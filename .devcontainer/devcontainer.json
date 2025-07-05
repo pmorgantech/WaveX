@@ -1,0 +1,23 @@
+{
+  "name": "WaveX Dual-MCU Synth DevContainer",
+  "build": { "dockerfile": "Dockerfile" },
+  "image": "wavex-devcontainer:latest",
+  "runArgs": [
+    "--privileged",
+    "--device=/dev/bus/usb",
+    "--device=/dev/ttyACM0",
+    "--device=/dev/ttyACM1"
+  ],
+  "extensions": [
+    "ms-vscode.cpptools",
+    "marus25.cortex-debug",
+    "espressif.esp-idf-extension-pack",
+    "bierner.markdown-mermaid",
+    "ms-vscode.debug-tracker",
+    "ms-vscode.cmake-tools"
+  ]
+  "postStartCommand": "udevadm trigger --subsystem-match=usb",
+  "features": {
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {}
+  }
+} 

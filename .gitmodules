@@ -1,0 +1,10 @@
+[submodule "firmware/esp32/libs/lvgl"]
+	path = firmware/esp32/libs/lvgl
+	url = https://github.com/lvgl/lvgl.git
+[submodule "firmware/esp32/libs/xpt2046"]
+	path = firmware/esp32/libs/xpt2046
+	url = https://github.com/PaulStoffregen/XPT2046_Touchscreen.git
+[submodule "firmware/esp32/libs/st7796s"]
+	path = firmware/esp32/libs/st7796s
+	url = https://github.com/yanbe/st7796s.git 
+

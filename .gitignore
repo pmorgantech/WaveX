@@ -1,41 +1,85 @@
-# Prerequisites
-*.d
-
-# Compiled Object files
-*.slo
-*.lo
+# Build directories (any directory starting with 'build')
+build*/
+builds/
+out/
+Debug/
+Release/
 *.o
 *.obj
+*.elf
+*.bin
+*.hex
+*.map
+*.lst
 
-# Precompiled Headers
-*.gch
-*.pch
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
 
-# Linker files
-*.ilk
-
-# Debugger Files
-*.pdb
-
-# Compiled Dynamic libraries
+# C++ specific
+*.d
+*.dll
 *.so
 *.dylib
-*.dll
-
-# Fortran module files
-*.mod
-*.smod
-
-# Compiled Static libraries
-*.lai
-*.la
-*.a
-*.lib
-
-# Executables
 *.exe
 *.out
 *.app
 
-# debug information files
-*.dwo
+# Project specific
+*.wav
+*.mp3
+*.mid
+*.syx
+*.patch
+*.preset
+
+# Dependencies (but allow git submodules)
+lib/
+libs/
+deps/
+# Note: external/ directory exists but submodules are tracked
+# Individual external dependencies that should be ignored:
+external/build/
+external/tmp/
+external/*.tar.gz
+external/*.zip
+# Allow git submodules in external/ by not ignoring the directory itself
+# Note: Do NOT ignore actual submodules here - they need to be tracked by git
+
+
+# FreeRTOS specific
+FreeRTOSConfig.h
+FreeRTOSConfig.h.bak
+
+# Daisy specific
+*.daisy
+*.daisyseed
+*.daisybin
+
+# CMake
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+*.cmake
+!CMakeLists.txt
+
+# Debug files
+*.log
+*.debug
+*.trace
+
+# Backup files
+*.bak
+*.backup
+*~
+
+# Cursor specific
+#
+.cursor/
+# VS Code Devcontainer
+!.devcontainer/
