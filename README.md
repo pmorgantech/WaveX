@@ -67,52 +67,31 @@ WaveX/
 - Add sample loading and playback functionality
 - Implement real-time parameter communication between MCUs
 
-## Build Instructions
+## Quickstart (Devcontainer)
 
-### Prerequisites
-- Docker installed on your system
-- Git with submodule support
+1. **Clone the repo**
+2. Open in VS Code with the [Dev Containers extension](https://code.visualstudio.com/docs/devcontainers/containers)
+3. Hit F1 → "Reopen in Container"
+4. **Build both systems**: `make all` (builds ESP32 + Daisy with enhanced visual output)
+5. **Flash firmware**: `make esp32-flash` and flash Daisy via DFU
+6. Follow the [setup guide](./setup.md) for detailed build, flash, and workflow instructions
 
-### Quick Start
+## Build System
 
-1. **Clone the repository:**
+WaveX uses a dual build system approach optimized for each platform:
+
+- **ESP32 Frontend**: CMake with ESP-IDF's `idf.py` (component-based, integrated toolchain)
+- **Daisy Backend**: Traditional Make with libDaisy templates (optimized STM32 build)
+- **Orchestration**: Top-level Makefile with enhanced visual output
+
+**Quick Commands:**
 ```bash
-git clone --recursive https://github.com/yourusername/WaveX.git
-cd WaveX
+make all        # Build both ESP32 and Daisy with clear progress
+make esp32      # Build ESP32 frontend only
+make daisy      # Build Daisy backend only
+make clean      # Clean both build systems
+make setup      # Initialize git submodules
 ```
-
-2. **Build the devcontainer:**
-```bash
-docker build -t wavex-dev .devcontainer/
-```
-
-3. **Build ESP32 firmware:**
-```bash
-# Build using ESP-IDF container
-docker run --rm -v $(pwd):/workspace espressif/idf:release-v5.2 \
-  /bin/bash -c "cd /workspace/firmware/esp32 && idf.py build"
-
-# Or use the Makefile
-make esp32
-```
-
-4. **Build Daisy firmware (when fixed):**
-```bash
-# Using custom devcontainer with ARM toolchain
-docker run --rm -v $(pwd):/workspace wavex-dev \
-  /bin/bash -c "cd /workspace/firmware/daisy && cmake -B build && cd build && make"
-
-# Or use the Makefile
-make daisy
-```
-
-### Development Container
-
-The project includes a pre-configured development container with:
-- ESP-IDF 5.2 for ESP32 development
-- ARM GCC toolchain for STM32 development
-- CMake, Ninja, and other build tools
-- Debug tools (OpenOCD, GDB, etc.)
 
 ## Hardware Requirements
 

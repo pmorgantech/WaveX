@@ -162,23 +162,84 @@ If you’re on macOS/Windows, swap the `--device` lines for `"mounts": ["source=
 
 ## Build / flash workflow
 
-### ESP32-S3 side
+### Unified Build System (Recommended)
+
+WaveX uses a dual build system approach with a top-level Makefile that orchestrates both ESP32 and Daisy builds:
+
+| Command | Description | Build System Used |
+|---------|-------------|------------------|
+| `make all` | Build both ESP32 and Daisy with enhanced visual output | CMake + Make |
+| `make esp32` | Build ESP32 frontend only | CMake via idf.py |
+| `make daisy` | Build Daisy backend only | Make |
+| `make clean` | Clean both build systems | Both |
+| `make setup` | Initialize git submodules | N/A |
+| `make info` | Show toolchain versions | N/A |
+
+**Enhanced Visual Output**: The unified Makefile provides clear progress indicators showing which MCU is being built:
+
+```
+========================================================================
+                    WaveX Dual-MCU Build System
+========================================================================
+Building both ESP32 Frontend and Daisy Seed Backend...
+
+========================================================================
+                    🔧 BUILDING ESP32 FRONTEND
+========================================================================
+Target: ESP32-S3 (UI, Controls, MIDI, Communication)
+Toolchain: ESP-IDF v5.2
+------------------------------------------------------------------------
+[ESP-IDF build output]
+------------------------------------------------------------------------
+✅ ESP32 Frontend build completed successfully!
+========================================================================
+
+========================================================================
+                   🎵 BUILDING DAISY SEED BACKEND
+========================================================================
+Target: STM32H750 (Audio Engine, DSP, CV Output)
+Toolchain: ARM GCC
+------------------------------------------------------------------------
+[ARM GCC build output]
+------------------------------------------------------------------------
+✅ Daisy Seed Backend build completed successfully!
+========================================================================
+```
+
+### ESP32-S3 Frontend (Individual Commands)
 
 | Step          | Command                                | Notes                                                                           |
 | ------------- | -------------------------------------- | ------------------------------------------------------------------------------- |
 | **Configure** | `idf.py set-target esp32s3`            | Done once.                                                                      |
-| **Build**     | `idf.py build`                         | Uses Espressif CMake presets ([docs.espressif.com][8])                          |
+| **Build**     | `idf.py build`                         | Uses ESP-IDF's CMake build system ([docs.espressif.com][8])                          |
 | **Flash**     | `idf.py -p /dev/ttyACM0 flash monitor` | Works inside container when `--device` passed.                                  |
 | **DFU alt**   | `idf.py dfu-flash`                     | S3 can flash via native USB DFU if UART pins are busy ([docs.espressif.com][9]) |
 
-### Daisy Seed side
+### Daisy Seed Backend (Individual Commands)
 
 | Step              | Command                                                                                                      | Notes                                                       |
 | ----------------- | ------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------- |
-| **Build**         | `cmake -B build -G Ninja && ninja -C build`                                                                  | libDaisy CMake exports ([github.com][10])                   |
+| **Build**         | `make` (from firmware/daisy directory)                                                                       | Uses libDaisy Makefile templates ([github.com][10])                   |
 | **Flash (quick)** | `dfu-util -a 0 -D build/myfirmware.bin`                                                                      | Seed bootloader expects DFU ([forum.electro-smith.com][11]) |
 | **Flash (debug)** | `openocd -f interface/stlink.cfg -f target/stm32h7x.cfg -c "program build/myfirmware.elf verify reset exit"` | Requires ST-Link or CMSIS-DAP ([community.st.com][2])       |
 | **GDB attach**    | Cortex-Debug launch: `"servertype": "openocd", "gdbTarget": "localhost:3333"`                                | Full halt-mode stepping.                                    |
+
+### Build System Architecture
+
+- **ESP32 Frontend**: Uses ESP-IDF's native CMake-based build system via `idf.py`
+  - Component-based architecture with automatic dependency resolution
+  - Built-in support for partitions, bootloader, and flash configuration
+  - Integrated menuconfig for project configuration
+  
+- **Daisy Backend**: Uses traditional Make with libDaisy Makefile templates
+  - Direct integration with libDaisy and DaisySP libraries
+  - Optimized compiler flags for STM32H750 performance
+  - Support for both DFU and OpenOCD/ST-Link flashing
+
+- **Orchestration**: Top-level Makefile coordinates both builds
+  - Automatically sources ESP-IDF environment (`/opt/esp/idf/export.sh`)
+  - Enhanced visual output with clear progress indicators
+  - No Docker-in-Docker overhead - all builds run natively in devcontainer
 
 ---
 

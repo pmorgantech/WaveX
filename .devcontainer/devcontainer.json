@@ -19,6 +19,7 @@
     "bierner.markdown-mermaid",
     "ms-vscode.makefile-tools"
   ],
+  "postCreateCommand": "echo 'source /opt/esp/idf/export.sh' >> ~/.bashrc",
   "features": {
     "ghcr.io/devcontainers/features/docker-in-docker:2": {}
   }
