@@ -37,20 +37,6 @@ Release/
 *.patch
 *.preset
 
-# Dependencies (but allow git submodules)
-lib/
-libs/
-deps/
-# Note: external/ directory exists but submodules are tracked
-# Individual external dependencies that should be ignored:
-external/build/
-external/tmp/
-external/*.tar.gz
-external/*.zip
-# Allow git submodules in external/ by not ignoring the directory itself
-# Note: Do NOT ignore actual submodules here - they need to be tracked by git
-
-
 # FreeRTOS specific
 FreeRTOSConfig.h
 FreeRTOSConfig.h.bak

@@ -8,15 +8,17 @@
     "--device=/dev/ttyACM0",
     "--device=/dev/ttyACM1"
   ],
+  "remoteUser": "petem",
+  "containerUser": "petem",
   "extensions": [
     "ms-vscode.cpptools",
-    "marus25.cortex-debug",
+    "ms-vscode.cpptools-extension-pack",
+    "ms-vscode.cmake-tools",
     "espressif.esp-idf-extension-pack",
+    "marus25.cortex-debug",
     "bierner.markdown-mermaid",
-    "ms-vscode.debug-tracker",
-    "ms-vscode.cmake-tools"
-  ]
-  "postStartCommand": "udevadm trigger --subsystem-match=usb",
+    "ms-vscode.makefile-tools"
+  ],
   "features": {
     "ghcr.io/devcontainers/features/docker-in-docker:2": {}
   }

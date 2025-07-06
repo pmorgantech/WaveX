@@ -6,5 +6,11 @@
 	url = https://github.com/PaulStoffregen/XPT2046_Touchscreen.git
 [submodule "firmware/esp32/libs/st7796s"]
 	path = firmware/esp32/libs/st7796s
-	url = https://github.com/yanbe/st7796s.git 
+	url = https://github.com/prenticedavid/Adafruit_ST7796S_kbv.git
+[submodule "firmware/daisy/libs/libDaisy"]
+	path = firmware/daisy/libs/libDaisy
+	url = https://github.com/electro-smith/libDaisy.git
+[submodule "firmware/daisy/libs/DaisySP"]
+	path = firmware/daisy/libs/DaisySP
+	url = https://github.com/electro-smith/DaisySP.git
 
