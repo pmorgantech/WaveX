@@ -18,6 +18,9 @@ static const char LICENSE_TEXT[] =
 "  Includes: Barcode, Expat, GifDec, LodePNG,\n"
 "  LZ4, QR Code, ThorVG, TinyTTF, TJPGD,\n"
 "  TLSF, Printf libraries\n\n"
+"• TFT-eSPI Display Library - MIT License\n"
+"  Copyright (c) 2017-2024 Bodmer\n"
+"  ESP32-optimized TFT driver with DMA\n\n"
 "• XPT2046 Touchscreen - MIT License\n"
 "  Copyright (c) 2015 Paul Stoffregen\n\n"
 

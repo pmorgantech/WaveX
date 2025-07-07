@@ -4,9 +4,9 @@
 [submodule "firmware/esp32/libs/xpt2046"]
 	path = firmware/esp32/libs/xpt2046
 	url = https://github.com/PaulStoffregen/XPT2046_Touchscreen.git
-[submodule "firmware/esp32/libs/st7796s"]
-	path = firmware/esp32/libs/st7796s
-	url = https://github.com/prenticedavid/Adafruit_ST7796S_kbv.git
+[submodule "firmware/esp32/libs/tft_espi"]
+	path = firmware/esp32/libs/tft_espi
+	url = https://github.com/Bodmer/TFT_eSPI.git
 [submodule "firmware/daisy/libs/libDaisy"]
 	path = firmware/daisy/libs/libDaisy
 	url = https://github.com/electro-smith/libDaisy.git

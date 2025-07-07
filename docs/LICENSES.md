@@ -42,6 +42,14 @@ LVGL includes several third-party libraries with their own licenses:
 - **TLSF Memory Allocator**: BSD 3-Clause License
 - **Printf Library**: MIT License
 
+### TFT-eSPI Display Library
+- **Source**: https://github.com/Bodmer/TFT_eSPI.git
+- **License**: MIT License
+- **Copyright**: Copyright (c) 2017-2024 Bodmer (bodmer)
+- **Usage**: ESP32-optimized TFT display driver with DMA support
+- **Submodule Path**: `firmware/esp32/libs/tft_espi`
+- **License File**: `firmware/esp32/libs/tft_espi/license.txt`
+
 ### XPT2046 Touchscreen Library
 - **Source**: https://github.com/PaulStoffregen/XPT2046_Touchscreen.git
 - **License**: MIT License
