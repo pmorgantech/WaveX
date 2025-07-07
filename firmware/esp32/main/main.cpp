@@ -2,6 +2,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
+#include "esp_lvgl_port.h"
 #include "ui_main.h"
 #include "version.h"
 
@@ -26,9 +27,15 @@ extern "C" void app_main(void)
     ESP_LOGI(TAG, "WaveX ESP32 Frontend Initialized");
     ESP_LOGI(TAG, "About menu available under System -> About");
     
+    // esp_lvgl_port manages LVGL timer automatically in background task
+    // Main thread can now focus on application logic
     while (1) {
-        // Main application loop - LVGL timer handler
-        lv_timer_handler();
-        vTaskDelay(pdMS_TO_TICKS(5));  // 5ms delay for ~200Hz refresh
+        // TODO: Add main application logic here
+        // - SPI communication with Daisy
+        // - SD card operations 
+        // - USB MIDI handling
+        // - System monitoring
+        
+        vTaskDelay(pdMS_TO_TICKS(100));  // 100ms loop for application tasks
     }
 } 

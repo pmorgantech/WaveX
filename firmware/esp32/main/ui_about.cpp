@@ -18,9 +18,6 @@ static const char LICENSE_TEXT[] =
 "  Includes: Barcode, Expat, GifDec, LodePNG,\n"
 "  LZ4, QR Code, ThorVG, TinyTTF, TJPGD,\n"
 "  TLSF, Printf libraries\n\n"
-"• TFT-eSPI Display Library - MIT License\n"
-"  Copyright (c) 2017-2024 Bodmer\n"
-"  ESP32-optimized TFT driver with DMA\n\n"
 "• XPT2046 Touchscreen - MIT License\n"
 "  Copyright (c) 2015 Paul Stoffregen\n\n"
 
@@ -69,13 +66,17 @@ lv_obj_t* ui_about_create(lv_obj_t* parent_menu)
     lv_obj_t* title_cont = lv_menu_cont_create(section);
     lv_obj_t* title_label = lv_label_create(title_cont);
     lv_label_set_text(title_label, WAVEX_PROJECT_NAME);
-    lv_obj_set_style_text_font(title_label, &lv_font_montserrat_20, 0);
+    // Set title style
+    lv_obj_set_style_text_color(title_label, lv_color_white(), 0);
+    lv_obj_set_style_text_font(title_label, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_align(title_label, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_width(title_label, LV_PCT(100));
     
     lv_obj_t* desc_cont = lv_menu_cont_create(section);
     lv_obj_t* desc_label = lv_label_create(desc_cont);
     lv_label_set_text(desc_label, WAVEX_PROJECT_DESCRIPTION);
+    // Set description style
+    lv_obj_set_style_text_color(desc_label, lv_color_white(), 0);
     lv_obj_set_style_text_align(desc_label, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_width(desc_label, LV_PCT(100));
     
@@ -154,7 +155,7 @@ void ui_about_show_license_modal(lv_obj_t* parent)
     
     lv_obj_t* title = lv_label_create(header);
     lv_label_set_text(title, "License Information");
-    lv_obj_set_style_text_font(title, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_font(title, &lv_font_montserrat_14, 0);
     
     lv_obj_t* close_btn = lv_button_create(header);
     lv_obj_set_size(close_btn, 40, 40);
@@ -170,7 +171,7 @@ void ui_about_show_license_modal(lv_obj_t* parent)
     lv_textarea_set_text(text_area, LICENSE_TEXT);
     lv_obj_add_flag(text_area, LV_OBJ_FLAG_SCROLL_ON_FOCUS);
     lv_obj_remove_flag(text_area, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_set_style_text_font(text_area, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_font(text_area, &lv_font_montserrat_14, 0);
 }
 
 void ui_about_get_version_info(char* buffer, size_t buffer_size)

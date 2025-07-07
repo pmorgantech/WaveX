@@ -1,6 +1,10 @@
 #include "ui_main.h"
 #include "ui_about.h"
 #include "version.h"
+#include "esp_lvgl_port.h"
+#include "esp_lcd_st7796.h"
+#include "esp_lcd_touch_xpt2046.h"
+#include "esp_log.h"
 #include <stdio.h>
 
 static lv_obj_t* main_screen = NULL;
@@ -57,8 +61,27 @@ static lv_obj_t* create_menu_switch(lv_obj_t* parent, const char* icon, const ch
 
 void ui_main_init(void)
 {
-    // Initialize LVGL
-    lv_init();
+    ESP_LOGI("UI", "Initializing esp_lvgl_port...");
+    
+    // Initialize esp_lvgl_port with display and touch
+    const lvgl_port_cfg_t lvgl_cfg = {
+        .task_priority = 4,
+        .task_stack = 6144,
+        .task_affinity = -1,
+        .task_max_sleep_ms = 500,
+        .timer_period_ms = 5
+    };
+    ESP_ERROR_CHECK(lvgl_port_init(&lvgl_cfg));
+    
+    // TODO: Add display configuration here
+    // - Configure ST7796S display driver
+    // - Configure XPT2046 touch controller  
+    // - Add display and touch to lvgl_port
+    
+    ESP_LOGI("UI", "Creating main UI elements...");
+    
+    // Lock LVGL for thread safety
+    lvgl_port_lock(0);
     
     // Create main screen
     main_screen = lv_obj_create(NULL);
@@ -70,6 +93,11 @@ void ui_main_init(void)
     
     // Load the main screen
     lv_screen_load(main_screen);
+    
+    // Unlock LVGL
+    lvgl_port_unlock();
+    
+    ESP_LOGI("UI", "UI initialization complete");
 }
 
 lv_obj_t* ui_main_create_menu(void)
@@ -146,7 +174,7 @@ lv_obj_t* ui_main_create_menu(void)
     // Performance section
     lv_obj_t* perf_label = lv_label_create(root_page);
     lv_label_set_text(perf_label, "Performance");
-    lv_obj_set_style_text_font(perf_label, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_font(perf_label, &lv_font_montserrat_14, 0);
     lv_obj_set_style_pad_top(perf_label, 10, 0);
     section = lv_menu_section_create(root_page);
     
