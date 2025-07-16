@@ -5,6 +5,7 @@
 #include "esp_lvgl_port.h"
 #include "ui_main.h"
 #include "version.h"
+#include "hardware_pins.h"
 
 static const char *TAG = "WaveX-ESP32";
 
@@ -35,6 +36,14 @@ extern "C" void app_main(void)
         // - SD card operations 
         // - USB MIDI handling
         // - System monitoring
+        
+        // Monitor backlight state
+        static int last_bl_state = -1;
+        int current_bl_state = gpio_get_level(WAVEX_LCD_GPIO_BL);
+        if (current_bl_state != last_bl_state) {
+            ESP_LOGI("WaveX-ESP32", "Backlight state changed: %d -> %d", last_bl_state, current_bl_state);
+            last_bl_state = current_bl_state;
+        }
         
         vTaskDelay(pdMS_TO_TICKS(100));  // 100ms loop for application tasks
     }

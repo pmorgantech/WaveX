@@ -3,12 +3,26 @@
 #include "version.h"
 #include "esp_lvgl_port.h"
 #include "esp_lcd_st7796.h"
-#include "esp_lcd_touch_xpt2046.h"
+#include "FT6X36.h"
 #include "esp_log.h"
+#include "hardware_pins.h"
+#include "driver/gpio.h"
+#include "driver/spi_master.h"
+#include "driver/i2c.h"
+#include "esp_lcd_panel_io.h"
+#include "esp_lcd_panel_ops.h"
+#include "esp_check.h"
 #include <stdio.h>
 
 static lv_obj_t* main_screen = NULL;
 static lv_obj_t* main_menu = NULL;
+
+// LCD and touch handles
+static esp_lcd_panel_io_handle_t lcd_io = NULL;
+static esp_lcd_panel_handle_t lcd_panel = NULL;
+static FT6X36* touch_controller = NULL;
+static lv_display_t* lvgl_disp = NULL;
+static lv_indev_t* lvgl_touch_indev = NULL;
 
 // Helper function to create menu text items
 static lv_obj_t* create_menu_text(lv_obj_t* parent, const char* icon, const char* txt)
@@ -59,6 +73,281 @@ static lv_obj_t* create_menu_switch(lv_obj_t* parent, const char* icon, const ch
     return obj;
 }
 
+// Touch state variables for LVGL integration
+static TPoint current_touch_point = {0, 0};
+static TEvent current_touch_event = TEvent::None;
+static bool touch_pressed = false;
+
+/**
+ * @brief Touch event handler callback from FT6X36
+ * Called when touch events occur (tap, drag, etc.)
+ */
+static void wavex_touch_event_handler(TPoint point, TEvent event)
+{
+    // Store the current touch data for LVGL to read
+    current_touch_point = point;
+    current_touch_event = event;
+    
+    // Update touch state based on event type
+    switch (event) {
+        case TEvent::TouchStart:
+        case TEvent::Tap:
+        case TEvent::DragStart:
+        case TEvent::DragMove:
+            touch_pressed = true;
+            break;
+        case TEvent::TouchEnd:
+        case TEvent::DragEnd:
+            touch_pressed = false;
+            break;
+        default:
+            // Keep current state for other events
+            break;
+    }
+}
+
+/**
+ * @brief Touch read callback for LVGL input device
+ * Bridges FT6X36 touch controller with LVGL input system
+ */
+static void wavex_touch_read_cb(lv_indev_t* indev, lv_indev_data_t* data)
+{
+    // Poll the touch controller for new data
+    if (touch_controller != nullptr) {
+        TPoint point;
+        TEvent event;
+        touch_controller->poll(&point, &event);
+        
+        // Update our touch state
+        if (event != TEvent::None) {
+            wavex_touch_event_handler(point, event);
+        }
+    }
+    
+    // Set LVGL touch data
+    if (touch_pressed) {
+        data->state = LV_INDEV_STATE_PRESSED;
+        data->point.x = current_touch_point.x;
+        data->point.y = current_touch_point.y;
+        
+        // Apply coordinate transformations to match display orientation
+        // The display is configured with swap_xy=true, mirror_x=true
+        // so we need to apply the same transformations to touch coordinates
+        
+        // Swap X and Y coordinates
+        int16_t temp = data->point.x;
+        data->point.x = data->point.y;
+        data->point.y = temp;
+        
+        // Mirror X coordinate
+        data->point.x = WAVEX_LCD_H_RES - data->point.x;
+        
+        // Ensure coordinates are within bounds
+        if (data->point.x < 0) data->point.x = 0;
+        if (data->point.x >= WAVEX_LCD_H_RES) data->point.x = WAVEX_LCD_H_RES - 1;
+        if (data->point.y < 0) data->point.y = 0;
+        if (data->point.y >= WAVEX_LCD_V_RES) data->point.y = WAVEX_LCD_V_RES - 1;
+    } else {
+        data->state = LV_INDEV_STATE_RELEASED;
+    }
+    
+    // Continue reading
+    data->continue_reading = false;
+}
+
+/**
+ * @brief Initialize ST7796S display hardware
+ * @return ESP_OK on success, error code on failure
+ */
+static esp_err_t wavex_display_init(void)
+{
+    ESP_LOGI("DISPLAY", "Initializing ST7796S display...");
+    
+    // Configure backlight GPIO
+    gpio_config_t bk_gpio_config = {
+        .pin_bit_mask = 1ULL << WAVEX_LCD_GPIO_BL,
+        .mode = GPIO_MODE_OUTPUT,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE
+    };
+    ESP_RETURN_ON_ERROR(gpio_config(&bk_gpio_config), "DISPLAY", "Backlight GPIO config failed");
+    
+    // Initialize SPI bus for display
+    ESP_LOGI("DISPLAY", "Initializing SPI bus");
+    const spi_bus_config_t buscfg = {
+        .mosi_io_num = WAVEX_LCD_GPIO_MOSI,
+        .miso_io_num = GPIO_NUM_NC,  // Display doesn't need MISO
+        .sclk_io_num = WAVEX_LCD_GPIO_SCLK,
+        .quadwp_io_num = GPIO_NUM_NC,
+        .quadhd_io_num = GPIO_NUM_NC,
+        .data4_io_num = GPIO_NUM_NC,
+        .data5_io_num = GPIO_NUM_NC,
+        .data6_io_num = GPIO_NUM_NC,
+        .data7_io_num = GPIO_NUM_NC,
+        .max_transfer_sz = WAVEX_LCD_H_RES * WAVEX_LVGL_DRAW_BUF_HEIGHT * sizeof(uint16_t),
+        .flags = 0,
+        .isr_cpu_id = ESP_INTR_CPU_AFFINITY_AUTO,
+        .intr_flags = 0
+    };
+    ESP_RETURN_ON_ERROR(spi_bus_initialize(WAVEX_SPI_HOST, &buscfg, SPI_DMA_CH_AUTO), 
+                       "DISPLAY", "SPI bus initialization failed");
+    
+    // Configure LCD panel IO
+    ESP_LOGI("DISPLAY", "Installing panel IO");
+    const esp_lcd_panel_io_spi_config_t io_config = {
+        .cs_gpio_num = WAVEX_LCD_GPIO_CS,
+        .dc_gpio_num = WAVEX_LCD_GPIO_DC,
+        .spi_mode = 0,
+        .pclk_hz = WAVEX_LCD_PIXEL_CLK_HZ,
+        .trans_queue_depth = 10,
+        .on_color_trans_done = NULL,
+        .user_ctx = NULL,
+        .lcd_cmd_bits = WAVEX_LCD_CMD_BITS,
+        .lcd_param_bits = WAVEX_LCD_PARAM_BITS,
+        .flags = {
+            .dc_high_on_cmd = 0,
+            .dc_low_on_data = 0,
+            .dc_low_on_param = 0,
+            .octal_mode = 0,
+            .quad_mode = 0,
+            .sio_mode = 0,
+            .lsb_first = 0,
+            .cs_high_active = 0
+        }
+    };
+    ESP_RETURN_ON_ERROR(esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)WAVEX_SPI_HOST, &io_config, &lcd_io),
+                       "DISPLAY", "Panel IO creation failed");
+    
+    // Install ST7796S LCD driver
+    ESP_LOGI("DISPLAY", "Installing LCD driver");
+    const esp_lcd_panel_dev_config_t panel_config = {
+        .reset_gpio_num = WAVEX_LCD_GPIO_RST,
+        .rgb_ele_order = LCD_RGB_ELEMENT_ORDER_RGB,
+        .data_endian = LCD_RGB_DATA_ENDIAN_LITTLE,
+        .bits_per_pixel = WAVEX_LCD_BITS_PER_PIXEL,
+        .flags = {0},
+        .vendor_config = NULL
+    };
+    ESP_RETURN_ON_ERROR(esp_lcd_new_panel_st7796(lcd_io, &panel_config, &lcd_panel),
+                       "DISPLAY", "LCD panel creation failed");
+    
+    // Reset and initialize panel
+    ESP_LOGI("DISPLAY", "Resetting and initializing panel");
+    ESP_RETURN_ON_ERROR(esp_lcd_panel_reset(lcd_panel), "DISPLAY", "Panel reset failed");
+    ESP_RETURN_ON_ERROR(esp_lcd_panel_init(lcd_panel), "DISPLAY", "Panel init failed");
+    
+    // Configure display orientation (landscape mode for 480x320)
+    // REMOVED: Conflicting rotation settings that cause display corruption
+    // ESP_RETURN_ON_ERROR(esp_lcd_panel_mirror(lcd_panel, true, false), "DISPLAY", "Panel mirror failed");
+    // ESP_RETURN_ON_ERROR(esp_lcd_panel_swap_xy(lcd_panel, true), "DISPLAY", "Panel swap_xy failed");
+    
+    // Turn on display
+    ESP_RETURN_ON_ERROR(esp_lcd_panel_disp_on_off(lcd_panel, true), "DISPLAY", "Panel display on failed");
+    
+    // Turn on backlight
+    ESP_LOGI("DISPLAY", "Enabling backlight on GPIO21...");
+    ESP_RETURN_ON_ERROR(gpio_set_level(WAVEX_LCD_GPIO_BL, WAVEX_LCD_BL_ON_LEVEL), 
+                       "DISPLAY", "Backlight enable failed");
+    ESP_LOGI("DISPLAY", "Backlight enabled successfully");
+    
+    // Verify backlight state
+    int bl_state = gpio_get_level(WAVEX_LCD_GPIO_BL);
+    ESP_LOGI("DISPLAY", "Backlight pin state: %d", bl_state);
+    
+    // REMOVED: Test pattern that was covering UI content
+    // ESP_LOGI("DISPLAY", "Testing display with color pattern...");
+    // uint16_t* test_buffer = (uint16_t*)heap_caps_malloc(WAVEX_LCD_H_RES * 10 * sizeof(uint16_t), MALLOC_CAP_DMA);
+    // if (test_buffer) {
+    //     // Create a simple test pattern (red, green, blue stripes)
+    //     for (int i = 0; i < WAVEX_LCD_H_RES * 10; i++) {
+    //         if (i < WAVEX_LCD_H_RES * 3) {
+    //             test_buffer[i] = 0xF800;  // Red
+    //         } else if (i < WAVEX_LCD_H_RES * 6) {
+    //             test_buffer[i] = 0x07E0;  // Green
+    //         } else {
+    //             test_buffer[i] = 0x001F;  // Blue
+    //         }
+    //     }
+    //     
+    //     // Send test pattern to display
+    //     esp_lcd_panel_draw_bitmap(lcd_panel, 0, 0, WAVEX_LCD_H_RES, 10, test_buffer);
+    //     vTaskDelay(pdMS_TO_TICKS(100));  // Wait for pattern to be visible
+    //     
+    //     free(test_buffer);
+    //     ESP_LOGI("DISPLAY", "Test pattern sent to display");
+    // }
+    
+    ESP_LOGI("DISPLAY", "ST7796S display initialization complete");
+    return ESP_OK;
+}
+
+/**
+ * @brief Initialize FT6X36 I2C capacitive touch controller hardware
+ * @return ESP_OK on success, error code on failure
+ */
+static esp_err_t wavex_touch_init(void)
+{
+    ESP_LOGI("TOUCH", "Initializing FT6X36 I2C capacitive touch controller...");
+    
+    // Configure I2C bus for touch controller
+    ESP_LOGI("TOUCH", "Configuring I2C bus");
+    i2c_config_t i2c_conf = {};
+    i2c_conf.mode = I2C_MODE_MASTER;
+    i2c_conf.sda_io_num = WAVEX_CTP_GPIO_SDA;      // GPIO20 (J3 pin 19)
+    i2c_conf.sda_pullup_en = GPIO_PULLUP_ENABLE;
+    i2c_conf.scl_io_num = WAVEX_CTP_GPIO_SCL;      // GPIO1 (J3 pin 4)
+    i2c_conf.scl_pullup_en = GPIO_PULLUP_ENABLE;
+    i2c_conf.master.clk_speed = WAVEX_CTP_I2C_FREQ_HZ;  // 100kHz
+    i2c_conf.clk_flags = 0;
+    
+    ESP_RETURN_ON_ERROR(i2c_param_config(WAVEX_CTP_I2C_NUM, &i2c_conf), 
+                       "TOUCH", "I2C parameter config failed");
+    ESP_RETURN_ON_ERROR(i2c_driver_install(WAVEX_CTP_I2C_NUM, I2C_MODE_MASTER, 0, 0, 0),
+                       "TOUCH", "I2C driver installation failed");
+    
+    // Configure touch reset GPIO (optional but recommended)
+    gpio_config_t touch_rst_config = {
+        .pin_bit_mask = 1ULL << WAVEX_CTP_GPIO_RST,
+        .mode = GPIO_MODE_OUTPUT,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE
+    };
+    ESP_RETURN_ON_ERROR(gpio_config(&touch_rst_config), "TOUCH", "Touch reset GPIO config failed");
+    
+    // Reset touch controller
+    ESP_LOGI("TOUCH", "Resetting touch controller");
+    ESP_RETURN_ON_ERROR(gpio_set_level(WAVEX_CTP_GPIO_RST, 0), "TOUCH", "Touch reset low failed");
+    vTaskDelay(pdMS_TO_TICKS(10));  // Hold reset for 10ms
+    ESP_RETURN_ON_ERROR(gpio_set_level(WAVEX_CTP_GPIO_RST, 1), "TOUCH", "Touch reset high failed");
+    vTaskDelay(pdMS_TO_TICKS(50));  // Wait for controller to initialize
+    
+    // Initialize FT6X36 touch controller with interrupt pin
+    ESP_LOGI("TOUCH", "Installing FT6X36 touch driver");
+    touch_controller = new FT6X36(GPIO_NUM_NC);  // No interrupt pin for polling mode
+    if (touch_controller == nullptr) {
+        ESP_LOGE("TOUCH", "Failed to create FT6X36 touch controller");
+        return ESP_ERR_NO_MEM;
+    }
+    
+    // Initialize the touch controller (uses default threshold and screen size)
+    if (!touch_controller->begin(FT6X36_DEFAULT_THRESHOLD, WAVEX_LCD_H_RES, WAVEX_LCD_V_RES)) {
+        ESP_LOGE("TOUCH", "Failed to initialize FT6X36 touch controller");
+        delete touch_controller;
+        touch_controller = nullptr;
+        return ESP_FAIL;
+    }
+    
+    // Set touch controller rotation to match display
+    touch_controller->setRotation(1);  // Match display rotation
+    touch_controller->setTouchWidth(WAVEX_LCD_H_RES);
+    touch_controller->setTouchHeight(WAVEX_LCD_V_RES);
+    
+    ESP_LOGI("TOUCH", "FT6X36 I2C capacitive touch controller initialization complete");
+    return ESP_OK;
+}
+
 void ui_main_init(void)
 {
     ESP_LOGI("UI", "Initializing esp_lvgl_port...");
@@ -66,17 +355,80 @@ void ui_main_init(void)
     // Initialize esp_lvgl_port with display and touch
     const lvgl_port_cfg_t lvgl_cfg = {
         .task_priority = 4,
-        .task_stack = 6144,
+        .task_stack = 8192,  // Increased from 6144 to fix stack overflow
         .task_affinity = -1,
         .task_max_sleep_ms = 500,
         .timer_period_ms = 5
     };
     ESP_ERROR_CHECK(lvgl_port_init(&lvgl_cfg));
     
-    // TODO: Add display configuration here
-    // - Configure ST7796S display driver
-    // - Configure XPT2046 touch controller  
-    // - Add display and touch to lvgl_port
+    // Initialize ST7796S display hardware
+    ESP_LOGI("UI", "Initializing display hardware...");
+    ESP_ERROR_CHECK(wavex_display_init());
+    
+    // Add display to LVGL port
+    ESP_LOGI("UI", "Configuring LVGL display...");
+    uint32_t buffer_size = WAVEX_LCD_H_RES * WAVEX_LVGL_DRAW_BUF_HEIGHT;
+    const lvgl_port_display_cfg_t disp_cfg = {
+        .io_handle = lcd_io,
+        .panel_handle = lcd_panel,
+        .control_handle = NULL,
+        .buffer_size = buffer_size,
+        .double_buffer = WAVEX_LVGL_DOUBLE_BUFFER,
+        .trans_size = 0,
+        .hres = WAVEX_LCD_H_RES,
+        .vres = WAVEX_LCD_V_RES,
+        .monochrome = false,
+        .rotation = {
+            .swap_xy = true,
+            .mirror_x = true,   // Flip horizontally for 180° rotation
+            .mirror_y = true,   // Flip vertically for 180° rotation
+        },
+#if LVGL_VERSION_MAJOR >= 9
+        .color_format = LV_COLOR_FORMAT_RGB565,
+#endif
+        .flags = {
+            .buff_dma = true,
+            .buff_spiram = false,
+            .sw_rotate = false,
+#if LVGL_VERSION_MAJOR >= 9
+            .swap_bytes = true,
+#endif
+            .full_refresh = false,
+            .direct_mode = false
+        }
+    };
+    
+    lvgl_disp = lvgl_port_add_disp(&disp_cfg);
+    if (lvgl_disp == NULL) {
+        ESP_LOGE("UI", "Failed to add display to LVGL port");
+        return;
+    }
+    
+    ESP_LOGI("UI", "Display initialization complete - %dx%d @ %d bpp", 
+             WAVEX_LCD_H_RES, WAVEX_LCD_V_RES, WAVEX_LCD_BITS_PER_PIXEL);
+    
+    // Initialize FT6X36 I2C touch controller hardware
+    ESP_LOGI("UI", "Initializing touch hardware...");
+    ESP_ERROR_CHECK(wavex_touch_init());
+    
+    // Create custom touch input device for LVGL (since FT6X36 is not directly compatible with esp_lvgl_port)
+    ESP_LOGI("UI", "Configuring LVGL touch input...");
+    
+    // Create LVGL input device for touch
+    lvgl_touch_indev = lv_indev_create();
+    lv_indev_set_type(lvgl_touch_indev, LV_INDEV_TYPE_POINTER);
+    
+    // Set touch read callback to bridge FT6X36 with LVGL
+    lv_indev_set_read_cb(lvgl_touch_indev, wavex_touch_read_cb);
+    
+    if (lvgl_touch_indev == NULL) {
+        ESP_LOGE("UI", "Failed to create LVGL touch input device");
+        return;
+    }
+    
+    ESP_LOGI("UI", "Touch initialization complete - FT6X36 I2C @ %dHz", 
+             WAVEX_CTP_I2C_FREQ_HZ);
     
     ESP_LOGI("UI", "Creating main UI elements...");
     
@@ -85,14 +437,50 @@ void ui_main_init(void)
     
     // Create main screen
     main_screen = lv_obj_create(NULL);
+    if (main_screen == NULL) {
+        ESP_LOGE("UI", "Failed to create main screen");
+        lvgl_port_unlock();
+        return;
+    }
+    ESP_LOGI("UI", "Main screen created successfully");
+    
+    // Set background color to a visible color (not black)
     lv_obj_set_style_bg_color(main_screen, lv_color_hex(0x003a57), LV_PART_MAIN);
     lv_obj_set_style_text_color(main_screen, lv_color_hex(0xffffff), LV_PART_MAIN);
+    ESP_LOGI("UI", "Main screen background color set");
     
     // Create the main menu
+    ESP_LOGI("UI", "Creating main menu...");
     main_menu = ui_main_create_menu();
+    if (main_menu == NULL) {
+        ESP_LOGE("UI", "Failed to create main menu");
+        lvgl_port_unlock();
+        return;
+    }
+    ESP_LOGI("UI", "Main menu created successfully");
     
     // Load the main screen
+    ESP_LOGI("UI", "Loading main screen...");
     lv_screen_load(main_screen);
+    ESP_LOGI("UI", "Main screen loaded successfully");
+    
+    // Force a refresh to ensure content is displayed
+    ESP_LOGI("UI", "Forcing display refresh...");
+    lv_obj_invalidate(main_screen);
+    lv_refr_now(lvgl_disp);
+    ESP_LOGI("UI", "Display refresh completed");
+    
+    // Add a simple test label to verify rendering
+    ESP_LOGI("UI", "Adding test label...");
+    lv_obj_t* test_label = lv_label_create(main_screen);
+    if (test_label) {
+        lv_label_set_text(test_label, "WaveX Test");
+        lv_obj_set_pos(test_label, 10, 10);
+        lv_obj_set_style_text_color(test_label, lv_color_hex(0xFFFFFF), 0);
+        ESP_LOGI("UI", "Test label created and positioned");
+    } else {
+        ESP_LOGE("UI", "Failed to create test label");
+    }
     
     // Unlock LVGL
     lvgl_port_unlock();
