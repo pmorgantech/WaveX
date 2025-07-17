@@ -48,18 +48,18 @@ WaveX/
 ## Current Status
 
 ### ✅ Completed
-- **Development Environment**: Devcontainer with ESP-IDF 5.2 and ARM GCC toolchain
+- **Development Environment**: Devcontainer with ESP-IDF 5.2, ARM GCC toolchain, and reliable USB device passthrough
+- **Build System**: Unified Makefile and `idf.py` build successful for ESP32 with unnecessary components disabled.
 - **ESP32 Firmware**: Project structure, builds successfully with zero warnings
 - **Hardware Compatibility**: All GPIO assignments verified for ESP32-S3-DevKitC-1
-- **Touch Integration**: FT6X36 I2C capacitive touch with LVGL integration
-- **Display Driver**: ST7796S 480x320 TFT display support
+- **Display Driver**: ST7796S 480x320 TFT display support via `esp_lcd` and `esp_lvgl_port`.
+- **Touch Integration**: FT6X36 I2C capacitive touch with LVGL integration.
 - **Shared Protocol Library**: SPI communication protocol definitions
-- **Build System**: Makefile and scripts for both firmwares
 - **Git Submodules**: LVGL, libDaisy, DaisySP properly configured
-- **Documentation**: Architecture and setup documentation
+- **Documentation**: Architecture and setup documentation updated.
 
 ### 🔄 In Progress
-- **Daisy Firmware**: Build issues with HAL dependencies (known libDaisy version compatibility issue)
+- **Daisy Firmware**: Resolving build issues with HAL dependencies.
 - **Protocol Implementation**: Complete SPI communication handlers
 
 ### 📋 Next Steps
@@ -136,8 +136,8 @@ Display Pin     Signal          GPIO    Pin Location    Description
 Touch Pin       Signal          GPIO    Pin Location    Description
 ---------       ------          ----    ------------    -----------
 10              CTP_SCL         1       J3 pin 4       I2C Clock for touch controller
-11              CTP_RST         16      J1 pin 9       Touch controller reset
-12              CTP_SDA         20      J3 pin 19      I2C Data for touch controller
+11              CTP_SDA         20      J3 pin 19      I2C Data for touch controller
+12              CTP_INT         -1      -              Interrupt pin (optional, disabled in config)
 ```
 
 **✅ Touch Technology**: Firmware supports FT6X36 I2C capacitive touch controllers (FT6236/FT6336) with polling-based LVGL integration.
@@ -249,19 +249,6 @@ CTRL_4          A3      Potentiometer/CV Input 4
    └──────────┘                          └──────────┘
 ```
 
-### ⚠️ Hardware Compatibility Notes
-
-**Current Firmware vs. Your Display:**
-- **Firmware**: Implements XPT2046 resistive touch controller (SPI interface)
-- **Your Display**: Uses capacitive touch panel (I2C interface)
-- **Impact**: Touch functionality will require firmware updates to support I2C touch driver
-
-**Required Changes for Your Display:**
-1. Replace XPT2046 touch driver with I2C capacitive touch driver (e.g., FT6236, GT911)
-2. Update `hardware_pins.h` with new GPIO assignments
-3. Configure I2C bus for touch communication
-4. Update LVGL touch input integration
-
 ### Power Requirements
 
 #### ESP32-S3 Frontend
@@ -314,14 +301,4 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - [Electro-Smith](https://www.electro-smith.com/) for the excellent Daisy platform and libraries
 - [LVGL](https://lvgl.io/) for the embedded graphics library
 - [Espressif](https://www.espressif.com/) for the ESP32 platform and ESP-IDF
-
-### Hardware Compatibility Notes
-
-**ESP32-S3-DevKitC-1 Verified**: All GPIO assignments have been verified against the official ESP32-S3-DevKitC-1 pinout and are confirmed compatible with both N8 and N8R8 (PSRAM) variants.
-
-**Key Changes from Original Design:**
-- **Touch Interface**: Migrated from XPT2046 resistive (SPI) to FT6X36 capacitive (I2C)
-- **GPIO Corrections**: Updated pin assignments to use only available GPIO pins on ESP32-S3-DevKitC-1
-- **Conflict Resolution**: Resolved GPIO conflicts and optimized pin usage
-
-**Code Reference**: All GPIO definitions are maintained in `firmware/esp32/components/hardware_config/include/hardware_pins.h` with corrected assignments for ESP32-S3-DevKitC-1 compatibility.
+- All the contributors who have invested their time and effort into this project.

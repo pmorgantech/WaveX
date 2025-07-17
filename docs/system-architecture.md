@@ -130,7 +130,7 @@ graph TD
     end
     
     subgraph "Hardware Abstraction"
-        TOUCH_HAL[Touch Driver<br/>XPT2046]
+        TOUCH_HAL[Touch Driver<br/>FT6X36]
         DISPLAY_HAL[Display Driver<br/>ST7796S]
         SPI_HAL[SPI Master<br/>ESP-IDF]
         FS_HAL[File System<br/>FatFS]

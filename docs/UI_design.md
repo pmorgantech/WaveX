@@ -18,9 +18,9 @@
 | **Encoder A** (with push) | Global focus wheel → scroll / change value; push = OK.             |
 | **Encoder B**             | Zoom in editors (waveform, envelopes).                             |
 | **Back button**           | Always returns to parent page.                                     |
-| **DIN/USB MIDI**          | Program‑change = patch load, CC #0‑31 reserved for quick params.   |
+| **DIN/USB MIDI**          | Program-change = patch load, CC #0-31 reserved for quick params.   |
 
-> *Hint:* Keep tactile controls functional even if the touch panel needs recalibration mid‑gig.
+> *Hint:* Keep tactile controls functional even if the touch panel needs recalibration mid-gig. The FT6X36 capacitive touch controller is more reliable than older resistive models.
 
 ---
 
