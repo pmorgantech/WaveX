@@ -152,11 +152,8 @@ CONFIG_PARTITION_TABLE_SINGLE_APP=y
 # These components are not built by default and don't have config options
 # in the main sdkconfig. They would need to be added as components if needed. 
 
-# Force single core mode for debugging
-CONFIG_FREERTOS_UNICORE=y
-
-# Ensure proper CPU frequency
-# CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_160 is not set 
+# Enable dual-core operation
+# CONFIG_FREERTOS_UNICORE is not set 
 CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
 
 # Disable potentially problematic features

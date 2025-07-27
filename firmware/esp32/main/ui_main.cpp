@@ -25,8 +25,55 @@
 #include "driver/ledc.h"
 #include "esp_err.h"
 
+// Touch state variables for LVGL integration
+static TPoint current_touch_point = {0, 0};
+static TEvent current_touch_event = TEvent::None;
+static bool touch_pressed = false;
+
+// Add touch filtering variables
+static bool last_touch_state = false;
+static int32_t last_touch_x = 0;
+static int32_t last_touch_y = 0;
+static uint32_t touch_debounce_time = 0;
+static const int32_t TOUCH_NOISE_THRESHOLD = 7;  // Ignore movements < 10 pixels
+
+// Denoising
+static const uint32_t TOUCH_EVENT_DEBOUNCE_MS = 5;  // 10ms event debounce
+static const uint32_t TOUCH_DEBOUNCE_MS = 3;  // 5ms general debounce
+
+// Add this near the top with other touch state variables
+static const uint32_t TOUCH_STABILIZATION_MS = 2000; // 2 second stabilization period
+
+// Add this near the top with other static variables
+static esp_timer_handle_t touch_registration_timer = NULL;
+
+// Add forward declaration at the top with other forward declarations
+static void wavex_touch_read_cb(lv_indev_t* indev, lv_indev_data_t* data);
+
 // Global for touch visualization (debug)
 static lv_obj_t* touch_circle = NULL;
+
+
+static lv_obj_t* main_screen = NULL;
+static lv_obj_t* main_menu = NULL;
+
+// LCD and touch handles
+static esp_lcd_panel_io_handle_t lcd_io = NULL;
+static esp_lcd_panel_handle_t lcd_panel = NULL;
+static FT6X36* touch_controller = NULL;
+static lv_display_t* lvgl_disp = NULL;
+static lv_indev_t* lvgl_touch_indev = NULL;
+
+// Global variables for settings
+static bool system_performance_mode = true;
+static bool auto_save_enabled = true;
+static bool debug_logging_enabled = false;
+static uint8_t display_brightness = 80;
+static uint32_t screen_timeout_seconds = 120;
+static bool dark_theme_enabled = true;
+
+// Add cross-core synchronization
+static SemaphoreHandle_t touch_data_mutex = NULL;
 
 // Custom LVGL memory allocation functions to use PSRAM
 void* lvgl_malloc(size_t size) {
@@ -60,24 +107,6 @@ void* lvgl_realloc(void* ptr, size_t size) {
     }
     return new_ptr;
 }
-
-static lv_obj_t* main_screen = NULL;
-static lv_obj_t* main_menu = NULL;
-
-// LCD and touch handles
-static esp_lcd_panel_io_handle_t lcd_io = NULL;
-static esp_lcd_panel_handle_t lcd_panel = NULL;
-static FT6X36* touch_controller = NULL;
-static lv_display_t* lvgl_disp = NULL;
-static lv_indev_t* lvgl_touch_indev = NULL;
-
-// Global variables for settings
-static bool system_performance_mode = true;
-static bool auto_save_enabled = true;
-static bool debug_logging_enabled = false;
-static uint8_t display_brightness = 80;
-static uint32_t screen_timeout_seconds = 120;
-static bool dark_theme_enabled = true;
 
 // Event callback for brightness slider
 static void brightness_slider_event_cb(lv_event_t* e) {
@@ -267,7 +296,7 @@ static lv_obj_t* create_menu_text(lv_obj_t* parent, const char* icon, const char
     return obj;
 }
 
-// Helper function to create menu sliders (placeholder for future settings)
+// Helper function to create menu sliders
 static lv_obj_t* create_menu_slider(lv_obj_t* parent, const char* icon, const char* txt, 
                                    int32_t min, int32_t max, int32_t val)
 {
@@ -285,7 +314,7 @@ static lv_obj_t* create_menu_slider(lv_obj_t* parent, const char* icon, const ch
     return obj;
 }
 
-// Helper function to create menu switches (placeholder for future settings)
+// Helper function to create menu switches
 static lv_obj_t* create_menu_switch(lv_obj_t* parent, const char* icon, const char* txt, bool checked)
 {
     lv_obj_t* obj = create_menu_text(parent, icon, txt);
@@ -330,31 +359,7 @@ static lv_obj_t* create_menu_text_with_callback(lv_obj_t* parent, const char* ic
     return obj;
 }
 
-// Touch state variables for LVGL integration
-static TPoint current_touch_point = {0, 0};
-static TEvent current_touch_event = TEvent::None;
-static bool touch_pressed = false;
-
-// Add touch filtering variables
-static bool last_touch_state = false;
-static int32_t last_touch_x = 0;
-static int32_t last_touch_y = 0;
-static uint32_t touch_debounce_time = 0;
-static const uint32_t TOUCH_DEBOUNCE_MS = 50;  // 50ms debounce
-static const int32_t TOUCH_NOISE_THRESHOLD = 10;  // Ignore movements < 10 pixels
-
-// Add this near the top with other touch state variables
-static bool touch_system_ready = false;
-static uint32_t touch_init_complete_time = 0;
-static const uint32_t TOUCH_STABILIZATION_MS = 2000; // 2 second stabilization period
-
-// Add this near the top with other static variables
-static esp_timer_handle_t touch_registration_timer = NULL;
-
-// Add forward declaration at the top with other forward declarations
-static void wavex_touch_read_cb(lv_indev_t* indev, lv_indev_data_t* data);
-
-// Add this callback function for the timer AFTER wavex_touch_read_cb function
+// Add this callback function for the timer
 static void register_touch_callback_delayed(void* arg) {
     if (lvgl_touch_indev && touch_controller) {
         ESP_LOGI("UI", "Registering touch callback after 1s stabilization period");
@@ -372,204 +377,6 @@ static void register_touch_callback_delayed(void* arg) {
         esp_timer_delete(touch_registration_timer);
         touch_registration_timer = NULL;
     }
-}
-
-/**
- * @brief Touch event handler callback from FT6X36
- * Called when touch events occur (tap, drag, etc.)
- */
-static void wavex_touch_event_handler(TPoint point, TEvent event)
-{
-    // Store the current touch data for LVGL to read
-    current_touch_point = point;
-    current_touch_event = event;
-    
-    // Update touch state based on event type
-    switch (event) {
-        case TEvent::TouchStart:
-        case TEvent::Tap:
-        case TEvent::DragStart:
-        case TEvent::DragMove:
-            touch_pressed = true;
-            break;
-        case TEvent::TouchEnd:
-        case TEvent::DragEnd:
-            touch_pressed = false;
-            break;
-        default:
-            // Keep current state for other events
-            break;
-    }
-}
-
-/**
- * @brief Enhanced touch read callback with improved filtering and reduced noise
- */
-static void wavex_touch_read_cb(lv_indev_t* indev, lv_indev_data_t* data)
-{
-    static uint32_t last_poll_time = 0;
-    static uint32_t touch_count = 0;
-    static uint32_t last_valid_event_time = 0;
-    static TEvent last_reported_event = TEvent::None;
-    static uint32_t touch_start_time = 0;
-    static bool in_touch_sequence = false;
-    
-    uint32_t current_time = esp_timer_get_time() / 1000;  // Get time in milliseconds
-    
-    // Poll the touch controller for new data
-    if (touch_controller != nullptr) {
-        TPoint point;
-        TEvent event;
-        
-        // Reduced debug logging - only every 5 seconds when no touch activity
-        if (current_time - last_poll_time > 5000 && !in_touch_sequence) {
-            ESP_LOGI("TOUCH_DEBUG", "Touch polling active - count: %" PRIu32 " (quiet)", touch_count);
-            last_poll_time = current_time;
-            touch_count = 0;
-        }
-        touch_count++;
-        
-        touch_controller->poll(&point, &event);
-        
-        // FILTER 1: Only process real events, ignore NoEvent completely
-        if (event != TEvent::None) {
-            // FILTER 2: COORDINATE VALIDATION FIRST - before any processing!
-            // Convert to signed 32-bit for safe math
-            int32_t x = (int32_t)point.x;
-            int32_t y = (int32_t)point.y;
-            
-            // Filter out edge touches that are likely noise - BEFORE processing
-            if (x <= 3 || x >= (WAVEX_LCD_H_RES - 3) || y <= 3 || y >= (WAVEX_LCD_V_RES - 3)) {
-                ESP_LOGD("TOUCH_FILTER", "Filtering edge touch at (%" PRId32 ", %" PRId32 ") - ignoring event", x, y);
-                // Don't process this event at all - return early
-                data->state = LV_INDEV_STATE_RELEASED;
-                data->continue_reading = false;
-                return;
-            }
-            
-            // Clamp coordinates to valid display area
-            if (x < 0) x = 0;
-            if (x >= WAVEX_LCD_H_RES) x = WAVEX_LCD_H_RES - 1;
-            if (y < 0) y = 0;
-            if (y >= WAVEX_LCD_V_RES) y = WAVEX_LCD_V_RES - 1;
-            
-            // Update the point with filtered coordinates
-            point.x = (uint16_t)x;
-            point.y = (uint16_t)y;
-            
-            // FILTER 3: Debounce rapid event changes (prevent bouncing)
-            if (current_time - last_valid_event_time < 20) { // 20ms debounce
-                // Too soon since last event - ignore
-                data->continue_reading = false;
-                return;
-            }
-            
-            // FILTER 4: State-based filtering (NOW with clean coordinates)
-            bool should_report_event = false;
-            
-            switch (event) {
-                case TEvent::TouchStart:
-                    if (!in_touch_sequence) {
-                        should_report_event = true;
-                        in_touch_sequence = true;
-                        touch_start_time = current_time;
-                        ESP_LOGI("TOUCH_EVENT", "Touch START at (%d, %d)", point.x, point.y);
-                    }
-                    // Ignore duplicate TouchStart events
-                    break;
-                    
-                case TEvent::TouchMove:
-                    if (in_touch_sequence) {
-                        // Movement threshold - only report significant moves
-                        int32_t dx = abs((int32_t)point.x - (int32_t)current_touch_point.x);
-                        int32_t dy = abs((int32_t)point.y - (int32_t)current_touch_point.y);
-                        
-                        if (dx > TOUCH_NOISE_THRESHOLD || dy > TOUCH_NOISE_THRESHOLD) {
-                            should_report_event = true;
-                            // Only log significant moves to reduce noise
-                            if (dx > 20 || dy > 20) {
-                                ESP_LOGD("TOUCH_EVENT", "Touch MOVE to (%d, %d)", point.x, point.y);
-                            }
-                        }
-                    } else {
-                        // Move without start - treat as start
-                        should_report_event = true;
-                        in_touch_sequence = true;
-                        touch_start_time = current_time;
-                        ESP_LOGI("TOUCH_EVENT", "Touch START (via move) at (%d, %d)", point.x, point.y);
-                        event = TEvent::TouchStart;  // Convert to start event
-                    }
-                    break;
-                    
-                case TEvent::TouchEnd:
-                    if (in_touch_sequence) {
-                        should_report_event = true;
-                        in_touch_sequence = false;
-                        ESP_LOGI("TOUCH_EVENT", "Touch END at (%d, %d) - duration: %" PRIu32 "ms", 
-                                point.x, point.y, current_time - touch_start_time);
-                    }
-                    // Ignore spurious TouchEnd without TouchStart
-                    break;
-                    
-                default:
-                    break;
-            }
-            
-            if (should_report_event) {
-                wavex_touch_event_handler(point, event);
-                last_valid_event_time = current_time;
-                last_reported_event = event;
-            }
-        }
-    }
-    
-    // Apply filtered coordinates to LVGL (this part stays mostly the same)
-    if (touch_pressed) {
-        // Use the already filtered coordinates from current_touch_point
-        int32_t x = (int32_t)current_touch_point.x;
-        int32_t y = (int32_t)current_touch_point.y;
-        
-        // Apply additional jitter filtering for continuous touches
-        if (last_touch_state) {
-            int32_t dx = abs(x - last_touch_x);
-            int32_t dy = abs(y - last_touch_y);
-            if (dx < 3 && dy < 3) { // Smaller threshold for fine touches
-                // Use previous position to reduce jitter
-                x = last_touch_x;
-                y = last_touch_y;
-            }
-        }
-        
-        data->state = LV_INDEV_STATE_PRESSED;
-        data->point.x = x;
-        data->point.y = y;
-        
-        last_touch_x = x;
-        last_touch_y = y;
-        last_touch_state = true;
-        
-        // Update touch visualization
-        if (touch_circle) {
-            lv_obj_set_pos(touch_circle, x - 10, y - 10);
-            lv_obj_clear_flag(touch_circle, LV_OBJ_FLAG_HIDDEN);
-        }
-    } else {
-        // Touch released
-        if (last_touch_state) {
-            touch_debounce_time = current_time;
-            in_touch_sequence = false;
-        }
-        data->state = LV_INDEV_STATE_RELEASED;
-        last_touch_state = false;
-
-        // Hide visualization
-        if (touch_circle) {
-            lv_obj_add_flag(touch_circle, LV_OBJ_FLAG_HIDDEN);
-        }
-    }
-    
-    // Continue reading
-    data->continue_reading = false;
 }
 
 /**
@@ -1577,8 +1384,14 @@ static void ui_creation_task(void* pvParameters) {
 
 void wavex_ui_init(void)
 {
-    ESP_LOGI("UI", "Initializing WaveX UI with PSRAM-optimized memory configuration...");
-    check_stack_usage("start of UI init");
+    ESP_LOGI("UI", "Initializing WaveX UI with dual-core optimization...");
+    
+    // Create mutex for cross-core touch data access - ADD THIS EARLY
+    touch_data_mutex = xSemaphoreCreateMutex();
+    if (touch_data_mutex == NULL) {
+        ESP_LOGE("UI", "Failed to create touch data mutex");
+        return;
+    }
     
     // Check memory status first
     check_memory_status();
@@ -1603,16 +1416,13 @@ void wavex_ui_init(void)
     }
     check_stack_usage("after touch init");
     
-    // Configure LVGL to use PSRAM via sdkconfig
-    ESP_LOGI("UI", "LVGL configured to use PSRAM via sdkconfig settings...");
-    
-    // Initialize esp_lvgl_port with custom memory management
+    // Configure LVGL to run on Core 1 (APP CPU) for UI responsiveness
     const lvgl_port_cfg_t lvgl_cfg = {
         .task_priority = 4,
         .task_stack = 8192,
-        .task_affinity = -1,
+        .task_affinity = 1,        // Pin LVGL to Core 1 (APP CPU)
         .task_max_sleep_ms = 500,
-        .timer_period_ms = 10  // Changed from 5ms to 10ms to reduce polling frequency
+        .timer_period_ms = 10
     };
     ESP_ERROR_CHECK(lvgl_port_init(&lvgl_cfg));
     
@@ -1710,30 +1520,10 @@ void wavex_ui_init(void)
     ESP_LOGI("UI", "Internal SRAM free: %zu bytes", heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
     ESP_LOGI("UI", "PSRAM free: %zu bytes", heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
     
-    // Create UI in separate task with large stack
-    xTaskCreate(ui_creation_task, "ui_create", 16384, NULL, 5, NULL);
+    // Create UI in separate task with Core 1 affinity for UI tasks
+    xTaskCreatePinnedToCore(ui_creation_task, "ui_create", 16384, NULL, 5, NULL, 1);  // Core 1
     
-    // Wait a bit for UI creation to complete
-    vTaskDelay(pdMS_TO_TICKS(100));
-    
-    ESP_LOGI("UI", "UI initialization complete with optimized memory allocation");
-    
-    // Move memory check to separate function call to reduce stack usage
-    vTaskDelay(pdMS_TO_TICKS(10)); // Small delay
-    check_memory_status();
-    check_stack_usage("end of UI init");
-
-    // After LVGL display is set up, create touch debug circle
-    if (lvgl_disp) {
-        touch_circle = lv_obj_create(lv_screen_active());
-        lv_obj_set_size(touch_circle, 20, 20);  // Small circle
-        lv_obj_set_style_radius(touch_circle, LV_RADIUS_CIRCLE, 0);
-        lv_obj_set_style_bg_color(touch_circle, lv_color_hex(0xFF0000), 0);  // Red
-        lv_obj_set_style_bg_opa(touch_circle, LV_OPA_100, 0);
-        lv_obj_set_style_border_width(touch_circle, 0, 0);
-        lv_obj_add_flag(touch_circle, LV_OBJ_FLAG_HIDDEN);  // Start hidden
-        lv_obj_set_pos(touch_circle, 0, 0);  // Initial position
-    }
+    ESP_LOGI("UI", "UI initialization complete with dual-core optimization");
 }
 
 lv_obj_t* ui_main_create_menu(void)
@@ -2116,7 +1906,7 @@ lv_obj_t* ui_diagnostics_create(lv_obj_t* parent_menu) {
     
     // Start resource monitoring task if not already running
     if (resource_monitor_task == NULL) {
-        xTaskCreate(resource_monitor_task_func, "resource_monitor", 2048, NULL, 1, &resource_monitor_task);
+        xTaskCreatePinnedToCore(resource_monitor_task_func, "resource_monitor", 2048, NULL, 1, &resource_monitor_task, 0);  // Core 0
     }
     
     return diagnostics_page;
@@ -2269,6 +2059,216 @@ lv_obj_t* ui_setup_create(lv_obj_t* parent_menu) {
     
     return setup_page;
 } 
+
+/**
+ * @brief Thread-safe touch event handler for multi-core operation
+ */
+static void wavex_touch_event_handler(TPoint point, TEvent event)
+{
+    // Protect shared touch data with mutex
+    if (touch_data_mutex && xSemaphoreTake(touch_data_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+        // Store the current touch data for LVGL to read
+        current_touch_point = point;
+        current_touch_event = event;
+        
+        // Update touch state based on event type
+        switch (event) {
+            case TEvent::TouchStart:
+            case TEvent::Tap:
+            case TEvent::DragStart:
+            case TEvent::DragMove:
+                touch_pressed = true;
+                break;
+            case TEvent::TouchEnd:
+            case TEvent::DragEnd:
+                touch_pressed = false;
+                break;
+            default:
+                // Keep current state for other events
+                break;
+        }
+        
+        xSemaphoreGive(touch_data_mutex);
+    } else {
+        ESP_LOGW("UI", "Touch mutex timeout - skipping event");
+    }
+}
+
+/**
+ * @brief Multi-core safe touch read callback
+ */
+static void wavex_touch_read_cb(lv_indev_t* indev, lv_indev_data_t* data)
+{
+    static uint32_t last_poll_time = 0;
+    static uint32_t touch_count = 0;
+    static uint32_t last_valid_event_time = 0;
+    static uint32_t touch_start_time = 0;
+    static bool in_touch_sequence = false;
+    
+    uint32_t current_time = esp_timer_get_time() / 1000;  // Get time in milliseconds
+    
+    // Poll the touch controller for new data
+    if (touch_controller != nullptr) {
+        TPoint point;
+        TEvent event;
+        
+        // Rate-limited debug logging - only every 5 seconds when no touch activity
+        if (current_time - last_poll_time > 5000 && !in_touch_sequence) {
+            ESP_LOGI("TOUCH_DEBUG", "Touch polling active - count: %" PRIu32 " (quiet)", touch_count);
+            last_poll_time = current_time;
+            touch_count = 0;
+        }
+        touch_count++;
+        
+        touch_controller->poll(&point, &event);
+        
+        // FILTER 1: Only process real events, ignore NoEvent completely
+        if (event != TEvent::None) {
+            // FILTER 2: COORDINATE VALIDATION FIRST - before any processing!
+            // Convert to signed 32-bit for safe math
+            int32_t x = (int32_t)point.x;
+            int32_t y = (int32_t)point.y;
+            
+            // Filter out edge touches that are likely noise - BEFORE processing
+            if (x <= 3 || x >= (WAVEX_LCD_H_RES - 3) || y <= 3 || y >= (WAVEX_LCD_V_RES - 3)) {
+                ESP_LOGD("TOUCH_FILTER", "Filtering edge touch at (%" PRId32 ", %" PRId32 ") - ignoring event", x, y);
+                // Don't process this event at all - return early
+                data->state = LV_INDEV_STATE_RELEASED;
+                data->continue_reading = false;
+                return;
+            }
+            
+            // Clamp coordinates to valid display area
+            if (x < 0) x = 0;
+            if (x >= WAVEX_LCD_H_RES) x = WAVEX_LCD_H_RES - 1;
+            if (y < 0) y = 0;
+            if (y >= WAVEX_LCD_V_RES) y = WAVEX_LCD_V_RES - 1;
+            
+            // Update the point with filtered coordinates
+            point.x = (uint16_t)x;
+            point.y = (uint16_t)y;
+            
+            // FILTER 3: Smart debouncing - prevent rapid event changes (using new macro)
+            if (current_time - last_valid_event_time < TOUCH_EVENT_DEBOUNCE_MS) {
+                // Too soon since last event - ignore
+                data->continue_reading = false;
+                return;
+            }
+            
+            // FILTER 4: State-based filtering with movement threshold (NOW with clean coordinates)
+            bool should_report_event = false;
+            
+            switch (event) {
+                case TEvent::TouchStart:
+                    if (!in_touch_sequence) {
+                        should_report_event = true;
+                        in_touch_sequence = true;
+                        touch_start_time = current_time;
+                        ESP_LOGI("TOUCH_EVENT", "Touch START at (%d, %d)", point.x, point.y);
+                    }
+                    // Ignore duplicate TouchStart events
+                    break;
+                    
+                case TEvent::TouchMove:
+                    if (in_touch_sequence) {
+                        // Movement threshold filtering - only report significant moves
+                        int32_t dx = abs((int32_t)point.x - (int32_t)current_touch_point.x);
+                        int32_t dy = abs((int32_t)point.y - (int32_t)current_touch_point.y);
+                        
+                        if (dx > TOUCH_NOISE_THRESHOLD || dy > TOUCH_NOISE_THRESHOLD) {
+                            should_report_event = true;
+                            // Only log significant moves to reduce noise
+                            if (dx > 20 || dy > 20) {
+                                ESP_LOGD("TOUCH_EVENT", "Touch MOVE to (%d, %d)", point.x, point.y);
+                            }
+                        }
+                    } else {
+                        // Move without start - treat as start
+                        should_report_event = true;
+                        in_touch_sequence = true;
+                        touch_start_time = current_time;
+                        ESP_LOGI("TOUCH_EVENT", "Touch START (via move) at (%d, %d)", point.x, point.y);
+                        event = TEvent::TouchStart;  // Convert to start event
+                    }
+                    break;
+                    
+                case TEvent::TouchEnd:
+                    if (in_touch_sequence) {
+                        should_report_event = true;
+                        in_touch_sequence = false;
+                        ESP_LOGI("TOUCH_EVENT", "Touch END at (%d, %d) - duration: %" PRIu32 "ms", 
+                                point.x, point.y, current_time - touch_start_time);
+                    }
+                    // Ignore spurious TouchEnd without TouchStart
+                    break;
+                    
+                default:
+                    break;
+            }
+            
+            if (should_report_event) {
+                wavex_touch_event_handler(point, event);
+                last_valid_event_time = current_time;
+            }
+        }
+    }
+    
+    // Protect touch data access with mutex for multi-core safety
+    if (touch_data_mutex && xSemaphoreTake(touch_data_mutex, pdMS_TO_TICKS(5)) == pdTRUE) {
+        // Apply filtered coordinates to LVGL
+        if (touch_pressed) {
+            // Use the already filtered coordinates from current_touch_point
+            int32_t x = (int32_t)current_touch_point.x;
+            int32_t y = (int32_t)current_touch_point.y;
+            
+            // Apply additional jitter filtering for continuous touches
+            if (last_touch_state) {
+                int32_t dx = abs(x - last_touch_x);
+                int32_t dy = abs(y - last_touch_y);
+                if (dx < 3 && dy < 3) { // Smaller threshold for fine touches
+                    // Use previous position to reduce jitter
+                    x = last_touch_x;
+                    y = last_touch_y;
+                }
+            }
+            
+            data->state = LV_INDEV_STATE_PRESSED;
+            data->point.x = x;
+            data->point.y = y;
+            
+            last_touch_x = x;
+            last_touch_y = y;
+            last_touch_state = true;
+            
+            // Update touch visualization
+            if (touch_circle) {
+                lv_obj_set_pos(touch_circle, x - 10, y - 10);
+                lv_obj_clear_flag(touch_circle, LV_OBJ_FLAG_HIDDEN);
+            }
+        } else {
+            // Touch released
+            if (last_touch_state) {
+                touch_debounce_time = current_time;
+                in_touch_sequence = false;
+            }
+            data->state = LV_INDEV_STATE_RELEASED;
+            last_touch_state = false;
+
+            // Hide visualization
+            if (touch_circle) {
+                lv_obj_add_flag(touch_circle, LV_OBJ_FLAG_HIDDEN);
+            }
+        }
+        
+        xSemaphoreGive(touch_data_mutex);
+    } else {
+        // Fallback to released state if mutex timeout
+        data->state = LV_INDEV_STATE_RELEASED;
+        ESP_LOGD("TOUCH", "Mutex timeout in touch read callback");
+    }
+    
+    data->continue_reading = false;
+}
 
 
 
