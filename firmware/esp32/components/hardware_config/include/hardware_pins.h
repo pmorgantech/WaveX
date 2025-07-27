@@ -62,6 +62,9 @@ extern "C" {
 /** Touch Reset - GPIO14 🔧 CHANGED: GPIO15 has conflicts, using GPIO14 instead */
 #define WAVEX_CTP_GPIO_RST      GPIO_NUM_14
 
+/** Touch Interrupt - GPIO15 (active-low on touch, from docs) */
+#define WAVEX_CTP_GPIO_INT      GPIO_NUM_15  // Available pin; enable pull-up and falling-edge interrupt
+
 /** I2C port number for touch controller */
 #define WAVEX_CTP_I2C_NUM       I2C_NUM_0
 
@@ -139,13 +142,20 @@ extern "C" {
 #define WAVEX_LCD_PARAM_BITS        8
 
 /** LCD color space - BGR order for correct red/blue channels */
-#define WAVEX_LCD_COLOR_SPACE       ESP_LCD_COLOR_SPACE_BGR  // Changed from BGR to match working config
+#define WAVEX_LCD_COLOR_SPACE       ESP_LCD_COLOR_SPACE_BGR
 
-/** LCD backlight active level (1 = high, 0 = low) */
+/** LCD backlight active level (1 = high/on via PWM duty >0) */
 #define WAVEX_LCD_BL_ON_LEVEL       1
 
-/** LCD reset active level (0 = low, 1 = high) */
-#define WAVEX_LCD_RST_ACTIVE_LEVEL 0
+/** LCD reset active level (0 = low/reset, confirmed from docs) */
+#define WAVEX_LCD_RST_ACTIVE_LEVEL  0
+
+/** LCD chip select active level (0 = low/active, from docs) */
+#define WAVEX_LCD_CS_ACTIVE_LEVEL   0
+
+// Backlight control mode selection
+#define WAVEX_BACKLIGHT_PWM_MODE    0  // Set to 1 for PWM mode, 0 for GPIO mode
+#define WAVEX_BACKLIGHT_ENABLED     1  // Set to 1 to enable backlight, 0 to disable
 
 // =============================================================================
 // Touch Configuration Constants  

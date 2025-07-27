@@ -350,8 +350,8 @@ bool FT6X36::readData(void)
 	case 3:
 		swap(_touchX[0], _touchY[0]);
 		swap(_touchX[1], _touchY[1]);
-		_touchX[0] = _touch_height - _touchX[0] - 1;
-		_touchX[1] = _touch_height - _touchX[1] - 1;
+		_touchX[0] = _touch_width - _touchX[0] - 1;
+		_touchX[1] = _touch_width - _touchX[1] - 1;
 		break;
   }
 	if (CONFIG_FT6X36_DEBUG) {

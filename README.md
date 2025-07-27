@@ -284,6 +284,37 @@ Parameter Sync  1kHz        Control rate     1ms
 - **SWD**: 4-pin SWD interface for debugging
 - **UART**: Serial debug output via USB
 
+## Hardware Pin Documentation
+
+Based on the provided LCD/touch controller specs, here are the key signals and their behaviors, mapped to ESP32-S3 pins (from `hardware_pins.h`):
+
+### LCD Signals
+| Signal | Description | Active Level | ESP32 GPIO | Notes |
+|--------|-------------|--------------|------------|-------|
+| LCD_CS | LCD selection control | Low active | GPIO5 | Handled by SPI driver |
+| LCD_RST | LCD reset control | Low reset | GPIO2 | Assert low to reset, high to release |
+| LCD_RS (DC) | Command/Data select | High: data, Low: command | GPIO4 | Configured in panel IO |
+| LED Backlight | PWM backlight control | PWM duty cycle | GPIO21 | Uses LEDC for brightness (0-255) |
+| SDI (MOSI) | SPI data in | N/A | GPIO6 | Display data input |
+| SCK | SPI clock | N/A | GPIO7 | 40MHz clock |
+| SDO (MISO) | SPI data out | N/A | GPIO19 | Optional, for readback |
+
+### Touch Signals
+| Signal | Description | Active Level | ESP32 GPIO | Notes |
+|--------|-------------|--------------|------------|-------|
+| CTP_SCL | I2C clock | N/A | GPIO9 | Touch clock signal |
+| CTP_SDA | I2C data | N/A | GPIO20 | Touch data signal |
+| CTP_INT | Touch interrupt | Low on touch | GPIO15 | Falling-edge interrupt; enable pull-up |
+| CTP_RST | Touch reset | Low reset | GPIO14 | Assert low to reset |
+
+**Troubleshooting Tips**:
+- **GPIO Stability**: If pin levels don't hold (e.g., reset reads 0 after set to 1), enable internal pull-ups in `ui_main.cpp` GPIO config. For stronger pull, add external 4.7kΩ resistors to 3.3V.
+- **Interrupt Mode**: Touch uses interrupt-driven polling for efficiency; verify CTP_INT pulls low on touch with multimeter.
+- **PWM Backlight**: Brightness controlled via LEDC (5kHz); test with duty cycle 128 (~50% brightness).
+- **Verification**: After init, check logs for pin states (e.g., "Reset pin state: 1" for deasserted).
+
+For full pinout and wiring diagram, see the "Hardware Pinout & Wiring" section below.
+
 ## Contributing
 
 1. Fork the repository

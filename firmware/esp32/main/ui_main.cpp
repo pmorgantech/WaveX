@@ -22,6 +22,8 @@
 #include <inttypes.h>
 #include "inter_mcu.h"
 #include "esp_task_wdt.h"
+#include "driver/ledc.h"
+#include "esp_err.h"
 
 // Forward declarations
 static void test_touch_gpio_pins(void);
@@ -86,16 +88,26 @@ static void brightness_slider_event_cb(lv_event_t* e) {
     int32_t value = lv_slider_get_value(slider);
     display_brightness = (uint8_t)value;
     
-    // Adjust backlight PWM based on brightness (simplified approach)
-    // In a real implementation, you'd use PWM to control brightness
-    // For now, we'll just turn backlight on/off based on threshold
-    if (value > 10) {
-        gpio_set_level(WAVEX_LCD_GPIO_BL, WAVEX_LCD_BL_ON_LEVEL);
-        ESP_LOGI("UI", "Display brightness set to %" PRId32 "%% (backlight ON)", value);
-    } else {
-        gpio_set_level(WAVEX_LCD_GPIO_BL, !WAVEX_LCD_BL_ON_LEVEL);
-        ESP_LOGI("UI", "Display brightness set to %" PRId32 "%% (backlight OFF)", value);
-    }
+#if WAVEX_BACKLIGHT_ENABLED == 1
+    #if WAVEX_BACKLIGHT_PWM_MODE == 1
+        // PWM mode - set duty cycle
+        uint32_t duty = (value * 255) / 100;
+        ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, duty);
+        ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
+        ESP_LOGI("UI", "Display brightness set to %" PRId32 "%% (PWM duty: %" PRIu32 ")", value, duty);
+    #else
+        // GPIO mode - simple on/off based on threshold
+        if (value > 10) {
+            gpio_set_level(WAVEX_LCD_GPIO_BL, WAVEX_LCD_BL_ON_LEVEL);
+            ESP_LOGI("UI", "Display brightness set to %" PRId32 "%% (backlight ON)", value);
+        } else {
+            gpio_set_level(WAVEX_LCD_GPIO_BL, !WAVEX_LCD_BL_ON_LEVEL);
+            ESP_LOGI("UI", "Display brightness set to %" PRId32 "%% (backlight OFF)", value);
+        }
+    #endif
+#else
+    ESP_LOGI("UI", "Brightness slider moved to %" PRId32 "%% (backlight disabled by config)", value);
+#endif
 }
 
 // Event callback for screen timeout slider
@@ -363,26 +375,41 @@ static void wavex_touch_event_handler(TPoint point, TEvent event)
 }
 
 /**
- * @brief Enhanced touch read callback with filtering and debouncing
+ * @brief Enhanced touch read callback with improved debugging
  */
 static void wavex_touch_read_cb(lv_indev_t* indev, lv_indev_data_t* data)
 {
+    static uint32_t last_poll_time = 0;
+    static uint32_t touch_count = 0;
+    
+    uint32_t current_time = esp_timer_get_time() / 1000;  // Get time in milliseconds
+    
     // Poll the touch controller for new data
     if (touch_controller != nullptr) {
         TPoint point;
         TEvent event;
+        
+        // Add debug logging every 1000 polls to see if we're polling
+        if (current_time - last_poll_time > 1000) { // Every 1 second
+            ESP_LOGI("TOUCH_DEBUG", "Touch polling active - count: %" PRIu32, touch_count);
+            last_poll_time = current_time;
+            touch_count = 0;
+        }
+        touch_count++;
+        
         touch_controller->poll(&point, &event);
         
-        // Update our touch state
+        // Update our touch state and log events
         if (event != TEvent::None) {
+            ESP_LOGI("TOUCH_EVENT", "Touch event: %d at (%d, %d)", (int)event, point.x, point.y);
             wavex_touch_event_handler(point, event);
         }
     }
     
-    uint32_t current_time = esp_timer_get_time() / 1000;  // Get time in milliseconds
-    
     // Apply debouncing and filtering
     if (touch_pressed) {
+        ESP_LOGI("TOUCH_ACTIVE", "Touch pressed at (%d, %d)", current_touch_point.x, current_touch_point.y);
+        
         // Convert to signed 32-bit for safe math
         int32_t x = (int32_t)current_touch_point.x;
         int32_t y = (int32_t)current_touch_point.y;
@@ -395,32 +422,32 @@ static void wavex_touch_read_cb(lv_indev_t* indev, lv_indev_data_t* data)
             return;
         }
         
-        // Apply coordinate transformations
-        //y = WAVEX_LCD_V_RES - y;  // Mirror Y coordinate
+        // // Apply coordinate transformations
+        // //y = WAVEX_LCD_V_RES - y;  // Mirror Y coordinate
         
-        // Clamp to display bounds
-        if (x < 0) x = 0;
-        if (x >= WAVEX_LCD_H_RES) x = WAVEX_LCD_H_RES - 1;
-        if (y < 0) y = 0;
-        if (y >= WAVEX_LCD_V_RES) y = WAVEX_LCD_V_RES - 1;
+        // // Clamp to display bounds
+        // if (x < 0) x = 0;
+        // if (x >= WAVEX_LCD_H_RES) x = WAVEX_LCD_H_RES - 1;
+        // if (y < 0) y = 0;
+        // if (y >= WAVEX_LCD_V_RES) y = WAVEX_LCD_V_RES - 1;
         
-        // Debounce new touches
-        if (!last_touch_state) {
-            if (current_time - touch_debounce_time < TOUCH_DEBOUNCE_MS) {
-                data->state = LV_INDEV_STATE_RELEASED;
-                return;  // Still in debounce period
-            }
-            ESP_LOGI("TOUCH", "New touch detected at (%" PRId32 ", %" PRId32 ")", x, y);
-        } else {
-            // Filter small movements during continuous touch
-            int32_t dx = abs(x - last_touch_x);
-            int32_t dy = abs(y - last_touch_y);
-            if (dx < TOUCH_NOISE_THRESHOLD && dy < TOUCH_NOISE_THRESHOLD) {
-                // Use last position to reduce jitter
-                x = last_touch_x;
-                y = last_touch_y;
-            }
-        }
+        // // Debounce new touches
+        // if (!last_touch_state) {
+        //     if (current_time - touch_debounce_time < TOUCH_DEBOUNCE_MS) {
+        //         data->state = LV_INDEV_STATE_RELEASED;
+        //         return;  // Still in debounce period
+        //     }
+        //     ESP_LOGI("TOUCH", "New touch detected at (%" PRId32 ", %" PRId32 ")", x, y);
+        // } else {
+        //     // Filter small movements during continuous touch
+        //     int32_t dx = abs(x - last_touch_x);
+        //     int32_t dy = abs(y - last_touch_y);
+        //     if (dx < TOUCH_NOISE_THRESHOLD && dy < TOUCH_NOISE_THRESHOLD) {
+        //         // Use last position to reduce jitter
+        //         x = last_touch_x;
+        //         y = last_touch_y;
+        //     }
+        // }
         
         data->state = LV_INDEV_STATE_PRESSED;
         data->point.x = x;
@@ -438,7 +465,7 @@ static void wavex_touch_read_cb(lv_indev_t* indev, lv_indev_data_t* data)
     } else {
         // Touch released
         if (last_touch_state) {
-            ESP_LOGI("TOUCH", "Touch released");
+            ESP_LOGI("TOUCH_EVENT", "Touch released");
             touch_debounce_time = current_time;
         }
         data->state = LV_INDEV_STATE_RELEASED;
@@ -488,7 +515,8 @@ static esp_err_t wavex_display_init(void)
     
     ESP_LOGI("DISPLAY", "Initializing ST7796S display...");
     
-    // Configure backlight GPIO
+#if WAVEX_BACKLIGHT_PWM_MODE == 0
+    // GPIO mode - configure backlight pin as regular GPIO
     gpio_config_t bk_gpio_config = {
         .pin_bit_mask = 1ULL << WAVEX_LCD_GPIO_BL,
         .mode = GPIO_MODE_OUTPUT,
@@ -497,8 +525,8 @@ static esp_err_t wavex_display_init(void)
         .intr_type = GPIO_INTR_DISABLE
     };
     ESP_RETURN_ON_ERROR(gpio_config(&bk_gpio_config), "DISPLAY", "Backlight GPIO config failed");
-    ESP_LOGI("DISPLAY", "Backlight GPIO configured successfully");
-    log_detailed_heap_info("after backlight GPIO");
+    ESP_LOGI("DISPLAY", "Backlight GPIO configured (GPIO mode)");
+#endif
     
     gpio_config_t rst_gpio_config = {
         .pin_bit_mask = 1ULL << WAVEX_LCD_GPIO_RST,
@@ -562,14 +590,14 @@ static esp_err_t wavex_display_init(void)
         .lcd_cmd_bits = WAVEX_LCD_CMD_BITS,
         .lcd_param_bits = WAVEX_LCD_PARAM_BITS,
         .flags = {
-            .dc_high_on_cmd = 0,
+            .dc_high_on_cmd = 0,  // Low for command (from docs: low=command, high=data)
             .dc_low_on_data = 0,
             .dc_low_on_param = 0,
             .octal_mode = 0,
             .quad_mode = 0,
             .sio_mode = 0,
             .lsb_first = 0,
-            .cs_high_active = 0
+            .cs_high_active = 0  // Low active CS (from docs)
         }
     };
     ESP_RETURN_ON_ERROR(esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)WAVEX_SPI_HOST, &io_config, &lcd_io),
@@ -604,18 +632,58 @@ static esp_err_t wavex_display_init(void)
     // Turn on display
     ESP_RETURN_ON_ERROR(esp_lcd_panel_disp_on_off(lcd_panel, true), "DISPLAY", "Panel display on failed");
     
-    // Turn on backlight
-    ESP_LOGI("DISPLAY", "Enabling backlight on GPIO21...");
-    ESP_RETURN_ON_ERROR(gpio_set_level(WAVEX_LCD_GPIO_BL, WAVEX_LCD_BL_ON_LEVEL), 
-                       "DISPLAY", "Backlight enable failed");
-    ESP_LOGI("DISPLAY", "Backlight enabled successfully");
-    
-    // Verify backlight state
-    int bl_state = gpio_get_level(WAVEX_LCD_GPIO_BL);
-    ESP_LOGI("DISPLAY", "Backlight pin state: %d", bl_state);
+    // Backlight control based on mode and enable flag
+#if WAVEX_BACKLIGHT_ENABLED == 1
+    #if WAVEX_BACKLIGHT_PWM_MODE == 1
+        // PWM mode backlight control
+        ESP_LOGI("DISPLAY", "Configuring backlight PWM...");
+        ledc_timer_config_t ledc_timer = {
+            .speed_mode = LEDC_LOW_SPEED_MODE,
+            .duty_resolution = LEDC_TIMER_8_BIT,
+            .timer_num = LEDC_TIMER_0,
+            .freq_hz = 5000,
+            .clk_cfg = LEDC_AUTO_CLK,
+            .deconfigure = false
+        };
+        ESP_RETURN_ON_ERROR(ledc_timer_config(&ledc_timer), "DISPLAY", "LEDC timer config failed");
+
+        ledc_channel_config_t ledc_ch = {
+            .gpio_num = WAVEX_LCD_GPIO_BL,
+            .speed_mode = LEDC_LOW_SPEED_MODE,
+            .channel = LEDC_CHANNEL_0,
+            .intr_type = LEDC_INTR_DISABLE,
+            .timer_sel = LEDC_TIMER_0,
+            .duty = 255,
+            .hpoint = 0,
+            .flags = { .output_invert = 0 }
+        };
+        ESP_RETURN_ON_ERROR(ledc_channel_config(&ledc_ch), "DISPLAY", "LEDC channel config failed");
+        
+        // Update the PWM duty to match the default brightness setting
+        ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, (display_brightness * 255) / 100);
+        ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
+        
+        ESP_LOGI("DISPLAY", "Backlight PWM configured successfully with %d%% brightness", display_brightness);
+    #else
+        // GPIO mode backlight control
+        ESP_LOGI("DISPLAY", "Enabling backlight (GPIO mode)...");
+        ESP_RETURN_ON_ERROR(gpio_set_level(WAVEX_LCD_GPIO_BL, WAVEX_LCD_BL_ON_LEVEL), 
+                           "DISPLAY", "Backlight enable failed");
+        ESP_LOGI("DISPLAY", "Backlight enabled successfully (GPIO mode)");
+    #endif
+#else
+    // Backlight disabled
+    ESP_LOGI("DISPLAY", "Backlight DISABLED by configuration");
+    #if WAVEX_BACKLIGHT_PWM_MODE == 0
+        ESP_RETURN_ON_ERROR(gpio_set_level(WAVEX_LCD_GPIO_BL, !WAVEX_LCD_BL_ON_LEVEL), 
+                           "DISPLAY", "Backlight disable failed");
+        ESP_LOGI("DISPLAY", "Backlight explicitly turned OFF (GPIO mode)");
+    #endif
+#endif
     
     ESP_LOGI("DISPLAY", "ST7796S display initialization complete");
     log_detailed_heap_info("display init complete");
+    
     return ESP_OK;
 }
 
@@ -759,69 +827,76 @@ static void configure_touch_sensitivity(void) {
 
 // Move this function definition BEFORE wavex_touch_init_debug():
 /**
- * @brief Enhanced touch initialization with better debugging
+ * @brief Enhanced touch initialization with polling mode (no interrupts)
  */
 static esp_err_t wavex_touch_init_debug(void)
 {
     log_detailed_heap_info("before touch init");
     
-    ESP_LOGI("TOUCH", "=== Enhanced Touch Controller Initialization ===");
+    ESP_LOGI("TOUCH", "=== Enhanced Touch Controller Initialization (Polling Mode) ===");
     
     // First, verify I2C pins from hardware_pins.h
     ESP_LOGI("TOUCH", "Touch I2C configuration:");
     ESP_LOGI("TOUCH", "  SDA Pin: GPIO%d", WAVEX_CTP_GPIO_SDA);
     ESP_LOGI("TOUCH", "  SCL Pin: GPIO%d", WAVEX_CTP_GPIO_SCL);
     ESP_LOGI("TOUCH", "  RST Pin: GPIO%d", WAVEX_CTP_GPIO_RST);
-    ESP_LOGI("TOUCH", "  INT Pin: Not used (polling mode)");
+    ESP_LOGI("TOUCH", "  Mode: Polling (no interrupt)");
     
-    // Configure and test touch reset GPIO
+    // Configure touch reset GPIO with pull-up
     gpio_config_t touch_rst_config = {
         .pin_bit_mask = 1ULL << WAVEX_CTP_GPIO_RST,
         .mode = GPIO_MODE_OUTPUT,
-        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_up_en = GPIO_PULLUP_ENABLE,  // Enable pull-up
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
         .intr_type = GPIO_INTR_DISABLE
     };
     ESP_RETURN_ON_ERROR(gpio_config(&touch_rst_config), "TOUCH", "Touch reset GPIO config failed");
     log_detailed_heap_info("after touch GPIO config");
     
-    // Test ONLY the reset pin before using it (skip I2C pins to avoid conflicts)
-    test_touch_gpio_pins();
+    // Skip the test_touch_gpio_pins() call that might interfere
+    // test_touch_gpio_pins();
     
-    // EXTENDED reset sequence - sometimes touch controllers need longer timing
-    ESP_LOGI("TOUCH", "Performing extended reset sequence...");
+    // PROPER reset sequence for FT6X36
+    ESP_LOGI("TOUCH", "Performing proper FT6X36 reset sequence...");
     
-    // Start with reset LOW for longer
-    ESP_RETURN_ON_ERROR(gpio_set_level(WAVEX_CTP_GPIO_RST, 0), "TOUCH", "Touch reset low failed");
-    ESP_LOGI("TOUCH", "Reset pin LOW, waiting 200ms for complete power down...");
-    vTaskDelay(pdMS_TO_TICKS(200));   // Longer reset pulse
-    
-    // Release reset
+    // Start with reset HIGH (inactive)
     ESP_RETURN_ON_ERROR(gpio_set_level(WAVEX_CTP_GPIO_RST, 1), "TOUCH", "Touch reset high failed");
-    ESP_LOGI("TOUCH", "Reset pin HIGH, waiting 500ms for controller boot...");
-    vTaskDelay(pdMS_TO_TICKS(500));  // Much longer initialization time
+    vTaskDelay(pdMS_TO_TICKS(10));   // Short delay
     
-    // Verify reset pin state (log but don't fail - continue to I2C scan)
+    // Assert reset LOW (active) 
+    ESP_RETURN_ON_ERROR(gpio_set_level(WAVEX_CTP_GPIO_RST, 0), "TOUCH", "Touch reset low failed");
+    ESP_LOGI("TOUCH", "Reset pin LOW, waiting 10ms...");
+    vTaskDelay(pdMS_TO_TICKS(10));   // Short reset pulse
+    
+    // Release reset HIGH (inactive)
+    ESP_RETURN_ON_ERROR(gpio_set_level(WAVEX_CTP_GPIO_RST, 1), "TOUCH", "Touch reset high failed");
+    ESP_LOGI("TOUCH", "Reset pin HIGH, waiting 300ms for controller boot...");
+    vTaskDelay(pdMS_TO_TICKS(300));  // Boot time
+    
+    // Verify reset pin state
     int rst_level = gpio_get_level(WAVEX_CTP_GPIO_RST);
-    ESP_LOGI("TOUCH", "Reset pin final state: %d (expected 1 for active-high release)", rst_level);
+    ESP_LOGI("TOUCH", "Reset pin final state: %d (expected 1)", rst_level);
     if (rst_level != 1) {
-        ESP_LOGW("TOUCH", "Reset pin not HIGH - possible active-low hardware or pull-down. Continuing anyway...");
-        // Optionally test active-low release: uncomment if touch still fails
-        // gpio_set_level(WAVEX_CTP_GPIO_RST, 0);
-        // ESP_LOGI("TOUCH", "Trying active-low release (set to 0)...");
-        // vTaskDelay(pdMS_TO_TICKS(100));
+        ESP_LOGW("TOUCH", "Reset pin issue detected - checking hardware connections");
+        
+        // Try to force the pin high again
+        gpio_set_level(WAVEX_CTP_GPIO_RST, 1);
+        vTaskDelay(pdMS_TO_TICKS(50));
+        rst_level = gpio_get_level(WAVEX_CTP_GPIO_RST);
+        ESP_LOGI("TOUCH", "After retry - Reset pin state: %d", rst_level);
     }
     
     // Scan I2C bus before trying to initialize touch controller
     debug_i2c_scan();
     
-    // Try to initialize FT6X36 touch controller
-    ESP_LOGI("TOUCH", "Attempting to initialize FT6X36 touch controller...");
-    touch_controller = new FT6X36(GPIO_NUM_NC);  // No interrupt pin for polling mode
+    // Try to initialize FT6X36 touch controller in POLLING MODE (no interrupt pin)
+    ESP_LOGI("TOUCH", "Attempting to initialize FT6X36 touch controller in polling mode...");
+    touch_controller = new FT6X36(-1);  // Use -1 to indicate no interrupt pin (polling mode)
     if (touch_controller == nullptr) {
         ESP_LOGE("TOUCH", "Failed to create FT6X36 touch controller - out of memory");
         return ESP_ERR_NO_MEM;
     }
+
     log_detailed_heap_info("after FT6X36 creation");
     
     // Try initialization with different thresholds
@@ -849,7 +924,7 @@ static esp_err_t wavex_touch_init_debug(void)
     // Call the function here (this should work now)
     configure_touch_sensitivity();
     
-    ESP_LOGI("TOUCH", "Touch controller initialized successfully!");
+    ESP_LOGI("TOUCH", "Touch controller initialized successfully in polling mode!");
     ESP_LOGI("TOUCH", "Touch resolution: %dx%d", WAVEX_LCD_H_RES, WAVEX_LCD_V_RES);
     ESP_LOGI("TOUCH", "Touch rotation: 3 (landscape)");
     
@@ -1080,87 +1155,6 @@ static lv_obj_t* create_system_info_widget(lv_obj_t* parent) {
     lv_obj_set_style_radius(midi_activity_led, LV_RADIUS_CIRCLE, LV_PART_MAIN);
     
     return info_container;
-}
-
-/**
- * @brief Create a very basic list-style menu using simple objects
- */
-static lv_obj_t* create_basic_list_menu(void) {
-    ESP_LOGI("UI", "Creating basic list menu...");
-    
-    // Create a container for the menu
-    lv_obj_t* menu_container = lv_obj_create(main_screen);
-    if (!menu_container) {
-        ESP_LOGE("UI", "Failed to create menu container");
-        return NULL;
-    }
-    
-    // Style the container
-    lv_obj_set_size(menu_container, WAVEX_LCD_H_RES, WAVEX_LCD_V_RES);
-    lv_obj_set_pos(menu_container, 0, 0);
-    lv_obj_set_style_bg_color(menu_container, lv_color_hex(0x003a57), LV_PART_MAIN);
-    lv_obj_set_style_border_width(menu_container, 0, LV_PART_MAIN);
-    lv_obj_set_style_pad_all(menu_container, 10, LV_PART_MAIN);
-    
-    // Create title
-    lv_obj_t* title = lv_label_create(menu_container);
-    if (!title) {
-        ESP_LOGW("UI", "Failed to create title label");
-    } else {
-        lv_label_set_text(title, "WaveX System Menu");
-        lv_obj_set_style_text_font(title, &lv_font_montserrat_14, 0);
-        lv_obj_set_style_text_color(title, lv_color_hex(0xFFFFFF), 0);
-        lv_obj_set_pos(title, 10, 10);
-    }
-    
-    // Create menu items as simple buttons
-    lv_obj_t* audio_btn = lv_btn_create(menu_container);
-    if (audio_btn) {
-        lv_obj_set_size(audio_btn, WAVEX_LCD_H_RES - 40, 50);
-        lv_obj_set_pos(audio_btn, 20, 50);
-        lv_obj_t* audio_label = lv_label_create(audio_btn);
-        if (audio_label) {
-            lv_label_set_text(audio_label, LV_SYMBOL_AUDIO " Audio Settings");
-            lv_obj_center(audio_label);
-        }
-    }
-    
-    lv_obj_t* display_btn = lv_btn_create(menu_container);
-    if (display_btn) {
-        lv_obj_set_size(display_btn, WAVEX_LCD_H_RES - 40, 50);
-        lv_obj_set_pos(display_btn, 20, 110);
-        lv_obj_t* display_label = lv_label_create(display_btn);
-        if (display_label) {
-            lv_label_set_text(display_label, LV_SYMBOL_EYE_OPEN " Display Settings");
-            lv_obj_center(display_label);
-        }
-    }
-    
-    lv_obj_t* system_btn = lv_btn_create(menu_container);
-    if (system_btn) {
-        lv_obj_set_size(system_btn, WAVEX_LCD_H_RES - 40, 50);
-        lv_obj_set_pos(system_btn, 20, 170);
-        lv_obj_t* system_label = lv_label_create(system_btn);
-        if (system_label) {
-            lv_label_set_text(system_label, LV_SYMBOL_SETTINGS " System Settings");
-            lv_obj_center(system_label);
-        }
-    }
-    
-    // Add status info at bottom
-    lv_obj_t* status_label = lv_label_create(menu_container);
-    if (status_label) {
-        char status_text[100];
-        snprintf(status_text, sizeof(status_text), 
-                "Heap: %lu bytes | ESP32-S3 @ 240MHz", 
-                esp_get_free_heap_size());
-        lv_label_set_text(status_label, status_text);
-        lv_obj_set_style_text_color(status_label, lv_color_hex(0xAAAAAAA), 0);
-        lv_obj_set_pos(status_label, 20, WAVEX_LCD_V_RES - 40);
-    }
-    
-    ESP_LOGI("UI", "Basic list menu created successfully");
-    return menu_container;
 }
 
 static void check_memory_status(void) {
@@ -2167,22 +2161,12 @@ lv_obj_t* ui_setup_create(lv_obj_t* parent_menu) {
 } 
 
 /**
- * @brief Test GPIO pins for touch controller
- * (Simplified: Only test reset pin to avoid I2C conflicts)
+ * @brief Test GPIO pins for touch controller - SIMPLIFIED to avoid conflicts
  */
 static void test_touch_gpio_pins(void) {
-    ESP_LOGI("GPIO_TEST", "=== Testing Touch Controller GPIO Pins (Reset Only) ===");
-    
-    // Skip SDA/SCL testing - they are I2C pins and should not be set to push-pull output
-    
-    // Test RST pin only
-    gpio_set_direction(WAVEX_CTP_GPIO_RST, GPIO_MODE_OUTPUT);
-    gpio_set_level(WAVEX_CTP_GPIO_RST, 0);
-    vTaskDelay(pdMS_TO_TICKS(50));
-    gpio_set_level(WAVEX_CTP_GPIO_RST, 1);
-    ESP_LOGI("GPIO_TEST", "RST pin GPIO%d test completed", WAVEX_CTP_GPIO_RST);
-    
-    // Add debug readback
-    int test_level = gpio_get_level(WAVEX_CTP_GPIO_RST);
-    ESP_LOGI("GPIO_TEST", "RST pin state after test: %d", test_level);
+    ESP_LOGI("GPIO_TEST", "=== SKIP GPIO Test to avoid I2C conflicts ===");
+    // Skip all GPIO testing since it can interfere with I2C operation
+    // The reset pin will be properly configured in the touch init function
 }
+
+
