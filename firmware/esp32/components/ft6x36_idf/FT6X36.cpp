@@ -248,31 +248,60 @@ void FT6X36::processTouch()
 
 void FT6X36::poll(TPoint * point, TEvent * e)
 {
-	readData();
-	// TPoint point{_touchX[0], _touchY[0]};
-	TRawEvent event = (TRawEvent)_touchEvent[0];
-
-	if (point != NULL)
-	{
-		point->x = _touchX[0];
-		point->y = _touchY[0];
-	}
-	if (e != NULL)
-	{
-		switch (event)
-		{
-			case TRawEvent::PressDown:
-				*e = TEvent::TouchStart;
-				break;
-			case TRawEvent::Contact:
-				*e = TEvent::TouchMove;
-				break;
-			case TRawEvent::LiftUp:
-			default:
-				*e = TEvent::TouchEnd;
-				break;
-		}
-	}
+    // Read fresh data from the touch controller
+    if (!readData()) {
+        if (e != NULL) *e = TEvent::None;
+        return;
+    }
+    
+    // Get the first touch point data
+    uint8_t n = 0;
+    TRawEvent event = (TRawEvent)_touchEvent[n];
+    TPoint current_point{_touchX[n], _touchY[n]};
+    
+    // Return the point data
+    if (point != NULL) {
+        point->x = current_point.x;
+        point->y = current_point.y;
+    }
+    
+    // Enhanced event processing similar to processTouch()
+    if (e != NULL) {
+        switch (event) {
+            case TRawEvent::PressDown:
+                _points[0] = current_point;
+                _dragMode = false;
+                _touchStartTime = esp_timer_get_time()/1000;
+                *e = TEvent::TouchStart;
+                break;
+                
+            case TRawEvent::Contact:
+                // Only report TouchMove if we're actually in a touch sequence
+                if (lastEvent == (int)TRawEvent::PressDown || lastEvent == (int)TRawEvent::Contact) {
+                    *e = TEvent::TouchMove;
+                } else {
+                    // Spurious contact without press down - treat as start
+                    *e = TEvent::TouchStart;
+                    _touchStartTime = esp_timer_get_time()/1000;
+                }
+                break;
+                
+            case TRawEvent::LiftUp:
+                *e = TEvent::TouchEnd;
+                break;
+                
+            case TRawEvent::NoEvent:
+            default:
+                // Filter out NoEvent completely - don't report anything
+                *e = TEvent::None;
+                break;
+        }
+        
+        // Store the last event for state tracking
+        lastEvent = (int)event;
+        lastX = _touchX[0];
+        lastY = _touchY[0];
+    }
 }
 
 uint8_t FT6X36::read8(uint8_t regName) {

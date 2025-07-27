@@ -25,9 +25,6 @@
 #include "driver/ledc.h"
 #include "esp_err.h"
 
-// Forward declarations
-static void test_touch_gpio_pins(void);
-
 // Global for touch visualization (debug)
 static lv_obj_t* touch_circle = NULL;
 
@@ -346,6 +343,37 @@ static uint32_t touch_debounce_time = 0;
 static const uint32_t TOUCH_DEBOUNCE_MS = 50;  // 50ms debounce
 static const int32_t TOUCH_NOISE_THRESHOLD = 10;  // Ignore movements < 10 pixels
 
+// Add this near the top with other touch state variables
+static bool touch_system_ready = false;
+static uint32_t touch_init_complete_time = 0;
+static const uint32_t TOUCH_STABILIZATION_MS = 2000; // 2 second stabilization period
+
+// Add this near the top with other static variables
+static esp_timer_handle_t touch_registration_timer = NULL;
+
+// Add forward declaration at the top with other forward declarations
+static void wavex_touch_read_cb(lv_indev_t* indev, lv_indev_data_t* data);
+
+// Add this callback function for the timer AFTER wavex_touch_read_cb function
+static void register_touch_callback_delayed(void* arg) {
+    if (lvgl_touch_indev && touch_controller) {
+        ESP_LOGI("UI", "Registering touch callback after 1s stabilization period");
+        if (lvgl_port_lock(10)) {
+            lv_indev_set_read_cb(lvgl_touch_indev, wavex_touch_read_cb);
+            lvgl_port_unlock();
+            ESP_LOGI("UI", "Touch callback registered successfully - touch system active");
+        } else {
+            ESP_LOGW("UI", "Failed to lock LVGL for touch callback registration");
+        }
+    }
+    
+    // Clean up the timer
+    if (touch_registration_timer) {
+        esp_timer_delete(touch_registration_timer);
+        touch_registration_timer = NULL;
+    }
+}
+
 /**
  * @brief Touch event handler callback from FT6X36
  * Called when touch events occur (tap, drag, etc.)
@@ -375,12 +403,16 @@ static void wavex_touch_event_handler(TPoint point, TEvent event)
 }
 
 /**
- * @brief Enhanced touch read callback with improved debugging
+ * @brief Enhanced touch read callback with improved filtering and reduced noise
  */
 static void wavex_touch_read_cb(lv_indev_t* indev, lv_indev_data_t* data)
 {
     static uint32_t last_poll_time = 0;
     static uint32_t touch_count = 0;
+    static uint32_t last_valid_event_time = 0;
+    static TEvent last_reported_event = TEvent::None;
+    static uint32_t touch_start_time = 0;
+    static bool in_touch_sequence = false;
     
     uint32_t current_time = esp_timer_get_time() / 1000;  // Get time in milliseconds
     
@@ -389,9 +421,9 @@ static void wavex_touch_read_cb(lv_indev_t* indev, lv_indev_data_t* data)
         TPoint point;
         TEvent event;
         
-        // Add debug logging every 1000 polls to see if we're polling
-        if (current_time - last_poll_time > 1000) { // Every 1 second
-            ESP_LOGI("TOUCH_DEBUG", "Touch polling active - count: %" PRIu32, touch_count);
+        // Reduced debug logging - only every 5 seconds when no touch activity
+        if (current_time - last_poll_time > 5000 && !in_touch_sequence) {
+            ESP_LOGI("TOUCH_DEBUG", "Touch polling active - count: %" PRIu32 " (quiet)", touch_count);
             last_poll_time = current_time;
             touch_count = 0;
         }
@@ -399,55 +431,114 @@ static void wavex_touch_read_cb(lv_indev_t* indev, lv_indev_data_t* data)
         
         touch_controller->poll(&point, &event);
         
-        // Update our touch state and log events
+        // FILTER 1: Only process real events, ignore NoEvent completely
         if (event != TEvent::None) {
-            ESP_LOGI("TOUCH_EVENT", "Touch event: %d at (%d, %d)", (int)event, point.x, point.y);
-            wavex_touch_event_handler(point, event);
+            // FILTER 2: COORDINATE VALIDATION FIRST - before any processing!
+            // Convert to signed 32-bit for safe math
+            int32_t x = (int32_t)point.x;
+            int32_t y = (int32_t)point.y;
+            
+            // Filter out edge touches that are likely noise - BEFORE processing
+            if (x <= 3 || x >= (WAVEX_LCD_H_RES - 3) || y <= 3 || y >= (WAVEX_LCD_V_RES - 3)) {
+                ESP_LOGD("TOUCH_FILTER", "Filtering edge touch at (%" PRId32 ", %" PRId32 ") - ignoring event", x, y);
+                // Don't process this event at all - return early
+                data->state = LV_INDEV_STATE_RELEASED;
+                data->continue_reading = false;
+                return;
+            }
+            
+            // Clamp coordinates to valid display area
+            if (x < 0) x = 0;
+            if (x >= WAVEX_LCD_H_RES) x = WAVEX_LCD_H_RES - 1;
+            if (y < 0) y = 0;
+            if (y >= WAVEX_LCD_V_RES) y = WAVEX_LCD_V_RES - 1;
+            
+            // Update the point with filtered coordinates
+            point.x = (uint16_t)x;
+            point.y = (uint16_t)y;
+            
+            // FILTER 3: Debounce rapid event changes (prevent bouncing)
+            if (current_time - last_valid_event_time < 20) { // 20ms debounce
+                // Too soon since last event - ignore
+                data->continue_reading = false;
+                return;
+            }
+            
+            // FILTER 4: State-based filtering (NOW with clean coordinates)
+            bool should_report_event = false;
+            
+            switch (event) {
+                case TEvent::TouchStart:
+                    if (!in_touch_sequence) {
+                        should_report_event = true;
+                        in_touch_sequence = true;
+                        touch_start_time = current_time;
+                        ESP_LOGI("TOUCH_EVENT", "Touch START at (%d, %d)", point.x, point.y);
+                    }
+                    // Ignore duplicate TouchStart events
+                    break;
+                    
+                case TEvent::TouchMove:
+                    if (in_touch_sequence) {
+                        // Movement threshold - only report significant moves
+                        int32_t dx = abs((int32_t)point.x - (int32_t)current_touch_point.x);
+                        int32_t dy = abs((int32_t)point.y - (int32_t)current_touch_point.y);
+                        
+                        if (dx > TOUCH_NOISE_THRESHOLD || dy > TOUCH_NOISE_THRESHOLD) {
+                            should_report_event = true;
+                            // Only log significant moves to reduce noise
+                            if (dx > 20 || dy > 20) {
+                                ESP_LOGD("TOUCH_EVENT", "Touch MOVE to (%d, %d)", point.x, point.y);
+                            }
+                        }
+                    } else {
+                        // Move without start - treat as start
+                        should_report_event = true;
+                        in_touch_sequence = true;
+                        touch_start_time = current_time;
+                        ESP_LOGI("TOUCH_EVENT", "Touch START (via move) at (%d, %d)", point.x, point.y);
+                        event = TEvent::TouchStart;  // Convert to start event
+                    }
+                    break;
+                    
+                case TEvent::TouchEnd:
+                    if (in_touch_sequence) {
+                        should_report_event = true;
+                        in_touch_sequence = false;
+                        ESP_LOGI("TOUCH_EVENT", "Touch END at (%d, %d) - duration: %" PRIu32 "ms", 
+                                point.x, point.y, current_time - touch_start_time);
+                    }
+                    // Ignore spurious TouchEnd without TouchStart
+                    break;
+                    
+                default:
+                    break;
+            }
+            
+            if (should_report_event) {
+                wavex_touch_event_handler(point, event);
+                last_valid_event_time = current_time;
+                last_reported_event = event;
+            }
         }
     }
     
-    // Apply debouncing and filtering
+    // Apply filtered coordinates to LVGL (this part stays mostly the same)
     if (touch_pressed) {
-        ESP_LOGI("TOUCH_ACTIVE", "Touch pressed at (%d, %d)", current_touch_point.x, current_touch_point.y);
-        
-        // Convert to signed 32-bit for safe math
+        // Use the already filtered coordinates from current_touch_point
         int32_t x = (int32_t)current_touch_point.x;
         int32_t y = (int32_t)current_touch_point.y;
         
-        // Filter out noise at edges - common source of ghost touches
-        if (x <= 5 || x >= (WAVEX_LCD_H_RES - 5) || y <= 5 || y >= (WAVEX_LCD_V_RES - 5)) {
-            ESP_LOGD("TOUCH", "Filtering edge touch at (%" PRId32 ", %" PRId32 ")", x, y);
-            data->state = LV_INDEV_STATE_RELEASED;
-            touch_pressed = false;
-            return;
+        // Apply additional jitter filtering for continuous touches
+        if (last_touch_state) {
+            int32_t dx = abs(x - last_touch_x);
+            int32_t dy = abs(y - last_touch_y);
+            if (dx < 3 && dy < 3) { // Smaller threshold for fine touches
+                // Use previous position to reduce jitter
+                x = last_touch_x;
+                y = last_touch_y;
+            }
         }
-        
-        // // Apply coordinate transformations
-        // //y = WAVEX_LCD_V_RES - y;  // Mirror Y coordinate
-        
-        // // Clamp to display bounds
-        // if (x < 0) x = 0;
-        // if (x >= WAVEX_LCD_H_RES) x = WAVEX_LCD_H_RES - 1;
-        // if (y < 0) y = 0;
-        // if (y >= WAVEX_LCD_V_RES) y = WAVEX_LCD_V_RES - 1;
-        
-        // // Debounce new touches
-        // if (!last_touch_state) {
-        //     if (current_time - touch_debounce_time < TOUCH_DEBOUNCE_MS) {
-        //         data->state = LV_INDEV_STATE_RELEASED;
-        //         return;  // Still in debounce period
-        //     }
-        //     ESP_LOGI("TOUCH", "New touch detected at (%" PRId32 ", %" PRId32 ")", x, y);
-        // } else {
-        //     // Filter small movements during continuous touch
-        //     int32_t dx = abs(x - last_touch_x);
-        //     int32_t dy = abs(y - last_touch_y);
-        //     if (dx < TOUCH_NOISE_THRESHOLD && dy < TOUCH_NOISE_THRESHOLD) {
-        //         // Use last position to reduce jitter
-        //         x = last_touch_x;
-        //         y = last_touch_y;
-        //     }
-        // }
         
         data->state = LV_INDEV_STATE_PRESSED;
         data->point.x = x;
@@ -457,16 +548,16 @@ static void wavex_touch_read_cb(lv_indev_t* indev, lv_indev_data_t* data)
         last_touch_y = y;
         last_touch_state = true;
         
-        // Visualize touch point (debug)
+        // Update touch visualization
         if (touch_circle) {
-            lv_obj_set_pos(touch_circle, x - 10, y - 10);  // Center circle on touch point
+            lv_obj_set_pos(touch_circle, x - 10, y - 10);
             lv_obj_clear_flag(touch_circle, LV_OBJ_FLAG_HIDDEN);
         }
     } else {
         // Touch released
         if (last_touch_state) {
-            ESP_LOGI("TOUCH_EVENT", "Touch released");
             touch_debounce_time = current_time;
+            in_touch_sequence = false;
         }
         data->state = LV_INDEV_STATE_RELEASED;
         last_touch_state = false;
@@ -853,9 +944,6 @@ static esp_err_t wavex_touch_init_debug(void)
     ESP_RETURN_ON_ERROR(gpio_config(&touch_rst_config), "TOUCH", "Touch reset GPIO config failed");
     log_detailed_heap_info("after touch GPIO config");
     
-    // Skip the test_touch_gpio_pins() call that might interfere
-    // test_touch_gpio_pins();
-    
     // PROPER reset sequence for FT6X36
     ESP_LOGI("TOUCH", "Performing proper FT6X36 reset sequence...");
     
@@ -924,11 +1012,7 @@ static esp_err_t wavex_touch_init_debug(void)
     // Call the function here (this should work now)
     configure_touch_sensitivity();
     
-    ESP_LOGI("TOUCH", "Touch controller initialized successfully in polling mode!");
-    ESP_LOGI("TOUCH", "Touch resolution: %dx%d", WAVEX_LCD_H_RES, WAVEX_LCD_V_RES);
-    ESP_LOGI("TOUCH", "Touch rotation: 3 (landscape)");
-    
-    log_detailed_heap_info("touch init complete");
+    ESP_LOGI("TOUCH", "Touch controller initialized - callback registration will be delayed");
     
     return ESP_OK;
 }
@@ -1528,7 +1612,7 @@ void wavex_ui_init(void)
         .task_stack = 8192,
         .task_affinity = -1,
         .task_max_sleep_ms = 500,
-        .timer_period_ms = 5
+        .timer_period_ms = 10  // Changed from 5ms to 10ms to reduce polling frequency
     };
     ESP_ERROR_CHECK(lvgl_port_init(&lvgl_cfg));
     
@@ -1577,16 +1661,42 @@ void wavex_ui_init(void)
     
     // Register touch input device if touch controller was initialized successfully
     if (touch_controller != nullptr) {
-        ESP_LOGI("UI", "Registering LVGL touch input device...");
+        ESP_LOGI("UI", "Creating LVGL touch input device (callback registration delayed)...");
         
         // Create touch input device directly using LVGL API
         lvgl_touch_indev = lv_indev_create();
         if (lvgl_touch_indev) {
             lv_indev_set_type(lvgl_touch_indev, LV_INDEV_TYPE_POINTER);
-            lv_indev_set_read_cb(lvgl_touch_indev, wavex_touch_read_cb);
+            // DON'T register callback immediately - we'll do it after 1 second
+            // lv_indev_set_read_cb(lvgl_touch_indev, wavex_touch_read_cb);
             lv_indev_set_display(lvgl_touch_indev, lvgl_disp);
             
-            ESP_LOGI("UI", "LVGL touch input device registered successfully");
+            // Create a one-shot timer to register the callback after 1 second
+            const esp_timer_create_args_t timer_args = {
+                .callback = register_touch_callback_delayed,
+                .arg = NULL,
+                .dispatch_method = ESP_TIMER_TASK,
+                .name = "touch_reg_timer",
+                .skip_unhandled_events = false
+            };
+            
+            esp_err_t ret = esp_timer_create(&timer_args, &touch_registration_timer);
+            if (ret == ESP_OK) {
+                ret = esp_timer_start_once(touch_registration_timer, 1000000); // 1 second in microseconds
+                if (ret == ESP_OK) {
+                    ESP_LOGI("UI", "LVGL touch input device created - callback will be registered in 1 second");
+                } else {
+                    ESP_LOGE("UI", "Failed to start touch registration timer: %s", esp_err_to_name(ret));
+                    // Fallback: register immediately
+                    lv_indev_set_read_cb(lvgl_touch_indev, wavex_touch_read_cb);
+                    ESP_LOGI("UI", "Touch callback registered immediately (timer failed)");
+                }
+            } else {
+                ESP_LOGE("UI", "Failed to create touch registration timer: %s", esp_err_to_name(ret));
+                // Fallback: register immediately
+                lv_indev_set_read_cb(lvgl_touch_indev, wavex_touch_read_cb);
+                ESP_LOGI("UI", "Touch callback registered immediately (timer creation failed)");
+            }
         } else {
             ESP_LOGE("UI", "Failed to create LVGL touch input device");
         }
@@ -2160,13 +2270,5 @@ lv_obj_t* ui_setup_create(lv_obj_t* parent_menu) {
     return setup_page;
 } 
 
-/**
- * @brief Test GPIO pins for touch controller - SIMPLIFIED to avoid conflicts
- */
-static void test_touch_gpio_pins(void) {
-    ESP_LOGI("GPIO_TEST", "=== SKIP GPIO Test to avoid I2C conflicts ===");
-    // Skip all GPIO testing since it can interfere with I2C operation
-    // The reset pin will be properly configured in the touch init function
-}
 
 
