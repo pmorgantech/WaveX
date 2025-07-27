@@ -50,17 +50,17 @@ extern "C" {
 #define WAVEX_LCD_GPIO_BL       GPIO_NUM_21
 
 // =============================================================================
-// I2C Capacitive Touch Controller - 🔧 CORRECTED FOR ESP32-S3-DevKitC-1
+// I2C Capacitive Touch Controller - 🔧 FIXED FOR ESP32-S3-DevKitC-1
 // =============================================================================
 
 /** Touch I2C Data - GPIO20 (J3 pin 19) ✅ */
 #define WAVEX_CTP_GPIO_SDA      GPIO_NUM_20
 
-/** Touch I2C Clock - GPIO1 (J3 pin 4) 🔧 FIXED: was GPIO22 (not available) */
-#define WAVEX_CTP_GPIO_SCL      GPIO_NUM_1
+/** Touch I2C Clock - GPIO9 🔧 CHANGED: GPIO38 is strapping pin, using GPIO9 instead */
+#define WAVEX_CTP_GPIO_SCL      GPIO_NUM_9
 
-/** Touch Reset - GPIO16 (J1 pin 9) ✅ */
-#define WAVEX_CTP_GPIO_RST      GPIO_NUM_16
+/** Touch Reset - GPIO14 🔧 CHANGED: GPIO15 has conflicts, using GPIO14 instead */
+#define WAVEX_CTP_GPIO_RST      GPIO_NUM_14
 
 /** I2C port number for touch controller */
 #define WAVEX_CTP_I2C_NUM       I2C_NUM_0
@@ -69,8 +69,11 @@ extern "C" {
 #define WAVEX_CTP_I2C_FREQ_HZ   100000
 
 // =============================================================================
-// Inter-MCU Communication (ESP32 ↔ Daisy) - 🔧 CORRECTED
+// Inter-MCU Communication (ESP32 ↔ Daisy)
 // =============================================================================
+
+/** Inter-MCU SPI host */
+#define WAVEX_INTER_MCU_SPI_HOST    SPI2_HOST
 
 /** Inter-MCU SPI Chip Select - GPIO8 (J1 pin 12) ✅ */
 #define WAVEX_INTER_MCU_GPIO_CS     GPIO_NUM_8
@@ -78,11 +81,14 @@ extern "C" {
 /** Inter-MCU SPI Clock - GPIO18 (J1 pin 11) ✅ */
 #define WAVEX_INTER_MCU_GPIO_SCLK   GPIO_NUM_18
 
-/** Inter-MCU SPI MOSI - GPIO47 (J3 pin 17) 🔧 FIXED: was GPIO23 (not available) */
+/** Inter-MCU SPI MOSI - GPIO47 (J3 pin 17) ✅ */
 #define WAVEX_INTER_MCU_GPIO_MOSI   GPIO_NUM_47
 
 /** Inter-MCU SPI MISO - GPIO19 (J3 pin 20) ✅ */
 #define WAVEX_INTER_MCU_GPIO_MISO   GPIO_NUM_19
+
+/** Inter-MCU SPI clock frequency (10MHz for audio timing) */
+#define WAVEX_INTER_MCU_SPI_CLK_HZ  (10 * 1000 * 1000)
 
 // =============================================================================
 // SD Card Interface - ✅ VERIFIED VALID
@@ -132,11 +138,14 @@ extern "C" {
 /** LCD parameter bits */
 #define WAVEX_LCD_PARAM_BITS        8
 
-/** LCD color space */
-#define WAVEX_LCD_COLOR_SPACE       ESP_LCD_COLOR_SPACE_BGR
+/** LCD color space - BGR order for correct red/blue channels */
+#define WAVEX_LCD_COLOR_SPACE       ESP_LCD_COLOR_SPACE_BGR  // Changed from BGR to match working config
 
 /** LCD backlight active level (1 = high, 0 = low) */
 #define WAVEX_LCD_BL_ON_LEVEL       1
+
+/** LCD reset active level (0 = low, 1 = high) */
+#define WAVEX_LCD_RST_ACTIVE_LEVEL 0
 
 // =============================================================================
 // Touch Configuration Constants  
@@ -152,11 +161,14 @@ extern "C" {
 // LVGL Buffer Configuration
 // =============================================================================
 
-/** LVGL draw buffer height (lines) - balance between memory and performance */
-#define WAVEX_LVGL_DRAW_BUF_HEIGHT  50
+/** LVGL draw buffer height (lines) - optimized for PSRAM */
+#define WAVEX_LVGL_DRAW_BUF_HEIGHT  40
 
-/** Enable double buffering for smoother rendering */
+/** Enable double buffering with PSRAM for better performance */
 #define WAVEX_LVGL_DOUBLE_BUFFER    1
+
+/** Use PSRAM for large buffers (>20KB) */
+#define WAVEX_LVGL_USE_PSRAM_THRESHOLD  (20 * 1024)
 
 // =============================================================================
 // Hardware Validation Status

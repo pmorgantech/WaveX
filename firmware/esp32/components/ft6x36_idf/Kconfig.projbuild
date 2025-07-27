@@ -3,11 +3,11 @@ menu "Touch FT6X36 Configuration"
     config TOUCH_SDA
         int "I2C data SDA"
         range 0 38
-        default 21
-    config TOUCH_SDL
-        int "I2C clock SDL"
+        default 20
+    config TOUCH_SCL
+        int "I2C clock SCL"
         range 0 39
-        default 22
+        default 9
     config TOUCH_INT
         int "Touch interrupt: On LOW reads the data via I2C (Input pullup)"
         range -1 34

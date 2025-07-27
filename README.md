@@ -302,3 +302,83 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - [LVGL](https://lvgl.io/) for the embedded graphics library
 - [Espressif](https://www.espressif.com/) for the ESP32 platform and ESP-IDF
 - All the contributors who have invested their time and effort into this project.
+
+## ESP32-S3 Pin Assignments
+
+WaveX uses an ESP32-S3-DevKitC-1 as the frontend MCU with the following verified pin assignments:
+
+### 🖥️ ST7796S Display Controller (480x320 TFT)
+| Function | GPIO | Pin Location | Status |
+|----------|------|--------------|--------|
+| SPI Clock (SCLK) | GPIO7 | J1-7 | ✅ Verified |
+| SPI MOSI | GPIO6 | J1-6 | ✅ Verified |
+| Chip Select (CS) | GPIO5 | J1-5 | ✅ Verified |
+| Data/Command (DC) | GPIO4 | J1-4 | ✅ Verified |
+| Reset (RST) | GPIO2 | J3-5 | ✅ Verified |
+| Backlight (BL) | GPIO21 | J3-18 | ✅ Verified |
+
+### 👆 Touch Controller (FT6X36 I2C)
+| Function | GPIO | Pin Location | Status |
+|----------|------|--------------|--------|
+| I2C Data (SDA) | GPIO20 | J3-19 | ✅ Verified |
+| I2C Clock (SCL) | GPIO9 | J1-13 | ✅ Default I2C SCL |
+| Reset (RST) | GPIO14 | J1-20 | 🔧 Updated from GPIO15 |
+
+### 🔗 Inter-MCU Communication (ESP32 ↔ Daisy)
+| Function | GPIO | Pin Location | Status |
+|----------|------|--------------|--------|
+| SPI Chip Select | GPIO8 | J1-12 | ✅ Verified |
+| SPI Clock | GPIO18 | J1-11 | ✅ Verified |
+| SPI MOSI | GPIO47 | J3-17 | ✅ Verified |
+| SPI MISO | GPIO19 | J3-20 | ✅ Verified |
+
+### 💾 SD Card Interface
+| Function | GPIO | Pin Location | Status |
+|----------|------|--------------|--------|
+| SPI Chip Select | GPIO10 | J1-16 | ✅ Verified |
+| SPI Clock | GPIO12 | J1-18 | ✅ Verified |
+| SPI MOSI | GPIO11 | J1-17 | ✅ Verified |
+| SPI MISO | GPIO13 | J1-19 | ✅ Verified |
+
+### 🎵 MIDI Interface
+| Function | GPIO | Pin Location | Status |
+|----------|------|--------------|--------|
+| UART TX | GPIO17 | J1-10 | ✅ Verified |
+| UART RX | GPIO42 | J3-6 | ✅ Verified |
+
+### 📌 Pin Usage Summary
+
+**Used Pins:** GPIO2, GPIO4, GPIO5, GPIO6, GPIO7, GPIO8, GPIO9, GPIO10, GPIO11, GPIO12, GPIO13, GPIO14, GPIO17, GPIO18, GPIO19, GPIO20, GPIO21, GPIO42, GPIO47
+
+**Available Pins:** GPIO0, GPIO1, GPIO3, GPIO15, GPIO16, GPIO22-25, GPIO33-48 (excluding used pins)
+
+**Reserved/Avoid:** GPIO26-32 (SPI Flash/PSRAM), GPIO45-46 (Strapping pins)
+
+### 🎯 Pin Selection Rationale
+
+**Display Pins (GPIO2, 4-7, 21):** Grouped together for efficient SPI communication and signal integrity.
+
+**Touch I2C (GPIO9, 20):** GPIO9 is the default I2C SCL pin on ESP32-S3, GPIO20 is default SDA alternative.
+
+**Inter-MCU SPI (GPIO8, 18-19, 47):** Uses SPI2 bus with high-speed capable pins for audio data transfer.
+
+**SD Card (GPIO10-13):** Dedicated SPI bus to avoid conflicts with display and inter-MCU communication.
+
+**Design Principles:**
+- ✅ No strapping pin conflicts (GPIO0, 3, 45, 46 avoided for critical functions)
+- ✅ SPI Flash/PSRAM pins (GPIO26-32) completely avoided
+- ✅ Grouped related functions on same SPI buses
+- ✅ Reserved ADC pins (GPIO1, 15, 16) for future analog sensors
+- ✅ Touch-capable pins available for future capacitive controls
+
+### 🔧 Hardware Validation Status
+
+**✅ Verified Components:**
+- ST7796S Display: Full initialization and LVGL integration working
+- FT6X36 Touch Controller: I2C communication and touch event handling
+- Inter-MCU SPI: Command/data exchange with Daisy Seed
+- SD Card Interface: Ready for data logging and preset storage
+
+**🎯 Target Board:** ESP32-S3-DevKitC-1 (N8R8 PSRAM variant recommended)
+
+**📚 Reference:** Pin assignments verified against [ESP32-S3 DevKitC Official Pinout](https://randomnerdtutorials.com/esp32-s3-devkitc-pinout-guide/)

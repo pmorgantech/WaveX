@@ -17,7 +17,7 @@ L58Touch::L58Touch(int8_t intPin)
     conf.mode = I2C_MODE_MASTER;
     conf.sda_io_num = (gpio_num_t)CONFIG_TOUCH_SDA;
     conf.sda_pullup_en = GPIO_PULLUP_ENABLE;
-    conf.scl_io_num = (gpio_num_t)CONFIG_TOUCH_SDL;
+    conf.scl_io_num = (gpio_num_t)CONFIG_TOUCH_SCL;
     conf.scl_pullup_en = GPIO_PULLUP_ENABLE;
     conf.master.clk_speed = CONFIG_I2C_MASTER_FREQUENCY;
 

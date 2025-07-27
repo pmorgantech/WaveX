@@ -71,3 +71,5 @@ Makefile
 # VS Code Devcontainer
 !.devcontainer/
 
+
+.specstory/

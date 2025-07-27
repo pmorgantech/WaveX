@@ -1,5 +1,6 @@
 #include "ui_about.h"
 #include "version.h"
+#include "esp_log.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -55,8 +56,19 @@ static void show_license_cb(lv_event_t* e)
 
 lv_obj_t* ui_about_create(lv_obj_t* parent_menu)
 {
+    // Validate parent_menu
+    if (!parent_menu) {
+        ESP_LOGE("UI", "ui_about_create: parent_menu is NULL");
+        return NULL;
+    }
+
     // Create the About page
     lv_obj_t* about_page = lv_menu_page_create(parent_menu, "About");
+    if (!about_page) {
+        ESP_LOGE("UI", "ui_about_create: failed to create about page");
+        return NULL;
+    }
+    
     lv_obj_set_style_pad_hor(about_page, lv_obj_get_style_pad_left(lv_menu_get_main_header(parent_menu), 0), 0);
     
     // Create main section

@@ -14,7 +14,7 @@ FT6X36::FT6X36(int8_t intPin)
     conf.mode = I2C_MODE_MASTER;
     conf.sda_io_num = (gpio_num_t)CONFIG_TOUCH_SDA;
     conf.sda_pullup_en = GPIO_PULLUP_ENABLE;
-    conf.scl_io_num = (gpio_num_t)CONFIG_TOUCH_SDL;
+    conf.scl_io_num = (gpio_num_t)CONFIG_TOUCH_SCL;
     conf.scl_pullup_en = GPIO_PULLUP_ENABLE;
     conf.master.clk_speed = CONFIG_I2C_MASTER_FREQUENCY;
     // you can use I2C_SCLK_SRC_FLAG_* flags to choose i2c source clock here
@@ -45,11 +45,50 @@ bool FT6X36::begin(uint8_t threshold, uint16_t width, uint16_t height)
 		ESP_LOGE(TAG,"begin(uint8_t threshold, uint16_t width, uint16_t height) did not receive the width / height so touch cannot be rotation aware");
 	}
 
+	// Scan I2C bus for debugging
+	ESP_LOGI(TAG, "Scanning I2C bus for devices...");
+	for (uint8_t addr = 1; addr < 127; addr++) {
+		i2c_cmd_handle_t cmd = i2c_cmd_link_create();
+		i2c_master_start(cmd);
+		i2c_master_write_byte(cmd, (addr << 1) | I2C_MASTER_WRITE, true);
+		i2c_master_stop(cmd);
+		esp_err_t ret = i2c_master_cmd_begin(I2C_NUM_0, cmd, 50 / portTICK_PERIOD_MS);
+		i2c_cmd_link_delete(cmd);
+		
+		if (ret == ESP_OK) {
+			ESP_LOGI(TAG, "Found I2C device at address 0x%02x", addr);
+		}
+	}
+
 	uint8_t data_panel_id;
 	readRegister8(FT6X36_REG_PANEL_ID, &data_panel_id);
 
 	if (data_panel_id != FT6X36_VENDID) {
 		ESP_LOGE(TAG,"FT6X36_VENDID does not match. Received:0x%x Expected:0x%x\n",data_panel_id,FT6X36_VENDID);
+		
+		// Try alternative I2C addresses for different touch controllers
+		ESP_LOGI(TAG, "Trying alternative touch controller addresses...");
+		
+		// Try GT911 address (0x5D or 0x14)
+		uint8_t alt_addresses[] = {0x5D, 0x14, 0x48, 0x49, 0x5A};
+		for (int i = 0; i < sizeof(alt_addresses); i++) {
+			i2c_cmd_handle_t cmd = i2c_cmd_link_create();
+			i2c_master_start(cmd);
+			i2c_master_write_byte(cmd, (alt_addresses[i] << 1) | I2C_MASTER_WRITE, true);
+			i2c_master_write_byte(cmd, 0x00, true); // Try to read register 0
+			i2c_master_start(cmd);
+			i2c_master_write_byte(cmd, (alt_addresses[i] << 1) | I2C_MASTER_READ, true);
+			uint8_t test_data;
+			i2c_master_read_byte(cmd, &test_data, I2C_MASTER_NACK);
+			i2c_master_stop(cmd);
+			esp_err_t ret = i2c_master_cmd_begin(I2C_NUM_0, cmd, 100 / portTICK_PERIOD_MS);
+			i2c_cmd_link_delete(cmd);
+			
+			if (ret == ESP_OK) {
+				ESP_LOGI(TAG, "Found responsive device at address 0x%02x, register 0x00 = 0x%02x", alt_addresses[i], test_data);
+			}
+		}
+		
 		return false;
 		}
 		ESP_LOGI(TAG, "\tDevice ID: 0x%02x", data_panel_id);
