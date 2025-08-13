@@ -8,3 +8,6 @@
 	path = firmware/daisy/libs/DaisySP
 	url = https://github.com/electro-smith/DaisySP.git
 
+[submodule "firmware/esp32/components/LovyanGFX"]
+	path = firmware/esp32/components/LovyanGFX
+	url = https://github.com/lovyan03/LovyanGFX.git

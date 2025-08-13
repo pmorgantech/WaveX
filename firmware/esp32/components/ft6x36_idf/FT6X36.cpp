@@ -379,10 +379,22 @@ bool FT6X36::readData(void)
 	case 3:
 		swap(_touchX[0], _touchY[0]);
 		swap(_touchX[1], _touchY[1]);
-		_touchX[0] = _touch_width - _touchX[0] - 1;
-		_touchX[1] = _touch_width - _touchX[1] - 1;
+      _touchX[0] = _touch_width  - _touchX[0] - 1;
+      _touchX[1] = _touch_width  - _touchX[1] - 1;
+      _touchY[0] = _touch_height - _touchY[0] - 1;
+      _touchY[1] = _touch_height - _touchY[1] - 1;
 		break;
   }
+  // Clamp to bounds to avoid wrap on subsequent casts
+  auto clamp_u16 = [](uint16_t v, uint16_t maxv) {
+    if ((int32_t)v < 0) return (uint16_t)0; // no-op on unsigned, kept for readability
+    if (v >= maxv) return (uint16_t)(maxv - 1);
+    return v;
+  };
+  _touchX[0] = clamp_u16(_touchX[0], _touch_width);
+  _touchY[0] = clamp_u16(_touchY[0], _touch_height);
+  _touchX[1] = clamp_u16(_touchX[1], _touch_width);
+  _touchY[1] = clamp_u16(_touchY[1], _touch_height);
 	if (CONFIG_FT6X36_DEBUG) {
 	  printf("X0:%d Y0:%d EVENT:%d\n", _touchX[0], _touchY[0], _touchEvent[0]);
 	  //printf("X1:%d Y1:%d EVENT:%d\n", _touchX[1], _touchY[1], _touchEvent[1]);

@@ -1,17 +1,6 @@
 ## IDF Component Manager Manifest File
 dependencies:
-  # ESP LVGL Port - Official Espressif LVGL integration component
-  espressif/esp_lvgl_port: "^2.6.0"
-  
-  # ESP LCD Touch - Touch controller support for LVGL (required by esp_lvgl_port)
-  espressif/esp_lcd_touch: "^1.1.0"
-  
-  # ST7796 Display Driver - LCD panel driver for 480x320 TFT displays
-  espressif/esp_lcd_st7796: "^1.0.0"
-  
-  # FT6X36-IDF - I2C Capacitive Touch Controller (FT6236/FT6336) for ESP-IDF
-  # Supports FT6236, FT6336, FT6436L capacitive touch controllers via I2C interface
-  # ESP-IDF v4.2 to v5+ compatible, configurable GPIO pins
-  # Note: Using git URL since component may not be in official registry
-  ft6x36_idf:
-    git: https://github.com/martinberlin/FT6X36-IDF.git 
+  # LovyanGFX - Graphics library for ESP32 (LGFX-only UI)
+  lovyanGFX:
+    git: https://github.com/lovyan03/LovyanGFX.git
+    # version: 1.1.11

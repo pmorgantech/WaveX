@@ -1,12 +1,23 @@
 #include <stdio.h>
+#include <inttypes.h>
+#ifdef ESP_PLATFORM
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
-#include "ui_main.h"
+#include "esp_timer.h"
+#else
+#include <stdio.h>
+#define ESP_LOGI(TAG, FMT, ...) ((void)0)
+#define ESP_LOGE(TAG, FMT, ...) ((void)0)
+static inline unsigned int esp_get_free_heap_size() { return 0U; }
+static inline long long esp_timer_get_time() { return 0; }
+typedef int esp_err_t;
+#define ESP_OK 0
+#endif
+// esp_err.h is brought in transitively by ESP-IDF headers when building on target
 #include "version.h"
-#include "hardware_pins.h"
 #include "inter_mcu.h"
-#include "esp_timer.h"  // Add this missing include
+#include "ui_lgfx/ui_task.h"
 
 static const char *TAG = "WaveX-ESP32";
 
@@ -17,24 +28,16 @@ extern "C" void app_main(void)
     ESP_LOGI(TAG, "Built: %s %s", WAVEX_COMPILE_DATE, WAVEX_COMPILE_TIME);
     ESP_LOGI(TAG, "Free heap: %" PRIu32 " bytes", esp_get_free_heap_size());
     
-    ESP_LOGI(TAG, "Initializing hardware...");
-    
-    // Initialize hardware configuration
-    esp_err_t ret = wavex_hardware_init();
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Hardware initialization failed: %d", ret);
-        return;
-    }
-    ESP_LOGI(TAG, "Hardware initialization completed successfully");
+    ESP_LOGI(TAG, "Initializing display (LovyanGFX)...");
     
     // Initialize inter-MCU communication
     if (inter_mcu_init() != ESP_OK) {
         ESP_LOGE(TAG, "Failed to initialize inter-MCU SPI");
         return;
     }
-    
-    // Initialize LVGL and UI
-    wavex_ui_init();
+
+    // Start LovyanGFX-based UI task
+    wavex_ui_task_start();
     
     ESP_LOGI(TAG, "WaveX ESP32 Frontend Initialized");
     ESP_LOGI(TAG, "About menu available under System -> About");

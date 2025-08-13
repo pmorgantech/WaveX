@@ -61,6 +61,7 @@ WaveX/
 ### 🔄 In Progress
 - **Daisy Firmware**: Resolving build issues with HAL dependencies.
 - **Protocol Implementation**: Complete SPI communication handlers
+- **UI Migration**: Migrating from LVGL to LovyanGFX-based custom UI (see `docs/WaveX_UI_Redesign.md`).
 
 ### 📋 Next Steps
 - Resolve libDaisy compilation issues or use alternative STM32 framework
@@ -100,7 +101,7 @@ make setup      # Initialize git submodules
 ### ESP32-S3 Frontend
 - ESP32-S3 with at least 8MB PSRAM
 - 3.5" TFT display (ST7796S controller)
-- XPT2046 touch controller
+- FT6x36 capacitive touch controller (I2C)
 - SD card interface
 - USB MIDI interface
 - SPI connection to Daisy
@@ -140,7 +141,7 @@ Touch Pin       Signal          GPIO    Pin Location    Description
 12              CTP_INT         -1      -              Interrupt pin (optional, disabled in config)
 ```
 
-**✅ Touch Technology**: Firmware supports FT6X36 I2C capacitive touch controllers (FT6236/FT6336) with polling-based LVGL integration.
+**✅ Touch Technology**: Firmware supports FT6x36 I2C capacitive touch controllers (FT6236/FT6336). LVGL integration exists today; migration to LovyanGFX touch handling is planned.
 
 **📡 SPI Configuration**: Multiple independent SPI interfaces are used - Display (VSPI), Inter-MCU (custom), and SD Card (HSPI) for optimal performance and signal isolation.
 
@@ -406,7 +407,7 @@ WaveX uses an ESP32-S3-DevKitC-1 as the frontend MCU with the following verified
 
 **✅ Verified Components:**
 - ST7796S Display: Full initialization and LVGL integration working
-- FT6X36 Touch Controller: I2C communication and touch event handling
+- FT6x36 Touch Controller: I2C communication and touch event handling
 - Inter-MCU SPI: Command/data exchange with Daisy Seed
 - SD Card Interface: Ready for data logging and preset storage
 

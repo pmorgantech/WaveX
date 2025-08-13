@@ -23,7 +23,7 @@ CONFIG_SPI_MASTER_ISR_IN_IRAM=y
 
 # CRITICAL: Memory Layout Optimization to prevent fragmentation
 # Reduce all task stack sizes to minimize early heap fragmentation
-CONFIG_ESP_MAIN_TASK_STACK_SIZE=32768        # Increased from 16KB to 32KB for LVGL init
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
 CONFIG_ESP_INT_WDT_TIMEOUT_MS=800
 
 # Optimize stack sizes to reduce memory fragmentation
@@ -35,17 +35,7 @@ CONFIG_LWIP_TCPIP_TASK_STACK_SIZE=1536        # Reduced from 4096
 CONFIG_ESP_TIMER_TASK_STACK_SIZE=1536         # Reduced from 3584
 CONFIG_ESP_IPC_TASK_STACK_SIZE=1024           # Reduced from 1280
 
-# LVGL Memory Pool Configuration - Use PSRAM for widgets, internal for display
-CONFIG_LV_MEM_CUSTOM=y
-CONFIG_LV_MEM_SIZE_KILOBYTES=512          # Larger LVGL heap in PSRAM
-CONFIG_LV_MEM_POOL_EXPAND_SIZE_KILOBYTES=128  # Larger expansion in PSRAM
-CONFIG_LV_MEM_ADR=0x0
-
-# Force LVGL allocations to PSRAM where possible
-CONFIG_LV_MEM_BUF_MAX_NUM=16
-
-# Alternative: Use custom memory management for LVGL
-CONFIG_LV_MEM_CUSTOM=n
+## LVGL removed (LGFX-only UI)
 
 # PSRAM Configuration - Use for large assets, NOT display buffers
 CONFIG_SPIRAM=y
@@ -73,9 +63,7 @@ CONFIG_TINYUSB_CDC_ENABLED=y
 CONFIG_TINYUSB_CDC_RX_BUFSIZE=256
 CONFIG_TINYUSB_CDC_TX_BUFSIZE=256
 
-# LVGL configuration - Optimized memory and stack usage
-CONFIG_LVGL_TASK_STACK_SIZE=8192
-CONFIG_LVGL_TASK_PRIORITY=5
+## LVGL removed (LGFX-only UI)
 
 # FT6X36 Touch Controller Configuration - Match hardware pins
 CONFIG_TOUCH_SDA=20
@@ -166,4 +154,10 @@ CONFIG_BOOTLOADER_WDT_TIME_MS=9000
 # Disable USB-related features that might cause issues
 CONFIG_ESP_CONSOLE_USB_CDC=n
 CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=n
-CONFIG_ESP_CONSOLE_UART_DEFAULT=y 
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+
+#
+# UI (LovyanGFX)
+#
+CONFIG_UI_LGFX_ENABLE_INIT=y
+# end of UI (LovyanGFX)
