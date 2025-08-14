@@ -1,6 +1,13 @@
 #include "daisy_seed.h"
 #include "daisysp.h"
+#include <cstdint>
+#include <cstddef>
+#include <cstring>
+#include <vector>
 #include "spi_protocol/protocol.h"
+#include "sampler.hpp"
+#include "cv_bus.hpp"
+#include "timebase.hpp"
 
 using namespace daisy;
 using namespace daisysp;
@@ -27,6 +34,19 @@ Svf filter;
 Adsr envelope;
 Oscillator lfo;
 Oscillator oscillator;
+Sampler g_sampler;
+CvBus   g_cv;
+
+static volatile float g_env_level = 0.0f;
+static float g_last_in_block[Timebase::kBlockSize] = {0};
+static size_t g_last_block_size = 0;
+
+// Preview state
+static std::vector<int16_t> g_preview;
+static uint32_t g_prev_sent = 0;
+
+// Outgoing packet ready flag
+static volatile bool g_tx_ready = false;
 
 // Envelope gate state
 bool envelope_gate = false;
@@ -35,20 +55,62 @@ bool envelope_gate = false;
 SPI_HandleTypeDef hspi1;
 uint8_t spi_rx_buffer[128];
 uint8_t spi_tx_buffer[128];
+uint8_t spi_dummy_rx[128];
 volatile bool spi_data_ready = false;
+static volatile bool g_tx_inflight = false;
+static uint16_t g_tx_len = 0;
+
+// Daisy → ESP32 IRQ pin remapped to a header pin for easy wiring.
+// Wire this pin to ESP32-S3 GPIO16.
+static GPIO s_irq_pin;
+
+static inline void IRQ_Init()
+{
+    // Choose a free Daisy header pin for IRQ (was PB0). Using seed::D21 (PC4).
+    s_irq_pin.Init(seed::D21, GPIO::Mode::OUTPUT);
+    s_irq_pin.Write(false);
+}
+
+static inline void IRQ_Raise() { s_irq_pin.Write(true); }
+static inline void IRQ_Lower() { s_irq_pin.Write(false); }
+
+static void SendPacket(uint8_t type, const void* payload, size_t length)
+{
+    if(length > MAX_PAYLOAD_SIZE) length = MAX_PAYLOAD_SIZE;
+    Packet* p = reinterpret_cast<Packet*>(spi_tx_buffer);
+    p->header.sync = SYNC_BYTE;
+    p->header.type = type;
+    p->header.length = (uint8_t)length;
+    if(payload && length)
+        memcpy(p->payload, payload, length);
+    p->header.checksum = ProtocolHandler::CalculateChecksum(p->payload, p->header.length);
+    g_tx_ready = true;
+    g_tx_len = (uint16_t)(sizeof(PacketHeader) + p->header.length);
+    // Prime TXRX so next master clock will shift the packet out
+    if(!g_tx_inflight) {
+        if(HAL_SPI_TransmitReceive_IT(&hspi1, spi_tx_buffer, spi_dummy_rx, g_tx_len) == HAL_OK) {
+            g_tx_inflight = true;
+            IRQ_Raise();
+        }
+    }
+}
 
 // Audio callback
 void AudioCallback(AudioHandle::InputBuffer  in,
                    AudioHandle::OutputBuffer out,
                    size_t                    size)
 {
+    static float inMono[128];
     for (size_t i = 0; i < size; i++)
     {
+        // Prepare mono input for sampler
+        inMono[i] = 0.5f * (in[0][i] + in[1][i]);
         // Update LFO
         float lfo_value = lfo.Process();
         
         // Process envelope with gate
         float env_value = envelope.Process(envelope_gate);
+        g_env_level = env_value;
         
         // Apply modulation to filter cutoff
         float modulated_cutoff = params.filter_cutoff + (lfo_value * params.lfo_depth * 1000.0f);
@@ -61,11 +123,58 @@ void AudioCallback(AudioHandle::InputBuffer  in,
         
         // Apply envelope
         float output_sample = filtered_sample * env_value;
+        // Mix in sampler playback
+        float s = g_sampler.Next();
+        output_sample = tanhf(output_sample + s);
         
         // Output processed audio
         out[0][i] = output_sample;
         out[1][i] = output_sample; // Mono for now
     }
+
+    // Feed sampler with current input block
+    g_sampler.FeedInputBlock(inMono, size);
+    // Save last input block for metering
+    g_last_block_size = size > Timebase::kBlockSize ? Timebase::kBlockSize : size;
+    for(size_t i=0;i<g_last_block_size;i++) g_last_in_block[i] = inMono[i];
+
+    // 1 kHz control tick (block size set to 48 samples)
+    Timebase::Tick1kHz([]{
+        // Map current params to CVs (normalized 0..1)
+        auto clamp01 = [](float x){ return x < 0.0f ? 0.0f : (x > 1.0f ? 1.0f : x); };
+        float norm_cut = clamp01((params.filter_cutoff - 20.0f) / (8000.0f - 20.0f));
+        float norm_res = clamp01(params.filter_resonance);
+        float norm_vca = clamp01(g_env_level);
+        g_cv.QueueVoice(0, norm_cut, norm_res, norm_vca);
+        g_cv.Flush();
+
+        // Meter push every 20 ms
+        static uint32_t meter_ctr = 0;
+        if(++meter_ctr >= 20) {
+            meter_ctr = 0;
+            float rms=0, peak=0;
+            Sampler::BlockMeters(g_last_in_block, g_last_block_size, rms, peak);
+            MeterPushMessage m{rms, peak};
+            if(!g_tx_ready) SendPacket(MSG_METER_PUSH, &m, sizeof(m));
+        }
+
+        // Stream preview chunks if pending
+        if(!g_tx_ready && g_prev_sent < g_preview.size()) {
+            WaveChunkMessage hdr{};
+            hdr.offset = g_prev_sent;
+            uint16_t samples_avail = (uint16_t)(g_preview.size() - g_prev_sent);
+            uint16_t max_samples = (uint16_t)((MAX_PAYLOAD_SIZE - sizeof(WaveChunkMessage)) / 2);
+            uint16_t count = samples_avail < max_samples ? samples_avail : max_samples;
+            uint8_t payload[MAX_PAYLOAD_SIZE];
+            memcpy(payload, &hdr, sizeof(hdr));
+            memcpy(payload + sizeof(hdr), &g_preview[g_prev_sent], count * sizeof(int16_t));
+            hdr.count = count; // update count after computing
+            // Re-write header with count
+            memcpy(payload, &hdr, sizeof(hdr));
+            SendPacket(MSG_WAVE_CHUNK, payload, sizeof(hdr) + count * sizeof(int16_t));
+            g_prev_sent += count;
+        }
+    });
 }
 
 // SPI callback for receiving data from ESP32
@@ -73,6 +182,11 @@ void WaveX_SPI_RxCpltCallback(SPI_HandleTypeDef *hspi)
 {
     if (hspi == &hspi1) {
         spi_data_ready = true;
+        if(g_tx_inflight){
+            g_tx_inflight = false;
+            g_tx_ready = false;
+            IRQ_Lower();
+        }
     }
 }
 
@@ -151,6 +265,38 @@ void ProcessSPIMessage(const uint8_t* buffer, size_t length)
             break;
         }
         
+        case MSG_SAMPLE_CTRL: {
+            SampleCtrlMessage sc{};
+            if(ProtocolHandler::ParseSampleCtrl(buffer, sc)) {
+                switch(sc.cmd){
+                    case SAMPLE_REC_START: g_sampler.StartRec(); break;
+                    case SAMPLE_REC_STOP:  g_sampler.StopRec();  break;
+                    case SAMPLE_PLAY_START: g_sampler.StartPlay(sc.rate); break;
+                    case SAMPLE_PLAY_STOP:  g_sampler.StopPlay(); break;
+                }
+            }
+            break;
+        }
+        case MSG_PREVIEW_REQ: {
+            PreviewReqMessage pr{};
+            if(ProtocolHandler::ParsePreviewReq(buffer, pr)) {
+                g_prev_sent = 0;
+                g_sampler.MakePreview(pr.start, pr.end, pr.decim ? pr.decim : 1, g_preview);
+                // Kick first chunk immediately if possible
+                if(!g_tx_ready && !g_preview.empty()) {
+                    WaveChunkMessage hdr{0,0};
+                    uint16_t max_samples = (uint16_t)((MAX_PAYLOAD_SIZE - sizeof(WaveChunkMessage)) / 2);
+                    uint16_t count = g_preview.size() < max_samples ? (uint16_t)g_preview.size() : max_samples;
+                    uint8_t payload[MAX_PAYLOAD_SIZE];
+                    hdr.offset = 0; hdr.count = count;
+                    memcpy(payload, &hdr, sizeof(hdr));
+                    memcpy(payload + sizeof(hdr), &g_preview[0], count * sizeof(int16_t));
+                    SendPacket(MSG_WAVE_CHUNK, payload, sizeof(hdr) + count * sizeof(int16_t));
+                    g_prev_sent = count;
+                }
+            }
+            break;
+        }
         default:
             // Handle other message types as needed
             break;
@@ -218,14 +364,19 @@ int main(void)
     hw.Init();
     
     // Initialize audio
-    hw.SetAudioBlockSize(64); // 64-sample blocks for low latency
+    hw.SetAudioBlockSize(Timebase::kBlockSize); // 48-sample blocks → 1 kHz control tick
     hw.SetAudioSampleRate(SaiHandle::Config::SampleRate::SAI_48KHZ);
     
     // Initialize DSP objects
     InitDSP();
+
+    // Init sampler and CV bus
+    g_sampler.Init(hw.AudioSampleRate());
+    g_cv.Init(0x60);
     
     // Initialize SPI communication with ESP32
     InitSPI();
+    IRQ_Init();
     
     // Start audio processing
     hw.StartAudio(AudioCallback);

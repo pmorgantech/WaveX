@@ -20,6 +20,7 @@ static inline int xTaskCreatePinnedToCore(TaskFunction_t, const char*, unsigned 
 #include "ui_lgfx/ui_manager.h"
 #include "ui_lgfx/screens_main.h"
 #include "ui_lgfx/screensaver.h"
+#include "inter_mcu.h"
 
 
 static const char *TAG = "ui_task";
@@ -29,7 +30,13 @@ static void ui_task_func(void *arg) {
     // Conditional LGFX init to avoid conflicts with esp_lcd/LVGL during migration
     // Enable via menuconfig: UI (LovyanGFX) -> Enable LovyanGFX device init
     #if CONFIG_UI_LGFX_ENABLE_INIT
+    // Pause inter-MCU RX briefly during LGFX init to avoid bus/DMA contention
+    // Start LGFX first; inter-MCU bus bring-up is now deferred until after display init
+    inter_mcu_set_suspended(true);
     lgfx_device_init();
+    // Now start the inter-MCU SPI stack
+    inter_mcu_start();
+    inter_mcu_set_suspended(false);
     
     // Initialize screensaver
     screensaver_init();

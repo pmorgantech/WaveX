@@ -30,14 +30,16 @@ extern "C" void app_main(void)
     
     ESP_LOGI(TAG, "Initializing display (LovyanGFX)...");
     
-    // Initialize inter-MCU communication
-    if (inter_mcu_init() != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to initialize inter-MCU SPI");
-        return;
-    }
+    // Initialize inter-MCU (deferred start; actual SPI bring-up happens in UI task after LGFX init)
+    (void)inter_mcu_init();
 
+    // Delay UI start slightly to avoid contention with SPI bus init
+    vTaskDelay(pdMS_TO_TICKS(200));
     // Start LovyanGFX-based UI task
     wavex_ui_task_start();
+
+    // Periodically probe Daisy status via SPI even if IRQ line is not wired
+    int probe_counter = 0;
     
     ESP_LOGI(TAG, "WaveX ESP32 Frontend Initialized");
     ESP_LOGI(TAG, "About menu available under System -> About");
@@ -51,6 +53,14 @@ extern "C" void app_main(void)
         if (current_time - last_heap_log >= 30) { // Log every 30 seconds
             ESP_LOGI(TAG, "System running - Free heap: %" PRIu32 " bytes", esp_get_free_heap_size());
             last_heap_log = current_time;
+        }
+        // Kick the inter-MCU RX task in case the IRQ line is floating or not wired
+        probe_counter++;
+        if (probe_counter >= 5) { // every 5 seconds
+            // Simulate a notify to RX task to fetch a frame
+            extern void inter_mcu_force_poll(void);
+            inter_mcu_force_poll();
+            probe_counter = 0;
         }
         
         vTaskDelay(pdMS_TO_TICKS(1000));  // 1 second loop

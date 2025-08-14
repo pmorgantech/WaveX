@@ -23,6 +23,11 @@ enum MessageType : uint8_t {
     MSG_PARAMETER_UPDATE = 0x06,
     MSG_STATUS_REQUEST = 0x07,
     MSG_STATUS_RESPONSE = 0x08,
+    // Phase I new message types
+    MSG_SAMPLE_CTRL = 0x09,
+    MSG_PREVIEW_REQ = 0x0A,
+    MSG_METER_PUSH  = 0x10, // backend -> frontend
+    MSG_WAVE_CHUNK  = 0x11, // backend -> frontend
     MSG_ERROR = 0xFF
 };
 
@@ -72,6 +77,35 @@ struct SampleLoadMessage {
     uint8_t bit_depth;      // Bit depth (16 or 24)
 } __attribute__((packed));
 
+// Sample control message
+enum SampleCtrlCmd : uint8_t { SAMPLE_REC_START=1, SAMPLE_REC_STOP=2, SAMPLE_PLAY_START=3, SAMPLE_PLAY_STOP=4 };
+struct SampleCtrlMessage {
+    uint8_t slot;           // 0 for now
+    uint8_t cmd;            // SampleCtrlCmd
+    float rate;             // playback rate (1.0 = normal)
+} __attribute__((packed));
+
+// Preview request message
+struct PreviewReqMessage {
+    uint8_t slot;           // 0 for now
+    uint32_t start;         // sample index start
+    uint32_t end;           // sample index end (exclusive)
+    uint16_t decim;         // decimation factor
+} __attribute__((packed));
+
+// Meter push (backend->frontend)
+struct MeterPushMessage {
+    float rms;
+    float peak;
+} __attribute__((packed));
+
+// Wave chunk (backend->frontend)
+struct WaveChunkMessage {
+    uint32_t offset;        // index in preview stream
+    uint16_t count;         // number of int16 samples following
+    // payload follows (count * int16)
+} __attribute__((packed));
+
 // Generic packet structure
 struct Packet {
     PacketHeader header;
@@ -90,12 +124,23 @@ public:
     
     static size_t CreateNoteOffPacket(uint8_t* buffer, size_t buffer_size,
                                     uint8_t note, uint8_t channel);
+
+    // Phase I: additional packet creators
+    static size_t CreateSampleCtrlPacket(uint8_t* buffer, size_t buffer_size,
+                                       const SampleCtrlMessage& msg);
+
+    static size_t CreatePreviewReqPacket(uint8_t* buffer, size_t buffer_size,
+                                       const PreviewReqMessage& msg);
     
     // Packet parsing
     static bool ValidatePacket(const uint8_t* buffer, size_t length);
     static MessageType GetMessageType(const uint8_t* buffer);
     static bool ParseControlChange(const uint8_t* buffer, ControlChangeMessage& msg);
     static bool ParseNoteMessage(const uint8_t* buffer, NoteMessage& msg);
+    static bool ParseSampleCtrl(const uint8_t* buffer, SampleCtrlMessage& msg);
+    static bool ParsePreviewReq(const uint8_t* buffer, PreviewReqMessage& msg);
+    // Generic payload parser for fixed-size messages
+    static bool ParseMessage(const uint8_t* buffer, MessageType expected_type, void* out_payload, size_t out_payload_size);
     
     // Utility functions
     static uint8_t CalculateChecksum(const uint8_t* data, size_t length);

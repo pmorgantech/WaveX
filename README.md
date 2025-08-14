@@ -136,7 +136,7 @@ Display Pin     Signal          GPIO    Pin Location    Description
 ```
 Touch Pin       Signal          GPIO    Pin Location    Description
 ---------       ------          ----    ------------    -----------
-10              CTP_SCL         1       J3 pin 4       I2C Clock for touch controller
+10              CTP_SCL         9       J3 pin 4       I2C Clock for touch controller
 11              CTP_SDA         20      J3 pin 19      I2C Data for touch controller
 12              CTP_INT         -1      -              Interrupt pin (optional, disabled in config)
 ```
@@ -152,7 +152,8 @@ Signal          GPIO    Pin Location    Description
 SPI_CS          8       J1 pin 12      SPI Chip Select to Daisy
 SPI_SCLK        18      J1 pin 11      SPI Clock (10MHz max for audio timing)
 SPI_MOSI        47      J3 pin 17      SPI Data to Daisy (control messages)
-SPI_MISO        19      J3 pin 20      SPI Data from Daisy (status/feedback)
+SPI_MISO        37      —               SPI Data from Daisy (status/feedback)
+IRQ_IN          16      —               Daisy→ESP32 interrupt (from PB0)
 ```
 
 #### 💾 SD Card Interface
@@ -362,7 +363,8 @@ WaveX uses an ESP32-S3-DevKitC-1 as the frontend MCU with the following verified
 | SPI Chip Select | GPIO8 | J1-12 | ✅ Verified |
 | SPI Clock | GPIO18 | J1-11 | ✅ Verified |
 | SPI MOSI | GPIO47 | J3-17 | ✅ Verified |
-| SPI MISO | GPIO19 | J3-20 | ✅ Verified |
+| SPI MISO | GPIO37 | — | 🔧 Remapped (GPIO19 in use) |
+| IRQ from Daisy | GPIO16 | — | ✅ Verified |
 
 ### 💾 SD Card Interface
 | Function | GPIO | Pin Location | Status |
@@ -380,9 +382,9 @@ WaveX uses an ESP32-S3-DevKitC-1 as the frontend MCU with the following verified
 
 ### 📌 Pin Usage Summary
 
-**Used Pins:** GPIO2, GPIO4, GPIO5, GPIO6, GPIO7, GPIO8, GPIO9, GPIO10, GPIO11, GPIO12, GPIO13, GPIO14, GPIO17, GPIO18, GPIO19, GPIO20, GPIO21, GPIO42, GPIO47
+**Used Pins:** GPIO2, GPIO4, GPIO5, GPIO6, GPIO7, GPIO8, GPIO9, GPIO10, GPIO11, GPIO12, GPIO13, GPIO14, GPIO16, GPIO17, GPIO18, GPIO19, GPIO20, GPIO21, GPIO37, GPIO42, GPIO47
 
-**Available Pins:** GPIO0, GPIO1, GPIO3, GPIO15, GPIO16, GPIO22-25, GPIO33-48 (excluding used pins)
+**Available Pins:** GPIO0, GPIO1, GPIO3, GPIO15, GPIO22-25, GPIO33-36, GPIO38-48 (excluding used pins)
 
 **Reserved/Avoid:** GPIO26-32 (SPI Flash/PSRAM), GPIO45-46 (Strapping pins)
 

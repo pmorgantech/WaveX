@@ -11,6 +11,8 @@ idf_component_register(
     REQUIRES 
         hardware_config
         LovyanGFX
+    PRIV_REQUIRES
+        main
 )
 
 

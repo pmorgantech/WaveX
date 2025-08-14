@@ -12,9 +12,51 @@
 
 #pragma once
 
+#ifdef ESP_PLATFORM
 #include "driver/gpio.h"
 #include "driver/spi_master.h"
 #include "driver/i2c.h"
+#include "esp_lcd_types.h"
+#else
+// Minimal fallbacks for host builds (lint/tests)
+typedef int gpio_num_t;
+#ifndef GPIO_NUM_2
+#define GPIO_NUM_2   2
+#define GPIO_NUM_4   4
+#define GPIO_NUM_5   5
+#define GPIO_NUM_6   6
+#define GPIO_NUM_7   7
+#define GPIO_NUM_8   8
+#define GPIO_NUM_9   9
+#define GPIO_NUM_10  10
+#define GPIO_NUM_11  11
+#define GPIO_NUM_12  12
+#define GPIO_NUM_13  13
+#define GPIO_NUM_14  14
+#define GPIO_NUM_15  15
+#define GPIO_NUM_16  16
+#define GPIO_NUM_17  17
+#define GPIO_NUM_18  18
+#define GPIO_NUM_19  19
+#define GPIO_NUM_20  20
+#define GPIO_NUM_21  21
+#define GPIO_NUM_38  38
+#define GPIO_NUM_42  42
+#define GPIO_NUM_47  47
+#endif
+#ifndef SPI2_HOST
+#define SPI2_HOST 2
+#endif
+#ifndef SPI3_HOST
+#define SPI3_HOST 3
+#endif
+#ifndef I2C_NUM_0
+#define I2C_NUM_0 0
+#endif
+#ifndef ESP_LCD_COLOR_SPACE_BGR
+#define ESP_LCD_COLOR_SPACE_BGR 1
+#endif
+#endif
 
 #ifdef __cplusplus
 extern "C" {
@@ -87,11 +129,16 @@ extern "C" {
 /** Inter-MCU SPI MOSI - GPIO47 (J3 pin 17) ✅ */
 #define WAVEX_INTER_MCU_GPIO_MOSI   GPIO_NUM_47
 
-/** Inter-MCU SPI MISO - GPIO19 (J3 pin 20) ✅ */
-#define WAVEX_INTER_MCU_GPIO_MISO   GPIO_NUM_19
+/** Inter-MCU SPI MISO - GPIO37 (remapped; per DevKitC-1 availability) ✅ */
+#define WAVEX_INTER_MCU_GPIO_MISO   GPIO_NUM_37
 
 /** Inter-MCU SPI clock frequency (10MHz for audio timing) */
 #define WAVEX_INTER_MCU_SPI_CLK_HZ  (10 * 1000 * 1000)
+
+/** Inter-MCU IRQ from Daisy PB0 → ESP32 GPIO16 (per docs) */
+#ifndef WAVEX_INTER_MCU_GPIO_IRQ
+#define WAVEX_INTER_MCU_GPIO_IRQ    GPIO_NUM_16
+#endif
 
 // =============================================================================
 // SD Card Interface - ✅ VERIFIED VALID

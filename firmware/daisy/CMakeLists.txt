@@ -4,16 +4,35 @@ cmake_minimum_required(VERSION 3.15)
 set(PROJECT_NAME wavex-daisy)
 project(${PROJECT_NAME} C CXX ASM)
 
+# Use C++17 for modern headers and defaults
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_C_STANDARD 11)
+set(CMAKE_C_STANDARD_REQUIRED ON)
+
+# Ensure STM32 device macros are visible to all subdirs (HAL expects these)
+add_definitions(
+    -DSTM32H750xx
+    -DUSE_HAL_DRIVER
+    -DHSE_VALUE=16000000
+    -DHSI_VALUE=16000000
+    -DARM_MATH_CM7
+)
+
 # Add libDaisy and DaisySP
 add_subdirectory(libs/libDaisy)
 add_subdirectory(libs/DaisySP)
 
-# Add shared components (will be built separately for Daisy)
-# add_subdirectory(../shared shared)
+# Shared protocol (headers under firmware/shared)
+include_directories(${CMAKE_CURRENT_LIST_DIR}/../shared)
 
 # Create our main executable
 set(SOURCES
     src/main.cpp
+    src/sampler.hpp
+    src/cv_bus.hpp
+    src/timebase.hpp
+    ../shared/spi_protocol/protocol.cpp
 )
 
 add_executable(${PROJECT_NAME} ${SOURCES})
@@ -60,8 +79,6 @@ target_link_options(${PROJECT_NAME} PRIVATE
     -fstack-usage
     -MMD
     -MP
-    --specs=nano.specs
-    --specs=nosys.specs
     -Wl,--gc-sections
     -Wl,--print-memory-usage
 ) 

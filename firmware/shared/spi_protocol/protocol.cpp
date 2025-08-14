@@ -4,84 +4,69 @@
 namespace WaveX {
 namespace Protocol {
 
+// Internal helper to build a packet with given type and payload
+static size_t BuildPacket(uint8_t* buffer, size_t buffer_size,
+                          uint8_t type, const void* payload, size_t payload_size)
+{
+    if (buffer_size < sizeof(PacketHeader) + payload_size) {
+        return 0;
+    }
+
+    Packet* packet = reinterpret_cast<Packet*>(buffer);
+    packet->header.sync = SYNC_BYTE;
+    packet->header.type = type;
+    packet->header.length = static_cast<uint8_t>(payload_size);
+
+    if (payload_size > 0 && payload != NULL) {
+        memcpy(packet->payload, payload, payload_size);
+    }
+
+    packet->header.checksum = ProtocolHandler::CalculateChecksum(packet->payload, packet->header.length);
+    return sizeof(PacketHeader) + packet->header.length;
+}
+
 size_t ProtocolHandler::CreateControlChangePacket(uint8_t* buffer, size_t buffer_size,
                                                 uint8_t parameter, uint8_t channel, uint16_t value)
 {
-    if (buffer_size < sizeof(PacketHeader) + sizeof(ControlChangeMessage)) {
-        return 0;
-    }
-    
-    Packet* packet = reinterpret_cast<Packet*>(buffer);
-    
-    // Set header
-    packet->header.sync = SYNC_BYTE;
-    packet->header.type = MSG_CONTROL_CHANGE;
-    packet->header.length = sizeof(ControlChangeMessage);
-    
-    // Set payload
-    ControlChangeMessage* msg = reinterpret_cast<ControlChangeMessage*>(packet->payload);
-    msg->parameter = parameter;
-    msg->channel = channel;
-    msg->value = value;
-    
-    // Calculate checksum
-    packet->header.checksum = CalculateChecksum(packet->payload, packet->header.length);
-    
-    return sizeof(PacketHeader) + packet->header.length;
+    ControlChangeMessage msg; memset(&msg, 0, sizeof(msg));
+    msg.parameter = parameter;
+    msg.channel = channel;
+    msg.value = value;
+    return BuildPacket(buffer, buffer_size, MSG_CONTROL_CHANGE, &msg, sizeof(msg));
 }
 
 size_t ProtocolHandler::CreateNoteOnPacket(uint8_t* buffer, size_t buffer_size,
                                          uint8_t note, uint8_t velocity, uint8_t channel)
 {
-    if (buffer_size < sizeof(PacketHeader) + sizeof(NoteMessage)) {
-        return 0;
-    }
-    
-    Packet* packet = reinterpret_cast<Packet*>(buffer);
-    
-    // Set header
-    packet->header.sync = SYNC_BYTE;
-    packet->header.type = MSG_NOTE_ON;
-    packet->header.length = sizeof(NoteMessage);
-    
-    // Set payload
-    NoteMessage* msg = reinterpret_cast<NoteMessage*>(packet->payload);
-    msg->note = note;
-    msg->velocity = velocity;
-    msg->channel = channel;
-    msg->reserved = 0;
-    
-    // Calculate checksum
-    packet->header.checksum = CalculateChecksum(packet->payload, packet->header.length);
-    
-    return sizeof(PacketHeader) + packet->header.length;
+    NoteMessage msg; memset(&msg, 0, sizeof(msg));
+    msg.note = note;
+    msg.velocity = velocity;
+    msg.channel = channel;
+    msg.reserved = 0;
+    return BuildPacket(buffer, buffer_size, MSG_NOTE_ON, &msg, sizeof(msg));
 }
 
 size_t ProtocolHandler::CreateNoteOffPacket(uint8_t* buffer, size_t buffer_size,
                                           uint8_t note, uint8_t channel)
 {
-    if (buffer_size < sizeof(PacketHeader) + sizeof(NoteMessage)) {
-        return 0;
-    }
-    
-    Packet* packet = reinterpret_cast<Packet*>(buffer);
-    
-    // Set header
-    packet->header.sync = SYNC_BYTE;
-    packet->header.type = MSG_NOTE_OFF;
-    packet->header.length = sizeof(NoteMessage);
-    
-    // Set payload
-    NoteMessage* msg = reinterpret_cast<NoteMessage*>(packet->payload);
-    msg->note = note;
-    msg->velocity = 0;
-    msg->channel = channel;
-    msg->reserved = 0;
-    
-    // Calculate checksum
-    packet->header.checksum = CalculateChecksum(packet->payload, packet->header.length);
-    
-    return sizeof(PacketHeader) + packet->header.length;
+    NoteMessage msg; memset(&msg, 0, sizeof(msg));
+    msg.note = note;
+    msg.velocity = 0;
+    msg.channel = channel;
+    msg.reserved = 0;
+    return BuildPacket(buffer, buffer_size, MSG_NOTE_OFF, &msg, sizeof(msg));
+}
+
+size_t ProtocolHandler::CreateSampleCtrlPacket(uint8_t* buffer, size_t buffer_size,
+                                             const SampleCtrlMessage& msg)
+{
+    return BuildPacket(buffer, buffer_size, MSG_SAMPLE_CTRL, &msg, sizeof(msg));
+}
+
+size_t ProtocolHandler::CreatePreviewReqPacket(uint8_t* buffer, size_t buffer_size,
+                                             const PreviewReqMessage& msg)
+{
+    return BuildPacket(buffer, buffer_size, MSG_PREVIEW_REQ, &msg, sizeof(msg));
 }
 
 bool ProtocolHandler::ValidatePacket(const uint8_t* buffer, size_t length)
@@ -119,27 +104,36 @@ MessageType ProtocolHandler::GetMessageType(const uint8_t* buffer)
 
 bool ProtocolHandler::ParseControlChange(const uint8_t* buffer, ControlChangeMessage& msg)
 {
-    const Packet* packet = reinterpret_cast<const Packet*>(buffer);
-    
-    if (packet->header.type != MSG_CONTROL_CHANGE || 
-        packet->header.length != sizeof(ControlChangeMessage)) {
-        return false;
-    }
-    
-    memcpy(&msg, packet->payload, sizeof(ControlChangeMessage));
-    return true;
+    return ParseMessage(buffer, MSG_CONTROL_CHANGE, &msg, sizeof(msg));
 }
 
 bool ProtocolHandler::ParseNoteMessage(const uint8_t* buffer, NoteMessage& msg)
 {
+    // Allow either NOTE_ON or NOTE_OFF
     const Packet* packet = reinterpret_cast<const Packet*>(buffer);
-    
-    if ((packet->header.type != MSG_NOTE_ON && packet->header.type != MSG_NOTE_OFF) ||
-        packet->header.length != sizeof(NoteMessage)) {
-        return false;
-    }
-    
+    if (packet->header.length != sizeof(NoteMessage)) return false;
+    if (packet->header.type != MSG_NOTE_ON && packet->header.type != MSG_NOTE_OFF) return false;
     memcpy(&msg, packet->payload, sizeof(NoteMessage));
+    return true;
+}
+
+bool ProtocolHandler::ParseSampleCtrl(const uint8_t* buffer, SampleCtrlMessage& msg)
+{
+    return ParseMessage(buffer, MSG_SAMPLE_CTRL, &msg, sizeof(msg));
+}
+
+bool ProtocolHandler::ParsePreviewReq(const uint8_t* buffer, PreviewReqMessage& msg)
+{
+    return ParseMessage(buffer, MSG_PREVIEW_REQ, &msg, sizeof(msg));
+}
+
+bool ProtocolHandler::ParseMessage(const uint8_t* buffer, MessageType expected_type, void* out_payload, size_t out_payload_size)
+{
+    if (!buffer || !out_payload || out_payload_size == 0) return false;
+    const Packet* packet = reinterpret_cast<const Packet*>(buffer);
+    if (packet->header.type != expected_type) return false;
+    if (packet->header.length != out_payload_size) return false;
+    memcpy(out_payload, packet->payload, out_payload_size);
     return true;
 }
 
