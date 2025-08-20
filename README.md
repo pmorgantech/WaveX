@@ -21,9 +21,12 @@ A high-performance dual-MCU sampler and synthesizer featuring an ESP32-S3 fronte
 - **Sample management** and preset storage
 
 ### Inter-MCU Communication
-- **High-speed SPI protocol** for control data and sample transfer
-- **Custom protocol** optimized for real-time audio applications
+- **High-speed UART protocol** (230.4kbps) for control data and sample transfer
+- **Custom protocol** optimized for real-time audio applications with packet statistics
 - **Shared library** for protocol definitions and utilities
+- **Bidirectional communication** with comprehensive testing and monitoring
+- **Automatic test messages** for continuous communication verification
+- **Packet statistics tracking** for debugging and performance analysis
 
 ## Project Structure
 
@@ -54,21 +57,23 @@ WaveX/
 - **Hardware Compatibility**: All GPIO assignments verified for ESP32-S3-DevKitC-1
 - **Display Driver**: ST7796S 480x320 TFT display support via `esp_lcd` and `esp_lvgl_port`.
 - **Touch Integration**: FT6X36 I2C capacitive touch with LVGL integration.
-- **Shared Protocol Library**: SPI communication protocol definitions
+- **Shared Protocol Library**: UART communication protocol definitions and implementations
+- **Inter-MCU Communication**: Full bidirectional UART protocol with packet statistics and testing
+- **Daisy Firmware**: QSPI flash configuration, automated build/flash process
 - **Git Submodules**: LVGL, libDaisy, DaisySP properly configured
 - **Documentation**: Architecture and setup documentation updated.
 
 ### 🔄 In Progress
-- **Daisy Firmware**: Resolving build issues with HAL dependencies.
-- **Protocol Implementation**: Complete SPI communication handlers
+- **Protocol Implementation**: Complete UART communication handlers and message routing
+- **Audio Engine**: Basic audio processing framework on Daisy backend
 - **UI Migration**: Migrating from LVGL to LovyanGFX-based custom UI (see `docs/WaveX_UI_Redesign.md`).
 
 ### 📋 Next Steps
-- Resolve libDaisy compilation issues or use alternative STM32 framework
-- Create basic audio engine structure for Daisy
-- Add sample loading and playback functionality
-- Implement real-time parameter communication between MCUs
-- Test hardware integration with ESP32-S3-DevKitC-1
+- Complete audio engine structure for Daisy with sample playback
+- Add sample loading and management functionality
+- Implement real-time parameter synchronization between MCUs
+- Test hardware integration with complete dual-MCU setup
+- Add file system support for sample storage
 
 ## Quickstart (Devcontainer)
 
@@ -108,9 +113,12 @@ make setup      # Initialize git submodules
 
 ### Daisy Seed Backend
 - Daisy Seed (STM32H750VBT6)
-- Audio I/O connections
-- SPI DAC for CV outputs
-- SPI connection to ESP32
+- Audio I/O connections (AK4556 codec)
+- **SD Card support** via SPI interface
+- **Multiple MCP4728 DACs** for CV outputs
+- **PCM1690 DAC** on SAI2 interface
+- **USB support** for storage and device mode
+- UART connection to ESP32
 
 ## Hardware Pinout & Wiring
 
@@ -143,18 +151,53 @@ Touch Pin       Signal          GPIO    Pin Location    Description
 
 **✅ Touch Technology**: Firmware supports FT6x36 I2C capacitive touch controllers (FT6236/FT6336). LVGL integration exists today; migration to LovyanGFX touch handling is planned.
 
-**📡 SPI Configuration**: Multiple independent SPI interfaces are used - Display (VSPI), Inter-MCU (custom), and SD Card (HSPI) for optimal performance and signal isolation.
+**📡 SPI Configuration**: Multiple independent SPI interfaces are used - Display (VSPI), SD Card (HSPI), and LED Driver (HSPI) for optimal performance and signal isolation.
+
+#### 🎛️ Dual Potentiometer Interface (CD74HC4067)
+```
+Signal          GPIO    Pin Location    Description
+------          ----    ------------    -----------
+ADDR_A0         33      J3 pin 7       Address select bit 0
+ADDR_A1         34      J3 pin 8       Address select bit 1
+ADDR_A2         35      J3 pin 9       Address select bit 2
+ADDR_A3         36      J3 pin 10      Address select bit 3
+ENABLE          37      J3 pin 11      Enable (active low)
+SIGNAL          1       ADC1_CH0       Common analog signal input
+```
+**✅ Technology**: 16-channel analog multiplexer supporting dual potentiometers (RV112FF-40-15A-0B10K) with 12-bit ADC resolution
+
+#### 🔘 Button Matrix Interface (TCA8418)
+```
+Signal          GPIO    Pin Location    Description
+------          ----    ------------    -----------
+I2C_SDA         39      J3 pin 12      I2C data line
+I2C_SCL         40      J3 pin 13      I2C clock line
+RESET           41      J3 pin 14      Hardware reset
+INTERRUPT       43      J3 pin 15      Touch interrupt (active low)
+```
+**✅ Technology**: 8x8 capacitive touch button matrix with I2C interface and interrupt support
+
+#### 💡 LED Driver Interface (TLC5947)
+```
+Signal          GPIO    Pin Location    Description
+------          ----    ------------    -----------
+SPI_SCLK        44      J3 pin 16      SPI clock
+SPI_MOSI        45      J3 pin 17      SPI data
+SPI_CS          46      J3 pin 18      Chip select
+BLANK           47      J3 pin 19      Blank control
+LATCH           48      J3 pin 20      Latch control
+```
+**✅ Technology**: 48-channel 12-bit PWM LED driver with SPI interface for status indicators and backlighting
 
 #### 🔗 Inter-MCU Communication (ESP32 ↔ Daisy)
 ```
 Signal          GPIO    Pin Location    Description
 ------          ----    ------------    -----------
-SPI_CS          8       J1 pin 12      SPI Chip Select to Daisy
-SPI_SCLK        18      J1 pin 11      SPI Clock (10MHz max for audio timing)
-SPI_MOSI        47      J3 pin 17      SPI Data to Daisy (control messages)
-SPI_MISO        37      —               SPI Data from Daisy (status/feedback)
-IRQ_IN          16      —               Daisy→ESP32 interrupt (from PB0)
+UART_TX         17      J1 pin 10      UART1 TX to Daisy (control messages)
+UART_RX         18      J1 pin 11      UART1 RX from Daisy (status/feedback)
+GND             GND     —               Common ground
 ```
+**Note**: Uses UART1 for reliable bidirectional communication at 230.4kbps with comprehensive packet statistics and automatic testing
 
 #### 💾 SD Card Interface
 ```
@@ -170,13 +213,16 @@ SD_MISO         13      J1 pin 19      SD Card Data In
 ```
 Signal          GPIO    Pin Location    Description
 ------          ----    ------------    -----------
-MIDI_TX         17      J1 pin 10      MIDI UART TX (5-pin DIN out)
+MIDI_TX         8       J1 pin 12      MIDI UART TX (5-pin DIN out)
 MIDI_RX         42      J3 pin 6       MIDI UART RX (5-pin DIN in)
 USB_D+          -       Built-in       USB MIDI Data+ (built-in USB)
 USB_D-          -       Built-in       USB MIDI Data- (built-in USB)
 ```
+**Note**: UART2 used for DIN MIDI, built-in USB for USB MIDI
 
 ### Daisy Seed Backend Pin Assignments
+
+**⚠️ IMPORTANT**: All pin assignments verified against actual Daisy Seed hardware (D0-D30 only available)
 
 #### 🎧 Audio I/O (Built-in AK4556 Codec)
 ```
@@ -192,23 +238,62 @@ AUDIO_OUT_R     D/A_R   Right audio output
 ```
 Signal          Pin     Description
 ------          ---     -----------
-SPI_CS          D7      SPI Chip Select from ESP32
-SPI_SCLK        D8      SPI Clock from ESP32
-SPI_MOSI        D9      SPI Data from ESP32 (parameter updates)
-SPI_MISO        D10     SPI Data to ESP32 (status/audio meters)
+UART_TX         D0      UART4 TX to ESP32 (status/audio meters)
+UART_RX         D1      UART4 RX from ESP32 (parameter updates)
+GND             GND     Common ground
 ```
+**Note**: Uses UART4 for reliable bidirectional communication at 230.4kbps with comprehensive packet statistics and automatic testing
 
-#### 🎛️ CV Outputs (via SPI DACs)
+#### 🎛️ CV Outputs (via MCP4728 DACs)
 ```
 Signal          Pin     Description
 ------          ---     -----------
-CV_OUT_1        D22     CV Output 1 (envelope, LFO, etc.)
-CV_OUT_2        D23     CV Output 2
-GATE_OUT        D24     Gate/Trigger Output
-DAC_CS          D25     SPI DAC Chip Select
-DAC_SCLK        D26     SPI DAC Clock
-DAC_MOSI        D27     SPI DAC Data
+DAC1_CS         D25     MCP4728 #1 Chip Select
+DAC2_CS         D26     MCP4728 #2 Chip Select
+DAC3_CS         D27     MCP4728 #3 Chip Select
+DAC4_CS         D28     MCP4728 #4 Chip Select
+DAC_SCLK        D29     SPI Clock (shared)
+DAC_MOSI        D30     SPI Data (shared)
 ```
+**✅ Technology**: 4x MCP4728 12-bit DACs providing 16 CV outputs total
+
+**⚠️ Note**: Daisy Seed only exposes D0-D30 pins. D31+ do not exist on the hardware.
+
+**✅ PIN CONFLICTS RESOLVED**:
+- **D10-D11**: Now used for inter-MCU UART4 communication
+- **D2-D6**: Available for other functions (was SDMMC1)
+- **D17-D20**: Used for SPI SD card interface
+- **D21-D24**: Available for PCM1690 SAI2 interface
+
+**💡 SOLUTION**: Using SPI SD cards eliminates hardware conflicts and provides flexible pin assignment.
+
+**🎯 NEWLY AVAILABLE PINS**:
+- **D2-D6**: Available for additional functions (was SDMMC1)
+- **D7-D8**: Available for other interfaces (was inter-MCU UART)
+- **D9-D16**: Available for additional peripherals
+
+#### 🎵 High-Quality Audio Output (PCM1690)
+```
+Signal          Pin     Description
+------          ---     -----------
+PCM_BCLK        D24     SAI2 Bit Clock
+PCM_LRCK        D23     SAI2 Left/Right Clock
+PCM_DATA        D22     SAI2 Data
+PCM_MCLK        D21     SAI2 Master Clock
+```
+**✅ Technology**: PCM1690 24-bit/192kHz DAC for high-fidelity audio output
+**✅ Technology**: PCM1690 24-bit/192kHz DAC for high-fidelity audio output
+
+#### 💾 SD Card Interface (SPI)
+```
+Signal          Pin     Description
+------          ---     -----------
+SD_CS           D19     SD Card Chip Select
+SD_SCLK         D20     SD Card SPI Clock
+SD_MOSI         D18     SD Card Data Out
+SD_MISO         D17     SD Card Data In
+```
+**✅ Technology**: SPI interface for standard SD cards - flexible pin assignment
 
 #### 🎚️ Analog Inputs (for hardware controls)
 ```
@@ -224,7 +309,7 @@ CTRL_4          A3      Potentiometer/CV Input 4
 
 ```
 ┌─────────────────┐                    ┌─────────────────┐
-│    ESP32-S3     │◄───  SPI Bus  ────►│  Daisy Seed     │
+│    ESP32-S3     │◄───  UART Bus  ────►│  Daisy Seed     │
 │   (Frontend)    │                    │   (Backend)     │
 │                 │                    │                 │
 │ ┌─────────────┐ │                    │ ┌─────────────┐ │
@@ -265,14 +350,14 @@ CTRL_4          A3      Potentiometer/CV Input 4
 
 ### Communication Protocol Timing
 
-The SPI communication between MCUs operates with specific timing constraints:
+The UART communication between MCUs operates with specific timing constraints:
 
 ```
-Protocol        Clock       Max Data Rate    Latency
---------        -----       -------------    -------
-Inter-MCU SPI   10MHz       1.25MB/s        <1ms
-Audio Callback  48kHz       64 samples       1.33ms
-Parameter Sync  1kHz        Control rate     1ms
+Protocol        Clock       Max Data Rate    Latency    Features
+--------        -----       -------------    -------    --------
+Inter-MCU UART  230.4kbps   230.4kb/s       <5ms       Packet stats, auto-testing, throttled logging
+Audio Callback  48kHz       64 samples       1.33ms     Real-time audio processing
+Parameter Sync  1kHz        Control rate     1ms        MIDI and control updates
 ```
 
 ### Development/Debug Interfaces
@@ -338,7 +423,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## ESP32-S3 Pin Assignments
 
-WaveX uses an ESP32-S3-DevKitC-1 as the frontend MCU with the following verified pin assignments:
+WaveX uses an ESP32-S3-DevKitC-1 as the frontend MCU with the following comprehensive pin assignments:
 
 ### 🖥️ ST7796S Display Controller (480x320 TFT)
 | Function | GPIO | Pin Location | Status |
@@ -360,11 +445,9 @@ WaveX uses an ESP32-S3-DevKitC-1 as the frontend MCU with the following verified
 ### 🔗 Inter-MCU Communication (ESP32 ↔ Daisy)
 | Function | GPIO | Pin Location | Status |
 |----------|------|--------------|--------|
-| SPI Chip Select | GPIO8 | J1-12 | ✅ Verified |
-| SPI Clock | GPIO18 | J1-11 | ✅ Verified |
-| SPI MOSI | GPIO47 | J3-17 | ✅ Verified |
-| SPI MISO | GPIO37 | — | 🔧 Remapped (GPIO19 in use) |
-| IRQ from Daisy | GPIO16 | — | ✅ Verified |
+| UART TX | GPIO17 | J1-10 | ✅ Updated to UART1 |
+| UART RX | GPIO18 | J1-11 | ✅ Updated to UART1 |
+| GND | GND | — | ✅ Common ground |
 
 ### 💾 SD Card Interface
 | Function | GPIO | Pin Location | Status |
@@ -377,16 +460,43 @@ WaveX uses an ESP32-S3-DevKitC-1 as the frontend MCU with the following verified
 ### 🎵 MIDI Interface
 | Function | GPIO | Pin Location | Status |
 |----------|------|--------------|--------|
-| UART TX | GPIO17 | J1-10 | ✅ Verified |
+| UART TX | GPIO8 | J1-12 | ✅ Updated to UART2 |
 | UART RX | GPIO42 | J3-6 | ✅ Verified |
+
+### 🎛️ Dual Potentiometer Interface (CD74HC4067)
+| Function | GPIO | Pin Location | Status |
+|----------|------|--------------|--------|
+| Address A0 | GPIO33 | J3-7 | 🆕 New |
+| Address A1 | GPIO34 | J3-8 | 🆕 New |
+| Address A2 | GPIO35 | J3-9 | 🆕 New |
+| Address A3 | GPIO36 | J3-10 | 🆕 New |
+| Enable | GPIO37 | J3-11 | 🆕 New |
+| Signal | GPIO1 | ADC1_CH0 | 🆕 New |
+
+### 🔘 Button Matrix Interface (TCA8418)
+| Function | GPIO | Pin Location | Status |
+|----------|------|--------------|--------|
+| I2C SDA | GPIO39 | J3-12 | 🆕 New |
+| I2C SCL | GPIO40 | J3-13 | 🆕 New |
+| Reset | GPIO41 | J3-14 | 🆕 New |
+| Interrupt | GPIO43 | J3-15 | 🆕 New |
+
+### 💡 LED Driver Interface (TLC5947)
+| Function | GPIO | Pin Location | Status |
+|----------|------|--------------|--------|
+| SPI SCLK | GPIO44 | J3-16 | 🆕 New |
+| SPI MOSI | GPIO45 | J3-17 | 🆕 New |
+| SPI CS | GPIO46 | J3-18 | 🆕 New |
+| Blank | GPIO47 | J3-19 | 🆕 New |
+| Latch | GPIO48 | J3-20 | 🆕 New |
 
 ### 📌 Pin Usage Summary
 
-**Used Pins:** GPIO2, GPIO4, GPIO5, GPIO6, GPIO7, GPIO8, GPIO9, GPIO10, GPIO11, GPIO12, GPIO13, GPIO14, GPIO16, GPIO17, GPIO18, GPIO19, GPIO20, GPIO21, GPIO37, GPIO42, GPIO47
+**Used Pins:** GPIO1, GPIO2, GPIO4, GPIO5, GPIO6, GPIO7, GPIO8, GPIO9, GPIO10, GPIO11, GPIO12, GPIO13, GPIO14, GPIO15, GPIO17, GPIO18, GPIO20, GPIO21, GPIO33, GPIO34, GPIO35, GPIO36, GPIO37, GPIO39, GPIO40, GPIO41, GPIO42, GPIO43, GPIO44, GPIO45, GPIO46, GPIO47, GPIO48
 
-**Available Pins:** GPIO0, GPIO1, GPIO3, GPIO15, GPIO22-25, GPIO33-36, GPIO38-48 (excluding used pins)
+**Available Pins:** GPIO0, GPIO3, GPIO16, GPIO19, GPIO24-25, GPIO26-32 (excluding used pins)
 
-**Reserved/Avoid:** GPIO26-32 (SPI Flash/PSRAM), GPIO45-46 (Strapping pins)
+**Reserved/Avoid:** GPIO26-32 (SPI Flash/PSRAM), GPIO45-46 (Strapping pins - but GPIO45-48 are used for LED driver)
 
 ### 🎯 Pin Selection Rationale
 
@@ -394,24 +504,32 @@ WaveX uses an ESP32-S3-DevKitC-1 as the frontend MCU with the following verified
 
 **Touch I2C (GPIO9, 20):** GPIO9 is the default I2C SCL pin on ESP32-S3, GPIO20 is default SDA alternative.
 
-**Inter-MCU SPI (GPIO8, 18-19, 47):** Uses SPI2 bus with high-speed capable pins for audio data transfer.
+**Inter-MCU UART (GPIO17-18):** Uses UART1 with high-speed capable pins for audio data transfer.
 
 **SD Card (GPIO10-13):** Dedicated SPI bus to avoid conflicts with display and inter-MCU communication.
 
 **Design Principles:**
-- ✅ No strapping pin conflicts (GPIO0, 3, 45, 46 avoided for critical functions)
+- ✅ No strapping pin conflicts (GPIO0, 3 avoided for critical functions)
 - ✅ SPI Flash/PSRAM pins (GPIO26-32) completely avoided
-- ✅ Grouped related functions on same SPI buses
-- ✅ Reserved ADC pins (GPIO1, 15, 16) for future analog sensors
-- ✅ Touch-capable pins available for future capacitive controls
+- ✅ Grouped related functions on same SPI buses (Display VSPI, SD Card HSPI, LED Driver HSPI)
+- ✅ Dedicated I2C buses (Touch I2C0, Button Matrix I2C1)
+- ✅ ADC pin (GPIO1) dedicated to potentiometer multiplexer
+- ✅ UART interfaces properly separated (UART1 for inter-MCU, UART2 for MIDI)
+- ✅ GPIO45-48 used for LED driver (strapping pins but safe when not booting)
 
 ### 🔧 Hardware Validation Status
 
 **✅ Verified Components:**
 - ST7796S Display: Full initialization and LVGL integration working
 - FT6x36 Touch Controller: I2C communication and touch event handling
-- Inter-MCU SPI: Command/data exchange with Daisy Seed
+- Inter-MCU UART: Design completed, using UART1 on GPIO17/18
 - SD Card Interface: Ready for data logging and preset storage
+
+**🆕 New Components Added:**
+- CD74HC4067: 16-channel potentiometer multiplexer with 12-bit ADC
+- TCA8418: 8x8 capacitive button matrix with I2C interface
+- TLC5947: 48-channel 12-bit PWM LED driver with SPI interface
+- Enhanced MIDI: Both USB and DIN interfaces supported
 
 **🎯 Target Board:** ESP32-S3-DevKitC-1 (N8R8 PSRAM variant recommended)
 

@@ -1,33 +1,11 @@
-cmake_minimum_required(VERSION 3.15)
+cmake_minimum_required(VERSION 3.20)
 
 # Set the project name
-set(PROJECT_NAME wavex-daisy)
-project(${PROJECT_NAME} C CXX ASM)
+project(wavex-daisy)
 
-# Use C++17 for modern headers and defaults
-set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_C_STANDARD 11)
-set(CMAKE_C_STANDARD_REQUIRED ON)
-
-# Ensure STM32 device macros are visible to all subdirs (HAL expects these)
-add_definitions(
-    -DSTM32H750xx
-    -DUSE_HAL_DRIVER
-    -DHSE_VALUE=16000000
-    -DHSI_VALUE=16000000
-    -DARM_MATH_CM7
-)
-
-# Add libDaisy and DaisySP
-add_subdirectory(libs/libDaisy)
-add_subdirectory(libs/DaisySP)
-
-# Shared protocol (headers under firmware/shared)
-include_directories(${CMAKE_CURRENT_LIST_DIR}/../shared)
-
-# Create our main executable
-set(SOURCES
+# Set the project name and sources
+set(FIRMWARE_NAME wavex-daisy)
+set(FIRMWARE_SOURCES
     src/main.cpp
     src/sampler.hpp
     src/cv_bus.hpp
@@ -35,50 +13,26 @@ set(SOURCES
     ../shared/spi_protocol/protocol.cpp
 )
 
-add_executable(${PROJECT_NAME} ${SOURCES})
+# Set Daisy storage to QSPI for more flash memory (7.75MB vs 128KB)
+set(DAISY_STORAGE qspi CACHE STRING "Select the storage destination of the executable.")
+# Use Daisy's QSPI placement (sets sections/ld script appropriately)
+set(DAISY_USE_QSPI_FLASH ON)
+# Build for bootloader QSPI (not internal flash)
+set(APP_TYPE BOOT_QSPI)
+# Set the toolchain to use STM32H750
+set(CMAKE_TOOLCHAIN_FILE ${CMAKE_CURRENT_LIST_DIR}/libs/libDaisy/cmake/toolchains/ArmGNUToolchain.cmake)
+# Add libDaisy and DaisySP
+add_subdirectory(libs/libDaisy)
+add_subdirectory(libs/DaisySP)
 
-# Link libraries
-target_link_libraries(${PROJECT_NAME} 
-    daisy 
-    DaisySP
-    # TODO: Add shared protocol library for Daisy
-)
+# Define DAISYSP_LIB for DaisyProject.cmake
+set(DAISYSP_LIB DaisySP)
 
-# Set target properties for STM32H750
-target_compile_definitions(${PROJECT_NAME} PRIVATE
-    -DSTM32H750xx
-    -DHSE_VALUE=16000000
-    -DHSI_VALUE=16000000
-    -DUSE_HAL_DRIVER
-    -DARM_MATH_CM7
-)
+# Shared protocol (headers under firmware/shared)
+include_directories(${CMAKE_CURRENT_LIST_DIR}/../shared)
 
-target_compile_options(${PROJECT_NAME} PRIVATE
-    -mcpu=cortex-m7
-    -mthumb
-    -mfpu=fpv5-d16
-    -mfloat-abi=hard
-    -fdata-sections
-    -ffunction-sections
-    -Wall
-    -fstack-usage
-    -MMD
-    -MP
-    $<$<CONFIG:Debug>:-Og -g3 -ggdb>
-    $<$<CONFIG:Release>:-Ofast -g0>
-)
+# Add DaisySP headers to include path
+include_directories(${CMAKE_CURRENT_LIST_DIR}/libs/DaisySP/Source)
 
-target_link_options(${PROJECT_NAME} PRIVATE
-    -mcpu=cortex-m7
-    -mthumb
-    -mfpu=fpv5-d16
-    -mfloat-abi=hard
-    -fdata-sections
-    -ffunction-sections
-    -Wall
-    -fstack-usage
-    -MMD
-    -MP
-    -Wl,--gc-sections
-    -Wl,--print-memory-usage
-) 
+# Include DaisyProject.cmake which handles all the STM32 configuration
+include(DaisyProject) 

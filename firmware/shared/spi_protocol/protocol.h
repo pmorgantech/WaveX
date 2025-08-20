@@ -26,8 +26,10 @@ enum MessageType : uint8_t {
     // Phase I new message types
     MSG_SAMPLE_CTRL = 0x09,
     MSG_PREVIEW_REQ = 0x0A,
+    MSG_DATA_REQUEST = 0x0B, // ESP32 requests queued data from Daisy
     MSG_METER_PUSH  = 0x10, // backend -> frontend
     MSG_WAVE_CHUNK  = 0x11, // backend -> frontend
+    MSG_HEARTBEAT   = 0x12, // periodic health beacon
     MSG_ERROR = 0xFF
 };
 
@@ -93,6 +95,12 @@ struct PreviewReqMessage {
     uint16_t decim;         // decimation factor
 } __attribute__((packed));
 
+// Data request message (ESP32 → Daisy: request queued data)
+struct DataRequestMessage {
+    uint8_t request_type;   // 0 = any data, 1 = meter data, 2 = wave data
+    uint8_t reserved[3];    // Reserved for future use
+} __attribute__((packed));
+
 // Meter push (backend->frontend)
 struct MeterPushMessage {
     float rms;
@@ -104,6 +112,13 @@ struct WaveChunkMessage {
     uint32_t offset;        // index in preview stream
     uint16_t count;         // number of int16 samples following
     // payload follows (count * int16)
+} __attribute__((packed));
+
+// Heartbeat (bidirectional)
+struct HeartbeatMessage {
+    uint32_t uptime_ms;
+    uint32_t rx_total;
+    uint32_t loop_counter;
 } __attribute__((packed));
 
 // Generic packet structure
@@ -131,6 +146,21 @@ public:
 
     static size_t CreatePreviewReqPacket(uint8_t* buffer, size_t buffer_size,
                                        const PreviewReqMessage& msg);
+
+    static size_t CreateDataRequestPacket(uint8_t* buffer, size_t buffer_size,
+                                        const DataRequestMessage& msg);
+    
+    static size_t CreateMeterPushPacket(uint8_t* buffer, size_t buffer_size,
+                                      const MeterPushMessage& msg);
+    
+    static size_t CreateWaveChunkPacket(uint8_t* buffer, size_t buffer_size,
+                                      const WaveChunkMessage& msg, const void* sample_data, size_t sample_data_size);
+    
+    static size_t CreateGenericPacket(uint8_t* buffer, size_t buffer_size,
+                                    uint8_t type, const void* payload, size_t payload_size);
+    
+    static size_t CreateHeartbeatPacket(uint8_t* buffer, size_t buffer_size,
+                                      const HeartbeatMessage& msg);
     
     // Packet parsing
     static bool ValidatePacket(const uint8_t* buffer, size_t length);
@@ -139,6 +169,8 @@ public:
     static bool ParseNoteMessage(const uint8_t* buffer, NoteMessage& msg);
     static bool ParseSampleCtrl(const uint8_t* buffer, SampleCtrlMessage& msg);
     static bool ParsePreviewReq(const uint8_t* buffer, PreviewReqMessage& msg);
+    static bool ParseDataRequest(const uint8_t* buffer, DataRequestMessage& msg);
+    static bool ParseMessage(const uint8_t* buffer, HeartbeatMessage& msg);
     // Generic payload parser for fixed-size messages
     static bool ParseMessage(const uint8_t* buffer, MessageType expected_type, void* out_payload, size_t out_payload_size);
     

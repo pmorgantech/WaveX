@@ -54,14 +54,6 @@ extern "C" void app_main(void)
             ESP_LOGI(TAG, "System running - Free heap: %" PRIu32 " bytes", esp_get_free_heap_size());
             last_heap_log = current_time;
         }
-        // Kick the inter-MCU RX task in case the IRQ line is floating or not wired
-        probe_counter++;
-        if (probe_counter >= 5) { // every 5 seconds
-            // Simulate a notify to RX task to fetch a frame
-            extern void inter_mcu_force_poll(void);
-            inter_mcu_force_poll();
-            probe_counter = 0;
-        }
         
         vTaskDelay(pdMS_TO_TICKS(1000));  // 1 second loop
     }

@@ -4,7 +4,20 @@
 #include <cstddef>
 #include <cstring>
 #include <vector>
+#include <cstdio>
 #include "spi_protocol/protocol.h"
+
+#define INTER_MCU_UART_BAUD_RATE 460800 
+
+// Enable to run a minimal audio path for hang isolation
+// #define WAVEX_AUDIO_DEBUG_MINIMAL 1
+// Set to 1 to completely disable UART init and polling for isolation testing
+#define WAVEX_DEBUG_DISABLE_UART 0
+// Set to 1 to enable UART RX via IRQ; leave 0 for polling-only mode
+// NOTE: When IRQ mode is enabled, the main loop will NOT poll for UART data
+//       Instead, bytes are received via libDaisy's interrupt callback system
+//       When polling mode is enabled, uses libDaisy's UartHandler::PollReceive()
+#define WAVEX_UART_RX_IRQ_MODE 1
 #include "sampler.hpp"
 #include "cv_bus.hpp"
 #include "timebase.hpp"
@@ -51,47 +64,268 @@ static volatile bool g_tx_ready = false;
 // Envelope gate state
 bool envelope_gate = false;
 
-// SPI communication
-SPI_HandleTypeDef hspi1;
-uint8_t spi_rx_buffer[128];
-uint8_t spi_tx_buffer[128];
-uint8_t spi_dummy_rx[128];
-volatile bool spi_data_ready = false;
-static volatile bool g_tx_inflight = false;
-static uint16_t g_tx_len = 0;
+// UART communication using libDaisy's UartHandler
+static UartHandler uart;
+static uint8_t uart_tx_buffer[256];
 
-// Daisy → ESP32 IRQ pin remapped to a header pin for easy wiring.
-// Wire this pin to ESP32-S3 GPIO16.
-static GPIO s_irq_pin;
+// Minimal RX ring buffer for ISR-safe byte capture
+static volatile uint8_t  rx_ring[256];
+static volatile uint16_t rx_head = 0;
+static volatile uint16_t rx_tail = 0;
+static volatile uint32_t rx_total = 0;
 
-static inline void IRQ_Init()
+// Forward declarations
+void ProcessUARTMessage(const uint8_t* buffer, size_t length);
+void InitUART(void);
+void TestUARTLoopback(void);
+
+// UART receive callback for interrupt-driven reception (DMA listen mode)
+void OnUartDataReceived(uint8_t* data, size_t size, void* context, UartHandler::Result result);
+
+// Data queue for outgoing messages (Daisy → ESP32)
+struct QueuedMessage {
+    uint8_t type;
+    uint8_t payload[MAX_PAYLOAD_SIZE];
+    uint8_t length;
+    bool valid;
+};
+static QueuedMessage g_message_queue[4]; // Small queue for pending messages
+static volatile uint8_t g_queue_head = 0;
+static volatile uint8_t g_queue_tail = 0;
+static volatile bool g_has_pending_data = false;
+
+// UART debugging counters
+static volatile uint32_t g_uart_rx_count = 0;
+static volatile uint32_t g_uart_rx_errors = 0;
+static volatile uint32_t g_uart_tx_count = 0;
+static volatile uint32_t g_uart_tx_errors = 0;
+static volatile uint32_t g_last_uart_activity = 0;
+static volatile uint32_t g_uart_rx_msgs = 0; // Decoded RX messages from ESP32
+
+// Simple RX parser state for ProtocolHandler packets (header then payload)
+enum class RxParseState : uint8_t { FindSync = 0, ReadHeader = 1, ReadPayload = 2 };
+static RxParseState g_rx_state = RxParseState::FindSync;
+static uint8_t g_rx_header[sizeof(PacketHeader)];
+static uint8_t g_rx_packet[sizeof(PacketHeader) + MAX_PAYLOAD_SIZE];
+static uint8_t g_rx_header_pos = 0;
+static uint8_t g_rx_payload_pos = 0;
+static uint8_t g_expected_payload_len = 0;
+
+static inline bool rx_ring_pop(uint8_t& out)
 {
-    // Choose a free Daisy header pin for IRQ (was PB0). Using seed::D21 (PC4).
-    s_irq_pin.Init(seed::D21, GPIO::Mode::OUTPUT);
-    s_irq_pin.Write(false);
+    if(rx_head == rx_tail) return false;
+    out = rx_ring[rx_tail];
+    rx_tail = (uint16_t)((rx_tail + 1) & 0xFF);
+    return true;
 }
 
-static inline void IRQ_Raise() { s_irq_pin.Write(true); }
-static inline void IRQ_Lower() { s_irq_pin.Write(false); }
+static void ProcessRxRing()
+{
+    uint8_t byte = 0;
+    while(rx_head != rx_tail)
+    {
+        if(!rx_ring_pop(byte)) {
+            break;
+        }
+        switch(g_rx_state)
+        {
+            case RxParseState::FindSync:
+                if(byte == SYNC_BYTE)
+                {
+                    g_rx_header_pos = 0;
+                    g_rx_payload_pos = 0;
+                    g_expected_payload_len = 0;
+                    g_rx_state = RxParseState::ReadHeader;
+                    // First header byte is sync
+                    g_rx_header[g_rx_header_pos++] = byte;
+                }
+                break;
 
-static void SendPacket(uint8_t type, const void* payload, size_t length)
+            case RxParseState::ReadHeader:
+                g_rx_header[g_rx_header_pos++] = byte;
+                if(g_rx_header_pos >= sizeof(PacketHeader))
+                {
+                    // Copy header into packet buffer
+                    memcpy(g_rx_packet, g_rx_header, sizeof(PacketHeader));
+                    // Extract expected payload length (1 byte length field)
+                    const PacketHeader* hdr = reinterpret_cast<const PacketHeader*>(g_rx_header);
+                    g_expected_payload_len = hdr->length;
+                    if(g_expected_payload_len > MAX_PAYLOAD_SIZE)
+                    {
+                        // Invalid length; reset state
+                        g_rx_state = RxParseState::FindSync;
+                        break;
+                    }
+                    if(g_expected_payload_len == 0)
+                    {
+                        // No payload; validate and process immediately
+                        size_t total_len = sizeof(PacketHeader);
+                        if(ProtocolHandler::ValidatePacket(g_rx_packet, total_len))
+                        {
+                            ProcessUARTMessage(g_rx_packet, total_len);
+                        }
+                        g_rx_state = RxParseState::FindSync;
+                    }
+                    else
+                    {
+                        g_rx_payload_pos = 0;
+                        g_rx_state = RxParseState::ReadPayload;
+                    }
+                }
+                break;
+
+            case RxParseState::ReadPayload:
+                g_rx_packet[sizeof(PacketHeader) + g_rx_payload_pos] = byte;
+                if(++g_rx_payload_pos >= g_expected_payload_len)
+                {
+                    size_t total_len = sizeof(PacketHeader) + g_expected_payload_len;
+                    if(ProtocolHandler::ValidatePacket(g_rx_packet, total_len))
+                    {
+                        ProcessUARTMessage(g_rx_packet, total_len);
+                    }
+                    g_rx_state = RxParseState::FindSync;
+                }
+                break;
+        }
+    }
+}
+
+
+static inline void UART_Send(const uint8_t* data, size_t length) {
+    if (uart.BlockingTransmit(const_cast<uint8_t*>(data), length, 1000) == UartHandler::Result::OK) {
+        g_has_pending_data = false;
+        g_uart_tx_count++;
+        g_last_uart_activity = System::GetNow();
+        
+        // Extract type, payload length from packet if possible
+        if (length >= sizeof(PacketHeader) && data[0] == SYNC_BYTE) {
+            const PacketHeader* hdr = reinterpret_cast<const PacketHeader*>(data);
+            uint8_t msg_type = hdr->type;
+            uint8_t payload_len = hdr->length;
+
+            switch (msg_type) {
+                case MSG_HEARTBEAT:
+                    hw.PrintLine("UART TX: HEARTBEAT (%u payload + header + CRC = %u bytes), total=%lu",
+                                payload_len, (unsigned)length, (unsigned long)g_uart_tx_count);
+                    break;
+
+                case MSG_METER_PUSH:
+                case MSG_WAVE_CHUNK:
+                    // Suppress frequent messages to avoid flooding
+                    break;
+
+                default:
+                    hw.PrintLine("UART TX: type=0x%02X (%u payload + header + CRC = %u bytes), total=%lu",
+                                msg_type, payload_len, (unsigned)length, (unsigned long)g_uart_tx_count);
+                    break;
+            }
+        }
+    } else {
+        g_uart_tx_errors++;
+        hw.PrintLine("UART TX failed! Total errors: %lu", g_uart_tx_errors);
+    }
+}
+
+// Queue a message for transmission (Daisy → ESP32)
+static void QueueMessage(uint8_t type, const void* payload, size_t length)
 {
     if(length > MAX_PAYLOAD_SIZE) length = MAX_PAYLOAD_SIZE;
-    Packet* p = reinterpret_cast<Packet*>(spi_tx_buffer);
-    p->header.sync = SYNC_BYTE;
-    p->header.type = type;
-    p->header.length = (uint8_t)length;
-    if(payload && length)
-        memcpy(p->payload, payload, length);
-    p->header.checksum = ProtocolHandler::CalculateChecksum(p->payload, p->header.length);
-    g_tx_ready = true;
-    g_tx_len = (uint16_t)(sizeof(PacketHeader) + p->header.length);
-    // Prime TXRX so next master clock will shift the packet out
-    if(!g_tx_inflight) {
-        if(HAL_SPI_TransmitReceive_IT(&hspi1, spi_tx_buffer, spi_dummy_rx, g_tx_len) == HAL_OK) {
-            g_tx_inflight = true;
-            IRQ_Raise();
+    
+    // Check if queue has space
+    uint8_t next_head = (g_queue_head + 1) % 4;
+    if(next_head == g_queue_tail) {
+        // Queue full, drop oldest message
+        g_queue_tail = (g_queue_tail + 1) % 4;
+    }
+    
+    // Add message to queue
+    QueuedMessage& msg = g_message_queue[g_queue_head];
+    msg.type = type;
+    msg.length = (uint8_t)length;
+    if(payload && length) {
+        memcpy(msg.payload, payload, length);
+    }
+    msg.valid = true;
+    g_queue_head = next_head;
+    
+    // Mark that we have data to send
+    g_has_pending_data = true;
+}
+
+// Get next queued message for transmission
+static bool GetNextQueuedMessage(QueuedMessage& msg)
+{
+    if(g_queue_head == g_queue_tail || !g_has_pending_data) {
+        return false;
+    }
+    
+    msg = g_message_queue[g_queue_tail];
+    g_message_queue[g_queue_tail].valid = false;
+    g_queue_tail = (g_queue_tail + 1) % 4;
+    
+    // If queue is empty, mark no pending data
+    if(g_queue_head == g_queue_tail) {
+        g_has_pending_data = false;
+    }
+    
+    return true;
+}
+
+// Prepare response packet for ESP32 to read
+void PrepareResponsePacket(const QueuedMessage& msg) {
+    if (msg.valid) {
+        // Create the response packet based on message type
+        size_t packet_len = 0;
+        
+        switch (msg.type) {
+            case MSG_METER_PUSH: {
+                // Create meter push packet
+                MeterPushMessage meter_msg;
+                memcpy(&meter_msg, msg.payload, sizeof(meter_msg));
+                packet_len = ProtocolHandler::CreateMeterPushPacket(
+                    uart_tx_buffer, 
+                    sizeof(uart_tx_buffer), 
+                    meter_msg
+                );
+                break;
+            }
+            case MSG_WAVE_CHUNK: {
+                // Create wave chunk packet
+                WaveChunkMessage wave_msg;
+                memcpy(&wave_msg, msg.payload, sizeof(wave_msg));
+                packet_len = ProtocolHandler::CreateWaveChunkPacket(
+                    uart_tx_buffer, 
+                    sizeof(uart_tx_buffer), 
+                    wave_msg,
+                    msg.payload + sizeof(wave_msg),
+                    msg.length - sizeof(wave_msg)
+                );
+                break;
+            }
+            default:
+                // For other message types, create a generic packet
+                packet_len = ProtocolHandler::CreateGenericPacket(
+                    uart_tx_buffer, 
+                    sizeof(uart_tx_buffer), 
+                    msg.type, 
+                    msg.payload, 
+                    msg.length
+                );
+                break;
         }
+        
+        if (packet_len > 0) {
+            // Packet is ready in uart_tx_buffer
+            // Send it immediately via UART
+            UART_Send(uart_tx_buffer, packet_len);
+            // g_tx_buffer_valid = true;  // Mark buffer as containing valid data - REMOVED
+        } else {
+            // Failed to create packet - mark buffer as invalid
+            // g_tx_buffer_valid = false; // REMOVED
+        }
+    } else {
+        // Send empty packet
+        memset(uart_tx_buffer, 0, sizeof(uart_tx_buffer));
     }
 }
 
@@ -100,6 +334,13 @@ void AudioCallback(AudioHandle::InputBuffer  in,
                    AudioHandle::OutputBuffer out,
                    size_t                    size)
 {
+    #if WAVEX_AUDIO_DEBUG_MINIMAL
+    for (size_t i = 0; i < size; i++) {
+        out[0][i] = in[0][i];
+        out[1][i] = in[1][i];
+    }
+    return;
+    #endif
     static float inMono[128];
     for (size_t i = 0; i < size; i++)
     {
@@ -146,7 +387,8 @@ void AudioCallback(AudioHandle::InputBuffer  in,
         float norm_res = clamp01(params.filter_resonance);
         float norm_vca = clamp01(g_env_level);
         g_cv.QueueVoice(0, norm_cut, norm_res, norm_vca);
-        g_cv.Flush();
+        // Temporarily disabled: blocking I2C in audio callback can stall audio; move to lower-priority context
+        // g_cv.Flush();
 
         // Meter push every 20 ms
         static uint32_t meter_ctr = 0;
@@ -155,11 +397,12 @@ void AudioCallback(AudioHandle::InputBuffer  in,
             float rms=0, peak=0;
             Sampler::BlockMeters(g_last_in_block, g_last_block_size, rms, peak);
             MeterPushMessage m{rms, peak};
-            if(!g_tx_ready) SendPacket(MSG_METER_PUSH, &m, sizeof(m));
+            // Queue the message instead of trying to send directly
+            QueueMessage(MSG_METER_PUSH, &m, sizeof(m));
         }
 
         // Stream preview chunks if pending
-        if(!g_tx_ready && g_prev_sent < g_preview.size()) {
+        if(g_prev_sent < g_preview.size()) {
             WaveChunkMessage hdr{};
             hdr.offset = g_prev_sent;
             uint16_t samples_avail = (uint16_t)(g_preview.size() - g_prev_sent);
@@ -171,33 +414,27 @@ void AudioCallback(AudioHandle::InputBuffer  in,
             hdr.count = count; // update count after computing
             // Re-write header with count
             memcpy(payload, &hdr, sizeof(hdr));
-            SendPacket(MSG_WAVE_CHUNK, payload, sizeof(hdr) + count * sizeof(int16_t));
+            // Queue the message instead of trying to send directly
+            QueueMessage(MSG_WAVE_CHUNK, payload, sizeof(hdr) + count * sizeof(int16_t));
             g_prev_sent += count;
         }
     });
 }
 
-// SPI callback for receiving data from ESP32
-void WaveX_SPI_RxCpltCallback(SPI_HandleTypeDef *hspi)
-{
-    if (hspi == &hspi1) {
-        spi_data_ready = true;
-        if(g_tx_inflight){
-            g_tx_inflight = false;
-            g_tx_ready = false;
-            IRQ_Lower();
-        }
-    }
-}
-
-// Process incoming SPI messages
-void ProcessSPIMessage(const uint8_t* buffer, size_t length)
+// Process incoming UART messages
+void ProcessUARTMessage(const uint8_t* buffer, size_t length)
 {
     if (!ProtocolHandler::ValidatePacket(buffer, length)) {
+        hw.PrintLine("UART RX: invalid packet (len=%u)", (unsigned)length);
         return; // Invalid packet
     }
     
     MessageType msg_type = ProtocolHandler::GetMessageType(buffer);
+    const PacketHeader* hdr = reinterpret_cast<const PacketHeader*>(buffer);
+    const uint8_t payload_len = hdr ? hdr->length : 0;
+    g_uart_rx_msgs++;
+    // Generic per-packet summary before type-specific handling
+    hw.PrintLine("UART RX: type=0x%02X len=%u (msg#=%lu)", (unsigned)msg_type, (unsigned)payload_len, (unsigned long)g_uart_rx_msgs);
     
     switch (msg_type) {
         case MSG_CONTROL_CHANGE: {
@@ -240,6 +477,7 @@ void ProcessSPIMessage(const uint8_t* buffer, size_t length)
                         params.lfo_depth = ctrl_msg.value / 65535.0f;
                         break;
                 }
+                hw.PrintLine("RX CONTROL_CHANGE: param=0x%02X ch=%u val=%u", (unsigned)ctrl_msg.parameter, (unsigned)ctrl_msg.channel, (unsigned)ctrl_msg.value);
             }
             break;
         }
@@ -252,6 +490,7 @@ void ProcessSPIMessage(const uint8_t* buffer, size_t length)
                 oscillator.SetFreq(freq);
                 envelope_gate = true;
                 envelope.Retrigger(false);
+                hw.PrintLine("RX NOTE_ON: note=%u vel=%u ch=%u freq=%.2f", (unsigned)note_msg.note, (unsigned)note_msg.velocity, (unsigned)note_msg.channel, (double)freq);
             }
             break;
         }
@@ -261,6 +500,7 @@ void ProcessSPIMessage(const uint8_t* buffer, size_t length)
             if (ProtocolHandler::ParseNoteMessage(buffer, note_msg)) {
                 // Release envelope
                 envelope_gate = false;
+                hw.PrintLine("RX NOTE_OFF: note=%u ch=%u", (unsigned)note_msg.note, (unsigned)note_msg.channel);
             }
             break;
         }
@@ -274,6 +514,7 @@ void ProcessSPIMessage(const uint8_t* buffer, size_t length)
                     case SAMPLE_PLAY_START: g_sampler.StartPlay(sc.rate); break;
                     case SAMPLE_PLAY_STOP:  g_sampler.StopPlay(); break;
                 }
+                hw.PrintLine("RX SAMPLE_CTRL: slot=%u cmd=%u rate=%.3f", (unsigned)sc.slot, (unsigned)sc.cmd, (double)sc.rate);
             }
             break;
         }
@@ -282,8 +523,9 @@ void ProcessSPIMessage(const uint8_t* buffer, size_t length)
             if(ProtocolHandler::ParsePreviewReq(buffer, pr)) {
                 g_prev_sent = 0;
                 g_sampler.MakePreview(pr.start, pr.end, pr.decim ? pr.decim : 1, g_preview);
-                // Kick first chunk immediately if possible
-                if(!g_tx_ready && !g_preview.empty()) {
+                hw.PrintLine("RX PREVIEW_REQ: slot=%u start=%lu end=%lu decim=%u", (unsigned)pr.slot, (unsigned long)pr.start, (unsigned long)pr.end, (unsigned)pr.decim);
+                // Queue first chunk immediately if possible
+                if(!g_preview.empty()) {
                     WaveChunkMessage hdr{0,0};
                     uint16_t max_samples = (uint16_t)((MAX_PAYLOAD_SIZE - sizeof(WaveChunkMessage)) / 2);
                     uint16_t count = g_preview.size() < max_samples ? (uint16_t)g_preview.size() : max_samples;
@@ -291,42 +533,128 @@ void ProcessSPIMessage(const uint8_t* buffer, size_t length)
                     hdr.offset = 0; hdr.count = count;
                     memcpy(payload, &hdr, sizeof(hdr));
                     memcpy(payload + sizeof(hdr), &g_preview[0], count * sizeof(int16_t));
-                    SendPacket(MSG_WAVE_CHUNK, payload, sizeof(hdr) + count * sizeof(int16_t));
+                    QueueMessage(MSG_WAVE_CHUNK, payload, sizeof(hdr) + count * sizeof(int16_t));
                     g_prev_sent = count;
                 }
             }
             break;
         }
+        
+        case MSG_DATA_REQUEST: {
+            DataRequestMessage dr{};
+            if(ProtocolHandler::ParseDataRequest(buffer, dr)) {
+                hw.PrintLine("RX DATA_REQUEST: type=%u", (unsigned)dr.request_type);
+                // ESP32 is requesting queued data - prepare response
+                QueuedMessage msg;
+                if(GetNextQueuedMessage(msg)) {
+                    // We have data to send - prepare the response packet
+                    PrepareResponsePacket(msg);
+                    // The ESP32 will read this data on the next SPI transaction
+                } else {
+                    // No data to send - send minimal sync/heartbeat back
+                    uint8_t payload[] = {0};
+                    size_t packet_len = ProtocolHandler::CreateGenericPacket(
+                        uart_tx_buffer,
+                        sizeof(uart_tx_buffer),
+                        MSG_SYNC,
+                        payload,
+                        0);
+                    if(packet_len > 0) {
+                        UART_Send(uart_tx_buffer, packet_len);
+                    }
+                }
+            }
+            break;
+        }
+        case MSG_SYNC: {
+            hw.PrintLine("RX SYNC");
+            break;
+        }
+        
         default:
             // Handle other message types as needed
+            hw.PrintLine("RX UNKNOWN: type=0x%02X len=%u", (unsigned)msg_type, (unsigned)payload_len);
             break;
     }
 }
 
-// Initialize SPI communication
-void InitSPI()
+
+
+// UART receive callback for interrupt-driven reception (DMA listen mode)
+void OnUartDataReceived(uint8_t* data, size_t size, void* context, UartHandler::Result result)
 {
-    // Configure SPI for slave mode
-    hspi1.Instance = SPI1;
-    hspi1.Init.Mode = SPI_MODE_SLAVE;
-    hspi1.Init.Direction = SPI_DIRECTION_2LINES;
-    hspi1.Init.DataSize = SPI_DATASIZE_8BIT;
-    hspi1.Init.CLKPolarity = SPI_POLARITY_LOW;
-    hspi1.Init.CLKPhase = SPI_PHASE_1EDGE;
-    hspi1.Init.NSS = SPI_NSS_HARD_INPUT;
-    hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_8;
-    hspi1.Init.FirstBit = SPI_FIRSTBIT_MSB;
-    hspi1.Init.TIMode = SPI_TIMODE_DISABLE;
-    hspi1.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
-    hspi1.Init.CRCPolynomial = 10;
+    if (result == UartHandler::Result::OK) {
+        // Process each received byte
+        for (size_t i = 0; i < size; i++) {
+            uint16_t next = (rx_head + 1) & 0xFF;
+            if (next != rx_tail) {
+                rx_ring[rx_head] = data[i];
+                rx_head = next;
+                rx_total++;
+            }
+        }
+    }
+}
+
+// Initialize UART communication using libDaisy's UartHandler
+void InitUART()
+{
+    // Configure UART using libDaisy's UartHandler
+    UartHandler::Config cfg;
+    cfg.periph = UartHandler::Config::Peripheral::USART_1;
+    cfg.baudrate = INTER_MCU_UART_BAUD_RATE;
+    cfg.stopbits = UartHandler::Config::StopBits::BITS_1;
+    cfg.parity = UartHandler::Config::Parity::NONE;
+    cfg.mode = UartHandler::Config::Mode::TX_RX;
+    cfg.wordlength = UartHandler::Config::WordLength::BITS_8;
+    cfg.pin_config.rx = Pin(PORTB, 7); // D14 = PB7 = RX
+    cfg.pin_config.tx = Pin(PORTB, 6); // D13 = PB6 = TX
     
-    if (HAL_SPI_Init(&hspi1) != HAL_OK) {
-        // Handle error
+    if (uart.Init(cfg) != UartHandler::Result::OK) {
+        hw.PrintLine("UartHandler init failed!");
+        return;
+    }
+    hw.PrintLine("UART initialized: TX=D13 (PB6), RX=D14 (PB7), Baud=%lu", (unsigned long)cfg.baudrate);
+    
+    // Clear TX buffer
+    memset(uart_tx_buffer, 0, sizeof(uart_tx_buffer));
+    
+    // Initialize TX buffer with a valid "no data" packet
+    uint8_t no_data_payload[] = {0}; // Empty payload
+    size_t packet_len = ProtocolHandler::CreateGenericPacket(
+        uart_tx_buffer, 
+        sizeof(uart_tx_buffer), 
+        MSG_SYNC, 
+        no_data_payload, 
+        0
+    );
+    if (packet_len > 0) {
+        hw.PrintLine("TX buffer initialized with sync packet");
+    } else {
+        hw.PrintLine("Failed to create TX buffer sync packet");
     }
     
-    // Start receiving data
-    HAL_SPI_Receive_IT(&hspi1, spi_rx_buffer, sizeof(spi_rx_buffer));
+    #if WAVEX_UART_RX_IRQ_MODE
+    // Set up interrupt-driven reception using DMA listen mode
+    
+    // Create a buffer for DMA reception
+    static uint8_t dma_rx_buffer[256];
+    
+    // Start DMA listening mode with callback
+    if (uart.DmaListenStart(dma_rx_buffer, sizeof(dma_rx_buffer), OnUartDataReceived, nullptr) == UartHandler::Result::OK) {
+        hw.PrintLine("UART DMA listen mode started");
+    } else {
+        hw.PrintLine("UART DMA listen mode failed to start");
+    }
+    #else
+    hw.PrintLine("UART polling mode enabled");
+    #endif
 }
+
+
+
+// UART interrupt handling is now managed by libDaisy's UartHandler
+// No custom interrupt handlers needed - the callback system handles everything
 
 // Initialize DSP objects
 void InitDSP()
@@ -359,9 +687,22 @@ void InitDSP()
 
 int main(void)
 {
+    static bool sync_sent = false;
+    // IMMEDIATE DEBUG - This should appear first
+    // Note: We can't use hw.PrintLine yet as hardware isn't initialized
     // Initialize Daisy Seed hardware
     hw.Configure();
+
     hw.Init();
+
+    
+    // Initialize USB CDC for debugging IMMEDIATELY after hw.Init() to capture ALL output
+    hw.usb_handle.Init(UsbHandle::FS_INTERNAL);
+    
+    // Start USB CDC interface - this makes it appear as a serial device
+    hw.StartLog(true);
+    hw.PrintLine("Hardware initialized successfully");
+    hw.PrintLine("Revision: 0x%lX", DBGMCU->IDCODE);
     
     // Initialize audio
     hw.SetAudioBlockSize(Timebase::kBlockSize); // 48-sample blocks → 1 kHz control tick
@@ -369,34 +710,124 @@ int main(void)
     
     // Initialize DSP objects
     InitDSP();
+    hw.PrintLine("DSP objects initialized");
 
     // Init sampler and CV bus
     g_sampler.Init(hw.AudioSampleRate());
     g_cv.Init(0x60);
+    hw.PrintLine("Sampler and CV bus initialized");
     
-    // Initialize SPI communication with ESP32
-    InitSPI();
-    IRQ_Init();
+    // Initialize UART communication with ESP32 (disabled for isolation if macro set)
+    #if !WAVEX_DEBUG_DISABLE_UART
+    InitUART();
+    System::Delay(100);
+    #else
+    hw.PrintLine("UART init disabled (WAVEX_DEBUG_DISABLE_UART)");
+    #endif
     
-    // Start audio processing
+    // Start audio processing (disabled temporarily to isolate interrupt/timing)
     hw.StartAudio(AudioCallback);
     
+    // Startup message
+    hw.PrintLine("WaveX Daisy firmware starting");
+    hw.PrintLine("USART1: TX=D13 (PB6), RX=D14 (PB7), Baud=%d", INTER_MCU_UART_BAUD_RATE);
+    #if WAVEX_UART_RX_IRQ_MODE
+    hw.PrintLine("UART RX Mode: Interrupt-driven");
+    #else
+    hw.PrintLine("UART RX Mode: Polling");
+    #endif
+    hw.PrintLine("Ready for inter-MCU communication");
+
+    // Periodic liveness beacon: respond proactively every ~1s with basic health
+    uint32_t last_beacon = System::GetNow();
+    uint32_t last_tx_pump = System::GetNow();
+    
+    // Main loop starting
+
     // Main loop
     while(1)
     {
-        // Process incoming SPI messages
-        if (spi_data_ready) {
-            ProcessSPIMessage(spi_rx_buffer, sizeof(spi_rx_buffer));
-            spi_data_ready = false;
-            
-            // Restart SPI reception
-            HAL_SPI_Receive_IT(&hspi1, spi_rx_buffer, sizeof(spi_rx_buffer));
+        static uint32_t loop_counter = 0;
+        loop_counter++;
+        
+
+        
+        // Handle UART reception based on mode
+        #if !WAVEX_DEBUG_DISABLE_UART
+        #if WAVEX_UART_RX_IRQ_MODE
+        // In IRQ mode, just process any bytes that have been received via interrupts
+        // The interrupt handler populates the ring buffer automatically
+        // No polling needed - interrupts handle all UART reception
+
+        #else
+        // Polling mode: use libDaisy's UartHandler to poll for received bytes
+        uint8_t ch;
+        size_t bytes_received = 0;
+        
+        // Poll for any available bytes using libDaisy's method
+        while (uart.BlockingReceive(&ch, 1, 1) == UartHandler::Result::OK) {
+            uint16_t next = (rx_head + 1) & 0xFF;
+            if (next != rx_tail) {
+                rx_ring[rx_head] = ch;
+                rx_head = next;
+                rx_total++;
+                bytes_received++;
+            } else {
+                break; // Ring buffer full
+            }
         }
         
-        // Update modulation sources (LFO, envelope)
-        // These are updated in the audio callback for real-time performance
-        
-        // Sleep for a bit to prevent busy waiting
-        System::Delay(1);
+
+        #endif
+
+        // Parse any bytes accumulated in the RX ring into protocol messages
+        ProcessRxRing();
+
+        // Proactively send one queued message every few ms (push model)
+        if(g_has_pending_data && (System::GetNow() - last_tx_pump) >= 5) {
+            last_tx_pump = System::GetNow();
+            QueuedMessage msg;
+            if(GetNextQueuedMessage(msg)) {
+                PrepareResponsePacket(msg);
+            }
+        }
+
+        // Debug output moved to the conditional blocks above
+        #endif
+
+        // Send SYNC packet every 2 seconds
+        if(System::GetNow() > 2000 && !sync_sent) {
+            uint8_t p[] = {0};
+            size_t len = ProtocolHandler::CreateGenericPacket(uart_tx_buffer, sizeof(uart_tx_buffer), MSG_SYNC, p, 0);
+            if(len > 0) UART_Send(uart_tx_buffer, len);
+            sync_sent = true;
+            hw.PrintLine("Manually sent SYNC packet");
+        }
+
+        // Periodic liveness beacon (approx 1s)
+        #if !WAVEX_DEBUG_DISABLE_UART
+        if(System::GetNow() - last_beacon >= 1000) {
+            last_beacon = System::GetNow();
+            HeartbeatMessage hb{};
+            hb.uptime_ms = last_beacon;
+            hb.rx_total = rx_total;
+            hb.loop_counter = loop_counter;
+            size_t packet_len = ProtocolHandler::CreateHeartbeatPacket(
+                uart_tx_buffer,
+                sizeof(uart_tx_buffer),
+                hb);
+            if(packet_len > 0) {
+                UART_Send(uart_tx_buffer, packet_len);
+                hw.PrintLine("Heartbeat sent: uptime=%lu rx_total=%lu", (unsigned long)hb.uptime_ms, (unsigned long)hb.rx_total);
+            }
+        }
+        #endif
+
+        // 5ms delay
+        System::Delay(5);
+
     }
-} 
+}
+
+// NOTE: UART interrupt handling is now properly managed by libDaisy's UartHandler
+// No custom interrupt handlers needed - the callback system handles everything safely

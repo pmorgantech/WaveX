@@ -4,6 +4,7 @@ extern "C" lgfx::LGFX_Device* lgfxInternal();
 static inline lgfx::LGFX_Device& lcdRef() { return *lgfxInternal(); }
 #include "ui_lgfx/ui_manager.h"
 #include "ui_lgfx/screens_display.h"
+#include "inter_mcu.h"
 
 // ESP-IDF includes for system monitoring
 #include "esp_system.h"
@@ -241,14 +242,14 @@ void DiagnosticsScreen::updateContent() {
   int left_col = 20;
   int right_col = 250;
   
-  // Left Column - CPU & Memory
+  // Left Column - CPU & Memory + System Info (ESP32)
   lcd.setTextColor(0x07E0, 0x0000); // Green for section headers
   lcd.drawString("CPU & Memory", left_col, y);
   y += line_height;
-  
+
   lcd.setTextColor(0xFFFF, 0x0000);
   char buf[64];
-  
+
   // CPU usage with color coding
   uint16_t cpu_color = 0xFFFF; // Default white
   if (metrics_.cpu_usage > 80) {
@@ -260,116 +261,109 @@ void DiagnosticsScreen::updateContent() {
   } else if (metrics_.cpu_usage > 20) {
     cpu_color = 0x07E0; // Green for low
   }
-  
   lcd.setTextColor(cpu_color, 0x0000);
   snprintf(buf, sizeof(buf), "CPU: %d%%", metrics_.cpu_usage);
   lcd.drawString(buf, left_col + 10, y);
   y += line_height;
-  
+
   // CPU estimation method
   lcd.setTextColor(0xFFFF, 0x0000);
   lcd.drawString("(Estimated)", left_col + 10, y);
   y += line_height;
-  
+
   // Memory info
   snprintf(buf, sizeof(buf), "Free Heap: %lu KB", metrics_.free_heap / 1024);
   lcd.drawString(buf, left_col + 10, y);
   y += line_height;
-  
   snprintf(buf, sizeof(buf), "Min Free: %lu KB", metrics_.min_free_heap / 1024);
   lcd.drawString(buf, left_col + 10, y);
   y += line_height;
-  
   snprintf(buf, sizeof(buf), "Total Heap: %lu KB", metrics_.total_heap / 1024);
   lcd.drawString(buf, left_col + 10, y);
   y += line_height;
-  
-  // Right Column - PSRAM, Flash & System
+
+  // System Info (ESP32) moved to left
+  y += 10; // Spacing
+  lcd.setTextColor(0x07E0, 0x0000);
+  lcd.drawString("System Info (ESP32)", left_col, y);
+  y += line_height;
+  lcd.setTextColor(0xFFFF, 0x0000);
+  snprintf(buf, sizeof(buf), "Uptime: %lu s", metrics_.uptime_seconds);
+  lcd.drawString(buf, left_col + 10, y);
+  y += line_height;
+  snprintf(buf, sizeof(buf), "Tasks: %lu", metrics_.task_count);
+  lcd.drawString(buf, left_col + 10, y);
+  y += line_height;
+
+  // Right Column - PSRAM, Flash & Backend
   y = 40; // Reset Y for right column
   lcd.setTextColor(0x07E0, 0x0000);
   lcd.drawString("PSRAM & Flash", right_col, y);
   y += line_height;
-  
-  // PSRAM info (if available)
   if (metrics_.psram_total > 0) {
     lcd.setTextColor(0xFFFF, 0x0000);
     snprintf(buf, sizeof(buf), "Free PSRAM: %lu KB", metrics_.psram_free / 1024);
     lcd.drawString(buf, right_col + 10, y);
     y += line_height;
-    
     snprintf(buf, sizeof(buf), "Total PSRAM: %lu KB", metrics_.psram_total / 1024);
     lcd.drawString(buf, right_col + 10, y);
     y += line_height;
-    
-    // PSRAM usage percentage
-    uint8_t psram_usage = (metrics_.psram_total > 0) ? 
-      ((metrics_.psram_total - metrics_.psram_free) * 100) / metrics_.psram_total : 0;
+    uint8_t psram_usage = (metrics_.psram_total > 0) ? ((metrics_.psram_total - metrics_.psram_free) * 100) / metrics_.psram_total : 0;
     snprintf(buf, sizeof(buf), "Usage: %d%%", psram_usage);
     lcd.drawString(buf, right_col + 10, y);
     y += line_height;
   } else {
-    lcd.setTextColor(0x8888, 0x0000); // Gray for unavailable
+    lcd.setTextColor(0x8888, 0x0000);
     lcd.drawString("PSRAM: Not Available", right_col + 10, y);
     y += line_height;
   }
-  
+
   // Flash info
   y += 10; // Spacing
   lcd.setTextColor(0x07E0, 0x0000);
   lcd.drawString("Flash Storage", right_col, y);
   y += line_height;
-  
   lcd.setTextColor(0xFFFF, 0x0000);
   snprintf(buf, sizeof(buf), "Total Flash: %lu MB", metrics_.flash_total / (1024 * 1024));
   lcd.drawString(buf, right_col + 10, y);
   y += line_height;
-  
   snprintf(buf, sizeof(buf), "Used Flash: %lu MB", metrics_.flash_used / (1024 * 1024));
   lcd.drawString(buf, right_col + 10, y);
   y += line_height;
-  
-  // Flash usage percentage
-  uint8_t flash_usage = (metrics_.flash_total > 0) ? 
-    (metrics_.flash_used * 100) / metrics_.flash_total : 0;
+  uint8_t flash_usage = (metrics_.flash_total > 0) ? (metrics_.flash_used * 100) / metrics_.flash_total : 0;
   snprintf(buf, sizeof(buf), "Usage: %d%%", flash_usage);
   lcd.drawString(buf, right_col + 10, y);
   y += line_height;
-  
-  // System info
-  y += 10; // Spacing
+
+  // Backend (Daisy) heartbeat stats
+  wavex_backend_heartbeat_t hb{};
+  inter_mcu_get_backend_heartbeat(&hb);
   lcd.setTextColor(0x07E0, 0x0000);
-  lcd.drawString("System Info", right_col, y);
+  lcd.drawString("Backend (Daisy)", right_col, y);
   y += line_height;
-  
   lcd.setTextColor(0xFFFF, 0x0000);
-  snprintf(buf, sizeof(buf), "Uptime: %lu s", metrics_.uptime_seconds);
-  lcd.drawString(buf, right_col + 10, y);
-  y += line_height;
-  
-  snprintf(buf, sizeof(buf), "Tasks: %lu", metrics_.task_count);
-  lcd.drawString(buf, right_col + 10, y);
-  y += line_height;
-  
-  // Bottom row - Update timestamps (centered, below both columns)
-  y = 200; // Position below both columns
-  lcd.setTextColor(0x8888, 0x0000); // Gray for status info
-  
-  // Update timestamp with live indicator
-  uint32_t time_since_update = (esp_timer_get_time() / 1000) - metrics_.last_update;
-  const char* live_indicator = (time_since_update < 1500) ? "●" : "○";
-  snprintf(buf, sizeof(buf), "Updated: %s %lu ms ago", live_indicator, time_since_update);
-  lcd.setTextDatum(textdatum_t::middle_center);
-  lcd.drawString(buf, 240, y);
-  y += line_height;
-  
-  // CPU measurement info
-  uint32_t time_since_cpu = (esp_timer_get_time() / 1000) - metrics_.last_cpu_update;
-  const char* cpu_indicator = (time_since_cpu < 1500) ? "●" : "○";
-  snprintf(buf, sizeof(buf), "CPU Measured: %s %lu ms ago", cpu_indicator, time_since_cpu);
-  lcd.drawString(buf, 240, y);
-  
-  // Reset text alignment for other drawing operations
-  lcd.setTextDatum(textdatum_t::top_left);
+  if (hb.valid) {
+    snprintf(buf, sizeof(buf), "Uptime(ms): %lu", (unsigned long)hb.uptime_ms);
+    lcd.drawString(buf, right_col + 10, y); y += line_height;
+    snprintf(buf, sizeof(buf), "RX bytes: %lu", (unsigned long)hb.rx_total);
+    lcd.drawString(buf, right_col + 10, y); y += line_height;
+    snprintf(buf, sizeof(buf), "Loop ctr: %lu", (unsigned long)hb.loop_counter);
+    lcd.drawString(buf, right_col + 10, y); y += line_height;
+    uint32_t age_ms = (esp_timer_get_time() / 1000) - hb.last_rx_ms;
+    const char* live = (age_ms < 1500) ? "●" : "○";
+    snprintf(buf, sizeof(buf), "HB age: %s %lu ms", live, (unsigned long)age_ms);
+    lcd.drawString(buf, right_col + 10, y); y += line_height;
+  } else {
+    lcd.drawString("No heartbeat", right_col + 10, y); y += line_height;
+  }
+
+  // Bottom timestamps temporarily disabled
+  // lcd.setTextDatum(textdatum_t::middle_center);
+  // snprintf(buf, sizeof(buf), "Updated: %lu ms ago", (esp_timer_get_time() / 1000) - metrics_.last_update);
+  // lcd.drawString(buf, 240, 200);
+  // snprintf(buf, sizeof(buf), "CPU Measured: %lu ms ago", (esp_timer_get_time() / 1000) - metrics_.last_cpu_update);
+  // lcd.drawString(buf, 240, 220);
+  // lcd.setTextDatum(textdatum_t::top_left);
 }
 
 void DiagnosticsScreen::processEvent(const UIEvent& ev) {

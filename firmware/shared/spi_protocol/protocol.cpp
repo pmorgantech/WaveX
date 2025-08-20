@@ -69,6 +69,49 @@ size_t ProtocolHandler::CreatePreviewReqPacket(uint8_t* buffer, size_t buffer_si
     return BuildPacket(buffer, buffer_size, MSG_PREVIEW_REQ, &msg, sizeof(msg));
 }
 
+size_t ProtocolHandler::CreateDataRequestPacket(uint8_t* buffer, size_t buffer_size,
+                                              const DataRequestMessage& msg)
+{
+    return BuildPacket(buffer, buffer_size, MSG_DATA_REQUEST, &msg, sizeof(msg));
+}
+
+size_t ProtocolHandler::CreateMeterPushPacket(uint8_t* buffer, size_t buffer_size,
+                                            const MeterPushMessage& msg)
+{
+    return BuildPacket(buffer, buffer_size, MSG_METER_PUSH, &msg, sizeof(msg));
+}
+
+size_t ProtocolHandler::CreateWaveChunkPacket(uint8_t* buffer, size_t buffer_size,
+                                            const WaveChunkMessage& msg, const void* sample_data, size_t sample_data_size)
+{
+    // Create a combined payload: header + sample data
+    if (buffer_size < sizeof(PacketHeader) + sizeof(WaveChunkMessage) + sample_data_size) {
+        return 0;
+    }
+    
+    // First, create the wave chunk message payload
+    uint8_t combined_payload[sizeof(WaveChunkMessage) + MAX_PAYLOAD_SIZE];
+    memcpy(combined_payload, &msg, sizeof(WaveChunkMessage));
+    if (sample_data && sample_data_size > 0) {
+        memcpy(combined_payload + sizeof(WaveChunkMessage), sample_data, sample_data_size);
+    }
+    
+    return BuildPacket(buffer, buffer_size, MSG_WAVE_CHUNK, combined_payload, 
+                      sizeof(WaveChunkMessage) + sample_data_size);
+}
+
+size_t ProtocolHandler::CreateGenericPacket(uint8_t* buffer, size_t buffer_size,
+                                          uint8_t type, const void* payload, size_t payload_size)
+{
+    return BuildPacket(buffer, buffer_size, type, payload, payload_size);
+}
+
+size_t ProtocolHandler::CreateHeartbeatPacket(uint8_t* buffer, size_t buffer_size,
+                                            const HeartbeatMessage& msg)
+{
+    return BuildPacket(buffer, buffer_size, MSG_HEARTBEAT, &msg, sizeof(msg));
+}
+
 bool ProtocolHandler::ValidatePacket(const uint8_t* buffer, size_t length)
 {
     if (length < sizeof(PacketHeader)) {
@@ -125,6 +168,16 @@ bool ProtocolHandler::ParseSampleCtrl(const uint8_t* buffer, SampleCtrlMessage& 
 bool ProtocolHandler::ParsePreviewReq(const uint8_t* buffer, PreviewReqMessage& msg)
 {
     return ParseMessage(buffer, MSG_PREVIEW_REQ, &msg, sizeof(msg));
+}
+
+bool ProtocolHandler::ParseDataRequest(const uint8_t* buffer, DataRequestMessage& msg)
+{
+    return ParseMessage(buffer, MSG_DATA_REQUEST, &msg, sizeof(msg));
+}
+
+bool ProtocolHandler::ParseMessage(const uint8_t* buffer, HeartbeatMessage& msg)
+{
+    return ParseMessage(buffer, MSG_HEARTBEAT, &msg, sizeof(msg));
 }
 
 bool ProtocolHandler::ParseMessage(const uint8_t* buffer, MessageType expected_type, void* out_payload, size_t out_payload_size)
