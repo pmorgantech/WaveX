@@ -295,6 +295,43 @@ SD_MISO         D17     SD Card Data In
 ```
 **✅ Technology**: SPI interface for standard SD cards - flexible pin assignment
 
+#### 🔧 Temporary MVP: SPI SD Card on Daisy (wiring + migration notes)
+
+For the initial MVP (before migrating to SDIO), the Daisy backend uses a simple SPI-based microSD connection. This is isolated to `src/storage/` so we can swap to SDIO later without touching higher-level code.
+
+Temporary SPI3 wiring (STM32H7 hardware SPI3):
+
+```
+Signal   Daisy Pin   STM32 Pin   Notes
+------   ---------   ---------   ------------------------------
+SCK      D2          PC10        SPI3_SCK
+MISO     D1          PC11        SPI3_MISO
+MOSI     D6          PC12        SPI3_MOSI
+CS       D9          PB4         GPIO (manual CS)
+VCC      3V3                     3.3 V only
+GND      GND                     Common ground
+```
+
+Implementation details:
+- SPI stack: `SpiHandle` (libDaisy) → minimal SD-over-SPI block I/O → FatFs `diskio` glue.
+- Files added under Daisy firmware:
+  - `src/storage/sd_spi.{h,cpp}`: low-level SPI SD init + single-sector read/write
+  - `src/storage/diskio_sd_spi.cpp`: FatFs `diskio` hooks for the SPI drive
+  - `src/storage/fs_browse.{h,cpp}`: directory listing helper for UI/browse protocol
+- On boot we mount FatFs (`f_mount`) and log success/fail.
+
+Performance and guardrails:
+- Init at ~400 kHz, then bump to ~20–24 MHz after `ACMD41/CMD58`.
+- Uses blocking SPI for simplicity and cache safety; DMA can be added later.
+- 512B-aligned sector transfers; no logging inside audio callback.
+
+Planned migration to SDIO (native MMC/SD):
+- The FatFs surface (`diskio_*` functions) is isolated. To migrate:
+  1. Implement a new backend (e.g., `diskio_sd_sdio.cpp`) that uses libDaisy SDMMC or a dedicated SDIO driver.
+  2. Keep `fs_browse` and all higher-level code unchanged.
+  3. Switch the drive registration in the build to the SDIO backend.
+- Pin changes: SDIO uses dedicated pins on Daisy (D2–D6 free up; refer to Daisy SDMMC example under `libs/libDaisy/examples/SDMMC_HelloWorld`).
+
 #### 🎚️ Analog Inputs (for hardware controls)
 ```
 Signal          Pin     Description
@@ -401,6 +438,128 @@ Based on the provided LCD/touch controller specs, here are the key signals and t
 - **Verification**: After init, check logs for pin states (e.g., "Reset pin state: 1" for deasserted).
 
 For full pinout and wiring diagram, see the "Hardware Pinout & Wiring" section below.
+
+## Configuration Flags & Debug Options
+
+WaveX firmware includes several compile-time configuration flags for debugging, testing, and performance tuning.
+
+### Daisy Backend Configuration (`firmware/daisy/src/config.hpp`)
+
+#### UART Communication Control
+```cpp
+// Daisy <-> ESP32 UART baud rate (default: 460800)
+#define INTER_MCU_UART_BAUD_RATE 460800
+
+// Completely disable UART init and polling for isolation testing (default: 0)
+#define WAVEX_DEBUG_DISABLE_UART 0
+
+// Enable UART RX via IRQ vs polling mode (default: 1 = IRQ mode)
+#define WAVEX_UART_RX_IRQ_MODE 1
+
+// Enable verbose UART debug logging - TX/RX messages, sync, heartbeats (default: 0)
+#define WAVEX_UART_DEBUG_LOG 0
+```
+
+**Usage Examples:**
+- **Silent UART**: Set `WAVEX_UART_DEBUG_LOG = 0` (default) for production builds
+- **Verbose Debug**: Set `WAVEX_UART_DEBUG_LOG = 1` to see all UART packet details
+- **UART Isolation**: Set `WAVEX_DEBUG_DISABLE_UART = 1` to disable inter-MCU communication
+- **Polling Mode**: Set `WAVEX_UART_RX_IRQ_MODE = 0` for simpler but less efficient reception
+
+#### Build Configuration
+```cpp
+// Daisy storage destination (default: qspi for 7.75MB flash)
+#define DAISY_STORAGE qspi
+
+// Use QSPI flash placement (default: ON)
+#define DAISY_USE_QSPI_FLASH ON
+
+// Build for bootloader QSPI (default: BOOT_QSPI)
+#define APP_TYPE BOOT_QSPI
+```
+
+### ESP32 Frontend Configuration
+
+#### Display & Touch
+```cpp
+// Enable/disable display initialization (default: enabled)
+#define WAVEX_DISPLAY_ENABLED 1
+
+// Enable/disable touch input (default: enabled)  
+#define WAVEX_TOUCH_ENABLED 1
+
+// Display brightness (0-255, default: 128)
+#define WAVEX_DISPLAY_BRIGHTNESS 128
+```
+
+#### Development & Debug
+```cpp
+// Enable verbose logging (default: 0)
+#define WAVEX_VERBOSE_LOGGING 0
+
+// Enable performance profiling (default: 0)
+#define WAVEX_PERFORMANCE_PROFILING 0
+
+// Enable memory usage tracking (default: 0)
+#define WAVEX_MEMORY_TRACKING 0
+```
+
+### Runtime Configuration
+
+#### Audio Settings
+```cpp
+// Audio block size (default: 48 samples = 1ms at 48kHz)
+#define WAVEX_AUDIO_BLOCK_SIZE 48
+
+// Audio sample rate (default: 48kHz)
+#define WAVEX_AUDIO_SAMPLE_RATE 48000
+
+// Enable/disable audio processing (default: enabled)
+#define WAVEX_AUDIO_ENABLED 1
+```
+
+#### Storage & File System
+```cpp
+// SD card timeout in milliseconds (default: 1000ms)
+#define WAVEX_SD_TIMEOUT_MS 1000
+
+// Maximum file path length (default: 96 characters)
+#define WAVEX_MAX_PATH_LENGTH 96
+
+// Enable/disable file system logging (default: 0)
+#define WAVEX_FS_DEBUG_LOG 0
+```
+
+### How to Modify Configuration
+
+1. **Edit the config file**: Modify `firmware/daisy/src/config.hpp` for Daisy, or create similar for ESP32
+2. **Rebuild**: Run `make daisy` or `make esp32` to apply changes
+3. **Flash**: Upload the new firmware to test configuration changes
+
+### Recommended Production Settings
+```cpp
+// Daisy production config
+#define WAVEX_DEBUG_DISABLE_UART 0      // Keep UART enabled
+#define WAVEX_UART_DEBUG_LOG 0          // Disable verbose logging
+#define WAVEX_UART_RX_IRQ_MODE 1        // Use efficient IRQ mode
+
+// ESP32 production config  
+#define WAVEX_VERBOSE_LOGGING 0         // Disable debug output
+#define WAVEX_PERFORMANCE_PROFILING 0   // Disable profiling overhead
+#define WAVEX_MEMORY_TRACKING 0         // Disable memory tracking
+```
+
+### Debug vs Production Builds
+
+**Debug Build** (development/testing):
+- Enable verbose logging: `WAVEX_UART_DEBUG_LOG = 1`
+- Enable performance profiling: `WAVEX_PERFORMANCE_PROFILING = 1`
+- Enable memory tracking: `WAVEX_MEMORY_TRACKING = 1`
+
+**Production Build** (deployment):
+- Disable all debug features: set flags to 0
+- Keep essential functionality: UART communication, audio processing
+- Optimize for performance and minimal memory usage
 
 ## Contributing
 

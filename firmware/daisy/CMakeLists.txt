@@ -7,6 +7,15 @@ project(wavex-daisy)
 set(FIRMWARE_NAME wavex-daisy)
 set(FIRMWARE_SOURCES
     src/main.cpp
+    src/config.hpp
+    src/comm/inter_uart.cpp
+    src/comm/message_router.cpp
+    src/audio/audio_adapter.cpp
+    src/audio/audio_engine.cpp
+    src/storage/fs_browse.cpp
+    src/storage/sd_spi.cpp
+    src/storage/diskio_sd_spi.cpp
+    src/metrics/metrics.cpp
     src/sampler.hpp
     src/cv_bus.hpp
     src/timebase.hpp
@@ -29,7 +38,10 @@ add_subdirectory(libs/DaisySP)
 set(DAISYSP_LIB DaisySP)
 
 # Shared protocol (headers under firmware/shared)
-include_directories(${CMAKE_CURRENT_LIST_DIR}/../shared)
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../shared)
+# Include src directory for relative includes
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/src)
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/src/storage)
 
 # Add DaisySP headers to include path
 include_directories(${CMAKE_CURRENT_LIST_DIR}/libs/DaisySP/Source)

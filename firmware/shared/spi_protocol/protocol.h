@@ -9,7 +9,7 @@ namespace Protocol {
 
 // Protocol constants
 static const uint8_t SYNC_BYTE = 0xAA;
-static const uint8_t MAX_PAYLOAD_SIZE = 64;
+static const uint8_t MAX_PAYLOAD_SIZE = 220; // allow multi-entry directory responses
 static const uint32_t PROTOCOL_VERSION = 1;
 
 // Message types
@@ -30,6 +30,12 @@ enum MessageType : uint8_t {
     MSG_METER_PUSH  = 0x10, // backend -> frontend
     MSG_WAVE_CHUNK  = 0x11, // backend -> frontend
     MSG_HEARTBEAT   = 0x12, // periodic health beacon
+    // File browse and sample playback control (MVP)
+    MSG_BROWSE_REQ   = 0x30,
+    MSG_BROWSE_RESP  = 0x31,
+    MSG_SAMPLE_PLAY_REQ = 0x32,
+    MSG_SAMPLE_STOP_REQ = 0x33,
+    MSG_SAMPLE_STATUS   = 0x34,
     MSG_ERROR = 0xFF
 };
 
@@ -114,6 +120,35 @@ struct WaveChunkMessage {
     // payload follows (count * int16)
 } __attribute__((packed));
 
+// File browse protocol (variable-size payloads)
+static const size_t FILE_NAME_MAX = 48;
+static const size_t BROWSE_PATH_MAX = 96;
+
+struct FileEntryWire {
+    uint8_t  is_dir;
+    uint32_t size_bytes;
+    char     name[FILE_NAME_MAX];
+} __attribute__((packed));
+
+struct BrowseRespHeader {
+    uint32_t total_count;
+    uint8_t  n;
+} __attribute__((packed));
+
+// Sample status
+struct SampleStatusMessage {
+    uint8_t  state;          // 0=stopped,1=playing,2=ended
+    uint32_t sample_rate;
+    uint8_t  channels;
+    uint32_t frames_played;
+} __attribute__((packed));
+
+// Error message (short)
+struct ErrorMessage {
+    uint16_t code;
+    char     msg[48];
+} __attribute__((packed));
+
 // Heartbeat (bidirectional)
 struct HeartbeatMessage {
     uint32_t uptime_ms;
@@ -161,6 +196,19 @@ public:
     
     static size_t CreateHeartbeatPacket(uint8_t* buffer, size_t buffer_size,
                                       const HeartbeatMessage& msg);
+
+    // Browse and sample control helpers
+    static bool   ParseBrowseReq(const uint8_t* buffer, char* path_out, size_t path_max,
+                                 uint32_t& start_index, uint8_t& max_entries);
+    static size_t CreateBrowseRespPacket(uint8_t* buffer, size_t buffer_size,
+                                         uint32_t total_count,
+                                         const FileEntryWire* entries,
+                                         uint8_t n);
+    static bool   ParseSamplePlayReq(const uint8_t* buffer, char* path_out, size_t path_max);
+    static size_t CreateSampleStatusPacket(uint8_t* buffer, size_t buffer_size,
+                                           const SampleStatusMessage& msg);
+    static size_t CreateErrorPacket(uint8_t* buffer, size_t buffer_size,
+                                    const ErrorMessage& err);
     
     // Packet parsing
     static bool ValidatePacket(const uint8_t* buffer, size_t length);

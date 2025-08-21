@@ -112,6 +112,71 @@ size_t ProtocolHandler::CreateHeartbeatPacket(uint8_t* buffer, size_t buffer_siz
     return BuildPacket(buffer, buffer_size, MSG_HEARTBEAT, &msg, sizeof(msg));
 }
 
+bool ProtocolHandler::ParseBrowseReq(const uint8_t* buffer, char* path_out, size_t path_max,
+                                     uint32_t& start_index, uint8_t& max_entries)
+{
+    if(!buffer || !path_out || path_max == 0) return false;
+    const Packet* p = reinterpret_cast<const Packet*>(buffer);
+    if(p->header.type != MSG_BROWSE_REQ) return false;
+    // Payload layout: path (null-terminated), start_index(u32), max_entries(u8)
+    const uint8_t* pay = p->payload;
+    size_t len = p->header.length;
+    // Find NUL within bounds
+    size_t i = 0;
+    while(i < len && pay[i] != 0) i++;
+    if(i >= len) return false;
+    size_t path_len = i + 1; // include NUL
+    size_t need = path_len + sizeof(uint32_t) + sizeof(uint8_t);
+    if(len < need) return false;
+    size_t copy = (path_len > path_max) ? (path_max - 1) : (path_len - 1);
+    memcpy(path_out, pay, copy);
+    path_out[copy] = 0;
+    const uint8_t* pidx = pay + path_len;
+    start_index = (uint32_t)pidx[0] | ((uint32_t)pidx[1] << 8) | ((uint32_t)pidx[2] << 16) | ((uint32_t)pidx[3] << 24);
+    max_entries = *(pidx + 4);
+    return true;
+}
+
+size_t ProtocolHandler::CreateBrowseRespPacket(uint8_t* buffer, size_t buffer_size,
+                                               uint32_t total_count,
+                                               const FileEntryWire* entries,
+                                               uint8_t n)
+{
+    if(n == 0 || !entries) n = 0;
+    size_t payload_size = sizeof(BrowseRespHeader) + (size_t)n * sizeof(FileEntryWire);
+    if(buffer_size < sizeof(PacketHeader) + payload_size) return 0;
+    uint8_t tmp[256];
+    if(payload_size > sizeof(tmp)) return 0; // keep small for now
+    BrowseRespHeader hdr{ total_count, n };
+    memcpy(tmp, &hdr, sizeof(hdr));
+    if(n) memcpy(tmp + sizeof(hdr), entries, (size_t)n * sizeof(FileEntryWire));
+    return BuildPacket(buffer, buffer_size, MSG_BROWSE_RESP, tmp, payload_size);
+}
+
+bool ProtocolHandler::ParseSamplePlayReq(const uint8_t* buffer, char* path_out, size_t path_max)
+{
+    if(!buffer || !path_out || path_max == 0) return false;
+    const Packet* p = reinterpret_cast<const Packet*>(buffer);
+    if(p->header.type != MSG_SAMPLE_PLAY_REQ) return false;
+    size_t len = p->header.length;
+    size_t copy = (len >= path_max) ? (path_max - 1) : len;
+    memcpy(path_out, p->payload, copy);
+    path_out[copy] = 0;
+    return true;
+}
+
+size_t ProtocolHandler::CreateSampleStatusPacket(uint8_t* buffer, size_t buffer_size,
+                                                 const SampleStatusMessage& msg)
+{
+    return BuildPacket(buffer, buffer_size, MSG_SAMPLE_STATUS, &msg, sizeof(msg));
+}
+
+size_t ProtocolHandler::CreateErrorPacket(uint8_t* buffer, size_t buffer_size,
+                                          const ErrorMessage& err)
+{
+    return BuildPacket(buffer, buffer_size, MSG_ERROR, &err, sizeof(err));
+}
+
 bool ProtocolHandler::ValidatePacket(const uint8_t* buffer, size_t length)
 {
     if (length < sizeof(PacketHeader)) {
