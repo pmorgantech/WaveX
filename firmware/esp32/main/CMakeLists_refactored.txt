@@ -9,7 +9,7 @@ idf_component_register(
         "links/uart_link.cpp"
         "tasks/rx_task.cpp"
         "tasks/tx_task.cpp"
-        "links/spi_link.cpp"
+        "spi_link.cpp"
     INCLUDE_DIRS 
         "."
         "comm"
@@ -22,7 +22,4 @@ idf_component_register(
         "freertos"
         "esp_timer"
         "esp_common"
-    PRIV_REQUIRES
-        "shared"
-        "ui_lgfx"
 )

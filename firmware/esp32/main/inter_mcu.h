@@ -1,5 +1,9 @@
 #pragma once
 
+#include <stdint.h>
+#include <stdbool.h>
+#include "comm/statistics.h"
+
 #ifdef ESP_PLATFORM
 #include "esp_err.h"
 #else
@@ -9,10 +13,18 @@ typedef int esp_err_t;
 #endif
 #endif
 
-// Early init (now a lightweight stub). Real SPI bring-up occurs in inter_mcu_start().
+// Forward declarations
+class StatisticsManager;
+
+// Inter-MCU communication interface
+// This provides a high-level API for communicating with the Daisy backend
+// over SPI or UART links.
+
+// Main inter-MCU interface (simplified)
 esp_err_t inter_mcu_init(void);
-// Perform SPI bus/device setup and start RX task. Safe to call once after LGFX init.
 esp_err_t inter_mcu_start(void);
+
+// Basic MIDI message sending
 esp_err_t inter_mcu_send_control_change(uint8_t parameter, uint8_t channel, uint16_t value);
 esp_err_t inter_mcu_send_note_on(uint8_t note, uint8_t velocity, uint8_t channel);
 esp_err_t inter_mcu_send_note_off(uint8_t note, uint8_t channel); 
@@ -52,29 +64,6 @@ typedef struct {
 // Thread-safe snapshot of latest heartbeat
 void inter_mcu_get_backend_heartbeat(wavex_backend_heartbeat_t* out);
 
-// Packet statistics tracking
-typedef struct {
-    uint32_t sync_packets;
-    uint32_t control_change_packets;
-    uint32_t note_on_packets;
-    uint32_t note_off_packets;
-    uint32_t sample_load_packets;
-    uint32_t sample_data_packets;
-    uint32_t parameter_update_packets;
-    uint32_t status_request_packets;
-    uint32_t status_response_packets;
-    uint32_t sample_ctrl_packets;
-    uint32_t preview_req_packets;
-    uint32_t data_request_packets;
-    uint32_t meter_push_packets;
-    uint32_t wave_chunk_packets;
-    uint32_t heartbeat_packets;
-    uint32_t error_packets;
-    uint32_t unknown_packets;
-    uint32_t total_packets;
-    uint32_t invalid_packets;
-} wavex_packet_stats_t;
-
 // Thread-safe snapshot of current packet statistics
 void inter_mcu_get_packet_stats(wavex_packet_stats_t* out);
 
@@ -82,14 +71,6 @@ void inter_mcu_get_packet_stats(wavex_packet_stats_t* out);
 void inter_mcu_reset_packet_stats(void);
 
 // Quick packet summary (most common types)
-typedef struct {
-    uint32_t total_packets;
-    uint32_t meter_packets;
-    uint32_t heartbeat_packets;
-    uint32_t control_packets;
-    uint32_t invalid_packets;
-} wavex_packet_summary_t;
-
 void inter_mcu_get_packet_summary(wavex_packet_summary_t* out);
 
 // Get current METER_PUSH packet count (useful for throttled logging)
@@ -106,11 +87,4 @@ int inter_mcu_format_packet_stats(char* buffer, size_t buffer_size);
 void inter_mcu_send_test_messages(void);
 
 // Get TX statistics (messages sent to Daisy)
-typedef struct {
-    uint32_t total_messages_sent;
-    uint32_t ping_messages_sent;
-    uint32_t test_messages_sent;
-    uint32_t last_send_time;
-} wavex_tx_stats_t;
-
 void inter_mcu_get_tx_stats(wavex_tx_stats_t* out);

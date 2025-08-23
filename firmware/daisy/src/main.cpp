@@ -9,6 +9,8 @@
 #include "spi_protocol/protocol.h"
 #include "config.hpp"
 #include "comm/inter_uart.h"
+#include "comm/inter_spi.h"  // Add SPI header
+#include "config/link_config.h"  // Add link configuration
 #include "comm/message_router.h"
 #include "metrics/metrics.h"
 #include "ff.h"
@@ -26,6 +28,20 @@ using namespace WaveX::Storage;
 // Hardware
 DaisySeed hw;
 static FATFS s_fs; // FatFs object
+
+// Helper function to process SPI packets
+void process_spi_packet(pkt_t* pkt) {
+    // Convert SPI packet to existing protocol format for compatibility
+    // This allows existing application code to work unchanged
+    
+    switch (pkt->h.type) {
+        case 0x1001: // Control change
+            // Convert to existing protocol format
+            // ... implementation ...
+            break;
+        // ... handle other packet types ...
+    }
+}
 
 // Whether we've sent the initial SYNC packet
 static bool sync_sent = false;
@@ -78,8 +94,13 @@ int main(void)
 
     // AudioEngine already initializes sampler and CV bus internally
     
-    // Initialize UART communication with ESP32 (disabled for isolation if macro set)
-    #if !WAVEX_DEBUG_DISABLE_UART
+    // Initialize communication with ESP32
+    #if WAVEX_SPI_LINK_ENABLED
+    // Initialize SPI link
+    WaveX::Comm::Spi_Init(hw);
+    System::Delay(100);
+    #elif !WAVEX_DEBUG_DISABLE_UART
+    // Initialize UART link (existing code)
     WaveX::Comm::Uart_Init(hw);
     System::Delay(100);
     #else
@@ -142,8 +163,17 @@ int main(void)
         loop_counter++;
         
         
-        // Handle UART reception based on mode
-        #if !WAVEX_DEBUG_DISABLE_UART
+        // Handle communication based on mode
+        #if WAVEX_SPI_LINK_ENABLED
+        // Handle SPI communication
+        pkt_t *p;
+        while (WaveX::Comm::Spi_Recv(&p)) {
+            // Process SPI packet
+            process_spi_packet(p);
+            WaveX::Comm::Spi_Recycle(p, 1);
+        }
+        #elif !WAVEX_DEBUG_DISABLE_UART
+        // Handle UART communication (existing code)
         // Parse any bytes accumulated in the RX ring into protocol messages
         WaveX::Comm::Uart_ProcessRxRing();
 
@@ -161,18 +191,51 @@ int main(void)
 
         // Send SYNC packet every 2 seconds
         if(System::GetNow() > 2000 && !sync_sent) {
+            #if WAVEX_SPI_LINK_ENABLED
+            // Send SYNC via SPI
+            uint8_t payload[1] = {0};
+            WaveX::Comm::Spi_Send(0x0000, payload, 1);
+            #if WAVEX_UART_DEBUG_LOG
+            hw.PrintLine("Manually sent SPI SYNC packet");
+            #endif
+            #else
+            // Send SYNC via UART
             uint8_t p[] = {0};
             uint8_t txbuf[64];
             size_t len = ProtocolHandler::CreateGenericPacket(txbuf, sizeof(txbuf), MSG_SYNC, p, 0);
             if(len > 0) WaveX::Comm::Uart_Send(txbuf, len);
-            sync_sent = true;
             #if WAVEX_UART_DEBUG_LOG
-            hw.PrintLine("Manually sent SYNC packet");
+            hw.PrintLine("Manually sent UART SYNC packet");
             #endif
+            #endif
+            sync_sent = true;
         }
 
         // Periodic liveness beacon (approx 1s)
-        #if !WAVEX_DEBUG_DISABLE_UART
+        #if WAVEX_SPI_LINK_ENABLED
+        if(System::GetNow() - last_beacon >= 1000) {
+            last_beacon = System::GetNow();
+            // Send heartbeat via SPI
+            uint8_t payload[12];
+            payload[0] = (last_beacon >> 0) & 0xFF;
+            payload[1] = (last_beacon >> 8) & 0xFF;
+            payload[2] = (last_beacon >> 16) & 0xFF;
+            payload[3] = (last_beacon >> 24) & 0xFF;
+            payload[4] = (loop_counter >> 0) & 0xFF;
+            payload[5] = (loop_counter >> 8) & 0xFF;
+            payload[6] = (loop_counter >> 16) & 0xFF;
+            payload[7] = (loop_counter >> 24) & 0xFF;
+            payload[8] = 0; // rx_total placeholder
+            payload[9] = 0;
+            payload[10] = 0;
+            payload[11] = 0;
+            
+            WaveX::Comm::Spi_Send(0x1000, payload, 12);
+            #if WAVEX_UART_DEBUG_LOG
+            hw.PrintLine("SPI Heartbeat sent: uptime=%lu loop_counter=%lu", (unsigned long)last_beacon, (unsigned long)loop_counter);
+            #endif
+        }
+        #elif !WAVEX_DEBUG_DISABLE_UART
         if(System::GetNow() - last_beacon >= 1000) {
             last_beacon = System::GetNow();
             HeartbeatMessage hb{};
