@@ -1,6 +1,7 @@
 #include "inter_uart.h"
 #include "../config.hpp"
 #include <cstring>
+#include "config/link_config.h"
 
 using namespace daisy;
 using namespace WaveX::Protocol;
@@ -66,7 +67,7 @@ static inline void UART_Send_Internal(const uint8_t* data, size_t length) {
         s_has_pending_data = false;
         s_uart_tx_count++;
         s_last_uart_activity = System::GetNow();
-#if WAVEX_UART_DEBUG_LOG
+#if WAVEX_MCU_LINK_DEBUG
         if (length >= sizeof(PacketHeader) && data[0] == SYNC_BYTE) {
             const PacketHeader* hdr = reinterpret_cast<const PacketHeader*>(data);
             uint8_t msg_type = hdr->type;
@@ -88,7 +89,7 @@ static inline void UART_Send_Internal(const uint8_t* data, size_t length) {
 #endif
     } else {
         s_uart_tx_errors++;
-        #if WAVEX_UART_DEBUG_LOG
+        #if WAVEX_MCU_LINK_DEBUG
         s_hw->PrintLine("UART TX failed! Total errors: %lu", s_uart_tx_errors);
         #endif
     }
@@ -100,6 +101,11 @@ void Uart_Send(const uint8_t* data, size_t length) {
 
 void Uart_Init(DaisySeed& hw)
 {
+#if !WAVEX_UART_LINK_ENABLED
+    // In SPI builds, UART is disabled. Provide minimal message to indicate skip.
+    (void)hw;
+    return;
+#endif
     s_hw = &hw;
 
     UartHandler::Config cfg;
@@ -224,6 +230,9 @@ void Uart_PrepareResponsePacket(const QueuedMessage& msg)
 
 void Uart_ProcessRxRing()
 {
+#if WAVEX_MCU_LINK_DEBUG
+    static uint32_t last_log = 0;
+#endif
     uint8_t byte = 0;
     while(s_rx_head != s_rx_tail)
     {

@@ -54,6 +54,9 @@ public:
     
     // Get current link instance
     ILink* get_current_link() const;
+    
+    // Process any received packets from the current link
+    void process_received_packets();
 
 private:
     LinkManager();

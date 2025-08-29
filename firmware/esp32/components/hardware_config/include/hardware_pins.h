@@ -2,16 +2,19 @@
  * @file hardware_pins.h
  * @brief WaveX Hardware GPIO Pin Definitions
  * 
- * Defines GPIO pin assignments for WaveX dual-MCU platform ESP32-S3 frontend.
- * All pin assignments VERIFIED for ESP32-S3-DevKitC-1 compatibility and optimized for
- * audio-focused embedded system requirements.
+ * This file serves as a mapping layer that converts centralized pin definitions
+ * from shared/config/pin_config.h into ESP32-specific GPIO_NUM macros.
  * 
- * ⚠️  CRITICAL: All GPIO assignments verified against ESP32-S3-DevKitC-1 official pinout
+ * ⚠️  CRITICAL: All pin assignments are defined in shared/config/pin_config.h
  * ✅  VERIFIED: Compatible with both N8 and N8R8 PSRAM variants
- * 🔧  UPDATED: Complete redesign for all new peripherals and available pins only
+ * 🔧  UPDATED: Complete redesign using centralized pin configuration
+ * 📍  CENTRALIZED: Pin definitions sourced from shared/config/pin_config.h
  */
 
 #pragma once
+
+// Include centralized pin configuration
+#include "../../../../shared/config/pin_config.h"
 
 #ifdef ESP_PLATFORM
 #include "driver/gpio.h"
@@ -46,6 +49,17 @@ typedef int gpio_num_t;
 #define GPIO_NUM_19  19
 #define GPIO_NUM_20  20
 #define GPIO_NUM_21  21
+#define GPIO_NUM_22  22
+#define GPIO_NUM_23  23
+#define GPIO_NUM_24  24
+#define GPIO_NUM_25  25
+#define GPIO_NUM_26  26
+#define GPIO_NUM_27  27
+#define GPIO_NUM_28  28
+#define GPIO_NUM_29  29
+#define GPIO_NUM_30  30
+#define GPIO_NUM_31  31
+#define GPIO_NUM_32  32
 #define GPIO_NUM_33  33
 #define GPIO_NUM_34  34
 #define GPIO_NUM_35  35
@@ -97,49 +111,49 @@ extern "C" {
 // SPI Bus Configuration
 // =============================================================================
 
-/** SPI host used for display and touch communication */
+/** SPI host used for display (VSPI) */
 #define WAVEX_SPI_HOST          SPI3_HOST
 
-/** SPI host used for SD card interface */
-#define WAVEX_SD_SPI_HOST       SPI2_HOST
+/** SPI host used for inter-MCU communication (HSPI) */
+#define WAVEX_INTER_MCU_SPI_HOST SPI2_HOST
 
 // =============================================================================
 // ST7796S Display Controller (480x320 TFT) - ✅ VERIFIED VALID
 // =============================================================================
 
 /** Display SPI Clock - GPIO7 (J1 pin 7) ✅ */
-#define WAVEX_LCD_GPIO_SCLK     GPIO_NUM_7
+#define WAVEX_LCD_GPIO_SCLK     WAVEX_ESP_LCD_SCLK
 
 /** Display SPI MOSI - GPIO6 (J1 pin 6) ✅ */
-#define WAVEX_LCD_GPIO_MOSI     GPIO_NUM_6
+#define WAVEX_LCD_GPIO_MOSI     WAVEX_ESP_LCD_MOSI
 
 /** Display SPI Chip Select - GPIO5 (J1 pin 5) ✅ */
-#define WAVEX_LCD_GPIO_CS       GPIO_NUM_5
+#define WAVEX_LCD_GPIO_CS       WAVEX_ESP_LCD_CS
 
 /** Display Data/Command control - GPIO4 (J1 pin 4) ✅ */
-#define WAVEX_LCD_GPIO_DC       GPIO_NUM_4
+#define WAVEX_LCD_GPIO_DC       WAVEX_ESP_LCD_DC
 
 /** Display Reset - GPIO2 (J3 pin 5) ✅ */
-#define WAVEX_LCD_GPIO_RST      GPIO_NUM_2
+#define WAVEX_LCD_GPIO_RST      WAVEX_ESP_LCD_RST
 
 /** Display Backlight control - GPIO21 (J3 pin 18) ✅ */
-#define WAVEX_LCD_GPIO_BL       GPIO_NUM_21
+#define WAVEX_LCD_GPIO_BL       WAVEX_ESP_LCD_BL
 
 // =============================================================================
 // I2C Capacitive Touch Controller - ✅ VERIFIED VALID
 // =============================================================================
 
 /** Touch I2C Data - GPIO20 (J3 pin 19) ✅ */
-#define WAVEX_CTP_GPIO_SDA      GPIO_NUM_20
+#define WAVEX_CTP_GPIO_SDA      WAVEX_ESP_TOUCH_SDA
 
 /** Touch I2C Clock - GPIO9 (J3 pin 4) ✅ */
-#define WAVEX_CTP_GPIO_SCL      GPIO_NUM_9
+#define WAVEX_CTP_GPIO_SCL      WAVEX_ESP_TOUCH_SCL
 
 /** Touch Reset - GPIO14 (J1 pin 20) ✅ */
-#define WAVEX_CTP_GPIO_RST      GPIO_NUM_14
+#define WAVEX_CTP_GPIO_RST      WAVEX_ESP_TOUCH_RST
 
 /** Touch Interrupt - GPIO15 (J1 pin 21) ✅ */
-#define WAVEX_CTP_GPIO_INT      GPIO_NUM_15
+#define WAVEX_CTP_GPIO_INT      WAVEX_ESP_TOUCH_INT
 
 /** I2C port number for touch controller */
 #define WAVEX_CTP_I2C_NUM       I2C_NUM_0
@@ -148,46 +162,77 @@ extern "C" {
 #define WAVEX_CTP_I2C_FREQ_HZ   100000
 
 // =============================================================================
-// Inter-MCU Communication (ESP32 ↔ Daisy) - 🔧 UPDATED TO UART
+// Inter-MCU Communication (ESP32 ↔ Daisy) - 🔧 UPDATED TO SPI
 // =============================================================================
 
-/** Inter-MCU UART port number */
+/** Inter-MCU SPI host number (dedicated to Daisy communication) */
+#define WAVEX_INTER_MCU_SPI_HOST    SPI2_HOST
+
+/** Inter-MCU SPI Clock - GPIO16 (J1 pin 14) ✅ */
+#define WAVEX_INTER_MCU_GPIO_SCLK   WAVEX_ESP_SPI_SCLK
+
+/** Inter-MCU SPI MOSI - GPIO17 (J1 pin 10) ✅ */
+#define WAVEX_INTER_MCU_GPIO_MOSI   WAVEX_ESP_SPI_MOSI
+
+/** Inter-MCU SPI MISO - GPIO18 (J1 pin 11) ✅ */
+#define WAVEX_INTER_MCU_GPIO_MISO   WAVEX_ESP_SPI_MISO
+
+/** Inter-MCU SPI Chip Select - GPIO19 (J1 pin 15) ✅ */
+#define WAVEX_INTER_MCU_GPIO_CS     WAVEX_ESP_SPI_CS
+
+/** Daisy Interrupt Output - GPIO27 (J3 pin 26) ✅ */
+#define WAVEX_INTER_MCU_GPIO_IRQ    WAVEX_ESP_DAISY_IRQ
+
+/** ESP Attention Output - GPIO41 (J3 pin 14) ✅ */
+#define WAVEX_INTER_MCU_GPIO_ATTN   WAVEX_ESP_ATTN_OUT
+
+/** Inter-MCU SPI clock frequency (10MHz for high-speed data transfer) */
+#define WAVEX_INTER_MCU_SPI_CLK_HZ  WAVEX_ESP_SPI_CLK_HZ
+
+/** Inter-MCU SPI queue size for DMA operations */
+#define WAVEX_INTER_MCU_SPI_QUEUE_SIZE  WAVEX_ESP_SPI_QUEUE_SIZE
+
+/** Inter-MCU SPI DMA channel (auto-select for best performance) */
+#define WAVEX_INTER_MCU_SPI_DMA_CH     WAVEX_ESP_SPI_DMA_CH
+
+// Legacy UART definitions (kept for compatibility, but deprecated)
+/** @deprecated Inter-MCU UART port number - use SPI instead */
 #define WAVEX_INTER_MCU_UART_NUM    UART_NUM_1
 
-/** Inter-MCU UART TX - GPIO17 (J1 pin 10) ✅ */
-#define WAVEX_INTER_MCU_GPIO_TX     GPIO_NUM_17
+/** @deprecated Inter-MCU UART TX - use SPI instead */
+#define WAVEX_INTER_MCU_GPIO_TX     WAVEX_ESP_LEGACY_TX
 
-/** Inter-MCU UART RX - GPIO18 (J1 pin 11) ✅ */
-#define WAVEX_INTER_MCU_GPIO_RX     GPIO_NUM_18
+/** @deprecated Inter-MCU UART RX - use SPI instead */
+#define WAVEX_INTER_MCU_GPIO_RX     WAVEX_ESP_LEGACY_RX
 
-/** Inter-MCU UART baud rate (3MHz for high-speed audio data) */
+/** @deprecated Inter-MCU UART baud rate - use SPI instead */
 #define WAVEX_INTER_MCU_UART_BAUD   3000000
 
 // =============================================================================
-// SD Card Interface - ✅ VERIFIED VALID
+// SD Card Interface - DISABLED: No SD card on ESP32
 // =============================================================================
 
-/** SD Card SPI Chip Select - GPIO10 (J1 pin 16) ✅ */
-#define WAVEX_SD_GPIO_CS        GPIO_NUM_10
+// /** SD Card SPI Chip Select - GPIO10 (J1 pin 16) ✅ */
+// #define WAVEX_SD_GPIO_CS        WAVEX_ESP_SD_CS
 
-/** SD Card SPI Clock - GPIO12 (J1 pin 18) ✅ */
-#define WAVEX_SD_GPIO_SCLK      GPIO_NUM_12
+// /** SD Card SPI Clock - GPIO12 (J1 pin 18) ✅ */
+// #define WAVEX_SD_GPIO_SCLK      WAVEX_ESP_SD_SCLK
 
-/** SD Card SPI MOSI - GPIO11 (J1 pin 17) ✅ */
-#define WAVEX_SD_GPIO_MOSI      GPIO_NUM_11
+// /** SD Card SPI MOSI - GPIO11 (J1 pin 17) ✅ */
+// #define WAVEX_SD_GPIO_MOSI      WAVEX_ESP_SD_MOSI
 
-/** SD Card SPI MISO - GPIO13 (J1 pin 19) ✅ */
-#define WAVEX_SD_GPIO_MISO      GPIO_NUM_13
+// /** SD Card SPI MISO - GPIO13 (J1 pin 19) ✅ */
+// #define WAVEX_SD_GPIO_MISO      WAVEX_ESP_SD_MISO
 
 // =============================================================================
 // MIDI Interface - 🔧 UPDATED FOR BOTH USB AND DIN
 // =============================================================================
 
 /** MIDI UART TX - GPIO8 (J1 pin 12) ✅ */
-#define WAVEX_MIDI_GPIO_TX      GPIO_NUM_8
+#define WAVEX_MIDI_GPIO_TX      WAVEX_ESP_MIDI_TX
 
 /** MIDI UART RX - GPIO42 (J3 pin 6) ✅ */
-#define WAVEX_MIDI_GPIO_RX      GPIO_NUM_42
+#define WAVEX_MIDI_GPIO_RX      WAVEX_ESP_MIDI_RX
 
 /** MIDI UART port number */
 #define WAVEX_MIDI_UART_NUM     UART_NUM_2
@@ -196,76 +241,98 @@ extern "C" {
 #define WAVEX_MIDI_UART_BAUD    31250
 
 // =============================================================================
-// Dual Potentiometer Interface (CD74HC4067) - 🆕 NEW
+// Dual Potentiometer Interface (CD74HC4067) - DISABLED: Using encoder instead
 // =============================================================================
 
-/** CD74HC4067 Address Select A0 - GPIO33 (J3 pin 7) ✅ */
-#define WAVEX_POT_ADDR_A0       GPIO_NUM_33
+// /** CD74HC4067 Address Select A0 - GPIO33 (J3 pin 7) ✅ */
+// #define WAVEX_POT_ADDR_A0       WAVEX_ESP_POT_A0
 
-/** CD74HC4067 Address Select A1 - GPIO34 (J3 pin 8) ✅ */
-#define WAVEX_POT_ADDR_A1       GPIO_NUM_34
+// /** CD74HC4067 Address Select A1 - GPIO34 (J3 pin 8) ✅ */
+// #define WAVEX_POT_ADDR_A1       WAVEX_ESP_POT_A1
 
-/** CD74HC4067 Address Select A2 - GPIO35 (J3 pin 9) ✅ */
-#define WAVEX_POT_ADDR_A2       GPIO_NUM_35
+// /** CD74HC4067 Address Select A2 - GPIO35 (J3 pin 9) ✅ */
+// #define WAVEX_POT_ADDR_A2       WAVEX_ESP_POT_A2
 
-/** CD74HC4067 Address Select A3 - GPIO36 (J3 pin 10) ✅ */
-#define WAVEX_POT_ADDR_A3       GPIO_NUM_36
+// /** CD74HC4067 Address Select A3 - GPIO36 (J3 pin 10) ✅ */
+// #define WAVEX_POT_ADDR_A3       WAVEX_ESP_POT_A3
 
-/** CD74HC4067 Enable (active low) - GPIO37 (J3 pin 11) ✅ */
-#define WAVEX_POT_ENABLE        GPIO_NUM_37
+// /** CD74HC4067 Enable (active low) - GPIO37 (J3 pin 11) ✅ */
+// #define WAVEX_POT_ENABLE        WAVEX_ESP_POT_EN
 
-/** CD74HC4067 Common Signal - GPIO1 (ADC1_CH0) ✅ */
-#define WAVEX_POT_SIGNAL        GPIO_NUM_1
+// /** CD74HC4067 Common Signal - GPIO1 (ADC1_CH0) ✅ */
+// #define WAVEX_POT_SIGNAL        WAVEX_ESP_POT_SIG
 
-/** ADC channel for potentiometer reading */
-#define WAVEX_POT_ADC_CHANNEL   ADC1_CHANNEL_0
+// /** ADC channel for potentiometer reading */
+// #define WAVEX_POT_ADC_CHANNEL   ADC1_CHANNEL_0
 
-/** ADC attenuation for 0-3.3V range */
-#define WAVEX_POT_ADC_ATTEN     ADC_ATTEN_DB_11
-
-// =============================================================================
-// Button Matrix Interface (TCA8418) - 🆕 NEW
-// =============================================================================
-
-/** TCA8418 I2C Data - GPIO39 (J3 pin 12) ✅ */
-#define WAVEX_BTN_GPIO_SDA      GPIO_NUM_39
-
-/** TCA8418 I2C Clock - GPIO40 (J3 pin 13) ✅ */
-#define WAVEX_BTN_GPIO_SCL      GPIO_NUM_40
-
-/** TCA8418 Reset - GPIO41 (J3 pin 14) ✅ */
-#define WAVEX_BTN_GPIO_RST      GPIO_NUM_41
-
-/** TCA8418 Interrupt - GPIO43 (J3 pin 15) ✅ */
-#define WAVEX_BTN_GPIO_INT      GPIO_NUM_43
-
-/** I2C port number for button matrix */
-#define WAVEX_BTN_I2C_NUM       I2C_NUM_1
-
-/** I2C master frequency for button matrix (100kHz standard) */
-#define WAVEX_BTN_I2C_FREQ_HZ   100000
+// /** ADC attenuation for 0-3.3V range */
+// #define WAVEX_POT_ADC_ATTEN     ADC_ATTEN_DB_11
 
 // =============================================================================
-// LED Driver Interface (TLC5947) - 🆕 NEW
+// Button Matrix Interface (TCA8418) - DISABLED: Using encoder instead
 // =============================================================================
 
-/** TLC5947 SPI Clock - GPIO44 (J3 pin 16) ✅ */
-#define WAVEX_LED_GPIO_SCLK     GPIO_NUM_44
+// /** TCA8418 I2C Data - GPIO39 (J3 pin 12) ✅ */
+// #define WAVEX_BTN_GPIO_SDA      WAVEX_ESP_BTN_SDA
 
-/** TLC5947 SPI MOSI - GPIO45 (J3 pin 17) ✅ */
-#define WAVEX_LED_GPIO_MOSI     GPIO_NUM_45
+// /** TCA8418 I2C Clock - GPIO40 (J3 pin 13) ✅ */
+// #define WAVEX_BTN_GPIO_SCL      WAVEX_ESP_BTN_SCL
 
-/** TLC5947 SPI Chip Select - GPIO46 (J3 pin 18) ✅ */
-#define WAVEX_LED_GPIO_CS       GPIO_NUM_46
+// /** TCA8418 Reset - GPIO41 (J3 pin 14) ✅ */
+// #define WAVEX_BTN_GPIO_RST      WAVEX_ESP_BTN_RST
 
-/** TLC5947 Blank - GPIO47 (J3 pin 19) ✅ */
-#define WAVEX_LED_GPIO_BLANK    GPIO_NUM_47
+// /** TCA8418 Interrupt - GPIO43 (J3 pin 15) ✅ */
+// #define WAVEX_BTN_GPIO_INT      WAVEX_ESP_BTN_INT
 
-/** TLC5947 Latch - GPIO48 (J3 pin 20) ✅ */
-#define WAVEX_LED_GPIO_LATCH    GPIO_NUM_48
+// /** I2C port number for button matrix */
+// #define WAVEX_BTN_I2C_NUM       I2C_NUM_1
 
-/** SPI host used for LED driver */
-#define WAVEX_LED_SPI_HOST      SPI2_HOST
+// /** I2C master frequency for button matrix (100kHz standard) */
+// #define WAVEX_BTN_I2C_FREQ_HZ   100000
+
+// =============================================================================
+// Quadrature Encoder Interface (PCNT) - ✅ VERIFIED VALID
+// =============================================================================
+
+/** Encoder Channel A - GPIO33 (J3 pin 7) ✅ */
+#define WAVEX_ENCODER_GPIO_A     WAVEX_ESP_ENCODER_A
+
+/** Encoder Channel B - GPIO34 (J3 pin 8) ✅ */
+#define WAVEX_ENCODER_GPIO_B     WAVEX_ESP_ENCODER_B
+
+/** Encoder Push Button - GPIO40 (J3 pin 12) ✅ */
+#define WAVEX_ENCODER_GPIO_BTN   WAVEX_ESP_ENCODER_BTN
+
+/** PCNT unit number for encoder */
+#define WAVEX_ENCODER_PCNT_UNIT  PCNT_UNIT_0
+
+/** PCNT channel for encoder A */
+#define WAVEX_ENCODER_PCNT_CH_A  PCNT_CHANNEL_0
+
+/** PCNT channel for encoder B */
+#define WAVEX_ENCODER_PCNT_CH_B  PCNT_CHANNEL_1
+
+// =============================================================================
+// LED Driver Interface (TLC5947) - DISABLED: Not needed for now
+// =============================================================================
+
+// /** TLC5947 SPI Clock - GPIO44 (J3 pin 16) ✅ */
+// #define WAVEX_LED_GPIO_SCLK     WAVEX_ESP_LED_SCLK
+
+// /** TLC5947 SPI MOSI - GPIO45 (J3 pin 17) ✅ */
+// #define WAVEX_LED_GPIO_MOSI     WAVEX_ESP_LED_MOSI
+
+// /** TLC5947 SPI Chip Select - GPIO46 (J3 pin 18) ✅ */
+// #define WAVEX_LED_GPIO_CS       WAVEX_ESP_LED_CS
+
+// /** TLC5947 Blank - GPIO47 (J3 pin 19) ✅ */
+// #define WAVEX_LED_GPIO_BLANK    WAVEX_ESP_LED_BLANK
+
+// /** TLC5947 Latch - GPIO48 (J3 pin 20) ✅ */
+// #define WAVEX_LED_GPIO_LATCH    WAVEX_ESP_LED_LATCH
+
+// /** SPI host used for LED driver */
+// #define WAVEX_LED_SPI_HOST      SPI2_HOST
 
 // =============================================================================
 // Display Configuration Constants
@@ -342,6 +409,19 @@ extern "C" {
 #define WAVEX_BTN_DEBOUNCE_MS       50
 
 // =============================================================================
+// Encoder Configuration Constants - ✅ VERIFIED VALID
+// =============================================================================
+
+/** Encoder resolution (counts per detent) */
+#define WAVEX_ENCODER_RESOLUTION     4
+
+/** Encoder debounce time in milliseconds */
+#define WAVEX_ENCODER_DEBOUNCE_MS   10
+
+/** Encoder filter value for noise reduction */
+#define WAVEX_ENCODER_FILTER_VALUE   100
+
+// =============================================================================
 // LED Driver Configuration Constants - 🆕 NEW
 // =============================================================================
 
@@ -376,6 +456,13 @@ extern "C" {
 
 /** Board compatibility identifier */
 #define WAVEX_TARGET_BOARD_ESP32_S3_DEVKITC_1   1
+
+/** Current configuration summary */
+#define WAVEX_CONFIG_DISPLAY_VSPI       1    // Display on VSPI (SPI3)
+#define WAVEX_CONFIG_INTER_MCU_HSPI     1    // Inter-MCU on HSPI (SPI2)
+#define WAVEX_CONFIG_TOUCH_I2C          1    // Touch on I2C with interrupt
+#define WAVEX_CONFIG_ENCODER_PCNT       1    // Encoder on PCNT
+#define WAVEX_CONFIG_SD_CARD_DISABLED   1    // No SD card on ESP32
 
 #ifdef __cplusplus
 }

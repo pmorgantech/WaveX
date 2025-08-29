@@ -15,7 +15,7 @@ extern daisy::DaisySeed hw;
 void ProcessUARTMessage(const uint8_t* buffer, size_t length)
 {
     if (!ProtocolHandler::ValidatePacket(buffer, length)) {
-        #if WAVEX_UART_DEBUG_LOG
+        #if WAVEX_MCU_LINK_DEBUG
         hw.PrintLine("UART RX: invalid packet (len=%u)", (unsigned)length);
         #endif
         return;
@@ -25,7 +25,7 @@ void ProcessUARTMessage(const uint8_t* buffer, size_t length)
     const PacketHeader* hdr = reinterpret_cast<const PacketHeader*>(buffer);
     const uint8_t payload_len = hdr ? hdr->length : 0;
     WaveX::Metrics::IncrementUartRxMessageCount();
-    #if WAVEX_UART_DEBUG_LOG
+    #if WAVEX_MCU_LINK_DEBUG
     hw.PrintLine("UART RX: type=0x%02X len=%u (msg#=%lu)", (unsigned)msg_type, (unsigned)payload_len, (unsigned long)WaveX::Metrics::GetUartRxMessageCount());
     #endif
 
@@ -109,7 +109,7 @@ void ProcessUARTMessage(const uint8_t* buffer, size_t length)
         case MSG_DATA_REQUEST: {
             DataRequestMessage dr{};
             if(ProtocolHandler::ParseDataRequest(buffer, dr)) {
-                #if WAVEX_UART_DEBUG_LOG
+                #if WAVEX_MCU_LINK_DEBUG
                 hw.PrintLine("RX DATA_REQUEST: type=%u", (unsigned)dr.request_type);
                 #endif
                 WaveX::Comm::QueuedMessage msg;
@@ -132,13 +132,13 @@ void ProcessUARTMessage(const uint8_t* buffer, size_t length)
             break;
         }
         case MSG_SYNC: {
-            #if WAVEX_UART_DEBUG_LOG
+            #if WAVEX_MCU_LINK_DEBUG
             hw.PrintLine("RX SYNC");
             #endif
             break;
         }
         default:
-            #if WAVEX_UART_DEBUG_LOG
+            #if WAVEX_MCU_LINK_DEBUG
             hw.PrintLine("RX UNKNOWN: type=0x%02X len=%u", (unsigned)msg_type, (unsigned)payload_len);
             #endif
             break;

@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
 
-# Set the project name
-project(wavex-daisy)
+# Set project name and version
+project(wavex-daisy VERSION 0.1.0)
 
 # Set the project name and sources
 set(FIRMWARE_NAME wavex-daisy)
@@ -10,6 +10,8 @@ set(FIRMWARE_SOURCES
     src/config.hpp
     src/comm/inter_uart.cpp
     src/comm/inter_spi.cpp
+    src/comm/inter_spi_hal.cpp
+    src/comm/spi_hal_interrupts.cpp
     src/comm/message_router.cpp
     src/audio/audio_adapter.cpp
     src/audio/audio_engine.cpp
@@ -46,6 +48,13 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR}/src/storage)
 
 # Add DaisySP headers to include path
 include_directories(${CMAKE_CURRENT_LIST_DIR}/libs/DaisySP/Source)
+
+# Add definitions for the project
+add_compile_definitions(
+    DAISY_PLATFORM
+    HSE_VALUE=16000000
+    ARM_MATH_CM7
+)
 
 # Include DaisyProject.cmake which handles all the STM32 configuration
 include(DaisyProject) 

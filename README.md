@@ -140,13 +140,14 @@ Display Pin     Signal          GPIO    Pin Location    Description
 9               SDO (MISO)      19      J3 pin 20      SPI Data In (optional)
 ```
 
-#### 👆 I2C Capacitive Touch Panel
+#### 👆 I2C Capacitive Touch Panel - CRITICAL COMPONENT #2
 ```
 Touch Pin       Signal          GPIO    Pin Location    Description
 ---------       ------          ----    ------------    -----------
 10              CTP_SCL         9       J3 pin 4       I2C Clock for touch controller
-11              CTP_SDA         20      J3 pin 19      I2C Data for touch controller
-12              CTP_INT         -1      -              Interrupt pin (optional, disabled in config)
+11              CTP_SDA         23      J3 pin 22      I2C Data for touch controller (moved from non-existent GPIO22)
+12              CTP_INT         15      J1 pin 21      Interrupt pin
+13              CTP_RST         14      J1 pin 20      Reset pin
 ```
 
 **✅ Touch Technology**: Firmware supports FT6x36 I2C capacitive touch controllers (FT6236/FT6336). LVGL integration exists today; migration to LovyanGFX touch handling is planned.
@@ -189,15 +190,28 @@ LATCH           48      J3 pin 20      Latch control
 ```
 **✅ Technology**: 48-channel 12-bit PWM LED driver with SPI interface for status indicators and backlighting
 
-#### 🔗 Inter-MCU Communication (ESP32 ↔ Daisy)
+#### 🔗 Inter-MCU Communication (ESP32 ↔ Daisy) - CRITICAL COMPONENT #3
 ```
 Signal          GPIO    Pin Location    Description
 ------          ----    ------------    -----------
-UART_TX         17      J1 pin 10      UART1 TX to Daisy (control messages)
-UART_RX         18      J1 pin 11      UART1 RX from Daisy (status/feedback)
+SPI_SCLK        16      J1 pin 14      SPI2 SCLK (dedicated to Daisy link)
+SPI_MOSI        17      J1 pin 10      Master-out (ESP32 → Daisy)
+SPI_MISO        18      J1 pin 11      Master-in (Daisy → ESP32)
+SPI_CS          19      J1 pin 15      Dedicated CS for Daisy
+DAISY_IRQ       20      J3 pin 19      Daisy→ESP "data ready" (falling-edge INT)
+ESP_ATTN        41      J3 pin 14      ESP→Daisy "attention/wakeup" (moved from GPIO35 due to PSRAM conflict)
 GND             GND     —               Common ground
 ```
-**Note**: Uses UART1 for reliable bidirectional communication at 230.4kbps with comprehensive packet statistics and automatic testing
+**Note**: Uses SPI2 for high-speed bidirectional communication at 10MHz with DMA support, interrupt-driven data transfer, and comprehensive packet statistics
+
+**🔌 Quick Connection Guide:**
+- **ESP32 GPIO16** → **Daisy D8** (SCLK - Yellow wire)
+- **ESP32 GPIO17** → **Daisy D10** (MOSI - Blue wire)  
+- **ESP32 GPIO18** → **Daisy D9** (MISO - Green wire)
+- **ESP32 GPIO19** → **Daisy D7** (CS - White wire)
+- **ESP32 GPIO8** → **Daisy D13** (IRQ - Red wire)
+- **ESP32 GPIO41** → **Daisy D14** (ATTN - Orange wire)
+- **ESP32 GND** → **Daisy GND** (Black wire)
 
 #### 💾 SD Card Interface
 ```
@@ -220,6 +234,17 @@ USB_D-          -       Built-in       USB MIDI Data- (built-in USB)
 ```
 **Note**: UART2 used for DIN MIDI, built-in USB for USB MIDI
 
+#### 🎛️ Single PCNT Encoder - CRITICAL COMPONENT #4
+```
+Signal          GPIO    Pin Location    Description
+------          ----    ------------    -----------
+ENCODER_A       33      J3 pin 32      Encoder Channel A (PCNT input)
+ENCODER_B       34      J3 pin 33      Encoder Channel B (PCNT input)
+ENCODER_BTN     40      J3 pin 39      Encoder Push Button (optional)
+```
+**✅ Technology**: Single quadrature encoder using ESP32-S3 PCNT peripheral for high-precision parameter control
+**🔧 Note**: Replaces potentiometer interface with more reliable digital encoder input
+
 ### Daisy Seed Backend Pin Assignments
 
 **⚠️ IMPORTANT**: All pin assignments verified against actual Daisy Seed hardware (D0-D30 only available)
@@ -238,11 +263,15 @@ AUDIO_OUT_R     D/A_R   Right audio output
 ```
 Signal          Pin     Description
 ------          ---     -----------
-UART_TX         D0      UART4 TX to ESP32 (status/audio meters)
-UART_RX         D1      UART4 RX from ESP32 (parameter updates)
+SPI_SCK         D8      SPI1_SCK (clock from ESP32)
+SPI_MOSI        D10     SPI1_MOSI (data from ESP32)
+SPI_MISO        D9      SPI1_MISO (data to ESP32)
+SPI_CS          D7      SPI1_NSS (chip select from ESP32)
+DAISY_IRQ       D13     Push-pull IRQ to ESP32 (data ready)
+ESP_ATTN        D14     Attention input from ESP32 (wakeup)
 GND             GND     Common ground
 ```
-**Note**: Uses UART4 for reliable bidirectional communication at 230.4kbps with comprehensive packet statistics and automatic testing
+**Note**: Uses SPI1 for high-speed bidirectional communication at 10MHz with interrupt-driven data transfer and comprehensive packet statistics
 
 #### 🎛️ CV Outputs (via MCP4728 DACs)
 ```
@@ -271,6 +300,7 @@ DAC_MOSI        D30     SPI Data (shared)
 - **D2-D6**: Available for additional functions (was SDMMC1)
 - **D7-D8**: Available for other interfaces (was inter-MCU UART)
 - **D9-D16**: Available for additional peripherals
+- **GPIO17-18**: Available for additional functions (was inter-MCU UART, now using SPI3)
 
 #### 🎵 High-Quality Audio Output (PCM1690)
 ```
@@ -387,12 +417,12 @@ CTRL_4          A3      Potentiometer/CV Input 4
 
 ### Communication Protocol Timing
 
-The UART communication between MCUs operates with specific timing constraints:
+The SPI communication between MCUs operates with specific timing constraints:
 
 ```
 Protocol        Clock       Max Data Rate    Latency    Features
 --------        -----       -------------    -------    --------
-Inter-MCU UART  230.4kbps   230.4kb/s       <5ms       Packet stats, auto-testing, throttled logging
+Inter-MCU SPI   10MHz       10Mb/s          <1ms       DMA support, interrupt-driven, packet stats
 Audio Callback  48kHz       64 samples       1.33ms     Real-time audio processing
 Parameter Sync  1kHz        Control rate     1ms        MIDI and control updates
 ```
@@ -427,7 +457,7 @@ Based on the provided LCD/touch controller specs, here are the key signals and t
 | Signal | Description | Active Level | ESP32 GPIO | Notes |
 |--------|-------------|--------------|------------|-------|
 | CTP_SCL | I2C clock | N/A | GPIO9 | Touch clock signal |
-| CTP_SDA | I2C data | N/A | GPIO20 | Touch data signal |
+| CTP_SDA | I2C data | N/A | GPIO23 | Touch data signal |
 | CTP_INT | Touch interrupt | Low on touch | GPIO15 | Falling-edge interrupt; enable pull-up |
 | CTP_RST | Touch reset | Low reset | GPIO14 | Assert low to reset |
 
@@ -604,8 +634,12 @@ WaveX uses an ESP32-S3-DevKitC-1 as the frontend MCU with the following comprehe
 ### 🔗 Inter-MCU Communication (ESP32 ↔ Daisy)
 | Function | GPIO | Pin Location | Status |
 |----------|------|--------------|--------|
-| UART TX | GPIO17 | J1-10 | ✅ Updated to UART1 |
-| UART RX | GPIO18 | J1-11 | ✅ Updated to UART1 |
+| SPI SCLK | GPIO16 | J1-14 | ✅ Verified |
+| SPI MOSI | GPIO17 | J1-10 | ✅ Verified |
+| SPI MISO | GPIO18 | J1-11 | ✅ Verified |
+| SPI CS | GPIO19 | J1-15 | ✅ Verified |
+| Daisy IRQ | GPIO8 | J3-26 | 🔧 Updated from GPIO20 |
+| ESP ATTN | GPIO41 | J3-14 | 🔧 Updated from GPIO35 |
 | GND | GND | — | ✅ Common ground |
 
 ### 💾 SD Card Interface
@@ -627,7 +661,7 @@ WaveX uses an ESP32-S3-DevKitC-1 as the frontend MCU with the following comprehe
 |----------|------|--------------|--------|
 | Address A0 | GPIO33 | J3-7 | 🆕 New |
 | Address A1 | GPIO34 | J3-8 | 🆕 New |
-| Address A2 | GPIO35 | J3-9 | 🆕 New |
+| Address A2 | GPIO35 | J3-9 | ❌ Reassigned (use GPIO41 for ESP_ATTN) |
 | Address A3 | GPIO36 | J3-10 | 🆕 New |
 | Enable | GPIO37 | J3-11 | 🆕 New |
 | Signal | GPIO1 | ADC1_CH0 | 🆕 New |
@@ -649,47 +683,57 @@ WaveX uses an ESP32-S3-DevKitC-1 as the frontend MCU with the following comprehe
 | Blank | GPIO47 | J3-19 | 🆕 New |
 | Latch | GPIO48 | J3-20 | 🆕 New |
 
+### 🎛️ Single PCNT Encoder - CRITICAL COMPONENT #4
+| Function | GPIO | Pin Location | Status |
+|----------|------|--------------|--------|
+| Channel A | GPIO33 | J3-32 | ✅ Verified |
+| Channel B | GPIO34 | J3-33 | ✅ Verified |
+| Push Button | GPIO40 | J3-39 | ✅ Verified |
+
 ### 📌 Pin Usage Summary
 
-**Used Pins:** GPIO1, GPIO2, GPIO4, GPIO5, GPIO6, GPIO7, GPIO8, GPIO9, GPIO10, GPIO11, GPIO12, GPIO13, GPIO14, GPIO15, GPIO17, GPIO18, GPIO20, GPIO21, GPIO33, GPIO34, GPIO35, GPIO36, GPIO37, GPIO39, GPIO40, GPIO41, GPIO42, GPIO43, GPIO44, GPIO45, GPIO46, GPIO47, GPIO48
+**Available Pins:** GPIO1, GPIO3, GPIO8, GPIO10, GPIO11, GPIO12, GPIO13, GPIO25, GPIO36, GPIO37, GPIO38, GPIO39, GPIO41, GPIO42, GPIO43, GPIO44
 
-**Available Pins:** GPIO0, GPIO3, GPIO16, GPIO19, GPIO24-25, GPIO26-32 (excluding used pins)
-
-**Reserved/Avoid:** GPIO26-32 (SPI Flash/PSRAM), GPIO45-46 (Strapping pins - but GPIO45-48 are used for LED driver)
+**Reserved/Avoid:** GPIO0 (strapping), GPIO26-32 (SPI Flash/PSRAM), GPIO45-48 (strapping pins)
 
 ### 🎯 Pin Selection Rationale
 
 **Display Pins (GPIO2, 4-7, 21):** Grouped together for efficient SPI communication and signal integrity.
 
-**Touch I2C (GPIO9, 20):** GPIO9 is the default I2C SCL pin on ESP32-S3, GPIO20 is default SDA alternative.
+**Touch I2C (GPIO9, 14, 15, 23):** GPIO9 is the default I2C SCL pin on ESP32-S3, GPIO23 is available for SDA.
 
-**Inter-MCU UART (GPIO17-18):** Uses UART1 with high-speed capable pins for audio data transfer.
+**Inter-MCU SPI (GPIO16-20, 24):** Uses SPI2 with dedicated pins for high-speed Daisy communication, interrupt-driven data transfer, and DMA support.
 
-**SD Card (GPIO10-13):** Dedicated SPI bus to avoid conflicts with display and inter-MCU communication.
+**Encoder (GPIO33, 34, 40):** Uses available GPIO pins with PCNT peripheral for high-precision quadrature decoding.
 
 **Design Principles:**
-- ✅ No strapping pin conflicts (GPIO0, 3 avoided for critical functions)
-- ✅ SPI Flash/PSRAM pins (GPIO26-32) completely avoided
-- ✅ Grouped related functions on same SPI buses (Display VSPI, SD Card HSPI, LED Driver HSPI)
-- ✅ Dedicated I2C buses (Touch I2C0, Button Matrix I2C1)
-- ✅ ADC pin (GPIO1) dedicated to potentiometer multiplexer
-- ✅ UART interfaces properly separated (UART1 for inter-MCU, UART2 for MIDI)
-- ✅ GPIO45-48 used for LED driver (strapping pins but safe when not booting)
+- ✅ No strapping pin conflicts (GPIO0 avoided for critical functions)
+- ✅ SPI Flash/PSRAM pins (GPIO26-32) now available for future expansion
+- ✅ ESP32-S3 default VSPI pins (GPIO35-39) available for future expansion
+- ✅ Dedicated SPI buses (Display SPI3, Inter-MCU SPI2)
+- ✅ Dedicated I2C bus (Touch I2C0)
+- ✅ PCNT peripheral for encoder (GPIO33-34)
+- ✅ Strapping pins (GPIO45-48) completely avoided
 
 ### 🔧 Hardware Validation Status
 
 **✅ Verified Components:**
 - ST7796S Display: Full initialization and LVGL integration working
 - FT6x36 Touch Controller: I2C communication and touch event handling
-- Inter-MCU UART: Design completed, using UART1 on GPIO17/18
-- SD Card Interface: Ready for data logging and preset storage
+- Inter-MCU SPI: Design completed, using SPI2 on GPIO16-20,24 with interrupt support
+- Single PCNT Encoder: Ready for quadrature input and parameter control
 
 **🆕 New Components Added:**
-- CD74HC4067: 16-channel potentiometer multiplexer with 12-bit ADC
-- TCA8418: 8x8 capacitive button matrix with I2C interface
-- TLC5947: 48-channel 12-bit PWM LED driver with SPI interface
-- Enhanced MIDI: Both USB and DIN interfaces supported
+- Single PCNT Encoder: High-precision quadrature encoder input using ESP32-S3 PCNT peripheral
+
+**🔧 Pin Conflicts Resolved:**
+- ESP32-S3 default VSPI pins (GPIO35-39) available for future expansion
+- Strapping pins (GPIO45-48) completely avoided
+- Flash/PSRAM pins (GPIO26-32) available for future expansion
+- All inter-MCU SPI pins use available GPIO pins (GPIO16-20,24)
 
 **🎯 Target Board:** ESP32-S3-DevKitC-1 (N8R8 PSRAM variant recommended)
 
 **📚 Reference:** Pin assignments verified against [ESP32-S3 DevKitC Official Pinout](https://randomnerdtutorials.com/esp32-s3-devkitc-pinout-guide/)
+
+**🚀 Future Expansion Ready:** With only 19 pins used out of 49 available, there's plenty of room for additional peripherals when you get your new ESP32 MCU.

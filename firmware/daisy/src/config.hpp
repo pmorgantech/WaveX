@@ -15,14 +15,15 @@
 #define WAVEX_UART_RX_IRQ_MODE 1
 #endif
 
-// Set to 1 to enable verbose UART debug logging (TX/RX message logs, etc.)
-#ifndef WAVEX_UART_DEBUG_LOG
-#define WAVEX_UART_DEBUG_LOG 0
+// Set to 1 to enable the audio engine, 0 to disable
+#ifndef WAVEX_AUDIO_ENGINE_ENABLED
+#define WAVEX_AUDIO_ENGINE_ENABLED 1
 #endif
 
-// Set to 1 to enable audio engine (DSP, audio callback, codec); 0 to disable for storage-only testing
-#ifndef WAVEX_AUDIO_ENGINE_ENABLED
-#define WAVEX_AUDIO_ENGINE_ENABLED 0
-#endif
+// The WAVEX_UART_DEBUG_LOG has been replaced by the protocol-agnostic
+// WAVEX_MCU_LINK_DEBUG in shared/config/link_config.h
+// #ifndef WAVEX_UART_DEBUG_LOG
+// #define WAVEX_UART_DEBUG_LOG 0
+// #endif
 
 

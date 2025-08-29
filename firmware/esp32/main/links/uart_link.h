@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../comm/link_manager.h"
+#include "../comm/shared_packet_handler.h"
 #include <stdint.h>
 #include <stddef.h>
 
@@ -49,8 +50,10 @@ private:
     #else
     static const int UART_NUM = 1;
     #endif
-    static const int TX_PIN = 17;
-    static const int RX_PIN = 18;
+    // FALLBACK PINS ONLY - UART link should not be used when SPI is enabled
+    // These pins are chosen to avoid conflicts with SPI inter-MCU communication
+    static const int TX_PIN = 44;  // Changed from 17 to avoid SPI conflict
+    static const int RX_PIN = 45;  // Changed from 18 to avoid SPI conflict
     static const int BAUD_RATE = 460800;
     static const int BUFFER_SIZE = 512;
     static const int TX_QUEUE_SIZE = 16;

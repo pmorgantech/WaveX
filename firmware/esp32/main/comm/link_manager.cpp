@@ -1,12 +1,11 @@
 #include "link_manager.h"
 #include "../links/uart_link.h"
-#include "../links/spi_link.h"
+#include "../links/spi_link_wrapper.h"
 #include "../../shared/config/link_config.h"
 
 #ifdef ESP_PLATFORM
 #include "esp_log.h"
 #include "esp_err.h"
-static const char* TAG = "LinkManager";
 #else
 #include <stdio.h>
 #define ESP_LOGI(tag, fmt, ...) printf("[%s] " fmt "\n", tag, ##__VA_ARGS__)
@@ -14,8 +13,8 @@ static const char* TAG = "LinkManager";
 #define ESP_ERR_INVALID_STATE -1
 #define ESP_ERR_NO_MEM -2
 #define esp_err_to_name(err) "Unknown Error"
-static const char* TAG = "LinkManager";
 #endif
+static const char* TAG = "LinkManager";
 
 LinkManager& LinkManager::getInstance()
 {
@@ -169,16 +168,42 @@ ILink* LinkManager::get_current_link() const
     return m_current_link;
 }
 
+void LinkManager::process_received_packets()
+{
+    if (!m_started || !m_current_link) {
+        return;
+    }
+    
+    // For SPI links, we need to call the specific packet processing method
+    if (is_spi_link()) {
+        SpiLink* spi_link = static_cast<SpiLink*>(m_current_link);
+        if (spi_link) {
+            spi_link->process_received_packets();
+        }
+    }
+    // For UART links, packet processing is handled by the UART link itself
+}
+
 esp_err_t LinkManager::init_spi_link()
 {
     ESP_LOGI(TAG, "Initializing SPI link...");
     
-    // For now, we'll use the existing SPI link
-    // In the future, we could create a SpiLink class that implements ILink
-    ESP_LOGI(TAG, "SPI link initialization delegated to existing spi_link module");
+    SpiLink* spi_link = new SpiLink();
+    if (!spi_link) {
+        ESP_LOGE(TAG, "Failed to create SPI link");
+        return ESP_ERR_NO_MEM;
+    }
     
-    // Note: We're not creating a new SpiLink instance yet
-    // This is a placeholder for future SPI link refactoring
+    esp_err_t ret = spi_link->init();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "SPI link init failed: %s", esp_err_to_name(ret));
+        delete spi_link;
+        return ret;
+    }
+    
+    m_current_link = spi_link;
+    ESP_LOGI(TAG, "SPI link initialized successfully");
+    
     return ESP_OK;
 }
 

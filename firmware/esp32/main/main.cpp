@@ -19,6 +19,11 @@ typedef int esp_err_t;
 #include "inter_mcu.h"
 #include "ui_lgfx/ui_task.h"
 
+// Bring in the SPI link API
+#if WAVEX_SPI_LINK_ENABLED
+#include "links/spi_link.h"
+#endif
+
 static const char *TAG = "WaveX-ESP32";
 
 extern "C" void app_main(void)
@@ -54,6 +59,14 @@ extern "C" void app_main(void)
             ESP_LOGI(TAG, "System running - Free heap: %" PRIu32 " bytes", esp_get_free_heap_size());
             last_heap_log = current_time;
         }
+
+        #if WAVEX_SPI_LINK_ENABLED
+        // Note: SPI packet processing is now handled automatically by the link manager
+        // and packet processor in the inter-MCU system. No manual processing needed here.
+        
+        // The link manager automatically processes packets in the background
+        // No manual intervention needed
+        #endif
         
         vTaskDelay(pdMS_TO_TICKS(1000));  // 1 second loop
     }

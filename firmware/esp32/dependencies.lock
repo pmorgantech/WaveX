@@ -13,6 +13,6 @@ dependencies:
     version: 5438181440c71cf30bbdc347b0b1597ae3ebf77d
 direct_dependencies:
 - lovyanGFX
-manifest_hash: 78df84d8e056cbb8022c5863e533212f6d32dfc4c2b8a270b8b8850ff3fc86b9
+manifest_hash: b5c3964d74afcd7b2be56106475b19f0b5e0cd35f1c793d59b0893407a9b79b7
 target: esp32s3
 version: 2.0.0

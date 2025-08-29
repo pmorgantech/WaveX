@@ -57,17 +57,23 @@ esp_err_t inter_mcu_start(void) {
         return ret;
     }
     
-    // Start the RX and TX tasks
-    ret = s_rx_task.start();
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "RX task start failed: %s", esp_err_to_name(ret));
-        return ret;
-    }
-    
-    ret = s_tx_task.start();
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "TX task start failed: %s", esp_err_to_name(ret));
-        return ret;
+    // Only start UART-based RX/TX tasks if using UART link
+    if (s_link_manager.is_uart_link()) {
+        ESP_LOGI(TAG, "Starting UART-based RX/TX tasks...");
+        
+        ret = s_rx_task.start();
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "RX task start failed: %s", esp_err_to_name(ret));
+            return ret;
+        }
+        
+        ret = s_tx_task.start();
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "TX task start failed: %s", esp_err_to_name(ret));
+            return ret;
+        }
+    } else {
+        ESP_LOGI(TAG, "Using SPI link - RX/TX tasks not needed, packet processing handled by link manager");
     }
     
     ESP_LOGI(TAG, "Inter-MCU communication started successfully");
@@ -181,6 +187,11 @@ void inter_mcu_get_tx_stats(wavex_tx_stats_t* out) {
     s_stats.get_tx_stats(out);
 }
 
+void inter_mcu_update_backend_heartbeat(uint32_t uptime_ms, uint32_t rx_total, uint32_t loop_counter) {
+    s_stats.update_backend_heartbeat(uptime_ms, rx_total, loop_counter);
+}
+void inter_mcu_process_packet_data(const uint8_t* data, size_t length) { (void)data; (void)length; }
+
 #else // !ESP_PLATFORM (host/lint build stubs)
 
 // Minimal stubs for non-ESP builds so linters and host builds pass
@@ -205,5 +216,7 @@ uint32_t inter_mcu_get_total_packet_count(void) { return 0; }
 int inter_mcu_format_packet_stats(char* buffer, size_t buffer_size) { if (buffer && buffer_size > 0) buffer[0] = '\0'; return 0; }
 void inter_mcu_send_test_messages(void) {}
 void inter_mcu_get_tx_stats(wavex_tx_stats_t* out) { if (out) memset(out, 0, sizeof(*out)); }
+void inter_mcu_update_backend_heartbeat(uint32_t uptime_ms, uint32_t rx_total, uint32_t loop_counter) { (void)uptime_ms; (void)rx_total; (void)loop_counter; }
+void inter_mcu_process_packet_data(const uint8_t* data, size_t length) { (void)data; (void)length; }
 
 #endif // ESP_PLATFORM

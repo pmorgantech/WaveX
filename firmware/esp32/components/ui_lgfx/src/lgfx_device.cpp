@@ -32,6 +32,7 @@ public:
       cfg.pin_dc   = WAVEX_LCD_GPIO_DC;
       _bus.config(cfg);
       _panel.setBus(&_bus);
+      ESP_LOGI("LGFX_Device", "Display SPI config: host=%d, sclk=%d, mosi=%d, dc=%d", cfg.spi_host, cfg.pin_sclk, cfg.pin_mosi, cfg.pin_dc);
     }
     {
       auto cfg = _panel.config();
@@ -52,6 +53,7 @@ public:
       // If colors appear swapped (blue -> red), set this to false
       cfg.rgb_order = false; // BGR=false, RGB=true depending on panel; try false first
       _panel.config(cfg);
+      ESP_LOGI("LGFX_Device", "Display Panel config: cs=%d, rst=%d", cfg.pin_cs, cfg.pin_rst);
     }
     {
       auto cfg = _light.config();
@@ -61,6 +63,7 @@ public:
       cfg.pwm_channel = 0;
       _light.config(cfg);
       _panel.setLight(&_light);
+      ESP_LOGI("LGFX_Device", "Display Light config: bl=%d", cfg.pin_bl);
     }
     setPanel(&_panel);
     {
@@ -82,6 +85,7 @@ public:
       tcfg.freq = 400000;
       _touch.config(tcfg);
       _panel.setTouch(&_touch);
+      ESP_LOGI("LGFX_Device", "Touch config: I2C port=%d, addr=0x%02X, SDA=%d, SCL=%d, INT=%d, RST=%d", tcfg.i2c_port, tcfg.i2c_addr, tcfg.pin_sda, tcfg.pin_scl, tcfg.pin_int, tcfg.pin_rst);
     }
   }
 };
@@ -99,7 +103,20 @@ extern "C" lgfx::LGFX_Device* lgfxInternal() {
 extern "C" void lgfx_device_init(void) {
 #ifdef WAVEX_HAVE_LGFX
   ESP_LOGI(LGFX_TAG, "LGFX init begin");
-  s_lgfx.init();
+  if (s_lgfx.init()) {
+    ESP_LOGI(LGFX_TAG, "LGFX init successful.");
+  } else {
+    ESP_LOGE(LGFX_TAG, "LGFX init failed!");
+    return;
+  }
+
+  // Check if touch is available
+  if (s_lgfx.touch()) {
+    ESP_LOGI(LGFX_TAG, "Touch controller detected and initialized.");
+  } else {
+    ESP_LOGW(LGFX_TAG, "Touch controller NOT detected!");
+  }
+
   // Rotate to correct on-hardware orientation (180° from previous)
   s_lgfx.setRotation(3);
   s_lgfx.setBrightness(179); // Default to 70% instead of 100%
@@ -135,6 +152,9 @@ extern "C" bool lgfx_device_get_touch(unsigned short* x, unsigned short* y) {
 #ifdef WAVEX_HAVE_LGFX
   if (!x || !y) return false;
   bool touched = s_lgfx.getTouch(x, y);
+  if (touched) {
+    ESP_LOGI(LGFX_TAG, "Touch event: x=%u, y=%u", *x, *y);
+  }
   if (!touched) return false;
   // Clamp to display bounds to avoid wrap-around when type-converted
   int32_t xi = static_cast<int32_t>(*x);

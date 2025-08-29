@@ -1,6 +1,7 @@
 #include "uart_link.h"
 #include "../comm/statistics.h"
 #include "../../shared/spi_protocol/protocol.h"
+#include "../../shared/config/link_config.h"
 #include <string.h>
 
 #ifdef ESP_PLATFORM
@@ -142,7 +143,7 @@ void UartLink::send_test_messages()
     uint8_t packet[64];
     
     // 1. SYNC message
-    size_t len = create_generic_packet(packet, sizeof(packet), WaveX::Protocol::MSG_SYNC, NULL, 0);
+    size_t len = SharedPacketHandler::create_generic_packet(packet, sizeof(packet), WaveX::Protocol::MSG_SYNC, NULL, 0);
     if (len > 0) {
         #ifdef ESP_PLATFORM
         uart_write_bytes(UART_NUM, packet, len);
@@ -151,7 +152,7 @@ void UartLink::send_test_messages()
     }
     
     // 2. Control change message
-    len = create_control_change_packet(packet, sizeof(packet), 0x02, 0x00, 0x64);
+    len = SharedPacketHandler::create_control_change_packet(packet, sizeof(packet), 0x02, 0x00, 0x64);
     if (len > 0) {
         #ifdef ESP_PLATFORM
         uart_write_bytes(UART_NUM, packet, len);
@@ -160,7 +161,7 @@ void UartLink::send_test_messages()
     }
     
     // 3. Note on message
-    len = create_note_on_packet(packet, sizeof(packet), 0x40, 0x60, 0x00);
+    len = SharedPacketHandler::create_note_on_packet(packet, sizeof(packet), 0x40, 0x60, 0x00);
     if (len > 0) {
         #ifdef ESP_PLATFORM
         uart_write_bytes(UART_NUM, packet, len);
@@ -169,7 +170,7 @@ void UartLink::send_test_messages()
     }
     
     // 4. Status request
-    len = create_generic_packet(packet, sizeof(packet), WaveX::Protocol::MSG_STATUS_REQUEST, NULL, 0);
+    len = SharedPacketHandler::create_generic_packet(packet, sizeof(packet), WaveX::Protocol::MSG_STATUS_REQUEST, NULL, 0);
     if (len > 0) {
         #ifdef ESP_PLATFORM
         uart_write_bytes(UART_NUM, packet, len);
@@ -339,44 +340,35 @@ esp_err_t UartLink::queue_message(const uint8_t* data, size_t length)
     return ESP_OK;
 }
 
-// Protocol helper methods
+// Protocol helper methods - now using SharedPacketHandler
 size_t UartLink::create_control_change_packet(uint8_t* buffer, size_t buffer_size, uint8_t parameter, uint8_t channel, uint16_t value)
 {
-    return WaveX::Protocol::ProtocolHandler::CreateControlChangePacket(buffer, buffer_size, parameter, channel, value);
+    return SharedPacketHandler::create_control_change_packet(buffer, buffer_size, parameter, channel, value);
 }
 
 size_t UartLink::create_note_on_packet(uint8_t* buffer, size_t buffer_size, uint8_t note, uint8_t velocity, uint8_t channel)
 {
-    return WaveX::Protocol::ProtocolHandler::CreateNoteOnPacket(buffer, buffer_size, note, velocity, channel);
+    return SharedPacketHandler::create_note_on_packet(buffer, buffer_size, note, velocity, channel);
 }
 
 size_t UartLink::create_note_off_packet(uint8_t* buffer, size_t buffer_size, uint8_t note, uint8_t channel)
 {
-    return WaveX::Protocol::ProtocolHandler::CreateNoteOffPacket(buffer, buffer_size, note, channel);
+    return SharedPacketHandler::create_note_off_packet(buffer, buffer_size, note, channel);
 }
 
 size_t UartLink::create_sample_ctrl_packet(uint8_t* buffer, size_t buffer_size, uint8_t slot, uint8_t cmd, float rate)
 {
-    WaveX::Protocol::SampleCtrlMessage msg;
-    msg.slot = slot;
-    msg.cmd = cmd;
-    msg.rate = rate;
-    return WaveX::Protocol::ProtocolHandler::CreateSampleCtrlPacket(buffer, buffer_size, msg);
+    return SharedPacketHandler::create_sample_ctrl_packet(buffer, buffer_size, slot, cmd, rate);
 }
 
 size_t UartLink::create_preview_req_packet(uint8_t* buffer, size_t buffer_size, uint8_t slot, uint32_t start, uint32_t end, uint16_t decim)
 {
-    WaveX::Protocol::PreviewReqMessage msg;
-    msg.slot = slot;
-    msg.start = start;
-    msg.end = end;
-    msg.decim = decim;
-    return WaveX::Protocol::ProtocolHandler::CreatePreviewReqPacket(buffer, buffer_size, msg);
+    return SharedPacketHandler::create_preview_req_packet(buffer, buffer_size, slot, start, end, decim);
 }
 
 size_t UartLink::create_generic_packet(uint8_t* buffer, size_t buffer_size, uint8_t msg_type, const void* payload, size_t payload_size)
 {
-    return WaveX::Protocol::ProtocolHandler::CreateGenericPacket(buffer, buffer_size, msg_type, payload, payload_size);
+    return SharedPacketHandler::create_generic_packet(buffer, buffer_size, msg_type, payload, payload_size);
 }
 
 // Task functions

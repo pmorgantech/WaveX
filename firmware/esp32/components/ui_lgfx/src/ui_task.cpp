@@ -73,6 +73,9 @@ static void ui_task_func(void *arg) {
         vTaskDelay(pdMS_TO_TICKS(100)); // Check every 100ms for responsiveness
     }
     #else
+    // If LGFX init is disabled, still bring up inter-MCU link here
+    inter_mcu_start();
+    ESP_LOGI(TAG, "Inter-MCU link started (LGFX init disabled)");
     while (true) { vTaskDelay(pdMS_TO_TICKS(1000)); }
     #endif
 }
