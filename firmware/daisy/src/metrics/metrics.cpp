@@ -1,17 +1,18 @@
 #include "metrics.h"
+#include <cstdint>
 
 namespace WaveX {
 namespace Metrics {
 
-// UART RX message counter (used by message router)
-volatile uint32_t g_uart_rx_msgs = 0;
+// Generic message counter (not UART-specific)
+volatile uint32_t g_message_count = 0;
 
-uint32_t GetUartRxMessageCount() {
-    return g_uart_rx_msgs;
+uint32_t GetMessageCount() {
+    return g_message_count;
 }
 
-void IncrementUartRxMessageCount() {
-    g_uart_rx_msgs++;
+void IncrementMessageCount() {
+    g_message_count++;
 }
 
 } // namespace Metrics

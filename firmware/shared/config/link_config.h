@@ -9,64 +9,40 @@
 #define WAVEX_MCU_LINK_DEBUG 1
 #endif
 
-// Link selection configuration
-// Set to 1 to use SPI link, 0 to use UART link
-#ifndef WAVEX_USE_SPI_LINK
-#define WAVEX_USE_SPI_LINK 1
-#endif
-
-#ifndef WAVEX_USE_UART_LINK
-#define WAVEX_USE_UART_LINK (!WAVEX_USE_SPI_LINK)
-#endif
-
 // SPI link configuration
-#if WAVEX_USE_SPI_LINK
-    #define WAVEX_SPI_LINK_ENABLED 1
-    #define WAVEX_UART_LINK_ENABLED 0
-    
-    // Use pin definitions from centralized pin_config.h
-    #ifdef ESP_PLATFORM
-    #define ESP_VSPI_HOST          WAVEX_ESP_SPI_HOST
-    #define PIN_SPI_SCK            WAVEX_ESP_SPI_SCLK
-    #define PIN_SPI_MOSI           WAVEX_ESP_SPI_MOSI
-    #define PIN_SPI_MISO           WAVEX_ESP_SPI_MISO
-    #define PIN_SPI_CS             WAVEX_ESP_SPI_CS
-    #define PIN_IRQ_DAISY2ESP      WAVEX_ESP_DAISY_IRQ
-    #define PIN_IRQ_ESP2DAISY      WAVEX_ESP_ATTN_OUT
-    
-    #define SPI_CLOCK_SPEED_HZ     WAVEX_ESP_SPI_CLK_HZ
-    #define SPI_QUEUE_SIZE         WAVEX_ESP_SPI_QUEUE_SIZE
-    #define SPI_DMA_CHANNEL        WAVEX_ESP_SPI_DMA_CH
-    #else
-    // Fallback pin definitions for non-ESP builds
-    #define ESP_VSPI_HOST          SPI3_HOST
-    #define PIN_SPI_SCK            WAVEX_DAISY_SPI_SCK
-    #define PIN_SPI_MOSI           WAVEX_DAISY_SPI_MOSI
-    #define PIN_SPI_MISO           WAVEX_DAISY_SPI_MISO
-    #define PIN_SPI_CS             WAVEX_DAISY_SPI_CS
-    #define PIN_IRQ_DAISY2ESP      WAVEX_DAISY_IRQ_OUT
-    #define PIN_IRQ_ESP2DAISY      WAVEX_DAISY_ATTN_IN
-    
-    #define SPI_CLOCK_SPEED_HZ     (10 * 1000 * 1000)  // 10 MHz
-    #define SPI_QUEUE_SIZE         4
-    #define SPI_DMA_CHANNEL        SPI_DMA_CH_AUTO
-    #endif
-#else
-    #define WAVEX_SPI_LINK_ENABLED 0
-    #define WAVEX_UART_LINK_ENABLED 1
-#endif
+#define WAVEX_SPI_LINK_ENABLED 1
 
-// UART link configuration (kept for fallback)
-#if WAVEX_UART_LINK_ENABLED
-    #define INTER_MCU_UART_BAUD_RATE 460800
-    #define INTER_MCU_UART_BUFFER_SIZE 512
+// Use pin definitions from centralized pin_config.h
+#ifdef ESP_PLATFORM
+#define ESP_VSPI_HOST          WAVEX_ESP_SPI_HOST
+#define PIN_SPI_SCK            WAVEX_ESP_SPI_SCLK
+#define PIN_SPI_MOSI           WAVEX_ESP_SPI_MOSI
+#define PIN_SPI_MISO           WAVEX_ESP_SPI_MISO
+#define PIN_SPI_CS             WAVEX_ESP_SPI_CS
+#define PIN_IRQ_DAISY2ESP      WAVEX_ESP_DAISY_IRQ
+#define PIN_IRQ_ESP2DAISY      WAVEX_ESP_ATTN_OUT
+
+#define SPI_CLOCK_SPEED_HZ     WAVEX_ESP_SPI_CLK_HZ
+#define SPI_QUEUE_SIZE         WAVEX_ESP_SPI_QUEUE_SIZE
+#define SPI_DMA_CHANNEL        WAVEX_ESP_SPI_DMA_CH
+#else
+// Fallback pin definitions for non-ESP builds
+#define ESP_VSPI_HOST          SPI3_HOST
+#define PIN_SPI_SCK            WAVEX_DAISY_SPI_SCK
+#define PIN_SPI_MOSI           WAVEX_DAISY_SPI_MISO
+#define PIN_SPI_MISO           WAVEX_DAISY_SPI_MISO
+#define PIN_SPI_CS             WAVEX_DAISY_SPI_CS
+#define PIN_IRQ_DAISY2ESP      WAVEX_DAISY_IRQ_OUT
+#define PIN_IRQ_ESP2DAISY      WAVEX_DAISY_ATTN_IN
+
+#define SPI_CLOCK_SPEED_HZ     (10 * 1000 * 1000)  // 10 MHz
+#define SPI_QUEUE_SIZE         4
+#define SPI_DMA_CHANNEL        SPI_DMA_CH_AUTO
 #endif
 
 // Ring buffer sizes for SPI
-#if WAVEX_SPI_LINK_ENABLED
-    #define SPI_RX_RING_SIZE   WAVEX_SPI_RX_RING_SIZE
-    #define SPI_TX_RING_SIZE   WAVEX_SPI_TX_RING_SIZE
-    #define SPI_POOL_SIZE      WAVEX_SPI_POOL_SIZE
-#endif
+#define SPI_RX_RING_SIZE   WAVEX_SPI_RX_RING_SIZE
+#define SPI_TX_RING_SIZE   WAVEX_SPI_TX_RING_SIZE
+#define SPI_POOL_SIZE      WAVEX_SPI_POOL_SIZE
 
 #endif // WAVEX_LINK_CONFIG_H

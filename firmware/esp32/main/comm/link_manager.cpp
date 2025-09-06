@@ -1,5 +1,4 @@
 #include "link_manager.h"
-#include "../links/uart_link.h"
 #include "../links/spi_link_wrapper.h"
 #include "../../shared/config/link_config.h"
 
@@ -38,13 +37,7 @@ esp_err_t LinkManager::init()
     
     ESP_LOGI(TAG, "Initializing LinkManager...");
     
-    esp_err_t ret;
-    
-    #if WAVEX_USE_SPI_LINK
-    ret = init_spi_link();
-    #else
-    ret = init_uart_link();
-    #endif
+    esp_err_t ret = init_spi_link();
     
     if (ret == ESP_OK) {
         m_initialized = true;
@@ -147,20 +140,7 @@ bool LinkManager::is_busy() const
 
 bool LinkManager::is_spi_link() const
 {
-    #if WAVEX_USE_SPI_LINK
-    return true;
-    #else
-    return false;
-    #endif
-}
-
-bool LinkManager::is_uart_link() const
-{
-    #if WAVEX_USE_UART_LINK
-    return true;
-    #else
-    return false;
-    #endif
+    return true; // Only SPI link is supported now
 }
 
 ILink* LinkManager::get_current_link() const
@@ -181,7 +161,6 @@ void LinkManager::process_received_packets()
             spi_link->process_received_packets();
         }
     }
-    // For UART links, packet processing is handled by the UART link itself
 }
 
 esp_err_t LinkManager::init_spi_link()
@@ -203,29 +182,6 @@ esp_err_t LinkManager::init_spi_link()
     
     m_current_link = spi_link;
     ESP_LOGI(TAG, "SPI link initialized successfully");
-    
-    return ESP_OK;
-}
-
-esp_err_t LinkManager::init_uart_link()
-{
-    ESP_LOGI(TAG, "Initializing UART link...");
-    
-    UartLink* uart_link = new UartLink();
-    if (!uart_link) {
-        ESP_LOGE(TAG, "Failed to create UART link");
-        return ESP_ERR_NO_MEM;
-    }
-    
-    esp_err_t ret = uart_link->init();
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "UART link init failed: %s", esp_err_to_name(ret));
-        delete uart_link;
-        return ret;
-    }
-    
-    m_current_link = uart_link;
-    ESP_LOGI(TAG, "UART link initialized successfully");
     
     return ESP_OK;
 }

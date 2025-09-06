@@ -4,7 +4,6 @@
 
 #ifdef ESP_PLATFORM
 #include "esp_err.h"
-#include "driver/uart.h"
 #include "driver/gpio.h"
 #else
 typedef int esp_err_t;
@@ -48,9 +47,8 @@ public:
     void send_test_messages();
     bool is_busy() const;
     
-    // Link type queries
+    // Link type queries (UART support removed)
     bool is_spi_link() const;
-    bool is_uart_link() const;
     
     // Get current link instance
     ILink* get_current_link() const;
@@ -65,7 +63,6 @@ private:
     LinkManager& operator=(const LinkManager&) = delete;
     
     esp_err_t init_spi_link();
-    esp_err_t init_uart_link();
     
     ILink* m_current_link;
     bool m_initialized;

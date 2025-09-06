@@ -5,14 +5,14 @@
 namespace WaveX {
 namespace Metrics {
 
-// UART RX message counter (used by message router)
-extern volatile uint32_t g_uart_rx_msgs;
+// Generic message counter (not UART-specific)
+extern volatile uint32_t g_message_count;
 
-// Get current UART RX message count
-uint32_t GetUartRxMessageCount();
+// Get current message count
+uint32_t GetMessageCount();
 
-// Increment UART RX message count
-void IncrementUartRxMessageCount();
+// Increment message count
+void IncrementMessageCount();
 
 } // namespace Metrics
 } // namespace WaveX

@@ -81,10 +81,6 @@ extern "C" {
 #define WAVEX_ESP_ENCODER_B      34   // J3-8: PCNT Channel B
 #define WAVEX_ESP_ENCODER_BTN    40   // J3-12: Encoder Push Button (optional)
 
-// Legacy UART pins (now available for other uses)
-#define WAVEX_ESP_LEGACY_TX     17   // J1-10: Was UART1 TX (now free)
-#define WAVEX_ESP_LEGACY_RX     18   // J1-11: Was UART1 RX (now free)
-
 #endif // ESP_PLATFORM
 
 // =============================================================================
@@ -150,19 +146,9 @@ extern "C" {
 // Inter-MCU Link Configuration
 // =============================================================================
 
-// Link type selection
-#define WAVEX_LINK_TYPE_SPI      1    // Use SPI for inter-MCU communication
-#define WAVEX_LINK_TYPE_UART     0    // Use UART for inter-MCU communication
-
-// Current link configuration
-#define WAVEX_CURRENT_LINK_TYPE  WAVEX_LINK_TYPE_SPI
-
-// SPI Link Configuration
-#if WAVEX_CURRENT_LINK_TYPE == WAVEX_LINK_TYPE_SPI
-
 // ESP32 SPI configuration
 #define WAVEX_ESP_SPI_HOST      SPI2_HOST     // SPI2_HOST (HSPI)
-#define WAVEX_ESP_SPI_CLK_HZ    1000000  // 10 MHz
+#define WAVEX_ESP_SPI_CLK_HZ    10000000  // 10 MHz
 #define WAVEX_ESP_SPI_QUEUE_SIZE 4
 #define WAVEX_ESP_SPI_DMA_CH    -1    // SPI_DMA_CH_AUTO
 
@@ -175,7 +161,6 @@ extern "C" {
 #define WAVEX_SPI_TX_RING_SIZE  32
 #define WAVEX_SPI_POOL_SIZE     16
 
-#endif // WAVEX_LINK_TYPE_SPI
 
 // =============================================================================
 // Pin Validation Macros

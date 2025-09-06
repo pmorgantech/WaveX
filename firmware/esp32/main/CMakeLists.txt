@@ -6,7 +6,6 @@ idf_component_register(
         "comm/packet_processor.cpp"
         "comm/statistics.cpp"
         "comm/listeners.cpp"
-        "links/uart_link.cpp"
         "tasks/rx_task.cpp"
         "tasks/tx_task.cpp"
         "links/spi_link.cpp"

@@ -76,3 +76,6 @@ Makefile
 
 # We only want the defaults
 sdkconfig
+
+docs/venv/
+docs/

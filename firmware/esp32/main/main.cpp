@@ -14,6 +14,10 @@ static inline long long esp_timer_get_time() { return 0; }
 typedef int esp_err_t;
 #define ESP_OK 0
 #endif
+
+// Include WaveX configuration
+#include "config.h"
+
 // esp_err.h is brought in transitively by ESP-IDF headers when building on target
 #include "version.h"
 #include "inter_mcu.h"
@@ -39,7 +43,12 @@ extern "C" void app_main(void)
     (void)inter_mcu_init();
 
     // Delay UI start slightly to avoid contention with SPI bus init
+    #ifdef ESP_PLATFORM
     vTaskDelay(pdMS_TO_TICKS(200));
+    #else
+    // Fallback for non-ESP builds
+    #endif
+    
     // Start LovyanGFX-based UI task
     wavex_ui_task_start();
 
@@ -68,6 +77,10 @@ extern "C" void app_main(void)
         // No manual intervention needed
         #endif
         
+        #ifdef ESP_PLATFORM
         vTaskDelay(pdMS_TO_TICKS(1000));  // 1 second loop
+        #else
+        // Fallback for non-ESP builds
+        #endif
     }
 } 
