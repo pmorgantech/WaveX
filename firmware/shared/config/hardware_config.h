@@ -69,7 +69,7 @@
 
 // SD Card bus width (Daisy only) - 1 for 1-bit mode, 4 for 4-bit mode
 #ifndef WAVEX_DAISY_SD_CARD_BUS_WIDTH
-#define WAVEX_DAISY_SD_CARD_BUS_WIDTH 1
+#define WAVEX_DAISY_SD_CARD_BUS_WIDTH 4
 #endif
 
 /**

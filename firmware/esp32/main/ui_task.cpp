@@ -34,7 +34,7 @@
 // Include BSP header for display functions
 #include "bsp/esp32_p4_nano.h"
  
-#define LV_TICK_PERIOD_MS 20
+#define LV_TICK_PERIOD_MS 10
  
  static const char *TAG = "UI_TASK";
  
@@ -55,6 +55,11 @@ static i2c_master_bus_handle_t s_i2c_bus_handle = NULL;
 // UI element references for real-time updates
 static lv_obj_t *s_diagnostics_label = NULL;
 static lv_obj_t *s_content_area = NULL;
+
+// Hotkey region elements
+static lv_obj_t *s_hotkey_region = NULL;
+static lv_obj_t *s_hotkey_buttons[6] = {NULL, NULL, NULL, NULL, NULL, NULL};
+static lv_obj_t *s_hotkey_labels[6] = {NULL, NULL, NULL, NULL, NULL, NULL};
 
 // Meter callback system
 static wavex_meter_cb_t s_meter_callback = NULL;
@@ -91,6 +96,13 @@ struct PeakHoldData {
 static PeakHoldData s_peak_hold_l = {0.0f, 0, false};
 static PeakHoldData s_peak_hold_r = {0.0f, 0, false};
 static const uint32_t PEAK_HOLD_TIMEOUT_MS = 500;  // Configurable peak hold duration
+
+// Adaptive refresh rate control
+static bool s_content_changed = false;
+static uint32_t s_last_refresh_time = 0;
+static uint32_t s_refresh_count = 0;
+static const uint32_t MIN_REFRESH_INTERVAL_MS = 16;  // 60 FPS maximum
+static const uint32_t MAX_REFRESH_INTERVAL_MS = 100; // 10 FPS minimum
  
 // Forward declarations
 static void ui_task(void *pvParameters);
@@ -101,6 +113,8 @@ static void meter_update_cb(void *arg);
 static void update_cpu_usage(void);
 static void meter_data_cb(float rms, float peak, void* user_data);
 static esp_err_t init_touch_controller(void);
+static void adaptive_refresh_control(void);
+static void mark_content_changed(void);
 
 // Enhanced meter functions
 static void update_peak_hold(PeakHoldData* peak_data, float current_peak, uint32_t current_time_ms);
@@ -110,10 +124,17 @@ static esp_err_t init_lvgl_display(void);
 
 // Menu system functions
 static void create_main_menu(lv_obj_t *parent);
+static void create_sample_menu(lv_obj_t *parent);
 static void create_system_menu(lv_obj_t *parent);
 static void create_diagnostics_page(lv_obj_t *parent);
 static void menu_button_event_cb(lv_event_t *e);
+static void hotkey_button_event_cb(lv_event_t *e);
 static void touch_event_cb(lv_event_t *e);
+
+// Hotkey region functions
+static void create_hotkey_region(lv_obj_t *parent);
+static void update_hotkey_labels(const char* labels[6]);
+static void clear_hotkey_labels(void);
  
 /**
  * @brief Initialize touch controller with custom configuration
@@ -346,6 +367,9 @@ static void meter_update_cb(void *arg)
         update_peak_hold(&s_peak_hold_l, meter_data.peak_left, current_time_ms);
         update_peak_hold(&s_peak_hold_r, meter_data.peak_right, current_time_ms);
         
+        // Mark content as changed for adaptive refresh
+        mark_content_changed();
+        
         LV_LOCK();
         
         // Update enhanced meter display if available
@@ -425,7 +449,7 @@ static void create_enhanced_meter_display(lv_obj_t* parent)
     lv_obj_t *meter_title = lv_label_create(meter_area);
     lv_label_set_text(meter_title, "Audio Meters");
     lv_obj_set_style_text_color(meter_title, lv_color_make(0x2E, 0x7D, 0x32), LV_PART_MAIN);
-    lv_obj_set_style_text_font(meter_title, &lv_font_montserrat_18, LV_PART_MAIN);
+    lv_obj_set_style_text_font(meter_title, &lv_font_montserrat_22, LV_PART_MAIN);
     lv_obj_align(meter_title, LV_ALIGN_TOP_MID, 0, 5);
 
     // Left channel container
@@ -635,6 +659,9 @@ static void diagnostics_update_cb(void *arg)
         lv_label_set_text(s_diagnostics_label, diag_text);
     }
     LV_UNLOCK();
+    
+    // Mark content as changed for adaptive refresh
+    mark_content_changed();
 }
  
 /**
@@ -653,12 +680,12 @@ static void diagnostics_update_cb(void *arg)
     ESP_LOGI(TAG, "  Free heap: %zu bytes", esp_get_free_heap_size());
     ESP_LOGI(TAG, "  Minimum free heap: %zu bytes", esp_get_minimum_free_heap_size());
 
-    // Use BSP's LVGL display setup with minimal config to prevent underruns
-    ESP_LOGI(TAG, "Using BSP's LVGL display setup...");
+    // Use BSP's LVGL display setup with optimized config for higher refresh rates
+    ESP_LOGI(TAG, "Using BSP's LVGL display setup with optimized buffer configuration...");
     bsp_display_cfg_t cfg = {
         .lvgl_port_cfg = ESP_LVGL_PORT_INIT_CONFIG(),
-        .buffer_size = 720 * 5,    // Very conservative: 5 lines × 720px × 2B = 7.2KB
-        .double_buffer = false,   // Disable double buffering to reduce memory bandwidth
+        .buffer_size = 720 * 20,   // Optimized: 20 lines × 720px × 2B = 28.8KB
+        .double_buffer = true,     // Enable double buffering for smoother updates
         .flags = {
             .buff_dma = true,
             .buff_spiram = false,
@@ -697,6 +724,107 @@ static void monitor_display_pins(void)
 }
 
 /**
+ * @brief Create the hotkey region with 6 buttons at bottom of screen
+ */
+static void create_hotkey_region(lv_obj_t *parent)
+{
+    if (parent == NULL) {
+        ESP_LOGE(TAG, "create_hotkey_region: parent is NULL");
+        return;
+    }
+
+    ESP_LOGI(TAG, "Creating hotkey region...");
+    LV_LOCK();
+
+    // Create hotkey region container
+    s_hotkey_region = lv_obj_create(parent);
+    lv_obj_set_size(s_hotkey_region, lv_pct(100), 100);  // 100px tall, full width
+    lv_obj_set_style_bg_color(s_hotkey_region, lv_color_make(0xF5, 0xF5, 0xF5), LV_PART_MAIN);
+    lv_obj_set_style_border_width(s_hotkey_region, 1, LV_PART_MAIN);
+    lv_obj_set_style_border_color(s_hotkey_region, lv_color_make(0xE0, 0xE0, 0xE0), LV_PART_MAIN);
+    lv_obj_set_style_pad_all(s_hotkey_region, 5, LV_PART_MAIN);
+    lv_obj_align(s_hotkey_region, LV_ALIGN_BOTTOM_MID, 0, 0);
+
+    // Create 6 hotkey buttons
+    for (int i = 0; i < 6; i++) {
+        s_hotkey_buttons[i] = lv_btn_create(s_hotkey_region);
+        lv_obj_set_size(s_hotkey_buttons[i], lv_pct(15), 90);  // 15% width, 90px height
+        lv_obj_set_style_bg_color(s_hotkey_buttons[i], lv_color_make(0xE8, 0xE8, 0xE8), LV_PART_MAIN);
+        lv_obj_set_style_bg_color(s_hotkey_buttons[i], lv_color_make(0xD0, 0xD0, 0xD0), LV_PART_MAIN | LV_STATE_PRESSED);
+        lv_obj_set_style_border_width(s_hotkey_buttons[i], 1, LV_PART_MAIN);
+        lv_obj_set_style_border_color(s_hotkey_buttons[i], lv_color_make(0xC0, 0xC0, 0xC0), LV_PART_MAIN);
+        
+        // Position buttons horizontally
+        lv_coord_t x_pos = (i * 15) + 2;  // 15% spacing + 2% offset
+        lv_obj_set_pos(s_hotkey_buttons[i], x_pos, 5);
+        
+        // Add event callback
+        lv_obj_add_event_cb(s_hotkey_buttons[i], hotkey_button_event_cb, LV_EVENT_CLICKED, (void*)(intptr_t)i);
+        
+        // Create label for button
+        s_hotkey_labels[i] = lv_label_create(s_hotkey_buttons[i]);
+        lv_label_set_text(s_hotkey_labels[i], "");  // Empty initially
+        lv_obj_set_style_text_font(s_hotkey_labels[i], &lv_font_montserrat_36, LV_PART_MAIN);
+        lv_obj_set_style_text_color(s_hotkey_labels[i], lv_color_make(0x2E, 0x34, 0x40), LV_PART_MAIN);
+        lv_obj_center(s_hotkey_labels[i]);
+    }
+
+    LV_UNLOCK();
+    ESP_LOGI(TAG, "Hotkey region created successfully");
+}
+
+/**
+ * @brief Update hotkey labels based on current screen context
+ */
+static void update_hotkey_labels(const char* labels[6])
+{
+    if (s_hotkey_labels[0] == NULL) {
+        ESP_LOGW(TAG, "Hotkey labels not initialized");
+        return;
+    }
+
+    LV_LOCK();
+    for (int i = 0; i < 6; i++) {
+        if (s_hotkey_labels[i] && lv_obj_is_valid(s_hotkey_labels[i])) {
+            if (labels[i] && strlen(labels[i]) > 0) {
+                lv_label_set_text(s_hotkey_labels[i], labels[i]);
+                lv_obj_clear_flag(s_hotkey_buttons[i], LV_OBJ_FLAG_HIDDEN);
+            } else {
+                lv_label_set_text(s_hotkey_labels[i], "");
+                lv_obj_add_flag(s_hotkey_buttons[i], LV_OBJ_FLAG_HIDDEN);
+            }
+        }
+    }
+    LV_UNLOCK();
+}
+
+/**
+ * @brief Clear all hotkey labels
+ */
+static void clear_hotkey_labels(void)
+{
+    const char* empty_labels[6] = {"", "", "", "", "", ""};
+    update_hotkey_labels(empty_labels);
+}
+
+/**
+ * @brief Hotkey button event callback
+ */
+static void hotkey_button_event_cb(lv_event_t *e)
+{
+    lv_event_code_t code = lv_event_get_code(e);
+    int button_index = (int)(intptr_t)lv_event_get_user_data(e);
+
+    if (code == LV_EVENT_CLICKED) {
+        ESP_LOGI(TAG, "Hotkey button %d clicked", button_index);
+        
+        // Handle hotkey actions based on current screen context
+        // This will be implemented based on the current menu state
+        // For now, just log the button press
+    }
+}
+
+/**
  * @brief Create the main menu with navigation buttons
  */
 static void create_main_menu(lv_obj_t *parent)
@@ -720,42 +848,100 @@ static void create_main_menu(lv_obj_t *parent)
     lv_obj_set_style_pad_all(menu_cont, 15, LV_PART_MAIN);  // Reduced padding
     lv_obj_center(menu_cont);
 
-    // Set flex layout for landscape mode - 2x2 grid
+    // Set flex layout for landscape mode - horizontal layout for 2 buttons
+    lv_obj_set_flex_flow(menu_cont, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(menu_cont, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+
+    // Create Sample button
+    lv_obj_t *btn1 = lv_btn_create(menu_cont);
+    lv_obj_set_size(btn1, lv_pct(45), 120);  // Increased height for larger font
+    lv_obj_add_event_cb(btn1, menu_button_event_cb, LV_EVENT_CLICKED, (void*)"sample");
+    lv_obj_t *label1 = lv_label_create(btn1);
+    lv_label_set_text(label1, "Sample");
+    lv_obj_set_style_text_font(label1, &lv_font_montserrat_22, LV_PART_MAIN);
+    lv_obj_center(label1);
+
+    // Create System button
+    lv_obj_t *btn2 = lv_btn_create(menu_cont);
+    lv_obj_set_size(btn2, lv_pct(45), 120);
+    lv_obj_add_event_cb(btn2, menu_button_event_cb, LV_EVENT_CLICKED, (void*)"system");
+    lv_obj_t *label2 = lv_label_create(btn2);
+    lv_label_set_text(label2, "System");
+    lv_obj_set_style_text_font(label2, &lv_font_montserrat_22, LV_PART_MAIN);
+    lv_obj_center(label2);
+    
+    // Update hotkey labels for main menu
+    const char* main_menu_labels[6] = {"Sample", "System", "", "", "", ""};
+    update_hotkey_labels(main_menu_labels);
+    
+    LV_UNLOCK();
+}
+
+/**
+ * @brief Create the sample submenu
+ */
+static void create_sample_menu(lv_obj_t *parent)
+{
+    if (parent == NULL) {
+        ESP_LOGE(TAG, "create_sample_menu: parent is NULL");
+        return;
+    }
+
+    ESP_LOGI(TAG, "Creating sample menu...");
+    LV_LOCK();
+    // Clear parent content
+    lv_obj_clean(parent);
+
+    // Create a flex container for sample options (optimized for landscape)
+    lv_obj_t *menu_cont = lv_obj_create(parent);
+    lv_obj_set_size(menu_cont, lv_pct(95), lv_pct(70));  // Adjusted for landscape
+    lv_obj_set_style_bg_color(menu_cont, lv_color_white(), LV_PART_MAIN);
+    lv_obj_set_style_border_width(menu_cont, 2, LV_PART_MAIN);
+    lv_obj_set_style_border_color(menu_cont, lv_color_make(0xE0, 0xE0, 0xE0), LV_PART_MAIN);
+    lv_obj_set_style_pad_all(menu_cont, 15, LV_PART_MAIN);  // Reduced padding
+    lv_obj_center(menu_cont);
+
+    // Set flex layout for landscape mode - horizontal layout
     lv_obj_set_flex_flow(menu_cont, LV_FLEX_FLOW_ROW_WRAP);
     lv_obj_set_flex_align(menu_cont, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
-    // Create menu buttons (2x2 grid layout for landscape) - adjusted sizing for larger fonts
+    // Back button (full width at top) - adjusted for larger font
+    lv_obj_t *back_btn = lv_btn_create(menu_cont);
+    lv_obj_set_size(back_btn, lv_pct(100), 60);  // Increased height for larger font
+    lv_obj_add_event_cb(back_btn, menu_button_event_cb, LV_EVENT_CLICKED, (void*)"back_main");
+    lv_obj_t *back_label = lv_label_create(back_btn);
+    lv_label_set_text(back_label, "< Back to Main Menu");
+    lv_obj_set_style_text_font(back_label, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_obj_center(back_label);
+
+    // Sample options (side by side for landscape) - adjusted sizing
     lv_obj_t *btn1 = lv_btn_create(menu_cont);
-    lv_obj_set_size(btn1, lv_pct(45), 100);  // Increased height for larger font
-    lv_obj_add_event_cb(btn1, menu_button_event_cb, LV_EVENT_CLICKED, (void*)"system");
+    lv_obj_set_size(btn1, lv_pct(30), 100);  // Increased height for larger font
+    lv_obj_add_event_cb(btn1, menu_button_event_cb, LV_EVENT_CLICKED, (void*)"record");
     lv_obj_t *label1 = lv_label_create(btn1);
-    lv_label_set_text(label1, "System");
-    lv_obj_set_style_text_font(label1, &lv_font_montserrat_20, LV_PART_MAIN);
+    lv_label_set_text(label1, "Record");
+    lv_obj_set_style_text_font(label1, &lv_font_montserrat_22, LV_PART_MAIN);
     lv_obj_center(label1);
 
     lv_obj_t *btn2 = lv_btn_create(menu_cont);
-    lv_obj_set_size(btn2, lv_pct(45), 100);
-    lv_obj_add_event_cb(btn2, menu_button_event_cb, LV_EVENT_CLICKED, (void*)"audio");
+    lv_obj_set_size(btn2, lv_pct(30), 100);
+    lv_obj_add_event_cb(btn2, menu_button_event_cb, LV_EVENT_CLICKED, (void*)"edit");
     lv_obj_t *label2 = lv_label_create(btn2);
-    lv_label_set_text(label2, "Audio");
-    lv_obj_set_style_text_font(label2, &lv_font_montserrat_20, LV_PART_MAIN);
+    lv_label_set_text(label2, "Edit");
+    lv_obj_set_style_text_font(label2, &lv_font_montserrat_22, LV_PART_MAIN);
     lv_obj_center(label2);
 
     lv_obj_t *btn3 = lv_btn_create(menu_cont);
-    lv_obj_set_size(btn3, lv_pct(45), 100);
-    lv_obj_add_event_cb(btn3, menu_button_event_cb, LV_EVENT_CLICKED, (void*)"network");
+    lv_obj_set_size(btn3, lv_pct(30), 100);
+    lv_obj_add_event_cb(btn3, menu_button_event_cb, LV_EVENT_CLICKED, (void*)"load_save");
     lv_obj_t *label3 = lv_label_create(btn3);
-    lv_label_set_text(label3, "Network");
-    lv_obj_set_style_text_font(label3, &lv_font_montserrat_20, LV_PART_MAIN);
+    lv_label_set_text(label3, "Load/Save");
+    lv_obj_set_style_text_font(label3, &lv_font_montserrat_22, LV_PART_MAIN);
     lv_obj_center(label3);
-
-    lv_obj_t *btn4 = lv_btn_create(menu_cont);
-    lv_obj_set_size(btn4, lv_pct(45), 100);
-    lv_obj_add_event_cb(btn4, menu_button_event_cb, LV_EVENT_CLICKED, (void*)"settings");
-    lv_obj_t *label4 = lv_label_create(btn4);
-    lv_label_set_text(label4, "Settings");
-    lv_obj_set_style_text_font(label4, &lv_font_montserrat_20, LV_PART_MAIN);
-    lv_obj_center(label4);
+    
+    // Update hotkey labels for sample menu
+    const char* sample_menu_labels[6] = {"Record", "Edit", "Load/Save", "Back", "", ""};
+    update_hotkey_labels(sample_menu_labels);
     
     LV_UNLOCK();
 }
@@ -794,7 +980,7 @@ static void create_system_menu(lv_obj_t *parent)
     lv_obj_add_event_cb(back_btn, menu_button_event_cb, LV_EVENT_CLICKED, (void*)"back_main");
     lv_obj_t *back_label = lv_label_create(back_btn);
     lv_label_set_text(back_label, "< Back to Main Menu");
-    lv_obj_set_style_text_font(back_label, &lv_font_montserrat_18, LV_PART_MAIN);
+    lv_obj_set_style_text_font(back_label, &lv_font_montserrat_22, LV_PART_MAIN);
     lv_obj_center(back_label);
 
     // System options (side by side for landscape) - adjusted sizing
@@ -803,16 +989,20 @@ static void create_system_menu(lv_obj_t *parent)
     lv_obj_add_event_cb(btn1, menu_button_event_cb, LV_EVENT_CLICKED, (void*)"diagnostics");
     lv_obj_t *label1 = lv_label_create(btn1);
     lv_label_set_text(label1, "Diagnostics");
-    lv_obj_set_style_text_font(label1, &lv_font_montserrat_20, LV_PART_MAIN);
+    lv_obj_set_style_text_font(label1, &lv_font_montserrat_22, LV_PART_MAIN);
     lv_obj_center(label1);
 
     lv_obj_t *btn2 = lv_btn_create(menu_cont);
     lv_obj_set_size(btn2, lv_pct(45), 100);
-    lv_obj_add_event_cb(btn2, menu_button_event_cb, LV_EVENT_CLICKED, (void*)"info");
+    lv_obj_add_event_cb(btn2, menu_button_event_cb, LV_EVENT_CLICKED, (void*)"settings");
     lv_obj_t *label2 = lv_label_create(btn2);
-    lv_label_set_text(label2, "System Info");
-    lv_obj_set_style_text_font(label2, &lv_font_montserrat_20, LV_PART_MAIN);
+    lv_label_set_text(label2, "Settings");
+    lv_obj_set_style_text_font(label2, &lv_font_montserrat_22, LV_PART_MAIN);
     lv_obj_center(label2);
+    
+    // Update hotkey labels for system menu
+    const char* system_menu_labels[6] = {"Diagnostics", "Settings", "Back", "", "", ""};
+    update_hotkey_labels(system_menu_labels);
     
     LV_UNLOCK();
 }
@@ -865,7 +1055,7 @@ static void create_diagnostics_page(lv_obj_t *parent)
     lv_obj_align(back_btn, LV_ALIGN_TOP_LEFT, 0, 0);
     lv_obj_t *back_label = lv_label_create(back_btn);
     lv_label_set_text(back_label, "< Back");
-    lv_obj_set_style_text_font(back_label, &lv_font_montserrat_16, LV_PART_MAIN);
+    lv_obj_set_style_text_font(back_label, &lv_font_montserrat_14, LV_PART_MAIN);
     lv_obj_center(back_label);
 
     // Create content area with side-by-side layout for landscape
@@ -896,7 +1086,7 @@ static void create_diagnostics_page(lv_obj_t *parent)
         (size_t)(esp_get_free_heap_size() / 1024),
         (size_t)(esp_get_minimum_free_heap_size() / 1024));
     lv_label_set_text(s_diagnostics_label, diag_text);
-    lv_obj_set_style_text_font(s_diagnostics_label, &lv_font_montserrat_16, LV_PART_MAIN);  // Larger font for diagnostics
+    lv_obj_set_style_text_font(s_diagnostics_label, &lv_font_montserrat_14, LV_PART_MAIN);  // Normal font for diagnostics
     lv_obj_align(s_diagnostics_label, LV_ALIGN_TOP_LEFT, 0, 0);
 
     // Create enhanced dual-channel meter display
@@ -913,12 +1103,16 @@ static void create_diagnostics_page(lv_obj_t *parent)
     lv_obj_t *touch_label = lv_label_create(touch_area);
     lv_label_set_text(touch_label, "Touch Test");
     lv_obj_set_style_text_color(touch_label, lv_color_make(0x15, 0x65, 0xC0), LV_PART_MAIN);
-    lv_obj_set_style_text_font(touch_label, &lv_font_montserrat_16, LV_PART_MAIN);
+    lv_obj_set_style_text_font(touch_label, &lv_font_montserrat_14, LV_PART_MAIN);
     lv_obj_center(touch_label);
 
     // Add touch event handler
     lv_obj_add_event_cb(touch_area, touch_event_cb, LV_EVENT_PRESSED, NULL);
     lv_obj_add_event_cb(touch_area, touch_event_cb, LV_EVENT_RELEASED, NULL);
+    
+    // Update hotkey labels for diagnostics page
+    const char* diagnostics_labels[6] = {"Back", "", "", "", "", ""};
+    update_hotkey_labels(diagnostics_labels);
     
     LV_UNLOCK();
 }
@@ -951,9 +1145,24 @@ static void menu_button_event_cb(lv_event_t *e)
             return;
         }
 
-        if (strcmp(btn_id, "system") == 0) {
+        if (strcmp(btn_id, "sample") == 0) {
+            ESP_LOGI(TAG, "Navigating to sample menu...");
+            create_sample_menu(s_content_area);
+        } else if (strcmp(btn_id, "system") == 0) {
             ESP_LOGI(TAG, "Navigating to system menu...");
             create_system_menu(s_content_area);
+        } else if (strcmp(btn_id, "record") == 0) {
+            ESP_LOGI(TAG, "Record option selected");
+            // TODO: Implement record functionality
+        } else if (strcmp(btn_id, "edit") == 0) {
+            ESP_LOGI(TAG, "Edit option selected");
+            // TODO: Implement edit functionality
+        } else if (strcmp(btn_id, "load_save") == 0) {
+            ESP_LOGI(TAG, "Load/Save option selected");
+            // TODO: Implement load/save functionality
+        } else if (strcmp(btn_id, "settings") == 0) {
+            ESP_LOGI(TAG, "Settings option selected");
+            // TODO: Implement settings functionality
         } else if (strcmp(btn_id, "diagnostics") == 0) {
             ESP_LOGI(TAG, "Navigating to diagnostics page...");
             create_diagnostics_page(s_content_area);
@@ -984,7 +1193,7 @@ static void touch_event_cb(lv_event_t *e)
         lv_obj_t *label = lv_obj_get_child(obj, 0);
         if (label) {
             lv_label_set_text(label, "Touch Detected!\nKeep pressing...");
-            lv_obj_set_style_text_font(label, &lv_font_montserrat_18, LV_PART_MAIN);  // Ensure larger font
+            lv_obj_set_style_text_font(label, &lv_font_montserrat_14, LV_PART_MAIN);  // Normal font
         }
     } else if (code == LV_EVENT_RELEASED) {
         ESP_LOGI(TAG, "Touch released from test area");
@@ -993,7 +1202,44 @@ static void touch_event_cb(lv_event_t *e)
         lv_obj_t *label = lv_obj_get_child(obj, 0);
         if (label) {
             lv_label_set_text(label, "Touch Test Area\nTap here to test touchscreen!");
-            lv_obj_set_style_text_font(label, &lv_font_montserrat_18, LV_PART_MAIN);  // Ensure larger font
+            lv_obj_set_style_text_font(label, &lv_font_montserrat_14, LV_PART_MAIN);  // Normal font
+        }
+    }
+}
+
+/**
+ * @brief Mark content as changed to trigger refresh
+ */
+static void mark_content_changed(void)
+{
+    s_content_changed = true;
+}
+
+/**
+ * @brief Adaptive refresh rate control for optimal performance
+ */
+static void adaptive_refresh_control(void)
+{
+    uint32_t current_time = (uint32_t)(esp_timer_get_time() / 1000); // Convert to ms
+    
+    // Only refresh if content has changed and enough time has passed
+    if (s_content_changed) {
+        uint32_t time_since_last_refresh = current_time - s_last_refresh_time;
+        
+        // Use minimum refresh interval for responsive updates
+        if (time_since_last_refresh >= MIN_REFRESH_INTERVAL_MS) {
+            LV_LOCK();
+            lv_refr_now(s_lvgl_display);
+            LV_UNLOCK();
+            
+            s_content_changed = false;
+            s_last_refresh_time = current_time;
+            s_refresh_count++;
+            
+            // Log refresh rate every 100 refreshes for monitoring
+            if (s_refresh_count % 100 == 0) {
+                ESP_LOGD(TAG, "Display refresh count: %lu", s_refresh_count);
+            }
         }
     }
 }
@@ -1039,12 +1285,12 @@ static void touch_event_cb(lv_event_t *e)
     lv_obj_t *title = lv_label_create(header);
     lv_label_set_text(title, "WaveX System");
     lv_obj_set_style_text_color(title, lv_color_white(), LV_PART_MAIN);
-    lv_obj_set_style_text_font(title, &lv_font_montserrat_24, LV_PART_MAIN);
+    lv_obj_set_style_text_font(title, &lv_font_montserrat_22, LV_PART_MAIN);
     lv_obj_center(title);
     
-    // Create content area (adjusted for landscape mode)
+    // Create content area (adjusted for landscape mode with hotkey region)
     lv_obj_t *content = lv_obj_create(main_screen);
-    lv_obj_set_size(content, lv_pct(100), 670);  // 720 - 50 = 670 pixels (full height minus header)
+    lv_obj_set_size(content, lv_pct(100), 570);  // 720 - 50 - 100 = 570 pixels (full height minus header and hotkey region)
     lv_obj_set_style_bg_color(content, lv_color_white(), LV_PART_MAIN);
     lv_obj_set_style_border_width(content, 0, LV_PART_MAIN);
     lv_obj_align(content, LV_ALIGN_TOP_MID, 0, 50);  // Position below header
@@ -1052,34 +1298,37 @@ static void touch_event_cb(lv_event_t *e)
     // Store content area reference for menu navigation
     s_content_area = content;
     
+    // Create hotkey region at bottom of screen
+    create_hotkey_region(main_screen);
+    
     // Create main menu
     create_main_menu(content);
     LV_UNLOCK();
 
     ESP_LOGI(TAG, "Main UI created successfully");
 
-    // Create diagnostics update timer (every 1 second)
+    // Create diagnostics update timer (every 500ms for more responsive updates)
     const esp_timer_create_args_t diag_timer_args = {
         .callback = &diagnostics_update_cb,
         .name = "diagnostics_timer"
     };
     esp_err_t timer_ret = esp_timer_create(&diag_timer_args, &s_diagnostics_timer_handle);
     if (timer_ret == ESP_OK) {
-        esp_timer_start_periodic(s_diagnostics_timer_handle, 1000000); // 1 second in microseconds
-        ESP_LOGI(TAG, "Diagnostics timer started (1s updates)");
+        esp_timer_start_periodic(s_diagnostics_timer_handle, 500000); // 500ms in microseconds (2 FPS)
+        ESP_LOGI(TAG, "Diagnostics timer started (500ms updates - 2 FPS)");
     } else {
         ESP_LOGE(TAG, "Failed to create diagnostics timer: %s", esp_err_to_name(timer_ret));
     }
 
-    // Create meter update timer (every 50ms for real-time updates)
+    // Create meter update timer (every 33ms for 30 FPS real-time updates)
     const esp_timer_create_args_t meter_timer_args = {
         .callback = &meter_update_cb,
         .name = "meter_timer"
     };
     timer_ret = esp_timer_create(&meter_timer_args, &s_meter_timer_handle);
     if (timer_ret == ESP_OK) {
-        esp_timer_start_periodic(s_meter_timer_handle, 50000); // 50ms in microseconds
-        ESP_LOGI(TAG, "Meter timer started (50ms real-time updates)");
+        esp_timer_start_periodic(s_meter_timer_handle, 33000); // 33ms in microseconds (30 FPS)
+        ESP_LOGI(TAG, "Meter timer started (33ms real-time updates - 30 FPS)");
     } else {
         ESP_LOGE(TAG, "Failed to create meter timer: %s", esp_err_to_name(timer_ret));
     }
@@ -1092,10 +1341,14 @@ static void touch_event_cb(lv_event_t *e)
     ESP_LOGI(TAG, "Testing meter callback with dummy data...");
     meter_data_cb(0.5f, 0.8f, NULL); // Test with 50% RMS, 80% peak
 
-    // Main UI loop
-    ESP_LOGI(TAG, "UI loop started");
+    // Main UI loop with adaptive refresh rate control
+    ESP_LOGI(TAG, "UI loop started with adaptive refresh rate control");
     while (1) {
-        vTaskDelay(pdMS_TO_TICKS(100)); // Short delay for responsiveness
+        // Use adaptive refresh control for optimal performance
+        adaptive_refresh_control();
+        
+        // Short delay to prevent excessive CPU usage
+        vTaskDelay(pdMS_TO_TICKS(8)); // 8ms delay for 120 FPS theoretical maximum
     }
  }
  

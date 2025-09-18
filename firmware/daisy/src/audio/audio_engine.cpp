@@ -70,7 +70,7 @@ struct WavState {
 static WavState s_wav = {};
 
 // Simple single-producer (main loop) / single-consumer (audio IRQ) ring buffer of stereo int16 frames
-static const uint32_t RB_CAP_FRAMES = 4096; // ~85ms at 48k
+static const uint32_t RB_CAP_FRAMES = 8192; // ~170ms at 48k (increased for better buffering)
 static volatile uint32_t s_rb_head = 0; // write counter (frames)
 static volatile uint32_t s_rb_tail = 0; // read counter (frames)
 static int16_t s_rb[RB_CAP_FRAMES * 2]; // interleaved L,R
@@ -386,6 +386,18 @@ bool IsWavPlaying()
     return s_wav.open;
 }
 
+bool ShouldPumpWavIO()
+{
+    if (!s_wav.open) return false;
+    
+    // Only pump I/O when ring buffer is less than 25% full
+    // This reduces unnecessary file I/O operations
+    uint32_t count = rb_count_frames();
+    uint32_t threshold = RB_CAP_FRAMES / 4;  // 25% of buffer capacity
+    
+    return count < threshold;
+}
+
 void PumpWavIO()
 {
     if (!s_wav.open)
@@ -396,8 +408,8 @@ void PumpWavIO()
     if (free_frames == 0)
         return;
 
-    // Read in chunks; align to frames
-    uint32_t frames_per_read = 256;
+    // Read in chunks; align to frames (optimized for performance)
+    uint32_t frames_per_read = 2048;  // Increased to 2048 frames for better performance
     if (frames_per_read > free_frames) frames_per_read = free_frames;
     // Bytes per frame in file
     uint32_t file_bpf = (uint32_t)s_wav.num_channels * 2u;
@@ -414,8 +426,8 @@ void PumpWavIO()
     }
 
     // Temp buffer on stack for simplicity (monophonic doubles to stereo during push)
-    // MOVED to static to ensure it's in DMA-accessible RAM
-    static uint8_t tmp[2048];
+    // MOVED to static to ensure it's in DMA-accessible RAM (increased for larger reads)
+    static uint8_t tmp[8192];  // Increased from 2048 to 8192 bytes for larger reads
     if (req_bytes > sizeof(tmp)) req_bytes = sizeof(tmp);
     UINT br = 0;
 

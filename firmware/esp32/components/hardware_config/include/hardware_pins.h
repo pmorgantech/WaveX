@@ -396,8 +396,8 @@ extern "C" {
 /** LCD color depth in bits per pixel */
 #define WAVEX_LCD_BITS_PER_PIXEL    16
 
-/** MIPI DSI lane bitrate (Mbps) */
-#define WAVEX_DSI_LANE_BITRATE_MBPS 1500
+/** MIPI DSI lane bitrate (Mbps) - optimized for better performance */
+#define WAVEX_DSI_LANE_BITRATE_MBPS 2000
 
 /** MIPI DSI color format (0 = RGB565, 1 = RGB888) */
 #define WAVEX_DSI_COLOR_FORMAT      0

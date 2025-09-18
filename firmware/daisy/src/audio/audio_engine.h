@@ -38,6 +38,7 @@ bool OpenWav(const char* path);
 void CloseWav();
 void PumpWavIO();
 bool IsWavPlaying();
+bool ShouldPumpWavIO();  // Adaptive polling helper
 
 } // namespace AudioEngine
 } // namespace WaveX

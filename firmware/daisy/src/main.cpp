@@ -448,13 +448,16 @@ int main(void)
                 #endif
             }
         }
-        // Pump WAV I/O to fill ring buffer
+        // Pump WAV I/O to fill ring buffer (adaptive polling)
         if (wav_started && sd_available) {
-            #if WAVEX_DAISY_SD_DEBUG
-            static uint32_t last_log = 0; uint32_t now = System::GetNow();
-            if (now - last_log > 1000) { last_log = now; WAVEX_LOG_DAISY(AUDIO_ENGINE, "SD: pumping WAV I/O"); }
-            #endif
-            WaveX::AudioEngine::PumpWavIO();
+            // Only pump I/O when ring buffer is getting low (adaptive polling)
+            if (WaveX::AudioEngine::ShouldPumpWavIO()) {
+                #if WAVEX_DAISY_SD_DEBUG
+                static uint32_t last_log = 0; uint32_t now = System::GetNow();
+                if (now - last_log > 1000) { last_log = now; WAVEX_LOG_DAISY(AUDIO_ENGINE, "SD: pumping WAV I/O (adaptive)"); }
+                #endif
+                WaveX::AudioEngine::PumpWavIO();
+            }
         }
         #endif
         #endif
@@ -464,7 +467,7 @@ int main(void)
             uint32_t now_us = System::GetUs();
             s_cpu_busy_us_accum += (now_us - busy_start_us);
         }
-        System::Delay(1);
+        System::Delay(10);
 
         // Emit CPU usage once per second
         static uint32_t last_cpu_log_ms = 0;
