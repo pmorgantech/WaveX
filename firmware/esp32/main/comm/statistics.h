@@ -53,6 +53,16 @@ typedef struct {
     uint32_t invalid_packets;
 } wavex_packet_summary_t;
 
+// Meter data structure
+typedef struct {
+    float rms_left;
+    float rms_right;
+    float peak_left;
+    float peak_right;
+    uint32_t last_update_ms;
+    bool valid;
+} wavex_meter_data_t;
+
 // Statistics manager that handles all statistics tracking
 class StatisticsManager {
 public:
@@ -76,6 +86,11 @@ public:
     // Backend heartbeat
     void update_backend_heartbeat(uint32_t uptime_ms, uint32_t rx_total, uint32_t loop_counter);
     void get_backend_heartbeat(uint32_t* uptime_ms, uint32_t* rx_total, uint32_t* loop_counter, uint32_t* last_rx_ms, bool* valid) const;
+    
+    // Meter data
+    void update_meter_data(float rms_left, float rms_right, float peak_left, float peak_right);
+    void get_meter_data(wavex_meter_data_t* out) const;
+    void set_meter_callback(void (*callback)(float rms, float peak, void* user_data), void* user_data);
 
 private:
     // Packet statistics
@@ -95,6 +110,14 @@ private:
         bool valid;
     } m_backend_hb;
     mutable portMUX_TYPE m_hb_lock;
+    
+    // Meter data
+    mutable wavex_meter_data_t m_meter_data;
+    mutable portMUX_TYPE m_meter_lock;
+    
+    // Meter callback
+    void (*m_meter_callback)(float rms, float peak, void* user_data);
+    void* m_meter_user_data;
     
     // Helper methods
     const char* get_packet_type_name(uint8_t packet_type) const;

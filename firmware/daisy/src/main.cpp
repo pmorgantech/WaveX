@@ -122,7 +122,7 @@ int main(void)
     
     #if WAVEX_AUDIO_ENGINE_ENABLED
     hw.SetAudioBlockSize(Timebase::kBlockSize); // 48-sample blocks → 1 kHz control tick
-    hw.SetAudioSampleRate(SaiHandle::Config::SampleRate::SAI_48KHZ);
+    hw.SetAudioSampleRate(SaiHandle::Config::SampleRate::SAI_44KHZ);
     
     // Initialize DSP objects
     InitDSP();

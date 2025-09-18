@@ -11,15 +11,20 @@ StatisticsManager::StatisticsManager()
     memset(&m_packet_stats, 0, sizeof(m_packet_stats));
     memset(&m_tx_stats, 0, sizeof(m_tx_stats));
     memset(&m_backend_hb, 0, sizeof(m_backend_hb));
+    memset(&m_meter_data, 0, sizeof(m_meter_data));
+    m_meter_callback = NULL;
+    m_meter_user_data = NULL;
     
 #ifdef ESP_PLATFORM
     m_stats_lock = portMUX_INITIALIZER_UNLOCKED;
     m_tx_stats_lock = portMUX_INITIALIZER_UNLOCKED;
     m_hb_lock = portMUX_INITIALIZER_UNLOCKED;
+    m_meter_lock = portMUX_INITIALIZER_UNLOCKED;
 #else
     memset(&m_stats_lock, 0, sizeof(m_stats_lock));
     memset(&m_tx_stats_lock, 0, sizeof(m_tx_stats_lock));
     memset(&m_hb_lock, 0, sizeof(m_hb_lock));
+    memset(&m_meter_lock, 0, sizeof(m_meter_lock));
 #endif
 }
 
@@ -208,4 +213,43 @@ const char* StatisticsManager::get_packet_type_name(uint8_t packet_type) const
 void StatisticsManager::update_tx_stats(uint8_t message_type)
 {
     increment_tx_message(message_type);
+}
+
+void StatisticsManager::update_meter_data(float rms_left, float rms_right, float peak_left, float peak_right)
+{
+    taskENTER_CRITICAL(&m_meter_lock);
+    m_meter_data.rms_left = rms_left;
+    m_meter_data.rms_right = rms_right;
+    m_meter_data.peak_left = peak_left;
+    m_meter_data.peak_right = peak_right;
+#ifdef ESP_PLATFORM
+    m_meter_data.last_update_ms = (uint32_t)(esp_timer_get_time() / 1000);
+#else
+    m_meter_data.last_update_ms = 0;
+#endif
+    m_meter_data.valid = true;
+    taskEXIT_CRITICAL(&m_meter_lock);
+    
+    // Call registered callback if any
+    if (m_meter_callback) {
+        // Use RMS left channel for the callback (assuming stereo)
+        m_meter_callback(rms_left, peak_left, m_meter_user_data);
+    }
+}
+
+void StatisticsManager::get_meter_data(wavex_meter_data_t* out) const
+{
+    if (!out) return;
+    
+    taskENTER_CRITICAL(&m_meter_lock);
+    *out = m_meter_data;
+    taskEXIT_CRITICAL(&m_meter_lock);
+}
+
+void StatisticsManager::set_meter_callback(void (*callback)(float rms, float peak, void* user_data), void* user_data)
+{
+    taskENTER_CRITICAL(&m_meter_lock);
+    m_meter_callback = callback;
+    m_meter_user_data = user_data;
+    taskEXIT_CRITICAL(&m_meter_lock);
 }

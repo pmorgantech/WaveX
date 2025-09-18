@@ -179,7 +179,7 @@
     
     // Audio sample rate configuration
     #ifndef WAVEX_AUDIO_SAMPLE_RATE
-    #define WAVEX_AUDIO_SAMPLE_RATE 48000
+    #define WAVEX_AUDIO_SAMPLE_RATE 44100
     #endif
     
     // Audio block size configuration
@@ -199,7 +199,7 @@
 
     // Interval for sending meter updates over SPI (ms)
     #ifndef WAVEX_AUDIO_METERS_SEND_INTERVAL_MS
-    #define WAVEX_AUDIO_METERS_SEND_INTERVAL_MS 10000
+    #define WAVEX_AUDIO_METERS_SEND_INTERVAL_MS 50
     #endif
 #endif
 

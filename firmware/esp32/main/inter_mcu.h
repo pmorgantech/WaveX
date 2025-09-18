@@ -92,5 +92,14 @@ void inter_mcu_get_tx_stats(wavex_tx_stats_t* out);
 // Update backend heartbeat statistics directly (for SPI link processing)
 void inter_mcu_update_backend_heartbeat(uint32_t uptime_ms, uint32_t rx_total, uint32_t loop_counter);
 
+// Update backend meter data directly (for SPI link processing)
+void inter_mcu_update_backend_meters(float rms_left, float rms_right, float peak_left, float peak_right);
+
+// Get current meter data
+void inter_mcu_get_meter_data(wavex_meter_data_t* out);
+
 // Process packet data through the packet processor (for SPI link integration)
 void inter_mcu_process_packet_data(const uint8_t* data, size_t length);
+
+// Increment packet statistics (for SPI link integration)
+void inter_mcu_increment_packet_stat(uint8_t packet_type);

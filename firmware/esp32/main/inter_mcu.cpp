@@ -180,8 +180,9 @@ void inter_mcu_toggle_debug()
 
 void inter_mcu_set_meter_listener(wavex_meter_cb_t cb, void* user_data)
 {
-    // TODO: Implement meter listener registration
-    ESP_LOGI(TAG, "Meter listener registration not yet implemented");
+    // Store the callback in the statistics manager
+    s_statistics.set_meter_callback(cb, user_data);
+    ESP_LOGI(TAG, "Meter listener registered: %p", cb);
 }
 
 void inter_mcu_set_wave_chunk_listener(wavex_wave_chunk_cb_t cb, void* user_data)
@@ -269,6 +270,21 @@ void inter_mcu_update_backend_heartbeat(uint32_t uptime_ms, uint32_t rx_total, u
     s_statistics.update_backend_heartbeat(uptime_ms, rx_total, loop_counter);
 }
 
+void inter_mcu_update_backend_meters(float rms_left, float rms_right, float peak_left, float peak_right)
+{
+    s_statistics.update_meter_data(rms_left, rms_right, peak_left, peak_right);
+}
+
+void inter_mcu_get_meter_data(wavex_meter_data_t* out)
+{
+    if (!out) {
+        ESP_LOGE(TAG, "Invalid meter data output pointer");
+        return;
+    }
+    
+    s_statistics.get_meter_data(out);
+}
+
 void inter_mcu_process_packet_data(const uint8_t* data, size_t length)
 {
     if (!data || length == 0) {
@@ -280,6 +296,11 @@ void inter_mcu_process_packet_data(const uint8_t* data, size_t length)
     // For now, just increment the total packet count
     s_statistics.increment_packet_stat(0xFF); // Unknown packet type
     ESP_LOGD(TAG, "Packet data processing not yet implemented, length: %zu", length);
+}
+
+void inter_mcu_increment_packet_stat(uint8_t packet_type)
+{
+    s_statistics.increment_packet_stat(packet_type);
 }
 
 esp_err_t create_tasks()

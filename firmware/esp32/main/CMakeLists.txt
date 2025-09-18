@@ -2,7 +2,7 @@ idf_component_register(
     SRCS
         "main.cpp"
         "inter_mcu.cpp"
-        "ui_task.c"
+        "ui_task.cpp"
         "comm/link_manager.cpp"
         "comm/packet_processor.cpp"
         "comm/statistics.cpp"

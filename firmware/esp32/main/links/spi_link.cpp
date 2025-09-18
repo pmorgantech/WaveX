@@ -49,13 +49,34 @@ static void handle_ctrl_packet(const ctrl_pkt_t* p)
               p->type, p->len, p->seq, p->flags);
     #endif
 
-    if (p->type == 0x90 && p->len >= 4) {
-        uint16_t l = (p->payload[0] | (p->payload[1]<<8));
-        uint16_t r = (p->payload[2] | (p->payload[3]<<8));
+    // Update packet statistics based on packet type
+    if (p->type == 0x90) {
+        // Meter data packet
+        inter_mcu_increment_packet_stat(0x0D); // METER_PUSH packet type
+    } else if (p->type == 0x91) {
+        // Heartbeat packet
+        inter_mcu_increment_packet_stat(0x0F); // HEARTBEAT packet type
+    } else {
+        // Unknown packet type
+        inter_mcu_increment_packet_stat(0xFF); // UNKNOWN packet type
+    }
+
+    if (p->type == 0x90 && p->len >= 8) {
+        uint16_t q_rmsL = (p->payload[0] | (p->payload[1]<<8));
+        uint16_t q_rmsR = (p->payload[2] | (p->payload[3]<<8));
+        uint16_t q_pkL  = (p->payload[4] | (p->payload[5]<<8));
+        uint16_t q_pkR  = (p->payload[6] | (p->payload[7]<<8));
+        
+        // Convert Q15 to float (divide by 32767.0f)
+        float rms_left = (float)q_rmsL / 32767.0f;
+        float rms_right = (float)q_rmsR / 32767.0f;
+        float peak_left = (float)q_pkL / 32767.0f;
+        float peak_right = (float)q_pkR / 32767.0f;
+        
         #if WAVEX_MCU_LINK_PACKET_DEBUG
-        ESP_LOGI(TAG, "METER L=%u R=%u (Q15)", l, r);
+        ESP_LOGI(TAG, "METER L=%.3f R=%.3f PEAK_L=%.3f PEAK_R=%.3f", rms_left, rms_right, peak_left, peak_right);
         #endif
-        // inter_mcu_update_backend_meters(l, r); // optional helper if you have one
+        inter_mcu_update_backend_meters(rms_left, rms_right, peak_left, peak_right);
     } else if (p->type == 0x91 && p->len >= 12) {
         uint32_t uptime = (uint32_t)p->payload[0] | ((uint32_t)p->payload[1] << 8) |
                           ((uint32_t)p->payload[2] << 16) | ((uint32_t)p->payload[3] << 24);
