@@ -1,7 +1,8 @@
 idf_component_register(
-    SRCS 
+    SRCS
         "main.cpp"
         "inter_mcu.cpp"
+        "ui_task.c"
         "comm/link_manager.cpp"
         "comm/packet_processor.cpp"
         "comm/statistics.cpp"
@@ -9,19 +10,26 @@ idf_component_register(
         "tasks/rx_task.cpp"
         "tasks/tx_task.cpp"
         "links/spi_link.cpp"
-    INCLUDE_DIRS 
+    INCLUDE_DIRS
         "."
         "comm"
         "links"
         "tasks"
         "../../shared/spi_protocol"
         "../../shared/config"
-    REQUIRES 
+    REQUIRES
         "driver"
         "freertos"
         "esp_timer"
         "esp_common"
+        "esp_driver_gpio"
+        "esp_driver_spi"
+        "esp_driver_i2c"
+        "esp_lcd"
+        "esp_lvgl_port"
+        "esp_lcd_touch"
+        "esp_lcd_touch_gt911"
     PRIV_REQUIRES
         "shared"
-        "ui_lgfx"
+        "hardware_config"
 )

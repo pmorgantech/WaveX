@@ -23,27 +23,41 @@ extern "C" {
 
 #ifdef ESP_PLATFORM
 
-// Display Interface (ST7796S TFT)
-#define WAVEX_ESP_LCD_SCLK      7    // J1-7: Display SPI Clock
-#define WAVEX_ESP_LCD_MOSI      6    // J1-6: Display SPI Data Out
-#define WAVEX_ESP_LCD_CS        5    // J1-5: Display Chip Select
-#define WAVEX_ESP_LCD_DC        4    // J1-4: Data/Command Control
-#define WAVEX_ESP_LCD_RST       2    // J3-5: Display Reset
-#define WAVEX_ESP_LCD_BL        21   // J3-18: Backlight Control
+// MIPI DSI Display Interface (5-DSI-TOUCH-A)
+// MIPI DSI Data Lanes
+#define WAVEX_ESP_DSI_D0P       2    // MIPI DSI Data Lane 0 Positive
+#define WAVEX_ESP_DSI_D0N       3    // MIPI DSI Data Lane 0 Negative
+#define WAVEX_ESP_DSI_D1P       4    // MIPI DSI Data Lane 1 Positive
+#define WAVEX_ESP_DSI_D1N       5    // MIPI DSI Data Lane 1 Negative
+#define WAVEX_ESP_DSI_CLKP      6    // MIPI DSI Clock Positive
+#define WAVEX_ESP_DSI_CLKN      7    // MIPI DSI Clock Negative
 
-// Touch Interface (FT6X36 I2C)
+// MIPI DSI Control Pins
+#define WAVEX_ESP_DSI_RST       8    // Display Reset
+#define WAVEX_ESP_DSI_BL        9    // Backlight Control
+
+// Touch Interface (GT911 I2C)
 #define WAVEX_ESP_TOUCH_SDA     20   // J3-19: Touch I2C Data
-#define WAVEX_ESP_TOUCH_SCL     9    // J3-4: Touch I2C Clock
+#define WAVEX_ESP_TOUCH_SCL     21   // J3-4: Touch I2C Clock
 #define WAVEX_ESP_TOUCH_RST     14   // J1-20: Touch Reset
 #define WAVEX_ESP_TOUCH_INT     15   // J1-21: Touch Interrupt
 
-// Inter-MCU Communication (SPI2/HSPI)
-#define WAVEX_ESP_SPI_SCLK      16   // J1-14: SPI2 SCLK to Daisy
-#define WAVEX_ESP_SPI_MOSI      17   // J1-10: SPI2 MOSI to Daisy
-#define WAVEX_ESP_SPI_MISO      18   // J1-11: SPI2 MISO from Daisy
-#define WAVEX_ESP_SPI_CS        19   // J1-15: SPI2 CS to Daisy
-#define WAVEX_ESP_DAISY_IRQ     8    // J3-26: Daisy IRQ input
-#define WAVEX_ESP_ATTN_OUT      41   // J3-14: ESP attention output (moved from GPIO35 due to PSRAM conflict)
+// Legacy SPI Display Interface (ST7796S TFT) - DISABLED for MIPI DSI
+// #define WAVEX_ESP_LCD_SCLK      7    // J1-7: Display SPI Clock
+// #define WAVEX_ESP_LCD_MOSI      6    // J1-6: Display SPI Data Out
+// #define WAVEX_ESP_LCD_CS        5    // J1-5: Display Chip Select
+// #define WAVEX_ESP_LCD_DC        4    // J1-4: Data/Command Control
+// #define WAVEX_ESP_LCD_RST       2    // J3-5: Display Reset
+// #define WAVEX_ESP_LCD_BL        21   // J3-18: Backlight Control
+
+// Inter-MCU Communication (SPI slave to Daisy master) - using user-verified available pins
+#define WAVEX_ESP_SPI_SCLK      48   // Using GPIO48 for SCK
+#define WAVEX_ESP_SPI_MOSI      49   // Using GPIO49 for MOSI
+#define WAVEX_ESP_SPI_MISO      50   // Using GPIO50 for MISO
+#define WAVEX_ESP_SPI_CS        51   // Using GPIO51 for CS
+// IRQ/ATTN lines for Daisy <-> ESP signaling
+#define WAVEX_ESP_DAISY_IRQ     27   // J3-26: Daisy IRQ line to ESP (active low)
+#define WAVEX_ESP_ATTN_OUT      41   // J3-14: ESP Attention output to Daisy (active high)
 
 // SD Card Interface (SPI2) - DISABLED: No SD card on ESP32
 // #define WAVEX_ESP_SD_CS         10   // J1-16: SD Card Chip Select
@@ -89,13 +103,12 @@ extern "C" {
 
 #ifdef DAISY_PLATFORM
 
-// Inter-MCU Communication (SPI1)
-#define WAVEX_DAISY_SPI_SCK     8     // D8: SPI1_SCK (clock from ESP32)
-#define WAVEX_DAISY_SPI_MOSI    10    // D10: SPI1_MOSI (data from ESP32)
-#define WAVEX_DAISY_SPI_MISO    9     // D9: SPI1_MISO (data to ESP32)
-#define WAVEX_DAISY_SPI_CS      7     // D7: SPI1_NSS (chip select from ESP32)
-#define WAVEX_DAISY_IRQ_OUT     13    // D13: Push-pull IRQ to ESP32
-#define WAVEX_DAISY_ATTN_IN     14    // D14: Attention input from ESP32
+// Inter-MCU Communication (SPI1 master to ESP32-P4 slave)
+#define WAVEX_DAISY_SPI_SCK     8     // D8: SPI1_SCK (clock to ESP32)
+#define WAVEX_DAISY_SPI_MOSI    10    // D10: SPI1_MOSI (data to ESP32)
+#define WAVEX_DAISY_SPI_MISO    9     // D9: SPI1_MISO (data from ESP32)
+#define WAVEX_DAISY_SPI_CS      7     // D7: SPI1_NSS (chip select to ESP32)
+// No IRQ lines needed - simple master-slave polling
 
 // Audio I/O (Built-in AK4556 Codec)
 #define WAVEX_DAISY_AUDIO_IN_L  -1   // Built-in: Left audio input
@@ -146,15 +159,15 @@ extern "C" {
 // Inter-MCU Link Configuration
 // =============================================================================
 
-// ESP32 SPI configuration
-#define WAVEX_ESP_SPI_HOST      SPI2_HOST     // SPI2_HOST (HSPI)
-#define WAVEX_ESP_SPI_CLK_HZ    10000000  // 10 MHz
-#define WAVEX_ESP_SPI_QUEUE_SIZE 4
-#define WAVEX_ESP_SPI_DMA_CH    -1    // SPI_DMA_CH_AUTO
+// ESP32 SPI configuration (slave mode)
+#define WAVEX_ESP_SPI_HOST      SPI3_HOST     // ESP32-P4 uses SPI3_HOST for slave mode
+#define WAVEX_ESP_SPI_CLK_HZ    10000000  // 10 MHz (master controls)
+#define WAVEX_ESP_SPI_QUEUE_SIZE 8
+#define WAVEX_ESP_SPI_DMA_CH    SPI_DMA_CH_AUTO // Reverting: P4 slave only supports auto-alloc for DMA
 
-// Daisy SPI configuration
+// Daisy SPI configuration (master mode)
 #define WAVEX_DAISY_SPI_PERIPH  1     // SPI1
-#define WAVEX_DAISY_SPI_MODE    1     // SLAVE mode
+#define WAVEX_DAISY_SPI_MODE    0     // MASTER mode
 
 // Ring buffer sizes
 #define WAVEX_SPI_RX_RING_SIZE  32

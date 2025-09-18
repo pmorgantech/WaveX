@@ -41,6 +41,12 @@ typedef struct {
 
 void spi_link_get_stats(spi_link_stats_t* stats);
 
+// Log current statistics for debugging
+void spi_link_log_stats(void);
+
+// Check if SPI link is active and receiving data
+bool spi_link_is_active(void);
+
 // Set packet processing callback for received packets
 void spi_link_set_packet_callback(void (*callback)(const uint8_t* data, size_t length));
 

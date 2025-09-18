@@ -1,9 +1,9 @@
 # Name,   Type, SubType, Offset,  Size,    Flags
-# Note: if you have increased the bootloader size, make sure to update the offsets to avoid overlap
+# Note: Adjusted for ESP32-P4 with 2MB flash (0x200000 total)
 nvs,      data, nvs,     0x9000,  0x6000,
 phy_init, data, phy,     0xf000,  0x1000,
-factory,  app,  factory, 0x10000, 1M,
-# Sample storage partition (3MB for storing audio samples)
-samples,  data, 0x06,    0x110000, 3M,
-# User data partition (remaining space for settings, presets, etc.)
-userdata, data, 0x07,    0x410000, 4M, 
+factory,  app,  factory, 0x10000, 0x100000,
+# Sample storage partition (640KB for storing audio samples) 
+samples,  data, 0x06,    0x110000, 0xA0000,
+# User data partition (remaining 192KB for settings, presets, etc.)
+userdata, data, 0x07,    0x1B0000, 0x30000, 

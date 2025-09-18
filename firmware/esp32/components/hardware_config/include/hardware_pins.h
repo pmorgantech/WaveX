@@ -21,7 +21,7 @@
 #include "driver/spi_master.h"
 #include "driver/i2c.h"
 #include "driver/uart.h"
-#include "driver/adc.h"
+// #include "esp_adc/adc_oneshot.h"  // Not needed - ADC functionality is disabled
 #include "esp_lcd_types.h"
 #else
 // Minimal fallbacks for host builds (lint/tests)
@@ -118,9 +118,35 @@ extern "C" {
 #define WAVEX_INTER_MCU_SPI_HOST SPI2_HOST
 
 // =============================================================================
-// ST7796S Display Controller (480x320 TFT) - ✅ VERIFIED VALID
+// MIPI DSI Display Controller (800x480 TFT) - ✅ NEW MIPI DSI SUPPORT
 // =============================================================================
 
+#if WAVEX_LCD_DISPLAY_TYPE == 1  // MIPI DSI Display
+/** MIPI DSI Data Lane 0 Positive - GPIO2 ✅ */
+#define WAVEX_DSI_GPIO_D0P      WAVEX_ESP_DSI_D0P
+
+/** MIPI DSI Data Lane 0 Negative - GPIO3 ✅ */
+#define WAVEX_DSI_GPIO_D0N      WAVEX_ESP_DSI_D0N
+
+/** MIPI DSI Data Lane 1 Positive - GPIO4 ✅ */
+#define WAVEX_DSI_GPIO_D1P      WAVEX_ESP_DSI_D1P
+
+/** MIPI DSI Data Lane 1 Negative - GPIO5 ✅ */
+#define WAVEX_DSI_GPIO_D1N      WAVEX_ESP_DSI_D1N
+
+/** MIPI DSI Clock Positive - GPIO6 ✅ */
+#define WAVEX_DSI_GPIO_CLKP     WAVEX_ESP_DSI_CLKP
+
+/** MIPI DSI Clock Negative - GPIO7 ✅ */
+#define WAVEX_DSI_GPIO_CLKN     WAVEX_ESP_DSI_CLKN
+
+/** Display Reset - GPIO8 ✅ */
+#define WAVEX_LCD_GPIO_RST      WAVEX_ESP_DSI_RST
+
+/** Display Backlight control - GPIO9 ✅ */
+#define WAVEX_LCD_GPIO_BL       WAVEX_ESP_DSI_BL
+
+#else  // ST7796S SPI Display (Legacy)
 /** Display SPI Clock - GPIO7 (J1 pin 7) ✅ */
 #define WAVEX_LCD_GPIO_SCLK     WAVEX_ESP_LCD_SCLK
 
@@ -138,11 +164,32 @@ extern "C" {
 
 /** Display Backlight control - GPIO21 (J3 pin 18) ✅ */
 #define WAVEX_LCD_GPIO_BL       WAVEX_ESP_LCD_BL
+#endif
 
 // =============================================================================
-// I2C Capacitive Touch Controller - ✅ VERIFIED VALID
+// I2C Capacitive Touch Controller - ✅ UPDATED FOR MIPI DSI
 // =============================================================================
 
+#if WAVEX_TOUCH_CONTROLLER_TYPE == 1  // GT911 Touch Controller
+/** Touch I2C Data - GPIO20 (J3 pin 19) ✅ */
+#define WAVEX_CTP_GPIO_SDA      WAVEX_ESP_TOUCH_SDA
+
+/** Touch I2C Clock - GPIO21 (J3 pin 4) ✅ */
+#define WAVEX_CTP_GPIO_SCL      WAVEX_ESP_TOUCH_SCL
+
+/** Touch Reset - GPIO14 (J1 pin 20) ✅ */
+#define WAVEX_CTP_GPIO_RST      WAVEX_ESP_TOUCH_RST
+
+/** Touch Interrupt - GPIO15 (J1 pin 21) ✅ */
+#define WAVEX_CTP_GPIO_INT      WAVEX_ESP_TOUCH_INT
+
+/** I2C port number for touch controller */
+#define WAVEX_CTP_I2C_NUM       I2C_NUM_0
+
+/** I2C master frequency for touch controller (400kHz for GT911) */
+#define WAVEX_CTP_I2C_FREQ_HZ   400000
+
+#else  // FT6X36 Touch Controller (Legacy)
 /** Touch I2C Data - GPIO20 (J3 pin 19) ✅ */
 #define WAVEX_CTP_GPIO_SDA      WAVEX_ESP_TOUCH_SDA
 
@@ -160,6 +207,7 @@ extern "C" {
 
 /** I2C master frequency for touch controller (100kHz standard) */
 #define WAVEX_CTP_I2C_FREQ_HZ   100000
+#endif
 
 // =============================================================================
 // Inter-MCU Communication (ESP32 ↔ Daisy) - 🔧 UPDATED TO SPI
@@ -338,6 +386,32 @@ extern "C" {
 // Display Configuration Constants
 // =============================================================================
 
+#if WAVEX_LCD_DISPLAY_TYPE == 1  // MIPI DSI Display
+/** LCD horizontal resolution (5-DSI-TOUCH-A) */
+#define WAVEX_LCD_H_RES         800
+
+/** LCD vertical resolution (5-DSI-TOUCH-A) */
+#define WAVEX_LCD_V_RES         480
+
+/** LCD color depth in bits per pixel */
+#define WAVEX_LCD_BITS_PER_PIXEL    16
+
+/** MIPI DSI lane bitrate (Mbps) */
+#define WAVEX_DSI_LANE_BITRATE_MBPS 1500
+
+/** MIPI DSI color format (0 = RGB565, 1 = RGB888) */
+#define WAVEX_DSI_COLOR_FORMAT      0
+
+/** LCD color space - RGB order for MIPI DSI */
+#define WAVEX_LCD_COLOR_SPACE       ESP_LCD_COLOR_SPACE_RGB
+
+/** LCD backlight active level (1 = high/on via PWM duty >0) */
+#define WAVEX_LCD_BL_ON_LEVEL       1
+
+/** LCD reset active level (0 = low/reset) */
+#define WAVEX_LCD_RST_ACTIVE_LEVEL  0
+
+#else  // ST7796S SPI Display (Legacy)
 /** LCD horizontal resolution */
 #define WAVEX_LCD_H_RES         480
 
@@ -367,6 +441,7 @@ extern "C" {
 
 /** LCD chip select active level (0 = low/active, from docs) */
 #define WAVEX_LCD_CS_ACTIVE_LEVEL   0
+#endif
 
 // Backlight control mode selection
 #define WAVEX_BACKLIGHT_PWM_MODE    0  // Set to 1 for PWM mode, 0 for GPIO mode
@@ -381,6 +456,9 @@ extern "C" {
 
 /** Touch screen maximum Y coordinate */
 #define WAVEX_TOUCH_MAX_Y           WAVEX_LCD_V_RES
+
+/** Touch controller type (0 = FT6X36, 1 = GT911) */
+#define WAVEX_TOUCH_CONTROLLER_TYPE WAVEX_TOUCH_CONTROLLER_TYPE
 
 // =============================================================================
 // Potentiometer Configuration Constants - 🆕 NEW

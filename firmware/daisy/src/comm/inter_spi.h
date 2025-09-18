@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 #include "daisy_seed.h"
-#include "spi_protocol/spi_protocol.h"
+#include "../../shared/spi_protocol/spi_protocol.h"
 #include "config/link_config.h"
 
 // SPI link configuration is now handled by the shared link_config.h

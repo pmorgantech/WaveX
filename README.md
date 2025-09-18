@@ -21,11 +21,11 @@ A high-performance dual-MCU sampler and synthesizer featuring an ESP32-S3 fronte
 - **Sample management** and preset storage
 
 ### Inter-MCU Communication
-- **High-speed UART protocol** (230.4kbps) for control data and sample transfer
+- **High-speed SPI protocol** (10+ Mbps) for control data and sample transfer
 - **Custom protocol** optimized for real-time audio applications with packet statistics
 - **Shared library** for protocol definitions and utilities
-- **Bidirectional communication** with comprehensive testing and monitoring
-- **Automatic test messages** for continuous communication verification
+- **Master-slave communication** with comprehensive testing and monitoring
+- **Interrupt-driven data transfer** for continuous communication verification
 - **Packet statistics tracking** for debugging and performance analysis
 
 ## Project Structure
@@ -55,18 +55,18 @@ WaveX/
 - **Build System**: Unified Makefile and `idf.py` build successful for ESP32 with unnecessary components disabled.
 - **ESP32 Firmware**: Project structure, builds successfully with zero warnings
 - **Hardware Compatibility**: All GPIO assignments verified for ESP32-S3-DevKitC-1
-- **Display Driver**: ST7796S 480x320 TFT display support via `esp_lcd` and `esp_lvgl_port`.
-- **Touch Integration**: FT6X36 I2C capacitive touch with LVGL integration.
-- **Shared Protocol Library**: UART communication protocol definitions and implementations
-- **Inter-MCU Communication**: Full bidirectional UART protocol with packet statistics and testing
+- **Display Driver**: MIPI-DSI display support via `esp_lcd` and `esp_lvgl_port`.
+- **Touch Integration**: Capacitive touch with LVGL integration.
+- **Shared Protocol Library**: SPI communication protocol definitions and implementations
+- **Inter-MCU Communication**: Full master-slave SPI protocol with packet statistics and testing
 - **Daisy Firmware**: QSPI flash configuration, automated build/flash process
 - **Git Submodules**: LVGL, libDaisy, DaisySP properly configured
 - **Documentation**: Architecture and setup documentation updated.
 
 ### 🔄 In Progress
-- **Protocol Implementation**: Complete UART communication handlers and message routing
+- **Protocol Implementation**: Complete SPI communication handlers and message routing
 - **Audio Engine**: Basic audio processing framework on Daisy backend
-- **UI Migration**: Migrating from LVGL to LovyanGFX-based custom UI (see `docs/WaveX_UI_Redesign.md`).
+- **UI System**: LVGL-based UI system with MIPI-DSI display support.
 
 ### 📋 Next Steps
 - Complete audio engine structure for Daisy with sample playback
@@ -125,19 +125,24 @@ make setup      # Initialize git submodules
 ### ESP32-S3 Frontend Pin Assignments
 **⚠️ All pin assignments verified for ESP32-S3-DevKitC-1 compatibility**
 
-#### 🖥️ ST7796S Display Controller (480x320 TFT)
+#### 🖥️ MIPI-DSI Display Controller
 ```
 Display Pin     Signal          GPIO    Pin Location    Description
 -----------     ------          ----    ------------    -----------
-1               VCC             5V      Power          LCD power positive (5V recommended)
-2               GND             GND     Power          LCD power ground
-3               LCD_CS          5       J1 pin 5       LCD chip select (low active)
-4               LCD_RST         2       J3 pin 5       LCD reset (low reset)
-5               LCD_RS (DC)     4       J1 pin 4       Data/Command control
-6               SDI (MOSI)      6       J1 pin 6       SPI Data Out
-7               SCK             7       J1 pin 7       SPI Clock (40MHz)
-8               LED (Backlight) 21      J3 pin 18      Backlight control
-9               SDO (MISO)      19      J3 pin 20      SPI Data In (optional)
+1               VCC             3.3V    Power          Display power positive
+2               GND             GND     Power          Display power ground
+3               MIPI_D0P        GPIO1   MIPI-DSI       MIPI Data Lane 0 Positive
+4               MIPI_D0N        GPIO2   MIPI-DSI       MIPI Data Lane 0 Negative
+5               MIPI_D1P        GPIO3   MIPI-DSI       MIPI Data Lane 1 Positive
+6               MIPI_D1N        GPIO4   MIPI-DSI       MIPI Data Lane 1 Negative
+7               MIPI_CLKP       GPIO5   MIPI-DSI       MIPI Clock Lane Positive
+8               MIPI_CLKN       GPIO6   MIPI-DSI       MIPI Clock Lane Negative
+9               MIPI_D2P        GPIO7   MIPI-DSI       MIPI Data Lane 2 Positive
+10              MIPI_D2N        GPIO8   MIPI-DSI       MIPI Data Lane 2 Negative
+11              MIPI_D3P        GPIO9   MIPI-DSI       MIPI Data Lane 3 Positive
+12              MIPI_D3N        GPIO10  MIPI-DSI       MIPI Data Lane 3 Negative
+13              MIPI_RST        GPIO11  MIPI-DSI       Display Reset
+14              MIPI_BL         GPIO12  MIPI-DSI       Backlight Control
 ```
 
 #### 👆 I2C Capacitive Touch Panel - CRITICAL COMPONENT #2
@@ -150,9 +155,9 @@ Touch Pin       Signal          GPIO    Pin Location    Description
 13              CTP_RST         14      J1 pin 20      Reset pin
 ```
 
-**✅ Touch Technology**: Firmware supports FT6x36 I2C capacitive touch controllers (FT6236/FT6336). LVGL integration exists today; migration to LovyanGFX touch handling is planned.
+**✅ Touch Technology**: Firmware supports capacitive touch controllers with LVGL integration.
 
-**📡 SPI Configuration**: Multiple independent SPI interfaces are used - Display (VSPI), SD Card (HSPI), and LED Driver (HSPI) for optimal performance and signal isolation.
+**📡 MIPI-DSI Configuration**: High-speed MIPI-DSI interface provides superior display performance compared to SPI, with LVGL integration for professional UI rendering.
 
 #### 🎛️ Dual Potentiometer Interface (CD74HC4067)
 ```
@@ -194,22 +199,22 @@ LATCH           48      J3 pin 20      Latch control
 ```
 Signal          GPIO    Pin Location    Description
 ------          ----    ------------    -----------
-SPI_SCLK        16      J1 pin 14      SPI2 SCLK (dedicated to Daisy link)
-SPI_MOSI        17      J1 pin 10      Master-out (ESP32 → Daisy)
-SPI_MISO        18      J1 pin 11      Master-in (Daisy → ESP32)
-SPI_CS          19      J1 pin 15      Dedicated CS for Daisy
-DAISY_IRQ       20      J3 pin 19      Daisy→ESP "data ready" (falling-edge INT)
-ESP_ATTN        41      J3 pin 14      ESP→Daisy "attention/wakeup" (moved from GPIO35 due to PSRAM conflict)
+SPI_SCLK        8       ESP32-P4 GPIO8  SPI SCK from Daisy (ESP32 as slave)
+SPI_MOSI        5       ESP32-P4 GPIO5  SPI MOSI from Daisy
+SPI_MISO        7       ESP32-P4 GPIO7  SPI MISO to Daisy
+SPI_CS          50      ESP32-P4 GPIO50 SPI CS from Daisy
+DAISY_IRQ       27      J3 pin 26      Daisy→ESP "data ready" (falling-edge INT)
+ESP_ATTN        41      J3 pin 14      ESP→Daisy "attention/wakeup" (active high)
 GND             GND     —               Common ground
 ```
-**Note**: Uses SPI2 for high-speed bidirectional communication at 10MHz with DMA support, interrupt-driven data transfer, and comprehensive packet statistics
+**Note**: Uses SPI with ESP32 as slave and Daisy as master for high-speed communication at 10MHz with interrupt-driven data transfer and comprehensive packet statistics
 
 **🔌 Quick Connection Guide:**
-- **ESP32 GPIO16** → **Daisy D8** (SCLK - Yellow wire)
-- **ESP32 GPIO17** → **Daisy D10** (MOSI - Blue wire)  
-- **ESP32 GPIO18** → **Daisy D9** (MISO - Green wire)
-- **ESP32 GPIO19** → **Daisy D7** (CS - White wire)
-- **ESP32 GPIO8** → **Daisy D13** (IRQ - Red wire)
+- **ESP32 GPIO8** → **Daisy D8** (SCLK - Yellow wire)
+- **ESP32 GPIO5** → **Daisy D10** (MOSI - Blue wire)  
+- **ESP32 GPIO7** → **Daisy D9** (MISO - Green wire)
+- **ESP32 GPIO50** → **Daisy D7** (CS - White wire)
+- **ESP32 GPIO27** → **Daisy D13** (IRQ - Red wire)
 - **ESP32 GPIO41** → **Daisy D14** (ATTN - Orange wire)
 - **ESP32 GND** → **Daisy GND** (Black wire)
 
@@ -263,15 +268,15 @@ AUDIO_OUT_R     D/A_R   Right audio output
 ```
 Signal          Pin     Description
 ------          ---     -----------
-SPI_SCK         D8      SPI1_SCK (clock from ESP32)
-SPI_MOSI        D10     SPI1_MOSI (data from ESP32)
-SPI_MISO        D9      SPI1_MISO (data to ESP32)
-SPI_CS          D7      SPI1_NSS (chip select from ESP32)
+SPI_SCK         D8      SPI1_SCK (clock to ESP32 - Daisy as master)
+SPI_MOSI        D10     SPI1_MOSI (data to ESP32)
+SPI_MISO        D9      SPI1_MISO (data from ESP32)
+SPI_CS          D7      SPI1_NSS (chip select to ESP32)
 DAISY_IRQ       D13     Push-pull IRQ to ESP32 (data ready)
 ESP_ATTN        D14     Attention input from ESP32 (wakeup)
 GND             GND     Common ground
 ```
-**Note**: Uses SPI1 for high-speed bidirectional communication at 10MHz with interrupt-driven data transfer and comprehensive packet statistics
+**Note**: Uses SPI1 with Daisy as master and ESP32 as slave for high-speed communication at 10MHz with interrupt-driven data transfer and comprehensive packet statistics
 
 #### 🎛️ CV Outputs (via MCP4728 DACs)
 ```
@@ -422,9 +427,10 @@ The SPI communication between MCUs operates with specific timing constraints:
 ```
 Protocol        Clock       Max Data Rate    Latency    Features
 --------        -----       -------------    -------    --------
-Inter-MCU SPI   10MHz       10Mb/s          <1ms       DMA support, interrupt-driven, packet stats
+Inter-MCU SPI   10MHz       10+ Mbps        <1ms       DMA support, interrupt-driven, packet stats
 Audio Callback  48kHz       64 samples       1.33ms     Real-time audio processing
 Parameter Sync  1kHz        Control rate     1ms        MIDI and control updates
+MIPI-DSI        Variable    High bandwidth   <16ms      LVGL rendering, hardware acceleration
 ```
 
 ### Development/Debug Interfaces
@@ -614,32 +620,38 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 WaveX uses an ESP32-S3-DevKitC-1 as the frontend MCU with the following comprehensive pin assignments:
 
-### 🖥️ ST7796S Display Controller (480x320 TFT)
+### 🖥️ MIPI-DSI Display Controller
 | Function | GPIO | Pin Location | Status |
 |----------|------|--------------|--------|
-| SPI Clock (SCLK) | GPIO7 | J1-7 | ✅ Verified |
-| SPI MOSI | GPIO6 | J1-6 | ✅ Verified |
-| Chip Select (CS) | GPIO5 | J1-5 | ✅ Verified |
-| Data/Command (DC) | GPIO4 | J1-4 | ✅ Verified |
-| Reset (RST) | GPIO2 | J3-5 | ✅ Verified |
-| Backlight (BL) | GPIO21 | J3-18 | ✅ Verified |
+| MIPI D0P | GPIO1 | MIPI-DSI | ✅ Verified |
+| MIPI D0N | GPIO2 | MIPI-DSI | ✅ Verified |
+| MIPI D1P | GPIO3 | MIPI-DSI | ✅ Verified |
+| MIPI D1N | GPIO4 | MIPI-DSI | ✅ Verified |
+| MIPI CLKP | GPIO5 | MIPI-DSI | ✅ Verified |
+| MIPI CLKN | GPIO6 | MIPI-DSI | ✅ Verified |
+| MIPI D2P | GPIO7 | MIPI-DSI | ✅ Verified |
+| MIPI D2N | GPIO8 | MIPI-DSI | ✅ Verified |
+| MIPI D3P | GPIO9 | MIPI-DSI | ✅ Verified |
+| MIPI D3N | GPIO10 | MIPI-DSI | ✅ Verified |
+| MIPI RST | GPIO11 | MIPI-DSI | ✅ Verified |
+| MIPI BL | GPIO12 | MIPI-DSI | ✅ Verified |
 
-### 👆 Touch Controller (FT6X36 I2C)
+### 👆 Touch Controller (Capacitive)
 | Function | GPIO | Pin Location | Status |
 |----------|------|--------------|--------|
-| I2C Data (SDA) | GPIO20 | J3-19 | ✅ Verified |
-| I2C Clock (SCL) | GPIO9 | J1-13 | ✅ Default I2C SCL |
-| Reset (RST) | GPIO14 | J1-20 | 🔧 Updated from GPIO15 |
+| Touch Data (SDA) | GPIO20 | J3-19 | ✅ Verified |
+| Touch Clock (SCL) | GPIO13 | J1-13 | ✅ I2C SCL |
+| Reset (RST) | GPIO14 | J1-20 | ✅ Verified |
 
 ### 🔗 Inter-MCU Communication (ESP32 ↔ Daisy)
 | Function | GPIO | Pin Location | Status |
 |----------|------|--------------|--------|
-| SPI SCLK | GPIO16 | J1-14 | ✅ Verified |
-| SPI MOSI | GPIO17 | J1-10 | ✅ Verified |
-| SPI MISO | GPIO18 | J1-11 | ✅ Verified |
-| SPI CS | GPIO19 | J1-15 | ✅ Verified |
-| Daisy IRQ | GPIO8 | J3-26 | 🔧 Updated from GPIO20 |
-| ESP ATTN | GPIO41 | J3-14 | 🔧 Updated from GPIO35 |
+| SPI SCLK | GPIO8 | ESP32-P4 GPIO8 | ✅ Verified |
+| SPI MOSI | GPIO5 | ESP32-P4 GPIO5 | ✅ Verified |
+| SPI MISO | GPIO7 | ESP32-P4 GPIO7 | ✅ Verified |
+| SPI CS | GPIO50 | ESP32-P4 GPIO50 | ✅ Verified |
+| Daisy IRQ | GPIO27 | J3-26 | ✅ Verified |
+| ESP ATTN | GPIO41 | J3-14 | ✅ Verified |
 | GND | GND | — | ✅ Common ground |
 
 ### 💾 SD Card Interface
@@ -692,48 +704,53 @@ WaveX uses an ESP32-S3-DevKitC-1 as the frontend MCU with the following comprehe
 
 ### 📌 Pin Usage Summary
 
-**Available Pins:** GPIO1, GPIO3, GPIO8, GPIO10, GPIO11, GPIO12, GPIO13, GPIO25, GPIO36, GPIO37, GPIO38, GPIO39, GPIO41, GPIO42, GPIO43, GPIO44
+**MIPI-DSI Pins:** GPIO1-12 (MIPI-DSI interface)
+**Inter-MCU SPI Pins:** GPIO5, GPIO7, GPIO8, GPIO50 (SPI communication)
+**Touch Pins:** GPIO13, GPIO14, GPIO20 (Capacitive touch)
+**Available Pins:** GPIO15, GPIO16, GPIO17, GPIO18, GPIO19, GPIO21-49 (excluding MIPI-DSI and reserved pins)
 
 **Reserved/Avoid:** GPIO0 (strapping), GPIO26-32 (SPI Flash/PSRAM), GPIO45-48 (strapping pins)
 
 ### 🎯 Pin Selection Rationale
 
-**Display Pins (GPIO2, 4-7, 21):** Grouped together for efficient SPI communication and signal integrity.
+**MIPI-DSI Pins (GPIO1-12):** Dedicated MIPI-DSI interface pins for high-speed display communication with hardware acceleration.
 
-**Touch I2C (GPIO9, 14, 15, 23):** GPIO9 is the default I2C SCL pin on ESP32-S3, GPIO23 is available for SDA.
+**Touch I2C (GPIO13, 14, 20):** Uses available GPIO pins for capacitive touch controller communication.
 
-**Inter-MCU SPI (GPIO16-20, 24):** Uses SPI2 with dedicated pins for high-speed Daisy communication, interrupt-driven data transfer, and DMA support.
+**Inter-MCU SPI (GPIO5, 7, 8, 50):** Uses dedicated pins for high-speed Daisy communication with interrupt-driven data transfer.
 
 **Encoder (GPIO33, 34, 40):** Uses available GPIO pins with PCNT peripheral for high-precision quadrature decoding.
 
 **Design Principles:**
 - ✅ No strapping pin conflicts (GPIO0 avoided for critical functions)
-- ✅ SPI Flash/PSRAM pins (GPIO26-32) now available for future expansion
+- ✅ MIPI-DSI interface uses dedicated pins (GPIO1-12) for optimal performance
+- ✅ SPI Flash/PSRAM pins (GPIO26-32) available for future expansion
 - ✅ ESP32-S3 default VSPI pins (GPIO35-39) available for future expansion
-- ✅ Dedicated SPI buses (Display SPI3, Inter-MCU SPI2)
-- ✅ Dedicated I2C bus (Touch I2C0)
+- ✅ Dedicated SPI bus for inter-MCU communication
+- ✅ Dedicated I2C bus for touch controller
 - ✅ PCNT peripheral for encoder (GPIO33-34)
 - ✅ Strapping pins (GPIO45-48) completely avoided
 
 ### 🔧 Hardware Validation Status
 
 **✅ Verified Components:**
-- ST7796S Display: Full initialization and LVGL integration working
-- FT6x36 Touch Controller: I2C communication and touch event handling
-- Inter-MCU SPI: Design completed, using SPI2 on GPIO16-20,24 with interrupt support
+- MIPI-DSI Display: Full initialization and LVGL integration working
+- Capacitive Touch Controller: I2C communication and touch event handling
+- Inter-MCU SPI: Design completed, using dedicated pins with interrupt support
 - Single PCNT Encoder: Ready for quadrature input and parameter control
 
 **🆕 New Components Added:**
 - Single PCNT Encoder: High-precision quadrature encoder input using ESP32-S3 PCNT peripheral
 
 **🔧 Pin Conflicts Resolved:**
+- MIPI-DSI interface uses dedicated pins (GPIO1-12) for optimal performance
 - ESP32-S3 default VSPI pins (GPIO35-39) available for future expansion
 - Strapping pins (GPIO45-48) completely avoided
 - Flash/PSRAM pins (GPIO26-32) available for future expansion
-- All inter-MCU SPI pins use available GPIO pins (GPIO16-20,24)
+- All inter-MCU SPI pins use dedicated GPIO pins for reliable communication
 
 **🎯 Target Board:** ESP32-S3-DevKitC-1 (N8R8 PSRAM variant recommended)
 
 **📚 Reference:** Pin assignments verified against [ESP32-S3 DevKitC Official Pinout](https://randomnerdtutorials.com/esp32-s3-devkitc-pinout-guide/)
 
-**🚀 Future Expansion Ready:** With only 19 pins used out of 49 available, there's plenty of room for additional peripherals when you get your new ESP32 MCU.
+**🚀 Future Expansion Ready:** With MIPI-DSI using dedicated pins and efficient pin allocation, there's plenty of room for additional peripherals and future expansion.

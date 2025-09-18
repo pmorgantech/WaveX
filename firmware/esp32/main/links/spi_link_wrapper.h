@@ -76,112 +76,32 @@ public:
     }
 
     esp_err_t send_control_change(uint8_t parameter, uint8_t channel, uint16_t value) override {
-        if (!m_started) {
-            return ESP_ERR_INVALID_STATE;
-        }
-        
-        // Create a simple packet for control change
-        uint8_t payload[4] = {
-            static_cast<uint8_t>(0x01),  // Control change message type
-            parameter,
-            channel,
-            static_cast<uint8_t>(value & 0xFF)
-        };
-        
-        int result = spi_link_send(0x0001, payload, 4);
-        return (result >= 0) ? ESP_OK : ESP_FAIL;
+        ESP_LOGW("SpiLink", "send_control_change is not supported in slave mode");
+        return ESP_OK;
     }
 
     esp_err_t send_note_on(uint8_t note, uint8_t velocity, uint8_t channel) override {
-        if (!m_started) {
-            return ESP_ERR_INVALID_STATE;
-        }
-        
-        uint8_t payload[3] = {
-            static_cast<uint8_t>(0x02),  // Note on message type
-            note,
-            velocity
-        };
-        
-        int result = spi_link_send(0x0002, payload, 3);
-        return (result >= 0) ? ESP_OK : ESP_FAIL;
+        ESP_LOGW("SpiLink", "send_note_on is not supported in slave mode");
+        return ESP_OK;
     }
 
     esp_err_t send_note_off(uint8_t note, uint8_t channel) override {
-        if (!m_started) {
-            return ESP_ERR_INVALID_STATE;
-        }
-        
-        uint8_t payload[3] = {
-            static_cast<uint8_t>(0x03),  // Note off message type
-            note,
-            static_cast<uint8_t>(0x00)   // Velocity 0 for note off
-        };
-        
-        int result = spi_link_send(0x0003, payload, 3);
-        return (result >= 0) ? ESP_OK : ESP_FAIL;
+        ESP_LOGW("SpiLink", "send_note_off is not supported in slave mode");
+        return ESP_OK;
     }
 
     esp_err_t send_sample_ctrl(uint8_t slot, uint8_t cmd, float rate) override {
-        if (!m_started) {
-            return ESP_ERR_INVALID_STATE;
-        }
-        
-        // Convert float to bytes safely
-        union {
-            float f;
-            uint8_t bytes[4];
-        } rate_union;
-        rate_union.f = rate;
-        
-        uint8_t payload[6] = {
-            static_cast<uint8_t>(0x04),  // Sample control message type
-            slot,
-            cmd,
-            rate_union.bytes[0],
-            rate_union.bytes[1],
-            rate_union.bytes[2]
-        };
-        
-        int result = spi_link_send(0x0004, payload, 6);
-        return (result >= 0) ? ESP_OK : ESP_FAIL;
+        ESP_LOGW("SpiLink", "send_sample_ctrl is not supported in slave mode");
+        return ESP_OK;
     }
 
     esp_err_t send_preview_req(uint8_t slot, uint32_t start, uint32_t end, uint16_t decim) override {
-        if (!m_started) {
-            return ESP_ERR_INVALID_STATE;
-        }
-        
-        uint8_t payload[12] = {
-            static_cast<uint8_t>(0x05),  // Preview request message type
-            slot,
-            static_cast<uint8_t>(start & 0xFF),
-            static_cast<uint8_t>((start >> 8) & 0xFF),
-            static_cast<uint8_t>((start >> 16) & 0xFF),
-            static_cast<uint8_t>((start >> 24) & 0xFF),
-            static_cast<uint8_t>(end & 0xFF),
-            static_cast<uint8_t>((end >> 8) & 0xFF),
-            static_cast<uint8_t>((end >> 16) & 0xFF),
-            static_cast<uint8_t>((end >> 24) & 0xFF),
-            static_cast<uint8_t>(decim & 0xFF),
-            static_cast<uint8_t>((decim >> 8) & 0xFF)
-        };
-        
-        int result = spi_link_send(0x0005, payload, 12);
-        return (result >= 0) ? ESP_OK : ESP_FAIL;
+        ESP_LOGW("SpiLink", "send_preview_req is not supported in slave mode");
+        return ESP_OK;
     }
 
     void send_test_messages() override {
-        if (!m_started) {
-            ESP_LOGE("SpiLink", "SPI link not started");
-            return;
-        }
-        
-        ESP_LOGI("SpiLink", "Sending test messages via SPI link...");
-        
-        // Send a simple test message
-        uint8_t test_payload[4] = {0xAA, 0xBB, 0xCC, 0xDD};
-        spi_link_send(0x00FF, test_payload, 4);
+        ESP_LOGW("SpiLink", "send_test_messages is not supported in slave mode");
     }
 
     bool is_busy() const override {
@@ -194,14 +114,10 @@ public:
     void process_received_packets() {
         if (!m_started) return;
         
-        void* pkt_payload = nullptr;
-        while (spi_link_recv(&pkt_payload) > 0) {
-            if (pkt_payload) {
-                // Process the packet through the packet processor
-                // This will be called by the link manager
-                spi_link_recycle(pkt_payload, 1);
-            }
-        }
+        // In SPI slave mode, packets are processed directly in the slave task
+        // This function is kept for API compatibility but does nothing
+        // The actual packet processing happens in spi_link.cpp link_task()
+        // No logging needed here since it's called frequently
     }
 
 private:

@@ -1,6 +1,8 @@
 ## IDF Component Manager Manifest File
 dependencies:
-  # LovyanGFX - Graphics library for ESP32 (LGFX-only UI)
-  lovyanGFX:
-    git: https://github.com/lovyan03/LovyanGFX.git
-    # version: 1.1.11
+  espressif/esp_lvgl_port: '*'
+  espressif/esp_lcd_touch: '*'
+  espressif/esp_lcd_touch_gt911: '*'
+  waveshare/esp_lcd_hx8394: '*'
+  waveshare/esp_lcd_dsi: '*'
+  waveshare/esp32_p4_nano: '*'

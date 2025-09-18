@@ -1,3 +1,7 @@
+// SD SPI diskio backend (legacy). Build only when explicitly selected.
+#include "../../shared/config/hardware_config.h"
+
+#if WAVEX_DAISY_SD_CARD_ENABLED && (WAVEX_DAISY_SD_CARD_BACKEND == 0)
 #include "ff.h"
 #include "diskio.h"
 #include "daisy_seed.h"
@@ -80,3 +84,5 @@ extern "C" DWORD get_fattime(void)
 }
 
 
+
+#endif // WAVEX_DAISY_SD_CARD_ENABLED && WAVEX_DAISY_SD_CARD_BACKEND == 0

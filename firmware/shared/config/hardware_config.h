@@ -33,7 +33,7 @@
 
 // DAC CV Outputs (Daisy only)
 #ifndef WAVEX_DAISY_CV_OUTPUTS_ENABLED
-#define WAVEX_DAISY_CV_OUTPUTS_ENABLED 1
+#define WAVEX_DAISY_CV_OUTPUTS_ENABLED 0
 #endif
 
 // USB Configuration (Daisy only)
@@ -43,7 +43,54 @@
 
 // SD Card (Daisy only)
 #ifndef WAVEX_DAISY_SD_CARD_ENABLED
-#define WAVEX_DAISY_SD_CARD_ENABLED 0  // Currently disabled due to SPI conflicts
+#define WAVEX_DAISY_SD_CARD_ENABLED 1
+#endif
+
+// Daisy SD Card Backend Selection
+// 0 = SPI-based SD (legacy), 1 = SDMMC (SDIO) 4-bit mode using libDaisy
+#ifndef WAVEX_DAISY_SD_CARD_BACKEND
+#define WAVEX_DAISY_SD_CARD_BACKEND 1
+#endif
+
+// Ensure SPI SD backend is completely disabled when using SDMMC
+#if WAVEX_DAISY_SD_CARD_BACKEND == 1
+#define DISABLE_SD_SPI_BACKEND 0
+#endif
+
+// SD Card debug logging (Daisy only)
+#ifndef WAVEX_DAISY_SD_DEBUG
+#define WAVEX_DAISY_SD_DEBUG 0
+#endif
+
+// SD Card detect pin (Daisy only) - set to -1 to disable card detect
+#ifndef WAVEX_DAISY_SD_CARD_DETECT_PIN
+#define WAVEX_DAISY_SD_CARD_DETECT_PIN 15
+#endif
+
+// SD Card bus width (Daisy only) - 1 for 1-bit mode, 4 for 4-bit mode
+#ifndef WAVEX_DAISY_SD_CARD_BUS_WIDTH
+#define WAVEX_DAISY_SD_CARD_BUS_WIDTH 1
+#endif
+
+/**
+ * @def WAVEX_DAISY_SD_CARD_SPEED
+ * @brief Sets the speed of the SD card interface.
+ *
+ * This macro configures the speed of the SD card communication. The available
+ * options are:
+ * - 0: SLOW (~400 KHz) - Recommended for maximum compatibility and debugging.
+ * - 1: MEDIUM_SLOW (~11 MHz)
+ * - 2: STANDARD (~20 MHz)
+ * - 3: FAST (~40 MHz)
+ *
+ * The default value is 2 (STANDARD). A lower speed might be necessary if you
+ * encounter data corruption or initialization issues, especially with long
+ * cables or certain SD card models.
+ *   @note Speed settings correspond to SdmmcHandler::Speed enum
+ *   0: SLOW (~400 KHz), 1: MEDIUM_SLOW, 2: STANDARD (~12.5 MHz), 3: FAST (~25 MHz)
+ */
+#ifndef WAVEX_DAISY_SD_CARD_SPEED
+#define WAVEX_DAISY_SD_CARD_SPEED 2
 #endif
 
 // External Flash (Daisy only)
@@ -54,6 +101,15 @@
 // PCM1690 TDM DAC (Daisy only)
 #ifndef WAVEX_DAISY_TDM_DAC_ENABLED
 #define WAVEX_DAISY_TDM_DAC_ENABLED 1
+#endif
+
+// Loop/CPU probe (Daisy only)
+#ifndef WAVEX_DAISY_LOOP_PROBE_ENABLED
+#define WAVEX_DAISY_LOOP_PROBE_ENABLED 0
+#endif
+
+#ifndef WAVEX_DAISY_LOOP_PROBE_PIN
+#define WAVEX_DAISY_LOOP_PROBE_PIN 15
 #endif
 
 // ============================================================================
@@ -75,9 +131,14 @@
 #define WAVEX_ESP_BUTTON_MATRIX_ENABLED 0  // Currently disabled, using encoder instead
 #endif
 
-// ST7796S LCD Display
+// MIPI DSI LCD Display (5-DSI-TOUCH-A)
 #ifndef WAVEX_LCD_DISPLAY_ENABLED
 #define WAVEX_LCD_DISPLAY_ENABLED 1
+#endif
+
+// MIPI DSI Display Type Selection
+#ifndef WAVEX_LCD_DISPLAY_TYPE
+#define WAVEX_LCD_DISPLAY_TYPE 1  // 0 = ST7796S SPI, 1 = MIPI DSI
 #endif
 
 // USB MIDI Interface
@@ -134,6 +195,11 @@
     // Audio processing priority
     #ifndef WAVEX_AUDIO_PRIORITY
     #define WAVEX_AUDIO_PRIORITY 0
+    #endif
+
+    // Interval for sending meter updates over SPI (ms)
+    #ifndef WAVEX_AUDIO_METERS_SEND_INTERVAL_MS
+    #define WAVEX_AUDIO_METERS_SEND_INTERVAL_MS 10000
     #endif
 #endif
 
@@ -228,22 +294,58 @@
     #define WAVEX_LCD_TOUCH_ENABLED 1
     #endif
     
-    // LCD resolution and color depth
-    #ifndef WAVEX_LCD_WIDTH
-    #define WAVEX_LCD_WIDTH 480
-    #endif
-    
-    #ifndef WAVEX_LCD_HEIGHT
-    #define WAVEX_LCD_HEIGHT 320
-    #endif
-    
-    #ifndef WAVEX_LCD_COLOR_DEPTH
-    #define WAVEX_LCD_COLOR_DEPTH 16
-    #endif
-    
-    // LCD SPI configuration
-    #ifndef WAVEX_LCD_SPI_CLOCK_SPEED
-    #define WAVEX_LCD_SPI_CLOCK_SPEED (40 * 1000 * 1000)  // 40 MHz
+    // Display type specific configuration
+    #if WAVEX_LCD_DISPLAY_TYPE == 1  // MIPI DSI Display
+        // MIPI DSI Display Resolution (5-DSI-TOUCH-A)
+        #ifndef WAVEX_LCD_WIDTH
+        #define WAVEX_LCD_WIDTH 800
+        #endif
+        
+        #ifndef WAVEX_LCD_HEIGHT
+        #define WAVEX_LCD_HEIGHT 480
+        #endif
+        
+        #ifndef WAVEX_LCD_COLOR_DEPTH
+        #define WAVEX_LCD_COLOR_DEPTH 16
+        #endif
+        
+        // MIPI DSI Configuration
+        #ifndef WAVEX_DSI_LANE_BITRATE_MBPS
+        #define WAVEX_DSI_LANE_BITRATE_MBPS 1500  // Default bitrate
+        #endif
+        
+        #ifndef WAVEX_DSI_COLOR_FORMAT
+        #define WAVEX_DSI_COLOR_FORMAT 0  // 0 = RGB565, 1 = RGB888
+        #endif
+        
+        // Touch Controller (GT911)
+        #ifndef WAVEX_TOUCH_CONTROLLER_TYPE
+        #define WAVEX_TOUCH_CONTROLLER_TYPE 1  // 0 = FT6X36, 1 = GT911
+        #endif
+        
+    #else  // ST7796S SPI Display (Legacy)
+        // ST7796S Display Resolution
+        #ifndef WAVEX_LCD_WIDTH
+        #define WAVEX_LCD_WIDTH 480
+        #endif
+        
+        #ifndef WAVEX_LCD_HEIGHT
+        #define WAVEX_LCD_HEIGHT 320
+        #endif
+        
+        #ifndef WAVEX_LCD_COLOR_DEPTH
+        #define WAVEX_LCD_COLOR_DEPTH 16
+        #endif
+        
+        // LCD SPI configuration
+        #ifndef WAVEX_LCD_SPI_CLOCK_SPEED
+        #define WAVEX_LCD_SPI_CLOCK_SPEED (40 * 1000 * 1000)  // 40 MHz
+        #endif
+        
+        // Touch Controller (FT6X36)
+        #ifndef WAVEX_TOUCH_CONTROLLER_TYPE
+        #define WAVEX_TOUCH_CONTROLLER_TYPE 0  // 0 = FT6X36, 1 = GT911
+        #endif
     #endif
 #endif
 

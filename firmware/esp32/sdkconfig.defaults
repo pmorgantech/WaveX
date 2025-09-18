@@ -1,8 +1,8 @@
 # ESP32-S3 WaveX Configuration Defaults
 
 # Set target chip
-CONFIG_IDF_TARGET="esp32s3"
-CONFIG_IDF_TARGET_ESP32S3=y
+CONFIG_IDF_TARGET="esp32p4"
+CONFIG_IDF_TARGET_ESP32P4=y
 
 # Serial port configuration
 CONFIG_ESPTOOLPY_PORT="/dev/ttyACM0"
@@ -22,9 +22,9 @@ CONFIG_SPI_MASTER_IN_IRAM=y
 CONFIG_SPI_MASTER_ISR_IN_IRAM=y
 
 # CRITICAL: Memory Layout Optimization to prevent fragmentation
-# Reduce all task stack sizes to minimize early heap fragmentation
-CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
-CONFIG_ESP_INT_WDT_TIMEOUT_MS=800
+# Increase main task stack size for debugging (was 16384)
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=32768
+CONFIG_ESP_INT_WDT_TIMEOUT_MS=5000
 
 # Optimize stack sizes to reduce memory fragmentation
 CONFIG_FREERTOS_IDLE_TASK_STACK_SIZE=1024   # Reduced from 1536
@@ -37,19 +37,26 @@ CONFIG_ESP_IPC_TASK_STACK_SIZE=1024           # Reduced from 1280
 
 ## LVGL removed (LGFX-only UI)
 
-# PSRAM Configuration - Use for large assets, NOT display buffers
+# PSRAM Configuration - ENABLED for MIPI DSI display
 CONFIG_SPIRAM=y
-CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_MODE_HEX=y
 CONFIG_SPIRAM_TYPE_AUTO=y
 CONFIG_SPIRAM_USE_MALLOC=y
-CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=32768   # Keep critical allocations < 32KB in internal RAM
-CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=64768 # Reserve more internal RAM for system use
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=16384   # Keep critical allocations < 64KB in internal RAM for DMA performance
+CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=32768  # Reserve 128KB internal RAM for system use
 CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
 CONFIG_SPIRAM_CACHE_WORKAROUND=y
 
-# Watchdog configuration - Extended timeout for development
+# added for MIPI DSI optimization
+CONFIG_SPIRAM_XIP_FROM_PSRAM=y
+CONFIG_CACHE_L2_CACHE_256KB=y
+CONFIG_CACHE_L2_CACHE_LINE_128B=y
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+CONFIG_DMA2D_OPERATION_FUNC_IN_IRAM=y
+
+# Watchdog configuration - Extended timeout for development and debugging
 CONFIG_ESP_TASK_WDT_INIT=n
-CONFIG_ESP_TASK_WDT_TIMEOUT_S=10
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=30
 CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU0=y
 CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU1=y
 
@@ -99,12 +106,14 @@ CONFIG_WL_SECTOR_SIZE=4096
 CONFIG_VFS_SUPPORT_SELECT=y
 CONFIG_VFS_MAX_COUNT=4
 
-# Reduce log buffer size to save memory
-CONFIG_LOG_DEFAULT_LEVEL_INFO=y
-CONFIG_LOG_MAXIMUM_LEVEL=3
+# Enable maximum logging for debugging boot issues
+CONFIG_LOG_DEFAULT_LEVEL_DEBUG=n
+CONFIG_LOG_MAXIMUM_LEVEL=4
 
-# You can also specifically disable SPI debug logging
-CONFIG_LOG_DEFAULT_LEVEL=3
+# Enable debug logging for all components during boot debugging
+CONFIG_LOG_DEFAULT_LEVEL=2
+CONFIG_BOOTLOADER_LOG_LEVEL_DEBUG=n
+CONFIG_LOG_BOOTLOADER_LEVEL_WARN=y
 
 # Reduce LWIP memory usage
 CONFIG_LWIP_MAX_SOCKETS=4
@@ -124,8 +133,9 @@ CONFIG_COMPILER_OPTIMIZATION_PERF=y
 CONFIG_BOOTLOADER_COMPILER_OPTIMIZATION_SIZE=y
 CONFIG_BOOTLOADER_LOG_LEVEL=2
 
-# Optimize partition table
-CONFIG_PARTITION_TABLE_SINGLE_APP=y
+# Use custom partition table with multiple partitions
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 
 # Note: mDNS and SNTP configurations are not available in ESP-IDF 5.2
 # These components are not built by default and don't have config options
@@ -133,7 +143,7 @@ CONFIG_PARTITION_TABLE_SINGLE_APP=y
 
 # Enable dual-core operation
 # CONFIG_FREERTOS_UNICORE is not set 
-CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_360=y
 
 # Disable potentially problematic features
 CONFIG_ESP_SYSTEM_PANIC_PRINT_HALT=y
@@ -150,5 +160,38 @@ CONFIG_ESP_CONSOLE_UART_DEFAULT=y
 #
 # UI (LovyanGFX)
 #
-CONFIG_UI_LGFX_ENABLE_INIT=y
+# Disable LovyanGFX init for ESP32-P4 bring-up
+CONFIG_UI_LGFX_ENABLE_INIT=n
 # end of UI (LovyanGFX)
+
+#
+# BSP Display Configuration for Waveshare 5-DSI-TOUCH-A
+#
+# Enable the correct LCD type for HX8394 720x1280 5-inch display
+CONFIG_BSP_LCD_TYPE_720_1280_5_INCH_A=y
+CONFIG_BSP_LCD_DPI_BUFFER_NUMS=3
+
+# Ensure other LCD types are disabled to avoid conflicts
+# CONFIG_BSP_LCD_TYPE_800_1280_10_1_INCH is not set
+# CONFIG_BSP_LCD_TYPE_800_1280_10_1_INCH_A is not set
+# CONFIG_BSP_LCD_TYPE_800_1280_8_INCH_A is not set
+# CONFIG_BSP_LCD_TYPE_720_1280_7_INCH_A is not set
+# CONFIG_BSP_LCD_TYPE_480_640_2_8_INCH is not set
+# CONFIG_BSP_LCD_TYPE_800_800_3_4_INCH_C is not set
+# CONFIG_BSP_LCD_TYPE_720_720_4_INCH_C is not set
+# CONFIG_BSP_LCD_TYPE_480_800_4_INCH is not set
+# CONFIG_BSP_LCD_TYPE_720_1280_5_INCH_D is not set
+# CONFIG_BSP_LCD_TYPE_720_1560_6_25_INCH is not set
+# CONFIG_BSP_LCD_TYPE_1024_600_5_INCH_C is not set
+# CONFIG_BSP_LCD_TYPE_1024_600_7_INCH_C is not set
+# CONFIG_BSP_LCD_TYPE_400_1280_7_9_INCH is not set
+# CONFIG_BSP_LCD_TYPE_1280_800_7_INCH_E is not set
+# CONFIG_BSP_LCD_TYPE_1280_800_8_INCH_C is not set
+# CONFIG_BSP_LCD_TYPE_1280_800_10_1_INCH_C is not set
+# CONFIG_BSP_LCD_TYPE_480_1920_8_8_INCH is not set
+# CONFIG_BSP_LCD_TYPE_320_1480_11_9_INCH is not set
+
+# Set conservative bitrate for 5-inch HX8394 display
+CONFIG_BSP_LCD_MIPI_DSI_LANE_BITRATE_MBPS=700
+
+CONFIG_SPIRAM_SPEED_80M=y

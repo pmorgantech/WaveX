@@ -12,23 +12,22 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
-// *** Regular SPI slave driver ***
-#include "driver/spi_slave.h"     // requires REQUIRES esp_driver_spi in CMake
+// *** HD driver ***
+#include "driver/spi_slave_hd.h"   // requires REQUIRES esp_driver_spi in CMake
 #include "driver/gpio.h"
 #endif
 
 // -----------------------------
 // Packet & CRC
 // -----------------------------
-static const char *TAG = "spi_link";
+static const char *TAG = "spi_link_hd";
 
-#define CTRL_PKT_SIZE 64 // Must be 64 for P4 DMA alignment
+#define CTRL_PKT_SIZE 32
 
 typedef struct __attribute__((packed)) {
     uint8_t  type, flags, seq, len;
     uint8_t  payload[26];
     uint16_t crc; // CRC16-CCITT over first 30 bytes
-    uint8_t  padding[32];
 } ctrl_pkt_t;
 
 static uint16_t wavex_crc16(const uint8_t* d, int n)
@@ -44,17 +43,13 @@ static uint16_t wavex_crc16(const uint8_t* d, int n)
 static void handle_ctrl_packet(const ctrl_pkt_t* p)
 {
 #ifdef ESP_PLATFORM
-    #if WAVEX_MCU_LINK_PACKET_DEBUG
     ESP_LOGI(TAG, "RX pkt: type=0x%02X len=%u seq=%u flags=0x%02X",
               p->type, p->len, p->seq, p->flags);
-    #endif
 
     if (p->type == 0x90 && p->len >= 4) {
         uint16_t l = (p->payload[0] | (p->payload[1]<<8));
         uint16_t r = (p->payload[2] | (p->payload[3]<<8));
-        #if WAVEX_MCU_LINK_PACKET_DEBUG
         ESP_LOGI(TAG, "METER L=%u R=%u (Q15)", l, r);
-        #endif
         // inter_mcu_update_backend_meters(l, r); // optional helper if you have one
     } else if (p->type == 0x91 && p->len >= 12) {
         uint32_t uptime = (uint32_t)p->payload[0] | ((uint32_t)p->payload[1] << 8) |
@@ -97,11 +92,10 @@ static spi_link_stats_t s_stats = {0};
 static uint8_t *rxbuf[RX_DESC_COUNT];
 static uint8_t *txbuf[TX_DESC_COUNT];
 
-static spi_slave_transaction_t rx_trans[RX_DESC_COUNT];
-static spi_slave_transaction_t tx_trans[TX_DESC_COUNT];
+static spi_slave_hd_data_t rx_desc[RX_DESC_COUNT];
+static spi_slave_hd_data_t tx_desc[TX_DESC_COUNT];
 
 static volatile uint8_t tx_seq_echo = 0;
-static int s_next_tx_desc_idx = 0;
 
 // -----------------------------
 // Helpers
@@ -122,16 +116,16 @@ static void make_resp_packet(ctrl_pkt_t *out, uint8_t echo_seq)
 // -----------------------------
 esp_err_t spi_link_init(void)
 {
-    ESP_LOGI(TAG, "Initializing Regular SPI Slave");
+    ESP_LOGI(TAG, "Initializing SPI Slave HD");
 
-    // Allocate DMA-capable buffers
+    // Allocate DMA-capable buffers (multiple of 4 for RX per driver requirement)
     for (int i=0;i<RX_DESC_COUNT;i++) {
-        rxbuf[i] = (uint8_t*)heap_caps_aligned_alloc(4, CTRL_PKT_SIZE, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+        rxbuf[i] = (uint8_t*)heap_caps_malloc(CTRL_PKT_SIZE, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
         if (!rxbuf[i]) return ESP_ERR_NO_MEM;
         memset(rxbuf[i], 0, CTRL_PKT_SIZE);
     }
     for (int i=0;i<TX_DESC_COUNT;i++) {
-        txbuf[i] = (uint8_t*)heap_caps_aligned_alloc(4, CTRL_PKT_SIZE, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+        txbuf[i] = (uint8_t*)heap_caps_malloc(CTRL_PKT_SIZE, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
         if (!txbuf[i]) return ESP_ERR_NO_MEM;
         memset(txbuf[i], 0, CTRL_PKT_SIZE);
         make_resp_packet((ctrl_pkt_t*)txbuf[i], 0);
@@ -144,99 +138,108 @@ esp_err_t spi_link_init(void)
         .sclk_io_num     = WAVEX_ESP_SPI_SCLK,
         .quadwp_io_num   = -1,
         .quadhd_io_num   = -1,
-        .max_transfer_sz = CTRL_PKT_SIZE,
-        .flags           = SPICOMMON_BUSFLAG_SCLK | SPICOMMON_BUSFLAG_MOSI | SPICOMMON_BUSFLAG_MISO | SPICOMMON_BUSFLAG_GPIO_PINS,
+        .max_transfer_sz = CTRL_PKT_SIZE, // we transfer 32-B control frames
     };
 
-    // Regular SPI slave config — Mode 0
-    spi_slave_interface_config_t slave_config = {
+    // HD slot config — Mode 0, 8/8/8 bits for cmd/addr/dummy (master must send these)
+    spi_slave_hd_slot_config_t slot = {
+        .mode         = 0,  // CPOL=0, CPHA=0
         .spics_io_num = WAVEX_ESP_SPI_CS,
         .flags        = 0,
-        .queue_size   = RX_DESC_COUNT,
-        .mode         = 0,  // CPOL=0, CPHA=0
-        .post_setup_cb = NULL,
-        .post_trans_cb = NULL
+        .command_bits = 8,
+        .address_bits = 8,
+        .dummy_bits   = 8,
+        .queue_size   = RX_DESC_COUNT + TX_DESC_COUNT,
+        .dma_chan     = SPI_DMA_CH_AUTO,     // you can force CH1/CH2 if AUTO causes conflicts
+        .cb_config    = {0},                 // no ISR callbacks for now
     };
 
-    // Initialize SPI bus
-    esp_err_t r = spi_slave_initialize(WAVEX_ESP_SPI_HOST, &bus, &slave_config, SPI_DMA_CH_AUTO);
-    ESP_LOGI(TAG, "spi_slave_initialize -> %s", esp_err_to_name(r));
+    // Initialize Slave HD (exclusively grabs this SPI host)
+    esp_err_t r = spi_slave_hd_init(WAVEX_ESP_SPI_HOST, &bus, &slot);
+    ESP_LOGI(TAG, "spi_slave_hd_init -> %s", esp_err_to_name(r));
     if (r != ESP_OK) return r;
 
-    // Initialize transaction structures
+    // Pre-build RX descriptors and queue them
     for (int i=0;i<RX_DESC_COUNT;i++) {
-        memset(&rx_trans[i], 0, sizeof(spi_slave_transaction_t));
-        rx_trans[i].rx_buffer = rxbuf[i];
-        rx_trans[i].length = CTRL_PKT_SIZE * 8;  // Length in bits
+        rx_desc[i].data      = rxbuf[i];
+        rx_desc[i].len       = CTRL_PKT_SIZE;        // multiple of 4 for RX
+        rx_desc[i].trans_len = 0;
+        rx_desc[i].flags     = 0;
+        rx_desc[i].arg       = (void*)(intptr_t)i;
+        ESP_ERROR_CHECK(spi_slave_hd_queue_trans(WAVEX_ESP_SPI_HOST, SPI_SLAVE_CHAN_RX, &rx_desc[i], portMAX_DELAY));
     }
 
+    // Queue one TX descriptor so the master can RDDMA immediately
     for (int i=0;i<TX_DESC_COUNT;i++) {
-        memset(&tx_trans[i], 0, sizeof(spi_slave_transaction_t));
-        tx_trans[i].tx_buffer = txbuf[i];
-        tx_trans[i].length = CTRL_PKT_SIZE * 8;  // Length in bits
+        tx_desc[i].data      = txbuf[i];
+        tx_desc[i].len       = CTRL_PKT_SIZE;
+        tx_desc[i].trans_len = 0;
+        tx_desc[i].flags     = 0;
+        tx_desc[i].arg       = (void*)(intptr_t)i;
+        // Queue both so we always have data ready to read
+        ESP_ERROR_CHECK(spi_slave_hd_queue_trans(WAVEX_ESP_SPI_HOST, SPI_SLAVE_CHAN_TX, &tx_desc[i], portMAX_DELAY));
     }
 
-    ESP_LOGI(TAG, "Regular SPI slave ready. Pins: SCK=%d MOSI=%d MISO=%d CS=%d  (Mode0)",
+    ESP_LOGI(TAG, "HD slave ready. Pins: SCK=%d MOSI=%d MISO=%d CS=%d  (Mode0, cmd/addr/dummy=8/8/8)",
             WAVEX_ESP_SPI_SCLK, WAVEX_ESP_SPI_MOSI, WAVEX_ESP_SPI_MISO, WAVEX_ESP_SPI_CS);
     return ESP_OK;
 }
 
 // -----------------------------
-// Link task (waits for SPI transactions)
+// Link task (waits for WRDMA segments to finish)
 // -----------------------------
 static void link_task(void *arg)
 {
     (void)arg;
-    ESP_LOGI(TAG, "Regular SPI Slave link task start");
+    ESP_LOGI(TAG, "SPI Slave HD link task start");
     uint32_t last_log = now_ms();
-    int current_rx_idx = 0;
 
     while (true) {
-        // Queue next RX transaction
-        spi_slave_transaction_t *rx_trans_ptr = &rx_trans[current_rx_idx];
-        esp_err_t r = spi_slave_queue_trans(WAVEX_ESP_SPI_HOST, rx_trans_ptr, portMAX_DELAY);
-        if (r != ESP_OK) {
-            ESP_LOGW(TAG, "spi_slave_queue_trans failed: %s", esp_err_to_name(r));
-            vTaskDelay(pdMS_TO_TICKS(100));
+        // Block until one RX desc finishes (master did WRDMA + WR_DONE)
+        spi_slave_hd_data_t *done_rx = NULL;
+        esp_err_t r = spi_slave_hd_get_trans_res(WAVEX_ESP_SPI_HOST, SPI_SLAVE_CHAN_RX, &done_rx, portMAX_DELAY);
+        if (r != ESP_OK || !done_rx) {
+            ESP_LOGW(TAG, "get_trans_res(RX) -> %s", esp_err_to_name(r));
             continue;
         }
 
-        // Wait for transaction to complete
-        spi_slave_transaction_t *completed_trans = NULL;
-        r = spi_slave_get_trans_result(WAVEX_ESP_SPI_HOST, &completed_trans, pdMS_TO_TICKS(3000));
-        if (r == ESP_ERR_TIMEOUT) {
-            // Log periodically to show we're waiting for SPI transactions
-            uint32_t now = now_ms();
-            if (now - last_log > 5000) {
-                #if WAVEX_MCU_LINK_PACKET_DEBUG
-                ESP_LOGI(TAG, "Waiting for SPI transactions from master...");
-                #endif
-                last_log = now;
+        s_stats.irq_count++;
+        s_stats.last_activity_ms = now_ms();
+
+        // Process RX data (done_rx->trans_len may be <= len; HD can segment)
+        if (done_rx->trans_len >= CTRL_PKT_SIZE) {
+            ctrl_pkt_t *rx = (ctrl_pkt_t*)done_rx->data;
+            uint16_t calc = wavex_crc16((uint8_t*)rx, 30);
+            if (calc == rx->crc) {
+                s_stats.packets_received++;
+                tx_seq_echo = rx->seq;
+                handle_ctrl_packet(rx);
+            } else {
+                s_stats.crc_errors++;
+                ESP_LOGW(TAG, "CRC mismatch exp=0x%04X got=0x%04X", calc, rx->crc);
             }
-            continue;
-        } else if (r != ESP_OK || !completed_trans) {
-            ESP_LOGW(TAG, "spi_slave_get_trans_result -> %s", esp_err_to_name(r));
-            vTaskDelay(pdMS_TO_TICKS(100));
-            continue;
         } else {
-            // A transaction was received!
-            #if WAVEX_MCU_LINK_PACKET_DEBUG
-            ESP_LOGI(TAG, "SPI RX transaction completed, len=%d bits", completed_trans->trans_len);
-            #endif
-            
-            // Process the received packet data
-            ctrl_pkt_t *rxp = (ctrl_pkt_t*)completed_trans->rx_buffer;
-            handle_ctrl_packet(rxp);
-            s_stats.packets_received++;
-            
-            // Move to next RX buffer
-            current_rx_idx = (current_rx_idx + 1) % RX_DESC_COUNT;
+            ESP_LOGW(TAG, "Short RX: %u bytes", (unsigned)done_rx->trans_len);
         }
+
+        // Prepare the *next* response in a TX buffer that is NOT in-flight.
+        // We have two TX descriptors (index 0 & 1). Try to reclaim one that has completed.
+        spi_slave_hd_data_t *done_tx = NULL;
+        if (spi_slave_hd_get_trans_res(WAVEX_ESP_SPI_HOST, SPI_SLAVE_CHAN_TX, &done_tx, 0) == ESP_OK && done_tx) {
+            // done_tx->data is safe to modify now
+            ctrl_pkt_t *txp = (ctrl_pkt_t*)done_tx->data;
+            make_resp_packet(txp, tx_seq_echo);
+            // Re-queue TX so master can RDDMA it next
+            ESP_ERROR_CHECK(spi_slave_hd_queue_trans(WAVEX_ESP_SPI_HOST, SPI_SLAVE_CHAN_TX, done_tx, portMAX_DELAY));
+        }
+        // Re-queue the RX descriptor so we can receive the next packet
+        ESP_ERROR_CHECK(spi_slave_hd_queue_trans(WAVEX_ESP_SPI_HOST, SPI_SLAVE_CHAN_RX, done_rx, portMAX_DELAY));
 
         // Occasional alive log
         uint32_t now = now_ms();
         if (now - last_log > 10000) {
-            ESP_LOGI(TAG, "Alive: RX=%lu CRCerr=%lu",
+            ESP_LOGI(TAG, "Alive: IRQ=%lu RX=%lu CRCerr=%lu",
+                     (unsigned long)s_stats.irq_count,
                      (unsigned long)s_stats.packets_received,
                      (unsigned long)s_stats.crc_errors);
             last_log = now;

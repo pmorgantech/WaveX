@@ -6,11 +6,21 @@
 
 // Set to 1 to enable debug logging for inter-MCU packet traffic
 #ifndef WAVEX_MCU_LINK_DEBUG
-#define WAVEX_MCU_LINK_DEBUG 1
+#define WAVEX_MCU_LINK_DEBUG 0
+#endif
+
+// Set to 1 to enable debug logging for inter-MCU packet traffic
+#ifndef WAVEX_MCU_LINK_PACKET_DEBUG
+#define WAVEX_MCU_LINK_PACKET_DEBUG 0
 #endif
 
 // SPI link configuration
 #define WAVEX_SPI_LINK_ENABLED 1
+
+// Enable non-blocking DMA transfers on Daisy SPI (master) by default
+#ifndef WAVEX_SPI_DMA_ENABLED
+#define WAVEX_SPI_DMA_ENABLED 1
+#endif
 
 // Use pin definitions from centralized pin_config.h
 #ifdef ESP_PLATFORM
@@ -44,5 +54,12 @@
 #define SPI_RX_RING_SIZE   WAVEX_SPI_RX_RING_SIZE
 #define SPI_TX_RING_SIZE   WAVEX_SPI_TX_RING_SIZE
 #define SPI_POOL_SIZE      WAVEX_SPI_POOL_SIZE
+
+// HD Protocol Commands (Espressif SPI Slave HD Protocol)
+#define WAVEX_HD_WRDMA     0x03  // Master→slave data transfer command
+#define WAVEX_HD_RDDMA     0x04  // Slave→master data transfer command
+#define WAVEX_HD_WR_DONE   0x07  // Terminate write segment command
+#define WAVEX_HD_CMD8      0x08  // Terminate read segment command
+#define WAVEX_HD_ADDR      0x00  // Default address byte for HD protocol
 
 #endif // WAVEX_LINK_CONFIG_H

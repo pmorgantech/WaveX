@@ -1,5 +1,8 @@
 #pragma once
 
+#include "../config.hpp"
+#if WAVEX_AUDIO_ENGINE_ENABLED
+
 #include "spi_protocol/protocol.h"
 
 namespace WaveX {
@@ -15,3 +18,4 @@ void HandlePreviewReq(const WaveX::Protocol::PreviewReqMessage& m);
 } // namespace WaveX
 
 
+#endif // WAVEX_AUDIO_ENGINE_ENABLED

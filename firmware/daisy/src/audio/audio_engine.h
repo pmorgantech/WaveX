@@ -1,11 +1,21 @@
 #pragma once
 
+#include "../config.hpp"
+#if WAVEX_AUDIO_ENGINE_ENABLED
+
 #include "daisy_seed.h"
 #include "daisysp.h"
 #include "spi_protocol/protocol.h"
 
 namespace WaveX {
 namespace AudioEngine {
+
+struct BlockMeters {
+    float rmsL;
+    float rmsR;
+    float peakL;
+    float peakR;
+};
 
 void Init(daisy::DaisySeed& hw, float sample_rate);
 void Callback(daisy::AudioHandle::InputBuffer in,
@@ -21,8 +31,17 @@ void OnPreviewReq(const WaveX::Protocol::PreviewReqMessage& m);
 
 // Meter helpers
 void GetInputMeters(float& rms, float& peak);
+void GetMeters(BlockMeters& out);
+
+// WAV playback control
+bool OpenWav(const char* path);
+void CloseWav();
+void PumpWavIO();
+bool IsWavPlaying();
 
 } // namespace AudioEngine
 } // namespace WaveX
 
+
+#endif // WAVEX_AUDIO_ENGINE_ENABLED
 

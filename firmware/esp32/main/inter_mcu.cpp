@@ -334,11 +334,11 @@ void rx_task(void* arg)
             continue;
         }
         
-        // Process received packets from SPI link
-        s_link_manager.process_received_packets();
-        
+        // For SPI slave mode, packets are processed directly in the slave task
+        // This RX task is mainly for future use with other link types
+        // Just sleep for a while since SPI slave handles everything
         #ifdef ESP_PLATFORM
-        vTaskDelay(pdMS_TO_TICKS(1));
+        vTaskDelay(pdMS_TO_TICKS(100));  // 100ms delay - SPI slave is self-contained
         #endif
     }
 }

@@ -1,3 +1,6 @@
+#include "../config.hpp"
+#if WAVEX_AUDIO_ENGINE_ENABLED
+
 #include "audio_adapter.h"
 #include "audio_engine.h"
 
@@ -28,3 +31,4 @@ void HandlePreviewReq(const WaveX::Protocol::PreviewReqMessage& m) {
 } // namespace WaveX
 
 
+#endif // WAVEX_AUDIO_ENGINE_ENABLED
