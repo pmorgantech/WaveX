@@ -49,6 +49,8 @@ private:
     void handle_wave_chunk(const uint8_t* payload, size_t length);
     void handle_heartbeat(const uint8_t* payload, size_t length);
     void handle_sync(const uint8_t* payload, size_t length);
+    void handle_browse_resp(const uint8_t* payload, size_t length);
+    void handle_sample_status(const uint8_t* payload, size_t length);
     void handle_unknown_message(uint8_t type, const uint8_t* payload, size_t length);
     
     // Frame validation

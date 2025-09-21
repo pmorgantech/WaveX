@@ -191,6 +191,28 @@ void inter_mcu_set_wave_chunk_listener(wavex_wave_chunk_cb_t cb, void* user_data
     ESP_LOGI(TAG, "Wave chunk listener registration not yet implemented");
 }
 
+void inter_mcu_set_browse_resp_listener(wavex_browse_resp_cb_t cb, void* user_data)
+{
+    ESP_LOGI(TAG, "=== INTER_MCU: About to call s_statistics.set_browse_resp_callback ===");
+    // Store the callback in the statistics manager
+    s_statistics.set_browse_resp_callback(cb, user_data);
+    ESP_LOGI(TAG, "=== INTER_MCU: Successfully called set_browse_resp_callback ===");
+    ESP_LOGI(TAG, "Browse response listener registered: %p", cb);
+}
+
+void inter_mcu_invoke_browse_resp_callback(const uint8_t* data, size_t length)
+{
+    ESP_LOGI(TAG, "Invoking browse response callback with %d bytes", (int)length);
+    s_statistics.invoke_browse_resp_callback(data, length);
+}
+
+void inter_mcu_set_sample_status_listener(wavex_sample_status_cb_t cb, void* user_data)
+{
+    // Store the callback in the statistics manager
+    s_statistics.set_sample_status_callback(cb, user_data);
+    ESP_LOGI(TAG, "Sample status listener registered: %p", cb);
+}
+
 void inter_mcu_get_backend_heartbeat(wavex_backend_heartbeat_t* out)
 {
     if (!out) {
@@ -199,13 +221,15 @@ void inter_mcu_get_backend_heartbeat(wavex_backend_heartbeat_t* out)
     }
     
     uint32_t uptime_ms, rx_total, loop_counter, last_rx_ms;
+    float cpu_usage_percent;
     bool valid;
-    s_statistics.get_backend_heartbeat(&uptime_ms, &rx_total, &loop_counter, &last_rx_ms, &valid);
+    s_statistics.get_backend_heartbeat(&uptime_ms, &rx_total, &loop_counter, &last_rx_ms, &cpu_usage_percent, &valid);
     
     out->uptime_ms = uptime_ms;
     out->rx_total = rx_total;
     out->loop_counter = loop_counter;
     out->last_rx_ms = last_rx_ms;
+    out->cpu_usage_percent = cpu_usage_percent;
     out->valid = valid;
 }
 
@@ -265,9 +289,9 @@ void inter_mcu_get_tx_stats(wavex_tx_stats_t* out)
     s_statistics.get_tx_stats(out);
 }
 
-void inter_mcu_update_backend_heartbeat(uint32_t uptime_ms, uint32_t rx_total, uint32_t loop_counter)
+void inter_mcu_update_backend_heartbeat(uint32_t uptime_ms, uint32_t rx_total, uint32_t loop_counter, float cpu_usage_percent)
 {
-    s_statistics.update_backend_heartbeat(uptime_ms, rx_total, loop_counter);
+    s_statistics.update_backend_heartbeat(uptime_ms, rx_total, loop_counter, cpu_usage_percent);
 }
 
 void inter_mcu_update_backend_meters(float rms_left, float rms_right, float peak_left, float peak_right)
@@ -381,4 +405,70 @@ void tx_task(void* arg)
         vTaskDelay(pdMS_TO_TICKS(10));
         #endif
     }
+}
+
+// Process control messages received from Daisy (backend)
+void inter_mcu_process_daisy_control_message(uint8_t type, const uint8_t* payload, uint8_t len)
+{
+#ifdef ESP_PLATFORM
+    ESP_LOGI("inter_mcu", "Processing control message from Daisy: type=0x%02X, len=%d", type, len);
+    
+    switch (type) {
+        case WaveX::Protocol::MSG_METER_PUSH:
+            // Handle meter data from Daisy audio engine
+            if (len >= 8) {
+                uint16_t rms_left = payload[0] | (payload[1] << 8);
+                uint16_t rms_right = payload[2] | (payload[3] << 8);
+                uint16_t peak_left = payload[4] | (payload[5] << 8);
+                uint16_t peak_right = payload[6] | (payload[7] << 8);
+                
+                // Convert Q15 to float
+                float rms_l = (float)rms_left / 32767.0f;
+                float rms_r = (float)rms_right / 32767.0f;
+                float peak_l = (float)peak_left / 32767.0f;
+                float peak_r = (float)peak_right / 32767.0f;
+                
+                ESP_LOGI("inter_mcu", "Meter data: RMS L=%.3f R=%.3f, Peak L=%.3f R=%.3f", 
+                         rms_l, rms_r, peak_l, peak_r);
+                
+                // TODO: Forward to web interface or store for UI
+                inter_mcu_update_backend_meters(rms_l, rms_r, peak_l, peak_r);
+            }
+            break;
+            
+        case WaveX::Protocol::MSG_HEARTBEAT:
+            // Handle heartbeat from Daisy
+            if (len >= 12) {
+                uint32_t uptime = payload[0] | (payload[1] << 8) | (payload[2] << 16) | (payload[3] << 24);
+                uint32_t loop_counter = payload[4] | (payload[5] << 8) | (payload[6] << 16) | (payload[7] << 24);
+                uint32_t rx_total = payload[8] | (payload[9] << 8) | (payload[10] << 16) | (payload[11] << 24);
+                
+                float cpu_usage = 0.0f;
+                if (len >= 14) {
+                    uint16_t cpu_scaled = payload[12] | (payload[13] << 8);
+                    cpu_usage = (float)cpu_scaled / 10.0f;
+                }
+                
+                ESP_LOGI("inter_mcu", "Heartbeat from Daisy: uptime=%lu, loops=%lu, rx=%lu, cpu=%.1f%%",
+                         (unsigned long)uptime, (unsigned long)loop_counter, (unsigned long)rx_total, cpu_usage);
+                
+                inter_mcu_update_backend_heartbeat(uptime, rx_total, loop_counter, cpu_usage);
+            }
+            break;
+            
+        case WaveX::Protocol::MSG_SAMPLE_STATUS:
+            // Handle sample playback status updates
+            ESP_LOGI("inter_mcu", "Sample status update from Daisy");
+            // TODO: Parse sample status and forward to web interface
+            break;
+            
+        default:
+            ESP_LOGW("inter_mcu", "Unknown control message type from Daisy: 0x%02X", type);
+            break;
+    }
+#else
+    (void)type;
+    (void)payload;
+    (void)len;
+#endif
 }

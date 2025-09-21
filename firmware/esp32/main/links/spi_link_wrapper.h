@@ -3,14 +3,20 @@
 
 #include "../comm/link_manager.h"
 #include "spi_link.h"
+#include "../../shared/spi_protocol/protocol.h"
 
 #ifdef ESP_PLATFORM
 #include "esp_err.h"
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include <string.h>
 #else
 #include <stdio.h>
+#include <string.h>
 #define ESP_LOGI(tag, fmt, ...) printf("[%s] " fmt "\n", tag, ##__VA_ARGS__)
 #define ESP_LOGE(tag, fmt, ...) printf("[%s] ERROR: " fmt "\n", tag, ##__VA_ARGS__)
+#define ESP_LOGW(tag, fmt, ...) printf("[%s] WARN: " fmt "\n", tag, ##__VA_ARGS__)
 typedef int esp_err_t;
 #ifndef ESP_OK
 #define ESP_OK 0
@@ -21,6 +27,8 @@ typedef int esp_err_t;
 #ifndef ESP_FAIL
 #define ESP_FAIL -1
 #endif
+#define vTaskDelay(ticks) // No-op for non-ESP32
+#define pdMS_TO_TICKS(ms) (ms)
 #endif
 
 // TAG is defined in the including file
@@ -98,6 +106,63 @@ public:
     esp_err_t send_preview_req(uint8_t slot, uint32_t start, uint32_t end, uint16_t decim) override {
         ESP_LOGW("SpiLink", "send_preview_req is not supported in slave mode");
         return ESP_OK;
+    }
+
+    // Additional methods for Sample Load/Save functionality
+    esp_err_t send_browse_req(const char* path) {
+        ESP_LOGI("SpiLink", "=== SPI WRAPPER 1: About to check if started ===");
+        
+        if (!m_started) return ESP_ERR_INVALID_STATE;
+
+        ESP_LOGI("SpiLink", "=== SPI WRAPPER 2: About to calculate path length ===");
+
+        size_t path_len = strlen(path);
+        if (path_len > 32) path_len = 32; // Limit to our message queue payload size
+
+        ESP_LOGI("SpiLink", "=== SPI WRAPPER 3: About to call spi_link_send for browse request ===");
+
+        int result = spi_link_send(WaveX::Protocol::MSG_BROWSE_REQ, path, path_len);
+        
+        ESP_LOGI("SpiLink", "=== SPI WRAPPER 4: spi_link_send returned: %d ===", result);
+        
+        if (result) {
+            ESP_LOGI("SpiLink", "Browse request sent successfully");
+        } else {
+            ESP_LOGE("SpiLink", "Failed to send browse request");
+        }
+        
+        return result ? ESP_OK : ESP_FAIL;
+    }
+
+    esp_err_t send_sample_play_req(const char* file_path) {
+        ESP_LOGI("SpiLink", "=== SPI WRAPPER 1: About to check if started for sample play ===");
+  
+        if (!m_started) return ESP_ERR_INVALID_STATE;
+
+        ESP_LOGI("SpiLink", "=== SPI WRAPPER 2: About to calculate file path length ===");
+
+        size_t path_len = strlen(file_path);
+        if (path_len > 32) path_len = 32; // Limit to our message queue payload size
+
+        ESP_LOGI("SpiLink", "=== SPI WRAPPER 3: About to call spi_link_send for sample play ===");
+        int result = spi_link_send(WaveX::Protocol::MSG_SAMPLE_PLAY_REQ, file_path, path_len);
+        
+        ESP_LOGI("SpiLink", "=== SPI WRAPPER 4: spi_link_send for sample play returned: %d ===", result);
+
+        return result ? ESP_OK : ESP_FAIL;
+    }
+
+    esp_err_t send_sample_stop_req() {
+        ESP_LOGI("SpiLink", "=== SPI WRAPPER 1: About to check if started for sample stop ===");
+
+        if (!m_started) return ESP_ERR_INVALID_STATE;
+
+        ESP_LOGI("SpiLink", "=== SPI WRAPPER 2: About to call spi_link_send for sample stop ===");
+        int result = spi_link_send(WaveX::Protocol::MSG_SAMPLE_STOP_REQ, NULL, 0);
+        
+        ESP_LOGI("SpiLink", "=== SPI WRAPPER 3: spi_link_send for sample stop returned: %d ===", result);
+
+        return result ? ESP_OK : ESP_FAIL;
     }
 
     void send_test_messages() override {

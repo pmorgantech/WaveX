@@ -32,4 +32,5 @@ idf_component_register(
     PRIV_REQUIRES
         "shared"
         "hardware_config"
+        "ui"
 )

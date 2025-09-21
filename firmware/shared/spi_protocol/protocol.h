@@ -36,6 +36,7 @@ enum MessageType : uint8_t {
     MSG_SAMPLE_PLAY_REQ = 0x32,
     MSG_SAMPLE_STOP_REQ = 0x33,
     MSG_SAMPLE_STATUS   = 0x34,
+    MSG_ACK = 0x35,  // Acknowledgment message
     MSG_ERROR = 0xFF
 };
 
@@ -149,11 +150,17 @@ struct ErrorMessage {
     char     msg[48];
 } __attribute__((packed));
 
-// Heartbeat (bidirectional)
+// Acknowledgment message
+struct AckMessage {
+    uint16_t serial_id;  // Serial ID of the message being acknowledged
+} __attribute__((packed));
+
+// Heartbeat (bidirectional) - extended with CPU usage
 struct HeartbeatMessage {
     uint32_t uptime_ms;
     uint32_t rx_total;
     uint32_t loop_counter;
+    uint16_t cpu_usage_percent;  // CPU usage as percentage * 10 (e.g., 25.6% = 256)
 } __attribute__((packed));
 
 // Generic packet structure
@@ -209,6 +216,8 @@ public:
                                            const SampleStatusMessage& msg);
     static size_t CreateErrorPacket(uint8_t* buffer, size_t buffer_size,
                                     const ErrorMessage& err);
+    static size_t CreateAckPacket(uint8_t* buffer, size_t buffer_size,
+                                  const AckMessage& ack);
     
     // Packet parsing
     static bool ValidatePacket(const uint8_t* buffer, size_t length);

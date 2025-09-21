@@ -4,6 +4,11 @@
 
 #ifdef ESP_PLATFORM
 #include "esp_timer.h"
+#include "esp_log.h"
+#else
+#include <stdio.h>
+#define ESP_LOGI(tag, fmt, ...) printf("[%s] " fmt "\n", tag, ##__VA_ARGS__)
+#define ESP_LOGW(tag, fmt, ...) printf("[%s] WARN: " fmt "\n", tag, ##__VA_ARGS__)
 #endif
 
 StatisticsManager::StatisticsManager()
@@ -14,17 +19,29 @@ StatisticsManager::StatisticsManager()
     memset(&m_meter_data, 0, sizeof(m_meter_data));
     m_meter_callback = NULL;
     m_meter_user_data = NULL;
+    m_browse_resp_callback = NULL;
+    m_browse_resp_user_data = NULL;
+    m_sample_status_callback = NULL;
+    m_sample_status_user_data = NULL;
     
 #ifdef ESP_PLATFORM
+    ESP_LOGI("StatisticsManager", "=== Initializing locks for ESP_PLATFORM ===");
     m_stats_lock = portMUX_INITIALIZER_UNLOCKED;
     m_tx_stats_lock = portMUX_INITIALIZER_UNLOCKED;
     m_hb_lock = portMUX_INITIALIZER_UNLOCKED;
     m_meter_lock = portMUX_INITIALIZER_UNLOCKED;
+    m_browse_resp_mutex = xSemaphoreCreateMutex();
+    m_sample_status_lock = portMUX_INITIALIZER_UNLOCKED;
+    ESP_LOGI("StatisticsManager", "=== Locks initialized successfully ===");
 #else
+    ESP_LOGI("StatisticsManager", "=== Initializing locks for non-ESP_PLATFORM ===");
     memset(&m_stats_lock, 0, sizeof(m_stats_lock));
     memset(&m_tx_stats_lock, 0, sizeof(m_tx_stats_lock));
     memset(&m_hb_lock, 0, sizeof(m_hb_lock));
     memset(&m_meter_lock, 0, sizeof(m_meter_lock));
+    m_browse_resp_mutex = NULL;
+    memset(&m_sample_status_lock, 0, sizeof(m_sample_status_lock));
+    ESP_LOGI("StatisticsManager", "=== Locks initialized successfully ===");
 #endif
 }
 
@@ -159,12 +176,13 @@ void StatisticsManager::get_tx_stats(wavex_tx_stats_t* out) const
     taskEXIT_CRITICAL(&m_tx_stats_lock);
 }
 
-void StatisticsManager::update_backend_heartbeat(uint32_t uptime_ms, uint32_t rx_total, uint32_t loop_counter)
+void StatisticsManager::update_backend_heartbeat(uint32_t uptime_ms, uint32_t rx_total, uint32_t loop_counter, float cpu_usage_percent)
 {
     taskENTER_CRITICAL(&m_hb_lock);
     m_backend_hb.uptime_ms = uptime_ms;
     m_backend_hb.rx_total = rx_total;
     m_backend_hb.loop_counter = loop_counter;
+    m_backend_hb.cpu_usage_percent = cpu_usage_percent;
 #ifdef ESP_PLATFORM
     m_backend_hb.last_rx_ms = (uint32_t)(esp_timer_get_time() / 1000);
 #else
@@ -174,15 +192,16 @@ void StatisticsManager::update_backend_heartbeat(uint32_t uptime_ms, uint32_t rx
     taskEXIT_CRITICAL(&m_hb_lock);
 }
 
-void StatisticsManager::get_backend_heartbeat(uint32_t* uptime_ms, uint32_t* rx_total, uint32_t* loop_counter, uint32_t* last_rx_ms, bool* valid) const
+void StatisticsManager::get_backend_heartbeat(uint32_t* uptime_ms, uint32_t* rx_total, uint32_t* loop_counter, uint32_t* last_rx_ms, float* cpu_usage_percent, bool* valid) const
 {
-    if (!uptime_ms || !rx_total || !loop_counter || !last_rx_ms || !valid) return;
+    if (!uptime_ms || !rx_total || !loop_counter || !last_rx_ms || !cpu_usage_percent || !valid) return;
     
     taskENTER_CRITICAL(&m_hb_lock);
     *uptime_ms = m_backend_hb.uptime_ms;
     *rx_total = m_backend_hb.rx_total;
     *loop_counter = m_backend_hb.loop_counter;
     *last_rx_ms = m_backend_hb.last_rx_ms;
+    *cpu_usage_percent = m_backend_hb.cpu_usage_percent;
     *valid = m_backend_hb.valid;
     taskEXIT_CRITICAL(&m_hb_lock);
 }
@@ -252,4 +271,52 @@ void StatisticsManager::set_meter_callback(void (*callback)(float rms, float pea
     m_meter_callback = callback;
     m_meter_user_data = user_data;
     taskEXIT_CRITICAL(&m_meter_lock);
+}
+
+void StatisticsManager::set_browse_resp_callback(void (*callback)(const uint8_t* data, size_t length, void* user_data), void* user_data)
+{
+    ESP_LOGI("StatisticsManager", "=== About to acquire mutex for browse resp callback ===");
+    if (m_browse_resp_mutex && xSemaphoreTake(m_browse_resp_mutex, portMAX_DELAY) == pdTRUE) {
+        ESP_LOGI("StatisticsManager", "=== Successfully acquired mutex ===");
+        m_browse_resp_callback = callback;
+        m_browse_resp_user_data = user_data;
+        ESP_LOGI("StatisticsManager", "Browse response callback registered: %p", callback);
+        ESP_LOGI("StatisticsManager", "=== About to release mutex ===");
+        xSemaphoreGive(m_browse_resp_mutex);
+        ESP_LOGI("StatisticsManager", "=== Successfully released mutex ===");
+    } else {
+        ESP_LOGE("StatisticsManager", "Failed to acquire browse resp mutex");
+    }
+}
+
+void StatisticsManager::invoke_browse_resp_callback(const uint8_t* data, size_t length)
+{
+    if (m_browse_resp_mutex && xSemaphoreTake(m_browse_resp_mutex, portMAX_DELAY) == pdTRUE) {
+        if (m_browse_resp_callback) {
+            ESP_LOGI("StatisticsManager", "Invoking browse response callback: %d bytes", (int)length);
+            m_browse_resp_callback(data, length, m_browse_resp_user_data);
+        } else {
+            ESP_LOGW("StatisticsManager", "No browse response callback registered");
+        }
+        xSemaphoreGive(m_browse_resp_mutex);
+    } else {
+        ESP_LOGE("StatisticsManager", "Failed to acquire browse resp mutex for invoke");
+    }
+}
+
+void StatisticsManager::set_sample_status_callback(void (*callback)(uint8_t state, uint32_t sample_rate, uint8_t channels, uint32_t frames_played, void* user_data), void* user_data)
+{
+    taskENTER_CRITICAL(&m_sample_status_lock);
+    m_sample_status_callback = callback;
+    m_sample_status_user_data = user_data;
+    taskEXIT_CRITICAL(&m_sample_status_lock);
+}
+
+void StatisticsManager::invoke_sample_status_callback(uint8_t state, uint32_t sample_rate, uint8_t channels, uint32_t frames_played)
+{
+    taskENTER_CRITICAL(&m_sample_status_lock);
+    if (m_sample_status_callback) {
+        m_sample_status_callback(state, sample_rate, channels, frames_played, m_sample_status_user_data);
+    }
+    taskEXIT_CRITICAL(&m_sample_status_lock);
 }

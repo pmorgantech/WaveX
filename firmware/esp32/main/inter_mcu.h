@@ -43,9 +43,14 @@ esp_err_t inter_mcu_send_preview_req(uint8_t slot, uint32_t start, uint32_t end,
 // Listener registration for backend->frontend messages
 typedef void (*wavex_meter_cb_t)(float rms, float peak, void* user_data);
 typedef void (*wavex_wave_chunk_cb_t)(uint32_t offset, const int16_t* samples, uint16_t count, void* user_data);
+typedef void (*wavex_browse_resp_cb_t)(const uint8_t* data, size_t length, void* user_data);
+typedef void (*wavex_sample_status_cb_t)(uint8_t state, uint32_t sample_rate, uint8_t channels, uint32_t frames_played, void* user_data);
 
 void inter_mcu_set_meter_listener(wavex_meter_cb_t cb, void* user_data);
 void inter_mcu_set_wave_chunk_listener(wavex_wave_chunk_cb_t cb, void* user_data);
+void inter_mcu_set_browse_resp_listener(wavex_browse_resp_cb_t cb, void* user_data);
+void inter_mcu_invoke_browse_resp_callback(const uint8_t* data, size_t length);
+void inter_mcu_set_sample_status_listener(wavex_sample_status_cb_t cb, void* user_data);
 
 // Control RX task behavior
 extern "C" void inter_mcu_set_suspended(bool suspended);
@@ -58,6 +63,7 @@ typedef struct {
     uint32_t rx_total;
     uint32_t loop_counter;
     uint32_t last_rx_ms; // esp_timer (ms) when last heartbeat was received
+    float    cpu_usage_percent; // CPU usage percentage from Daisy
     bool     valid;
 } wavex_backend_heartbeat_t;
 
@@ -90,7 +96,7 @@ void inter_mcu_send_test_messages(void);
 void inter_mcu_get_tx_stats(wavex_tx_stats_t* out);
 
 // Update backend heartbeat statistics directly (for SPI link processing)
-void inter_mcu_update_backend_heartbeat(uint32_t uptime_ms, uint32_t rx_total, uint32_t loop_counter);
+void inter_mcu_update_backend_heartbeat(uint32_t uptime_ms, uint32_t rx_total, uint32_t loop_counter, float cpu_usage_percent);
 
 // Update backend meter data directly (for SPI link processing)
 void inter_mcu_update_backend_meters(float rms_left, float rms_right, float peak_left, float peak_right);
@@ -103,3 +109,6 @@ void inter_mcu_process_packet_data(const uint8_t* data, size_t length);
 
 // Increment packet statistics (for SPI link integration)
 void inter_mcu_increment_packet_stat(uint8_t packet_type);
+
+// Process control messages received from Daisy (backend)
+void inter_mcu_process_daisy_control_message(uint8_t type, const uint8_t* payload, uint8_t len);

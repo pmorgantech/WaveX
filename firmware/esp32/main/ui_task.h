@@ -10,6 +10,7 @@
 
  #include "esp_err.h"
  #include "esp_lcd_types.h"
+ #include "lvgl.h"
  
  #ifdef __cplusplus
  extern "C" {
@@ -41,6 +42,39 @@
   * @return ESP_OK on success, error code otherwise
   */
  esp_err_t wavex_ui_get_panel_handle(esp_lcd_panel_handle_t *panel_handle);
+ 
+ /**
+  * @brief Create the enhanced meter display
+  * 
+  * @param parent The parent LVGL object
+  */
+ void wavex_ui_create_meter_display(lv_obj_t *parent);
+ 
+ /**
+  * @brief Set the current screen context for hotkey mapping
+  * 
+  * @param screen_name The name of the current screen
+  */
+ void wavex_ui_set_screen_context(const char* screen_name);
+ 
+ /**
+  * @brief Update the header title
+  * 
+  * @param title The new title
+  */
+ void wavex_ui_update_header_title(const char* title);
+ 
+ /**
+  * @brief Update hotkey labels
+  * 
+  * @param labels Array of 6 strings for the hotkey labels
+  */
+ void wavex_ui_update_hotkey_labels(const char* labels[6]);
+ 
+ /**
+  * @brief Mark UI content as changed to trigger a refresh
+  */
+ void wavex_ui_mark_content_changed(void);
  
  #ifdef __cplusplus
  }

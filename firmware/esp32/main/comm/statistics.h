@@ -84,13 +84,21 @@ public:
     void get_tx_stats(wavex_tx_stats_t* out) const;
     
     // Backend heartbeat
-    void update_backend_heartbeat(uint32_t uptime_ms, uint32_t rx_total, uint32_t loop_counter);
-    void get_backend_heartbeat(uint32_t* uptime_ms, uint32_t* rx_total, uint32_t* loop_counter, uint32_t* last_rx_ms, bool* valid) const;
+    void update_backend_heartbeat(uint32_t uptime_ms, uint32_t rx_total, uint32_t loop_counter, float cpu_usage_percent);
+    void get_backend_heartbeat(uint32_t* uptime_ms, uint32_t* rx_total, uint32_t* loop_counter, uint32_t* last_rx_ms, float* cpu_usage_percent, bool* valid) const;
     
     // Meter data
     void update_meter_data(float rms_left, float rms_right, float peak_left, float peak_right);
     void get_meter_data(wavex_meter_data_t* out) const;
     void set_meter_callback(void (*callback)(float rms, float peak, void* user_data), void* user_data);
+    
+    // Browse response callback
+    void set_browse_resp_callback(void (*callback)(const uint8_t* data, size_t length, void* user_data), void* user_data);
+    void invoke_browse_resp_callback(const uint8_t* data, size_t length);
+    
+    // Sample status callback
+    void set_sample_status_callback(void (*callback)(uint8_t state, uint32_t sample_rate, uint8_t channels, uint32_t frames_played, void* user_data), void* user_data);
+    void invoke_sample_status_callback(uint8_t state, uint32_t sample_rate, uint8_t channels, uint32_t frames_played);
 
 private:
     // Packet statistics
@@ -107,6 +115,7 @@ private:
         uint32_t rx_total;
         uint32_t loop_counter;
         uint32_t last_rx_ms;
+        float cpu_usage_percent;
         bool valid;
     } m_backend_hb;
     mutable portMUX_TYPE m_hb_lock;
@@ -118,6 +127,17 @@ private:
     // Meter callback
     void (*m_meter_callback)(float rms, float peak, void* user_data);
     void* m_meter_user_data;
+    
+    // Browse response callback
+    void (*m_browse_resp_callback)(const uint8_t* data, size_t length, void* user_data);
+    void* m_browse_resp_user_data;
+    mutable SemaphoreHandle_t m_browse_resp_mutex;
+    
+    // Sample status callback
+    void (*m_sample_status_callback)(uint8_t state, uint32_t sample_rate, uint8_t channels, uint32_t frames_played, void* user_data);
+    void* m_sample_status_user_data;
+    mutable portMUX_TYPE m_sample_status_lock;
+    
     
     // Helper methods
     const char* get_packet_type_name(uint8_t packet_type) const;

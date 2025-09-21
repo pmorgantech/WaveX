@@ -13,6 +13,10 @@ typedef int esp_err_t;
 #endif
 #endif
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 // SPI link configuration
 // WAVEX_SPI_LINK_ENABLED is defined in shared/config/link_config.h
 // All pin definitions are now centralized in shared/config/pin_config.h
@@ -51,5 +55,9 @@ bool spi_link_is_active(void);
 void spi_link_set_packet_callback(void (*callback)(const uint8_t* data, size_t length));
 
 #endif // WAVEX_SPI_LINK_ENABLED
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif // WAVEX_SPI_LINK_H

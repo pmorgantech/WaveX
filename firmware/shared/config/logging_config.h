@@ -26,6 +26,11 @@
 // COMPONENT-SPECIFIC LOGGING MACROS
 // ============================================================================
 
+// Meter Data Logging (ESP32 only)
+#ifndef WAVEX_LOG_METER_DATA
+#define WAVEX_LOG_METER_DATA 0
+#endif
+
 // Inter-MCU Communication Link Logging
 #ifndef WAVEX_LOG_INTER_MCU_LINK
 #define WAVEX_LOG_INTER_MCU_LINK WAVEX_DEBUG_LOGGING_ENABLED

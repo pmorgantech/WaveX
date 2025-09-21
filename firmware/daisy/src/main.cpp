@@ -38,25 +38,75 @@ static daisy::SpiHandle spi_handle;
 
 // Helper function to process SPI packets
 void process_spi_packet(::pkt_t* pkt) {
-    // Convert SPI packet to existing protocol format for compatibility
-    // This allows existing application code to work unchanged
-    
-    switch (pkt->h.type) {
-        case 0x1001: // Control change
-            // Convert to existing protocol format
-            // ... implementation ...
-            break;
-        // ... handle other packet types ...
+    // Process incoming SPI messages from ESP32 using the proper message processor
+    if (pkt && pkt->h.len <= 26) {
+        // Call the actual message processing function from inter_spi.cpp
+        // pkt_t has payload directly, not pkt->h.payload
+        WaveX::Comm::ProcessEsp32Message(pkt->h.type, 0, pkt->payload, pkt->h.len);
     }
 }
 
+// Process incoming SPI messages from ESP32
+void process_incoming_spi_messages() {
+    #if WAVEX_SPI_LINK_ENABLED
+    // Check for incoming SPI messages and process them
+    // Note: Current SPI implementation is one-way (Daisy sends, ESP32 receives)
+    // For now, we'll poll for any buffered messages
+    pkt_t* pkt = nullptr;
+    int recv_result = WaveX::Comm::Spi_Recv(&pkt);
+    if (recv_result > 0 && pkt) {
+        hw.PrintLine("DAISY: process_incoming_spi_messages - got packet type=0x%02X, len=%d", 
+                     pkt->h.type, pkt->h.len);
+        // Process the received packet
+        process_spi_packet(pkt);
+        WaveX::Comm::Spi_Recycle(pkt, 1);
+    }
+    #endif
+}
+
 // Optional loop/CPU probe GPIO
-// CPU usage measurement state
-static uint32_t s_cpu_last_us = 0;
-static uint32_t s_cpu_busy_us_accum = 0;
-static uint32_t s_cpu_window_start_us = 0;
+// CPU usage measurement state - improved accuracy
+static uint32_t s_cpu_window_start_ticks = 0;
+static uint32_t s_cpu_busy_ticks_accum = 0;
+static uint32_t s_cpu_total_ticks_accum = 0;
+static uint32_t s_cpu_last_log_ms = 0;
+static uint32_t s_cpu_baseline_ticks_per_second = 0;
+static bool s_cpu_baseline_measured = false;
+static uint32_t s_cpu_measurement_count = 0;
+static float s_cpu_usage_percent = 0.0f; // Current CPU usage percentage
 
 // QueuedMessage removed - using SPI only
+
+/**
+ * @brief Measure CPU baseline to determine maximum possible CPU usage
+ * This runs a tight loop for 1 second to measure maximum ticks per second
+ */
+static void measure_cpu_baseline()
+{
+    if (s_cpu_baseline_measured) return;
+    
+    WAVEX_LOG_DAISY(INTER_MCU_LINK, "CPU: Measuring baseline performance...");
+    
+    uint32_t start_time = System::GetNow();
+    uint32_t start_ticks = System::GetTick();
+    uint32_t end_time = start_time + 100; // Run for 100ms (much shorter)
+    
+    // Tight loop to measure maximum CPU capability
+    volatile uint32_t counter = 0;
+    while (System::GetNow() < end_time) {
+        counter++;
+        // Prevent compiler optimization
+        __asm__ __volatile__("" : "+r" (counter));
+    }
+    
+    uint32_t end_ticks = System::GetTick();
+    uint32_t elapsed_ticks = end_ticks - start_ticks;
+    s_cpu_baseline_ticks_per_second = elapsed_ticks * 10; // Scale up from 100ms to 1 second
+    s_cpu_baseline_measured = true;
+    
+    WAVEX_LOG_DAISY(INTER_MCU_LINK, "CPU: Baseline = %lu ticks/second (counter=%lu)", 
+                    (unsigned long)s_cpu_baseline_ticks_per_second, (unsigned long)counter);
+}
 
 // Initialize DSP objects via AudioEngine
 void InitDSP()
@@ -83,10 +133,17 @@ int main(void)
     WAVEX_LOG_DAISY(INTER_MCU_LINK, "Hardware initialized successfully");
     WAVEX_LOG_DAISY(INTER_MCU_LINK, "Revision: 0x%lX", 0x20036450); // STM32H7B3
     WAVEX_LOG_DAISY(INTER_MCU_LINK, "USB CDC logging active");
+    WAVEX_LOG_DAISY(INTER_MCU_LINK, "SPI Link Enabled: %d", WAVEX_SPI_LINK_ENABLED);
+    WAVEX_LOG_DAISY(INTER_MCU_LINK, "SPI DMA Enabled: %d", WAVEX_SPI_DMA_ENABLED);
     
     // Initialize CPU usage measurement window
-    s_cpu_last_us = System::GetUs();
-    s_cpu_window_start_us = s_cpu_last_us;
+    s_cpu_window_start_ticks = System::GetTick();
+    s_cpu_last_log_ms = System::GetNow();
+    s_cpu_baseline_measured = false;
+    s_cpu_measurement_count = 0;
+    
+    // Measure CPU baseline early to avoid interfering with audio
+    measure_cpu_baseline();
     
     // Initialize SD card (SDMMC + FatFS) if enabled
     bool sd_available = false;
@@ -254,32 +311,34 @@ int main(void)
 
     // Initialize SPI link only if SPI init succeeded
     if (init_result == daisy::SpiHandle::Result::OK) {
+        hw.PrintLine("DAISY: SPI Init SUCCESS - About to call WaveX::Comm::Spi_Init");
         WAVEX_LOG_DAISY(INTER_MCU_LINK, "DEBUG: Calling WaveX::Comm::Spi_Init");
         WaveX::Comm::Spi_Init(hw, &spi_handle);
+        hw.PrintLine("DAISY: WaveX::Comm::Spi_Init completed");
         WAVEX_LOG_DAISY(INTER_MCU_LINK, "DEBUG: Returned from Spi_Init");
         System::Delay(100);
         
-        // Test SPI immediately after init to verify it's working
-        WAVEX_LOG_DAISY(INTER_MCU_LINK, "DEBUG: Testing SPI with immediate test packet");
-        uint8_t test_payload[4] = {0xAA, 0xBB, 0xCC, 0xDD};
-        int test_result = WaveX::Comm::Spi_Send(0x99, test_payload, 4);  // Test packet
-        WAVEX_LOG_DAISY(INTER_MCU_LINK, "DEBUG: SPI test result: %d (1=success, 0=fail)", test_result);
-        if (test_result == 1) {
-            WAVEX_LOG_DAISY(INTER_MCU_LINK, "SUCCESS: SPI is working! You should see SPI1 CLK on scope now!");
-        } else {
-            WAVEX_LOG_DAISY(INTER_MCU_LINK, "FAILURE: SPI test failed - this explains the missing SPI1 CLK!");
-        }
-        WaveX::Comm::Spi_DebugState();
+        // SPI test to verify communication works
+    WAVEX_LOG_DAISY(INTER_MCU_LINK, "DEBUG: Testing SPI with immediate test packet");
+    uint8_t test_payload[4] = {0xAA, 0xBB, 0xCC, 0xDD};
+    int test_result = WaveX::Comm::Spi_Send(0x99, test_payload, 4);  // Test packet
+    WAVEX_LOG_DAISY(INTER_MCU_LINK, "DEBUG: SPI test result: %d (1=success, 0=fail)", test_result);
+    if (test_result == 1) {
+        WAVEX_LOG_DAISY(INTER_MCU_LINK, "SUCCESS: SPI is working! You should see SPI1 CLK on scope now!");
+    } else {
+        WAVEX_LOG_DAISY(INTER_MCU_LINK, "FAILURE: SPI test failed - this explains the missing SPI1 CLK!");
+    }
+    WaveX::Comm::Spi_DebugState();
     } else {
         WAVEX_LOG_DAISY(INTER_MCU_LINK, "ERROR: Skipping SPI link init due to SPI init failure - NO SPI CLOCK WILL BE GENERATED");
         WAVEX_LOG_DAISY(INTER_MCU_LINK, "ERROR: This explains why you see no SPI1 CLK on the scope!");
     }
     #endif
 
-    // Start audio processing (if enabled)
+    // Start audio callback system
     #if WAVEX_AUDIO_ENGINE_ENABLED
     hw.StartAudio(WaveX::AudioEngine::Callback);
-    WAVEX_LOG_DAISY(AUDIO_ENGINE, "Audio started - you should hear a 440 Hz tone");
+    WAVEX_LOG_DAISY(AUDIO_ENGINE, "Audio engine started - callback system active");
     #else
     WAVEX_LOG_DAISY(AUDIO_ENGINE, "Audio engine disabled (WAVEX_AUDIO_ENGINE_ENABLED = 0)");
     #endif
@@ -300,6 +359,7 @@ int main(void)
     // Main loop
     while(1)
     {
+        
         #if WAVEX_DAISY_LOOP_PROBE_ENABLED
         s_loop_probe.Write(true);
         #endif
@@ -310,55 +370,89 @@ int main(void)
         }
         #endif
 
-        // Start busy timing for this iteration
-        uint32_t busy_start_us = System::GetUs();
+        // Start busy timing for this iteration (using ticks for better accuracy)
+        uint32_t busy_start_ticks = System::GetTick();
 
         loop_counter++;
 
-        // Send SYNC packet every 2 seconds
-        uint32_t current_time = System::GetNow();   
-        if(current_time - last_sync >= 2000) {
+        // Batch SPI operations to reduce timing variations
+        uint32_t current_time = System::GetNow();
+        
+        // Process any incoming SPI messages from ESP32
+        process_incoming_spi_messages();
+        bool send_sync = (current_time - last_sync >= 2000);
+        bool send_beacon = (current_time - last_beacon >= 1000);
+
+        // WAVEX_LOG_DAISY(INTER_MCU_LINK, "DEBUG: Main loop iteration %lu, current_time=%lu, last_sync=%lu, last_beacon=%lu",
+        //                 (unsigned long)loop_counter, (unsigned long)current_time, (unsigned long)last_sync, (unsigned long)last_beacon);
+
+        if (send_sync || send_beacon) {
+            // WAVEX_LOG_DAISY(INTER_MCU_LINK, "DEBUG: Time to send SPI packets - send_sync=%d, send_beacon=%d", send_sync, send_beacon);
+
             #if WAVEX_SPI_LINK_ENABLED
-            // Send SYNC via SPI
-            uint8_t payload[1] = {0};
-            WaveX::Comm::Spi_Send(0x92, payload, 1);  // SYNC packet type
-            #if WAVEX_MCU_LINK_PACKET_DEBUG
-            WAVEX_LOG_DAISY(INTER_MCU_LINK, "SPI SYNC packet sent");
-            WaveX::Comm::Spi_DebugState();  // Add debug output
+            // WAVEX_LOG_DAISY(INTER_MCU_LINK, "DEBUG: SPI link is enabled, attempting to send packets");
+            // WAVEX_LOG_DAISY(INTER_MCU_LINK, "DEBUG: WAVEX_SPI_LINK_ENABLED=1, WAVEX_SPI_DMA_ENABLED=%d", WAVEX_SPI_DMA_ENABLED);
+
+            if (send_sync) {
+                // WAVEX_LOG_DAISY(INTER_MCU_LINK, "DEBUG: Sending SYNC packet");
+                // Send SYNC via SPI
+                uint8_t payload[1] = {0};
+                int sync_result = WaveX::Comm::Spi_Send(0x92, payload, 1);  // SYNC packet type
+                // WAVEX_LOG_DAISY(INTER_MCU_LINK, "DEBUG: SYNC packet send result: %d", sync_result);
+                #if WAVEX_MCU_LINK_PACKET_DEBUG
+                WAVEX_LOG_DAISY(INTER_MCU_LINK, "SPI SYNC packet sent");
+                #endif
+                last_sync = current_time;
+            }
+
+            if (send_beacon) {
+                // WAVEX_LOG_DAISY(INTER_MCU_LINK, "DEBUG: Preparing heartbeat packet");
+                // Send heartbeat via SPI with CPU usage
+                uint8_t payload[14]; // Extended to 14 bytes for CPU usage
+                payload[0] = (current_time >> 0) & 0xFF;
+                payload[1] = (current_time >> 8) & 0xFF;
+                payload[2] = (current_time >> 16) & 0xFF;
+                payload[3] = (current_time >> 24) & 0xFF;
+                payload[4] = (loop_counter >> 0) & 0xFF;
+                payload[5] = (loop_counter >> 8) & 0xFF;
+                payload[6] = (loop_counter >> 16) & 0xFF;
+                payload[7] = (loop_counter >> 24) & 0xFF;
+                payload[8] = 0; // rx_total placeholder
+                payload[9] = 0;
+                payload[10] = 0;
+                payload[11] = 0;
+
+                // Add CPU usage (as percentage * 10 for 1 decimal place precision)
+                uint16_t cpu_usage_scaled = (uint16_t)(s_cpu_usage_percent * 10.0f);
+                payload[12] = (cpu_usage_scaled >> 0) & 0xFF;
+                payload[13] = (cpu_usage_scaled >> 8) & 0xFF;
+
+                // WAVEX_LOG_DAISY(INTER_MCU_LINK, "DEBUG: Sending heartbeat packet - calling Spi_Send");
+                int heartbeat_result = WaveX::Comm::Spi_Send(0x91, payload, 14);  // Heartbeat packet type
+                // WAVEX_LOG_DAISY(INTER_MCU_LINK, "DEBUG: Heartbeat packet send result: %d", heartbeat_result);
+
+                #if WAVEX_MCU_LINK_PACKET_DEBUG
+                WAVEX_LOG_DAISY(INTER_MCU_LINK, "CPU in heartbeat: %.1f%% -> scaled=%u (0x%04X)",
+                                s_cpu_usage_percent, (unsigned int)cpu_usage_scaled, (unsigned int)cpu_usage_scaled);
+                WAVEX_LOG_DAISY(INTER_MCU_LINK, "SPI Heartbeat sent: uptime=%lu loop_counter=%lu cpu=%.1f%%",
+                                (unsigned long)current_time, (unsigned long)loop_counter, s_cpu_usage_percent);
+                #endif
+                last_beacon = current_time;
+            }
+            #else
+            WAVEX_LOG_DAISY(INTER_MCU_LINK, "ERROR: SPI link is NOT enabled!");
             #endif
-            #endif
-            last_sync = current_time;
+        } else {
+            // Only log occasionally to avoid spam
+            // if (loop_counter % 100 == 0) {
+            //     WAVEX_LOG_DAISY(INTER_MCU_LINK, "DEBUG: Not time to send SPI packets yet - current_time=%lu, last_sync=%lu, last_beacon=%lu",
+            //                     (unsigned long)current_time, (unsigned long)last_sync, (unsigned long)last_beacon);
+            // }
         }
 
-        // Periodic liveness beacon (approx 1s)
-        #if WAVEX_SPI_LINK_ENABLED
-        current_time = System::GetNow();
-        if(current_time - last_beacon >= 1000) {
-            last_beacon = current_time;
-            // Send heartbeat via SPI
-            uint8_t payload[12];
-            payload[0] = (last_beacon >> 0) & 0xFF;
-            payload[1] = (last_beacon >> 8) & 0xFF;
-            payload[2] = (last_beacon >> 16) & 0xFF;
-            payload[3] = (last_beacon >> 24) & 0xFF;
-            payload[4] = (loop_counter >> 0) & 0xFF;
-            payload[5] = (loop_counter >> 8) & 0xFF;
-            payload[6] = (loop_counter >> 16) & 0xFF;
-            payload[7] = (loop_counter >> 24) & 0xFF;
-            payload[8] = 0; // rx_total placeholder
-            payload[9] = 0;
-            payload[10] = 0;
-            payload[11] = 0;
-                       
-            WaveX::Comm::Spi_Send(0x91, payload, 12);  // Heartbeat packet type
-            #if WAVEX_MCU_LINK_PACKET_DEBUG
-            WAVEX_LOG_DAISY(INTER_MCU_LINK, "SPI Heartbeat sent: uptime=%lu loop_counter=%lu", (unsigned long)last_beacon, (unsigned long)loop_counter);
-            WaveX::Comm::Spi_DebugState();  // Add debug output for heartbeat too
-            #endif
-        }
-
-        // Periodic meter update
-        if(current_time - last_meter_send >= WAVEX_AUDIO_METERS_SEND_INTERVAL_MS) {
+        // TEMPORARILY DISABLED: Periodic meter update - Daisy (backend) sends to ESP32 (frontend)
+        // TODO: Re-enable after fixing browse request issue
+        if(false && current_time - last_meter_send >= WAVEX_AUDIO_METERS_SEND_INTERVAL_MS) {
             last_meter_send = current_time;
             WaveX::AudioEngine::BlockMeters m;
             WaveX::AudioEngine::GetMeters(m);
@@ -378,115 +472,87 @@ int main(void)
             payload[6] = (uint8_t)(q_pkR & 0xFF);
             payload[7] = (uint8_t)(q_pkR >> 8);
 
-            WaveX::Comm::Spi_Send(0x90, payload, sizeof(payload));
+            // Send meter data using proper protocol message type (only if queue not full)
+            int result = WaveX::Comm::Spi_Send(WaveX::Protocol::MSG_METER_PUSH, payload, sizeof(payload));
+            if (!result) {
+                // Queue was full - skip this meter update to prevent spam
+                hw.PrintLine("DAISY: Skipped meter update - queue full");
+            }
         }
 
-        // SD WAV: find and start once
+        // DISABLED: Automatic WAV playback on startup
+        // The system should only play audio when audition commands are received via SPI
+        // from the ESP32 Sample Load/Save page
+        //
+        // Previous auto-playback code removed to meet requirements:
+        // "When daisy starts, no audio plays (no oscillator, no .wavs)"
+
         #if WAVEX_DAISY_SD_CARD_ENABLED && (WAVEX_DAISY_SD_CARD_BACKEND == 1)
-        if (!wav_started && sd_available) {
+        // SD card is available but we don't auto-play - waiting for audition commands
+        if (sd_available && !wav_started) {
             #if WAVEX_DAISY_SD_DEBUG
-            WAVEX_LOG_DAISY(AUDIO_ENGINE, "SD: scanning root for .wav files");
+            WAVEX_LOG_DAISY(AUDIO_ENGINE, "SD: card ready, waiting for audition commands (no auto-play)");
             #endif
-            DIR dir;
-            FILINFO fno;
-            FRESULT res = f_opendir(&dir, "/");
-            if (res == FR_OK) {
-                #if WAVEX_DAISY_SD_DEBUG
-                WAVEX_LOG_DAISY(AUDIO_ENGINE, "SD: f_opendir('/') OK, reading entries");
-                #endif
-                uint32_t file_count = 0;
-                for (;;) {
-                    res = f_readdir(&dir, &fno);
-                    if (res != FR_OK || fno.fname[0] == 0) break;
-                    file_count++;
-                    #if WAVEX_DAISY_SD_DEBUG
-                    WAVEX_LOG_DAISY(AUDIO_ENGINE, "SD: entry %lu: %s %s", 
-                        (unsigned long)file_count, 
-                        (fno.fattrib & AM_DIR) ? "[DIR]" : "[FILE]", 
-                        fno.fname);
-                    #endif
-                    if (!(fno.fattrib & AM_DIR)) {
-                        // check .wav extension (case-insensitive)
-                        const char* name = fno.fname;
-                        size_t n = strlen(name);
-                        if (n >= 4) {
-                            const char* ext = name + (n - 4);
-                            char e0 = ext[0] | 0x20;
-                            char e1 = ext[1] | 0x20;
-                            char e2 = ext[2] | 0x20;
-                            char e3 = ext[3] | 0x20;
-                            if (e0 == '.' && e1 == 'w' && e2 == 'a' && e3 == 'v') {
-                                snprintf(wav_path, sizeof(wav_path), "/%s", name);
-                                #if WAVEX_DAISY_SD_DEBUG
-                                WAVEX_LOG_DAISY(AUDIO_ENGINE, "SD: found wav %s", wav_path);
-                                #endif
-                                break;
-                            }
-                        }
-                    }
-                }
-                f_closedir(&dir);
-                #if WAVEX_DAISY_SD_DEBUG
-                WAVEX_LOG_DAISY(AUDIO_ENGINE, "SD: scanned %lu entries total", (unsigned long)file_count);
-                #endif
-            } else {
-                #if WAVEX_DAISY_SD_DEBUG
-                WAVEX_LOG_DAISY(AUDIO_ENGINE, "SD: f_opendir('/') failed with FRESULT %d", (int)res);
-                #endif
-            }
-            if (wav_path[0]) {
-                if (WaveX::AudioEngine::OpenWav(wav_path)) {
-                    WAVEX_LOG_DAISY(AUDIO_ENGINE, "Playing WAV: %s", wav_path);
-                    wav_started = true;
-                } else {
-                    WAVEX_LOG_DAISY(AUDIO_ENGINE, "Failed to open WAV: %s", wav_path);
-                    wav_path[0] = 0;
-                }
-            } else {
-                #if WAVEX_DAISY_SD_DEBUG
-                WAVEX_LOG_DAISY(AUDIO_ENGINE, "SD: no .wav found in root");
-                #endif
-            }
-        }
-        // Pump WAV I/O to fill ring buffer (adaptive polling)
-        if (wav_started && sd_available) {
-            // Only pump I/O when ring buffer is getting low (adaptive polling)
-            if (WaveX::AudioEngine::ShouldPumpWavIO()) {
-                #if WAVEX_DAISY_SD_DEBUG
-                static uint32_t last_log = 0; uint32_t now = System::GetNow();
-                if (now - last_log > 1000) { last_log = now; WAVEX_LOG_DAISY(AUDIO_ENGINE, "SD: pumping WAV I/O (adaptive)"); }
-                #endif
-                WaveX::AudioEngine::PumpWavIO();
-            }
+            // Mark as "started" to prevent re-scanning, but don't actually start playback
+            wav_started = true;
         }
         #endif
-        #endif
 
-        // Compute busy time for this loop iteration and sleep briefly
-        {
-            uint32_t now_us = System::GetUs();
-            s_cpu_busy_us_accum += (now_us - busy_start_us);
+        // Measure work time for this iteration (excluding sleep)
+        uint32_t work_end_ticks = System::GetTick();
+        s_cpu_busy_ticks_accum += (work_end_ticks - busy_start_ticks);
+        s_cpu_measurement_count++;
+        
+        // Precise timing: sleep for exactly 1ms using tick-based timing
+        uint32_t sleep_start = System::GetTick();
+        uint32_t target_sleep_ticks = System::GetTickFreq() / 1000; // 1ms in ticks
+        while ((System::GetTick() - sleep_start) < target_sleep_ticks) {
+            // Busy wait for precise timing - this is only 1ms so it's acceptable
+            __NOP(); // No operation instruction for CPU efficiency
         }
-        System::Delay(10);
-
-        // Emit CPU usage once per second
-        static uint32_t last_cpu_log_ms = 0;
+        
+        // Measure CPU usage every 2 seconds (reduced frequency for better performance)
         uint32_t now_ms = System::GetNow();
-        if(last_cpu_log_ms == 0) {
-            last_cpu_log_ms = now_ms;
-            s_cpu_window_start_us = System::GetUs();
+        if (s_cpu_last_log_ms == 0) {
+            s_cpu_last_log_ms = now_ms;
+            s_cpu_window_start_ticks = System::GetTick();
         }
-        if(now_ms - last_cpu_log_ms >= 1000) {
-            uint32_t window_us = (System::GetUs() - s_cpu_window_start_us);
-            uint32_t pct10 = window_us ? (s_cpu_busy_us_accum * 1000u) / window_us : 0u; // tenths
-            if (pct10 > 1000u) pct10 = 1000u; // clamp at 100.0%
-            WAVEX_LOG_DAISY(INTER_MCU_LINK, "CPU busy: %lu.%lu%% (window %lu us)",
-                            (unsigned long)(pct10 / 10u),
-                            (unsigned long)(pct10 % 10u),
-                            (unsigned long)window_us);
-            s_cpu_busy_us_accum = 0;
-            s_cpu_window_start_us = System::GetUs();
-            last_cpu_log_ms = now_ms;
+        
+        // Only do CPU measurement every 2 seconds to reduce overhead
+        if (now_ms - s_cpu_last_log_ms >= 2000) {
+            // Baseline already measured at startup
+            
+            // Calculate total time window (excluding sleep)
+            uint32_t window_ticks = System::GetTick() - s_cpu_window_start_ticks;
+            
+            // Calculate CPU usage percentage - simplified approach
+            s_cpu_usage_percent = 0.0f;
+            if (window_ticks > 0 && s_cpu_busy_ticks_accum <= window_ticks) {
+                // Simple approach: calculate what percentage of the window we were busy
+                // This gives us a reasonable CPU usage estimate
+                s_cpu_usage_percent = (float)s_cpu_busy_ticks_accum / (float)window_ticks * 100.0f;
+                
+                // Clamp to reasonable range
+                if (s_cpu_usage_percent > 100.0f) s_cpu_usage_percent = 100.0f;
+                if (s_cpu_usage_percent < 0.0f) s_cpu_usage_percent = 0.0f;
+                
+            } else if (window_ticks > 0) {
+                // Safety fallback: if busy time exceeds window time, cap at 100%
+                s_cpu_usage_percent = 100.0f;
+            }
+            
+            // Log CPU usage - convert float to integer to avoid formatting issues
+            uint32_t cpu_percent_int = (uint32_t)(s_cpu_usage_percent * 10); // Store as tenths (e.g., 6.5% = 65)
+            if (cpu_percent_int > 1000) cpu_percent_int = 1000; // Cap at 100.0%
+            WAVEX_LOG_DAISY(INTER_MCU_LINK, "CPU: %lu.%lu%%", 
+                            (unsigned long)(cpu_percent_int / 10), 
+                            (unsigned long)(cpu_percent_int % 10));
+            
+            // Reset for next measurement window
+            s_cpu_busy_ticks_accum = 0;
+            s_cpu_window_start_ticks = System::GetTick();
+            s_cpu_last_log_ms = now_ms;
+            s_cpu_measurement_count = 0;
         }
     }
 }

@@ -21,9 +21,13 @@ namespace Comm {
 // Function declarations
 void Spi_Init(daisy::DaisySeed& hw, daisy::SpiHandle* hspi);
 int Spi_Send(uint16_t type, const void* payload, uint16_t len);
+int Spi_SendLargePacket(const uint8_t* packet_data, size_t packet_size);
 int Spi_Recv(pkt_t **out);
 void Spi_Recycle(pkt_t *p, int is_rx);
 bool Spi_HasPendingData(void);
+
+// Message processing function
+void ProcessEsp32Message(uint8_t type, uint8_t flags, const uint8_t* payload, uint8_t len);
 
 // Get link statistics
 typedef struct {

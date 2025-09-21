@@ -154,6 +154,8 @@ void PacketProcessor::process_frame(const uint8_t* frame_data, size_t frame_leng
             break;
         case WaveX::Protocol::MSG_WAVE_CHUNK: packet_type_name = "WAVE_CHUNK"; break;
         case WaveX::Protocol::MSG_HEARTBEAT: packet_type_name = "HEARTBEAT"; break;
+        case WaveX::Protocol::MSG_BROWSE_RESP: packet_type_name = "BROWSE_RESP"; break;
+        case WaveX::Protocol::MSG_SAMPLE_STATUS: packet_type_name = "SAMPLE_STATUS"; break;
         case WaveX::Protocol::MSG_ERROR: packet_type_name = "ERROR"; break;
         default: packet_type_name = "UNKNOWN"; break;
     }
@@ -176,6 +178,12 @@ void PacketProcessor::process_frame(const uint8_t* frame_data, size_t frame_leng
             break;
         case WaveX::Protocol::MSG_SYNC:
             handle_sync(payload, length);
+            break;
+        case WaveX::Protocol::MSG_BROWSE_RESP:
+            handle_browse_resp(payload, length);
+            break;
+        case WaveX::Protocol::MSG_SAMPLE_STATUS:
+            handle_sample_status(payload, length);
             break;
         default:
             handle_unknown_message(type, payload, length);
@@ -210,11 +218,19 @@ void PacketProcessor::handle_wave_chunk(const uint8_t* payload, size_t length)
 
 void PacketProcessor::handle_heartbeat(const uint8_t* payload, size_t length)
 {
-    if (length == sizeof(WaveX::Protocol::HeartbeatMessage)) {
+    if (length >= sizeof(WaveX::Protocol::HeartbeatMessage)) {
         WaveX::Protocol::HeartbeatMessage hb;
         memset(&hb, 0, sizeof(hb));
         memcpy(&hb, payload, sizeof(hb));
-        m_stats.update_backend_heartbeat(hb.uptime_ms, hb.rx_total, hb.loop_counter);
+        
+        // Convert CPU usage from scaled integer back to float
+        float cpu_usage_percent = (float)hb.cpu_usage_percent / 10.0f;
+        
+        ESP_LOGI(TAG, "Heartbeat received: uptime=%lu, loop=%lu, cpu_raw=%u, cpu=%.1f%%", 
+                 (unsigned long)hb.uptime_ms, (unsigned long)hb.loop_counter, 
+                 (unsigned int)hb.cpu_usage_percent, cpu_usage_percent);
+        
+        m_stats.update_backend_heartbeat(hb.uptime_ms, hb.rx_total, hb.loop_counter, cpu_usage_percent);
     }
 }
 
@@ -223,6 +239,42 @@ void PacketProcessor::handle_sync(const uint8_t* payload, size_t length)
     // SYNC messages don't need special handling
     (void)payload;
     (void)length;
+}
+
+void PacketProcessor::handle_browse_resp(const uint8_t* payload, size_t length)
+{
+    ESP_LOGI(TAG, "Processing browse response: %d bytes", (int)length);
+    
+    // Log raw payload for debugging (first 64 bytes)
+    ESP_LOGI(TAG, "Browse response payload (first 64 bytes):");
+    for (int i = 0; i < (int)length && i < 64; i++) {
+        if (i % 16 == 0) {
+            ESP_LOGI(TAG, "  %04X: ", i);
+        }
+        ESP_LOGI(TAG, "%02X ", payload[i]);
+        if (i % 16 == 15) {
+            ESP_LOGI(TAG, "");
+        }
+    }
+    if (length % 16 != 0) {
+        ESP_LOGI(TAG, "");
+    }
+    
+    // Use statistics manager to invoke browse response callback
+    m_stats.invoke_browse_resp_callback(payload, length);
+}
+
+void PacketProcessor::handle_sample_status(const uint8_t* payload, size_t length)
+{
+    if (length >= sizeof(WaveX::Protocol::SampleStatusMessage)) {
+        WaveX::Protocol::SampleStatusMessage status;
+        memset(&status, 0, sizeof(status));
+        memcpy(&status, payload, sizeof(status));
+        
+        // Use statistics manager to invoke sample status callback
+        m_stats.invoke_sample_status_callback(status.state, status.sample_rate, 
+                                             status.channels, status.frames_played);
+    }
 }
 
 void PacketProcessor::handle_unknown_message(uint8_t type, const uint8_t* payload, size_t length)

@@ -57,7 +57,7 @@ extern "C" {
 #define WAVEX_ESP_SPI_CS        51   // Using GPIO51 for CS
 // IRQ/ATTN lines for Daisy <-> ESP signaling
 #define WAVEX_ESP_DAISY_IRQ     27   // J3-26: Daisy IRQ line to ESP (active low)
-#define WAVEX_ESP_ATTN_OUT      41   // J3-14: ESP Attention output to Daisy (active high)
+#define WAVEX_ESP_ATTN_OUT      31   // J3-14: ESP Attention output to Daisy (active high)
 
 // SD Card Interface (SPI2) - DISABLED: No SD card on ESP32
 // #define WAVEX_ESP_SD_CS         10   // J1-16: SD Card Chip Select
@@ -108,7 +108,8 @@ extern "C" {
 #define WAVEX_DAISY_SPI_MOSI    10    // D10: SPI1_MOSI (data to ESP32)
 #define WAVEX_DAISY_SPI_MISO    9     // D9: SPI1_MISO (data from ESP32)
 #define WAVEX_DAISY_SPI_CS      7     // D7: SPI1_NSS (chip select to ESP32)
-// No IRQ lines needed - simple master-slave polling
+// Attention signal from ESP32 (active high)
+#define WAVEX_DAISY_ATTN_IN     0     // D0: ESP32 attention input to Daisy
 
 // Audio I/O (Built-in AK4556 Codec)
 #define WAVEX_DAISY_AUDIO_IN_L  -1   // Built-in: Left audio input

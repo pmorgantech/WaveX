@@ -5,6 +5,9 @@
 #include "../sampler.hpp"
 #include "../cv_bus.hpp"
 #include "../timebase.hpp"
+#include "daisy_core.h"  // For memory sections
+#include "sys/dma.h"     // For cache management
+#include "stm32h7xx_ll_cortex.h" // For ARM atomic operations
 #include <cmath>
 #include <vector>
 #include <cstdint>
@@ -69,16 +72,192 @@ struct WavState {
 };
 static WavState s_wav = {};
 
-// Simple single-producer (main loop) / single-consumer (audio IRQ) ring buffer of stereo int16 frames
-static const uint32_t RB_CAP_FRAMES = 8192; // ~170ms at 48k (increased for better buffering)
-static volatile uint32_t s_rb_head = 0; // write counter (frames)
-static volatile uint32_t s_rb_tail = 0; // read counter (frames)
-static int16_t s_rb[RB_CAP_FRAMES * 2]; // interleaved L,R
+// ============================
+// Sample audition state (separate from main WAV playback)
+// ============================
+struct AuditionState {
+    bool        active;
+    FIL         file;
+    uint32_t    data_start;
+    uint32_t    data_size;
+    uint32_t    bytes_remaining;
+    uint16_t    num_channels;
+    uint16_t    bits_per_sample;
+    uint32_t    sample_rate;
+    char        current_path[96];
+};
+static AuditionState s_audition = {};
 
+// Thread-safe single-producer (main loop) / single-consumer (audio IRQ) ring buffer of stereo int16 frames
+// Uses ARM Cortex-M7 atomic operations and memory barriers for race-condition-free operation
+// This eliminates warbling caused by timing variations between main loop and audio callback
+// Using regular memory for larger buffers - DMA memory was too constrained
+static const uint32_t RB_CAP_FRAMES = 4096; // ~93ms at 44.1k (excellent buffering for smooth playback)
+static volatile uint32_t s_rb_head = 0; // write counter (frames) - atomic access with memory barriers
+static volatile uint32_t s_rb_tail = 0; // read counter (frames) - atomic access with memory barriers
+static int16_t s_rb[RB_CAP_FRAMES * 2]; // interleaved L,R - regular memory (larger buffers)
+
+// Pre-buffering system for smooth playback start
+static const uint32_t PREBUFFER_FRAMES = 44100; // 1 second at 44.1kHz
+static int16_t s_prebuffer[PREBUFFER_FRAMES * 2]; // 1 second of stereo audio
+static uint32_t s_prebuffer_filled = 0; // Number of frames pre-buffered
+static bool s_prebuffer_ready = false; // Whether pre-buffer is ready for playback
+static bool s_prebuffering = false; // Whether we're currently pre-buffering
+
+// Background SD I/O system with larger buffers
+static const uint32_t SD_BUFFER_SIZE = 8192; // 8KB SD read buffer for better performance
+static uint8_t s_sd_buffer[SD_BUFFER_SIZE]; // SD read buffer in regular memory
+static uint32_t s_sd_buffer_pos = 0; // Current position in SD buffer
+static uint32_t s_sd_buffer_frames = 0; // Number of frames available in SD buffer
+static bool s_sd_buffer_valid = false; // Whether SD buffer contains valid data
+static uint32_t s_last_io_time = 0; // Last time we did SD I/O (for rate limiting)
+
+// Resampling temporarily disabled
+
+// Pre-buffering functions
+static bool prebuffer_audio()
+{
+    if (!s_wav.open || s_prebuffer_ready) return true;
+    
+    s_prebuffering = true;
+    uint32_t file_bpf = (uint32_t)s_wav.num_channels * 2u;
+    uint32_t frames_to_read = PREBUFFER_FRAMES - s_prebuffer_filled;
+    
+    if (frames_to_read == 0) {
+        s_prebuffer_ready = true;
+        s_prebuffering = false;
+        #if WAVEX_DAISY_SD_DEBUG
+        if (s_hw) s_hw->PrintLine("Pre-buffer complete: %u frames ready", (unsigned)PREBUFFER_FRAMES);
+        #endif
+        return true;
+    }
+    
+    // Calculate how much to read
+    uint32_t max_frames = SD_BUFFER_SIZE / file_bpf;
+    uint32_t req_bytes = (frames_to_read < max_frames ? frames_to_read : max_frames) * file_bpf;
+    
+    if (req_bytes > s_wav.bytes_remaining) {
+        req_bytes = s_wav.bytes_remaining;
+    }
+    
+    if (req_bytes == 0) {
+        // End of file reached during pre-buffering
+        s_prebuffer_ready = true;
+        s_prebuffering = false;
+        #if WAVEX_DAISY_SD_DEBUG
+        if (s_hw) s_hw->PrintLine("Pre-buffer complete: %u frames (end of file)", (unsigned)s_prebuffer_filled);
+        #endif
+        return true;
+    }
+    
+    // Read from SD card
+    UINT br = 0;
+    FRESULT fr = f_read(&s_wav.file, s_sd_buffer, req_bytes, &br);
+    
+    if (fr != FR_OK || br == 0) {
+        #if WAVEX_DAISY_SD_DEBUG
+        if (s_hw) s_hw->PrintLine("Pre-buffer read error: fr=%d, br=%u", (int)fr, (unsigned)br);
+        #endif
+        s_prebuffering = false;
+        return false;
+    }
+    
+    s_wav.bytes_remaining -= br;
+    
+    // Copy to pre-buffer
+    uint32_t frames_read = br / file_bpf;
+    const int16_t* src = (const int16_t*)s_sd_buffer;
+    int16_t* dst = &s_prebuffer[s_prebuffer_filled * 2];
+    
+    if (s_wav.num_channels == 2) {
+        // Stereo: copy L,R pairs
+        for (uint32_t i = 0; i < frames_read; ++i) {
+            dst[i * 2 + 0] = src[i * 2 + 0];
+            dst[i * 2 + 1] = src[i * 2 + 1];
+        }
+    } else {
+        // Mono: duplicate to both channels
+        for (uint32_t i = 0; i < frames_read; ++i) {
+            dst[i * 2 + 0] = src[i];
+            dst[i * 2 + 1] = src[i];
+        }
+    }
+    
+    s_prebuffer_filled += frames_read;
+    
+    #if WAVEX_DAISY_SD_DEBUG
+    if (s_hw) s_hw->PrintLine("Pre-buffer progress: %u/%u frames", (unsigned)s_prebuffer_filled, (unsigned)PREBUFFER_FRAMES);
+    #endif
+    
+    return true;
+}
+
+// Background SD I/O functions
+static bool refill_sd_buffer()
+{
+    if (!s_wav.open) return false;
+    
+    // Check if we need to refill
+    if (s_sd_buffer_valid && s_sd_buffer_pos < s_sd_buffer_frames) {
+        return true; // Still have data
+    }
+    
+    // Calculate how much to read
+    uint32_t file_bpf = (uint32_t)s_wav.num_channels * 2u;
+    uint32_t max_frames = SD_BUFFER_SIZE / file_bpf;
+    uint32_t req_bytes = max_frames * file_bpf;
+    
+    if (req_bytes > s_wav.bytes_remaining) {
+        req_bytes = s_wav.bytes_remaining;
+    }
+    
+    if (req_bytes == 0) {
+        // Loop: seek back to data start
+        f_lseek(&s_wav.file, s_wav.data_start);
+        s_wav.bytes_remaining = s_wav.data_size;
+        req_bytes = max_frames * file_bpf;
+        if (req_bytes > s_wav.bytes_remaining) {
+            req_bytes = s_wav.bytes_remaining;
+        }
+        #if WAVEX_DAISY_SD_DEBUG
+        if (s_hw) s_hw->PrintLine("WAV loop: rewinding to data start");
+        #endif
+    }
+    
+    if (req_bytes == 0) return false;
+    
+    // Read from SD card
+    UINT br = 0;
+    FRESULT fr = f_read(&s_wav.file, s_sd_buffer, req_bytes, &br);
+    
+    if (fr != FR_OK || br == 0) {
+        #if WAVEX_DAISY_SD_DEBUG
+        if (s_hw) s_hw->PrintLine("WAV read error: fr=%d, br=%u", (int)fr, (unsigned)br);
+        #endif
+        return false;
+    }
+    
+    // Update state
+    s_sd_buffer_frames = br / file_bpf;
+    s_sd_buffer_pos = 0;
+    s_sd_buffer_valid = true;
+    s_wav.bytes_remaining -= br;
+    
+    #if WAVEX_DAISY_SD_DEBUG
+    if (s_hw) s_hw->PrintLine("SD buffer refilled: %u frames, %u bytes", (unsigned)s_sd_buffer_frames, (unsigned)br);
+    #endif
+    
+    return true;
+}
+
+// Thread-safe ring buffer operations with atomic access and memory barriers
 static inline uint32_t rb_count_frames()
 {
+    // Atomic read with memory barrier to ensure consistency
+    __DMB(); // Data Memory Barrier - ensure all previous memory operations complete
     uint32_t head = s_rb_head;
     uint32_t tail = s_rb_tail;
+    __DMB(); // Ensure reads are completed before calculation
     return (head - tail) & (RB_CAP_FRAMES - 1u);
 }
 
@@ -89,24 +268,55 @@ static inline uint32_t rb_free_frames()
 
 static inline void rb_push_stereo(int16_t l, int16_t r)
 {
+    // Atomic write with memory barriers for thread safety
     uint32_t head = s_rb_head;
     uint32_t idx = (head & (RB_CAP_FRAMES - 1u)) * 2u;
+    
+    // Write data first
     s_rb[idx + 0] = l;
     s_rb[idx + 1] = r;
+    
+    // Memory barrier to ensure data is written before updating head
+    __DMB(); // Data Memory Barrier - ensure data writes complete
+    
+    // Atomic update of head pointer
     s_rb_head = head + 1u;
+    
+    // Final memory barrier to ensure head update is visible
+    __DMB(); // Ensure head update is committed to memory
 }
 
 static inline bool rb_pop_stereo(int16_t &l, int16_t &r)
 {
+    // Atomic read with memory barriers for thread safety
+    __DMB(); // Data Memory Barrier - ensure all previous operations complete
     uint32_t tail = s_rb_tail;
-    if (tail == s_rb_head)
+    uint32_t head = s_rb_head;
+    
+    // Check if buffer is empty (atomic comparison)
+    if (tail == head) {
+        __DMB(); // Ensure comparison is complete
         return false;
+    }
+    
+    // Read data
     uint32_t idx = (tail & (RB_CAP_FRAMES - 1u)) * 2u;
     l = s_rb[idx + 0];
     r = s_rb[idx + 1];
+    
+    // Memory barrier to ensure data is read before updating tail
+    __DMB(); // Data Memory Barrier - ensure data reads complete
+    
+    // Atomic update of tail pointer
     s_rb_tail = tail + 1u;
+    
+    // Final memory barrier to ensure tail update is visible
+    __DMB(); // Ensure tail update is committed to memory
+    
     return true;
 }
+
+// Resampling temporarily disabled - using direct playback
 
 void Init(DaisySeed& hw, float sample_rate)
 {
@@ -130,8 +340,8 @@ void Init(DaisySeed& hw, float sample_rate)
 
     s_oscillator.Init(sample_rate);
     s_oscillator.SetWaveform(Oscillator::WAVE_SIN);
-    s_oscillator.SetFreq(440.0f);
-    s_oscillator.SetAmp(0.5f);
+    s_oscillator.SetFreq(1000.0f);  // Use 1kHz - simple test frequency
+    s_oscillator.SetAmp(0.3f);      // Reduce amplitude slightly
 
     s_sampler.Init(sample_rate);
     s_cv.Init(0x60);
@@ -147,18 +357,70 @@ void Callback(AudioHandle::InputBuffer in,
         int16_t l16 = 0, r16 = 0;
         if (!rb_pop_stereo(l16, r16))
         {
-            // Fallback to oscillator if no file, otherwise silence
-            if (!s_wav.open)
+            // Check if we have audition playback active
+            if (s_audition.active && s_audition.bytes_remaining > 0)
             {
-                float sample = s_oscillator.Process();
-                out[0][i] = sample;
-                out[1][i] = sample;
+                // Read audition sample data directly
+                uint8_t buffer[4]; // Max 2 bytes per sample per channel
+                UINT bytes_read = 0;
+
+                if (s_audition.num_channels == 2) {
+                    // Stereo: read 4 bytes (L+R)
+                    FRESULT res = f_read(&s_audition.file, buffer, 4, &bytes_read);
+                    if (res == FR_OK && bytes_read == 4) {
+                        l16 = (int16_t)(buffer[0] | (buffer[1] << 8));
+                        r16 = (int16_t)(buffer[2] | (buffer[3] << 8));
+                        s_audition.bytes_remaining -= 4;
+                    } else {
+                        s_audition.bytes_remaining = 0; // End of file or error
+                    }
+                } else {
+                    // Mono: read 2 bytes and duplicate to both channels
+                    FRESULT res = f_read(&s_audition.file, buffer, 2, &bytes_read);
+                    if (res == FR_OK && bytes_read == 2) {
+                        l16 = r16 = (int16_t)(buffer[0] | (buffer[1] << 8));
+                        s_audition.bytes_remaining -= 2;
+                    } else {
+                        s_audition.bytes_remaining = 0; // End of file or error
+                    }
+                }
+
+                // Check if audition is complete
+                if (s_audition.bytes_remaining == 0) {
+                    StopAudition();
+                }
+            }
+            else if (!s_wav.open)
+            {
+                // No audio should play on startup - output silence until audition commands
+                // Requirement: "When daisy starts, no audio plays (no oscillator, no .wavs)"
+                out[0][i] = 0.0f;
+                out[1][i] = 0.0f;
+                continue;
+            }
+            else
+            {
+                // WAV is playing but buffer is empty - output silence to prevent glitches
+                out[0][i] = 0.0f;
+                out[1][i] = 0.0f;
+                // Log underrun only once per block to avoid spam
+                static bool underrun_logged = false;
+                if (!underrun_logged) {
+                    if (s_hw) s_hw->PrintLine("AUDIO: Ring buffer underrun - outputting silence");
+                    underrun_logged = true;
+                }
                 continue;
             }
         }
 
         out[0][i] = (float)l16 / 32768.0f;
         out[1][i] = (float)r16 / 32768.0f;
+        
+        // Reset underrun logging flag when we have data again
+        static bool underrun_logged = false;
+        if (underrun_logged) {
+            underrun_logged = false;
+        }
     }
 
     // Compute per-block meters
@@ -363,13 +625,20 @@ bool OpenWav(const char* path)
     s_wav.num_channels = num_ch;
     s_wav.bits_per_sample = bits;
     s_wav.sample_rate = sample_rate;
-
-    // Reset ring buffer
+    
+    // Reset buffers
     s_rb_head = 0;
     s_rb_tail = 0;
+    
     #if WAVEX_DAISY_SD_DEBUG
     if (s_hw) s_hw->PrintLine("WAV open ok: %s ch=%u sr=%lu bits=%u size=%lu", path, (unsigned)num_ch, (unsigned long)sample_rate, (unsigned)bits, (unsigned long)data_size);
     #endif
+    
+    // Reset pre-buffer state and start pre-buffering
+    s_prebuffer_filled = 0;
+    s_prebuffer_ready = false;
+    s_prebuffering = false;
+    
     return true;
 }
 
@@ -379,6 +648,17 @@ void CloseWav()
         f_close(&s_wav.file);
         s_wav = {};
     }
+    
+    // Reset SD buffer state
+    s_sd_buffer_pos = 0;
+    s_sd_buffer_frames = 0;
+    s_sd_buffer_valid = false;
+    s_last_io_time = 0;
+    
+    // Reset pre-buffer state
+    s_prebuffer_filled = 0;
+    s_prebuffer_ready = false;
+    s_prebuffering = false;
 }
 
 bool IsWavPlaying()
@@ -386,16 +666,38 @@ bool IsWavPlaying()
     return s_wav.open;
 }
 
+bool IsPrebufferReady()
+{
+    return s_prebuffer_ready;
+}
+
 bool ShouldPumpWavIO()
 {
     if (!s_wav.open) return false;
     
-    // Only pump I/O when ring buffer is less than 25% full
-    // This reduces unnecessary file I/O operations
-    uint32_t count = rb_count_frames();
-    uint32_t threshold = RB_CAP_FRAMES / 4;  // 25% of buffer capacity
+    // If we're pre-buffering, always pump I/O
+    if (s_prebuffering) {
+        return true;
+    }
     
-    return count < threshold;
+    // If pre-buffer is ready, use normal I/O pumping logic
+    if (s_prebuffer_ready) {
+        // Rate limit SD I/O to avoid blocking the main loop too frequently
+        uint32_t now = System::GetNow();
+        if (now - s_last_io_time < 10) { // Minimum 10ms between I/O operations
+            return false;
+        }
+        
+        // Pump I/O when ring buffer is less than 50% full
+        // Good balance between performance and buffering
+        uint32_t count = rb_count_frames();
+        uint32_t threshold = RB_CAP_FRAMES / 2;  // 50% of buffer capacity
+        
+        return count < threshold;
+    }
+    
+    // If pre-buffer is not ready, start pre-buffering
+    return true;
 }
 
 void PumpWavIO()
@@ -403,72 +705,158 @@ void PumpWavIO()
     if (!s_wav.open)
         return;
 
-    // Fill ring buffer with as many frames as we can
+    // Update I/O timing
+    s_last_io_time = System::GetNow();
+
+    // If we're pre-buffering, do that first
+    if (s_prebuffering || !s_prebuffer_ready) {
+        if (!prebuffer_audio()) {
+            return; // Pre-buffering failed
+        }
+        return; // Continue pre-buffering next time
+    }
+
+    // If pre-buffer is ready, transfer data from pre-buffer to ring buffer
+    if (s_prebuffer_ready && s_prebuffer_filled > 0) {
+        uint32_t free_frames = rb_free_frames();
+        if (free_frames == 0) return;
+
+        // Calculate how many frames we can transfer from pre-buffer
+        uint32_t frames_to_transfer = (s_prebuffer_filled < free_frames) ? s_prebuffer_filled : free_frames;
+        
+        if (frames_to_transfer == 0) return;
+
+        // Transfer frames from pre-buffer to ring buffer
+        for (uint32_t i = 0; i < frames_to_transfer; ++i) {
+            int16_t L = s_prebuffer[i * 2 + 0];
+            int16_t R = s_prebuffer[i * 2 + 1];
+            rb_push_stereo(L, R);
+        }
+        
+        // Remove transferred frames from pre-buffer
+        s_prebuffer_filled -= frames_to_transfer;
+        if (s_prebuffer_filled > 0) {
+            // Shift remaining data to beginning of pre-buffer
+            memmove(s_prebuffer, &s_prebuffer[frames_to_transfer * 2], s_prebuffer_filled * 2 * sizeof(int16_t));
+        }
+        
+        #if WAVEX_DAISY_SD_DEBUG
+        if (s_hw) s_hw->PrintLine("Transferred %u frames from pre-buffer to ring buffer", (unsigned)frames_to_transfer);
+        #endif
+        
+        return;
+    }
+
+    // Normal I/O pumping (when pre-buffer is empty)
+    // Refill SD buffer if needed (this does the actual SD I/O)
+    if (!refill_sd_buffer()) {
+        return; // Failed to refill, or no data available
+    }
+
+    // Transfer data from SD buffer to ring buffer
     uint32_t free_frames = rb_free_frames();
-    if (free_frames == 0)
-        return;
+    if (free_frames == 0) return;
 
-    // Read in chunks; align to frames (optimized for performance)
-    uint32_t frames_per_read = 2048;  // Increased to 2048 frames for better performance
-    if (frames_per_read > free_frames) frames_per_read = free_frames;
-    // Bytes per frame in file
+    // Calculate how many frames we can transfer
+    uint32_t available_frames = s_sd_buffer_frames - s_sd_buffer_pos;
+    uint32_t frames_to_transfer = (available_frames < free_frames) ? available_frames : free_frames;
+    
+    if (frames_to_transfer == 0) return;
+
+    // Transfer frames from SD buffer to ring buffer
     uint32_t file_bpf = (uint32_t)s_wav.num_channels * 2u;
-    uint32_t req_bytes = frames_per_read * file_bpf;
-    if (req_bytes > s_wav.bytes_remaining) req_bytes = s_wav.bytes_remaining;
-    if (req_bytes == 0) {
-        // Loop: seek back to data start
-        f_lseek(&s_wav.file, s_wav.data_start);
-        s_wav.bytes_remaining = s_wav.data_size;
-        #if WAVEX_DAISY_SD_DEBUG
-        if (s_hw) s_hw->PrintLine("WAV loop: rewinding to data start");
-        #endif
-        return;
-    }
-
-    // Temp buffer on stack for simplicity (monophonic doubles to stereo during push)
-    // MOVED to static to ensure it's in DMA-accessible RAM (increased for larger reads)
-    static uint8_t tmp[8192];  // Increased from 2048 to 8192 bytes for larger reads
-    if (req_bytes > sizeof(tmp)) req_bytes = sizeof(tmp);
-    UINT br = 0;
-
-    // #if WAVEX_DAISY_SD_DEBUG
-    // if (s_hw) s_hw->PrintLine("WAV read: req=%u, offset=%lu", (unsigned)req_bytes, (unsigned long)f_tell(&s_wav.file));
-    // #endif
-
-    FRESULT fr = f_read(&s_wav.file, tmp, req_bytes, &br);
-
-    // #if WAVEX_DAISY_SD_DEBUG
-    // if (s_hw) s_hw->PrintLine("WAV read: result fr=%d, br=%u, new_offset=%lu", (int)fr, (unsigned)br, (unsigned long)f_tell(&s_wav.file));
-    // #endif
-
-    if (fr != FR_OK || br == 0) {
-        // On read error, stop playback
-        #if WAVEX_DAISY_SD_DEBUG
-        if (s_hw) s_hw->PrintLine("WAV read error: fr=%d br=%u", (int)fr, (unsigned)br);
-        #endif
-        CloseWav();
-        return;
-    }
-    s_wav.bytes_remaining -= br;
-
-    // Convert and push
+    const int16_t* src = (const int16_t*)(s_sd_buffer + (s_sd_buffer_pos * file_bpf));
+    
     if (s_wav.num_channels == 2) {
-        const int16_t* s = (const int16_t*)tmp;
-        uint32_t frames = br / 4u; // 4 bytes per stereo frame
-        for (uint32_t i = 0; i < frames; ++i) {
-            if (rb_free_frames() == 0) break;
-            int16_t L = s[i * 2 + 0];
-            int16_t R = s[i * 2 + 1];
+        // Stereo: copy L,R pairs
+        for (uint32_t i = 0; i < frames_to_transfer; ++i) {
+            int16_t L = src[i * 2 + 0];
+            int16_t R = src[i * 2 + 1];
             rb_push_stereo(L, R);
         }
     } else {
-        const int16_t* s = (const int16_t*)tmp;
-        uint32_t frames = br / 2u; // 2 bytes per mono frame
-        for (uint32_t i = 0; i < frames; ++i) {
-            if (rb_free_frames() == 0) break;
-            int16_t M = s[i];
+        // Mono: duplicate to both channels
+        for (uint32_t i = 0; i < frames_to_transfer; ++i) {
+            int16_t M = src[i];
             rb_push_stereo(M, M);
         }
+    }
+    
+    // Update SD buffer position
+    s_sd_buffer_pos += frames_to_transfer;
+    
+    #if WAVEX_DAISY_SD_DEBUG
+    if (s_hw) s_hw->PrintLine("Transferred %u frames from SD buffer to ring buffer", (unsigned)frames_to_transfer);
+    #endif
+}
+
+// ============================================================================
+// Sample Audition Functions (for Sample Load/Save page)
+// ============================================================================
+
+bool AuditionSample(const char* path)
+{
+    // Stop any current audition first
+    StopAudition();
+
+    // Copy path for tracking
+    std::strncpy(s_audition.current_path, path, sizeof(s_audition.current_path) - 1);
+    s_audition.current_path[sizeof(s_audition.current_path) - 1] = '\0';
+
+    // Open the WAV file for audition
+    FRESULT res = f_open(&s_audition.file, path, FA_READ);
+    if (res != FR_OK) {
+        if (s_hw) s_hw->PrintLine("AuditionSample: Failed to open %s (error %d)", path, res);
+        return false;
+    }
+
+    // Read WAV header and validate format
+    WAV_FormatTypeDef wav_format;
+    res = f_read(&s_audition.file, &wav_format, sizeof(wav_format), NULL);
+    if (res != FR_OK || wav_format.ChunkId != 0x46464952) { // "RIFF"
+        f_close(&s_audition.file);
+        if (s_hw) s_hw->PrintLine("AuditionSample: Invalid WAV header for %s", path);
+        return false;
+    }
+
+    // Parse WAV header
+    s_audition.data_start = sizeof(WAV_FormatTypeDef);
+    s_audition.data_size = wav_format.FileSize - 36; // Total file size minus header
+    s_audition.bytes_remaining = s_audition.data_size;
+    s_audition.num_channels = wav_format.NbrChannels;
+    s_audition.bits_per_sample = wav_format.BitPerSample;
+    s_audition.sample_rate = wav_format.SampleRate;
+
+    // Validate format (16-bit, stereo or mono, 44.1k or 48k)
+    if (wav_format.BitPerSample != 16 ||
+        (wav_format.SampleRate != 44100 && wav_format.SampleRate != 48000) ||
+        (wav_format.NbrChannels != 1 && wav_format.NbrChannels != 2)) {
+        f_close(&s_audition.file);
+        if (s_hw) s_hw->PrintLine("AuditionSample: Unsupported format (channels=%d, bits=%d, rate=%d)",
+                               wav_format.NbrChannels, wav_format.BitPerSample, wav_format.SampleRate);
+        return false;
+    }
+
+    // Seek to data chunk
+    res = f_lseek(&s_audition.file, s_audition.data_start);
+    if (res != FR_OK) {
+        f_close(&s_audition.file);
+        if (s_hw) s_hw->PrintLine("AuditionSample: Failed to seek to data chunk");
+        return false;
+    }
+
+    s_audition.active = true;
+
+    if (s_hw) s_hw->PrintLine("AuditionSample: Started audition of %s", path);
+    return true;
+}
+
+void StopAudition()
+{
+    if (s_audition.active) {
+        f_close(&s_audition.file);
+        s_audition = {}; // Reset all fields
+        if (s_hw) s_hw->PrintLine("AuditionSample: Stopped audition");
     }
 }
 

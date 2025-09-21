@@ -15,6 +15,10 @@ static size_t BuildPacket(uint8_t* buffer, size_t buffer_size,
     Packet* packet = reinterpret_cast<Packet*>(buffer);
     packet->header.sync = SYNC_BYTE;
     packet->header.type = type;
+    // Check if payload size fits in uint8_t
+    if (payload_size > 255) {
+        return 0; // Payload too large for PacketHeader format
+    }
     packet->header.length = static_cast<uint8_t>(payload_size);
 
     if (payload_size > 0 && payload != NULL) {
@@ -145,8 +149,8 @@ size_t ProtocolHandler::CreateBrowseRespPacket(uint8_t* buffer, size_t buffer_si
     if(n == 0 || !entries) n = 0;
     size_t payload_size = sizeof(BrowseRespHeader) + (size_t)n * sizeof(FileEntryWire);
     if(buffer_size < sizeof(PacketHeader) + payload_size) return 0;
-    uint8_t tmp[256];
-    if(payload_size > sizeof(tmp)) return 0; // keep small for now
+    uint8_t tmp[600];  // Increased to accommodate ~10 file entries (53 bytes each + header)
+    if(payload_size > sizeof(tmp)) return 0;
     BrowseRespHeader hdr{ total_count, n };
     memcpy(tmp, &hdr, sizeof(hdr));
     if(n) memcpy(tmp + sizeof(hdr), entries, (size_t)n * sizeof(FileEntryWire));
@@ -268,6 +272,12 @@ size_t ProtocolHandler::GetPacketSize(const uint8_t* buffer)
 {
     const Packet* packet = reinterpret_cast<const Packet*>(buffer);
     return sizeof(PacketHeader) + packet->header.length;
+}
+
+size_t ProtocolHandler::CreateAckPacket(uint8_t* buffer, size_t buffer_size,
+                                       const AckMessage& ack)
+{
+    return BuildPacket(buffer, buffer_size, MSG_ACK, &ack, sizeof(ack));
 }
 
 } // namespace Protocol

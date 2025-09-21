@@ -39,6 +39,11 @@ void CloseWav();
 void PumpWavIO();
 bool IsWavPlaying();
 bool ShouldPumpWavIO();  // Adaptive polling helper
+bool IsPrebufferReady(); // Check if pre-buffering is complete
+
+// Sample audition control (for Sample Load/Save page)
+bool AuditionSample(const char* path);
+void StopAudition();
 
 } // namespace AudioEngine
 } // namespace WaveX

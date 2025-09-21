@@ -128,7 +128,7 @@ extern "C" void app_main(void)
         #endif
 
         #ifdef ESP_PLATFORM
-        vTaskDelay(pdMS_TO_TICKS(2000));  // 2 second loop - slower to reduce load
+        vTaskDelay(pdMS_TO_TICKS(1000));  // 2 second loop - slower to reduce load
         #else
         // Fallback for non-ESP builds
         #endif
