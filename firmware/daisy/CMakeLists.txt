@@ -9,8 +9,6 @@ set(FIRMWARE_SOURCES
     src/main.cpp
     src/config.hpp
     src/comm/inter_spi.cpp
-    src/comm/inter_spi_hal.cpp
-    src/comm/spi_hal_interrupts.cpp
     src/audio/audio_adapter.cpp
     src/audio/audio_engine.cpp
     src/storage/fs_browse.cpp

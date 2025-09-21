@@ -117,7 +117,7 @@ public:
         ESP_LOGI("SpiLink", "=== SPI WRAPPER 2: About to calculate path length ===");
 
         size_t path_len = strlen(path);
-        if (path_len > 32) path_len = 32; // Limit to our message queue payload size
+        if (path_len > 19) path_len = 19; // Limit to Daisy packet payload size (20 - 1 for message type)
 
         ESP_LOGI("SpiLink", "=== SPI WRAPPER 3: About to call spi_link_send for browse request ===");
 
@@ -142,7 +142,7 @@ public:
         ESP_LOGI("SpiLink", "=== SPI WRAPPER 2: About to calculate file path length ===");
 
         size_t path_len = strlen(file_path);
-        if (path_len > 32) path_len = 32; // Limit to our message queue payload size
+        if (path_len > 19) path_len = 19; // Limit to Daisy packet payload size (20 - 1 for message type)
 
         ESP_LOGI("SpiLink", "=== SPI WRAPPER 3: About to call spi_link_send for sample play ===");
         int result = spi_link_send(WaveX::Protocol::MSG_SAMPLE_PLAY_REQ, file_path, path_len);

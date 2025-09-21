@@ -169,6 +169,42 @@ struct Packet {
     uint8_t payload[MAX_PAYLOAD_SIZE];
 } __attribute__((packed));
 
+// SPI packet structures for inter-MCU communication
+// Command packet structure (32 bytes total)
+struct SpiCommandPacket {
+    uint8_t type;        // Packet type (0x01=CMD, 0x02=DATA)
+    uint8_t flags;       // ACK/REQ/NACK/MORE flags
+    uint8_t seq;         // Sequence number
+    uint8_t len;         // Payload length (0-20)
+    uint16_t crc;        // CRC16-CCITT over header + payload (fixed at offset 4)
+    uint8_t payload[20]; // Command payload (20 bytes)
+    uint8_t padding[6];  // Alignment padding
+} __attribute__((packed));
+
+// Data packet structure (256 bytes total)
+struct SpiDataPacket {
+    uint8_t type;         // Packet type (0x02=DATA)
+    uint8_t flags;        // ACK/REQ/NACK/MORE flags
+    uint8_t seq;          // Sequence number
+    uint8_t len;          // Payload length (0-240)
+    uint16_t crc;         // CRC16-CCITT over header + payload (fixed at offset 4)
+    uint8_t payload[240]; // Data payload (240 bytes)
+    uint8_t padding[6];   // Alignment padding
+} __attribute__((packed));
+
+// Legacy packet structure for compatibility
+struct LegacyPacket {
+    uint8_t sync;           // Always SYNC_BYTE
+    uint8_t type;           // MessageType
+    uint8_t length;         // Payload length
+    uint8_t checksum;       // Simple XOR checksum
+    uint8_t payload[MAX_PAYLOAD_SIZE];
+} __attribute__((packed));
+
+// Packet size constants
+static const size_t SPI_CMD_PKT_SIZE = sizeof(SpiCommandPacket);
+static const size_t SPI_DATA_PKT_SIZE = sizeof(SpiDataPacket);
+
 // Protocol functions
 class ProtocolHandler {
 public:
@@ -230,6 +266,13 @@ public:
     static bool ParseMessage(const uint8_t* buffer, HeartbeatMessage& msg);
     // Generic payload parser for fixed-size messages
     static bool ParseMessage(const uint8_t* buffer, MessageType expected_type, void* out_payload, size_t out_payload_size);
+    
+    // SPI packet functions
+    static bool ValidateSpiPacket(const uint8_t* data, size_t size);
+    static size_t GetSpiPacketSize(const uint8_t* data);
+    static uint16_t CalculateSpiCrc(const uint8_t* data, size_t length);
+    static bool IsCommandPacket(const uint8_t* data);
+    static bool IsDataPacket(const uint8_t* data);
     
     // Utility functions
     static uint8_t CalculateChecksum(const uint8_t* data, size_t length);

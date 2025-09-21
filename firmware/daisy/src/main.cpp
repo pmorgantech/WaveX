@@ -6,11 +6,11 @@
 #include <vector>
 #include <cstdio>
 #include <cmath>
+#include "stm32h7xx_hal.h"
 #include "../shared/spi_protocol/spi_protocol.h"
 #include "../shared/config/pin_config.h"
 #include "config.hpp"
 #include "comm/inter_spi.h"
-#include "comm/inter_spi_hal.h"
 #include "config/link_config.h"
 #include "metrics/metrics.h"
 #include "ff.h"
@@ -190,6 +190,25 @@ int main(void)
 
     // AudioEngine already initializes sampler and CV bus internally
     
+    // Configure interrupt priorities to prevent audio starvation
+    // Audio DMA should have higher priority (lower number) than SPI
+    #if WAVEX_AUDIO_ENGINE_ENABLED
+    // Set audio DMA to highest priority
+    HAL_NVIC_SetPriority(SAI1_IRQn, 5, 0);
+    HAL_NVIC_SetPriority(DMA1_Stream0_IRQn, 5, 0);  // SAI1 DMA A
+    HAL_NVIC_SetPriority(DMA1_Stream1_IRQn, 5, 0);  // SAI1 DMA B
+    HAL_NVIC_SetPriority(SAI2_IRQn, 6, 0);
+    HAL_NVIC_SetPriority(DMA1_Stream3_IRQn, 6, 0);  // SAI2 DMA A
+    HAL_NVIC_SetPriority(DMA1_Stream4_IRQn, 6, 0);  // SAI2 DMA B
+    
+    // Set SPI to lower priority
+    HAL_NVIC_SetPriority(SPI1_IRQn, 12, 0);
+    HAL_NVIC_SetPriority(DMA2_Stream2_IRQn, 10, 0); // SPI1 DMA RX
+    HAL_NVIC_SetPriority(DMA2_Stream3_IRQn, 10, 0); // SPI1 DMA TX
+    
+    WAVEX_LOG_DAISY(INTER_MCU_LINK, "Interrupt priorities configured: Audio DMA=5/6, SPI DMA=10");
+    #endif
+    
     // Initialize communication with ESP32
     #if WAVEX_SPI_LINK_ENABLED
     // Add debug to confirm SPI init is reached
@@ -321,7 +340,7 @@ int main(void)
         // SPI test to verify communication works
     WAVEX_LOG_DAISY(INTER_MCU_LINK, "DEBUG: Testing SPI with immediate test packet");
     uint8_t test_payload[4] = {0xAA, 0xBB, 0xCC, 0xDD};
-    int test_result = WaveX::Comm::Spi_Send(0x99, test_payload, 4);  // Test packet
+    int test_result = WaveX::Comm::Spi_Send(WaveX::Protocol::MSG_SYNC, test_payload, 4);  // Test packet
     WAVEX_LOG_DAISY(INTER_MCU_LINK, "DEBUG: SPI test result: %d (1=success, 0=fail)", test_result);
     if (test_result == 1) {
         WAVEX_LOG_DAISY(INTER_MCU_LINK, "SUCCESS: SPI is working! You should see SPI1 CLK on scope now!");
@@ -397,7 +416,7 @@ int main(void)
                 // WAVEX_LOG_DAISY(INTER_MCU_LINK, "DEBUG: Sending SYNC packet");
                 // Send SYNC via SPI
                 uint8_t payload[1] = {0};
-                int sync_result = WaveX::Comm::Spi_Send(0x92, payload, 1);  // SYNC packet type
+                int sync_result = WaveX::Comm::Spi_Send(WaveX::Protocol::MSG_SYNC, payload, 1);  // SYNC packet type
                 // WAVEX_LOG_DAISY(INTER_MCU_LINK, "DEBUG: SYNC packet send result: %d", sync_result);
                 #if WAVEX_MCU_LINK_PACKET_DEBUG
                 WAVEX_LOG_DAISY(INTER_MCU_LINK, "SPI SYNC packet sent");
@@ -428,7 +447,7 @@ int main(void)
                 payload[13] = (cpu_usage_scaled >> 8) & 0xFF;
 
                 // WAVEX_LOG_DAISY(INTER_MCU_LINK, "DEBUG: Sending heartbeat packet - calling Spi_Send");
-                int heartbeat_result = WaveX::Comm::Spi_Send(0x91, payload, 14);  // Heartbeat packet type
+                int heartbeat_result = WaveX::Comm::Spi_Send(WaveX::Protocol::MSG_HEARTBEAT, payload, 14);  // Heartbeat packet type
                 // WAVEX_LOG_DAISY(INTER_MCU_LINK, "DEBUG: Heartbeat packet send result: %d", heartbeat_result);
 
                 #if WAVEX_MCU_LINK_PACKET_DEBUG

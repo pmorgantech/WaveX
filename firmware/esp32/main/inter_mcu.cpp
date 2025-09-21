@@ -414,6 +414,12 @@ void inter_mcu_process_daisy_control_message(uint8_t type, const uint8_t* payloa
     ESP_LOGI("inter_mcu", "Processing control message from Daisy: type=0x%02X, len=%d", type, len);
     
     switch (type) {
+        case WaveX::Protocol::MSG_SYNC:
+            // Synchronization message from Daisy - acknowledge receipt
+            ESP_LOGI("inter_mcu", "Received MSG_SYNC from Daisy - acknowledging");
+            // For now, just acknowledge the sync - could add sync-specific logic later
+            break;
+            
         case WaveX::Protocol::MSG_METER_PUSH:
             // Handle meter data from Daisy audio engine
             if (len >= 8) {

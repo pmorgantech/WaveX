@@ -30,25 +30,14 @@ extern "C" {
 // -----------------------------
 static const char *TAG = "spi_link";
 
-#define CTRL_PKT_SIZE 64 // Must be 64 for P4 DMA alignment
+#define CTRL_PKT_SIZE WaveX::Protocol::SPI_CMD_PKT_SIZE
 #define MAX_PKT_SIZE 256 // Support large packets up to 256 bytes (pkt_t max is 246)
 
-typedef struct __attribute__((packed)) {
-    uint8_t  type, flags, seq, len;
-    uint8_t  payload[26];
-    uint16_t crc; // CRC16-CCITT over first 30 bytes
-    uint8_t  padding[32];
-} ctrl_pkt_t;
+// Use shared packet structure
+typedef WaveX::Protocol::SpiCommandPacket ctrl_pkt_t;
 
-static uint16_t wavex_crc16(const uint8_t* d, int n)
-{
-    uint16_t crc=0xFFFF;
-    for (int i=0;i<n;i++) {
-        crc ^= (uint16_t)d[i] << 8;
-        for (int b=0;b<8;b++) crc = (crc & 0x8000) ? (uint16_t)((crc<<1) ^ 0x1021) : (uint16_t)(crc<<1);
-    }
-    return crc;
-}
+// Use shared CRC function
+#define wavex_crc16 WaveX::Protocol::ProtocolHandler::CalculateSpiCrc
 
 
 // Handle large packet format (pkt_t) - for bulk data like browse responses
@@ -113,6 +102,25 @@ static void handle_control_message_from_daisy(const ctrl_pkt_t* p)
     inter_mcu_increment_packet_stat(p->type);
 #else
     (void)p;
+#endif
+}
+
+// Handle new format control messages from Daisy (message type in payload)
+static void handle_control_message_from_daisy_new_format(uint8_t msg_type, const uint8_t* payload, uint8_t len)
+{
+#ifdef ESP_PLATFORM
+    ESP_LOGI(TAG, "Received new format control message from Daisy: type=0x%02X, len=%d", msg_type, len);
+    
+    // Forward control messages to the inter_mcu layer for processing
+    extern void inter_mcu_process_daisy_control_message(uint8_t type, const uint8_t* payload, uint8_t len);
+    inter_mcu_process_daisy_control_message(msg_type, payload, len);
+    
+    // Update packet statistics
+    inter_mcu_increment_packet_stat(msg_type);
+#else
+    (void)msg_type;
+    (void)payload;
+    (void)len;
 #endif
 }
 
@@ -200,15 +208,34 @@ static uint8_t next_seq_num = 1; // Sequence number for message tracking (0 rese
 static portMUX_TYPE s_spi_mutex = portMUX_INITIALIZER_UNLOCKED;
 
 
+// Helper function to calculate CRC over header + payload (excluding CRC field)
+static uint16_t calculate_packet_crc(const ctrl_pkt_t* pkt)
+{
+    uint8_t crc_data[4 + 20]; // Header (4) + max payload (20)
+    crc_data[0] = pkt->type;
+    crc_data[1] = pkt->flags;
+    crc_data[2] = pkt->seq;
+    crc_data[3] = pkt->len;
+    memcpy(&crc_data[4], pkt->payload, pkt->len);
+    
+    // Debug: Log CRC calculation data
+    ESP_LOGI(TAG, "ESP32 CRC calculation: %d bytes - %02X %02X %02X %02X %02X", 
+             4 + pkt->len, crc_data[0], crc_data[1], crc_data[2], crc_data[3], crc_data[4]);
+    
+    uint16_t crc = wavex_crc16(crc_data, 4 + pkt->len);
+    ESP_LOGI(TAG, "ESP32 calculated CRC: 0x%04X", crc);
+    return crc;
+}
+
 // Signal Daisy for urgent control data (active high on GPIO31)
 static void signal_daisy_urgent(bool urgent)
 {
 #ifdef ESP_PLATFORM
     gpio_set_level((gpio_num_t)WAVEX_ESP_ATTN_OUT, urgent ? 1 : 0);  // Active high
     if (urgent) {
-        ESP_LOGI(TAG, "Signaling Daisy for urgent control (GPIO31 HIGH)");
+        ESP_LOGI(TAG, "Signaling Daisy for urgent control (GPIO31 HIGH) - queue_count=%d", msg_queue_count);
     } else {
-        ESP_LOGI(TAG, "Cleared Daisy urgent signal (GPIO31 LOW)");  // Changed to LOGI for debugging
+        ESP_LOGI(TAG, "Cleared Daisy urgent signal (GPIO31 LOW) - queue_count=%d", msg_queue_count);
     }
     
     // Debug: Read back the GPIO level to verify it was set correctly
@@ -233,7 +260,20 @@ static void prepare_tx_buffer_without_consuming(uint8_t* tx_buf, size_t len)
     // Check if we have messages to send
     if (msg_queue_count == 0) {
         taskEXIT_CRITICAL(&s_spi_mutex);
-        ESP_LOGD(TAG, "No messages to send, preparing zeros");
+        ESP_LOGI(TAG, "No messages to send, preparing no-data response");
+        // Send a proper "no data" packet instead of all zeros
+        ctrl_pkt_t* pkt = (ctrl_pkt_t*)tx_buf;
+        pkt->type = 0x01;  // Command packet type
+        pkt->flags = 0;
+        pkt->seq = 0;
+        pkt->len = 1;      // Just the message type
+        pkt->payload[0] = WaveX::Protocol::MSG_ACK; // Use ACK as "no data" indicator
+        pkt->crc = calculate_packet_crc(pkt);
+        ESP_LOGI(TAG, "Prepared no-data packet: type=0x%02X, len=%d, payload[0]=0x%02X, crc=0x%04X", 
+                 pkt->type, pkt->len, pkt->payload[0], pkt->crc);
+        ESP_LOGI(TAG, "No-data packet bytes: %02X %02X %02X %02X %02X %02X %02X %02X", 
+                 ((uint8_t*)pkt)[0], ((uint8_t*)pkt)[1], ((uint8_t*)pkt)[2], ((uint8_t*)pkt)[3],
+                 ((uint8_t*)pkt)[4], ((uint8_t*)pkt)[5], ((uint8_t*)pkt)[6], ((uint8_t*)pkt)[7]);
         return;
     }
     
@@ -272,18 +312,25 @@ static void prepare_tx_buffer_without_consuming(uint8_t* tx_buf, size_t len)
     ctrl_pkt_t* pkt = (ctrl_pkt_t*)tx_buf;
     memset(pkt, 0, response_size);
     
-    pkt->type = msg_type & 0xFF;
+    // New format: packet type is 0x01 (command), message type goes in payload
+    pkt->type = 0x01;  // Command packet type
     pkt->flags = 0;
     pkt->seq = 0;
-    pkt->len = msg_len;
+    pkt->len = msg_len + 1;  // +1 for message type byte
     
-    // Copy payload safely
-    if (msg_len > 0 && msg_len <= sizeof(pkt->payload)) {
-        memcpy(pkt->payload, msg_payload, msg_len);
+    // First byte of payload is the message type
+    pkt->payload[0] = msg_type & 0xFF;
+    
+    // Copy actual payload after message type
+    if (msg_len > 0 && msg_len <= sizeof(pkt->payload) - 1) {
+        memcpy(&pkt->payload[1], msg_payload, msg_len);
     }
     
-    ESP_LOGI(TAG, "Prepared TX buffer: type=0x%02X, len=%d, payload=%.*s", 
-             pkt->type, pkt->len, (int)msg_len, msg_payload);
+    // Calculate CRC over header + payload
+    pkt->crc = calculate_packet_crc(pkt);
+    
+    ESP_LOGI(TAG, "Prepared TX buffer: type=0x%02X, len=%d, msg_type=0x%02X, payload=%.*s", 
+             pkt->type, pkt->len, msg_type & 0xFF, (int)msg_len, msg_payload);
     ESP_LOGI(TAG, "TX buffer: %02X %02X %02X %02X %02X %02X %02X %02X", 
              tx_buf[0], tx_buf[1], tx_buf[2], tx_buf[3], tx_buf[4], tx_buf[5], tx_buf[6], tx_buf[7]);
 }
@@ -348,7 +395,20 @@ static void handle_spi_slave_response(uint8_t* tx_buf, uint8_t* rx_buf, size_t l
     // Check if we have messages to send
     if (msg_queue_count == 0) {
         taskEXIT_CRITICAL(&s_spi_mutex);
-        ESP_LOGD(TAG, "No messages to send, responding with zeros");
+        ESP_LOGI(TAG, "No messages to send, preparing no-data response");
+        // Send a proper "no data" packet instead of all zeros
+        ctrl_pkt_t* pkt = (ctrl_pkt_t*)tx_buf;
+        pkt->type = 0x01;  // Command packet type
+        pkt->flags = 0;
+        pkt->seq = 0;
+        pkt->len = 1;      // Just the message type
+        pkt->payload[0] = WaveX::Protocol::MSG_ACK; // Use ACK as "no data" indicator
+        pkt->crc = calculate_packet_crc(pkt);
+        ESP_LOGI(TAG, "Prepared no-data packet: type=0x%02X, len=%d, payload[0]=0x%02X, crc=0x%04X", 
+                 pkt->type, pkt->len, pkt->payload[0], pkt->crc);
+        ESP_LOGI(TAG, "No-data packet bytes: %02X %02X %02X %02X %02X %02X %02X %02X", 
+                 ((uint8_t*)pkt)[0], ((uint8_t*)pkt)[1], ((uint8_t*)pkt)[2], ((uint8_t*)pkt)[3],
+                 ((uint8_t*)pkt)[4], ((uint8_t*)pkt)[5], ((uint8_t*)pkt)[6], ((uint8_t*)pkt)[7]);
         return;
     }
     
@@ -363,7 +423,17 @@ static void handle_spi_slave_response(uint8_t* tx_buf, uint8_t* rx_buf, size_t l
     msg_queue_entry_t* entry = &msg_queue[idx];
     if (!entry->pending) {
         taskEXIT_CRITICAL(&s_spi_mutex);
-        ESP_LOGD(TAG, "Message at head not pending, responding with zeros");
+        ESP_LOGI(TAG, "Message at head not pending, preparing no-data response");
+        // Send a proper "no data" packet instead of all zeros
+        ctrl_pkt_t* pkt = (ctrl_pkt_t*)tx_buf;
+        pkt->type = 0x01;  // Command packet type
+        pkt->flags = 0;
+        pkt->seq = 0;
+        pkt->len = 1;      // Just the message type
+        pkt->payload[0] = WaveX::Protocol::MSG_ACK; // Use ACK as "no data" indicator
+        pkt->crc = calculate_packet_crc(pkt);
+        ESP_LOGI(TAG, "Prepared no-data packet: type=0x%02X, len=%d, payload[0]=0x%02X, crc=0x%04X", 
+                 pkt->type, pkt->len, pkt->payload[0], pkt->crc);
         return;
     }
     
@@ -394,17 +464,28 @@ static void handle_spi_slave_response(uint8_t* tx_buf, uint8_t* rx_buf, size_t l
     ctrl_pkt_t* pkt = (ctrl_pkt_t*)tx_buf;
     memset(pkt, 0, response_size);
     
-    pkt->type = msg_type & 0xFF;
+    // New format: packet type is 0x01 (command), message type goes in payload
+    pkt->type = 0x01;  // Command packet type
     pkt->flags = 0;
     pkt->seq = 0;
-    pkt->len = msg_len;
+    pkt->len = msg_len + 1;  // +1 for message type byte
     
-    // Copy payload safely
-    if (msg_len > 0 && msg_len <= sizeof(pkt->payload)) {
-        memcpy(pkt->payload, msg_payload, msg_len);
+    // First byte of payload is the message type
+    pkt->payload[0] = msg_type & 0xFF;
+    
+    // Copy actual payload after message type
+    if (msg_len > 0 && msg_len <= sizeof(pkt->payload) - 1) {
+        memcpy(&pkt->payload[1], msg_payload, msg_len);
     }
     
-    ESP_LOGI(TAG, "Responding to poll with message type=0x%02X, len=%d", pkt->type, pkt->len);
+    // Calculate CRC over header + payload
+    pkt->crc = calculate_packet_crc(pkt);
+    
+    ESP_LOGI(TAG, "Responding to poll with message type=0x%02X, len=%d, payload[0]=0x%02X, crc=0x%04X", 
+             pkt->type, pkt->len, pkt->payload[0], pkt->crc);
+    ESP_LOGI(TAG, "Response packet bytes: %02X %02X %02X %02X %02X %02X %02X %02X", 
+             ((uint8_t*)pkt)[0], ((uint8_t*)pkt)[1], ((uint8_t*)pkt)[2], ((uint8_t*)pkt)[3],
+             ((uint8_t*)pkt)[4], ((uint8_t*)pkt)[5], ((uint8_t*)pkt)[6], ((uint8_t*)pkt)[7]);
 }
 
 int spi_link_send(uint16_t type, const void* payload, uint16_t len)
@@ -444,9 +525,14 @@ int spi_link_send(uint16_t type, const void* payload, uint16_t len)
 
     taskEXIT_CRITICAL(&s_spi_mutex);
 
-    ESP_LOGD(TAG, "Queued message type 0x%04X, len=%d, queue_count=%d", type, len, msg_queue_count);
+    ESP_LOGI(TAG, "Queued message type 0x%04X, len=%d, queue_count=%d", type, len, msg_queue_count);
     ESP_LOGI(TAG, "Queued message payload: %.*s", (int)len, (const char*)payload);
     ESP_LOGI(TAG, "DEBUG: After queuing - head=%d, tail=%d, count=%d", snapshot_head, snapshot_tail, snapshot_count);
+    
+    // Special logging for BROWSE_REQ
+    if (type == WaveX::Protocol::MSG_BROWSE_REQ) {
+        ESP_LOGI(TAG, "*** BROWSE_REQ QUEUED SUCCESSFULLY ***");
+    }
     
     // Signal Daisy for urgent response if this is a control message
     if (type == WaveX::Protocol::MSG_CONTROL_CHANGE || 
@@ -628,6 +714,12 @@ static void link_task(void *arg)
             ESP_LOGI(TAG, "ESP32 attention signal state: queue_count=%d", msg_queue_count);
         }
         
+        // Debug: Log when we have messages in queue
+        if (msg_queue_count > 0) {
+            ESP_LOGI(TAG, "ESP32 has %d messages in queue, head=%d, tail=%d", 
+                     msg_queue_count, msg_queue_head, msg_queue_tail);
+        }
+        
         // Prepare TX buffer with current message (if any)
         if (msg_queue_count > 0) {
             // We have a message to send - prepare TX buffer with current message
@@ -636,11 +728,12 @@ static void link_task(void *arg)
             rx_trans_had_message[current_rx_idx] = true;
             ESP_LOGI(TAG, "Prepared TX buffer with queued message, queue_count=%d", msg_queue_count);
         } else {
-            // No message - prepare clean zero response for poll requests
+            // No message - prepare proper no-data response
+            prepare_tx_buffer_without_consuming((uint8_t*)txbuf[0], CTRL_PKT_SIZE);
             rx_trans_ptr->tx_buffer = txbuf[0];
             rx_trans_had_message[current_rx_idx] = false;
             #if WAVEX_MCU_LINK_PACKET_DEBUG
-            ESP_LOGI(TAG, "Prepared empty TX buffer (all zeros)");
+            ESP_LOGI(TAG, "Prepared no-data TX buffer");
             #endif
         }
         
@@ -748,10 +841,18 @@ static void link_task(void *arg)
             }
             
             // Detect packet type by examining the first few bytes
-            if (rx_len >= 4 && rx_data[0] == 0xFF) {
+            if (rx_len >= 5 && rx_data[0] == 0x01 && rx_data[3] == 0x01 && rx_data[4] == 0xFF) {
                 // This is a poll request from Daisy - we already prepared response in TX buffer
-                ESP_LOGI(TAG, "Detected poll request (0xFF) from Daisy");
+                ESP_LOGI(TAG, "Detected poll request (0xFF in payload) from Daisy");
                 // No additional processing needed - response was already prepared
+            } else if (rx_len >= 4 && rx_data[0] == 0x00 && rx_data[1] == 0x00 && rx_data[2] == 0x00 && rx_data[3] == 0x00) {
+                // This is an empty packet from Daisy requesting urgent data
+                ESP_LOGI(TAG, "Detected urgent data request from Daisy (empty packet)");
+                // ESP32 should respond with queued data - this is handled by the TX buffer preparation
+                // Clear ATTN line after responding
+                if (msg_queue_count > 0) {
+                    clear_transmitted_message_from_queue();
+                }
             } else if (rx_len >= 4 && rx_data[0] == WaveX::Protocol::SYNC_BYTE) {
                 // Large packet format (pkt_t) - starts with sync byte 0xAA
                 ESP_LOGI(TAG, "Detected large packet format (pkt_t)");
@@ -761,14 +862,22 @@ static void link_task(void *arg)
                 // ESP_LOGI(TAG, "Detected control packet format (ctrl_pkt_t)");
                 ctrl_pkt_t *rxp = (ctrl_pkt_t*)rx_data;
                 
-                // Check if this is a control message from Daisy
-                if (rxp->type == WaveX::Protocol::MSG_CONTROL_CHANGE || 
-                    rxp->type == WaveX::Protocol::MSG_NOTE_ON ||
-                    rxp->type == WaveX::Protocol::MSG_NOTE_OFF ||
-                    rxp->type == WaveX::Protocol::MSG_METER_PUSH ||
-                    rxp->type == WaveX::Protocol::MSG_HEARTBEAT) {
-                    // ESP_LOGI(TAG, "Processing control message type=0x%02X from Daisy", rxp->type);
-                    handle_control_message_from_daisy(rxp);
+                // Check if this is a new format command packet from Daisy (type=0x01)
+                if (rxp->type == 0x01 && rxp->len > 0) {
+                    // Check if this is a poll request (0xFF in payload)
+                    if (rxp->payload[0] == 0xFF) {
+                        ESP_LOGI(TAG, "Received poll request from Daisy - no processing needed");
+                        // No processing needed for poll requests
+                        continue; // Skip to next iteration
+                    } else {
+                        // New format: message type is in first byte of payload
+                        uint8_t msg_type = rxp->payload[0];
+                        uint8_t msg_len = rxp->len - 1; // Subtract message type byte
+                        const uint8_t* msg_payload = &rxp->payload[1];
+                        
+                        ESP_LOGI(TAG, "Processing new format command packet: msg_type=0x%02X, len=%d", msg_type, msg_len);
+                        handle_control_message_from_daisy_new_format(msg_type, msg_payload, msg_len);
+                    }
                 } else {
                     // Handle as regular packet (meter data from backend, etc.)
                     handle_ctrl_packet(rxp);

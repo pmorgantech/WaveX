@@ -1,5 +1,6 @@
 #include "protocol.h"
 #include <string.h>
+#include <cstdio>
 
 namespace WaveX {
 namespace Protocol {
@@ -151,7 +152,9 @@ size_t ProtocolHandler::CreateBrowseRespPacket(uint8_t* buffer, size_t buffer_si
     if(buffer_size < sizeof(PacketHeader) + payload_size) return 0;
     uint8_t tmp[600];  // Increased to accommodate ~10 file entries (53 bytes each + header)
     if(payload_size > sizeof(tmp)) return 0;
-    BrowseRespHeader hdr{ total_count, n };
+    BrowseRespHeader hdr;
+    hdr.total_count = total_count;
+    hdr.n = n;
     memcpy(tmp, &hdr, sizeof(hdr));
     if(n) memcpy(tmp + sizeof(hdr), entries, (size_t)n * sizeof(FileEntryWire));
     return BuildPacket(buffer, buffer_size, MSG_BROWSE_RESP, tmp, payload_size);
@@ -278,6 +281,117 @@ size_t ProtocolHandler::CreateAckPacket(uint8_t* buffer, size_t buffer_size,
                                        const AckMessage& ack)
 {
     return BuildPacket(buffer, buffer_size, MSG_ACK, &ack, sizeof(ack));
+}
+
+// SPI packet functions
+bool ProtocolHandler::ValidateSpiPacket(const uint8_t* data, size_t size)
+{
+    if (!data || size < 8) {
+        // Debug: Log validation failure
+        printf("ValidateSpiPacket: Failed basic checks - data=%p, size=%zu\n", data, size);
+        return false;
+    }
+    
+    uint8_t type = data[0];
+    uint8_t len = data[3];
+    
+    // Debug: Log packet details
+    printf("ValidateSpiPacket: type=0x%02X, len=%d, size=%zu\n", type, len, size);
+    printf("ValidateSpiPacket: First 8 bytes: %02X %02X %02X %02X %02X %02X %02X %02X\n",
+           data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7]);
+    printf("ValidateSpiPacket: SPI_CMD_PKT_SIZE=%zu, SPI_DATA_PKT_SIZE=%zu\n", 
+           SPI_CMD_PKT_SIZE, SPI_DATA_PKT_SIZE);
+    
+    // Validate packet type
+    if (type != 0x01 && type != 0x02) {
+        printf("ValidateSpiPacket: Invalid packet type 0x%02X\n", type);
+        return false;
+    }
+    
+    // Validate length based on packet type
+    if (type == 0x01) { // Command packet
+        if (len > 20 || size < SPI_CMD_PKT_SIZE) {
+            printf("ValidateSpiPacket: Command packet validation failed - len=%d, size=%zu, SPI_CMD_PKT_SIZE=%zu\n", 
+                   len, size, SPI_CMD_PKT_SIZE);
+            return false;
+        }
+    } else if (type == 0x02) { // Data packet
+        if (len > 240 || size < SPI_DATA_PKT_SIZE) {
+            printf("ValidateSpiPacket: Data packet validation failed - len=%d, size=%zu, SPI_DATA_PKT_SIZE=%zu\n", 
+                   len, size, SPI_DATA_PKT_SIZE);
+            return false;
+        }
+    }
+    
+    // Validate CRC (CRC is at fixed offset 4)
+    // Calculate CRC over header + payload (excluding CRC field itself)
+    uint8_t crc_data[4 + 20]; // Header (4) + max payload (20)
+    crc_data[0] = data[0]; // type
+    crc_data[1] = data[1]; // flags
+    crc_data[2] = data[2]; // seq
+    crc_data[3] = data[3]; // len
+    memcpy(&crc_data[4], &data[6], len); // payload (starts at offset 6)
+    uint16_t calculated_crc = CalculateSpiCrc(crc_data, 4 + len);
+    uint16_t received_crc = data[4] | (data[5] << 8);
+    
+    printf("ValidateSpiPacket: CRC check - calculated=0x%04X, received=0x%04X, len=%d\n", 
+           calculated_crc, received_crc, len);
+    
+    bool crc_valid = (calculated_crc == received_crc);
+    if (!crc_valid) {
+        printf("ValidateSpiPacket: CRC validation failed\n");
+    }
+    
+    return crc_valid;
+}
+
+size_t ProtocolHandler::GetSpiPacketSize(const uint8_t* data)
+{
+    if (!data) return 0;
+    
+    uint8_t type = data[0];
+    
+    // Command packets: type=0x01, length in byte 3
+    if (type == 0x01) {
+        return SPI_CMD_PKT_SIZE;
+    }
+    
+    // Data packets: type=0x02, length in byte 3  
+    if (type == 0x02) {
+        return SPI_DATA_PKT_SIZE;
+    }
+    
+    // If we get here, it's likely a data packet with unknown type
+    // Check if it looks like a data packet by examining the structure
+    if (data[1] == 0x00 && data[2] == 0x00 && data[3] <= 240) {
+        // Looks like a data packet structure
+        return SPI_DATA_PKT_SIZE;
+    }
+    
+    // Default to command packet size for unknown formats
+    return SPI_CMD_PKT_SIZE;
+}
+
+uint16_t ProtocolHandler::CalculateSpiCrc(const uint8_t* data, size_t length)
+{
+    uint16_t crc = 0xFFFF;
+    for (size_t i = 0; i < length; i++) {
+        crc ^= (uint16_t)data[i] << 8;
+        for (int b = 0; b < 8; b++) {
+            crc = (crc & 0x8000) ? (crc << 1) ^ 0x1021 : (crc << 1);
+        }
+    }
+    return crc;
+}
+
+bool ProtocolHandler::IsCommandPacket(const uint8_t* data)
+{
+    return data && data[0] == 0x01;
+}
+
+bool ProtocolHandler::IsDataPacket(const uint8_t* data)
+{
+    return data && data[0] == 0x02;
 }
 
 } // namespace Protocol

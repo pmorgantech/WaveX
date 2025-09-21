@@ -18,27 +18,24 @@
 
 using namespace daisy;
 
-// Control packet structure (matching ESP32 slave format)
-#define CTRL_PKT_SIZE 64 // Must be 64 for ESP32-P4 DMA alignment
+// Use shared packet structures
+#define CMD_PKT_SIZE WaveX::Protocol::SPI_CMD_PKT_SIZE
+#define DATA_PKT_SIZE WaveX::Protocol::SPI_DATA_PKT_SIZE
 
-typedef struct __attribute__((packed)) {
-    uint8_t type, flags, seq, len;
-    uint8_t payload[26];
-    uint16_t crc; // CRC16-CCITT over first 30 bytes
-    uint8_t padding[32];
-} ctrl_pkt_t;
+typedef WaveX::Protocol::SpiCommandPacket cmd_pkt_t;
+typedef WaveX::Protocol::SpiDataPacket data_pkt_t;
 
-// CRC16-CCITT implementation
-static uint16_t crc16_ccitt(const uint8_t* d, size_t n)
-{
-    uint16_t c=0xFFFF;
-    for(size_t i=0;i<n;i++){ 
-        c ^= (uint16_t)d[i]<<8; 
-        for(int b=0;b<8;b++) 
-            c=(c&0x8000)?(c<<1)^0x1021:(c<<1); 
-    }
-    return c;
-}
+// Legacy compatibility - use command packet size as default
+#define CTRL_PKT_SIZE CMD_PKT_SIZE
+
+// Use shared CRC function
+#define crc16_ccitt WaveX::Protocol::ProtocolHandler::CalculateSpiCrc
+
+// Use shared packet functions
+#define is_command_packet WaveX::Protocol::ProtocolHandler::IsCommandPacket
+#define is_data_packet WaveX::Protocol::ProtocolHandler::IsDataPacket
+#define validate_packet WaveX::Protocol::ProtocolHandler::ValidateSpiPacket
+#define get_packet_size WaveX::Protocol::ProtocolHandler::GetSpiPacketSize
 
 // ============================================================================
 // Module-level static variables
@@ -50,15 +47,15 @@ static daisy::GPIO cs_pin;
 static daisy::GPIO attn_pin;
 static WaveX::Comm::spi_link_stats_t s_stats = {};
 
-// Message queue for received messages
+// Message queue for received messages (unified for both packet types)
 #define MAX_QUEUED_MESSAGES 8
-static ctrl_pkt_t message_queue[MAX_QUEUED_MESSAGES];
+static uint8_t message_queue[MAX_QUEUED_MESSAGES][DATA_PKT_SIZE] __attribute__((aligned(4)));
 static int queue_head = 0;
 static int queue_tail = 0;
 static int queue_count = 0;
 
 // Outgoing message queue (Daisy → ESP32)
-static ctrl_pkt_t outgoing_queue[MAX_QUEUED_MESSAGES];
+static uint8_t outgoing_queue[MAX_QUEUED_MESSAGES][DATA_PKT_SIZE] __attribute__((aligned(4)));
 static int outgoing_head = 0;
 static int outgoing_tail = 0;
 static int outgoing_count = 0;
@@ -67,11 +64,9 @@ static int outgoing_count = 0;
 
 #if WAVEX_SPI_DMA_ENABLED
 static volatile bool s_tx_inflight = false;
-#ifdef DMA_BUFFER_MEM_SECTION
-static uint8_t DMA_BUFFER_MEM_SECTION s_tx_dma_buf[CTRL_PKT_SIZE];
-#else
-static uint8_t s_tx_dma_buf[CTRL_PKT_SIZE];
-#endif
+// DMA buffers in non-cacheable SRAM for proper coherency
+static uint8_t s_tx_dma_buf[DATA_PKT_SIZE] __attribute__((section(".dma_buffer"))) __attribute__((aligned(32)));
+static uint8_t s_rx_dma_buf[DATA_PKT_SIZE] __attribute__((section(".dma_buffer"))) __attribute__((aligned(32)));
 
 static void spi_dma_start_cb(void* /*context*/)
 {
@@ -100,63 +95,61 @@ static void spi_dma_end_cb(void* /*context*/, daisy::SpiHandle::Result result)
 // ============================================================================
 
 /**
- * @brief Send a single 64-byte frame to ESP32 (one-way). Uses DMA when enabled.
+ * @brief Send a packet to ESP32 (one-way). Uses DMA when enabled.
+ * Supports both command (32-byte) and data (256-byte) packets.
  */
-static daisy::SpiHandle::Result Spi_SendRaw64(const uint8_t* tx_buf)
+static daisy::SpiHandle::Result Spi_SendPacket(const uint8_t* tx_buf, size_t packet_size)
 {
-    // if (s_hw) s_hw->PrintLine("Spi_SendRaw64 called");
-
     if(!g_spi_handle) {
-        // if (s_hw) s_hw->PrintLine("Spi_SendRaw64 ERROR: g_spi_handle is NULL!");
+        if (s_hw) s_hw->PrintLine("Spi_SendPacket ERROR: g_spi_handle is NULL!");
         return daisy::SpiHandle::Result::ERR;
     }
 
-    // if (s_hw) s _hw->PrintLine("Spi_SendRaw64: g_spi_handle is valid");
+    // Validate packet size
+    if (packet_size != CMD_PKT_SIZE && packet_size != DATA_PKT_SIZE) {
+        if (s_hw) s_hw->PrintLine("Spi_SendPacket ERROR: Invalid packet size: %d", (int)packet_size);
+        return daisy::SpiHandle::Result::ERR;
+    }
 
 #if WAVEX_SPI_DMA_ENABLED
-    // if (s_hw) s_hw->PrintLine("Spi_SendRaw64: Using DMA path");
-
     if(s_tx_inflight) {
-        // if (s_hw) s_hw->PrintLine("Spi_SendRaw64: DMA transaction already in flight, returning ERR");
+        if (s_hw) s_hw->PrintLine("Spi_SendPacket: DMA transaction already in flight, returning ERR");
         return daisy::SpiHandle::Result::ERR;
     }
 
-    // if (s_hw) s_hw->PrintLine("Spi_SendRaw64: Copying payload to DMA buffer");
     // Copy payload into persistent DMA buffer
-    memcpy(s_tx_dma_buf, tx_buf, CTRL_PKT_SIZE);
-    // Ensure cache coherency for DMA
-    dsy_dma_clear_cache_for_buffer(s_tx_dma_buf, CTRL_PKT_SIZE);
+    memcpy(s_tx_dma_buf, tx_buf, packet_size);
+    
+    // Ensure cache coherency for DMA on STM32H7
+    SCB_CleanDCache_by_Addr((uint32_t*)s_tx_dma_buf, packet_size);
 
     s_tx_inflight = true;
-    // if (s_hw) s_hw->PrintLine("Spi_SendRaw64: Starting DMA transfer");
 
     // Start DMA transfer (one-way); CS low/high handled in callbacks
     daisy::SpiHandle::Result dma_result = g_spi_handle->DmaTransmit(
         s_tx_dma_buf,
-        CTRL_PKT_SIZE,
+        packet_size,
         spi_dma_start_cb,
         spi_dma_end_cb,
         NULL);
 
-    // if (s_hw) s_hw->PrintLine("Spi_SendRaw64: DMA transfer initiated, result: %d", (int)dma_result);
     return dma_result;
 #else
-    if (s_hw) s_hw->PrintLine("Spi_SendRaw64: Using blocking path");
-
     // Fallback: blocking transmit
-    if (s_hw) s_hw->PrintLine("Spi_SendRaw64: Setting CS low");
     cs_pin.Write(false);
+    System::DelayUs(10); // Small delay for setup
 
-    if (s_hw) s_hw->PrintLine("Spi_SendRaw64: Calling BlockingTransmit");
-    daisy::SpiHandle::Result res = g_spi_handle->BlockingTransmit((uint8_t*)tx_buf, CTRL_PKT_SIZE, 100);
+    daisy::SpiHandle::Result res = g_spi_handle->BlockingTransmit((uint8_t*)tx_buf, packet_size, 100);
 
-    if (s_hw) s_hw->PrintLine("Spi_SendRaw64: BlockingTransmit returned: %d", (int)res);
-
-    if (s_hw) s_hw->PrintLine("Spi_SendRaw64: Setting CS high");
     cs_pin.Write(true);
-
     return res;
 #endif
+}
+
+// Legacy compatibility function
+static daisy::SpiHandle::Result Spi_SendRaw64(const uint8_t* tx_buf)
+{
+    return Spi_SendPacket(tx_buf, CMD_PKT_SIZE);
 }
 
 
@@ -175,7 +168,7 @@ namespace WaveX {
 namespace Comm {
 
 // Forward declarations for outgoing message queue functions
-static bool QueueOutgoingMessage(uint8_t type, const uint8_t* payload, uint8_t len);
+static bool QueueOutgoingMessage(const uint8_t* packet_data, size_t packet_size);
 static bool Spi_HasOutgoingData();
 static void PrepareTxBuffer(uint8_t* tx_buf, size_t buf_size);
 
@@ -211,6 +204,10 @@ void Spi_Init(daisy::DaisySeed &hw, daisy::SpiHandle* hspi)
     spi_config.baud_prescaler = daisy::SpiHandle::Config::BaudPrescaler::PS_8;
     spi_config.nss = daisy::SpiHandle::Config::NSS::SOFT;
     
+    // Configure interrupt priorities to prevent audio starvation
+    // Audio DMA should have higher priority (lower number) than SPI
+    // This will be handled in the main audio initialization
+    
     spi_config.pin_config.sclk = hw.GetPin(WAVEX_DAISY_SPI_SCK);
     spi_config.pin_config.mosi = hw.GetPin(WAVEX_DAISY_SPI_MOSI);
     spi_config.pin_config.miso = hw.GetPin(WAVEX_DAISY_SPI_MISO);
@@ -242,9 +239,41 @@ static void ProcessBrowseRequest(const char* path);
 static void ProcessSamplePlayRequest(const char* file_path);
 static void ProcessSampleStopRequest();
 
-static void ProcessSpiMessage(uint8_t type, const uint8_t* payload, uint8_t len)
+static void ProcessSpiMessage(const uint8_t* packet_data, size_t packet_size)
 {
     using namespace WaveX::Protocol;
+
+    // Debug: Log received packet bytes
+    if (s_hw) {
+        s_hw->PrintLine("DAISY: Received packet bytes: %02X %02X %02X %02X %02X %02X %02X %02X", 
+                        packet_data[0], packet_data[1], packet_data[2], packet_data[3],
+                        packet_data[4], packet_data[5], packet_data[6], packet_data[7]);
+    }
+    
+    // Validate packet first
+    if (!validate_packet(packet_data, packet_size)) {
+        if (s_hw) {
+            s_hw->PrintLine("DAISY: Invalid packet received, dropping");
+        }
+        return;
+    }
+
+    uint8_t packet_type = packet_data[0]; // Packet type (0x01=CMD, 0x02=DATA)
+    uint8_t len = packet_data[3];
+    const uint8_t* payload = &packet_data[6]; // Payload is now at offset 6 (after header + CRC)
+    
+    // Determine message type based on packet format
+    uint8_t type;
+    if (packet_type == 0x01 && len > 0) {
+        // New format: message type is in first byte of payload
+        type = payload[0];
+    } else if (packet_type == 0x01 && len == 0) {
+        // No-data response: treat as MSG_ACK
+        type = MSG_ACK;
+    } else {
+        // Fallback: use packet type as message type
+        type = packet_type;
+    }
 
     // Process incoming SPI messages from ESP32
     switch (type) {
@@ -264,9 +293,10 @@ static void ProcessSpiMessage(uint8_t type, const uint8_t* payload, uint8_t len)
             }
             
             char path[96] = {0};
-            if (len > 0 && len < sizeof(path)) {
-                memcpy(path, payload, len);
-                path[len] = '\0';
+            if (packet_type == 0x01 && len > 1) {
+                // New format: skip the message type byte (first byte of payload)
+                memcpy(path, &payload[1], len - 1);
+                path[len - 1] = '\0';
             } else {
                 // Default to root if no path provided
                 strcpy(path, "/");
@@ -283,9 +313,14 @@ static void ProcessSpiMessage(uint8_t type, const uint8_t* payload, uint8_t len)
 
         case MSG_SAMPLE_PLAY_REQ: {
             // ESP32 requesting sample audition
-            if (len >= 1) {
+            if (len > 0) {
                 char file_path[96] = {0};
-                memcpy(file_path, payload, len < sizeof(file_path) ? len : sizeof(file_path) - 1);
+                if (packet_type == 0x01 && len > 1) {
+                    // New format: skip the message type byte (first byte of payload)
+                    size_t copy_len = (len - 1) < (sizeof(file_path) - 1) ? (len - 1) : (sizeof(file_path) - 1);
+                    memcpy(file_path, &payload[1], copy_len);
+                    file_path[copy_len] = '\0';
+                }
                 ProcessSamplePlayRequest(file_path);
             }
             break;
@@ -299,14 +334,33 @@ static void ProcessSpiMessage(uint8_t type, const uint8_t* payload, uint8_t len)
 
         default:
             // Unknown message type - ignore
+            if (s_hw) {
+                s_hw->PrintLine("DAISY: Unknown message type: 0x%02X", type);
+            }
             break;
     }
 }
 
 void ProcessEsp32Message(uint8_t type, uint8_t flags, const uint8_t* payload, uint8_t len)
 {
-    // Process messages received from ESP32 by calling the message processor
-    ProcessSpiMessage(type, payload, len);
+    // Legacy compatibility - create packet structure
+    uint8_t packet_data[CMD_PKT_SIZE] = {0};
+    packet_data[0] = 0x01; // Command packet type
+    packet_data[1] = flags;
+    packet_data[2] = 0; // Sequence number (not used in legacy mode)
+    packet_data[3] = len;
+    
+    if (payload && len > 0) {
+        memcpy(&packet_data[4], payload, len < 20 ? len : 20);
+    }
+    
+    // Calculate CRC
+    uint16_t crc = crc16_ccitt(packet_data, 4 + len);
+    packet_data[4 + len] = crc & 0xFF;
+    packet_data[4 + len + 1] = (crc >> 8) & 0xFF;
+    
+    // Process the packet
+    ProcessSpiMessage(packet_data, CMD_PKT_SIZE);
 
     if (s_hw) {
         s_hw->PrintLine("Processed ESP32 message type 0x%02X, len=%d", type, len);
@@ -320,8 +374,29 @@ int Spi_Send(uint16_t type, const void* payload, uint16_t len)
         return 0;
     }
 
+    // Create command packet
+    cmd_pkt_t cmd_pkt = {0};
+    cmd_pkt.type = 0x01; // Command packet type
+    cmd_pkt.flags = 0;   // No special flags
+    cmd_pkt.seq = 0;     // Sequence number (not used for now)
+    
+    // First byte of payload should be the message type
+    cmd_pkt.payload[0] = (uint8_t)(type & 0xFF);
+    cmd_pkt.len = 1; // Start with message type
+    
+    // Add actual payload data
+    if (payload && len > 0) {
+        size_t remaining_space = 20 - 1; // 20 total - 1 for message type
+        size_t copy_len = (len > remaining_space) ? remaining_space : len;
+        memcpy(&cmd_pkt.payload[1], payload, copy_len);
+        cmd_pkt.len += copy_len;
+    }
+    
+    // Calculate CRC
+    cmd_pkt.crc = crc16_ccitt((uint8_t*)&cmd_pkt, 4 + cmd_pkt.len);
+
     // Queue the message for bidirectional transmission
-    bool queued = QueueOutgoingMessage((uint8_t)(type & 0xFF), (const uint8_t*)payload, (uint8_t)len);
+    bool queued = QueueOutgoingMessage((uint8_t*)&cmd_pkt, CMD_PKT_SIZE);
     
     if (queued) {
         // Reduce logging for meter data
@@ -337,7 +412,7 @@ int Spi_Send(uint16_t type, const void* payload, uint16_t len)
     }
 }
 
-// Send large packet (pkt_t format) - for bulk data like browse responses
+// Send large packet (data packet format) - for bulk data like browse responses
 int Spi_SendLargePacket(const uint8_t* packet_data, size_t packet_size)
 {
     if (!g_spi_handle) {
@@ -350,29 +425,31 @@ int Spi_SendLargePacket(const uint8_t* packet_data, size_t packet_size)
         return 0;
     }
     
-    if (packet_size > 246) { // Max pkt_t size
+    if (packet_size > 240) { // Max data payload size
         if (s_hw) s_hw->PrintLine("Spi_SendLargePacket ERROR: Packet too large: %d bytes", (int)packet_size);
         return 0;
     }
     
-    // Create aligned pkt_t buffer
-    static uint8_t large_tx_buf[246] __attribute__((aligned(4)));
-    memset(large_tx_buf, 0, sizeof(large_tx_buf));
-    memcpy(large_tx_buf, packet_data, packet_size);
+    // Create data packet
+    data_pkt_t data_pkt = {0};
+    data_pkt.type = 0x02; // Data packet type
+    data_pkt.flags = 0;   // No special flags
+    data_pkt.seq = 0;     // Sequence number (not used for now)
+    data_pkt.len = packet_size;
+    
+    memcpy(data_pkt.payload, packet_data, packet_size);
+    
+    // Calculate CRC
+    data_pkt.crc = crc16_ccitt((uint8_t*)&data_pkt, 4 + data_pkt.len);
     
     if (s_hw) {
         s_hw->PrintLine("DAISY: Sending large packet - size=%d bytes", (int)packet_size);
-        s_hw->PrintLine("DAISY: Large packet header: %02X %02X %02X %02X", 
-                       large_tx_buf[0], large_tx_buf[1], large_tx_buf[2], large_tx_buf[3]);
+        s_hw->PrintLine("DAISY: Data packet header: %02X %02X %02X %02X", 
+                       data_pkt.type, data_pkt.flags, data_pkt.seq, data_pkt.len);
     }
     
-    // Send using SPI (CS management by caller)
-    cs_pin.Write(false); // Assert CS
-    System::DelayUs(10); // Small delay for setup
-    
-    daisy::SpiHandle::Result result = g_spi_handle->BlockingTransmit(large_tx_buf, packet_size, 1000);
-    
-    cs_pin.Write(true); // Deassert CS
+    // Send using the new packet function
+    daisy::SpiHandle::Result result = Spi_SendPacket((uint8_t*)&data_pkt, DATA_PKT_SIZE);
     
     if (result == daisy::SpiHandle::Result::OK) {
         s_stats.packets_sent++;
@@ -610,10 +687,11 @@ static void PrepareTxBuffer(uint8_t* tx_buf, size_t buf_size)
     }
     
     // Get next outgoing message
-    ctrl_pkt_t* outgoing_msg = &outgoing_queue[outgoing_head];
+    uint8_t* outgoing_msg = outgoing_queue[outgoing_head];
     
-    // Copy to TX buffer
-    size_t copy_size = (buf_size < CTRL_PKT_SIZE) ? buf_size : CTRL_PKT_SIZE;
+    // Determine packet size based on type
+    size_t packet_size = get_packet_size(outgoing_msg);
+    size_t copy_size = (buf_size < packet_size) ? buf_size : packet_size;
     memcpy(tx_buf, outgoing_msg, copy_size);
     
     // Remove from queue
@@ -622,25 +700,25 @@ static void PrepareTxBuffer(uint8_t* tx_buf, size_t buf_size)
     
     if (s_hw) {
         // s_hw->PrintLine("DAISY: Prepared outgoing message type=0x%02X, len=%d, remaining=%d", 
-        //                outgoing_msg->type, outgoing_msg->len, outgoing_count);
+        //                outgoing_msg[0], outgoing_msg[3], outgoing_count);
     }
 }
 
 // Add message to outgoing queue
-static bool QueueOutgoingMessage(uint8_t type, const uint8_t* payload, uint8_t len)
+static bool QueueOutgoingMessage(const uint8_t* packet_data, size_t packet_size)
 {
     if (outgoing_count >= MAX_QUEUED_MESSAGES) {
         if (s_hw) {
-            s_hw->PrintLine("DAISY: Outgoing queue full, dropping message type=0x%02X", type);
+            s_hw->PrintLine("DAISY: Outgoing queue full, dropping message type=0x%02X", packet_data[0]);
         }
         return false;
     }
     
     // For meter data, check if we already have meter data queued to prevent spam
-    if (type == WaveX::Protocol::MSG_METER_PUSH) {
+    if (packet_data[0] == 0x01 && packet_data[4] == WaveX::Protocol::MSG_METER_PUSH) {
         for (int i = 0; i < outgoing_count; i++) {
             int idx = (outgoing_head + i) % MAX_QUEUED_MESSAGES;
-            if (outgoing_queue[idx].type == WaveX::Protocol::MSG_METER_PUSH) {
+            if (outgoing_queue[idx][0] == 0x01 && outgoing_queue[idx][4] == WaveX::Protocol::MSG_METER_PUSH) {
                 // Already have meter data queued - skip this one
                 if (s_hw) {
                     s_hw->PrintLine("DAISY: Skipping meter data - already queued (count=%d)", outgoing_count);
@@ -654,23 +732,17 @@ static bool QueueOutgoingMessage(uint8_t type, const uint8_t* payload, uint8_t l
         }
     }
     
-    ctrl_pkt_t* msg = &outgoing_queue[outgoing_tail];
-    memset(msg, 0, sizeof(*msg));
-    
-    msg->type = type;
-    msg->len = (len > 26) ? 26 : len; // Limit to payload size
-    if (payload && len > 0) {
-        memcpy(msg->payload, payload, msg->len);
-    }
+    uint8_t* msg = outgoing_queue[outgoing_tail];
+    memcpy(msg, packet_data, packet_size);
     
     outgoing_tail = (outgoing_tail + 1) % MAX_QUEUED_MESSAGES;
     outgoing_count++;
     
     // Reduce logging for meter data to avoid spam
-    if (s_hw && type != WaveX::Protocol::MSG_METER_PUSH) {
+    if (s_hw && !(packet_data[0] == 0x01 && packet_data[4] == WaveX::Protocol::MSG_METER_PUSH)) {
         // s_hw->PrintLine("DAISY: Queued outgoing message type=0x%02X, len=%d, count=%d", 
-        //                type, len, outgoing_count);
-    } else if (s_hw && type == WaveX::Protocol::MSG_METER_PUSH && outgoing_count % 10 == 1) {
+        //                packet_data[0], packet_data[3], outgoing_count);
+    } else if (s_hw && packet_data[0] == 0x01 && packet_data[4] == WaveX::Protocol::MSG_METER_PUSH && outgoing_count % 10 == 1) {
         s_hw->PrintLine("DAISY: Queued meter data (every 10th logged), count=%d", outgoing_count);
     }
     
@@ -724,21 +796,31 @@ static bool PerformBidirectionalPoll()
     }
     
     // Prepare bidirectional transaction
-    uint8_t rx_buf[CTRL_PKT_SIZE] = {0};
-    uint8_t tx_buf[CTRL_PKT_SIZE] = {0};
+    uint8_t rx_buf[DATA_PKT_SIZE] = {0};
+    uint8_t tx_buf[DATA_PKT_SIZE] = {0};
+    size_t transfer_size = CMD_PKT_SIZE; // Default to command packet size
     
-    // Always prepare TX buffer - either with our data or a poll request
-    if (we_have_data) {
-        PrepareTxBuffer(tx_buf, CTRL_PKT_SIZE);
+    // Prepare TX buffer based on the situation
+    if (esp32_urgent) {
+        // ESP32 has urgent data - send empty packet to trigger ESP32 response
+        // ESP32 will respond with its queued data during the transaction
+        memset(tx_buf, 0, DATA_PKT_SIZE);
+        transfer_size = CMD_PKT_SIZE; // Start with command packet size
+        if (s_hw) {
+            s_hw->PrintLine("DAISY: Requesting urgent data from ESP32 (no poll needed)");
+        }
+    } else if (we_have_data) {
+        // We have data to send - prepare our outgoing data
+        PrepareTxBuffer(tx_buf, DATA_PKT_SIZE);
+        // Determine actual packet size from the prepared buffer
+        transfer_size = get_packet_size(tx_buf);
+        if (transfer_size == 0) transfer_size = CMD_PKT_SIZE; // Fallback
         // if (s_hw && poll_count % 10 == 0) { // Reduce logging
         //     s_hw->PrintLine("DAISY: Sending queued data to ESP32, type=0x%02X", tx_buf[0]);
         // }
     } else {
-        // Send poll request - ESP32 might have data for us
-        tx_buf[0] = 0xFF; // Poll command  
-        if (s_hw && poll_count % 20 == 0) { // Reduce logging
-            s_hw->PrintLine("DAISY: Sending poll request to ESP32");
-        }
+        // No urgent data and no outgoing data - skip communication
+        return false;
     }
     
     // Set up SPI transaction
@@ -747,7 +829,7 @@ static bool PerformBidirectionalPoll()
     
     // Send poll request and receive response
     daisy::SpiHandle::Result result = g_spi_handle->BlockingTransmitAndReceive(
-        tx_buf, rx_buf, CTRL_PKT_SIZE, 100); // 100ms timeout for faster polling
+        tx_buf, rx_buf, transfer_size, 100); // Use appropriate transfer size
     
     cs_pin.Write(true); // Deassert CS
     
@@ -766,8 +848,8 @@ static bool PerformBidirectionalPoll()
     bool has_meaningful_data = false;
     
     // Skip check if this is just echoing our poll request
-    if (!(rx_buf[0] == 0xFF && rx_buf[1] == 0x00 && rx_buf[2] == 0x00 && rx_buf[3] == 0x00)) {
-        for (int i = 0; i < CTRL_PKT_SIZE; i++) {
+    if (!(rx_buf[0] == 0x01 && rx_buf[1] == 0x00 && rx_buf[2] == 0x00 && rx_buf[3] == 0x01 && rx_buf[4] == 0xFF)) {
+        for (int i = 0; i < DATA_PKT_SIZE; i++) {
             if (rx_buf[i] != 0) {
                 has_meaningful_data = true;
                 break;
@@ -786,27 +868,84 @@ static bool PerformBidirectionalPoll()
         return false; // No meaningful data available
     }
     
-    // Parse the received packet
-    ctrl_pkt_t* pkt = (ctrl_pkt_t*)rx_buf;
+    // Determine packet size and validate
+    size_t packet_size = get_packet_size(rx_buf);
+    if (s_hw) {
+        s_hw->PrintLine("DAISY: get_packet_size returned %d for type 0x%02X", (int)packet_size, rx_buf[0]);
+    }
+    if (packet_size == 0) {
+        if (s_hw) {
+            s_hw->PrintLine("DAISY: Unknown packet type: 0x%02X", rx_buf[0]);
+        }
+        return false;
+    }
     
-    // Basic validation
-    if (pkt->len > 26) {
-        s_hw->PrintLine("DAISY: Invalid packet length: %d", pkt->len);
+    // Check for empty or invalid data packets (all 0xFF or all 0x00)
+    bool is_empty_data = true;
+    for (int i = 0; i < 8; i++) {
+        if (rx_buf[i] != 0xFF && rx_buf[i] != 0x00) {
+            is_empty_data = false;
+            break;
+        }
+    }
+    
+    if (is_empty_data) {
+        if (s_hw) {
+            s_hw->PrintLine("DAISY: Received empty/invalid data packet, ignoring");
+        }
+        return false;
+    }
+    
+    // Validate the packet
+    if (s_hw) {
+        s_hw->PrintLine("DAISY: Validating packet of size %d", (int)packet_size);
+        s_hw->PrintLine("DAISY: Packet bytes: %02X %02X %02X %02X %02X %02X %02X %02X", 
+                        rx_buf[0], rx_buf[1], rx_buf[2], rx_buf[3], 
+                        rx_buf[4], rx_buf[5], rx_buf[6], rx_buf[7]);
+    }
+    
+    // Check packet type and length
+    uint8_t type = rx_buf[0];
+    uint8_t len = rx_buf[3];
+    if (s_hw) {
+        s_hw->PrintLine("DAISY: Packet type=0x%02X, len=%d", type, len);
+    }
+    
+    // Check CRC
+    uint16_t received_crc = rx_buf[4] | (rx_buf[5] << 8);
+    
+    // Calculate CRC over header + payload (excluding CRC field)
+    uint8_t crc_data[4 + 20]; // Header (4) + max payload (20)
+    crc_data[0] = rx_buf[0]; // type
+    crc_data[1] = rx_buf[1]; // flags
+    crc_data[2] = rx_buf[2]; // seq
+    crc_data[3] = rx_buf[3]; // len
+    memcpy(&crc_data[4], &rx_buf[6], len); // payload (starts at offset 6)
+    
+    uint16_t calculated_crc = crc16_ccitt(crc_data, 4 + len);
+    if (s_hw) {
+        s_hw->PrintLine("DAISY: CRC calculation: %d bytes - %02X %02X %02X %02X %02X", 
+                        4 + len, crc_data[0], crc_data[1], crc_data[2], crc_data[3], crc_data[4]);
+        s_hw->PrintLine("DAISY: Received CRC=0x%04X, Calculated CRC=0x%04X", received_crc, calculated_crc);
+    }
+    
+    if (!validate_packet(rx_buf, packet_size)) {
+        if (s_hw) {
+            s_hw->PrintLine("DAISY: Invalid packet received, dropping");
+        }
         return false;
     }
     
     if (s_hw) {
-        s_hw->PrintLine("DAISY: Received packet type=0x%02X, len=%d", pkt->type, pkt->len);
-        if (pkt->len > 0) {
-            s_hw->PrintLine("DAISY: Packet payload: %.*s", pkt->len, pkt->payload);
-        }
+        s_hw->PrintLine("DAISY: Received packet type=0x%02X, len=%d, size=%d", 
+                        rx_buf[0], rx_buf[3], (int)packet_size);
         s_hw->PrintLine("DAISY: Full packet data: %02X %02X %02X %02X %02X %02X %02X %02X", 
                         rx_buf[0], rx_buf[1], rx_buf[2], rx_buf[3], rx_buf[4], rx_buf[5], rx_buf[6], rx_buf[7]);
     }
     
     // Queue the message for processing
     if (queue_count < MAX_QUEUED_MESSAGES) {
-        message_queue[queue_tail] = *pkt;
+        memcpy(message_queue[queue_tail], rx_buf, packet_size);
         queue_tail = (queue_tail + 1) % MAX_QUEUED_MESSAGES;
         queue_count++;
         if (s_hw) {
@@ -831,18 +970,36 @@ int Spi_Recv(pkt_t **out)
     
     // Return queued message if available
     if (queue_count > 0) {
-        ctrl_pkt_t* ctrl_msg = &message_queue[queue_head];
+        uint8_t* packet_data = message_queue[queue_head];
         if (s_hw) {
             s_hw->PrintLine("DAISY: Spi_Recv - dequeuing message type=0x%02X, len=%d, queue_count=%d", 
-                           ctrl_msg->type, ctrl_msg->len, queue_count);
+                           packet_data[0], packet_data[3], queue_count);
         }
         
-        // Convert ctrl_pkt_t to pkt_t format
+        // Convert to pkt_t format for legacy compatibility
         memset(&converted_packet, 0, sizeof(converted_packet));
-        converted_packet.h.len = ctrl_msg->len;
-        converted_packet.h.type = ctrl_msg->type;
-        if (ctrl_msg->len > 0 && ctrl_msg->len <= sizeof(converted_packet.payload)) {
-            memcpy(converted_packet.payload, ctrl_msg->payload, ctrl_msg->len);
+        
+        uint8_t packet_type = packet_data[0];
+        uint8_t len = packet_data[3];
+        const uint8_t* payload = &packet_data[6]; // Payload is now at offset 6 (after header + CRC)
+        
+        if (packet_type == 0x01 && len > 0) {
+            // Command packet - message type is first byte of payload
+            converted_packet.h.type = payload[0];
+            converted_packet.h.len = len - 1; // Subtract message type byte
+            
+            // Copy payload (skip message type byte)
+            if (converted_packet.h.len > 0 && converted_packet.h.len <= sizeof(converted_packet.payload)) {
+                memcpy(converted_packet.payload, &payload[1], converted_packet.h.len);
+            }
+        } else {
+            // Data packet or invalid - use packet type as message type
+            converted_packet.h.type = packet_type;
+            converted_packet.h.len = len;
+            
+            if (len > 0 && len <= sizeof(converted_packet.payload)) {
+                memcpy(converted_packet.payload, payload, len);
+            }
         }
         
         if (s_hw) {

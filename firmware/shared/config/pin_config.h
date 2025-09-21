@@ -162,7 +162,7 @@ extern "C" {
 
 // ESP32 SPI configuration (slave mode)
 #define WAVEX_ESP_SPI_HOST      SPI3_HOST     // ESP32-P4 uses SPI3_HOST for slave mode
-#define WAVEX_ESP_SPI_CLK_HZ    10000000  // 10 MHz (master controls)
+#define WAVEX_ESP_SPI_CLK_HZ    4000000  // 10 MHz (master controls)
 #define WAVEX_ESP_SPI_QUEUE_SIZE 8
 #define WAVEX_ESP_SPI_DMA_CH    SPI_DMA_CH_AUTO // Reverting: P4 slave only supports auto-alloc for DMA
 
@@ -173,7 +173,7 @@ extern "C" {
 // Ring buffer sizes
 #define WAVEX_SPI_RX_RING_SIZE  32
 #define WAVEX_SPI_TX_RING_SIZE  32
-#define WAVEX_SPI_POOL_SIZE     16
+#define ary.       16
 
 
 // =============================================================================
