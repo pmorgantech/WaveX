@@ -880,7 +880,8 @@ static void link_task(void *arg)
                     }
                 } else {
                     // Handle as regular packet (meter data from backend, etc.)
-                    handle_ctrl_packet(rxp);
+                    ESP_LOGI(TAG, "This is an OLD FORMAT PACKET: type=0x%02X, len=%d", rxp->type, rxp->len);
+                    
                 }
             } else {
                 ESP_LOGW(TAG, "Unknown packet format, rx_len=%d", (int)rx_len);

@@ -36,7 +36,8 @@ static daisy::SpiHandle spi_handle;
 #include "storage/sd_sdio.h"
 #endif
 
-// Helper function to process SPI packets
+// Helper function to process SPI packets - NO LONGER NEEDED
+/*
 void process_spi_packet(::pkt_t* pkt) {
     // Process incoming SPI messages from ESP32 using the proper message processor
     if (pkt && pkt->h.len <= 26) {
@@ -45,22 +46,14 @@ void process_spi_packet(::pkt_t* pkt) {
         WaveX::Comm::ProcessEsp32Message(pkt->h.type, 0, pkt->payload, pkt->h.len);
     }
 }
+*/
 
 // Process incoming SPI messages from ESP32
 void process_incoming_spi_messages() {
     #if WAVEX_SPI_LINK_ENABLED
-    // Check for incoming SPI messages and process them
-    // Note: Current SPI implementation is one-way (Daisy sends, ESP32 receives)
-    // For now, we'll poll for any buffered messages
-    pkt_t* pkt = nullptr;
-    int recv_result = WaveX::Comm::Spi_Recv(&pkt);
-    if (recv_result > 0 && pkt) {
-        hw.PrintLine("DAISY: process_incoming_spi_messages - got packet type=0x%02X, len=%d", 
-                     pkt->h.type, pkt->h.len);
-        // Process the received packet
-        process_spi_packet(pkt);
-        WaveX::Comm::Spi_Recycle(pkt, 1);
-    }
+    // The new, correct approach is to call a function that handles polling,
+    // dequeuing, and processing in one step, avoiding the legacy conversion.
+    WaveX::Comm::ProcessQueuedSpiMessage();
     #endif
 }
 

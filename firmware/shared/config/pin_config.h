@@ -173,7 +173,6 @@ extern "C" {
 // Ring buffer sizes
 #define WAVEX_SPI_RX_RING_SIZE  32
 #define WAVEX_SPI_TX_RING_SIZE  32
-#define ary.       16
 
 
 // =============================================================================

@@ -2,6 +2,11 @@
 
 #if WAVEX_SPI_LINK_ENABLED
 
+// Force platform define for linter
+#ifndef DAISY_PLATFORM
+#define DAISY_PLATFORM 1
+#endif
+
 #include "daisy_seed.h"
 #include <string.h>
 #include <stdint.h>
@@ -15,6 +20,7 @@
 #include "../../shared/spi_protocol/protocol.h" // For protocol functions
 #include "../storage/fs_browse.h" // For file browsing
 #include "../audio/audio_engine.h" // For sample audition
+#include "stm32h7xx_hal.h" // For interrupt handling
 
 using namespace daisy;
 
@@ -46,6 +52,8 @@ static daisy::SpiHandle* g_spi_handle = NULL;
 static daisy::GPIO cs_pin;
 static daisy::GPIO attn_pin;
 static WaveX::Comm::spi_link_stats_t s_stats = {};
+
+static volatile bool g_esp32_attention_flag = false; // Flag for ESP32 attention
 
 // Message queue for received messages (unified for both packet types)
 #define MAX_QUEUED_MESSAGES 8
@@ -121,7 +129,7 @@ static daisy::SpiHandle::Result Spi_SendPacket(const uint8_t* tx_buf, size_t pac
     memcpy(s_tx_dma_buf, tx_buf, packet_size);
     
     // Ensure cache coherency for DMA on STM32H7
-    SCB_CleanDCache_by_Addr((uint32_t*)s_tx_dma_buf, packet_size);
+    // SCB_CleanDCache_by_Addr((uint32_t*)s_tx_dma_buf, packet_size);
 
     s_tx_inflight = true;
 
@@ -192,6 +200,11 @@ void Spi_Init(daisy::DaisySeed &hw, daisy::SpiHandle* hspi)
     daisy::Pin attn_p = hw.GetPin(WAVEX_DAISY_ATTN_IN);  // D0
     attn_pin.Init(attn_p, daisy::GPIO::Mode::INPUT, daisy::GPIO::Pull::PULLDOWN, daisy::GPIO::Speed::VERY_HIGH);
     hw.PrintLine("Attention pin D%d configured as input from ESP32 GPIO31", WAVEX_DAISY_ATTN_IN);
+
+    // Enable interrupt for the attention pin (D0 is PB12, which uses EXTI15_10)
+    // Priority must be lower than audio (higher number) to prevent preemption.
+    HAL_NVIC_SetPriority(EXTI15_10_IRQn, 14, 0); // Priority 14, as per plan
+    HAL_NVIC_EnableIRQ(EXTI15_10_IRQn);
 
     // 2) Configure SPI1 Master with NSS::SOFT and NO nss pin assigned
     daisy::SpiHandle::Config spi_config;
@@ -286,6 +299,14 @@ static void ProcessSpiMessage(const uint8_t* packet_data, size_t packet_size)
             break;
         }
         
+        case MSG_ACK: {
+            // Acknowledgment from ESP32
+            if (s_hw) {
+                s_hw->PrintLine("DAISY: Received MSG_ACK (0x35) from ESP32");
+            }
+            break;
+        }
+
         case MSG_BROWSE_REQ: {
             // ESP32 requesting directory listing
             if (s_hw) {
@@ -341,6 +362,7 @@ static void ProcessSpiMessage(const uint8_t* packet_data, size_t packet_size)
     }
 }
 
+/*
 void ProcessEsp32Message(uint8_t type, uint8_t flags, const uint8_t* payload, uint8_t len)
 {
     // Legacy compatibility - create packet structure
@@ -366,6 +388,7 @@ void ProcessEsp32Message(uint8_t type, uint8_t flags, const uint8_t* payload, ui
         s_hw->PrintLine("Processed ESP32 message type 0x%02X, len=%d", type, len);
     }
 }
+*/
 
 int Spi_Send(uint16_t type, const void* payload, uint16_t len)
 {
@@ -600,26 +623,43 @@ static void ProcessBrowseRequest(const char* path)
         s_hw->PrintLine("DAISY: Created browse response packet, size=%d bytes", (int)pkt_size);
     }
     
-    // Send as large packet - try with longer delay to ensure ESP32 is ready
+    // Send browse response using custom large packet format that ESP32 will recognize
+    // The ESP32 expects packets starting with SYNC_BYTE (0xAA) for large packets
     if (s_hw) {
-        s_hw->PrintLine("DAISY: Waiting for ESP32 to be ready for large packet...");
+        s_hw->PrintLine("DAISY: Sending browse response using custom large packet format...");
     }
     
-    // Wait longer to ensure ESP32 has finished processing the browse request
-    System::Delay(100); // 100ms delay
+    // Create a PacketHeader format packet that the ESP32 expects
+    uint8_t custom_packet[256] = {0};
+    custom_packet[0] = WaveX::Protocol::SYNC_BYTE;  // 0xAA - sync byte
+    custom_packet[1] = MSG_BROWSE_RESP;             // Message type
+    custom_packet[2] = (pkt_size - sizeof(PacketHeader)) & 0xFF;  // Payload length (8-bit)
+    custom_packet[3] = 0;  // Checksum (will be calculated)
     
-    if (s_hw) {
-        s_hw->PrintLine("DAISY: Sending large packet to ESP32 now...");
+    // Copy the payload (skip the PacketHeader that was created)
+    const uint8_t* payload = response_buffer + sizeof(PacketHeader);
+    size_t payload_size = pkt_size - sizeof(PacketHeader);
+    memcpy(&custom_packet[4], payload, payload_size);
+    
+    // Calculate checksum over payload
+    uint8_t checksum = 0;
+    for (size_t i = 0; i < payload_size; i++) {
+        checksum ^= payload[i];
     }
+    custom_packet[3] = checksum;
     
-    int send_result = Spi_SendLargePacket(response_buffer, pkt_size);
+    // Send using Spi_SendPacket with DATA_PKT_SIZE
+    daisy::SpiHandle::Result result = Spi_SendPacket(custom_packet, DATA_PKT_SIZE);
     
-    if (s_hw) {
-        s_hw->PrintLine("DAISY: Large packet send result: %d", send_result);
-    }
-    
-    if (s_hw) {
-        s_hw->PrintLine("DAISY: Browse response sent successfully");
+    if (result == daisy::SpiHandle::Result::OK) {
+        s_stats.packets_sent++;
+        if (s_hw) {
+            s_hw->PrintLine("DAISY: Browse response sent successfully");
+        }
+    } else {
+        if (s_hw) {
+            s_hw->PrintLine("DAISY: Browse response send FAILED: %d", (int)result);
+        }
     }
 }
 
@@ -757,8 +797,15 @@ static bool QueueOutgoingMessage(const uint8_t* packet_data, size_t packet_size)
 static bool PerformBidirectionalPoll()
 {
     // Check for urgent ESP32 control signal (active high on D0)
-    bool esp32_urgent = attn_pin.Read();  // Active high signal from GPIO31
+    // bool esp32_urgent = attn_pin.Read();  // Active high signal from GPIO31 - OLD POLLING METHOD
     
+    bool esp32_urgent = g_esp32_attention_flag;
+    if(esp32_urgent)
+    {
+        // Reset the flag now that we're handling it.
+        g_esp32_attention_flag = false;
+    }
+
     // Debug: Log attention pin state periodically AND when urgent
     static uint32_t debug_count = 0;
     debug_count++;
@@ -949,7 +996,7 @@ static bool PerformBidirectionalPoll()
         queue_tail = (queue_tail + 1) % MAX_QUEUED_MESSAGES;
         queue_count++;
         if (s_hw) {
-            s_hw->PrintLine("DAISY: Queued message, queue_count=%d", queue_count);
+            s_hw->PrintLine("DAISY: Queued message type=0x%02X, queue_count=%d", rx_buf[0], queue_count);
         }
         return true;
     } else {
@@ -963,66 +1010,64 @@ static bool PerformBidirectionalPoll()
 // Static buffer to convert ctrl_pkt_t to pkt_t format
 static pkt_t converted_packet;
 
-int Spi_Recv(pkt_t **out) 
-{ 
-    // Perform regular bidirectional polling
-    PerformBidirectionalPoll();
-    
-    // Return queued message if available
-    if (queue_count > 0) {
-        uint8_t* packet_data = message_queue[queue_head];
-        if (s_hw) {
-            s_hw->PrintLine("DAISY: Spi_Recv - dequeuing message type=0x%02X, len=%d, queue_count=%d", 
-                           packet_data[0], packet_data[3], queue_count);
-        }
-        
-        // Convert to pkt_t format for legacy compatibility
-        memset(&converted_packet, 0, sizeof(converted_packet));
-        
-        uint8_t packet_type = packet_data[0];
-        uint8_t len = packet_data[3];
-        const uint8_t* payload = &packet_data[6]; // Payload is now at offset 6 (after header + CRC)
-        
-        if (packet_type == 0x01 && len > 0) {
-            // Command packet - message type is first byte of payload
-            converted_packet.h.type = payload[0];
-            converted_packet.h.len = len - 1; // Subtract message type byte
-            
-            // Copy payload (skip message type byte)
-            if (converted_packet.h.len > 0 && converted_packet.h.len <= sizeof(converted_packet.payload)) {
-                memcpy(converted_packet.payload, &payload[1], converted_packet.h.len);
-            }
-        } else {
-            // Data packet or invalid - use packet type as message type
-            converted_packet.h.type = packet_type;
-            converted_packet.h.len = len;
-            
-            if (len > 0 && len <= sizeof(converted_packet.payload)) {
-                memcpy(converted_packet.payload, payload, len);
-            }
-        }
-        
-        if (s_hw) {
-            s_hw->PrintLine("DAISY: Converted to pkt_t - type=0x%02X, len=%d", 
-                           converted_packet.h.type, converted_packet.h.len);
-        }
-        
-        *out = &converted_packet;
-        queue_head = (queue_head + 1) % MAX_QUEUED_MESSAGES;
-        queue_count--;
-        return 1;
-    }
-    
-    *out = NULL;
-    return 0;
-}
+// int Spi_Recv(pkt_t **out) 
+// { 
+//     // Perform regular bidirectional polling
+//     PerformBidirectionalPoll();  
+//     // Return queued message if available
+//     if (queue_count > 0) {
+//         uint8_t* packet_data = message_queue[queue_head];
+//         if (s_hw) {
+//             s_hw->PrintLine("DAISY: Spi_Recv - dequeuing message type=0x%02X, len=%d, queue_count=%d", 
+//                            packet_data[0], packet_data[3], queue_count);
+//         }
+// 
+//         // Convert to pkt_t format for legacy compatibility
+//         memset(&converted_packet, 0, sizeof(converted_packet));
+//         uint8_t packet_type = packet_data[0];
+//         uint8_t len = packet_data[3];
+//         const uint8_t* payload = &packet_data[6]; // Payload is now at offset 6 (after header + CRC)
+//         if (packet_type == 0x01 && len > 0) {
+//             // Command packet - message type is first byte of payload
+//             converted_packet.h.type = payload[0];
+//             converted_packet.h.len = len - 1; // Subtract message type byte
+//
+//             // Copy payload (skip message type byte)
+//             if (converted_packet.h.len > 0 && converted_packet.h.len <= sizeof(converted_packet.payload)) {
+//                 memcpy(converted_packet.payload, &payload[1], converted_packet.h.len);
+//             }
+//         } else {
+//             // Data packet or invalid - use packet type as message type
+//             converted_packet.h.type = packet_type;
+//             converted_packet.h.len = len;
+//     
+//             if (len > 0 && len <= sizeof(converted_packet.payload)) {
+//                 memcpy(converted_packet.payload, payload, len);
+//             }
+//    
+//         if (s_hw) {
+//             s_hw->PrintLine("DAISY: Converted to pkt_t - type=0x%02X, len=%d", 
+//                            converted_packet.h.type, converted_packet.h.len);
+//         }
+//
+//         *out = &converted_packet;
+//         queue_head = (queue_head + 1) % MAX_QUEUED_MESSAGES;
+//         queue_count--;
+//         return 1;
+//     }
+//
+//     *out = NULL;
+//     return 0;
+// }
+
 void Spi_ValidateBuffers() {}
-void Spi_Recycle(pkt_t *p, int is_rx) {}
+// void Spi_Recycle(pkt_t *p, int is_rx) {}
 void Spi_ForceReset() {}
+
 bool Spi_HasPendingData(void) 
 { 
     // Perform regular bidirectional polling
-    PerformBidirectionalPoll();
+    WaveX::Comm::PerformBidirectionalPoll();
     
     // Return true if we have queued messages
     return queue_count > 0;
@@ -1042,7 +1087,46 @@ void Spi_DebugState() {
     }
 }
 
+// New function to poll, dequeue, and process a single SPI message
+void ProcessQueuedSpiMessage()
+{
+    // Poll for new messages
+    PerformBidirectionalPoll();
+
+    // Process one message from queue if available
+    if (queue_count > 0) {
+        uint8_t* packet_data = message_queue[queue_head];
+        size_t packet_size = get_packet_size(packet_data);
+        
+        if (s_hw) {
+            s_hw->PrintLine("DAISY: Dequeuing message for processing, type=0x%02X, len=%d, size=%d",
+                           packet_data[0], packet_data[3], (int)packet_size);
+        }
+        
+        // Process the message directly
+        ProcessSpiMessage(packet_data, packet_size);
+        
+        // Dequeue
+        queue_head = (queue_head + 1) % MAX_QUEUED_MESSAGES;
+        queue_count--;
+        
+        if (s_hw) {
+            s_hw->PrintLine("DAISY: Message processed and dequeued, remaining queue_count=%d", queue_count);
+        }
+    }
+}
+
 } // namespace Comm
 } // namespace WaveX
 
 #endif // WAVEX_SPI_LINK_ENABLED
+
+/** This is the HAL IRQ handler for pins 10-15. D0 is PB12 on the Daisy Seed. */
+extern "C" void EXTI15_10_IRQHandler(void)
+{
+    if(__HAL_GPIO_EXTI_GET_IT(GPIO_PIN_12) != 0)
+    {
+        __HAL_GPIO_EXTI_CLEAR_IT(GPIO_PIN_12);
+        g_esp32_attention_flag = true;
+    }
+}
