@@ -18,12 +18,14 @@ struct FileEntry {
 // - max_entries: capacity of out array.
 // - total_count: returns total number of entries in directory (excluding . and ..).
 // - start_index: first entry index to return.
+// - entries_written: returns actual number of entries written to out array.
 // Returns true on success.
 bool ListDir(const char* path,
              FileEntry* out,
              size_t max_entries,
              size_t& total_count,
-             size_t start_index);
+             size_t start_index,
+             size_t& entries_written);
 
 } // namespace Storage
 } // namespace WaveX

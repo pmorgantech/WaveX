@@ -392,6 +392,14 @@ int main(void)
         
         // Process any incoming SPI messages from ESP32
         process_incoming_spi_messages();
+        
+        // Log SPI processing to verify it continues during auditioning
+        #if WAVEX_MCU_LINK_PACKET_DEBUG
+        static uint32_t spi_debug_count = 0;
+        if (++spi_debug_count % 1000 == 0) {
+            WAVEX_LOG_DAISY(INTER_MCU_LINK, "SPI message processing active (loop %lu)", (unsigned long)loop_counter);
+        }
+        #endif
         bool send_sync = (current_time - last_sync >= 2000);
         bool send_beacon = (current_time - last_beacon >= 1000);
 
@@ -420,6 +428,10 @@ int main(void)
             if (send_beacon) {
                 // WAVEX_LOG_DAISY(INTER_MCU_LINK, "DEBUG: Preparing heartbeat packet");
                 // Send heartbeat via SPI with CPU usage
+                // Log heartbeat sending to verify it continues during auditioning
+                #if WAVEX_MCU_LINK_PACKET_DEBUG
+                WAVEX_LOG_DAISY(INTER_MCU_LINK, "Sending heartbeat during auditioning (if active)");
+                #endif
                 uint8_t payload[14]; // Extended to 14 bytes for CPU usage
                 payload[0] = (current_time >> 0) & 0xFF;
                 payload[1] = (current_time >> 8) & 0xFF;
@@ -440,6 +452,7 @@ int main(void)
                 payload[13] = (cpu_usage_scaled >> 8) & 0xFF;
 
                 // WAVEX_LOG_DAISY(INTER_MCU_LINK, "DEBUG: Sending heartbeat packet - calling Spi_Send");
+                // Heartbeat is fire-and-forget (no ACK needed)
                 int heartbeat_result = WaveX::Comm::Spi_Send(WaveX::Protocol::MSG_HEARTBEAT, payload, 14);  // Heartbeat packet type
                 // WAVEX_LOG_DAISY(INTER_MCU_LINK, "DEBUG: Heartbeat packet send result: %d", heartbeat_result);
 
@@ -462,10 +475,13 @@ int main(void)
             // }
         }
 
-        // TEMPORARILY DISABLED: Periodic meter update - Daisy (backend) sends to ESP32 (frontend)
-        // TODO: Re-enable after fixing browse request issue
+        // Periodic meter update - Daisy (backend) sends to ESP32 (frontend)
+        // DISABLED: Meter updates interfere with bidirectional communication needed for file browsing
         if(false && current_time - last_meter_send >= WAVEX_AUDIO_METERS_SEND_INTERVAL_MS) {
             last_meter_send = current_time;
+            #if WAVEX_MCU_LINK_PACKET_DEBUG
+            WAVEX_LOG_DAISY(INTER_MCU_LINK, "Sending meter update during auditioning (if active)");
+            #endif
             WaveX::AudioEngine::BlockMeters m;
             WaveX::AudioEngine::GetMeters(m);
             // Quantize to Q15 and clamp
@@ -484,11 +500,11 @@ int main(void)
             payload[6] = (uint8_t)(q_pkR & 0xFF);
             payload[7] = (uint8_t)(q_pkR >> 8);
 
-            // Send meter data using proper protocol message type (only if queue not full)
-            int result = WaveX::Comm::Spi_Send(WaveX::Protocol::MSG_METER_PUSH, payload, sizeof(payload));
+            // Meter data sending disabled - interferes with bidirectional communication
+            int result = 0; // Disabled
             if (!result) {
-                // Queue was full - skip this meter update to prevent spam
-                hw.PrintLine("DAISY: Skipped meter update - queue full");
+                // Meter updates disabled to prevent interference with file browsing
+                // hw.PrintLine("DAISY: Meter updates disabled");
             }
         }
 

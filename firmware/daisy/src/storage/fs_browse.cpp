@@ -14,7 +14,8 @@ bool ListDir(const char* path,
              FileEntry* out,
              size_t max_entries,
              size_t& total_count,
-             size_t start_index)
+             size_t start_index,
+             size_t& entries_written)
 {
     if(!path || !out || max_entries == 0) { total_count = 0; return false; }
 
@@ -71,8 +72,8 @@ bool ListDir(const char* path,
         e.name[sizeof(e.name) - 1] = '\0';
     }
     f_closedir(&dir);
-    // If fewer than max_entries found, that's fine.
-    (void)written;
+    // Return the actual number of entries written to the array
+    entries_written = written;
     return true;
 }
 

@@ -50,6 +50,13 @@ typedef struct {
     wavex_file_selected_cb_t file_selected_cb;
     wavex_directory_changed_cb_t dir_changed_cb;
     void* user_data;
+    
+    // Pagination state
+    uint32_t total_files;            // Total number of files in directory
+    uint32_t current_page;           // Current page being displayed
+    uint32_t entries_per_page;       // Entries per page (typically 4)
+    bool pagination_in_progress;     // True if we're currently loading more pages
+    uint32_t loaded_entries;         // Number of entries loaded so far
 } wavex_file_browser_t;
 
 // File browser functions

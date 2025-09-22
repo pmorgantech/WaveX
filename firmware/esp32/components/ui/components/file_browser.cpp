@@ -33,7 +33,8 @@ static wavex_file_browser_t* g_current_browser = NULL;
 static void file_list_event_cb(lv_event_t *e);
 static bool refresh_file_list(wavex_file_browser_t* browser);
 static bool parse_browse_response(const uint8_t* data, size_t length, wavex_file_entry_t* entries, uint32_t* count);
-static bool send_browse_request(const char* path);
+static bool parse_browse_response_with_pagination(const uint8_t* data, size_t length, wavex_file_entry_t* entries, uint32_t* count, uint32_t* total_files, uint8_t* current_page_entries);
+static bool send_browse_request(const char* path, uint8_t start_index = 0);
 static void update_visual_selection(wavex_file_browser_t* browser);
 static void browse_resp_callback(const uint8_t* data, size_t length, void* user_data);
 
@@ -60,6 +61,13 @@ wavex_file_browser_t* wavex_file_browser_create(lv_obj_t* parent, const wavex_fi
     memset(browser, 0, sizeof(wavex_file_browser_t));
     browser->config = *config;
     browser->selected_index = 0;
+    
+    // Initialize pagination state
+    browser->total_files = 0;
+    browser->current_page = 0;
+    browser->entries_per_page = 4;  // Daisy sends 4 entries per page
+    browser->pagination_in_progress = false;
+    browser->loaded_entries = 0;
     
     ESP_LOGI(TAG, "=== FILE_BROWSER_CREATE 4: About to copy root path ===");
     
@@ -322,15 +330,22 @@ static bool refresh_file_list(wavex_file_browser_t* browser)
     
     ESP_LOGI(TAG, "refresh_file_list called for path: %s", browser->current_path);
     
+    // Reset pagination state
+    browser->total_files = 0;
+    browser->current_page = 0;
+    browser->pagination_in_progress = true;
+    browser->loaded_entries = 0;
+    browser->entry_count = 0;
+    
     // Clear existing list items
     LV_LOCK();
     lv_obj_clean(browser->list);
     LV_UNLOCK();
-    browser->entry_count = 0;
     
-    // Send browse request to Daisy
-    if (!send_browse_request(browser->current_path)) {
+    // Send first browse request (page 0)
+    if (!send_browse_request(browser->current_path, 0)) {
         ESP_LOGE(TAG, "Failed to send browse request");
+        browser->pagination_in_progress = false;
         // Show error message
         LV_LOCK();
         lv_obj_clean(browser->list);
@@ -341,13 +356,9 @@ static bool refresh_file_list(wavex_file_browser_t* browser)
         LV_UNLOCK();
         return false;
     } else {
-        ESP_LOGI(TAG, "Sent browse request, waiting for response...");
-        // The browse_resp_callback will handle the response and call refresh_file_list again
+        ESP_LOGI(TAG, "Sent browse request for page 0, waiting for response...");
         return true;
     }
-    
-    ESP_LOGI(TAG, "Refreshed file list with %d entries", browser->entry_count);
-    return true;
 }
 
 // Parse browse response from Daisy
@@ -414,8 +425,72 @@ static bool parse_browse_response(const uint8_t* data, size_t length, wavex_file
     return true;
 }
 
+// Parse browse response with pagination information
+static bool parse_browse_response_with_pagination(const uint8_t* data, size_t length, wavex_file_entry_t* entries, uint32_t* count, uint32_t* total_files, uint8_t* current_page_entries)
+{
+    if (!data || length < sizeof(WaveX::Protocol::PacketHeader) + sizeof(WaveX::Protocol::BrowseRespHeader)) {
+        ESP_LOGE(TAG, "Browse response too short: %d bytes", (int)length);
+        *count = 0;
+        *total_files = 0;
+        *current_page_entries = 0;
+        return false;
+    }
+
+    // Parse as PacketHeader + payload format (not Packet structure)
+    const WaveX::Protocol::PacketHeader* header = (const WaveX::Protocol::PacketHeader*)data;
+    if (header->type != WaveX::Protocol::MSG_BROWSE_RESP) {
+        ESP_LOGE(TAG, "Wrong message type: expected %d, got %d", WaveX::Protocol::MSG_BROWSE_RESP, header->type);
+        *count = 0;
+        *total_files = 0;
+        *current_page_entries = 0;
+        return false;
+    }
+
+    const uint8_t* payload = data + sizeof(WaveX::Protocol::PacketHeader);
+    const WaveX::Protocol::BrowseRespHeader* browse_header = (const WaveX::Protocol::BrowseRespHeader*)payload;
+    *total_files = browse_header->total_count;
+    *current_page_entries = browse_header->n;
+
+    ESP_LOGI(TAG, "Browse response: total_count=%lu, n_entries=%u", (unsigned long)*total_files, *current_page_entries);
+    
+    // Parse file entries
+    uint32_t parsed_count = 0;
+    const WaveX::Protocol::FileEntryWire* wire_entries = (const WaveX::Protocol::FileEntryWire*)(payload + sizeof(WaveX::Protocol::BrowseRespHeader));
+
+    ESP_LOGI(TAG, "Starting file entry parsing: n_entries=%u, max_count=%u", *current_page_entries, *count);
+
+    for (uint8_t i = 0; i < *current_page_entries && parsed_count < *count; i++) {
+        const WaveX::Protocol::FileEntryWire* wire_entry = &wire_entries[i];
+        wavex_file_entry_t* entry = &entries[parsed_count];
+        
+        entry->is_directory = wire_entry->is_dir != 0;
+        entry->size_bytes = wire_entry->size_bytes;
+        
+        // Copy name with null termination
+        strncpy(entry->name, wire_entry->name, sizeof(entry->name) - 1);
+        entry->name[sizeof(entry->name) - 1] = '\0';
+        
+        // Build full path with bounds checking
+        const char* current_path = g_current_browser ? g_current_browser->current_path : "/";
+        int path_len = snprintf(entry->path, sizeof(entry->path), "%s/%s", current_path, entry->name);
+        if (path_len >= (int)sizeof(entry->path)) {
+            // Path was truncated, ensure null termination
+            entry->path[sizeof(entry->path) - 1] = '\0';
+            ESP_LOGW(TAG, "Path truncated for entry: %s", entry->name);
+        }
+        
+        parsed_count++;
+        
+        ESP_LOGI(TAG, "Parsed entry %d: '%s' (%s) - %lu bytes", 
+                 i, entry->name, entry->is_directory ? "DIR" : "FILE", (unsigned long)entry->size_bytes);
+    }
+
+    *count = parsed_count;
+    return true;
+}
+
 // Send browse request to Daisy
-static bool send_browse_request(const char* path)
+static bool send_browse_request(const char* path, uint8_t start_index)
 {
     ESP_LOGI(TAG, "=== SPI OPERATION 1: About to get LinkManager instance ===");
     
@@ -443,15 +518,15 @@ static bool send_browse_request(const char* path)
     // Cast to SpiLink - we know it's safe because is_spi_link() returned true
     SpiLink* spi_link = static_cast<SpiLink*>(link);
 
-    ESP_LOGI(TAG, "=== SPI OPERATION 5: About to call send_browse_req ===");
+    ESP_LOGI(TAG, "=== SPI OPERATION 5: About to call send_browse_req (start_index=%d) ===", start_index);
 
-    esp_err_t result = spi_link->send_browse_req(path);
+    esp_err_t result = spi_link->send_browse_req(path, start_index);
     if (result != ESP_OK) {
         ESP_LOGE(TAG, "Failed to send browse request: %d", result);
         return false;
     }
 
-    ESP_LOGI(TAG, "=== SPI OPERATION 6: Successfully sent browse request for path: %s ===", path);
+    ESP_LOGI(TAG, "=== SPI OPERATION 6: Successfully sent browse request for path: %s, start_index: %d ===", path, start_index);
     return true;
 }
 
@@ -482,26 +557,72 @@ static void browse_resp_callback(const uint8_t* data, size_t length, void* user_
         ESP_LOGI(TAG, "");
     }
     
-    // Parse the browse response
-    uint32_t entry_count = browser->config.max_entries;  // Pass max capacity, not 0
-    if (parse_browse_response(data, length, browser->entries, &entry_count)) {
-        browser->entry_count = entry_count;
-        ESP_LOGI(TAG, "Parsed %d file entries from browse response", entry_count);
+    // Parse the browse response to get total count and current page entries
+    wavex_file_entry_t temp_entries[4];  // Temporary array for current page
+    uint32_t temp_count = 4;
+    uint32_t total_files = 0;
+    uint8_t current_page_entries = 0;
+    
+    if (!parse_browse_response_with_pagination(data, length, temp_entries, &temp_count, &total_files, &current_page_entries)) {
+        ESP_LOGE(TAG, "Failed to parse browse response");
+        browser->pagination_in_progress = false;
+        // Show error message
+        LV_LOCK();
+        lv_obj_clean(browser->list);
+        lv_obj_t* btn = lv_list_add_btn(browser->list, NULL, "Error loading files");
+        ui_theme_apply_button_style(btn, false);
+        lv_obj_set_style_text_color(btn, UI_COLOR_TEXT, LV_PART_MAIN);
+        lv_obj_set_style_text_font(btn, &lv_font_montserrat_18, LV_PART_MAIN);
+        LV_UNLOCK();
+        return;
+    }
+    
+    // Update browser state
+    if (browser->current_page == 0) {
+        // First page - initialize total count
+        browser->total_files = total_files;
+        ESP_LOGI(TAG, "Total files in directory: %d", total_files);
+    }
+    
+    // Add current page entries to the browser's entry array
+    uint32_t start_index = browser->loaded_entries;
+    for (uint32_t i = 0; i < current_page_entries && (start_index + i) < browser->config.max_entries; i++) {
+        browser->entries[start_index + i] = temp_entries[i];
+        browser->loaded_entries++;
+    }
+    
+    ESP_LOGI(TAG, "Loaded page %d: %d entries, total loaded: %d/%d", 
+             browser->current_page, current_page_entries, browser->loaded_entries, browser->total_files);
+    
+    // Check if we need to load more pages
+    bool has_more_pages = (browser->loaded_entries < browser->total_files) && 
+                         (browser->loaded_entries < browser->config.max_entries);
+    
+    if (has_more_pages) {
+        // Request next page
+        browser->current_page++;
+        uint8_t next_start_index = browser->current_page * browser->entries_per_page;
         
-        // Log all parsed entries for debugging
-        for (uint32_t i = 0; i < entry_count; i++) {
-            ESP_LOGI(TAG, "Parsed Entry %d: %s (%s) - %s", i, 
-                    browser->entries[i].name,
-                    browser->entries[i].is_directory ? "DIR" : "FILE",
-                    browser->entries[i].path);
+        ESP_LOGI(TAG, "Requesting next page: start_index=%d", next_start_index);
+        if (!send_browse_request(browser->current_path, next_start_index)) {
+            ESP_LOGE(TAG, "Failed to request next page");
+            browser->pagination_in_progress = false;
         }
+        // Don't update UI yet - wait for all pages to load
+        return;
+    } else {
+        // All pages loaded (or reached max entries)
+        browser->pagination_in_progress = false;
+        browser->entry_count = browser->loaded_entries;
         
-        // Clear existing list items
+        ESP_LOGI(TAG, "Pagination complete: loaded %d entries", browser->entry_count);
+        
+        // Update UI with all loaded entries
         LV_LOCK();
         lv_obj_clean(browser->list);
         
         if (browser->entry_count > 0) {
-            // Create list items
+            // Create list items for all loaded entries
             for (uint32_t i = 0; i < browser->entry_count; i++) {
                 lv_obj_t* btn = lv_list_add_btn(browser->list, NULL, browser->entries[i].name);
                 
@@ -526,7 +647,7 @@ static void browse_resp_callback(const uint8_t* data, size_t length, void* user_
             // Update visual selection
             update_visual_selection(browser);
             
-            ESP_LOGI(TAG, "Updated file browser UI with %d entries", entry_count);
+            ESP_LOGI(TAG, "Updated file browser UI with %d entries", browser->entry_count);
         } else {
             // Show "No files found..." message
             lv_obj_t* btn = lv_list_add_btn(browser->list, NULL, "No files found...");
@@ -535,17 +656,13 @@ static void browse_resp_callback(const uint8_t* data, size_t length, void* user_
             lv_obj_set_style_text_font(btn, &lv_font_montserrat_18, LV_PART_MAIN);
             ESP_LOGI(TAG, "No files found in directory");
         }
+        
         LV_UNLOCK();
-    } else {
-        ESP_LOGE(TAG, "Failed to parse browse response");
-        // Show error message
-        LV_LOCK();
-        lv_obj_clean(browser->list);
-        lv_obj_t* btn = lv_list_add_btn(browser->list, NULL, "Error loading files");
-        ui_theme_apply_button_style(btn, false);
-        lv_obj_set_style_text_color(btn, UI_COLOR_TEXT, LV_PART_MAIN);
-        lv_obj_set_style_text_font(btn, &lv_font_montserrat_18, LV_PART_MAIN);
-        LV_UNLOCK();
+        
+        // Notify directory changed callback
+        if (browser->dir_changed_cb) {
+            browser->dir_changed_cb(browser->current_path, browser->user_data);
+        }
     }
 }
 

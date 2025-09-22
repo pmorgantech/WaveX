@@ -248,7 +248,7 @@ void Spi_Init(daisy::DaisySeed &hw, daisy::SpiHandle* hspi)
 // ============================================================================
 
 // Forward declarations for message processing functions
-static void ProcessBrowseRequest(const char* path);
+static void ProcessBrowseRequest(const char* path, size_t start_index = 0);
 static void ProcessSamplePlayRequest(const char* file_path);
 static void ProcessSampleStopRequest();
 
@@ -291,11 +291,11 @@ static void ProcessSpiMessage(const uint8_t* packet_data, size_t packet_size)
     // Process incoming SPI messages from ESP32
     switch (type) {
         case MSG_SYNC: {
-            // Synchronization message - acknowledge receipt
+            // Synchronization message from ESP32
             if (s_hw) {
-                s_hw->PrintLine("DAISY: Received MSG_SYNC (0x00), acknowledging");
+                s_hw->PrintLine("DAISY: Received MSG_SYNC (0x00) from ESP32");
             }
-            // For now, just acknowledge the sync - could add sync-specific logic later
+            // No action needed for SYNC - it's just a keepalive
             break;
         }
         
@@ -314,21 +314,42 @@ static void ProcessSpiMessage(const uint8_t* packet_data, size_t packet_size)
             }
             
             char path[96] = {0};
+            size_t start_index = 0;
+            
             if (packet_type == 0x01 && len > 1) {
-                // New format: skip the message type byte (first byte of payload)
-                memcpy(path, &payload[1], len - 1);
-                path[len - 1] = '\0';
+                // New format: [MSG_BROWSE_REQ][start_index_byte][path_string]
+                if (len >= 2) {
+                    start_index = payload[1]; // Second byte is start_index
+                    if (len > 2) {
+                        // Copy path string (skip message type and start_index bytes)
+                        size_t path_len = len - 2;
+                        if (path_len < sizeof(path)) {
+                            memcpy(path, &payload[2], path_len);
+                            path[path_len] = '\0';
+                        } else {
+                            // Path too long, truncate
+                            memcpy(path, &payload[2], sizeof(path) - 1);
+                            path[sizeof(path) - 1] = '\0';
+                        }
+                    } else {
+                        // No path provided, default to root
+                        strcpy(path, "/");
+                    }
+                } else {
+                    // Only message type, no start_index or path
+                    strcpy(path, "/");
+                }
             } else {
                 // Default to root if no path provided
                 strcpy(path, "/");
             }
 
             if (s_hw) {
-                s_hw->PrintLine("DAISY: Browse request path: '%s'", path);
+                s_hw->PrintLine("DAISY: Browse request path: '%s', start_index: %d", path, (int)start_index);
             }
 
-            // Process browse request
-            ProcessBrowseRequest(path);
+            // Process browse request with pagination
+            ProcessBrowseRequest(path, start_index);
             break;
         }
 
@@ -435,6 +456,8 @@ int Spi_Send(uint16_t type, const void* payload, uint16_t len)
     }
 }
 
+// Meter data sending disabled - interferes with bidirectional communication
+
 // Send large packet (data packet format) - for bulk data like browse responses
 int Spi_SendLargePacket(const uint8_t* packet_data, size_t packet_size)
 {
@@ -505,14 +528,14 @@ int Spi_Poll_For_Response(void)
 // Message Processing Implementations
 // ============================================================================
 
-static void ProcessBrowseRequest(const char* path)
+static void ProcessBrowseRequest(const char* path, size_t start_index)
 {
     using namespace WaveX::Storage;
     using namespace WaveX::Protocol;
 
     // Log browse request receipt
     if (s_hw) {
-        s_hw->PrintLine("DAISY: Received browse request for path: '%s'", path);
+        s_hw->PrintLine("DAISY: Received browse request for path: '%s', start_index: %d", path, (int)start_index);
     }
 
     // Buffer for response packet  
@@ -521,16 +544,16 @@ static void ProcessBrowseRequest(const char* path)
     // Get directory listing
     FileEntry entries[4]; // Max 4 entries per response to fit in 255-byte packet limit
     size_t total_count = 0;
-    size_t start_index = 0; // TODO: Support pagination in future
+    size_t entries_written = 0;
 
     if (s_hw) {
-        s_hw->PrintLine("DAISY: Calling ListDir for path: '%s'", path);
+        s_hw->PrintLine("DAISY: Calling ListDir for path: '%s', start_index: %d", path, (int)start_index);
     }
 
-    bool success = ListDir(path, entries, sizeof(entries)/sizeof(entries[0]), total_count, start_index);
+    bool success = ListDir(path, entries, sizeof(entries)/sizeof(entries[0]), total_count, start_index, entries_written);
 
     if (s_hw) {
-        s_hw->PrintLine("DAISY: ListDir result: success=%d, total_count=%d", success, (int)total_count);
+        s_hw->PrintLine("DAISY: ListDir result: success=%d, total_count=%d, entries_written=%d", success, (int)total_count, (int)entries_written);
     }
 
     if (!success) {
@@ -549,12 +572,14 @@ static void ProcessBrowseRequest(const char* path)
     uint8_t num_entries = 0;
 
     if (s_hw) {
-        s_hw->PrintLine("DAISY: Converting %d file entries to wire format", (int)total_count);
+        s_hw->PrintLine("DAISY: Converting %d file entries to wire format", (int)entries_written);
     }
 
-    for (size_t i = 0; i < sizeof(entries)/sizeof(entries[0]) && num_entries < 4; i++) {
-        if (entries[i].name[0] == '\0') break; // End of valid entries
-
+    // Process only the entries that were actually filled by ListDir
+    // ListDir fills entries sequentially starting from index 0
+    size_t max_entries_to_process = std::min(entries_written, (size_t)4);
+    
+    for (size_t i = 0; i < max_entries_to_process; i++) {
         wire_entries[num_entries].is_dir = entries[i].is_dir;
         wire_entries[num_entries].size_bytes = entries[i].size_bytes;
         std::strncpy(wire_entries[num_entries].name, entries[i].name, sizeof(wire_entries[num_entries].name) - 1);
@@ -623,42 +648,29 @@ static void ProcessBrowseRequest(const char* path)
         s_hw->PrintLine("DAISY: Created browse response packet, size=%d bytes", (int)pkt_size);
     }
     
-    // Send browse response using custom large packet format that ESP32 will recognize
-    // The ESP32 expects packets starting with SYNC_BYTE (0xAA) for large packets
+    // Send browse response using the bidirectional communication system
+    // We need to use the outgoing message queue since the ESP32 expects bidirectional communication
     if (s_hw) {
-        s_hw->PrintLine("DAISY: Sending browse response using custom large packet format...");
+        s_hw->PrintLine("DAISY: Sending browse response using bidirectional communication...");
     }
     
-    // Create a PacketHeader format packet that the ESP32 expects
+    // CreateBrowseRespPacket already creates a complete Packet with PacketHeader
+    // Just copy the entire packet directly - no need to recreate the header
     uint8_t custom_packet[256] = {0};
-    custom_packet[0] = WaveX::Protocol::SYNC_BYTE;  // 0xAA - sync byte
-    custom_packet[1] = MSG_BROWSE_RESP;             // Message type
-    custom_packet[2] = (pkt_size - sizeof(PacketHeader)) & 0xFF;  // Payload length (8-bit)
-    custom_packet[3] = 0;  // Checksum (will be calculated)
+    size_t copy_size = (pkt_size < sizeof(custom_packet)) ? pkt_size : sizeof(custom_packet);
+    memcpy(custom_packet, response_buffer, copy_size);
     
-    // Copy the payload (skip the PacketHeader that was created)
-    const uint8_t* payload = response_buffer + sizeof(PacketHeader);
-    size_t payload_size = pkt_size - sizeof(PacketHeader);
-    memcpy(&custom_packet[4], payload, payload_size);
+    // Queue the message for bidirectional transmission instead of direct send
+    bool queued = QueueOutgoingMessage(custom_packet, DATA_PKT_SIZE);
     
-    // Calculate checksum over payload
-    uint8_t checksum = 0;
-    for (size_t i = 0; i < payload_size; i++) {
-        checksum ^= payload[i];
-    }
-    custom_packet[3] = checksum;
-    
-    // Send using Spi_SendPacket with DATA_PKT_SIZE
-    daisy::SpiHandle::Result result = Spi_SendPacket(custom_packet, DATA_PKT_SIZE);
-    
-    if (result == daisy::SpiHandle::Result::OK) {
+    if (queued) {
         s_stats.packets_sent++;
         if (s_hw) {
-            s_hw->PrintLine("DAISY: Browse response sent successfully");
+            s_hw->PrintLine("DAISY: Browse response queued for transmission");
         }
     } else {
         if (s_hw) {
-            s_hw->PrintLine("DAISY: Browse response send FAILED: %d", (int)result);
+            s_hw->PrintLine("DAISY: Failed to queue browse response - queue full");
         }
     }
 }

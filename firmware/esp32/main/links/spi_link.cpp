@@ -650,7 +650,7 @@ esp_err_t spi_link_init(void)
         .sclk_io_num     = WAVEX_ESP_SPI_SCLK,
         .quadwp_io_num   = -1,
         .quadhd_io_num   = -1,
-        .max_transfer_sz = CTRL_PKT_SIZE,
+        .max_transfer_sz = MAX_PKT_SIZE,  // Support large packets up to 256 bytes
         .flags           = SPICOMMON_BUSFLAG_SCLK | SPICOMMON_BUSFLAG_MOSI | SPICOMMON_BUSFLAG_MISO | SPICOMMON_BUSFLAG_GPIO_PINS,
     };
 
@@ -774,16 +774,15 @@ static void link_task(void *arg)
                 if (completed_trans == &rx_trans[i]) { completed_idx = i; break; }
             }
 
-            // Check if this was a poll request (0xFF) and we actually transmitted a message in this transaction.
-            if (completed_trans->rx_buffer && completed_idx >= 0) {
-                uint8_t* rx_data = (uint8_t*)completed_trans->rx_buffer;
-                if (rx_data[0] == 0xFF && rx_trans_had_message[completed_idx]) {
-                    // Clear the message from TX queue only if this transaction carried a message
-                    if (msg_queue_count > 0) {
-                        clear_transmitted_message_from_queue();
-                    }
+            // Clear ATTN signal after successful transmission
+            // If we had a message to send in this transaction, clear it from the queue
+            if (completed_idx >= 0 && rx_trans_had_message[completed_idx]) {
+                if (msg_queue_count > 0) {
+                    clear_transmitted_message_from_queue();
                 }
-                // Reset flag for this descriptor
+            }
+            // Reset flag for this descriptor
+            if (completed_idx >= 0) {
                 rx_trans_had_message[completed_idx] = false;
             }
             
@@ -791,8 +790,16 @@ static void link_task(void *arg)
             uint8_t* rx_data = (uint8_t*)completed_trans->rx_buffer;
             size_t rx_len = completed_trans->trans_len / 8; // Convert bits to bytes
             
-            ESP_LOGI(TAG, "Received %d bytes, first 4 bytes: %02X %02X %02X %02X",
+            ESP_LOGI(TAG, "Received %d bytes, first 4 bytes: %02X %02X %02X %02X", 
                      (int)rx_len, rx_data[0], rx_data[1], rx_data[2], rx_data[3]);
+            
+            // Debug: Check if this could be a large packet
+            if (rx_len >= 4 && rx_data[0] == WaveX::Protocol::SYNC_BYTE) {
+                ESP_LOGI(TAG, "DEBUG: This IS a large packet (starts with 0x%02X)", WaveX::Protocol::SYNC_BYTE);
+            } else {
+                ESP_LOGI(TAG, "DEBUG: Not a large packet - first byte=0x%02X, expected=0x%02X", 
+                         rx_data[0], WaveX::Protocol::SYNC_BYTE);
+            }
             
             // Debug: If we receive more than 4 bytes, show more data for debugging
             if (rx_len > 4) {
@@ -856,6 +863,8 @@ static void link_task(void *arg)
             } else if (rx_len >= 4 && rx_data[0] == WaveX::Protocol::SYNC_BYTE) {
                 // Large packet format (pkt_t) - starts with sync byte 0xAA
                 ESP_LOGI(TAG, "Detected large packet format (pkt_t)");
+                ESP_LOGI(TAG, "Large packet first 8 bytes: %02X %02X %02X %02X %02X %02X %02X %02X",
+                         rx_data[0], rx_data[1], rx_data[2], rx_data[3], rx_data[4], rx_data[5], rx_data[6], rx_data[7]);
                 handle_large_packet(rx_data, rx_len);
             } else if (rx_len >= 4 && rx_len <= 64) {
                 // Small control packet format (ctrl_pkt_t) - could be control messages from Daisy
