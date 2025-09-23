@@ -41,8 +41,9 @@ void PacketProcessor::process_data(const uint8_t* data, size_t length)
         uint8_t byte = data[i];
         
         if (!m_frame_state.in_progress) {
-            // Not in a frame - look for sync byte
-            if (byte == WaveX::Protocol::SYNC_BYTE) {
+            // Not in a frame - look for flexible packet type
+            if (WaveX::Protocol::ProtocolHandler::IsCommandPacketType(byte) || 
+                WaveX::Protocol::ProtocolHandler::IsDataPacketType(byte)) {
                 m_frame_state.in_progress = true;
                 m_frame_state.position = 0;
                 m_frame_state.expected_total = 0;
@@ -52,12 +53,17 @@ void PacketProcessor::process_data(const uint8_t* data, size_t length)
         } else {
             m_frame_state.buffer[m_frame_state.position++] = byte;
             
-            // Once we have 4 bytes (PacketHeader), compute expected total
-            if (m_frame_state.expected_total == 0 && m_frame_state.position >= 4) {
-                uint8_t type = m_frame_state.buffer[1];
-                uint8_t length = m_frame_state.buffer[2];
-                (void)type;
-                m_frame_state.expected_total = 4 + length; // header + payload
+            // Once we have the packet type, compute expected total
+            if (m_frame_state.expected_total == 0 && m_frame_state.position >= 1) {
+                uint8_t packet_type = m_frame_state.buffer[0];
+                m_frame_state.expected_total = WaveX::Protocol::ProtocolHandler::GetPacketSizeFromType(packet_type);
+                
+                if (m_frame_state.expected_total == 0) {
+                    // Invalid packet type, reset
+                    ESP_LOGW(TAG, "Invalid packet type: 0x%02X, resetting", packet_type);
+                    reset_frame_state();
+                    continue;
+                }
                 
                 if (m_frame_state.expected_total > sizeof(m_frame_state.buffer)) {
                     // Invalid, reset

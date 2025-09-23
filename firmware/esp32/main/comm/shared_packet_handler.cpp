@@ -4,98 +4,42 @@
 size_t SharedPacketHandler::create_control_change_packet(uint8_t* buffer, size_t buffer_size, 
                                                        uint8_t parameter, uint8_t channel, uint16_t value)
 {
-    if (buffer_size < 8) return 0; // Need at least 8 bytes: header(4) + payload(3) + checksum(1)
-    
-    WaveX::Protocol::ControlChangeMessage msg;
-    msg.parameter = parameter;
-    msg.channel = channel;
-    msg.value = value;
-    
-    return create_generic_packet(buffer, buffer_size, WaveX::Protocol::MSG_CONTROL_CHANGE, &msg, sizeof(msg));
+    return WaveX::Protocol::ProtocolHandler::CreateControlChangePacket(buffer, buffer_size, parameter, channel, value);
 }
 
 size_t SharedPacketHandler::create_note_on_packet(uint8_t* buffer, size_t buffer_size, 
                                                 uint8_t note, uint8_t velocity, uint8_t channel)
 {
-    if (buffer_size < 8) return 0; // Need at least 8 bytes: header(4) + payload(3) + checksum(1)
-    
-    WaveX::Protocol::NoteMessage msg;
-    msg.note = note;
-    msg.velocity = velocity;
-    msg.channel = channel;
-    msg.reserved = 0;
-    
-    return create_generic_packet(buffer, buffer_size, WaveX::Protocol::MSG_NOTE_ON, &msg, sizeof(msg));
+    return WaveX::Protocol::ProtocolHandler::CreateNoteOnPacket(buffer, buffer_size, note, velocity, channel);
 }
 
 size_t SharedPacketHandler::create_note_off_packet(uint8_t* buffer, size_t buffer_size, 
                                                  uint8_t note, uint8_t channel)
 {
-    if (buffer_size < 8) return 0; // Need at least 8 bytes: header(4) + payload(3) + checksum(1)
-    
-    WaveX::Protocol::NoteMessage msg;
-    msg.note = note;
-    msg.velocity = 0; // Note off
-    msg.channel = channel;
-    msg.reserved = 0;
-    
-    return create_generic_packet(buffer, buffer_size, WaveX::Protocol::MSG_NOTE_OFF, &msg, sizeof(msg));
+    return WaveX::Protocol::ProtocolHandler::CreateNoteOffPacket(buffer, buffer_size, note, channel);
 }
 
 size_t SharedPacketHandler::create_sample_ctrl_packet(uint8_t* buffer, size_t buffer_size, 
                                                     uint8_t slot, uint8_t cmd, float rate)
 {
-    if (buffer_size < 12) return 0; // Need at least 12 bytes: header(4) + payload(7) + checksum(1)
-    
     WaveX::Protocol::SampleCtrlMessage msg;
     msg.slot = slot;
     msg.cmd = cmd;
     msg.rate = rate;
     
-    return create_generic_packet(buffer, buffer_size, WaveX::Protocol::MSG_SAMPLE_CTRL, &msg, sizeof(msg));
+    return WaveX::Protocol::ProtocolHandler::CreateSampleCtrlPacket(buffer, buffer_size, msg);
 }
 
 size_t SharedPacketHandler::create_preview_req_packet(uint8_t* buffer, size_t buffer_size, 
                                                     uint8_t slot, uint32_t start, uint32_t end, uint16_t decim)
 {
-    if (buffer_size < 16) return 0; // Need at least 16 bytes: header(4) + payload(11) + checksum(1)
-    
     WaveX::Protocol::PreviewReqMessage msg;
     msg.slot = slot;
     msg.start = start;
     msg.end = end;
     msg.decim = decim;
     
-    return create_generic_packet(buffer, buffer_size, WaveX::Protocol::MSG_PREVIEW_REQ, &msg, sizeof(msg));
-}
-
-size_t SharedPacketHandler::create_generic_packet(uint8_t* buffer, size_t buffer_size, 
-                                                uint8_t msg_type, const void* payload, size_t payload_size)
-{
-    if (buffer_size < 4 + payload_size + 1) return 0; // header(4) + payload + checksum(1)
-    
-    size_t pos = 0;
-    
-    // SYNC byte
-    buffer[pos++] = WaveX::Protocol::SYNC_BYTE;
-    
-    // Message type
-    buffer[pos++] = msg_type;
-    
-    // Payload length
-    buffer[pos++] = (uint8_t)payload_size;
-    
-    // Copy payload
-    if (payload && payload_size > 0) {
-        memcpy(&buffer[pos], payload, payload_size);
-        pos += payload_size;
-    }
-    
-    // Calculate and add checksum
-    uint8_t checksum = calculate_checksum(&buffer[4], payload_size);
-    buffer[pos++] = checksum;
-    
-    return pos;
+    return WaveX::Protocol::ProtocolHandler::CreatePreviewReqPacket(buffer, buffer_size, msg);
 }
 
 uint8_t SharedPacketHandler::calculate_checksum(const uint8_t* payload, size_t length)
@@ -109,18 +53,23 @@ uint8_t SharedPacketHandler::calculate_checksum(const uint8_t* payload, size_t l
 
 bool SharedPacketHandler::validate_packet_header(const uint8_t* data, size_t length)
 {
-    if (length < 4) return false;
+    if (!data || length < 5) return false;
     
-    // Check sync byte
-    if (data[0] != WaveX::Protocol::SYNC_BYTE) return false;
+    // Check if it's a valid flexible packet type
+    uint8_t packet_type = data[0];
+    if (!WaveX::Protocol::ProtocolHandler::IsCommandPacketType(packet_type) && 
+        !WaveX::Protocol::ProtocolHandler::IsDataPacketType(packet_type)) {
+        return false;
+    }
     
-    // Check payload length consistency
-    uint8_t payload_len = data[2];
-    if (length != 4 + payload_len + 1) return false; // header(4) + payload + checksum(1)
+    // Get expected packet size
+    size_t expected_size = WaveX::Protocol::ProtocolHandler::GetPacketSizeFromType(packet_type);
+    if (expected_size == 0 || length != expected_size) {
+        return false;
+    }
     
-    // Validate checksum
-    uint8_t expected_checksum = calculate_checksum(&data[4], payload_len);
-    return data[3 + payload_len] == expected_checksum;
+    // Validate CRC
+    return WaveX::Protocol::ProtocolHandler::ValidatePacketCrc(data, length);
 }
 
 uint8_t SharedPacketHandler::get_message_type(const uint8_t* data)

@@ -28,10 +28,6 @@ public:
     static size_t create_preview_req_packet(uint8_t* buffer, size_t buffer_size, 
                                           uint8_t slot, uint32_t start, uint32_t end, uint16_t decim);
     
-    // Create generic packet
-    static size_t create_generic_packet(uint8_t* buffer, size_t buffer_size, 
-                                      uint8_t msg_type, const void* payload, size_t payload_size);
-    
     // Calculate checksum for payload
     static uint8_t calculate_checksum(const uint8_t* payload, size_t length);
     

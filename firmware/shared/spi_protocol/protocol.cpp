@@ -5,425 +5,343 @@
 namespace WaveX {
 namespace Protocol {
 
-// Internal helper to build a packet with given type and payload
-static size_t BuildPacket(uint8_t* buffer, size_t buffer_size,
-                          uint8_t type, const void* payload, size_t payload_size)
-{
-    if (buffer_size < sizeof(PacketHeader) + payload_size) {
-        return 0;
-    }
+// Legacy packet creation functions removed - using flexible packet system only
 
-    Packet* packet = reinterpret_cast<Packet*>(buffer);
-    packet->header.sync = SYNC_BYTE;
-    packet->header.type = type;
-    // Check if payload size fits in uint8_t
-    if (payload_size > 255) {
-        return 0; // Payload too large for PacketHeader format
-    }
-    packet->header.length = static_cast<uint8_t>(payload_size);
+// Flexible packet system functions
 
-    if (payload_size > 0 && payload != NULL) {
-        memcpy(packet->payload, payload, payload_size);
+// Packet size lookup table
+size_t ProtocolHandler::GetPacketSizeFromType(uint8_t packet_type) {
+    switch (packet_type) {
+        // Command packets
+        case PKT_TYPE_CMD32:    return PKT_SIZE_32;
+        case PKT_TYPE_CMD64:    return PKT_SIZE_64;
+        case PKT_TYPE_CMD128:   return PKT_SIZE_128;
+        case PKT_TYPE_CMD256:   return PKT_SIZE_256;
+        case PKT_TYPE_CMD512:   return PKT_SIZE_512;
+        case PKT_TYPE_CMD1024:  return PKT_SIZE_1024;
+        case PKT_TYPE_CMD2048:  return PKT_SIZE_2048;
+        case PKT_TYPE_CMD4096:  return PKT_SIZE_4096;
+        
+        // Data packets
+        case PKT_TYPE_DATA32:   return PKT_SIZE_32;
+        case PKT_TYPE_DATA64:   return PKT_SIZE_64;
+        case PKT_TYPE_DATA128:  return PKT_SIZE_128;
+        case PKT_TYPE_DATA256:  return PKT_SIZE_256;
+        case PKT_TYPE_DATA512:  return PKT_SIZE_512;
+        case PKT_TYPE_DATA1024: return PKT_SIZE_1024;
+        case PKT_TYPE_DATA2048: return PKT_SIZE_2048;
+        case PKT_TYPE_DATA4096: return PKT_SIZE_4096;
+        
+        default:
+            return 0; // Unknown packet type
     }
-
-    packet->header.checksum = ProtocolHandler::CalculateChecksum(packet->payload, packet->header.length);
-    return sizeof(PacketHeader) + packet->header.length;
 }
 
+bool ProtocolHandler::IsCommandPacketType(uint8_t packet_type) {
+    return (packet_type >= 0x01 && packet_type <= 0x7F);
+}
+
+bool ProtocolHandler::IsDataPacketType(uint8_t packet_type) {
+    return (packet_type >= 0x80 && packet_type <= 0xFE);
+}
+
+// Get optimal packet type for given payload size
+uint8_t ProtocolHandler::GetOptimalPacketType(size_t payload_size, bool is_command) {
+    // Determine optimal packet size based on payload
+    size_t optimal_size = 32;  // Start with minimum size
+    
+    if (payload_size <= 20) {
+        optimal_size = 32;
+    } else if (payload_size <= 52) {
+        optimal_size = 64;
+    } else if (payload_size <= 116) {
+        optimal_size = 128;
+    } else if (payload_size <= 244) {
+        optimal_size = 256;
+    } else if (payload_size <= 500) {
+        optimal_size = 512;
+    } else if (payload_size <= 1012) {
+        optimal_size = 1024;
+    } else if (payload_size <= 2036) {
+        optimal_size = 2048;
+    } else if (payload_size <= 4068) {
+        optimal_size = 4096;
+    } else {
+        return PKT_TYPE_ERROR_VAL; // Payload too large
+    }
+    
+    // Return appropriate packet type based on command/data flag
+    if (is_command) {
+        switch (optimal_size) {
+            case 32:    return PKT_TYPE_CMD32;
+            case 64:    return PKT_TYPE_CMD64;
+            case 128:   return PKT_TYPE_CMD128;
+            case 256:   return PKT_TYPE_CMD256;
+            case 512:   return PKT_TYPE_CMD512;
+            case 1024:  return PKT_TYPE_CMD1024;
+            case 2048:  return PKT_TYPE_CMD2048;
+            case 4096:  return PKT_TYPE_CMD4096;
+            default:    return PKT_TYPE_ERROR_VAL;
+        }
+    } else {
+        switch (optimal_size) {
+            case 32:    return PKT_TYPE_DATA32;
+            case 64:    return PKT_TYPE_DATA64;
+            case 128:   return PKT_TYPE_DATA128;
+            case 256:   return PKT_TYPE_DATA256;
+            case 512:   return PKT_TYPE_DATA512;
+            case 1024:  return PKT_TYPE_DATA1024;
+            case 2048:  return PKT_TYPE_DATA2048;
+            case 4096:  return PKT_TYPE_DATA4096;
+            default:    return PKT_TYPE_ERROR_VAL;
+        }
+    }
+}
+
+// CRC calculation functions
+uint16_t ProtocolHandler::CalculateSpiCrc(const uint8_t* data, size_t length) {
+    uint16_t crc = 0xFFFF;
+    
+    for (size_t i = 0; i < length; i++) {
+        crc ^= data[i];
+        for (int j = 0; j < 8; j++) {
+            if (crc & 0x0001) {
+                crc = (crc >> 1) ^ 0x8408;
+            } else {
+                crc = crc >> 1;
+            }
+        }
+    }
+    
+    return crc;
+}
+
+// Optimized CRC calculation (CRC at end)
+uint16_t ProtocolHandler::CalculatePacketCrc(const uint8_t* packet_data, size_t packet_size) {
+    // Calculate CRC over entire packet except last 2 bytes (CRC field)
+    return CalculateSpiCrc(packet_data, packet_size - sizeof(uint16_t));
+}
+
+// Optimized CRC validation
+bool ProtocolHandler::ValidatePacketCrc(const uint8_t* packet_data, size_t packet_size) {
+    uint16_t calculated_crc = CalculatePacketCrc(packet_data, packet_size);
+    uint16_t received_crc = packet_data[packet_size - 2] | (packet_data[packet_size - 1] << 8);
+    return calculated_crc == received_crc;
+}
+
+// Zero-pad unused packet areas
+void ProtocolHandler::ZeroPadPacket(uint8_t* packet_data, size_t packet_size, size_t used_size) {
+    if (used_size < packet_size) {
+        memset(packet_data + used_size, 0, packet_size - used_size);
+    }
+}
+
+// Flexible packet system implementations for missing functions
+
+// Generic packet creation function - DRY principle
+static size_t CreateFlexiblePacket(uint8_t* buffer, size_t buffer_size, 
+                                 const void* payload_data, size_t payload_size, 
+                                 bool is_command_packet) {
+    // Determine optimal packet type
+    uint8_t packet_type = WaveX::Protocol::ProtocolHandler::GetOptimalPacketType(payload_size, is_command_packet);
+    if (packet_type == PKT_TYPE_ERROR_VAL) {
+        return 0; // Payload too large
+    }
+    
+    size_t packet_size = WaveX::Protocol::ProtocolHandler::GetPacketSizeFromType(packet_type);
+    if (packet_size == 0 || packet_size > buffer_size) {
+        return 0;
+    }
+    
+    // Create packet header
+    buffer[0] = packet_type;  // type
+    buffer[1] = 0;           // flags
+    buffer[2] = 0;           // seq (low byte)
+    buffer[3] = 0;           // seq (high byte)
+    buffer[4] = payload_size; // len
+    
+    // Copy payload data
+    if (payload_size > 0 && payload_data != NULL) {
+        memcpy(buffer + 5, payload_data, payload_size);
+    }
+    
+    // Zero pad remaining payload area
+    WaveX::Protocol::ProtocolHandler::ZeroPadPacket(buffer + 5 + payload_size, 
+                                                   packet_size - 5 - payload_size, 0);
+    
+    // Calculate CRC at end
+    uint16_t crc = WaveX::Protocol::ProtocolHandler::CalculatePacketCrc(buffer, packet_size);
+    buffer[packet_size - 2] = crc & 0xFF;
+    buffer[packet_size - 1] = (crc >> 8) & 0xFF;
+    
+    return packet_size;
+}
+
+// Create error packet using flexible packet system
+size_t ProtocolHandler::CreateErrorPacket(uint8_t* buffer, size_t buffer_size, const ErrorMessage& err) {
+    return CreateFlexiblePacket(buffer, buffer_size, &err, sizeof(ErrorMessage), true);
+}
+
+// Create sample status packet using flexible packet system
+size_t ProtocolHandler::CreateSampleStatusPacket(uint8_t* buffer, size_t buffer_size, const SampleStatusMessage& msg) {
+    return CreateFlexiblePacket(buffer, buffer_size, &msg, sizeof(SampleStatusMessage), true);
+}
+
+// Create browse response packet using flexible packet system
+size_t ProtocolHandler::CreateBrowseRespPacket(uint8_t* buffer, size_t buffer_size,
+                                             uint32_t total_count,
+                                             const FileEntryWire* entries,
+                                             uint8_t n) {
+    // Calculate payload size: total_count (4 bytes) + n_entries (1 byte) + entries array
+    size_t payload_size = sizeof(uint32_t) + sizeof(uint8_t) + (size_t)n * sizeof(FileEntryWire);
+    
+    // Create temporary payload buffer
+    uint8_t temp_payload[1024]; // Should be large enough for most cases
+    if (payload_size > sizeof(temp_payload)) {
+        return 0; // Payload too large
+    }
+    
+    // Copy total_count first
+    memcpy(temp_payload, &total_count, sizeof(uint32_t));
+    
+    // Copy n_entries count
+    temp_payload[sizeof(uint32_t)] = n;
+    
+    // Copy entries array
+    if (n > 0 && entries != NULL) {
+        memcpy(temp_payload + sizeof(uint32_t) + sizeof(uint8_t), entries, (size_t)n * sizeof(FileEntryWire));
+    }
+    
+    return CreateFlexiblePacket(buffer, buffer_size, temp_payload, payload_size, false);
+}
+
+// Create sample path response packet using flexible packet system
+size_t ProtocolHandler::CreateSamplePathResponsePacket(uint8_t* buffer, size_t buffer_size,
+                                                       const SamplePathResponseMessage& msg) {
+    return CreateFlexiblePacket(buffer, buffer_size, &msg, sizeof(SamplePathResponseMessage), true);
+}
+
+// Create control change packet using flexible packet system
 size_t ProtocolHandler::CreateControlChangePacket(uint8_t* buffer, size_t buffer_size,
-                                                uint8_t parameter, uint8_t channel, uint16_t value)
-{
-    ControlChangeMessage msg; memset(&msg, 0, sizeof(msg));
+                                                uint8_t parameter, uint8_t channel, uint16_t value) {
+    ControlChangeMessage msg;
     msg.parameter = parameter;
     msg.channel = channel;
     msg.value = value;
-    return BuildPacket(buffer, buffer_size, MSG_CONTROL_CHANGE, &msg, sizeof(msg));
+    return CreateFlexiblePacket(buffer, buffer_size, &msg, sizeof(ControlChangeMessage), true);
 }
 
+// Create note on packet using flexible packet system
 size_t ProtocolHandler::CreateNoteOnPacket(uint8_t* buffer, size_t buffer_size,
-                                         uint8_t note, uint8_t velocity, uint8_t channel)
-{
-    NoteMessage msg; memset(&msg, 0, sizeof(msg));
+                                         uint8_t note, uint8_t velocity, uint8_t channel) {
+    NoteMessage msg;
     msg.note = note;
     msg.velocity = velocity;
     msg.channel = channel;
     msg.reserved = 0;
-    return BuildPacket(buffer, buffer_size, MSG_NOTE_ON, &msg, sizeof(msg));
+    return CreateFlexiblePacket(buffer, buffer_size, &msg, sizeof(NoteMessage), true);
 }
 
+// Create note off packet using flexible packet system
 size_t ProtocolHandler::CreateNoteOffPacket(uint8_t* buffer, size_t buffer_size,
-                                          uint8_t note, uint8_t channel)
-{
-    NoteMessage msg; memset(&msg, 0, sizeof(msg));
+                                          uint8_t note, uint8_t channel) {
+    NoteMessage msg;
     msg.note = note;
     msg.velocity = 0;
     msg.channel = channel;
     msg.reserved = 0;
-    return BuildPacket(buffer, buffer_size, MSG_NOTE_OFF, &msg, sizeof(msg));
+    return CreateFlexiblePacket(buffer, buffer_size, &msg, sizeof(NoteMessage), true);
 }
 
+// Create sample control packet using flexible packet system
 size_t ProtocolHandler::CreateSampleCtrlPacket(uint8_t* buffer, size_t buffer_size,
-                                             const SampleCtrlMessage& msg)
-{
-    return BuildPacket(buffer, buffer_size, MSG_SAMPLE_CTRL, &msg, sizeof(msg));
+                                             const SampleCtrlMessage& msg) {
+    return CreateFlexiblePacket(buffer, buffer_size, &msg, sizeof(SampleCtrlMessage), true);
 }
 
+// Create preview request packet using flexible packet system
 size_t ProtocolHandler::CreatePreviewReqPacket(uint8_t* buffer, size_t buffer_size,
-                                             const PreviewReqMessage& msg)
-{
-    return BuildPacket(buffer, buffer_size, MSG_PREVIEW_REQ, &msg, sizeof(msg));
+                                             const PreviewReqMessage& msg) {
+    return CreateFlexiblePacket(buffer, buffer_size, &msg, sizeof(PreviewReqMessage), true);
 }
 
+// Create data request packet using flexible packet system
 size_t ProtocolHandler::CreateDataRequestPacket(uint8_t* buffer, size_t buffer_size,
-                                              const DataRequestMessage& msg)
-{
-    return BuildPacket(buffer, buffer_size, MSG_DATA_REQUEST, &msg, sizeof(msg));
+                                              const DataRequestMessage& msg) {
+    return CreateFlexiblePacket(buffer, buffer_size, &msg, sizeof(DataRequestMessage), true);
 }
 
+// Create meter push packet using flexible packet system
 size_t ProtocolHandler::CreateMeterPushPacket(uint8_t* buffer, size_t buffer_size,
-                                            const MeterPushMessage& msg)
-{
-    return BuildPacket(buffer, buffer_size, MSG_METER_PUSH, &msg, sizeof(msg));
+                                            const MeterPushMessage& msg) {
+    return CreateFlexiblePacket(buffer, buffer_size, &msg, sizeof(MeterPushMessage), true);
 }
 
-size_t ProtocolHandler::CreateWaveChunkPacket(uint8_t* buffer, size_t buffer_size,
-                                            const WaveChunkMessage& msg, const void* sample_data, size_t sample_data_size)
-{
-    // Create a combined payload: header + sample data
-    if (buffer_size < sizeof(PacketHeader) + sizeof(WaveChunkMessage) + sample_data_size) {
-        return 0;
-    }
-    
-    // First, create the wave chunk message payload
-    uint8_t combined_payload[sizeof(WaveChunkMessage) + MAX_PAYLOAD_SIZE];
-    memcpy(combined_payload, &msg, sizeof(WaveChunkMessage));
-    if (sample_data && sample_data_size > 0) {
-        memcpy(combined_payload + sizeof(WaveChunkMessage), sample_data, sample_data_size);
-    }
-    
-    return BuildPacket(buffer, buffer_size, MSG_WAVE_CHUNK, combined_payload, 
-                      sizeof(WaveChunkMessage) + sample_data_size);
-}
-
-size_t ProtocolHandler::CreateGenericPacket(uint8_t* buffer, size_t buffer_size,
-                                          uint8_t type, const void* payload, size_t payload_size)
-{
-    return BuildPacket(buffer, buffer_size, type, payload, payload_size);
-}
-
+// Create heartbeat packet using flexible packet system
 size_t ProtocolHandler::CreateHeartbeatPacket(uint8_t* buffer, size_t buffer_size,
-                                            const HeartbeatMessage& msg)
-{
-    return BuildPacket(buffer, buffer_size, MSG_HEARTBEAT, &msg, sizeof(msg));
+                                            const HeartbeatMessage& msg) {
+    return CreateFlexiblePacket(buffer, buffer_size, &msg, sizeof(HeartbeatMessage), true);
 }
 
-bool ProtocolHandler::ParseBrowseReq(const uint8_t* buffer, char* path_out, size_t path_max,
-                                     uint32_t& start_index, uint8_t& max_entries)
-{
-    if(!buffer || !path_out || path_max == 0) return false;
-    const Packet* p = reinterpret_cast<const Packet*>(buffer);
-    if(p->header.type != MSG_BROWSE_REQ) return false;
-    // Payload layout: path (null-terminated), start_index(u32), max_entries(u8)
-    const uint8_t* pay = p->payload;
-    size_t len = p->header.length;
-    // Find NUL within bounds
-    size_t i = 0;
-    while(i < len && pay[i] != 0) i++;
-    if(i >= len) return false;
-    size_t path_len = i + 1; // include NUL
-    size_t need = path_len + sizeof(uint32_t) + sizeof(uint8_t);
-    if(len < need) return false;
-    size_t copy = (path_len > path_max) ? (path_max - 1) : (path_len - 1);
-    memcpy(path_out, pay, copy);
-    path_out[copy] = 0;
-    const uint8_t* pidx = pay + path_len;
-    start_index = (uint32_t)pidx[0] | ((uint32_t)pidx[1] << 8) | ((uint32_t)pidx[2] << 16) | ((uint32_t)pidx[3] << 24);
-    max_entries = *(pidx + 4);
-    return true;
-}
-
-size_t ProtocolHandler::CreateBrowseRespPacket(uint8_t* buffer, size_t buffer_size,
-                                               uint32_t total_count,
-                                               const FileEntryWire* entries,
-                                               uint8_t n)
-{
-    if(n == 0 || !entries) n = 0;
-    size_t payload_size = sizeof(BrowseRespHeader) + (size_t)n * sizeof(FileEntryWire);
-    if(buffer_size < sizeof(PacketHeader) + payload_size) return 0;
-    uint8_t tmp[600];  // Increased to accommodate ~10 file entries (53 bytes each + header)
-    if(payload_size > sizeof(tmp)) return 0;
-    BrowseRespHeader hdr;
-    hdr.total_count = total_count;
-    hdr.n = n;
-    memcpy(tmp, &hdr, sizeof(hdr));
-    if(n) memcpy(tmp + sizeof(hdr), entries, (size_t)n * sizeof(FileEntryWire));
-    return BuildPacket(buffer, buffer_size, MSG_BROWSE_RESP, tmp, payload_size);
-}
-
-bool ProtocolHandler::ParseSamplePlayReq(const uint8_t* buffer, char* path_out, size_t path_max)
-{
-    if(!buffer || !path_out || path_max == 0) return false;
-    const Packet* p = reinterpret_cast<const Packet*>(buffer);
-    if(p->header.type != MSG_SAMPLE_PLAY_REQ) return false;
-    size_t len = p->header.length;
-    size_t copy = (len >= path_max) ? (path_max - 1) : len;
-    memcpy(path_out, p->payload, copy);
-    path_out[copy] = 0;
-    return true;
-}
-
-size_t ProtocolHandler::CreateSampleStatusPacket(uint8_t* buffer, size_t buffer_size,
-                                                 const SampleStatusMessage& msg)
-{
-    return BuildPacket(buffer, buffer_size, MSG_SAMPLE_STATUS, &msg, sizeof(msg));
-}
-
-size_t ProtocolHandler::CreateErrorPacket(uint8_t* buffer, size_t buffer_size,
-                                          const ErrorMessage& err)
-{
-    return BuildPacket(buffer, buffer_size, MSG_ERROR, &err, sizeof(err));
-}
-
-bool ProtocolHandler::ValidatePacket(const uint8_t* buffer, size_t length)
-{
-    if (length < sizeof(PacketHeader)) {
-        return false;
-    }
-    
-    const Packet* packet = reinterpret_cast<const Packet*>(buffer);
-    
-    // Check sync byte
-    if (packet->header.sync != SYNC_BYTE) {
-        return false;
-    }
-    
-    // Check packet length
-    if (length < sizeof(PacketHeader) + packet->header.length) {
-        return false;
-    }
-    
-    // Verify checksum
-    uint8_t calculated_checksum = CalculateChecksum(packet->payload, packet->header.length);
-    if (packet->header.checksum != calculated_checksum) {
-        return false;
-    }
-    
-    return true;
-}
-
-MessageType ProtocolHandler::GetMessageType(const uint8_t* buffer)
-{
-    const Packet* packet = reinterpret_cast<const Packet*>(buffer);
-    return static_cast<MessageType>(packet->header.type);
-}
-
-bool ProtocolHandler::ParseControlChange(const uint8_t* buffer, ControlChangeMessage& msg)
-{
-    return ParseMessage(buffer, MSG_CONTROL_CHANGE, &msg, sizeof(msg));
-}
-
-bool ProtocolHandler::ParseNoteMessage(const uint8_t* buffer, NoteMessage& msg)
-{
-    // Allow either NOTE_ON or NOTE_OFF
-    const Packet* packet = reinterpret_cast<const Packet*>(buffer);
-    if (packet->header.length != sizeof(NoteMessage)) return false;
-    if (packet->header.type != MSG_NOTE_ON && packet->header.type != MSG_NOTE_OFF) return false;
-    memcpy(&msg, packet->payload, sizeof(NoteMessage));
-    return true;
-}
-
-bool ProtocolHandler::ParseSampleCtrl(const uint8_t* buffer, SampleCtrlMessage& msg)
-{
-    return ParseMessage(buffer, MSG_SAMPLE_CTRL, &msg, sizeof(msg));
-}
-
-bool ProtocolHandler::ParsePreviewReq(const uint8_t* buffer, PreviewReqMessage& msg)
-{
-    return ParseMessage(buffer, MSG_PREVIEW_REQ, &msg, sizeof(msg));
-}
-
-bool ProtocolHandler::ParseDataRequest(const uint8_t* buffer, DataRequestMessage& msg)
-{
-    return ParseMessage(buffer, MSG_DATA_REQUEST, &msg, sizeof(msg));
-}
-
-bool ProtocolHandler::ParseMessage(const uint8_t* buffer, HeartbeatMessage& msg)
-{
-    return ParseMessage(buffer, MSG_HEARTBEAT, &msg, sizeof(msg));
-}
-
-bool ProtocolHandler::ParseMessage(const uint8_t* buffer, MessageType expected_type, void* out_payload, size_t out_payload_size)
-{
-    if (!buffer || !out_payload || out_payload_size == 0) return false;
-    const Packet* packet = reinterpret_cast<const Packet*>(buffer);
-    if (packet->header.type != expected_type) return false;
-    if (packet->header.length != out_payload_size) return false;
-    memcpy(out_payload, packet->payload, out_payload_size);
-    return true;
-}
-
-uint8_t ProtocolHandler::CalculateChecksum(const uint8_t* data, size_t length)
-{
-    uint8_t checksum = 0;
-    for (size_t i = 0; i < length; i++) {
-        checksum ^= data[i];
-    }
-    return checksum;
-}
-
-size_t ProtocolHandler::GetPacketSize(const uint8_t* buffer)
-{
-    const Packet* packet = reinterpret_cast<const Packet*>(buffer);
-    return sizeof(PacketHeader) + packet->header.length;
-}
-
+// Create ACK packet using flexible packet system
 size_t ProtocolHandler::CreateAckPacket(uint8_t* buffer, size_t buffer_size,
-                                       const AckMessage& ack)
-{
-    return BuildPacket(buffer, buffer_size, MSG_ACK, &ack, sizeof(ack));
+                                      const AckMessage& ack) {
+    return CreateFlexiblePacket(buffer, buffer_size, &ack, sizeof(AckMessage), true);
 }
 
-// SPI packet functions
-bool ProtocolHandler::ValidateSpiPacket(const uint8_t* data, size_t size)
-{
-    if (!data || size < 8) {
-        // Debug: Log validation failure
-        printf("ValidateSpiPacket: Failed basic checks - data=%p, size=%zu\n", data, size);
-        return false;
-    }
-    
-    uint8_t type = data[0];
-    uint8_t len = data[3];
-    
-    // Debug: Log packet details
-    printf("ValidateSpiPacket: type=0x%02X, len=%d, size=%zu\n", type, len, size);
-    printf("ValidateSpiPacket: First 8 bytes: %02X %02X %02X %02X %02X %02X %02X %02X\n",
-           data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7]);
-    printf("ValidateSpiPacket: SPI_CMD_PKT_SIZE=%zu, SPI_DATA_PKT_SIZE=%zu\n", 
-           SPI_CMD_PKT_SIZE, SPI_DATA_PKT_SIZE);
-    
-    // Validate packet type
-    if (type != 0x01 && type != 0x02) {
-        printf("ValidateSpiPacket: Invalid packet type 0x%02X\n", type);
-        return false;
-    }
-    
-    // Validate length based on packet type
-    if (type == 0x01) { // Command packet
-        if (len > 20 || size < SPI_CMD_PKT_SIZE) {
-            printf("ValidateSpiPacket: Command packet validation failed - len=%d, size=%zu, SPI_CMD_PKT_SIZE=%zu\n", 
-                   len, size, SPI_CMD_PKT_SIZE);
-            return false;
-        }
-    } else if (type == 0x02) { // Data packet
-        if (len > 244 || size < SPI_DATA_PKT_SIZE) {
-            printf("ValidateSpiPacket: Data packet validation failed - len=%d, size=%zu, SPI_DATA_PKT_SIZE=%zu\n", 
-                   len, size, SPI_DATA_PKT_SIZE);
-            return false;
-        }
-    }
-    
-    // Validate CRC (CRC is at fixed offset 4)
-    // Calculate CRC over header + payload (excluding CRC field itself)
-    uint8_t crc_data[4 + 20]; // Header (4) + max payload (20)
-    crc_data[0] = data[0]; // type
-    crc_data[1] = data[1]; // flags
-    crc_data[2] = data[2]; // seq
-    crc_data[3] = data[3]; // len
-    memcpy(&crc_data[4], &data[6], len); // payload (starts at offset 6)
-    uint16_t calculated_crc = CalculateSpiCrc(crc_data, 4 + len);
-    uint16_t received_crc = data[4] | (data[5] << 8);
-    
-    printf("ValidateSpiPacket: CRC check - calculated=0x%04X, received=0x%04X, len=%d\n", 
-           calculated_crc, received_crc, len);
-    
-    bool crc_valid = (calculated_crc == received_crc);
-    if (!crc_valid) {
-        printf("ValidateSpiPacket: CRC validation failed\n");
-    }
-    
-    return crc_valid;
-}
-
-size_t ProtocolHandler::GetSpiPacketSize(const uint8_t* data)
-{
-    if (!data) return 0;
-
-    uint8_t type = data[0];
-
-    // Command packets: type=0x01, length in byte 3
-    if (type == 0x01) {
-        return SPI_CMD_PKT_SIZE;
-    }
-
-    // Data packets: type=0x02, length in byte 3
-    if (type == 0x02) {
-        return SPI_DATA_PKT_SIZE;
-    }
-
-    // New large-packet format with sync header (PacketHeader)
-    if (type == SYNC_BYTE) {
-        const PacketHeader* hdr = reinterpret_cast<const PacketHeader*>(data);
-
-        // Basic sanity: avoid overruns; payload must fit in MAX_PAYLOAD_SIZE
-        if (hdr->length > MAX_PAYLOAD_SIZE) {
-            return 0;
-        }
-
-        return sizeof(PacketHeader) + hdr->length;
-    }
-
-    // If we get here, it's likely a data packet with unknown type
-    // Check if it looks like a data packet by examining the structure
-    if (data[1] == 0x00 && data[2] == 0x00 && data[3] <= 244) {
-        // Looks like a data packet structure
-        return SPI_DATA_PKT_SIZE;
-    }
-
-    // Default to command packet size for unknown formats
-    return SPI_CMD_PKT_SIZE;
-}
-
-uint16_t ProtocolHandler::CalculateSpiCrc(const uint8_t* data, size_t length)
-{
-    uint16_t crc = 0xFFFF;
-    for (size_t i = 0; i < length; i++) {
-        crc ^= (uint16_t)data[i] << 8;
-        for (int b = 0; b < 8; b++) {
-            crc = (crc & 0x8000) ? (crc << 1) ^ 0x1021 : (crc << 1);
-        }
-    }
-    return crc;
-}
-
-bool ProtocolHandler::IsCommandPacket(const uint8_t* data)
-{
-    return data && data[0] == 0x01;
-}
-
-bool ProtocolHandler::IsDataPacket(const uint8_t* data)
-{
-    return data && data[0] == 0x02;
-}
-
-// Index-based file selection packet creators
+// Create sample play index packet using flexible packet system
 size_t ProtocolHandler::CreateSamplePlayIndexPacket(uint8_t* buffer, size_t buffer_size,
-                                                  const SamplePlayIndexMessage& msg)
-{
-    return BuildPacket(buffer, buffer_size, MSG_SAMPLE_PLAY_INDEX_REQ, &msg, sizeof(msg));
+                                                  const SamplePlayIndexMessage& msg) {
+    return CreateFlexiblePacket(buffer, buffer_size, &msg, sizeof(SamplePlayIndexMessage), true);
 }
 
+// Create sample get path packet using flexible packet system
 size_t ProtocolHandler::CreateSampleGetPathPacket(uint8_t* buffer, size_t buffer_size,
-                                                const SampleGetPathMessage& msg)
-{
-    return BuildPacket(buffer, buffer_size, MSG_SAMPLE_GET_PATH_REQ, &msg, sizeof(msg));
+                                                const SampleGetPathMessage& msg) {
+    return CreateFlexiblePacket(buffer, buffer_size, &msg, sizeof(SampleGetPathMessage), true);
 }
 
-size_t ProtocolHandler::CreateSamplePathResponsePacket(uint8_t* buffer, size_t buffer_size,
-                                                     const SamplePathResponseMessage& msg)
-{
-    return BuildPacket(buffer, buffer_size, MSG_SAMPLE_GET_PATH_RESP, &msg, sizeof(msg));
+// Parse browse request from flexible packet
+bool ProtocolHandler::ParseBrowseReq(const uint8_t* buffer, char* path_out, size_t path_max,
+                                     uint32_t& start_index, uint8_t& max_entries) {
+    if (buffer == NULL || path_out == NULL) {
+        return false;
+    }
+    
+    // Parse browse request payload: path (null-terminated) + start_index (4 bytes) + max_entries (1 byte)
+    size_t path_len = strlen((const char*)buffer);
+    if (path_len >= path_max) {
+        return false; // Path too long
+    }
+    
+    // Extract path
+    strncpy(path_out, (const char*)buffer, path_max - 1);
+    path_out[path_max - 1] = '\0';
+    
+    // Extract start_index and max_entries
+    const uint8_t* data_ptr = buffer + path_len + 1;
+    if (data_ptr + sizeof(uint32_t) + sizeof(uint8_t) > buffer + 1024) { // Safety check
+        return false;
+    }
+    
+    start_index = *(const uint32_t*)data_ptr;
+    data_ptr += sizeof(uint32_t);
+    max_entries = *data_ptr;
+    
+    return true;
+}
+
+// Parse sample play request from flexible packet
+bool ProtocolHandler::ParseSamplePlayReq(const uint8_t* buffer, char* path_out, size_t path_max) {
+    if (buffer == NULL || path_out == NULL) {
+        return false;
+    }
+    
+    // Parse sample play request payload: path (null-terminated)
+    strncpy(path_out, (const char*)buffer, path_max - 1);
+    path_out[path_max - 1] = '\0';
+    return true;
 }
 
 } // namespace Protocol
-} // namespace WaveX 
+} // namespace WaveX

@@ -25,12 +25,13 @@
 
 using namespace daisy;
 
-// Use shared packet structures
-#define CMD_PKT_SIZE WaveX::Protocol::SPI_CMD_PKT_SIZE
-#define DATA_PKT_SIZE WaveX::Protocol::SPI_DATA_PKT_SIZE
+// Use flexible packet structures
+#define CMD_PKT_SIZE WaveX::Protocol::PKT_SIZE_32
+#define DATA_PKT_SIZE WaveX::Protocol::PKT_SIZE_1024  // Increased from 256 to 1024 bytes
+#define MAX_PKT_SIZE WaveX::Protocol::MAX_PKT_SIZE  // Support up to 4KB packets
 
-typedef WaveX::Protocol::SpiCommandPacket cmd_pkt_t;
-typedef WaveX::Protocol::SpiDataPacket data_pkt_t;
+typedef WaveX::Protocol::SpiCommandPacket32 cmd_pkt_t;
+typedef WaveX::Protocol::SpiDataPacket1024 data_pkt_t;  // Updated to use 1024-byte packet
 
 // Legacy compatibility - use command packet size as default
 #define CTRL_PKT_SIZE CMD_PKT_SIZE
@@ -38,11 +39,24 @@ typedef WaveX::Protocol::SpiDataPacket data_pkt_t;
 // Use shared CRC function
 #define crc16_ccitt WaveX::Protocol::ProtocolHandler::CalculateSpiCrc
 
-// Use shared packet functions
-#define is_command_packet WaveX::Protocol::ProtocolHandler::IsCommandPacket
-#define is_data_packet WaveX::Protocol::ProtocolHandler::IsDataPacket
-#define validate_packet WaveX::Protocol::ProtocolHandler::ValidateSpiPacket
-#define get_packet_size WaveX::Protocol::ProtocolHandler::GetSpiPacketSize
+// Use flexible packet system functions
+#define get_packet_size_from_type WaveX::Protocol::ProtocolHandler::GetPacketSizeFromType
+#define is_command_packet_type WaveX::Protocol::ProtocolHandler::IsCommandPacketType
+#define is_data_packet_type WaveX::Protocol::ProtocolHandler::IsDataPacketType
+#define get_optimal_packet_type WaveX::Protocol::ProtocolHandler::GetOptimalPacketType
+#define calculate_packet_crc WaveX::Protocol::ProtocolHandler::CalculatePacketCrc
+#define validate_packet_crc WaveX::Protocol::ProtocolHandler::ValidatePacketCrc
+#define zero_pad_packet WaveX::Protocol::ProtocolHandler::ZeroPadPacket
+
+// Legacy function compatibility (for functions that were removed)
+#define validate_packet validate_packet_crc
+
+// Compatibility function for get_packet_size - extracts packet type from packet data
+static size_t get_packet_size(const uint8_t* packet_data) {
+    if (!packet_data) return 0;
+    uint8_t packet_type = packet_data[0];
+    return get_packet_size_from_type(packet_type);
+}
 
 // ============================================================================
 // Module-level static variables
@@ -74,6 +88,10 @@ static char s_current_directory[96] = "/";
 static WaveX::Storage::FileEntry s_current_file_entries[50]; // Increased to accommodate more files
 static size_t s_current_file_count = 0;
 static bool s_directory_state_valid = false;
+
+// Message deduplication - simple approach for single-threaded execution
+static uint8_t s_last_processed_packet[32] = {0};
+static bool s_has_last_packet = false;
 
 // Forward declarations will be inside namespace
 
@@ -120,8 +138,11 @@ static daisy::SpiHandle::Result Spi_SendPacket(const uint8_t* tx_buf, size_t pac
         return daisy::SpiHandle::Result::ERR;
     }
 
-    // Validate packet size
-    if (packet_size != CMD_PKT_SIZE && packet_size != DATA_PKT_SIZE) {
+    // Validate packet size - allow flexible packet sizes
+    if (packet_size != CMD_PKT_SIZE && packet_size != DATA_PKT_SIZE && 
+        packet_size != WaveX::Protocol::PKT_SIZE_64 && packet_size != WaveX::Protocol::PKT_SIZE_128 &&
+        packet_size != WaveX::Protocol::PKT_SIZE_256 && packet_size != WaveX::Protocol::PKT_SIZE_512 &&
+        packet_size != WaveX::Protocol::PKT_SIZE_2048 && packet_size != WaveX::Protocol::PKT_SIZE_4096) {
         if (s_hw) s_hw->PrintLine("Spi_SendPacket ERROR: Invalid packet size: %d", (int)packet_size);
         return daisy::SpiHandle::Result::ERR;
     }
@@ -271,27 +292,58 @@ static void ProcessSpiMessage(const uint8_t* packet_data, size_t packet_size)
         s_hw->PrintLine("DAISY: Received packet bytes: %02X %02X %02X %02X %02X %02X %02X %02X", 
                         packet_data[0], packet_data[1], packet_data[2], packet_data[3],
                         packet_data[4], packet_data[5], packet_data[6], packet_data[7]);
+        s_hw->PrintLine("DAISY: Packet size: %d bytes", (int)packet_size);
     }
     
-    // Validate packet first
-    if (!validate_packet(packet_data, packet_size)) {
+    uint8_t packet_type = packet_data[0]; // Packet type
+    
+    // Validate packet using flexible packet system
+    if (is_command_packet_type(packet_type) || is_data_packet_type(packet_type)) {
+        // New flexible packet format
+        size_t expected_size = get_packet_size_from_type(packet_type);
         if (s_hw) {
-            s_hw->PrintLine("DAISY: Invalid packet received, dropping");
+            s_hw->PrintLine("DAISY: Packet validation - type=0x%02X, expected_size=%d, received_size=%d", 
+                           packet_type, (int)expected_size, (int)packet_size);
+        }
+        if (expected_size == 0 || packet_size != expected_size) {
+            if (s_hw) {
+                s_hw->PrintLine("DAISY: Invalid flexible packet size: type=0x%02X, expected=%d, received=%d", 
+                               packet_type, (int)expected_size, (int)packet_size);
+            }
+            return;
+        }
+        
+        // Validate CRC
+        if (!validate_packet_crc(packet_data, packet_size)) {
+            if (s_hw) {
+                s_hw->PrintLine("DAISY: Flexible packet CRC validation failed");
+                // Debug: Show CRC bytes
+                uint16_t received_crc = packet_data[packet_size - 2] | (packet_data[packet_size - 1] << 8);
+                uint16_t calculated_crc = calculate_packet_crc(packet_data, packet_size);
+                s_hw->PrintLine("DAISY: CRC debug - received=0x%04X, calculated=0x%04X", received_crc, calculated_crc);
+                s_hw->PrintLine("DAISY: CRC bytes - [%d]=0x%02X, [%d]=0x%02X", 
+                               (int)packet_size-2, packet_data[packet_size-2], 
+                               (int)packet_size-1, packet_data[packet_size-1]);
+            }
+            return;
+        }
+    } else {
+        if (s_hw) {
+            s_hw->PrintLine("DAISY: Unknown packet type: 0x%02X", packet_type);
         }
         return;
     }
 
-    uint8_t packet_type = packet_data[0]; // Packet type (0x01=CMD, 0x02=DATA)
-    uint8_t len = packet_data[3];
-    const uint8_t* payload = &packet_data[6]; // Payload is now at offset 6 (after header + CRC)
+    uint8_t len = packet_data[4]; // Payload length (offset 4 in flexible format)
+    const uint8_t* payload = &packet_data[5]; // Payload starts at offset 5 in flexible format
     
     // Determine message type based on packet format
     uint8_t type;
-    if (packet_type == 0x01 && len > 0) {
-        // New format: message type is in first byte of payload
+    if (is_command_packet_type(packet_type) && len > 0) {
+        // Flexible command packet: message type is in first byte of payload
         type = payload[0];
-    } else if (packet_type == 0x01 && len == 0) {
-        // No-data response: treat as MSG_ACK
+    } else if (is_command_packet_type(packet_type) && len == 0) {
+        // No-data command packet: treat as MSG_ACK
         type = MSG_ACK;
     } else {
         // Fallback: use packet type as message type
@@ -322,9 +374,7 @@ static void ProcessSpiMessage(const uint8_t* packet_data, size_t packet_size)
             char path[96] = {0};
             size_t start_index = 0;
             
-            
             if (packet_type == 0x01 && len > 1) {
-                // Format: [MSG_BROWSE_REQ][start_index_byte][path_string]
                 // ESP32 sends: payload[0] = MSG_BROWSE_REQ (0x30), payload[1] = start_index, payload[2+] = path
                 if (len >= 2) {
                     start_index = payload[1]; // Second byte is start_index (skip message type)
@@ -362,6 +412,7 @@ static void ProcessSpiMessage(const uint8_t* packet_data, size_t packet_size)
                 // Default to root if no path provided
                 strcpy(path, "/");
             }
+            
             
 
             WAVEX_LOG_DAISY_MESSAGE(DAISY_SPI_MESSAGE, "IN MSG BROWSE_REQ path=%s", path);
@@ -505,7 +556,7 @@ int Spi_Send(uint16_t type, const void* payload, uint16_t len)
 
 // Meter data sending disabled - interferes with bidirectional communication
 
-// Send large packet (data packet format) - for bulk data like browse responses
+// Send large packet using flexible packet system
 int Spi_SendLargePacket(const uint8_t* packet_data, size_t packet_size)
 {
     if (!g_spi_handle) {
@@ -518,38 +569,64 @@ int Spi_SendLargePacket(const uint8_t* packet_data, size_t packet_size)
         return 0;
     }
     
-    if (packet_size > 240) { // Max data payload size
-        if (s_hw) s_hw->PrintLine("Spi_SendLargePacket ERROR: Packet too large: %d bytes", (int)packet_size);
+    // Determine optimal packet type for the payload size
+    uint8_t packet_type = get_optimal_packet_type(packet_size, false); // false = data packet
+    if (packet_type == PKT_TYPE_ERROR_VAL) {
+        if (s_hw) s_hw->PrintLine("Spi_SendLargePacket ERROR: Payload too large: %d bytes", (int)packet_size);
         return 0;
     }
     
-    // Create data packet
-    data_pkt_t data_pkt = {0};
-    data_pkt.type = 0x02; // Data packet type
-    data_pkt.flags = 0;   // No special flags
-    data_pkt.seq = 0;     // Sequence number (not used for now)
-    data_pkt.len = packet_size;
-    
-    memcpy(data_pkt.payload, packet_data, packet_size);
-    
-    // Calculate CRC
-    data_pkt.crc = crc16_ccitt((uint8_t*)&data_pkt, 4 + data_pkt.len);
-    
-    if (s_hw) {
-        s_hw->PrintLine("DAISY: Sending large packet - size=%d bytes", (int)packet_size);
-        s_hw->PrintLine("DAISY: Data packet header: %02X %02X %02X %02X", 
-                       data_pkt.type, data_pkt.flags, data_pkt.seq, data_pkt.len);
+    // Get packet size for the selected type
+    size_t packet_struct_size = get_packet_size_from_type(packet_type);
+    if (packet_struct_size == 0) {
+        if (s_hw) s_hw->PrintLine("Spi_SendLargePacket ERROR: Unknown packet type: 0x%02X", packet_type);
+        return 0;
     }
     
-    // Send using the new packet function
-    daisy::SpiHandle::Result result = Spi_SendPacket((uint8_t*)&data_pkt, DATA_PKT_SIZE);
+    // Allocate buffer for the packet
+    uint8_t* packet_buffer = (uint8_t*)malloc(packet_struct_size);
+    if (!packet_buffer) {
+        if (s_hw) s_hw->PrintLine("Spi_SendLargePacket ERROR: Failed to allocate %d bytes", (int)packet_struct_size);
+        return 0;
+    }
+    
+    // Zero-pad the entire packet
+    memset(packet_buffer, 0, packet_struct_size);
+    
+    // Fill packet header
+    packet_buffer[0] = packet_type;  // Packet type
+    packet_buffer[1] = 0;           // Flags
+    packet_buffer[2] = 0;           // Sequence number (low byte)
+    packet_buffer[3] = 0;           // Sequence number (high byte)
+    packet_buffer[4] = packet_size; // Payload length
+    
+    // Copy payload data
+    if (packet_size > 0) {
+        memcpy(packet_buffer + 5, packet_data, packet_size);
+    }
+    
+    // Calculate CRC over header + payload (CRC will be placed at the end)
+    uint16_t crc = calculate_packet_crc(packet_buffer, packet_struct_size);
+    packet_buffer[packet_struct_size - 2] = crc & 0xFF;        // CRC low byte
+    packet_buffer[packet_struct_size - 1] = (crc >> 8) & 0xFF; // CRC high byte
+    
+    if (s_hw) {
+        s_hw->PrintLine("DAISY: Sending flexible packet - type=0x%02X, size=%d bytes, payload=%d bytes", 
+                       packet_type, (int)packet_struct_size, (int)packet_size);
+    }
+    
+    // Send using the packet function
+    daisy::SpiHandle::Result result = Spi_SendPacket(packet_buffer, packet_struct_size);
+    
+    // Free the allocated buffer
+    free(packet_buffer);
     
     if (result == daisy::SpiHandle::Result::OK) {
         s_stats.packets_sent++;
-        if (s_hw) s_hw->PrintLine("DAISY: Large packet sent successfully");
+        if (s_hw) s_hw->PrintLine("DAISY: Flexible packet sent successfully");
         return 1;
     } else {
-        if (s_hw) s_hw->PrintLine("DAISY: Large packet send FAILED: %d", (int)result);
+        if (s_hw) s_hw->PrintLine("DAISY: Flexible packet send FAILED: %d", (int)result);
         return 0;
     }
 }
@@ -596,7 +673,7 @@ static void ProcessBrowseRequest(const char* path, size_t start_index)
     }
 
     // Buffer for response packet  
-    uint8_t response_buffer[700]; // Large enough for header + 10 file entries (~53 bytes each)
+    uint8_t response_buffer[1200]; // Large enough for header + 20 file entries (~53 bytes each)
 
     // Get directory listing - get all files at once for first page, then paginate
     FileEntry entries[50]; // Increased to accommodate more files
@@ -619,7 +696,7 @@ static void ProcessBrowseRequest(const char* path, size_t start_index)
             ErrorMessage err = {0x01, "Directory read failed"};
             uint8_t response_buffer[64];
             size_t pkt_size = ProtocolHandler::CreateErrorPacket(response_buffer, sizeof(response_buffer), err);
-            Spi_Send(MSG_ERROR, response_buffer + sizeof(PacketHeader), pkt_size - sizeof(PacketHeader));
+            Spi_Send(MSG_ERROR, response_buffer, pkt_size);
             return;
         }
         
@@ -633,8 +710,8 @@ static void ProcessBrowseRequest(const char* path, size_t start_index)
             s_hw->PrintLine("DAISY: Stored %d file entries for current directory", (int)s_current_file_count);
         }
         
-        // Now paginate the response (send first 4 entries)
-        entries_written = std::min(entries_written, (size_t)4);
+        // Now paginate the response (send first 20 entries for better performance)
+        entries_written = std::min(entries_written, (size_t)20);
     } else {
         // For subsequent pages, use normal pagination
         bool success = ListDir(path, entries, sizeof(entries)/sizeof(entries[0]), total_count, start_index, entries_written);
@@ -646,7 +723,7 @@ static void ProcessBrowseRequest(const char* path, size_t start_index)
             ErrorMessage err = {0x01, "Directory read failed"};
             uint8_t response_buffer[64];
             size_t pkt_size = ProtocolHandler::CreateErrorPacket(response_buffer, sizeof(response_buffer), err);
-            Spi_Send(MSG_ERROR, response_buffer + sizeof(PacketHeader), pkt_size - sizeof(PacketHeader));
+            Spi_Send(MSG_ERROR, response_buffer, pkt_size);
             return;
         }
     }
@@ -656,7 +733,7 @@ static void ProcessBrowseRequest(const char* path, size_t start_index)
     }
 
     // Convert FileEntry to FileEntryWire format
-    FileEntryWire wire_entries[4];
+    FileEntryWire wire_entries[20]; // Increased to support 20 entries
     uint8_t num_entries = 0;
 
     if (s_hw) {
@@ -665,7 +742,7 @@ static void ProcessBrowseRequest(const char* path, size_t start_index)
 
     // Process only the entries that were actually filled by ListDir
     // ListDir fills entries sequentially starting from index 0
-    size_t max_entries_to_process = std::min(entries_written, (size_t)4);
+    size_t max_entries_to_process = std::min(entries_written, (size_t)20);
     
     for (size_t i = 0; i < max_entries_to_process; i++) {
         wire_entries[num_entries].is_dir = entries[i].is_dir;
@@ -727,13 +804,13 @@ static void ProcessBrowseRequest(const char* path, size_t start_index)
     }
     
     // Use original CreateBrowseRespPacket with corrected approach
-    // ESP32 expects PacketHeader format, not pkt_t format
-    // Maximum payload size with PacketHeader: 252 bytes (256 - 4 byte header)
-    // This allows: (252 - 5) / 53 = 4.6 → 4 entries max
+    // ESP32 expects flexible packet format
+    // Maximum payload size with flexible packets: up to 4KB
+    // This allows: (4096 - 5) / 53 = 77 entries max
     
     if (s_hw) {
-        s_hw->PrintLine("DAISY: Using PacketHeader format for ESP32 compatibility");
-        s_hw->PrintLine("DAISY: Expected payload = 5 + %d * 53 = %d bytes (max ~250)", 
+        s_hw->PrintLine("DAISY: Using flexible packet format for ESP32 compatibility");
+        s_hw->PrintLine("DAISY: Expected payload = 5 + %d * 53 = %d bytes (max ~4KB)", 
                        num_entries, (int)(5 + num_entries * 53));
     }
     
@@ -755,9 +832,9 @@ static void ProcessBrowseRequest(const char* path, size_t start_index)
         s_hw->PrintLine("DAISY: Sending browse response using large packet format...");
     }
     
-    // Extract payload from Packet structure (skip PacketHeader)
-    const uint8_t* payload = response_buffer + sizeof(WaveX::Protocol::PacketHeader);
-    size_t payload_size = pkt_size - sizeof(WaveX::Protocol::PacketHeader);
+    // Extract payload from flexible packet structure
+    const uint8_t* payload = response_buffer + 5; // Skip type, flags, seq, len (5 bytes)
+    size_t payload_size = pkt_size - 5;
     
     // Send using Spi_SendLargePacket which creates proper SpiDataPacket format
     int result = Spi_SendLargePacket(payload, payload_size);
@@ -797,7 +874,7 @@ static void ProcessSamplePlayRequest(const char* file_path)
 
     uint8_t response_buffer[64];
     size_t pkt_size = ProtocolHandler::CreateSampleStatusPacket(response_buffer, sizeof(response_buffer), status);
-    Spi_Send(MSG_SAMPLE_STATUS, response_buffer + sizeof(PacketHeader), pkt_size - sizeof(PacketHeader));
+    Spi_Send(MSG_SAMPLE_STATUS, response_buffer, pkt_size);
 }
 
 static void ProcessSampleStopRequest()
@@ -816,7 +893,7 @@ static void ProcessSampleStopRequest()
 
     uint8_t response_buffer[64];
     size_t pkt_size = ProtocolHandler::CreateSampleStatusPacket(response_buffer, sizeof(response_buffer), status);
-    Spi_Send(MSG_SAMPLE_STATUS, response_buffer + sizeof(PacketHeader), pkt_size - sizeof(PacketHeader));
+    Spi_Send(MSG_SAMPLE_STATUS, response_buffer, pkt_size);
 }
 
 static void ProcessSamplePlayIndexRequest(uint32_t file_index)
@@ -843,7 +920,7 @@ static void ProcessSamplePlayIndexRequest(uint32_t file_index)
         
         uint8_t response_buffer[64];
         size_t pkt_size = ProtocolHandler::CreateSampleStatusPacket(response_buffer, sizeof(response_buffer), status);
-        Spi_Send(MSG_SAMPLE_STATUS, response_buffer + sizeof(PacketHeader), pkt_size - sizeof(PacketHeader));
+        Spi_Send(MSG_SAMPLE_STATUS, response_buffer, pkt_size);
         return;
     }
 
@@ -862,7 +939,7 @@ static void ProcessSamplePlayIndexRequest(uint32_t file_index)
         
         uint8_t response_buffer[64];
         size_t pkt_size = ProtocolHandler::CreateSampleStatusPacket(response_buffer, sizeof(response_buffer), status);
-        Spi_Send(MSG_SAMPLE_STATUS, response_buffer + sizeof(PacketHeader), pkt_size - sizeof(PacketHeader));
+        Spi_Send(MSG_SAMPLE_STATUS, response_buffer, pkt_size);
         return;
     }
     
@@ -893,7 +970,7 @@ static void ProcessSamplePlayIndexRequest(uint32_t file_index)
     
     uint8_t response_buffer[64];
     size_t pkt_size = ProtocolHandler::CreateSampleStatusPacket(response_buffer, sizeof(response_buffer), status);
-    Spi_Send(MSG_SAMPLE_STATUS, response_buffer + sizeof(PacketHeader), pkt_size - sizeof(PacketHeader));
+    Spi_Send(MSG_SAMPLE_STATUS, response_buffer, pkt_size);
 }
 
 static void ProcessSampleGetPathRequest(uint32_t file_index)
@@ -924,7 +1001,7 @@ static void ProcessSampleGetPathRequest(uint32_t file_index)
         ErrorMessage err = {0x02, "Invalid file index"};
         uint8_t response_buffer[64];
         size_t pkt_size = ProtocolHandler::CreateErrorPacket(response_buffer, sizeof(response_buffer), err);
-        Spi_Send(MSG_ERROR, response_buffer + sizeof(PacketHeader), pkt_size - sizeof(PacketHeader));
+        Spi_Send(MSG_ERROR, response_buffer, pkt_size);
         return;
     }
     
@@ -944,7 +1021,7 @@ static void ProcessSampleGetPathRequest(uint32_t file_index)
     
     uint8_t response_buffer[256];
     size_t pkt_size = ProtocolHandler::CreateSamplePathResponsePacket(response_buffer, sizeof(response_buffer), response);
-    Spi_Send(MSG_SAMPLE_GET_PATH_RESP, response_buffer + sizeof(PacketHeader), pkt_size - sizeof(PacketHeader));
+    Spi_Send(MSG_SAMPLE_GET_PATH_RESP, response_buffer, pkt_size);
 }
 
 static void ClearDirectoryState()
@@ -1153,6 +1230,13 @@ static bool PerformBidirectionalPoll()
     // Check if we got a valid response (not all zeros or just the poll echo)
     bool has_meaningful_data = false;
     
+    // Debug: Log raw received data
+    if (s_hw) {
+        s_hw->PrintLine("DAISY: Raw RX buffer: %02X %02X %02X %02X %02X %02X %02X %02X", 
+                        rx_buf[0], rx_buf[1], rx_buf[2], rx_buf[3],
+                        rx_buf[4], rx_buf[5], rx_buf[6], rx_buf[7]);
+    }
+    
     // Skip check if this is just echoing our poll request
     if (!(rx_buf[0] == 0x01 && rx_buf[1] == 0x00 && rx_buf[2] == 0x00 && rx_buf[3] == 0x01 && rx_buf[4] == 0xFF)) {
         for (int i = 0; i < DATA_PKT_SIZE; i++) {
@@ -1177,6 +1261,9 @@ static bool PerformBidirectionalPoll()
     // Determine packet size and validate
     size_t packet_size = get_packet_size(rx_buf);
     WAVEX_LOG_DAISY_INBOUND(DAISY_INBOUND_SPI, "get_packet_size returned %d for type 0x%02X", (int)packet_size, rx_buf[0]);
+    if (s_hw) {
+        s_hw->PrintLine("DAISY: Calculated packet size: %d for packet type 0x%02X", (int)packet_size, rx_buf[0]);
+    }
     if (packet_size == 0) {
         if (s_hw) {
             s_hw->PrintLine("DAISY: Unknown packet type: 0x%02X", rx_buf[0]);
@@ -1200,36 +1287,37 @@ static bool PerformBidirectionalPoll()
         return false;
     }
     
-    // Validate the packet
+    // Validate the packet using flexible packet system
     WAVEX_LOG_DAISY_INBOUND(DAISY_INBOUND_SPI, "Validating packet of size %d", (int)packet_size);
     WAVEX_LOG_DAISY_INBOUND(DAISY_INBOUND_SPI, "Packet bytes: %02X %02X %02X %02X %02X %02X %02X %02X", 
                         rx_buf[0], rx_buf[1], rx_buf[2], rx_buf[3], 
                         rx_buf[4], rx_buf[5], rx_buf[6], rx_buf[7]);
     
-    // Check packet type and length
-    uint8_t type = rx_buf[0];
-    uint8_t len = rx_buf[3];
-    WAVEX_LOG_DAISY_INBOUND(DAISY_INBOUND_SPI, "Packet type=0x%02X, len=%d", type, len);
+    uint8_t packet_type = rx_buf[0];
+    WAVEX_LOG_DAISY_INBOUND(DAISY_INBOUND_SPI, "Packet type=0x%02X", packet_type);
     
-    // Check CRC
-    uint16_t received_crc = rx_buf[4] | (rx_buf[5] << 8);
-    
-    // Calculate CRC over header + payload (excluding CRC field)
-    uint8_t crc_data[4 + 20]; // Header (4) + max payload (20)
-    crc_data[0] = rx_buf[0]; // type
-    crc_data[1] = rx_buf[1]; // flags
-    crc_data[2] = rx_buf[2]; // seq
-    crc_data[3] = rx_buf[3]; // len
-    memcpy(&crc_data[4], &rx_buf[6], len); // payload (starts at offset 6)
-    
-    uint16_t calculated_crc = crc16_ccitt(crc_data, 4 + len);
-    WAVEX_LOG_DAISY_INBOUND(DAISY_INBOUND_SPI, "CRC calculation: %d bytes - %02X %02X %02X %02X %02X", 
-                        4 + len, crc_data[0], crc_data[1], crc_data[2], crc_data[3], crc_data[4]);
-    WAVEX_LOG_DAISY_INBOUND(DAISY_INBOUND_SPI, "Received CRC=0x%04X, Calculated CRC=0x%04X", received_crc, calculated_crc);
-    
-    if (!validate_packet(rx_buf, packet_size)) {
+    // Use flexible packet validation
+    if (is_command_packet_type(packet_type) || is_data_packet_type(packet_type)) {
+        // New flexible packet format
+        size_t expected_size = get_packet_size_from_type(packet_type);
+        if (expected_size == 0 || packet_size != expected_size) {
+            if (s_hw) {
+                s_hw->PrintLine("DAISY: Invalid flexible packet size: type=0x%02X, expected=%d, received=%d", 
+                               packet_type, (int)expected_size, (int)packet_size);
+            }
+            return false;
+        }
+        
+        // Validate CRC using flexible packet system
+        if (!validate_packet_crc(rx_buf, packet_size)) {
+            if (s_hw) {
+                s_hw->PrintLine("DAISY: Flexible packet CRC validation failed");
+            }
+            return false;
+        }
+    } else {
         if (s_hw) {
-            s_hw->PrintLine("DAISY: Invalid packet received, dropping");
+            s_hw->PrintLine("DAISY: Unknown packet type: 0x%02X", packet_type);
         }
         return false;
     }
@@ -1238,12 +1326,29 @@ static bool PerformBidirectionalPoll()
                         rx_buf[0], rx_buf[3], (int)packet_size,
                         rx_buf[0], rx_buf[1], rx_buf[2], rx_buf[3], rx_buf[4], rx_buf[5], rx_buf[6], rx_buf[7]);
     
+    // Check for duplicate packets (simple approach for single-threaded execution)
+    if (s_has_last_packet && packet_size <= 32) {
+        if (memcmp(rx_buf, s_last_processed_packet, packet_size) == 0) {
+            if (s_hw) {
+                s_hw->PrintLine("DAISY: Duplicate packet detected, skipping (type=0x%02X)", rx_buf[0]);
+            }
+            return false; // Skip duplicate packet
+        }
+    }
+    
     // Queue the message for processing
     if (queue_count < MAX_QUEUED_MESSAGES) {
         memcpy(message_queue[queue_tail], rx_buf, packet_size);
         queue_tail = (queue_tail + 1) % MAX_QUEUED_MESSAGES;
         queue_count++;
         WAVEX_LOG_DAISY_INBOUND(DAISY_INBOUND_SPI, "Queued message type=0x%02X, queue_count=%d", rx_buf[0], queue_count);
+        
+        // Store this packet for duplicate detection
+        if (packet_size <= 32) {
+            memcpy(s_last_processed_packet, rx_buf, packet_size);
+            s_has_last_packet = true;
+        }
+        
         return true;
     } else {
         if (s_hw) {
@@ -1346,6 +1451,12 @@ void ProcessQueuedSpiMessage()
         
         WAVEX_LOG_DAISY_INBOUND(DAISY_INBOUND_SPI, "Dequeuing message for processing, type=0x%02X, len=%d, size=%d",
                            packet_data[0], packet_data[3], (int)packet_size);
+        
+        // Debug: Log packet details for browse requests
+        if (s_hw && packet_data[0] == 0x01 && packet_data[4] == WaveX::Protocol::MSG_BROWSE_REQ) {
+            s_hw->PrintLine("DAISY: DEBUG - Processing browse request: payload[1]=0x%02X, payload[2]=0x%02X", 
+                           packet_data[5], packet_data[6]);
+        }
         
         // Process the message directly
         ProcessSpiMessage(packet_data, packet_size);

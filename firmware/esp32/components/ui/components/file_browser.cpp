@@ -57,7 +57,7 @@ wavex_file_browser_t* wavex_file_browser_create(lv_obj_t* parent, const wavex_fi
     // Initialize pagination state
     browser->total_files = 0;
     browser->current_page = 0;
-    browser->entries_per_page = 4;  // Daisy sends 4 entries per page
+    browser->entries_per_page = 20;  // Daisy now sends 20 entries per page with flexible packet system
     browser->pagination_in_progress = false;
     browser->loaded_entries = 0;
     
@@ -377,24 +377,26 @@ static bool refresh_file_list(wavex_file_browser_t* browser)
     }
 }
 
-// Parse browse response from Daisy
+// Parse browse response from Daisy using flexible packet format
 static bool parse_browse_response(const uint8_t* data, size_t length, wavex_file_entry_t* entries, uint32_t* count)
 {
-    if (!data || length < sizeof(WaveX::Protocol::PacketHeader) + sizeof(WaveX::Protocol::BrowseRespHeader)) {
+    if (!data || length < 5 + sizeof(WaveX::Protocol::BrowseRespHeader)) {
         ESP_LOGE(TAG, "Browse response too short: %d bytes", (int)length);
         *count = 0;
         return false;
     }
 
-    // Parse as PacketHeader + payload format (not Packet structure)
-    const WaveX::Protocol::PacketHeader* header = (const WaveX::Protocol::PacketHeader*)data;
-    if (header->type != WaveX::Protocol::MSG_BROWSE_RESP) {
-        ESP_LOGE(TAG, "Wrong message type: expected %d, got %d", WaveX::Protocol::MSG_BROWSE_RESP, header->type);
+    // Parse as flexible packet format: type(1) + flags(1) + seq(2) + len(1) + payload + crc(2)
+    uint8_t packet_type = data[0];
+    uint8_t payload_len = data[4];
+    
+    if (!WaveX::Protocol::ProtocolHandler::IsDataPacketType(packet_type)) {
+        ESP_LOGE(TAG, "Wrong packet type: expected data packet, got 0x%02X", packet_type);
         *count = 0;
         return false;
     }
 
-    const uint8_t* payload = data + sizeof(WaveX::Protocol::PacketHeader);
+    const uint8_t* payload = data + 5; // Skip header
     const WaveX::Protocol::BrowseRespHeader* browse_header = (const WaveX::Protocol::BrowseRespHeader*)payload;
     uint32_t total_count = browse_header->total_count;
     uint8_t n_entries = browse_header->n;
@@ -403,7 +405,7 @@ static bool parse_browse_response(const uint8_t* data, size_t length, wavex_file
     
     // Debug: Show raw payload data
     ESP_LOGI(TAG, "Raw payload (first 64 bytes):");
-    for (int i = 0; i < 64 && i < (int)(length - sizeof(WaveX::Protocol::PacketHeader)); i++) {
+    for (int i = 0; i < 64 && i < (int)(length - 5); i++) { // Skip flexible packet header (5 bytes)
         if (i % 16 == 0) ESP_LOGI(TAG, "");
         ESP_LOGI(TAG, "%02X ", payload[i]);
     }
@@ -455,49 +457,27 @@ static bool parse_browse_response_with_pagination(const uint8_t* data, size_t le
     const uint8_t* payload;
     size_t payload_len;
     
-    // Determine packet format and extract payload
-    if (data[0] == WaveX::Protocol::SYNC_BYTE) {
-        // PacketHeader format (0xAA sync byte)
-        if (length < sizeof(WaveX::Protocol::PacketHeader) + sizeof(WaveX::Protocol::BrowseRespHeader)) {
-            ESP_LOGE(TAG, "PacketHeader browse response too short: %d bytes", (int)length);
-            *count = 0;
-            *total_files = 0;
-            *current_page_entries = 0;
-            return false;
-        }
-        
-        const WaveX::Protocol::PacketHeader* header = (const WaveX::Protocol::PacketHeader*)data;
-        if (header->type != WaveX::Protocol::MSG_BROWSE_RESP) {
-            ESP_LOGE(TAG, "Wrong PacketHeader message type: expected %d, got %d", WaveX::Protocol::MSG_BROWSE_RESP, header->type);
-            *count = 0;
-            *total_files = 0;
-            *current_page_entries = 0;
-            return false;
-        }
-        
-        payload = data + sizeof(WaveX::Protocol::PacketHeader);
-        payload_len = header->length;
-        ESP_LOGI(TAG, "Parsing PacketHeader format browse response: payload_len=%d", (int)payload_len);
-    } else if (data[0] == 0x02) {
-        // SpiDataPacket format (type=0x02)
-        if (length < 6 + sizeof(WaveX::Protocol::BrowseRespHeader)) {
-            ESP_LOGE(TAG, "SpiDataPacket browse response too short: %d bytes", (int)length);
-            *count = 0;
-            *total_files = 0;
-            *current_page_entries = 0;
-            return false;
-        }
-        
-        payload = data + 6; // Skip header (6 bytes: type, flags, seq, len, crc)
-        payload_len = data[3];
-        ESP_LOGI(TAG, "Parsing SpiDataPacket format browse response: payload_len=%d", (int)payload_len);
-    } else {
-        ESP_LOGE(TAG, "Unknown packet format: 0x%02X", data[0]);
+    // All packets now use flexible packet format
+    if (length < 5 + sizeof(WaveX::Protocol::BrowseRespHeader)) {
+        ESP_LOGE(TAG, "Flexible packet browse response too short: %d bytes", (int)length);
         *count = 0;
         *total_files = 0;
         *current_page_entries = 0;
         return false;
     }
+    
+    uint8_t packet_type = data[0];
+    if (!WaveX::Protocol::ProtocolHandler::IsDataPacketType(packet_type)) {
+        ESP_LOGE(TAG, "Wrong packet type: expected data packet, got 0x%02X", packet_type);
+        *count = 0;
+        *total_files = 0;
+        *current_page_entries = 0;
+        return false;
+    }
+    
+    payload = data + 5; // Skip flexible packet header
+    payload_len = data[4]; // Payload length from flexible packet header
+    ESP_LOGI(TAG, "Parsing flexible packet format browse response: payload_len=%d", (int)payload_len);
     
     // Validate payload length
     if (payload_len < sizeof(WaveX::Protocol::BrowseRespHeader)) {
@@ -604,8 +584,8 @@ static void browse_resp_callback(const uint8_t* data, size_t length, void* user_
     ESP_LOGI(TAG, "Received browse response: %d bytes", (int)length);
     
     // Parse the browse response to get total count and current page entries
-    wavex_file_entry_t temp_entries[4];  // Temporary array for current page
-    uint32_t temp_count = 4;
+    wavex_file_entry_t temp_entries[20];  // Temporary array for current page (increased for flexible packet system)
+    uint32_t temp_count = 20;
     uint32_t total_files = 0;
     uint8_t current_page_entries = 0;
     
