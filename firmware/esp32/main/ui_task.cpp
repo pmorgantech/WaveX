@@ -848,6 +848,23 @@ void wavex_ui_update_header_title(const char* title)
 }
 
 /**
+ * @brief Update hotkey label for a specific button
+ */
+void wavex_ui_update_hotkey_label(int button_index, const char* label)
+{
+    if (button_index < 0 || button_index >= 6 || !s_hotkey_labels[button_index]) {
+        ESP_LOGW(TAG, "Invalid hotkey button index: %d", button_index);
+        return;
+    }
+    
+    LV_LOCK();
+    if (lv_obj_is_valid(s_hotkey_labels[button_index])) {
+        lv_label_set_text(s_hotkey_labels[button_index], label);
+    }
+    LV_UNLOCK();
+}
+
+/**
  * @brief Hotkey button event callback
  */
 static void hotkey_button_event_cb(lv_event_t *e)
@@ -939,16 +956,29 @@ static void hotkey_button_event_cb(lv_event_t *e)
                     break;
             }
         } else if (strcmp(s_current_screen, "sample_load_save") == 0) {
-            // Sample Load/Save page: Audition, Load, Save, Back, Up, Down
+            // Sample Load/Save page: Audition, Load, Up, Down, Select, Back
             switch (button_index) {
-                case 0: // Audition
-                    ESP_LOGI(TAG, "Hotkey: Audition sample");
+                case 0: // Audition/Stop
+                    ESP_LOGI(TAG, "Hotkey: Audition/Stop sample");
                     if (s_sample_load_save_page) {
-                        const wavex_file_entry_t* selected = wavex_file_browser_get_selected(s_sample_load_save_page->file_browser);
-                        if (selected && !selected->is_directory) {
-                            // Use index-based audition for better performance
-                            uint32_t selected_index = wavex_file_browser_get_selected_index(s_sample_load_save_page->file_browser);
-                            wavex_sample_load_save_audition_sample_by_index(s_sample_load_save_page, selected_index);
+                        if (s_sample_load_save_page->is_playing) {
+                            // Stop current audition
+                            ESP_LOGI(TAG, "Stopping current audition");
+                            wavex_sample_load_save_stop_audition(s_sample_load_save_page);
+                            // Update button text back to "Audition"
+                            wavex_ui_update_hotkey_label(0, "Audition");
+                        } else {
+                            // Start new audition
+                            const wavex_file_entry_t* selected = wavex_file_browser_get_selected(s_sample_load_save_page->file_browser);
+                            if (selected && !selected->is_directory) {
+                                // Use index-based audition for better performance
+                                uint32_t selected_index = wavex_file_browser_get_selected_index(s_sample_load_save_page->file_browser);
+                                wavex_sample_load_save_audition_sample_by_index(s_sample_load_save_page, selected_index);
+                                // Update button text to "Stop"
+                                wavex_ui_update_hotkey_label(0, "Stop");
+                            } else {
+                                ESP_LOGW(TAG, "No valid file selected for audition");
+                            }
                         }
                     }
                     break;
@@ -961,23 +991,7 @@ static void hotkey_button_event_cb(lv_event_t *e)
                         }
                     }
                     break;
-                case 2: // Save
-                    ESP_LOGI(TAG, "Hotkey: Save sample");
-                    if (s_sample_load_save_page) {
-                        // TODO: Implement save functionality
-                        wavex_sample_load_save_set_status(s_sample_load_save_page, "Save not implemented yet");
-                    }
-                    break;
-                case 3: // Back
-                    ESP_LOGI(TAG, "Hotkey: Navigating back to sample menu");
-                    // Destroy existing sample load/save page before navigating away
-                    if (s_sample_load_save_page) {
-                        wavex_sample_load_save_destroy(s_sample_load_save_page);
-                        s_sample_load_save_page = NULL;
-                    }
-                    create_sample_menu(s_content_area);
-                    break;
-                case 4: // Up (^)
+                case 2: // Up Arrow
                     ESP_LOGI(TAG, "Hotkey: Navigate up in file list");
                     if (s_sample_load_save_page && s_sample_load_save_page->file_browser) {
                         uint32_t current_idx = wavex_file_browser_get_selected_index(s_sample_load_save_page->file_browser);
@@ -987,7 +1001,7 @@ static void hotkey_button_event_cb(lv_event_t *e)
                         }
                     }
                     break;
-                case 5: // Down (v)
+                case 3: // Down Arrow
                     ESP_LOGI(TAG, "Hotkey: Navigate down in file list");
                     if (s_sample_load_save_page && s_sample_load_save_page->file_browser) {
                         uint32_t current_idx = wavex_file_browser_get_selected_index(s_sample_load_save_page->file_browser);
@@ -995,6 +1009,38 @@ static void hotkey_button_event_cb(lv_event_t *e)
                         if (current_idx < max_idx - 1) {
                             wavex_file_browser_set_selection(s_sample_load_save_page->file_browser, current_idx + 1);
                             ESP_LOGI(TAG, "Navigated down to index %d", current_idx + 1);
+                        }
+                    }
+                    break;
+                case 4: // Select
+                    ESP_LOGI(TAG, "Hotkey: Select action");
+                    if (s_sample_load_save_page) {
+                        const wavex_file_entry_t* selected = wavex_file_browser_get_selected(s_sample_load_save_page->file_browser);
+                        if (selected) {
+                            if (selected->is_directory) {
+                                // Enter directory
+                                ESP_LOGI(TAG, "Entering directory: %s", selected->name);
+                                wavex_file_browser_navigate_to(s_sample_load_save_page->file_browser, selected->path);
+                            } else {
+                                // Show file metadata
+                                ESP_LOGI(TAG, "Showing metadata for file: %s", selected->name);
+                                wavex_sample_load_save_update_info(s_sample_load_save_page, selected);
+                            }
+                        }
+                    }
+                    break;
+                case 5: // Back
+                    ESP_LOGI(TAG, "Hotkey: Back action");
+                    if (s_sample_load_save_page) {
+                        // Try to navigate up one directory level first
+                        if (wavex_file_browser_navigate_up(s_sample_load_save_page->file_browser)) {
+                            ESP_LOGI(TAG, "Navigated up one directory level");
+                        } else {
+                            // If we're at root, go back to sample menu
+                            ESP_LOGI(TAG, "At root directory, navigating back to sample menu");
+                            wavex_sample_load_save_destroy(s_sample_load_save_page);
+                            s_sample_load_save_page = NULL;
+                            create_sample_menu(s_content_area);
                         }
                     }
                     break;
@@ -1290,7 +1336,7 @@ static void create_sample_load_save_page(lv_obj_t *parent)
     }
     
     // Update hotkey labels for sample load/save page
-    const char* load_save_labels[6] = {"Audition", "Load", "Save", "Back", "^", "v"};
+    const char* load_save_labels[6] = {"Audition", "Load", "Up", "Down", "Select", "Back"};
     wavex_ui_update_hotkey_labels(load_save_labels);
     
     ESP_LOGI(TAG, "Sample load/save page creation completed");

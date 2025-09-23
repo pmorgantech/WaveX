@@ -64,12 +64,20 @@
   */
  void wavex_ui_update_header_title(const char* title);
  
- /**
-  * @brief Update hotkey labels
-  * 
-  * @param labels Array of 6 strings for the hotkey labels
-  */
- void wavex_ui_update_hotkey_labels(const char* labels[6]);
+/**
+ * @brief Update hotkey labels
+ * 
+ * @param labels Array of 6 strings for the hotkey labels
+ */
+void wavex_ui_update_hotkey_labels(const char* labels[6]);
+
+/**
+ * @brief Update hotkey label for a specific button
+ * 
+ * @param button_index Index of the button (0-5)
+ * @param label New label text
+ */
+void wavex_ui_update_hotkey_label(int button_index, const char* label);
  
  /**
   * @brief Mark UI content as changed to trigger a refresh

@@ -24,6 +24,7 @@ typedef struct {
     wavex_file_browser_t* file_browser;
     lv_obj_t* info_panel;
     lv_obj_t* status_label;
+    lv_obj_t* metadata_label;
     bool is_playing;
     char selected_file[96];
     uint32_t selected_file_index;

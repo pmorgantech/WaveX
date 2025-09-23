@@ -280,33 +280,49 @@ static void file_list_event_cb(lv_event_t *e)
         lv_obj_t* btn = (lv_obj_t*)lv_event_get_target(e);
         
         // Find the button index by iterating through the list
-        uint32_t index = 0;
+        uint32_t ui_index = 0;
         lv_obj_t* child = lv_obj_get_child(list, 0);
         while (child && child != btn) {
-            child = lv_obj_get_child(list, index + 1);
-            index++;
+            child = lv_obj_get_child(list, ui_index + 1);
+            ui_index++;
         }
         
-        if (index < browser->entry_count) {
-            wavex_file_browser_set_selection(browser, index);
+        // Check if we're at root directory (no ".." entry)
+        bool has_parent_entry = (strcmp(browser->current_path, "/") != 0);
+        uint32_t entry_index = ui_index;
+        
+        if (has_parent_entry) {
+            if (ui_index == 0) {
+                // ".." entry clicked - navigate up
+                ESP_LOGI(TAG, "Parent directory entry clicked");
+                wavex_file_browser_navigate_up(browser);
+                return;
+            } else {
+                // Adjust index for actual entries (subtract 1 for ".." entry)
+                entry_index = ui_index - 1;
+            }
+        }
+        
+        if (entry_index < browser->entry_count) {
+            wavex_file_browser_set_selection(browser, entry_index);
             
             // If it's a directory, navigate into it
-            if (browser->entries[index].is_directory) {
+            if (browser->entries[entry_index].is_directory) {
                 char new_path[256];
                 // Avoid double slashes when constructing directory path
                 if (strcmp(browser->current_path, "/") == 0) {
-                    snprintf(new_path, sizeof(new_path), "/%s", browser->entries[index].name);
+                    snprintf(new_path, sizeof(new_path), "/%s", browser->entries[entry_index].name);
                 } else {
-                    snprintf(new_path, sizeof(new_path), "%s/%s", browser->current_path, browser->entries[index].name);
+                    snprintf(new_path, sizeof(new_path), "%s/%s", browser->current_path, browser->entries[entry_index].name);
                 }
-                ESP_LOGD(TAG, "Directory navigation: current='%s', name='%s' -> new_path='%s'", browser->current_path, browser->entries[index].name, new_path);
+                ESP_LOGD(TAG, "Directory navigation: current='%s', name='%s' -> new_path='%s'", browser->current_path, browser->entries[entry_index].name, new_path);
                 wavex_file_browser_navigate_to(browser, new_path);
             } else {
                 // File selected - notify callback with index
-                ESP_LOGI(TAG, "File selected: %s, index=%d", browser->entries[index].name, index);
+                ESP_LOGI(TAG, "File selected: %s, index=%d", browser->entries[entry_index].name, entry_index);
                 
                 if (browser->file_selected_index_cb) {
-                    browser->file_selected_index_cb(index, &browser->entries[index], browser->user_data);
+                    browser->file_selected_index_cb(entry_index, &browser->entries[entry_index], browser->user_data);
                 } else {
                     ESP_LOGW(TAG, "No callback set for file selection");
                 }
@@ -625,6 +641,24 @@ static void browse_resp_callback(const uint8_t* data, size_t length, void* user_
         // Update UI with all loaded entries
         LV_LOCK();
         lv_obj_clean(browser->list);
+        
+        // Add ".." entry if not at root directory
+        bool added_parent_entry = false;
+        if (strcmp(browser->current_path, "/") != 0) {
+            lv_obj_t* btn = lv_list_add_btn(browser->list, NULL, "..");
+            if (btn) {
+                ui_theme_apply_button_style(btn, true);
+                lv_obj_set_style_text_color(btn, UI_COLOR_TEXT, LV_PART_MAIN);
+                lv_obj_set_style_text_font(btn, UI_FONT_TITLE, LV_PART_MAIN);
+                
+                // Add directory indicator for parent entry
+                lv_obj_t* label = lv_obj_get_child(btn, 0);
+                if (label) {
+                    lv_label_set_text(label, "[DIR] ..");
+                }
+                added_parent_entry = true;
+            }
+        }
         
         if (browser->entry_count > 0 && browser->entries) {
             // Create list items for all loaded entries

@@ -15,6 +15,7 @@
 #include "../../../main/links/spi_link_wrapper.h"
 #include "../../../shared/spi_protocol/protocol.h"
 #include "../../../main/inter_mcu.h"
+#include "../../../main/ui_task.h"
 
 // LVGL includes for thread safety
 #include "esp_lvgl_port.h"
@@ -103,6 +104,13 @@ wavex_sample_load_save_page_t* wavex_sample_load_save_create(lv_obj_t* parent)
     lv_label_set_text(page->status_label, "Ready - File Browser Active");
     ui_theme_apply_label_style(page->status_label, false);
     lv_obj_align(page->status_label, LV_ALIGN_TOP_LEFT, UI_PADDING_MEDIUM, UI_PADDING_MEDIUM);
+    
+    // Create metadata display area
+    page->metadata_label = lv_label_create(page->info_panel);
+    lv_label_set_text(page->metadata_label, "Select a file to view metadata");
+    ui_theme_apply_label_style(page->metadata_label, false);
+    lv_obj_align(page->metadata_label, LV_ALIGN_TOP_LEFT, UI_PADDING_MEDIUM, UI_PADDING_MEDIUM + 40);
+    lv_obj_set_style_text_font(page->metadata_label, &lv_font_montserrat_14, LV_PART_MAIN);
     
     // Note: Hotkeys are handled by the UI task, not here
     
@@ -225,6 +233,9 @@ bool wavex_sample_load_save_stop_audition(wavex_sample_load_save_page_t* page)
 
         page->is_playing = false;
         wavex_sample_load_save_set_status(page, "Stopped");
+        
+        // Update button text back to "Audition"
+        wavex_ui_update_hotkey_label(0, "Audition");
 
         return true;
     }
@@ -276,29 +287,72 @@ void wavex_sample_load_save_set_status(wavex_sample_load_save_page_t* page, cons
 
 void wavex_sample_load_save_update_info(wavex_sample_load_save_page_t* page, const wavex_file_entry_t* entry)
 {
-    if (!page || !entry) return;
+    if (!page || !entry || !page->metadata_label) return;
     
-    // Update info panel with file details
-    // This could show file size, duration, format, etc.
-    char info_text[256];
-    snprintf(info_text, sizeof(info_text), 
-             "File: %s\n"
-             "Size: %lu bytes\n"
-             "Type: %s",
-             entry->name,
-             entry->size_bytes,
-             entry->is_directory ? "Directory" : "File");
-    
-    // Create or update info label
     LV_LOCK();
-    lv_obj_t* info_label = lv_obj_get_child(page->info_panel, 1);
-    if (!info_label) {
-        info_label = lv_label_create(page->info_panel);
-        ui_theme_apply_label_style(info_label, false);
-        lv_obj_align(info_label, LV_ALIGN_TOP_LEFT, UI_PADDING_MEDIUM, 40);
+    
+    if (entry->is_directory) {
+        // Display directory information
+        char info_text[512];
+        snprintf(info_text, sizeof(info_text), 
+                 "Directory Information:\n"
+                 "─────────────────────\n"
+                 "Name: %.47s\n"
+                 "Type: Directory\n"
+                 "Path: %.95s\n\n"
+                 "Use Select to enter directory",
+                 entry->name,
+                 entry->path);
+        
+        lv_label_set_text(page->metadata_label, info_text);
+    } else {
+        // Display file metadata
+        char info_text[512];
+        
+        // Format file size
+        char size_str[32];
+        if (entry->size_bytes < 1024) {
+            snprintf(size_str, sizeof(size_str), "%lu B", entry->size_bytes);
+        } else if (entry->size_bytes < 1024 * 1024) {
+            snprintf(size_str, sizeof(size_str), "%.1f KB", entry->size_bytes / 1024.0f);
+        } else {
+            snprintf(size_str, sizeof(size_str), "%.1f MB", entry->size_bytes / (1024.0f * 1024.0f));
+        }
+        
+        // Format duration if available (placeholder for now)
+        char duration_str[32] = "Unknown";
+        // TODO: Extract duration from WAV file metadata
+        
+        // Format sample rate if available (placeholder for now)
+        char sample_rate_str[32] = "Unknown";
+        // TODO: Extract sample rate from WAV file metadata
+        
+        // Format channels if available (placeholder for now)
+        char channels_str[32] = "Unknown";
+        // TODO: Extract channel count from WAV file metadata
+        
+        snprintf(info_text, sizeof(info_text), 
+                 "Sample Information:\n"
+                 "─────────────────\n"
+                 "Name: %.47s\n"
+                 "Size: %s\n"
+                 "Duration: %s\n"
+                 "Sample Rate: %s\n"
+                 "Channels: %s\n"
+                 "Format: WAV PCM\n"
+                 "Path: %.95s\n\n"
+                 "Use Audition to preview\n"
+                 "Use Load to load sample",
+                 entry->name,
+                 size_str,
+                 duration_str,
+                 sample_rate_str,
+                 channels_str,
+                 entry->path);
+        
+        lv_label_set_text(page->metadata_label, info_text);
     }
     
-    lv_label_set_text(info_label, info_text);
     LV_UNLOCK();
 }
 
@@ -348,6 +402,23 @@ static void directory_changed_callback(const char* path, void* user_data)
     if (!page || !path) return;
     
     ESP_LOGI(TAG, "Directory changed to: %s", path);
+    
+    // Clear previous state to prevent sync issues
+    page->selected_file_index = 0;
+    memset(page->selected_file, 0, sizeof(page->selected_file));
+    
+    // Stop any current audition when changing directories
+    if (page->is_playing) {
+        ESP_LOGI(TAG, "Stopping audition due to directory change");
+        wavex_sample_load_save_stop_audition(page);
+    }
+    
+    // Clear metadata display
+    if (page->metadata_label) {
+        LV_LOCK();
+        lv_label_set_text(page->metadata_label, "Select a file to view metadata");
+        LV_UNLOCK();
+    }
     
     // Update status
     char status_text[256];
