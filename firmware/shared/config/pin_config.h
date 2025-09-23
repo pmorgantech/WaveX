@@ -23,6 +23,10 @@ extern "C" {
 
 #ifdef ESP_PLATFORM
 
+// Pins for ESP32-P4-WIFI6
+// The GPIO available on this board are:
+// GPIO2-GPIO5, GPIO7, GPIO8, GPIO20-GPIO33, GPIO46-GPIO52 
+
 // MIPI DSI Display Interface (5-DSI-TOUCH-A)
 // MIPI DSI Data Lanes
 #define WAVEX_ESP_DSI_D0P       2    // MIPI DSI Data Lane 0 Positive

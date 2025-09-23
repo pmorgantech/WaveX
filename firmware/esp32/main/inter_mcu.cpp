@@ -458,8 +458,6 @@ void tx_task(void* arg)
 void inter_mcu_process_daisy_control_message(uint8_t type, const uint8_t* payload, uint8_t len)
 {
 #ifdef ESP_PLATFORM
-    ESP_LOGI("inter_mcu", "Processing control message from Daisy: type=0x%02X, len=%d", type, len);
-    
     switch (type) {
         case WaveX::Protocol::MSG_SYNC:
             // Synchronization message from Daisy - acknowledge receipt
@@ -540,6 +538,13 @@ esp_err_t inter_mcu_send_browse_req(const char* path, uint8_t start_index)
     uint8_t payload[20];
     payload[0] = start_index;
     memcpy(&payload[1], path, path_len);
+    
+    // Debug: Log what we're sending
+    ESP_LOGI("inter_mcu", "DEBUG - Sending browse request: start_index=%d, path='%s'", start_index, path);
+    ESP_LOGI("inter_mcu", "DEBUG - Payload bytes: ");
+    for (int i = 0; i < path_len + 1 && i < 20; i++) {
+        ESP_LOGI("inter_mcu", "  [%d] = 0x%02X ('%c')", i, payload[i], (payload[i] >= 32 && payload[i] <= 126) ? payload[i] : '.');
+    }
     
     int result = spi_link_send(WaveX::Protocol::MSG_BROWSE_REQ, payload, path_len + 1);
     return result ? ESP_OK : -1; // ESP_FAIL

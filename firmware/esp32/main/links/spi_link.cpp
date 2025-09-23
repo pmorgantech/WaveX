@@ -40,53 +40,106 @@ typedef WaveX::Protocol::SpiCommandPacket ctrl_pkt_t;
 // Use shared CRC function
 #define wavex_crc16 WaveX::Protocol::ProtocolHandler::CalculateSpiCrc
 
+// Forward declarations for helper functions
+static void process_packet_header_format(const uint8_t* packet_data, size_t packet_len, const WaveX::Protocol::PacketHeader* header);
+static void process_spi_data_packet_format(const uint8_t* packet_data, size_t packet_len);
 
-// Handle large packet format (pkt_t) - for bulk data like browse responses
+
+// Handle large packet format - for bulk data like browse responses
 static void handle_large_packet(const uint8_t* packet_data, size_t packet_len)
 {
 #ifdef ESP_PLATFORM
-    if (packet_len < sizeof(WaveX::Protocol::PacketHeader)) {
+    if (packet_len < 4) {
         ESP_LOGE(TAG, "Large packet too short: %d bytes", (int)packet_len);
         return;
     }
     
-    const WaveX::Protocol::PacketHeader* header = (const WaveX::Protocol::PacketHeader*)packet_data;
+    ESP_LOGI(TAG, "Large packet: type=0x%02X, len=%u, total_size=%d",
+             packet_data[0], packet_data[3], (int)packet_len);
     
-    ESP_LOGI(TAG, "Large packet: sync=0x%02X, type=0x%02X, len=%u, total_size=%d",
-             header->sync, header->type, header->length, (int)packet_len);
-    
-    // Validate sync byte
-    if (header->sync != WaveX::Protocol::SYNC_BYTE) {
-        ESP_LOGE(TAG, "Invalid sync byte: 0x%02X", header->sync);
+    // Handle different packet formats
+    if (packet_data[0] == WaveX::Protocol::SYNC_BYTE) {
+        // PacketHeader format (0xAA sync byte)
+        if (packet_len < sizeof(WaveX::Protocol::PacketHeader)) {
+            ESP_LOGE(TAG, "PacketHeader packet too short: %d bytes", (int)packet_len);
+            return;
+        }
+        
+        const WaveX::Protocol::PacketHeader* header = (const WaveX::Protocol::PacketHeader*)packet_data;
+        
+        // Validate packet length
+        if (header->length + sizeof(WaveX::Protocol::PacketHeader) > packet_len) {
+            ESP_LOGE(TAG, "Packet length mismatch: header says %u, received %d", 
+                     header->length, (int)packet_len);
+            return;
+        }
+        
+        // Process PacketHeader format
+        process_packet_header_format(packet_data, packet_len, header);
+    } else if (packet_data[0] == 0x02) {
+        // SpiDataPacket format (type=0x02)
+        if (packet_len < 6) { // Minimum: type, flags, seq, len, crc (2 bytes)
+            ESP_LOGE(TAG, "SpiDataPacket too short: %d bytes", (int)packet_len);
+            return;
+        }
+        
+        // Process SpiDataPacket format
+        process_spi_data_packet_format(packet_data, packet_len);
+    } else {
+        ESP_LOGW(TAG, "Unknown large packet format: 0x%02X", packet_data[0]);
         return;
     }
-    
-    // Validate packet length
-    if (header->length + sizeof(WaveX::Protocol::PacketHeader) > packet_len) {
-        ESP_LOGE(TAG, "Packet length mismatch: header says %u, received %d", 
-                 header->length, (int)packet_len);
-        return;
-    }
-    
-    // Handle different large packet types
+#else
+    (void)packet_data;
+    (void)packet_len;
+#endif
+}
+
+// Process PacketHeader format (0xAA sync byte)
+static void process_packet_header_format(const uint8_t* packet_data, size_t packet_len, const WaveX::Protocol::PacketHeader* header)
+{
     const uint8_t* payload = packet_data + sizeof(WaveX::Protocol::PacketHeader);
     
     if (header->type == WaveX::Protocol::MSG_BROWSE_RESP) {
-        ESP_LOGI(TAG, "Processing large browse response: %u bytes", header->length);
+        ESP_LOGI(TAG, "Processing PacketHeader browse response: %u bytes", header->length);
         
         // Forward entire packet (including header) to browse response callback
         extern void inter_mcu_invoke_browse_resp_callback(const uint8_t* data, size_t length);
         inter_mcu_invoke_browse_resp_callback(packet_data, packet_len);
     } else {
-        ESP_LOGW(TAG, "Unknown large packet type: 0x%02X", header->type);
+        ESP_LOGW(TAG, "Unknown PacketHeader type: 0x%02X", header->type);
     }
     
     // Update packet statistics
     inter_mcu_increment_packet_stat(header->type);
-#else
-    (void)packet_data;
-    (void)packet_len;
-#endif
+}
+
+// Process SpiDataPacket format (type=0x02)
+static void process_spi_data_packet_format(const uint8_t* packet_data, size_t packet_len)
+{
+    ESP_LOGI(TAG, "Processing SpiDataPacket: %u bytes", packet_data[3]);
+    
+    // Check if this is a browse response by examining the payload
+    const uint8_t* payload = packet_data + 6; // Skip header (6 bytes: type, flags, seq, len, crc)
+    uint8_t payload_len = packet_data[3];
+    
+    if (payload_len >= 5) { // Minimum size for BrowseRespHeader
+        // Check if this looks like a browse response
+        // BrowseRespHeader: total_count (4 bytes) + n (1 byte)
+        uint32_t total_count = payload[0] | (payload[1] << 8) | (payload[2] << 16) | (payload[3] << 24);
+        uint8_t n_entries = payload[4];
+        
+        ESP_LOGI(TAG, "SpiDataPacket appears to be browse response: total_count=%u, n_entries=%u", total_count, n_entries);
+        
+        // Forward to browse response callback
+        extern void inter_mcu_invoke_browse_resp_callback(const uint8_t* data, size_t length);
+        inter_mcu_invoke_browse_resp_callback(packet_data, packet_len);
+    } else {
+        ESP_LOGW(TAG, "SpiDataPacket too small to be browse response: %u bytes", payload_len);
+    }
+    
+    // Update packet statistics
+    inter_mcu_increment_packet_stat(0x02);
 }
 
 // Handle control messages received FROM Daisy (frontend commands to backend)
@@ -110,8 +163,6 @@ static void handle_control_message_from_daisy(const ctrl_pkt_t* p)
 static void handle_control_message_from_daisy_new_format(uint8_t msg_type, const uint8_t* payload, uint8_t len)
 {
 #ifdef ESP_PLATFORM
-    ESP_LOGI(TAG, "Received new format control message from Daisy: type=0x%02X, len=%d", msg_type, len);
-    
     // Forward control messages to the inter_mcu layer for processing
     extern void inter_mcu_process_daisy_control_message(uint8_t type, const uint8_t* payload, uint8_t len);
     inter_mcu_process_daisy_control_message(msg_type, payload, len);
@@ -878,9 +929,13 @@ static void link_task(void *arg)
                 if (msg_queue_count > 0) {
                     clear_transmitted_message_from_queue();
                 }
-            } else if (rx_len >= 4 && rx_data[0] == WaveX::Protocol::SYNC_BYTE) {
-                // Large packet format (pkt_t) - starts with sync byte 0xAA
-                WAVEX_LOG_ESP32_SPI(ESP32_INTER_SPI, "Detected large packet format (pkt_t)");
+            } else if (rx_len >= 4 && (rx_data[0] == WaveX::Protocol::SYNC_BYTE || rx_data[0] == 0x02)) {
+                // Large packet format - either PacketHeader (0xAA) or SpiDataPacket (0x02)
+                if (rx_data[0] == WaveX::Protocol::SYNC_BYTE) {
+                    WAVEX_LOG_ESP32_SPI(ESP32_INTER_SPI, "Detected PacketHeader format (sync=0xAA)");
+                } else {
+                    WAVEX_LOG_ESP32_SPI(ESP32_INTER_SPI, "Detected SpiDataPacket format (type=0x02)");
+                }
                 WAVEX_LOG_ESP32_SPI(ESP32_INTER_SPI, "Large packet first 8 bytes: %02X %02X %02X %02X %02X %02X %02X %02X",
                          rx_data[0], rx_data[1], rx_data[2], rx_data[3], rx_data[4], rx_data[5], rx_data[6], rx_data[7]);
                 handle_large_packet(rx_data, rx_len);

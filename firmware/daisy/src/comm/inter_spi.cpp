@@ -322,20 +322,33 @@ static void ProcessSpiMessage(const uint8_t* packet_data, size_t packet_size)
             char path[96] = {0};
             size_t start_index = 0;
             
+            
             if (packet_type == 0x01 && len > 1) {
-                // New format: [MSG_BROWSE_REQ][start_index_byte][path_string]
+                // Format: [MSG_BROWSE_REQ][start_index_byte][path_string]
+                // ESP32 sends: payload[0] = MSG_BROWSE_REQ (0x30), payload[1] = start_index, payload[2+] = path
                 if (len >= 2) {
-                    start_index = payload[1]; // Second byte is start_index
+                    start_index = payload[1]; // Second byte is start_index (skip message type)
                     if (len > 2) {
                         // Copy path string (skip message type and start_index bytes)
                         size_t path_len = len - 2;
-                        if (path_len < sizeof(path)) {
-                            memcpy(path, &payload[2], path_len);
+                        
+                        // Find actual path start (skip any null bytes)
+                        const uint8_t* path_start = &payload[2];
+                        while (path_start < &payload[len] && *path_start == 0) {
+                            path_start++;
+                            path_len--;
+                        }
+                        
+                        if (path_len > 0 && path_len < sizeof(path)) {
+                            memcpy(path, path_start, path_len);
                             path[path_len] = '\0';
-                        } else {
+                        } else if (path_len >= sizeof(path)) {
                             // Path too long, truncate
-                            memcpy(path, &payload[2], sizeof(path) - 1);
+                            memcpy(path, path_start, sizeof(path) - 1);
                             path[sizeof(path) - 1] = '\0';
+                        } else {
+                            // No valid path found, default to root
+                            strcpy(path, "/");
                         }
                     } else {
                         // No path provided, default to root
@@ -349,6 +362,7 @@ static void ProcessSpiMessage(const uint8_t* packet_data, size_t packet_size)
                 // Default to root if no path provided
                 strcpy(path, "/");
             }
+            
 
             WAVEX_LOG_DAISY_MESSAGE(DAISY_SPI_MESSAGE, "IN MSG BROWSE_REQ path=%s", path);
 
@@ -735,29 +749,27 @@ static void ProcessBrowseRequest(const char* path, size_t start_index)
         s_hw->PrintLine("DAISY: Created browse response packet, size=%d bytes", (int)pkt_size);
     }
     
-    // Send browse response using the bidirectional communication system
-    // We need to use the outgoing message queue since the ESP32 expects bidirectional communication
+    // Send browse response using large packet format
+    // ESP32 expects browse responses to be sent via Spi_SendLargePacket
     if (s_hw) {
-        s_hw->PrintLine("DAISY: Sending browse response using bidirectional communication...");
+        s_hw->PrintLine("DAISY: Sending browse response using large packet format...");
     }
     
-    // CreateBrowseRespPacket already creates a complete Packet with PacketHeader
-    // Just copy the entire packet directly - no need to recreate the header
-    uint8_t custom_packet[256] = {0};
-    size_t copy_size = (pkt_size < sizeof(custom_packet)) ? pkt_size : sizeof(custom_packet);
-    memcpy(custom_packet, response_buffer, copy_size);
+    // Extract payload from Packet structure (skip PacketHeader)
+    const uint8_t* payload = response_buffer + sizeof(WaveX::Protocol::PacketHeader);
+    size_t payload_size = pkt_size - sizeof(WaveX::Protocol::PacketHeader);
     
-    // Queue the message for bidirectional transmission instead of direct send
-    bool queued = QueueOutgoingMessage(custom_packet, pkt_size);
+    // Send using Spi_SendLargePacket which creates proper SpiDataPacket format
+    int result = Spi_SendLargePacket(payload, payload_size);
     
-    if (queued) {
+    if (result > 0) {
         s_stats.packets_sent++;
         if (s_hw) {
-            s_hw->PrintLine("DAISY: Browse response queued for transmission");
+            s_hw->PrintLine("DAISY: Browse response sent successfully");
         }
     } else {
         if (s_hw) {
-            s_hw->PrintLine("DAISY: Failed to queue browse response - queue full");
+            s_hw->PrintLine("DAISY: Failed to send browse response");
         }
     }
 }

@@ -34,6 +34,7 @@ static bool parse_browse_response_with_pagination(const uint8_t* data, size_t le
 static bool send_browse_request(const char* path, uint8_t start_index = 0);
 static void update_visual_selection(wavex_file_browser_t* browser);
 static void browse_resp_callback(const uint8_t* data, size_t length, void* user_data);
+static void update_file_browser_ui(wavex_file_browser_t* browser);
 
 wavex_file_browser_t* wavex_file_browser_create(lv_obj_t* parent, const wavex_file_browser_config_t* config)
 {
@@ -443,7 +444,7 @@ static bool parse_browse_response(const uint8_t* data, size_t length, wavex_file
 // Parse browse response with pagination information
 static bool parse_browse_response_with_pagination(const uint8_t* data, size_t length, wavex_file_entry_t* entries, uint32_t* count, uint32_t* total_files, uint8_t* current_page_entries)
 {
-    if (!data || length < sizeof(WaveX::Protocol::PacketHeader) + sizeof(WaveX::Protocol::BrowseRespHeader)) {
+    if (!data || length < 6) { // Minimum size for any packet format
         ESP_LOGE(TAG, "Browse response too short: %d bytes", (int)length);
         *count = 0;
         *total_files = 0;
@@ -451,17 +452,62 @@ static bool parse_browse_response_with_pagination(const uint8_t* data, size_t le
         return false;
     }
 
-    // Parse as PacketHeader + payload format (not Packet structure)
-    const WaveX::Protocol::PacketHeader* header = (const WaveX::Protocol::PacketHeader*)data;
-    if (header->type != WaveX::Protocol::MSG_BROWSE_RESP) {
-        ESP_LOGE(TAG, "Wrong message type: expected %d, got %d", WaveX::Protocol::MSG_BROWSE_RESP, header->type);
+    const uint8_t* payload;
+    size_t payload_len;
+    
+    // Determine packet format and extract payload
+    if (data[0] == WaveX::Protocol::SYNC_BYTE) {
+        // PacketHeader format (0xAA sync byte)
+        if (length < sizeof(WaveX::Protocol::PacketHeader) + sizeof(WaveX::Protocol::BrowseRespHeader)) {
+            ESP_LOGE(TAG, "PacketHeader browse response too short: %d bytes", (int)length);
+            *count = 0;
+            *total_files = 0;
+            *current_page_entries = 0;
+            return false;
+        }
+        
+        const WaveX::Protocol::PacketHeader* header = (const WaveX::Protocol::PacketHeader*)data;
+        if (header->type != WaveX::Protocol::MSG_BROWSE_RESP) {
+            ESP_LOGE(TAG, "Wrong PacketHeader message type: expected %d, got %d", WaveX::Protocol::MSG_BROWSE_RESP, header->type);
+            *count = 0;
+            *total_files = 0;
+            *current_page_entries = 0;
+            return false;
+        }
+        
+        payload = data + sizeof(WaveX::Protocol::PacketHeader);
+        payload_len = header->length;
+        ESP_LOGI(TAG, "Parsing PacketHeader format browse response: payload_len=%d", (int)payload_len);
+    } else if (data[0] == 0x02) {
+        // SpiDataPacket format (type=0x02)
+        if (length < 6 + sizeof(WaveX::Protocol::BrowseRespHeader)) {
+            ESP_LOGE(TAG, "SpiDataPacket browse response too short: %d bytes", (int)length);
+            *count = 0;
+            *total_files = 0;
+            *current_page_entries = 0;
+            return false;
+        }
+        
+        payload = data + 6; // Skip header (6 bytes: type, flags, seq, len, crc)
+        payload_len = data[3];
+        ESP_LOGI(TAG, "Parsing SpiDataPacket format browse response: payload_len=%d", (int)payload_len);
+    } else {
+        ESP_LOGE(TAG, "Unknown packet format: 0x%02X", data[0]);
         *count = 0;
         *total_files = 0;
         *current_page_entries = 0;
         return false;
     }
-
-    const uint8_t* payload = data + sizeof(WaveX::Protocol::PacketHeader);
+    
+    // Validate payload length
+    if (payload_len < sizeof(WaveX::Protocol::BrowseRespHeader)) {
+        ESP_LOGE(TAG, "Payload too short for BrowseRespHeader: %d bytes", (int)payload_len);
+        *count = 0;
+        *total_files = 0;
+        *current_page_entries = 0;
+        return false;
+    }
+    
     const WaveX::Protocol::BrowseRespHeader* browse_header = (const WaveX::Protocol::BrowseRespHeader*)payload;
     *total_files = browse_header->total_count;
     *current_page_entries = browse_header->n;
@@ -557,21 +603,6 @@ static void browse_resp_callback(const uint8_t* data, size_t length, void* user_
     
     ESP_LOGI(TAG, "Received browse response: %d bytes", (int)length);
     
-    // // Log raw data for debugging (first 64 bytes)
-    // ESP_LOGI(TAG, "Raw data (first 64 bytes):");
-    // for (int i = 0; i < (int)length && i < 64; i++) {
-    //     if (i % 16 == 0) {
-    //         ESP_LOGI(TAG, "  %04X: ", i);
-    //     }
-    //     ESP_LOGI(TAG, "%02X ", data[i]);
-    //     if (i % 16 == 15) {
-    //         ESP_LOGI(TAG, "");
-    //     }
-    // }
-    // if (length % 16 != 0) {
-    //     ESP_LOGI(TAG, "");
-    // }
-    
     // Parse the browse response to get total count and current page entries
     wavex_file_entry_t temp_entries[4];  // Temporary array for current page
     uint32_t temp_count = 4;
@@ -613,17 +644,39 @@ static void browse_resp_callback(const uint8_t* data, size_t length, void* user_
     bool has_more_pages = (browser->loaded_entries < browser->total_files) && 
                          (browser->loaded_entries < browser->config.max_entries);
     
+    // Update UI immediately after first page loads for better user experience
+    if (browser->current_page == 0) {
+        // First page loaded - update UI immediately
+        browser->entry_count = browser->loaded_entries;
+        
+        // Ensure selected_index is within bounds
+        if (browser->selected_index >= browser->entry_count) {
+            browser->selected_index = 0;
+        }
+        
+        ESP_LOGI(TAG, "First page loaded: showing %d entries immediately", browser->entry_count);
+        
+        // Update UI with currently loaded entries
+        update_file_browser_ui(browser);
+        
+        // Notify directory changed callback
+        if (browser->dir_changed_cb) {
+            browser->dir_changed_cb(browser->current_path, browser->user_data);
+        }
+    }
+    
     if (has_more_pages) {
         // Request next page
         browser->current_page++;
         uint8_t next_start_index = browser->current_page * browser->entries_per_page;
         
-        ESP_LOGI(TAG, "Requesting next page: start_index=%d", next_start_index);
+        ESP_LOGI(TAG, "Requesting next page: current_page=%d, entries_per_page=%d, start_index=%d", 
+                 browser->current_page, browser->entries_per_page, next_start_index);
         if (!send_browse_request(browser->current_path, next_start_index)) {
             ESP_LOGE(TAG, "Failed to request next page");
             browser->pagination_in_progress = false;
         }
-        // Don't update UI yet - wait for all pages to load
+        // Continue loading additional pages in background
         return;
     } else {
         // All pages loaded (or reached max entries)
@@ -637,66 +690,73 @@ static void browse_resp_callback(const uint8_t* data, size_t length, void* user_
         
         ESP_LOGI(TAG, "Pagination complete: loaded %d entries", browser->entry_count);
         
-        // Update UI with all loaded entries
-        LV_LOCK();
-        lv_obj_clean(browser->list);
-        
-        // Note: ".." entries are now provided by Daisy backend, no need to create them manually
-        bool added_parent_entry = false;
-        
-        if (browser->entry_count > 0 && browser->entries) {
-            // Create list items for all loaded entries
-            for (uint32_t i = 0; i < browser->entry_count; i++) {
-                // Safety check for entry access
-                if (!browser->entries[i].name[0]) {
-                    ESP_LOGW(TAG, "Skipping empty entry at index %d", i);
-                    continue;
-                }
-                
-                lv_obj_t* btn = lv_list_add_btn(browser->list, NULL, browser->entries[i].name);
-                if (!btn) {
-                    ESP_LOGE(TAG, "Failed to create button for entry %d", i);
-                    continue;
-                }
-                
-                // Apply styling
-                ui_theme_apply_button_style(btn, true);
-                
-                // Set text color to white and increase font size to 18px
-                lv_obj_set_style_text_color(btn, UI_COLOR_TEXT, LV_PART_MAIN);
-                lv_obj_set_style_text_font(btn, UI_FONT_TITLE, LV_PART_MAIN);
-                
-                // Add directory indicator
-                if (browser->entries[i].is_directory) {
-                    lv_obj_t* label = lv_obj_get_child(btn, 0);
-                    if (label) {
-                        char dir_text[64];
-                        snprintf(dir_text, sizeof(dir_text), "[DIR] %s", browser->entries[i].name);
-                        lv_label_set_text(label, dir_text);
-                    }
-                }
-            }
-            
-            // Update visual selection
-            update_visual_selection(browser);
-            
-            ESP_LOGI(TAG, "Updated file browser UI with %d entries", browser->entry_count);
-        } else {
-            // Show "No files found..." message
-            lv_obj_t* btn = lv_list_add_btn(browser->list, NULL, "No files found...");
-            ui_theme_apply_button_style(btn, false);
-            lv_obj_set_style_text_color(btn, UI_COLOR_TEXT, LV_PART_MAIN);
-            lv_obj_set_style_text_font(btn, &lv_font_montserrat_18, LV_PART_MAIN);
-            ESP_LOGI(TAG, "No files found in directory");
+        // Update UI with all loaded entries (only if not first page)
+        if (browser->current_page > 0) {
+            update_file_browser_ui(browser);
         }
         
-        LV_UNLOCK();
-        
-        // Notify directory changed callback
-        if (browser->dir_changed_cb) {
+        // Notify directory changed callback (only if not first page)
+        if (browser->current_page > 0 && browser->dir_changed_cb) {
             browser->dir_changed_cb(browser->current_path, browser->user_data);
         }
     }
+}
+
+// Helper function to update the file browser UI
+static void update_file_browser_ui(wavex_file_browser_t* browser)
+{
+    if (!browser || !browser->list) return;
+    
+    LV_LOCK();
+    lv_obj_clean(browser->list);
+    
+    if (browser->entry_count > 0 && browser->entries) {
+        // Create list items for all loaded entries
+        for (uint32_t i = 0; i < browser->entry_count; i++) {
+            // Safety check for entry access
+            if (!browser->entries[i].name[0]) {
+                ESP_LOGW(TAG, "Skipping empty entry at index %d", i);
+                continue;
+            }
+            
+            lv_obj_t* btn = lv_list_add_btn(browser->list, NULL, browser->entries[i].name);
+            if (!btn) {
+                ESP_LOGE(TAG, "Failed to create button for entry %d", i);
+                continue;
+            }
+            
+            // Apply styling
+            ui_theme_apply_button_style(btn, true);
+            
+            // Set text color to white and increase font size to 18px
+            lv_obj_set_style_text_color(btn, UI_COLOR_TEXT, LV_PART_MAIN);
+            lv_obj_set_style_text_font(btn, UI_FONT_TITLE, LV_PART_MAIN);
+            
+            // Add directory indicator
+            if (browser->entries[i].is_directory) {
+                lv_obj_t* label = lv_obj_get_child(btn, 0);
+                if (label) {
+                    char dir_text[64];
+                    snprintf(dir_text, sizeof(dir_text), "[DIR] %s", browser->entries[i].name);
+                    lv_label_set_text(label, dir_text);
+                }
+            }
+        }
+        
+        // Update visual selection
+        update_visual_selection(browser);
+        
+        ESP_LOGI(TAG, "Updated file browser UI with %d entries", browser->entry_count);
+    } else {
+        // Show "No files found..." message
+        lv_obj_t* btn = lv_list_add_btn(browser->list, NULL, "No files found...");
+        ui_theme_apply_button_style(btn, false);
+        lv_obj_set_style_text_color(btn, UI_COLOR_TEXT, LV_PART_MAIN);
+        lv_obj_set_style_text_font(btn, &lv_font_montserrat_18, LV_PART_MAIN);
+        ESP_LOGI(TAG, "No files found in directory");
+    }
+    
+    LV_UNLOCK();
 }
 
 // Helper function to update visual selection highlighting

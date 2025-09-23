@@ -43,7 +43,10 @@ bool ListDir(const char* path,
 #endif
 
     FRESULT fr = f_opendir(&dir, path);
-    if(fr != FR_OK) { total_count = 0; return false; }
+    if(fr != FR_OK) { 
+        total_count = 0; 
+        return false; 
+    }
 
     // First pass: count entries (excluding . and .., only WAV files and directories)
     total_count = 0;
@@ -91,7 +94,10 @@ bool ListDir(const char* path,
             continue; // Skip non-WAV files and non-directories (except "..")
         }
         
-        if(skipped < start_index) { skipped++; continue; }
+        if(skipped < start_index) { 
+            skipped++; 
+            continue; 
+        }
         if(written >= max_entries) break;
 
         FileEntry& e = out[written++];
