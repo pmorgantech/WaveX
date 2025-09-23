@@ -98,8 +98,8 @@ static volatile uint32_t s_rb_tail = 0; // read counter (frames) - atomic access
 static int16_t s_rb[RB_CAP_FRAMES * 2]; // interleaved L,R - regular memory (larger buffers)
 
 // Pre-buffering system for smooth playback start
-static const uint32_t PREBUFFER_FRAMES = 44100; // 1 second at 44.1kHz
-static int16_t s_prebuffer[PREBUFFER_FRAMES * 2]; // 1 second of stereo audio
+static const uint32_t PREBUFFER_FRAMES = 1024; // ~23ms at 44.1kHz (much more responsive for auditioning)
+static int16_t s_prebuffer[PREBUFFER_FRAMES * 2]; // ~23ms of stereo audio
 static uint32_t s_prebuffer_filled = 0; // Number of frames pre-buffered
 static bool s_prebuffer_ready = false; // Whether pre-buffer is ready for playback
 static bool s_prebuffering = false; // Whether we're currently pre-buffering
@@ -358,37 +358,16 @@ void Callback(AudioHandle::InputBuffer in,
         if (!rb_pop_stereo(l16, r16))
         {
             // Check if we have audition playback active
-            if (s_audition.active && s_audition.bytes_remaining > 0)
+            if (s_audition.active && s_wav.open)
             {
-                // Read audition sample data directly
-                uint8_t buffer[4]; // Max 2 bytes per sample per channel
-                UINT bytes_read = 0;
-
-                if (s_audition.num_channels == 2) {
-                    // Stereo: read 4 bytes (L+R)
-                    FRESULT res = f_read(&s_audition.file, buffer, 4, &bytes_read);
-                    if (res == FR_OK && bytes_read == 4) {
-                        l16 = (int16_t)(buffer[0] | (buffer[1] << 8));
-                        r16 = (int16_t)(buffer[2] | (buffer[3] << 8));
-                        s_audition.bytes_remaining -= 4;
-                    } else {
-                        s_audition.bytes_remaining = 0; // End of file or error
-                    }
-                } else {
-                    // Mono: read 2 bytes and duplicate to both channels
-                    FRESULT res = f_read(&s_audition.file, buffer, 2, &bytes_read);
-                    if (res == FR_OK && bytes_read == 2) {
-                        l16 = r16 = (int16_t)(buffer[0] | (buffer[1] << 8));
-                        s_audition.bytes_remaining -= 2;
-                    } else {
-                        s_audition.bytes_remaining = 0; // End of file or error
-                    }
-                }
-
-                // Check if audition is complete
-                if (s_audition.bytes_remaining == 0) {
-                    StopAudition();
-                }
+                // Use pre-buffering system for audition to avoid blocking audio callback
+                // The main loop will handle file I/O via PumpWavIO()
+                // For now, output silence and let the pre-buffering system handle the data
+                l16 = 0;
+                r16 = 0;
+                
+                // Check if audition is complete (this will be handled by the main loop)
+                // The audio callback should never do file I/O
             }
             else if (!s_wav.open)
             {
@@ -799,63 +778,31 @@ bool AuditionSample(const char* path)
     // Stop any current audition first
     StopAudition();
 
-    // Copy path for tracking
+    // Use the existing WAV playback system for audition
+    // This integrates with the pre-buffering system and avoids blocking I/O
+    if (!OpenWav(path)) {
+        if (s_hw) s_hw->PrintLine("AuditionSample: Failed to open WAV file for %s", path);
+        return false;
+    }
+
+    // Mark audition as active for tracking
+    s_audition.active = true;
     std::strncpy(s_audition.current_path, path, sizeof(s_audition.current_path) - 1);
     s_audition.current_path[sizeof(s_audition.current_path) - 1] = '\0';
-
-    // Open the WAV file for audition
-    FRESULT res = f_open(&s_audition.file, path, FA_READ);
-    if (res != FR_OK) {
-        if (s_hw) s_hw->PrintLine("AuditionSample: Failed to open %s (error %d)", path, res);
-        return false;
+    
+    if (s_hw) {
+        s_hw->PrintLine("AuditionSample: Started audition of %s using WAV playback system", path);
     }
-
-    // Read WAV header and validate format
-    WAV_FormatTypeDef wav_format;
-    res = f_read(&s_audition.file, &wav_format, sizeof(wav_format), NULL);
-    if (res != FR_OK || wav_format.ChunkId != 0x46464952) { // "RIFF"
-        f_close(&s_audition.file);
-        if (s_hw) s_hw->PrintLine("AuditionSample: Invalid WAV header for %s", path);
-        return false;
-    }
-
-    // Parse WAV header
-    s_audition.data_start = sizeof(WAV_FormatTypeDef);
-    s_audition.data_size = wav_format.FileSize - 36; // Total file size minus header
-    s_audition.bytes_remaining = s_audition.data_size;
-    s_audition.num_channels = wav_format.NbrChannels;
-    s_audition.bits_per_sample = wav_format.BitPerSample;
-    s_audition.sample_rate = wav_format.SampleRate;
-
-    // Validate format (16-bit, stereo or mono, 44.1k or 48k)
-    if (wav_format.BitPerSample != 16 ||
-        (wav_format.SampleRate != 44100 && wav_format.SampleRate != 48000) ||
-        (wav_format.NbrChannels != 1 && wav_format.NbrChannels != 2)) {
-        f_close(&s_audition.file);
-        if (s_hw) s_hw->PrintLine("AuditionSample: Unsupported format (channels=%d, bits=%d, rate=%d)",
-                               wav_format.NbrChannels, wav_format.BitPerSample, wav_format.SampleRate);
-        return false;
-    }
-
-    // Seek to data chunk
-    res = f_lseek(&s_audition.file, s_audition.data_start);
-    if (res != FR_OK) {
-        f_close(&s_audition.file);
-        if (s_hw) s_hw->PrintLine("AuditionSample: Failed to seek to data chunk");
-        return false;
-    }
-
-    s_audition.active = true;
-
-    if (s_hw) s_hw->PrintLine("AuditionSample: Started audition of %s", path);
+    
     return true;
 }
 
 void StopAudition()
 {
     if (s_audition.active) {
-        f_close(&s_audition.file);
-        s_audition = {}; // Reset all fields
+        // Stop the WAV playback system
+        CloseWav();
+        s_audition.active = false;
         if (s_hw) s_hw->PrintLine("AuditionSample: Stopped audition");
     }
 }

@@ -18,11 +18,11 @@
 #include <stdlib.h>
 #include "driver/i2c_master.h"
 #include "hardware_pins.h"
+#include "pages/diagnostics_page.h"
 #include "inter_mcu.h"
 #include "comm/statistics.h"
 #include "links/spi_link.h"
 #include "sample_load_save.h"
-#include "pages/diagnostics_page.h"
  
 // LVGL includes
 #include "esp_lvgl_port.h"
@@ -107,6 +107,14 @@ static uint32_t s_last_refresh_time = 0;
 static uint32_t s_refresh_count = 0;
 static const uint32_t MIN_REFRESH_INTERVAL_MS = 16;  // 60 FPS maximum
 static const uint32_t MAX_REFRESH_INTERVAL_MS = 100; // 10 FPS minimum
+
+// Deferred meter update data
+static bool s_meter_update_pending = false;
+static bool s_meter_reset_pending = false;
+static float s_deferred_rms_left = 0.0f;
+static float s_deferred_rms_right = 0.0f;
+static float s_deferred_peak_left = 0.0f;
+static float s_deferred_peak_right = 0.0f;
  
 // Forward declarations
 static void ui_task(void *pvParameters);
@@ -328,9 +336,34 @@ static void meter_update_cb(void *arg)
             
             last_reset_time = current_time_ms;
             
-            // Mark content as changed for adaptive refresh
+            // Mark meter reset as pending (will be processed by main UI task)
+            s_meter_reset_pending = true;
             wavex_ui_mark_content_changed();
+        }
+    } else if (meter_data.valid) {
+        // Normal operation - update meters with valid data
+        // Update peak hold tracking
+        update_peak_hold(&s_peak_hold_l, meter_data.peak_left, current_time_ms);
+        update_peak_hold(&s_peak_hold_r, meter_data.peak_right, current_time_ms);
         
+        // Store meter data for deferred update (no LVGL locks in timer callback)
+        s_deferred_rms_left = meter_data.rms_left;
+        s_deferred_rms_right = meter_data.rms_right;
+        s_deferred_peak_left = s_peak_hold_l.peak_value;
+        s_deferred_peak_right = s_peak_hold_r.peak_value;
+        
+        // Mark meter update as pending (will be processed by main UI task)
+        s_meter_update_pending = true;
+        wavex_ui_mark_content_changed();
+    }
+}
+
+/**
+ * @brief Process deferred meter updates (called from main UI task)
+ */
+static void process_deferred_meter_updates(void)
+{
+    if (s_meter_reset_pending) {
         LV_LOCK();
         
         // Reset enhanced meter display if available
@@ -364,16 +397,10 @@ static void meter_update_cb(void *arg)
         }
         
         LV_UNLOCK();
-        }
-    } else if (meter_data.valid) {
-        // Normal operation - update meters with valid data
-        // Update peak hold tracking
-        update_peak_hold(&s_peak_hold_l, meter_data.peak_left, current_time_ms);
-        update_peak_hold(&s_peak_hold_r, meter_data.peak_right, current_time_ms);
-        
-        // Mark content as changed for adaptive refresh
-        wavex_ui_mark_content_changed();
-        
+        s_meter_reset_pending = false;
+    }
+    
+    if (s_meter_update_pending) {
         LV_LOCK();
         
         // Update enhanced meter display if available
@@ -382,33 +409,33 @@ static void meter_update_cb(void *arg)
             lv_obj_is_valid(s_peak_line_l) && lv_obj_is_valid(s_peak_line_r)) {
             
             // Update left channel RMS bar
-            int rms_l_value = (int)(meter_data.rms_left * 100.0f);
+            int rms_l_value = (int)(s_deferred_rms_left * 100.0f);
             if (rms_l_value > 100) rms_l_value = 100;
             if (rms_l_value < 0) rms_l_value = 0;
             lv_bar_set_value(s_meter_bar_l, rms_l_value, LV_ANIM_ON);
             
             // Update right channel RMS bar
-            int rms_r_value = (int)(meter_data.rms_right * 100.0f);
+            int rms_r_value = (int)(s_deferred_rms_right * 100.0f);
             if (rms_r_value > 100) rms_r_value = 100;
             if (rms_r_value < 0) rms_r_value = 0;
             lv_bar_set_value(s_meter_bar_r, rms_r_value, LV_ANIM_ON);
             
             // Update peak line positions
-            update_peak_line_position(s_peak_line_l, s_meter_bar_l, s_peak_hold_l.peak_value);
-            update_peak_line_position(s_peak_line_r, s_meter_bar_r, s_peak_hold_r.peak_value);
+            update_peak_line_position(s_peak_line_l, s_meter_bar_l, s_deferred_peak_left);
+            update_peak_line_position(s_peak_line_r, s_meter_bar_r, s_deferred_peak_right);
             
             // Update channel labels
             if (s_meter_label_l && lv_obj_is_valid(s_meter_label_l)) {
                 char label_text[32];
                 snprintf(label_text, sizeof(label_text), "L: %.3f\nPeak: %.3f", 
-                        meter_data.rms_left, s_peak_hold_l.peak_value);
+                        s_deferred_rms_left, s_deferred_peak_left);
                 lv_label_set_text(s_meter_label_l, label_text);
             }
             
             if (s_meter_label_r && lv_obj_is_valid(s_meter_label_r)) {
                 char label_text[32];
                 snprintf(label_text, sizeof(label_text), "R: %.3f\nPeak: %.3f", 
-                        meter_data.rms_right, s_peak_hold_r.peak_value);
+                        s_deferred_rms_right, s_deferred_peak_right);
                 lv_label_set_text(s_meter_label_r, label_text);
             }
         }
@@ -417,7 +444,7 @@ static void meter_update_cb(void *arg)
         else if (s_meter_bar && s_meter_label && 
                  lv_obj_is_valid(s_meter_bar) && lv_obj_is_valid(s_meter_label)) {
             // Use RMS left channel for the bar (assuming stereo)
-            float rms_value = meter_data.rms_left;
+            float rms_value = s_deferred_rms_left;
             int bar_value = (int)(rms_value * 100.0f);
             if (bar_value > 100) bar_value = 100;
             if (bar_value < 0) bar_value = 0;
@@ -427,12 +454,13 @@ static void meter_update_cb(void *arg)
             // Update label with current values
             char meter_text[64];
             snprintf(meter_text, sizeof(meter_text), "L: %.3f R: %.3f\nPeak L: %.3f R: %.3f", 
-                    meter_data.rms_left, meter_data.rms_right, 
-                    meter_data.peak_left, meter_data.peak_right);
+                    s_deferred_rms_left, s_deferred_rms_right, 
+                    s_deferred_peak_left, s_deferred_peak_right);
             lv_label_set_text(s_meter_label, meter_text);
         }
         
         LV_UNLOCK();
+        s_meter_update_pending = false;
     }
 }
 
@@ -918,7 +946,9 @@ static void hotkey_button_event_cb(lv_event_t *e)
                     if (s_sample_load_save_page) {
                         const wavex_file_entry_t* selected = wavex_file_browser_get_selected(s_sample_load_save_page->file_browser);
                         if (selected && !selected->is_directory) {
-                            wavex_sample_load_save_audition_sample(s_sample_load_save_page, selected->path);
+                            // Use index-based audition for better performance
+                            uint32_t selected_index = wavex_file_browser_get_selected_index(s_sample_load_save_page->file_browser);
+                            wavex_sample_load_save_audition_sample_by_index(s_sample_load_save_page, selected_index);
                         }
                     }
                     break;
@@ -1418,6 +1448,12 @@ static void menu_button_event_cb(lv_event_t *e)
     // Main UI loop with adaptive refresh rate control
     ESP_LOGI(TAG, "UI loop started with adaptive refresh rate control");
     while (1) {
+        // Process deferred diagnostics updates (prevents deadlock)
+        diagnostics_page_process_deferred_updates();
+        
+        // Process deferred meter updates (prevents deadlock during audio playback)
+        process_deferred_meter_updates();
+        
         // Use adaptive refresh control for optimal performance
         adaptive_refresh_control();
         

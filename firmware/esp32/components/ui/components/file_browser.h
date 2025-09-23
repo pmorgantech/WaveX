@@ -35,6 +35,7 @@ typedef struct {
 
 // File browser callbacks
 typedef void (*wavex_file_selected_cb_t)(const wavex_file_entry_t* entry, void* user_data);
+typedef void (*wavex_file_selected_index_cb_t)(uint32_t file_index, const wavex_file_entry_t* entry, void* user_data);
 typedef void (*wavex_directory_changed_cb_t)(const char* path, void* user_data);
 
 // File browser structure
@@ -48,6 +49,7 @@ typedef struct {
     char current_path[96];           // Current directory path
     wavex_file_browser_config_t config;
     wavex_file_selected_cb_t file_selected_cb;
+    wavex_file_selected_index_cb_t file_selected_index_cb;
     wavex_directory_changed_cb_t dir_changed_cb;
     void* user_data;
     
@@ -77,6 +79,9 @@ uint32_t wavex_file_browser_get_selected_index(wavex_file_browser_t* browser);
 void wavex_file_browser_set_file_selected_callback(wavex_file_browser_t* browser, 
                                                    wavex_file_selected_cb_t callback, 
                                                    void* user_data);
+void wavex_file_browser_set_file_selected_index_callback(wavex_file_browser_t* browser, 
+                                                         wavex_file_selected_index_cb_t callback, 
+                                                         void* user_data);
 void wavex_file_browser_set_directory_changed_callback(wavex_file_browser_t* browser, 
                                                        wavex_directory_changed_cb_t callback, 
                                                        void* user_data);

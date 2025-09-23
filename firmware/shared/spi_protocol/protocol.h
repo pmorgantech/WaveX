@@ -37,6 +37,10 @@ enum MessageType : uint8_t {
     MSG_SAMPLE_STOP_REQ = 0x33,
     MSG_SAMPLE_STATUS   = 0x34,
     MSG_ACK = 0x35,  // Acknowledgment message
+    // Index-based file selection (new)
+    MSG_SAMPLE_PLAY_INDEX_REQ = 0x36,  // Play sample by index
+    MSG_SAMPLE_GET_PATH_REQ = 0x37,    // Get full path for index
+    MSG_SAMPLE_GET_PATH_RESP = 0x38,   // Full path response
     MSG_ERROR = 0xFF
 };
 
@@ -163,6 +167,20 @@ struct HeartbeatMessage {
     uint16_t cpu_usage_percent;  // CPU usage as percentage * 10 (e.g., 25.6% = 256)
 } __attribute__((packed));
 
+// Index-based file selection messages
+struct SamplePlayIndexMessage {
+    uint32_t index;         // File index in current directory
+} __attribute__((packed));
+
+struct SampleGetPathMessage {
+    uint32_t index;         // File index in current directory
+} __attribute__((packed));
+
+struct SamplePathResponseMessage {
+    uint32_t index;         // File index that was requested
+    char     path[200];     // Full file path (null-terminated)
+} __attribute__((packed));
+
 // Generic packet structure
 struct Packet {
     PacketHeader header;
@@ -186,9 +204,9 @@ struct SpiDataPacket {
     uint8_t type;         // Packet type (0x02=DATA)
     uint8_t flags;        // ACK/REQ/NACK/MORE flags
     uint8_t seq;          // Sequence number
-    uint8_t len;          // Payload length (0-240)
+    uint8_t len;          // Payload length (0-244)
     uint16_t crc;         // CRC16-CCITT over header + payload (fixed at offset 4)
-    uint8_t payload[240]; // Data payload (240 bytes)
+    uint8_t payload[244]; // Data payload (244 bytes)
     uint8_t padding[6];   // Alignment padding
 } __attribute__((packed));
 
@@ -204,6 +222,11 @@ struct LegacyPacket {
 // Packet size constants
 static const size_t SPI_CMD_PKT_SIZE = sizeof(SpiCommandPacket);
 static const size_t SPI_DATA_PKT_SIZE = sizeof(SpiDataPacket);
+
+// Sanity checks for packet sizes
+static_assert(sizeof(PacketHeader) == 4, "Unexpected PacketHeader size");
+static_assert(SPI_CMD_PKT_SIZE == 32, "Command packet size drift");
+static_assert(SPI_DATA_PKT_SIZE == 256, "Data packet size drift");
 
 // Protocol functions
 class ProtocolHandler {
@@ -254,6 +277,14 @@ public:
                                     const ErrorMessage& err);
     static size_t CreateAckPacket(uint8_t* buffer, size_t buffer_size,
                                   const AckMessage& ack);
+    
+    // Index-based file selection packet creators
+    static size_t CreateSamplePlayIndexPacket(uint8_t* buffer, size_t buffer_size,
+                                            const SamplePlayIndexMessage& msg);
+    static size_t CreateSampleGetPathPacket(uint8_t* buffer, size_t buffer_size,
+                                          const SampleGetPathMessage& msg);
+    static size_t CreateSamplePathResponsePacket(uint8_t* buffer, size_t buffer_size,
+                                               const SamplePathResponseMessage& msg);
     
     // Packet parsing
     static bool ValidatePacket(const uint8_t* buffer, size_t length);

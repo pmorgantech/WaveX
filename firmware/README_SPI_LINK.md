@@ -53,7 +53,7 @@ The SPI link uses a simplified protocol compared to the UART link:
 
 ```cpp
 typedef struct __attribute__((packed)) {
-    uint16_t len;    // bytes in payload (0..240)
+    uint16_t len;    // bytes in payload (0..244)
     uint16_t type;   // app-defined message type
 } pkt_hdr_t;
 

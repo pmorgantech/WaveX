@@ -1,6 +1,7 @@
 #include "fs_browse.h"
 #include "ff.h"
 #include <cstring>
+#include <strings.h>  // for strcasecmp
 
 namespace WaveX {
 namespace Storage {
@@ -8,6 +9,19 @@ namespace Storage {
 static bool is_dot_entry(const char* name)
 {
     return (name[0] == '.' && (name[1] == '\0' || (name[1] == '.' && name[2] == '\0')));
+}
+
+static bool has_wav_extension(const char* name)
+{
+    if (!name) return false;
+    
+    // Find the last dot in the filename
+    const char* last_dot = strrchr(name, '.');
+    if (!last_dot) return false;
+    
+    // Check if it ends with .wav (case insensitive)
+    const char* ext = last_dot + 1;
+    return (strcasecmp(ext, "wav") == 0);
 }
 
 bool ListDir(const char* path,
@@ -30,7 +44,7 @@ bool ListDir(const char* path,
     FRESULT fr = f_opendir(&dir, path);
     if(fr != FR_OK) { total_count = 0; return false; }
 
-    // First pass: count entries (excluding . and ..)
+    // First pass: count entries (excluding . and .., only WAV files and directories)
     total_count = 0;
     for(;;)
     {
@@ -42,7 +56,12 @@ bool ListDir(const char* path,
         const char* name = fno.fname;
 #endif
         if(is_dot_entry(name)) continue;
-        total_count++;
+        
+        // Only include directories and WAV files
+        bool is_dir = (fno.fattrib & AM_DIR) ? true : false;
+        if (is_dir || has_wav_extension(name)) {
+            total_count++;
+        }
     }
 
     // Second pass: collect requested page
@@ -62,11 +81,18 @@ bool ListDir(const char* path,
         const char* name = fno.fname;
 #endif
         if(is_dot_entry(name)) continue;
+        
+        // Only include directories and WAV files
+        bool is_dir = (fno.fattrib & AM_DIR) ? true : false;
+        if (!is_dir && !has_wav_extension(name)) {
+            continue; // Skip non-WAV files
+        }
+        
         if(skipped < start_index) { skipped++; continue; }
         if(written >= max_entries) break;
 
         FileEntry& e = out[written++];
-        e.is_dir     = (fno.fattrib & AM_DIR) ? 1 : 0;
+        e.is_dir     = is_dir ? 1 : 0;
         e.size_bytes = e.is_dir ? 0u : (uint32_t)fno.fsize;
         std::strncpy(e.name, name, sizeof(e.name) - 1);
         e.name[sizeof(e.name) - 1] = '\0';

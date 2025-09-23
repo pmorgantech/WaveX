@@ -18,6 +18,7 @@
 #include "config/link_config.h" // For HD protocol command macros
 #include "config/pin_config.h" // For Daisy SPI pin definitions
 #include "../../shared/spi_protocol/protocol.h" // For protocol functions
+#include "../../shared/config/logging_config.h" // For logging macros
 #include "../storage/fs_browse.h" // For file browsing
 #include "../audio/audio_engine.h" // For sample audition
 #include "stm32h7xx_hal.h" // For interrupt handling
@@ -67,6 +68,12 @@ static uint8_t outgoing_queue[MAX_QUEUED_MESSAGES][DATA_PKT_SIZE] __attribute__(
 static int outgoing_head = 0;
 static int outgoing_tail = 0;
 static int outgoing_count = 0;
+
+// Directory state for file browsing
+static char s_current_directory[96] = "/";
+static WaveX::Storage::FileEntry s_current_file_entries[50]; // Increased to accommodate more files
+static size_t s_current_file_count = 0;
+static bool s_directory_state_valid = false;
 
 // Forward declarations will be inside namespace
 
@@ -251,6 +258,9 @@ void Spi_Init(daisy::DaisySeed &hw, daisy::SpiHandle* hspi)
 static void ProcessBrowseRequest(const char* path, size_t start_index = 0);
 static void ProcessSamplePlayRequest(const char* file_path);
 static void ProcessSampleStopRequest();
+static void ProcessSamplePlayIndexRequest(uint32_t file_index);
+static void ProcessSampleGetPathRequest(uint32_t file_index);
+static void ClearDirectoryState();
 
 static void ProcessSpiMessage(const uint8_t* packet_data, size_t packet_size)
 {
@@ -309,10 +319,6 @@ static void ProcessSpiMessage(const uint8_t* packet_data, size_t packet_size)
 
         case MSG_BROWSE_REQ: {
             // ESP32 requesting directory listing
-            if (s_hw) {
-                s_hw->PrintLine("DAISY: Processing MSG_BROWSE_REQ, payload len=%d", len);
-            }
-            
             char path[96] = {0};
             size_t start_index = 0;
             
@@ -344,9 +350,7 @@ static void ProcessSpiMessage(const uint8_t* packet_data, size_t packet_size)
                 strcpy(path, "/");
             }
 
-            if (s_hw) {
-                s_hw->PrintLine("DAISY: Browse request path: '%s', start_index: %d", path, (int)start_index);
-            }
+            WAVEX_LOG_DAISY_MESSAGE(DAISY_SPI_MESSAGE, "IN MSG BROWSE_REQ path=%s", path);
 
             // Process browse request with pagination
             ProcessBrowseRequest(path, start_index);
@@ -363,6 +367,10 @@ static void ProcessSpiMessage(const uint8_t* packet_data, size_t packet_size)
                     memcpy(file_path, &payload[1], copy_len);
                     file_path[copy_len] = '\0';
                 }
+                if (s_hw) {
+                    s_hw->PrintLine("DAISY: Processing MSG_SAMPLE_PLAY_REQ, payload len=%d", len);
+                    s_hw->PrintLine("DAISY: File path: '%s'", file_path);
+                }
                 ProcessSamplePlayRequest(file_path);
             }
             break;
@@ -370,7 +378,32 @@ static void ProcessSpiMessage(const uint8_t* packet_data, size_t packet_size)
 
         case MSG_SAMPLE_STOP_REQ: {
             // ESP32 requesting to stop sample audition
+            if (s_hw) {
+                s_hw->PrintLine("DAISY: Processing MSG_SAMPLE_STOP_REQ");
+            }
             ProcessSampleStopRequest();
+            break;
+        }
+
+        case MSG_SAMPLE_PLAY_INDEX_REQ: {
+            // ESP32 requesting sample audition by index
+            if (len >= sizeof(WaveX::Protocol::SamplePlayIndexMessage) + 1) { // +1 for message type byte
+                WaveX::Protocol::SamplePlayIndexMessage* msg = (WaveX::Protocol::SamplePlayIndexMessage*)&payload[1]; // Skip message type byte
+                WAVEX_LOG_DAISY_MESSAGE(DAISY_SPI_MESSAGE, "IN MSG SAMPLE_PLAY_INDEX_REQ index=%lu", (unsigned long)msg->index);
+                ProcessSamplePlayIndexRequest(msg->index);
+            }
+            break;
+        }
+
+        case MSG_SAMPLE_GET_PATH_REQ: {
+            // ESP32 requesting full path for index
+            if (len >= sizeof(WaveX::Protocol::SampleGetPathMessage) + 1) { // +1 for message type byte
+                WaveX::Protocol::SampleGetPathMessage* msg = (WaveX::Protocol::SampleGetPathMessage*)&payload[1]; // Skip message type byte
+                if (s_hw) {
+                    s_hw->PrintLine("DAISY: Processing MSG_SAMPLE_GET_PATH_REQ, index=%lu", (unsigned long)msg->index);
+                }
+                ProcessSampleGetPathRequest(msg->index);
+            }
             break;
         }
 
@@ -538,11 +571,21 @@ static void ProcessBrowseRequest(const char* path, size_t start_index)
         s_hw->PrintLine("DAISY: Received browse request for path: '%s', start_index: %d", path, (int)start_index);
     }
 
+    // Update directory state if this is the first page (start_index == 0)
+    if (start_index == 0) {
+        strncpy(s_current_directory, path, sizeof(s_current_directory) - 1);
+        s_current_directory[sizeof(s_current_directory) - 1] = '\0';
+        s_directory_state_valid = false; // Will be set to true after successful directory read
+        if (s_hw) {
+            s_hw->PrintLine("DAISY: Updated current directory to: '%s'", s_current_directory);
+        }
+    }
+
     // Buffer for response packet  
     uint8_t response_buffer[700]; // Large enough for header + 10 file entries (~53 bytes each)
 
-    // Get directory listing
-    FileEntry entries[4]; // Max 4 entries per response to fit in 255-byte packet limit
+    // Get directory listing - get all files at once for first page, then paginate
+    FileEntry entries[50]; // Increased to accommodate more files
     size_t total_count = 0;
     size_t entries_written = 0;
 
@@ -550,21 +593,52 @@ static void ProcessBrowseRequest(const char* path, size_t start_index)
         s_hw->PrintLine("DAISY: Calling ListDir for path: '%s', start_index: %d", path, (int)start_index);
     }
 
-    bool success = ListDir(path, entries, sizeof(entries)/sizeof(entries[0]), total_count, start_index, entries_written);
-
-    if (s_hw) {
-        s_hw->PrintLine("DAISY: ListDir result: success=%d, total_count=%d, entries_written=%d", success, (int)total_count, (int)entries_written);
+    // For first page (start_index == 0), get all files to populate directory state
+    // For subsequent pages, use pagination
+    if (start_index == 0) {
+        bool success = ListDir(path, entries, sizeof(entries)/sizeof(entries[0]), total_count, 0, entries_written);
+        if (!success) {
+            if (s_hw) {
+                s_hw->PrintLine("DAISY: ListDir failed for path: '%s'", path);
+            }
+            // Send error response
+            ErrorMessage err = {0x01, "Directory read failed"};
+            uint8_t response_buffer[64];
+            size_t pkt_size = ProtocolHandler::CreateErrorPacket(response_buffer, sizeof(response_buffer), err);
+            Spi_Send(MSG_ERROR, response_buffer + sizeof(PacketHeader), pkt_size - sizeof(PacketHeader));
+            return;
+        }
+        
+        // Store all files in directory state
+        s_current_file_count = std::min(entries_written, (size_t)50);
+        for (size_t i = 0; i < s_current_file_count; i++) {
+            s_current_file_entries[i] = entries[i];
+        }
+        s_directory_state_valid = true;
+        if (s_hw) {
+            s_hw->PrintLine("DAISY: Stored %d file entries for current directory", (int)s_current_file_count);
+        }
+        
+        // Now paginate the response (send first 4 entries)
+        entries_written = std::min(entries_written, (size_t)4);
+    } else {
+        // For subsequent pages, use normal pagination
+        bool success = ListDir(path, entries, sizeof(entries)/sizeof(entries[0]), total_count, start_index, entries_written);
+        if (!success) {
+            if (s_hw) {
+                s_hw->PrintLine("DAISY: ListDir failed for path: '%s'", path);
+            }
+            // Send error response
+            ErrorMessage err = {0x01, "Directory read failed"};
+            uint8_t response_buffer[64];
+            size_t pkt_size = ProtocolHandler::CreateErrorPacket(response_buffer, sizeof(response_buffer), err);
+            Spi_Send(MSG_ERROR, response_buffer + sizeof(PacketHeader), pkt_size - sizeof(PacketHeader));
+            return;
+        }
     }
 
-    if (!success) {
-        // Send error response
-        if (s_hw) {
-            s_hw->PrintLine("DAISY: Directory read failed, sending error response");
-        }
-        ErrorMessage err = {0x01, "Directory read failed"};
-        size_t pkt_size = ProtocolHandler::CreateErrorPacket(response_buffer, sizeof(response_buffer), err);
-        Spi_Send(MSG_ERROR, response_buffer + sizeof(PacketHeader), pkt_size - sizeof(PacketHeader));
-        return;
+    if (s_hw) {
+        s_hw->PrintLine("DAISY: ListDir result: total_count=%d, entries_written=%d", (int)total_count, (int)entries_written);
     }
 
     // Convert FileEntry to FileEntryWire format
@@ -598,6 +672,19 @@ static void ProcessBrowseRequest(const char* path, size_t start_index)
 
     if (s_hw) {
         s_hw->PrintLine("DAISY: Sending browse response with %d entries (total_count=%d)", num_entries, (int)total_count);
+    }
+
+    // Update directory state after successful directory read (only for first page)
+    if (start_index == 0) {
+        // Store the first page of entries for index-based operations
+        s_current_file_count = std::min(entries_written, (size_t)4);
+        for (size_t i = 0; i < s_current_file_count; i++) {
+            s_current_file_entries[i] = entries[i];
+        }
+        s_directory_state_valid = true;
+        if (s_hw) {
+            s_hw->PrintLine("DAISY: Stored %d file entries for current directory", (int)s_current_file_count);
+        }
     }
 
     // Send browse response using large packet format (pkt_t)
@@ -661,7 +748,7 @@ static void ProcessBrowseRequest(const char* path, size_t start_index)
     memcpy(custom_packet, response_buffer, copy_size);
     
     // Queue the message for bidirectional transmission instead of direct send
-    bool queued = QueueOutgoingMessage(custom_packet, DATA_PKT_SIZE);
+    bool queued = QueueOutgoingMessage(custom_packet, pkt_size);
     
     if (queued) {
         s_stats.packets_sent++;
@@ -720,6 +807,144 @@ static void ProcessSampleStopRequest()
     Spi_Send(MSG_SAMPLE_STATUS, response_buffer + sizeof(PacketHeader), pkt_size - sizeof(PacketHeader));
 }
 
+static void ProcessSamplePlayIndexRequest(uint32_t file_index)
+{
+    using namespace WaveX::Protocol;
+    using namespace WaveX::Storage;
+
+    if (s_hw) {
+        s_hw->PrintLine("DAISY: Processing sample play index request for index %lu", (unsigned long)file_index);
+    }
+
+    // Check if we have valid directory state
+    if (!s_directory_state_valid) {
+        if (s_hw) {
+            s_hw->PrintLine("DAISY: No valid directory state, cannot process index request");
+        }
+        
+        // Send error response
+        SampleStatusMessage status;
+        status.state = 0; // Stopped (failed)
+        status.sample_rate = 0;
+        status.channels = 0;
+        status.frames_played = 0;
+        
+        uint8_t response_buffer[64];
+        size_t pkt_size = ProtocolHandler::CreateSampleStatusPacket(response_buffer, sizeof(response_buffer), status);
+        Spi_Send(MSG_SAMPLE_STATUS, response_buffer + sizeof(PacketHeader), pkt_size - sizeof(PacketHeader));
+        return;
+    }
+
+    // Validate index against stored file list
+    if (file_index >= s_current_file_count) {
+        if (s_hw) {
+            s_hw->PrintLine("DAISY: Invalid file index %lu (total entries: %lu)", (unsigned long)file_index, (unsigned long)s_current_file_count);
+        }
+        
+        // Send error response
+        SampleStatusMessage status;
+        status.state = 0; // Stopped (failed)
+        status.sample_rate = 0;
+        status.channels = 0;
+        status.frames_played = 0;
+        
+        uint8_t response_buffer[64];
+        size_t pkt_size = ProtocolHandler::CreateSampleStatusPacket(response_buffer, sizeof(response_buffer), status);
+        Spi_Send(MSG_SAMPLE_STATUS, response_buffer + sizeof(PacketHeader), pkt_size - sizeof(PacketHeader));
+        return;
+    }
+    
+    // Build full path for the file at the given index using stored state
+    char full_path[256];
+    snprintf(full_path, sizeof(full_path), "%s/%s", s_current_directory, s_current_file_entries[file_index].name);
+    
+    if (s_hw) {
+        s_hw->PrintLine("DAISY: Playing file at index %lu: '%s'", (unsigned long)file_index, full_path);
+    }
+    
+    // Start sample audition using the full path
+    bool play_success = WaveX::AudioEngine::AuditionSample(full_path);
+    
+    // Send status response
+    SampleStatusMessage status;
+    if (play_success) {
+        status.state = 1; // Playing
+        status.sample_rate = 44100; // TODO: Get actual sample rate
+        status.channels = 2; // TODO: Get actual channel count
+        status.frames_played = 0;
+    } else {
+        status.state = 0; // Stopped (failed to start)
+        status.sample_rate = 0;
+        status.channels = 0;
+        status.frames_played = 0;
+    }
+    
+    uint8_t response_buffer[64];
+    size_t pkt_size = ProtocolHandler::CreateSampleStatusPacket(response_buffer, sizeof(response_buffer), status);
+    Spi_Send(MSG_SAMPLE_STATUS, response_buffer + sizeof(PacketHeader), pkt_size - sizeof(PacketHeader));
+}
+
+static void ProcessSampleGetPathRequest(uint32_t file_index)
+{
+    using namespace WaveX::Protocol;
+    using namespace WaveX::Storage;
+
+    if (s_hw) {
+        s_hw->PrintLine("DAISY: Processing sample get path request for index %lu", (unsigned long)file_index);
+    }
+
+    // Get directory listing to find the file at the given index
+    FileEntry entries[4];
+    size_t total_count = 0;
+    size_t entries_written = 0;
+    
+    // Use the last browsed path (we'd need to maintain this state)
+    const char* current_path = "/"; // TODO: Get from state
+    
+    bool success = ListDir(current_path, entries, sizeof(entries)/sizeof(entries[0]), total_count, 0, entries_written);
+    
+    if (!success || file_index >= entries_written) {
+        if (s_hw) {
+            s_hw->PrintLine("DAISY: Invalid file index %lu for path request (total entries: %lu)", (unsigned long)file_index, (unsigned long)entries_written);
+        }
+        
+        // Send error response
+        ErrorMessage err = {0x02, "Invalid file index"};
+        uint8_t response_buffer[64];
+        size_t pkt_size = ProtocolHandler::CreateErrorPacket(response_buffer, sizeof(response_buffer), err);
+        Spi_Send(MSG_ERROR, response_buffer + sizeof(PacketHeader), pkt_size - sizeof(PacketHeader));
+        return;
+    }
+    
+    // Build full path for the file at the given index
+    char full_path[256];
+    snprintf(full_path, sizeof(full_path), "%s/%s", current_path, entries[file_index].name);
+    
+    if (s_hw) {
+        s_hw->PrintLine("DAISY: Sending path for index %lu: '%s'", (unsigned long)file_index, full_path);
+    }
+    
+    // Send path response
+    SamplePathResponseMessage response;
+    response.index = file_index;
+    strncpy(response.path, full_path, sizeof(response.path) - 1);
+    response.path[sizeof(response.path) - 1] = '\0';
+    
+    uint8_t response_buffer[256];
+    size_t pkt_size = ProtocolHandler::CreateSamplePathResponsePacket(response_buffer, sizeof(response_buffer), response);
+    Spi_Send(MSG_SAMPLE_GET_PATH_RESP, response_buffer + sizeof(PacketHeader), pkt_size - sizeof(PacketHeader));
+}
+
+static void ClearDirectoryState()
+{
+    strcpy(s_current_directory, "/");
+    s_current_file_count = 0;
+    s_directory_state_valid = false;
+    if (s_hw) {
+        s_hw->PrintLine("DAISY: Directory state cleared");
+    }
+}
+
 
 // ============================================================================
 // Outgoing Message Queue Management
@@ -741,8 +966,16 @@ static void PrepareTxBuffer(uint8_t* tx_buf, size_t buf_size)
     // Get next outgoing message
     uint8_t* outgoing_msg = outgoing_queue[outgoing_head];
     
+    // Debug the outgoing message before processing
+    WAVEX_LOG_DAISY_OUTBOUND(DAISY_OUTBOUND_SPI, "PrepareTxBuffer - outgoing_msg[0]=0x%02X, outgoing_msg[1]=0x%02X", 
+                       outgoing_msg[0], outgoing_msg[1]);
+    
     // Determine packet size based on type
     size_t packet_size = get_packet_size(outgoing_msg);
+    
+    WAVEX_LOG_DAISY_OUTBOUND(DAISY_OUTBOUND_SPI, "get_packet_size returned %d for type 0x%02X", 
+                       (int)packet_size, outgoing_msg[0]);
+    
     size_t copy_size = (buf_size < packet_size) ? buf_size : packet_size;
     memcpy(tx_buf, outgoing_msg, copy_size);
     
@@ -750,10 +983,8 @@ static void PrepareTxBuffer(uint8_t* tx_buf, size_t buf_size)
     outgoing_head = (outgoing_head + 1) % MAX_QUEUED_MESSAGES;
     outgoing_count--;
     
-    if (s_hw) {
-        // s_hw->PrintLine("DAISY: Prepared outgoing message type=0x%02X, len=%d, remaining=%d", 
-        //                outgoing_msg[0], outgoing_msg[3], outgoing_count);
-    }
+    WAVEX_LOG_DAISY_OUTBOUND(DAISY_OUTBOUND_SPI, "Prepared outgoing message type=0x%02X, len=%d, remaining=%d",
+                       outgoing_msg[0], (int)packet_size, outgoing_count);
 }
 
 // Add message to outgoing queue
@@ -786,6 +1017,13 @@ static bool QueueOutgoingMessage(const uint8_t* packet_data, size_t packet_size)
     
     uint8_t* msg = outgoing_queue[outgoing_tail];
     memcpy(msg, packet_data, packet_size);
+    
+    // Debug: Log what we're actually queuing
+    if (s_hw) {
+        s_hw->PrintLine("DAISY: QueueOutgoingMessage - queuing type=0x%02X, size=%d, first_4_bytes: %02X %02X %02X %02X",
+                       packet_data[0], (int)packet_size, 
+                       packet_data[0], packet_data[1], packet_data[2], packet_data[3]);
+    }
     
     outgoing_tail = (outgoing_tail + 1) % MAX_QUEUED_MESSAGES;
     outgoing_count++;
@@ -849,9 +1087,7 @@ static bool PerformBidirectionalPoll()
         }
     } else if (we_have_data) {
         // We have data to send (meter, heartbeat, etc.)
-        if (s_hw && poll_count % 20 == 0) { // Reduce logging
-            s_hw->PrintLine("DAISY: Sending queued data, poll #%lu", (unsigned long)poll_count);
-        }
+        WAVEX_LOG_DAISY_OUTBOUND(DAISY_OUTBOUND_SPI, "Sending queued data, poll #%lu", (unsigned long)poll_count);
     }
     
     // Prepare bidirectional transaction
@@ -874,9 +1110,8 @@ static bool PerformBidirectionalPoll()
         // Determine actual packet size from the prepared buffer
         transfer_size = get_packet_size(tx_buf);
         if (transfer_size == 0) transfer_size = CMD_PKT_SIZE; // Fallback
-        // if (s_hw && poll_count % 10 == 0) { // Reduce logging
-        //     s_hw->PrintLine("DAISY: Sending queued data to ESP32, type=0x%02X", tx_buf[0]);
-        // }
+        WAVEX_LOG_DAISY_OUTBOUND(DAISY_OUTBOUND_SPI, "Sending queued data to ESP32, type=0x%02X, transfer_size=%d",
+                           tx_buf[0], (int)transfer_size);
     } else {
         // No urgent data and no outgoing data - skip communication
         return false;
@@ -929,9 +1164,7 @@ static bool PerformBidirectionalPoll()
     
     // Determine packet size and validate
     size_t packet_size = get_packet_size(rx_buf);
-    if (s_hw) {
-        s_hw->PrintLine("DAISY: get_packet_size returned %d for type 0x%02X", (int)packet_size, rx_buf[0]);
-    }
+    WAVEX_LOG_DAISY_INBOUND(DAISY_INBOUND_SPI, "get_packet_size returned %d for type 0x%02X", (int)packet_size, rx_buf[0]);
     if (packet_size == 0) {
         if (s_hw) {
             s_hw->PrintLine("DAISY: Unknown packet type: 0x%02X", rx_buf[0]);
@@ -949,26 +1182,22 @@ static bool PerformBidirectionalPoll()
     }
     
     if (is_empty_data) {
-        if (s_hw) {
-            s_hw->PrintLine("DAISY: Received empty/invalid data packet, ignoring");
-        }
+        // if (s_hw) {
+        //     s_hw->PrintLine("DAISY: Received empty/invalid data packet, ignoring");
+        // }
         return false;
     }
     
     // Validate the packet
-    if (s_hw) {
-        s_hw->PrintLine("DAISY: Validating packet of size %d", (int)packet_size);
-        s_hw->PrintLine("DAISY: Packet bytes: %02X %02X %02X %02X %02X %02X %02X %02X", 
+    WAVEX_LOG_DAISY_INBOUND(DAISY_INBOUND_SPI, "Validating packet of size %d", (int)packet_size);
+    WAVEX_LOG_DAISY_INBOUND(DAISY_INBOUND_SPI, "Packet bytes: %02X %02X %02X %02X %02X %02X %02X %02X", 
                         rx_buf[0], rx_buf[1], rx_buf[2], rx_buf[3], 
                         rx_buf[4], rx_buf[5], rx_buf[6], rx_buf[7]);
-    }
     
     // Check packet type and length
     uint8_t type = rx_buf[0];
     uint8_t len = rx_buf[3];
-    if (s_hw) {
-        s_hw->PrintLine("DAISY: Packet type=0x%02X, len=%d", type, len);
-    }
+    WAVEX_LOG_DAISY_INBOUND(DAISY_INBOUND_SPI, "Packet type=0x%02X, len=%d", type, len);
     
     // Check CRC
     uint16_t received_crc = rx_buf[4] | (rx_buf[5] << 8);
@@ -982,11 +1211,9 @@ static bool PerformBidirectionalPoll()
     memcpy(&crc_data[4], &rx_buf[6], len); // payload (starts at offset 6)
     
     uint16_t calculated_crc = crc16_ccitt(crc_data, 4 + len);
-    if (s_hw) {
-        s_hw->PrintLine("DAISY: CRC calculation: %d bytes - %02X %02X %02X %02X %02X", 
+    WAVEX_LOG_DAISY_INBOUND(DAISY_INBOUND_SPI, "CRC calculation: %d bytes - %02X %02X %02X %02X %02X", 
                         4 + len, crc_data[0], crc_data[1], crc_data[2], crc_data[3], crc_data[4]);
-        s_hw->PrintLine("DAISY: Received CRC=0x%04X, Calculated CRC=0x%04X", received_crc, calculated_crc);
-    }
+    WAVEX_LOG_DAISY_INBOUND(DAISY_INBOUND_SPI, "Received CRC=0x%04X, Calculated CRC=0x%04X", received_crc, calculated_crc);
     
     if (!validate_packet(rx_buf, packet_size)) {
         if (s_hw) {
@@ -995,21 +1222,16 @@ static bool PerformBidirectionalPoll()
         return false;
     }
     
-    if (s_hw) {
-        s_hw->PrintLine("DAISY: Received packet type=0x%02X, len=%d, size=%d", 
-                        rx_buf[0], rx_buf[3], (int)packet_size);
-        s_hw->PrintLine("DAISY: Full packet data: %02X %02X %02X %02X %02X %02X %02X %02X", 
+    WAVEX_LOG_DAISY_PACKET(DAISY_SPI_PACKET, "INPACKET type=0x%02X, len=%d, size=%d, data %02X %02X %02X %02X %02X %02X %02X %02X", 
+                        rx_buf[0], rx_buf[3], (int)packet_size,
                         rx_buf[0], rx_buf[1], rx_buf[2], rx_buf[3], rx_buf[4], rx_buf[5], rx_buf[6], rx_buf[7]);
-    }
     
     // Queue the message for processing
     if (queue_count < MAX_QUEUED_MESSAGES) {
         memcpy(message_queue[queue_tail], rx_buf, packet_size);
         queue_tail = (queue_tail + 1) % MAX_QUEUED_MESSAGES;
         queue_count++;
-        if (s_hw) {
-            s_hw->PrintLine("DAISY: Queued message type=0x%02X, queue_count=%d", rx_buf[0], queue_count);
-        }
+        WAVEX_LOG_DAISY_INBOUND(DAISY_INBOUND_SPI, "Queued message type=0x%02X, queue_count=%d", rx_buf[0], queue_count);
         return true;
     } else {
         if (s_hw) {
@@ -1110,10 +1332,8 @@ void ProcessQueuedSpiMessage()
         uint8_t* packet_data = message_queue[queue_head];
         size_t packet_size = get_packet_size(packet_data);
         
-        if (s_hw) {
-            s_hw->PrintLine("DAISY: Dequeuing message for processing, type=0x%02X, len=%d, size=%d",
+        WAVEX_LOG_DAISY_INBOUND(DAISY_INBOUND_SPI, "Dequeuing message for processing, type=0x%02X, len=%d, size=%d",
                            packet_data[0], packet_data[3], (int)packet_size);
-        }
         
         // Process the message directly
         ProcessSpiMessage(packet_data, packet_size);
@@ -1122,9 +1342,7 @@ void ProcessQueuedSpiMessage()
         queue_head = (queue_head + 1) % MAX_QUEUED_MESSAGES;
         queue_count--;
         
-        if (s_hw) {
-            s_hw->PrintLine("DAISY: Message processed and dequeued, remaining queue_count=%d", queue_count);
-        }
+        WAVEX_LOG_DAISY_INBOUND(DAISY_INBOUND_SPI, "Message processed and dequeued, remaining queue_count=%d", queue_count);
     }
 }
 

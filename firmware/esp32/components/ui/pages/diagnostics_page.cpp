@@ -25,6 +25,11 @@ static lv_obj_t *s_diagnostics_label = NULL;
 static lv_obj_t *s_daisy_label = NULL;
 static esp_timer_handle_t s_diagnostics_timer_handle = NULL;
 
+// Deferred UI update data
+static char s_deferred_esp32_text[512] = {0};
+static char s_deferred_daisy_text[512] = {0};
+static bool s_ui_update_pending = false;
+
 // CPU monitoring variables
 static float s_cpu_usage_percent = 0.0f;
 static float s_cpu_usage_core0 = 0.0f;
@@ -134,8 +139,8 @@ static void diagnostics_update_cb(void *arg)
         link_status = "INIT";
     }
     
-    char esp32_text[512];
-    snprintf(esp32_text, sizeof(esp32_text),
+    // Prepare text data (no LVGL locks in timer callback)
+    snprintf(s_deferred_esp32_text, sizeof(s_deferred_esp32_text),
         "Uptime: %lu sec\n"
         "Free RAM: %zu KB\n"
         "Min RAM: %zu KB\n"
@@ -150,8 +155,7 @@ static void diagnostics_update_cb(void *arg)
         s_cpu_usage_core0,
         s_cpu_usage_core1);
     
-    char daisy_text[512];
-    snprintf(daisy_text, sizeof(daisy_text),
+    snprintf(s_deferred_daisy_text, sizeof(s_deferred_daisy_text),
         "Status: %s\n"
         "Last RX: %lu ms ago\n"
         "Total Packets: %lu\n"
@@ -171,18 +175,32 @@ static void diagnostics_update_cb(void *arg)
         spi_active ? "YES" : "NO",
         heartbeat.cpu_usage_percent);
     
+    // Mark UI update as pending (will be processed by main UI task)
+    s_ui_update_pending = true;
+    wavex_ui_mark_content_changed();
+}
+
+/**
+ * @brief Process deferred UI updates (called from main UI task)
+ */
+void diagnostics_page_process_deferred_updates(void)
+{
+    if (!s_ui_update_pending) {
+        return;
+    }
+    
     LV_LOCK();
     if (s_diagnostics_label && lv_obj_is_valid(s_diagnostics_label)) {
-        lv_label_set_text(s_diagnostics_label, esp32_text);
+        lv_label_set_text(s_diagnostics_label, s_deferred_esp32_text);
         lv_obj_set_style_text_font(s_diagnostics_label, &lv_font_montserrat_18, LV_PART_MAIN);
     }
     if (s_daisy_label && lv_obj_is_valid(s_daisy_label)) {
-        lv_label_set_text(s_daisy_label, daisy_text);
+        lv_label_set_text(s_daisy_label, s_deferred_daisy_text);
         lv_obj_set_style_text_font(s_daisy_label, &lv_font_montserrat_18, LV_PART_MAIN);
     }
     LV_UNLOCK();
     
-    wavex_ui_mark_content_changed();
+    s_ui_update_pending = false;
 }
 
 /**

@@ -11,7 +11,7 @@ extern "C" {
 
 // ---- Framing ---------------------------------------------------------------
 typedef struct __attribute__((packed)) {
-    uint16_t len;    // bytes in payload (0..240)
+    uint16_t len;    // bytes in payload (0..244)
     uint16_t type;   // app-defined (0=ping,1=state,2=param,...)
 } pkt_hdr_t;
 

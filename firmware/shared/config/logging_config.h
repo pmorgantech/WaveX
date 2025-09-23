@@ -71,6 +71,35 @@
 #define WAVEX_LOG_USB_MIDI WAVEX_DEBUG_LOGGING_ENABLED
 #endif
 
+// Daisy SPI Outbound Packet Logging (Daisy only)
+#ifndef WAVEX_LOG_DAISY_OUTBOUND_SPI
+#define WAVEX_LOG_DAISY_OUTBOUND_SPI 0
+#endif
+
+// Daisy SPI Inbound Packet Logging (Daisy only)
+#ifndef WAVEX_LOG_DAISY_INBOUND_SPI
+#define WAVEX_LOG_DAISY_INBOUND_SPI 0
+#endif
+
+// Daisy SPI Packet Summary Logging (Daisy only)
+#ifndef WAVEX_LOG_DAISY_SPI_PACKET
+#define WAVEX_LOG_DAISY_SPI_PACKET WAVEX_DEBUG_LOGGING_ENABLED
+#endif
+
+// Daisy SPI Message Decoding Logging (Daisy only)
+#ifndef WAVEX_LOG_DAISY_SPI_MESSAGE
+#define WAVEX_LOG_DAISY_SPI_MESSAGE WAVEX_DEBUG_LOGGING_ENABLED
+#endif
+
+
+// ESP32_INTER_SPI component logging (for token pasting with ESP32_INTER_SPI)
+#ifndef WAVEX_LOG_ESP32_INTER_SPI
+#define WAVEX_LOG_ESP32_INTER_SPI 0
+#endif
+
+// ESP32 SPI component logging (for token pasting)
+
+
 // ============================================================================
 // LOGGING MACRO DEFINITIONS
 // ============================================================================
@@ -102,42 +131,50 @@
 #ifdef ESP_PLATFORM
     // ESP32-specific logging using ESP_LOG macros
     #include "esp_log.h"
-    
+
     #define WAVEX_LOG_ESP(component, level, format, ...) \
         do { \
             if (WAVEX_LOG_##component) { \
                 ESP_LOG_##level("WAVEX-" #component, format, ##__VA_ARGS__); \
             } \
         } while(0)
-    
+
     #define WAVEX_LOG_ESP_INFO(component, format, ...) \
         WAVEX_LOG_ESP(component, INFO, format, ##__VA_ARGS__)
-    
+
     #define WAVEX_LOG_ESP_WARN(component, format, ...) \
         WAVEX_LOG_ESP(component, WARN, format, ##__VA_ARGS__)
-    
+
     #define WAVEX_LOG_ESP_ERROR(component, format, ...) \
         WAVEX_LOG_ESP(component, ERROR, format, ##__VA_ARGS__)
-    
+
     #define WAVEX_LOG_ESP_DEBUG(component, format, ...) \
         WAVEX_LOG_ESP(component, DEBUG, format, ##__VA_ARGS__)
-    
+
     #define WAVEX_LOG_ESP_VERBOSE(component, format, ...) \
         WAVEX_LOG_ESP(component, VERBOSE, format, ##__VA_ARGS__)
-    
+
+    // ESP32 inter-SPI debugging logging
+    #define WAVEX_LOG_ESP32_SPI(component, format, ...) \
+        do { \
+            if (WAVEX_LOG_##component) { \
+                ESP_LOGI("WAVEX-" #component, format, ##__VA_ARGS__); \
+            } \
+        } while(0)
+
 #else
-    // Daisy-specific logging using hw.PrintLine
+    // Daisy-specific logging using printf (since hw may not be available in all contexts)
     #define WAVEX_LOG_DAISY(component, format, ...) \
         do { \
             if (WAVEX_LOG_##component) { \
-                hw.PrintLine("[WAVEX-%s] " format, #component, ##__VA_ARGS__); \
+                printf("[WAVEX-%s] " format "\n", #component, ##__VA_ARGS__); \
             } \
         } while(0)
-    
+
     #define WAVEX_LOG_DAISY_RAW(component, format, ...) \
         do { \
             if (WAVEX_LOG_##component) { \
-                hw.PrintLine(format, ##__VA_ARGS__); \
+                printf(format, ##__VA_ARGS__); \
             } \
         } while(0)
 #endif
@@ -171,6 +208,26 @@
 // Component debug logging
 #define WAVEX_LOG_DEBUG(component, format, ...) \
     WAVEX_LOG(component, "DEBUG: " format, ##__VA_ARGS__)
+
+// ============================================================================
+// SPI-SPECIFIC LOGGING MACROS
+// ============================================================================
+
+// Daisy outbound SPI packet logging
+#define WAVEX_LOG_DAISY_OUTBOUND(component, format, ...) \
+    WAVEX_LOG_DAISY(component, format, ##__VA_ARGS__)
+
+// Daisy inbound SPI packet logging  
+#define WAVEX_LOG_DAISY_INBOUND(component, format, ...) \
+    WAVEX_LOG_DAISY(component, format, ##__VA_ARGS__)
+
+// Daisy SPI packet summary logging
+#define WAVEX_LOG_DAISY_PACKET(component, format, ...) \
+    WAVEX_LOG_DAISY(component, format, ##__VA_ARGS__)
+
+// Daisy SPI message decoding logging
+#define WAVEX_LOG_DAISY_MESSAGE(component, format, ...) \
+    WAVEX_LOG_DAISY(component, format, ##__VA_ARGS__)
 
 // ============================================================================
 // CONDITIONAL COMPILATION HELPERS

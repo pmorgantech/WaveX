@@ -316,7 +316,7 @@ bool ProtocolHandler::ValidateSpiPacket(const uint8_t* data, size_t size)
             return false;
         }
     } else if (type == 0x02) { // Data packet
-        if (len > 240 || size < SPI_DATA_PKT_SIZE) {
+        if (len > 244 || size < SPI_DATA_PKT_SIZE) {
             printf("ValidateSpiPacket: Data packet validation failed - len=%d, size=%zu, SPI_DATA_PKT_SIZE=%zu\n", 
                    len, size, SPI_DATA_PKT_SIZE);
             return false;
@@ -348,26 +348,38 @@ bool ProtocolHandler::ValidateSpiPacket(const uint8_t* data, size_t size)
 size_t ProtocolHandler::GetSpiPacketSize(const uint8_t* data)
 {
     if (!data) return 0;
-    
+
     uint8_t type = data[0];
-    
+
     // Command packets: type=0x01, length in byte 3
     if (type == 0x01) {
         return SPI_CMD_PKT_SIZE;
     }
-    
-    // Data packets: type=0x02, length in byte 3  
+
+    // Data packets: type=0x02, length in byte 3
     if (type == 0x02) {
         return SPI_DATA_PKT_SIZE;
     }
-    
+
+    // New large-packet format with sync header (PacketHeader)
+    if (type == SYNC_BYTE) {
+        const PacketHeader* hdr = reinterpret_cast<const PacketHeader*>(data);
+
+        // Basic sanity: avoid overruns; payload must fit in MAX_PAYLOAD_SIZE
+        if (hdr->length > MAX_PAYLOAD_SIZE) {
+            return 0;
+        }
+
+        return sizeof(PacketHeader) + hdr->length;
+    }
+
     // If we get here, it's likely a data packet with unknown type
     // Check if it looks like a data packet by examining the structure
-    if (data[1] == 0x00 && data[2] == 0x00 && data[3] <= 240) {
+    if (data[1] == 0x00 && data[2] == 0x00 && data[3] <= 244) {
         // Looks like a data packet structure
         return SPI_DATA_PKT_SIZE;
     }
-    
+
     // Default to command packet size for unknown formats
     return SPI_CMD_PKT_SIZE;
 }
@@ -392,6 +404,25 @@ bool ProtocolHandler::IsCommandPacket(const uint8_t* data)
 bool ProtocolHandler::IsDataPacket(const uint8_t* data)
 {
     return data && data[0] == 0x02;
+}
+
+// Index-based file selection packet creators
+size_t ProtocolHandler::CreateSamplePlayIndexPacket(uint8_t* buffer, size_t buffer_size,
+                                                  const SamplePlayIndexMessage& msg)
+{
+    return BuildPacket(buffer, buffer_size, MSG_SAMPLE_PLAY_INDEX_REQ, &msg, sizeof(msg));
+}
+
+size_t ProtocolHandler::CreateSampleGetPathPacket(uint8_t* buffer, size_t buffer_size,
+                                                const SampleGetPathMessage& msg)
+{
+    return BuildPacket(buffer, buffer_size, MSG_SAMPLE_GET_PATH_REQ, &msg, sizeof(msg));
+}
+
+size_t ProtocolHandler::CreateSamplePathResponsePacket(uint8_t* buffer, size_t buffer_size,
+                                                     const SamplePathResponseMessage& msg)
+{
+    return BuildPacket(buffer, buffer_size, MSG_SAMPLE_GET_PATH_RESP, &msg, sizeof(msg));
 }
 
 } // namespace Protocol

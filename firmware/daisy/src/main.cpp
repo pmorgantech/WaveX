@@ -393,6 +393,13 @@ int main(void)
         // Process any incoming SPI messages from ESP32
         process_incoming_spi_messages();
         
+        // Pump WAV I/O for audio playback (including audition)
+        #if WAVEX_AUDIO_ENGINE_ENABLED
+        if (WaveX::AudioEngine::ShouldPumpWavIO()) {
+            WaveX::AudioEngine::PumpWavIO();
+        }
+        #endif
+        
         // Log SPI processing to verify it continues during auditioning
         #if WAVEX_MCU_LINK_PACKET_DEBUG
         static uint32_t spi_debug_count = 0;
@@ -476,8 +483,16 @@ int main(void)
         }
 
         // Periodic meter update - Daisy (backend) sends to ESP32 (frontend)
-        // DISABLED: Meter updates interfere with bidirectional communication needed for file browsing
-        if(false && current_time - last_meter_send >= WAVEX_AUDIO_METERS_SEND_INTERVAL_MS) {
+        // Enable during audition for audio level display
+        // Send meters during audition (when WAV is playing)
+        #if WAVEX_AUDIO_ENGINE_ENABLED
+        bool should_send_meters = WaveX::AudioEngine::IsWavPlaying() && 
+                                 (current_time - last_meter_send >= WAVEX_AUDIO_METERS_SEND_INTERVAL_MS);
+        #else
+        bool should_send_meters = false;
+        #endif
+        
+        if(should_send_meters) {
             last_meter_send = current_time;
             #if WAVEX_MCU_LINK_PACKET_DEBUG
             WAVEX_LOG_DAISY(INTER_MCU_LINK, "Sending meter update during auditioning (if active)");
@@ -500,11 +515,17 @@ int main(void)
             payload[6] = (uint8_t)(q_pkR & 0xFF);
             payload[7] = (uint8_t)(q_pkR >> 8);
 
-            // Meter data sending disabled - interferes with bidirectional communication
-            int result = 0; // Disabled
-            if (!result) {
-                // Meter updates disabled to prevent interference with file browsing
-                // hw.PrintLine("DAISY: Meter updates disabled");
+            // Send meter data to ESP32 for audio level display
+            int result = WaveX::Comm::Spi_Send(WaveX::Protocol::MSG_METER_PUSH, payload, 8);
+            if (result) {
+                #if WAVEX_MCU_LINK_PACKET_DEBUG
+                WAVEX_LOG_DAISY(INTER_MCU_LINK, "Sent meter data: RMS L=%u R=%u, Peak L=%u R=%u", 
+                               (unsigned)q_rmsL, (unsigned)q_rmsR, (unsigned)q_pkL, (unsigned)q_pkR);
+                #endif
+            } else {
+                #if WAVEX_MCU_LINK_PACKET_DEBUG
+                WAVEX_LOG_DAISY(INTER_MCU_LINK, "Failed to send meter data - queue full or SPI busy");
+                #endif
             }
         }
 

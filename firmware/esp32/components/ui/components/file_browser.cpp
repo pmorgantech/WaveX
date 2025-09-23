@@ -40,22 +40,16 @@ static void browse_resp_callback(const uint8_t* data, size_t length, void* user_
 
 wavex_file_browser_t* wavex_file_browser_create(lv_obj_t* parent, const wavex_file_browser_config_t* config)
 {
-    ESP_LOGI(TAG, "=== FILE_BROWSER_CREATE 1: About to validate parameters ===");
-    
     if (!parent || !config) {
         ESP_LOGE(TAG, "Invalid parameters");
         return NULL;
     }
-    
-    ESP_LOGI(TAG, "=== FILE_BROWSER_CREATE 2: About to allocate browser structure ===");
     
     wavex_file_browser_t* browser = (wavex_file_browser_t*)malloc(sizeof(wavex_file_browser_t));
     if (!browser) {
         ESP_LOGE(TAG, "Failed to allocate file browser structure");
         return NULL;
     }
-    
-    ESP_LOGI(TAG, "=== FILE_BROWSER_CREATE 3: About to initialize structure ===");
 
     // Initialize structure
     memset(browser, 0, sizeof(wavex_file_browser_t));
@@ -69,13 +63,9 @@ wavex_file_browser_t* wavex_file_browser_create(lv_obj_t* parent, const wavex_fi
     browser->pagination_in_progress = false;
     browser->loaded_entries = 0;
     
-    ESP_LOGI(TAG, "=== FILE_BROWSER_CREATE 4: About to copy root path ===");
-    
     // Copy root path
     strncpy(browser->current_path, config->root_path ? config->root_path : "/", sizeof(browser->current_path) - 1);
     browser->current_path[sizeof(browser->current_path) - 1] = '\0';
-    
-    ESP_LOGI(TAG, "=== FILE_BROWSER_CREATE 5: About to allocate entries array ===");
     
     // Allocate entries array
     browser->entries = (wavex_file_entry_t*)malloc(config->max_entries * sizeof(wavex_file_entry_t));
@@ -84,8 +74,6 @@ wavex_file_browser_t* wavex_file_browser_create(lv_obj_t* parent, const wavex_fi
         free(browser);
         return NULL;
     }
-    
-    ESP_LOGI(TAG, "=== FILE_BROWSER_CREATE 6: About to create main container ===");
     
     // Create main container
     LV_LOCK();
@@ -96,15 +84,11 @@ wavex_file_browser_t* wavex_file_browser_create(lv_obj_t* parent, const wavex_fi
     lv_obj_set_style_pad_all(browser->container, 0, LV_PART_MAIN);
     lv_obj_align(browser->container, LV_ALIGN_TOP_LEFT, 0, 0);
     
-    ESP_LOGI(TAG, "=== FILE_BROWSER_CREATE 7: About to create path label ===");
-    
     // Create path label
     browser->path_label = lv_label_create(browser->container);
     lv_label_set_text(browser->path_label, browser->current_path);
     ui_theme_apply_label_style(browser->path_label, false);
     lv_obj_align(browser->path_label, LV_ALIGN_TOP_LEFT, UI_PADDING_MEDIUM, UI_PADDING_MEDIUM);
-    
-    ESP_LOGI(TAG, "=== FILE_BROWSER_CREATE 8: About to create file list ===");
     
     // Create file list
     browser->list = lv_list_create(browser->container);
@@ -114,34 +98,22 @@ wavex_file_browser_t* wavex_file_browser_create(lv_obj_t* parent, const wavex_fi
     lv_obj_set_style_border_width(browser->list, 0, LV_PART_MAIN);
     lv_obj_set_style_pad_all(browser->list, UI_PADDING_SMALL, LV_PART_MAIN);
     
-    ESP_LOGI(TAG, "=== FILE_BROWSER_CREATE 9: About to add event callback ===");
-    
     // Add event callback for list
     lv_obj_add_event_cb(browser->list, file_list_event_cb, LV_EVENT_CLICKED, browser);
     LV_UNLOCK();
     
-    ESP_LOGI(TAG, "=== FILE_BROWSER_CREATE 10: About to set global reference ===");
-    
     // Set global reference and register callback
     g_current_browser = browser;
-    
-    ESP_LOGI(TAG, "=== FILE_BROWSER_CREATE 11: About to register browse response callback ===");
 
     // Register browse response callback with inter-MCU system
     extern void inter_mcu_set_browse_resp_listener(wavex_browse_resp_cb_t cb, void* user_data);
     inter_mcu_set_browse_resp_listener(browse_resp_callback, browser);
-    
-    ESP_LOGI(TAG, "=== FILE_BROWSER_CREATE 12: About to refresh file list ===");
     
     // Refresh file list
     ESP_LOGI(TAG, "Calling refresh_file_list for path: %s", browser->current_path);
     if (!refresh_file_list(browser)) {
         ESP_LOGE(TAG, "Failed to refresh file list");
     }
-    
-    ESP_LOGI(TAG, "=== FILE_BROWSER_CREATE 13: File browser created successfully ===");
-
-    ESP_LOGI(TAG, "File browser created for path: %s with %d entries", browser->current_path, browser->entry_count);
     
     // Log all file entries for debugging
     for (uint32_t i = 0; i < browser->entry_count; i++) {
@@ -256,6 +228,16 @@ void wavex_file_browser_set_file_selected_callback(wavex_file_browser_t* browser
     browser->user_data = user_data;
 }
 
+void wavex_file_browser_set_file_selected_index_callback(wavex_file_browser_t* browser, 
+                                                         wavex_file_selected_index_cb_t callback, 
+                                                         void* user_data)
+{
+    if (!browser) return;
+    
+    browser->file_selected_index_cb = callback;
+    browser->user_data = user_data;
+}
+
 void wavex_file_browser_set_directory_changed_callback(wavex_file_browser_t* browser, 
                                                        wavex_directory_changed_cb_t callback, 
                                                        void* user_data)
@@ -311,12 +293,22 @@ static void file_list_event_cb(lv_event_t *e)
             // If it's a directory, navigate into it
             if (browser->entries[index].is_directory) {
                 char new_path[256];
-                snprintf(new_path, sizeof(new_path), "%s/%s", browser->current_path, browser->entries[index].name);
+                // Avoid double slashes when constructing directory path
+                if (strcmp(browser->current_path, "/") == 0) {
+                    snprintf(new_path, sizeof(new_path), "/%s", browser->entries[index].name);
+                } else {
+                    snprintf(new_path, sizeof(new_path), "%s/%s", browser->current_path, browser->entries[index].name);
+                }
+                ESP_LOGD(TAG, "Directory navigation: current='%s', name='%s' -> new_path='%s'", browser->current_path, browser->entries[index].name, new_path);
                 wavex_file_browser_navigate_to(browser, new_path);
             } else {
-                // File selected - notify callback
-                if (browser->file_selected_cb) {
-                    browser->file_selected_cb(&browser->entries[index], browser->user_data);
+                // File selected - notify callback with index
+                ESP_LOGI(TAG, "File selected: %s, index=%d", browser->entries[index].name, index);
+                
+                if (browser->file_selected_index_cb) {
+                    browser->file_selected_index_cb(index, &browser->entries[index], browser->user_data);
+                } else {
+                    ESP_LOGW(TAG, "No callback set for file selection");
                 }
             }
         }
@@ -397,8 +389,8 @@ static bool parse_browse_response(const uint8_t* data, size_t length, wavex_file
     uint32_t parsed_count = 0;
     const WaveX::Protocol::FileEntryWire* wire_entries = (const WaveX::Protocol::FileEntryWire*)(payload + sizeof(WaveX::Protocol::BrowseRespHeader));
 
-    ESP_LOGI(TAG, "Starting file entry parsing: n_entries=%u, max_count=%u", n_entries, *count);
-    ESP_LOGI(TAG, "Wire entries pointer: %p, payload offset: %d", wire_entries, (int)(payload - data + sizeof(WaveX::Protocol::BrowseRespHeader)));
+    // ESP_LOGI(TAG, "Starting file entry parsing: n_entries=%u, max_count=%u", n_entries, *count);
+    // ESP_LOGI(TAG, "Wire entries pointer: %p, payload offset: %d", wire_entries, (int)(payload - data + sizeof(WaveX::Protocol::BrowseRespHeader)));
 
     for (uint8_t i = 0; i < n_entries && parsed_count < *count; i++) {
         const WaveX::Protocol::FileEntryWire* wire = &wire_entries[i];
@@ -470,9 +462,38 @@ static bool parse_browse_response_with_pagination(const uint8_t* data, size_t le
         strncpy(entry->name, wire_entry->name, sizeof(entry->name) - 1);
         entry->name[sizeof(entry->name) - 1] = '\0';
         
+        // Strip leading slash if present (Daisy sometimes includes it)
+        if (entry->name[0] == '/') {
+            memmove(entry->name, entry->name + 1, strlen(entry->name));
+        }
+        
+        ESP_LOGD(TAG, "Entry %d: Raw name from Daisy: '%s', after slash strip: '%s'", i, wire_entry->name, entry->name);
+        
         // Build full path with bounds checking
         const char* current_path = g_current_browser ? g_current_browser->current_path : "/";
-        int path_len = snprintf(entry->path, sizeof(entry->path), "%s/%s", current_path, entry->name);
+        
+        ESP_LOGD(TAG, "Entry %d: current_path='%s', entry->name='%s'", i, current_path, entry->name);
+        
+        // Ensure we don't have double slashes - remove trailing slash from current_path if present
+        const char* base_path = current_path;
+        if (strlen(current_path) > 1 && current_path[strlen(current_path) - 1] == '/') {
+            // Create a temporary string without trailing slash
+            static char temp_path[96];
+            strncpy(temp_path, current_path, sizeof(temp_path) - 1);
+            temp_path[sizeof(temp_path) - 1] = '\0';
+            temp_path[strlen(temp_path) - 1] = '\0'; // Remove trailing slash
+            base_path = temp_path;
+        }
+        
+        // Special case: if base_path is "/" and entry->name starts with "/", avoid double slash
+        int path_len;
+        if (strcmp(base_path, "/") == 0 && entry->name[0] == '/') {
+            path_len = snprintf(entry->path, sizeof(entry->path), "%s", entry->name);
+            ESP_LOGD(TAG, "Path construction (root case): base='%s', name='%s' -> path='%s'", base_path, entry->name, entry->path);
+        } else {
+            path_len = snprintf(entry->path, sizeof(entry->path), "%s/%s", base_path, entry->name);
+            ESP_LOGD(TAG, "Path construction (normal case): base='%s', name='%s' -> path='%s'", base_path, entry->name, entry->path);
+        }
         if (path_len >= (int)sizeof(entry->path)) {
             // Path was truncated, ensure null termination
             entry->path[sizeof(entry->path) - 1] = '\0';
@@ -492,40 +513,19 @@ static bool parse_browse_response_with_pagination(const uint8_t* data, size_t le
 // Send browse request to Daisy
 static bool send_browse_request(const char* path, uint8_t start_index)
 {
-    ESP_LOGI(TAG, "=== SPI OPERATION 1: About to get LinkManager instance ===");
-    
     LinkManager& link_mgr = LinkManager::getInstance();
-    ESP_LOGI(TAG, "=== SPI OPERATION 2: About to get current link ===");
-
     ILink* link = link_mgr.get_current_link();
-
     if (!link) {
         ESP_LOGE(TAG, "No link available for browse request");
         return false;
     }
-
-    ESP_LOGI(TAG, "=== SPI OPERATION 3: About to check if link is SPI link ===");
-
-    // Check if this is an SPI link by checking if it supports the extended methods
-    // We'll use a safer approach than dynamic_cast for ESP32
-    if (!link_mgr.is_spi_link()) {
-        ESP_LOGE(TAG, "Link is not SPI link, cannot send browse request");
-        return false;
-    }
-    
-    ESP_LOGI(TAG, "=== SPI OPERATION 4: About to cast to SpiLink ===");
-    
-    // Cast to SpiLink - we know it's safe because is_spi_link() returned true
     SpiLink* spi_link = static_cast<SpiLink*>(link);
-
-    ESP_LOGI(TAG, "=== SPI OPERATION 5: About to call send_browse_req (start_index=%d) ===", start_index);
 
     esp_err_t result = spi_link->send_browse_req(path, start_index);
     if (result != ESP_OK) {
         ESP_LOGE(TAG, "Failed to send browse request: %d", result);
         return false;
     }
-
     ESP_LOGI(TAG, "=== SPI OPERATION 6: Successfully sent browse request for path: %s, start_index: %d ===", path, start_index);
     return true;
 }
@@ -542,20 +542,20 @@ static void browse_resp_callback(const uint8_t* data, size_t length, void* user_
     
     ESP_LOGI(TAG, "Received browse response: %d bytes", (int)length);
     
-    // Log raw data for debugging (first 64 bytes)
-    ESP_LOGI(TAG, "Raw data (first 64 bytes):");
-    for (int i = 0; i < (int)length && i < 64; i++) {
-        if (i % 16 == 0) {
-            ESP_LOGI(TAG, "  %04X: ", i);
-        }
-        ESP_LOGI(TAG, "%02X ", data[i]);
-        if (i % 16 == 15) {
-            ESP_LOGI(TAG, "");
-        }
-    }
-    if (length % 16 != 0) {
-        ESP_LOGI(TAG, "");
-    }
+    // // Log raw data for debugging (first 64 bytes)
+    // ESP_LOGI(TAG, "Raw data (first 64 bytes):");
+    // for (int i = 0; i < (int)length && i < 64; i++) {
+    //     if (i % 16 == 0) {
+    //         ESP_LOGI(TAG, "  %04X: ", i);
+    //     }
+    //     ESP_LOGI(TAG, "%02X ", data[i]);
+    //     if (i % 16 == 15) {
+    //         ESP_LOGI(TAG, "");
+    //     }
+    // }
+    // if (length % 16 != 0) {
+    //     ESP_LOGI(TAG, "");
+    // }
     
     // Parse the browse response to get total count and current page entries
     wavex_file_entry_t temp_entries[4];  // Temporary array for current page
@@ -615,16 +615,31 @@ static void browse_resp_callback(const uint8_t* data, size_t length, void* user_
         browser->pagination_in_progress = false;
         browser->entry_count = browser->loaded_entries;
         
+        // Ensure selected_index is within bounds
+        if (browser->selected_index >= browser->entry_count) {
+            browser->selected_index = 0;
+        }
+        
         ESP_LOGI(TAG, "Pagination complete: loaded %d entries", browser->entry_count);
         
         // Update UI with all loaded entries
         LV_LOCK();
         lv_obj_clean(browser->list);
         
-        if (browser->entry_count > 0) {
+        if (browser->entry_count > 0 && browser->entries) {
             // Create list items for all loaded entries
             for (uint32_t i = 0; i < browser->entry_count; i++) {
+                // Safety check for entry access
+                if (!browser->entries[i].name[0]) {
+                    ESP_LOGW(TAG, "Skipping empty entry at index %d", i);
+                    continue;
+                }
+                
                 lv_obj_t* btn = lv_list_add_btn(browser->list, NULL, browser->entries[i].name);
+                if (!btn) {
+                    ESP_LOGE(TAG, "Failed to create button for entry %d", i);
+                    continue;
+                }
                 
                 // Apply styling
                 ui_theme_apply_button_style(btn, true);
@@ -674,6 +689,11 @@ static void update_visual_selection(wavex_file_browser_t* browser)
     LV_LOCK();
     // Get all buttons in the list
     uint32_t child_count = lv_obj_get_child_cnt(browser->list);
+    
+    // Ensure selected_index is within bounds
+    if (browser->selected_index >= child_count) {
+        browser->selected_index = 0; // Reset to first item if out of bounds
+    }
     
     for (uint32_t i = 0; i < child_count; i++) {
         lv_obj_t* btn = lv_obj_get_child(browser->list, i);

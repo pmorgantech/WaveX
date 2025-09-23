@@ -110,12 +110,7 @@ public:
 
     // Additional methods for Sample Load/Save functionality
     esp_err_t send_browse_req(const char* path, uint8_t start_index = 0) {
-        ESP_LOGI("SpiLink", "=== SPI WRAPPER 1: About to check if started ===");
-        
         if (!m_started) return ESP_ERR_INVALID_STATE;
-
-        ESP_LOGI("SpiLink", "=== SPI WRAPPER 2: About to calculate path length ===");
-
         size_t path_len = strlen(path);
         if (path_len > 18) path_len = 18; // Limit to Daisy packet payload size (20 - 1 for message type - 1 for start_index)
 
@@ -124,12 +119,7 @@ public:
         payload[0] = start_index;
         memcpy(&payload[1], path, path_len);
 
-        ESP_LOGI("SpiLink", "=== SPI WRAPPER 3: About to call spi_link_send for browse request (start_index=%d) ===", start_index);
-
         int result = spi_link_send(WaveX::Protocol::MSG_BROWSE_REQ, payload, path_len + 1);
-        
-        ESP_LOGI("SpiLink", "=== SPI WRAPPER 4: spi_link_send returned: %d ===", result);
-        
         if (result) {
             ESP_LOGI("SpiLink", "Browse request sent successfully (start_index=%d)", start_index);
         } else {
@@ -139,33 +129,23 @@ public:
         return result ? ESP_OK : ESP_FAIL;
     }
 
-    esp_err_t send_sample_play_req(const char* file_path) {
-        ESP_LOGI("SpiLink", "=== SPI WRAPPER 1: About to check if started for sample play ===");
-  
+    esp_err_t send_sample_play_index_req(uint32_t file_index) {
         if (!m_started) return ESP_ERR_INVALID_STATE;
 
-        ESP_LOGI("SpiLink", "=== SPI WRAPPER 2: About to calculate file path length ===");
+        // Create payload: just the SamplePlayIndexMessage (message type is added by spi_link_send)
+        WaveX::Protocol::SamplePlayIndexMessage msg;
+        msg.index = file_index;
 
-        size_t path_len = strlen(file_path);
-        if (path_len > 19) path_len = 19; // Limit to Daisy packet payload size (20 - 1 for message type)
-
-        ESP_LOGI("SpiLink", "=== SPI WRAPPER 3: About to call spi_link_send for sample play ===");
-        int result = spi_link_send(WaveX::Protocol::MSG_SAMPLE_PLAY_REQ, file_path, path_len);
-        
-        ESP_LOGI("SpiLink", "=== SPI WRAPPER 4: spi_link_send for sample play returned: %d ===", result);
+        int result = spi_link_send(WaveX::Protocol::MSG_SAMPLE_PLAY_INDEX_REQ, &msg, sizeof(msg));
 
         return result ? ESP_OK : ESP_FAIL;
     }
 
     esp_err_t send_sample_stop_req() {
-        ESP_LOGI("SpiLink", "=== SPI WRAPPER 1: About to check if started for sample stop ===");
+        ESP_LOGI("SpiLink", "=== Sending SAMPLE_STOP_REQ ===");
 
         if (!m_started) return ESP_ERR_INVALID_STATE;
-
-        ESP_LOGI("SpiLink", "=== SPI WRAPPER 2: About to call spi_link_send for sample stop ===");
         int result = spi_link_send(WaveX::Protocol::MSG_SAMPLE_STOP_REQ, NULL, 0);
-        
-        ESP_LOGI("SpiLink", "=== SPI WRAPPER 3: spi_link_send for sample stop returned: %d ===", result);
 
         return result ? ESP_OK : ESP_FAIL;
     }

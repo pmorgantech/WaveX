@@ -3,6 +3,7 @@
 #include "link_config.h"
 #include "../inter_mcu.h"
 #include "../../shared/spi_protocol/protocol.h"
+#include "../../shared/config/logging_config.h"
 #include <string.h>
 #include <assert.h>
 
@@ -51,8 +52,8 @@ static void handle_large_packet(const uint8_t* packet_data, size_t packet_len)
     
     const WaveX::Protocol::PacketHeader* header = (const WaveX::Protocol::PacketHeader*)packet_data;
     
-    ESP_LOGI(TAG, "Large packet: sync=0x%02X, type=0x%02X, len=%u", 
-             header->sync, header->type, header->length);
+    ESP_LOGI(TAG, "Large packet: sync=0x%02X, type=0x%02X, len=%u, total_size=%d",
+             header->sync, header->type, header->length, (int)packet_len);
     
     // Validate sync byte
     if (header->sync != WaveX::Protocol::SYNC_BYTE) {
@@ -219,11 +220,11 @@ static uint16_t calculate_packet_crc(const ctrl_pkt_t* pkt)
     memcpy(&crc_data[4], pkt->payload, pkt->len);
     
     // Debug: Log CRC calculation data
-    ESP_LOGI(TAG, "ESP32 CRC calculation: %d bytes - %02X %02X %02X %02X %02X", 
+    WAVEX_LOG_ESP32_SPI(ESP32_INTER_SPI, "ESP32 CRC calculation: %d bytes - %02X %02X %02X %02X %02X",
              4 + pkt->len, crc_data[0], crc_data[1], crc_data[2], crc_data[3], crc_data[4]);
-    
+
     uint16_t crc = wavex_crc16(crc_data, 4 + pkt->len);
-    ESP_LOGI(TAG, "ESP32 calculated CRC: 0x%04X", crc);
+    WAVEX_LOG_ESP32_SPI(ESP32_INTER_SPI, "ESP32 calculated CRC: 0x%04X", crc);
     return crc;
 }
 
@@ -233,18 +234,21 @@ static void signal_daisy_urgent(bool urgent)
 #ifdef ESP_PLATFORM
     gpio_set_level((gpio_num_t)WAVEX_ESP_ATTN_OUT, urgent ? 1 : 0);  // Active high
     if (urgent) {
-        ESP_LOGI(TAG, "Signaling Daisy for urgent control (GPIO31 HIGH) - queue_count=%d", msg_queue_count);
+        WAVEX_LOG_ESP32_SPI(ESP32_INTER_SPI, "Signaling Daisy for urgent control (GPIO31 HIGH) - queue_count=%d", msg_queue_count);
     } else {
-        ESP_LOGI(TAG, "Cleared Daisy urgent signal (GPIO31 LOW) - queue_count=%d", msg_queue_count);
+        WAVEX_LOG_ESP32_SPI(ESP32_INTER_SPI, "Cleared Daisy urgent signal (GPIO31 LOW) - queue_count=%d", msg_queue_count);
     }
     
     // Debug: Read back the GPIO level to verify it was set correctly
     int current_level = gpio_get_level((gpio_num_t)WAVEX_ESP_ATTN_OUT);
-    ESP_LOGI(TAG, "GPIO31 readback: %s (expected: %s)", 
+    WAVEX_LOG_ESP32_SPI(ESP32_INTER_SPI, "GPIO31 readback: %s (expected: %s)", 
              current_level ? "HIGH" : "LOW", 
              urgent ? "HIGH" : "LOW");
 #endif
 }
+
+// Track whether the last received packet was a one-way packet
+static bool s_last_packet_was_one_way = false;
 
 // Prepare TX buffer with queued message without consuming from queue
 static void prepare_tx_buffer_without_consuming(uint8_t* tx_buf, size_t len)
@@ -260,7 +264,15 @@ static void prepare_tx_buffer_without_consuming(uint8_t* tx_buf, size_t len)
     // Check if we have messages to send
     if (msg_queue_count == 0) {
         taskEXIT_CRITICAL(&s_spi_mutex);
-        ESP_LOGI(TAG, "No messages to send, preparing no-data response");
+        
+        // If the last packet was one-way, don't send a response
+        if (s_last_packet_was_one_way) {
+            WAVEX_LOG_ESP32_SPI(ESP32_INTER_SPI, "Last packet was one-way, not sending response");
+            s_last_packet_was_one_way = false; // Reset flag
+            return;
+        }
+        
+        WAVEX_LOG_ESP32_SPI(ESP32_INTER_SPI, "No messages to send, preparing no-data response");
         // Send a proper "no data" packet instead of all zeros
         ctrl_pkt_t* pkt = (ctrl_pkt_t*)tx_buf;
         pkt->type = 0x01;  // Command packet type
@@ -269,9 +281,9 @@ static void prepare_tx_buffer_without_consuming(uint8_t* tx_buf, size_t len)
         pkt->len = 1;      // Just the message type
         pkt->payload[0] = WaveX::Protocol::MSG_ACK; // Use ACK as "no data" indicator
         pkt->crc = calculate_packet_crc(pkt);
-        ESP_LOGI(TAG, "Prepared no-data packet: type=0x%02X, len=%d, payload[0]=0x%02X, crc=0x%04X", 
+        WAVEX_LOG_ESP32_SPI(ESP32_INTER_SPI, "Prepared no-data packet: type=0x%02X, len=%d, payload[0]=0x%02X, crc=0x%04X", 
                  pkt->type, pkt->len, pkt->payload[0], pkt->crc);
-        ESP_LOGI(TAG, "No-data packet bytes: %02X %02X %02X %02X %02X %02X %02X %02X", 
+        WAVEX_LOG_ESP32_SPI(ESP32_INTER_SPI, "No-data packet bytes: %02X %02X %02X %02X %02X %02X %02X %02X", 
                  ((uint8_t*)pkt)[0], ((uint8_t*)pkt)[1], ((uint8_t*)pkt)[2], ((uint8_t*)pkt)[3],
                  ((uint8_t*)pkt)[4], ((uint8_t*)pkt)[5], ((uint8_t*)pkt)[6], ((uint8_t*)pkt)[7]);
         return;
@@ -329,9 +341,9 @@ static void prepare_tx_buffer_without_consuming(uint8_t* tx_buf, size_t len)
     // Calculate CRC over header + payload
     pkt->crc = calculate_packet_crc(pkt);
     
-    ESP_LOGI(TAG, "Prepared TX buffer: type=0x%02X, len=%d, msg_type=0x%02X, payload=%.*s", 
+    WAVEX_LOG_ESP32_SPI(ESP32_INTER_SPI, "Prepared TX buffer: type=0x%02X, len=%d, msg_type=0x%02X, payload=%.*s", 
              pkt->type, pkt->len, msg_type & 0xFF, (int)msg_len, msg_payload);
-    ESP_LOGI(TAG, "TX buffer: %02X %02X %02X %02X %02X %02X %02X %02X", 
+    WAVEX_LOG_ESP32_SPI(ESP32_INTER_SPI, "TX buffer: %02X %02X %02X %02X %02X %02X %02X %02X", 
              tx_buf[0], tx_buf[1], tx_buf[2], tx_buf[3], tx_buf[4], tx_buf[5], tx_buf[6], tx_buf[7]);
 }
 
@@ -395,7 +407,7 @@ static void handle_spi_slave_response(uint8_t* tx_buf, uint8_t* rx_buf, size_t l
     // Check if we have messages to send
     if (msg_queue_count == 0) {
         taskEXIT_CRITICAL(&s_spi_mutex);
-        ESP_LOGI(TAG, "No messages to send, preparing no-data response");
+        WAVEX_LOG_ESP32_SPI(ESP32_INTER_SPI, "No messages to send, preparing no-data response");
         // Send a proper "no data" packet instead of all zeros
         ctrl_pkt_t* pkt = (ctrl_pkt_t*)tx_buf;
         pkt->type = 0x01;  // Command packet type
@@ -404,9 +416,9 @@ static void handle_spi_slave_response(uint8_t* tx_buf, uint8_t* rx_buf, size_t l
         pkt->len = 1;      // Just the message type
         pkt->payload[0] = WaveX::Protocol::MSG_ACK; // Use ACK as "no data" indicator
         pkt->crc = calculate_packet_crc(pkt);
-        ESP_LOGI(TAG, "Prepared no-data packet: type=0x%02X, len=%d, payload[0]=0x%02X, crc=0x%04X", 
+        WAVEX_LOG_ESP32_SPI(ESP32_INTER_SPI, "Prepared no-data packet: type=0x%02X, len=%d, payload[0]=0x%02X, crc=0x%04X", 
                  pkt->type, pkt->len, pkt->payload[0], pkt->crc);
-        ESP_LOGI(TAG, "No-data packet bytes: %02X %02X %02X %02X %02X %02X %02X %02X", 
+        WAVEX_LOG_ESP32_SPI(ESP32_INTER_SPI, "No-data packet bytes: %02X %02X %02X %02X %02X %02X %02X %02X", 
                  ((uint8_t*)pkt)[0], ((uint8_t*)pkt)[1], ((uint8_t*)pkt)[2], ((uint8_t*)pkt)[3],
                  ((uint8_t*)pkt)[4], ((uint8_t*)pkt)[5], ((uint8_t*)pkt)[6], ((uint8_t*)pkt)[7]);
         return;
@@ -432,7 +444,7 @@ static void handle_spi_slave_response(uint8_t* tx_buf, uint8_t* rx_buf, size_t l
         pkt->len = 1;      // Just the message type
         pkt->payload[0] = WaveX::Protocol::MSG_ACK; // Use ACK as "no data" indicator
         pkt->crc = calculate_packet_crc(pkt);
-        ESP_LOGI(TAG, "Prepared no-data packet: type=0x%02X, len=%d, payload[0]=0x%02X, crc=0x%04X", 
+        WAVEX_LOG_ESP32_SPI(ESP32_INTER_SPI, "Prepared no-data packet: type=0x%02X, len=%d, payload[0]=0x%02X, crc=0x%04X", 
                  pkt->type, pkt->len, pkt->payload[0], pkt->crc);
         return;
     }
@@ -481,9 +493,9 @@ static void handle_spi_slave_response(uint8_t* tx_buf, uint8_t* rx_buf, size_t l
     // Calculate CRC over header + payload
     pkt->crc = calculate_packet_crc(pkt);
     
-    ESP_LOGI(TAG, "Responding to poll with message type=0x%02X, len=%d, payload[0]=0x%02X, crc=0x%04X", 
+    WAVEX_LOG_ESP32_SPI(ESP32_INTER_SPI, "Responding to poll with message type=0x%02X, len=%d, payload[0]=0x%02X, crc=0x%04X", 
              pkt->type, pkt->len, pkt->payload[0], pkt->crc);
-    ESP_LOGI(TAG, "Response packet bytes: %02X %02X %02X %02X %02X %02X %02X %02X", 
+    WAVEX_LOG_ESP32_SPI(ESP32_INTER_SPI, "Response packet bytes: %02X %02X %02X %02X %02X %02X %02X %02X", 
              ((uint8_t*)pkt)[0], ((uint8_t*)pkt)[1], ((uint8_t*)pkt)[2], ((uint8_t*)pkt)[3],
              ((uint8_t*)pkt)[4], ((uint8_t*)pkt)[5], ((uint8_t*)pkt)[6], ((uint8_t*)pkt)[7]);
 }
@@ -525,9 +537,9 @@ int spi_link_send(uint16_t type, const void* payload, uint16_t len)
 
     taskEXIT_CRITICAL(&s_spi_mutex);
 
-    ESP_LOGI(TAG, "Queued message type 0x%04X, len=%d, queue_count=%d", type, len, msg_queue_count);
-    ESP_LOGI(TAG, "Queued message payload: %.*s", (int)len, (const char*)payload);
-    ESP_LOGI(TAG, "DEBUG: After queuing - head=%d, tail=%d, count=%d", snapshot_head, snapshot_tail, snapshot_count);
+    // ESP_LOGI(TAG, "Queued message type 0x%04X, len=%d, queue_count=%d", type, len, msg_queue_count);
+    // ESP_LOGI(TAG, "Queued message payload: %.*s", (int)len, (const char*)payload);
+    // ESP_LOGI(TAG, "DEBUG: After queuing - head=%d, tail=%d, count=%d", snapshot_head, snapshot_tail, snapshot_count);
     
     // Special logging for BROWSE_REQ
     if (type == WaveX::Protocol::MSG_BROWSE_REQ) {
@@ -542,10 +554,10 @@ int spi_link_send(uint16_t type, const void* payload, uint16_t len)
         type == WaveX::Protocol::MSG_SAMPLE_PLAY_REQ ||
         type == WaveX::Protocol::MSG_SAMPLE_STOP_REQ) {
         signal_daisy_urgent(true);
-        ESP_LOGI(TAG, "URGENT control message queued, signaling Daisy");
+        // ESP_LOGI(TAG, "URGENT control message queued, signaling Daisy");
     }
     
-    ESP_LOGI(TAG, "Message queued in TX queue");
+    // ESP_LOGI(TAG, "Message queued in TX queue");
     ESP_LOGI(TAG, "*** TX MESSAGE QUEUED - COUNT: %d ***", msg_queue_count);
     
     return 1;
@@ -726,14 +738,14 @@ static void link_task(void *arg)
             prepare_tx_buffer_without_consuming((uint8_t*)txbuf[0], CTRL_PKT_SIZE);
             rx_trans_ptr->tx_buffer = txbuf[0];
             rx_trans_had_message[current_rx_idx] = true;
-            ESP_LOGI(TAG, "Prepared TX buffer with queued message, queue_count=%d", msg_queue_count);
+            // ESP_LOGI(TAG, "Prepared TX buffer with queued message, queue_count=%d", msg_queue_count);
         } else {
             // No message - prepare proper no-data response
             prepare_tx_buffer_without_consuming((uint8_t*)txbuf[0], CTRL_PKT_SIZE);
             rx_trans_ptr->tx_buffer = txbuf[0];
             rx_trans_had_message[current_rx_idx] = false;
             #if WAVEX_MCU_LINK_PACKET_DEBUG
-            ESP_LOGI(TAG, "Prepared no-data TX buffer");
+            // ESP_LOGI(TAG, "Prepared no-data TX buffer");
             #endif
         }
         
@@ -790,26 +802,32 @@ static void link_task(void *arg)
             uint8_t* rx_data = (uint8_t*)completed_trans->rx_buffer;
             size_t rx_len = completed_trans->trans_len / 8; // Convert bits to bytes
             
-            ESP_LOGI(TAG, "Received %d bytes, first 4 bytes: %02X %02X %02X %02X", 
+            WAVEX_LOG_ESP32_SPI(ESP32_INTER_SPI, "Received %d bytes, first 4 bytes: %02X %02X %02X %02X", 
                      (int)rx_len, rx_data[0], rx_data[1], rx_data[2], rx_data[3]);
             
-            // Debug: Check if this could be a large packet
-            if (rx_len >= 4 && rx_data[0] == WaveX::Protocol::SYNC_BYTE) {
-                ESP_LOGI(TAG, "DEBUG: This IS a large packet (starts with 0x%02X)", WaveX::Protocol::SYNC_BYTE);
-            } else {
-                ESP_LOGI(TAG, "DEBUG: Not a large packet - first byte=0x%02X, expected=0x%02X", 
-                         rx_data[0], WaveX::Protocol::SYNC_BYTE);
-            }
+            // // Debug: Check if this could be a large packet
+            // if (rx_len >= 4 && rx_data[0] == WaveX::Protocol::SYNC_BYTE) {
+            //     WAVEX_LOG_ESP32_SPI(ESP32_INTER_SPI, "DEBUG: This IS a large packet (starts with 0x%02X)", WaveX::Protocol::SYNC_BYTE);
+            // } else {
+            //     WAVEX_LOG_ESP32_SPI(ESP32_INTER_SPI, "DEBUG: Not a large packet - first byte=0x%02X, expected=0x%02X", 
+            //              rx_data[0], WaveX::Protocol::SYNC_BYTE);
+            // }
             
             // Debug: If we receive more than 4 bytes, show more data for debugging
             if (rx_len > 4) {
-                ESP_LOGI(TAG, "Large reception - bytes 4-7: %02X %02X %02X %02X", 
+                WAVEX_LOG_ESP32_SPI(ESP32_INTER_SPI, "Large reception - bytes 4-7: %02X %02X %02X %02X", 
                          rx_data[4], rx_data[5], rx_data[6], rx_data[7]);
+            }
+            
+            // Add succinct packet summary (always visible)
+            if (rx_len >= 4) {
+                ESP_LOGI(TAG, "IN PACKET type=0x%02X, len=%d data=%02X %02X %02X %02X", 
+                         rx_data[0], (int)rx_len, rx_data[0], rx_data[1], rx_data[2], rx_data[3]);
             }
             
             // Handle zero-length transactions - but check if we have valid data anyway
             if (rx_len == 0) {
-                ESP_LOGW(TAG, "Received 0-byte transaction - SPI timing or CS issue");
+                WAVEX_LOG_ESP32_SPI(ESP32_INTER_SPI, "Received 0-byte transaction - SPI timing or CS issue");
                 
                 // Check if we actually have valid data despite the 0 length report
                 // This can happen with SPI timing issues where data arrives but length isn't detected
@@ -829,19 +847,19 @@ static void link_task(void *arg)
                         size_t expected_packet_size = 4 + payload_len; // header + payload
                         if (expected_packet_size <= MAX_PKT_SIZE) {
                             rx_len = expected_packet_size;
-                            ESP_LOGI(TAG, "Found large packet despite 0-length report, assuming %d bytes (header says %d+4)", 
+                            WAVEX_LOG_ESP32_SPI(ESP32_INTER_SPI, "Found large packet despite 0-length report, assuming %d bytes (header says %d+4)", 
                                      (int)rx_len, payload_len);
                         } else {
                             rx_len = MAX_PKT_SIZE; // Cap at maximum
-                            ESP_LOGI(TAG, "Found oversized packet, capping at %d bytes", MAX_PKT_SIZE);
+                            WAVEX_LOG_ESP32_SPI(ESP32_INTER_SPI, "Found oversized packet, capping at %d bytes", MAX_PKT_SIZE);
                         }
                     } else {
                         // Regular control packet
                         rx_len = CTRL_PKT_SIZE; // Assume standard control packet size
-                        ESP_LOGI(TAG, "Found valid data despite 0-length report, assuming %d bytes", CTRL_PKT_SIZE);
+                        WAVEX_LOG_ESP32_SPI(ESP32_INTER_SPI, "Found valid data despite 0-length report, assuming %d bytes", CTRL_PKT_SIZE);
                     }
                     // Log this as a timing issue that should be investigated
-                    ESP_LOGW(TAG, "SPI timing issue detected - data present but length=0");
+                    WAVEX_LOG_ESP32_SPI(ESP32_INTER_SPI, "SPI timing issue detected - data present but length=0");
                 } else {
                     continue; // Skip processing if truly no data
                 }
@@ -850,11 +868,11 @@ static void link_task(void *arg)
             // Detect packet type by examining the first few bytes
             if (rx_len >= 5 && rx_data[0] == 0x01 && rx_data[3] == 0x01 && rx_data[4] == 0xFF) {
                 // This is a poll request from Daisy - we already prepared response in TX buffer
-                ESP_LOGI(TAG, "Detected poll request (0xFF in payload) from Daisy");
+                WAVEX_LOG_ESP32_SPI(ESP32_INTER_SPI, "Detected poll request (0xFF in payload) from Daisy");
                 // No additional processing needed - response was already prepared
             } else if (rx_len >= 4 && rx_data[0] == 0x00 && rx_data[1] == 0x00 && rx_data[2] == 0x00 && rx_data[3] == 0x00) {
                 // This is an empty packet from Daisy requesting urgent data
-                ESP_LOGI(TAG, "Detected urgent data request from Daisy (empty packet)");
+                WAVEX_LOG_ESP32_SPI(ESP32_INTER_SPI, "Detected urgent data request from Daisy (empty packet)");
                 // ESP32 should respond with queued data - this is handled by the TX buffer preparation
                 // Clear ATTN line after responding
                 if (msg_queue_count > 0) {
@@ -862,20 +880,20 @@ static void link_task(void *arg)
                 }
             } else if (rx_len >= 4 && rx_data[0] == WaveX::Protocol::SYNC_BYTE) {
                 // Large packet format (pkt_t) - starts with sync byte 0xAA
-                ESP_LOGI(TAG, "Detected large packet format (pkt_t)");
-                ESP_LOGI(TAG, "Large packet first 8 bytes: %02X %02X %02X %02X %02X %02X %02X %02X",
+                WAVEX_LOG_ESP32_SPI(ESP32_INTER_SPI, "Detected large packet format (pkt_t)");
+                WAVEX_LOG_ESP32_SPI(ESP32_INTER_SPI, "Large packet first 8 bytes: %02X %02X %02X %02X %02X %02X %02X %02X",
                          rx_data[0], rx_data[1], rx_data[2], rx_data[3], rx_data[4], rx_data[5], rx_data[6], rx_data[7]);
                 handle_large_packet(rx_data, rx_len);
             } else if (rx_len >= 4 && rx_len <= 64) {
                 // Small control packet format (ctrl_pkt_t) - could be control messages from Daisy
-                // ESP_LOGI(TAG, "Detected control packet format (ctrl_pkt_t)");
+                WAVEX_LOG_ESP32_SPI(ESP32_INTER_SPI, "Detected control packet format (ctrl_pkt_t)");
                 ctrl_pkt_t *rxp = (ctrl_pkt_t*)rx_data;
                 
                 // Check if this is a new format command packet from Daisy (type=0x01)
                 if (rxp->type == 0x01 && rxp->len > 0) {
                     // Check if this is a poll request (0xFF in payload)
                     if (rxp->payload[0] == 0xFF) {
-                        ESP_LOGI(TAG, "Received poll request from Daisy - no processing needed");
+                        WAVEX_LOG_ESP32_SPI(ESP32_INTER_SPI, "Received poll request from Daisy - no processing needed");
                         // No processing needed for poll requests
                         continue; // Skip to next iteration
                     } else {
@@ -884,16 +902,26 @@ static void link_task(void *arg)
                         uint8_t msg_len = rxp->len - 1; // Subtract message type byte
                         const uint8_t* msg_payload = &rxp->payload[1];
                         
-                        ESP_LOGI(TAG, "Processing new format command packet: msg_type=0x%02X, len=%d", msg_type, msg_len);
+                        // Check if this is a one-way packet (no response needed)
+                        if (msg_type == WaveX::Protocol::MSG_SYNC || 
+                            msg_type == WaveX::Protocol::MSG_METER_PUSH || 
+                            msg_type == WaveX::Protocol::MSG_HEARTBEAT) {
+                            s_last_packet_was_one_way = true;
+                            WAVEX_LOG_ESP32_SPI(ESP32_INTER_SPI, "Received one-way packet type=0x%02X, will not send response", msg_type);
+                        } else {
+                            s_last_packet_was_one_way = false;
+                        }
+                        
+                        WAVEX_LOG_ESP32_SPI(ESP32_INTER_SPI, "Processing new format command packet: msg_type=0x%02X, len=%d", msg_type, msg_len);
                         handle_control_message_from_daisy_new_format(msg_type, msg_payload, msg_len);
                     }
                 } else {
                     // Handle as regular packet (meter data from backend, etc.)
-                    ESP_LOGI(TAG, "This is an OLD FORMAT PACKET: type=0x%02X, len=%d", rxp->type, rxp->len);
+                    WAVEX_LOG_ESP32_SPI(ESP32_INTER_SPI, "This is an OLD FORMAT PACKET: type=0x%02X, len=%d", rxp->type, rxp->len);
                     
                 }
             } else {
-                ESP_LOGW(TAG, "Unknown packet format, rx_len=%d", (int)rx_len);
+                WAVEX_LOG_ESP32_SPI(ESP32_INTER_SPI, "Unknown packet format, rx_len=%d", (int)rx_len);
             }
             
             s_stats.packets_received++;

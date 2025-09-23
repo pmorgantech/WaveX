@@ -26,6 +26,7 @@ typedef struct {
     lv_obj_t* status_label;
     bool is_playing;
     char selected_file[96];
+    uint32_t selected_file_index;
 } wavex_sample_load_save_page_t;
 
 // Page creation and management
@@ -39,6 +40,7 @@ void wavex_sample_load_save_update(wavex_sample_load_save_page_t* page);
 
 // Sample operations
 bool wavex_sample_load_save_audition_sample(wavex_sample_load_save_page_t* page, const char* file_path);
+bool wavex_sample_load_save_audition_sample_by_index(wavex_sample_load_save_page_t* page, uint32_t file_index);
 bool wavex_sample_load_save_stop_audition(wavex_sample_load_save_page_t* page);
 bool wavex_sample_load_save_load_sample(wavex_sample_load_save_page_t* page, const char* file_path);
 bool wavex_sample_load_save_save_sample(wavex_sample_load_save_page_t* page, const char* file_path);

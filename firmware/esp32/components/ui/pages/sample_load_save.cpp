@@ -30,6 +30,7 @@ static wavex_sample_load_save_page_t* g_current_page = NULL;
 
 // Forward declarations
 static void file_selected_callback(const wavex_file_entry_t* entry, void* user_data);
+static void file_selected_index_callback(uint32_t file_index, const wavex_file_entry_t* entry, void* user_data);
 static void directory_changed_callback(const char* path, void* user_data);
 static void hotkey_event_callback(lv_event_t* e);
 
@@ -77,11 +78,6 @@ wavex_sample_load_save_page_t* wavex_sample_load_save_create(lv_obj_t* parent)
     lv_obj_set_style_border_width(page->file_browser_container, 0, LV_PART_MAIN);
     lv_obj_set_style_pad_all(page->file_browser_container, 0, LV_PART_MAIN);
     
-    // Create real file browser with SPI communication
-    ESP_LOGI(TAG, "=== SAMPLE_LOAD_SAVE 1: About to create file browser with SPI communication ===");
-    ESP_LOGI(TAG, "Creating file browser with SPI communication...");
-    ESP_LOGI(TAG, "=== SAMPLE_LOAD_SAVE 2: About to configure file browser ===");
-    
     // Configure file browser
     wavex_file_browser_config_t browser_config = {
         .root_path = "/",
@@ -89,8 +85,6 @@ wavex_sample_load_save_page_t* wavex_sample_load_save_create(lv_obj_t* parent)
         .max_entries = 50,
         .show_hidden = false
     };
-    
-    ESP_LOGI(TAG, "=== SAMPLE_LOAD_SAVE 3: About to call wavex_file_browser_create ===");
     
     page->file_browser = wavex_file_browser_create(page->file_browser_container, &browser_config);
     if (!page->file_browser) {
@@ -100,13 +94,9 @@ wavex_sample_load_save_page_t* wavex_sample_load_save_create(lv_obj_t* parent)
         return NULL;
     }
     
-    ESP_LOGI(TAG, "=== SAMPLE_LOAD_SAVE 4: File browser created successfully ===");
-    
-    // Set file browser callbacks
-    wavex_file_browser_set_file_selected_callback(page->file_browser, file_selected_callback, page);
+    // Set file browser callbacks - use index-based callback for better performance
+    wavex_file_browser_set_file_selected_index_callback(page->file_browser, file_selected_index_callback, page);
     wavex_file_browser_set_directory_changed_callback(page->file_browser, directory_changed_callback, page);
-    
-    ESP_LOGI(TAG, "File browser created successfully with SPI communication");
     
     // Create status label
     page->status_label = lv_label_create(page->info_panel);
@@ -176,56 +166,30 @@ void wavex_sample_load_save_update(wavex_sample_load_save_page_t* page)
     // This could include updating file list, status, etc.
 }
 
-bool wavex_sample_load_save_audition_sample(wavex_sample_load_save_page_t* page, const char* file_path)
+bool wavex_sample_load_save_audition_sample_by_index(wavex_sample_load_save_page_t* page, uint32_t file_index)
 {
-    if (!page || !file_path) return false;
+    if (!page) return false;
 
-    ESP_LOGI(TAG, "=== SAMPLE PLAY OPERATION 1: About to audition sample: %s ===", file_path);
+    ESP_LOGI(TAG, "=== SAMPLE PLAY INDEX OPERATION 1: About to audition sample by index: %lu ===", (unsigned long)file_index);
 
-    // Send sample play request to Daisy
-    ESP_LOGI(TAG, "=== SAMPLE PLAY OPERATION 2: About to get LinkManager instance ===");
-    
     LinkManager& link_mgr = LinkManager::getInstance();
-    ESP_LOGI(TAG, "=== SAMPLE PLAY OPERATION 3: About to get current link ===");
-
     ILink* link = link_mgr.get_current_link();
-
     if (!link) {
-        ESP_LOGE(TAG, "No link available for sample audition");
         return false;
     }
-
-    ESP_LOGI(TAG, "=== SAMPLE PLAY OPERATION 4: About to check if link is SPI link ===");
-
-    // Check if this is an SPI link by checking if it supports the extended methods
-    // We'll use a safer approach than dynamic_cast for ESP32
-    if (!link_mgr.is_spi_link()) {
-        ESP_LOGE(TAG, "Link is not SPI link, cannot send sample play request");
-        return false;
-    }
-    
-    ESP_LOGI(TAG, "=== SAMPLE PLAY OPERATION 5: About to cast to SpiLink ===");
-
-    // Cast to SpiLink - we know it's safe because is_spi_link() returned true
     SpiLink* spi_link = static_cast<SpiLink*>(link);
 
-    ESP_LOGI(TAG, "=== SAMPLE PLAY OPERATION 6: About to call send_sample_play_req ===");
-
-    esp_err_t result = spi_link->send_sample_play_req(file_path);
+    esp_err_t result = spi_link->send_sample_play_index_req(file_index);
     if (result != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to send sample play request: %d", result);
+        ESP_LOGE(TAG, "Failed to send sample play index request: %d", result);
         return false;
     }
-
-    ESP_LOGI(TAG, "=== SAMPLE PLAY OPERATION 7: Successfully sent sample play request ===");
-
     page->is_playing = true;
-    strncpy(page->selected_file, file_path, sizeof(page->selected_file) - 1);
-    page->selected_file[sizeof(page->selected_file) - 1] = '\0';
+    snprintf(page->selected_file, sizeof(page->selected_file), "Index %lu", (unsigned long)file_index);
 
     // Update status
     char status_text[256];
-    snprintf(status_text, sizeof(status_text), "Playing: %s", file_path);
+    snprintf(status_text, sizeof(status_text), "Playing: Index %lu", (unsigned long)file_index);
     wavex_sample_load_save_set_status(page, status_text);
 
     return true;
@@ -238,38 +202,16 @@ bool wavex_sample_load_save_stop_audition(wavex_sample_load_save_page_t* page)
     if (page->is_playing) {
         ESP_LOGI(TAG, "=== SAMPLE STOP OPERATION 1: About to stop sample audition ===");
 
-        // Send sample stop request to Daisy
-        ESP_LOGI(TAG, "=== SAMPLE STOP OPERATION 2: About to get LinkManager instance ===");
         
         LinkManager& link_mgr = LinkManager::getInstance();
-        ESP_LOGI(TAG, "=== SAMPLE STOP OPERATION 3: About to get current link ===");
-
         ILink* link = link_mgr.get_current_link();
-
         if (!link) {
             ESP_LOGE(TAG, "No link available for sample stop");
             page->is_playing = false;
             wavex_sample_load_save_set_status(page, "Error: No link");
             return false;
         }
-
-        ESP_LOGI(TAG, "=== SAMPLE STOP OPERATION 4: About to check if link is SPI link ===");
-
-        // Check if this is an SPI link by checking if it supports the extended methods
-        // We'll use a safer approach than dynamic_cast for ESP32
-        if (!link_mgr.is_spi_link()) {
-            ESP_LOGE(TAG, "Link is not SPI link, cannot send sample stop request");
-            page->is_playing = false;
-            wavex_sample_load_save_set_status(page, "Error: Not SPI link");
-            return false;
-        }
-        
-        ESP_LOGI(TAG, "=== SAMPLE STOP OPERATION 5: About to cast to SpiLink ===");
-        
-        // Cast to SpiLink - we know it's safe because is_spi_link() returned true
         SpiLink* spi_link = static_cast<SpiLink*>(link);
-
-        ESP_LOGI(TAG, "=== SAMPLE STOP OPERATION 6: About to call send_sample_stop_req ===");
 
         esp_err_t result = spi_link->send_sample_stop_req();
         if (result != ESP_OK) {
@@ -376,6 +318,29 @@ static void file_selected_callback(const wavex_file_entry_t* entry, void* user_d
     page->selected_file[sizeof(page->selected_file) - 1] = '\0';
 }
 
+static void file_selected_index_callback(uint32_t file_index, const wavex_file_entry_t* entry, void* user_data)
+{
+    ESP_LOGI(TAG, "=== INDEX CALLBACK CALLED: index=%lu, entry=%p, user_data=%p ===", (unsigned long)file_index, entry, user_data);
+    
+    wavex_sample_load_save_page_t* page = (wavex_sample_load_save_page_t*)user_data;
+    if (!page || !entry) {
+        ESP_LOGE(TAG, "Invalid parameters: page=%p, entry=%p", page, entry);
+        return;
+    }
+    
+    ESP_LOGI(TAG, "File selected by index %lu: %s", (unsigned long)file_index, entry->name);
+    
+    // Update info panel
+    wavex_sample_load_save_update_info(page, entry);
+    
+    // Store selected file index and name (not full path to avoid length issues)
+    page->selected_file_index = file_index;
+    strncpy(page->selected_file, entry->name, sizeof(page->selected_file) - 1);
+    page->selected_file[sizeof(page->selected_file) - 1] = '\0';
+    
+    ESP_LOGI(TAG, "Stored selected_file_index=%lu, selected_file='%s'", (unsigned long)page->selected_file_index, page->selected_file);
+}
+
 // Directory changed callback
 static void directory_changed_callback(const char* path, void* user_data)
 {
@@ -404,7 +369,9 @@ static void hotkey_event_callback(lv_event_t* e)
                 if (g_current_page->file_browser && g_current_page->file_browser->entry_count > 0) {
                     const wavex_file_entry_t* selected = wavex_file_browser_get_selected(g_current_page->file_browser);
                     if (selected && !selected->is_directory) {
-                        wavex_sample_load_save_audition_sample(g_current_page, selected->path);
+                        // Use index-based audition for better performance
+                        uint32_t selected_index = wavex_file_browser_get_selected_index(g_current_page->file_browser);
+                        wavex_sample_load_save_audition_sample_by_index(g_current_page, selected_index);
                     } else {
                         ESP_LOGW(TAG, "No valid file selected for audition");
                     }

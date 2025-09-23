@@ -199,7 +199,7 @@
 
     // Interval for sending meter updates over SPI (ms)
     #ifndef WAVEX_AUDIO_METERS_SEND_INTERVAL_MS
-    #define WAVEX_AUDIO_METERS_SEND_INTERVAL_MS 50
+    #define WAVEX_AUDIO_METERS_SEND_INTERVAL_MS 100  // 100ms = 10Hz meter updates (reduced frequency)
     #endif
 #endif
 
