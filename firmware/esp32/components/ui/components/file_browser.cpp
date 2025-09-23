@@ -12,9 +12,6 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "../../../../shared/spi_protocol/protocol.h"
-#include "../../../main/comm/link_manager.h"
-#include "../../../main/links/spi_link_wrapper.h"
-#include "../../../../shared/config/link_config.h"
 #include "../../../main/inter_mcu.h"
 
 // LVGL includes for thread safety
@@ -174,6 +171,12 @@ bool wavex_file_browser_navigate_to(wavex_file_browser_t* browser, const char* p
 bool wavex_file_browser_navigate_up(wavex_file_browser_t* browser)
 {
     if (!browser) return false;
+    
+    // Check if we're already at root directory
+    if (strcmp(browser->current_path, "/") == 0) {
+        ESP_LOGI(TAG, "Already at root directory, cannot navigate up");
+        return false;
+    }
     
     // Construct parent path without modifying current_path
     char parent_path[96];
@@ -533,20 +536,12 @@ static bool parse_browse_response_with_pagination(const uint8_t* data, size_t le
 // Send browse request to Daisy
 static bool send_browse_request(const char* path, uint8_t start_index)
 {
-    LinkManager& link_mgr = LinkManager::getInstance();
-    ILink* link = link_mgr.get_current_link();
-    if (!link) {
-        ESP_LOGE(TAG, "No link available for browse request");
-        return false;
-    }
-    SpiLink* spi_link = static_cast<SpiLink*>(link);
-
-    esp_err_t result = spi_link->send_browse_req(path, start_index);
+    esp_err_t result = inter_mcu_send_browse_req(path, start_index);
     if (result != ESP_OK) {
         ESP_LOGE(TAG, "Failed to send browse request: %d", result);
         return false;
     }
-    ESP_LOGI(TAG, "=== SPI OPERATION 6: Successfully sent browse request for path: %s, start_index: %d ===", path, start_index);
+    ESP_LOGI(TAG, "=== SPI OPERATION: Successfully sent browse request for path: %s, start_index: %d ===", path, start_index);
     return true;
 }
 

@@ -783,11 +783,13 @@ void wavex_ui_update_hotkey_labels(const char* labels[6])
             if (labels[i] && strlen(labels[i]) > 0) {
                 lv_label_set_text(s_hotkey_labels[i], labels[i]);
                 lv_obj_clear_flag(s_hotkey_buttons[i], LV_OBJ_FLAG_HIDDEN);
+                lv_obj_add_flag(s_hotkey_buttons[i], LV_OBJ_FLAG_CLICKABLE);
                 // Update button width based on calculated layout
                 lv_obj_set_size(s_hotkey_buttons[i], lv_pct(button_widths[i]), 90);
             } else {
                 lv_label_set_text(s_hotkey_labels[i], "");
                 lv_obj_add_flag(s_hotkey_buttons[i], LV_OBJ_FLAG_HIDDEN);
+                lv_obj_clear_flag(s_hotkey_buttons[i], LV_OBJ_FLAG_CLICKABLE);
             }
         }
     }
@@ -1042,6 +1044,8 @@ static void hotkey_button_event_cb(lv_event_t *e)
                             s_sample_load_save_page = NULL;
                             create_sample_menu(s_content_area);
                         }
+                    } else {
+                        ESP_LOGW(TAG, "Sample load/save page is NULL, cannot navigate back");
                     }
                     break;
                 default:

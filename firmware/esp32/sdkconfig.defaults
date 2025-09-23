@@ -5,9 +5,13 @@ CONFIG_IDF_TARGET="esp32p4"
 CONFIG_IDF_TARGET_ESP32P4=y
 
 # Serial port configuration
-CONFIG_ESPTOOLPY_PORT="/dev/ttyACM0"
-CONFIG_ESPTOOLPY_BAUD_921600B=y
-CONFIG_ESPTOOLPY_BAUD=921600
+# Note: In ESP-IDF v5.5.1, port and baudrate are specified via command line:
+# idf.py -p /dev/ttyACM0 -b 2000000 flash
+
+# Flash size configuration - Updated to 16MB
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="16MB"
+CONFIG_ESPTOOLPY_HEADER_FLASHSIZE_UPDATE=y
 
 # Compiler optimization
 CONFIG_COMPILER_OPTIMIZATION_PERF=y

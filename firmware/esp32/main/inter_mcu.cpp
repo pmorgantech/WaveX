@@ -1,7 +1,7 @@
 #include "inter_mcu.h"
-#include "comm/link_manager.h"
 #include "comm/statistics.h"
 #include "comm/shared_packet_handler.h"
+#include "links/spi_link.h"
 #include "../../shared/spi_protocol/protocol.h"
 #include "../../shared/config/link_config.h"
 #include <string.h>
@@ -20,8 +20,9 @@
 
 static const char* TAG = "InterMCU";
 
-// Global link manager instance
-static LinkManager& s_link_manager = LinkManager::getInstance();
+// Direct SPI link state
+static bool s_spi_initialized = false;
+static bool s_spi_started = false;
 
 // Statistics tracking
 static StatisticsManager s_statistics;
@@ -55,15 +56,14 @@ esp_err_t inter_mcu_init()
     
     ESP_LOGI(TAG, "Initializing inter-MCU communication...");
     
-    // Initialize link manager (SPI only now)
-    esp_err_t ret = s_link_manager.init();
+    // Initialize SPI link directly
+    esp_err_t ret = spi_link_init();
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Link manager initialization failed");
+        ESP_LOGE(TAG, "SPI link initialization failed");
         return ret;
     }
     
-    // Statistics manager doesn't need explicit initialization
-    
+    s_spi_initialized = true;
     ESP_LOGI(TAG, "Inter-MCU communication initialized successfully");
     s_initialized = true;
     
@@ -79,12 +79,14 @@ esp_err_t inter_mcu_start()
     
     ESP_LOGI(TAG, "Starting inter-MCU communication...");
     
-    // Start link manager
-    esp_err_t ret = s_link_manager.start();
+    // Start SPI link directly
+    esp_err_t ret = spi_link_start();
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Link manager start failed");
+        ESP_LOGE(TAG, "SPI link start failed");
         return ret;
     }
+    
+    s_spi_started = true;
     
     // Start RX/TX tasks
     ret = create_tasks();
@@ -104,7 +106,13 @@ esp_err_t inter_mcu_send_control_change(uint8_t parameter, uint8_t channel, uint
         return -1; // ESP_ERR_INVALID_STATE
     }
     
-    return s_link_manager.send_control_change(parameter, channel, value);
+    WaveX::Protocol::ControlChangeMessage msg;
+    msg.parameter = parameter;
+    msg.channel = channel;
+    msg.value = value;
+    
+    int result = spi_link_send(WaveX::Protocol::MSG_CONTROL_CHANGE, &msg, sizeof(msg));
+    return result ? ESP_OK : -1; // ESP_FAIL
 }
 
 esp_err_t inter_mcu_send_note_on(uint8_t note, uint8_t velocity, uint8_t channel)
@@ -113,7 +121,14 @@ esp_err_t inter_mcu_send_note_on(uint8_t note, uint8_t velocity, uint8_t channel
         return -1; // ESP_ERR_INVALID_STATE
     }
     
-    return s_link_manager.send_note_on(note, velocity, channel);
+    WaveX::Protocol::NoteMessage msg;
+    msg.note = note;
+    msg.velocity = velocity;
+    msg.channel = channel;
+    msg.reserved = 0;
+    
+    int result = spi_link_send(WaveX::Protocol::MSG_NOTE_ON, &msg, sizeof(msg));
+    return result ? ESP_OK : -1; // ESP_FAIL
 }
 
 esp_err_t inter_mcu_send_note_off(uint8_t note, uint8_t channel)
@@ -122,7 +137,14 @@ esp_err_t inter_mcu_send_note_off(uint8_t note, uint8_t channel)
         return -1; // ESP_ERR_INVALID_STATE
     }
     
-    return s_link_manager.send_note_off(note, channel);
+    WaveX::Protocol::NoteMessage msg;
+    msg.note = note;
+    msg.velocity = 0; // Note off
+    msg.channel = channel;
+    msg.reserved = 0;
+    
+    int result = spi_link_send(WaveX::Protocol::MSG_NOTE_OFF, &msg, sizeof(msg));
+    return result ? ESP_OK : -1; // ESP_FAIL
 }
 
 esp_err_t inter_mcu_send_sample_ctrl(uint8_t slot, uint8_t cmd, float rate)
@@ -131,7 +153,13 @@ esp_err_t inter_mcu_send_sample_ctrl(uint8_t slot, uint8_t cmd, float rate)
         return -1; // ESP_ERR_INVALID_STATE
     }
     
-    return s_link_manager.send_sample_ctrl(slot, cmd, rate);
+    WaveX::Protocol::SampleCtrlMessage msg;
+    msg.slot = slot;
+    msg.cmd = cmd;
+    msg.rate = rate;
+    
+    int result = spi_link_send(WaveX::Protocol::MSG_SAMPLE_CTRL, &msg, sizeof(msg));
+    return result ? ESP_OK : -1; // ESP_FAIL
 }
 
 esp_err_t inter_mcu_send_preview_req(uint8_t slot, uint32_t start, uint32_t end, uint16_t decim)
@@ -140,7 +168,14 @@ esp_err_t inter_mcu_send_preview_req(uint8_t slot, uint32_t start, uint32_t end,
         return -1; // ESP_ERR_INVALID_STATE
     }
     
-    return s_link_manager.send_preview_req(slot, start, end, decim);
+    WaveX::Protocol::PreviewReqMessage msg;
+    msg.slot = slot;
+    msg.start = start;
+    msg.end = end;
+    msg.decim = decim;
+    
+    int result = spi_link_send(WaveX::Protocol::MSG_PREVIEW_REQ, &msg, sizeof(msg));
+    return result ? ESP_OK : -1; // ESP_FAIL
 }
 
 void inter_mcu_send_test_messages()
@@ -150,10 +185,20 @@ void inter_mcu_send_test_messages()
         return;
     }
     
-    ESP_LOGI(TAG, "Sending test messages via %s link...", 
-              s_link_manager.is_spi_link() ? "SPI" : "Unknown");
+    ESP_LOGI(TAG, "Sending test messages via SPI link...");
     
-    s_link_manager.send_test_messages();
+    // Send a simple control change test message
+    WaveX::Protocol::ControlChangeMessage msg;
+    msg.parameter = WaveX::Protocol::PARAM_VOLUME;
+    msg.channel = 0;
+    msg.value = 100;
+    
+    int result = spi_link_send(WaveX::Protocol::MSG_CONTROL_CHANGE, &msg, sizeof(msg));
+    if (result) {
+        ESP_LOGI(TAG, "Test message sent successfully");
+    } else {
+        ESP_LOGE(TAG, "Failed to send test message");
+    }
 }
 
 bool inter_mcu_is_busy()
@@ -162,7 +207,9 @@ bool inter_mcu_is_busy()
         return false;
     }
     
-    return s_link_manager.is_busy();
+    // For now, SPI link doesn't have a busy state, so return false
+    // This could be enhanced to check SPI transaction queue status
+    return false;
 }
 
 void inter_mcu_set_suspended(bool suspended)
@@ -477,4 +524,46 @@ void inter_mcu_process_daisy_control_message(uint8_t type, const uint8_t* payloa
     (void)payload;
     (void)len;
 #endif
+}
+
+// Direct SPI API functions (replacing LinkManager)
+
+esp_err_t inter_mcu_send_browse_req(const char* path, uint8_t start_index)
+{
+    if (!s_initialized) {
+        return -1; // ESP_ERR_INVALID_STATE
+    }
+    
+    size_t path_len = strlen(path);
+    if (path_len > 18) path_len = 18; // Limit to packet payload size
+    
+    uint8_t payload[20];
+    payload[0] = start_index;
+    memcpy(&payload[1], path, path_len);
+    
+    int result = spi_link_send(WaveX::Protocol::MSG_BROWSE_REQ, payload, path_len + 1);
+    return result ? ESP_OK : -1; // ESP_FAIL
+}
+
+esp_err_t inter_mcu_send_sample_play_index_req(uint32_t file_index)
+{
+    if (!s_initialized) {
+        return -1; // ESP_ERR_INVALID_STATE
+    }
+    
+    WaveX::Protocol::SamplePlayIndexMessage msg;
+    msg.index = file_index;
+    
+    int result = spi_link_send(WaveX::Protocol::MSG_SAMPLE_PLAY_INDEX_REQ, &msg, sizeof(msg));
+    return result ? ESP_OK : -1; // ESP_FAIL
+}
+
+esp_err_t inter_mcu_send_sample_stop_req()
+{
+    if (!s_initialized) {
+        return -1; // ESP_ERR_INVALID_STATE
+    }
+    
+    int result = spi_link_send(WaveX::Protocol::MSG_SAMPLE_STOP_REQ, NULL, 0);
+    return result ? ESP_OK : -1; // ESP_FAIL
 }

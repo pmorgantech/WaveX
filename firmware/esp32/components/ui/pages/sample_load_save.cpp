@@ -11,9 +11,6 @@
 #include <cstdio>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "../../../main/comm/link_manager.h"
-#include "../../../main/links/spi_link_wrapper.h"
-#include "../../../shared/spi_protocol/protocol.h"
 #include "../../../main/inter_mcu.h"
 #include "../../../main/ui_task.h"
 
@@ -178,20 +175,15 @@ bool wavex_sample_load_save_audition_sample_by_index(wavex_sample_load_save_page
 {
     if (!page) return false;
 
-    ESP_LOGI(TAG, "=== SAMPLE PLAY INDEX OPERATION 1: About to audition sample by index: %lu ===", (unsigned long)file_index);
-
-    LinkManager& link_mgr = LinkManager::getInstance();
-    ILink* link = link_mgr.get_current_link();
-    if (!link) {
-        return false;
-    }
-    SpiLink* spi_link = static_cast<SpiLink*>(link);
-
-    esp_err_t result = spi_link->send_sample_play_index_req(file_index);
+    ESP_LOGI(TAG, "=== SAMPLE PLAY INDEX OPERATION: About to audition sample by index: %lu ===", (unsigned long)file_index);
+    
+    esp_err_t result = inter_mcu_send_sample_play_index_req(file_index);
     if (result != ESP_OK) {
         ESP_LOGE(TAG, "Failed to send sample play index request: %d", result);
         return false;
     }
+    
+    ESP_LOGI(TAG, "=== SAMPLE PLAY INDEX OPERATION: Request sent successfully ===");
     page->is_playing = true;
     snprintf(page->selected_file, sizeof(page->selected_file), "Index %lu", (unsigned long)file_index);
 
@@ -208,28 +200,17 @@ bool wavex_sample_load_save_stop_audition(wavex_sample_load_save_page_t* page)
     if (!page) return false;
 
     if (page->is_playing) {
-        ESP_LOGI(TAG, "=== SAMPLE STOP OPERATION 1: About to stop sample audition ===");
-
+        ESP_LOGI(TAG, "=== SAMPLE STOP OPERATION: Stopping sample ===");
         
-        LinkManager& link_mgr = LinkManager::getInstance();
-        ILink* link = link_mgr.get_current_link();
-        if (!link) {
-            ESP_LOGE(TAG, "No link available for sample stop");
-            page->is_playing = false;
-            wavex_sample_load_save_set_status(page, "Error: No link");
-            return false;
-        }
-        SpiLink* spi_link = static_cast<SpiLink*>(link);
-
-        esp_err_t result = spi_link->send_sample_stop_req();
+        esp_err_t result = inter_mcu_send_sample_stop_req();
         if (result != ESP_OK) {
             ESP_LOGE(TAG, "Failed to send sample stop request: %d", result);
             page->is_playing = false;
             wavex_sample_load_save_set_status(page, "Error: Stop failed");
             return false;
         }
-
-        ESP_LOGI(TAG, "=== SAMPLE STOP OPERATION 7: Successfully sent sample stop request ===");
+        
+        ESP_LOGI(TAG, "=== SAMPLE STOP OPERATION: Request sent successfully ===");
 
         page->is_playing = false;
         wavex_sample_load_save_set_status(page, "Stopped");
@@ -426,68 +407,6 @@ static void directory_changed_callback(const char* path, void* user_data)
     wavex_sample_load_save_set_status(page, status_text);
 }
 
-// Hotkey event callback
-static void hotkey_event_callback(lv_event_t* e)
-{
-    lv_event_code_t code = lv_event_get_code(e);
-    int button_index = (int)(intptr_t)lv_event_get_user_data(e);
-
-    if (code == LV_EVENT_CLICKED && g_current_page) {
-        ESP_LOGI(TAG, "Hotkey button %d clicked", button_index);
-
-        switch (button_index) {
-            case 0: // Audition
-                if (g_current_page->file_browser && g_current_page->file_browser->entry_count > 0) {
-                    const wavex_file_entry_t* selected = wavex_file_browser_get_selected(g_current_page->file_browser);
-                    if (selected && !selected->is_directory) {
-                        // Use index-based audition for better performance
-                        uint32_t selected_index = wavex_file_browser_get_selected_index(g_current_page->file_browser);
-                        wavex_sample_load_save_audition_sample_by_index(g_current_page, selected_index);
-                    } else {
-                        ESP_LOGW(TAG, "No valid file selected for audition");
-                    }
-                }
-                break;
-            case 1: // Load
-                if (g_current_page->file_browser && g_current_page->file_browser->entry_count > 0) {
-                    const wavex_file_entry_t* selected = wavex_file_browser_get_selected(g_current_page->file_browser);
-                    if (selected && !selected->is_directory) {
-                        wavex_sample_load_save_load_sample(g_current_page, selected->path);
-                    } else {
-                        ESP_LOGW(TAG, "No valid file selected for loading");
-                    }
-                }
-                break;
-            case 2: // Save
-                ESP_LOGI(TAG, "Save functionality not implemented yet");
-                // TODO: Implement save functionality
-                break;
-            case 3: // Back
-                ESP_LOGI(TAG, "Back hotkey pressed - navigation would be handled by UI task");
-                // Navigation back to menu is handled by ui_task.cpp
-                break;
-            case 4: // Up (^)
-                if (g_current_page->file_browser && g_current_page->file_browser->entry_count > 0) {
-                    uint32_t current_idx = wavex_file_browser_get_selected_index(g_current_page->file_browser);
-                    if (current_idx > 0) {
-                        wavex_file_browser_set_selection(g_current_page->file_browser, current_idx - 1);
-                        ESP_LOGI(TAG, "Navigated up to index %d", current_idx - 1);
-                    }
-                }
-                break;
-            case 5: // Down (v)
-                if (g_current_page->file_browser && g_current_page->file_browser->entry_count > 0) {
-                    uint32_t current_idx = wavex_file_browser_get_selected_index(g_current_page->file_browser);
-                    if (current_idx < g_current_page->file_browser->entry_count - 1) {
-                        wavex_file_browser_set_selection(g_current_page->file_browser, current_idx + 1);
-                        ESP_LOGI(TAG, "Navigated down to index %d", current_idx + 1);
-                    }
-                }
-                break;
-            default:
-                ESP_LOGW(TAG, "Unknown hotkey button: %d", button_index);
-                break;
-        }
-    }
-}
+// Note: Hotkey handling is now done by ui_task.cpp to ensure proper navigation
+// This allows the UI task to handle back navigation and other screen transitions
 
