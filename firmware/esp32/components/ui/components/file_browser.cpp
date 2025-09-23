@@ -175,15 +175,22 @@ bool wavex_file_browser_navigate_up(wavex_file_browser_t* browser)
 {
     if (!browser) return false;
     
+    // Construct parent path without modifying current_path
+    char parent_path[96];
+    strncpy(parent_path, browser->current_path, sizeof(parent_path) - 1);
+    parent_path[sizeof(parent_path) - 1] = '\0';
+    
     // Find last directory separator
-    char* last_slash = strrchr(browser->current_path, '/');
-    if (last_slash && last_slash != browser->current_path) {
+    char* last_slash = strrchr(parent_path, '/');
+    if (last_slash && last_slash != parent_path) {
         *last_slash = '\0';
     } else {
-        strcpy(browser->current_path, "/");
+        strcpy(parent_path, "/");
     }
     
-    return wavex_file_browser_navigate_to(browser, browser->current_path);
+    ESP_LOGI(TAG, "Navigating up: '%s' -> '%s'", browser->current_path, parent_path);
+    
+    return wavex_file_browser_navigate_to(browser, parent_path);
 }
 
 bool wavex_file_browser_refresh(wavex_file_browser_t* browser)
@@ -287,19 +294,16 @@ static void file_list_event_cb(lv_event_t *e)
             ui_index++;
         }
         
-        // Check if we're at root directory (no ".." entry)
-        bool has_parent_entry = (strcmp(browser->current_path, "/") != 0);
+        // Handle ".." entries that come from Daisy
         uint32_t entry_index = ui_index;
         
-        if (has_parent_entry) {
-            if (ui_index == 0) {
+        if (entry_index < browser->entry_count) {
+            const wavex_file_entry_t* entry = &browser->entries[entry_index];
+            if (strcmp(entry->name, "..") == 0) {
                 // ".." entry clicked - navigate up
                 ESP_LOGI(TAG, "Parent directory entry clicked");
                 wavex_file_browser_navigate_up(browser);
                 return;
-            } else {
-                // Adjust index for actual entries (subtract 1 for ".." entry)
-                entry_index = ui_index - 1;
             }
         }
         
@@ -642,23 +646,8 @@ static void browse_resp_callback(const uint8_t* data, size_t length, void* user_
         LV_LOCK();
         lv_obj_clean(browser->list);
         
-        // Add ".." entry if not at root directory
+        // Note: ".." entries are now provided by Daisy backend, no need to create them manually
         bool added_parent_entry = false;
-        if (strcmp(browser->current_path, "/") != 0) {
-            lv_obj_t* btn = lv_list_add_btn(browser->list, NULL, "..");
-            if (btn) {
-                ui_theme_apply_button_style(btn, true);
-                lv_obj_set_style_text_color(btn, UI_COLOR_TEXT, LV_PART_MAIN);
-                lv_obj_set_style_text_font(btn, UI_FONT_TITLE, LV_PART_MAIN);
-                
-                // Add directory indicator for parent entry
-                lv_obj_t* label = lv_obj_get_child(btn, 0);
-                if (label) {
-                    lv_label_set_text(label, "[DIR] ..");
-                }
-                added_parent_entry = true;
-            }
-        }
         
         if (browser->entry_count > 0 && browser->entries) {
             // Create list items for all loaded entries

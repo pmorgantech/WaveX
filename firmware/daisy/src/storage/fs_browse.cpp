@@ -8,7 +8,8 @@ namespace Storage {
 
 static bool is_dot_entry(const char* name)
 {
-    return (name[0] == '.' && (name[1] == '\0' || (name[1] == '.' && name[2] == '\0')));
+    // Only filter "." entries, allow ".." entries for navigation
+    return (name[0] == '.' && name[1] == '\0');
 }
 
 static bool has_wav_extension(const char* name)
@@ -57,9 +58,10 @@ bool ListDir(const char* path,
 #endif
         if(is_dot_entry(name)) continue;
         
-        // Only include directories and WAV files
+        // Include directories, WAV files, and ".." entries
         bool is_dir = (fno.fattrib & AM_DIR) ? true : false;
-        if (is_dir || has_wav_extension(name)) {
+        bool is_parent_dir = (strcmp(name, "..") == 0);
+        if (is_dir || has_wav_extension(name) || is_parent_dir) {
             total_count++;
         }
     }
@@ -82,20 +84,26 @@ bool ListDir(const char* path,
 #endif
         if(is_dot_entry(name)) continue;
         
-        // Only include directories and WAV files
+        // Include directories, WAV files, and ".." entries
         bool is_dir = (fno.fattrib & AM_DIR) ? true : false;
-        if (!is_dir && !has_wav_extension(name)) {
-            continue; // Skip non-WAV files
+        bool is_parent_dir = (strcmp(name, "..") == 0);
+        if (!is_dir && !has_wav_extension(name) && !is_parent_dir) {
+            continue; // Skip non-WAV files and non-directories (except "..")
         }
         
         if(skipped < start_index) { skipped++; continue; }
         if(written >= max_entries) break;
 
         FileEntry& e = out[written++];
-        e.is_dir     = is_dir ? 1 : 0;
+        e.is_dir     = (is_dir || is_parent_dir) ? 1 : 0;
         e.size_bytes = e.is_dir ? 0u : (uint32_t)fno.fsize;
         std::strncpy(e.name, name, sizeof(e.name) - 1);
         e.name[sizeof(e.name) - 1] = '\0';
+        
+        // Debug logging for ".." entries
+        if (is_parent_dir) {
+            // Note: This will be logged by the calling function
+        }
     }
     f_closedir(&dir);
     // Return the actual number of entries written to the array
