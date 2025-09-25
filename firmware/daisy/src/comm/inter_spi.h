@@ -20,7 +20,7 @@ namespace Comm {
 
 // Function declarations
 void Spi_Init(daisy::DaisySeed& hw, daisy::SpiHandle* hspi);
-int Spi_Send(uint16_t type, const void* payload, uint16_t len);
+bool Spi_SendPreCreatedPacket(const uint8_t* packet_data, size_t packet_size);
 int Spi_SendLargePacket(const uint8_t* packet_data, size_t packet_size);
 bool Spi_HasPendingData(void);
 

@@ -11,33 +11,47 @@ namespace Protocol {
 static const uint8_t MAX_PAYLOAD_SIZE = 220; // allow multi-entry directory responses
 static const uint32_t PROTOCOL_VERSION = 1;
 
-// Flexible Packet Type Space Allocation
+// Simplified Packet Format - Clean and Efficient
 
-// Command Packet Types (0x01-0x7F) - 127 available
-#define PKT_TYPE_CMD32        0x01  // Command packet (32 bytes)
-#define PKT_TYPE_CMD64        0x02  // Command packet (64 bytes)
-#define PKT_TYPE_CMD128       0x03  // Command packet (128 bytes)
-#define PKT_TYPE_CMD256       0x04  // Command packet (256 bytes)
-#define PKT_TYPE_CMD512       0x05  // Command packet (512 bytes)
-#define PKT_TYPE_CMD1024      0x06  // Command packet (1024 bytes)
-#define PKT_TYPE_CMD2048      0x07  // Command packet (2048 bytes)
-#define PKT_TYPE_CMD4096      0x08  // Command packet (4096 bytes)
-// ... reserve 0x09-0x7F for future command packet types
+// Single Unified Packet Format - no command vs data distinction
+struct WaveXPacket {
+    uint8_t  flags_size;   // 4 LSB = size code, 4 MSB = flags
+    uint8_t  msg_type;     // Message type (MSG_SYNC, MSG_HEARTBEAT, etc.)
+    uint16_t seq;          // 16-bit sequence number (0-65535)
+    uint8_t  payload[0];   // Variable length payload (structured message data)
+    uint16_t crc;          // CRC16-CCITT over entire packet except CRC (at end)
+} __attribute__((packed));
 
-// Data Packet Types (0x80-0xFE) - 127 available
-#define PKT_TYPE_DATA32      0x80  // Data packet (32 bytes)
-#define PKT_TYPE_DATA64      0x81  // Data packet (64 bytes)
-#define PKT_TYPE_DATA128     0x82  // Data packet (128 bytes)
-#define PKT_TYPE_DATA256     0x83  // Data packet (256 bytes)
-#define PKT_TYPE_DATA512     0x84  // Data packet (512 bytes)
-#define PKT_TYPE_DATA1024    0x85  // Data packet (1024 bytes)
-#define PKT_TYPE_DATA2048    0x86  // Data packet (2048 bytes)
-#define PKT_TYPE_DATA4096    0x87  // Data packet (4096 bytes)
-// ... reserve 0x88-0xFE for future data packet types
+// Size encoding (4 LSB of flags_size)
+#define PKT_SIZE_32      0x00  // 32 bytes total
+#define PKT_SIZE_64      0x01  // 64 bytes total
+#define PKT_SIZE_128     0x02  // 128 bytes total
+#define PKT_SIZE_256     0x03  // 256 bytes total
+#define PKT_SIZE_512     0x04  // 512 bytes total (future)
+#define PKT_SIZE_1024    0x05  // 1024 bytes total
+#define PKT_SIZE_2048    0x06  // 2048 bytes total
 
-// Reserved/Control Types
-#define PKT_TYPE_NULL        0x00  // Empty/null packet
-#define PKT_TYPE_ERROR_VAL   0xFF  // Error/invalid packet
+// Flags (4 MSB of flags_size)
+#define PKT_FLAG_ACK     0x80  // This is an acknowledgment packet
+#define PKT_FLAG_NACK    0x40  // This packet is corrupted/needs resent
+#define PKT_FLAG_RES1    0x20  // Reserved for future use
+#define PKT_FLAG_RES2    0x10  // Reserved for future use
+
+// Masks
+#define PKT_SIZE_MASK    0x0F  // 4 LSB for size encoding
+#define PKT_FLAG_MASK    0xF0  // 4 MSB for flags
+
+// Helper macros
+#define PKT_GET_SIZE(flags_size) ((flags_size & PKT_SIZE_MASK) == 0 ? 32 : \
+                                 (flags_size & PKT_SIZE_MASK) == 1 ? 64 : \
+                                 (flags_size & PKT_SIZE_MASK) == 2 ? 128 : \
+                                 (flags_size & PKT_SIZE_MASK) == 3 ? 256 : \
+                                 (flags_size & PKT_SIZE_MASK) == 4 ? 512 : \
+                                 (flags_size & PKT_SIZE_MASK) == 5 ? 1024 : 2048)
+
+#define PKT_GET_FLAGS(flags_size) (flags_size & PKT_FLAG_MASK)
+#define PKT_SET_FLAGS(flags_size, flags) ((flags_size & PKT_SIZE_MASK) | (flags & PKT_FLAG_MASK))
+#define PKT_MAKE_FLAGS_SIZE(size_code, flags) ((flags & PKT_FLAG_MASK) | (size_code & PKT_SIZE_MASK))
 
 // Message types
 enum MessageType : uint8_t {
@@ -131,10 +145,12 @@ struct DataRequestMessage {
     uint8_t reserved[3];    // Reserved for future use
 } __attribute__((packed));
 
-// Meter push (backend->frontend)
+// Meter push (backend->frontend) - stereo version
 struct MeterPushMessage {
-    float rms;
-    float peak;
+    uint16_t rms_left;   // Left channel RMS (0-32767)
+    uint16_t rms_right;  // Right channel RMS (0-32767)
+    uint16_t peak_left;   // Left channel peak (0-32767)
+    uint16_t peak_right;  // Right channel peak (0-32767)
 } __attribute__((packed));
 
 // Wave chunk (backend->frontend)
@@ -178,6 +194,12 @@ struct AckMessage {
     uint16_t serial_id;  // Serial ID of the message being acknowledged
 } __attribute__((packed));
 
+// Sync message (simple keepalive)
+struct SyncMessage {
+    uint32_t timestamp_ms;  // Timestamp for sync
+    uint8_t reserved[4];    // Reserved for future use
+} __attribute__((packed));
+
 // Heartbeat (bidirectional) - extended with CPU usage
 struct HeartbeatMessage {
     uint32_t uptime_ms;
@@ -200,198 +222,10 @@ struct SamplePathResponseMessage {
     char     path[200];     // Full file path (null-terminated)
 } __attribute__((packed));
 
-// Legacy Packet structure removed - using flexible packet system only
-
-// Flexible Packet Structures (CRC at end for optimal performance)
-
-// Command packet structures (CRC at end)
-struct SpiCommandPacket32 {
-    uint8_t type;         // Packet type (PKT_TYPE_CMD32)
-    uint8_t flags;        // ACK/REQ/NACK/MORE flags
-    uint16_t seq;         // Sequence number (2 bytes)
-    uint8_t len;          // Payload length (0-20)
-    uint8_t payload[20]; // Command payload (20 bytes)
-    uint8_t padding[5];  // Alignment padding (5 bytes to make total 32)
-    uint16_t crc;         // CRC16-CCITT over header + payload (at end)
-} __attribute__((packed));
-
-struct SpiCommandPacket64 {
-    uint8_t type;         // Packet type (PKT_TYPE_CMD64)
-    uint8_t flags;        // ACK/REQ/NACK/MORE flags
-    uint16_t seq;         // Sequence number (2 bytes)
-    uint8_t len;          // Payload length (0-52)
-    uint8_t payload[52];  // Command payload (52 bytes)
-    uint8_t padding[6];   // Alignment padding
-    uint16_t crc;         // CRC16-CCITT over header + payload (at end)
-} __attribute__((packed));
-
-struct SpiCommandPacket128 {
-    uint8_t type;         // Packet type (PKT_TYPE_CMD128)
-    uint8_t flags;        // ACK/REQ/NACK/MORE flags
-    uint16_t seq;         // Sequence number (2 bytes)
-    uint8_t len;          // Payload length (0-116)
-    uint8_t payload[116]; // Command payload (116 bytes)
-    uint8_t padding[6];   // Alignment padding
-    uint16_t crc;         // CRC16-CCITT over header + payload (at end)
-} __attribute__((packed));
-
-struct SpiCommandPacket256 {
-    uint8_t type;         // Packet type (PKT_TYPE_CMD256)
-    uint8_t flags;        // ACK/REQ/NACK/MORE flags
-    uint16_t seq;         // Sequence number (2 bytes)
-    uint8_t len;          // Payload length (0-244)
-    uint8_t payload[244]; // Command payload (244 bytes)
-    uint8_t padding[6];   // Alignment padding
-    uint16_t crc;         // CRC16-CCITT over header + payload (at end)
-} __attribute__((packed));
-
-struct SpiCommandPacket512 {
-    uint8_t type;         // Packet type (PKT_TYPE_CMD512)
-    uint8_t flags;        // ACK/REQ/NACK/MORE flags
-    uint16_t seq;         // Sequence number (2 bytes)
-    uint8_t len;          // Payload length (0-500)
-    uint8_t payload[500]; // Command payload (500 bytes)
-    uint8_t padding[6];   // Alignment padding
-    uint16_t crc;         // CRC16-CCITT over header + payload (at end)
-} __attribute__((packed));
-
-struct SpiCommandPacket1024 {
-    uint8_t type;         // Packet type (PKT_TYPE_CMD1024)
-    uint8_t flags;        // ACK/REQ/NACK/MORE flags
-    uint16_t seq;         // Sequence number (2 bytes)
-    uint8_t len;          // Payload length (0-1012)
-    uint8_t payload[1012]; // Command payload (1012 bytes)
-    uint8_t padding[6];   // Alignment padding
-    uint16_t crc;         // CRC16-CCITT over header + payload (at end)
-} __attribute__((packed));
-
-struct SpiCommandPacket2048 {
-    uint8_t type;         // Packet type (PKT_TYPE_CMD2048)
-    uint8_t flags;        // ACK/REQ/NACK/MORE flags
-    uint16_t seq;         // Sequence number (2 bytes)
-    uint8_t len;          // Payload length (0-2036)
-    uint8_t payload[2036]; // Command payload (2036 bytes)
-    uint8_t padding[6];   // Alignment padding
-    uint16_t crc;         // CRC16-CCITT over header + payload (at end)
-} __attribute__((packed));
-
-struct SpiCommandPacket4096 {
-    uint8_t type;         // Packet type (PKT_TYPE_CMD4096)
-    uint8_t flags;        // ACK/REQ/NACK/MORE flags
-    uint16_t seq;         // Sequence number (2 bytes)
-    uint8_t len;          // Payload length (0-4084)
-    uint8_t payload[4084]; // Command payload (4084 bytes)
-    uint8_t padding[6];   // Alignment padding
-    uint16_t crc;         // CRC16-CCITT over header + payload (at end)
-} __attribute__((packed));
-
-// Data packet structures (CRC at end)
-struct SpiDataPacket32 {
-    uint8_t type;         // Packet type (PKT_TYPE_DATA32)
-    uint8_t flags;        // ACK/REQ/NACK/MORE flags
-    uint16_t seq;         // Sequence number (2 bytes)
-    uint8_t len;          // Payload length (0-20)
-    uint8_t payload[20];  // Data payload (20 bytes)
-    uint8_t padding[6];   // Alignment padding
-    uint16_t crc;         // CRC16-CCITT over header + payload (at end)
-} __attribute__((packed));
-
-struct SpiDataPacket64 {
-    uint8_t type;         // Packet type (PKT_TYPE_DATA64)
-    uint8_t flags;        // ACK/REQ/NACK/MORE flags
-    uint16_t seq;         // Sequence number (2 bytes)
-    uint8_t len;          // Payload length (0-52)
-    uint8_t payload[52];  // Data payload (52 bytes)
-    uint8_t padding[6];   // Alignment padding
-    uint16_t crc;         // CRC16-CCITT over header + payload (at end)
-} __attribute__((packed));
-
-struct SpiDataPacket128 {
-    uint8_t type;         // Packet type (PKT_TYPE_DATA128)
-    uint8_t flags;        // ACK/REQ/NACK/MORE flags
-    uint16_t seq;         // Sequence number (2 bytes)
-    uint8_t len;          // Payload length (0-116)
-    uint8_t payload[116]; // Data payload (116 bytes)
-    uint8_t padding[6];   // Alignment padding
-    uint16_t crc;         // CRC16-CCITT over header + payload (at end)
-} __attribute__((packed));
-
-struct SpiDataPacket256 {
-    uint8_t type;         // Packet type (PKT_TYPE_DATA256)
-    uint8_t flags;        // ACK/REQ/NACK/MORE flags
-    uint16_t seq;         // Sequence number (2 bytes)
-    uint8_t len;          // Payload length (0-244)
-    uint8_t payload[244]; // Data payload (244 bytes)
-    uint8_t padding[5];   // Alignment padding (5 bytes to make total 256)
-    uint16_t crc;         // CRC16-CCITT over header + payload (at end)
-} __attribute__((packed));
-
-struct SpiDataPacket512 {
-    uint8_t type;         // Packet type (PKT_TYPE_DATA512)
-    uint8_t flags;        // ACK/REQ/NACK/MORE flags
-    uint16_t seq;         // Sequence number (2 bytes)
-    uint8_t len;          // Payload length (0-500)
-    uint8_t payload[500]; // Data payload (500 bytes)
-    uint8_t padding[6];   // Alignment padding
-    uint16_t crc;         // CRC16-CCITT over header + payload (at end)
-} __attribute__((packed));
-
-struct SpiDataPacket1024 {
-    uint8_t type;         // Packet type (PKT_TYPE_DATA1024)
-    uint8_t flags;        // ACK/REQ/NACK/MORE flags
-    uint16_t seq;         // Sequence number (2 bytes)
-    uint8_t len;          // Payload length (0-1012)
-    uint8_t payload[1012]; // Data payload (1012 bytes)
-    uint8_t padding[5];   // Alignment padding (5 bytes to make total 1024)
-    uint16_t crc;         // CRC16-CCITT over header + payload (at end)
-} __attribute__((packed));
-
-struct SpiDataPacket2048 {
-    uint8_t type;         // Packet type (PKT_TYPE_DATA2048)
-    uint8_t flags;        // ACK/REQ/NACK/MORE flags
-    uint16_t seq;         // Sequence number (2 bytes)
-    uint8_t len;          // Payload length (0-2036)
-    uint8_t payload[2036]; // Data payload (2036 bytes)
-    uint8_t padding[6];   // Alignment padding
-    uint16_t crc;         // CRC16-CCITT over header + payload (at end)
-} __attribute__((packed));
-
-struct SpiDataPacket4096 {
-    uint8_t type;         // Packet type (PKT_TYPE_DATA4096)
-    uint8_t flags;        // ACK/REQ/NACK/MORE flags
-    uint16_t seq;         // Sequence number (2 bytes)
-    uint8_t len;          // Payload length (0-4084)
-    uint8_t payload[4084]; // Data payload (4084 bytes)
-    uint8_t padding[6];   // Alignment padding
-    uint16_t crc;         // CRC16-CCITT over header + payload (at end)
-} __attribute__((packed));
-
-// Legacy packet structure for compatibility
-struct LegacyPacket {
-    uint8_t sync;           // Always SYNC_BYTE
-    uint8_t type;           // MessageType
-    uint8_t length;         // Payload length
-    uint8_t checksum;       // Simple XOR checksum
-    uint8_t payload[MAX_PAYLOAD_SIZE];
-} __attribute__((packed));
-
-// Flexible packet size constants
-static const size_t PKT_SIZE_32 = 32;
-static const size_t PKT_SIZE_64 = 64;
-static const size_t PKT_SIZE_128 = 128;
-static const size_t PKT_SIZE_256 = 256;
-static const size_t PKT_SIZE_512 = 512;
-static const size_t PKT_SIZE_1024 = 1024;
-static const size_t PKT_SIZE_2048 = 2048;
-static const size_t PKT_SIZE_4096 = 4096;
+// Legacy packet structures completely removed - using new simplified format only
 
 // Maximum packet size support
-static const size_t MAX_PKT_SIZE = PKT_SIZE_4096;
-
-// Sanity checks for packet sizes
-static_assert(sizeof(SpiCommandPacket32) == 32, "Command packet 32 size drift");
-static_assert(sizeof(SpiDataPacket256) == 256, "Data packet 256 size drift");
-static_assert(sizeof(SpiDataPacket1024) == 1024, "Data packet 1024 size drift");
+static const size_t MAX_PKT_SIZE = 2048;
 
 // Protocol functions
 class ProtocolHandler {
@@ -432,6 +266,7 @@ public:
                                          uint32_t total_count,
                                          const FileEntryWire* entries,
                                          uint8_t n);
+    static size_t CreateSyncPacket(uint8_t* buffer, size_t buffer_size, const SyncMessage& msg);
     static size_t CreateHeartbeatPacket(uint8_t* buffer, size_t buffer_size, const HeartbeatMessage& msg);
     static size_t CreateAckPacket(uint8_t* buffer, size_t buffer_size, const AckMessage& ack);
     static size_t CreateSamplePlayIndexPacket(uint8_t* buffer, size_t buffer_size, const SamplePlayIndexMessage& msg);
@@ -454,15 +289,21 @@ public:
                               uint32_t& start_index, uint8_t& max_entries);
     static bool ParseSamplePlayReq(const uint8_t* buffer, char* path_out, size_t path_max);
     
-    // Flexible packet system functions
-    static size_t GetPacketSizeFromType(uint8_t packet_type);
-    static bool IsCommandPacketType(uint8_t packet_type);
-    static bool IsDataPacketType(uint8_t packet_type);
-    static uint8_t GetOptimalPacketType(size_t payload_size, bool is_command);
-    static uint16_t CalculateSpiCrc(const uint8_t* data, size_t length);
-    static uint16_t CalculatePacketCrc(const uint8_t* packet_data, size_t packet_size);
-    static bool ValidatePacketCrc(const uint8_t* packet_data, size_t packet_size);
-    static void ZeroPadPacket(uint8_t* packet_data, size_t packet_size, size_t used_size);
+    // New simplified packet system functions
+    static size_t GetPacketSizeFromCode(uint8_t size_code);
+    static uint8_t GetOptimalSizeCode(size_t payload_size);
+    static size_t CreateWaveXPacket(uint8_t* buffer, size_t buffer_size,
+                                   uint8_t msg_type, const void* payload, size_t payload_size,
+                                   uint16_t sequence_number = 0, uint8_t flags = 0);
+    static bool ParseWaveXPacket(const uint8_t* buffer, size_t buffer_size,
+                                uint8_t& msg_type, void* payload, size_t& payload_size,
+                                uint16_t& sequence_number, uint8_t& flags);
+    static uint16_t CalculateWaveXCrc(const uint8_t* data, size_t length);
+    static uint16_t CalculateSpiCrc(const uint8_t* data, size_t length);  // Legacy compatibility
+    static uint16_t CalculatePacketCrc(const uint8_t* packet_data, size_t packet_size);  // Legacy compatibility
+    static bool ValidateWaveXPacket(const uint8_t* buffer, size_t buffer_size);
+    static bool ValidatePacketCrc(const uint8_t* packet_data, size_t packet_size);  // Legacy compatibility
+    static void ZeroPadPacket(uint8_t* packet_data, size_t packet_size, size_t used_size);  // Legacy compatibility
     
     // Utility functions
     static uint8_t CalculateChecksum(const uint8_t* data, size_t length);

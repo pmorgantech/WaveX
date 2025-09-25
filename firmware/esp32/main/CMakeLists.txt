@@ -4,6 +4,7 @@ idf_component_register(
         "inter_mcu.cpp"
         "ui_task.cpp"
         "comm/packet_processor.cpp"
+        "comm/packet_router.cpp"
         "comm/statistics.cpp"
         "comm/listeners.cpp"
         "tasks/rx_task.cpp"

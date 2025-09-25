@@ -14,6 +14,8 @@
 #include "../../../../shared/spi_protocol/protocol.h"
 #include "../../../main/inter_mcu.h"
 
+using namespace WaveX::Protocol;
+
 // LVGL includes for thread safety
 #include "esp_lvgl_port.h"
 
@@ -380,24 +382,39 @@ static bool refresh_file_list(wavex_file_browser_t* browser)
 // Parse browse response from Daisy using flexible packet format
 static bool parse_browse_response(const uint8_t* data, size_t length, wavex_file_entry_t* entries, uint32_t* count)
 {
-    if (!data || length < 5 + sizeof(WaveX::Protocol::BrowseRespHeader)) {
+    if (!data || length < 7) { // Minimum size for unified packet (5 header + 2 CRC)
         ESP_LOGE(TAG, "Browse response too short: %d bytes", (int)length);
         *count = 0;
         return false;
     }
 
-    // Parse as flexible packet format: type(1) + flags(1) + seq(2) + len(1) + payload + crc(2)
-    uint8_t packet_type = data[0];
-    uint8_t payload_len = data[4];
-    
-    if (!WaveX::Protocol::ProtocolHandler::IsDataPacketType(packet_type)) {
-        ESP_LOGE(TAG, "Wrong packet type: expected data packet, got 0x%02X", packet_type);
+    // Parse as unified packet format: flags_size(1) + msg_type(1) + seq(2) + reserved(1) + payload + crc(2)
+    // Validate unified packet format
+    if (!ProtocolHandler::ValidateWaveXPacket(data, length)) {
+        ESP_LOGE(TAG, "Invalid unified packet CRC");
         *count = 0;
         return false;
     }
 
-    const uint8_t* payload = data + 5; // Skip header
-    const WaveX::Protocol::BrowseRespHeader* browse_header = (const WaveX::Protocol::BrowseRespHeader*)payload;
+    // Extract packet info using unified format
+    uint8_t msg_type, flags;
+    uint16_t sequence_number;
+    uint8_t payload[MAX_PAYLOAD_SIZE];
+    size_t payload_size;
+
+    if (!ProtocolHandler::ParseWaveXPacket(data, length, msg_type, static_cast<void*>(payload), payload_size, sequence_number, flags)) {
+        ESP_LOGE(TAG, "Failed to parse unified packet");
+        *count = 0;
+        return false;
+    }
+
+    // Check if this is a browse response message
+    if (msg_type != WaveX::Protocol::MSG_BROWSE_RESP) {
+        ESP_LOGE(TAG, "Wrong message type: expected browse response, got 0x%02X", msg_type);
+        *count = 0;
+        return false;
+    }
+    const BrowseRespHeader* browse_header = (const BrowseRespHeader*)payload;
     uint32_t total_count = browse_header->total_count;
     uint8_t n_entries = browse_header->n;
 
@@ -413,13 +430,13 @@ static bool parse_browse_response(const uint8_t* data, size_t length, wavex_file
 
     // Parse file entries
     uint32_t parsed_count = 0;
-    const WaveX::Protocol::FileEntryWire* wire_entries = (const WaveX::Protocol::FileEntryWire*)(payload + sizeof(WaveX::Protocol::BrowseRespHeader));
+    const FileEntryWire* wire_entries = (const FileEntryWire*)(payload + sizeof(BrowseRespHeader));
 
     // ESP_LOGI(TAG, "Starting file entry parsing: n_entries=%u, max_count=%u", n_entries, *count);
-    // ESP_LOGI(TAG, "Wire entries pointer: %p, payload offset: %d", wire_entries, (int)(payload - data + sizeof(WaveX::Protocol::BrowseRespHeader)));
+    // ESP_LOGI(TAG, "Wire entries pointer: %p, payload offset: %d", wire_entries, (int)(payload - data + sizeof(BrowseRespHeader)));
 
     for (uint8_t i = 0; i < n_entries && parsed_count < *count; i++) {
-        const WaveX::Protocol::FileEntryWire* wire = &wire_entries[i];
+        const FileEntryWire* wire = &wire_entries[i];
         
         ESP_LOGI(TAG, "Parsing entry %d: is_dir=%d, size=%lu, name='%.50s'", 
                  i, wire->is_dir, (unsigned long)wire->size_bytes, wire->name);
@@ -454,41 +471,59 @@ static bool parse_browse_response_with_pagination(const uint8_t* data, size_t le
         return false;
     }
 
-    const uint8_t* payload;
-    size_t payload_len;
-    
-    // All packets now use flexible packet format
-    if (length < 5 + sizeof(WaveX::Protocol::BrowseRespHeader)) {
-        ESP_LOGE(TAG, "Flexible packet browse response too short: %d bytes", (int)length);
+    // All packets now use unified packet format
+    if (length < 7) { // Minimum size for unified packet (5 header + 2 CRC)
+        ESP_LOGE(TAG, "Unified packet browse response too short: %d bytes", (int)length);
         *count = 0;
         *total_files = 0;
         *current_page_entries = 0;
         return false;
     }
     
-    uint8_t packet_type = data[0];
-    if (!WaveX::Protocol::ProtocolHandler::IsDataPacketType(packet_type)) {
-        ESP_LOGE(TAG, "Wrong packet type: expected data packet, got 0x%02X", packet_type);
+    // Validate unified packet format
+    if (!ProtocolHandler::ValidateWaveXPacket(data, length)) {
+        ESP_LOGE(TAG, "Invalid unified packet CRC");
         *count = 0;
         *total_files = 0;
         *current_page_entries = 0;
         return false;
     }
-    
-    payload = data + 5; // Skip flexible packet header
-    payload_len = data[4]; // Payload length from flexible packet header
-    ESP_LOGI(TAG, "Parsing flexible packet format browse response: payload_len=%d", (int)payload_len);
-    
+
+    // Extract packet info using unified format
+    uint8_t msg_type, flags;
+    uint16_t sequence_number;
+    uint8_t payload[MAX_PAYLOAD_SIZE];
+    size_t payload_size;
+
+    if (!ProtocolHandler::ParseWaveXPacket(data, length, msg_type, static_cast<void*>(payload), payload_size, sequence_number, flags)) {
+        ESP_LOGE(TAG, "Failed to parse unified packet");
+        *count = 0;
+        *total_files = 0;
+        *current_page_entries = 0;
+        return false;
+    }
+
+    // Check if this is a browse response message
+    if (msg_type != MSG_BROWSE_RESP) {
+        ESP_LOGE(TAG, "Wrong message type: expected browse response, got 0x%02X", msg_type);
+        *count = 0;
+        *total_files = 0;
+        *current_page_entries = 0;
+        return false;
+    }
+
+    ESP_LOGI(TAG, "Parsing unified packet format browse response: payload_size=%d", (int)payload_size);
+
     // Validate payload length
-    if (payload_len < sizeof(WaveX::Protocol::BrowseRespHeader)) {
-        ESP_LOGE(TAG, "Payload too short for BrowseRespHeader: %d bytes", (int)payload_len);
+    if (payload_size < sizeof(BrowseRespHeader)) {
+        ESP_LOGE(TAG, "Payload too short for BrowseRespHeader: %d bytes", (int)payload_size);
         *count = 0;
         *total_files = 0;
         *current_page_entries = 0;
         return false;
     }
     
-    const WaveX::Protocol::BrowseRespHeader* browse_header = (const WaveX::Protocol::BrowseRespHeader*)payload;
+    const BrowseRespHeader* browse_header = (const BrowseRespHeader*)payload;
     *total_files = browse_header->total_count;
     *current_page_entries = browse_header->n;
 
@@ -496,12 +531,12 @@ static bool parse_browse_response_with_pagination(const uint8_t* data, size_t le
     
     // Parse file entries
     uint32_t parsed_count = 0;
-    const WaveX::Protocol::FileEntryWire* wire_entries = (const WaveX::Protocol::FileEntryWire*)(payload + sizeof(WaveX::Protocol::BrowseRespHeader));
+    const FileEntryWire* wire_entries = (const FileEntryWire*)(payload + sizeof(BrowseRespHeader));
 
     ESP_LOGI(TAG, "Starting file entry parsing: n_entries=%u, max_count=%u", *current_page_entries, *count);
 
     for (uint8_t i = 0; i < *current_page_entries && parsed_count < *count; i++) {
-        const WaveX::Protocol::FileEntryWire* wire_entry = &wire_entries[i];
+        const FileEntryWire* wire_entry = &wire_entries[i];
         wavex_file_entry_t* entry = &entries[parsed_count];
         
         entry->is_directory = wire_entry->is_dir != 0;

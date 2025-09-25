@@ -4,6 +4,8 @@
 #include "../../shared/spi_protocol/protocol.h"
 #include <string.h>
 
+using namespace WaveX::Protocol;
+
 #ifdef ESP_PLATFORM
 #include "esp_log.h"
 static const char* TAG = "PacketProcessor";
@@ -41,26 +43,28 @@ void PacketProcessor::process_data(const uint8_t* data, size_t length)
         uint8_t byte = data[i];
         
         if (!m_frame_state.in_progress) {
-            // Not in a frame - look for flexible packet type
-            if (WaveX::Protocol::ProtocolHandler::IsCommandPacketType(byte) || 
-                WaveX::Protocol::ProtocolHandler::IsDataPacketType(byte)) {
+            // Not in a frame - look for unified packet (size code in first 4 bits)
+            uint8_t size_code = byte & PKT_SIZE_MASK;
+            size_t expected_size = WaveX::Protocol::ProtocolHandler::GetPacketSizeFromCode(size_code);
+            if (expected_size > 0) {
                 m_frame_state.in_progress = true;
                 m_frame_state.position = 0;
-                m_frame_state.expected_total = 0;
+                m_frame_state.expected_total = expected_size;
                 m_frame_state.buffer[m_frame_state.position++] = byte;
                 m_frame_state.start_time = esp_timer_get_time();
             }
         } else {
             m_frame_state.buffer[m_frame_state.position++] = byte;
             
-            // Once we have the packet type, compute expected total
+            // Once we have the flags_size byte, compute expected total
             if (m_frame_state.expected_total == 0 && m_frame_state.position >= 1) {
-                uint8_t packet_type = m_frame_state.buffer[0];
-                m_frame_state.expected_total = WaveX::Protocol::ProtocolHandler::GetPacketSizeFromType(packet_type);
+                uint8_t flags_size = m_frame_state.buffer[0];
+                uint8_t size_code = flags_size & PKT_SIZE_MASK;
+                m_frame_state.expected_total = WaveX::Protocol::ProtocolHandler::GetPacketSizeFromCode(size_code);
                 
                 if (m_frame_state.expected_total == 0) {
-                    // Invalid packet type, reset
-                    ESP_LOGW(TAG, "Invalid packet type: 0x%02X, resetting", packet_type);
+                    // Invalid size code, reset
+                    ESP_LOGW(TAG, "Invalid size code: 0x%02X, resetting", size_code);
                     reset_frame_state();
                     continue;
                 }
@@ -203,7 +207,10 @@ void PacketProcessor::handle_meter_push(const uint8_t* payload, size_t length)
         WaveX::Protocol::MeterPushMessage m;
         memset(&m, 0, sizeof(m));
         memcpy(&m, payload, sizeof(m));
-        m_listeners.invoke_meter_callback(m.rms, m.peak);
+        // Convert stereo meter data to mono for the callback
+        uint16_t rms = (m.rms_left + m.rms_right) / 2;
+        uint16_t peak = (m.peak_left + m.peak_right) / 2;
+        m_listeners.invoke_meter_callback(rms, peak);
     }
 }
 

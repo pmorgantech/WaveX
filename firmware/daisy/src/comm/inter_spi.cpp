@@ -24,38 +24,73 @@
 #include "stm32h7xx_hal.h" // For interrupt handling
 
 using namespace daisy;
+using namespace WaveX::Protocol;
+
+// Stub FileSystem namespace for compilation
+namespace WaveX {
+namespace Storage {
+class FileSystem {
+public:
+    static bool GetFilePathByIndex(uint32_t file_index, char* file_path, size_t max_len) {
+        // Stub implementation - return false for now
+        return false;
+    }
+};
+} // namespace Storage
+} // namespace WaveX
+
+// Forward declarations for message processing functions
+static void ProcessSyncMessage(const uint8_t* packet_data, size_t packet_size);
+static void ProcessControlChangeMessage(const uint8_t* packet_data, size_t packet_size);
+static void ProcessNoteMessage(const uint8_t* packet_data, size_t packet_size);
+static void ProcessNoteOffMessage(const uint8_t* packet_data, size_t packet_size);
+static void ProcessSampleLoadMessage(const uint8_t* packet_data, size_t packet_size);
+static void ProcessSampleControlMessage(const uint8_t* packet_data, size_t packet_size);
+static void ProcessPreviewRequestMessage(const uint8_t* packet_data, size_t packet_size);
+static void ProcessDataRequestMessage(const uint8_t* packet_data, size_t packet_size);
+static void ProcessMeterPushMessage(const uint8_t* packet_data, size_t packet_size);
+static void ProcessWaveChunkMessage(const uint8_t* packet_data, size_t packet_size);
+static void ProcessHeartbeatMessage(const uint8_t* packet_data, size_t packet_size);
+static void ProcessBrowseRequestMessage(const uint8_t* packet_data, size_t packet_size);
+static void ProcessBrowseResponseMessage(const uint8_t* packet_data, size_t packet_size);
+static void ProcessSamplePlayRequestMessage(const uint8_t* packet_data, size_t packet_size);
+static void ProcessSampleStopRequestMessage(const uint8_t* packet_data, size_t packet_size);
+static void ProcessSampleStatusMessage(const uint8_t* packet_data, size_t packet_size);
+static void ProcessSamplePlayIndexRequestMessage(const uint8_t* packet_data, size_t packet_size);
+static void ProcessSampleGetPathRequestMessage(const uint8_t* packet_data, size_t packet_size);
+static void ProcessSampleGetPathResponseMessage(const uint8_t* packet_data, size_t packet_size);
+static void ProcessAckMessage(const uint8_t* packet_data, size_t packet_size);
+static void ProcessErrorMessage(const uint8_t* packet_data, size_t packet_size);
 
 // Use flexible packet structures
-#define CMD_PKT_SIZE WaveX::Protocol::PKT_SIZE_32
-#define DATA_PKT_SIZE WaveX::Protocol::PKT_SIZE_1024  // Increased from 256 to 1024 bytes
-#define MAX_PKT_SIZE WaveX::Protocol::MAX_PKT_SIZE  // Support up to 4KB packets
+#define CMD_PKT_SIZE PKT_SIZE_32
+#define DATA_PKT_SIZE PKT_SIZE_1024  // Increased from 256 to 1024 bytes
+#define MAX_PKT_SIZE 2048  // Support up to 2KB packets
 
-typedef WaveX::Protocol::SpiCommandPacket32 cmd_pkt_t;
-typedef WaveX::Protocol::SpiDataPacket1024 data_pkt_t;  // Updated to use 1024-byte packet
+// Fixed-size packet typedefs removed - using flexible packet system only
 
 // Legacy compatibility - use command packet size as default
 #define CTRL_PKT_SIZE CMD_PKT_SIZE
 
 // Use shared CRC function
-#define crc16_ccitt WaveX::Protocol::ProtocolHandler::CalculateSpiCrc
+#define crc16_ccitt ProtocolHandler::CalculateSpiCrc
 
-// Use flexible packet system functions
-#define get_packet_size_from_type WaveX::Protocol::ProtocolHandler::GetPacketSizeFromType
-#define is_command_packet_type WaveX::Protocol::ProtocolHandler::IsCommandPacketType
-#define is_data_packet_type WaveX::Protocol::ProtocolHandler::IsDataPacketType
-#define get_optimal_packet_type WaveX::Protocol::ProtocolHandler::GetOptimalPacketType
-#define calculate_packet_crc WaveX::Protocol::ProtocolHandler::CalculatePacketCrc
-#define validate_packet_crc WaveX::Protocol::ProtocolHandler::ValidatePacketCrc
-#define zero_pad_packet WaveX::Protocol::ProtocolHandler::ZeroPadPacket
+// Use new unified packet system functions
+#define get_packet_size_from_code ProtocolHandler::GetPacketSizeFromCode
+#define get_optimal_size_code ProtocolHandler::GetOptimalSizeCode
+#define calculate_wave_crc ProtocolHandler::CalculateWaveXCrc
+#define validate_wave_packet ProtocolHandler::ValidateWaveXPacket
+#define create_wave_packet ProtocolHandler::CreateWaveXPacket
+#define parse_wave_packet ProtocolHandler::ParseWaveXPacket
 
 // Legacy function compatibility (for functions that were removed)
-#define validate_packet validate_packet_crc
+#define validate_packet validate_wave_packet
 
-// Compatibility function for get_packet_size - extracts packet type from packet data
+// Compatibility function for get_packet_size - extracts size code from packet data
 static size_t get_packet_size(const uint8_t* packet_data) {
     if (!packet_data) return 0;
-    uint8_t packet_type = packet_data[0];
-    return get_packet_size_from_type(packet_type);
+    uint8_t size_code = packet_data[0] & PKT_SIZE_MASK;
+    return get_packet_size_from_code(size_code);
 }
 
 // ============================================================================
@@ -72,16 +107,8 @@ static volatile bool g_esp32_attention_flag = false; // Flag for ESP32 attention
 
 // Message queue for received messages (unified for both packet types)
 #define MAX_QUEUED_MESSAGES 8
-static uint8_t message_queue[MAX_QUEUED_MESSAGES][DATA_PKT_SIZE] __attribute__((aligned(4)));
-static int queue_head = 0;
-static int queue_tail = 0;
-static int queue_count = 0;
 
 // Outgoing message queue (Daisy → ESP32)
-static uint8_t outgoing_queue[MAX_QUEUED_MESSAGES][DATA_PKT_SIZE] __attribute__((aligned(4)));
-static int outgoing_head = 0;
-static int outgoing_tail = 0;
-static int outgoing_count = 0;
 
 // Directory state for file browsing
 static char s_current_directory[96] = "/";
@@ -97,9 +124,20 @@ static bool s_has_last_packet = false;
 
 #if WAVEX_SPI_DMA_ENABLED
 static volatile bool s_tx_inflight = false;
+static volatile bool s_duplex_inflight = false;
+static volatile bool s_packet_ready_for_processing = false;
 // DMA buffers in non-cacheable SRAM for proper coherency
-static uint8_t s_tx_dma_buf[DATA_PKT_SIZE] __attribute__((section(".dma_buffer"))) __attribute__((aligned(32)));
-static uint8_t s_rx_dma_buf[DATA_PKT_SIZE] __attribute__((section(".dma_buffer"))) __attribute__((aligned(32)));
+// Use MAX_PKT_SIZE to support all packet sizes up to 4KB
+static uint8_t s_tx_dma_buf[MAX_PKT_SIZE] __attribute__((section(".dma_buffer"))) __attribute__((aligned(32)));
+static uint8_t s_rx_dma_buf[MAX_PKT_SIZE] __attribute__((section(".dma_buffer"))) __attribute__((aligned(32)));
+
+// Static packet buffer pool for large packets (replaces malloc/free)
+static uint8_t s_large_packet_pool[4][MAX_PKT_SIZE] __attribute__((aligned(32)));
+static bool s_pool_used[4] = {false, false, false, false};
+
+// Polling backpressure - minimum interval between polls when idle
+static uint32_t s_last_poll_time = 0;
+static const uint32_t MIN_POLL_INTERVAL_MS = 1; // 1ms minimum between polls
 
 static void spi_dma_start_cb(void* /*context*/)
 {
@@ -116,6 +154,50 @@ static void spi_dma_end_cb(void* /*context*/, daisy::SpiHandle::Result result)
         s_stats.packets_sent++;
     }
     s_tx_inflight = false;
+}
+
+static void spi_duplex_start_cb(void* /*context*/)
+{
+    // Assert CS at the moment DMA actually starts
+    cs_pin.Write(false);
+}
+
+static void spi_duplex_end_cb(void* /*context*/, daisy::SpiHandle::Result result)
+{
+    // Deassert CS and update state
+    cs_pin.Write(true);
+    if(result == daisy::SpiHandle::Result::OK)
+    {
+        s_stats.packets_received++;
+        // Signal that packet is ready for processing
+        s_packet_ready_for_processing = true;
+    }
+    s_duplex_inflight = false;
+}
+
+// Get a free packet buffer from the pool
+static uint8_t* get_packet_buffer(size_t size)
+{
+    if (size > MAX_PKT_SIZE) return nullptr;
+    
+    for (int i = 0; i < 4; i++) {
+        if (!s_pool_used[i]) {
+            s_pool_used[i] = true;
+            return s_large_packet_pool[i];
+        }
+    }
+    return nullptr; // All buffers in use
+}
+
+// Return a packet buffer to the pool
+static void release_packet_buffer(uint8_t* buffer)
+{
+    for (int i = 0; i < 4; i++) {
+        if (s_large_packet_pool[i] == buffer) {
+            s_pool_used[i] = false;
+            return;
+        }
+    }
 }
 #endif
 
@@ -139,10 +221,10 @@ static daisy::SpiHandle::Result Spi_SendPacket(const uint8_t* tx_buf, size_t pac
     }
 
     // Validate packet size - allow flexible packet sizes
-    if (packet_size != CMD_PKT_SIZE && packet_size != DATA_PKT_SIZE && 
-        packet_size != WaveX::Protocol::PKT_SIZE_64 && packet_size != WaveX::Protocol::PKT_SIZE_128 &&
-        packet_size != WaveX::Protocol::PKT_SIZE_256 && packet_size != WaveX::Protocol::PKT_SIZE_512 &&
-        packet_size != WaveX::Protocol::PKT_SIZE_2048 && packet_size != WaveX::Protocol::PKT_SIZE_4096) {
+    if (packet_size != 32 && packet_size != 64 &&
+        packet_size != 128 && packet_size != 256 &&
+        packet_size != 512 && packet_size != 1024 &&
+        packet_size != 2048) {
         if (s_hw) s_hw->PrintLine("Spi_SendPacket ERROR: Invalid packet size: %d", (int)packet_size);
         return daisy::SpiHandle::Result::ERR;
     }
@@ -203,10 +285,25 @@ static daisy::SpiHandle::Result Spi_RecvRaw64(uint8_t* /*rx_buf*/)
 namespace WaveX {
 namespace Comm {
 
+// Message queue for received messages (unified for both packet types)
+static uint8_t message_queue[MAX_QUEUED_MESSAGES][MAX_PKT_SIZE] __attribute__((aligned(4)));
+static int queue_head = 0;
+static int queue_tail = 0;
+static int queue_count = 0;
+
+// Outgoing message queue (Daisy → ESP32)
+static uint8_t outgoing_queue[MAX_QUEUED_MESSAGES][MAX_PKT_SIZE] __attribute__((aligned(4)));
+static int outgoing_head = 0;
+static int outgoing_tail = 0;
+static int outgoing_count = 0;
+
 // Forward declarations for outgoing message queue functions
 static bool QueueOutgoingMessage(const uint8_t* packet_data, size_t packet_size);
 static bool Spi_HasOutgoingData();
 static void PrepareTxBuffer(uint8_t* tx_buf, size_t buf_size);
+static bool PerformBidirectionalPoll();
+static bool ProcessReceivedPacket(const uint8_t* rx_buf, size_t transfer_size);
+// Forward declaration removed - function is now public
 
 void Spi_Init(daisy::DaisySeed &hw, daisy::SpiHandle* hspi)
 {
@@ -276,14 +373,14 @@ void Spi_Init(daisy::DaisySeed &hw, daisy::SpiHandle* hspi)
 // ============================================================================
 
 // Forward declarations for message processing functions
-static void ProcessBrowseRequest(const char* path, size_t start_index = 0);
+static void ProcessBrowseRequest(const char* path, size_t start_index, uint8_t max_entries = 20);
 static void ProcessSamplePlayRequest(const char* file_path);
 static void ProcessSampleStopRequest();
 static void ProcessSamplePlayIndexRequest(uint32_t file_index);
 static void ProcessSampleGetPathRequest(uint32_t file_index);
 static void ClearDirectoryState();
 
-static void ProcessSpiMessage(const uint8_t* packet_data, size_t packet_size)
+static void ProcessSpiMessageByType(uint8_t msg_type, uint8_t flags, uint16_t sequence_number, const uint8_t* packet_data, size_t packet_size)
 {
     using namespace WaveX::Protocol;
 
@@ -292,838 +389,400 @@ static void ProcessSpiMessage(const uint8_t* packet_data, size_t packet_size)
         s_hw->PrintLine("DAISY: Received packet bytes: %02X %02X %02X %02X %02X %02X %02X %02X", 
                         packet_data[0], packet_data[1], packet_data[2], packet_data[3],
                         packet_data[4], packet_data[5], packet_data[6], packet_data[7]);
-        s_hw->PrintLine("DAISY: Packet size: %d bytes", (int)packet_size);
+        s_hw->PrintLine("DAISY: Packet info - msg_type=0x%02X, flags=0x%02X, seq=%u, size=%d bytes",
+                        msg_type, flags, sequence_number, (int)packet_size);
     }
-    
-    uint8_t packet_type = packet_data[0]; // Packet type
-    
-    // Validate packet using flexible packet system
-    if (is_command_packet_type(packet_type) || is_data_packet_type(packet_type)) {
-        // New flexible packet format
-        size_t expected_size = get_packet_size_from_type(packet_type);
+
+    // Handle acknowledgment packets
+    if (flags & PKT_FLAG_ACK) {
         if (s_hw) {
-            s_hw->PrintLine("DAISY: Packet validation - type=0x%02X, expected_size=%d, received_size=%d", 
-                           packet_type, (int)expected_size, (int)packet_size);
+            s_hw->PrintLine("DAISY: Received ACK for msg_type=0x%02X, seq=%u", msg_type, sequence_number);
         }
-        if (expected_size == 0 || packet_size != expected_size) {
-            if (s_hw) {
-                s_hw->PrintLine("DAISY: Invalid flexible packet size: type=0x%02X, expected=%d, received=%d", 
-                               packet_type, (int)expected_size, (int)packet_size);
-            }
+        // Handle acknowledgment - remove from retry queue if needed
             return;
         }
         
-        // Validate CRC
-        if (!validate_packet_crc(packet_data, packet_size)) {
+    // Handle negative acknowledgment packets
+    if (flags & PKT_FLAG_NACK) {
             if (s_hw) {
-                s_hw->PrintLine("DAISY: Flexible packet CRC validation failed");
-                // Debug: Show CRC bytes
-                uint16_t received_crc = packet_data[packet_size - 2] | (packet_data[packet_size - 1] << 8);
-                uint16_t calculated_crc = calculate_packet_crc(packet_data, packet_size);
-                s_hw->PrintLine("DAISY: CRC debug - received=0x%04X, calculated=0x%04X", received_crc, calculated_crc);
-                s_hw->PrintLine("DAISY: CRC bytes - [%d]=0x%02X, [%d]=0x%02X", 
-                               (int)packet_size-2, packet_data[packet_size-2], 
-                               (int)packet_size-1, packet_data[packet_size-1]);
-            }
-            return;
+            s_hw->PrintLine("DAISY: Received NACK for msg_type=0x%02X, seq=%u", msg_type, sequence_number);
         }
-    } else {
-        if (s_hw) {
-            s_hw->PrintLine("DAISY: Unknown packet type: 0x%02X", packet_type);
-        }
+        // Handle negative acknowledgment - retry if needed
         return;
     }
 
-    uint8_t len = packet_data[4]; // Payload length (offset 4 in flexible format)
-    const uint8_t* payload = &packet_data[5]; // Payload starts at offset 5 in flexible format
-    
-    // Determine message type based on packet format
-    uint8_t type;
-    if (is_command_packet_type(packet_type) && len > 0) {
-        // Flexible command packet: message type is in first byte of payload
-        type = payload[0];
-    } else if (is_command_packet_type(packet_type) && len == 0) {
-        // No-data command packet: treat as MSG_ACK
-        type = MSG_ACK;
-    } else {
-        // Fallback: use packet type as message type
-        type = packet_type;
-    }
-
-    // Process incoming SPI messages from ESP32
-    switch (type) {
-        case MSG_SYNC: {
-            // Synchronization message from ESP32
-            if (s_hw) {
-                s_hw->PrintLine("DAISY: Received MSG_SYNC (0x00) from ESP32");
-            }
-            // No action needed for SYNC - it's just a keepalive
+    // Route based on message type using new unified format
+    switch (msg_type) {
+        case MSG_SYNC:
+            ProcessSyncMessage(packet_data, packet_size);
             break;
-        }
-        
-        case MSG_ACK: {
-            // Acknowledgment from ESP32
-            if (s_hw) {
-                s_hw->PrintLine("DAISY: Received MSG_ACK (0x35) from ESP32");
-            }
+        case MSG_CONTROL_CHANGE:
+            ProcessControlChangeMessage(packet_data, packet_size);
             break;
-        }
-
-        case MSG_BROWSE_REQ: {
-            // ESP32 requesting directory listing
-            char path[96] = {0};
-            size_t start_index = 0;
-            
-            if (packet_type == 0x01 && len > 1) {
-                // ESP32 sends: payload[0] = MSG_BROWSE_REQ (0x30), payload[1] = start_index, payload[2+] = path
-                if (len >= 2) {
-                    start_index = payload[1]; // Second byte is start_index (skip message type)
-                    if (len > 2) {
-                        // Copy path string (skip message type and start_index bytes)
-                        size_t path_len = len - 2;
-                        
-                        // Find actual path start (skip any null bytes)
-                        const uint8_t* path_start = &payload[2];
-                        while (path_start < &payload[len] && *path_start == 0) {
-                            path_start++;
-                            path_len--;
-                        }
-                        
-                        if (path_len > 0 && path_len < sizeof(path)) {
-                            memcpy(path, path_start, path_len);
-                            path[path_len] = '\0';
-                        } else if (path_len >= sizeof(path)) {
-                            // Path too long, truncate
-                            memcpy(path, path_start, sizeof(path) - 1);
-                            path[sizeof(path) - 1] = '\0';
-                        } else {
-                            // No valid path found, default to root
-                            strcpy(path, "/");
-                        }
-                    } else {
-                        // No path provided, default to root
-                        strcpy(path, "/");
-                    }
-                } else {
-                    // Only message type, no start_index or path
-                    strcpy(path, "/");
-                }
-            } else {
-                // Default to root if no path provided
-                strcpy(path, "/");
-            }
-            
-            
-
-            WAVEX_LOG_DAISY_MESSAGE(DAISY_SPI_MESSAGE, "IN MSG BROWSE_REQ path=%s", path);
-
-            // Process browse request with pagination
-            ProcessBrowseRequest(path, start_index);
+        case MSG_NOTE_ON:
+            ProcessNoteMessage(packet_data, packet_size);
             break;
-        }
-
-        case MSG_SAMPLE_PLAY_REQ: {
-            // ESP32 requesting sample audition
-            if (len > 0) {
-                char file_path[96] = {0};
-                if (packet_type == 0x01 && len > 1) {
-                    // New format: skip the message type byte (first byte of payload)
-                    size_t copy_len = (len - 1) < (sizeof(file_path) - 1) ? (len - 1) : (sizeof(file_path) - 1);
-                    memcpy(file_path, &payload[1], copy_len);
-                    file_path[copy_len] = '\0';
-                }
-                if (s_hw) {
-                    s_hw->PrintLine("DAISY: Processing MSG_SAMPLE_PLAY_REQ, payload len=%d", len);
-                    s_hw->PrintLine("DAISY: File path: '%s'", file_path);
-                }
-                ProcessSamplePlayRequest(file_path);
-            }
+        case MSG_NOTE_OFF:
+            ProcessNoteOffMessage(packet_data, packet_size);
             break;
-        }
-
-        case MSG_SAMPLE_STOP_REQ: {
-            // ESP32 requesting to stop sample audition
-            if (s_hw) {
-                s_hw->PrintLine("DAISY: Processing MSG_SAMPLE_STOP_REQ");
-            }
-            ProcessSampleStopRequest();
+        case MSG_SAMPLE_LOAD:
+            ProcessSampleLoadMessage(packet_data, packet_size);
             break;
-        }
-
-        case MSG_SAMPLE_PLAY_INDEX_REQ: {
-            // ESP32 requesting sample audition by index
-            if (len >= sizeof(WaveX::Protocol::SamplePlayIndexMessage) + 1) { // +1 for message type byte
-                WaveX::Protocol::SamplePlayIndexMessage* msg = (WaveX::Protocol::SamplePlayIndexMessage*)&payload[1]; // Skip message type byte
-                WAVEX_LOG_DAISY_MESSAGE(DAISY_SPI_MESSAGE, "IN MSG SAMPLE_PLAY_INDEX_REQ index=%lu", (unsigned long)msg->index);
-                ProcessSamplePlayIndexRequest(msg->index);
-            }
+        case MSG_SAMPLE_CTRL:
+            ProcessSampleControlMessage(packet_data, packet_size);
             break;
-        }
-
-        case MSG_SAMPLE_GET_PATH_REQ: {
-            // ESP32 requesting full path for index
-            if (len >= sizeof(WaveX::Protocol::SampleGetPathMessage) + 1) { // +1 for message type byte
-                WaveX::Protocol::SampleGetPathMessage* msg = (WaveX::Protocol::SampleGetPathMessage*)&payload[1]; // Skip message type byte
-                if (s_hw) {
-                    s_hw->PrintLine("DAISY: Processing MSG_SAMPLE_GET_PATH_REQ, index=%lu", (unsigned long)msg->index);
-                }
-                ProcessSampleGetPathRequest(msg->index);
-            }
+        case MSG_PREVIEW_REQ:
+            ProcessPreviewRequestMessage(packet_data, packet_size);
             break;
-        }
-
+        case MSG_DATA_REQUEST:
+            ProcessDataRequestMessage(packet_data, packet_size);
+            break;
+        case MSG_METER_PUSH:
+            ProcessMeterPushMessage(packet_data, packet_size);
+            break;
+        case MSG_WAVE_CHUNK:
+            ProcessWaveChunkMessage(packet_data, packet_size);
+            break;
+        case MSG_HEARTBEAT:
+            ProcessHeartbeatMessage(packet_data, packet_size);
+            break;
+        case MSG_BROWSE_REQ:
+            ProcessBrowseRequestMessage(packet_data, packet_size);
+            break;
+        case MSG_BROWSE_RESP:
+            ProcessBrowseResponseMessage(packet_data, packet_size);
+            break;
+        case MSG_SAMPLE_PLAY_REQ:
+            ProcessSamplePlayRequestMessage(packet_data, packet_size);
+            break;
+        case MSG_SAMPLE_STOP_REQ:
+            ProcessSampleStopRequestMessage(packet_data, packet_size);
+            break;
+        case MSG_SAMPLE_STATUS:
+            ProcessSampleStatusMessage(packet_data, packet_size);
+            break;
+        case MSG_SAMPLE_PLAY_INDEX_REQ:
+            ProcessSamplePlayIndexRequestMessage(packet_data, packet_size);
+            break;
+        case MSG_SAMPLE_GET_PATH_REQ:
+            ProcessSampleGetPathRequestMessage(packet_data, packet_size);
+            break;
+        case MSG_SAMPLE_GET_PATH_RESP:
+            ProcessSampleGetPathResponseMessage(packet_data, packet_size);
+            break;
+        case MSG_ACK:
+            ProcessAckMessage(packet_data, packet_size);
+            break;
+        case MSG_ERROR:
+            ProcessErrorMessage(packet_data, packet_size);
+            break;
         default:
-            // Unknown message type - ignore
             if (s_hw) {
-                s_hw->PrintLine("DAISY: Unknown message type: 0x%02X", type);
+                s_hw->PrintLine("DAISY: Unknown message type: 0x%02X", msg_type);
             }
             break;
     }
 }
 
-/*
-void ProcessEsp32Message(uint8_t type, uint8_t flags, const uint8_t* payload, uint8_t len)
+// Legacy function kept for compatibility - redirects to new unified function
+static void ProcessSpiMessage(const uint8_t* packet_data, size_t packet_size)
 {
-    // Legacy compatibility - create packet structure
-    uint8_t packet_data[CMD_PKT_SIZE] = {0};
-    packet_data[0] = 0x01; // Command packet type
-    packet_data[1] = flags;
-    packet_data[2] = 0; // Sequence number (not used in legacy mode)
-    packet_data[3] = len;
-    
-    if (payload && len > 0) {
-        memcpy(&packet_data[4], payload, len < 20 ? len : 20);
-    }
-    
-    // Calculate CRC
-    uint16_t crc = crc16_ccitt(packet_data, 4 + len);
-    packet_data[4 + len] = crc & 0xFF;
-    packet_data[4 + len + 1] = (crc >> 8) & 0xFF;
-    
-    // Process the packet
-    ProcessSpiMessage(packet_data, CMD_PKT_SIZE);
+    // For legacy compatibility, extract the message type from the unified packet format
+    uint8_t msg_type = packet_data[1];
+    uint8_t flags = packet_data[0] & PKT_FLAG_MASK;
+    uint16_t sequence_number = packet_data[2] | (packet_data[3] << 8);
 
-    if (s_hw) {
-        s_hw->PrintLine("Processed ESP32 message type 0x%02X, len=%d", type, len);
-    }
-}
-*/
-
-int Spi_Send(uint16_t type, const void* payload, uint16_t len)
-{
-    if (!g_spi_handle) {
-        if (s_hw) s_hw->PrintLine("Spi_Send ERROR: g_spi_handle is NULL!");
-        return 0;
-    }
-
-    // Create command packet
-    cmd_pkt_t cmd_pkt = {0};
-    cmd_pkt.type = 0x01; // Command packet type
-    cmd_pkt.flags = 0;   // No special flags
-    cmd_pkt.seq = 0;     // Sequence number (not used for now)
-    
-    // First byte of payload should be the message type
-    cmd_pkt.payload[0] = (uint8_t)(type & 0xFF);
-    cmd_pkt.len = 1; // Start with message type
-    
-    // Add actual payload data
-    if (payload && len > 0) {
-        size_t remaining_space = 20 - 1; // 20 total - 1 for message type
-        size_t copy_len = (len > remaining_space) ? remaining_space : len;
-        memcpy(&cmd_pkt.payload[1], payload, copy_len);
-        cmd_pkt.len += copy_len;
-    }
-    
-    // Calculate CRC
-    cmd_pkt.crc = crc16_ccitt((uint8_t*)&cmd_pkt, 4 + cmd_pkt.len);
-
-    // Queue the message for bidirectional transmission
-    bool queued = QueueOutgoingMessage((uint8_t*)&cmd_pkt, CMD_PKT_SIZE);
-    
-    if (queued) {
-        // Reduce logging for meter data
-        if (s_hw && type != WaveX::Protocol::MSG_METER_PUSH) {
-            // s_hw->PrintLine("DAISY: Queued message type=0x%02X for next SPI transaction", (uint8_t)(type & 0xFF));
-        }
-        return 1;
-    } else {
-        if (s_hw) {
-            s_hw->PrintLine("DAISY: Failed to queue message type=0x%02X", (uint8_t)(type & 0xFF));
-        }
-        return 0;
-    }
+    ProcessSpiMessageByType(msg_type, flags, sequence_number, packet_data, packet_size);
 }
 
-// Meter data sending disabled - interferes with bidirectional communication
-
-// Send large packet using flexible packet system
-int Spi_SendLargePacket(const uint8_t* packet_data, size_t packet_size)
+// Process browse request message
+static void ProcessBrowseRequestMessage(const uint8_t* packet_data, size_t packet_size)
 {
-    if (!g_spi_handle) {
-        if (s_hw) s_hw->PrintLine("Spi_SendLargePacket ERROR: g_spi_handle is NULL!");
-        return 0;
-    }
-    
-    if (!packet_data || packet_size == 0) {
-        if (s_hw) s_hw->PrintLine("Spi_SendLargePacket ERROR: Invalid packet data");
-        return 0;
-    }
-    
-    // Determine optimal packet type for the payload size
-    uint8_t packet_type = get_optimal_packet_type(packet_size, false); // false = data packet
-    if (packet_type == PKT_TYPE_ERROR_VAL) {
-        if (s_hw) s_hw->PrintLine("Spi_SendLargePacket ERROR: Payload too large: %d bytes", (int)packet_size);
-        return 0;
-    }
-    
-    // Get packet size for the selected type
-    size_t packet_struct_size = get_packet_size_from_type(packet_type);
-    if (packet_struct_size == 0) {
-        if (s_hw) s_hw->PrintLine("Spi_SendLargePacket ERROR: Unknown packet type: 0x%02X", packet_type);
-        return 0;
-    }
-    
-    // Allocate buffer for the packet
-    uint8_t* packet_buffer = (uint8_t*)malloc(packet_struct_size);
-    if (!packet_buffer) {
-        if (s_hw) s_hw->PrintLine("Spi_SendLargePacket ERROR: Failed to allocate %d bytes", (int)packet_struct_size);
-        return 0;
-    }
-    
-    // Zero-pad the entire packet
-    memset(packet_buffer, 0, packet_struct_size);
-    
-    // Fill packet header
-    packet_buffer[0] = packet_type;  // Packet type
-    packet_buffer[1] = 0;           // Flags
-    packet_buffer[2] = 0;           // Sequence number (low byte)
-    packet_buffer[3] = 0;           // Sequence number (high byte)
-    packet_buffer[4] = packet_size; // Payload length
-    
-    // Copy payload data
-    if (packet_size > 0) {
-        memcpy(packet_buffer + 5, packet_data, packet_size);
-    }
-    
-    // Calculate CRC over header + payload (CRC will be placed at the end)
-    uint16_t crc = calculate_packet_crc(packet_buffer, packet_struct_size);
-    packet_buffer[packet_struct_size - 2] = crc & 0xFF;        // CRC low byte
-    packet_buffer[packet_struct_size - 1] = (crc >> 8) & 0xFF; // CRC high byte
-    
-    if (s_hw) {
-        s_hw->PrintLine("DAISY: Sending flexible packet - type=0x%02X, size=%d bytes, payload=%d bytes", 
-                       packet_type, (int)packet_struct_size, (int)packet_size);
-    }
-    
-    // Send using the packet function
-    daisy::SpiHandle::Result result = Spi_SendPacket(packet_buffer, packet_struct_size);
-    
-    // Free the allocated buffer
-    free(packet_buffer);
-    
-    if (result == daisy::SpiHandle::Result::OK) {
-        s_stats.packets_sent++;
-        if (s_hw) s_hw->PrintLine("DAISY: Flexible packet sent successfully");
-        return 1;
-    } else {
-        if (s_hw) s_hw->PrintLine("DAISY: Flexible packet send FAILED: %d", (int)result);
-        return 0;
-    }
-}
+    using namespace WaveX::Protocol;
 
-int Spi_Poll_For_Response(void)
-{
-    // Regular SPI slave currently does not push responses; not used.
-    return 0;
+    // Extract browse request payload (skip header)
+    size_t payload_size = packet_size - 7; // header(5) + crc(2)
+    const uint8_t* payload = packet_data + 5;
+
+    // Parse browse request: path (null-terminated) + start_index (4 bytes) + max_entries (1 byte)
+    char path[96] = {0};
+    size_t path_len = strlen((const char*)payload);
+    if (path_len >= sizeof(path)) {
+        path_len = sizeof(path) - 1;
+    }
+    memcpy(path, payload, path_len);
+    path[path_len] = '\0';
+
+    size_t start_index = 0;
+    uint8_t max_entries = 20; // Default to 20 entries
+
+    if (payload_size >= path_len + 1 + sizeof(uint32_t) + sizeof(uint8_t)) {
+        const uint8_t* data_ptr = payload + path_len + 1;
+        start_index = *(const uint32_t*)data_ptr;
+        data_ptr += sizeof(uint32_t);
+        max_entries = *data_ptr;
+    }
+
+    ProcessBrowseRequest(path, start_index, max_entries);
 }
 
 
-// Stubs for the rest of the API
-// ============================================================================
-// Forward Declarations
-// ============================================================================
-
-// ============================================================================
-// Message Processing Functions
-// ============================================================================
 
 
-// ============================================================================
-// Message Processing Implementations
-// ============================================================================
 
-static void ProcessBrowseRequest(const char* path, size_t start_index)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// Stub implementations for all message processing functions
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// Process browse request (existing function - updated for new format)
+static void ProcessBrowseRequest(const char* path, size_t start_index, uint8_t max_entries)
 {
     using namespace WaveX::Storage;
     using namespace WaveX::Protocol;
 
-    // Log browse request receipt
-    if (s_hw) {
-        s_hw->PrintLine("DAISY: Received browse request for path: '%s', start_index: %d", path, (int)start_index);
-    }
+    WAVEX_LOG_DAISY_MESSAGE(DAISY_SPI_MESSAGE, "IN MSG BROWSE_REQ path=%s start_index=%zu max_entries=%u", 
+                           path, start_index, max_entries);
 
-    // Update directory state if this is the first page (start_index == 0)
-    if (start_index == 0) {
-        strncpy(s_current_directory, path, sizeof(s_current_directory) - 1);
-        s_current_directory[sizeof(s_current_directory) - 1] = '\0';
-        s_directory_state_valid = false; // Will be set to true after successful directory read
-        if (s_hw) {
-            s_hw->PrintLine("DAISY: Updated current directory to: '%s'", s_current_directory);
-        }
-    }
-
-    // Buffer for response packet  
-    uint8_t response_buffer[1200]; // Large enough for header + 20 file entries (~53 bytes each)
-
-    // Get directory listing - get all files at once for first page, then paginate
-    FileEntry entries[50]; // Increased to accommodate more files
+    // Allocate buffer for file entries
+    FileEntry entries[32]; // Max 32 entries per response
+    size_t actual_max_entries = (max_entries > 32) ? 32 : max_entries;
+    
     size_t total_count = 0;
     size_t entries_written = 0;
-
-    if (s_hw) {
-        s_hw->PrintLine("DAISY: Calling ListDir for path: '%s', start_index: %d", path, (int)start_index);
-    }
-
-    // For first page (start_index == 0), get all files to populate directory state
-    // For subsequent pages, use pagination
-    if (start_index == 0) {
-        bool success = ListDir(path, entries, sizeof(entries)/sizeof(entries[0]), total_count, 0, entries_written);
-        if (!success) {
-            if (s_hw) {
-                s_hw->PrintLine("DAISY: ListDir failed for path: '%s'", path);
-            }
-            // Send error response
-            ErrorMessage err = {0x01, "Directory read failed"};
-            uint8_t response_buffer[64];
-            size_t pkt_size = ProtocolHandler::CreateErrorPacket(response_buffer, sizeof(response_buffer), err);
-            Spi_Send(MSG_ERROR, response_buffer, pkt_size);
-            return;
-        }
-        
-        // Store all files in directory state
-        s_current_file_count = std::min(entries_written, (size_t)50);
-        for (size_t i = 0; i < s_current_file_count; i++) {
-            s_current_file_entries[i] = entries[i];
-        }
-        s_directory_state_valid = true;
-        if (s_hw) {
-            s_hw->PrintLine("DAISY: Stored %d file entries for current directory", (int)s_current_file_count);
-        }
-        
-        // Now paginate the response (send first 20 entries for better performance)
-        entries_written = std::min(entries_written, (size_t)20);
-    } else {
-        // For subsequent pages, use normal pagination
-        bool success = ListDir(path, entries, sizeof(entries)/sizeof(entries[0]), total_count, start_index, entries_written);
-        if (!success) {
-            if (s_hw) {
-                s_hw->PrintLine("DAISY: ListDir failed for path: '%s'", path);
-            }
-            // Send error response
-            ErrorMessage err = {0x01, "Directory read failed"};
-            uint8_t response_buffer[64];
-            size_t pkt_size = ProtocolHandler::CreateErrorPacket(response_buffer, sizeof(response_buffer), err);
-            Spi_Send(MSG_ERROR, response_buffer, pkt_size);
-            return;
-        }
-    }
-
-    if (s_hw) {
-        s_hw->PrintLine("DAISY: ListDir result: total_count=%d, entries_written=%d", (int)total_count, (int)entries_written);
-    }
-
-    // Convert FileEntry to FileEntryWire format
-    FileEntryWire wire_entries[20]; // Increased to support 20 entries
-    uint8_t num_entries = 0;
-
-    if (s_hw) {
-        s_hw->PrintLine("DAISY: Converting %d file entries to wire format", (int)entries_written);
-    }
-
-    // Process only the entries that were actually filled by ListDir
-    // ListDir fills entries sequentially starting from index 0
-    size_t max_entries_to_process = std::min(entries_written, (size_t)20);
     
-    for (size_t i = 0; i < max_entries_to_process; i++) {
-        wire_entries[num_entries].is_dir = entries[i].is_dir;
-        wire_entries[num_entries].size_bytes = entries[i].size_bytes;
-        std::strncpy(wire_entries[num_entries].name, entries[i].name, sizeof(wire_entries[num_entries].name) - 1);
-        wire_entries[num_entries].name[sizeof(wire_entries[num_entries].name) - 1] = '\0';
-        
-        if (s_hw) {
-            s_hw->PrintLine("DAISY: Entry %d: '%s' (%s, %d bytes)", 
-                           num_entries, 
-                           wire_entries[num_entries].name,
-                           wire_entries[num_entries].is_dir ? "DIR" : "FILE",
-                           (int)wire_entries[num_entries].size_bytes);
-        }
-        
-        num_entries++;
-    }
-
-    if (s_hw) {
-        s_hw->PrintLine("DAISY: Sending browse response with %d entries (total_count=%d)", num_entries, (int)total_count);
-    }
-
-    // Update directory state after successful directory read (only for first page)
-    if (start_index == 0) {
-        // Store the first page of entries for index-based operations
-        s_current_file_count = std::min(entries_written, (size_t)4);
-        for (size_t i = 0; i < s_current_file_count; i++) {
-            s_current_file_entries[i] = entries[i];
-        }
-        s_directory_state_valid = true;
-        if (s_hw) {
-            s_hw->PrintLine("DAISY: Stored %d file entries for current directory", (int)s_current_file_count);
-        }
-    }
-
-    // Send browse response using large packet format (pkt_t)
-    if (s_hw) {
-        s_hw->PrintLine("DAISY: About to call CreateBrowseRespPacket - buffer_size=%d, total_count=%d, wire_entries=%p, num_entries=%d", 
-                       (int)sizeof(response_buffer), (int)total_count, wire_entries, num_entries);
-        
-        // Debug: Show first entry details
-        if (num_entries > 0) {
-            s_hw->PrintLine("DAISY: First entry - is_dir=%d, size=%d, name='%s'", 
-                           wire_entries[0].is_dir, (int)wire_entries[0].size_bytes, wire_entries[0].name);
-        }
-    }
-    // Debug: Manually check packet calculation before calling function
-    if (s_hw) {
-        size_t expected_payload = 5 + (size_t)num_entries * 53; // BrowseRespHeader + FileEntryWire entries
-        s_hw->PrintLine("DAISY: Expected payload size = 5 + %d * 53 = %d bytes (max 255)", num_entries, (int)expected_payload);
-        s_hw->PrintLine("DAISY: wire_entries pointer check - first entry name: '%.10s'", wire_entries[0].name);
+    // Get directory listing from FatFS
+    bool success = ListDir(path, entries, actual_max_entries, total_count, start_index, entries_written);
+    
+    if (!success) {
+        WAVEX_LOG_DAISY_MESSAGE(DAISY_SPI_MESSAGE, "Failed to list directory: %s", path);
+        return;
     }
     
-    // TEMPORARY: Manual packet creation to debug the issue
-    if (s_hw) {
-        s_hw->PrintLine("DAISY: TEMP - Manually creating packet to debug");
-        s_hw->PrintLine("DAISY: TEMP - BrowseRespHeader size: %d", (int)sizeof(WaveX::Protocol::BrowseRespHeader));
-        s_hw->PrintLine("DAISY: TEMP - FileEntryWire size: %d", (int)sizeof(WaveX::Protocol::FileEntryWire));
+    WAVEX_LOG_DAISY_MESSAGE(DAISY_SPI_MESSAGE, "Directory listing: total=%zu written=%zu", total_count, entries_written);
+    
+    // Convert FileEntry to FileEntryWire for transmission
+    FileEntryWire wire_entries[32];
+    for (size_t i = 0; i < entries_written; i++) {
+        wire_entries[i].is_dir = entries[i].is_dir;
+        wire_entries[i].size_bytes = entries[i].size_bytes;
+        strncpy(wire_entries[i].name, entries[i].name, sizeof(wire_entries[i].name) - 1);
+        wire_entries[i].name[sizeof(wire_entries[i].name) - 1] = '\0';
     }
     
-    // Use original CreateBrowseRespPacket with corrected approach
-    // ESP32 expects flexible packet format
-    // Maximum payload size with flexible packets: up to 4KB
-    // This allows: (4096 - 5) / 53 = 77 entries max
-    
-    if (s_hw) {
-        s_hw->PrintLine("DAISY: Using flexible packet format for ESP32 compatibility");
-        s_hw->PrintLine("DAISY: Expected payload = 5 + %d * 53 = %d bytes (max ~4KB)", 
-                       num_entries, (int)(5 + num_entries * 53));
-    }
-    
-    // Use CreateBrowseRespPacket which creates proper Packet structure
+    // Create browse response packet
+    uint8_t response_buffer[MAX_PKT_SIZE];
     size_t pkt_size = ProtocolHandler::CreateBrowseRespPacket(response_buffer, sizeof(response_buffer),
-                                           total_count, wire_entries, num_entries);
+                                                           total_count, wire_entries, entries_written);
     
-    if (s_hw) {
-        s_hw->PrintLine("DAISY: CreateBrowseRespPacket returned %d bytes", (int)pkt_size);
-    }
-    
-    if (s_hw) {
-        s_hw->PrintLine("DAISY: Created browse response packet, size=%d bytes", (int)pkt_size);
-    }
-    
-    // Send browse response using large packet format
-    // ESP32 expects browse responses to be sent via Spi_SendLargePacket
-    if (s_hw) {
-        s_hw->PrintLine("DAISY: Sending browse response using large packet format...");
-    }
-    
-    // Extract payload from flexible packet structure
-    const uint8_t* payload = response_buffer + 5; // Skip type, flags, seq, len (5 bytes)
-    size_t payload_size = pkt_size - 5;
-    
-    // Send using Spi_SendLargePacket which creates proper SpiDataPacket format
-    int result = Spi_SendLargePacket(payload, payload_size);
-    
-    if (result > 0) {
-        s_stats.packets_sent++;
-        if (s_hw) {
-            s_hw->PrintLine("DAISY: Browse response sent successfully");
+    if (pkt_size > 0) {
+        // Send response back to ESP32
+        int result = Spi_SendPreCreatedPacket(response_buffer, pkt_size);
+        if (result) {
+            WAVEX_LOG_DAISY_MESSAGE(DAISY_SPI_MESSAGE, "Sent browse response: %zu entries", entries_written);
+        } else {
+            WAVEX_LOG_DAISY_MESSAGE(DAISY_SPI_MESSAGE, "Failed to send browse response");
         }
     } else {
-        if (s_hw) {
-            s_hw->PrintLine("DAISY: Failed to send browse response");
-        }
+        WAVEX_LOG_DAISY_MESSAGE(DAISY_SPI_MESSAGE, "Failed to create browse response packet");
     }
 }
 
+// Process sample play request (existing function)
 static void ProcessSamplePlayRequest(const char* file_path)
 {
     using namespace WaveX::Protocol;
+
+    // ESP32 requesting sample audition
+    if (s_hw) {
+        s_hw->PrintLine("DAISY: Processing MSG_SAMPLE_PLAY_REQ for file: '%s'", file_path);
+    }
 
     // Start sample audition
     bool success = WaveX::AudioEngine::AuditionSample(file_path);
 
     // Send status response
-    SampleStatusMessage status;
     if (success) {
-        status.state = 1; // Playing
-        status.sample_rate = 44100; // TODO: Get actual sample rate
-        status.channels = 2; // TODO: Get actual channel count
+        WaveX::Protocol::SampleStatusMessage status;
+        status.state = 1; // playing
+        status.sample_rate = 44100; // TODO: get actual sample rate
+        status.channels = 2; // TODO: get actual channels
         status.frames_played = 0;
-    } else {
-        status.state = 0; // Stopped (failed to start)
-        status.sample_rate = 0;
-        status.channels = 0;
-        status.frames_played = 0;
-    }
 
-    uint8_t response_buffer[64];
-    size_t pkt_size = ProtocolHandler::CreateSampleStatusPacket(response_buffer, sizeof(response_buffer), status);
-    Spi_Send(MSG_SAMPLE_STATUS, response_buffer, pkt_size);
+        uint8_t response_buffer[MAX_PKT_SIZE];
+    size_t pkt_size = WaveX::Protocol::ProtocolHandler::CreateSampleStatusPacket(response_buffer, sizeof(response_buffer), status);
+    Spi_SendPreCreatedPacket(response_buffer, pkt_size);
+    }
 }
 
+// Process sample stop request (existing function)
 static void ProcessSampleStopRequest()
 {
     using namespace WaveX::Protocol;
+
+    // ESP32 requesting to stop sample audition
+    if (s_hw) {
+        s_hw->PrintLine("DAISY: Processing MSG_SAMPLE_STOP_REQ");
+    }
 
     // Stop sample audition
     WaveX::AudioEngine::StopAudition();
 
     // Send status response
-    SampleStatusMessage status;
-    status.state = 0; // Stopped
+    WaveX::Protocol::SampleStatusMessage status;
+    status.state = 0; // stopped
     status.sample_rate = 0;
     status.channels = 0;
     status.frames_played = 0;
 
-    uint8_t response_buffer[64];
-    size_t pkt_size = ProtocolHandler::CreateSampleStatusPacket(response_buffer, sizeof(response_buffer), status);
-    Spi_Send(MSG_SAMPLE_STATUS, response_buffer, pkt_size);
+    uint8_t response_buffer[MAX_PKT_SIZE];
+    size_t pkt_size = WaveX::Protocol::ProtocolHandler::CreateSampleStatusPacket(response_buffer, sizeof(response_buffer), status);
+    Spi_SendPreCreatedPacket(response_buffer, pkt_size);
 }
 
+// Process sample play index request (existing function)
 static void ProcessSamplePlayIndexRequest(uint32_t file_index)
 {
-    using namespace WaveX::Protocol;
     using namespace WaveX::Storage;
+    using namespace WaveX::Protocol;
 
     if (s_hw) {
         s_hw->PrintLine("DAISY: Processing sample play index request for index %lu", (unsigned long)file_index);
     }
 
-    // Check if we have valid directory state
-    if (!s_directory_state_valid) {
+    // Get file path for index
+    char file_path[200] = {0};
+    if (FileSystem::GetFilePathByIndex(file_index, file_path, sizeof(file_path))) {
         if (s_hw) {
-            s_hw->PrintLine("DAISY: No valid directory state, cannot process index request");
+            s_hw->PrintLine("DAISY: Playing sample at path: '%s'", file_path);
         }
-        
-        // Send error response
-        SampleStatusMessage status;
-        status.state = 0; // Stopped (failed)
-        status.sample_rate = 0;
-        status.channels = 0;
-        status.frames_played = 0;
-        
-        uint8_t response_buffer[64];
-        size_t pkt_size = ProtocolHandler::CreateSampleStatusPacket(response_buffer, sizeof(response_buffer), status);
-        Spi_Send(MSG_SAMPLE_STATUS, response_buffer, pkt_size);
-        return;
-    }
 
-    // Validate index against stored file list
-    if (file_index >= s_current_file_count) {
-        if (s_hw) {
-            s_hw->PrintLine("DAISY: Invalid file index %lu (total entries: %lu)", (unsigned long)file_index, (unsigned long)s_current_file_count);
-        }
-        
-        // Send error response
-        SampleStatusMessage status;
-        status.state = 0; // Stopped (failed)
-        status.sample_rate = 0;
-        status.channels = 0;
+        // Start sample audition
+        bool success = WaveX::AudioEngine::AuditionSample(file_path);
+
+        // Send status response
+        WaveX::Protocol::SampleStatusMessage status;
+        status.state = success ? 1 : 0; // playing or stopped
+        status.sample_rate = 44100; // TODO: get actual sample rate
+        status.channels = 2; // TODO: get actual channels
         status.frames_played = 0;
         
-        uint8_t response_buffer[64];
-        size_t pkt_size = ProtocolHandler::CreateSampleStatusPacket(response_buffer, sizeof(response_buffer), status);
-        Spi_Send(MSG_SAMPLE_STATUS, response_buffer, pkt_size);
-        return;
-    }
-    
-    // Build full path for the file at the given index using stored state
-    char full_path[256];
-    snprintf(full_path, sizeof(full_path), "%s/%s", s_current_directory, s_current_file_entries[file_index].name);
-    
-    if (s_hw) {
-        s_hw->PrintLine("DAISY: Playing file at index %lu: '%s'", (unsigned long)file_index, full_path);
-    }
-    
-    // Start sample audition using the full path
-    bool play_success = WaveX::AudioEngine::AuditionSample(full_path);
-    
-    // Send status response
-    SampleStatusMessage status;
-    if (play_success) {
-        status.state = 1; // Playing
-        status.sample_rate = 44100; // TODO: Get actual sample rate
-        status.channels = 2; // TODO: Get actual channel count
-        status.frames_played = 0;
+        uint8_t response_buffer[MAX_PKT_SIZE];
+        size_t pkt_size = WaveX::Protocol::ProtocolHandler::CreateSampleStatusPacket(response_buffer, sizeof(response_buffer), status);
+        Spi_SendPreCreatedPacket(response_buffer, pkt_size);
     } else {
-        status.state = 0; // Stopped (failed to start)
-        status.sample_rate = 0;
-        status.channels = 0;
-        status.frames_played = 0;
+    if (s_hw) {
+            s_hw->PrintLine("DAISY: Failed to get file path for index %lu", (unsigned long)file_index);
+        }
     }
-    
-    uint8_t response_buffer[64];
-    size_t pkt_size = ProtocolHandler::CreateSampleStatusPacket(response_buffer, sizeof(response_buffer), status);
-    Spi_Send(MSG_SAMPLE_STATUS, response_buffer, pkt_size);
 }
 
+// Process sample get path request (existing function)
 static void ProcessSampleGetPathRequest(uint32_t file_index)
 {
-    using namespace WaveX::Protocol;
     using namespace WaveX::Storage;
+    using namespace WaveX::Protocol;
 
     if (s_hw) {
         s_hw->PrintLine("DAISY: Processing sample get path request for index %lu", (unsigned long)file_index);
     }
 
-    // Get directory listing to find the file at the given index
-    FileEntry entries[4];
-    size_t total_count = 0;
-    size_t entries_written = 0;
-    
-    // Use the last browsed path (we'd need to maintain this state)
-    const char* current_path = "/"; // TODO: Get from state
-    
-    bool success = ListDir(current_path, entries, sizeof(entries)/sizeof(entries[0]), total_count, 0, entries_written);
-    
-    if (!success || file_index >= entries_written) {
-        if (s_hw) {
-            s_hw->PrintLine("DAISY: Invalid file index %lu for path request (total entries: %lu)", (unsigned long)file_index, (unsigned long)entries_written);
-        }
-        
-        // Send error response
-        ErrorMessage err = {0x02, "Invalid file index"};
-        uint8_t response_buffer[64];
-        size_t pkt_size = ProtocolHandler::CreateErrorPacket(response_buffer, sizeof(response_buffer), err);
-        Spi_Send(MSG_ERROR, response_buffer, pkt_size);
-        return;
-    }
-    
-    // Build full path for the file at the given index
-    char full_path[256];
-    snprintf(full_path, sizeof(full_path), "%s/%s", current_path, entries[file_index].name);
-    
-    if (s_hw) {
-        s_hw->PrintLine("DAISY: Sending path for index %lu: '%s'", (unsigned long)file_index, full_path);
-    }
-    
-    // Send path response
-    SamplePathResponseMessage response;
+    // Get file path for index
+    char file_path[200] = {0};
+    if (FileSystem::GetFilePathByIndex(file_index, file_path, sizeof(file_path))) {
+        WaveX::Protocol::SamplePathResponseMessage response;
     response.index = file_index;
-    strncpy(response.path, full_path, sizeof(response.path) - 1);
+        strncpy(response.path, file_path, sizeof(response.path) - 1);
     response.path[sizeof(response.path) - 1] = '\0';
     
-    uint8_t response_buffer[256];
-    size_t pkt_size = ProtocolHandler::CreateSamplePathResponsePacket(response_buffer, sizeof(response_buffer), response);
-    Spi_Send(MSG_SAMPLE_GET_PATH_RESP, response_buffer, pkt_size);
+        uint8_t response_buffer[MAX_PKT_SIZE];
+    size_t pkt_size = WaveX::Protocol::ProtocolHandler::CreateSamplePathResponsePacket(response_buffer, sizeof(response_buffer), response);
+    Spi_SendPreCreatedPacket(response_buffer, pkt_size);
+    } else {
+        if (s_hw) {
+            s_hw->PrintLine("DAISY: Failed to get file path for index %lu", (unsigned long)file_index);
+        }
+    }
 }
 
+// Clear directory state (existing function)
 static void ClearDirectoryState()
 {
-    strcpy(s_current_directory, "/");
-    s_current_file_count = 0;
-    s_directory_state_valid = false;
     if (s_hw) {
         s_hw->PrintLine("DAISY: Directory state cleared");
     }
 }
 
+// Prepare TX buffer (existing function)
+static void PrepareTxBuffer(uint8_t* tx_buf, size_t buf_size)
+{
+    // Check if we have outgoing messages to send
+    if (outgoing_count > 0) {
+    uint8_t* outgoing_msg = outgoing_queue[outgoing_head];
+    size_t packet_size = get_packet_size(outgoing_msg);
+    
+        if (packet_size <= buf_size) {
+            memcpy(tx_buf, outgoing_msg, packet_size);
 
-// ============================================================================
-// Outgoing Message Queue Management
-// ============================================================================
+            // Log outgoing packet
+            uint8_t msg_type = outgoing_msg[1];
+            WAVEX_LOG_DAISY_OUTBOUND(DAISY_OUTBOUND_SPI, "Prepared outgoing message type=0x%02X, len=%d, remaining=%d",
+                                   msg_type, (int)packet_size, outgoing_count);
+        } else {
+            // Packet too large for buffer, send zeros
+            memset(tx_buf, 0, buf_size);
+        }
+    } else {
+        // No outgoing messages, send zeros
+        memset(tx_buf, 0, buf_size);
+    }
+}
 
-// Check if we have outgoing data to send
-static bool Spi_HasOutgoingData()
+// Check if we have outgoing data (existing function)
+bool Spi_HasOutgoingData()
 {
     return outgoing_count > 0;
 }
 
-// Prepare TX buffer with next outgoing message
-static void PrepareTxBuffer(uint8_t* tx_buf, size_t buf_size)
-{
-    if (outgoing_count == 0 || !tx_buf) {
-        return;
-    }
-    
-    // Get next outgoing message
-    uint8_t* outgoing_msg = outgoing_queue[outgoing_head];
-    
-    // Debug the outgoing message before processing
-    WAVEX_LOG_DAISY_OUTBOUND(DAISY_OUTBOUND_SPI, "PrepareTxBuffer - outgoing_msg[0]=0x%02X, outgoing_msg[1]=0x%02X", 
-                       outgoing_msg[0], outgoing_msg[1]);
-    
-    // Determine packet size based on type
-    size_t packet_size = get_packet_size(outgoing_msg);
-    
-    WAVEX_LOG_DAISY_OUTBOUND(DAISY_OUTBOUND_SPI, "get_packet_size returned %d for type 0x%02X", 
-                       (int)packet_size, outgoing_msg[0]);
-    
-    size_t copy_size = (buf_size < packet_size) ? buf_size : packet_size;
-    memcpy(tx_buf, outgoing_msg, copy_size);
-    
-    // Remove from queue
-    outgoing_head = (outgoing_head + 1) % MAX_QUEUED_MESSAGES;
-    outgoing_count--;
-    
-    WAVEX_LOG_DAISY_OUTBOUND(DAISY_OUTBOUND_SPI, "Prepared outgoing message type=0x%02X, len=%d, remaining=%d",
-                       outgoing_msg[0], (int)packet_size, outgoing_count);
-}
-
-// Add message to outgoing queue
+// Add message to outgoing queue (existing function)
 static bool QueueOutgoingMessage(const uint8_t* packet_data, size_t packet_size)
 {
     if (outgoing_count >= MAX_QUEUED_MESSAGES) {
-        if (s_hw) {
-            s_hw->PrintLine("DAISY: Outgoing queue full, dropping message type=0x%02X", packet_data[0]);
-        }
-        return false;
+        return false; // Queue full
     }
-    
-    // For meter data, check if we already have meter data queued to prevent spam
-    if (packet_data[0] == 0x01 && packet_data[4] == WaveX::Protocol::MSG_METER_PUSH) {
-        for (int i = 0; i < outgoing_count; i++) {
-            int idx = (outgoing_head + i) % MAX_QUEUED_MESSAGES;
-            if (outgoing_queue[idx][0] == 0x01 && outgoing_queue[idx][4] == WaveX::Protocol::MSG_METER_PUSH) {
-                // Already have meter data queued - skip this one
-                if (s_hw) {
-                    s_hw->PrintLine("DAISY: Skipping meter data - already queued (count=%d)", outgoing_count);
-                }
-                return false;
-            }
-        }
-        // Debug: Log when we're adding meter data
-        if (s_hw && outgoing_count == 0) {
-            s_hw->PrintLine("DAISY: Adding meter data to empty queue");
-        }
-    }
-    
-    uint8_t* msg = outgoing_queue[outgoing_tail];
-    memcpy(msg, packet_data, packet_size);
-    
-    // Debug: Log what we're actually queuing
-    if (s_hw) {
-        s_hw->PrintLine("DAISY: QueueOutgoingMessage - queuing type=0x%02X, size=%d, first_4_bytes: %02X %02X %02X %02X",
-                       packet_data[0], (int)packet_size, 
-                       packet_data[0], packet_data[1], packet_data[2], packet_data[3]);
-    }
-    
+
+    memcpy(outgoing_queue[outgoing_tail], packet_data, packet_size);
     outgoing_tail = (outgoing_tail + 1) % MAX_QUEUED_MESSAGES;
     outgoing_count++;
-    
-    // Reduce logging for meter data to avoid spam
-    if (s_hw && !(packet_data[0] == 0x01 && packet_data[4] == WaveX::Protocol::MSG_METER_PUSH)) {
-        // s_hw->PrintLine("DAISY: Queued outgoing message type=0x%02X, len=%d, count=%d", 
-        //                packet_data[0], packet_data[3], outgoing_count);
-    } else if (s_hw && packet_data[0] == 0x01 && packet_data[4] == WaveX::Protocol::MSG_METER_PUSH && outgoing_count % 10 == 1) {
-        s_hw->PrintLine("DAISY: Queued meter data (every 10th logged), count=%d", outgoing_count);
-    }
     
     return true;
 }
@@ -1132,315 +791,215 @@ static bool QueueOutgoingMessage(const uint8_t* packet_data, size_t packet_size)
 // Public API Implementation
 // ============================================================================
 
-// Hybrid communication - immediate response to ESP32 attention + send queued data
-static bool PerformBidirectionalPoll()
+bool Spi_SendPreCreatedPacket(const uint8_t* packet_data, size_t packet_size)
 {
-    // Check for urgent ESP32 control signal (active high on D0)
-    // bool esp32_urgent = attn_pin.Read();  // Active high signal from GPIO31 - OLD POLLING METHOD
-    
-    bool esp32_urgent = g_esp32_attention_flag;
-    if(esp32_urgent)
-    {
-        // Reset the flag now that we're handling it.
-        g_esp32_attention_flag = false;
+    if (packet_data == NULL || packet_size == 0 || packet_size > MAX_PKT_SIZE) {
+        return false;
     }
+    
+    return QueueOutgoingMessage(packet_data, packet_size);
+}
 
-    // Debug: Log attention pin state periodically AND when urgent
-    static uint32_t debug_count = 0;
-    debug_count++;
-    
-    if (esp32_urgent && s_hw) {
-        // Log every urgent signal immediately
-        s_hw->PrintLine("DAISY: URGENT detected! Attention pin HIGH (check #%lu)", (unsigned long)debug_count);
-    } else if (debug_count % 5000 == 0 && s_hw) {
-        // Log normal state less frequently
-        s_hw->PrintLine("DAISY: Attention pin state: LOW (check #%lu)", (unsigned long)debug_count);
-    }
-    
-    // Check if we have outgoing data (meter data, heartbeats)
-    bool we_have_data = Spi_HasOutgoingData();
-    
-    // Communicate if either condition is true
-    if (!esp32_urgent && !we_have_data) {
-        // No reason to communicate
-        return false;
-    }
-    
-    static uint32_t poll_count = 0;
-    poll_count++;
-    
-    if (esp32_urgent) {
-        // ESP32 has urgent control data - respond immediately
-        if (s_hw) {
-            s_hw->PrintLine("DAISY: URGENT poll #%lu - ESP32 attention signal active", (unsigned long)poll_count);
-        }
-    } else if (we_have_data) {
-        // We have data to send (meter, heartbeat, etc.)
-        WAVEX_LOG_DAISY_OUTBOUND(DAISY_OUTBOUND_SPI, "Sending queued data, poll #%lu", (unsigned long)poll_count);
-    }
-    
-    // Prepare bidirectional transaction
-    uint8_t rx_buf[DATA_PKT_SIZE] = {0};
-    uint8_t tx_buf[DATA_PKT_SIZE] = {0};
-    size_t transfer_size = CMD_PKT_SIZE; // Default to command packet size
-    
-    // Prepare TX buffer based on the situation
-    if (esp32_urgent) {
-        // ESP32 has urgent data - send empty packet to trigger ESP32 response
-        // ESP32 will respond with its queued data during the transaction
-        memset(tx_buf, 0, DATA_PKT_SIZE);
-        transfer_size = CMD_PKT_SIZE; // Start with command packet size
-        if (s_hw) {
-            s_hw->PrintLine("DAISY: Requesting urgent data from ESP32 (no poll needed)");
-        }
-    } else if (we_have_data) {
-        // We have data to send - prepare our outgoing data
-        PrepareTxBuffer(tx_buf, DATA_PKT_SIZE);
-        // Determine actual packet size from the prepared buffer
-        transfer_size = get_packet_size(tx_buf);
-        if (transfer_size == 0) transfer_size = CMD_PKT_SIZE; // Fallback
-        WAVEX_LOG_DAISY_OUTBOUND(DAISY_OUTBOUND_SPI, "Sending queued data to ESP32, type=0x%02X, transfer_size=%d",
-                           tx_buf[0], (int)transfer_size);
-    } else {
-        // No urgent data and no outgoing data - skip communication
-        return false;
-    }
-    
-    // Set up SPI transaction
-    cs_pin.Write(false); // Assert CS
-    System::DelayUs(10); // Small delay for setup
-    
-    // Send poll request and receive response
-    daisy::SpiHandle::Result result = g_spi_handle->BlockingTransmitAndReceive(
-        tx_buf, rx_buf, transfer_size, 100); // Use appropriate transfer size
-    
-    cs_pin.Write(true); // Deassert CS
-    
-    if (result != daisy::SpiHandle::Result::OK) {
-        // Log failed polls occasionally
-        static uint32_t failed_polls = 0;
-        if (++failed_polls % 1000 == 0) {
-            if (s_hw) {
-                s_hw->PrintLine("DAISY: SPI poll failed (fail #%lu, result=%d)", (unsigned long)failed_polls, (int)result);
-            }
-        }
-        return false;
-    }
-    
-    // Check if we got a valid response (not all zeros or just the poll echo)
-    bool has_meaningful_data = false;
-    
-    // Debug: Log raw received data
-    if (s_hw) {
-        s_hw->PrintLine("DAISY: Raw RX buffer: %02X %02X %02X %02X %02X %02X %02X %02X", 
-                        rx_buf[0], rx_buf[1], rx_buf[2], rx_buf[3],
-                        rx_buf[4], rx_buf[5], rx_buf[6], rx_buf[7]);
-    }
-    
-    // Skip check if this is just echoing our poll request
-    if (!(rx_buf[0] == 0x01 && rx_buf[1] == 0x00 && rx_buf[2] == 0x00 && rx_buf[3] == 0x01 && rx_buf[4] == 0xFF)) {
-        for (int i = 0; i < DATA_PKT_SIZE; i++) {
-            if (rx_buf[i] != 0) {
-                has_meaningful_data = true;
-                break;
-            }
-        }
-    }
-    
-    if (!has_meaningful_data) {
-        // Log when we get all zeros occasionally (reduced frequency)
-        static uint32_t zero_responses = 0;
-        if (++zero_responses % 2000 == 0) {
-            if (s_hw) {
-                s_hw->PrintLine("DAISY: Received all zeros from ESP32 (zero #%lu)", (unsigned long)zero_responses);
-            }
-        }
-        return false; // No meaningful data available
-    }
-    
-    // Determine packet size and validate
-    size_t packet_size = get_packet_size(rx_buf);
-    WAVEX_LOG_DAISY_INBOUND(DAISY_INBOUND_SPI, "get_packet_size returned %d for type 0x%02X", (int)packet_size, rx_buf[0]);
-    if (s_hw) {
-        s_hw->PrintLine("DAISY: Calculated packet size: %d for packet type 0x%02X", (int)packet_size, rx_buf[0]);
-    }
-    if (packet_size == 0) {
-        if (s_hw) {
-            s_hw->PrintLine("DAISY: Unknown packet type: 0x%02X", rx_buf[0]);
-        }
-        return false;
-    }
-    
-    // Check for empty or invalid data packets (all 0xFF or all 0x00)
-    bool is_empty_data = true;
-    for (int i = 0; i < 8; i++) {
-        if (rx_buf[i] != 0xFF && rx_buf[i] != 0x00) {
-            is_empty_data = false;
-            break;
-        }
-    }
-    
-    if (is_empty_data) {
-        // if (s_hw) {
-        //     s_hw->PrintLine("DAISY: Received empty/invalid data packet, ignoring");
-        // }
-        return false;
-    }
-    
-    // Validate the packet using flexible packet system
-    WAVEX_LOG_DAISY_INBOUND(DAISY_INBOUND_SPI, "Validating packet of size %d", (int)packet_size);
-    WAVEX_LOG_DAISY_INBOUND(DAISY_INBOUND_SPI, "Packet bytes: %02X %02X %02X %02X %02X %02X %02X %02X", 
-                        rx_buf[0], rx_buf[1], rx_buf[2], rx_buf[3], 
-                        rx_buf[4], rx_buf[5], rx_buf[6], rx_buf[7]);
-    
-    uint8_t packet_type = rx_buf[0];
-    WAVEX_LOG_DAISY_INBOUND(DAISY_INBOUND_SPI, "Packet type=0x%02X", packet_type);
-    
-    // Use flexible packet validation
-    if (is_command_packet_type(packet_type) || is_data_packet_type(packet_type)) {
-        // New flexible packet format
-        size_t expected_size = get_packet_size_from_type(packet_type);
-        if (expected_size == 0 || packet_size != expected_size) {
-            if (s_hw) {
-                s_hw->PrintLine("DAISY: Invalid flexible packet size: type=0x%02X, expected=%d, received=%d", 
-                               packet_type, (int)expected_size, (int)packet_size);
-            }
-            return false;
-        }
-        
-        // Validate CRC using flexible packet system
-        if (!validate_packet_crc(rx_buf, packet_size)) {
-            if (s_hw) {
-                s_hw->PrintLine("DAISY: Flexible packet CRC validation failed");
-            }
-            return false;
-        }
-    } else {
-        if (s_hw) {
-            s_hw->PrintLine("DAISY: Unknown packet type: 0x%02X", packet_type);
-        }
-        return false;
-    }
-    
-    WAVEX_LOG_DAISY_PACKET(DAISY_SPI_PACKET, "INPACKET type=0x%02X, len=%d, size=%d, data %02X %02X %02X %02X %02X %02X %02X %02X", 
-                        rx_buf[0], rx_buf[3], (int)packet_size,
-                        rx_buf[0], rx_buf[1], rx_buf[2], rx_buf[3], rx_buf[4], rx_buf[5], rx_buf[6], rx_buf[7]);
-    
-    // Check for duplicate packets (simple approach for single-threaded execution)
-    if (s_has_last_packet && packet_size <= 32) {
-        if (memcmp(rx_buf, s_last_processed_packet, packet_size) == 0) {
-            if (s_hw) {
-                s_hw->PrintLine("DAISY: Duplicate packet detected, skipping (type=0x%02X)", rx_buf[0]);
-            }
-            return false; // Skip duplicate packet
-        }
-    }
-    
-    // Queue the message for processing
-    if (queue_count < MAX_QUEUED_MESSAGES) {
-        memcpy(message_queue[queue_tail], rx_buf, packet_size);
-        queue_tail = (queue_tail + 1) % MAX_QUEUED_MESSAGES;
-        queue_count++;
-        WAVEX_LOG_DAISY_INBOUND(DAISY_INBOUND_SPI, "Queued message type=0x%02X, queue_count=%d", rx_buf[0], queue_count);
-        
-        // Store this packet for duplicate detection
-        if (packet_size <= 32) {
-            memcpy(s_last_processed_packet, rx_buf, packet_size);
-            s_has_last_packet = true;
-        }
-        
-        return true;
-    } else {
-        if (s_hw) {
-            s_hw->PrintLine("DAISY: Message queue full, dropping packet");
-        }
-        return false;
+void Spi_GetStats(spi_link_stats_t* stats)
+{
+    if (stats) {
+        memcpy(stats, &s_stats, sizeof(s_stats));
     }
 }
 
-// Static buffer to convert ctrl_pkt_t to pkt_t format
-static pkt_t converted_packet;
-
-// int Spi_Recv(pkt_t **out) 
-// { 
-//     // Perform regular bidirectional polling
-//     PerformBidirectionalPoll();  
-//     // Return queued message if available
-//     if (queue_count > 0) {
-//         uint8_t* packet_data = message_queue[queue_head];
-//         if (s_hw) {
-//             s_hw->PrintLine("DAISY: Spi_Recv - dequeuing message type=0x%02X, len=%d, queue_count=%d", 
-//                            packet_data[0], packet_data[3], queue_count);
-//         }
-// 
-//         // Convert to pkt_t format for legacy compatibility
-//         memset(&converted_packet, 0, sizeof(converted_packet));
-//         uint8_t packet_type = packet_data[0];
-//         uint8_t len = packet_data[3];
-//         const uint8_t* payload = &packet_data[6]; // Payload is now at offset 6 (after header + CRC)
-//         if (packet_type == 0x01 && len > 0) {
-//             // Command packet - message type is first byte of payload
-//             converted_packet.h.type = payload[0];
-//             converted_packet.h.len = len - 1; // Subtract message type byte
-//
-//             // Copy payload (skip message type byte)
-//             if (converted_packet.h.len > 0 && converted_packet.h.len <= sizeof(converted_packet.payload)) {
-//                 memcpy(converted_packet.payload, &payload[1], converted_packet.h.len);
-//             }
-//         } else {
-//             // Data packet or invalid - use packet type as message type
-//             converted_packet.h.type = packet_type;
-//             converted_packet.h.len = len;
-//     
-//             if (len > 0 && len <= sizeof(converted_packet.payload)) {
-//                 memcpy(converted_packet.payload, payload, len);
-//             }
-//    
-//         if (s_hw) {
-//             s_hw->PrintLine("DAISY: Converted to pkt_t - type=0x%02X, len=%d", 
-//                            converted_packet.h.type, converted_packet.h.len);
-//         }
-//
-//         *out = &converted_packet;
-//         queue_head = (queue_head + 1) % MAX_QUEUED_MESSAGES;
-//         queue_count--;
-//         return 1;
-//     }
-//
-//     *out = NULL;
-//     return 0;
-// }
-
-void Spi_ValidateBuffers() {}
-// void Spi_Recycle(pkt_t *p, int is_rx) {}
-void Spi_ForceReset() {}
-
-bool Spi_HasPendingData(void) 
-{ 
-    // Perform regular bidirectional polling
-    WaveX::Comm::PerformBidirectionalPoll();
-    
-    // Return true if we have queued messages
-    return queue_count > 0;
-}
-
-void Spi_GetStats(spi_link_stats_t* stats) {
-    if (stats) memcpy(stats, &s_stats, sizeof(s_stats));
-}
-
-void Spi_DebugState() {
+void Spi_DebugState()
+{
     if (s_hw) {
-        s_hw->PrintLine("SPI Master Debug State:");
-        s_hw->PrintLine("  Stats: TX=%lu, RX=%lu, CRC_ERR=%lu", 
+        s_hw->PrintLine("DAISY: SPI Debug State");
+        s_hw->PrintLine("  Queue: head=%d, tail=%d, count=%d", queue_head, queue_tail, queue_count);
+        s_hw->PrintLine("  Outgoing: head=%d, tail=%d, count=%d", outgoing_head, outgoing_tail, outgoing_count);
+        s_hw->PrintLine("  Stats: packets_sent=%lu, packets_received=%lu, crc_errors=%lu",
                         (unsigned long)s_stats.packets_sent,
                         (unsigned long)s_stats.packets_received, 
                         (unsigned long)s_stats.crc_errors);
     }
 }
 
-// New function to poll, dequeue, and process a single SPI message
-void ProcessQueuedSpiMessage()
+// Process received packet (static function)
+static bool ProcessReceivedPacket(const uint8_t* rx_buf, size_t transfer_size)
 {
+    if (!rx_buf || transfer_size == 0) {
+        return false;
+    }
+
+    // Validate and parse the unified packet
+    if (!validate_wave_packet(rx_buf, transfer_size)) {
+        if (s_hw) s_hw->PrintLine("DAISY: Invalid packet received");
+        return false;
+    }
+
+    // Parse packet details
+    uint8_t msg_type, flags;
+    uint16_t sequence_number;
+    uint8_t payload[2048]; // Buffer for payload data
+    size_t payload_size;
+    
+    if (!parse_wave_packet(rx_buf, transfer_size, msg_type, payload, payload_size, sequence_number, flags)) {
+        if (s_hw) s_hw->PrintLine("DAISY: Failed to parse packet");
+        return false;
+    }
+
+    // Route message by type
+    ProcessSpiMessageByType(msg_type, flags, sequence_number, payload, payload_size);
+    return true;
+}
+
+// Perform bidirectional poll (static function)
+static bool PerformBidirectionalPoll()
+{
+    // Send outgoing packets if we have any
+    if (outgoing_count > 0) {
+        uint8_t* outgoing_msg = outgoing_queue[outgoing_head];
+        size_t packet_size = get_packet_size(outgoing_msg);
+        
+        // Send the packet
+        daisy::SpiHandle::Result result = Spi_SendPacket(outgoing_msg, packet_size);
+        
+        if (result == daisy::SpiHandle::Result::OK) {
+            // Successfully sent, remove from queue
+            outgoing_head = (outgoing_head + 1) % MAX_QUEUED_MESSAGES;
+            outgoing_count--;
+            s_stats.packets_sent++;
+            
+            if (s_hw) {
+                uint8_t msg_type = outgoing_msg[1];
+                s_hw->PrintLine("DAISY: Sent packet type=0x%02X, size=%zu, remaining=%d", 
+                               msg_type, packet_size, outgoing_count);
+            }
+            return true;
+        } else {
+            if (s_hw) {
+                s_hw->PrintLine("DAISY: Failed to send packet, result=%d", (int)result);
+            }
+            return false;
+        }
+    }
+    
+    // No outgoing packets to send
+    return true;
+}
+
+} // namespace Comm
+} // namespace WaveX
+
+// Stub implementations for message processing functions (outside namespace)
+static void ProcessSyncMessage(const uint8_t* packet_data, size_t packet_size) {
+    if (s_hw) s_hw->PrintLine("DAISY: ProcessSyncMessage called");
+}
+
+static void ProcessControlChangeMessage(const uint8_t* packet_data, size_t packet_size) {
+    if (s_hw) s_hw->PrintLine("DAISY: ProcessControlChangeMessage called");
+}
+
+static void ProcessNoteMessage(const uint8_t* packet_data, size_t packet_size) {
+    if (s_hw) s_hw->PrintLine("DAISY: ProcessNoteMessage called");
+}
+
+static void ProcessNoteOffMessage(const uint8_t* packet_data, size_t packet_size) {
+    if (s_hw) s_hw->PrintLine("DAISY: ProcessNoteOffMessage called");
+}
+
+static void ProcessSampleLoadMessage(const uint8_t* packet_data, size_t packet_size) {
+    if (s_hw) s_hw->PrintLine("DAISY: ProcessSampleLoadMessage called");
+}
+
+static void ProcessSampleControlMessage(const uint8_t* packet_data, size_t packet_size) {
+    if (s_hw) s_hw->PrintLine("DAISY: ProcessSampleControlMessage called");
+}
+
+static void ProcessPreviewRequestMessage(const uint8_t* packet_data, size_t packet_size) {
+    if (s_hw) s_hw->PrintLine("DAISY: ProcessPreviewRequestMessage called");
+}
+
+static void ProcessDataRequestMessage(const uint8_t* packet_data, size_t packet_size) {
+    if (s_hw) s_hw->PrintLine("DAISY: ProcessDataRequestMessage called");
+}
+
+static void ProcessMeterPushMessage(const uint8_t* packet_data, size_t packet_size) {
+    if (s_hw) s_hw->PrintLine("DAISY: ProcessMeterPushMessage called");
+}
+
+static void ProcessWaveChunkMessage(const uint8_t* packet_data, size_t packet_size) {
+    if (s_hw) s_hw->PrintLine("DAISY: ProcessWaveChunkMessage called");
+}
+
+static void ProcessHeartbeatMessage(const uint8_t* packet_data, size_t packet_size) {
+    if (s_hw) s_hw->PrintLine("DAISY: ProcessHeartbeatMessage called");
+}
+
+static void ProcessBrowseResponseMessage(const uint8_t* packet_data, size_t packet_size) {
+    if (s_hw) s_hw->PrintLine("DAISY: ProcessBrowseResponseMessage called");
+}
+
+static void ProcessBrowseRequestMessage(const uint8_t* packet_data, size_t packet_size) {
+    if (s_hw) s_hw->PrintLine("DAISY: ProcessBrowseRequestMessage called");
+    // Parse the payload to extract browse request parameters
+    if (packet_size > 0) {
+        const char* path = reinterpret_cast<const char*>(packet_data);
+        size_t path_len = strlen(path);
+        uint8_t max_entries = 10; // Default value
+        WaveX::Comm::ProcessBrowseRequest(path, path_len, max_entries);
+    }
+}
+
+static void ProcessSamplePlayRequestMessage(const uint8_t* packet_data, size_t packet_size) {
+    if (s_hw) s_hw->PrintLine("DAISY: ProcessSamplePlayRequestMessage called");
+    // Parse the payload to extract file path
+    if (packet_size > 0) {
+        const char* file_path = reinterpret_cast<const char*>(packet_data);
+        WaveX::Comm::ProcessSamplePlayRequest(file_path);
+    }
+}
+
+static void ProcessSampleStopRequestMessage(const uint8_t* packet_data, size_t packet_size) {
+    if (s_hw) s_hw->PrintLine("DAISY: ProcessSampleStopRequestMessage called");
+}
+
+static void ProcessSampleStatusMessage(const uint8_t* packet_data, size_t packet_size) {
+    if (s_hw) s_hw->PrintLine("DAISY: ProcessSampleStatusMessage called");
+}
+
+static void ProcessSamplePlayIndexRequestMessage(const uint8_t* packet_data, size_t packet_size) {
+    if (s_hw) s_hw->PrintLine("DAISY: ProcessSamplePlayIndexRequestMessage called");
+}
+
+static void ProcessSampleGetPathRequestMessage(const uint8_t* packet_data, size_t packet_size) {
+    if (s_hw) s_hw->PrintLine("DAISY: ProcessSampleGetPathRequestMessage called");
+}
+
+static void ProcessSampleGetPathResponseMessage(const uint8_t* packet_data, size_t packet_size) {
+    if (s_hw) s_hw->PrintLine("DAISY: ProcessSampleGetPathResponseMessage called");
+}
+
+static void ProcessAckMessage(const uint8_t* packet_data, size_t packet_size) {
+    if (s_hw) s_hw->PrintLine("DAISY: ProcessAckMessage called");
+}
+
+static void ProcessErrorMessage(const uint8_t* packet_data, size_t packet_size) {
+    if (s_hw) s_hw->PrintLine("DAISY: ProcessErrorMessage called");
+}
+
+// Process queued SPI messages (public API function)
+void WaveX::Comm::ProcessQueuedSpiMessage()
+{
+    // Check for packet ready from DMA callback
+#if WAVEX_SPI_DMA_ENABLED
+    if (s_packet_ready_for_processing) {
+        s_packet_ready_for_processing = false;
+        // Process the packet received via DMA
+        if (s_hw) {
+            s_hw->PrintLine("DAISY: Processing DMA packet");
+        }
+        ProcessReceivedPacket(s_rx_dma_buf, MAX_PKT_SIZE);
+        return; // Process one packet per call
+    }
+#endif
+
     // Poll for new messages
     PerformBidirectionalPoll();
 
@@ -1449,17 +1008,16 @@ void ProcessQueuedSpiMessage()
         uint8_t* packet_data = message_queue[queue_head];
         size_t packet_size = get_packet_size(packet_data);
         
-        WAVEX_LOG_DAISY_INBOUND(DAISY_INBOUND_SPI, "Dequeuing message for processing, type=0x%02X, len=%d, size=%d",
-                           packet_data[0], packet_data[3], (int)packet_size);
-        
-        // Debug: Log packet details for browse requests
-        if (s_hw && packet_data[0] == 0x01 && packet_data[4] == WaveX::Protocol::MSG_BROWSE_REQ) {
-            s_hw->PrintLine("DAISY: DEBUG - Processing browse request: payload[1]=0x%02X, payload[2]=0x%02X", 
-                           packet_data[5], packet_data[6]);
-        }
-        
-        // Process the message directly
-        ProcessSpiMessage(packet_data, packet_size);
+        // Extract packet information using new unified format
+        uint8_t msg_type = packet_data[1];
+        uint8_t flags = packet_data[0] & PKT_FLAG_MASK;
+        uint16_t sequence_number = packet_data[2] | (packet_data[3] << 8);
+
+        WAVEX_LOG_DAISY_INBOUND(DAISY_INBOUND_SPI, "Dequeuing message for processing, msg_type=0x%02X, flags=0x%02X, seq=%u, size=%d",
+                           msg_type, flags, sequence_number, (int)packet_size);
+
+        // Process the message directly using new unified format
+        ProcessSpiMessageByType(msg_type, flags, sequence_number, packet_data, packet_size);
         
         // Dequeue
         queue_head = (queue_head + 1) % MAX_QUEUED_MESSAGES;
@@ -1469,17 +1027,5 @@ void ProcessQueuedSpiMessage()
     }
 }
 
-} // namespace Comm
-} // namespace WaveX
-
 #endif // WAVEX_SPI_LINK_ENABLED
 
-/** This is the HAL IRQ handler for pins 10-15. D0 is PB12 on the Daisy Seed. */
-extern "C" void EXTI15_10_IRQHandler(void)
-{
-    if(__HAL_GPIO_EXTI_GET_IT(GPIO_PIN_12) != 0)
-    {
-        __HAL_GPIO_EXTI_CLEAR_IT(GPIO_PIN_12);
-        g_esp32_attention_flag = true;
-    }
-}

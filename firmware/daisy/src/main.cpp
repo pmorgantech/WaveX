@@ -332,8 +332,10 @@ int main(void)
         
         // SPI test to verify communication works
     WAVEX_LOG_DAISY(INTER_MCU_LINK, "DEBUG: Testing SPI with immediate test packet");
-    uint8_t test_payload[4] = {0xAA, 0xBB, 0xCC, 0xDD};
-    int test_result = WaveX::Comm::Spi_Send(WaveX::Protocol::MSG_SYNC, test_payload, 4);  // Test packet
+    WaveX::Protocol::SyncMessage sync_msg = {System::GetTick(), {0xAA, 0xBB, 0xCC, 0xDD}};
+    uint8_t test_buffer[64];
+    size_t pkt_size = WaveX::Protocol::ProtocolHandler::CreateSyncPacket(test_buffer, sizeof(test_buffer), sync_msg);
+    int test_result = WaveX::Comm::Spi_SendPreCreatedPacket(test_buffer, pkt_size);
     WAVEX_LOG_DAISY(INTER_MCU_LINK, "DEBUG: SPI test result: %d (1=success, 0=fail)", test_result);
     if (test_result == 1) {
         WAVEX_LOG_DAISY(INTER_MCU_LINK, "SUCCESS: SPI is working! You should see SPI1 CLK on scope now!");
@@ -422,9 +424,17 @@ int main(void)
 
             if (send_sync) {
                 // WAVEX_LOG_DAISY(INTER_MCU_LINK, "DEBUG: Sending SYNC packet");
-                // Send SYNC via SPI
-                uint8_t payload[1] = {0};
-                int sync_result = WaveX::Comm::Spi_Send(WaveX::Protocol::MSG_SYNC, payload, 1);  // SYNC packet type
+                // Send SYNC via SPI using flexible packet system
+                WaveX::Protocol::SyncMessage sync_msg = {current_time, {0}};
+                uint8_t sync_buffer[64];
+                size_t pkt_size = WaveX::Protocol::ProtocolHandler::CreateSyncPacket(sync_buffer, sizeof(sync_buffer), sync_msg);
+                #if WAVEX_MCU_LINK_PACKET_DEBUG
+                s_hw->PrintLine("DAISY: Created SYNC packet, size=%d, bytes: %02X %02X %02X %02X %02X %02X %02X %02X", 
+                               (int)pkt_size, sync_buffer[0], sync_buffer[1], sync_buffer[2], sync_buffer[3],
+                               sync_buffer[4], sync_buffer[5], sync_buffer[6], sync_buffer[7]);
+                s_hw->PrintLine("DAISY: SYNC CRC bytes: %02X %02X", sync_buffer[pkt_size-2], sync_buffer[pkt_size-1]);
+                #endif
+                int sync_result = WaveX::Comm::Spi_SendPreCreatedPacket(sync_buffer, pkt_size);
                 // WAVEX_LOG_DAISY(INTER_MCU_LINK, "DEBUG: SYNC packet send result: %d", sync_result);
                 #if WAVEX_MCU_LINK_PACKET_DEBUG
                 WAVEX_LOG_DAISY(INTER_MCU_LINK, "SPI SYNC packet sent");
@@ -439,33 +449,32 @@ int main(void)
                 #if WAVEX_MCU_LINK_PACKET_DEBUG
                 WAVEX_LOG_DAISY(INTER_MCU_LINK, "Sending heartbeat during auditioning (if active)");
                 #endif
-                uint8_t payload[14]; // Extended to 14 bytes for CPU usage
-                payload[0] = (current_time >> 0) & 0xFF;
-                payload[1] = (current_time >> 8) & 0xFF;
-                payload[2] = (current_time >> 16) & 0xFF;
-                payload[3] = (current_time >> 24) & 0xFF;
-                payload[4] = (loop_counter >> 0) & 0xFF;
-                payload[5] = (loop_counter >> 8) & 0xFF;
-                payload[6] = (loop_counter >> 16) & 0xFF;
-                payload[7] = (loop_counter >> 24) & 0xFF;
-                payload[8] = 0; // rx_total placeholder
-                payload[9] = 0;
-                payload[10] = 0;
-                payload[11] = 0;
-
-                // Add CPU usage (as percentage * 10 for 1 decimal place precision)
-                uint16_t cpu_usage_scaled = (uint16_t)(s_cpu_usage_percent * 10.0f);
-                payload[12] = (cpu_usage_scaled >> 0) & 0xFF;
-                payload[13] = (cpu_usage_scaled >> 8) & 0xFF;
-
-                // WAVEX_LOG_DAISY(INTER_MCU_LINK, "DEBUG: Sending heartbeat packet - calling Spi_Send");
+                // Create heartbeat message using flexible packet system
+                WaveX::Protocol::HeartbeatMessage heartbeat_msg = {
+                    current_time,           // uptime_ms
+                    0,                      // rx_total (placeholder)
+                    loop_counter,           // loop_counter
+                    (uint16_t)(s_cpu_usage_percent * 10.0f)  // cpu_usage_percent (scaled by 10)
+                };
+                
+                uint8_t heartbeat_buffer[64];
+                size_t pkt_size = WaveX::Protocol::ProtocolHandler::CreateHeartbeatPacket(heartbeat_buffer, sizeof(heartbeat_buffer), heartbeat_msg);
+                
+                #if WAVEX_MCU_LINK_PACKET_DEBUG
+                s_hw->PrintLine("DAISY: Created HEARTBEAT packet, size=%d, bytes: %02X %02X %02X %02X %02X %02X %02X %02X", 
+                               (int)pkt_size, heartbeat_buffer[0], heartbeat_buffer[1], heartbeat_buffer[2], heartbeat_buffer[3],
+                               heartbeat_buffer[4], heartbeat_buffer[5], heartbeat_buffer[6], heartbeat_buffer[7]);
+                s_hw->PrintLine("DAISY: HEARTBEAT CRC bytes: %02X %02X", heartbeat_buffer[pkt_size-2], heartbeat_buffer[pkt_size-1]);
+                #endif
+                
+                // WAVEX_LOG_DAISY(INTER_MCU_LINK, "DEBUG: Sending heartbeat packet - calling Spi_SendPreCreatedPacket");
                 // Heartbeat is fire-and-forget (no ACK needed)
-                int heartbeat_result = WaveX::Comm::Spi_Send(WaveX::Protocol::MSG_HEARTBEAT, payload, 14);  // Heartbeat packet type
+                int heartbeat_result = WaveX::Comm::Spi_SendPreCreatedPacket(heartbeat_buffer, pkt_size);
                 // WAVEX_LOG_DAISY(INTER_MCU_LINK, "DEBUG: Heartbeat packet send result: %d", heartbeat_result);
 
                 #if WAVEX_MCU_LINK_PACKET_DEBUG
                 WAVEX_LOG_DAISY(INTER_MCU_LINK, "CPU in heartbeat: %.1f%% -> scaled=%u (0x%04X)",
-                                s_cpu_usage_percent, (unsigned int)cpu_usage_scaled, (unsigned int)cpu_usage_scaled);
+                                s_cpu_usage_percent, (unsigned int)heartbeat_msg.cpu_usage_percent, (unsigned int)heartbeat_msg.cpu_usage_percent);
                 WAVEX_LOG_DAISY(INTER_MCU_LINK, "SPI Heartbeat sent: uptime=%lu loop_counter=%lu cpu=%.1f%%",
                                 (unsigned long)current_time, (unsigned long)loop_counter, s_cpu_usage_percent);
                 #endif
@@ -505,18 +514,19 @@ int main(void)
             uint16_t q_pkL  = (uint16_t)(fminf(1.f, m.peakL) * 32767.f);
             uint16_t q_pkR  = (uint16_t)(fminf(1.f, m.peakR) * 32767.f);
 
-            uint8_t payload[8];
-            payload[0] = (uint8_t)(q_rmsL & 0xFF);
-            payload[1] = (uint8_t)(q_rmsL >> 8);
-            payload[2] = (uint8_t)(q_rmsR & 0xFF);
-            payload[3] = (uint8_t)(q_rmsR >> 8);
-            payload[4] = (uint8_t)(q_pkL & 0xFF);
-            payload[5] = (uint8_t)(q_pkL >> 8);
-            payload[6] = (uint8_t)(q_pkR & 0xFF);
-            payload[7] = (uint8_t)(q_pkR >> 8);
+            // Create meter push message using flexible packet system
+            WaveX::Protocol::MeterPushMessage meter_msg = {
+                q_rmsL,  // rms_left
+                q_rmsR,  // rms_right
+                q_pkL,   // peak_left
+                q_pkR    // peak_right
+            };
+            
+            uint8_t meter_buffer[64];
+            size_t pkt_size = WaveX::Protocol::ProtocolHandler::CreateMeterPushPacket(meter_buffer, sizeof(meter_buffer), meter_msg);
 
             // Send meter data to ESP32 for audio level display
-            int result = WaveX::Comm::Spi_Send(WaveX::Protocol::MSG_METER_PUSH, payload, 8);
+            int result = WaveX::Comm::Spi_SendPreCreatedPacket(meter_buffer, pkt_size);
             if (result) {
                 #if WAVEX_MCU_LINK_PACKET_DEBUG
                 WAVEX_LOG_DAISY(INTER_MCU_LINK, "Sent meter data: RMS L=%u R=%u, Peak L=%u R=%u", 

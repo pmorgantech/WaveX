@@ -1,0 +1,48 @@
+#pragma once
+
+#include <stdint.h>
+#include <stddef.h>
+#include <functional>
+#include "../../shared/spi_protocol/protocol.h"
+
+namespace WaveX {
+namespace Comm {
+
+// Unified packet router - single entry point for all packet processing
+class PacketRouter {
+public:
+    PacketRouter() = default;
+    ~PacketRouter() = default;
+    
+    // Main entry point - routes packets based on format and type
+    void route_packet(const uint8_t* packet_data, size_t packet_len);
+    
+    // Statistics callback
+    void set_stats_callback(std::function<void(uint8_t)> callback) {
+        m_stats_callback = callback;
+    }
+    
+private:
+    // Route unified packets (single format)
+    void route_unified_packet(const uint8_t* packet_data, size_t packet_len);
+
+    // Route by message type (extracted from unified packet)
+    void route_by_message_type(uint8_t msg_type, const uint8_t* payload, size_t payload_len, uint8_t flags, uint16_t sequence_number);
+    
+    // Route browse responses (large data packets)
+    void route_browse_response(const uint8_t* packet_data, size_t packet_len);
+    
+    // Message handlers
+    void handle_sync(const WaveX::Protocol::SyncMessage& msg);
+    void handle_heartbeat(const WaveX::Protocol::HeartbeatMessage& msg);
+    void handle_meter_push(const WaveX::Protocol::MeterPushMessage& msg);
+    void handle_browse_resp(const uint8_t* data, size_t length);
+    void handle_sample_status(const WaveX::Protocol::SampleStatusMessage& msg);
+    void handle_error(const WaveX::Protocol::ErrorMessage& msg);
+    
+    // Statistics callback
+    std::function<void(uint8_t)> m_stats_callback;
+};
+
+} // namespace Comm
+} // namespace WaveX
