@@ -393,7 +393,14 @@ int main(void)
         uint32_t current_time = System::GetNow();
         
         // Process any incoming SPI messages from ESP32
+        uint32_t spi_start = System::GetTick();
         process_incoming_spi_messages();
+        uint32_t spi_duration = System::GetTick() - spi_start;
+        
+        // Log long SPI operations
+        if (spi_duration > 2) { // More than 2ms
+            WAVEX_LOG_DAISY(INTER_MCU_LINK, "LONG SPI: %u ms", (unsigned)spi_duration);
+        }
         
         #if WAVEX_SPI_DMA_ENABLED
         // Check for DMA timeouts to prevent hanging
@@ -403,7 +410,14 @@ int main(void)
         // Pump WAV I/O for audio playback (including audition)
         #if WAVEX_AUDIO_ENGINE_ENABLED
         if (WaveX::AudioEngine::ShouldPumpWavIO()) {
+            uint32_t io_start = System::GetTick();
             WaveX::AudioEngine::PumpWavIO();
+            uint32_t io_duration = System::GetTick() - io_start;
+            
+            // Log long I/O operations that might cause audio pauses
+            if (io_duration > 5) { // More than 5ms
+                WAVEX_LOG_DAISY(AUDIO_ENGINE, "LONG I/O: %u ms (might cause audio pause)", (unsigned)io_duration);
+            }
         }
         #endif
         
@@ -416,6 +430,18 @@ int main(void)
         #endif
         
         bool send_beacon = (current_time - last_beacon >= 1000);
+        
+        // Report I/O performance stats every 5 seconds
+        static uint32_t last_stats_report = 0;
+        if (current_time - last_stats_report >= 5000) {
+            last_stats_report = current_time;
+            #if WAVEX_AUDIO_ENGINE_ENABLED
+            uint32_t io_count, max_io_duration, last_io_duration;
+            WaveX::AudioEngine::GetIOStats(io_count, max_io_duration, last_io_duration);
+            WAVEX_LOG_DAISY(AUDIO_ENGINE, "I/O Stats: count=%u, max=%u ms, last=%u ms", 
+                           (unsigned)io_count, (unsigned)max_io_duration, (unsigned)last_io_duration);
+            #endif
+        }
 
         #if WAVEX_SPI_LINK_ENABLED
         if (send_beacon) {
@@ -532,13 +558,8 @@ int main(void)
         s_cpu_busy_ticks_accum += (work_end_ticks - busy_start_ticks);
         s_cpu_measurement_count++;
         
-        // Precise timing: sleep for exactly 1ms using tick-based timing
-        uint32_t sleep_start = System::GetTick();
-        uint32_t target_sleep_ticks = System::GetTickFreq() / 1000; // 1ms in ticks
-        while ((System::GetTick() - sleep_start) < target_sleep_ticks) {
-            // Busy wait for precise timing - this is only 1ms so it's acceptable
-            __NOP(); // No operation instruction for CPU efficiency
-        }
+        // Use actual sleep instead of busy wait - much more CPU efficient
+        System::Delay(1); // 1ms actual sleep instead of busy wait
         
         // Measure CPU usage every 2 seconds (reduced frequency for better performance)
         uint32_t now_ms = System::GetNow();

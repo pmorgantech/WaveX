@@ -15,6 +15,7 @@
 #include "per/spi.h"
 #include "sys/system.h" // For System::DelayUs
 #include "sys/dma.h"    // For DMA cache helpers
+#include "daisy_core.h" // For DMA_BUFFER_MEM_SECTION
 #include "stm32h7xx_hal.h" // For SCB cache maintenance functions and STM32 HAL GPIO and interrupt functions
 #include "stm32h7xx_hal_cortex.h" // For SCB cache maintenance functions
 #include "../../shared/config/link_config.h" // For HD protocol command macros
@@ -163,8 +164,8 @@ static uint32_t s_dma_start_time = 0;
 static const uint32_t DMA_TIMEOUT_MS = 1000; // 1 second timeout
 // DMA buffers in non-cacheable SRAM for proper coherency
 // Use MAX_PKT_SIZE to support all packet sizes up to 4KB
-static uint8_t s_tx_dma_buf[MAX_PKT_SIZE] __attribute__((section(".dma_buffer"))) __attribute__((aligned(32)));
-static uint8_t s_rx_dma_buf[MAX_PKT_SIZE] __attribute__((section(".dma_buffer"))) __attribute__((aligned(32)));
+static uint8_t s_tx_dma_buf[MAX_PKT_SIZE] DMA_BUFFER_MEM_SECTION;
+static uint8_t s_rx_dma_buf[MAX_PKT_SIZE] DMA_BUFFER_MEM_SECTION;
 
 // Static packet buffer pool for large packets (replaces malloc/free)
 static uint8_t s_large_packet_pool[4][MAX_PKT_SIZE] __attribute__((aligned(32)));
@@ -172,7 +173,7 @@ static bool s_pool_used[4] = {false, false, false, false};
 
 // Polling backpressure - minimum interval between polls when idle
 static uint32_t s_last_poll_time = 0;
-static const uint32_t MIN_POLL_INTERVAL_MS = 1; // 1ms minimum between polls
+static const uint32_t MIN_POLL_INTERVAL_MS = 5; // Increased from 1ms to 5ms for better CPU efficiency
 
 static void spi_dma_start_cb(void* /*context*/)
 {
@@ -197,12 +198,7 @@ static void spi_dma_end_cb(void* /*context*/, daisy::SpiHandle::Result result)
     // Toggle a pin to verify IRQ is firing (can be observed with oscilloscope)
     // Using built-in LED or a spare GPIO pin would work here
     
-    // Cache maintenance for RX buffer after DMA completion
-    if (result == daisy::SpiHandle::Result::OK) {
-        // Invalidate cache for RX buffer to ensure we see the data DMA wrote
-        SCB_InvalidateDCache_by_Addr((uint32_t*)s_rx_dma_buf, MAX_PKT_SIZE);
-        if (s_hw) s_hw->PrintLine("DAISY: Cache invalidated for RX buffer after DMA completion");
-    }
+    // Cache operations removed - buffers are in non-cacheable DMA memory
     
     // Deassert CS and update state
     cs_pin.Write(true);
@@ -311,23 +307,13 @@ static daisy::SpiHandle::Result Spi_SendPacket(const uint8_t* tx_buf, size_t pac
     // Clear RX buffer before transaction
     memset(s_rx_dma_buf, 0, packet_size);
     
-    // Ensure cache coherency for DMA on STM32H7 - critical for H7!
-    SCB_CleanDCache_by_Addr((uint32_t*)s_tx_dma_buf, packet_size);
-    SCB_InvalidateDCache_by_Addr((uint32_t*)s_rx_dma_buf, packet_size);
-    
-    // Force memory barrier to ensure cache operations complete before DMA
-    __DSB();
-    __ISB();
+    // Cache operations removed - buffers are in non-cacheable DMA memory
 
     s_tx_inflight = true;
     if (s_hw) s_hw->PrintLine("DAISY: Starting DMA duplex transaction, packet_size=%d", (int)packet_size);
     if (s_hw) s_hw->PrintLine("DAISY: TX buffer contents: %02X %02X %02X %02X %02X %02X %02X %02X", 
                                s_tx_dma_buf[0], s_tx_dma_buf[1], s_tx_dma_buf[2], s_tx_dma_buf[3],
                                s_tx_dma_buf[4], s_tx_dma_buf[5], s_tx_dma_buf[6], s_tx_dma_buf[7]);
-
-    // Cache maintenance for DMA buffers
-    SCB_CleanDCache_by_Addr((uint32_t*)s_tx_dma_buf, packet_size);
-    SCB_InvalidateDCache_by_Addr((uint32_t*)s_rx_dma_buf, packet_size);
     
     // Start DMA duplex transfer
     uint32_t call_start_time = System::GetTick();
@@ -382,7 +368,7 @@ static daisy::SpiHandle::Result Spi_SendPacket(const uint8_t* tx_buf, size_t pac
     }
     
     // Add small delay to prevent overwhelming ESP32
-    System::DelayUs(1000); // 1ms delay between packets
+    System::DelayUs(500); // Reduced from 1000us to 100us for better performance
     
     return dma_result;
 #else
@@ -397,9 +383,15 @@ static daisy::SpiHandle::Result Spi_SendPacket(const uint8_t* tx_buf, size_t pac
     cs_pin.Write(false);
     System::DelayUs(10); // Small delay for setup
 
-    daisy::SpiHandle::Result res = g_spi_handle->BlockingTransmitAndReceive((uint8_t*)tx_buf, rx_buf, packet_size, 1000);
+    uint32_t blocking_start = System::GetTick();
+    daisy::SpiHandle::Result res = g_spi_handle->BlockingTransmitAndReceive((uint8_t*)tx_buf, rx_buf, packet_size, 10); // Reduced from 1000ms to 10ms
+    uint32_t blocking_duration = System::GetTick() - blocking_start;
 
     cs_pin.Write(true);
+    
+    if (s_hw) s_hw->PrintLine("DAISY: Blocking duplex transmit %s, duration=%u ms", 
+                              res == daisy::SpiHandle::Result::OK ? "successful" : "failed",
+                              (unsigned)blocking_duration);
 
     if (res == daisy::SpiHandle::Result::OK) {
         if (s_hw) s_hw->PrintLine("DAISY: Blocking duplex transmit successful");
@@ -1187,9 +1179,7 @@ daisy::SpiHandle::Result Spi_ReceivePacket()
     // Prepare TX buffer with outgoing data if available, otherwise zeros
     WaveX::Comm::PrepareTxBuffer(s_tx_dma_buf, MAX_PKT_SIZE);
     
-    // Ensure cache coherency for DMA on STM32H7
-    SCB_CleanDCache_by_Addr((uint32_t*)s_tx_dma_buf, MAX_PKT_SIZE);
-    SCB_InvalidateDCache_by_Addr((uint32_t*)s_rx_dma_buf, MAX_PKT_SIZE);
+    // Cache operations removed - buffers are in non-cacheable DMA memory
 
     s_duplex_inflight = true;
     if (s_hw) s_hw->PrintLine("DAISY: Starting DMA duplex transaction to receive from ESP32");

@@ -41,6 +41,9 @@ bool IsWavPlaying();
 bool ShouldPumpWavIO();  // Adaptive polling helper
 bool IsPrebufferReady(); // Check if pre-buffering is complete
 
+// Performance monitoring
+void GetIOStats(uint32_t& count, uint32_t& max_duration, uint32_t& last_duration);
+
 // Sample audition control (for Sample Load/Save page)
 bool AuditionSample(const char* path);
 void StopAudition();

@@ -92,10 +92,10 @@ static AuditionState s_audition = {};
 // Uses ARM Cortex-M7 atomic operations and memory barriers for race-condition-free operation
 // This eliminates warbling caused by timing variations between main loop and audio callback
 // Using regular memory for larger buffers - DMA memory was too constrained
-static const uint32_t RB_CAP_FRAMES = 4096; // ~93ms at 44.1k (excellent buffering for smooth playback)
+static const uint32_t RB_CAP_FRAMES = 2048; // ~46ms at 44.1k (better latency) (excellent buffering for smooth playback)
 static volatile uint32_t s_rb_head = 0; // write counter (frames) - atomic access with memory barriers
 static volatile uint32_t s_rb_tail = 0; // read counter (frames) - atomic access with memory barriers
-static int16_t s_rb[RB_CAP_FRAMES * 2]; // interleaved L,R - regular memory (larger buffers)
+static int16_t s_rb[RB_CAP_FRAMES * 2] DMA_BUFFER_MEM_SECTION; // interleaved L,R - DMA memory (8KB, fits comfortably)
 
 // Pre-buffering system for smooth playback start
 static const uint32_t PREBUFFER_FRAMES = 1024; // ~23ms at 44.1kHz (much more responsive for auditioning)
@@ -110,6 +110,12 @@ static uint8_t s_sd_buffer[SD_BUFFER_SIZE]; // SD read buffer in regular memory
 static uint32_t s_sd_buffer_pos = 0; // Current position in SD buffer
 static uint32_t s_sd_buffer_frames = 0; // Number of frames available in SD buffer
 static bool s_sd_buffer_valid = false; // Whether SD buffer contains valid data
+// Audio performance instrumentation
+static uint32_t s_io_start_time = 0;
+static uint32_t s_io_duration = 0;
+static uint32_t s_max_io_duration = 0;
+static uint32_t s_io_count = 0;
+static uint32_t s_last_io_log = 0;
 static uint32_t s_last_io_time = 0; // Last time we did SD I/O (for rate limiting)
 
 // Resampling temporarily disabled
@@ -152,7 +158,21 @@ static bool prebuffer_audio()
     
     // Read from SD card
     UINT br = 0;
+    s_io_start_time = System::GetTick(); // Start timing
     FRESULT fr = f_read(&s_wav.file, s_sd_buffer, req_bytes, &br);
+    s_io_duration = System::GetTick() - s_io_start_time; // End timing
+    
+    // Track I/O performance
+    s_io_count++;
+    if (s_io_duration > s_max_io_duration) {
+        s_max_io_duration = s_io_duration;
+    }
+    
+    // Log I/O performance every 100 operations
+    if (s_io_count % 100 == 0) {
+        if (s_hw) s_hw->PrintLine("SD I/O Stats: count=%u, max_duration=%u ms, last_duration=%u ms", 
+                                   (unsigned)s_io_count, (unsigned)s_max_io_duration, (unsigned)s_io_duration);
+    }
     
     if (fr != FR_OK || br == 0) {
         #if WAVEX_DAISY_SD_DEBUG
@@ -648,6 +668,13 @@ bool IsWavPlaying()
 bool IsPrebufferReady()
 {
     return s_prebuffer_ready;
+}
+
+void GetIOStats(uint32_t& count, uint32_t& max_duration, uint32_t& last_duration)
+{
+    count = s_io_count;
+    max_duration = s_max_io_duration;
+    last_duration = s_io_duration;
 }
 
 bool ShouldPumpWavIO()
