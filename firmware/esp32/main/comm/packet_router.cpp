@@ -96,6 +96,14 @@ void PacketRouter::route_by_message_type(uint8_t msg_type, const uint8_t* payloa
             }
             break;
 
+        case WaveX::Protocol::MSG_WAVE_CHUNK:
+            {
+                WaveX::Protocol::WaveChunkMessage msg;
+                memcpy(&msg, payload, sizeof(msg));
+                handle_wave_chunk(msg, payload, payload_len);
+            }
+            break;
+
         case WaveX::Protocol::MSG_BROWSE_RESP:
             // Browse responses are handled differently - they don't have message type in payload
             ESP_LOGI("packet_router", "Browse response received: %zu bytes", payload_len);
@@ -120,6 +128,7 @@ void PacketRouter::route_by_message_type(uint8_t msg_type, const uint8_t* payloa
 
         default:
             ESP_LOGW("packet_router", "Unknown message type: 0x%02X", msg_type);
+            handle_unknown_message(msg_type, payload, payload_len);
             break;
     }
 }
@@ -167,7 +176,24 @@ void PacketRouter::handle_meter_push(const WaveX::Protocol::MeterPushMessage& ms
 void PacketRouter::handle_browse_resp(const uint8_t* data, size_t length)
 {
     ESP_LOGI("packet_router", "Browse response: %zu bytes", length);
-    // TODO: Implement browse response handling
+    
+    // Log raw payload for debugging (first 64 bytes)
+    ESP_LOGI("packet_router", "Browse response payload (first 64 bytes):");
+    for (int i = 0; i < (int)length && i < 64; i++) {
+        if (i % 16 == 0) {
+            ESP_LOGI("packet_router", "  %04X: ", i);
+        }
+        ESP_LOGI("packet_router", "%02X ", data[i]);
+        if (i % 16 == 15) {
+            ESP_LOGI("packet_router", "");
+        }
+    }
+    if (length % 16 != 0) {
+        ESP_LOGI("packet_router", "");
+    }
+    
+    // Forward browse response to inter_mcu system for callback handling
+    inter_mcu_invoke_browse_resp_callback(data, length);
 }
 
 void PacketRouter::handle_sample_status(const WaveX::Protocol::SampleStatusMessage& msg)
@@ -180,6 +206,30 @@ void PacketRouter::handle_error(const WaveX::Protocol::ErrorMessage& msg)
 {
     ESP_LOGE("packet_router", "Error: code=0x%02X, message=%s", msg.code, msg.msg);
     // TODO: Implement error handling
+}
+
+void PacketRouter::handle_wave_chunk(const WaveX::Protocol::WaveChunkMessage& msg, const uint8_t* payload, size_t length)
+{
+    ESP_LOGI("packet_router", "Wave chunk: offset=%u, count=%u", msg.offset, msg.count);
+    
+    // Validate payload size matches expected size
+    size_t expected_size = sizeof(WaveX::Protocol::WaveChunkMessage) + msg.count * sizeof(int16_t);
+    if (length >= expected_size) {
+        const int16_t* samples = reinterpret_cast<const int16_t*>(payload + sizeof(WaveX::Protocol::WaveChunkMessage));
+        
+        // TODO: Forward wave chunk data to audio processing system
+        // For now, just log the first few samples for debugging
+        ESP_LOGD("packet_router", "Wave chunk samples (first 4): %d, %d, %d, %d", 
+                 samples[0], samples[1], samples[2], samples[3]);
+    } else {
+        ESP_LOGW("packet_router", "Wave chunk payload size mismatch: expected %zu, got %zu", expected_size, length);
+    }
+}
+
+void PacketRouter::handle_unknown_message(uint8_t type, const uint8_t* payload, size_t length)
+{
+    ESP_LOGW("packet_router", "Unknown message type: 0x%02X, payload length: %zu", type, length);
+    (void)payload; // Suppress unused parameter warning
 }
 
 } // namespace Comm

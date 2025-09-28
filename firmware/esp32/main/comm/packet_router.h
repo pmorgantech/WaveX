@@ -36,9 +36,11 @@ private:
     void handle_sync(const WaveX::Protocol::SyncMessage& msg);
     void handle_heartbeat(const WaveX::Protocol::HeartbeatMessage& msg);
     void handle_meter_push(const WaveX::Protocol::MeterPushMessage& msg);
+    void handle_wave_chunk(const WaveX::Protocol::WaveChunkMessage& msg, const uint8_t* payload, size_t length);
     void handle_browse_resp(const uint8_t* data, size_t length);
     void handle_sample_status(const WaveX::Protocol::SampleStatusMessage& msg);
     void handle_error(const WaveX::Protocol::ErrorMessage& msg);
+    void handle_unknown_message(uint8_t type, const uint8_t* payload, size_t length);
     
     // Statistics callback
     std::function<void(uint8_t)> m_stats_callback;

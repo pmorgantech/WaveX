@@ -8,7 +8,7 @@ set(FIRMWARE_NAME wavex-daisy)
 set(FIRMWARE_SOURCES
     src/main.cpp
     src/config.hpp
-    src/comm/inter_spi.cpp
+    src/comm/daisy_spi_link.cpp
     src/audio/audio_adapter.cpp
     src/audio/audio_engine.cpp
     src/storage/fs_browse.cpp

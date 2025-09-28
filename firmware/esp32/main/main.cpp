@@ -27,7 +27,7 @@ typedef int esp_err_t;
 
 // Bring in the SPI link API
 #if WAVEX_SPI_LINK_ENABLED
-#include "links/spi_link.h"
+#include "links/esp_spi_link.h"
 #endif
 
 static const char *TAG = "WaveX-ESP32";

@@ -379,42 +379,17 @@ static bool refresh_file_list(wavex_file_browser_t* browser)
     }
 }
 
-// Parse browse response from Daisy using flexible packet format
+// Parse browse response from Daisy using payload format (not full packet)
 static bool parse_browse_response(const uint8_t* data, size_t length, wavex_file_entry_t* entries, uint32_t* count)
 {
-    if (!data || length < 7) { // Minimum size for unified packet (5 header + 2 CRC)
-        ESP_LOGE(TAG, "Browse response too short: %d bytes", (int)length);
+    if (!data || length < sizeof(BrowseRespHeader)) {
+        ESP_LOGE(TAG, "Browse response payload too short: %d bytes (need at least %d)", (int)length, (int)sizeof(BrowseRespHeader));
         *count = 0;
         return false;
     }
 
-    // Parse as unified packet format: flags_size(1) + msg_type(1) + seq(2) + reserved(1) + payload + crc(2)
-    // Validate unified packet format
-    if (!ProtocolHandler::ValidateWaveXPacket(data, length)) {
-        ESP_LOGE(TAG, "Invalid unified packet CRC");
-        *count = 0;
-        return false;
-    }
-
-    // Extract packet info using unified format
-    uint8_t msg_type, flags;
-    uint16_t sequence_number;
-    uint8_t payload[MAX_PAYLOAD_SIZE];
-    size_t payload_size;
-
-    if (!ProtocolHandler::ParseWaveXPacket(data, length, msg_type, static_cast<void*>(payload), payload_size, sequence_number, flags)) {
-        ESP_LOGE(TAG, "Failed to parse unified packet");
-        *count = 0;
-        return false;
-    }
-
-    // Check if this is a browse response message
-    if (msg_type != WaveX::Protocol::MSG_BROWSE_RESP) {
-        ESP_LOGE(TAG, "Wrong message type: expected browse response, got 0x%02X", msg_type);
-        *count = 0;
-        return false;
-    }
-    const BrowseRespHeader* browse_header = (const BrowseRespHeader*)payload;
+    // Parse payload directly: BrowseRespHeader + FileEntryWire entries
+    const BrowseRespHeader* browse_header = (const BrowseRespHeader*)data;
     uint32_t total_count = browse_header->total_count;
     uint8_t n_entries = browse_header->n;
 
@@ -422,18 +397,25 @@ static bool parse_browse_response(const uint8_t* data, size_t length, wavex_file
     
     // Debug: Show raw payload data
     ESP_LOGI(TAG, "Raw payload (first 64 bytes):");
-    for (int i = 0; i < 64 && i < (int)(length - 5); i++) { // Skip flexible packet header (5 bytes)
+    for (int i = 0; i < 64 && i < (int)length; i++) {
         if (i % 16 == 0) ESP_LOGI(TAG, "");
-        ESP_LOGI(TAG, "%02X ", payload[i]);
+        ESP_LOGI(TAG, "%02X ", data[i]);
     }
     ESP_LOGI(TAG, "");
 
+    // Validate we have enough data for the header + entries
+    size_t expected_size = sizeof(BrowseRespHeader) + (n_entries * sizeof(FileEntryWire));
+    if (length < expected_size) {
+        ESP_LOGE(TAG, "Browse response payload too short: got %d bytes, expected %d", (int)length, (int)expected_size);
+        *count = 0;
+        return false;
+    }
+
     // Parse file entries
     uint32_t parsed_count = 0;
-    const FileEntryWire* wire_entries = (const FileEntryWire*)(payload + sizeof(BrowseRespHeader));
+    const FileEntryWire* wire_entries = (const FileEntryWire*)(data + sizeof(BrowseRespHeader));
 
-    // ESP_LOGI(TAG, "Starting file entry parsing: n_entries=%u, max_count=%u", n_entries, *count);
-    // ESP_LOGI(TAG, "Wire entries pointer: %p, payload offset: %d", wire_entries, (int)(payload - data + sizeof(BrowseRespHeader)));
+    ESP_LOGI(TAG, "Starting file entry parsing: n_entries=%u, max_count=%u", n_entries, *count);
 
     for (uint8_t i = 0; i < n_entries && parsed_count < *count; i++) {
         const FileEntryWire* wire = &wire_entries[i];
@@ -443,7 +425,7 @@ static bool parse_browse_response(const uint8_t* data, size_t length, wavex_file
 
         // Copy to our file entry structure
         wavex_file_entry_t* entry = &entries[parsed_count++];
-        entry->is_directory = wire->is_dir;
+        entry->is_directory = wire->is_dir != 0;
         entry->size_bytes = wire->size_bytes;
         strncpy(entry->name, wire->name, sizeof(entry->name) - 1);
         entry->name[sizeof(entry->name) - 1] = '\0';
@@ -460,78 +442,39 @@ static bool parse_browse_response(const uint8_t* data, size_t length, wavex_file
     return true;
 }
 
-// Parse browse response with pagination information
+// Parse browse response with pagination information using payload format
 static bool parse_browse_response_with_pagination(const uint8_t* data, size_t length, wavex_file_entry_t* entries, uint32_t* count, uint32_t* total_files, uint8_t* current_page_entries)
 {
-    if (!data || length < 6) { // Minimum size for any packet format
-        ESP_LOGE(TAG, "Browse response too short: %d bytes", (int)length);
+    if (!data || length < sizeof(BrowseRespHeader)) {
+        ESP_LOGE(TAG, "Browse response payload too short: %d bytes (need at least %d)", (int)length, (int)sizeof(BrowseRespHeader));
         *count = 0;
         *total_files = 0;
         *current_page_entries = 0;
         return false;
     }
 
-    // All packets now use unified packet format
-    if (length < 7) { // Minimum size for unified packet (5 header + 2 CRC)
-        ESP_LOGE(TAG, "Unified packet browse response too short: %d bytes", (int)length);
-        *count = 0;
-        *total_files = 0;
-        *current_page_entries = 0;
-        return false;
-    }
-    
-    // Validate unified packet format
-    if (!ProtocolHandler::ValidateWaveXPacket(data, length)) {
-        ESP_LOGE(TAG, "Invalid unified packet CRC");
-        *count = 0;
-        *total_files = 0;
-        *current_page_entries = 0;
-        return false;
-    }
+    ESP_LOGI(TAG, "Parsing browse response payload: %d bytes", (int)length);
 
-    // Extract packet info using unified format
-    uint8_t msg_type, flags;
-    uint16_t sequence_number;
-    uint8_t payload[MAX_PAYLOAD_SIZE];
-    size_t payload_size;
-
-    if (!ProtocolHandler::ParseWaveXPacket(data, length, msg_type, static_cast<void*>(payload), payload_size, sequence_number, flags)) {
-        ESP_LOGE(TAG, "Failed to parse unified packet");
-        *count = 0;
-        *total_files = 0;
-        *current_page_entries = 0;
-        return false;
-    }
-
-    // Check if this is a browse response message
-    if (msg_type != MSG_BROWSE_RESP) {
-        ESP_LOGE(TAG, "Wrong message type: expected browse response, got 0x%02X", msg_type);
-        *count = 0;
-        *total_files = 0;
-        *current_page_entries = 0;
-        return false;
-    }
-
-    ESP_LOGI(TAG, "Parsing unified packet format browse response: payload_size=%d", (int)payload_size);
-
-    // Validate payload length
-    if (payload_size < sizeof(BrowseRespHeader)) {
-        ESP_LOGE(TAG, "Payload too short for BrowseRespHeader: %d bytes", (int)payload_size);
-        *count = 0;
-        *total_files = 0;
-        *current_page_entries = 0;
-        return false;
-    }
-    
-    const BrowseRespHeader* browse_header = (const BrowseRespHeader*)payload;
+    // Parse payload directly: BrowseRespHeader + FileEntryWire entries
+    const BrowseRespHeader* browse_header = (const BrowseRespHeader*)data;
     *total_files = browse_header->total_count;
     *current_page_entries = browse_header->n;
 
     ESP_LOGI(TAG, "Browse response: total_count=%lu, n_entries=%u", (unsigned long)*total_files, *current_page_entries);
     
+    // Validate we have enough data for the header + entries
+    size_t expected_size = sizeof(BrowseRespHeader) + (*current_page_entries * sizeof(FileEntryWire));
+    if (length < expected_size) {
+        ESP_LOGE(TAG, "Browse response payload too short: got %d bytes, expected %d", (int)length, (int)expected_size);
+        *count = 0;
+        *total_files = 0;
+        *current_page_entries = 0;
+        return false;
+    }
+    
     // Parse file entries
     uint32_t parsed_count = 0;
-    const FileEntryWire* wire_entries = (const FileEntryWire*)(payload + sizeof(BrowseRespHeader));
+    const FileEntryWire* wire_entries = (const FileEntryWire*)(data + sizeof(BrowseRespHeader));
 
     ESP_LOGI(TAG, "Starting file entry parsing: n_entries=%u, max_count=%u", *current_page_entries, *count);
 

@@ -7,7 +7,7 @@
 
 **Solution**: Changed ESP32 IRQ configuration to rising-edge (`GPIO_INTR_POSEDGE`) so it triggers when Daisy releases the IRQ line (goes from low to high).
 
-**File**: `firmware/esp32/main/links/spi_link.cpp`
+**File**: `firmware/esp32/main/links/esp_spi_link.cpp`
 ```cpp
 // Before: .intr_type = GPIO_INTR_NEGEDGE
 // After:  .intr_type = GPIO_INTR_POSEDGE
@@ -21,7 +21,7 @@
 - Release IRQ line high after sending data
 - This allows Daisy to know when ESP32 has data ready
 
-**File**: `firmware/esp32/main/links/spi_link.cpp`
+**File**: `firmware/esp32/main/links/esp_spi_link.cpp`
 ```cpp
 // Signal Daisy that we have data
 gpio_set_level((gpio_num_t)PIN_IRQ_ESP2DAISY, 0);
@@ -39,7 +39,7 @@ gpio_set_level((gpio_num_t)PIN_IRQ_ESP2DAISY, 1);
 - Only poll for RX data every 100th iteration
 - This reduces CPU overhead while maintaining responsiveness
 
-**File**: `firmware/esp32/main/links/spi_link.cpp`
+**File**: `firmware/esp32/main/links/esp_spi_link.cpp`
 ```cpp
 // Before: const TickType_t tout = pdMS_TO_TICKS(2);
 // After:  const TickType_t tout = pdMS_TO_TICKS(10);

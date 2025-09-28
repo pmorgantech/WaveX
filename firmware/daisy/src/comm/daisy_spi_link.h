@@ -27,6 +27,9 @@ bool Spi_HasPendingData(void);
 // New function to handle polling and processing of queued messages
 void ProcessQueuedSpiMessage(void);
 
+// Timeout check function for DMA operations
+void Spi_CheckTimeout(void);
+
 // Message processing function
 // void ProcessEsp32Message(uint8_t type, uint8_t flags, const uint8_t* payload, uint8_t len); // No longer needed
 

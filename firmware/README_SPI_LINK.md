@@ -37,7 +37,7 @@ The system can switch between SPI and UART using configuration macros:
 
 #### Daisy (Slave)
 ```cpp
-// Configure these pins in firmware/daisy/src/comm/inter_spi.h
+// Configure these pins in firmware/daisy/src/comm/daisy_spi_link.h
 #define PIN_IRQ_DAISY2ESP  (/* your GPIO here */)
 #define PIN_SPI_SCK        (/* your SPI SCK pin */)
 #define PIN_SPI_MOSI       (/* your SPI MOSI pin */)
@@ -87,7 +87,7 @@ The system uses lock-free ring buffers for efficient packet queuing:
 ### ESP32-S3 Side
 
 ```cpp
-#include "spi_link.h"
+#include "esp_spi_link.h"
 
 // Initialize SPI link
 esp_err_t ret = spi_link_init();
@@ -122,7 +122,7 @@ while (spi_link_recv(&packet)) {
 ### Daisy Side
 
 ```cpp
-#include "comm/inter_spi.h"
+#include "comm/daisy_spi_link.h"
 
 // Initialize SPI link
 WaveX::Comm::Spi_Init(hw);

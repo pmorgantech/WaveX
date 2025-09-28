@@ -1,13 +1,14 @@
 #include "inter_mcu.h"
 #include "comm/statistics.h"
 #include "comm/shared_packet_handler.h"
-#include "links/spi_link.h"
+#include "links/esp_spi_link.h"
 #include "../../shared/spi_protocol/protocol.h"
 #include "../../shared/config/link_config.h"
 #include <string.h>
 
 #ifdef ESP_PLATFORM
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
@@ -27,25 +28,9 @@ static bool s_spi_started = false;
 // Statistics tracking
 static StatisticsManager s_statistics;
 
-// Task handles
-#ifdef ESP_PLATFORM
-static TaskHandle_t s_rx_task_handle = NULL;
-static TaskHandle_t s_tx_task_handle = NULL;
-#else
-static void* s_rx_task_handle = NULL;
-static void* s_tx_task_handle = NULL;
-#endif
-
 // Communication state
 static volatile bool s_suspended = false;
 static volatile bool s_initialized = false;
-
-// Task functions
-static void rx_task(void* arg);
-static void tx_task(void* arg);
-
-// Helper function declarations
-static esp_err_t create_tasks();
 
 esp_err_t inter_mcu_init()
 {
@@ -87,14 +72,7 @@ esp_err_t inter_mcu_start()
     }
     
     s_spi_started = true;
-    
-    // Start RX/TX tasks
-    ret = create_tasks();
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to create tasks");
-        return ret;
-    }
-    
+
     ESP_LOGI(TAG, "Inter-MCU communication started successfully");
     
     return ESP_OK;
@@ -374,86 +352,6 @@ void inter_mcu_increment_packet_stat(uint8_t packet_type)
     s_statistics.increment_packet_stat(packet_type);
 }
 
-esp_err_t create_tasks()
-{
-    #ifdef ESP_PLATFORM
-    // Create RX task
-    BaseType_t ret = xTaskCreatePinnedToCore(rx_task, "inter_mcu_rx", 4096, NULL, 3, &s_rx_task_handle, 1);
-    if (ret != pdPASS) {
-        ESP_LOGE(TAG, "Failed to create RX task");
-        return -1; // ESP_FAIL
-    }
-    
-    // Create TX task
-    ret = xTaskCreatePinnedToCore(tx_task, "inter_mcu_tx", 4096, NULL, 3, &s_tx_task_handle, 1);
-    if (ret != pdPASS) {
-        ESP_LOGE(TAG, "Failed to create TX task");
-        return -1; // ESP_FAIL
-    }
-    #endif
-    
-    ESP_LOGI(TAG, "Inter-MCU tasks created successfully");
-    return ESP_OK;
-}
-
-void stop_tasks()
-{
-    #ifdef ESP_PLATFORM
-    if (s_rx_task_handle) {
-        vTaskDelete(s_rx_task_handle);
-        s_rx_task_handle = NULL;
-    }
-    
-    if (s_tx_task_handle) {
-        vTaskDelete(s_tx_task_handle);
-        s_tx_task_handle = NULL;
-    }
-    #endif
-    
-    ESP_LOGI(TAG, "Inter-MCU tasks stopped");
-}
-
-// Task functions
-void rx_task(void* arg)
-{
-    ESP_LOGI(TAG, "Inter-MCU RX task started");
-    
-    while (true) {
-        if (s_suspended) {
-            #ifdef ESP_PLATFORM
-            vTaskDelay(pdMS_TO_TICKS(10));
-            #endif
-            continue;
-        }
-        
-        // For SPI slave mode, packets are processed directly in the slave task
-        // This RX task is mainly for future use with other link types
-        // Just sleep for a while since SPI slave handles everything
-        #ifdef ESP_PLATFORM
-        vTaskDelay(pdMS_TO_TICKS(100));  // 100ms delay - SPI slave is self-contained
-        #endif
-    }
-}
-
-void tx_task(void* arg)
-{
-    ESP_LOGI(TAG, "Inter-MCU TX task started");
-    
-    while (true) {
-        if (s_suspended) {
-            #ifdef ESP_PLATFORM
-            vTaskDelay(pdMS_TO_TICKS(10));
-            #endif
-            continue;
-        }
-        
-        // TX task is mainly for future use - SPI handles most communication
-        #ifdef ESP_PLATFORM
-        vTaskDelay(pdMS_TO_TICKS(10));
-        #endif
-    }
-}
-
 // Process control messages received from Daisy (backend)
 void inter_mcu_process_daisy_control_message(uint8_t type, const uint8_t* payload, uint8_t len)
 {
@@ -528,16 +426,30 @@ void inter_mcu_process_daisy_control_message(uint8_t type, const uint8_t* payloa
 
 esp_err_t inter_mcu_send_browse_req(const char* path, uint8_t start_index)
 {
+    ESP_LOGI("inter_mcu", "DEBUG - inter_mcu_send_browse_req called: path='%s', start_index=%d", path ? path : "NULL", start_index);
+    
     if (!s_initialized) {
+        ESP_LOGE("inter_mcu", "inter_mcu not initialized");
         return -1; // ESP_ERR_INVALID_STATE
+    }
+    
+    if (!path) {
+        ESP_LOGE("inter_mcu", "path is NULL");
+        return -1;
     }
     
     size_t path_len = strlen(path);
     if (path_len > 18) path_len = 18; // Limit to packet payload size
     
+    ESP_LOGI("inter_mcu", "DEBUG - path_len=%d", (int)path_len);
+    
     uint8_t payload[20];
+    memset(payload, 0, sizeof(payload)); // Initialize to zeros
     payload[0] = start_index;
-    memcpy(&payload[1], path, path_len);
+    
+    if (path_len > 0) {
+        memcpy(&payload[1], path, path_len);
+    }
     
     // Debug: Log what we're sending
     ESP_LOGI("inter_mcu", "DEBUG - Sending browse request: start_index=%d, path='%s'", start_index, path);
@@ -546,7 +458,10 @@ esp_err_t inter_mcu_send_browse_req(const char* path, uint8_t start_index)
         ESP_LOGI("inter_mcu", "  [%d] = 0x%02X ('%c')", i, payload[i], (payload[i] >= 32 && payload[i] <= 126) ? payload[i] : '.');
     }
     
+    ESP_LOGI("inter_mcu", "DEBUG - About to call spi_link_send with MSG_BROWSE_REQ=0x%02X", WaveX::Protocol::MSG_BROWSE_REQ);
     int result = spi_link_send(WaveX::Protocol::MSG_BROWSE_REQ, payload, path_len + 1);
+    ESP_LOGI("inter_mcu", "DEBUG - spi_link_send returned: %d", result);
+    
     return result ? ESP_OK : -1; // ESP_FAIL
 }
 

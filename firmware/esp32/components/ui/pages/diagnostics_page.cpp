@@ -7,7 +7,7 @@
 #include "freertos/task.h"
 
 #include "comm/statistics.h"
-#include "links/spi_link.h"
+#include "links/esp_spi_link.h"
 #include "inter_mcu.h"
 #include "ui_task.h" // For wavex_ui_create_meter_display
 

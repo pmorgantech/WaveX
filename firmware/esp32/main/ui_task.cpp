@@ -21,7 +21,7 @@
 #include "pages/diagnostics_page.h"
 #include "inter_mcu.h"
 #include "comm/statistics.h"
-#include "links/spi_link.h"
+#include "links/esp_spi_link.h"
 #include "sample_load_save.h"
  
 // LVGL includes
