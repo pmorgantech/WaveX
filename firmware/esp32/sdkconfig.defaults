@@ -1,223 +1,36 @@
-# ESP32-S3 WaveX Configuration Defaults
-
-# Set target chip
+    # This file was generated using idf.py save-defconfig. It can be edited manually.
+    # Espressif IoT Development Framework (ESP-IDF) 5.5.1 Project Minimal Configuration
+    #
+    # default:
 CONFIG_IDF_TARGET="esp32p4"
-CONFIG_IDF_TARGET_ESP32P4=y
-
-# Serial port configuration
-# Note: In ESP-IDF v5.5.1, port and baudrate are specified via command line:
-# idf.py -p /dev/ttyACM0 -b 2000000 flash
-
-# Flash size configuration - Updated to 16MB
+CONFIG_BOOTLOADER_LOG_LEVEL_WARN=y
 CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
-CONFIG_ESPTOOLPY_FLASHSIZE="16MB"
 CONFIG_ESPTOOLPY_HEADER_FLASHSIZE_UPDATE=y
-
-# Compiler optimization
+CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_COMPILER_OPTIMIZATION_PERF=y
 CONFIG_COMPILER_OPTIMIZATION_ASSERTIONS_DISABLE=y
-
-# FreeRTOS configuration
-CONFIG_FREERTOS_HZ=1000
-# CONFIG_FREERTOS_UNICORE is not set
-
-# SPI configuration  
 CONFIG_SPI_MASTER_IN_IRAM=y
-CONFIG_SPI_MASTER_ISR_IN_IRAM=y
-
-# CRITICAL: Memory Layout Optimization to prevent fragmentation
-# Increase main task stack size for debugging (was 16384)
+CONFIG_DMA2D_OPERATION_FUNC_IN_IRAM=y
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_SPIRAM_XIP_FROM_PSRAM=y
+CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
+CONFIG_CACHE_L2_CACHE_256KB=y
+CONFIG_CACHE_L2_CACHE_LINE_128B=y
+CONFIG_ESP_SYSTEM_PANIC_PRINT_HALT=y
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=32768
+CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
 CONFIG_ESP_INT_WDT_TIMEOUT_MS=5000
-
-# Optimize stack sizes to reduce memory fragmentation
-CONFIG_FREERTOS_IDLE_TASK_STACK_SIZE=1024   # Reduced from 1536
-
-# Drastically reduce system task stack sizes
-CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE=1536  # Reduced from 4096
-CONFIG_LWIP_TCPIP_TASK_STACK_SIZE=1536        # Reduced from 4096  
-CONFIG_ESP_TIMER_TASK_STACK_SIZE=1536         # Reduced from 3584
-CONFIG_ESP_IPC_TASK_STACK_SIZE=1024           # Reduced from 1280
-
-## LVGL fonts
-CONFIG_LV_FONT_MONTSERRAT_14=y
+CONFIG_ESP_TASK_WDT_INIT=n
+CONFIG_FREERTOS_HZ=1000
+CONFIG_LWIP_MAX_SOCKETS=4
+CONFIG_LWIP_TCPIP_RECVMBOX_SIZE=16
+CONFIG_MBEDTLS_TLS_DISABLED=y
+CONFIG_VFS_MAX_COUNT=4
 CONFIG_LV_FONT_MONTSERRAT_18=y
 CONFIG_LV_FONT_MONTSERRAT_22=y
 CONFIG_LV_FONT_MONTSERRAT_24=y
 CONFIG_LV_FONT_MONTSERRAT_32=y
 CONFIG_LV_FONT_MONTSERRAT_36=y
-
-
-# PSRAM Configuration - ENABLED for MIPI DSI display
-CONFIG_SPIRAM=y
-CONFIG_SPIRAM_MODE_HEX=y
-CONFIG_SPIRAM_TYPE_AUTO=y
-CONFIG_SPIRAM_USE_MALLOC=y
-CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=16384   # Keep critical allocations < 64KB in internal RAM for DMA performance
-CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=32768  # Reserve 128KB internal RAM for system use
-CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
-CONFIG_SPIRAM_CACHE_WORKAROUND=y
-
-# added for MIPI DSI optimization
-CONFIG_SPIRAM_XIP_FROM_PSRAM=y
-CONFIG_CACHE_L2_CACHE_256KB=y
-CONFIG_CACHE_L2_CACHE_LINE_128B=y
-CONFIG_COMPILER_OPTIMIZATION_PERF=y
-CONFIG_DMA2D_OPERATION_FUNC_IN_IRAM=y
-
-# Additional MIPI DSI performance optimizations
-CONFIG_ESP_LCD_MIPI_DSI_IRAM_OPTIMIZATION=y
-CONFIG_ESP_LCD_MIPI_DSI_DMA_OPTIMIZATION=y
-CONFIG_ESP_LCD_MIPI_DSI_BURST_MODE=y
-
-# Watchdog configuration - Extended timeout for development and debugging
-CONFIG_ESP_TASK_WDT_INIT=n
-CONFIG_ESP_TASK_WDT_TIMEOUT_S=30
-CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU0=y
-CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU1=y
-
-# Power Management - Disable to avoid USB issues and screen going black
-CONFIG_PM_ENABLE=n
-CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
-CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
-
-# USB Configuration for stability
-CONFIG_TINYUSB_CDC_ENABLED=y
-CONFIG_TINYUSB_CDC_RX_BUFSIZE=256
-CONFIG_TINYUSB_CDC_TX_BUFSIZE=256
-
-## LVGL removed (LGFX-only UI)
-
-# Disable wireless features to save memory
-CONFIG_BT_ENABLED=n
-CONFIG_ESP_WIFI_ENABLED=n
-
-# Disable TLS/SSL features to save memory
-CONFIG_MBEDTLS_TLS_DISABLED=y
-
-# Memory optimization - Reduce various buffer sizes
-CONFIG_ESP_TIMER_TASK_STACK_SIZE=1536
-CONFIG_ESP_IPC_TASK_STACK_SIZE=1024
-
-# Reduce FreeRTOS timer task stack
-CONFIG_FREERTOS_TIMER_TASK_STACK_DEPTH=1024
-
-# Disable GDB stub to save memory
-CONFIG_ESP_GDBSTUB_ENABLED=n
-
-# Disable core dump to save memory  
-CONFIG_ESP_COREDUMP_ENABLE_TO_NONE=y
-
-# Disable performance monitoring to save memory
-CONFIG_ESP_TIMER_PROFILING=n
-
-# Disable ultra-low power features to save memory
-CONFIG_ULP_COPROC_ENABLED=n
-
-# Optimize wear levelling
-CONFIG_WL_SECTOR_SIZE_4096=y
-CONFIG_WL_SECTOR_SIZE=4096
-
-# Optimize VFS to save memory
-CONFIG_VFS_SUPPORT_SELECT=y
-CONFIG_VFS_MAX_COUNT=4
-
-# Enable maximum logging for debugging boot issues
-CONFIG_LOG_DEFAULT_LEVEL_DEBUG=n
-CONFIG_LOG_MAXIMUM_LEVEL=4
-
-# Enable debug logging for all components during boot debugging
-CONFIG_LOG_DEFAULT_LEVEL=2
-CONFIG_BOOTLOADER_LOG_LEVEL_DEBUG=n
-CONFIG_LOG_BOOTLOADER_LEVEL_WARN=y
-
-# Reduce LWIP memory usage
-CONFIG_LWIP_MAX_SOCKETS=4
-CONFIG_LWIP_TCP_RECVMBOX_SIZE=4
-CONFIG_LWIP_UDP_RECVMBOX_SIZE=4
-CONFIG_LWIP_TCPIP_RECVMBOX_SIZE=16
-
-# Additional memory optimizations
-CONFIG_NEWLIB_STDOUT_LINE_ENDING_CRLF=y
-CONFIG_NEWLIB_STDIN_LINE_ENDING_CR=y
-
-# Optimize compiler for size where memory is critical
-CONFIG_COMPILER_OPTIMIZATION_SIZE=n
-CONFIG_COMPILER_OPTIMIZATION_PERF=y
-
-# Ensure minimal memory footprint for components
-CONFIG_BOOTLOADER_COMPILER_OPTIMIZATION_SIZE=y
-CONFIG_BOOTLOADER_LOG_LEVEL=2
-
-# Use custom partition table with multiple partitions
-CONFIG_PARTITION_TABLE_CUSTOM=y
-CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
-
-# Note: mDNS and SNTP configurations are not available in ESP-IDF 5.2
-# These components are not built by default and don't have config options
-# in the main sdkconfig. They would need to be added as components if needed. 
-
-# Enable dual-core operation
-# CONFIG_FREERTOS_UNICORE is not set 
-CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_360=y
-
-# Disable potentially problematic features
-CONFIG_ESP_SYSTEM_PANIC_PRINT_HALT=y
-CONFIG_ESP_SYSTEM_PANIC_PRINT_REBOOT=n
-
-# Ensure bootloader doesn't hang
-CONFIG_BOOTLOADER_WDT_TIME_MS=9000
-
-# Disable USB-related features that might cause issues
-CONFIG_ESP_CONSOLE_USB_CDC=n
-CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=n
-CONFIG_ESP_CONSOLE_UART_DEFAULT=y
-
-#
-# UI (LovyanGFX)
-#
-# Disable LovyanGFX init for ESP32-P4 bring-up
-CONFIG_UI_LGFX_ENABLE_INIT=n
-# end of UI (LovyanGFX)
-
-#
-# BSP Display Configuration for Waveshare 5-DSI-TOUCH-A
-#
-# Enable the correct LCD type for HX8394 720x1280 5-inch display
-CONFIG_BSP_LCD_TYPE_720_1280_5_INCH_A=y
 CONFIG_BSP_LCD_DPI_BUFFER_NUMS=3
-
-# Ensure other LCD types are disabled to avoid conflicts
-# CONFIG_BSP_LCD_TYPE_800_1280_10_1_INCH is not set
-# CONFIG_BSP_LCD_TYPE_800_1280_10_1_INCH_A is not set
-# CONFIG_BSP_LCD_TYPE_800_1280_8_INCH_A is not set
-# CONFIG_BSP_LCD_TYPE_720_1280_7_INCH_A is not set
-# CONFIG_BSP_LCD_TYPE_480_640_2_8_INCH is not set
-# CONFIG_BSP_LCD_TYPE_800_800_3_4_INCH_C is not set
-# CONFIG_BSP_LCD_TYPE_720_720_4_INCH_C is not set
-# CONFIG_BSP_LCD_TYPE_480_800_4_INCH is not set
-# CONFIG_BSP_LCD_TYPE_720_1280_5_INCH_D is not set
-# CONFIG_BSP_LCD_TYPE_720_1560_6_25_INCH is not set
-# CONFIG_BSP_LCD_TYPE_1024_600_5_INCH_C is not set
-# CONFIG_BSP_LCD_TYPE_1024_600_7_INCH_C is not set
-# CONFIG_BSP_LCD_TYPE_400_1280_7_9_INCH is not set
-# CONFIG_BSP_LCD_TYPE_1280_800_7_INCH_E is not set
-# CONFIG_BSP_LCD_TYPE_1280_800_8_INCH_C is not set
-# CONFIG_BSP_LCD_TYPE_1280_800_10_1_INCH_C is not set
-# CONFIG_BSP_LCD_TYPE_480_1920_8_8_INCH is not set
-# CONFIG_BSP_LCD_TYPE_320_1480_11_9_INCH is not set
-
-# Set optimized bitrate for 5-inch HX8394 display (increased from 1500)
-# HX8394 supports up to 1000 Mbps per lane, ESP32-P4 supports up to 4000 Mbps
-# Using 2000 Mbps for better performance while staying well within limits
-CONFIG_BSP_LCD_MIPI_DSI_LANE_BITRATE_MBPS=2000
-
-# Additional MIPI DSI optimizations for higher refresh rates
-CONFIG_BSP_LCD_MIPI_DSI_HSYNC_BACK_PORCH=50
-CONFIG_BSP_LCD_MIPI_DSI_HSYNC_FRONT_PORCH=50
-CONFIG_BSP_LCD_MIPI_DSI_HSYNC_PULSE_WIDTH=20
-CONFIG_BSP_LCD_MIPI_DSI_VSYNC_BACK_PORCH=20
-CONFIG_BSP_LCD_MIPI_DSI_VSYNC_FRONT_PORCH=20
-CONFIG_BSP_LCD_MIPI_DSI_VSYNC_PULSE_WIDTH=10
-
-CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_BSP_LCD_TYPE_720_1280_5_INCH_A=y
