@@ -198,6 +198,8 @@ int main(void)
     HAL_NVIC_SetPriority(SPI1_IRQn, 12, 0);
     HAL_NVIC_SetPriority(DMA2_Stream2_IRQn, 10, 0); // SPI1 DMA RX
     HAL_NVIC_SetPriority(DMA2_Stream3_IRQn, 10, 0); // SPI1 DMA TX
+    HAL_NVIC_EnableIRQ(DMA1_Stream2_IRQn);
+    HAL_NVIC_EnableIRQ(DMA1_Stream3_IRQn);
     
     WAVEX_LOG_DAISY(INTER_MCU_LINK, "Interrupt priorities configured: Audio DMA=5/6, SPI DMA=10");
     #endif
