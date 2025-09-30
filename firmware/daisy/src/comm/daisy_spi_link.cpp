@@ -1278,6 +1278,7 @@ daisy::SpiHandle::Result Spi_ReceivePacket()
 // ATTN Pin Interrupt Handler (outside namespace)
 // ============================================================================
 
+static volatile bool s_interrupt_processing = false;
 extern "C" void EXTI15_10_IRQHandler(void)
 {
     // Check if this interrupt is from our attention pin (D0/PB12)
@@ -1286,11 +1287,13 @@ extern "C" void EXTI15_10_IRQHandler(void)
         __HAL_GPIO_EXTI_CLEAR_IT(GPIO_PIN_12);
         
         // Check if attention pin is high (ESP32 signaling data ready)
-        if (attn_pin.Read()) {
+        if (attn_pin.Read() && !s_interrupt_processing) {
             if (s_hw) s_hw->PrintLine("DAISY: ATTN interrupt - ESP32 has data ready");
             
             // Initiate non-blocking DMA duplex transaction to receive data
+            s_interrupt_processing = true;
             WaveX::Comm::Spi_ReceivePacket();
+            s_interrupt_processing = false;
         }
     }
 }
