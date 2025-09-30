@@ -18,58 +18,17 @@
 #include "daisy_core.h" // For DMA_BUFFER_MEM_SECTION
 #include "stm32h7xx_hal.h" // For SCB cache maintenance functions and STM32 HAL GPIO and interrupt functions
 #include "stm32h7xx_hal_cortex.h" // For SCB cache maintenance functions
-#include "../../shared/config/link_config.h" // For HD protocol command macros
-#include "../../shared/config/pin_config.h" // For Daisy SPI pin definitions
-#include "../../shared/spi_protocol/protocol.h" // For protocol functions
-#include "../../shared/config/logging_config.h" // For logging macros
+#include "config/link_config.h" // For HD protocol command macros
+#include "config/pin_config.h" // For Daisy SPI pin definitions
+#include "spi_protocol/protocol.h" // For protocol functions
+#include "config/logging_config.h" // For logging macros
 #include "../storage/fs_browse.h" // For file browsing
 #include "../audio/audio_engine.h" // For sample audition
+#include "daisy_spi_message_handlers.h" // For message handlers
+#include "daisy_spi_filesystem.h" // For filesystem function declarations
 
 using namespace daisy;
 using namespace WaveX::Protocol;
-
-// Stub FileSystem namespace for compilation
-namespace WaveX {
-namespace Storage {
-class FileSystem {
-public:
-    static bool GetFilePathByIndex(uint32_t file_index, char* file_path, size_t max_len);
-};
-} // namespace Storage
-} // namespace WaveX
-
-// Forward declarations for message processing functions
-static void ProcessSyncMessage(const uint8_t* payload, size_t payload_size);
-static void ProcessControlChangeMessage(const uint8_t* payload, size_t payload_size);
-static void ProcessNoteMessage(const uint8_t* payload, size_t payload_size);
-static void ProcessNoteOffMessage(const uint8_t* payload, size_t payload_size);
-static void ProcessSampleLoadMessage(const uint8_t* payload, size_t payload_size);
-static void ProcessSampleControlMessage(const uint8_t* payload, size_t payload_size);
-static void ProcessPreviewRequestMessage(const uint8_t* payload, size_t payload_size);
-static void ProcessDataRequestMessage(const uint8_t* payload, size_t payload_size);
-static void ProcessMeterPushMessage(const uint8_t* payload, size_t payload_size);
-static void ProcessWaveChunkMessage(const uint8_t* payload, size_t payload_size);
-static void ProcessHeartbeatMessage(const uint8_t* payload, size_t payload_size);
-static void ProcessBrowseResponseMessage(const uint8_t* payload, size_t payload_size);
-static void ProcessSamplePlayRequestMessage(const uint8_t* payload, size_t payload_size);
-static void ProcessSamplePlayIndexRequestMessage(const uint8_t* payload, size_t payload_size);
-static void ProcessSampleStopRequestMessage(const uint8_t* payload, size_t payload_size);
-static void ProcessSampleStatusMessage(const uint8_t* payload, size_t payload_size);
-
-static void ProcessSampleGetPathRequestMessage(const uint8_t* payload, size_t payload_size);
-static void ProcessSampleGetPathResponseMessage(const uint8_t* payload, size_t payload_size);
-static void ProcessAckMessage(const uint8_t* payload, size_t payload_size);
-static void ProcessErrorMessage(const uint8_t* payload, size_t payload_size);
-
-// Use flexible packet structures
-#define CMD_PKT_SIZE PKT_SIZE_32
-#define DATA_PKT_SIZE PKT_SIZE_1024  // Increased from 256 to 1024 bytes
-#define MAX_PKT_SIZE 2048  // Support up to 2KB packets
-
-// Fixed-size packet typedefs removed - using flexible packet system only
-
-// Legacy compatibility - use command packet size as default
-#define CTRL_PKT_SIZE CMD_PKT_SIZE
 
 // Use shared CRC function
 #define crc16_ccitt ProtocolHandler::CalculateSpiCrc
@@ -96,7 +55,7 @@ static size_t get_packet_size(const uint8_t* packet_data) {
 // Module-level static variables
 // ============================================================================
 
-static daisy::DaisySeed* s_hw = NULL;
+daisy::DaisySeed* s_hw = NULL;
 static daisy::SpiHandle* g_spi_handle = NULL;
 static daisy::GPIO cs_pin;
 static daisy::GPIO attn_pin;
@@ -109,50 +68,9 @@ static volatile bool g_esp32_attention_flag = false; // Flag for ESP32 attention
 
 // Outgoing message queue (Daisy → ESP32)
 
-// Directory state for file browsing
-static char s_current_directory[96] = "/";
-static WaveX::Storage::FileEntry s_current_file_entries[50]; // Increased to accommodate more files
-static size_t s_current_file_count = 0;
-static bool s_directory_state_valid = false;
-
 // Message deduplication - simple approach for single-threaded execution
 static uint8_t s_last_processed_packet[32] = {0};
 static bool s_has_last_packet = false;
-
-// Implementation of FileSystem::GetFilePathByIndex
-namespace WaveX {
-namespace Storage {
-bool FileSystem::GetFilePathByIndex(uint32_t file_index, char* file_path, size_t max_len) {
-    // Use cached directory state to get file path by index
-    if (!s_directory_state_valid || file_index >= s_current_file_count) {
-        return false; // No valid directory state or index out of range
-    }
-    
-    const WaveX::Storage::FileEntry& entry = s_current_file_entries[file_index];
-    
-    // Build full path: current_directory + "/" + filename
-    size_t dir_len = strlen(s_current_directory);
-    size_t name_len = strlen(entry.name);
-    
-    // Check if we have enough space
-    if (dir_len + 1 + name_len + 1 > max_len) {
-        return false; // Path too long
-    }
-    
-    // Build the path
-    strcpy(file_path, s_current_directory);
-    
-    // Add "/" if current directory is not root and doesn't end with "/"
-    if (strcmp(s_current_directory, "/") != 0 && s_current_directory[dir_len - 1] != '/') {
-        strcat(file_path, "/");
-    }
-    
-    strcat(file_path, entry.name);
-    
-    return true;
-}
-} // namespace Storage
-} // namespace WaveX
 
 // Forward declarations will be inside namespace
 
@@ -525,13 +443,7 @@ void Spi_Init(daisy::DaisySeed &hw, daisy::SpiHandle* hspi)
 // ESP32 Message Processing
 // ============================================================================
 
-// Forward declarations for message processing functions
-static void ProcessBrowseRequest(const char* path, size_t start_index, uint8_t max_entries = 20);
-static void ProcessSamplePlayRequest(const char* file_path);
-static void ProcessSampleStopRequest();
-static void ProcessSamplePlayIndexRequest(uint32_t file_index);
-static void ProcessSampleGetPathRequest(uint32_t file_index);
-static void ClearDirectoryState();
+// Forward declarations for functions called from message handlers
 
 static void ProcessSpiMessageByType(uint8_t msg_type, uint16_t sequence_number, const uint8_t* payload, size_t payload_size)
 {
@@ -657,242 +569,9 @@ static void ProcessBrowseRequestMessage(const uint8_t* payload, size_t payload_s
                        path, start_index, max_entries);
     }
 
-    ProcessBrowseRequest(path, start_index, max_entries);
+    WaveX::Comm::ProcessBrowseRequest(path, start_index, max_entries);
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-// Stub implementations for all message processing functions
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-// Process browse request (existing function - updated for new format)
-static void ProcessBrowseRequest(const char* path, size_t start_index, uint8_t max_entries)
-{
-    using namespace WaveX::Storage;
-    using namespace WaveX::Protocol;
-
-    WAVEX_LOG_DAISY_MESSAGE(DAISY_SPI_MESSAGE, "IN MSG BROWSE_REQ path=%s start_index=%zu max_entries=%u", 
-                           path, start_index, max_entries);
-
-    // Allocate buffer for file entries
-    FileEntry entries[32]; // Max 32 entries per response
-    size_t actual_max_entries = (max_entries > 32) ? 32 : max_entries;
-    
-    size_t total_count = 0;
-    size_t entries_written = 0;
-    
-    // Get directory listing from FatFS
-    bool success = ListDir(path, entries, actual_max_entries, total_count, start_index, entries_written);
-    
-    if (!success) {
-        WAVEX_LOG_DAISY_MESSAGE(DAISY_SPI_MESSAGE, "Failed to list directory: %s", path);
-        return;
-    }
-    
-    WAVEX_LOG_DAISY_MESSAGE(DAISY_SPI_MESSAGE, "Directory listing: total=%zu written=%zu", total_count, entries_written);
-    
-    // Cache the directory state for index-based lookups
-    strncpy(s_current_directory, path, sizeof(s_current_directory) - 1);
-    s_current_directory[sizeof(s_current_directory) - 1] = '\0';
-    
-    // Cache all entries (not just the paginated ones)
-    if (start_index == 0) {
-        // If this is the first page, cache all entries
-        size_t all_entries_count = 0;
-        FileEntry all_entries[50];
-        ListDir(path, all_entries, 50, total_count, 0, all_entries_count);
-        
-        s_current_file_count = all_entries_count;
-        for (size_t i = 0; i < all_entries_count && i < 50; i++) {
-            s_current_file_entries[i] = all_entries[i];
-        }
-        s_directory_state_valid = true;
-        
-        if (s_hw) {
-            s_hw->PrintLine("DAISY: Cached directory state: %zu entries from '%s'", all_entries_count, path);
-        }
-    }
-    
-    // Convert FileEntry to FileEntryWire for transmission
-    FileEntryWire wire_entries[32];
-    for (size_t i = 0; i < entries_written; i++) {
-        wire_entries[i].is_dir = entries[i].is_dir;
-        wire_entries[i].size_bytes = entries[i].size_bytes;
-        strncpy(wire_entries[i].name, entries[i].name, sizeof(wire_entries[i].name) - 1);
-        wire_entries[i].name[sizeof(wire_entries[i].name) - 1] = '\0';
-    }
-    
-    // Create browse response packet
-    uint8_t response_buffer[MAX_PKT_SIZE];
-    size_t pkt_size = ProtocolHandler::CreateBrowseRespPacket(response_buffer, sizeof(response_buffer),
-                                                           total_count, wire_entries, entries_written);
-    
-    if (pkt_size > 0) {
-        // Send response back to ESP32
-        if (s_hw) s_hw->PrintLine("DAISY: Creating browse response packet, size=%d, entries=%zu", (int)pkt_size, entries_written);
-        int result = Spi_SendPreCreatedPacket(response_buffer, pkt_size);
-        if (result) {
-            WAVEX_LOG_DAISY_MESSAGE(DAISY_SPI_MESSAGE, "Sent browse response: %zu entries", entries_written);
-            if (s_hw) s_hw->PrintLine("DAISY: Browse response queued successfully, outgoing_count=%d", outgoing_count);
-        } else {
-            WAVEX_LOG_DAISY_MESSAGE(DAISY_SPI_MESSAGE, "Failed to send browse response");
-            if (s_hw) s_hw->PrintLine("DAISY: Failed to queue browse response");
-        }
-    } else {
-        WAVEX_LOG_DAISY_MESSAGE(DAISY_SPI_MESSAGE, "Failed to create browse response packet");
-        if (s_hw) s_hw->PrintLine("DAISY: Failed to create browse response packet");
-    }
-}
-
-// Process sample play request (existing function)
-static void ProcessSamplePlayRequest(const char* file_path)
-{
-    using namespace WaveX::Protocol;
-
-    // ESP32 requesting sample audition
-    if (s_hw) {
-        s_hw->PrintLine("DAISY: Processing MSG_SAMPLE_PLAY_REQ for file: '%s'", file_path);
-    }
-
-    // Start sample audition
-    bool success = WaveX::AudioEngine::AuditionSample(file_path);
-
-    // Send status response
-    if (success) {
-        WaveX::Protocol::SampleStatusMessage status;
-        status.state = 1; // playing
-        status.sample_rate = 44100; // TODO: get actual sample rate
-        status.channels = 2; // TODO: get actual channels
-        status.frames_played = 0;
-
-        uint8_t response_buffer[MAX_PKT_SIZE];
-    size_t pkt_size = WaveX::Protocol::ProtocolHandler::CreateSampleStatusPacket(response_buffer, sizeof(response_buffer), status);
-    Spi_SendPreCreatedPacket(response_buffer, pkt_size);
-    }
-}
-
-// Process sample stop request (existing function)
-static void ProcessSampleStopRequest()
-{
-    using namespace WaveX::Protocol;
-
-    // ESP32 requesting to stop sample audition
-    if (s_hw) {
-        s_hw->PrintLine("DAISY: Processing MSG_SAMPLE_STOP_REQ");
-    }
-
-    // Stop sample audition
-    WaveX::AudioEngine::StopAudition();
-
-    // Send status response
-    WaveX::Protocol::SampleStatusMessage status;
-    status.state = 0; // stopped
-    status.sample_rate = 0;
-    status.channels = 0;
-    status.frames_played = 0;
-
-    uint8_t response_buffer[MAX_PKT_SIZE];
-    size_t pkt_size = WaveX::Protocol::ProtocolHandler::CreateSampleStatusPacket(response_buffer, sizeof(response_buffer), status);
-    Spi_SendPreCreatedPacket(response_buffer, pkt_size);
-}
-
-// Process sample play index request (existing function)
-static void ProcessSamplePlayIndexRequest(uint32_t file_index)
-{
-    using namespace WaveX::Storage;
-    using namespace WaveX::Protocol;
-
-    if (s_hw) {
-        s_hw->PrintLine("DAISY: Processing sample play index request for index %lu", (unsigned long)file_index);
-    }
-
-    // Get file path for index
-    char file_path[200] = {0};
-    if (FileSystem::GetFilePathByIndex(file_index, file_path, sizeof(file_path))) {
-        if (s_hw) {
-            s_hw->PrintLine("DAISY: Playing sample at path: '%s'", file_path);
-        }
-
-        // Start sample audition
-        bool success = WaveX::AudioEngine::AuditionSample(file_path);
-
-        // Send status response
-        WaveX::Protocol::SampleStatusMessage status;
-        status.state = success ? 1 : 0; // playing or stopped
-        status.sample_rate = 44100; // TODO: get actual sample rate
-        status.channels = 2; // TODO: get actual channels
-        status.frames_played = 0;
-        
-        uint8_t response_buffer[MAX_PKT_SIZE];
-        size_t pkt_size = WaveX::Protocol::ProtocolHandler::CreateSampleStatusPacket(response_buffer, sizeof(response_buffer), status);
-        Spi_SendPreCreatedPacket(response_buffer, pkt_size);
-    } else {
-    if (s_hw) {
-            s_hw->PrintLine("DAISY: Failed to get file path for index %lu", (unsigned long)file_index);
-        }
-    }
-}
-
-// Process sample get path request (existing function)
-static void ProcessSampleGetPathRequest(uint32_t file_index)
-{
-    using namespace WaveX::Storage;
-    using namespace WaveX::Protocol;
-
-    if (s_hw) {
-        s_hw->PrintLine("DAISY: Processing sample get path request for index %lu", (unsigned long)file_index);
-    }
-
-    // Get file path for index
-    char file_path[200] = {0};
-    if (FileSystem::GetFilePathByIndex(file_index, file_path, sizeof(file_path))) {
-        WaveX::Protocol::SamplePathResponseMessage response;
-    response.index = file_index;
-        strncpy(response.path, file_path, sizeof(response.path) - 1);
-    response.path[sizeof(response.path) - 1] = '\0';
-    
-        uint8_t response_buffer[MAX_PKT_SIZE];
-    size_t pkt_size = WaveX::Protocol::ProtocolHandler::CreateSamplePathResponsePacket(response_buffer, sizeof(response_buffer), response);
-    Spi_SendPreCreatedPacket(response_buffer, pkt_size);
-    } else {
-        if (s_hw) {
-            s_hw->PrintLine("DAISY: Failed to get file path for index %lu", (unsigned long)file_index);
-        }
-    }
-}
 
 // Clear directory state (existing function)
 static void ClearDirectoryState()
@@ -1298,115 +977,7 @@ extern "C" void EXTI15_10_IRQHandler(void)
     }
 }
 
-// Stub implementations for message processing functions (outside namespace)
-static void ProcessSyncMessage(const uint8_t* payload, size_t payload_size) {
-    if (s_hw) s_hw->PrintLine("DAISY: ProcessSyncMessage called - payload_size=%d", (int)payload_size);
-}
-
-static void ProcessControlChangeMessage(const uint8_t* payload, size_t payload_size) {
-    if (s_hw) s_hw->PrintLine("DAISY: ProcessControlChangeMessage called - payload_size=%d", (int)payload_size);
-}
-
-static void ProcessNoteMessage(const uint8_t* payload, size_t payload_size) {
-    if (s_hw) s_hw->PrintLine("DAISY: ProcessNoteMessage called - payload_size=%d", (int)payload_size);
-}
-
-static void ProcessNoteOffMessage(const uint8_t* payload, size_t payload_size) {
-    if (s_hw) s_hw->PrintLine("DAISY: ProcessNoteOffMessage called - payload_size=%d", (int)payload_size);
-}
-
-static void ProcessSampleLoadMessage(const uint8_t* payload, size_t payload_size) {
-    if (s_hw) s_hw->PrintLine("DAISY: ProcessSampleLoadMessage called - payload_size=%d", (int)payload_size);
-}
-
-static void ProcessSampleControlMessage(const uint8_t* payload, size_t payload_size) {
-    if (s_hw) s_hw->PrintLine("DAISY: ProcessSampleControlMessage called - payload_size=%d", (int)payload_size);
-}
-
-static void ProcessPreviewRequestMessage(const uint8_t* payload, size_t payload_size) {
-    if (s_hw) s_hw->PrintLine("DAISY: ProcessPreviewRequestMessage called - payload_size=%d", (int)payload_size);
-}
-
-static void ProcessDataRequestMessage(const uint8_t* payload, size_t payload_size) {
-    if (s_hw) s_hw->PrintLine("DAISY: ProcessDataRequestMessage called - payload_size=%d", (int)payload_size);
-}
-
-static void ProcessMeterPushMessage(const uint8_t* payload, size_t payload_size) {
-    if (s_hw) s_hw->PrintLine("DAISY: ProcessMeterPushMessage called - payload_size=%d", (int)payload_size);
-}
-
-static void ProcessWaveChunkMessage(const uint8_t* payload, size_t payload_size) {
-    if (s_hw) s_hw->PrintLine("DAISY: ProcessWaveChunkMessage called - payload_size=%d", (int)payload_size);
-}
-
-static void ProcessHeartbeatMessage(const uint8_t* payload, size_t payload_size) {
-    if (s_hw) s_hw->PrintLine("DAISY: ProcessHeartbeatMessage called - payload_size=%d", (int)payload_size);
-}
-
-static void ProcessBrowseResponseMessage(const uint8_t* payload, size_t payload_size) {
-    if (s_hw) s_hw->PrintLine("DAISY: ProcessBrowseResponseMessage called - payload_size=%d", (int)payload_size);
-}
-
-static void ProcessSamplePlayRequestMessage(const uint8_t* payload, size_t payload_size) {
-    if (s_hw) s_hw->PrintLine("DAISY: ProcessSamplePlayRequestMessage called - payload_size=%d", (int)payload_size);
-    // Parse the payload to extract file path
-    if (payload_size > 0) {
-        const char* file_path = reinterpret_cast<const char*>(payload);
-        WaveX::Comm::ProcessSamplePlayRequest(file_path);
-    }
-}
-
-static void ProcessSampleStopRequestMessage(const uint8_t* payload, size_t payload_size) {
-    if (s_hw) s_hw->PrintLine("DAISY: ProcessSampleStopRequestMessage called - payload_size=%d", (int)payload_size);
-    WaveX::Comm::ProcessSampleStopRequest();
-}
-
-static void ProcessSampleStatusMessage(const uint8_t* payload, size_t payload_size) {
-    if (s_hw) s_hw->PrintLine("DAISY: ProcessSampleStatusMessage called - payload_size=%d", (int)payload_size);
-}
-
-static void ProcessSamplePlayIndexRequestMessage(const uint8_t* payload, size_t payload_size) {
-    if (s_hw) s_hw->PrintLine("DAISY: ProcessSamplePlayIndexRequestMessage called - payload_size=%d", (int)payload_size);
-    
-    // Parse the SamplePlayIndexMessage structure
-    if (payload_size >= sizeof(WaveX::Protocol::SamplePlayIndexMessage)) {
-        const WaveX::Protocol::SamplePlayIndexMessage* msg = 
-            reinterpret_cast<const WaveX::Protocol::SamplePlayIndexMessage*>(payload);
-        
-        if (s_hw) {
-            s_hw->PrintLine("DAISY: Parsed sample play index request - index=%lu", (unsigned long)msg->index);
-        }
-        
-        WaveX::Comm::ProcessSamplePlayIndexRequest(msg->index);
-    } else {
-        if (s_hw) {
-            s_hw->PrintLine("DAISY: Invalid payload size for SamplePlayIndexMessage: %d (expected %d)", 
-                           (int)payload_size, (int)sizeof(WaveX::Protocol::SamplePlayIndexMessage));
-        }
-    }
-}
-
-static void ProcessSampleGetPathRequestMessage(const uint8_t* payload, size_t payload_size) {
-    if (s_hw) s_hw->PrintLine("DAISY: ProcessSampleGetPathRequestMessage called - payload_size=%d", (int)payload_size);
-}
-
-static void ProcessSampleGetPathResponseMessage(const uint8_t* payload, size_t payload_size) {
-    if (s_hw) s_hw->PrintLine("DAISY: ProcessSampleGetPathResponseMessage called - payload_size=%d", (int)payload_size);
-}
-
-static void ProcessAckMessage(const uint8_t* payload, size_t payload_size) {
-    if (s_hw) s_hw->PrintLine("DAISY: ProcessAckMessage called - payload_size=%d", (int)payload_size);
-
-    // ACK messages typically have minimal payload - just log for now
-    // The actual ACK processing (sequence numbers, etc.) is handled at the packet level
-    // in ProcessReceivedPacket before we get here
-    
-    if (s_hw) s_hw->PrintLine("DAISY: ACK message payload processing completed");
-}
-
-static void ProcessErrorMessage(const uint8_t* payload, size_t payload_size) {
-    if (s_hw) s_hw->PrintLine("DAISY: ProcessErrorMessage called - payload_size=%d", (int)payload_size);
-}
+// Message processing stub implementations moved to daisy_spi_message_handlers.cpp
 
 // Process queued SPI messages (public API function)
 void WaveX::Comm::ProcessQueuedSpiMessage()

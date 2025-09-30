@@ -9,6 +9,8 @@ set(FIRMWARE_SOURCES
     src/main.cpp
     src/config.hpp
     src/comm/daisy_spi_link.cpp
+    src/comm/daisy_spi_message_handlers.cpp
+    src/comm/daisy_spi_filesystem.cpp
     src/audio/audio_adapter.cpp
     src/audio/audio_engine.cpp
     src/storage/fs_browse.cpp

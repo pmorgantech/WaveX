@@ -37,8 +37,6 @@ static const char *TAG = "esp_spi_link";
 // Logging component identifier
 #define ESP32_INTER_SPI 1
 
-#define CTRL_PKT_SIZE PKT_SIZE_32
-#define MAX_PKT_SIZE 2048  // Support up to 2KB packets
 #define SPI_OPERATIONS_TIMEOUT_MS 1200
 
 // Use new unified packet system
