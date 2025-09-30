@@ -39,7 +39,7 @@
 // Include BSP header for display functions
 #include "bsp/esp32_p4_nano.h"
  
-#define LV_TICK_PERIOD_MS 10
+#define LV_TICK_PERIOD_MS 5
  
  static const char *TAG = "UI_TASK";
  
@@ -1508,7 +1508,7 @@ static void menu_button_event_cb(lv_event_t *e)
         adaptive_refresh_control();
         
         // Short delay to prevent excessive CPU usage
-        vTaskDelay(pdMS_TO_TICKS(8)); // 8ms delay for 120 FPS theoretical maximum
+        vTaskDelay(pdMS_TO_TICKS(32)); // 32ms delay for 30 FPS theoretical maximum
     }
  }
  
