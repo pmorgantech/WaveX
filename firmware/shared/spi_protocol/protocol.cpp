@@ -5,6 +5,9 @@
 namespace WaveX {
 namespace Protocol {
 
+// Sequence number management - one per platform
+static uint16_t s_next_seq_num = 1; // Start from 1, 0 is reserved
+
 // New simplified packet system functions - single unified format
 
 // Get packet size from size code (4 bits)
@@ -66,6 +69,17 @@ bool ProtocolHandler::ValidateWaveXPacket(const uint8_t* buffer, size_t buffer_s
     uint16_t calculated_crc = CalculateWaveXCrc(buffer, buffer_size - 2);
     uint16_t received_crc = buffer[buffer_size - 2] | (buffer[buffer_size - 1] << 8);
     return calculated_crc == received_crc;
+}
+
+// Core packet creation with automatic sequence number management
+size_t ProtocolHandler::CreatePacket(uint8_t* buffer, size_t buffer_size,
+                                    uint8_t msg_type, const void* payload, size_t payload_size,
+                                    uint8_t flags) {
+    // Get next sequence number and increment it
+    uint16_t seq_num = s_next_seq_num++;
+    
+    // Use the existing CreateWaveXPacket method
+    return CreateWaveXPacket(buffer, buffer_size, msg_type, payload, payload_size, seq_num, flags);
 }
 
 // Single packet creation function for all message types
@@ -147,8 +161,8 @@ void ProtocolHandler::ZeroPadPacket(uint8_t* packet_data, size_t packet_size, si
 // Generic packet creation function - DRY principle
 static size_t CreateUnifiedPacket(uint8_t* buffer, size_t buffer_size,
                                 uint8_t msg_type, const void* payload_data, size_t payload_size,
-                                uint16_t sequence_number = 0, uint8_t flags = 0) {
-    return ProtocolHandler::CreateWaveXPacket(buffer, buffer_size, msg_type, payload_data, payload_size, sequence_number, flags);
+                                uint8_t flags = 0) {
+    return ProtocolHandler::CreatePacket(buffer, buffer_size, msg_type, payload_data, payload_size, flags);
 }
 
 // Create error packet using unified packet system
@@ -169,8 +183,8 @@ size_t ProtocolHandler::CreateBrowseRespPacket(uint8_t* buffer, size_t buffer_si
     // Calculate payload size: total_count (4 bytes) + n_entries (1 byte) + entries array
     size_t payload_size = sizeof(uint32_t) + sizeof(uint8_t) + (size_t)n * sizeof(FileEntryWire);
 
-    // Create temporary payload buffer
-    uint8_t temp_payload[1024]; // Should be large enough for most cases
+    // Create temporary payload buffer - increased size to handle max entries
+    uint8_t temp_payload[2048]; // Increased from 1024 to 2048 bytes to handle 20+ entries
     if (payload_size > sizeof(temp_payload)) {
         return 0; // Payload too large
     }
@@ -254,13 +268,13 @@ size_t ProtocolHandler::CreateMeterPushPacket(uint8_t* buffer, size_t buffer_siz
 // Create sync packet using unified packet system - force 32-byte packets for SPI
 size_t ProtocolHandler::CreateSyncPacket(uint8_t* buffer, size_t buffer_size,
                                         const SyncMessage& msg) {
-    return CreateWaveXPacket(buffer, buffer_size, MSG_SYNC, &msg, sizeof(SyncMessage), 0, 0);
+    return CreatePacket(buffer, buffer_size, MSG_SYNC, &msg, sizeof(SyncMessage), 0);
 }
 
 // Create heartbeat packet using unified packet system - force 32-byte packets for SPI
 size_t ProtocolHandler::CreateHeartbeatPacket(uint8_t* buffer, size_t buffer_size,
                                             const HeartbeatMessage& msg) {
-    return CreateWaveXPacket(buffer, buffer_size, MSG_HEARTBEAT, &msg, sizeof(HeartbeatMessage), 0, 0);
+    return CreatePacket(buffer, buffer_size, MSG_HEARTBEAT, &msg, sizeof(HeartbeatMessage), 0);
 }
 
 // Create ACK packet using unified packet system

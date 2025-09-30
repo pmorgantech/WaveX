@@ -18,6 +18,7 @@
 #include "daisy_core.h" // For DMA_BUFFER_MEM_SECTION
 #include "stm32h7xx_hal.h" // For SCB cache maintenance functions and STM32 HAL GPIO and interrupt functions
 #include "stm32h7xx_hal_cortex.h" // For SCB cache maintenance functions
+#include "stm32h7xx_hal_crc.h" // For hardware CRC support
 #include "config/link_config.h" // For HD protocol command macros
 #include "config/pin_config.h" // For Daisy SPI pin definitions
 #include "spi_protocol/protocol.h" // For protocol functions
@@ -36,7 +37,8 @@ using namespace WaveX::Protocol;
 // Use new unified packet system functions
 #define get_packet_size_from_code ProtocolHandler::GetPacketSizeFromCode
 #define get_optimal_size_code ProtocolHandler::GetOptimalSizeCode
-#define calculate_wave_crc ProtocolHandler::CalculateWaveXCrc
+// Use hardware CRC when available, fallback to software
+#define calculate_wave_crc calculate_hardware_crc16
 #define validate_wave_packet ProtocolHandler::ValidateWaveXPacket
 #define create_wave_packet ProtocolHandler::CreateWaveXPacket
 #define parse_wave_packet ProtocolHandler::ParseWaveXPacket
@@ -61,6 +63,9 @@ static daisy::GPIO cs_pin;
 static daisy::GPIO attn_pin;
 static WaveX::Comm::spi_link_stats_t s_stats = {};
 
+// Hardware CRC handle for STM32H7
+static CRC_HandleTypeDef hcrc;
+
 static volatile bool g_esp32_attention_flag = false; // Flag for ESP32 attention
 
 // Message queue for received messages (unified for both packet types)
@@ -71,6 +76,97 @@ static volatile bool g_esp32_attention_flag = false; // Flag for ESP32 attention
 // Message deduplication - simple approach for single-threaded execution
 static uint8_t s_last_processed_packet[32] = {0};
 static bool s_has_last_packet = false;
+
+// Sequence number tracking for duplicate detection
+static uint16_t s_last_received_seq = 0;
+static uint16_t s_expected_seq = 1; // Start from 1, 0 is reserved
+static uint32_t s_duplicate_count = 0;
+static uint32_t s_out_of_order_count = 0;
+
+// Check for duplicate packets using sequence numbers
+static bool is_duplicate_packet(uint16_t seq_num)
+{
+    if (seq_num == 0) {
+        // Sequence number 0 is reserved/invalid
+        return true;
+    }
+    
+    if (seq_num == s_last_received_seq) {
+        // Exact duplicate
+        s_duplicate_count++;
+        if (s_hw) s_hw->PrintLine("DAISY: Duplicate packet detected: seq=%u (duplicate count: %u)", seq_num, s_duplicate_count);
+        return true;
+    }
+    
+    // Check for out-of-order packets (allow some tolerance for network reordering)
+    uint16_t expected_min = (s_expected_seq > 10) ? (s_expected_seq - 10) : 1;
+    if (seq_num < expected_min) {
+        s_out_of_order_count++;
+        if (s_hw) s_hw->PrintLine("DAISY: Out-of-order packet: seq=%u, expected>=%u (out-of-order count: %u)", 
+                                  seq_num, expected_min, s_out_of_order_count);
+        return true;
+    }
+    
+    // Update tracking
+    s_last_received_seq = seq_num;
+    s_expected_seq = seq_num + 1;
+    
+    return false;
+}
+
+// Hardware CRC16 calculation using STM32H7 CRC peripheral
+static uint16_t calculate_hardware_crc16(const uint8_t* data, size_t length)
+{
+    if (!data || length == 0) return 0;
+    
+    // Configure CRC for CRC-16-CCITT (polynomial 0x1021)
+    hcrc.Instance = CRC;
+    hcrc.Init.DefaultPolynomialUse = DEFAULT_POLYNOMIAL_DISABLE;
+    hcrc.Init.DefaultInitValueUse = DEFAULT_INIT_VALUE_DISABLE;
+    hcrc.Init.GeneratingPolynomial = 0x1021; // CRC-16-CCITT polynomial
+    hcrc.Init.CRCLength = CRC_POLYLENGTH_16B;
+    hcrc.Init.InitValue = 0xFFFF; // CCITT-FALSE initial value
+    hcrc.Init.InputDataInversionMode = CRC_INPUTDATA_INVERSION_BYTE;
+    hcrc.Init.OutputDataInversionMode = CRC_OUTPUTDATA_INVERSION_ENABLE;
+    hcrc.InputDataFormat = CRC_INPUTDATA_FORMAT_BYTES;
+    
+    if (HAL_CRC_Init(&hcrc) != HAL_OK) {
+        if (s_hw) s_hw->PrintLine("DAISY: Hardware CRC initialization failed");
+        return 0;
+    }
+    
+    // Calculate CRC
+    uint32_t crc_result = HAL_CRC_Calculate(&hcrc, (uint32_t*)data, length);
+    
+    // Return only the lower 16 bits
+    return (uint16_t)(crc_result & 0xFFFF);
+}
+
+// Initialize hardware CRC peripheral
+static bool init_hardware_crc()
+{
+    // Enable CRC clock
+    __HAL_RCC_CRC_CLK_ENABLE();
+    
+    // Initialize CRC handle
+    hcrc.Instance = CRC;
+    hcrc.Init.DefaultPolynomialUse = DEFAULT_POLYNOMIAL_DISABLE;
+    hcrc.Init.DefaultInitValueUse = DEFAULT_INIT_VALUE_DISABLE;
+    hcrc.Init.GeneratingPolynomial = 0x1021; // CRC-16-CCITT polynomial
+    hcrc.Init.CRCLength = CRC_POLYLENGTH_16B;
+    hcrc.Init.InitValue = 0xFFFF; // CCITT-FALSE initial value
+    hcrc.Init.InputDataInversionMode = CRC_INPUTDATA_INVERSION_BYTE;
+    hcrc.Init.OutputDataInversionMode = CRC_OUTPUTDATA_INVERSION_ENABLE;
+    hcrc.InputDataFormat = CRC_INPUTDATA_FORMAT_BYTES;
+    
+    if (HAL_CRC_Init(&hcrc) != HAL_OK) {
+        if (s_hw) s_hw->PrintLine("DAISY: Hardware CRC initialization failed");
+        return false;
+    }
+    
+    if (s_hw) s_hw->PrintLine("DAISY: Hardware CRC16 initialized successfully");
+    return true;
+}
 
 // Forward declarations will be inside namespace
 
@@ -373,6 +469,11 @@ void Spi_Init(daisy::DaisySeed &hw, daisy::SpiHandle* hspi)
     hw.PrintLine("SPI Init: Daisy Master for ESP32 Slave");
     hw.PrintLine("Spi_Init called with hspi=%p", hspi);
     
+    // Initialize hardware CRC peripheral
+    if (!init_hardware_crc()) {
+        hw.PrintLine("WARNING: Hardware CRC initialization failed, falling back to software CRC");
+    }
+    
     if (!hspi) {
         hw.PrintLine("ERROR: SPI handle is null.");
         return;
@@ -448,6 +549,12 @@ void Spi_Init(daisy::DaisySeed &hw, daisy::SpiHandle* hspi)
 static void ProcessSpiMessageByType(uint8_t msg_type, uint16_t sequence_number, const uint8_t* payload, size_t payload_size)
 {
     using namespace WaveX::Protocol;
+
+    // Check for duplicate packets using sequence numbers
+    if (is_duplicate_packet(sequence_number)) {
+        if (s_hw) s_hw->PrintLine("DAISY: Dropping duplicate/out-of-order packet: seq=%u", sequence_number);
+        return;
+    }
 
     // Debug: Log message processing
     if (s_hw) {
@@ -603,9 +710,9 @@ static void PrepareTxBuffer(uint8_t* tx_buf, size_t buf_size)
     } else {
         // No outgoing messages, send a proper "no data" response packet
         uint8_t msg_type = WaveX::Protocol::MSG_ACK;
-        size_t packet_size = WaveX::Protocol::ProtocolHandler::CreateWaveXPacket(
+        size_t packet_size = WaveX::Protocol::ProtocolHandler::CreatePacket(
             tx_buf, buf_size, static_cast<WaveX::Protocol::MessageType>(msg_type),
-            nullptr, 0, 0, PKT_FLAG_ACK  // ACK flag indicates this is an acknowledgment
+            nullptr, 0, PKT_FLAG_ACK  // ACK flag indicates this is an acknowledgment
         );
         
         if (packet_size > 0) {

@@ -658,6 +658,10 @@ void CloseWav()
     s_prebuffer_filled = 0;
     s_prebuffer_ready = false;
     s_prebuffering = false;
+    
+    // Clear ring buffer to stop any remaining audio immediately
+    s_rb_head = 0;
+    s_rb_tail = 0;
 }
 
 bool IsWavPlaying()

@@ -15,6 +15,7 @@
 #include "esp_heap_caps.h"
 #include "esp_timer.h"
 #include "esp_rom_sys.h"
+#include "esp_rom_crc.h" // For hardware CRC support
 #include "driver/gpio.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -39,8 +40,18 @@ static const char *TAG = "esp_spi_link";
 
 #define SPI_OPERATIONS_TIMEOUT_MS 1200
 
+// Hardware CRC16 calculation using ESP32 ROM functions
+static uint16_t calculate_hardware_crc16(const uint8_t* data, size_t length)
+{
+    if (!data || length == 0) return 0;
+    
+    // Use ESP32 ROM CRC-16 function (CCITT polynomial 0x1021)
+    // esp_rom_crc16_le uses little-endian CRC-16 with polynomial 0x1021
+    return esp_rom_crc16_le(0xFFFF, data, length);
+}
+
 // Use new unified packet system
-#define wavex_crc16 ProtocolHandler::CalculateWaveXCrc
+#define wavex_crc16 calculate_hardware_crc16
 #define validate_wave_packet ProtocolHandler::ValidateWaveXPacket
 #define create_wave_packet ProtocolHandler::CreateWaveXPacket
 #define parse_wave_packet ProtocolHandler::ParseWaveXPacket
@@ -59,6 +70,12 @@ static int s_current_rx_index = 0;
 static int s_processing_index = -1; // Index of buffer being processed (-1 = none)
 static uint32_t s_packet_counter = 0; // Track total packets received
 static uint32_t s_last_packet_hash = 0; // Hash of last packet to detect duplicates
+
+// Sequence number tracking for duplicate detection
+static uint16_t s_last_received_seq = 0;
+static uint16_t s_expected_seq = 1; // Start from 1, 0 is reserved
+static uint32_t s_duplicate_count = 0;
+static uint32_t s_out_of_order_count = 0;
 
 // Track whether the last received packet was a one-way packet
 static bool s_last_packet_was_one_way = false;
@@ -90,6 +107,37 @@ static SemaphoreHandle_t s_spi_mutex = NULL;
 static void spi_slave_task(void* pvParameters);
 static esp_err_t allocate_dma_buffers(void);
 static void free_dma_buffers(void);
+
+// Check for duplicate packets using sequence numbers
+static bool is_duplicate_packet(uint16_t seq_num)
+{
+    if (seq_num == 0) {
+        // Sequence number 0 is reserved/invalid
+        return true;
+    }
+    
+    if (seq_num == s_last_received_seq) {
+        // Exact duplicate
+        s_duplicate_count++;
+        ESP_LOGW(TAG, "Duplicate packet detected: seq=%u (duplicate count: %u)", seq_num, s_duplicate_count);
+        return true;
+    }
+    
+    // Check for out-of-order packets (allow some tolerance for network reordering)
+    uint16_t expected_min = (s_expected_seq > 10) ? (s_expected_seq - 10) : 1;
+    if (seq_num < expected_min) {
+        s_out_of_order_count++;
+        ESP_LOGW(TAG, "Out-of-order packet: seq=%u, expected>=%u (out-of-order count: %u)", 
+                 seq_num, expected_min, s_out_of_order_count);
+        return true;
+    }
+    
+    // Update tracking
+    s_last_received_seq = seq_num;
+    s_expected_seq = seq_num + 1;
+    
+    return false;
+}
 
 // Initialize packet router
 static void init_packet_router()
@@ -208,6 +256,12 @@ static void handle_large_packet(const uint8_t* packet_data, size_t packet_len)
     ESP_LOGI(TAG, "Large packet: msg_type=0x%02X, flags=0x%02X, seq=%u, payload_size=%d, total_size=%d",
              msg_type, flags, sequence_number, (int)payload_size, (int)packet_len);
 
+    // Check for duplicate packets using sequence numbers
+    if (is_duplicate_packet(sequence_number)) {
+        ESP_LOGW(TAG, "Dropping duplicate/out-of-order packet: seq=%u", sequence_number);
+        return;
+    }
+
     // Route to unified packet router
     s_packet_router.route_packet(packet_data, packet_len);
 #else
@@ -233,6 +287,12 @@ static void handle_control_message_from_daisy(const uint8_t* packet_data, size_t
 
     ESP_LOGI(TAG, "Received control message from Daisy: msg_type=0x%02X, flags=0x%02X, seq=%u, payload_size=%d",
              msg_type, flags, sequence_number, (int)payload_size);
+
+    // Check for duplicate packets using sequence numbers
+    if (is_duplicate_packet(sequence_number)) {
+        ESP_LOGW(TAG, "Dropping duplicate/out-of-order control message: seq=%u", sequence_number);
+        return;
+    }
 
     // Forward control messages to the inter_mcu layer for processing
     extern void inter_mcu_process_daisy_control_message(uint8_t type, const uint8_t* payload, uint8_t len);

@@ -48,8 +48,10 @@ bool ListDir(const char* path,
         return false; 
     }
 
-    // First pass: count entries (excluding . and .., only WAV files and directories)
-    total_count = 0;
+    // Single pass: collect all valid entries first, then paginate
+    FileEntry all_entries[256]; // Buffer for all entries
+    size_t all_count = 0;
+    
     for(;;)
     {
         fr = f_readdir(&dir, &fno);
@@ -65,54 +67,26 @@ bool ListDir(const char* path,
         bool is_dir = (fno.fattrib & AM_DIR) ? true : false;
         bool is_parent_dir = (strcmp(name, "..") == 0);
         if (is_dir || has_wav_extension(name) || is_parent_dir) {
-            total_count++;
+            if (all_count < 256) { // Prevent buffer overflow
+                FileEntry& e = all_entries[all_count++];
+                e.is_dir     = (is_dir || is_parent_dir) ? 1 : 0;
+                e.size_bytes = e.is_dir ? 0u : (uint32_t)fno.fsize;
+                std::strncpy(e.name, name, sizeof(e.name) - 1);
+                e.name[sizeof(e.name) - 1] = '\0';
+            }
         }
     }
-
-    // Second pass: collect requested page
     f_closedir(&dir);
-    fr = f_opendir(&dir, path);
-    if(fr != FR_OK) { return false; }
-
-    size_t skipped = 0;
+    
+    // Set total count
+    total_count = all_count;
+    
+    // Now paginate the results
     size_t written = 0;
-    for(;;)
-    {
-        fr = f_readdir(&dir, &fno);
-        if(fr != FR_OK || !fno.fname[0]) break;
-#if FF_USE_LFN
-        const char* name = (fno.lfname && fno.lfname[0]) ? fno.lfname : fno.fname;
-#else
-        const char* name = fno.fname;
-#endif
-        if(is_dot_entry(name)) continue;
-        
-        // Include directories, WAV files, and ".." entries
-        bool is_dir = (fno.fattrib & AM_DIR) ? true : false;
-        bool is_parent_dir = (strcmp(name, "..") == 0);
-        if (!is_dir && !has_wav_extension(name) && !is_parent_dir) {
-            continue; // Skip non-WAV files and non-directories (except "..")
-        }
-        
-        if(skipped < start_index) { 
-            skipped++; 
-            continue; 
-        }
-        if(written >= max_entries) break;
-
-        FileEntry& e = out[written++];
-        e.is_dir     = (is_dir || is_parent_dir) ? 1 : 0;
-        e.size_bytes = e.is_dir ? 0u : (uint32_t)fno.fsize;
-        std::strncpy(e.name, name, sizeof(e.name) - 1);
-        e.name[sizeof(e.name) - 1] = '\0';
-        
-        // Debug logging for ".." entries
-        if (is_parent_dir) {
-            // Note: This will be logged by the calling function
-        }
+    for (size_t i = start_index; i < all_count && written < max_entries; i++) {
+        out[written++] = all_entries[i];
     }
-    f_closedir(&dir);
-    // Return the actual number of entries written to the array
+    
     entries_written = written;
     return true;
 }

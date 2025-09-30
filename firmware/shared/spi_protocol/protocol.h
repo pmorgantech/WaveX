@@ -292,6 +292,11 @@ public:
     // New simplified packet system functions
     static size_t GetPacketSizeFromCode(uint8_t size_code);
     static uint8_t GetOptimalSizeCode(size_t payload_size);
+    // Core packet creation with automatic sequence number management
+    static size_t CreatePacket(uint8_t* buffer, size_t buffer_size,
+                              uint8_t msg_type, const void* payload, size_t payload_size,
+                              uint8_t flags = 0);
+    
     static size_t CreateWaveXPacket(uint8_t* buffer, size_t buffer_size,
                                    uint8_t msg_type, const void* payload, size_t payload_size,
                                    uint16_t sequence_number = 0, uint8_t flags = 0);
