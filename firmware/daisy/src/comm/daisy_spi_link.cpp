@@ -345,7 +345,8 @@ static daisy::SpiHandle::Result Spi_SendPacket(const uint8_t* tx_buf, size_t pac
     }
     
     // Add small delay to prevent overwhelming ESP32
-    System::DelayUs(200); // Reduced from 1000us to 100us for better performance
+    // FIXME: This seems to have an effect on whether or not get receive browse_resp packets
+    System::DelayUs(400); // Reduced from 1000us to 400us for better performance
     
     return dma_result;
 #else
@@ -381,20 +382,6 @@ static daisy::SpiHandle::Result Spi_SendPacket(const uint8_t* tx_buf, size_t pac
     return res;
 #endif
 }
-
-// Legacy compatibility function
-static daisy::SpiHandle::Result Spi_SendRaw64(const uint8_t* tx_buf)
-{
-    return Spi_SendPacket(tx_buf, MAX_PKT_SIZE);
-}
-
-
-// Receive path currently unused with regular SPI slave link. Stubbed for now.
-static daisy::SpiHandle::Result Spi_RecvRaw64(uint8_t* /*rx_buf*/)
-{
-    return daisy::SpiHandle::Result::ERR;
-}
-
 
 // ============================================================================
 // Public API Implementation
@@ -677,14 +664,6 @@ static void ProcessBrowseRequestMessage(const uint8_t* payload, size_t payload_s
 }
 
 
-// Clear directory state (existing function)
-static void ClearDirectoryState()
-{
-    if (s_hw) {
-        s_hw->PrintLine("DAISY: Directory state cleared");
-    }
-}
-
 // Prepare TX buffer (existing function)
 static void PrepareTxBuffer(uint8_t* tx_buf, size_t buf_size)
 {
@@ -740,62 +719,6 @@ static bool QueueOutgoingMessage(const uint8_t* packet_data, size_t packet_size)
     
     return true;
 }
-
-// ============================================================================
-// Public API Implementation
-// ============================================================================
-
-bool Spi_SendPreCreatedPacket(const uint8_t* packet_data, size_t packet_size)
-{
-    if (packet_data == NULL || packet_size == 0 || packet_size > MAX_PKT_SIZE) {
-        return false;
-    }
-    
-    return QueueOutgoingMessage(packet_data, packet_size);
-}
-
-void Spi_GetStats(spi_link_stats_t* stats)
-{
-    if (stats) {
-        memcpy(stats, &s_stats, sizeof(s_stats));
-    }
-}
-
-void Spi_DebugState()
-{
-    if (s_hw) {
-        s_hw->PrintLine("DAISY: SPI Debug State");
-        s_hw->PrintLine("  Queue: head=%d, tail=%d, count=%d", queue_head, queue_tail, queue_count);
-        s_hw->PrintLine("  Outgoing: head=%d, tail=%d, count=%d", outgoing_head, outgoing_tail, outgoing_count);
-        s_hw->PrintLine("  Stats: packets_sent=%lu, packets_received=%lu, crc_errors=%lu",
-                        (unsigned long)s_stats.packets_sent,
-                        (unsigned long)s_stats.packets_received, 
-                        (unsigned long)s_stats.crc_errors);
-    }
-}
-
-void Spi_CheckTimeout()
-{
-#if WAVEX_SPI_DMA_ENABLED
-    if (s_tx_inflight) {
-        uint32_t current_time = System::GetTick();
-        uint32_t elapsed = current_time - s_dma_start_time;
-        
-        if (elapsed > DMA_TIMEOUT_MS) {
-            if (s_hw) s_hw->PrintLine("DAISY: DMA timeout after %u ms - forcing abort", elapsed);
-            if (s_hw) s_hw->PrintLine("DAISY: Timeout details: start_time=%u, current_time=%u, inflight=%s", 
-                                     s_dma_start_time, current_time, s_tx_inflight ? "true" : "false");
-            
-            // Force CS high and clear inflight flag
-            cs_pin.Write(true);
-            s_tx_inflight = false;
-            
-            if (s_hw) s_hw->PrintLine("DAISY: DMA timeout recovery - CS deasserted, ready for next packet");
-        }
-    }
-#endif
-}
-
 
 // Process received packet (static function)
 static bool ProcessReceivedPacket(const uint8_t* rx_buf, size_t transfer_size)
@@ -902,7 +825,6 @@ static bool ProcessReceivedPacket(const uint8_t* rx_buf, size_t transfer_size)
     return true;
 }
 
-
 // Perform bidirectional poll (static function) - now non-blocking
 static bool PerformBidirectionalPoll()
 {
@@ -940,11 +862,120 @@ static bool PerformBidirectionalPoll()
 }
 
 
+// ============================================================================
+// Public API Implementation
+// ============================================================================
+
+bool Spi_SendPreCreatedPacket(const uint8_t* packet_data, size_t packet_size)
+{
+    if (packet_data == NULL || packet_size == 0 || packet_size > MAX_PKT_SIZE) {
+        return false;
+    }
+    
+    return QueueOutgoingMessage(packet_data, packet_size);
+}
+
+void Spi_GetStats(spi_link_stats_t* stats)
+{
+    if (stats) {
+        memcpy(stats, &s_stats, sizeof(s_stats));
+    }
+}
+
+void Spi_DebugState()
+{
+    if (s_hw) {
+        s_hw->PrintLine("DAISY: SPI Debug State");
+        s_hw->PrintLine("  Queue: head=%d, tail=%d, count=%d", queue_head, queue_tail, queue_count);
+        s_hw->PrintLine("  Outgoing: head=%d, tail=%d, count=%d", outgoing_head, outgoing_tail, outgoing_count);
+        s_hw->PrintLine("  Stats: packets_sent=%lu, packets_received=%lu, crc_errors=%lu",
+                        (unsigned long)s_stats.packets_sent,
+                        (unsigned long)s_stats.packets_received, 
+                        (unsigned long)s_stats.crc_errors);
+    }
+}
+
+void Spi_CheckTimeout()
+{
+#if WAVEX_SPI_DMA_ENABLED
+    if (s_tx_inflight) {
+        uint32_t current_time = System::GetTick();
+        uint32_t elapsed = current_time - s_dma_start_time;
+        
+        if (elapsed > DMA_TIMEOUT_MS) {
+            if (s_hw) s_hw->PrintLine("DAISY: DMA timeout after %u ms - forcing abort", elapsed);
+            if (s_hw) s_hw->PrintLine("DAISY: Timeout details: start_time=%u, current_time=%u, inflight=%s", 
+                                     s_dma_start_time, current_time, s_tx_inflight ? "true" : "false");
+            
+            // Force CS high and clear inflight flag
+            cs_pin.Write(true);
+            s_tx_inflight = false;
+            
+            if (s_hw) s_hw->PrintLine("DAISY: DMA timeout recovery - CS deasserted, ready for next packet");
+        }
+    }
+#endif
+}
+
+// Process queued SPI messages (public API function)
+void ProcessQueuedSpiMessage()
+{
+    // Check for packet ready from DMA callback
+#if WAVEX_SPI_DMA_ENABLED
+    if (s_packet_ready_for_processing) {
+        s_packet_ready_for_processing = false;
+        // Process the packet received via DMA
+        if (s_hw) {
+            s_hw->PrintLine("DAISY: Processing DMA packet");
+        }
+        ProcessReceivedPacket(s_rx_dma_buf, MAX_PKT_SIZE);
+        return; // Process one packet per call
+    }
+#endif
+    // Poll for new messages
+    PerformBidirectionalPoll();
+
+    // Process one message from queue if available
+    if (queue_count > 0) {
+        uint8_t* packet_data = message_queue[queue_head];
+        size_t packet_size = get_packet_size(packet_data);
+        
+        // Extract packet information using new unified format
+        uint8_t msg_type = packet_data[1];
+        uint8_t flags = packet_data[0] & PKT_FLAG_MASK;
+        uint16_t sequence_number = packet_data[2] | (packet_data[3] << 8);
+
+        WAVEX_LOG_DAISY_INBOUND(DAISY_INBOUND_SPI, "Dequeuing message for processing, msg_type=0x%02X, flags=0x%02X, seq=%u, size=%d",
+                           msg_type, flags, sequence_number, (int)packet_size);
+
+        // Handle ACK/NACK flags here
+        if (flags & PKT_FLAG_ACK) {
+            if (s_hw) {
+                s_hw->PrintLine("DAISY: Queue - Received ACK for msg_type=0x%02X, seq=%u", msg_type, sequence_number);
+            }
+        } else if (flags & PKT_FLAG_NACK) {
+            if (s_hw) {
+                s_hw->PrintLine("DAISY: Queue - Received NACK for msg_type=0x%02X, seq=%u", msg_type, sequence_number);
+            }
+        } else {
+            // Extract payload and process message
+            size_t payload_size = packet_size - 6; // header(4) + crc(2)
+            const uint8_t* payload = packet_data + 4;
+            
+            ProcessSpiMessageByType(msg_type, sequence_number, payload, payload_size);
+        }
+        
+        // Dequeue
+        queue_head = (queue_head + 1) % MAX_QUEUED_MESSAGES;
+        queue_count--;
+        
+        WAVEX_LOG_DAISY_INBOUND(DAISY_INBOUND_SPI, "Message processed and dequeued, remaining queue_count=%d", queue_count);
+    }
+}
 
 // ============================================================================
 // Non-blocking DMA duplex transaction to receive data from ESP32 (outside namespace)
 // ============================================================================
-
 daisy::SpiHandle::Result Spi_ReceivePacket()
 {
     if (!g_spi_handle) {
@@ -1081,65 +1112,6 @@ extern "C" void EXTI15_10_IRQHandler(void)
             WaveX::Comm::Spi_ReceivePacket();
             s_interrupt_processing = false;
         }
-    }
-}
-
-// Message processing stub implementations moved to daisy_spi_message_handlers.cpp
-
-// Process queued SPI messages (public API function)
-void WaveX::Comm::ProcessQueuedSpiMessage()
-{
-    // Check for packet ready from DMA callback
-#if WAVEX_SPI_DMA_ENABLED
-    if (s_packet_ready_for_processing) {
-        s_packet_ready_for_processing = false;
-        // Process the packet received via DMA
-        if (s_hw) {
-            s_hw->PrintLine("DAISY: Processing DMA packet");
-        }
-        ProcessReceivedPacket(s_rx_dma_buf, MAX_PKT_SIZE);
-        return; // Process one packet per call
-    }
-#endif
-
-    // Poll for new messages
-    PerformBidirectionalPoll();
-
-    // Process one message from queue if available
-    if (queue_count > 0) {
-        uint8_t* packet_data = message_queue[queue_head];
-        size_t packet_size = get_packet_size(packet_data);
-        
-        // Extract packet information using new unified format
-        uint8_t msg_type = packet_data[1];
-        uint8_t flags = packet_data[0] & PKT_FLAG_MASK;
-        uint16_t sequence_number = packet_data[2] | (packet_data[3] << 8);
-
-        WAVEX_LOG_DAISY_INBOUND(DAISY_INBOUND_SPI, "Dequeuing message for processing, msg_type=0x%02X, flags=0x%02X, seq=%u, size=%d",
-                           msg_type, flags, sequence_number, (int)packet_size);
-
-        // Handle ACK/NACK flags here
-        if (flags & PKT_FLAG_ACK) {
-            if (s_hw) {
-                s_hw->PrintLine("DAISY: Queue - Received ACK for msg_type=0x%02X, seq=%u", msg_type, sequence_number);
-            }
-        } else if (flags & PKT_FLAG_NACK) {
-            if (s_hw) {
-                s_hw->PrintLine("DAISY: Queue - Received NACK for msg_type=0x%02X, seq=%u", msg_type, sequence_number);
-            }
-        } else {
-            // Extract payload and process message
-            size_t payload_size = packet_size - 6; // header(4) + crc(2)
-            const uint8_t* payload = packet_data + 4;
-            
-            ProcessSpiMessageByType(msg_type, sequence_number, payload, payload_size);
-        }
-        
-        // Dequeue
-        queue_head = (queue_head + 1) % MAX_QUEUED_MESSAGES;
-        queue_count--;
-        
-        WAVEX_LOG_DAISY_INBOUND(DAISY_INBOUND_SPI, "Message processed and dequeued, remaining queue_count=%d", queue_count);
     }
 }
 
