@@ -36,21 +36,23 @@ uint8_t ProtocolHandler::GetOptimalSizeCode(size_t payload_size) {
     return PKT_SIZE_2048;  // Maximum 2048-byte packets (2048-4-2 = 2042 bytes payload)
 }
 
-// New simplified CRC calculation function
+// CRC16 calculation using CRC-16-CCITT to match Daisy hardware implementation
 uint16_t ProtocolHandler::CalculateWaveXCrc(const uint8_t* data, size_t length) {
+    if (!data || length == 0) return 0;
+    
+    // Use CRC-16-CCITT algorithm matching Daisy hardware CRC
+    // Polynomial: 0x1021 (CRC-16-CCITT)
     uint16_t crc = 0xFFFF;
-
     for (size_t i = 0; i < length; i++) {
-        crc ^= data[i];
+        crc ^= (uint16_t)(data[i]) << 8;
         for (int j = 0; j < 8; j++) {
-            if (crc & 0x0001) {
-                crc = (crc >> 1) ^ 0x8408;
+            if (crc & 0x8000) {
+                crc = (crc << 1) ^ 0x1021;
             } else {
-                crc = crc >> 1;
+                crc = crc << 1;
             }
         }
     }
-
     return crc;
 }
 

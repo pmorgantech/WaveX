@@ -38,7 +38,8 @@ using namespace WaveX::Protocol;
 #define get_packet_size_from_code ProtocolHandler::GetPacketSizeFromCode
 #define get_optimal_size_code ProtocolHandler::GetOptimalSizeCode
 // Use hardware CRC when available, fallback to software
-#define calculate_wave_crc calculate_hardware_crc16
+// #define calculate_wave_crc calculate_hardware_crc16
+#define calculate_wave_crc ProtocolHandler::CalculateWaveXCrc
 #define validate_wave_packet ProtocolHandler::ValidateWaveXPacket
 #define create_wave_packet ProtocolHandler::CreateWaveXPacket
 #define parse_wave_packet ProtocolHandler::ParseWaveXPacket
@@ -66,9 +67,6 @@ static daisy::SpiHandle* g_spi_handle = NULL;
 static daisy::GPIO cs_pin;
 static daisy::GPIO attn_pin;
 static WaveX::Comm::spi_link_stats_t s_stats = {};
-
-// Hardware CRC handle for STM32H7
-static CRC_HandleTypeDef hcrc;
 
 static volatile bool g_esp32_attention_flag = false; // Flag for ESP32 attention
 
@@ -122,57 +120,31 @@ static bool is_duplicate_packet(uint16_t seq_num)
     return false;
 }
 
-// Hardware CRC16 calculation using STM32H7 CRC peripheral
+// Software CRC16 calculation matching ESP32 and shared protocol (CRC-16-CCITT)
 static uint16_t calculate_hardware_crc16(const uint8_t* data, size_t length)
 {
     if (!data || length == 0) return 0;
     
-    // Configure CRC for CRC-16-CCITT (polynomial 0x1021)
-    hcrc.Instance = CRC;
-    hcrc.Init.DefaultPolynomialUse = DEFAULT_POLYNOMIAL_DISABLE;
-    hcrc.Init.DefaultInitValueUse = DEFAULT_INIT_VALUE_DISABLE;
-    hcrc.Init.GeneratingPolynomial = 0x1021; // CRC-16-CCITT polynomial
-    hcrc.Init.CRCLength = CRC_POLYLENGTH_16B;
-    hcrc.Init.InitValue = 0xFFFF; // CCITT-FALSE initial value
-    hcrc.Init.InputDataInversionMode = CRC_INPUTDATA_INVERSION_BYTE;
-    hcrc.Init.OutputDataInversionMode = CRC_OUTPUTDATA_INVERSION_ENABLE;
-    hcrc.InputDataFormat = CRC_INPUTDATA_FORMAT_BYTES;
-    
-    if (HAL_CRC_Init(&hcrc) != HAL_OK) {
-        if (s_hw) s_hw->PrintLine("DAISY: Hardware CRC initialization failed");
-        return 0;
+    // Use CRC-16-CCITT algorithm matching ESP32 and shared protocol exactly
+    // Polynomial: 0x1021 (CRC-16-CCITT)
+    uint16_t crc = 0xFFFF;
+    for (size_t i = 0; i < length; i++) {
+        crc ^= (uint16_t)(data[i]) << 8;
+        for (int j = 0; j < 8; j++) {
+            if (crc & 0x8000) {
+                crc = (crc << 1) ^ 0x1021;
+            } else {
+                crc = crc << 1;
+            }
+        }
     }
-    
-    // Calculate CRC
-    uint32_t crc_result = HAL_CRC_Calculate(&hcrc, (uint32_t*)data, length);
-    
-    // Return only the lower 16 bits
-    return (uint16_t)(crc_result & 0xFFFF);
+    return crc & 0xFFFF;
 }
 
-// Initialize hardware CRC peripheral
+// CRC16 initialization (software implementation - no hardware needed)
 static bool init_hardware_crc()
 {
-    // Enable CRC clock
-    __HAL_RCC_CRC_CLK_ENABLE();
-    
-    // Initialize CRC handle
-    hcrc.Instance = CRC;
-    hcrc.Init.DefaultPolynomialUse = DEFAULT_POLYNOMIAL_DISABLE;
-    hcrc.Init.DefaultInitValueUse = DEFAULT_INIT_VALUE_DISABLE;
-    hcrc.Init.GeneratingPolynomial = 0x1021; // CRC-16-CCITT polynomial
-    hcrc.Init.CRCLength = CRC_POLYLENGTH_16B;
-    hcrc.Init.InitValue = 0xFFFF; // CCITT-FALSE initial value
-    hcrc.Init.InputDataInversionMode = CRC_INPUTDATA_INVERSION_BYTE;
-    hcrc.Init.OutputDataInversionMode = CRC_OUTPUTDATA_INVERSION_ENABLE;
-    hcrc.InputDataFormat = CRC_INPUTDATA_FORMAT_BYTES;
-    
-    if (HAL_CRC_Init(&hcrc) != HAL_OK) {
-        if (s_hw) s_hw->PrintLine("DAISY: Hardware CRC initialization failed");
-        return false;
-    }
-    
-    if (s_hw) s_hw->PrintLine("DAISY: Hardware CRC16 initialized successfully");
+    if (s_hw) s_hw->PrintLine("DAISY: CRC16 initialized (software implementation matching ESP32)");
     return true;
 }
 
@@ -323,8 +295,11 @@ static daisy::SpiHandle::Result Spi_SendPacket(const uint8_t* tx_buf, size_t pac
     daisy::SpiHandle::Result dma_result = g_spi_handle->DmaTransmitAndReceive(
         s_tx_dma_buf,
         s_rx_dma_buf,
-        packet_size, spi_dma_start_cb, spi_dma_end_cb, NULL);
-    // cs_pin.Write(true);
+        MAX_PKT_SIZE,
+        spi_dma_start_cb,
+        spi_dma_end_cb,
+        NULL);
+    // cs_pin.Write(true); // REMOVED: Let callbacks handle CS timing
 
     uint32_t call_end_time = System::GetTick();
     uint32_t call_duration = call_end_time - call_start_time;
@@ -410,7 +385,7 @@ static daisy::SpiHandle::Result Spi_SendPacket(const uint8_t* tx_buf, size_t pac
 // Legacy compatibility function
 static daisy::SpiHandle::Result Spi_SendRaw64(const uint8_t* tx_buf)
 {
-    return Spi_SendPacket(tx_buf, CMD_PKT_SIZE);
+    return Spi_SendPacket(tx_buf, MAX_PKT_SIZE);
 }
 
 
