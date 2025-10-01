@@ -228,9 +228,6 @@ extern "C" {
 /** Inter-MCU SPI Chip Select - GPIO19 (J1 pin 15) ✅ */
 #define WAVEX_INTER_MCU_GPIO_CS     WAVEX_ESP_SPI_CS
 
-/** Daisy Interrupt Output - GPIO27 (J3 pin 26) ✅ */
-#define WAVEX_INTER_MCU_GPIO_IRQ    WAVEX_ESP_DAISY_IRQ
-
 /** ESP Attention Output - GPIO41 (J3 pin 14) ✅ */
 #define WAVEX_INTER_MCU_GPIO_ATTN   WAVEX_ESP_ATTN_OUT
 

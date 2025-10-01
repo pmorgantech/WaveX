@@ -45,9 +45,19 @@ static uint16_t calculate_hardware_crc16(const uint8_t* data, size_t length)
 {
     if (!data || length == 0) return 0;
     
-    // Use ESP32 ROM CRC-16 function (CCITT polynomial 0x1021)
-    // esp_rom_crc16_le uses little-endian CRC-16 with polynomial 0x1021
-    return esp_rom_crc16_le(0xFFFF, data, length);
+    // Use the SAME CRC algorithm as Daisy (CRC-16-ANSI with polynomial 0x8408)
+    uint16_t crc = 0xFFFF;
+    for (size_t i = 0; i < length; i++) {
+        crc ^= data[i];
+        for (int j = 0; j < 8; j++) {
+            if (crc & 0x0001) {
+                crc = (crc >> 1) ^ 0x8408;
+            } else {
+                crc = crc >> 1;
+            }
+        }
+    }
+    return crc;
 }
 
 // Use new unified packet system
@@ -599,13 +609,11 @@ static void spi_slave_task(void* pvParameters)
         
         // Signal Daisy ONLY if we have actual data to send (not zeros)
         if (has_message) {
-            // Consume the message from queue BEFORE signaling Daisy
-            // This prevents the message from being consumed by another task
-            clear_transmitted_message_from_queue();
-            ESP_LOGI(TAG, "Consumed message from queue before signaling");
-            
+            // DO NOT consume the message from queue yet - wait until Daisy receives it
+            // This prevents race conditions where message is lost before Daisy gets it
             signal_daisy_urgent(true);
             ESP_LOGI(TAG, "Signaled Daisy AFTER transaction queued - has real message");
+            // DO NOT consume message here - wait until transaction completes
         }
         
         ESP_LOGD(TAG, "SPI transaction queued, waiting for result...");
@@ -620,6 +628,12 @@ static void spi_slave_task(void* pvParameters)
             continue;
         }
         ESP_LOGD(TAG, "SPI transaction completed successfully");
+        
+        // Now that Daisy has received our message, consume it from the queue
+        if (has_message) {
+            clear_transmitted_message_from_queue();
+            ESP_LOGI(TAG, "Consumed message from queue after successful transmission");
+        }
         
         // Process received data - determine actual packet size from first byte
         size_t rx_len = trans_result->length / 8; // Convert bits to bytes

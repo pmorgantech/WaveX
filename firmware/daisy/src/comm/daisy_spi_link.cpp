@@ -57,6 +57,10 @@ static size_t get_packet_size(const uint8_t* packet_data) {
 // Module-level static variables
 // ============================================================================
 
+// Forward declarations for debug function and DMA callbacks
+static void spi_dma_start_cb(void* context);
+static void spi_dma_end_cb(void* context, daisy::SpiHandle::Result result);
+
 daisy::DaisySeed* s_hw = NULL;
 static daisy::SpiHandle* g_spi_handle = NULL;
 static daisy::GPIO cs_pin;
@@ -67,6 +71,10 @@ static WaveX::Comm::spi_link_stats_t s_stats = {};
 static CRC_HandleTypeDef hcrc;
 
 static volatile bool g_esp32_attention_flag = false; // Flag for ESP32 attention
+
+// ============================================================================
+// Debug DMA Function
+// ============================================================================
 
 // Message queue for received messages (unified for both packet types)
 #define MAX_QUEUED_MESSAGES 8
@@ -193,60 +201,38 @@ static void spi_dma_start_cb(void* /*context*/)
 {
     // Assert CS at the moment DMA actually starts
     cs_pin.Write(false);
-    s_dma_start_time = System::GetTick();
-    if (s_hw) s_hw->PrintLine("DAISY: === DMA START CALLBACK FIRED === CS asserted, start_time=%u", s_dma_start_time);
-    if (s_hw) s_hw->PrintLine("DAISY: DMA start callback fired - transaction is actually running");
-    
-    // Add timeout check - if DMA doesn't complete within timeout, force abort
-    // This will be checked in the main loop
+    // Set flag to indicate DMA is running
+    s_tx_inflight = true;
 }
 
 static void spi_dma_end_cb(void* /*context*/, daisy::SpiHandle::Result result)
 {
-    // Critical debug: Verify this callback actually fires
-    if (s_hw) s_hw->PrintLine("DAISY: === DMA END CALLBACK FIRED === result=%d", (int)result);
-    
-    // GPIO toggle for hardware verification (in case logging is buffered)
-    static bool toggle_state = false;
-    toggle_state = !toggle_state;
-    // Toggle a pin to verify IRQ is firing (can be observed with oscilloscope)
-    // Using built-in LED or a spare GPIO pin would work here
-    
-    // Cache operations removed - buffers are in non-cacheable DMA memory
-    
     // Deassert CS and update state
     cs_pin.Write(true);
-    uint32_t duration = System::GetTick() - s_dma_start_time;
-    if(result == daisy::SpiHandle::Result::OK)
-    {
+    // Update stats atomically
+    if(result == daisy::SpiHandle::Result::OK) {
         s_stats.packets_sent++;
-        if (s_hw) s_hw->PrintLine("DAISY: DMA transaction completed successfully, duration=%u ms", duration);
-        if (s_hw) s_hw->PrintLine("DAISY: RX buffer contents: %02X %02X %02X %02X %02X %02X %02X %02X", 
-                                   s_rx_dma_buf[0], s_rx_dma_buf[1], s_rx_dma_buf[2], s_rx_dma_buf[3],
-                                   s_rx_dma_buf[4], s_rx_dma_buf[5], s_rx_dma_buf[6], s_rx_dma_buf[7]);
-    } else {
-        if (s_hw) s_hw->PrintLine("DAISY: DMA transaction failed with result: %d, duration=%u ms", (int)result, duration);
     }
     s_tx_inflight = false;
-    if (s_hw) s_hw->PrintLine("DAISY: s_tx_inflight cleared, ready for next packet");
 }
 
 static void spi_duplex_start_cb(void* /*context*/)
 {
     // Assert CS at the moment DMA actually starts
     cs_pin.Write(false);
+    s_duplex_inflight = true;
 }
 
 static void spi_duplex_end_cb(void* /*context*/, daisy::SpiHandle::Result result)
 {
     // Deassert CS and update state
     cs_pin.Write(true);
-    if(result == daisy::SpiHandle::Result::OK)
-    {
+    // if(result == daisy::SpiHandle::Result::OK)
+    // {
         s_stats.packets_received++;
         // Signal that packet is ready for processing
         s_packet_ready_for_processing = true;
-    }
+    // }
     s_duplex_inflight = false;
 }
 
@@ -315,35 +301,37 @@ static daisy::SpiHandle::Result Spi_SendPacket(const uint8_t* tx_buf, size_t pac
     s_tx_inflight = false;
     cs_pin.Write(true); // Ensure CS is high before starting
 
+    // Clear both TX and RX buffers before transaction
+    memset(s_tx_dma_buf, 0, MAX_PKT_SIZE);
+    memset(s_rx_dma_buf, 0, MAX_PKT_SIZE);
+    
     // Copy payload into persistent DMA buffer
     memcpy(s_tx_dma_buf, tx_buf, packet_size);
     
-    // Clear RX buffer before transaction
-    memset(s_rx_dma_buf, 0, packet_size);
-    
     // Cache operations removed - buffers are in non-cacheable DMA memory
 
-    s_tx_inflight = true;
     if (s_hw) s_hw->PrintLine("DAISY: Starting DMA duplex transaction, packet_size=%d", (int)packet_size);
     if (s_hw) s_hw->PrintLine("DAISY: TX buffer contents: %02X %02X %02X %02X %02X %02X %02X %02X", 
                                s_tx_dma_buf[0], s_tx_dma_buf[1], s_tx_dma_buf[2], s_tx_dma_buf[3],
                                s_tx_dma_buf[4], s_tx_dma_buf[5], s_tx_dma_buf[6], s_tx_dma_buf[7]);
-    
+                               
     // Start DMA duplex transfer
     uint32_t call_start_time = System::GetTick();
+    s_dma_start_time = call_start_time; // Set timing before DMA starts
+    
+    // cs_pin.Write(false);
     daisy::SpiHandle::Result dma_result = g_spi_handle->DmaTransmitAndReceive(
         s_tx_dma_buf,
         s_rx_dma_buf,
-        packet_size,
-        spi_dma_start_cb,
-        spi_dma_end_cb,
-        NULL);
-    
+        packet_size, spi_dma_start_cb, spi_dma_end_cb, NULL);
+    // cs_pin.Write(true);
+
     uint32_t call_end_time = System::GetTick();
     uint32_t call_duration = call_end_time - call_start_time;
     
     if (s_hw) s_hw->PrintLine("DAISY: DmaTransmitAndReceive call completed at time=%u, duration=%u ms", call_end_time, call_duration);
     if (s_hw) s_hw->PrintLine("DAISY: DmaTransmitAndReceive returned: %d", (int)dma_result);
+    if (s_hw) s_hw->PrintLine("DAISY: Post-DMA state: inflight=%s, start_time=%u", s_tx_inflight ? "true" : "false", s_dma_start_time);
     
     if (dma_result != daisy::SpiHandle::Result::OK) {
         if (s_hw) s_hw->PrintLine("DAISY: DMA transaction failed to start - result=%d, clearing inflight flag", (int)dma_result);
@@ -382,7 +370,7 @@ static daisy::SpiHandle::Result Spi_SendPacket(const uint8_t* tx_buf, size_t pac
     }
     
     // Add small delay to prevent overwhelming ESP32
-    System::DelayUs(500); // Reduced from 1000us to 100us for better performance
+    System::DelayUs(200); // Reduced from 1000us to 100us for better performance
     
     return dma_result;
 #else
@@ -484,6 +472,75 @@ void Spi_Init(daisy::DaisySeed &hw, daisy::SpiHandle* hspi)
     cs_pin.Init(cs_p, daisy::GPIO::Mode::OUTPUT, daisy::GPIO::Pull::PULLUP, daisy::GPIO::Speed::VERY_HIGH);
     cs_pin.Write(true); // Start with CS high (inactive)
 
+    // 2) Configure SPI1 Master with NSS::SOFT and NO nss pin assigned
+    daisy::SpiHandle::Config spi_config;
+    spi_config.periph = daisy::SpiHandle::Config::Peripheral::SPI_1;
+    spi_config.mode = daisy::SpiHandle::Config::Mode::MASTER;
+    spi_config.direction = daisy::SpiHandle::Config::Direction::TWO_LINES;
+    spi_config.datasize = 8;
+    spi_config.clock_polarity = daisy::SpiHandle::Config::ClockPolarity::LOW;
+    spi_config.clock_phase = daisy::SpiHandle::Config::ClockPhase::ONE_EDGE;
+    spi_config.baud_prescaler = daisy::SpiHandle::Config::BaudPrescaler::PS_16; // Slower clock for debugging
+    spi_config.nss = daisy::SpiHandle::Config::NSS::SOFT;
+    spi_config.pin_config.sclk = hw.GetPin(WAVEX_DAISY_SPI_SCK);
+    spi_config.pin_config.mosi = hw.GetPin(WAVEX_DAISY_SPI_MOSI);
+    spi_config.pin_config.miso = hw.GetPin(WAVEX_DAISY_SPI_MISO);
+    spi_config.pin_config.nss  = Pin(); // IMPORTANT: leave unassigned for software CS
+    
+    hw.PrintLine("Spi_Init: About to call hspi->Init");
+    SpiHandle::Result result = hspi->Init(spi_config);
+    
+    // Access DMA streams directly (libDaisy uses DMA2_Stream2/3 for SPI1)
+    if (result == SpiHandle::Result::OK) {
+        DMA_Stream_TypeDef* tx_stream = DMA2_Stream3; // libDaisy TX stream
+        DMA_Stream_TypeDef* rx_stream = DMA2_Stream2; // libDaisy RX stream
+        
+        hw.PrintLine("TX DMA (DMA2_Stream3): CR=0x%08lx NDTR=%lu PAR=0x%08lx M0AR=0x%08lx",
+                    tx_stream->CR,
+                    tx_stream->NDTR,
+                    tx_stream->PAR,
+                    tx_stream->M0AR);
+        
+        hw.PrintLine("RX DMA (DMA2_Stream2): CR=0x%08lx NDTR=%lu PAR=0x%08lx M0AR=0x%08lx",
+                    rx_stream->CR,
+                    rx_stream->NDTR,
+                    rx_stream->PAR,
+                    rx_stream->M0AR);
+    }
+    
+    if (result == SpiHandle::Result::OK) {
+        hw.PrintLine("SUCCESS: SPI master configured correctly!");
+        // // **** FORCED SPI1 INITIALIZATION ****
+        // if (!(SPI1->CR1 & SPI_CR1_SPE))
+        // {
+        //     SPI1->CR1 |= SPI_CR1_SPE;     // Enable SPI if not already
+        // }
+        // if (!(SPI1->CR1 & SPI_CR1_CSTART))
+        // {
+        //     SPI1->CR1 |= SPI_CR1_CSTART;  // Force start
+        //     s_hw->PrintLine("DAISY: Forced SPI1->CR1.CSTART=1");
+        // }
+        // hw.PrintLine("Spi_Init: hspi->Init returned: %d", (int)result);
+        // // Force RX FIFO threshold to 1/4 (8-bit mode, RXNE=1 byte)
+        // #define SPI_CR2_RXFTCFG_Pos 29U
+        // #define SPI_CR2_RXFTCFG_Msk (0x7UL << SPI_CR2_RXFTCFG_Pos)
+        // const uint32_t RXFTCFG_Pos = 29;
+        // const uint32_t RXFTCFG_Msk = (0x7U << RXFTCFG_Pos);
+        // MODIFY_REG(SPI1->CR2, RXFTCFG_Msk, (0x1U << RXFTCFG_Pos));
+        // s_hw->PrintLine("DAISY: Forced RXFTCFG=0x%lx", (SPI1->CR2 >> RXFTCFG_Pos) & 0x7);
+        // // **** END OF FORCED SPI1 INITIALIZATION ****
+        
+        // Set g_spi_handle and initialize stats
+        g_spi_handle = hspi;
+        hw.PrintLine("Spi_Init: g_spi_handle set to %p", g_spi_handle);
+        memset(&s_stats, 0, sizeof(s_stats));
+        hw.PrintLine("Spi_Init: Stats initialized");
+    } else {
+        hw.PrintLine("ERROR: SPI init failed with result: %d", (int)result);
+        g_spi_handle = NULL;
+        hw.PrintLine("Spi_Init: g_spi_handle set to NULL");
+    }
+
     // Configure D0 as input to receive attention signal from ESP32 GPIO31
     daisy::Pin attn_p = hw.GetPin(WAVEX_DAISY_ATTN_IN);  // D0
     attn_pin.Init(attn_p, daisy::GPIO::Mode::INPUT, daisy::GPIO::Pull::PULLDOWN, daisy::GPIO::Speed::VERY_HIGH);
@@ -503,41 +560,6 @@ void Spi_Init(daisy::DaisySeed &hw, daisy::SpiHandle* hspi)
     
     hw.PrintLine("ATTN pin interrupt configured - will trigger DMA duplex transaction on ESP32 signal");
 
-    // 2) Configure SPI1 Master with NSS::SOFT and NO nss pin assigned
-    daisy::SpiHandle::Config spi_config;
-    spi_config.periph = daisy::SpiHandle::Config::Peripheral::SPI_1;
-    spi_config.mode = daisy::SpiHandle::Config::Mode::MASTER;
-    spi_config.direction = daisy::SpiHandle::Config::Direction::TWO_LINES;
-    spi_config.datasize = 8;
-    spi_config.clock_polarity = daisy::SpiHandle::Config::ClockPolarity::LOW;
-    spi_config.clock_phase = daisy::SpiHandle::Config::ClockPhase::ONE_EDGE;
-    spi_config.baud_prescaler = daisy::SpiHandle::Config::BaudPrescaler::PS_16; // Slower clock for debugging
-    spi_config.nss = daisy::SpiHandle::Config::NSS::SOFT;
-    
-    // Configure interrupt priorities to prevent audio starvation
-    // Audio DMA should have higher priority (lower number) than SPI
-    // This will be handled in the main audio initialization
-    
-    spi_config.pin_config.sclk = hw.GetPin(WAVEX_DAISY_SPI_SCK);
-    spi_config.pin_config.mosi = hw.GetPin(WAVEX_DAISY_SPI_MOSI);
-    spi_config.pin_config.miso = hw.GetPin(WAVEX_DAISY_SPI_MISO);
-    spi_config.pin_config.nss  = Pin(); // IMPORTANT: leave unassigned for software CS
-    
-    hw.PrintLine("Spi_Init: About to call hspi->Init");
-    SpiHandle::Result result = hspi->Init(spi_config);
-    hw.PrintLine("Spi_Init: hspi->Init returned: %d", (int)result);
-
-    if (result == SpiHandle::Result::OK) {
-        hw.PrintLine("SUCCESS: SPI master configured correctly!");
-        g_spi_handle = hspi;
-        hw.PrintLine("Spi_Init: g_spi_handle set to %p", g_spi_handle);
-        memset(&s_stats, 0, sizeof(s_stats));
-        hw.PrintLine("Spi_Init: Stats initialized");
-    } else {
-        hw.PrintLine("ERROR: SPI init failed with result: %d", (int)result);
-        g_spi_handle = NULL;
-        hw.PrintLine("Spi_Init: g_spi_handle set to NULL");
-    }
 }
 
 // ============================================================================
@@ -786,6 +808,8 @@ void Spi_CheckTimeout()
         
         if (elapsed > DMA_TIMEOUT_MS) {
             if (s_hw) s_hw->PrintLine("DAISY: DMA timeout after %u ms - forcing abort", elapsed);
+            if (s_hw) s_hw->PrintLine("DAISY: Timeout details: start_time=%u, current_time=%u, inflight=%s", 
+                                     s_dma_start_time, current_time, s_tx_inflight ? "true" : "false");
             
             // Force CS high and clear inflight flag
             cs_pin.Write(true);
@@ -967,10 +991,10 @@ daisy::SpiHandle::Result Spi_ReceivePacket()
     
     // Cache operations removed - buffers are in non-cacheable DMA memory
 
-    s_duplex_inflight = true;
     if (s_hw) s_hw->PrintLine("DAISY: Starting DMA duplex transaction to receive from ESP32");
 
     // Start DMA duplex transfer (bidirectional); CS low/high handled in callbacks
+    // cs_pin.Write(false);
     daisy::SpiHandle::Result dma_result = g_spi_handle->DmaTransmitAndReceive(
         s_tx_dma_buf,
         s_rx_dma_buf,
@@ -978,6 +1002,7 @@ daisy::SpiHandle::Result Spi_ReceivePacket()
         spi_duplex_start_cb,
         spi_duplex_end_cb,
         NULL);
+    // cs_pin.Write(true);
 
     if (s_hw) s_hw->PrintLine("DAISY: DmaTransmitAndReceive returned: %d", (int)dma_result);
     

@@ -192,15 +192,13 @@ int main(void)
     HAL_NVIC_SetPriority(DMA1_Stream1_IRQn, 5, 0);  // SAI1 DMA B
     HAL_NVIC_SetPriority(SAI2_IRQn, 6, 0);
     HAL_NVIC_SetPriority(DMA1_Stream3_IRQn, 6, 0);  // SAI2 DMA A
-    HAL_NVIC_SetPriority(DMA1_Stream4_IRQn, 6, 0);  // SAI2 DMA B
+    HAL_NVIC_SetPriority(DMA1_Stream4_IRQn, 6, 0);  // SAI2 DMA B 
     
-    // Set SPI to lower priority
-    HAL_NVIC_SetPriority(SPI1_IRQn, 12, 0);
-    HAL_NVIC_SetPriority(DMA2_Stream2_IRQn, 10, 0); // SPI1 DMA RX
-    HAL_NVIC_SetPriority(DMA2_Stream3_IRQn, 10, 0); // SPI1 DMA TX
-    HAL_NVIC_EnableIRQ(DMA1_Stream2_IRQn);
-    HAL_NVIC_EnableIRQ(DMA1_Stream3_IRQn);
-    
+    // Set SPI DMA to lower priority than audio (higher number = lower priority)
+    HAL_NVIC_SetPriority(DMA2_Stream2_IRQn, 10, 0);  // SPI1 DMA RX
+    HAL_NVIC_SetPriority(DMA2_Stream3_IRQn, 10, 0);  // SPI1 DMA TX
+    HAL_NVIC_EnableIRQ(DMA2_Stream2_IRQn);
+    HAL_NVIC_EnableIRQ(DMA2_Stream3_IRQn);
     WAVEX_LOG_DAISY(INTER_MCU_LINK, "Interrupt priorities configured: Audio DMA=5/6, SPI DMA=10");
     #endif
     
@@ -404,10 +402,10 @@ int main(void)
             WAVEX_LOG_DAISY(INTER_MCU_LINK, "LONG SPI: %u ms", (unsigned)spi_duration);
         }
         
-        #if WAVEX_SPI_DMA_ENABLED
-        // Check for DMA timeouts to prevent hanging
-        WaveX::Comm::Spi_CheckTimeout();
-        #endif
+        // #if WAVEX_SPI_DMA_ENABLED
+        // // Check for DMA timeouts to prevent hanging
+        // WaveX::Comm::Spi_CheckTimeout();
+        // #endif
         
         // Pump WAV I/O for audio playback (including audition)
         #if WAVEX_AUDIO_ENGINE_ENABLED

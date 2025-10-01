@@ -19,7 +19,7 @@
 
 // Enable non-blocking DMA transfers on Daisy SPI (master) by default
 #ifndef WAVEX_SPI_DMA_ENABLED
-#define WAVEX_SPI_DMA_ENABLED 0
+#define WAVEX_SPI_DMA_ENABLED 1
 #endif
 
 // Use pin definitions from centralized pin_config.h
