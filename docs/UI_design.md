@@ -49,10 +49,9 @@
 Main Menu
 ├─ Play/Perform
 │   ├─ Live tweaks (pots/encoders)
-│   └─ Mod matrix view
 ├─ Sample Mode
 │   ├─ Arm & Threshold
-│   ├─ Duration / SR   
+│   ├─ Duration / SR
 │   └─ Take list
 ├─ Sample Editor
 │   ├─ Trim & Zoom
@@ -61,23 +60,20 @@ Main Menu
 ├─ Patch Manager
 │   ├─ Load / Save / Rename
 │   └─ Category filter
-├─ MIDI & Sync
-│   ├─ DIN ⇆ USB routing
-│   ├─ Clock source & tempo
-│   └─ Channel map
 ├─ System Settings
 │   ├─ Audio (rate/latency)
+|   ├─ MIDI & Sync (DIN/USB routing, Clock source & tempo, Channel map)
 │   ├─ Storage (SD, MSC)
 │   ├─ Firmware update
-│   └─ UI theme
-├─ Diagnostics
-│   ├─ CPU/RAM/PSRAM graphs
-│   ├─ SD‑bench & flash wear
-│   ├─ ADC visualize
-│   └─ MIDI monitor
-└─ Calibration
-    ├─ Touch grid (5‑point)
-    └─ ADC auto‑scale (pots & CV)
+│   ├─ UI theme
+|   ├─ Diagnostics
+|   │   ├─ CPU/RAM/PSRAM graphs
+|   │   ├─ SD‑bench & flash wear
+|   │   ├─ ADC visualize
+|   │   └─ MIDI monitor
+|   └─ Calibration
+        ├─ Touch grid (5‑point)
+        └─ ADC auto‑scale (pots & CV)
 ```
 
 ---
