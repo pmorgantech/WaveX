@@ -8,9 +8,9 @@
 
  #pragma once
 
- #include "esp_err.h"
- #include "esp_lcd_types.h"
- #include "lvgl.h"
+#include "esp_err.h"
+#include "esp_lcd_types.h"
+#include "lvgl.h"
  
  #ifdef __cplusplus
  extern "C" {
@@ -73,17 +73,24 @@ void wavex_ui_update_hotkey_labels(const char* labels[6]);
 
 /**
  * @brief Update hotkey label for a specific button
- * 
+ *
  * @param button_index Index of the button (0-5)
  * @param label New label text
  */
 void wavex_ui_update_hotkey_label(int button_index, const char* label);
- 
- /**
-  * @brief Mark UI content as changed to trigger a refresh
-  */
+
+/**
+ * @brief Mark UI content as changed to trigger a refresh
+ */
  void wavex_ui_mark_content_changed(void);
- 
- #ifdef __cplusplus
- }
- #endif
+
+#ifdef __cplusplus
+}
+#endif
+
+/**
+ * @brief Handle sample stop response from Daisy (C++ function)
+ *
+ * @param success True if sample was successfully stopped
+ */
+void wavex_ui_handle_sample_stop_response(bool success);

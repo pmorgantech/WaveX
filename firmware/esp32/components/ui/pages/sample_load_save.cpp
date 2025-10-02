@@ -212,16 +212,39 @@ bool wavex_sample_load_save_stop_audition(wavex_sample_load_save_page_t* page)
         
         ESP_LOGI(TAG, "=== SAMPLE STOP OPERATION: Request sent successfully ===");
 
-        page->is_playing = false;
-        wavex_sample_load_save_set_status(page, "Stopped");
-        
-        // Update button text back to "Audition"
-        wavex_ui_update_hotkey_label(0, "Audition");
+        // Don't immediately change is_playing - wait for response
+        // Show "Stopping..." status instead of immediate UI change
+        wavex_sample_load_save_set_status(page, "Stopping...");
 
         return true;
     }
 
     return false;
+}
+
+// Handle sample stop response from Daisy
+void wavex_ui_handle_sample_stop_response(bool success)
+{
+    // Access the global sample load/save page instance
+    extern wavex_sample_load_save_page_t* s_sample_load_save_page;
+    
+    if (!s_sample_load_save_page) {
+        ESP_LOGW(TAG, "Received sample stop response but no active sample load/save page");
+        return;
+    }
+    
+    if (success) {
+        ESP_LOGI(TAG, "=== SAMPLE STOP RESPONSE: Successfully stopped ===");
+        s_sample_load_save_page->is_playing = false;
+        wavex_sample_load_save_set_status(s_sample_load_save_page, "Stopped");
+
+        // Update button text back to "Audition"
+        wavex_ui_update_hotkey_label(0, "Audition");
+    } else {
+        ESP_LOGE(TAG, "=== SAMPLE STOP RESPONSE: Failed to stop ===");
+        wavex_sample_load_save_set_status(s_sample_load_save_page, "Stop failed");
+        // Keep is_playing state as-is since stop failed
+    }
 }
 
 bool wavex_sample_load_save_load_sample(wavex_sample_load_save_page_t* page, const char* file_path)

@@ -241,7 +241,11 @@ void ProcessSamplePlayRequestMessage(const uint8_t* payload, size_t payload_size
 
 void ProcessSampleStopRequestMessage(const uint8_t* payload, size_t payload_size) {
     if (s_hw) s_hw->PrintLine("DAISY: ProcessSampleStopRequestMessage called - payload_size=%d", (int)payload_size);
-    WaveX::Comm::ProcessSampleStopRequest();
+    uint8_t slot = 0;
+    const WaveX::Protocol::SampleStopReqMessage* msg =
+            reinterpret_cast<const WaveX::Protocol::SampleStopReqMessage*>(payload);
+    slot = msg->slot;
+    WaveX::Comm::ProcessSampleStopRequest(slot);
 }
 
 void ProcessSampleStatusMessage(const uint8_t* payload, size_t payload_size) {

@@ -177,6 +177,17 @@ size_t ProtocolHandler::CreateSampleStatusPacket(uint8_t* buffer, size_t buffer_
     return CreateUnifiedPacket(buffer, buffer_size, MSG_SAMPLE_STATUS, &msg, sizeof(SampleStatusMessage));
 }
 
+// Create sample stop response packet using unified packet system
+size_t ProtocolHandler::CreateSampleStopRespPacket(uint8_t* buffer, size_t buffer_size, const SampleStopRespMessage& msg) {
+    return CreateUnifiedPacket(buffer, buffer_size, MSG_SAMPLE_STOP_RESP, &msg, sizeof(SampleStopRespMessage));
+}
+
+// Create sample stop request packet using unified packet system
+size_t ProtocolHandler::CreateSampleStopReqPacket(uint8_t* buffer, size_t buffer_size,
+                                               const SampleStopReqMessage& msg) {
+    return CreateUnifiedPacket(buffer, buffer_size, MSG_SAMPLE_STOP_REQ, &msg, sizeof(SampleStopReqMessage));
+}
+
 // Create browse response packet using unified packet system
 size_t ProtocolHandler::CreateBrowseRespPacket(uint8_t* buffer, size_t buffer_size,
                                              uint32_t total_count,

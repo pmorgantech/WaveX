@@ -559,7 +559,7 @@ int main(void)
         s_cpu_measurement_count++;
         
         // Use actual sleep instead of busy wait - much more CPU efficient
-        System::Delay(1); // 1ms actual sleep instead of busy wait
+        System::DelayUs(1000); // 1ms actual sleep instead of busy wait
         
         // Measure CPU usage every 2 seconds (reduced frequency for better performance)
         uint32_t now_ms = System::GetNow();

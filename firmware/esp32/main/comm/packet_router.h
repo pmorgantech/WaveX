@@ -39,6 +39,7 @@ private:
     void handle_wave_chunk(const WaveX::Protocol::WaveChunkMessage& msg, const uint8_t* payload, size_t length);
     void handle_browse_resp(const uint8_t* data, size_t length);
     void handle_sample_status(const WaveX::Protocol::SampleStatusMessage& msg);
+    void handle_sample_stop_resp(const WaveX::Protocol::SampleStopRespMessage& msg);
     void handle_error(const WaveX::Protocol::ErrorMessage& msg);
     void handle_unknown_message(uint8_t type, const uint8_t* payload, size_t length);
     

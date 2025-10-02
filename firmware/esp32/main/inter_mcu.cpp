@@ -484,6 +484,21 @@ esp_err_t inter_mcu_send_sample_stop_req()
         return -1; // ESP_ERR_INVALID_STATE
     }
     
-    int result = spi_link_send(WaveX::Protocol::MSG_SAMPLE_STOP_REQ, NULL, 0);
+    WaveX::Protocol::SampleStopReqMessage msg;
+    msg.slot = 0; // Currently single slot; extend when multi-slot is supported
+    msg.reserved[0] = 0;
+    msg.reserved[1] = 0;
+    msg.reserved[2] = 0;
+    
+    int result = spi_link_send(WaveX::Protocol::MSG_SAMPLE_STOP_REQ, &msg, sizeof(msg));
     return result ? ESP_OK : -1; // ESP_FAIL
 }
+
+// Handle sample stop response from communication layer
+void inter_mcu_handle_sample_stop_response(bool success)
+{
+    // Forward to UI layer - this is the proper place for UI callbacks
+    extern void wavex_ui_handle_sample_stop_response(bool success);
+    wavex_ui_handle_sample_stop_response(success);
+}
+

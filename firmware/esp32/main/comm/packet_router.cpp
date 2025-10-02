@@ -118,6 +118,14 @@ void PacketRouter::route_by_message_type(uint8_t msg_type, const uint8_t* payloa
             }
             break;
 
+        case WaveX::Protocol::MSG_SAMPLE_STOP_RESP:
+            {
+                WaveX::Protocol::SampleStopRespMessage msg;
+                memcpy(&msg, payload, sizeof(msg));
+                handle_sample_stop_resp(msg);
+            }
+            break;
+
         case WaveX::Protocol::MSG_ERROR:
             {
                 WaveX::Protocol::ErrorMessage msg;
@@ -202,6 +210,14 @@ void PacketRouter::handle_sample_status(const WaveX::Protocol::SampleStatusMessa
 {
     ESP_LOGI("packet_router", "Sample status: state=0x%02X", msg.state);
     // TODO: Implement sample status handling
+}
+
+void PacketRouter::handle_sample_stop_resp(const WaveX::Protocol::SampleStopRespMessage& msg)
+{
+    ESP_LOGI("packet_router", "Sample stop response: success=%d", msg.success);
+
+    // Forward to inter_mcu layer which can handle UI callbacks
+    inter_mcu_handle_sample_stop_response(msg.success == 1);
 }
 
 void PacketRouter::handle_error(const WaveX::Protocol::ErrorMessage& msg)

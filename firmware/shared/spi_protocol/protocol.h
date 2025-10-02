@@ -71,13 +71,14 @@ enum MessageType : uint8_t {
     MSG_METER_PUSH  = 0x10, // backend -> frontend
     MSG_WAVE_CHUNK  = 0x11, // backend -> frontend
     MSG_HEARTBEAT   = 0x12, // periodic health beacon
+    MSG_ACK = 0x13,  // Acknowledgment message
     // File browse and sample playback control (MVP)
     MSG_BROWSE_REQ   = 0x30,
     MSG_BROWSE_RESP  = 0x31,
     MSG_SAMPLE_PLAY_REQ = 0x32,
     MSG_SAMPLE_STOP_REQ = 0x33,
     MSG_SAMPLE_STATUS   = 0x34,
-    MSG_ACK = 0x35,  // Acknowledgment message
+    MSG_SAMPLE_STOP_RESP = 0x35,
     // Index-based file selection (new)
     MSG_SAMPLE_PLAY_INDEX_REQ = 0x36,  // Play sample by index
     MSG_SAMPLE_GET_PATH_REQ = 0x37,    // Get full path for index
@@ -183,6 +184,18 @@ struct SampleStatusMessage {
     uint32_t frames_played;
 } __attribute__((packed));
 
+// Sample stop request (now includes slot)
+struct SampleStopReqMessage {
+    uint8_t slot;            // Slot of currently playing sample (0 for now)
+    uint8_t reserved[3];     // Reserved for alignment/future
+} __attribute__((packed));
+
+// Sample stop response
+struct SampleStopRespMessage {
+    uint8_t  success;        // 1=successfully stopped, 0=failed
+    uint8_t  reserved[3];    // Reserved for future use
+} __attribute__((packed));
+
 // Error message (short)
 struct ErrorMessage {
     uint16_t code;
@@ -262,6 +275,8 @@ public:
     // Additional flexible packet system functions
     static size_t CreateErrorPacket(uint8_t* buffer, size_t buffer_size, const ErrorMessage& err);
     static size_t CreateSampleStatusPacket(uint8_t* buffer, size_t buffer_size, const SampleStatusMessage& msg);
+    static size_t CreateSampleStopRespPacket(uint8_t* buffer, size_t buffer_size, const SampleStopRespMessage& msg);
+    static size_t CreateSampleStopReqPacket(uint8_t* buffer, size_t buffer_size, const SampleStopReqMessage& msg);
     static size_t CreateBrowseRespPacket(uint8_t* buffer, size_t buffer_size,
                                          uint32_t total_count,
                                          const FileEntryWire* entries,
@@ -318,4 +333,4 @@ public:
 } // namespace Protocol
 } // namespace WaveX
 
-#endif // WAVEX_PROTOCOL_H 
+#endif // WAVEX_PROTOCOL_H

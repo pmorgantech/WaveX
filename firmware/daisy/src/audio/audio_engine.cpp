@@ -644,8 +644,11 @@ bool OpenWav(const char* path)
 void CloseWav()
 {
     if (s_wav.open) {
+        if (s_hw) s_hw->PrintLine("CloseWav: closing WAV file and clearing state");
         f_close(&s_wav.file);
         s_wav = {};
+    } else {
+        if (s_hw) s_hw->PrintLine("CloseWav: called but no WAV was open");
     }
     
     // Reset SD buffer state

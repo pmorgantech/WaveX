@@ -52,6 +52,9 @@ void inter_mcu_set_browse_resp_listener(wavex_browse_resp_cb_t cb, void* user_da
 void inter_mcu_invoke_browse_resp_callback(const uint8_t* data, size_t length);
 void inter_mcu_set_sample_status_listener(wavex_sample_status_cb_t cb, void* user_data);
 
+// Sample stop response handling
+void inter_mcu_handle_sample_stop_response(bool success);
+
 // Direct SPI API functions (replacing LinkManager)
 esp_err_t inter_mcu_send_browse_req(const char* path, uint8_t start_index);
 esp_err_t inter_mcu_send_sample_play_index_req(uint32_t file_index);

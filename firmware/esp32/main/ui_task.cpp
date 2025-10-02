@@ -6,6 +6,7 @@
  * using the Waveshare 5-DSI-TOUCH-A display and HX8394 driver.
  */
 
+#include "../components/ui/pages/sample_load_save.h"
 #include "ui_task.h"
 #include "esp_log.h"
 #include "esp_check.h"
@@ -22,7 +23,6 @@
 #include "inter_mcu.h"
 #include "comm/statistics.h"
 #include "links/esp_spi_link.h"
-#include "sample_load_save.h"
  
 // LVGL includes
 #include "esp_lvgl_port.h"
@@ -70,8 +70,8 @@ static lv_obj_t *s_header_title = NULL;
 // Current screen context for hotkey mapping
 static const char* s_current_screen = "main";
 
-// Sample Load/Save page instance
-static wavex_sample_load_save_page_t* s_sample_load_save_page = NULL;
+// Sample Load/Save page instance (global for access from other modules)
+wavex_sample_load_save_page_t* s_sample_load_save_page = NULL;
 
 // Meter callback system
 static wavex_meter_cb_t s_meter_callback = NULL;
@@ -967,8 +967,7 @@ static void hotkey_button_event_cb(lv_event_t *e)
                             // Stop current audition
                             ESP_LOGI(TAG, "Stopping current audition");
                             wavex_sample_load_save_stop_audition(s_sample_load_save_page);
-                            // Update button text back to "Audition"
-                            wavex_ui_update_hotkey_label(0, "Audition");
+                            // Don't update button text immediately - wait for stop response
                         } else {
                             // Start new audition
                             const wavex_file_entry_t* selected = wavex_file_browser_get_selected(s_sample_load_save_page->file_browser);

@@ -212,28 +212,38 @@ void ProcessSamplePlayRequest(const char* file_path)
 }
 
 // Process sample stop request (existing function)
-void ProcessSampleStopRequest()
+void ProcessSampleStopRequest(uint8_t slot)
 {
     using namespace WaveX::Protocol;
     using namespace WaveX::AudioEngine;
 
     if (s_hw) {
-        s_hw->PrintLine("DAISY: ProcessSampleStopRequest called");
+        s_hw->PrintLine("DAISY: ProcessSampleStopRequest called (slot=%u)", (unsigned)slot);
     }
 
-    // Stop current playback using the proper audition stop function
+    // Stop current playback. Call CloseWav() to stop any WAV playback,
+    // then call StopAudition() to clear audition state if active.
+    CloseWav();
     StopAudition();
+    // Debug: report playback state after attempting stop
+    if (s_hw) {
+        bool wav_playing = WaveX::AudioEngine::IsWavPlaying();
+        s_hw->PrintLine("DAISY: After stop - IsWavPlaying=%d", wav_playing ? 1 : 0);
+    }
 
-    // Send acknowledgment
-    AckMessage ack;
-    ack.serial_id = 0; // TODO: Get actual serial ID
+    // Send sample stop response
+    SampleStopRespMessage stop_resp;
+    stop_resp.success = 1; // Successfully stopped
+    stop_resp.reserved[0] = 0;
+    stop_resp.reserved[1] = 0;
+    stop_resp.reserved[2] = 0;
     
     uint8_t response_buffer[MAX_PKT_SIZE];
-    size_t pkt_size = ProtocolHandler::CreateAckPacket(response_buffer, sizeof(response_buffer), ack);
+    size_t pkt_size = ProtocolHandler::CreateSampleStopRespPacket(response_buffer, sizeof(response_buffer), stop_resp);
     Spi_SendPreCreatedPacket(response_buffer, pkt_size);
     
     if (s_hw) {
-        s_hw->PrintLine("DAISY: Sample stop request acknowledged");
+        s_hw->PrintLine("DAISY: Sample stop response sent");
     }
 }
 
