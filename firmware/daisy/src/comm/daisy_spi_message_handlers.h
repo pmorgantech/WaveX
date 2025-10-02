@@ -3,8 +3,11 @@
 namespace WaveX {
 namespace Comm {
 
-// Forward declarations for message processing functions moved to daisy_spi_message_handlers.cpp
-// These are needed for ProcessSpiMessageByType to call them
+// Main message dispatcher function
+void ProcessSpiMessageByType(uint8_t msg_type, uint16_t sequence_number, const uint8_t* payload, size_t payload_size);
+
+// Forward declarations for individual message handlers
+void ProcessBrowseRequestMessage(const uint8_t* payload, size_t payload_size);
 void ProcessSyncMessage(const uint8_t* payload, size_t payload_size);
 void ProcessControlChangeMessage(const uint8_t* payload, size_t payload_size);
 void ProcessNoteMessage(const uint8_t* payload, size_t payload_size);

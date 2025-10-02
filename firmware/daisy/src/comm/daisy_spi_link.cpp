@@ -10,6 +10,7 @@
 #include "daisy_seed.h"
 #include <string.h>
 #include <stdint.h>
+#include <cstdint>
 #include <cstdlib>
 #include "per/gpio.h"
 #include "per/spi.h"
@@ -68,20 +69,12 @@ static daisy::GPIO cs_pin;
 static daisy::GPIO attn_pin;
 static WaveX::Comm::spi_link_stats_t s_stats = {};
 
-static volatile bool g_esp32_attention_flag = false; // Flag for ESP32 attention
-
 // ============================================================================
-// Debug DMA Function
+// Message Queue and Packet Management
 // ============================================================================
 
 // Message queue for received messages (unified for both packet types)
 #define MAX_QUEUED_MESSAGES 8
-
-// Outgoing message queue (Daisy → ESP32)
-
-// Message deduplication - simple approach for single-threaded execution
-static uint8_t s_last_processed_packet[32] = {0};
-static bool s_has_last_packet = false;
 
 // Sequence number tracking for duplicate detection
 static uint16_t s_last_received_seq = 0;
@@ -89,7 +82,14 @@ static uint16_t s_expected_seq = 1; // Start from 1, 0 is reserved
 static uint32_t s_duplicate_count = 0;
 static uint32_t s_out_of_order_count = 0;
 
-// Check for duplicate packets using sequence numbers
+// ============================================================================
+// Utility Functions (used by message handlers)
+// ============================================================================
+
+namespace WaveX {
+namespace Comm {
+
+// Check for duplicate packets using sequence numbers (packet-level processing)
 static bool is_duplicate_packet(uint16_t seq_num)
 {
     if (seq_num == 0) {
@@ -119,6 +119,9 @@ static bool is_duplicate_packet(uint16_t seq_num)
     
     return false;
 }
+
+} // namespace Comm
+} // namespace WaveX
 
 // Software CRC16 calculation matching ESP32 and shared protocol (CRC-16-CCITT)
 static uint16_t calculate_hardware_crc16(const uint8_t* data, size_t length)
@@ -153,13 +156,26 @@ static bool init_hardware_crc()
 #if WAVEX_SPI_DMA_ENABLED
 static volatile bool s_tx_inflight = false;
 static volatile bool s_duplex_inflight = false;
-static volatile bool s_packet_ready_for_processing = false;
+static volatile uint32_t s_packets_ready_for_processing = 0; // Counter instead of bool
 static uint32_t s_dma_start_time = 0;
-static const uint32_t DMA_TIMEOUT_MS = 1000; // 1 second timeout
-// DMA buffers in non-cacheable SRAM for proper coherency
-// Use MAX_PKT_SIZE to support all packet sizes up to 4KB
+static const uint32_t DMA_TIMEOUT_MS = 100; // 100ms timeout
+
+// DMA buffers - these are for active DMA transfers
 static uint8_t s_tx_dma_buf[MAX_PKT_SIZE] DMA_BUFFER_MEM_SECTION;
 static uint8_t s_rx_dma_buf[MAX_PKT_SIZE] DMA_BUFFER_MEM_SECTION;
+
+// Multiple TX buffers for send throughput - in regular RAM
+#define TX_BUFFER_COUNT 4
+static uint8_t s_tx_buffers[TX_BUFFER_COUNT][MAX_PKT_SIZE] __attribute__((aligned(32)));
+static volatile uint32_t s_tx_buffer_states[TX_BUFFER_COUNT]; // 0=free, 1=ready, 2=sending
+static volatile uint32_t s_current_tx_buffer = 0;
+static volatile uint32_t s_tx_packets_queued = 0;
+
+// Multiple RX buffers for receive throughput - in regular RAM  
+#define RX_BUFFER_COUNT 4
+static uint8_t s_rx_buffers[RX_BUFFER_COUNT][MAX_PKT_SIZE] __attribute__((aligned(32)));
+static volatile uint32_t s_current_rx_buffer = 0; // Currently active RX buffer for DMA
+static volatile uint32_t s_ready_rx_buffers[RX_BUFFER_COUNT]; // Buffer ready flags (0=free, 1=ready)
 
 // Static packet buffer pool for large packets (replaces malloc/free)
 static uint8_t s_large_packet_pool[4][MAX_PKT_SIZE] __attribute__((aligned(32)));
@@ -181,9 +197,14 @@ static void spi_dma_end_cb(void* /*context*/, daisy::SpiHandle::Result result)
 {
     // Deassert CS and update state
     cs_pin.Write(true);
-    // Update stats atomically
+    
     if(result == daisy::SpiHandle::Result::OK) {
         s_stats.packets_sent++;
+        
+        // Mark current TX buffer as free (minimal IRQ work)
+        if (s_current_tx_buffer < TX_BUFFER_COUNT) {
+            s_tx_buffer_states[s_current_tx_buffer] = 0; // Mark as free
+        }
     }
     s_tx_inflight = false;
 }
@@ -199,12 +220,14 @@ static void spi_duplex_end_cb(void* /*context*/, daisy::SpiHandle::Result result
 {
     // Deassert CS and update state
     cs_pin.Write(true);
-    // if(result == daisy::SpiHandle::Result::OK)
-    // {
+    
+    if(result == daisy::SpiHandle::Result::OK) {
         s_stats.packets_received++;
-        // Signal that packet is ready for processing
-        s_packet_ready_for_processing = true;
-    // }
+        
+        // ONLY set flags in IRQ context - NO memory operations!
+        // The DMA buffer data will be copied in main loop processing
+        s_packets_ready_for_processing++;
+    }
     s_duplex_inflight = false;
 }
 
@@ -273,12 +296,37 @@ static daisy::SpiHandle::Result Spi_SendPacket(const uint8_t* tx_buf, size_t pac
     s_tx_inflight = false;
     cs_pin.Write(true); // Ensure CS is high before starting
 
-    // Clear both TX and RX buffers before transaction
-    memset(s_tx_dma_buf, 0, MAX_PKT_SIZE);
-    memset(s_rx_dma_buf, 0, MAX_PKT_SIZE);
+    // Find a free TX buffer and prepare it
+    uint32_t tx_buffer_idx = 0;
+    bool found_free = false;
+    for (uint32_t i = 0; i < TX_BUFFER_COUNT; i++) {
+        if (s_tx_buffer_states[i] == 0) { // Free
+            tx_buffer_idx = i;
+            found_free = true;
+            break;
+        }
+    }
     
-    // Copy payload into persistent DMA buffer
-    memcpy(s_tx_dma_buf, tx_buf, packet_size);
+    if (!found_free) {
+        if (s_hw) s_hw->PrintLine("DAISY: All TX buffers in use - dropping packet");
+        return daisy::SpiHandle::Result::ERR;
+    }
+    
+    // Check if packet fits in DMA buffer
+    if (packet_size > MAX_PKT_SIZE) {
+        if (s_hw) s_hw->PrintLine("DAISY: Packet too large for DMA buffer (%d > %d)", (int)packet_size, MAX_PKT_SIZE);
+        return daisy::SpiHandle::Result::ERR;
+    }
+    
+    // Prepare the TX buffer
+    memset(s_tx_buffers[tx_buffer_idx], 0, MAX_PKT_SIZE);
+    memcpy(s_tx_buffers[tx_buffer_idx], tx_buf, packet_size);
+    s_tx_buffer_states[tx_buffer_idx] = 2; // Mark as sending
+    s_current_tx_buffer = tx_buffer_idx;
+    
+    // Copy to DMA buffer for transmission (only the packet size needed)
+    memset(s_tx_dma_buf, 0, MAX_PKT_SIZE);
+    memcpy(s_tx_dma_buf, s_tx_buffers[tx_buffer_idx], packet_size);
     
     // Cache operations removed - buffers are in non-cacheable DMA memory
 
@@ -294,7 +342,7 @@ static daisy::SpiHandle::Result Spi_SendPacket(const uint8_t* tx_buf, size_t pac
     // cs_pin.Write(false);
     daisy::SpiHandle::Result dma_result = g_spi_handle->DmaTransmitAndReceive(
         s_tx_dma_buf,
-        s_rx_dma_buf,
+        s_rx_dma_buf, // Use RX buffer as dummy for send operations
         MAX_PKT_SIZE,
         spi_dma_start_cb,
         spi_dma_end_cb,
@@ -390,8 +438,9 @@ static daisy::SpiHandle::Result Spi_SendPacket(const uint8_t* tx_buf, size_t pac
 namespace WaveX {
 namespace Comm {
 
-// Forward declarations
-static void ProcessBrowseRequestMessage(const uint8_t* packet_data, size_t packet_size);
+// ============================================================================
+// Message Queue Variables
+// ============================================================================
 
 // Message queue for received messages (unified for both packet types)
 static uint8_t message_queue[MAX_QUEUED_MESSAGES][MAX_PKT_SIZE] __attribute__((aligned(4)));
@@ -405,13 +454,18 @@ static int outgoing_head = 0;
 static int outgoing_tail = 0;
 static int outgoing_count = 0;
 
-// Forward declarations for outgoing message queue functions
+// ============================================================================
+// Static Function Declarations
+// ============================================================================
+
 static bool QueueOutgoingMessage(const uint8_t* packet_data, size_t packet_size);
-static bool Spi_HasOutgoingData();
 static void PrepareTxBuffer(uint8_t* tx_buf, size_t buf_size);
 static bool PerformBidirectionalPoll();
 static bool ProcessReceivedPacket(const uint8_t* rx_buf, size_t transfer_size);
-// Forward declaration removed - function is now public
+
+// ============================================================================
+// Public API Functions
+// ============================================================================
 
 void Spi_Init(daisy::DaisySeed &hw, daisy::SpiHandle* hspi)
 {
@@ -525,146 +579,10 @@ void Spi_Init(daisy::DaisySeed &hw, daisy::SpiHandle* hspi)
 }
 
 // ============================================================================
-// ESP32 Message Processing
+// Static Helper Functions - Queue Management
 // ============================================================================
 
-// Forward declarations for functions called from message handlers
-
-static void ProcessSpiMessageByType(uint8_t msg_type, uint16_t sequence_number, const uint8_t* payload, size_t payload_size)
-{
-    using namespace WaveX::Protocol;
-
-    // Check for duplicate packets using sequence numbers
-    if (is_duplicate_packet(sequence_number)) {
-        if (s_hw) s_hw->PrintLine("DAISY: Dropping duplicate/out-of-order packet: seq=%u", sequence_number);
-        return;
-    }
-
-    // Debug: Log message processing
-    if (s_hw) {
-        s_hw->PrintLine("DAISY: Processing message - msg_type=0x%02X, seq=%u, payload_size=%d bytes",
-                        msg_type, sequence_number, (int)payload_size);
-        if (payload_size > 0) {
-            s_hw->PrintLine("DAISY: Payload bytes: %02X %02X %02X %02X %02X %02X %02X %02X", 
-                            payload[0], payload[1], payload[2], payload[3],
-                            payload[4], payload[5], payload[6], payload[7]);
-        }
-    }
-
-    // Route based on message type - all handlers now receive payload only
-    switch (msg_type) {
-        case MSG_SYNC:
-            ProcessSyncMessage(payload, payload_size);
-            break;
-        case MSG_CONTROL_CHANGE:
-            ProcessControlChangeMessage(payload, payload_size);
-            break;
-        case MSG_NOTE_ON:
-            ProcessNoteMessage(payload, payload_size);
-            break;
-        case MSG_NOTE_OFF:
-            ProcessNoteOffMessage(payload, payload_size);
-            break;
-        case MSG_SAMPLE_LOAD:
-            ProcessSampleLoadMessage(payload, payload_size);
-            break;
-        case MSG_SAMPLE_CTRL:
-            ProcessSampleControlMessage(payload, payload_size);
-            break;
-        case MSG_PREVIEW_REQ:
-            ProcessPreviewRequestMessage(payload, payload_size);
-            break;
-        case MSG_DATA_REQUEST:
-            ProcessDataRequestMessage(payload, payload_size);
-            break;
-        case MSG_METER_PUSH:
-            ProcessMeterPushMessage(payload, payload_size);
-            break;
-        case MSG_WAVE_CHUNK:
-            ProcessWaveChunkMessage(payload, payload_size);
-            break;
-        case MSG_HEARTBEAT:
-            ProcessHeartbeatMessage(payload, payload_size);
-            break;
-        case MSG_BROWSE_REQ:
-            if (s_hw) s_hw->PrintLine("DAISY: Routing MSG_BROWSE_REQ to ProcessBrowseRequestMessage");
-            ProcessBrowseRequestMessage(payload, payload_size);
-            break;
-        case MSG_BROWSE_RESP:
-            ProcessBrowseResponseMessage(payload, payload_size);
-            break;
-        case MSG_SAMPLE_PLAY_REQ:
-            ProcessSamplePlayRequestMessage(payload, payload_size);
-            break;
-        case MSG_SAMPLE_STOP_REQ:
-            ProcessSampleStopRequestMessage(payload, payload_size);
-            break;
-        case MSG_SAMPLE_STATUS:
-            ProcessSampleStatusMessage(payload, payload_size);
-            break;
-        case MSG_SAMPLE_PLAY_INDEX_REQ:
-            ProcessSamplePlayIndexRequestMessage(payload, payload_size);
-            break;
-        case MSG_SAMPLE_GET_PATH_REQ:
-            ProcessSampleGetPathRequestMessage(payload, payload_size);
-            break;
-        case MSG_SAMPLE_GET_PATH_RESP:
-            ProcessSampleGetPathResponseMessage(payload, payload_size);
-            break;
-        case MSG_ACK:
-            ProcessAckMessage(payload, payload_size);
-            break;
-        case MSG_ERROR:
-            ProcessErrorMessage(payload, payload_size);
-            break;
-        default:
-            if (s_hw) {
-                s_hw->PrintLine("DAISY: Unknown message type: 0x%02X", msg_type);
-            }
-            break;
-    }
-}
-
-// Process browse request message
-static void ProcessBrowseRequestMessage(const uint8_t* payload, size_t payload_size)
-{
-    using namespace WaveX::Protocol;
-
-    if (s_hw) {
-        s_hw->PrintLine("DAISY: ProcessBrowseRequestMessage called - payload_size=%d", (int)payload_size);
-        s_hw->PrintLine("DAISY: Payload bytes: %02X %02X %02X %02X %02X %02X %02X %02X", 
-                       payload[0], payload[1], payload[2], payload[3],
-                       payload[4], payload[5], payload[6], payload[7]);
-    }
-
-    // Parse browse request: start_index (1 byte) + path (null-terminated)
-    uint8_t start_index = payload[0];
-    const char* path_ptr = (const char*)(payload + 1);
-    
-    if (s_hw) {
-        s_hw->PrintLine("DAISY: Parsed start_index=%d, path_ptr='%s'", start_index, path_ptr);
-    }
-    
-    char path[96] = {0};
-    size_t path_len = strlen(path_ptr);
-    if (path_len >= sizeof(path)) {
-        path_len = sizeof(path) - 1;
-    }
-    memcpy(path, path_ptr, path_len);
-    path[path_len] = '\0';
-    
-    uint8_t max_entries = 20; // Default to 20 entries
-
-    if (s_hw) {
-        s_hw->PrintLine("DAISY: Calling ProcessBrowseRequest with path='%s', start_index=%d, max_entries=%d", 
-                       path, start_index, max_entries);
-    }
-
-    WaveX::Comm::ProcessBrowseRequest(path, start_index, max_entries);
-}
-
-
-// Prepare TX buffer (existing function)
+// Prepare TX buffer with outgoing data or ACK packet
 static void PrepareTxBuffer(uint8_t* tx_buf, size_t buf_size)
 {
     // Check if we have outgoing messages to send
@@ -700,13 +618,7 @@ static void PrepareTxBuffer(uint8_t* tx_buf, size_t buf_size)
     }
 }
 
-// Check if we have outgoing data (existing function)
-bool Spi_HasOutgoingData()
-{
-    return outgoing_count > 0;
-}
-
-// Add message to outgoing queue (existing function)
+// Add message to outgoing queue
 static bool QueueOutgoingMessage(const uint8_t* packet_data, size_t packet_size)
 {
     if (outgoing_count >= MAX_QUEUED_MESSAGES) {
@@ -720,12 +632,16 @@ static bool QueueOutgoingMessage(const uint8_t* packet_data, size_t packet_size)
     return true;
 }
 
-// Process received packet (static function)
+// ============================================================================
+// Static Helper Functions - Packet Processing
+// ============================================================================
+
+// Process received packet - validates, parses, and routes to message handlers
 static bool ProcessReceivedPacket(const uint8_t* rx_buf, size_t transfer_size)
 {
-    if (s_hw) {
-        s_hw->PrintLine("DAISY: ProcessReceivedPacket called - transfer_size=%d", (int)transfer_size);
-    }
+    // if (s_hw) {
+    //     s_hw->PrintLine("DAISY: ProcessReceivedPacket called - transfer_size=%d", (int)transfer_size);
+    // }
 
     if (!rx_buf || transfer_size == 0) {
         if (s_hw) s_hw->PrintLine("DAISY: Invalid rx_buf or transfer_size=0");
@@ -733,11 +649,11 @@ static bool ProcessReceivedPacket(const uint8_t* rx_buf, size_t transfer_size)
     }
 
     // Debug: Always show first 8 bytes of received data
-    if (s_hw) {
-        s_hw->PrintLine("DAISY: Raw RX data: %02X %02X %02X %02X %02X %02X %02X %02X", 
-                       rx_buf[0], rx_buf[1], rx_buf[2], rx_buf[3], 
-                       rx_buf[4], rx_buf[5], rx_buf[6], rx_buf[7]);
-    }
+    // if (s_hw) {
+    //     s_hw->PrintLine("DAISY: Raw RX data: %02X %02X %02X %02X %02X %02X %02X %02X", 
+    //                    rx_buf[0], rx_buf[1], rx_buf[2], rx_buf[3], 
+    //                    rx_buf[4], rx_buf[5], rx_buf[6], rx_buf[7]);
+    // }
 
     // Check for all-zero packet (ESP32 sends this when it has no data)
     // This prevents ACK ping-pong between ESP32 and Daisy
@@ -750,12 +666,8 @@ static bool ProcessReceivedPacket(const uint8_t* rx_buf, size_t transfer_size)
     }
     
     if (all_zeros) {
-        if (s_hw) s_hw->PrintLine("DAISY: Received all-zero packet - ignoring");
+        //if (s_hw) s_hw->PrintLine("DAISY: Received all-zero packet - ignoring");
         return true; // Successfully ignored
-    }
-
-    if (s_hw) {
-        s_hw->PrintLine("DAISY: Non-zero packet detected, proceeding with processing");
     }
 
     // Debug: Print received packet details
@@ -781,11 +693,6 @@ static bool ProcessReceivedPacket(const uint8_t* rx_buf, size_t transfer_size)
     
     // Use expected size if valid, otherwise use full buffer
     size_t parse_size = (expected_size > 0 && expected_size <= transfer_size) ? expected_size : transfer_size;
-    
-    if (s_hw) {
-        s_hw->PrintLine("DAISY: Using parse_size=%d for validation", (int)parse_size);
-    }
-
     // Validate and parse the unified packet
     if (!validate_wave_packet(rx_buf, parse_size)) {
         if (s_hw) s_hw->PrintLine("DAISY: Invalid packet received - CRC validation failed");
@@ -801,6 +708,12 @@ static bool ProcessReceivedPacket(const uint8_t* rx_buf, size_t transfer_size)
     if (!parse_wave_packet(rx_buf, parse_size, msg_type, payload, payload_size, sequence_number, flags)) {
         if (s_hw) s_hw->PrintLine("DAISY: Failed to parse packet");
         return false;
+    }
+
+    // Check for duplicate packets using sequence numbers (packet-level concern)
+    if (is_duplicate_packet(sequence_number)) {
+        if (s_hw) s_hw->PrintLine("DAISY: Dropping duplicate/out-of-order packet: seq=%u", sequence_number);
+        return true; // Successfully handled (by ignoring)
     }
 
     // Handle packet-level flags (ACK/NACK) here
@@ -820,12 +733,12 @@ static bool ProcessReceivedPacket(const uint8_t* rx_buf, size_t transfer_size)
         return true;
     }
 
-    // Route message by type - pass only the payload
+    // Route message by type - pass only the payload (packet processing is complete)
     ProcessSpiMessageByType(msg_type, sequence_number, payload, payload_size);
     return true;
 }
 
-// Perform bidirectional poll (static function) - now non-blocking
+// Perform bidirectional poll - sends queued outgoing packets (non-blocking)
 static bool PerformBidirectionalPoll()
 {
     // Send outgoing packets if we have any (non-blocking)
@@ -886,12 +799,26 @@ void Spi_DebugState()
 {
     if (s_hw) {
         s_hw->PrintLine("DAISY: SPI Debug State");
-        s_hw->PrintLine("  Queue: head=%d, tail=%d, count=%d", queue_head, queue_tail, queue_count);
-        s_hw->PrintLine("  Outgoing: head=%d, tail=%d, count=%d", outgoing_head, outgoing_tail, outgoing_count);
-        s_hw->PrintLine("  Stats: packets_sent=%lu, packets_received=%lu, crc_errors=%lu",
+        s_hw->PrintLine("  Incoming Queue: head=%d, tail=%d, count=%d", queue_head, queue_tail, queue_count);
+        s_hw->PrintLine("  Outgoing Queue: head=%d, tail=%d, count=%d", outgoing_head, outgoing_tail, outgoing_count);
+#if WAVEX_SPI_DMA_ENABLED
+        s_hw->PrintLine("  DMA RX Buffers: current=%u, ready=%u", 
+                        (unsigned)s_current_rx_buffer, (unsigned)s_packets_ready_for_processing);
+        s_hw->PrintLine("  RX Buffer Status: [%u,%u,%u,%u]", 
+                        (unsigned)s_ready_rx_buffers[0], (unsigned)s_ready_rx_buffers[1],
+                        (unsigned)s_ready_rx_buffers[2], (unsigned)s_ready_rx_buffers[3]);
+        s_hw->PrintLine("  TX Buffer Status: [%u,%u,%u,%u]", 
+                        (unsigned)s_tx_buffer_states[0], (unsigned)s_tx_buffer_states[1],
+                        (unsigned)s_tx_buffer_states[2], (unsigned)s_tx_buffer_states[3]);
+        s_hw->PrintLine("  DMA State: tx_inflight=%s, duplex_inflight=%s", 
+                        s_tx_inflight ? "true" : "false", 
+                        s_duplex_inflight ? "true" : "false");
+#endif
+        s_hw->PrintLine("  Stats: sent=%lu, received=%lu, crc_errors=%lu, rx_overflows=%lu",
                         (unsigned long)s_stats.packets_sent,
                         (unsigned long)s_stats.packets_received, 
-                        (unsigned long)s_stats.crc_errors);
+                        (unsigned long)s_stats.crc_errors,
+                        (unsigned long)s_stats.rx_q_overflows);
     }
 }
 
@@ -917,26 +844,77 @@ void Spi_CheckTimeout()
 #endif
 }
 
-// Process queued SPI messages (public API function)
+// Process queued SPI messages (public API function) - now with batch processing
 void ProcessQueuedSpiMessage()
 {
-    // Check for packet ready from DMA callback
+    const int MAX_PACKETS_PER_CALL = 4; // Process up to 4 packets per main loop call
+    int processed_count = 0;
+    
+    // Process DMA packets - copy from DMA buffer to storage and process
 #if WAVEX_SPI_DMA_ENABLED
-    if (s_packet_ready_for_processing) {
-        s_packet_ready_for_processing = false;
-        // Process the packet received via DMA
-        if (s_hw) {
-            s_hw->PrintLine("DAISY: Processing DMA packet");
+    while (s_packets_ready_for_processing > 0 && processed_count < MAX_PACKETS_PER_CALL) {
+        // Find a free storage buffer
+        uint32_t storage_buffer = 0;
+        bool found_free = false;
+        for (uint32_t i = 0; i < RX_BUFFER_COUNT; i++) {
+            if (s_ready_rx_buffers[i] == 0) { // Free
+                storage_buffer = i;
+                found_free = true;
+                break;
+            }
         }
-        ProcessReceivedPacket(s_rx_dma_buf, MAX_PKT_SIZE);
-        return; // Process one packet per call
+        
+        if (!found_free) {
+            if (s_hw) s_hw->PrintLine("DAISY: No free RX storage buffers - dropping packet");
+            s_packets_ready_for_processing--;
+            continue;
+        }
+        
+        // Copy from DMA buffer to storage buffer (main loop context - safe!)
+        memcpy(s_rx_buffers[storage_buffer], s_rx_dma_buf, MAX_PKT_SIZE);
+        
+        if (s_hw) {
+            s_hw->PrintLine("DAISY: Processing DMA packet (remaining: %u)", s_packets_ready_for_processing);
+        }
+        
+        // Process the packet from storage buffer
+        ProcessReceivedPacket(s_rx_buffers[storage_buffer], MAX_PKT_SIZE);
+        
+        // Decrement counter
+        s_packets_ready_for_processing--;
+        processed_count++;
     }
 #endif
-    // Poll for new messages
-    PerformBidirectionalPoll();
 
-    // Process one message from queue if available
-    if (queue_count > 0) {
+    // Process multiple outgoing packets - send up to MAX_PACKETS_PER_CALL
+    while (outgoing_count > 0 && processed_count < MAX_PACKETS_PER_CALL) {
+        // Send one packet from the queue
+        uint8_t* outgoing_msg = outgoing_queue[outgoing_head];
+        size_t packet_size = get_packet_size(outgoing_msg);
+        
+        // Send the packet (non-blocking DMA)
+        daisy::SpiHandle::Result result = Spi_SendPacket(outgoing_msg, packet_size);
+        
+        if (result == daisy::SpiHandle::Result::OK) {
+            // Successfully sent, remove from queue
+            outgoing_head = (outgoing_head + 1) % MAX_QUEUED_MESSAGES;
+            outgoing_count--;
+            
+            if (s_hw) {
+                uint8_t msg_type = outgoing_msg[1];
+                uint16_t seq_num = outgoing_msg[2] | (outgoing_msg[3] << 8);
+                s_hw->PrintLine("DAISY: Sent packet type=0x%02X, seq=%u, size=%d, remaining=%d", 
+                               msg_type, seq_num, (int)packet_size, outgoing_count);
+            }
+            processed_count++;
+        } else {
+            if (s_hw) s_hw->PrintLine("DAISY: Send failed with result %d - stopping batch", (int)result);
+            break; // Stop on send error
+        }
+    }
+
+    // Process multiple queued messages (if we start using the incoming message queue)
+    while (queue_count > 0 && processed_count < MAX_PACKETS_PER_CALL) {
         uint8_t* packet_data = message_queue[queue_head];
         size_t packet_size = get_packet_size(packet_data);
         
@@ -968,8 +946,16 @@ void ProcessQueuedSpiMessage()
         // Dequeue
         queue_head = (queue_head + 1) % MAX_QUEUED_MESSAGES;
         queue_count--;
+        processed_count++;
         
         WAVEX_LOG_DAISY_INBOUND(DAISY_INBOUND_SPI, "Message processed and dequeued, remaining queue_count=%d", queue_count);
+    }
+    
+    // Log batch processing stats periodically
+    static uint32_t s_last_batch_log = 0;
+    if (processed_count > 1 && (System::GetTick() - s_last_batch_log) > 1000) {
+        s_last_batch_log = System::GetTick();
+        if (s_hw) s_hw->PrintLine("DAISY: Batch processed %d packets in single call", processed_count);
     }
 }
 
@@ -989,7 +975,8 @@ daisy::SpiHandle::Result Spi_ReceivePacket()
         return daisy::SpiHandle::Result::ERR;
     }
 
-    // Clear RX buffer before transaction
+    // Find next available RX buffer (check for buffer overflow)
+    // Clear the RX DMA buffer
     memset(s_rx_dma_buf, 0, MAX_PKT_SIZE);
     
     // Prepare TX buffer with outgoing data if available, otherwise zeros
@@ -1003,7 +990,7 @@ daisy::SpiHandle::Result Spi_ReceivePacket()
     // cs_pin.Write(false);
     daisy::SpiHandle::Result dma_result = g_spi_handle->DmaTransmitAndReceive(
         s_tx_dma_buf,
-        s_rx_dma_buf,
+        s_rx_dma_buf, // Use DMA buffer
         MAX_PKT_SIZE,
         spi_duplex_start_cb,
         spi_duplex_end_cb,
