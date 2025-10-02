@@ -48,6 +48,10 @@ using namespace WaveX::Protocol;
 // Legacy function compatibility (for functions that were removed)
 #define validate_packet validate_wave_packet
 
+// How long to wait for ESP32 to be ready for DMA
+#define ESP32_DMA_READY_WAIT_MS 1000
+
+
 // Compatibility function for get_packet_size - extracts size code from packet data
 static size_t get_packet_size(const uint8_t* packet_data) {
     if (!packet_data) return 0;
@@ -331,9 +335,9 @@ static daisy::SpiHandle::Result Spi_SendPacket(const uint8_t* tx_buf, size_t pac
     // Cache operations removed - buffers are in non-cacheable DMA memory
 
     if (s_hw) s_hw->PrintLine("DAISY: Starting DMA duplex transaction, packet_size=%d", (int)packet_size);
-    if (s_hw) s_hw->PrintLine("DAISY: TX buffer contents: %02X %02X %02X %02X %02X %02X %02X %02X", 
-                               s_tx_dma_buf[0], s_tx_dma_buf[1], s_tx_dma_buf[2], s_tx_dma_buf[3],
-                               s_tx_dma_buf[4], s_tx_dma_buf[5], s_tx_dma_buf[6], s_tx_dma_buf[7]);
+    // if (s_hw) s_hw->PrintLine("DAISY: TX buffer contents: %02X %02X %02X %02X %02X %02X %02X %02X", 
+    //                            s_tx_dma_buf[0], s_tx_dma_buf[1], s_tx_dma_buf[2], s_tx_dma_buf[3],
+    //                            s_tx_dma_buf[4], s_tx_dma_buf[5], s_tx_dma_buf[6], s_tx_dma_buf[7]);
                                
     // Start DMA duplex transfer
     uint32_t call_start_time = System::GetTick();
@@ -352,9 +356,9 @@ static daisy::SpiHandle::Result Spi_SendPacket(const uint8_t* tx_buf, size_t pac
     uint32_t call_end_time = System::GetTick();
     uint32_t call_duration = call_end_time - call_start_time;
     
-    if (s_hw) s_hw->PrintLine("DAISY: DmaTransmitAndReceive call completed at time=%u, duration=%u ms", call_end_time, call_duration);
-    if (s_hw) s_hw->PrintLine("DAISY: DmaTransmitAndReceive returned: %d", (int)dma_result);
-    if (s_hw) s_hw->PrintLine("DAISY: Post-DMA state: inflight=%s, start_time=%u", s_tx_inflight ? "true" : "false", s_dma_start_time);
+    // if (s_hw) s_hw->PrintLine("DAISY: DmaTransmitAndReceive call completed at time=%u, duration=%u ms", call_end_time, call_duration);
+    // if (s_hw) s_hw->PrintLine("DAISY: DmaTransmitAndReceive returned: %d", (int)dma_result);
+    // if (s_hw) s_hw->PrintLine("DAISY: Post-DMA state: inflight=%s, start_time=%u", s_tx_inflight ? "true" : "false", s_dma_start_time);
     
     if (dma_result != daisy::SpiHandle::Result::OK) {
         if (s_hw) s_hw->PrintLine("DAISY: DMA transaction failed to start - result=%d, clearing inflight flag", (int)dma_result);
@@ -369,32 +373,11 @@ static daisy::SpiHandle::Result Spi_SendPacket(const uint8_t* tx_buf, size_t pac
             default: error_msg = "Unknown result code"; break;
         }
         if (s_hw) s_hw->PrintLine("DAISY: DMA error details: %s", error_msg);
-        
-        // Fallback to blocking call since DMA is broken
-        if (s_hw) s_hw->PrintLine("DAISY: DMA failed - using blocking fallback...");
-        uint8_t dummy_rx[32];
-        cs_pin.Write(false);
-        uint32_t blocking_start = System::GetTick();
-        daisy::SpiHandle::Result blocking_result = g_spi_handle->BlockingTransmitAndReceive(
-            s_tx_dma_buf, dummy_rx, packet_size, 1000);
-        uint32_t blocking_duration = System::GetTick() - blocking_start;
-        cs_pin.Write(true);
-        
-        if (blocking_result == daisy::SpiHandle::Result::OK) {
-            s_stats.packets_sent++;
-            if (s_hw) s_hw->PrintLine("DAISY: Blocking call SUCCESS: duration=%u ms", blocking_duration);
-            return blocking_result; // Return success for blocking call
-        } else {
-            if (s_hw) s_hw->PrintLine("DAISY: Blocking call FAILED: result=%d, duration=%u ms", (int)blocking_result, blocking_duration);
-        }
-    } else {
-        // DMA started successfully - callback will handle completion
-        if (s_hw) s_hw->PrintLine("DAISY: DMA transaction started successfully, waiting for completion callback...");
     }
     
     // Add small delay to prevent overwhelming ESP32
     // FIXME: This seems to have an effect on whether or not get receive browse_resp packets
-    System::DelayUs(400); // Reduced from 1000us to 400us for better performance
+    System::DelayUs(ESP32_DMA_READY_WAIT_MS); // Reduced from 1000us to 400us for better performance
     
     return dma_result;
 #else
@@ -1011,7 +994,7 @@ daisy::SpiHandle::Result Spi_ReceivePacket()
     memset(rx_buf, 0, MAX_PKT_SIZE);
     
     // Wait longer for ESP32 to be ready
-    System::DelayUs(500);
+    System::DelayUs(ESP32_DMA_READY_WAIT_MS));
 
     // Check if ESP32 is still signaling data ready
     if (!attn_pin.Read()) {
