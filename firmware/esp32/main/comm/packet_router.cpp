@@ -160,8 +160,10 @@ void PacketRouter::handle_heartbeat(const WaveX::Protocol::HeartbeatMessage& msg
 
 void PacketRouter::handle_meter_push(const WaveX::Protocol::MeterPushMessage& msg)
 {
+    #ifdef WAVEX_LOG_METER_DATA
     ESP_LOGI("packet_router", "Meter: L=(%u,%u) R=(%u,%u)", 
              msg.rms_left, msg.peak_left, msg.rms_right, msg.peak_right);
+    #endif
     
     // Convert uint16_t to float (0-32767 -> 0.0-1.0)
     float rms_left = msg.rms_left / 32767.0f;
