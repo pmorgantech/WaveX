@@ -8,6 +8,7 @@
 
 #ifdef ESP_PLATFORM
 #include "esp_log.h"
+#include <vector>
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -438,28 +439,24 @@ esp_err_t inter_mcu_send_browse_req(const char* path, uint8_t start_index)
         return -1;
     }
     
-    size_t path_len = strlen(path);
-    if (path_len > 18) path_len = 18; // Limit to packet payload size
+    // Flexible payload: [start_index][path bytes...][\0]
+    const size_t path_len = strlen(path);
+    const size_t payload_len = 1 + path_len + 1; // start_index + path + null terminator
     
-    ESP_LOGI("inter_mcu", "DEBUG - path_len=%d", (int)path_len);
-    
-    uint8_t payload[20];
-    memset(payload, 0, sizeof(payload)); // Initialize to zeros
+    std::vector<uint8_t> payload(payload_len, 0);
     payload[0] = start_index;
+    memcpy(&payload[1], path, path_len);
+    payload[payload_len - 1] = '\0';
     
-    if (path_len > 0) {
-        memcpy(&payload[1], path, path_len);
-    }
-    
-    // Debug: Log what we're sending
+    // Debug: Log what we're sending (limit output)
     ESP_LOGI("inter_mcu", "DEBUG - Sending browse request: start_index=%d, path='%s'", start_index, path);
-    ESP_LOGI("inter_mcu", "DEBUG - Payload bytes: ");
-    for (int i = 0; i < path_len + 1 && i < 20; i++) {
-        ESP_LOGI("inter_mcu", "  [%d] = 0x%02X ('%c')", i, payload[i], (payload[i] >= 32 && payload[i] <= 126) ? payload[i] : '.');
+    ESP_LOGI("inter_mcu", "DEBUG - Payload length: %d", (int)payload_len);
+    for (size_t i = 0; i < payload_len && i < 24; i++) {
+        ESP_LOGD("inter_mcu", "  [%d] = 0x%02X", (int)i, payload[i]);
     }
     
     ESP_LOGI("inter_mcu", "DEBUG - About to call spi_link_send with MSG_BROWSE_REQ=0x%02X", WaveX::Protocol::MSG_BROWSE_REQ);
-    int result = spi_link_send(WaveX::Protocol::MSG_BROWSE_REQ, payload, path_len + 1);
+    int result = spi_link_send(WaveX::Protocol::MSG_BROWSE_REQ, payload.data(), (uint16_t)payload_len);
     ESP_LOGI("inter_mcu", "DEBUG - spi_link_send returned: %d", result);
     
     return result ? ESP_OK : -1; // ESP_FAIL

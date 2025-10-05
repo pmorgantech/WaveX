@@ -198,6 +198,7 @@ static void signal_daisy_urgent(bool urgent)
         ESP_LOGE(TAG, "Failed to set GPIO%d level: %s", WAVEX_INTER_MCU_GPIO_ATTN, esp_err_to_name(ret));
         return;
     }
+    ESP_LOGI(TAG, "************GPIO%d level set to %d", WAVEX_INTER_MCU_GPIO_ATTN, urgent ? 1 : 0);
 
     // Allow time for signal to stabilize before any operations
     esp_rom_delay_us(100);  // Increased delay for stability
@@ -207,13 +208,6 @@ static void signal_daisy_urgent(bool urgent)
     } else {
         WAVEX_LOG_ESP32_SPI(ESP32_INTER_SPI, "Cleared Daisy urgent signal (GPIO%d LOW) - queue_count=%d", WAVEX_INTER_MCU_GPIO_ATTN, msg_queue_count);
     }
-
-    // NOTE: Removed unreliable gpio_get_level() readback verification
-    // The actual signal works (Daisy receives interrupts) but readback can fail due to:
-    // - GPIO matrix timing issues
-    // - Electrical characteristics
-    // - Hardware-dependent behavior
-    // If signaling truly fails, Daisy will timeout and retry naturally
 #endif
 }
 
@@ -429,9 +423,17 @@ static void clear_transmitted_message_from_queue()
         xSemaphoreGive(s_spi_mutex);
 
         if (queue_empty) {
-            // Clear urgent signal when all messages are sent
-            signal_daisy_urgent(false);
-            ESP_LOGI(TAG, "TX queue empty, cleared urgent signal");
+            // Hold ATTN a bit to ensure Daisy sees the level and starts a duplex
+            vTaskDelay(pdMS_TO_TICKS(2));
+            // If something arrived during the hold, keep ATTN high
+            if (xSemaphoreTake(s_spi_mutex, portMAX_DELAY) == pdTRUE) {
+                queue_empty = (msg_queue_count == 0);
+                xSemaphoreGive(s_spi_mutex);
+            }
+            if (queue_empty) {
+                signal_daisy_urgent(false);
+                ESP_LOGI(TAG, "TX queue empty, cleared urgent signal (after hold)");
+            }
         }
 
         ESP_LOGD(TAG, "Cleared transmitted message from TX queue, remaining: %d", msg_queue_count);
@@ -608,7 +610,7 @@ static void spi_slave_task(void* pvParameters)
             }
             continue;
         }
-        ESP_LOGD(TAG, "SPI transaction completed successfully");
+        ESP_LOGI(TAG, "SPI transaction completed successfully");
         
         // Now that Daisy has received our message, consume it from the queue
         if (has_message) {
@@ -710,8 +712,9 @@ static void spi_slave_task(void* pvParameters)
 
 int spi_link_send(uint16_t type, const void* payload, uint16_t len)
 {
-    if (len > 32) {
-        ESP_LOGE(TAG, "spi_link_send: Payload too large - len=%d (max=32)", len);
+    // Allow flexible payload sizes up to protocol maximum
+    if (len == 0 || len > MAX_PAYLOAD_SIZE) {
+        ESP_LOGE(TAG, "spi_link_send: Invalid payload length %d (max=%d)", len, (int)MAX_PAYLOAD_SIZE);
         return -1;
     }
 
@@ -764,12 +767,7 @@ int spi_link_send(uint16_t type, const void* payload, uint16_t len)
         msg_queue_tail = (msg_queue_tail + 1) % MSG_QUEUE_SIZE;
         msg_queue_count++;
 
-        bool was_empty = (msg_queue_count == 1);
-
         xSemaphoreGive(s_spi_mutex);
-
-        // Note: GPIO31 signaling moved to SPI slave task after buffer is prepared
-        // This prevents race condition where Daisy starts transaction before buffer is ready
 
         return len;  // Return original payload length
     } else {
