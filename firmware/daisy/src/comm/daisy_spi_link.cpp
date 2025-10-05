@@ -49,7 +49,7 @@ using namespace WaveX::Protocol;
 #define validate_packet validate_wave_packet
 
 // How long to wait for ESP32 to be ready for DMA
-#define ESP32_DMA_READY_WAIT_MS 1000
+#define ESP32_DMA_READY_WAIT_MS 350
 
 
 // Compatibility function for get_packet_size - extracts size code from packet data
@@ -92,6 +92,10 @@ static uint32_t s_out_of_order_count = 0;
 
 namespace WaveX {
 namespace Comm {
+
+// Forward declarations
+daisy::SpiHandle::Result Spi_ReceivePacket();
+
 
 // Check for duplicate packets using sequence numbers (packet-level processing)
 static bool is_duplicate_packet(uint16_t seq_num)
@@ -334,7 +338,7 @@ static daisy::SpiHandle::Result Spi_SendPacket(const uint8_t* tx_buf, size_t pac
     
     // Cache operations removed - buffers are in non-cacheable DMA memory
 
-    if (s_hw) s_hw->PrintLine("DAISY: Starting DMA duplex transaction, packet_size=%d", (int)packet_size);
+    // if (s_hw) s_hw->PrintLine("DAISY: Starting DMA duplex transaction, packet_size=%d", (int)packet_size);
     // if (s_hw) s_hw->PrintLine("DAISY: TX buffer contents: %02X %02X %02X %02X %02X %02X %02X %02X", 
     //                            s_tx_dma_buf[0], s_tx_dma_buf[1], s_tx_dma_buf[2], s_tx_dma_buf[3],
     //                            s_tx_dma_buf[4], s_tx_dma_buf[5], s_tx_dma_buf[6], s_tx_dma_buf[7]);
@@ -508,27 +512,7 @@ void Spi_Init(daisy::DaisySeed &hw, daisy::SpiHandle* hspi)
     }
     
     if (result == SpiHandle::Result::OK) {
-        hw.PrintLine("SUCCESS: SPI master configured correctly!");
-        // // **** FORCED SPI1 INITIALIZATION ****
-        // if (!(SPI1->CR1 & SPI_CR1_SPE))
-        // {
-        //     SPI1->CR1 |= SPI_CR1_SPE;     // Enable SPI if not already
-        // }
-        // if (!(SPI1->CR1 & SPI_CR1_CSTART))
-        // {
-        //     SPI1->CR1 |= SPI_CR1_CSTART;  // Force start
-        //     s_hw->PrintLine("DAISY: Forced SPI1->CR1.CSTART=1");
-        // }
-        // hw.PrintLine("Spi_Init: hspi->Init returned: %d", (int)result);
-        // // Force RX FIFO threshold to 1/4 (8-bit mode, RXNE=1 byte)
-        // #define SPI_CR2_RXFTCFG_Pos 29U
-        // #define SPI_CR2_RXFTCFG_Msk (0x7UL << SPI_CR2_RXFTCFG_Pos)
-        // const uint32_t RXFTCFG_Pos = 29;
-        // const uint32_t RXFTCFG_Msk = (0x7U << RXFTCFG_Pos);
-        // MODIFY_REG(SPI1->CR2, RXFTCFG_Msk, (0x1U << RXFTCFG_Pos));
-        // s_hw->PrintLine("DAISY: Forced RXFTCFG=0x%lx", (SPI1->CR2 >> RXFTCFG_Pos) & 0x7);
-        // // **** END OF FORCED SPI1 INITIALIZATION ****
-        
+        hw.PrintLine("SUCCESS: SPI master configured correctly!");  
         // Set g_spi_handle and initialize stats
         g_spi_handle = hspi;
         hw.PrintLine("Spi_Init: g_spi_handle set to %p", g_spi_handle);
@@ -558,6 +542,14 @@ void Spi_Init(daisy::DaisySeed &hw, daisy::SpiHandle* hspi)
     HAL_NVIC_EnableIRQ(EXTI15_10_IRQn);
     
     hw.PrintLine("ATTN pin interrupt configured - will trigger DMA duplex transaction on ESP32 signal");
+
+    // If ATTN is already asserted at init time, kick a receive to avoid missing the first edge
+#if WAVEX_SPI_DMA_ENABLED
+    if (attn_pin.Read()) {
+        hw.PrintLine("DAISY: ATTN was high at init - starting immediate receive");
+        WaveX::Comm::Spi_ReceivePacket();
+    }
+#endif
 
 }
 
@@ -827,6 +819,20 @@ void Spi_CheckTimeout()
 #endif
 }
 
+// Level-based fallback: if ATTN is asserted and no duplex is in flight, start a receive
+bool Spi_PollAttnLevel(void)
+{
+#if WAVEX_SPI_DMA_ENABLED
+    // If attention line is high and we are not already receiving, kick a duplex transfer
+    if (attn_pin.Read() && !s_duplex_inflight)
+    {
+        if (s_hw) s_hw->PrintLine("DAISY: ATTN level high detected in poll - starting receive");
+        return Spi_ReceivePacket() == daisy::SpiHandle::Result::OK;
+    }
+#endif
+    return false;
+}
+
 // Process queued SPI messages (public API function) - now with batch processing
 void ProcessQueuedSpiMessage()
 {
@@ -871,6 +877,12 @@ void ProcessQueuedSpiMessage()
 
     // Process multiple outgoing packets - send up to MAX_PACKETS_PER_CALL
     while (outgoing_count > 0 && processed_count < MAX_PACKETS_PER_CALL) {
+        // If a DMA TX is currently in flight, defer remaining sends to a later call
+#if WAVEX_SPI_DMA_ENABLED
+        if (s_tx_inflight) {
+            break;
+        }
+#endif
         // Send one packet from the queue
         uint8_t* outgoing_msg = outgoing_queue[outgoing_head];
         size_t packet_size = get_packet_size(outgoing_msg);
@@ -967,7 +979,7 @@ daisy::SpiHandle::Result Spi_ReceivePacket()
     
     // Cache operations removed - buffers are in non-cacheable DMA memory
 
-    if (s_hw) s_hw->PrintLine("DAISY: Starting DMA duplex transaction to receive from ESP32");
+    // if (s_hw) s_hw->PrintLine("DAISY: Starting DMA duplex transaction to receive from ESP32");
 
     // Start DMA duplex transfer (bidirectional); CS low/high handled in callbacks
     // cs_pin.Write(false);
@@ -1072,10 +1084,10 @@ extern "C" void EXTI15_10_IRQHandler(void)
     if (__HAL_GPIO_EXTI_GET_IT(GPIO_PIN_12) != RESET) {
         // Clear the interrupt flag
         __HAL_GPIO_EXTI_CLEAR_IT(GPIO_PIN_12);
-        
+
         // Check if attention pin is high (ESP32 signaling data ready)
         if (attn_pin.Read() && !s_interrupt_processing) {
-            if (s_hw) s_hw->PrintLine("DAISY: ATTN interrupt - ESP32 has data ready");
+            //if (s_hw) s_hw->PrintLine("DAISY: ATTN interrupt - ESP32 has data ready");
             
             // Initiate non-blocking DMA duplex transaction to receive data
             s_interrupt_processing = true;

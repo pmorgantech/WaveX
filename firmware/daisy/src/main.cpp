@@ -394,6 +394,10 @@ int main(void)
         
         // Process any incoming SPI messages from ESP32
         uint32_t spi_start = System::GetTick();
+        // Fallback: if ATTN edge was missed, poll the level and start a receive
+        // #if WAVEX_SPI_LINK_ENABLED
+        // WaveX::Comm::Spi_PollAttnLevel();
+        // #endif
         process_incoming_spi_messages();
         uint32_t spi_duration = System::GetTick() - spi_start;
         
@@ -559,7 +563,7 @@ int main(void)
         s_cpu_measurement_count++;
         
         // Use actual sleep instead of busy wait - much more CPU efficient
-        System::DelayUs(1000); // 1ms actual sleep instead of busy wait
+        //System::Delay(1); // 1ms actual sleep instead of busy wait
         
         // Measure CPU usage every 2 seconds (reduced frequency for better performance)
         uint32_t now_ms = System::GetNow();
