@@ -121,6 +121,11 @@
 #define WAVEX_ESP_ENCODER_PCNT_ENABLED 1
 #endif
 
+// Additional PCNT Unit (PCNT_UNIT_1)
+#ifndef WAVEX_ESP_PCNT1_ENABLED
+#define WAVEX_ESP_PCNT1_ENABLED 1
+#endif
+
 // CD74HC4067 16-channel Analog Multiplexer
 #ifndef WAVEX_ESP_MUX_ENABLED
 #define WAVEX_ESP_MUX_ENABLED 0  // Currently disabled, using encoder instead
@@ -199,7 +204,7 @@
 
     // Interval for sending meter updates over SPI (ms)
     #ifndef WAVEX_AUDIO_METERS_SEND_INTERVAL_MS
-    #define WAVEX_AUDIO_METERS_SEND_INTERVAL_MS 100  // 100ms = 10Hz meter updates (reduced frequency)
+    #define WAVEX_AUDIO_METERS_SEND_INTERVAL_MS 1000  // 100ms = 10Hz meter updates (reduced frequency)
     #endif
 #endif
 
@@ -385,6 +390,41 @@
     #endif
 #endif
 
+// PCNT1 Configuration
+#if WAVEX_ESP_PCNT1_ENABLED
+    // PCNT unit selection for PCNT1
+    #ifndef WAVEX_PCNT1_UNIT
+    #define WAVEX_PCNT1_UNIT PCNT_UNIT_1
+    #endif
+
+    // PCNT channel configuration for PCNT1
+    #ifndef WAVEX_PCNT1_CH_A
+    #define WAVEX_PCNT1_CH_A PCNT_CHANNEL_0
+    #endif
+
+    #ifndef WAVEX_PCNT1_CH_B
+    #define WAVEX_PCNT1_CH_B PCNT_CHANNEL_1
+    #endif
+
+    // PCNT1 filter configuration
+    #ifndef WAVEX_PCNT1_FILTER_ENABLED
+    #define WAVEX_PCNT1_FILTER_ENABLED 1
+    #endif
+
+    #ifndef WAVEX_PCNT1_FILTER_VALUE
+    #define WAVEX_PCNT1_FILTER_VALUE 100
+    #endif
+
+    // PCNT1 interrupt thresholds
+    #ifndef WAVEX_PCNT1_THRESH_POS
+    #define WAVEX_PCNT1_THRESH_POS 4
+    #endif
+
+    #ifndef WAVEX_PCNT1_THRESH_NEG
+    #define WAVEX_PCNT1_THRESH_NEG -4
+    #endif
+#endif
+
 // USB MIDI Configuration
 #if WAVEX_ESP_USB_MIDI_ENABLED
     // Set to 1 to enable USB MIDI input, 0 to disable
@@ -473,7 +513,7 @@
 
 // Ensure inter-MCU link is enabled if any component that depends on it is enabled
 #if (WAVEX_AUDIO_ENGINE_ENABLED || WAVEX_DAC_CV_OUTPUTS_ENABLED || \
-     WAVEX_ENCODER_PCNT_ENABLED || WAVEX_4067_MUX_ENABLED || \
+     WAVEX_ENCODER_PCNT_ENABLED || WAVEX_PCNT1_ENABLED || WAVEX_4067_MUX_ENABLED || \
      WAVEX_TCA8418_BUTTON_MATRIX_ENABLED || WAVEX_LCD_DISPLAY_ENABLED || \
      WAVEX_USB_MIDI_ENABLED) && !WAVEX_INTER_MCU_LINK_ENABLED
     #error "Inter-MCU link must be enabled when using components that depend on it"

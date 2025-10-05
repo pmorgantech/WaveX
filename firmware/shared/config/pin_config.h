@@ -46,58 +46,59 @@ extern "C" {
 #define WAVEX_ESP_TOUCH_RST     14   // J1-20: Touch Reset
 #define WAVEX_ESP_TOUCH_INT     15   // J1-21: Touch Interrupt
 
-// Legacy SPI Display Interface (ST7796S TFT) - DISABLED for MIPI DSI
-// #define WAVEX_ESP_LCD_SCLK      7    // J1-7: Display SPI Clock
-// #define WAVEX_ESP_LCD_MOSI      6    // J1-6: Display SPI Data Out
-// #define WAVEX_ESP_LCD_CS        5    // J1-5: Display Chip Select
-// #define WAVEX_ESP_LCD_DC        4    // J1-4: Data/Command Control
-// #define WAVEX_ESP_LCD_RST       2    // J3-5: Display Reset
-// #define WAVEX_ESP_LCD_BL        21   // J3-18: Backlight Control
-
 // Inter-MCU Communication (SPI slave to Daisy master) - using user-verified available pins
 #define WAVEX_ESP_SPI_SCLK      48   // Using GPIO48 for SCK
 #define WAVEX_ESP_SPI_MOSI      49   // Using GPIO49 for MOSI
 #define WAVEX_ESP_SPI_MISO      50   // Using GPIO50 for MISO
 #define WAVEX_ESP_SPI_CS        51   // Using GPIO51 for CS
 // IRQ/ATTN lines for Daisy <-> ESP signaling
-#define WAVEX_ESP_DAISY_IRQ     27   // J3-26: Daisy IRQ line to ESP (active low)
 #define WAVEX_ESP_ATTN_OUT      31   // J3-14: ESP Attention output to Daisy (active high)
-
-// SD Card Interface (SPI2) - DISABLED: No SD card on ESP32
-// #define WAVEX_ESP_SD_CS         10   // J1-16: SD Card Chip Select
-// #define WAVEX_ESP_SD_SCLK       12   // J1-18: SD Card SPI Clock
-// #define WAVEX_ESP_SD_MOSI       11   // J1-17: SD Card Data Out
-// #define WAVEX_ESP_SD_MISO       13   // J1-19: SD Card Data In
-
-// MIDI Interface (UART2)
-#define WAVEX_ESP_MIDI_TX       8    // J1-12: MIDI UART TX
-#define WAVEX_ESP_MIDI_RX       42   // J3-6: MIDI UART RX
-
-// Potentiometer Interface (CD74HC4067) - DISABLED: Using encoder instead
-// #define WAVEX_ESP_POT_A0        33   // J3-7: Address Bit 0 (now encoder A)
-// #define WAVEX_ESP_POT_A1        34   // J3-8: Address Bit 1 (now encoder B)
-// #define WAVEX_ESP_POT_A2        35   // J3-9: Address Bit 2
-// #define WAVEX_ESP_POT_A3        36   // J3-10: Address Bit 3
-// #define WAVEX_ESP_POT_EN        37   // J3-11: Enable (Active Low)
-// #define WAVEX_ESP_POT_SIG       1    // ADC1_CH0: Analog Signal
-
-// Button Matrix Interface (TCA8418) - DISABLED: Using encoder instead
-// #define WAVEX_ESP_BTN_SDA       39   // J3-12: Button I2C Data
-// #define WAVEX_ESP_BTN_SCL       40   // J3-13: Button I2C Clock (now encoder button)
-// #define WAVEX_ESP_BTN_RST       41   // J3-14: Button Reset
-// #define WAVEX_ESP_BTN_INT       43   // J3-15: Button Interrupt
-
-// LED Driver Interface (TLC5947) - DISABLED: Not needed for now
-// #define WAVEX_ESP_LED_SCLK      44   // J3-16: LED SPI Clock
-// #define WAVEX_ESP_LED_MOSI      45   // J3-17: LED SPI Data
-// #define WAVEX_ESP_LED_CS        46   // J3-18: LED Chip Select
-// #define WAVEX_ESP_LED_BLANK     47   // J3-19: LED Blank Control
-// #define WAVEX_ESP_LED_LATCH     48   // J3-20: LED Latch Control
 
 // Quadrature Encoder (PCNT)
 #define WAVEX_ESP_ENCODER_A      33   // J3-7: PCNT Channel A
 #define WAVEX_ESP_ENCODER_B      34   // J3-8: PCNT Channel B
 #define WAVEX_ESP_ENCODER_BTN    40   // J3-12: Encoder Push Button (optional)
+
+// Additional PCNT Unit (PCNT_UNIT_1)
+#define WAVEX_ESP_PCNT1_A        46   // GPIO46: PCNT Unit 1 Channel A
+#define WAVEX_ESP_PCNT1_B        47   // GPIO47: PCNT Unit 1 Channel B
+#define WAVEX_ESP_PCNT1_UNIT     PCNT_UNIT_1
+#define WAVEX_ESP_PCNT1_CH_A     PCNT_CHANNEL_0
+#define WAVEX_ESP_PCNT1_CH_B     PCNT_CHANNEL_1
+
+// MIDI UART (UART2)
+// -----------------------------------------------------------------------------
+#define WAVEX_ESP_MIDI_UART_NUM UART_NUM_2
+#define WAVEX_ESP_MIDI_TX 32 // UART2 TX
+#define WAVEX_ESP_MIDI_RX 33 // UART2 RX
+#define WAVEX_ESP_MIDI_BAUD 31250
+
+
+// -----------------------------------------------------------------------------
+// Shared I2C Bus (Touch + TCA8418)
+// -----------------------------------------------------------------------------
+#define WAVEX_ESP_I2C_PORT_NUM I2C_NUM_0
+#define WAVEX_ESP_I2C_SDA 20 // Shared SDA for GT911 + TCA8418
+#define WAVEX_ESP_I2C_SCL 21 // Shared SCL for GT911 + TCA8418
+#define WAVEX_ESP_I2C_SPEED_HZ 400000
+#define WAVEX_ESP_I2C_PULLUPS 1 // Enable internal pull-ups
+#define WAVEX_ESP_BTN_INT       30   // J3-15: Button Interrupt
+
+// -----------------------------------------------------------------------------
+// SPI Master #2 (TLC5947 + MCP3008)
+// -----------------------------------------------------------------------------
+#define WAVEX_ESP_SPI2_HOST SPI2_HOST
+#define WAVEX_ESP_SPI2_MOSI 47
+#define WAVEX_ESP_SPI2_MISO 52
+#define WAVEX_ESP_SPI2_SCLK 46
+#define WAVEX_ESP_SPI2_FREQ_HZ 10000000 // 10 MHz typical for LEDs/ADC
+
+// MCP3008 (ADC for pots)
+#define WAVEX_ESP_MCP3008_CS 29
+
+// TLC5947 LED Driver
+#define WAVEX_ESP_TLC5947_LAT 28 // Latch pin (XLAT)
+#define WAVEX_ESP_TLC5947_BLANK 27 // Output enable / BLANK
 
 #endif // ESP_PLATFORM
 
