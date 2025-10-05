@@ -19,7 +19,8 @@
 #include "driver/gpio.h"
 #include <stdlib.h>
 #include "driver/i2c_master.h"
-#include "hardware_pins.h"
+#include "config/pin_config.h"
+#include "config/hardware_config.h"
 #include "pages/diagnostics_page.h"
 #include "inter_mcu.h"
 #include "comm/statistics.h"
@@ -42,7 +43,6 @@
 // Include BSP header for display functions
 #include "bsp/esp32_p4_nano.h"
 #include "ui/tca8418_keypad.h"
-#include "pin_config.h"
  
 #define LV_TICK_PERIOD_MS 5
  
@@ -181,10 +181,10 @@ static esp_err_t init_touch_controller(void)
 
     // --- GT911 Reset and Address Selection Sequence ---
     // Per datasheet, this selects the I2C address. We will select 0x5D.
-    gpio_set_level(WAVEX_ESP_TOUCH_INT, 1);  // INT high for address 0x5D
-    gpio_set_level(WAVEX_ESP_TOUCH_RST, 0);  // RST low
+    gpio_set_level((gpio_num_t)WAVEX_ESP_TOUCH_INT, 1);  // INT high for address 0x5D
+    gpio_set_level((gpio_num_t)WAVEX_ESP_TOUCH_RST, 0);  // RST low
     vTaskDelay(pdMS_TO_TICKS(10));
-    gpio_set_level(WAVEX_ESP_TOUCH_RST, 1);  // RST high
+    gpio_set_level((gpio_num_t)WAVEX_ESP_TOUCH_RST, 1);  // RST high
     vTaskDelay(pdMS_TO_TICKS(60)); // Hold INT state for >50ms after reset
 
     // Release INT pin to be an input for interrupts
@@ -218,8 +218,8 @@ static esp_err_t init_touch_controller(void)
     esp_lcd_touch_config_t touch_config = {
         .x_max = BSP_LCD_H_RES,
         .y_max = BSP_LCD_V_RES,
-        .rst_gpio_num = WAVEX_ESP_TOUCH_RST,  // Touch reset pin
-        .int_gpio_num = WAVEX_ESP_TOUCH_INT,  // Touch interrupt pin
+        .rst_gpio_num = (gpio_num_t)WAVEX_ESP_TOUCH_RST,  // Touch reset pin
+        .int_gpio_num = (gpio_num_t)WAVEX_ESP_TOUCH_INT,  // Touch interrupt pin
         .levels = {
             .reset = 0,
             .interrupt = 0,

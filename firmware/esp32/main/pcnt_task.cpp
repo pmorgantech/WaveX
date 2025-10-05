@@ -9,7 +9,7 @@
 #include "pcnt_task.h"
 #include "esp_log.h"
 #include "driver/pcnt.h"
-#include "hardware_pins.h"
+#include "../../shared/config/pin_config.h"
 #include "../../shared/config/hardware_config.h"
 
 // For interrupt handling
@@ -25,8 +25,8 @@ static wavex_pcnt_config_t s_pcnt_configs[] = {
         .unit = WAVEX_ENCODER_PCNT_UNIT,
         .channel_a = WAVEX_ENCODER_PCNT_CH_A,
         .channel_b = WAVEX_ENCODER_PCNT_CH_B,
-        .gpio_a = WAVEX_ENCODER_GPIO_A,
-        .gpio_b = WAVEX_ENCODER_GPIO_B,
+        .gpio_a = WAVEX_ESP_ENCODER_A,
+        .gpio_b = WAVEX_ESP_ENCODER_B,
         .filter_value = WAVEX_ENCODER_FILTER_VALUE,
         .enabled = WAVEX_ESP_ENCODER_PCNT_ENABLED
     },
@@ -35,8 +35,8 @@ static wavex_pcnt_config_t s_pcnt_configs[] = {
         .unit = WAVEX_PCNT1_UNIT,
         .channel_a = WAVEX_PCNT1_CH_A,
         .channel_b = WAVEX_PCNT1_CH_B,
-        .gpio_a = WAVEX_PCNT1_GPIO_A,
-        .gpio_b = WAVEX_PCNT1_GPIO_B,
+        .gpio_a = WAVEX_ESP_PCNT1_A,
+        .gpio_b = WAVEX_ESP_PCNT1_B,
         .filter_value = WAVEX_PCNT1_FILTER_VALUE,
         .enabled = WAVEX_ESP_PCNT1_ENABLED
     }

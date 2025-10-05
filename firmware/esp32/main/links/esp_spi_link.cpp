@@ -6,7 +6,6 @@
 #include "../../shared/spi_protocol/protocol.h"
 #include "../../shared/config/logging_config.h"
 #include "../../shared/config/pin_config.h"
-#include "hardware_pins.h"
 #include <string.h>
 #include <assert.h>
 
@@ -193,20 +192,20 @@ static void signal_daisy_urgent(bool urgent)
 {
 #ifdef ESP_PLATFORM
     // Set GPIO level
-    esp_err_t ret = gpio_set_level((gpio_num_t)WAVEX_INTER_MCU_GPIO_ATTN, urgent ? 1 : 0);
+    esp_err_t ret = gpio_set_level((gpio_num_t)WAVEX_ESP_ATTN_OUT, urgent ? 1 : 0);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to set GPIO%d level: %s", WAVEX_INTER_MCU_GPIO_ATTN, esp_err_to_name(ret));
+        ESP_LOGE(TAG, "Failed to set GPIO%d level: %s", WAVEX_ESP_ATTN_OUT, esp_err_to_name(ret));
         return;
     }
-    ESP_LOGI(TAG, "************GPIO%d level set to %d", WAVEX_INTER_MCU_GPIO_ATTN, urgent ? 1 : 0);
+    ESP_LOGI(TAG, "************GPIO%d level set to %d", WAVEX_ESP_ATTN_OUT, urgent ? 1 : 0);
 
     // Allow time for signal to stabilize before any operations
     esp_rom_delay_us(100);  // Increased delay for stability
 
     if (urgent) {
-        WAVEX_LOG_ESP32_SPI(ESP32_INTER_SPI, "Signaling Daisy for urgent control (GPIO%d HIGH) - queue_count=%d", WAVEX_INTER_MCU_GPIO_ATTN, msg_queue_count);
+        WAVEX_LOG_ESP32_SPI(ESP32_INTER_SPI, "Signaling Daisy for urgent control (GPIO%d HIGH) - queue_count=%d", WAVEX_ESP_ATTN_OUT, msg_queue_count);
     } else {
-        WAVEX_LOG_ESP32_SPI(ESP32_INTER_SPI, "Cleared Daisy urgent signal (GPIO%d LOW) - queue_count=%d", WAVEX_INTER_MCU_GPIO_ATTN, msg_queue_count);
+        WAVEX_LOG_ESP32_SPI(ESP32_INTER_SPI, "Cleared Daisy urgent signal (GPIO%d LOW) - queue_count=%d", WAVEX_ESP_ATTN_OUT, msg_queue_count);
     }
 #endif
 }
@@ -467,7 +466,7 @@ esp_err_t spi_link_init(void)
     
     // Configure attention GPIO (output to Daisy)
     gpio_config_t attn_config = {};
-    attn_config.pin_bit_mask = (1ULL << WAVEX_INTER_MCU_GPIO_ATTN);
+    attn_config.pin_bit_mask = (1ULL << WAVEX_ESP_ATTN_OUT);
     attn_config.mode = GPIO_MODE_OUTPUT;
     attn_config.pull_up_en = GPIO_PULLUP_DISABLE;
     attn_config.pull_down_en = GPIO_PULLDOWN_DISABLE;
@@ -480,14 +479,14 @@ esp_err_t spi_link_init(void)
         return ret;
     }
     
-    ESP_LOGI(TAG, "GPIO%d configured as output for attention signal", WAVEX_INTER_MCU_GPIO_ATTN);
+    ESP_LOGI(TAG, "GPIO%d configured as output for attention signal", WAVEX_ESP_ATTN_OUT);
     
     // Initialize attention signal to low (no urgent data)
-    gpio_set_level((gpio_num_t)WAVEX_INTER_MCU_GPIO_ATTN, 0);
+    gpio_set_level((gpio_num_t)WAVEX_ESP_ATTN_OUT, 0);
     
     // Verify initial state
-    int initial_level = gpio_get_level((gpio_num_t)WAVEX_INTER_MCU_GPIO_ATTN);
-    ESP_LOGI(TAG, "GPIO%d initial level: %s", WAVEX_INTER_MCU_GPIO_ATTN, initial_level ? "HIGH" : "LOW");
+    int initial_level = gpio_get_level((gpio_num_t)WAVEX_ESP_ATTN_OUT);
+    ESP_LOGI(TAG, "GPIO%d initial level: %s", WAVEX_ESP_ATTN_OUT, initial_level ? "HIGH" : "LOW");
     
     ESP_LOGI(TAG, "SPI link initialized successfully");
     return ESP_OK;
@@ -500,23 +499,23 @@ esp_err_t spi_link_start(void)
     
     // Configure SPI slave
     spi_bus_config_t buscfg = {};
-    buscfg.mosi_io_num = WAVEX_INTER_MCU_GPIO_MOSI;
-    buscfg.miso_io_num = WAVEX_INTER_MCU_GPIO_MISO;
-    buscfg.sclk_io_num = WAVEX_INTER_MCU_GPIO_SCLK;
+    buscfg.mosi_io_num = WAVEX_ESP_SPI_MOSI;
+    buscfg.miso_io_num = WAVEX_ESP_SPI_MISO;
+    buscfg.sclk_io_num = WAVEX_ESP_SPI_SCLK;
     buscfg.quadwp_io_num = -1;
     buscfg.quadhd_io_num = -1;
     buscfg.max_transfer_sz = MAX_PKT_SIZE;
     
     spi_slave_interface_config_t slavecfg = {};
     slavecfg.mode = 0;  // SPI mode 0 (CPOL=0, CPHA=0)
-    slavecfg.spics_io_num = WAVEX_INTER_MCU_GPIO_CS;
+    slavecfg.spics_io_num = WAVEX_ESP_SPI_CS;
     slavecfg.queue_size = 3;
     slavecfg.flags = 0;
     slavecfg.post_setup_cb = NULL;
     slavecfg.post_trans_cb = NULL;
     
     ESP_LOGI(TAG, "DEBUG: About to call spi_slave_initialize");
-    esp_err_t ret = spi_slave_initialize(WAVEX_INTER_MCU_SPI_HOST, &buscfg, &slavecfg, SPI_DMA_CH_AUTO);
+    esp_err_t ret = spi_slave_initialize(WAVEX_ESP_SPI_HOST, &buscfg, &slavecfg, SPI_DMA_CH_AUTO);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to initialize SPI slave: %s", esp_err_to_name(ret));
         return ret;
@@ -525,8 +524,8 @@ esp_err_t spi_link_start(void)
     
     ESP_LOGI(TAG, "SPI slave initialized successfully");
     ESP_LOGI(TAG, "SPI pins: SCLK=%d, MOSI=%d, MISO=%d, CS=%d", 
-             WAVEX_INTER_MCU_GPIO_SCLK, WAVEX_INTER_MCU_GPIO_MOSI, 
-             WAVEX_INTER_MCU_GPIO_MISO, WAVEX_INTER_MCU_GPIO_CS);
+             WAVEX_ESP_SPI_SCLK, WAVEX_ESP_SPI_MOSI, 
+             WAVEX_ESP_SPI_MISO, WAVEX_ESP_SPI_CS);
     
     // Create SPI slave task
     BaseType_t task_ret = xTaskCreate(
@@ -584,7 +583,7 @@ static void spi_slave_task(void* pvParameters)
                  s_transactions[rx_idx].length, s_transactions[rx_idx].tx_buffer, s_transactions[rx_idx].rx_buffer);
         // ESP_LOGI(TAG, "DEBUG: About to queue SPI transaction - waiting for Daisy to initiate");
         
-        esp_err_t ret = spi_slave_queue_trans(WAVEX_INTER_MCU_SPI_HOST, &s_transactions[rx_idx], pdMS_TO_TICKS(SPI_OPERATIONS_TIMEOUT_MS)); // 5 second timeout
+        esp_err_t ret = spi_slave_queue_trans(WAVEX_ESP_SPI_HOST, &s_transactions[rx_idx], pdMS_TO_TICKS(SPI_OPERATIONS_TIMEOUT_MS)); // 5 second timeout
         if (ret != ESP_OK) {
             ESP_LOGE(TAG, "Failed to queue SPI transaction: %s", esp_err_to_name(ret));
             continue;
@@ -601,7 +600,7 @@ static void spi_slave_task(void* pvParameters)
         
         ESP_LOGD(TAG, "SPI transaction queued, waiting for result...");
         spi_slave_transaction_t* trans_result;
-        ret = spi_slave_get_trans_result(WAVEX_INTER_MCU_SPI_HOST, &trans_result, pdMS_TO_TICKS(SPI_OPERATIONS_TIMEOUT_MS));
+        ret = spi_slave_get_trans_result(WAVEX_ESP_SPI_HOST, &trans_result, pdMS_TO_TICKS(SPI_OPERATIONS_TIMEOUT_MS));
         if (ret != ESP_OK) {
             if (ret == ESP_ERR_TIMEOUT) {
                 ESP_LOGW(TAG, "SPI slave transaction timeout - no data from Daisy");

@@ -1,4 +1,14 @@
 dependencies:
+  esp_tca8418:
+    component_hash: 8c7b139e6e4982df65396c1133081a969c6455ade9fe69b42f70d7825e26ee6d
+    dependencies:
+    - name: idf
+      version: '>=5.2'
+    source:
+      git: https://github.com/atanisoft/esp_tca8418.git
+      path: .
+      type: git
+    version: 52f11fb6222ca7837ba08853cd16cf7f8129f991
   espressif/cmake_utilities:
     component_hash: 351350613ceafba240b761b4ea991e0f231ac7a9f59a9ee901f751bddc0bb18f
     dependencies:
@@ -44,11 +54,11 @@ dependencies:
       type: service
     version: 1.1.3
   espressif/esp_lvgl_port:
-    component_hash: e720c95cf0667554a204591bb5fade4655fb2990465557041200fa44b5bc7556
+    component_hash: bfb2778c063b05a6c47c1a8de6d166ee4d911bc86fe0b3ff9e6bab06d2812033
     dependencies:
     - name: idf
       require: private
-      version: '>=4.4'
+      version: '>=5.1'
     - name: lvgl/lvgl
       registry_url: https://components.espressif.com
       require: public
@@ -56,7 +66,7 @@ dependencies:
     source:
       registry_url: https://components.espressif.com/
       type: service
-    version: 2.6.0
+    version: 2.6.2
   espressif/i2c_bus:
     component_hash: fe8f85b3859544fabb960d7bcec24278cd3c88e3f1777e8a2075b0aca202fd9f
     dependencies:
@@ -131,7 +141,7 @@ dependencies:
     - esp32p4
     version: 1.1.7
   waveshare/esp_lcd_dsi:
-    component_hash: 941c9d83db221182e8547d144c17139715fb41ba2abdbec45319595eaf59ee3e
+    component_hash: 012d00af80a7330b0f051e4c77dba9239fd7418c57b42af11db7fd3e49663fb0
     dependencies:
     - name: espressif/cmake_utilities
       registry_url: https://components.espressif.com
@@ -149,7 +159,7 @@ dependencies:
       type: service
     targets:
     - esp32p4
-    version: 1.0.6
+    version: 1.0.7
   waveshare/esp_lcd_hx8394:
     component_hash: 996c4fbe75b27321d7cb040e7796bc57e2facd7383d739becb1ed77a98619b84
     dependencies:
@@ -231,12 +241,13 @@ dependencies:
     - esp32p4
     version: 1.0.4
 direct_dependencies:
+- esp_tca8418
 - espressif/esp_lcd_touch
 - espressif/esp_lcd_touch_gt911
 - espressif/esp_lvgl_port
 - waveshare/esp32_p4_nano
 - waveshare/esp_lcd_dsi
 - waveshare/esp_lcd_hx8394
-manifest_hash: 0345945d1e83b3a1de8ef4c3a719db5cffc81044442f8f595b87ddcf65242464
+manifest_hash: 57fba9ff2e41c871633939e2ef511b7a7513487ee662ba24f48d42d70cd64e65
 target: esp32p4
 version: 2.0.0

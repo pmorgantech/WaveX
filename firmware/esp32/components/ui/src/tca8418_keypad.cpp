@@ -8,7 +8,8 @@
 #include "bsp/esp32_p4_nano.h"
 #include "pin_config.h"
 
-#ifdef ESP_PLATFORM
+#include "config/hardware_config.h"
+#if defined(ESP_PLATFORM) && WAVEX_ESP_BUTTON_MATRIX_ENABLED
 #include "esp_tca8418.h"
 #endif
 
@@ -17,7 +18,7 @@ namespace wavex_ui {
 static const char* TAG = "TCA8418";
 static TaskHandle_t s_task = nullptr;
 static gpio_num_t s_int_gpio = GPIO_NUM_NC;
-#ifdef ESP_PLATFORM
+#if defined(ESP_PLATFORM) && WAVEX_ESP_BUTTON_MATRIX_ENABLED
 static tca8418_handle_t s_dev = nullptr;
 #endif
 
@@ -59,7 +60,7 @@ static void keypad_task(void* arg) {
         }
 
     // Drain event FIFO
-#ifdef ESP_PLATFORM
+#if defined(ESP_PLATFORM) && WAVEX_ESP_BUTTON_MATRIX_ENABLED
     tca8418_event_t ev;
     while (tca8418_get_event(s_dev, &ev) == ESP_OK) {
         bool pressed = (ev.type == TCA8418_EVENT_PRESS);
@@ -81,7 +82,7 @@ esp_err_t tca8418_keypad_start(int int_gpio, uint8_t i2c_addr) {
     }
 
     // Create device
-#ifdef ESP_PLATFORM
+#if defined(ESP_PLATFORM) && WAVEX_ESP_BUTTON_MATRIX_ENABLED
     tca8418_config_t cfg = {
         .i2c_bus = i2c,
         .i2c_addr = i2c_addr,
@@ -111,7 +112,7 @@ esp_err_t tca8418_keypad_start(int int_gpio, uint8_t i2c_addr) {
     BaseType_t ok = xTaskCreatePinnedToCore(keypad_task, "tca8418_task", 4096, nullptr, 5, &s_task, 1);
     if (ok != pdPASS) {
         ESP_LOGE(TAG, "Failed to create keypad task");
-        #ifdef ESP_PLATFORM
+        #if defined(ESP_PLATFORM) && WAVEX_ESP_BUTTON_MATRIX_ENABLED
         tca8418_del(s_dev);
         s_dev = nullptr;
         #endif
@@ -125,7 +126,7 @@ esp_err_t tca8418_keypad_stop() {
         vTaskDelete(s_task);
         s_task = nullptr;
     }
-    #ifdef ESP_PLATFORM
+    #if defined(ESP_PLATFORM) && WAVEX_ESP_BUTTON_MATRIX_ENABLED
     if (s_dev) {
         tca8418_del(s_dev);
         s_dev = nullptr;

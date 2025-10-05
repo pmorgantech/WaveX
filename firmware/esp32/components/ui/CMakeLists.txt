@@ -39,6 +39,7 @@ idf_component_register(
         esp_tca8418
         esp_driver_gpio
         esp_driver_spi
+        esp32_p4_nano
         esp_common
         shared
 )

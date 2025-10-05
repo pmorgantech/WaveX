@@ -299,60 +299,54 @@
     #define WAVEX_LCD_TOUCH_ENABLED 1
     #endif
     
-    // Display type specific configuration
-    #if WAVEX_LCD_DISPLAY_TYPE == 1  // MIPI DSI Display
-        // MIPI DSI Display Resolution (5-DSI-TOUCH-A)
-        #ifndef WAVEX_LCD_WIDTH
-        #define WAVEX_LCD_WIDTH 800
-        #endif
-        
-        #ifndef WAVEX_LCD_HEIGHT
-        #define WAVEX_LCD_HEIGHT 480
-        #endif
-        
-        #ifndef WAVEX_LCD_COLOR_DEPTH
-        #define WAVEX_LCD_COLOR_DEPTH 16
-        #endif
-        
-        // MIPI DSI Configuration
-        #ifndef WAVEX_DSI_LANE_BITRATE_MBPS
-        #define WAVEX_DSI_LANE_BITRATE_MBPS 1500  // Default bitrate
-        #endif
-        
-        #ifndef WAVEX_DSI_COLOR_FORMAT
-        #define WAVEX_DSI_COLOR_FORMAT 0  // 0 = RGB565, 1 = RGB888
-        #endif
-        
-        // Touch Controller (GT911)
-        #ifndef WAVEX_TOUCH_CONTROLLER_TYPE
-        #define WAVEX_TOUCH_CONTROLLER_TYPE 1  // 0 = FT6X36, 1 = GT911
-        #endif
-        
-    #else  // ST7796S SPI Display (Legacy)
-        // ST7796S Display Resolution
-        #ifndef WAVEX_LCD_WIDTH
-        #define WAVEX_LCD_WIDTH 480
-        #endif
-        
-        #ifndef WAVEX_LCD_HEIGHT
-        #define WAVEX_LCD_HEIGHT 320
-        #endif
-        
-        #ifndef WAVEX_LCD_COLOR_DEPTH
-        #define WAVEX_LCD_COLOR_DEPTH 16
-        #endif
-        
-        // LCD SPI configuration
-        #ifndef WAVEX_LCD_SPI_CLOCK_SPEED
-        #define WAVEX_LCD_SPI_CLOCK_SPEED (40 * 1000 * 1000)  // 40 MHz
-        #endif
-        
-        // Touch Controller (FT6X36)
-        #ifndef WAVEX_TOUCH_CONTROLLER_TYPE
-        #define WAVEX_TOUCH_CONTROLLER_TYPE 0  // 0 = FT6X36, 1 = GT911
-        #endif
-    #endif
+
+// MIPI DSI Display Resolution (5-DSI-TOUCH-A)
+#ifndef WAVEX_LCD_WIDTH
+#define WAVEX_LCD_WIDTH 1280
 #endif
+
+#ifndef WAVEX_LCD_HEIGHT
+#define WAVEX_LCD_HEIGHT 720
+#endif
+
+#ifndef WAVEX_LCD_COLOR_DEPTH
+#define WAVEX_LCD_COLOR_DEPTH 16
+#endif
+
+// Touch coordinate limits (defaults to LCD resolution)
+#ifndef WAVEX_TOUCH_MAX_X
+#define WAVEX_TOUCH_MAX_X WAVEX_LCD_WIDTH
+#endif
+
+#ifndef WAVEX_TOUCH_MAX_Y
+#define WAVEX_TOUCH_MAX_Y WAVEX_LCD_HEIGHT
+#endif
+
+// LVGL buffer configuration
+#ifndef WAVEX_LVGL_DRAW_BUF_HEIGHT
+#define WAVEX_LVGL_DRAW_BUF_HEIGHT 40
+#endif
+
+#ifndef WAVEX_LVGL_DOUBLE_BUFFER
+#define WAVEX_LVGL_DOUBLE_BUFFER 1
+#endif
+
+#ifndef WAVEX_LVGL_USE_PSRAM_THRESHOLD
+#define WAVEX_LVGL_USE_PSRAM_THRESHOLD (20 * 1024)
+#endif
+
+// MIPI DSI Configuration
+#ifndef WAVEX_DSI_LANE_BITRATE_MBPS
+#define WAVEX_DSI_LANE_BITRATE_MBPS 1500  // Default bitrate
+#endif
+
+#ifndef WAVEX_DSI_COLOR_FORMAT
+#define WAVEX_DSI_COLOR_FORMAT 0  // 0 = RGB565, 1 = RGB888
+#endif
+
+
+#endif // WAVEX_LCD_DISPLAY_ENABLED
+
 
 // Encoder Configuration
 #if WAVEX_ESP_ENCODER_PCNT_ENABLED
@@ -423,6 +417,44 @@
     #ifndef WAVEX_PCNT1_THRESH_NEG
     #define WAVEX_PCNT1_THRESH_NEG -4
     #endif
+#endif
+// Optional LED driver configuration (e.g., TLC5947)
+#ifndef WAVEX_LED_CHANNELS
+#define WAVEX_LED_CHANNELS 48
+#endif
+
+#ifndef WAVEX_LED_PWM_FREQ_HZ
+#define WAVEX_LED_PWM_FREQ_HZ 1000
+#endif
+
+#ifndef WAVEX_LED_BRIGHTNESS_BITS
+#define WAVEX_LED_BRIGHTNESS_BITS 12
+#endif
+
+// Optional potentiometer configuration (e.g., MCP3008 via SPI)
+#ifndef WAVEX_POT_COUNT
+#define WAVEX_POT_COUNT 4
+#endif
+
+#ifndef WAVEX_POT_ADC_RESOLUTION
+#define WAVEX_POT_ADC_RESOLUTION 10
+#endif
+
+#ifndef WAVEX_POT_ADC_SAMPLES
+#define WAVEX_POT_ADC_SAMPLES 64
+#endif
+
+// Optional button matrix configuration (e.g., TCA8418)
+#ifndef WAVEX_BTN_MATRIX_ROWS
+#define WAVEX_BTN_MATRIX_ROWS 8
+#endif
+
+#ifndef WAVEX_BTN_MATRIX_COLS
+#define WAVEX_BTN_MATRIX_COLS 8
+#endif
+
+#ifndef WAVEX_BTN_DEBOUNCE_MS
+#define WAVEX_BTN_DEBOUNCE_MS 50
 #endif
 
 // USB MIDI Configuration
