@@ -95,8 +95,8 @@ void ProcessBrowseRequest(const char* path, size_t start_index, uint8_t max_entr
     using namespace WaveX::Storage;
     using namespace WaveX::Protocol;
 
-    WAVEX_LOG_DAISY_MESSAGE(DAISY_SPI_MESSAGE, "IN MSG BROWSE_REQ path=%s start_index=%zu max_entries=%u", 
-                           path, start_index, max_entries);
+    WAVEX_LOG_DAISY_MESSAGE(DAISY_SPI_MESSAGE, "IN MSG BROWSE_REQ path=%s start_index=%u max_entries=%u", 
+                           path, (uint32_t)start_index, max_entries);
 
     // Allocate buffer for file entries
     FileEntry entries[50]; // Max 50 entries per response (matches cache size)
@@ -113,7 +113,7 @@ void ProcessBrowseRequest(const char* path, size_t start_index, uint8_t max_entr
         return;
     }
     
-    WAVEX_LOG_DAISY_MESSAGE(DAISY_SPI_MESSAGE, "Directory listing: total=%zu written=%zu", total_count, entries_written);
+    WAVEX_LOG_DAISY_MESSAGE(DAISY_SPI_MESSAGE, "Directory listing: total=%u written=%u", (uint32_t)total_count, (uint32_t)entries_written);
     
     // Cache the directory state for index-based lookups
     strncpy(s_current_directory, path, sizeof(s_current_directory) - 1);
@@ -134,7 +134,7 @@ void ProcessBrowseRequest(const char* path, size_t start_index, uint8_t max_entr
         s_directory_state_valid = true;
         
         if (s_hw) {
-            s_hw->PrintLine("DAISY: Cached directory state: %zu entries from '%s'", s_current_file_count, path);
+            s_hw->PrintLine("DAISY: Cached directory state: %u entries from '%s'", (uint32_t)s_current_file_count, path);
         }
     }
     
@@ -155,8 +155,8 @@ void ProcessBrowseRequest(const char* path, size_t start_index, uint8_t max_entr
     if (pkt_size > 0) {
         // Send the response
         if (s_hw) {
-            s_hw->PrintLine("DAISY: Sending browse response: total=%u start=%zu count=%u", 
-                           total_count, start_index, entries_written);
+            s_hw->PrintLine("DAISY: Sending browse response: total=%u start=%u count=%u", 
+                           (uint32_t)total_count, (uint32_t)start_index, (uint32_t)entries_written);
         }
         
         Spi_SendPreCreatedPacket(response_buffer, pkt_size);
