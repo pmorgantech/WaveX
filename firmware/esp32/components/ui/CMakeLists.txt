@@ -7,6 +7,10 @@ set(UI_SOURCES
     "components/file_browser.cpp"
     "pages/sample_load_save.cpp"
     "pages/diagnostics_page.cpp"
+    "src/input_dispatcher.cpp"
+    "src/ui_patch_list.cpp"
+    "src/ui_param_edit.cpp"
+    "src/tca8418_keypad.cpp"
 )
 
 # Add UI include directories
@@ -15,6 +19,7 @@ set(UI_INCLUDE_DIRS
     "common"
     "components"
     "pages"
+    "include"
     "."
     "../../main"
     "../../main/comm"
@@ -31,6 +36,7 @@ idf_component_register(
         lvgl
         esp_lvgl_port
         driver
+        esp_tca8418
         esp_driver_gpio
         esp_driver_spi
         esp_common

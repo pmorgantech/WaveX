@@ -3,6 +3,7 @@ idf_component_register(
         "main.cpp"
         "inter_mcu.cpp"
         "ui_task.cpp"
+        "pcnt_task.cpp"
         "comm/packet_router.cpp"
         "comm/statistics.cpp"
         "comm/listeners.cpp"

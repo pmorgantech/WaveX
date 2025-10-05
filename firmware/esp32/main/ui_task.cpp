@@ -8,6 +8,7 @@
 
 #include "../components/ui/pages/sample_load_save.h"
 #include "ui_task.h"
+#include "pcnt_task.h"
 #include "esp_log.h"
 #include "esp_check.h"
 #include "freertos/FreeRTOS.h"
@@ -31,6 +32,8 @@
 #include "esp_lcd_io_i2c.h"
 #include "esp_heap_caps.h"
 #include "esp_timer.h"
+#include "ui/input_dispatcher.h"
+#include "ui/ui_demo.h"
 
 // LVGL port lock macros for thread safety
 #define LV_LOCK()   lvgl_port_lock(portMAX_DELAY)
@@ -38,6 +41,8 @@
 
 // Include BSP header for display functions
 #include "bsp/esp32_p4_nano.h"
+#include "ui/tca8418_keypad.h"
+#include "pin_config.h"
  
 #define LV_TICK_PERIOD_MS 5
  
@@ -166,7 +171,7 @@ static esp_err_t init_touch_controller(void)
 
     // Configure touch reset and interrupt pins for GT911 address selection
     gpio_config_t io_conf = {
-        .pin_bit_mask = (1ULL << GPIO_NUM_14) | (1ULL << GPIO_NUM_15),  // RST and INT pins
+        .pin_bit_mask = (1ULL << WAVEX_ESP_TOUCH_RST) | (1ULL << WAVEX_ESP_TOUCH_INT),  // RST and INT pins
         .mode = GPIO_MODE_OUTPUT,
         .pull_up_en = GPIO_PULLUP_DISABLE,
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
@@ -176,14 +181,14 @@ static esp_err_t init_touch_controller(void)
 
     // --- GT911 Reset and Address Selection Sequence ---
     // Per datasheet, this selects the I2C address. We will select 0x5D.
-    gpio_set_level(GPIO_NUM_15, 1);  // INT high for address 0x5D
-    gpio_set_level(GPIO_NUM_14, 0);  // RST low
+    gpio_set_level(WAVEX_ESP_TOUCH_INT, 1);  // INT high for address 0x5D
+    gpio_set_level(WAVEX_ESP_TOUCH_RST, 0);  // RST low
     vTaskDelay(pdMS_TO_TICKS(10));
-    gpio_set_level(GPIO_NUM_14, 1);  // RST high
+    gpio_set_level(WAVEX_ESP_TOUCH_RST, 1);  // RST high
     vTaskDelay(pdMS_TO_TICKS(60)); // Hold INT state for >50ms after reset
 
     // Release INT pin to be an input for interrupts
-    io_conf.pin_bit_mask = (1ULL << GPIO_NUM_15);  // Only INT pin
+    io_conf.pin_bit_mask = (1ULL << WAVEX_ESP_TOUCH_INT);  // Only INT pin
     io_conf.mode = GPIO_MODE_INPUT;
     io_conf.pull_up_en = GPIO_PULLUP_ENABLE; // INT line usually requires a pull-up
     ESP_RETURN_ON_ERROR(gpio_config(&io_conf), TAG, "Failed to reconfigure INT pin to input");
@@ -213,8 +218,8 @@ static esp_err_t init_touch_controller(void)
     esp_lcd_touch_config_t touch_config = {
         .x_max = BSP_LCD_H_RES,
         .y_max = BSP_LCD_V_RES,
-        .rst_gpio_num = GPIO_NUM_14,  // Touch reset pin
-        .int_gpio_num = GPIO_NUM_15,  // Touch interrupt pin
+        .rst_gpio_num = WAVEX_ESP_TOUCH_RST,  // Touch reset pin
+        .int_gpio_num = WAVEX_ESP_TOUCH_INT,  // Touch interrupt pin
         .levels = {
             .reset = 0,
             .interrupt = 0,
@@ -1494,9 +1499,48 @@ static void menu_button_event_cb(lv_event_t *e)
     ESP_LOGI(TAG, "Testing meter callback with dummy data...");
     meter_data_cb(0.5f, 0.8f, NULL); // Test with 50% RMS, 80% peak
 
+    // Start TCA8418 keypad on BSP I2C; INT on GPIO31 per pin_config
+    {
+        const int tca_int_gpio = WAVEX_ESP_BTN_INT; // GPIO31
+        const uint8_t tca_addr = 0x34;
+        esp_err_t kret = wavex_ui::tca8418_keypad_start(tca_int_gpio, tca_addr);
+        if (kret != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to start TCA8418 keypad: %s", esp_err_to_name(kret));
+        } else {
+            ESP_LOGI(TAG, "TCA8418 keypad started (INT GPIO=%d, addr=0x%02X)", tca_int_gpio, tca_addr);
+        }
+    }
+
+    // Set initial input context (demo)
+    wavex_ui::InputDispatcher::instance().setActiveContext(wavex_ui::createPatchListContext());
+
     // Main UI loop with adaptive refresh rate control
     ESP_LOGI(TAG, "UI loop started with adaptive refresh rate control");
     while (1) {
+        // Apply encoder movement to active UI when applicable
+        int32_t enc_delta = pcnt_consume_delta(WAVEX_ENCODER_PCNT_UNIT);
+        if (enc_delta != 0) {
+            // Post unified input events for encoder movement
+            wavex_ui::InputEvent evt;
+            evt.type = (enc_delta > 0) ? wavex_ui::InputType::EncoderRight : wavex_ui::InputType::EncoderLeft;
+            evt.delta = (int16_t)enc_delta;
+            evt.timestamp_ms = (uint32_t)(esp_timer_get_time() / 1000);
+            wavex_ui::InputDispatcher::instance().post(evt);
+
+            // Currently, only the Sample Load/Save page has a file browser
+            if (strcmp(s_current_screen, "sample_load_save") == 0 && s_sample_load_save_page && s_sample_load_save_page->file_browser) {
+                uint32_t current_idx = wavex_file_browser_get_selected_index(s_sample_load_save_page->file_browser);
+                uint32_t max_idx = wavex_file_browser_get_entry_count(s_sample_load_save_page->file_browser);
+                int32_t target = (int32_t)current_idx + enc_delta;
+                if (target < 0) target = 0;
+                if (max_idx > 0 && target > (int32_t)max_idx - 1) target = (int32_t)max_idx - 1;
+                if ((uint32_t)target != current_idx) {
+                    wavex_file_browser_set_selection(s_sample_load_save_page->file_browser, (uint32_t)target);
+                }
+            }
+        }
+        // Dispatch queued input events to current context
+        wavex_ui::InputDispatcher::instance().processAll();
         // Process deferred diagnostics updates (prevents deadlock)
         diagnostics_page_process_deferred_updates();
         

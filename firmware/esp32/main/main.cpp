@@ -30,6 +30,9 @@ typedef int esp_err_t;
 #include "links/esp_spi_link.h"
 #endif
 
+// Bring in the PCNT task API
+#include "pcnt_task.h"
+
 static const char *TAG = "WaveX-ESP32";
 
 extern "C" void app_main(void)
@@ -70,40 +73,59 @@ extern "C" void app_main(void)
         ESP_LOGE(TAG, "DEBUG: Checkpoint 5 - Inter-MCU initialization FAILED: %s", esp_err_to_name(inter_mcu_result));
     }
 
-    ESP_LOGI(TAG, "DEBUG: Checkpoint 6 - About to delay for UI start");
-    
+    ESP_LOGI(TAG, "DEBUG: Checkpoint 6 - About to initialize PCNT");
+
+    // Initialize PCNT encoders
+    ESP_LOGI(TAG, "DEBUG: Checkpoint 6a - Starting PCNT initialization");
+    esp_err_t pcnt_result = pcnt_task_init();
+    if (pcnt_result == ESP_OK) {
+        ESP_LOGI(TAG, "DEBUG: Checkpoint 6b - PCNT initialization completed successfully");
+
+        // Start PCNT reading task
+        esp_err_t pcnt_start_result = pcnt_task_start();
+        if (pcnt_start_result == ESP_OK) {
+            ESP_LOGI(TAG, "DEBUG: Checkpoint 6c - PCNT task started successfully");
+        } else {
+            ESP_LOGE(TAG, "DEBUG: Checkpoint 6c - PCNT task start FAILED: %s", esp_err_to_name(pcnt_start_result));
+        }
+    } else {
+        ESP_LOGE(TAG, "DEBUG: Checkpoint 6b - PCNT initialization FAILED: %s", esp_err_to_name(pcnt_result));
+    }
+
+    ESP_LOGI(TAG, "DEBUG: Checkpoint 7 - About to delay for UI start");
+
     // Delay UI start slightly to avoid contention with SPI bus init
     #ifdef ESP_PLATFORM
     vTaskDelay(pdMS_TO_TICKS(200));
-    ESP_LOGI(TAG, "DEBUG: Checkpoint 7 - Delay completed");
+    ESP_LOGI(TAG, "DEBUG: Checkpoint 8 - Delay completed");
     #else
     // Fallback for non-ESP builds
-    ESP_LOGI(TAG, "DEBUG: Checkpoint 7 - Non-ESP build (no delay)");
+    ESP_LOGI(TAG, "DEBUG: Checkpoint 8 - Non-ESP build (no delay)");
     #endif
-    
-    ESP_LOGI(TAG, "DEBUG: Checkpoint 8 - About to check UI config");
+
+    ESP_LOGI(TAG, "DEBUG: Checkpoint 9 - About to check UI config");
     
     // Start UI task with minimal version to test display initialization
     #if WAVEX_LCD_DISPLAY_ENABLED && (WAVEX_LCD_DISPLAY_TYPE == 1)
-    ESP_LOGI(TAG, "DEBUG: Checkpoint 9 - Starting minimal UI task for testing");
+    ESP_LOGI(TAG, "DEBUG: Checkpoint 10 - Starting minimal UI task for testing");
     esp_err_t ui_result = wavex_ui_task_start();
     if (ui_result == ESP_OK) {
-        ESP_LOGI(TAG, "DEBUG: Checkpoint 10 - Minimal UI task started successfully");
+        ESP_LOGI(TAG, "DEBUG: Checkpoint 11 - Minimal UI task started successfully");
     } else {
-        ESP_LOGE(TAG, "DEBUG: Checkpoint 10 - Minimal UI task start FAILED: %s", esp_err_to_name(ui_result));
+        ESP_LOGE(TAG, "DEBUG: Checkpoint 11 - Minimal UI task start FAILED: %s", esp_err_to_name(ui_result));
     }
     #else
     ESP_LOGI(TAG, "MIPI DSI UI disabled for this configuration.");
-    ESP_LOGI(TAG, "DEBUG: Checkpoint 10 - UI disabled");
+    ESP_LOGI(TAG, "DEBUG: Checkpoint 11 - UI disabled");
     #endif
 
     // Periodically probe Daisy status via SPI even if IRQ line is not wired
     int probe_counter = 0;
-    
-    ESP_LOGI(TAG, "DEBUG: Checkpoint 11 - About to log initialization complete");
+
+    ESP_LOGI(TAG, "DEBUG: Checkpoint 12 - About to log initialization complete");
     ESP_LOGI(TAG, "WaveX ESP32 Frontend Initialized");
     ESP_LOGI(TAG, "About menu available under System -> About");
-    ESP_LOGI(TAG, "DEBUG: Checkpoint 12 - Entering main loop");
+    ESP_LOGI(TAG, "DEBUG: Checkpoint 13 - Entering main loop");
     
     // Main application loop - reduced logging to prevent memory issues
     int loop_counter = 0;

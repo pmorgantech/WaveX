@@ -6,3 +6,4 @@ dependencies:
   waveshare/esp_lcd_hx8394: '*'
   waveshare/esp_lcd_dsi: '*'
   waveshare/esp32_p4_nano: '*'
+  atanisoft/esp_tca8418: "~1.0.0"
