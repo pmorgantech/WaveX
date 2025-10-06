@@ -44,6 +44,12 @@ bool IsPrebufferReady(); // Check if pre-buffering is complete
 // Performance monitoring
 void GetIOStats(uint32_t& count, uint32_t& max_duration, uint32_t& last_duration);
 
+// CPU load monitoring (audio processing performance)
+float GetAvgCpuLoad();     // 0.0-1.0 smoothed average
+float GetMinCpuLoad();     // 0.0-1.0 minimum observed
+float GetMaxCpuLoad();     // 0.0-1.0 maximum observed
+float GetBlockPeriodMs();  // Block period in milliseconds
+
 // Sample audition control (for Sample Load/Save page)
 bool AuditionSample(const char* path);
 void StopAudition();

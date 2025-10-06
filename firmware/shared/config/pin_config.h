@@ -122,11 +122,11 @@ extern "C" {
 #define WAVEX_DAISY_AUDIO_OUT_L -1   // Built-in: Left audio output
 #define WAVEX_DAISY_AUDIO_OUT_R -1   // Built-in: Right audio output
 
-// CV Outputs (MCP4728 DACs)
-#define WAVEX_DAISY_DAC1_CS     25   // D25: MCP4728 #1 Chip Select
-#define WAVEX_DAISY_DAC2_CS     26   // D26: MCP4728 #2 Chip Select
-#define WAVEX_DAISY_DAC3_CS     27   // D27: MCP4728 #3 Chip Select
-#define WAVEX_DAISY_DAC4_CS     28   // D28: MCP4728 #4 Chip Select
+// CV Outputs (MCP48CMB28 DACs)
+#define WAVEX_DAISY_DAC1_CS     25   // D25: MCP48CMB28 #1 Chip Select
+#define WAVEX_DAISY_DAC2_CS     26   // D26: MCP48CMB28 #2 Chip Select
+#define WAVEX_DAISY_DAC3_CS     27   // D27: MCP48CMB28 #3 Chip Select
+#define WAVEX_DAISY_DAC4_CS     28   // D28: MCP48CMB28 #4 Chip Select
 #define WAVEX_DAISY_DAC_SCLK    29   // D29: SPI Clock (shared)
 #define WAVEX_DAISY_DAC_MOSI    30   // D30: SPI Data (shared)
 

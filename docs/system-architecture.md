@@ -8,37 +8,41 @@ The WaveX dual-MCU sampler/synthesizer implements a distributed architecture tha
 
 ```mermaid
 graph TB
-    subgraph "ESP32-S3 Frontend"
-        UI[LVGL Touchscreen UI]
+    subgraph "ESP32-P4 Frontend"
+        UI[LVGL Touchscreen UI<br/>1280x720 MIPI DSI]
         FS[File System Manager]
         MIDI[MIDI Handler]
         PROT_ESP[Protocol Handler]
         SPI_M[SPI Master]
-        
+        LED_CTRL[LED Controller<br/>TLC5947]
+
         UI --> PROT_ESP
         FS --> PROT_ESP
         MIDI --> PROT_ESP
         PROT_ESP --> SPI_M
+        PROT_ESP --> LED_CTRL
     end
-    
+
     subgraph "Communication Layer"
-        SPI_BUS[SPI Bus<br/>10MHz, Mode 0]
+        SPI_BUS[SPI Bus<br/>4MHz, Mode 0]
         IRQ_LINE[IRQ Line<br/>Ready Signal]
     end
-    
-    subgraph "STM32H750 Backend"
+
+    subgraph "Daisy Seed Backend"
         SPI_S[SPI Slave]
         PROT_STM[Protocol Processor]
         AUDIO[Audio Engine]
         VOICES[Voice Manager]
         SAMPLES[Sample Manager]
-        CV_OUT[CV Output DACs]
-        
+        CV_OUT[CV Output DACs<br/>MCP4728]
+        SDIO[SDIO Interface<br/>4-bit SD Card]
+
         SPI_S --> PROT_STM
         PROT_STM --> AUDIO
         AUDIO --> VOICES
         AUDIO --> SAMPLES
         AUDIO --> CV_OUT
+        PROT_STM --> SDIO
     end
     
     SPI_M -.->|MOSI/MISO/CLK/CS| SPI_BUS
@@ -67,44 +71,53 @@ graph TB
 ```mermaid
 graph LR
     subgraph "User Interface"
-        TOUCH["7 inch Touchscreen<br/>ST7796S 480x320"]
-        ENCODER["Rotary Encoders<br/>x4"]
-        BUTTONS["Push Buttons<br/>x8"]
+        TOUCH["5 inch Touchscreen<br/>5-DSI-TOUCH-A 1280x720<br/>MIPI DSI + GT911 Touch"]
+        ENCODERS["4x Dual Rotary Encoders<br/>Endless via MCP3008 ADC"]
+        BUTTONS["Capacitive Buttons<br/>TCA8418 8x8 Matrix<br/>Enabled"]
+        LEDS["LED Indicators<br/>TLC5947 48-channel"]
+        POTS["Analog Pots<br/>MCP3008 ADC x4"]
     end
-    
-    subgraph "ESP32-S3 Module"
-        ESP32["ESP32-S3<br/>Dual Core 240MHz<br/>8MB PSRAM"]
+
+    subgraph "ESP32-P4 Module"
+        ESP32["ESP32-P4<br/>Dual Core 400MHz<br/>PSRAM Enabled"]
         FLASH["16MB Flash"]
-        WIFI["WiFi/Bluetooth"]
+        WIFI["WiFi/Bluetooth<br/>(Disabled)"]
+        SPI2["SPI2 Master<br/>LEDs + ADC"]
     end
-    
+
     subgraph "Storage & I/O"
-        SD["SD Card Slot<br/>SDXC Support"]
-        USB["USB-C<br/>Host/Device"]
-        MIDI_IO["MIDI In/Out<br/>DIN-5 Connectors"]
+        SD["SD Card Slot<br/>SDIO 4-bit on Daisy<br/>SDXC Support"]
+        USB["USB-C<br/>MIDI Host/Device"]
+        MIDI_IO["MIDI UART<br/>3.5mm TRS"]
     end
-    
+
     subgraph "Audio Processing"
-        DAISY["Daisy Seed<br/>STM32H750 480MHz<br/>64MB SDRAM"]
+        DAISY["Daisy Seed<br/>STM32H7 480MHz<br/>64MB SDRAM"]
         CODEC["Audio Codec<br/>AK4556 24-bit"]
         AUDIO_IO["Audio I/O<br/>1/4 inch TRS"]
+        TDM_DAC["TDM DAC<br/>PCM1690 8-channel"]
     end
-    
+
     subgraph "CV/Gate Output"
-        DAC1["CV Out 1-4<br/>12-bit DACs"]
-        DAC2["CV Out 5-8<br/>12-bit DACs"]
+        DAC1["CV Out 1-8<br/>MCP48CMB28 DACs"]
+        DAC2["CV Out 9-16<br/>MCP48CMB28 DACs"]
+        DAC1["CV Out 17-24<br/>MCP48CMB28 DACs"]
+        DAC2["CV Out 25-32<br/>MCP48CMB28 DACs"]
         GATE["Gate Outputs<br/>x8 3.3V"]
     end
     
     TOUCH --> ESP32
     ENCODER --> ESP32
     BUTTONS --> ESP32
-    ESP32 --> SD
+    LEDS --> ESP32
+    POTS --> ESP32
     ESP32 --> USB
     ESP32 --> MIDI_IO
-    ESP32 <-->|SPI Protocol| DAISY
+    ESP32 <-->|SPI Slave-Master| DAISY
+    DAISY --> SD
     DAISY --> CODEC
     CODEC --> AUDIO_IO
+    DAISY --> TDM_DAC
     DAISY --> DAC1
     DAISY --> DAC2
     DAISY --> GATE
@@ -112,54 +125,63 @@ graph LR
 
 ## Software Architecture
 
-### ESP32-S3 Frontend Components
+### ESP32-P4 Frontend Components
 ```mermaid
 graph TD
     subgraph "Application Layer"
         UI_APP[UI Application<br/>LVGL-based]
         FILE_MGR[File Manager<br/>Sample Browser]
         PRESET_MGR[Preset Manager<br/>Save/Load]
-        MIDI_APP[MIDI Application<br/>External Control]
+        MIDI_APP[MIDI Application<br/>USB MIDI]
     end
-    
+
     subgraph "Service Layer"
         AUDIO_SVC[Audio Service<br/>Parameter Management]
-        COMM_SVC[Communication Service<br/>Protocol Handler]
-        STORAGE_SVC[Storage Service<br/>SD/USB Management]
+        COMM_SVC[Communication Service<br/>SPI Protocol Handler]
+        STORAGE_SVC[Storage Service<br/>USB Management]
         CONFIG_SVC[Configuration Service<br/>Settings]
+        LED_SVC[LED Service<br/>TLC5947 Control]
     end
-    
+
     subgraph "Hardware Abstraction"
-        TOUCH_HAL[Touch Driver<br/>FT6X36]
-        DISPLAY_HAL[Display Driver<br/>ST7796S]
-        SPI_HAL[SPI Master<br/>ESP-IDF]
-        FS_HAL[File System<br/>FatFS]
+        TOUCH_HAL[Touch Driver<br/>GT911 I2C]
+        DISPLAY_HAL[Display Driver<br/>MIPI DSI hx8394]
+        SPI_MASTER[SPI Master<br/>Inter-MCU Link]
+        SPI2_MASTER[SPI2 Master<br/>LEDs + ADC]
+        PCNT_HAL|[PEC24R encoder<br>Encoder]
+        ADC_HAL[ADC Driver<br/>MCP3008 for Encoders]
+        I2C_HAL[I2C Driver<br/>Touch + Buttons]
+        UART_MIDI[MIDI UART<br/>31250 baud]
     end
     
     subgraph "ESP-IDF Framework"
         FREERTOS[FreeRTOS<br/>Task Scheduler]
         DRIVERS[Hardware Drivers]
-        NETWORK[WiFi/Bluetooth<br/>Stack]
+        NETWORK[WiFi/Bluetooth<br/>(Disabled)]
     end
-    
+
     UI_APP --> AUDIO_SVC
     FILE_MGR --> STORAGE_SVC
     PRESET_MGR --> CONFIG_SVC
     MIDI_APP --> COMM_SVC
-    
+
     AUDIO_SVC --> COMM_SVC
-    COMM_SVC --> SPI_HAL
-    STORAGE_SVC --> FS_HAL
-    
-    TOUCH_HAL --> DRIVERS
+    COMM_SVC --> SPI_MASTER
+    STORAGE_SVC --> LED_SVC
+
+    TOUCH_HAL --> I2C_HAL
     DISPLAY_HAL --> DRIVERS
-    SPI_HAL --> DRIVERS
-    FS_HAL --> DRIVERS
-    
+    SPI_MASTER --> DRIVERS
+    SPI2_MASTER --> DRIVERS
+    ADC_HAL --> SPI2_MASTER
+    I2C_HAL --> DRIVERS
+    UART_MIDI --> DRIVERS
+
+    LED_SVC --> SPI2_MASTER
     DRIVERS --> FREERTOS
 ```
 
-### STM32H750 Backend Components
+### Daisy Seed Backend Components
 ```mermaid
 graph TD
     subgraph "Audio Engine"
@@ -168,29 +190,32 @@ graph TD
         EFFECT_ENG[Effects Engine<br/>Reverb, Delay, etc.]
         MIX_ENG[Mixing Engine<br/>Voice Combining]
     end
-    
+
     subgraph "Parameter System"
         PARAM_MGR[Parameter Manager<br/>Real-time Updates]
         MOD_MATRIX[Modulation Matrix<br/>LFO, Envelope Routing]
         PRESET_ENG[Preset Engine<br/>Voice Management]
     end
-    
+
     subgraph "Communication"
         PROTOCOL[Protocol Handler<br/>SPI Message Processing]
         CMD_QUEUE[Command Queue<br/>Priority-based]
         STATUS_MGR[Status Manager<br/>System Monitoring]
     end
-    
+
     subgraph "Hardware Interface"
-        AUDIO_HAL[Audio HAL<br/>I2S/SAI Interface]
-        SPI_HAL[SPI Slave<br/>STM32 HAL]
-        DAC_HAL[DAC Control<br/>CV Output]
+        AUDIO_HAL[Audio HAL<br/>AK4556 Codec]
+        SPI_SLAVE[SPI Slave<br/>Inter-MCU Link]
+        DAC_HAL[DAC Control<br/>MCP48CMB28 CV Output]
+        SDIO_HAL[SDIO Interface<br/>4-bit SD Card]
+        TDM_HAL[TDM DAC<br/>PCM1690 8-channel]
         GPIO_HAL[GPIO Control<br/>Gate Outputs]
     end
-    
+
     subgraph "libDaisy Framework"
         DAISY_CORE[Daisy Core<br/>Hardware Abstraction]
         DAISYSP[DaisySP<br/>DSP Library]
+        FATFS[FAT32 File System<br/>SD Card Support]
         HAL_DRIVERS[STM32 HAL<br/>Low-level Drivers]
     end
     
@@ -198,26 +223,30 @@ graph TD
     VOICE_ENG --> EFFECT_ENG
     SAMPLE_ENG --> MIX_ENG
     EFFECT_ENG --> MIX_ENG
-    
+
     PARAM_MGR --> VOICE_ENG
     MOD_MATRIX --> PARAM_MGR
     PRESET_ENG --> PARAM_MGR
-    
+
     PROTOCOL --> CMD_QUEUE
     CMD_QUEUE --> PARAM_MGR
     STATUS_MGR --> PROTOCOL
-    
+
     MIX_ENG --> AUDIO_HAL
     PARAM_MGR --> DAC_HAL
     PARAM_MGR --> GPIO_HAL
-    PROTOCOL --> SPI_HAL
-    
+    PROTOCOL --> SPI_SLAVE
+    STATUS_MGR --> SDIO_HAL
+
     AUDIO_HAL --> DAISY_CORE
-    SPI_HAL --> HAL_DRIVERS
+    SPI_SLAVE --> HAL_DRIVERS
     DAC_HAL --> HAL_DRIVERS
+    SDIO_HAL --> FATFS
+    TDM_HAL --> HAL_DRIVERS
     GPIO_HAL --> HAL_DRIVERS
-    
+
     DAISY_CORE --> DAISYSP
+    FATFS --> HAL_DRIVERS
     DAISYSP --> HAL_DRIVERS
 ```
 
@@ -323,22 +352,22 @@ graph TB
 
 ## Memory Architecture
 
-### ESP32-S3 Memory Layout
+### ESP32-P4 Memory Layout
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    ESP32-S3 Memory Map                      │
+│                    ESP32-P4 Memory Map                      │
 ├─────────────────────────────────────────────────────────────┤
-│ Internal SRAM (512KB)                                       │
-│ ├─ Stack/Heap (256KB)                                      │
-│ ├─ LVGL Buffers (128KB)                                    │
-│ ├─ Protocol Buffers (64KB)                                 │
-│ └─ System Reserved (64KB)                                  │
+│ Internal SRAM (1.25MB)                                      │
+│ ├─ Stack/Heap (512KB)                                      │
+│ ├─ LVGL Double Buffers (320KB x2)                          │
+│ ├─ Protocol Ring Buffers (128KB)                           │
+│ ├─ MIPI DSI Frame Buffer (256KB)                           │
+│ └─ System Reserved (128KB)                                 │
 ├─────────────────────────────────────────────────────────────┤
-│ External PSRAM (8MB)                                        │
-│ ├─ UI Graphics Cache (4MB)                                 │
-│ ├─ File System Cache (2MB)                                 │
-│ ├─ Sample Preview Buffer (1MB)                             │
-│ └─ Application Heap (1MB)                                  │
+│ External PSRAM (Enabled)                                    │
+│ ├─ UI Graphics Cache (Variable)                            │
+│ ├─ LVGL PSRAM Buffers (if >20KB threshold)                 │
+│ └─ Application Heap (Variable)                             │
 ├─────────────────────────────────────────────────────────────┤
 │ Flash Memory (16MB)                                         │
 │ ├─ Application Code (8MB)                                  │
@@ -348,16 +377,16 @@ graph TB
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### STM32H750 Memory Layout
+### Daisy Seed Memory Layout
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                   STM32H750 Memory Map                      │
+│                   Daisy Seed Memory Map                     │
 ├─────────────────────────────────────────────────────────────┤
-│ Internal SRAM (1MB)                                         │
-│ ├─ Audio Buffers (512KB)                                   │
-│ ├─ Voice Data (256KB)                                      │
-│ ├─ Protocol Stack (128KB)                                  │
-│ └─ System Stack/Heap (128KB)                               │
+│ Internal SRAM (512KB)                                       │
+│ ├─ Audio Buffers (256KB)                                   │
+│ ├─ Voice Data (128KB)                                      │
+│ ├─ Protocol Ring Buffers (64KB)                            │
+│ └─ System Stack/Heap (64KB)                                │
 ├─────────────────────────────────────────────────────────────┤
 │ External SDRAM (64MB)                                       │
 │ ├─ Sample Storage (48MB)                                   │
@@ -365,12 +394,14 @@ graph TB
 │ ├─ Effects Buffers (4MB)                                   │
 │ └─ Parameter Storage (4MB)                                 │
 ├─────────────────────────────────────────────────────────────┤
-│ Flash Memory (128KB)                                        │
-│ ├─ Bootloader (64KB)                                       │
-│ ├─ Application Code (32KB)                                 │
-│ └─ Configuration (32KB)                                    │
-│                                                             │
-│ Note: Main application runs from external QSPI Flash       │
+│ QSPI Flash (8MB)                                           │
+│ ├─ Application Code (4MB)                                  │
+│ ├─ Sample Library (2MB)                                    │
+│ └─ Configuration (2MB)                                     │
+├─────────────────────────────────────────────────────────────┤
+│ SD Card (External, SDIO 4-bit)                              │
+│ ├─ User Samples (Variable)                                 │
+│ └─ Preset Storage (Variable)                               │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -384,11 +415,13 @@ graph TB
 - **Effect Processing**: <500μs per voice
 
 ### Throughput Specifications
-- **SPI Communication**: 8.5 Mbps effective
-- **Audio Processing**: 48kHz/24-bit stereo
+- **SPI Communication**: 4 MHz (ESP32 slave, Daisy master)
+- **Audio Processing**: 48kHz/24-bit stereo + 8-channel TDM
 - **Voice Polyphony**: 16 simultaneous voices
 - **Sample Rate**: Up to 96kHz (configurable)
 - **CV Update Rate**: 1kHz per channel
+- **Display**: 1280x720 MIPI DSI @1500Mbps lane bitrate
+- **SDIO**: 4-bit SD card interface on Daisy
 
 ## System Interfaces
 
@@ -421,9 +454,11 @@ graph LR
     end
     
     subgraph "User Interface"
-        DISPLAY["7 inch Touchscreen<br/>480x320 RGB"]
-        ENCODERS["4x Rotary<br/>Encoders"]
-        BUTTONS["8x Push<br/>Buttons"]
+        DISPLAY["5 inch Touchscreen<br/>1280x720 MIPI DSI<br/>GT911 Touch"]
+        ENCODERS["4x Dual Rotary Encoders<br/>Endless via MCP3008 ADC"]
+        BUTTONS["Capacitive Buttons<br/>TCA8418 8x8 Matrix<br/>Enabled"]
+        LEDS["48-channel LED Driver<br/>TLC5947 PWM"]
+        POTS["4x Analog Pots<br/>MCP3008 ADC"]
     end
     
     WAVEX["WaveX<br/>Main Unit"] --> AUDIO_L
@@ -442,6 +477,93 @@ graph LR
     WAVEX --> DISPLAY
     WAVEX --> ENCODERS
     WAVEX --> BUTTONS
+    WAVEX --> LEDS
+    WAVEX --> POTS
 ```
+
+## Detailed Hardware Configuration
+
+### ESP32-P4 Pin Assignments
+
+#### MIPI DSI Display Interface
+- **Data Lanes**: GPIO2 (D0P), GPIO3 (D0N), GPIO4 (D1P), GPIO5 (D1N)
+- **Clock**: GPIO6 (CLKP), GPIO7 (CLKN)
+- **Control**: GPIO8 (RST), GPIO9 (BL)
+
+#### Touch Interface (GT911 I2C)
+- **I2C Bus**: GPIO20 (SDA), GPIO21 (SCL)
+- **Control**: GPIO14 (RST), GPIO15 (INT)
+
+#### Inter-MCU Communication (SPI Slave)
+- **SPI**: GPIO48 (SCK), GPIO49 (MOSI), GPIO50 (MISO), GPIO51 (CS)
+- **IRQ**: GPIO31 (ATTN_OUT)
+
+#### Rotary Encoders (MCP3008 ADC)
+- **4x Dual Rotary Encoders**: Connected via MCP3008 ADC channels
+- **ADC**: GPIO47 (MOSI), GPIO52 (MISO), GPIO46 (SCK), GPIO29 (CS)
+
+#### MIDI UART
+- **UART2**: GPIO32 (TX), GPIO33 (RX) @31250 baud
+
+#### SPI2 Master (LEDs + Encoders)
+- **SPI2**: GPIO47 (MOSI), GPIO52 (MISO), GPIO46 (SCK)
+- **TLC5947**: GPIO28 (XLAT), GPIO27 (BLANK)
+- **MCP3008**: GPIO29 (CS) - Rotary encoders + potentiometers
+
+#### I2C Shared Bus (Touch + Buttons)
+- **GT911 Touch**: GPIO20 (SDA), GPIO21 (SCL), GPIO14 (RST), GPIO15 (INT)
+- **TCA8418 Buttons**: GPIO20 (SDA), GPIO21 (SCL), GPIO30 (INT)
+
+### Daisy Seed Pin Assignments
+
+#### Inter-MCU Communication (SPI Master)
+- **SPI1**: D8 (SCK), D10 (MOSI), D9 (MISO), D7 (CS)
+- **IRQ**: D0 (ATTN_IN)
+
+#### Audio Interface (AK4556)
+- **Built-in codec**: Standard Daisy audio I/O
+
+#### CV Output DACs (MCP48CMB28)
+- **DAC1**: D25 (CS), **DAC2**: D26 (CS), **DAC3**: D27 (CS), **DAC4**: D28 (CS)
+- **SPI**: D29 (SCK), D30 (MOSI)
+
+#### TDM DAC (PCM1690)
+- **SAI2**: D24 (BCLK), D23 (LRCK), D22 (DATA), D21 (MCLK)
+
+#### SD Card (SDIO 4-bit)
+- **SDIO**: D19 (CS), D20 (SCK), D18 (MOSI), D17 (MISO)
+
+### Hardware Component Configuration
+
+#### Audio Engine (Daisy)
+- **Sample Rate**: 48kHz
+- **Block Size**: 48 samples
+- **Buffer Size**: 256 samples
+- **Meters Update**: 100ms intervals
+
+#### Display (ESP32)
+- **Resolution**: 1280x720
+- **Interface**: MIPI DSI
+- **Color Depth**: 16-bit RGB565
+- **Controller**: HX8394
+- **Touch**: GT911 I2C
+
+#### LED Driver (TLC5947)
+- **Channels**: 48
+- **PWM Frequency**: 1000Hz
+- **Bit Depth**: 12-bit brightness
+
+#### ADC (MCP3008)
+- **Channels**: 8 total (4x rotary encoders + 4x potentiometers)
+- **Resolution**: 10-bit
+- **Samples**: 64 per reading
+- **Rotary Encoders**: 4x dual endless encoders
+
+#### Button Matrix (TCA8418)
+- **Matrix**: 8x8 capacitive buttons
+- **I2C Address**: Standard
+- **I2C Bus**: Shared with GT911 touch controller
+- **Debounce**: 50ms
+- **Interrupt**: GPIO30
 
 This architecture provides a clear separation of concerns, optimizing each microcontroller for its specific role while maintaining tight integration through the high-speed SPI communication protocol. 

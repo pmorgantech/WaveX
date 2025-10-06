@@ -133,7 +133,7 @@
 
 // TCA8418 8x8 Capacitive Button Matrix
 #ifndef WAVEX_ESP_BUTTON_MATRIX_ENABLED
-#define WAVEX_ESP_BUTTON_MATRIX_ENABLED 0  // Currently disabled, using encoder instead
+#define WAVEX_ESP_BUTTON_MATRIX_ENABLED 1  // Enabled for switch/button inputs
 #endif
 
 // MIPI DSI LCD Display (5-DSI-TOUCH-A)
@@ -442,6 +442,15 @@
 
 #ifndef WAVEX_POT_ADC_SAMPLES
 #define WAVEX_POT_ADC_SAMPLES 64
+#endif
+
+// Rotary Encoder Configuration (via MCP3008 ADC)
+#ifndef WAVEX_ROTARY_ENCODER_COUNT
+#define WAVEX_ROTARY_ENCODER_COUNT 4  // 4x dual rotary encoders
+#endif
+
+#ifndef WAVEX_ROTARY_ENCODER_TYPE
+#define WAVEX_ROTARY_ENCODER_TYPE 1   // 1 = Endless rotary via ADC
 #endif
 
 // Optional button matrix configuration (e.g., TCA8418)

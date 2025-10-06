@@ -158,12 +158,16 @@ void PacketRouter::handle_sync(const WaveX::Protocol::SyncMessage& msg)
 
 void PacketRouter::handle_heartbeat(const WaveX::Protocol::HeartbeatMessage& msg)
 {
-    ESP_LOGI("packet_router", "Heartbeat: uptime=%u, loop=%u, cpu=%.1f%%", 
-             msg.uptime_ms, msg.loop_counter, msg.cpu_usage_percent / 10.0f);
-    
-    // Update backend heartbeat data
-    inter_mcu_update_backend_heartbeat(msg.uptime_ms, msg.rx_total, msg.loop_counter, 
-                                       msg.cpu_usage_percent / 10.0f);
+    float cpu_avg = msg.cpu_avg_percent / 10.0f;
+    float cpu_min = msg.cpu_min_percent / 10.0f;
+    float cpu_max = msg.cpu_max_percent / 10.0f;
+
+    ESP_LOGI("packet_router", "Heartbeat: uptime=%u, loop=%u, cpu=avg:%.1f%% min:%.1f%% max:%.1f%%",
+             msg.uptime_ms, msg.loop_counter, cpu_avg, cpu_min, cpu_max);
+
+    // Update backend heartbeat data with detailed CPU metrics
+    inter_mcu_update_backend_heartbeat_detailed(msg.uptime_ms, msg.rx_total, msg.loop_counter,
+                                               cpu_avg, cpu_min, cpu_max);
 }
 
 void PacketRouter::handle_meter_push(const WaveX::Protocol::MeterPushMessage& msg)

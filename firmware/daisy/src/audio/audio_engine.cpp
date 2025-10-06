@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <cstring>
 #include "ff.h"
+#include <daisy.h>  // For CpuLoadMeter
 
 using namespace daisy;
 using namespace daisysp;
@@ -49,6 +50,11 @@ static volatile float s_env_level = 0.0f;
 static float s_last_in_block[Timebase::kBlockSize] = {0};
 static size_t s_last_block_size = 0;
 static BlockMeters s_last_block_meters = {0, 0, 0, 0};
+
+// CPU Load Meter for audio processing performance monitoring
+static CpuLoadMeter s_cpu_load_meter;
+static float s_sample_rate = 48000.0f;
+static int s_block_size = 48;
 
 // Preview state
 static std::vector<int16_t> s_preview;
@@ -341,6 +347,7 @@ static inline bool rb_pop_stereo(int16_t &l, int16_t &r)
 void Init(DaisySeed& hw, float sample_rate)
 {
     s_hw = &hw;
+    s_sample_rate = sample_rate;
 
     s_filter.Init(sample_rate);
     s_filter.SetFreq(s_params.filter_cutoff);
@@ -365,12 +372,19 @@ void Init(DaisySeed& hw, float sample_rate)
 
     s_sampler.Init(sample_rate);
     s_cv.Init(0x60);
+
+    // Initialize CPU load meter for audio processing performance monitoring
+    // Use default block size of 48 and 200-block averaging window
+    s_cpu_load_meter.Init(sample_rate, 48, 200);
 }
 
 void Callback(AudioHandle::InputBuffer in,
               AudioHandle::OutputBuffer out,
               size_t size)
 {
+    // Start CPU load measurement for this audio block
+    s_cpu_load_meter.OnBlockStart();
+
     (void)in;
     for (size_t i = 0; i < size; i++)
     {
@@ -443,6 +457,9 @@ void Callback(AudioHandle::InputBuffer in,
     Timebase::Tick1kHz([]{
         // Future control logic
     });
+
+    // End CPU load measurement for this audio block
+    s_cpu_load_meter.OnBlockEnd();
 }
 
 void OnControlChange(const ControlChangeMessage& ctrl_msg)
@@ -525,6 +542,30 @@ void GetInputMeters(float& rms, float& peak)
 void GetMeters(BlockMeters& out)
 {
     out = s_last_block_meters;
+}
+
+// ============================
+// CPU Load Monitoring Functions
+// ============================
+
+float GetAvgCpuLoad()
+{
+    return s_cpu_load_meter.GetAvgCpuLoad();
+}
+
+float GetMinCpuLoad()
+{
+    return s_cpu_load_meter.GetMinCpuLoad();
+}
+
+float GetMaxCpuLoad()
+{
+    return s_cpu_load_meter.GetMaxCpuLoad();
+}
+
+float GetBlockPeriodMs()
+{
+    return 1000.0f * (float)s_block_size / s_sample_rate;  // Block period in milliseconds
 }
 
 // ============================

@@ -11,9 +11,7 @@
 
 #include "lvgl.h"
 
-#ifdef __cplusplus
-extern "C" {
-#endif
+/* No extern "C" here to avoid C linkage bleed */
 
 // Window structure for standardized layout
 typedef struct {
@@ -46,8 +44,6 @@ void wavex_window_set_title(wavex_window_t* window, const char* title);
 // Layout calculations
 void wavex_window_update_layout(wavex_window_t* window);
 
-#ifdef __cplusplus
-}
-#endif
+
 
 #endif // WAVEX_WINDOW_MANAGER_H

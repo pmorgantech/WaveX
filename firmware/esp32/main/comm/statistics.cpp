@@ -183,6 +183,30 @@ void StatisticsManager::update_backend_heartbeat(uint32_t uptime_ms, uint32_t rx
     m_backend_hb.rx_total = rx_total;
     m_backend_hb.loop_counter = loop_counter;
     m_backend_hb.cpu_usage_percent = cpu_usage_percent;
+    // For backward compatibility, set all CPU metrics to the same value
+    m_backend_hb.cpu_avg_percent = cpu_usage_percent;
+    m_backend_hb.cpu_min_percent = cpu_usage_percent;
+    m_backend_hb.cpu_max_percent = cpu_usage_percent;
+#ifdef ESP_PLATFORM
+    m_backend_hb.last_rx_ms = (uint32_t)(esp_timer_get_time() / 1000);
+#else
+    m_backend_hb.last_rx_ms = 0;
+#endif
+    m_backend_hb.valid = true;
+    taskEXIT_CRITICAL(&m_hb_lock);
+}
+
+void StatisticsManager::update_backend_heartbeat_detailed(uint32_t uptime_ms, uint32_t rx_total, uint32_t loop_counter,
+                                                         float cpu_avg_percent, float cpu_min_percent, float cpu_max_percent)
+{
+    taskENTER_CRITICAL(&m_hb_lock);
+    m_backend_hb.uptime_ms = uptime_ms;
+    m_backend_hb.rx_total = rx_total;
+    m_backend_hb.loop_counter = loop_counter;
+    m_backend_hb.cpu_usage_percent = cpu_avg_percent;  // Legacy compatibility
+    m_backend_hb.cpu_avg_percent = cpu_avg_percent;
+    m_backend_hb.cpu_min_percent = cpu_min_percent;
+    m_backend_hb.cpu_max_percent = cpu_max_percent;
 #ifdef ESP_PLATFORM
     m_backend_hb.last_rx_ms = (uint32_t)(esp_timer_get_time() / 1000);
 #else
@@ -195,13 +219,30 @@ void StatisticsManager::update_backend_heartbeat(uint32_t uptime_ms, uint32_t rx
 void StatisticsManager::get_backend_heartbeat(uint32_t* uptime_ms, uint32_t* rx_total, uint32_t* loop_counter, uint32_t* last_rx_ms, float* cpu_usage_percent, bool* valid) const
 {
     if (!uptime_ms || !rx_total || !loop_counter || !last_rx_ms || !cpu_usage_percent || !valid) return;
-    
+
     taskENTER_CRITICAL(&m_hb_lock);
     *uptime_ms = m_backend_hb.uptime_ms;
     *rx_total = m_backend_hb.rx_total;
     *loop_counter = m_backend_hb.loop_counter;
     *last_rx_ms = m_backend_hb.last_rx_ms;
     *cpu_usage_percent = m_backend_hb.cpu_usage_percent;
+    *valid = m_backend_hb.valid;
+    taskEXIT_CRITICAL(&m_hb_lock);
+}
+
+void StatisticsManager::get_backend_heartbeat_detailed(uint32_t* uptime_ms, uint32_t* rx_total, uint32_t* loop_counter, uint32_t* last_rx_ms,
+                                                      float* cpu_avg_percent, float* cpu_min_percent, float* cpu_max_percent, bool* valid) const
+{
+    if (!uptime_ms || !rx_total || !loop_counter || !last_rx_ms || !cpu_avg_percent || !cpu_min_percent || !cpu_max_percent || !valid) return;
+
+    taskENTER_CRITICAL(&m_hb_lock);
+    *uptime_ms = m_backend_hb.uptime_ms;
+    *rx_total = m_backend_hb.rx_total;
+    *loop_counter = m_backend_hb.loop_counter;
+    *last_rx_ms = m_backend_hb.last_rx_ms;
+    *cpu_avg_percent = m_backend_hb.cpu_avg_percent;
+    *cpu_min_percent = m_backend_hb.cpu_min_percent;
+    *cpu_max_percent = m_backend_hb.cpu_max_percent;
     *valid = m_backend_hb.valid;
     taskEXIT_CRITICAL(&m_hb_lock);
 }

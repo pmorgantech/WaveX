@@ -28,6 +28,5 @@ idf_component_register(
         "esp_lcd_touch_gt911"
     PRIV_REQUIRES
         "shared"
-        "hardware_config"
         "ui"
 )

@@ -5,6 +5,8 @@
 
 #include "sample_load_save.h"
 #include "../styles/ui_theme.h"
+
+// C headers (C linkage not required for includes)
 #include "esp_log.h"
 #include <string.h>
 #include <stdlib.h>
@@ -14,7 +16,7 @@
 #include "../../../main/inter_mcu.h"
 #include "../../../main/ui_task.h"
 
-// LVGL includes for thread safety
+// LVGL includes for thread safety (C++)
 #include "esp_lvgl_port.h"
 
 // LVGL port lock macros for thread safety
@@ -432,4 +434,5 @@ static void directory_changed_callback(const char* path, void* user_data)
 
 // Note: Hotkey handling is now done by ui_task.cpp to ensure proper navigation
 // This allows the UI task to handle back navigation and other screen transitions
+
 

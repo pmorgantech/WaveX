@@ -1,6 +1,6 @@
 #include <stdio.h>
 #include <inttypes.h>
-#include "../../shared/config/link_config.h"
+#include "config/link_config.h"
 #ifdef ESP_PLATFORM
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"

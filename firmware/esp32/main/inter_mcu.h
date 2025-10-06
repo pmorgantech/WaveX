@@ -71,12 +71,18 @@ typedef struct {
     uint32_t rx_total;
     uint32_t loop_counter;
     uint32_t last_rx_ms; // esp_timer (ms) when last heartbeat was received
-    float    cpu_usage_percent; // CPU usage percentage from Daisy
+    float    cpu_usage_percent; // CPU usage percentage from Daisy (legacy)
+    float    cpu_avg_percent;   // Average CPU usage percentage
+    float    cpu_min_percent;   // Minimum CPU usage percentage
+    float    cpu_max_percent;   // Maximum CPU usage percentage
     bool     valid;
 } wavex_backend_heartbeat_t;
 
 // Thread-safe snapshot of latest heartbeat
 void inter_mcu_get_backend_heartbeat(wavex_backend_heartbeat_t* out);
+
+// Thread-safe snapshot of latest heartbeat with detailed CPU metrics
+void inter_mcu_get_backend_heartbeat_detailed(wavex_backend_heartbeat_t* out);
 
 // Thread-safe snapshot of current packet statistics
 void inter_mcu_get_packet_stats(wavex_packet_stats_t* out);
@@ -105,6 +111,10 @@ void inter_mcu_get_tx_stats(wavex_tx_stats_t* out);
 
 // Update backend heartbeat statistics directly (for SPI link processing)
 void inter_mcu_update_backend_heartbeat(uint32_t uptime_ms, uint32_t rx_total, uint32_t loop_counter, float cpu_usage_percent);
+
+// Update backend heartbeat statistics with detailed CPU metrics (for SPI link processing)
+void inter_mcu_update_backend_heartbeat_detailed(uint32_t uptime_ms, uint32_t rx_total, uint32_t loop_counter,
+                                                float cpu_avg_percent, float cpu_min_percent, float cpu_max_percent);
 
 // Update backend meter data directly (for SPI link processing)
 void inter_mcu_update_backend_meters(float rms_left, float rms_right, float peak_left, float peak_right);

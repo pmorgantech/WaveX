@@ -30,11 +30,16 @@
 #include "esp_lvgl_port.h"
 #include "esp_lcd_touch.h"
 #include "esp_lcd_touch_gt911.h"
-#include "esp_lcd_io_i2c.h"
 #include "esp_heap_caps.h"
 #include "esp_timer.h"
 #include "ui/input_dispatcher.h"
 #include "ui/ui_demo.h"
+#include "ui/ui_navigation_integration.h"
+
+// Workaround for ESP LCD I2C function conflict
+// Use the v2 version directly since we have i2c_master_bus_handle_t
+#undef esp_lcd_new_panel_io_i2c
+#define esp_lcd_new_panel_io_i2c esp_lcd_new_panel_io_i2c_v2
 
 // LVGL port lock macros for thread safety
 #define LV_LOCK()   lvgl_port_lock(portMAX_DELAY)
@@ -211,7 +216,7 @@ static esp_err_t init_touch_controller(void)
     };
 
     esp_lcd_panel_io_handle_t io_handle = NULL;
-    ESP_RETURN_ON_ERROR(esp_lcd_new_panel_io_i2c_v2(i2c_handle, &io_config, &io_handle),
+    ESP_RETURN_ON_ERROR(esp_lcd_new_panel_io_i2c(i2c_handle, &io_config, &io_handle),
                        TAG, "Failed to create I2C panel IO");
 
     // Configure GT911 touch controller with correct orientation for 720x1280 display
@@ -1466,11 +1471,8 @@ static void menu_button_event_cb(lv_event_t *e)
     // Store content area reference for menu navigation
     s_content_area = content;
     
-    // Create hotkey region at bottom of screen
-    create_hotkey_region(main_screen);
-    
-    // Create main menu
-    create_main_menu(content);
+    // Navigation system will handle UI creation
+    // No need to create hotkey region or main menu manually
     LV_UNLOCK();
 
     ESP_LOGI(TAG, "Main UI created successfully");
@@ -1511,8 +1513,11 @@ static void menu_button_event_cb(lv_event_t *e)
         }
     }
 
-    // Set initial input context (demo)
-    wavex_ui::InputDispatcher::instance().setActiveContext(wavex_ui::createPatchListContext());
+    // Initialize navigation system
+    wavex_ui::initNavigationSystem();
+    
+    // Set navigation context as active input handler
+    wavex_ui::InputDispatcher::instance().setActiveContext(wavex_ui::createNavigationContext());
 
     // Main UI loop with adaptive refresh rate control
     ESP_LOGI(TAG, "UI loop started with adaptive refresh rate control");
@@ -1527,17 +1532,8 @@ static void menu_button_event_cb(lv_event_t *e)
             evt.timestamp_ms = (uint32_t)(esp_timer_get_time() / 1000);
             wavex_ui::InputDispatcher::instance().post(evt);
 
-            // Currently, only the Sample Load/Save page has a file browser
-            if (strcmp(s_current_screen, "sample_load_save") == 0 && s_sample_load_save_page && s_sample_load_save_page->file_browser) {
-                uint32_t current_idx = wavex_file_browser_get_selected_index(s_sample_load_save_page->file_browser);
-                uint32_t max_idx = wavex_file_browser_get_entry_count(s_sample_load_save_page->file_browser);
-                int32_t target = (int32_t)current_idx + enc_delta;
-                if (target < 0) target = 0;
-                if (max_idx > 0 && target > (int32_t)max_idx - 1) target = (int32_t)max_idx - 1;
-                if ((uint32_t)target != current_idx) {
-                    wavex_file_browser_set_selection(s_sample_load_save_page->file_browser, (uint32_t)target);
-                }
-            }
+            // Navigation system handles all encoder input through InputDispatcher
+            // No need for manual encoder handling here
         }
         // Dispatch queued input events to current context
         wavex_ui::InputDispatcher::instance().processAll();

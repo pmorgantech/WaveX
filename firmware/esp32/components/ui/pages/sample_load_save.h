@@ -13,9 +13,9 @@
 #include "../common/window_manager.h"
 #include "../components/file_browser.h"
 
-#ifdef __cplusplus
-extern "C" {
-#endif
+/* Public C API: these declarations are C-friendly. Avoid forcing C linkage on
+ * transitively included C++ headers by keeping extern "C" minimal and only in
+ * implementation files where needed. */
 
 // Sample load/save page structure
 typedef struct {
@@ -50,8 +50,6 @@ bool wavex_sample_load_save_save_sample(wavex_sample_load_save_page_t* page, con
 void wavex_sample_load_save_set_status(wavex_sample_load_save_page_t* page, const char* status);
 void wavex_sample_load_save_update_info(wavex_sample_load_save_page_t* page, const wavex_file_entry_t* entry);
 
-#ifdef __cplusplus
-}
-#endif
+
 
 #endif // WAVEX_SAMPLE_LOAD_SAVE_H

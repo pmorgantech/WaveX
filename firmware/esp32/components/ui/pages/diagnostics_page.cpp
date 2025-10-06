@@ -1,5 +1,10 @@
 #include "pages/diagnostics_page.h"
 
+// C++ includes first (no C linkage wrapper)
+#include "ui_task.h" // For wavex_ui_create_meter_display
+#include "esp_lvgl_port.h"
+
+// C/ESP-IDF headers (safe to include as C++ headers)
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "esp_heap_caps.h"
@@ -13,11 +18,7 @@
 #include "comm/statistics.h"
 #include "links/esp_spi_link.h"
 #include "inter_mcu.h"
-#include "ui_task.h" // For wavex_ui_create_meter_display
 #include "config.h"  // For WAVEX_CPU_USAGE_METHOD
-
-// LVGL includes
-#include "esp_lvgl_port.h"
 
 // LVGL port lock macros for thread safety
 #define LV_LOCK()   lvgl_port_lock(portMAX_DELAY)
@@ -317,27 +318,32 @@ static void update_cpu_usage_esp_idf_builtin(void)
  */
 static void diagnostics_update_cb(void *arg)
 {
+    // Only update if the diagnostics page is currently active
+    if (!s_diagnostics_label || !s_daisy_label) {
+        return;
+    }
+
     update_cpu_usage();
-    
+
     size_t free_heap = esp_get_free_heap_size();
     size_t min_free_heap = esp_get_minimum_free_heap_size();
     uint32_t uptime_ms = (uint32_t)(esp_timer_get_time() / 1000);
-    
+
     wavex_backend_heartbeat_t heartbeat;
-    inter_mcu_get_backend_heartbeat(&heartbeat);
-    
+    inter_mcu_get_backend_heartbeat_detailed(&heartbeat);
+
     spi_link_stats_t spi_stats;
     spi_link_get_stats(&spi_stats);
     bool spi_active = spi_link_is_active();
-    
+
     wavex_packet_stats_t packet_stats;
     inter_mcu_get_packet_stats(&packet_stats);
-    
+
     uint32_t time_since_last_rx = 999999;
     if (heartbeat.valid && heartbeat.last_rx_ms > 0) {
         time_since_last_rx = uptime_ms - heartbeat.last_rx_ms;
     }
-    
+
     const char* link_status = "INACTIVE";
     if (heartbeat.valid && time_since_last_rx < 2000) {
         link_status = "ACTIVE";
@@ -348,9 +354,9 @@ static void diagnostics_update_cb(void *arg)
     } else if (spi_active) {
         link_status = "INIT";
     }
-    
+
     // Prepare text data (no LVGL locks in timer callback)
-    snprintf(s_deferred_esp32_text, sizeof(s_deferred_esp32_text),
+    int esp32_len = snprintf(s_deferred_esp32_text, sizeof(s_deferred_esp32_text),
         "Uptime: %lu sec\n"
         "Free RAM: %zu KB\n"
         "Min RAM: %zu KB\n"
@@ -364,8 +370,8 @@ static void diagnostics_update_cb(void *arg)
         s_cpu_usage_percent,
         s_cpu_usage_core0,
         s_cpu_usage_core1);
-    
-    snprintf(s_deferred_daisy_text, sizeof(s_deferred_daisy_text),
+
+    int daisy_len = snprintf(s_deferred_daisy_text, sizeof(s_deferred_daisy_text),
         "Status: %s\n"
         "Last RX: %lu ms ago\n"
         "Total Packets: %lu\n"
@@ -374,7 +380,7 @@ static void diagnostics_update_cb(void *arg)
         "CRC Errors: %lu\n"
         "IRQ Count: %lu\n"
         "SPI Active: %s\n"
-        "Daisy CPU: %.1f%%",
+        "Daisy CPU: avg=%.1f%% min=%.1f%% max=%.1f%%",
         link_status,
         time_since_last_rx,
         packet_stats.total_packets,
@@ -383,8 +389,16 @@ static void diagnostics_update_cb(void *arg)
         spi_stats.crc_errors,
         spi_stats.irq_count,
         spi_active ? "YES" : "NO",
-        heartbeat.cpu_usage_percent);
-    
+        heartbeat.cpu_avg_percent,
+        heartbeat.cpu_min_percent,
+        heartbeat.cpu_max_percent);
+
+    // Safety check for buffer overflow
+    if (esp32_len >= sizeof(s_deferred_esp32_text) || daisy_len >= sizeof(s_deferred_daisy_text)) {
+        ESP_LOGE(TAG, "Buffer overflow in diagnostics text formatting");
+        return;
+    }
+
     // Mark UI update as pending (will be processed by main UI task)
     s_ui_update_pending = true;
     wavex_ui_mark_content_changed();
@@ -398,18 +412,26 @@ void diagnostics_page_process_deferred_updates(void)
     if (!s_ui_update_pending) {
         return;
     }
-    
+
+    // Only update if we have valid labels
+    if (!s_diagnostics_label || !s_daisy_label) {
+        s_ui_update_pending = false;
+        return;
+    }
+
     LV_LOCK();
-    if (s_diagnostics_label && lv_obj_is_valid(s_diagnostics_label)) {
+    if (lv_obj_is_valid(s_diagnostics_label)) {
         lv_label_set_text(s_diagnostics_label, s_deferred_esp32_text);
         lv_obj_set_style_text_font(s_diagnostics_label, &lv_font_montserrat_18, LV_PART_MAIN);
+        lv_obj_set_style_text_color(s_diagnostics_label, lv_color_white(), LV_PART_MAIN);
     }
-    if (s_daisy_label && lv_obj_is_valid(s_daisy_label)) {
+    if (lv_obj_is_valid(s_daisy_label)) {
         lv_label_set_text(s_daisy_label, s_deferred_daisy_text);
         lv_obj_set_style_text_font(s_daisy_label, &lv_font_montserrat_18, LV_PART_MAIN);
+        lv_obj_set_style_text_color(s_daisy_label, lv_color_white(), LV_PART_MAIN);
     }
     LV_UNLOCK();
-    
+
     s_ui_update_pending = false;
 }
 
@@ -535,9 +557,15 @@ void diagnostics_page_init(void)
 
 void diagnostics_page_stop(void)
 {
+    // Clear the label pointers when leaving diagnostics page
+    s_diagnostics_label = NULL;
+    s_daisy_label = NULL;
+    s_ui_update_pending = false;
+
     if (s_diagnostics_timer_handle) {
         esp_timer_stop(s_diagnostics_timer_handle);
         esp_timer_delete(s_diagnostics_timer_handle);
         s_diagnostics_timer_handle = NULL;
     }
 }
+

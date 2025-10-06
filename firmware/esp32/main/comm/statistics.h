@@ -85,7 +85,11 @@ public:
     
     // Backend heartbeat
     void update_backend_heartbeat(uint32_t uptime_ms, uint32_t rx_total, uint32_t loop_counter, float cpu_usage_percent);
+    void update_backend_heartbeat_detailed(uint32_t uptime_ms, uint32_t rx_total, uint32_t loop_counter,
+                                          float cpu_avg_percent, float cpu_min_percent, float cpu_max_percent);
     void get_backend_heartbeat(uint32_t* uptime_ms, uint32_t* rx_total, uint32_t* loop_counter, uint32_t* last_rx_ms, float* cpu_usage_percent, bool* valid) const;
+    void get_backend_heartbeat_detailed(uint32_t* uptime_ms, uint32_t* rx_total, uint32_t* loop_counter, uint32_t* last_rx_ms,
+                                       float* cpu_avg_percent, float* cpu_min_percent, float* cpu_max_percent, bool* valid) const;
     
     // Meter data
     void update_meter_data(float rms_left, float rms_right, float peak_left, float peak_right);
@@ -115,7 +119,10 @@ private:
         uint32_t rx_total;
         uint32_t loop_counter;
         uint32_t last_rx_ms;
-        float cpu_usage_percent;
+        float cpu_usage_percent;      // Legacy single value
+        float cpu_avg_percent;        // New detailed metrics
+        float cpu_min_percent;
+        float cpu_max_percent;
         bool valid;
     } m_backend_hb;
     mutable portMUX_TYPE m_hb_lock;

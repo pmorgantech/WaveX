@@ -11,9 +11,7 @@
 
 #include "lvgl.h"
 
-#ifdef __cplusplus
-extern "C" {
-#endif
+/* Avoid broad extern "C" to prevent C linkage on C++ includes */
 
 // Color definitions for dark theme
 #define UI_COLOR_BACKGROUND      lv_color_make(0x00, 0x00, 0x00)  // Black
@@ -53,8 +51,6 @@ void ui_theme_apply_container_style(lv_obj_t* container, bool has_border);
 // Label styling function
 void ui_theme_apply_label_style(lv_obj_t* label, bool is_title);
 
-#ifdef __cplusplus
-}
-#endif
+
 
 #endif // WAVEX_UI_THEME_H

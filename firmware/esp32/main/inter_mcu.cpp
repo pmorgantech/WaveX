@@ -256,6 +256,34 @@ void inter_mcu_get_backend_heartbeat(wavex_backend_heartbeat_t* out)
     out->loop_counter = loop_counter;
     out->last_rx_ms = last_rx_ms;
     out->cpu_usage_percent = cpu_usage_percent;
+    // For backward compatibility, set all CPU fields to the same value
+    out->cpu_avg_percent = cpu_usage_percent;
+    out->cpu_min_percent = cpu_usage_percent;
+    out->cpu_max_percent = cpu_usage_percent;
+    out->valid = valid;
+}
+
+void inter_mcu_get_backend_heartbeat_detailed(wavex_backend_heartbeat_t* out)
+{
+    if (!out) {
+        ESP_LOGE(TAG, "Invalid heartbeat output pointer");
+        return;
+    }
+
+    uint32_t uptime_ms, rx_total, loop_counter, last_rx_ms;
+    float cpu_avg_percent, cpu_min_percent, cpu_max_percent;
+    bool valid;
+    s_statistics.get_backend_heartbeat_detailed(&uptime_ms, &rx_total, &loop_counter, &last_rx_ms,
+                                              &cpu_avg_percent, &cpu_min_percent, &cpu_max_percent, &valid);
+
+    out->uptime_ms = uptime_ms;
+    out->rx_total = rx_total;
+    out->loop_counter = loop_counter;
+    out->last_rx_ms = last_rx_ms;
+    out->cpu_usage_percent = cpu_avg_percent;  // Legacy compatibility
+    out->cpu_avg_percent = cpu_avg_percent;
+    out->cpu_min_percent = cpu_min_percent;
+    out->cpu_max_percent = cpu_max_percent;
     out->valid = valid;
 }
 
@@ -318,6 +346,13 @@ void inter_mcu_get_tx_stats(wavex_tx_stats_t* out)
 void inter_mcu_update_backend_heartbeat(uint32_t uptime_ms, uint32_t rx_total, uint32_t loop_counter, float cpu_usage_percent)
 {
     s_statistics.update_backend_heartbeat(uptime_ms, rx_total, loop_counter, cpu_usage_percent);
+}
+
+void inter_mcu_update_backend_heartbeat_detailed(uint32_t uptime_ms, uint32_t rx_total, uint32_t loop_counter,
+                                                float cpu_avg_percent, float cpu_min_percent, float cpu_max_percent)
+{
+    s_statistics.update_backend_heartbeat_detailed(uptime_ms, rx_total, loop_counter,
+                                                  cpu_avg_percent, cpu_min_percent, cpu_max_percent);
 }
 
 void inter_mcu_update_backend_meters(float rms_left, float rms_right, float peak_left, float peak_right)

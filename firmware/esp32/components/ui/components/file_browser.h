@@ -13,9 +13,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-#ifdef __cplusplus
-extern "C" {
-#endif
+/* Keep headers C-friendly without forcing C linkage on downstream C++ headers */
 
 // File entry structure
 typedef struct {
@@ -91,8 +89,6 @@ const char* wavex_file_browser_get_current_path(wavex_file_browser_t* browser);
 uint32_t wavex_file_browser_get_entry_count(wavex_file_browser_t* browser);
 const wavex_file_entry_t* wavex_file_browser_get_entry(wavex_file_browser_t* browser, uint32_t index);
 
-#ifdef __cplusplus
-}
-#endif
+
 
 #endif // WAVEX_FILE_BROWSER_H

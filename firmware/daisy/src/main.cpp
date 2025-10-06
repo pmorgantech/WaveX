@@ -455,12 +455,14 @@ int main(void)
             #if WAVEX_MCU_LINK_PACKET_DEBUG
             WAVEX_LOG_DAISY(INTER_MCU_LINK, "Sending heartbeat during auditioning (if active)");
             #endif
-            // Create heartbeat message using flexible packet system
+            // Create heartbeat message using flexible packet system with detailed CPU metrics
             WaveX::Protocol::HeartbeatMessage heartbeat_msg = {
                 current_time,           // uptime_ms
                 0,                      // rx_total (placeholder)
                 loop_counter,           // loop_counter
-                (uint16_t)(s_cpu_usage_percent * 10.0f)  // cpu_usage_percent (scaled by 10)
+                (uint16_t)(WaveX::AudioEngine::GetAvgCpuLoad() * 1000.0f),  // cpu_avg_percent (scaled by 10)
+                (uint16_t)(WaveX::AudioEngine::GetMinCpuLoad() * 1000.0f),  // cpu_min_percent (scaled by 10)
+                (uint16_t)(WaveX::AudioEngine::GetMaxCpuLoad() * 1000.0f)   // cpu_max_percent (scaled by 10)
             };
         
             uint8_t heartbeat_buffer[64];
@@ -479,10 +481,16 @@ int main(void)
             // WAVEX_LOG_DAISY(INTER_MCU_LINK, "DEBUG: Heartbeat packet send result: %d", heartbeat_result);
 
             #if WAVEX_MCU_LINK_PACKET_DEBUG
-            WAVEX_LOG_DAISY(INTER_MCU_LINK, "CPU in heartbeat: %.1f%% -> scaled=%u (0x%04X)",
-                            s_cpu_usage_percent, (unsigned int)heartbeat_msg.cpu_usage_percent, (unsigned int)heartbeat_msg.cpu_usage_percent);
-            WAVEX_LOG_DAISY(INTER_MCU_LINK, "SPI Heartbeat sent: uptime=%lu loop_counter=%lu cpu=%.1f%%",
-                            (unsigned long)current_time, (unsigned long)loop_counter, s_cpu_usage_percent);
+            float avg_cpu = WaveX::AudioEngine::GetAvgCpuLoad() * 100.0f;
+            float min_cpu = WaveX::AudioEngine::GetMinCpuLoad() * 100.0f;
+            float max_cpu = WaveX::AudioEngine::GetMaxCpuLoad() * 100.0f;
+            WAVEX_LOG_DAISY(INTER_MCU_LINK, "CPU in heartbeat: avg=%.1f%% min=%.1f%% max=%.1f%% -> scaled=%u/%u/%u",
+                            avg_cpu, min_cpu, max_cpu,
+                            (unsigned int)heartbeat_msg.cpu_avg_percent,
+                            (unsigned int)heartbeat_msg.cpu_min_percent,
+                            (unsigned int)heartbeat_msg.cpu_max_percent);
+            WAVEX_LOG_DAISY(INTER_MCU_LINK, "SPI Heartbeat sent: uptime=%lu loop_counter=%lu",
+                            (unsigned long)current_time, (unsigned long)loop_counter);
             #endif
             last_beacon = current_time;
         }
@@ -557,56 +565,7 @@ int main(void)
         }
         #endif
 
-        // Measure work time for this iteration (excluding sleep)
-        uint32_t work_end_ticks = System::GetTick();
-        s_cpu_busy_ticks_accum += (work_end_ticks - busy_start_ticks);
-        s_cpu_measurement_count++;
-        
-        // Use actual sleep instead of busy wait - much more CPU efficient
-        //System::Delay(1); // 1ms actual sleep instead of busy wait
-        
-        // Measure CPU usage every 2 seconds (reduced frequency for better performance)
-        uint32_t now_ms = System::GetNow();
-        if (s_cpu_last_log_ms == 0) {
-            s_cpu_last_log_ms = now_ms;
-            s_cpu_window_start_ticks = System::GetTick();
-        }
-        
-        // Only do CPU measurement every 2 seconds to reduce overhead
-        if (now_ms - s_cpu_last_log_ms >= 2000) {
-            // Baseline already measured at startup
-            
-            // Calculate total time window (excluding sleep)
-            uint32_t window_ticks = System::GetTick() - s_cpu_window_start_ticks;
-            
-            // Calculate CPU usage percentage - simplified approach
-            s_cpu_usage_percent = 0.0f;
-            if (window_ticks > 0 && s_cpu_busy_ticks_accum <= window_ticks) {
-                // Simple approach: calculate what percentage of the window we were busy
-                // This gives us a reasonable CPU usage estimate
-                s_cpu_usage_percent = (float)s_cpu_busy_ticks_accum / (float)window_ticks * 100.0f;
-                
-                // Clamp to reasonable range
-                if (s_cpu_usage_percent > 100.0f) s_cpu_usage_percent = 100.0f;
-                if (s_cpu_usage_percent < 0.0f) s_cpu_usage_percent = 0.0f;
-                
-            } else if (window_ticks > 0) {
-                // Safety fallback: if busy time exceeds window time, cap at 100%
-                s_cpu_usage_percent = 100.0f;
-            }
-            
-            // Log CPU usage - convert float to integer to avoid formatting issues
-            uint32_t cpu_percent_int = (uint32_t)(s_cpu_usage_percent * 10); // Store as tenths (e.g., 6.5% = 65)
-            if (cpu_percent_int > 1000) cpu_percent_int = 1000; // Cap at 100.0%
-            WAVEX_LOG_DAISY(INTER_MCU_LINK, "CPU: %lu.%lu%%", 
-                            (unsigned long)(cpu_percent_int / 10), 
-                            (unsigned long)(cpu_percent_int % 10));
-            
-            // Reset for next measurement window
-            s_cpu_busy_ticks_accum = 0;
-            s_cpu_window_start_ticks = System::GetTick();
-            s_cpu_last_log_ms = now_ms;
-            s_cpu_measurement_count = 0;
-        }
+        // CPU usage monitoring is now handled by CpuLoadMeter in the audio callback
+        // No need for manual busy time measurement here
     }
 }

@@ -218,7 +218,9 @@ struct HeartbeatMessage {
     uint32_t uptime_ms;
     uint32_t rx_total;
     uint32_t loop_counter;
-    uint16_t cpu_usage_percent;  // CPU usage as percentage * 10 (e.g., 25.6% = 256)
+    uint16_t cpu_avg_percent;   // Average CPU usage as percentage * 10 (e.g., 25.6% = 256)
+    uint16_t cpu_min_percent;   // Minimum CPU usage as percentage * 10
+    uint16_t cpu_max_percent;   // Maximum CPU usage as percentage * 10
 } __attribute__((packed));
 
 // Index-based file selection messages

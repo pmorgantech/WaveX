@@ -11,6 +11,11 @@ set(UI_SOURCES
     "src/ui_patch_list.cpp"
     "src/ui_param_edit.cpp"
     "src/tca8418_keypad.cpp"
+    "src/ui_softkey_bar.cpp"
+    "src/ui_navigator.cpp"
+    "src/ui_menu_page.cpp"
+    "src/ui_navigation_integration.cpp"
+    "src/ui_existing_pages.cpp"
 )
 
 # Add UI include directories
