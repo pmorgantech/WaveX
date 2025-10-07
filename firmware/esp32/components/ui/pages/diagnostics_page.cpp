@@ -318,11 +318,7 @@ static void update_cpu_usage_esp_idf_builtin(void)
  */
 static void diagnostics_update_cb(void *arg)
 {
-    // Only update if the diagnostics page is currently active
-    if (!s_diagnostics_label || !s_daisy_label) {
-        return;
-    }
-
+    // Compute stats regardless of label presence; UI will apply when ready
     update_cpu_usage();
 
     size_t free_heap = esp_get_free_heap_size();
@@ -415,7 +411,7 @@ void diagnostics_page_process_deferred_updates(void)
 
     // Only update if we have valid labels
     if (!s_diagnostics_label || !s_daisy_label) {
-        s_ui_update_pending = false;
+        // Keep pending so content applies once labels are ready
         return;
     }
 
@@ -474,7 +470,7 @@ void diagnostics_page_create(lv_obj_t *parent)
 
     lv_obj_t *esp32_title = lv_label_create(esp32_column);
     lv_label_set_text(esp32_title, "ESP32 Status");
-    lv_obj_set_style_text_font(esp32_title, &lv_font_montserrat_22, LV_PART_MAIN);
+    lv_obj_set_style_text_font(esp32_title, &lv_font_montserrat_26, LV_PART_MAIN);
     lv_obj_set_style_text_color(esp32_title, lv_color_white(), LV_PART_MAIN);
     lv_obj_align(esp32_title, LV_ALIGN_TOP_MID, 0, 5);
 
@@ -491,7 +487,7 @@ void diagnostics_page_create(lv_obj_t *parent)
         (size_t)(esp_get_free_heap_size() / 1024),
         (size_t)(esp_get_minimum_free_heap_size() / 1024));
     lv_label_set_text(s_diagnostics_label, esp32_text);
-    lv_obj_set_style_text_font(s_diagnostics_label, &lv_font_montserrat_18, LV_PART_MAIN);
+    lv_obj_set_style_text_font(s_diagnostics_label, &lv_font_montserrat_22, LV_PART_MAIN);
     lv_obj_set_style_text_color(s_diagnostics_label, lv_color_white(), LV_PART_MAIN);
     lv_obj_align(s_diagnostics_label, LV_ALIGN_TOP_LEFT, 0, 30);
 
@@ -504,7 +500,7 @@ void diagnostics_page_create(lv_obj_t *parent)
 
     lv_obj_t *daisy_title = lv_label_create(daisy_column);
     lv_label_set_text(daisy_title, "Daisy Link");
-    lv_obj_set_style_text_font(daisy_title, &lv_font_montserrat_22, LV_PART_MAIN);
+    lv_obj_set_style_text_font(daisy_title, &lv_font_montserrat_28, LV_PART_MAIN);
     lv_obj_set_style_text_color(daisy_title, lv_color_white(), LV_PART_MAIN);
     lv_obj_align(daisy_title, LV_ALIGN_TOP_MID, 0, 5);
 
@@ -521,7 +517,7 @@ void diagnostics_page_create(lv_obj_t *parent)
         "SPI Active: NO\n"
         "Daisy CPU: 0.0%%");
     lv_label_set_text(s_daisy_label, daisy_text);
-    lv_obj_set_style_text_font(s_daisy_label, &lv_font_montserrat_18, LV_PART_MAIN);
+    lv_obj_set_style_text_font(s_daisy_label, &lv_font_montserrat_22, LV_PART_MAIN);
     lv_obj_set_style_text_color(s_daisy_label, lv_color_white(), LV_PART_MAIN);
     lv_obj_align(s_daisy_label, LV_ALIGN_TOP_LEFT, 0, 30);
 
@@ -534,8 +530,7 @@ void diagnostics_page_create(lv_obj_t *parent)
 
     wavex_ui_create_meter_display(meters_column);
     
-    const char* diagnostics_labels[6] = {"Back", "", "", "", "", ""};
-    wavex_ui_update_hotkey_labels(diagnostics_labels);
+    // Softkeys are now owned by the navigator; UI wrapper provides them.
     
     LV_UNLOCK();
 }

@@ -50,6 +50,9 @@ float GetMinCpuLoad();     // 0.0-1.0 minimum observed
 float GetMaxCpuLoad();     // 0.0-1.0 maximum observed
 float GetBlockPeriodMs();  // Block period in milliseconds
 
+// Underrun monitoring (called from main loop to avoid blocking audio)
+void CheckAndLogUnderruns();
+
 // Sample audition control (for Sample Load/Save page)
 bool AuditionSample(const char* path);
 void StopAudition();

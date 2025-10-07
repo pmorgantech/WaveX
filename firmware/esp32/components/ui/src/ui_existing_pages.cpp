@@ -1,8 +1,13 @@
 // WaveX UI Existing Pages Integration Implementation
 #include "ui/ui_existing_pages.h"
 #include <esp_log.h>
+#include "esp_lvgl_port.h"
 
 #include "../pages/diagnostics_page.h"
+
+// LVGL locking macros
+#define LV_LOCK()   lvgl_port_lock(portMAX_DELAY)
+#define LV_UNLOCK() lvgl_port_unlock()
 #include "../pages/sample_load_save.h"
 
 static const char* TAG = "UI_EXISTING_PAGES";
@@ -12,7 +17,7 @@ namespace wavex_ui {
 // Diagnostics Page Implementation
 void UIDiagnosticsPage::onEnter(lv_obj_t* parent) {
     root_ = lv_obj_create(parent);
-    lv_obj_set_size(root_, 480, 320);
+    lv_obj_set_size(root_, 1280, 540);
     lv_obj_set_style_bg_color(root_, lv_color_make(0x00, 0x00, 0x00), LV_PART_MAIN); // Dark mode
     lv_obj_set_style_border_width(root_, 0, LV_PART_MAIN);
     lv_obj_align(root_, LV_ALIGN_TOP_LEFT, 0, 0);
@@ -24,13 +29,16 @@ void UIDiagnosticsPage::onEnter(lv_obj_t* parent) {
     lv_obj_set_style_border_width(diagnostics_container_, 0, LV_PART_MAIN);
     lv_obj_align(diagnostics_container_, LV_ALIGN_TOP_LEFT, 0, 0);
 
-    // Create the existing diagnostics page
+    // Create the existing diagnostics page and start its lifecycle
     diagnostics_page_create(diagnostics_container_);
-    
+    diagnostics_page_init();
+
     ESP_LOGI(TAG, "Diagnostics page created in navigation system");
 }
 
 void UIDiagnosticsPage::onExit() {
+    // Stop diagnostics lifecycle before tearing down UI
+    diagnostics_page_stop();
     if (root_) {
         lv_obj_del(root_);
         root_ = nullptr;
@@ -64,7 +72,7 @@ std::array<Softkey, NUM_SOFTKEYS> UIDiagnosticsPage::getSoftkeys() {
 // Sample Load/Save Page Implementation
 void UISampleLoadSavePage::onEnter(lv_obj_t* parent) {
     root_ = lv_obj_create(parent);
-    lv_obj_set_size(root_, 480, 320);
+    lv_obj_set_size(root_, 1280, 540);
     lv_obj_set_style_bg_color(root_, lv_color_make(0x00, 0x00, 0x00), LV_PART_MAIN); // Dark mode
     lv_obj_set_style_border_width(root_, 0, LV_PART_MAIN);
     lv_obj_align(root_, LV_ALIGN_TOP_LEFT, 0, 0);
@@ -78,7 +86,7 @@ void UISampleLoadSavePage::onEnter(lv_obj_t* parent) {
 
     // Create the existing sample load/save page
     sample_page_handle_ = wavex_sample_load_save_create(sample_container_);
-    
+
     ESP_LOGI(TAG, "Sample Load/Save page created in navigation system");
 }
 
@@ -119,14 +127,22 @@ std::array<Softkey, NUM_SOFTKEYS> UISampleLoadSavePage::getSoftkeys() {
     if (sample_page_handle_) {
         auto* page = static_cast<wavex_sample_load_save_page_t*>(sample_page_handle_);
         if (page->is_playing) {
-            keys[1] = {"Stop", []() {
+            keys[1] = {"Stop", [page]() {
                 // Stop audition
                 ESP_LOGI(TAG, "Stop audition requested");
+                wavex_sample_load_save_stop_audition(page);
             }};
         } else {
-            keys[1] = {"Audition", []() {
-                // Start audition
+            keys[1] = {"Audition", [page]() {
+                // Start audition using selected file index
                 ESP_LOGI(TAG, "Audition requested");
+                const wavex_file_entry_t* selected = wavex_file_browser_get_selected(page->file_browser);
+                if (selected && !selected->is_directory) {
+                    uint32_t selected_index = wavex_file_browser_get_selected_index(page->file_browser);
+                    wavex_sample_load_save_audition_sample_by_index(page, selected_index);
+                } else {
+                    ESP_LOGW(TAG, "No valid file selected for audition");
+                }
             }};
         }
         

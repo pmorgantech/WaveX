@@ -49,7 +49,7 @@ using namespace WaveX::Protocol;
 #define validate_packet validate_wave_packet
 
 // How long to wait for ESP32 to be ready for DMA
-#define ESP32_DMA_READY_WAIT_MS 550
+#define ESP32_DMA_READY_WAIT_MS 450
 
 
 // Compatibility function for get_packet_size - extracts size code from packet data

@@ -1,7 +1,13 @@
 // WaveX UI Menu Page Implementation
 #include "ui/ui_menu_page.h"
 #include <esp_log.h>
+#include "esp_lvgl_port.h"
+
 #include "../styles/ui_theme.h"
+
+// LVGL locking macros
+#define LV_LOCK()   lvgl_port_lock(portMAX_DELAY)
+#define LV_UNLOCK() lvgl_port_unlock()
 
 static const char* TAG = "UI_MENU_PAGE";
 
@@ -73,9 +79,8 @@ std::array<Softkey, NUM_SOFTKEYS> UIMenuPage::getSoftkeys() {
 
 void UIMenuPage::rebuildList() {
     if (!list_) return;
-    
     lv_obj_clean(list_);
-    
+
     for (size_t i = 0; i < items_.size(); ++i) {
         auto item = lv_list_add_btn(list_, LV_SYMBOL_FILE, items_[i].label.c_str());
         
@@ -92,7 +97,10 @@ void UIMenuPage::rebuildList() {
             for (int i = 0; i < (int)self->items_.size(); ++i) {
                 if (lv_obj_get_child(self->list_, i) == target) {
                     self->selected_ = i;
-                    self->activateSelection();
+                    // Defer activation to avoid modifying object tree during LVGL event processing
+                    lv_async_call([](void* ud){
+                        static_cast<UIMenuPage*>(ud)->activateSelection();
+                    }, self);
                     break;
                 }
             }

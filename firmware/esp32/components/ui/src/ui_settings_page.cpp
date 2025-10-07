@@ -1,12 +1,18 @@
 // WaveX UI Settings Page Implementation
 #include "ui/ui_settings_page.h"
 #include <esp_log.h>
+#include "esp_lvgl_port.h"
+
+// LVGL locking macros
+#define LV_LOCK()   lvgl_port_lock(portMAX_DELAY)
+#define LV_UNLOCK() lvgl_port_unlock()
 
 static const char* TAG = "UI_SETTINGS_PAGE";
 
 namespace wavex_ui {
 
 void UISettingsPage::onEnter(lv_obj_t* parent) {
+    LV_LOCK();
     root_ = lv_obj_create(parent);
     lv_obj_set_size(root_, 480, 320);
     lv_obj_set_style_bg_color(root_, lv_color_make(0x00, 0x00, 0x00), LV_PART_MAIN); // Dark mode
@@ -31,11 +37,14 @@ void UISettingsPage::onEnter(lv_obj_t* parent) {
     lv_obj_set_style_border_color(list_, lv_color_make(0x33, 0x33, 0x33), LV_PART_MAIN);
 
     rebuildList();
+    LV_UNLOCK();
 }
 
 void UISettingsPage::onExit() {
     if (root_) {
+        LV_LOCK();
         lv_obj_del(root_);
+        LV_UNLOCK();
         root_ = nullptr;
         list_ = nullptr;
         valueLabels_.clear();
@@ -81,6 +90,7 @@ std::array<Softkey, NUM_SOFTKEYS> UISettingsPage::getSoftkeys() {
 
 void UISettingsPage::rebuildList() {
     if (!list_) return;
+    LV_LOCK();
     
     lv_list_clean(list_);
     valueLabels_.clear();
@@ -121,6 +131,7 @@ void UISettingsPage::rebuildList() {
             }
         }
     }
+    LV_UNLOCK();
 }
 
 void UISettingsPage::moveSelection(int delta) {
@@ -166,9 +177,11 @@ void UISettingsPage::updateSetting(int settingIndex, int newValue) {
     
     // Update display
     if (settingIndex < (int)valueLabels_.size() && valueLabels_[settingIndex]) {
+        LV_LOCK();
         char valueText[32];
         snprintf(valueText, sizeof(valueText), "%d", newValue);
         lv_label_set_text(valueLabels_[settingIndex], valueText);
+        LV_UNLOCK();
     }
     
     // Call change callback

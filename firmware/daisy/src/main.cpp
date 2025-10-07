@@ -400,16 +400,16 @@ int main(void)
         // #endif
         process_incoming_spi_messages();
         uint32_t spi_duration = System::GetTick() - spi_start;
+
+        // Check for audio underruns (logging handled here to avoid blocking audio callback)
+        #if WAVEX_AUDIO_ENGINE_ENABLED
+        WaveX::AudioEngine::CheckAndLogUnderruns();
+        #endif
         
         // Log long SPI operations
         if (spi_duration > 2) { // More than 2ms
             WAVEX_LOG_DAISY(INTER_MCU_LINK, "LONG SPI: %u ms", (unsigned)spi_duration);
         }
-        
-        // #if WAVEX_SPI_DMA_ENABLED
-        // // Check for DMA timeouts to prevent hanging
-        // WaveX::Comm::Spi_CheckTimeout();
-        // #endif
         
         // Pump WAV I/O for audio playback (including audition)
         #if WAVEX_AUDIO_ENGINE_ENABLED
@@ -547,13 +547,6 @@ int main(void)
             }
         }
 
-        // DISABLED: Automatic WAV playback on startup
-        // The system should only play audio when audition commands are received via SPI
-        // from the ESP32 Sample Load/Save page
-        //
-        // Previous auto-playback code removed to meet requirements:
-        // "When daisy starts, no audio plays (no oscillator, no .wavs)"
-
         #if WAVEX_DAISY_SD_CARD_ENABLED && (WAVEX_DAISY_SD_CARD_BACKEND == 1)
         // SD card is available but we don't auto-play - waiting for audition commands
         if (sd_available && !wav_started) {
@@ -564,8 +557,5 @@ int main(void)
             wav_started = true;
         }
         #endif
-
-        // CPU usage monitoring is now handled by CpuLoadMeter in the audio callback
-        // No need for manual busy time measurement here
     }
 }

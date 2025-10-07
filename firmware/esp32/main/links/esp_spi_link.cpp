@@ -642,56 +642,40 @@ static void spi_slave_task(void* pvParameters)
                      rx_data[0], rx_data[1], rx_data[2], rx_data[3],
                      rx_data[4], rx_data[5], rx_data[6], rx_data[7]);
             
-            // Find actual packet size by looking for non-zero data
-            size_t actual_packet_size = 0;
-            for (size_t i = 0; i < rx_len; i++) {
-                if (rx_data[i] != 0) {
-                    actual_packet_size = i + 1; // Include the non-zero byte
-                }
-            }
-            
-            // If we found actual data, try to determine packet size from size code
-            if (actual_packet_size > 0) {
-                uint8_t size_code = rx_data[0] & PKT_SIZE_MASK;
-                size_t expected_packet_size = ProtocolHandler::GetPacketSizeFromCode(size_code);
-                
-                ESP_LOGD(TAG, "Actual data size: %d bytes, size_code=0x%02X, expected_size=%d", 
-                         (int)actual_packet_size, size_code, (int)expected_packet_size);
-                
-                // Use the smaller of expected size or actual data size
-                size_t packet_size_to_validate = (expected_packet_size > 0 && expected_packet_size <= actual_packet_size) 
-                                                ? expected_packet_size : actual_packet_size;
-                
-                ESP_LOGD(TAG, "Using packet size: %d bytes for validation", (int)packet_size_to_validate);
-                
-                // Validate and process the packet with determined size
-                if (validate_wave_packet(rx_data, packet_size_to_validate)) {
-                    // Route to packet router for processing
-                    s_packet_router.route_packet(rx_data, packet_size_to_validate);
+            // Determine packet size from protocol size code in first byte
+            uint8_t size_code = rx_data[0] & PKT_SIZE_MASK;
+            size_t expected_packet_size = ProtocolHandler::GetPacketSizeFromCode(size_code);
+
+            if (expected_packet_size == 0 || expected_packet_size > rx_len) {
+                ESP_LOGW(TAG, "Invalid/unsupported packet size: size_code=0x%02X, expected=%d, rx_len=%d",
+                         size_code, (int)expected_packet_size, (int)rx_len);
+            } else {
+                ESP_LOGD(TAG, "Using protocol-indicated size: %d bytes (size_code=0x%02X)",
+                         (int)expected_packet_size, size_code);
+
+                // Validate and process the packet using the expected size
+                if (validate_wave_packet(rx_data, expected_packet_size)) {
+                    s_packet_router.route_packet(rx_data, expected_packet_size);
                 } else {
                     // Detailed packet analysis for debugging
                     uint8_t flags_size = rx_data[0];
                     uint8_t msg_type = rx_data[1];
                     uint16_t seq = rx_data[2] | (rx_data[3] << 8);
                     uint8_t flags = PKT_GET_FLAGS(flags_size);
-                    uint8_t size_code = flags_size & PKT_SIZE_MASK;
-                    
-                    ESP_LOGW(TAG, "Invalid packet - actual_size=%d, flags_size=0x%02X, msg_type=0x%02X, seq=%u, flags=0x%02X, size_code=%d", 
-                             (int)packet_size_to_validate, flags_size, msg_type, seq, flags, size_code);
-                    
-                    // Log more packet bytes for analysis
-                    ESP_LOGW(TAG, "Packet bytes: %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X", 
+                    uint8_t dbg_size_code = flags_size & PKT_SIZE_MASK;
+
+                    ESP_LOGW(TAG, "Invalid packet CRC - expected_size=%d, flags_size=0x%02X, msg_type=0x%02X, seq=%u, flags=0x%02X, size_code=%d",
+                             (int)expected_packet_size, flags_size, msg_type, seq, flags, dbg_size_code);
+
+                    ESP_LOGW(TAG, "Packet bytes: %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X",
                              rx_data[0], rx_data[1], rx_data[2], rx_data[3],
                              rx_data[4], rx_data[5], rx_data[6], rx_data[7],
                              rx_data[8], rx_data[9], rx_data[10], rx_data[11],
                              rx_data[12], rx_data[13], rx_data[14], rx_data[15]);
-                    
-                    // Log CRC bytes
-                    ESP_LOGW(TAG, "CRC bytes: %02X %02X (last 2 bytes)", 
-                             rx_data[packet_size_to_validate-2], rx_data[packet_size_to_validate-1]);
+
+                    ESP_LOGW(TAG, "CRC bytes: %02X %02X (last 2 bytes)",
+                             rx_data[expected_packet_size-2], rx_data[expected_packet_size-1]);
                 }
-            } else {
-                ESP_LOGD(TAG, "No actual data found in received buffer");
             }
         }
         

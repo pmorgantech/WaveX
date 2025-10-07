@@ -28,6 +28,10 @@
  
 // LVGL includes
 #include "esp_lvgl_port.h"
+#include "lvgl.h"
+
+// Forward declaration for LVGL log callback (defined later in this file)
+extern "C" void wavex_lvgl_log_cb(signed char level, const char * buf);
 #include "esp_lcd_touch.h"
 #include "esp_lcd_touch_gt911.h"
 #include "esp_heap_caps.h"
@@ -480,6 +484,7 @@ static void process_deferred_meter_updates(void)
 void wavex_ui_create_meter_display(lv_obj_t* parent)
 {
     // Create meter container - full width and height of parent for 3-column layout
+    LV_LOCK();
     lv_obj_t *meter_area = lv_obj_create(parent);
     lv_obj_set_size(meter_area, lv_pct(100), lv_pct(100));
     lv_obj_set_style_bg_color(meter_area, lv_color_make(0x1A, 0x1A, 0x1A), LV_PART_MAIN); // Dark gray background to match columns
@@ -673,6 +678,11 @@ static void adaptive_refresh_control(void)
     ESP_LOGI(TAG, "Initializing LVGL...");
     lv_init();
 
+    // Register LVGL log print callback so LVGL logs appear in ESP logs
+    #if CONFIG_LV_USE_LOG
+    lv_log_register_print_cb(wavex_lvgl_log_cb);
+    #endif
+
     // Check available memory before display initialization
     ESP_LOGI(TAG, "Memory before display init:");
     ESP_LOGI(TAG, "  Free heap: %zu bytes", esp_get_free_heap_size());
@@ -703,8 +713,29 @@ static void adaptive_refresh_control(void)
     // BSP handles touch setup automatically
     ESP_LOGI(TAG, "LVGL display initialized successfully");
     return ESP_OK;
- }
- 
+}
+
+// C-compatible LVGL log callback implementation
+extern "C" void wavex_lvgl_log_cb(signed char level, const char * buf)
+{
+    // Map LVGL levels to ESP log levels (simplified)
+    switch (level) {
+        case 0: // TRACE
+        case 1: // INFO
+            ESP_LOGI("LVGL", "%s", buf);
+            break;
+        case 2: // WARN
+            ESP_LOGW("LVGL", "%s", buf);
+            break;
+        case 3: // ERROR
+            ESP_LOGE("LVGL", "%s", buf);
+            break;
+        default:
+            ESP_LOGI("LVGL", "%s", buf);
+            break;
+    }
+}
+
 /**
  * @brief Create the hotkey region with 6 buttons at bottom of screen
  */
@@ -1168,6 +1199,7 @@ static void create_sample_menu(lv_obj_t *parent)
 
     // Create a flex container for sample options (optimized for landscape)
     lv_obj_t *menu_cont = lv_obj_create(parent);
+    LV_UNLOCK();
     lv_obj_set_size(menu_cont, lv_pct(95), lv_pct(100));  // Use full height since no title/back button
     lv_obj_set_style_bg_color(menu_cont, lv_color_make(0x00, 0x00, 0x00), LV_PART_MAIN); // Black background for dark mode
     lv_obj_set_style_border_width(menu_cont, 2, LV_PART_MAIN);
@@ -1476,9 +1508,6 @@ static void menu_button_event_cb(lv_event_t *e)
     LV_UNLOCK();
 
     ESP_LOGI(TAG, "Main UI created successfully");
-
-    // Initialize diagnostics page module (starts its timer)
-    diagnostics_page_init();
 
     // Create meter update timer (every 33ms for 30 FPS real-time updates)
     const esp_timer_create_args_t meter_timer_args = {

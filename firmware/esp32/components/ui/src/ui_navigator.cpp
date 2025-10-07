@@ -2,6 +2,11 @@
 #include "ui/ui_navigator.h"
 #include "../styles/ui_theme.h"
 #include <esp_log.h>
+#include "esp_lvgl_port.h"
+
+// LVGL locking macros
+#define LV_LOCK()   lvgl_port_lock(portMAX_DELAY)
+#define LV_UNLOCK() lvgl_port_unlock()
 
 static const char* TAG = "UI_NAVIGATOR";
 
@@ -15,6 +20,7 @@ void UINavigator::push(std::shared_ptr<UIPage> page) {
 
     // Initialize screen and static regions if first page
     if (!screen_) {
+        LV_LOCK();
         screen_ = lv_obj_create(nullptr);
         lv_scr_load(screen_);
         ESP_LOGI(TAG, "Created navigation screen");
@@ -42,13 +48,16 @@ void UINavigator::push(std::shared_ptr<UIPage> page) {
         lv_obj_set_style_bg_color(content_, UI_COLOR_CONTENT, LV_PART_MAIN);
         lv_obj_set_style_border_width(content_, 0, LV_PART_MAIN);
         lv_obj_align(content_, LV_ALIGN_TOP_LEFT, 0, UI_HEADER_HEIGHT);
+        LV_UNLOCK();
     }
 
     // Call onExit for current page if any
     if (!stack_.empty()) {
         auto current = stack_.top();
         ESP_LOGI(TAG, "Exiting page: %s", current->name());
+        LV_LOCK();
         current->onExit();
+        LV_UNLOCK();
     }
 
     // Push new page onto stack
@@ -56,15 +65,20 @@ void UINavigator::push(std::shared_ptr<UIPage> page) {
     active_ = page;
 
     // Clear content area only and create new page content
+    LV_LOCK();
     lv_obj_clean(content_);
 
     // Title
     lv_label_set_text(title_label_, page->name());
+    LV_UNLOCK();
 
     ESP_LOGI(TAG, "Entering page: %s", page->name());
+    LV_LOCK();
     page->onEnter(content_);
+    LV_UNLOCK();
 
     // Create/update softkey bar and then correct content height
+    LV_LOCK();
     softkeyBar_.create(screen_);
     softkeyBar_.setSoftkeys(page->getSoftkeys());
 
@@ -73,6 +87,7 @@ void UINavigator::push(std::shared_ptr<UIPage> page) {
     const int16_t content_h = total_h - UI_HEADER_HEIGHT - UI_HOTKEY_HEIGHT;
     lv_obj_set_size(content_, lv_pct(100), content_h > 0 ? content_h : 0);
     lv_obj_align(content_, LV_ALIGN_TOP_LEFT, 0, UI_HEADER_HEIGHT);
+    LV_UNLOCK();
 
     ESP_LOGI(TAG, "Navigation stack depth: %zu", stack_.size());
 }
@@ -87,7 +102,9 @@ void UINavigator::pop() {
     if (!stack_.empty()) {
         auto current = stack_.top();
         ESP_LOGI(TAG, "Exiting page: %s", current->name());
+        LV_LOCK();
         current->onExit();
+        LV_UNLOCK();
         stack_.pop();
     }
 
@@ -97,13 +114,18 @@ void UINavigator::pop() {
         active_ = prev;
 
         // Clear content and recreate previous page content
+        LV_LOCK();
         lv_obj_clean(content_);
         lv_label_set_text(title_label_, prev->name());
+        LV_UNLOCK();
 
         ESP_LOGI(TAG, "Returning to page: %s", prev->name());
+        LV_LOCK();
         prev->onEnter(content_);
+        LV_UNLOCK();
 
         // Update softkey bar and layout
+        LV_LOCK();
         softkeyBar_.create(screen_);
         softkeyBar_.setSoftkeys(prev->getSoftkeys());
 
@@ -111,6 +133,7 @@ void UINavigator::pop() {
         const int16_t content_h = total_h - UI_HEADER_HEIGHT - UI_HOTKEY_HEIGHT;
         lv_obj_set_size(content_, lv_pct(100), content_h > 0 ? content_h : 0);
         lv_obj_align(content_, LV_ALIGN_TOP_LEFT, 0, UI_HEADER_HEIGHT);
+        LV_UNLOCK();
     }
 
     ESP_LOGI(TAG, "Navigation stack depth: %zu", stack_.size());

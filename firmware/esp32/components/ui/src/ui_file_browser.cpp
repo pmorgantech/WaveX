@@ -2,12 +2,18 @@
 #include "ui/ui_file_browser.h"
 #include "ui/ui_sample_detail.h"
 #include <esp_log.h>
+#include "esp_lvgl_port.h"
+
+// LVGL locking macros
+#define LV_LOCK()   lvgl_port_lock(portMAX_DELAY)
+#define LV_UNLOCK() lvgl_port_unlock()
 
 static const char* TAG = "UI_FILE_BROWSER";
 
 namespace wavex_ui {
 
 void UIFileBrowser::onEnter(lv_obj_t* parent) {
+    LV_LOCK();
     root_ = lv_obj_create(parent);
     lv_obj_set_size(root_, 480, 320);
     lv_obj_set_style_bg_color(root_, lv_color_make(0x00, 0x00, 0x00), LV_PART_MAIN); // Dark mode
@@ -34,13 +40,16 @@ void UIFileBrowser::onEnter(lv_obj_t* parent) {
     // Load files and refresh display
     loadFiles();
     refreshList();
+    LV_UNLOCK();
 }
 
 void UIFileBrowser::onExit() {
     // Keep state - don't clear currentPath_, files_, or selected_
     // This preserves the browser state when returning to this page
     if (root_) {
+        LV_LOCK();
         lv_obj_del(root_);
+        LV_UNLOCK();
         root_ = nullptr;
         labelPath_ = nullptr;
         list_ = nullptr;
@@ -83,7 +92,8 @@ std::array<Softkey, NUM_SOFTKEYS> UIFileBrowser::getSoftkeys() {
 
 void UIFileBrowser::refreshList() {
     if (!list_) return;
-    
+    LV_LOCK();
+
     lv_list_clean(list_);
     
     for (size_t i = 0; i < files_.size(); ++i) {
@@ -100,6 +110,7 @@ void UIFileBrowser::refreshList() {
             lv_obj_add_state(item, LV_STATE_FOCUSED);
         }
     }
+    LV_UNLOCK();
 }
 
 void UIFileBrowser::moveSelection(int delta) {
@@ -131,7 +142,9 @@ void UIFileBrowser::openSelection() {
         
         // Update path label
         if (labelPath_) {
+            LV_LOCK();
             lv_label_set_text(labelPath_, currentPath_.c_str());
+            LV_UNLOCK();
         }
     } else {
         // Open file - navigate to sample detail page
@@ -155,7 +168,9 @@ void UIFileBrowser::navigateUp() {
     
     // Update path label
     if (labelPath_) {
+        LV_LOCK();
         lv_label_set_text(labelPath_, currentPath_.c_str());
+        LV_UNLOCK();
     }
     
     ESP_LOGI(TAG, "Navigated up to: %s", currentPath_.c_str());

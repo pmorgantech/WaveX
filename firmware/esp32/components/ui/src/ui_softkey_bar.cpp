@@ -2,13 +2,20 @@
 #include "ui/ui_softkey_bar.h"
 #include "ui/ui_navigator.h"
 #include <esp_log.h>
+#include "esp_lvgl_port.h"
+
 #include "../styles/ui_theme.h"
+
+// LVGL locking macros
+#define LV_LOCK()   lvgl_port_lock(portMAX_DELAY)
+#define LV_UNLOCK() lvgl_port_unlock()
 
 static const char* TAG = "SOFTKEY_BAR";
 
 namespace wavex_ui {
 
 void SoftkeyBar::create(lv_obj_t* parent) {
+
     // Destroy previous container if it exists to avoid duplicates on push/pop
     if (container_) {
         lv_obj_del(container_);
@@ -70,7 +77,7 @@ void SoftkeyBar::setSoftkeys(const std::array<Softkey, NUM_SOFTKEYS>& keys) {
 
 void SoftkeyBar::focusNext(int delta) {
     focused_ = (focused_ + delta + NUM_SOFTKEYS) % NUM_SOFTKEYS;
-    
+
     // Update visual focus indication
     for (int i = 0; i < NUM_SOFTKEYS; ++i) {
         if (i == focused_ && keys_[i].enabled) {
@@ -83,7 +90,13 @@ void SoftkeyBar::focusNext(int delta) {
 
 void SoftkeyBar::pressFocused() {
     if (keys_[focused_].enabled && keys_[focused_].onPress) {
-        keys_[focused_].onPress();
+        // Defer to avoid modifying UI during LVGL event processing/draw
+        auto cb = keys_[focused_].onPress;
+        lv_async_call([](void* ud){
+            auto fn = static_cast<std::function<void()>*>(ud);
+            (*fn)();
+            delete fn;
+        }, new std::function<void()>(cb));
     }
 }
 
@@ -95,7 +108,13 @@ void SoftkeyBar::event_cb(lv_event_t* e) {
         if (target == bar->btns_[i] && bar->keys_[i].enabled) {
             ESP_LOGI(TAG, "Softkey %d pressed: %s", i, bar->keys_[i].label.c_str());
             if (bar->keys_[i].onPress) {
-                bar->keys_[i].onPress();
+                // Defer to avoid modifying UI during LVGL event processing/draw
+                auto cb = bar->keys_[i].onPress;
+                lv_async_call([](void* ud){
+                    auto fn = static_cast<std::function<void()>*>(ud);
+                    (*fn)();
+                    delete fn;
+                }, new std::function<void()>(cb));
             }
             break;
         }

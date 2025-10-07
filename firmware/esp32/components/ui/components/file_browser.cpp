@@ -11,8 +11,10 @@
 #include <cstdio>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "../../../../shared/spi_protocol/protocol.h"
+#include "spi_protocol/protocol.h"
 #include "../../../main/inter_mcu.h"
+// Mark UI content changes so the main UI task triggers a refresh
+#include "../../../main/ui_task.h"
 
 using namespace WaveX::Protocol;
 
@@ -159,6 +161,8 @@ bool wavex_file_browser_navigate_to(wavex_file_browser_t* browser, const char* p
     LV_LOCK();
     lv_label_set_text(browser->path_label, browser->current_path);
     LV_UNLOCK();
+    // Trigger a screen refresh after updating the path label
+    wavex_ui_mark_content_changed();
     
     // Refresh file list
     bool success = refresh_file_list(browser);
@@ -359,6 +363,8 @@ static bool refresh_file_list(wavex_file_browser_t* browser)
     LV_LOCK();
     lv_obj_clean(browser->list);
     LV_UNLOCK();
+    // Request a screen refresh after clearing the list
+    wavex_ui_mark_content_changed();
     
     // Send first browse request (page 0)
     if (!send_browse_request(browser->current_path, 0)) {
@@ -372,6 +378,8 @@ static bool refresh_file_list(wavex_file_browser_t* browser)
         lv_obj_set_style_text_color(btn, UI_COLOR_TEXT, LV_PART_MAIN);
         lv_obj_set_style_text_font(btn, &lv_font_montserrat_18, LV_PART_MAIN);
         LV_UNLOCK();
+        // Ensure the UI refreshes to show the error state
+        wavex_ui_mark_content_changed();
         return false;
     } else {
         ESP_LOGI(TAG, "Sent browse request for page 0, waiting for response...");
@@ -578,6 +586,8 @@ static void browse_resp_callback(const uint8_t* data, size_t length, void* user_
         lv_obj_set_style_text_color(btn, UI_COLOR_TEXT, LV_PART_MAIN);
         lv_obj_set_style_text_font(btn, &lv_font_montserrat_18, LV_PART_MAIN);
         LV_UNLOCK();
+        // Ensure UI refresh after showing error message
+        wavex_ui_mark_content_changed();
         return;
     }
     
@@ -715,6 +725,8 @@ static void update_file_browser_ui(wavex_file_browser_t* browser)
     }
     
     LV_UNLOCK();
+    // Trigger a screen refresh after updating the list contents
+    wavex_ui_mark_content_changed();
 }
 
 // Helper function to update visual selection highlighting
@@ -748,4 +760,6 @@ static void update_visual_selection(wavex_file_browser_t* browser)
         }
     }
     LV_UNLOCK();
+    // Ensure the selection highlight is rendered promptly
+    wavex_ui_mark_content_changed();
 }

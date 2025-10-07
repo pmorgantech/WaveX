@@ -10,7 +10,7 @@
 
 #include "config/hardware_config.h"
 #if defined(ESP_PLATFORM) && WAVEX_ESP_BUTTON_MATRIX_ENABLED
-#include "esp_tca8418.h"
+#include "esp_tca8418.hxx"
 #endif
 
 namespace wavex_ui {
@@ -19,7 +19,7 @@ static const char* TAG = "TCA8418";
 static TaskHandle_t s_task = nullptr;
 static gpio_num_t s_int_gpio = GPIO_NUM_NC;
 #if defined(ESP_PLATFORM) && WAVEX_ESP_BUTTON_MATRIX_ENABLED
-static tca8418_handle_t s_dev = nullptr;
+static TCA8418* s_dev = nullptr;
 #endif
 
 // Simple example mapping: map TCA keycode -> logical button id
@@ -45,6 +45,10 @@ static void post_button(bool pressed, uint8_t button_id) {
 
 static void keypad_task(void* arg) {
     ESP_LOGI(TAG, "Keypad task started");
+
+    // Track pressed keys to detect release events
+    static uint8_t last_keycode = 0;
+
     while (true) {
         // If INT available, wait for it, otherwise poll periodically
         if (s_int_gpio != GPIO_NUM_NC) {
@@ -59,14 +63,28 @@ static void keypad_task(void* arg) {
             vTaskDelay(pdMS_TO_TICKS(20));
         }
 
-    // Drain event FIFO
+        // Check for key events
 #if defined(ESP_PLATFORM) && WAVEX_ESP_BUTTON_MATRIX_ENABLED
-    tca8418_event_t ev;
-    while (tca8418_get_event(s_dev, &ev) == ESP_OK) {
-        bool pressed = (ev.type == TCA8418_EVENT_PRESS);
-        uint8_t button = map_keycode_to_button(ev.key);
-        post_button(pressed, button);
-    }
+        if (s_dev && s_dev->get_event_count() > 0) {
+            uint8_t keycode = s_dev->get_key();
+            if (keycode != last_keycode) {
+                // Key changed - release previous key if any
+                if (last_keycode != 0) {
+                    uint8_t button = map_keycode_to_button(last_keycode);
+                    if (button != 0) {
+                        post_button(false, button); // Release
+                    }
+                }
+                // Press new key if valid
+                if (keycode != 0) {
+                    uint8_t button = map_keycode_to_button(keycode);
+                    if (button != 0) {
+                        post_button(true, button); // Press
+                    }
+                }
+                last_keycode = keycode;
+            }
+        }
 #endif
     }
 }
@@ -83,15 +101,17 @@ esp_err_t tca8418_keypad_start(int int_gpio, uint8_t i2c_addr) {
 
     // Create device
 #if defined(ESP_PLATFORM) && WAVEX_ESP_BUTTON_MATRIX_ENABLED
-    tca8418_config_t cfg = {
-        .i2c_bus = i2c,
-        .i2c_addr = i2c_addr,
-        .rows = 8,
-        .cols = 10,
-        .debounce_ms = 5,
-        .autorepeat = false,
-    };
-    ESP_RETURN_ON_ERROR(tca8418_new(&cfg, &s_dev), TAG, "tca8418_new failed");
+    s_dev = new TCA8418(i2c, GPIO_NUM_NC, i2c_addr);
+    if (!s_dev) {
+        ESP_LOGE(TAG, "Failed to create TCA8418 instance");
+        return ESP_FAIL;
+    }
+    if (!s_dev->hw_init(8, 10)) {
+        ESP_LOGE(TAG, "TCA8418 hardware initialization failed");
+        delete s_dev;
+        s_dev = nullptr;
+        return ESP_FAIL;
+    }
 #else
     (void)i2c_addr;
 #endif
@@ -113,7 +133,7 @@ esp_err_t tca8418_keypad_start(int int_gpio, uint8_t i2c_addr) {
     if (ok != pdPASS) {
         ESP_LOGE(TAG, "Failed to create keypad task");
         #if defined(ESP_PLATFORM) && WAVEX_ESP_BUTTON_MATRIX_ENABLED
-        tca8418_del(s_dev);
+        delete s_dev;
         s_dev = nullptr;
         #endif
         return ESP_FAIL;
@@ -128,7 +148,7 @@ esp_err_t tca8418_keypad_stop() {
     }
     #if defined(ESP_PLATFORM) && WAVEX_ESP_BUTTON_MATRIX_ENABLED
     if (s_dev) {
-        tca8418_del(s_dev);
+        delete s_dev;
         s_dev = nullptr;
     }
     #endif

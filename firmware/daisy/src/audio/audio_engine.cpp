@@ -56,6 +56,10 @@ static CpuLoadMeter s_cpu_load_meter;
 static float s_sample_rate = 48000.0f;
 static int s_block_size = 48;
 
+// Underrun detection state - set in callback, logged in main loop
+static volatile bool s_underrun_detected = false;
+static bool s_underrun_logged = false;
+
 // Preview state
 static std::vector<int16_t> s_preview;
 static uint32_t s_prev_sent = 0;
@@ -416,24 +420,14 @@ void Callback(AudioHandle::InputBuffer in,
                 // WAV is playing but buffer is empty - output silence to prevent glitches
                 out[0][i] = 0.0f;
                 out[1][i] = 0.0f;
-                // Log underrun only once per block to avoid spam
-                static bool underrun_logged = false;
-                if (!underrun_logged) {
-                    if (s_hw) s_hw->PrintLine("AUDIO: Ring buffer underrun - outputting silence");
-                    underrun_logged = true;
-                }
+                // Signal underrun detection (logging handled in main loop)
+                s_underrun_detected = true;
                 continue;
             }
         }
 
         out[0][i] = (float)l16 / 32768.0f;
         out[1][i] = (float)r16 / 32768.0f;
-        
-        // Reset underrun logging flag when we have data again
-        static bool underrun_logged = false;
-        if (underrun_logged) {
-            underrun_logged = false;
-        }
     }
 
     // Compute per-block meters
@@ -547,6 +541,19 @@ void GetMeters(BlockMeters& out)
 // ============================
 // CPU Load Monitoring Functions
 // ============================
+
+// Check for underruns detected in audio callback and log them (called from main loop)
+void CheckAndLogUnderruns()
+{
+    if (s_underrun_detected && !s_underrun_logged) {
+        if (s_hw) s_hw->PrintLine("AUDIO: Ring buffer underrun - outputting silence");
+        s_underrun_logged = true;
+        s_underrun_detected = false;  // Reset detection flag
+    } else if (!s_underrun_detected && s_underrun_logged) {
+        // Reset logging flag when underruns stop
+        s_underrun_logged = false;
+    }
+}
 
 float GetAvgCpuLoad()
 {
