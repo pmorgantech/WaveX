@@ -328,6 +328,10 @@ static void diagnostics_update_cb(void *arg)
     wavex_backend_heartbeat_t heartbeat;
     inter_mcu_get_backend_heartbeat_detailed(&heartbeat);
 
+    ESP_LOGD(TAG, "DIAG_CB: heartbeat.valid=%d uptime=%lu cpu_avg=%.2f cpu_min=%.2f cpu_max=%.2f",
+             heartbeat.valid, (unsigned long)heartbeat.uptime_ms,
+             heartbeat.cpu_avg_percent, heartbeat.cpu_min_percent, heartbeat.cpu_max_percent);
+
     spi_link_stats_t spi_stats;
     spi_link_get_stats(&spi_stats);
     bool spi_active = spi_link_is_active();
@@ -367,6 +371,8 @@ static void diagnostics_update_cb(void *arg)
         s_cpu_usage_core0,
         s_cpu_usage_core1);
 
+    ESP_LOGD(TAG, "DIAG_CB: deferred_esp32_text=(%d) %s", esp32_len, s_deferred_esp32_text);
+
     int daisy_len = snprintf(s_deferred_daisy_text, sizeof(s_deferred_daisy_text),
         "Status: %s\n"
         "Last RX: %lu ms ago\n"
@@ -388,6 +394,8 @@ static void diagnostics_update_cb(void *arg)
         heartbeat.cpu_avg_percent,
         heartbeat.cpu_min_percent,
         heartbeat.cpu_max_percent);
+
+    ESP_LOGD(TAG, "DIAG_CB: deferred_daisy_text=(%d) %s", daisy_len, s_deferred_daisy_text);
 
     // Safety check for buffer overflow
     if (esp32_len >= sizeof(s_deferred_esp32_text) || daisy_len >= sizeof(s_deferred_daisy_text)) {
@@ -411,20 +419,25 @@ void diagnostics_page_process_deferred_updates(void)
 
     // Only update if we have valid labels
     if (!s_diagnostics_label || !s_daisy_label) {
+        ESP_LOGD(TAG, "PROCESS_DEFERRED: labels not ready yet: %p/%p", s_diagnostics_label, s_daisy_label);
         // Keep pending so content applies once labels are ready
         return;
     }
 
     LV_LOCK();
     if (lv_obj_is_valid(s_diagnostics_label)) {
+        ESP_LOGD(TAG, "PROCESS_DEFERRED: applying esp32_text");
         lv_label_set_text(s_diagnostics_label, s_deferred_esp32_text);
         lv_obj_set_style_text_font(s_diagnostics_label, &lv_font_montserrat_18, LV_PART_MAIN);
         lv_obj_set_style_text_color(s_diagnostics_label, lv_color_white(), LV_PART_MAIN);
+        ESP_LOGD(TAG, "PROCESS_DEFERRED: applied esp32_text");
     }
     if (lv_obj_is_valid(s_daisy_label)) {
+        ESP_LOGD(TAG, "PROCESS_DEFERRED: applying daisy_text");
         lv_label_set_text(s_daisy_label, s_deferred_daisy_text);
         lv_obj_set_style_text_font(s_daisy_label, &lv_font_montserrat_18, LV_PART_MAIN);
         lv_obj_set_style_text_color(s_daisy_label, lv_color_white(), LV_PART_MAIN);
+        ESP_LOGD(TAG, "PROCESS_DEFERRED: applied daisy_text");
     }
     LV_UNLOCK();
 

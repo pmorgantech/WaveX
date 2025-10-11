@@ -974,6 +974,7 @@ static void hotkey_button_event_cb(lv_event_t *e)
                 case 0: // Diagnostics
                     ESP_LOGI(TAG, "Hotkey: Navigating to diagnostics page");
                     diagnostics_page_create(s_content_area);
+                    diagnostics_page_init();
                     break;
                 case 1: // Settings
                     ESP_LOGI(TAG, "Hotkey: Settings option selected");
@@ -992,6 +993,7 @@ static void hotkey_button_event_cb(lv_event_t *e)
             switch (button_index) {
                 case 0: // Back
                     ESP_LOGI(TAG, "Hotkey: Navigating back to system menu");
+                    diagnostics_page_stop();
                     create_system_menu(s_content_area);
                     break;
                 default:
@@ -1437,11 +1439,13 @@ static void menu_button_event_cb(lv_event_t *e)
         } else if (strcmp(btn_id, "diagnostics") == 0) {
             ESP_LOGI(TAG, "Navigating to diagnostics page...");
             diagnostics_page_create(s_content_area);
+            diagnostics_page_init();
         } else if (strcmp(btn_id, "back_main") == 0) {
             ESP_LOGI(TAG, "Navigating back to main menu...");
             create_main_menu(s_content_area);
         } else if (strcmp(btn_id, "back_system") == 0) {
             ESP_LOGI(TAG, "Navigating back to system menu...");
+            diagnostics_page_stop();
             create_system_menu(s_content_area);
         } else {
             ESP_LOGI(TAG, "Menu option '%s' selected", btn_id);

@@ -28,9 +28,9 @@
 #define UI_COLOR_PEAK            lv_color_make(0xFF, 0x57, 0x22)  // Orange
 
 // Font definitions
-#define UI_FONT_NORMAL           &lv_font_montserrat_14
-#define UI_FONT_TITLE            &lv_font_montserrat_22
-#define UI_FONT_HEADER           &lv_font_montserrat_32
+#define UI_FONT_NORMAL           &lv_font_montserrat_18
+#define UI_FONT_TITLE            &lv_font_montserrat_26
+#define UI_FONT_HEADER           &lv_font_montserrat_36
 #define UI_FONT_HOTKEY           &lv_font_montserrat_36
 
 // Size definitions

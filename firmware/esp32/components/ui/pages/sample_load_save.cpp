@@ -15,6 +15,8 @@
 #include "freertos/task.h"
 #include "../../../main/inter_mcu.h"
 #include "../../../main/ui_task.h"
+// Refresh softkeys after state changes
+#include "../include/ui/ui_navigator.h"
 
 // LVGL includes for thread safety (C++)
 #include "esp_lvgl_port.h"
@@ -194,6 +196,11 @@ bool wavex_sample_load_save_audition_sample_by_index(wavex_sample_load_save_page
     snprintf(status_text, sizeof(status_text), "Playing: Index %lu", (unsigned long)file_index);
     wavex_sample_load_save_set_status(page, status_text);
 
+    // Refresh softkeys to reflect playing state (Audition -> Stop)
+    LV_LOCK();
+    wavex_ui::UINavigator::instance().softkeyBar()->setSoftkeys(wavex_ui::UINavigator::instance().active()->getSoftkeys());
+    LV_UNLOCK();
+
     return true;
 }
 
@@ -240,8 +247,10 @@ void wavex_ui_handle_sample_stop_response(bool success)
         s_sample_load_save_page->is_playing = false;
         wavex_sample_load_save_set_status(s_sample_load_save_page, "Stopped");
 
-        // Update button text back to "Audition"
-        wavex_ui_update_hotkey_label(0, "Audition");
+        // Refresh softkeys to reflect stopped state (Stop -> Audition)
+        LV_LOCK();
+        wavex_ui::UINavigator::instance().softkeyBar()->setSoftkeys(wavex_ui::UINavigator::instance().active()->getSoftkeys());
+        LV_UNLOCK();
     } else {
         ESP_LOGE(TAG, "=== SAMPLE STOP RESPONSE: Failed to stop ===");
         wavex_sample_load_save_set_status(s_sample_load_save_page, "Stop failed");

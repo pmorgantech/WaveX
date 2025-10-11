@@ -60,6 +60,10 @@ static int s_current_rx_index = 0;
 static int s_processing_index = -1; // Index of buffer being processed (-1 = none)
 static uint32_t s_packet_counter = 0; // Track total packets received
 static uint32_t s_last_packet_hash = 0; // Hash of last packet to detect duplicates
+// Track which queued TX buffers contain a real message (vs zeros)
+static bool s_tx_has_message[BUFFER_POOL_SIZE] = { false, false, false };
+// Ensure we only queue a single real message at any time to avoid duplicates
+static bool s_real_msg_queued = false;
 
 // Sequence number tracking for duplicate detection
 static uint16_t s_last_received_seq = 0;
@@ -551,56 +555,50 @@ static void spi_slave_task(void* pvParameters)
 {
     ESP_LOGI(TAG, "SPI slave task started (triple buffering)");
     ESP_LOGI(TAG, "DEBUG: SPI slave task is running and ready to receive transactions");
-    
+
+    // Pre-fill the slave queue to avoid any gap where Daisy could start a transfer
+    bool initialized = false;
+
     while (1) {
-        // Get current buffer indices
-        int tx_idx = s_current_tx_index;
-        int rx_idx = s_current_rx_index;
-        
-        // Prepare TX buffer with queued message
-        bool has_message = prepare_tx_buffer_without_consuming(s_tx_buffers[tx_idx], MAX_PKT_SIZE);
-        
-        // Debug: Log what we prepared
-        if (has_message) {
-            ESP_LOGI(TAG, "Buffer preparation: has_message=%s, tx_buffer[0-7]: %02X %02X %02X %02X %02X %02X %02X %02X", 
-                    has_message ? "true" : "false",
-                    s_tx_buffers[tx_idx][0], s_tx_buffers[tx_idx][1], s_tx_buffers[tx_idx][2], s_tx_buffers[tx_idx][3],
-                    s_tx_buffers[tx_idx][4], s_tx_buffers[tx_idx][5], s_tx_buffers[tx_idx][6], s_tx_buffers[tx_idx][7]);
+        if (!initialized) {
+            for (int i = 0; i < BUFFER_POOL_SIZE; i++) {
+                // Prepare TX buffer; only one of these should contain a real message
+                bool has_message = false;
+                if (!s_real_msg_queued) {
+                    has_message = prepare_tx_buffer_without_consuming(s_tx_buffers[i], MAX_PKT_SIZE);
+                    s_tx_has_message[i] = has_message;
+                    if (has_message) {
+                        s_real_msg_queued = true;
+                        signal_daisy_urgent(true);
+                        ESP_LOGI(TAG, "Signaled Daisy AFTER transaction queued - has real message (init fill)");
+                    }
+                } else {
+                    // Ensure zeros if a real message is already queued
+                    memset(s_tx_buffers[i], 0, MAX_PKT_SIZE);
+                    s_tx_has_message[i] = false;
+                }
+
+                // Setup transaction
+                memset(&s_transactions[i], 0, sizeof(s_transactions[i]));
+                s_transactions[i].length = MAX_PKT_SIZE * 8;
+                s_transactions[i].tx_buffer = s_tx_buffers[i];
+                s_transactions[i].rx_buffer = s_rx_buffers[i];
+                s_transactions[i].user = (void*)(uintptr_t)(s_tx_has_message[i] ? 1 : 0);
+                memset(s_rx_buffers[i], 0, MAX_PKT_SIZE);
+
+                esp_err_t qret = spi_slave_queue_trans(WAVEX_ESP_SPI_HOST, &s_transactions[i], pdMS_TO_TICKS(SPI_OPERATIONS_TIMEOUT_MS));
+                if (qret != ESP_OK) {
+                    ESP_LOGE(TAG, "Failed to pre-queue SPI transaction %d: %s", i, esp_err_to_name(qret));
+                }
+            }
+            initialized = true;
+            s_current_rx_index = 0;
+            s_current_tx_index = 0;
         }
-        
-        // Set up transaction - use maximum packet size for SPI communication
-        memset(&s_transactions[rx_idx], 0, sizeof(s_transactions[rx_idx]));
-        s_transactions[rx_idx].length = MAX_PKT_SIZE * 8; // Maximum packet size for SPI
-        s_transactions[rx_idx].tx_buffer = s_tx_buffers[tx_idx];
-        s_transactions[rx_idx].rx_buffer = s_rx_buffers[rx_idx];
-        
-        // Clear RX buffer before transaction to prevent stale data
-        memset(s_rx_buffers[rx_idx], 0, MAX_PKT_SIZE);
-        
-        // Queue transaction and wait for result
-        ESP_LOGD(TAG, "Queuing SPI transaction (buffer %d)...", rx_idx);
-        ESP_LOGD(TAG, "Transaction setup: length=%d bits, tx_buf=%p, rx_buf=%p", 
-                 s_transactions[rx_idx].length, s_transactions[rx_idx].tx_buffer, s_transactions[rx_idx].rx_buffer);
-        // ESP_LOGI(TAG, "DEBUG: About to queue SPI transaction - waiting for Daisy to initiate");
-        
-        esp_err_t ret = spi_slave_queue_trans(WAVEX_ESP_SPI_HOST, &s_transactions[rx_idx], pdMS_TO_TICKS(SPI_OPERATIONS_TIMEOUT_MS)); // 5 second timeout
-        if (ret != ESP_OK) {
-            ESP_LOGE(TAG, "Failed to queue SPI transaction: %s", esp_err_to_name(ret));
-            continue;
-        }
-        
-        // Signal Daisy ONLY if we have actual data to send (not zeros)
-        if (has_message) {
-            // DO NOT consume the message from queue yet - wait until Daisy receives it
-            // This prevents race conditions where message is lost before Daisy gets it
-            signal_daisy_urgent(true);
-            ESP_LOGI(TAG, "Signaled Daisy AFTER transaction queued - has real message");
-            // DO NOT consume message here - wait until transaction completes
-        }
-        
-        ESP_LOGD(TAG, "SPI transaction queued, waiting for result...");
-        spi_slave_transaction_t* trans_result;
-        ret = spi_slave_get_trans_result(WAVEX_ESP_SPI_HOST, &trans_result, pdMS_TO_TICKS(SPI_OPERATIONS_TIMEOUT_MS));
+
+        // Wait for any queued transaction to complete, then immediately re-queue that slot
+        spi_slave_transaction_t* trans_result = NULL;
+        esp_err_t ret = spi_slave_get_trans_result(WAVEX_ESP_SPI_HOST, &trans_result, pdMS_TO_TICKS(SPI_OPERATIONS_TIMEOUT_MS));
         if (ret != ESP_OK) {
             if (ret == ESP_ERR_TIMEOUT) {
                 ESP_LOGW(TAG, "SPI slave transaction timeout - no data from Daisy");
@@ -609,85 +607,90 @@ static void spi_slave_task(void* pvParameters)
             }
             continue;
         }
-        ESP_LOGI(TAG, "SPI transaction completed successfully");
-        
-        // Now that Daisy has received our message, consume it from the queue
-        if (has_message) {
+
+        // Identify which buffer completed
+        int completed_idx = -1;
+        for (int i = 0; i < BUFFER_POOL_SIZE; i++) {
+            if (trans_result == &s_transactions[i]) {
+                completed_idx = i;
+                break;
+            }
+        }
+        if (completed_idx < 0) {
+            ESP_LOGW(TAG, "Completed transaction does not match known buffers");
+            continue;
+        }
+
+        // If this transaction carried a real message, consume it now and allow another to be queued
+        bool completed_had_message = (trans_result->user == (void*)1);
+        if (completed_had_message) {
             clear_transmitted_message_from_queue();
+            s_tx_has_message[completed_idx] = false;
+            s_real_msg_queued = false;
             ESP_LOGI(TAG, "Consumed message from queue after successful transmission");
         }
-        
-        // Process received data - determine actual packet size from received data
-        size_t rx_len = trans_result->length / 8; // Convert bits to bytes
+
+        // Process received data
+        size_t rx_len = trans_result->length / 8;
         if (rx_len > 0) {
             s_packet_counter++;
-            ESP_LOGD(TAG, "Received %d bytes from Daisy (buffer %d, packet #%u)", (int)rx_len, rx_idx, s_packet_counter);
-            
-            // Check for duplicate packets (same content)
             uint8_t* rx_data = (uint8_t*)trans_result->rx_buffer;
             uint32_t packet_hash = 0;
-            for (int i = 0; i < 16; i++) { // Hash first 16 bytes
+            for (int i = 0; i < 16; i++) {
                 packet_hash ^= rx_data[i];
-                packet_hash = (packet_hash << 1) | (packet_hash >> 31); // Rotate
+                packet_hash = (packet_hash << 1) | (packet_hash >> 31);
             }
-            
             if (packet_hash == s_last_packet_hash && s_packet_counter > 1) {
                 ESP_LOGW(TAG, "DUPLICATE PACKET DETECTED! Hash=0x%08X (packet #%u)", packet_hash, s_packet_counter);
-                ESP_LOGW(TAG, "This suggests ESP32 is not receiving new data from Daisy");
             }
             s_last_packet_hash = packet_hash;
-            
-            // Debug: Log first few bytes of received packet
-            ESP_LOGD(TAG, "RX packet bytes: %02X %02X %02X %02X %02X %02X %02X %02X", 
-                     rx_data[0], rx_data[1], rx_data[2], rx_data[3],
-                     rx_data[4], rx_data[5], rx_data[6], rx_data[7]);
-            
-            // Determine packet size from protocol size code in first byte
+
             uint8_t size_code = rx_data[0] & PKT_SIZE_MASK;
             size_t expected_packet_size = ProtocolHandler::GetPacketSizeFromCode(size_code);
-
-            if (expected_packet_size == 0 || expected_packet_size > rx_len) {
-                ESP_LOGW(TAG, "Invalid/unsupported packet size: size_code=0x%02X, expected=%d, rx_len=%d",
-                         size_code, (int)expected_packet_size, (int)rx_len);
-            } else {
-                ESP_LOGD(TAG, "Using protocol-indicated size: %d bytes (size_code=0x%02X)",
-                         (int)expected_packet_size, size_code);
-
-                // Validate and process the packet using the expected size
+            if (expected_packet_size > 0 && expected_packet_size <= rx_len) {
                 if (validate_wave_packet(rx_data, expected_packet_size)) {
                     s_packet_router.route_packet(rx_data, expected_packet_size);
                 } else {
-                    // Detailed packet analysis for debugging
                     uint8_t flags_size = rx_data[0];
                     uint8_t msg_type = rx_data[1];
                     uint16_t seq = rx_data[2] | (rx_data[3] << 8);
                     uint8_t flags = PKT_GET_FLAGS(flags_size);
                     uint8_t dbg_size_code = flags_size & PKT_SIZE_MASK;
-
                     ESP_LOGW(TAG, "Invalid packet CRC - expected_size=%d, flags_size=0x%02X, msg_type=0x%02X, seq=%u, flags=0x%02X, size_code=%d",
                              (int)expected_packet_size, flags_size, msg_type, seq, flags, dbg_size_code);
-
-                    ESP_LOGW(TAG, "Packet bytes: %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X",
-                             rx_data[0], rx_data[1], rx_data[2], rx_data[3],
-                             rx_data[4], rx_data[5], rx_data[6], rx_data[7],
-                             rx_data[8], rx_data[9], rx_data[10], rx_data[11],
-                             rx_data[12], rx_data[13], rx_data[14], rx_data[15]);
-
-                    ESP_LOGW(TAG, "CRC bytes: %02X %02X (last 2 bytes)",
-                             rx_data[expected_packet_size-2], rx_data[expected_packet_size-1]);
                 }
+            } else {
+                ESP_LOGW(TAG, "Invalid/unsupported packet size: size_code=0x%02X, expected=%d, rx_len=%d",
+                         size_code, (int)expected_packet_size, (int)rx_len);
             }
         }
-        
-        // Message was already consumed from queue before signaling Daisy
-        // This prevents race conditions where the queue gets cleared before transmission
-        
-        // Rotate buffer indices for next transaction
-        s_current_tx_index = (s_current_tx_index + 1) % BUFFER_POOL_SIZE;
-        s_current_rx_index = (s_current_rx_index + 1) % BUFFER_POOL_SIZE;
-        
-        ESP_LOGD(TAG, "Buffer rotation complete: tx_idx=%d, rx_idx=%d", s_current_tx_index, s_current_rx_index);
-        
+
+        // Immediately re-queue the freed slot to keep the queue filled
+        bool next_has_message = false;
+        if (!s_real_msg_queued) {
+            next_has_message = prepare_tx_buffer_without_consuming(s_tx_buffers[completed_idx], MAX_PKT_SIZE);
+            s_tx_has_message[completed_idx] = next_has_message;
+            if (next_has_message) {
+                s_real_msg_queued = true;
+                signal_daisy_urgent(true);
+                ESP_LOGI(TAG, "Signaled Daisy AFTER transaction queued - has real message");
+            }
+        } else {
+            memset(s_tx_buffers[completed_idx], 0, MAX_PKT_SIZE);
+            s_tx_has_message[completed_idx] = false;
+        }
+
+        memset(&s_transactions[completed_idx], 0, sizeof(s_transactions[completed_idx]));
+        s_transactions[completed_idx].length = MAX_PKT_SIZE * 8;
+        s_transactions[completed_idx].tx_buffer = s_tx_buffers[completed_idx];
+        s_transactions[completed_idx].rx_buffer = s_rx_buffers[completed_idx];
+        s_transactions[completed_idx].user = (void*)(uintptr_t)(s_tx_has_message[completed_idx] ? 1 : 0);
+        memset(s_rx_buffers[completed_idx], 0, MAX_PKT_SIZE);
+        esp_err_t qret = spi_slave_queue_trans(WAVEX_ESP_SPI_HOST, &s_transactions[completed_idx], pdMS_TO_TICKS(SPI_OPERATIONS_TIMEOUT_MS));
+        if (qret != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to re-queue SPI transaction %d: %s", completed_idx, esp_err_to_name(qret));
+        }
+
         // Small delay to prevent overwhelming the system
         vTaskDelay(pdMS_TO_TICKS(1));
     }

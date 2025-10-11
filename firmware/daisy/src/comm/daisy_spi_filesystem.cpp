@@ -177,7 +177,16 @@ void ProcessSamplePlayRequest(const char* file_path)
         s_hw->PrintLine("DAISY: ProcessSamplePlayRequest called with path: '%s'", file_path);
     }
 
-    // Stop any current playback first
+    // Send immediate ACK to keep SPI responsive while we start playback
+    {
+        AckMessage ack;
+        ack.serial_id = 0; // TODO: Get actual serial ID if needed
+        uint8_t response_buffer[MAX_PKT_SIZE];
+        size_t pkt_size = ProtocolHandler::CreateAckPacket(response_buffer, sizeof(response_buffer), ack);
+        Spi_SendPreCreatedPacket(response_buffer, pkt_size);
+    }
+
+    // Stop any current playback first (may touch filesystem/audio state)
     CloseWav();
 
     // Start playback using the existing WAV playback system
@@ -197,14 +206,6 @@ void ProcessSamplePlayRequest(const char* file_path)
         Spi_SendPreCreatedPacket(response_buffer, pkt_size);
         return;
     }
-
-    // Send success acknowledgment
-    AckMessage ack;
-    ack.serial_id = 0; // TODO: Get actual serial ID
-    
-    uint8_t response_buffer[MAX_PKT_SIZE];
-    size_t pkt_size = ProtocolHandler::CreateAckPacket(response_buffer, sizeof(response_buffer), ack);
-    Spi_SendPreCreatedPacket(response_buffer, pkt_size);
     
     if (s_hw) {
         s_hw->PrintLine("DAISY: Sample playback started successfully for: '%s'", file_path);
