@@ -57,6 +57,9 @@ typedef struct {
     uint32_t entries_per_page;       // Entries per page (typically 4)
     bool pagination_in_progress;     // True if we're currently loading more pages
     uint32_t loaded_entries;         // Number of entries loaded so far
+    
+    // UI update flags (for thread-safe deferred updates)
+    bool ui_update_pending;          // True if UI needs to be updated
 } wavex_file_browser_t;
 
 // File browser functions
@@ -83,6 +86,9 @@ void wavex_file_browser_set_file_selected_index_callback(wavex_file_browser_t* b
 void wavex_file_browser_set_directory_changed_callback(wavex_file_browser_t* browser, 
                                                        wavex_directory_changed_cb_t callback, 
                                                        void* user_data);
+
+// Thread-safe UI update
+void wavex_file_browser_process_pending_updates(wavex_file_browser_t* browser);
 
 // Utility functions
 const char* wavex_file_browser_get_current_path(wavex_file_browser_t* browser);

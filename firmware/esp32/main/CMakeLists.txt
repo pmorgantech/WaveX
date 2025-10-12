@@ -26,6 +26,7 @@ idf_component_register(
         "esp_lvgl_port"
         "esp_lcd_touch"
         "esp_lcd_touch_gt911"
+        "esp_mm"
     PRIV_REQUIRES
         "shared"
         "ui"

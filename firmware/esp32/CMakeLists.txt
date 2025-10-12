@@ -45,4 +45,6 @@ set(EXCLUDE_COMPONENTS
 )
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
-project(wavex-esp32) 
+project(wavex-esp32)
+add_compile_options(-Os -flto -ffunction-sections -fdata-sections)
+add_link_options(-flto -Wl,--gc-sections -Wl,--relax)

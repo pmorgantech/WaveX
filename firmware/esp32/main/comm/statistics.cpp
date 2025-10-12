@@ -51,22 +51,26 @@ void StatisticsManager::increment_packet_stat(uint8_t packet_type)
     m_packet_stats.total_packets++;
     
     switch (packet_type) {
-        case 0x01: m_packet_stats.sync_packets++; break;
-        case 0x02: m_packet_stats.control_change_packets++; break;
-        case 0x03: m_packet_stats.note_on_packets++; break;
-        case 0x04: m_packet_stats.note_off_packets++; break;
-        case 0x05: m_packet_stats.sample_load_packets++; break;
-        case 0x06: m_packet_stats.sample_data_packets++; break;
-        case 0x07: m_packet_stats.parameter_update_packets++; break;
-        case 0x08: m_packet_stats.status_request_packets++; break;
-        case 0x09: m_packet_stats.status_response_packets++; break;
-        case 0x0A: m_packet_stats.sample_ctrl_packets++; break;
-        case 0x0B: m_packet_stats.preview_req_packets++; break;
-        case 0x0C: m_packet_stats.data_request_packets++; break;
-        case 0x0D: m_packet_stats.meter_push_packets++; break;
-        case 0x0E: m_packet_stats.wave_chunk_packets++; break;
-        case 0x0F: m_packet_stats.heartbeat_packets++; break;
-        case 0xFF: m_packet_stats.error_packets++; break;
+        case 0x00: m_packet_stats.sync_packets++; break;                                   // MSG_SYNC
+        case 0x01: m_packet_stats.control_change_packets++; break;                         // MSG_CONTROL_CHANGE
+        case 0x02: m_packet_stats.note_on_packets++; break;                                // MSG_NOTE_ON
+        case 0x03: m_packet_stats.note_off_packets++; break;                               // MSG_NOTE_OFF
+        case 0x04: m_packet_stats.sample_load_packets++; break;                            // MSG_SAMPLE_LOAD
+        case 0x05: m_packet_stats.sample_data_packets++; break;                            // MSG_SAMPLE_DATA
+        case 0x06: m_packet_stats.parameter_update_packets++; break;                       // MSG_PARAMETER_UPDATE
+        case 0x07: m_packet_stats.status_request_packets++; break;                         // MSG_STATUS_REQUEST
+        case 0x08: m_packet_stats.status_response_packets++; break;                        // MSG_STATUS_RESPONSE
+        case 0x09: m_packet_stats.sample_ctrl_packets++; break;                            // MSG_SAMPLE_CTRL
+        case 0x0A: m_packet_stats.preview_req_packets++; break;                            // MSG_PREVIEW_REQ
+        case 0x0B: // Legacy MSG_DATA_REQUEST (pre-unified)
+        case 0x0C: m_packet_stats.data_request_packets++; break;                           // Current MSG_DATA_REQUEST (0x0C)
+        case 0x0D: // Legacy MSG_METER_PUSH
+        case 0x10: m_packet_stats.meter_push_packets++; break;                             // Current MSG_METER_PUSH (0x10)
+        case 0x0E: // Legacy MSG_WAVE_CHUNK
+        case 0x11: m_packet_stats.wave_chunk_packets++; break;                             // Current MSG_WAVE_CHUNK (0x11)
+        case 0x0F: // Legacy MSG_HEARTBEAT
+        case 0x12: m_packet_stats.heartbeat_packets++; break;                              // Current MSG_HEARTBEAT (0x12)
+        case 0xFF: m_packet_stats.error_packets++; break;                                  // MSG_ERROR
         default: m_packet_stats.unknown_packets++; break;
     }
     taskEXIT_CRITICAL(&m_stats_lock);

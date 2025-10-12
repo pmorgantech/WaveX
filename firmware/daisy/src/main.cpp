@@ -395,6 +395,8 @@ int main(void)
         // Process any incoming SPI messages from ESP32
         uint32_t spi_start = System::GetTick();
         // Fallback: if ATTN edge was missed, poll the level and start a receive
+        // NOTE: Disabled - relying on GPIO interrupt (EXTI15_10) for edge detection
+        // ESP32 now clears ATTN in post_trans_cb to eliminate race condition
         // #if WAVEX_SPI_LINK_ENABLED
         // WaveX::Comm::Spi_PollAttnLevel();
         // #endif

@@ -92,7 +92,7 @@ void UISettingsPage::rebuildList() {
     if (!list_) return;
     LV_LOCK();
     
-    lv_list_clean(list_);
+    lv_obj_clean(list_);
     valueLabels_.clear();
     
     for (size_t i = 0; i < settings_.size(); ++i) {
@@ -103,7 +103,7 @@ void UISettingsPage::rebuildList() {
         lv_obj_set_style_border_width(container, 0, LV_PART_MAIN);
         
         // Add to list
-        lv_list_add_obj(list_, container);
+        lv_list_add_btn(list_, container, nullptr);
         
         // Create setting name label
         auto nameLabel = lv_label_create(container);

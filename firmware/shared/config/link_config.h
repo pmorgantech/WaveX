@@ -11,7 +11,7 @@
 
 // Set to 1 to enable debug logging for inter-MCU packet traffic
 #ifndef WAVEX_MCU_LINK_PACKET_DEBUG
-#define WAVEX_MCU_LINK_PACKET_DEBUG 0
+#define WAVEX_MCU_LINK_PACKET_DEBUG 1
 #endif
 
 // SPI link configuration

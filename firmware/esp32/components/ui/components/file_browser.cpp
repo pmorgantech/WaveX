@@ -6,6 +6,7 @@
 #include "file_browser.h"
 #include "../styles/ui_theme.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include <string.h>
 #include <stdlib.h>
 #include <cstdio>
@@ -94,8 +95,9 @@ wavex_file_browser_t* wavex_file_browser_create(lv_obj_t* parent, const wavex_fi
     
     // Create file list
     browser->list = lv_list_create(browser->container);
-    lv_obj_set_size(browser->list, lv_pct(100), lv_pct(100) - 40); // Leave space for path label
-    lv_obj_align(browser->list, LV_ALIGN_TOP_LEFT, 0, 40);
+    // Note: Do not perform arithmetic with lv_pct(); set full height and offset below path label
+    lv_obj_set_size(browser->list, lv_pct(100), lv_pct(100));
+    lv_obj_align(browser->list, LV_ALIGN_TOP_LEFT, 0, 40); // visually below the 40px-tall path label
     lv_obj_set_style_bg_color(browser->list, UI_COLOR_CONTENT, LV_PART_MAIN);
     lv_obj_set_style_border_width(browser->list, 0, LV_PART_MAIN);
     lv_obj_set_style_pad_all(browser->list, UI_PADDING_SMALL, LV_PART_MAIN);
@@ -614,7 +616,7 @@ static void browse_resp_callback(const uint8_t* data, size_t length, void* user_
     
     // Update UI immediately after first page loads for better user experience
     if (browser->current_page == 0) {
-        // First page loaded - update UI immediately
+        // First page loaded - mark UI update as pending
         browser->entry_count = browser->loaded_entries;
         
         // Ensure selected_index is within bounds
@@ -622,10 +624,11 @@ static void browse_resp_callback(const uint8_t* data, size_t length, void* user_
             browser->selected_index = 0;
         }
         
-        ESP_LOGI(TAG, "First page loaded: showing %d entries immediately", browser->entry_count);
+        ESP_LOGI(TAG, "First page loaded: marking %d entries for UI update", browser->entry_count);
         
-        // Update UI with currently loaded entries
-        update_file_browser_ui(browser);
+        // Set flag for UI task to process (thread-safe deferred update)
+        browser->ui_update_pending = true;
+        wavex_ui_mark_content_changed();
         
         // Notify directory changed callback
         if (browser->dir_changed_cb) {
@@ -658,9 +661,10 @@ static void browse_resp_callback(const uint8_t* data, size_t length, void* user_
         
         ESP_LOGI(TAG, "Pagination complete: loaded %d entries", browser->entry_count);
         
-        // Update UI with all loaded entries (only if not first page)
+        // Mark UI update as pending (only if not first page)
         if (browser->current_page > 0) {
-            update_file_browser_ui(browser);
+            browser->ui_update_pending = true;
+            wavex_ui_mark_content_changed();
         }
         
         // Notify directory changed callback (only if not first page)
@@ -668,6 +672,29 @@ static void browse_resp_callback(const uint8_t* data, size_t length, void* user_
             browser->dir_changed_cb(browser->current_path, browser->user_data);
         }
     }
+}
+
+// Thread-safe function to process pending UI updates (called from UI task)
+void wavex_file_browser_process_pending_updates(wavex_file_browser_t* browser)
+{
+    if (!browser) {
+        ESP_LOGE(TAG, "process_pending_updates: browser is NULL!");
+        return;
+    }
+    
+    if (!browser->ui_update_pending) {
+        return; // No update needed
+    }
+    
+    ESP_LOGI(TAG, "Processing pending UI update for file browser with %d entries", browser->entry_count);
+    
+    // Clear flag first
+    browser->ui_update_pending = false;
+    
+    // Now safe to update UI (called from UI task with LVGL lock)
+    update_file_browser_ui(browser);
+    
+    ESP_LOGI(TAG, "UI update complete");
 }
 
 // Helper function to update the file browser UI
@@ -725,7 +752,8 @@ static void update_file_browser_ui(wavex_file_browser_t* browser)
     }
     
     LV_UNLOCK();
-    // Trigger a screen refresh after updating the list contents
+    
+    // Mark content as changed to trigger refresh in UI task
     wavex_ui_mark_content_changed();
 }
 

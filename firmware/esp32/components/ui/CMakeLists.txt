@@ -1,30 +1,36 @@
 # UI Components CMakeLists.txt
 
 # Add UI source files
-set(UI_SOURCES
-    "styles/ui_theme.cpp"
+set(COMPONENT_SRCS
     "common/window_manager.cpp"
     "components/file_browser.cpp"
-    "pages/sample_load_save.cpp"
     "pages/diagnostics_page.cpp"
+    "pages/sample_load_save.cpp"
     "src/input_dispatcher.cpp"
-    "src/ui_patch_list.cpp"
-    "src/ui_param_edit.cpp"
     "src/tca8418_keypad.cpp"
-    "src/ui_softkey_bar.cpp"
-    "src/ui_navigator.cpp"
-    "src/ui_menu_page.cpp"
-    "src/ui_navigation_integration.cpp"
     "src/ui_existing_pages.cpp"
+    "src/ui_file_browser.cpp"
+    "src/ui_main_menu.cpp"
+    "src/ui_main.cpp"
+    "src/ui_menu_page.cpp"
+    "src/ui_navigation_demo.cpp"
+    "src/ui_navigation_integration.cpp"
+    "src/ui_navigator.cpp"
+    "src/ui_param_edit.cpp"
+    "src/ui_patch_list.cpp"
+    "src/ui_sample_detail.cpp"
+    "src/ui_settings_page.cpp"
+    "src/ui_softkey_bar.cpp"
+    "styles/ui_theme.cpp"
+    "ui_globals.cpp"
 )
 
 # Add UI include directories
-set(UI_INCLUDE_DIRS
+set(COMPONENT_INCLUDE_DIRS
     "styles"
     "common"
     "components"
     "pages"
-    "include"
     "."
     "../../main"
     "../../main/comm"
@@ -35,8 +41,8 @@ set(UI_INCLUDE_DIRS
 
 # Create UI library
 idf_component_register(
-    SRCS ${UI_SOURCES}
-    INCLUDE_DIRS ${UI_INCLUDE_DIRS}
+    SRCS ${COMPONENT_SRCS}
+    INCLUDE_DIRS "include" ${COMPONENT_INCLUDE_DIRS}
     REQUIRES 
         lvgl
         esp_lvgl_port

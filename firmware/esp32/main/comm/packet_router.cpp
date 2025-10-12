@@ -191,20 +191,20 @@ void PacketRouter::handle_browse_resp(const uint8_t* data, size_t length)
 {
     ESP_LOGI("packet_router", "Browse response: %zu bytes", length);
     
-    // Log raw payload for debugging (first 64 bytes)
-    ESP_LOGI("packet_router", "Browse response payload (first 64 bytes):");
-    for (int i = 0; i < (int)length && i < 64; i++) {
-        if (i % 16 == 0) {
-            ESP_LOGI("packet_router", "  %04X: ", i);
-        }
-        ESP_LOGI("packet_router", "%02X ", data[i]);
-        if (i % 16 == 15) {
-            ESP_LOGI("packet_router", "");
-        }
-    }
-    if (length % 16 != 0) {
-        ESP_LOGI("packet_router", "");
-    }
+    // // Log raw payload for debugging (first 64 bytes)
+    // ESP_LOGI("packet_router", "Browse response payload (first 64 bytes):");
+    // for (int i = 0; i < (int)length && i < 64; i++) {
+    //     if (i % 16 == 0) {
+    //         ESP_LOGI("packet_router", "  %04X: ", i);
+    //     }
+    //     ESP_LOGI("packet_router", "%02X ", data[i]);
+    //     if (i % 16 == 15) {
+    //         ESP_LOGI("packet_router", "");
+    //     }
+    // }
+    // if (length % 16 != 0) {
+    //     ESP_LOGI("packet_router", "");
+    // }
     
     // Forward browse response to inter_mcu system for callback handling
     inter_mcu_invoke_browse_resp_callback(data, length);

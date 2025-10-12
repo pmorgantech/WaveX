@@ -6,7 +6,8 @@
  * using the Waveshare 5-DSI-TOUCH-A display and HX8394 driver.
  */
 
-#include "../components/ui/pages/sample_load_save.h"
+#include "pages/sample_load_save.h"
+#include "pages/diagnostics_page.h"
 #include "ui_task.h"
 #include "pcnt_task.h"
 #include "esp_log.h"
@@ -39,6 +40,7 @@ extern "C" void wavex_lvgl_log_cb(signed char level, const char * buf);
 #include "ui/input_dispatcher.h"
 #include "ui/ui_demo.h"
 #include "ui/ui_navigation_integration.h"
+#include "ui/ui_globals.h"
 
 // Workaround for ESP LCD I2C function conflict
 // Use the v2 version directly since we have i2c_master_bus_handle_t
@@ -1570,11 +1572,17 @@ static void menu_button_event_cb(lv_event_t *e)
         }
         // Dispatch queued input events to current context
         wavex_ui::InputDispatcher::instance().processAll();
+        
         // Process deferred diagnostics updates (prevents deadlock)
         diagnostics_page_process_deferred_updates();
         
         // Process deferred meter updates (prevents deadlock during audio playback)
         process_deferred_meter_updates();
+        
+        // Process deferred file browser updates (prevents deadlock from SPI task)
+        if (g_sample_load_save_page) {
+            wavex_sample_load_save_update(g_sample_load_save_page);
+        }
         
         // Use adaptive refresh control for optimal performance
         adaptive_refresh_control();
@@ -1673,3 +1681,9 @@ esp_err_t wavex_ui_get_panel_handle(esp_lcd_panel_handle_t *panel_handle)
     *panel_handle = s_panel_handle;
     return ESP_OK;
 }
+
+// All page pointers are now managed through the UI navigation system or globals
+// wavex_sample_load_save_page_t* g_sample_load_save_page is defined in ui_globals.cpp
+
+static lv_obj_t* s_status_bar_container;
+static lv_obj_t* s_page_container;

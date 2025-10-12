@@ -150,9 +150,18 @@ void ProcessBrowseRequestMessage(const uint8_t* payload, size_t payload_size)
 
     if (s_hw) {
         s_hw->PrintLine("DAISY: ProcessBrowseRequestMessage called - payload_size=%d", (int)payload_size);
-        s_hw->PrintLine("DAISY: Payload bytes: %02X %02X %02X %02X %02X %02X %02X %02X", 
-                       payload[0], payload[1], payload[2], payload[3],
-                       payload[4], payload[5], payload[6], payload[7]);
+        if (payload && payload_size > 0) {
+            const size_t preview_count = payload_size > 8 ? 8 : payload_size;
+            s_hw->PrintLine("DAISY: Browse payload preview: %02X %02X %02X %02X %02X %02X %02X %02X",
+                           payload[0],
+                           (preview_count > 1) ? payload[1] : 0,
+                           (preview_count > 2) ? payload[2] : 0,
+                           (preview_count > 3) ? payload[3] : 0,
+                           (preview_count > 4) ? payload[4] : 0,
+                           (preview_count > 5) ? payload[5] : 0,
+                           (preview_count > 6) ? payload[6] : 0,
+                           (preview_count > 7) ? payload[7] : 0);
+        }
     }
 
     // Parse browse request: start_index (1 byte) + path (null-terminated)

@@ -30,11 +30,12 @@ static const char *TAG = "DIAG_PAGE";
 static lv_obj_t *s_diagnostics_label = NULL;
 static lv_obj_t *s_daisy_label = NULL;
 static esp_timer_handle_t s_diagnostics_timer_handle = NULL;
+static lv_timer_t *s_lvgl_update_timer = NULL;
 
 // Deferred UI update data
 static char s_deferred_esp32_text[512] = {0};
 static char s_deferred_daisy_text[512] = {0};
-static bool s_ui_update_pending = false;
+static volatile bool s_ui_update_pending = false;
 
 // CPU monitoring variables
 static float s_cpu_usage_percent = 0.0f;
@@ -328,10 +329,6 @@ static void diagnostics_update_cb(void *arg)
     wavex_backend_heartbeat_t heartbeat;
     inter_mcu_get_backend_heartbeat_detailed(&heartbeat);
 
-    ESP_LOGD(TAG, "DIAG_CB: heartbeat.valid=%d uptime=%lu cpu_avg=%.2f cpu_min=%.2f cpu_max=%.2f",
-             heartbeat.valid, (unsigned long)heartbeat.uptime_ms,
-             heartbeat.cpu_avg_percent, heartbeat.cpu_min_percent, heartbeat.cpu_max_percent);
-
     spi_link_stats_t spi_stats;
     spi_link_get_stats(&spi_stats);
     bool spi_active = spi_link_is_active();
@@ -409,39 +406,40 @@ static void diagnostics_update_cb(void *arg)
 }
 
 /**
- * @brief Process deferred UI updates (called from main UI task)
+ * @brief LVGL timer callback to apply deferred UI updates
+ * This runs in LVGL context where lock is already held
  */
-void diagnostics_page_process_deferred_updates(void)
+static void lvgl_update_timer_cb(lv_timer_t *timer)
 {
+    (void)timer;
+    
     if (!s_ui_update_pending) {
         return;
     }
 
     // Only update if we have valid labels
     if (!s_diagnostics_label || !s_daisy_label) {
-        ESP_LOGD(TAG, "PROCESS_DEFERRED: labels not ready yet: %p/%p", s_diagnostics_label, s_daisy_label);
-        // Keep pending so content applies once labels are ready
         return;
     }
 
-    LV_LOCK();
+    // No need to lock - we're already in LVGL timer context
     if (lv_obj_is_valid(s_diagnostics_label)) {
-        ESP_LOGD(TAG, "PROCESS_DEFERRED: applying esp32_text");
         lv_label_set_text(s_diagnostics_label, s_deferred_esp32_text);
-        lv_obj_set_style_text_font(s_diagnostics_label, &lv_font_montserrat_18, LV_PART_MAIN);
-        lv_obj_set_style_text_color(s_diagnostics_label, lv_color_white(), LV_PART_MAIN);
-        ESP_LOGD(TAG, "PROCESS_DEFERRED: applied esp32_text");
     }
     if (lv_obj_is_valid(s_daisy_label)) {
-        ESP_LOGD(TAG, "PROCESS_DEFERRED: applying daisy_text");
         lv_label_set_text(s_daisy_label, s_deferred_daisy_text);
-        lv_obj_set_style_text_font(s_daisy_label, &lv_font_montserrat_18, LV_PART_MAIN);
-        lv_obj_set_style_text_color(s_daisy_label, lv_color_white(), LV_PART_MAIN);
-        ESP_LOGD(TAG, "PROCESS_DEFERRED: applied daisy_text");
     }
-    LV_UNLOCK();
 
     s_ui_update_pending = false;
+}
+
+/**
+ * @brief Process deferred UI updates (called from main UI task)
+ * Kept for compatibility but now does nothing - LVGL timer handles it
+ */
+void diagnostics_page_process_deferred_updates(void)
+{
+    // No-op: LVGL timer now handles UI updates
 }
 
 /**
@@ -454,7 +452,7 @@ void diagnostics_page_create(lv_obj_t *parent)
         return;
     }
 
-    LV_LOCK();
+    // NOTE: Caller (navigation system) already holds LVGL lock
     lv_obj_clean(parent);
     
     wavex_ui_set_screen_context("diagnostics");
@@ -544,12 +542,11 @@ void diagnostics_page_create(lv_obj_t *parent)
     wavex_ui_create_meter_display(meters_column);
     
     // Softkeys are now owned by the navigator; UI wrapper provides them.
-    
-    LV_UNLOCK();
 }
 
 void diagnostics_page_init(void)
 {
+    // Create ESP timer for data collection (runs in timer ISR context)
     const esp_timer_create_args_t diag_timer_args = {
         .callback = &diagnostics_update_cb,
         .name = "diagnostics_timer"
@@ -557,23 +554,35 @@ void diagnostics_page_init(void)
     esp_err_t timer_ret = esp_timer_create(&diag_timer_args, &s_diagnostics_timer_handle);
     if (timer_ret == ESP_OK) {
         esp_timer_start_periodic(s_diagnostics_timer_handle, 500000); // 500ms
-        ESP_LOGI(TAG, "Diagnostics timer started");
     } else {
         ESP_LOGE(TAG, "Failed to create diagnostics timer: %s", esp_err_to_name(timer_ret));
+    }
+    
+    // Create LVGL timer for UI updates (runs in LVGL context with lock held)
+    s_lvgl_update_timer = lv_timer_create(lvgl_update_timer_cb, 50, NULL); // Check every 50ms
+    if (!s_lvgl_update_timer) {
+        ESP_LOGE(TAG, "Failed to create LVGL update timer");
     }
 }
 
 void diagnostics_page_stop(void)
 {
-    // Clear the label pointers when leaving diagnostics page
-    s_diagnostics_label = NULL;
-    s_daisy_label = NULL;
-    s_ui_update_pending = false;
-
+    // Stop and delete LVGL timer first
+    if (s_lvgl_update_timer) {
+        lv_timer_del(s_lvgl_update_timer);
+        s_lvgl_update_timer = NULL;
+    }
+    
+    // Stop and delete ESP timer
     if (s_diagnostics_timer_handle) {
         esp_timer_stop(s_diagnostics_timer_handle);
         esp_timer_delete(s_diagnostics_timer_handle);
         s_diagnostics_timer_handle = NULL;
     }
+    
+    // Clear the label pointers when leaving diagnostics page
+    s_diagnostics_label = NULL;
+    s_daisy_label = NULL;
+    s_ui_update_pending = false;
 }
 

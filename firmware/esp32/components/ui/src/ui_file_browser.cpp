@@ -94,7 +94,7 @@ void UIFileBrowser::refreshList() {
     if (!list_) return;
     LV_LOCK();
 
-    lv_list_clean(list_);
+    lv_obj_clean(list_);
     
     for (size_t i = 0; i < files_.size(); ++i) {
         auto item = lv_list_add_btn(list_, nullptr, files_[i].c_str());

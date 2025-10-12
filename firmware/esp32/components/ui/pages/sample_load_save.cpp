@@ -15,6 +15,7 @@
 #include "freertos/task.h"
 #include "../../../main/inter_mcu.h"
 #include "../../../main/ui_task.h"
+#include "../include/ui/ui_globals.h" // For g_sample_load_save_page
 // Refresh softkeys after state changes
 #include "../include/ui/ui_navigator.h"
 
@@ -28,7 +29,7 @@
 static const char *TAG = "SAMPLE_LOAD_SAVE";
 
 // Global reference to current sample load/save page for hotkey callbacks
-static wavex_sample_load_save_page_t* g_current_page = NULL;
+// static wavex_sample_load_save_page_t* g_current_page = NULL; // Replaced by g_sample_load_save_page
 
 // Forward declarations
 static void file_selected_callback(const wavex_file_entry_t* entry, void* user_data);
@@ -44,9 +45,9 @@ wavex_sample_load_save_page_t* wavex_sample_load_save_create(lv_obj_t* parent)
     }
     
     // Clear any existing global reference to prevent conflicts
-    if (g_current_page) {
+    if (g_sample_load_save_page) {
         ESP_LOGW(TAG, "Clearing existing global page reference");
-        g_current_page = NULL;
+        g_sample_load_save_page = NULL;
     }
     
     wavex_sample_load_save_page_t* page = (wavex_sample_load_save_page_t*)malloc(sizeof(wavex_sample_load_save_page_t));
@@ -115,8 +116,8 @@ wavex_sample_load_save_page_t* wavex_sample_load_save_create(lv_obj_t* parent)
     
     // Note: Hotkeys are handled by the UI task, not here
     
-    // Set global reference for hotkey callbacks
-    g_current_page = page;
+    // Set global reference for hotkey callbacks and deferred updates
+    g_sample_load_save_page = page;
 
     ESP_LOGI(TAG, "Sample Load/Save page created successfully");
     return page;
@@ -127,8 +128,8 @@ void wavex_sample_load_save_destroy(wavex_sample_load_save_page_t* page)
     if (!page) return;
     
     // Clear global reference if this is the current page
-    if (g_current_page == page) {
-        g_current_page = NULL;
+    if (g_sample_load_save_page == page) {
+        g_sample_load_save_page = NULL;
     }
     
     // Unregister browse response callback to prevent crashes
@@ -169,10 +170,17 @@ void wavex_sample_load_save_hide(wavex_sample_load_save_page_t* page)
 
 void wavex_sample_load_save_update(wavex_sample_load_save_page_t* page)
 {
+    ESP_LOGD(TAG, "wavex_sample_load_save_update called");
     if (!page) return;
     
-    // Update any dynamic content if needed
-    // This could include updating file list, status, etc.
+    // Process any pending file browser UI updates (thread-safe)
+    if (page->file_browser) {
+        // Check if there's a pending update (for debugging)
+        if (page->file_browser->ui_update_pending) {
+            ESP_LOGI(TAG, "Processing pending file browser UI update...");
+        }
+        wavex_file_browser_process_pending_updates(page->file_browser);
+    }
 }
 
 bool wavex_sample_load_save_audition_sample_by_index(wavex_sample_load_save_page_t* page, uint32_t file_index)
@@ -235,17 +243,15 @@ bool wavex_sample_load_save_stop_audition(wavex_sample_load_save_page_t* page)
 void wavex_ui_handle_sample_stop_response(bool success)
 {
     // Access the global sample load/save page instance
-    extern wavex_sample_load_save_page_t* s_sample_load_save_page;
-    
-    if (!s_sample_load_save_page) {
+    if (!g_sample_load_save_page) {
         ESP_LOGW(TAG, "Received sample stop response but no active sample load/save page");
         return;
     }
     
     if (success) {
         ESP_LOGI(TAG, "=== SAMPLE STOP RESPONSE: Successfully stopped ===");
-        s_sample_load_save_page->is_playing = false;
-        wavex_sample_load_save_set_status(s_sample_load_save_page, "Stopped");
+        g_sample_load_save_page->is_playing = false;
+        wavex_sample_load_save_set_status(g_sample_load_save_page, "Stopped");
 
         // Refresh softkeys to reflect stopped state (Stop -> Audition)
         LV_LOCK();
@@ -253,7 +259,7 @@ void wavex_ui_handle_sample_stop_response(bool success)
         LV_UNLOCK();
     } else {
         ESP_LOGE(TAG, "=== SAMPLE STOP RESPONSE: Failed to stop ===");
-        wavex_sample_load_save_set_status(s_sample_load_save_page, "Stop failed");
+        wavex_sample_load_save_set_status(g_sample_load_save_page, "Stop failed");
         // Keep is_playing state as-is since stop failed
     }
 }

@@ -379,9 +379,8 @@ static daisy::SpiHandle::Result Spi_SendPacket(const uint8_t* tx_buf, size_t pac
         if (s_hw) s_hw->PrintLine("DAISY: DMA error details: %s", error_msg);
     }
     
-    // Add small delay to prevent overwhelming ESP32
-    // FIXME: This seems to have an effect on whether or not get receive browse_resp packets
-    System::DelayUs(ESP32_DMA_READY_WAIT_MS); // Reduced from 1000us to 400us for better performance
+    // Removed fixed delay: ESP32 now keeps the slave queue continuously filled.
+    // This eliminates the need for arbitrary timing gaps here.
     
     return dma_result;
 #else
@@ -624,11 +623,11 @@ static bool ProcessReceivedPacket(const uint8_t* rx_buf, size_t transfer_size)
     }
 
     // Debug: Always show first 8 bytes of received data
-    // if (s_hw) {
-    //     s_hw->PrintLine("DAISY: Raw RX data: %02X %02X %02X %02X %02X %02X %02X %02X", 
-    //                    rx_buf[0], rx_buf[1], rx_buf[2], rx_buf[3], 
-    //                    rx_buf[4], rx_buf[5], rx_buf[6], rx_buf[7]);
-    // }
+    if (s_hw) {
+        s_hw->PrintLine("DAISY: Raw RX data: %02X %02X %02X %02X %02X %02X %02X %02X", 
+                       rx_buf[0], rx_buf[1], rx_buf[2], rx_buf[3], 
+                       rx_buf[4], rx_buf[5], rx_buf[6], rx_buf[7]);
+    }
 
     // Check for all-zero packet (ESP32 sends this when it has no data)
     // This prevents ACK ping-pong between ESP32 and Daisy
@@ -680,7 +679,9 @@ static bool ProcessReceivedPacket(const uint8_t* rx_buf, size_t transfer_size)
     uint8_t payload[2048]; // Buffer for payload data
     size_t payload_size;
     
-    if (!parse_wave_packet(rx_buf, parse_size, msg_type, payload, payload_size, sequence_number, flags)) {
+    bool parsed_ok = parse_wave_packet(rx_buf, parse_size, msg_type, payload, payload_size, sequence_number, flags);
+
+    if (!parsed_ok) {
         if (s_hw) s_hw->PrintLine("DAISY: Failed to parse packet");
         return false;
     }
@@ -692,6 +693,23 @@ static bool ProcessReceivedPacket(const uint8_t* rx_buf, size_t transfer_size)
     }
 
     // Handle packet-level flags (ACK/NACK) here
+    if (msg_type == WaveX::Protocol::MSG_BROWSE_REQ && s_hw) {
+        s_hw->PrintLine("DAISY: Browse request packet received - seq=%u payload=%u bytes flags=0x%02X",
+                        sequence_number, (unsigned)payload_size, flags);
+        if (payload_size > 0) {
+            const uint32_t preview_count = payload_size > 8 ? 8 : payload_size;
+            s_hw->PrintLine("DAISY: Browse request payload bytes: %02X %02X %02X %02X %02X %02X %02X %02X",
+                            payload[0],
+                            (preview_count > 1) ? payload[1] : 0,
+                            (preview_count > 2) ? payload[2] : 0,
+                            (preview_count > 3) ? payload[3] : 0,
+                            (preview_count > 4) ? payload[4] : 0,
+                            (preview_count > 5) ? payload[5] : 0,
+                            (preview_count > 6) ? payload[6] : 0,
+                            (preview_count > 7) ? payload[7] : 0);
+        }
+    }
+
     if (flags & PKT_FLAG_ACK) {
         if (s_hw) {
             s_hw->PrintLine("DAISY: Received ACK for msg_type=0x%02X, seq=%u", msg_type, sequence_number);
@@ -1005,8 +1023,8 @@ daisy::SpiHandle::Result Spi_ReceivePacket()
     WaveX::Comm::PrepareTxBuffer(tx_buf, MAX_PKT_SIZE);
     memset(rx_buf, 0, MAX_PKT_SIZE);
     
-    // Wait longer for ESP32 to be ready
-    System::DelayUs(ESP32_DMA_READY_WAIT_MS));
+    // Wait for ESP32 to be ready (blocking fallback only)
+    System::DelayUs(ESP32_DMA_READY_WAIT_MS);
 
     // Check if ESP32 is still signaling data ready
     if (!attn_pin.Read()) {
@@ -1078,21 +1096,30 @@ daisy::SpiHandle::Result Spi_ReceivePacket()
 // ============================================================================
 
 static volatile bool s_interrupt_processing = false;
+static volatile uint32_t s_interrupt_count = 0;
+static volatile uint32_t s_interrupt_ignored = 0;
 extern "C" void EXTI15_10_IRQHandler(void)
 {
     // Check if this interrupt is from our attention pin (D0/PB12)
     if (__HAL_GPIO_EXTI_GET_IT(GPIO_PIN_12) != RESET) {
         // Clear the interrupt flag
         __HAL_GPIO_EXTI_CLEAR_IT(GPIO_PIN_12);
+        s_interrupt_count++;
 
         // Check if attention pin is high (ESP32 signaling data ready)
         if (attn_pin.Read() && !s_interrupt_processing) {
-            //if (s_hw) s_hw->PrintLine("DAISY: ATTN interrupt - ESP32 has data ready");
+            if (s_hw) s_hw->PrintLine("DAISY: ATTN interrupt #%lu - ESP32 has data ready", (unsigned long)s_interrupt_count);
             
             // Initiate non-blocking DMA duplex transaction to receive data
             s_interrupt_processing = true;
             WaveX::Comm::Spi_ReceivePacket();
             s_interrupt_processing = false;
+        } else {
+            s_interrupt_ignored++;
+            if (s_hw) s_hw->PrintLine("DAISY: ATTN interrupt #%lu IGNORED - pin=%d processing=%d", 
+                                     (unsigned long)s_interrupt_count, 
+                                     attn_pin.Read() ? 1 : 0,
+                                     s_interrupt_processing ? 1 : 0);
         }
     }
 }
