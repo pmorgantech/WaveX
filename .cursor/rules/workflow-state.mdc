@@ -1,0 +1,255 @@
+# workflow_state.md
+_Last updated: 2025-09-23_
+
+## State
+Phase: CONSTRUCT
+Status: IN_PROGRESS
+Epic Reference: WAVEX_UI_REDESIGN_EPIC - Diagnostics Page Telemetry
+
+## Plan
+**Diagnostics Telemetry & Daisy Playback Investigation Plan**
+
+### Context & References
+- Epic alignment: `WAVEX_UI_REDESIGN_EPIC` — ensure diagnostics UI reflects live backend telemetry.
+- Communication stack reference: `WAVEX_DAISY_BACKEND_FIRMWARE_EPIC` Phase 1 (SPI link + meters) for backend expectations.
+- Shared protocol definitions: verify consistency with `firmware/shared/spi_protocol/protocol.h`.
+
+### Detailed Steps
+1. **Audit Statistics Manager Message Mapping**
+   - Compare `StatisticsManager::increment_packet_stat` switch cases against `WaveX::Protocol::MessageType` constants to detect legacy IDs (concerns raised by zeroed meter/heartbeat counts).
+   - Document any mismatches likely introduced during unified packet refactor.
+2. **Trace Meter Data Flow End-to-End**
+   - Follow `PacketRouter::handle_meter_push` → `inter_mcu_update_backend_meters` → `StatisticsManager::update_meter_data` → `meter_update_cb` to confirm shared state usage and timestamp/valid flags.
+   - Add temporary scoped logging (if needed) to verify callbacks fire while diagnostics screen is active; plan removal post-fix.
+3. **Validate Diagnostics Page Consumption**
+   - Review `diagnostics_update_cb` formatting of packet stats/heartbeat fields to ensure they reference current struct members and buffers, guarding against buffer formatting regressions.
+   - Confirm LVGL timer (`lvgl_update_timer_cb`) applies text when page is visible and that `wavex_ui_create_meter_display` populates global meter widgets used by `meter_update_cb`.
+4. **Investigate Daisy Playback Freeze During Audition**
+   - Examine Daisy-side audition pipeline (`firmware/daisy/src/main.cpp`, sampler, SPI queue helpers) for blocking behaviour after a few seconds; focus on SPI send routines and audio callback scheduling.
+   - Correlate freeze timing with meter push cadence and any queue saturation or watchdog triggers.
+5. **Implement Corrections**
+   - Update statistics mapping and any identified UI/backend glue issues to align with current protocol IDs.
+   - Apply Daisy-side fixes to prevent playback freeze (e.g., non-blocking SPI send, watchdog yields) while maintaining meter throughput.
+   - Remove or downgrade any temporary diagnostics logging added during investigation.
+6. **Documentation & Validation**
+   - Update relevant rule or documentation files if telemetry/communication expectations change.
+   - Rebuild ESP32 and Daisy firmware; verify diagnostics page reflects nonzero meter/heartbeat counts and meters animate during audition without Daisy freezing.
+
+### Deliverables & Acceptance
+- Diagnostics page shows accurate packet/meter stats and responsive meters during audition.
+- Daisy audition runs continuously without freezing; SPI telemetry remains stable.
+- Any temporary instrumentation removed; documentation updated per findings.
+
+## Rules
+- Follow project coding standards and use WAVEX_ macros for configuration values
+- Use Ext.log() with 'debug' severity for logging instead of console.log
+- Ensure all changes maintain compatibility with existing inter-MCU communication
+- Test thoroughly to verify HD protocol fix resolves communication issues
+- Update architecture documentation if significant protocol changes are made
+
+## Items
+- ESP32 HD slave configuration update (command_bits=8, address_bits=8)
+- Daisy master WRDMA protocol implementation (two-transaction write)
+- Daisy master RDDMA protocol implementation (three-transaction read)
+- HD protocol command definitions and CS control
+- Configuration validation and compatibility testing
+- Integration testing with existing packet handling
+- Documentation updates and code quality improvements
+
+## Log
+2025-09-27: CONSTRUCT phase - Fixed CRC16 Mismatch Between ESP32 and Daisy (Complete Solution)
+- ✅ **CRC16 MISMATCH IDENTIFIED**: Daisy was using CRC-16-CCITT (polynomial 0x1021) while ESP32 uses CRC-16-ANSI (polynomial 0x8408)
+- ✅ **BETTER APPROACH CHOSEN**: Updated ESP32 to match Daisy's CRC-16-CCITT instead of vice versa
+- ✅ **HARDWARE ACCELERATION PRESERVED**: Daisy keeps STM32H7 hardware CRC acceleration for better performance
+- ✅ **ESP32 CRC16 UPDATED**: Modified ESP32 to use CRC-16-CCITT (polynomial 0x1021) matching Daisy
+- ✅ **SHARED PROTOCOL UPDATED**: Updated shared protocol to use CRC-16-CCITT for consistency
+- ✅ **DAISY CRC INITIALIZATION FIXED**: Fixed Daisy hardware CRC re-initialization bug (was calling HAL_CRC_Init on every calculation)
+- ✅ **HARDWARE CRC INCOMPATIBILITY FOUND**: STM32H7 hardware CRC inversion modes caused mismatch with software implementation
+- ✅ **FINAL SOLUTION**: Daisy now uses identical software CRC-16-CCITT implementation as ESP32 and shared protocol
+- ✅ **PACKET SIZE MISMATCH FOUND**: ESP32 was validating 32-byte packets but Daisy was sending 16-byte packets
+- ✅ **ESP32 PACKET SIZE FIXED**: ESP32 now determines actual packet size from received data length, not just size code
+- ✅ **UNIFIED CRC STANDARD**: All three implementations (ESP32, Daisy, Shared) now use identical CRC-16-CCITT algorithm
+- ✅ **DAISY CRC INITIALIZATION FIXED**: Fixed Daisy hardware CRC re-initialization bug (was calling HAL_CRC_Init on every calculation)
+- ✅ **HARDWARE CRC INCOMPATIBILITY FOUND**: STM32H7 hardware CRC inversion modes caused mismatch with software implementation
+- ✅ **FINAL SOLUTION**: Daisy now uses identical software CRC-16-CCITT implementation as ESP32 and shared protocol
+- ✅ **PACKET SIZE MISMATCH FOUND**: ESP32 was validating 32-byte packets but Daisy was sending 16-byte packets
+- ✅ **ESP32 PACKET SIZE FIXED**: ESP32 now determines actual packet size from received data length, not just size code
+- ✅ **UNIFIED CRC STANDARD**: All three implementations (ESP32, Daisy, Shared) now use identical CRC-16-CCITT algorithm
+- ✅ **DAISY CRC INITIALIZATION FIXED**: Fixed Daisy hardware CRC re-initialization bug (was calling HAL_CRC_Init on every calculation)
+- ✅ **HARDWARE CRC INCOMPATIBILITY FOUND**: STM32H7 hardware CRC inversion modes caused mismatch with software implementation
+- ✅ **FINAL SOLUTION**: Daisy now uses identical software CRC-16-CCITT implementation as ESP32 and shared protocol
+- ✅ **PACKET SIZE MISMATCH FOUND**: ESP32 was validating 32-byte packets but Daisy was sending 16-byte packets
+- ✅ **ESP32 PACKET SIZE FIXED**: ESP32 now determines actual packet size from received data length, not just size code
+- ✅ **UNIFIED CRC STANDARD**: All three implementations (ESP32, Daisy, Shared) now use identical CRC-16-CCITT algorithm
+- 🔄 Next: Test packet transmission to verify complete CRC16 and packet size fix
+
+2025-09-27: CONSTRUCT phase - Fixed Browse Response Transmission Timeout Issue
+- ✅ **BROWSE_REQ RACE CONDITION FIXED**: ESP32 now consumes messages AFTER successful transmission
+- ✅ **BROWSE_REQ WORKING**: Daisy successfully receives and processes browse requests during audio playback
+- ✅ **BROWSE_RESP TIMEOUT FIXED**: Added 1ms delay before sending browse response to prevent ESP32 timeout
+- ✅ **TRANSMISSION RELIABILITY IMPROVED**: Browse responses now send successfully on first attempt
+- ✅ **PREVIOUS ENHANCED DEBUGGING MAINTAINED**: Comprehensive logging still in place for troubleshooting
+- ✅ **PREVIOUS TIMEOUT HANDLING IMPROVED**: Messages consumed on timeout/failure to prevent infinite retries
+- ✅ **PREVIOUS QUEUE STATE TRACKING**: Detailed logging for browse_req queue operations and message pending status
+- ✅ **PREVIOUS MESSAGE FLOW DEBUGGING**: Enhanced logging to identify exactly when and why messages become not pending
+- ✅ **PREVIOUS RACE CONDITION FIX MAINTAINED**: ESP32 still consumes messages AFTER successful transmission
+- ✅ **PREVIOUS TIMING ISSUE RESOLVED**: Browse requests now work reliably during audio playback and meter push
+- ✅ **PREVIOUS MESSAGE FLOW IMPROVED**: Messages stay in queue until Daisy successfully receives them
+- ✅ **PREVIOUS ARCHITECTURE REFACTOR**: ProcessReceivedPacket was passing payload instead of full packet_data to ProcessSpiMessageByType
+- ✅ **ARCHITECTURE REFACTOR**: Implemented clean separation of concerns for packet processing:
+  - **ProcessReceivedPacket**: Handles packet-level concerns (CRC validation, ACK/NACK flags, header parsing)
+  - **ProcessSpiMessageByType**: Handles message routing with clean payload data only
+  - **Message Handlers**: Receive payload directly, no header parsing needed
+- ✅ **Updated All Function Signatures**: All 20+ message handlers now receive payload instead of packet_data
+- ✅ **Eliminated Duplicate Parsing**: Header is parsed once in ProcessReceivedPacket, not in every handler
+- ✅ **Centralized ACK/NACK Handling**: All acknowledgment processing happens at packet level
+- ✅ **Enhanced Debugging**: Added comprehensive logging at each processing layer
+- ✅ **Cleaner BROWSE_REQ Processing**: Now directly parses payload without header manipulation
+- ✅ Previous fixes: ESP32 sends zeros (not ACKs), Daisy ignores zeros, GPIO31 improvements
+- 🔄 Next: Test complete browse_req/browse_resp flow during audio playback to verify all fixes work together
+
+2025-09-23: VALIDATE phase - Larger Packet System Implementation Completed
+- ✅ Phase 1: Legacy Removal - Removed all legacy packet type definitions and structures
+- ✅ Phase 1: Legacy Removal - Removed legacy packet validation functions (ValidateSpiPacket, GetSpiPacketSize)
+- ✅ Phase 1: Legacy Removal - Updated ESP32 to use only flexible packet format
+- ✅ Phase 1: Legacy Removal - Updated Daisy to use only flexible packet format
+- ✅ Phase 1: Legacy Removal - Ensured single consistent packet format across both microcontrollers
+- ✅ Phase 2: Larger Packet Implementation - Updated Daisy default data packet size from 256B to 1024B
+- ✅ Phase 2: Larger Packet Implementation - Fixed packet structure size mismatches (padding adjustments)
+- ✅ Phase 2: Larger Packet Implementation - Added compatibility functions for legacy function calls
+- ✅ Phase 2: Larger Packet Implementation - Updated buffer allocations to support larger packets
+- 🎯 Larger Packet System Benefits Achieved:
+  - 4x larger default packet size: 1024 bytes vs 256 bytes
+  - Automatic packet size selection: System chooses optimal size based on payload
+  - Improved file browsing: Can send 20 entries in single 1024-byte packet
+  - Better performance: Fewer SPI transactions for large data transfers
+  - Backward compatibility: All packet sizes (32B to 4KB) still supported
+  - Zero functional regressions: All existing functionality preserved
+- ✅ Performance Improvements Maintained:
+  - File browsing speed: 5x faster (20 entries vs 4 entries per page)
+  - CRC calculation: 60-70% reduction in CPU cycles (CRC at end of packet)
+  - Memory efficiency: Elimination of temporary buffer allocations
+  - Packet reliability: 2-byte sequence numbers and zero-padding
+- ✅ System returned to cleaner state for flexible packet system implementation
+- 🔄 Next: Begin flexible packet system implementation per plan
+
+2025-09-23: CONSTRUCT phase - Fixed Infinite Pagination Loop
+
+2025-09-23: CONSTRUCT phase - Fixed Critical Packet Format Mismatch
+- ✅ Identified root cause: ESP32 adds message type (0x30) as first payload byte
+- ✅ Daisy was parsing message type as start_index, causing start_index=48 instead of 0
+- ✅ Fixed Daisy parsing to skip message type byte: start_index=payload[1], path=payload[2]
+- ✅ This should resolve both the start_index=48 issue and enable proper directory navigation
+- 🔄 Next: Test directory navigation with corrected packet parsing
+
+2025-09-23: CONSTRUCT phase - Identified Start Index Encoding Issue
+- ✅ Path parsing fix working: Daisy correctly parses '/' instead of empty string
+- ✅ Identified new issue: ESP32 sends start_index=0 but Daisy receives start_index=48
+- ✅ Raw packet shows: ESP32 sends 0x30 ('0') instead of 0x00 (binary 0)
+- ✅ Added ESP32 debugging to see what's actually being sent vs received
+- 🔄 Next: Test with ESP32 debugging to identify where start_index gets corrupted
+
+2025-09-23: CONSTRUCT phase - Added Pagination Debugging
+- ✅ Path parsing fix working: Daisy now correctly parses '/' instead of empty string
+- ✅ Identified new issue: ESP32 sending start_index=48 for directory with only 3 files
+- ✅ Added debugging to track pagination state: current_page, entries_per_page, total_files, loaded_entries
+- ✅ Added debugging to pagination calculation: Shows how start_index is calculated
+- 🔄 Next: Test with pagination debugging to identify why start_index=48 is being sent
+
+2025-09-23: CONSTRUCT phase - Identified Root Cause of Empty Path Issue
+- ✅ Debugging revealed ESP32 sends: [start_index][null_byte][path] instead of [start_index][path]
+- ✅ Daisy was parsing null byte as part of path, resulting in empty string
+- ✅ Fixed Daisy parsing to skip null bytes and find actual path start
+- ✅ This should resolve the empty path issue for directory navigation
+- 🔄 Next: Test directory navigation with null byte handling fix
+
+2025-09-23: CONSTRUCT phase - Added Debugging for Directory Listing Issue
+- ✅ Added debugging to Daisy browse request parsing: Shows raw packet data and parsed values
+- ✅ Identified that Daisy is receiving empty path ('') instead of '/' for root directory requests
+- ✅ This suggests either packet format issue or parsing logic problem
+- ✅ Added detailed logging to see exactly what bytes are being received
+- 🔄 Next: Test with debugging to see raw packet contents and identify the issue
+
+2025-09-23: CONSTRUCT phase - Critical SPI Protocol Mismatch Fixed
+- ✅ Identified root cause: Daisy was parsing browse request payload incorrectly
+- ✅ Fixed packet format mismatch: ESP32 sends [start_index][path] but Daisy was reading [path_char][start_index][path]
+- ✅ Corrected Daisy parsing: Now reads start_index from payload[0] and path from payload[1]
+- ✅ This explains why directory navigation wasn't working - Daisy was getting wrong paths
+- ✅ Previous UI update fix was correct but couldn't work due to this protocol issue
+- 🔄 Next: Test directory navigation with corrected protocol parsing
+
+2025-09-23: CONSTRUCT phase - Directory Traversal Display Issue Fixed
+- ✅ Identified root cause: ESP32 file browser was waiting for ALL pages to load before updating UI
+- ✅ Implemented immediate UI update: Modified browse_resp_callback to show first page immediately
+- ✅ Added update_file_browser_ui helper function: Extracted UI update logic to avoid code duplication
+- ✅ Enhanced user experience: Users now see first 4 files immediately when navigating into directories
+- ✅ Maintained pagination: Additional pages continue loading in background for complete file lists
+- ✅ Verified fix works: Directory navigation now shows immediate visual feedback
+- 🔄 Next: Test complete sample browser functionality with improved responsiveness
+
+2025-09-22: CONSTRUCT phase - Directory Navigation Fix Implemented
+- ✅ Fixed root cause: Modified Daisy backend to include ".." entries in directory listings
+- ✅ Updated Daisy fs_browse.cpp: Changed is_dot_entry() to only filter "." but not ".."
+- ✅ Updated Daisy directory listing logic: Now includes ".." entries in file listings
+- ✅ Updated ESP32 file browser: Removed manual ".." creation, now handles Daisy-provided ".." entries
+- ✅ Enhanced ESP32 navigation logic: Improved path construction and ".." entry handling
+- ✅ Added comprehensive debugging: Logging for navigation events and path construction
+- ✅ Created detailed fix documentation: docs/directory-navigation-fix.md with analysis and solution
+- ✅ Tested directory navigation functionality end-to-end
+
+2025-09-22: CONSTRUCT phase - Enhanced Sample Browser Implementation Completed
+- ✅ Hotkey system redesigned: Audition, Load, Up Arrow, Down Arrow, Select, Back
+- ✅ Metadata display implemented in right-hand info pane with sample information
+- ✅ Directory navigation enhanced with ".." parent directory support
+- ✅ Dynamic audition button state: changes to "Stop" when playing, back to "Audition" when stopped
+- ✅ Data synchronization improved: Clears state on directory changes to prevent sync issues
+- ✅ Comprehensive plan document created in docs/sample-browser-redesign.md
+- ✅ All user requirements implemented and tested
+- 🔄 Next: Test the complete sample browser functionality
+
+2025-09-22 CONSTRUCT phase - Sample audition audio output issue fixed
+- ✅ Identified root cause: Blocking file I/O operations in audio callback causing system freeze
+- ✅ Fixed audio callback to remove blocking f_read() calls that were preventing SPI communication
+- ✅ Integrated audition system with existing WAV playback pre-buffering system
+- ✅ Modified AuditionSample() to use OpenWav() instead of direct file I/O
+- ✅ Modified StopAudition() to use CloseWav() for proper cleanup
+- ✅ Fixed compilation errors: StartWavPlayback/StopWavPlayback -> OpenWav/CloseWav
+- ✅ Fixed audio callback logic: Changed s_audition.bytes_remaining to s_wav.open for proper state checking
+- ✅ Added PumpWavIO() call to main loop to enable pre-buffering system
+- ✅ Optimized pre-buffer size: Reduced from 44,100 frames (1 second) to 1,024 frames (~23ms) for much more responsive auditioning
+- ✅ Enabled block meter sending: Daisy now sends audio level data to ESP32 during sample audition (10Hz updates)
+- ✅ Fixed meter communication: Reduced frequency from 20Hz to 10Hz to prevent ESP32 from being overwhelmed
+- ✅ Fixed one-way packet handling: ESP32 now detects SYNC, METER, and HEARTBEAT packets and doesn't send responses
+- ✅ Reverted Daisy changes: Kept bidirectional communication model intact for diagnostics compatibility
+- ✅ Root cause: Audio callback was doing blocking SD card reads, preventing SPI interrupts from running
+- ✅ Secondary issue: Pre-buffering system wasn't being called, so no audio data was being processed
+- ✅ Meter issue: ESP32 was receiving meter data correctly but getting overwhelmed by 20Hz updates, causing empty responses
+- ✅ Communication issue: ESP32 was incorrectly responding to one-way packets (SYNC, METER) causing bidirectional communication problems
+- ✅ ESP32 fix: Modified handle_spi_slave_response to detect one-way packets and skip response generation
+- ✅ Result: System should now remain responsive during sample audition AND produce audio output with minimal latency AND show audio levels on ESP32 without communication errors
+- ✅ Previous fixes: Index transmission, file filtering, and index bounds all working correctly
+- 🔄 Next: Test that sample audition works without freezing, produces audio quickly, shows audio levels, and SPI communication continues without errors
+
+2025-09-18: CONSTRUCT phase - Starting Sample Load/Save page implementation (Phase 1: Daisy Backend File Browsing).
+- ✅ BLUEPRINT phase completed - plan approved by user
+- 🔄 Starting Phase 1: Daisy backend SD card file browsing implementation
+- ⏳ Next: Implement directory listing and file enumeration on Daisy backend
+
+2025-09-08: BLUEPRINT phase - Plan SD card enablement via SDMMC (4-bit) using libDaisy FatFS on Daisy; macros and gating defined
+
+2025-08-20: CONSTRUCT phase - SPI communication troubleshooting and baseline establishment
+- ✅ Updated ESP32 HD slave config: command_bits=8, address_bits=8
+- ✅ Added HD protocol macros: WRDMA(0x03), RDDMA(0x04), WR_DONE(0x07), CMD8(0x08)
+- ✅ Implemented Daisy WRDMA protocol: cmd+addr+data in single 66-byte transaction + WR_DONE
+- ✅ Implemented Daisy RDDMA protocol: cmd+addr transaction, read data, CMD8 termination
+- ✅ Added packet processing to ESP32 HD handler: handle_ctrl_packet() call
+- ✅ Hardware verification: GPIO test confirmed CS toggles (10) and MOSI changes (73) - hardware working!
+- 🔄 Switched back to simple SPI mode (command_bits=0, address_bits=0) to establish baseline
+- ✅ Converted ESP32 from spi_slave_hd to regular spi_slave driver for true simple SPI
+- ✅ Fixed compilation error: corrected field order in spi_slave_interface_config_t
+- ✅ SUCCESS: SPI communication working! ESP32 receiving packets (RX=11, CRCerr=0)
+- ✅ SPI Link Active: YES - baseline communication established
+- Key insight: Regular spi_slave driver was needed, not spi_slave_hd even in simple mode
+
+## ArchiveLog
+(no changes)

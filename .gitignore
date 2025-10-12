@@ -68,7 +68,7 @@ Makefile
 
 # Cursor specific
 #
-.cursor/
+#.cursor/
 # VS Code Devcontainer
 !.devcontainer/
 

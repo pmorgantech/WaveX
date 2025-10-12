@@ -1,0 +1,184 @@
+---
+description: LVGL and UI related tasks
+alwaysApply: false
+---
+# LVGL Threading and Lock Architecture Rules
+
+## Critical Rule: Never Compete for LVGL Lock from External Tasks
+
+**Problem**: The ESP LVGL port uses a mutex to protect LVGL objects. The LVGL timer task holds this lock while processing timers, rendering, and handling animations. External tasks (like the main UI task) that try to acquire this lock will experience unpredictable delays (50-200ms+) causing UI freezes and timeouts.
+
+**Solution**: Use LVGL's own timer mechanism for UI updates instead of external timers + locks.
+
+## Architecture Pattern
+
+### ✅ CORRECT: Two-Stage Update Pattern
+
+```cpp
+// Stage 1: Data Collection (ESP Timer ISR - no LVGL access)
+static esp_timer_handle_t s_data_timer;
+static volatile bool s_data_ready = false;
+static char s_deferred_text[512];
+
+static void data_collection_cb(void *arg) {
+    // Collect data, format text
+    snprintf(s_deferred_text, sizeof(s_deferred_text), "Status: %d", get_status());
+    s_data_ready = true;  // Signal ready
+    // NO LVGL calls here!
+}
+
+// Stage 2: UI Update (LVGL Timer - already in LVGL context)
+static lv_timer_t *s_ui_timer;
+
+static void ui_update_cb(lv_timer_t *timer) {
+    if (!s_data_ready) return;
+    
+    // Already in LVGL context, lock is held
+    lv_label_set_text(my_label, s_deferred_text);
+    s_data_ready = false;
+}
+
+void page_init(void) {
+    // Create data collection timer (ESP timer for precise timing)
+    esp_timer_create(..., &s_data_timer);
+    esp_timer_start_periodic(s_data_timer, 500000);
+    
+    // Create UI update timer (LVGL timer, runs in LVGL context)
+    s_ui_timer = lv_timer_create(ui_update_cb, 50, NULL);
+}
+```
+
+### ❌ WRONG: External Task Competing for Lock
+
+```cpp
+// DON'T DO THIS!
+static void external_task_update(void) {
+    // This will timeout/block unpredictably
+    if (lvgl_port_lock(pdMS_TO_TICKS(50))) {
+        lv_label_set_text(my_label, text);
+        lvgl_port_unlock();
+    }
+}
+```
+
+## Key Principles
+
+1. **Data Collection**: Use ESP timers for precise data collection in ISR context
+2. **UI Updates**: Use LVGL timers (`lv_timer_create`) for all UI modifications
+3. **Communication**: Use volatile flags or FreeRTOS queues between stages
+4. **Lock Acquisition**: Only acquire LVGL lock from page creation/destruction callbacks where the caller already holds it, never from independent tasks
+
+## When to Use LVGL Lock
+
+- ✅ Page creation callbacks (`onEnter`, `diagnostics_page_create`) - caller already holds lock
+- ✅ Event handlers - LVGL provides the lock context
+- ✅ LVGL timer callbacks - already in LVGL context
+- ❌ ESP timer callbacks - run in ISR, can't take locks
+- ❌ Independent FreeRTOS tasks - will compete and timeout
+- ❌ Main UI loop for updates - will compete and timeout
+
+## Migration Checklist
+
+When updating existing code that has UI update issues:
+
+1. Identify the data source (where does the data come from?)
+2. Create ESP timer for data collection if needed
+3. Create LVGL timer for UI updates (50-100ms period is typical)
+4. Use volatile flag or queue to signal data availability
+5. Remove any `lvgl_port_lock()` calls from external contexts
+6. Test that updates happen smoothly without timeouts
+
+## Related Files
+
+- `/firmware/esp32/components/ui/pages/diagnostics_page.cpp` - Reference implementation
+- ESP-IDF LVGL Port documentation for threading model details
+# LVGL Threading and Lock Architecture Rules
+
+## Critical Rule: Never Compete for LVGL Lock from External Tasks
+
+**Problem**: The ESP LVGL port uses a mutex to protect LVGL objects. The LVGL timer task holds this lock while processing timers, rendering, and handling animations. External tasks (like the main UI task) that try to acquire this lock will experience unpredictable delays (50-200ms+) causing UI freezes and timeouts.
+
+**Solution**: Use LVGL's own timer mechanism for UI updates instead of external timers + locks.
+
+## Architecture Pattern
+
+### ✅ CORRECT: Two-Stage Update Pattern
+
+```cpp
+// Stage 1: Data Collection (ESP Timer ISR - no LVGL access)
+static esp_timer_handle_t s_data_timer;
+static volatile bool s_data_ready = false;
+static char s_deferred_text[512];
+
+static void data_collection_cb(void *arg) {
+    // Collect data, format text
+    snprintf(s_deferred_text, sizeof(s_deferred_text), "Status: %d", get_status());
+    s_data_ready = true;  // Signal ready
+    // NO LVGL calls here!
+}
+
+// Stage 2: UI Update (LVGL Timer - already in LVGL context)
+static lv_timer_t *s_ui_timer;
+
+static void ui_update_cb(lv_timer_t *timer) {
+    if (!s_data_ready) return;
+    
+    // Already in LVGL context, lock is held
+    lv_label_set_text(my_label, s_deferred_text);
+    s_data_ready = false;
+}
+
+void page_init(void) {
+    // Create data collection timer (ESP timer for precise timing)
+    esp_timer_create(..., &s_data_timer);
+    esp_timer_start_periodic(s_data_timer, 500000);
+    
+    // Create UI update timer (LVGL timer, runs in LVGL context)
+    s_ui_timer = lv_timer_create(ui_update_cb, 50, NULL);
+}
+```
+
+### ❌ WRONG: External Task Competing for Lock
+
+```cpp
+// DON'T DO THIS!
+static void external_task_update(void) {
+    // This will timeout/block unpredictably
+    if (lvgl_port_lock(pdMS_TO_TICKS(50))) {
+        lv_label_set_text(my_label, text);
+        lvgl_port_unlock();
+    }
+}
+```
+
+## Key Principles
+
+1. **Data Collection**: Use ESP timers for precise data collection in ISR context
+2. **UI Updates**: Use LVGL timers (`lv_timer_create`) for all UI modifications
+3. **Communication**: Use volatile flags or FreeRTOS queues between stages
+4. **Lock Acquisition**: Only acquire LVGL lock from page creation/destruction callbacks where the caller already holds it, never from independent tasks
+
+## When to Use LVGL Lock
+
+- ✅ Page creation callbacks (`onEnter`, `diagnostics_page_create`) - caller already holds lock
+- ✅ Event handlers - LVGL provides the lock context
+- ✅ LVGL timer callbacks - already in LVGL context
+- ❌ ESP timer callbacks - run in ISR, can't take locks
+- ❌ Independent FreeRTOS tasks - will compete and timeout
+- ❌ Main UI loop for updates - will compete and timeout
+
+## Migration Checklist
+
+When updating existing code that has UI update issues:
+
+1. Identify the data source (where does the data come from?)
+2. Create ESP timer for data collection if needed
+3. Create LVGL timer for UI updates (50-100ms period is typical)
+4. Use volatile flag or queue to signal data availability
+5. Remove any `lvgl_port_lock()` calls from external contexts
+6. Test that updates happen smoothly without timeouts
+
+## Related Files
+
+- `/firmware/esp32/components/ui/pages/diagnostics_page.cpp` - Reference implementation
+- ESP-IDF LVGL Port documentation for threading model details
