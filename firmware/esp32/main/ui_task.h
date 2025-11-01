@@ -49,6 +49,8 @@
   * @param parent The parent LVGL object
   */
  void wavex_ui_create_meter_display(lv_obj_t *parent);
+// Create an LVGL timer that applies deferred meter updates in LVGL context
+void wavex_ui_create_meter_lv_timer(void);
  
  /**
   * @brief Set the current screen context for hotkey mapping

@@ -11,7 +11,7 @@
 
 // Set to 1 to enable debug logging for inter-MCU packet traffic
 #ifndef WAVEX_MCU_LINK_PACKET_DEBUG
-#define WAVEX_MCU_LINK_PACKET_DEBUG 1
+#define WAVEX_MCU_LINK_PACKET_DEBUG 0
 #endif
 
 // SPI link configuration
@@ -45,7 +45,7 @@
 #define PIN_IRQ_DAISY2ESP      WAVEX_DAISY_IRQ_OUT
 #define PIN_IRQ_ESP2DAISY      WAVEX_DAISY_ATTN_IN
 
-#define SPI_CLOCK_SPEED_HZ     4000000  // 8 MHz
+#define SPI_CLOCK_SPEED_HZ     10000000  // 8 MHz
 #define SPI_QUEUE_SIZE         4
 #define SPI_DMA_CHANNEL        SPI_DMA_CH_AUTO
 #endif

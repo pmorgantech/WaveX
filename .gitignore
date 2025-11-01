@@ -71,6 +71,7 @@ Makefile
 #.cursor/
 # VS Code Devcontainer
 !.devcontainer/
+.specstory/
 
 
 #.specstory/

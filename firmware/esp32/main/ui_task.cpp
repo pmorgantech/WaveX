@@ -68,6 +68,10 @@ static esp_lcd_touch_handle_t s_touch_handle = NULL;
 static lv_display_t *s_lvgl_display = NULL;
 static esp_timer_handle_t s_lvgl_tick_timer_handle = NULL;
 static esp_timer_handle_t s_meter_timer_handle = NULL;
+// LVGL timer to apply deferred meter updates in LVGL context
+static lv_timer_t *s_meter_lvgl_timer = NULL;
+// LVGL timer for applying meter updates (runs in LVGL context with lock held)
+static lv_timer_t *s_meter_lv_timer = NULL;
  
 // I2C handles
 static i2c_master_bus_handle_t s_i2c_bus_handle = NULL;
@@ -124,19 +128,21 @@ static uint32_t s_refresh_count = 0;
 static const uint32_t MIN_REFRESH_INTERVAL_MS = 16;  // 60 FPS maximum
 static const uint32_t MAX_REFRESH_INTERVAL_MS = 100; // 10 FPS minimum
 
-// Deferred meter update data
-static bool s_meter_update_pending = false;
-static bool s_meter_reset_pending = false;
-static float s_deferred_rms_left = 0.0f;
-static float s_deferred_rms_right = 0.0f;
-static float s_deferred_peak_left = 0.0f;
-static float s_deferred_peak_right = 0.0f;
+// Deferred meter update data (shared between timer and UI task)
+static volatile bool s_meter_update_pending = false;
+static volatile bool s_meter_reset_pending = false;
+static volatile float s_deferred_rms_left = 0.0f;
+static volatile float s_deferred_rms_right = 0.0f;
+static volatile float s_deferred_peak_left = 0.0f;
+static volatile float s_deferred_peak_right = 0.0f;
  
 // Forward declarations
 static void ui_task(void *pvParameters);
 static void lvgl_flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px_map);
 static void lvgl_tick_cb(void *arg);
 static void meter_update_cb(void *arg);
+static void lvgl_meter_apply_cb(lv_timer_t *timer);
+static void lv_meter_update_timer_cb(lv_timer_t *timer);
 static void meter_data_cb(float rms, float peak, void* user_data);
 static esp_err_t init_touch_controller(void);
 static void adaptive_refresh_control(void);
@@ -320,6 +326,12 @@ static void meter_update_cb(void *arg)
     // Get current meter data from statistics
     wavex_meter_data_t meter_data;
     inter_mcu_get_meter_data(&meter_data);
+    // Instrumentation: log received meter snapshot for debugging UI updates
+    // ESP_LOGI(TAG, "METER_CB: valid=%d last_update_ms=%u rms_l=%.3f rms_r=%.3f peak_l=%.3f peak_r=%.3f",
+    //          meter_data.valid ? 1 : 0,
+    //          meter_data.last_update_ms,
+    //          meter_data.rms_left, meter_data.rms_right,
+    //          meter_data.peak_left, meter_data.peak_right);
     
     uint32_t current_time_ms = (uint32_t)(esp_timer_get_time() / 1000);
     bool should_reset_meters = false;
@@ -352,6 +364,7 @@ static void meter_update_cb(void *arg)
             
             last_reset_time = current_time_ms;
             
+            // ESP_LOGI(TAG, "METER_CB: resetting meters (time_since_reset=%u)", (unsigned)time_since_reset);
             // Mark meter reset as pending (will be processed by main UI task)
             s_meter_reset_pending = true;
             wavex_ui_mark_content_changed();
@@ -368,6 +381,8 @@ static void meter_update_cb(void *arg)
         s_deferred_peak_left = s_peak_hold_l.peak_value;
         s_deferred_peak_right = s_peak_hold_r.peak_value;
         
+        // ESP_LOGI(TAG, "METER_CB: scheduling meter update rms_l=%.3f rms_r=%.3f peak_l=%.3f peak_r=%.3f",
+        //          s_deferred_rms_left, s_deferred_rms_right, s_deferred_peak_left, s_deferred_peak_right);
         // Mark meter update as pending (will be processed by main UI task)
         s_meter_update_pending = true;
         wavex_ui_mark_content_changed();
@@ -379,6 +394,7 @@ static void meter_update_cb(void *arg)
  */
 static void process_deferred_meter_updates(void)
 {
+    //ESP_LOGI(TAG, "METER_PROC: entered (pending=%d reset=%d)", s_meter_update_pending ? 1 : 0, s_meter_reset_pending ? 1 : 0);
     if (s_meter_reset_pending) {
         LV_LOCK();
         
@@ -413,11 +429,23 @@ static void process_deferred_meter_updates(void)
         }
         
         LV_UNLOCK();
+        ESP_LOGI(TAG, "METER_PROC: performed meter reset");
         s_meter_reset_pending = false;
     }
     
     if (s_meter_update_pending) {
         LV_LOCK();
+        ESP_LOGI(TAG, "METER_PROC: processing deferred meter update pending=%d", s_meter_update_pending ? 1 : 0);
+        // Log LVGL object validity to diagnose lifecycle issues
+        ESP_LOGI(TAG, "METER_PROC: objs s_meter_bar_l=%p s_meter_bar_r=%p s_peak_line_l=%p s_peak_line_r=%p s_meter_label_l=%p s_meter_label_r=%p",
+                 (void*)s_meter_bar_l, (void*)s_meter_bar_r, (void*)s_peak_line_l, (void*)s_peak_line_r,
+                 (void*)s_meter_label_l, (void*)s_meter_label_r);
+        if (s_meter_bar_l) ESP_LOGI(TAG, "METER_PROC: s_meter_bar_l valid=%d", lv_obj_is_valid(s_meter_bar_l));
+        if (s_meter_bar_r) ESP_LOGI(TAG, "METER_PROC: s_meter_bar_r valid=%d", lv_obj_is_valid(s_meter_bar_r));
+        if (s_peak_line_l) ESP_LOGI(TAG, "METER_PROC: s_peak_line_l valid=%d", lv_obj_is_valid(s_peak_line_l));
+        if (s_peak_line_r) ESP_LOGI(TAG, "METER_PROC: s_peak_line_r valid=%d", lv_obj_is_valid(s_peak_line_r));
+        if (s_meter_label_l) ESP_LOGI(TAG, "METER_PROC: s_meter_label_l valid=%d", lv_obj_is_valid(s_meter_label_l));
+        if (s_meter_label_r) ESP_LOGI(TAG, "METER_PROC: s_meter_label_r valid=%d", lv_obj_is_valid(s_meter_label_r));
         
         // Update enhanced meter display if available
         if (s_meter_bar_l && s_meter_bar_r && s_peak_line_l && s_peak_line_r &&
@@ -476,6 +504,62 @@ static void process_deferred_meter_updates(void)
         }
         
         LV_UNLOCK();
+        ESP_LOGI(TAG, "METER_PROC: meter update applied L=%.3f R=%.3f peakL=%.3f peakR=%.3f",
+                 s_deferred_rms_left, s_deferred_rms_right, s_deferred_peak_left, s_deferred_peak_right);
+        s_meter_update_pending = false;
+    }
+}
+
+/**
+ * @brief LVGL timer callback to apply deferred meter updates in LVGL context.
+ * Runs with LVGL lock already held.
+ */
+static void lvgl_meter_apply_cb(lv_timer_t *timer)
+{
+    (void)timer;
+
+    if (!s_meter_update_pending && !s_meter_reset_pending) return;
+
+    // Reset handling
+    if (s_meter_reset_pending) {
+        if (s_meter_bar_l && s_meter_bar_r && s_peak_line_l && s_peak_line_r &&
+            lv_obj_is_valid(s_meter_bar_l) && lv_obj_is_valid(s_meter_bar_r) &&
+            lv_obj_is_valid(s_peak_line_l) && lv_obj_is_valid(s_peak_line_r)) {
+            lv_bar_set_value(s_meter_bar_l, 0, LV_ANIM_ON);
+            lv_bar_set_value(s_meter_bar_r, 0, LV_ANIM_ON);
+            update_peak_line_position(s_peak_line_l, s_meter_bar_l, 0.0f);
+            update_peak_line_position(s_peak_line_r, s_meter_bar_r, 0.0f);
+            if (s_meter_label_l && lv_obj_is_valid(s_meter_label_l)) lv_label_set_text(s_meter_label_l, "L: 0.000\nPeak: 0.000");
+            if (s_meter_label_r && lv_obj_is_valid(s_meter_label_r)) lv_label_set_text(s_meter_label_r, "R: 0.000\nPeak: 0.000");
+        }
+        s_meter_reset_pending = false;
+        s_meter_update_pending = false;
+        return;
+    }
+
+    if (s_meter_update_pending) {
+        if (s_meter_bar_l && s_meter_bar_r && s_peak_line_l && s_peak_line_r &&
+            lv_obj_is_valid(s_meter_bar_l) && lv_obj_is_valid(s_meter_bar_r) &&
+            lv_obj_is_valid(s_peak_line_l) && lv_obj_is_valid(s_peak_line_r)) {
+            int rms_l_value = (int)(s_deferred_rms_left * 100.0f);
+            int rms_r_value = (int)(s_deferred_rms_right * 100.0f);
+            if (rms_l_value > 100) rms_l_value = 100;
+            if (rms_r_value > 100) rms_r_value = 100;
+            lv_bar_set_value(s_meter_bar_l, rms_l_value, LV_ANIM_ON);
+            lv_bar_set_value(s_meter_bar_r, rms_r_value, LV_ANIM_ON);
+            update_peak_line_position(s_peak_line_l, s_meter_bar_l, s_deferred_peak_left);
+            update_peak_line_position(s_peak_line_r, s_meter_bar_r, s_deferred_peak_right);
+            if (s_meter_label_l && lv_obj_is_valid(s_meter_label_l)) {
+                char label_text[32];
+                snprintf(label_text, sizeof(label_text), "L: %.3f\nPeak: %.3f", s_deferred_rms_left, s_deferred_peak_left);
+                lv_label_set_text(s_meter_label_l, label_text);
+            }
+            if (s_meter_label_r && lv_obj_is_valid(s_meter_label_r)) {
+                char label_text[32];
+                snprintf(label_text, sizeof(label_text), "R: %.3f\nPeak: %.3f", s_deferred_rms_right, s_deferred_peak_right);
+                lv_label_set_text(s_meter_label_r, label_text);
+            }
+        }
         s_meter_update_pending = false;
     }
 }
@@ -582,6 +666,28 @@ void wavex_ui_create_meter_display(lv_obj_t* parent)
     lv_obj_set_style_text_color(peak_info, lv_color_white(), LV_PART_MAIN); // White text for dark mode
     lv_obj_set_style_text_font(peak_info, &lv_font_montserrat_14, LV_PART_MAIN);
     lv_obj_align(peak_info, LV_ALIGN_BOTTOM_MID, 0, -5);
+
+    // Populate deferred meter values from current backend snapshot so UI can show immediately
+    wavex_meter_data_t md;
+    inter_mcu_get_meter_data(&md);
+    if (md.valid) {
+        s_deferred_rms_left = md.rms_left;
+        s_deferred_rms_right = md.rms_right;
+        s_deferred_peak_left = md.peak_left;
+        s_deferred_peak_right = md.peak_right;
+    }
+
+    // Mark an initial update so the meters render as soon as the page is created
+    s_meter_update_pending = true;
+    wavex_ui_mark_content_changed();
+    ESP_LOGI(TAG, "METER_UI: meter widgets created and initial update scheduled L=%.3f R=%.3f", s_deferred_rms_left, s_deferred_rms_right);
+    // Create LVGL timer to ensure deferred updates are applied in LVGL context
+    if (!s_meter_lvgl_timer) {
+        s_meter_lvgl_timer = lv_timer_create(lvgl_meter_apply_cb, 50, NULL);
+        if (!s_meter_lvgl_timer) {
+            ESP_LOGE(TAG, "Failed to create meter LVGL timer");
+        }
+    }
 }
 
 /**
@@ -1578,6 +1684,13 @@ static void menu_button_event_cb(lv_event_t *e)
         
         // Process deferred meter updates (prevents deadlock during audio playback)
         process_deferred_meter_updates();
+        // // If deferred update still pending (LVGL timers or lock contention), ensure it is applied here
+        // if (s_meter_update_pending || s_meter_reset_pending) {
+        //     LV_LOCK();
+        //     ESP_LOGI(TAG, "UI_LOOP: forcing LVGL meter apply (pending=%d reset=%d)", s_meter_update_pending ? 1 : 0, s_meter_reset_pending ? 1 : 0);
+        //     lvgl_meter_apply_cb(NULL);
+        //     LV_UNLOCK();
+        // }
         
         // Process deferred file browser updates (prevents deadlock from SPI task)
         if (g_sample_load_save_page) {

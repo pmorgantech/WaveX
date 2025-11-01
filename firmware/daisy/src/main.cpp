@@ -479,7 +479,15 @@ int main(void)
             
             // WAVEX_LOG_DAISY(INTER_MCU_LINK, "DEBUG: Sending heartbeat packet - calling Spi_SendPreCreatedPacket");
             // Heartbeat is fire-and-forget (no ACK needed)
+            #if WAVEX_MCU_LINK_PACKET_DEBUG
+            WAVEX_LOG_DAISY(INTER_MCU_LINK, "DEBUG Heartbeat prep: size=%d, bytes=%02X %02X %02X %02X %02X %02X %02X %02X",
+                           (int)pkt_size, heartbeat_buffer[0], heartbeat_buffer[1], heartbeat_buffer[2], heartbeat_buffer[3],
+                           heartbeat_buffer[4], heartbeat_buffer[5], heartbeat_buffer[6], heartbeat_buffer[7]);
+            #endif
             int heartbeat_result = WaveX::Comm::Spi_SendPreCreatedPacket(heartbeat_buffer, pkt_size);
+            #if WAVEX_MCU_LINK_PACKET_DEBUG
+            WAVEX_LOG_DAISY(INTER_MCU_LINK, "Heartbeat send result: %d", heartbeat_result);
+            #endif
             // WAVEX_LOG_DAISY(INTER_MCU_LINK, "DEBUG: Heartbeat packet send result: %d", heartbeat_result);
 
             #if WAVEX_MCU_LINK_PACKET_DEBUG
@@ -534,6 +542,9 @@ int main(void)
             
             uint8_t meter_buffer[64];
             size_t pkt_size = WaveX::Protocol::ProtocolHandler::CreateMeterPushPacket(meter_buffer, sizeof(meter_buffer), meter_msg);
+            #if WAVEX_MCU_LINK_PACKET_DEBUG
+            WAVEX_LOG_DAISY(INTER_MCU_LINK, "DEBUG MeterPush prepared: size=%d", (int)pkt_size);
+            #endif
 
             // Send meter data to ESP32 for audio level display
             int result = WaveX::Comm::Spi_SendPreCreatedPacket(meter_buffer, pkt_size);

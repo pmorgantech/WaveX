@@ -620,8 +620,9 @@ static void spi_slave_task(void* pvParameters)
             }
             continue;
         }
+#if WAVEX_MCU_LINK_PACKET_DEBUG
         ESP_LOGI(TAG, "SPI transaction completed successfully - processing RX data...");
-        
+#endif
         // Now that Daisy has received our message, consume it from the queue
         if (has_message) {
             clear_transmitted_message_from_queue();
@@ -632,15 +633,18 @@ static void spi_slave_task(void* pvParameters)
         size_t rx_len = trans_result->length / 8; // Convert bits to bytes
         if (rx_len > 0) {
             s_packet_counter++;
-            
+#if WAVEX_MCU_LINK_PACKET_DEBUG
+            ESP_LOGI(TAG, "SPI transaction completed successfully - processing RX data...");
+#endif
             uint8_t* rx_data = (uint8_t*)trans_result->rx_buffer;
             
+#if WAVEX_MCU_LINK_PACKET_DEBUG
             // Log first bytes to see what we received
             ESP_LOGI(TAG, "RX: Received %d bytes, first 8 bytes: %02X %02X %02X %02X %02X %02X %02X %02X", 
                      (int)rx_len,
                      rx_data[0], rx_data[1], rx_data[2], rx_data[3],
                      rx_data[4], rx_data[5], rx_data[6], rx_data[7]);
-            
+#endif
             // Determine packet size from protocol size code in first byte
             uint8_t size_code = rx_data[0] & PKT_SIZE_MASK;
             size_t expected_packet_size = ProtocolHandler::GetPacketSizeFromCode(size_code);
@@ -649,22 +653,28 @@ static void spi_slave_task(void* pvParameters)
                 ESP_LOGW(TAG, "Invalid/unsupported packet size: size_code=0x%02X, expected=%d, rx_len=%d",
                          size_code, (int)expected_packet_size, (int)rx_len);
             } else {
+#if WAVEX_MCU_LINK_PACKET_DEBUG
                 ESP_LOGI(TAG, "Using protocol-indicated size: %d bytes (size_code=0x%02X)",
                          (int)expected_packet_size, size_code);
-
+#endif
                 // Validate and process the packet using the expected size
                 if (validate_wave_packet(rx_data, expected_packet_size)) {
+#if WAVEX_MCU_LINK_PACKET_DEBUG
                     ESP_LOGI(TAG, "CRC validation PASSED, routing packet type=0x%02X", rx_data[1]);
+#endif
                     s_packet_router.route_packet(rx_data, expected_packet_size);
                 } else {
                     ESP_LOGW(TAG, "CRC validation FAILED for packet type=0x%02X size=%d", rx_data[1], (int)expected_packet_size);
                 }
             }
         } else {
+#if WAVEX_MCU_LINK_PACKET_DEBUG
             ESP_LOGI(TAG, "RX: No data received (rx_len=0)");
+#endif
         }
-        
+#if WAVEX_MCU_LINK_PACKET_DEBUG
         ESP_LOGI(TAG, "Transaction complete, looping to queue next transaction...");
+#endif
     }
     
     // Should never reach here
@@ -720,11 +730,12 @@ int spi_link_send(uint16_t type, const void* payload, uint16_t len)
         entry->seq_num = next_seq_num++;
         entry->pending = true;
 
+#if WAVEX_MCU_LINK_PACKET_DEBUG
         ESP_LOGI(TAG, "Created packet: type=0x%02X, size=%d, seq=%d", type, (int)packet_size, entry->seq_num);
         ESP_LOGI(TAG, "Packet bytes: %02X %02X %02X %02X %02X %02X %02X %02X", 
                  entry->packet_data[0], entry->packet_data[1], entry->packet_data[2], entry->packet_data[3],
                  entry->packet_data[4], entry->packet_data[5], entry->packet_data[6], entry->packet_data[7]);
-
+#endif
         msg_queue_tail = (msg_queue_tail + 1) % MSG_QUEUE_SIZE;
         msg_queue_count++;
 
