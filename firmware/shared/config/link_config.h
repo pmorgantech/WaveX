@@ -15,11 +15,10 @@
 #endif
 
 // SPI link configuration
-#define WAVEX_SPI_LINK_ENABLED 1
+#define WAVEX_SPI_LINK_ENABLED 0  // TEMPORARILY DISABLED for UART-only testing
 
-// Enable non-blocking DMA transfers on Daisy SPI (master) by default
 #ifndef WAVEX_SPI_DMA_ENABLED
-#define WAVEX_SPI_DMA_ENABLED 1
+#define WAVEX_SPI_DMA_ENABLED 0  // Disabled - not using SPI currently, save DMA memory
 #endif
 
 // Use pin definitions from centralized pin_config.h

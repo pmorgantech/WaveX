@@ -11,6 +11,7 @@
 #include "../shared/config/pin_config.h"
 #include "config.hpp"
 #include "comm/daisy_spi_link.h"
+#include "comm/daisy_uart_link.h"
 #include "config/link_config.h"
 #include "metrics/metrics.h"
 #include "ff.h"
@@ -35,18 +36,6 @@ static daisy::SpiHandle spi_handle;
 #if WAVEX_DAISY_SD_CARD_ENABLED && (WAVEX_DAISY_SD_CARD_BACKEND == 1)
 #include "storage/sd_sdio.h"
 #endif
-
-// Helper function to process SPI packets - NO LONGER NEEDED
-/*
-void process_spi_packet(::pkt_t* pkt) {
-    // Process incoming SPI messages from ESP32 using the proper message processor
-    if (pkt && pkt->h.len <= 26) {
-        // Call the actual message processing function from daisy_spi_link.cpp
-        // pkt_t has payload directly, not pkt->h.payload
-        WaveX::Comm::ProcessEsp32Message(pkt->h.type, 0, pkt->payload, pkt->h.len);
-    }
-}
-*/
 
 // Process incoming SPI messages from ESP32
 void process_incoming_spi_messages() {
@@ -330,24 +319,19 @@ int main(void)
         WAVEX_LOG_DAISY(INTER_MCU_LINK, "DEBUG: Returned from Spi_Init");
         System::Delay(100);
         
-        // SPI test to verify communication works
-    WAVEX_LOG_DAISY(INTER_MCU_LINK, "DEBUG: Testing SPI with immediate test packet");
-    WaveX::Protocol::SyncMessage sync_msg = {System::GetTick(), {0xAA, 0xBB, 0xCC, 0xDD}};
-    uint8_t test_buffer[64];
-    size_t pkt_size = WaveX::Protocol::ProtocolHandler::CreateSyncPacket(test_buffer, sizeof(test_buffer), sync_msg);
-    int test_result = WaveX::Comm::Spi_SendPreCreatedPacket(test_buffer, pkt_size);
-    WAVEX_LOG_DAISY(INTER_MCU_LINK, "DEBUG: SPI test result: %d (1=success, 0=fail)", test_result);
-    if (test_result == 1) {
-        WAVEX_LOG_DAISY(INTER_MCU_LINK, "SUCCESS: SPI is working! You should see SPI1 CLK on scope now!");
-    } else {
-        WAVEX_LOG_DAISY(INTER_MCU_LINK, "FAILURE: SPI test failed - this explains the missing SPI1 CLK!");
-    }
+        // SPI is reserved for BROWSE_RESP and WAVE_DATA_CHUNK only
+        // All other messages (SYNC, HEARTBEAT, METER, etc.) use UART
+        WAVEX_LOG_DAISY(INTER_MCU_LINK, "SPI link initialized - reserved for file browser and wave data only");
     WaveX::Comm::Spi_DebugState();
     } else {
         WAVEX_LOG_DAISY(INTER_MCU_LINK, "ERROR: Skipping SPI link init due to SPI init failure - NO SPI CLOCK WILL BE GENERATED");
         WAVEX_LOG_DAISY(INTER_MCU_LINK, "ERROR: This explains why you see no SPI1 CLK on the scope!");
     }
     #endif
+
+    WaveX::Comm::UartLinkInit(&hw);
+    WaveX::Comm::UartLinkStart();
+    hw.PrintLine("DAISY: UART link started");
 
     // Start audio callback system
     #if WAVEX_AUDIO_ENGINE_ENABLED
@@ -389,9 +373,8 @@ int main(void)
 
         loop_counter++;
 
-        // Batch SPI operations to reduce timing variations
         uint32_t current_time = System::GetNow();
-        
+
         // Process any incoming SPI messages from ESP32
         uint32_t spi_start = System::GetTick();
         // Fallback: if ATTN edge was missed, poll the level and start a receive
@@ -402,6 +385,8 @@ int main(void)
         // #endif
         process_incoming_spi_messages();
         uint32_t spi_duration = System::GetTick() - spi_start;
+
+        WaveX::Comm::UartLinkProcess();
 
         // Check for audio underruns (logging handled here to avoid blocking audio callback)
         #if WAVEX_AUDIO_ENGINE_ENABLED
@@ -447,12 +432,22 @@ int main(void)
             WAVEX_LOG_DAISY(AUDIO_ENGINE, "I/O Stats: count=%u, max=%u ms, last=%u ms", 
                            (unsigned)io_count, (unsigned)max_io_duration, (unsigned)last_io_duration);
             #endif
+
+            // Log UART stats
+            WaveX::Comm::UartLinkLogStats();
         }
 
-        #if WAVEX_SPI_LINK_ENABLED
+        // Log UART stats every 1 second for more detailed debug
+        static uint32_t last_uart_log = 0;
+        if (current_time - last_uart_log >= 1000) {
+            last_uart_log = current_time;
+            WaveX::Comm::UartLinkLogStats();
+            printf("DAISY: === UART Link Stats (1sec) ===\n");
+        }
+
         if (send_beacon) {
             // WAVEX_LOG_DAISY(INTER_MCU_LINK, "DEBUG: Preparing heartbeat packet");
-            // Send heartbeat via SPI with CPU usage
+            // Send heartbeat via UART with CPU usage
             // Log heartbeat sending to verify it continues during auditioning
             #if WAVEX_MCU_LINK_PACKET_DEBUG
             WAVEX_LOG_DAISY(INTER_MCU_LINK, "Sending heartbeat during auditioning (if active)");
@@ -467,28 +462,11 @@ int main(void)
                 (uint16_t)(WaveX::AudioEngine::GetMaxCpuLoad() * 1000.0f)   // cpu_max_percent (scaled by 10)
             };
         
-            uint8_t heartbeat_buffer[64];
-            size_t pkt_size = WaveX::Protocol::ProtocolHandler::CreateHeartbeatPacket(heartbeat_buffer, sizeof(heartbeat_buffer), heartbeat_msg);
-            
-            #if WAVEX_MCU_LINK_PACKET_DEBUG
-            WAVEX_LOG_DAISY(INTER_MCU_LINK, "Created HEARTBEAT packet, size=%d, bytes: %02X %02X %02X %02X %02X %02X %02X %02X", 
-                            (int)pkt_size, heartbeat_buffer[0], heartbeat_buffer[1], heartbeat_buffer[2], heartbeat_buffer[3],
-                            heartbeat_buffer[4], heartbeat_buffer[5], heartbeat_buffer[6], heartbeat_buffer[7]);
-            WAVEX_LOG_DAISY(INTER_MCU_LINK, "HEARTBEAT CRC bytes: %02X %02X", heartbeat_buffer[pkt_size-2], heartbeat_buffer[pkt_size-1]);
-            #endif
-            
-            // WAVEX_LOG_DAISY(INTER_MCU_LINK, "DEBUG: Sending heartbeat packet - calling Spi_SendPreCreatedPacket");
-            // Heartbeat is fire-and-forget (no ACK needed)
-            #if WAVEX_MCU_LINK_PACKET_DEBUG
-            WAVEX_LOG_DAISY(INTER_MCU_LINK, "DEBUG Heartbeat prep: size=%d, bytes=%02X %02X %02X %02X %02X %02X %02X %02X",
-                           (int)pkt_size, heartbeat_buffer[0], heartbeat_buffer[1], heartbeat_buffer[2], heartbeat_buffer[3],
-                           heartbeat_buffer[4], heartbeat_buffer[5], heartbeat_buffer[6], heartbeat_buffer[7]);
-            #endif
-            int heartbeat_result = WaveX::Comm::Spi_SendPreCreatedPacket(heartbeat_buffer, pkt_size);
+            int heartbeat_result = WaveX::Comm::UartLinkSend(WaveX::Protocol::MSG_HEARTBEAT, &heartbeat_msg, sizeof(heartbeat_msg));
+            hw.PrintLine("DAISY: Heartbeat send result=%d", heartbeat_result);
             #if WAVEX_MCU_LINK_PACKET_DEBUG
             WAVEX_LOG_DAISY(INTER_MCU_LINK, "Heartbeat send result: %d", heartbeat_result);
             #endif
-            // WAVEX_LOG_DAISY(INTER_MCU_LINK, "DEBUG: Heartbeat packet send result: %d", heartbeat_result);
 
             #if WAVEX_MCU_LINK_PACKET_DEBUG
             float avg_cpu = WaveX::AudioEngine::GetAvgCpuLoad() * 100.0f;
@@ -499,14 +477,11 @@ int main(void)
                             (unsigned int)heartbeat_msg.cpu_avg_percent,
                             (unsigned int)heartbeat_msg.cpu_min_percent,
                             (unsigned int)heartbeat_msg.cpu_max_percent);
-            WAVEX_LOG_DAISY(INTER_MCU_LINK, "SPI Heartbeat sent: uptime=%lu loop_counter=%lu",
+            WAVEX_LOG_DAISY(INTER_MCU_LINK, "UART Heartbeat sent: uptime=%lu loop_counter=%lu",
                             (unsigned long)current_time, (unsigned long)loop_counter);
             #endif
             last_beacon = current_time;
         }
-        #else
-        WAVEX_LOG_DAISY(INTER_MCU_LINK, "ERROR: SPI link is NOT enabled!");
-        #endif
 
 
         // Periodic meter update - Daisy (backend) sends to ESP32 (frontend)
@@ -532,7 +507,7 @@ int main(void)
             uint16_t q_pkL  = (uint16_t)(fminf(1.f, m.peakL) * 32767.f);
             uint16_t q_pkR  = (uint16_t)(fminf(1.f, m.peakR) * 32767.f);
 
-            // Create meter push message using flexible packet system
+            // Create meter push message for UART transmission
             WaveX::Protocol::MeterPushMessage meter_msg = {
                 q_rmsL,  // rms_left
                 q_rmsR,  // rms_right
@@ -540,24 +515,16 @@ int main(void)
                 q_pkR    // peak_right
             };
             
-            uint8_t meter_buffer[64];
-            size_t pkt_size = WaveX::Protocol::ProtocolHandler::CreateMeterPushPacket(meter_buffer, sizeof(meter_buffer), meter_msg);
+            // Send meter data via UART (not SPI - SPI reserved for browse/wave only)
+            int result = WaveX::Comm::UartLinkSend(WaveX::Protocol::MSG_METER_PUSH, &meter_msg, sizeof(meter_msg));
             #if WAVEX_MCU_LINK_PACKET_DEBUG
-            WAVEX_LOG_DAISY(INTER_MCU_LINK, "DEBUG MeterPush prepared: size=%d", (int)pkt_size);
-            #endif
-
-            // Send meter data to ESP32 for audio level display
-            int result = WaveX::Comm::Spi_SendPreCreatedPacket(meter_buffer, pkt_size);
-            if (result) {
-                #if WAVEX_MCU_LINK_PACKET_DEBUG
-                WAVEX_LOG_DAISY(INTER_MCU_LINK, "Sent meter data: RMS L=%u R=%u, Peak L=%u R=%u", 
+            if (result > 0) {
+                WAVEX_LOG_DAISY(INTER_MCU_LINK, "Sent meter data via UART: RMS L=%u R=%u, Peak L=%u R=%u", 
                                (unsigned)q_rmsL, (unsigned)q_rmsR, (unsigned)q_pkL, (unsigned)q_pkR);
-                #endif
             } else {
-                #if WAVEX_MCU_LINK_PACKET_DEBUG
-                WAVEX_LOG_DAISY(INTER_MCU_LINK, "Failed to send meter data - queue full or SPI busy");
-                #endif
+                WAVEX_LOG_DAISY(INTER_MCU_LINK, "Failed to send meter data via UART: result=%d", result);
             }
+            #endif
         }
 
         #if WAVEX_DAISY_SD_CARD_ENABLED && (WAVEX_DAISY_SD_CARD_BACKEND == 1)

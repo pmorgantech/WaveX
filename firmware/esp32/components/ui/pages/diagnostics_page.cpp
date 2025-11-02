@@ -17,6 +17,7 @@
 
 #include "comm/statistics.h"
 #include "links/esp_spi_link.h"
+#include "../../shared/config/link_config.h"
 #include "inter_mcu.h"
 #include "config.h"  // For WAVEX_CPU_USAGE_METHOD
 
@@ -329,9 +330,14 @@ static void diagnostics_update_cb(void *arg)
     wavex_backend_heartbeat_t heartbeat;
     inter_mcu_get_backend_heartbeat_detailed(&heartbeat);
 
+    #if WAVEX_SPI_LINK_ENABLED
     spi_link_stats_t spi_stats;
     spi_link_get_stats(&spi_stats);
     bool spi_active = spi_link_is_active();
+    #else
+    struct { uint32_t packets_sent; uint32_t packets_received; uint32_t crc_errors; uint32_t irq_count; uint32_t rx_pool_empty; uint32_t last_activity_ms; } spi_stats = {};
+    bool spi_active = false;
+    #endif
 
     wavex_packet_stats_t packet_stats;
     inter_mcu_get_packet_stats(&packet_stats);

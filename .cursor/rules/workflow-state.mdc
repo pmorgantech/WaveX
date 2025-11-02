@@ -4,59 +4,115 @@ _Last updated: 2025-09-23_
 ## State
 Phase: CONSTRUCT
 Status: IN_PROGRESS
-Epic Reference: WAVEX_UI_REDESIGN_EPIC - Diagnostics Page Telemetry
+Epic Reference: WAVEX_DAISY_BACKEND_FIRMWARE_EPIC - Phase 1 Step 6 (1 kHz Control Tick Integration)
 
 ## Plan
-**Diagnostics Telemetry & Daisy Playback Investigation Plan**
+**UART Pending Buffer Blueprint**
 
 ### Context & References
-- Epic alignment: `WAVEX_UI_REDESIGN_EPIC` — ensure diagnostics UI reflects live backend telemetry.
-- Communication stack reference: `WAVEX_DAISY_BACKEND_FIRMWARE_EPIC` Phase 1 (SPI link + meters) for backend expectations.
-- Shared protocol definitions: verify consistency with `firmware/shared/spi_protocol/protocol.h`.
+- Epic alignment: `WAVEX_DAISY_BACKEND_FIRMWARE_EPIC` — Phase 1 Step 6 “1 kHz Control Tick Integration” covers UART transport stability for control telemetry.
+- Source focus: `firmware/daisy/src/comm/daisy_uart_link.cpp` (`pull_pending_into_frame_buffer`).
+- Build reference: `firmware/daisy/CMakeLists.txt` target configuration for Daisy firmware.
 
 ### Detailed Steps
-1. **Audit Statistics Manager Message Mapping**
-   - Compare `StatisticsManager::increment_packet_stat` switch cases against `WaveX::Protocol::MessageType` constants to detect legacy IDs (concerns raised by zeroed meter/heartbeat counts).
-   - Document any mismatches likely introduced during unified packet refactor.
-2. **Trace Meter Data Flow End-to-End**
-   - Follow `PacketRouter::handle_meter_push` → `inter_mcu_update_backend_meters` → `StatisticsManager::update_meter_data` → `meter_update_cb` to confirm shared state usage and timestamp/valid flags.
-   - Add temporary scoped logging (if needed) to verify callbacks fire while diagnostics screen is active; plan removal post-fix.
-3. **Validate Diagnostics Page Consumption**
-   - Review `diagnostics_update_cb` formatting of packet stats/heartbeat fields to ensure they reference current struct members and buffers, guarding against buffer formatting regressions.
-   - Confirm LVGL timer (`lvgl_update_timer_cb`) applies text when page is visible and that `wavex_ui_create_meter_display` populates global meter widgets used by `meter_update_cb`.
-4. **Investigate Daisy Playback Freeze During Audition**
-   - Examine Daisy-side audition pipeline (`firmware/daisy/src/main.cpp`, sampler, SPI queue helpers) for blocking behaviour after a few seconds; focus on SPI send routines and audio callback scheduling.
-   - Correlate freeze timing with meter push cadence and any queue saturation or watchdog triggers.
-5. **Implement Corrections**
-   - Update statistics mapping and any identified UI/backend glue issues to align with current protocol IDs.
-   - Apply Daisy-side fixes to prevent playback freeze (e.g., non-blocking SPI send, watchdog yields) while maintaining meter throughput.
-   - Remove or downgrade any temporary diagnostics logging added during investigation.
-6. **Documentation & Validation**
-   - Update relevant rule or documentation files if telemetry/communication expectations change.
-   - Rebuild ESP32 and Daisy firmware; verify diagnostics page reflects nonzero meter/heartbeat counts and meters animate during audition without Daisy freezing.
-
-### Deliverables & Acceptance
-- Diagnostics page shows accurate packet/meter stats and responsive meters during audition.
-- Daisy audition runs continuously without freezing; SPI telemetry remains stable.
-- Any temporary instrumentation removed; documentation updated per findings.
+1. **Reproduce & Document Compiler Error**
+   - Review the current build failure concerning `std::min` and the volatile `s_rx_pending_len`.
+   - Confirm interrupt-safety assumptions around `s_rx_pending_len` while `ScopedIrqBlocker` is active.
+2. **Design Safe Fix**
+   - Determine the correct approach for snapshotting the volatile buffer length without losing ISR semantics.
+   - Check for other `std::min` or arithmetic operations that touch `s_rx_pending_len` to ensure consistency.
+3. **Implement Code Change**
+   - Update `pull_pending_into_frame_buffer` to use a non-volatile local copy when calculating `to_copy`.
+   - Apply similar adjustments if additional sites require the same treatment.
+4. **Build Verification**
+   - Invoke the Daisy firmware build (`cmake --build /workspaces/WaveX/build/daisy --target daisy`) to confirm the compiler error is resolved.
+   - Capture any additional warnings for follow-up.
+5. **Documentation & Logging**
+   - Verify whether documentation or rules need updates; if none, note the decision in the workflow log.
+   - Record plan execution outcomes in `## Log` once validation succeeds.
 
 ## Rules
-- Follow project coding standards and use WAVEX_ macros for configuration values
-- Use Ext.log() with 'debug' severity for logging instead of console.log
-- Ensure all changes maintain compatibility with existing inter-MCU communication
-- Test thoroughly to verify HD protocol fix resolves communication issues
-- Update architecture documentation if significant protocol changes are made
+- Keep ISR-adjacent code minimal while `ScopedIrqBlocker` holds interrupts.
+- Preserve volatile-qualified globals but operate on local snapshots for arithmetic.
+- Maintain adherence to Daisy firmware coding standards and naming conventions.
+- Run required builds/tests after changes and document outcomes.
 
 ## Items
-- ESP32 HD slave configuration update (command_bits=8, address_bits=8)
-- Daisy master WRDMA protocol implementation (two-transaction write)
-- Daisy master RDDMA protocol implementation (three-transaction read)
-- HD protocol command definitions and CS control
-- Configuration validation and compatibility testing
-- Integration testing with existing packet handling
-- Documentation updates and code quality improvements
+- Investigate volatile length handling in `pull_pending_into_frame_buffer`.
+- Apply safe snapshot fix for `s_rx_pending_len` usage.
+- Rebuild Daisy firmware to verify compilation succeeds.
+- Update workflow log with results and documentation status.
 
 ## Log
+2025-11-01: CONSTRUCT phase - Renamed Dispatcher to Transport-Neutral Inter-MCU Handler
+- ✅ Renamed `ProcessSpiMessageByType` → `ProcessInterMcuMessage`
+- ✅ Replaced `daisy_spi_message_handlers.*` with `daisy_inter_mcu_message_handlers.*`
+- ✅ Updated UART/SPI code to include the new header and call the neutral function
+- ✅ CMake now builds `daisy_inter_mcu_message_handlers.cpp`
+- ✅ Removed standalone linker stub; dispatcher now provides a stub internally when SPI is disabled
+- 📝 Shared handler still reuses WaveX protocol payloads (identical on UART/SPI)
+- 📝 SPI-only features (browse/file streaming) remain guarded by `WAVEX_SPI_LINK_ENABLED`
+- 📝 Future follow-up: implement UART-specific responses for browse/sample ops when SPI stays off
+2025-11-01: CONSTRUCT phase - Temporarily Disabled SPI_LINK for UART-only Testing
+- ✅ **ACTION**: Changed `WAVEX_SPI_LINK_ENABLED` from 1 to 0 in link_config.h
+- ✅ SPI initialization code will now be completely skipped by `#if WAVEX_SPI_LINK_ENABLED` guards
+- ✅ This isolates UART initialization from any potential SPI-related issues
+- ✅ Daisy will boot with UART only - no SPI interference
+- 📝 This will show if SD card works without SPI link active
+- 📝 Will reveal if UART can initialize without any SPI code running
+- 📝 Can re-enable later once we confirm UART works
+2025-11-01: CONSTRUCT phase - CRITICAL: Found Root Cause - UART Logging Was Completely Disabled
+- ✅ **ROOT CAUSE FOUND**: `WAVEX_UART_DEBUG_LEVEL` was set to 0 in uart_debug_config.h
+- ✅ ALL UART_LOGI/UART_LOGE macros expanded to `((void)0)` - no output at all
+- ✅ This explains why we saw ZERO UART messages in logs
+- ✅ The "hang" after `Spi_DebugState()` is actually NOT a hang - just no visible output
+- ✅ System likely boots fine but we can't see UART status because logging is off
+- ✅ **FIX APPLIED**: Changed `WAVEX_UART_DEBUG_LEVEL` from 0 to 3 (INFO level)
+- ✅ Now UART_LOGI and UART_LOGE will actually print messages
+- 📝 This will reveal what's actually happening with UART initialization
+- 📝 SD card "not ready" may be unrelated or consequence of system state
+2025-11-01: CONSTRUCT phase - Added Detailed UART Init Logging to Find Hang Point
+- ✅ **CORRECTION**: DMA2_Stream4 (UART TX) does NOT conflict with DMA1_Stream4 (SAI2_B)
+- ✅ Different DMA controllers (DMA1 vs DMA2) - no actual conflict
+- ✅ SAI2 priority settings were NOT the root cause
+- ✅ Reverted SAI2 priority settings back to original (they're fine)
+- ✅ **REAL ISSUE**: Daisy is rebooting/resetting after SPI init (duplicated output in logs)
+- ✅ System never reaches `UartLinkInit()` - hangs/resets before that
+- ✅ **NEW APPROACH**: Added comprehensive logging inside `configure_uart()` to pinpoint exact hang location
+- 📝 Logs will show: START → Config set → Pins configured → Init call → Init returned → COMPLETE
+- 📝 Whichever log is missing will show exactly where the hang occurs
+- 📝 Next test will reveal if it's GetPin(), uart.Init(), or something else
+2025-11-01: CONSTRUCT phase - Fixed SPI Slave Task Startup and Added UART Logging
+- ✅ Disabled ESP32 SPI slave task at startup (commented out spi_link_start call)
+- ✅ SPI slave will only start on-demand when user enters file browser
+- ✅ This eliminates continuous SPI queue timeout errors
+- ✅ Added comprehensive UART initialization logging on both ESP32 and Daisy
+- ✅ Daisy logs: "UART link initialized: UART4 @ [baud] baud"
+- ✅ Daisy logs: "UART link started - DMA listener active"
+- ✅ ESP32 logs: "UART link initialized: UART[n] @ [baud] baud on GPIO[TX]/GPIO[RX]"
+- ✅ ESP32 logs: "UART link started - task created successfully"
+- 📝 System should now boot with UART active and SPI idle
+2025-11-01: CONSTRUCT phase - Fixed SPI/UART Protocol Bifurcation Issues
+- ✅ Removed SPI SYNC test packet from Daisy initialization (should only be UART)
+- ✅ Changed METER_PUSH from SPI to UART transmission
+- ✅ Confirmed HEARTBEAT already using UART correctly
+- ✅ Confirmed BROWSE_RESP correctly using SPI (file browser)
+- 📝 SPI now reserved ONLY for: BROWSE_RESP and WAVE_DATA_CHUNK
+- 📝 UART handles: HEARTBEAT, METER_PUSH, SYNC, and all other control messages
+- 📝 This should eliminate SPI queue timeout issues - no polling needed if no browse active
+2025-11-01: CONSTRUCT phase - SPI Hang Root Cause Identified
+- ✅ Confirmed "Sent packet type=0x00" is SPI SYNC packet from Daisy initialization
+- ✅ Root cause: Daisy (SPI master) sends one SYNC packet then stops initiating transactions
+- ✅ ESP32 (SPI slave) has 3 transactions queued (queue_size=3) waiting for clock
+- ✅ ESP32 queue fills up, subsequent queue attempts timeout after 1200ms
+- ✅ Deadlock: Daisy waits for ESP32 response, ESP32 waits for Daisy to clock data
+- 📝 Solution needed: Daisy must periodically initiate SPI transactions as master to poll ESP32
+- 📝 Current ProcessQueuedSpiMessage only sends when Daisy has outgoing data
+- 📝 Need polling mechanism: Daisy should initiate RX transaction even with no TX data
+2025-11-01: CONSTRUCT phase - UART pending buffer volatility fix in progress
+- ✅ Captured volatile snapshot in `pull_pending_into_frame_buffer` before `std::min`
+- 🔄 Daisy build pending (awaiting user approval to run `cmake --build /workspaces/WaveX/build/daisy --target daisy`)
+- 📝 Heartbeat send path confirmed in `firmware/daisy/src/main.cpp` via `UartLinkSend`
 2025-09-27: CONSTRUCT phase - Fixed CRC16 Mismatch Between ESP32 and Daisy (Complete Solution)
 - ✅ **CRC16 MISMATCH IDENTIFIED**: Daisy was using CRC-16-CCITT (polynomial 0x1021) while ESP32 uses CRC-16-ANSI (polynomial 0x8408)
 - ✅ **BETTER APPROACH CHOSEN**: Updated ESP32 to match Daisy's CRC-16-CCITT instead of vice versa

@@ -26,7 +26,7 @@
 #include "config/logging_config.h" // For logging macros
 #include "../storage/fs_browse.h" // For file browsing
 #include "../audio/audio_engine.h" // For sample audition
-#include "daisy_spi_message_handlers.h" // For message handlers
+#include "daisy_inter_mcu_message_handlers.h" // For message handlers
 #include "daisy_spi_filesystem.h" // For filesystem function declarations
 
 using namespace daisy;
@@ -727,7 +727,7 @@ static bool ProcessReceivedPacket(const uint8_t* rx_buf, size_t transfer_size)
     }
 
     // Route message by type - pass only the payload (packet processing is complete)
-    ProcessSpiMessageByType(msg_type, sequence_number, payload, payload_size);
+    ProcessInterMcuMessage(msg_type, sequence_number, payload, payload_size);
     return true;
 }
 
@@ -953,7 +953,7 @@ void ProcessQueuedSpiMessage()
             size_t payload_size = packet_size - 6; // header(4) + crc(2)
             const uint8_t* payload = packet_data + 4;
             
-            ProcessSpiMessageByType(msg_type, sequence_number, payload, payload_size);
+            ProcessInterMcuMessage(msg_type, sequence_number, payload, payload_size);
         }
         
         // Dequeue

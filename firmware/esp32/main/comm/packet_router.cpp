@@ -1,6 +1,7 @@
 #include "packet_router.h"
 #include "inter_mcu.h"
 #include <functional>
+#include <cstring>
 
 #ifdef ESP_PLATFORM
 #include "esp_log.h"
@@ -11,6 +12,15 @@ namespace Comm {
 
 using namespace WaveX::Protocol;
 
+namespace {
+PacketRouter g_packet_router_instance;
+}
+
+PacketRouter& GetPacketRouter()
+{
+    return g_packet_router_instance;
+}
+
 void PacketRouter::route_packet(const uint8_t* packet_data, size_t packet_len)
 {
     if (!packet_data || packet_len < 6) { // Minimum size for unified packet (4 header + 2 CRC)
@@ -20,6 +30,18 @@ void PacketRouter::route_packet(const uint8_t* packet_data, size_t packet_len)
 
     // Route using unified packet format
     route_unified_packet(packet_data, packet_len);
+}
+
+void PacketRouter::route_uart_message(uint8_t msg_type, const uint8_t* payload, size_t payload_len, uint8_t flags, uint16_t sequence_number)
+{
+    ESP_LOGI("packet_router", "UART packet: msg_type=0x%02X, flags=0x%02X, seq=%u, payload_size=%d",
+             msg_type, flags, sequence_number, static_cast<int>(payload_len));
+
+    route_by_message_type(msg_type, payload, payload_len, flags, sequence_number);
+
+    if (m_stats_callback) {
+        m_stats_callback(msg_type);
+    }
 }
 
 void PacketRouter::route_unified_packet(const uint8_t* packet_data, size_t packet_len)

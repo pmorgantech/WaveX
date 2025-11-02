@@ -70,8 +70,15 @@ extern "C" {
 // -----------------------------------------------------------------------------
 #define WAVEX_ESP_MIDI_UART_NUM UART_NUM_2
 #define WAVEX_ESP_MIDI_TX 32 // UART2 TX
-#define WAVEX_ESP_MIDI_RX 33 // UART2 RX
+#define WAVEX_ESP_MIDI_RX 24 // UART2 RX (moved from GPIO33 to resolve encoder conflict)
 #define WAVEX_ESP_MIDI_BAUD 31250
+
+// Inter-MCU UART (UART1) - control link to Daisy
+#define WAVEX_ESP_UART_INTER_NUM    UART_NUM_1
+#define WAVEX_ESP_UART_INTER_TX     22
+#define WAVEX_ESP_UART_INTER_RX     23
+#define WAVEX_ESP_UART_INTER_BAUD   2000000
+#define WAVEX_ESP_UART_INTER_BUF_SIZE 2048
 
 
 // -----------------------------------------------------------------------------
@@ -115,6 +122,13 @@ extern "C" {
 #define WAVEX_DAISY_SPI_CS      7     // D7: SPI1_NSS (chip select to ESP32)
 // Attention signal from ESP32 (active high)
 #define WAVEX_DAISY_ATTN_IN     0     // D0: ESP32 attention input to Daisy
+
+// Inter-MCU UART (UART4) - control link from Daisy
+#define WAVEX_DAISY_UART_INTER_PERIPH 3  // matches daisy::UartHandler::Config::Peripheral::UART_4
+#define WAVEX_DAISY_UART_INTER_TX      12   // D12: UART4_TX (PORTB9)
+#define WAVEX_DAISY_UART_INTER_RX      11   // D11: UART4_RX (PORTB8)
+#define WAVEX_DAISY_UART_INTER_BAUD    2000000
+#define WAVEX_DAISY_UART_INTER_BUF_SIZE 2048
 
 // Audio I/O (Built-in AK4556 Codec)
 #define WAVEX_DAISY_AUDIO_IN_L  -1   // Built-in: Left audio input

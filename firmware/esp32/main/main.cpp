@@ -56,13 +56,13 @@ extern "C" void app_main(void)
     
     ESP_LOGI(TAG, "DEBUG: Checkpoint 4 - About to initialize inter-MCU");
     
-    // Initialize inter-MCU with regular SPI (non-HD mode)
-    ESP_LOGI(TAG, "DEBUG: Checkpoint 5 - Starting inter-MCU with regular SPI mode");
+    // Initialize inter-MCU over UART
+    ESP_LOGI(TAG, "DEBUG: Checkpoint 5 - Starting inter-MCU with UART mode");
     esp_err_t inter_mcu_result = inter_mcu_init();
     if (inter_mcu_result == ESP_OK) {
         ESP_LOGI(TAG, "DEBUG: Checkpoint 5 - Inter-MCU initialization completed successfully");
         
-        // Start inter-MCU communication (this starts the SPI link)
+        // Start inter-MCU communication (UART link)
         esp_err_t start_result = inter_mcu_start();
         if (start_result == ESP_OK) {
             ESP_LOGI(TAG, "DEBUG: Checkpoint 5a - Inter-MCU communication started successfully");
@@ -94,7 +94,7 @@ extern "C" void app_main(void)
 
     ESP_LOGI(TAG, "DEBUG: Checkpoint 7 - About to delay for UI start");
 
-    // Delay UI start slightly to avoid contention with SPI bus init
+    // Delay UI start slightly to avoid contention with early init
     #ifdef ESP_PLATFORM
     vTaskDelay(pdMS_TO_TICKS(200));
     ESP_LOGI(TAG, "DEBUG: Checkpoint 8 - Delay completed");
@@ -119,7 +119,7 @@ extern "C" void app_main(void)
     ESP_LOGI(TAG, "DEBUG: Checkpoint 11 - UI disabled");
     #endif
 
-    // Periodically probe Daisy status via SPI even if IRQ line is not wired
+    // Periodically probe Daisy status (UART-based comms now)
     int probe_counter = 0;
 
     ESP_LOGI(TAG, "DEBUG: Checkpoint 12 - About to log initialization complete");
@@ -144,10 +144,7 @@ extern "C" void app_main(void)
             last_heap_log = current_time;
         }
 
-        #if WAVEX_SPI_LINK_ENABLED
-        // Process SPI link without excessive logging
-        // SPI operations are handled by inter_mcu
-        #endif
+        // UART operations are handled by inter_mcu
 
         #ifdef ESP_PLATFORM
         vTaskDelay(pdMS_TO_TICKS(1000));  // 2 second loop - slower to reduce load

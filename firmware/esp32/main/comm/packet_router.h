@@ -16,6 +16,9 @@ public:
     
     // Main entry point - routes packets based on format and type
     void route_packet(const uint8_t* packet_data, size_t packet_len);
+
+    // Route already-parsed UART message payloads
+    void route_uart_message(uint8_t msg_type, const uint8_t* payload, size_t payload_len, uint8_t flags, uint16_t sequence_number);
     
     // Statistics callback
     void set_stats_callback(std::function<void(uint8_t)> callback) {
@@ -46,6 +49,14 @@ private:
     // Statistics callback
     std::function<void(uint8_t)> m_stats_callback;
 };
+
+} // namespace Comm
+} // namespace WaveX
+
+namespace WaveX {
+namespace Comm {
+
+PacketRouter& GetPacketRouter();
 
 } // namespace Comm
 } // namespace WaveX

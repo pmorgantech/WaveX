@@ -26,6 +26,8 @@
 
 using namespace WaveX::Protocol;
 
+#if WAVEX_SPI_LINK_ENABLED
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -48,7 +50,7 @@ static const char *TAG = "esp_spi_link";
 #define parse_wave_packet ProtocolHandler::ParseWaveXPacket
 
 // Global packet router instance
-static WaveX::Comm::PacketRouter s_packet_router;
+static WaveX::Comm::PacketRouter& s_packet_router = WaveX::Comm::GetPacketRouter();
 
 // SPI slave transaction buffers - DMA-capable and aligned
 // Use triple buffering for efficient packet processing
@@ -820,3 +822,5 @@ esp_err_t spi_link_stop(void)
 #ifdef __cplusplus
 }
 #endif
+
+#endif // WAVEX_SPI_LINK_ENABLED

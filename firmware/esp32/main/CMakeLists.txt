@@ -8,11 +8,13 @@ idf_component_register(
         "comm/statistics.cpp"
         "comm/listeners.cpp"
         "links/esp_spi_link.cpp"
+        "links/esp_uart_link.cpp"
     INCLUDE_DIRS
         "."
         "comm"
         "links"
         "../../shared/spi_protocol"
+        "../../shared/uart_protocol"
         "../../shared/config"
     REQUIRES
         "driver"

@@ -15,8 +15,9 @@
 #include "spi_protocol/protocol.h" // For WaveX::Protocol namespace
 #include "../storage/fs_browse.h" // For file browsing
 #include "../audio/audio_engine.h" // For sample audition
-#include "daisy_spi_message_handlers.h"
+#include "daisy_inter_mcu_message_handlers.h"
 #include "daisy_spi_filesystem.h"
+#include "daisy_uart_link.h"
 
 using namespace daisy;
 using namespace WaveX::Protocol;
@@ -147,22 +148,35 @@ void ProcessBrowseRequest(const char* path, size_t start_index, uint8_t max_entr
         wire_entries[i].name[sizeof(wire_entries[i].name) - 1] = '\0';
     }
     
-    // Create browse response packet using the protocol handler
-    uint8_t response_buffer[MAX_PKT_SIZE];
-    size_t pkt_size = ProtocolHandler::CreateBrowseRespPacket(response_buffer, sizeof(response_buffer),
-                                                           total_count, wire_entries, entries_written);
+    // Create browse response payload: total_count (4 bytes) + n_entries (1 byte) + entries
+    uint8_t browse_payload[2048];
+    size_t payload_size = 0;
     
-    if (pkt_size > 0) {
-        // Send the response
+    // Copy total_count
+    uint32_t total_count_le = total_count;
+    memcpy(browse_payload, &total_count_le, sizeof(uint32_t));
+    payload_size += sizeof(uint32_t);
+    
+    // Copy n_entries count
+    browse_payload[payload_size++] = entries_written;
+    
+    // Copy entries array
+    if (entries_written > 0) {
+        size_t entries_size = entries_written * sizeof(FileEntryWire);
+        memcpy(browse_payload + payload_size, wire_entries, entries_size);
+        payload_size += entries_size;
+    }
+    
+    // Send the response via UART
+    if (s_hw) {
+        s_hw->PrintLine("DAISY: Sending browse response via UART: total=%u count=%u size=%u", 
+                       (uint32_t)total_count, (uint32_t)entries_written, (uint32_t)payload_size);
+    }
+    
+    int send_result = UartLinkSend(WaveX::Protocol::MSG_BROWSE_RESP, browse_payload, payload_size);
+    if (send_result < 0) {
         if (s_hw) {
-            s_hw->PrintLine("DAISY: Sending browse response: total=%u start=%u count=%u", 
-                           (uint32_t)total_count, (uint32_t)start_index, (uint32_t)entries_written);
-        }
-        
-        Spi_SendPreCreatedPacket(response_buffer, pkt_size);
-    } else {
-        if (s_hw) {
-            s_hw->PrintLine("DAISY: Failed to create browse response packet");
+            s_hw->PrintLine("DAISY: Failed to send browse response (queue full?)");
         }
     }
 }
@@ -181,9 +195,7 @@ void ProcessSamplePlayRequest(const char* file_path)
     {
         AckMessage ack;
         ack.serial_id = 0; // TODO: Get actual serial ID if needed
-        uint8_t response_buffer[MAX_PKT_SIZE];
-        size_t pkt_size = ProtocolHandler::CreateAckPacket(response_buffer, sizeof(response_buffer), ack);
-        Spi_SendPreCreatedPacket(response_buffer, pkt_size);
+        WaveX::Comm::UartLinkSend(WaveX::Protocol::MSG_ACK, &ack, sizeof(ack));
     }
 
     // Stop any current playback first (may touch filesystem/audio state)
@@ -201,9 +213,7 @@ void ProcessSamplePlayRequest(const char* file_path)
         strncpy(error.msg, "Failed to open WAV file", sizeof(error.msg) - 1);
         error.msg[sizeof(error.msg) - 1] = '\0';
         
-        uint8_t response_buffer[MAX_PKT_SIZE];
-        size_t pkt_size = ProtocolHandler::CreateErrorPacket(response_buffer, sizeof(response_buffer), error);
-        Spi_SendPreCreatedPacket(response_buffer, pkt_size);
+        WaveX::Comm::UartLinkSend(WaveX::Protocol::MSG_ERROR, &error, sizeof(error));
         return;
     }
     
@@ -239,9 +249,7 @@ void ProcessSampleStopRequest(uint8_t slot)
     stop_resp.reserved[1] = 0;
     stop_resp.reserved[2] = 0;
     
-    uint8_t response_buffer[MAX_PKT_SIZE];
-    size_t pkt_size = ProtocolHandler::CreateSampleStopRespPacket(response_buffer, sizeof(response_buffer), stop_resp);
-    Spi_SendPreCreatedPacket(response_buffer, pkt_size);
+    WaveX::Comm::UartLinkSend(WaveX::Protocol::MSG_SAMPLE_STOP_RESP, &stop_resp, sizeof(stop_resp));
     
     if (s_hw) {
         s_hw->PrintLine("DAISY: Sample stop response sent");
@@ -292,9 +300,7 @@ void ProcessSampleGetPathRequest(uint32_t file_index)
         strncpy(response.path, file_path, sizeof(response.path) - 1);
         response.path[sizeof(response.path) - 1] = '\0';
         
-        uint8_t response_buffer[MAX_PKT_SIZE];
-        size_t pkt_size = ProtocolHandler::CreateSamplePathResponsePacket(response_buffer, sizeof(response_buffer), response);
-        Spi_SendPreCreatedPacket(response_buffer, pkt_size);
+        WaveX::Comm::UartLinkSend(WaveX::Protocol::MSG_SAMPLE_GET_PATH_RESP, &response, sizeof(response));
         
         if (s_hw) {
             s_hw->PrintLine("DAISY: Sent file path response: index=%lu path='%s'", 

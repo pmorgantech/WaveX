@@ -1,7 +1,7 @@
 #include "inter_mcu.h"
 #include "comm/statistics.h"
 #include "comm/shared_packet_handler.h"
-#include "links/esp_spi_link.h"
+#include "links/esp_uart_link.h"
 #include "../../shared/spi_protocol/protocol.h"
 #include "../../shared/config/link_config.h"
 #include <string.h>
@@ -22,9 +22,9 @@
 
 static const char* TAG = "InterMCU";
 
-// Direct SPI link state
-static bool s_spi_initialized = false;
-static bool s_spi_started = false;
+// UART link state
+static bool s_uart_initialized = false;
+static bool s_uart_started = false;
 
 // Statistics tracking
 static StatisticsManager s_statistics;
@@ -33,6 +33,20 @@ static StatisticsManager s_statistics;
 static volatile bool s_suspended = false;
 static volatile bool s_initialized = false;
 
+static int send_uart_message(uint8_t msg_type, const void* payload, uint16_t len)
+{
+    if (!s_uart_initialized || !s_uart_started) {
+        ESP_LOGE(TAG, "UART link not ready (msg=0x%02X)", msg_type);
+        return -1;
+    }
+
+    int result = uart_link_send(msg_type, payload, len);
+    if (result < 0) {
+        ESP_LOGE(TAG, "UART send failed (msg=0x%02X)", msg_type);
+    }
+    return result;
+}
+
 esp_err_t inter_mcu_init()
 {
     if (s_initialized) {
@@ -40,16 +54,15 @@ esp_err_t inter_mcu_init()
         return ESP_OK;
     }
     
-    ESP_LOGI(TAG, "Initializing inter-MCU communication...");
-    
-    // Initialize SPI link directly
-    esp_err_t ret = spi_link_init();
+    ESP_LOGI(TAG, "Initializing inter-MCU communication (UART only)...");
+
+    // Initialize UART link only
+    esp_err_t ret = uart_link_init();
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "SPI link initialization failed");
+        ESP_LOGE(TAG, "UART link initialization failed");
         return ret;
     }
-    
-    s_spi_initialized = true;
+    s_uart_initialized = true;
     ESP_LOGI(TAG, "Inter-MCU communication initialized successfully");
     s_initialized = true;
     
@@ -63,16 +76,14 @@ esp_err_t inter_mcu_start()
         return -1; // ESP_ERR_INVALID_STATE
     }
     
-    ESP_LOGI(TAG, "Starting inter-MCU communication...");
-    
-    // Start SPI link directly
-    esp_err_t ret = spi_link_start();
+    ESP_LOGI(TAG, "Starting inter-MCU communication (UART only)...");
+
+    esp_err_t ret = uart_link_start();
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "SPI link start failed");
+        ESP_LOGE(TAG, "UART link start failed");
         return ret;
     }
-    
-    s_spi_started = true;
+    s_uart_started = true;
 
     ESP_LOGI(TAG, "Inter-MCU communication started successfully");
     
@@ -90,7 +101,7 @@ esp_err_t inter_mcu_send_control_change(uint8_t parameter, uint8_t channel, uint
     msg.channel = channel;
     msg.value = value;
     
-    int result = spi_link_send(WaveX::Protocol::MSG_CONTROL_CHANGE, &msg, sizeof(msg));
+    int result = send_uart_message(WaveX::Protocol::MSG_CONTROL_CHANGE, &msg, sizeof(msg));
     return result ? ESP_OK : -1; // ESP_FAIL
 }
 
@@ -106,7 +117,7 @@ esp_err_t inter_mcu_send_note_on(uint8_t note, uint8_t velocity, uint8_t channel
     msg.channel = channel;
     msg.reserved = 0;
     
-    int result = spi_link_send(WaveX::Protocol::MSG_NOTE_ON, &msg, sizeof(msg));
+    int result = send_uart_message(WaveX::Protocol::MSG_NOTE_ON, &msg, sizeof(msg));
     return result ? ESP_OK : -1; // ESP_FAIL
 }
 
@@ -122,7 +133,7 @@ esp_err_t inter_mcu_send_note_off(uint8_t note, uint8_t channel)
     msg.channel = channel;
     msg.reserved = 0;
     
-    int result = spi_link_send(WaveX::Protocol::MSG_NOTE_OFF, &msg, sizeof(msg));
+    int result = send_uart_message(WaveX::Protocol::MSG_NOTE_OFF, &msg, sizeof(msg));
     return result ? ESP_OK : -1; // ESP_FAIL
 }
 
@@ -137,7 +148,7 @@ esp_err_t inter_mcu_send_sample_ctrl(uint8_t slot, uint8_t cmd, float rate)
     msg.cmd = cmd;
     msg.rate = rate;
     
-    int result = spi_link_send(WaveX::Protocol::MSG_SAMPLE_CTRL, &msg, sizeof(msg));
+    int result = send_uart_message(WaveX::Protocol::MSG_SAMPLE_CTRL, &msg, sizeof(msg));
     return result ? ESP_OK : -1; // ESP_FAIL
 }
 
@@ -153,7 +164,7 @@ esp_err_t inter_mcu_send_preview_req(uint8_t slot, uint32_t start, uint32_t end,
     msg.end = end;
     msg.decim = decim;
     
-    int result = spi_link_send(WaveX::Protocol::MSG_PREVIEW_REQ, &msg, sizeof(msg));
+    int result = send_uart_message(WaveX::Protocol::MSG_PREVIEW_REQ, &msg, sizeof(msg));
     return result ? ESP_OK : -1; // ESP_FAIL
 }
 
@@ -164,7 +175,7 @@ void inter_mcu_send_test_messages()
         return;
     }
     
-    ESP_LOGI(TAG, "Sending test messages via SPI link...");
+    ESP_LOGI(TAG, "Sending test messages via UART link...");
     
     // Send a simple control change test message
     WaveX::Protocol::ControlChangeMessage msg;
@@ -172,7 +183,7 @@ void inter_mcu_send_test_messages()
     msg.channel = 0;
     msg.value = 100;
     
-    int result = spi_link_send(WaveX::Protocol::MSG_CONTROL_CHANGE, &msg, sizeof(msg));
+    int result = send_uart_message(WaveX::Protocol::MSG_CONTROL_CHANGE, &msg, sizeof(msg));
     if (result) {
         ESP_LOGI(TAG, "Test message sent successfully");
     } else {
@@ -186,8 +197,7 @@ bool inter_mcu_is_busy()
         return false;
     }
     
-    // For now, SPI link doesn't have a busy state, so return false
-    // This could be enhanced to check SPI transaction queue status
+    // For now, UART link doesn't expose a busy state; return false
     return false;
 }
 
@@ -199,7 +209,7 @@ void inter_mcu_set_suspended(bool suspended)
 
 void inter_mcu_toggle_debug()
 {
-    ESP_LOGI(TAG, "Debug mode toggled (SPI link only)");
+    ESP_LOGI(TAG, "Debug mode toggled (UART link)");
 }
 
 // Implement missing functions that are declared in the header
@@ -392,6 +402,10 @@ void inter_mcu_increment_packet_stat(uint8_t packet_type)
 void inter_mcu_process_daisy_control_message(uint8_t type, const uint8_t* payload, uint8_t len)
 {
 #ifdef ESP_PLATFORM
+    // NOTE: As of current design, only the following Daisy->ESP32 messages are expected over UART:
+    // - MSG_BROWSE_RESP (file browser responses)
+    // - MSG_WAVE_CHUNK (preview/sample wave chunks)
+    // Arguably also MSG_METER_PUSH in future; leave it on UART when enabled.
     switch (type) {
         case WaveX::Protocol::MSG_SYNC:
             // Synchronization message from Daisy - acknowledge receipt
@@ -490,9 +504,9 @@ esp_err_t inter_mcu_send_browse_req(const char* path, uint8_t start_index)
         ESP_LOGD("inter_mcu", "  [%d] = 0x%02X", (int)i, payload[i]);
     }
     
-    ESP_LOGI("inter_mcu", "DEBUG - About to call spi_link_send with MSG_BROWSE_REQ=0x%02X", WaveX::Protocol::MSG_BROWSE_REQ);
-    int result = spi_link_send(WaveX::Protocol::MSG_BROWSE_REQ, payload.data(), (uint16_t)payload_len);
-    ESP_LOGI("inter_mcu", "DEBUG - spi_link_send returned: %d", result);
+    ESP_LOGI("inter_mcu", "DEBUG - About to call send_uart_message with MSG_BROWSE_REQ=0x%02X", WaveX::Protocol::MSG_BROWSE_REQ);
+    int result = send_uart_message(WaveX::Protocol::MSG_BROWSE_REQ, payload.data(), (uint16_t)payload_len);
+    ESP_LOGI("inter_mcu", "DEBUG - UART send returned: %d", result);
     
     return result ? ESP_OK : -1; // ESP_FAIL
 }
@@ -506,7 +520,7 @@ esp_err_t inter_mcu_send_sample_play_index_req(uint32_t file_index)
     WaveX::Protocol::SamplePlayIndexMessage msg;
     msg.index = file_index;
     
-    int result = spi_link_send(WaveX::Protocol::MSG_SAMPLE_PLAY_INDEX_REQ, &msg, sizeof(msg));
+    int result = send_uart_message(WaveX::Protocol::MSG_SAMPLE_PLAY_INDEX_REQ, &msg, sizeof(msg));
     return result ? ESP_OK : -1; // ESP_FAIL
 }
 
@@ -522,7 +536,7 @@ esp_err_t inter_mcu_send_sample_stop_req()
     msg.reserved[1] = 0;
     msg.reserved[2] = 0;
     
-    int result = spi_link_send(WaveX::Protocol::MSG_SAMPLE_STOP_REQ, &msg, sizeof(msg));
+    int result = send_uart_message(WaveX::Protocol::MSG_SAMPLE_STOP_REQ, &msg, sizeof(msg));
     return result ? ESP_OK : -1; // ESP_FAIL
 }
 

@@ -9,7 +9,8 @@ set(FIRMWARE_SOURCES
     src/main.cpp
     src/config.hpp
     src/comm/daisy_spi_link.cpp
-    src/comm/daisy_spi_message_handlers.cpp
+    src/comm/daisy_inter_mcu_message_handlers.cpp
+    src/comm/daisy_uart_link.cpp
     src/comm/daisy_spi_filesystem.cpp
     src/audio/audio_adapter.cpp
     src/audio/audio_engine.cpp
@@ -22,6 +23,7 @@ set(FIRMWARE_SOURCES
     src/cv_bus.hpp
     src/timebase.hpp
     ../shared/spi_protocol/protocol.cpp
+    ../shared/uart_protocol/uart_protocol.cpp
 )
 
 # Set Daisy storage to QSPI for more flash memory (7.75MB vs 128KB)
