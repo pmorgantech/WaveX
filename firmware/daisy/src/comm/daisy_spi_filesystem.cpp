@@ -1,6 +1,7 @@
+#include "config/hardware_config.h" // For WAVEX_INTER_MCU_LINK_ENABLED
 #include "daisy_spi_link.h"
 
-#if WAVEX_SPI_LINK_ENABLED
+#if WAVEX_INTER_MCU_LINK_ENABLED
 
 // Force platform define for linter
 #ifndef DAISY_PLATFORM
@@ -11,6 +12,7 @@
 #include <stdint.h>
 #include "daisy_seed.h"
 
+#include "config/hardware_config.h" // For WAVEX_INTER_MCU_LINK_ENABLED
 #include "config/logging_config.h" // For logging macros
 #include "spi_protocol/protocol.h" // For WaveX::Protocol namespace
 #include "../storage/fs_browse.h" // For file browsing
@@ -21,9 +23,6 @@
 
 using namespace daisy;
 using namespace WaveX::Protocol;
-
-// Forward declaration for s_hw (defined in main file)
-extern daisy::DaisySeed* s_hw;
 
 // Forward declaration for Spi_SendPreCreatedPacket (defined in main file)
 extern bool Spi_SendPreCreatedPacket(const uint8_t* packet_data, size_t packet_size);
@@ -316,4 +315,4 @@ void ProcessSampleGetPathRequest(uint32_t file_index)
 } // namespace Comm
 } // namespace WaveX
 
-#endif // WAVEX_SPI_LINK_ENABLED
+#endif // WAVEX_INTER_MCU_LINK_ENABLED

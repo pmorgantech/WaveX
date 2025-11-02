@@ -3,32 +3,23 @@
 #include <string.h>
 
 #include "config/logging_config.h"
+#include "config/uart_debug_config.h"
 #include "spi_protocol/protocol.h"
+#include "daisy_spi_filesystem.h"
+#include "daisy_uart_link.h"
 
 #include "daisy_seed.h"
 
 #if WAVEX_SPI_LINK_ENABLED
 #include "daisy_spi_link.h"
-#include "daisy_spi_filesystem.h"
 #endif
 
 namespace WaveX {
 namespace Comm {
 
-// Forward declaration for hardware logger (defined in main.cpp)
-#if WAVEX_SPI_LINK_ENABLED
-extern daisy::DaisySeed* s_hw;
-#endif
-
-#if WAVEX_SPI_LINK_ENABLED
-
-// -----------------------------------------------------------------------------
-// Existing SPI message handling implementation (transport-agnostic payload)
-// -----------------------------------------------------------------------------
-
 using namespace WaveX::Protocol;
 
-// Forward declarations for message handler functions (defined later in this file)
+// Forward declarations for message handler functions
 static void HandleSyncMessage(const uint8_t* payload, size_t payload_size);
 static void HandleControlChangeMessage(const uint8_t* payload, size_t payload_size);
 static void HandleNoteMessage(const uint8_t* payload, size_t payload_size);
@@ -51,6 +42,7 @@ static void HandleSampleGetPathResponseMessage(const uint8_t* payload, size_t pa
 static void HandleAckMessage(const uint8_t* payload, size_t payload_size);
 static void HandleErrorMessage(const uint8_t* payload, size_t payload_size);
 
+// Message dispatcher - transport agnostic (works with both SPI and UART)
 void ProcessInterMcuMessage(uint8_t msg_type,
                             uint16_t sequence_number,
                             const uint8_t* payload,
@@ -221,6 +213,8 @@ static void HandleHeartbeatMessage(const uint8_t* payload, size_t payload_size) 
     if (s_hw) s_hw->PrintLine("DAISY: HandleHeartbeatMessage called - payload_size=%d", (int)payload_size);
 }
 
+// Browse request handler - transport agnostic (works via SPI or UART)
+// Requires filesystem support and inter-MCU communication to be enabled
 static void HandleBrowseRequestMessage(const uint8_t* payload, size_t payload_size)
 {
     if (s_hw) {
@@ -264,6 +258,7 @@ static void HandleBrowseResponseMessage(const uint8_t* payload, size_t payload_s
     if (s_hw) s_hw->PrintLine("DAISY: HandleBrowseResponseMessage called - payload_size=%d", (int)payload_size);
 }
 
+// Sample play request handler - requires inter-MCU comm and audio/filesystem support
 static void HandleSamplePlayRequestMessage(const uint8_t* payload, size_t payload_size)
 {
     if (s_hw) s_hw->PrintLine("DAISY: HandleSamplePlayRequestMessage called - payload_size=%d", (int)payload_size);
@@ -273,6 +268,7 @@ static void HandleSamplePlayRequestMessage(const uint8_t* payload, size_t payloa
     }
 }
 
+// Sample stop request handler - requires inter-MCU comm and audio support  
 static void HandleSampleStopRequestMessage(const uint8_t* payload, size_t payload_size)
 {
     if (s_hw) s_hw->PrintLine("DAISY: HandleSampleStopRequestMessage called - payload_size=%d", (int)payload_size);
@@ -287,6 +283,7 @@ static void HandleSampleStatusMessage(const uint8_t* payload, size_t payload_siz
     if (s_hw) s_hw->PrintLine("DAISY: HandleSampleStatusMessage called - payload_size=%d", (int)payload_size);
 }
 
+// Sample play index request handler - requires inter-MCU comm and audio/filesystem support
 static void HandleSamplePlayIndexRequestMessage(const uint8_t* payload, size_t payload_size)
 {
     if (s_hw) s_hw->PrintLine("DAISY: HandleSamplePlayIndexRequestMessage called - payload_size=%d", (int)payload_size);
@@ -325,24 +322,6 @@ static void HandleAckMessage(const uint8_t* payload, size_t payload_size) {
 static void HandleErrorMessage(const uint8_t* payload, size_t payload_size) {
     if (s_hw) s_hw->PrintLine("DAISY: HandleErrorMessage called - payload_size=%d", (int)payload_size);
 }
-
-#else  // WAVEX_SPI_LINK_ENABLED == 0
-
-// When SPI link is disabled, we still provide the dispatcher symbol so UART can
-// link successfully. For now we simply log that the message was ignored.
-void ProcessInterMcuMessage(uint8_t msg_type,
-                            uint16_t sequence_number,
-                            const uint8_t* payload,
-                            size_t payload_size)
-{
-    (void)msg_type;
-    (void)sequence_number;
-    (void)payload;
-    (void)payload_size;
-    // TODO: provide UART-specific implementations for browse/sample commands.
-}
-
-#endif // WAVEX_SPI_LINK_ENABLED
 
 } // namespace Comm
 } // namespace WaveX

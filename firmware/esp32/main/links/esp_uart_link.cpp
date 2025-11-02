@@ -191,6 +191,7 @@ bool dequeue_tx_entry(uart_msg_entry_t& out_entry)
         entry.pending = false;
         s_msg_head = (s_msg_head + 1) % MSG_QUEUE_SIZE;
         s_msg_count = s_msg_count - 1;
+        UART_LOGI(TAG, "TX dequeued: seq=%u frame_len=%u s_msg_count=%d", out_entry.seq, out_entry.frame_len, s_msg_count);
     }
 
     xSemaphoreGive(s_uart_mutex);
@@ -259,11 +260,14 @@ void uart_task(void* /*param*/)
 
         uart_msg_entry_t entry;
         if (dequeue_tx_entry(entry)) {
+            UART_LOGI(TAG, "TX: About to write %u bytes to UART", (unsigned)entry.frame_len);
             int written = uart_write_bytes(WAVEX_ESP_UART_INTER_NUM, reinterpret_cast<const char*>(entry.frame), entry.frame_len);
+            UART_LOGI(TAG, "TX: uart_write_bytes returned %d (expected %u)", written, (unsigned)entry.frame_len);
             if (written != static_cast<int>(entry.frame_len)) {
                 UART_LOGE(TAG, "UART write truncated (%d/%d)", written, static_cast<int>(entry.frame_len));
             } else {
                 s_stats.packets_sent++;
+                UART_LOGI(TAG, "TX: Packet sent successfully (seq=%u)", entry.seq);
             }
             uart_wait_tx_done(WAVEX_ESP_UART_INTER_NUM, pdMS_TO_TICKS(10));
         }

@@ -67,7 +67,7 @@ static size_t get_packet_size(const uint8_t* packet_data) {
 static void spi_dma_start_cb(void* context);
 static void spi_dma_end_cb(void* context, daisy::SpiHandle::Result result);
 
-daisy::DaisySeed* s_hw = NULL;
+extern daisy::DaisySeed* s_hw;
 static daisy::SpiHandle* g_spi_handle = NULL;
 static daisy::GPIO cs_pin;
 static daisy::GPIO attn_pin;

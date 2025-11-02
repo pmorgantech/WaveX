@@ -555,7 +555,7 @@ static bool send_browse_request(const char* path, uint8_t start_index)
         ESP_LOGE(TAG, "Failed to send browse request: %d", result);
         return false;
     }
-    ESP_LOGI(TAG, "=== SPI OPERATION: Successfully sent browse request for path: %s, start_index: %d ===", path, start_index);
+    ESP_LOGI(TAG, "=== UART MESSAGE: Successfully sent browse request for path: %s, start_index: %d ===", path, start_index);
     return true;
 }
 

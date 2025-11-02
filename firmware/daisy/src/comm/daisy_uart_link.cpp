@@ -19,6 +19,9 @@ namespace Comm {
 
 using namespace WaveX::UartProtocol;
 
+// Global hardware instance pointer (used by all comm handlers)
+daisy::DaisySeed* s_hw = NULL;
+
 constexpr size_t RX_BUFFER_SIZE = WAVEX_DAISY_UART_INTER_BUF_SIZE;
 constexpr size_t RX_PENDING_CAPACITY = RX_BUFFER_SIZE * 2;
 constexpr size_t MSG_QUEUE_SIZE = 8;
@@ -66,6 +69,10 @@ void append_rx_data_isr(const uint8_t* data, size_t len)
         return;
     }
 
+    // **CRITICAL**: The data pointer points into libDaisy's DMA circular buffer.
+    // We must copy it immediately to avoid reading recycled data on the next wraparound.
+    // libDaisy already calls dsy_dma_invalidate_cache_for_buffer, so cache is valid.
+    
     if (len > RX_PENDING_CAPACITY) {
         data += (len - RX_PENDING_CAPACITY);
         len = RX_PENDING_CAPACITY;
@@ -83,6 +90,8 @@ void append_rx_data_isr(const uint8_t* data, size_t len)
         s_stats.frame_sync_errors++;
     }
 
+    // Copy from DMA buffer into our pending buffer
+    // This MUST happen before libDaisy's next callback overwrites the DMA circular buffer
     std::memcpy(s_rx_pending + s_rx_pending_len, data, len);
     s_rx_pending_len += len;
 }
@@ -127,14 +136,32 @@ void consume_frame_bytes(size_t count)
 
 void process_rx_frames()
 {
+    static uint32_t last_log = 0;
+    uint32_t now = daisy::System::GetNow();
+    bool should_log = (now - last_log > 5000);  // Log every 5 seconds
+    
     pull_pending_into_frame_buffer();
-
+    
     size_t offset = 0;
     while (s_frame_len - offset >= UART_FRAME_OVERHEAD) {
         int start = FindFrameStart(s_frame_buffer + offset, s_frame_len - offset);
         if (start < 0) {
             // No start byte found; discard processed bytes
+            if (should_log && offset > 0) {
+                if (s_hw) s_hw->PrintLine("DAISY: No frame start in %u bytes", (unsigned)(s_frame_len - offset));
+                // Dump first 32 bytes for diagnosis
+                char hex_buf[128] = {0};
+                int hex_pos = 0;
+                size_t to_dump = std::min<size_t>(32, s_frame_len - offset);
+                for (size_t i = 0; i < to_dump && hex_pos < 120; i++) {
+                    hex_pos += snprintf(hex_buf + hex_pos, 120 - hex_pos, "%02X ", s_frame_buffer[offset + i]);
+                }
+                if (s_hw) s_hw->PrintLine("DAISY: RX buffer: %s", hex_buf);
+            }
             consume_frame_bytes(offset);
+            if (should_log) {
+                last_log = now;
+            }
             return;
         }
 
@@ -142,7 +169,14 @@ void process_rx_frames()
         size_t available = s_frame_len - offset;
         size_t frame_len = GetFrameLength(s_frame_buffer + offset, available);
         if (frame_len == 0 || frame_len > available) {
+            if (should_log && frame_len > 0) {
+                if (s_hw) s_hw->PrintLine("DAISY: Incomplete frame: frame_len=%u available=%u", 
+                                          (unsigned)frame_len, (unsigned)available);
+            }
             consume_frame_bytes(offset);
+            if (should_log) {
+                last_log = now;
+            }
             return;
         }
 
@@ -150,6 +184,9 @@ void process_rx_frames()
         if (!ValidateUartFrame(frame, frame_len)) {
             UART_LOGE("daisy_uart", "Invalid UART frame len=%d", static_cast<int>(frame_len));
             s_stats.crc_errors++;
+            if (should_log) {
+                if (s_hw) s_hw->PrintLine("DAISY: CRC/validation FAILED len=%u", (unsigned)frame_len);
+            }
             offset += 1;
             continue;
         }
@@ -167,11 +204,7 @@ void process_rx_frames()
                       static_cast<int>(payload_len),
                       seq,
                       flags);
-            printf("DAISY: UART RX frame msg=0x%02X len=%d seq=%u flags=0x%02X\n",
-                   msg_type,
-                   (int)payload_len,
-                   seq,
-                   flags);
+            if (s_hw) s_hw->PrintLine("DAISY: RX msg=0x%02X len=%d seq=%u", msg_type, (int)payload_len, seq);
             UART_LOG_DUMP_PACKET("daisy_uart", frame, frame_len);
             if (flags & UART_FLAG_ACK) {
                 UART_LOGI("daisy_uart", "ACK received for msg=0x%02X seq=%u", msg_type, seq);
@@ -183,13 +216,18 @@ void process_rx_frames()
         } else {
             s_stats.crc_errors++;
             UART_LOGE("daisy_uart", "Failed to parse UART packet len=%d", static_cast<int>(frame_len));
-            printf("DAISY: UART RX parse failed len=%d\n", (int)frame_len);
+            if (s_hw) s_hw->PrintLine("DAISY: Parse FAILED len=%u", (unsigned)frame_len);
         }
 
         offset += frame_len;
     }
 
     consume_frame_bytes(offset);
+    if (should_log) {
+        if (s_hw) s_hw->PrintLine("DAISY: process_rx_frames: s_frame_len=%u parsed %u bytes", 
+                                   (unsigned)s_frame_len, (unsigned)offset);
+        last_log = now;
+    }
 }
 
 void uart_tx_complete(void* /*ctx*/, daisy::UartHandler::Result result)
@@ -200,14 +238,11 @@ void uart_tx_complete(void* /*ctx*/, daisy::UartHandler::Result result)
         return;
     }
 
-    printf("DAISY: UART TX complete callback fired - result=%d seq=%u\n", (int)result, s_tx_inflight->seq);
-
     if (result == daisy::UartHandler::Result::OK) {
         s_stats.packets_sent++;
-        printf("DAISY: UART TX complete OK (seq=%u, sent_total=%u)\n", s_tx_inflight->seq, s_stats.packets_sent);
     } else {
         s_stats.tx_errors++;
-        printf("DAISY: UART TX complete ERROR (seq=%u result=%d, tx_errors=%u)\n", s_tx_inflight->seq, (int)result, s_stats.tx_errors);
+        UART_LOGE("daisy_uart", "TX complete ERROR (seq=%u result=%d)", s_tx_inflight->seq, (int)result);
     }
 
     s_tx_inflight->pending = false;
@@ -216,8 +251,6 @@ void uart_tx_complete(void* /*ctx*/, daisy::UartHandler::Result result)
     if (s_tx_count > 0) {
         --s_tx_count;
     }
-    
-    UART_LOGI("daisy_uart", "TX queue after callback: count=%d head=%d tail=%d", s_tx_count, s_tx_head, s_tx_tail);
 }
 
 void process_tx_queue()
@@ -225,13 +258,7 @@ void process_tx_queue()
     // Check if we have messages to send
     uart_msg_entry_t* entry = nullptr;
     
-    static uint32_t last_log = 0;
-    uint32_t now = daisy::System::GetNow();
-    if (now - last_log > 500) {  // Log every 500ms
-        printf("DAISY: process_tx_queue: s_tx_count=%d s_tx_inflight=%p head=%d tail=%d\n", 
-               s_tx_count, s_tx_inflight, s_tx_head, s_tx_tail);
-        last_log = now;
-    }
+    // Removed verbose TX logging - TX is working fine
     
     {
         daisy::ScopedIrqBlocker lock;
@@ -255,21 +282,22 @@ void process_tx_queue()
     // Validate frame format before sending
     bool frame_valid = true;
     if (entry->frame_len < 10) {
-        printf("DAISY: ERROR - Frame too short: %u bytes\n", (unsigned)entry->frame_len);
+        if (s_hw) s_hw->PrintLine("DAISY: ERROR - Frame too short: %u bytes", (unsigned)entry->frame_len);
         UART_LOGE("daisy_uart", "Frame too short: %u bytes", entry->frame_len);
         frame_valid = false;
     } else if (entry->frame[0] != 0xA5) {
-        printf("DAISY: ERROR - Frame start byte 0x%02X (expect 0xA5) len=%u\n", entry->frame[0], (unsigned)entry->frame_len);
+        if (s_hw) s_hw->PrintLine("DAISY: ERROR - Frame start byte 0x%02X (expect 0xA5) len=%u", entry->frame[0], (unsigned)entry->frame_len);
         UART_LOGE("daisy_uart", "Frame missing start byte! First byte: 0x%02X", entry->frame[0]);
         // Dump frame for diagnosis
-        printf("DAISY: Frame hex: ");
-        for (size_t i = 0; i < std::min<size_t>(32, entry->frame_len); i++) {
-            printf("%02X ", entry->frame[i]);
+        char hex_buf[128] = {0};
+        int hex_pos = 0;
+        for (size_t i = 0; i < std::min<size_t>(32, entry->frame_len) && hex_pos < 120; i++) {
+            hex_pos += snprintf(hex_buf + hex_pos, 120 - hex_pos, "%02X ", entry->frame[i]);
         }
-        printf("\n");
+        if (s_hw) s_hw->PrintLine("DAISY: Frame hex: %s", hex_buf);
         frame_valid = false;
     } else if (entry->frame[entry->frame_len - 1] != 0x5A) {
-        printf("DAISY: ERROR - Frame end byte 0x%02X (expect 0x5A)\n", entry->frame[entry->frame_len - 1]);
+        if (s_hw) s_hw->PrintLine("DAISY: ERROR - Frame end byte 0x%02X (expect 0x5A)", entry->frame[entry->frame_len - 1]);
         UART_LOGE("daisy_uart", "Frame missing end byte! Last byte: 0x%02X", entry->frame[entry->frame_len - 1]);
         frame_valid = false;
     }
@@ -288,16 +316,13 @@ void process_tx_queue()
         }
     } else {
         // Temporarily use blocking transmit to diagnose DMA callback issue
-        printf("DAISY: Sending via BlockingTransmit: frame_len=%u seq=%u\n", (unsigned)entry->frame_len, entry->seq);
         auto res = s_uart.BlockingTransmit(entry->frame, entry->frame_len, 100);
-        printf("DAISY: BlockingTransmit returned: result=%d\n", (int)res);
 
         if (res == daisy::UartHandler::Result::OK) {
             s_stats.packets_sent++;
-            printf("DAISY: TX SUCCESS seq=%u\n", entry->seq);
         } else {
             s_stats.tx_errors++;
-            printf("DAISY: TX FAILED result=%d\n", (int)res);
+            UART_LOGE("daisy_uart", "TX FAILED result=%d", (int)res);
         }
         
         // Mark entry as done and advance queue
@@ -319,11 +344,13 @@ void uart_rx_listener(uint8_t* buffer,
                       daisy::UartHandler::Result result)
 {
     if (result != daisy::UartHandler::Result::OK || size == 0) {
-        printf("DAISY: uart_rx_listener ERROR result=%d size=%d\n", (int)result, (int)size);
+        if (result != daisy::UartHandler::Result::OK) {
+            UART_LOGE("daisy_uart", "uart_rx_listener ERROR result=%d", (int)result);
+        }
         return;
     }
 
-    printf("DAISY: uart_rx_listener RX %d bytes\n", (int)size);
+    UART_LOGI("daisy_uart", "uart_rx_listener RX %u bytes", (unsigned)size);
     append_rx_data_isr(buffer, size);
 }
 
@@ -351,19 +378,24 @@ void configure_uart()
 void start_dma_listener()
 {
     if (s_dma_listening) {
-        printf("DAISY: DMA listener already started\n");
+        if (s_hw) s_hw->PrintLine("DAISY: DMA listener already started");
         return;
     }
 
-    printf("DAISY: Attempting to start DMA listener on UART4...\n");
+    if (s_hw) s_hw->PrintLine("DAISY: Attempting to start DMA listener on UART4...");
+    if (s_hw) s_hw->PrintLine("DAISY: DMA RX buffer at %p, size=%u", s_uart_rx_dma, (unsigned)RX_BUFFER_SIZE);
+    
+    // Clear the DMA buffer to remove any stale data
+    std::memset(s_uart_rx_dma, 0, RX_BUFFER_SIZE);
+    
     if (s_uart.DmaListenStart(s_uart_rx_dma,
                               RX_BUFFER_SIZE,
                               uart_rx_listener,
                               nullptr) != daisy::UartHandler::Result::OK) {
-        printf("DAISY: ERROR - Failed to start DMA listener\n");
+        if (s_hw) s_hw->PrintLine("DAISY: ERROR - Failed to start DMA listener");
         UART_LOGE("daisy_uart", "Failed to start DMA listener");
     } else {
-        printf("DAISY: SUCCESS - DMA listener started, buffer=%p size=%d\n", s_uart_rx_dma, RX_BUFFER_SIZE);
+        if (s_hw) s_hw->PrintLine("DAISY: SUCCESS - DMA listener started");
         s_dma_listening = true;
         UART_LOGI("daisy_uart", "DMA listener started successfully");
     }
@@ -397,6 +429,7 @@ void UartLinkInit(daisy::DaisySeed* hw)
     s_tx_tail = 0;
     s_tx_count = 0;
     s_tx_inflight = nullptr;
+    s_hw = hw; // Store the hw pointer
 
     s_initialized = true;
     UART_LOGI("daisy_uart", "UART link initialized: UART4 @ %d baud", WAVEX_DAISY_UART_INTER_BAUD);
@@ -409,12 +442,12 @@ void UartLinkStart()
 {
     if (!s_initialized) {
         UART_LOGE("daisy_uart", "UartLinkStart before init");
-        printf("DAISY: ERROR - UartLinkStart called before init\n");
+        if (s_hw) s_hw->PrintLine("DAISY: ERROR - UartLinkStart called before init");
         return;
     }
-    printf("DAISY: UartLinkStart() called - starting DMA listener\n");
+    if (s_hw) s_hw->PrintLine("DAISY: UartLinkStart() called - starting DMA listener");
     start_dma_listener();
-    printf("DAISY: UartLinkStart() complete - s_dma_listening=%d\n", s_dma_listening);
+    if (s_hw) s_hw->PrintLine("DAISY: UartLinkStart() complete - s_dma_listening=%d", s_dma_listening);
     UART_LOGI("daisy_uart", "UART link started - DMA listener active");
 }
 
@@ -453,11 +486,11 @@ int UartLinkSend(uint16_t msg_type, const void* payload, uint16_t len)
 
     // Verify frame was created correctly (for debugging DMA issues)
     if (entry.frame[0] != 0xA5) {
-        printf("DAISY: WARNING - Frame created without 0xA5! First byte=0x%02X\n", entry.frame[0]);
+        if (s_hw) s_hw->PrintLine("DAISY: WARNING - Frame created without 0xA5! First byte=0x%02X", entry.frame[0]);
         UART_LOGE("daisy_uart", "CreateUartPacket produced bad frame: start=0x%02X (expect 0xA5)", entry.frame[0]);
     }
     if (entry.frame[frame_len - 1] != 0x5A) {
-        printf("DAISY: WARNING - Frame created without 0x5A! Last byte=0x%02X\n", entry.frame[frame_len - 1]);
+        if (s_hw) s_hw->PrintLine("DAISY: WARNING - Frame created without 0x5A! Last byte=0x%02X", entry.frame[frame_len - 1]);
         UART_LOGE("daisy_uart", "CreateUartPacket produced bad frame: end=0x%02X (expect 0x5A)", entry.frame[frame_len - 1]);
     }
 
@@ -476,8 +509,28 @@ int UartLinkSend(uint16_t msg_type, const void* payload, uint16_t len)
 
 void UartLinkProcess()
 {
+    static uint32_t last_log = 0;
+    uint32_t now = daisy::System::GetNow();
+    
     process_rx_frames();
     process_tx_queue();
+    
+    // Diagnostic: check for UART errors
+    static uint32_t last_error_check = 0;
+    if (now - last_error_check > 5000) {  // Check every 5 seconds
+        int uart_error = s_uart.CheckError();
+        if (uart_error != 0) {
+            if (s_hw) s_hw->PrintLine("DAISY: UART error detected: %d", uart_error);
+            UART_LOGE("daisy_uart", "UART error: %d", uart_error);
+        }
+        last_error_check = now;
+    }
+    
+    if (now - last_log > 1000) {  // Log every 1 second
+        if (s_hw) s_hw->PrintLine("DAISY: UartLinkProcess() executed (s_rx_pending_len=%u s_tx_count=%d dma_listening=%d)", 
+                (unsigned)s_rx_pending_len, s_tx_count, s_dma_listening);
+        last_log = now;
+    }
 }
 
 void UartLinkLogStats()
