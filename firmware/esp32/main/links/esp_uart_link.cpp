@@ -24,7 +24,7 @@ constexpr char TAG[] = "esp_uart_link";
 
 constexpr size_t RX_TEMP_BUFFER = 256;
 constexpr size_t RX_PENDING_CAPACITY = WAVEX_ESP_UART_INTER_BUF_SIZE * 2;
-constexpr size_t MSG_QUEUE_SIZE = 16;
+constexpr size_t MSG_QUEUE_SIZE = 8;
 
 struct uart_msg_entry_t {
     uint8_t frame[UART_MAX_PAYLOAD + UART_FRAME_OVERHEAD];
@@ -364,7 +364,9 @@ esp_err_t uart_link_start(void)
         return ESP_OK;
     }
 
-    BaseType_t rc = xTaskCreate(uart_task, "uart_link", 8192, nullptr, 6, &s_uart_task_handle);
+    // Increased stack size to 16384 bytes to prevent stack overflow when processing
+    // browse response callbacks which allocate large temporary arrays
+    BaseType_t rc = xTaskCreate(uart_task, "uart_link", 16384, nullptr, 6, &s_uart_task_handle);
     if (rc != pdPASS) {
         UART_LOGE(TAG, "Failed to create UART task");
         s_uart_task_handle = nullptr;

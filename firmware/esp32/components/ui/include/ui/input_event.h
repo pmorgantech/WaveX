@@ -13,7 +13,9 @@ enum class InputType : uint8_t {
     ButtonRelease,
     EncoderLeft,
     EncoderRight,
-    EncoderClick
+    EncoderClick,
+    EncoderUp,
+    EncoderDown
 };
 
 struct InputEvent {

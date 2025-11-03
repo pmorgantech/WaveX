@@ -9,20 +9,20 @@ set(COMPONENT_SRCS
     "src/input_dispatcher.cpp"
     "src/tca8418_keypad.cpp"
     "src/ui_existing_pages.cpp"
-    "src/ui_file_browser.cpp"
     "src/ui_main_menu.cpp"
     "src/ui_main.cpp"
     "src/ui_menu_page.cpp"
     "src/ui_navigation_demo.cpp"
     "src/ui_navigation_integration.cpp"
     "src/ui_navigator.cpp"
+    "src/display_manager.cpp"
     "src/ui_param_edit.cpp"
     "src/ui_patch_list.cpp"
     "src/ui_sample_detail.cpp"
     "src/ui_settings_page.cpp"
     "src/ui_softkey_bar.cpp"
+    "src/ui_sample_browser.cpp"
     "styles/ui_theme.cpp"
-    "ui_globals.cpp"
 )
 
 # Add UI include directories
@@ -46,6 +46,7 @@ idf_component_register(
     REQUIRES 
         lvgl
         esp_lvgl_port
+        esp_lcd_touch_gt911
         driver
         esp_tca8418
         esp_driver_gpio

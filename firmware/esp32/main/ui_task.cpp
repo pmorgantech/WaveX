@@ -6,8 +6,8 @@
  * using the Waveshare 5-DSI-TOUCH-A display and HX8394 driver.
  */
 
-#include "pages/sample_load_save.h"
 #include "pages/diagnostics_page.h"
+#include "ui/ui_sample_browser.h"
 #include "ui_task.h"
 #include "pcnt_task.h"
 #include "esp_log.h"
@@ -17,12 +17,9 @@
 #include "freertos/semphr.h"
 #include "freertos/portable.h"
 #include "freertos/event_groups.h"
-#include "driver/gpio.h"
 #include <stdlib.h>
-#include "driver/i2c_master.h"
 #include "config/pin_config.h"
 #include "config/hardware_config.h"
-#include "pages/diagnostics_page.h"
 #include "inter_mcu.h"
 #include "comm/statistics.h"
 #include "links/esp_spi_link.h"
@@ -30,22 +27,12 @@
 // LVGL includes
 #include "esp_lvgl_port.h"
 #include "lvgl.h"
-
-// Forward declaration for LVGL log callback (defined later in this file)
-extern "C" void wavex_lvgl_log_cb(signed char level, const char * buf);
-#include "esp_lcd_touch.h"
-#include "esp_lcd_touch_gt911.h"
 #include "esp_heap_caps.h"
 #include "esp_timer.h"
 #include "ui/input_dispatcher.h"
 #include "ui/ui_demo.h"
 #include "ui/ui_navigation_integration.h"
-#include "ui/ui_globals.h"
-
-// Workaround for ESP LCD I2C function conflict
-// Use the v2 version directly since we have i2c_master_bus_handle_t
-#undef esp_lcd_new_panel_io_i2c
-#define esp_lcd_new_panel_io_i2c esp_lcd_new_panel_io_i2c_v2
+#include "ui/display_manager.h"
 
 // LVGL port lock macros for thread safety
 #define LV_LOCK()   lvgl_port_lock(portMAX_DELAY)
@@ -55,48 +42,16 @@ extern "C" void wavex_lvgl_log_cb(signed char level, const char * buf);
 #include "bsp/esp32_p4_nano.h"
 #include "ui/tca8418_keypad.h"
  
-#define LV_TICK_PERIOD_MS 5
- 
  static const char *TAG = "UI_TASK";
  
  // Task handle
  static TaskHandle_t s_ui_task_handle = NULL;
  
 // Display and LVGL handles
-static esp_lcd_panel_handle_t s_panel_handle = NULL;
-static esp_lcd_touch_handle_t s_touch_handle = NULL;
-static lv_display_t *s_lvgl_display = NULL;
-static esp_timer_handle_t s_lvgl_tick_timer_handle = NULL;
 static esp_timer_handle_t s_meter_timer_handle = NULL;
 // LVGL timer to apply deferred meter updates in LVGL context
 static lv_timer_t *s_meter_lvgl_timer = NULL;
-// LVGL timer for applying meter updates (runs in LVGL context with lock held)
-static lv_timer_t *s_meter_lv_timer = NULL;
  
-// I2C handles
-static i2c_master_bus_handle_t s_i2c_bus_handle = NULL;
-
-// UI element references for real-time updates
-static lv_obj_t *s_content_area = NULL;
-
-// Hotkey region elements
-static lv_obj_t *s_hotkey_region = NULL;
-static lv_obj_t *s_hotkey_buttons[6] = {NULL, NULL, NULL, NULL, NULL, NULL};
-static lv_obj_t *s_hotkey_labels[6] = {NULL, NULL, NULL, NULL, NULL, NULL};
-
-// Header elements
-static lv_obj_t *s_header_title = NULL;
-
-// Current screen context for hotkey mapping
-static const char* s_current_screen = "main";
-
-// Sample Load/Save page instance (global for access from other modules)
-wavex_sample_load_save_page_t* s_sample_load_save_page = NULL;
-
-// Meter callback system
-static wavex_meter_cb_t s_meter_callback = NULL;
-static void* s_meter_user_data = NULL;
-
 // Meter data variables
 static float s_current_rms = 0.0f;
 static float s_current_peak = 0.0f;
@@ -138,13 +93,9 @@ static volatile float s_deferred_peak_right = 0.0f;
  
 // Forward declarations
 static void ui_task(void *pvParameters);
-static void lvgl_flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px_map);
-static void lvgl_tick_cb(void *arg);
 static void meter_update_cb(void *arg);
 static void lvgl_meter_apply_cb(lv_timer_t *timer);
-static void lv_meter_update_timer_cb(lv_timer_t *timer);
 static void meter_data_cb(float rms, float peak, void* user_data);
-static esp_err_t init_touch_controller(void);
 static void adaptive_refresh_control(void);
 void wavex_ui_mark_content_changed(void);
 
@@ -152,122 +103,6 @@ void wavex_ui_mark_content_changed(void);
 static void update_peak_hold(PeakHoldData* peak_data, float current_peak, uint32_t current_time_ms);
 static void update_peak_line_position(lv_obj_t* peak_line, lv_obj_t* meter_bar, float peak_value);
 void wavex_ui_create_meter_display(lv_obj_t* parent);
-static esp_err_t init_lvgl_display(void);
-
-// Menu system functions
-static void create_main_menu(lv_obj_t *parent);
-static void create_sample_menu(lv_obj_t *parent);
-static void create_system_menu(lv_obj_t *parent);
-static void create_sample_load_save_page(lv_obj_t *parent);
-static void menu_button_event_cb(lv_event_t *e);
-static void hotkey_button_event_cb(lv_event_t *e);
-static void touch_event_cb(lv_event_t *e);
-
-// Hotkey region functions
-static void create_hotkey_region(lv_obj_t *parent);
-void wavex_ui_update_hotkey_labels(const char* labels[6]);
-static void clear_hotkey_labels(void);
-static void calculate_hotkey_layout(int num_items, int* button_widths);
-void wavex_ui_set_screen_context(const char* screen_name);
-void wavex_ui_update_header_title(const char* title);
- 
-/**
- * @brief Initialize touch controller with custom configuration
- */
-static esp_err_t init_touch_controller(void)
-{
-    ESP_LOGI(TAG, "Initializing GT911 touch controller with custom config...");
-
-    // Use BSP's I2C handle to avoid conflicts
-    i2c_master_bus_handle_t i2c_handle = bsp_i2c_get_handle();
-    if (i2c_handle == NULL) {
-        ESP_LOGE(TAG, "BSP I2C not initialized, initializing it first");
-        ESP_RETURN_ON_ERROR(bsp_i2c_init(), TAG, "Failed to initialize BSP I2C");
-        i2c_handle = bsp_i2c_get_handle();
-    }
-
-    // Configure touch reset and interrupt pins for GT911 address selection
-    gpio_config_t io_conf = {
-        .pin_bit_mask = (1ULL << WAVEX_ESP_TOUCH_RST) | (1ULL << WAVEX_ESP_TOUCH_INT),  // RST and INT pins
-        .mode = GPIO_MODE_OUTPUT,
-        .pull_up_en = GPIO_PULLUP_DISABLE,
-        .pull_down_en = GPIO_PULLDOWN_DISABLE,
-        .intr_type = GPIO_INTR_DISABLE,
-    };
-    ESP_RETURN_ON_ERROR(gpio_config(&io_conf), TAG, "Failed to configure touch GPIO pins");
-
-    // --- GT911 Reset and Address Selection Sequence ---
-    // Per datasheet, this selects the I2C address. We will select 0x5D.
-    gpio_set_level((gpio_num_t)WAVEX_ESP_TOUCH_INT, 1);  // INT high for address 0x5D
-    gpio_set_level((gpio_num_t)WAVEX_ESP_TOUCH_RST, 0);  // RST low
-    vTaskDelay(pdMS_TO_TICKS(10));
-    gpio_set_level((gpio_num_t)WAVEX_ESP_TOUCH_RST, 1);  // RST high
-    vTaskDelay(pdMS_TO_TICKS(60)); // Hold INT state for >50ms after reset
-
-    // Release INT pin to be an input for interrupts
-    io_conf.pin_bit_mask = (1ULL << WAVEX_ESP_TOUCH_INT);  // Only INT pin
-    io_conf.mode = GPIO_MODE_INPUT;
-    io_conf.pull_up_en = GPIO_PULLUP_ENABLE; // INT line usually requires a pull-up
-    ESP_RETURN_ON_ERROR(gpio_config(&io_conf), TAG, "Failed to reconfigure INT pin to input");
-
-    vTaskDelay(pdMS_TO_TICKS(10)); // Settle time
-    // --- End of GT911 Sequence ---
-
-    // Create I2C panel IO for touch controller using BSP's I2C handle
-    esp_lcd_panel_io_i2c_config_t io_config = {
-        .dev_addr = ESP_LCD_TOUCH_IO_I2C_GT911_ADDRESS, // Use 0x5D address
-        .control_phase_bytes = 1,
-        .dc_bit_offset = 0,
-        .lcd_cmd_bits = 8,
-        .lcd_param_bits = 8,
-        .flags = {
-            .dc_low_on_data = 0,
-            .disable_control_phase = 0,
-        },
-        .scl_speed_hz = 400000,  // 400kHz for GT911
-    };
-
-    esp_lcd_panel_io_handle_t io_handle = NULL;
-    ESP_RETURN_ON_ERROR(esp_lcd_new_panel_io_i2c(i2c_handle, &io_config, &io_handle),
-                       TAG, "Failed to create I2C panel IO");
-
-    // Configure GT911 touch controller with correct orientation for 720x1280 display
-    esp_lcd_touch_config_t touch_config = {
-        .x_max = BSP_LCD_H_RES,
-        .y_max = BSP_LCD_V_RES,
-        .rst_gpio_num = (gpio_num_t)WAVEX_ESP_TOUCH_RST,  // Touch reset pin
-        .int_gpio_num = (gpio_num_t)WAVEX_ESP_TOUCH_INT,  // Touch interrupt pin
-        .levels = {
-            .reset = 0,
-            .interrupt = 0,
-        },
-        .flags = {
-            .swap_xy = 0,     // No swap for portrait orientation
-            .mirror_x = 0,    // No mirror X
-            .mirror_y = 0,    // No mirror Y
-        },
-    };
-
-    ESP_RETURN_ON_ERROR(esp_lcd_touch_new_i2c_gt911(io_handle, &touch_config, &s_touch_handle),
-                       TAG, "Failed to create GT911 touch controller");
-
-    ESP_LOGI(TAG, "GT911 touch controller initialized successfully");
-    return ESP_OK;
-}
-
-static void lvgl_flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px_map)
-{
-    esp_lcd_panel_handle_t panel_handle = (esp_lcd_panel_handle_t) lv_display_get_user_data(disp);
-    // LVGL handles rotation internally, coordinates are already transformed
-    // For 90° clockwise rotation: area coordinates should be correct as provided
-    esp_lcd_panel_draw_bitmap(panel_handle, area->x1, area->y1, area->x2 + 1, area->y2 + 1, px_map);
-    lv_display_flush_ready(disp);
-}
- 
-static void lvgl_tick_cb(void *arg)
-{
-    lv_tick_inc(LV_TICK_PERIOD_MS);
-}
 
 /**
  * @brief Update peak hold tracking for a channel
@@ -391,6 +226,13 @@ static void meter_update_cb(void *arg)
 
 /**
  * @brief Process deferred meter updates (called from main UI task)
+ * 
+ * NOTE: This function uses LV_LOCK() which may compete with LVGL's own lock.
+ * The preferred method is via the LVGL timer (lvgl_meter_apply_cb), which runs
+ * in LVGL context without lock contention. This function exists as a fallback
+ * but ideally should be removed if the LVGL timer is sufficient.
+ * 
+ * See .cursor/rules/lvgl-threading.mdc for threading guidelines.
  */
 static void process_deferred_meter_updates(void)
 {
@@ -702,40 +544,6 @@ static void meter_data_cb(float rms, float peak, void* user_data)
     
     s_current_rms = rms;
     s_current_peak = peak;
-    
-    // Call registered callback if any
-    if (s_meter_callback) {
-        s_meter_callback(rms, peak, s_meter_user_data);
-    }
-}
-
-/**
- * @brief Touch event callback for testing
- */
-static void touch_event_cb(lv_event_t *e)
-{
-    lv_event_code_t code = lv_event_get_code(e);
-    lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
-
-    if (code == LV_EVENT_PRESSED) {
-        ESP_LOGI(TAG, "Touch pressed on test area");
-        // Note: Event callbacks run in LVGL context, no locking needed
-        lv_obj_set_style_bg_color(obj, lv_color_make(0xFF, 0xEB, 0x3B), LV_PART_MAIN);
-        lv_obj_t *label = lv_obj_get_child(obj, 0);
-        if (label) {
-            lv_label_set_text(label, "Touch Detected!\nKeep pressing...");
-            lv_obj_set_style_text_font(label, &lv_font_montserrat_14, LV_PART_MAIN);  // Normal font
-        }
-    } else if (code == LV_EVENT_RELEASED) {
-        ESP_LOGI(TAG, "Touch released from test area");
-        // Note: Event callbacks run in LVGL context, no locking needed
-        lv_obj_set_style_bg_color(obj, lv_color_make(0xE3, 0xF2, 0xFD), LV_PART_MAIN);
-        lv_obj_t *label = lv_obj_get_child(obj, 0);
-        if (label) {
-            lv_label_set_text(label, "Touch Test Area\nTap here to test touchscreen!");
-            lv_obj_set_style_text_font(label, &lv_font_montserrat_14, LV_PART_MAIN);  // Normal font
-        }
-    }
 }
 
 /**
@@ -759,9 +567,11 @@ static void adaptive_refresh_control(void)
         
         // Use minimum refresh interval for responsive updates
         if (time_since_last_refresh >= MIN_REFRESH_INTERVAL_MS) {
-            LV_LOCK();
-            lv_refr_now(s_lvgl_display);
-            LV_UNLOCK();
+            if (auto* display = wavex_ui::DisplayManager::instance().display()) {
+                LV_LOCK();
+                lv_refr_now(display);
+                LV_UNLOCK();
+            }
             
             s_content_changed = false;
             s_last_refresh_time = current_time;
@@ -771,792 +581,6 @@ static void adaptive_refresh_control(void)
             if (s_refresh_count % 100 == 0) {
                 ESP_LOGD(TAG, "Display refresh count: %lu", s_refresh_count);
             }
-        }
-    }
-}
-
-/**
- * @brief Initialize LVGL display using BSP (Recommended approach)
- */
- static esp_err_t init_lvgl_display(void)
- {
-     ESP_LOGI(TAG, "Initializing LVGL display using BSP...");
-
-    // Initialize LVGL core
-    ESP_LOGI(TAG, "Initializing LVGL...");
-    lv_init();
-
-    // Register LVGL log print callback so LVGL logs appear in ESP logs
-    #if CONFIG_LV_USE_LOG
-    lv_log_register_print_cb(wavex_lvgl_log_cb);
-    #endif
-
-    // Check available memory before display initialization
-    ESP_LOGI(TAG, "Memory before display init:");
-    ESP_LOGI(TAG, "  Free heap: %zu bytes", esp_get_free_heap_size());
-    ESP_LOGI(TAG, "  Minimum free heap: %zu bytes", esp_get_minimum_free_heap_size());
-
-    // Use BSP's LVGL display setup with optimized config for higher refresh rates
-    ESP_LOGI(TAG, "Using BSP's LVGL display setup with optimized buffer configuration...");
-    bsp_display_cfg_t cfg = {
-        .lvgl_port_cfg = ESP_LVGL_PORT_INIT_CONFIG(),
-        .buffer_size = 720 * 20,   // Optimized: 20 lines × 720px × 2B = 28.8KB
-        .double_buffer = true,     // Enable double buffering for smoother updates
-        .flags = {
-            .buff_dma = true,
-            .buff_spiram = false,
-            .sw_rotate = true,   // Enable software rotation for HX8394
-        }
-    };
-
-    s_lvgl_display = bsp_display_start_with_config(&cfg);
-    ESP_RETURN_ON_FALSE(s_lvgl_display, ESP_FAIL, TAG, "Failed to start BSP display");
-
-    // BSP disabled mirror operations for HX8394, so we need software rotation
-    // Rotate 90 degrees clockwise
-    LV_LOCK();
-    lv_display_set_rotation(s_lvgl_display, LV_DISPLAY_ROTATION_90);
-    LV_UNLOCK();
-
-    // BSP handles touch setup automatically
-    ESP_LOGI(TAG, "LVGL display initialized successfully");
-    return ESP_OK;
-}
-
-// C-compatible LVGL log callback implementation
-extern "C" void wavex_lvgl_log_cb(signed char level, const char * buf)
-{
-    // Map LVGL levels to ESP log levels (simplified)
-    switch (level) {
-        case 0: // TRACE
-        case 1: // INFO
-            ESP_LOGI("LVGL", "%s", buf);
-            break;
-        case 2: // WARN
-            ESP_LOGW("LVGL", "%s", buf);
-            break;
-        case 3: // ERROR
-            ESP_LOGE("LVGL", "%s", buf);
-            break;
-        default:
-            ESP_LOGI("LVGL", "%s", buf);
-            break;
-    }
-}
-
-/**
- * @brief Create the hotkey region with 6 buttons at bottom of screen
- */
-static void create_hotkey_region(lv_obj_t *parent)
-{
-    if (parent == NULL) {
-        ESP_LOGE(TAG, "create_hotkey_region: parent is NULL");
-        return;
-    }
-
-    ESP_LOGI(TAG, "Creating hotkey region...");
-    LV_LOCK();
-
-    // Create hotkey region container with dark mode styling
-    s_hotkey_region = lv_obj_create(parent);
-    lv_obj_set_size(s_hotkey_region, lv_pct(100), 100);  // 100px tall, full width
-    lv_obj_set_style_bg_color(s_hotkey_region, lv_color_make(0x00, 0x00, 0x00), LV_PART_MAIN); // Black background
-    lv_obj_set_style_border_width(s_hotkey_region, 1, LV_PART_MAIN);
-    lv_obj_set_style_border_color(s_hotkey_region, lv_color_make(0x33, 0x33, 0x33), LV_PART_MAIN); // Dark gray border
-    lv_obj_set_style_pad_all(s_hotkey_region, 5, LV_PART_MAIN);
-    lv_obj_align(s_hotkey_region, LV_ALIGN_BOTTOM_MID, 0, 0);
-
-    // Set flex layout for horizontal arrangement of buttons
-    lv_obj_set_flex_flow(s_hotkey_region, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(s_hotkey_region, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-
-    // Create 6 hotkey buttons with dynamic sizing (will be updated by update_hotkey_labels)
-    for (int i = 0; i < 6; i++) {
-        s_hotkey_buttons[i] = lv_btn_create(s_hotkey_region);
-        lv_obj_set_size(s_hotkey_buttons[i], lv_pct(16), 90);  // Default 16% width, will be updated dynamically
-        
-        // Blue button styling with white text (matching main screen buttons)
-        lv_obj_set_style_bg_color(s_hotkey_buttons[i], lv_color_make(0x21, 0x96, 0xF3), LV_PART_MAIN); // Blue background
-        lv_obj_set_style_bg_color(s_hotkey_buttons[i], lv_color_make(0x19, 0x76, 0xD2), LV_PART_MAIN | LV_STATE_PRESSED); // Darker blue when pressed
-        lv_obj_set_style_border_width(s_hotkey_buttons[i], 2, LV_PART_MAIN);
-        lv_obj_set_style_border_color(s_hotkey_buttons[i], lv_color_make(0x15, 0x65, 0xC0), LV_PART_MAIN); // Darker blue border
-        lv_obj_set_style_radius(s_hotkey_buttons[i], 5, LV_PART_MAIN);
-        
-        // Ensure button can receive input events
-        lv_obj_clear_flag(s_hotkey_buttons[i], LV_OBJ_FLAG_HIDDEN);
-        lv_obj_clear_flag(s_hotkey_buttons[i], LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_add_flag(s_hotkey_buttons[i], LV_OBJ_FLAG_CLICKABLE);
-        
-        // Add event callbacks for all touch events
-        lv_obj_add_event_cb(s_hotkey_buttons[i], hotkey_button_event_cb, LV_EVENT_CLICKED, (void*)(intptr_t)i);
-        lv_obj_add_event_cb(s_hotkey_buttons[i], hotkey_button_event_cb, LV_EVENT_PRESSED, (void*)(intptr_t)i);
-        lv_obj_add_event_cb(s_hotkey_buttons[i], hotkey_button_event_cb, LV_EVENT_RELEASED, (void*)(intptr_t)i);
-        
-        // Create label for button with white text
-        s_hotkey_labels[i] = lv_label_create(s_hotkey_buttons[i]);
-        lv_label_set_text(s_hotkey_labels[i], "");  // Empty initially
-        lv_obj_set_style_text_font(s_hotkey_labels[i], &lv_font_montserrat_36, LV_PART_MAIN);
-        lv_obj_set_style_text_color(s_hotkey_labels[i], lv_color_white(), LV_PART_MAIN); // White text
-        lv_obj_center(s_hotkey_labels[i]);
-    }
-
-    LV_UNLOCK();
-    ESP_LOGI(TAG, "Hotkey region created successfully with 6 buttons");
-}
-
-/**
- * @brief Update hotkey labels based on current screen context
- */
-void wavex_ui_update_hotkey_labels(const char* labels[6])
-{
-    if (s_hotkey_labels[0] == NULL) {
-        ESP_LOGW(TAG, "Hotkey labels not initialized");
-        return;
-    }
-
-    // Count number of active labels
-    int num_active_labels = 0;
-    for (int i = 0; i < 6; i++) {
-        if (labels[i] && strlen(labels[i]) > 0) {
-            num_active_labels++;
-        }
-    }
-
-    // Calculate dynamic button widths
-    int button_widths[6];
-    calculate_hotkey_layout(num_active_labels, button_widths);
-
-    LV_LOCK();
-    for (int i = 0; i < 6; i++) {
-        if (s_hotkey_labels[i] && lv_obj_is_valid(s_hotkey_labels[i])) {
-            if (labels[i] && strlen(labels[i]) > 0) {
-                lv_label_set_text(s_hotkey_labels[i], labels[i]);
-                lv_obj_clear_flag(s_hotkey_buttons[i], LV_OBJ_FLAG_HIDDEN);
-                lv_obj_add_flag(s_hotkey_buttons[i], LV_OBJ_FLAG_CLICKABLE);
-                // Update button width based on calculated layout
-                lv_obj_set_size(s_hotkey_buttons[i], lv_pct(button_widths[i]), 90);
-            } else {
-                lv_label_set_text(s_hotkey_labels[i], "");
-                lv_obj_add_flag(s_hotkey_buttons[i], LV_OBJ_FLAG_HIDDEN);
-                lv_obj_clear_flag(s_hotkey_buttons[i], LV_OBJ_FLAG_CLICKABLE);
-            }
-        }
-    }
-    LV_UNLOCK();
-    
-    ESP_LOGI(TAG, "Updated hotkey labels: %d active items, layout: %d%% %d%% %d%% %d%% %d%% %d%%", 
-             num_active_labels, button_widths[0], button_widths[1], button_widths[2], 
-             button_widths[3], button_widths[4], button_widths[5]);
-}
-
-/**
- * @brief Clear all hotkey labels
- */
-static void clear_hotkey_labels(void)
-{
-    const char* empty_labels[6] = {"", "", "", "", "", ""};
-    wavex_ui_update_hotkey_labels(empty_labels);
-}
-
-/**
- * @brief Calculate dynamic hotkey button layout based on number of items
- */
-static void calculate_hotkey_layout(int num_items, int* button_widths)
-{
-    // 6 slots total, distribute based on number of items
-    int slots_per_button = 6 / num_items;
-    int remaining_slots = 6 % num_items;
-    
-    for (int i = 0; i < 6; i++) {
-        if (i < num_items) {
-            // Each button gets base slots plus potentially one extra slot
-            int slots = slots_per_button + (i < remaining_slots ? 1 : 0);
-            button_widths[i] = (slots * 100) / 6; // Convert to percentage
-        } else {
-            button_widths[i] = 0; // Hidden buttons
-        }
-    }
-}
-
-/**
- * @brief Set current screen context for hotkey mapping
- */
-void wavex_ui_set_screen_context(const char* screen_name)
-{
-    s_current_screen = screen_name;
-}
-
-/**
- * @brief Update header title
- */
-void wavex_ui_update_header_title(const char* title)
-{
-    if (s_header_title && lv_obj_is_valid(s_header_title)) {
-        LV_LOCK();
-        lv_label_set_text(s_header_title, title);
-        LV_UNLOCK();
-    }
-}
-
-/**
- * @brief Update hotkey label for a specific button
- */
-void wavex_ui_update_hotkey_label(int button_index, const char* label)
-{
-    if (button_index < 0 || button_index >= 6 || !s_hotkey_labels[button_index]) {
-        ESP_LOGW(TAG, "Invalid hotkey button index: %d", button_index);
-        return;
-    }
-    
-    LV_LOCK();
-    if (lv_obj_is_valid(s_hotkey_labels[button_index])) {
-        lv_label_set_text(s_hotkey_labels[button_index], label);
-    }
-    LV_UNLOCK();
-}
-
-/**
- * @brief Hotkey button event callback
- */
-static void hotkey_button_event_cb(lv_event_t *e)
-{
-    lv_event_code_t code = lv_event_get_code(e);
-    int button_index = (int)(intptr_t)lv_event_get_user_data(e);
-
-    ESP_LOGI(TAG, "Hotkey button event: code=%d, button=%d, screen=%s", code, button_index, s_current_screen);
-
-    if (code == LV_EVENT_CLICKED) {
-        ESP_LOGI(TAG, "Hotkey button %d clicked on screen %s", button_index, s_current_screen);
-        
-        // Handle hotkey actions based on current screen context
-        if (s_content_area == NULL || !lv_obj_is_valid(s_content_area)) {
-            ESP_LOGE(TAG, "Content area not available for hotkey navigation");
-            return;
-        }
-        
-        // Lock LVGL for thread safety
-        LV_LOCK();
-        
-        // Map button index to hotkey actions based on current screen
-        if (strcmp(s_current_screen, "main") == 0) {
-            // Main menu: Sample, System
-            switch (button_index) {
-                case 0: // Sample
-                    ESP_LOGI(TAG, "Hotkey: Navigating to sample menu");
-                    create_sample_menu(s_content_area);
-                    break;
-                case 1: // System
-                    ESP_LOGI(TAG, "Hotkey: Navigating to system menu");
-                    create_system_menu(s_content_area);
-                    break;
-                default:
-                    ESP_LOGW(TAG, "Unknown hotkey button index for main menu: %d", button_index);
-                    break;
-            }
-        } else if (strcmp(s_current_screen, "sample") == 0) {
-            // Sample menu: Record, Edit, Load/Save, Back
-            switch (button_index) {
-                case 0: // Record
-                    ESP_LOGI(TAG, "Hotkey: Record option selected");
-                    // TODO: Implement record functionality
-                    break;
-                case 1: // Edit
-                    ESP_LOGI(TAG, "Hotkey: Edit option selected");
-                    // TODO: Implement edit functionality
-                    break;
-                case 2: // Load/Save
-                    ESP_LOGI(TAG, "Hotkey: Load/Save option selected");
-                    create_sample_load_save_page(s_content_area);
-                    break;
-                case 3: // Back
-                    ESP_LOGI(TAG, "Hotkey: Navigating back to main menu");
-                    create_main_menu(s_content_area);
-                    break;
-                default:
-                    ESP_LOGW(TAG, "Unknown hotkey button index for sample menu: %d", button_index);
-                    break;
-            }
-        } else if (strcmp(s_current_screen, "system") == 0) {
-            // System menu: Diagnostics, Settings, Back
-            switch (button_index) {
-                case 0: // Diagnostics
-                    ESP_LOGI(TAG, "Hotkey: Navigating to diagnostics page");
-                    diagnostics_page_create(s_content_area);
-                    diagnostics_page_init();
-                    break;
-                case 1: // Settings
-                    ESP_LOGI(TAG, "Hotkey: Settings option selected");
-                    // TODO: Implement settings functionality
-                    break;
-                case 2: // Back
-                    ESP_LOGI(TAG, "Hotkey: Navigating back to main menu");
-                    create_main_menu(s_content_area);
-                    break;
-                default:
-                    ESP_LOGW(TAG, "Unknown hotkey button index for system menu: %d", button_index);
-                    break;
-            }
-        } else if (strcmp(s_current_screen, "diagnostics") == 0) {
-            // Diagnostics page: Back
-            switch (button_index) {
-                case 0: // Back
-                    ESP_LOGI(TAG, "Hotkey: Navigating back to system menu");
-                    diagnostics_page_stop();
-                    create_system_menu(s_content_area);
-                    break;
-                default:
-                    ESP_LOGW(TAG, "Unknown hotkey button index for diagnostics page: %d", button_index);
-                    break;
-            }
-        } else if (strcmp(s_current_screen, "sample_load_save") == 0) {
-            // Sample Load/Save page: Audition, Load, Up, Down, Select, Back
-            switch (button_index) {
-                case 0: // Audition/Stop
-                    ESP_LOGI(TAG, "Hotkey: Audition/Stop sample");
-                    if (s_sample_load_save_page) {
-                        if (s_sample_load_save_page->is_playing) {
-                            // Stop current audition
-                            ESP_LOGI(TAG, "Stopping current audition");
-                            wavex_sample_load_save_stop_audition(s_sample_load_save_page);
-                            // Don't update button text immediately - wait for stop response
-                        } else {
-                            // Start new audition
-                            const wavex_file_entry_t* selected = wavex_file_browser_get_selected(s_sample_load_save_page->file_browser);
-                            if (selected && !selected->is_directory) {
-                                // Use index-based audition for better performance
-                                uint32_t selected_index = wavex_file_browser_get_selected_index(s_sample_load_save_page->file_browser);
-                                wavex_sample_load_save_audition_sample_by_index(s_sample_load_save_page, selected_index);
-                                // Update button text to "Stop"
-                                wavex_ui_update_hotkey_label(0, "Stop");
-                            } else {
-                                ESP_LOGW(TAG, "No valid file selected for audition");
-                            }
-                        }
-                    }
-                    break;
-                case 1: // Load
-                    ESP_LOGI(TAG, "Hotkey: Load sample");
-                    if (s_sample_load_save_page) {
-                        const wavex_file_entry_t* selected = wavex_file_browser_get_selected(s_sample_load_save_page->file_browser);
-                        if (selected && !selected->is_directory) {
-                            wavex_sample_load_save_load_sample(s_sample_load_save_page, selected->path);
-                        }
-                    }
-                    break;
-                case 2: // Up Arrow
-                    ESP_LOGI(TAG, "Hotkey: Navigate up in file list");
-                    if (s_sample_load_save_page && s_sample_load_save_page->file_browser) {
-                        uint32_t current_idx = wavex_file_browser_get_selected_index(s_sample_load_save_page->file_browser);
-                        if (current_idx > 0) {
-                            wavex_file_browser_set_selection(s_sample_load_save_page->file_browser, current_idx - 1);
-                            ESP_LOGI(TAG, "Navigated up to index %d", current_idx - 1);
-                        }
-                    }
-                    break;
-                case 3: // Down Arrow
-                    ESP_LOGI(TAG, "Hotkey: Navigate down in file list");
-                    if (s_sample_load_save_page && s_sample_load_save_page->file_browser) {
-                        uint32_t current_idx = wavex_file_browser_get_selected_index(s_sample_load_save_page->file_browser);
-                        uint32_t max_idx = wavex_file_browser_get_entry_count(s_sample_load_save_page->file_browser);
-                        if (current_idx < max_idx - 1) {
-                            wavex_file_browser_set_selection(s_sample_load_save_page->file_browser, current_idx + 1);
-                            ESP_LOGI(TAG, "Navigated down to index %d", current_idx + 1);
-                        }
-                    }
-                    break;
-                case 4: // Select
-                    ESP_LOGI(TAG, "Hotkey: Select action");
-                    if (s_sample_load_save_page) {
-                        const wavex_file_entry_t* selected = wavex_file_browser_get_selected(s_sample_load_save_page->file_browser);
-                        if (selected) {
-                            if (selected->is_directory) {
-                                // Enter directory
-                                ESP_LOGI(TAG, "Entering directory: %s", selected->name);
-                                wavex_file_browser_navigate_to(s_sample_load_save_page->file_browser, selected->path);
-                            } else {
-                                // Show file metadata
-                                ESP_LOGI(TAG, "Showing metadata for file: %s", selected->name);
-                                wavex_sample_load_save_update_info(s_sample_load_save_page, selected);
-                            }
-                        }
-                    }
-                    break;
-                case 5: // Back
-                    ESP_LOGI(TAG, "Hotkey: Back action");
-                    if (s_sample_load_save_page) {
-                        // Try to navigate up one directory level first
-                        if (wavex_file_browser_navigate_up(s_sample_load_save_page->file_browser)) {
-                            ESP_LOGI(TAG, "Navigated up one directory level");
-                        } else {
-                            // If we're at root, go back to sample menu
-                            ESP_LOGI(TAG, "At root directory, navigating back to sample menu");
-                            wavex_sample_load_save_destroy(s_sample_load_save_page);
-                            s_sample_load_save_page = NULL;
-                            create_sample_menu(s_content_area);
-                        }
-                    } else {
-                        ESP_LOGW(TAG, "Sample load/save page is NULL, cannot navigate back");
-                    }
-                    break;
-                default:
-                    ESP_LOGW(TAG, "Unknown hotkey button index for sample load/save page: %d", button_index);
-                    break;
-            }
-        } else {
-            ESP_LOGW(TAG, "Unknown screen context for hotkey: %s", s_current_screen);
-        }
-    } else if (code == LV_EVENT_PRESSED) {
-        ESP_LOGI(TAG, "Hotkey button %d pressed", button_index);
-    } else if (code == LV_EVENT_RELEASED) {
-        ESP_LOGI(TAG, "Hotkey button %d released", button_index);
-    }
-    
-    // Unlock LVGL
-    LV_UNLOCK();
-}
-
-/**
- * @brief Create the main menu with navigation buttons
- */
-static void create_main_menu(lv_obj_t *parent)
-{
-    if (parent == NULL) {
-        ESP_LOGE(TAG, "create_main_menu: parent is NULL");
-        return;
-    }
-
-    ESP_LOGI(TAG, "Creating main menu...");
-    LV_LOCK();
-    // Clear parent content
-    lv_obj_clean(parent);
-
-    // Set screen context for hotkey mapping
-    wavex_ui_set_screen_context("main");
-    
-    // Update header title
-    wavex_ui_update_header_title("Main Menu");
-
-    // Create a flex container for menu buttons (optimized for landscape)
-    lv_obj_t *menu_cont = lv_obj_create(parent);
-    lv_obj_set_size(menu_cont, lv_pct(95), lv_pct(100));  // Use full height since no title/back button
-    lv_obj_set_style_bg_color(menu_cont, lv_color_make(0x00, 0x00, 0x00), LV_PART_MAIN); // Black background for dark mode
-    lv_obj_set_style_border_width(menu_cont, 2, LV_PART_MAIN);
-    lv_obj_set_style_border_color(menu_cont, lv_color_make(0x33, 0x33, 0x33), LV_PART_MAIN); // Dark gray border
-    lv_obj_set_style_pad_all(menu_cont, 15, LV_PART_MAIN);  // Reduced padding
-    lv_obj_center(menu_cont);
-
-    // Set flex layout for landscape mode - horizontal layout for 2 buttons
-    lv_obj_set_flex_flow(menu_cont, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(menu_cont, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-
-    // Create Sample button with blue styling
-    lv_obj_t *btn1 = lv_btn_create(menu_cont);
-    lv_obj_set_size(btn1, lv_pct(45), 120);  // Increased height for larger font
-    lv_obj_add_event_cb(btn1, menu_button_event_cb, LV_EVENT_CLICKED, (void*)"sample");
-    lv_obj_set_style_bg_color(btn1, lv_color_make(0x21, 0x96, 0xF3), LV_PART_MAIN); // Blue background
-    lv_obj_set_style_bg_color(btn1, lv_color_make(0x19, 0x76, 0xD2), LV_PART_MAIN | LV_STATE_PRESSED); // Darker blue when pressed
-    lv_obj_set_style_border_width(btn1, 2, LV_PART_MAIN);
-    lv_obj_set_style_border_color(btn1, lv_color_make(0x15, 0x65, 0xC0), LV_PART_MAIN); // Darker blue border
-    lv_obj_set_style_radius(btn1, 5, LV_PART_MAIN);
-    lv_obj_t *label1 = lv_label_create(btn1);
-    lv_label_set_text(label1, "Sample");
-    lv_obj_set_style_text_font(label1, &lv_font_montserrat_22, LV_PART_MAIN);
-    lv_obj_set_style_text_color(label1, lv_color_white(), LV_PART_MAIN); // White text
-    lv_obj_center(label1);
-
-    // Create System button with blue styling
-    lv_obj_t *btn2 = lv_btn_create(menu_cont);
-    lv_obj_set_size(btn2, lv_pct(45), 120);
-    lv_obj_add_event_cb(btn2, menu_button_event_cb, LV_EVENT_CLICKED, (void*)"system");
-    lv_obj_set_style_bg_color(btn2, lv_color_make(0x21, 0x96, 0xF3), LV_PART_MAIN); // Blue background
-    lv_obj_set_style_bg_color(btn2, lv_color_make(0x19, 0x76, 0xD2), LV_PART_MAIN | LV_STATE_PRESSED); // Darker blue when pressed
-    lv_obj_set_style_border_width(btn2, 2, LV_PART_MAIN);
-    lv_obj_set_style_border_color(btn2, lv_color_make(0x15, 0x65, 0xC0), LV_PART_MAIN); // Darker blue border
-    lv_obj_set_style_radius(btn2, 5, LV_PART_MAIN);
-    lv_obj_t *label2 = lv_label_create(btn2);
-    lv_label_set_text(label2, "System");
-    lv_obj_set_style_text_font(label2, &lv_font_montserrat_22, LV_PART_MAIN);
-    lv_obj_set_style_text_color(label2, lv_color_white(), LV_PART_MAIN); // White text
-    lv_obj_center(label2);
-    
-    // Update hotkey labels for main menu
-    const char* main_menu_labels[6] = {"Sample", "System", "", "", "", ""};
-    wavex_ui_update_hotkey_labels(main_menu_labels);
-    
-    LV_UNLOCK();
-}
-
-/**
- * @brief Create the sample submenu
- */
-static void create_sample_menu(lv_obj_t *parent)
-{
-    if (parent == NULL) {
-        ESP_LOGE(TAG, "create_sample_menu: parent is NULL");
-        return;
-    }
-
-    ESP_LOGI(TAG, "Creating sample menu...");
-    LV_LOCK();
-    // Clear parent content
-    lv_obj_clean(parent);
-
-    // Set screen context for hotkey mapping
-    wavex_ui_set_screen_context("sample");
-    
-    // Update header title
-    wavex_ui_update_header_title("Sample Menu");
-
-    // Create a flex container for sample options (optimized for landscape)
-    lv_obj_t *menu_cont = lv_obj_create(parent);
-    LV_UNLOCK();
-    lv_obj_set_size(menu_cont, lv_pct(95), lv_pct(100));  // Use full height since no title/back button
-    lv_obj_set_style_bg_color(menu_cont, lv_color_make(0x00, 0x00, 0x00), LV_PART_MAIN); // Black background for dark mode
-    lv_obj_set_style_border_width(menu_cont, 2, LV_PART_MAIN);
-    lv_obj_set_style_border_color(menu_cont, lv_color_make(0x33, 0x33, 0x33), LV_PART_MAIN); // Dark gray border
-    lv_obj_set_style_pad_all(menu_cont, 15, LV_PART_MAIN);  // Reduced padding
-    lv_obj_center(menu_cont);
-
-    // Set flex layout for landscape mode - horizontal layout
-    lv_obj_set_flex_flow(menu_cont, LV_FLEX_FLOW_ROW_WRAP);
-    lv_obj_set_flex_align(menu_cont, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-
-    // Sample options (side by side for landscape) - adjusted sizing with blue styling
-    lv_obj_t *btn1 = lv_btn_create(menu_cont);
-    lv_obj_set_size(btn1, lv_pct(30), 100);  // Increased height for larger font
-    lv_obj_add_event_cb(btn1, menu_button_event_cb, LV_EVENT_CLICKED, (void*)"record");
-    lv_obj_set_style_bg_color(btn1, lv_color_make(0x21, 0x96, 0xF3), LV_PART_MAIN); // Blue background
-    lv_obj_set_style_bg_color(btn1, lv_color_make(0x19, 0x76, 0xD2), LV_PART_MAIN | LV_STATE_PRESSED); // Darker blue when pressed
-    lv_obj_set_style_border_width(btn1, 2, LV_PART_MAIN);
-    lv_obj_set_style_border_color(btn1, lv_color_make(0x15, 0x65, 0xC0), LV_PART_MAIN); // Darker blue border
-    lv_obj_set_style_radius(btn1, 5, LV_PART_MAIN);
-    lv_obj_t *label1 = lv_label_create(btn1);
-    lv_label_set_text(label1, "Record");
-    lv_obj_set_style_text_font(label1, &lv_font_montserrat_22, LV_PART_MAIN);
-    lv_obj_set_style_text_color(label1, lv_color_white(), LV_PART_MAIN); // White text
-    lv_obj_center(label1);
-
-    lv_obj_t *btn2 = lv_btn_create(menu_cont);
-    lv_obj_set_size(btn2, lv_pct(30), 100);
-    lv_obj_add_event_cb(btn2, menu_button_event_cb, LV_EVENT_CLICKED, (void*)"edit");
-    lv_obj_set_style_bg_color(btn2, lv_color_make(0x21, 0x96, 0xF3), LV_PART_MAIN); // Blue background
-    lv_obj_set_style_bg_color(btn2, lv_color_make(0x19, 0x76, 0xD2), LV_PART_MAIN | LV_STATE_PRESSED); // Darker blue when pressed
-    lv_obj_set_style_border_width(btn2, 2, LV_PART_MAIN);
-    lv_obj_set_style_border_color(btn2, lv_color_make(0x15, 0x65, 0xC0), LV_PART_MAIN); // Darker blue border
-    lv_obj_set_style_radius(btn2, 5, LV_PART_MAIN);
-    lv_obj_t *label2 = lv_label_create(btn2);
-    lv_label_set_text(label2, "Edit");
-    lv_obj_set_style_text_font(label2, &lv_font_montserrat_22, LV_PART_MAIN);
-    lv_obj_set_style_text_color(label2, lv_color_white(), LV_PART_MAIN); // White text
-    lv_obj_center(label2);
-
-    lv_obj_t *btn3 = lv_btn_create(menu_cont);
-    lv_obj_set_size(btn3, lv_pct(30), 100);
-    lv_obj_add_event_cb(btn3, menu_button_event_cb, LV_EVENT_CLICKED, (void*)"load_save");
-    lv_obj_set_style_bg_color(btn3, lv_color_make(0x21, 0x96, 0xF3), LV_PART_MAIN); // Blue background
-    lv_obj_set_style_bg_color(btn3, lv_color_make(0x19, 0x76, 0xD2), LV_PART_MAIN | LV_STATE_PRESSED); // Darker blue when pressed
-    lv_obj_set_style_border_width(btn3, 2, LV_PART_MAIN);
-    lv_obj_set_style_border_color(btn3, lv_color_make(0x15, 0x65, 0xC0), LV_PART_MAIN); // Darker blue border
-    lv_obj_set_style_radius(btn3, 5, LV_PART_MAIN);
-    lv_obj_t *label3 = lv_label_create(btn3);
-    lv_label_set_text(label3, "Load/Save");
-    lv_obj_set_style_text_font(label3, &lv_font_montserrat_22, LV_PART_MAIN);
-    lv_obj_set_style_text_color(label3, lv_color_white(), LV_PART_MAIN); // White text
-    lv_obj_center(label3);
-    
-    // Update hotkey labels for sample menu
-    const char* sample_menu_labels[6] = {"Record", "Edit", "Load/Save", "Back", "", ""};
-    wavex_ui_update_hotkey_labels(sample_menu_labels);
-    
-    LV_UNLOCK();
-}
-
-/**
- * @brief Create the system submenu
- */
-static void create_system_menu(lv_obj_t *parent)
-{
-    if (parent == NULL) {
-        ESP_LOGE(TAG, "create_system_menu: parent is NULL");
-        return;
-    }
-
-    ESP_LOGI(TAG, "Creating system menu...");
-    LV_LOCK();
-    // Clear parent content
-    lv_obj_clean(parent);
-
-    // Set screen context for hotkey mapping
-    wavex_ui_set_screen_context("system");
-    
-    // Update header title
-    wavex_ui_update_header_title("System Menu");
-
-    // Create a flex container for system options (optimized for landscape)
-    lv_obj_t *menu_cont = lv_obj_create(parent);
-    lv_obj_set_size(menu_cont, lv_pct(95), lv_pct(100));  // Use full height since no title/back button
-    lv_obj_set_style_bg_color(menu_cont, lv_color_make(0x00, 0x00, 0x00), LV_PART_MAIN); // Black background for dark mode
-    lv_obj_set_style_border_width(menu_cont, 2, LV_PART_MAIN);
-    lv_obj_set_style_border_color(menu_cont, lv_color_make(0x33, 0x33, 0x33), LV_PART_MAIN); // Dark gray border
-    lv_obj_set_style_pad_all(menu_cont, 15, LV_PART_MAIN);  // Reduced padding
-    lv_obj_center(menu_cont);
-
-    // Set flex layout for landscape mode - horizontal layout
-    lv_obj_set_flex_flow(menu_cont, LV_FLEX_FLOW_ROW_WRAP);
-    lv_obj_set_flex_align(menu_cont, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-
-    // System options (side by side for landscape) - adjusted sizing with blue styling
-    lv_obj_t *btn1 = lv_btn_create(menu_cont);
-    lv_obj_set_size(btn1, lv_pct(45), 100);  // Increased height for larger font
-    lv_obj_add_event_cb(btn1, menu_button_event_cb, LV_EVENT_CLICKED, (void*)"diagnostics");
-    lv_obj_set_style_bg_color(btn1, lv_color_make(0x21, 0x96, 0xF3), LV_PART_MAIN); // Blue background
-    lv_obj_set_style_bg_color(btn1, lv_color_make(0x19, 0x76, 0xD2), LV_PART_MAIN | LV_STATE_PRESSED); // Darker blue when pressed
-    lv_obj_set_style_border_width(btn1, 2, LV_PART_MAIN);
-    lv_obj_set_style_border_color(btn1, lv_color_make(0x15, 0x65, 0xC0), LV_PART_MAIN); // Darker blue border
-    lv_obj_set_style_radius(btn1, 5, LV_PART_MAIN);
-    lv_obj_t *label1 = lv_label_create(btn1);
-    lv_label_set_text(label1, "Diagnostics");
-    lv_obj_set_style_text_font(label1, &lv_font_montserrat_22, LV_PART_MAIN);
-    lv_obj_set_style_text_color(label1, lv_color_white(), LV_PART_MAIN); // White text
-    lv_obj_center(label1);
-
-    lv_obj_t *btn2 = lv_btn_create(menu_cont);
-    lv_obj_set_size(btn2, lv_pct(45), 100);
-    lv_obj_add_event_cb(btn2, menu_button_event_cb, LV_EVENT_CLICKED, (void*)"settings");
-    lv_obj_set_style_bg_color(btn2, lv_color_make(0x21, 0x96, 0xF3), LV_PART_MAIN); // Blue background
-    lv_obj_set_style_bg_color(btn2, lv_color_make(0x19, 0x76, 0xD2), LV_PART_MAIN | LV_STATE_PRESSED); // Darker blue when pressed
-    lv_obj_set_style_border_width(btn2, 2, LV_PART_MAIN);
-    lv_obj_set_style_border_color(btn2, lv_color_make(0x15, 0x65, 0xC0), LV_PART_MAIN); // Darker blue border
-    lv_obj_set_style_radius(btn2, 5, LV_PART_MAIN);
-    lv_obj_t *label2 = lv_label_create(btn2);
-    lv_label_set_text(label2, "Settings");
-    lv_obj_set_style_text_font(label2, &lv_font_montserrat_22, LV_PART_MAIN);
-    lv_obj_set_style_text_color(label2, lv_color_white(), LV_PART_MAIN); // White text
-    lv_obj_center(label2);
-    
-    // Update hotkey labels for system menu
-    const char* system_menu_labels[6] = {"Diagnostics", "Settings", "Back", "", "", ""};
-    wavex_ui_update_hotkey_labels(system_menu_labels);
-    
-    LV_UNLOCK();
-}
-
-/**
- * @brief Create the sample load/save page
- */
-static void create_sample_load_save_page(lv_obj_t *parent)
-{
-    if (parent == NULL) {
-        ESP_LOGE(TAG, "create_sample_load_save_page: parent is NULL");
-        return;
-    }
-
-    ESP_LOGI(TAG, "Creating sample load/save page...");
-    LV_LOCK();
-    
-    // Clear parent content
-    lv_obj_clean(parent);
-
-    // Set screen context for hotkey mapping
-    wavex_ui_set_screen_context("sample_load_save");
-    
-    // Update header title
-    wavex_ui_update_header_title("Sample Load/Save");
-
-    // Destroy existing page if it exists
-    if (s_sample_load_save_page) {
-        wavex_sample_load_save_destroy(s_sample_load_save_page);
-        s_sample_load_save_page = NULL;
-    }
-
-    // Create the proper sample load/save page with file browser
-    s_sample_load_save_page = wavex_sample_load_save_create(parent);
-    if (!s_sample_load_save_page) {
-        ESP_LOGE(TAG, "Failed to create sample load/save page");
-        // Fall back to test page
-        lv_obj_t* container = lv_obj_create(parent);
-        lv_obj_set_size(container, lv_pct(100), lv_pct(100));
-        lv_obj_set_style_bg_color(container, lv_color_make(0x00, 0x00, 0x00), LV_PART_MAIN);
-        lv_obj_set_style_border_width(container, 2, LV_PART_MAIN);
-        lv_obj_set_style_border_color(container, lv_color_make(0x33, 0x33, 0x33), LV_PART_MAIN);
-        lv_obj_align(container, LV_ALIGN_TOP_LEFT, 0, 0);
-        
-        lv_obj_t* test_label = lv_label_create(container);
-        lv_label_set_text(test_label, "Sample Load/Save Page\n\nFile Browser failed to load\n\nUse hotkeys: Audition, Load, Save, Back");
-        lv_obj_set_style_text_color(test_label, lv_color_white(), LV_PART_MAIN);
-        lv_obj_set_style_text_font(test_label, &lv_font_montserrat_18, LV_PART_MAIN);
-        lv_obj_center(test_label);
-    } else {
-        ESP_LOGI(TAG, "Sample load/save page created successfully with file browser");
-    }
-    
-    // Update hotkey labels for sample load/save page
-    const char* load_save_labels[6] = {"Audition", "Load", "Up", "Down", "Select", "Back"};
-    wavex_ui_update_hotkey_labels(load_save_labels);
-    
-    ESP_LOGI(TAG, "Sample load/save page creation completed");
-    LV_UNLOCK();
-}
-
-/**
- * @brief Menu button event callback
- */
-static void menu_button_event_cb(lv_event_t *e)
-{
-    lv_event_code_t code = lv_event_get_code(e);
-    const char *btn_id = (const char *)lv_event_get_user_data(e);
-
-    if (code == LV_EVENT_CLICKED) {
-        if (btn_id == NULL) {
-            ESP_LOGE(TAG, "Menu button clicked with NULL ID");
-            return;
-        }
-
-        ESP_LOGI(TAG, "Menu button clicked: %s", btn_id);
-
-        // Use the stored content area reference
-        if (s_content_area == NULL) {
-            ESP_LOGE(TAG, "Content area not initialized for menu navigation");
-            return;
-        }
-        
-        // Additional safety check
-        if (!lv_obj_is_valid(s_content_area)) {
-            ESP_LOGE(TAG, "Content area is not a valid LVGL object");
-            return;
-        }
-
-        if (strcmp(btn_id, "sample") == 0) {
-            ESP_LOGI(TAG, "Navigating to sample menu...");
-            create_sample_menu(s_content_area);
-        } else if (strcmp(btn_id, "system") == 0) {
-            ESP_LOGI(TAG, "Navigating to system menu...");
-            create_system_menu(s_content_area);
-        } else if (strcmp(btn_id, "record") == 0) {
-            ESP_LOGI(TAG, "Record option selected");
-            // TODO: Implement record functionality
-        } else if (strcmp(btn_id, "edit") == 0) {
-            ESP_LOGI(TAG, "Edit option selected");
-            // TODO: Implement edit functionality
-        } else if (strcmp(btn_id, "load_save") == 0) {
-            ESP_LOGI(TAG, "Load/Save option selected");
-            create_sample_load_save_page(s_content_area);
-        } else if (strcmp(btn_id, "settings") == 0) {
-            ESP_LOGI(TAG, "Settings option selected");
-            // TODO: Implement settings functionality
-        } else if (strcmp(btn_id, "diagnostics") == 0) {
-            ESP_LOGI(TAG, "Navigating to diagnostics page...");
-            diagnostics_page_create(s_content_area);
-            diagnostics_page_init();
-        } else if (strcmp(btn_id, "back_main") == 0) {
-            ESP_LOGI(TAG, "Navigating back to main menu...");
-            create_main_menu(s_content_area);
-        } else if (strcmp(btn_id, "back_system") == 0) {
-            ESP_LOGI(TAG, "Navigating back to system menu...");
-            diagnostics_page_stop();
-            create_system_menu(s_content_area);
-        } else {
-            ESP_LOGI(TAG, "Menu option '%s' selected", btn_id);
         }
     }
 }
@@ -1572,7 +596,7 @@ static void menu_button_event_cb(lv_event_t *e)
     ESP_LOGI(TAG, "Initializing LVGL display...");
 
     // Initialize LVGL display
-    esp_err_t lvgl_ret = init_lvgl_display();
+    esp_err_t lvgl_ret = wavex_ui::DisplayManager::instance().init();
     if (lvgl_ret != ESP_OK) {
          ESP_LOGE(TAG, "Failed to initialize LVGL display: %s", esp_err_to_name(lvgl_ret));
          vTaskDelete(NULL);
@@ -1585,41 +609,8 @@ static void menu_button_event_cb(lv_event_t *e)
     ESP_LOGI(TAG, "Memory after display init:");
     ESP_LOGI(TAG, "  Free heap: %zu bytes", esp_get_free_heap_size());
 
-    // Create the main UI with dark mode
-    ESP_LOGI(TAG, "Creating main UI...");
-    LV_LOCK();
-    lv_obj_t *main_screen = lv_screen_active();
-    lv_obj_set_style_bg_color(main_screen, lv_color_make(0x00, 0x00, 0x00), LV_PART_MAIN); // Black background for dark mode
-    
-    // Create header (increased size by 50% for better visibility)
-    lv_obj_t *header = lv_obj_create(main_screen);
-    lv_obj_set_size(header, lv_pct(100), 75);  // Increased from 50 to 75 (50% increase)
-    lv_obj_set_style_bg_color(header, lv_color_make(0x2E, 0x34, 0x40), LV_PART_MAIN); // Keep dark gray for contrast
-    lv_obj_set_style_border_width(header, 0, LV_PART_MAIN);
-    lv_obj_align(header, LV_ALIGN_TOP_MID, 0, 0);
-    
-    // Add title to header (larger font to match increased header size)
-    s_header_title = lv_label_create(header);
-    lv_label_set_text(s_header_title, "Main Menu");
-    lv_obj_set_style_text_color(s_header_title, lv_color_white(), LV_PART_MAIN);
-    lv_obj_set_style_text_font(s_header_title, &lv_font_montserrat_32, LV_PART_MAIN); // Increased from 22 to 32
-    lv_obj_center(s_header_title);
-    
-    // Create content area (adjusted for landscape mode with hotkey region) with dark mode
-    lv_obj_t *content = lv_obj_create(main_screen);
-    lv_obj_set_size(content, lv_pct(100), 545);  // 720 - 75 - 100 = 545 pixels (full height minus header and hotkey region)
-    lv_obj_set_style_bg_color(content, lv_color_make(0x00, 0x00, 0x00), LV_PART_MAIN); // Black background for dark mode
-    lv_obj_set_style_border_width(content, 0, LV_PART_MAIN);
-    lv_obj_align(content, LV_ALIGN_TOP_MID, 0, 75);  // Position below header
-    
-    // Store content area reference for menu navigation
-    s_content_area = content;
-    
-    // Navigation system will handle UI creation
-    // No need to create hotkey region or main menu manually
-    LV_UNLOCK();
-
-    ESP_LOGI(TAG, "Main UI created successfully");
+    // Defer layout construction to the navigator stack
+    ESP_LOGI(TAG, "Handing layout control to navigator stack");
 
     // Create meter update timer (every 33ms for 30 FPS real-time updates)
     const esp_timer_create_args_t meter_timer_args = {
@@ -1676,6 +667,26 @@ static void menu_button_event_cb(lv_event_t *e)
             // Navigation system handles all encoder input through InputDispatcher
             // No need for manual encoder handling here
         }
+        
+        // Read potentiometer encoder (PCNT1) for scrolling
+#if WAVEX_ESP_PCNT1_ENABLED
+        int32_t pot_delta = pcnt_consume_delta(WAVEX_PCNT1_UNIT);
+        if (pot_delta != 0) {
+            // Convert PCNT1 delta to EncoderUp/EncoderDown events
+            // Negative delta (counter decreasing) = scrolling up = EncoderUp
+            // Positive delta (counter increasing) = scrolling down = EncoderDown
+            wavex_ui::InputEvent pot_evt;
+            pot_evt.type = (pot_delta > 0) ? wavex_ui::InputType::EncoderDown : wavex_ui::InputType::EncoderUp;
+            pot_evt.delta = (int16_t)(pot_delta > 0 ? pot_delta : -pot_delta); // Use absolute value
+            pot_evt.timestamp_ms = (uint32_t)(esp_timer_get_time() / 1000);
+            ESP_LOGI(TAG, "PCNT1 encoder: delta=%d, posting %s event", pot_delta, 
+                     (pot_delta > 0) ? "EncoderDown" : "EncoderUp");
+            bool posted = wavex_ui::InputDispatcher::instance().post(pot_evt);
+            if (!posted) {
+                ESP_LOGW(TAG, "Failed to post PCNT1 encoder event to queue");
+            }
+        }
+#endif
         // Dispatch queued input events to current context
         wavex_ui::InputDispatcher::instance().processAll();
         
@@ -1692,10 +703,11 @@ static void menu_button_event_cb(lv_event_t *e)
         //     LV_UNLOCK();
         // }
         
-        // Process deferred file browser updates (prevents deadlock from SPI task)
-        if (g_sample_load_save_page) {
-            wavex_sample_load_save_update(g_sample_load_save_page);
-        }
+        // Process deferred sample browser updates (prevents deadlock from SPI/UART task)
+        // Acquire LVGL lock before processing deferred updates
+        LV_LOCK();
+        wavex_ui::UISampleBrowser::processDeferredUpdates();
+        LV_UNLOCK();
         
         // Use adaptive refresh control for optimal performance
         adaptive_refresh_control();
@@ -1738,13 +750,6 @@ static void menu_button_event_cb(lv_event_t *e)
          s_ui_task_handle = NULL;
      }
 
-    // Stop and delete the LVGL tick timer
-    if (s_lvgl_tick_timer_handle) {
-        esp_timer_stop(s_lvgl_tick_timer_handle);
-        esp_timer_delete(s_lvgl_tick_timer_handle);
-        s_lvgl_tick_timer_handle = NULL;
-    }
-
     // Stop diagnostics page module
     diagnostics_page_stop();
 
@@ -1754,24 +759,9 @@ static void menu_button_event_cb(lv_event_t *e)
         esp_timer_delete(s_meter_timer_handle);
         s_meter_timer_handle = NULL;
     }
-     
-     // Deinitialize LVGL
-     if (s_lvgl_display) {
-         lv_display_delete(s_lvgl_display);
-         s_lvgl_display = NULL;
-     }
-     
-     // Deinitialize touch controller (BSP will handle this)
-     if (s_touch_handle) {
-         esp_lcd_touch_del(s_touch_handle);
-         s_touch_handle = NULL;
-     }
 
-     // BSP handles I2C bus cleanup automatically
-     
-     // Deinitialize display using BSP
-     // BSP handles display cleanup automatically when LVGL display is deleted
-     // No need for manual panel deinitialization
+    // Let display manager clean up LVGL and touch resources
+    wavex_ui::DisplayManager::instance().deinit();
      
      ESP_LOGI(TAG, "UI task stopped");
      return ESP_OK;
@@ -1779,24 +769,5 @@ static void menu_button_event_cb(lv_event_t *e)
  
 esp_err_t wavex_ui_get_panel_handle(esp_lcd_panel_handle_t *panel_handle)
 {
-    if (panel_handle == NULL) {
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    // Get panel handle from BSP if not already available
-    if (s_panel_handle == NULL) {
-        ESP_LOGI(TAG, "Getting panel handle from BSP...");
-        bsp_display_config_t config = {0}; // Default config
-        ESP_RETURN_ON_ERROR(bsp_display_new(&config, &s_panel_handle, NULL),
-                           TAG, "Failed to get panel handle from BSP");
-    }
-
-    *panel_handle = s_panel_handle;
-    return ESP_OK;
+    return wavex_ui::DisplayManager::instance().panelHandle(panel_handle);
 }
-
-// All page pointers are now managed through the UI navigation system or globals
-// wavex_sample_load_save_page_t* g_sample_load_save_page is defined in ui_globals.cpp
-
-static lv_obj_t* s_status_bar_container;
-static lv_obj_t* s_page_container;

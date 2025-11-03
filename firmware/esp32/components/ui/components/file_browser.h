@@ -60,6 +60,10 @@ typedef struct {
     
     // UI update flags (for thread-safe deferred updates)
     bool ui_update_pending;          // True if UI needs to be updated
+    
+    // Scrolling/viewport state
+    uint32_t first_visible_index;    // Index of first visible entry (for scrolling)
+    uint32_t visible_count;          // Number of entries visible on screen
 } wavex_file_browser_t;
 
 // File browser functions
@@ -75,6 +79,10 @@ bool wavex_file_browser_refresh(wavex_file_browser_t* browser);
 void wavex_file_browser_set_selection(wavex_file_browser_t* browser, uint32_t index);
 const wavex_file_entry_t* wavex_file_browser_get_selected(wavex_file_browser_t* browser);
 uint32_t wavex_file_browser_get_selected_index(wavex_file_browser_t* browser);
+
+// Navigation functions with boundary checking and scrolling
+bool wavex_file_browser_navigate_up_entry(wavex_file_browser_t* browser);  // Move selection up (respects boundaries)
+bool wavex_file_browser_navigate_down_entry(wavex_file_browser_t* browser); // Move selection down (respects boundaries)
 
 // Callback functions
 void wavex_file_browser_set_file_selected_callback(wavex_file_browser_t* browser, 

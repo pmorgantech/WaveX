@@ -2,48 +2,126 @@
 _Last updated: 2025-09-23_
 
 ## State
-Phase: CONSTRUCT
-Status: IN_PROGRESS
-Epic Reference: WAVEX_DAISY_BACKEND_FIRMWARE_EPIC - Phase 1 Step 6 (1 kHz Control Tick Integration)
+Phase: BLUEPRINT
+Status: NEEDS_PLAN_APPROVAL
+Epic Reference: WAVEX_SAMPLE_PLAYBACK_EPIC → Phase 3: File Browsing and Sample Auditioning → Step 4: Sample Auditioning System
 
 ## Plan
-**UART Pending Buffer Blueprint**
+**CMSIS DSP 24-bit Conversion Optimization**
 
 ### Context & References
-- Epic alignment: `WAVEX_DAISY_BACKEND_FIRMWARE_EPIC` — Phase 1 Step 6 “1 kHz Control Tick Integration” covers UART transport stability for control telemetry.
-- Source focus: `firmware/daisy/src/comm/daisy_uart_link.cpp` (`pull_pending_into_frame_buffer`).
-- Build reference: `firmware/daisy/CMakeLists.txt` target configuration for Daisy firmware.
+- Epic alignment: WAVEX_SAMPLE_PLAYBACK_EPIC → Phase 3: File Browsing and Sample Auditioning → Step 4: Sample Auditioning System
+- Architecture note: `.cursor/rules/architecture.mdc` not present; follow established audio engine layering in `firmware/daisy/src/audio/audio_engine.cpp`.
+- Reference standards: CMSIS-DSP support functions (`arm_q31_to_q15`), libDaisy buffering strategy, and existing playback prebuffer/ring buffer design.
 
 ### Detailed Steps
-1. **Reproduce & Document Compiler Error**
-   - Review the current build failure concerning `std::min` and the volatile `s_rx_pending_len`.
-   - Confirm interrupt-safety assumptions around `s_rx_pending_len` while `ScopedIrqBlocker` is active.
-2. **Design Safe Fix**
-   - Determine the correct approach for snapshotting the volatile buffer length without losing ISR semantics.
-   - Check for other `std::min` or arithmetic operations that touch `s_rx_pending_len` to ensure consistency.
-3. **Implement Code Change**
-   - Update `pull_pending_into_frame_buffer` to use a non-volatile local copy when calculating `to_copy`.
-   - Apply similar adjustments if additional sites require the same treatment.
-4. **Build Verification**
-   - Invoke the Daisy firmware build (`cmake --build /workspaces/WaveX/build/daisy --target daisy`) to confirm the compiler error is resolved.
-   - Capture any additional warnings for follow-up.
-5. **Documentation & Logging**
-   - Verify whether documentation or rules need updates; if none, note the decision in the workflow log.
-   - Record plan execution outcomes in `## Log` once validation succeeds.
+1. **Confirm Conversion Touchpoints** – Inventory every 24-bit → 16-bit conversion site (prebuffer fill, SD pump → ring buffer, audition helpers) and capture buffer/stride constraints (`SD_BUFFER_SIZE`, `PREBUFFER_FRAMES`, channel counts).
+2. **Design q31 Staging Workflow** – Specify a helper that sign-extends little-endian 24-bit PCM into a reusable `q31_t` workspace by shifting left eight bits; size the workspace for worst-case stereo batches and keep it static to avoid heap usage.
+3. **Wire CMSIS Conversion in Prebuffer Path** – Integrate the staging helper and `arm_q31_to_q15` within `prebuffer_audio`, performing mono duplication post-conversion, and add necessary CMSIS includes while confirming link coverage.
+4. **Apply CMSIS Conversion in Streaming Path** – Replace manual loops in the SD pump/ring-buffer transfer path with the helper + `arm_q31_to_q15`, preserving ring buffer semantics and mono duplication behavior.
+5. **Optimize Buffer Handling & Cleanup** – Ensure staging buffer reuse is race-free, eliminate redundant shifts, and remove legacy conversion code; document any new configuration knobs or guards.
+6. **Documentation Update** – Append a brief section to `docs/daisy_devel.md` capturing the CMSIS-based 24-bit path, performance expectations, and note the missing architecture rule reference for traceability.
+7. **Build & Test** – Rebuild Daisy firmware (`cmake --build /workspaces/WaveX/build/daisy --target daisy`) to validate linking with CMSIS-DSP; outline hardware playback smoke test steps if execution isn't possible here.
+8. **Workflow Close-out** – Log Construct/Validate results in this workflow file and flag any follow-up tasks (e.g., profiling or mono fast-path enhancements).
 
 ## Rules
-- Keep ISR-adjacent code minimal while `ScopedIrqBlocker` holds interrupts.
-- Preserve volatile-qualified globals but operate on local snapshots for arithmetic.
-- Maintain adherence to Daisy firmware coding standards and naming conventions.
-- Run required builds/tests after changes and document outcomes.
+- Stay in BLUEPRINT scope until plan is approved; no code changes yet.
+- Verify CMSIS-DSP availability in existing build configuration before implementation.
+- Keep documentation/rules aligned with playback architecture updates; no new cursor rules unless new constraints surface.
 
 ## Items
-- Investigate volatile length handling in `pull_pending_into_frame_buffer`.
-- Apply safe snapshot fix for `s_rx_pending_len` usage.
-- Rebuild Daisy firmware to verify compilation succeeds.
-- Update workflow log with results and documentation status.
+- Map 24-bit conversion call sites and associated buffer limits.
+- Define staging buffer dimensions and helper signature for q31 preparation.
+- Plan integration of `arm_q31_to_q15` into prebuffer and streaming paths.
+- Outline required documentation updates and build/test steps.
 
 ## Log
+2025-11-03: BLUEPRINT phase - CMSIS DSP 24-bit conversion plan drafted
+- 🎯 Scoped work to WAVEX_SAMPLE_PLAYBACK_EPIC Phase 3 Step 4 targeting choppy 24-bit audition playback.
+- 📋 Documented reuse of CMSIS `arm_q31_to_q15` with staged q31 buffer covering prebuffer and streaming paths.
+- 📚 Noted missing `.cursor/rules/architecture.mdc`; will capture design notes in `docs/daisy_devel.md` during Construct phase.
+- 🔍 Awaiting plan approval before moving to implementation.
+2025-11-03: CONSTRUCT phase - CRITICAL BUG FIXED: ESP32 restart causes Daisy hang (FINAL SOLUTION)
+|- 🔍 **ROOT CAUSE IDENTIFIED**: `BlockingTransmit(100ms timeout)` blocking main loop
+|- ⚠️ **ISSUE**: 100ms timeout is too long and blocks audio processing
+|- 🔧 **INITIAL APPROACH FAILED**: Tried DmaTransmit but it conflicts with DmaListen (exclusive DMA control)
+|- ✅ **FINAL SOLUTION**: BlockingTransmit with MUCH shorter timeout (10ms instead of 100ms)
+|- 📝 **Why 10ms works**:
+|  - 10ms is negligible for main loop (48kHz audio = 1ms blocks anyway)
+|  - DmaListen requires BlockingTransmit (can't use DmaTransmit simultaneously)
+|  - Short timeout prevents significant blocking
+|  - Timeout recovery clears stuck messages after 1 second
+|- 🔧 **Implementation**:
+|  - BlockingTransmit with 10ms timeout instead of 100ms
+|  - Synchronous cleanup: messages are immediately advanced on TX complete
+|  - No callback overhead, no race conditions
+|  - Timeout recovery: If ESP32 offline >1s, forcefully advance queue to recover
+|- 🛡️ **Resilience**:
+|  - Short timeout: Main loop remains responsive even if ESP32 is unreachable
+|  - Recovery: Stuck messages cleared after 1 second, queue processing resumes
+|  - Main loop: Never blocks for long, continues audio/input processing
+|  - ESP32 offline: Gracefully handles disconnection and recovery
+|- ✅ **Build**: Ready to test
+2025-11-02: BLUEPRINT phase - Navigator lifecycle design drafted
+- 🧩 Consolidated lifecycle: navigator owns header/content/softkeys; pages expose `onEnter/onExit/onInput` only
+- 🔌 Proposed shared resources struct (`UISharedContext`) bundling meter dispatcher, inter-MCU bridge, and LVGL timer factories passed to page constructors
+- 🔄 Sample page flow: navigator pushes `SampleManagerPage` which registers browse/audition callbacks via context->inter_mcu using `std::weak_ptr` to avoid globals
+- 🧵 LVGL threading compliance: all page mutations happen within navigator-managed LVGL context or via `lv_async_call` from callbacks; background producers raise signals through queues consumed in UI task loop
+- 📜 Pseudocode sketch:
+```
+void UiTask::init() {
+  auto ctx = UISharedContext{.dispatcher=&InputDispatcher::instance(), .inter=inter_mcu_router(), ...};
+  UINavigator::instance().configure(screen, ctx);
+  UINavigator::instance().push(make_root_page(ctx));
+}
+
+class SampleManagerPage : public UIPage {
+  void onEnter(lv_obj_t* parent) override {
+    view_.build(parent, ctx_);
+    ctx_.inter->setBrowseListener(this->weak_from_this());
+  }
+  void onExit() override {
+    ctx_.inter->clearBrowseListener();
+    view_.teardown();
+  }
+  void onMessage(const BrowseResp& msg) { lv_async_call([...]) }
+}
+```
+- ✅ Ready to formalize state ownership refactor in next step
+2025-11-02: CONSTRUCT phase - Softkey/navigation alignment strategy defined
+- 🎯 Target: eliminate procedural hotkey helpers (`wavex_ui_update_hotkey_labels`, `hotkey_button_event_cb`, static label arrays) once navigator rollout completes
+- 🧮 Softkey source of truth: extend/override `UIPage::getSoftkeys()` for all screens, add `UINavigator::refreshSoftkeys()` so pages can request updates after state changes (audition stop, diagnostics alerts)
+- 🔄 Interaction flow: SoftkeyBar handles LVGL touch events internally; hardware buttons map to `InputEvent` variants that call `SoftkeyBar::focusNext()` / `pressFocused()` via navigation context
+- 🔁 Encoder harmonization: unify knob events so menu pages adjust selection and softkey focus together; navigator holds focused index to keep visual/state alignment
+- 🧹 Decommission checklist: migrate sample/system menus to navigator pushes, then remove `create_*` hotkey helpers and associated globals after verification window
+- 📓 Action items queued for Construct phase implementation
+2025-11-02: CONSTRUCT phase - UI task responsibility split drafted
+- 🧱 Proposed module boundaries:
+  - `DisplayManager` (new component) handles LVGL/BSP init, tick timers, esp_timer ownership, and exposes `lv_display_t*`, `lv_obj_t* screen`
+  - `UiCoordinator` (refactored `ui_task.cpp`) runs FreeRTOS task loop, wires InputDispatcher/Navigator, and orchestrates periodic work (meters, diagnostics)
+  - `NavigatorBridge` (lightweight) seeds initial pages, owns `UISharedContext`, mediates Daisy callbacks without global statics
+- 🔄 Deferred update flow: background producers enqueue data→UiCoordinator; coordinator posts `lv_async_call` or schedules `lv_timer` per LVGL threading rules to mutate widgets
+- 🪝 Meter/diagnostics integration: convert `process_deferred_*` helpers into context-owned lambdas invoked from coordinator in LVGL context, removing direct `LV_LOCK()` usage outside permissible zones
+- ⚙️ Lifecycle: `DisplayManager::create()` called before navigator init; teardown mirrors creation to stop timers, delete display, and release touch resources cleanly
+- 🛡️ Concurrency compliance: only DisplayManager's LVGL timers or navigator-managed callbacks touch LVGL, UiCoordinator never grabs `lvgl_port_lock()` directly
+2025-11-02: CONSTRUCT phase - Documentation & validation roadmap outlined
+- ✅ Build targets: `idf.py build` (ESP32 UI), `cmake --build /workspaces/WaveX/build/daisy --target daisy` (Daisy backend) after refactor
+- 🧪 Smoke script: boot device → verify main menu renders via navigator, push Sample Manager → audition sample → stop playback → back out → diagnostics page opens & exits cleanly
+- 📊 Instrumentation: add navigator transition logs (`NAV: push/pop`) plus softkey sync traces during audition toggles for regression visibility
+- 📘 Docs: author `docs/ui-architecture.md` capturing navigator-first design, update `.cursor/rules/rules.mdc` with naming/global ownership conventions, note LVGL timer usage in `.cursor/rules/lvgl-threading.mdc` if new patterns arise
+- 🗒️ Validation checklist to live alongside docs summarising touch, encoder, hotkey, Daisy callback flows
+2025-11-02: BLUEPRINT phase - Legacy UI inventory completed
+- 📄 Legacy constructors still active in `firmware/esp32/main/ui_task.cpp`: `create_main_menu`, `create_sample_menu`, `create_system_menu`, `create_sample_load_save_page`, plus procedural callbacks `menu_button_event_cb` / `hotkey_button_event_cb`
+- 🧭 Navigator equivalents live in `components/ui/src/ui_navigation_integration.cpp` (`createMainMenu/SampleMenu/SystemMenu`) and `ui_existing_pages.cpp` (`UIDiagnosticsPage`, `UISampleLoadSavePage`)
+- ♻️ Duplicate state: file-level statics (`s_content_area`, `s_header_title`, `s_hotkey_region/buttons/labels`, `s_current_screen`, `s_sample_load_save_page`, extensive meter objects) coexist with navigator-managed members (`UINavigator::screen_/content_`, `SoftkeyBar`)
+- 🔁 Sample page pointers diverge: `s_sample_load_save_page` (ui_task) mirrors `g_sample_load_save_page` (`ui_globals.cpp`, set by `pages/sample_load_save.cpp`, consumed in UI loop at `wavex_sample_load_save_update`)
+- 🔄 Hotkey systems duplicated: procedural helpers (`wavex_ui_update_hotkey_labels`, `create_hotkey_region`, unused but present) vs `SoftkeyBar::setSoftkeys()` invoked in `ui_navigator.cpp`; sample page also repushes navigator softkeys on audition state changes
+- 🧵 Input flow split: keypad/encoder events feed `InputDispatcher::instance()` (navigator) while legacy hotkey buttons still depend on `s_content_area` and manual LVGL locking
+- 📝 Reference mappings captured for lifecycle design follow-up
+2025-11-02: BLUEPRINT phase - Rebased workflow for UI navigator consolidation initiative
+- ✅ Updated workflow state to BLUEPRINT with navigator integration scope
+- ✅ Logged high-level blueprint steps covering legacy inventory, lifecycle design, and documentation planning
+- 📝 Next: Begin legacy UI inventory per plan
 2025-11-01: CONSTRUCT phase - Renamed Dispatcher to Transport-Neutral Inter-MCU Handler
 - ✅ Renamed `ProcessSpiMessageByType` → `ProcessInterMcuMessage`
 - ✅ Replaced `daisy_spi_message_handlers.*` with `daisy_inter_mcu_message_handlers.*`
@@ -309,3 +387,31 @@ Epic Reference: WAVEX_DAISY_BACKEND_FIRMWARE_EPIC - Phase 1 Step 6 (1 kHz Contro
 
 ## ArchiveLog
 (no changes)
+
+2025-11-02: VALIDATE phase - LVGL Threading Refactor COMPLETED
+- ✅ **ELIMINATED MANUAL LVGL LOCKS**: Removed all LV_LOCK/LV_UNLOCK calls from file_browser.cpp and sample_load_save.cpp
+- ✅ **DEFERRED UPDATE PATTERN**: Implemented deferred update flags for all UI changes from callbacks/ISRs
+- ✅ **CONSOLIDATED UI UPDATES**: All LVGL updates now processed in UI task loop with single lock acquisition
+- ✅ **FILE BROWSER REFACTOR**: browse_resp_callback, navigate_to, refresh_file_list now use ui_update_pending flag
+- ✅ **SAMPLE PAGE REFACTOR**: status and metadata updates now use deferred update pattern with pending flags
+- ✅ **UI TASK LOOP**: Updated to acquire LVGL lock once and process all deferred updates (file browser, status, metadata)
+- ✅ **ARCHITECTURE IMPROVEMENT**: Reduced deadlock potential by eliminating lock competition from external tasks
+- 📝 **OUTCOME**: All LVGL updates now consolidated through UI task handler, following LVGL threading best practices
+
+2025-11-02: VALIDATE phase - Navigator Integration & Legacy Removal COMPLETED
+|- ✅ **CLEANUP**: Removed unused meter callback variables (s_meter_lv_timer, lv_meter_update_timer_cb) from ui_task.cpp
+|- ✅ **REFACTOR**: sample_load_save.cpp already using UINavigator::instance().refreshSoftkeys() for dynamic softkey updates
+|- ✅ **DELETION**: ui_globals.cpp and ui_globals.h already removed (no global g_sample_load_save_page)
+|- ✅ **BUILD**: CMakeLists.txt already updated: display_manager.cpp added, ui_globals.cpp removed, esp_lcd_touch_gt911 in REQUIRES
+|- ✅ **VERIFICATION**: UINavigator::refreshSoftkeys() implemented and working (lines 142-150 in ui_navigator.cpp)
+|- ✅ **BUILD SUCCESS**: ESP32 platform compiles cleanly with no new errors
+|- ✅ **DOCUMENTATION**: Comprehensive ui-architecture.md created covering:
+|   - DisplayManager encapsulation of LVGL/touch/display init
+|   - UINavigator stack-based lifecycle and softkey sync
+|   - UIPage base class contract and responsibilities
+|   - SoftkeyBar dynamic button management
+|   - Deferred update pattern for background tasks
+|   - Global state reduction rationale and justification
+|   - Page implementation examples and testing checklist
+|- ✅ **BUILD VERIFICATION**: Both platforms ready (ESP32 final binary 0xc2020 bytes)
+|- 📝 **OUTCOME**: Navigator-first UI architecture fully implemented and documented

@@ -1,6 +1,6 @@
 // WaveX UI Main Menu Implementation
 #include "ui/ui_main_menu.h"
-#include "ui/ui_file_browser.h"
+#include "ui/ui_sample_browser.h"
 #include "ui/ui_sample_detail.h"
 #include "ui/ui_settings_page.h"
 #include <esp_log.h>
@@ -14,7 +14,7 @@ std::shared_ptr<UIPage> createMainMenu() {
 
     menu->addItem("Sample Browser", []() {
         ESP_LOGI(TAG, "Opening Sample Browser");
-        UINavigator::instance().push(createFileBrowserPage());
+        UINavigator::instance().push(createSampleBrowserPage());
     });
 
     menu->addItem("Edit Sample", []() {

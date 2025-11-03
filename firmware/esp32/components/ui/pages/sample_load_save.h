@@ -28,11 +28,19 @@ typedef struct {
     bool is_playing;
     char selected_file[96];
     uint32_t selected_file_index;
+    
+    // Deferred UI update flags (for thread-safe updates from callbacks)
+    bool status_update_pending;
+    bool metadata_update_pending;
+    char pending_status_text[256];
+    char pending_metadata_text[512];
+    const wavex_file_entry_t* pending_metadata_entry;  // Pointer to entry data (valid until next update)
 } wavex_sample_load_save_page_t;
 
 // Page creation and management
 wavex_sample_load_save_page_t* wavex_sample_load_save_create(lv_obj_t* parent);
 void wavex_sample_load_save_destroy(wavex_sample_load_save_page_t* page);
+wavex_sample_load_save_page_t* wavex_sample_load_save_get_active(void);
 
 // Page interface functions
 void wavex_sample_load_save_show(wavex_sample_load_save_page_t* page);

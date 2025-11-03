@@ -12,7 +12,8 @@ static const char* TAG = "UI_SETTINGS_PAGE";
 namespace wavex_ui {
 
 void UISettingsPage::onEnter(lv_obj_t* parent) {
-    LV_LOCK();
+    // NOTE: onEnter is called from UINavigator::push/pop which already holds LVGL lock
+    // No need to acquire lock here
     root_ = lv_obj_create(parent);
     lv_obj_set_size(root_, 480, 320);
     lv_obj_set_style_bg_color(root_, lv_color_make(0x00, 0x00, 0x00), LV_PART_MAIN); // Dark mode
@@ -37,14 +38,13 @@ void UISettingsPage::onEnter(lv_obj_t* parent) {
     lv_obj_set_style_border_color(list_, lv_color_make(0x33, 0x33, 0x33), LV_PART_MAIN);
 
     rebuildList();
-    LV_UNLOCK();
 }
 
 void UISettingsPage::onExit() {
+    // NOTE: onExit is called from UINavigator::push/pop which already holds LVGL lock
+    // No need to acquire lock here
     if (root_) {
-        LV_LOCK();
         lv_obj_del(root_);
-        LV_UNLOCK();
         root_ = nullptr;
         list_ = nullptr;
         valueLabels_.clear();

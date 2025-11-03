@@ -15,21 +15,21 @@
 #include "freertos/task.h"
 #include "../../../main/inter_mcu.h"
 #include "../../../main/ui_task.h"
-#include "../include/ui/ui_globals.h" // For g_sample_load_save_page
-// Refresh softkeys after state changes
 #include "../include/ui/ui_navigator.h"
 
 // LVGL includes for thread safety (C++)
 #include "esp_lvgl_port.h"
 
-// LVGL port lock macros for thread safety
-#define LV_LOCK()   lvgl_port_lock(portMAX_DELAY)
-#define LV_UNLOCK() lvgl_port_unlock()
+// NOTE: LVGL locks are handled by UI task loop - all UI updates use deferred update pattern
 
 static const char *TAG = "SAMPLE_LOAD_SAVE";
+static wavex_sample_load_save_page_t* s_active_page = NULL;
 
-// Global reference to current sample load/save page for hotkey callbacks
-// static wavex_sample_load_save_page_t* g_current_page = NULL; // Replaced by g_sample_load_save_page
+// State preservation: preserve last directory path and selected index across page destroy/create cycles
+// Note: Directory path is automatically restored on page creation. Selected index is preserved
+// but not automatically restored (would require async coordination with browse response callback).
+static char s_last_directory_path[96] = "/";
+static uint32_t s_last_selected_index = 0;
 
 // Forward declarations
 static void file_selected_callback(const wavex_file_entry_t* entry, void* user_data);
@@ -45,9 +45,9 @@ wavex_sample_load_save_page_t* wavex_sample_load_save_create(lv_obj_t* parent)
     }
     
     // Clear any existing global reference to prevent conflicts
-    if (g_sample_load_save_page) {
-        ESP_LOGW(TAG, "Clearing existing global page reference");
-        g_sample_load_save_page = NULL;
+    if (s_active_page) {
+        ESP_LOGW(TAG, "Clearing existing active page reference");
+        s_active_page = NULL;
     }
     
     wavex_sample_load_save_page_t* page = (wavex_sample_load_save_page_t*)malloc(sizeof(wavex_sample_load_save_page_t));
@@ -58,6 +58,7 @@ wavex_sample_load_save_page_t* wavex_sample_load_save_create(lv_obj_t* parent)
     
     // Initialize structure
     memset(page, 0, sizeof(wavex_sample_load_save_page_t));
+    page->pending_metadata_entry = NULL;
     
     // Create main container (no window manager - UI task provides titlebar and hotkeys)
     page->main_container = lv_obj_create(parent);
@@ -81,13 +82,16 @@ wavex_sample_load_save_page_t* wavex_sample_load_save_create(lv_obj_t* parent)
     lv_obj_set_style_border_width(page->file_browser_container, 0, LV_PART_MAIN);
     lv_obj_set_style_pad_all(page->file_browser_container, 0, LV_PART_MAIN);
     
-    // Configure file browser
+    // Configure file browser - restore last directory path if available
+    // This preserves user's browsing position when re-entering the page
     wavex_file_browser_config_t browser_config = {
-        .root_path = "/",
+        .root_path = s_last_directory_path,  // Use preserved path instead of always "/"
         .file_extension = ".wav",
         .max_entries = 50,
         .show_hidden = false
     };
+    
+    ESP_LOGI(TAG, "Creating file browser with root_path: %s", browser_config.root_path);
     
     page->file_browser = wavex_file_browser_create(page->file_browser_container, &browser_config);
     if (!page->file_browser) {
@@ -117,7 +121,7 @@ wavex_sample_load_save_page_t* wavex_sample_load_save_create(lv_obj_t* parent)
     // Note: Hotkeys are handled by the UI task, not here
     
     // Set global reference for hotkey callbacks and deferred updates
-    g_sample_load_save_page = page;
+    s_active_page = page;
 
     ESP_LOGI(TAG, "Sample Load/Save page created successfully");
     return page;
@@ -127,9 +131,34 @@ void wavex_sample_load_save_destroy(wavex_sample_load_save_page_t* page)
 {
     if (!page) return;
     
+    // Stop any active audition before destroying the page
+    // This prevents the Daisy audio co-processor from continuing playback after page destruction
+    if (page->is_playing) {
+        ESP_LOGI(TAG, "Stopping active audition before page destruction");
+        wavex_sample_load_save_stop_audition(page);
+        
+        // Wait a brief moment for the stop command to be sent
+        // Note: We don't wait for the response since the page is being destroyed
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
+    
+    // Save browsing state before destroying file browser
+    if (page->file_browser) {
+        const char* current_path = wavex_file_browser_get_current_path(page->file_browser);
+        if (current_path && strlen(current_path) > 0) {
+            strncpy(s_last_directory_path, current_path, sizeof(s_last_directory_path) - 1);
+            s_last_directory_path[sizeof(s_last_directory_path) - 1] = '\0';
+            ESP_LOGI(TAG, "Preserved directory path: %s", s_last_directory_path);
+        }
+        
+        uint32_t selected_index = wavex_file_browser_get_selected_index(page->file_browser);
+        s_last_selected_index = selected_index;
+        ESP_LOGI(TAG, "Preserved selected index: %lu", (unsigned long)s_last_selected_index);
+    }
+    
     // Clear global reference if this is the current page
-    if (g_sample_load_save_page == page) {
-        g_sample_load_save_page = NULL;
+    if (s_active_page == page) {
+        s_active_page = NULL;
     }
     
     // Unregister browse response callback to prevent crashes
@@ -148,13 +177,18 @@ void wavex_sample_load_save_destroy(wavex_sample_load_save_page_t* page)
     ESP_LOGI(TAG, "Sample Load/Save page destroyed");
 }
 
+wavex_sample_load_save_page_t* wavex_sample_load_save_get_active(void)
+{
+    return s_active_page;
+}
+
 void wavex_sample_load_save_show(wavex_sample_load_save_page_t* page)
 {
     if (!page || !page->main_container) return;
     
-    LV_LOCK();
+    // Page show/hide typically called from LVGL context (navigator), so direct update is safe
+    // But to be consistent with deferred update pattern, we'll use direct update here since navigator holds lock
     lv_obj_clear_flag(page->main_container, LV_OBJ_FLAG_HIDDEN);
-    LV_UNLOCK();
     ESP_LOGI(TAG, "Sample Load/Save page shown");
 }
 
@@ -162,10 +196,98 @@ void wavex_sample_load_save_hide(wavex_sample_load_save_page_t* page)
 {
     if (!page || !page->main_container) return;
     
-    LV_LOCK();
+    // Page show/hide typically called from LVGL context (navigator), so direct update is safe
+    // But to be consistent with deferred update pattern, we'll use direct update here since navigator holds lock
     lv_obj_add_flag(page->main_container, LV_OBJ_FLAG_HIDDEN);
-    LV_UNLOCK();
     ESP_LOGI(TAG, "Sample Load/Save page hidden");
+}
+
+// Process deferred UI updates (must be called with LVGL lock held)
+static void process_deferred_page_updates(wavex_sample_load_save_page_t* page)
+{
+    if (!page) return;
+    
+    // Process status update
+    if (page->status_update_pending && page->status_label) {
+        lv_label_set_text(page->status_label, page->pending_status_text);
+        page->status_update_pending = false;
+        ESP_LOGI(TAG, "Status label updated: %s", page->pending_status_text);
+    }
+    
+    // Process metadata update
+    if (page->metadata_update_pending && page->metadata_label) {
+        char info_text[512];
+        
+        if (page->pending_metadata_entry) {
+            const wavex_file_entry_t* entry = page->pending_metadata_entry;
+            
+            if (entry->is_directory) {
+                // Display directory information
+                snprintf(info_text, sizeof(info_text), 
+                     "Directory Information:\n"
+                     "─────────────────────\n"
+                     "Name: %.47s\n"
+                     "Type: Directory\n"
+                     "Path: %.95s\n\n"
+                     "Use Select to enter directory",
+                     entry->name,
+                     entry->path);
+        } else {
+            // Display file metadata
+            // Format file size
+            char size_str[32];
+            if (entry->size_bytes < 1024) {
+                snprintf(size_str, sizeof(size_str), "%lu B", entry->size_bytes);
+            } else if (entry->size_bytes < 1024 * 1024) {
+                snprintf(size_str, sizeof(size_str), "%.1f KB", entry->size_bytes / 1024.0f);
+            } else {
+                snprintf(size_str, sizeof(size_str), "%.1f MB", entry->size_bytes / (1024.0f * 1024.0f));
+            }
+            
+            // Format duration if available (placeholder for now)
+            char duration_str[32] = "Unknown";
+            // TODO: Extract duration from WAV file metadata
+            
+            // Format sample rate if available (placeholder for now)
+            char sample_rate_str[32] = "Unknown";
+            // TODO: Extract sample rate from WAV file metadata
+            
+            // Format channels if available (placeholder for now)
+            char channels_str[32] = "Unknown";
+            // TODO: Extract channel count from WAV file metadata
+            
+            snprintf(info_text, sizeof(info_text), 
+                     "Sample Information:\n"
+                     "─────────────────\n"
+                     "Name: %.47s\n"
+                     "Size: %s\n"
+                     "Duration: %s\n"
+                     "Sample Rate: %s\n"
+                     "Channels: %s\n"
+                     "Format: WAV PCM\n"
+                     "Path: %.95s\n\n"
+                     "Use Audition to preview\n"
+                     "Use Load to load sample",
+                     entry->name,
+                     size_str,
+                     duration_str,
+                     sample_rate_str,
+                     channels_str,
+                     entry->path);
+            }
+            
+            lv_label_set_text(page->metadata_label, info_text);
+            page->metadata_update_pending = false;
+            page->pending_metadata_entry = NULL;
+            ESP_LOGI(TAG, "Metadata label updated for: %s", entry->name);
+        } else if (strlen(page->pending_metadata_text) > 0) {
+            // Use pending text (for "Select a file" message)
+            lv_label_set_text(page->metadata_label, page->pending_metadata_text);
+            page->metadata_update_pending = false;
+            page->pending_metadata_text[0] = '\0';
+            ESP_LOGI(TAG, "Metadata label updated with pending text");
+        }
+    }
 }
 
 void wavex_sample_load_save_update(wavex_sample_load_save_page_t* page)
@@ -181,6 +303,9 @@ void wavex_sample_load_save_update(wavex_sample_load_save_page_t* page)
         }
         wavex_file_browser_process_pending_updates(page->file_browser);
     }
+    
+    // Process deferred page updates (status/metadata)
+    process_deferred_page_updates(page);
 }
 
 bool wavex_sample_load_save_audition_sample_by_index(wavex_sample_load_save_page_t* page, uint32_t file_index)
@@ -205,9 +330,11 @@ bool wavex_sample_load_save_audition_sample_by_index(wavex_sample_load_save_page
     wavex_sample_load_save_set_status(page, status_text);
 
     // Refresh softkeys to reflect playing state (Audition -> Stop)
-    LV_LOCK();
-    wavex_ui::UINavigator::instance().softkeyBar()->setSoftkeys(wavex_ui::UINavigator::instance().active()->getSoftkeys());
-    LV_UNLOCK();
+    // This must be called from LVGL context via lv_async_call
+    wavex_ui_mark_content_changed();
+    lv_async_call([](void*) {
+        wavex_ui::UINavigator::instance().refreshSoftkeys();
+    }, nullptr);
 
     return true;
 }
@@ -243,23 +370,25 @@ bool wavex_sample_load_save_stop_audition(wavex_sample_load_save_page_t* page)
 void wavex_ui_handle_sample_stop_response(bool success)
 {
     // Access the global sample load/save page instance
-    if (!g_sample_load_save_page) {
+    if (!s_active_page) {
         ESP_LOGW(TAG, "Received sample stop response but no active sample load/save page");
         return;
     }
     
     if (success) {
         ESP_LOGI(TAG, "=== SAMPLE STOP RESPONSE: Successfully stopped ===");
-        g_sample_load_save_page->is_playing = false;
-        wavex_sample_load_save_set_status(g_sample_load_save_page, "Stopped");
+        s_active_page->is_playing = false;
+        wavex_sample_load_save_set_status(s_active_page, "Stopped");
 
         // Refresh softkeys to reflect stopped state (Stop -> Audition)
-        LV_LOCK();
-        wavex_ui::UINavigator::instance().softkeyBar()->setSoftkeys(wavex_ui::UINavigator::instance().active()->getSoftkeys());
-        LV_UNLOCK();
+        // This must be called from LVGL context via lv_async_call
+        wavex_ui_mark_content_changed();
+        lv_async_call([](void*) {
+            wavex_ui::UINavigator::instance().refreshSoftkeys();
+        }, nullptr);
     } else {
         ESP_LOGE(TAG, "=== SAMPLE STOP RESPONSE: Failed to stop ===");
-        wavex_sample_load_save_set_status(g_sample_load_save_page, "Stop failed");
+        wavex_sample_load_save_set_status(s_active_page, "Stop failed");
         // Keep is_playing state as-is since stop failed
     }
 }
@@ -298,83 +427,25 @@ bool wavex_sample_load_save_save_sample(wavex_sample_load_save_page_t* page, con
 
 void wavex_sample_load_save_set_status(wavex_sample_load_save_page_t* page, const char* status)
 {
-    if (!page || !page->status_label || !status) return;
+    if (!page || !status) return;
     
-    LV_LOCK();
-    lv_label_set_text(page->status_label, status);
-    LV_UNLOCK();
-    ESP_LOGI(TAG, "Status updated: %s", status);
+    // Store status text for deferred update (may be called from non-LVGL context)
+    strncpy(page->pending_status_text, status, sizeof(page->pending_status_text) - 1);
+    page->pending_status_text[sizeof(page->pending_status_text) - 1] = '\0';
+    page->status_update_pending = true;
+    wavex_ui_mark_content_changed();
+    ESP_LOGI(TAG, "Status update queued: %s", status);
 }
 
 void wavex_sample_load_save_update_info(wavex_sample_load_save_page_t* page, const wavex_file_entry_t* entry)
 {
-    if (!page || !entry || !page->metadata_label) return;
+    if (!page || !entry) return;
     
-    LV_LOCK();
-    
-    if (entry->is_directory) {
-        // Display directory information
-        char info_text[512];
-        snprintf(info_text, sizeof(info_text), 
-                 "Directory Information:\n"
-                 "─────────────────────\n"
-                 "Name: %.47s\n"
-                 "Type: Directory\n"
-                 "Path: %.95s\n\n"
-                 "Use Select to enter directory",
-                 entry->name,
-                 entry->path);
-        
-        lv_label_set_text(page->metadata_label, info_text);
-    } else {
-        // Display file metadata
-        char info_text[512];
-        
-        // Format file size
-        char size_str[32];
-        if (entry->size_bytes < 1024) {
-            snprintf(size_str, sizeof(size_str), "%lu B", entry->size_bytes);
-        } else if (entry->size_bytes < 1024 * 1024) {
-            snprintf(size_str, sizeof(size_str), "%.1f KB", entry->size_bytes / 1024.0f);
-        } else {
-            snprintf(size_str, sizeof(size_str), "%.1f MB", entry->size_bytes / (1024.0f * 1024.0f));
-        }
-        
-        // Format duration if available (placeholder for now)
-        char duration_str[32] = "Unknown";
-        // TODO: Extract duration from WAV file metadata
-        
-        // Format sample rate if available (placeholder for now)
-        char sample_rate_str[32] = "Unknown";
-        // TODO: Extract sample rate from WAV file metadata
-        
-        // Format channels if available (placeholder for now)
-        char channels_str[32] = "Unknown";
-        // TODO: Extract channel count from WAV file metadata
-        
-        snprintf(info_text, sizeof(info_text), 
-                 "Sample Information:\n"
-                 "─────────────────\n"
-                 "Name: %.47s\n"
-                 "Size: %s\n"
-                 "Duration: %s\n"
-                 "Sample Rate: %s\n"
-                 "Channels: %s\n"
-                 "Format: WAV PCM\n"
-                 "Path: %.95s\n\n"
-                 "Use Audition to preview\n"
-                 "Use Load to load sample",
-                 entry->name,
-                 size_str,
-                 duration_str,
-                 sample_rate_str,
-                 channels_str,
-                 entry->path);
-        
-        lv_label_set_text(page->metadata_label, info_text);
-    }
-    
-    LV_UNLOCK();
+    // Store entry pointer for deferred update (may be called from non-LVGL context)
+    page->pending_metadata_entry = entry;
+    page->metadata_update_pending = true;
+    wavex_ui_mark_content_changed();
+    ESP_LOGI(TAG, "Metadata update queued for: %s", entry->name);
 }
 
 // File selected callback
@@ -431,15 +502,25 @@ static void directory_changed_callback(const char* path, void* user_data)
     // Stop any current audition when changing directories
     if (page->is_playing) {
         ESP_LOGI(TAG, "Stopping audition due to directory change");
-        wavex_sample_load_save_stop_audition(page);
+        
+        // Send stop request to Daisy
+        inter_mcu_send_sample_stop_req();
+        
+        // Immediately reset playing state (don't wait for response since we're changing directories anyway)
+        page->is_playing = false;
+        
+        // Refresh softkeys to show Audition button again instead of Stop
+        // Use lv_async_call to ensure we're in LVGL context
+        lv_async_call([](void*) {
+            wavex_ui::UINavigator::instance().refreshSoftkeys();
+        }, nullptr);
     }
     
-    // Clear metadata display
-    if (page->metadata_label) {
-        LV_LOCK();
-        lv_label_set_text(page->metadata_label, "Select a file to view metadata");
-        LV_UNLOCK();
-    }
+    // Clear metadata display (deferred update)
+    strcpy(page->pending_metadata_text, "Select a file to view metadata");
+    page->metadata_update_pending = true;
+    page->pending_metadata_entry = NULL;
+    wavex_ui_mark_content_changed();
     
     // Update status
     char status_text[256];

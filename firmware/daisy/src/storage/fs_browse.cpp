@@ -2,6 +2,7 @@
 #include "ff.h"
 #include <cstring>
 #include <strings.h>  // for strcasecmp
+#include <stdio.h> // For printf
 
 namespace WaveX {
 namespace Storage {
@@ -33,6 +34,8 @@ bool ListDir(const char* path,
              size_t& entries_written)
 {
     if(!path || !out || max_entries == 0) { total_count = 0; return false; }
+    
+    printf("DAISY ListDir: path='%s', start_index=%zu, max_entries=%zu\n", path, start_index, max_entries);
 
     DIR dir;
     FILINFO fno;
@@ -48,9 +51,27 @@ bool ListDir(const char* path,
         return false; 
     }
 
+    // Check if we're at root directory (need to manually add ".." when not at root)
+    bool is_root = (strcmp(path, "/") == 0 || strlen(path) == 0 || (path[0] == '/' && strlen(path) == 1));
+
+    printf("DAISY ListDir: is_root=%d\n", is_root);
+
     // Single pass: collect all valid entries first, then paginate
     FileEntry all_entries[256]; // Buffer for all entries
     size_t all_count = 0;
+    
+    // Manually insert ".." entry at the beginning if not at root
+    // FatFS may not always return ".." entries reliably
+    if (!is_root && all_count < 256) {
+        FileEntry& e = all_entries[all_count++];
+        e.is_dir = 1;
+        e.size_bytes = 0u;
+        std::strncpy(e.name, "..", sizeof(e.name) - 1);
+        e.name[sizeof(e.name) - 1] = '\0';
+        printf("DAISY ListDir: Added '..' entry at index 0\n");
+    }
+    
+    bool found_dotdot = !is_root; // Track if we already added ".." manually
     
     for(;;)
     {
@@ -62,6 +83,11 @@ bool ListDir(const char* path,
         const char* name = fno.fname;
 #endif
         if(is_dot_entry(name)) continue;
+        
+        // Skip ".." from filesystem if we already added it manually
+        if (found_dotdot && strcmp(name, "..") == 0) {
+            continue;
+        }
         
         // Include directories, WAV files, and ".." entries
         bool is_dir = (fno.fattrib & AM_DIR) ? true : false;
@@ -82,10 +108,30 @@ bool ListDir(const char* path,
     total_count = all_count;
     
     // Now paginate the results
+    // Special handling: when start_index == 0 and we have ".." entry, ensure it's always included first
     size_t written = 0;
+    bool has_dotdot_at_start = (!is_root && all_count > 0 && strcmp(all_entries[0].name, "..") == 0);
+    
+    printf("DAISY ListDir pagination: all_count=%zu, has_dotdot_at_start=%d, start_index=%zu\n", 
+           all_count, has_dotdot_at_start, start_index);
+    
+    // If we're requesting from start (index 0) and ".." exists, ensure it's first
+    if (start_index == 0 && has_dotdot_at_start && written < max_entries) {
+        out[written++] = all_entries[0];
+        printf("DAISY ListDir: Wrote '..' at position 0\n");
+        // Adjust start_index to skip the ".." entry when iterating
+        start_index = 1;
+    }
+    
+    // Add remaining entries starting from adjusted start_index
     for (size_t i = start_index; i < all_count && written < max_entries; i++) {
         out[written++] = all_entries[i];
+        if (written <= 3) {
+            printf("DAISY ListDir: Wrote entry at position %zu: '%s'\n", written - 1, all_entries[i].name);
+        }
     }
+    
+    printf("DAISY ListDir: Returning %zu entries (total=%zu)\n", written, total_count);
     
     entries_written = written;
     return true;

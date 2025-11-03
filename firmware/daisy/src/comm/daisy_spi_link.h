@@ -56,6 +56,9 @@ void Spi_DebugState(void);
 // Poll the ATTN level and trigger a receive if asserted (fallback when EXTI edge is missed)
 bool Spi_PollAttnLevel(void);
 
+// Monitor ATTN line for stuck state that may indicate ESP32 restart
+void Spi_CheckAttentionLine(void);
+
 } // namespace Comm
 } // namespace WaveX
 

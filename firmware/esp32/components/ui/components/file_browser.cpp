@@ -9,6 +9,7 @@
 #include "esp_timer.h"
 #include <string.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <cstdio>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -22,9 +23,7 @@ using namespace WaveX::Protocol;
 // LVGL includes for thread safety
 #include "esp_lvgl_port.h"
 
-// LVGL port lock macros for thread safety
-#define LV_LOCK()   lvgl_port_lock(portMAX_DELAY)
-#define LV_UNLOCK() lvgl_port_unlock()
+// NOTE: LVGL locks are handled by UI task loop - all UI updates use deferred update pattern
 
 static const char *TAG = "FILE_BROWSER";
 
@@ -58,6 +57,8 @@ wavex_file_browser_t* wavex_file_browser_create(lv_obj_t* parent, const wavex_fi
     memset(browser, 0, sizeof(wavex_file_browser_t));
     browser->config = *config;
     browser->selected_index = 0;
+    browser->first_visible_index = 0;
+    browser->visible_count = 8;  // Approximately 8 entries visible on screen (adjust based on screen size)
     
     // Initialize pagination state
     browser->total_files = 0;
@@ -78,8 +79,7 @@ wavex_file_browser_t* wavex_file_browser_create(lv_obj_t* parent, const wavex_fi
         return NULL;
     }
     
-    // Create main container
-    LV_LOCK();
+    // Create main container (page creation callbacks already have LVGL context)
     browser->container = lv_obj_create(parent);
     lv_obj_set_size(browser->container, lv_pct(100), lv_pct(100));
     lv_obj_set_style_bg_color(browser->container, UI_COLOR_CONTENT, LV_PART_MAIN);
@@ -104,7 +104,6 @@ wavex_file_browser_t* wavex_file_browser_create(lv_obj_t* parent, const wavex_fi
     
     // Add event callback for list
     lv_obj_add_event_cb(browser->list, file_list_event_cb, LV_EVENT_CLICKED, browser);
-    LV_UNLOCK();
     
     // Set global reference and register callback
     g_current_browser = browser;
@@ -143,9 +142,8 @@ void wavex_file_browser_destroy(wavex_file_browser_t* browser)
     }
     
     if (browser->container) {
-        LV_LOCK();
+        // Page destruction should be called from LVGL context
         lv_obj_del(browser->container);
-        LV_UNLOCK();
     }
     
     free(browser);
@@ -159,12 +157,13 @@ bool wavex_file_browser_navigate_to(wavex_file_browser_t* browser, const char* p
     strncpy(browser->current_path, path, sizeof(browser->current_path) - 1);
     browser->current_path[sizeof(browser->current_path) - 1] = '\0';
     
-    // Update path label
-    LV_LOCK();
-    lv_label_set_text(browser->path_label, browser->current_path);
-    LV_UNLOCK();
-    // Trigger a screen refresh after updating the path label
+    // Mark path update as pending (navigation may be called from non-LVGL context)
+    browser->ui_update_pending = true;
     wavex_ui_mark_content_changed();
+    
+    // Reset scroll position and selection when navigating
+    browser->first_visible_index = 0;
+    browser->selected_index = 0;
     
     // Refresh file list
     bool success = refresh_file_list(browser);
@@ -217,10 +216,25 @@ void wavex_file_browser_set_selection(wavex_file_browser_t* browser, uint32_t in
     if (!browser || index >= browser->entry_count) return;
     
     browser->selected_index = index;
+    
+    // Update viewport to ensure selected entry is visible
+    if (browser->selected_index < browser->first_visible_index) {
+        browser->first_visible_index = browser->selected_index;
+    } else {
+        uint32_t last_visible_index = browser->first_visible_index + browser->visible_count - 1;
+        if (browser->selected_index > last_visible_index) {
+            browser->first_visible_index = browser->selected_index - (browser->visible_count - 1);
+            if (browser->first_visible_index > browser->selected_index) {
+                browser->first_visible_index = 0;
+            }
+        }
+    }
+    
     ESP_LOGI(TAG, "Selected entry %d: %s", index, browser->entries[index].name);
     
-    // Update visual highlighting
-    update_visual_selection(browser);
+    // Mark visual selection update as pending (selection may be changed from non-LVGL context)
+    browser->ui_update_pending = true;
+    wavex_ui_mark_content_changed();
 }
 
 const wavex_file_entry_t* wavex_file_browser_get_selected(wavex_file_browser_t* browser)
@@ -235,6 +249,76 @@ uint32_t wavex_file_browser_get_selected_index(wavex_file_browser_t* browser)
     if (!browser) return 0;
     
     return browser->selected_index;
+}
+
+// Navigate selection up with boundary checking and scrolling
+bool wavex_file_browser_navigate_up_entry(wavex_file_browser_t* browser)
+{
+    if (!browser || browser->entry_count == 0) {
+        ESP_LOGD(TAG, "navigate_up: Invalid browser or no entries");
+        return false;
+    }
+    
+    // If already at first entry, do nothing (no wrap-around)
+    if (browser->selected_index == 0) {
+        ESP_LOGD(TAG, "navigate_up: Already at first entry (index 0)");
+        return false;
+    }
+    
+    uint32_t new_index = browser->selected_index - 1;
+    browser->selected_index = new_index;
+    ESP_LOGI(TAG, "navigate_up: moved from %u to %u", browser->selected_index + 1, new_index);
+    
+    // Update viewport if selection moved above visible area
+    if (browser->selected_index < browser->first_visible_index) {
+        browser->first_visible_index = browser->selected_index;
+        ESP_LOGD(TAG, "navigate_up: scrolled viewport to %u", browser->first_visible_index);
+    }
+    
+    // Update visual highlighting - refresh UI if viewport might have changed
+    browser->ui_update_pending = true;
+    wavex_ui_mark_content_changed();
+    
+    return true;
+}
+
+// Navigate selection down with boundary checking and scrolling
+bool wavex_file_browser_navigate_down_entry(wavex_file_browser_t* browser)
+{
+    if (!browser || browser->entry_count == 0) {
+        ESP_LOGD(TAG, "navigate_down: Invalid browser or no entries");
+        return false;
+    }
+    
+    uint32_t last_index = browser->entry_count - 1;
+    
+    // If already at last entry, do nothing (no wrap-around)
+    if (browser->selected_index >= last_index) {
+        ESP_LOGD(TAG, "navigate_down: Already at last entry (index %u)", browser->selected_index);
+        return false;
+    }
+    
+    uint32_t new_index = browser->selected_index + 1;
+    browser->selected_index = new_index;
+    ESP_LOGI(TAG, "navigate_down: moved from %u to %u", browser->selected_index - 1, new_index);
+    
+    // Update viewport if selection moved below visible area
+    uint32_t last_visible_index = browser->first_visible_index + browser->visible_count - 1;
+    if (browser->selected_index > last_visible_index) {
+        // Scroll down to show the selected entry
+        browser->first_visible_index = browser->selected_index - (browser->visible_count - 1);
+        // Ensure first_visible_index doesn't go negative (unsigned will wrap, so check bounds)
+        if (browser->first_visible_index > browser->selected_index) {
+            browser->first_visible_index = 0;
+        }
+        ESP_LOGD(TAG, "navigate_down: scrolled viewport to %u", browser->first_visible_index);
+    }
+    
+    // Update visual highlighting - refresh UI if viewport might have changed
+    browser->ui_update_pending = true;
+    wavex_ui_mark_content_changed();
+    
+    return true;
 }
 
 void wavex_file_browser_set_file_selected_callback(wavex_file_browser_t* browser, 
@@ -295,7 +379,9 @@ static void file_list_event_cb(lv_event_t *e)
     wavex_file_browser_t* browser = (wavex_file_browser_t*)lv_event_get_user_data(e);
     
     if (code == LV_EVENT_CLICKED) {
-        lv_obj_t* list = (lv_obj_t*)lv_event_get_target(e);
+        // lv_event_get_current_target returns the object the callback was attached to (the list)
+        // lv_event_get_target returns the actual object that was clicked (the button)
+        lv_obj_t* list = (lv_obj_t*)lv_event_get_current_target(e);
         lv_obj_t* btn = (lv_obj_t*)lv_event_get_target(e);
         
         // Find the button index by iterating through the list
@@ -361,26 +447,17 @@ static bool refresh_file_list(wavex_file_browser_t* browser)
     browser->loaded_entries = 0;
     browser->entry_count = 0;
     
-    // Clear existing list items
-    LV_LOCK();
-    lv_obj_clean(browser->list);
-    LV_UNLOCK();
-    // Request a screen refresh after clearing the list
+    // Mark UI update as pending (will clear list when processed in UI task)
+    browser->ui_update_pending = true;
     wavex_ui_mark_content_changed();
     
     // Send first browse request (page 0)
     if (!send_browse_request(browser->current_path, 0)) {
         ESP_LOGE(TAG, "Failed to send browse request");
         browser->pagination_in_progress = false;
-        // Show error message
-        LV_LOCK();
-        lv_obj_clean(browser->list);
-        lv_obj_t* btn = lv_list_add_btn(browser->list, NULL, "Error loading files");
-        ui_theme_apply_button_style(btn, false);
-        lv_obj_set_style_text_color(btn, UI_COLOR_TEXT, LV_PART_MAIN);
-        lv_obj_set_style_text_font(btn, &lv_font_montserrat_18, LV_PART_MAIN);
-        LV_UNLOCK();
-        // Ensure the UI refreshes to show the error state
+        // Mark error state for deferred UI update
+        browser->entry_count = 0;
+        browser->ui_update_pending = true;
         wavex_ui_mark_content_changed();
         return false;
     } else {
@@ -572,23 +649,28 @@ static void browse_resp_callback(const uint8_t* data, size_t length, void* user_
     ESP_LOGI(TAG, "Received browse response: %d bytes", (int)length);
     
     // Parse the browse response to get total count and current page entries
-    wavex_file_entry_t temp_entries[20];  // Temporary array for current page (increased for flexible packet system)
+    // Allocate on heap instead of stack to prevent stack overflow in uart_link task
+    // Each entry is ~152 bytes, so 20 entries = ~3040 bytes - too large for task stack
+    wavex_file_entry_t* temp_entries = (wavex_file_entry_t*)malloc(20 * sizeof(wavex_file_entry_t));
+    if (!temp_entries) {
+        ESP_LOGE(TAG, "Failed to allocate memory for browse response parsing");
+        browser->pagination_in_progress = false;
+        return;
+    }
+    
     uint32_t temp_count = 20;
     uint32_t total_files = 0;
     uint8_t current_page_entries = 0;
     
-    if (!parse_browse_response_with_pagination(data, length, temp_entries, &temp_count, &total_files, &current_page_entries)) {
+    bool parse_success = parse_browse_response_with_pagination(data, length, temp_entries, &temp_count, &total_files, &current_page_entries);
+    
+    if (!parse_success) {
+        free(temp_entries);
         ESP_LOGE(TAG, "Failed to parse browse response");
         browser->pagination_in_progress = false;
-        // Show error message
-        LV_LOCK();
-        lv_obj_clean(browser->list);
-        lv_obj_t* btn = lv_list_add_btn(browser->list, NULL, "Error loading files");
-        ui_theme_apply_button_style(btn, false);
-        lv_obj_set_style_text_color(btn, UI_COLOR_TEXT, LV_PART_MAIN);
-        lv_obj_set_style_text_font(btn, &lv_font_montserrat_18, LV_PART_MAIN);
-        LV_UNLOCK();
-        // Ensure UI refresh after showing error message
+        // Mark error state for deferred UI update (this callback runs from UART task, not LVGL context)
+        browser->entry_count = 0;
+        browser->ui_update_pending = true;
         wavex_ui_mark_content_changed();
         return;
     }
@@ -601,14 +683,46 @@ static void browse_resp_callback(const uint8_t* data, size_t length, void* user_
     }
     
     // Add current page entries to the browser's entry array
+    // Sort ".." entries to the top if present (only on first page, and only if not at root)
     uint32_t start_index = browser->loaded_entries;
-    for (uint32_t i = 0; i < current_page_entries && (start_index + i) < browser->config.max_entries; i++) {
-        browser->entries[start_index + i] = temp_entries[i];
+    uint32_t parent_dir_index = 0xFFFFFFFF;  // Track where ".." is found (using max value)
+    
+    // First pass: find ".." entry position if on first page and not at root
+    if (browser->current_page == 0 && strcmp(browser->current_path, "/") != 0) {
+        for (uint32_t i = 0; i < current_page_entries; i++) {
+            if (strcmp(temp_entries[i].name, "..") == 0) {
+                parent_dir_index = i;
+                break;
+            }
+        }
+    }
+    
+    // Second pass: add entries, putting ".." first if found on first page
+    uint32_t write_index = start_index;
+    
+    // If ".." was found on first page and we're not at root, put it first
+    if (parent_dir_index != 0xFFFFFFFF && browser->current_page == 0 && 
+        strcmp(browser->current_path, "/") != 0 && write_index < browser->config.max_entries) {
+        browser->entries[write_index] = temp_entries[parent_dir_index];
         browser->loaded_entries++;
+        write_index++;
+    }
+    
+    // Add all other entries (skip ".." if already added at the top)
+    for (uint32_t i = 0; i < current_page_entries && write_index < browser->config.max_entries; i++) {
+        if (parent_dir_index != 0xFFFFFFFF && i == parent_dir_index) {
+            continue;  // Skip ".." if already added at the top
+        }
+        browser->entries[write_index] = temp_entries[i];
+        browser->loaded_entries++;
+        write_index++;
     }
     
     ESP_LOGI(TAG, "Loaded page %d: %d entries, total loaded: %d/%d", 
              browser->current_page, current_page_entries, browser->loaded_entries, browser->total_files);
+    
+    // Free the temporary array now that we've copied the data
+    free(temp_entries);
     
     // Check if we need to load more pages
     bool has_more_pages = (browser->loaded_entries < browser->total_files) && 
@@ -619,7 +733,10 @@ static void browse_resp_callback(const uint8_t* data, size_t length, void* user_
         // First page loaded - mark UI update as pending
         browser->entry_count = browser->loaded_entries;
         
-        // Ensure selected_index is within bounds
+        // Reset scroll position for new directory
+        browser->first_visible_index = 0;
+        
+        // Ensure selected_index is within bounds (default to first entry, or ".." if present)
         if (browser->selected_index >= browser->entry_count) {
             browser->selected_index = 0;
         }
@@ -674,7 +791,7 @@ static void browse_resp_callback(const uint8_t* data, size_t length, void* user_
     }
 }
 
-// Thread-safe function to process pending UI updates (called from UI task)
+// Thread-safe function to process pending UI updates (called from UI task with LVGL lock)
 void wavex_file_browser_process_pending_updates(wavex_file_browser_t* browser)
 {
     if (!browser) {
@@ -691,23 +808,41 @@ void wavex_file_browser_process_pending_updates(wavex_file_browser_t* browser)
     // Clear flag first
     browser->ui_update_pending = false;
     
-    // Now safe to update UI (called from UI task with LVGL lock)
+    // Update UI (caller must hold LVGL lock - this is called from UI task loop)
     update_file_browser_ui(browser);
     
     ESP_LOGI(TAG, "UI update complete");
 }
 
 // Helper function to update the file browser UI
+// NOTE: Must be called with LVGL lock already held (from UI task loop)
 static void update_file_browser_ui(wavex_file_browser_t* browser)
 {
     if (!browser || !browser->list) return;
     
-    LV_LOCK();
+    // LVGL lock must be held by caller (UI task loop)
+    // Update path label if needed
+    if (browser->path_label) {
+        lv_label_set_text(browser->path_label, browser->current_path);
+    }
+    
     lv_obj_clean(browser->list);
     
     if (browser->entry_count > 0 && browser->entries) {
-        // Create list items for all loaded entries
-        for (uint32_t i = 0; i < browser->entry_count; i++) {
+        // Ensure first_visible_index is valid
+        if (browser->first_visible_index >= browser->entry_count) {
+            browser->first_visible_index = 0;
+        }
+        
+        // Calculate which entries to display (scrolling viewport)
+        uint32_t start_index = browser->first_visible_index;
+        uint32_t end_index = start_index + browser->visible_count;
+        if (end_index > browser->entry_count) {
+            end_index = browser->entry_count;
+        }
+        
+        // Create list items only for visible entries
+        for (uint32_t i = start_index; i < end_index; i++) {
             // Safety check for entry access
             if (!browser->entries[i].name[0]) {
                 ESP_LOGW(TAG, "Skipping empty entry at index %d", i);
@@ -736,45 +871,58 @@ static void update_file_browser_ui(wavex_file_browser_t* browser)
                     lv_label_set_text(label, dir_text);
                 }
             }
+            
+            // Store the actual entry index in user data for selection highlighting
+            lv_obj_set_user_data(btn, (void*)(uintptr_t)i);
         }
         
-        // Update visual selection
+        // Update visual selection (maps selected_index to visible button)
         update_visual_selection(browser);
         
         ESP_LOGI(TAG, "Updated file browser UI with %d entries", browser->entry_count);
-    } else {
-        // Show "No files found..." message
+    } else if (browser->entry_count == 0 && browser->pagination_in_progress == false) {
+        // Show "No files found..." message (pagination complete but no entries)
         lv_obj_t* btn = lv_list_add_btn(browser->list, NULL, "No files found...");
         ui_theme_apply_button_style(btn, false);
         lv_obj_set_style_text_color(btn, UI_COLOR_TEXT, LV_PART_MAIN);
         lv_obj_set_style_text_font(btn, &lv_font_montserrat_18, LV_PART_MAIN);
         ESP_LOGI(TAG, "No files found in directory");
+    } else {
+        // Error state - show error message (entry_count is 0 but pagination not in progress = error)
+        lv_obj_t* btn = lv_list_add_btn(browser->list, NULL, "Error loading files");
+        ui_theme_apply_button_style(btn, false);
+        lv_obj_set_style_text_color(btn, UI_COLOR_TEXT, LV_PART_MAIN);
+        lv_obj_set_style_text_font(btn, &lv_font_montserrat_18, LV_PART_MAIN);
+        ESP_LOGI(TAG, "Showing error message in file browser");
     }
-    
-    LV_UNLOCK();
     
     // Mark content as changed to trigger refresh in UI task
     wavex_ui_mark_content_changed();
 }
 
 // Helper function to update visual selection highlighting
+// NOTE: Must be called with LVGL lock already held
 static void update_visual_selection(wavex_file_browser_t* browser)
 {
     if (!browser || !browser->list) return;
     
-    LV_LOCK();
-    // Get all buttons in the list
+    // LVGL lock must be held by caller
+    // Get all buttons in the list (these are only the visible ones)
     uint32_t child_count = lv_obj_get_child_cnt(browser->list);
     
-    // Ensure selected_index is within bounds
-    if (browser->selected_index >= child_count) {
+    // Ensure selected_index is within bounds of all entries
+    if (browser->selected_index >= browser->entry_count) {
         browser->selected_index = 0; // Reset to first item if out of bounds
     }
     
+    // Highlight the selected entry if it's visible
     for (uint32_t i = 0; i < child_count; i++) {
         lv_obj_t* btn = lv_obj_get_child(browser->list, i);
         if (btn) {
-            if (i == browser->selected_index) {
+            // Get the actual entry index from user data
+            uint32_t entry_index = (uint32_t)(uintptr_t)lv_obj_get_user_data(btn);
+            
+            if (entry_index == browser->selected_index) {
                 // Highlight selected item
                 lv_obj_set_style_bg_color(btn, lv_color_make(0x33, 0x66, 0x99), LV_PART_MAIN);
                 lv_obj_set_style_border_color(btn, lv_color_make(0x66, 0x99, 0xCC), LV_PART_MAIN);
@@ -787,7 +935,6 @@ static void update_visual_selection(wavex_file_browser_t* browser)
             }
         }
     }
-    LV_UNLOCK();
-    // Ensure the selection highlight is rendered promptly
+    // Mark content as changed to trigger refresh (lock held by caller)
     wavex_ui_mark_content_changed();
 }

@@ -461,9 +461,6 @@ void diagnostics_page_create(lv_obj_t *parent)
     // NOTE: Caller (navigation system) already holds LVGL lock
     lv_obj_clean(parent);
     
-    wavex_ui_set_screen_context("diagnostics");
-    wavex_ui_update_header_title("System Diagnostics");
-    
     s_diagnostics_label = NULL;
     s_daisy_label = NULL;
 

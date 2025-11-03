@@ -52,6 +52,11 @@ public:
     bool canPop() const { return stack_.size() > 1; }
 
     /**
+     * @brief Refresh softkeys using the currently active page definition
+     */
+    void refreshSoftkeys();
+
+    /**
      * @brief Get the current stack depth
      */
     size_t depth() const { return stack_.size(); }

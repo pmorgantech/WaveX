@@ -98,6 +98,10 @@ void ProcessBrowseRequest(const char* path, size_t start_index, uint8_t max_entr
     WAVEX_LOG_DAISY_MESSAGE(DAISY_SPI_MESSAGE, "IN MSG BROWSE_REQ path=%s start_index=%u max_entries=%u", 
                            path, (uint32_t)start_index, max_entries);
 
+    // Cache the directory state for index-based lookups
+    strncpy(s_current_directory, path, sizeof(s_current_directory) - 1);
+    s_current_directory[sizeof(s_current_directory) - 1] = '\0';
+    
     // Allocate buffer for file entries
     FileEntry entries[50]; // Max 50 entries per response (matches cache size)
     size_t actual_max_entries = (max_entries > 50) ? 50 : max_entries;
@@ -106,37 +110,49 @@ void ProcessBrowseRequest(const char* path, size_t start_index, uint8_t max_entr
     size_t entries_written = 0;
     
     // Get directory listing from FatFS
-    bool success = ListDir(path, entries, actual_max_entries, total_count, start_index, entries_written);
+    // OPTIMIZATION: If this is the first page (start_index == 0), get all entries first for caching,
+    // then extract the paginated subset. This avoids calling ListDir twice.
+    FileEntry all_entries[50]; // Buffer for all entries when caching
+    size_t all_entries_count = 0;
     
-    if (!success) {
-        WAVEX_LOG_DAISY_MESSAGE(DAISY_SPI_MESSAGE, "Failed to list directory: %s", path);
-        return;
-    }
-    
-    WAVEX_LOG_DAISY_MESSAGE(DAISY_SPI_MESSAGE, "Directory listing: total=%u written=%u", (uint32_t)total_count, (uint32_t)entries_written);
-    
-    // Cache the directory state for index-based lookups
-    strncpy(s_current_directory, path, sizeof(s_current_directory) - 1);
-    s_current_directory[sizeof(s_current_directory) - 1] = '\0';
-    
-    // Cache all entries (not just the paginated ones)
     if (start_index == 0) {
-        // If this is the first page, cache all entries
-        size_t all_entries_count = 0;
-        FileEntry all_entries[50];
-        ListDir(path, all_entries, 50, total_count, 0, all_entries_count);
+        // Get all entries for caching (max 50)
+        bool success = ListDir(path, all_entries, 50, total_count, 0, all_entries_count);
         
-        // Ensure we don't exceed our cache size
+        if (!success) {
+            WAVEX_LOG_DAISY_MESSAGE(DAISY_SPI_MESSAGE, "Failed to list directory: %s", path);
+            return;
+        }
+        
+        // Cache all entries (up to cache limit)
         s_current_file_count = (all_entries_count > 50) ? 50 : all_entries_count;
         for (size_t i = 0; i < s_current_file_count; i++) {
             s_current_file_entries[i] = all_entries[i];
         }
         s_directory_state_valid = true;
         
+        // Extract paginated subset for response
+        entries_written = 0;
+        size_t end_index = (all_entries_count < actual_max_entries) ? all_entries_count : actual_max_entries;
+        for (size_t i = 0; i < end_index; i++) {
+            entries[entries_written++] = all_entries[i];
+        }
+        
         if (s_hw) {
-            s_hw->PrintLine("DAISY: Cached directory state: %u entries from '%s'", (uint32_t)s_current_file_count, path);
+            s_hw->PrintLine("DAISY: Cached directory state: %u entries from '%s' (sending %u)", 
+                           (uint32_t)s_current_file_count, path, (uint32_t)entries_written);
+        }
+    } else {
+        // For subsequent pages, just get the paginated entries (no caching needed)
+        bool success = ListDir(path, entries, actual_max_entries, total_count, start_index, entries_written);
+        
+        if (!success) {
+            WAVEX_LOG_DAISY_MESSAGE(DAISY_SPI_MESSAGE, "Failed to list directory: %s", path);
+            return;
         }
     }
+    
+    WAVEX_LOG_DAISY_MESSAGE(DAISY_SPI_MESSAGE, "Directory listing: total=%u written=%u", (uint32_t)total_count, (uint32_t)entries_written);
     
     // Convert FileEntry to FileEntryWire for transmission
     FileEntryWire wire_entries[50];

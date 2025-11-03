@@ -1,6 +1,7 @@
 // WaveX UI Navigation Integration Implementation
 #include "ui/ui_navigation_integration.h"
 #include "ui/ui_existing_pages.h"
+#include "ui/ui_sample_browser.h"
 #include <esp_log.h>
 
 static const char* TAG = "UI_NAV_INTEGRATION";
@@ -61,9 +62,9 @@ std::shared_ptr<UIPage> createSampleMenu() {
         // TODO: Implement edit functionality
     });
 
-    menu->addItem("Load/Save", []() {
-        ESP_LOGI(TAG, "Opening Sample Load/Save page");
-        UINavigator::instance().push(createSampleLoadSavePage());
+    menu->addItem("Browser", []() {
+        ESP_LOGI(TAG, "Opening Sample Browser page");
+        UINavigator::instance().push(createSampleBrowserPage());
     });
 
     return menu;

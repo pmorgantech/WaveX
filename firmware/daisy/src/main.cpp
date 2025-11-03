@@ -37,14 +37,6 @@ static daisy::SpiHandle spi_handle;
 #include "storage/sd_sdio.h"
 #endif
 
-// Process incoming SPI messages from ESP32
-void process_incoming_spi_messages() {
-    #if WAVEX_SPI_LINK_ENABLED
-    // The new, correct approach is to call a function that handles polling,
-    // dequeuing, and processing in one step, avoiding the legacy conversion.
-    WaveX::Comm::ProcessQueuedSpiMessage();
-    #endif
-}
 
 // Optional loop/CPU probe GPIO
 // CPU usage measurement state - improved accuracy
@@ -383,7 +375,11 @@ int main(void)
         // #if WAVEX_SPI_LINK_ENABLED
         // WaveX::Comm::Spi_PollAttnLevel();
         // #endif
-        process_incoming_spi_messages();
+        #if WAVEX_SPI_LINK_ENABLED
+        // The new, correct approach is to call a function that handles polling,
+        // dequeuing, and processing in one step, avoiding the legacy conversion.
+        WaveX::Comm::ProcessQueuedSpiMessage();
+        #endif
         uint32_t spi_duration = System::GetTick() - spi_start;
 
         WaveX::Comm::UartLinkProcess();

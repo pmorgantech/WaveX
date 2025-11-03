@@ -8,6 +8,13 @@
 #define LV_LOCK()   lvgl_port_lock(portMAX_DELAY)
 #define LV_UNLOCK() lvgl_port_unlock()
 
+// LVGL Lock Usage Guidelines:
+// - UINavigator::push/pop: Acquire lock because they're called from UI task (not LVGL context)
+// - UINavigator::refreshSoftkeys: NO lock - only called from LVGL context or via lv_async_call
+// - UIPage::onEnter/onExit: NO lock - called from push/pop which already holds lock
+// - UIPage::onInput handlers: NEED locks - called from UI task via InputDispatcher
+// - Functions called from both onEnter and onInput: NEED locks (FreeRTOS mutex supports recursion)
+
 static const char* TAG = "UI_NAVIGATOR";
 
 namespace wavex_ui {
@@ -137,6 +144,17 @@ void UINavigator::pop() {
     }
 
     ESP_LOGI(TAG, "Navigation stack depth: %zu", stack_.size());
+}
+
+void UINavigator::refreshSoftkeys() {
+    if (!screen_ || !active_) {
+        return;
+    }
+
+    // NOTE: This function should only be called from LVGL context (where lock is already held)
+    // or via lv_async_call(). If called from non-LVGL context, use lv_async_call.
+    // DO NOT call with LV_LOCK() - it will compete with LVGL's own lock.
+    softkeyBar_.setSoftkeys(active_->getSoftkeys());
 }
 
 } // namespace wavex_ui

@@ -101,11 +101,12 @@ static AuditionState s_audition = {};
 // Thread-safe single-producer (main loop) / single-consumer (audio IRQ) ring buffer of stereo int16 frames
 // Uses ARM Cortex-M7 atomic operations and memory barriers for race-condition-free operation
 // This eliminates warbling caused by timing variations between main loop and audio callback
-// Using regular memory for larger buffers - DMA memory was too constrained
+// Using regular memory - this buffer is NOT accessed by DMA, only by CPU (main loop writes, IRQ reads)
+// Moving out of DMA memory saves 8KB from the 32KB RAM_D2_DMA limit
 static const uint32_t RB_CAP_FRAMES = 2048; // ~46ms at 44.1k (better latency) (excellent buffering for smooth playback)
 static volatile uint32_t s_rb_head = 0; // write counter (frames) - atomic access with memory barriers
 static volatile uint32_t s_rb_tail = 0; // read counter (frames) - atomic access with memory barriers
-static int16_t s_rb[RB_CAP_FRAMES * 2] DMA_BUFFER_MEM_SECTION; // interleaved L,R - DMA memory (8KB, fits comfortably)
+static int16_t s_rb[RB_CAP_FRAMES * 2]; // interleaved L,R - regular memory (8KB saved from DMA memory)
 
 // Pre-buffering system for smooth playback start
 static const uint32_t PREBUFFER_FRAMES = 1024; // ~23ms at 44.1kHz (much more responsive for auditioning)
@@ -136,7 +137,9 @@ static bool prebuffer_audio()
     if (!s_wav.open || s_prebuffer_ready) return true;
     
     s_prebuffering = true;
-    uint32_t file_bpf = (uint32_t)s_wav.num_channels * 2u;
+    // Calculate bytes per frame (bytes per sample * channels)
+    uint32_t bytes_per_sample = (s_wav.bits_per_sample == 24) ? 3u : 2u;
+    uint32_t file_bpf = (uint32_t)s_wav.num_channels * bytes_per_sample;
     uint32_t frames_to_read = PREBUFFER_FRAMES - s_prebuffer_filled;
     
     if (frames_to_read == 0) {
@@ -194,22 +197,51 @@ static bool prebuffer_audio()
     
     s_wav.bytes_remaining -= br;
     
-    // Copy to pre-buffer
+    // Copy to pre-buffer with format conversion if needed
     uint32_t frames_read = br / file_bpf;
-    const int16_t* src = (const int16_t*)s_sd_buffer;
     int16_t* dst = &s_prebuffer[s_prebuffer_filled * 2];
     
-    if (s_wav.num_channels == 2) {
-        // Stereo: copy L,R pairs
-        for (uint32_t i = 0; i < frames_read; ++i) {
-            dst[i * 2 + 0] = src[i * 2 + 0];
-            dst[i * 2 + 1] = src[i * 2 + 1];
+    // Convert samples from file format to 16-bit
+    if (s_wav.bits_per_sample == 24) {
+        // 24-bit: read 3 bytes (little-endian) and convert to 16-bit
+        const uint8_t* src = (const uint8_t*)s_sd_buffer;
+        if (s_wav.num_channels == 2) {
+            // Stereo: convert L,R pairs
+            for (uint32_t i = 0; i < frames_read; ++i) {
+                uint32_t idx = i * 6; // 3 bytes per sample * 2 channels
+                // Convert 24-bit L sample (little-endian, signed)
+                int32_t sample_l = (int32_t)(src[idx + 0] | (src[idx + 1] << 8) | ((int8_t)src[idx + 2] << 16));
+                dst[i * 2 + 0] = (int16_t)(sample_l >> 8); // Shift right 8 bits to convert to 16-bit
+                // Convert 24-bit R sample
+                int32_t sample_r = (int32_t)(src[idx + 3] | (src[idx + 4] << 8) | ((int8_t)src[idx + 5] << 16));
+                dst[i * 2 + 1] = (int16_t)(sample_r >> 8);
+            }
+        } else {
+            // Mono: convert and duplicate to both channels
+            for (uint32_t i = 0; i < frames_read; ++i) {
+                uint32_t idx = i * 3; // 3 bytes per sample
+                // Convert 24-bit sample (little-endian, signed)
+                int32_t sample = (int32_t)(src[idx + 0] | (src[idx + 1] << 8) | ((int8_t)src[idx + 2] << 16));
+                int16_t sample_16 = (int16_t)(sample >> 8); // Shift right 8 bits to convert to 16-bit
+                dst[i * 2 + 0] = sample_16;
+                dst[i * 2 + 1] = sample_16;
+            }
         }
     } else {
-        // Mono: duplicate to both channels
-        for (uint32_t i = 0; i < frames_read; ++i) {
-            dst[i * 2 + 0] = src[i];
-            dst[i * 2 + 1] = src[i];
+        // 16-bit: direct copy
+        const int16_t* src = (const int16_t*)s_sd_buffer;
+        if (s_wav.num_channels == 2) {
+            // Stereo: copy L,R pairs
+            for (uint32_t i = 0; i < frames_read; ++i) {
+                dst[i * 2 + 0] = src[i * 2 + 0];
+                dst[i * 2 + 1] = src[i * 2 + 1];
+            }
+        } else {
+            // Mono: duplicate to both channels
+            for (uint32_t i = 0; i < frames_read; ++i) {
+                dst[i * 2 + 0] = src[i];
+                dst[i * 2 + 1] = src[i];
+            }
         }
     }
     
@@ -232,8 +264,9 @@ static bool refill_sd_buffer()
         return true; // Still have data
     }
     
-    // Calculate how much to read
-    uint32_t file_bpf = (uint32_t)s_wav.num_channels * 2u;
+    // Calculate how much to read (bytes per frame = channels * bytes per sample)
+    uint32_t bytes_per_sample = (s_wav.bits_per_sample == 24) ? 3u : 2u;
+    uint32_t file_bpf = (uint32_t)s_wav.num_channels * bytes_per_sample;
     uint32_t max_frames = SD_BUFFER_SIZE / file_bpf;
     uint32_t req_bytes = max_frames * file_bpf;
     
@@ -659,10 +692,11 @@ bool OpenWav(const char* path)
         }
     }
 
-    if (audio_fmt != 1 || (bits != 16) || (num_ch != 1 && num_ch != 2)) {
+    // Support PCM format (fmt=1), 16-bit or 24-bit, mono or stereo
+    if (audio_fmt != 1 || (bits != 16 && bits != 24) || (num_ch != 1 && num_ch != 2)) {
         if (s_hw) s_hw->PrintLine("WAV open failed: unsupported format fmt=%u bits=%u ch=%u", (unsigned)audio_fmt, (unsigned)bits, (unsigned)num_ch);
         f_close(&s_wav.file);
-        return false; // only PCM16 mono/stereo supported
+        return false; // only PCM16/24 mono/stereo supported
     }
 
     s_wav.open = true;
@@ -824,22 +858,51 @@ void PumpWavIO()
     
     if (frames_to_transfer == 0) return;
 
-    // Transfer frames from SD buffer to ring buffer
-    uint32_t file_bpf = (uint32_t)s_wav.num_channels * 2u;
-    const int16_t* src = (const int16_t*)(s_sd_buffer + (s_sd_buffer_pos * file_bpf));
+    // Transfer frames from SD buffer to ring buffer with format conversion if needed
+    uint32_t bytes_per_sample = (s_wav.bits_per_sample == 24) ? 3u : 2u;
+    uint32_t file_bpf = (uint32_t)s_wav.num_channels * bytes_per_sample;
+    const uint8_t* src = (const uint8_t*)(s_sd_buffer + (s_sd_buffer_pos * file_bpf));
     
-    if (s_wav.num_channels == 2) {
-        // Stereo: copy L,R pairs
-        for (uint32_t i = 0; i < frames_to_transfer; ++i) {
-            int16_t L = src[i * 2 + 0];
-            int16_t R = src[i * 2 + 1];
-            rb_push_stereo(L, R);
+    if (s_wav.bits_per_sample == 24) {
+        // 24-bit: convert to 16-bit
+        if (s_wav.num_channels == 2) {
+            // Stereo: convert L,R pairs
+            for (uint32_t i = 0; i < frames_to_transfer; ++i) {
+                uint32_t idx = i * 6; // 3 bytes per sample * 2 channels
+                // Convert 24-bit L sample (little-endian, signed)
+                int32_t sample_l = (int32_t)(src[idx + 0] | (src[idx + 1] << 8) | ((int8_t)src[idx + 2] << 16));
+                int16_t L = (int16_t)(sample_l >> 8);
+                // Convert 24-bit R sample
+                int32_t sample_r = (int32_t)(src[idx + 3] | (src[idx + 4] << 8) | ((int8_t)src[idx + 5] << 16));
+                int16_t R = (int16_t)(sample_r >> 8);
+                rb_push_stereo(L, R);
+            }
+        } else {
+            // Mono: convert and duplicate to both channels
+            for (uint32_t i = 0; i < frames_to_transfer; ++i) {
+                uint32_t idx = i * 3; // 3 bytes per sample
+                // Convert 24-bit sample (little-endian, signed)
+                int32_t sample = (int32_t)(src[idx + 0] | (src[idx + 1] << 8) | ((int8_t)src[idx + 2] << 16));
+                int16_t M = (int16_t)(sample >> 8);
+                rb_push_stereo(M, M);
+            }
         }
     } else {
-        // Mono: duplicate to both channels
-        for (uint32_t i = 0; i < frames_to_transfer; ++i) {
-            int16_t M = src[i];
-            rb_push_stereo(M, M);
+        // 16-bit: direct copy
+        const int16_t* src_16 = (const int16_t*)src;
+        if (s_wav.num_channels == 2) {
+            // Stereo: copy L,R pairs
+            for (uint32_t i = 0; i < frames_to_transfer; ++i) {
+                int16_t L = src_16[i * 2 + 0];
+                int16_t R = src_16[i * 2 + 1];
+                rb_push_stereo(L, R);
+            }
+        } else {
+            // Mono: duplicate to both channels
+            for (uint32_t i = 0; i < frames_to_transfer; ++i) {
+                int16_t M = src_16[i];
+                rb_push_stereo(M, M);
+            }
         }
     }
     

@@ -13,7 +13,7 @@ namespace UartProtocol {
 static constexpr uint8_t UART_START_BYTE = 0xA5;
 static constexpr uint8_t UART_END_BYTE   = 0x5A;
 static constexpr size_t  UART_FRAME_OVERHEAD = 10; // start + len + flags + type + seq + crc + end
-static constexpr size_t  UART_MAX_PAYLOAD   = 512; // control-plane payload size limit
+static constexpr size_t  UART_MAX_PAYLOAD   = 2048; // payload size limit (matches buffer capacity)
 
 // UART packet flags (upper 4 bits used, lower 4 reserved/adaptive)
 static constexpr uint8_t UART_FLAG_ACK      = 0x80; // acknowledgment
