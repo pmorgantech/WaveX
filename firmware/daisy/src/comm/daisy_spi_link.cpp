@@ -818,14 +818,12 @@ void Spi_DebugState()
 void Spi_CheckTimeout()
 {
 #if WAVEX_SPI_DMA_ENABLED
-    uint32_t current_time = System::GetTick();
-    
-    // Check TX timeout
     if (s_tx_inflight) {
+        uint32_t current_time = System::GetTick();
         uint32_t elapsed = current_time - s_dma_start_time;
         
         if (elapsed > DMA_TIMEOUT_MS) {
-            if (s_hw) s_hw->PrintLine("DAISY: DMA TX timeout after %u ms - forcing abort", elapsed);
+            if (s_hw) s_hw->PrintLine("DAISY: DMA timeout after %u ms - forcing abort", elapsed);
             if (s_hw) s_hw->PrintLine("DAISY: Timeout details: start_time=%u, current_time=%u, inflight=%s", 
                                      s_dma_start_time, current_time, s_tx_inflight ? "true" : "false");
             
@@ -833,26 +831,7 @@ void Spi_CheckTimeout()
             cs_pin.Write(true);
             s_tx_inflight = false;
             
-            if (s_hw) s_hw->PrintLine("DAISY: DMA TX timeout recovery - CS deasserted, ready for next packet");
-            if (s_hw) s_hw->PrintLine("DAISY: NOTE: ESP32 may have restarted - SPI communication will resume");
-        }
-    }
-    
-    // Check DUPLEX timeout (this is critical for detecting ESP32 restart)
-    if (s_duplex_inflight) {
-        uint32_t elapsed = current_time - s_dma_start_time;
-        
-        if (elapsed > DMA_TIMEOUT_MS) {
-            if (s_hw) s_hw->PrintLine("DAISY: DMA DUPLEX timeout after %u ms - ESP32 may have restarted", elapsed);
-            if (s_hw) s_hw->PrintLine("DAISY: Timeout details: start_time=%u, current_time=%u, duplex_inflight=%s", 
-                                     s_dma_start_time, current_time, s_duplex_inflight ? "true" : "false");
-            
-            // Force CS high and clear inflight flag
-            cs_pin.Write(true);
-            s_duplex_inflight = false;
-            
-            if (s_hw) s_hw->PrintLine("DAISY: DMA DUPLEX timeout recovery - CS deasserted");
-            if (s_hw) s_hw->PrintLine("DAISY: WARNING: Possible ESP32 restart detected - awaiting ESP32 reboot completion");
+            if (s_hw) s_hw->PrintLine("DAISY: DMA timeout recovery - CS deasserted, ready for next packet");
         }
     }
 #endif
