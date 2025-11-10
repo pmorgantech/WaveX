@@ -46,52 +46,69 @@
 
 static const char *TAG = "UI_TASK";
 
-// Task handle
-static TaskHandle_t s_ui_task_handle = NULL;
-
-// Display and LVGL handles
-static esp_timer_handle_t s_meter_timer_handle = NULL;
-// LVGL timer to apply deferred meter updates in LVGL context
-static lv_timer_t *s_meter_lvgl_timer = NULL;
-
-// Meter data variables
-static float s_current_rms = 0.0f;
-static float s_current_peak = 0.0f;
-static lv_obj_t *s_meter_bar = NULL;
-static lv_obj_t *s_meter_label = NULL;
-
-// Enhanced meter display variables
-static lv_obj_t *s_meter_bar_l = NULL;
-static lv_obj_t *s_meter_bar_r = NULL;
-static lv_obj_t *s_peak_line_l = NULL;
-static lv_obj_t *s_peak_line_r = NULL;
-static lv_obj_t *s_meter_label_l = NULL;
-static lv_obj_t *s_meter_label_r = NULL;
-
 // Peak hold tracking
 struct PeakHoldData {
     float peak_value;
     uint32_t peak_time_ms;
     bool is_holding;
 };
-static PeakHoldData s_peak_hold_l = {0.0f, 0, false};
-static PeakHoldData s_peak_hold_r = {0.0f, 0, false};
 static const uint32_t PEAK_HOLD_TIMEOUT_MS = 500;  // Configurable peak hold duration
 
-// Adaptive refresh rate control
-static bool s_content_changed = false;
-static uint32_t s_last_refresh_time = 0;
-static uint32_t s_refresh_count = 0;
+// Meter display state (grouped for better organization and scalability)
+struct MeterDisplay {
+    // Legacy single meter (fallback)
+    lv_obj_t *bar = nullptr;
+    lv_obj_t *label = nullptr;
+
+    // Enhanced dual-channel meters
+    lv_obj_t *bar_l = nullptr;
+    lv_obj_t *bar_r = nullptr;
+    lv_obj_t *peak_line_l = nullptr;
+    lv_obj_t *peak_line_r = nullptr;
+    lv_obj_t *label_l = nullptr;
+    lv_obj_t *label_r = nullptr;
+
+    // Peak hold tracking
+    PeakHoldData peak_hold_l = {0.0f, 0, false};
+    PeakHoldData peak_hold_r = {0.0f, 0, false};
+};
+
+// UI Context - encapsulates all UI state to reduce global variables
+struct UiContext {
+    // Task handle
+    TaskHandle_t ui_task_handle = NULL;
+
+    // Display and LVGL handles
+    esp_timer_handle_t meter_timer_handle = NULL;
+    lv_timer_t *meter_lvgl_timer = NULL;
+
+    // Meter display state
+    MeterDisplay meter_display;
+
+    // Adaptive refresh rate control
+    bool content_changed = false;
+    uint32_t last_refresh_time = 0;
+    uint32_t refresh_count = 0;
+
+    // Deferred meter update data (shared between timer and UI task)
+    volatile bool meter_update_pending = false;
+    volatile bool meter_reset_pending = false;
+    volatile float deferred_rms_left = 0.0f;
+    volatile float deferred_rms_right = 0.0f;
+    volatile float deferred_peak_left = 0.0f;
+    volatile float deferred_peak_right = 0.0f;
+
+    // Current meter values (from Daisy callback)
+    volatile float current_rms = 0.0f;
+    volatile float current_peak = 0.0f;
+};
+
+// Global UI context instance (single instance for this module)
+static UiContext g_ui_context;
+
+// Adaptive refresh rate control constants
 static const uint32_t MIN_REFRESH_INTERVAL_MS = 16;   // 60 FPS maximum
 static const uint32_t MAX_REFRESH_INTERVAL_MS = 100;  // 10 FPS minimum
-
-// Deferred meter update data (shared between timer and UI task)
-static volatile bool s_meter_update_pending = false;
-static volatile bool s_meter_reset_pending = false;
-static volatile float s_deferred_rms_left = 0.0f;
-static volatile float s_deferred_rms_right = 0.0f;
-static volatile float s_deferred_peak_left = 0.0f;
-static volatile float s_deferred_peak_right = 0.0f;
 
 // Forward declarations
 static void ui_task(void *pvParameters);
@@ -161,6 +178,9 @@ static void update_peak_line_position(lv_obj_t *peak_line, lv_obj_t *meter_bar, 
  * @brief Meter update timer callback for real-time updates
  */
 static void meter_update_cb(void *arg) {
+    UiContext *ctx = (UiContext *)arg;
+    if (!ctx)
+        return;
     // Get current meter data from statistics
     wavex_meter_data_t meter_data;
     inter_mcu_get_meter_data(&meter_data);
@@ -193,268 +213,122 @@ static void meter_update_cb(void *arg) {
 
         if (time_since_reset > 1000) {  // Only reset once per second
             // Reset peak hold values to 0
-            s_peak_hold_l.peak_value = 0.0f;
-            s_peak_hold_l.peak_time_ms = current_time_ms;
-            s_peak_hold_l.is_holding = false;
+            ctx->meter_display.peak_hold_l.peak_value = 0.0f;
+            ctx->meter_display.peak_hold_l.peak_time_ms = current_time_ms;
+            ctx->meter_display.peak_hold_l.is_holding = false;
 
-            s_peak_hold_r.peak_value = 0.0f;
-            s_peak_hold_r.peak_time_ms = current_time_ms;
-            s_peak_hold_r.is_holding = false;
+            ctx->meter_display.peak_hold_r.peak_value = 0.0f;
+            ctx->meter_display.peak_hold_r.peak_time_ms = current_time_ms;
+            ctx->meter_display.peak_hold_r.is_holding = false;
 
             last_reset_time = current_time_ms;
 
             // ESP_LOGI(TAG, "METER_CB: resetting meters (time_since_reset=%u)",
             // (unsigned)time_since_reset); Mark meter reset as pending (will be processed by main
             // UI task)
-            s_meter_reset_pending = true;
+            ctx->meter_reset_pending = true;
             wavex_ui_mark_content_changed();
         }
     } else if (meter_data.valid) {
         // Normal operation - update meters with valid data
         // Update peak hold tracking
-        update_peak_hold(&s_peak_hold_l, meter_data.peak_left, current_time_ms);
-        update_peak_hold(&s_peak_hold_r, meter_data.peak_right, current_time_ms);
+        update_peak_hold(&ctx->meter_display.peak_hold_l, meter_data.peak_left, current_time_ms);
+        update_peak_hold(&ctx->meter_display.peak_hold_r, meter_data.peak_right, current_time_ms);
 
         // Store meter data for deferred update (no LVGL locks in timer callback)
-        s_deferred_rms_left = meter_data.rms_left;
-        s_deferred_rms_right = meter_data.rms_right;
-        s_deferred_peak_left = s_peak_hold_l.peak_value;
-        s_deferred_peak_right = s_peak_hold_r.peak_value;
+        ctx->deferred_rms_left = meter_data.rms_left;
+        ctx->deferred_rms_right = meter_data.rms_right;
+        ctx->deferred_peak_left = ctx->meter_display.peak_hold_l.peak_value;
+        ctx->deferred_peak_right = ctx->meter_display.peak_hold_r.peak_value;
 
         // ESP_LOGI(TAG, "METER_CB: scheduling meter update rms_l=%.3f rms_r=%.3f peak_l=%.3f
         // peak_r=%.3f",
-        //          s_deferred_rms_left, s_deferred_rms_right, s_deferred_peak_left,
-        //          s_deferred_peak_right);
+        //          ctx->deferred_rms_left, ctx->deferred_rms_right, ctx->deferred_peak_left,
+        //          ctx->deferred_peak_right);
         // Mark meter update as pending (will be processed by main UI task)
-        s_meter_update_pending = true;
+        ctx->meter_update_pending = true;
         wavex_ui_mark_content_changed();
     }
 }
 
-/**
- * @brief Process deferred meter updates (called from main UI task)
- *
- * NOTE: This function uses LV_LOCK() which may compete with LVGL's own lock.
- * The preferred method is via the LVGL timer (lvgl_meter_apply_cb), which runs
- * in LVGL context without lock contention. This function exists as a fallback
- * but ideally should be removed if the LVGL timer is sufficient.
- *
- * See .cursor/rules/lvgl-threading.mdc for threading guidelines.
- */
-static void process_deferred_meter_updates(void) {
-    // ESP_LOGI(TAG, "METER_PROC: entered (pending=%d reset=%d)", s_meter_update_pending ? 1 : 0,
-    // s_meter_reset_pending ? 1 : 0);
-    if (s_meter_reset_pending) {
-        LV_LOCK();
-
-        // Reset enhanced meter display if available
-        if (s_meter_bar_l && s_meter_bar_r && s_peak_line_l && s_peak_line_r &&
-            lv_obj_is_valid(s_meter_bar_l) && lv_obj_is_valid(s_meter_bar_r) &&
-            lv_obj_is_valid(s_peak_line_l) && lv_obj_is_valid(s_peak_line_r)) {
-            // Reset RMS bars to 0
-            lv_bar_set_value(s_meter_bar_l, 0, LV_ANIM_ON);
-            lv_bar_set_value(s_meter_bar_r, 0, LV_ANIM_ON);
-
-            // Hide peak lines (they will be hidden by update_peak_line_position with 0 value)
-            update_peak_line_position(s_peak_line_l, s_meter_bar_l, 0.0f);
-            update_peak_line_position(s_peak_line_r, s_meter_bar_r, 0.0f);
-
-            // Update channel labels to show 0 values
-            if (s_meter_label_l && lv_obj_is_valid(s_meter_label_l)) {
-                lv_label_set_text(s_meter_label_l, "L: 0.000\nPeak: 0.000");
-            }
-
-            if (s_meter_label_r && lv_obj_is_valid(s_meter_label_r)) {
-                lv_label_set_text(s_meter_label_r, "R: 0.000\nPeak: 0.000");
-            }
-        }
-
-        // Reset fallback legacy single meter display
-        else if (s_meter_bar && s_meter_label && lv_obj_is_valid(s_meter_bar) &&
-                 lv_obj_is_valid(s_meter_label)) {
-            lv_bar_set_value(s_meter_bar, 0, LV_ANIM_ON);
-            lv_label_set_text(s_meter_label, "L: 0.000 R: 0.000\nPeak L: 0.000 R: 0.000");
-        }
-
-        LV_UNLOCK();
-        ESP_LOGI(TAG, "METER_PROC: performed meter reset");
-        s_meter_reset_pending = false;
-    }
-
-    if (s_meter_update_pending) {
-        LV_LOCK();
-        ESP_LOGI(
-            TAG,
-            "METER_PROC: processing deferred meter update pending=%d",
-            s_meter_update_pending ? 1 : 0);
-        // Log LVGL object validity to diagnose lifecycle issues
-        ESP_LOGI(TAG,
-                 "METER_PROC: objs s_meter_bar_l=%p s_meter_bar_r=%p s_peak_line_l=%p "
-                 "s_peak_line_r=%p s_meter_label_l=%p s_meter_label_r=%p",
-                 (void *)s_meter_bar_l,
-                 (void *)s_meter_bar_r,
-                 (void *)s_peak_line_l,
-                 (void *)s_peak_line_r,
-                 (void *)s_meter_label_l,
-                 (void *)s_meter_label_r);
-        if (s_meter_bar_l)
-            ESP_LOGI(TAG, "METER_PROC: s_meter_bar_l valid=%d", lv_obj_is_valid(s_meter_bar_l));
-        if (s_meter_bar_r)
-            ESP_LOGI(TAG, "METER_PROC: s_meter_bar_r valid=%d", lv_obj_is_valid(s_meter_bar_r));
-        if (s_peak_line_l)
-            ESP_LOGI(TAG, "METER_PROC: s_peak_line_l valid=%d", lv_obj_is_valid(s_peak_line_l));
-        if (s_peak_line_r)
-            ESP_LOGI(TAG, "METER_PROC: s_peak_line_r valid=%d", lv_obj_is_valid(s_peak_line_r));
-        if (s_meter_label_l)
-            ESP_LOGI(TAG, "METER_PROC: s_meter_label_l valid=%d", lv_obj_is_valid(s_meter_label_l));
-        if (s_meter_label_r)
-            ESP_LOGI(TAG, "METER_PROC: s_meter_label_r valid=%d", lv_obj_is_valid(s_meter_label_r));
-
-        // Update enhanced meter display if available
-        if (s_meter_bar_l && s_meter_bar_r && s_peak_line_l && s_peak_line_r &&
-            lv_obj_is_valid(s_meter_bar_l) && lv_obj_is_valid(s_meter_bar_r) &&
-            lv_obj_is_valid(s_peak_line_l) && lv_obj_is_valid(s_peak_line_r)) {
-            // Update left channel RMS bar
-            int rms_l_value = (int)(s_deferred_rms_left * 100.0f);
-            if (rms_l_value > 100)
-                rms_l_value = 100;
-            if (rms_l_value < 0)
-                rms_l_value = 0;
-            lv_bar_set_value(s_meter_bar_l, rms_l_value, LV_ANIM_ON);
-
-            // Update right channel RMS bar
-            int rms_r_value = (int)(s_deferred_rms_right * 100.0f);
-            if (rms_r_value > 100)
-                rms_r_value = 100;
-            if (rms_r_value < 0)
-                rms_r_value = 0;
-            lv_bar_set_value(s_meter_bar_r, rms_r_value, LV_ANIM_ON);
-
-            // Update peak line positions
-            update_peak_line_position(s_peak_line_l, s_meter_bar_l, s_deferred_peak_left);
-            update_peak_line_position(s_peak_line_r, s_meter_bar_r, s_deferred_peak_right);
-
-            // Update channel labels
-            if (s_meter_label_l && lv_obj_is_valid(s_meter_label_l)) {
-                char label_text[32];
-                snprintf(label_text,
-                         sizeof(label_text),
-                         "L: %.3f\nPeak: %.3f",
-                         s_deferred_rms_left,
-                         s_deferred_peak_left);
-                lv_label_set_text(s_meter_label_l, label_text);
-            }
-
-            if (s_meter_label_r && lv_obj_is_valid(s_meter_label_r)) {
-                char label_text[32];
-                snprintf(label_text,
-                         sizeof(label_text),
-                         "R: %.3f\nPeak: %.3f",
-                         s_deferred_rms_right,
-                         s_deferred_peak_right);
-                lv_label_set_text(s_meter_label_r, label_text);
-            }
-        }
-
-        // Fallback to legacy single meter display
-        else if (s_meter_bar && s_meter_label && lv_obj_is_valid(s_meter_bar) &&
-                 lv_obj_is_valid(s_meter_label)) {
-            // Use RMS left channel for the bar (assuming stereo)
-            float rms_value = s_deferred_rms_left;
-            int bar_value = (int)(rms_value * 100.0f);
-            if (bar_value > 100)
-                bar_value = 100;
-            if (bar_value < 0)
-                bar_value = 0;
-
-            lv_bar_set_value(s_meter_bar, bar_value, LV_ANIM_ON);
-
-            // Update label with current values
-            char meter_text[64];
-            snprintf(meter_text,
-                     sizeof(meter_text),
-                     "L: %.3f R: %.3f\nPeak L: %.3f R: %.3f",
-                     s_deferred_rms_left,
-                     s_deferred_rms_right,
-                     s_deferred_peak_left,
-                     s_deferred_peak_right);
-            lv_label_set_text(s_meter_label, meter_text);
-        }
-
-        LV_UNLOCK();
-        ESP_LOGI(TAG,
-                 "METER_PROC: meter update applied L=%.3f R=%.3f peakL=%.3f peakR=%.3f",
-                 s_deferred_rms_left,
-                 s_deferred_rms_right,
-                 s_deferred_peak_left,
-                 s_deferred_peak_right);
-        s_meter_update_pending = false;
-    }
-}
+// Removed: process_deferred_meter_updates() - now handled exclusively by LVGL timer
+// (lvgl_meter_apply_cb)
 
 /**
  * @brief LVGL timer callback to apply deferred meter updates in LVGL context.
  * Runs with LVGL lock already held.
  */
 static void lvgl_meter_apply_cb(lv_timer_t *timer) {
-    (void)timer;
+    UiContext *ctx = (UiContext *)lv_timer_get_user_data(timer);
+    if (!ctx)
+        return;
 
-    if (!s_meter_update_pending && !s_meter_reset_pending)
+    if (!ctx->meter_update_pending && !ctx->meter_reset_pending)
         return;
 
     // Reset handling
-    if (s_meter_reset_pending) {
-        if (s_meter_bar_l && s_meter_bar_r && s_peak_line_l && s_peak_line_r &&
-            lv_obj_is_valid(s_meter_bar_l) && lv_obj_is_valid(s_meter_bar_r) &&
-            lv_obj_is_valid(s_peak_line_l) && lv_obj_is_valid(s_peak_line_r)) {
-            lv_bar_set_value(s_meter_bar_l, 0, LV_ANIM_ON);
-            lv_bar_set_value(s_meter_bar_r, 0, LV_ANIM_ON);
-            update_peak_line_position(s_peak_line_l, s_meter_bar_l, 0.0f);
-            update_peak_line_position(s_peak_line_r, s_meter_bar_r, 0.0f);
-            if (s_meter_label_l && lv_obj_is_valid(s_meter_label_l))
-                lv_label_set_text(s_meter_label_l, "L: 0.000\nPeak: 0.000");
-            if (s_meter_label_r && lv_obj_is_valid(s_meter_label_r))
-                lv_label_set_text(s_meter_label_r, "R: 0.000\nPeak: 0.000");
+    if (ctx->meter_reset_pending) {
+        if (ctx->meter_display.bar_l && ctx->meter_display.bar_r &&
+            ctx->meter_display.peak_line_l && ctx->meter_display.peak_line_r &&
+            lv_obj_is_valid(ctx->meter_display.bar_l) &&
+            lv_obj_is_valid(ctx->meter_display.bar_r) &&
+            lv_obj_is_valid(ctx->meter_display.peak_line_l) &&
+            lv_obj_is_valid(ctx->meter_display.peak_line_r)) {
+            lv_bar_set_value(ctx->meter_display.bar_l, 0, LV_ANIM_ON);
+            lv_bar_set_value(ctx->meter_display.bar_r, 0, LV_ANIM_ON);
+            update_peak_line_position(
+                ctx->meter_display.peak_line_l, ctx->meter_display.bar_l, 0.0f);
+            update_peak_line_position(
+                ctx->meter_display.peak_line_r, ctx->meter_display.bar_r, 0.0f);
+            if (ctx->meter_display.label_l && lv_obj_is_valid(ctx->meter_display.label_l))
+                lv_label_set_text(ctx->meter_display.label_l, "L: 0.000\nPeak: 0.000");
+            if (ctx->meter_display.label_r && lv_obj_is_valid(ctx->meter_display.label_r))
+                lv_label_set_text(ctx->meter_display.label_r, "R: 0.000\nPeak: 0.000");
         }
-        s_meter_reset_pending = false;
-        s_meter_update_pending = false;
+        ctx->meter_reset_pending = false;
+        ctx->meter_update_pending = false;
         return;
     }
 
-    if (s_meter_update_pending) {
-        if (s_meter_bar_l && s_meter_bar_r && s_peak_line_l && s_peak_line_r &&
-            lv_obj_is_valid(s_meter_bar_l) && lv_obj_is_valid(s_meter_bar_r) &&
-            lv_obj_is_valid(s_peak_line_l) && lv_obj_is_valid(s_peak_line_r)) {
-            int rms_l_value = (int)(s_deferred_rms_left * 100.0f);
-            int rms_r_value = (int)(s_deferred_rms_right * 100.0f);
+    if (ctx->meter_update_pending) {
+        if (ctx->meter_display.bar_l && ctx->meter_display.bar_r &&
+            ctx->meter_display.peak_line_l && ctx->meter_display.peak_line_r &&
+            lv_obj_is_valid(ctx->meter_display.bar_l) &&
+            lv_obj_is_valid(ctx->meter_display.bar_r) &&
+            lv_obj_is_valid(ctx->meter_display.peak_line_l) &&
+            lv_obj_is_valid(ctx->meter_display.peak_line_r)) {
+            int rms_l_value = (int)(ctx->deferred_rms_left * 100.0f);
+            int rms_r_value = (int)(ctx->deferred_rms_right * 100.0f);
             if (rms_l_value > 100)
                 rms_l_value = 100;
             if (rms_r_value > 100)
                 rms_r_value = 100;
-            lv_bar_set_value(s_meter_bar_l, rms_l_value, LV_ANIM_ON);
-            lv_bar_set_value(s_meter_bar_r, rms_r_value, LV_ANIM_ON);
-            update_peak_line_position(s_peak_line_l, s_meter_bar_l, s_deferred_peak_left);
-            update_peak_line_position(s_peak_line_r, s_meter_bar_r, s_deferred_peak_right);
-            if (s_meter_label_l && lv_obj_is_valid(s_meter_label_l)) {
+            lv_bar_set_value(ctx->meter_display.bar_l, rms_l_value, LV_ANIM_ON);
+            lv_bar_set_value(ctx->meter_display.bar_r, rms_r_value, LV_ANIM_ON);
+            update_peak_line_position(
+                ctx->meter_display.peak_line_l, ctx->meter_display.bar_l, ctx->deferred_peak_left);
+            update_peak_line_position(
+                ctx->meter_display.peak_line_r, ctx->meter_display.bar_r, ctx->deferred_peak_right);
+            if (ctx->meter_display.label_l && lv_obj_is_valid(ctx->meter_display.label_l)) {
                 char label_text[32];
                 snprintf(label_text,
                          sizeof(label_text),
                          "L: %.3f\nPeak: %.3f",
-                         s_deferred_rms_left,
-                         s_deferred_peak_left);
-                lv_label_set_text(s_meter_label_l, label_text);
+                         ctx->deferred_rms_left,
+                         ctx->deferred_peak_left);
+                lv_label_set_text(ctx->meter_display.label_l, label_text);
             }
-            if (s_meter_label_r && lv_obj_is_valid(s_meter_label_r)) {
+            if (ctx->meter_display.label_r && lv_obj_is_valid(ctx->meter_display.label_r)) {
                 char label_text[32];
                 snprintf(label_text,
                          sizeof(label_text),
                          "R: %.3f\nPeak: %.3f",
-                         s_deferred_rms_right,
-                         s_deferred_peak_right);
-                lv_label_set_text(s_meter_label_r, label_text);
+                         ctx->deferred_rms_right,
+                         ctx->deferred_peak_right);
+                lv_label_set_text(ctx->meter_display.label_r, label_text);
             }
         }
-        s_meter_update_pending = false;
+        ctx->meter_update_pending = false;
     }
 }
 
@@ -499,28 +373,32 @@ void wavex_ui_create_meter_display(lv_obj_t *parent) {
     lv_obj_align(left_label, LV_ALIGN_TOP_MID, 0, 5);
 
     // Left channel RMS bar
-    s_meter_bar_l = lv_bar_create(left_channel);
-    lv_obj_set_size(s_meter_bar_l, lv_pct(80), 20);
-    lv_obj_align(s_meter_bar_l, LV_ALIGN_CENTER, 0, -10);
-    lv_bar_set_range(s_meter_bar_l, 0, 100);
-    lv_bar_set_value(s_meter_bar_l, 0, LV_ANIM_OFF);
-    lv_obj_set_style_bg_color(s_meter_bar_l, lv_color_make(0x4C, 0xAF, 0x50), LV_PART_INDICATOR);
+    g_ui_context.meter_display.bar_l = lv_bar_create(left_channel);
+    lv_obj_set_size(g_ui_context.meter_display.bar_l, lv_pct(80), 20);
+    lv_obj_align(g_ui_context.meter_display.bar_l, LV_ALIGN_CENTER, 0, -10);
+    lv_bar_set_range(g_ui_context.meter_display.bar_l, 0, 100);
+    lv_bar_set_value(g_ui_context.meter_display.bar_l, 0, LV_ANIM_OFF);
+    lv_obj_set_style_bg_color(
+        g_ui_context.meter_display.bar_l, lv_color_make(0x4C, 0xAF, 0x50), LV_PART_INDICATOR);
 
     // Left channel peak line (initially hidden) - as child of meter bar
-    s_peak_line_l = lv_obj_create(s_meter_bar_l);
-    lv_obj_set_size(s_peak_line_l, 2, 20);
-    lv_obj_set_style_bg_color(s_peak_line_l, lv_color_make(0xFF, 0x57, 0x22), LV_PART_MAIN);
-    lv_obj_set_style_border_width(s_peak_line_l, 0, LV_PART_MAIN);
-    lv_obj_set_pos(s_peak_line_l, 0, 0);
-    lv_obj_add_flag(s_peak_line_l, LV_OBJ_FLAG_HIDDEN);
+    g_ui_context.meter_display.peak_line_l = lv_obj_create(g_ui_context.meter_display.bar_l);
+    lv_obj_set_size(g_ui_context.meter_display.peak_line_l, 2, 20);
+    lv_obj_set_style_bg_color(
+        g_ui_context.meter_display.peak_line_l, lv_color_make(0xFF, 0x57, 0x22), LV_PART_MAIN);
+    lv_obj_set_style_border_width(g_ui_context.meter_display.peak_line_l, 0, LV_PART_MAIN);
+    lv_obj_set_pos(g_ui_context.meter_display.peak_line_l, 0, 0);
+    lv_obj_add_flag(g_ui_context.meter_display.peak_line_l, LV_OBJ_FLAG_HIDDEN);
 
     // Left channel values label
-    s_meter_label_l = lv_label_create(left_channel);
-    lv_label_set_text(s_meter_label_l, "L: 0.000\nPeak: 0.000");
-    lv_obj_set_style_text_color(
-        s_meter_label_l, lv_color_white(), LV_PART_MAIN);  // White text for dark mode
-    lv_obj_set_style_text_font(s_meter_label_l, &lv_font_montserrat_14, LV_PART_MAIN);
-    lv_obj_align(s_meter_label_l, LV_ALIGN_BOTTOM_MID, 0, -5);
+    g_ui_context.meter_display.label_l = lv_label_create(left_channel);
+    lv_label_set_text(g_ui_context.meter_display.label_l, "L: 0.000\nPeak: 0.000");
+    lv_obj_set_style_text_color(g_ui_context.meter_display.label_l,
+                                lv_color_white(),
+                                LV_PART_MAIN);  // White text for dark mode
+    lv_obj_set_style_text_font(
+        g_ui_context.meter_display.label_l, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_obj_align(g_ui_context.meter_display.label_l, LV_ALIGN_BOTTOM_MID, 0, -5);
 
     // Right channel container
     lv_obj_t *right_channel = lv_obj_create(meter_area);
@@ -540,28 +418,32 @@ void wavex_ui_create_meter_display(lv_obj_t *parent) {
     lv_obj_align(right_label, LV_ALIGN_TOP_MID, 0, 5);
 
     // Right channel RMS bar
-    s_meter_bar_r = lv_bar_create(right_channel);
-    lv_obj_set_size(s_meter_bar_r, lv_pct(80), 20);
-    lv_obj_align(s_meter_bar_r, LV_ALIGN_CENTER, 0, -10);
-    lv_bar_set_range(s_meter_bar_r, 0, 100);
-    lv_bar_set_value(s_meter_bar_r, 0, LV_ANIM_OFF);
-    lv_obj_set_style_bg_color(s_meter_bar_r, lv_color_make(0x4C, 0xAF, 0x50), LV_PART_INDICATOR);
+    g_ui_context.meter_display.bar_r = lv_bar_create(right_channel);
+    lv_obj_set_size(g_ui_context.meter_display.bar_r, lv_pct(80), 20);
+    lv_obj_align(g_ui_context.meter_display.bar_r, LV_ALIGN_CENTER, 0, -10);
+    lv_bar_set_range(g_ui_context.meter_display.bar_r, 0, 100);
+    lv_bar_set_value(g_ui_context.meter_display.bar_r, 0, LV_ANIM_OFF);
+    lv_obj_set_style_bg_color(
+        g_ui_context.meter_display.bar_r, lv_color_make(0x4C, 0xAF, 0x50), LV_PART_INDICATOR);
 
     // Right channel peak line (initially hidden) - as child of meter bar
-    s_peak_line_r = lv_obj_create(s_meter_bar_r);
-    lv_obj_set_size(s_peak_line_r, 2, 20);
-    lv_obj_set_style_bg_color(s_peak_line_r, lv_color_make(0xFF, 0x57, 0x22), LV_PART_MAIN);
-    lv_obj_set_style_border_width(s_peak_line_r, 0, LV_PART_MAIN);
-    lv_obj_set_pos(s_peak_line_r, 0, 0);
-    lv_obj_add_flag(s_peak_line_r, LV_OBJ_FLAG_HIDDEN);
+    g_ui_context.meter_display.peak_line_r = lv_obj_create(g_ui_context.meter_display.bar_r);
+    lv_obj_set_size(g_ui_context.meter_display.peak_line_r, 2, 20);
+    lv_obj_set_style_bg_color(
+        g_ui_context.meter_display.peak_line_r, lv_color_make(0xFF, 0x57, 0x22), LV_PART_MAIN);
+    lv_obj_set_style_border_width(g_ui_context.meter_display.peak_line_r, 0, LV_PART_MAIN);
+    lv_obj_set_pos(g_ui_context.meter_display.peak_line_r, 0, 0);
+    lv_obj_add_flag(g_ui_context.meter_display.peak_line_r, LV_OBJ_FLAG_HIDDEN);
 
     // Right channel values label
-    s_meter_label_r = lv_label_create(right_channel);
-    lv_label_set_text(s_meter_label_r, "R: 0.000\nPeak: 0.000");
-    lv_obj_set_style_text_color(
-        s_meter_label_r, lv_color_white(), LV_PART_MAIN);  // White text for dark mode
-    lv_obj_set_style_text_font(s_meter_label_r, &lv_font_montserrat_14, LV_PART_MAIN);
-    lv_obj_align(s_meter_label_r, LV_ALIGN_BOTTOM_MID, 0, -5);
+    g_ui_context.meter_display.label_r = lv_label_create(right_channel);
+    lv_label_set_text(g_ui_context.meter_display.label_r, "R: 0.000\nPeak: 0.000");
+    lv_obj_set_style_text_color(g_ui_context.meter_display.label_r,
+                                lv_color_white(),
+                                LV_PART_MAIN);  // White text for dark mode
+    lv_obj_set_style_text_font(
+        g_ui_context.meter_display.label_r, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_obj_align(g_ui_context.meter_display.label_r, LV_ALIGN_BOTTOM_MID, 0, -5);
 
     // Peak hold info label
     lv_obj_t *peak_info = lv_label_create(meter_area);
@@ -575,23 +457,23 @@ void wavex_ui_create_meter_display(lv_obj_t *parent) {
     wavex_meter_data_t md;
     inter_mcu_get_meter_data(&md);
     if (md.valid) {
-        s_deferred_rms_left = md.rms_left;
-        s_deferred_rms_right = md.rms_right;
-        s_deferred_peak_left = md.peak_left;
-        s_deferred_peak_right = md.peak_right;
+        g_ui_context.deferred_rms_left = md.rms_left;
+        g_ui_context.deferred_rms_right = md.rms_right;
+        g_ui_context.deferred_peak_left = md.peak_left;
+        g_ui_context.deferred_peak_right = md.peak_right;
     }
 
     // Mark an initial update so the meters render as soon as the page is created
-    s_meter_update_pending = true;
+    g_ui_context.meter_update_pending = true;
     wavex_ui_mark_content_changed();
     ESP_LOGI(TAG,
              "METER_UI: meter widgets created and initial update scheduled L=%.3f R=%.3f",
-             s_deferred_rms_left,
-             s_deferred_rms_right);
+             g_ui_context.deferred_rms_left,
+             g_ui_context.deferred_rms_right);
     // Create LVGL timer to ensure deferred updates are applied in LVGL context
-    if (!s_meter_lvgl_timer) {
-        s_meter_lvgl_timer = lv_timer_create(lvgl_meter_apply_cb, 50, NULL);
-        if (!s_meter_lvgl_timer) {
+    if (!g_ui_context.meter_lvgl_timer) {
+        g_ui_context.meter_lvgl_timer = lv_timer_create(lvgl_meter_apply_cb, 50, &g_ui_context);
+        if (!g_ui_context.meter_lvgl_timer) {
             ESP_LOGE(TAG, "Failed to create meter LVGL timer");
         }
     }
@@ -599,33 +481,39 @@ void wavex_ui_create_meter_display(lv_obj_t *parent) {
 
 /**
  * @brief Meter data callback from Daisy
+ * Stores real-time meter data in UI context for potential future use
  */
 static void meter_data_cb(float rms, float peak, void *user_data) {
+    UiContext *ctx = (UiContext *)user_data;
+    if (!ctx)
+        return;
+
 // Debug logging for meter data
 #ifdef WAVEX_LOG_METER_DATA
     ESP_LOGI(TAG, "Meter data received: RMS=%.3f, Peak=%.3f", rms, peak);
 #endif
 
-    s_current_rms = rms;
-    s_current_peak = peak;
+    // Store real-time meter data in context
+    ctx->current_rms = rms;
+    ctx->current_peak = peak;
 }
 
 /**
  * @brief Mark content as changed to trigger refresh
  */
 void wavex_ui_mark_content_changed(void) {
-    s_content_changed = true;
+    g_ui_context.content_changed = true;
 }
 
 /**
  * @brief Adaptive refresh rate control for optimal performance
  */
-static void adaptive_refresh_control(void) {
+static void adaptive_refresh_control(UiContext *ctx) {
     uint32_t current_time = (uint32_t)(esp_timer_get_time() / 1000);  // Convert to ms
 
     // Only refresh if content has changed and enough time has passed
-    if (s_content_changed) {
-        uint32_t time_since_last_refresh = current_time - s_last_refresh_time;
+    if (ctx->content_changed) {
+        uint32_t time_since_last_refresh = current_time - ctx->last_refresh_time;
 
         // Use minimum refresh interval for responsive updates
         if (time_since_last_refresh >= MIN_REFRESH_INTERVAL_MS) {
@@ -635,13 +523,13 @@ static void adaptive_refresh_control(void) {
                 LV_UNLOCK();
             }
 
-            s_content_changed = false;
-            s_last_refresh_time = current_time;
-            s_refresh_count++;
+            ctx->content_changed = false;
+            ctx->last_refresh_time = current_time;
+            ctx->refresh_count++;
 
             // Log refresh rate every 100 refreshes for monitoring
-            if (s_refresh_count % 100 == 0) {
-                ESP_LOGD(TAG, "Display refresh count: %lu", s_refresh_count);
+            if (ctx->refresh_count % 100 == 0) {
+                ESP_LOGD(TAG, "Display refresh count: %lu", ctx->refresh_count);
             }
         }
     }
@@ -675,22 +563,25 @@ static void ui_task(void *pvParameters) {
 
     // Create meter update timer (every 33ms for 30 FPS real-time updates)
     const esp_timer_create_args_t meter_timer_args = {.callback = &meter_update_cb,
-                                                      .name = "meter_timer"};
-    esp_err_t timer_ret = esp_timer_create(&meter_timer_args, &s_meter_timer_handle);
+                                                      .arg = &g_ui_context,
+                                                      .dispatch_method = ESP_TIMER_TASK,
+                                                      .name = "meter_timer",
+                                                      .skip_unhandled_events = false};
+    esp_err_t timer_ret = esp_timer_create(&meter_timer_args, &g_ui_context.meter_timer_handle);
     if (timer_ret == ESP_OK) {
-        esp_timer_start_periodic(s_meter_timer_handle, 33000); // 33ms in microseconds (30 FPS)
+        esp_timer_start_periodic(g_ui_context.meter_timer_handle, 33000); // 33ms in microseconds (30 FPS)
         ESP_LOGI(TAG, "Meter timer started (33ms real-time updates - 30 FPS)");
     } else {
         ESP_LOGE(TAG, "Failed to create meter timer: %s", esp_err_to_name(timer_ret));
     }
 
     // Register meter data callback for real-time audio meter updates
-    inter_mcu_set_meter_listener(meter_data_cb, NULL);
+    inter_mcu_set_meter_listener(meter_data_cb, &g_ui_context);
     ESP_LOGI(TAG, "Meter data callback registered");
 
     // Test meter callback with dummy data to verify it's working
     ESP_LOGI(TAG, "Testing meter callback with dummy data...");
-    meter_data_cb(0.5f, 0.8f, NULL);  // Test with 50% RMS, 80% peak
+    meter_data_cb(0.5f, 0.8f, &g_ui_context);  // Test with 50% RMS, 80% peak
 
     // Start TCA8418 keypad on BSP I2C; INT on GPIO31 per pin_config
     {
@@ -757,9 +648,6 @@ static void ui_task(void *pvParameters) {
 
         // Process deferred diagnostics updates (prevents deadlock)
         diagnostics_page_process_deferred_updates();
-
-        // Process deferred meter updates (prevents deadlock during audio playback)
-        process_deferred_meter_updates();
         // // If deferred update still pending (LVGL timers or lock contention), ensure it is
         // applied here if (s_meter_update_pending || s_meter_reset_pending) {
         //     LV_LOCK();
@@ -776,7 +664,7 @@ static void ui_task(void *pvParameters) {
         LV_UNLOCK();
 
         // Use adaptive refresh control for optimal performance
-        adaptive_refresh_control();
+        adaptive_refresh_control(&g_ui_context);
 
         // Short delay to prevent excessive CPU usage
         vTaskDelay(pdMS_TO_TICKS(32));  // 32ms delay for 30 FPS theoretical maximum
@@ -793,7 +681,7 @@ esp_err_t wavex_ui_task_start(void) {
                                 16384,  // Increased stack size to 16KB for LVGL and diagnostics
                                 NULL,
                                 2,  // Priority
-                                &s_ui_task_handle,
+                                &g_ui_context.ui_task_handle,
                                 1  // Run on Core 1
         );
 
@@ -809,19 +697,25 @@ esp_err_t wavex_ui_task_start(void) {
 esp_err_t wavex_ui_task_stop(void) {
     ESP_LOGI(TAG, "Stopping UI task...");
 
-    if (s_ui_task_handle != NULL) {
-        vTaskDelete(s_ui_task_handle);
-        s_ui_task_handle = NULL;
+    if (g_ui_context.ui_task_handle != NULL) {
+        vTaskDelete(g_ui_context.ui_task_handle);
+        g_ui_context.ui_task_handle = NULL;
     }
 
     // Stop diagnostics page module
     diagnostics_page_stop();
 
     // Stop and delete the meter timer
-    if (s_meter_timer_handle) {
-        esp_timer_stop(s_meter_timer_handle);
-        esp_timer_delete(s_meter_timer_handle);
-        s_meter_timer_handle = NULL;
+    if (g_ui_context.meter_timer_handle) {
+        esp_timer_stop(g_ui_context.meter_timer_handle);
+        esp_timer_delete(g_ui_context.meter_timer_handle);
+        g_ui_context.meter_timer_handle = NULL;
+    }
+
+    // Delete LVGL timer
+    if (g_ui_context.meter_lvgl_timer) {
+        lv_timer_delete(g_ui_context.meter_lvgl_timer);
+        g_ui_context.meter_lvgl_timer = NULL;
     }
 
     // Let display manager clean up LVGL and touch resources

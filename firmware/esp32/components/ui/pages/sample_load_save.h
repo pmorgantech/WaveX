@@ -9,7 +9,6 @@
 #ifndef WAVEX_SAMPLE_LOAD_SAVE_H
 #define WAVEX_SAMPLE_LOAD_SAVE_H
 
-#include "../common/window_manager.h"
 #include "../components/file_browser.h"
 #include "lvgl.h"
 

@@ -30,8 +30,7 @@ using namespace WaveX::Protocol;
 
 static const char* TAG = "FILE_BROWSER";
 
-// Global reference to current file browser for callback
-static wavex_file_browser_t* g_current_browser = NULL;
+// Browser instances are passed via user_data in callbacks - no global needed
 
 // Forward declarations
 static void file_list_event_cb(lv_event_t* e);
@@ -45,7 +44,8 @@ static bool parse_browse_response_with_pagination(const uint8_t* data,
                                                   wavex_file_entry_t* entries,
                                                   uint32_t* count,
                                                   uint32_t* total_files,
-                                                  uint8_t* current_page_entries);
+                                                  uint8_t* current_page_entries,
+                                                  const char* current_path);
 static bool send_browse_request(const char* path, uint8_t start_index = 0);
 static void update_visual_selection(wavex_file_browser_t* browser);
 static void browse_resp_callback(const uint8_t* data, size_t length, void* user_data);
@@ -122,9 +122,6 @@ wavex_file_browser_t* wavex_file_browser_create(lv_obj_t* parent,
     // Add event callback for list
     lv_obj_add_event_cb(browser->list, file_list_event_cb, LV_EVENT_CLICKED, browser);
 
-    // Set global reference and register callback
-    g_current_browser = browser;
-
     // Register browse response callback with inter-MCU system
     extern void inter_mcu_set_browse_resp_listener(wavex_browse_resp_cb_t cb, void* user_data);
     inter_mcu_set_browse_resp_listener(browse_resp_callback, browser);
@@ -151,10 +148,7 @@ void wavex_file_browser_destroy(wavex_file_browser_t* browser) {
     if (!browser)
         return;
 
-    // Clear global reference if this is the current browser
-    if (g_current_browser == browser) {
-        g_current_browser = NULL;
-    }
+    // Browser cleanup handled via user_data parameter in callbacks
 
     if (browser->entries) {
         free(browser->entries);
@@ -584,7 +578,8 @@ static bool parse_browse_response_with_pagination(const uint8_t* data,
                                                   wavex_file_entry_t* entries,
                                                   uint32_t* count,
                                                   uint32_t* total_files,
-                                                  uint8_t* current_page_entries) {
+                                                  uint8_t* current_page_entries,
+                                                  const char* current_path) {
     if (!data || length < sizeof(BrowseRespHeader)) {
         ESP_LOGE(TAG,
                  "Browse response payload too short: %d bytes (need at least %d)",
@@ -654,17 +649,16 @@ static bool parse_browse_response_with_pagination(const uint8_t* data,
                  entry->name);
 
         // Build full path with bounds checking
-        const char* current_path = g_current_browser ? g_current_browser->current_path : "/";
+        const char* path_base = current_path ? current_path : "/";
 
-        ESP_LOGD(
-            TAG, "Entry %d: current_path='%s', entry->name='%s'", i, current_path, entry->name);
+        ESP_LOGD(TAG, "Entry %d: current_path='%s', entry->name='%s'", i, path_base, entry->name);
 
         // Ensure we don't have double slashes - remove trailing slash from current_path if present
-        const char* base_path = current_path;
-        if (strlen(current_path) > 1 && current_path[strlen(current_path) - 1] == '/') {
+        const char* base_path = path_base;
+        if (strlen(path_base) > 1 && path_base[strlen(path_base) - 1] == '/') {
             // Create a temporary string without trailing slash
             static char temp_path[96];
-            strncpy(temp_path, current_path, sizeof(temp_path) - 1);
+            strncpy(temp_path, path_base, sizeof(temp_path) - 1);
             temp_path[sizeof(temp_path) - 1] = '\0';
             temp_path[strlen(temp_path) - 1] = '\0';  // Remove trailing slash
             base_path = temp_path;
@@ -745,8 +739,13 @@ static void browse_resp_callback(const uint8_t* data, size_t length, void* user_
     uint32_t total_files = 0;
     uint8_t current_page_entries = 0;
 
-    bool parse_success = parse_browse_response_with_pagination(
-        data, length, temp_entries, &temp_count, &total_files, &current_page_entries);
+    bool parse_success = parse_browse_response_with_pagination(data,
+                                                               length,
+                                                               temp_entries,
+                                                               &temp_count,
+                                                               &total_files,
+                                                               &current_page_entries,
+                                                               browser->current_path);
 
     if (!parse_success) {
         free(temp_entries);
