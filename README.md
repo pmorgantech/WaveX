@@ -170,15 +170,13 @@ make test-clean    # Clean test build artifacts
 
 ### GitHub Actions CI
 
-WaveX uses GitHub Actions for continuous integration on all pushes and pull requests to `main` and `develop` branches. The CI pipeline runs pre-commit on all files to ensure:
+WaveX uses GitHub Actions for continuous integration on all pushes and pull requests to `main` and `develop` branches. The CI pipeline validates that code builds and tests pass:
 
-- **Code formatting** validation (clang-format, black, prettier)
-- **Code quality** checks (flake8, trailing whitespace, etc.)
-- **Build verification** for both ESP32 and Daisy firmware
 - **Unit test execution** for all components (shared protocol, ESP32 UI, Daisy audio engine)
+- **Build verification** for both ESP32 and Daisy firmware
 - **Caching build artifacts** for faster subsequent runs
 
-**Note**: CI runs on all files to catch any issues, while local pre-commit hooks only run on changed files for efficiency.
+**Note**: CI focuses on validation rather than formatting. Code formatting and quality checks are handled by local pre-commit hooks to ensure consistency before commits.
 
 ### Pre-commit Hooks
 

@@ -14,7 +14,7 @@
     "--device=/dev/ttyACM1"
   ],
   "remoteUser": "petem",
-  "containerUser": "petem",
+  "updateRemoteUserUID": true,
   "extensions": [
     "ms-vscode.cpptools",
     "ms-vscode.cpptools-extension-pack",
@@ -24,8 +24,5 @@
     "bierner.markdown-mermaid",
     "ms-vscode.makefile-tools"
   ],
-  "postCreateCommand": "bash -c 'grep -q \"export.sh\" ~/.bashrc || echo \"source /opt/esp/idf/export.sh\" >> ~/.bashrc && sudo usermod -a -G plugdev,dialout petem'",
-  "features": {
-    "ghcr.io/devcontainers/features/docker-in-docker:2": {}
-  }
+  "postCreateCommand": "bash -c 'grep -q \"export.sh\" ~/.bashrc || echo \"source /opt/esp/idf/export.sh\" >> ~/.bashrc'"
 }

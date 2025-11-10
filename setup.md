@@ -108,7 +108,7 @@ External libraries (such as LVGL for ESP32 or DaisySP for Daisy) are managed as 
 ## Dockerfile (essentials)
 
 ```Dockerfile
-FROM espressif/idf:release-v5.2       # ESP32 tool-chain + Python 3   (turn0search1)
+FROM espressif/idf:release-v5.5       # ESP32 tool-chain + Python 3   (turn0search1)
 
 # STM32 / Daisy tool-chain
 RUN apt-get update && apt-get install -y \
@@ -187,7 +187,7 @@ Building both ESP32 Frontend and Daisy Seed Backend...
                     🔧 BUILDING ESP32 FRONTEND
 ========================================================================
 Target: ESP32-P4 (UI, Controls, MIDI, Communication)
-Toolchain: ESP-IDF v5.2
+Toolchain: ESP-IDF v5.5
 ------------------------------------------------------------------------
 [ESP-IDF build output]
 ------------------------------------------------------------------------
