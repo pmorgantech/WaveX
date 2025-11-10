@@ -1,8 +1,10 @@
 // WaveX UI Navigation Integration Implementation
 #include "ui/ui_navigation_integration.h"
+
+#include <esp_log.h>
+
 #include "ui/ui_existing_pages.h"
 #include "ui/ui_sample_browser.h"
-#include <esp_log.h>
 
 static const char* TAG = "UI_NAV_INTEGRATION";
 
@@ -10,11 +12,11 @@ namespace wavex_ui {
 
 void initNavigationSystem() {
     ESP_LOGI(TAG, "Initializing navigation system");
-    
+
     // Create and push the main menu as the root page
     auto mainMenu = createMainMenu();
     UINavigator::instance().push(mainMenu);
-    
+
     ESP_LOGI(TAG, "Navigation system initialized with main menu");
 }
 
@@ -38,13 +40,11 @@ std::shared_ptr<UIPage> createMainMenu() {
 
     menu->addItem("Sample", []() {
         ESP_LOGI(TAG, "Opening Sample Menu");
-        UINavigator::instance().push(createSampleMenu());
-    });
+        UINavigator::instance().push(createSampleMenu()); });
 
     menu->addItem("System", []() {
         ESP_LOGI(TAG, "Opening System Menu");
-        UINavigator::instance().push(createSystemMenu());
-    });
+        UINavigator::instance().push(createSystemMenu()); });
 
     return menu;
 }
@@ -52,20 +52,21 @@ std::shared_ptr<UIPage> createMainMenu() {
 std::shared_ptr<UIPage> createSampleMenu() {
     auto menu = std::make_shared<UIMenuPage>("Sample Menu");
 
-    menu->addItem("Record", []() {
+    menu->addItem("Record",
+                  []() {
         ESP_LOGI(TAG, "Record option selected");
         // TODO: Implement record functionality
     });
 
-    menu->addItem("Edit", []() {
+    menu->addItem("Edit",
+                  []() {
         ESP_LOGI(TAG, "Edit option selected");
         // TODO: Implement edit functionality
     });
 
     menu->addItem("Browser", []() {
         ESP_LOGI(TAG, "Opening Sample Browser page");
-        UINavigator::instance().push(createSampleBrowserPage());
-    });
+        UINavigator::instance().push(createSampleBrowserPage()); });
 
     return menu;
 }
@@ -75,10 +76,10 @@ std::shared_ptr<UIPage> createSystemMenu() {
 
     menu->addItem("Diagnostics", []() {
         ESP_LOGI(TAG, "Opening Diagnostics page");
-        UINavigator::instance().push(createDiagnosticsPage());
-    });
+        UINavigator::instance().push(createDiagnosticsPage()); });
 
-    menu->addItem("Settings", []() {
+    menu->addItem("Settings",
+                  []() {
         ESP_LOGI(TAG, "Settings option selected");
         // TODO: Implement settings functionality
     });
@@ -86,4 +87,4 @@ std::shared_ptr<UIPage> createSystemMenu() {
     return menu;
 }
 
-} // namespace wavex_ui
+}  // namespace wavex_ui

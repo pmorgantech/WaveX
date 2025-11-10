@@ -1,7 +1,8 @@
 #pragma once
 
-#include <stdint.h>
 #include <stdbool.h>
+#include <stdint.h>
+
 #include "comm/statistics.h"
 #ifdef ESP_PLATFORM
 #include "esp_err.h"
@@ -11,7 +12,6 @@ typedef int esp_err_t;
 #define ESP_OK 0
 #endif
 #endif
-
 
 // Forward declarations
 class StatisticsManager;
@@ -27,14 +27,14 @@ esp_err_t inter_mcu_start(void);
 // Basic MIDI message sending
 esp_err_t inter_mcu_send_control_change(uint8_t parameter, uint8_t channel, uint16_t value);
 esp_err_t inter_mcu_send_note_on(uint8_t note, uint8_t velocity, uint8_t channel);
-esp_err_t inter_mcu_send_note_off(uint8_t note, uint8_t channel); 
+esp_err_t inter_mcu_send_note_off(uint8_t note, uint8_t channel);
 
 // Phase I helpers
 typedef enum {
     WAVEX_SAMPLE_REC_START = 1,
-    WAVEX_SAMPLE_REC_STOP  = 2,
+    WAVEX_SAMPLE_REC_STOP = 2,
     WAVEX_SAMPLE_PLAY_START = 3,
-    WAVEX_SAMPLE_PLAY_STOP  = 4,
+    WAVEX_SAMPLE_PLAY_STOP = 4,
 } wavex_sample_ctrl_cmd_t;
 
 esp_err_t inter_mcu_send_sample_ctrl(uint8_t slot, wavex_sample_ctrl_cmd_t cmd, float rate);
@@ -42,9 +42,13 @@ esp_err_t inter_mcu_send_preview_req(uint8_t slot, uint32_t start, uint32_t end,
 
 // Listener registration for backend->frontend messages
 typedef void (*wavex_meter_cb_t)(float rms, float peak, void* user_data);
-typedef void (*wavex_wave_chunk_cb_t)(uint32_t offset, const int16_t* samples, uint16_t count, void* user_data);
+typedef void (*wavex_wave_chunk_cb_t)(uint32_t offset,
+                                      const int16_t* samples,
+                                      uint16_t count,
+                                      void* user_data);
 typedef void (*wavex_browse_resp_cb_t)(const uint8_t* data, size_t length, void* user_data);
-typedef void (*wavex_sample_status_cb_t)(uint8_t state, uint32_t sample_rate, uint8_t channels, uint32_t frames_played, void* user_data);
+typedef void (*wavex_sample_status_cb_t)(
+    uint8_t state, uint32_t sample_rate, uint8_t channels, uint32_t frames_played, void* user_data);
 
 void inter_mcu_set_meter_listener(wavex_meter_cb_t cb, void* user_data);
 void inter_mcu_set_wave_chunk_listener(wavex_wave_chunk_cb_t cb, void* user_data);
@@ -70,12 +74,12 @@ typedef struct {
     uint32_t uptime_ms;
     uint32_t rx_total;
     uint32_t loop_counter;
-    uint32_t last_rx_ms; // esp_timer (ms) when last heartbeat was received
-    float    cpu_usage_percent; // CPU usage percentage from Daisy (legacy)
-    float    cpu_avg_percent;   // Average CPU usage percentage
-    float    cpu_min_percent;   // Minimum CPU usage percentage
-    float    cpu_max_percent;   // Maximum CPU usage percentage
-    bool     valid;
+    uint32_t last_rx_ms;      // esp_timer (ms) when last heartbeat was received
+    float cpu_usage_percent;  // CPU usage percentage from Daisy (legacy)
+    float cpu_avg_percent;    // Average CPU usage percentage
+    float cpu_min_percent;    // Minimum CPU usage percentage
+    float cpu_max_percent;    // Maximum CPU usage percentage
+    bool valid;
 } wavex_backend_heartbeat_t;
 
 // Thread-safe snapshot of latest heartbeat
@@ -110,14 +114,24 @@ void inter_mcu_send_test_messages(void);
 void inter_mcu_get_tx_stats(wavex_tx_stats_t* out);
 
 // Update backend heartbeat statistics directly (for SPI link processing)
-void inter_mcu_update_backend_heartbeat(uint32_t uptime_ms, uint32_t rx_total, uint32_t loop_counter, float cpu_usage_percent);
+void inter_mcu_update_backend_heartbeat(uint32_t uptime_ms,
+                                        uint32_t rx_total,
+                                        uint32_t loop_counter,
+                                        float cpu_usage_percent);
 
 // Update backend heartbeat statistics with detailed CPU metrics (for SPI link processing)
-void inter_mcu_update_backend_heartbeat_detailed(uint32_t uptime_ms, uint32_t rx_total, uint32_t loop_counter,
-                                                float cpu_avg_percent, float cpu_min_percent, float cpu_max_percent);
+void inter_mcu_update_backend_heartbeat_detailed(uint32_t uptime_ms,
+                                                 uint32_t rx_total,
+                                                 uint32_t loop_counter,
+                                                 float cpu_avg_percent,
+                                                 float cpu_min_percent,
+                                                 float cpu_max_percent);
 
 // Update backend meter data directly (for SPI link processing)
-void inter_mcu_update_backend_meters(float rms_left, float rms_right, float peak_left, float peak_right);
+void inter_mcu_update_backend_meters(float rms_left,
+                                     float rms_right,
+                                     float peak_left,
+                                     float peak_right);
 
 // Get current meter data
 void inter_mcu_get_meter_data(wavex_meter_data_t* out);

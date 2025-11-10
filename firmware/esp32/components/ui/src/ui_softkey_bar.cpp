@@ -1,13 +1,14 @@
 // WaveX UI Softkey Bar Implementation
 #include "ui/ui_softkey_bar.h"
-#include "ui/ui_navigator.h"
+
 #include <esp_log.h>
-#include "esp_lvgl_port.h"
 
 #include "../styles/ui_theme.h"
+#include "esp_lvgl_port.h"
+#include "ui/ui_navigator.h"
 
 // LVGL locking macros
-#define LV_LOCK()   lvgl_port_lock(portMAX_DELAY)
+#define LV_LOCK() lvgl_port_lock(portMAX_DELAY)
 #define LV_UNLOCK() lvgl_port_unlock()
 
 static const char* TAG = "SOFTKEY_BAR";
@@ -15,7 +16,6 @@ static const char* TAG = "SOFTKEY_BAR";
 namespace wavex_ui {
 
 void SoftkeyBar::create(lv_obj_t* parent) {
-
     // Destroy previous container if it exists to avoid duplicates on push/pop
     if (container_) {
         lv_obj_del(container_);
@@ -34,7 +34,8 @@ void SoftkeyBar::create(lv_obj_t* parent) {
 
     // Use flex layout for equal distribution
     lv_obj_set_flex_flow(container_, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(container_, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_flex_align(
+        container_, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     for (int i = 0; i < NUM_SOFTKEYS; ++i) {
         btns_[i] = lv_btn_create(container_);
         lv_obj_set_size(btns_[i], LV_SIZE_CONTENT, UI_HOTKEY_HEIGHT - (UI_PADDING_SMALL * 2));
@@ -42,7 +43,8 @@ void SoftkeyBar::create(lv_obj_t* parent) {
 
         // Blue button styling with white text (matching existing UI)
         lv_obj_set_style_bg_color(btns_[i], UI_COLOR_BUTTON, LV_PART_MAIN);
-        lv_obj_set_style_bg_color(btns_[i], UI_COLOR_BUTTON_PRESSED, LV_PART_MAIN | LV_STATE_PRESSED);
+        lv_obj_set_style_bg_color(
+            btns_[i], UI_COLOR_BUTTON_PRESSED, LV_PART_MAIN | LV_STATE_PRESSED);
         lv_obj_set_style_border_width(btns_[i], UI_BORDER_WIDTH, LV_PART_MAIN);
         lv_obj_set_style_border_color(btns_[i], UI_COLOR_BUTTON_BORDER, LV_PART_MAIN);
         lv_obj_set_style_radius(btns_[i], UI_BORDER_RADIUS, LV_PART_MAIN);
@@ -61,7 +63,7 @@ void SoftkeyBar::setSoftkeys(const std::array<Softkey, NUM_SOFTKEYS>& keys) {
     keys_ = keys;
     for (int i = 0; i < NUM_SOFTKEYS; ++i) {
         lv_label_set_text(labels_[i], keys_[i].label.c_str());
-        
+
         // Update button appearance based on enabled state
         if (keys_[i].enabled) {
             lv_obj_clear_flag(btns_[i], LV_OBJ_FLAG_HIDDEN);
@@ -92,11 +94,13 @@ void SoftkeyBar::pressFocused() {
     if (keys_[focused_].enabled && keys_[focused_].onPress) {
         // Defer to avoid modifying UI during LVGL event processing/draw
         auto cb = keys_[focused_].onPress;
-        lv_async_call([](void* ud){
-            auto fn = static_cast<std::function<void()>*>(ud);
-            (*fn)();
-            delete fn;
-        }, new std::function<void()>(cb));
+        lv_async_call(
+            [](void* ud) {
+                auto fn = static_cast<std::function<void()>*>(ud);
+                (*fn)();
+                delete fn;
+            },
+            new std::function<void()>(cb));
     }
 }
 
@@ -110,15 +114,17 @@ void SoftkeyBar::event_cb(lv_event_t* e) {
             if (bar->keys_[i].onPress) {
                 // Defer to avoid modifying UI during LVGL event processing/draw
                 auto cb = bar->keys_[i].onPress;
-                lv_async_call([](void* ud){
-                    auto fn = static_cast<std::function<void()>*>(ud);
-                    (*fn)();
-                    delete fn;
-                }, new std::function<void()>(cb));
+                lv_async_call(
+                    [](void* ud) {
+                        auto fn = static_cast<std::function<void()>*>(ud);
+                        (*fn)();
+                        delete fn;
+                    },
+                    new std::function<void()>(cb));
             }
             break;
         }
     }
 }
 
-} // namespace wavex_ui
+}  // namespace wavex_ui

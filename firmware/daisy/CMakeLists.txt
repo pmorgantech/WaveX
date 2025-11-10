@@ -58,4 +58,4 @@ add_compile_definitions(
 )
 
 # Include DaisyProject.cmake which handles all the STM32 configuration
-include(DaisyProject) 
+include(DaisyProject)

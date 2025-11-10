@@ -40,4 +40,4 @@ cd ../../..
 echo ""
 echo "Build complete!"
 echo "ESP32 binary: firmware/esp32/build/wavex-esp32.bin"
-echo "Daisy binary: firmware/daisy/build/wavex-daisy.bin" 
+echo "Daisy binary: firmware/daisy/build/wavex-daisy.bin"

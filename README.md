@@ -1,6 +1,6 @@
 # WaveX - Dual-MCU Sampler/Synth
 
-A high-performance dual-MCU sampler and synthesizer featuring an ESP32-S3 frontend and Daisy Seed (STM32H750) backend.
+A high-performance dual-MCU sampler and synthesizer featuring an ESP32-P4 frontend and Daisy Seed (STM32H750) backend.
 
 ## Architecture Overview
 
@@ -13,7 +13,7 @@ A high-performance dual-MCU sampler and synthesizer featuring an ESP32-S3 fronte
 - **CV outputs** via SPI DACs for modular integration
 - **High-performance DSP** using ARM Cortex-M7 at 480MHz
 
-### Frontend - User Interface (ESP32-S3)
+### Frontend - User Interface (ESP32-P4)
 - **Touchscreen interface** using LVGL graphics library
 - **File management** with SD card and USB connectivity
 - **MIDI I/O** for external controller integration
@@ -33,7 +33,7 @@ A high-performance dual-MCU sampler and synthesizer featuring an ESP32-S3 fronte
 ```
 WaveX/
 ├── firmware/
-│   ├── esp32/                 # ESP32-S3 Frontend Firmware
+│   ├── esp32/                 # ESP32-P4 Frontend Firmware
 │   │   ├── main/             # Main application code
 │   │   ├── components/       # Custom ESP-IDF components
 │   │   └── libs/             # External libraries (LVGL, etc.)
@@ -52,21 +52,24 @@ WaveX/
 
 ### ✅ Completed
 - **Development Environment**: Devcontainer with ESP-IDF 5.2, ARM GCC toolchain, and reliable USB device passthrough
-- **Build System**: Unified Makefile and `idf.py` build successful for ESP32 with unnecessary components disabled.
-- **ESP32 Firmware**: Project structure, builds successfully with zero warnings
-- **Hardware Compatibility**: All GPIO assignments verified for ESP32-S3-DevKitC-1
-- **Display Driver**: MIPI-DSI display support via `esp_lcd` and `esp_lvgl_port`.
-- **Touch Integration**: Capacitive touch with LVGL integration.
+- **Build System**: Unified Makefile and `idf.py` build successful for ESP32-P4 with unnecessary components disabled
+- **ESP32-P4 Firmware**: Project structure, builds successfully with zero warnings
+- **Hardware Compatibility**: All GPIO assignments verified for ESP32-P4-WIFI6
+- **Display Driver**: MIPI-DSI display support via `esp_lcd` and `esp_lvgl_port`
+- **Touch Integration**: Capacitive touch with LVGL integration and interrupt handling
+- **UI System**: Complete LVGL-based UI navigation system with pages, menus, and input handling
+- **Encoder Support**: PCNT-based quadrature encoder support for parameter control
 - **Shared Protocol Library**: SPI communication protocol definitions and implementations
 - **Inter-MCU Communication**: Full master-slave SPI protocol with packet statistics and testing
 - **Daisy Firmware**: QSPI flash configuration, automated build/flash process
 - **Git Submodules**: LVGL, libDaisy, DaisySP properly configured
-- **Documentation**: Architecture and setup documentation updated.
+- **Documentation**: Architecture and setup documentation updated
 
 ### 🔄 In Progress
-- **Protocol Implementation**: Complete SPI communication handlers and message routing
 - **Audio Engine**: Basic audio processing framework on Daisy backend
-- **UI System**: LVGL-based UI system with MIPI-DSI display support.
+- **Sample Management**: File system integration for sample storage and loading
+- **MIDI Integration**: USB and UART MIDI input/output support
+- **CV Outputs**: MCP4728 DAC integration for modular synthesizer control
 
 ### 📋 Next Steps
 - Complete audio engine structure for Daisy with sample playback
@@ -75,14 +78,66 @@ WaveX/
 - Test hardware integration with complete dual-MCU setup
 - Add file system support for sample storage
 
-## Quickstart (Devcontainer)
+## Development Setup
+
+### Prerequisites
+
+- **Python 3.10+** for development tools
+- **VS Code** with Dev Containers extension (recommended)
+- **Git** with submodules support
+
+### Quickstart (Devcontainer - Recommended)
 
 1. **Clone the repo**
+   ```bash
+   git clone --recursive https://github.com/your-org/wavex.git
+   cd wavex
+   ```
+
 2. Open in VS Code with the [Dev Containers extension](https://code.visualstudio.com/docs/devcontainers/containers)
+
 3. Hit F1 → "Reopen in Container"
-4. **Build both systems**: `make all` (builds ESP32 + Daisy with enhanced visual output)
-5. **Flash firmware**: `make esp32-flash` and flash Daisy via DFU
-6. Follow the [setup guide](./setup.md) for detailed build, flash, and workflow instructions
+
+4. **Set up development environment**:
+   ```bash
+   # Activate virtual environment (created automatically)
+   source .env/bin/activate
+
+   # Install pre-commit hooks
+   pre-commit install
+   ```
+
+5. **Build both systems**: `make all` (builds ESP32 + Daisy with enhanced visual output)
+
+6. **Flash firmware**: `make esp32-flash` and flash Daisy via DFU
+
+7. Follow the [setup guide](./setup.md) for detailed build, flash, and workflow instructions
+
+### Alternative Setup (Local Development)
+
+If you prefer not to use devcontainers:
+
+1. **Install system dependencies**:
+   ```bash
+   # Ubuntu/Debian
+   sudo apt-get update
+   sudo apt-get install -y cmake ninja-build git python3 python3-pip clang-format
+   ```
+
+2. **Set up Python virtual environment**:
+   ```bash
+   python3 -m venv .env
+   source .env/bin/activate
+   pip install pre-commit
+   pre-commit install
+   ```
+
+3. **Install ESP-IDF and ARM GCC** (see setup.md for details)
+
+4. **Initialize submodules**:
+   ```bash
+   git submodule update --init --recursive
+   ```
 
 ## Build System
 
@@ -101,12 +156,85 @@ make clean      # Clean both build systems
 make setup      # Initialize git submodules
 ```
 
+### Testing Commands
+
+```bash
+make test          # Run all unit tests
+make test-shared   # Test shared protocol library
+make test-esp32    # Test ESP32 components
+make test-daisy    # Test Daisy components
+make test-clean    # Clean test build artifacts
+```
+
+## CI/CD and Code Quality
+
+### GitHub Actions CI
+
+WaveX uses GitHub Actions for continuous integration on all pushes and pull requests to `main` and `develop` branches. The CI pipeline runs pre-commit on all files to ensure:
+
+- **Code formatting** validation (clang-format, black, prettier)
+- **Code quality** checks (flake8, trailing whitespace, etc.)
+- **Build verification** for both ESP32 and Daisy firmware
+- **Unit test execution** for all components (shared protocol, ESP32 UI, Daisy audio engine)
+- **Caching build artifacts** for faster subsequent runs
+
+**Note**: CI runs on all files to catch any issues, while local pre-commit hooks only run on changed files for efficiency.
+
+### Pre-commit Hooks
+
+Code quality is enforced through pre-commit hooks that run automatically before each commit:
+
+#### Automatic Code Formatting
+- **C/C++**: clang-format with Google style (4-space indent, 100-column limit)
+- **Python**: black formatter with isort import sorting
+- **YAML**: prettier formatting
+
+#### Quality Checks
+- **Trailing whitespace** removal
+- **End-of-file** fixes
+- **Merge conflict** detection
+- **Large file** prevention
+
+#### Build & Test Validation
+- **ESP32 build** verification
+- **Daisy build** verification
+- **Unit test execution** (shared, ESP32, Daisy components)
+
+#### Setup Pre-commit Hooks
+```bash
+# Activate virtual environment
+source .env/bin/activate
+
+# Install pre-commit hooks
+pre-commit install
+
+# Run on staged files only (recommended for local development)
+pre-commit run
+
+# Run on all files (only for CI or complete repo validation)
+pre-commit run --all-files
+
+# Update hooks to latest versions
+pre-commit autoupdate
+```
+
+#### Pre-commit Configuration
+
+The `.pre-commit-config.yaml` defines all quality checks. Key features:
+- **Selective execution**: Hooks only run on relevant file changes
+- **Automatic staging**: Pre-commit hooks run only on files staged for commit
+- **Caching**: Tools are cached for faster execution
+- **CI integration**: Same checks run in GitHub Actions
+- **Auto-fixing**: Many issues are automatically resolved
+
 ## Hardware Requirements
 
-### ESP32-S3 Frontend
-- ESP32-S3 with at least 8MB PSRAM
-- 3.5" TFT display (ST7796S controller)
-- FT6x36 capacitive touch controller (I2C)
+### ESP32-P4 Frontend
+- ESP32-P4-WIFI6 with PSRAM support
+- 5" MIPI DSI display (1280x720)
+- GT911 capacitive touch controller (I2C)
+- Rotary encoder with push button (PCNT)
+- Button matrix interface (TCA8418)
 - SD card interface
 - USB MIDI interface
 - SPI connection to Daisy
@@ -122,8 +250,8 @@ make setup      # Initialize git submodules
 
 ## Hardware Pinout & Wiring
 
-### ESP32-S3 Frontend Pin Assignments
-**⚠️ All pin assignments verified for ESP32-S3-DevKitC-1 compatibility**
+### ESP32-P4 Frontend Pin Assignments
+**⚠️ All pin assignments verified for ESP32-P4-WIFI6 compatibility**
 
 #### 🖥️ MIPI-DSI Display Controller
 ```
@@ -131,92 +259,77 @@ Display Pin     Signal          GPIO    Pin Location    Description
 -----------     ------          ----    ------------    -----------
 1               VCC             3.3V    Power          Display power positive
 2               GND             GND     Power          Display power ground
-3               MIPI_D0P        GPIO1   MIPI-DSI       MIPI Data Lane 0 Positive
-4               MIPI_D0N        GPIO2   MIPI-DSI       MIPI Data Lane 0 Negative
-5               MIPI_D1P        GPIO3   MIPI-DSI       MIPI Data Lane 1 Positive
-6               MIPI_D1N        GPIO4   MIPI-DSI       MIPI Data Lane 1 Negative
-7               MIPI_CLKP       GPIO5   MIPI-DSI       MIPI Clock Lane Positive
-8               MIPI_CLKN       GPIO6   MIPI-DSI       MIPI Clock Lane Negative
-9               MIPI_D2P        GPIO7   MIPI-DSI       MIPI Data Lane 2 Positive
-10              MIPI_D2N        GPIO8   MIPI-DSI       MIPI Data Lane 2 Negative
-11              MIPI_D3P        GPIO9   MIPI-DSI       MIPI Data Lane 3 Positive
-12              MIPI_D3N        GPIO10  MIPI-DSI       MIPI Data Lane 3 Negative
-13              MIPI_RST        GPIO11  MIPI-DSI       Display Reset
-14              MIPI_BL         GPIO12  MIPI-DSI       Backlight Control
+3               MIPI_D0P        GPIO2   —              MIPI Data Lane 0 Positive
+4               MIPI_D0N        GPIO3   —              MIPI Data Lane 0 Negative
+5               MIPI_D1P        GPIO4   —              MIPI Data Lane 1 Positive
+6               MIPI_D1N        GPIO5   —              MIPI Data Lane 1 Negative
+7               MIPI_CLKP       GPIO6   —              MIPI Clock Lane Positive
+8               MIPI_CLKN       GPIO7   —              MIPI Clock Lane Negative
+9               MIPI_RST        GPIO8   —              Display Reset
+10              MIPI_BL         GPIO9   —              Backlight Control
 ```
 
-#### 👆 I2C Capacitive Touch Panel - CRITICAL COMPONENT #2
+#### 👆 I2C Capacitive Touch Panel
 ```
 Touch Pin       Signal          GPIO    Pin Location    Description
 ---------       ------          ----    ------------    -----------
-10              CTP_SCL         9       J3 pin 4       I2C Clock for touch controller
-11              CTP_SDA         23      J3 pin 22      I2C Data for touch controller (moved from non-existent GPIO22)
-12              CTP_INT         15      J1 pin 21      Interrupt pin
-13              CTP_RST         14      J1 pin 20      Reset pin
+CTP_SCL         Touch SCL       GPIO21  J3-4           I2C Clock for touch controller
+CTP_SDA         Touch SDA       GPIO20  J3-19          I2C Data for touch controller
+CTP_INT         Touch INT       GPIO15  J1-21          Interrupt pin
+CTP_RST         Touch RST       GPIO14  J1-20          Reset pin
 ```
 
 **✅ Touch Technology**: Firmware supports capacitive touch controllers with LVGL integration.
 
 **📡 MIPI-DSI Configuration**: High-speed MIPI-DSI interface provides superior display performance compared to SPI, with LVGL integration for professional UI rendering.
 
-#### 🎛️ Dual Potentiometer Interface (CD74HC4067)
+#### 🎛️ Rotary Encoders (MCP3008 ADC)
 ```
 Signal          GPIO    Pin Location    Description
 ------          ----    ------------    -----------
-ADDR_A0         33      J3 pin 7       Address select bit 0
-ADDR_A1         34      J3 pin 8       Address select bit 1
-ADDR_A2         35      J3 pin 9       Address select bit 2
-ADDR_A3         36      J3 pin 10      Address select bit 3
-ENABLE          37      J3 pin 11      Enable (active low)
-SIGNAL          1       ADC1_CH0       Common analog signal input
+ADC_SCK         GPIO46  —              SPI Clock for MCP3008
+ADC_MOSI        GPIO47  —              SPI MOSI for MCP3008
+ADC_MISO        GPIO52  —              SPI MISO for MCP3008
+ADC_CS          GPIO29  —              Chip Select for MCP3008
 ```
-**✅ Technology**: 16-channel analog multiplexer supporting dual potentiometers (RV112FF-40-15A-0B10K) with 12-bit ADC resolution
+**✅ Technology**: MCP3008 8-channel 10-bit ADC for rotary encoders and potentiometers
 
 #### 🔘 Button Matrix Interface (TCA8418)
 ```
 Signal          GPIO    Pin Location    Description
 ------          ----    ------------    -----------
-I2C_SDA         39      J3 pin 12      I2C data line
-I2C_SCL         40      J3 pin 13      I2C clock line
-RESET           41      J3 pin 14      Hardware reset
-INTERRUPT       43      J3 pin 15      Touch interrupt (active low)
+TCA8418_INT    GPIO30  —              Interrupt pin (shared I2C bus with touch)
 ```
-**✅ Technology**: 8x8 capacitive touch button matrix with I2C interface and interrupt support
+**✅ Technology**: 8x8 capacitive touch button matrix with I2C interface (shared with touch controller)
 
 #### 💡 LED Driver Interface (TLC5947)
 ```
 Signal          GPIO    Pin Location    Description
 ------          ----    ------------    -----------
-SPI_SCLK        44      J3 pin 16      SPI clock
-SPI_MOSI        45      J3 pin 17      SPI data
-SPI_CS          46      J3 pin 18      Chip select
-BLANK           47      J3 pin 19      Blank control
-LATCH           48      J3 pin 20      Latch control
+TLC5947_LAT     GPIO28  —              Latch pin (XLAT)
+TLC5947_BLANK   GPIO27  —              Output enable / BLANK
 ```
-**✅ Technology**: 48-channel 12-bit PWM LED driver with SPI interface for status indicators and backlighting
+**✅ Technology**: 48-channel 12-bit PWM LED driver with SPI interface (shared SPI2 bus)
 
-#### 🔗 Inter-MCU Communication (ESP32 ↔ Daisy) - CRITICAL COMPONENT #3
+#### 🔗 Inter-MCU Communication (ESP32 ↔ Daisy)
 ```
 Signal          GPIO    Pin Location    Description
 ------          ----    ------------    -----------
-SPI_SCLK        8       ESP32-P4 GPIO8  SPI SCK from Daisy (ESP32 as slave)
-SPI_MOSI        5       ESP32-P4 GPIO5  SPI MOSI from Daisy
-SPI_MISO        7       ESP32-P4 GPIO7  SPI MISO to Daisy
-SPI_CS          50      ESP32-P4 GPIO50 SPI CS from Daisy
-DAISY_IRQ       27      J3 pin 26      Daisy→ESP "data ready" (falling-edge INT)
-ESP_ATTN        41      J3 pin 14      ESP→Daisy "attention/wakeup" (active high)
-GND             GND     —               Common ground
+SPI_SCLK        GPIO48  —              SPI Clock (ESP32 as slave)
+SPI_MOSI        GPIO49  —              SPI MOSI from Daisy
+SPI_MISO        GPIO50  —              SPI MISO to Daisy
+SPI_CS          GPIO51  —              SPI Chip Select from Daisy
+ESP_ATTN        GPIO31  J3-14          ESP32 attention output to Daisy
 ```
-**Note**: Uses SPI with ESP32 as slave and Daisy as master for high-speed communication at 10MHz with interrupt-driven data transfer and comprehensive packet statistics
+**Note**: Uses SPI with ESP32 as slave and Daisy as master for high-speed communication at 4MHz with interrupt-driven data transfer
 
 **🔌 Quick Connection Guide:**
-- **ESP32 GPIO8** → **Daisy D8** (SCLK - Yellow wire)
-- **ESP32 GPIO5** → **Daisy D10** (MOSI - Blue wire)  
-- **ESP32 GPIO7** → **Daisy D9** (MISO - Green wire)
-- **ESP32 GPIO50** → **Daisy D7** (CS - White wire)
-- **ESP32 GPIO27** → **Daisy D13** (IRQ - Red wire)
-- **ESP32 GPIO41** → **Daisy D14** (ATTN - Orange wire)
-- **ESP32 GND** → **Daisy GND** (Black wire)
+- **ESP32 GPIO48** → **Daisy D8** (SCLK)
+- **ESP32 GPIO49** → **Daisy D10** (MOSI)
+- **ESP32 GPIO50** → **Daisy D9** (MISO)
+- **ESP32 GPIO51** → **Daisy D7** (CS)
+- **ESP32 GPIO31** → **Daisy D0** (ATTN)
+- **ESP32 GND** → **Daisy GND**
 
 #### 💾 SD Card Interface
 ```
@@ -239,16 +352,15 @@ USB_D-          -       Built-in       USB MIDI Data- (built-in USB)
 ```
 **Note**: UART2 used for DIN MIDI, built-in USB for USB MIDI
 
-#### 🎛️ Single PCNT Encoder - CRITICAL COMPONENT #4
+#### 🎛️ PCNT Encoder
 ```
 Signal          GPIO    Pin Location    Description
 ------          ----    ------------    -----------
-ENCODER_A       33      J3 pin 32      Encoder Channel A (PCNT input)
-ENCODER_B       34      J3 pin 33      Encoder Channel B (PCNT input)
-ENCODER_BTN     40      J3 pin 39      Encoder Push Button (optional)
+ENCODER_A       GPIO33  J3-7           Encoder Channel A (PCNT input)
+ENCODER_B       GPIO34  J3-8           Encoder Channel B (PCNT input)
+ENCODER_BTN     GPIO40  J3-12          Encoder Push Button
 ```
-**✅ Technology**: Single quadrature encoder using ESP32-S3 PCNT peripheral for high-precision parameter control
-**🔧 Note**: Replaces potentiometer interface with more reliable digital encoder input
+**✅ Technology**: Quadrature encoder using ESP32-P4 PCNT peripheral for high-precision parameter control
 
 ### Daisy Seed Backend Pin Assignments
 
@@ -259,7 +371,7 @@ ENCODER_BTN     40      J3 pin 39      Encoder Push Button (optional)
 Signal          Pin     Description
 ------          ---     -----------
 AUDIO_IN_L      A/D_L   Left audio input (line/instrument)
-AUDIO_IN_R      A/D_R   Right audio input  
+AUDIO_IN_R      A/D_R   Right audio input
 AUDIO_OUT_L     D/A_L   Left audio output
 AUDIO_OUT_R     D/A_R   Right audio output
 ```
@@ -372,7 +484,7 @@ Planned migration to SDIO (native MMC/SD):
 Signal          Pin     Description
 ------          ---     -----------
 CTRL_1          A0      Potentiometer/CV Input 1
-CTRL_2          A1      Potentiometer/CV Input 2  
+CTRL_2          A1      Potentiometer/CV Input 2
 CTRL_3          A2      Potentiometer/CV Input 3
 CTRL_4          A3      Potentiometer/CV Input 4
 ```
@@ -380,14 +492,14 @@ CTRL_4          A3      Potentiometer/CV Input 4
 ### Complete System Wiring Diagram
 
 ```
-┌─────────────────┐                    ┌─────────────────┐
-│    ESP32-S3     │◄───  UART Bus  ────►│  Daisy Seed     │
+   ┌─────────────────┐                    ┌─────────────────┐
+│    ESP32-P4     │◄───  UART Bus  ────►│  Daisy Seed     │
 │   (Frontend)    │                    │   (Backend)     │
 │                 │                    │                 │
 │ ┌─────────────┐ │                    │ ┌─────────────┐ │
-│ │   ST7796S   │ │                    │ │   AK4556    │ │
-│ │   Display   │ │                    │ │   Codec     │ │
-│ │  480x320    │ │                    │ │ 48kHz/24bit │ │
+│ │ MIPI DSI    │ │                    │ │   AK4556    │ │
+│ │ 1280x720    │ │                    │ │   Codec     │ │
+│ │             │ │                    │ │ 48kHz/24bit │ │
 │ └─────────────┘ │                    │ └─────────────┘ │
 │                 │                    │                 │
 │ ┌─────────────┐ │                    │ ┌─────────────┐ │
@@ -410,12 +522,12 @@ CTRL_4          A3      Potentiometer/CV Input 4
 
 ### Power Requirements
 
-#### ESP32-S3 Frontend
+#### ESP32-P4 Frontend
 - **Voltage**: 3.3V
 - **Current**: ~200mA (display active) / ~50mA (sleep)
 - **Power**: USB 5V → 3.3V regulator
 
-#### Daisy Seed Backend  
+#### Daisy Seed Backend
 - **Voltage**: 3.3V
 - **Current**: ~150mA (audio processing)
 - **Power**: USB 5V → 3.3V regulator or direct 3.3V supply
@@ -435,18 +547,18 @@ MIPI-DSI        Variable    High bandwidth   <16ms      LVGL rendering, hardware
 
 ### Development/Debug Interfaces
 
-#### ESP32-S3 Debug
+#### ESP32-P4 Debug
 - **USB-Serial**: Built-in USB-to-Serial for programming/debug
 - **JTAG**: Standard 20-pin JTAG for hardware debugging
 
-#### Daisy Seed Debug  
+#### Daisy Seed Debug
 - **USB-DFU**: Built-in DFU bootloader for programming
 - **SWD**: 4-pin SWD interface for debugging
 - **UART**: Serial debug output via USB
 
 ## Hardware Pin Documentation
 
-Based on the provided LCD/touch controller specs, here are the key signals and their behaviors, mapped to ESP32-S3 pins (from `hardware_pins.h`):
+Based on the provided LCD/touch controller specs, here are the key signals and their behaviors, mapped to ESP32-P4 pins (from `pin_config.h`):
 
 ### LCD Signals
 | Signal | Description | Active Level | ESP32 GPIO | Notes |
@@ -521,7 +633,7 @@ WaveX firmware includes several compile-time configuration flags for debugging, 
 // Enable/disable display initialization (default: enabled)
 #define WAVEX_DISPLAY_ENABLED 1
 
-// Enable/disable touch input (default: enabled)  
+// Enable/disable touch input (default: enabled)
 #define WAVEX_TOUCH_ENABLED 1
 
 // Display brightness (0-255, default: 128)
@@ -579,7 +691,7 @@ WaveX firmware includes several compile-time configuration flags for debugging, 
 #define WAVEX_UART_DEBUG_LOG 0          // Disable verbose logging
 #define WAVEX_UART_RX_IRQ_MODE 1        // Use efficient IRQ mode
 
-// ESP32 production config  
+// ESP32 production config
 #define WAVEX_VERBOSE_LOGGING 0         // Disable debug output
 #define WAVEX_PERFORMANCE_PROFILING 0   // Disable profiling overhead
 #define WAVEX_MEMORY_TRACKING 0         // Disable memory tracking
@@ -616,42 +728,38 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - [Espressif](https://www.espressif.com/) for the ESP32 platform and ESP-IDF
 - All the contributors who have invested their time and effort into this project.
 
-## ESP32-S3 Pin Assignments
+## ESP32-P4 Pin Assignments
 
-WaveX uses an ESP32-S3-DevKitC-1 as the frontend MCU with the following comprehensive pin assignments:
+WaveX uses an ESP32-P4-WIFI6 as the frontend MCU with the following comprehensive pin assignments:
 
 ### 🖥️ MIPI-DSI Display Controller
 | Function | GPIO | Pin Location | Status |
 |----------|------|--------------|--------|
-| MIPI D0P | GPIO1 | MIPI-DSI | ✅ Verified |
-| MIPI D0N | GPIO2 | MIPI-DSI | ✅ Verified |
-| MIPI D1P | GPIO3 | MIPI-DSI | ✅ Verified |
-| MIPI D1N | GPIO4 | MIPI-DSI | ✅ Verified |
-| MIPI CLKP | GPIO5 | MIPI-DSI | ✅ Verified |
-| MIPI CLKN | GPIO6 | MIPI-DSI | ✅ Verified |
-| MIPI D2P | GPIO7 | MIPI-DSI | ✅ Verified |
-| MIPI D2N | GPIO8 | MIPI-DSI | ✅ Verified |
-| MIPI D3P | GPIO9 | MIPI-DSI | ✅ Verified |
-| MIPI D3N | GPIO10 | MIPI-DSI | ✅ Verified |
-| MIPI RST | GPIO11 | MIPI-DSI | ✅ Verified |
-| MIPI BL | GPIO12 | MIPI-DSI | ✅ Verified |
+| MIPI D0P | GPIO2 | MIPI-DSI | ✅ Verified |
+| MIPI D0N | GPIO3 | MIPI-DSI | ✅ Verified |
+| MIPI D1P | GPIO4 | MIPI-DSI | ✅ Verified |
+| MIPI D1N | GPIO5 | MIPI-DSI | ✅ Verified |
+| MIPI CLKP | GPIO6 | MIPI-DSI | ✅ Verified |
+| MIPI CLKN | GPIO7 | MIPI-DSI | ✅ Verified |
+| MIPI RST | GPIO8 | MIPI-DSI | ✅ Verified |
+| MIPI BL | GPIO9 | MIPI-DSI | ✅ Verified |
 
 ### 👆 Touch Controller (Capacitive)
 | Function | GPIO | Pin Location | Status |
 |----------|------|--------------|--------|
 | Touch Data (SDA) | GPIO20 | J3-19 | ✅ Verified |
-| Touch Clock (SCL) | GPIO13 | J1-13 | ✅ I2C SCL |
+| Touch Clock (SCL) | GPIO21 | J3-4 | ✅ I2C SCL |
 | Reset (RST) | GPIO14 | J1-20 | ✅ Verified |
+| Interrupt (INT) | GPIO15 | J1-21 | ✅ Verified |
 
 ### 🔗 Inter-MCU Communication (ESP32 ↔ Daisy)
 | Function | GPIO | Pin Location | Status |
 |----------|------|--------------|--------|
-| SPI SCLK | GPIO8 | ESP32-P4 GPIO8 | ✅ Verified |
-| SPI MOSI | GPIO5 | ESP32-P4 GPIO5 | ✅ Verified |
-| SPI MISO | GPIO7 | ESP32-P4 GPIO7 | ✅ Verified |
-| SPI CS | GPIO50 | ESP32-P4 GPIO50 | ✅ Verified |
-| Daisy IRQ | GPIO27 | J3-26 | ✅ Verified |
-| ESP ATTN | GPIO41 | J3-14 | ✅ Verified |
+| SPI SCLK | GPIO48 | ESP32-P4 GPIO48 | ✅ Verified |
+| SPI MOSI | GPIO49 | ESP32-P4 GPIO49 | ✅ Verified |
+| SPI MISO | GPIO50 | ESP32-P4 GPIO50 | ✅ Verified |
+| SPI CS | GPIO51 | ESP32-P4 GPIO51 | ✅ Verified |
+| ESP ATTN | GPIO31 | J3-14 | ✅ Verified |
 | GND | GND | — | ✅ Common ground |
 
 ### 💾 SD Card Interface
@@ -698,59 +806,63 @@ WaveX uses an ESP32-S3-DevKitC-1 as the frontend MCU with the following comprehe
 ### 🎛️ Single PCNT Encoder - CRITICAL COMPONENT #4
 | Function | GPIO | Pin Location | Status |
 |----------|------|--------------|--------|
-| Channel A | GPIO33 | J3-32 | ✅ Verified |
-| Channel B | GPIO34 | J3-33 | ✅ Verified |
-| Push Button | GPIO40 | J3-39 | ✅ Verified |
+| Channel A | GPIO33 | J3-7 | ✅ Verified |
+| Channel B | GPIO34 | J3-8 | ✅ Verified |
+| Push Button | GPIO40 | J3-12 | ✅ Verified |
 
 ### 📌 Pin Usage Summary
 
-**MIPI-DSI Pins:** GPIO1-12 (MIPI-DSI interface)
-**Inter-MCU SPI Pins:** GPIO5, GPIO7, GPIO8, GPIO50 (SPI communication)
-**Touch Pins:** GPIO13, GPIO14, GPIO20 (Capacitive touch)
-**Available Pins:** GPIO15, GPIO16, GPIO17, GPIO18, GPIO19, GPIO21-49 (excluding MIPI-DSI and reserved pins)
+**MIPI-DSI Pins:** GPIO2-9 (MIPI-DSI interface)
+**Inter-MCU SPI Pins:** GPIO48, GPIO49, GPIO50, GPIO51 (SPI communication)
+**Touch Pins:** GPIO14, GPIO15, GPIO20, GPIO21 (Capacitive touch)
+**Encoder Pins:** GPIO33, GPIO34, GPIO40 (PCNT encoder)
+**Available Pins:** GPIO1, GPIO16-GPIO19, GPIO22-GPIO30, GPIO32, GPIO35-GPIO39, GPIO41-GPIO47, GPIO52 (excluding used and reserved pins)
 
-**Reserved/Avoid:** GPIO0 (strapping), GPIO26-32 (SPI Flash/PSRAM), GPIO45-48 (strapping pins)
+**Reserved/Avoid:** GPIO0 (strapping), GPIO26-32 (SPI Flash/PSRAM)
 
 ### 🎯 Pin Selection Rationale
 
-**MIPI-DSI Pins (GPIO1-12):** Dedicated MIPI-DSI interface pins for high-speed display communication with hardware acceleration.
+**MIPI-DSI Pins (GPIO2-9):** Dedicated MIPI-DSI interface pins for high-speed display communication with hardware acceleration.
 
-**Touch I2C (GPIO13, 14, 20):** Uses available GPIO pins for capacitive touch controller communication.
+**Touch I2C (GPIO20, 21, 14, 15):** Uses available GPIO pins for capacitive touch controller communication with interrupt support.
 
-**Inter-MCU SPI (GPIO5, 7, 8, 50):** Uses dedicated pins for high-speed Daisy communication with interrupt-driven data transfer.
+**Inter-MCU SPI (GPIO48-51):** Uses dedicated high-numbered GPIO pins for high-speed Daisy communication with interrupt-driven data transfer.
 
 **Encoder (GPIO33, 34, 40):** Uses available GPIO pins with PCNT peripheral for high-precision quadrature decoding.
 
 **Design Principles:**
-- ✅ No strapping pin conflicts (GPIO0 avoided for critical functions)
-- ✅ MIPI-DSI interface uses dedicated pins (GPIO1-12) for optimal performance
-- ✅ SPI Flash/PSRAM pins (GPIO26-32) available for future expansion
-- ✅ ESP32-S3 default VSPI pins (GPIO35-39) available for future expansion
+- ✅ No strapping pin conflicts (GPIO0, GPIO45-48 avoided)
+- ✅ MIPI-DSI interface uses dedicated pins (GPIO2-9) for optimal performance
+- ✅ SPI Flash/PSRAM pins (GPIO26-32) preserved for system use
+- ✅ ESP32-P4 available GPIO pins (GPIO1, GPIO16-19, GPIO22-30, GPIO32, GPIO35-39, GPIO41-47, GPIO52) for future expansion
 - ✅ Dedicated SPI bus for inter-MCU communication
 - ✅ Dedicated I2C bus for touch controller
 - ✅ PCNT peripheral for encoder (GPIO33-34)
-- ✅ Strapping pins (GPIO45-48) completely avoided
 
 ### 🔧 Hardware Validation Status
 
 **✅ Verified Components:**
 - MIPI-DSI Display: Full initialization and LVGL integration working
-- Capacitive Touch Controller: I2C communication and touch event handling
-- Inter-MCU SPI: Design completed, using dedicated pins with interrupt support
-- Single PCNT Encoder: Ready for quadrature input and parameter control
+- Capacitive Touch Controller: I2C communication and touch event handling with interrupts
+- UI Navigation System: Complete page-based navigation with menus and input handling
+- Inter-MCU SPI: Full master-slave protocol with packet statistics and testing
+- PCNT Encoder: High-precision quadrature encoder support for parameter control
+- UART Communication: Inter-MCU UART link for control data
 
 **🆕 New Components Added:**
-- Single PCNT Encoder: High-precision quadrature encoder input using ESP32-S3 PCNT peripheral
+- PCNT Encoder: High-precision quadrature encoder input using ESP32-P4 PCNT peripheral
+- UI Navigation System: Complete LVGL-based navigation with pages, menus, and softkeys
+- Button Matrix Support: TCA8418 capacitive button matrix interface
 
 **🔧 Pin Conflicts Resolved:**
-- MIPI-DSI interface uses dedicated pins (GPIO1-12) for optimal performance
-- ESP32-S3 default VSPI pins (GPIO35-39) available for future expansion
-- Strapping pins (GPIO45-48) completely avoided
-- Flash/PSRAM pins (GPIO26-32) available for future expansion
+- MIPI-DSI interface uses dedicated pins (GPIO2-9) for optimal performance
+- ESP32-P4 available GPIO pins preserved for future expansion
+- Strapping pins (GPIO0, GPIO45-48) completely avoided
+- SPI Flash/PSRAM pins (GPIO26-32) preserved for system use
 - All inter-MCU SPI pins use dedicated GPIO pins for reliable communication
 
-**🎯 Target Board:** ESP32-S3-DevKitC-1 (N8R8 PSRAM variant recommended)
+**🎯 Target Board:** ESP32-P4-WIFI6 with PSRAM support
 
-**📚 Reference:** Pin assignments verified against [ESP32-S3 DevKitC Official Pinout](https://randomnerdtutorials.com/esp32-s3-devkitc-pinout-guide/)
+**📚 Reference:** Pin assignments verified against ESP32-P4-WIFI6 datasheet and hardware specifications
 
 **🚀 Future Expansion Ready:** With MIPI-DSI using dedicated pins and efficient pin allocation, there's plenty of room for additional peripherals and future expansion.

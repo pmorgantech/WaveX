@@ -1,10 +1,10 @@
 /**
  * @file logging_config.h
  * @brief WaveX Logging Configuration
- * 
+ *
  * This file defines logging macros for all hardware components
  * to allow selective debug output control at compile time.
- * 
+ *
  * Each component has its own logging macro that can be set to 0
  * to completely compile out all debug logging for that component.
  * This allows for production builds with minimal debug overhead
@@ -91,7 +91,6 @@
 #define WAVEX_LOG_DAISY_SPI_MESSAGE WAVEX_DEBUG_LOGGING_ENABLED
 #endif
 
-
 // ESP32_INTER_SPI component logging (for token pasting with ESP32_INTER_SPI)
 #ifndef WAVEX_LOG_ESP32_INTER_SPI
 #define WAVEX_LOG_ESP32_INTER_SPI 0
@@ -99,29 +98,28 @@
 
 // ESP32 SPI component logging (for token pasting)
 
-
 // ============================================================================
 // LOGGING MACRO DEFINITIONS
 // ============================================================================
 
 // Generic logging macro that can be used across platforms
 #if WAVEX_DEBUG_LOGGING_ENABLED
-    #define WAVEX_LOG(component, format, ...) \
-        do { \
-            if (WAVEX_LOG_##component) { \
-                printf("[WAVEX-%s] " format "\n", #component, ##__VA_ARGS__); \
-            } \
-        } while(0)
-    
-    #define WAVEX_LOG_RAW(component, format, ...) \
-        do { \
-            if (WAVEX_LOG_##component) { \
-                printf(format, ##__VA_ARGS__); \
-            } \
-        } while(0)
+#define WAVEX_LOG(component, format, ...)                                 \
+    do {                                                                  \
+        if (WAVEX_LOG_##component) {                                      \
+            printf("[WAVEX-%s] " format "\n", #component, ##__VA_ARGS__); \
+        }                                                                 \
+    } while (0)
+
+#define WAVEX_LOG_RAW(component, format, ...) \
+    do {                                      \
+        if (WAVEX_LOG_##component) {          \
+            printf(format, ##__VA_ARGS__);    \
+        }                                     \
+    } while (0)
 #else
-    #define WAVEX_LOG(component, format, ...) ((void)0)
-    #define WAVEX_LOG_RAW(component, format, ...) ((void)0)
+#define WAVEX_LOG(component, format, ...) ((void)0)
+#define WAVEX_LOG_RAW(component, format, ...) ((void)0)
 #endif
 
 // ============================================================================
@@ -129,54 +127,54 @@
 // ============================================================================
 
 #ifdef ESP_PLATFORM
-    // ESP32-specific logging using ESP_LOG macros
-    #include "esp_log.h"
+// ESP32-specific logging using ESP_LOG macros
+#include "esp_log.h"
 
-    #define WAVEX_LOG_ESP(component, level, format, ...) \
-        do { \
-            if (WAVEX_LOG_##component) { \
-                ESP_LOG_##level("WAVEX-" #component, format, ##__VA_ARGS__); \
-            } \
-        } while(0)
+#define WAVEX_LOG_ESP(component, level, format, ...)                     \
+    do {                                                                 \
+        if (WAVEX_LOG_##component) {                                     \
+            ESP_LOG_##level("WAVEX-" #component, format, ##__VA_ARGS__); \
+        }                                                                \
+    } while (0)
 
-    #define WAVEX_LOG_ESP_INFO(component, format, ...) \
-        WAVEX_LOG_ESP(component, INFO, format, ##__VA_ARGS__)
+#define WAVEX_LOG_ESP_INFO(component, format, ...) \
+    WAVEX_LOG_ESP(component, INFO, format, ##__VA_ARGS__)
 
-    #define WAVEX_LOG_ESP_WARN(component, format, ...) \
-        WAVEX_LOG_ESP(component, WARN, format, ##__VA_ARGS__)
+#define WAVEX_LOG_ESP_WARN(component, format, ...) \
+    WAVEX_LOG_ESP(component, WARN, format, ##__VA_ARGS__)
 
-    #define WAVEX_LOG_ESP_ERROR(component, format, ...) \
-        WAVEX_LOG_ESP(component, ERROR, format, ##__VA_ARGS__)
+#define WAVEX_LOG_ESP_ERROR(component, format, ...) \
+    WAVEX_LOG_ESP(component, ERROR, format, ##__VA_ARGS__)
 
-    #define WAVEX_LOG_ESP_DEBUG(component, format, ...) \
-        WAVEX_LOG_ESP(component, DEBUG, format, ##__VA_ARGS__)
+#define WAVEX_LOG_ESP_DEBUG(component, format, ...) \
+    WAVEX_LOG_ESP(component, DEBUG, format, ##__VA_ARGS__)
 
-    #define WAVEX_LOG_ESP_VERBOSE(component, format, ...) \
-        WAVEX_LOG_ESP(component, VERBOSE, format, ##__VA_ARGS__)
+#define WAVEX_LOG_ESP_VERBOSE(component, format, ...) \
+    WAVEX_LOG_ESP(component, VERBOSE, format, ##__VA_ARGS__)
 
-    // ESP32 inter-SPI debugging logging
-    #define WAVEX_LOG_ESP32_SPI(component, format, ...) \
-        do { \
-            if (WAVEX_LOG_##component) { \
-                ESP_LOGI("WAVEX-" #component, format, ##__VA_ARGS__); \
-            } \
-        } while(0)
+// ESP32 inter-SPI debugging logging
+#define WAVEX_LOG_ESP32_SPI(component, format, ...)               \
+    do {                                                          \
+        if (WAVEX_LOG_##component) {                              \
+            ESP_LOGI("WAVEX-" #component, format, ##__VA_ARGS__); \
+        }                                                         \
+    } while (0)
 
 #else
-    // Daisy-specific logging using printf (since hw may not be available in all contexts)
-    #define WAVEX_LOG_DAISY(component, format, ...) \
-        do { \
-            if (WAVEX_LOG_##component) { \
-                printf("[WAVEX-%s] " format "\n", #component, ##__VA_ARGS__); \
-            } \
-        } while(0)
+// Daisy-specific logging using printf (since hw may not be available in all contexts)
+#define WAVEX_LOG_DAISY(component, format, ...)                           \
+    do {                                                                  \
+        if (WAVEX_LOG_##component) {                                      \
+            printf("[WAVEX-%s] " format "\n", #component, ##__VA_ARGS__); \
+        }                                                                 \
+    } while (0)
 
-    #define WAVEX_LOG_DAISY_RAW(component, format, ...) \
-        do { \
-            if (WAVEX_LOG_##component) { \
-                printf(format, ##__VA_ARGS__); \
-            } \
-        } while(0)
+#define WAVEX_LOG_DAISY_RAW(component, format, ...) \
+    do {                                            \
+        if (WAVEX_LOG_##component) {                \
+            printf(format, ##__VA_ARGS__);          \
+        }                                           \
+    } while (0)
 #endif
 
 // ============================================================================
@@ -217,7 +215,7 @@
 #define WAVEX_LOG_DAISY_OUTBOUND(component, format, ...) \
     WAVEX_LOG_DAISY(component, format, ##__VA_ARGS__)
 
-// Daisy inbound SPI packet logging  
+// Daisy inbound SPI packet logging
 #define WAVEX_LOG_DAISY_INBOUND(component, format, ...) \
     WAVEX_LOG_DAISY(component, format, ##__VA_ARGS__)
 
@@ -238,9 +236,9 @@
     (WAVEX_LOG_##component && WAVEX_DEBUG_LOGGING_ENABLED)
 
 // Macro to conditionally execute code only when logging is enabled for a component
-#define WAVEX_IF_LOGGING(component, code) \
-    do { \
+#define WAVEX_IF_LOGGING(component, code)                 \
+    do {                                                  \
         if (WAVEX_COMPONENT_LOGGING_ENABLED(component)) { \
-            code; \
-        } \
-    } while(0)
+            code;                                         \
+        }                                                 \
+    } while (0)

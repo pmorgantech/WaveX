@@ -1,22 +1,24 @@
 // WaveX UI Page Abstraction
 #pragma once
 
+#include <lvgl.h>
+
 #include "input_event.h"
 #include "ui_softkey.h"
-#include <lvgl.h>
-#include <string>
+
 #include <memory>
+#include <string>
 
 namespace wavex_ui {
 
 /**
  * @brief Base class for all UI pages/screens
- * 
+ *
  * Each page manages its own LVGL objects, state, and input handling.
  * Pages can be pushed/popped from a navigation stack.
  */
 class UIPage {
-public:
+   public:
     virtual ~UIPage() = default;
 
     /**
@@ -47,7 +49,7 @@ public:
      * @return Array of 6 softkeys (empty by default)
      */
     virtual std::array<Softkey, NUM_SOFTKEYS> getSoftkeys() {
-        return {}; // Default: no softkeys
+        return {};  // Default: no softkeys
     }
 
     /**
@@ -55,8 +57,8 @@ public:
      */
     lv_obj_t* root() const { return root_; }
 
-protected:
+   protected:
     lv_obj_t* root_ = nullptr;
 };
 
-} // namespace wavex_ui
+}  // namespace wavex_ui

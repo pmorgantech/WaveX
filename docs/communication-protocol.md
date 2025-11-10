@@ -240,13 +240,13 @@ sequenceDiagram
     ESP32->>Daisy: SAMPLE_LOAD (metadata)
     Daisy->>Mem: Allocate Memory
     Daisy->>ESP32: ACK
-    
+
     loop Sample Transfer
         ESP32->>Daisy: SAMPLE_DATA (chunk)
         Daisy->>Mem: Write Chunk
         Daisy->>ESP32: ACK
     end
-    
+
     Daisy->>ESP32: Load Complete
 ```
 
@@ -332,4 +332,4 @@ graph TD
 - **Protocol Analyzer**: Real-time message inspection
 - **Simulation Mode**: Test without hardware
 
-This protocol provides a robust, efficient communication layer enabling seamless coordination between the ESP32 frontend and Daisy backend while maintaining real-time audio performance. 
+This protocol provides a robust, efficient communication layer enabling seamless coordination between the ESP32 frontend and Daisy backend while maintaining real-time audio performance.

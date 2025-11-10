@@ -1,28 +1,28 @@
 #include "pages/diagnostics_page.h"
 
 // C++ includes first (no C linkage wrapper)
-#include "ui_task.h" // For wavex_ui_create_meter_display
 #include "esp_lvgl_port.h"
+#include "ui_task.h"  // For wavex_ui_create_meter_display
 
 // C/ESP-IDF headers (safe to include as C++ headers)
-#include "esp_log.h"
-#include "esp_timer.h"
+#include <stdlib.h>
+#include <string.h>
+
+#include "../../shared/config/link_config.h"
+#include "comm/statistics.h"
+#include "config.h"  // For WAVEX_CPU_USAGE_METHOD
 #include "esp_heap_caps.h"
-#include "esp_system.h"
+#include "esp_log.h"
 #include "esp_random.h"
+#include "esp_system.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include <string.h>
-#include <stdlib.h>
-
-#include "comm/statistics.h"
-#include "links/esp_spi_link.h"
-#include "../../shared/config/link_config.h"
 #include "inter_mcu.h"
-#include "config.h"  // For WAVEX_CPU_USAGE_METHOD
+#include "links/esp_spi_link.h"
 
 // LVGL port lock macros for thread safety
-#define LV_LOCK()   lvgl_port_lock(portMAX_DELAY)
+#define LV_LOCK() lvgl_port_lock(portMAX_DELAY)
 #define LV_UNLOCK() lvgl_port_unlock()
 
 static const char *TAG = "DIAG_PAGE";
@@ -44,7 +44,7 @@ static float s_cpu_usage_core0 = 0.0f;
 static float s_cpu_usage_core1 = 0.0f;
 static uint32_t s_last_cpu_check = 0;
 static uint32_t s_cpu_measurement_count = 0;
-static float s_cpu_usage_history[10] = {0}; // Rolling average buffer
+static float s_cpu_usage_history[10] = {0};  // Rolling average buffer
 static uint8_t s_cpu_history_index = 0;
 
 // Method 1: FreeRTOS Runtime Statistics tracking
@@ -66,14 +66,13 @@ static void update_cpu_usage_esp_idf_builtin(void);
 /**
  * @brief Update CPU usage statistics using configured method
  */
-static void update_cpu_usage(void)
-{
+static void update_cpu_usage(void) {
 #if WAVEX_CPU_USAGE_METHOD == 1
     update_cpu_usage_freertos_stats();
 #elif WAVEX_CPU_USAGE_METHOD == 2
     update_cpu_usage_esp_idf_builtin();
 #else
-    #error "Invalid WAVEX_CPU_USAGE_METHOD value. Must be 1 or 2."
+#error "Invalid WAVEX_CPU_USAGE_METHOD value. Must be 1 or 2."
 #endif
 }
 
@@ -84,38 +83,37 @@ static void update_cpu_usage(void)
 /**
  * @brief Update CPU usage statistics using FreeRTOS runtime statistics
  */
-static void update_cpu_usage_freertos_stats(void)
-{
+static void update_cpu_usage_freertos_stats(void) {
     uint32_t current_time_ms = (uint32_t)(esp_timer_get_time() / 1000);
-    
+
     if (s_last_check_time_ms == 0) {
         s_last_check_time_ms = current_time_ms;
         return;
     }
-    
+
     uint32_t time_diff = current_time_ms - s_last_check_time_ms;
-    if (time_diff >= 1000) { // Update every 1 second
-        
+    if (time_diff >= 1000) {  // Update every 1 second
+
         // Get runtime statistics buffer
-        char *runtime_stats = (char*)malloc(2048);
+        char *runtime_stats = (char *)malloc(2048);
         if (!runtime_stats) {
             ESP_LOGE(TAG, "Failed to allocate memory for runtime stats");
             return;
         }
-        
+
         // Get runtime statistics for all tasks
         vTaskGetRunTimeStats(runtime_stats);
-        
+
         // Debug: Log the raw runtime stats to see the format
         ESP_LOGI(TAG, "Raw runtime stats:\n%s", runtime_stats);
-        
+
         // Parse the runtime stats to calculate CPU usage
         // The format is: "Task Name\tRun Time\tPercentage"
         char *line = runtime_stats;
         uint32_t total_runtime = 0;
         uint32_t idle_runtime = 0;
         int task_count = 0;
-        
+
         while (*line != '\0') {
             // Find the percentage value in each line
             char *percent_start = strstr(line, "\t");
@@ -123,19 +121,20 @@ static void update_cpu_usage_freertos_stats(void)
                 percent_start = strstr(percent_start + 1, "\t");
                 if (percent_start) {
                     float percent = atof(percent_start + 1);
-                    total_runtime += (uint32_t)(percent * 1000); // Convert to microsecond precision
+                    total_runtime +=
+                        (uint32_t)(percent * 1000);  // Convert to microsecond precision
                     task_count++;
-                    
+
                     // Check if this is an idle task
                     if (strstr(line, "IDLE") != NULL) {
                         idle_runtime += (uint32_t)(percent * 1000);
                         ESP_LOGI(TAG, "Found IDLE task with %.1f%%", percent);
                     }
-                    
+
                     ESP_LOGI(TAG, "Task %d: %.1f%%", task_count, percent);
                 }
             }
-            
+
             // Move to next line
             line = strchr(line, '\n');
             if (line) {
@@ -144,15 +143,18 @@ static void update_cpu_usage_freertos_stats(void)
                 break;
             }
         }
-        
-        ESP_LOGI(TAG, "Parsed %d tasks, total_runtime=%lu, idle_runtime=%lu", 
-                 task_count, (unsigned long)total_runtime, (unsigned long)idle_runtime);
-        
+
+        ESP_LOGI(TAG,
+                 "Parsed %d tasks, total_runtime=%lu, idle_runtime=%lu",
+                 task_count,
+                 (unsigned long)total_runtime,
+                 (unsigned long)idle_runtime);
+
         // Calculate CPU usage percentage using a more robust method
         if (task_count > 0) {
             // Method 1: Calculate based on non-idle task percentages
             float non_idle_percentage = 0.0f;
-            
+
             // Re-parse to get non-idle percentages
             line = runtime_stats;
             while (*line != '\0') {
@@ -161,14 +163,14 @@ static void update_cpu_usage_freertos_stats(void)
                     percent_start = strstr(percent_start + 1, "\t");
                     if (percent_start) {
                         float percent = atof(percent_start + 1);
-                        
+
                         // Add to non-idle if not an idle task
                         if (strstr(line, "IDLE") == NULL) {
                             non_idle_percentage += percent;
                         }
                     }
                 }
-                
+
                 line = strchr(line, '\n');
                 if (line) {
                     line++;
@@ -176,50 +178,61 @@ static void update_cpu_usage_freertos_stats(void)
                     break;
                 }
             }
-            
+
             // Use the non-idle percentage directly
             s_cpu_usage_percent = non_idle_percentage;
-            
+
             // For dual-core, estimate core distribution
             // Core 0 typically handles more system tasks
             s_cpu_usage_core0 = s_cpu_usage_percent * 1.1f;
             s_cpu_usage_core1 = s_cpu_usage_percent * 0.9f;
-            
+
             // Clamp values
-            if (s_cpu_usage_percent > 100.0f) s_cpu_usage_percent = 100.0f;
-            if (s_cpu_usage_core0 > 100.0f) s_cpu_usage_core0 = 100.0f;
-            if (s_cpu_usage_core1 > 100.0f) s_cpu_usage_core1 = 100.0f;
-            if (s_cpu_usage_percent < 0.0f) s_cpu_usage_percent = 0.0f;
-            if (s_cpu_usage_core0 < 0.0f) s_cpu_usage_core0 = 0.0f;
-            if (s_cpu_usage_core1 < 0.0f) s_cpu_usage_core1 = 0.0f;
-            
+            if (s_cpu_usage_percent > 100.0f)
+                s_cpu_usage_percent = 100.0f;
+            if (s_cpu_usage_core0 > 100.0f)
+                s_cpu_usage_core0 = 100.0f;
+            if (s_cpu_usage_core1 > 100.0f)
+                s_cpu_usage_core1 = 100.0f;
+            if (s_cpu_usage_percent < 0.0f)
+                s_cpu_usage_percent = 0.0f;
+            if (s_cpu_usage_core0 < 0.0f)
+                s_cpu_usage_core0 = 0.0f;
+            if (s_cpu_usage_core1 < 0.0f)
+                s_cpu_usage_core1 = 0.0f;
+
             // Update rolling average
             s_cpu_usage_history[s_cpu_history_index] = s_cpu_usage_percent;
             s_cpu_history_index = (s_cpu_history_index + 1) % 10;
-            
+
             float sum = 0.0f;
             for (int i = 0; i < 10; i++) {
                 sum += s_cpu_usage_history[i];
             }
             s_cpu_usage_percent = sum / 10.0f;
-            
+
             s_cpu_measurement_count++;
-            
+
             if (s_cpu_measurement_count % 10 == 0) {
                 UBaseType_t total_task_count = uxTaskGetNumberOfTasks();
                 size_t free_heap = esp_get_free_heap_size();
-                ESP_LOGI(TAG, "FreeRTOS CPU Usage: %.1f%% (Core0: %.1f%%, Core1: %.1f%%) [Tasks: %d, Heap: %zu KB]", 
-                        s_cpu_usage_percent, s_cpu_usage_core0, s_cpu_usage_core1, 
-                        (int)total_task_count, free_heap / 1024);
+                ESP_LOGI(TAG,
+                         "FreeRTOS CPU Usage: %.1f%% (Core0: %.1f%%, Core1: %.1f%%) [Tasks: %d, "
+                         "Heap: %zu KB]",
+                         s_cpu_usage_percent,
+                         s_cpu_usage_core0,
+                         s_cpu_usage_core1,
+                         (int)total_task_count,
+                         free_heap / 1024);
             }
         } else {
             ESP_LOGW(TAG, "No tasks found in runtime stats, using fallback calculation");
             // Fallback: Use a simple estimation based on system load
-            s_cpu_usage_percent = 5.0f; // Base system load
+            s_cpu_usage_percent = 5.0f;  // Base system load
             s_cpu_usage_core0 = 6.0f;
             s_cpu_usage_core1 = 4.0f;
         }
-        
+
         free(runtime_stats);
         s_last_check_time_ms = current_time_ms;
     }
@@ -232,42 +245,41 @@ static void update_cpu_usage_freertos_stats(void)
 /**
  * @brief Update CPU usage statistics using ESP-IDF built-in system monitoring
  */
-static void update_cpu_usage_esp_idf_builtin(void)
-{
+static void update_cpu_usage_esp_idf_builtin(void) {
     uint32_t current_time_ms = (uint32_t)(esp_timer_get_time() / 1000);
-    
+
     if (s_last_esp_idf_check_time == 0) {
         s_last_esp_idf_check_time = current_time_ms;
         return;
     }
-    
+
     uint32_t time_diff = current_time_ms - s_last_esp_idf_check_time;
-    if (time_diff >= 1000) { // Update every 1 second
-        
+    if (time_diff >= 1000) {  // Update every 1 second
+
         // Get system information
         UBaseType_t task_count = uxTaskGetNumberOfTasks();
         size_t free_heap = esp_get_free_heap_size();
         size_t min_free_heap = esp_get_minimum_free_heap_size();
-        
+
         // ESP-IDF doesn't have a direct CPU usage API, but we can use system metrics
         // This is a hybrid approach using system load indicators
-        
+
         // Calculate CPU usage based on system load indicators
-        float base_load = 3.0f; // Base system load for ESP32
-        
+        float base_load = 3.0f;  // Base system load for ESP32
+
         // Factor in task count (more tasks = higher load)
         float task_load = (float)task_count * 0.3f;
-        
+
         // Factor in memory pressure
         float memory_load = 0.0f;
         if (free_heap < 30000) {
-            memory_load = 20.0f; // High memory pressure
+            memory_load = 20.0f;  // High memory pressure
         } else if (free_heap < 60000) {
             memory_load = 10.0f;  // Medium memory pressure
         } else if (free_heap < 100000) {
             memory_load = 5.0f;  // Low memory pressure
         }
-        
+
         // Factor in minimum heap (indicates memory fragmentation)
         float fragmentation_load = 0.0f;
         if (min_free_heap < 20000) {
@@ -275,42 +287,55 @@ static void update_cpu_usage_esp_idf_builtin(void)
         } else if (min_free_heap < 40000) {
             fragmentation_load = 8.0f;
         }
-        
+
         // Add some randomness to simulate actual CPU usage variation
-        float random_factor = ((float)(esp_random() % 100)) / 100.0f * 2.0f; // 0-2% random variation
-        
-        s_cpu_usage_percent = base_load + task_load + memory_load + fragmentation_load + random_factor;
-        
+        float random_factor =
+            ((float)(esp_random() % 100)) / 100.0f * 2.0f;  // 0-2% random variation
+
+        s_cpu_usage_percent =
+            base_load + task_load + memory_load + fragmentation_load + random_factor;
+
         // Estimate core distribution (Core 0 typically handles more system tasks)
         s_cpu_usage_core0 = s_cpu_usage_percent * 1.1f;
         s_cpu_usage_core1 = s_cpu_usage_percent * 0.9f;
-        
+
         // Clamp values
-        if (s_cpu_usage_percent > 100.0f) s_cpu_usage_percent = 100.0f;
-        if (s_cpu_usage_core0 > 100.0f) s_cpu_usage_core0 = 100.0f;
-        if (s_cpu_usage_core1 > 100.0f) s_cpu_usage_core1 = 100.0f;
-        if (s_cpu_usage_percent < 0.0f) s_cpu_usage_percent = 0.0f;
-        if (s_cpu_usage_core0 < 0.0f) s_cpu_usage_core0 = 0.0f;
-        if (s_cpu_usage_core1 < 0.0f) s_cpu_usage_core1 = 0.0f;
-        
+        if (s_cpu_usage_percent > 100.0f)
+            s_cpu_usage_percent = 100.0f;
+        if (s_cpu_usage_core0 > 100.0f)
+            s_cpu_usage_core0 = 100.0f;
+        if (s_cpu_usage_core1 > 100.0f)
+            s_cpu_usage_core1 = 100.0f;
+        if (s_cpu_usage_percent < 0.0f)
+            s_cpu_usage_percent = 0.0f;
+        if (s_cpu_usage_core0 < 0.0f)
+            s_cpu_usage_core0 = 0.0f;
+        if (s_cpu_usage_core1 < 0.0f)
+            s_cpu_usage_core1 = 0.0f;
+
         // Update rolling average
         s_cpu_usage_history[s_cpu_history_index] = s_cpu_usage_percent;
         s_cpu_history_index = (s_cpu_history_index + 1) % 10;
-        
+
         float sum = 0.0f;
         for (int i = 0; i < 10; i++) {
             sum += s_cpu_usage_history[i];
         }
         s_cpu_usage_percent = sum / 10.0f;
-        
+
         s_cpu_measurement_count++;
-        
+
         if (s_cpu_measurement_count % 10 == 0) {
-            ESP_LOGI(TAG, "ESP-IDF CPU Usage: %.1f%% (Core0: %.1f%%, Core1: %.1f%%) [Tasks: %d, Heap: %zu KB]", 
-                    s_cpu_usage_percent, s_cpu_usage_core0, s_cpu_usage_core1, 
-                    (int)task_count, free_heap / 1024);
+            ESP_LOGI(TAG,
+                     "ESP-IDF CPU Usage: %.1f%% (Core0: %.1f%%, Core1: %.1f%%) [Tasks: %d, Heap: "
+                     "%zu KB]",
+                     s_cpu_usage_percent,
+                     s_cpu_usage_core0,
+                     s_cpu_usage_core1,
+                     (int)task_count,
+                     free_heap / 1024);
         }
-        
+
         s_last_esp_idf_check_time = current_time_ms;
     }
 }
@@ -318,8 +343,7 @@ static void update_cpu_usage_esp_idf_builtin(void)
 /**
  * @brief Update diagnostics information every 1 second
  */
-static void diagnostics_update_cb(void *arg)
-{
+static void diagnostics_update_cb(void *arg) {
     // Compute stats regardless of label presence; UI will apply when ready
     update_cpu_usage();
 
@@ -330,14 +354,21 @@ static void diagnostics_update_cb(void *arg)
     wavex_backend_heartbeat_t heartbeat;
     inter_mcu_get_backend_heartbeat_detailed(&heartbeat);
 
-    #if WAVEX_SPI_LINK_ENABLED
+#if WAVEX_SPI_LINK_ENABLED
     spi_link_stats_t spi_stats;
     spi_link_get_stats(&spi_stats);
     bool spi_active = spi_link_is_active();
-    #else
-    struct { uint32_t packets_sent; uint32_t packets_received; uint32_t crc_errors; uint32_t irq_count; uint32_t rx_pool_empty; uint32_t last_activity_ms; } spi_stats = {};
+#else
+    struct {
+        uint32_t packets_sent;
+        uint32_t packets_received;
+        uint32_t crc_errors;
+        uint32_t irq_count;
+        uint32_t rx_pool_empty;
+        uint32_t last_activity_ms;
+    } spi_stats = {};
     bool spi_active = false;
-    #endif
+#endif
 
     wavex_packet_stats_t packet_stats;
     inter_mcu_get_packet_stats(&packet_stats);
@@ -347,7 +378,7 @@ static void diagnostics_update_cb(void *arg)
         time_since_last_rx = uptime_ms - heartbeat.last_rx_ms;
     }
 
-    const char* link_status = "INACTIVE";
+    const char *link_status = "INACTIVE";
     if (heartbeat.valid && time_since_last_rx < 2000) {
         link_status = "ACTIVE";
     } else if (heartbeat.valid && time_since_last_rx < 5000) {
@@ -359,44 +390,25 @@ static void diagnostics_update_cb(void *arg)
     }
 
     // Prepare text data (no LVGL locks in timer callback)
-    int esp32_len = snprintf(s_deferred_esp32_text, sizeof(s_deferred_esp32_text),
-        "Uptime: %lu sec\n"
-        "Free RAM: %zu KB\n"
-        "Min RAM: %zu KB\n"
-        "CPU: ESP32-P4\n"
-        "CPU Total: %.1f%%\n"
-        "CPU Core 0: %.1f%%\n"
-        "CPU Core 1: %.1f%%",
-        uptime_ms / 1000,
-        free_heap / 1024,
-        min_free_heap / 1024,
-        s_cpu_usage_percent,
-        s_cpu_usage_core0,
-        s_cpu_usage_core1);
+    int esp32_len = snprintf(s_deferred_esp32_text, sizeof(s_deferred_esp32_text), "Uptime: %lu sec\n"
+                                                                                   "Free RAM: %zu KB\n"
+                                                                                   "Min RAM: %zu KB\n"
+                                                                                   "CPU: ESP32-P4\n"
+                                                                                   "CPU Total: %.1f%%\n"
+                                                                                   "CPU Core 0: %.1f%%\n"
+                                                                                   "CPU Core 1: %.1f%%", uptime_ms / 1000, free_heap / 1024, min_free_heap / 1024, s_cpu_usage_percent, s_cpu_usage_core0, s_cpu_usage_core1);
 
     ESP_LOGD(TAG, "DIAG_CB: deferred_esp32_text=(%d) %s", esp32_len, s_deferred_esp32_text);
 
-    int daisy_len = snprintf(s_deferred_daisy_text, sizeof(s_deferred_daisy_text),
-        "Status: %s\n"
-        "Last RX: %lu ms ago\n"
-        "Total Packets: %lu\n"
-        "Heartbeat: %lu\n"
-        "Meter Packets: %lu\n"
-        "CRC Errors: %lu\n"
-        "IRQ Count: %lu\n"
-        "SPI Active: %s\n"
-        "Daisy CPU: avg=%.1f%% min=%.1f%% max=%.1f%%",
-        link_status,
-        time_since_last_rx,
-        packet_stats.total_packets,
-        packet_stats.heartbeat_packets,
-        packet_stats.meter_push_packets,
-        spi_stats.crc_errors,
-        spi_stats.irq_count,
-        spi_active ? "YES" : "NO",
-        heartbeat.cpu_avg_percent,
-        heartbeat.cpu_min_percent,
-        heartbeat.cpu_max_percent);
+    int daisy_len = snprintf(s_deferred_daisy_text, sizeof(s_deferred_daisy_text), "Status: %s\n"
+                                                                                   "Last RX: %lu ms ago\n"
+                                                                                   "Total Packets: %lu\n"
+                                                                                   "Heartbeat: %lu\n"
+                                                                                   "Meter Packets: %lu\n"
+                                                                                   "CRC Errors: %lu\n"
+                                                                                   "IRQ Count: %lu\n"
+                                                                                   "SPI Active: %s\n"
+                                                                                   "Daisy CPU: avg=%.1f%% min=%.1f%% max=%.1f%%", link_status, time_since_last_rx, packet_stats.total_packets, packet_stats.heartbeat_packets, packet_stats.meter_push_packets, spi_stats.crc_errors, spi_stats.irq_count, spi_active ? "YES" : "NO", heartbeat.cpu_avg_percent, heartbeat.cpu_min_percent, heartbeat.cpu_max_percent);
 
     ESP_LOGD(TAG, "DIAG_CB: deferred_daisy_text=(%d) %s", daisy_len, s_deferred_daisy_text);
 
@@ -415,10 +427,9 @@ static void diagnostics_update_cb(void *arg)
  * @brief LVGL timer callback to apply deferred UI updates
  * This runs in LVGL context where lock is already held
  */
-static void lvgl_update_timer_cb(lv_timer_t *timer)
-{
+static void lvgl_update_timer_cb(lv_timer_t *timer) {
     (void)timer;
-    
+
     if (!s_ui_update_pending) {
         return;
     }
@@ -443,16 +454,14 @@ static void lvgl_update_timer_cb(lv_timer_t *timer)
  * @brief Process deferred UI updates (called from main UI task)
  * Kept for compatibility but now does nothing - LVGL timer handles it
  */
-void diagnostics_page_process_deferred_updates(void)
-{
+void diagnostics_page_process_deferred_updates(void) {
     // No-op: LVGL timer now handles UI updates
 }
 
 /**
  * @brief Create the diagnostics page
  */
-void diagnostics_page_create(lv_obj_t *parent)
-{
+void diagnostics_page_create(lv_obj_t *parent) {
     if (parent == NULL) {
         ESP_LOGE(TAG, "create_diagnostics_page: parent is NULL");
         return;
@@ -460,7 +469,7 @@ void diagnostics_page_create(lv_obj_t *parent)
 
     // NOTE: Caller (navigation system) already holds LVGL lock
     lv_obj_clean(parent);
-    
+
     s_diagnostics_label = NULL;
     s_daisy_label = NULL;
 
@@ -473,7 +482,8 @@ void diagnostics_page_create(lv_obj_t *parent)
     lv_obj_set_style_pad_all(content, 8, LV_PART_MAIN);
 
     lv_obj_set_flex_flow(content, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(content, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+    lv_obj_set_flex_align(
+        content, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
 
     lv_obj_t *esp32_column = lv_obj_create(content);
     lv_obj_set_size(esp32_column, lv_pct(30), lv_pct(100));
@@ -490,16 +500,17 @@ void diagnostics_page_create(lv_obj_t *parent)
 
     s_diagnostics_label = lv_label_create(esp32_column);
     char esp32_text[512];
-    snprintf(esp32_text, sizeof(esp32_text),
-        "Uptime: 0 sec\n"
-        "Free RAM: %zu KB\n"
-        "Min RAM: %zu KB\n"
-        "CPU: ESP32-P4\n"
-        "CPU Total: 0.0%%\n"
-        "CPU Core 0: 0.0%%\n"
-        "CPU Core 1: 0.0%%",
-        (size_t)(esp_get_free_heap_size() / 1024),
-        (size_t)(esp_get_minimum_free_heap_size() / 1024));
+    snprintf(esp32_text,
+             sizeof(esp32_text),
+             "Uptime: 0 sec\n"
+             "Free RAM: %zu KB\n"
+             "Min RAM: %zu KB\n"
+             "CPU: ESP32-P4\n"
+             "CPU Total: 0.0%%\n"
+             "CPU Core 0: 0.0%%\n"
+             "CPU Core 1: 0.0%%",
+             (size_t)(esp_get_free_heap_size() / 1024),
+             (size_t)(esp_get_minimum_free_heap_size() / 1024));
     lv_label_set_text(s_diagnostics_label, esp32_text);
     lv_obj_set_style_text_font(s_diagnostics_label, &lv_font_montserrat_22, LV_PART_MAIN);
     lv_obj_set_style_text_color(s_diagnostics_label, lv_color_white(), LV_PART_MAIN);
@@ -520,16 +531,17 @@ void diagnostics_page_create(lv_obj_t *parent)
 
     s_daisy_label = lv_label_create(daisy_column);
     char daisy_text[512];
-    snprintf(daisy_text, sizeof(daisy_text),
-        "Status: CHECKING...\n"
-        "Last RX: -- ms ago\n"
-        "Total Packets: 0\n"
-        "Heartbeat: 0\n"
-        "Meter Packets: 0\n"
-        "CRC Errors: 0\n"
-        "IRQ Count: 0\n"
-        "SPI Active: NO\n"
-        "Daisy CPU: 0.0%%");
+    snprintf(daisy_text,
+             sizeof(daisy_text),
+             "Status: CHECKING...\n"
+             "Last RX: -- ms ago\n"
+             "Total Packets: 0\n"
+             "Heartbeat: 0\n"
+             "Meter Packets: 0\n"
+             "CRC Errors: 0\n"
+             "IRQ Count: 0\n"
+             "SPI Active: NO\n"
+             "Daisy CPU: 0.0%%");
     lv_label_set_text(s_daisy_label, daisy_text);
     lv_obj_set_style_text_font(s_daisy_label, &lv_font_montserrat_22, LV_PART_MAIN);
     lv_obj_set_style_text_color(s_daisy_label, lv_color_white(), LV_PART_MAIN);
@@ -543,49 +555,44 @@ void diagnostics_page_create(lv_obj_t *parent)
     lv_obj_set_style_pad_all(meters_column, 10, LV_PART_MAIN);
 
     wavex_ui_create_meter_display(meters_column);
-    
+
     // Softkeys are now owned by the navigator; UI wrapper provides them.
 }
 
-void diagnostics_page_init(void)
-{
+void diagnostics_page_init(void) {
     // Create ESP timer for data collection (runs in timer ISR context)
-    const esp_timer_create_args_t diag_timer_args = {
-        .callback = &diagnostics_update_cb,
-        .name = "diagnostics_timer"
-    };
+    const esp_timer_create_args_t diag_timer_args = {.callback = &diagnostics_update_cb,
+                                                     .name = "diagnostics_timer"};
     esp_err_t timer_ret = esp_timer_create(&diag_timer_args, &s_diagnostics_timer_handle);
     if (timer_ret == ESP_OK) {
-        esp_timer_start_periodic(s_diagnostics_timer_handle, 500000); // 500ms
+        esp_timer_start_periodic(s_diagnostics_timer_handle, 500000);  // 500ms
     } else {
         ESP_LOGE(TAG, "Failed to create diagnostics timer: %s", esp_err_to_name(timer_ret));
     }
-    
+
     // Create LVGL timer for UI updates (runs in LVGL context with lock held)
-    s_lvgl_update_timer = lv_timer_create(lvgl_update_timer_cb, 50, NULL); // Check every 50ms
+    s_lvgl_update_timer = lv_timer_create(lvgl_update_timer_cb, 50, NULL);  // Check every 50ms
     if (!s_lvgl_update_timer) {
         ESP_LOGE(TAG, "Failed to create LVGL update timer");
     }
 }
 
-void diagnostics_page_stop(void)
-{
+void diagnostics_page_stop(void) {
     // Stop and delete LVGL timer first
     if (s_lvgl_update_timer) {
         lv_timer_del(s_lvgl_update_timer);
         s_lvgl_update_timer = NULL;
     }
-    
+
     // Stop and delete ESP timer
     if (s_diagnostics_timer_handle) {
         esp_timer_stop(s_diagnostics_timer_handle);
         esp_timer_delete(s_diagnostics_timer_handle);
         s_diagnostics_timer_handle = NULL;
     }
-    
+
     // Clear the label pointers when leaving diagnostics page
     s_diagnostics_label = NULL;
     s_daisy_label = NULL;
     s_ui_update_pending = false;
 }
-

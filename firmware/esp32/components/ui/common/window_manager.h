@@ -1,7 +1,7 @@
 /**
  * @file window_manager.h
  * @brief Window Manager for Standardized UI Window Creation
- * 
+ *
  * This module provides standardized window creation patterns for consistent
  * UI layout across all WaveX pages.
  */
@@ -15,11 +15,11 @@
 
 // Window structure for standardized layout
 typedef struct {
-    lv_obj_t* window;        // Main window container
-    lv_obj_t* header;        // Header with title
-    lv_obj_t* content;       // Content area
-    lv_obj_t* hotkey_region; // Hotkey buttons at bottom
-    lv_obj_t* title_label;   // Title label in header
+    lv_obj_t* window;         // Main window container
+    lv_obj_t* header;         // Header with title
+    lv_obj_t* content;        // Content area
+    lv_obj_t* hotkey_region;  // Hotkey buttons at bottom
+    lv_obj_t* title_label;    // Title label in header
 } wavex_window_t;
 
 // Hotkey button configuration
@@ -44,6 +44,4 @@ void wavex_window_set_title(wavex_window_t* window, const char* title);
 // Layout calculations
 void wavex_window_update_layout(wavex_window_t* window);
 
-
-
-#endif // WAVEX_WINDOW_MANAGER_H
+#endif  // WAVEX_WINDOW_MANAGER_H

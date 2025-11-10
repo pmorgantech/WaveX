@@ -132,7 +132,7 @@ make all
 
 The dual-MCU architecture is proving sound with clear separation of concerns:
 
-- **ESP32-S3**: UI, file management, MIDI, control processing
+- **ESP32-P4**: UI, file management, MIDI, control processing
 - **STM32H750**: Real-time audio, DSP, sample playback, CV output
 - **SPI Protocol**: Clean communication layer with shared definitions
 
@@ -143,10 +143,10 @@ The build system demonstrates that both MCUs can be developed and built independ
 **Firmware Environment Setup: 100% Complete** 🎉
 
 - ✅ Development tools and containers (100%)
-- ✅ ESP32 firmware foundation (100%) 
+- ✅ ESP32 firmware foundation (100%)
 - ✅ Shared protocol library (100%)
 - ✅ Build automation (100%)
 - ✅ Daisy firmware foundation (100%)
 - ✅ Hardware abstraction layers (100%)
 
-**Ready for next phase**: Both firmwares are building successfully. Ready to implement LVGL integration, audio engine, and inter-MCU communication protocols. 
+**Ready for next phase**: Both firmwares are building successfully. Ready to implement LVGL integration, audio engine, and inter-MCU communication protocols.

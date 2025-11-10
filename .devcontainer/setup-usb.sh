@@ -10,12 +10,12 @@ ESP32_DEVICES=$(lsusb | grep "303a:1001" || true)
 if [ -n "$ESP32_DEVICES" ]; then
     echo "✅ ESP32 device detected:"
     echo "$ESP32_DEVICES"
-    
+
     # Try to create device node
     echo "🔧 Attempting to create device node..."
     sudo mknod /dev/ttyACM0 c 166 0 2>/dev/null || true
     sudo chmod 666 /dev/ttyACM0 2>/dev/null || true
-    
+
     if [ -e /dev/ttyACM0 ]; then
         echo "✅ /dev/ttyACM0 created successfully"
     else
@@ -41,4 +41,4 @@ ls -la /dev/tty* 2>/dev/null || echo "No serial devices found"
 echo "💡 If devices aren't working, try:"
 echo "   1. Use Docker Desktop with USB-IP enabled"
 echo "   2. Run container with: --device=/dev/bus/usb --privileged"
-echo "   3. Install udev rules on host system" 
+echo "   3. Install udev rules on host system"

@@ -1,25 +1,25 @@
 #ifndef WAVEX_BUFFER_H
 #define WAVEX_BUFFER_H
 
-#include <stdint.h>
 #include <stddef.h>
+#include <stdint.h>
 
 namespace WaveX {
 namespace Utils {
 
 class CircularBuffer {
-public:
+   public:
     CircularBuffer(uint8_t* buffer, size_t size);
-    
+
     bool Push(const uint8_t* data, size_t length);
     bool Pop(uint8_t* data, size_t length);
-    
+
     size_t GetAvailableData() const;
     size_t GetAvailableSpace() const;
-    
+
     void Clear();
-    
-private:
+
+   private:
     uint8_t* buffer_;
     size_t size_;
     size_t head_;
@@ -27,7 +27,7 @@ private:
     size_t count_;
 };
 
-} // namespace Utils
-} // namespace WaveX
+}  // namespace Utils
+}  // namespace WaveX
 
-#endif // WAVEX_BUFFER_H 
+#endif  // WAVEX_BUFFER_H

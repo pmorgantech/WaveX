@@ -1,7 +1,7 @@
 /**
  * @file config.h
  * @brief ESP32-Specific Configuration
- * 
+ *
  * This file contains ESP32-specific configuration macros and includes
  * the shared hardware and logging configurations.
  */

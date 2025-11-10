@@ -1,29 +1,30 @@
 // WaveX UI Sample Detail Page
 #pragma once
 
-#include "ui_page.h"
-#include "ui_navigator.h"
-#include "input_event.h"
 #include <lvgl.h>
-#include <string>
+
+#include "input_event.h"
+#include "ui_navigator.h"
+#include "ui_page.h"
+
 #include <memory>
+#include <string>
 
 namespace wavex_ui {
 
 /**
  * @brief Sample detail page showing file information
- * 
+ *
  * Displays sample metadata and provides playback controls.
  * Simple page that demonstrates the navigation system.
  */
 class UISampleDetail : public UIPage {
-public:
+   public:
     /**
      * @brief Constructor
      * @param filename Name of the sample file
      */
-    explicit UISampleDetail(std::string filename)
-        : filename_(std::move(filename)) {}
+    explicit UISampleDetail(std::string filename) : filename_(std::move(filename)) {}
 
     /**
      * @brief Get page name
@@ -50,7 +51,7 @@ public:
      */
     std::array<Softkey, NUM_SOFTKEYS> getSoftkeys() override;
 
-private:
+   private:
     std::string filename_;
     lv_obj_t* infoLabel_ = nullptr;
     bool isPlaying_ = false;
@@ -71,4 +72,4 @@ private:
  */
 std::shared_ptr<UIPage> createSampleDetailPage(const std::string& filename);
 
-} // namespace wavex_ui
+}  // namespace wavex_ui

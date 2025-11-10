@@ -1,18 +1,18 @@
 #include "ui/display_manager.h"
 
-#include "esp_lvgl_port.h"
-#include "esp_log.h"
-#include "esp_check.h"
 #include "bsp/esp32_p4_nano.h"
-#include "esp_lcd_touch.h"
-#include "esp_lcd_touch_gt911.h"
-#include "esp_lcd_panel_io.h"
+#include "config/pin_config.h"
 #include "driver/gpio.h"
 #include "driver/i2c_master.h"
+#include "esp_check.h"
+#include "esp_heap_caps.h"
+#include "esp_lcd_panel_io.h"
+#include "esp_lcd_touch.h"
+#include "esp_lcd_touch_gt911.h"
+#include "esp_log.h"
+#include "esp_lvgl_port.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "config/pin_config.h"
-#include "esp_heap_caps.h"
 
 #undef esp_lcd_new_panel_io_i2c
 #define esp_lcd_new_panel_io_i2c esp_lcd_new_panel_io_i2c_v2
@@ -23,18 +23,16 @@ namespace {
 constexpr uint32_t LV_TICK_PERIOD_MS = 5;
 static const char* TAG = "DisplayManager";
 
-#define LV_LOCK()   lvgl_port_lock(portMAX_DELAY)
+#define LV_LOCK() lvgl_port_lock(portMAX_DELAY)
 #define LV_UNLOCK() lvgl_port_unlock()
 
-static void lvgl_tick_cb(void* /*arg*/)
-{
+static void lvgl_tick_cb(void* /*arg*/) {
     lv_tick_inc(LV_TICK_PERIOD_MS);
 }
 
-extern "C" void wavex_lvgl_log_cb(signed char level, const char * buf)
-{
+extern "C" void wavex_lvgl_log_cb(signed char level, const char* buf) {
     switch (level) {
-        case 0: // TRACE
+        case 0:  // TRACE
         case 1: // INFO
             ESP_LOGI("LVGL", "%s", buf);
             break;
@@ -50,16 +48,14 @@ extern "C" void wavex_lvgl_log_cb(signed char level, const char * buf)
     }
 }
 
-} // namespace
+}  // namespace
 
-DisplayManager& DisplayManager::instance()
-{
+DisplayManager& DisplayManager::instance() {
     static DisplayManager inst;
     return inst;
 }
 
-esp_err_t DisplayManager::init()
-{
+esp_err_t DisplayManager::init() {
     if (display_) {
         return ESP_OK;
     }
@@ -70,8 +66,7 @@ esp_err_t DisplayManager::init()
     return ESP_OK;
 }
 
-void DisplayManager::deinit()
-{
+void DisplayManager::deinit() {
     stopLvglTick();
 
     if (display_) {
@@ -85,8 +80,7 @@ void DisplayManager::deinit()
     }
 }
 
-esp_err_t DisplayManager::panelHandle(esp_lcd_panel_handle_t* out)
-{
+esp_err_t DisplayManager::panelHandle(esp_lcd_panel_handle_t* out) {
     if (!out) {
         return ESP_ERR_INVALID_ARG;
     }
@@ -98,13 +92,13 @@ esp_err_t DisplayManager::panelHandle(esp_lcd_panel_handle_t* out)
 
     ESP_LOGI(TAG, "Fetching panel handle from BSP");
     bsp_display_config_t config = {};
-    ESP_RETURN_ON_ERROR(bsp_display_new(&config, &panel_handle_, nullptr), TAG, "Failed to get panel handle");
+    ESP_RETURN_ON_ERROR(
+        bsp_display_new(&config, &panel_handle_, nullptr), TAG, "Failed to get panel handle");
     *out = panel_handle_;
     return ESP_OK;
 }
 
-esp_err_t DisplayManager::initLvglDisplay()
-{
+esp_err_t DisplayManager::initLvglDisplay() {
     ESP_LOGI(TAG, "Initialising LVGL core...");
     lv_init();
 
@@ -112,20 +106,17 @@ esp_err_t DisplayManager::initLvglDisplay()
     lv_log_register_print_cb(wavex_lvgl_log_cb);
 #endif
 
-    ESP_LOGI(TAG, "Memory before display init: free=%zu bytes, minimum=%zu bytes",
-             esp_get_free_heap_size(), esp_get_minimum_free_heap_size());
+    ESP_LOGI(TAG, "Memory before display init: free=%zu bytes, minimum=%zu bytes", esp_get_free_heap_size(), esp_get_minimum_free_heap_size());
 
     ESP_LOGI(TAG, "Starting BSP display with optimised configuration...");
-    bsp_display_cfg_t cfg = {
-        .lvgl_port_cfg = ESP_LVGL_PORT_INIT_CONFIG(),
-        .buffer_size = 720 * 20,
-        .double_buffer = true,
-        .flags = {
-            .buff_dma = true,
-            .buff_spiram = false,
-            .sw_rotate = true,
-        }
-    };
+    bsp_display_cfg_t cfg = {.lvgl_port_cfg = ESP_LVGL_PORT_INIT_CONFIG(),
+                             .buffer_size = 720 * 20,
+                             .double_buffer = true,
+                             .flags = {
+                                 .buff_dma = true,
+                                 .buff_spiram = false,
+                                 .sw_rotate = true,
+                             }};
 
     display_ = bsp_display_start_with_config(&cfg);
     ESP_RETURN_ON_FALSE(display_, ESP_FAIL, TAG, "Failed to start BSP display");
@@ -137,36 +128,35 @@ esp_err_t DisplayManager::initLvglDisplay()
     return ESP_OK;
 }
 
-esp_err_t DisplayManager::initTouchController()
-{
+esp_err_t DisplayManager::initTouchController() {
     ESP_LOGI(TAG, "Initialising GT911 touch controller");
 
     i2c_master_bus_handle_t i2c_handle = nullptr;
-    
+
     // Try to get I2C handle from BSP first
     i2c_handle = bsp_i2c_get_handle();
     if (i2c_handle == nullptr) {
         ESP_LOGI(TAG, "BSP I2C not initialised; initialising now");
         esp_err_t bsp_ret = bsp_i2c_init();
         if (bsp_ret != ESP_OK) {
-            ESP_LOGW(TAG, "BSP I2C init failed (%s), creating manual I2C bus", esp_err_to_name(bsp_ret));
-            
+            ESP_LOGW(
+                TAG, "BSP I2C init failed (%s), creating manual I2C bus", esp_err_to_name(bsp_ret));
+
             // Manually create I2C master bus as fallback
-            i2c_master_bus_config_t bus_config = {
-                .i2c_port = I2C_NUM_0,
-                .sda_io_num = (gpio_num_t)WAVEX_ESP_I2C_SDA,
-                .scl_io_num = (gpio_num_t)WAVEX_ESP_I2C_SCL,
-                .clk_source = I2C_CLK_SRC_DEFAULT,
-                .glitch_ignore_cnt = 7,
-                .intr_priority = 0,
-                .trans_queue_depth = 0,
-                .flags = {
-                    .enable_internal_pullup = true,
-                }
-            };
+            i2c_master_bus_config_t bus_config = {.i2c_port = I2C_NUM_0,
+                                                  .sda_io_num = (gpio_num_t)WAVEX_ESP_I2C_SDA,
+                                                  .scl_io_num = (gpio_num_t)WAVEX_ESP_I2C_SCL,
+                                                  .clk_source = I2C_CLK_SRC_DEFAULT,
+                                                  .glitch_ignore_cnt = 7,
+                                                  .intr_priority = 0,
+                                                  .trans_queue_depth = 0,
+                                                  .flags = {
+                                                      .enable_internal_pullup = true,
+                                                  }};
             esp_err_t manual_ret = i2c_new_master_bus(&bus_config, &i2c_handle);
             if (manual_ret != ESP_OK) {
-                ESP_LOGE(TAG, "Failed to create manual I2C master bus: %s", esp_err_to_name(manual_ret));
+                ESP_LOGE(
+                    TAG, "Failed to create manual I2C master bus: %s", esp_err_to_name(manual_ret));
                 return manual_ret;
             }
             ESP_LOGI(TAG, "Manual I2C master bus created successfully on port I2C_NUM_0");
@@ -214,10 +204,12 @@ esp_err_t DisplayManager::initTouchController()
         .scl_speed_hz = WAVEX_ESP_I2C_SPEED_HZ,
     };
 
-    ESP_LOGI(TAG, "Creating I2C panel IO with device address 0x%02X at speed %lu Hz", 
-             ESP_LCD_TOUCH_IO_I2C_GT911_ADDRESS, WAVEX_ESP_I2C_SPEED_HZ);
+    ESP_LOGI(TAG,
+             "Creating I2C panel IO with device address 0x%02X at speed %lu Hz",
+             ESP_LCD_TOUCH_IO_I2C_GT911_ADDRESS,
+             WAVEX_ESP_I2C_SPEED_HZ);
     esp_lcd_panel_io_handle_t io_handle = nullptr;
-    
+
     esp_err_t ret = esp_lcd_new_panel_io_i2c(i2c_handle, &io_config, &io_handle);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to create I2C panel IO: %s", esp_err_to_name(ret));
@@ -237,31 +229,28 @@ esp_err_t DisplayManager::initTouchController()
         ESP_LOGE(TAG, "Failed to create GT911 touch controller: %s", esp_err_to_name(ret));
         return ret;
     }
-    
+
     ESP_LOGI(TAG, "GT911 touch controller initialised successfully");
     return ESP_OK;
 }
 
-esp_err_t DisplayManager::startLvglTick()
-{
+esp_err_t DisplayManager::startLvglTick() {
     if (lvgl_tick_timer_handle_) {
         return ESP_OK;
     }
 
-    const esp_timer_create_args_t timer_args = {
-        .callback = &lvgl_tick_cb,
-        .name = "lvgl_tick"
-    };
+    const esp_timer_create_args_t timer_args = {.callback = &lvgl_tick_cb, .name = "lvgl_tick"};
 
-    ESP_RETURN_ON_ERROR(esp_timer_create(&timer_args, &lvgl_tick_timer_handle_), TAG,
+    ESP_RETURN_ON_ERROR(esp_timer_create(&timer_args, &lvgl_tick_timer_handle_),
+                        TAG,
                         "Failed to create LVGL tick timer");
-    ESP_RETURN_ON_ERROR(esp_timer_start_periodic(lvgl_tick_timer_handle_, LV_TICK_PERIOD_MS * 1000), TAG,
+    ESP_RETURN_ON_ERROR(esp_timer_start_periodic(lvgl_tick_timer_handle_, LV_TICK_PERIOD_MS * 1000),
+                        TAG,
                         "Failed to start LVGL tick timer");
     return ESP_OK;
 }
 
-void DisplayManager::stopLvglTick()
-{
+void DisplayManager::stopLvglTick() {
     if (!lvgl_tick_timer_handle_) {
         return;
     }
@@ -271,5 +260,4 @@ void DisplayManager::stopLvglTick()
     lvgl_tick_timer_handle_ = nullptr;
 }
 
-} // namespace wavex_ui
-
+}  // namespace wavex_ui

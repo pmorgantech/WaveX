@@ -1,21 +1,23 @@
 // WaveX UI Existing Pages Integration
 #pragma once
 
-#include "ui_page.h"
-#include "ui_navigator.h"
-#include "input_event.h"
 #include <lvgl.h>
+
+#include "input_event.h"
+#include "ui_navigator.h"
+#include "ui_page.h"
+
 #include <memory>
 
 namespace wavex_ui {
 
 /**
  * @brief Diagnostics page wrapper for navigation system
- * 
+ *
  * Wraps the existing diagnostics page to work with the navigation system.
  */
 class UIDiagnosticsPage : public UIPage {
-public:
+   public:
     const char* name() const override { return "Diagnostics"; }
 
     void onEnter(lv_obj_t* parent) override;
@@ -23,7 +25,7 @@ public:
     void onInput(const InputEvent& evt) override;
     std::array<Softkey, NUM_SOFTKEYS> getSoftkeys() override;
 
-private:
+   private:
     lv_obj_t* diagnostics_container_ = nullptr;
 };
 
@@ -32,4 +34,4 @@ private:
  */
 std::shared_ptr<UIPage> createDiagnosticsPage();
 
-} // namespace wavex_ui
+}  // namespace wavex_ui

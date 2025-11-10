@@ -34,7 +34,7 @@ Open `pin_config.h` to see the complete pin mapping for both platforms:
 #define WAVEX_ESP_SPI_MISO      24   // J3-23: SPI3 MISO from Daisy
 #define WAVEX_ESP_SPI_CS        26   // J3-25: SPI3 CS to Daisy
 
-// Daisy Seed Backend Pin Assignments  
+// Daisy Seed Backend Pin Assignments
 #define WAVEX_DAISY_SPI_SCK     10   // D10: SPI1_SCK (clock from ESP32)
 #define WAVEX_DAISY_SPI_MOSI    11   // D11: SPI1_MOSI (data from ESP32)
 #define WAVEX_DAISY_SPI_MISO    12   // D12: SPI1_MISO (data to ESP32)
@@ -108,7 +108,7 @@ The system includes built-in validation:
 // ESP32 pins must be 0-48
 #define WAVEX_VALIDATE_ESP_PIN(pin) ((pin) >= 0 && (pin) <= 48)
 
-// Daisy pins must be 0-30  
+// Daisy pins must be 0-30
 #define WAVEX_VALIDATE_DAISY_PIN(pin) ((pin) >= 0 && (pin) <= 30)
 ```
 

@@ -3,19 +3,20 @@
 
 #include "ui_page.h"
 #include "ui_softkey_bar.h"
-#include <stack>
+
 #include <memory>
+#include <stack>
 
 namespace wavex_ui {
 
 /**
  * @brief Navigation manager with stack-based page navigation
- * 
+ *
  * Manages a stack of UI pages with push/pop operations.
  * Automatically handles page lifecycle (onEnter/onExit) and softkey updates.
  */
 class UINavigator {
-public:
+   public:
     /**
      * @brief Get the singleton instance
      */
@@ -61,7 +62,7 @@ public:
      */
     size_t depth() const { return stack_.size(); }
 
-private:
+   private:
     UINavigator() = default;
     ~UINavigator() = default;
 
@@ -74,4 +75,4 @@ private:
     SoftkeyBar softkeyBar_;
 };
 
-} // namespace wavex_ui
+}  // namespace wavex_ui

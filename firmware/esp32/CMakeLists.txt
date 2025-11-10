@@ -3,15 +3,15 @@
 cmake_minimum_required(VERSION 3.16)
 
 # Add the component directories
-set(EXTRA_COMPONENT_DIRS 
+set(EXTRA_COMPONENT_DIRS
     "components"
     "../shared"
 )
 
 # Exclude unnecessary components to reduce build size and prevent compilation errors
-set(EXCLUDE_COMPONENTS 
+set(EXCLUDE_COMPONENTS
     "esp_http_server"
-    "esp_http_client" 
+    "esp_http_client"
     "esp_https_ota"
     "esp_https_server"
     "esp_wifi"

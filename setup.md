@@ -1,6 +1,6 @@
 Below is a one-stop, **drop-in dev-container guide** that turns any VS Code install into a reproducible build-&-debug cockpit for your dual-MCU sampler/synth:
 
-* **ESP32-S3-N16R8 side:** ESP-IDF, LVGL (ST7796S display + XPT2046 touch), SD-MMC, USB storage/MIDI, SPI link to the Daisy.
+* **ESP32-P4-WIFI6 side:** ESP-IDF, LVGL (MIPI-DSI display + GT911 touch), SD-MMC, USB storage/MIDI, SPI link to the Daisy.
 * **Daisy Seed side:** libDaisy + DaisySP on an STM32H750, SPI bridge back to the ESP32, I²S audio out.
 
 Everything lives in one Docker image, so new contributors clone the repo, hit **“Re-open in Container”**, and start coding—no tool-chain hunts, no “works on my machine.”
@@ -186,7 +186,7 @@ Building both ESP32 Frontend and Daisy Seed Backend...
 ========================================================================
                     🔧 BUILDING ESP32 FRONTEND
 ========================================================================
-Target: ESP32-S3 (UI, Controls, MIDI, Communication)
+Target: ESP32-P4 (UI, Controls, MIDI, Communication)
 Toolchain: ESP-IDF v5.2
 ------------------------------------------------------------------------
 [ESP-IDF build output]
@@ -206,14 +206,14 @@ Toolchain: ARM GCC
 ========================================================================
 ```
 
-### ESP32-S3 Frontend (Individual Commands)
+### ESP32-P4 Frontend (Individual Commands)
 
 | Step          | Command                                | Notes                                                                           |
 | ------------- | -------------------------------------- | ------------------------------------------------------------------------------- |
-| **Configure** | `idf.py set-target esp32s3`            | Done once.                                                                      |
+| **Configure** | `idf.py set-target esp32p4`            | Done once.                                                                      |
 | **Build**     | `idf.py build`                         | Uses ESP-IDF's CMake build system ([docs.espressif.com][8])                          |
 | **Flash**     | `idf.py -p /dev/ttyACM0 flash monitor` | Works inside container when `--device` passed.                                  |
-| **DFU alt**   | `idf.py dfu-flash`                     | S3 can flash via native USB DFU if UART pins are busy ([docs.espressif.com][9]) |
+| **DFU alt**   | `idf.py dfu-flash`                     | P4 can flash via native USB DFU if UART pins are busy ([docs.espressif.com][9]) |
 
 ### Daisy Seed Backend (Individual Commands)
 
@@ -230,7 +230,7 @@ Toolchain: ARM GCC
   - Component-based architecture with automatic dependency resolution
   - Built-in support for partitions, bootloader, and flash configuration
   - Integrated menuconfig for project configuration
-  
+
 - **Daisy Backend**: Uses traditional Make with libDaisy Makefile templates
   - Direct integration with libDaisy and DaisySP libraries
   - Optimized compiler flags for STM32H750 performance
@@ -245,8 +245,8 @@ Toolchain: ARM GCC
 
 ## Display, touch & peripherals
 
-* **LVGL 9** runs fine on ESP32-S3 + ST7796S at 40 MHz SPI; see official LVGL-ESP32 examples ([hackster.io][12]).
-* XPT2046 driver is in the ESP-IDF component registry; add `pm add xpt2046` and wire MISO/MOSI-shared SPI bus ([hackster.io][12]).
+* **LVGL 9** runs fine on ESP32-P4 + MIPI-DSI display; see official LVGL-ESP32 examples ([hackster.io][12]).
+* GT911 capacitive touch controller uses I2C interface with interrupt support for reliable touch detection.
 * SD-MMC and USB-MSC sample projects (`storage/sd_card` and `usb/host/msc`) are included in ESP-IDF 5.x ([docs.espressif.com][8]).
 * USB MIDI uses the TinyUSB class already wrapped by ESP-IDF (`tinyusb_midi_streaming` example) ([docs.espressif.com][8]).
 * DaisySP handles oscillators & sample playback; the ESP32 streams commands over SPI (8- or 16-bit frames) using the `spi_master` half-duplex driver ([github.com][10]).
@@ -303,9 +303,8 @@ Commit the `.devcontainer` folder, push, and tell collaborators “Docker + VS C
 [6]: https://code.visualstudio.com/docs/devcontainers/containers?utm_source=chatgpt.com "Developing inside a Container - Visual Studio Code"
 [7]: https://code.visualstudio.com/docs/devcontainers/tutorial?utm_source=chatgpt.com "Dev Containers tutorial - Visual Studio Code"
 [8]: https://docs.espressif.com/projects/vscode-esp-idf-extension/en/latest/additionalfeatures/docker-container.html?utm_source=chatgpt.com "Using Docker Container - - — ESP-IDF Extension for VSCode latest ..."
-[9]: https://docs.espressif.com/projects/esp-idf/en/v5.0.2/esp32s3/api-guides/dfu.html?utm_source=chatgpt.com "Device Firmware Upgrade via USB - ESP32-S3"
+[9]: https://docs.espressif.com/projects/esp-idf/en/v5.0.2/esp32p4/api-guides/dfu.html?utm_source=chatgpt.com "Device Firmware Upgrade via USB - ESP32-P4"
 [10]: https://github.com/electro-smith/libDaisy?utm_source=chatgpt.com "electro-smith/libDaisy: Hardware Library for the Daisy Audio Platform"
 [11]: https://forum.electro-smith.com/t/seed-bootloader-dfu-util/3743?utm_source=chatgpt.com "Seed bootloader + dfu-util - Software Development - Daisy Forums"
 [12]: https://www.hackster.io/leoribg/esp-idf-in-docker-dev-container-e8510f?utm_source=chatgpt.com "ESP-IDF in Docker Dev Container - Hackster.io"
 [13]: https://forum.electro-smith.com/t/libdaisy-automated-hardware-tests/1686?utm_source=chatgpt.com "libDaisy: Automated hardware tests - Daisy Forums"
-

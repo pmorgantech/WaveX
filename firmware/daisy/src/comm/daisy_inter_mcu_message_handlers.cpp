@@ -4,11 +4,10 @@
 
 #include "config/logging_config.h"
 #include "config/uart_debug_config.h"
-#include "spi_protocol/protocol.h"
+#include "daisy_seed.h"
 #include "daisy_spi_filesystem.h"
 #include "daisy_uart_link.h"
-
-#include "daisy_seed.h"
+#include "spi_protocol/protocol.h"
 
 #if WAVEX_SPI_LINK_ENABLED
 #include "daisy_spi_link.h"
@@ -46,45 +45,68 @@ static void HandleErrorMessage(const uint8_t* payload, size_t payload_size);
 void ProcessInterMcuMessage(uint8_t msg_type,
                             uint16_t sequence_number,
                             const uint8_t* payload,
-                            size_t payload_size)
-{
+                            size_t payload_size) {
     if (s_hw) {
-        s_hw->PrintLine("DAISY: Processing message - msg_type=0x%02X, seq=%u, payload_size=%d bytes",
-                        msg_type, sequence_number, static_cast<int>(payload_size));
+        s_hw->PrintLine(
+            "DAISY: Processing message - msg_type=0x%02X, seq=%u, payload_size=%d bytes",
+            msg_type,
+            sequence_number,
+            static_cast<int>(payload_size));
         if (payload && payload_size > 0) {
             const size_t preview = payload_size < 8 ? payload_size : 8;
             switch (preview) {
                 default:
                 case 8:
                     s_hw->PrintLine("DAISY: Payload bytes: %02X %02X %02X %02X %02X %02X %02X %02X",
-                                    payload[0], payload[1], payload[2], payload[3],
-                                    payload[4], payload[5], payload[6], payload[7]);
+                                    payload[0],
+                                    payload[1],
+                                    payload[2],
+                                    payload[3],
+                                    payload[4],
+                                    payload[5],
+                                    payload[6],
+                                    payload[7]);
                     break;
                 case 7:
                     s_hw->PrintLine("DAISY: Payload bytes: %02X %02X %02X %02X %02X %02X %02X",
-                                    payload[0], payload[1], payload[2], payload[3],
-                                    payload[4], payload[5], payload[6]);
+                                    payload[0],
+                                    payload[1],
+                                    payload[2],
+                                    payload[3],
+                                    payload[4],
+                                    payload[5],
+                                    payload[6]);
                     break;
                 case 6:
                     s_hw->PrintLine("DAISY: Payload bytes: %02X %02X %02X %02X %02X %02X",
-                                    payload[0], payload[1], payload[2], payload[3],
-                                    payload[4], payload[5]);
+                                    payload[0],
+                                    payload[1],
+                                    payload[2],
+                                    payload[3],
+                                    payload[4],
+                                    payload[5]);
                     break;
                 case 5:
                     s_hw->PrintLine("DAISY: Payload bytes: %02X %02X %02X %02X %02X",
-                                    payload[0], payload[1], payload[2], payload[3], payload[4]);
+                                    payload[0],
+                                    payload[1],
+                                    payload[2],
+                                    payload[3],
+                                    payload[4]);
                     break;
                 case 4:
                     s_hw->PrintLine("DAISY: Payload bytes: %02X %02X %02X %02X",
-                                    payload[0], payload[1], payload[2], payload[3]);
+                                    payload[0],
+                                    payload[1],
+                                    payload[2],
+                                    payload[3]);
                     break;
                 case 3:
-                    s_hw->PrintLine("DAISY: Payload bytes: %02X %02X %02X",
-                                    payload[0], payload[1], payload[2]);
+                    s_hw->PrintLine(
+                        "DAISY: Payload bytes: %02X %02X %02X", payload[0], payload[1], payload[2]);
                     break;
                 case 2:
-                    s_hw->PrintLine("DAISY: Payload bytes: %02X %02X",
-                                    payload[0], payload[1]);
+                    s_hw->PrintLine("DAISY: Payload bytes: %02X %02X", payload[0], payload[1]);
                     break;
                 case 1:
                     s_hw->PrintLine("DAISY: Payload bytes: %02X", payload[0]);
@@ -170,55 +192,74 @@ void ProcessInterMcuMessage(uint8_t msg_type,
 // ---- Individual handler implementations ----
 
 static void HandleSyncMessage(const uint8_t* payload, size_t payload_size) {
-    if (s_hw) s_hw->PrintLine("DAISY: HandleSyncMessage called - payload_size=%d", (int)payload_size);
+    if (s_hw)
+        s_hw->PrintLine("DAISY: HandleSyncMessage called - payload_size=%d", (int)payload_size);
 }
 
 static void HandleControlChangeMessage(const uint8_t* payload, size_t payload_size) {
-    if (s_hw) s_hw->PrintLine("DAISY: HandleControlChangeMessage called - payload_size=%d", (int)payload_size);
+    if (s_hw)
+        s_hw->PrintLine("DAISY: HandleControlChangeMessage called - payload_size=%d",
+                        (int)payload_size);
 }
 
 static void HandleNoteMessage(const uint8_t* payload, size_t payload_size) {
-    if (s_hw) s_hw->PrintLine("DAISY: HandleNoteMessage called - payload_size=%d", (int)payload_size);
+    if (s_hw)
+        s_hw->PrintLine("DAISY: HandleNoteMessage called - payload_size=%d", (int)payload_size);
 }
 
 static void HandleNoteOffMessage(const uint8_t* payload, size_t payload_size) {
-    if (s_hw) s_hw->PrintLine("DAISY: HandleNoteOffMessage called - payload_size=%d", (int)payload_size);
+    if (s_hw)
+        s_hw->PrintLine("DAISY: HandleNoteOffMessage called - payload_size=%d", (int)payload_size);
 }
 
 static void HandleSampleLoadMessage(const uint8_t* payload, size_t payload_size) {
-    if (s_hw) s_hw->PrintLine("DAISY: HandleSampleLoadMessage called - payload_size=%d", (int)payload_size);
+    if (s_hw)
+        s_hw->PrintLine("DAISY: HandleSampleLoadMessage called - payload_size=%d",
+                        (int)payload_size);
 }
 
 static void HandleSampleControlMessage(const uint8_t* payload, size_t payload_size) {
-    if (s_hw) s_hw->PrintLine("DAISY: HandleSampleControlMessage called - payload_size=%d", (int)payload_size);
+    if (s_hw)
+        s_hw->PrintLine("DAISY: HandleSampleControlMessage called - payload_size=%d",
+                        (int)payload_size);
 }
 
 static void HandlePreviewRequestMessage(const uint8_t* payload, size_t payload_size) {
-    if (s_hw) s_hw->PrintLine("DAISY: HandlePreviewRequestMessage called - payload_size=%d", (int)payload_size);
+    if (s_hw)
+        s_hw->PrintLine("DAISY: HandlePreviewRequestMessage called - payload_size=%d",
+                        (int)payload_size);
 }
 
 static void HandleDataRequestMessage(const uint8_t* payload, size_t payload_size) {
-    if (s_hw) s_hw->PrintLine("DAISY: HandleDataRequestMessage called - payload_size=%d", (int)payload_size);
+    if (s_hw)
+        s_hw->PrintLine("DAISY: HandleDataRequestMessage called - payload_size=%d",
+                        (int)payload_size);
 }
 
 static void HandleMeterPushMessage(const uint8_t* payload, size_t payload_size) {
-    if (s_hw) s_hw->PrintLine("DAISY: HandleMeterPushMessage called - payload_size=%d", (int)payload_size);
+    if (s_hw)
+        s_hw->PrintLine("DAISY: HandleMeterPushMessage called - payload_size=%d",
+                        (int)payload_size);
 }
 
 static void HandleWaveChunkMessage(const uint8_t* payload, size_t payload_size) {
-    if (s_hw) s_hw->PrintLine("DAISY: HandleWaveChunkMessage called - payload_size=%d", (int)payload_size);
+    if (s_hw)
+        s_hw->PrintLine("DAISY: HandleWaveChunkMessage called - payload_size=%d",
+                        (int)payload_size);
 }
 
 static void HandleHeartbeatMessage(const uint8_t* payload, size_t payload_size) {
-    if (s_hw) s_hw->PrintLine("DAISY: HandleHeartbeatMessage called - payload_size=%d", (int)payload_size);
+    if (s_hw)
+        s_hw->PrintLine("DAISY: HandleHeartbeatMessage called - payload_size=%d",
+                        (int)payload_size);
 }
 
 // Browse request handler - transport agnostic (works via SPI or UART)
 // Requires filesystem support and inter-MCU communication to be enabled
-static void HandleBrowseRequestMessage(const uint8_t* payload, size_t payload_size)
-{
+static void HandleBrowseRequestMessage(const uint8_t* payload, size_t payload_size) {
     if (s_hw) {
-        s_hw->PrintLine("DAISY: HandleBrowseRequestMessage called - payload_size=%d", (int)payload_size);
+        s_hw->PrintLine("DAISY: HandleBrowseRequestMessage called - payload_size=%d",
+                        (int)payload_size);
     }
     UART_LOGI("daisy_uart", "BROWSE_REQ received: payload_size=%u", (unsigned)payload_size);
 
@@ -233,7 +274,8 @@ static void HandleBrowseRequestMessage(const uint8_t* payload, size_t payload_si
     if (s_hw) {
         s_hw->PrintLine("DAISY: Parsed start_index=%d, path_ptr='%s'", start_index, path_ptr);
     }
-    UART_LOGI("daisy_uart", "BROWSE_REQ: start_index=%u path='%s'", (unsigned)start_index, path_ptr);
+    UART_LOGI(
+        "daisy_uart", "BROWSE_REQ: start_index=%u path='%s'", (unsigned)start_index, path_ptr);
 
     char path[96] = {0};
     size_t path_len = strlen(path_ptr);
@@ -243,35 +285,46 @@ static void HandleBrowseRequestMessage(const uint8_t* payload, size_t payload_si
     memcpy(path, path_ptr, path_len);
     path[path_len] = '\0';
 
-    uint8_t max_entries = 20; // Default to 20 entries
+    uint8_t max_entries = 20;  // Default to 20 entries
 
     if (s_hw) {
-        s_hw->PrintLine("DAISY: Calling ProcessBrowseRequest with path='%s', start_index=%d, max_entries=%d",
-                        path, start_index, max_entries);
+        s_hw->PrintLine(
+            "DAISY: Calling ProcessBrowseRequest with path='%s', start_index=%d, max_entries=%d",
+            path,
+            start_index,
+            max_entries);
     }
-    UART_LOGI("daisy_uart", "BROWSE_REQ processing: path='%s' start=%u max=%u", path, (unsigned)start_index, max_entries);
+    UART_LOGI("daisy_uart",
+              "BROWSE_REQ processing: path='%s' start=%u max=%u",
+              path,
+              (unsigned)start_index,
+              max_entries);
 
     WaveX::Comm::ProcessBrowseRequest(path, start_index, max_entries);
 }
 
 static void HandleBrowseResponseMessage(const uint8_t* payload, size_t payload_size) {
-    if (s_hw) s_hw->PrintLine("DAISY: HandleBrowseResponseMessage called - payload_size=%d", (int)payload_size);
+    if (s_hw)
+        s_hw->PrintLine("DAISY: HandleBrowseResponseMessage called - payload_size=%d",
+                        (int)payload_size);
 }
 
 // Sample play request handler - requires inter-MCU comm and audio/filesystem support
-static void HandleSamplePlayRequestMessage(const uint8_t* payload, size_t payload_size)
-{
-    if (s_hw) s_hw->PrintLine("DAISY: HandleSamplePlayRequestMessage called - payload_size=%d", (int)payload_size);
+static void HandleSamplePlayRequestMessage(const uint8_t* payload, size_t payload_size) {
+    if (s_hw)
+        s_hw->PrintLine("DAISY: HandleSamplePlayRequestMessage called - payload_size=%d",
+                        (int)payload_size);
     if (payload_size > 0 && payload) {
         const char* file_path = reinterpret_cast<const char*>(payload);
         WaveX::Comm::ProcessSamplePlayRequest(file_path);
     }
 }
 
-// Sample stop request handler - requires inter-MCU comm and audio support  
-static void HandleSampleStopRequestMessage(const uint8_t* payload, size_t payload_size)
-{
-    if (s_hw) s_hw->PrintLine("DAISY: HandleSampleStopRequestMessage called - payload_size=%d", (int)payload_size);
+// Sample stop request handler - requires inter-MCU comm and audio support
+static void HandleSampleStopRequestMessage(const uint8_t* payload, size_t payload_size) {
+    if (s_hw)
+        s_hw->PrintLine("DAISY: HandleSampleStopRequestMessage called - payload_size=%d",
+                        (int)payload_size);
     if (!payload || payload_size < sizeof(WaveX::Protocol::SampleStopReqMessage)) {
         return;
     }
@@ -280,19 +333,23 @@ static void HandleSampleStopRequestMessage(const uint8_t* payload, size_t payloa
 }
 
 static void HandleSampleStatusMessage(const uint8_t* payload, size_t payload_size) {
-    if (s_hw) s_hw->PrintLine("DAISY: HandleSampleStatusMessage called - payload_size=%d", (int)payload_size);
+    if (s_hw)
+        s_hw->PrintLine("DAISY: HandleSampleStatusMessage called - payload_size=%d",
+                        (int)payload_size);
 }
 
 // Sample play index request handler - requires inter-MCU comm and audio/filesystem support
-static void HandleSamplePlayIndexRequestMessage(const uint8_t* payload, size_t payload_size)
-{
-    if (s_hw) s_hw->PrintLine("DAISY: HandleSamplePlayIndexRequestMessage called - payload_size=%d", (int)payload_size);
+static void HandleSamplePlayIndexRequestMessage(const uint8_t* payload, size_t payload_size) {
+    if (s_hw)
+        s_hw->PrintLine("DAISY: HandleSamplePlayIndexRequestMessage called - payload_size=%d",
+                        (int)payload_size);
 
     if (!payload || payload_size < sizeof(WaveX::Protocol::SamplePlayIndexMessage)) {
         if (s_hw) {
-            s_hw->PrintLine("DAISY: Invalid payload size for SamplePlayIndexMessage: %d (expected %d)",
-                            (int)payload_size,
-                            (int)sizeof(WaveX::Protocol::SamplePlayIndexMessage));
+            s_hw->PrintLine(
+                "DAISY: Invalid payload size for SamplePlayIndexMessage: %d (expected %d)",
+                (int)payload_size,
+                (int)sizeof(WaveX::Protocol::SamplePlayIndexMessage));
         }
         return;
     }
@@ -308,22 +365,26 @@ static void HandleSamplePlayIndexRequestMessage(const uint8_t* payload, size_t p
 }
 
 static void HandleSampleGetPathRequestMessage(const uint8_t* payload, size_t payload_size) {
-    if (s_hw) s_hw->PrintLine("DAISY: HandleSampleGetPathRequestMessage called - payload_size=%d", (int)payload_size);
+    if (s_hw)
+        s_hw->PrintLine("DAISY: HandleSampleGetPathRequestMessage called - payload_size=%d",
+                        (int)payload_size);
 }
 
 static void HandleSampleGetPathResponseMessage(const uint8_t* payload, size_t payload_size) {
-    if (s_hw) s_hw->PrintLine("DAISY: HandleSampleGetPathResponseMessage called - payload_size=%d", (int)payload_size);
+    if (s_hw)
+        s_hw->PrintLine("DAISY: HandleSampleGetPathResponseMessage called - payload_size=%d",
+                        (int)payload_size);
 }
 
 static void HandleAckMessage(const uint8_t* payload, size_t payload_size) {
-    if (s_hw) s_hw->PrintLine("DAISY: HandleAckMessage called - payload_size=%d", (int)payload_size);
+    if (s_hw)
+        s_hw->PrintLine("DAISY: HandleAckMessage called - payload_size=%d", (int)payload_size);
 }
 
 static void HandleErrorMessage(const uint8_t* payload, size_t payload_size) {
-    if (s_hw) s_hw->PrintLine("DAISY: HandleErrorMessage called - payload_size=%d", (int)payload_size);
+    if (s_hw)
+        s_hw->PrintLine("DAISY: HandleErrorMessage called - payload_size=%d", (int)payload_size);
 }
 
-} // namespace Comm
-} // namespace WaveX
-
-
+}  // namespace Comm
+}  // namespace WaveX

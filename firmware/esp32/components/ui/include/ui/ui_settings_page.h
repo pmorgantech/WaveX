@@ -1,14 +1,16 @@
 // WaveX UI Settings Page
 #pragma once
 
-#include "ui_page.h"
-#include "ui_navigator.h"
-#include "input_event.h"
 #include <lvgl.h>
-#include <vector>
-#include <string>
-#include <memory>
+
+#include "input_event.h"
+#include "ui_navigator.h"
+#include "ui_page.h"
+
 #include <functional>
+#include <memory>
+#include <string>
+#include <vector>
 
 namespace wavex_ui {
 
@@ -25,18 +27,17 @@ struct Setting {
 
 /**
  * @brief Settings page for parameter editing
- * 
+ *
  * Displays a list of settings with encoder-based value adjustment.
  * Each setting has a label, current value, and min/max range.
  */
 class UISettingsPage : public UIPage {
-public:
+   public:
     /**
      * @brief Constructor
      * @param title Page title
      */
-    explicit UISettingsPage(std::string title)
-        : title_(std::move(title)) {}
+    explicit UISettingsPage(std::string title) : title_(std::move(title)) {}
 
     /**
      * @brief Get page name
@@ -51,8 +52,11 @@ public:
      * @param maxValue Maximum value
      * @param onChange Callback when value changes
      */
-    void addSetting(const std::string& label, int value, int minValue, int maxValue,
-                   std::function<void(int)> onChange) {
+    void addSetting(const std::string& label,
+                    int value,
+                    int minValue,
+                    int maxValue,
+                    std::function<void(int)> onChange) {
         settings_.push_back({label, value, minValue, maxValue, std::move(onChange)});
     }
 
@@ -76,7 +80,7 @@ public:
      */
     std::array<Softkey, NUM_SOFTKEYS> getSoftkeys() override;
 
-private:
+   private:
     std::string title_;
     std::vector<Setting> settings_;
     int selectedSetting_ = 0;
@@ -115,4 +119,4 @@ private:
     void updateSetting(int settingIndex, int newValue);
 };
 
-} // namespace wavex_ui
+}  // namespace wavex_ui

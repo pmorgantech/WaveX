@@ -43,7 +43,7 @@ set(COMPONENT_INCLUDE_DIRS
 idf_component_register(
     SRCS ${COMPONENT_SRCS}
     INCLUDE_DIRS "include" ${COMPONENT_INCLUDE_DIRS}
-    REQUIRES 
+    REQUIRES
         lvgl
         esp_lvgl_port
         esp_lcd_touch_gt911

@@ -1,11 +1,11 @@
 /**
  * @file hardware_config.h
  * @brief WaveX Hardware Component Configuration
- * 
+ *
  * This file defines ALL hardware component enable/disable macros and configuration
  * options for the WaveX project. This is the single source of truth for all
  * hardware feature flags.
- * 
+ *
  * Components can be completely disabled at compile time by setting their
  * respective _ENABLED macro to 0, or runtime controlled via additional
  * configuration options.
@@ -172,133 +172,132 @@
 
 // Audio Engine Configuration
 #if WAVEX_AUDIO_ENGINE_ENABLED
-    // Set to 1 to enable audio output, 0 to mute (write zeros to output)
-    #ifndef WAVEX_AUDIO_OUTPUT_ENABLED
-    #define WAVEX_AUDIO_OUTPUT_ENABLED 1
-    #endif
-    
-    // Set to 1 to enable audio input processing, 0 to ignore input
-    #ifndef WAVEX_AUDIO_INPUT_ENABLED
-    #define WAVEX_AUDIO_INPUT_ENABLED 1
-    #endif
-    
-    // Audio sample rate configuration
-    #ifndef WAVEX_AUDIO_SAMPLE_RATE
-    #define WAVEX_AUDIO_SAMPLE_RATE 44100
-    #endif
-    
-    // Audio block size configuration
-    #ifndef WAVEX_AUDIO_BLOCK_SIZE
-    #define WAVEX_AUDIO_BLOCK_SIZE 48
-    #endif
-    
-    // Audio buffer configuration
-    #ifndef WAVEX_AUDIO_BUFFER_SIZE
-    #define WAVEX_AUDIO_BUFFER_SIZE 256
-    #endif
-    
-    // Audio processing priority
-    #ifndef WAVEX_AUDIO_PRIORITY
-    #define WAVEX_AUDIO_PRIORITY 0
-    #endif
+// Set to 1 to enable audio output, 0 to mute (write zeros to output)
+#ifndef WAVEX_AUDIO_OUTPUT_ENABLED
+#define WAVEX_AUDIO_OUTPUT_ENABLED 1
+#endif
 
-    // Interval for sending meter updates over SPI (ms)
-    #ifndef WAVEX_AUDIO_METERS_SEND_INTERVAL_MS
-    #define WAVEX_AUDIO_METERS_SEND_INTERVAL_MS 50
-    #endif
+// Set to 1 to enable audio input processing, 0 to ignore input
+#ifndef WAVEX_AUDIO_INPUT_ENABLED
+#define WAVEX_AUDIO_INPUT_ENABLED 1
+#endif
+
+// Audio sample rate configuration
+#ifndef WAVEX_AUDIO_SAMPLE_RATE
+#define WAVEX_AUDIO_SAMPLE_RATE 44100
+#endif
+
+// Audio block size configuration
+#ifndef WAVEX_AUDIO_BLOCK_SIZE
+#define WAVEX_AUDIO_BLOCK_SIZE 48
+#endif
+
+// Audio buffer configuration
+#ifndef WAVEX_AUDIO_BUFFER_SIZE
+#define WAVEX_AUDIO_BUFFER_SIZE 256
+#endif
+
+// Audio processing priority
+#ifndef WAVEX_AUDIO_PRIORITY
+#define WAVEX_AUDIO_PRIORITY 0
+#endif
+
+// Interval for sending meter updates over SPI (ms)
+#ifndef WAVEX_AUDIO_METERS_SEND_INTERVAL_MS
+#define WAVEX_AUDIO_METERS_SEND_INTERVAL_MS 50
+#endif
 #endif
 
 // DAC CV Outputs Configuration
 #if WAVEX_DAISY_CV_OUTPUTS_ENABLED
-    // DAC resolution configuration
-    #ifndef WAVEX_DAC_RESOLUTION
-    #define WAVEX_DAC_RESOLUTION 12
-    #endif
-    
-    // DAC reference voltage
-    #ifndef WAVEX_DAC_REFERENCE_VOLTAGE
-    #define WAVEX_DAC_REFERENCE_VOLTAGE 3.3f
-    #endif
-    
-    // DAC output range
-    #ifndef WAVEX_DAC_OUTPUT_MIN
-    #define WAVEX_DAC_OUTPUT_MIN 0.0f
-    #endif
-    
-    #ifndef WAVEX_DAC_OUTPUT_MAX
-    #define WAVEX_DAC_OUTPUT_MAX 3.3f
-    #endif
-    
-    // DAC update rate (Hz)
-    #ifndef WAVEX_DAC_UPDATE_RATE
-    #define WAVEX_DAC_UPDATE_RATE 1000
-    #endif
+// DAC resolution configuration
+#ifndef WAVEX_DAC_RESOLUTION
+#define WAVEX_DAC_RESOLUTION 12
+#endif
+
+// DAC reference voltage
+#ifndef WAVEX_DAC_REFERENCE_VOLTAGE
+#define WAVEX_DAC_REFERENCE_VOLTAGE 3.3f
+#endif
+
+// DAC output range
+#ifndef WAVEX_DAC_OUTPUT_MIN
+#define WAVEX_DAC_OUTPUT_MIN 0.0f
+#endif
+
+#ifndef WAVEX_DAC_OUTPUT_MAX
+#define WAVEX_DAC_OUTPUT_MAX 3.3f
+#endif
+
+// DAC update rate (Hz)
+#ifndef WAVEX_DAC_UPDATE_RATE
+#define WAVEX_DAC_UPDATE_RATE 1000
+#endif
 #endif
 
 // PCM1690 TDM DAC Configuration
 #if WAVEX_DAISY_TDM_DAC_ENABLED
-    // TDM configuration
-    #ifndef WAVEX_PCM1690_TDM_CHANNELS
-    #define WAVEX_PCM1690_TDM_CHANNELS 8
-    #endif
-    
-    #ifndef WAVEX_PCM1690_TDM_SLOT_WIDTH
-    #define WAVEX_PCM1690_TDM_SLOT_WIDTH 32
-    #endif
-    
-    #ifndef WAVEX_PCM1690_TDM_FRAME_SYNC_POLARITY
-    #define WAVEX_PCM1690_TDM_FRAME_SYNC_POLARITY 0  // 0 = active low, 1 = active high
-    #endif
-    
-    #ifndef WAVEX_PCM1690_TDM_BIT_CLOCK_POLARITY
-    #define WAVEX_PCM1690_TDM_BIT_CLOCK_POLARITY 0  // 0 = rising edge, 1 = falling edge
-    #endif
-    
-    // Audio format configuration
-    #ifndef WAVEX_PCM1690_AUDIO_FORMAT
-    #define WAVEX_PCM1690_AUDIO_FORMAT 0  // 0 = I2S, 1 = Left-justified, 2 = Right-justified
-    #endif
-    
-    #ifndef WAVEX_PCM1690_AUDIO_RESOLUTION
-    #define WAVEX_PCM1690_AUDIO_RESOLUTION 24  // 16, 20, or 24 bit
-    #endif
-    
-    // Volume control
-    #ifndef WAVEX_PCM1690_VOLUME_CONTROL_ENABLED
-    #define WAVEX_PCM1690_VOLUME_CONTROL_ENABLED 1
-    #endif
-    
-    #ifndef WAVEX_PCM1690_DEFAULT_VOLUME
-    #define WAVEX_PCM1690_DEFAULT_VOLUME 0  // 0 = 0dB, -127 = -127dB
-    #endif
-    
-    // Power management
-    #ifndef WAVEX_PCM1690_POWER_DOWN_ENABLED
-    #define WAVEX_PCM1690_POWER_DOWN_ENABLED 1
-    #endif
-    
-    // Mute control
-    #ifndef WAVEX_PCM1690_MUTE_ENABLED
-    #define WAVEX_PCM1690_MUTE_ENABLED 1
-    #endif
-    
-    #ifndef WAVEX_PCM1690_DEFAULT_MUTE_STATE
-    #define WAVEX_PCM1690_DEFAULT_MUTE_STATE 0  // 0 = unmuted, 1 = muted
-    #endif
+// TDM configuration
+#ifndef WAVEX_PCM1690_TDM_CHANNELS
+#define WAVEX_PCM1690_TDM_CHANNELS 8
+#endif
+
+#ifndef WAVEX_PCM1690_TDM_SLOT_WIDTH
+#define WAVEX_PCM1690_TDM_SLOT_WIDTH 32
+#endif
+
+#ifndef WAVEX_PCM1690_TDM_FRAME_SYNC_POLARITY
+#define WAVEX_PCM1690_TDM_FRAME_SYNC_POLARITY 0  // 0 = active low, 1 = active high
+#endif
+
+#ifndef WAVEX_PCM1690_TDM_BIT_CLOCK_POLARITY
+#define WAVEX_PCM1690_TDM_BIT_CLOCK_POLARITY 0  // 0 = rising edge, 1 = falling edge
+#endif
+
+// Audio format configuration
+#ifndef WAVEX_PCM1690_AUDIO_FORMAT
+#define WAVEX_PCM1690_AUDIO_FORMAT 0  // 0 = I2S, 1 = Left-justified, 2 = Right-justified
+#endif
+
+#ifndef WAVEX_PCM1690_AUDIO_RESOLUTION
+#define WAVEX_PCM1690_AUDIO_RESOLUTION 24  // 16, 20, or 24 bit
+#endif
+
+// Volume control
+#ifndef WAVEX_PCM1690_VOLUME_CONTROL_ENABLED
+#define WAVEX_PCM1690_VOLUME_CONTROL_ENABLED 1
+#endif
+
+#ifndef WAVEX_PCM1690_DEFAULT_VOLUME
+#define WAVEX_PCM1690_DEFAULT_VOLUME 0  // 0 = 0dB, -127 = -127dB
+#endif
+
+// Power management
+#ifndef WAVEX_PCM1690_POWER_DOWN_ENABLED
+#define WAVEX_PCM1690_POWER_DOWN_ENABLED 1
+#endif
+
+// Mute control
+#ifndef WAVEX_PCM1690_MUTE_ENABLED
+#define WAVEX_PCM1690_MUTE_ENABLED 1
+#endif
+
+#ifndef WAVEX_PCM1690_DEFAULT_MUTE_STATE
+#define WAVEX_PCM1690_DEFAULT_MUTE_STATE 0  // 0 = unmuted, 1 = muted
+#endif
 #endif
 
 // LCD Display Configuration
 #if WAVEX_LCD_DISPLAY_ENABLED
-    // Set to 1 to enable backlight control, 0 to keep backlight always on
-    #ifndef WAVEX_LCD_BACKLIGHT_CONTROL_ENABLED
-    #define WAVEX_LCD_BACKLIGHT_CONTROL_ENABLED 1
-    #endif
-    
-    // Set to 1 to enable touch input processing, 0 to disable touch
-    #ifndef WAVEX_LCD_TOUCH_ENABLED
-    #define WAVEX_LCD_TOUCH_ENABLED 1
-    #endif
-    
+// Set to 1 to enable backlight control, 0 to keep backlight always on
+#ifndef WAVEX_LCD_BACKLIGHT_CONTROL_ENABLED
+#define WAVEX_LCD_BACKLIGHT_CONTROL_ENABLED 1
+#endif
+
+// Set to 1 to enable touch input processing, 0 to disable touch
+#ifndef WAVEX_LCD_TOUCH_ENABLED
+#define WAVEX_LCD_TOUCH_ENABLED 1
+#endif
 
 // MIPI DSI Display Resolution (5-DSI-TOUCH-A)
 #ifndef WAVEX_LCD_WIDTH
@@ -344,79 +343,77 @@
 #define WAVEX_DSI_COLOR_FORMAT 0  // 0 = RGB565, 1 = RGB888
 #endif
 
-
-#endif // WAVEX_LCD_DISPLAY_ENABLED
-
+#endif  // WAVEX_LCD_DISPLAY_ENABLED
 
 // Encoder Configuration
 #if WAVEX_ESP_ENCODER_PCNT_ENABLED
-    // Set to 1 to enable encoder input processing, 0 to disable
-    #ifndef WAVEX_ENCODER_INPUT_ENABLED
-    #define WAVEX_ENCODER_INPUT_ENABLED 1
-    #endif
-    
-    // Set to 1 to enable encoder interrupt handling, 0 for polling only
-    #ifndef WAVEX_ENCODER_IRQ_ENABLED
-    #define WAVEX_ENCODER_IRQ_ENABLED 1
-    #endif
-    
-    // PCNT unit selection
-    #ifndef WAVEX_ENCODER_PCNT_UNIT
-    #define WAVEX_ENCODER_PCNT_UNIT PCNT_UNIT_0
-    #endif
-    
-    // PCNT channel configuration
-    #ifndef WAVEX_ENCODER_PCNT_CH_A
-    #define WAVEX_ENCODER_PCNT_CH_A PCNT_CHANNEL_0
-    #endif
-    
-    #ifndef WAVEX_ENCODER_PCNT_CH_B
-    #define WAVEX_ENCODER_PCNT_CH_B PCNT_CHANNEL_1
-    #endif
-    
-    // Encoder filter configuration
-    #ifndef WAVEX_ENCODER_FILTER_ENABLED
-    #define WAVEX_ENCODER_FILTER_ENABLED 1
-    #endif
-    
-    #ifndef WAVEX_ENCODER_FILTER_VALUE
-    #define WAVEX_ENCODER_FILTER_VALUE 100
-    #endif
+// Set to 1 to enable encoder input processing, 0 to disable
+#ifndef WAVEX_ENCODER_INPUT_ENABLED
+#define WAVEX_ENCODER_INPUT_ENABLED 1
+#endif
+
+// Set to 1 to enable encoder interrupt handling, 0 for polling only
+#ifndef WAVEX_ENCODER_IRQ_ENABLED
+#define WAVEX_ENCODER_IRQ_ENABLED 1
+#endif
+
+// PCNT unit selection
+#ifndef WAVEX_ENCODER_PCNT_UNIT
+#define WAVEX_ENCODER_PCNT_UNIT PCNT_UNIT_0
+#endif
+
+// PCNT channel configuration
+#ifndef WAVEX_ENCODER_PCNT_CH_A
+#define WAVEX_ENCODER_PCNT_CH_A PCNT_CHANNEL_0
+#endif
+
+#ifndef WAVEX_ENCODER_PCNT_CH_B
+#define WAVEX_ENCODER_PCNT_CH_B PCNT_CHANNEL_1
+#endif
+
+// Encoder filter configuration
+#ifndef WAVEX_ENCODER_FILTER_ENABLED
+#define WAVEX_ENCODER_FILTER_ENABLED 1
+#endif
+
+#ifndef WAVEX_ENCODER_FILTER_VALUE
+#define WAVEX_ENCODER_FILTER_VALUE 100
+#endif
 #endif
 
 // PCNT1 Configuration
 #if WAVEX_ESP_PCNT1_ENABLED
-    // PCNT unit selection for PCNT1
-    #ifndef WAVEX_PCNT1_UNIT
-    #define WAVEX_PCNT1_UNIT PCNT_UNIT_1
-    #endif
+// PCNT unit selection for PCNT1
+#ifndef WAVEX_PCNT1_UNIT
+#define WAVEX_PCNT1_UNIT PCNT_UNIT_1
+#endif
 
-    // PCNT channel configuration for PCNT1
-    #ifndef WAVEX_PCNT1_CH_A
-    #define WAVEX_PCNT1_CH_A PCNT_CHANNEL_0
-    #endif
+// PCNT channel configuration for PCNT1
+#ifndef WAVEX_PCNT1_CH_A
+#define WAVEX_PCNT1_CH_A PCNT_CHANNEL_0
+#endif
 
-    #ifndef WAVEX_PCNT1_CH_B
-    #define WAVEX_PCNT1_CH_B PCNT_CHANNEL_1
-    #endif
+#ifndef WAVEX_PCNT1_CH_B
+#define WAVEX_PCNT1_CH_B PCNT_CHANNEL_1
+#endif
 
-    // PCNT1 filter configuration
-    #ifndef WAVEX_PCNT1_FILTER_ENABLED
-    #define WAVEX_PCNT1_FILTER_ENABLED 1
-    #endif
+// PCNT1 filter configuration
+#ifndef WAVEX_PCNT1_FILTER_ENABLED
+#define WAVEX_PCNT1_FILTER_ENABLED 1
+#endif
 
-    #ifndef WAVEX_PCNT1_FILTER_VALUE
-    #define WAVEX_PCNT1_FILTER_VALUE 100
-    #endif
+#ifndef WAVEX_PCNT1_FILTER_VALUE
+#define WAVEX_PCNT1_FILTER_VALUE 100
+#endif
 
-    // PCNT1 interrupt thresholds
-    #ifndef WAVEX_PCNT1_THRESH_POS
-    #define WAVEX_PCNT1_THRESH_POS 4
-    #endif
+// PCNT1 interrupt thresholds
+#ifndef WAVEX_PCNT1_THRESH_POS
+#define WAVEX_PCNT1_THRESH_POS 4
+#endif
 
-    #ifndef WAVEX_PCNT1_THRESH_NEG
-    #define WAVEX_PCNT1_THRESH_NEG -4
-    #endif
+#ifndef WAVEX_PCNT1_THRESH_NEG
+#define WAVEX_PCNT1_THRESH_NEG -4
+#endif
 #endif
 // Optional LED driver configuration (e.g., TLC5947)
 #ifndef WAVEX_LED_CHANNELS
@@ -450,7 +447,7 @@
 #endif
 
 #ifndef WAVEX_ROTARY_ENCODER_TYPE
-#define WAVEX_ROTARY_ENCODER_TYPE 1   // 1 = Endless rotary via ADC
+#define WAVEX_ROTARY_ENCODER_TYPE 1  // 1 = Endless rotary via ADC
 #endif
 
 // Optional button matrix configuration (e.g., TCA8418)
@@ -468,84 +465,84 @@
 
 // USB MIDI Configuration
 #if WAVEX_ESP_USB_MIDI_ENABLED
-    // Set to 1 to enable USB MIDI input, 0 to disable
-    #ifndef WAVEX_USB_MIDI_INPUT_ENABLED
-    #define WAVEX_USB_MIDI_INPUT_ENABLED 1
-    #endif
-    
-    // Set to 1 to enable USB MIDI output, 0 to disable
-    #ifndef WAVEX_USB_MIDI_OUTPUT_ENABLED
-    #define WAVEX_USB_MIDI_OUTPUT_ENABLED 1
-    #endif
-    
-    // USB MIDI buffer sizes
-    #ifndef WAVEX_USB_MIDI_RX_BUFFER_SIZE
-    #define WAVEX_USB_MIDI_RX_BUFFER_SIZE 64
-    #endif
-    
-    #ifndef WAVEX_USB_MIDI_TX_BUFFER_SIZE
-    #define WAVEX_USB_MIDI_TX_BUFFER_SIZE 64
-    #endif
-    
-    // USB MIDI task priorities
-    #ifndef WAVEX_USB_MIDI_TASK_PRIORITY
-    #define WAVEX_USB_MIDI_TASK_PRIORITY 5
-    #endif
-    
-    #ifndef WAVEX_USB_MIDI_TASK_STACK_SIZE
-    #define WAVEX_USB_MIDI_TASK_STACK_SIZE 4096
-    #endif
+// Set to 1 to enable USB MIDI input, 0 to disable
+#ifndef WAVEX_USB_MIDI_INPUT_ENABLED
+#define WAVEX_USB_MIDI_INPUT_ENABLED 1
+#endif
+
+// Set to 1 to enable USB MIDI output, 0 to disable
+#ifndef WAVEX_USB_MIDI_OUTPUT_ENABLED
+#define WAVEX_USB_MIDI_OUTPUT_ENABLED 1
+#endif
+
+// USB MIDI buffer sizes
+#ifndef WAVEX_USB_MIDI_RX_BUFFER_SIZE
+#define WAVEX_USB_MIDI_RX_BUFFER_SIZE 64
+#endif
+
+#ifndef WAVEX_USB_MIDI_TX_BUFFER_SIZE
+#define WAVEX_USB_MIDI_TX_BUFFER_SIZE 64
+#endif
+
+// USB MIDI task priorities
+#ifndef WAVEX_USB_MIDI_TASK_PRIORITY
+#define WAVEX_USB_MIDI_TASK_PRIORITY 5
+#endif
+
+#ifndef WAVEX_USB_MIDI_TASK_STACK_SIZE
+#define WAVEX_USB_MIDI_TASK_STACK_SIZE 4096
+#endif
 #endif
 
 // 4067 Mux Configuration
 #if WAVEX_ESP_MUX_ENABLED
-    // ADC configuration for mux
-    #ifndef WAVEX_4067_ADC_UNIT
-    #define WAVEX_4067_ADC_UNIT ADC_UNIT_1
-    #endif
-    
-    #ifndef WAVEX_4067_ADC_CHANNEL
-    #define WAVEX_4067_ADC_CHANNEL ADC_CHANNEL_0
-    #endif
-    
-    // Mux address pins configuration
-    #ifndef WAVEX_4067_ADDR_PINS
-    #define WAVEX_4067_ADDR_PINS {33, 34, 35, 36}
-    #endif
-    
-    #ifndef WAVEX_4067_ENABLE_PIN
-    #define WAVEX_4067_ENABLE_PIN 37
-    #endif
+// ADC configuration for mux
+#ifndef WAVEX_4067_ADC_UNIT
+#define WAVEX_4067_ADC_UNIT ADC_UNIT_1
+#endif
+
+#ifndef WAVEX_4067_ADC_CHANNEL
+#define WAVEX_4067_ADC_CHANNEL ADC_CHANNEL_0
+#endif
+
+// Mux address pins configuration
+#ifndef WAVEX_4067_ADDR_PINS
+#define WAVEX_4067_ADDR_PINS {33, 34, 35, 36}
+#endif
+
+#ifndef WAVEX_4067_ENABLE_PIN
+#define WAVEX_4067_ENABLE_PIN 37
+#endif
 #endif
 
 // TCA8418 Button Matrix Configuration
 #if WAVEX_ESP_BUTTON_MATRIX_ENABLED
-    // I2C configuration
-    #ifndef WAVEX_TCA8418_I2C_PORT
-    #define WAVEX_TCA8418_I2C_PORT I2C_NUM_0
-    #endif
-    
-    #ifndef WAVEX_TCA8418_I2C_CLOCK_SPEED
-    #define WAVEX_TCA8418_I2C_CLOCK_SPEED (400 * 1000)  // 400 kHz
-    #endif
-    
-    // Button matrix dimensions
-    #ifndef WAVEX_TCA8418_ROWS
-    #define WAVEX_TCA8418_ROWS 8
-    #endif
-    
-    #ifndef WAVEX_TCA8418_COLUMNS
-    #define WAVEX_TCA8418_COLUMNS 8
-    #endif
-    
-    // Task configuration
-    #ifndef WAVEX_TCA8418_TASK_PRIORITY
-    #define WAVEX_TCA8418_TASK_PRIORITY 4
-    #endif
-    
-    #ifndef WAVEX_TCA8418_TASK_STACK_SIZE
-    #define WAVEX_TCA8418_TASK_STACK_SIZE 2048
-    #endif
+// I2C configuration
+#ifndef WAVEX_TCA8418_I2C_PORT
+#define WAVEX_TCA8418_I2C_PORT I2C_NUM_0
+#endif
+
+#ifndef WAVEX_TCA8418_I2C_CLOCK_SPEED
+#define WAVEX_TCA8418_I2C_CLOCK_SPEED (400 * 1000)  // 400 kHz
+#endif
+
+// Button matrix dimensions
+#ifndef WAVEX_TCA8418_ROWS
+#define WAVEX_TCA8418_ROWS 8
+#endif
+
+#ifndef WAVEX_TCA8418_COLUMNS
+#define WAVEX_TCA8418_COLUMNS 8
+#endif
+
+// Task configuration
+#ifndef WAVEX_TCA8418_TASK_PRIORITY
+#define WAVEX_TCA8418_TASK_PRIORITY 4
+#endif
+
+#ifndef WAVEX_TCA8418_TASK_STACK_SIZE
+#define WAVEX_TCA8418_TASK_STACK_SIZE 2048
+#endif
 #endif
 
 // ============================================================================
@@ -553,9 +550,9 @@
 // ============================================================================
 
 // Ensure inter-MCU link is enabled if any component that depends on it is enabled
-#if (WAVEX_AUDIO_ENGINE_ENABLED || WAVEX_DAC_CV_OUTPUTS_ENABLED || \
-     WAVEX_ENCODER_PCNT_ENABLED || WAVEX_PCNT1_ENABLED || WAVEX_4067_MUX_ENABLED || \
-     WAVEX_TCA8418_BUTTON_MATRIX_ENABLED || WAVEX_LCD_DISPLAY_ENABLED || \
-     WAVEX_USB_MIDI_ENABLED) && !WAVEX_INTER_MCU_LINK_ENABLED
-    #error "Inter-MCU link must be enabled when using components that depend on it"
+#if (WAVEX_AUDIO_ENGINE_ENABLED || WAVEX_DAC_CV_OUTPUTS_ENABLED || WAVEX_ENCODER_PCNT_ENABLED || \
+     WAVEX_PCNT1_ENABLED || WAVEX_4067_MUX_ENABLED || WAVEX_TCA8418_BUTTON_MATRIX_ENABLED ||     \
+     WAVEX_LCD_DISPLAY_ENABLED || WAVEX_USB_MIDI_ENABLED) &&                                     \
+    !WAVEX_INTER_MCU_LINK_ENABLED
+#error "Inter-MCU link must be enabled when using components that depend on it"
 #endif

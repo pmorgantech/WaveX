@@ -82,7 +82,7 @@ if (poll_counter % 100 == 0) { ... }
 
 ### **ESP32 Pins**
 - **GPIO16 (J1-14)**: SPI2 SCLK to Daisy
-- **GPIO17 (J1-10)**: SPI2 MOSI to Daisy  
+- **GPIO17 (J1-10)**: SPI2 MOSI to Daisy
 - **GPIO18 (J1-11)**: SPI2 MISO from Daisy
 - **GPIO19 (J1-15)**: SPI2 CS to Daisy
 - **GPIO8 (J3-26)**: Daisy IRQ input (rising-edge)

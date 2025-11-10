@@ -44,12 +44,12 @@ graph TB
         AUDIO --> CV_OUT
         PROT_STM --> SDIO
     end
-    
+
     SPI_M -.->|MOSI/MISO/CLK/CS| SPI_BUS
     SPI_BUS -.->|MOSI/MISO/CLK/CS| SPI_S
     SPI_S -.->|Ready Signal| IRQ_LINE
     IRQ_LINE -.->|Interrupt| SPI_M
-    
+
     subgraph "Message Types"
         MSG1[Control Change<br/>0x01]
         MSG2[Note On/Off<br/>0x02/0x03]
@@ -57,7 +57,7 @@ graph TB
         MSG4[Sample Data<br/>0x05]
         MSG5[Status/Error<br/>0x06-0xFF]
     end
-    
+
     PROT_ESP -.-> MSG1
     PROT_ESP -.-> MSG2
     PROT_ESP -.-> MSG3
@@ -105,7 +105,7 @@ graph LR
         DAC2["CV Out 25-32<br/>MCP48CMB28 DACs"]
         GATE["Gate Outputs<br/>x8 3.3V"]
     end
-    
+
     TOUCH --> ESP32
     ENCODER --> ESP32
     BUTTONS --> ESP32
@@ -153,7 +153,7 @@ graph TD
         I2C_HAL[I2C Driver<br/>Touch + Buttons]
         UART_MIDI[MIDI UART<br/>31250 baud]
     end
-    
+
     subgraph "ESP-IDF Framework"
         FREERTOS[FreeRTOS<br/>Task Scheduler]
         DRIVERS[Hardware Drivers]
@@ -218,7 +218,7 @@ graph TD
         FATFS[FAT32 File System<br/>SD Card Support]
         HAL_DRIVERS[STM32 HAL<br/>Low-level Drivers]
     end
-    
+
     VOICE_ENG --> SAMPLE_ENG
     VOICE_ENG --> EFFECT_ENG
     SAMPLE_ENG --> MIX_ENG
@@ -260,51 +260,51 @@ graph LR
         MIDI_IN[MIDI Input<br/>External Controller]
         UI_INPUT[UI Input<br/>Touch/Encoders]
     end
-    
+
     subgraph "Parameter Processing"
         PARAM_PROC[Parameter<br/>Processing]
         MOD_PROC[Modulation<br/>Processing]
         ENV_PROC[Envelope<br/>Processing]
     end
-    
+
     subgraph "Voice Processing"
         VOICE1[Voice 1<br/>Sample + Synthesis]
         VOICE2[Voice 2<br/>Sample + Synthesis]
         VOICEN[Voice N<br/>Sample + Synthesis]
     end
-    
+
     subgraph "Effects Chain"
         FILTER[Filter<br/>Resonant Lowpass]
         DELAY[Delay<br/>Tempo Sync]
         REVERB[Reverb<br/>Plate/Hall]
         CHORUS[Chorus<br/>Stereo Width]
     end
-    
+
     subgraph "Output Stage"
         MIXER[Stereo Mixer<br/>Voice Combining]
         AUDIO_OUT[Audio Output<br/>Line Level]
         CV_OUT[CV Outputs<br/>x8 Channels]
     end
-    
+
     AUDIO_IN --> PARAM_PROC
     MIDI_IN --> PARAM_PROC
     UI_INPUT --> PARAM_PROC
-    
+
     PARAM_PROC --> MOD_PROC
     MOD_PROC --> ENV_PROC
-    
+
     ENV_PROC --> VOICE1
     ENV_PROC --> VOICE2
     ENV_PROC --> VOICEN
-    
+
     VOICE1 --> FILTER
     VOICE2 --> FILTER
     VOICEN --> FILTER
-    
+
     FILTER --> DELAY
     DELAY --> REVERB
     REVERB --> CHORUS
-    
+
     CHORUS --> MIXER
     MIXER --> AUDIO_OUT
     MIXER --> CV_OUT
@@ -318,24 +318,24 @@ graph TB
         PARAM_CHANGE[Parameter<br/>Change]
         SPI_TX[SPI Transmit<br/>Queue]
     end
-    
+
     subgraph "SPI Communication"
         SPI_BUS[SPI Bus<br/>10MHz]
         PACKET[Protocol Packet<br/>Header + Payload]
     end
-    
+
     subgraph "STM32 Backend"
         SPI_RX[SPI Receive<br/>Buffer]
         MSG_PROC[Message<br/>Processor]
         AUDIO_UPDATE[Audio Engine<br/>Update]
     end
-    
+
     subgraph "Response Path"
         STATUS_GEN[Status<br/>Generation]
         RESPONSE[Response<br/>Message]
         SPI_RESPONSE[SPI Response<br/>Transmission]
     end
-    
+
     UI_EVENT --> PARAM_CHANGE
     PARAM_CHANGE --> SPI_TX
     SPI_TX --> SPI_BUS
@@ -343,7 +343,7 @@ graph TB
     PACKET --> SPI_RX
     SPI_RX --> MSG_PROC
     MSG_PROC --> AUDIO_UPDATE
-    
+
     AUDIO_UPDATE --> STATUS_GEN
     STATUS_GEN --> RESPONSE
     RESPONSE --> SPI_RESPONSE
@@ -433,26 +433,26 @@ graph LR
         AUDIO_R["Audio Right<br/>1/4 inch TRS"]
         HP_OUT["Headphone<br/>1/4 inch TRS"]
     end
-    
+
     subgraph "MIDI I/O"
         MIDI_IN["MIDI In<br/>DIN-5"]
         MIDI_OUT["MIDI Out<br/>DIN-5"]
         MIDI_THRU["MIDI Thru<br/>DIN-5"]
     end
-    
+
     subgraph "CV/Gate"
         CV1["CV 1-4<br/>3.5mm TS"]
         CV2["CV 5-8<br/>3.5mm TS"]
         GATE1["Gate 1-4<br/>3.5mm TS"]
         GATE2["Gate 5-8<br/>3.5mm TS"]
     end
-    
+
     subgraph "Data I/O"
         USB_C["USB-C<br/>Host/Device"]
         SD_CARD["SD Card<br/>SDXC"]
         WIFI_BT["WiFi/Bluetooth<br/>Internal"]
     end
-    
+
     subgraph "User Interface"
         DISPLAY["5 inch Touchscreen<br/>1280x720 MIPI DSI<br/>GT911 Touch"]
         ENCODERS["4x Dual Rotary Encoders<br/>Endless via MCP3008 ADC"]
@@ -460,7 +460,7 @@ graph LR
         LEDS["48-channel LED Driver<br/>TLC5947 PWM"]
         POTS["4x Analog Pots<br/>MCP3008 ADC"]
     end
-    
+
     WAVEX["WaveX<br/>Main Unit"] --> AUDIO_L
     WAVEX --> AUDIO_R
     WAVEX --> HP_OUT
@@ -566,4 +566,4 @@ graph LR
 - **Debounce**: 50ms
 - **Interrupt**: GPIO30
 
-This architecture provides a clear separation of concerns, optimizing each microcontroller for its specific role while maintaining tight integration through the high-speed SPI communication protocol. 
+This architecture provides a clear separation of concerns, optimizing each microcontroller for its specific role while maintaining tight integration through the high-speed SPI communication protocol.

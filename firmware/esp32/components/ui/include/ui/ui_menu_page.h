@@ -1,30 +1,31 @@
 // WaveX UI Menu Page Class
 #pragma once
 
-#include "ui_page.h"
+#include <lvgl.h>
+
+#include "input_event.h"
 #include "ui_menu_item.h"
 #include "ui_navigator.h"
-#include "input_event.h"
-#include <lvgl.h>
-#include <vector>
+#include "ui_page.h"
+
 #include <memory>
+#include <vector>
 
 namespace wavex_ui {
 
 /**
  * @brief Menu page for hierarchical navigation
- * 
+ *
  * Displays a list of menu items with encoder/button navigation.
  * Each item can open a submenu, functional page, or trigger an action.
  */
 class UIMenuPage : public UIPage {
-public:
+   public:
     /**
      * @brief Constructor
      * @param title Menu title displayed at the top
      */
-    explicit UIMenuPage(std::string title)
-        : title_(std::move(title)) {}
+    explicit UIMenuPage(std::string title) : title_(std::move(title)) {}
 
     /**
      * @brief Get page name
@@ -60,7 +61,7 @@ public:
      */
     std::array<Softkey, NUM_SOFTKEYS> getSoftkeys() override;
 
-protected:
+   protected:
     std::string title_;
     std::vector<MenuItem> items_;
     int selected_ = 0;
@@ -88,4 +89,4 @@ protected:
     static void list_event_cb(lv_event_t* e);
 };
 
-} // namespace wavex_ui
+}  // namespace wavex_ui

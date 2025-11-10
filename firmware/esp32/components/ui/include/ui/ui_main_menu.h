@@ -3,13 +3,14 @@
 
 #include "ui_menu_page.h"
 #include "ui_navigator.h"
+
 #include <memory>
 
 namespace wavex_ui {
 
 /**
  * @brief Main menu page factory functions
- * 
+ *
  * Creates the hierarchical menu structure as described in the document:
  * Main Menu -> Sample Browser, Edit Sample, Modulation, Settings, Diagnostics
  */
@@ -39,4 +40,4 @@ std::shared_ptr<UIPage> createDisplaySettingsPage();
  */
 std::shared_ptr<UIPage> createMidiSettingsPage();
 
-} // namespace wavex_ui
+}  // namespace wavex_ui

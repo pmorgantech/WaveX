@@ -1,20 +1,22 @@
 // WaveX UI Softkey Bar Widget
 #pragma once
 
-#include "ui_softkey.h"
 #include <lvgl.h>
+
+#include "ui_softkey.h"
+
 #include <array>
 
 namespace wavex_ui {
 
 /**
  * @brief Softkey bar widget for bottom navigation
- * 
+ *
  * Creates 6 buttons at the bottom of the screen with dynamic labels
  * and touch/encoder support.
  */
 class SoftkeyBar {
-public:
+   public:
     /**
      * @brief Create the softkey bar
      * @param parent LVGL parent object
@@ -43,7 +45,7 @@ public:
      */
     void pressFocused();
 
-private:
+   private:
     static void event_cb(lv_event_t* e);
 
     lv_obj_t* container_ = nullptr;
@@ -53,4 +55,4 @@ private:
     int focused_ = 0;  ///< Currently focused softkey index
 };
 
-} // namespace wavex_ui
+}  // namespace wavex_ui

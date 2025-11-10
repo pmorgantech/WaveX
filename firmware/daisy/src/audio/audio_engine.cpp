@@ -1,19 +1,21 @@
 #include "../config.hpp"
 #if WAVEX_AUDIO_ENGINE_ENABLED
 
+#include <daisy.h>  // For CpuLoadMeter
+
 #include "audio_engine.h"
-#include "../sampler.hpp"
-#include "../cv_bus.hpp"
-#include "../timebase.hpp"
 #include "daisy_core.h"  // For memory sections
-#include "sys/dma.h"     // For cache management
-#include "stm32h7xx_ll_cortex.h" // For ARM atomic operations
+#include "ff.h"
+#include "stm32h7xx_ll_cortex.h"  // For ARM atomic operations
+#include "sys/dma.h"              // For cache management
+
+#include "../cv_bus.hpp"
+#include "../sampler.hpp"
+#include "../timebase.hpp"
 #include <cmath>
-#include <vector>
 #include <cstdint>
 #include <cstring>
-#include "ff.h"
-#include <daisy.h>  // For CpuLoadMeter
+#include <vector>
 
 using namespace daisy;
 using namespace daisysp;
@@ -44,7 +46,7 @@ static Adsr s_envelope;
 static Oscillator s_lfo;
 static Oscillator s_oscillator;
 static Sampler s_sampler;
-static CvBus   s_cv;
+static CvBus s_cv;
 
 static volatile float s_env_level = 0.0f;
 static float s_last_in_block[Timebase::kBlockSize] = {0};
@@ -71,14 +73,14 @@ static bool s_envelope_gate = false;
 // WAV playback state
 // ============================
 struct WavState {
-    bool        open;
-    FIL         file;
-    uint32_t    data_start;
-    uint32_t    data_size;
-    uint32_t    bytes_remaining;
-    uint16_t    num_channels;
-    uint16_t    bits_per_sample;
-    uint32_t    sample_rate;
+    bool open;
+    FIL file;
+    uint32_t data_start;
+    uint32_t data_size;
+    uint32_t bytes_remaining;
+    uint16_t num_channels;
+    uint16_t bits_per_sample;
+    uint32_t sample_rate;
 };
 static WavState s_wav = {};
 
@@ -86,121 +88,133 @@ static WavState s_wav = {};
 // Sample audition state (separate from main WAV playback)
 // ============================
 struct AuditionState {
-    bool        active;
-    FIL         file;
-    uint32_t    data_start;
-    uint32_t    data_size;
-    uint32_t    bytes_remaining;
-    uint16_t    num_channels;
-    uint16_t    bits_per_sample;
-    uint32_t    sample_rate;
-    char        current_path[96];
+    bool active;
+    FIL file;
+    uint32_t data_start;
+    uint32_t data_size;
+    uint32_t bytes_remaining;
+    uint16_t num_channels;
+    uint16_t bits_per_sample;
+    uint32_t sample_rate;
+    char current_path[96];
 };
 static AuditionState s_audition = {};
 
-// Thread-safe single-producer (main loop) / single-consumer (audio IRQ) ring buffer of stereo int16 frames
-// Uses ARM Cortex-M7 atomic operations and memory barriers for race-condition-free operation
+// Thread-safe single-producer (main loop) / single-consumer (audio IRQ) ring buffer of stereo int16
+// frames Uses ARM Cortex-M7 atomic operations and memory barriers for race-condition-free operation
 // This eliminates warbling caused by timing variations between main loop and audio callback
-// Using regular memory - this buffer is NOT accessed by DMA, only by CPU (main loop writes, IRQ reads)
-// Moving out of DMA memory saves 8KB from the 32KB RAM_D2_DMA limit
-static const uint32_t RB_CAP_FRAMES = 2048; // ~46ms at 44.1k (better latency) (excellent buffering for smooth playback)
-static volatile uint32_t s_rb_head = 0; // write counter (frames) - atomic access with memory barriers
-static volatile uint32_t s_rb_tail = 0; // read counter (frames) - atomic access with memory barriers
-static int16_t s_rb[RB_CAP_FRAMES * 2]; // interleaved L,R - regular memory (8KB saved from DMA memory)
+// Using regular memory - this buffer is NOT accessed by DMA, only by CPU (main loop writes, IRQ
+// reads) Moving out of DMA memory saves 8KB from the 32KB RAM_D2_DMA limit
+static const uint32_t RB_CAP_FRAMES =
+    2048;  // ~46ms at 44.1k (better latency) (excellent buffering for smooth playback)
+static volatile uint32_t s_rb_head =
+    0;  // write counter (frames) - atomic access with memory barriers
+static volatile uint32_t s_rb_tail =
+    0;  // read counter (frames) - atomic access with memory barriers
+static int16_t
+    s_rb[RB_CAP_FRAMES * 2];  // interleaved L,R - regular memory (8KB saved from DMA memory)
 
 // Pre-buffering system for smooth playback start
-static const uint32_t PREBUFFER_FRAMES = 1024; // ~23ms at 44.1kHz (much more responsive for auditioning)
-static int16_t s_prebuffer[PREBUFFER_FRAMES * 2]; // ~23ms of stereo audio
-static uint32_t s_prebuffer_filled = 0; // Number of frames pre-buffered
-static bool s_prebuffer_ready = false; // Whether pre-buffer is ready for playback
-static bool s_prebuffering = false; // Whether we're currently pre-buffering
+static const uint32_t PREBUFFER_FRAMES =
+    1024;  // ~23ms at 44.1kHz (much more responsive for auditioning)
+static int16_t s_prebuffer[PREBUFFER_FRAMES * 2];  // ~23ms of stereo audio
+static uint32_t s_prebuffer_filled = 0;            // Number of frames pre-buffered
+static bool s_prebuffer_ready = false;             // Whether pre-buffer is ready for playback
+static bool s_prebuffering = false;                // Whether we're currently pre-buffering
 
 // Background SD I/O system with larger buffers
-static const uint32_t SD_BUFFER_SIZE = 8192; // 8KB SD read buffer for better performance
-static uint8_t s_sd_buffer[SD_BUFFER_SIZE]; // SD read buffer in regular memory
-static uint32_t s_sd_buffer_pos = 0; // Current position in SD buffer
-static uint32_t s_sd_buffer_frames = 0; // Number of frames available in SD buffer
-static bool s_sd_buffer_valid = false; // Whether SD buffer contains valid data
+static const uint32_t SD_BUFFER_SIZE = 8192;  // 8KB SD read buffer for better performance
+static uint8_t s_sd_buffer[SD_BUFFER_SIZE];   // SD read buffer in regular memory
+static uint32_t s_sd_buffer_pos = 0;          // Current position in SD buffer
+static uint32_t s_sd_buffer_frames = 0;       // Number of frames available in SD buffer
+static bool s_sd_buffer_valid = false;        // Whether SD buffer contains valid data
 // Audio performance instrumentation
 static uint32_t s_io_start_time = 0;
 static uint32_t s_io_duration = 0;
 static uint32_t s_max_io_duration = 0;
 static uint32_t s_io_count = 0;
 static uint32_t s_last_io_log = 0;
-static uint32_t s_last_io_time = 0; // Last time we did SD I/O (for rate limiting)
+static uint32_t s_last_io_time = 0;  // Last time we did SD I/O (for rate limiting)
 
 // Resampling temporarily disabled
 
 // Pre-buffering functions
-static bool prebuffer_audio()
-{
-    if (!s_wav.open || s_prebuffer_ready) return true;
-    
+static bool prebuffer_audio() {
+    if (!s_wav.open || s_prebuffer_ready)
+        return true;
+
     s_prebuffering = true;
     // Calculate bytes per frame (bytes per sample * channels)
     uint32_t bytes_per_sample = (s_wav.bits_per_sample == 24) ? 3u : 2u;
     uint32_t file_bpf = (uint32_t)s_wav.num_channels * bytes_per_sample;
     uint32_t frames_to_read = PREBUFFER_FRAMES - s_prebuffer_filled;
-    
+
     if (frames_to_read == 0) {
         s_prebuffer_ready = true;
         s_prebuffering = false;
-        #if WAVEX_DAISY_SD_DEBUG
-        if (s_hw) s_hw->PrintLine("Pre-buffer complete: %u frames ready", (unsigned)PREBUFFER_FRAMES);
-        #endif
+#if WAVEX_DAISY_SD_DEBUG
+        if (s_hw)
+            s_hw->PrintLine("Pre-buffer complete: %u frames ready", (unsigned)PREBUFFER_FRAMES);
+#endif
         return true;
     }
-    
+
     // Calculate how much to read
     uint32_t max_frames = SD_BUFFER_SIZE / file_bpf;
     uint32_t req_bytes = (frames_to_read < max_frames ? frames_to_read : max_frames) * file_bpf;
-    
+
     if (req_bytes > s_wav.bytes_remaining) {
         req_bytes = s_wav.bytes_remaining;
     }
-    
+
     if (req_bytes == 0) {
         // End of file reached during pre-buffering
         s_prebuffer_ready = true;
         s_prebuffering = false;
-        #if WAVEX_DAISY_SD_DEBUG
-        if (s_hw) s_hw->PrintLine("Pre-buffer complete: %u frames (end of file)", (unsigned)s_prebuffer_filled);
-        #endif
+#if WAVEX_DAISY_SD_DEBUG
+        if (s_hw)
+            s_hw->PrintLine("Pre-buffer complete: %u frames (end of file)",
+                            (unsigned)s_prebuffer_filled);
+#endif
         return true;
     }
-    
+
     // Read from SD card
     UINT br = 0;
-    s_io_start_time = System::GetTick(); // Start timing
+    s_io_start_time = System::GetTick();  // Start timing
     FRESULT fr = f_read(&s_wav.file, s_sd_buffer, req_bytes, &br);
-    s_io_duration = System::GetTick() - s_io_start_time; // End timing
-    
+    s_io_duration = System::GetTick() - s_io_start_time;  // End timing
+
     // Track I/O performance
     s_io_count++;
     if (s_io_duration > s_max_io_duration) {
         s_max_io_duration = s_io_duration;
     }
-    
+
     // Log I/O performance every 100 operations
     if (s_io_count % 100 == 0) {
-        if (s_hw) s_hw->PrintLine("SD I/O Stats: count=%u, max_duration=%u ms, last_duration=%u ms", 
-                                   (unsigned)s_io_count, (unsigned)s_max_io_duration, (unsigned)s_io_duration);
+        if (s_hw)
+            s_hw->PrintLine("SD I/O Stats: count=%u, max_duration=%u ms, last_duration=%u ms",
+                            (unsigned)s_io_count,
+                            (unsigned)s_max_io_duration,
+                            (unsigned)s_io_duration);
     }
-    
+
     if (fr != FR_OK || br == 0) {
-        #if WAVEX_DAISY_SD_DEBUG
-        if (s_hw) s_hw->PrintLine("Pre-buffer read error: fr=%d, br=%u", (int)fr, (unsigned)br);
-        #endif
+#if WAVEX_DAISY_SD_DEBUG
+        if (s_hw)
+            s_hw->PrintLine("Pre-buffer read error: fr=%d, br=%u", (int)fr, (unsigned)br);
+#endif
         s_prebuffering = false;
         return false;
     }
-    
+
     s_wav.bytes_remaining -= br;
-    
+
     // Copy to pre-buffer with format conversion if needed
     uint32_t frames_read = br / file_bpf;
     int16_t* dst = &s_prebuffer[s_prebuffer_filled * 2];
-    
+
     // Convert samples from file format to 16-bit
     if (s_wav.bits_per_sample == 24) {
         // 24-bit: read 3 bytes (little-endian) and convert to 16-bit
@@ -208,21 +222,26 @@ static bool prebuffer_audio()
         if (s_wav.num_channels == 2) {
             // Stereo: convert L,R pairs
             for (uint32_t i = 0; i < frames_read; ++i) {
-                uint32_t idx = i * 6; // 3 bytes per sample * 2 channels
+                uint32_t idx = i * 6;  // 3 bytes per sample * 2 channels
                 // Convert 24-bit L sample (little-endian, signed)
-                int32_t sample_l = (int32_t)(src[idx + 0] | (src[idx + 1] << 8) | ((int8_t)src[idx + 2] << 16));
-                dst[i * 2 + 0] = (int16_t)(sample_l >> 8); // Shift right 8 bits to convert to 16-bit
+                int32_t sample_l =
+                    (int32_t)(src[idx + 0] | (src[idx + 1] << 8) | ((int8_t)src[idx + 2] << 16));
+                dst[i * 2 + 0] =
+                    (int16_t)(sample_l >> 8);  // Shift right 8 bits to convert to 16-bit
                 // Convert 24-bit R sample
-                int32_t sample_r = (int32_t)(src[idx + 3] | (src[idx + 4] << 8) | ((int8_t)src[idx + 5] << 16));
+                int32_t sample_r =
+                    (int32_t)(src[idx + 3] | (src[idx + 4] << 8) | ((int8_t)src[idx + 5] << 16));
                 dst[i * 2 + 1] = (int16_t)(sample_r >> 8);
             }
         } else {
             // Mono: convert and duplicate to both channels
             for (uint32_t i = 0; i < frames_read; ++i) {
-                uint32_t idx = i * 3; // 3 bytes per sample
+                uint32_t idx = i * 3;  // 3 bytes per sample
                 // Convert 24-bit sample (little-endian, signed)
-                int32_t sample = (int32_t)(src[idx + 0] | (src[idx + 1] << 8) | ((int8_t)src[idx + 2] << 16));
-                int16_t sample_16 = (int16_t)(sample >> 8); // Shift right 8 bits to convert to 16-bit
+                int32_t sample =
+                    (int32_t)(src[idx + 0] | (src[idx + 1] << 8) | ((int8_t)src[idx + 2] << 16));
+                int16_t sample_16 =
+                    (int16_t)(sample >> 8);  // Shift right 8 bits to convert to 16-bit
                 dst[i * 2 + 0] = sample_16;
                 dst[i * 2 + 1] = sample_16;
             }
@@ -244,36 +263,39 @@ static bool prebuffer_audio()
             }
         }
     }
-    
+
     s_prebuffer_filled += frames_read;
-    
-    #if WAVEX_DAISY_SD_DEBUG
-    if (s_hw) s_hw->PrintLine("Pre-buffer progress: %u/%u frames", (unsigned)s_prebuffer_filled, (unsigned)PREBUFFER_FRAMES);
-    #endif
-    
+
+#if WAVEX_DAISY_SD_DEBUG
+    if (s_hw)
+        s_hw->PrintLine("Pre-buffer progress: %u/%u frames",
+                        (unsigned)s_prebuffer_filled,
+                        (unsigned)PREBUFFER_FRAMES);
+#endif
+
     return true;
 }
 
 // Background SD I/O functions
-static bool refill_sd_buffer()
-{
-    if (!s_wav.open) return false;
-    
+static bool refill_sd_buffer() {
+    if (!s_wav.open)
+        return false;
+
     // Check if we need to refill
     if (s_sd_buffer_valid && s_sd_buffer_pos < s_sd_buffer_frames) {
-        return true; // Still have data
+        return true;  // Still have data
     }
-    
+
     // Calculate how much to read (bytes per frame = channels * bytes per sample)
     uint32_t bytes_per_sample = (s_wav.bits_per_sample == 24) ? 3u : 2u;
     uint32_t file_bpf = (uint32_t)s_wav.num_channels * bytes_per_sample;
     uint32_t max_frames = SD_BUFFER_SIZE / file_bpf;
     uint32_t req_bytes = max_frames * file_bpf;
-    
+
     if (req_bytes > s_wav.bytes_remaining) {
         req_bytes = s_wav.bytes_remaining;
     }
-    
+
     if (req_bytes == 0) {
         // Loop: seek back to data start
         f_lseek(&s_wav.file, s_wav.data_start);
@@ -282,107 +304,107 @@ static bool refill_sd_buffer()
         if (req_bytes > s_wav.bytes_remaining) {
             req_bytes = s_wav.bytes_remaining;
         }
-        #if WAVEX_DAISY_SD_DEBUG
-        if (s_hw) s_hw->PrintLine("WAV loop: rewinding to data start");
-        #endif
+#if WAVEX_DAISY_SD_DEBUG
+        if (s_hw)
+            s_hw->PrintLine("WAV loop: rewinding to data start");
+#endif
     }
-    
-    if (req_bytes == 0) return false;
-    
+
+    if (req_bytes == 0)
+        return false;
+
     // Read from SD card
     UINT br = 0;
     FRESULT fr = f_read(&s_wav.file, s_sd_buffer, req_bytes, &br);
-    
+
     if (fr != FR_OK || br == 0) {
-        #if WAVEX_DAISY_SD_DEBUG
-        if (s_hw) s_hw->PrintLine("WAV read error: fr=%d, br=%u", (int)fr, (unsigned)br);
-        #endif
+#if WAVEX_DAISY_SD_DEBUG
+        if (s_hw)
+            s_hw->PrintLine("WAV read error: fr=%d, br=%u", (int)fr, (unsigned)br);
+#endif
         return false;
     }
-    
+
     // Update state
     s_sd_buffer_frames = br / file_bpf;
     s_sd_buffer_pos = 0;
     s_sd_buffer_valid = true;
     s_wav.bytes_remaining -= br;
-    
-    #if WAVEX_DAISY_SD_DEBUG
-    if (s_hw) s_hw->PrintLine("SD buffer refilled: %u frames, %u bytes", (unsigned)s_sd_buffer_frames, (unsigned)br);
-    #endif
-    
+
+#if WAVEX_DAISY_SD_DEBUG
+    if (s_hw)
+        s_hw->PrintLine(
+            "SD buffer refilled: %u frames, %u bytes", (unsigned)s_sd_buffer_frames, (unsigned)br);
+#endif
+
     return true;
 }
 
 // Thread-safe ring buffer operations with atomic access and memory barriers
-static inline uint32_t rb_count_frames()
-{
+static inline uint32_t rb_count_frames() {
     // Atomic read with memory barrier to ensure consistency
-    __DMB(); // Data Memory Barrier - ensure all previous memory operations complete
+    __DMB();  // Data Memory Barrier - ensure all previous memory operations complete
     uint32_t head = s_rb_head;
     uint32_t tail = s_rb_tail;
-    __DMB(); // Ensure reads are completed before calculation
+    __DMB();  // Ensure reads are completed before calculation
     return (head - tail) & (RB_CAP_FRAMES - 1u);
 }
 
-static inline uint32_t rb_free_frames()
-{
+static inline uint32_t rb_free_frames() {
     return (RB_CAP_FRAMES - 1u) - rb_count_frames();
 }
 
-static inline void rb_push_stereo(int16_t l, int16_t r)
-{
+static inline void rb_push_stereo(int16_t l, int16_t r) {
     // Atomic write with memory barriers for thread safety
     uint32_t head = s_rb_head;
     uint32_t idx = (head & (RB_CAP_FRAMES - 1u)) * 2u;
-    
+
     // Write data first
     s_rb[idx + 0] = l;
     s_rb[idx + 1] = r;
-    
+
     // Memory barrier to ensure data is written before updating head
-    __DMB(); // Data Memory Barrier - ensure data writes complete
-    
+    __DMB();  // Data Memory Barrier - ensure data writes complete
+
     // Atomic update of head pointer
     s_rb_head = head + 1u;
-    
+
     // Final memory barrier to ensure head update is visible
-    __DMB(); // Ensure head update is committed to memory
+    __DMB();  // Ensure head update is committed to memory
 }
 
-static inline bool rb_pop_stereo(int16_t &l, int16_t &r)
-{
+static inline bool rb_pop_stereo(int16_t& l, int16_t& r) {
     // Atomic read with memory barriers for thread safety
-    __DMB(); // Data Memory Barrier - ensure all previous operations complete
+    __DMB();  // Data Memory Barrier - ensure all previous operations complete
     uint32_t tail = s_rb_tail;
     uint32_t head = s_rb_head;
-    
+
     // Check if buffer is empty (atomic comparison)
     if (tail == head) {
-        __DMB(); // Ensure comparison is complete
+        __DMB();  // Ensure comparison is complete
         return false;
     }
-    
+
     // Read data
     uint32_t idx = (tail & (RB_CAP_FRAMES - 1u)) * 2u;
     l = s_rb[idx + 0];
     r = s_rb[idx + 1];
-    
+
     // Memory barrier to ensure data is read before updating tail
-    __DMB(); // Data Memory Barrier - ensure data reads complete
-    
+    __DMB();  // Data Memory Barrier - ensure data reads complete
+
     // Atomic update of tail pointer
     s_rb_tail = tail + 1u;
-    
+
     // Final memory barrier to ensure tail update is visible
-    __DMB(); // Ensure tail update is committed to memory
-    
+    __DMB();  // Ensure tail update is committed to memory
+
     return true;
 }
 
 // Resampling temporarily disabled - using direct playback
 
-void Init(DaisySeed& hw, float sample_rate)
-{
+void Init(DaisySeed& hw, float sample_rate) {
     s_hw = &hw;
     s_sample_rate = sample_rate;
 
@@ -415,41 +437,31 @@ void Init(DaisySeed& hw, float sample_rate)
     s_cpu_load_meter.Init(sample_rate, 48, 200);
 }
 
-void Callback(AudioHandle::InputBuffer in,
-              AudioHandle::OutputBuffer out,
-              size_t size)
-{
+void Callback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t size) {
     // Start CPU load measurement for this audio block
     s_cpu_load_meter.OnBlockStart();
 
     (void)in;
-    for (size_t i = 0; i < size; i++)
-    {
+    for (size_t i = 0; i < size; i++) {
         int16_t l16 = 0, r16 = 0;
-        if (!rb_pop_stereo(l16, r16))
-        {
+        if (!rb_pop_stereo(l16, r16)) {
             // Check if we have audition playback active
-            if (s_audition.active && s_wav.open)
-            {
+            if (s_audition.active && s_wav.open) {
                 // Use pre-buffering system for audition to avoid blocking audio callback
                 // The main loop will handle file I/O via PumpWavIO()
                 // For now, output silence and let the pre-buffering system handle the data
                 l16 = 0;
                 r16 = 0;
-                
+
                 // Check if audition is complete (this will be handled by the main loop)
                 // The audio callback should never do file I/O
-            }
-            else if (!s_wav.open)
-            {
+            } else if (!s_wav.open) {
                 // No audio should play on startup - output silence until audition commands
                 // Requirement: "When daisy starts, no audio plays (no oscillator, no .wavs)"
                 out[0][i] = 0.0f;
                 out[1][i] = 0.0f;
                 continue;
-            }
-            else
-            {
+            } else {
                 // WAV is playing but buffer is empty - output silence to prevent glitches
                 out[0][i] = 0.0f;
                 out[1][i] = 0.0f;
@@ -473,15 +485,17 @@ void Callback(AudioHandle::InputBuffer in,
         sumR += r * r;
         float al = fabsf(l);
         float ar = fabsf(r);
-        if (al > pkL) pkL = al;
-        if (ar > pkR) pkR = ar;
+        if (al > pkL)
+            pkL = al;
+        if (ar > pkR)
+            pkR = ar;
     }
     s_last_block_meters.rmsL = sqrtf(sumL / (float)size);
     s_last_block_meters.rmsR = sqrtf(sumR / (float)size);
     s_last_block_meters.peakL = pkL;
     s_last_block_meters.peakR = pkR;
 
-    Timebase::Tick1kHz([]{
+    Timebase::Tick1kHz([] {
         // Future control logic
     });
 
@@ -489,8 +503,7 @@ void Callback(AudioHandle::InputBuffer in,
     s_cpu_load_meter.OnBlockEnd();
 }
 
-void OnControlChange(const ControlChangeMessage& ctrl_msg)
-{
+void OnControlChange(const ControlChangeMessage& ctrl_msg) {
     switch (ctrl_msg.parameter) {
         case PARAM_VOLUME:
             s_params.volume = ctrl_msg.value / 65535.0f;
@@ -529,45 +542,54 @@ void OnControlChange(const ControlChangeMessage& ctrl_msg)
     }
 }
 
-void OnNoteOn(const NoteMessage& note_msg)
-{
+void OnNoteOn(const NoteMessage& note_msg) {
     float freq = mtof(note_msg.note);
     s_oscillator.SetFreq(freq);
     s_envelope_gate = true;
     s_envelope.Retrigger(false);
-    if (s_hw) s_hw->PrintLine("RX NOTE_ON: note=%u vel=%u ch=%u freq=%.2f", (unsigned)note_msg.note, (unsigned)note_msg.velocity, (unsigned)note_msg.channel, (double)freq);
+    if (s_hw)
+        s_hw->PrintLine("RX NOTE_ON: note=%u vel=%u ch=%u freq=%.2f",
+                        (unsigned)note_msg.note,
+                        (unsigned)note_msg.velocity,
+                        (unsigned)note_msg.channel,
+                        (double)freq);
 }
 
-void OnNoteOff(const NoteMessage& note_msg)
-{
+void OnNoteOff(const NoteMessage& note_msg) {
     (void)note_msg;
     s_envelope_gate = false;
-    if (s_hw) s_hw->PrintLine("RX NOTE_OFF: note=%u ch=%u", (unsigned)note_msg.note, (unsigned)note_msg.channel);
+    if (s_hw)
+        s_hw->PrintLine(
+            "RX NOTE_OFF: note=%u ch=%u", (unsigned)note_msg.note, (unsigned)note_msg.channel);
 }
 
-void OnSampleCtrl(const SampleCtrlMessage& sc)
-{
-    switch(sc.cmd){
-        case SAMPLE_REC_START: s_sampler.StartRec(); break;
-        case SAMPLE_REC_STOP:  s_sampler.StopRec();  break;
-        case SAMPLE_PLAY_START: s_sampler.StartPlay(sc.rate); break;
-        case SAMPLE_PLAY_STOP:  s_sampler.StopPlay(); break;
+void OnSampleCtrl(const SampleCtrlMessage& sc) {
+    switch (sc.cmd) {
+        case SAMPLE_REC_START:
+            s_sampler.StartRec();
+            break;
+        case SAMPLE_REC_STOP:
+            s_sampler.StopRec();
+            break;
+        case SAMPLE_PLAY_START:
+            s_sampler.StartPlay(sc.rate);
+            break;
+        case SAMPLE_PLAY_STOP:
+            s_sampler.StopPlay();
+            break;
     }
 }
 
-void OnPreviewReq(const PreviewReqMessage& pr)
-{
+void OnPreviewReq(const PreviewReqMessage& pr) {
     s_prev_sent = 0;
     s_sampler.MakePreview(pr.start, pr.end, pr.decim ? pr.decim : 1, s_preview);
 }
 
-void GetInputMeters(float& rms, float& peak)
-{
+void GetInputMeters(float& rms, float& peak) {
     Sampler::BlockMeters(s_last_in_block, s_last_block_size, rms, peak);
 }
 
-void GetMeters(BlockMeters& out)
-{
+void GetMeters(BlockMeters& out) {
     out = s_last_block_meters;
 }
 
@@ -576,10 +598,10 @@ void GetMeters(BlockMeters& out)
 // ============================
 
 // Check for underruns detected in audio callback and log them (called from main loop)
-void CheckAndLogUnderruns()
-{
+void CheckAndLogUnderruns() {
     if (s_underrun_detected && !s_underrun_logged) {
-        if (s_hw) s_hw->PrintLine("AUDIO: Ring buffer underrun - outputting silence");
+        if (s_hw)
+            s_hw->PrintLine("AUDIO: Ring buffer underrun - outputting silence");
         s_underrun_logged = true;
         s_underrun_detected = false;  // Reset detection flag
     } else if (!s_underrun_detected && s_underrun_logged) {
@@ -588,23 +610,19 @@ void CheckAndLogUnderruns()
     }
 }
 
-float GetAvgCpuLoad()
-{
+float GetAvgCpuLoad() {
     return s_cpu_load_meter.GetAvgCpuLoad();
 }
 
-float GetMinCpuLoad()
-{
+float GetMinCpuLoad() {
     return s_cpu_load_meter.GetMinCpuLoad();
 }
 
-float GetMaxCpuLoad()
-{
+float GetMaxCpuLoad() {
     return s_cpu_load_meter.GetMaxCpuLoad();
 }
 
-float GetBlockPeriodMs()
-{
+float GetBlockPeriodMs() {
     return 1000.0f * (float)s_block_size / s_sample_rate;  // Block period in milliseconds
 }
 
@@ -612,17 +630,20 @@ float GetBlockPeriodMs()
 // WAV playback implementation
 // ============================
 
-static uint16_t read_le16(const uint8_t* p) { return (uint16_t)p[0] | ((uint16_t)p[1] << 8); }
-static uint32_t read_le32(const uint8_t* p) { return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24); }
+static uint16_t read_le16(const uint8_t* p) {
+    return (uint16_t)p[0] | ((uint16_t)p[1] << 8);
+}
+static uint32_t read_le32(const uint8_t* p) {
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
 
-bool OpenWav(const char* path)
-{
+bool OpenWav(const char* path) {
     CloseWav();
 
     FRESULT fr = f_open(&s_wav.file, path, FA_READ);
-    if (fr != FR_OK)
-    {
-        if (s_hw) s_hw->PrintLine("WAV open failed: f_open error %d for path %s", (int)fr, path);
+    if (fr != FR_OK) {
+        if (s_hw)
+            s_hw->PrintLine("WAV open failed: f_open error %d for path %s", (int)fr, path);
         return false;
     }
 
@@ -630,13 +651,16 @@ bool OpenWav(const char* path)
     UINT br = 0;
     fr = f_read(&s_wav.file, hdr, sizeof(hdr), &br);
     if (fr != FR_OK || br < 44) {
-        if (s_hw) s_hw->PrintLine("WAV open failed: header read error %d, bytes read %u", (int)fr, (unsigned)br);
+        if (s_hw)
+            s_hw->PrintLine(
+                "WAV open failed: header read error %d, bytes read %u", (int)fr, (unsigned)br);
         f_close(&s_wav.file);
         return false;
     }
     // Validate RIFF/WAVE
     if (memcmp(hdr + 0, "RIFF", 4) != 0 || memcmp(hdr + 8, "WAVE", 4) != 0) {
-        if (s_hw) s_hw->PrintLine("WAV open failed: not a RIFF/WAVE file");
+        if (s_hw)
+            s_hw->PrintLine("WAV open failed: not a RIFF/WAVE file");
         f_close(&s_wav.file);
         return false;
     }
@@ -651,27 +675,31 @@ bool OpenWav(const char* path)
 
     // Rewind and iterate using f_lseek for generality
     f_lseek(&s_wav.file, 12);
-    while (true)
-    {
+    while (true) {
         uint8_t chdr[8];
         fr = f_read(&s_wav.file, chdr, 8, &br);
         if (fr != FR_OK || br < 8) {
-            if (s_hw) s_hw->PrintLine("WAV open failed: chunk header read error %d, bytes read %u", (int)fr, (unsigned)br);
+            if (s_hw)
+                s_hw->PrintLine("WAV open failed: chunk header read error %d, bytes read %u",
+                                (int)fr,
+                                (unsigned)br);
             f_close(&s_wav.file);
             return false;
         }
         uint32_t cid = read_le32(chdr);
         uint32_t csz = read_le32(chdr + 4);
-        if (cid == 0x20746d66) { // 'fmt '
+        if (cid == 0x20746d66) {  // 'fmt '
             uint8_t fmt[16];
             if (csz < 16) {
-                if (s_hw) s_hw->PrintLine("WAV open failed: fmt chunk too small");
+                if (s_hw)
+                    s_hw->PrintLine("WAV open failed: fmt chunk too small");
                 f_close(&s_wav.file);
                 return false;
             }
             fr = f_read(&s_wav.file, fmt, 16, &br);
             if (fr != FR_OK || br < 16) {
-                if (s_hw) s_hw->PrintLine("WAV open failed: fmt chunk read error");
+                if (s_hw)
+                    s_hw->PrintLine("WAV open failed: fmt chunk read error");
                 f_close(&s_wav.file);
                 return false;
             }
@@ -680,8 +708,9 @@ bool OpenWav(const char* path)
             sample_rate = read_le32(fmt + 4);
             bits = read_le16(fmt + 14);
             // Skip any extra fmt bytes
-            if (csz > 16) f_lseek(&s_wav.file, f_tell(&s_wav.file) + (csz - 16));
-        } else if (cid == 0x61746164) { // 'data'
+            if (csz > 16)
+                f_lseek(&s_wav.file, f_tell(&s_wav.file) + (csz - 16));
+        } else if (cid == 0x61746164) {  // 'data'
             data_off = f_tell(&s_wav.file);
             data_size = csz;
             // Position after header for reading
@@ -694,9 +723,13 @@ bool OpenWav(const char* path)
 
     // Support PCM format (fmt=1), 16-bit or 24-bit, mono or stereo
     if (audio_fmt != 1 || (bits != 16 && bits != 24) || (num_ch != 1 && num_ch != 2)) {
-        if (s_hw) s_hw->PrintLine("WAV open failed: unsupported format fmt=%u bits=%u ch=%u", (unsigned)audio_fmt, (unsigned)bits, (unsigned)num_ch);
+        if (s_hw)
+            s_hw->PrintLine("WAV open failed: unsupported format fmt=%u bits=%u ch=%u",
+                            (unsigned)audio_fmt,
+                            (unsigned)bits,
+                            (unsigned)num_ch);
         f_close(&s_wav.file);
-        return false; // only PCM16/24 mono/stereo supported
+        return false;  // only PCM16/24 mono/stereo supported
     }
 
     s_wav.open = true;
@@ -706,97 +739,100 @@ bool OpenWav(const char* path)
     s_wav.num_channels = num_ch;
     s_wav.bits_per_sample = bits;
     s_wav.sample_rate = sample_rate;
-    
+
     // Reset buffers
     s_rb_head = 0;
     s_rb_tail = 0;
-    
-    #if WAVEX_DAISY_SD_DEBUG
-    if (s_hw) s_hw->PrintLine("WAV open ok: %s ch=%u sr=%lu bits=%u size=%lu", path, (unsigned)num_ch, (unsigned long)sample_rate, (unsigned)bits, (unsigned long)data_size);
-    #endif
-    
+
+#if WAVEX_DAISY_SD_DEBUG
+    if (s_hw)
+        s_hw->PrintLine("WAV open ok: %s ch=%u sr=%lu bits=%u size=%lu",
+                        path,
+                        (unsigned)num_ch,
+                        (unsigned long)sample_rate,
+                        (unsigned)bits,
+                        (unsigned long)data_size);
+#endif
+
     // Reset pre-buffer state and start pre-buffering
     s_prebuffer_filled = 0;
     s_prebuffer_ready = false;
     s_prebuffering = false;
-    
+
     return true;
 }
 
-void CloseWav()
-{
+void CloseWav() {
     if (s_wav.open) {
-        if (s_hw) s_hw->PrintLine("CloseWav: closing WAV file and clearing state");
+        if (s_hw)
+            s_hw->PrintLine("CloseWav: closing WAV file and clearing state");
         f_close(&s_wav.file);
         s_wav = {};
     } else {
-        if (s_hw) s_hw->PrintLine("CloseWav: called but no WAV was open");
+        if (s_hw)
+            s_hw->PrintLine("CloseWav: called but no WAV was open");
     }
-    
+
     // Reset SD buffer state
     s_sd_buffer_pos = 0;
     s_sd_buffer_frames = 0;
     s_sd_buffer_valid = false;
     s_last_io_time = 0;
-    
+
     // Reset pre-buffer state
     s_prebuffer_filled = 0;
     s_prebuffer_ready = false;
     s_prebuffering = false;
-    
+
     // Clear ring buffer to stop any remaining audio immediately
     s_rb_head = 0;
     s_rb_tail = 0;
 }
 
-bool IsWavPlaying()
-{
+bool IsWavPlaying() {
     return s_wav.open;
 }
 
-bool IsPrebufferReady()
-{
+bool IsPrebufferReady() {
     return s_prebuffer_ready;
 }
 
-void GetIOStats(uint32_t& count, uint32_t& max_duration, uint32_t& last_duration)
-{
+void GetIOStats(uint32_t& count, uint32_t& max_duration, uint32_t& last_duration) {
     count = s_io_count;
     max_duration = s_max_io_duration;
     last_duration = s_io_duration;
 }
 
-bool ShouldPumpWavIO()
-{
-    if (!s_wav.open) return false;
-    
+bool ShouldPumpWavIO() {
+    if (!s_wav.open)
+        return false;
+
     // If we're pre-buffering, always pump I/O
     if (s_prebuffering) {
         return true;
     }
-    
+
     // If pre-buffer is ready, use normal I/O pumping logic
     if (s_prebuffer_ready) {
         // Rate limit SD I/O to avoid blocking the main loop too frequently
         uint32_t now = System::GetNow();
-        if (now - s_last_io_time < 10) { // Minimum 10ms between I/O operations
+        if (now - s_last_io_time < 10) {  // Minimum 10ms between I/O operations
             return false;
         }
-        
+
         // Pump I/O when ring buffer is less than 50% full
         // Good balance between performance and buffering
         uint32_t count = rb_count_frames();
         uint32_t threshold = RB_CAP_FRAMES / 2;  // 50% of buffer capacity
-        
+
         return count < threshold;
     }
-    
+
     // If pre-buffer is not ready, start pre-buffering
     return true;
 }
 
-void PumpWavIO()
-{
+void PumpWavIO() {
     if (!s_wav.open)
         return;
 
@@ -806,20 +842,23 @@ void PumpWavIO()
     // If we're pre-buffering, do that first
     if (s_prebuffering || !s_prebuffer_ready) {
         if (!prebuffer_audio()) {
-            return; // Pre-buffering failed
+            return;  // Pre-buffering failed
         }
-        return; // Continue pre-buffering next time
+        return;  // Continue pre-buffering next time
     }
 
     // If pre-buffer is ready, transfer data from pre-buffer to ring buffer
     if (s_prebuffer_ready && s_prebuffer_filled > 0) {
         uint32_t free_frames = rb_free_frames();
-        if (free_frames == 0) return;
+        if (free_frames == 0)
+            return;
 
         // Calculate how many frames we can transfer from pre-buffer
-        uint32_t frames_to_transfer = (s_prebuffer_filled < free_frames) ? s_prebuffer_filled : free_frames;
-        
-        if (frames_to_transfer == 0) return;
+        uint32_t frames_to_transfer =
+            (s_prebuffer_filled < free_frames) ? s_prebuffer_filled : free_frames;
+
+        if (frames_to_transfer == 0)
+            return;
 
         // Transfer frames from pre-buffer to ring buffer
         for (uint32_t i = 0; i < frames_to_transfer; ++i) {
@@ -827,62 +866,71 @@ void PumpWavIO()
             int16_t R = s_prebuffer[i * 2 + 1];
             rb_push_stereo(L, R);
         }
-        
+
         // Remove transferred frames from pre-buffer
         s_prebuffer_filled -= frames_to_transfer;
         if (s_prebuffer_filled > 0) {
             // Shift remaining data to beginning of pre-buffer
-            memmove(s_prebuffer, &s_prebuffer[frames_to_transfer * 2], s_prebuffer_filled * 2 * sizeof(int16_t));
+            memmove(s_prebuffer,
+                    &s_prebuffer[frames_to_transfer * 2],
+                    s_prebuffer_filled * 2 * sizeof(int16_t));
         }
-        
-        #if WAVEX_DAISY_SD_DEBUG
-        if (s_hw) s_hw->PrintLine("Transferred %u frames from pre-buffer to ring buffer", (unsigned)frames_to_transfer);
-        #endif
-        
+
+#if WAVEX_DAISY_SD_DEBUG
+        if (s_hw)
+            s_hw->PrintLine("Transferred %u frames from pre-buffer to ring buffer",
+                            (unsigned)frames_to_transfer);
+#endif
+
         return;
     }
 
     // Normal I/O pumping (when pre-buffer is empty)
     // Refill SD buffer if needed (this does the actual SD I/O)
     if (!refill_sd_buffer()) {
-        return; // Failed to refill, or no data available
+        return;  // Failed to refill, or no data available
     }
 
     // Transfer data from SD buffer to ring buffer
     uint32_t free_frames = rb_free_frames();
-    if (free_frames == 0) return;
+    if (free_frames == 0)
+        return;
 
     // Calculate how many frames we can transfer
     uint32_t available_frames = s_sd_buffer_frames - s_sd_buffer_pos;
     uint32_t frames_to_transfer = (available_frames < free_frames) ? available_frames : free_frames;
-    
-    if (frames_to_transfer == 0) return;
+
+    if (frames_to_transfer == 0)
+        return;
 
     // Transfer frames from SD buffer to ring buffer with format conversion if needed
     uint32_t bytes_per_sample = (s_wav.bits_per_sample == 24) ? 3u : 2u;
     uint32_t file_bpf = (uint32_t)s_wav.num_channels * bytes_per_sample;
     const uint8_t* src = (const uint8_t*)(s_sd_buffer + (s_sd_buffer_pos * file_bpf));
-    
+
     if (s_wav.bits_per_sample == 24) {
         // 24-bit: convert to 16-bit
         if (s_wav.num_channels == 2) {
             // Stereo: convert L,R pairs
             for (uint32_t i = 0; i < frames_to_transfer; ++i) {
-                uint32_t idx = i * 6; // 3 bytes per sample * 2 channels
+                uint32_t idx = i * 6;  // 3 bytes per sample * 2 channels
                 // Convert 24-bit L sample (little-endian, signed)
-                int32_t sample_l = (int32_t)(src[idx + 0] | (src[idx + 1] << 8) | ((int8_t)src[idx + 2] << 16));
+                int32_t sample_l =
+                    (int32_t)(src[idx + 0] | (src[idx + 1] << 8) | ((int8_t)src[idx + 2] << 16));
                 int16_t L = (int16_t)(sample_l >> 8);
                 // Convert 24-bit R sample
-                int32_t sample_r = (int32_t)(src[idx + 3] | (src[idx + 4] << 8) | ((int8_t)src[idx + 5] << 16));
+                int32_t sample_r =
+                    (int32_t)(src[idx + 3] | (src[idx + 4] << 8) | ((int8_t)src[idx + 5] << 16));
                 int16_t R = (int16_t)(sample_r >> 8);
                 rb_push_stereo(L, R);
             }
         } else {
             // Mono: convert and duplicate to both channels
             for (uint32_t i = 0; i < frames_to_transfer; ++i) {
-                uint32_t idx = i * 3; // 3 bytes per sample
+                uint32_t idx = i * 3;  // 3 bytes per sample
                 // Convert 24-bit sample (little-endian, signed)
-                int32_t sample = (int32_t)(src[idx + 0] | (src[idx + 1] << 8) | ((int8_t)src[idx + 2] << 16));
+                int32_t sample =
+                    (int32_t)(src[idx + 0] | (src[idx + 1] << 8) | ((int8_t)src[idx + 2] << 16));
                 int16_t M = (int16_t)(sample >> 8);
                 rb_push_stereo(M, M);
             }
@@ -905,28 +953,30 @@ void PumpWavIO()
             }
         }
     }
-    
+
     // Update SD buffer position
     s_sd_buffer_pos += frames_to_transfer;
-    
-    #if WAVEX_DAISY_SD_DEBUG
-    if (s_hw) s_hw->PrintLine("Transferred %u frames from SD buffer to ring buffer", (unsigned)frames_to_transfer);
-    #endif
+
+#if WAVEX_DAISY_SD_DEBUG
+    if (s_hw)
+        s_hw->PrintLine("Transferred %u frames from SD buffer to ring buffer",
+                        (unsigned)frames_to_transfer);
+#endif
 }
 
 // ============================================================================
 // Sample Audition Functions (for Sample Load/Save page)
 // ============================================================================
 
-bool AuditionSample(const char* path)
-{
+bool AuditionSample(const char* path) {
     // Stop any current audition first
     StopAudition();
 
     // Use the existing WAV playback system for audition
     // This integrates with the pre-buffering system and avoids blocking I/O
     if (!OpenWav(path)) {
-        if (s_hw) s_hw->PrintLine("AuditionSample: Failed to open WAV file for %s", path);
+        if (s_hw)
+            s_hw->PrintLine("AuditionSample: Failed to open WAV file for %s", path);
         return false;
     }
 
@@ -934,27 +984,25 @@ bool AuditionSample(const char* path)
     s_audition.active = true;
     std::strncpy(s_audition.current_path, path, sizeof(s_audition.current_path) - 1);
     s_audition.current_path[sizeof(s_audition.current_path) - 1] = '\0';
-    
+
     if (s_hw) {
         s_hw->PrintLine("AuditionSample: Started audition of %s using WAV playback system", path);
     }
-    
+
     return true;
 }
 
-void StopAudition()
-{
+void StopAudition() {
     if (s_audition.active) {
         // Stop the WAV playback system
         CloseWav();
         s_audition.active = false;
-        if (s_hw) s_hw->PrintLine("AuditionSample: Stopped audition");
+        if (s_hw)
+            s_hw->PrintLine("AuditionSample: Stopped audition");
     }
 }
 
-} // namespace AudioEngine
-} // namespace WaveX
+}  // namespace AudioEngine
+}  // namespace WaveX
 
-
-
-#endif // WAVEX_AUDIO_ENGINE_ENABLED
+#endif  // WAVEX_AUDIO_ENGINE_ENABLED

@@ -3,7 +3,7 @@
 nvs,      data, nvs,     0x9000,  0x6000,
 phy_init, data, phy,     0xf000,  0x1000,
 factory,  app,  factory, 0x10000, 0x100000,
-# Sample storage partition (640KB for storing audio samples) 
+# Sample storage partition (640KB for storing audio samples)
 samples,  data, 0x06,    0x110000, 0xA0000,
 # User data partition (remaining 192KB for settings, presets, etc.)
-userdata, data, 0x07,    0x1B0000, 0x30000, 
+userdata, data, 0x07,    0x1B0000, 0x30000,
