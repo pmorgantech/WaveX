@@ -16,15 +16,6 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: "3.10"
-
-      - name: Install pre-commit
-        run: |
-          pip install pre-commit
-
       - name: Install system dependencies
         run: |
           sudo apt-get update
@@ -75,7 +66,25 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-daisy-build-
 
-      - name: Run pre-commit checks
+      - name: Run Shared Protocol Tests
         run: |
           source ~/esp/esp-idf/export.sh
-          pre-commit run --all-files
+          make test-shared
+
+      - name: Run ESP32 Unit Tests
+        run: |
+          source ~/esp/esp-idf/export.sh
+          make test-esp32
+
+      - name: Run Daisy Unit Tests
+        run: |
+          make test-daisy
+
+      - name: Build ESP32 Firmware
+        run: |
+          source ~/esp/esp-idf/export.sh
+          make esp32
+
+      - name: Build Daisy Firmware
+        run: |
+          make daisy
