@@ -21,6 +21,10 @@ jobs:
         with:
           python-version: "3.10"
 
+      - name: Install pre-commit
+        run: |
+          pip install pre-commit
+
       - name: Install system dependencies
         run: |
           sudo apt-get update
@@ -45,8 +49,8 @@ jobs:
           git clone -b v5.2 --recursive https://github.com/espressif/esp-idf.git
           cd esp-idf
           ./install.sh esp32p4
-          echo "export IDF_PATH=~/esp/esp-idf" >> $GITHUB_ENV
-          echo "~/esp/esp-idf/tools:$PATH" >> $GITHUB_ENV
+          echo "IDF_PATH=$HOME/esp/esp-idf" >> $GITHUB_ENV
+          echo "$HOME/esp/esp-idf/tools" >> $GITHUB_PATH
 
       - name: Install ARM GCC Toolchain
         run: |
@@ -71,25 +75,7 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-daisy-build-
 
-      - name: Run Shared Protocol Tests
+      - name: Run pre-commit checks
         run: |
           source ~/esp/esp-idf/export.sh
-          make test-shared
-
-      - name: Run ESP32 Unit Tests
-        run: |
-          source ~/esp/esp-idf/export.sh
-          make test-esp32
-
-      - name: Run Daisy Unit Tests
-        run: |
-          make test-daisy
-
-      - name: Build ESP32 Firmware
-        run: |
-          source ~/esp/esp-idf/export.sh
-          make esp32
-
-      - name: Build Daisy Firmware
-        run: |
-          make daisy
+          pre-commit run --all-files
