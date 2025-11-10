@@ -24,12 +24,20 @@ typedef struct {
     char path[96];
 } wavex_file_entry_t;
 
+// Forward declaration for comm interface
+namespace WaveX {
+namespace Comm {
+class ICommInterface;
+}
+}  // namespace WaveX
+
 // File browser configuration
 typedef struct {
-    const char* root_path;       // Root directory path
-    const char* file_extension;  // File extension filter (e.g., ".wav")
-    uint32_t max_entries;        // Maximum number of entries to display
-    bool show_hidden;            // Show hidden files
+    const char* root_path;                        // Root directory path
+    const char* file_extension;                   // File extension filter (e.g., ".wav")
+    uint32_t max_entries;                         // Maximum number of entries to display
+    bool show_hidden;                             // Show hidden files
+    WaveX::Comm::ICommInterface* comm_interface;  // Communication interface
 } wavex_file_browser_config_t;
 
 // File browser callbacks

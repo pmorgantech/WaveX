@@ -32,9 +32,6 @@ set(COMPONENT_INCLUDE_DIRS
     "components"
     "pages"
     "."
-    "../../main"
-    "../../main/comm"
-    "../../main/links"
     "../../../shared/config"
     "../../../shared/spi_protocol"
 )
@@ -54,4 +51,5 @@ idf_component_register(
         esp32_p4_nano
         esp_common
         shared
+        main
 )

@@ -12,6 +12,13 @@
 #include "../components/file_browser.h"
 #include "lvgl.h"
 
+// Forward declaration for comm interface
+namespace WaveX {
+namespace Comm {
+class ICommInterface;
+}
+}  // namespace WaveX
+
 /* Public C API: these declarations are C-friendly. Avoid forcing C linkage on
  * transitively included C++ headers by keeping extern "C" minimal and only in
  * implementation files where needed. */
@@ -27,6 +34,7 @@ typedef struct {
     bool is_playing;
     char selected_file[96];
     uint32_t selected_file_index;
+    WaveX::Comm::ICommInterface* comm_interface;  // Communication interface
 
     // Deferred UI update flags (for thread-safe updates from callbacks)
     bool status_update_pending;
@@ -38,7 +46,8 @@ typedef struct {
 } wavex_sample_load_save_page_t;
 
 // Page creation and management
-wavex_sample_load_save_page_t* wavex_sample_load_save_create(lv_obj_t* parent);
+wavex_sample_load_save_page_t* wavex_sample_load_save_create(
+    lv_obj_t* parent, WaveX::Comm::ICommInterface* comm_interface);
 void wavex_sample_load_save_destroy(wavex_sample_load_save_page_t* page);
 wavex_sample_load_save_page_t* wavex_sample_load_save_get_active(void);
 

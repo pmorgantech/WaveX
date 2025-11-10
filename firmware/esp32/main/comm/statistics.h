@@ -112,7 +112,11 @@ class StatisticsManager {
     // Meter data
     void update_meter_data(float rms_left, float rms_right, float peak_left, float peak_right);
     void get_meter_data(wavex_meter_data_t* out) const;
-    void set_meter_callback(void (*callback)(float rms, float peak, void* user_data),
+    void set_meter_callback(void (*callback)(float rms_left,
+                                             float rms_right,
+                                             float peak_left,
+                                             float peak_right,
+                                             void* user_data),
                             void* user_data);
 
     // Browse response callback
@@ -160,7 +164,8 @@ class StatisticsManager {
     mutable portMUX_TYPE m_meter_lock;
 
     // Meter callback
-    void (*m_meter_callback)(float rms, float peak, void* user_data);
+    void (*m_meter_callback)(
+        float rms_left, float rms_right, float peak_left, float peak_right, void* user_data);
     void* m_meter_user_data;
 
     // Browse response callback

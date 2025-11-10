@@ -70,6 +70,8 @@ lv_color_t lv_color_make(uint8_t r, uint8_t g, uint8_t b);
 void lv_obj_clean(lv_obj_t* obj);
 void lv_obj_set_user_data(lv_obj_t* obj, void* user_data);
 void* lv_obj_get_user_data(lv_obj_t* obj);
+bool lv_obj_is_valid(lv_obj_t* obj);
+void lv_async_call(void (*cb)(void*), void* user_data);
 
 #ifdef __cplusplus
 }

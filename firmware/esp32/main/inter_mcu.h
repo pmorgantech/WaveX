@@ -41,7 +41,8 @@ esp_err_t inter_mcu_send_sample_ctrl(uint8_t slot, wavex_sample_ctrl_cmd_t cmd, 
 esp_err_t inter_mcu_send_preview_req(uint8_t slot, uint32_t start, uint32_t end, uint16_t decim);
 
 // Listener registration for backend->frontend messages
-typedef void (*wavex_meter_cb_t)(float rms, float peak, void* user_data);
+typedef void (*wavex_meter_cb_t)(
+    float rms_left, float rms_right, float peak_left, float peak_right, void* user_data);
 typedef void (*wavex_wave_chunk_cb_t)(uint32_t offset,
                                       const int16_t* samples,
                                       uint16_t count,

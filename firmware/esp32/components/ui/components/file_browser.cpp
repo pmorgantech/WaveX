@@ -9,17 +9,23 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "../../../main/inter_mcu.h"
 #include "../styles/ui_theme.h"
+#include "comm/i_comm_interface.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "inter_mcu.h"
+#include "lvgl.h"
 #include "spi_protocol/protocol.h"
 
 #include <cstdio>
 // Mark UI content changes so the main UI task triggers a refresh
-#include "../../../main/ui_task.h"
+#ifndef WAVEX_TEST_BUILD
+#include "ui_task.h"
+#else
+#include "../../../tests/mocks/esp32_mocks.h"
+#endif
 
 using namespace WaveX::Protocol;
 
@@ -46,7 +52,9 @@ static bool parse_browse_response_with_pagination(const uint8_t* data,
                                                   uint32_t* total_files,
                                                   uint8_t* current_page_entries,
                                                   const char* current_path);
-static bool send_browse_request(const char* path, uint8_t start_index = 0);
+static bool send_browse_request(WaveX::Comm::ICommInterface* comm_interface,
+                                const char* path,
+                                uint8_t start_index = 0);
 static void update_visual_selection(wavex_file_browser_t* browser);
 static void browse_resp_callback(const uint8_t* data, size_t length, void* user_data);
 static void update_file_browser_ui(wavex_file_browser_t* browser);
@@ -122,9 +130,13 @@ wavex_file_browser_t* wavex_file_browser_create(lv_obj_t* parent,
     // Add event callback for list
     lv_obj_add_event_cb(browser->list, file_list_event_cb, LV_EVENT_CLICKED, browser);
 
-    // Register browse response callback with inter-MCU system
-    extern void inter_mcu_set_browse_resp_listener(wavex_browse_resp_cb_t cb, void* user_data);
-    inter_mcu_set_browse_resp_listener(browse_resp_callback, browser);
+    // Register browse response callback with comm interface
+    if (config->comm_interface) {
+        config->comm_interface->setBrowseResponseListener(browse_resp_callback, browser);
+    } else {
+        ESP_LOGE(TAG, "No comm interface provided to file browser");
+        return NULL;
+    }
 
     // Refresh file list
     ESP_LOGI(TAG, "Calling refresh_file_list for path: %s", browser->current_path);
@@ -475,7 +487,7 @@ static bool refresh_file_list(wavex_file_browser_t* browser) {
     wavex_ui_mark_content_changed();
 
     // Send first browse request (page 0)
-    if (!send_browse_request(browser->current_path, 0)) {
+    if (!send_browse_request(browser->config.comm_interface, browser->current_path, 0)) {
         ESP_LOGE(TAG, "Failed to send browse request");
         browser->pagination_in_progress = false;
         // Mark error state for deferred UI update
@@ -701,17 +713,25 @@ static bool parse_browse_response_with_pagination(const uint8_t* data,
     return true;
 }
 
-// Send browse request to Daisy
-static bool send_browse_request(const char* path, uint8_t start_index) {
-    esp_err_t result = inter_mcu_send_browse_req(path, start_index);
+// Send browse request to Daisy via comm interface
+static bool send_browse_request(WaveX::Comm::ICommInterface* comm_interface,
+                                const char* path,
+                                uint8_t start_index) {
+    if (!comm_interface) {
+        ESP_LOGE(TAG, "No comm interface available for browse request");
+        return false;
+    }
+
+    esp_err_t result = comm_interface->sendBrowseRequest(path, start_index);
     if (result != ESP_OK) {
         ESP_LOGE(TAG, "Failed to send browse request: %d", result);
         return false;
     }
-    ESP_LOGI(TAG,
-             "=== UART MESSAGE: Successfully sent browse request for path: %s, start_index: %d ===",
-             path,
-             start_index);
+    ESP_LOGI(
+        TAG,
+        "=== INTERFACE MESSAGE: Successfully sent browse request for path: %s, start_index: %d ===",
+        path,
+        start_index);
     return true;
 }
 
@@ -836,6 +856,97 @@ static void browse_resp_callback(const uint8_t* data, size_t length, void* user_
         browser->ui_update_pending = true;
         wavex_ui_mark_content_changed();
 
+        // DEBUG: Direct refresh test - bypass normal update mechanism
+        ESP_LOGI(TAG, "DEBUG: Adding direct refresh via lv_async_call");
+        lv_async_call(
+            [](void* data) {
+                wavex_file_browser_t* b = (wavex_file_browser_t*)data;
+                if (!b || !b->list) {
+                ESP_LOGE(TAG, "DIRECT REFRESH: invalid browser or list");
+                    return;
+                }
+
+                ESP_LOGI(TAG,
+                         "DIRECT REFRESH: list valid=%d, entry_count=%d",
+                         lv_obj_is_valid(b->list) ? 1 : 0,
+                         b->entry_count);
+
+                if (!lv_obj_is_valid(b->list)) {
+                ESP_LOGE(TAG, "DIRECT REFRESH: list object is invalid!");
+                    return;
+                }
+
+                // Clear existing items
+                lv_obj_clean(b->list);
+
+                // Update path label
+                if (b->path_label && lv_obj_is_valid(b->path_label)) {
+                    lv_label_set_text(b->path_label, b->current_path);
+                }
+
+                if (b->entry_count > 0 && b->entries) {
+                    // Calculate which entries to display (scrolling viewport)
+                    uint32_t start_index = b->first_visible_index;
+                    uint32_t end_index = start_index + b->visible_count;
+                    if (end_index > b->entry_count) {
+                        end_index = b->entry_count;
+                    }
+
+                ESP_LOGI(TAG,
+                             "DIRECT REFRESH: adding %d items (start=%d, end=%d)",
+                             end_index - start_index,
+                             start_index,
+                             end_index);
+
+                    // Create list items for visible entries
+                    for (uint32_t i = start_index; i < end_index; i++) {
+                        // Safety check for entry access
+                        if (!b->entries[i].name[0]) {
+                ESP_LOGW(TAG, "DIRECT REFRESH: Skipping empty entry at index %d", i);
+                            continue;
+                        }
+
+                        lv_obj_t* btn = lv_list_add_btn(b->list, NULL, b->entries[i].name);
+                        if (!btn) {
+                ESP_LOGE(
+                                TAG, "DIRECT REFRESH: Failed to create button for entry %d", i);
+                            continue;
+                        }
+
+                        // Apply styling
+                        ui_theme_apply_button_style(btn, true);
+                        lv_obj_set_style_text_color(btn, UI_COLOR_TEXT, LV_PART_MAIN);
+                        lv_obj_set_style_text_font(btn, UI_FONT_TITLE, LV_PART_MAIN);
+
+                        // Add directory indicator
+                        if (b->entries[i].is_directory) {
+                            lv_obj_t* label = lv_obj_get_child(btn, 0);
+                            if (label) {
+                                char dir_text[64];
+                                snprintf(
+                                    dir_text, sizeof(dir_text), "[DIR] %s", b->entries[i].name);
+                                lv_label_set_text(label, dir_text);
+                            }
+                        }
+
+                        // Store entry index for selection
+                        lv_obj_set_user_data(btn, (void*)(uintptr_t)i);
+                    }
+
+                ESP_LOGI(TAG, "DIRECT REFRESH: successfully added items to list");
+                } else {
+                ESP_LOGI(TAG, "DIRECT REFRESH: no entries to display");
+                    // Show "No files found..." message
+                    lv_obj_t* btn = lv_list_add_btn(b->list, NULL, "No files found...");
+                    ui_theme_apply_button_style(btn, false);
+                    lv_obj_set_style_text_color(btn, UI_COLOR_TEXT, LV_PART_MAIN);
+                    lv_obj_set_style_text_font(btn, UI_FONT_TITLE, LV_PART_MAIN);
+                }
+
+                ESP_LOGI(TAG, "DIRECT REFRESH: completed UI update");
+            },
+            browser);
+
         // Notify directory changed callback
         if (browser->dir_changed_cb) {
             browser->dir_changed_cb(browser->current_path, browser->user_data);
@@ -852,7 +963,7 @@ static void browse_resp_callback(const uint8_t* data, size_t length, void* user_
                  browser->current_page,
                  browser->entries_per_page,
                  next_start_index);
-        if (!send_browse_request(browser->current_path, next_start_index)) {
+        if (!send_browse_request(browser->config.comm_interface, browser->current_path, next_start_index)) {
             ESP_LOGE(TAG, "Failed to request next page");
             browser->pagination_in_progress = false;
         }
@@ -889,6 +1000,11 @@ void wavex_file_browser_process_pending_updates(wavex_file_browser_t* browser) {
         ESP_LOGE(TAG, "process_pending_updates: browser is NULL!");
         return;
     }
+
+    ESP_LOGD(TAG,
+             "process_pending_updates: ui_update_pending=%d, entry_count=%d",
+             browser->ui_update_pending ? 1 : 0,
+             browser->entry_count);
 
     if (!browser->ui_update_pending) {
         return;  // No update needed

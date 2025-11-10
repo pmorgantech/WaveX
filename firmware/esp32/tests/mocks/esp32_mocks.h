@@ -62,4 +62,7 @@ extern void heap_caps_free(void* ptr);
 // Mock ESP-IDF timer
 #include "esp_timer.h"
 
+// Mock UI task functions
+void wavex_ui_mark_content_changed(void);
+
 #endif  // ESP32_TEST_MOCKS_H

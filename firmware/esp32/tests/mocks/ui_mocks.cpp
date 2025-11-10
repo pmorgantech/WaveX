@@ -131,6 +131,16 @@ void* lv_obj_get_user_data(lv_obj_t* obj) {
     return nullptr;
 }
 
+bool lv_obj_is_valid(lv_obj_t* obj) {
+    return obj != nullptr;
+}
+
+void lv_async_call(void (*cb)(void*), void* user_data) {
+    if (cb) {
+        cb(user_data);
+    }
+}
+
 }  // extern "C" - end LVGL functions
 
 // Mock UI theme functions (C++ linkage due to bool parameters)
@@ -142,6 +152,11 @@ void ui_theme_apply_label_style(lv_obj_t* label, bool is_header) {
 void ui_theme_apply_button_style(lv_obj_t* btn, bool is_selected) {
     (void)btn;
     (void)is_selected;
+}
+
+// Mock UI task functions (C++ linkage)
+void wavex_ui_mark_content_changed(void) {
+    // Mock implementation - do nothing for tests
 }
 
 // Mock inter-MCU functions (C++ linkage - declared without extern "C" in inter_mcu.h)

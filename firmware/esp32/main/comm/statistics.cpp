@@ -362,8 +362,8 @@ void StatisticsManager::update_meter_data(float rms_left,
 
     // Call registered callback if any
     if (m_meter_callback) {
-        // Use RMS left channel for the callback (assuming stereo)
-        m_meter_callback(rms_left, peak_left, m_meter_user_data);
+        // Send full stereo meter data
+        m_meter_callback(rms_left, rms_right, peak_left, peak_right, m_meter_user_data);
     }
 }
 
@@ -376,7 +376,11 @@ void StatisticsManager::get_meter_data(wavex_meter_data_t* out) const {
     taskEXIT_CRITICAL(&m_meter_lock);
 }
 
-void StatisticsManager::set_meter_callback(void (*callback)(float rms, float peak, void* user_data),
+void StatisticsManager::set_meter_callback(void (*callback)(float rms_left,
+                                                            float rms_right,
+                                                            float peak_left,
+                                                            float peak_right,
+                                                            void* user_data),
                                            void* user_data) {
     taskENTER_CRITICAL(&m_meter_lock);
     m_meter_callback = callback;

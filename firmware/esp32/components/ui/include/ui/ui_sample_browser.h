@@ -3,9 +3,10 @@
 
 #include <lvgl.h>
 
-#include "../../../main/inter_mcu.h"
 #include "../components/file_browser.h"
+#include "comm/i_comm_interface.h"
 #include "input_event.h"
+#include "inter_mcu.h"
 #include "ui_navigator.h"
 #include "ui_page.h"
 
@@ -47,6 +48,9 @@ class UISampleBrowser : public UIPage {
 
     // File browser component (C-style, but we wrap it)
     wavex_file_browser_t* file_browser_ = nullptr;
+
+    // Communication interface
+    WaveX::Comm::ICommInterface* comm_interface_ = nullptr;
 
     // State
     bool is_playing_ = false;

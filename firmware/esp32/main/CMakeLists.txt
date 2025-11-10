@@ -7,6 +7,7 @@ idf_component_register(
         "comm/packet_router.cpp"
         "comm/statistics.cpp"
         "comm/listeners.cpp"
+        "comm/comm_interface_impl.cpp"
         "links/esp_spi_link.cpp"
         "links/esp_uart_link.cpp"
     INCLUDE_DIRS

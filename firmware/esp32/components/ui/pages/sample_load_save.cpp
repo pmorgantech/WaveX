@@ -11,12 +11,13 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "../../../main/inter_mcu.h"
-#include "../../../main/ui_task.h"
 #include "../include/ui/ui_navigator.h"
+#include "comm/i_comm_interface.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "inter_mcu.h"
+#include "ui_task.h"
 
 #include <cstdio>
 
@@ -43,7 +44,8 @@ static void file_selected_index_callback(uint32_t file_index,
 static void directory_changed_callback(const char* path, void* user_data);
 static void hotkey_event_callback(lv_event_t* e);
 
-wavex_sample_load_save_page_t* wavex_sample_load_save_create(lv_obj_t* parent) {
+wavex_sample_load_save_page_t* wavex_sample_load_save_create(
+    lv_obj_t* parent, WaveX::Comm::ICommInterface* comm_interface) {
     if (!parent) {
         ESP_LOGE(TAG, "Parent is NULL");
         return NULL;
@@ -65,6 +67,7 @@ wavex_sample_load_save_page_t* wavex_sample_load_save_create(lv_obj_t* parent) {
     // Initialize structure
     memset(page, 0, sizeof(wavex_sample_load_save_page_t));
     page->pending_metadata_entry = NULL;
+    page->comm_interface = comm_interface;
 
     // Create main container (no window manager - UI task provides titlebar and hotkeys)
     page->main_container = lv_obj_create(parent);
@@ -95,7 +98,7 @@ wavex_sample_load_save_page_t* wavex_sample_load_save_create(lv_obj_t* parent) {
                                                                                        // path
                                                                                        // instead of
                                                                                        // always "/"
-                                                  .file_extension = ".wav", .max_entries = 50, .show_hidden = false};
+                                                  .file_extension = ".wav", .max_entries = 50, .show_hidden = false, .comm_interface = comm_interface};
 
     ESP_LOGI(TAG, "Creating file browser with root_path: %s", browser_config.root_path);
 
@@ -171,8 +174,9 @@ void wavex_sample_load_save_destroy(wavex_sample_load_save_page_t* page) {
     }
 
     // Unregister browse response callback to prevent crashes
-    extern void inter_mcu_set_browse_resp_listener(wavex_browse_resp_cb_t cb, void* user_data);
-    inter_mcu_set_browse_resp_listener(NULL, NULL);
+    if (page->comm_interface) {
+        page->comm_interface->setBrowseResponseListener(NULL, NULL);
+    }
 
     if (page->file_browser) {
         wavex_file_browser_destroy(page->file_browser);
@@ -332,7 +336,8 @@ bool wavex_sample_load_save_audition_sample_by_index(wavex_sample_load_save_page
              "=== SAMPLE PLAY INDEX OPERATION: About to audition sample by index: %lu ===",
              (unsigned long)file_index);
 
-    esp_err_t result = inter_mcu_send_sample_play_index_req(file_index);
+    esp_err_t result =
+        page->comm_interface ? page->comm_interface->sendSamplePlayRequest(file_index) : ESP_FAIL;
     if (result != ESP_OK) {
         ESP_LOGE(TAG, "Failed to send sample play index request: %d", result);
         return false;
@@ -363,7 +368,8 @@ bool wavex_sample_load_save_stop_audition(wavex_sample_load_save_page_t* page) {
     if (page->is_playing) {
         ESP_LOGI(TAG, "=== SAMPLE STOP OPERATION: Stopping sample ===");
 
-        esp_err_t result = inter_mcu_send_sample_stop_req();
+        esp_err_t result =
+            page->comm_interface ? page->comm_interface->sendSampleStopRequest() : ESP_FAIL;
         if (result != ESP_OK) {
             ESP_LOGE(TAG, "Failed to send sample stop request: %d", result);
             page->is_playing = false;
@@ -529,7 +535,9 @@ static void directory_changed_callback(const char* path, void* user_data) {
         ESP_LOGI(TAG, "Stopping audition due to directory change");
 
         // Send stop request to Daisy
-        inter_mcu_send_sample_stop_req();
+        if (page->comm_interface) {
+            page->comm_interface->sendSampleStopRequest();
+        }
 
         // Immediately reset playing state (don't wait for response since we're changing directories
         // anyway)

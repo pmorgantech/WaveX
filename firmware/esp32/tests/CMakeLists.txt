@@ -80,6 +80,7 @@ target_include_directories(wavex_esp32_test_lib PUBLIC
 target_compile_definitions(wavex_esp32_test_lib PUBLIC
     UNIT_TEST
     ESP_PLATFORM
+    WAVEX_TEST_BUILD
 )
 
 target_link_libraries(wavex_esp32_test_lib PUBLIC
@@ -104,6 +105,7 @@ function(add_wavex_esp32_test test_source)
     target_compile_definitions(${test_name} PRIVATE
         UNIT_TEST
         ESP_PLATFORM
+        WAVEX_TEST_BUILD
     )
 
     set_target_properties(${test_name} PROPERTIES

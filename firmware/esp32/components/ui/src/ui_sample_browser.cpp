@@ -3,10 +3,11 @@
 
 #include <esp_log.h>
 
-#include "../../../main/inter_mcu.h"
-#include "../../../main/ui_task.h"
 #include "../styles/ui_theme.h"
+#include "comm/i_comm_interface.h"
 #include "esp_lvgl_port.h"
+#include "inter_mcu.h"
+#include "ui_task.h"
 
 #include <cstdio>
 #include <cstring>
@@ -67,8 +68,11 @@ void UISampleBrowser::onEnter(lv_obj_t* parent) {
     lv_obj_align(metadata_label_, LV_ALIGN_TOP_LEFT, UI_PADDING_MEDIUM, 60);
     lv_obj_set_style_text_align(metadata_label_, LV_TEXT_ALIGN_LEFT, LV_PART_MAIN);
 
+    // Get and store comm interface
+    comm_interface_ = WaveX::Comm::GetCommInterface();
+
     // Configure file browser - restore last directory path if available
-    wavex_file_browser_config_t browser_config = {.root_path = s_last_directory_path_, .file_extension = ".wav", .max_entries = 50, .show_hidden = false};
+    wavex_file_browser_config_t browser_config = {.root_path = s_last_directory_path_, .file_extension = ".wav", .max_entries = 50, .show_hidden = false, .comm_interface = comm_interface_};
 
     ESP_LOGI(TAG, "Creating file browser with root_path: %s", browser_config.root_path);
 
@@ -329,15 +333,18 @@ void UISampleBrowser::directory_changed_callback(const char* path, void* user_da
     // Stop any current audition when changing directories
     if (browser->is_playing_) {
         ESP_LOGI(TAG, "Stopping audition due to directory change");
-        inter_mcu_send_sample_stop_req();
-        browser->is_playing_ = false;
+        if (browser->comm_interface_) {
+            browser->comm_interface_->sendSampleStopRequest();
+        }
 
         // Refresh softkeys
         lv_async_call(
             [](void* data) {
                 UISampleBrowser* b = static_cast<UISampleBrowser*>(data);
-                if (b)
+                if (b) {
+                    b->is_playing_ = false;
                     b->refreshSoftkeys();
+                }
             },
             browser);
     }
@@ -380,7 +387,10 @@ void UISampleBrowser::updateMetadata(const wavex_file_entry_t* entry) {
 // Static method to process updates for active instance (called from UI task)
 void UISampleBrowser::processDeferredUpdates() {
     if (s_active_instance_) {
+        ESP_LOGD(TAG, "processDeferredUpdates: calling processDeferredUpdates_()");
         s_active_instance_->processDeferredUpdates_();
+    } else {
+        ESP_LOGD(TAG, "processDeferredUpdates: no active instance");
     }
 }
 
@@ -476,7 +486,8 @@ bool UISampleBrowser::auditionSampleByIndex(uint32_t file_index) {
              "=== SAMPLE PLAY INDEX OPERATION: About to audition sample by index: %lu ===",
              (unsigned long)file_index);
 
-    esp_err_t result = inter_mcu_send_sample_play_index_req(file_index);
+    esp_err_t result =
+        comm_interface_ ? comm_interface_->sendSamplePlayRequest(file_index) : ESP_FAIL;
     if (result != ESP_OK) {
         ESP_LOGE(TAG, "Failed to send sample play index request: %d", result);
         return false;
@@ -504,7 +515,7 @@ bool UISampleBrowser::stopAudition() {
 
     ESP_LOGI(TAG, "=== SAMPLE STOP OPERATION: Stopping sample ===");
 
-    esp_err_t result = inter_mcu_send_sample_stop_req();
+    esp_err_t result = comm_interface_ ? comm_interface_->sendSampleStopRequest() : ESP_FAIL;
     if (result != ESP_OK) {
         ESP_LOGE(TAG, "Failed to send sample stop request: %d", result);
         is_playing_ = false;
