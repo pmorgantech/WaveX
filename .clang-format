@@ -1,0 +1,96 @@
+# WaveX Clang-Format Configuration
+# Based on Google style with embedded system considerations
+
+BasedOnStyle: Google
+Language: Cpp
+
+# Basic formatting
+ColumnLimit: 100
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+
+# Line breaks
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: false
+AllowShortLoopsOnASingleLine: false
+
+# Braces
+BreakBeforeBraces: Attach
+BraceWrapping:
+  AfterClass: false
+  AfterControlStatement: false
+  AfterEnum: false
+  AfterFunction: false
+  AfterNamespace: false
+  AfterObjCDeclaration: false
+  AfterStruct: false
+  AfterUnion: false
+  BeforeCatch: false
+  BeforeElse: false
+  IndentBraces: false
+
+# Spaces
+SpacesBeforeTrailingComments: 2
+SpaceBeforeParens: ControlStatements
+SpaceBeforeRangeBasedForLoopColon: false
+
+# Includes
+IncludeCategories:
+  - Regex: '^<.*\.h>'
+    Priority: 1
+  - Regex: '^".*\.h"'
+    Priority: 2
+  - Regex: '.*'
+    Priority: 3
+IncludeIsMainRegex: '([-_](test|unittest))?$'
+
+# Pointer alignment
+PointerAlignment: Left
+ReferenceAlignment: Left
+
+# Namespace indentation
+NamespaceIndentation: None
+
+# Function declarations
+AlwaysBreakAfterReturnType: None
+AlwaysBreakAfterDefinitionReturnType: None
+
+# Comments
+CommentPragmas: '^ IWYU pragma:'
+
+# Macros
+Macros:
+  - 'ESP_LOGI=ESP_LOGI'
+  - 'ESP_LOGE=ESP_LOGE'
+  - 'ESP_LOGW=ESP_LOGW'
+  - 'ESP_LOGD=ESP_LOGD'
+  - 'ESP_LOGV=ESP_LOGV'
+
+# Disable formatting for certain constructs
+ForEachMacros:
+  - foreach
+  - Q_FOREACH
+  - BOOST_FOREACH
+
+# Sort includes
+SortIncludes: true
+
+# Keep empty lines
+MaxEmptyLinesToKeep: 1
+
+# Constructor initializer lists
+ConstructorInitializerAllOnOneLineOrOnePerLine: true
+ConstructorInitializerIndentWidth: 4
+
+# Function argument wrapping
+BinPackArguments: false
+BinPackParameters: false
+
+# Alignment
+AlignAfterOpenBracket: Align
+AlignConsecutiveAssignments: false
+AlignConsecutiveDeclarations: false
+AlignEscapedNewlines: Left
+AlignOperands: true
+AlignTrailingComments: true

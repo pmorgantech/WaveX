@@ -1,0 +1,119 @@
+# WaveX Pre-commit Configuration
+# Ensures code quality, formatting, and builds before commits
+
+repos:
+  # Code formatting and linting
+  - repo: https://github.com/pre-commit/mirrors-clang-format
+    rev: v18.1.8
+    hooks:
+      - id: clang-format
+        files: \.(c|cpp|h|hpp)$
+        exclude: ^(firmware/.*/libs/|firmware/.*/managed_components/)
+
+  # Python formatting and linting
+  - repo: https://github.com/psf/black
+    rev: 24.10.0
+    hooks:
+      - id: black
+        language_version: python3
+        files: \.py$
+
+  - repo: https://github.com/pycqa/isort
+    rev: 5.13.2
+    hooks:
+      - id: isort
+        args: ["--profile", "black"]
+        files: \.py$
+
+  - repo: https://github.com/pycqa/flake8
+    rev: 7.1.1
+    hooks:
+      - id: flake8
+        files: \.py$
+        exclude: ^(firmware/|\.env/)
+
+  # YAML formatting
+  - repo: https://github.com/pre-commit/mirrors-prettier
+    rev: v4.0.0-alpha.8
+    hooks:
+      - id: prettier
+        files: \.(yaml|yml)$
+        exclude: ^(firmware/|\.env/)
+
+  # Trailing whitespace and end-of-file fixes
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+        files: \.(c|cpp|h|hpp|py|md|txt|yaml|yml|cmake|sh|make)$
+        exclude: ^(firmware/.*/libs/|firmware/.*/managed_components/)
+      - id: end-of-file-fixer
+        files: \.(c|cpp|h|hpp|py|md|txt|yaml|yml|cmake|sh|make)$
+        exclude: ^(firmware/.*/libs/|firmware/.*/managed_components/)
+      - id: check-yaml
+        files: \.(yaml|yml)$
+      - id: check-merge-conflict
+      - id: check-added-large-files
+
+  # Build validation - run quick checks
+  - repo: local
+    hooks:
+      - id: check-build-esp32
+        name: Check ESP32 build
+        entry: make
+        args: [esp32]
+        language: system
+        files: ^(firmware/esp32/|Makefile)$
+        pass_filenames: false
+        require_serial: true
+
+      - id: check-build-daisy
+        name: Check Daisy build
+        entry: make
+        args: [daisy]
+        language: system
+        files: ^(firmware/daisy/|Makefile)$
+        pass_filenames: false
+        require_serial: true
+
+  # Test execution - run unit tests
+  - repo: local
+    hooks:
+      - id: run-shared-tests
+        name: Run shared protocol tests
+        entry: make
+        args: [test-shared]
+        language: system
+        files: ^(firmware/shared/|Makefile)$
+        pass_filenames: false
+        require_serial: true
+
+      - id: run-esp32-tests
+        name: Run ESP32 unit tests
+        entry: make
+        args: [test-esp32]
+        language: system
+        files: ^(firmware/esp32/|Makefile)$
+        pass_filenames: false
+        require_serial: true
+
+      - id: run-daisy-tests
+        name: Run Daisy unit tests
+        entry: make
+        args: [test-daisy]
+        language: system
+        files: ^(firmware/daisy/|Makefile)$
+        pass_filenames: false
+        require_serial: true
+
+ci:
+  autofix_commit_msg: |
+    [pre-commit.ci] auto fixes from pre-commit hooks
+
+    for more information, see https://pre-commit.ci
+  autofix_prs: true
+  autoupdate_branch: ""
+  autoupdate_commit_msg: "[pre-commit.ci] pre-commit autoupdate"
+  autoupdate_schedule: weekly
+  skip: []
+  submodules: false

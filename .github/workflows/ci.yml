@@ -1,0 +1,95 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  test:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.10"
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake \
+            ninja-build \
+            git \
+            wget \
+            libusb-1.0-0-dev \
+            pkg-config \
+            libffi-dev \
+            libssl-dev \
+            python3-dev \
+            python3-pip \
+            libglib2.0-dev \
+            libpixman-1-dev
+
+      - name: Install ESP-IDF
+        run: |
+          mkdir -p ~/esp
+          cd ~/esp
+          git clone -b v5.2 --recursive https://github.com/espressif/esp-idf.git
+          cd esp-idf
+          ./install.sh esp32p4
+          echo "export IDF_PATH=~/esp/esp-idf" >> $GITHUB_ENV
+          echo "~/esp/esp-idf/tools:$PATH" >> $GITHUB_ENV
+
+      - name: Install ARM GCC Toolchain
+        run: |
+          sudo apt-get install -y gcc-arm-none-eabi gdb-multiarch
+          arm-none-eabi-gcc --version
+
+      - name: Cache ESP-IDF build
+        uses: actions/cache@v3
+        with:
+          path: |
+            firmware/esp32/build
+            firmware/shared/tests/build
+          key: ${{ runner.os }}-esp32-build-${{ hashFiles('firmware/esp32/**/*', 'firmware/shared/**/*') }}
+          restore-keys: |
+            ${{ runner.os }}-esp32-build-
+
+      - name: Cache Daisy build
+        uses: actions/cache@v3
+        with:
+          path: firmware/daisy/build
+          key: ${{ runner.os }}-daisy-build-${{ hashFiles('firmware/daisy/**/*') }}
+          restore-keys: |
+            ${{ runner.os }}-daisy-build-
+
+      - name: Run Shared Protocol Tests
+        run: |
+          source ~/esp/esp-idf/export.sh
+          make test-shared
+
+      - name: Run ESP32 Unit Tests
+        run: |
+          source ~/esp/esp-idf/export.sh
+          make test-esp32
+
+      - name: Run Daisy Unit Tests
+        run: |
+          make test-daisy
+
+      - name: Build ESP32 Firmware
+        run: |
+          source ~/esp/esp-idf/export.sh
+          make esp32
+
+      - name: Build Daisy Firmware
+        run: |
+          make daisy
