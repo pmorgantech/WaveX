@@ -62,11 +62,3 @@ class PacketRouter {
 
 }  // namespace Comm
 }  // namespace WaveX
-
-namespace WaveX {
-namespace Comm {
-
-PacketRouter& GetPacketRouter();
-
-}  // namespace Comm
-}  // namespace WaveX

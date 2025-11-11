@@ -59,3 +59,6 @@ add_compile_definitions(
 
 # Include DaisyProject.cmake which handles all the STM32 configuration
 include(DaisyProject)
+
+# Set linker specs to use nano library with nosys stubs
+set(CMAKE_EXE_LINKER_FLAGS "--specs=nano.specs --specs=nosys.specs")

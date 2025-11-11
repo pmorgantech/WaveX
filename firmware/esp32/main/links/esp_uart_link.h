@@ -6,6 +6,13 @@
 
 #include "link_config.h"
 
+// Forward declaration for PacketRouter
+namespace WaveX {
+namespace Comm {
+class PacketRouter;
+}
+}  // namespace WaveX
+
 #ifdef ESP_PLATFORM
 #include "esp_err.h"
 #else
@@ -36,7 +43,9 @@ void uart_link_log_stats(void);
 
 #ifdef __cplusplus
 }
+
+// Set PacketRouter reference for dependency injection (C++ function)
+void uart_link_set_packet_router(WaveX::Comm::PacketRouter* packet_router);
 #endif
 
-#endif // WAVEX_ESP_UART_LINK_H
-
+#endif  // WAVEX_ESP_UART_LINK_H

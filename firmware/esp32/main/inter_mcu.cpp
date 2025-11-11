@@ -29,8 +29,8 @@ static const char* TAG = "InterMCU";
 static bool s_uart_initialized = false;
 static bool s_uart_started = false;
 
-// Statistics tracking
-static StatisticsManager s_statistics;
+// Statistics tracking (injected dependency)
+static StatisticsManager* s_statistics = nullptr;
 
 // Communication state
 static volatile bool s_suspended = false;
@@ -49,11 +49,14 @@ static int send_uart_message(uint8_t msg_type, const void* payload, uint16_t len
     return result;
 }
 
-esp_err_t inter_mcu_init() {
+esp_err_t inter_mcu_init(StatisticsManager& statistics) {
     if (s_initialized) {
         ESP_LOGI(TAG, "Inter-MCU communication already initialized");
         return ESP_OK;
     }
+
+    // Store injected StatisticsManager reference
+    s_statistics = &statistics;
 
     ESP_LOGI(TAG, "Initializing inter-MCU communication (UART only)...");
 
@@ -206,8 +209,12 @@ void inter_mcu_toggle_debug() {
 // Implement missing functions that are declared in the header
 
 void inter_mcu_set_meter_listener(wavex_meter_cb_t cb, void* user_data) {
+    if (!s_statistics) {
+        ESP_LOGE(TAG, "StatisticsManager not initialized");
+        return;
+    }
     // Store the callback in the statistics manager
-    s_statistics.set_meter_callback(cb, user_data);
+    s_statistics->set_meter_callback(cb, user_data);
     ESP_LOGI(TAG, "Meter listener registered: %p", cb);
 }
 
@@ -217,25 +224,41 @@ void inter_mcu_set_wave_chunk_listener(wavex_wave_chunk_cb_t cb, void* user_data
 }
 
 void inter_mcu_set_browse_resp_listener(wavex_browse_resp_cb_t cb, void* user_data) {
+    if (!s_statistics) {
+        ESP_LOGE(TAG, "StatisticsManager not initialized");
+        return;
+    }
     ESP_LOGI(TAG, "=== INTER_MCU: About to call s_statistics.set_browse_resp_callback ===");
     // Store the callback in the statistics manager
-    s_statistics.set_browse_resp_callback(cb, user_data);
+    s_statistics->set_browse_resp_callback(cb, user_data);
     ESP_LOGI(TAG, "=== INTER_MCU: Successfully called set_browse_resp_callback ===");
     ESP_LOGI(TAG, "Browse response listener registered: %p", cb);
 }
 
 void inter_mcu_invoke_browse_resp_callback(const uint8_t* data, size_t length) {
+    if (!s_statistics) {
+        ESP_LOGE(TAG, "StatisticsManager not initialized");
+        return;
+    }
     ESP_LOGI(TAG, "Invoking browse response callback with %d bytes", (int)length);
-    s_statistics.invoke_browse_resp_callback(data, length);
+    s_statistics->invoke_browse_resp_callback(data, length);
 }
 
 void inter_mcu_set_sample_status_listener(wavex_sample_status_cb_t cb, void* user_data) {
+    if (!s_statistics) {
+        ESP_LOGE(TAG, "StatisticsManager not initialized");
+        return;
+    }
     // Store the callback in the statistics manager
-    s_statistics.set_sample_status_callback(cb, user_data);
+    s_statistics->set_sample_status_callback(cb, user_data);
     ESP_LOGI(TAG, "Sample status listener registered: %p", cb);
 }
 
 void inter_mcu_get_backend_heartbeat(wavex_backend_heartbeat_t* out) {
+    if (!s_statistics) {
+        ESP_LOGE(TAG, "StatisticsManager not initialized");
+        return;
+    }
     if (!out) {
         ESP_LOGE(TAG, "Invalid heartbeat output pointer");
         return;
@@ -244,7 +267,7 @@ void inter_mcu_get_backend_heartbeat(wavex_backend_heartbeat_t* out) {
     uint32_t uptime_ms, rx_total, loop_counter, last_rx_ms;
     float cpu_usage_percent;
     bool valid;
-    s_statistics.get_backend_heartbeat(
+    s_statistics->get_backend_heartbeat(
         &uptime_ms, &rx_total, &loop_counter, &last_rx_ms, &cpu_usage_percent, &valid);
 
     out->uptime_ms = uptime_ms;
@@ -260,6 +283,10 @@ void inter_mcu_get_backend_heartbeat(wavex_backend_heartbeat_t* out) {
 }
 
 void inter_mcu_get_backend_heartbeat_detailed(wavex_backend_heartbeat_t* out) {
+    if (!s_statistics) {
+        ESP_LOGE(TAG, "StatisticsManager not initialized");
+        return;
+    }
     if (!out) {
         ESP_LOGE(TAG, "Invalid heartbeat output pointer");
         return;
@@ -268,14 +295,14 @@ void inter_mcu_get_backend_heartbeat_detailed(wavex_backend_heartbeat_t* out) {
     uint32_t uptime_ms, rx_total, loop_counter, last_rx_ms;
     float cpu_avg_percent, cpu_min_percent, cpu_max_percent;
     bool valid;
-    s_statistics.get_backend_heartbeat_detailed(&uptime_ms,
-                                                &rx_total,
-                                                &loop_counter,
-                                                &last_rx_ms,
-                                                &cpu_avg_percent,
-                                                &cpu_min_percent,
-                                                &cpu_max_percent,
-                                                &valid);
+    s_statistics->get_backend_heartbeat_detailed(&uptime_ms,
+                                                 &rx_total,
+                                                 &loop_counter,
+                                                 &last_rx_ms,
+                                                 &cpu_avg_percent,
+                                                 &cpu_min_percent,
+                                                 &cpu_max_percent,
+                                                 &valid);
 
     out->uptime_ms = uptime_ms;
     out->rx_total = rx_total;
@@ -289,59 +316,91 @@ void inter_mcu_get_backend_heartbeat_detailed(wavex_backend_heartbeat_t* out) {
 }
 
 void inter_mcu_get_packet_stats(wavex_packet_stats_t* out) {
+    if (!s_statistics) {
+        ESP_LOGE(TAG, "StatisticsManager not initialized");
+        return;
+    }
     if (!out) {
         ESP_LOGE(TAG, "Invalid packet stats output pointer");
         return;
     }
 
-    s_statistics.get_packet_stats(out);
+    s_statistics->get_packet_stats(out);
 }
 
 void inter_mcu_reset_packet_stats(void) {
-    s_statistics.reset_packet_stats();
+    if (!s_statistics) {
+        ESP_LOGE(TAG, "StatisticsManager not initialized");
+        return;
+    }
+    s_statistics->reset_packet_stats();
     ESP_LOGI(TAG, "Packet statistics reset");
 }
 
 void inter_mcu_get_packet_summary(wavex_packet_summary_t* out) {
+    if (!s_statistics) {
+        ESP_LOGE(TAG, "StatisticsManager not initialized");
+        return;
+    }
     if (!out) {
         ESP_LOGE(TAG, "Invalid packet summary output pointer");
         return;
     }
 
-    s_statistics.get_packet_summary(out);
+    s_statistics->get_packet_summary(out);
 }
 
 uint32_t inter_mcu_get_meter_packet_count(void) {
-    return s_statistics.get_meter_packet_count();
+    if (!s_statistics) {
+        ESP_LOGE(TAG, "StatisticsManager not initialized");
+        return 0;
+    }
+    return s_statistics->get_meter_packet_count();
 }
 
 uint32_t inter_mcu_get_total_packet_count(void) {
-    return s_statistics.get_total_packet_count();
+    if (!s_statistics) {
+        ESP_LOGE(TAG, "StatisticsManager not initialized");
+        return 0;
+    }
+    return s_statistics->get_total_packet_count();
 }
 
 int inter_mcu_format_packet_stats(char* buffer, size_t buffer_size) {
+    if (!s_statistics) {
+        ESP_LOGE(TAG, "StatisticsManager not initialized");
+        return -1;
+    }
     if (!buffer || buffer_size == 0) {
         ESP_LOGE(TAG, "Invalid buffer for packet stats formatting");
         return -1;
     }
 
-    return s_statistics.format_packet_stats(buffer, buffer_size);
+    return s_statistics->format_packet_stats(buffer, buffer_size);
 }
 
 void inter_mcu_get_tx_stats(wavex_tx_stats_t* out) {
+    if (!s_statistics) {
+        ESP_LOGE(TAG, "StatisticsManager not initialized");
+        return;
+    }
     if (!out) {
         ESP_LOGE(TAG, "Invalid TX stats output pointer");
         return;
     }
 
-    s_statistics.get_tx_stats(out);
+    s_statistics->get_tx_stats(out);
 }
 
 void inter_mcu_update_backend_heartbeat(uint32_t uptime_ms,
                                         uint32_t rx_total,
                                         uint32_t loop_counter,
                                         float cpu_usage_percent) {
-    s_statistics.update_backend_heartbeat(uptime_ms, rx_total, loop_counter, cpu_usage_percent);
+    if (!s_statistics) {
+        ESP_LOGE(TAG, "StatisticsManager not initialized");
+        return;
+    }
+    s_statistics->update_backend_heartbeat(uptime_ms, rx_total, loop_counter, cpu_usage_percent);
 }
 
 void inter_mcu_update_backend_heartbeat_detailed(uint32_t uptime_ms,
@@ -350,7 +409,11 @@ void inter_mcu_update_backend_heartbeat_detailed(uint32_t uptime_ms,
                                                  float cpu_avg_percent,
                                                  float cpu_min_percent,
                                                  float cpu_max_percent) {
-    s_statistics.update_backend_heartbeat_detailed(
+    if (!s_statistics) {
+        ESP_LOGE(TAG, "StatisticsManager not initialized");
+        return;
+    }
+    s_statistics->update_backend_heartbeat_detailed(
         uptime_ms, rx_total, loop_counter, cpu_avg_percent, cpu_min_percent, cpu_max_percent);
 }
 
@@ -358,19 +421,31 @@ void inter_mcu_update_backend_meters(float rms_left,
                                      float rms_right,
                                      float peak_left,
                                      float peak_right) {
-    s_statistics.update_meter_data(rms_left, rms_right, peak_left, peak_right);
+    if (!s_statistics) {
+        ESP_LOGE(TAG, "StatisticsManager not initialized");
+        return;
+    }
+    s_statistics->update_meter_data(rms_left, rms_right, peak_left, peak_right);
 }
 
 void inter_mcu_get_meter_data(wavex_meter_data_t* out) {
+    if (!s_statistics) {
+        ESP_LOGE(TAG, "StatisticsManager not initialized");
+        return;
+    }
     if (!out) {
         ESP_LOGE(TAG, "Invalid meter data output pointer");
         return;
     }
 
-    s_statistics.get_meter_data(out);
+    s_statistics->get_meter_data(out);
 }
 
 void inter_mcu_process_packet_data(const uint8_t* data, size_t length) {
+    if (!s_statistics) {
+        ESP_LOGE(TAG, "StatisticsManager not initialized");
+        return;
+    }
     if (!data || length == 0) {
         ESP_LOGE(TAG, "Invalid packet data for processing");
         return;
@@ -378,12 +453,16 @@ void inter_mcu_process_packet_data(const uint8_t* data, size_t length) {
 
     // TODO: Implement packet processing through the packet processor
     // For now, just increment the total packet count
-    s_statistics.increment_packet_stat(0xFF); // Unknown packet type
+    s_statistics->increment_packet_stat(0xFF); // Unknown packet type
     ESP_LOGD(TAG, "Packet data processing not yet implemented, length: %zu", length);
 }
 
 void inter_mcu_increment_packet_stat(uint8_t packet_type) {
-    s_statistics.increment_packet_stat(packet_type);
+    if (!s_statistics) {
+        ESP_LOGE(TAG, "StatisticsManager not initialized");
+        return;
+    }
+    s_statistics->increment_packet_stat(packet_type);
 }
 
 // Process control messages received from Daisy (backend)

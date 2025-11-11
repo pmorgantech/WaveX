@@ -66,10 +66,5 @@ class ICommInterface {
     virtual bool isBusy() = 0;
 };
 
-/**
- * @brief Factory function to get the default comm interface implementation
- */
-ICommInterface* GetCommInterface();
-
 }  // namespace Comm
 }  // namespace WaveX

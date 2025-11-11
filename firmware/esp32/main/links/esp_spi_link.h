@@ -2,7 +2,15 @@
 #define WAVEX_SPI_LINK_H
 
 #include <stdint.h>
+
 #include "link_config.h"
+
+// Forward declaration for PacketRouter
+namespace WaveX {
+namespace Comm {
+class PacketRouter;
+}
+}  // namespace WaveX
 
 #ifdef ESP_PLATFORM
 #include "esp_err.h"
@@ -54,10 +62,13 @@ bool spi_link_is_active(void);
 // Set packet processing callback for received packets
 void spi_link_set_packet_callback(void (*callback)(const uint8_t* data, size_t length));
 
-#endif // WAVEX_SPI_LINK_ENABLED
+#endif  // WAVEX_SPI_LINK_ENABLED
+
+// Set PacketRouter reference for dependency injection (C++ function)
+void spi_link_set_packet_router(WaveX::Comm::PacketRouter* packet_router);
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif // WAVEX_SPI_LINK_H
+#endif  // WAVEX_SPI_LINK_H

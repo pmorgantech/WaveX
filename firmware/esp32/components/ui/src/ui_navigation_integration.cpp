@@ -64,9 +64,12 @@ std::shared_ptr<UIPage> createSampleMenu() {
         // TODO: Implement edit functionality
     });
 
-    menu->addItem("Browser", []() {
+    menu->addItem("Browser",
+                  []() {
         ESP_LOGI(TAG, "Opening Sample Browser page");
-        UINavigator::instance().push(createSampleBrowserPage()); });
+        // TODO: Need to inject comm_interface
+        // UINavigator::instance().push(createSampleBrowserPage(comm_interface));
+    });
 
     return menu;
 }

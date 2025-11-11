@@ -14,9 +14,12 @@ namespace wavex_ui {
 std::shared_ptr<UIPage> createMainMenu() {
     auto menu = std::make_shared<UIMenuPage>("Main Menu");
 
-    menu->addItem("Sample Browser", []() {
+    menu->addItem("Sample Browser",
+                  []() {
         ESP_LOGI(TAG, "Opening Sample Browser");
-        UINavigator::instance().push(createSampleBrowserPage()); });
+        // TODO: Need to inject comm_interface
+        // UINavigator::instance().push(createSampleBrowserPage(comm_interface));
+    });
 
     menu->addItem("Edit Sample",
                   []() {

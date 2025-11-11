@@ -1,19 +1,25 @@
 #pragma once
 
 #include "i_comm_interface.h"
+#include "statistics.h"
 
 namespace WaveX {
 namespace Comm {
 
 /**
- * @brief Concrete implementation of ICommInterface using inter_mcu functions
+ * @brief Concrete implementation of ICommInterface using injected StatisticsManager
  *
- * This implementation wraps the existing inter_mcu_* functions to provide
- * a clean interface for the UI layer.
+ * This implementation uses dependency injection to access StatisticsManager
+ * instead of global state, providing a clean interface for the UI layer.
  */
 class CommInterfaceImpl : public ICommInterface {
    public:
-    CommInterfaceImpl() = default;
+    /**
+     * @brief Construct with injected StatisticsManager dependency
+     * @param statistics Reference to StatisticsManager (owned by ApplicationContext)
+     */
+    explicit CommInterfaceImpl(StatisticsManager& statistics);
+
     ~CommInterfaceImpl() override = default;
 
     // Meter data operations
@@ -35,6 +41,9 @@ class CommInterfaceImpl : public ICommInterface {
 
     // Utility operations
     bool isBusy() override;
+
+   private:
+    StatisticsManager& statistics_;  // Injected dependency reference
 };
 
 }  // namespace Comm

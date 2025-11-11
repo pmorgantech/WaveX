@@ -21,7 +21,8 @@ char UISampleBrowser::s_last_directory_path_[96] = "/";
 uint32_t UISampleBrowser::s_last_selected_index_ = 0;
 UISampleBrowser* UISampleBrowser::s_active_instance_ = nullptr;
 
-UISampleBrowser::UISampleBrowser() {}
+UISampleBrowser::UISampleBrowser(WaveX::Comm::ICommInterface& comm_interface)
+    : comm_interface_(&comm_interface) {}
 
 UISampleBrowser::~UISampleBrowser() {
     // Cleanup is done in onExit()
@@ -67,9 +68,6 @@ void UISampleBrowser::onEnter(lv_obj_t* parent) {
     ui_theme_apply_label_style(metadata_label_, false);
     lv_obj_align(metadata_label_, LV_ALIGN_TOP_LEFT, UI_PADDING_MEDIUM, 60);
     lv_obj_set_style_text_align(metadata_label_, LV_TEXT_ALIGN_LEFT, LV_PART_MAIN);
-
-    // Get and store comm interface
-    comm_interface_ = WaveX::Comm::GetCommInterface();
 
     // Configure file browser - restore last directory path if available
     wavex_file_browser_config_t browser_config = {.root_path = s_last_directory_path_, .file_extension = ".wav", .max_entries = 50, .show_hidden = false, .comm_interface = comm_interface_};
@@ -572,8 +570,8 @@ void UISampleBrowser::sample_status_callback(uint8_t state,
     }
 }
 
-std::shared_ptr<UIPage> createSampleBrowserPage() {
-    return std::make_shared<UISampleBrowser>();
+std::shared_ptr<UIPage> createSampleBrowserPage(WaveX::Comm::ICommInterface& comm_interface) {
+    return std::make_shared<UISampleBrowser>(comm_interface);
 }
 
 }  // namespace wavex_ui

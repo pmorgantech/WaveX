@@ -54,11 +54,13 @@ static const uint32_t MIN_REFRESH_INTERVAL_MS = 16;   // 60 FPS maximum
 static const uint32_t MAX_REFRESH_INTERVAL_MS = 100;  // 10 FPS minimum
 
 // Global UITask instance (singleton pattern)
-static UITask *g_ui_task_instance = nullptr;
+UITask *g_ui_task_instance = nullptr;
 
 // UITask class implementation
-UITask::UITask() {
-    ESP_LOGI(TAG, "UITask created");
+UITask::UITask(WaveX::Comm::ICommInterface &comm_interface) : m_comm_interface(comm_interface) {
+    // Initialize the UI context with injected dependencies
+    m_context.comm_interface = &m_comm_interface;
+    ESP_LOGI(TAG, "UITask created with injected CommInterface at %p", &comm_interface);
 }
 
 esp_err_t UITask::init() {
@@ -83,9 +85,6 @@ esp_err_t UITask::init() {
 
 esp_err_t UITask::start() {
     ESP_LOGI(TAG, "Starting UITask");
-
-    // Get communication interface
-    m_context.comm_interface = WaveX::Comm::GetCommInterface();
 
     // Register meter data callback for real-time audio meter updates
     m_context.comm_interface->setMeterListener(meterDataCallback, &m_context);
@@ -671,13 +670,13 @@ void UITask::createMeterDisplay(lv_obj_t *parent) {
 }
 
 // Global functions for C compatibility
-esp_err_t wavex_ui_task_start(void) {
+esp_err_t wavex_ui_task_start(WaveX::Comm::ICommInterface &comm_interface) {
     if (g_ui_task_instance) {
         ESP_LOGE(TAG, "UI task already started");
         return ESP_FAIL;
     }
 
-    g_ui_task_instance = new UITask();
+    g_ui_task_instance = new UITask(comm_interface);
     if (!g_ui_task_instance) {
         ESP_LOGE(TAG, "Failed to create UI task instance");
         return ESP_FAIL;

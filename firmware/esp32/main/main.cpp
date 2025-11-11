@@ -25,6 +25,9 @@ typedef int esp_err_t;
 // Include WaveX configuration
 #include "config.h"
 
+// Include application context
+#include "application_context.h"
+
 // esp_err.h is brought in transitively by ESP-IDF headers when building on target
 #include "inter_mcu.h"
 #include "ui_task.h"
@@ -38,7 +41,10 @@ typedef int esp_err_t;
 // Bring in the PCNT task API
 #include "pcnt_task.h"
 
-static const char *TAG = "WaveX-ESP32";
+// Forward declaration for UI task instance
+extern UITask* g_ui_task_instance;
+
+static const char* TAG = "WaveX-ESP32";
 
 extern "C" void app_main(void) {
     // THIS IS THE MOST IMPORTANT DEBUG MESSAGE. IF YOU DON'T SEE THIS, THE APP ISN'T STARTING.
@@ -58,11 +64,16 @@ extern "C" void app_main(void) {
     ESP_LOGI(TAG, "Free heap: %" PRIu32 " bytes", esp_get_free_heap_size());
     ESP_LOGI(TAG, "DEBUG: Checkpoint 3 - Heap info logged");
 
-    ESP_LOGI(TAG, "DEBUG: Checkpoint 4 - About to initialize inter-MCU");
+    ESP_LOGI(TAG, "DEBUG: Checkpoint 4 - About to create application context");
 
-    // Initialize inter-MCU over UART
+    // Create application context to own all system components
+    WaveX::ApplicationContext context;
+
+    ESP_LOGI(TAG, "DEBUG: Checkpoint 4a - About to initialize inter-MCU");
+
+    // Initialize inter-MCU over UART with injected StatisticsManager
     ESP_LOGI(TAG, "DEBUG: Checkpoint 5 - Starting inter-MCU with UART mode");
-    esp_err_t inter_mcu_result = inter_mcu_init();
+    esp_err_t inter_mcu_result = inter_mcu_init(context.getStatistics());
     if (inter_mcu_result == ESP_OK) {
         ESP_LOGI(TAG, "DEBUG: Checkpoint 5 - Inter-MCU initialization completed successfully");
 
@@ -120,9 +131,12 @@ extern "C" void app_main(void) {
 // Start UI task with minimal version to test display initialization
 #if WAVEX_LCD_DISPLAY_ENABLED && (WAVEX_LCD_DISPLAY_TYPE == 1)
     ESP_LOGI(TAG, "DEBUG: Checkpoint 10 - Starting minimal UI task for testing");
-    esp_err_t ui_result = wavex_ui_task_start();
+    ESP_LOGI(TAG, "DEBUG: CommInterface address: %p", &context.getCommInterface());
+
+    esp_err_t ui_result = wavex_ui_task_start(context.getCommInterface());
     if (ui_result == ESP_OK) {
         ESP_LOGI(TAG, "DEBUG: Checkpoint 11 - Minimal UI task started successfully");
+        ESP_LOGI(TAG, "DEBUG: UI task instance created at: %p", g_ui_task_instance);
     } else {
         ESP_LOGE(TAG,
                  "DEBUG: Checkpoint 11 - Minimal UI task start FAILED: %s",

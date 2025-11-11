@@ -26,7 +26,7 @@ namespace wavex_ui {
  */
 class UISampleBrowser : public UIPage {
    public:
-    UISampleBrowser();
+    explicit UISampleBrowser(WaveX::Comm::ICommInterface& comm_interface);
     ~UISampleBrowser() override;
 
     const char* name() const override { return "Sample Browser"; }
@@ -98,6 +98,6 @@ class UISampleBrowser : public UIPage {
 /**
  * @brief Factory function to create a sample browser page
  */
-std::shared_ptr<UIPage> createSampleBrowserPage();
+std::shared_ptr<UIPage> createSampleBrowserPage(WaveX::Comm::ICommInterface& comm_interface);
 
 }  // namespace wavex_ui

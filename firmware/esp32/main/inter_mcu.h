@@ -21,7 +21,7 @@ class StatisticsManager;
 // over SPI or UART links.
 
 // Main inter-MCU interface (simplified)
-esp_err_t inter_mcu_init(void);
+esp_err_t inter_mcu_init(StatisticsManager& statistics);
 esp_err_t inter_mcu_start(void);
 
 // Basic MIDI message sending

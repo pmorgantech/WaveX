@@ -94,7 +94,7 @@ struct UiContext {
 // UI Task class - encapsulates UI task state and operations
 class UITask {
    public:
-    UITask();
+    explicit UITask(WaveX::Comm::ICommInterface &comm_interface);
     ~UITask() = default;
 
     // Initialize the UI task
@@ -116,6 +116,9 @@ class UITask {
     void createMeterDisplay(lv_obj_t *parent);
 
    private:
+    // Injected dependencies
+    WaveX::Comm::ICommInterface &m_comm_interface;
+
     // UI context (encapsulated state)
     UiContext m_context;
 
@@ -147,7 +150,7 @@ class UITask {
 #ifndef WAVEX_TEST_BUILD
 
 // Global functions (for C compatibility)
-esp_err_t wavex_ui_task_start(void);
+esp_err_t wavex_ui_task_start(WaveX::Comm::ICommInterface &comm_interface);
 esp_err_t wavex_ui_task_stop(void);
 esp_err_t wavex_ui_get_panel_handle(esp_lcd_panel_handle_t *panel_handle);
 void wavex_ui_mark_content_changed(void);

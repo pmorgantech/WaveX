@@ -56,8 +56,17 @@ static volatile bool s_uart_running = false;
 static uint16_t s_next_sequence = 1;
 static uart_stats_t s_stats;
 
-PacketRouter& GetRouter() {
-    return WaveX::Comm::GetPacketRouter();
+// PacketRouter reference (injected via uart_link_set_packet_router)
+static WaveX::Comm::PacketRouter* s_packet_router = nullptr;
+
+// Get the injected PacketRouter reference
+static WaveX::Comm::PacketRouter& GetRouter() {
+    if (!s_packet_router) {
+        // Fallback for tests or uninitialized state - this should not happen in production
+        static WaveX::Comm::PacketRouter dummy_router;
+        return dummy_router;
+    }
+    return *s_packet_router;
 }
 
 void append_rx_data(const uint8_t* data, size_t len) {
@@ -307,6 +316,16 @@ void uart_task(void* /*param*/) {
 }
 
 }  // namespace
+
+// Set PacketRouter reference for dependency injection
+void uart_link_set_packet_router(WaveX::Comm::PacketRouter* packet_router) {
+    s_packet_router = packet_router;
+    // Initialize the packet router with stats callback
+    if (s_packet_router) {
+        s_packet_router->set_stats_callback(
+            [](uint8_t packet_type) { inter_mcu_increment_packet_stat(packet_type); });
+    }
+}
 
 esp_err_t uart_link_init(void) {
     if (s_uart_mutex) {

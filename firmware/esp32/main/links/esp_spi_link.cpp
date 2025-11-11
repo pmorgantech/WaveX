@@ -50,8 +50,8 @@ static const char* TAG = "esp_spi_link";
 #define create_wave_packet ProtocolHandler::CreateWaveXPacket
 #define parse_wave_packet ProtocolHandler::ParseWaveXPacket
 
-// Global packet router instance
-static WaveX::Comm::PacketRouter& s_packet_router = WaveX::Comm::GetPacketRouter();
+// Packet router reference (injected via spi_link_set_packet_router)
+static WaveX::Comm::PacketRouter* s_packet_router = nullptr;
 
 // SPI slave transaction buffers - DMA-capable and aligned
 // Use triple buffering for efficient packet processing
@@ -146,8 +146,8 @@ static bool is_duplicate_packet(uint16_t seq_num) {
 
 // Initialize packet router
 static void init_packet_router() {
-    s_packet_router.set_stats_callback(
-        [](uint8_t packet_type) { inter_mcu_increment_packet_stat(packet_type); });
+    // Packet router is now set via spi_link_set_packet_router()
+    // This function is kept for backward compatibility but does nothing
 }
 
 // Allocate DMA-capable buffers
@@ -281,7 +281,11 @@ static void handle_large_packet(const uint8_t* packet_data, size_t packet_len) {
     }
 
     // Route to unified packet router
-    s_packet_router.route_packet(packet_data, packet_len);
+    if (s_packet_router) {
+        s_packet_router->route_packet(packet_data, packet_len);
+    } else {
+        ESP_LOGE(TAG, "PacketRouter not set - cannot route packet");
+    }
 #else
     (void)packet_data;
     (void)packet_len;
@@ -713,7 +717,11 @@ static void spi_slave_task(void* pvParameters) {
 #if WAVEX_MCU_LINK_PACKET_DEBUG
                     ESP_LOGI(TAG, "CRC validation PASSED, routing packet type=0x%02X", rx_data[1]);
 #endif
-                    s_packet_router.route_packet(rx_data, expected_packet_size);
+                    if (s_packet_router) {
+                        s_packet_router->route_packet(rx_data, expected_packet_size);
+                    } else {
+                        ESP_LOGE(TAG, "PacketRouter not set - cannot route packet");
+                    }
                 } else {
                     ESP_LOGW(TAG,
                              "CRC validation FAILED for packet type=0x%02X size=%d",
@@ -873,6 +881,16 @@ void spi_link_set_packet_callback(void (*callback)(const uint8_t* data, size_t l
     // This function is not implemented in the unified packet system
     // as we now use the packet router for incoming messages
     (void)callback;
+}
+
+// Set PacketRouter reference for dependency injection
+void spi_link_set_packet_router(WaveX::Comm::PacketRouter* packet_router) {
+    s_packet_router = packet_router;
+    // Initialize the packet router with stats callback
+    if (s_packet_router) {
+        s_packet_router->set_stats_callback(
+            [](uint8_t packet_type) { inter_mcu_increment_packet_stat(packet_type); });
+    }
 }
 
 esp_err_t spi_link_stop(void) {
