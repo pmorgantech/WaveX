@@ -56,22 +56,13 @@ DisplayManager& DisplayManager::instance() {
 }
 
 esp_err_t DisplayManager::init() {
-    ESP_LOGI(TAG, "DisplayManager::init() called");
     if (display_) {
-        ESP_LOGI(TAG, "Display already initialized");
         return ESP_OK;
     }
 
-    ESP_LOGI(TAG, "Initializing LVGL display...");
     ESP_RETURN_ON_ERROR(initLvglDisplay(), TAG, "failed to initialise LVGL display");
-
-    ESP_LOGI(TAG, "Initializing touch controller...");
     ESP_RETURN_ON_ERROR(initTouchController(), TAG, "failed to initialise touch controller");
-
-    ESP_LOGI(TAG, "Starting LVGL tick timer...");
     ESP_RETURN_ON_ERROR(startLvglTick(), TAG, "failed to start LVGL tick timer");
-
-    ESP_LOGI(TAG, "DisplayManager::init() completed successfully");
     return ESP_OK;
 }
 

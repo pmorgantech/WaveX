@@ -139,16 +139,32 @@ int main(void) {
         WAVEX_LOG_DAISY(INTER_MCU_LINK, "SD: InitAndMount SUCCESS");
 #endif
         // Give SD card time to stabilize after mount
+        WAVEX_LOG_DAISY(INTER_MCU_LINK, "DEBUG: Starting SD card stabilization delay...");
         System::Delay(200);
-#if WAVEX_DAISY_SD_DEBUG
-        WAVEX_LOG_DAISY(INTER_MCU_LINK, "SD: post-mount delay complete");
-#endif
+        WAVEX_LOG_DAISY(INTER_MCU_LINK, "DEBUG: SD card stabilization delay complete");
     } else {
         WAVEX_LOG_DAISY(INTER_MCU_LINK, "SD: InitAndMount FAILED - no card or mount error");
     }
 #endif
 
+    // Initialize SDRAM (required for sample RAM manager)
+    WAVEX_LOG_DAISY(INTER_MCU_LINK, "=== SDRAM INIT START ===");
+    WAVEX_LOG_DAISY(INTER_MCU_LINK, "Initializing SDRAM...");
+    System::Delay(10);  // Small delay before SDRAM init
+
+    SdramHandle::Result sdram_result = hw.sdram_handle.Init();
+
+    if (sdram_result != SdramHandle::Result::OK) {
+        WAVEX_LOG_DAISY(
+            INTER_MCU_LINK, "SDRAM initialization FAILED! Result: %d", (int)sdram_result);
+        // Continue anyway - audio engine will handle gracefully
+    } else {
+        WAVEX_LOG_DAISY(INTER_MCU_LINK, "SDRAM initialized successfully");
+    }
+    WAVEX_LOG_DAISY(INTER_MCU_LINK, "=== SDRAM INIT COMPLETE ===");
+
     // Initialize audio (if enabled)
+    WAVEX_LOG_DAISY(INTER_MCU_LINK, "=== AUDIO ENGINE INIT START ===");
 
 #if WAVEX_AUDIO_ENGINE_ENABLED
     hw.SetAudioBlockSize(Timebase::kBlockSize);  // 48-sample blocks → 1 kHz control tick
@@ -162,11 +178,9 @@ int main(void) {
 #endif
 
 // AudioEngine already initializes sampler and CV bus internally
-
-// Configure interrupt priorities to prevent audio starvation
-// Audio DMA should have higher priority (lower number) than SPI
 #if WAVEX_AUDIO_ENGINE_ENABLED
-    // Set audio DMA to highest priority
+    // Configure interrupt priorities to prevent audio starvation
+    // Audio DMA should have higher priority (lower number) than SPI
     HAL_NVIC_SetPriority(SAI1_IRQn, 5, 0);
     HAL_NVIC_SetPriority(DMA1_Stream0_IRQn, 5, 0);  // SAI1 DMA A
     HAL_NVIC_SetPriority(DMA1_Stream1_IRQn, 5, 0);  // SAI1 DMA B
@@ -182,7 +196,9 @@ int main(void) {
     WAVEX_LOG_DAISY(INTER_MCU_LINK, "Interrupt priorities configured: Audio DMA=5/6, SPI DMA=10");
 #endif
 
-// Initialize communication with ESP32
+    // Initialize communication with ESP32
+    WAVEX_LOG_DAISY(INTER_MCU_LINK, "=== COMMUNICATION INIT START ===");
+
 #if WAVEX_SPI_LINK_ENABLED
 // Add debug to confirm SPI init is reached
 #if WAVEX_MCU_LINK_DEBUG
@@ -308,11 +324,10 @@ int main(void) {
 
     // Initialize SPI link only if SPI init succeeded
     if (init_result == daisy::SpiHandle::Result::OK) {
-        hw.PrintLine("DAISY: SPI Init SUCCESS - About to call WaveX::Comm::Spi_Init");
-        WAVEX_LOG_DAISY(INTER_MCU_LINK, "DEBUG: Calling WaveX::Comm::Spi_Init");
+        WAVEX_LOG_DAISY(INTER_MCU_LINK,
+                        "DAISY: SPI Init SUCCESS - About to call WaveX::Comm::Spi_Init");
         WaveX::Comm::Spi_Init(hw, &spi_handle);
-        hw.PrintLine("DAISY: WaveX::Comm::Spi_Init completed");
-        WAVEX_LOG_DAISY(INTER_MCU_LINK, "DEBUG: Returned from Spi_Init");
+        WAVEX_LOG_DAISY(INTER_MCU_LINK, "DAISY: WaveX::Comm::Spi_Init completed");
         System::Delay(100);
 
         // SPI is reserved for BROWSE_RESP and WAVE_DATA_CHUNK only
@@ -331,7 +346,7 @@ int main(void) {
 
     WaveX::Comm::UartLinkInit(&hw);
     WaveX::Comm::UartLinkStart();
-    hw.PrintLine("DAISY: UART link started");
+    WAVEX_LOG_DAISY(INTER_MCU_LINK, "DAISY: UART link started");
 
 // Start audio callback system
 #if WAVEX_AUDIO_ENGINE_ENABLED
@@ -351,6 +366,8 @@ int main(void) {
     bool wav_started = false;
     static uint32_t loop_counter = 0;
     static uint32_t last_heartbeat = 0;
+
+    WAVEX_LOG_DAISY(INTER_MCU_LINK, "=== BOOT COMPLETE - ENTERING MAIN LOOP ===");
 
     // Main loop
     while (1) {
@@ -474,7 +491,7 @@ int main(void) {
 
             int heartbeat_result = WaveX::Comm::UartLinkSend(
                 WaveX::Protocol::MSG_HEARTBEAT, &heartbeat_msg, sizeof(heartbeat_msg));
-            hw.PrintLine("DAISY: Heartbeat send result=%d", heartbeat_result);
+            WAVEX_LOG_DAISY(INTER_MCU_LINK, "DAISY: Heartbeat send result=%d", heartbeat_result);
 #if WAVEX_MCU_LINK_PACKET_DEBUG
             WAVEX_LOG_DAISY(INTER_MCU_LINK, "Heartbeat send result: %d", heartbeat_result);
 #endif

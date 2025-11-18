@@ -6,6 +6,67 @@
 #include "../../utils/test_helpers.h"
 #include "protocol.h"
 
+// Mock functions for testing message handlers
+static bool g_sync_handler_called = false;
+static bool g_heartbeat_handler_called = false;
+static bool g_meter_push_handler_called = false;
+static bool g_browse_resp_handler_called = false;
+static bool g_sample_stop_resp_handler_called = false;
+static bool g_error_handler_called = false;
+
+static uint8_t g_last_msg_type = 0;
+static uint32_t g_last_seq_num = 0;
+
+// Mock message handlers - redefine them to override the real ones
+extern "C" {
+
+// Save original function pointers
+static void (*original_handle_sync)(const WaveX::Protocol::SyncMessage&) = nullptr;
+static void (*original_handle_heartbeat)(const WaveX::Protocol::HeartbeatMessage&) = nullptr;
+static void (*original_handle_meter_push)(const WaveX::Protocol::MeterPushMessage&) = nullptr;
+static void (*original_handle_browse_resp)(const uint8_t*, size_t) = nullptr;
+static void (*original_handle_sample_stop_resp)(const WaveX::Protocol::SampleStopRespMessage&) =
+    nullptr;
+static void (*original_handle_error)(const WaveX::Protocol::ErrorMessage&) = nullptr;
+
+void handle_sync(const WaveX::Protocol::SyncMessage& msg) {
+    (void)msg;
+    g_sync_handler_called = true;
+    g_last_msg_type = WaveX::Protocol::MSG_SYNC;
+}
+
+void handle_heartbeat(const WaveX::Protocol::HeartbeatMessage& msg) {
+    (void)msg;
+    g_heartbeat_handler_called = true;
+    g_last_msg_type = WaveX::Protocol::MSG_HEARTBEAT;
+}
+
+void handle_meter_push(const WaveX::Protocol::MeterPushMessage& msg) {
+    (void)msg;
+    g_meter_push_handler_called = true;
+    g_last_msg_type = WaveX::Protocol::MSG_METER_PUSH;
+}
+
+void handle_browse_resp(const uint8_t* data, size_t length) {
+    (void)data;
+    (void)length;
+    g_browse_resp_handler_called = true;
+    g_last_msg_type = WaveX::Protocol::MSG_BROWSE_RESP;
+}
+
+void handle_sample_stop_resp(const WaveX::Protocol::SampleStopRespMessage& msg) {
+    (void)msg;
+    g_sample_stop_resp_handler_called = true;
+    g_last_msg_type = WaveX::Protocol::MSG_SAMPLE_STOP_RESP;
+}
+
+void handle_error(const WaveX::Protocol::ErrorMessage& msg) {
+    (void)msg;
+    g_error_handler_called = true;
+    g_last_msg_type = WaveX::Protocol::MSG_ERROR;
+}
+}
+
 using namespace WaveX::Comm;
 using namespace WaveX::Protocol;
 using namespace WaveX::Test;
@@ -13,34 +74,44 @@ using namespace WaveX::Test;
 class PacketRouterTest : public ::testing::Test {
    protected:
     void SetUp() override {
-        router_ = &GetPacketRouter();
-        stats_callback_called_ = false;
-        last_stats_msg_type_ = 0;
+        router_ = std::make_unique<PacketRouter>();
+
+        // Reset global test flags
+        g_sync_handler_called = false;
+        g_heartbeat_handler_called = false;
+        g_meter_push_handler_called = false;
+        g_browse_resp_handler_called = false;
+        g_sample_stop_resp_handler_called = false;
+        g_error_handler_called = false;
+        g_last_msg_type = 0;
+        g_last_seq_num = 0;
     }
 
     void TearDown() override {}
 
-    PacketRouter* router_;
-    bool stats_callback_called_;
-    uint8_t last_stats_msg_type_;
-
-    void stats_callback(uint8_t msg_type) {
-        stats_callback_called_ = true;
-        last_stats_msg_type_ = msg_type;
-    }
+    std::unique_ptr<PacketRouter> router_;
 };
 
-// Test routing a valid packet
-TEST_F(PacketRouterTest, RouteValidPacket) {
+// Test routing a valid heartbeat packet
+TEST_F(PacketRouterTest, RouteValidHeartbeatPacket) {
     std::vector<uint8_t> packet = ProtocolTestHelper::CreateHeartbeatPacket(1000, 5000, 10000);
 
+    // Should not crash and should process packet without throwing
     router_->route_packet(packet.data(), packet.size());
 
-    // Should not crash and should call stats callback
-    router_->set_stats_callback([this](uint8_t type) { this->stats_callback(type); });
+    // Packet routing completed successfully
+    SUCCEED();
+}
 
+// Test routing a valid sync packet
+TEST_F(PacketRouterTest, RouteValidSyncPacket) {
+    std::vector<uint8_t> packet = ProtocolTestHelper::CreateWaveXPacket(MSG_SYNC, nullptr, 0);
+
+    // Should not crash and should process packet without throwing
     router_->route_packet(packet.data(), packet.size());
-    // Note: In real implementation, stats callback would be called
+
+    // Packet routing completed successfully
+    SUCCEED();
 }
 
 // Test routing invalid packet (too small)
@@ -49,8 +120,13 @@ TEST_F(PacketRouterTest, RouteInvalidPacketTooSmall) {
 
     router_->route_packet(small_packet.data(), small_packet.size());
 
-    // Should handle gracefully without crashing
-    EXPECT_TRUE(true);  // Just verify no crash
+    // No handlers should be called for invalid packet
+    EXPECT_FALSE(g_sync_handler_called);
+    EXPECT_FALSE(g_heartbeat_handler_called);
+    EXPECT_FALSE(g_meter_push_handler_called);
+    EXPECT_FALSE(g_browse_resp_handler_called);
+    EXPECT_FALSE(g_sample_stop_resp_handler_called);
+    EXPECT_FALSE(g_error_handler_called);
 }
 
 // Test routing invalid packet (corrupted CRC)
@@ -63,55 +139,38 @@ TEST_F(PacketRouterTest, RouteInvalidPacketCorruptedCRC) {
 
     router_->route_packet(packet.data(), packet.size());
 
-    // Should handle gracefully without crashing
-    EXPECT_TRUE(true);  // Just verify no crash
+    // No handlers should be called for corrupted packet
+    EXPECT_FALSE(g_sync_handler_called);
+    EXPECT_FALSE(g_heartbeat_handler_called);
+    EXPECT_FALSE(g_meter_push_handler_called);
+    EXPECT_FALSE(g_browse_resp_handler_called);
+    EXPECT_FALSE(g_sample_stop_resp_handler_called);
+    EXPECT_FALSE(g_error_handler_called);
 }
 
 // Test routing UART message
 TEST_F(PacketRouterTest, RouteUartMessage) {
     HeartbeatMessage msg = {1000, 5000, 10000, 256, 128, 512};
 
-    router_->set_stats_callback([this](uint8_t type) { this->stats_callback(type); });
-
+    // Should not crash and should process UART message without throwing
     router_->route_uart_message(
         MSG_HEARTBEAT, reinterpret_cast<const uint8_t*>(&msg), sizeof(msg), 0, 0x1234);
 
-    // Should handle message routing
-    EXPECT_TRUE(true);  // Just verify no crash
+    // UART message routing completed successfully
+    SUCCEED();
 }
 
-// Test routing SYNC message
-TEST_F(PacketRouterTest, RouteSyncMessage) {
-    SyncMessage msg = {1000, {0}};
-    std::vector<uint8_t> packet =
-        ProtocolTestHelper::CreateWaveXPacket(MSG_SYNC, &msg, sizeof(msg));
-
-    router_->route_packet(packet.data(), packet.size());
-
-    // Should handle SYNC message
-    EXPECT_TRUE(true);  // Just verify no crash
-}
-
-// Test routing HEARTBEAT message
-TEST_F(PacketRouterTest, RouteHeartbeatMessage) {
-    std::vector<uint8_t> packet = ProtocolTestHelper::CreateHeartbeatPacket(1000, 5000, 10000);
-
-    router_->route_packet(packet.data(), packet.size());
-
-    // Should handle HEARTBEAT message
-    EXPECT_TRUE(true);  // Just verify no crash
-}
-
-// Test routing METER_PUSH message
+// Test routing METER_PUSH message via packet
 TEST_F(PacketRouterTest, RouteMeterPushMessage) {
     MeterPushMessage msg = {0x7FFF, 0x4000, 0x7FFF, 0x4000};
     std::vector<uint8_t> packet =
         ProtocolTestHelper::CreateWaveXPacket(MSG_METER_PUSH, &msg, sizeof(msg));
 
+    // Should not crash and should process packet without throwing
     router_->route_packet(packet.data(), packet.size());
 
-    // Should handle METER_PUSH message
-    EXPECT_TRUE(true);  // Just verify no crash
+    // Packet routing completed successfully
+    SUCCEED();
 }
 
 // Test routing BROWSE_RESP message
@@ -120,10 +179,11 @@ TEST_F(PacketRouterTest, RouteBrowseRespMessage) {
 
     std::vector<uint8_t> packet = ProtocolTestHelper::CreateBrowseRespPacket(2, entries);
 
+    // Should not crash and should process packet without throwing
     router_->route_packet(packet.data(), packet.size());
 
-    // Should handle BROWSE_RESP message
-    EXPECT_TRUE(true);  // Just verify no crash
+    // Packet routing completed successfully
+    SUCCEED();
 }
 
 // Test routing ERROR message
@@ -132,10 +192,11 @@ TEST_F(PacketRouterTest, RouteErrorMessage) {
     std::vector<uint8_t> packet =
         ProtocolTestHelper::CreateWaveXPacket(MSG_ERROR, &msg, sizeof(msg));
 
+    // Should not crash and should process packet without throwing
     router_->route_packet(packet.data(), packet.size());
 
-    // Should handle ERROR message
-    EXPECT_TRUE(true);  // Just verify no crash
+    // Packet routing completed successfully
+    SUCCEED();
 }
 
 // Test routing unknown message type
@@ -148,8 +209,13 @@ TEST_F(PacketRouterTest, RouteUnknownMessage) {
 
     router_->route_packet(packet.data(), packet.size());
 
-    // Should handle unknown message gracefully
-    EXPECT_TRUE(true);  // Just verify no crash
+    // No handlers should be called for unknown message type
+    EXPECT_FALSE(g_sync_handler_called);
+    EXPECT_FALSE(g_heartbeat_handler_called);
+    EXPECT_FALSE(g_meter_push_handler_called);
+    EXPECT_FALSE(g_browse_resp_handler_called);
+    EXPECT_FALSE(g_sample_stop_resp_handler_called);
+    EXPECT_FALSE(g_error_handler_called);
 }
 
 // Test routing packet with ACK flag
@@ -158,10 +224,11 @@ TEST_F(PacketRouterTest, RoutePacketWithACK) {
     std::vector<uint8_t> packet = ProtocolTestHelper::CreateWaveXPacket(
         MSG_HEARTBEAT, &msg, sizeof(msg), 0x1234, PKT_FLAG_ACK);
 
+    // Should not crash and should process ACK packet without throwing
     router_->route_packet(packet.data(), packet.size());
 
-    // Should handle ACK flag
-    EXPECT_TRUE(true);  // Just verify no crash
+    // ACK packet routing completed successfully
+    SUCCEED();
 }
 
 // Test routing packet with NACK flag
@@ -170,39 +237,56 @@ TEST_F(PacketRouterTest, RoutePacketWithNACK) {
     std::vector<uint8_t> packet = ProtocolTestHelper::CreateWaveXPacket(
         MSG_HEARTBEAT, &msg, sizeof(msg), 0x1234, PKT_FLAG_NACK);
 
+    // Should not crash and should process NACK packet without throwing
     router_->route_packet(packet.data(), packet.size());
 
-    // Should handle NACK flag
-    EXPECT_TRUE(true);  // Just verify no crash
+    // NACK packet routing completed successfully
+    SUCCEED();
 }
 
-// Test statistics callback
+// Test statistics callback functionality
 TEST_F(PacketRouterTest, StatisticsCallback) {
-    router_->set_stats_callback([this](uint8_t type) { this->stats_callback(type); });
+    bool stats_callback_called = false;
+    uint8_t last_stats_type = 0;
+
+    router_->set_stats_callback([&stats_callback_called, &last_stats_type](uint8_t type) {
+        stats_callback_called = true;
+        last_stats_type = type;
+    });
 
     HeartbeatMessage msg = {1000, 5000, 10000, 256, 128, 512};
     router_->route_uart_message(
         MSG_HEARTBEAT, reinterpret_cast<const uint8_t*>(&msg), sizeof(msg), 0, 0x1234);
 
-    // In real implementation, callback would be called
-    // For now, just verify router doesn't crash
-    EXPECT_TRUE(true);
+    // Statistics callback should be called
+    EXPECT_TRUE(stats_callback_called);
+    EXPECT_EQ(last_stats_type, MSG_HEARTBEAT);
 }
 
-// Test routing null packet
+// Test routing null packet (should handle gracefully)
 TEST_F(PacketRouterTest, RouteNullPacket) {
     router_->route_packet(nullptr, 0);
 
-    // Should handle null packet gracefully
-    EXPECT_TRUE(true);  // Just verify no crash
+    // No handlers should be called for null packet
+    EXPECT_FALSE(g_sync_handler_called);
+    EXPECT_FALSE(g_heartbeat_handler_called);
+    EXPECT_FALSE(g_meter_push_handler_called);
+    EXPECT_FALSE(g_browse_resp_handler_called);
+    EXPECT_FALSE(g_sample_stop_resp_handler_called);
+    EXPECT_FALSE(g_error_handler_called);
 }
 
-// Test routing empty packet
+// Test routing empty packet (should handle gracefully)
 TEST_F(PacketRouterTest, RouteEmptyPacket) {
     std::vector<uint8_t> empty_packet;
 
     router_->route_packet(empty_packet.data(), 0);
 
-    // Should handle empty packet gracefully
-    EXPECT_TRUE(true);  // Just verify no crash
+    // No handlers should be called for empty packet
+    EXPECT_FALSE(g_sync_handler_called);
+    EXPECT_FALSE(g_heartbeat_handler_called);
+    EXPECT_FALSE(g_meter_push_handler_called);
+    EXPECT_FALSE(g_browse_resp_handler_called);
+    EXPECT_FALSE(g_sample_stop_resp_handler_called);
+    EXPECT_FALSE(g_error_handler_called);
 }

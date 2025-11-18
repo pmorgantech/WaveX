@@ -173,12 +173,18 @@ void PacketRouter::route_browse_response(const uint8_t* packet_data, size_t pack
 }
 
 // Message handlers
-void PacketRouter::handle_sync(const WaveX::Protocol::SyncMessage& msg) {
+#ifdef WAVEX_TEST_BUILD
+#define WEAK_HANDLER __attribute__((weak))
+#else
+#define WEAK_HANDLER
+#endif
+
+WEAK_HANDLER void PacketRouter::handle_sync(const WaveX::Protocol::SyncMessage& msg) {
     ESP_LOGI("packet_router", "Sync: timestamp=%u", msg.timestamp_ms);
     // TODO: Implement sync handling
 }
 
-void PacketRouter::handle_heartbeat(const WaveX::Protocol::HeartbeatMessage& msg) {
+WEAK_HANDLER void PacketRouter::handle_heartbeat(const WaveX::Protocol::HeartbeatMessage& msg) {
     float cpu_avg = msg.cpu_avg_percent / 10.0f;
     float cpu_min = msg.cpu_min_percent / 10.0f;
     float cpu_max = msg.cpu_max_percent / 10.0f;
@@ -196,7 +202,7 @@ void PacketRouter::handle_heartbeat(const WaveX::Protocol::HeartbeatMessage& msg
         msg.uptime_ms, msg.rx_total, msg.loop_counter, cpu_avg, cpu_min, cpu_max);
 }
 
-void PacketRouter::handle_meter_push(const WaveX::Protocol::MeterPushMessage& msg) {
+WEAK_HANDLER void PacketRouter::handle_meter_push(const WaveX::Protocol::MeterPushMessage& msg) {
 #ifdef WAVEX_LOG_METER_DATA
     ESP_LOGI("packet_router",
              "Meter: L=(%u,%u) R=(%u,%u)",
@@ -216,7 +222,7 @@ void PacketRouter::handle_meter_push(const WaveX::Protocol::MeterPushMessage& ms
     inter_mcu_update_backend_meters(rms_left, rms_right, peak_left, peak_right);
 }
 
-void PacketRouter::handle_browse_resp(const uint8_t* data, size_t length) {
+WEAK_HANDLER void PacketRouter::handle_browse_resp(const uint8_t* data, size_t length) {
     ESP_LOGI("packet_router", "Browse response: %zu bytes", length);
 
     // // Log raw payload for debugging (first 64 bytes)
@@ -238,24 +244,24 @@ void PacketRouter::handle_browse_resp(const uint8_t* data, size_t length) {
     inter_mcu_invoke_browse_resp_callback(data, length);
 }
 
-void PacketRouter::handle_sample_status(const WaveX::Protocol::SampleStatusMessage& msg) {
+WEAK_HANDLER void PacketRouter::handle_sample_status(const WaveX::Protocol::SampleStatusMessage& msg) {
     ESP_LOGI("packet_router", "Sample status: state=0x%02X", msg.state);
     // TODO: Implement sample status handling
 }
 
-void PacketRouter::handle_sample_stop_resp(const WaveX::Protocol::SampleStopRespMessage& msg) {
+WEAK_HANDLER void PacketRouter::handle_sample_stop_resp(const WaveX::Protocol::SampleStopRespMessage& msg) {
     ESP_LOGI("packet_router", "Sample stop response: success=%d", msg.success);
 
     // Forward to inter_mcu layer which can handle UI callbacks
     inter_mcu_handle_sample_stop_response(msg.success == 1);
 }
 
-void PacketRouter::handle_error(const WaveX::Protocol::ErrorMessage& msg) {
+WEAK_HANDLER void PacketRouter::handle_error(const WaveX::Protocol::ErrorMessage& msg) {
     ESP_LOGE("packet_router", "Error: code=0x%02X, message=%s", msg.code, msg.msg);
     // TODO: Implement error handling
 }
 
-void PacketRouter::handle_wave_chunk(const WaveX::Protocol::WaveChunkMessage& msg, const uint8_t* payload, size_t length) {
+WEAK_HANDLER void PacketRouter::handle_wave_chunk(const WaveX::Protocol::WaveChunkMessage& msg, const uint8_t* payload, size_t length) {
     ESP_LOGI("packet_router", "Wave chunk: offset=%u, count=%u", msg.offset, msg.count);
 
     // Validate payload size matches expected size
@@ -280,7 +286,7 @@ void PacketRouter::handle_wave_chunk(const WaveX::Protocol::WaveChunkMessage& ms
     }
 }
 
-void PacketRouter::handle_unknown_message(uint8_t type, const uint8_t* payload, size_t length) {
+WEAK_HANDLER void PacketRouter::handle_unknown_message(uint8_t type, const uint8_t* payload, size_t length) {
     ESP_LOGW("packet_router", "Unknown message type: 0x%02X, payload length: %zu", type, length);
     (void)payload;  // Suppress unused parameter warning
 }

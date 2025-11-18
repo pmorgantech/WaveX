@@ -299,6 +299,13 @@ bool wavex_file_browser_navigate_up_entry(wavex_file_browser_t* browser) {
         ESP_LOGD(TAG, "navigate_up: scrolled viewport to %u", browser->first_visible_index);
     }
 
+    // Notify callback about selection change
+    if (browser->file_selected_index_cb && browser->entries) {
+        browser->file_selected_index_cb(browser->selected_index,
+                                        &browser->entries[browser->selected_index],
+                                        browser->user_data);
+    }
+
     // Update visual highlighting - refresh UI if viewport might have changed
     browser->ui_update_pending = true;
     wavex_ui_mark_content_changed();
@@ -335,6 +342,13 @@ bool wavex_file_browser_navigate_down_entry(wavex_file_browser_t* browser) {
             browser->first_visible_index = 0;
         }
         ESP_LOGD(TAG, "navigate_down: scrolled viewport to %u", browser->first_visible_index);
+    }
+
+    // Notify callback about selection change
+    if (browser->file_selected_index_cb && browser->entries) {
+        browser->file_selected_index_cb(browser->selected_index,
+                                        &browser->entries[browser->selected_index],
+                                        browser->user_data);
     }
 
     // Update visual highlighting - refresh UI if viewport might have changed
@@ -644,6 +658,12 @@ static bool parse_browse_response_with_pagination(const uint8_t* data,
 
         entry->is_directory = wire_entry->is_dir != 0;
         entry->size_bytes = wire_entry->size_bytes;
+
+        // Copy WAV metadata
+        entry->sample_rate = wire_entry->sample_rate;
+        entry->channels = wire_entry->channels;
+        entry->bits_per_sample = wire_entry->bits_per_sample;
+        entry->duration_ms = wire_entry->duration_ms;
 
         // Copy name with null termination
         strncpy(entry->name, wire_entry->name, sizeof(entry->name) - 1);

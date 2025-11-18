@@ -1,5 +1,6 @@
 #include "comm_interface_impl.h"
 
+#include "../../shared/spi_protocol/protocol.h"
 #include "../inter_mcu.h"
 
 namespace WaveX {
@@ -37,6 +38,22 @@ esp_err_t CommInterfaceImpl::sendSamplePlayRequest(uint32_t file_index) {
 
 esp_err_t CommInterfaceImpl::sendSampleStopRequest() {
     return inter_mcu_send_sample_stop_req();
+}
+
+esp_err_t CommInterfaceImpl::sendSampleLoadRequest(uint16_t sample_id,
+                                                   uint32_t sample_size,
+                                                   uint16_t sample_rate,
+                                                   uint8_t channels,
+                                                   uint8_t bit_depth) {
+    return inter_mcu_send_sample_load_req(sample_id, sample_size, sample_rate, channels, bit_depth);
+}
+
+esp_err_t CommInterfaceImpl::sendSampleData(const uint8_t* data, size_t length) {
+    if (!data || length == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    return inter_mcu_send_sample_data(data, length);
 }
 
 // Diagnostics operations

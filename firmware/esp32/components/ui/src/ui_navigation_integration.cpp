@@ -3,7 +3,8 @@
 
 #include <esp_log.h>
 
-#include "ui/ui_existing_pages.h"
+#include "ui/ui_api.h"
+#include "ui/ui_diagnostics_page.h"
 #include "ui/ui_sample_browser.h"
 
 static const char* TAG = "UI_NAV_INTEGRATION";
@@ -64,12 +65,14 @@ std::shared_ptr<UIPage> createSampleMenu() {
         // TODO: Implement edit functionality
     });
 
-    menu->addItem("Browser",
-                  []() {
+    menu->addItem("Browser", []() {
         ESP_LOGI(TAG, "Opening Sample Browser page");
-        // TODO: Need to inject comm_interface
-        // UINavigator::instance().push(createSampleBrowserPage(comm_interface));
-    });
+        auto comm_interface = wavex_ui::ui_get_comm_interface();
+        if (comm_interface) {
+            UINavigator::instance().push(createSampleBrowserPage(*comm_interface));
+        } else {
+            ESP_LOGE(TAG, "No comm interface available for Sample Browser");
+        } });
 
     return menu;
 }

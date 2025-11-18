@@ -7,10 +7,11 @@
  */
 
 #include "pcnt_task.h"
-#include "esp_log.h"
-#include "driver/pcnt.h"
-#include "../../shared/config/pin_config.h"
+
 #include "../../shared/config/hardware_config.h"
+#include "../../shared/config/pin_config.h"
+#include "driver/pcnt.h"
+#include "esp_log.h"
 
 // For interrupt handling
 #include "esp_intr_alloc.h"
@@ -21,26 +22,21 @@ static const char *TAG = "PCNT_TASK";
 // PCNT unit configurations
 static wavex_pcnt_config_t s_pcnt_configs[] = {
     // Main encoder (PCNT_UNIT_0)
-    {
-        .unit = WAVEX_ENCODER_PCNT_UNIT,
-        .channel_a = WAVEX_ENCODER_PCNT_CH_A,
-        .channel_b = WAVEX_ENCODER_PCNT_CH_B,
-        .gpio_a = WAVEX_ESP_ENCODER_A,
-        .gpio_b = WAVEX_ESP_ENCODER_B,
-        .filter_value = WAVEX_ENCODER_FILTER_VALUE,
-        .enabled = WAVEX_ESP_ENCODER_PCNT_ENABLED
-    },
+    {.unit = WAVEX_ENCODER_PCNT_UNIT,
+     .channel_a = WAVEX_ENCODER_PCNT_CH_A,
+     .channel_b = WAVEX_ENCODER_PCNT_CH_B,
+     .gpio_a = WAVEX_ESP_ENCODER_A,
+     .gpio_b = WAVEX_ESP_ENCODER_B,
+     .filter_value = WAVEX_ENCODER_FILTER_VALUE,
+     .enabled = WAVEX_ESP_ENCODER_PCNT_ENABLED},
     // Additional PCNT unit (PCNT_UNIT_1)
-    {
-        .unit = WAVEX_PCNT1_UNIT,
-        .channel_a = WAVEX_PCNT1_CH_A,
-        .channel_b = WAVEX_PCNT1_CH_B,
-        .gpio_a = WAVEX_ESP_PCNT1_A,
-        .gpio_b = WAVEX_ESP_PCNT1_B,
-        .filter_value = WAVEX_PCNT1_FILTER_VALUE,
-        .enabled = WAVEX_ESP_PCNT1_ENABLED
-    }
-};
+    {.unit = WAVEX_PCNT1_UNIT,
+     .channel_a = WAVEX_PCNT1_CH_A,
+     .channel_b = WAVEX_PCNT1_CH_B,
+     .gpio_a = WAVEX_ESP_PCNT1_A,
+     .gpio_b = WAVEX_ESP_PCNT1_B,
+     .filter_value = WAVEX_PCNT1_FILTER_VALUE,
+     .enabled = WAVEX_ESP_PCNT1_ENABLED}};
 
 #define PCNT_CONFIG_COUNT (sizeof(s_pcnt_configs) / sizeof(wavex_pcnt_config_t))
 
@@ -54,79 +50,87 @@ static TaskHandle_t s_pcnt_task_handle = NULL;
  * @brief Initialize a single PCNT unit
  */
 static esp_err_t pcnt_init_unit(const wavex_pcnt_config_t *config) {
-    ESP_LOGI(TAG, "Initializing PCNT unit %d (GPIO A:%d, B:%d)",
-             config->unit, config->gpio_a, config->gpio_b);
+    ESP_LOGI(TAG,
+             "Initializing PCNT unit %d (GPIO A:%d, B:%d) - quadrature mode for PEC11R",
+             config->unit,
+             config->gpio_a,
+             config->gpio_b);
 
-    // Configure PCNT unit
+    // Configure PCNT unit for PEC11R quadrature encoder
+    // Try alternative quadrature configuration for PEC11R
     pcnt_config_t esp_pcnt_config = {
         .pulse_gpio_num = config->gpio_a,
         .ctrl_gpio_num = config->gpio_b,
-        .lctrl_mode = PCNT_MODE_REVERSE,
-        .hctrl_mode = PCNT_MODE_KEEP,
-        .pos_mode = PCNT_COUNT_INC,
-        .neg_mode = PCNT_COUNT_DEC,
+        .lctrl_mode = PCNT_MODE_KEEP,     // Try KEEP instead of REVERSE
+        .hctrl_mode = PCNT_MODE_REVERSE,  // Try REVERSE instead of KEEP
+        .pos_mode = PCNT_COUNT_INC,       // Count up on positive edge
+        .neg_mode = PCNT_COUNT_DEC,       // Count down on negative edge
         .counter_h_lim = INT16_MAX,
         .counter_l_lim = INT16_MIN,
         .unit = config->unit,
-        .channel = config->channel_a
-    };
+        .channel = config->channel_a};
 
     esp_err_t ret = pcnt_unit_config(&esp_pcnt_config);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to configure PCNT unit %d channel A: %s",
-                 config->unit, esp_err_to_name(ret));
+        ESP_LOGE(TAG,
+                 "Failed to configure PCNT unit %d channel A: %s",
+                 config->unit,
+                 esp_err_to_name(ret));
         return ret;
     }
 
-    // Configure channel B
+    // Configure channel B for quadrature decoding (alternative config)
     esp_pcnt_config.pulse_gpio_num = config->gpio_b;
     esp_pcnt_config.ctrl_gpio_num = config->gpio_a;
     esp_pcnt_config.channel = config->channel_b;
-    esp_pcnt_config.pos_mode = PCNT_COUNT_DEC;
-    esp_pcnt_config.neg_mode = PCNT_COUNT_INC;
+    esp_pcnt_config.pos_mode = PCNT_COUNT_DEC;  // Standard for channel B
+    esp_pcnt_config.neg_mode = PCNT_COUNT_INC;  // Standard for channel B
 
     ret = pcnt_unit_config(&esp_pcnt_config);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to configure PCNT unit %d channel B: %s",
-                 config->unit, esp_err_to_name(ret));
+        ESP_LOGE(TAG,
+                 "Failed to configure PCNT unit %d channel B: %s",
+                 config->unit,
+                 esp_err_to_name(ret));
         return ret;
     }
 
     // Configure glitch filter
     ret = pcnt_set_filter_value(config->unit, config->filter_value);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to set filter value for PCNT unit %d: %s",
-                 config->unit, esp_err_to_name(ret));
+        ESP_LOGE(TAG,
+                 "Failed to set filter value for PCNT unit %d: %s",
+                 config->unit,
+                 esp_err_to_name(ret));
         return ret;
     }
 
     ret = pcnt_filter_enable(config->unit);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to enable filter for PCNT unit %d: %s",
-                 config->unit, esp_err_to_name(ret));
+        ESP_LOGE(TAG,
+                 "Failed to enable filter for PCNT unit %d: %s",
+                 config->unit,
+                 esp_err_to_name(ret));
         return ret;
     }
 
     // Initialize counter
     ret = pcnt_counter_pause(config->unit);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to pause PCNT unit %d: %s",
-                 config->unit, esp_err_to_name(ret));
+        ESP_LOGE(TAG, "Failed to pause PCNT unit %d: %s", config->unit, esp_err_to_name(ret));
         return ret;
     }
 
     ret = pcnt_counter_clear(config->unit);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to clear PCNT unit %d: %s",
-                 config->unit, esp_err_to_name(ret));
+        ESP_LOGE(TAG, "Failed to clear PCNT unit %d: %s", config->unit, esp_err_to_name(ret));
         return ret;
     }
 
     // Start counter
     ret = pcnt_counter_resume(config->unit);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to resume PCNT unit %d: %s",
-                 config->unit, esp_err_to_name(ret));
+        ESP_LOGE(TAG, "Failed to resume PCNT unit %d: %s", config->unit, esp_err_to_name(ret));
         return ret;
     }
 
@@ -134,88 +138,19 @@ static esp_err_t pcnt_init_unit(const wavex_pcnt_config_t *config) {
     return ESP_OK;
 }
 
-/**
- * @brief PCNT interrupt handler
- */
-static void IRAM_ATTR pcnt_isr_handler(void *arg) {
-    uint32_t unit_val = (uint32_t)arg;
-    pcnt_unit_t unit = (pcnt_unit_t)unit_val;
-    encoder_reading_t *reading = &s_encoder_readings[unit];
-
-    // Read hardware counter delta since last clear
-    int16_t raw_count = 0;
-    pcnt_get_counter_value(unit, &raw_count);
-
-    // Accumulate in software so we can safely clear HW counter for per-step interrupts
-    int32_t step_delta = (int32_t)raw_count;
-    if (step_delta != 0) {
-        reading->prev_count = reading->count;
-        reading->count += step_delta;
-        reading->delta = step_delta;
-    }
-
-    // Clear hardware counter so next pulse will trigger the threshold again
-    pcnt_counter_clear(unit);
-
-    // Clear interrupt flags for this unit
-    // Note: Legacy PCNT driver may not have pcnt_intr_status_clear
-    // The interrupt status is automatically cleared when the ISR runs
-
-    // Optional: Notify task of interrupt (if needed for additional processing)
-    // This would require a semaphore or queue
-}
+// ISR handler removed - using polling approach instead
 
 /**
- * @brief PCNT monitoring task (interrupt-driven with continuous change logging)
+ * @brief PCNT monitoring task (polling-based for reliable encoder reading)
  */
 static void pcnt_task(void *pvParameters) {
-    ESP_LOGI(TAG, "PCNT monitoring task started (interrupt-driven with continuous logging)");
+    ESP_LOGI(TAG, "PCNT monitoring task started (polling-based for reliable operation)");
 
-    // Install ISR service
-    esp_err_t ret = pcnt_isr_service_install(0);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to install PCNT ISR service: %s", esp_err_to_name(ret));
-        return;
-    }
-
-    // Configure interrupts for each enabled PCNT unit
-    for (int i = 0; i < PCNT_CONFIG_COUNT; i++) {
-        const wavex_pcnt_config_t *config = &s_pcnt_configs[i];
-        if (!config->enabled) {
-            continue;
-        }
-
-        // Configure watch points so every pulse (+/-1) generates an interrupt.
-        // We accumulate in software in the ISR and clear the HW counter each time.
-        int thresh_pos = 1;
-        int thresh_neg = -1;
-
-        pcnt_set_event_value(config->unit, PCNT_EVT_THRES_0, thresh_pos);
-        pcnt_event_enable(config->unit, PCNT_EVT_THRES_0);
-
-        pcnt_set_event_value(config->unit, PCNT_EVT_THRES_1, thresh_neg);
-        pcnt_event_enable(config->unit, PCNT_EVT_THRES_1);
-
-        // Also enable zero crossing interrupts for full rotation tracking
-        pcnt_event_enable(config->unit, PCNT_EVT_ZERO);
-
-        // Enable interrupts for this unit
-        pcnt_intr_enable(config->unit);
-
-        // Register ISR handler
-        ret = pcnt_isr_handler_add(config->unit, pcnt_isr_handler, (void*)config->unit);
-        if (ret != ESP_OK) {
-            ESP_LOGE(TAG, "Failed to add ISR handler for PCNT unit %d: %s",
-                     config->unit, esp_err_to_name(ret));
-            continue;
-        }
-
-        ESP_LOGI(TAG, "PCNT unit %d interrupt handler installed (thresholds: %d, %d)",
-                 config->unit, thresh_pos, thresh_neg);
-    }
+    // No ISR service needed for polling approach
+    // We'll periodically check counter values instead of using interrupts
 
     while (1) {
-        // Monitor for encoder value changes and log them immediately
+        // Poll encoder counters for changes
         for (int i = 0; i < PCNT_CONFIG_COUNT; i++) {
             const wavex_pcnt_config_t *config = &s_pcnt_configs[i];
             if (!config->enabled) {
@@ -224,18 +159,36 @@ static void pcnt_task(void *pvParameters) {
 
             encoder_reading_t *reading = &s_encoder_readings[config->unit];
 
-            // Check if there's a change since last interrupt-driven update
-            if (reading->delta != 0) {
-                const char* unit_name = (config->unit == WAVEX_ENCODER_PCNT_UNIT) ? "Main Encoder" : "PCNT1 Encoder";
-                ESP_LOGI(TAG, "%s - Count: %" PRId32 ", Delta: %" PRId32,
-                         unit_name, reading->count, reading->delta);
+            // Read current hardware counter value
+            int16_t hw_count = 0;
+            pcnt_get_counter_value(config->unit, &hw_count);
 
-                // Clear delta so we don't re-log the same value when idle
-                reading->delta = 0;
+            // Calculate delta since last poll
+            int32_t delta = (int32_t)hw_count - reading->count;
+            if (delta != 0) {
+                const char *unit_name = (config->unit == WAVEX_ENCODER_PCNT_UNIT)
+                                            ? "Main Encoder"
+                                            : "PCNT1 Encoder (PEC11R quadrature)";
+                ESP_LOGI(TAG,
+                         "%s - Count: %" PRId32 ", Delta: %" PRId32,
+                         unit_name,
+                         (int32_t)hw_count,
+                         delta);
+
+                // For now, process all deltas to restore functionality
+                // TODO: Add noise filtering back once we understand the delta patterns
+                reading->prev_count = reading->count;
+                reading->count = (int32_t)hw_count;
+                reading->delta += delta;
+
+                // Clear hardware counter to prevent overflow
+                pcnt_counter_clear(config->unit);
+                reading->count = 0;
+                reading->prev_count = 0;
             }
         }
 
-        // Brief delay to prevent busy-waiting while still being responsive
+        // Brief delay for polling frequency (faster polling for better responsiveness)
         vTaskDelay(pdMS_TO_TICKS(2));
     }
 }
@@ -263,13 +216,12 @@ esp_err_t pcnt_task_start(void) {
     ESP_LOGI(TAG, "Starting PCNT reading task...");
 
     // Create PCNT reading task
-    BaseType_t ret = xTaskCreate(
-        pcnt_task,              // Task function
-        "pcnt_task",           // Task name
-        4096,                  // Stack size
-        NULL,                  // Parameters
-        5,                     // Priority (higher than UI task)
-        &s_pcnt_task_handle    // Task handle
+    BaseType_t ret = xTaskCreate(pcnt_task,           // Task function
+                                 "pcnt_task",         // Task name
+                                 4096,                // Stack size
+                                 NULL,                // Parameters
+                                 5,                   // Priority (higher than UI task)
+                                 &s_pcnt_task_handle  // Task handle
     );
 
     if (ret != pdPASS) {

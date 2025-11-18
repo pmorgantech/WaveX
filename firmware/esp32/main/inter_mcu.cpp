@@ -254,6 +254,17 @@ void inter_mcu_set_sample_status_listener(wavex_sample_status_cb_t cb, void* use
     ESP_LOGI(TAG, "Sample status listener registered: %p", cb);
 }
 
+void inter_mcu_invoke_sample_status_callback(uint8_t state,
+                                             uint32_t sample_rate,
+                                             uint8_t channels,
+                                             uint32_t frames_played) {
+    if (!s_statistics) {
+        ESP_LOGE(TAG, "StatisticsManager not initialized");
+        return;
+    }
+    s_statistics->invoke_sample_status_callback(state, sample_rate, channels, frames_played);
+}
+
 void inter_mcu_get_backend_heartbeat(wavex_backend_heartbeat_t* out) {
     if (!s_statistics) {
         ESP_LOGE(TAG, "StatisticsManager not initialized");
@@ -619,9 +630,49 @@ esp_err_t inter_mcu_send_sample_stop_req() {
     return result ? ESP_OK : -1;  // ESP_FAIL
 }
 
+esp_err_t inter_mcu_send_sample_load_req(uint16_t sample_id,
+                                         uint32_t sample_size,
+                                         uint16_t sample_rate,
+                                         uint8_t channels,
+                                         uint8_t bit_depth) {
+    if (!s_initialized) {
+        return -1;  // ESP_ERR_INVALID_STATE
+    }
+
+    WaveX::Protocol::SampleLoadMessage msg;
+    msg.sample_id = sample_id;
+    msg.sample_size = sample_size;
+    msg.sample_rate = sample_rate;
+    msg.channels = channels;
+    msg.bit_depth = bit_depth;
+
+    int result = send_uart_message(WaveX::Protocol::MSG_SAMPLE_LOAD, &msg, sizeof(msg));
+    return result ? ESP_OK : -1;  // ESP_FAIL
+}
+
+esp_err_t inter_mcu_send_sample_data(const uint8_t* data, size_t length) {
+    if (!s_initialized) {
+        return -1;  // ESP_ERR_INVALID_STATE
+    }
+
+    if (!data || length == 0) {
+        return -1;  // ESP_ERR_INVALID_ARG
+    }
+
+    // For large data, we may need to chunk it, but for now send as one message
+    // The protocol handler will handle packet sizing
+    int result = send_uart_message(WaveX::Protocol::MSG_SAMPLE_DATA, data, length);
+    return result ? ESP_OK : -1;  // ESP_FAIL
+}
+
 // Handle sample stop response from communication layer
 void inter_mcu_handle_sample_stop_response(bool success) {
-    // Forward to UI layer - this is the proper place for UI callbacks
-    extern void wavex_ui_handle_sample_stop_response(bool success);
-    wavex_ui_handle_sample_stop_response(success);
+    ESP_LOGI("InterMCU", "inter_mcu_handle_sample_stop_response: success=%d", success ? 1 : 0);
+    // Trigger sample status callback with stopped state (0)
+    // This allows the UI layer to handle the response through the registered callback
+    if (s_statistics) {
+        s_statistics->invoke_sample_status_callback(0, 0, 0, 0);  // state=0 (stopped)
+    } else {
+        ESP_LOGE("InterMCU", "s_statistics is NULL in handle_sample_stop_response");
+    }
 }

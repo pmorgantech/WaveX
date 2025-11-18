@@ -1,8 +1,9 @@
 #pragma once
 
-#include <stdint.h>
 #include <stddef.h>
-#include "spi_protocol/protocol.h" // For PKT_SIZE_* constants
+#include <stdint.h>
+
+#include "spi_protocol/protocol.h"  // For PKT_SIZE_* constants
 
 namespace WaveX {
 namespace Comm {
@@ -14,5 +15,5 @@ void ProcessSampleStopRequest(uint8_t slot);
 void ProcessSamplePlayIndexRequest(uint32_t file_index);
 void ProcessSampleGetPathRequest(uint32_t file_index);
 
-} // namespace Comm
-} // namespace WaveX
+}  // namespace Comm
+}  // namespace WaveX

@@ -74,6 +74,9 @@ struct UiContext {
     uint32_t last_refresh_time = 0;
     uint32_t refresh_count = 0;
 
+    // Encoder delta accumulation for detent-based events
+    int32_t pcnt1_delta_accumulator = 0;
+
     // Deferred meter update data (shared between timer and UI task)
     volatile bool meter_update_pending = false;
     volatile bool meter_reset_pending = false;

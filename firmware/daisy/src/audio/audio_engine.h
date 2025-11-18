@@ -28,6 +28,8 @@ void OnNoteOn(const WaveX::Protocol::NoteMessage& m);
 void OnNoteOff(const WaveX::Protocol::NoteMessage& m);
 void OnSampleCtrl(const WaveX::Protocol::SampleCtrlMessage& m);
 void OnPreviewReq(const WaveX::Protocol::PreviewReqMessage& m);
+void OnSampleLoad(const WaveX::Protocol::SampleLoadMessage& m);
+void OnSampleData(const uint8_t* data, size_t length);
 
 // Meter helpers
 void GetInputMeters(float& rms, float& peak);
@@ -38,8 +40,8 @@ bool OpenWav(const char* path);
 void CloseWav();
 void PumpWavIO();
 bool IsWavPlaying();
-bool ShouldPumpWavIO();  // Adaptive polling helper
-bool IsPrebufferReady(); // Check if pre-buffering is complete
+bool ShouldPumpWavIO();   // Adaptive polling helper
+bool IsPrebufferReady();  // Check if pre-buffering is complete
 
 // Performance monitoring
 void GetIOStats(uint32_t& count, uint32_t& max_duration, uint32_t& last_duration);
@@ -57,9 +59,7 @@ void CheckAndLogUnderruns();
 bool AuditionSample(const char* path);
 void StopAudition();
 
-} // namespace AudioEngine
-} // namespace WaveX
+}  // namespace AudioEngine
+}  // namespace WaveX
 
-
-#endif // WAVEX_AUDIO_ENGINE_ENABLED
-
+#endif  // WAVEX_AUDIO_ENGINE_ENABLED

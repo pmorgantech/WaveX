@@ -2,10 +2,11 @@
 
 #include <string.h>
 
+#include "audio/audio_engine.h"
 #include "config/logging_config.h"
 #include "config/uart_debug_config.h"
+#include "daisy_filesystem.h"
 #include "daisy_seed.h"
-#include "daisy_spi_filesystem.h"
 #include "daisy_uart_link.h"
 #include "spi_protocol/protocol.h"
 
@@ -24,6 +25,7 @@ static void HandleControlChangeMessage(const uint8_t* payload, size_t payload_si
 static void HandleNoteMessage(const uint8_t* payload, size_t payload_size);
 static void HandleNoteOffMessage(const uint8_t* payload, size_t payload_size);
 static void HandleSampleLoadMessage(const uint8_t* payload, size_t payload_size);
+static void HandleSampleDataMessage(const uint8_t* payload, size_t payload_size);
 static void HandleSampleControlMessage(const uint8_t* payload, size_t payload_size);
 static void HandlePreviewRequestMessage(const uint8_t* payload, size_t payload_size);
 static void HandleDataRequestMessage(const uint8_t* payload, size_t payload_size);
@@ -133,6 +135,9 @@ void ProcessInterMcuMessage(uint8_t msg_type,
         case MSG_SAMPLE_LOAD:
             HandleSampleLoadMessage(payload, payload_size);
             break;
+        case MSG_SAMPLE_DATA:
+            HandleSampleDataMessage(payload, payload_size);
+            break;
         case MSG_SAMPLE_CTRL:
             HandleSampleControlMessage(payload, payload_size);
             break;
@@ -216,6 +221,33 @@ static void HandleSampleLoadMessage(const uint8_t* payload, size_t payload_size)
     if (s_hw)
         s_hw->PrintLine("DAISY: HandleSampleLoadMessage called - payload_size=%d",
                         (int)payload_size);
+
+    if (!payload || payload_size < sizeof(WaveX::Protocol::SampleLoadMessage)) {
+        if (s_hw) {
+            s_hw->PrintLine("DAISY: Invalid payload size for SampleLoadMessage: %d (expected %d)",
+                            (int)payload_size,
+                            (int)sizeof(WaveX::Protocol::SampleLoadMessage));
+        }
+        return;
+    }
+
+    const auto* msg = reinterpret_cast<const WaveX::Protocol::SampleLoadMessage*>(payload);
+    WaveX::AudioEngine::OnSampleLoad(*msg);
+}
+
+static void HandleSampleDataMessage(const uint8_t* payload, size_t payload_size) {
+    if (s_hw)
+        s_hw->PrintLine("DAISY: HandleSampleDataMessage called - payload_size=%d",
+                        (int)payload_size);
+
+    if (!payload || payload_size == 0) {
+        if (s_hw) {
+            s_hw->PrintLine("DAISY: Empty payload for SampleDataMessage");
+        }
+        return;
+    }
+
+    WaveX::AudioEngine::OnSampleData(payload, payload_size);
 }
 
 static void HandleSampleControlMessage(const uint8_t* payload, size_t payload_size) {

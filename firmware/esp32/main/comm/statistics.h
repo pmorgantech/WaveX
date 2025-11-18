@@ -180,6 +180,7 @@ class StatisticsManager {
                                      uint32_t frames_played,
                                      void* user_data);
     void* m_sample_status_user_data;
+    SemaphoreHandle_t m_sample_status_mutex;
     mutable portMUX_TYPE m_sample_status_lock;
 
     // Helper methods

@@ -1,5 +1,7 @@
 #include "esp32_mocks.h"
 
+#include "comm/i_comm_interface.h"
+#include "comm/statistics.h"
 #include "esp_log.h"
 #include "freertos/task.h"
 
@@ -307,3 +309,58 @@ void inter_mcu_update_backend_heartbeat_detailed(uint32_t uptime_ms,
     (void)cpu_max_percent;
     // Stub implementation for tests
 }
+
+// Additional ESP-IDF mock functions
+unsigned int esp_get_free_heap_size() {
+    return 1024 * 1024;  // Mock 1MB free heap
+}
+
+const char* esp_err_to_name(esp_err_t code) {
+    switch (code) {
+        case ESP_OK:
+            return "ESP_OK";
+        case ESP_FAIL:
+            return "ESP_FAIL";
+        default:
+            return "UNKNOWN_ERROR";
+    }
+}
+
+// Additional mock functions for WaveXApplication tests
+esp_err_t inter_mcu_init(StatisticsManager& statistics) {
+    (void)statistics;
+    return ESP_OK;
+}
+
+esp_err_t inter_mcu_start() {
+    return ESP_OK;
+}
+
+esp_err_t pcnt_task_init() {
+    return ESP_OK;
+}
+
+esp_err_t pcnt_task_start() {
+    return ESP_OK;
+}
+
+esp_err_t wavex_ui_task_start(WaveX::Comm::ICommInterface& comm_interface) {
+    (void)comm_interface;
+    return ESP_OK;
+}
+
+// Additional inter_mcu mock functions for CommInterfaceImpl
+esp_err_t inter_mcu_send_sample_play_index_req(uint32_t file_index) {
+    (void)file_index;
+    return ESP_OK;
+}
+
+esp_err_t inter_mcu_send_sample_stop_req() {
+    return ESP_OK;
+}
+
+bool inter_mcu_is_busy() {
+    return false;
+}
+
+// FreeRTOS tick conversion macros are defined in esp32_mocks.h

@@ -57,6 +57,12 @@ class ICommInterface {
     virtual void setSampleStatusListener(wavex_sample_status_cb_t cb, void* user_data) = 0;
     virtual esp_err_t sendSamplePlayRequest(uint32_t file_index) = 0;
     virtual esp_err_t sendSampleStopRequest() = 0;
+    virtual esp_err_t sendSampleLoadRequest(uint16_t sample_id,
+                                            uint32_t sample_size,
+                                            uint16_t sample_rate,
+                                            uint8_t channels,
+                                            uint8_t bit_depth) = 0;
+    virtual esp_err_t sendSampleData(const uint8_t* data, size_t length) = 0;
 
     // Diagnostics operations
     virtual void getBackendHeartbeat(wavex_backend_heartbeat_t* out) = 0;

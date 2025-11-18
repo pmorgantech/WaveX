@@ -177,6 +177,11 @@ struct FileEntryWire {
     uint8_t is_dir;
     uint32_t size_bytes;
     char name[FILE_NAME_MAX];
+    // WAV metadata (only valid for audio files)
+    uint32_t sample_rate;      // 0 if not a WAV file or unknown
+    uint16_t channels;         // 0 if not a WAV file or unknown
+    uint16_t bits_per_sample;  // 0 if not a WAV file or unknown
+    uint32_t duration_ms;      // Duration in milliseconds (0 if unknown)
 } __attribute__((packed));
 
 struct BrowseRespHeader {

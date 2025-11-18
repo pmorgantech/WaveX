@@ -56,6 +56,10 @@ void inter_mcu_set_wave_chunk_listener(wavex_wave_chunk_cb_t cb, void* user_data
 void inter_mcu_set_browse_resp_listener(wavex_browse_resp_cb_t cb, void* user_data);
 void inter_mcu_invoke_browse_resp_callback(const uint8_t* data, size_t length);
 void inter_mcu_set_sample_status_listener(wavex_sample_status_cb_t cb, void* user_data);
+void inter_mcu_invoke_sample_status_callback(uint8_t state,
+                                             uint32_t sample_rate,
+                                             uint8_t channels,
+                                             uint32_t frames_played);
 
 // Sample stop response handling
 void inter_mcu_handle_sample_stop_response(bool success);
@@ -64,6 +68,12 @@ void inter_mcu_handle_sample_stop_response(bool success);
 esp_err_t inter_mcu_send_browse_req(const char* path, uint8_t start_index);
 esp_err_t inter_mcu_send_sample_play_index_req(uint32_t file_index);
 esp_err_t inter_mcu_send_sample_stop_req();
+esp_err_t inter_mcu_send_sample_load_req(uint16_t sample_id,
+                                         uint32_t sample_size,
+                                         uint16_t sample_rate,
+                                         uint8_t channels,
+                                         uint8_t bit_depth);
+esp_err_t inter_mcu_send_sample_data(const uint8_t* data, size_t length);
 
 // Control RX task behavior
 extern "C" void inter_mcu_set_suspended(bool suspended);

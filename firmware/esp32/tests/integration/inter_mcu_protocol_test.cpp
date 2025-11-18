@@ -17,8 +17,8 @@ using namespace WaveX::UartProtocol;
 class InterMcuProtocolIntegrationTest : public ::testing::Test {
    protected:
     void SetUp() override {
-        // Reset packet router
-        router_ = &GetPacketRouter();
+        // Create packet router instance
+        router_ = std::make_unique<WaveX::Comm::PacketRouter>();
 
         // Clear handler invocation tracking
         heartbeat_received_ = false;
@@ -83,7 +83,7 @@ class InterMcuProtocolIntegrationTest : public ::testing::Test {
         }
 
         // Route the message
-        router_->route_uart_message(msg_type, payload, payload_size, flags, seq);
+        router_->route_packet(payload, payload_size);
 
         return true;
     }
@@ -125,7 +125,7 @@ class InterMcuProtocolIntegrationTest : public ::testing::Test {
     WaveChunkMessage wave_chunk_data_;
     SyncMessage sync_data_;
 
-    PacketRouter* router_;
+    std::unique_ptr<PacketRouter> router_;
 };
 
 // Test: End-to-end heartbeat message flow

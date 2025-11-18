@@ -2,6 +2,7 @@ idf_component_register(
     SRCS
         "main.cpp"
         "application_context.cpp"
+        "wavex_application.cpp"
         "inter_mcu.cpp"
         "ui_task.cpp"
         "pcnt_task.cpp"

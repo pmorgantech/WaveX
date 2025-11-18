@@ -6,10 +6,20 @@
 #ifdef ESP_PLATFORM
 #include "esp_log.h"
 #include "esp_timer.h"
+#ifdef WAVEX_TEST_BUILD
+// Define FreeRTOS macros for test builds
+#define pdMS_TO_TICKS(x) ((x) / 10)  // Assume 10ms tick period
+#define pdTRUE 1
+#define pdFALSE 0
+#endif
 #else
 #include <stdio.h>
 #define ESP_LOGI(tag, fmt, ...) printf("[%s] " fmt "\n", tag, ##__VA_ARGS__)
 #define ESP_LOGW(tag, fmt, ...) printf("[%s] WARN: " fmt "\n", tag, ##__VA_ARGS__)
+// Define FreeRTOS macros for non-ESP_PLATFORM builds
+#define pdMS_TO_TICKS(x) ((x) / 10)  // Assume 10ms tick period
+#define pdTRUE 1
+#define pdFALSE 0
 #endif
 
 StatisticsManager::StatisticsManager() {
@@ -31,6 +41,7 @@ StatisticsManager::StatisticsManager() {
     m_hb_lock = portMUX_INITIALIZER_UNLOCKED;
     m_meter_lock = portMUX_INITIALIZER_UNLOCKED;
     m_browse_resp_mutex = xSemaphoreCreateMutex();
+    m_sample_status_mutex = xSemaphoreCreateMutex();
     m_sample_status_lock = portMUX_INITIALIZER_UNLOCKED;
     ESP_LOGI("StatisticsManager", "=== Locks initialized successfully ===");
 #else
@@ -40,6 +51,7 @@ StatisticsManager::StatisticsManager() {
     memset(&m_hb_lock, 0, sizeof(m_hb_lock));
     memset(&m_meter_lock, 0, sizeof(m_meter_lock));
     m_browse_resp_mutex = NULL;
+    m_sample_status_mutex = NULL;
     memset(&m_sample_status_lock, 0, sizeof(m_sample_status_lock));
     ESP_LOGI("StatisticsManager", "=== Locks initialized successfully ===");
 #endif
@@ -111,6 +123,7 @@ void StatisticsManager::increment_packet_stat(uint8_t packet_type) {
 
 void StatisticsManager::increment_invalid_packet() {
     taskENTER_CRITICAL(&m_stats_lock);
+    m_packet_stats.total_packets++;
     m_packet_stats.invalid_packets++;
     taskEXIT_CRITICAL(&m_stats_lock);
 }
@@ -424,20 +437,52 @@ void StatisticsManager::set_sample_status_callback(void (*callback)(uint8_t stat
                                                                     uint32_t frames_played,
                                                                     void* user_data),
                                                    void* user_data) {
-    taskENTER_CRITICAL(&m_sample_status_lock);
-    m_sample_status_callback = callback;
-    m_sample_status_user_data = user_data;
-    taskEXIT_CRITICAL(&m_sample_status_lock);
+    if (m_sample_status_mutex) {
+        xSemaphoreTake(m_sample_status_mutex, portMAX_DELAY);
+        m_sample_status_callback = callback;
+        m_sample_status_user_data = user_data;
+        xSemaphoreGive(m_sample_status_mutex);
+    } else {
+        // Fallback for non-ESP_PLATFORM
+        m_sample_status_callback = callback;
+        m_sample_status_user_data = user_data;
+    }
 }
 
 void StatisticsManager::invoke_sample_status_callback(uint8_t state,
                                                       uint32_t sample_rate,
                                                       uint8_t channels,
                                                       uint32_t frames_played) {
-    taskENTER_CRITICAL(&m_sample_status_lock);
-    if (m_sample_status_callback) {
-        m_sample_status_callback(
-            state, sample_rate, channels, frames_played, m_sample_status_user_data);
+    ESP_LOGI("StatisticsManager",
+             "invoke_sample_status_callback: state=%d, callback=%p, user_data=%p",
+             state,
+             m_sample_status_callback,
+             m_sample_status_user_data);
+
+    if (m_sample_status_mutex) {
+        ESP_LOGI("StatisticsManager", "Taking sample status mutex");
+        if (xSemaphoreTake(m_sample_status_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+            if (m_sample_status_callback) {
+                ESP_LOGI("StatisticsManager", "About to call sample status callback");
+                // Release mutex before calling callback to avoid deadlocks
+                xSemaphoreGive(m_sample_status_mutex);
+                m_sample_status_callback(state, sample_rate, channels, frames_played, m_sample_status_user_data);
+                ESP_LOGI("StatisticsManager", "Sample status callback returned");
+            } else {
+                ESP_LOGW("StatisticsManager", "No sample status callback registered");
+                xSemaphoreGive(m_sample_status_mutex);
+            }
+        } else {
+            ESP_LOGE("StatisticsManager", "Failed to acquire sample status mutex for invoke");
+        }
+    } else {
+        // Fallback for non-ESP_PLATFORM
+        if (m_sample_status_callback) {
+            ESP_LOGI("StatisticsManager", "About to call sample status callback (no mutex)");
+            m_sample_status_callback(state, sample_rate, channels, frames_played, m_sample_status_user_data);
+            ESP_LOGI("StatisticsManager", "Sample status callback returned");
+        } else {
+            ESP_LOGW("StatisticsManager", "No sample status callback registered");
+        }
     }
-    taskEXIT_CRITICAL(&m_sample_status_lock);
 }

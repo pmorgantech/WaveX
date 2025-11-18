@@ -3,6 +3,7 @@
 
 #include <daisy.h>  // For CpuLoadMeter
 
+#include "../memory.h"
 #include "audio_engine.h"
 #include "daisy_core.h"  // For memory sections
 #include "ff.h"
@@ -47,6 +48,9 @@ static Oscillator s_lfo;
 static Oscillator s_oscillator;
 static Sampler s_sampler;
 static CvBus s_cv;
+
+// Sample RAM Manager (for loaded samples)
+static SampleMemMgr s_sample_mem_mgr;
 
 static volatile float s_env_level = 0.0f;
 static float s_last_in_block[Timebase::kBlockSize] = {0};
@@ -99,6 +103,21 @@ struct AuditionState {
     char current_path[96];
 };
 static AuditionState s_audition = {};
+
+// ============================
+// Sample loading state
+// ============================
+struct SampleLoadState {
+    wxsamp_t handle = {};
+    uint16_t sample_id = 0;
+    uint32_t expected_size = 0;
+    uint32_t received_size = 0;
+    bool loading = false;
+    uint16_t sample_rate = 0;
+    uint8_t channels = 0;
+    uint8_t bit_depth = 0;
+};
+static SampleLoadState s_sample_load = {};
 
 // Thread-safe single-producer (main loop) / single-consumer (audio IRQ) ring buffer of stereo int16
 // frames Uses ARM Cortex-M7 atomic operations and memory barriers for race-condition-free operation
@@ -432,6 +451,52 @@ void Init(DaisySeed& hw, float sample_rate) {
     s_sampler.Init(sample_rate);
     s_cv.Init(0x60);
 
+    // Initialize Sample RAM Manager (conditionally)
+    // SDRAM is mapped at 0xC0000000, typically 64MB available on Daisy Seed
+    // Use 32MB for sample storage, reserve 32MB for other uses
+    const uint32_t SDRAM_BASE = 0xC0000000;
+    const uint32_t SDRAM_SIZE = 64 * 1024 * 1024;       // 64MB
+    const uint32_t SAMPLE_MEM_SIZE = 32 * 1024 * 1024;  // 32MB for samples
+    const uint32_t SMALL_POOL_SIZE = 4 * 1024 * 1024;   // 4MB for small samples
+
+    // Initialize Sample RAM Manager
+    if (s_hw) {
+        s_hw->PrintLine("AUDIO_ENGINE: Initializing Sample RAM Manager...");
+    }
+    if (s_hw) {
+        s_hw->PrintLine("AUDIO_ENGINE: Calling SampleMemMgr.init()...");
+    }
+    s_sample_mem_mgr.init((void*)SDRAM_BASE, SAMPLE_MEM_SIZE, SMALL_POOL_SIZE);
+    if (s_hw) {
+        s_hw->PrintLine("AUDIO_ENGINE: SampleMemMgr.init() completed");
+    }
+
+    // Test basic allocation to ensure SDRAM is working
+    if (s_hw) {
+        s_hw->PrintLine("AUDIO_ENGINE: Testing Sample RAM allocation...");
+    }
+    wxsamp_t test_handle = {};
+    bool test_alloc = s_sample_mem_mgr.alloc(1024, &test_handle);  // Try to allocate 1KB
+    if (test_alloc) {
+        if (s_hw) {
+            s_hw->PrintLine(
+                "AUDIO_ENGINE: Sample RAM test allocation successful (handle: cls=%u page=%u "
+                "slot=%u)",
+                (unsigned)test_handle.cls,
+                (unsigned)test_handle.page,
+                (unsigned)test_handle.slot);
+        }
+        s_sample_mem_mgr.release(&test_handle);  // Clean up test allocation
+        if (s_hw) {
+            s_hw->PrintLine("AUDIO_ENGINE: Sample RAM test completed successfully");
+        }
+    } else {
+        if (s_hw) {
+            s_hw->PrintLine(
+                "AUDIO_ENGINE: Sample RAM test allocation FAILED - SDRAM may not be initialized");
+        }
+    }
+
     // Initialize CPU load meter for audio processing performance monitoring
     // Use default block size of 48 and 200-block averaging window
     s_cpu_load_meter.Init(sample_rate, 48, 200);
@@ -583,6 +648,91 @@ void OnSampleCtrl(const SampleCtrlMessage& sc) {
 void OnPreviewReq(const PreviewReqMessage& pr) {
     s_prev_sent = 0;
     s_sampler.MakePreview(pr.start, pr.end, pr.decim ? pr.decim : 1, s_preview);
+}
+
+void OnSampleLoad(const SampleLoadMessage& sl) {
+    if (s_hw) {
+        s_hw->PrintLine("SAMPLE_LOAD: id=%u, size=%lu, rate=%u, ch=%u, bits=%u",
+                        (unsigned)sl.sample_id,
+                        (unsigned long)sl.sample_size,
+                        (unsigned)sl.sample_rate,
+                        (unsigned)sl.channels,
+                        (unsigned)sl.bit_depth);
+    }
+
+    // Allocate memory for the sample
+    wxsamp_t handle = {};
+    if (!s_sample_mem_mgr.alloc(sl.sample_size, &handle)) {
+        if (s_hw) {
+            s_hw->PrintLine("SAMPLE_LOAD: Failed to allocate %lu bytes for sample %u",
+                            (unsigned long)sl.sample_size,
+                            (unsigned)sl.sample_id);
+        }
+        return;
+    }
+
+    // Store loading state
+    s_sample_load.handle = handle;
+    s_sample_load.sample_id = sl.sample_id;
+    s_sample_load.expected_size = sl.sample_size;
+    s_sample_load.received_size = 0;
+    s_sample_load.loading = true;
+    s_sample_load.sample_rate = sl.sample_rate;
+    s_sample_load.channels = sl.channels;
+    s_sample_load.bit_depth = sl.bit_depth;
+
+    if (s_hw) {
+        s_hw->PrintLine("SAMPLE_LOAD: Allocated sample %u, handle cls=%u page=%u slot=%u len=%lu",
+                        (unsigned)sl.sample_id,
+                        (unsigned)handle.cls,
+                        (unsigned)handle.page,
+                        (unsigned)handle.slot,
+                        (unsigned long)handle.len);
+    }
+}
+
+void OnSampleData(const uint8_t* data, size_t length) {
+    if (!s_sample_load.loading) {
+        if (s_hw) {
+            s_hw->PrintLine("SAMPLE_DATA: Received data but not in loading state");
+        }
+        return;
+    }
+
+    // Get pointer to sample memory
+    void* sample_ptr = nullptr;
+    if (!s_sample_mem_mgr.ptr(s_sample_load.handle, &sample_ptr)) {
+        if (s_hw) {
+            s_hw->PrintLine("SAMPLE_DATA: Failed to get sample memory pointer");
+        }
+        return;
+    }
+
+    // Check if we would exceed allocated size
+    if (s_sample_load.received_size + length > s_sample_load.expected_size) {
+        if (s_hw) {
+            s_hw->PrintLine("SAMPLE_DATA: Data would exceed allocated size (%lu + %lu > %lu)",
+                            (unsigned long)s_sample_load.received_size,
+                            (unsigned long)length,
+                            (unsigned long)s_sample_load.expected_size);
+        }
+        return;
+    }
+
+    // Copy data to SDRAM
+    uint8_t* dest = static_cast<uint8_t*>(sample_ptr) + s_sample_load.received_size;
+    memcpy(dest, data, length);
+    s_sample_load.received_size += length;
+
+    // Check if loading is complete
+    if (s_sample_load.received_size >= s_sample_load.expected_size) {
+        s_sample_load.loading = false;
+        if (s_hw) {
+            s_hw->PrintLine("SAMPLE_LOAD: Completed loading sample %u (%lu bytes)",
+                            (unsigned)s_sample_load.sample_id,
+                            (unsigned long)s_sample_load.received_size);
+        }
+    }
 }
 
 void GetInputMeters(float& rms, float& peak) {

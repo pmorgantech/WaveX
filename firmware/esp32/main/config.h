@@ -26,7 +26,7 @@
 // Options:
 //  1 = FreeRTOS Runtime Statistics (recommended, most accurate)
 //  2 = ESP-IDF built-in CPU usage (system-level monitoring)
-#define WAVEX_CPU_USAGE_METHOD 2
+#define WAVEX_CPU_USAGE_METHOD 1
 
 // ============================================================================
 // COMPATIBILITY AND LEGACY SUPPORT

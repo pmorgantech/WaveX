@@ -16,9 +16,9 @@
 #include "config/logging_config.h"             // For logging macros
 #include "config/pin_config.h"                 // For Daisy SPI pin definitions
 #include "daisy_core.h"                        // For DMA_BUFFER_MEM_SECTION
+#include "daisy_filesystem.h"                  // For filesystem function declarations
 #include "daisy_inter_mcu_message_handlers.h"  // For message handlers
 #include "daisy_seed.h"
-#include "daisy_spi_filesystem.h"  // For filesystem function declarations
 #include "per/gpio.h"
 #include "per/spi.h"
 #include "spi_protocol/protocol.h"  // For protocol functions

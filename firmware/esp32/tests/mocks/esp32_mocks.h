@@ -65,4 +65,12 @@ extern void heap_caps_free(void* ptr);
 // Mock UI task functions
 void wavex_ui_mark_content_changed(void);
 
+// FreeRTOS tick conversion macros
+#define portTICK_PERIOD_MS 10
+#define pdMS_TO_TICKS(xTimeInMs) ((TickType_t)((xTimeInMs) / portTICK_PERIOD_MS))
+
+// FreeRTOS return values
+#define pdTRUE 1
+#define pdFALSE 0
+
 #endif  // ESP32_TEST_MOCKS_H

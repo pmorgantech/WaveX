@@ -377,7 +377,7 @@
 #endif
 
 #ifndef WAVEX_ENCODER_FILTER_VALUE
-#define WAVEX_ENCODER_FILTER_VALUE 100
+#define WAVEX_ENCODER_FILTER_VALUE 800
 #endif
 #endif
 
@@ -403,7 +403,7 @@
 #endif
 
 #ifndef WAVEX_PCNT1_FILTER_VALUE
-#define WAVEX_PCNT1_FILTER_VALUE 100
+#define WAVEX_PCNT1_FILTER_VALUE 800
 #endif
 
 // PCNT1 interrupt thresholds

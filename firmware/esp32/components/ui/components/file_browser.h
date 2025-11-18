@@ -22,6 +22,11 @@ typedef struct {
     uint32_t size_bytes;
     char name[48];
     char path[96];
+    // WAV metadata (only valid for audio files)
+    uint32_t sample_rate;      // 0 if not a WAV file or unknown
+    uint16_t channels;         // 0 if not a WAV file or unknown
+    uint16_t bits_per_sample;  // 0 if not a WAV file or unknown
+    uint32_t duration_ms;      // Duration in milliseconds (0 if unknown)
 } wavex_file_entry_t;
 
 // Forward declaration for comm interface

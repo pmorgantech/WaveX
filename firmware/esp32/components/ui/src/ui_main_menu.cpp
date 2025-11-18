@@ -3,6 +3,7 @@
 
 #include <esp_log.h>
 
+#include "ui/ui_api.h"
 #include "ui/ui_sample_browser.h"
 #include "ui/ui_sample_detail.h"
 #include "ui/ui_settings_page.h"
@@ -14,12 +15,14 @@ namespace wavex_ui {
 std::shared_ptr<UIPage> createMainMenu() {
     auto menu = std::make_shared<UIMenuPage>("Main Menu");
 
-    menu->addItem("Sample Browser",
-                  []() {
+    menu->addItem("Sample Browser", []() {
         ESP_LOGI(TAG, "Opening Sample Browser");
-        // TODO: Need to inject comm_interface
-        // UINavigator::instance().push(createSampleBrowserPage(comm_interface));
-    });
+        auto comm_interface = wavex_ui::ui_get_comm_interface();
+        if (comm_interface) {
+            UINavigator::instance().push(createSampleBrowserPage(*comm_interface));
+        } else {
+            ESP_LOGE(TAG, "No comm interface available for Sample Browser");
+        } });
 
     menu->addItem("Edit Sample",
                   []() {

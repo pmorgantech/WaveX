@@ -98,6 +98,11 @@
 
 // ESP32 SPI component logging (for token pasting)
 
+// Storage/Filesystem Logging (Daisy only)
+#ifndef WAVEX_LOG_STORAGE
+#define WAVEX_LOG_STORAGE WAVEX_DEBUG_LOGGING_ENABLED
+#endif
+
 // ============================================================================
 // LOGGING MACRO DEFINITIONS
 // ============================================================================

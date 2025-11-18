@@ -22,8 +22,8 @@
 #include "freertos/task.h"
 #include "inter_mcu.h"
 #include "links/esp_spi_link.h"
-#include "pages/diagnostics_page.h"
 #include "pcnt_task.h"
+#include "ui/ui_api.h"
 #include "ui/ui_sample_browser.h"
 
 // LVGL includes
@@ -54,13 +54,17 @@ static const uint32_t MIN_REFRESH_INTERVAL_MS = 16;   // 60 FPS maximum
 static const uint32_t MAX_REFRESH_INTERVAL_MS = 100;  // 10 FPS minimum
 
 // Global UITask instance (singleton pattern)
-UITask *g_ui_task_instance = nullptr;
+static UITask *g_ui_task_instance = nullptr;
 
 // UITask class implementation
 UITask::UITask(WaveX::Comm::ICommInterface &comm_interface) : m_comm_interface(comm_interface) {
     // Initialize the UI context with injected dependencies
     m_context.comm_interface = &m_comm_interface;
-    ESP_LOGI(TAG, "UITask created with injected CommInterface at %p", &comm_interface);
+
+    // Register comm interface with UI system for page creation
+    wavex_ui::ui_set_comm_interface(&m_comm_interface);
+
+    ESP_LOGI(TAG, "UITask created with injected CommInterface");
 }
 
 esp_err_t UITask::init() {
@@ -158,9 +162,6 @@ esp_err_t UITask::stop() {
         vTaskDelete(m_context.ui_task_handle);
         m_context.ui_task_handle = NULL;
     }
-
-    // Stop diagnostics page module
-    diagnostics_page_stop();
 
     // Stop and delete the meter timer
     if (m_context.meter_timer_handle) {
@@ -482,30 +483,44 @@ void UITask::run() {
 #if WAVEX_ESP_PCNT1_ENABLED
         int32_t pot_delta = pcnt_consume_delta(WAVEX_PCNT1_UNIT);
         if (pot_delta != 0) {
-            // Convert PCNT1 delta to EncoderUp/EncoderDown events
-            // Negative delta (counter decreasing) = scrolling up = EncoderUp
-            // Positive delta (counter increasing) = scrolling down = EncoderDown
-            wavex_ui::InputEvent pot_evt;
-            pot_evt.type =
-                (pot_delta > 0) ? wavex_ui::InputType::EncoderDown : wavex_ui::InputType::EncoderUp;
-            pot_evt.delta =
-                (int16_t)(pot_delta > 0 ? pot_delta : -pot_delta);  // Use absolute value
-            pot_evt.timestamp_ms = (uint32_t)(esp_timer_get_time() / 1000);
-            ESP_LOGI(TAG,
-                     "PCNT1 encoder: delta=%d, posting %s event",
-                     pot_delta,
-                     (pot_delta > 0) ? "EncoderDown" : "EncoderUp");
-            bool posted = wavex_ui::InputDispatcher::instance().post(pot_evt);
-            if (!posted) {
-                ESP_LOGW(TAG, "Failed to post PCNT1 encoder event to queue");
+            // Accumulate deltas to detect complete detent movements
+            m_context.pcnt1_delta_accumulator += pot_delta;
+
+            // Check if we've accumulated enough for a detent (quadrature = ±4, single = ±1)
+            // Use higher threshold to prevent partial detent triggers
+            const int32_t DETENT_THRESHOLD = 3;
+            if (abs(m_context.pcnt1_delta_accumulator) >= DETENT_THRESHOLD) {
+                // Send one event per accumulated detent
+                wavex_ui::InputEvent pot_evt;
+                pot_evt.type = (m_context.pcnt1_delta_accumulator > 0)
+                                   ? wavex_ui::InputType::EncoderUp
+                                   : wavex_ui::InputType::EncoderDown;
+                pot_evt.delta = 1;  // One step per detent
+                pot_evt.timestamp_ms = (uint32_t)(esp_timer_get_time() / 1000);
+
+                ESP_LOGI(TAG,
+                         "PCNT1 encoder: accumulated=%d, threshold=%d, posting %s event",
+                         m_context.pcnt1_delta_accumulator,
+                         DETENT_THRESHOLD,
+                         (m_context.pcnt1_delta_accumulator > 0) ? "EncoderUp" : "EncoderDown");
+
+                bool posted = wavex_ui::InputDispatcher::instance().post(pot_evt);
+                if (!posted) {
+                    ESP_LOGW(TAG, "Failed to post PCNT1 encoder event to queue");
+                }
+
+                // Reset accumulator for next detent
+                m_context.pcnt1_delta_accumulator = 0;
+            } else {
+                ESP_LOGD(TAG,
+                         "PCNT1 encoder: accumulated=%d (waiting for threshold %d)",
+                         m_context.pcnt1_delta_accumulator,
+                         DETENT_THRESHOLD);
             }
         }
 #endif
         // Dispatch queued input events to current context
         wavex_ui::InputDispatcher::instance().processAll();
-
-        // Process deferred diagnostics updates (prevents deadlock)
-        diagnostics_page_process_deferred_updates();
 
         // Process deferred sample browser updates (prevents deadlock from SPI/UART task)
         // Acquire LVGL lock before processing deferred updates
