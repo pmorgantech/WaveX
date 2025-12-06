@@ -13,6 +13,9 @@
 
 #pragma once
 
+#include <cstdarg>
+#include <cstdio>
+
 // ============================================================================
 // GLOBAL LOGGING CONTROL
 // ============================================================================
@@ -166,19 +169,57 @@
     } while (0)
 
 #else
-// Daisy-specific logging using printf (since hw may not be available in all contexts)
-#define WAVEX_LOG_DAISY(component, format, ...)                           \
-    do {                                                                  \
-        if (WAVEX_LOG_##component) {                                      \
-            printf("[WAVEX-%s] " format "\n", #component, ##__VA_ARGS__); \
-        }                                                                 \
+// Daisy-specific logging routed through a helper that can use s_hw->PrintLine when available.
+// Implementations are in firmware/daisy/src/comm/daisy_logging.cpp
+void wavex_daisy_log(const char* format, ...);
+void wavex_daisy_log_raw(const char* format, ...);
+
+// Helper wrappers to keep per-component log gating while using the raw logging helpers directly.
+inline void wavex_daisy_log_if(bool enabled,
+                               const char* component,
+                               const char* format,
+                               ...) {
+    if (!enabled) {
+        return;
+    }
+
+    char buf[256];
+    va_list args;
+    va_start(args, format);
+    vsnprintf(buf, sizeof(buf), format, args);
+    va_end(args);
+
+    wavex_daisy_log("[WAVEX-%s] %s", component, buf);
+}
+
+inline void wavex_daisy_log_raw_if(bool enabled, const char* format, ...) {
+    if (!enabled) {
+        return;
+    }
+
+    char buf[256];
+    va_list args;
+    va_start(args, format);
+    vsnprintf(buf, sizeof(buf), format, args);
+    va_end(args);
+
+    wavex_daisy_log_raw("%s", buf);
+}
+
+#define WAVEX_LOG_DAISY(component, format, ...)        \
+    do {                                              \
+        if (WAVEX_LOG_##component) {                  \
+            wavex_daisy_log("[WAVEX-%s] " format,     \
+                            #component,               \
+                            ##__VA_ARGS__);           \
+        }                                             \
     } while (0)
 
 #define WAVEX_LOG_DAISY_RAW(component, format, ...) \
-    do {                                            \
-        if (WAVEX_LOG_##component) {                \
-            printf(format, ##__VA_ARGS__);          \
-        }                                           \
+    do {                                           \
+        if (WAVEX_LOG_##component) {               \
+            wavex_daisy_log_raw(format, ##__VA_ARGS__); \
+        }                                          \
     } while (0)
 #endif
 

@@ -9,10 +9,14 @@
 #include "ff.h"
 #include "stm32h7xx_ll_cortex.h"  // For ARM atomic operations
 #include "sys/dma.h"              // For cache management
+#include "arm_math.h"             // For CMSIS-DSP helpers
 
 #include "../cv_bus.hpp"
 #include "../sampler.hpp"
 #include "../timebase.hpp"
+#include "profiling/profiler.h"
+#include "comm/daisy_uart_link.h"
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -25,7 +29,23 @@ using namespace WaveX::Protocol;
 namespace WaveX {
 namespace AudioEngine {
 
+PROFILE_DEFINE_ZONE(audio_callback);
+PROFILE_DEFINE_ZONE(wav_pump_io);
+PROFILE_DEFINE_ZONE(format_conversion);
+PROFILE_DEFINE_ZONE(ring_buffer_push);
+PROFILE_DEFINE_ZONE(prebuffer_audio);
+PROFILE_DEFINE_ZONE(sd_refill);
+
 static DaisySeed* s_hw = nullptr;
+
+static constexpr uint32_t kMaxMixChannels = 8;
+static constexpr uint32_t kScratchPoolBytes = 32 * 1024;
+static constexpr uint32_t kScratchPoolSamples = kScratchPoolBytes / sizeof(q15_t);
+static constexpr uint32_t kSdBufferCount = 3;
+static constexpr uint32_t kSdBufferAlignment = 32;
+static uint32_t s_output_channels = static_cast<uint32_t>(AudioOutputMode::StereoSAI1);
+static q15_t s_scratch_pool[kScratchPoolSamples];
+static uint32_t s_scratch_offset = 0;
 
 // Parameters
 struct AudioParameters {
@@ -73,6 +93,14 @@ static uint32_t s_prev_sent = 0;
 // Envelope gate state
 static bool s_envelope_gate = false;
 
+// Little-endian helpers
+static inline uint16_t read_le16(const uint8_t* p) {
+    return (uint16_t)p[0] | ((uint16_t)p[1] << 8);
+}
+static inline uint32_t read_le32(const uint8_t* p) {
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+
 // ============================
 // WAV playback state
 // ============================
@@ -118,35 +146,102 @@ struct SampleLoadState {
     uint8_t bit_depth = 0;
 };
 static SampleLoadState s_sample_load = {};
+// FIL structure is large (~600 bytes with SDMMC sector buffer); keep it static in normal BSS
+// (matches the audition/playback path). Keep I/O buffers in normal BSS as well, but 32-byte aligned
+// so cache maintenance in the SD driver works correctly.
+static FIL s_sample_load_file;
+alignas(32) static uint8_t s_sample_hdr[64];
+alignas(32) static uint8_t s_sample_io[1024];
 
-// Thread-safe single-producer (main loop) / single-consumer (audio IRQ) ring buffer of stereo int16
+// ============================
+// Loaded sample registry (for diagnostics)
+// ============================
+struct LoadedSampleInfo {
+    wxsamp_t handle = {};
+    uint16_t sample_id = 0;
+    uint32_t allocated_bytes = 0;
+    uint32_t loaded_bytes = 0;
+    uint16_t sample_rate = 0;
+    uint8_t channels = 0;
+    uint8_t bit_depth = 0;
+};
+static std::vector<LoadedSampleInfo> s_loaded_samples;
+
+static LoadedSampleInfo* find_loaded_sample(uint16_t sample_id) {
+    for (auto& entry : s_loaded_samples) {
+        if (entry.sample_id == sample_id) {
+            return &entry;
+        }
+    }
+    return nullptr;
+}
+
+static void remove_loaded_sample(uint16_t sample_id) {
+    for (auto it = s_loaded_samples.begin(); it != s_loaded_samples.end(); ++it) {
+        if (it->sample_id == sample_id) {
+            // Release the allocation tied to this entry
+            s_sample_mem_mgr.release(&it->handle);
+            s_loaded_samples.erase(it);
+            return;
+        }
+    }
+}
+
+static void upsert_loaded_sample(const SampleLoadMessage& sl, const wxsamp_t& handle) {
+    // Replace any existing entry for this sample_id
+    remove_loaded_sample(sl.sample_id);
+
+    LoadedSampleInfo info;
+    info.sample_id = sl.sample_id;
+    info.handle = handle;
+    info.allocated_bytes = handle.len ? handle.len : sl.sample_size;
+    info.loaded_bytes = 0;
+    info.sample_rate = sl.sample_rate;
+    info.channels = sl.channels;
+    info.bit_depth = sl.bit_depth;
+    s_loaded_samples.push_back(info);
+}
+
+static void update_loaded_sample_progress(uint16_t sample_id, uint32_t loaded_bytes) {
+    if (auto* entry = find_loaded_sample(sample_id)) {
+        entry->loaded_bytes = loaded_bytes;
+    }
+}
+
+
+// Thread-safe single-producer (main loop) / single-consumer (audio IRQ) ring buffer of interleaved q15_t
 // frames Uses ARM Cortex-M7 atomic operations and memory barriers for race-condition-free operation
 // This eliminates warbling caused by timing variations between main loop and audio callback
 // Using regular memory - this buffer is NOT accessed by DMA, only by CPU (main loop writes, IRQ
 // reads) Moving out of DMA memory saves 8KB from the 32KB RAM_D2_DMA limit
-static const uint32_t RB_CAP_FRAMES =
-    2048;  // ~46ms at 44.1k (better latency) (excellent buffering for smooth playback)
-static volatile uint32_t s_rb_head =
-    0;  // write counter (frames) - atomic access with memory barriers
-static volatile uint32_t s_rb_tail =
-    0;  // read counter (frames) - atomic access with memory barriers
-static int16_t
-    s_rb[RB_CAP_FRAMES * 2];  // interleaved L,R - regular memory (8KB saved from DMA memory)
+static const uint32_t RB_CAP_FRAMES = 2048;
+static volatile uint32_t s_rb_head = 0;
+static volatile uint32_t s_rb_tail = 0;
+static q15_t s_rb[RB_CAP_FRAMES * kMaxMixChannels];
 
 // Pre-buffering system for smooth playback start
 static const uint32_t PREBUFFER_FRAMES =
     1024;  // ~23ms at 44.1kHz (much more responsive for auditioning)
-static int16_t s_prebuffer[PREBUFFER_FRAMES * 2];  // ~23ms of stereo audio
+static q15_t s_prebuffer[PREBUFFER_FRAMES * kMaxMixChannels];  // ~23ms of interleaved audio
 static uint32_t s_prebuffer_filled = 0;            // Number of frames pre-buffered
 static bool s_prebuffer_ready = false;             // Whether pre-buffer is ready for playback
 static bool s_prebuffering = false;                // Whether we're currently pre-buffering
 
 // Background SD I/O system with larger buffers
 static const uint32_t SD_BUFFER_SIZE = 8192;  // 8KB SD read buffer for better performance
-static uint8_t s_sd_buffer[SD_BUFFER_SIZE];   // SD read buffer in regular memory
-static uint32_t s_sd_buffer_pos = 0;          // Current position in SD buffer
-static uint32_t s_sd_buffer_frames = 0;       // Number of frames available in SD buffer
-static bool s_sd_buffer_valid = false;        // Whether SD buffer contains valid data
+static constexpr uint32_t SD_INT16_CAPACITY = SD_BUFFER_SIZE / sizeof(int16_t);
+struct SdBufferSlot {
+    alignas(kSdBufferAlignment) uint8_t data[SD_BUFFER_SIZE];
+    uint32_t bytes = 0;
+    uint32_t frames = 0;
+    uint32_t consumed = 0;
+    bool ready = false;
+};
+static SdBufferSlot s_sd_buffers[kSdBufferCount];
+static uint32_t s_sd_fill_index = 0;
+static uint32_t s_sd_consume_index = 0;
+static q15_t s_conversion_buffer[SD_INT16_CAPACITY * kMaxMixChannels];  // Scratch for conversions/resample
+alignas(kSdBufferAlignment) static uint8_t s_prebuffer_sd[SD_BUFFER_SIZE];
 // Audio performance instrumentation
 static uint32_t s_io_start_time = 0;
 static uint32_t s_io_duration = 0;
@@ -154,19 +249,121 @@ static uint32_t s_max_io_duration = 0;
 static uint32_t s_io_count = 0;
 static uint32_t s_last_io_log = 0;
 static uint32_t s_last_io_time = 0;  // Last time we did SD I/O (for rate limiting)
+static uint32_t s_dwt_callback_cycles = 0;
+static uint32_t s_dwt_callback_max = 0;
+static uint32_t s_dwt_io_cycles = 0;
+static uint32_t s_dwt_io_max = 0;
+
+// Helpers
+static inline void ResetScratchPool() {
+    s_scratch_offset = 0;
+}
+
+static inline q15_t* AcquireScratch(uint32_t samples) {
+    if (s_scratch_offset + samples > kScratchPoolSamples) {
+        return nullptr;
+    }
+    q15_t* ptr = &s_scratch_pool[s_scratch_offset];
+    s_scratch_offset += samples;
+    return ptr;
+}
+
+static inline q15_t ReadSample16(const uint8_t* src) {
+    int16_t sample = static_cast<int16_t>(src[0] | (src[1] << 8));
+    return sample;
+}
+
+static inline q15_t ReadSample24(const uint8_t* src) {
+    int32_t sample = static_cast<int32_t>(src[0]) | (static_cast<int32_t>(src[1]) << 8) |
+                     (static_cast<int32_t>(static_cast<int8_t>(src[2])) << 16);
+    return static_cast<q15_t>(sample >> 8);
+}
+
+static uint32_t ConvertFramesToOutput(const uint8_t* src,
+                                      q15_t* dst,
+                                      uint32_t frames,
+                                      uint16_t src_channels,
+                                      uint8_t bit_depth) {
+    const uint32_t bytes_per_sample = (bit_depth == 24) ? 3u : 2u;
+    const uint32_t src_stride = bytes_per_sample * src_channels;
+
+    for (uint32_t i = 0; i < frames; ++i) {
+        const uint8_t* frame_ptr = src + i * src_stride;
+        q15_t sample_vals[2];
+        sample_vals[0] = (bit_depth == 24) ? ReadSample24(frame_ptr) : ReadSample16(frame_ptr);
+        if (src_channels > 1) {
+            sample_vals[1] =
+                (bit_depth == 24) ? ReadSample24(frame_ptr + bytes_per_sample)
+                                  : ReadSample16(frame_ptr + bytes_per_sample);
+        } else {
+            sample_vals[1] = sample_vals[0];
+        }
+
+        for (uint32_t ch = 0; ch < s_output_channels; ++ch) {
+            q15_t value = 0;
+            if (ch < src_channels) {
+                value = sample_vals[ch];
+            }
+            dst[i * s_output_channels + ch] = value;
+        }
+    }
+
+    return frames;
+}
+
+static uint32_t LinearResampleFrames(const q15_t* src,
+                                     uint32_t src_frames,
+                                     q15_t* dst,
+                                     uint32_t channels,
+                                     float ratio) {
+    if (ratio <= 0.0f || src_frames < 2) {
+        return 0;
+    }
+
+    const float step = 1.0f / ratio;
+    float position = 0.0f;
+    uint32_t output = 0;
+
+    while (position + 1.0f < static_cast<float>(src_frames)) {
+        uint32_t idx = static_cast<uint32_t>(position);
+        float frac = position - static_cast<float>(idx);
+
+        for (uint32_t ch = 0; ch < channels; ++ch) {
+            float start = src[idx * channels + ch] / 32768.0f;
+            float finish = src[(idx + 1) * channels + ch] / 32768.0f;
+            float sample = start + frac * (finish - start);
+            sample = std::max(-1.0f, std::min(sample, 0.999969f));
+            dst[output * channels + ch] = static_cast<q15_t>(sample * 32767.0f);
+        }
+
+        output++;
+        position += step;
+    }
+
+    return output;
+}
 
 // Resampling temporarily disabled
-
+ 
 // Pre-buffering functions
 static bool prebuffer_audio() {
-    if (!s_wav.open || s_prebuffer_ready)
+    PROFILE_SCOPE(prebuffer_audio);
+
+    if (!s_wav.open || s_prebuffer_ready) {
         return true;
+    }
 
     s_prebuffering = true;
+    ResetScratchPool();
     // Calculate bytes per frame (bytes per sample * channels)
     uint32_t bytes_per_sample = (s_wav.bits_per_sample == 24) ? 3u : 2u;
     uint32_t file_bpf = (uint32_t)s_wav.num_channels * bytes_per_sample;
-    uint32_t frames_to_read = PREBUFFER_FRAMES - s_prebuffer_filled;
+    uint32_t free_prebuffer_frames = PREBUFFER_FRAMES - s_prebuffer_filled;
+    float resample_ratio = 1.0f;
+    if (s_wav.sample_rate != s_sample_rate) {
+        resample_ratio = static_cast<float>(s_sample_rate) / static_cast<float>(s_wav.sample_rate);
+    }
+    uint32_t frames_to_read = free_prebuffer_frames;
 
     if (frames_to_read == 0) {
         s_prebuffer_ready = true;
@@ -180,10 +377,31 @@ static bool prebuffer_audio() {
 
     // Calculate how much to read
     uint32_t max_frames = SD_BUFFER_SIZE / file_bpf;
-    uint32_t req_bytes = (frames_to_read < max_frames ? frames_to_read : max_frames) * file_bpf;
+    uint32_t req_frames = (frames_to_read < max_frames) ? frames_to_read : max_frames;
+
+    // Ensure the resampled output fits into the remaining pre-buffer space
+    if (resample_ratio > 1.0f) {
+        if (free_prebuffer_frames <= 1) {
+            s_prebuffer_ready = true;
+            s_prebuffering = false;
+            return true;
+        }
+        uint32_t max_input_by_space =
+            static_cast<uint32_t>(static_cast<float>(free_prebuffer_frames - 1) / resample_ratio);
+        if (max_input_by_space == 0) {
+            s_prebuffer_ready = true;
+            s_prebuffering = false;
+            return true;
+        }
+        if (req_frames > max_input_by_space) {
+            req_frames = max_input_by_space;
+        }
+    }
+    uint32_t req_bytes = req_frames * file_bpf;
 
     if (req_bytes > s_wav.bytes_remaining) {
         req_bytes = s_wav.bytes_remaining;
+        req_frames = req_bytes / file_bpf;
     }
 
     if (req_bytes == 0) {
@@ -201,7 +419,7 @@ static bool prebuffer_audio() {
     // Read from SD card
     UINT br = 0;
     s_io_start_time = System::GetTick();  // Start timing
-    FRESULT fr = f_read(&s_wav.file, s_sd_buffer, req_bytes, &br);
+    FRESULT fr = f_read(&s_wav.file, s_prebuffer_sd, req_bytes, &br);
     s_io_duration = System::GetTick() - s_io_start_time;  // End timing
 
     // Track I/O performance
@@ -230,60 +448,40 @@ static bool prebuffer_audio() {
 
     s_wav.bytes_remaining -= br;
 
-    // Copy to pre-buffer with format conversion if needed
     uint32_t frames_read = br / file_bpf;
-    int16_t* dst = &s_prebuffer[s_prebuffer_filled * 2];
+    q15_t* conversion_output = AcquireScratch(frames_read * s_output_channels);
+    if (conversion_output == nullptr) {
+        // Fallback: write directly into prebuffer
+        conversion_output = &s_prebuffer[s_prebuffer_filled * s_output_channels];
+    }
 
-    // Convert samples from file format to 16-bit
-    if (s_wav.bits_per_sample == 24) {
-        // 24-bit: read 3 bytes (little-endian) and convert to 16-bit
-        const uint8_t* src = (const uint8_t*)s_sd_buffer;
-        if (s_wav.num_channels == 2) {
-            // Stereo: convert L,R pairs
-            for (uint32_t i = 0; i < frames_read; ++i) {
-                uint32_t idx = i * 6;  // 3 bytes per sample * 2 channels
-                // Convert 24-bit L sample (little-endian, signed)
-                int32_t sample_l =
-                    (int32_t)(src[idx + 0] | (src[idx + 1] << 8) | ((int8_t)src[idx + 2] << 16));
-                dst[i * 2 + 0] =
-                    (int16_t)(sample_l >> 8);  // Shift right 8 bits to convert to 16-bit
-                // Convert 24-bit R sample
-                int32_t sample_r =
-                    (int32_t)(src[idx + 3] | (src[idx + 4] << 8) | ((int8_t)src[idx + 5] << 16));
-                dst[i * 2 + 1] = (int16_t)(sample_r >> 8);
-            }
-        } else {
-            // Mono: convert and duplicate to both channels
-            for (uint32_t i = 0; i < frames_read; ++i) {
-                uint32_t idx = i * 3;  // 3 bytes per sample
-                // Convert 24-bit sample (little-endian, signed)
-                int32_t sample =
-                    (int32_t)(src[idx + 0] | (src[idx + 1] << 8) | ((int8_t)src[idx + 2] << 16));
-                int16_t sample_16 =
-                    (int16_t)(sample >> 8);  // Shift right 8 bits to convert to 16-bit
-                dst[i * 2 + 0] = sample_16;
-                dst[i * 2 + 1] = sample_16;
-            }
-        }
-    } else {
-        // 16-bit: direct copy
-        const int16_t* src = (const int16_t*)s_sd_buffer;
-        if (s_wav.num_channels == 2) {
-            // Stereo: copy L,R pairs
-            for (uint32_t i = 0; i < frames_read; ++i) {
-                dst[i * 2 + 0] = src[i * 2 + 0];
-                dst[i * 2 + 1] = src[i * 2 + 1];
-            }
-        } else {
-            // Mono: duplicate to both channels
-            for (uint32_t i = 0; i < frames_read; ++i) {
-                dst[i * 2 + 0] = src[i];
-                dst[i * 2 + 1] = src[i];
+    const uint8_t* src = s_prebuffer_sd;
+    PROFILE_SCOPE(format_conversion);
+    ConvertFramesToOutput(src, conversion_output, frames_read, s_wav.num_channels, s_wav.bits_per_sample);
+
+    q15_t* to_push = conversion_output;
+    uint32_t output_frames = frames_read;
+    if (resample_ratio != 1.0f) {
+        uint32_t max_out_frames = static_cast<uint32_t>(std::ceil(frames_read * resample_ratio)) + 1;
+        q15_t* resample_buffer = AcquireScratch(max_out_frames * s_output_channels);
+        if (resample_buffer != nullptr) {
+            uint32_t resampled = LinearResampleFrames(
+                conversion_output, frames_read, resample_buffer, s_output_channels, resample_ratio);
+            if (resampled > 0) {
+                to_push = resample_buffer;
+                output_frames = resampled;
             }
         }
     }
 
-    s_prebuffer_filled += frames_read;
+    if (output_frames > free_prebuffer_frames) {
+        output_frames = free_prebuffer_frames;
+    }
+
+    // Push into the pre-buffer
+    q15_t* dst = &s_prebuffer[s_prebuffer_filled * s_output_channels];
+    arm_copy_q15(to_push, dst, output_frames * s_output_channels);
+    s_prebuffer_filled += output_frames;
 
 #if WAVEX_DAISY_SD_DEBUG
     if (s_hw)
@@ -291,6 +489,11 @@ static bool prebuffer_audio() {
                         (unsigned)s_prebuffer_filled,
                         (unsigned)PREBUFFER_FRAMES);
 #endif
+
+    if (s_prebuffer_filled >= PREBUFFER_FRAMES) {
+        s_prebuffer_ready = true;
+        s_prebuffering = false;
+    }
 
     return true;
 }
@@ -300,61 +503,68 @@ static bool refill_sd_buffer() {
     if (!s_wav.open)
         return false;
 
-    // Check if we need to refill
-    if (s_sd_buffer_valid && s_sd_buffer_pos < s_sd_buffer_frames) {
-        return true;  // Still have data
-    }
+    PROFILE_SCOPE(sd_refill);
 
-    // Calculate how much to read (bytes per frame = channels * bytes per sample)
     uint32_t bytes_per_sample = (s_wav.bits_per_sample == 24) ? 3u : 2u;
     uint32_t file_bpf = (uint32_t)s_wav.num_channels * bytes_per_sample;
     uint32_t max_frames = SD_BUFFER_SIZE / file_bpf;
-    uint32_t req_bytes = max_frames * file_bpf;
 
-    if (req_bytes > s_wav.bytes_remaining) {
-        req_bytes = s_wav.bytes_remaining;
-    }
+    for (uint32_t attempt = 0; attempt < kSdBufferCount; ++attempt) {
+        uint32_t idx = (s_sd_fill_index + attempt) % kSdBufferCount;
+        SdBufferSlot& slot = s_sd_buffers[idx];
+        if (slot.ready) {
+            continue;
+        }
 
-    if (req_bytes == 0) {
-        // Loop: seek back to data start
-        f_lseek(&s_wav.file, s_wav.data_start);
-        s_wav.bytes_remaining = s_wav.data_size;
-        req_bytes = max_frames * file_bpf;
+        uint32_t req_frames = max_frames;
+        uint32_t req_bytes = req_frames * file_bpf;
+
         if (req_bytes > s_wav.bytes_remaining) {
             req_bytes = s_wav.bytes_remaining;
+            req_frames = req_bytes / file_bpf;
         }
+
+        if (req_bytes == 0) {
+            f_lseek(&s_wav.file, s_wav.data_start);
+            s_wav.bytes_remaining = s_wav.data_size;
+            req_frames = std::min(max_frames, s_wav.bytes_remaining / file_bpf);
+            req_bytes = req_frames * file_bpf;
 #if WAVEX_DAISY_SD_DEBUG
-        if (s_hw)
-            s_hw->PrintLine("WAV loop: rewinding to data start");
+            if (s_hw)
+                s_hw->PrintLine("WAV loop: rewinding to data start");
 #endif
+        }
+
+        if (req_bytes == 0)
+            return false;
+
+        UINT br = 0;
+        s_io_start_time = System::GetTick();
+        FRESULT fr = f_read(&s_wav.file, slot.data, req_bytes, &br);
+        s_io_duration = System::GetTick() - s_io_start_time;
+
+        if (fr != FR_OK || br == 0) {
+#if WAVEX_DAISY_SD_DEBUG
+            if (s_hw)
+                s_hw->PrintLine("WAV read error: fr=%d, br=%u", (int)fr, (unsigned)br);
+#endif
+            return false;
+        }
+
+        slot.bytes = br;
+        slot.frames = br / file_bpf;
+        slot.consumed = 0;
+        slot.ready = true;
+        s_sd_fill_index = (idx + 1) % kSdBufferCount;
+        s_wav.bytes_remaining -= br;
+
+        s_io_count++;
+        if (s_io_duration > s_max_io_duration) {
+            s_max_io_duration = s_io_duration;
+        }
+
+        return true;
     }
-
-    if (req_bytes == 0)
-        return false;
-
-    // Read from SD card
-    UINT br = 0;
-    FRESULT fr = f_read(&s_wav.file, s_sd_buffer, req_bytes, &br);
-
-    if (fr != FR_OK || br == 0) {
-#if WAVEX_DAISY_SD_DEBUG
-        if (s_hw)
-            s_hw->PrintLine("WAV read error: fr=%d, br=%u", (int)fr, (unsigned)br);
-#endif
-        return false;
-    }
-
-    // Update state
-    s_sd_buffer_frames = br / file_bpf;
-    s_sd_buffer_pos = 0;
-    s_sd_buffer_valid = true;
-    s_wav.bytes_remaining -= br;
-
-#if WAVEX_DAISY_SD_DEBUG
-    if (s_hw)
-        s_hw->PrintLine(
-            "SD buffer refilled: %u frames, %u bytes", (unsigned)s_sd_buffer_frames, (unsigned)br);
-#endif
 
     return true;
 }
@@ -373,23 +583,28 @@ static inline uint32_t rb_free_frames() {
     return (RB_CAP_FRAMES - 1u) - rb_count_frames();
 }
 
-static inline void rb_push_stereo(int16_t l, int16_t r) {
-    // Atomic write with memory barriers for thread safety
+static inline void rb_push_frames(const q15_t* samples, uint32_t frames) {
+    if (frames == 0 || samples == nullptr)
+        return;
+
+    const uint32_t mask = RB_CAP_FRAMES - 1u;
     uint32_t head = s_rb_head;
-    uint32_t idx = (head & (RB_CAP_FRAMES - 1u)) * 2u;
+    uint32_t first_chunk = RB_CAP_FRAMES - (head & mask);
+    uint32_t chunk = (frames < first_chunk) ? frames : first_chunk;
+    uint32_t samples_per_channel = s_output_channels;
+    uint32_t dst_idx = (head & mask) * samples_per_channel;
 
-    // Write data first
-    s_rb[idx + 0] = l;
-    s_rb[idx + 1] = r;
+    PROFILE_SCOPE(ring_buffer_push);
+    arm_copy_q15(samples, &s_rb[dst_idx], chunk * samples_per_channel);
+    if (frames > chunk) {
+        arm_copy_q15(samples + chunk * samples_per_channel,
+                     s_rb,
+                     (frames - chunk) * samples_per_channel);
+    }
 
-    // Memory barrier to ensure data is written before updating head
-    __DMB();  // Data Memory Barrier - ensure data writes complete
-
-    // Atomic update of head pointer
-    s_rb_head = head + 1u;
-
-    // Final memory barrier to ensure head update is visible
-    __DMB();  // Ensure head update is committed to memory
+    __DMB();  // Ensure writes complete before updating head
+    s_rb_head = head + frames;
+    __DMB();  // Ensure head is visible to consumer
 }
 
 static inline bool rb_pop_stereo(int16_t& l, int16_t& r) {
@@ -426,6 +641,14 @@ static inline bool rb_pop_stereo(int16_t& l, int16_t& r) {
 void Init(DaisySeed& hw, float sample_rate) {
     s_hw = &hw;
     s_sample_rate = sample_rate;
+
+    WaveX::Profiling::InitHardware();
+    PROFILE_REGISTER_ZONE(audio_callback);
+    PROFILE_REGISTER_ZONE(wav_pump_io);
+    PROFILE_REGISTER_ZONE(format_conversion);
+    PROFILE_REGISTER_ZONE(ring_buffer_push);
+    PROFILE_REGISTER_ZONE(prebuffer_audio);
+    PROFILE_REGISTER_ZONE(sd_refill);
 
     s_filter.Init(sample_rate);
     s_filter.SetFreq(s_params.filter_cutoff);
@@ -503,6 +726,8 @@ void Init(DaisySeed& hw, float sample_rate) {
 }
 
 void Callback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t size) {
+    PROFILE_SCOPE(audio_callback);
+    uint32_t callback_cycles_start = WaveX::Profiling::GetCycles();
     // Start CPU load measurement for this audio block
     s_cpu_load_meter.OnBlockStart();
 
@@ -566,6 +791,8 @@ void Callback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t
 
     // End CPU load measurement for this audio block
     s_cpu_load_meter.OnBlockEnd();
+    s_dwt_callback_cycles = WaveX::Profiling::GetCycles() - callback_cycles_start;
+    s_dwt_callback_max = std::max(s_dwt_callback_max, s_dwt_callback_cycles);
 }
 
 void OnControlChange(const ControlChangeMessage& ctrl_msg) {
@@ -652,43 +879,259 @@ void OnPreviewReq(const PreviewReqMessage& pr) {
 
 void OnSampleLoad(const SampleLoadMessage& sl) {
     if (s_hw) {
-        s_hw->PrintLine("SAMPLE_LOAD: id=%u, size=%lu, rate=%u, ch=%u, bits=%u",
-                        (unsigned)sl.sample_id,
-                        (unsigned long)sl.sample_size,
-                        (unsigned)sl.sample_rate,
-                        (unsigned)sl.channels,
-                        (unsigned)sl.bit_depth);
+        s_hw->PrintLine("SAMPLE_LOAD: [1/10] Entry - path='%s' id=%u", sl.path, (unsigned)sl.sample_id);
     }
 
-    // Allocate memory for the sample
-    wxsamp_t handle = {};
-    if (!s_sample_mem_mgr.alloc(sl.sample_size, &handle)) {
+    // CRITICAL: Stop ALL SD activity (audition/playback) and ensure PumpWavIO is not running.
+    // FatFS + SDMMC are NOT thread-safe or re-entrant. The main loop calls PumpWavIO() which
+    // will conflict with f_open/f_read calls here if s_wav.open is true.
+    if (s_hw) {
+        s_hw->PrintLine("SAMPLE_LOAD: [2/10] Calling StopAudition()...");
+    }
+    StopAudition();
+    
+    if (s_hw) {
+        s_hw->PrintLine("SAMPLE_LOAD: [3/10] Calling CloseWav()...");
+    }
+    CloseWav();
+    
+    if (s_hw) {
+        s_hw->PrintLine("SAMPLE_LOAD: [4/10] Delaying 10ms for DMA settle...");
+    }
+    // Add a small delay to ensure any in-flight SD DMA completes
+    System::Delay(10);
+
+    if (s_hw) {
+        s_hw->PrintLine("SAMPLE_LOAD: [5/10] Getting FIL reference...");
+    }
+    // Use static FIL (too large for stack - ~600 bytes with SDMMC buffer).
+    // Keep in normal BSS like s_wav.file so cache maintenance works correctly.
+    // CRITICAL: Do NOT memset() the FIL - it has internal buffer pointers managed by FatFS.
+    FIL& file = s_sample_load_file;
+
+    if (s_hw) {
+        s_hw->PrintLine("SAMPLE_LOAD: [6/10] Calling f_open('%s')...", sl.path);
+    }
+    // Try raw path first (matches playback/audition). If that fails and path does not include a
+    // drive prefix, retry with "0:" prefix to be tolerant of mount styles.
+    FRESULT fr = f_open(&file, sl.path, FA_READ);
+    if (s_hw) {
+        s_hw->PrintLine("SAMPLE_LOAD: [6a/10] f_open result: %d", (int)fr);
+    }
+    
+    if (fr != FR_OK && strncmp(sl.path, "0:", 2) != 0) {
         if (s_hw) {
-            s_hw->PrintLine("SAMPLE_LOAD: Failed to allocate %lu bytes for sample %u",
-                            (unsigned long)sl.sample_size,
-                            (unsigned)sl.sample_id);
+            s_hw->PrintLine("SAMPLE_LOAD: [6b/10] Retrying with 0: prefix...");
+        }
+        char alt_path[128];
+        snprintf(alt_path, sizeof(alt_path), "0:%s", sl.path);
+        fr = f_open(&file, alt_path, FA_READ);
+        if (s_hw) {
+            s_hw->PrintLine("SAMPLE_LOAD: [6c/10] f_open alt result: %d", (int)fr);
+        }
+        if (fr != FR_OK && s_hw) {
+            s_hw->PrintLine("SAMPLE_LOAD: f_open failed (%d) for '%s' and alt '%s'",
+                            (int)fr,
+                            sl.path,
+                            alt_path);
+        }
+    } else if (fr != FR_OK && s_hw) {
+        s_hw->PrintLine("SAMPLE_LOAD: f_open failed (%d) for '%s'", (int)fr, sl.path);
+    }
+    if (fr != FR_OK) {
+        if (s_hw) {
+            s_hw->PrintLine("SAMPLE_LOAD: [EXIT-ERR] f_open failed, returning");
         }
         return;
     }
 
-    // Store loading state
-    s_sample_load.handle = handle;
-    s_sample_load.sample_id = sl.sample_id;
-    s_sample_load.expected_size = sl.sample_size;
-    s_sample_load.received_size = 0;
-    s_sample_load.loading = true;
-    s_sample_load.sample_rate = sl.sample_rate;
-    s_sample_load.channels = sl.channels;
-    s_sample_load.bit_depth = sl.bit_depth;
+    if (s_hw) {
+        s_hw->PrintLine("SAMPLE_LOAD: [7/10] File opened successfully, reading header...");
+    }
+    // Read header into DMA-safe buffer (RAM_D2) so SDMMC DMA can access it.
+    uint8_t* hdr = s_sample_hdr;
+    UINT br = 0;
+    const UINT kHdrSize = 44;
+    fr = f_read(&file, hdr, kHdrSize, &br);
+    if (s_hw) {
+        s_hw->PrintLine("SAMPLE_LOAD: [7a/10] f_read header result: fr=%d, br=%u", (int)fr, (unsigned)br);
+    }
+    
+    if (fr != FR_OK || br < 44 || memcmp(hdr + 0, "RIFF", 4) != 0 ||
+        memcmp(hdr + 8, "WAVE", 4) != 0) {
+        if (s_hw) {
+            s_hw->PrintLine("SAMPLE_LOAD: invalid WAV header (%d, bytes=%u)", (int)fr, (unsigned)br);
+        }
+        f_close(&file);
+        return;
+    }
 
     if (s_hw) {
-        s_hw->PrintLine("SAMPLE_LOAD: Allocated sample %u, handle cls=%u page=%u slot=%u len=%lu",
-                        (unsigned)sl.sample_id,
-                        (unsigned)handle.cls,
-                        (unsigned)handle.page,
-                        (unsigned)handle.slot,
-                        (unsigned long)handle.len);
+        s_hw->PrintLine("SAMPLE_LOAD: [8/10] Valid WAV header, parsing chunks...");
     }
+    
+    uint16_t audio_fmt = 0;
+    uint16_t num_ch = 0;
+    uint32_t sample_rate = 0;
+    uint16_t bits = 0;
+    uint32_t data_off = 0;
+    uint32_t data_size = 0;
+
+    f_lseek(&file, 12);
+    if (s_hw) {
+        s_hw->PrintLine("SAMPLE_LOAD: [8a/10] Seeking to chunk 12, starting chunk parse loop...");
+    }
+    
+    while (true) {
+        uint8_t* chdr = s_sample_hdr;  // reuse DMA-safe buffer
+        fr = f_read(&file, chdr, 8, &br);
+        if (fr != FR_OK || br < 8) {
+            if (s_hw) {
+                s_hw->PrintLine("SAMPLE_LOAD: [8b/10] Chunk read failed or EOF: fr=%d, br=%u", (int)fr, (unsigned)br);
+            }
+            f_close(&file);
+            return;
+        }
+        uint32_t cid = read_le32(chdr);
+        uint32_t csz = read_le32(chdr + 4);
+        if (cid == 0x20746d66) {  // 'fmt '
+            uint8_t* fmt = s_sample_hdr;  // reuse DMA-safe buffer
+            if (csz < 16) {
+                f_close(&file);
+                return;
+            }
+            fr = f_read(&file, fmt, 16, &br);
+            if (fr != FR_OK || br < 16) {
+                f_close(&file);
+                return;
+            }
+            audio_fmt = read_le16(fmt + 0);
+            num_ch = read_le16(fmt + 2);
+            sample_rate = read_le32(fmt + 4);
+            bits = read_le16(fmt + 14);
+            if (csz > 16)
+                f_lseek(&file, f_tell(&file) + (csz - 16));
+        } else if (cid == 0x61746164) {  // 'data'
+            data_off = f_tell(&file);
+            data_size = csz;
+            break;
+        } else {
+            f_lseek(&file, f_tell(&file) + csz);
+        }
+    }
+
+    if (audio_fmt != 1 || (bits != 16 && bits != 24) || (num_ch != 1 && num_ch != 2)) {
+        if (s_hw) {
+            s_hw->PrintLine("SAMPLE_LOAD: unsupported format fmt=%u bits=%u ch=%u",
+                            (unsigned)audio_fmt,
+                            (unsigned)bits,
+                            (unsigned)num_ch);
+        }
+        f_close(&file);
+        return;
+    }
+
+    if (s_hw) {
+        s_hw->PrintLine("SAMPLE_LOAD: [9/10] Format valid: sr=%lu ch=%u bits=%u, data_size=%lu",
+                        (unsigned long)sample_rate,
+                        (unsigned)num_ch,
+                        (unsigned)bits,
+                        (unsigned long)data_size);
+    }
+
+    wxsamp_t handle = {};
+    if (!s_sample_mem_mgr.alloc(data_size, &handle)) {
+        if (s_hw) {
+            wxsamp_stats_t st{};
+            s_sample_mem_mgr.stats(&st);
+            s_hw->PrintLine("SAMPLE_LOAD: alloc failed for %lu bytes (largest_free=%lu, free_total=%lu)",
+                            (unsigned long)data_size,
+                            (unsigned long)st.largest_free_bytes,
+                            (unsigned long)st.large_free_bytes + (unsigned long)st.small_free_bytes);
+        }
+        f_close(&file);
+        return;
+    }
+
+    if (s_hw) {
+        s_hw->PrintLine("SAMPLE_LOAD: [9a/10] Memory allocated, getting pointer...");
+    }
+    
+    void* sample_ptr = nullptr;
+    if (!s_sample_mem_mgr.ptr(handle, &sample_ptr)) {
+        if (s_hw) {
+            s_hw->PrintLine("SAMPLE_LOAD: [9b/10] Failed to get pointer");
+        }
+        s_sample_mem_mgr.release(&handle);
+        f_close(&file);
+        return;
+    }
+
+    if (s_hw) {
+        s_hw->PrintLine("SAMPLE_LOAD: [10/10] Seeking to data_off=%lu, starting data read loop...", (unsigned long)data_off);
+    }
+    
+    f_lseek(&file, data_off);
+    uint32_t remaining = data_size;
+    uint32_t written = 0;
+    // Use DMA-safe buffer in RAM_D2; stack (DTCM) is not accessible to SDMMC DMA.
+    uint8_t* temp = s_sample_io;
+    constexpr UINT kIoChunk = sizeof(s_sample_io);
+    
+    if (s_hw) {
+        s_hw->PrintLine("SAMPLE_LOAD: [10a/10] ENTERING f_read loop, remaining=%lu...", (unsigned long)remaining);
+    }
+    
+    while (remaining > 0) {
+        UINT to_read = (remaining > kIoChunk) ? kIoChunk : remaining;
+        
+        if (s_hw && written == 0) {
+            s_hw->PrintLine("SAMPLE_LOAD: [10b/10] CALLING f_read for first chunk, to_read=%u...", (unsigned)to_read);
+        }
+        
+        fr = f_read(&file, temp, to_read, &br);
+        
+        if (s_hw && written == 0) {
+            s_hw->PrintLine("SAMPLE_LOAD: [10c/10] RETURNED from f_read: fr=%d, br=%u", (int)fr, (unsigned)br);
+        }
+        
+        if (fr != FR_OK || br == 0) {
+            if (s_hw) {
+                s_hw->PrintLine("SAMPLE_LOAD: read error %d after %lu bytes", (int)fr, (unsigned long)written);
+            }
+            s_sample_mem_mgr.release(&handle);
+            f_close(&file);
+            return;
+        }
+        memcpy(static_cast<uint8_t*>(sample_ptr) + written, temp, br);
+        written += br;
+        remaining -= br;
+    }
+
+    if (s_hw) {
+        s_hw->PrintLine("SAMPLE_LOAD: [SUCCESS] Data read complete, closing file...");
+    }
+
+    f_close(&file);
+
+    upsert_loaded_sample(sl, handle);
+    update_loaded_sample_progress(sl.sample_id, data_size);
+
+    s_sample_load.loading = false;
+
+    if (s_hw) {
+        s_hw->PrintLine("SAMPLE_LOAD: Loaded %lu bytes for sample %u",
+                        (unsigned long)data_size,
+                        (unsigned)sl.sample_id);
+    }
+
+    // Notify host (ESP32) that sample load completed.
+    SampleStatusMessage status{};
+    status.state = 0x10;  // custom code: load complete
+    status.sample_rate = sample_rate;
+    status.channels = num_ch;
+    status.frames_played = data_size / ((bits / 8) * num_ch);  // total frames loaded
+    WaveX::Comm::UartLinkSend(WaveX::Protocol::MSG_SAMPLE_STATUS, &status, sizeof(status));
 }
 
 void OnSampleData(const uint8_t* data, size_t length) {
@@ -723,15 +1166,49 @@ void OnSampleData(const uint8_t* data, size_t length) {
     uint8_t* dest = static_cast<uint8_t*>(sample_ptr) + s_sample_load.received_size;
     memcpy(dest, data, length);
     s_sample_load.received_size += length;
+    update_loaded_sample_progress(s_sample_load.sample_id, s_sample_load.received_size);
 
     // Check if loading is complete
     if (s_sample_load.received_size >= s_sample_load.expected_size) {
         s_sample_load.loading = false;
+        update_loaded_sample_progress(s_sample_load.sample_id, s_sample_load.expected_size);
         if (s_hw) {
             s_hw->PrintLine("SAMPLE_LOAD: Completed loading sample %u (%lu bytes)",
                             (unsigned)s_sample_load.sample_id,
                             (unsigned long)s_sample_load.received_size);
         }
+    }
+}
+
+void GetSampleMemStatus(SampleMemStatusMessage& out) {
+    memset(&out, 0, sizeof(out));
+    out.category = STATUS_CATEGORY_SAMPLE_MEM;
+
+    wxsamp_stats_t stats = {};
+    s_sample_mem_mgr.stats(&stats);
+
+    out.small_total_bytes = stats.small_total_bytes;
+    out.small_free_bytes = stats.small_free_bytes;
+    out.large_total_bytes = stats.large_total_bytes;
+    out.large_free_bytes = stats.large_free_bytes;
+    out.largest_free_bytes = stats.largest_free_bytes;
+    out.in_use_bytes = stats.in_use_bytes;
+    out.failed_allocs = stats.failed_allocs;
+
+    const size_t count = std::min<size_t>(s_loaded_samples.size(), WAVEX_SAMPLE_STATUS_MAX_ENTRIES);
+    out.sample_count = static_cast<uint8_t>(count);
+    for (size_t i = 0; i < count; ++i) {
+        const auto& src = s_loaded_samples[i];
+        auto& dst = out.entries[i];
+        dst.sample_id = src.sample_id;
+        dst.allocated_bytes = src.allocated_bytes;
+        dst.loaded_bytes = src.loaded_bytes;
+        dst.cls = src.handle.cls;
+        dst.page = src.handle.page;
+        dst.slot = src.handle.slot;
+        dst.sample_rate = src.sample_rate;
+        dst.channels = src.channels;
+        dst.bit_depth = src.bit_depth;
     }
 }
 
@@ -779,13 +1256,6 @@ float GetBlockPeriodMs() {
 // ============================
 // WAV playback implementation
 // ============================
-
-static uint16_t read_le16(const uint8_t* p) {
-    return (uint16_t)p[0] | ((uint16_t)p[1] << 8);
-}
-static uint32_t read_le32(const uint8_t* p) {
-    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
-}
 
 bool OpenWav(const char* path) {
     CloseWav();
@@ -924,9 +1394,14 @@ void CloseWav() {
     }
 
     // Reset SD buffer state
-    s_sd_buffer_pos = 0;
-    s_sd_buffer_frames = 0;
-    s_sd_buffer_valid = false;
+    for (auto& slot : s_sd_buffers) {
+        slot.frames = 0;
+        slot.bytes = 0;
+        slot.consumed = 0;
+        slot.ready = false;
+    }
+    s_sd_fill_index = 0;
+    s_sd_consume_index = 0;
     s_last_io_time = 0;
 
     // Reset pre-buffer state
@@ -951,6 +1426,23 @@ void GetIOStats(uint32_t& count, uint32_t& max_duration, uint32_t& last_duration
     count = s_io_count;
     max_duration = s_max_io_duration;
     last_duration = s_io_duration;
+}
+
+void SetOutputMode(AudioOutputMode mode) {
+    s_output_channels = static_cast<uint32_t>(mode);
+}
+
+AudioOutputMode GetOutputMode() {
+    return static_cast<AudioOutputMode>(s_output_channels);
+}
+
+uint32_t GetOutputChannelCount() {
+    return s_output_channels;
+}
+
+void GetDwtStats(uint32_t& callback_cycles, uint32_t& io_cycles) {
+    callback_cycles = s_dwt_callback_cycles;
+    io_cycles = s_dwt_io_cycles;
 }
 
 bool ShouldPumpWavIO() {
@@ -986,44 +1478,41 @@ void PumpWavIO() {
     if (!s_wav.open)
         return;
 
+    PROFILE_SCOPE(wav_pump_io);
+    uint32_t block_cycles_start = WaveX::Profiling::GetCycles();
+
     // Update I/O timing
     s_last_io_time = System::GetNow();
 
     // If we're pre-buffering, do that first
     if (s_prebuffering || !s_prebuffer_ready) {
         if (!prebuffer_audio()) {
-            return;  // Pre-buffering failed
+            return;
         }
-        return;  // Continue pre-buffering next time
+        return;
     }
 
     // If pre-buffer is ready, transfer data from pre-buffer to ring buffer
     if (s_prebuffer_ready && s_prebuffer_filled > 0) {
         uint32_t free_frames = rb_free_frames();
-        if (free_frames == 0)
+        if (free_frames == 0) {
+            s_dwt_io_cycles = WaveX::Profiling::GetCycles() - block_cycles_start;
+            s_dwt_io_max = std::max(s_dwt_io_max, s_dwt_io_cycles);
             return;
+        }
 
-        // Calculate how many frames we can transfer from pre-buffer
-        uint32_t frames_to_transfer =
-            (s_prebuffer_filled < free_frames) ? s_prebuffer_filled : free_frames;
+        uint32_t frames_to_transfer = std::min(s_prebuffer_filled, free_frames);
 
         if (frames_to_transfer == 0)
             return;
 
-        // Transfer frames from pre-buffer to ring buffer
-        for (uint32_t i = 0; i < frames_to_transfer; ++i) {
-            int16_t L = s_prebuffer[i * 2 + 0];
-            int16_t R = s_prebuffer[i * 2 + 1];
-            rb_push_stereo(L, R);
-        }
+        rb_push_frames(s_prebuffer, frames_to_transfer);
 
-        // Remove transferred frames from pre-buffer
         s_prebuffer_filled -= frames_to_transfer;
         if (s_prebuffer_filled > 0) {
-            // Shift remaining data to beginning of pre-buffer
             memmove(s_prebuffer,
-                    &s_prebuffer[frames_to_transfer * 2],
-                    s_prebuffer_filled * 2 * sizeof(int16_t));
+                    &s_prebuffer[frames_to_transfer * s_output_channels],
+                    s_prebuffer_filled * s_output_channels * sizeof(q15_t));
         }
 
 #if WAVEX_DAISY_SD_DEBUG
@@ -1032,85 +1521,107 @@ void PumpWavIO() {
                             (unsigned)frames_to_transfer);
 #endif
 
+        s_dwt_io_cycles = WaveX::Profiling::GetCycles() - block_cycles_start;
+        s_dwt_io_max = std::max(s_dwt_io_max, s_dwt_io_cycles);
         return;
     }
 
     // Normal I/O pumping (when pre-buffer is empty)
-    // Refill SD buffer if needed (this does the actual SD I/O)
     if (!refill_sd_buffer()) {
-        return;  // Failed to refill, or no data available
+        return;
     }
 
-    // Transfer data from SD buffer to ring buffer
+    SdBufferSlot& slot = s_sd_buffers[s_sd_consume_index];
+    if (!slot.ready) {
+        return;
+    }
+
     uint32_t free_frames = rb_free_frames();
-    if (free_frames == 0)
+    if (free_frames == 0) {
+        s_dwt_io_cycles = WaveX::Profiling::GetCycles() - block_cycles_start;
+        s_dwt_io_max = std::max(s_dwt_io_max, s_dwt_io_cycles);
         return;
+    }
 
-    // Calculate how many frames we can transfer
-    uint32_t available_frames = s_sd_buffer_frames - s_sd_buffer_pos;
-    uint32_t frames_to_transfer = (available_frames < free_frames) ? available_frames : free_frames;
+    uint32_t available_frames = slot.frames - slot.consumed;
+    float resample_ratio = (s_wav.sample_rate != s_sample_rate)
+                               ? static_cast<float>(s_sample_rate) / static_cast<float>(s_wav.sample_rate)
+                               : 1.0f;
+    uint32_t frames_to_transfer = std::min(available_frames, free_frames);
 
-    if (frames_to_transfer == 0)
+    // Prevent ring buffer overflow when upsampling (e.g., 22kHz -> 48kHz)
+    if (resample_ratio > 1.0f) {
+        if (free_frames <= 1) {
+            s_dwt_io_cycles = WaveX::Profiling::GetCycles() - block_cycles_start;
+            s_dwt_io_max = std::max(s_dwt_io_max, s_dwt_io_cycles);
+            return;
+        }
+        uint32_t max_input_by_space =
+            static_cast<uint32_t>(static_cast<float>(free_frames - 1) / resample_ratio);
+        if (max_input_by_space == 0) {
+            s_dwt_io_cycles = WaveX::Profiling::GetCycles() - block_cycles_start;
+            s_dwt_io_max = std::max(s_dwt_io_max, s_dwt_io_cycles);
+            return;
+        }
+        if (frames_to_transfer > max_input_by_space) {
+            frames_to_transfer = max_input_by_space;
+        }
+    }
+    if (frames_to_transfer == 0) {
+        s_dwt_io_cycles = WaveX::Profiling::GetCycles() - block_cycles_start;
+        s_dwt_io_max = std::max(s_dwt_io_max, s_dwt_io_cycles);
         return;
+    }
 
-    // Transfer frames from SD buffer to ring buffer with format conversion if needed
+    ResetScratchPool();
     uint32_t bytes_per_sample = (s_wav.bits_per_sample == 24) ? 3u : 2u;
     uint32_t file_bpf = (uint32_t)s_wav.num_channels * bytes_per_sample;
-    const uint8_t* src = (const uint8_t*)(s_sd_buffer + (s_sd_buffer_pos * file_bpf));
+    const uint8_t* src = slot.data + (slot.consumed * file_bpf);
 
-    if (s_wav.bits_per_sample == 24) {
-        // 24-bit: convert to 16-bit
-        if (s_wav.num_channels == 2) {
-            // Stereo: convert L,R pairs
-            for (uint32_t i = 0; i < frames_to_transfer; ++i) {
-                uint32_t idx = i * 6;  // 3 bytes per sample * 2 channels
-                // Convert 24-bit L sample (little-endian, signed)
-                int32_t sample_l =
-                    (int32_t)(src[idx + 0] | (src[idx + 1] << 8) | ((int8_t)src[idx + 2] << 16));
-                int16_t L = (int16_t)(sample_l >> 8);
-                // Convert 24-bit R sample
-                int32_t sample_r =
-                    (int32_t)(src[idx + 3] | (src[idx + 4] << 8) | ((int8_t)src[idx + 5] << 16));
-                int16_t R = (int16_t)(sample_r >> 8);
-                rb_push_stereo(L, R);
-            }
-        } else {
-            // Mono: convert and duplicate to both channels
-            for (uint32_t i = 0; i < frames_to_transfer; ++i) {
-                uint32_t idx = i * 3;  // 3 bytes per sample
-                // Convert 24-bit sample (little-endian, signed)
-                int32_t sample =
-                    (int32_t)(src[idx + 0] | (src[idx + 1] << 8) | ((int8_t)src[idx + 2] << 16));
-                int16_t M = (int16_t)(sample >> 8);
-                rb_push_stereo(M, M);
-            }
-        }
-    } else {
-        // 16-bit: direct copy
-        const int16_t* src_16 = (const int16_t*)src;
-        if (s_wav.num_channels == 2) {
-            // Stereo: copy L,R pairs
-            for (uint32_t i = 0; i < frames_to_transfer; ++i) {
-                int16_t L = src_16[i * 2 + 0];
-                int16_t R = src_16[i * 2 + 1];
-                rb_push_stereo(L, R);
-            }
-        } else {
-            // Mono: duplicate to both channels
-            for (uint32_t i = 0; i < frames_to_transfer; ++i) {
-                int16_t M = src_16[i];
-                rb_push_stereo(M, M);
+    q15_t* conversion_output = AcquireScratch(frames_to_transfer * s_output_channels);
+    if (conversion_output == nullptr)
+        return;
+
+    PROFILE_SCOPE(format_conversion);
+    ConvertFramesToOutput(src, conversion_output, frames_to_transfer, s_wav.num_channels, s_wav.bits_per_sample);
+
+    q15_t* final_buffer = conversion_output;
+    uint32_t final_frames = frames_to_transfer;
+    if (resample_ratio != 1.0f) {
+        uint32_t max_out_frames = static_cast<uint32_t>(std::ceil(frames_to_transfer * resample_ratio)) + 1;
+        q15_t* resample_buffer = AcquireScratch(max_out_frames * s_output_channels);
+        if (resample_buffer != nullptr) {
+            uint32_t resampled = LinearResampleFrames(conversion_output,
+                                                      frames_to_transfer,
+                                                      resample_buffer,
+                                                      s_output_channels,
+                                                      resample_ratio);
+            if (resampled > 0) {
+                final_buffer = resample_buffer;
+                final_frames = resampled;
             }
         }
     }
 
-    // Update SD buffer position
-    s_sd_buffer_pos += frames_to_transfer;
+    if (final_frames > free_frames) {
+        final_frames = free_frames;
+    }
+
+    rb_push_frames(final_buffer, final_frames);
+    slot.consumed += frames_to_transfer;
+    if (slot.consumed >= slot.frames) {
+        slot.ready = false;
+        slot.consumed = 0;
+        s_sd_consume_index = (s_sd_consume_index + 1) % kSdBufferCount;
+    }
+
+    s_dwt_io_cycles = WaveX::Profiling::GetCycles() - block_cycles_start;
+    s_dwt_io_max = std::max(s_dwt_io_max, s_dwt_io_cycles);
 
 #if WAVEX_DAISY_SD_DEBUG
     if (s_hw)
         s_hw->PrintLine("Transferred %u frames from SD buffer to ring buffer",
-                        (unsigned)frames_to_transfer);
+                        (unsigned)final_frames);
 #endif
 }
 

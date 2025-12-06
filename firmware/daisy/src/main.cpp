@@ -23,6 +23,7 @@
 
 // Feature macros moved to config.hpp
 #include "audio/audio_engine.h"
+#include "profiling/profiler.h"
 
 #include "timebase.hpp"
 
@@ -88,6 +89,30 @@ static void measure_cpu_baseline() {
 // Initialize DSP objects via AudioEngine
 void InitDSP() {
     WaveX::AudioEngine::Init(hw, hw.AudioSampleRate());
+}
+
+static void PrintProfilingStats(DaisySeed& hw) {
+#if WAVEX_PROFILING_ENABLED
+    hw.PrintLine("\n=== Profiling Stats ===");
+    uint32_t zone_count = WaveX::Profiling::Profiler::GetZoneCount();
+    for (uint32_t i = 0; i < zone_count; ++i) {
+        const auto* zone = WaveX::Profiling::Profiler::GetZone(i);
+        if (!zone || zone->entry_count == 0)
+            continue;
+        float avg_us, min_us, max_us;
+        zone->GetStats(avg_us, min_us, max_us);
+        hw.PrintLine("%s: calls=%u avg=%.2f max=%.2f min=%.2f last=%.2f",
+                     zone->name,
+                     zone->entry_count,
+                     avg_us,
+                     max_us,
+                     min_us,
+                     WaveX::Profiling::CyclesToMicroseconds(zone->last_cycles));
+    }
+    hw.PrintLine("=======================\n");
+#else
+    (void)hw;
+#endif
 }
 
 int main(void) {
@@ -362,6 +387,7 @@ int main(void) {
     uint32_t last_sync = System::GetNow();
     uint32_t last_tx_pump = System::GetNow();
     uint32_t last_meter_send = System::GetNow();
+    uint32_t last_profile_print = 0;
     char wav_path[64] = {0};
     bool wav_started = false;
     static uint32_t loop_counter = 0;
@@ -410,10 +436,10 @@ int main(void) {
         WaveX::AudioEngine::CheckAndLogUnderruns();
 #endif
 
-        // Log long SPI operations
-        if (spi_duration > 2) {  // More than 2ms
-            WAVEX_LOG_DAISY(INTER_MCU_LINK, "LONG SPI: %u ms", (unsigned)spi_duration);
-        }
+        // // Log long SPI operations
+        // if (spi_duration > 2) {  // More than 2ms
+        //     WAVEX_LOG_DAISY(INTER_MCU_LINK, "LONG SPI: %u ms", (unsigned)spi_duration);
+        // }
 
 // Pump WAV I/O for audio playback (including audition)
 #if WAVEX_AUDIO_ENGINE_ENABLED
@@ -575,6 +601,14 @@ int main(void) {
 #endif
             // Mark as "started" to prevent re-scanning, but don't actually start playback
             wav_started = true;
+        }
+#endif
+
+#if WAVEX_PROFILING_ENABLED
+        if (current_time - last_profile_print >= 5000) {
+            PrintProfilingStats(hw);
+            WaveX::Profiling::Profiler::ResetAll();
+            last_profile_print = current_time;
         }
 #endif
     }

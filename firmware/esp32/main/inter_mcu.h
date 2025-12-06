@@ -4,6 +4,7 @@
 #include <stdint.h>
 
 #include "comm/statistics.h"
+#include "../../shared/spi_protocol/protocol.h"
 #ifdef ESP_PLATFORM
 #include "esp_err.h"
 #else
@@ -72,7 +73,8 @@ esp_err_t inter_mcu_send_sample_load_req(uint16_t sample_id,
                                          uint32_t sample_size,
                                          uint16_t sample_rate,
                                          uint8_t channels,
-                                         uint8_t bit_depth);
+                                         uint8_t bit_depth,
+                                         const char* path);
 esp_err_t inter_mcu_send_sample_data(const uint8_t* data, size_t length);
 
 // Control RX task behavior
@@ -92,6 +94,9 @@ typedef struct {
     float cpu_max_percent;    // Maximum CPU usage percentage
     bool valid;
 } wavex_backend_heartbeat_t;
+
+using wavex_sample_mem_entry_t = WaveX::Protocol::SampleMemEntryMessage;
+using wavex_sample_mem_status_t = WaveX::Protocol::SampleMemStatusMessage;
 
 // Thread-safe snapshot of latest heartbeat
 void inter_mcu_get_backend_heartbeat(wavex_backend_heartbeat_t* out);
@@ -113,6 +118,11 @@ uint32_t inter_mcu_get_meter_packet_count(void);
 
 // Get total packet count
 uint32_t inter_mcu_get_total_packet_count(void);
+
+// Sample memory diagnostics
+esp_err_t inter_mcu_request_sample_mem_status();
+void inter_mcu_get_sample_mem_status(wavex_sample_mem_status_t* out);
+void inter_mcu_update_sample_mem_status(const wavex_sample_mem_status_t& status);
 
 // Get packet statistics as formatted string (for logging/debugging)
 // Returns the number of characters written (excluding null terminator)

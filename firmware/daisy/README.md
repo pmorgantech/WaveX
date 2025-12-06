@@ -156,3 +156,16 @@ The Daisy communicates with the ESP32 via UART protocol at 230.4kbps:
 - **CMake**: Build system
 - **dfu-util**: DFU flashing tool
 - **Daisy Bootloader**: Required for QSPI operation
+
+## CMSIS-DSP Format Conversion
+
+- `CMSIS-DSP` sources live under `libs/libDaisy/Drivers/CMSIS-DSP`. The firmware `CMakeLists.txt`
+  explicitly pulls in the `SupportFunctions` conversion helpers you need for float/quantized helpers
+  (`arm_float_to_q15`, `arm_q15_to_float`, etc.) and exposes the DSP include directory so `arm_math.h`
+  is available.
+- The build already defines `ARM_MATH_CM7`; we also set `__FPU_PRESENT=1` so the CMSIS headers match the
+  STM32H750 math unit configuration.
+- Only add the `.c` files for the conversion routines you consume to keep the QSPI image size under control.
+  Expand the `target_sources` block when you need additional conversions.
+- When using large FFT buffers or tables, place them in `DSY_SDRAM_BSS` instead of the stack so you stay within SRAM.
+- Include `arm_math.h` wherever you call the CMSIS routines so the prototypes pick up the correct `ARM_MATH_CM7` definitions.

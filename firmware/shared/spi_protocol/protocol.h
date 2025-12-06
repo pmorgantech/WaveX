@@ -7,6 +7,9 @@
 namespace WaveX {
 namespace Protocol {
 
+// Shared limits
+#define WAVEX_SAMPLE_STATUS_MAX_ENTRIES 8
+
 // Protocol constants
 static const uint8_t MAX_PAYLOAD_SIZE = 220;  // allow multi-entry directory responses
 static const uint32_t PROTOCOL_VERSION = 1;
@@ -103,6 +106,10 @@ enum ControlParameter : uint8_t {
     PARAM_MODULATION_MATRIX = 0x0A
 };
 
+// Common string limits (used by multiple messages)
+static const size_t FILE_NAME_MAX = 48;
+static const size_t BROWSE_PATH_MAX = 96;
+
 // Control change message
 struct ControlChangeMessage {
     uint8_t parameter;  // ControlParameter
@@ -120,11 +127,12 @@ struct NoteMessage {
 
 // Sample load message
 struct SampleLoadMessage {
-    uint16_t sample_id;    // Unique sample identifier
-    uint32_t sample_size;  // Size in bytes
-    uint16_t sample_rate;  // Sample rate in Hz
-    uint8_t channels;      // Number of channels (1 or 2)
-    uint8_t bit_depth;     // Bit depth (16 or 24)
+    uint16_t sample_id;     // Unique sample identifier
+    uint32_t sample_size;   // Size in bytes (optional hint; Daisy re-reads)
+    uint16_t sample_rate;   // Sample rate in Hz (optional hint; Daisy re-reads)
+    uint8_t channels;       // Number of channels (1 or 2) (optional hint)
+    uint8_t bit_depth;      // Bit depth (16 or 24) (optional hint)
+    char path[BROWSE_PATH_MAX];  // Absolute/normalized path on Daisy SD
 } __attribute__((packed));
 
 // Sample control message
@@ -154,6 +162,18 @@ struct DataRequestMessage {
     uint8_t reserved[3];   // Reserved for future use
 } __attribute__((packed));
 
+// Status request/response categories
+enum StatusCategory : uint8_t {
+    STATUS_CATEGORY_GENERAL = 0,
+    STATUS_CATEGORY_SAMPLE_MEM = 1,
+};
+
+// Status request (ESP32 -> Daisy)
+struct StatusRequestMessage {
+    uint8_t category;   // StatusCategory
+    uint8_t reserved[3];
+} __attribute__((packed));
+
 // Meter push (backend->frontend) - stereo version
 struct MeterPushMessage {
     uint16_t rms_left;    // Left channel RMS (0-32767)
@@ -168,10 +188,6 @@ struct WaveChunkMessage {
     uint16_t count;   // number of int16 samples following
     // payload follows (count * int16)
 } __attribute__((packed));
-
-// File browse protocol (variable-size payloads)
-static const size_t FILE_NAME_MAX = 48;
-static const size_t BROWSE_PATH_MAX = 96;
 
 struct FileEntryWire {
     uint8_t is_dir;
@@ -248,6 +264,34 @@ struct SampleGetPathMessage {
 struct SamplePathResponseMessage {
     uint32_t index;  // File index that was requested
     char path[200];  // Full file path (null-terminated)
+} __attribute__((packed));
+
+// Sample memory status entry (Daisy -> ESP32)
+struct SampleMemEntryMessage {
+    uint16_t sample_id;        // Logical sample identifier
+    uint32_t allocated_bytes;  // Bytes reserved in sample RAM
+    uint32_t loaded_bytes;     // Bytes written so far
+    uint8_t cls;               // Allocation class (0-5 small, 0xFF large)
+    uint16_t page;             // Page index (class-relative or extent start)
+    uint16_t slot;             // Slot index (small) or page_count (large)
+    uint16_t sample_rate;      // Hz
+    uint8_t channels;          // 1 or 2
+    uint8_t bit_depth;         // e.g., 16
+} __attribute__((packed));
+
+// Sample memory status payload (Daisy -> ESP32)
+struct SampleMemStatusMessage {
+    uint8_t category;     // STATUS_CATEGORY_SAMPLE_MEM
+    uint8_t sample_count; // Number of valid entries
+    uint8_t reserved[2];
+    uint32_t small_total_bytes;
+    uint32_t small_free_bytes;
+    uint32_t large_total_bytes;
+    uint32_t large_free_bytes;
+    uint32_t largest_free_bytes;
+    uint32_t in_use_bytes;
+    uint32_t failed_allocs;
+    SampleMemEntryMessage entries[WAVEX_SAMPLE_STATUS_MAX_ENTRIES];
 } __attribute__((packed));
 
 // Legacy packet structures completely removed - using new simplified format only

@@ -11,3 +11,9 @@
 [submodule "firmware/esp32/components/LovyanGFX"]
 	path = firmware/esp32/components/LovyanGFX
 	url = https://github.com/lovyan03/LovyanGFX.git
+[submodule "firmware/daisy/tests/_deps/googletest-src"]
+	path = firmware/daisy/tests/_deps/googletest-src
+	url = https://github.com/google/googletest.git
+[submodule "firmware/daisy/tests/_deps/firmware/daisy/tests/_deps/googletest-src"]
+	path = firmware/daisy/tests/_deps/firmware/daisy/tests/_deps/googletest-src
+	url = https://github.com/google/googletest.git

@@ -130,17 +130,29 @@ void PacketRouter::route_by_message_type(uint8_t msg_type,
             handle_meter_push(msg);
         } break;
 
+        case WaveX::Protocol::MSG_STATUS_RESPONSE: {
+            WaveX::Protocol::SampleMemStatusMessage msg;
+            memcpy(&msg, payload, sizeof(msg));
+            handle_status_response(msg);
+        } break;
+
         case WaveX::Protocol::MSG_WAVE_CHUNK: {
             WaveX::Protocol::WaveChunkMessage msg;
             memcpy(&msg, payload, sizeof(msg));
             handle_wave_chunk(msg, payload, payload_len);
         } break;
 
-        case WaveX::Protocol::MSG_BROWSE_RESP:
+        case WaveX::Protocol::MSG_BROWSE_RESP: {
             // Browse responses are handled differently - they don't have message type in payload
-            ESP_LOGI("packet_router", "Browse response received: %zu bytes", payload_len);
+            int64_t response_arrival_time_us = esp_timer_get_time();
+            ESP_LOGI("packet_router",
+                     "Browse response received: %zu bytes (t=%lld us, seq=%u)",
+                     payload_len,
+                     response_arrival_time_us,
+                     sequence_number);
             handle_browse_resp(payload, payload_len);
             break;
+        }
 
         case WaveX::Protocol::MSG_SAMPLE_STATUS: {
             WaveX::Protocol::SampleStatusMessage msg;
@@ -223,7 +235,11 @@ WEAK_HANDLER void PacketRouter::handle_meter_push(const WaveX::Protocol::MeterPu
 }
 
 WEAK_HANDLER void PacketRouter::handle_browse_resp(const uint8_t* data, size_t length) {
-    ESP_LOGI("packet_router", "Browse response: %zu bytes", length);
+    int64_t callback_start_time_us = esp_timer_get_time();
+    ESP_LOGI("packet_router",
+             "Browse response: %zu bytes (callback start t=%lld us)",
+             length,
+             callback_start_time_us);
 
     // // Log raw payload for debugging (first 64 bytes)
     // ESP_LOGI("packet_router", "Browse response payload (first 64 bytes):");
@@ -241,7 +257,31 @@ WEAK_HANDLER void PacketRouter::handle_browse_resp(const uint8_t* data, size_t l
     // }
 
     // Forward browse response to inter_mcu system for callback handling
+    int64_t callback_invoke_time_us = esp_timer_get_time();
+    ESP_LOGI("packet_router",
+             "About to invoke browse callback (t=%lld us, since arrival=%lld us)",
+             callback_invoke_time_us,
+             callback_invoke_time_us - callback_start_time_us);
     inter_mcu_invoke_browse_resp_callback(data, length);
+    int64_t callback_complete_time_us = esp_timer_get_time();
+    ESP_LOGI("packet_router",
+             "Browse callback completed (t=%lld us, callback duration=%lld us)",
+             callback_complete_time_us,
+             callback_complete_time_us - callback_invoke_time_us);
+}
+
+WEAK_HANDLER void PacketRouter::handle_status_response(
+    const WaveX::Protocol::SampleMemStatusMessage& msg) {
+    ESP_LOGI("packet_router",
+             "Status response: category=%u samples=%u small_free=%lu large_free=%lu",
+             (unsigned)msg.category,
+             (unsigned)msg.sample_count,
+             (unsigned long)msg.small_free_bytes,
+             (unsigned long)msg.large_free_bytes);
+
+    if (msg.category == WaveX::Protocol::STATUS_CATEGORY_SAMPLE_MEM) {
+        inter_mcu_update_sample_mem_status(msg);
+    }
 }
 
 WEAK_HANDLER void PacketRouter::handle_sample_status(const WaveX::Protocol::SampleStatusMessage& msg) {

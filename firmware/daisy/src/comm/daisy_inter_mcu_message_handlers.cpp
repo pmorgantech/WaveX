@@ -32,6 +32,7 @@ static void HandleDataRequestMessage(const uint8_t* payload, size_t payload_size
 static void HandleMeterPushMessage(const uint8_t* payload, size_t payload_size);
 static void HandleWaveChunkMessage(const uint8_t* payload, size_t payload_size);
 static void HandleHeartbeatMessage(const uint8_t* payload, size_t payload_size);
+static void HandleStatusRequestMessage(const uint8_t* payload, size_t payload_size);
 static void HandleBrowseRequestMessage(const uint8_t* payload, size_t payload_size);
 static void HandleBrowseResponseMessage(const uint8_t* payload, size_t payload_size);
 static void HandleSamplePlayRequestMessage(const uint8_t* payload, size_t payload_size);
@@ -149,6 +150,9 @@ void ProcessInterMcuMessage(uint8_t msg_type,
             break;
         case MSG_METER_PUSH:
             HandleMeterPushMessage(payload, payload_size);
+            break;
+        case MSG_STATUS_REQUEST:
+            HandleStatusRequestMessage(payload, payload_size);
             break;
         case MSG_WAVE_CHUNK:
             HandleWaveChunkMessage(payload, payload_size);
@@ -284,6 +288,27 @@ static void HandleHeartbeatMessage(const uint8_t* payload, size_t payload_size) 
     if (s_hw)
         s_hw->PrintLine("DAISY: HandleHeartbeatMessage called - payload_size=%d",
                         (int)payload_size);
+}
+
+static void HandleStatusRequestMessage(const uint8_t* payload, size_t payload_size) {
+    if (s_hw) {
+        s_hw->PrintLine("DAISY: HandleStatusRequestMessage called - payload_size=%d",
+                        (int)payload_size);
+    }
+
+    if (!payload || payload_size < sizeof(WaveX::Protocol::StatusRequestMessage)) {
+        if (s_hw) {
+            s_hw->PrintLine("DAISY: Invalid status request payload (size=%d)", (int)payload_size);
+        }
+        return;
+    }
+
+    const auto* msg = reinterpret_cast<const WaveX::Protocol::StatusRequestMessage*>(payload);
+    if (msg->category == STATUS_CATEGORY_SAMPLE_MEM) {
+        WaveX::Protocol::SampleMemStatusMessage status{};
+        WaveX::AudioEngine::GetSampleMemStatus(status);
+        WaveX::Comm::UartLinkSend(WaveX::Protocol::MSG_STATUS_RESPONSE, &status, sizeof(status));
+    }
 }
 
 // Browse request handler - transport agnostic (works via SPI or UART)

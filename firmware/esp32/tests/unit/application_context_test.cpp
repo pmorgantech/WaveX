@@ -9,7 +9,6 @@
 
 // Mock functions for ApplicationContext tests
 #ifdef WAVEX_TEST_BUILD
-extern "C" {
 // Mock inter_mcu functions that ApplicationContext depends on
 esp_err_t inter_mcu_send_sample_load_req(uint16_t sample_id,
                                          uint32_t sample_size,
@@ -28,7 +27,6 @@ esp_err_t inter_mcu_send_sample_data(const uint8_t* data, size_t length) {
     (void)data;
     (void)length;
     return ESP_OK;
-}
 }
 #endif
 

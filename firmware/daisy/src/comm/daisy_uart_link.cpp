@@ -324,6 +324,17 @@ void process_tx_queue() {
         return;
     }
 
+    // Log when browse response frame is pulled from queue
+    uint32_t tx_pull_time_ms = daisy::System::GetNow();
+    if (s_hw) {
+        // Check if this is a browse response by examining the frame
+        if (entry->frame_len > 4 && entry->frame[4] == WaveX::Protocol::MSG_BROWSE_RESP) {
+            s_hw->PrintLine("DAISY: Browse response PULLED from queue: seq=%u, t=%lu ms",
+                            entry->seq,
+                            (unsigned long)tx_pull_time_ms);
+        }
+    }
+
     // Validate frame format before sending
     bool frame_valid = true;
     if (entry->frame_len < 10) {
@@ -381,9 +392,17 @@ void process_tx_queue() {
         if (res == daisy::UartHandler::Result::OK) {
             // Transmission successful - immediately clean up and advance queue
             s_stats.packets_sent++;
+            uint32_t tx_complete_time_ms = daisy::System::GetNow();
             UART_LOGI("daisy_uart", "TX complete OK (seq=%u len=%u)", entry->seq, entry->frame_len);
-            if (s_hw)
-                s_hw->PrintLine("DAISY: TX OK seq=%u", entry->seq);
+            if (s_hw) {
+                s_hw->PrintLine("DAISY: TX OK seq=%u, t=%lu ms", entry->seq, (unsigned long)tx_complete_time_ms);
+                // Check if this was a browse response
+                if (entry->frame_len > 4 && entry->frame[4] == WaveX::Protocol::MSG_BROWSE_RESP) {
+                    s_hw->PrintLine("DAISY: Browse response TX COMPLETE: seq=%u, t=%lu ms",
+                                    entry->seq,
+                                    (unsigned long)tx_complete_time_ms);
+                }
+            }
 
             // Advance queue
             {
@@ -596,6 +615,7 @@ int UartLinkSend(uint16_t msg_type, const void* payload, uint16_t len) {
     }
 
     daisy::ScopedIrqBlocker lock;
+    
     if (s_tx_count >= MSG_QUEUE_SIZE) {
         s_stats.queue_overflows++;
         UART_LOGE("daisy_uart", "TX queue full");
@@ -606,27 +626,10 @@ int UartLinkSend(uint16_t msg_type, const void* payload, uint16_t len) {
     uint16_t seq = s_next_sequence++;
     size_t frame_len = CreateUartPacket(
         entry.frame, sizeof(entry.frame), static_cast<uint8_t>(msg_type), payload, len, seq, 0);
+    
     if (frame_len == 0) {
         UART_LOGE("daisy_uart", "Failed to create packet");
         return -1;
-    }
-
-    // Verify frame was created correctly (for debugging DMA issues)
-    if (entry.frame[0] != 0xA5) {
-        if (s_hw)
-            s_hw->PrintLine("DAISY: WARNING - Frame created without 0xA5! First byte=0x%02X",
-                            entry.frame[0]);
-        UART_LOGE("daisy_uart",
-                  "CreateUartPacket produced bad frame: start=0x%02X (expect 0xA5)",
-                  entry.frame[0]);
-    }
-    if (entry.frame[frame_len - 1] != 0x5A) {
-        if (s_hw)
-            s_hw->PrintLine("DAISY: WARNING - Frame created without 0x5A! Last byte=0x%02X",
-                            entry.frame[frame_len - 1]);
-        UART_LOGE("daisy_uart",
-                  "CreateUartPacket produced bad frame: end=0x%02X (expect 0x5A)",
-                  entry.frame[frame_len - 1]);
     }
 
     entry.frame_len = frame_len;
@@ -638,7 +641,7 @@ int UartLinkSend(uint16_t msg_type, const void* payload, uint16_t len) {
 
     UART_LOGI("daisy_uart", "TX queued msg=0x%02X len=%u seq=%u", msg_type, len, seq);
     UART_LOG_DUMP_PACKET("daisy_uart", entry.frame, frame_len);
-
+    
     return len;
 }
 

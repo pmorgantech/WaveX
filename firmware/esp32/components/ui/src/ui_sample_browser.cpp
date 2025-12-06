@@ -805,42 +805,41 @@ bool UISampleBrowser::loadSample(const wavex_file_entry_t* entry) {
         return false;
     }
 
-    // Check if we have valid WAV metadata from the backend
-    if (entry->sample_rate == 0 || entry->channels == 0) {
-        ESP_LOGE(TAG, "No WAV metadata available for: %s", entry->name);
-        updateStatus("Error: No WAV metadata");
-        return false;
+    // Gracefully fall back if metadata isn't available from the backend yet.
+    // TODO(todo1): revert to strict validation once Daisy browse metadata is populated.
+    uint32_t sample_rate = entry->sample_rate ? entry->sample_rate : 44100;
+    uint8_t channels = entry->channels ? entry->channels : 2;
+    uint8_t bits_per_sample = entry->bits_per_sample ? entry->bits_per_sample : 16;
+
+    if (entry->sample_rate == 0 || entry->channels == 0 || entry->bits_per_sample == 0) {
+        ESP_LOGW(TAG,
+                 "Missing WAV metadata for %s (rate=%lu, ch=%u, bits=%u). "
+                 "Using defaults %lu Hz, %u ch, %u-bit.",
+                 entry->name,
+                 (unsigned long)entry->sample_rate,
+                 entry->channels,
+                 entry->bits_per_sample,
+                 (unsigned long)sample_rate,
+                 channels,
+                 bits_per_sample);
     }
 
-    // Only support 16-bit PCM for now
-    if (entry->bits_per_sample != 16) {
-        ESP_LOGE(TAG, "Unsupported bit depth: %u (only 16-bit supported)", entry->bits_per_sample);
+    if (bits_per_sample != 16) {
+        ESP_LOGE(TAG, "Unsupported bit depth: %u (only 16-bit supported)", bits_per_sample);
         updateStatus("Error: Only 16-bit WAV supported");
         return false;
     }
 
-    // Calculate data size (total file size minus header)
-    // For WAV files, this is approximately file_size - 44 bytes header
-    uint32_t data_size = entry->size_bytes;
-    if (data_size > 44) {
-        data_size -= 44;  // Subtract WAV header size
-    }
+    // Daisy will load from its SD card; assign a unique sample ID per request
+    uint16_t sample_id = persistent_state_.allocateSampleId();
 
-    ESP_LOGI(TAG,
-             "WAV metadata: rate=%lu, channels=%u, bits=%u, size=%lu",
-             (unsigned long)entry->sample_rate,
-             entry->channels,
-             entry->bits_per_sample,
-             (unsigned long)data_size);
-
-    // Send sample load request
-    updateStatus("Loading sample...");
-    esp_err_t result = comm_interface_ ? comm_interface_->sendSampleLoadRequest(
-                                             1,  // sample_id (hardcoded for now)
-                                             data_size,
-                                             entry->sample_rate,
-                                             entry->channels,
-                                             entry->bits_per_sample)
+    updateStatus("Loading sample on Daisy...");
+    esp_err_t result = comm_interface_ ? inter_mcu_send_sample_load_req(sample_id,
+                                                                        entry->size_bytes,
+                                                                        sample_rate,
+                                                                        channels,
+                                                                        bits_per_sample,
+                                                                        entry->path)
                                        : ESP_FAIL;
 
     if (result != ESP_OK) {
@@ -849,15 +848,11 @@ bool UISampleBrowser::loadSample(const wavex_file_entry_t* entry) {
         return false;
     }
 
-    // Request the sample data from the backend (Daisy will read and send it)
-    // For now, we'll assume the backend handles the file reading
-    // In a future implementation, we might stream the data from ESP32 to Daisy
-
     ESP_LOGI(TAG,
-             "=== SAMPLE LOAD REQUEST SENT: %s (%lu bytes) ===",
-             entry->name,
-             (unsigned long)data_size);
-    updateStatus("Sample load requested");
+             "=== SAMPLE LOAD REQUEST SENT TO DAISY: id=%u path=%s ===",
+             (unsigned)sample_id,
+             entry->path);
+    updateStatus("Sample load requested on Daisy");
 
     return true;
 }

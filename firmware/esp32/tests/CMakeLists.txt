@@ -71,6 +71,7 @@ add_library(wavex_esp32_test_lib STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/../../shared/spi_protocol/protocol.cpp  # Add protocol.cpp for ProtocolHandler
     ${CMAKE_CURRENT_SOURCE_DIR}/mocks/esp32_mocks.cpp  # Include mock implementations
     ${CMAKE_CURRENT_SOURCE_DIR}/mocks/ui_mocks.cpp  # Include UI mock implementations
+    ${CMAKE_CURRENT_SOURCE_DIR}/mocks/inter_mcu_mocks.cpp  # Mock inter-mcu linkage
     ${CMAKE_CURRENT_SOURCE_DIR}/utils/test_helpers.cpp  # Include test helpers
 )
 
@@ -104,6 +105,7 @@ add_library(wavex_esp32_test_lib_no_router STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/../../shared/spi_protocol/protocol.cpp  # Add protocol.cpp for ProtocolHandler
     ${CMAKE_CURRENT_SOURCE_DIR}/mocks/esp32_mocks.cpp  # Include mock implementations
     ${CMAKE_CURRENT_SOURCE_DIR}/mocks/ui_mocks.cpp  # Include UI mock implementations
+    ${CMAKE_CURRENT_SOURCE_DIR}/mocks/inter_mcu_mocks.cpp  # Mock inter-mcu linkage
     ${CMAKE_CURRENT_SOURCE_DIR}/utils/test_helpers.cpp  # Include test helpers
 )
 

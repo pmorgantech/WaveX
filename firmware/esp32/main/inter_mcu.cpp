@@ -36,6 +36,10 @@ static StatisticsManager* s_statistics = nullptr;
 static volatile bool s_suspended = false;
 static volatile bool s_initialized = false;
 
+// Cached sample memory diagnostics
+static wavex_sample_mem_status_t s_sample_mem_status = {};
+static portMUX_TYPE s_sample_mem_lock = portMUX_INITIALIZER_UNLOCKED;
+
 static int send_uart_message(uint8_t msg_type, const void* payload, uint16_t len) {
     if (!s_uart_initialized || !s_uart_started) {
         ESP_LOGE(TAG, "UART link not ready (msg=0x%02X)", msg_type);
@@ -206,6 +210,34 @@ void inter_mcu_toggle_debug() {
     ESP_LOGI(TAG, "Debug mode toggled (UART link)");
 }
 
+esp_err_t inter_mcu_request_sample_mem_status() {
+    if (!s_initialized || s_suspended) {
+        return -1;  // ESP_ERR_INVALID_STATE
+    }
+
+    WaveX::Protocol::StatusRequestMessage req{};
+    req.category = WaveX::Protocol::STATUS_CATEGORY_SAMPLE_MEM;
+    int result = send_uart_message(WaveX::Protocol::MSG_STATUS_REQUEST, &req, sizeof(req));
+    return result ? ESP_OK : -1;
+}
+
+void inter_mcu_update_sample_mem_status(const wavex_sample_mem_status_t& status) {
+    taskENTER_CRITICAL(&s_sample_mem_lock);
+    s_sample_mem_status = status;
+    taskEXIT_CRITICAL(&s_sample_mem_lock);
+}
+
+void inter_mcu_get_sample_mem_status(wavex_sample_mem_status_t* out) {
+    if (!out) {
+        ESP_LOGE(TAG, "Invalid sample mem status output pointer");
+        return;
+    }
+
+    taskENTER_CRITICAL(&s_sample_mem_lock);
+    memcpy(out, &s_sample_mem_status, sizeof(s_sample_mem_status));
+    taskEXIT_CRITICAL(&s_sample_mem_lock);
+}
+
 // Implement missing functions that are declared in the header
 
 void inter_mcu_set_meter_listener(wavex_meter_cb_t cb, void* user_data) {
@@ -236,12 +268,21 @@ void inter_mcu_set_browse_resp_listener(wavex_browse_resp_cb_t cb, void* user_da
 }
 
 void inter_mcu_invoke_browse_resp_callback(const uint8_t* data, size_t length) {
+    int64_t invoke_time_us = esp_timer_get_time();
     if (!s_statistics) {
         ESP_LOGE(TAG, "StatisticsManager not initialized");
         return;
     }
-    ESP_LOGI(TAG, "Invoking browse response callback with %d bytes", (int)length);
+    ESP_LOGI(TAG,
+             "Invoking browse response callback with %d bytes (t=%lld us)",
+             (int)length,
+             invoke_time_us);
     s_statistics->invoke_browse_resp_callback(data, length);
+    int64_t invoke_complete_time_us = esp_timer_get_time();
+    ESP_LOGI(TAG,
+             "Browse response callback invocation completed (t=%lld us, duration=%lld us)",
+             invoke_complete_time_us,
+             invoke_complete_time_us - invoke_time_us);
 }
 
 void inter_mcu_set_sample_status_listener(wavex_sample_status_cb_t cb, void* user_data) {
@@ -594,11 +635,18 @@ esp_err_t inter_mcu_send_browse_req(const char* path, uint8_t start_index) {
         ESP_LOGD("inter_mcu", "  [%d] = 0x%02X", (int)i, payload[i]);
     }
 
+    int64_t request_send_time_us = esp_timer_get_time();
     ESP_LOGI("inter_mcu",
-             "DEBUG - About to call send_uart_message with MSG_BROWSE_REQ=0x%02X",
-             WaveX::Protocol::MSG_BROWSE_REQ);
+             "DEBUG - About to call send_uart_message with MSG_BROWSE_REQ=0x%02X (t=%lld us)",
+             WaveX::Protocol::MSG_BROWSE_REQ,
+             request_send_time_us);
     int result = send_uart_message(WaveX::Protocol::MSG_BROWSE_REQ, payload.data(), (uint16_t)payload_len);
-    ESP_LOGI("inter_mcu", "DEBUG - UART send returned: %d", result);
+    int64_t request_send_complete_us = esp_timer_get_time();
+    ESP_LOGI("inter_mcu",
+             "DEBUG - UART send returned: %d (t=%lld us, duration=%lld us)",
+             result,
+             request_send_complete_us,
+             request_send_complete_us - request_send_time_us);
 
     return result ? ESP_OK : -1;  // ESP_FAIL
 }
@@ -634,7 +682,8 @@ esp_err_t inter_mcu_send_sample_load_req(uint16_t sample_id,
                                          uint32_t sample_size,
                                          uint16_t sample_rate,
                                          uint8_t channels,
-                                         uint8_t bit_depth) {
+                                         uint8_t bit_depth,
+                                         const char* path) {
     if (!s_initialized) {
         return -1;  // ESP_ERR_INVALID_STATE
     }
@@ -645,6 +694,12 @@ esp_err_t inter_mcu_send_sample_load_req(uint16_t sample_id,
     msg.sample_rate = sample_rate;
     msg.channels = channels;
     msg.bit_depth = bit_depth;
+    if (path) {
+        strncpy(msg.path, path, sizeof(msg.path) - 1);
+        msg.path[sizeof(msg.path) - 1] = '\0';
+    } else {
+        msg.path[0] = '\0';
+    }
 
     int result = send_uart_message(WaveX::Protocol::MSG_SAMPLE_LOAD, &msg, sizeof(msg));
     return result ? ESP_OK : -1;  // ESP_FAIL

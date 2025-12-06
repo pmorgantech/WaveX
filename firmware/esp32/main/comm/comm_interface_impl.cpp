@@ -45,7 +45,8 @@ esp_err_t CommInterfaceImpl::sendSampleLoadRequest(uint16_t sample_id,
                                                    uint16_t sample_rate,
                                                    uint8_t channels,
                                                    uint8_t bit_depth) {
-    return inter_mcu_send_sample_load_req(sample_id, sample_size, sample_rate, channels, bit_depth);
+    // Not used in this implementation; use the path-based overload directly via inter_mcu
+    return ESP_ERR_INVALID_ARG;
 }
 
 esp_err_t CommInterfaceImpl::sendSampleData(const uint8_t* data, size_t length) {

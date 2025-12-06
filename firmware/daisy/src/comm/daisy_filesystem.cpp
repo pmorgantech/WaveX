@@ -21,7 +21,9 @@
 #include "daisy_inter_mcu_message_handlers.h"
 #include "daisy_seed.h"
 #include "daisy_uart_link.h"
+#include "ff.h"
 #include "spi_protocol/protocol.h"  // For WaveX::Protocol namespace
+#include "sys/dma.h"                // For DMA_BUFFER_MEM_SECTION
 
 // Hardware instance (shared with UART link) - accessed via WaveX::Comm::s_hw
 
@@ -46,6 +48,11 @@ static char s_current_directory[96] = "/";
 static WaveX::Storage::FileEntry s_current_file_entries[50];  // Increased to accommodate more files
 static size_t s_current_file_count = 0;
 static bool s_directory_state_valid = false;
+// Keep FIL off the stack and aligned; place in default BSS (cache managed by driver).
+alignas(32) static FIL s_metadata_file;
+// Metadata read buffer: 4KB, aligned, in normal BSS (non-DTCM) so cache maintenance works.
+// 4KB matches the earlier probe size and is enough to find fmt+data in typical WAVs.
+alignas(32) static uint8_t s_metadata_buf[4096];
 
 // ============================================================================
 // FileSystem Implementation
@@ -86,10 +93,31 @@ bool FileSystem::GetFilePathByIndex(uint32_t file_index, char* file_path, size_t
 }  // namespace Storage
 }  // namespace WaveX
 
+static inline uint16_t read_le16(const uint8_t* p) {
+    return static_cast<uint16_t>(p[0]) | (static_cast<uint16_t>(p[1]) << 8);
+}
+
+static inline uint32_t read_le32(const uint8_t* p) {
+    return (static_cast<uint32_t>(p[0])) | (static_cast<uint32_t>(p[1]) << 8) |
+           (static_cast<uint32_t>(p[2]) << 16) | (static_cast<uint32_t>(p[3]) << 24);
+}
+
 // WAV file metadata parsing
-void ParseWavMetadata(const WaveX::Storage::FileEntry& entry,
-                      WaveX::Protocol::FileEntryWire& wire_entry) {
+// Returns true if fmt chunk was found; duration_ms_out (if provided) reports total parse time.
+bool ParseWavMetadata(const WaveX::Storage::FileEntry& entry,
+                      WaveX::Protocol::FileEntryWire& wire_entry,
+                      uint32_t* duration_ms_out /*=nullptr*/) {
     using namespace WaveX::Protocol;
+
+    // Initialize to zero in case of early return
+    wire_entry.sample_rate = 0;
+    wire_entry.channels = 0;
+    wire_entry.bits_per_sample = 0;
+    wire_entry.duration_ms = 0;
+
+    if (duration_ms_out) {
+        *duration_ms_out = 0;
+    }
 
     // Build full file path
     char full_path[256];
@@ -98,11 +126,7 @@ void ParseWavMetadata(const WaveX::Storage::FileEntry& entry,
 
     if (dir_len + 1 + name_len + 1 > sizeof(full_path)) {
         // Path too long - skip metadata parsing
-        wire_entry.sample_rate = 0;
-        wire_entry.channels = 0;
-        wire_entry.bits_per_sample = 0;
-        wire_entry.duration_ms = 0;
-        return;
+        return false;
     }
 
     strcpy(full_path, s_current_directory);
@@ -111,73 +135,174 @@ void ParseWavMetadata(const WaveX::Storage::FileEntry& entry,
     }
     strcat(full_path, entry.name);
 
-    WAVEX_LOG_DAISY(STORAGE, "Parsing WAV metadata for: %s", full_path);
-
-    // Open file for reading
-    FILE* file = fopen(full_path, "rb");
-    if (!file) {
-        WAVEX_LOG_DAISY(STORAGE, "Failed to open WAV file: %s", full_path);
-        wire_entry.sample_rate = 0;
-        wire_entry.channels = 0;
-        wire_entry.bits_per_sample = 0;
-        wire_entry.duration_ms = 0;
-        return;
+    if (WaveX::Comm::s_hw) {
+        WaveX::Comm::s_hw->PrintLine("WAV META PARSE START: %s", entry.name);
     }
 
-    // Read WAV header (first 44 bytes typically)
-    uint8_t header[44];
-    size_t bytes_read = fread(header, 1, sizeof(header), file);
-    fclose(file);
-
-    if (bytes_read < 44) {
-        WAVEX_LOG_DAISY(
-            STORAGE, "WAV file too small: %s (%u bytes)", full_path, (unsigned int)bytes_read);
-        wire_entry.sample_rate = 0;
-        wire_entry.channels = 0;
-        wire_entry.bits_per_sample = 0;
-        wire_entry.duration_ms = 0;
-        return;
+    // FatFS paths require an explicit drive prefix (0:/) when using f_open
+    char fs_path[sizeof(full_path) + 2];
+    if (strncmp(full_path, "0:", 2) == 0) {
+        strncpy(fs_path, full_path, sizeof(fs_path) - 1);
+        fs_path[sizeof(fs_path) - 1] = '\0';
+    } else {
+        snprintf(fs_path, sizeof(fs_path), "0:%s", full_path);
     }
 
-    // Check RIFF signature
-    if (memcmp(header, "RIFF", 4) != 0 || memcmp(header + 8, "WAVE", 4) != 0) {
-        WAVEX_LOG_DAISY(STORAGE, "Not a valid WAV file: %s", full_path);
-        wire_entry.sample_rate = 0;
-        wire_entry.channels = 0;
-        wire_entry.bits_per_sample = 0;
-        wire_entry.duration_ms = 0;
-        return;
+    uint32_t parse_start_ms = daisy::System::GetNow();
+    uint32_t elapsed_ms = 0;
+    constexpr uint32_t METADATA_TIMEOUT_MS = 2000;  // 2 second timeout for metadata parsing
+
+    // Avoid concurrent FatFS/SDMMC access while audio playback is active.
+    // If playback is running, skip metadata to prevent stalls; UI will see duration=0.
+    if (WaveX::AudioEngine::IsWavPlaying()) {
+        return false;
     }
 
-    // Extract format information from fmt chunk (typically at offset 12)
-    // Format: uint16_t format, uint16_t channels, uint32_t sample_rate, uint32_t byte_rate,
-    // uint16_t block_align, uint16_t bits_per_sample
-    uint16_t channels = *(uint16_t*)(header + 22);
-    uint32_t sample_rate = *(uint32_t*)(header + 24);
-    uint16_t bits_per_sample = *(uint16_t*)(header + 34);
-
-    // Calculate duration: data_size / (sample_rate * channels * bytes_per_sample)
-    uint32_t data_size = *(uint32_t*)(header + 40);  // Data chunk size
-    uint32_t bytes_per_second = sample_rate * channels * (bits_per_sample / 8);
-    uint32_t duration_ms = 0;
-
-    if (bytes_per_second > 0) {
-        float duration_seconds = (float)data_size / bytes_per_second;
-        duration_ms = (uint32_t)(duration_seconds * 1000.0f);
+    // Use static FIL allocated in AXI SRAM so SDMMC DMA can reach its sector buffer
+    // CRITICAL: Do NOT memset() the FIL - it has internal buffer pointers managed by FatFS.
+    FIL& file = s_metadata_file;
+    uint32_t t_open_start = daisy::System::GetNow();
+    FRESULT fr = f_open(&file, fs_path, FA_READ | FA_OPEN_EXISTING);
+    uint32_t t_open = daisy::System::GetNow() - t_open_start;
+    if (WaveX::Comm::s_hw) {
+        WaveX::Comm::s_hw->PrintLine("WAV META OPEN: %s t=%lu ms", entry.name, (unsigned long)t_open);
+    }
+    if (fr != FR_OK) {
+        if (WaveX::Comm::s_hw) {
+            WaveX::Comm::s_hw->PrintLine("WAV META OPEN FAIL: %s err=%d", entry.name, static_cast<int>(fr));
+        }
+        return false;
     }
 
-    // Set metadata
+    // Read the first chunk (4k bytes) – enough to cover RIFF+fmt in most WAVs
+    static constexpr size_t kHeaderProbeSize = sizeof(s_metadata_buf);
+    UINT bytes_read = 0;
+
+    uint32_t t_read_start = daisy::System::GetNow();
+    fr = f_read(&file, s_metadata_buf, kHeaderProbeSize, &bytes_read);
+    uint32_t t_read = daisy::System::GetNow() - t_read_start;
+    if (WaveX::Comm::s_hw) {
+        WaveX::Comm::s_hw->PrintLine("WAV META READ: %s t=%lu ms bytes=%u",
+                                     entry.name,
+                                     (unsigned long)t_read,
+                                     (unsigned)bytes_read);
+    }
+
+    // Final timeout check happens after read
+    elapsed_ms = daisy::System::GetNow() - parse_start_ms;
+    if (elapsed_ms > METADATA_TIMEOUT_MS) {
+        if (WaveX::Comm::s_hw) {
+            WaveX::Comm::s_hw->PrintLine("WAV META TIMEOUT total=%lu ms file=%s",
+                                         (unsigned long)elapsed_ms,
+                                         entry.name);
+        }
+        if (duration_ms_out) *duration_ms_out = elapsed_ms;
+        f_close(&file);
+        return false;
+    }
+
+    if (fr != FR_OK || bytes_read < 12) {
+        if (WaveX::Comm::s_hw) {
+            WaveX::Comm::s_hw->PrintLine("WAV META HEADER FAIL %s bytes=%u fr=%d",
+                                         entry.name,
+                                         (unsigned)bytes_read,
+                                         (int)fr);
+        }
+        if (duration_ms_out) *duration_ms_out = elapsed_ms;
+        f_close(&file);
+        return false;
+    }
+
+    f_close(&file);
+
+    if (memcmp(s_metadata_buf, "RIFF", 4) != 0 || memcmp(s_metadata_buf + 8, "WAVE", 4) != 0) {
+        if (WaveX::Comm::s_hw) {
+            WaveX::Comm::s_hw->PrintLine("WAV META NOT RIFF/WAVE: %s", entry.name);
+        }
+        if (duration_ms_out) *duration_ms_out = elapsed_ms;
+        return false;
+    }
+
+    bool fmt_found = false;
+    bool data_found = false;
+    uint32_t sample_rate = 0;
+    uint16_t channels = 0;
+    uint16_t bits_per_sample = 0;
+    uint32_t data_chunk_size = 0;
+
+    size_t offset = 12;  // Skip RIFF header
+    while (offset + 8 <= bytes_read) {
+        const uint8_t* chunk = s_metadata_buf + offset;
+        uint32_t chunk_size = read_le32(chunk + 4);
+        char chunk_id[5] = {static_cast<char>(chunk[0]),
+                            static_cast<char>(chunk[1]),
+                            static_cast<char>(chunk[2]),
+                            static_cast<char>(chunk[3]),
+                            0};
+        offset += 8;
+
+        size_t bytes_available = (bytes_read > offset) ? (bytes_read - offset) : 0;
+        if (chunk_size > bytes_available) {
+            // Not enough data in our probe to parse this chunk – stop scanning
+            break;
+        }
+
+        if (!fmt_found && memcmp(chunk_id, "fmt ", 4) == 0 && chunk_size >= 16) {
+            const uint8_t* fmt = s_metadata_buf + offset;
+            channels = read_le16(fmt + 2);
+            sample_rate = read_le32(fmt + 4);
+            bits_per_sample = read_le16(fmt + 14);
+            fmt_found = true;
+        } else if (!data_found && memcmp(chunk_id, "data", 4) == 0) {
+            data_chunk_size = chunk_size;
+            data_found = true;
+        }
+
+        offset += chunk_size;
+        if (chunk_size & 1) {
+            offset += 1;  // Pad byte alignment
+        }
+
+        if (fmt_found && data_found) {
+            break;
+        }
+    }
+
+    if (!fmt_found) {
+        if (WaveX::Comm::s_hw) {
+            WaveX::Comm::s_hw->PrintLine("WAV META MISSING fmt: %s", entry.name);
+        }
+        if (duration_ms_out) *duration_ms_out = elapsed_ms;
+        return false;
+    }
+
     wire_entry.sample_rate = sample_rate;
     wire_entry.channels = channels;
     wire_entry.bits_per_sample = bits_per_sample;
-    wire_entry.duration_ms = duration_ms;
+    wire_entry.duration_ms = 0;
 
-    WAVEX_LOG_DAISY(STORAGE,
-                    "WAV metadata - rate:%lu, channels:%u, bits:%u, duration:%lu ms",
-                    (unsigned long)sample_rate,
-                    channels,
-                    bits_per_sample,
-                    (unsigned long)duration_ms);
+    if (data_found && sample_rate > 0 && channels > 0 && bits_per_sample > 0) {
+        uint32_t bytes_per_sample = bits_per_sample / 8;
+        if (bytes_per_sample > 0) {
+            uint32_t bytes_per_frame = bytes_per_sample * channels;
+            if (bytes_per_frame > 0) {
+                uint32_t frames = data_chunk_size / bytes_per_frame;
+                wire_entry.duration_ms = (frames * 1000u) / sample_rate;
+            }
+        }
+    }
+
+    uint32_t parse_total_ms = daisy::System::GetNow() - parse_start_ms;
+    if (duration_ms_out) *duration_ms_out = parse_total_ms;
+    if (WaveX::Comm::s_hw) {
+        WaveX::Comm::s_hw->PrintLine("WAV META DONE: %s total=%lu ms sr=%lu ch=%u bits=%u",
+                                     entry.name,
+                                     (unsigned long)parse_total_ms,
+                                     (unsigned long)wire_entry.sample_rate,
+                                     wire_entry.channels,
+                                     wire_entry.bits_per_sample);
+    }
+    return true;
 }
 
 // ============================================================================
@@ -217,7 +342,16 @@ void ProcessBrowseRequest(const char* path, size_t start_index, uint8_t max_entr
 
     if (start_index == 0) {
         // Get all entries for caching (max 50)
+        uint32_t listdir_start_ms = daisy::System::GetNow();
         bool success = ListDir(path, all_entries, 50, total_count, 0, all_entries_count);
+        uint32_t listdir_end_ms = daisy::System::GetNow();
+        uint32_t listdir_duration_ms = listdir_end_ms - listdir_start_ms;
+
+        if (WaveX::Comm::s_hw) {
+            WaveX::Comm::s_hw->PrintLine("DAISY: ListDir completed: t=%lu ms, duration=%lu ms",
+                                         (unsigned long)listdir_end_ms,
+                                         (unsigned long)listdir_duration_ms);
+        }
 
         if (!success) {
             WAVEX_LOG_DAISY_MESSAGE(DAISY_SPI_MESSAGE, "Failed to list directory: %s", path);
@@ -270,29 +404,13 @@ void ProcessBrowseRequest(const char* path, size_t start_index, uint8_t max_entr
         strncpy(wire_entries[i].name, entries[i].name, sizeof(wire_entries[i].name) - 1);
         wire_entries[i].name[sizeof(wire_entries[i].name) - 1] = '\0';
 
-        // Parse WAV metadata if this is a WAV file
+        // Parse WAV metadata during browse (DMA-safe buffers now prevent stalls).
+        wire_entries[i].sample_rate = 0;
+        wire_entries[i].channels = 0;
+        wire_entries[i].bits_per_sample = 0;
+        wire_entries[i].duration_ms = 0;
         if (!entries[i].is_dir) {
-            // Check if filename ends with .wav (case insensitive)
-            const char* name = entries[i].name;
-            size_t name_len = strlen(name);
-            bool is_wav = (name_len >= 4 && (strcasecmp(name + name_len - 4, ".wav") == 0 ||
-                                             strcasecmp(name + name_len - 4, ".WAV") == 0));
-
-            if (is_wav) {
-                ParseWavMetadata(entries[i], wire_entries[i]);
-            } else {
-                // Not a WAV file - set metadata to 0
-                wire_entries[i].sample_rate = 0;
-                wire_entries[i].channels = 0;
-                wire_entries[i].bits_per_sample = 0;
-                wire_entries[i].duration_ms = 0;
-            }
-        } else {
-            // Directory - set metadata to 0
-            wire_entries[i].sample_rate = 0;
-            wire_entries[i].channels = 0;
-            wire_entries[i].bits_per_sample = 0;
-            wire_entries[i].duration_ms = 0;
+            ParseWavMetadata(entries[i], wire_entries[i], nullptr);
         }
     }
 

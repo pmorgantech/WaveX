@@ -18,6 +18,7 @@
 #include "inter_mcu.h"
 #include "links/esp_spi_link.h"
 #include "ui/ui_navigator.h"
+#include "ui/ui_sample_memory_page.h"
 #include "ui_task.h"
 
 #include <memory>
@@ -113,6 +114,9 @@ std::array<Softkey, NUM_SOFTKEYS> UIDiagnosticsPage::getSoftkeys() {
 
     // Back button
     keys[0] = {"Back", [this]() { UINavigator::instance().pop(); }};
+
+    // Sample memory diagnostics
+    keys[1] = {"Samples", []() { UINavigator::instance().push(createSampleMemoryPage()); }};
 
     return keys;
 }

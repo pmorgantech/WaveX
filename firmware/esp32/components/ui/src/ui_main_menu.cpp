@@ -7,6 +7,7 @@
 #include "ui/ui_sample_browser.h"
 #include "ui/ui_sample_detail.h"
 #include "ui/ui_settings_page.h"
+#include "ui/ui_diagnostics_page.h"
 
 static const char* TAG = "UI_MAIN_MENU";
 
@@ -41,7 +42,7 @@ std::shared_ptr<UIPage> createMainMenu() {
     menu->addItem("Diagnostics",
                   []() {
         ESP_LOGI(TAG, "Diagnostics selected");
-        // TODO: Implement diagnostics functionality
+        UINavigator::instance().push(createDiagnosticsPage());
     });
 
     return menu;

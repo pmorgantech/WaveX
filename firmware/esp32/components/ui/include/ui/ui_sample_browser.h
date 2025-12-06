@@ -29,6 +29,7 @@ struct SampleBrowserState {
     bool is_playing = false;
     std::string playing_sample_path = "";
     uint32_t playing_sample_index = 0;
+    uint16_t next_sample_id = 1;
 
     // Default constructor
     SampleBrowserState() = default;
@@ -79,6 +80,15 @@ struct SampleBrowserState {
         is_playing = false;
         playing_sample_path.clear();
         playing_sample_index = 0;
+    }
+
+    // Reserve a new sample ID (skips 0 which is used as sentinel)
+    uint16_t allocateSampleId() {
+        uint16_t id = next_sample_id++;
+        if (next_sample_id == 0) {
+            next_sample_id = 1;
+        }
+        return id;
     }
 };
 

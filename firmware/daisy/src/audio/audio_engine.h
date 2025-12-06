@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../config.hpp"
+#include <cstdint>
 #if WAVEX_AUDIO_ENGINE_ENABLED
 
 #include "daisy_seed.h"
@@ -17,6 +18,11 @@ struct BlockMeters {
     float peakR;
 };
 
+enum class AudioOutputMode : uint8_t {
+    StereoSAI1 = 2,
+    VoiceSAI2 = 8,
+};
+
 void Init(daisy::DaisySeed& hw, float sample_rate);
 void Callback(daisy::AudioHandle::InputBuffer in,
               daisy::AudioHandle::OutputBuffer out,
@@ -30,6 +36,7 @@ void OnSampleCtrl(const WaveX::Protocol::SampleCtrlMessage& m);
 void OnPreviewReq(const WaveX::Protocol::PreviewReqMessage& m);
 void OnSampleLoad(const WaveX::Protocol::SampleLoadMessage& m);
 void OnSampleData(const uint8_t* data, size_t length);
+void GetSampleMemStatus(WaveX::Protocol::SampleMemStatusMessage& out);
 
 // Meter helpers
 void GetInputMeters(float& rms, float& peak);
@@ -45,6 +52,10 @@ bool IsPrebufferReady();  // Check if pre-buffering is complete
 
 // Performance monitoring
 void GetIOStats(uint32_t& count, uint32_t& max_duration, uint32_t& last_duration);
+void SetOutputMode(AudioOutputMode mode);
+AudioOutputMode GetOutputMode();
+uint32_t GetOutputChannelCount();
+void GetDwtStats(uint32_t& callback_cycles, uint32_t& io_cycles);
 
 // CPU load monitoring (audio processing performance)
 float GetAvgCpuLoad();     // 0.0-1.0 smoothed average

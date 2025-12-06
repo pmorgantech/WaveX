@@ -205,24 +205,42 @@ bool Init(
 }
 
 bool ReadSector(uint32_t lba, uint8_t* buf) {
+    uint32_t t_start = System::GetNow();
     CS_L();
     uint8_t r = cmd(17, lba, 0x01);
     if (r != 0x00) {
+        if (s_hw)
+            s_hw->PrintLine("SD: ReadSector cmd17 fail lba=%lu r=0x%02X", (unsigned long)lba, r);
         CS_H();
         xfer1(0xFF);
         return false;
     }
     if (wait_token(100) != 0xFE) {
+        if (s_hw)
+            s_hw->PrintLine("SD: ReadSector token timeout lba=%lu after %lu ms",
+                            (unsigned long)lba,
+                            (unsigned long)(System::GetNow() - t_start));
         CS_H();
         xfer1(0xFF);
         return false;
     }
+    uint32_t t_data_start = System::GetNow();
     for (int i = 0; i < 512; i++)
         buf[i] = xfer1(0xFF);
     xfer1(0xFF);
     xfer1(0xFF);
     CS_H();
     xfer1(0xFF);
+
+    uint32_t t_total = System::GetNow() - t_start;
+    uint32_t t_data = System::GetNow() - t_data_start;
+    if (t_total > 500 && s_hw) {
+        s_hw->PrintLine("SD: ReadSector slow lba=%lu total=%lu ms data=%lu ms",
+                        (unsigned long)lba,
+                        (unsigned long)t_total,
+                        (unsigned long)t_data);
+    }
+
     return true;
 }
 
