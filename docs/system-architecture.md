@@ -250,6 +250,17 @@ graph TD
     DAISYSP --> HAL_DRIVERS
 ```
 
+### Audio Engine Optimization Roadmap
+
+To keep the Daisy backend responsive while streaming large samples, we treat the audio engine as a tightly coupled producer/consumer system.
+
+- **Multi-channel SIMD-friendly pipeline** – Conversion now runs through a shared scratch pool, converts mono/stereo PCM into the configured `AudioOutputMode`, and resamples before batch-pushing into the ring buffer so the pipeline can later feed SAI1/SAI2 outputs without per-frame overhead.
+- **Channel-agnostic buffering** – `kMaxMixChannels` sized buffers and ring writes operate with a single `rb_push_frames()` call per block, keeping `__DMB` usage minimal while allowing future consumers to read every mix channel.
+- **Triple-buffered SD pipeline** – Three aligned SD slots with ready/consumed flags let `PumpWavIO` always drain one block while another refills asynchronously; the 32 KB scratch pool is recycled every block to keep allocations deterministic.
+- **Zero-overhead profiling** – `profiling/profiler.h` adds `PROFILE_SCOPE` macros, DWT cycle counting, and optional ITM traces behind `WAVEX_PROFILING_ENABLED`. `main.cpp` prints the stats every 5 seconds while the core DWT timers remain available even when profiling is compiled out.
+
+These recommendations keep the existing producer/consumer rhythm while progressively introducing CMSIS/DaisySP acceleration, clarified instrumentation, and better data movement.
+
 ## Data Flow Architecture
 
 ### Audio Processing Pipeline
