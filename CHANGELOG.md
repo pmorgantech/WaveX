@@ -17,6 +17,28 @@ versioning and release process.
   (`PROJECT_VER`) and Daisy (`project(... VERSION ...)`) firmware builds.
 - `AGENTS.md` / `CLAUDE.md` project instructions.
 
+### Changed (ESP32 UI) — needs hardware verification
+
+- Upgraded LVGL 9.3.0 → 9.5.0 and `esp_lvgl_port` to 2.8.0 (roadmap Phase
+  0.1): pinned `lvgl/lvgl: '>=9.4,<10'` in `idf_component.yml` so the
+  component manager can't silently resolve back down. Enabled
+  `CONFIG_LVGL_PORT_ENABLE_PPA=y` (in both `sdkconfig` and
+  `sdkconfig.defaults`) to offload display rotation to the ESP32-P4's PPA
+  hardware instead of software. **Important correction to the original
+  roadmap risk assessment**: our UI does use display rotation
+  (`display_manager.cpp` sets `LV_DISPLAY_ROTATION_90`) — the roadmap had
+  assumed otherwise when calling this low-risk, and `LVGL_PORT_ENABLE_PPA`'s
+  Kconfig help text is literally "Enable PPA for screen rotation," so this
+  is likely the correct fix but also puts us squarely in the "known PPA
+  rotation-mode bugs on P4" risk category the roadmap flagged. **Only
+  compile/build-verified so far** (full ESP32 build green in the
+  devcontainer) — this needs to be flashed to the real HX8394/MIPI-DSI panel
+  and checked for tearing/corruption during rotation before being trusted,
+  and the FPS/CPU before-after profiling the roadmap called for on the
+  waveform-preview and meter pages hasn't been done. Flip
+  `CONFIG_LVGL_PORT_ENABLE_PPA` back to unset in both sdkconfig files if it
+  misbehaves on hardware.
+
 ### Fixed (ESP32 dispatch)
 
 - **UART `PacketRouter` injection was silently broken** (roadmap Phase 0.2

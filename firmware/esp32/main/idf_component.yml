@@ -1,5 +1,8 @@
 ## IDF Component Manager Manifest File
 dependencies:
+  # Pinned >=9.4 for native ESP32-P4 PPA hardware-accelerated rendering
+  # (~30% faster, ~30% lower CPU at 1280x720) - see docs/roadmap.md Phase 0.1.
+  lvgl/lvgl: '>=9.4,<10'
   espressif/esp_lvgl_port: '*'
   espressif/esp_lcd_touch: '*'
   espressif/esp_lcd_touch_gt911: '*'
