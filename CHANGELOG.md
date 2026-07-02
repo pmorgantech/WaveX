@@ -17,6 +17,39 @@ versioning and release process.
   (`PROJECT_VER`) and Daisy (`project(... VERSION ...)`) firmware builds.
 - `AGENTS.md` / `CLAUDE.md` project instructions.
 
+### Fixed (ESP32 dispatch)
+
+- **UART `PacketRouter` injection was silently broken** (roadmap Phase 0.2
+  item 4): `application_context.cpp` had the injection call commented out
+  with "function not linking properly." Root cause was a namespace-scoping
+  bug — the hand-rolled `extern` declaration was lexically inside
+  `namespace WaveX`, so it declared (and looked up) `WaveX::
+  uart_link_set_packet_router` instead of the real global-scope function
+  defined in `esp_uart_link.cpp`. Fixed by including the real header and
+  qualifying the call with `::`. Production UART traffic now routes through
+  `ApplicationContext`'s single owned `PacketRouter` instead of a throwaway
+  `dummy_router` fallback instance in `esp_uart_link.cpp`.
+
+### Removed (ESP32 dispatch consolidation)
+
+- **One event-dispatch owner on ESP32** (roadmap Phase 0.2 item 4):
+  `PacketRouter` now owns fan-out; `inter_mcu` is the thin facade over
+  `StatisticsManager` it was meant to be. Deleted: `ListenersManager`
+  (`comm/listeners.h/.cpp`, wholesale dead — never instantiated anywhere);
+  `inter_mcu_set_meter_listener`/`_set_browse_resp_listener` (dead redundant
+  entry points — the live registration path is `CommInterfaceImpl` →
+  `StatisticsManager` directly, bypassing these); the `s_sample_status_listener`
+  static and its always-unreachable fallback branch in
+  `inter_mcu_invoke_sample_status_callback` (`s_statistics` always wins in
+  production); two dead duplicate SPI dispatch functions in `esp_spi_link.cpp`
+  (`handle_control_message_from_daisy`, `_new_format`, zero callers) and the
+  hand-rolled byte-unpacking `inter_mcu_process_daisy_control_message` they
+  alone called (duplicated what `PacketRouter::handle_meter_push`/
+  `handle_heartbeat` already do with typed structs). Left alone:
+  `inter_mcu_set_wave_chunk_listener`/`_set_sample_status_listener` — both are
+  genuinely live, used by production UI code, and `ICommInterface` has no
+  wave-chunk equivalent to consolidate onto yet.
+
 ### Changed
 
 - Upgraded `libDaisy` submodule v8.0.0 → v8.1.0 (roadmap Phase 0.1). Pulls in

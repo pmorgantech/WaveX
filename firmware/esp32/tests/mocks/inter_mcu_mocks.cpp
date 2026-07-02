@@ -1,4 +1,12 @@
+#include "../main/comm/packet_router.h"
 #include "../main/inter_mcu.h"
+
+// esp_uart_link.cpp (real UART/FreeRTOS driver code) isn't compiled into the
+// host test libraries; application_context.cpp still calls this at
+// construction time, so provide a no-op stand-in for host tests.
+void uart_link_set_packet_router(WaveX::Comm::PacketRouter* packet_router) {
+    (void)packet_router;
+}
 
 esp_err_t inter_mcu_send_sample_load_req(uint16_t sample_id,
                                          uint32_t sample_size,

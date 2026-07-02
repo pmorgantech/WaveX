@@ -292,68 +292,6 @@ static void handle_large_packet(const uint8_t* packet_data, size_t packet_len) {
 #endif
 }
 
-// Handle control messages received FROM Daisy (frontend commands to backend)
-static void handle_control_message_from_daisy(const uint8_t* packet_data, size_t packet_len) {
-#ifdef ESP_PLATFORM
-    // Parse unified packet to extract message info
-    uint8_t msg_type, flags;
-    uint16_t sequence_number;
-    uint8_t payload[MAX_PAYLOAD_SIZE];
-    size_t payload_size;
-
-    if (!parse_wave_packet(packet_data, packet_len, msg_type, payload, payload_size, sequence_number, flags)) {
-        ESP_LOGE(TAG, "Failed to parse control message packet");
-        return;
-    }
-
-    ESP_LOGI(TAG,
-             "Received control message from Daisy: msg_type=0x%02X, flags=0x%02X, seq=%u, "
-             "payload_size=%d",
-             msg_type,
-             flags,
-             sequence_number,
-             (int)payload_size);
-
-    // Check for duplicate packets using sequence numbers
-    if (is_duplicate_packet(sequence_number)) {
-        ESP_LOGW(TAG, "Dropping duplicate/out-of-order control message: seq=%u", sequence_number);
-        return;
-    }
-
-    // Forward control messages to the inter_mcu layer for processing
-    extern void inter_mcu_process_daisy_control_message(
-        uint8_t type, const uint8_t* payload, uint8_t len);
-    inter_mcu_process_daisy_control_message(msg_type, payload, payload_size);
-
-    // Update packet statistics
-    inter_mcu_increment_packet_stat(msg_type);
-#else
-    (void)packet_data;
-    (void)packet_len;
-#endif
-}
-
-// Handle new format control messages from Daisy (message type in payload)
-static void handle_control_message_from_daisy_new_format(uint8_t msg_type,
-                                                         const uint8_t* payload,
-                                                         uint8_t len,
-                                                         uint8_t flags = 0,
-                                                         uint16_t sequence_number = 0) {
-#ifdef ESP_PLATFORM
-    // Forward control messages to the inter_mcu layer for processing
-    extern void inter_mcu_process_daisy_control_message(
-        uint8_t type, const uint8_t* payload, uint8_t len);
-    inter_mcu_process_daisy_control_message(msg_type, payload, len);
-
-    // Update packet statistics
-    inter_mcu_increment_packet_stat(msg_type);
-#else
-    (void)msg_type;
-    (void)payload;
-    (void)len;
-#endif
-}
-
 // ============================================================================
 // SPI Link Functions
 // ============================================================================

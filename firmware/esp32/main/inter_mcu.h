@@ -56,9 +56,7 @@ typedef void (*wavex_sample_status_cb_t)(uint16_t sample_id,
                                          uint32_t frames_played,
                                          void* user_data);
 
-void inter_mcu_set_meter_listener(wavex_meter_cb_t cb, void* user_data);
 void inter_mcu_set_wave_chunk_listener(wavex_wave_chunk_cb_t cb, void* user_data);
-void inter_mcu_set_browse_resp_listener(wavex_browse_resp_cb_t cb, void* user_data);
 void inter_mcu_invoke_browse_resp_callback(const uint8_t* data, size_t length);
 void inter_mcu_invoke_wave_chunk_callback(uint32_t offset, const int16_t* samples, uint16_t count);
 void inter_mcu_set_sample_status_listener(wavex_sample_status_cb_t cb, void* user_data);
@@ -168,6 +166,3 @@ void inter_mcu_process_packet_data(const uint8_t* data, size_t length);
 
 // Increment packet statistics (for SPI link integration)
 void inter_mcu_increment_packet_stat(uint8_t packet_type);
-
-// Process control messages received from Daisy (backend)
-void inter_mcu_process_daisy_control_message(uint8_t type, const uint8_t* payload, uint8_t len);

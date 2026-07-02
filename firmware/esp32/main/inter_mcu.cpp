@@ -39,8 +39,6 @@ static volatile bool s_initialized = false;
 // Cached sample memory diagnostics
 static wavex_sample_mem_status_t s_sample_mem_status = {};
 static portMUX_TYPE s_sample_mem_lock = portMUX_INITIALIZER_UNLOCKED;
-static wavex_sample_status_cb_t s_sample_status_listener = nullptr;
-static void* s_sample_status_user_data = nullptr;
 static wavex_wave_chunk_cb_t s_wave_chunk_listener = nullptr;
 static void* s_wave_chunk_user_data = nullptr;
 
@@ -244,32 +242,10 @@ void inter_mcu_get_sample_mem_status(wavex_sample_mem_status_t* out) {
 
 // Implement missing functions that are declared in the header
 
-void inter_mcu_set_meter_listener(wavex_meter_cb_t cb, void* user_data) {
-    if (!s_statistics) {
-        ESP_LOGE(TAG, "StatisticsManager not initialized");
-        return;
-    }
-    // Store the callback in the statistics manager
-    s_statistics->set_meter_callback(cb, user_data);
-    ESP_LOGI(TAG, "Meter listener registered: %p", cb);
-}
-
 void inter_mcu_set_wave_chunk_listener(wavex_wave_chunk_cb_t cb, void* user_data) {
     s_wave_chunk_listener = cb;
     s_wave_chunk_user_data = user_data;
     ESP_LOGI(TAG, "Wave chunk listener registered: %p", cb);
-}
-
-void inter_mcu_set_browse_resp_listener(wavex_browse_resp_cb_t cb, void* user_data) {
-    if (!s_statistics) {
-        ESP_LOGE(TAG, "StatisticsManager not initialized");
-        return;
-    }
-    ESP_LOGI(TAG, "=== INTER_MCU: About to call s_statistics.set_browse_resp_callback ===");
-    // Store the callback in the statistics manager
-    s_statistics->set_browse_resp_callback(cb, user_data);
-    ESP_LOGI(TAG, "=== INTER_MCU: Successfully called set_browse_resp_callback ===");
-    ESP_LOGI(TAG, "Browse response listener registered: %p", cb);
 }
 
 void inter_mcu_invoke_browse_resp_callback(const uint8_t* data, size_t length) {
@@ -300,12 +276,11 @@ void inter_mcu_invoke_wave_chunk_callback(uint32_t offset, const int16_t* sample
 }
 
 void inter_mcu_set_sample_status_listener(wavex_sample_status_cb_t cb, void* user_data) {
-    // Store locally and in statistics for consistency
-    s_sample_status_listener = cb;
-    s_sample_status_user_data = user_data;
-    if (s_statistics) {
-        s_statistics->set_sample_status_callback(cb, user_data);
+    if (!s_statistics) {
+        ESP_LOGE(TAG, "StatisticsManager not initialized");
+        return;
     }
+    s_statistics->set_sample_status_callback(cb, user_data);
     ESP_LOGI(TAG, "Sample status listener registered: %p", cb);
 }
 
@@ -317,9 +292,6 @@ void inter_mcu_invoke_sample_status_callback(uint16_t sample_id,
     if (s_statistics) {
         s_statistics->invoke_sample_status_callback(
             sample_id, state, sample_rate, channels, frames_played);
-    } else if (s_sample_status_listener) {
-        s_sample_status_listener(
-            sample_id, state, sample_rate, channels, frames_played, s_sample_status_user_data);
     }
 }
 
@@ -532,90 +504,6 @@ void inter_mcu_increment_packet_stat(uint8_t packet_type) {
         return;
     }
     s_statistics->increment_packet_stat(packet_type);
-}
-
-// Process control messages received from Daisy (backend)
-void inter_mcu_process_daisy_control_message(uint8_t type, const uint8_t* payload, uint8_t len) {
-#ifdef ESP_PLATFORM
-    // NOTE: As of current design, only the following Daisy->ESP32 messages are expected over UART:
-    // - MSG_BROWSE_RESP (file browser responses)
-    // - MSG_WAVE_CHUNK (preview/sample wave chunks)
-    // Arguably also MSG_METER_PUSH in future; leave it on UART when enabled.
-    switch (type) {
-        case WaveX::Protocol::MSG_SYNC:
-            // Synchronization message from Daisy - acknowledge receipt
-            ESP_LOGI("inter_mcu", "Received MSG_SYNC from Daisy - acknowledging");
-            // For now, just acknowledge the sync - could add sync-specific logic later
-            break;
-
-        case WaveX::Protocol::MSG_METER_PUSH:
-            // Handle meter data from Daisy audio engine
-            if (len >= 8) {
-                uint16_t rms_left = payload[0] | (payload[1] << 8);
-                uint16_t rms_right = payload[2] | (payload[3] << 8);
-                uint16_t peak_left = payload[4] | (payload[5] << 8);
-                uint16_t peak_right = payload[6] | (payload[7] << 8);
-
-                // Convert Q15 to float
-                float rms_l = (float)rms_left / 32767.0f;
-                float rms_r = (float)rms_right / 32767.0f;
-                float peak_l = (float)peak_left / 32767.0f;
-                float peak_r = (float)peak_right / 32767.0f;
-
-                ESP_LOGI("inter_mcu",
-                         "Meter data: RMS L=%.3f R=%.3f, Peak L=%.3f R=%.3f",
-                         rms_l,
-                         rms_r,
-                         peak_l,
-                         peak_r);
-
-                // TODO: Forward to web interface or store for UI
-                inter_mcu_update_backend_meters(rms_l, rms_r, peak_l, peak_r);
-            }
-            break;
-
-        case WaveX::Protocol::MSG_HEARTBEAT:
-            // Handle heartbeat from Daisy
-            if (len >= 12) {
-                uint32_t uptime =
-                    payload[0] | (payload[1] << 8) | (payload[2] << 16) | (payload[3] << 24);
-                uint32_t loop_counter =
-                    payload[4] | (payload[5] << 8) | (payload[6] << 16) | (payload[7] << 24);
-                uint32_t rx_total =
-                    payload[8] | (payload[9] << 8) | (payload[10] << 16) | (payload[11] << 24);
-
-                float cpu_usage = 0.0f;
-                if (len >= 14) {
-                    uint16_t cpu_scaled = payload[12] | (payload[13] << 8);
-                    cpu_usage = (float)cpu_scaled / 10.0f;
-                }
-
-                ESP_LOGI("inter_mcu",
-                         "Heartbeat from Daisy: uptime=%lu, loops=%lu, rx=%lu, cpu=%.1f%%",
-                         (unsigned long)uptime,
-                         (unsigned long)loop_counter,
-                         (unsigned long)rx_total,
-                         cpu_usage);
-
-                inter_mcu_update_backend_heartbeat(uptime, rx_total, loop_counter, cpu_usage);
-            }
-            break;
-
-        case WaveX::Protocol::MSG_SAMPLE_STATUS:
-            // Handle sample playback status updates
-            ESP_LOGI("inter_mcu", "Sample status update from Daisy");
-            // TODO: Parse sample status and forward to web interface
-            break;
-
-        default:
-            ESP_LOGW("inter_mcu", "Unknown control message type from Daisy: 0x%02X", type);
-            break;
-    }
-#else
-    (void)type;
-    (void)payload;
-    (void)len;
-#endif
 }
 
 // Direct SPI API functions (replacing LinkManager)
