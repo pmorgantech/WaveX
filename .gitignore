@@ -54,6 +54,10 @@ cmake_install.cmake
 Makefile
 *.cmake
 !CMakeLists.txt
+# The bare "Makefile" pattern above is for CMake-generated makefiles; these
+# two are hand-written build entrypoints and must stay tracked:
+!/Makefile
+!/firmware/daisy/Makefile
 
 # Debug files
 *.log

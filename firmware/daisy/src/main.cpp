@@ -7,6 +7,7 @@
 #include "daisysp.h"
 #include "ff.h"
 #include "metrics/metrics.h"
+#include "per/gpio.h"
 #include "stm32h7xx_hal.h"
 
 #include "config.hpp"
@@ -16,10 +17,6 @@
 #include <cstdio>
 #include <cstring>
 #include <vector>
-#if WAVEX_DAISY_SD_CARD_ENABLED && (WAVEX_DAISY_SD_CARD_BACKEND == 0)
-#include "storage/sd_spi.h"
-#endif
-#include "per/gpio.h"
 
 // Feature macros moved to config.hpp
 #include "audio/audio_engine.h"

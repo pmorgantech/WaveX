@@ -22,9 +22,7 @@ set(FIRMWARE_SOURCES
     src/audio/audio_engine.cpp
     src/storage/fs_browse.cpp
     src/storage/sd_sdio.cpp
-    src/storage/sd_spi.cpp
     src/storage/sd_log_bridge.cpp
-    src/storage/diskio_sd_spi.cpp
     src/metrics/metrics.cpp
     src/sampler.hpp
     src/cv_bus.hpp

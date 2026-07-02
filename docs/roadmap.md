@@ -31,12 +31,13 @@ Phases are ordered by dependency, not calendar. Within a phase, items are listed
 
 ### 0.2 Repo & contract cleanup (small, high leverage)
 
-1. **Delete legacy transports/backends**: `esp_uart_link`, `daisy_uart_link`, `sd_spi.cpp`/`diskio_sd_spi.cpp` (keep in git history; they confuse contributors and rot). Gate: full build + host tests green with files removed.
+1. **Delete legacy SD backend**: `sd_spi.cpp`/`diskio_sd_spi.cpp` (kept in git history). `WAVEX_DAISY_SD_CARD_BACKEND` defaults to `1` (SDIO) and nothing sets it to `0`, so the SPI SD path was dead. Done — `make daisy` + `make test` green with the files removed.
+   - **`esp_uart_link`/`daisy_uart_link` are NOT dead and were not touched.** They're a live transport running in parallel with SPI: SPI carries browse/wave data only, while UART carries heartbeat, meter-push, status, and ACK/NACK messages on both MCUs (see `main.cpp`'s "SPI reserved for file browser and wave data only" comment, and `inter_mcu.cpp` on the ESP32 side). Consolidating onto SPI-only is real protocol/transport work — extending `protocol.h` to carry the UART-only message types, rewiring every `UartLinkSend`/`uart_link_send` call site, then hardware bring-up to verify — not a drive-by deletion. Track as a separate task if/when SPI-only consolidation is prioritized.
 2. **Fix `partitions.csv`** (uses 2 MB of 16 MB flash; vestigial "samples" partition). Add OTA slots while at it.
 3. **Wire-struct hygiene**: add named constructors / encode-decode helpers for every message in `protocol.h`; forbid aggregate-initializing packed wire structs in app code and tests. Round-trip tests for every message type (some exist; make it exhaustive).
 4. **One event-dispatch owner on ESP32**: collapse the overlap between `inter_mcu`, `PacketRouter`, `ListenersManager`, `StatisticsManager` → `PacketRouter` owns fan-out; `inter_mcu` becomes a thin facade. (Assessment recommendation #2, still open.)
 5. **Split `daisy_spi_link.cpp`** along the boundaries in `archive/daisy_spi_link_splitup_plan.md` (transport / packet / message-processing / bridges) — do it opportunistically as Phase 1 touches those files, not as a big-bang refactor.
-6. **Fix test-build brittleness**: fresh build dirs by default; vendor or cache GoogleTest so `make test` works offline.
+6. ~~**Fix test-build brittleness**: fresh build dirs by default; vendor or cache GoogleTest so `make test` works offline.~~ **Done.** GoogleTest is now a single vendored submodule at `firmware/shared/tests/_deps/googletest-src` (pinned `release-1.12.1`), referenced by all three test `CMakeLists.txt` via `FetchContent_Declare(... SOURCE_DIR ...)` instead of `GIT_REPOSITORY`. Also fixed a duplicated/malformed nested submodule entry (`.../tests/_deps/firmware/daisy/tests/_deps/googletest-src`) that had accumulated from a prior `git submodule add` run from the wrong directory. `make test-daisy`/`test-esp32`/`test-shared` now `rm -rf` their build dirs before reconfiguring.
 
 **Gate**: `make all` + `make test` clean from scratch; SD soak test passes on v8.1.0.
 
