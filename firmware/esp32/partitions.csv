@@ -1,9 +1,13 @@
-# Name,   Type, SubType, Offset,  Size,    Flags
-# Note: Adjusted for ESP32-P4 with 2MB flash (0x200000 total)
-nvs,      data, nvs,     0x9000,  0x6000,
-phy_init, data, phy,     0xf000,  0x1000,
-factory,  app,  factory, 0x10000, 0x100000,
-# Sample storage partition (640KB for storing audio samples)
-samples,  data, 0x06,    0x110000, 0xA0000,
-# User data partition (remaining 192KB for settings, presets, etc.)
-userdata, data, 0x07,    0x1B0000, 0x30000,
+# Name,   Type, SubType,  Offset,   Size,     Flags
+# ESP32-P4 module: 16MB flash (0x1000000).
+# Layout: factory fallback image + two OTA app slots (4MB each) with otadata
+# for slot selection, and a userdata partition for settings/presets.
+# (The former "samples" partition was vestigial - samples live on the Daisy's
+# SD card, and no code referenced the partition by name.)
+nvs,      data, nvs,      0x9000,   0x6000,
+otadata,  data, ota,      0xf000,   0x2000,
+phy_init, data, phy,      0x11000,  0x1000,
+factory,  app,  factory,  0x20000,  0x400000,
+ota_0,    app,  ota_0,    0x420000, 0x400000,
+ota_1,    app,  ota_1,    0x820000, 0x400000,
+userdata, data, 0x07,     0xC20000, 0x3E0000,

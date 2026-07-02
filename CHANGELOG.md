@@ -28,6 +28,13 @@ versioning and release process.
   `make test` (79/79) pass; on-hardware SD soak test still needed before
   calling the Phase 0 gate closed.
 
+- ESP32 partition table now uses the full 16 MB flash (roadmap Phase 0.2):
+  factory image + two 4 MB OTA app slots with `otadata`, `userdata` grown from
+  192 KB to ~3.9 MB, and the vestigial `samples` partition removed (samples
+  live on the Daisy's SD card; no code referenced the partition). The app
+  offset moved 0x10000 → 0x20000 — reflash via `flash-esp32.sh`/`idf.py
+  flash` as usual; NVS offset/size are unchanged so stored settings survive.
+
 ### Removed
 
 - Dead legacy SPI-based SD card backend: `sd_spi.cpp`/`sd_spi.h`/
