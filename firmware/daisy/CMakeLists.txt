@@ -3,8 +3,10 @@ cmake_minimum_required(VERSION 3.20)
 # Set the toolchain before declaring the project so it takes effect.
 set(CMAKE_TOOLCHAIN_FILE ${CMAKE_CURRENT_LIST_DIR}/libs/libDaisy/cmake/toolchains/ArmGNUToolchain.cmake)
 
-# Set project name and version
-project(wavex-daisy VERSION 0.1.0)
+# Project version is the repo-root VERSION file, shared with the ESP32 build
+# so frontend and backend firmware stay in sync. Bump that one file, not this one.
+file(STRINGS "${CMAKE_CURRENT_LIST_DIR}/../../VERSION" WAVEX_VERSION)
+project(wavex-daisy VERSION ${WAVEX_VERSION})
 
 # Set the project name and sources
 set(FIRMWARE_NAME wavex-daisy)

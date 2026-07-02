@@ -35,8 +35,28 @@ RUN set -e && \
     echo "petem ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers && \
     getent passwd petem
 
+# The rename above (usermod -l) only changes the login name, not the home
+# directory or primary group name, so it can be left as /home/ubuntu:ubuntu.
+# Normalize both to match the username so $HOME is predictable.
+RUN set -e && \
+    CURRENT_HOME=$(getent passwd petem | cut -d: -f6) && \
+    if [ "$CURRENT_HOME" != "/home/petem" ]; then \
+      usermod -d /home/petem -m petem; \
+    fi && \
+    CURRENT_GROUP=$(getent group 1000 | cut -d: -f1) && \
+    if [ -n "$CURRENT_GROUP" ] && [ "$CURRENT_GROUP" != "petem" ]; then \
+      groupmod -n petem "$CURRENT_GROUP"; \
+    fi
+
 ENV LANG=en_US.UTF-8
 ENV LC_ALL=en_US.UTF-8
 
-# Note: Do NOT set USER here - let devcontainer system handle user setup
-# VSCode's UID adjustment layer needs to control the user configuration
+# Run as petem by default so bind-mounted build output (build/, CMakeCache.txt,
+# etc.) is owned by the host user instead of root. IDF_TOOLS_PATH/PATH are
+# absolute (baked in via ENV in the base image, not $HOME-relative), so this
+# is safe: petem only needs read access to /opt/esp, which the default image
+# permissions already grant. VS Code's Dev Containers UID-remapping
+# (updateRemoteUserUID + remoteUser in devcontainer.json) still overrides this
+# for interactive sessions; this default matters for `docker run` / CI use.
+USER petem
+WORKDIR /home/petem

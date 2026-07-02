@@ -86,8 +86,12 @@ __pycache__/
 # We only want the defaults
 sdkconfig
 
+docs/archive/
+docs/docx2md.py
 docs/venv/
-docs/
 
 graphify-out/
 node_modules/
+
+.analysis/
+.cursor/

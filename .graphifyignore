@@ -1,0 +1,30 @@
+# Graphify output / local noise
+graphify-out/
+.git/
+.cache/
+.venv/
+venv/
+__pycache__/
+
+docs/archive
+
+# Build/test/vendor output
+build/
+dist/
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+compile_commands.json
+*.o
+*.a
+*.elf
+*.bin
+*.map
+*.log
+
+# Git submodules / vendored third-party code
+firmware/esp32/libs/xpt2046/
+firmware/daisy/libs/libDaisy/
+firmware/daisy/libs/DaisySP/
+firmware/esp32/components/LovyanGFX/
+firmware/daisy/tests/_deps/

@@ -44,6 +44,10 @@ set(EXCLUDE_COMPONENTS
     "xtensa"
 )
 
+# Firmware version comes from the repo-root VERSION file, shared with the
+# Daisy build so frontend and backend stay in sync. Bump that one file, not this one.
+file(STRINGS "${CMAKE_CURRENT_LIST_DIR}/../../VERSION" PROJECT_VER)
+
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(wavex-esp32)
 add_compile_options(-Os -flto -ffunction-sections -fdata-sections)
