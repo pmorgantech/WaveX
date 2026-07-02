@@ -529,6 +529,14 @@ void UISampleBrowser::processDeferredUpdates_() {
                 char duration_str[32] = "Unknown";
                 char sample_rate_str[32] = "Unknown";
                 char channels_str[32] = "Unknown";
+                char bit_depth_str[32] = "Unknown";
+
+                if (entry->bits_per_sample > 0) {
+                    snprintf(bit_depth_str,
+                             sizeof(bit_depth_str),
+                             "%u-bit",
+                             (unsigned)entry->bits_per_sample);
+                }
 
                 if (entry->sample_rate > 0) {
                     // Format duration from milliseconds
@@ -567,11 +575,11 @@ void UISampleBrowser::processDeferredUpdates_() {
                     }
 
                     ESP_LOGI(TAG,
-                             "=== WAV METADATA: duration='%s', rate='%s', channels='%s', bits=%u",
+                             "=== WAV METADATA: duration='%s', rate='%s', channels='%s', bits=%s",
                              duration_str,
                              sample_rate_str,
                              channels_str,
-                             entry->bits_per_sample);
+                             bit_depth_str);
                 } else {
                     ESP_LOGD(TAG, "No WAV metadata available for: %s", entry->name);
                 }
@@ -584,6 +592,7 @@ void UISampleBrowser::processDeferredUpdates_() {
                          "Size: %s\n"
                          "Duration: %s\n"
                          "Sample Rate: %s\n"
+                         "Bit Depth: %s\n"
                          "Channels: %s\n"
                          "Format: WAV PCM\n"
                          "Path: %.95s\n\n"
@@ -593,6 +602,7 @@ void UISampleBrowser::processDeferredUpdates_() {
                          size_str,
                          duration_str,
                          sample_rate_str,
+                         bit_depth_str,
                          channels_str,
                          entry->path);
             }
@@ -712,19 +722,21 @@ void UISampleBrowser::refreshSoftkeys() {
         this);
 }
 
-void UISampleBrowser::sample_status_callback(uint8_t state,
+void UISampleBrowser::sample_status_callback(uint16_t sample_id,
+                                             uint8_t state,
                                              uint32_t sample_rate,
                                              uint8_t channels,
                                              uint32_t frames_played,
                                              void* user_data) {
-    ESP_LOGI(
-        TAG,
-        "=== SAMPLE STATUS CALLBACK: state=%d, rate=%lu, channels=%u, frames=%lu, user_data=%p",
-        state,
-        (unsigned long)sample_rate,
-        channels,
-        (unsigned long)frames_played,
-        user_data);
+    ESP_LOGI(TAG,
+             "=== SAMPLE STATUS CALLBACK: id=%u state=%d, rate=%lu, channels=%u, frames=%lu, "
+             "user_data=%p",
+             (unsigned)sample_id,
+             state,
+             (unsigned long)sample_rate,
+             channels,
+             (unsigned long)frames_played,
+             user_data);
 
     UISampleBrowser* browser = static_cast<UISampleBrowser*>(user_data);
 
@@ -760,7 +772,7 @@ void UISampleBrowser::sample_status_callback(uint8_t state,
 
     ESP_LOGI(TAG, "=== CALLBACK VALIDATION PASSED: Processing state=%d", state);
 
-    // State: 0 = stopped, 1 = playing, 2 = paused, etc.
+    // State: 0 = stopped, 1 = playing, 2 = paused, 0x10 = load complete.
     if (state == 0) {
         ESP_LOGI(TAG, "=== SAMPLE STOP RESPONSE: Processing stop callback ===");
         browser->is_playing_ = false;
@@ -790,6 +802,29 @@ void UISampleBrowser::sample_status_callback(uint8_t state,
         } else {
             ESP_LOGW(TAG,
                      "=== SAMPLE PLAYING RESPONSE: Skipping UI update - not fully initialized ===");
+        }
+    } else if (state == 0x10) {
+        ESP_LOGI(TAG, "=== SAMPLE LOAD COMPLETE: id=%u ===", (unsigned)sample_id);
+        if (browser->is_initialized_ && browser->status_label_ && browser->root_) {
+            char status_text[256];
+            const char* path = browser->persistent_state_.last_load_sample_path.c_str();
+            snprintf(status_text,
+                     sizeof(status_text),
+                     "Sample loaded: id=%u%s%s",
+                     (unsigned)sample_id,
+                     path && path[0] ? " (" : "",
+                     path && path[0] ? path : "");
+            // If path was appended, close paren
+            if (path && path[0]) {
+                size_t len = strlen(status_text);
+                if (len < sizeof(status_text) - 1) {
+                    status_text[len] = ')';
+                    status_text[len + 1] = '\0';
+                }
+            }
+            browser->updateStatus(status_text);
+        } else {
+            ESP_LOGW(TAG, "=== SAMPLE LOAD COMPLETE: Skipping UI update - not initialized ===");
         }
     } else {
         ESP_LOGW(TAG, "=== UNKNOWN SAMPLE STATE: %d ===", state);
@@ -824,23 +859,23 @@ bool UISampleBrowser::loadSample(const wavex_file_entry_t* entry) {
                  bits_per_sample);
     }
 
-    if (bits_per_sample != 16) {
-        ESP_LOGE(TAG, "Unsupported bit depth: %u (only 16-bit supported)", bits_per_sample);
-        updateStatus("Error: Only 16-bit WAV supported");
+    if (bits_per_sample != 8 && bits_per_sample != 16 && bits_per_sample != 24) {
+        ESP_LOGE(TAG, "Unsupported bit depth: %u (only 8/16/24-bit supported)", bits_per_sample);
+        updateStatus("Error: Unsupported bit depth");
         return false;
     }
 
     // Daisy will load from its SD card; assign a unique sample ID per request
     uint16_t sample_id = persistent_state_.allocateSampleId();
+    persistent_state_.last_load_sample_id = sample_id;
+    persistent_state_.last_load_sample_path = entry->path;
 
     updateStatus("Loading sample on Daisy...");
-    esp_err_t result = comm_interface_ ? inter_mcu_send_sample_load_req(sample_id,
-                                                                        entry->size_bytes,
-                                                                        sample_rate,
-                                                                        channels,
-                                                                        bits_per_sample,
-                                                                        entry->path)
-                                       : ESP_FAIL;
+    esp_err_t result =
+        comm_interface_
+            ? inter_mcu_send_sample_load_req(
+                  sample_id, entry->size_bytes, sample_rate, channels, bits_per_sample, entry->path)
+            : ESP_FAIL;
 
     if (result != ESP_OK) {
         ESP_LOGE(TAG, "Failed to send sample load request: %d", result);
@@ -857,12 +892,19 @@ bool UISampleBrowser::loadSample(const wavex_file_entry_t* entry) {
     return true;
 }
 
-std::shared_ptr<UIPage> createSampleBrowserPage(WaveX::Comm::ICommInterface& comm_interface) {
-    // Create persistent state (static to maintain state across page instances)
-    // This is better than static variables in the class because it's encapsulated
-    // and could be moved to a state manager service in the future
+namespace {
+SampleBrowserState& persistent_state_singleton() {
     static SampleBrowserState persistent_state;
-    return std::make_shared<UISampleBrowser>(comm_interface, persistent_state);
+    return persistent_state;
+}
+}  // namespace
+
+std::shared_ptr<UIPage> createSampleBrowserPage(WaveX::Comm::ICommInterface& comm_interface) {
+    return std::make_shared<UISampleBrowser>(comm_interface, persistent_state_singleton());
+}
+
+SampleBrowserState* getSampleBrowserState() {
+    return &persistent_state_singleton();
 }
 
 }  // namespace wavex_ui

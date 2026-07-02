@@ -10,8 +10,12 @@ typedef void (*wavex_wave_chunk_cb_t)(uint32_t offset,
                                       uint16_t count,
                                       void* user_data);
 typedef void (*wavex_browse_resp_cb_t)(const uint8_t* data, size_t length, void* user_data);
-typedef void (*wavex_sample_status_cb_t)(
-    uint8_t state, uint32_t sample_rate, uint8_t channels, uint32_t frames_played, void* user_data);
+typedef void (*wavex_sample_status_cb_t)(uint16_t sample_id,
+                                         uint8_t state,
+                                         uint32_t sample_rate,
+                                         uint8_t channels,
+                                         uint32_t frames_played,
+                                         void* user_data);
 
 // Listeners manager that handles callback registration and invocation
 class ListenersManager {
@@ -29,7 +33,8 @@ class ListenersManager {
     void invoke_meter_callback(float rms, float peak);
     void invoke_wave_chunk_callback(uint32_t offset, const int16_t* samples, uint16_t count);
     void invoke_browse_resp_callback(const uint8_t* data, size_t length);
-    void invoke_sample_status_callback(uint8_t state,
+    void invoke_sample_status_callback(uint16_t sample_id,
+                                       uint8_t state,
                                        uint32_t sample_rate,
                                        uint8_t channels,
                                        uint32_t frames_played);

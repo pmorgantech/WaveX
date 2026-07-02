@@ -4,10 +4,11 @@
 #include <esp_log.h>
 
 #include "ui/ui_api.h"
+#include "ui/ui_diagnostics_page.h"
 #include "ui/ui_sample_browser.h"
 #include "ui/ui_sample_detail.h"
+#include "ui/ui_sample_edit_page.h"
 #include "ui/ui_settings_page.h"
-#include "ui/ui_diagnostics_page.h"
 
 static const char* TAG = "UI_MAIN_MENU";
 
@@ -25,11 +26,9 @@ std::shared_ptr<UIPage> createMainMenu() {
             ESP_LOGE(TAG, "No comm interface available for Sample Browser");
         } });
 
-    menu->addItem("Edit Sample",
-                  []() {
+    menu->addItem("Edit Sample", []() {
         ESP_LOGI(TAG, "Edit Sample selected");
-        // TODO: Implement sample editing functionality
-    });
+        UINavigator::instance().push(createSampleEditPage()); });
 
     menu->addItem("Modulation", []() {
         ESP_LOGI(TAG, "Opening Modulation Menu");
@@ -39,11 +38,9 @@ std::shared_ptr<UIPage> createMainMenu() {
         ESP_LOGI(TAG, "Opening Settings Menu");
         UINavigator::instance().push(createSettingsMenu()); });
 
-    menu->addItem("Diagnostics",
-                  []() {
+    menu->addItem("Diagnostics", []() {
         ESP_LOGI(TAG, "Diagnostics selected");
-        UINavigator::instance().push(createDiagnosticsPage());
-    });
+        UINavigator::instance().push(createDiagnosticsPage()); });
 
     return menu;
 }

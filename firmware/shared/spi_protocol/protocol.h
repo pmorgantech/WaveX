@@ -127,11 +127,11 @@ struct NoteMessage {
 
 // Sample load message
 struct SampleLoadMessage {
-    uint16_t sample_id;     // Unique sample identifier
-    uint32_t sample_size;   // Size in bytes (optional hint; Daisy re-reads)
-    uint16_t sample_rate;   // Sample rate in Hz (optional hint; Daisy re-reads)
-    uint8_t channels;       // Number of channels (1 or 2) (optional hint)
-    uint8_t bit_depth;      // Bit depth (16 or 24) (optional hint)
+    uint16_t sample_id;          // Unique sample identifier
+    uint32_t sample_size;        // Size in bytes (optional hint; Daisy re-reads)
+    uint16_t sample_rate;        // Sample rate in Hz (optional hint; Daisy re-reads)
+    uint8_t channels;            // Number of channels (1 or 2) (optional hint)
+    uint8_t bit_depth;           // Bit depth (16 or 24) (optional hint)
     char path[BROWSE_PATH_MAX];  // Absolute/normalized path on Daisy SD
 } __attribute__((packed));
 
@@ -170,7 +170,7 @@ enum StatusCategory : uint8_t {
 
 // Status request (ESP32 -> Daisy)
 struct StatusRequestMessage {
-    uint8_t category;   // StatusCategory
+    uint8_t category;  // StatusCategory
     uint8_t reserved[3];
 } __attribute__((packed));
 
@@ -205,12 +205,13 @@ struct BrowseRespHeader {
     uint8_t n;
 } __attribute__((packed));
 
-// Sample status
+// Sample status (playback or load notifications)
 struct SampleStatusMessage {
-    uint8_t state;  // 0=stopped,1=playing,2=ended
-    uint32_t sample_rate;
+    uint16_t sample_id;  // logical sample identifier
+    uint8_t state;       // 0=stopped,1=playing,2=ended,0x10=load complete
     uint8_t channels;
-    uint32_t frames_played;
+    uint32_t sample_rate;
+    uint32_t frames_played;  // for load-complete: total frames loaded
 } __attribute__((packed));
 
 // Sample stop request (now includes slot)
@@ -281,8 +282,8 @@ struct SampleMemEntryMessage {
 
 // Sample memory status payload (Daisy -> ESP32)
 struct SampleMemStatusMessage {
-    uint8_t category;     // STATUS_CATEGORY_SAMPLE_MEM
-    uint8_t sample_count; // Number of valid entries
+    uint8_t category;      // STATUS_CATEGORY_SAMPLE_MEM
+    uint8_t sample_count;  // Number of valid entries
     uint8_t reserved[2];
     uint32_t small_total_bytes;
     uint32_t small_free_bytes;

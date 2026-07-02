@@ -50,11 +50,13 @@ static void meter_callback(
     }
 }
 
-static void sample_status_callback(uint8_t state,
+static void sample_status_callback(uint16_t sample_id,
+                                   uint8_t state,
                                    uint32_t sample_rate,
                                    uint8_t channels,
                                    uint32_t frames_played,
                                    void* user_data) {
+    (void)sample_id;
     g_callback_state = state;
     g_callback_sample_rate = sample_rate;
     g_callback_channels = channels;
@@ -302,7 +304,7 @@ TEST_F(StatisticsManagerTest, SampleStatusCallback) {
     stats->set_sample_status_callback(sample_status_callback, &callback_called);
 
     // Invoke callback
-    stats->invoke_sample_status_callback(1, 44100, 2, 1000);
+    stats->invoke_sample_status_callback(1, 1, 44100, 2, 1000);
 
     EXPECT_TRUE(callback_called);
     EXPECT_EQ(g_callback_state, 1);

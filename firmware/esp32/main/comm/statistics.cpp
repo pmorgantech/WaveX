@@ -431,7 +431,8 @@ void StatisticsManager::invoke_browse_resp_callback(const uint8_t* data, size_t 
     }
 }
 
-void StatisticsManager::set_sample_status_callback(void (*callback)(uint8_t state,
+void StatisticsManager::set_sample_status_callback(void (*callback)(uint16_t sample_id,
+                                                                    uint8_t state,
                                                                     uint32_t sample_rate,
                                                                     uint8_t channels,
                                                                     uint32_t frames_played,
@@ -449,7 +450,8 @@ void StatisticsManager::set_sample_status_callback(void (*callback)(uint8_t stat
     }
 }
 
-void StatisticsManager::invoke_sample_status_callback(uint8_t state,
+void StatisticsManager::invoke_sample_status_callback(uint16_t sample_id,
+                                                      uint8_t state,
                                                       uint32_t sample_rate,
                                                       uint8_t channels,
                                                       uint32_t frames_played) {
@@ -466,7 +468,7 @@ void StatisticsManager::invoke_sample_status_callback(uint8_t state,
                 ESP_LOGI("StatisticsManager", "About to call sample status callback");
                 // Release mutex before calling callback to avoid deadlocks
                 xSemaphoreGive(m_sample_status_mutex);
-                m_sample_status_callback(state, sample_rate, channels, frames_played, m_sample_status_user_data);
+                m_sample_status_callback(sample_id, state, sample_rate, channels, frames_played, m_sample_status_user_data);
                 ESP_LOGI("StatisticsManager", "Sample status callback returned");
             } else {
                 ESP_LOGW("StatisticsManager", "No sample status callback registered");
@@ -479,7 +481,7 @@ void StatisticsManager::invoke_sample_status_callback(uint8_t state,
         // Fallback for non-ESP_PLATFORM
         if (m_sample_status_callback) {
             ESP_LOGI("StatisticsManager", "About to call sample status callback (no mutex)");
-            m_sample_status_callback(state, sample_rate, channels, frames_played, m_sample_status_user_data);
+            m_sample_status_callback(sample_id, state, sample_rate, channels, frames_played, m_sample_status_user_data);
             ESP_LOGI("StatisticsManager", "Sample status callback returned");
         } else {
             ESP_LOGW("StatisticsManager", "No sample status callback registered");

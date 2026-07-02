@@ -29,8 +29,12 @@ typedef int esp_err_t;
 typedef void (*wavex_meter_cb_t)(
     float rms_left, float rms_right, float peak_left, float peak_right, void* user_data);
 typedef void (*wavex_browse_resp_cb_t)(const uint8_t* data, size_t length, void* user_data);
-typedef void (*wavex_sample_status_cb_t)(
-    uint8_t state, uint32_t sample_rate, uint8_t channels, uint32_t frames_played, void* user_data);
+typedef void (*wavex_sample_status_cb_t)(uint16_t sample_id,
+                                         uint8_t state,
+                                         uint32_t sample_rate,
+                                         uint8_t channels,
+                                         uint32_t frames_played,
+                                         void* user_data);
 
 namespace WaveX {
 namespace Comm {

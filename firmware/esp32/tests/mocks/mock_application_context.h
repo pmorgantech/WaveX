@@ -38,7 +38,11 @@ class MockStatisticsManager : public StatisticsManager {
     MOCK_METHOD(void, update_backend_heartbeat, (uint8_t state), (override));
     MOCK_METHOD(void,
                 update_sample_status,
-                (uint8_t state, uint32_t sample_rate, uint8_t channels, uint32_t frames_played),
+                (uint16_t sample_id,
+                 uint8_t state,
+                 uint32_t sample_rate,
+                 uint8_t channels,
+                 uint32_t frames_played),
                 (override));
 };
 

@@ -88,3 +88,6 @@ sdkconfig
 
 docs/venv/
 docs/
+
+graphify-out/
+node_modules/

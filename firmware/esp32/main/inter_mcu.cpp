@@ -39,6 +39,10 @@ static volatile bool s_initialized = false;
 // Cached sample memory diagnostics
 static wavex_sample_mem_status_t s_sample_mem_status = {};
 static portMUX_TYPE s_sample_mem_lock = portMUX_INITIALIZER_UNLOCKED;
+static wavex_sample_status_cb_t s_sample_status_listener = nullptr;
+static void* s_sample_status_user_data = nullptr;
+static wavex_wave_chunk_cb_t s_wave_chunk_listener = nullptr;
+static void* s_wave_chunk_user_data = nullptr;
 
 static int send_uart_message(uint8_t msg_type, const void* payload, uint16_t len) {
     if (!s_uart_initialized || !s_uart_started) {
@@ -141,14 +145,14 @@ esp_err_t inter_mcu_send_note_off(uint8_t note, uint8_t channel) {
     return result ? ESP_OK : -1;  // ESP_FAIL
 }
 
-esp_err_t inter_mcu_send_sample_ctrl(uint8_t slot, uint8_t cmd, float rate) {
+esp_err_t inter_mcu_send_sample_ctrl(uint8_t slot, wavex_sample_ctrl_cmd_t cmd, float rate) {
     if (!s_initialized || s_suspended) {
         return -1;  // ESP_ERR_INVALID_STATE
     }
 
     WaveX::Protocol::SampleCtrlMessage msg;
     msg.slot = slot;
-    msg.cmd = cmd;
+    msg.cmd = static_cast<uint8_t>(cmd);
     msg.rate = rate;
 
     int result = send_uart_message(WaveX::Protocol::MSG_SAMPLE_CTRL, &msg, sizeof(msg));
@@ -251,8 +255,9 @@ void inter_mcu_set_meter_listener(wavex_meter_cb_t cb, void* user_data) {
 }
 
 void inter_mcu_set_wave_chunk_listener(wavex_wave_chunk_cb_t cb, void* user_data) {
-    // TODO: Implement wave chunk listener registration
-    ESP_LOGI(TAG, "Wave chunk listener registration not yet implemented");
+    s_wave_chunk_listener = cb;
+    s_wave_chunk_user_data = user_data;
+    ESP_LOGI(TAG, "Wave chunk listener registered: %p", cb);
 }
 
 void inter_mcu_set_browse_resp_listener(wavex_browse_resp_cb_t cb, void* user_data) {
@@ -285,25 +290,37 @@ void inter_mcu_invoke_browse_resp_callback(const uint8_t* data, size_t length) {
              invoke_complete_time_us - invoke_time_us);
 }
 
-void inter_mcu_set_sample_status_listener(wavex_sample_status_cb_t cb, void* user_data) {
-    if (!s_statistics) {
-        ESP_LOGE(TAG, "StatisticsManager not initialized");
+void inter_mcu_invoke_wave_chunk_callback(uint32_t offset, const int16_t* samples, uint16_t count) {
+    if (!s_wave_chunk_listener) {
+        ESP_LOGW(TAG, "Wave chunk received but no listener registered");
         return;
     }
-    // Store the callback in the statistics manager
-    s_statistics->set_sample_status_callback(cb, user_data);
+
+    s_wave_chunk_listener(offset, samples, count, s_wave_chunk_user_data);
+}
+
+void inter_mcu_set_sample_status_listener(wavex_sample_status_cb_t cb, void* user_data) {
+    // Store locally and in statistics for consistency
+    s_sample_status_listener = cb;
+    s_sample_status_user_data = user_data;
+    if (s_statistics) {
+        s_statistics->set_sample_status_callback(cb, user_data);
+    }
     ESP_LOGI(TAG, "Sample status listener registered: %p", cb);
 }
 
-void inter_mcu_invoke_sample_status_callback(uint8_t state,
+void inter_mcu_invoke_sample_status_callback(uint16_t sample_id,
+                                             uint8_t state,
                                              uint32_t sample_rate,
                                              uint8_t channels,
                                              uint32_t frames_played) {
-    if (!s_statistics) {
-        ESP_LOGE(TAG, "StatisticsManager not initialized");
-        return;
+    if (s_statistics) {
+        s_statistics->invoke_sample_status_callback(
+            sample_id, state, sample_rate, channels, frames_played);
+    } else if (s_sample_status_listener) {
+        s_sample_status_listener(
+            sample_id, state, sample_rate, channels, frames_played, s_sample_status_user_data);
     }
-    s_statistics->invoke_sample_status_callback(state, sample_rate, channels, frames_played);
 }
 
 void inter_mcu_get_backend_heartbeat(wavex_backend_heartbeat_t* out) {
@@ -640,7 +657,8 @@ esp_err_t inter_mcu_send_browse_req(const char* path, uint8_t start_index) {
              "DEBUG - About to call send_uart_message with MSG_BROWSE_REQ=0x%02X (t=%lld us)",
              WaveX::Protocol::MSG_BROWSE_REQ,
              request_send_time_us);
-    int result = send_uart_message(WaveX::Protocol::MSG_BROWSE_REQ, payload.data(), (uint16_t)payload_len);
+    int result =
+        send_uart_message(WaveX::Protocol::MSG_BROWSE_REQ, payload.data(), (uint16_t)payload_len);
     int64_t request_send_complete_us = esp_timer_get_time();
     ESP_LOGI("inter_mcu",
              "DEBUG - UART send returned: %d (t=%lld us, duration=%lld us)",
@@ -726,7 +744,8 @@ void inter_mcu_handle_sample_stop_response(bool success) {
     // Trigger sample status callback with stopped state (0)
     // This allows the UI layer to handle the response through the registered callback
     if (s_statistics) {
-        s_statistics->invoke_sample_status_callback(0, 0, 0, 0);  // state=0 (stopped)
+        s_statistics->invoke_sample_status_callback(
+            0, 0, 0, 0, 0);  // sample_id=0, state=0 (stopped)
     } else {
         ESP_LOGE("InterMCU", "s_statistics is NULL in handle_sample_stop_response");
     }

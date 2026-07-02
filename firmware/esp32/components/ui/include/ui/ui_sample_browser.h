@@ -30,6 +30,8 @@ struct SampleBrowserState {
     std::string playing_sample_path = "";
     uint32_t playing_sample_index = 0;
     uint16_t next_sample_id = 1;
+    uint16_t last_load_sample_id = 0;
+    std::string last_load_sample_path = "";
 
     // Default constructor
     SampleBrowserState() = default;
@@ -45,6 +47,8 @@ struct SampleBrowserState {
         is_playing = false;
         playing_sample_path.clear();
         playing_sample_index = 0;
+        last_load_sample_id = 0;
+        last_load_sample_path.clear();
     }
 
     // Check if state is valid
@@ -158,7 +162,8 @@ class UISampleBrowser : public UIPage {
     static void directory_changed_callback(const char* path, void* user_data);
 
     // Sample status callback handler (called from inter-MCU system)
-    static void sample_status_callback(uint8_t state,
+    static void sample_status_callback(uint16_t sample_id,
+                                       uint8_t state,
                                        uint32_t sample_rate,
                                        uint8_t channels,
                                        uint32_t frames_played,
@@ -185,5 +190,12 @@ class UISampleBrowser : public UIPage {
  * dependency injection rather than static variables in the class.
  */
 std::shared_ptr<UIPage> createSampleBrowserPage(WaveX::Comm::ICommInterface& comm_interface);
+
+/**
+ * @brief Access the shared SampleBrowserState used by the browser page.
+ *
+ * Returns nullptr if the browser has not been created yet.
+ */
+SampleBrowserState* getSampleBrowserState();
 
 }  // namespace wavex_ui

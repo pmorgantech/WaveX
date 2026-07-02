@@ -3,8 +3,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#include "comm/statistics.h"
 #include "../../shared/spi_protocol/protocol.h"
+#include "comm/statistics.h"
 #ifdef ESP_PLATFORM
 #include "esp_err.h"
 #else
@@ -49,15 +49,21 @@ typedef void (*wavex_wave_chunk_cb_t)(uint32_t offset,
                                       uint16_t count,
                                       void* user_data);
 typedef void (*wavex_browse_resp_cb_t)(const uint8_t* data, size_t length, void* user_data);
-typedef void (*wavex_sample_status_cb_t)(
-    uint8_t state, uint32_t sample_rate, uint8_t channels, uint32_t frames_played, void* user_data);
+typedef void (*wavex_sample_status_cb_t)(uint16_t sample_id,
+                                         uint8_t state,
+                                         uint32_t sample_rate,
+                                         uint8_t channels,
+                                         uint32_t frames_played,
+                                         void* user_data);
 
 void inter_mcu_set_meter_listener(wavex_meter_cb_t cb, void* user_data);
 void inter_mcu_set_wave_chunk_listener(wavex_wave_chunk_cb_t cb, void* user_data);
 void inter_mcu_set_browse_resp_listener(wavex_browse_resp_cb_t cb, void* user_data);
 void inter_mcu_invoke_browse_resp_callback(const uint8_t* data, size_t length);
+void inter_mcu_invoke_wave_chunk_callback(uint32_t offset, const int16_t* samples, uint16_t count);
 void inter_mcu_set_sample_status_listener(wavex_sample_status_cb_t cb, void* user_data);
-void inter_mcu_invoke_sample_status_callback(uint8_t state,
+void inter_mcu_invoke_sample_status_callback(uint16_t sample_id,
+                                             uint8_t state,
                                              uint32_t sample_rate,
                                              uint8_t channels,
                                              uint32_t frames_played);

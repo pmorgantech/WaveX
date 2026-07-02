@@ -5,7 +5,10 @@
 
 #include "ui/ui_api.h"
 #include "ui/ui_diagnostics_page.h"
+#include "ui/ui_main_menu.h"
 #include "ui/ui_sample_browser.h"
+#include "ui/ui_sample_edit_page.h"
+#include "ui/ui_sample_record_page.h"
 
 static const char* TAG = "UI_NAV_INTEGRATION";
 
@@ -36,34 +39,16 @@ bool isNavigationActive() {
     return UINavigator::instance().active() != nullptr;
 }
 
-std::shared_ptr<UIPage> createMainMenu() {
-    auto menu = std::make_shared<UIMenuPage>("Main Menu");
-
-    menu->addItem("Sample", []() {
-        ESP_LOGI(TAG, "Opening Sample Menu");
-        UINavigator::instance().push(createSampleMenu()); });
-
-    menu->addItem("System", []() {
-        ESP_LOGI(TAG, "Opening System Menu");
-        UINavigator::instance().push(createSystemMenu()); });
-
-    return menu;
-}
-
 std::shared_ptr<UIPage> createSampleMenu() {
     auto menu = std::make_shared<UIMenuPage>("Sample Menu");
 
-    menu->addItem("Record",
-                  []() {
+    menu->addItem("Record", []() {
         ESP_LOGI(TAG, "Record option selected");
-        // TODO: Implement record functionality
-    });
+        UINavigator::instance().push(createSampleRecordPage()); });
 
-    menu->addItem("Edit",
-                  []() {
+    menu->addItem("Edit", []() {
         ESP_LOGI(TAG, "Edit option selected");
-        // TODO: Implement edit functionality
-    });
+        UINavigator::instance().push(createSampleEditPage()); });
 
     menu->addItem("Browser", []() {
         ESP_LOGI(TAG, "Opening Sample Browser page");
@@ -84,11 +69,9 @@ std::shared_ptr<UIPage> createSystemMenu() {
         ESP_LOGI(TAG, "Opening Diagnostics page");
         UINavigator::instance().push(createDiagnosticsPage()); });
 
-    menu->addItem("Settings",
-                  []() {
+    menu->addItem("Settings", []() {
         ESP_LOGI(TAG, "Settings option selected");
-        // TODO: Implement settings functionality
-    });
+        UINavigator::instance().push(createSettingsMenu()); });
 
     return menu;
 }

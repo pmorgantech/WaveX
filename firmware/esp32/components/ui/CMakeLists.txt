@@ -4,6 +4,7 @@
 set(COMPONENT_SRCS
     "common/window_manager.cpp"
     "components/file_browser.cpp"
+    "components/waveform_view.cpp"
     "src/ui_diagnostics_page.cpp"
     "src/input_dispatcher.cpp"
     "src/tca8418_keypad.cpp"
@@ -21,6 +22,8 @@ set(COMPONENT_SRCS
     "src/ui_softkey_bar.cpp"
     "src/ui_sample_browser.cpp"
     "src/ui_sample_memory_page.cpp"
+    "pages/ui_sample_record_page.cpp"
+    "pages/ui_sample_edit_page.cpp"
     "styles/ui_theme.cpp"
 )
 

@@ -99,12 +99,8 @@ include(DaisyProject)
 
 set(CMSIS_DSP_DIR ${CMAKE_CURRENT_LIST_DIR}/libs/libDaisy/Drivers/CMSIS-DSP)
 
-target_include_directories(${FIRMWARE_NAME} PRIVATE
-    ${CMSIS_DSP_DIR}/Include
-)
-
-# Only add the CMSIS-DSP conversion helpers we actually need to limit flash usage.
-target_sources(${FIRMWARE_NAME} PRIVATE
+# Explicitly list the CMSIS-DSP sources we require (present in libDaisy’s CMSIS tree).
+set(CMSIS_DSP_SOURCES
     ${CMSIS_DSP_DIR}/Source/SupportFunctions/arm_float_to_f16.c
     ${CMSIS_DSP_DIR}/Source/SupportFunctions/arm_f16_to_float.c
     ${CMSIS_DSP_DIR}/Source/SupportFunctions/arm_float_to_q15.c
@@ -114,7 +110,16 @@ target_sources(${FIRMWARE_NAME} PRIVATE
     ${CMSIS_DSP_DIR}/Source/SupportFunctions/arm_q31_to_float.c
     ${CMSIS_DSP_DIR}/Source/SupportFunctions/arm_q7_to_float.c
     ${CMSIS_DSP_DIR}/Source/SupportFunctions/arm_copy_q15.c
+    ${CMSIS_DSP_DIR}/Source/InterpolationFunctions/arm_linear_interp_q15.c
 )
+
+add_library(cmsis_dsp_support OBJECT ${CMSIS_DSP_SOURCES})
+target_include_directories(cmsis_dsp_support PUBLIC ${CMSIS_DSP_DIR}/Include)
+target_include_directories(cmsis_dsp_support PUBLIC
+    ${CMAKE_CURRENT_LIST_DIR}/libs/libDaisy/Drivers/CMSIS_5/CMSIS/Core/Include
+    ${CMAKE_CURRENT_LIST_DIR}/libs/libDaisy/Drivers/CMSIS_5/CMSIS/Include
+)
+target_link_libraries(${FIRMWARE_NAME} PRIVATE cmsis_dsp_support)
 
 # Set linker specs to use nano library with nosys stubs
 set(CMAKE_EXE_LINKER_FLAGS "--specs=nano.specs --specs=nosys.specs")

@@ -125,13 +125,15 @@ class StatisticsManager {
     void invoke_browse_resp_callback(const uint8_t* data, size_t length);
 
     // Sample status callback
-    void set_sample_status_callback(void (*callback)(uint8_t state,
+    void set_sample_status_callback(void (*callback)(uint16_t sample_id,
+                                                     uint8_t state,
                                                      uint32_t sample_rate,
                                                      uint8_t channels,
                                                      uint32_t frames_played,
                                                      void* user_data),
                                     void* user_data);
-    void invoke_sample_status_callback(uint8_t state,
+    void invoke_sample_status_callback(uint16_t sample_id,
+                                       uint8_t state,
                                        uint32_t sample_rate,
                                        uint8_t channels,
                                        uint32_t frames_played);
@@ -174,7 +176,8 @@ class StatisticsManager {
     mutable SemaphoreHandle_t m_browse_resp_mutex;
 
     // Sample status callback
-    void (*m_sample_status_callback)(uint8_t state,
+    void (*m_sample_status_callback)(uint16_t sample_id,
+                                     uint8_t state,
                                      uint32_t sample_rate,
                                      uint8_t channels,
                                      uint32_t frames_played,

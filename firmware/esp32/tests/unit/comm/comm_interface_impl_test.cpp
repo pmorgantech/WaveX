@@ -51,11 +51,13 @@ static void comm_browse_callback(const uint8_t* data, size_t length, void* user_
     }
 }
 
-static void comm_sample_status_callback(uint8_t state,
+static void comm_sample_status_callback(uint16_t sample_id,
+                                        uint8_t state,
                                         uint32_t sample_rate,
                                         uint8_t channels,
                                         uint32_t frames_played,
                                         void* user_data) {
+    (void)sample_id;
     (void)state;
     (void)sample_rate;
     (void)channels;
@@ -151,7 +153,7 @@ TEST_F(CommInterfaceImplTest, SetSampleStatusListener) {
     comm->setSampleStatusListener(comm_sample_status_callback, &callback_called);
 
     // Invoke callback through StatisticsManager
-    stats->invoke_sample_status_callback(1, 44100, 2, 1000);
+    stats->invoke_sample_status_callback(1, 1, 44100, 2, 1000);
 
     EXPECT_TRUE(callback_called);
 }

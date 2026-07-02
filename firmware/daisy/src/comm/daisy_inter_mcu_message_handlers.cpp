@@ -264,6 +264,34 @@ static void HandlePreviewRequestMessage(const uint8_t* payload, size_t payload_s
     if (s_hw)
         s_hw->PrintLine("DAISY: HandlePreviewRequestMessage called - payload_size=%d",
                         (int)payload_size);
+
+    if (!payload || payload_size < sizeof(PreviewReqMessage)) {
+        if (s_hw) {
+            s_hw->PrintLine("DAISY: PreviewReq invalid size %d (expected %d)",
+                            (int)payload_size,
+                            (int)sizeof(PreviewReqMessage));
+        }
+        return;
+    }
+
+    PreviewReqMessage req{};
+    memcpy(&req, payload, sizeof(req));
+
+    if (s_hw) {
+        s_hw->PrintLine("DAISY: PreviewReq slot=%u start=%lu end=%lu decim=%u",
+                        (unsigned)req.slot,
+                        (unsigned long)req.start,
+                        (unsigned long)req.end,
+                        (unsigned)req.decim);
+    }
+
+#if WAVEX_AUDIO_ENGINE_ENABLED
+    WaveX::AudioEngine::OnPreviewReq(req);
+#else
+    if (s_hw) {
+        s_hw->PrintLine("DAISY: Audio engine disabled; cannot process preview req");
+    }
+#endif
 }
 
 static void HandleDataRequestMessage(const uint8_t* payload, size_t payload_size) {

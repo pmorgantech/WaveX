@@ -209,7 +209,7 @@ TEST_F(MessageTypeTest, BrowseRespMessage) {
 
 // Test SampleStatusMessage creation
 TEST_F(MessageTypeTest, SampleStatusMessage) {
-    SampleStatusMessage original = {1, 48000, 2, 1000};
+    SampleStatusMessage original = {1, 1, 2, 48000, 1000};
 
     size_t created =
         ProtocolHandler::CreateSampleStatusPacket(buffer_.data(), buffer_.size(), original);

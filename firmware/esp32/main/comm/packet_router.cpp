@@ -7,6 +7,7 @@
 
 #ifdef ESP_PLATFORM
 #include "esp_log.h"
+#include "esp_timer.h"
 #endif
 
 namespace WaveX {
@@ -148,7 +149,7 @@ void PacketRouter::route_by_message_type(uint8_t msg_type,
             ESP_LOGI("packet_router",
                      "Browse response received: %zu bytes (t=%lld us, seq=%u)",
                      payload_len,
-                     response_arrival_time_us,
+                     (long long)response_arrival_time_us,
                      sequence_number);
             handle_browse_resp(payload, payload_len);
             break;
@@ -156,8 +157,15 @@ void PacketRouter::route_by_message_type(uint8_t msg_type,
 
         case WaveX::Protocol::MSG_SAMPLE_STATUS: {
             WaveX::Protocol::SampleStatusMessage msg;
-            memcpy(&msg, payload, sizeof(msg));
-            handle_sample_status(msg);
+            if (payload_len >= sizeof(msg)) {
+                memcpy(&msg, payload, sizeof(msg));
+                handle_sample_status(msg);
+            } else {
+                ESP_LOGW("packet_router",
+                         "Sample status payload too small (%u vs %u)",
+                         (unsigned)payload_len,
+                         (unsigned)sizeof(msg));
+            }
         } break;
 
         case WaveX::Protocol::MSG_SAMPLE_STOP_RESP: {
@@ -239,7 +247,7 @@ WEAK_HANDLER void PacketRouter::handle_browse_resp(const uint8_t* data, size_t l
     ESP_LOGI("packet_router",
              "Browse response: %zu bytes (callback start t=%lld us)",
              length,
-             callback_start_time_us);
+             (long long)callback_start_time_us);
 
     // // Log raw payload for debugging (first 64 bytes)
     // ESP_LOGI("packet_router", "Browse response payload (first 64 bytes):");
@@ -260,14 +268,14 @@ WEAK_HANDLER void PacketRouter::handle_browse_resp(const uint8_t* data, size_t l
     int64_t callback_invoke_time_us = esp_timer_get_time();
     ESP_LOGI("packet_router",
              "About to invoke browse callback (t=%lld us, since arrival=%lld us)",
-             callback_invoke_time_us,
-             callback_invoke_time_us - callback_start_time_us);
+             (long long)callback_invoke_time_us,
+             (long long)(callback_invoke_time_us - callback_start_time_us));
     inter_mcu_invoke_browse_resp_callback(data, length);
     int64_t callback_complete_time_us = esp_timer_get_time();
     ESP_LOGI("packet_router",
              "Browse callback completed (t=%lld us, callback duration=%lld us)",
-             callback_complete_time_us,
-             callback_complete_time_us - callback_invoke_time_us);
+             (long long)callback_complete_time_us,
+             (long long)(callback_complete_time_us - callback_invoke_time_us));
 }
 
 WEAK_HANDLER void PacketRouter::handle_status_response(
@@ -284,9 +292,17 @@ WEAK_HANDLER void PacketRouter::handle_status_response(
     }
 }
 
-WEAK_HANDLER void PacketRouter::handle_sample_status(const WaveX::Protocol::SampleStatusMessage& msg) {
-    ESP_LOGI("packet_router", "Sample status: state=0x%02X", msg.state);
-    // TODO: Implement sample status handling
+WEAK_HANDLER void PacketRouter::handle_sample_status(
+    const WaveX::Protocol::SampleStatusMessage& msg) {
+    ESP_LOGI("packet_router",
+             "Sample status: id=%u state=0x%02X sr=%lu ch=%u frames=%lu",
+             (unsigned)msg.sample_id,
+             msg.state,
+             (unsigned long)msg.sample_rate,
+             msg.channels,
+             (unsigned long)msg.frames_played);
+    inter_mcu_invoke_sample_status_callback(
+        msg.sample_id, msg.state, msg.sample_rate, msg.channels, msg.frames_played);
 }
 
 WEAK_HANDLER void PacketRouter::handle_sample_stop_resp(const WaveX::Protocol::SampleStopRespMessage& msg) {
@@ -318,6 +334,9 @@ WEAK_HANDLER void PacketRouter::handle_wave_chunk(const WaveX::Protocol::WaveChu
                  samples[1],
                  samples[2],
                  samples[3]);
+
+        // Forward to inter-MCU layer for UI/UI consumers
+        inter_mcu_invoke_wave_chunk_callback(msg.offset, samples, msg.count);
     } else {
         ESP_LOGW("packet_router",
                  "Wave chunk payload size mismatch: expected %zu, got %zu",
