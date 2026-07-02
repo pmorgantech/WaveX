@@ -32,21 +32,21 @@ std::vector<uint8_t> ProtocolTestHelper::CreateWaveXPacket(
 std::vector<uint8_t> ProtocolTestHelper::CreateControlChangePacket(uint8_t parameter,
                                                                    uint8_t channel,
                                                                    uint16_t value) {
-    Protocol::ControlChangeMessage msg = {parameter, channel, value};
+    Protocol::ControlChangeMessage msg(parameter, channel, value);
     return CreateWaveXPacket(Protocol::MSG_CONTROL_CHANGE, &msg, sizeof(msg));
 }
 
 std::vector<uint8_t> ProtocolTestHelper::CreateNoteOnPacket(uint8_t note,
                                                             uint8_t velocity,
                                                             uint8_t channel) {
-    Protocol::NoteMessage msg = {note, velocity, channel, 0};
+    Protocol::NoteMessage msg(note, velocity, channel);
     return CreateWaveXPacket(Protocol::MSG_NOTE_ON, &msg, sizeof(msg));
 }
 
 std::vector<uint8_t> ProtocolTestHelper::CreateHeartbeatPacket(uint32_t uptime_ms,
                                                                uint32_t rx_total,
                                                                uint32_t loop_counter) {
-    Protocol::HeartbeatMessage msg = {uptime_ms, rx_total, loop_counter, 0, 0, 0};
+    Protocol::HeartbeatMessage msg(uptime_ms, rx_total, loop_counter);
     return CreateWaveXPacket(Protocol::MSG_HEARTBEAT, &msg, sizeof(msg));
 }
 
@@ -68,7 +68,7 @@ std::vector<uint8_t> ProtocolTestHelper::CreateBrowseReqPacket(const std::string
 std::vector<uint8_t> ProtocolTestHelper::CreateBrowseRespPacket(
     uint32_t total_count, const std::vector<Protocol::FileEntryWire>& entries) {
     std::vector<uint8_t> payload;
-    Protocol::BrowseRespHeader header = {total_count, static_cast<uint8_t>(entries.size())};
+    Protocol::BrowseRespHeader header(total_count, static_cast<uint8_t>(entries.size()));
     payload.insert(payload.end(),
                    reinterpret_cast<const uint8_t*>(&header),
                    reinterpret_cast<const uint8_t*>(&header) + sizeof(header));

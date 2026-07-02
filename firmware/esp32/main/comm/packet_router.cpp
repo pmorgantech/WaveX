@@ -62,8 +62,8 @@ void PacketRouter::route_unified_packet(const uint8_t* packet_data, size_t packe
     // Extract packet info using unified format
     uint8_t msg_type, flags;
     uint16_t sequence_number;
-    uint8_t payload[2048];  // Max payload size
-    size_t payload_size;
+    uint8_t payload[2048];                  // Max payload size
+    size_t payload_size = sizeof(payload);  // in: destination capacity; out: bytes copied
 
     if (!WaveX::Protocol::ProtocolHandler::ParseWaveXPacket(packet_data, packet_len, msg_type, payload, payload_size, sequence_number, flags)) {
         ESP_LOGE("packet_router", "Failed to parse unified packet");

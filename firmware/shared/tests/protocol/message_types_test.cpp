@@ -15,7 +15,7 @@ class MessageTypeTest : public ::testing::Test {
 
 // Test ControlChangeMessage creation and parsing
 TEST_F(MessageTypeTest, ControlChangeMessage) {
-    ControlChangeMessage original = {PARAM_VOLUME, 0, 0x7FFF};
+    ControlChangeMessage original(PARAM_VOLUME, 0, 0x7FFF);
 
     size_t created = ProtocolHandler::CreateControlChangePacket(
         buffer_.data(), buffer_.size(), original.parameter, original.channel, original.value);
@@ -34,7 +34,7 @@ TEST_F(MessageTypeTest, ControlChangeMessage) {
 
 // Test NoteMessage creation and parsing
 TEST_F(MessageTypeTest, NoteMessage) {
-    NoteMessage original = {60, 127, 0, 0};  // Middle C, max velocity
+    NoteMessage original(60, 127, 0);  // Middle C, max velocity
 
     size_t created_on = ProtocolHandler::CreateNoteOnPacket(
         buffer_.data(), buffer_.size(), original.note, original.velocity, original.channel);
@@ -60,7 +60,7 @@ TEST_F(MessageTypeTest, NoteMessage) {
 
 // Test SampleCtrlMessage creation and parsing
 TEST_F(MessageTypeTest, SampleCtrlMessage) {
-    SampleCtrlMessage original = {0, SAMPLE_PLAY_START, 1.0f};
+    SampleCtrlMessage original(0, SAMPLE_PLAY_START, 1.0f);
 
     size_t created =
         ProtocolHandler::CreateSampleCtrlPacket(buffer_.data(), buffer_.size(), original);
@@ -79,7 +79,7 @@ TEST_F(MessageTypeTest, SampleCtrlMessage) {
 
 // Test PreviewReqMessage creation and parsing
 TEST_F(MessageTypeTest, PreviewReqMessage) {
-    PreviewReqMessage original = {0, 0, 1000, 4};
+    PreviewReqMessage original(0, 0, 1000, 4);
 
     size_t created =
         ProtocolHandler::CreatePreviewReqPacket(buffer_.data(), buffer_.size(), original);
@@ -97,9 +97,9 @@ TEST_F(MessageTypeTest, PreviewReqMessage) {
     EXPECT_EQ(parsed.decim, original.decim);
 }
 
-// Test MeterPushMessage creation
+// Test MeterPushMessage creation and parsing
 TEST_F(MessageTypeTest, MeterPushMessage) {
-    MeterPushMessage original = {0x7FFF, 0x4000, 0x7FFF, 0x4000};
+    MeterPushMessage original(0x7FFF, 0x4000, 0x7FFF, 0x4000);
 
     size_t created =
         ProtocolHandler::CreateMeterPushPacket(buffer_.data(), buffer_.size(), original);
@@ -107,12 +107,25 @@ TEST_F(MessageTypeTest, MeterPushMessage) {
     ASSERT_GT(created, 0);
     EXPECT_TRUE(ProtocolHandler::ValidatePacket(buffer_.data(), created));
     EXPECT_EQ(ProtocolHandler::GetMessageType(buffer_.data()), MSG_METER_PUSH);
+
+    MeterPushMessage parsed;
+    bool result =
+        ProtocolHandler::ParseMessage(buffer_.data(), MSG_METER_PUSH, &parsed, sizeof(parsed));
+
+    EXPECT_TRUE(result);
+    EXPECT_EQ(parsed.rms_left, original.rms_left);
+    EXPECT_EQ(parsed.rms_right, original.rms_right);
+    EXPECT_EQ(parsed.peak_left, original.peak_left);
+    EXPECT_EQ(parsed.peak_right, original.peak_right);
 }
 
-// Test WaveChunkMessage creation
+// Test WaveChunkMessage creation and parsing (header + trailing sample payload)
 TEST_F(MessageTypeTest, WaveChunkMessage) {
-    WaveChunkMessage header = {0, 128};
-    std::vector<int16_t> samples(128, 0x7FFF);
+    WaveChunkMessage header(4096, 128);
+    std::vector<int16_t> samples(128);
+    for (size_t i = 0; i < samples.size(); ++i) {
+        samples[i] = static_cast<int16_t>(i * 7 - 300);
+    }
 
     size_t created = ProtocolHandler::CreateWaveChunkPacket(
         buffer_.data(), buffer_.size(), header, samples.data(), samples.size() * sizeof(int16_t));
@@ -120,11 +133,35 @@ TEST_F(MessageTypeTest, WaveChunkMessage) {
     ASSERT_GT(created, 0);
     EXPECT_TRUE(ProtocolHandler::ValidatePacket(buffer_.data(), created));
     EXPECT_EQ(ProtocolHandler::GetMessageType(buffer_.data()), MSG_WAVE_CHUNK);
+
+    uint8_t msg_type;
+    uint16_t seq;
+    uint8_t flags;
+    std::vector<uint8_t> parsed_payload(sizeof(WaveChunkMessage) +
+                                        samples.size() * sizeof(int16_t));
+    size_t parsed_payload_size = parsed_payload.size();
+
+    bool result = ProtocolHandler::ParseWaveXPacket(
+        buffer_.data(), created, msg_type, parsed_payload.data(), parsed_payload_size, seq, flags);
+
+    ASSERT_TRUE(result);
+    EXPECT_EQ(msg_type, MSG_WAVE_CHUNK);
+
+    const WaveChunkMessage* parsed_header =
+        reinterpret_cast<const WaveChunkMessage*>(parsed_payload.data());
+    EXPECT_EQ(parsed_header->offset, header.offset);
+    EXPECT_EQ(parsed_header->count, header.count);
+
+    const int16_t* parsed_samples =
+        reinterpret_cast<const int16_t*>(parsed_payload.data() + sizeof(WaveChunkMessage));
+    for (size_t i = 0; i < samples.size(); ++i) {
+        EXPECT_EQ(parsed_samples[i], samples[i]) << "sample index " << i;
+    }
 }
 
 // Test HeartbeatMessage creation and parsing
 TEST_F(MessageTypeTest, HeartbeatMessage) {
-    HeartbeatMessage original = {1000, 5000, 10000, 256, 128, 512};
+    HeartbeatMessage original(1000, 5000, 10000, 256, 128, 512);
 
     size_t created =
         ProtocolHandler::CreateHeartbeatPacket(buffer_.data(), buffer_.size(), original);
@@ -195,9 +232,11 @@ TEST_F(MessageTypeTest, BrowseReqMessage) {
     EXPECT_STREQ(parsed_path, path);
 }
 
-// Test BrowseResp creation
+// Test BrowseResp creation and parsing (header + entries array)
 TEST_F(MessageTypeTest, BrowseRespMessage) {
-    FileEntryWire entries[3] = {{1, 0, "dir1"}, {0, 1024, "file1.wav"}, {0, 2048, "file2.wav"}};
+    FileEntryWire entries[3] = {FileEntryWire(1, 0, "dir1"),
+                                FileEntryWire(0, 1024, "file1.wav", 44100, 2, 16, 5000),
+                                FileEntryWire(0, 2048, "file2.wav", 48000, 1, 24, 9000)};
 
     size_t created =
         ProtocolHandler::CreateBrowseRespPacket(buffer_.data(), buffer_.size(), 3, entries, 3);
@@ -205,11 +244,40 @@ TEST_F(MessageTypeTest, BrowseRespMessage) {
     ASSERT_GT(created, 0);
     EXPECT_TRUE(ProtocolHandler::ValidatePacket(buffer_.data(), created));
     EXPECT_EQ(ProtocolHandler::GetMessageType(buffer_.data()), MSG_BROWSE_RESP);
+
+    uint8_t msg_type;
+    uint16_t seq;
+    uint8_t flags;
+    std::vector<uint8_t> parsed_payload(sizeof(BrowseRespHeader) + 3 * sizeof(FileEntryWire));
+    size_t parsed_payload_size = parsed_payload.size();
+
+    bool result = ProtocolHandler::ParseWaveXPacket(
+        buffer_.data(), created, msg_type, parsed_payload.data(), parsed_payload_size, seq, flags);
+
+    ASSERT_TRUE(result);
+    EXPECT_EQ(msg_type, MSG_BROWSE_RESP);
+
+    const BrowseRespHeader* parsed_header =
+        reinterpret_cast<const BrowseRespHeader*>(parsed_payload.data());
+    EXPECT_EQ(parsed_header->total_count, 3u);
+    EXPECT_EQ(parsed_header->n, 3);
+
+    const FileEntryWire* parsed_entries =
+        reinterpret_cast<const FileEntryWire*>(parsed_payload.data() + sizeof(BrowseRespHeader));
+    for (int i = 0; i < 3; ++i) {
+        EXPECT_EQ(parsed_entries[i].is_dir, entries[i].is_dir) << "entry " << i;
+        EXPECT_EQ(parsed_entries[i].size_bytes, entries[i].size_bytes) << "entry " << i;
+        EXPECT_STREQ(parsed_entries[i].name, entries[i].name) << "entry " << i;
+        EXPECT_EQ(parsed_entries[i].sample_rate, entries[i].sample_rate) << "entry " << i;
+        EXPECT_EQ(parsed_entries[i].channels, entries[i].channels) << "entry " << i;
+        EXPECT_EQ(parsed_entries[i].bits_per_sample, entries[i].bits_per_sample) << "entry " << i;
+        EXPECT_EQ(parsed_entries[i].duration_ms, entries[i].duration_ms) << "entry " << i;
+    }
 }
 
-// Test SampleStatusMessage creation
+// Test SampleStatusMessage creation and parsing
 TEST_F(MessageTypeTest, SampleStatusMessage) {
-    SampleStatusMessage original = {1, 1, 2, 48000, 1000};
+    SampleStatusMessage original(1, 1, 2, 48000, 1000);
 
     size_t created =
         ProtocolHandler::CreateSampleStatusPacket(buffer_.data(), buffer_.size(), original);
@@ -217,11 +285,22 @@ TEST_F(MessageTypeTest, SampleStatusMessage) {
     ASSERT_GT(created, 0);
     EXPECT_TRUE(ProtocolHandler::ValidatePacket(buffer_.data(), created));
     EXPECT_EQ(ProtocolHandler::GetMessageType(buffer_.data()), MSG_SAMPLE_STATUS);
+
+    SampleStatusMessage parsed;
+    bool result =
+        ProtocolHandler::ParseMessage(buffer_.data(), MSG_SAMPLE_STATUS, &parsed, sizeof(parsed));
+
+    EXPECT_TRUE(result);
+    EXPECT_EQ(parsed.sample_id, original.sample_id);
+    EXPECT_EQ(parsed.state, original.state);
+    EXPECT_EQ(parsed.channels, original.channels);
+    EXPECT_EQ(parsed.sample_rate, original.sample_rate);
+    EXPECT_EQ(parsed.frames_played, original.frames_played);
 }
 
-// Test SampleStopReq/Resp messages
+// Test SampleStopReq/Resp messages round trip
 TEST_F(MessageTypeTest, SampleStopMessages) {
-    SampleStopReqMessage req = {0, {0}};
+    SampleStopReqMessage req(3);
 
     size_t created_req =
         ProtocolHandler::CreateSampleStopReqPacket(buffer_.data(), buffer_.size(), req);
@@ -229,51 +308,80 @@ TEST_F(MessageTypeTest, SampleStopMessages) {
     ASSERT_GT(created_req, 0);
     EXPECT_TRUE(ProtocolHandler::ValidatePacket(buffer_.data(), created_req));
 
-    SampleStopRespMessage resp = {1, {0}};
+    SampleStopReqMessage parsed_req;
+    EXPECT_TRUE(ProtocolHandler::ParseMessage(
+        buffer_.data(), MSG_SAMPLE_STOP_REQ, &parsed_req, sizeof(parsed_req)));
+    EXPECT_EQ(parsed_req.slot, req.slot);
+
+    SampleStopRespMessage resp(1);
 
     size_t created_resp =
         ProtocolHandler::CreateSampleStopRespPacket(buffer_.data(), buffer_.size(), resp);
 
     ASSERT_GT(created_resp, 0);
     EXPECT_TRUE(ProtocolHandler::ValidatePacket(buffer_.data(), created_resp));
+
+    SampleStopRespMessage parsed_resp;
+    EXPECT_TRUE(ProtocolHandler::ParseMessage(
+        buffer_.data(), MSG_SAMPLE_STOP_RESP, &parsed_resp, sizeof(parsed_resp)));
+    EXPECT_EQ(parsed_resp.success, resp.success);
 }
 
-// Test ErrorMessage creation
+// Test ErrorMessage creation and parsing
 TEST_F(MessageTypeTest, ErrorMessage) {
-    ErrorMessage original = {0x0001, "Test error message"};
+    ErrorMessage original(0x0001, "Test error message");
 
     size_t created = ProtocolHandler::CreateErrorPacket(buffer_.data(), buffer_.size(), original);
 
     ASSERT_GT(created, 0);
     EXPECT_TRUE(ProtocolHandler::ValidatePacket(buffer_.data(), created));
     EXPECT_EQ(ProtocolHandler::GetMessageType(buffer_.data()), MSG_ERROR);
+
+    ErrorMessage parsed;
+    bool result = ProtocolHandler::ParseMessage(buffer_.data(), MSG_ERROR, &parsed, sizeof(parsed));
+
+    EXPECT_TRUE(result);
+    EXPECT_EQ(parsed.code, original.code);
+    EXPECT_STREQ(parsed.msg, original.msg);
 }
 
-// Test SyncMessage creation
+// Test SyncMessage creation and parsing
 TEST_F(MessageTypeTest, SyncMessage) {
-    SyncMessage original = {1000, {0}};
+    SyncMessage original(1000);
 
     size_t created = ProtocolHandler::CreateSyncPacket(buffer_.data(), buffer_.size(), original);
 
     ASSERT_GT(created, 0);
     EXPECT_TRUE(ProtocolHandler::ValidatePacket(buffer_.data(), created));
     EXPECT_EQ(ProtocolHandler::GetMessageType(buffer_.data()), MSG_SYNC);
+
+    SyncMessage parsed;
+    bool result = ProtocolHandler::ParseMessage(buffer_.data(), MSG_SYNC, &parsed, sizeof(parsed));
+
+    EXPECT_TRUE(result);
+    EXPECT_EQ(parsed.timestamp_ms, original.timestamp_ms);
 }
 
-// Test AckMessage creation
+// Test AckMessage creation and parsing
 TEST_F(MessageTypeTest, AckMessage) {
-    AckMessage original = {0x1234};
+    AckMessage original(0x1234);
 
     size_t created = ProtocolHandler::CreateAckPacket(buffer_.data(), buffer_.size(), original);
 
     ASSERT_GT(created, 0);
     EXPECT_TRUE(ProtocolHandler::ValidatePacket(buffer_.data(), created));
     EXPECT_EQ(ProtocolHandler::GetMessageType(buffer_.data()), MSG_ACK);
+
+    AckMessage parsed;
+    bool result = ProtocolHandler::ParseMessage(buffer_.data(), MSG_ACK, &parsed, sizeof(parsed));
+
+    EXPECT_TRUE(result);
+    EXPECT_EQ(parsed.serial_id, original.serial_id);
 }
 
-// Test SamplePlayIndexMessage creation
+// Test SamplePlayIndexMessage creation and parsing
 TEST_F(MessageTypeTest, SamplePlayIndexMessage) {
-    SamplePlayIndexMessage original = {5};
+    SamplePlayIndexMessage original(5);
 
     size_t created =
         ProtocolHandler::CreateSamplePlayIndexPacket(buffer_.data(), buffer_.size(), original);
@@ -281,11 +389,18 @@ TEST_F(MessageTypeTest, SamplePlayIndexMessage) {
     ASSERT_GT(created, 0);
     EXPECT_TRUE(ProtocolHandler::ValidatePacket(buffer_.data(), created));
     EXPECT_EQ(ProtocolHandler::GetMessageType(buffer_.data()), MSG_SAMPLE_PLAY_INDEX_REQ);
+
+    SamplePlayIndexMessage parsed;
+    bool result = ProtocolHandler::ParseMessage(
+        buffer_.data(), MSG_SAMPLE_PLAY_INDEX_REQ, &parsed, sizeof(parsed));
+
+    EXPECT_TRUE(result);
+    EXPECT_EQ(parsed.index, original.index);
 }
 
-// Test SampleGetPathMessage creation
+// Test SampleGetPathMessage creation and parsing
 TEST_F(MessageTypeTest, SampleGetPathMessage) {
-    SampleGetPathMessage original = {10};
+    SampleGetPathMessage original(10);
 
     size_t created =
         ProtocolHandler::CreateSampleGetPathPacket(buffer_.data(), buffer_.size(), original);
@@ -293,11 +408,18 @@ TEST_F(MessageTypeTest, SampleGetPathMessage) {
     ASSERT_GT(created, 0);
     EXPECT_TRUE(ProtocolHandler::ValidatePacket(buffer_.data(), created));
     EXPECT_EQ(ProtocolHandler::GetMessageType(buffer_.data()), MSG_SAMPLE_GET_PATH_REQ);
+
+    SampleGetPathMessage parsed;
+    bool result = ProtocolHandler::ParseMessage(
+        buffer_.data(), MSG_SAMPLE_GET_PATH_REQ, &parsed, sizeof(parsed));
+
+    EXPECT_TRUE(result);
+    EXPECT_EQ(parsed.index, original.index);
 }
 
-// Test SamplePathResponseMessage creation
+// Test SamplePathResponseMessage creation and parsing
 TEST_F(MessageTypeTest, SamplePathResponseMessage) {
-    SamplePathResponseMessage original = {10, "/samples/test.wav"};
+    SamplePathResponseMessage original(10, "/samples/test.wav");
 
     size_t created =
         ProtocolHandler::CreateSamplePathResponsePacket(buffer_.data(), buffer_.size(), original);
@@ -305,6 +427,145 @@ TEST_F(MessageTypeTest, SamplePathResponseMessage) {
     ASSERT_GT(created, 0);
     EXPECT_TRUE(ProtocolHandler::ValidatePacket(buffer_.data(), created));
     EXPECT_EQ(ProtocolHandler::GetMessageType(buffer_.data()), MSG_SAMPLE_GET_PATH_RESP);
+
+    SamplePathResponseMessage parsed;
+    bool result = ProtocolHandler::ParseMessage(
+        buffer_.data(), MSG_SAMPLE_GET_PATH_RESP, &parsed, sizeof(parsed));
+
+    EXPECT_TRUE(result);
+    EXPECT_EQ(parsed.index, original.index);
+    EXPECT_STREQ(parsed.path, original.path);
+}
+
+// Test DataRequestMessage creation and parsing (previously untested)
+TEST_F(MessageTypeTest, DataRequestMessage) {
+    DataRequestMessage original(2);  // 2 = wave data
+
+    size_t created =
+        ProtocolHandler::CreateDataRequestPacket(buffer_.data(), buffer_.size(), original);
+
+    ASSERT_GT(created, 0);
+    EXPECT_TRUE(ProtocolHandler::ValidatePacket(buffer_.data(), created));
+    EXPECT_EQ(ProtocolHandler::GetMessageType(buffer_.data()), MSG_DATA_REQUEST);
+
+    DataRequestMessage parsed;
+    bool result = ProtocolHandler::ParseDataRequest(buffer_.data(), parsed);
+
+    EXPECT_TRUE(result);
+    EXPECT_EQ(parsed.request_type, original.request_type);
+}
+
+// Test StatusRequestMessage creation and parsing (previously untested; no dedicated
+// Create*/Parse* helpers exist yet, so this exercises the generic packet path directly)
+TEST_F(MessageTypeTest, StatusRequestMessage) {
+    StatusRequestMessage original(STATUS_CATEGORY_SAMPLE_MEM);
+
+    size_t created = ProtocolHandler::CreatePacket(
+        buffer_.data(), buffer_.size(), MSG_STATUS_REQUEST, &original, sizeof(original));
+
+    ASSERT_GT(created, 0);
+    EXPECT_TRUE(ProtocolHandler::ValidatePacket(buffer_.data(), created));
+    EXPECT_EQ(ProtocolHandler::GetMessageType(buffer_.data()), MSG_STATUS_REQUEST);
+
+    StatusRequestMessage parsed;
+    bool result =
+        ProtocolHandler::ParseMessage(buffer_.data(), MSG_STATUS_REQUEST, &parsed, sizeof(parsed));
+
+    EXPECT_TRUE(result);
+    EXPECT_EQ(parsed.category, original.category);
+}
+
+// Test SampleLoadMessage creation and parsing (previously untested; no dedicated
+// Create*/Parse* helpers exist yet, so this exercises the generic packet path directly)
+TEST_F(MessageTypeTest, SampleLoadMessage) {
+    SampleLoadMessage original(42, 1048576, 48000, 2, 24, "/samples/kick.wav");
+
+    size_t created = ProtocolHandler::CreatePacket(
+        buffer_.data(), buffer_.size(), MSG_SAMPLE_LOAD, &original, sizeof(original));
+
+    ASSERT_GT(created, 0);
+    EXPECT_TRUE(ProtocolHandler::ValidatePacket(buffer_.data(), created));
+    EXPECT_EQ(ProtocolHandler::GetMessageType(buffer_.data()), MSG_SAMPLE_LOAD);
+
+    SampleLoadMessage parsed;
+    bool result =
+        ProtocolHandler::ParseMessage(buffer_.data(), MSG_SAMPLE_LOAD, &parsed, sizeof(parsed));
+
+    EXPECT_TRUE(result);
+    EXPECT_EQ(parsed.sample_id, original.sample_id);
+    EXPECT_EQ(parsed.sample_size, original.sample_size);
+    EXPECT_EQ(parsed.sample_rate, original.sample_rate);
+    EXPECT_EQ(parsed.channels, original.channels);
+    EXPECT_EQ(parsed.bit_depth, original.bit_depth);
+    EXPECT_STREQ(parsed.path, original.path);
+}
+
+// Test SampleMemStatusMessage (+ SampleMemEntryMessage) creation and parsing (previously
+// untested; no dedicated Create*/Parse* helpers exist yet, so this exercises the generic
+// packet path directly)
+TEST_F(MessageTypeTest, SampleMemStatusMessage) {
+    SampleMemStatusMessage original(
+        /*small_total_bytes=*/65536,
+        /*small_free_bytes=*/32768,
+        /*large_total_bytes=*/4194304,
+        /*large_free_bytes=*/2097152,
+        /*largest_free_bytes=*/1048576,
+        /*in_use_bytes=*/3145728,
+        /*failed_allocs=*/1);
+
+    ASSERT_TRUE(original.AddEntry(SampleMemEntryMessage(1, 65536, 65536, 0, 0, 0, 48000, 2, 16)));
+    ASSERT_TRUE(
+        original.AddEntry(SampleMemEntryMessage(2, 1048576, 524288, 0xFF, 3, 8, 44100, 1, 24)));
+    EXPECT_EQ(original.sample_count, 2);
+
+    size_t created = ProtocolHandler::CreatePacket(
+        buffer_.data(), buffer_.size(), MSG_STATUS_RESPONSE, &original, sizeof(original));
+
+    ASSERT_GT(created, 0);
+    EXPECT_TRUE(ProtocolHandler::ValidatePacket(buffer_.data(), created));
+    EXPECT_EQ(ProtocolHandler::GetMessageType(buffer_.data()), MSG_STATUS_RESPONSE);
+
+    SampleMemStatusMessage parsed;
+    bool result =
+        ProtocolHandler::ParseMessage(buffer_.data(), MSG_STATUS_RESPONSE, &parsed, sizeof(parsed));
+
+    EXPECT_TRUE(result);
+    EXPECT_EQ(parsed.category, original.category);
+    EXPECT_EQ(parsed.sample_count, original.sample_count);
+    EXPECT_EQ(parsed.small_total_bytes, original.small_total_bytes);
+    EXPECT_EQ(parsed.small_free_bytes, original.small_free_bytes);
+    EXPECT_EQ(parsed.large_total_bytes, original.large_total_bytes);
+    EXPECT_EQ(parsed.large_free_bytes, original.large_free_bytes);
+    EXPECT_EQ(parsed.largest_free_bytes, original.largest_free_bytes);
+    EXPECT_EQ(parsed.in_use_bytes, original.in_use_bytes);
+    EXPECT_EQ(parsed.failed_allocs, original.failed_allocs);
+
+    for (int i = 0; i < original.sample_count; ++i) {
+        EXPECT_EQ(parsed.entries[i].sample_id, original.entries[i].sample_id) << "entry " << i;
+        EXPECT_EQ(parsed.entries[i].allocated_bytes, original.entries[i].allocated_bytes)
+            << "entry " << i;
+        EXPECT_EQ(parsed.entries[i].loaded_bytes, original.entries[i].loaded_bytes)
+            << "entry " << i;
+        EXPECT_EQ(parsed.entries[i].cls, original.entries[i].cls) << "entry " << i;
+        EXPECT_EQ(parsed.entries[i].page, original.entries[i].page) << "entry " << i;
+        EXPECT_EQ(parsed.entries[i].slot, original.entries[i].slot) << "entry " << i;
+        EXPECT_EQ(parsed.entries[i].sample_rate, original.entries[i].sample_rate) << "entry " << i;
+        EXPECT_EQ(parsed.entries[i].channels, original.entries[i].channels) << "entry " << i;
+        EXPECT_EQ(parsed.entries[i].bit_depth, original.entries[i].bit_depth) << "entry " << i;
+    }
+}
+
+// SampleMemStatusMessage::AddEntry bounds check
+TEST_F(MessageTypeTest, SampleMemStatusMessageAddEntryBounds) {
+    SampleMemStatusMessage status(0, 0, 0, 0, 0, 0, 0);
+    for (int i = 0; i < WAVEX_SAMPLE_STATUS_MAX_ENTRIES; ++i) {
+        EXPECT_TRUE(status.AddEntry(
+            SampleMemEntryMessage(static_cast<uint16_t>(i), 0, 0, 0, 0, 0, 0, 0, 0)));
+    }
+    EXPECT_EQ(status.sample_count, WAVEX_SAMPLE_STATUS_MAX_ENTRIES);
+    // One more push must be rejected, not overflow the fixed array.
+    EXPECT_FALSE(status.AddEntry(SampleMemEntryMessage(99, 0, 0, 0, 0, 0, 0, 0, 0)));
+    EXPECT_EQ(status.sample_count, WAVEX_SAMPLE_STATUS_MAX_ENTRIES);
 }
 
 // Test GetMessageType
@@ -360,7 +621,7 @@ TEST_F(MessageTypeTest, ParseWaveXPacket) {
     uint16_t sequence = 0x1234;
     uint8_t flags = 0;
 
-    HeartbeatMessage payload = {1000, 5000, 10000, 256, 128, 512};
+    HeartbeatMessage payload(1000, 5000, 10000, 256, 128, 512);
 
     size_t created = ProtocolHandler::CreateWaveXPacket(
         buffer_.data(), buffer_.size(), msg_type, &payload, sizeof(payload), sequence, flags);

@@ -169,9 +169,19 @@ bool ProtocolHandler::ParseWaveXPacket(const uint8_t* buffer,
     if (!ValidateWaveXPacket(buffer, buffer_size))
         return false;
 
-    // Extract payload
-    payload_size = total_size - 6;  // header(4) + crc(2)
-    memcpy(payload, buffer + 4, payload_size);
+    // Extract payload. `payload_size` is in/out: on entry it is the caller's
+    // destination buffer capacity; copy no more than that, even though the
+    // packet's payload region (zero-padded up to the size class) may be
+    // larger. Without this clamp, a caller sizing its buffer to a specific
+    // message struct (e.g. ErrorMessage, 50 bytes) can be overrun by a larger
+    // padded region (e.g. 58 bytes for a 64-byte packet) - this was a real,
+    // previously-latent stack/heap overflow caught by round-trip tests.
+    size_t available_payload = total_size - 6;  // header(4) + crc(2)
+    size_t to_copy = payload_size < available_payload ? payload_size : available_payload;
+    if (payload && to_copy > 0) {
+        memcpy(payload, buffer + 4, to_copy);
+    }
+    payload_size = to_copy;
 
     return true;
 }
@@ -276,10 +286,7 @@ size_t ProtocolHandler::CreateSamplePathResponsePacket(uint8_t* buffer,
 // Create control change packet using unified packet system
 size_t ProtocolHandler::CreateControlChangePacket(
     uint8_t* buffer, size_t buffer_size, uint8_t parameter, uint8_t channel, uint16_t value) {
-    ControlChangeMessage msg;
-    msg.parameter = parameter;
-    msg.channel = channel;
-    msg.value = value;
+    ControlChangeMessage msg(parameter, channel, value);
     return CreateUnifiedPacket(
         buffer, buffer_size, MSG_CONTROL_CHANGE, &msg, sizeof(ControlChangeMessage));
 }
@@ -287,11 +294,7 @@ size_t ProtocolHandler::CreateControlChangePacket(
 // Create note on packet using unified packet system
 size_t ProtocolHandler::CreateNoteOnPacket(
     uint8_t* buffer, size_t buffer_size, uint8_t note, uint8_t velocity, uint8_t channel) {
-    NoteMessage msg;
-    msg.note = note;
-    msg.velocity = velocity;
-    msg.channel = channel;
-    msg.reserved = 0;
+    NoteMessage msg(note, velocity, channel);
     return CreateUnifiedPacket(buffer, buffer_size, MSG_NOTE_ON, &msg, sizeof(NoteMessage));
 }
 
@@ -300,11 +303,7 @@ size_t ProtocolHandler::CreateNoteOffPacket(uint8_t* buffer,
                                             size_t buffer_size,
                                             uint8_t note,
                                             uint8_t channel) {
-    NoteMessage msg;
-    msg.note = note;
-    msg.velocity = 0;
-    msg.channel = channel;
-    msg.reserved = 0;
+    NoteMessage msg(note, 0, channel);
     return CreateUnifiedPacket(buffer, buffer_size, MSG_NOTE_OFF, &msg, sizeof(NoteMessage));
 }
 

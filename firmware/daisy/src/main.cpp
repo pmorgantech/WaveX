@@ -500,7 +500,7 @@ int main(void) {
             WAVEX_LOG_DAISY(INTER_MCU_LINK, "Sending heartbeat during auditioning (if active)");
 #endif
             // Create heartbeat message using flexible packet system with detailed CPU metrics
-            WaveX::Protocol::HeartbeatMessage heartbeat_msg = {
+            WaveX::Protocol::HeartbeatMessage heartbeat_msg(
                 current_time,  // uptime_ms
                 0,             // rx_total (placeholder)
                 loop_counter,  // loop_counter
@@ -510,7 +510,7 @@ int main(void) {
                            1000.0f),  // cpu_min_percent (scaled by 10)
                 (uint16_t)(WaveX::AudioEngine::GetMaxCpuLoad() *
                            1000.0f)  // cpu_max_percent (scaled by 10)
-            };
+            );
 
             int heartbeat_result = WaveX::Comm::UartLinkSend(
                 WaveX::Protocol::MSG_HEARTBEAT, &heartbeat_msg, sizeof(heartbeat_msg));
@@ -564,12 +564,11 @@ int main(void) {
             uint16_t q_pkR = (uint16_t)(fminf(1.f, m.peakR) * 32767.f);
 
             // Create meter push message for UART transmission
-            WaveX::Protocol::MeterPushMessage meter_msg = {
-                q_rmsL,  // rms_left
-                q_rmsR,  // rms_right
-                q_pkL,   // peak_left
-                q_pkR    // peak_right
-            };
+            WaveX::Protocol::MeterPushMessage meter_msg(q_rmsL,  // rms_left
+                                                        q_rmsR,  // rms_right
+                                                        q_pkL,   // peak_left
+                                                        q_pkR    // peak_right
+            );
 
             // Send meter data via UART (not SPI - SPI reserved for browse/wave only)
             int result = WaveX::Comm::UartLinkSend(

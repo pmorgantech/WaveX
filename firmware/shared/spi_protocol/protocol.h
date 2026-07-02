@@ -110,11 +110,44 @@ enum ControlParameter : uint8_t {
 static const size_t FILE_NAME_MAX = 48;
 static const size_t BROWSE_PATH_MAX = 96;
 
+namespace detail {
+// Bounded, always-null-terminated string copy for fixed-size wire char arrays.
+// dest_size must be the full array size (including the byte reserved for '\0').
+inline void CopyWireString(char* dest, size_t dest_size, const char* src) {
+    if (!dest || dest_size == 0)
+        return;
+    if (!src) {
+        dest[0] = '\0';
+        return;
+    }
+    size_t i = 0;
+    for (; i < dest_size - 1 && src[i] != '\0'; ++i) {
+        dest[i] = src[i];
+    }
+    dest[i] = '\0';
+}
+}  // namespace detail
+
+// All message structs below are wire formats sent verbatim over SPI/UART: keep
+// them packed, standard-layout, and free of virtual functions. Each has a
+// zero-initializing default constructor (for the "declare then Parse() into
+// it" pattern) and a named-argument constructor. Having any user-declared
+// constructor makes the type a non-aggregate, so `Type x = {a, b, c};` /
+// designated-initializer construction no longer compiles — construct with
+// `Type x(a, b, c);` instead. This is deliberate: it forces every call site to
+// be updated (and re-checked) whenever a field is added, reordered, or a
+// reserved slot is repurposed, instead of silently reinterpreting positional
+// braces.
+
 // Control change message
 struct ControlChangeMessage {
     uint8_t parameter;  // ControlParameter
     uint8_t channel;    // 0-15
     uint16_t value;     // 0-65535
+
+    ControlChangeMessage() : parameter(0), channel(0), value(0) {}
+    ControlChangeMessage(uint8_t parameter_, uint8_t channel_, uint16_t value_)
+        : parameter(parameter_), channel(channel_), value(value_) {}
 } __attribute__((packed));
 
 // Note message
@@ -123,6 +156,10 @@ struct NoteMessage {
     uint8_t velocity;  // 0-127
     uint8_t channel;   // 0-15
     uint8_t reserved;  // Reserved for future use
+
+    NoteMessage() : note(0), velocity(0), channel(0), reserved(0) {}
+    NoteMessage(uint8_t note_, uint8_t velocity_, uint8_t channel_)
+        : note(note_), velocity(velocity_), channel(channel_), reserved(0) {}
 } __attribute__((packed));
 
 // Sample load message
@@ -133,6 +170,23 @@ struct SampleLoadMessage {
     uint8_t channels;            // Number of channels (1 or 2) (optional hint)
     uint8_t bit_depth;           // Bit depth (16 or 24) (optional hint)
     char path[BROWSE_PATH_MAX];  // Absolute/normalized path on Daisy SD
+
+    SampleLoadMessage() : sample_id(0), sample_size(0), sample_rate(0), channels(0), bit_depth(0) {
+        path[0] = '\0';
+    }
+    SampleLoadMessage(uint16_t sample_id_,
+                      uint32_t sample_size_,
+                      uint16_t sample_rate_,
+                      uint8_t channels_,
+                      uint8_t bit_depth_,
+                      const char* path_)
+        : sample_id(sample_id_),
+          sample_size(sample_size_),
+          sample_rate(sample_rate_),
+          channels(channels_),
+          bit_depth(bit_depth_) {
+        detail::CopyWireString(path, sizeof(path), path_);
+    }
 } __attribute__((packed));
 
 // Sample control message
@@ -146,6 +200,10 @@ struct SampleCtrlMessage {
     uint8_t slot;  // 0 for now
     uint8_t cmd;   // SampleCtrlCmd
     float rate;    // playback rate (1.0 = normal)
+
+    SampleCtrlMessage() : slot(0), cmd(0), rate(1.0f) {}
+    SampleCtrlMessage(uint8_t slot_, uint8_t cmd_, float rate_)
+        : slot(slot_), cmd(cmd_), rate(rate_) {}
 } __attribute__((packed));
 
 // Preview request message
@@ -154,12 +212,20 @@ struct PreviewReqMessage {
     uint32_t start;  // sample index start
     uint32_t end;    // sample index end (exclusive)
     uint16_t decim;  // decimation factor
+
+    PreviewReqMessage() : slot(0), start(0), end(0), decim(1) {}
+    PreviewReqMessage(uint8_t slot_, uint32_t start_, uint32_t end_, uint16_t decim_)
+        : slot(slot_), start(start_), end(end_), decim(decim_) {}
 } __attribute__((packed));
 
 // Data request message (ESP32 → Daisy: request queued data)
 struct DataRequestMessage {
     uint8_t request_type;  // 0 = any data, 1 = meter data, 2 = wave data
     uint8_t reserved[3];   // Reserved for future use
+
+    DataRequestMessage() : request_type(0), reserved{0, 0, 0} {}
+    explicit DataRequestMessage(uint8_t request_type_)
+        : request_type(request_type_), reserved{0, 0, 0} {}
 } __attribute__((packed));
 
 // Status request/response categories
@@ -172,6 +238,9 @@ enum StatusCategory : uint8_t {
 struct StatusRequestMessage {
     uint8_t category;  // StatusCategory
     uint8_t reserved[3];
+
+    StatusRequestMessage() : category(0), reserved{0, 0, 0} {}
+    explicit StatusRequestMessage(uint8_t category_) : category(category_), reserved{0, 0, 0} {}
 } __attribute__((packed));
 
 // Meter push (backend->frontend) - stereo version
@@ -180,6 +249,16 @@ struct MeterPushMessage {
     uint16_t rms_right;   // Right channel RMS (0-32767)
     uint16_t peak_left;   // Left channel peak (0-32767)
     uint16_t peak_right;  // Right channel peak (0-32767)
+
+    MeterPushMessage() : rms_left(0), rms_right(0), peak_left(0), peak_right(0) {}
+    MeterPushMessage(uint16_t rms_left_,
+                     uint16_t rms_right_,
+                     uint16_t peak_left_,
+                     uint16_t peak_right_)
+        : rms_left(rms_left_),
+          rms_right(rms_right_),
+          peak_left(peak_left_),
+          peak_right(peak_right_) {}
 } __attribute__((packed));
 
 // Wave chunk (backend->frontend)
@@ -187,6 +266,9 @@ struct WaveChunkMessage {
     uint32_t offset;  // index in preview stream
     uint16_t count;   // number of int16 samples following
     // payload follows (count * int16)
+
+    WaveChunkMessage() : offset(0), count(0) {}
+    WaveChunkMessage(uint32_t offset_, uint16_t count_) : offset(offset_), count(count_) {}
 } __attribute__((packed));
 
 struct FileEntryWire {
@@ -198,11 +280,39 @@ struct FileEntryWire {
     uint16_t channels;         // 0 if not a WAV file or unknown
     uint16_t bits_per_sample;  // 0 if not a WAV file or unknown
     uint32_t duration_ms;      // Duration in milliseconds (0 if unknown)
+
+    FileEntryWire()
+        : is_dir(0),
+          size_bytes(0),
+          sample_rate(0),
+          channels(0),
+          bits_per_sample(0),
+          duration_ms(0) {
+        name[0] = '\0';
+    }
+    FileEntryWire(uint8_t is_dir_,
+                  uint32_t size_bytes_,
+                  const char* name_,
+                  uint32_t sample_rate_ = 0,
+                  uint16_t channels_ = 0,
+                  uint16_t bits_per_sample_ = 0,
+                  uint32_t duration_ms_ = 0)
+        : is_dir(is_dir_),
+          size_bytes(size_bytes_),
+          sample_rate(sample_rate_),
+          channels(channels_),
+          bits_per_sample(bits_per_sample_),
+          duration_ms(duration_ms_) {
+        detail::CopyWireString(name, sizeof(name), name_);
+    }
 } __attribute__((packed));
 
 struct BrowseRespHeader {
     uint32_t total_count;
     uint8_t n;
+
+    BrowseRespHeader() : total_count(0), n(0) {}
+    BrowseRespHeader(uint32_t total_count_, uint8_t n_) : total_count(total_count_), n(n_) {}
 } __attribute__((packed));
 
 // Sample status (playback or load notifications)
@@ -212,35 +322,65 @@ struct SampleStatusMessage {
     uint8_t channels;
     uint32_t sample_rate;
     uint32_t frames_played;  // for load-complete: total frames loaded
+
+    SampleStatusMessage() : sample_id(0), state(0), channels(0), sample_rate(0), frames_played(0) {}
+    SampleStatusMessage(uint16_t sample_id_,
+                        uint8_t state_,
+                        uint8_t channels_,
+                        uint32_t sample_rate_,
+                        uint32_t frames_played_)
+        : sample_id(sample_id_),
+          state(state_),
+          channels(channels_),
+          sample_rate(sample_rate_),
+          frames_played(frames_played_) {}
 } __attribute__((packed));
 
 // Sample stop request (now includes slot)
 struct SampleStopReqMessage {
     uint8_t slot;         // Slot of currently playing sample (0 for now)
     uint8_t reserved[3];  // Reserved for alignment/future
+
+    SampleStopReqMessage() : slot(0), reserved{0, 0, 0} {}
+    explicit SampleStopReqMessage(uint8_t slot_) : slot(slot_), reserved{0, 0, 0} {}
 } __attribute__((packed));
 
 // Sample stop response
 struct SampleStopRespMessage {
     uint8_t success;      // 1=successfully stopped, 0=failed
     uint8_t reserved[3];  // Reserved for future use
+
+    SampleStopRespMessage() : success(0), reserved{0, 0, 0} {}
+    explicit SampleStopRespMessage(uint8_t success_) : success(success_), reserved{0, 0, 0} {}
 } __attribute__((packed));
 
 // Error message (short)
 struct ErrorMessage {
     uint16_t code;
     char msg[48];
+
+    ErrorMessage() : code(0) { msg[0] = '\0'; }
+    ErrorMessage(uint16_t code_, const char* msg_) : code(code_) {
+        detail::CopyWireString(msg, sizeof(msg), msg_);
+    }
 } __attribute__((packed));
 
 // Acknowledgment message
 struct AckMessage {
     uint16_t serial_id;  // Serial ID of the message being acknowledged
+
+    AckMessage() : serial_id(0) {}
+    explicit AckMessage(uint16_t serial_id_) : serial_id(serial_id_) {}
 } __attribute__((packed));
 
 // Sync message (simple keepalive)
 struct SyncMessage {
     uint32_t timestamp_ms;  // Timestamp for sync
     uint8_t reserved[4];    // Reserved for future use
+
+    SyncMessage() : timestamp_ms(0), reserved{0, 0, 0, 0} {}
+    explicit SyncMessage(uint32_t timestamp_ms_)
+        : timestamp_ms(timestamp_ms_), reserved{0, 0, 0, 0} {}
 } __attribute__((packed));
 
 // Heartbeat (bidirectional) - extended with CPU usage
@@ -251,20 +391,51 @@ struct HeartbeatMessage {
     uint16_t cpu_avg_percent;  // Average CPU usage as percentage * 10 (e.g., 25.6% = 256)
     uint16_t cpu_min_percent;  // Minimum CPU usage as percentage * 10
     uint16_t cpu_max_percent;  // Maximum CPU usage as percentage * 10
+
+    HeartbeatMessage()
+        : uptime_ms(0),
+          rx_total(0),
+          loop_counter(0),
+          cpu_avg_percent(0),
+          cpu_min_percent(0),
+          cpu_max_percent(0) {}
+    HeartbeatMessage(uint32_t uptime_ms_,
+                     uint32_t rx_total_,
+                     uint32_t loop_counter_,
+                     uint16_t cpu_avg_percent_ = 0,
+                     uint16_t cpu_min_percent_ = 0,
+                     uint16_t cpu_max_percent_ = 0)
+        : uptime_ms(uptime_ms_),
+          rx_total(rx_total_),
+          loop_counter(loop_counter_),
+          cpu_avg_percent(cpu_avg_percent_),
+          cpu_min_percent(cpu_min_percent_),
+          cpu_max_percent(cpu_max_percent_) {}
 } __attribute__((packed));
 
 // Index-based file selection messages
 struct SamplePlayIndexMessage {
     uint32_t index;  // File index in current directory
+
+    SamplePlayIndexMessage() : index(0) {}
+    explicit SamplePlayIndexMessage(uint32_t index_) : index(index_) {}
 } __attribute__((packed));
 
 struct SampleGetPathMessage {
     uint32_t index;  // File index in current directory
+
+    SampleGetPathMessage() : index(0) {}
+    explicit SampleGetPathMessage(uint32_t index_) : index(index_) {}
 } __attribute__((packed));
 
 struct SamplePathResponseMessage {
     uint32_t index;  // File index that was requested
     char path[200];  // Full file path (null-terminated)
+
+    SamplePathResponseMessage() : index(0) { path[0] = '\0'; }
+    SamplePathResponseMessage(uint32_t index_, const char* path_) : index(index_) {
+        detail::CopyWireString(path, sizeof(path), path_);
+    }
 } __attribute__((packed));
 
 // Sample memory status entry (Daisy -> ESP32)
@@ -278,6 +449,35 @@ struct SampleMemEntryMessage {
     uint16_t sample_rate;      // Hz
     uint8_t channels;          // 1 or 2
     uint8_t bit_depth;         // e.g., 16
+
+    SampleMemEntryMessage()
+        : sample_id(0),
+          allocated_bytes(0),
+          loaded_bytes(0),
+          cls(0),
+          page(0),
+          slot(0),
+          sample_rate(0),
+          channels(0),
+          bit_depth(0) {}
+    SampleMemEntryMessage(uint16_t sample_id_,
+                          uint32_t allocated_bytes_,
+                          uint32_t loaded_bytes_,
+                          uint8_t cls_,
+                          uint16_t page_,
+                          uint16_t slot_,
+                          uint16_t sample_rate_,
+                          uint8_t channels_,
+                          uint8_t bit_depth_)
+        : sample_id(sample_id_),
+          allocated_bytes(allocated_bytes_),
+          loaded_bytes(loaded_bytes_),
+          cls(cls_),
+          page(page_),
+          slot(slot_),
+          sample_rate(sample_rate_),
+          channels(channels_),
+          bit_depth(bit_depth_) {}
 } __attribute__((packed));
 
 // Sample memory status payload (Daisy -> ESP32)
@@ -293,6 +493,45 @@ struct SampleMemStatusMessage {
     uint32_t in_use_bytes;
     uint32_t failed_allocs;
     SampleMemEntryMessage entries[WAVEX_SAMPLE_STATUS_MAX_ENTRIES];
+
+    // Default-constructs with sample_count=0; fill `entries[0..sample_count)`
+    // and call SetSampleCount() before sending.
+    SampleMemStatusMessage()
+        : category(STATUS_CATEGORY_SAMPLE_MEM),
+          sample_count(0),
+          reserved{0, 0},
+          small_total_bytes(0),
+          small_free_bytes(0),
+          large_total_bytes(0),
+          large_free_bytes(0),
+          largest_free_bytes(0),
+          in_use_bytes(0),
+          failed_allocs(0) {}
+    SampleMemStatusMessage(uint32_t small_total_bytes_,
+                           uint32_t small_free_bytes_,
+                           uint32_t large_total_bytes_,
+                           uint32_t large_free_bytes_,
+                           uint32_t largest_free_bytes_,
+                           uint32_t in_use_bytes_,
+                           uint32_t failed_allocs_)
+        : category(STATUS_CATEGORY_SAMPLE_MEM),
+          sample_count(0),
+          reserved{0, 0},
+          small_total_bytes(small_total_bytes_),
+          small_free_bytes(small_free_bytes_),
+          large_total_bytes(large_total_bytes_),
+          large_free_bytes(large_free_bytes_),
+          largest_free_bytes(largest_free_bytes_),
+          in_use_bytes(in_use_bytes_),
+          failed_allocs(failed_allocs_) {}
+
+    // Bounds-checked append; returns false (no-op) if entries[] is already full.
+    bool AddEntry(const SampleMemEntryMessage& entry) {
+        if (sample_count >= WAVEX_SAMPLE_STATUS_MAX_ENTRIES)
+            return false;
+        entries[sample_count++] = entry;
+        return true;
+    }
 } __attribute__((packed));
 
 // Legacy packet structures completely removed - using new simplified format only

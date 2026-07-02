@@ -60,6 +60,39 @@ versioning and release process.
   entrypoints documented in `AGENTS.md` — were never in git: `.gitignore`'s
   bare `Makefile` pattern (meant for CMake-generated makefiles) was swallowing
   them. Added negation exceptions and tracked both files.
+- **`ProtocolHandler::ParseWaveXPacket` buffer overflow** (roadmap Phase 0.2,
+  found while writing exhaustive round-trip tests): the function ignored the
+  caller-supplied destination capacity and always copied the packet's full
+  zero-padded payload region, which is rounded up to the next size class (32/
+  64/128/...). Any message struct smaller than its packet's padded region
+  (e.g. `ErrorMessage`, `SampleLoadMessage`, `SampleMemStatusMessage`,
+  `BrowseRespMessage`'s entries buffer) could be overrun by the extra padding
+  bytes — reproducible as `*** stack smashing detected ***` once round-trip
+  tests actually parsed those types back. Also fixed the one real firmware
+  caller (`firmware/esp32/main/comm/packet_router.cpp`), which read the
+  `payload_size` in/out parameter uninitialized. `payload_size` is now
+  correctly treated as an in/out capacity: at most that many bytes are
+  copied, and the true byte count copied is returned.
+
+### Changed (protocol)
+
+- **Wire-struct hygiene** (roadmap Phase 0.2): every message struct in
+  `firmware/shared/spi_protocol/protocol.h` now has a zero-initializing
+  default constructor and a named-argument constructor, and no other
+  constructors — this makes each type a non-aggregate, so
+  `Type x = {a, b, c};` / designated-initializer construction is now a
+  **compile error** instead of a style guideline (`docs/features/inter-mcu-
+  protocol.md` already warned about field-order bugs from aggregate init;
+  now the compiler enforces it). All ~40 call sites across app and test code
+  were migrated to `Type x(a, b, c);`. `SampleMemStatusMessage` gained a
+  bounds-checked `AddEntry()` for its fixed `entries[]` array.
+- Round-trip tests in `firmware/shared/tests/protocol/message_types_test.cpp`
+  are now exhaustive: every message type is both created and parsed back
+  with field-level assertions (several were previously create-only), and the
+  four types with no coverage at all (`DataRequestMessage`,
+  `StatusRequestMessage`, `SampleLoadMessage`, `SampleMemStatusMessage`/
+  `SampleMemEntryMessage`) now have tests. This is what surfaced the
+  `ParseWaveXPacket` overflow above.
 
 ## [0.1.0] - 2026-07-02
 

@@ -63,7 +63,7 @@ struct WaveXPacket {           // packed
 ## 4. Conventions & invariants
 
 1. **All payload structs are `__attribute__((packed))` and fixed-layout.** Never reorder fields; append only, or bump `PROTOCOL_VERSION`.
-2. **Construct wire structs via `ProtocolHandler::Create*` helpers**, never aggregate initialization in app code (field-order bugs have bitten before — see `archive/ARCHITECTURE_ASSESSMENT_20260626.md`).
+2. **Every payload struct has a named constructor** (`Type(field1, field2, ...)`) plus a zero-initializing default constructor, and no other constructors — this makes the type a non-aggregate, so `Type x = {a, b, c};` / designated-initializer construction is a **compile error**, not just a style rule (field-order bugs have bitten before — see `archive/ARCHITECTURE_ASSESSMENT_20260626.md`). Build with the named constructor (`Type x(a, b, c);`); reserved/padding fields are not constructor parameters and are always zeroed internally. `SampleMemStatusMessage` additionally has `AddEntry()` for bounds-checked appends to its fixed `entries[]` array. When adding a new field, update the constructor's parameter list (and every call site the compiler then flags) in the same commit.
 3. **String fields** are fixed-size, null-terminated, `FILE_NAME_MAX=48`, `BROWSE_PATH_MAX=96` (path response uses 200).
 4. **Flow control**: packet statistics (per-type counters, CRC error counts) are tracked on both sides; NACK triggers resend; a stuck TX queue must self-recover within 1 s (regression requirement from the UART-era hang).
 5. **Nothing latency-critical rides the link**: audio never crosses it; note events do (from MIDI on the ESP32), so keep the note path under 5 ms end-to-end — this bounds acceptable polling cadence.

@@ -130,7 +130,7 @@ class InterMcuProtocolIntegrationTest : public ::testing::Test {
 
 // Test: End-to-end heartbeat message flow
 TEST_F(InterMcuProtocolIntegrationTest, HeartbeatMessageFlow) {
-    HeartbeatMessage heartbeat = {.uptime_ms = 12345, .rx_total = 100, .loop_counter = 200};
+    HeartbeatMessage heartbeat(12345, 100, 200);
 
     // Test full pipeline
     bool success = TestFullPipeline(MSG_HEARTBEAT, &heartbeat, sizeof(heartbeat));
@@ -144,12 +144,11 @@ TEST_F(InterMcuProtocolIntegrationTest, HeartbeatMessageFlow) {
 
 // Test: End-to-end meter push message flow
 TEST_F(InterMcuProtocolIntegrationTest, MeterPushMessageFlow) {
-    MeterPushMessage meter = {
-        .rms_left = 0x4000,   // Q15: 0.5
-        .rms_right = 0x6000,  // Q15: 0.75
-        .peak_left = 0x7FFF,  // Q15: 1.0
-        .peak_right = 0x5000  // Q15: 0.625
-    };
+    MeterPushMessage meter(0x4000,  // rms_left, Q15: 0.5
+                           0x6000,  // rms_right, Q15: 0.75
+                           0x7FFF,  // peak_left, Q15: 1.0
+                           0x5000   // peak_right, Q15: 0.625
+    );
 
     bool success = TestFullPipeline(MSG_METER_PUSH, &meter, sizeof(meter));
     EXPECT_TRUE(success);
@@ -235,7 +234,7 @@ TEST_F(InterMcuProtocolIntegrationTest, BrowseResponseMessageFlow) {
 
 // Test: Control change message flow (ESP32 -> Daisy direction)
 TEST_F(InterMcuProtocolIntegrationTest, ControlChangeMessageFlow) {
-    ControlChangeMessage control = {.parameter = 0x42, .channel = 0x01, .value = 0x1234};
+    ControlChangeMessage control(0x42, 0x01, 0x1234);
 
     bool success = TestFullPipeline(MSG_CONTROL_CHANGE, &control, sizeof(control));
     EXPECT_TRUE(success);
@@ -267,12 +266,7 @@ TEST_F(InterMcuProtocolIntegrationTest, ControlChangeMessageFlow) {
 
 // Test: Error recovery - corrupted CRC
 TEST_F(InterMcuProtocolIntegrationTest, ErrorRecoveryCorruptedCRC) {
-    HeartbeatMessage heartbeat = {.uptime_ms = 1000,
-                                  .rx_total = 50,
-                                  .loop_counter = 100,
-                                  .cpu_avg_percent = 250,
-                                  .cpu_min_percent = 200,
-                                  .cpu_max_percent = 300};
+    HeartbeatMessage heartbeat(1000, 50, 100, 250, 200, 300);
 
     // Create valid packet
     std::vector<uint8_t> frame =
@@ -301,12 +295,7 @@ TEST_F(InterMcuProtocolIntegrationTest, ErrorRecoveryCorruptedCRC) {
 
 // Test: Error recovery - corrupted start byte
 TEST_F(InterMcuProtocolIntegrationTest, ErrorRecoveryCorruptedStartByte) {
-    HeartbeatMessage heartbeat = {.uptime_ms = 1000,
-                                  .rx_total = 50,
-                                  .loop_counter = 100,
-                                  .cpu_avg_percent = 250,
-                                  .cpu_min_percent = 200,
-                                  .cpu_max_percent = 300};
+    HeartbeatMessage heartbeat(1000, 50, 100, 250, 200, 300);
 
     std::vector<uint8_t> frame =
         CreateUartPacketFromMessage(MSG_HEARTBEAT, &heartbeat, sizeof(heartbeat));
@@ -320,12 +309,7 @@ TEST_F(InterMcuProtocolIntegrationTest, ErrorRecoveryCorruptedStartByte) {
 
 // Test: Error recovery - corrupted end byte
 TEST_F(InterMcuProtocolIntegrationTest, ErrorRecoveryCorruptedEndByte) {
-    HeartbeatMessage heartbeat = {.uptime_ms = 1000,
-                                  .rx_total = 50,
-                                  .loop_counter = 100,
-                                  .cpu_avg_percent = 250,
-                                  .cpu_min_percent = 200,
-                                  .cpu_max_percent = 300};
+    HeartbeatMessage heartbeat(1000, 50, 100, 250, 200, 300);
 
     std::vector<uint8_t> frame =
         CreateUartPacketFromMessage(MSG_HEARTBEAT, &heartbeat, sizeof(heartbeat));
@@ -339,12 +323,7 @@ TEST_F(InterMcuProtocolIntegrationTest, ErrorRecoveryCorruptedEndByte) {
 
 // Test: Sequence number tracking through pipeline
 TEST_F(InterMcuProtocolIntegrationTest, SequenceNumberTracking) {
-    HeartbeatMessage heartbeat = {.uptime_ms = 1000,
-                                  .rx_total = 50,
-                                  .loop_counter = 100,
-                                  .cpu_avg_percent = 250,
-                                  .cpu_min_percent = 200,
-                                  .cpu_max_percent = 300};
+    HeartbeatMessage heartbeat(1000, 50, 100, 250, 200, 300);
 
     // Create packets with different sequence numbers
     for (uint16_t seq = 0; seq < 10; seq++) {
@@ -372,12 +351,7 @@ TEST_F(InterMcuProtocolIntegrationTest, SequenceNumberTracking) {
 
 // Test: ACK flag handling
 TEST_F(InterMcuProtocolIntegrationTest, AckFlagHandling) {
-    HeartbeatMessage heartbeat = {.uptime_ms = 1000,
-                                  .rx_total = 50,
-                                  .loop_counter = 100,
-                                  .cpu_avg_percent = 250,
-                                  .cpu_min_percent = 200,
-                                  .cpu_max_percent = 300};
+    HeartbeatMessage heartbeat(1000, 50, 100, 250, 200, 300);
 
     // Create packet with ACK flag
     std::vector<uint8_t> frame =
@@ -398,12 +372,7 @@ TEST_F(InterMcuProtocolIntegrationTest, AckFlagHandling) {
 
 // Test: NACK flag handling
 TEST_F(InterMcuProtocolIntegrationTest, NackFlagHandling) {
-    HeartbeatMessage heartbeat = {.uptime_ms = 1000,
-                                  .rx_total = 50,
-                                  .loop_counter = 100,
-                                  .cpu_avg_percent = 250,
-                                  .cpu_min_percent = 200,
-                                  .cpu_max_percent = 300};
+    HeartbeatMessage heartbeat(1000, 50, 100, 250, 200, 300);
 
     // Create packet with NACK flag
     std::vector<uint8_t> frame = CreateUartPacketFromMessage(
@@ -426,23 +395,22 @@ TEST_F(InterMcuProtocolIntegrationTest, NackFlagHandling) {
 TEST_F(InterMcuProtocolIntegrationTest, MultipleMessagesInSequence) {
     // Send multiple heartbeat messages
     for (int i = 0; i < 5; i++) {
-        HeartbeatMessage heartbeat = {.uptime_ms = static_cast<uint32_t>(1000 + (i * 100)),
-                                      .rx_total = static_cast<uint32_t>(50 + i),
-                                      .loop_counter = static_cast<uint32_t>(100 + i),
-                                      .cpu_avg_percent = 250,
-                                      .cpu_min_percent = 200,
-                                      .cpu_max_percent = 300};
+        HeartbeatMessage heartbeat(static_cast<uint32_t>(1000 + (i * 100)),
+                                   static_cast<uint32_t>(50 + i),
+                                   static_cast<uint32_t>(100 + i),
+                                   250,
+                                   200,
+                                   300);
 
         bool success = TestFullPipeline(MSG_HEARTBEAT, &heartbeat, sizeof(heartbeat));
         EXPECT_TRUE(success);
     }
 
     // Send mixed message types
-    ControlChangeMessage control = {.parameter = 0x01, .channel = 0x00, .value = 0x1000};
+    ControlChangeMessage control(0x01, 0x00, 0x1000);
     EXPECT_TRUE(TestFullPipeline(MSG_CONTROL_CHANGE, &control, sizeof(control)));
 
-    MeterPushMessage meter = {
-        .rms_left = 0x4000, .rms_right = 0x4000, .peak_left = 0x7FFF, .peak_right = 0x7FFF};
+    MeterPushMessage meter(0x4000, 0x4000, 0x7FFF, 0x7FFF);
     EXPECT_TRUE(TestFullPipeline(MSG_METER_PUSH, &meter, sizeof(meter)));
 }
 

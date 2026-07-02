@@ -150,7 +150,7 @@ TEST_F(PacketRouterTest, RouteInvalidPacketCorruptedCRC) {
 
 // Test routing UART message
 TEST_F(PacketRouterTest, RouteUartMessage) {
-    HeartbeatMessage msg = {1000, 5000, 10000, 256, 128, 512};
+    HeartbeatMessage msg(1000, 5000, 10000, 256, 128, 512);
 
     // Should not crash and should process UART message without throwing
     router_->route_uart_message(
@@ -162,7 +162,7 @@ TEST_F(PacketRouterTest, RouteUartMessage) {
 
 // Test routing METER_PUSH message via packet
 TEST_F(PacketRouterTest, RouteMeterPushMessage) {
-    MeterPushMessage msg = {0x7FFF, 0x4000, 0x7FFF, 0x4000};
+    MeterPushMessage msg(0x7FFF, 0x4000, 0x7FFF, 0x4000);
     std::vector<uint8_t> packet =
         ProtocolTestHelper::CreateWaveXPacket(MSG_METER_PUSH, &msg, sizeof(msg));
 
@@ -175,7 +175,8 @@ TEST_F(PacketRouterTest, RouteMeterPushMessage) {
 
 // Test routing BROWSE_RESP message
 TEST_F(PacketRouterTest, RouteBrowseRespMessage) {
-    std::vector<FileEntryWire> entries = {{1, 0, "dir1"}, {0, 1024, "file1.wav"}};
+    std::vector<FileEntryWire> entries = {FileEntryWire(1, 0, "dir1"),
+                                          FileEntryWire(0, 1024, "file1.wav")};
 
     std::vector<uint8_t> packet = ProtocolTestHelper::CreateBrowseRespPacket(2, entries);
 
@@ -188,7 +189,7 @@ TEST_F(PacketRouterTest, RouteBrowseRespMessage) {
 
 // Test routing ERROR message
 TEST_F(PacketRouterTest, RouteErrorMessage) {
-    ErrorMessage msg = {0x0001, "Test error"};
+    ErrorMessage msg(0x0001, "Test error");
     std::vector<uint8_t> packet =
         ProtocolTestHelper::CreateWaveXPacket(MSG_ERROR, &msg, sizeof(msg));
 
@@ -220,7 +221,7 @@ TEST_F(PacketRouterTest, RouteUnknownMessage) {
 
 // Test routing packet with ACK flag
 TEST_F(PacketRouterTest, RoutePacketWithACK) {
-    HeartbeatMessage msg = {1000, 5000, 10000, 256, 128, 512};
+    HeartbeatMessage msg(1000, 5000, 10000, 256, 128, 512);
     std::vector<uint8_t> packet = ProtocolTestHelper::CreateWaveXPacket(
         MSG_HEARTBEAT, &msg, sizeof(msg), 0x1234, PKT_FLAG_ACK);
 
@@ -233,7 +234,7 @@ TEST_F(PacketRouterTest, RoutePacketWithACK) {
 
 // Test routing packet with NACK flag
 TEST_F(PacketRouterTest, RoutePacketWithNACK) {
-    HeartbeatMessage msg = {1000, 5000, 10000, 256, 128, 512};
+    HeartbeatMessage msg(1000, 5000, 10000, 256, 128, 512);
     std::vector<uint8_t> packet = ProtocolTestHelper::CreateWaveXPacket(
         MSG_HEARTBEAT, &msg, sizeof(msg), 0x1234, PKT_FLAG_NACK);
 
@@ -254,7 +255,7 @@ TEST_F(PacketRouterTest, StatisticsCallback) {
         last_stats_type = type;
     });
 
-    HeartbeatMessage msg = {1000, 5000, 10000, 256, 128, 512};
+    HeartbeatMessage msg(1000, 5000, 10000, 256, 128, 512);
     router_->route_uart_message(
         MSG_HEARTBEAT, reinterpret_cast<const uint8_t*>(&msg), sizeof(msg), 0, 0x1234);
 

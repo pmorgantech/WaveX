@@ -35,7 +35,7 @@ class ProtocolTestHelper {
     static std::vector<uint8_t> CreateHeartbeatPacket(uint32_t uptime_ms,
                                                       uint32_t rx_total,
                                                       uint32_t loop_counter) {
-        Protocol::HeartbeatMessage msg = {uptime_ms, rx_total, loop_counter, 256, 128, 512};
+        Protocol::HeartbeatMessage msg(uptime_ms, rx_total, loop_counter, 256, 128, 512);
         return CreateWaveXPacket(Protocol::MSG_HEARTBEAT, &msg, sizeof(msg));
     }
 
