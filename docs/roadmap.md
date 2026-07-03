@@ -45,6 +45,15 @@ Phases are ordered by dependency, not calendar. Within a phase, items are listed
 
 ## Phase 1 — Solid Playback Core (the instrument must play reliably before it grooves)
 
+> ### ⚠ Next steps first: DMA/timing review findings (2026-07-03)
+>
+> A dedicated review of the UART link and audio path (**[`dma-timing-review-2026-07-03.md`](dma-timing-review-2026-07-03.md)**) found 12 issues, three high-severity. **Work through these before continuing with items 5/6/8 below** — items 5 (CV at the control tick) and 8 (MIDI over UART), and all of Phase 2 (sequencer tempo), build directly on the affected code.
+>
+> 1. **Switch the engine back to 48 kHz** (decision recorded 2026-07-03). The engine currently runs at 44.1 kHz with 48-sample blocks, making the "1 kHz control tick" actually 918.75 Hz (−8.1%) — a Phase 2 sequencer on this tick would run ~110 BPM at a setting of 120. Consequences: the WAV audition/streaming path *already* resamples (`PumpWavIO`, needs the review's Finding-6 fix to be trustworthy); RAM-resident samples need either playback-rate compensation in `VoiceManager` (scale `Voice::increment` by `file_rate/48000` — cheap, recommended first) or resample-on-load (cleaner for Phase 4, can come later). See the review doc, Finding 1.
+> 2. **Fix the oversize-frame transmit wedge** (Finding 2): frames ≥ ~1990 bytes deterministically exceed the 10 ms `BlockingTransmit` timeout at 2 Mbaud and can never be sent — each attempt sprays a truncated frame and blocks the main loop, starving audio for ~1 s until the frame is dropped. Wave-chunk single frames are only 0.9 ms under this cliff today.
+> 3. **Fix the UART-over-audio interrupt priority inversion** (Finding 3): libDaisy leaves UART4_IRQn and its RX DMA stream at NVIC priority 0, above audio's 5 — two `HAL_NVIC_SetPriority` calls after `UartLinkInit`.
+> 4. Then the medium findings (4–8: CRC-under-IRQ-lock, dropped preview chunks, wrong-pitch resample fallback, per-iteration CRC-recovery window, ~8.3 KB of DMA RAM wasted on a non-DMA queue) and low findings (9–12, ESP32-side), per the review doc.
+
 Order of implementation:
 
 1. ~~**Output/CV backend seams first** (`architecture.md` §5.3): introduce the `WAVEX_VOICE_OUTPUT_BACKEND` / `WAVEX_CV_BACKEND` / `WAVEX_ANALOG_CV_GROUPS` flags in `hardware_config.h`, the output-sink split (`StereoMixSink` now, `TdmVoiceSink` stub), and the CV group router over `cv_bus`. Cheap while the engine is small; retrofitting after the voice manager exists is expensive. CI compiles both flag sets.~~ **Done** — see `architecture.md` §5.3 "Implementation status". `cv_bus.hpp` (the old orphaned single-group prototype, `Flush()` was hardcoded to slot 0 regardless of caller) was superseded by `firmware/daisy/src/cv/{cv_cal,cv_group_router,mcp4728_backend,mcp48_backend}.hpp`. Both flag-set combinations build in CI (`make daisy` + new `make daisy-stageb`, `.github/workflows/ci.yml`). Not yet wired into the audio callback — nothing to feed the sink/router until item 2 (voice manager) exists; the paraphonic envelope law is item 5's job, not this seam's.

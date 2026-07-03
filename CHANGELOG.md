@@ -13,6 +13,20 @@ versioning and release process.
 
 ### Added
 
+- **DMA/timing code review** (`docs/dma-timing-review-2026-07-03.md`): 12
+  findings across the UART link and audio path, three high-severity — the
+  control tick actually runs at 918.75 Hz not 1 kHz (engine is at 44.1 kHz
+  with 48-sample blocks, violating architecture.md §5.1's 1-block=1-ms
+  invariant; **decision recorded: return to 48 kHz**, with 44.1 kHz WAVs
+  handled by the existing streaming resampler plus playback-rate
+  compensation in `VoiceManager`); Daisy→ESP32 frames ≥ ~1990 bytes
+  deterministically exceed the 10 ms `BlockingTransmit` timeout at 2 Mbaud
+  and can never transmit (retry storm starves audio ~1 s per attempt-cycle);
+  and libDaisy leaves UART4 + its RX DMA stream at NVIC priority 0, above
+  audio's 5 (priority inversion vs §7.1.5). Fix sequencing added to the
+  front of `roadmap.md`'s Phase 1 next steps; no code changed in this
+  commit.
+
 - **Link robustness regression tests** (roadmap Phase 1 item 7): investigation
   found the disabled SPI path's sequence-number validation
   (`is_duplicate_packet`, byte-for-byte duplicated between

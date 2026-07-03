@@ -44,6 +44,7 @@ Dated snapshots of implementation progress against `roadmap.md`, not living docu
 | Document | Contents |
 |---|---|
 | [status-2026-07-02.md](status-2026-07-02.md) | Phase 0 (Foundation Hardening) complete + Phase 1 items 1–3 (output/CV seam, RAM-resident voice manager, real-time-safe recording buffer); bugs found along the way; what still needs hardware verification |
+| [dma-timing-review-2026-07-03.md](dma-timing-review-2026-07-03.md) | DMA/timing code review of the UART link + audio path: 12 findings (3 high: 918.75 Hz control tick vs the 1 kHz invariant → **48 kHz decision recorded**, oversize-frame transmit wedge, UART-over-audio priority inversion); fix order lives in `roadmap.md` Phase 1 |
 
 ## Housekeeping notes
 
