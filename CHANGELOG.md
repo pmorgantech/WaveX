@@ -59,7 +59,26 @@ versioning and release process.
   `docs/roadmap.md` item 2 for why it's scoped as its own follow-up rather
   than bundled into this change.
 
-### Removed (Daisy audio)
+### Fixed (Daisy audio) — roadmap Phase 1 item 3
+
+- **`Sampler`'s recording buffer no longer grows via `std::vector::push_back`
+  in the audio path.** `Sampler::Init()` now takes a `SampleMemMgr&` and a
+  frame-count capacity, and preallocates one fixed-size extent from it up
+  front (`audio_engine.cpp` requests 30 seconds at the current sample rate,
+  right after `SampleMemMgr::init()` — reordered so the manager exists
+  before `Sampler` allocates from it). `FeedInputBlock()` now writes within
+  that fixed capacity and silently stops once full, instead of triggering a
+  heap reallocation on every sample past the old 1024-sample
+  `reserve()` (AGENTS.md constraint #1: no heap allocation in the audio
+  path). **Found in the process**: `FeedInputBlock()` was never actually
+  called from `Callback()` in production (only from tests) — recording is
+  wired up via `OnSampleCtrl`'s `StartRec`/`StopRec`, but `Callback()`
+  discards its input buffer (`(void)in;`) and never feeds it to the
+  sampler, so recording currently produces silence regardless of this fix.
+  Making the storage real-time-safe doesn't make recording functional;
+  actually wiring live input into `FeedInputBlock()` is separate, deferred
+  work (same reasoning as items 1/2 - no hardware here to verify audio-input
+  correctness).
 
 - `firmware/daisy/src/cv_bus.hpp` (the `CvBus` class) — superseded by the CV
   backend seam above. Its `Flush()` had a real bug: hardcoded to always

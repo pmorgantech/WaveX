@@ -5,25 +5,72 @@
 #include <cmath>
 #include <vector>
 
+// Sampler's recording buffer is now a fixed-capacity extent preallocated
+// from SampleMemMgr (roadmap Phase 1 item 3 - no heap growth in the audio
+// path), so tests need a real (if small) backing "SDRAM" region and a
+// SampleMemMgr to allocate from. Fresh per test (fixture member, not
+// static) so tests can't exhaust each other's allocations.
 class SamplerTest : public ::testing::Test {
    protected:
+    static constexpr uint32_t kBackingBytes = 512 * 1024;  // 512KB, plenty for test-sized buffers
+    static constexpr uint32_t kTestCapacityFrames = 8192;  // >> largest test recording (1000)
+
     void SetUp() override {
-        sampler_.Init(48000);  // 48kHz sample rate
+        mem_.init(backing_, kBackingBytes, /*small_bytes=*/0);
+        sampler_.Init(48000, mem_, kTestCapacityFrames);  // 48kHz sample rate
     }
 
     void TearDown() override {}
 
+    uint8_t backing_[kBackingBytes];
+    SampleMemMgr mem_;
     Sampler sampler_;
 };
+
+// Out-of-class definitions required in C++14 for static constexpr members
+// that are ODR-used (e.g. bound by reference, as GoogleTest's EXPECT_EQ does).
+constexpr uint32_t SamplerTest::kBackingBytes;
+constexpr uint32_t SamplerTest::kTestCapacityFrames;
 
 // Test sampler initialization
 TEST_F(SamplerTest, Initialization) {
     Sampler s;
-    s.Init(44100);
+    s.Init(44100, mem_, kTestCapacityFrames);
 
     // After initialization, sampler should be stopped
     sampler_.StopPlay();
     sampler_.StopRec();
+}
+
+// Test that the recording buffer is a fixed, preallocated capacity - never
+// grows past it, matching roadmap Phase 1 item 3's real-time-safety
+// requirement (no push_back-driven heap growth in the audio path).
+TEST_F(SamplerTest, RecordingCapacityIsFixedAndDoesNotGrow) {
+    EXPECT_EQ(sampler_.Capacity(), kTestCapacityFrames);
+    EXPECT_EQ(sampler_.Length(), 0u);
+
+    sampler_.StartRec();
+    std::vector<float> big_block(kTestCapacityFrames + 1000, 0.5f);  // deliberately overflow
+    sampler_.FeedInputBlock(big_block.data(), big_block.size());
+    sampler_.StopRec();
+
+    // Recording stops at capacity instead of growing past it.
+    EXPECT_EQ(sampler_.Length(), kTestCapacityFrames);
+}
+
+// A Sampler that fails to allocate (capacity 0) must not crash - it should
+// behave as a safe no-op rather than dereferencing a null buffer.
+TEST_F(SamplerTest, ZeroCapacityIsSafeNoOp) {
+    Sampler s;
+    s.Init(48000, mem_, /*max_frames=*/0);
+
+    s.StartRec();
+    std::vector<float> input_block(100, 0.5f);
+    EXPECT_NO_THROW({ s.FeedInputBlock(input_block.data(), input_block.size()); });
+    s.StopRec();
+
+    s.StartPlay(1.0f);
+    EXPECT_FLOAT_EQ(s.Next(), 0.0f);
 }
 
 // Test recording functionality

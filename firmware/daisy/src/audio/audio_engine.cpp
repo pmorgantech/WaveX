@@ -785,7 +785,6 @@ void Init(DaisySeed& hw, float sample_rate) {
     s_oscillator.SetFreq(1000.0f);  // Use 1kHz - simple test frequency
     s_oscillator.SetAmp(0.3f);      // Reduce amplitude slightly
 
-    s_sampler.Init(sample_rate);
 #if WAVEX_CV_BACKEND == WAVEX_CV_BACKEND_MCP4728
     s_cv_backend.Init(0x60);
 #else
@@ -811,6 +810,12 @@ void Init(DaisySeed& hw, float sample_rate) {
     if (s_hw) {
         s_hw->PrintLine("AUDIO_ENGINE: SampleMemMgr.init() completed");
     }
+
+    // Sampler's recording buffer must be preallocated from SampleMemMgr, so
+    // it must init() after the manager above (roadmap Phase 1 item 3: no
+    // heap growth in the audio path - see sampler.hpp).
+    constexpr uint32_t kSamplerMaxRecordSeconds = 30;
+    s_sampler.Init(sample_rate, s_sample_mem_mgr, sample_rate * kSamplerMaxRecordSeconds);
 
     // Test basic allocation to ensure SDRAM is working
     if (s_hw) {
