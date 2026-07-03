@@ -2,5 +2,4 @@ firmware/esp32/libs/xpt2046/
 firmware/daisy/libs/libDaisy/
 firmware/daisy/libs/DaisySP/
 firmware/esp32/components/LovyanGFX/
-firmware/daisy/tests/_deps/googletest-src/
-firmware/daisy/tests/_deps/firmware/daisy/tests/_deps/googletest-src/
+firmware/shared/tests/_deps/googletest-src/
