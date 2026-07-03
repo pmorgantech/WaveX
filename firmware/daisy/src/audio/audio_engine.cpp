@@ -18,6 +18,7 @@
 #include "../sampler.hpp"
 #include "../timebase.hpp"
 #include "output_sink.hpp"
+#include "voice_manager.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -37,12 +38,10 @@ static_assert(WAVEX_ANALOG_CV_GROUPS == 1,
 using CvBackendType = WaveX::Cv::Mcp48Backend;
 #endif
 
-// Output sink selection (architecture.md §5.3, roadmap Phase 1 item 1). Not
-// yet wired into Callback() below - today's engine has one playback source
-// (the WAV ring buffer / Sampler), not an array of per-voice buffers, so
-// there's nothing for a sink to consume until the voice manager (Phase 1
-// item 2) exists. Declared here so both flag sets are proven to compile
-// ahead of that retrofit.
+// Output sink selection (architecture.md §5.3, roadmap Phase 1 item 1).
+// Declared here so both flag sets are proven to compile; not yet wired into
+// Callback() below - see the VoiceManager comment right after this block
+// for why.
 #if WAVEX_VOICE_OUTPUT_BACKEND == WAVEX_VOICE_OUTPUT_STEREO_MIX
 using OutputSinkType = WaveX::AudioEngine::StereoMixSink;
 #else
@@ -96,10 +95,17 @@ static Oscillator s_oscillator;
 static Sampler s_sampler;
 static CvBackendType s_cv_backend;
 static WaveX::Cv::CvGroupRouter<CvBackendType, WAVEX_ANALOG_CV_GROUPS> s_cv_router(s_cv_backend);
-// See "Output sink selection" comment above: constructed but not yet driven
-// by the callback (no voice manager exists yet to feed it per-voice
-// buffers).
 static OutputSinkType s_output_sink;
+// Roadmap Phase 1 item 2: 8-voice RAM-resident player (allocation/stealing,
+// per-voice gain/pan/pitch - see voice_manager.hpp). Constructed but not yet
+// driven by Callback() below: OnNoteOn/OnNoteOff still only touch the test
+// oscillator (s_oscillator), because there is no note-to-sample mapping
+// policy yet (which MIDI note plays which loaded sample) - that's item 8's
+// job, "MIDI note path ... -> voice manager". Wiring Trigger()/Release()/
+// Render() into the real-time callback ahead of a real trigger source would
+// be unverifiable risk (no hardware here to confirm audio correctness) for
+// no behavioral change.
+static WaveX::AudioEngine::VoiceManager s_voice_manager;
 
 // Sample RAM Manager (for loaded samples)
 static SampleMemMgr s_sample_mem_mgr;

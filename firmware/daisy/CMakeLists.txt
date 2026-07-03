@@ -26,6 +26,7 @@ set(FIRMWARE_SOURCES
     src/metrics/metrics.cpp
     src/sampler.hpp
     src/audio/output_sink.hpp
+    src/audio/voice_manager.hpp
     src/cv/cv_cal.hpp
     src/cv/cv_group_router.hpp
     src/cv/mcp4728_backend.hpp

@@ -36,6 +36,28 @@ versioning and release process.
   the voice manager (Phase 1 item 2) exists. The paraphonic envelope law
   (which voice's envelope drives the shared Stage A VCF/VCA) is Phase 1 item
   5's job, not this seam's.
+- **Voice manager, RAM-resident half** (roadmap Phase 1 item 2):
+  `firmware/daisy/src/audio/voice_manager.hpp` — `VoiceManager`, 8-voice
+  array, allocation with oldest-triggered stealing when all 8 are busy,
+  per-voice gain (from MIDI velocity) and linear pan, a pitch hook
+  (`Voice::increment`, hardcoded to 1.0 - note-to-pitch mapping is item 4's
+  job), zero-I/O triggering (`Trigger()` just stores a pointer into
+  already-SDRAM-resident sample data - no allocation, no blocking), and
+  `Render()` into the stereo buffer shape `output_sink.hpp` (item 1)
+  consumes. HAL-free like the CV router, so it's host-testable without any
+  Daisy hardware; 12 new tests cover allocation, stealing, release-by-note,
+  gain/pan scaling, self-stop at sample end (no looping yet), and rejecting
+  null/too-short samples. Constructed in `audio_engine.cpp` (compiles for
+  the real ARM target - a first pass at this forgot to actually `#include`
+  it into any compiled translation unit, so the ARM build silently never
+  checked it; caught before committing) but **not wired into `Callback()`**
+  — `OnNoteOn`/`OnNoteOff` still only drive the test oscillator, since
+  there's no note-to-sample mapping policy yet (item 8's job).
+  **Streamed-voice concurrency (2 concurrent streams + prebuffer admission
+  control), the other half of item 2's roadmap text, is not started** — the
+  existing WAV-streaming path is a separate, still-singleton subsystem; see
+  `docs/roadmap.md` item 2 for why it's scoped as its own follow-up rather
+  than bundled into this change.
 
 ### Removed (Daisy audio)
 

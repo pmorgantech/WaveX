@@ -178,6 +178,8 @@ The 1-block = 1-ms identity is a deliberate design invariant: the control tick i
 
 8 voices, each: sample oscillator (streamed or RAM-resident) + optional VA oscillator + noise, 4 ADSR, 3 LFO, per-voice mod matrix.
 
+**Implementation status (roadmap Phase 1 item 2)**: `firmware/daisy/src/audio/voice_manager.hpp` implements the RAM-resident half — 8-voice allocation/stealing, per-voice gain/pan, and a pitch hook (not yet driven by note number). Not yet implemented: streamed voices (still the old singleton WAV-ring-buffer path, not voice-manager-owned), VA oscillator/noise/LFO/mod matrix, and ADSR (item 4). Not yet wired into the audio callback — see item 2 in `roadmap.md` for why.
+
 The analog output section is deliberately **two-stage**, selected by build flags (see §5.3):
 
 - **Stage A — paraphonic prototype (now)**: all voices render digitally and sum to the **stereo codec on SAI1** (`AudioOutputMode::StereoSAI1`). The stereo mix passes through **one shared analog VCF/VCA pair**, driven by a single **MCP4728** (I2C, 4 ch: cutoff, resonance, VCA, +1 spare). Paraphonic semantics: the shared filter/amp envelope retriggers on each note-on and releases when the last voice releases (classic paraphonic behavior).
