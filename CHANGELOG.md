@@ -11,6 +11,22 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Changed (submodules)
+
+- **libDaisy submodule re-pinned to the public upstream v8.1.0 tag**
+  (`9498417a`), and its nested `Drivers/STM32H7xx_HAL_Driver` to the
+  upstream commit v8.1.0 ships with (`404a70d`). The local-only patch
+  commits (44.1 kHz SAI support, ADC HAL sources disabled, `stdint.h`
+  include fix) are now fully obsolete: the 48 kHz switch removed the only
+  consumer of the SAI patch, and a clean-from-scratch build against pure
+  upstream confirms the ADC/stdint build fixes are no longer needed (the
+  CMSIS-include fix in `firmware/daisy/CMakeLists.txt` covers it). This
+  unblocks pushing the repo: fresh clones and CI (`submodules: recursive`
+  checkout) can now fetch every pinned submodule commit from its public
+  upstream. The old patches remain available locally on the
+  `wavex-v8.1.0-with-local-patches` branch in the submodule clone if ever
+  needed for reference.
+
 ### Changed (Daisy audio) — needs hardware listen test
 
 - **Engine sample rate: 44.1 kHz → 48 kHz** (decision 2026-07-03,
