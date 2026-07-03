@@ -509,6 +509,27 @@ static bool prebuffer_audio() {
             req_frames = max_input_by_space;
         }
     }
+
+    // When resampling, cap the request so all scratch users of this pass fit
+    // the pool together - same formula and reasoning as PumpWavIO (review
+    // Finding 6): conversion (f x out_ch) + resampler's per-channel buffer
+    // (f) + resample output ((ceil(f x ratio) + 1) x out_ch). This must
+    // happen BEFORE the SD read, because bytes are consumed from the file
+    // as soon as they're read - there is no retry path here.
+    if (resample_ratio != 1.0f) {
+        const float per_frame_cost = static_cast<float>(s_output_channels) + 1.0f +
+                                     resample_ratio * static_cast<float>(s_output_channels);
+        const uint32_t fixed_cost = s_output_channels + 1;
+        uint32_t max_by_scratch = static_cast<uint32_t>(
+            static_cast<float>(kScratchPoolSamples - fixed_cost) / per_frame_cost);
+        if (max_by_scratch == 0) {
+            s_prebuffering = false;
+            return false;  // cannot make progress; unreachable with a 32KB pool
+        }
+        if (req_frames > max_by_scratch) {
+            req_frames = max_by_scratch;
+        }
+    }
     uint32_t req_bytes = req_frames * file_bpf;
 
     if (req_bytes > s_wav.bytes_remaining) {
@@ -563,7 +584,17 @@ static bool prebuffer_audio() {
     uint32_t frames_read = br / file_bpf;
     q15_t* conversion_output = AcquireScratch(frames_read * s_output_channels);
     if (conversion_output == nullptr) {
-        // Fallback: write directly into prebuffer
+        if (resample_ratio != 1.0f) {
+            // Can't resample without scratch, and the bytes are already
+            // consumed from the file (no retry path). Drop the chunk rather
+            // than writing wrong-pitch audio into the prebuffer (review
+            // Finding 6). Unreachable in practice: req_frames is capped by
+            // scratch capacity above.
+            return true;
+        }
+        // Pitch-correct fallback (ratio == 1.0 only): convert directly into
+        // the prebuffer. frames_read <= req_frames <= free_prebuffer_frames,
+        // so this cannot overflow.
         conversion_output = &s_prebuffer[s_prebuffer_filled * s_output_channels];
     }
 
@@ -578,14 +609,18 @@ static bool prebuffer_audio() {
         uint32_t max_out_frames =
             static_cast<uint32_t>(std::ceil(frames_read * resample_ratio)) + 1;
         q15_t* resample_buffer = AcquireScratch(max_out_frames * s_output_channels);
+        uint32_t resampled = 0;
         if (resample_buffer != nullptr) {
-            uint32_t resampled = LinearResampleFrames(
+            resampled = LinearResampleFrames(
                 conversion_output, frames_read, resample_buffer, s_output_channels, resample_ratio);
-            if (resampled > 0) {
-                to_push = resample_buffer;
-                output_frames = resampled;
-            }
         }
+        if (resampled == 0) {
+            // Same reasoning as the null-scratch case above: drop, don't
+            // push unresampled (wrong-pitch) audio (review Finding 6).
+            return true;
+        }
+        to_push = resample_buffer;
+        output_frames = resampled;
     }
 
     if (output_frames > free_prebuffer_frames) {
@@ -1789,6 +1824,29 @@ void PumpWavIO() {
         return;
     }
 
+    // When resampling, cap the input so ALL scratch users of this pass fit
+    // the pool together: conversion (f x out_ch) + LinearResampleFrames'
+    // internal per-channel buffer (f) + the resample output
+    // ((ceil(f x ratio) + 1) x out_ch). Without this cap, a full 8KB slot of
+    // mono audio needing resample (e.g. a 44.1kHz file on the 48kHz engine)
+    // exceeds the 16K-sample pool on every pass, and the old fallback below
+    // then pushed the audio UNRESAMPLED - i.e. at the wrong pitch
+    // (docs/dma-timing-review-2026-07-03.md, Finding 6).
+    if (resample_ratio != 1.0f) {
+        const float per_frame_cost = static_cast<float>(s_output_channels) /*conversion*/
+                                     + 1.0f /*per-channel de-interleave*/
+                                     + resample_ratio * static_cast<float>(s_output_channels);
+        const uint32_t fixed_cost = s_output_channels + 1;  // ceil()+1 output slack
+        uint32_t max_by_scratch = static_cast<uint32_t>(
+            static_cast<float>(kScratchPoolSamples - fixed_cost) / per_frame_cost);
+        if (max_by_scratch == 0) {
+            return;  // cannot make progress; should not happen with a 32KB pool
+        }
+        if (frames_to_transfer > max_by_scratch) {
+            frames_to_transfer = max_by_scratch;
+        }
+    }
+
     ResetScratchPool();
     uint32_t bytes_per_sample = (s_wav.bits_per_sample == 24) ? 3u : 2u;
     uint32_t file_bpf = (uint32_t)s_wav.num_channels * bytes_per_sample;
@@ -1808,21 +1866,37 @@ void PumpWavIO() {
         uint32_t max_out_frames =
             static_cast<uint32_t>(std::ceil(frames_to_transfer * resample_ratio)) + 1;
         q15_t* resample_buffer = AcquireScratch(max_out_frames * s_output_channels);
+        uint32_t resampled = 0;
         if (resample_buffer != nullptr) {
-            uint32_t resampled = LinearResampleFrames(conversion_output,
-                                                      frames_to_transfer,
-                                                      resample_buffer,
-                                                      s_output_channels,
-                                                      resample_ratio);
-            if (resampled > 0) {
-                final_buffer = resample_buffer;
-                final_frames = resampled;
-            }
+            resampled = LinearResampleFrames(conversion_output,
+                                             frames_to_transfer,
+                                             resample_buffer,
+                                             s_output_channels,
+                                             resample_ratio);
         }
+        if (resampled == 0) {
+            // Resampling unavailable this pass (scratch exhausted or the
+            // resampler failed). The old fallback pushed conversion_output
+            // UNRESAMPLED - audio at the wrong pitch (review Finding 6).
+            // Skip instead: nothing is consumed from the slot, so the same
+            // data is retried next pump with a fresh scratch pool.
+            s_dwt_io_cycles = WaveX::Profiling::GetCycles() - block_cycles_start;
+            s_dwt_io_max = std::max(s_dwt_io_max, s_dwt_io_cycles);
+            return;
+        }
+        final_buffer = resample_buffer;
+        final_frames = resampled;
     }
 
     if (final_frames > free_frames) {
-        final_frames = free_frames;
+        // Output slightly exceeds ring space (the ceil()+1 sizing slack at
+        // the upsampling boundary). The old code truncated the push while
+        // still consuming the full input - silently dropping frames (review
+        // Finding 6). Skip instead; the ring drains ~48 frames/ms, so the
+        // retry lands almost immediately.
+        s_dwt_io_cycles = WaveX::Profiling::GetCycles() - block_cycles_start;
+        s_dwt_io_max = std::max(s_dwt_io_max, s_dwt_io_cycles);
+        return;
     }
 
     rb_push_frames(final_buffer, final_frames);
