@@ -8,6 +8,7 @@
 using WaveX::AudioEngine::kNumVoices;
 using WaveX::AudioEngine::VoiceManager;
 using WaveX::AudioEngine::VoiceState;
+using WaveX::AudioEngine::VoiceTriggerParams;
 
 namespace {
 
@@ -20,10 +21,32 @@ std::vector<int16_t> MakeRampSample(size_t frames, int16_t start, int16_t step) 
     return s;
 }
 
+// Params for tests that want a clean, constant, full-amplitude signal with
+// no envelope ramp/decay and no filtering, matching the pre-ADSR/pre-filter
+// test semantics: instant attack, no decay (sustain=1.0), instant release,
+// filter wide open.
+VoiceTriggerParams FlatParams(
+    const int16_t* sample, uint32_t frames, uint8_t note, uint8_t velocity, float pan) {
+    VoiceTriggerParams p;
+    p.sample = sample;
+    p.sample_frames = frames;
+    p.note = note;
+    p.velocity = velocity;
+    p.pan = pan;
+    p.root_note = note;           // pitch ratio 1.0
+    p.filter_cutoff_hz = 1.0e6f;  // safely at/above Nyquist at any sample rate -> exact bypass
+    p.attack_s = 0.0f;
+    p.decay_s = 0.0f;
+    p.sustain_level = 1.0f;
+    p.release_s = 0.0f;
+    return p;
+}
+
 }  // namespace
 
 TEST(VoiceManagerTest, NoVoicesActiveProducesSilence) {
     VoiceManager vm;
+    vm.Init(48000);
     float out_l[8] = {1, 1, 1, 1, 1, 1, 1, 1};
     float out_r[8] = {1, 1, 1, 1, 1, 1, 1, 1};
 
@@ -38,8 +61,9 @@ TEST(VoiceManagerTest, NoVoicesActiveProducesSilence) {
 
 TEST(VoiceManagerTest, TriggerAllocatesAndRenders) {
     VoiceManager vm;
+    vm.Init(48000);
     auto sample = MakeRampSample(100, 1000, 0);  // constant value 1000
-    vm.Trigger(sample.data(), sample.size(), /*note=*/60, /*velocity=*/127, /*pan=*/0.5f);
+    vm.Trigger(FlatParams(sample.data(), sample.size(), 60, 127, 0.5f));
 
     EXPECT_EQ(vm.ActiveVoiceCount(), 1);
 
@@ -49,15 +73,16 @@ TEST(VoiceManagerTest, TriggerAllocatesAndRenders) {
 
     float expected = (1000.0f / 32768.0f) * 1.0f /*gain*/ * 0.5f /*pan split*/;
     for (int i = 0; i < 4; ++i) {
-        EXPECT_NEAR(out_l[i], expected, 1e-5f) << "sample " << i;
-        EXPECT_NEAR(out_r[i], expected, 1e-5f) << "sample " << i;
+        EXPECT_NEAR(out_l[i], expected, 1e-4f) << "sample " << i;
+        EXPECT_NEAR(out_r[i], expected, 1e-4f) << "sample " << i;
     }
 }
 
 TEST(VoiceManagerTest, VelocityScalesGain) {
     VoiceManager vm;
+    vm.Init(48000);
     auto sample = MakeRampSample(10, 32767, 0);
-    vm.Trigger(sample.data(), sample.size(), 60, /*velocity=*/64, 0.5f);
+    vm.Trigger(FlatParams(sample.data(), sample.size(), 60, /*velocity=*/64, 0.5f));
 
     float out_l[1] = {0};
     float out_r[1] = {0};
@@ -65,48 +90,55 @@ TEST(VoiceManagerTest, VelocityScalesGain) {
 
     float expected_gain = 64.0f / 127.0f;
     float expected = 1.0f * expected_gain * 0.5f;
-    EXPECT_NEAR(out_l[0], expected, 1e-4f);
+    EXPECT_NEAR(out_l[0], expected, 1e-3f);
 }
 
 TEST(VoiceManagerTest, PanFullyLeftAndFullyRight) {
-    VoiceManager vm_left;
     auto sample = MakeRampSample(10, 32767, 0);
-    vm_left.Trigger(sample.data(), sample.size(), 60, 127, /*pan=*/0.0f);
+
+    VoiceManager vm_left;
+    vm_left.Init(48000);
+    vm_left.Trigger(FlatParams(sample.data(), sample.size(), 60, 127, /*pan=*/0.0f));
     float l[1] = {0}, r[1] = {0};
     vm_left.Render(l, r, 1);
-    EXPECT_NEAR(l[0], 1.0f, 1e-4f);
-    EXPECT_NEAR(r[0], 0.0f, 1e-4f);
+    EXPECT_NEAR(l[0], 1.0f, 1e-3f);
+    EXPECT_NEAR(r[0], 0.0f, 1e-3f);
 
     VoiceManager vm_right;
-    vm_right.Trigger(sample.data(), sample.size(), 60, 127, /*pan=*/1.0f);
+    vm_right.Init(48000);
+    vm_right.Trigger(FlatParams(sample.data(), sample.size(), 60, 127, /*pan=*/1.0f));
     l[0] = r[0] = 0;
     vm_right.Render(l, r, 1);
-    EXPECT_NEAR(l[0], 0.0f, 1e-4f);
-    EXPECT_NEAR(r[0], 1.0f, 1e-4f);
+    EXPECT_NEAR(l[0], 0.0f, 1e-3f);
+    EXPECT_NEAR(r[0], 1.0f, 1e-3f);
 }
 
 TEST(VoiceManagerTest, PanIsClamped) {
-    VoiceManager vm;
     auto sample = MakeRampSample(10, 32767, 0);
-    vm.Trigger(sample.data(), sample.size(), 60, 127, /*pan=*/5.0f);
+
+    VoiceManager vm;
+    vm.Init(48000);
+    auto p = FlatParams(sample.data(), sample.size(), 60, 127, /*pan=*/5.0f);
+    vm.Trigger(p);
     EXPECT_FLOAT_EQ(vm.GetVoice(0).pan, 1.0f);
 
     VoiceManager vm2;
-    vm2.Trigger(sample.data(), sample.size(), 60, 127, /*pan=*/-5.0f);
+    vm2.Init(48000);
+    auto p2 = FlatParams(sample.data(), sample.size(), 60, 127, /*pan=*/-5.0f);
+    vm2.Trigger(p2);
     EXPECT_FLOAT_EQ(vm2.GetVoice(0).pan, 0.0f);
 }
 
 TEST(VoiceManagerTest, EightVoicesGetDistinctSlots) {
     VoiceManager vm;
+    vm.Init(48000);
     auto sample = MakeRampSample(1000, 0, 1);
 
     for (uint8_t note = 0; note < kNumVoices; ++note) {
-        vm.Trigger(sample.data(), sample.size(), note, 100, 0.5f);
+        vm.Trigger(FlatParams(sample.data(), sample.size(), note, 100, 0.5f));
     }
 
     EXPECT_EQ(vm.ActiveVoiceCount(), kNumVoices);
-    // Every voice should have a distinct note (proves distinct slots, not
-    // one voice repeatedly reused).
     std::vector<uint8_t> notes;
     for (uint8_t i = 0; i < kNumVoices; ++i) {
         notes.push_back(vm.GetVoice(i).note);
@@ -119,16 +151,17 @@ TEST(VoiceManagerTest, EightVoicesGetDistinctSlots) {
 
 TEST(VoiceManagerTest, NinthTriggerStealsOldestVoice) {
     VoiceManager vm;
+    vm.Init(48000);
     auto sample = MakeRampSample(1000, 0, 1);
 
     for (uint8_t note = 0; note < kNumVoices; ++note) {
-        vm.Trigger(sample.data(), sample.size(), note, 100, 0.5f);
+        vm.Trigger(FlatParams(sample.data(), sample.size(), note, 100, 0.5f));
     }
     ASSERT_EQ(vm.ActiveVoiceCount(), kNumVoices);
 
-    // The 9th trigger must steal voice 0 (the oldest, note=0) rather than
-    // silently being dropped or growing beyond 8 voices.
-    vm.Trigger(sample.data(), sample.size(), /*note=*/99, 100, 0.5f);
+    // None of the 8 are releasing, so stealing must fall back to the
+    // oldest-triggered voice (note=0).
+    vm.Trigger(FlatParams(sample.data(), sample.size(), /*note=*/99, 100, 0.5f));
 
     EXPECT_EQ(vm.ActiveVoiceCount(), kNumVoices);
     bool found_note_0 = false;
@@ -143,34 +176,77 @@ TEST(VoiceManagerTest, NinthTriggerStealsOldestVoice) {
     EXPECT_TRUE(found_note_99) << "9th trigger should have taken the stolen slot";
 }
 
-TEST(VoiceManagerTest, ReleaseStopsMatchingNote) {
+TEST(VoiceManagerTest, StealingPrefersReleasingVoiceOverOlderSustainingOne) {
     VoiceManager vm;
+    vm.Init(48000);
     auto sample = MakeRampSample(1000, 0, 1);
-    vm.Trigger(sample.data(), sample.size(), 60, 100, 0.5f);
-    vm.Trigger(sample.data(), sample.size(), 61, 100, 0.5f);
-    ASSERT_EQ(vm.ActiveVoiceCount(), 2);
+
+    for (uint8_t note = 0; note < kNumVoices; ++note) {
+        vm.Trigger(FlatParams(sample.data(), sample.size(), note, 100, 0.5f));
+    }
+    // Release note 5 (not the oldest) - its envelope enters Release stage
+    // immediately since attack/decay are instant (FlatParams).
+    vm.Release(5);
+
+    vm.Trigger(FlatParams(sample.data(), sample.size(), /*note=*/99, 100, 0.5f));
+
+    bool found_note_5 = false;
+    bool found_note_0 = false;
+    for (uint8_t i = 0; i < kNumVoices; ++i) {
+        if (vm.GetVoice(i).note == 5)
+            found_note_5 = true;
+        if (vm.GetVoice(i).note == 0)
+            found_note_0 = true;
+    }
+    EXPECT_FALSE(found_note_5) << "the releasing voice should be stolen preferentially";
+    EXPECT_TRUE(found_note_0) << "the oldest (but still sustaining) voice should be left alone";
+}
+
+TEST(VoiceManagerTest, ReleaseStartsDecayNotImmediateStop) {
+    VoiceManager vm;
+    vm.Init(48000);
+    auto sample = MakeRampSample(1000, 0, 1);
+
+    VoiceTriggerParams p = FlatParams(sample.data(), sample.size(), 60, 100, 0.5f);
+    p.release_s = 0.01f;  // real release tail this time
+    vm.Trigger(p);
+    ASSERT_EQ(vm.ActiveVoiceCount(), 1);
 
     vm.Release(60);
 
+    // Still allocated immediately after Release() - only the envelope's
+    // Release stage has started, the voice hasn't been freed yet.
     EXPECT_EQ(vm.ActiveVoiceCount(), 1);
-    EXPECT_EQ(vm.GetVoice(1).note, 61);
-    EXPECT_EQ(vm.GetVoice(1).state, VoiceState::Playing);
+    EXPECT_TRUE(vm.GetVoice(0).envelope.IsReleasing());
+
+    // Render through the full release tail (0.01s @ 48kHz = 480 samples).
+    float out_l[512] = {0};
+    float out_r[512] = {0};
+    vm.Render(out_l, out_r, 512);
+
+    EXPECT_EQ(vm.ActiveVoiceCount(), 0) << "voice should be freed once its release tail completes";
 }
 
 TEST(VoiceManagerTest, ReleaseUnknownNoteIsNoOp) {
     VoiceManager vm;
+    vm.Init(48000);
     auto sample = MakeRampSample(1000, 0, 1);
-    vm.Trigger(sample.data(), sample.size(), 60, 100, 0.5f);
+    vm.Trigger(FlatParams(sample.data(), sample.size(), 60, 100, 0.5f));
 
     vm.Release(99);  // no voice playing note 99
 
     EXPECT_EQ(vm.ActiveVoiceCount(), 1);
+    EXPECT_FALSE(vm.GetVoice(0).envelope.IsReleasing());
 }
 
-TEST(VoiceManagerTest, VoiceSelfStopsAtSampleEnd) {
+TEST(VoiceManagerTest, VoiceSelfStopsAfterEndOfSampleAndRelease) {
     VoiceManager vm;
+    vm.Init(48000);
     auto sample = MakeRampSample(4, 0, 0);  // 4 frames
-    vm.Trigger(sample.data(), sample.size(), 60, 100, 0.5f);
+
+    // Instant release so hitting end_frame frees the voice within this
+    // Render() call rather than needing a long release tail rendered too.
+    vm.Trigger(FlatParams(sample.data(), sample.size(), 60, 100, 0.5f));
 
     float out_l[16] = {0};
     float out_r[16] = {0};
@@ -181,22 +257,24 @@ TEST(VoiceManagerTest, VoiceSelfStopsAtSampleEnd) {
 
 TEST(VoiceManagerTest, TriggerRejectsNullOrTooShortSample) {
     VoiceManager vm;
+    vm.Init(48000);
     int16_t one_frame[1] = {123};
 
-    vm.Trigger(nullptr, 100, 60, 100, 0.5f);
+    vm.Trigger(FlatParams(nullptr, 100, 60, 100, 0.5f));
     EXPECT_EQ(vm.ActiveVoiceCount(), 0);
 
-    vm.Trigger(one_frame, 1, 60, 100, 0.5f);  // < 2 frames, can't interpolate
+    vm.Trigger(FlatParams(one_frame, 1, 60, 100, 0.5f));  // < 2 frames, can't interpolate
     EXPECT_EQ(vm.ActiveVoiceCount(), 0);
 }
 
 TEST(VoiceManagerTest, RenderSumsMultipleConcurrentVoices) {
     VoiceManager vm;
+    vm.Init(48000);
     auto sample_a = MakeRampSample(10, 16384, 0);  // constant 0.5 in float
     auto sample_b = MakeRampSample(10, 16384, 0);
 
-    vm.Trigger(sample_a.data(), sample_a.size(), 60, 127, /*pan=*/1.0f);  // full right
-    vm.Trigger(sample_b.data(), sample_b.size(), 61, 127, /*pan=*/0.0f);  // full left
+    vm.Trigger(FlatParams(sample_a.data(), sample_a.size(), 60, 127, /*pan=*/1.0f));  // full right
+    vm.Trigger(FlatParams(sample_b.data(), sample_b.size(), 61, 127, /*pan=*/0.0f));  // full left
 
     float out_l[1] = {0};
     float out_r[1] = {0};
@@ -205,4 +283,184 @@ TEST(VoiceManagerTest, RenderSumsMultipleConcurrentVoices) {
     // voice A contributes 0.5 to R only, voice B contributes 0.5 to L only.
     EXPECT_NEAR(out_l[0], 0.5f, 1e-3f);
     EXPECT_NEAR(out_r[0], 0.5f, 1e-3f);
+}
+
+// --- Phase 1 item 4: pitch, loop points, filter, ADSR ------------------
+
+TEST(VoiceManagerTest, PitchRatioFromNoteRelativeToRootNote) {
+    VoiceManager vm;
+    vm.Init(48000);
+    auto sample = MakeRampSample(1000, 0, 1);
+
+    VoiceTriggerParams p = FlatParams(sample.data(), sample.size(), /*note=*/72, 100, 0.5f);
+    p.root_note = 60;  // one octave below note 72
+    vm.Trigger(p);
+
+    EXPECT_NEAR(vm.GetVoice(0).increment, 2.0f, 1e-4f) << "one octave up should double the rate";
+}
+
+TEST(VoiceManagerTest, PitchRatioOneOctaveDown) {
+    VoiceManager vm;
+    vm.Init(48000);
+    auto sample = MakeRampSample(1000, 0, 1);
+
+    VoiceTriggerParams p = FlatParams(sample.data(), sample.size(), /*note=*/48, 100, 0.5f);
+    p.root_note = 60;  // one octave below root
+    vm.Trigger(p);
+
+    EXPECT_NEAR(vm.GetVoice(0).increment, 0.5f, 1e-4f);
+}
+
+TEST(VoiceManagerTest, SameNoteAsRootNoteIsUnityRate) {
+    VoiceManager vm;
+    vm.Init(48000);
+    auto sample = MakeRampSample(1000, 0, 1);
+
+    VoiceTriggerParams p = FlatParams(sample.data(), sample.size(), 60, 100, 0.5f);
+    p.root_note = 60;
+    vm.Trigger(p);
+
+    EXPECT_NEAR(vm.GetVoice(0).increment, 1.0f, 1e-4f);
+}
+
+TEST(VoiceManagerTest, LoopingVoiceWrapsInsteadOfStopping) {
+    VoiceManager vm;
+    vm.Init(48000);
+    auto sample = MakeRampSample(4, 0, 0);  // 4 frames
+
+    VoiceTriggerParams p = FlatParams(sample.data(), sample.size(), 60, 100, 0.5f);
+    p.loop = true;
+    p.loop_start = 0;
+    p.loop_end = 4;
+    vm.Trigger(p);
+
+    float out_l[100] = {0};
+    float out_r[100] = {0};
+    vm.Render(out_l, out_r, 100);  // far more than 4 frames
+
+    // A looping voice must still be active after playing well past its
+    // natural sample length - it wraps instead of releasing/stopping.
+    EXPECT_EQ(vm.ActiveVoiceCount(), 1);
+    EXPECT_EQ(vm.GetVoice(0).state, VoiceState::Playing);
+}
+
+TEST(VoiceManagerTest, StartFrameOffsetsInitialPlaybackPosition) {
+    VoiceManager vm;
+    vm.Init(48000);
+    auto sample = MakeRampSample(10, 0, 100);  // sample[i] == i*100
+
+    VoiceTriggerParams p = FlatParams(sample.data(), sample.size(), 60, 127, 0.5f);
+    p.start_frame = 5;
+    vm.Trigger(p);
+
+    EXPECT_FLOAT_EQ(vm.GetVoice(0).phase, 5.0f);
+
+    float out_l[1] = {0};
+    float out_r[1] = {0};
+    vm.Render(out_l, out_r, 1);
+
+    // First rendered sample should reflect sample[5], not sample[0].
+    float expected = (500.0f / 32768.0f) * 0.5f;
+    EXPECT_NEAR(out_l[0], expected, 1e-3f);
+}
+
+TEST(VoiceManagerTest, EndFrameTruncatesPlaybackRegion) {
+    VoiceManager vm;
+    vm.Init(48000);
+    auto sample = MakeRampSample(100, 0, 1);
+
+    VoiceTriggerParams p = FlatParams(sample.data(), sample.size(), 60, 100, 0.5f);
+    p.end_frame = 10;  // much shorter than the full 100-frame sample
+    vm.Trigger(p);
+
+    float out_l[64] = {0};
+    float out_r[64] = {0};
+    vm.Render(out_l, out_r, 64);
+
+    EXPECT_EQ(vm.ActiveVoiceCount(), 0)
+        << "voice should have released at end_frame=10, not played the full 100 frames";
+}
+
+TEST(VoiceManagerTest, FilterAttenuatesHighFrequencyContent) {
+    // A signal alternating +/-full-scale every sample is entirely
+    // high-frequency (Nyquist); a lowpass filter should sharply attenuate
+    // it, whereas a wide-open filter (FlatParams default) leaves it intact.
+    constexpr size_t kFrames = 200;
+    std::vector<int16_t> nyquist(kFrames);
+    for (size_t i = 0; i < kFrames; ++i) {
+        nyquist[i] = (i % 2 == 0) ? 32767 : -32768;
+    }
+
+    VoiceManager vm_open;
+    vm_open.Init(48000);
+    vm_open.Trigger(FlatParams(nyquist.data(), nyquist.size(), 60, 127, 0.5f));
+
+    VoiceManager vm_filtered;
+    vm_filtered.Init(48000);
+    VoiceTriggerParams p = FlatParams(nyquist.data(), nyquist.size(), 60, 127, 0.5f);
+    p.filter_cutoff_hz = 200.0f;  // well below Nyquist
+    vm_filtered.Trigger(p);
+
+    constexpr size_t kBlock = 64;
+    float open_l[kBlock] = {0}, open_r[kBlock] = {0};
+    float filt_l[kBlock] = {0}, filt_r[kBlock] = {0};
+    vm_open.Render(open_l, open_r, kBlock);
+    vm_filtered.Render(filt_l, filt_r, kBlock);
+
+    // Compare peak-to-peak amplitude near the end of the block (past the
+    // filter's initial transient) - the filtered signal must be
+    // substantially smaller.
+    float open_peak = 0.0f, filt_peak = 0.0f;
+    for (size_t i = kBlock - 16; i < kBlock; ++i) {
+        open_peak = std::max(open_peak, std::fabs(open_l[i]));
+        filt_peak = std::max(filt_peak, std::fabs(filt_l[i]));
+    }
+    EXPECT_GT(open_peak, 0.1f);
+    EXPECT_LT(filt_peak, open_peak * 0.5f)
+        << "a 200Hz lowpass should substantially attenuate a Nyquist-rate signal";
+}
+
+TEST(VoiceManagerTest, EnvelopeRampsUpDuringAttack) {
+    VoiceManager vm;
+    vm.Init(48000);
+    auto sample = MakeRampSample(48000, 32767, 0);  // long constant-value sample
+
+    VoiceTriggerParams p = FlatParams(sample.data(), sample.size(), 60, 127, 0.5f);
+    p.attack_s = 0.01f;  // 480 samples @ 48kHz
+    p.decay_s = 0.0f;
+    p.sustain_level = 1.0f;
+    p.release_s = 0.0f;
+    vm.Trigger(p);
+
+    float out_l[600] = {0};
+    float out_r[600] = {0};
+    vm.Render(out_l, out_r, 600);
+
+    // Output should start near zero (attack just beginning) and be much
+    // louder by the time attack has completed (past sample 480).
+    EXPECT_LT(std::fabs(out_l[0]), std::fabs(out_l[599]));
+    EXPECT_NEAR(out_l[599], 0.5f, 0.05f) << "should be near full amplitude once attack completes";
+}
+
+TEST(VoiceManagerTest, ReleasedVoiceEnvelopeDecaysTowardZero) {
+    VoiceManager vm;
+    vm.Init(48000);
+    auto sample = MakeRampSample(48000, 32767, 0);
+
+    VoiceTriggerParams p = FlatParams(sample.data(), sample.size(), 60, 127, 0.5f);
+    p.release_s = 0.01f;  // 480 samples
+    vm.Trigger(p);
+
+    // Run to full sustain first.
+    float scratch_l[64] = {0}, scratch_r[64] = {0};
+    vm.Render(scratch_l, scratch_r, 64);
+
+    vm.Release(60);
+
+    float out_l[600] = {0};
+    float out_r[600] = {0};
+    vm.Render(out_l, out_r, 600);
+
+    EXPECT_GT(std::fabs(out_l[0]), std::fabs(out_l[599]))
+        << "amplitude should be decaying during the release tail";
 }

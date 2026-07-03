@@ -817,6 +817,8 @@ void Init(DaisySeed& hw, float sample_rate) {
     constexpr uint32_t kSamplerMaxRecordSeconds = 30;
     s_sampler.Init(sample_rate, s_sample_mem_mgr, sample_rate * kSamplerMaxRecordSeconds);
 
+    s_voice_manager.Init(static_cast<uint32_t>(sample_rate));
+
     // Test basic allocation to ensure SDRAM is working
     if (s_hw) {
         s_hw->PrintLine("AUDIO_ENGINE: Testing Sample RAM allocation...");

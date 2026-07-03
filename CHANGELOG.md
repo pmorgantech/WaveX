@@ -58,6 +58,31 @@ versioning and release process.
   existing WAV-streaming path is a separate, still-singleton subsystem; see
   `docs/roadmap.md` item 2 for why it's scoped as its own follow-up rather
   than bundled into this change.
+- **Per-voice digital processing** (roadmap Phase 1 item 4): extends the
+  voice manager above with the pieces it was deliberately missing —
+  `Voice::increment` is now a real 12-TET pitch ratio (`note` relative to a
+  per-trigger `root_note`, octave up/down verified exactly); start/end/loop
+  playback region (`Voice::start_frame/end_frame/loop/loop_start/loop_end`
+  — a looping voice now keeps playing indefinitely instead of self-stopping
+  at the sample's natural end); a one-pole lowpass filter stand-in for the
+  analog VCF (`firmware/daisy/src/audio/one_pole_filter.hpp`, picked over
+  SVF for simplicity — no per-voice resonance state needed for "a
+  stand-in"); and a linear ADSR envelope
+  (`firmware/daisy/src/audio/envelope.hpp` — deliberately not DaisySP's
+  `Adsr`, which isn't linked into the host test libraries). `Release()` now
+  starts the envelope's release phase instead of hard-stopping the voice —
+  a voice stays allocated and rendering through its release tail, matching
+  real synth behavior; this is a real, deliberate behavior change from the
+  item-2 version. Voice-stealing now prefers a voice already releasing over
+  an older sustaining one (the follow-up the item-2 code comment predicted).
+  `Trigger()`'s signature changed to a `VoiceTriggerParams` struct (named
+  fields) since the old 5-positional-argument form doesn't scale to this
+  many parameters. **Did not adopt `arm_linear_interp_q15`** despite the
+  roadmap citing it — that's a profiling-driven ARM-only optimization
+  (needs the DWT cycle counter on real hardware) that would cost this
+  class's host-testability; the roadmap text reads as "(exists) for later
+  use," not a mandate for this pass. 10 new host tests (22 total).
+  Still not wired into `Callback()`, same reasoning as item 2.
 
 ### Fixed (Daisy audio) — roadmap Phase 1 item 3
 

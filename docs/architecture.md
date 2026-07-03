@@ -178,7 +178,7 @@ The 1-block = 1-ms identity is a deliberate design invariant: the control tick i
 
 8 voices, each: sample oscillator (streamed or RAM-resident) + optional VA oscillator + noise, 4 ADSR, 3 LFO, per-voice mod matrix.
 
-**Implementation status (roadmap Phase 1 item 2)**: `firmware/daisy/src/audio/voice_manager.hpp` implements the RAM-resident half — 8-voice allocation/stealing, per-voice gain/pan, and a pitch hook (not yet driven by note number). Not yet implemented: streamed voices (still the old singleton WAV-ring-buffer path, not voice-manager-owned), VA oscillator/noise/LFO/mod matrix, and ADSR (item 4). Not yet wired into the audio callback — see item 2 in `roadmap.md` for why.
+**Implementation status (roadmap Phase 1 items 2 + 4)**: `firmware/daisy/src/audio/voice_manager.hpp` implements the RAM-resident half — 8-voice allocation/stealing (preferring a releasing voice when stealing), per-voice gain/pan, a note-relative pitch ratio, start/end/loop points, a one-pole lowpass filter stand-in (`audio/one_pole_filter.hpp`), and a linear ADSR (`audio/envelope.hpp`). Not yet implemented: streamed voices (still the old singleton WAV-ring-buffer path, not voice-manager-owned), VA oscillator/noise/LFO/mod matrix. Not yet wired into the audio callback — see items 2/4 in `roadmap.md` for why.
 
 The analog output section is deliberately **two-stage**, selected by build flags (see §5.3):
 
