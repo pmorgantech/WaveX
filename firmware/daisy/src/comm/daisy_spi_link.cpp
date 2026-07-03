@@ -28,6 +28,7 @@
 #include "sys/dma.h"               // For DMA cache helpers
 #include "sys/system.h"            // For System::DelayUs
 
+#include "spi_protocol/sequence_tracker.hpp"  // For reboot-aware seq tracking (roadmap Phase 1 item 7)
 #include <cstdint>
 #include <cstdlib>
 
@@ -69,7 +70,19 @@ static size_t get_packet_size(const uint8_t* packet_data) {
 static void spi_dma_start_cb(void* context);
 static void spi_dma_end_cb(void* context, daisy::SpiHandle::Result result);
 
+// The real s_hw lives in daisy_uart_link.cpp as WaveX::Comm::s_hw. This
+// bare `extern` (at file/global scope, before any `namespace WaveX::Comm`
+// block below opens) previously declared a *different*, never-defined
+// ::s_hw - the same class of namespace-scoping bug found and fixed in
+// application_context.cpp's UART PacketRouter injection. Harmless while
+// WAVEX_SPI_LINK_ENABLED=0 (this file isn't compiled), but breaks the link
+// step the moment it is.
+namespace WaveX {
+namespace Comm {
 extern daisy::DaisySeed* s_hw;
+}  // namespace Comm
+}  // namespace WaveX
+using WaveX::Comm::s_hw;
 static daisy::SpiHandle* g_spi_handle = NULL;
 static daisy::GPIO cs_pin;
 static daisy::GPIO attn_pin;
@@ -82,11 +95,9 @@ static WaveX::Comm::spi_link_stats_t s_stats = {};
 // Message queue for received messages (unified for both packet types)
 #define MAX_QUEUED_MESSAGES 8
 
-// Sequence number tracking for duplicate detection
-static uint16_t s_last_received_seq = 0;
-static uint16_t s_expected_seq = 1;  // Start from 1, 0 is reserved
-static uint32_t s_duplicate_count = 0;
-static uint32_t s_out_of_order_count = 0;
+// Sequence number tracking for duplicate/out-of-order/reboot-resync
+// detection - shared implementation, see sequence_tracker.hpp.
+static WaveX::Protocol::SequenceTracker s_seq_tracker;
 
 // ============================================================================
 // Utility Functions (used by message handlers)
@@ -98,41 +109,37 @@ namespace Comm {
 // Forward declarations
 daisy::SpiHandle::Result Spi_ReceivePacket();
 
-// Check for duplicate packets using sequence numbers (packet-level processing)
+// Check for duplicate/out-of-order packets using sequence numbers
+// (packet-level processing). Returns true if the packet should be dropped.
 static bool is_duplicate_packet(uint16_t seq_num) {
-    if (seq_num == 0) {
-        // Sequence number 0 is reserved/invalid
-        return true;
+    using WaveX::Protocol::SequenceTracker;
+    SequenceTracker::Result result = s_seq_tracker.Evaluate(seq_num);
+    switch (result) {
+        case SequenceTracker::Result::Accept:
+            return false;
+        case SequenceTracker::Result::ResyncAccept:
+            if (s_hw)
+                s_hw->PrintLine(
+                    "DAISY: Peer resync detected: seq=%u (expected>=%u) - treating as reboot, "
+                    "not corruption (resync count: %u)",
+                    seq_num,
+                    s_seq_tracker.ExpectedSeq(),
+                    s_seq_tracker.ResyncCount());
+            return false;
+        case SequenceTracker::Result::Duplicate:
+            if (s_hw)
+                s_hw->PrintLine("DAISY: Duplicate packet detected: seq=%u (duplicate count: %u)",
+                                seq_num,
+                                s_seq_tracker.DuplicateCount());
+            return true;
+        case SequenceTracker::Result::OutOfOrder:
+        default:
+            if (s_hw)
+                s_hw->PrintLine("DAISY: Out-of-order packet: seq=%u (out-of-order count: %u)",
+                                seq_num,
+                                s_seq_tracker.OutOfOrderCount());
+            return true;
     }
-
-    if (seq_num == s_last_received_seq) {
-        // Exact duplicate
-        s_duplicate_count++;
-        if (s_hw)
-            s_hw->PrintLine("DAISY: Duplicate packet detected: seq=%u (duplicate count: %u)",
-                            seq_num,
-                            s_duplicate_count);
-        return true;
-    }
-
-    // Check for out-of-order packets (allow some tolerance for network reordering)
-    uint16_t expected_min = (s_expected_seq > 10) ? (s_expected_seq - 10) : 1;
-    if (seq_num < expected_min) {
-        s_out_of_order_count++;
-        if (s_hw)
-            s_hw->PrintLine(
-                "DAISY: Out-of-order packet: seq=%u, expected>=%u (out-of-order count: %u)",
-                seq_num,
-                expected_min,
-                s_out_of_order_count);
-        return true;
-    }
-
-    // Update tracking
-    s_last_received_seq = seq_num;
-    s_expected_seq = seq_num + 1;
-
-    return false;
 }
 
 }  // namespace Comm

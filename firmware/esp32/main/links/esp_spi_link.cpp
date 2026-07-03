@@ -25,6 +25,9 @@
 #include "soc/spi_periph.h"
 #include "spi_protocol/spi_protocol.h"
 
+#include "../../shared/spi_protocol/attn_watchdog.hpp"
+#include "../../shared/spi_protocol/sequence_tracker.hpp"
+
 using namespace WaveX::Protocol;
 
 #if WAVEX_SPI_LINK_ENABLED
@@ -69,11 +72,12 @@ static bool s_tx_has_message[BUFFER_POOL_SIZE] = {false, false, false};
 // Ensure we only queue a single real message at any time to avoid duplicates
 static bool s_real_msg_queued = false;
 
-// Sequence number tracking for duplicate detection
-static uint16_t s_last_received_seq = 0;
-static uint16_t s_expected_seq = 1;  // Start from 1, 0 is reserved
-static uint32_t s_duplicate_count = 0;
-static uint32_t s_out_of_order_count = 0;
+// Sequence number tracking for duplicate/out-of-order/reboot-resync
+// detection - shared implementation, see sequence_tracker.hpp.
+static SequenceTracker s_seq_tracker;
+
+// ATTN-stuck-high recovery (roadmap Phase 1 item 7) - see attn_watchdog.hpp.
+static AttnWatchdog s_attn_watchdog;
 
 // Track whether the last received packet was a one-way packet
 static bool s_last_packet_was_one_way = false;
@@ -108,40 +112,35 @@ static esp_err_t allocate_dma_buffers(void);
 static void free_dma_buffers(void);
 static void spi_post_trans_cb(spi_slave_transaction_t* trans);
 
-// Check for duplicate packets using sequence numbers
+// Check for duplicate/out-of-order packets using sequence numbers. Returns
+// true if the packet should be dropped.
 static bool is_duplicate_packet(uint16_t seq_num) {
-    if (seq_num == 0) {
-        // Sequence number 0 is reserved/invalid
-        return true;
+    SequenceTracker::Result result = s_seq_tracker.Evaluate(seq_num);
+    switch (result) {
+        case SequenceTracker::Result::Accept:
+            return false;
+        case SequenceTracker::Result::ResyncAccept:
+            ESP_LOGW(TAG,
+                     "Peer resync detected: seq=%u (expected>=%u) - treating as reboot, not "
+                     "corruption (resync count: %u)",
+                     seq_num,
+                     s_seq_tracker.ExpectedSeq(),
+                     s_seq_tracker.ResyncCount());
+            return false;
+        case SequenceTracker::Result::Duplicate:
+            ESP_LOGW(TAG,
+                     "Duplicate packet detected: seq=%u (duplicate count: %u)",
+                     seq_num,
+                     s_seq_tracker.DuplicateCount());
+            return true;
+        case SequenceTracker::Result::OutOfOrder:
+        default:
+            ESP_LOGW(TAG,
+                     "Out-of-order packet: seq=%u (out-of-order count: %u)",
+                     seq_num,
+                     s_seq_tracker.OutOfOrderCount());
+            return true;
     }
-
-    if (seq_num == s_last_received_seq) {
-        // Exact duplicate
-        s_duplicate_count++;
-        ESP_LOGW(TAG,
-                 "Duplicate packet detected: seq=%u (duplicate count: %u)",
-                 seq_num,
-                 s_duplicate_count);
-        return true;
-    }
-
-    // Check for out-of-order packets (allow some tolerance for network reordering)
-    uint16_t expected_min = (s_expected_seq > 10) ? (s_expected_seq - 10) : 1;
-    if (seq_num < expected_min) {
-        s_out_of_order_count++;
-        ESP_LOGW(TAG,
-                 "Out-of-order packet: seq=%u, expected>=%u (out-of-order count: %u)",
-                 seq_num,
-                 expected_min,
-                 s_out_of_order_count);
-        return true;
-    }
-
-    // Update tracking
-    s_last_received_seq = seq_num;
-    s_expected_seq = seq_num + 1;
-
-    return false;
 }
 
 // Initialize packet router
@@ -210,6 +209,7 @@ static void spi_post_trans_cb(spi_slave_transaction_t* trans) {
     if (trans && trans->user == (void*)1) {
         // Clear ATTN immediately - the message has been clocked out
         gpio_set_level((gpio_num_t)WAVEX_ESP_ATTN_OUT, 0);
+        s_attn_watchdog.MarkCleared();
     }
 }
 
@@ -228,11 +228,18 @@ static void signal_daisy_urgent(bool urgent) {
     esp_rom_delay_us(100);  // Increased delay for stability
 
     if (urgent) {
+        // Roadmap Phase 1 item 7 (ATTN-stuck-high recovery): start the
+        // watchdog clock. If spi_post_trans_cb never fires to clear it (the
+        // Daisy never clocks the transaction), spi_slave_task's loop force-
+        // deasserts ATTN once the watchdog trips, instead of staying
+        // wedged high forever.
+        s_attn_watchdog.MarkAsserted(static_cast<uint32_t>(esp_timer_get_time() / 1000));
         WAVEX_LOG_ESP32_SPI(ESP32_INTER_SPI,
                             "Signaling Daisy for urgent control (GPIO%d HIGH) - queue_count=%d",
                             WAVEX_ESP_ATTN_OUT,
                             msg_queue_count);
     } else {
+        s_attn_watchdog.MarkCleared();
         WAVEX_LOG_ESP32_SPI(ESP32_INTER_SPI,
                             "Cleared Daisy urgent signal (GPIO%d LOW) - queue_count=%d",
                             WAVEX_ESP_ATTN_OUT,
@@ -539,6 +546,21 @@ static void spi_slave_task(void* pvParameters) {
     ESP_LOGI(TAG, "=== INITIALIZING FIRST TRANSACTION ===");
 
     while (1) {
+        // Roadmap Phase 1 item 7 (ATTN-stuck-high recovery): if ATTN has
+        // been asserted longer than AttnWatchdog::kForceDeassertMs without
+        // spi_post_trans_cb ever clearing it (the Daisy never clocked the
+        // transaction), force it low and log rather than leaving the link
+        // wedged until a manual ESP32 restart.
+        uint32_t now_ms = static_cast<uint32_t>(esp_timer_get_time() / 1000);
+        if (s_attn_watchdog.ShouldForceDeassert(now_ms)) {
+            ESP_LOGE(TAG,
+                     "ATTN stuck high for >%ums with no transaction completing - forcing low "
+                     "(link may have wedged; Daisy possibly rebooted mid-transaction)",
+                     (unsigned)AttnWatchdog::kForceDeassertMs);
+            gpio_set_level((gpio_num_t)WAVEX_ESP_ATTN_OUT, 0);
+            s_attn_watchdog.MarkCleared();
+        }
+
         // Rotate to next buffer set FIRST (triple buffering)
         // This ensures we never reuse a buffer that's still queued
         s_current_tx_index = (s_current_tx_index + 1) % BUFFER_POOL_SIZE;

@@ -13,6 +13,25 @@ versioning and release process.
 
 ### Added
 
+- **Link robustness regression tests** (roadmap Phase 1 item 7): investigation
+  found the disabled SPI path's sequence-number validation
+  (`is_duplicate_packet`, byte-for-byte duplicated between
+  `daisy_spi_link.cpp`/`esp_spi_link.cpp`) would have permanently wedged on
+  a real peer reboot — a sender resetting its sequence counter to 1 gets
+  classified "out-of-order" against the receiver's still-high expectation
+  forever, with no recovery path. Extracted into a single shared
+  `firmware/shared/spi_protocol/sequence_tracker.hpp` (`SequenceTracker`)
+  that detects that specific reboot signature (a low, fresh-looking
+  sequence number arriving far below an already-advanced expectation) and
+  resyncs instead of wedging, replacing both duplicated copies. Added
+  `firmware/shared/spi_protocol/attn_watchdog.hpp` (`AttnWatchdog`): the
+  ESP32-side ATTN-assertion code had **no timeout at all** for "asserted
+  ATTN, transaction never completed" — a wedged Daisy left ATTN stuck high
+  forever with no recovery; now force-deasserted after 500ms, mirroring the
+  UART fix's threshold. Both are HAL-free/host-tested (12 new tests) since
+  real GPIO/SPI electrical timing isn't testable without hardware — see the
+  roadmap entry for exactly what is and isn't covered.
+
 - Synced versioning: a single root `VERSION` file now drives both the ESP32
   (`PROJECT_VER`) and Daisy (`project(... VERSION ...)`) firmware builds.
 - `AGENTS.md` / `CLAUDE.md` project instructions.
@@ -83,6 +102,23 @@ versioning and release process.
   class's host-testability; the roadmap text reads as "(exists) for later
   use," not a mandate for this pass. 10 new host tests (22 total).
   Still not wired into `Callback()`, same reasoning as item 2.
+
+### Fixed (Daisy SPI link) — roadmap Phase 1 item 7
+
+- **`daisy_spi_link.cpp`'s `extern daisy::DaisySeed* s_hw;` was declared at
+  file/global scope**, before any `namespace WaveX::Comm` block in the file
+  opens — the same namespace-scoping bug class as the UART `PacketRouter`
+  injection fix (Phase 0.2, `c3c7967`). The real `s_hw` is
+  `WaveX::Comm::s_hw`, defined in `daisy_uart_link.cpp`; the mismatched
+  extern declared a different, never-defined `::s_hw`. Harmless while
+  `WAVEX_SPI_LINK_ENABLED=0` wraps this entire file out of the build (the
+  default), which is exactly why nobody had noticed: this dead code hadn't
+  actually compile-checked, let alone linked, in some time. Found and fixed
+  while verifying the sequence-resync/ATTN-watchdog changes below actually
+  compile — temporarily flipped the flag to 1, confirmed the link error, hit
+  this bug, fixed it, confirmed a clean build+link on both MCUs, then
+  reverted the flag (SPI stays disabled; re-enabling it for real is roadmap
+  Phase 1 item 6, blocked on oscilloscope access to verify the raised clock).
 
 ### Fixed (Daisy audio) — roadmap Phase 1 item 3
 
