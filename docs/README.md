@@ -37,6 +37,14 @@ Superseded or historical documents, kept for context. **Do not implement from th
 - UI docs (`UI_system.md`, `esp32_ui_page-based_navigation.md`, `navigation-integration-guide.md`) — superseded by `ui-architecture.md`.
 - `encoder-implementation-plan.md`, `sample-browser-redesign.md` — implemented plans.
 
+## Status reports
+
+Dated snapshots of implementation progress against `roadmap.md`, not living documents — check the date before trusting anything in one over the canonical docs above.
+
+| Document | Contents |
+|---|---|
+| [status-2026-07-02.md](status-2026-07-02.md) | Phase 0 (Foundation Hardening) complete + Phase 1 items 1–3 (output/CV seam, RAM-resident voice manager, real-time-safe recording buffer); bugs found along the way; what still needs hardware verification |
+
 ## Housekeeping notes
 
 - `docs/venv/` is a stray Python virtualenv (used by `docx2md.py`); it should be removed or gitignored.
