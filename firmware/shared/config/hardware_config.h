@@ -223,9 +223,10 @@
 #define WAVEX_AUDIO_INPUT_ENABLED 1
 #endif
 
-// Audio sample rate configuration
+// Audio sample rate configuration (48 kHz: preserves the 1-block = 1-ms
+// control-tick invariant with 48-sample blocks - architecture.md §5.1)
 #ifndef WAVEX_AUDIO_SAMPLE_RATE
-#define WAVEX_AUDIO_SAMPLE_RATE 44100
+#define WAVEX_AUDIO_SAMPLE_RATE 48000
 #endif
 
 // Audio block size configuration

@@ -323,6 +323,51 @@ TEST(VoiceManagerTest, SameNoteAsRootNoteIsUnityRate) {
     EXPECT_NEAR(vm.GetVoice(0).increment, 1.0f, 1e-4f);
 }
 
+// Native-rate compensation (dma-timing-review-2026-07-03.md Finding 1): a
+// 44.1kHz sample on a 48kHz engine must advance 44100/48000 = 0.91875
+// source frames per output frame to play at its recorded pitch.
+TEST(VoiceManagerTest, NativeRateCompensationFor44k1SampleOn48kEngine) {
+    VoiceManager vm;
+    vm.Init(48000);
+    auto sample = MakeRampSample(1000, 0, 1);
+
+    VoiceTriggerParams p = FlatParams(sample.data(), sample.size(), 60, 100, 0.5f);
+    p.root_note = 60;          // pitch ratio 1.0 from the note
+    p.sample_rate_hz = 44100;  // native rate differs from engine
+    vm.Trigger(p);
+
+    EXPECT_NEAR(vm.GetVoice(0).increment, 44100.0f / 48000.0f, 1e-5f);
+}
+
+// sample_rate_hz == 0 (the default) means "same as engine": no compensation.
+TEST(VoiceManagerTest, ZeroSampleRateMeansNoCompensation) {
+    VoiceManager vm;
+    vm.Init(48000);
+    auto sample = MakeRampSample(1000, 0, 1);
+
+    VoiceTriggerParams p = FlatParams(sample.data(), sample.size(), 60, 100, 0.5f);
+    p.root_note = 60;
+    p.sample_rate_hz = 0;
+    vm.Trigger(p);
+
+    EXPECT_NEAR(vm.GetVoice(0).increment, 1.0f, 1e-5f);
+}
+
+// Rate compensation and note-based pitch compose multiplicatively: an
+// octave up on a 44.1k sample = 2.0 x 0.91875.
+TEST(VoiceManagerTest, RateCompensationComposesWithNotePitch) {
+    VoiceManager vm;
+    vm.Init(48000);
+    auto sample = MakeRampSample(1000, 0, 1);
+
+    VoiceTriggerParams p = FlatParams(sample.data(), sample.size(), /*note=*/72, 100, 0.5f);
+    p.root_note = 60;  // one octave below note 72 -> x2.0
+    p.sample_rate_hz = 44100;
+    vm.Trigger(p);
+
+    EXPECT_NEAR(vm.GetVoice(0).increment, 2.0f * (44100.0f / 48000.0f), 1e-4f);
+}
+
 TEST(VoiceManagerTest, LoopingVoiceWrapsInsteadOfStopping) {
     VoiceManager vm;
     vm.Init(48000);

@@ -87,6 +87,15 @@ struct VoiceTriggerParams {
     float pan = 0.5f;
     uint8_t root_note = 60;  // note at which `sample` plays at its recorded pitch
 
+    // The sample's native rate in Hz. 0 (default) means "same as the
+    // engine" - no compensation. When set (e.g. 44100 for a 44.1kHz WAV on
+    // the 48kHz engine), playback rate is scaled by native/engine so the
+    // sample plays at its recorded pitch without resampling its data -
+    // the fractional-phase linear interpolation in Render() does the work
+    // (dma-timing-review-2026-07-03.md Finding 1, "playback-rate
+    // compensation" option).
+    uint32_t sample_rate_hz = 0;
+
     uint32_t start_frame = 0;
     uint32_t end_frame = 0;  // 0 => sample_frames
     bool loop = false;
@@ -135,11 +144,18 @@ class VoiceManager {
             (params.loop_end == 0 || params.loop_end > v.end_frame) ? v.end_frame : params.loop_end;
         v.phase = static_cast<float>(v.start_frame);
 
-        // Pitch: 12-TET ratio relative to the sample's recorded root note.
-        v.increment = std::pow(
-            2.0f,
-            static_cast<float>(static_cast<int>(params.note) - static_cast<int>(params.root_note)) /
-                12.0f);
+        // Pitch: 12-TET ratio relative to the sample's recorded root note,
+        // times native-rate/engine-rate compensation (a 44.1kHz sample on a
+        // 48kHz engine advances 0.919 source frames per output frame so it
+        // plays at recorded pitch).
+        const float rate_ratio =
+            (params.sample_rate_hz > 0)
+                ? static_cast<float>(params.sample_rate_hz) / static_cast<float>(sample_rate_)
+                : 1.0f;
+        v.increment = rate_ratio * std::pow(2.0f,
+                                            static_cast<float>(static_cast<int>(params.note) -
+                                                               static_cast<int>(params.root_note)) /
+                                                12.0f);
 
         v.filter.Init(sample_rate_);
         v.filter.SetCutoff(params.filter_cutoff_hz);

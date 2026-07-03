@@ -11,6 +11,25 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Changed (Daisy audio) — needs hardware listen test
+
+- **Engine sample rate: 44.1 kHz → 48 kHz** (decision 2026-07-03,
+  `docs/dma-timing-review-2026-07-03.md` Finding 1). Restores the
+  1-block = 1-ms control-tick invariant (48-sample blocks at 48 kHz), which
+  44.1 kHz had silently broken — the "1 kHz" tick was running at 918.75 Hz,
+  and a Phase 2 sequencer built on it would have run ~110 BPM at a setting
+  of 120. `timebase.hpp` now `static_assert`s the integer-ms invariant so
+  this can't silently regress again. 44.1 kHz WAV content is rate-converted
+  at playback: streaming/audition through `PumpWavIO`'s existing resampler
+  (made trustworthy by the Finding-6 fix in the previous commit, since
+  resampling is now the *normal* path for 44.1k files), and RAM-resident
+  samples via new playback-rate compensation —
+  `VoiceTriggerParams::sample_rate_hz` scales `Voice::increment` by
+  native/engine rate (0.91875 for 44.1k on 48k), composing multiplicatively
+  with note pitch; 3 new host tests. Resample-on-load stays a later option
+  for Phase 4 uniformity. **Verify on hardware**: audition one 44.1 kHz and
+  one 48 kHz WAV and confirm correct pitch on both.
+
 ### Added
 
 - **DMA/timing code review** (`docs/dma-timing-review-2026-07-03.md`): 12

@@ -313,7 +313,7 @@ static q15_t s_rb[RB_CAP_FRAMES * kMaxMixChannels];
 
 // Pre-buffering system for smooth playback start
 static const uint32_t PREBUFFER_FRAMES =
-    1024;  // ~23ms at 44.1kHz (much more responsive for auditioning)
+    1024;  // ~21ms at 48kHz (much more responsive for auditioning)
 static q15_t s_prebuffer[PREBUFFER_FRAMES * kMaxMixChannels];  // ~23ms of interleaved audio
 static uint32_t s_prebuffer_filled = 0;                        // Number of frames pre-buffered
 static bool s_prebuffer_ready = false;  // Whether pre-buffer is ready for playback

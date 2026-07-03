@@ -172,9 +172,7 @@ See `features/inter-mcu-protocol.md` for the full as-built wire specification (p
 | Control tick work | envelopes, LFOs, mod matrix, CV staging, meter accumulation |
 | CPU load target | ≤ 70% average in callback, measured continuously via DWT |
 
-The 1-block = 1-ms identity is a deliberate design invariant: the control tick is derived from the audio callback, so CV, modulation, and (future) sequencer events are inherently phase-locked to the audio stream. Any change to block size must preserve an integer-ms tick or introduce a proper tick divider.
-
-> **Invariant currently violated (found 2026-07-03, decision recorded)**: the as-built code actually runs at **44.1 kHz** (`main.cpp` sets `SAI_44KHZ` via a local libDaisy patch; `timebase.hpp` says `kAudioRate = 44100`), making the "1 kHz" tick really 918.75 Hz. Decision: return to **48 kHz** as this table states, with 44.1 kHz WAV content handled by the existing streaming resampler (audition) and playback-rate compensation in `VoiceManager` (RAM-resident samples). Details and consequences: `dma-timing-review-2026-07-03.md` Finding 1; sequencing: `roadmap.md` Phase 1 next-steps block. Remove this note once the switch lands.
+The 1-block = 1-ms identity is a deliberate design invariant: the control tick is derived from the audio callback, so CV, modulation, and (future) sequencer events are inherently phase-locked to the audio stream. Any change to block size must preserve an integer-ms tick or introduce a proper tick divider — `timebase.hpp` now enforces this with a `static_assert`. (The engine briefly ran at 44.1 kHz, silently making the "1 kHz" tick 918.75 Hz; found and reverted 2026-07-03 — `dma-timing-review-2026-07-03.md` Finding 1.) Non-48 kHz WAV content is rate-converted at playback: the streaming/audition path resamples in `PumpWavIO`, and RAM-resident samples use playback-rate compensation (`VoiceTriggerParams::sample_rate_hz` scales `Voice::increment` by native/engine rate).
 
 ### 5.2 Voice architecture (target — partially implemented)
 

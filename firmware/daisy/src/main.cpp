@@ -190,7 +190,12 @@ int main(void) {
 
 #if WAVEX_AUDIO_ENGINE_ENABLED
     hw.SetAudioBlockSize(Timebase::kBlockSize);  // 48-sample blocks → 1 kHz control tick
-    hw.SetAudioSampleRate(SaiHandle::Config::SampleRate::SAI_44KHZ);
+    // 48 kHz: preserves the 1-block = 1-ms control-tick invariant (48-sample
+    // blocks). Decision recorded 2026-07-03 - see timebase.hpp and
+    // docs/dma-timing-review-2026-07-03.md Finding 1. 44.1 kHz WAV content
+    // is rate-converted at playback (PumpWavIO resampler for streaming/
+    // audition; Voice::increment scaling for RAM-resident samples).
+    hw.SetAudioSampleRate(SaiHandle::Config::SampleRate::SAI_48KHZ);
 
     // Initialize DSP objects
     InitDSP();
