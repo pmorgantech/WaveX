@@ -7,88 +7,47 @@ on:
     branches: [main, develop]
 
 jobs:
-  test:
-    runs-on: ubuntu-22.04
+  build-and-test:
+    runs-on: ubuntu-latest
+    # Same base image as .devcontainer/Dockerfile: CI builds with exactly the
+    # toolchain developers use (ESP-IDF release-v5.5 at /opt/esp/idf, which is
+    # the path `make esp32` sources, plus apt's arm-none-eabi-gcc for the
+    # Daisy build - the devcontainer installs the same package). This
+    # replaces the old per-run `git clone -b v5.2` ESP-IDF install, which was
+    # both slow (~10 min) and a different major toolchain version than dev.
+    container:
+      image: espressif/idf:release-v5.5
 
     steps:
+      - name: Install Daisy/host-test toolchain
+        run: |
+          apt-get update
+          apt-get install -y gcc-arm-none-eabi cmake ninja-build build-essential git
+
+      # The job runs as root inside the container; submodule operations trip
+      # git's dubious-ownership check without this.
+      - name: Trust workspace for git
+        run: git config --global --add safe.directory '*'
+
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            cmake \
-            ninja-build \
-            git \
-            wget \
-            libusb-1.0-0-dev \
-            pkg-config \
-            libffi-dev \
-            libssl-dev \
-            python3-dev \
-            python3-pip \
-            libglib2.0-dev \
-            libpixman-1-dev
+      - name: Run shared protocol tests
+        run: make test-shared
 
-      - name: Install ESP-IDF
-        run: |
-          mkdir -p ~/esp
-          cd ~/esp
-          git clone -b v5.2 --recursive https://github.com/espressif/esp-idf.git
-          cd esp-idf
-          ./install.sh esp32p4
-          echo "IDF_PATH=$HOME/esp/esp-idf" >> $GITHUB_ENV
-          echo "$HOME/esp/esp-idf/tools" >> $GITHUB_PATH
+      - name: Run ESP32 unit tests
+        run: make test-esp32
 
-      - name: Install ARM GCC Toolchain
-        run: |
-          sudo apt-get install -y gcc-arm-none-eabi gdb-multiarch
-          arm-none-eabi-gcc --version
+      - name: Run Daisy unit tests
+        run: make test-daisy
 
-      - name: Cache ESP-IDF build
-        uses: actions/cache@v3
-        with:
-          path: |
-            firmware/esp32/build
-            firmware/shared/tests/build
-          key: ${{ runner.os }}-esp32-build-${{ hashFiles('firmware/esp32/**/*', 'firmware/shared/**/*') }}
-          restore-keys: |
-            ${{ runner.os }}-esp32-build-
+      - name: Build ESP32 firmware
+        run: make esp32
 
-      - name: Cache Daisy build
-        uses: actions/cache@v3
-        with:
-          path: firmware/daisy/build
-          key: ${{ runner.os }}-daisy-build-${{ hashFiles('firmware/daisy/**/*') }}
-          restore-keys: |
-            ${{ runner.os }}-daisy-build-
+      - name: Build Daisy firmware (Stage A)
+        run: make daisy
 
-      - name: Run Shared Protocol Tests
-        run: |
-          source ~/esp/esp-idf/export.sh
-          make test-shared
-
-      - name: Run ESP32 Unit Tests
-        run: |
-          source ~/esp/esp-idf/export.sh
-          make test-esp32
-
-      - name: Run Daisy Unit Tests
-        run: |
-          make test-daisy
-
-      - name: Build ESP32 Firmware
-        run: |
-          source ~/esp/esp-idf/export.sh
-          make esp32
-
-      - name: Build Daisy Firmware
-        run: |
-          make daisy
-
-      - name: Build Daisy Firmware (Stage B flag set)
-        run: |
-          make daisy-stageb
+      - name: Build Daisy firmware (Stage B flag set)
+        run: make daisy-stageb

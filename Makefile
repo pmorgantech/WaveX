@@ -118,8 +118,8 @@ esp32:
 	@echo "========================================================================"
 	@echo "                    🔧 BUILDING ESP32 FRONTEND"
 	@echo "========================================================================"
-	@echo "Target: ESP32-S3 (UI, Controls, MIDI, Communication)"
-	@echo "Toolchain: ESP-IDF v5.2"
+	@echo "Target: ESP32-P4 (UI, Controls, MIDI, Communication)"
+	@echo "Toolchain: ESP-IDF release-v5.5"
 	@echo "------------------------------------------------------------------------"
 	cd firmware/esp32 && . /opt/esp/idf/export.sh && idf.py build
 	@echo "------------------------------------------------------------------------"

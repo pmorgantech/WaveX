@@ -11,6 +11,21 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Changed (CI)
+
+- GitHub Actions now runs inside `espressif/idf:release-v5.5` — the same
+  base image as `.devcontainer/Dockerfile` — instead of git-cloning ESP-IDF
+  v5.2 from scratch every run. This fixes the toolchain-version mismatch
+  with dev (5.5 vs 5.2), removes ~10 minutes of per-run IDF install, and
+  makes the Daisy toolchain identical too (the image's
+  `gcc-arm-none-eabi` is 13.2.1, matching dev). The stale build-directory
+  caches (which risked restoring stale absolute paths) were dropped along
+  with the separate IDF/ARM-GCC install steps. The full new CI recipe —
+  fresh recursive clone through both firmware builds and all host tests —
+  was dry-run locally in the exact container image before landing.
+  Cosmetic: `make esp32`'s banner no longer claims "ESP32-S3 / ESP-IDF
+  v5.2" (it's P4 / release-v5.5).
+
 ### Changed (submodules)
 
 - **libDaisy submodule re-pinned to the public upstream v8.1.0 tag**
