@@ -2,7 +2,13 @@
 # This Makefile configures CMake properly and delegates to the build directory
 
 CMAKE_SOURCE_DIR := $(CURDIR)
-BUILD_DIR := build
+# Overridable so CI can build a second flag-set configuration (roadmap Phase
+# 1 item 1, e.g. BUILD_DIR=build-stageb) into its own directory without
+# disturbing the default build/.
+BUILD_DIR ?= build
+# Extra -D args passed through to the CMake configure step, e.g.
+# CMAKE_EXTRA_ARGS="-DWAVEX_VOICE_OUTPUT_BACKEND=1 -DWAVEX_CV_BACKEND=1 -DWAVEX_ANALOG_CV_GROUPS=8"
+CMAKE_EXTRA_ARGS ?=
 CMAKE := cmake
 MAKE := make
 TOOLCHAIN_FILE := $(CMAKE_SOURCE_DIR)/libs/libDaisy/cmake/toolchains/ArmGNUToolchain.cmake
@@ -23,7 +29,7 @@ configure:
 	@if [ ! -d "$(BUILD_DIR)" ] || [ ! -f "$(BUILD_DIR)/CMakeCache.txt" ]; then \
 		echo "Configuring CMake..."; \
 		mkdir -p $(BUILD_DIR); \
-		cd $(BUILD_DIR) && $(TOOLCHAIN_ENV) $(CMAKE) $(CMAKE_SOURCE_DIR) -DCMAKE_TOOLCHAIN_FILE=$(TOOLCHAIN_FILE); \
+		cd $(BUILD_DIR) && $(TOOLCHAIN_ENV) $(CMAKE) $(CMAKE_SOURCE_DIR) -DCMAKE_TOOLCHAIN_FILE=$(TOOLCHAIN_FILE) $(CMAKE_EXTRA_ARGS); \
 	fi
 
 # Build the firmware

@@ -117,6 +117,22 @@ function(add_wavex_test test_source)
         )
     endif()
 
+    # cv_group_router.hpp is header-only and HAL-free (templated over the
+    # backend, no daisy_seed.h include) - safe to compile directly on host.
+    if(test_name STREQUAL "cv_group_router_test")
+        target_sources(${test_name} PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/../src/cv/cv_group_router.hpp
+        )
+    endif()
+
+    # output_sink.hpp is header-only and HAL-free (plain float arithmetic,
+    # no daisy_seed.h include) - safe to compile directly on host.
+    if(test_name STREQUAL "output_sink_test")
+        target_sources(${test_name} PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/../src/audio/output_sink.hpp
+        )
+    endif()
+
     target_link_libraries(${test_name} PUBLIC
         wavex_test_lib
         Threads::Threads

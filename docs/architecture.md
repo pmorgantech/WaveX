@@ -185,14 +185,16 @@ The analog output section is deliberately **two-stage**, selected by build flags
 
 Digital send effects (delay/reverb) return into the stereo mix; per-voice character DSP (bit-crush, drive) runs digitally pre-DAC in both stages.
 
-### 5.3 Output/CV backend abstraction (design rule)
+### 5.3 Output/CV backend abstraction (design rule, seam implemented)
+
+**Implementation status (roadmap Phase 1 item 1, done)**: the flags, sink split, and CV group router below exist as specified — `firmware/shared/config/hardware_config.h` (flags), `firmware/daisy/src/audio/output_sink.hpp` (`StereoMixSink` real, `TdmVoiceSink` a compiling stub), `firmware/daisy/src/cv/` (`CvGroupRouter`, `Mcp4728Backend` real I2C, `Mcp48Backend` a compiling stub). What's *not* done yet: the router/sinks aren't wired into `audio_engine.cpp`'s callback, because there's no array of per-voice buffers to feed them until the voice manager (item 2) exists — today's engine still has exactly one playback source. The paraphonic fold's envelope law (Stage A, M=1) is deliberately not implemented here either; that's item 5. Both flag-set combinations are proven to compile in CI (`make daisy` / `make daisy-stageb`).
 
 So that Stage A → Stage B is a configuration change rather than a rewrite, the engine is structured around two seams:
 
 1. **Output sink**: voices always render into per-voice block buffers; a sink stage consumes them. `StereoMixSink` sums into the SAI1 stereo stream (Stage A); `TdmVoiceSink` interleaves voice *i* into TDM slot *i* (Stage B). The existing `AudioOutputMode` enum remains the runtime switch; build flags set the default and exclude dead backend code from the build.
 2. **CV group router**: upper layers (sequencer, param locks, UI) always address parameters **per voice**. A router folds voice-indexed CV targets onto *M* physical CV groups: Stage A has M=1 (paraphonic fold — shared envelope logic decides the group value); Stage B has M=8 (identity map). The CV backend behind the router is `Mcp4728Backend` (I2C) or `Mcp48Backend` (SPI chain), same `QueueGroup()/Flush()` interface, both flushed from the main loop per §7.
 
-Configuration flags (defined in `firmware/shared/config/hardware_config.h` when implemented):
+Configuration flags (defined in `firmware/shared/config/hardware_config.h`):
 
 ```c
 // Voice output backend
@@ -207,6 +209,10 @@ Configuration flags (defined in `firmware/shared/config/hardware_config.h` when 
 
 // Physical analog CV groups (1 = paraphonic, 8 = full voice board)
 #define WAVEX_ANALOG_CV_GROUPS        1
+
+// Calibration tables are always sized for this many groups, regardless of
+// WAVEX_ANALOG_CV_GROUPS, so stored calibration data survives Stage A -> B.
+#define WAVEX_ANALOG_CV_GROUPS_MAX    8
 ```
 
 Invariants that keep the transition safe: voice index == TDM slot index == CV group index in Stage B; calibration tables are always sized for 8 groups regardless of backend; nothing above the router may branch on the backend flags.

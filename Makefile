@@ -1,5 +1,5 @@
 # WaveX Dual-MCU Sampler/Synth Build System
-.PHONY: help all esp32 daisy clean esp32-clean daisy-clean esp32-flash esp32-monitor esp32-flash-monitor esp32-menuconfig test test-all test-daisy test-esp32 test-shared test-clean ai-graph
+.PHONY: help all esp32 daisy daisy-stageb clean esp32-clean daisy-clean esp32-flash esp32-monitor esp32-flash-monitor esp32-menuconfig test test-all test-daisy test-esp32 test-shared test-clean ai-graph
 
 # Graphify
 ai-graph:
@@ -164,10 +164,25 @@ daisy:
 	@echo "✅ Daisy Seed Backend build completed successfully!"
 	@echo "========================================================================"
 
+# Compile the Stage B (TDM8/MCP48/8-group) flag set into a separate build
+# dir, alongside the default Stage A build - proves both output/CV backend
+# configurations compile (roadmap Phase 1 item 1 gate). Stage B has no real
+# hardware yet (TdmVoiceSink/Mcp48Backend are stubs - see
+# firmware/daisy/src/audio/output_sink.hpp / src/cv/mcp48_backend.hpp), so
+# this only verifies compilation, not behavior.
+daisy-stageb:
+	@echo "========================================================================"
+	@echo "            🎵 BUILDING DAISY SEED BACKEND (Stage B flag set)"
+	@echo "========================================================================"
+	cd firmware/daisy && make BUILD_DIR=build-stageb CMAKE_EXTRA_ARGS="-DWAVEX_VOICE_OUTPUT_BACKEND=1 -DWAVEX_CV_BACKEND=1 -DWAVEX_ANALOG_CV_GROUPS=8"
+	@echo "✅ Daisy Seed Backend (Stage B flag set) build completed successfully!"
+	@echo "========================================================================"
+
 # Add Daisy flash target for convenience
 daisy-clean:
 	@echo "🧹 Cleaning Daisy Seed Backend build..."
 	cd firmware/daisy && make clean
+	cd firmware/daisy && make BUILD_DIR=build-stageb clean
 	@echo "✅ Daisy Seed Backend cleaned"
 
 daisy-flash:

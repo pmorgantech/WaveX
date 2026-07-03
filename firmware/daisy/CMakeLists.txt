@@ -25,7 +25,11 @@ set(FIRMWARE_SOURCES
     src/storage/sd_log_bridge.cpp
     src/metrics/metrics.cpp
     src/sampler.hpp
-    src/cv_bus.hpp
+    src/audio/output_sink.hpp
+    src/cv/cv_cal.hpp
+    src/cv/cv_group_router.hpp
+    src/cv/mcp4728_backend.hpp
+    src/cv/mcp48_backend.hpp
     src/timebase.hpp
     src/profiling/profiler.cpp
     ../shared/spi_protocol/protocol.cpp
@@ -91,6 +95,24 @@ if(WAVEX_PROFILING_ENABLED)
     add_compile_definitions(WAVEX_PROFILING_ENABLED=1)
 else()
     add_compile_definitions(WAVEX_PROFILING_ENABLED=0)
+endif()
+
+# Voice output / CV backend selection (architecture.md §5.3, roadmap Phase 1
+# item 1). Empty (the default) leaves hardware_config.h's own #ifndef
+# defaults (Stage A) in effect. CI uses these to also compile the Stage B
+# flag set without needing a second checkout - e.g.:
+#   cmake -DWAVEX_VOICE_OUTPUT_BACKEND=1 -DWAVEX_CV_BACKEND=1 -DWAVEX_ANALOG_CV_GROUPS=8 ..
+set(WAVEX_VOICE_OUTPUT_BACKEND "" CACHE STRING "0=StereoMix (Stage A), 1=TDM8 (Stage B)")
+set(WAVEX_CV_BACKEND "" CACHE STRING "0=MCP4728 (Stage A), 1=MCP48 chain (Stage B)")
+set(WAVEX_ANALOG_CV_GROUPS "" CACHE STRING "1=paraphonic (Stage A), 8=full voice board (Stage B)")
+if(NOT WAVEX_VOICE_OUTPUT_BACKEND STREQUAL "")
+    add_compile_definitions(WAVEX_VOICE_OUTPUT_BACKEND=${WAVEX_VOICE_OUTPUT_BACKEND})
+endif()
+if(NOT WAVEX_CV_BACKEND STREQUAL "")
+    add_compile_definitions(WAVEX_CV_BACKEND=${WAVEX_CV_BACKEND})
+endif()
+if(NOT WAVEX_ANALOG_CV_GROUPS STREQUAL "")
+    add_compile_definitions(WAVEX_ANALOG_CV_GROUPS=${WAVEX_ANALOG_CV_GROUPS})
 endif()
 
 

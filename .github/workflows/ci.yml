@@ -88,3 +88,7 @@ jobs:
       - name: Build Daisy Firmware
         run: |
           make daisy
+
+      - name: Build Daisy Firmware (Stage B flag set)
+        run: |
+          make daisy-stageb

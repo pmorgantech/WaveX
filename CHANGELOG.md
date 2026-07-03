@@ -16,6 +16,36 @@ versioning and release process.
 - Synced versioning: a single root `VERSION` file now drives both the ESP32
   (`PROJECT_VER`) and Daisy (`project(... VERSION ...)`) firmware builds.
 - `AGENTS.md` / `CLAUDE.md` project instructions.
+- **Output/CV backend seam** (roadmap Phase 1 item 1, architecture.md §5.3):
+  `WAVEX_VOICE_OUTPUT_BACKEND`/`WAVEX_CV_BACKEND`/`WAVEX_ANALOG_CV_GROUPS`
+  flags (`hardware_config.h`); `StereoMixSink` (real, sums per-voice buffers
+  into the SAI1 stereo stream) and `TdmVoiceSink` (compiling stub for the
+  Phase 3 PCM1690/SAI2 bring-up) in
+  `firmware/daisy/src/audio/output_sink.hpp`; a template-based
+  `CvGroupRouter` (`firmware/daisy/src/cv/cv_group_router.hpp`, zero vtable
+  overhead) that folds voice-indexed CV targets onto
+  `WAVEX_ANALOG_CV_GROUPS` physical groups, backed by `Mcp4728Backend` (real
+  I2C, Stage A) or `Mcp48Backend` (compiling stub, Stage B). New CMake cache
+  vars in `firmware/daisy/CMakeLists.txt` plus a `make daisy-stageb` target
+  and CI step prove both flag-set combinations compile. 10 new host tests
+  for the router's voice-to-group folding and the sinks' mixing logic (both
+  are HAL-free and run without any Daisy hardware).
+  **Not wired into the audio callback yet** — today's engine has exactly one
+  playback source (the WAV ring buffer / `Sampler`), not an array of
+  per-voice buffers, so there's nothing for the sink/router to consume until
+  the voice manager (Phase 1 item 2) exists. The paraphonic envelope law
+  (which voice's envelope drives the shared Stage A VCF/VCA) is Phase 1 item
+  5's job, not this seam's.
+
+### Removed (Daisy audio)
+
+- `firmware/daisy/src/cv_bus.hpp` (the `CvBus` class) — superseded by the CV
+  backend seam above. Its `Flush()` had a real bug: hardcoded to always
+  flush DAC slot 0 regardless of which voice/group was queued (harmless in
+  practice only because nothing ever called `QueueVoice`/`Flush` on it —
+  `s_cv.Init()` was the only call site anywhere in the tree). The same
+  calibration math and MCP4728 fast-write protocol now live correctly in
+  `Mcp4728Backend`.
 
 ### Changed (ESP32 UI) — needs hardware verification
 

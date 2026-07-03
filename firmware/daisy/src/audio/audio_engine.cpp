@@ -7,20 +7,47 @@
 #include "arm_math.h"  // For CMSIS-DSP helpers
 #include "audio_engine.h"
 #include "comm/daisy_uart_link.h"
+#include "config/hardware_config.h"
 #include "daisy_core.h"  // For memory sections
 #include "ff.h"
 #include "profiling/profiler.h"
 #include "stm32h7xx_ll_cortex.h"  // For ARM atomic operations
 #include "sys/dma.h"              // For cache management
 
-#include "../cv_bus.hpp"
+#include "../cv/cv_group_router.hpp"
 #include "../sampler.hpp"
 #include "../timebase.hpp"
+#include "output_sink.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <vector>
+
+// CV backend selection (architecture.md §5.3, roadmap Phase 1 item 1).
+#if WAVEX_CV_BACKEND == WAVEX_CV_BACKEND_MCP4728
+#include "../cv/mcp4728_backend.hpp"
+using CvBackendType = WaveX::Cv::Mcp4728Backend;
+static_assert(WAVEX_ANALOG_CV_GROUPS == 1,
+              "Mcp4728Backend is a single physical chip serving exactly one CV "
+              "group (Stage A); use WAVEX_CV_BACKEND_MCP48 for "
+              "WAVEX_ANALOG_CV_GROUPS > 1 (Stage B)");
+#else
+#include "../cv/mcp48_backend.hpp"
+using CvBackendType = WaveX::Cv::Mcp48Backend;
+#endif
+
+// Output sink selection (architecture.md §5.3, roadmap Phase 1 item 1). Not
+// yet wired into Callback() below - today's engine has one playback source
+// (the WAV ring buffer / Sampler), not an array of per-voice buffers, so
+// there's nothing for a sink to consume until the voice manager (Phase 1
+// item 2) exists. Declared here so both flag sets are proven to compile
+// ahead of that retrofit.
+#if WAVEX_VOICE_OUTPUT_BACKEND == WAVEX_VOICE_OUTPUT_STEREO_MIX
+using OutputSinkType = WaveX::AudioEngine::StereoMixSink;
+#else
+using OutputSinkType = WaveX::AudioEngine::TdmVoiceSink;
+#endif
 
 using namespace daisy;
 using namespace daisysp;
@@ -67,7 +94,12 @@ static Adsr s_envelope;
 static Oscillator s_lfo;
 static Oscillator s_oscillator;
 static Sampler s_sampler;
-static CvBus s_cv;
+static CvBackendType s_cv_backend;
+static WaveX::Cv::CvGroupRouter<CvBackendType, WAVEX_ANALOG_CV_GROUPS> s_cv_router(s_cv_backend);
+// See "Output sink selection" comment above: constructed but not yet driven
+// by the callback (no voice manager exists yet to feed it per-voice
+// buffers).
+static OutputSinkType s_output_sink;
 
 // Sample RAM Manager (for loaded samples)
 static SampleMemMgr s_sample_mem_mgr;
@@ -748,7 +780,11 @@ void Init(DaisySeed& hw, float sample_rate) {
     s_oscillator.SetAmp(0.3f);      // Reduce amplitude slightly
 
     s_sampler.Init(sample_rate);
-    s_cv.Init(0x60);
+#if WAVEX_CV_BACKEND == WAVEX_CV_BACKEND_MCP4728
+    s_cv_backend.Init(0x60);
+#else
+    s_cv_backend.Init();
+#endif
 
     // Initialize Sample RAM Manager (conditionally)
     // SDRAM is mapped at 0xC0000000, typically 64MB available on Daisy Seed

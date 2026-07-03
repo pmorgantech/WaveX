@@ -36,6 +36,47 @@
 #define WAVEX_DAISY_CV_OUTPUTS_ENABLED 0
 #endif
 
+// Voice output backend (Daisy only) - architecture.md §5.3.
+// Stage A: all voices sum to the SAI1 stereo codec (StereoMixSink).
+// Stage B: each voice gets a dedicated PCM1690 TDM slot on SAI2 (TdmVoiceSink,
+// stub until Phase 3 SAI2/PCM1690 bring-up).
+#ifndef WAVEX_VOICE_OUTPUT_STEREO_MIX
+#define WAVEX_VOICE_OUTPUT_STEREO_MIX 0
+#endif
+#ifndef WAVEX_VOICE_OUTPUT_TDM8
+#define WAVEX_VOICE_OUTPUT_TDM8 1
+#endif
+#ifndef WAVEX_VOICE_OUTPUT_BACKEND
+#define WAVEX_VOICE_OUTPUT_BACKEND WAVEX_VOICE_OUTPUT_STEREO_MIX
+#endif
+
+// CV backend (Daisy only) - architecture.md §5.3.
+// Stage A: single MCP4728 I2C quad-DAC serving WAVEX_ANALOG_CV_GROUPS=1
+// (paraphonic, shared VCF/VCA). Stage B: MCP48CMB28 SPI chain serving
+// WAVEX_ANALOG_CV_GROUPS=8 (one physical CV group per voice).
+#ifndef WAVEX_CV_BACKEND_MCP4728
+#define WAVEX_CV_BACKEND_MCP4728 0
+#endif
+#ifndef WAVEX_CV_BACKEND_MCP48
+#define WAVEX_CV_BACKEND_MCP48 1
+#endif
+#ifndef WAVEX_CV_BACKEND
+#define WAVEX_CV_BACKEND WAVEX_CV_BACKEND_MCP4728
+#endif
+
+// Physical analog CV groups the CV group router folds voice-indexed targets
+// onto (1 = paraphonic Stage A, 8 = full voice board Stage B).
+#ifndef WAVEX_ANALOG_CV_GROUPS
+#define WAVEX_ANALOG_CV_GROUPS 1
+#endif
+
+// Calibration tables are always sized for the maximum voice count regardless
+// of WAVEX_ANALOG_CV_GROUPS, so the Stage A -> B transition never touches
+// stored calibration data.
+#ifndef WAVEX_ANALOG_CV_GROUPS_MAX
+#define WAVEX_ANALOG_CV_GROUPS_MAX 8
+#endif
+
 // USB Configuration (Daisy only)
 #ifndef WAVEX_DAISY_USB_ENABLED
 #define WAVEX_DAISY_USB_ENABLED 1
