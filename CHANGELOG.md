@@ -37,6 +37,15 @@ versioning and release process.
   new `WAVEX_ESP_DIN_MIDI_ENABLED` (default on); MIDI init failure is
   non-fatal. CC events are parsed but not yet forwarded (CC→parameter
   mapping is Phase 2).
+- ESP32: USB MIDI device (`main/usb_midi_task.cpp`) — the P4's native
+  USB-OTG port now enumerates as a class-compliant USB MIDI device
+  ("WaveX Sampler") via new `esp_tinyusb` (^2.0) dependency with
+  `CONFIG_TINYUSB_MIDI_COUNT=1`. Callback-driven RX (no polling): TinyUSB's
+  `tud_midi_rx_cb` notifies a reader task that drains the class driver's
+  byte stream through the same shared parser and note forwarding as DIN.
+  Gated by the existing `WAVEX_ESP_USB_MIDI_ENABLED` /
+  `WAVEX_USB_MIDI_INPUT_ENABLED` flags. This completes Phase 1 item 8
+  (code-complete; in-to-sound latency measurement needs bench hardware).
 
 ### Fixed — DMA/timing review Findings 4–12 (medium/low batch)
 

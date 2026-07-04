@@ -45,8 +45,9 @@ typedef int esp_err_t;
 // Bring in the PCNT task API
 #ifndef WAVEX_TEST_BUILD
 #include "pcnt_task.h"
-// DIN MIDI input task (roadmap Phase 1 item 8)
+// MIDI input tasks (roadmap Phase 1 item 8)
 #include "midi_task.h"
+#include "usb_midi_task.h"
 #endif
 
 static const char *TAG = "WaveXApplication";
@@ -83,12 +84,15 @@ bool WaveXApplication::initialize() {
         return false;
     }
 
-    // DIN MIDI input (Phase 1 item 8) - after inter-MCU so forwarded notes
+    // MIDI input (Phase 1 item 8) - after inter-MCU so forwarded notes
     // have a live link. Not fatal on failure: the instrument works without
-    // a MIDI cable, so log and continue.
+    // MIDI, so log and continue.
 #ifndef WAVEX_TEST_BUILD
     if (midi_task_start() != ESP_OK) {
-        ESP_LOGE(TAG, "DIN MIDI init failed - continuing without MIDI input");
+        ESP_LOGE(TAG, "DIN MIDI init failed - continuing without DIN MIDI input");
+    }
+    if (usb_midi_task_start() != ESP_OK) {
+        ESP_LOGE(TAG, "USB MIDI init failed - continuing without USB MIDI input");
     }
 #endif
 

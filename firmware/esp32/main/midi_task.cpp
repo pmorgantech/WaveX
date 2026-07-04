@@ -16,24 +16,15 @@
 #include "midi_task.h"
 
 #include "config/hardware_config.h"
-
-#if WAVEX_ESP_DIN_MIDI_ENABLED
-
-#include "config/pin_config.h"
-#include "driver/uart.h"
 #include "esp_log.h"
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
 #include "inter_mcu.h"
-
-#include "midi/midi_stream_parser.hpp"
 
 static const char* TAG = "midi_task";
 
-static TaskHandle_t s_midi_task_handle = nullptr;
-static bool s_driver_installed = false;
-
-static void handle_event(const WaveX::Midi::Event& ev) {
+// Shared with the USB MIDI reader (usb_midi_task.cpp) - declared in
+// midi_task.h. Not gated on WAVEX_ESP_DIN_MIDI_ENABLED so either
+// transport can be compiled out independently.
+void midi_forward_event(const WaveX::Midi::Event& ev) {
     switch (ev.type) {
         case WaveX::Midi::EventType::NoteOn: {
             esp_err_t err = inter_mcu_send_note_on(ev.data1, ev.data2, ev.channel);
@@ -61,6 +52,16 @@ static void handle_event(const WaveX::Midi::Event& ev) {
     }
 }
 
+#if WAVEX_ESP_DIN_MIDI_ENABLED
+
+#include "config/pin_config.h"
+#include "driver/uart.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
+static TaskHandle_t s_midi_task_handle = nullptr;
+static bool s_driver_installed = false;
+
 static void midi_task(void* arg) {
     (void)arg;
     WaveX::Midi::StreamParser parser;
@@ -80,7 +81,7 @@ static void midi_task(void* arg) {
         while (n > 0) {
             for (int i = 0; i < n; ++i) {
                 if (parser.Feed(buf[i], ev)) {
-                    handle_event(ev);
+                    midi_forward_event(ev);
                 }
             }
             n = uart_read_bytes(WAVEX_ESP_MIDI_UART_NUM, buf, sizeof(buf), 0);

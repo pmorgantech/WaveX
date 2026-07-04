@@ -7,6 +7,7 @@ idf_component_register(
         "ui_task.cpp"
         "pcnt_task.cpp"
         "midi_task.cpp"
+        "usb_midi_task.cpp"
         "comm/packet_router.cpp"
         "comm/statistics.cpp"
         "comm/comm_interface_impl.cpp"
