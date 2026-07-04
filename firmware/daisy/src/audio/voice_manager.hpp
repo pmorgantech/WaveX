@@ -15,8 +15,9 @@
 // item 1) consumes.
 //
 // Deliberately NOT in scope: note-to-sample mapping policy (which MIDI note
-// plays which sample - item 8, "MIDI note path ... -> voice manager", wires
-// that up once a kit/pad-mapping concept exists in Phase 2); CMSIS-DSP
+// plays which sample) - item 8's mapping lives in audio_engine.cpp's
+// OnNoteOn, which resolves a loaded sample and feeds Trigger() through an
+// SPSC event queue drained by the audio callback; CMSIS-DSP
 // interpolation kernels (arm_linear_interp_q15) - the roadmap cites this as
 // "(exists)" in the codebase for later use, not something this pass must
 // adopt; swapping the portable float interpolation below for a q15 CMSIS
@@ -26,11 +27,7 @@
 // would cost host-testability, which this class currently has. The "2
 // concurrent streamed voices with prebuffer admission control" half of
 // item 2's text is a separate refactor of the existing singleton
-// WAV-streaming path in audio_engine.cpp, tracked separately. Not yet wired
-// into audio_engine.cpp's Callback() - nothing safe to verify on real
-// hardware should be wired into the audio callback without something
-// meaningful (a real note-to-sample trigger source, item 8) actually
-// driving it.
+// WAV-streaming path in audio_engine.cpp, tracked separately.
 //
 // Real-time-safety: Trigger()/Release()/Render() are all callback-safe -
 // fixed-size array, no heap allocation, no blocking I/O, no logging
@@ -52,14 +49,15 @@ enum class VoiceState : uint8_t { Idle, Playing };
 
 struct Voice {
     VoiceState state = VoiceState::Idle;
-    const int16_t* sample = nullptr;  // mono, RAM-resident; not owned by Voice
+    const int16_t* sample = nullptr;  // RAM-resident, interleaved; not owned by Voice
     uint32_t sample_frames = 0;
-    float phase = 0.0f;      // fractional playback position, in frames
-    float increment = 1.0f;  // playback rate (pitch), from note/root_note
-    float gain = 0.0f;       // 0..1, derived from velocity
-    float pan = 0.5f;        // 0=left, 1=right, linear (not equal-power)
-    uint8_t note = 0;        // MIDI note that triggered this voice
-    uint32_t age = 0;        // trigger order, for stealing/release-newest-first
+    uint8_t src_channels = 1;  // interleave stride: 1 = mono, 2 = stereo (averaged to mono)
+    float phase = 0.0f;        // fractional playback position, in frames
+    float increment = 1.0f;    // playback rate (pitch), from note/root_note
+    float gain = 0.0f;         // 0..1, derived from velocity
+    float pan = 0.5f;          // 0=left, 1=right, linear (not equal-power)
+    uint8_t note = 0;          // MIDI note that triggered this voice
+    uint32_t age = 0;          // trigger order, for stealing/release-newest-first
 
     // Playback region + loop (item 4). end_frame/loop_end are exclusive.
     uint32_t start_frame = 0;
@@ -82,6 +80,13 @@ struct Voice {
 struct VoiceTriggerParams {
     const int16_t* sample = nullptr;
     uint32_t sample_frames = 0;
+    // Interleaved channel count of `sample` (1 or 2). A stereo source is
+    // averaged to mono before the per-voice filter/envelope/pan chain -
+    // voices are mono-in by design (pan re-places them in the stereo
+    // field). Loaded WAVs are stored raw/interleaved (see audio_engine
+    // OnSampleLoad), so item 8's note path needs this to play 16-bit
+    // stereo files without a load-time downmix pass.
+    uint8_t channels = 1;
     uint8_t note = 60;
     uint8_t velocity = 127;
     float pan = 0.5f;
@@ -129,6 +134,7 @@ class VoiceManager {
         v.state = VoiceState::Playing;
         v.sample = params.sample;
         v.sample_frames = params.sample_frames;
+        v.src_channels = (params.channels == 2) ? 2 : 1;
         v.gain = static_cast<float>(params.velocity) / 127.0f;
         v.pan = params.pan < 0.0f ? 0.0f : (params.pan > 1.0f ? 1.0f : params.pan);
         v.note = params.note;
@@ -224,8 +230,19 @@ class VoiceManager {
                     idx0 = v.sample_frames - 2;  // clamp: envelope release masks the tail anyway
                 uint32_t idx1 = idx0 + 1;
                 float frac = v.phase - static_cast<float>(idx0);
-                float s0 = static_cast<float>(v.sample[idx0]) / 32768.0f;
-                float s1 = static_cast<float>(v.sample[idx1]) / 32768.0f;
+                float s0, s1;
+                if (v.src_channels == 2) {
+                    // Interleaved stereo source: average L/R to mono.
+                    s0 = (static_cast<float>(v.sample[idx0 * 2]) +
+                          static_cast<float>(v.sample[idx0 * 2 + 1])) *
+                         0.5f / 32768.0f;
+                    s1 = (static_cast<float>(v.sample[idx1 * 2]) +
+                          static_cast<float>(v.sample[idx1 * 2 + 1])) *
+                         0.5f / 32768.0f;
+                } else {
+                    s0 = static_cast<float>(v.sample[idx0]) / 32768.0f;
+                    s1 = static_cast<float>(v.sample[idx1]) / 32768.0f;
+                }
                 float s = s0 + (s1 - s0) * frac;
 
                 s = v.filter.Process(s);
@@ -242,6 +259,17 @@ class VoiceManager {
 
                 v.phase += v.increment;
             }
+        }
+    }
+
+    // Hard-stops every voice immediately (no release tail). For sample-
+    // memory invalidation: audio_engine calls this (from the audio
+    // callback, via a flag set by the main loop) before a loaded sample's
+    // backing memory is released/rewritten, so no voice keeps reading
+    // freed SDRAM. Callback-safe: just clears state.
+    void StopAll() {
+        for (auto& v: voices_) {
+            v.state = VoiceState::Idle;
         }
     }
 

@@ -19,6 +19,17 @@ versioning and release process.
   SysEx skipping, system-common alignment, orphan-data discard, and
   velocity-0 NoteOn → NoteOff normalization. 16 host tests
   (`tests/midi/midi_stream_parser_test.cpp`).
+- Daisy: `MSG_NOTE_ON/OFF` now plays loaded samples through the 8-voice
+  `VoiceManager`, finally wired into the audio callback. Note events are
+  resolved to trigger params in the main loop and handed to the callback
+  through an SPSC ring (release/acquire, one-block worst-case latency);
+  mapping policy: most-recently-loaded 16-bit sample, root note 60,
+  velocity → gain, stored sample rate → pitch compensation on the 48 kHz
+  engine. Falls back to the test oscillator when nothing playable is
+  loaded. `VoiceManager` gained interleaved-stereo source support
+  (averaged to mono pre-pan) and `StopAll()`; `OnSampleLoad` now
+  hard-stops voices before releasing/rewriting sample memory. 3 new host
+  tests (76 total Daisy-side).
 
 ### Fixed — DMA/timing review Findings 4–12 (medium/low batch)
 

@@ -40,8 +40,9 @@ using CvBackendType = WaveX::Cv::Mcp48Backend;
 
 // Output sink selection (architecture.md §5.3, roadmap Phase 1 item 1).
 // Declared here so both flag sets are proven to compile; not yet wired into
-// Callback() below - see the VoiceManager comment right after this block
-// for why.
+// Callback() below - the voice manager currently mixes straight into the
+// stereo out[] (equivalent to StereoMixSink); routing through the sink
+// abstraction lands with the Stage B TDM path.
 #if WAVEX_VOICE_OUTPUT_BACKEND == WAVEX_VOICE_OUTPUT_STEREO_MIX
 using OutputSinkType = WaveX::AudioEngine::StereoMixSink;
 #else
@@ -96,16 +97,70 @@ static Sampler s_sampler;
 static CvBackendType s_cv_backend;
 static WaveX::Cv::CvGroupRouter<CvBackendType, WAVEX_ANALOG_CV_GROUPS> s_cv_router(s_cv_backend);
 static OutputSinkType s_output_sink;
-// Roadmap Phase 1 item 2: 8-voice RAM-resident player (allocation/stealing,
-// per-voice gain/pan/pitch - see voice_manager.hpp). Constructed but not yet
-// driven by Callback() below: OnNoteOn/OnNoteOff still only touch the test
-// oscillator (s_oscillator), because there is no note-to-sample mapping
-// policy yet (which MIDI note plays which loaded sample) - that's item 8's
-// job, "MIDI note path ... -> voice manager". Wiring Trigger()/Release()/
-// Render() into the real-time callback ahead of a real trigger source would
-// be unverifiable risk (no hardware here to confirm audio correctness) for
-// no behavioral change.
+// Roadmap Phase 1 items 2+8: 8-voice RAM-resident player (allocation/
+// stealing, per-voice gain/pan/pitch - see voice_manager.hpp), driven by
+// the MIDI note path: OnNoteOn/OnNoteOff (main-loop message-handler
+// context) resolve notes to loaded samples and hand events to Callback()
+// (audio IRQ context) through the SPSC queue below; Callback() drains the
+// queue and mixes Render() output on top of the streaming path.
 static WaveX::AudioEngine::VoiceManager s_voice_manager;
+
+// --- MIDI note-event handoff (roadmap Phase 1 item 8) ---
+// Voice state must only be touched from one context: Trigger()/Release()
+// write fields Render() reads, so calling them from the main loop while
+// the audio IRQ renders would race. Events are therefore fully resolved
+// (sample pointer, frames, rate) in the main loop and passed through a
+// single-producer/single-consumer ring - release/acquire index pair, same
+// discipline as the ESP32-side ui_update_pending fix (dma-timing-review
+// Finding 11). Producer: OnNoteOn/OnNoteOff (main loop). Consumer:
+// Callback() at block start (1 ms cadence, so worst-case added latency is
+// one block - well inside item 8's < 5 ms in-to-sound budget).
+struct NoteEvent {
+    bool is_trigger = false;  // true = Trigger(params), false = Release(note)
+    uint8_t note = 0;
+    WaveX::AudioEngine::VoiceTriggerParams params;
+};
+static constexpr uint32_t kNoteQueueSize = 16;  // power of two (index math wraps)
+static NoteEvent s_note_queue[kNoteQueueSize];
+static uint32_t s_note_q_write = 0;  // advanced by main loop only
+static uint32_t s_note_q_read = 0;   // advanced by audio callback only
+
+// Set by the main loop before releasing/rewriting loaded-sample memory
+// (OnSampleLoad); consumed by Callback(), which drains the queue and then
+// hard-stops every voice so nothing keeps reading freed SDRAM.
+static bool s_voice_stop_all = false;
+
+static bool note_queue_push(const NoteEvent& ev) {
+    const uint32_t w = s_note_q_write;  // single producer: plain read of own index
+    const uint32_t r = __atomic_load_n(&s_note_q_read, __ATOMIC_ACQUIRE);
+    if (w - r >= kNoteQueueSize) {
+        return false;  // full; caller logs (main-loop context)
+    }
+    s_note_queue[w % kNoteQueueSize] = ev;
+    __atomic_store_n(&s_note_q_write, w + 1, __ATOMIC_RELEASE);
+    return true;
+}
+
+// Audio-callback side: apply every pending note event, then honor a
+// pending hard-stop. Order matters - a stop request must also kill
+// triggers queued before it (they reference the memory being released).
+static void drain_note_queue() {
+    const uint32_t w = __atomic_load_n(&s_note_q_write, __ATOMIC_ACQUIRE);
+    uint32_t r = s_note_q_read;  // single consumer: plain read of own index
+    while (r != w) {
+        const NoteEvent& ev = s_note_queue[r % kNoteQueueSize];
+        if (ev.is_trigger) {
+            s_voice_manager.Trigger(ev.params);
+        } else {
+            s_voice_manager.Release(ev.note);
+        }
+        ++r;
+    }
+    __atomic_store_n(&s_note_q_read, r, __ATOMIC_RELEASE);
+    if (__atomic_exchange_n(&s_voice_stop_all, false, __ATOMIC_ACQUIRE)) {
+        s_voice_manager.StopAll();
+    }
+}
 
 // Sample RAM Manager (for loaded samples)
 static SampleMemMgr s_sample_mem_mgr;
@@ -956,6 +1011,23 @@ void Callback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t
         out[1][i] = (float)r16 / 32768.0f;
     }
 
+    // MIDI note path (roadmap Phase 1 item 8): apply pending note events,
+    // then mix the RAM-resident voices on top of the streaming/ring
+    // content above. Render() only runs when a voice is active, so the
+    // startup silence requirement is preserved. All callback-safe: fixed
+    // buffers, no allocation, no I/O, no logging.
+    drain_note_queue();
+    if (s_voice_manager.ActiveVoiceCount() > 0 &&
+        size <= static_cast<size_t>(Timebase::kBlockSize)) {
+        static float vm_l[Timebase::kBlockSize];
+        static float vm_r[Timebase::kBlockSize];
+        s_voice_manager.Render(vm_l, vm_r, size);
+        for (size_t i = 0; i < size; ++i) {
+            out[0][i] += vm_l[i];
+            out[1][i] += vm_r[i];
+        }
+    }
+
     // Compute per-block meters
     float sumL = 0.f, sumR = 0.f;
     float pkL = 0.f, pkR = 0.f;
@@ -1025,22 +1097,78 @@ void OnControlChange(const ControlChangeMessage& ctrl_msg) {
     }
 }
 
+// Note-to-sample mapping policy for item 8: the most recently loaded
+// playable sample, treated as root note 60 (a kit/pad mapping concept
+// arrives with the Phase 2 sequencer). "Playable" means 16-bit PCM, mono
+// or stereo - the voice manager reads int16 interleaved data directly;
+// 24-bit files would need a load-time conversion pass (not yet built).
+static const LoadedSampleInfo* find_playable_sample() {
+    for (auto it = s_loaded_samples.rbegin(); it != s_loaded_samples.rend(); ++it) {
+        if (it->bit_depth == 16 && (it->channels == 1 || it->channels == 2)) {
+            return &(*it);
+        }
+    }
+    return nullptr;
+}
+
 void OnNoteOn(const NoteMessage& note_msg) {
-    float freq = mtof(note_msg.note);
-    s_oscillator.SetFreq(freq);
-    s_envelope_gate = true;
-    s_envelope.Retrigger(false);
+    static constexpr uint8_t kDefaultRootNote = 60;
+
+    const LoadedSampleInfo* src = find_playable_sample();
+    void* sample_ptr = nullptr;
+    if (src && (!s_sample_mem_mgr.ptr(src->handle, &sample_ptr) || !sample_ptr)) {
+        src = nullptr;
+    }
+    if (!src) {
+        // Bring-up fallback: nothing playable loaded (or only 24-bit
+        // files) - drive the test oscillator as before, so the MIDI path
+        // stays verifiable on hardware with an empty SD card.
+        float freq = mtof(note_msg.note);
+        s_oscillator.SetFreq(freq);
+        s_envelope_gate = true;
+        s_envelope.Retrigger(false);
+        if (s_hw)
+            s_hw->PrintLine("RX NOTE_ON: note=%u vel=%u ch=%u -> osc %.2f Hz (no sample)",
+                            (unsigned)note_msg.note,
+                            (unsigned)note_msg.velocity,
+                            (unsigned)note_msg.channel,
+                            (double)freq);
+        return;
+    }
+
+    const uint32_t bytes = src->loaded_bytes ? src->loaded_bytes : src->handle.len;
+    const uint32_t bytes_per_frame = 2u * src->channels;
+
+    NoteEvent ev;
+    ev.is_trigger = true;
+    ev.note = note_msg.note;
+    ev.params.sample = static_cast<const int16_t*>(sample_ptr);
+    ev.params.sample_frames = bytes / bytes_per_frame;
+    ev.params.channels = src->channels;
+    ev.params.note = note_msg.note;
+    ev.params.velocity = note_msg.velocity;
+    ev.params.root_note = kDefaultRootNote;
+    ev.params.sample_rate_hz = src->sample_rate;  // 44.1k content pitches correctly on 48k engine
+
+    const bool queued = note_queue_push(ev);
     if (s_hw)
-        s_hw->PrintLine("RX NOTE_ON: note=%u vel=%u ch=%u freq=%.2f",
+        s_hw->PrintLine("RX NOTE_ON: note=%u vel=%u ch=%u -> sample_id=%u (%lu frames)%s",
                         (unsigned)note_msg.note,
                         (unsigned)note_msg.velocity,
                         (unsigned)note_msg.channel,
-                        (double)freq);
+                        (unsigned)src->sample_id,
+                        (unsigned long)ev.params.sample_frames,
+                        queued ? "" : " DROPPED: note queue full");
 }
 
 void OnNoteOff(const NoteMessage& note_msg) {
-    (void)note_msg;
-    s_envelope_gate = false;
+    s_envelope_gate = false;  // oscillator fallback path
+
+    NoteEvent ev;
+    ev.is_trigger = false;
+    ev.note = note_msg.note;
+    note_queue_push(ev);  // Release() of an unknown note is a no-op, safe to always send
+
     if (s_hw)
         s_hw->PrintLine(
             "RX NOTE_OFF: note=%u ch=%u", (unsigned)note_msg.note, (unsigned)note_msg.channel);
@@ -1164,6 +1292,11 @@ void OnSampleLoad(const SampleLoadMessage& sl) {
     if (s_hw) {
         s_hw->PrintLine("SAMPLE_LOAD: [4/10] Delaying 10ms for DMA settle...");
     }
+    // Voices may still be reading the sample memory this load is about to
+    // release/rewrite (upsert_loaded_sample below). Ask the audio callback
+    // to hard-stop all voices; the delay below (blocks are 1 ms) guarantees
+    // it has acted before any memory is touched.
+    __atomic_store_n(&s_voice_stop_all, true, __ATOMIC_RELEASE);
     // Add a small delay to ensure any in-flight SD DMA completes
     System::Delay(10);
 

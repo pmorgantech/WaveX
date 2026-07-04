@@ -509,3 +509,74 @@ TEST(VoiceManagerTest, ReleasedVoiceEnvelopeDecaysTowardZero) {
     EXPECT_GT(std::fabs(out_l[0]), std::fabs(out_l[599]))
         << "amplitude should be decaying during the release tail";
 }
+
+TEST(VoiceManagerTest, StereoSourceAveragesChannelsToMono) {
+    VoiceManager vm;
+    vm.Init(48000);
+    // Interleaved stereo, 100 frames: L = 2000, R = 1000 -> mono avg 1500.
+    std::vector<int16_t> sample(200);
+    for (size_t f = 0; f < 100; ++f) {
+        sample[f * 2] = 2000;
+        sample[f * 2 + 1] = 1000;
+    }
+    VoiceTriggerParams p = FlatParams(sample.data(), 100, 60, 127, 0.5f);
+    p.channels = 2;
+    vm.Trigger(p);
+
+    float out_l[4] = {0}, out_r[4] = {0};
+    vm.Render(out_l, out_r, 4);
+
+    float expected = (1500.0f / 32768.0f) * 0.5f /*pan split*/;
+    for (int i = 0; i < 4; ++i) {
+        EXPECT_NEAR(out_l[i], expected, 1e-4f) << "sample " << i;
+        EXPECT_NEAR(out_r[i], expected, 1e-4f) << "sample " << i;
+    }
+}
+
+TEST(VoiceManagerTest, StereoSourceInterpolatesPerFrameNotPerValue) {
+    VoiceManager vm;
+    vm.Init(48000);
+    // Stereo ramp on both channels: frame f holds value 100*f. Played one
+    // octave up (increment 2.0), output sample i must read frame 2*i - if
+    // the interleave stride were mishandled, values would come from the
+    // wrong channel/frame and break the 200*i progression.
+    std::vector<int16_t> sample(2 * 64);
+    for (size_t f = 0; f < 64; ++f) {
+        sample[f * 2] = static_cast<int16_t>(100 * f);
+        sample[f * 2 + 1] = static_cast<int16_t>(100 * f);
+    }
+    VoiceTriggerParams p = FlatParams(sample.data(), 64, 72, 127, 0.0f);  // fully left
+    p.root_note = 60;                                                     // +12 semitones = 2x
+    p.channels = 2;
+    vm.Trigger(p);
+
+    float out_l[8] = {0}, out_r[8] = {0};
+    vm.Render(out_l, out_r, 8);
+
+    for (int i = 0; i < 8; ++i) {
+        float expected = (200.0f * static_cast<float>(i)) / 32768.0f;
+        EXPECT_NEAR(out_l[i], expected, 1e-3f) << "sample " << i;
+    }
+}
+
+TEST(VoiceManagerTest, StopAllSilencesEveryVoiceImmediately) {
+    VoiceManager vm;
+    vm.Init(48000);
+    auto sample = MakeRampSample(48000, 32767, 0);
+    for (uint8_t n = 0; n < kNumVoices; ++n) {
+        vm.Trigger(
+            FlatParams(sample.data(), sample.size(), static_cast<uint8_t>(60 + n), 127, 0.5f));
+    }
+    ASSERT_EQ(vm.ActiveVoiceCount(), kNumVoices);
+
+    vm.StopAll();
+
+    EXPECT_EQ(vm.ActiveVoiceCount(), 0);
+    float out_l[8] = {1, 1, 1, 1, 1, 1, 1, 1};
+    float out_r[8] = {1, 1, 1, 1, 1, 1, 1, 1};
+    vm.Render(out_l, out_r, 8);
+    for (int i = 0; i < 8; ++i) {
+        EXPECT_FLOAT_EQ(out_l[i], 0.0f);
+        EXPECT_FLOAT_EQ(out_r[i], 0.0f);
+    }
+}
