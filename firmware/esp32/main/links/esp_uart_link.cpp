@@ -22,8 +22,20 @@ using WaveX::Comm::PacketRouter;
 constexpr char TAG[] = "esp_uart_link";
 
 constexpr size_t RX_TEMP_BUFFER = 256;
-constexpr size_t RX_PENDING_CAPACITY = WAVEX_ESP_UART_INTER_BUF_SIZE * 2;
+// Sized to absorb a full driver-ring drain (see DRIVER_RX_RING below) plus
+// leftover partial frames, so drain_driver_rx() can't overflow it in the
+// common case (overflow is still handled - oldest bytes dropped, logged).
+constexpr size_t RX_PENDING_CAPACITY = WAVEX_ESP_UART_INTER_BUF_SIZE * 4;
 constexpr size_t MSG_QUEUE_SIZE = 8;
+
+// Driver ring sizes (review Finding 10). RX: at 2 Mbaud (200 KB/s) a 2KB
+// ring holds only ~10ms of inbound while this same task can block ~10ms
+// feeding a max frame into the TX ring - razor-thin under full-duplex load;
+// 8KB gives ~40ms. TX: 2x the max frame (2058B) so uart_write_bytes copies
+// the whole frame into the ring and returns instead of blocking on wire
+// drain.
+constexpr int DRIVER_RX_RING = WAVEX_ESP_UART_INTER_BUF_SIZE * 4;
+constexpr int DRIVER_TX_RING = WAVEX_ESP_UART_INTER_BUF_SIZE * 2;
 
 struct uart_msg_entry_t {
     uint8_t frame[UART_MAX_PAYLOAD + UART_FRAME_OVERHEAD];
@@ -218,6 +230,17 @@ bool dequeue_tx_entry(uart_msg_entry_t& out_entry) {
     return has_entry;
 }
 
+// Drain everything currently in the driver ring into s_rx_pending. Events
+// only fire on NEW rx activity: bytes left in the ring after a partial read
+// generate no further UART_DATA event until more data arrives, so anything
+// not drained here would sit unread indefinitely (review Finding 9).
+void drain_driver_rx(uint8_t* temp) {
+    int read;
+    while ((read = uart_read_bytes(WAVEX_ESP_UART_INTER_NUM, temp, RX_TEMP_BUFFER, 0)) > 0) {
+        append_rx_data(temp, static_cast<size_t>(read));
+    }
+}
+
 void uart_task(void* /*param*/) {
     UART_LOGI(TAG, "UART task started");
     uart_event_t event;
@@ -240,18 +263,10 @@ void uart_task(void* /*param*/) {
             switch (event.type) {
                 case UART_DATA: {
                     UART_LOGI(TAG, "UART_DATA event size=%d", (int)event.size);
-                    int read = uart_read_bytes(WAVEX_ESP_UART_INTER_NUM,
-                                               temp,
-                                               std::min<int>(event.size, RX_TEMP_BUFFER),
-                                               pdMS_TO_TICKS(5));
-                    if (read > 0) {
-                        UART_LOGI(TAG, "UART read %d bytes", read);
-                        append_rx_data(temp, static_cast<size_t>(read));
-                        process_rx_frames();
-                    } else {
-                        UART_LOGW(
-                            TAG, "uart_read_bytes returned %d (event.size=%d)", read, event.size);
-                    }
+                    // Drain the whole ring, not just up to event.size /
+                    // RX_TEMP_BUFFER bytes of it (review Finding 9).
+                    drain_driver_rx(temp);
+                    process_rx_frames();
                     break;
                 }
                 case UART_FIFO_OVF:
@@ -276,7 +291,10 @@ void uart_task(void* /*param*/) {
                     break;
             }
         } else {
-            // Periodic processing even without events
+            // Periodic processing even without events. Also drain the
+            // driver ring: leftover bytes here generate no new UART_DATA
+            // event until MORE data arrives, so without this a frame tail
+            // could sit unread indefinitely (review Finding 9).
             uint32_t now = xTaskGetTickCount();
             if (now - last_event_time > 5000) {  // No event for 5 seconds
                 UART_LOGI(TAG,
@@ -285,6 +303,7 @@ void uart_task(void* /*param*/) {
                           (unsigned)(now - last_event_time));
                 last_event_time = now;  // Reset to avoid spamming
             }
+            drain_driver_rx(temp);
             process_rx_frames();
         }
 
@@ -307,7 +326,13 @@ void uart_task(void* /*param*/) {
                 s_stats.packets_sent++;
                 UART_LOGI(TAG, "TX: Packet sent successfully (seq=%u)", entry.seq);
             }
-            uart_wait_tx_done(WAVEX_ESP_UART_INTER_NUM, pdMS_TO_TICKS(10));
+            // 15ms > a max frame's 10.29ms wire time at 2 Mbaud (the old
+            // 10ms could legitimately expire mid-frame - harmless here
+            // since data stays queued, but the timeout was meaningless).
+            esp_err_t txw = uart_wait_tx_done(WAVEX_ESP_UART_INTER_NUM, pdMS_TO_TICKS(15));
+            if (txw != ESP_OK) {
+                UART_LOGW(TAG, "uart_wait_tx_done: %d (frame still draining)", (int)txw);
+            }
         }
     }
 
@@ -359,10 +384,8 @@ esp_err_t uart_link_init(void) {
         return err;
     }
 
-    const int rx_buffer = WAVEX_ESP_UART_INTER_BUF_SIZE;
-    const int tx_buffer = WAVEX_ESP_UART_INTER_BUF_SIZE;
     err = uart_driver_install(
-        WAVEX_ESP_UART_INTER_NUM, rx_buffer, tx_buffer, 20, &s_uart_event_queue, 0);
+        WAVEX_ESP_UART_INTER_NUM, DRIVER_RX_RING, DRIVER_TX_RING, 20, &s_uart_event_queue, 0);
     if (err != ESP_OK) {
         UART_LOGE(TAG, "uart_driver_install failed: %d", err);
         return err;
