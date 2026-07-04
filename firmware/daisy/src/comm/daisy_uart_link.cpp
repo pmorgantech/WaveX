@@ -675,6 +675,10 @@ int UartLinkSend(uint16_t msg_type, const void* payload, uint16_t len) {
     return len;
 }
 
+void UartLinkPumpTx() {
+    process_tx_queue();
+}
+
 void UartLinkProcess() {
     static uint32_t last_log = 0;
     static uint32_t last_error_recovery = 0;

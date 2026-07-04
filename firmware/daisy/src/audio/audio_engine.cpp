@@ -144,6 +144,13 @@ static void SendPreviewChunks() {
 
         int res = WaveX::Comm::UartLinkSend(
             WaveX::Protocol::MSG_WAVE_CHUNK, payload.data(), static_cast<uint16_t>(payload_bytes));
+        if (res < 0) {
+            // Queue full: drain one frame and retry once (review Finding 5).
+            WaveX::Comm::UartLinkPumpTx();
+            res = WaveX::Comm::UartLinkSend(WaveX::Protocol::MSG_WAVE_CHUNK,
+                                            payload.data(),
+                                            static_cast<uint16_t>(payload_bytes));
+        }
         if (s_hw) {
             s_hw->PrintLine("DAISY: Sending wave chunk (single) offset=0 count=%u res=%d",
                             (unsigned)header.count,
@@ -153,6 +160,19 @@ static void SendPreviewChunks() {
     }
 
     constexpr uint16_t kChunkSamples = 256;
+
+    // The TX queue is only 4 deep and normally drains one frame per
+    // main-loop pass; the old version queued every chunk in a tight loop,
+    // ignored the queue-full return, and advanced s_prev_sent regardless -
+    // silently dropping everything past the 4th chunk and leaving holes in
+    // the waveform preview (review Finding 5). Now: on queue-full, pump the
+    // TX queue directly (UartLinkPumpTx is TX-only, safe from this
+    // message-handler context) and retry the same chunk. kMaxPumps bounds
+    // the extra main-loop blocking this adds (~2.6ms wire time per 522-byte
+    // chunk pumped at 2 Mbaud); if the link is genuinely stalled we abort
+    // loudly with the tail missing rather than punching silent mid-stream
+    // gaps.
+    uint32_t pumps_remaining = 32;
 
     while (s_prev_sent < s_preview.size()) {
         uint16_t remaining = static_cast<uint16_t>(
@@ -172,6 +192,17 @@ static void SendPreviewChunks() {
 
         int res = WaveX::Comm::UartLinkSend(
             WaveX::Protocol::MSG_WAVE_CHUNK, payload.data(), static_cast<uint16_t>(payload_bytes));
+        if (res < 0) {
+            if (pumps_remaining == 0) {
+                if (s_hw)
+                    s_hw->PrintLine("DAISY: preview send aborted at offset %u (TX stalled)",
+                                    (unsigned)s_prev_sent);
+                return;  // partial preview; chunk offsets make the gap visible upstream
+            }
+            --pumps_remaining;
+            WaveX::Comm::UartLinkPumpTx();
+            continue;  // retry the same chunk; s_prev_sent unchanged
+        }
         if (s_hw) {
             s_hw->PrintLine("DAISY: Sending wave chunk: offset=%u count=%u res=%d",
                             (unsigned)header.offset,
