@@ -50,8 +50,14 @@ static volatile size_t s_rx_pending_len = 0;
 static uint8_t s_frame_buffer[RX_PENDING_CAPACITY];
 static size_t s_frame_len = 0;
 
-// TX queue in DMA-safe memory (size reduced to 8 to fit in RAM_D2_DMA)
-static DMA_BUFFER_MEM_SECTION uart_msg_entry_t s_tx_queue[MSG_QUEUE_SIZE];
+// TX queue in regular RAM: transmission is CPU-polled BlockingTransmit (DMA
+// TX can't run while DmaListen holds the UART's DMA stream), so these
+// buffers are never DMA sources. They previously sat in
+// DMA_BUFFER_MEM_SECTION, spending ~8.3KB of the fixed 32KB non-cacheable
+// RAM_D2_DMA region - the scarcest memory in the system, 86% full - on
+// buffers that never touch DMA (review Finding 8). If TX ever moves to
+// DMA, this must move back (and re-check the region budget).
+static uart_msg_entry_t s_tx_queue[MSG_QUEUE_SIZE];
 static int s_tx_head = 0;
 static int s_tx_tail = 0;
 static int s_tx_count = 0;
@@ -629,7 +635,16 @@ int UartLinkSend(uint16_t msg_type, const void* payload, uint16_t len) {
         return -1;
     }
 
-    daisy::ScopedIrqBlocker lock;
+    // Single-context invariant: UartLinkSend (producer) and process_tx_queue
+    // (consumer) both run exclusively on the main loop - every call site is
+    // reachable only from main()'s loop or from message handlers dispatched
+    // by UartLinkProcess(), and the UART RX ISR never touches TX state. No
+    // lock is needed. This used to hold a ScopedIrqBlocker (global IRQ-off,
+    // audio included) across CreateUartPacket - a memcpy plus a bitwise
+    // software CRC16 over up to 2058 bytes, ~60-130us of masked interrupts
+    // per large send, guarding no actual concurrency (review Finding 4).
+    // If a future caller sends from ISR context, synchronization must be
+    // reintroduced here AND in process_tx_queue.
 
     if (s_tx_count >= MSG_QUEUE_SIZE) {
         s_stats.queue_overflows++;
@@ -664,7 +679,6 @@ void UartLinkProcess() {
     static uint32_t last_log = 0;
     static uint32_t last_error_recovery = 0;
     static uint32_t consecutive_parse_failures = 0;
-    static uint32_t last_crc_error_count = 0;
     uint32_t now = daisy::System::GetNow();
 
     process_rx_frames();
@@ -690,23 +704,31 @@ void UartLinkProcess() {
         last_error_check = now;
     }
 
-    // Detect excessive CRC errors (indicates corrupted data stream)
-    // This typically happens after ESP32 resets and sends garbage
-    uint32_t current_crc_errors = s_stats.crc_errors;
-    if (now - last_error_recovery > 2000) {  // Only check 2 seconds after last recovery
-        uint32_t new_crc_errors = current_crc_errors - last_crc_error_count;
-        if (new_crc_errors > 10) {  // More than 10 CRC errors in a short period
+    // Detect excessive CRC errors (indicates a corrupted data stream, e.g.
+    // after the ESP32 resets and sprays garbage). Counted over a real
+    // 1-second window: the old code compared against the count from the
+    // PREVIOUS UartLinkProcess() call - sub-millisecond apart - so the
+    // ">10 errors" threshold was effectively per-main-loop-iteration, far
+    // stricter than the "in 1 sec" its log claimed, and slow-drip
+    // corruption could never trigger recovery (review Finding 7).
+    static uint32_t crc_window_start_ms = 0;
+    static uint32_t crc_count_at_window_start = 0;
+    if (now - crc_window_start_ms >= 1000) {
+        uint32_t errors_this_window = s_stats.crc_errors - crc_count_at_window_start;
+        if (errors_this_window > 10 && (now - last_error_recovery > 2000)) {
             if (s_hw)
                 s_hw->PrintLine(
                     "DAISY: Excessive CRC errors detected (%u in 1 sec) - resetting DMA",
-                    new_crc_errors);
-            UART_LOGE(
-                "daisy_uart", "Excessive CRC errors: %u - resetting DMA listener", new_crc_errors);
+                    errors_this_window);
+            UART_LOGE("daisy_uart",
+                      "Excessive CRC errors: %u/sec - resetting DMA listener",
+                      errors_this_window);
 
             reset_uart_dma_listener();
             last_error_recovery = now;
         }
-        last_crc_error_count = current_crc_errors;
+        crc_window_start_ms = now;
+        crc_count_at_window_start = s_stats.crc_errors;
     }
 
     // Detect frame buffer stuck in error state
