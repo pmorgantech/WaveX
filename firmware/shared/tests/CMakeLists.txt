@@ -106,7 +106,8 @@ endfunction()
 # Auto-discover and add all test files
 file(GLOB_RECURSE protocol_tests "${CMAKE_CURRENT_SOURCE_DIR}/protocol/*_test.cpp")
 file(GLOB_RECURSE integration_tests "${CMAKE_CURRENT_SOURCE_DIR}/integration/*_test.cpp")
+file(GLOB_RECURSE midi_tests "${CMAKE_CURRENT_SOURCE_DIR}/midi/*_test.cpp")
 
-foreach(test_file IN LISTS protocol_tests integration_tests)
+foreach(test_file IN LISTS protocol_tests integration_tests midi_tests)
     add_wavex_shared_test(${test_file})
 endforeach()

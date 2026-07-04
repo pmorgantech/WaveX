@@ -11,6 +11,15 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Added — MIDI note path (Phase 1 item 8)
+
+- Shared serial-MIDI byte-stream parser
+  (`firmware/shared/midi/midi_stream_parser.hpp`) — HAL-free/header-only,
+  handles running status, real-time interleave (including inside SysEx),
+  SysEx skipping, system-common alignment, orphan-data discard, and
+  velocity-0 NoteOn → NoteOff normalization. 16 host tests
+  (`tests/midi/midi_stream_parser_test.cpp`).
+
 ### Fixed — DMA/timing review Findings 4–12 (medium/low batch)
 
 - **F4**: `UartLinkSend` no longer disables all interrupts (audio included)
