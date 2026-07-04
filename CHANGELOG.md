@@ -11,6 +11,41 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Fixed — DMA/timing review Findings 4–12 (medium/low batch)
+
+- **F4**: `UartLinkSend` no longer disables all interrupts (audio included)
+  while building the frame — the ~60–130 µs CRC-under-IRQ-lock guarded no
+  actual concurrency (producer and consumer both main-loop-only; invariant
+  now documented in code).
+- **F5**: preview wave chunks no longer silently dropped past the 4-deep TX
+  queue — new `UartLinkPumpTx()` (TX-only, safe from message-handler
+  context) drains a frame and the same chunk retries; a pump budget bounds
+  the added main-loop blocking, and a genuine stall aborts loudly instead
+  of punching silent mid-stream gaps.
+- **F7**: the excessive-CRC-error DMA-listener reset is now measured over a
+  real 1-second window instead of per-main-loop-iteration (which its own
+  log claimed was "per sec" but made slow-drip corruption unable to ever
+  trigger recovery).
+- **F8**: the UART TX queue moved out of `DMA_BUFFER_MEM_SECTION` (it's
+  CPU-polled `BlockingTransmit`, never DMA) — measured RAM_D2_DMA drop:
+  28204 B (86.07%) → 19932 B (60.83%), reclaiming ~8.3 KB of the scarcest
+  region for future DMA TX / SPI buffers.
+- **F9 (ESP32)**: `uart_task` now drains the driver ring fully on every
+  data event *and* in the idle branch — leftover bytes generate no new
+  UART_DATA event until more data arrives, so frame tails could previously
+  sit unread indefinitely. `uart_wait_tx_done`'s result is checked and its
+  timeout sized above a max frame's wire time.
+- **F10 (ESP32)**: driver rings resized — RX 2 KB → 8 KB (~10 ms → ~40 ms of
+  margin at 2 Mbaud), TX 2 KB → 4 KB (a max 2058 B frame now fits entirely,
+  so `uart_write_bytes` returns without blocking on wire drain);
+  `s_rx_pending` grown to match.
+- **F11 (ESP32)**: the `ui_update_pending` cross-task handoff
+  (UART task → UI task) is now a release-store/acquire-load atomic pair —
+  a plain bool gave no ordering guarantee on the dual-core P4 that
+  `entries[]` writes were visible before the flag.
+- **F12**: architecture.md §7.1.2 now documents the load-time SD→SDRAM
+  direct-DMA exception instead of silently contradicting the code.
+
 ### Fixed (Daisy link) — DMA/timing review Finding 2
 
 - **Frames ≥ ~1990 bytes are no longer deterministically un-sendable.** The

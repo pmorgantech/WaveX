@@ -59,6 +59,25 @@ static void update_visual_selection(wavex_file_browser_t* browser);
 static void browse_resp_callback(const uint8_t* data, size_t length, void* user_data);
 static void update_file_browser_ui(wavex_file_browser_t* browser);
 
+// Cross-task handoff for ui_update_pending (dma-timing-review-2026-07-03.md
+// Finding 11): browse_resp_callback runs on the UART task, writing
+// browser->entries[] and then setting this flag, while the UI task reads
+// the flag and then the entries. On the dual-core P4 a plain bool store
+// guarantees no ordering between those writes - the UI task could see the
+// flag set but the entries only partially written. The release-store /
+// acquire-load pair below provides that ordering; all other stores go
+// through the same helpers so no plain access ever races an atomic one on
+// the same address.
+static inline void browser_set_ui_update(wavex_file_browser_t* browser) {
+    __atomic_store_n(&browser->ui_update_pending, true, __ATOMIC_RELEASE);
+}
+static inline void browser_clear_ui_update(wavex_file_browser_t* browser) {
+    __atomic_store_n(&browser->ui_update_pending, false, __ATOMIC_RELAXED);
+}
+static inline bool browser_ui_update_pending(const wavex_file_browser_t* browser) {
+    return __atomic_load_n(&browser->ui_update_pending, __ATOMIC_ACQUIRE);
+}
+
 wavex_file_browser_t* wavex_file_browser_create(lv_obj_t* parent,
                                                 const wavex_file_browser_config_t* config) {
     if (!parent || !config) {
@@ -183,7 +202,7 @@ bool wavex_file_browser_navigate_to(wavex_file_browser_t* browser, const char* p
     browser->current_path[sizeof(browser->current_path) - 1] = '\0';
 
     // Mark path update as pending (navigation may be called from non-LVGL context)
-    browser->ui_update_pending = true;
+    browser_set_ui_update(browser);
     wavex_ui_mark_content_changed();
 
     // Reset scroll position and selection when navigating
@@ -258,7 +277,7 @@ void wavex_file_browser_set_selection(wavex_file_browser_t* browser, uint32_t in
     ESP_LOGI(TAG, "Selected entry %d: %s", index, browser->entries[index].name);
 
     // Mark visual selection update as pending (selection may be changed from non-LVGL context)
-    browser->ui_update_pending = true;
+    browser_set_ui_update(browser);
     wavex_ui_mark_content_changed();
 }
 
@@ -307,7 +326,7 @@ bool wavex_file_browser_navigate_up_entry(wavex_file_browser_t* browser) {
     }
 
     // Update visual highlighting - refresh UI if viewport might have changed
-    browser->ui_update_pending = true;
+    browser_set_ui_update(browser);
     wavex_ui_mark_content_changed();
 
     return true;
@@ -352,7 +371,7 @@ bool wavex_file_browser_navigate_down_entry(wavex_file_browser_t* browser) {
     }
 
     // Update visual highlighting - refresh UI if viewport might have changed
-    browser->ui_update_pending = true;
+    browser_set_ui_update(browser);
     wavex_ui_mark_content_changed();
 
     return true;
@@ -497,7 +516,7 @@ static bool refresh_file_list(wavex_file_browser_t* browser) {
     browser->entry_count = 0;
 
     // Mark UI update as pending (will clear list when processed in UI task)
-    browser->ui_update_pending = true;
+    browser_set_ui_update(browser);
     wavex_ui_mark_content_changed();
 
     // Send first browse request (page 0)
@@ -506,7 +525,7 @@ static bool refresh_file_list(wavex_file_browser_t* browser) {
         browser->pagination_in_progress = false;
         // Mark error state for deferred UI update
         browser->entry_count = 0;
-        browser->ui_update_pending = true;
+        browser_set_ui_update(browser);
         wavex_ui_mark_content_changed();
         return false;
     } else {
@@ -794,7 +813,7 @@ static void browse_resp_callback(const uint8_t* data, size_t length, void* user_
         // Mark error state for deferred UI update (this callback runs from UART task, not LVGL
         // context)
         browser->entry_count = 0;
-        browser->ui_update_pending = true;
+        browser_set_ui_update(browser);
         wavex_ui_mark_content_changed();
         return;
     }
@@ -873,7 +892,7 @@ static void browse_resp_callback(const uint8_t* data, size_t length, void* user_
         ESP_LOGI(TAG, "First page loaded: marking %d entries for UI update", browser->entry_count);
 
         // Set flag for UI task to process (thread-safe deferred update)
-        browser->ui_update_pending = true;
+        browser_set_ui_update(browser);
         wavex_ui_mark_content_changed();
 
         // DEBUG: Direct refresh test - bypass normal update mechanism
@@ -1003,7 +1022,7 @@ static void browse_resp_callback(const uint8_t* data, size_t length, void* user_
 
         // Mark UI update as pending (only if not first page)
         if (browser->current_page > 0) {
-            browser->ui_update_pending = true;
+            browser_set_ui_update(browser);
             wavex_ui_mark_content_changed();
         }
 
@@ -1021,12 +1040,16 @@ void wavex_file_browser_process_pending_updates(wavex_file_browser_t* browser) {
         return;
     }
 
+    // Acquire-load pairs with browser_set_ui_update's release-store: once we
+    // see the flag, the UART task's writes to entries[]/entry_count are
+    // guaranteed visible (review Finding 11).
+    bool pending = browser_ui_update_pending(browser);
     ESP_LOGD(TAG,
              "process_pending_updates: ui_update_pending=%d, entry_count=%d",
-             browser->ui_update_pending ? 1 : 0,
+             pending ? 1 : 0,
              browser->entry_count);
 
-    if (!browser->ui_update_pending) {
+    if (!pending) {
         return;  // No update needed
     }
 
@@ -1034,7 +1057,7 @@ void wavex_file_browser_process_pending_updates(wavex_file_browser_t* browser) {
         TAG, "Processing pending UI update for file browser with %d entries", browser->entry_count);
 
     // Clear flag first
-    browser->ui_update_pending = false;
+    browser_clear_ui_update(browser);
 
     // Update UI (caller must hold LVGL lock - this is called from UI task loop)
     update_file_browser_ui(browser);
