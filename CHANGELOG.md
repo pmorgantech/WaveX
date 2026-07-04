@@ -11,6 +11,22 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Fixed (Daisy link) — DMA/timing review Finding 2
+
+- **Frames ≥ ~1990 bytes are no longer deterministically un-sendable.** The
+  UART blocking-transmit timeout was a fixed 10 ms, but a max frame (2058
+  bytes) at 2 Mbaud needs 10.29 ms of wire time — so near-max frames always
+  timed out mid-frame, sprayed a truncated frame at the peer (CRC/sync
+  storm), and retried the whole frame every main-loop pass (~10 ms blocked
+  each) until the 1-second stuck-TX force-clear dropped the message,
+  starving the audio pump throughout. The timeout is now derived from the
+  frame's own wire time plus margin (`UartTxTimeoutMs()` in
+  `uart_protocol.h`, host-tested — including a regression test documenting
+  that the max frame's wire time really did exceed the old fixed timeout).
+  Documented tradeoff: a max-size frame now legitimately blocks ~13 ms,
+  slightly over §7.1.4's ~10 ms guideline, until TX moves to DMA; typical
+  traffic stays well under 10 ms.
+
 ### Fixed (Daisy link) — DMA/timing review Finding 3
 
 - **UART interrupts no longer preempt audio.** libDaisy hardcodes UART4_IRQn

@@ -358,3 +358,42 @@ TEST_F(UartProtocolTest, RoundTrip) {
     EXPECT_EQ(parsed_payload_size, sizeof(original_payload));
     EXPECT_EQ(memcmp(&parsed_payload, &original_payload, sizeof(original_payload)), 0);
 }
+
+// UartTxTimeoutMs (dma-timing-review-2026-07-03.md Finding 2): a transmit
+// timeout must always exceed the frame's own wire time.
+TEST_F(UartProtocolTest, TxTimeoutAlwaysExceedsWireTime) {
+    // Wire time = frame_bytes * 10 bits / baud. The timeout must clear it
+    // for every frame size up to the protocol maximum.
+    constexpr uint32_t kBaud = 2'000'000;
+    for (size_t frame = 1; frame <= UART_MAX_PAYLOAD + UART_FRAME_OVERHEAD; frame += 97) {
+        double wire_ms = static_cast<double>(frame) * 10.0 * 1000.0 / kBaud;
+        EXPECT_GT(static_cast<double>(UartTxTimeoutMs(frame, kBaud)), wire_ms) << "frame=" << frame;
+    }
+}
+
+// The regression this guards against: a max-size frame at 2 Mbaud has
+// 10.29ms of wire time - MORE than the old fixed 10ms timeout, which made
+// such frames deterministically un-sendable (mid-frame abort + retry storm).
+TEST_F(UartProtocolTest, TxTimeoutMaxFrameExceedsOldFixedTimeout) {
+    constexpr size_t kMaxFrame = UART_MAX_PAYLOAD + UART_FRAME_OVERHEAD;  // 2058
+    constexpr uint32_t kBaud = 2'000'000;
+    constexpr uint32_t kOldFixedTimeoutMs = 10;
+
+    // Documents the old bug: the max frame's wire time really does exceed
+    // the old fixed timeout...
+    double max_frame_wire_ms = static_cast<double>(kMaxFrame) * 10.0 * 1000.0 / kBaud;
+    EXPECT_GT(max_frame_wire_ms, static_cast<double>(kOldFixedTimeoutMs));
+
+    // ...and the derived timeout clears it.
+    EXPECT_GT(UartTxTimeoutMs(kMaxFrame, kBaud), kOldFixedTimeoutMs);
+    EXPECT_GT(static_cast<double>(UartTxTimeoutMs(kMaxFrame, kBaud)), max_frame_wire_ms);
+}
+
+// Small control frames (heartbeat ~26B, meter ~18B) keep short timeouts -
+// the derived value must not balloon the main-loop blocking bound for the
+// common case.
+TEST_F(UartProtocolTest, TxTimeoutSmallFramesStaySmall) {
+    constexpr uint32_t kBaud = 2'000'000;
+    EXPECT_LE(UartTxTimeoutMs(32, kBaud), 4u);
+    EXPECT_LE(UartTxTimeoutMs(128, kBaud), 5u);
+}

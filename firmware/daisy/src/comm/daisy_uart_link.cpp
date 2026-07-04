@@ -380,14 +380,27 @@ void process_tx_queue() {
             }
         }
     } else {
-        // Use BlockingTransmit with very short timeout (10ms instead of 100ms)
-        // DmaListen mode requires BlockingTransmit - DmaTransmit won't work while listening
-        // Short timeout prevents blocking the main loop; timeout recovery handles stuck states
+        // DmaListen mode requires BlockingTransmit - DmaTransmit won't work
+        // while listening. The timeout is derived from the frame's own wire
+        // time (UartTxTimeoutMs): the old fixed 10ms was SHORTER than a max
+        // frame's 10.29ms wire time at 2 Mbaud, so frames >= ~1990 bytes
+        // deterministically timed out mid-frame - spraying a truncated frame
+        // at the peer and retrying the whole frame every main-loop pass
+        // until the 1s stuck-TX force-clear dropped it, starving the audio
+        // pump throughout (review Finding 2). Worst case now: a max-size
+        // frame blocks ~13ms - slightly over the §7.1.4 ~10ms guideline,
+        // the honest interim tradeoff until TX moves to DMA; typical frames
+        // (browse pages ~1.3KB, wave chunks) stay well under 10ms. The
+        // 500ms/1000ms stuck-TX recovery remains for genuine peer-dead
+        // failures.
         UART_LOGI("daisy_uart",
                   "TX frame: len=%u seq=%u starting blocking transmission",
                   entry->frame_len,
                   entry->seq);
-        auto res = s_uart.BlockingTransmit(entry->frame, entry->frame_len, 10);
+        auto res =
+            s_uart.BlockingTransmit(entry->frame,
+                                    entry->frame_len,
+                                    UartTxTimeoutMs(entry->frame_len, WAVEX_DAISY_UART_INTER_BAUD));
 
         if (res == daisy::UartHandler::Result::OK) {
             // Transmission successful - immediately clean up and advance queue
@@ -395,7 +408,9 @@ void process_tx_queue() {
             uint32_t tx_complete_time_ms = daisy::System::GetNow();
             UART_LOGI("daisy_uart", "TX complete OK (seq=%u len=%u)", entry->seq, entry->frame_len);
             if (s_hw) {
-                s_hw->PrintLine("DAISY: TX OK seq=%u, t=%lu ms", entry->seq, (unsigned long)tx_complete_time_ms);
+                s_hw->PrintLine("DAISY: TX OK seq=%u, t=%lu ms",
+                                entry->seq,
+                                (unsigned long)tx_complete_time_ms);
                 // Check if this was a browse response
                 if (entry->frame_len > 4 && entry->frame[4] == WaveX::Protocol::MSG_BROWSE_RESP) {
                     s_hw->PrintLine("DAISY: Browse response TX COMPLETE: seq=%u, t=%lu ms",
@@ -615,7 +630,7 @@ int UartLinkSend(uint16_t msg_type, const void* payload, uint16_t len) {
     }
 
     daisy::ScopedIrqBlocker lock;
-    
+
     if (s_tx_count >= MSG_QUEUE_SIZE) {
         s_stats.queue_overflows++;
         UART_LOGE("daisy_uart", "TX queue full");
@@ -626,7 +641,7 @@ int UartLinkSend(uint16_t msg_type, const void* payload, uint16_t len) {
     uint16_t seq = s_next_sequence++;
     size_t frame_len = CreateUartPacket(
         entry.frame, sizeof(entry.frame), static_cast<uint8_t>(msg_type), payload, len, seq, 0);
-    
+
     if (frame_len == 0) {
         UART_LOGE("daisy_uart", "Failed to create packet");
         return -1;
@@ -641,7 +656,7 @@ int UartLinkSend(uint16_t msg_type, const void* payload, uint16_t len) {
 
     UART_LOGI("daisy_uart", "TX queued msg=0x%02X len=%u seq=%u", msg_type, len, seq);
     UART_LOG_DUMP_PACKET("daisy_uart", entry.frame, frame_len);
-    
+
     return len;
 }
 
