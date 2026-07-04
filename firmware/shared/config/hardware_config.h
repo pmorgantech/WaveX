@@ -192,6 +192,11 @@
 #define WAVEX_ESP_USB_MIDI_ENABLED 1
 #endif
 
+// DIN MIDI Input (ESP32 UART2 - pins/baud in pin_config.h)
+#ifndef WAVEX_ESP_DIN_MIDI_ENABLED
+#define WAVEX_ESP_DIN_MIDI_ENABLED 1
+#endif
+
 // PSRAM (ESP32 only)
 #ifndef WAVEX_ESP_PSRAM_ENABLED
 #define WAVEX_ESP_PSRAM_ENABLED 1
@@ -533,6 +538,26 @@
 
 #ifndef WAVEX_USB_MIDI_TASK_STACK_SIZE
 #define WAVEX_USB_MIDI_TASK_STACK_SIZE 4096
+#endif
+#endif
+
+// DIN MIDI Configuration
+#if WAVEX_ESP_DIN_MIDI_ENABLED
+// Above the UI task, below the inter-MCU uart_link task (6): a note must
+// preempt rendering to make item 8's < 5 ms in-to-sound budget, but must
+// never starve the link that carries it onward.
+#ifndef WAVEX_DIN_MIDI_TASK_PRIORITY
+#define WAVEX_DIN_MIDI_TASK_PRIORITY 5
+#endif
+
+#ifndef WAVEX_DIN_MIDI_TASK_STACK_SIZE
+#define WAVEX_DIN_MIDI_TASK_STACK_SIZE 4096
+#endif
+
+// UART driver RX ring. MIDI is 3125 bytes/s max; 256 bytes is ~80 ms of
+// worst-case backlog, far more than the task ever lets accumulate.
+#ifndef WAVEX_DIN_MIDI_RX_BUF_SIZE
+#define WAVEX_DIN_MIDI_RX_BUF_SIZE 256
 #endif
 #endif
 

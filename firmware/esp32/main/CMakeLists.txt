@@ -6,6 +6,7 @@ idf_component_register(
         "inter_mcu.cpp"
         "ui_task.cpp"
         "pcnt_task.cpp"
+        "midi_task.cpp"
         "comm/packet_router.cpp"
         "comm/statistics.cpp"
         "comm/comm_interface_impl.cpp"
@@ -18,6 +19,7 @@ idf_component_register(
         "../../shared/spi_protocol"
         "../../shared/uart_protocol"
         "../../shared/config"
+        "../../shared"
     REQUIRES
         "driver"
         "freertos"

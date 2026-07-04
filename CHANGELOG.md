@@ -30,6 +30,13 @@ versioning and release process.
   (averaged to mono pre-pan) and `StopAll()`; `OnSampleLoad` now
   hard-stops voices before releasing/rewriting sample memory. 3 new host
   tests (76 total Daisy-side).
+- ESP32: DIN MIDI input task (`main/midi_task.cpp`) — UART2 @ 31250 baud
+  (pins in `pin_config.h`), per-byte RX delivery (RX-full threshold 1,
+  1-symbol idle timeout) for the < 5 ms latency budget, shared parser,
+  notes forwarded as `MSG_NOTE_ON/OFF` over the inter-MCU link. Gated by
+  new `WAVEX_ESP_DIN_MIDI_ENABLED` (default on); MIDI init failure is
+  non-fatal. CC events are parsed but not yet forwarded (CC→parameter
+  mapping is Phase 2).
 
 ### Fixed — DMA/timing review Findings 4–12 (medium/low batch)
 
