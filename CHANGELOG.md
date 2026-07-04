@@ -11,6 +11,17 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Fixed (Daisy link) — DMA/timing review Finding 3
+
+- **UART interrupts no longer preempt audio.** libDaisy hardcodes UART4_IRQn
+  (`HAL_UART_MspInit`) and DMA1_Stream5 / UART4 RX DMA (`dsy_dma_init`) to
+  NVIC priority (0,0) — the maximum, above the audio SAI DMA at 5 — letting
+  the UART RX callback's multi-KB memmoves preempt the audio callback,
+  inverting architecture.md §7.1.5's "audio highest" rule. `main.cpp` now
+  re-sets both to priority 7 (below audio 5/6, above SPI 10) immediately
+  after `UartLinkStart()`. Compile-verified; the jitter improvement needs
+  DWT measurement on hardware.
+
 ### Changed (CI)
 
 - GitHub Actions now runs inside `espressif/idf:release-v5.5` — the same

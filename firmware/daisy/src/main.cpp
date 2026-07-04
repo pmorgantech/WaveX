@@ -373,7 +373,18 @@ int main(void) {
 
     WaveX::Comm::UartLinkInit(&hw);
     WaveX::Comm::UartLinkStart();
-    WAVEX_LOG_DAISY(INTER_MCU_LINK, "DAISY: UART link started");
+    // libDaisy hardcodes both halves of the UART RX chain to NVIC priority
+    // (0,0) - the maximum, ABOVE the audio SAI DMA at 5 configured earlier:
+    // UART4_IRQn in HAL_UART_MspInit (fires inside UartLinkInit) and
+    // DMA1_Stream5 (UART4 RX DMA) in dsy_dma_init (fires inside hw.Init()).
+    // That inverts the §7.1.5 hierarchy (audio highest) and lets the UART RX
+    // callback's multi-KB memmoves preempt the audio callback - Finding 3 of
+    // docs/dma-timing-review-2026-07-03.md. Re-set both AFTER UartLinkInit
+    // (which is what installs the (0,0) values) to sit below audio (5/6) and
+    // above the SPI link (10).
+    HAL_NVIC_SetPriority(UART4_IRQn, 7, 0);
+    HAL_NVIC_SetPriority(DMA1_Stream5_IRQn, 7, 0);
+    WAVEX_LOG_DAISY(INTER_MCU_LINK, "DAISY: UART link started (IRQ priority 7, below audio)");
 
 // Start audio callback system
 #if WAVEX_AUDIO_ENGINE_ENABLED
