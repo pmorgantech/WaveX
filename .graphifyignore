@@ -1,30 +1,49 @@
-# Graphify output / local noise
+# .graphifyignore
+*
+
+# Allow directory traversal
+
+# Allow only code-ish files under src trees
+!firmware/
+*.pdf
+*.md
+*.doc
+*.txt
+.xml
+.rst
+.html
+.gif
+*.jpg
+*.png
+*.csv
+*.webp
+*.ipynb
+*.svg
+
+# Root build metadata
+!/CMakeLists.txt
+!/*.cmake
+!/CMakePresets.json
+!/CMakeUserPresets.json
+!/Makefile
+!/build.sh
+!/VERSION
+
+# Always exclude outputs/caches/vendor-ish stuff
 graphify-out/
-.git/
-.cache/
-.venv/
-venv/
-__pycache__/
-
-docs/archive
-
-# Build/test/vendor output
-build/
-dist/
-cmake-build-*/
-CMakeFiles/
-CMakeCache.txt
-compile_commands.json
-*.o
-*.a
-*.elf
-*.bin
-*.map
-*.log
-
-# Git submodules / vendored third-party code
-firmware/esp32/libs/xpt2046/
-firmware/daisy/libs/libDaisy/
-firmware/daisy/libs/DaisySP/
-firmware/esp32/components/LovyanGFX/
-firmware/daisy/tests/_deps/
+**/graphify-out/
+**/.git/
+**/.venv/
+**/venv/
+**/node_modules/
+**/build/
+**/dist/
+**/coverage/
+**/vendor/
+**/third_party/
+**/external/
+**/deps/
+**/generated/
+**/examples/
+**/fixtures/
+.specstory/

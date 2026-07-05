@@ -4,12 +4,13 @@ set -euo pipefail
 root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 cd "$root"
 
-if [[ -f .gitmodules ]]; then
-  git config --file .gitmodules --get-regexp path \
-    | awk '{print $2 "/"}' > .graphifyignore.submodules
-fi
+# NO LLM!
+unset GRAPHIFY_BACKEND GRAPHIFY_MODEL
+unset OPENAI_API_KEY OPENAI_BASE_URL OPENAI_MODEL
+unset ANTHROPIC_API_KEY ANTHROPIC_MODEL
+unset GEMINI_API_KEY GOOGLE_API_KEY GOOGLE_MODEL
 
-graphify .
+graphify update --no-viz .
 
 echo
 echo "Graph updated:"

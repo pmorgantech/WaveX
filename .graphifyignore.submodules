@@ -1,5 +1,0 @@
-firmware/esp32/libs/xpt2046/
-firmware/daisy/libs/libDaisy/
-firmware/daisy/libs/DaisySP/
-firmware/esp32/components/LovyanGFX/
-firmware/shared/tests/_deps/googletest-src/

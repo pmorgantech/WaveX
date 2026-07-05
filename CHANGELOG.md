@@ -11,6 +11,11 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Changed (Tooling)
+
+- Graphify analysis is now scoped to source directories and root-level build
+  metadata, and the refresh helper no longer generates a submodule ignore list.
+
 ### Added — MIDI note path (Phase 1 item 8)
 
 - Shared serial-MIDI byte-stream parser
