@@ -173,7 +173,20 @@ void process_rx_frames() {
                 if (s_hw)
                     s_hw->PrintLine("DAISY: RX buffer: %s", hex_buf);
             }
-            consume_frame_bytes(offset);
+            // Nothing in the scanned window can begin a frame. Keep only the
+            // last UART_FRAME_OVERHEAD-1 bytes (FindFrameStart doesn't scan
+            // them - a start byte there may complete a frame once more data
+            // arrives) and discard the rest. Previously this consumed only
+            // `offset` bytes - zero on a fresh call - so a frame buffer full
+            // of start-byte-free garbage never drained: new bytes were then
+            // discarded at pull_pending_into_frame_buffer (buffer full) and
+            // the "stuck" recovery below never fired because it requires
+            // s_frame_len == 0. Permanent RX wedge (review H2); the ESP32
+            // twin already had this guard.
+            const size_t keep = UART_FRAME_OVERHEAD - 1;
+            if (s_frame_len > keep) {
+                consume_frame_bytes(s_frame_len - keep);
+            }
             if (should_log) {
                 last_log = now;
             }
