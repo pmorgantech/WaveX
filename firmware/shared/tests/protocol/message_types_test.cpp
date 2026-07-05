@@ -702,3 +702,23 @@ TEST_F(MessageTypeTest, CreatePacketSequenceNumberSkipsZeroOnWrap) {
     }
     EXPECT_TRUE(saw_wrap);
 }
+
+// Review H4: GetOptimalSizeCode saturates to the 2048-byte class for any
+// oversize payload; CreateWaveXPacket must reject payloads beyond the
+// class's real capacity (2042 = 2048 - header - crc) instead of
+// overrunning the caller's buffer and underflowing the zero-pad memset.
+TEST_F(MessageTypeTest, CreateWaveXPacketRejectsPayloadBeyondLargestClass) {
+    std::vector<uint8_t> payload(2049, 0xAB);
+
+    // Exactly at capacity: fits the 2048-byte class.
+    size_t created = ProtocolHandler::CreateWaveXPacket(
+        buffer_.data(), buffer_.size(), MSG_WAVE_CHUNK, payload.data(), 2042, 7, 0);
+    EXPECT_EQ(created, 2048u);
+
+    // One past capacity through six past: must fail cleanly, not overflow.
+    for (size_t oversize = 2043; oversize <= 2048; ++oversize) {
+        created = ProtocolHandler::CreateWaveXPacket(
+            buffer_.data(), buffer_.size(), MSG_WAVE_CHUNK, payload.data(), oversize, 7, 0);
+        EXPECT_EQ(created, 0u) << "payload_size=" << oversize;
+    }
+}

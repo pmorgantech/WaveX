@@ -226,7 +226,7 @@ void process_rx_frames() {
         uint8_t flags;
         uint16_t seq;
         uint8_t payload[UART_MAX_PAYLOAD];
-        size_t payload_len = 0;
+        size_t payload_len = sizeof(payload);  // in: capacity, out: bytes copied
 
         if (ParseUartPacket(frame, frame_len, msg_type, payload, payload_len, seq, flags)) {
             s_stats.packets_received++;

@@ -35,6 +35,17 @@ versioning and release process.
   drives the real dispatcher against recording mocks and pins every routed
   message type to its observable subsystem call — the test class that would
   have caught this. Bench verification (in-to-sound latency) still pending.
+- `CreateWaveXPacket` rejects payloads of 2043–2048 bytes (code review H4):
+  `GetOptimalSizeCode` saturates to the 2048-byte class, whose real payload
+  capacity is 2042 (header + CRC overhead), so those six sizes previously
+  memcpy'd past the caller's buffer and underflowed the zero-pad `memset`
+  length into a wild multi-GB write. Boundary host tests added (2042 OK,
+  2043–2048 rejected).
+- `ParseUartPacket` takes the destination capacity in/out (code review H5):
+  the copy length previously came entirely from the wire — the same overflow
+  class fixed earlier in `ParseWaveXPacket`. A frame whose payload exceeds
+  the caller's buffer is now rejected outright (a truncated UART message is
+  never valid). Both link call sites updated; host tests added.
 - ESP32 `PacketRouter` validates payload length before copying typed
   messages (code review H3): a CRC-valid frame with an empty payload
   previously reached `memcpy(&msg, nullptr, sizeof)` (undefined behavior),

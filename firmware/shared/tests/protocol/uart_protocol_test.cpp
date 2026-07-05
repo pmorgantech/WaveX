@@ -397,3 +397,29 @@ TEST_F(UartProtocolTest, TxTimeoutSmallFramesStaySmall) {
     EXPECT_LE(UartTxTimeoutMs(32, kBaud), 4u);
     EXPECT_LE(UartTxTimeoutMs(128, kBaud), 5u);
 }
+
+// Review H5: payload_size is in/out (destination capacity on entry). A
+// frame whose payload exceeds the caller's buffer must be rejected, not
+// copied past the end and not silently truncated.
+TEST_F(UartProtocolTest, ParseRejectsPayloadLargerThanDestination) {
+    std::vector<uint8_t> payload(100, 0x5C);
+    size_t created = CreateUartPacket(
+        buffer_.data(), buffer_.size(), 0x12, payload.data(), payload.size(), 0x0001, 0);
+    ASSERT_GT(created, 0u);
+
+    uint8_t parsed_type;
+    uint8_t parsed_flags;
+    uint16_t parsed_seq;
+    uint8_t small_dest[50];
+
+    size_t capacity = sizeof(small_dest);
+    EXPECT_FALSE(ParseUartPacket(
+        buffer_.data(), created, parsed_type, small_dest, capacity, parsed_seq, parsed_flags));
+
+    uint8_t big_dest[100];
+    capacity = sizeof(big_dest);
+    ASSERT_TRUE(ParseUartPacket(
+        buffer_.data(), created, parsed_type, big_dest, capacity, parsed_seq, parsed_flags));
+    EXPECT_EQ(capacity, payload.size());
+    EXPECT_EQ(memcmp(big_dest, payload.data(), payload.size()), 0);
+}

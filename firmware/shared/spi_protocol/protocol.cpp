@@ -126,6 +126,16 @@ size_t ProtocolHandler::CreateWaveXPacket(uint8_t* buffer,
         return 0;  // Invalid size or buffer too small
     }
 
+    // Reject payloads that exceed the largest size class's capacity
+    // (2042 = 2048 - header(4) - crc(2)). GetOptimalSizeCode saturates to
+    // PKT_SIZE_2048 for anything larger, so without this check a payload of
+    // 2043-2048 bytes would memcpy past the CRC region and the zero-pad
+    // memset length below would underflow size_t into a wild multi-GB
+    // memset (review H4).
+    if (payload_size > total_size - 6) {
+        return 0;
+    }
+
     // Create packet header (4 bytes)
     buffer[0] = PKT_MAKE_FLAGS_SIZE(size_code, flags);  // flags + size
     buffer[1] = msg_type;                               // Message type

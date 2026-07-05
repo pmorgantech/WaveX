@@ -30,7 +30,10 @@ size_t CreateUartPacket(uint8_t* buffer,
                         uint16_t sequence_number,
                         uint8_t flags = 0);
 
-// Packet parsing (returns true on success, false on validation failure)
+// Packet parsing (returns true on success, false on validation failure).
+// `payload_size` is in/out: set it to payload_out's capacity before the
+// call; a frame whose payload exceeds that capacity is rejected (truncated
+// delivery is never valid). On success it holds the bytes copied.
 bool ParseUartPacket(const uint8_t* buffer,
                      size_t buffer_size,
                      uint8_t& msg_type,

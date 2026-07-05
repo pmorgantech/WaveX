@@ -1,9 +1,9 @@
 #include "uart_protocol.h"
 
-#include <cstring>
-#include <cstdio>
-
 #include "../config/uart_debug_config.h"
+
+#include <cstdio>
+#include <cstring>
 
 namespace WaveX {
 namespace UartProtocol {
@@ -15,10 +15,9 @@ namespace {
 constexpr size_t kHeaderSize = 1 /*start*/ + 2 /*length*/;
 constexpr size_t kBodyFixedSize = 1 /*flags*/ + 1 /*type*/ + 2 /*seq*/ + 2 /*crc*/;
 
-}
+}  // namespace
 
-uint16_t CalculateUartCrc(const uint8_t* data, size_t length)
-{
+uint16_t CalculateUartCrc(const uint8_t* data, size_t length) {
     if (!data || length == 0) {
         return 0;
     }
@@ -31,8 +30,7 @@ size_t CreateUartPacket(uint8_t* buffer,
                         const void* payload,
                         size_t payload_size,
                         uint16_t sequence_number,
-                        uint8_t flags)
-{
+                        uint8_t flags) {
     if (!buffer) {
         return 0;
     }
@@ -73,8 +71,7 @@ size_t CreateUartPacket(uint8_t* buffer,
     return total_frame;
 }
 
-bool ValidateUartFrame(const uint8_t* buffer, size_t buffer_size)
-{
+bool ValidateUartFrame(const uint8_t* buffer, size_t buffer_size) {
     if (!buffer || buffer_size < UART_FRAME_OVERHEAD) {
         return false;
     }
@@ -83,14 +80,14 @@ bool ValidateUartFrame(const uint8_t* buffer, size_t buffer_size)
         return false;
     }
 
-    const uint16_t length_field = static_cast<uint16_t>(buffer[1]) |
-                                   (static_cast<uint16_t>(buffer[2]) << 8);
+    const uint16_t length_field =
+        static_cast<uint16_t>(buffer[1]) | (static_cast<uint16_t>(buffer[2]) << 8);
 
     if (length_field < kBodyFixedSize) {
         return false;
     }
 
-    const size_t expected_frame = kHeaderSize + length_field + 1; // + end byte
+    const size_t expected_frame = kHeaderSize + length_field + 1;  // + end byte
     if (expected_frame != buffer_size) {
         return false;
     }
@@ -116,23 +113,31 @@ bool ParseUartPacket(const uint8_t* buffer,
                      uint8_t* payload_out,
                      size_t& payload_size,
                      uint16_t& sequence_number,
-                     uint8_t& flags)
-{
+                     uint8_t& flags) {
     if (!ValidateUartFrame(buffer, buffer_size)) {
         return false;
     }
 
-    const uint16_t length_field = static_cast<uint16_t>(buffer[1]) |
-                                   (static_cast<uint16_t>(buffer[2]) << 8);
+    const uint16_t length_field =
+        static_cast<uint16_t>(buffer[1]) | (static_cast<uint16_t>(buffer[2]) << 8);
     const uint8_t* body = &buffer[kHeaderSize];
 
     flags = body[0];
     msg_type = body[1];
-    sequence_number = static_cast<uint16_t>(body[2]) |
-                      (static_cast<uint16_t>(body[3]) << 8);
+    sequence_number = static_cast<uint16_t>(body[2]) | (static_cast<uint16_t>(body[3]) << 8);
 
     const size_t payload_len = length_field - kBodyFixedSize;
     if (payload_len > UART_MAX_PAYLOAD) {
+        return false;
+    }
+
+    // `payload_size` is in/out: on entry it is the caller's destination
+    // capacity (review H5 - previously the copy length came entirely from
+    // the wire, the same overflow class fixed in ParseWaveXPacket). Unlike
+    // the SPI path, a UART payload length is exact rather than padded, so a
+    // destination too small for the message rejects the frame outright -
+    // delivering a truncated message is never valid.
+    if (payload_len > payload_size) {
         return false;
     }
 
@@ -145,8 +150,7 @@ bool ParseUartPacket(const uint8_t* buffer,
     return true;
 }
 
-int FindFrameStart(const uint8_t* buffer, size_t buffer_size)
-{
+int FindFrameStart(const uint8_t* buffer, size_t buffer_size) {
     if (!buffer || buffer_size < UART_FRAME_OVERHEAD) {
         return -1;
     }
@@ -159,8 +163,7 @@ int FindFrameStart(const uint8_t* buffer, size_t buffer_size)
     return -1;
 }
 
-size_t GetFrameLength(const uint8_t* buffer, size_t buffer_size)
-{
+size_t GetFrameLength(const uint8_t* buffer, size_t buffer_size) {
     if (!buffer || buffer_size < UART_FRAME_OVERHEAD) {
         return 0;
     }
@@ -169,19 +172,17 @@ size_t GetFrameLength(const uint8_t* buffer, size_t buffer_size)
         return 0;
     }
 
-    const uint16_t length_field = static_cast<uint16_t>(buffer[1]) |
-                                   (static_cast<uint16_t>(buffer[2]) << 8);
+    const uint16_t length_field =
+        static_cast<uint16_t>(buffer[1]) | (static_cast<uint16_t>(buffer[2]) << 8);
 
-    if (length_field < kBodyFixedSize ||
-        length_field > UART_MAX_PAYLOAD + kBodyFixedSize) {
+    if (length_field < kBodyFixedSize || length_field > UART_MAX_PAYLOAD + kBodyFixedSize) {
         return 0;
     }
 
     return kHeaderSize + length_field + 1;
 }
 
-void DumpPacket(const char* tag, const uint8_t* data, size_t length)
-{
+void DumpPacket(const char* tag, const uint8_t* data, size_t length) {
 #if WAVEX_UART_DEBUG_LEVEL >= UART_LOG_DUMP
     if (!data || length == 0) {
         UART_LOGI(tag ? tag : "uartpkt", "<empty packet>");
@@ -205,7 +206,5 @@ void DumpPacket(const char* tag, const uint8_t* data, size_t length)
 #endif
 }
 
-} // namespace UartProtocol
-} // namespace WaveX
-
-
+}  // namespace UartProtocol
+}  // namespace WaveX
