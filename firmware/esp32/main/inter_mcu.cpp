@@ -110,7 +110,7 @@ esp_err_t inter_mcu_send_control_change(uint8_t parameter, uint8_t channel, uint
     msg.value = value;
 
     int result = send_uart_message(WaveX::Protocol::MSG_CONTROL_CHANGE, &msg, sizeof(msg));
-    return result ? ESP_OK : -1;  // ESP_FAIL
+    return result >= 0 ? ESP_OK : ESP_FAIL;
 }
 
 esp_err_t inter_mcu_send_note_on(uint8_t note, uint8_t velocity, uint8_t channel) {
@@ -125,7 +125,7 @@ esp_err_t inter_mcu_send_note_on(uint8_t note, uint8_t velocity, uint8_t channel
     msg.reserved = 0;
 
     int result = send_uart_message(WaveX::Protocol::MSG_NOTE_ON, &msg, sizeof(msg));
-    return result ? ESP_OK : -1;  // ESP_FAIL
+    return result >= 0 ? ESP_OK : ESP_FAIL;
 }
 
 esp_err_t inter_mcu_send_note_off(uint8_t note, uint8_t channel) {
@@ -140,7 +140,7 @@ esp_err_t inter_mcu_send_note_off(uint8_t note, uint8_t channel) {
     msg.reserved = 0;
 
     int result = send_uart_message(WaveX::Protocol::MSG_NOTE_OFF, &msg, sizeof(msg));
-    return result ? ESP_OK : -1;  // ESP_FAIL
+    return result >= 0 ? ESP_OK : ESP_FAIL;
 }
 
 esp_err_t inter_mcu_send_sample_ctrl(uint8_t slot, wavex_sample_ctrl_cmd_t cmd, float rate) {
@@ -154,7 +154,7 @@ esp_err_t inter_mcu_send_sample_ctrl(uint8_t slot, wavex_sample_ctrl_cmd_t cmd, 
     msg.rate = rate;
 
     int result = send_uart_message(WaveX::Protocol::MSG_SAMPLE_CTRL, &msg, sizeof(msg));
-    return result ? ESP_OK : -1;  // ESP_FAIL
+    return result >= 0 ? ESP_OK : ESP_FAIL;
 }
 
 esp_err_t inter_mcu_send_preview_req(uint8_t slot, uint32_t start, uint32_t end, uint16_t decim) {
@@ -169,7 +169,7 @@ esp_err_t inter_mcu_send_preview_req(uint8_t slot, uint32_t start, uint32_t end,
     msg.decim = decim;
 
     int result = send_uart_message(WaveX::Protocol::MSG_PREVIEW_REQ, &msg, sizeof(msg));
-    return result ? ESP_OK : -1;  // ESP_FAIL
+    return result >= 0 ? ESP_OK : ESP_FAIL;
 }
 
 void inter_mcu_send_test_messages() {
@@ -220,7 +220,7 @@ esp_err_t inter_mcu_request_sample_mem_status() {
     WaveX::Protocol::StatusRequestMessage req{};
     req.category = WaveX::Protocol::STATUS_CATEGORY_SAMPLE_MEM;
     int result = send_uart_message(WaveX::Protocol::MSG_STATUS_REQUEST, &req, sizeof(req));
-    return result ? ESP_OK : -1;
+    return result >= 0 ? ESP_OK : ESP_FAIL;
 }
 
 void inter_mcu_update_sample_mem_status(const wavex_sample_mem_status_t& status) {
@@ -554,7 +554,7 @@ esp_err_t inter_mcu_send_browse_req(const char* path, uint8_t start_index) {
              request_send_complete_us,
              request_send_complete_us - request_send_time_us);
 
-    return result ? ESP_OK : -1;  // ESP_FAIL
+    return result >= 0 ? ESP_OK : ESP_FAIL;
 }
 
 esp_err_t inter_mcu_send_sample_play_index_req(uint32_t file_index) {
@@ -566,7 +566,7 @@ esp_err_t inter_mcu_send_sample_play_index_req(uint32_t file_index) {
     msg.index = file_index;
 
     int result = send_uart_message(WaveX::Protocol::MSG_SAMPLE_PLAY_INDEX_REQ, &msg, sizeof(msg));
-    return result ? ESP_OK : -1;  // ESP_FAIL
+    return result >= 0 ? ESP_OK : ESP_FAIL;
 }
 
 esp_err_t inter_mcu_send_sample_stop_req() {
@@ -581,7 +581,7 @@ esp_err_t inter_mcu_send_sample_stop_req() {
     msg.reserved[2] = 0;
 
     int result = send_uart_message(WaveX::Protocol::MSG_SAMPLE_STOP_REQ, &msg, sizeof(msg));
-    return result ? ESP_OK : -1;  // ESP_FAIL
+    return result >= 0 ? ESP_OK : ESP_FAIL;
 }
 
 esp_err_t inter_mcu_send_sample_load_req(uint16_t sample_id,
@@ -608,7 +608,7 @@ esp_err_t inter_mcu_send_sample_load_req(uint16_t sample_id,
     }
 
     int result = send_uart_message(WaveX::Protocol::MSG_SAMPLE_LOAD, &msg, sizeof(msg));
-    return result ? ESP_OK : -1;  // ESP_FAIL
+    return result >= 0 ? ESP_OK : ESP_FAIL;
 }
 
 esp_err_t inter_mcu_send_sample_data(const uint8_t* data, size_t length) {
@@ -623,7 +623,7 @@ esp_err_t inter_mcu_send_sample_data(const uint8_t* data, size_t length) {
     // For large data, we may need to chunk it, but for now send as one message
     // The protocol handler will handle packet sizing
     int result = send_uart_message(WaveX::Protocol::MSG_SAMPLE_DATA, data, length);
-    return result ? ESP_OK : -1;  // ESP_FAIL
+    return result >= 0 ? ESP_OK : ESP_FAIL;
 }
 
 // Handle sample stop response from communication layer

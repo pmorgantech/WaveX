@@ -35,6 +35,13 @@ versioning and release process.
   drives the real dispatcher against recording mocks and pins every routed
   message type to its observable subsystem call — the test class that would
   have caught this. Bench verification (in-to-sound latency) still pending.
+- ESP32 `inter_mcu_send_*` wrappers no longer invert their error result
+  (code review C3): `uart_link_send` returns -1 on failure, and the old
+  `return result ? ESP_OK : -1` mapped that truthy -1 to **ESP_OK**, so
+  every link-send failure (queue full, link down) was reported as success
+  and all upstream error handling — including midi_task's "note dropped"
+  warnings and the UI pages' send-failure paths — was unreachable. Now
+  `result >= 0 → ESP_OK`, else `ESP_FAIL`.
 - Pre-commit's five repo-local hooks (ESP32/Daisy build checks and all three
   test suites) never actually ran: their `files:` regexes
   (`^(firmware/esp32/|Makefile)$` etc.) matched only the literal directory
