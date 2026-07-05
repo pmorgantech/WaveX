@@ -291,3 +291,43 @@ TEST_F(PacketRouterTest, RouteEmptyPacket) {
     EXPECT_FALSE(g_sample_stop_resp_handler_called);
     EXPECT_FALSE(g_error_handler_called);
 }
+
+// Review H3 regression tests: a CRC-valid frame whose payload is empty or
+// shorter than the typed message must be dropped, not memcpy'd. Before the
+// CopyMessage guard, a zero-length payload reached
+// memcpy(&msg, nullptr, sizeof(msg)) - undefined behavior (segfault here on
+// the host, arbitrary misbehavior on target).
+TEST_F(PacketRouterTest, NullPayloadDoesNotCrashAnyFixedSizeType) {
+    const uint8_t types[] = {WaveX::Protocol::MSG_SYNC,
+                             WaveX::Protocol::MSG_HEARTBEAT,
+                             WaveX::Protocol::MSG_METER_PUSH,
+                             WaveX::Protocol::MSG_STATUS_RESPONSE,
+                             WaveX::Protocol::MSG_WAVE_CHUNK,
+                             WaveX::Protocol::MSG_SAMPLE_STATUS,
+                             WaveX::Protocol::MSG_SAMPLE_STOP_RESP,
+                             WaveX::Protocol::MSG_ERROR};
+    for (uint8_t t: types) {
+        router_->route_uart_message(t, nullptr, 0, 0, 1);
+    }
+    // Reaching here without UB/crash is the assertion; the router must also
+    // still be functional afterwards.
+    WaveX::Protocol::HeartbeatMessage hb(1000, 1, 1);
+    uint8_t payload[sizeof(hb)];
+    memcpy(payload, &hb, sizeof(hb));
+    router_->route_uart_message(WaveX::Protocol::MSG_HEARTBEAT, payload, sizeof(payload), 0, 2);
+}
+
+TEST_F(PacketRouterTest, TruncatedPayloadDoesNotCrashAnyFixedSizeType) {
+    uint8_t partial[3] = {0x01, 0x02, 0x03};
+    const uint8_t types[] = {WaveX::Protocol::MSG_SYNC,
+                             WaveX::Protocol::MSG_HEARTBEAT,
+                             WaveX::Protocol::MSG_METER_PUSH,
+                             WaveX::Protocol::MSG_STATUS_RESPONSE,
+                             WaveX::Protocol::MSG_WAVE_CHUNK,
+                             WaveX::Protocol::MSG_SAMPLE_STATUS,
+                             WaveX::Protocol::MSG_SAMPLE_STOP_RESP,
+                             WaveX::Protocol::MSG_ERROR};
+    for (uint8_t t: types) {
+        router_->route_uart_message(t, partial, sizeof(partial), 0, 1);
+    }
+}

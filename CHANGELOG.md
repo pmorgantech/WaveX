@@ -35,6 +35,12 @@ versioning and release process.
   drives the real dispatcher against recording mocks and pins every routed
   message type to its observable subsystem call — the test class that would
   have caught this. Bench verification (in-to-sound latency) still pending.
+- ESP32 `PacketRouter` validates payload length before copying typed
+  messages (code review H3): a CRC-valid frame with an empty payload
+  previously reached `memcpy(&msg, nullptr, sizeof)` (undefined behavior),
+  and truncated payloads filled message tails with stale stack bytes. All
+  eight fixed-size message cases now go through one checked helper; new
+  host tests drive every type with null and truncated payloads.
 - Daisy UART RX can no longer wedge permanently on a frame buffer full of
   start-byte-free garbage (code review H2): the no-start-byte path now
   discards the scanned window (keeping the last frame-overhead-minus-one

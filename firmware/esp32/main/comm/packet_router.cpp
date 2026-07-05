@@ -17,7 +17,25 @@ using namespace WaveX::Protocol;
 
 namespace {
 PacketRouter g_packet_router_instance;
+
+// Copies a fixed-size wire struct out of a payload region, rejecting
+// null/short payloads (review H3): a CRC-valid frame with an empty payload
+// used to reach memcpy(&msg, nullptr, sizeof) here - undefined behavior -
+// and a truncated one filled the tail of `msg` with stale stack bytes.
+template <typename T>
+bool CopyMessage(const uint8_t* payload, size_t payload_len, T& out, const char* name) {
+    if (!payload || payload_len < sizeof(T)) {
+        ESP_LOGW("packet_router",
+                 "%s payload too small (%u < %u) - dropped",
+                 name,
+                 (unsigned)payload_len,
+                 (unsigned)sizeof(T));
+        return false;
+    }
+    memcpy(&out, payload, sizeof(T));
+    return true;
 }
+}  // namespace
 
 PacketRouter& GetPacketRouter() {
     return g_packet_router_instance;
@@ -115,32 +133,32 @@ void PacketRouter::route_by_message_type(uint8_t msg_type,
     switch (msg_type) {
         case WaveX::Protocol::MSG_SYNC: {
             WaveX::Protocol::SyncMessage msg;
-            memcpy(&msg, payload, sizeof(msg));
-            handle_sync(msg);
+            if (CopyMessage(payload, payload_len, msg, "SYNC"))
+                handle_sync(msg);
         } break;
 
         case WaveX::Protocol::MSG_HEARTBEAT: {
             WaveX::Protocol::HeartbeatMessage msg;
-            memcpy(&msg, payload, sizeof(msg));
-            handle_heartbeat(msg);
+            if (CopyMessage(payload, payload_len, msg, "HEARTBEAT"))
+                handle_heartbeat(msg);
         } break;
 
         case WaveX::Protocol::MSG_METER_PUSH: {
             WaveX::Protocol::MeterPushMessage msg;
-            memcpy(&msg, payload, sizeof(msg));
-            handle_meter_push(msg);
+            if (CopyMessage(payload, payload_len, msg, "METER_PUSH"))
+                handle_meter_push(msg);
         } break;
 
         case WaveX::Protocol::MSG_STATUS_RESPONSE: {
             WaveX::Protocol::SampleMemStatusMessage msg;
-            memcpy(&msg, payload, sizeof(msg));
-            handle_status_response(msg);
+            if (CopyMessage(payload, payload_len, msg, "STATUS_RESPONSE"))
+                handle_status_response(msg);
         } break;
 
         case WaveX::Protocol::MSG_WAVE_CHUNK: {
             WaveX::Protocol::WaveChunkMessage msg;
-            memcpy(&msg, payload, sizeof(msg));
-            handle_wave_chunk(msg, payload, payload_len);
+            if (CopyMessage(payload, payload_len, msg, "WAVE_CHUNK"))
+                handle_wave_chunk(msg, payload, payload_len);
         } break;
 
         case WaveX::Protocol::MSG_BROWSE_RESP: {
@@ -157,27 +175,20 @@ void PacketRouter::route_by_message_type(uint8_t msg_type,
 
         case WaveX::Protocol::MSG_SAMPLE_STATUS: {
             WaveX::Protocol::SampleStatusMessage msg;
-            if (payload_len >= sizeof(msg)) {
-                memcpy(&msg, payload, sizeof(msg));
+            if (CopyMessage(payload, payload_len, msg, "SAMPLE_STATUS"))
                 handle_sample_status(msg);
-            } else {
-                ESP_LOGW("packet_router",
-                         "Sample status payload too small (%u vs %u)",
-                         (unsigned)payload_len,
-                         (unsigned)sizeof(msg));
-            }
         } break;
 
         case WaveX::Protocol::MSG_SAMPLE_STOP_RESP: {
             WaveX::Protocol::SampleStopRespMessage msg;
-            memcpy(&msg, payload, sizeof(msg));
-            handle_sample_stop_resp(msg);
+            if (CopyMessage(payload, payload_len, msg, "SAMPLE_STOP_RESP"))
+                handle_sample_stop_resp(msg);
         } break;
 
         case WaveX::Protocol::MSG_ERROR: {
             WaveX::Protocol::ErrorMessage msg;
-            memcpy(&msg, payload, sizeof(msg));
-            handle_error(msg);
+            if (CopyMessage(payload, payload_len, msg, "ERROR"))
+                handle_error(msg);
         } break;
 
         default:
@@ -326,14 +337,14 @@ WEAK_HANDLER void PacketRouter::handle_wave_chunk(const WaveX::Protocol::WaveChu
         const int16_t* samples =
             reinterpret_cast<const int16_t*>(payload + sizeof(WaveX::Protocol::WaveChunkMessage));
 
-        // TODO: Forward wave chunk data to audio processing system
-        // For now, just log the first few samples for debugging
-        ESP_LOGD("packet_router",
-                 "Wave chunk samples (first 4): %d, %d, %d, %d",
-                 samples[0],
-                 samples[1],
-                 samples[2],
-                 samples[3]);
+        if (msg.count >= 4) {
+            ESP_LOGD("packet_router",
+                     "Wave chunk samples (first 4): %d, %d, %d, %d",
+                     samples[0],
+                     samples[1],
+                     samples[2],
+                     samples[3]);
+        }
 
         // Forward to inter-MCU layer for UI/UI consumers
         inter_mcu_invoke_wave_chunk_callback(msg.offset, samples, msg.count);
