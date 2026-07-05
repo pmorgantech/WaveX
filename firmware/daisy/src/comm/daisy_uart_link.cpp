@@ -10,6 +10,7 @@
 #include "sys/dma.h"
 #include "util/scopedirqblocker.h"
 
+#include "../../shared/spi_protocol/sequence_tracker.hpp"
 #include <algorithm>
 #include <cstring>
 
@@ -39,6 +40,8 @@ struct uart_stats_t {
     uint32_t frame_sync_errors = 0;
     uint32_t queue_overflows = 0;
     uint32_t tx_errors = 0;
+    uint32_t seq_drops = 0;    // duplicate/out-of-order frames dropped by SequenceTracker
+    uint32_t seq_resyncs = 0;  // peer-reboot resyncs accepted by SequenceTracker
 };
 
 static daisy::UartHandler s_uart;
@@ -67,6 +70,13 @@ static uint16_t s_next_sequence = 1;
 static uart_stats_t s_stats;
 static bool s_initialized = false;
 static bool s_dma_listening = false;
+
+// Reboot-aware duplicate/out-of-order gate for the peer's RX sequence
+// stream (shared with the SPI path's implementation - see
+// sequence_tracker.hpp). Until 2026-07-05 only the compiled-out SPI path
+// had this protection; the live UART transport dispatched every CRC-valid
+// frame regardless of sequence number (code review C4/M4).
+static WaveX::Protocol::SequenceTracker s_rx_seq;
 
 void append_rx_data_isr(const uint8_t* data, size_t len) {
     if (!data || len == 0) {
@@ -217,6 +227,35 @@ void process_rx_frames() {
                 s_hw->PrintLine(
                     "DAISY: RX msg=0x%02X len=%d seq=%u", msg_type, (int)payload_len, seq);
             UART_LOG_DUMP_PACKET("daisy_uart", frame, frame_len);
+
+            // Sequence gate: every frame from the peer shares one sequence
+            // counter, so evaluate all of them (ACK/NACK included) to keep
+            // the tracker in step; only Accept/ResyncAccept dispatch.
+            // Duplicates (peer retransmit) and severe out-of-order (stale
+            // or corrupted-but-CRC-valid) are dropped. A peer reboot (low,
+            // fresh-looking seq after real progress) resyncs and continues
+            // instead of wedging.
+            const auto seq_result = s_rx_seq.Evaluate(seq);
+            if (seq_result == WaveX::Protocol::SequenceTracker::Result::Duplicate ||
+                seq_result == WaveX::Protocol::SequenceTracker::Result::OutOfOrder) {
+                s_stats.seq_drops++;
+                UART_LOGW("daisy_uart",
+                          "RX seq=%u dropped (%s), expected=%u",
+                          seq,
+                          seq_result == WaveX::Protocol::SequenceTracker::Result::Duplicate
+                              ? "duplicate"
+                              : "out-of-order",
+                          s_rx_seq.ExpectedSeq());
+                offset += frame_len;
+                continue;
+            }
+            if (seq_result == WaveX::Protocol::SequenceTracker::Result::ResyncAccept) {
+                s_stats.seq_resyncs++;
+                UART_LOGW("daisy_uart", "peer reboot detected - seq resynced to %u", seq);
+                if (s_hw)
+                    s_hw->PrintLine("DAISY: peer reboot detected - seq resynced to %u", seq);
+            }
+
             if (flags & UART_FLAG_ACK) {
                 UART_LOGI("daisy_uart", "ACK received for msg=0x%02X seq=%u", msg_type, seq);
             } else if (flags & UART_FLAG_NACK) {
@@ -654,6 +693,9 @@ int UartLinkSend(uint16_t msg_type, const void* payload, uint16_t len) {
 
     uart_msg_entry_t& entry = s_tx_queue[s_tx_tail];
     uint16_t seq = s_next_sequence++;
+    if (seq == 0) {  // 0 is reserved (receivers reject it); skip it on uint16 wrap
+        seq = s_next_sequence++;
+    }
     size_t frame_len = CreateUartPacket(
         entry.frame, sizeof(entry.frame), static_cast<uint8_t>(msg_type), payload, len, seq, 0);
 
@@ -771,13 +813,16 @@ void UartLinkProcess() {
 
 void UartLinkLogStats() {
     UART_LOGI("daisy_uart",
-              "UART stats: sent=%u received=%u crc=%u sync=%u overflow=%u txerr=%u",
+              "UART stats: sent=%u received=%u crc=%u sync=%u overflow=%u txerr=%u seqdrop=%u "
+              "resync=%u",
               s_stats.packets_sent,
               s_stats.packets_received,
               s_stats.crc_errors,
               s_stats.frame_sync_errors,
               s_stats.queue_overflows,
-              s_stats.tx_errors);
+              s_stats.tx_errors,
+              s_stats.seq_drops,
+              s_stats.seq_resyncs);
 }
 
 }  // namespace Comm

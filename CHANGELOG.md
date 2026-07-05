@@ -11,6 +11,23 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Added — UART link sequence protection (review C4/M4)
+
+- Both live UART links (`daisy_uart_link.cpp`, `esp_uart_link.cpp`) now run
+  every received frame through the shared reboot-aware `SequenceTracker`
+  (previously wired only into the compiled-out SPI path): duplicate and
+  severe out-of-order frames are dropped (counted in link stats as
+  `seq_drops`), and a peer reboot (low, fresh-looking sequence number after
+  real progress) resyncs and continues (`seq_resyncs`) instead of being
+  double-processed or wedging.
+
+### Fixed
+
+- Sequence-number generators (shared `CreatePacket` and both UART links) now
+  skip the reserved value 0 when the 16-bit counter wraps; previously one
+  packet per 65,535 would carry seq 0, which receivers reject. Host tests
+  cover the wrap on both the generator and tracker sides.
+
 ### Changed (Docs)
 
 - `docs/code_review_20260705.md`: comprehensive code review of the full

@@ -260,7 +260,7 @@ These rules are mandatory for all new code. Most past instability (SPI corruptio
 
 - Parameter changes (UI → audio): target < 5 ms end-to-end (touch → SPI → applied at next control tick).
 - Meters/heartbeat: 20–50 ms cadence, coalesced, lowest priority.
-- The link must degrade gracefully: either MCU rebooting must never wedge the other (timeouts + resync; regression-tested — roadmap Phase 1 item 7). UART's stuck-TX recovery (`daisy_uart_link.cpp`, wire-time-derived transmit timeout + 500ms/1000ms force-clear) implements the TX half. `SequenceTracker` (`firmware/shared/spi_protocol/sequence_tracker.hpp`) and `AttnWatchdog` (`attn_watchdog.hpp`) are HAL-free and host-tested; note that as of 2026-07-05 they are integrated only into the **compiled-out SPI path** — wiring `SequenceTracker` into the live UART RX paths is in progress (code review C4/M4).
+- The link must degrade gracefully: either MCU rebooting must never wedge the other (timeouts + resync; regression-tested — roadmap Phase 1 item 7). UART's stuck-TX recovery (`daisy_uart_link.cpp`, wire-time-derived transmit timeout + 500ms/1000ms force-clear) implements the TX half. `SequenceTracker` (`firmware/shared/spi_protocol/sequence_tracker.hpp`) is wired into **both live UART RX paths** (duplicate/out-of-order drop + peer-reboot resync, counted in link stats) as well as the compiled-out SPI path; `AttnWatchdog` (`attn_watchdog.hpp`) is SPI-path-only by nature (there is no ATTN line on UART). Both are HAL-free and host-tested.
 
 ---
 

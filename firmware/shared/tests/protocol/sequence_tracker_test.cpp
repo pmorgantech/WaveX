@@ -86,3 +86,32 @@ TEST(SequenceTrackerTest, RebootResyncOnlyRecognizedForFreshLookingSequence) {
     EXPECT_EQ(t.Evaluate(50), SequenceTracker::Result::OutOfOrder);
     EXPECT_EQ(t.ResyncCount(), 0u);
 }
+
+TEST(SequenceTrackerTest, Uint16WrapContinuesAccepting) {
+    // Senders wrap 65535 -> 1 (0 is reserved and skipped at the generator -
+    // see CreatePacket / the uart links' UartLinkSend). The tracker's
+    // expected_seq_ wraps through 0 internally; the post-wrap seq=1 must be
+    // accepted as normal forward progress, not misread as a reboot or
+    // out-of-order.
+    SequenceTracker t;
+    // Jump the tracker near the top of the range (a forward jump is Accept).
+    ASSERT_EQ(t.Evaluate(65530), SequenceTracker::Result::Accept);
+    for (uint32_t seq = 65531; seq <= 65535; ++seq) {
+        ASSERT_EQ(t.Evaluate(static_cast<uint16_t>(seq)), SequenceTracker::Result::Accept)
+            << "seq=" << seq;
+    }
+    // expected_seq_ has wrapped to 0; the sender skips 0 and sends 1.
+    EXPECT_EQ(t.Evaluate(1), SequenceTracker::Result::Accept);
+    EXPECT_EQ(t.Evaluate(2), SequenceTracker::Result::Accept);
+    EXPECT_EQ(t.ResyncCount(), 0u);
+    EXPECT_EQ(t.OutOfOrderCount(), 0u);
+}
+
+TEST(SequenceTrackerTest, SequenceZeroStillRejectedAfterWrap) {
+    // A legacy/buggy sender that does NOT skip 0 on wrap loses exactly that
+    // one frame; the stream must recover on the next frame.
+    SequenceTracker t;
+    ASSERT_EQ(t.Evaluate(65535), SequenceTracker::Result::Accept);
+    EXPECT_EQ(t.Evaluate(0), SequenceTracker::Result::OutOfOrder);
+    EXPECT_EQ(t.Evaluate(1), SequenceTracker::Result::Accept);
+}

@@ -672,3 +672,33 @@ TEST_F(MessageTypeTest, CalculateWaveXCrc) {
     uint16_t crc3 = ProtocolHandler::CalculateWaveXCrc(test_data2, sizeof(test_data2) - 1);
     EXPECT_NE(crc1, crc3);
 }
+
+// The internal sequence counter must skip the reserved value 0 when the
+// uint16 wraps (review M4): a receiver-side SequenceTracker rejects seq 0,
+// so a generator that wraps through it silently loses one packet per 64K.
+TEST_F(MessageTypeTest, CreatePacketSequenceNumberSkipsZeroOnWrap) {
+    SyncMessage msg(0);
+    uint8_t msg_type = 0;
+    uint16_t seq = 0;
+    uint8_t flags = 0;
+
+    uint16_t prev_seq = 0;
+    bool saw_wrap = false;
+    // More than one full uint16 cycle so the wrap is exercised regardless of
+    // the counter's starting value (it is shared across tests in this binary).
+    for (uint32_t i = 0; i < 70000; ++i) {
+        size_t created = ProtocolHandler::CreatePacket(
+            buffer_.data(), buffer_.size(), MSG_SYNC, &msg, sizeof(msg));
+        ASSERT_GT(created, 0u);
+        size_t payload_size = sizeof(msg);
+        ASSERT_TRUE(ProtocolHandler::ParseWaveXPacket(
+            buffer_.data(), created, msg_type, &msg, payload_size, seq, flags));
+        ASSERT_NE(seq, 0u) << "iteration " << i;
+        if (i > 0 && seq < prev_seq) {
+            saw_wrap = true;
+            EXPECT_EQ(seq, 1u) << "wrap must land on 1, not 0";
+        }
+        prev_seq = seq;
+    }
+    EXPECT_TRUE(saw_wrap);
+}

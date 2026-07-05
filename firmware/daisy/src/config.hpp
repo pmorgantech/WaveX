@@ -14,7 +14,8 @@
 // DAISY-SPECIFIC CONFIGURATION
 // ============================================================================
 
-// UART support removed - using SPI only
+// Transport: UART is the transport of record (architecture.md §4.4); the
+// SPI link is compiled out via WAVEX_SPI_LINK_ENABLED in link_config.h.
 
 // ============================================================================
 // LEGACY MACRO SUPPORT (for backward compatibility)
@@ -30,5 +31,3 @@
 // #ifndef WAVEX_AUDIO_ENGINE_ENABLED
 // #define WAVEX_AUDIO_ENGINE_ENABLED 1
 // #endif
-
-

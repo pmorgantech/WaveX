@@ -98,8 +98,12 @@ size_t ProtocolHandler::CreatePacket(uint8_t* buffer,
                                      const void* payload,
                                      size_t payload_size,
                                      uint8_t flags) {
-    // Get next sequence number and increment it
+    // Get next sequence number and increment it. 0 is reserved (receivers
+    // reject it - see sequence_tracker.hpp), so skip it on uint16 wrap.
     uint16_t seq_num = s_next_seq_num++;
+    if (seq_num == 0) {
+        seq_num = s_next_seq_num++;
+    }
 
     // Use the existing CreateWaveXPacket method
     return CreateWaveXPacket(buffer, buffer_size, msg_type, payload, payload_size, seq_num, flags);

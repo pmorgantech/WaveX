@@ -11,6 +11,7 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 
+#include "../../shared/spi_protocol/sequence_tracker.hpp"
 #include <algorithm>
 #include <cstring>
 
@@ -50,6 +51,8 @@ struct uart_stats_t {
     uint32_t crc_errors = 0;
     uint32_t frame_sync_errors = 0;
     uint32_t queue_overflows = 0;
+    uint32_t seq_drops = 0;    // duplicate/out-of-order frames dropped by SequenceTracker
+    uint32_t seq_resyncs = 0;  // peer-reboot resyncs accepted by SequenceTracker
 };
 
 TaskHandle_t s_uart_task_handle = nullptr;
@@ -67,6 +70,12 @@ static size_t s_rx_pending_len = 0;
 static volatile bool s_uart_running = false;
 static uint16_t s_next_sequence = 1;
 static uart_stats_t s_stats;
+
+// Reboot-aware duplicate/out-of-order gate for the Daisy's RX sequence
+// stream (same shared SequenceTracker the SPI path uses). Until 2026-07-05
+// the live UART transport dispatched every CRC-valid frame regardless of
+// sequence number (code review C4/M4). Only touched from uart_task.
+static WaveX::Protocol::SequenceTracker s_rx_seq;
 
 // PacketRouter reference (injected via uart_link_set_packet_router)
 static WaveX::Comm::PacketRouter* s_packet_router = nullptr;
@@ -188,6 +197,30 @@ void process_rx_frames() {
                       static_cast<int>(payload_len),
                       seq,
                       flags);
+
+            // Sequence gate (mirrors daisy_uart_link.cpp): evaluate every
+            // frame so the tracker stays in step with the peer's counter;
+            // drop duplicates and severe out-of-order, resync-and-continue
+            // on the peer-reboot signature instead of wedging.
+            const auto seq_result = s_rx_seq.Evaluate(seq);
+            if (seq_result == WaveX::Protocol::SequenceTracker::Result::Duplicate ||
+                seq_result == WaveX::Protocol::SequenceTracker::Result::OutOfOrder) {
+                s_stats.seq_drops++;
+                UART_LOGW(TAG,
+                          "RX seq=%u dropped (%s), expected=%u",
+                          seq,
+                          seq_result == WaveX::Protocol::SequenceTracker::Result::Duplicate
+                              ? "duplicate"
+                              : "out-of-order",
+                          s_rx_seq.ExpectedSeq());
+                offset += frame_len;
+                continue;
+            }
+            if (seq_result == WaveX::Protocol::SequenceTracker::Result::ResyncAccept) {
+                s_stats.seq_resyncs++;
+                UART_LOGW(TAG, "peer reboot detected - seq resynced to %u", seq);
+            }
+
             GetRouter().route_uart_message(
                 msg_type, payload_len ? payload : nullptr, payload_len, flags, seq);
         } else {
@@ -474,6 +507,9 @@ int uart_link_send(uint16_t msg_type, const void* payload, uint16_t len) {
 
     uart_msg_entry_t& entry = s_msg_queue[s_msg_tail];
     uint16_t seq = s_next_sequence++;
+    if (seq == 0) {  // 0 is reserved (receivers reject it); skip it on uint16 wrap
+        seq = s_next_sequence++;
+    }
     size_t frame_len = CreateUartPacket(
         entry.frame, sizeof(entry.frame), static_cast<uint8_t>(msg_type), payload, len, seq, 0);
     if (frame_len == 0) {
@@ -524,10 +560,13 @@ esp_err_t uart_link_stop(void) {
 
 void uart_link_log_stats(void) {
     UART_LOGI(TAG,
-              "UART stats: sent=%u received=%u crc_errors=%u sync_errors=%u overflow=%u",
+              "UART stats: sent=%u received=%u crc_errors=%u sync_errors=%u overflow=%u "
+              "seq_drops=%u resyncs=%u",
               s_stats.packets_sent,
               s_stats.packets_received,
               s_stats.crc_errors,
               s_stats.frame_sync_errors,
-              s_stats.queue_overflows);
+              s_stats.queue_overflows,
+              s_stats.seq_drops,
+              s_stats.seq_resyncs);
 }
