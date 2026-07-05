@@ -82,6 +82,18 @@
 #define WAVEX_DAISY_USB_ENABLED 1
 #endif
 
+// Wait for a USB-CDC serial terminal at boot (Daisy only). libDaisy's
+// StartLog(true) puts the logger in synchronous mode: every PrintLine
+// busy-waits until a USB host accepts the transfer, and the first log line
+// inside StartLog itself never returns without one - a unit powered
+// standalone (no PC) hangs before the audio engine starts (review H8).
+// Default 0 = boot unconditionally, early boot logs are dropped if no
+// terminal is attached. Set to 1 on the bench when catching boot logs
+// matters more than standalone operation.
+#ifndef WAVEX_DAISY_WAIT_FOR_SERIAL
+#define WAVEX_DAISY_WAIT_FOR_SERIAL 0
+#endif
+
 // SD Card (Daisy only)
 #ifndef WAVEX_DAISY_SD_CARD_ENABLED
 #define WAVEX_DAISY_SD_CARD_ENABLED 1

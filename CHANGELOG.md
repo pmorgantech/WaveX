@@ -35,6 +35,13 @@ versioning and release process.
   drives the real dispatcher against recording mocks and pins every routed
   message type to its observable subsystem call — the test class that would
   have caught this. Bench verification (in-to-sound latency) still pending.
+- Daisy no longer requires a USB serial terminal to boot (code review H8):
+  `StartLog(true)` put libDaisy's logger in synchronous mode — an unbounded
+  busy-wait on every `PrintLine` until a host accepts the transfer, so a
+  standalone unit hung inside `StartLog` before the audio engine started.
+  Boot logging is now gated by `WAVEX_DAISY_WAIT_FOR_SERIAL`
+  (hardware_config.h, default 0 = boot standalone, drop early logs; set 1
+  on the bench to keep the old wait-for-terminal behavior).
 - Reclaimed ~254 KB of Daisy internal RAM (code review H1): each
   `SlabPage` bitmap in the sample-memory manager was sized at one *word*
   per possible slot instead of one *bit* (512 B where 16 B suffices — ~190

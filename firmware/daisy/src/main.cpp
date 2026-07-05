@@ -120,8 +120,11 @@ int main(void) {
     // Initialize USB CDC for debugging
     hw.usb_handle.Init(UsbHandle::FS_INTERNAL);
 
-    // Start USB CDC interface - this makes it appear as a serial device
-    hw.StartLog(true);
+    // Start USB CDC logging. WAVEX_DAISY_WAIT_FOR_SERIAL=1 (bench builds)
+    // blocks here - and on every subsequent PrintLine - until a terminal
+    // attaches; the default 0 boots standalone and drops early logs instead
+    // (hardware_config.h / review H8).
+    hw.StartLog(WAVEX_DAISY_WAIT_FOR_SERIAL != 0);
 
     // Add delay to ensure USB CDC is ready before logging
     System::Delay(100);
