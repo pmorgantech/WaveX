@@ -23,6 +23,13 @@ versioning and release process.
 
 ### Fixed
 
+- Pre-commit's five repo-local hooks (ESP32/Daisy build checks and all three
+  test suites) never actually ran: their `files:` regexes
+  (`^(firmware/esp32/|Makefile)$` etc.) matched only the literal directory
+  string, never files under it, so every hook silently skipped on every
+  commit. Patterns now match directory contents, and shared-code changes
+  (`firmware/shared/`) trigger both build checks and both MCU test suites,
+  since shared sources are compiled into all of them.
 - Sequence-number generators (shared `CreatePacket` and both UART links) now
   skip the reserved value 0 when the 16-bit counter wraps; previously one
   packet per 65,535 would carry seq 0, which receivers reject. Host tests

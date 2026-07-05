@@ -55,7 +55,16 @@ repos:
       - id: check-merge-conflict
       - id: check-added-large-files
 
-  # Build validation - run quick checks
+  # Build validation - run quick checks.
+  # NOTE on `files:` patterns: these are regexes matched against each staged
+  # path. The previous form `^(firmware/esp32/|Makefile)$` anchored `$`
+  # directly after the directory prefix, so it matched only the literal
+  # string "firmware/esp32/" - never any file under it - and every local
+  # hook below silently skipped on every commit (found 2026-07-05; see
+  # docs/code_review_20260705.md §8 follow-up). Shared code is compiled into
+  # both firmware images and both test suites, so firmware/shared/ triggers
+  # them all. Device builds need the devcontainer toolchain; on a bare host
+  # use SKIP=check-build-esp32,check-build-daisy and build in the container.
   - repo: local
     hooks:
       - id: check-build-esp32
@@ -63,7 +72,7 @@ repos:
         entry: make
         args: [esp32]
         language: system
-        files: ^(firmware/esp32/|Makefile)$
+        files: ^(firmware/esp32/.*|firmware/shared/.*|Makefile)$
         pass_filenames: false
         require_serial: true
 
@@ -72,7 +81,7 @@ repos:
         entry: make
         args: [daisy]
         language: system
-        files: ^(firmware/daisy/|Makefile)$
+        files: ^(firmware/daisy/.*|firmware/shared/.*|Makefile)$
         pass_filenames: false
         require_serial: true
 
@@ -84,7 +93,7 @@ repos:
         entry: make
         args: [test-shared]
         language: system
-        files: ^(firmware/shared/|Makefile)$
+        files: ^(firmware/shared/.*|Makefile)$
         pass_filenames: false
         require_serial: true
 
@@ -93,7 +102,7 @@ repos:
         entry: make
         args: [test-esp32]
         language: system
-        files: ^(firmware/esp32/|Makefile)$
+        files: ^(firmware/esp32/.*|firmware/shared/.*|Makefile)$
         pass_filenames: false
         require_serial: true
 
@@ -102,6 +111,6 @@ repos:
         entry: make
         args: [test-daisy]
         language: system
-        files: ^(firmware/daisy/|Makefile)$
+        files: ^(firmware/daisy/.*|firmware/shared/.*|Makefile)$
         pass_filenames: false
         require_serial: true
