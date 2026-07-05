@@ -26,6 +26,9 @@
 #ifndef WXM_LARGE_MAX_RUNS
 #define WXM_LARGE_MAX_RUNS 512  // free list capacity for extent pool
 #endif
+#ifndef WXM_SMALL_MIN_CLASS_BYTES
+#define WXM_SMALL_MIN_CLASS_BYTES 32u  // smallest WXM_SMALL_CLASSES_BYTES entry (bitmap sizing)
+#endif
 
 // ===== Public handle type =====
 typedef struct {
@@ -63,9 +66,14 @@ struct SlabPage {
     uint32_t base_off;  // offset in small region
     uint16_t used;      // number of allocated slots
     uint16_t slots;     // total slots in this page
-    // bitmap: 1 = free, 0 = used (so ffz-style search works)
-    // dynamically sized per page in code; here we cap by max slots for each class
-    uint32_t bm[WXM_SMALL_PAGE_BYTES / 32u];  // upper entries unused; safe cap
+    // Bitmap: 1 = free, 0 = used (so ffz-style search works). Worst case is
+    // the smallest class: WXM_SMALL_PAGE_BYTES / WXM_SMALL_MIN_CLASS_BYTES
+    // slots, one BIT each. This was previously sized
+    // bm[WXM_SMALL_PAGE_BYTES / 32u] - one WORD per possible slot, a 32x
+    // oversize that cost ~190 KB of internal-RAM BSS across
+    // 6 classes x 64 pages of bookkeeping (review H1: 512 B/page of bitmap
+    // where 16 B suffices).
+    uint32_t bm[(WXM_SMALL_PAGE_BYTES / WXM_SMALL_MIN_CLASS_BYTES + 31u) / 32u];
 };
 }  // namespace wxsamp_internal
 
@@ -179,6 +187,9 @@ class SmallSlabPool {
 
    private:
     static constexpr uint16_t class_block_[WXM_SMALL_CLASS_COUNT] = WXM_SMALL_CLASSES_BYTES;
+    static_assert(class_block_[0] >= WXM_SMALL_MIN_CLASS_BYTES,
+                  "smallest slab class is below the SlabPage bitmap sizing assumption "
+                  "(WXM_SMALL_MIN_CLASS_BYTES)");
 
     uint8_t* base_ = nullptr;  // start of small region
     uint32_t size_ = 0;        // bytes of small region

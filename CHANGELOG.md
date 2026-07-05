@@ -35,6 +35,14 @@ versioning and release process.
   drives the real dispatcher against recording mocks and pins every routed
   message type to its observable subsystem call — the test class that would
   have caught this. Bench verification (in-to-sound latency) still pending.
+- Reclaimed ~254 KB of Daisy internal RAM (code review H1): each
+  `SlabPage` bitmap in the sample-memory manager was sized at one *word*
+  per possible slot instead of one *bit* (512 B where 16 B suffices — ~190
+  KB of BSS across 6 classes × 64 pages of bookkeeping), and
+  `audio_engine.cpp` carried a 64 KB `s_conversion_buffer` unreferenced
+  since the scratch-pool refactor. New `SampleMemTest` host suite (6 tests)
+  pins the slot bookkeeping the bitmap drives (full-page fill of the
+  smallest class, slot distinctness, release/reuse, extent coalescing).
 - `CreateWaveXPacket` rejects payloads of 2043–2048 bytes (code review H4):
   `GetOptimalSizeCode` saturates to the 2048-byte class, whose real payload
   capacity is 2042 (header + CRC overhead), so those six sizes previously

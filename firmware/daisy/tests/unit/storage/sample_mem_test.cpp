@@ -1,0 +1,132 @@
+// Host tests for the SDRAM sample-memory manager (src/memory.h - HAL-free,
+// header-only: slab pool for small allocations, extent pool for large).
+// Added with the review-H1 bitmap resize (SlabPage::bm shrank 32x); these
+// tests pin the slot bookkeeping the bitmap drives - full-page allocation
+// for the smallest class, address distinctness, release/reuse - so a sizing
+// regression corrupts a test, not sample RAM.
+
+#include <gtest/gtest.h>
+
+#include "memory.h"
+
+#include <cstdint>
+#include <set>
+
+namespace {
+
+constexpr uint32_t kArenaBytes = 2 * 1024 * 1024;  // 2 MiB test arena
+constexpr uint32_t kSmallBytes = 256 * 1024;       // 256 KiB small pool
+alignas(64) static uint8_t g_arena[kArenaBytes];
+
+class SampleMemTest : public ::testing::Test {
+   protected:
+    void SetUp() override { mgr_.init(g_arena, kArenaBytes, kSmallBytes); }
+
+    SampleMemMgr mgr_;
+};
+
+TEST_F(SampleMemTest, SmallAllocReturnsUsablePointer) {
+    wxsamp_t h{};
+    ASSERT_TRUE(mgr_.alloc(200, &h));
+    EXPECT_NE(h.cls, 0xFF);  // routed to the slab pool
+
+    void* p = nullptr;
+    ASSERT_TRUE(mgr_.ptr(h, &p));
+    ASSERT_NE(p, nullptr);
+    EXPECT_GE(p, static_cast<void*>(g_arena));
+    EXPECT_LT(p, static_cast<void*>(g_arena + kSmallBytes));
+
+    // The slot must be writable across its full logical length.
+    memset(p, 0xA5, 200);
+    mgr_.release(&h);
+}
+
+TEST_F(SampleMemTest, LargeAllocRoutesToExtentPool) {
+    wxsamp_t h{};
+    ASSERT_TRUE(mgr_.alloc(200 * 1024, &h));
+    EXPECT_EQ(h.cls, 0xFF);
+
+    void* p = nullptr;
+    ASSERT_TRUE(mgr_.ptr(h, &p));
+    ASSERT_NE(p, nullptr);
+    EXPECT_GE(p, static_cast<void*>(g_arena + kSmallBytes));
+    memset(p, 0x5A, 200 * 1024);
+    mgr_.release(&h);
+}
+
+// Fills complete pages of the smallest class (32 B -> 128 slots/page, the
+// bitmap's worst case) and checks every slot is distinct and in-bounds.
+// With a too-small bitmap this aliases slots or walks out of the page.
+TEST_F(SampleMemTest, SmallestClassFillsPagesWithDistinctSlots) {
+    constexpr int kAllocs = 300;  // > 2 full 128-slot pages
+    wxsamp_t handles[kAllocs];
+    std::set<void*> addresses;
+
+    for (int i = 0; i < kAllocs; ++i) {
+        handles[i] = wxsamp_t{};
+        ASSERT_TRUE(mgr_.alloc(16, &handles[i])) << "alloc " << i;
+        ASSERT_NE(handles[i].cls, 0xFF);
+        void* p = nullptr;
+        ASSERT_TRUE(mgr_.ptr(handles[i], &p));
+        ASSERT_NE(p, nullptr);
+        EXPECT_LT(p, static_cast<void*>(g_arena + kSmallBytes));
+        EXPECT_TRUE(addresses.insert(p).second) << "slot " << i << " aliases another slot";
+    }
+
+    for (int i = 0; i < kAllocs; ++i) {
+        mgr_.release(&handles[i]);
+    }
+
+    // After releasing everything, the same capacity must be allocatable
+    // again (bitmap correctly returned every slot).
+    for (int i = 0; i < kAllocs; ++i) {
+        wxsamp_t h{};
+        ASSERT_TRUE(mgr_.alloc(16, &h)) << "re-alloc " << i;
+    }
+}
+
+TEST_F(SampleMemTest, ReleaseZeroesHandleAndSecondReleaseIsSafe) {
+    wxsamp_t h{};
+    ASSERT_TRUE(mgr_.alloc(64, &h));
+    mgr_.release(&h);
+    EXPECT_EQ(h.refcnt, 0);
+    EXPECT_EQ(h.len, 0u);
+    mgr_.release(&h);  // no-op on a zeroed handle; must not corrupt state
+
+    wxsamp_t h2{};
+    ASSERT_TRUE(mgr_.alloc(64, &h2));
+    mgr_.release(&h2);
+}
+
+TEST_F(SampleMemTest, LargePoolCoalescesOnRelease) {
+    // Carve the large pool into pieces, free them all, then ask for nearly
+    // the whole pool - only possible if freed runs coalesced.
+    wxsamp_t a{}, b{}, c{};
+    ASSERT_TRUE(mgr_.alloc(400 * 1024, &a));
+    ASSERT_TRUE(mgr_.alloc(400 * 1024, &b));
+    ASSERT_TRUE(mgr_.alloc(400 * 1024, &c));
+    mgr_.release(&b);
+    mgr_.release(&a);
+    mgr_.release(&c);
+
+    wxsamp_t big{};
+    ASSERT_TRUE(mgr_.alloc(1500 * 1024, &big));
+    mgr_.release(&big);
+}
+
+TEST_F(SampleMemTest, StatsReflectSmallPoolActivity) {
+    wxsamp_stats_t before{};
+    mgr_.stats(&before);
+
+    wxsamp_t h{};
+    ASSERT_TRUE(mgr_.alloc(500, &h));
+
+    wxsamp_stats_t during{};
+    mgr_.stats(&during);
+    EXPECT_GT(during.in_use_bytes, before.in_use_bytes);
+    EXPECT_GE(during.objects_alive, 1u);
+
+    mgr_.release(&h);
+}
+
+}  // namespace

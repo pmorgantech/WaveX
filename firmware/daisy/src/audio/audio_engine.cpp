@@ -407,7 +407,6 @@ static bool s_prebuffering = false;     // Whether we're currently pre-buffering
 
 // Background SD I/O system with larger buffers
 static const uint32_t SD_BUFFER_SIZE = 8192;  // 8KB SD read buffer for better performance
-static constexpr uint32_t SD_INT16_CAPACITY = SD_BUFFER_SIZE / sizeof(int16_t);
 struct SdBufferSlot {
     alignas(kSdBufferAlignment) uint8_t data[SD_BUFFER_SIZE];
     uint32_t bytes = 0;
@@ -418,8 +417,9 @@ struct SdBufferSlot {
 static SdBufferSlot s_sd_buffers[kSdBufferCount];
 static uint32_t s_sd_fill_index = 0;
 static uint32_t s_sd_consume_index = 0;
-static q15_t
-    s_conversion_buffer[SD_INT16_CAPACITY * kMaxMixChannels];  // Scratch for conversions/resample
+// (A 64 KB s_conversion_buffer scratch array sat here, unreferenced since
+// the scratch-pool refactor - deleted, review H1. Conversion/resample
+// scratch comes from s_scratch_pool via AcquireScratch().)
 alignas(kSdBufferAlignment) static uint8_t s_prebuffer_sd[SD_BUFFER_SIZE];
 // Audio performance instrumentation
 static uint32_t s_io_start_time = 0;
