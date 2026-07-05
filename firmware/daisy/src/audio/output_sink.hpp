@@ -14,7 +14,7 @@
 // Phase 1 item 2, not yet built) - these sinks only combine whatever the
 // caller already staged into voice_buffers. Not yet wired into
 // audio_engine.cpp's callback: today's engine has exactly one playback
-// source (WAV ring buffer / Sampler), not an array of voices, so there is
+// source (the WAV ring buffer), not an array of voices, so there is
 // nothing for a sink to consume until the voice manager exists. This header
 // exists so that seam is already defined and compiling under both flag sets
 // before that retrofit becomes expensive.

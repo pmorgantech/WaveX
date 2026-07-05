@@ -305,7 +305,7 @@ These rules are mandatory for all new code. Most past instability (SPI corruptio
 ## 10. Known Design Gaps (summary — details and sequencing in `roadmap.md`)
 
 1. **No sequencer exists** — the defining groovebox feature is unstarted (design doc now exists).
-2. **Offline editing pipeline is unstarted** (design doc now exists). The `Sampler`'s storage was moved to preallocated SDRAM extents (roadmap Phase 1 item 3), but the sampler itself is inert — nothing feeds it input or renders its playback (code review C2).
+2. **Offline editing pipeline is unstarted** (design doc now exists). The legacy `Sampler` (and the never-rendered mono-synth DSP surface around it) was removed 2026-07-05 as inert end-to-end (code review C2); recording will be rebuilt against the voice/streaming architecture when it is actually scheduled. `MSG_SAMPLE_CTRL`/`MSG_CONTROL_CHANGE` remain routed wire hooks that are documented no-ops until then.
 3. **CV DAC hardware decision** (§3.3) blocks the analog voice board.
 4. **Polyphony**: the 8-voice manager (allocation, stealing, per-voice pitch/filter/ADSR) is implemented, host-tested, and wired into the callback — but unreachable from the wire until the dispatcher fix lands (code review C1). Streamed playback is still the singleton WAV path.
 5. **Event dispatch ownership on ESP32** is consolidated onto `PacketRouter` for routing, but listener registration still lives in `StatisticsManager`/`inter_mcu` (code review M9).

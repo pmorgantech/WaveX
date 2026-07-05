@@ -110,13 +110,6 @@ function(add_wavex_test test_source)
 
     add_executable(${test_name} ${test_source})
 
-    # For sampler test, add sampler.hpp directly (it's header-only with inline implementation)
-    if(test_name STREQUAL "sampler_test")
-        target_sources(${test_name} PRIVATE
-            ${CMAKE_CURRENT_SOURCE_DIR}/../src/sampler.hpp
-        )
-    endif()
-
     # cv_group_router.hpp is header-only and HAL-free (templated over the
     # backend, no daisy_seed.h include) - safe to compile directly on host.
     if(test_name STREQUAL "cv_group_router_test")

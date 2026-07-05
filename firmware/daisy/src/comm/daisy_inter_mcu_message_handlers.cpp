@@ -264,19 +264,15 @@ static void HandleSampleLoadMessage(const uint8_t* payload, size_t payload_size)
     WaveX::AudioEngine::OnSampleLoad(*msg);
 }
 
+// MSG_SAMPLE_DATA (push sample bytes over the link) is not implemented:
+// the engine-side receiver was unreachable dead code and was removed
+// (review C2). Samples load from the Daisy's own SD card (MSG_SAMPLE_LOAD).
+// The message id stays reserved in protocol.h.
 static void HandleSampleDataMessage(const uint8_t* payload, size_t payload_size) {
-    if (s_hw)
-        s_hw->PrintLine("DAISY: HandleSampleDataMessage called - payload_size=%d",
-                        (int)payload_size);
-
-    if (!payload || payload_size == 0) {
-        if (s_hw) {
-            s_hw->PrintLine("DAISY: Empty payload for SampleDataMessage");
-        }
-        return;
-    }
-
-    WaveX::AudioEngine::OnSampleData(payload, payload_size);
+    (void)payload;
+    UART_LOGW("daisy_msg",
+              "MSG_SAMPLE_DATA ignored (%d bytes) - not implemented (review C2)",
+              (int)payload_size);
 }
 
 static void HandleSampleControlMessage(const uint8_t* payload, size_t payload_size) {

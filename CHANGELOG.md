@@ -11,6 +11,26 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Removed — inert legacy DSP surface (review C2)
+
+- Deleted the Daisy audio engine's never-rendered mono-synth remnants: the
+  SVF filter, ADSR, LFO, test oscillator, and the `AudioParameters` bank
+  they shared — `Callback()` never processed any of them, so every
+  `MSG_CONTROL_CHANGE` parameter and the "test oscillator fallback" for
+  note-on had been silently doing nothing. `OnControlChange` remains as a
+  routed, documented no-op hook until Phase 2 defines real parameter
+  routing.
+- Deleted the `Sampler` (`sampler.hpp` + its 18 host tests): inert
+  end-to-end — nothing fed it input, nothing rendered its playback, and its
+  record/play wire commands were dispatcher stubs. `OnSampleCtrl` remains a
+  routed no-op hook (logs "recording not implemented"); recording will be
+  rebuilt against the voice/streaming architecture when scheduled.
+  `GetInputMeters` (which could only ever report zero) went with it.
+- Deleted `OnSampleData`/`SampleLoadState`: the `MSG_SAMPLE_DATA`
+  push-sample-over-the-link receiver was unreachable (its `loading` flag was
+  never set). The message id stays reserved in `protocol.h`; the dispatcher
+  logs and ignores it.
+
 ### Added — UART link sequence protection (review C4/M4)
 
 - Both live UART links (`daisy_uart_link.cpp`, `esp_uart_link.cpp`) now run

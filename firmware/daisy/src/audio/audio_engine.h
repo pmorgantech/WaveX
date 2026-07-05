@@ -5,7 +5,6 @@
 #if WAVEX_AUDIO_ENGINE_ENABLED
 
 #include "daisy_seed.h"
-#include "daisysp.h"
 #include "spi_protocol/protocol.h"
 
 namespace WaveX {
@@ -35,11 +34,9 @@ void OnNoteOff(const WaveX::Protocol::NoteMessage& m);
 void OnSampleCtrl(const WaveX::Protocol::SampleCtrlMessage& m);
 void OnPreviewReq(const WaveX::Protocol::PreviewReqMessage& m);
 void OnSampleLoad(const WaveX::Protocol::SampleLoadMessage& m);
-void OnSampleData(const uint8_t* data, size_t length);
 void GetSampleMemStatus(WaveX::Protocol::SampleMemStatusMessage& out);
 
 // Meter helpers
-void GetInputMeters(float& rms, float& peak);
 void GetMeters(BlockMeters& out);
 
 // WAV playback control

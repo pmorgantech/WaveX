@@ -26,7 +26,6 @@ struct DispatchRecord {
     std::vector<WaveX::Protocol::SampleCtrlMessage> sample_ctrls;
     std::vector<WaveX::Protocol::PreviewReqMessage> preview_reqs;
     std::vector<WaveX::Protocol::SampleLoadMessage> sample_loads;
-    std::vector<size_t> sample_data_lengths;
     int get_sample_mem_status_calls = 0;
 
     struct BrowseCall {

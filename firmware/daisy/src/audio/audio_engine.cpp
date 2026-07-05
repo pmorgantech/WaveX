@@ -15,7 +15,6 @@
 #include "sys/dma.h"              // For cache management
 
 #include "../cv/cv_group_router.hpp"
-#include "../sampler.hpp"
 #include "../timebase.hpp"
 #include "output_sink.hpp"
 #include "voice_manager.hpp"
@@ -50,7 +49,6 @@ using OutputSinkType = WaveX::AudioEngine::TdmVoiceSink;
 #endif
 
 using namespace daisy;
-using namespace daisysp;
 using namespace WaveX::Protocol;
 
 namespace WaveX {
@@ -74,26 +72,11 @@ static uint32_t s_output_channels = static_cast<uint32_t>(AudioOutputMode::Stere
 static q15_t s_scratch_pool[kScratchPoolSamples];
 static uint32_t s_scratch_offset = 0;
 
-// Parameters
-struct AudioParameters {
-    float volume = 1.0f;
-    float filter_cutoff = 2000.0f;
-    float filter_resonance = 0.5f;
-    float envelope_attack = 0.01f;
-    float envelope_decay = 0.1f;
-    float envelope_sustain = 0.7f;
-    float envelope_release = 0.5f;
-    float lfo_rate = 1.0f;
-    float lfo_depth = 0.1f;
-};
-static AudioParameters s_params;
-
-// DSP objects
-static Svf s_filter;
-static Adsr s_envelope;
-static Oscillator s_lfo;
-static Oscillator s_oscillator;
-static Sampler s_sampler;
+// (Review C2: a legacy mono-synth DSP surface sat here - Svf/Adsr/LFO/test
+// oscillator, an AudioParameters bank written by OnControlChange, and a
+// Sampler instance - none of it ever rendered by Callback(). Deleted;
+// per-voice filter/envelope live in voice_manager.hpp, and real parameter
+// routing arrives with Phase 2.)
 static CvBackendType s_cv_backend;
 static WaveX::Cv::CvGroupRouter<CvBackendType, WAVEX_ANALOG_CV_GROUPS> s_cv_router(s_cv_backend);
 static OutputSinkType s_output_sink;
@@ -165,9 +148,6 @@ static void drain_note_queue() {
 // Sample RAM Manager (for loaded samples)
 static SampleMemMgr s_sample_mem_mgr;
 
-static volatile float s_env_level = 0.0f;
-static float s_last_in_block[Timebase::kBlockSize] = {0};
-static size_t s_last_block_size = 0;
 static BlockMeters s_last_block_meters = {0, 0, 0, 0};
 
 // CPU Load Meter for audio processing performance monitoring
@@ -269,9 +249,6 @@ static void SendPreviewChunks() {
     }
 }
 
-// Envelope gate state
-static bool s_envelope_gate = false;
-
 // Little-endian helpers
 static inline uint16_t read_le16(const uint8_t* p) {
     return (uint16_t)p[0] | ((uint16_t)p[1] << 8);
@@ -314,17 +291,11 @@ static AuditionState s_audition = {};
 // ============================
 // Sample loading state
 // ============================
-struct SampleLoadState {
-    wxsamp_t handle = {};
-    uint16_t sample_id = 0;
-    uint32_t expected_size = 0;
-    uint32_t received_size = 0;
-    bool loading = false;
-    uint16_t sample_rate = 0;
-    uint8_t channels = 0;
-    uint8_t bit_depth = 0;
-};
-static SampleLoadState s_sample_load = {};
+// (Review C2: a SampleLoadState tracker for MSG_SAMPLE_DATA streaming sat
+// here; its `loading` flag was never set true anywhere, so the whole
+// push-sample-data-over-the-link receive path was unreachable. Removed -
+// samples load from the Daisy's own SD card via OnSampleLoad below.)
+//
 // FIL structure is large (~600 bytes with SDMMC sector buffer); keep it static in normal BSS
 // (matches the audition/playback path). Keep I/O buffers in normal BSS as well, but 32-byte aligned
 // so cache maintenance in the SD driver works correctly.
@@ -885,27 +856,6 @@ void Init(DaisySeed& hw, float sample_rate) {
     PROFILE_REGISTER_ZONE(prebuffer_audio);
     PROFILE_REGISTER_ZONE(sd_refill);
 
-    s_filter.Init(sample_rate);
-    s_filter.SetFreq(s_params.filter_cutoff);
-    s_filter.SetRes(s_params.filter_resonance);
-    s_filter.SetDrive(0.5f);
-
-    s_envelope.Init(sample_rate);
-    s_envelope.SetAttackTime(s_params.envelope_attack);
-    s_envelope.SetDecayTime(s_params.envelope_decay);
-    s_envelope.SetSustainLevel(s_params.envelope_sustain);
-    s_envelope.SetReleaseTime(s_params.envelope_release);
-
-    s_lfo.Init(sample_rate);
-    s_lfo.SetWaveform(Oscillator::WAVE_SIN);
-    s_lfo.SetFreq(s_params.lfo_rate);
-    s_lfo.SetAmp(s_params.lfo_depth);
-
-    s_oscillator.Init(sample_rate);
-    s_oscillator.SetWaveform(Oscillator::WAVE_SIN);
-    s_oscillator.SetFreq(1000.0f);  // Use 1kHz - simple test frequency
-    s_oscillator.SetAmp(0.3f);      // Reduce amplitude slightly
-
 #if WAVEX_CV_BACKEND == WAVEX_CV_BACKEND_MCP4728
     s_cv_backend.Init(0x60);
 #else
@@ -931,12 +881,6 @@ void Init(DaisySeed& hw, float sample_rate) {
     if (s_hw) {
         s_hw->PrintLine("AUDIO_ENGINE: SampleMemMgr.init() completed");
     }
-
-    // Sampler's recording buffer must be preallocated from SampleMemMgr, so
-    // it must init() after the manager above (roadmap Phase 1 item 3: no
-    // heap growth in the audio path - see sampler.hpp).
-    constexpr uint32_t kSamplerMaxRecordSeconds = 30;
-    s_sampler.Init(sample_rate, s_sample_mem_mgr, sample_rate * kSamplerMaxRecordSeconds);
 
     s_voice_manager.Init(static_cast<uint32_t>(sample_rate));
 
@@ -1058,43 +1002,14 @@ void Callback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t
     s_dwt_callback_max = std::max(s_dwt_callback_max, s_dwt_callback_cycles);
 }
 
+// Wire hook for MSG_CONTROL_CHANGE. Deliberately a no-op today (review C2):
+// the legacy mono-synth parameter bank this used to write was never rendered
+// by Callback(), so the mapping was deleted rather than left pretending to
+// work. Real parameter routing (per-voice / kit parameters) is Phase 2
+// front-panel work; the dispatch route and its test stay so that work has a
+// pinned entry point.
 void OnControlChange(const ControlChangeMessage& ctrl_msg) {
-    switch (ctrl_msg.parameter) {
-        case PARAM_VOLUME:
-            s_params.volume = ctrl_msg.value / 65535.0f;
-            break;
-        case PARAM_FILTER_CUTOFF:
-            s_params.filter_cutoff = 20.0f + (ctrl_msg.value / 65535.0f) * 8000.0f;
-            s_filter.SetFreq(s_params.filter_cutoff);
-            break;
-        case PARAM_FILTER_RESONANCE:
-            s_params.filter_resonance = ctrl_msg.value / 65535.0f;
-            s_filter.SetRes(s_params.filter_resonance);
-            break;
-        case PARAM_ENVELOPE_ATTACK:
-            s_params.envelope_attack = 0.001f + (ctrl_msg.value / 65535.0f) * 2.0f;
-            s_envelope.SetAttackTime(s_params.envelope_attack);
-            break;
-        case PARAM_ENVELOPE_DECAY:
-            s_params.envelope_decay = 0.001f + (ctrl_msg.value / 65535.0f) * 2.0f;
-            s_envelope.SetDecayTime(s_params.envelope_decay);
-            break;
-        case PARAM_ENVELOPE_SUSTAIN:
-            s_params.envelope_sustain = ctrl_msg.value / 65535.0f;
-            s_envelope.SetSustainLevel(s_params.envelope_sustain);
-            break;
-        case PARAM_ENVELOPE_RELEASE:
-            s_params.envelope_release = 0.001f + (ctrl_msg.value / 65535.0f) * 2.0f;
-            s_envelope.SetReleaseTime(s_params.envelope_release);
-            break;
-        case PARAM_LFO_RATE:
-            s_params.lfo_rate = 0.1f + (ctrl_msg.value / 65535.0f) * 10.0f;
-            s_lfo.SetFreq(s_params.lfo_rate);
-            break;
-        case PARAM_LFO_DEPTH:
-            s_params.lfo_depth = ctrl_msg.value / 65535.0f;
-            break;
-    }
+    (void)ctrl_msg;
 }
 
 // Note-to-sample mapping policy for item 8: the most recently loaded
@@ -1120,19 +1035,16 @@ void OnNoteOn(const NoteMessage& note_msg) {
         src = nullptr;
     }
     if (!src) {
-        // Bring-up fallback: nothing playable loaded (or only 24-bit
-        // files) - drive the test oscillator as before, so the MIDI path
-        // stays verifiable on hardware with an empty SD card.
-        float freq = mtof(note_msg.note);
-        s_oscillator.SetFreq(freq);
-        s_envelope_gate = true;
-        s_envelope.Retrigger(false);
+        // Nothing playable loaded (or only 24-bit files): drop the note.
+        // A previous "test oscillator fallback" here set state on DSP
+        // objects Callback() never rendered - silent while claiming
+        // otherwise (review C2) - so it was removed rather than fixed;
+        // load a 16-bit sample to verify the MIDI path end-to-end.
         if (s_hw)
-            s_hw->PrintLine("RX NOTE_ON: note=%u vel=%u ch=%u -> osc %.2f Hz (no sample)",
+            s_hw->PrintLine("RX NOTE_ON: note=%u vel=%u ch=%u -> dropped (no playable sample)",
                             (unsigned)note_msg.note,
                             (unsigned)note_msg.velocity,
-                            (unsigned)note_msg.channel,
-                            (double)freq);
+                            (unsigned)note_msg.channel);
         return;
     }
 
@@ -1162,8 +1074,6 @@ void OnNoteOn(const NoteMessage& note_msg) {
 }
 
 void OnNoteOff(const NoteMessage& note_msg) {
-    s_envelope_gate = false;  // oscillator fallback path
-
     NoteEvent ev;
     ev.is_trigger = false;
     ev.note = note_msg.note;
@@ -1174,21 +1084,16 @@ void OnNoteOff(const NoteMessage& note_msg) {
             "RX NOTE_OFF: note=%u ch=%u", (unsigned)note_msg.note, (unsigned)note_msg.channel);
 }
 
+// Wire hook for MSG_SAMPLE_CTRL (record/play transport from the UI's
+// record page). Deliberately a no-op today (review C2): the Sampler these
+// commands drove was inert end-to-end - nothing fed it input and nothing
+// rendered its playback - so it was deleted rather than left pretending to
+// record. Rebuild against the voice/streaming architecture when recording
+// is actually scheduled (offline-editing work, Phase 4).
 void OnSampleCtrl(const SampleCtrlMessage& sc) {
-    switch (sc.cmd) {
-        case SAMPLE_REC_START:
-            s_sampler.StartRec();
-            break;
-        case SAMPLE_REC_STOP:
-            s_sampler.StopRec();
-            break;
-        case SAMPLE_PLAY_START:
-            s_sampler.StartPlay(sc.rate);
-            break;
-        case SAMPLE_PLAY_STOP:
-            s_sampler.StopPlay();
-            break;
-    }
+    if (s_hw)
+        s_hw->PrintLine("SAMPLE_CTRL cmd=%u ignored (recording not implemented - review C2)",
+                        (unsigned)sc.cmd);
 }
 
 void OnPreviewReq(const PreviewReqMessage& pr) {
@@ -1526,8 +1431,6 @@ void OnSampleLoad(const SampleLoadMessage& sl) {
     upsert_loaded_sample(sl, handle);
     update_loaded_sample_progress(sl.sample_id, data_size);
 
-    s_sample_load.loading = false;
-
     if (s_hw) {
         s_hw->PrintLine("SAMPLE_LOAD: Loaded %lu bytes for sample %u",
                         (unsigned long)data_size,
@@ -1542,52 +1445,6 @@ void OnSampleLoad(const SampleLoadMessage& sl) {
     status.sample_rate = sample_rate;
     status.frames_played = data_size / ((bits / 8) * num_ch);  // total frames loaded
     WaveX::Comm::UartLinkSend(WaveX::Protocol::MSG_SAMPLE_STATUS, &status, sizeof(status));
-}
-
-void OnSampleData(const uint8_t* data, size_t length) {
-    if (!s_sample_load.loading) {
-        if (s_hw) {
-            s_hw->PrintLine("SAMPLE_DATA: Received data but not in loading state");
-        }
-        return;
-    }
-
-    // Get pointer to sample memory
-    void* sample_ptr = nullptr;
-    if (!s_sample_mem_mgr.ptr(s_sample_load.handle, &sample_ptr)) {
-        if (s_hw) {
-            s_hw->PrintLine("SAMPLE_DATA: Failed to get sample memory pointer");
-        }
-        return;
-    }
-
-    // Check if we would exceed allocated size
-    if (s_sample_load.received_size + length > s_sample_load.expected_size) {
-        if (s_hw) {
-            s_hw->PrintLine("SAMPLE_DATA: Data would exceed allocated size (%lu + %lu > %lu)",
-                            (unsigned long)s_sample_load.received_size,
-                            (unsigned long)length,
-                            (unsigned long)s_sample_load.expected_size);
-        }
-        return;
-    }
-
-    // Copy data to SDRAM
-    uint8_t* dest = static_cast<uint8_t*>(sample_ptr) + s_sample_load.received_size;
-    memcpy(dest, data, length);
-    s_sample_load.received_size += length;
-    update_loaded_sample_progress(s_sample_load.sample_id, s_sample_load.received_size);
-
-    // Check if loading is complete
-    if (s_sample_load.received_size >= s_sample_load.expected_size) {
-        s_sample_load.loading = false;
-        update_loaded_sample_progress(s_sample_load.sample_id, s_sample_load.expected_size);
-        if (s_hw) {
-            s_hw->PrintLine("SAMPLE_LOAD: Completed loading sample %u (%lu bytes)",
-                            (unsigned)s_sample_load.sample_id,
-                            (unsigned long)s_sample_load.received_size);
-        }
-    }
 }
 
 void GetSampleMemStatus(SampleMemStatusMessage& out) {
@@ -1620,10 +1477,6 @@ void GetSampleMemStatus(SampleMemStatusMessage& out) {
         dst.channels = src.channels;
         dst.bit_depth = src.bit_depth;
     }
-}
-
-void GetInputMeters(float& rms, float& peak) {
-    Sampler::BlockMeters(s_last_in_block, s_last_block_size, rms, peak);
 }
 
 void GetMeters(BlockMeters& out) {

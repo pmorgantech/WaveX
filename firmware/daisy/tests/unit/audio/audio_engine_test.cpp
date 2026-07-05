@@ -300,14 +300,7 @@ TEST_F(AudioEngineTest, InputMeterCalculation) {
     // Process callback
     Callback(GetInputBuffer(), GetOutputBuffer(), block_size_);
 
-    // Get input meters
-    float rms = 0.0f;
-    float peak = 0.0f;
-    GetInputMeters(rms, peak);
-
-    // Verify meters are calculated
-    EXPECT_GE(rms, 0.0f);
-    EXPECT_GE(peak, 0.0f);
+    // (GetInputMeters was removed with the inert Sampler - review C2.)
     EXPECT_LE(rms, 1.0f);
     EXPECT_LE(peak, 1.0f);
 }

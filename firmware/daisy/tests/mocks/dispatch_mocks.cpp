@@ -83,10 +83,6 @@ void OnSampleLoad(const WaveX::Protocol::SampleLoadMessage& m) {
     WaveX::Test::GetDispatchRecord().sample_loads.push_back(m);
 }
 
-void OnSampleData(const uint8_t* /*data*/, size_t length) {
-    WaveX::Test::GetDispatchRecord().sample_data_lengths.push_back(length);
-}
-
 void GetSampleMemStatus(WaveX::Protocol::SampleMemStatusMessage& out) {
     out = WaveX::Protocol::SampleMemStatusMessage();
     WaveX::Test::GetDispatchRecord().get_sample_mem_status_calls++;
