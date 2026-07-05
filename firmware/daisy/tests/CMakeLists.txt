@@ -141,6 +141,18 @@ function(add_wavex_test test_source)
         )
     endif()
 
+    # Dispatch-level test (code review C1): compiles the REAL message
+    # dispatcher against recording mocks of its subsystems, so a handler
+    # regressing to a log-only stub fails a test instead of shipping.
+    # daisy_seed.h resolves to mocks/daisy_seed.h (mocks dir is first on the
+    # include path).
+    if(test_name STREQUAL "message_dispatch_test")
+        target_sources(${test_name} PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/../src/comm/daisy_inter_mcu_message_handlers.cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/mocks/dispatch_mocks.cpp
+        )
+    endif()
+
     target_link_libraries(${test_name} PUBLIC
         wavex_test_lib
         Threads::Threads

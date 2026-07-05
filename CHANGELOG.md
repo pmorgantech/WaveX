@@ -23,6 +23,18 @@ versioning and release process.
 
 ### Fixed
 
+- **MIDI notes now actually reach the voice manager** (code review C1): the
+  Daisy message dispatcher's `MSG_NOTE_ON`/`MSG_NOTE_OFF`/
+  `MSG_CONTROL_CHANGE`/`MSG_SAMPLE_CTRL` handlers were log-only stubs, so
+  the entire item-8 MIDI path (ESP32 DIN/USB in → UART link → SPSC note
+  queue → `VoiceManager`) was unreachable from the wire despite being
+  implemented and unit-tested. The four handlers now validate payload size
+  and dispatch to the audio engine; the dead `audio_adapter.{h,cpp}` (zero
+  callers) was deleted. A new dispatch-level host suite
+  (`firmware/daisy/tests/unit/comm/message_dispatch_test.cpp`, 12 tests)
+  drives the real dispatcher against recording mocks and pins every routed
+  message type to its observable subsystem call — the test class that would
+  have caught this. Bench verification (in-to-sound latency) still pending.
 - Pre-commit's five repo-local hooks (ESP32/Daisy build checks and all three
   test suites) never actually ran: their `files:` regexes
   (`^(firmware/esp32/|Makefile)$` etc.) matched only the literal directory

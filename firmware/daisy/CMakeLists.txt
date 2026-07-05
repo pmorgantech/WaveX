@@ -18,7 +18,6 @@ set(FIRMWARE_SOURCES
     src/comm/daisy_uart_link.cpp
     src/comm/daisy_logging.cpp
     src/comm/daisy_filesystem.cpp
-    src/audio/audio_adapter.cpp
     src/audio/audio_engine.cpp
     src/storage/fs_browse.cpp
     src/storage/sd_sdio.cpp

@@ -205,20 +205,45 @@ static void HandleSyncMessage(const uint8_t* payload, size_t payload_size) {
         s_hw->PrintLine("DAISY: HandleSyncMessage called - payload_size=%d", (int)payload_size);
 }
 
+// NOTE_ON/NOTE_OFF/CONTROL_CHANGE/SAMPLE_CTRL were log-only stubs until
+// 2026-07-05 - the engine side (SPSC note queue -> VoiceManager) existed
+// and was host-tested, but no wire message ever reached it (code review
+// C1). These four now dispatch like the SAMPLE_LOAD/PREVIEW handlers
+// below always did; tests/unit/comm/message_dispatch_test.cpp pins every
+// routed type to its observable engine call so a stub can't silently
+// reappear.
+
 static void HandleControlChangeMessage(const uint8_t* payload, size_t payload_size) {
-    if (s_hw)
-        s_hw->PrintLine("DAISY: HandleControlChangeMessage called - payload_size=%d",
-                        (int)payload_size);
+    if (!payload || payload_size < sizeof(WaveX::Protocol::ControlChangeMessage)) {
+        UART_LOGE("daisy_msg", "CONTROL_CHANGE payload too small (%d)", (int)payload_size);
+        return;
+    }
+#if WAVEX_AUDIO_ENGINE_ENABLED
+    const auto* msg = reinterpret_cast<const WaveX::Protocol::ControlChangeMessage*>(payload);
+    WaveX::AudioEngine::OnControlChange(*msg);
+#endif
 }
 
 static void HandleNoteMessage(const uint8_t* payload, size_t payload_size) {
-    if (s_hw)
-        s_hw->PrintLine("DAISY: HandleNoteMessage called - payload_size=%d", (int)payload_size);
+    if (!payload || payload_size < sizeof(WaveX::Protocol::NoteMessage)) {
+        UART_LOGE("daisy_msg", "NOTE_ON payload too small (%d)", (int)payload_size);
+        return;
+    }
+#if WAVEX_AUDIO_ENGINE_ENABLED
+    const auto* msg = reinterpret_cast<const WaveX::Protocol::NoteMessage*>(payload);
+    WaveX::AudioEngine::OnNoteOn(*msg);
+#endif
 }
 
 static void HandleNoteOffMessage(const uint8_t* payload, size_t payload_size) {
-    if (s_hw)
-        s_hw->PrintLine("DAISY: HandleNoteOffMessage called - payload_size=%d", (int)payload_size);
+    if (!payload || payload_size < sizeof(WaveX::Protocol::NoteMessage)) {
+        UART_LOGE("daisy_msg", "NOTE_OFF payload too small (%d)", (int)payload_size);
+        return;
+    }
+#if WAVEX_AUDIO_ENGINE_ENABLED
+    const auto* msg = reinterpret_cast<const WaveX::Protocol::NoteMessage*>(payload);
+    WaveX::AudioEngine::OnNoteOff(*msg);
+#endif
 }
 
 static void HandleSampleLoadMessage(const uint8_t* payload, size_t payload_size) {
@@ -255,9 +280,17 @@ static void HandleSampleDataMessage(const uint8_t* payload, size_t payload_size)
 }
 
 static void HandleSampleControlMessage(const uint8_t* payload, size_t payload_size) {
-    if (s_hw)
-        s_hw->PrintLine("DAISY: HandleSampleControlMessage called - payload_size=%d",
-                        (int)payload_size);
+    if (!payload || payload_size < sizeof(WaveX::Protocol::SampleCtrlMessage)) {
+        UART_LOGE("daisy_msg", "SAMPLE_CTRL payload too small (%d)", (int)payload_size);
+        return;
+    }
+#if WAVEX_AUDIO_ENGINE_ENABLED
+    // memcpy, not reinterpret_cast: SampleCtrlMessage carries a float, and
+    // the payload pointer is only byte-aligned.
+    WaveX::Protocol::SampleCtrlMessage msg;
+    memcpy(&msg, payload, sizeof(msg));
+    WaveX::AudioEngine::OnSampleCtrl(msg);
+#endif
 }
 
 static void HandlePreviewRequestMessage(const uint8_t* payload, size_t payload_size) {

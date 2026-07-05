@@ -1,0 +1,56 @@
+#ifndef WAVEX_DISPATCH_MOCKS_H
+#define WAVEX_DISPATCH_MOCKS_H
+
+// Recording mocks for the message-dispatch host test
+// (unit/comm/message_dispatch_test.cpp). dispatch_mocks.cpp provides the
+// AudioEngine::On* / Comm::Process* / Comm::UartLinkSend symbols that
+// daisy_inter_mcu_message_handlers.cpp links against, and records every
+// call here so the test can assert that a wire message type actually
+// reached its subsystem (code review C1: the note/control/sample-ctrl
+// handlers were silent stubs and nothing could catch that).
+
+#include "spi_protocol/protocol.h"
+
+#include <cstddef>
+#include <cstdint>
+#include <string>
+#include <vector>
+
+namespace WaveX {
+namespace Test {
+
+struct DispatchRecord {
+    std::vector<WaveX::Protocol::NoteMessage> note_ons;
+    std::vector<WaveX::Protocol::NoteMessage> note_offs;
+    std::vector<WaveX::Protocol::ControlChangeMessage> control_changes;
+    std::vector<WaveX::Protocol::SampleCtrlMessage> sample_ctrls;
+    std::vector<WaveX::Protocol::PreviewReqMessage> preview_reqs;
+    std::vector<WaveX::Protocol::SampleLoadMessage> sample_loads;
+    std::vector<size_t> sample_data_lengths;
+    int get_sample_mem_status_calls = 0;
+
+    struct BrowseCall {
+        std::string path;
+        size_t start_index;
+        uint8_t max_entries;
+    };
+    std::vector<BrowseCall> browse_requests;
+    std::vector<std::string> play_requests;
+    std::vector<uint8_t> stop_requests;
+    std::vector<uint32_t> play_index_requests;
+
+    struct UartSend {
+        uint16_t msg_type;
+        uint16_t len;
+    };
+    std::vector<UartSend> uart_sends;
+
+    void Clear() { *this = DispatchRecord{}; }
+};
+
+DispatchRecord& GetDispatchRecord();
+
+}  // namespace Test
+}  // namespace WaveX
+
+#endif  // WAVEX_DISPATCH_MOCKS_H
