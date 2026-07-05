@@ -11,6 +11,22 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Changed (Docs)
+
+- `docs/code_review_20260705.md`: comprehensive code review of the full
+  first-party tree (findings C1–C4, H1–H8, M1–M13 + smells inventory,
+  prioritized P0–P3 action list, doc-drift appendix).
+- `docs/architecture.md` corrected to match transport reality (review C4):
+  **UART (UART1↔UART4 @ 2 Mbaud) is the transport of record and carries all
+  inter-MCU traffic**; the SPI link is wired but compiled out
+  (`WAVEX_SPI_LINK_ENABLED=0`) and its revival requires bench re-validation.
+  Also refreshed stale "as-built" claims: voice manager is implemented and
+  callback-wired (but unreachable from the wire until review C1 is fixed),
+  sampler storage fix vs. inert sampler, partition-table rework done,
+  event-dispatch consolidation status. `docs/roadmap.md`: corrected 0.2.1's
+  "SPI carries browse/wave" premise, marked Phase 1 item 6 blocked on SPI
+  re-enablement, and corrected item 8's "Done" claim (dispatcher hop missing).
+
 ### Changed (Tooling)
 
 - Graphify analysis is now scoped to source directories and root-level build

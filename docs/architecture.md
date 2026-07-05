@@ -1,7 +1,7 @@
 # WaveX System Architecture
 
 **Status**: Canonical architecture document — this file is the single source of truth for system design.
-**Last updated**: 2026-07-02
+**Last updated**: 2026-07-05 (transport-reality corrections from `code_review_20260705.md`)
 **Supersedes**: `system-architecture.md`, `communication-protocol.md`, `daisy_devel.md` (all moved to `docs/archive/`).
 
 When this document and the code disagree, the code wins for *as-built* sections and this document wins for *target design* sections; each section is labeled. Pin assignments live in exactly one place: `firmware/shared/config/pin_config.h`. Hardware feature flags live in `firmware/shared/config/hardware_config.h`. Do not duplicate pin tables into documentation.
@@ -33,18 +33,18 @@ WaveX is a modern **sampler / groovebox / drum machine** built around:
 Dual-MCU split, each processor doing what it is best at:
 
 ```
-┌──────────────────────────────┐         ┌──────────────────────────────────┐
-│  ESP32-P4 "Frontend"         │         │  Daisy Seed (STM32H750) "Backend"│
-│  ESP-IDF 5.5.1 / FreeRTOS    │         │  libDaisy v8.0.0 (bare-metal)    │
-│                              │         │                                  │
-│  • LVGL 9.3 touchscreen UI   │  SPI    │  • Audio engine @48 kHz          │
-│    (1280×720 MIPI-DSI+GT911) │◄───────►│  • Sample streaming from SD      │
-│  • Encoders (PCNT), TCA8418  │ Daisy=  │    (SDMMC 4-bit + FatFs)         │
-│    button matrix, TLC5947 LEDs│ master │  • 64 MB SDRAM sample RAM        │
-│  • MIDI (UART DIN + USB)     │ ESP=    │  • CV outputs (VCF/VCA/CV-Gate)  │
-│  • Sample browser / metadata │ slave   │  • PCM1690 8-ch TDM DAC (planned)│
-│  • Presets & settings        │  +ATTN  │  • Metrics, heartbeat, profiling │
-└──────────────────────────────┘  line   └──────────────────────────────────┘
+┌──────────────────────────────┐          ┌──────────────────────────────────┐
+│  ESP32-P4 "Frontend"         │          │  Daisy Seed (STM32H750) "Backend"│
+│  ESP-IDF 5.5.1 / FreeRTOS    │   UART   │  libDaisy v8.0.0 (bare-metal)    │
+│                              │ 2 Mbaud  │                                  │
+│  • LVGL 9.3 touchscreen UI   │ UART1 ↔  │  • Audio engine @48 kHz          │
+│    (1280×720 MIPI-DSI+GT911) │◄────────►│  • Sample streaming from SD      │
+│  • Encoders (PCNT), TCA8418  │  UART4   │    (SDMMC 4-bit + FatFs)         │
+│    button matrix, TLC5947 LEDs│         │  • 64 MB SDRAM sample RAM        │
+│  • MIDI (UART DIN + USB)     │ (SPI link│  • CV outputs (VCF/VCA/CV-Gate)  │
+│  • Sample browser / metadata │ wired but│  • PCM1690 8-ch TDM DAC (planned)│
+│  • Presets & settings        │ disabled)│  • Metrics, heartbeat, profiling │
+└──────────────────────────────┘          └──────────────────────────────────┘
 ```
 
 **Division of responsibility**
@@ -52,7 +52,7 @@ Dual-MCU split, each processor doing what it is best at:
 | Concern | Owner | Rationale |
 |---|---|---|
 | UI, navigation, waveform display | ESP32-P4 | PSRAM + PPA + MIPI-DSI bandwidth |
-| MIDI I/O | ESP32-P4 | USB host/device + UART; forwards note/CC over SPI |
+| MIDI I/O | ESP32-P4 | USB device + DIN UART; forwards notes over the inter-MCU link |
 | Sample storage (SD card) | Daisy | Audio engine streams directly; no sample data crosses the SPI link during playback |
 | Real-time audio, voices, mixing | Daisy | Deterministic bare-metal loop, CMSIS-DSP, SDRAM |
 | CV/Gate + analog voice control | Daisy | Generated at the 1 kHz control tick, phase-aligned with audio |
@@ -81,7 +81,8 @@ The **file browsing model** follows from the storage split: the SD card is on th
 | Multi-out DAC | PCM1690 8-ch | SAI2 TDM-8 + I2C control | planned (Phase: analog voice board) |
 | SD card | microSD, SDMMC 4-bit via libDaisy `SdmmcHandler` + FatFs | SDMMC | working (SPI-SD legacy code still in tree) |
 | CV DACs | **open decision — see §3.3** | I2C or SPI | prototype (MCP4728 I2C in code) |
-| Inter-MCU link | SPI: **Daisy master / ESP32 slave**, mode 0, software CS, ATTN line ESP GPIO31 → Daisy D0 | SPI1 (Daisy) / SPI3_HOST slave (ESP) | working |
+| Inter-MCU link (live) | UART @ 2 Mbaud, framing in `firmware/shared/uart_protocol/` | UART1 (ESP) ↔ UART4 (Daisy) | working — carries **all** inter-MCU traffic |
+| Inter-MCU link (SPI) | SPI: **Daisy master / ESP32 slave**, mode 0, software CS, ATTN line ESP GPIO31 → Daisy D0 | SPI1 (Daisy) / SPI3_HOST slave (ESP) | wired but **compiled out** (`WAVEX_SPI_LINK_ENABLED=0` in `link_config.h`); revival requires bench re-validation |
 
 ### 3.2 Authoritative configuration files
 
@@ -95,7 +96,7 @@ Older documents (README pin tables, `system-architecture.md`, `daisy_devel.md`) 
 
 1. **CV DAC part for Stage B**: the two-stage plan (§5.2) is now settled — Stage A uses the **MCP4728 (I2C, 4-ch, 12-bit)** already implemented in `cv_bus.hpp` for the paraphonic prototype. What remains open is the Stage-B part: `pin_config.h` reserves pins for **4× MCP48CMB28 (SPI, dual 12-bit)**. At the 1 kHz control tick, one MCP4728 fast-write (~9 bytes @400 kHz ≈ 225 µs) is fine for one shared CV group but cannot scale to 3–4 CVs × 8 voices; SPI DACs at 20+ MHz do it in <100 µs. **Recommendation**: SPI MCP48CMB28 chain for the production voice board. Decide before the analog voice board PCB is finalized.
 2. **Radio**: ESP32-P4 has **no built-in WiFi/Bluetooth** (the WIFI6 board pairs an ESP32-C6 over SDIO). Older docs saying "WiFi/Bluetooth (disabled)" on the P4 were wrong. Decide whether the C6 is ever used (e.g. Ableton Link, sample transfer) or explicitly out of scope.
-3. **ESP32 flash partition table** (`firmware/esp32/partitions.csv`) only allocates 2 MB of the 16 MB flash and includes a vestigial 640 KB "samples" partition (samples live on the Daisy SD card). Rework: larger app slots + OTA + assets.
+3. ~~**ESP32 flash partition table** rework~~ **Done** (roadmap 0.2.2): full 16 MB mapped, factory + two 4 MB OTA slots, vestigial "samples" partition dropped. Flash+boot verification on hardware still pending.
 4. **Analog voice count and CV-per-voice** (affects DAC count, TDM slot mapping, panel space): current plan is 8 voices × (cutoff, resonance, VCA, +1 spare). Confirm before PCB.
 
 ---
@@ -108,16 +109,16 @@ Older documents (README pin tables, `system-architecture.md`, `daisy_devel.md`) 
 firmware/
 ├── esp32/                  # ESP-IDF 5.5.1 project (target: esp32p4)
 │   ├── main/               # app entry, tasks, inter-MCU client
-│   │   ├── links/          # esp_spi_link (active), esp_uart_link (legacy)
-│   │   ├── comm/           # packet_router, listeners, statistics, ICommInterface
+│   │   ├── links/          # esp_uart_link (live), esp_spi_link (compiled out)
+│   │   ├── comm/           # packet_router, statistics, ICommInterface
 │   │   └── inter_mcu.cpp   # facade over link + router (large; slated for split)
 │   ├── components/ui/      # navigator/page/softkey UI framework + pages
 │   └── managed_components/ # lvgl 9.3, esp_lvgl_port, hx8394, gt911, p4 BSP
 ├── daisy/                  # CMake + arm-gcc project (libDaisy v8.0.0, DaisySP)
 │   └── src/
-│       ├── audio/          # audio_engine (callback, streaming, q15 pipeline), adapter
-│       ├── comm/           # daisy_spi_link (active), daisy_uart_link (legacy), msg handlers
-│       ├── storage/        # sd_sdio (active), sd_spi + diskio (legacy), fs_browse
+│       ├── audio/          # audio_engine (callback, streaming, q15 pipeline), voice_manager
+│       ├── comm/           # daisy_uart_link (live), daisy_spi_link (compiled out), msg handlers
+│       ├── storage/        # sd_sdio, fs_browse
 │       ├── metrics/ profiling/  # CPU load, DWT cycle counters
 │       ├── memory.h        # SDRAM sample RAM manager (slab + extent allocator)
 │       ├── sampler.hpp cv_bus.hpp timebase.hpp
@@ -152,12 +153,11 @@ Known architectural debt (from the 2026-06-26 assessment, still valid): event/ca
 
 ### 4.4 Shared protocol
 
-See `features/inter-mcu-protocol.md` for the full as-built wire specification (packet framing, size classes 32–2048 B, CRC16-CCITT, sequence numbers, ACK/NACK flags, and every message struct). Summary of the link:
+See `features/inter-mcu-protocol.md` for the message catalog. Every message struct lives in `firmware/shared/spi_protocol/protocol.h` regardless of transport. Transport status (**as-built; decision recorded 2026-07-05**):
 
-- **Daisy is SPI master** (SPI1, mode 0, 8-bit, software CS); **ESP32 is SPI slave** (SPI3_HOST, DMA). The ESP32 signals pending data via the ATTN line; the Daisy also polls at a steady cadence. Clock is currently conservative (`PS_16` prescaler, set during bring-up); raising it is a roadmap item with scope verification.
-- Fixed power-of-two transaction sizes (32/64/128/256/512/1024/2048) simplify DMA slave buffer management.
-- Hardware CRC on the Daisy side, software fallback.
-- **UART link code (`esp_uart_link`, `daisy_uart_link`) is legacy** — the design is SPI-only. Removal is a roadmap cleanup item; until removed, do not extend it.
+- **UART is the transport of record.** All inter-MCU traffic — heartbeat, meters, status, browse requests/responses, wave-preview chunks, note on/off, sample load/control — runs over UART1 (ESP32) ↔ UART4 (Daisy) at 2 Mbaud, using the framing in `firmware/shared/uart_protocol/uart_protocol.h` (0xA5/0x5A markers, 16-bit length, CRC16-CCITT, 16-bit sequence numbers) with `protocol.h` structs as payloads. RX is DMA-circular-buffer driven on the Daisy and event-driven on the ESP32; TX is a small queue pumped from the main loop (Daisy) / link task (ESP32). New messages target this link.
+- **The SPI link is wired but compiled out**: `WAVEX_SPI_LINK_ENABLED` is `0` in `firmware/shared/config/link_config.h`, so `daisy_spi_link.cpp` / `esp_spi_link.cpp` (Daisy master / ESP32 slave, ATTN line, fixed power-of-two transaction sizes 32–2048 B) are in no shipped image. Re-enabling SPI — whether for bulk browse/wave data or full consolidation — is future work requiring bench re-validation, and roadmap Phase 1 item 6 ("raise SPI link clock") is blocked on it. Until then, do not extend the SPI path.
+- The pre-2026-07-05 revision of this section stated the opposite ("SPI active, UART legacy"); see `docs/code_review_20260705.md` finding C4 for the correction trail.
 
 ---
 
@@ -178,7 +178,7 @@ The 1-block = 1-ms identity is a deliberate design invariant: the control tick i
 
 8 voices, each: sample oscillator (streamed or RAM-resident) + optional VA oscillator + noise, 4 ADSR, 3 LFO, per-voice mod matrix.
 
-**Implementation status (roadmap Phase 1 items 2 + 4)**: `firmware/daisy/src/audio/voice_manager.hpp` implements the RAM-resident half — 8-voice allocation/stealing (preferring a releasing voice when stealing), per-voice gain/pan, a note-relative pitch ratio, start/end/loop points, a one-pole lowpass filter stand-in (`audio/one_pole_filter.hpp`), and a linear ADSR (`audio/envelope.hpp`). Not yet implemented: streamed voices (still the old singleton WAV-ring-buffer path, not voice-manager-owned), VA oscillator/noise/LFO/mod matrix. Not yet wired into the audio callback — see items 2/4 in `roadmap.md` for why.
+**Implementation status (roadmap Phase 1 items 2 + 4 + 8)**: `firmware/daisy/src/audio/voice_manager.hpp` implements the RAM-resident half — 8-voice allocation/stealing (preferring a releasing voice when stealing), per-voice gain/pan, a note-relative pitch ratio, start/end/loop points, a one-pole lowpass filter stand-in (`audio/one_pole_filter.hpp`), and a linear ADSR (`audio/envelope.hpp`). It **is** wired into `Callback()` via an SPSC note-event queue (item 8 stage 2) — but as of 2026-07-05 the UART message dispatcher never feeds that path (`HandleNoteMessage` is a stub; see `code_review_20260705.md` C1), so it is not yet reachable from hardware MIDI input until that fix lands. Not yet implemented: streamed voices (still the old singleton WAV-ring-buffer path, not voice-manager-owned), VA oscillator/noise/LFO/mod matrix.
 
 The analog output section is deliberately **two-stage**, selected by build flags (see §5.3):
 
@@ -260,7 +260,7 @@ These rules are mandatory for all new code. Most past instability (SPI corruptio
 
 - Parameter changes (UI → audio): target < 5 ms end-to-end (touch → SPI → applied at next control tick).
 - Meters/heartbeat: 20–50 ms cadence, coalesced, lowest priority.
-- The link must degrade gracefully: either MCU rebooting must never wedge the other (timeouts + resync; regression-tested — roadmap Phase 1 item 7). UART's stuck-TX recovery (`daisy_uart_link.cpp`, 10ms transmit timeout + 500ms/1000ms force-clear) and the SPI-path reboot detection (`firmware/shared/spi_protocol/sequence_tracker.hpp`'s `SequenceTracker`, `attn_watchdog.hpp`'s `AttnWatchdog`) implement this; the latter two are HAL-free and host-tested, since real GPIO/SPI timing isn't testable without hardware.
+- The link must degrade gracefully: either MCU rebooting must never wedge the other (timeouts + resync; regression-tested — roadmap Phase 1 item 7). UART's stuck-TX recovery (`daisy_uart_link.cpp`, wire-time-derived transmit timeout + 500ms/1000ms force-clear) implements the TX half. `SequenceTracker` (`firmware/shared/spi_protocol/sequence_tracker.hpp`) and `AttnWatchdog` (`attn_watchdog.hpp`) are HAL-free and host-tested; note that as of 2026-07-05 they are integrated only into the **compiled-out SPI path** — wiring `SequenceTracker` into the live UART RX paths is in progress (code review C4/M4).
 
 ---
 
@@ -305,10 +305,10 @@ These rules are mandatory for all new code. Most past instability (SPI corruptio
 ## 10. Known Design Gaps (summary — details and sequencing in `roadmap.md`)
 
 1. **No sequencer exists** — the defining groovebox feature is unstarted (design doc now exists).
-2. **Offline editing pipeline is unstarted** (design doc now exists); the current `Sampler` records into a heap `std::vector` from the audio path — must move to the sample RAM allocator with preallocated extents.
+2. **Offline editing pipeline is unstarted** (design doc now exists). The `Sampler`'s storage was moved to preallocated SDRAM extents (roadmap Phase 1 item 3), but the sampler itself is inert — nothing feeds it input or renders its playback (code review C2).
 3. **CV DAC hardware decision** (§3.3) blocks the analog voice board.
-4. **Polyphony**: engine currently plays one streamed WAV + preview; the 8-voice manager (allocation, stealing, per-voice params) is design-only.
-5. **Event dispatch ownership on ESP32** is fragmented (four overlapping components).
-6. **Legacy transports/backends** (UART links, SPI-SD) linger in-tree and confuse contributors.
-7. **MIDI**: UART/USB MIDI is scaffolding only; clock sync (MIDI clock in/out) is required for a groovebox.
+4. **Polyphony**: the 8-voice manager (allocation, stealing, per-voice pitch/filter/ADSR) is implemented, host-tested, and wired into the callback — but unreachable from the wire until the dispatcher fix lands (code review C1). Streamed playback is still the singleton WAV path.
+5. **Event dispatch ownership on ESP32** is consolidated onto `PacketRouter` for routing, but listener registration still lives in `StatisticsManager`/`inter_mcu` (code review M9).
+6. **The disabled SPI link lingers in-tree** (compiled out via `WAVEX_SPI_LINK_ENABLED=0`) pending a revival-or-delete decision; SPI-SD was removed (roadmap 0.2.1). UART is the transport of record (§4.4).
+7. **MIDI**: DIN/USB input and forwarding exist on the ESP32; the Daisy-side dispatch is broken (C1); clock sync (MIDI clock in/out) is required for a groovebox and unstarted.
 8. **Project/preset persistence format** is undefined (kits, patterns, songs, sample references).
