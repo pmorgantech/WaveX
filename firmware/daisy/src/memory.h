@@ -32,11 +32,14 @@
 
 // ===== Public handle type =====
 typedef struct {
-    uint8_t cls;      // 0..(WXM_SMALL_CLASS_COUNT-1) for small; 0xFF for large
-    uint16_t page;    // small: page index within class; large: first page index
-    uint16_t slot;    // small: slot index in page; large: page_count
-    uint32_t len;     // logical bytes
-    uint16_t refcnt;  // reference count for sharing
+    uint8_t cls;    // 0..(WXM_SMALL_CLASS_COUNT-1) for small; 0xFF for large
+    uint16_t page;  // small: page index within class; large: first page index
+    uint16_t slot;  // small: slot index in page; large: page_count
+    uint32_t len;   // logical bytes; 0 = released/never allocated
+    // (review M8: a uint16_t refcnt lived here "for sharing" - but handles
+    // are copied by value, so every copy counted independently; broken by
+    // design and never used. Removed with retain(). If shared samples are
+    // ever needed (Phase 2 kits), refcount in the manager, not the handle.)
 } wxsamp_t;
 
 // ===== Stats =====
@@ -281,7 +284,6 @@ class SmallSlabPool {
         h.page = page;
         h.slot = slot;
         h.len = len;
-        h.refcnt = 1;
     }
 };
 
@@ -301,8 +303,10 @@ class LargeExtentPool {
     bool alloc(uint32_t nbytes, wxsamp_t* out) {
         uint32_t need_pages = (nbytes + WXM_LARGE_PAGE_BYTES - 1u) / WXM_LARGE_PAGE_BYTES;
         int idx = find_best_fit(need_pages);
-        if (idx < 0)
+        if (idx < 0) {
+            failed_allocs_++;
             return false;
+        }
         uint32_t first = free_runs_[idx].first;
         if (free_runs_[idx].count == need_pages)
             remove_run(idx);
@@ -311,6 +315,8 @@ class LargeExtentPool {
             free_runs_[idx].count -= need_pages;
         }
         fill_handle_large(*out, first, (uint16_t)need_pages, nbytes);
+        in_use_bytes_ += need_pages * WXM_LARGE_PAGE_BYTES;
+        objects_alive_++;
         return true;
     }
 
@@ -326,13 +332,22 @@ class LargeExtentPool {
             return false;
         insert_run({h->page, h->slot});
         coalesce();
+        const uint32_t bytes = (uint32_t)h->slot * WXM_LARGE_PAGE_BYTES;
+        in_use_bytes_ = (in_use_bytes_ >= bytes) ? (in_use_bytes_ - bytes) : 0;
+        objects_alive_ = objects_alive_ ? objects_alive_ - 1 : 0;
         return true;
     }
 
+    // Merges into `s`: fill_small_stats() must run first (stats() does) -
+    // the in_use/alive/failed fields accumulate across both pools
+    // (review M8: they previously reflected the small pool only).
     void fill_large_stats(wxsamp_stats_t& s) const {
         s.large_total_bytes = size_;
         s.large_free_bytes = free_bytes();
         s.largest_free_bytes = largest_free_bytes();
+        s.in_use_bytes += in_use_bytes_;
+        s.objects_alive += objects_alive_;
+        s.failed_allocs += failed_allocs_;
     }
 
    private:
@@ -344,6 +359,9 @@ class LargeExtentPool {
     uint32_t size_ = 0;
     Run free_runs_[WXM_LARGE_MAX_RUNS];
     uint16_t run_count_ = 0;
+    uint32_t in_use_bytes_ = 0;
+    uint32_t objects_alive_ = 0;
+    uint32_t failed_allocs_ = 0;
 
     inline uint32_t pages_total() const { return size_ / WXM_LARGE_PAGE_BYTES; }
 
@@ -424,7 +442,6 @@ class LargeExtentPool {
         h.page = (uint16_t)first_page;
         h.slot = page_count;
         h.len = len;
-        h.refcnt = 1;
     }
 };
 
@@ -439,8 +456,12 @@ class SampleMemMgr {
         large_.init(base + sb, sdram_bytes - sb);
     }
 
-    // Route allocation by threshold
+    // Route allocation by threshold. Zero-byte requests are rejected: a
+    // len==0 handle is the "released" sentinel, so allocating one would
+    // leak its slot on release().
     bool alloc(uint32_t nbytes, wxsamp_t* out) {
+        if (nbytes == 0 || !out)
+            return false;
         if (nbytes <= class_threshold_bytes()) {
             if (small_.alloc(nbytes, out))
                 return true;
@@ -457,20 +478,16 @@ class SampleMemMgr {
         return small_.ptr(h, out_ptr);
     }
 
-    void retain(wxsamp_t* h) {
-        if (h)
-            h->refcnt++;
-    }
+    // Frees the allocation and zeroes the handle. Safe to call on an
+    // already-released (zeroed) handle - it is a no-op.
     void release(wxsamp_t* h) {
-        if (!h)
+        if (!h || h->len == 0)
             return;
-        if (h->refcnt && --h->refcnt == 0) {
-            if (h->cls == 0xFF)
-                large_.release(h);
-            else
-                small_.release(h);
-            *h = {};
-        }
+        if (h->cls == 0xFF)
+            large_.release(h);
+        else
+            small_.release(h);
+        *h = {};
     }
 
     void stats(wxsamp_stats_t* s) {
@@ -532,6 +549,6 @@ static void wxm_mem_test() {
  *  Integration notes
  *  - Place SampleMemMgr in your Daisy app singleton; call init() after SDRAM bring-up.
  *  - Route all sample loads through alloc(); copy bytes into mm.ptr(handle) buffer(s).
- *  - Never malloc/free during audio; retain()/release() from voice engine as pads are assigned.
+ *  - Never malloc/free during audio; release() only from the main loop.
  *  - Expose stats() to your diagnostics UI.
  * ===================================================================== */

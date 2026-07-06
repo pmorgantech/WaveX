@@ -31,6 +31,19 @@ versioning and release process.
   never set). The message id stays reserved in `protocol.h`; the dispatcher
   logs and ignores it.
 
+### Fixed — sample-memory stats and handle semantics (review M8)
+
+- `SampleMemMgr` stats now cover both pools: `in_use_bytes`,
+  `objects_alive`, and `failed_allocs` previously tracked only the small
+  slab pool, so the UI's sample-memory page was blind to the dominant
+  consumer — the samples themselves in the large extent pool.
+- Removed the per-handle `refcnt`/`retain()`: handles are copied by value,
+  so each copy counted independently — broken sharing semantics that
+  nothing used. `release()` frees unconditionally and zeroes the handle
+  (idempotent); zero-byte allocations are rejected (a `len==0` handle is
+  the released sentinel). New host tests cover cross-pool stats,
+  failed-alloc counting, and zero-byte rejection.
+
 ### Changed — preview pipeline bounded (review M7)
 
 - `OnPreviewReq` no longer heap-allocates from wire-controlled values: the

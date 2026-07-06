@@ -89,7 +89,6 @@ TEST_F(SampleMemTest, ReleaseZeroesHandleAndSecondReleaseIsSafe) {
     wxsamp_t h{};
     ASSERT_TRUE(mgr_.alloc(64, &h));
     mgr_.release(&h);
-    EXPECT_EQ(h.refcnt, 0);
     EXPECT_EQ(h.len, 0u);
     mgr_.release(&h);  // no-op on a zeroed handle; must not corrupt state
 
@@ -130,3 +129,37 @@ TEST_F(SampleMemTest, StatsReflectSmallPoolActivity) {
 }
 
 }  // namespace
+
+TEST_F(SampleMemTest, StatsCoverLargePoolToo) {
+    // Review M8: in_use_bytes/objects_alive/failed_allocs used to reflect
+    // only the small slab pool, leaving the UI blind to sample allocations.
+    wxsamp_stats_t before{};
+    mgr_.stats(&before);
+
+    wxsamp_t big{};
+    ASSERT_TRUE(mgr_.alloc(200 * 1024, &big));
+    ASSERT_EQ(big.cls, 0xFF);
+
+    wxsamp_stats_t during{};
+    mgr_.stats(&during);
+    EXPECT_GE(during.in_use_bytes, before.in_use_bytes + 200 * 1024);
+    EXPECT_EQ(during.objects_alive, before.objects_alive + 1);
+
+    // Impossible request: must fail AND be counted.
+    wxsamp_t huge{};
+    EXPECT_FALSE(mgr_.alloc(kArenaBytes * 2, &huge));
+    wxsamp_stats_t after_fail{};
+    mgr_.stats(&after_fail);
+    EXPECT_EQ(after_fail.failed_allocs, during.failed_allocs + 1);
+
+    mgr_.release(&big);
+    wxsamp_stats_t after{};
+    mgr_.stats(&after);
+    EXPECT_EQ(after.in_use_bytes, before.in_use_bytes);
+    EXPECT_EQ(after.objects_alive, before.objects_alive);
+}
+
+TEST_F(SampleMemTest, ZeroByteAllocRejected) {
+    wxsamp_t h{};
+    EXPECT_FALSE(mgr_.alloc(0, &h));
+}
