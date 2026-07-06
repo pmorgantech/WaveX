@@ -33,6 +33,7 @@ set(FIRMWARE_SOURCES
     src/cv/mcp48_backend.hpp
     src/sequencer/pattern.hpp
     src/sequencer/sequencer_scheduler.hpp
+    src/sequencer/tempo_follower.hpp
     src/timebase.hpp
     src/profiling/profiler.cpp
     ../shared/spi_protocol/protocol.cpp

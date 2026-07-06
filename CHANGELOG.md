@@ -11,6 +11,27 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Added — MIDI clock PLL tempo follower (roadmap Phase 2 item 3)
+
+- `firmware/daisy/src/sequencer/tempo_follower.hpp`: `TempoFollower` per
+  `docs/features/midi-sync-tempo-follower.md` §3-4 - period estimator
+  (median-of-5 + EMA, ±25% outlier rejection with 3-consecutive-consistent
+  hard re-acquire for real tempo jumps), phase servo (proportional rate
+  trim, clamped ±0.5%), and the Unlocked/Acquiring/Locked/Freewheel state
+  machine. HAL-free, not yet wired to the UART message or the sequencer
+  scheduler (protocol work is a separate follow-up stage).
+- 22 new host tests (`tempo_follower_test.cpp`) covering the design doc's
+  test plan: clean lock across several tempos, jittered-clock phase-error
+  bounds, a simulated one-hour 50 ppm master-clock offset with no
+  unbounded drift, step and gradual tempo changes, dropout/freewheel/
+  resume, single-glitch rejection, and Start/Stop/Continue+SPP transport
+  math.
+- Fixed a real bug caught by an early version of this class's linked
+  binary: `Tick()`'s rate-trim clamp used `std::min`/`std::max` against a
+  `static constexpr` member, which odr-uses it and fails to link without
+  an out-of-class definition in a header-only class - replaced with a
+  manual clamp.
+
 ### Added — Sequencer scheduler core (roadmap Phase 2 item 1)
 
 - `firmware/daisy/src/sequencer/pattern.hpp`: HAL-free pattern data model

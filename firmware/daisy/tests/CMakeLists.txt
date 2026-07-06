@@ -145,6 +145,14 @@ function(add_wavex_test test_source)
         )
     endif()
 
+    # tempo_follower.hpp is header-only and HAL-free (plain arithmetic, no
+    # daisy_seed.h include) - safe to compile directly on host.
+    if(test_name STREQUAL "tempo_follower_test")
+        target_sources(${test_name} PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/../src/sequencer/tempo_follower.hpp
+        )
+    endif()
+
     # Dispatch-level test (code review C1): compiles the REAL message
     # dispatcher against recording mocks of its subsystems, so a handler
     # regressing to a log-only stub fails a test instead of shipping.
