@@ -56,7 +56,7 @@ void PacketRouter::route_uart_message(uint8_t msg_type,
                                       size_t payload_len,
                                       uint8_t flags,
                                       uint16_t sequence_number) {
-    ESP_LOGI("packet_router",
+    ESP_LOGD("packet_router",
              "UART packet: msg_type=0x%02X, flags=0x%02X, seq=%u, payload_size=%d",
              msg_type,
              flags,
@@ -88,7 +88,7 @@ void PacketRouter::route_unified_packet(const uint8_t* packet_data, size_t packe
         return;
     }
 
-    ESP_LOGI(
+    ESP_LOGD(
         "packet_router",
         "Unified packet: msg_type=0x%02X, flags=0x%02X, seq=%u, payload_size=%d, total_size=%d",
         msg_type,
@@ -164,7 +164,7 @@ void PacketRouter::route_by_message_type(uint8_t msg_type,
         case WaveX::Protocol::MSG_BROWSE_RESP: {
             // Browse responses are handled differently - they don't have message type in payload
             int64_t response_arrival_time_us = esp_timer_get_time();
-            ESP_LOGI("packet_router",
+            ESP_LOGD("packet_router",
                      "Browse response received: %zu bytes (t=%lld us, seq=%u)",
                      payload_len,
                      (long long)response_arrival_time_us,
@@ -220,7 +220,7 @@ WEAK_HANDLER void PacketRouter::handle_heartbeat(const WaveX::Protocol::Heartbea
     float cpu_min = msg.cpu_min_percent / 10.0f;
     float cpu_max = msg.cpu_max_percent / 10.0f;
 
-    ESP_LOGI("packet_router",
+    ESP_LOGD("packet_router",
              "Heartbeat: uptime=%u, loop=%u, cpu=avg:%.1f%% min:%.1f%% max:%.1f%%",
              msg.uptime_ms,
              msg.loop_counter,
@@ -255,7 +255,7 @@ WEAK_HANDLER void PacketRouter::handle_meter_push(const WaveX::Protocol::MeterPu
 
 WEAK_HANDLER void PacketRouter::handle_browse_resp(const uint8_t* data, size_t length) {
     int64_t callback_start_time_us = esp_timer_get_time();
-    ESP_LOGI("packet_router",
+    ESP_LOGD("packet_router",
              "Browse response: %zu bytes (callback start t=%lld us)",
              length,
              (long long)callback_start_time_us);
@@ -277,13 +277,13 @@ WEAK_HANDLER void PacketRouter::handle_browse_resp(const uint8_t* data, size_t l
 
     // Forward browse response to inter_mcu system for callback handling
     int64_t callback_invoke_time_us = esp_timer_get_time();
-    ESP_LOGI("packet_router",
+    ESP_LOGD("packet_router",
              "About to invoke browse callback (t=%lld us, since arrival=%lld us)",
              (long long)callback_invoke_time_us,
              (long long)(callback_invoke_time_us - callback_start_time_us));
     inter_mcu_invoke_browse_resp_callback(data, length);
     int64_t callback_complete_time_us = esp_timer_get_time();
-    ESP_LOGI("packet_router",
+    ESP_LOGD("packet_router",
              "Browse callback completed (t=%lld us, callback duration=%lld us)",
              (long long)callback_complete_time_us,
              (long long)(callback_complete_time_us - callback_invoke_time_us));
@@ -291,7 +291,7 @@ WEAK_HANDLER void PacketRouter::handle_browse_resp(const uint8_t* data, size_t l
 
 WEAK_HANDLER void PacketRouter::handle_status_response(
     const WaveX::Protocol::SampleMemStatusMessage& msg) {
-    ESP_LOGI("packet_router",
+    ESP_LOGD("packet_router",
              "Status response: category=%u samples=%u small_free=%lu large_free=%lu",
              (unsigned)msg.category,
              (unsigned)msg.sample_count,
@@ -329,7 +329,7 @@ WEAK_HANDLER void PacketRouter::handle_error(const WaveX::Protocol::ErrorMessage
 }
 
 WEAK_HANDLER void PacketRouter::handle_wave_chunk(const WaveX::Protocol::WaveChunkMessage& msg, const uint8_t* payload, size_t length) {
-    ESP_LOGI("packet_router", "Wave chunk: offset=%u, count=%u", msg.offset, msg.count);
+    ESP_LOGD("packet_router", "Wave chunk: offset=%u, count=%u", msg.offset, msg.count);
 
     // Validate payload size matches expected size
     size_t expected_size = sizeof(WaveX::Protocol::WaveChunkMessage) + msg.count * sizeof(int16_t);

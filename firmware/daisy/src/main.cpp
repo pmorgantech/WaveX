@@ -37,51 +37,12 @@ static daisy::SpiHandle spi_handle;
 #include "storage/sd_sdio.h"
 #endif
 
-// Optional loop/CPU probe GPIO
-// CPU usage measurement state - improved accuracy
-static uint32_t s_cpu_window_start_ticks = 0;
-static uint32_t s_cpu_busy_ticks_accum = 0;
-static uint32_t s_cpu_total_ticks_accum = 0;
-static uint32_t s_cpu_last_log_ms = 0;
-static uint32_t s_cpu_baseline_ticks_per_second = 0;
-static bool s_cpu_baseline_measured = false;
-static uint32_t s_cpu_measurement_count = 0;
-static float s_cpu_usage_percent = 0.0f;  // Current CPU usage percentage
+// (Review M11: a hand-rolled CPU-usage measurement scaffold sat here -
+// eight state variables plus a 100 ms boot-time busy-loop baseline - whose
+// results nothing ever read. Deleted; audio CPU load comes from libDaisy's
+// CpuLoadMeter in the audio engine and is reported in heartbeats.)
 
 // QueuedMessage removed - using SPI only
-
-/**
- * @brief Measure CPU baseline to determine maximum possible CPU usage
- * This runs a tight loop for 1 second to measure maximum ticks per second
- */
-static void measure_cpu_baseline() {
-    if (s_cpu_baseline_measured)
-        return;
-
-    WAVEX_LOG_DAISY(INTER_MCU_LINK, "CPU: Measuring baseline performance...");
-
-    uint32_t start_time = System::GetNow();
-    uint32_t start_ticks = System::GetTick();
-    uint32_t end_time = start_time + 100;  // Run for 100ms (much shorter)
-
-    // Tight loop to measure maximum CPU capability
-    volatile uint32_t counter = 0;
-    while (System::GetNow() < end_time) {
-        counter++;
-        // Prevent compiler optimization
-        __asm__ __volatile__("" : "+r"(counter));
-    }
-
-    uint32_t end_ticks = System::GetTick();
-    uint32_t elapsed_ticks = end_ticks - start_ticks;
-    s_cpu_baseline_ticks_per_second = elapsed_ticks * 10;  // Scale up from 100ms to 1 second
-    s_cpu_baseline_measured = true;
-
-    WAVEX_LOG_DAISY(INTER_MCU_LINK,
-                    "CPU: Baseline = %lu ticks/second (counter=%lu)",
-                    (unsigned long)s_cpu_baseline_ticks_per_second,
-                    (unsigned long)counter);
-}
 
 // Initialize DSP objects via AudioEngine
 void InitDSP() {
@@ -131,19 +92,9 @@ int main(void) {
 
     WAVEX_LOG_DAISY(INTER_MCU_LINK, "=== WAVEX DAISY BOOT START ===");
     WAVEX_LOG_DAISY(INTER_MCU_LINK, "Hardware initialized successfully");
-    WAVEX_LOG_DAISY(INTER_MCU_LINK, "Revision: 0x%lX", 0x20036450);  // STM32H7B3
     WAVEX_LOG_DAISY(INTER_MCU_LINK, "USB CDC logging active");
     WAVEX_LOG_DAISY(INTER_MCU_LINK, "SPI Link Enabled: %d", WAVEX_SPI_LINK_ENABLED);
     WAVEX_LOG_DAISY(INTER_MCU_LINK, "SPI DMA Enabled: %d", WAVEX_SPI_DMA_ENABLED);
-
-    // Initialize CPU usage measurement window
-    s_cpu_window_start_ticks = System::GetTick();
-    s_cpu_last_log_ms = System::GetNow();
-    s_cpu_baseline_measured = false;
-    s_cpu_measurement_count = 0;
-
-    // Measure CPU baseline early to avoid interfering with audio
-    measure_cpu_baseline();
 
     // Initialize SD card (SDMMC + FatFS) if enabled
     bool sd_available = false;
@@ -400,14 +351,10 @@ int main(void) {
     // Main loop
     // Periodic liveness beacon: respond proactively every ~1s with basic health
     uint32_t last_beacon = System::GetNow();
-    uint32_t last_sync = System::GetNow();
-    uint32_t last_tx_pump = System::GetNow();
     uint32_t last_meter_send = System::GetNow();
     uint32_t last_profile_print = 0;
-    char wav_path[64] = {0};
     bool wav_started = false;
     static uint32_t loop_counter = 0;
-    static uint32_t last_heartbeat = 0;
 
     WAVEX_LOG_DAISY(INTER_MCU_LINK, "=== BOOT COMPLETE - ENTERING MAIN LOOP ===");
 
@@ -423,15 +370,11 @@ int main(void) {
         }
 #endif
 
-        // Start busy timing for this iteration (using ticks for better accuracy)
-        uint32_t busy_start_ticks = System::GetTick();
-
         loop_counter++;
 
         uint32_t current_time = System::GetNow();
 
         // Process any incoming SPI messages from ESP32
-        uint32_t spi_start = System::GetTick();
 // Fallback: if ATTN edge was missed, poll the level and start a receive
 // NOTE: Disabled - relying on GPIO interrupt (EXTI15_10) for edge detection
 // ESP32 now clears ATTN in post_trans_cb to eliminate race condition
@@ -443,7 +386,6 @@ int main(void) {
         // dequeuing, and processing in one step, avoiding the legacy conversion.
         WaveX::Comm::ProcessQueuedSpiMessage();
 #endif
-        uint32_t spi_duration = System::GetTick() - spi_start;
 
         WaveX::Comm::UartLinkProcess();
 
@@ -451,11 +393,6 @@ int main(void) {
 #if WAVEX_AUDIO_ENGINE_ENABLED
         WaveX::AudioEngine::CheckAndLogUnderruns();
 #endif
-
-        // // Log long SPI operations
-        // if (spi_duration > 2) {  // More than 2ms
-        //     WAVEX_LOG_DAISY(INTER_MCU_LINK, "LONG SPI: %u ms", (unsigned)spi_duration);
-        // }
 
 // Pump WAV I/O for audio playback (including audition)
 #if WAVEX_AUDIO_ENGINE_ENABLED
@@ -503,14 +440,6 @@ int main(void) {
             WaveX::Comm::UartLinkLogStats();
         }
 
-        // Log UART stats every 1 second for more detailed debug
-        static uint32_t last_uart_log = 0;
-        if (current_time - last_uart_log >= 1000) {
-            last_uart_log = current_time;
-            WaveX::Comm::UartLinkLogStats();
-            printf("DAISY: === UART Link Stats (1sec) ===\n");
-        }
-
         if (send_beacon) {
 // WAVEX_LOG_DAISY(INTER_MCU_LINK, "DEBUG: Preparing heartbeat packet");
 // Send heartbeat via UART with CPU usage
@@ -533,7 +462,6 @@ int main(void) {
 
             int heartbeat_result = WaveX::Comm::UartLinkSend(
                 WaveX::Protocol::MSG_HEARTBEAT, &heartbeat_msg, sizeof(heartbeat_msg));
-            WAVEX_LOG_DAISY(INTER_MCU_LINK, "DAISY: Heartbeat send result=%d", heartbeat_result);
 #if WAVEX_MCU_LINK_PACKET_DEBUG
             WAVEX_LOG_DAISY(INTER_MCU_LINK, "Heartbeat send result: %d", heartbeat_result);
 #endif

@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "audio/audio_engine.h"
+#include "config/link_config.h"
 #include "config/logging_config.h"
 #include "config/uart_debug_config.h"
 #include "daisy_filesystem.h"
@@ -49,6 +50,9 @@ void ProcessInterMcuMessage(uint8_t msg_type,
                             uint16_t sequence_number,
                             const uint8_t* payload,
                             size_t payload_size) {
+#if WAVEX_MCU_LINK_PACKET_DEBUG
+    // Per-message tracing: compile-gated (review M5 - this ran unconditionally
+    // for every frame, including 20 Hz meter pushes, over blocking USB-CDC).
     if (s_hw) {
         s_hw->PrintLine(
             "DAISY: Processing message - msg_type=0x%02X, seq=%u, payload_size=%d bytes",
@@ -56,69 +60,18 @@ void ProcessInterMcuMessage(uint8_t msg_type,
             sequence_number,
             static_cast<int>(payload_size));
         if (payload && payload_size > 0) {
+            char hex[3 * 8 + 1] = {0};
+            int pos = 0;
             const size_t preview = payload_size < 8 ? payload_size : 8;
-            switch (preview) {
-                default:
-                case 8:
-                    s_hw->PrintLine("DAISY: Payload bytes: %02X %02X %02X %02X %02X %02X %02X %02X",
-                                    payload[0],
-                                    payload[1],
-                                    payload[2],
-                                    payload[3],
-                                    payload[4],
-                                    payload[5],
-                                    payload[6],
-                                    payload[7]);
-                    break;
-                case 7:
-                    s_hw->PrintLine("DAISY: Payload bytes: %02X %02X %02X %02X %02X %02X %02X",
-                                    payload[0],
-                                    payload[1],
-                                    payload[2],
-                                    payload[3],
-                                    payload[4],
-                                    payload[5],
-                                    payload[6]);
-                    break;
-                case 6:
-                    s_hw->PrintLine("DAISY: Payload bytes: %02X %02X %02X %02X %02X %02X",
-                                    payload[0],
-                                    payload[1],
-                                    payload[2],
-                                    payload[3],
-                                    payload[4],
-                                    payload[5]);
-                    break;
-                case 5:
-                    s_hw->PrintLine("DAISY: Payload bytes: %02X %02X %02X %02X %02X",
-                                    payload[0],
-                                    payload[1],
-                                    payload[2],
-                                    payload[3],
-                                    payload[4]);
-                    break;
-                case 4:
-                    s_hw->PrintLine("DAISY: Payload bytes: %02X %02X %02X %02X",
-                                    payload[0],
-                                    payload[1],
-                                    payload[2],
-                                    payload[3]);
-                    break;
-                case 3:
-                    s_hw->PrintLine(
-                        "DAISY: Payload bytes: %02X %02X %02X", payload[0], payload[1], payload[2]);
-                    break;
-                case 2:
-                    s_hw->PrintLine("DAISY: Payload bytes: %02X %02X", payload[0], payload[1]);
-                    break;
-                case 1:
-                    s_hw->PrintLine("DAISY: Payload bytes: %02X", payload[0]);
-                    break;
-                case 0:
-                    break;
+            for (size_t i = 0; i < preview; ++i) {
+                pos += snprintf(hex + pos, sizeof(hex) - pos, "%02X ", payload[i]);
             }
+            s_hw->PrintLine("DAISY: Payload bytes: %s", hex);
         }
     }
+#else
+    (void)sequence_number;
+#endif
 
     switch (msg_type) {
         case MSG_SYNC:
@@ -200,10 +153,7 @@ void ProcessInterMcuMessage(uint8_t msg_type,
 
 // ---- Individual handler implementations ----
 
-static void HandleSyncMessage(const uint8_t* payload, size_t payload_size) {
-    if (s_hw)
-        s_hw->PrintLine("DAISY: HandleSyncMessage called - payload_size=%d", (int)payload_size);
-}
+static void HandleSyncMessage(const uint8_t* payload, size_t payload_size) {}
 
 // NOTE_ON/NOTE_OFF/CONTROL_CHANGE/SAMPLE_CTRL were log-only stubs until
 // 2026-07-05 - the engine side (SPSC note queue -> VoiceManager) existed
@@ -247,10 +197,6 @@ static void HandleNoteOffMessage(const uint8_t* payload, size_t payload_size) {
 }
 
 static void HandleSampleLoadMessage(const uint8_t* payload, size_t payload_size) {
-    if (s_hw)
-        s_hw->PrintLine("DAISY: HandleSampleLoadMessage called - payload_size=%d",
-                        (int)payload_size);
-
     if (!payload || payload_size < sizeof(WaveX::Protocol::SampleLoadMessage)) {
         if (s_hw) {
             s_hw->PrintLine("DAISY: Invalid payload size for SampleLoadMessage: %d (expected %d)",
@@ -290,10 +236,6 @@ static void HandleSampleControlMessage(const uint8_t* payload, size_t payload_si
 }
 
 static void HandlePreviewRequestMessage(const uint8_t* payload, size_t payload_size) {
-    if (s_hw)
-        s_hw->PrintLine("DAISY: HandlePreviewRequestMessage called - payload_size=%d",
-                        (int)payload_size);
-
     if (!payload || payload_size < sizeof(PreviewReqMessage)) {
         if (s_hw) {
             s_hw->PrintLine("DAISY: PreviewReq invalid size %d (expected %d)",
@@ -323,36 +265,15 @@ static void HandlePreviewRequestMessage(const uint8_t* payload, size_t payload_s
 #endif
 }
 
-static void HandleDataRequestMessage(const uint8_t* payload, size_t payload_size) {
-    if (s_hw)
-        s_hw->PrintLine("DAISY: HandleDataRequestMessage called - payload_size=%d",
-                        (int)payload_size);
-}
+static void HandleDataRequestMessage(const uint8_t* payload, size_t payload_size) {}
 
-static void HandleMeterPushMessage(const uint8_t* payload, size_t payload_size) {
-    if (s_hw)
-        s_hw->PrintLine("DAISY: HandleMeterPushMessage called - payload_size=%d",
-                        (int)payload_size);
-}
+static void HandleMeterPushMessage(const uint8_t* payload, size_t payload_size) {}
 
-static void HandleWaveChunkMessage(const uint8_t* payload, size_t payload_size) {
-    if (s_hw)
-        s_hw->PrintLine("DAISY: HandleWaveChunkMessage called - payload_size=%d",
-                        (int)payload_size);
-}
+static void HandleWaveChunkMessage(const uint8_t* payload, size_t payload_size) {}
 
-static void HandleHeartbeatMessage(const uint8_t* payload, size_t payload_size) {
-    if (s_hw)
-        s_hw->PrintLine("DAISY: HandleHeartbeatMessage called - payload_size=%d",
-                        (int)payload_size);
-}
+static void HandleHeartbeatMessage(const uint8_t* payload, size_t payload_size) {}
 
 static void HandleStatusRequestMessage(const uint8_t* payload, size_t payload_size) {
-    if (s_hw) {
-        s_hw->PrintLine("DAISY: HandleStatusRequestMessage called - payload_size=%d",
-                        (int)payload_size);
-    }
-
     if (!payload || payload_size < sizeof(WaveX::Protocol::StatusRequestMessage)) {
         if (s_hw) {
             s_hw->PrintLine("DAISY: Invalid status request payload (size=%d)", (int)payload_size);
@@ -371,10 +292,6 @@ static void HandleStatusRequestMessage(const uint8_t* payload, size_t payload_si
 // Browse request handler - transport agnostic (works via SPI or UART)
 // Requires filesystem support and inter-MCU communication to be enabled
 static void HandleBrowseRequestMessage(const uint8_t* payload, size_t payload_size) {
-    if (s_hw) {
-        s_hw->PrintLine("DAISY: HandleBrowseRequestMessage called - payload_size=%d",
-                        (int)payload_size);
-    }
     UART_LOGI("daisy_uart", "BROWSE_REQ received: payload_size=%u", (unsigned)payload_size);
 
     if (!payload || payload_size == 0) {
@@ -417,17 +334,10 @@ static void HandleBrowseRequestMessage(const uint8_t* payload, size_t payload_si
     WaveX::Comm::ProcessBrowseRequest(path, start_index, max_entries);
 }
 
-static void HandleBrowseResponseMessage(const uint8_t* payload, size_t payload_size) {
-    if (s_hw)
-        s_hw->PrintLine("DAISY: HandleBrowseResponseMessage called - payload_size=%d",
-                        (int)payload_size);
-}
+static void HandleBrowseResponseMessage(const uint8_t* payload, size_t payload_size) {}
 
 // Sample play request handler - requires inter-MCU comm and audio/filesystem support
 static void HandleSamplePlayRequestMessage(const uint8_t* payload, size_t payload_size) {
-    if (s_hw)
-        s_hw->PrintLine("DAISY: HandleSamplePlayRequestMessage called - payload_size=%d",
-                        (int)payload_size);
     if (payload_size > 0 && payload) {
         const char* file_path = reinterpret_cast<const char*>(payload);
         WaveX::Comm::ProcessSamplePlayRequest(file_path);
@@ -436,9 +346,6 @@ static void HandleSamplePlayRequestMessage(const uint8_t* payload, size_t payloa
 
 // Sample stop request handler - requires inter-MCU comm and audio support
 static void HandleSampleStopRequestMessage(const uint8_t* payload, size_t payload_size) {
-    if (s_hw)
-        s_hw->PrintLine("DAISY: HandleSampleStopRequestMessage called - payload_size=%d",
-                        (int)payload_size);
     if (!payload || payload_size < sizeof(WaveX::Protocol::SampleStopReqMessage)) {
         return;
     }
@@ -446,18 +353,10 @@ static void HandleSampleStopRequestMessage(const uint8_t* payload, size_t payloa
     WaveX::Comm::ProcessSampleStopRequest(msg->slot);
 }
 
-static void HandleSampleStatusMessage(const uint8_t* payload, size_t payload_size) {
-    if (s_hw)
-        s_hw->PrintLine("DAISY: HandleSampleStatusMessage called - payload_size=%d",
-                        (int)payload_size);
-}
+static void HandleSampleStatusMessage(const uint8_t* payload, size_t payload_size) {}
 
 // Sample play index request handler - requires inter-MCU comm and audio/filesystem support
 static void HandleSamplePlayIndexRequestMessage(const uint8_t* payload, size_t payload_size) {
-    if (s_hw)
-        s_hw->PrintLine("DAISY: HandleSamplePlayIndexRequestMessage called - payload_size=%d",
-                        (int)payload_size);
-
     if (!payload || payload_size < sizeof(WaveX::Protocol::SamplePlayIndexMessage)) {
         if (s_hw) {
             s_hw->PrintLine(
@@ -478,27 +377,13 @@ static void HandleSamplePlayIndexRequestMessage(const uint8_t* payload, size_t p
     WaveX::Comm::ProcessSamplePlayIndexRequest(msg->index);
 }
 
-static void HandleSampleGetPathRequestMessage(const uint8_t* payload, size_t payload_size) {
-    if (s_hw)
-        s_hw->PrintLine("DAISY: HandleSampleGetPathRequestMessage called - payload_size=%d",
-                        (int)payload_size);
-}
+static void HandleSampleGetPathRequestMessage(const uint8_t* payload, size_t payload_size) {}
 
-static void HandleSampleGetPathResponseMessage(const uint8_t* payload, size_t payload_size) {
-    if (s_hw)
-        s_hw->PrintLine("DAISY: HandleSampleGetPathResponseMessage called - payload_size=%d",
-                        (int)payload_size);
-}
+static void HandleSampleGetPathResponseMessage(const uint8_t* payload, size_t payload_size) {}
 
-static void HandleAckMessage(const uint8_t* payload, size_t payload_size) {
-    if (s_hw)
-        s_hw->PrintLine("DAISY: HandleAckMessage called - payload_size=%d", (int)payload_size);
-}
+static void HandleAckMessage(const uint8_t* payload, size_t payload_size) {}
 
-static void HandleErrorMessage(const uint8_t* payload, size_t payload_size) {
-    if (s_hw)
-        s_hw->PrintLine("DAISY: HandleErrorMessage called - payload_size=%d", (int)payload_size);
-}
+static void HandleErrorMessage(const uint8_t* payload, size_t payload_size) {}
 
 }  // namespace Comm
 }  // namespace WaveX

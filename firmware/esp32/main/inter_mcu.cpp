@@ -249,21 +249,12 @@ void inter_mcu_set_wave_chunk_listener(wavex_wave_chunk_cb_t cb, void* user_data
 }
 
 void inter_mcu_invoke_browse_resp_callback(const uint8_t* data, size_t length) {
-    int64_t invoke_time_us = esp_timer_get_time();
     if (!s_statistics) {
         ESP_LOGE(TAG, "StatisticsManager not initialized");
         return;
     }
-    ESP_LOGI(TAG,
-             "Invoking browse response callback with %d bytes (t=%lld us)",
-             (int)length,
-             invoke_time_us);
+    ESP_LOGD(TAG, "Invoking browse response callback with %d bytes", (int)length);
     s_statistics->invoke_browse_resp_callback(data, length);
-    int64_t invoke_complete_time_us = esp_timer_get_time();
-    ESP_LOGI(TAG,
-             "Browse response callback invocation completed (t=%lld us, duration=%lld us)",
-             invoke_complete_time_us,
-             invoke_complete_time_us - invoke_time_us);
 }
 
 void inter_mcu_invoke_wave_chunk_callback(uint32_t offset, const int16_t* samples, uint16_t count) {
@@ -509,8 +500,8 @@ void inter_mcu_increment_packet_stat(uint8_t packet_type) {
 // Direct SPI API functions (replacing LinkManager)
 
 esp_err_t inter_mcu_send_browse_req(const char* path, uint8_t start_index) {
-    ESP_LOGI("inter_mcu",
-             "DEBUG - inter_mcu_send_browse_req called: path='%s', start_index=%d",
+    ESP_LOGD("inter_mcu",
+             "inter_mcu_send_browse_req: path='%s', start_index=%d",
              path ? path : "NULL",
              start_index);
 
@@ -533,26 +524,12 @@ esp_err_t inter_mcu_send_browse_req(const char* path, uint8_t start_index) {
     memcpy(&payload[1], path, path_len);
     payload[payload_len - 1] = '\0';
 
-    // Debug: Log what we're sending (limit output)
-    ESP_LOGI("inter_mcu", "DEBUG - Sending browse request: start_index=%d, path='%s'", start_index, path);
-    ESP_LOGI("inter_mcu", "DEBUG - Payload length: %d", (int)payload_len);
     for (size_t i = 0; i < payload_len && i < 24; i++) {
         ESP_LOGD("inter_mcu", "  [%d] = 0x%02X", (int)i, payload[i]);
     }
 
-    int64_t request_send_time_us = esp_timer_get_time();
-    ESP_LOGI("inter_mcu",
-             "DEBUG - About to call send_uart_message with MSG_BROWSE_REQ=0x%02X (t=%lld us)",
-             WaveX::Protocol::MSG_BROWSE_REQ,
-             request_send_time_us);
     int result =
         send_uart_message(WaveX::Protocol::MSG_BROWSE_REQ, payload.data(), (uint16_t)payload_len);
-    int64_t request_send_complete_us = esp_timer_get_time();
-    ESP_LOGI("inter_mcu",
-             "DEBUG - UART send returned: %d (t=%lld us, duration=%lld us)",
-             result,
-             request_send_complete_us,
-             request_send_complete_us - request_send_time_us);
 
     return result >= 0 ? ESP_OK : ESP_FAIL;
 }

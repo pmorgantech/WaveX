@@ -31,6 +31,24 @@ versioning and release process.
   never set). The message id stays reserved in `protocol.h`; the dispatcher
   logs and ignores it.
 
+### Changed — hot-path logging gated (review M5/M11)
+
+- Daisy no longer logs unconditionally on hot paths: the per-received-frame
+  `PrintLine`, the dispatcher's per-message header + hex-dump ladder, the
+  per-note NOTE_ON/OFF logs, per-TX and per-preview-chunk traces, and the
+  1 Hz link-status lines are now compile-gated behind
+  `WAVEX_MCU_LINK_DEBUG` / `WAVEX_MCU_LINK_PACKET_DEBUG` /
+  `WAVEX_DAISY_SD_DEBUG` (all default 0). Error paths and one-shot boot/
+  user-action logs remain. `fs_browse.cpp`'s seven tracing `printf`s and
+  the 22-step `SAMPLE_LOAD: [n/10]` scaffolding are deleted. ESP32
+  per-packet/heartbeat/browse-timing logs demoted from INFO to DEBUG.
+- Deleted `main.cpp`'s dead CPU-measurement scaffold (review M11): eight
+  state variables plus a 100 ms boot busy-loop baseline whose results
+  nothing read (superseded by `CpuLoadMeter`), the unused
+  `wav_path`/`last_sync`/`last_tx_pump`/`busy_start_ticks` locals, the
+  duplicate 1 Hz stats logger with its bare `printf`, and a boot log line
+  claiming a hardcoded STM32H7B3 revision on an H750.
+
 ### Added — UART link sequence protection (review C4/M4)
 
 - Both live UART links (`daisy_uart_link.cpp`, `esp_uart_link.cpp`) now run

@@ -8,6 +8,7 @@
 #include "audio_engine.h"
 #include "comm/daisy_uart_link.h"
 #include "config/hardware_config.h"
+#include "config/link_config.h"
 #include "daisy_core.h"  // For memory sections
 #include "ff.h"
 #include "profiling/profiler.h"
@@ -186,11 +187,6 @@ static void SendPreviewChunks() {
                                             payload.data(),
                                             static_cast<uint16_t>(payload_bytes));
         }
-        if (s_hw) {
-            s_hw->PrintLine("DAISY: Sending wave chunk (single) offset=0 count=%u res=%d",
-                            (unsigned)header.count,
-                            res);
-        }
         return;
     }
 
@@ -238,13 +234,6 @@ static void SendPreviewChunks() {
             WaveX::Comm::UartLinkPumpTx();
             continue;  // retry the same chunk; s_prev_sent unchanged
         }
-        if (s_hw) {
-            s_hw->PrintLine("DAISY: Sending wave chunk: offset=%u count=%u res=%d",
-                            (unsigned)header.offset,
-                            (unsigned)header.count,
-                            res);
-        }
-
         s_prev_sent += remaining;
     }
 }
@@ -618,6 +607,7 @@ static bool prebuffer_audio() {
         s_max_io_duration = s_io_duration;
     }
 
+#if WAVEX_DAISY_SD_DEBUG
     // Log I/O performance every 100 operations
     if (s_io_count % 100 == 0) {
         if (s_hw)
@@ -626,6 +616,7 @@ static bool prebuffer_audio() {
                             (unsigned)s_max_io_duration,
                             (unsigned)s_io_duration);
     }
+#endif
 
     if (fr != FR_OK || br == 0) {
 #if WAVEX_DAISY_SD_DEBUG
@@ -1063,14 +1054,17 @@ void OnNoteOn(const NoteMessage& note_msg) {
     ev.params.sample_rate_hz = src->sample_rate;  // 44.1k content pitches correctly on 48k engine
 
     const bool queued = note_queue_push(ev);
-    if (s_hw)
-        s_hw->PrintLine("RX NOTE_ON: note=%u vel=%u ch=%u -> sample_id=%u (%lu frames)%s",
+    if (!queued && s_hw)
+        s_hw->PrintLine("RX NOTE_ON: note=%u DROPPED - note queue full", (unsigned)note_msg.note);
+#if WAVEX_MCU_LINK_PACKET_DEBUG
+    if (queued && s_hw)
+        s_hw->PrintLine("RX NOTE_ON: note=%u vel=%u ch=%u -> sample_id=%u (%lu frames)",
                         (unsigned)note_msg.note,
                         (unsigned)note_msg.velocity,
                         (unsigned)note_msg.channel,
                         (unsigned)src->sample_id,
-                        (unsigned long)ev.params.sample_frames,
-                        queued ? "" : " DROPPED: note queue full");
+                        (unsigned long)ev.params.sample_frames);
+#endif
 }
 
 void OnNoteOff(const NoteMessage& note_msg) {
@@ -1079,9 +1073,11 @@ void OnNoteOff(const NoteMessage& note_msg) {
     ev.note = note_msg.note;
     note_queue_push(ev);  // Release() of an unknown note is a no-op, safe to always send
 
+#if WAVEX_MCU_LINK_PACKET_DEBUG
     if (s_hw)
         s_hw->PrintLine(
             "RX NOTE_OFF: note=%u ch=%u", (unsigned)note_msg.note, (unsigned)note_msg.channel);
+#endif
 }
 
 // Wire hook for MSG_SAMPLE_CTRL (record/play transport from the UI's
@@ -1177,26 +1173,15 @@ void OnPreviewReq(const PreviewReqMessage& pr) {
 
 void OnSampleLoad(const SampleLoadMessage& sl) {
     if (s_hw) {
-        s_hw->PrintLine(
-            "SAMPLE_LOAD: [1/10] Entry - path='%s' id=%u", sl.path, (unsigned)sl.sample_id);
+        s_hw->PrintLine("SAMPLE_LOAD: path='%s' id=%u", sl.path, (unsigned)sl.sample_id);
     }
-
     // CRITICAL: Stop ALL SD activity (audition/playback) and ensure PumpWavIO is not running.
     // FatFS + SDMMC are NOT thread-safe or re-entrant. The main loop calls PumpWavIO() which
     // will conflict with f_open/f_read calls here if s_wav.open is true.
-    if (s_hw) {
-        s_hw->PrintLine("SAMPLE_LOAD: [2/10] Calling StopAudition()...");
-    }
     StopAudition();
 
-    if (s_hw) {
-        s_hw->PrintLine("SAMPLE_LOAD: [3/10] Calling CloseWav()...");
-    }
     CloseWav();
 
-    if (s_hw) {
-        s_hw->PrintLine("SAMPLE_LOAD: [4/10] Delaying 10ms for DMA settle...");
-    }
     // Voices may still be reading the sample memory this load is about to
     // release/rewrite (upsert_loaded_sample below). Ask the audio callback
     // to hard-stop all voices; the delay below (blocks are 1 ms) guarantees
@@ -1205,34 +1190,18 @@ void OnSampleLoad(const SampleLoadMessage& sl) {
     // Add a small delay to ensure any in-flight SD DMA completes
     System::Delay(10);
 
-    if (s_hw) {
-        s_hw->PrintLine("SAMPLE_LOAD: [5/10] Getting FIL reference...");
-    }
     // Use static FIL (too large for stack - ~600 bytes with SDMMC buffer).
     // Keep in normal BSS like s_wav.file so cache maintenance works correctly.
     // CRITICAL: Do NOT memset() the FIL - it has internal buffer pointers managed by FatFS.
     FIL& file = s_sample_load_file;
 
-    if (s_hw) {
-        s_hw->PrintLine("SAMPLE_LOAD: [6/10] Calling f_open('%s')...", sl.path);
-    }
     // Try raw path first (matches playback/audition). If that fails and path does not include a
     // drive prefix, retry with "0:" prefix to be tolerant of mount styles.
     FRESULT fr = f_open(&file, sl.path, FA_READ);
-    if (s_hw) {
-        s_hw->PrintLine("SAMPLE_LOAD: [6a/10] f_open result: %d", (int)fr);
-    }
-
     if (fr != FR_OK && strncmp(sl.path, "0:", 2) != 0) {
-        if (s_hw) {
-            s_hw->PrintLine("SAMPLE_LOAD: [6b/10] Retrying with 0: prefix...");
-        }
         char alt_path[128];
         snprintf(alt_path, sizeof(alt_path), "0:%s", sl.path);
         fr = f_open(&file, alt_path, FA_READ);
-        if (s_hw) {
-            s_hw->PrintLine("SAMPLE_LOAD: [6c/10] f_open alt result: %d", (int)fr);
-        }
         if (fr != FR_OK && s_hw) {
             s_hw->PrintLine("SAMPLE_LOAD: f_open failed (%d) for '%s' and alt '%s'",
                             (int)fr,
@@ -1243,25 +1212,14 @@ void OnSampleLoad(const SampleLoadMessage& sl) {
         s_hw->PrintLine("SAMPLE_LOAD: f_open failed (%d) for '%s'", (int)fr, sl.path);
     }
     if (fr != FR_OK) {
-        if (s_hw) {
-            s_hw->PrintLine("SAMPLE_LOAD: [EXIT-ERR] f_open failed, returning");
-        }
         return;
     }
 
-    if (s_hw) {
-        s_hw->PrintLine("SAMPLE_LOAD: [7/10] File opened successfully, reading header...");
-    }
     // Read header into DMA-safe buffer (RAM_D2) so SDMMC DMA can access it.
     uint8_t* hdr = s_sample_hdr;
     UINT br = 0;
     const UINT kHdrSize = 44;
     fr = f_read(&file, hdr, kHdrSize, &br);
-    if (s_hw) {
-        s_hw->PrintLine(
-            "SAMPLE_LOAD: [7a/10] f_read header result: fr=%d, br=%u", (int)fr, (unsigned)br);
-    }
-
     if (fr != FR_OK || br < 44 || memcmp(hdr + 0, "RIFF", 4) != 0 ||
         memcmp(hdr + 8, "WAVE", 4) != 0) {
         if (s_hw) {
@@ -1272,10 +1230,6 @@ void OnSampleLoad(const SampleLoadMessage& sl) {
         return;
     }
 
-    if (s_hw) {
-        s_hw->PrintLine("SAMPLE_LOAD: [8/10] Valid WAV header, parsing chunks...");
-    }
-
     uint16_t audio_fmt = 0;
     uint16_t num_ch = 0;
     uint32_t sample_rate = 0;
@@ -1284,19 +1238,10 @@ void OnSampleLoad(const SampleLoadMessage& sl) {
     uint32_t data_size = 0;
 
     f_lseek(&file, 12);
-    if (s_hw) {
-        s_hw->PrintLine("SAMPLE_LOAD: [8a/10] Seeking to chunk 12, starting chunk parse loop...");
-    }
-
     while (true) {
         uint8_t* chdr = s_sample_hdr;  // reuse DMA-safe buffer
         fr = f_read(&file, chdr, 8, &br);
         if (fr != FR_OK || br < 8) {
-            if (s_hw) {
-                s_hw->PrintLine("SAMPLE_LOAD: [8b/10] Chunk read failed or EOF: fr=%d, br=%u",
-                                (int)fr,
-                                (unsigned)br);
-            }
             f_close(&file);
             return;
         }
@@ -1339,14 +1284,6 @@ void OnSampleLoad(const SampleLoadMessage& sl) {
         return;
     }
 
-    if (s_hw) {
-        s_hw->PrintLine("SAMPLE_LOAD: [9/10] Format valid: sr=%lu ch=%u bits=%u, data_size=%lu",
-                        (unsigned long)sample_rate,
-                        (unsigned)num_ch,
-                        (unsigned)bits,
-                        (unsigned long)data_size);
-    }
-
     wxsamp_t handle = {};
     if (!s_sample_mem_mgr.alloc(data_size, &handle)) {
         if (s_hw) {
@@ -1362,23 +1299,11 @@ void OnSampleLoad(const SampleLoadMessage& sl) {
         return;
     }
 
-    if (s_hw) {
-        s_hw->PrintLine("SAMPLE_LOAD: [9a/10] Memory allocated, getting pointer...");
-    }
-
     void* sample_ptr = nullptr;
     if (!s_sample_mem_mgr.ptr(handle, &sample_ptr)) {
-        if (s_hw) {
-            s_hw->PrintLine("SAMPLE_LOAD: [9b/10] Failed to get pointer");
-        }
         s_sample_mem_mgr.release(&handle);
         f_close(&file);
         return;
-    }
-
-    if (s_hw) {
-        s_hw->PrintLine("SAMPLE_LOAD: [10/10] Seeking to data_off=%lu, starting data read loop...",
-                        (unsigned long)data_off);
     }
 
     f_lseek(&file, data_off);
@@ -1388,25 +1313,10 @@ void OnSampleLoad(const SampleLoadMessage& sl) {
     uint8_t* temp = s_sample_io;
     constexpr UINT kIoChunk = sizeof(s_sample_io);
 
-    if (s_hw) {
-        s_hw->PrintLine("SAMPLE_LOAD: [10a/10] ENTERING f_read loop, remaining=%lu...",
-                        (unsigned long)remaining);
-    }
-
     while (remaining > 0) {
         UINT to_read = (remaining > kIoChunk) ? kIoChunk : remaining;
 
-        if (s_hw && written == 0) {
-            s_hw->PrintLine("SAMPLE_LOAD: [10b/10] CALLING f_read for first chunk, to_read=%u...",
-                            (unsigned)to_read);
-        }
-
         fr = f_read(&file, temp, to_read, &br);
-
-        if (s_hw && written == 0) {
-            s_hw->PrintLine(
-                "SAMPLE_LOAD: [10c/10] RETURNED from f_read: fr=%d, br=%u", (int)fr, (unsigned)br);
-        }
 
         if (fr != FR_OK || br == 0) {
             if (s_hw) {
@@ -1420,10 +1330,6 @@ void OnSampleLoad(const SampleLoadMessage& sl) {
         memcpy(static_cast<uint8_t*>(sample_ptr) + written, temp, br);
         written += br;
         remaining -= br;
-    }
-
-    if (s_hw) {
-        s_hw->PrintLine("SAMPLE_LOAD: [SUCCESS] Data read complete, closing file...");
     }
 
     f_close(&file);
@@ -1651,9 +1557,6 @@ void CloseWav() {
             s_hw->PrintLine("CloseWav: closing WAV file and clearing state");
         f_close(&s_wav.file);
         s_wav = {};
-    } else {
-        if (s_hw)
-            s_hw->PrintLine("CloseWav: called but no WAV was open");
     }
 
     // Reset SD buffer state

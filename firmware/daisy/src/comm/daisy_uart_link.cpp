@@ -1,5 +1,6 @@
 #include "daisy_uart_link.h"
 
+#include "../../shared/config/link_config.h"
 #include "../../shared/config/pin_config.h"
 #include "../../shared/config/uart_debug_config.h"
 #include "../../shared/spi_protocol/protocol.h"
@@ -236,9 +237,6 @@ void process_rx_frames() {
                       static_cast<int>(payload_len),
                       seq,
                       flags);
-            if (s_hw)
-                s_hw->PrintLine(
-                    "DAISY: RX msg=0x%02X len=%d seq=%u", msg_type, (int)payload_len, seq);
             UART_LOG_DUMP_PACKET("daisy_uart", frame, frame_len);
 
             // Sequence gate: every frame from the peer shares one sequence
@@ -382,17 +380,6 @@ void process_tx_queue() {
         return;
     }
 
-    // Log when browse response frame is pulled from queue
-    uint32_t tx_pull_time_ms = daisy::System::GetNow();
-    if (s_hw) {
-        // Check if this is a browse response by examining the frame
-        if (entry->frame_len > 4 && entry->frame[4] == WaveX::Protocol::MSG_BROWSE_RESP) {
-            s_hw->PrintLine("DAISY: Browse response PULLED from queue: seq=%u, t=%lu ms",
-                            entry->seq,
-                            (unsigned long)tx_pull_time_ms);
-        }
-    }
-
     // Validate frame format before sending
     bool frame_valid = true;
     if (entry->frame_len < 10) {
@@ -463,19 +450,7 @@ void process_tx_queue() {
         if (res == daisy::UartHandler::Result::OK) {
             // Transmission successful - immediately clean up and advance queue
             s_stats.packets_sent++;
-            uint32_t tx_complete_time_ms = daisy::System::GetNow();
             UART_LOGI("daisy_uart", "TX complete OK (seq=%u len=%u)", entry->seq, entry->frame_len);
-            if (s_hw) {
-                s_hw->PrintLine("DAISY: TX OK seq=%u, t=%lu ms",
-                                entry->seq,
-                                (unsigned long)tx_complete_time_ms);
-                // Check if this was a browse response
-                if (entry->frame_len > 4 && entry->frame[4] == WaveX::Protocol::MSG_BROWSE_RESP) {
-                    s_hw->PrintLine("DAISY: Browse response TX COMPLETE: seq=%u, t=%lu ms",
-                                    entry->seq,
-                                    (unsigned long)tx_complete_time_ms);
-                }
-            }
 
             // Advance queue
             {
@@ -812,6 +787,7 @@ void UartLinkProcess() {
         consecutive_parse_failures = 0;
     }
 
+#if WAVEX_MCU_LINK_DEBUG
     if (now - last_log > 1000) {  // Log every 1 second
         if (s_hw)
             s_hw->PrintLine(
@@ -822,6 +798,9 @@ void UartLinkProcess() {
                 s_dma_listening);
         last_log = now;
     }
+#else
+    (void)last_log;
+#endif
 }
 
 void UartLinkLogStats() {
