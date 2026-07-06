@@ -31,6 +31,16 @@ versioning and release process.
   never set). The message id stays reserved in `protocol.h`; the dispatcher
   logs and ignores it.
 
+### Changed — preview pipeline bounded (review M7)
+
+- `OnPreviewReq` no longer heap-allocates from wire-controlled values: the
+  preview buffer is a fixed 4096-point static array, and an oversized
+  start/end/decim request widens the decimation to fit (full selection
+  stays visible, coarser) instead of reserving megabytes of newlib heap —
+  which, with exceptions disabled, terminated the firmware on allocation
+  failure. `SendPreviewChunks` stages frames in a static buffer instead of
+  a fresh `std::vector` per chunk.
+
 ### Removed — dead protocol artifacts; browse path hardened (review H6/M10)
 
 - Deleted `spi_protocol.h` — a third, competing wire framing (`pkt_t`, its

@@ -160,31 +160,41 @@ static int s_block_size = 48;
 static volatile bool s_underrun_detected = false;
 static bool s_underrun_logged = false;
 
-// Preview state
-static std::vector<int16_t> s_preview;
+// Preview state (review M7): fixed-capacity, not a heap vector. The old
+// std::vector reserved (end-start)/decim+1 elements straight from wire-
+// controlled values - a PreviewReq with decim=1 over a long sample asked
+// for megabytes of newlib heap, and with exceptions disabled a failed
+// allocation terminates the firmware. 4096 points comfortably covers the
+// 1280-px waveform view; OnPreviewReq widens decim to fit.
+static constexpr uint32_t kMaxPreviewPoints = 4096;
+static int16_t s_preview[kMaxPreviewPoints];
+static uint32_t s_preview_len = 0;
 static uint32_t s_prev_sent = 0;
+// Staging for one outbound preview frame (header + samples); static so
+// chunk sends don't heap-allocate per frame.
+static uint8_t s_preview_frame[sizeof(WaveX::Protocol::WaveChunkMessage) +
+                               kMaxPreviewPoints * sizeof(int16_t)];
 
 static void SendPreviewChunks() {
     // Prefer to send the entire preview in one frame if it fits.
     constexpr uint16_t kMaxSingleFrameSamples = 900;  // header + 900*2 < 2048 payload limit
-    if (s_preview.size() <= kMaxSingleFrameSamples) {
+    if (s_preview_len <= kMaxSingleFrameSamples) {
         WaveX::Protocol::WaveChunkMessage header{};
         header.offset = 0;
-        header.count = static_cast<uint16_t>(s_preview.size());
+        header.count = static_cast<uint16_t>(s_preview_len);
 
         const size_t payload_bytes =
             sizeof(header) + static_cast<size_t>(header.count) * sizeof(int16_t);
-        std::vector<uint8_t> payload(payload_bytes);
-        memcpy(payload.data(), &header, sizeof(header));
-        memcpy(payload.data() + sizeof(header), s_preview.data(), header.count * sizeof(int16_t));
+        memcpy(s_preview_frame, &header, sizeof(header));
+        memcpy(s_preview_frame + sizeof(header), s_preview, header.count * sizeof(int16_t));
 
         int res = WaveX::Comm::UartLinkSend(
-            WaveX::Protocol::MSG_WAVE_CHUNK, payload.data(), static_cast<uint16_t>(payload_bytes));
+            WaveX::Protocol::MSG_WAVE_CHUNK, s_preview_frame, static_cast<uint16_t>(payload_bytes));
         if (res < 0) {
             // Queue full: drain one frame and retry once (review Finding 5).
             WaveX::Comm::UartLinkPumpTx();
             res = WaveX::Comm::UartLinkSend(WaveX::Protocol::MSG_WAVE_CHUNK,
-                                            payload.data(),
+                                            s_preview_frame,
                                             static_cast<uint16_t>(payload_bytes));
         }
         return;
@@ -205,9 +215,9 @@ static void SendPreviewChunks() {
     // gaps.
     uint32_t pumps_remaining = 32;
 
-    while (s_prev_sent < s_preview.size()) {
-        uint16_t remaining = static_cast<uint16_t>(
-            std::min<uint32_t>(kChunkSamples, s_preview.size() - s_prev_sent));
+    while (s_prev_sent < s_preview_len) {
+        uint16_t remaining =
+            static_cast<uint16_t>(std::min<uint32_t>(kChunkSamples, s_preview_len - s_prev_sent));
 
         WaveX::Protocol::WaveChunkMessage header{};
         header.offset = s_prev_sent;
@@ -215,14 +225,12 @@ static void SendPreviewChunks() {
 
         const size_t payload_bytes =
             sizeof(header) + static_cast<size_t>(remaining) * sizeof(int16_t);
-        std::vector<uint8_t> payload(payload_bytes);
-        memcpy(payload.data(), &header, sizeof(header));
-        memcpy(payload.data() + sizeof(header),
-               s_preview.data() + s_prev_sent,
-               remaining * sizeof(int16_t));
+        memcpy(s_preview_frame, &header, sizeof(header));
+        memcpy(
+            s_preview_frame + sizeof(header), s_preview + s_prev_sent, remaining * sizeof(int16_t));
 
         int res = WaveX::Comm::UartLinkSend(
-            WaveX::Protocol::MSG_WAVE_CHUNK, payload.data(), static_cast<uint16_t>(payload_bytes));
+            WaveX::Protocol::MSG_WAVE_CHUNK, s_preview_frame, static_cast<uint16_t>(payload_bytes));
         if (res < 0) {
             if (pumps_remaining == 0) {
                 if (s_hw)
@@ -1094,7 +1102,7 @@ void OnSampleCtrl(const SampleCtrlMessage& sc) {
 
 void OnPreviewReq(const PreviewReqMessage& pr) {
     s_prev_sent = 0;
-    s_preview.clear();
+    s_preview_len = 0;
 
     // Pick the most recently loaded sample; fall back to empty if none.
     if (s_loaded_samples.empty()) {
@@ -1129,13 +1137,19 @@ void OnPreviewReq(const PreviewReqMessage& pr) {
     uint32_t end = pr.end > 0 ? std::min<uint32_t>(pr.end, total_frames) : total_frames;
     if (start > end)
         start = end;
-    uint16_t decim = pr.decim ? pr.decim : 1;
+    uint32_t decim = pr.decim ? pr.decim : 1;
+
+    // Clamp the point count to the fixed preview buffer by widening the
+    // decimation instead of truncating the range (review M7): the full
+    // selection stays visible, just coarser. Wire-controlled start/end/
+    // decim can no longer request an unbounded heap allocation.
+    const uint32_t span = end - start;
+    if (span / decim + 1 > kMaxPreviewPoints) {
+        decim = span / (kMaxPreviewPoints - 1) + 1;
+    }
 
     const int16_t* samples16 = reinterpret_cast<const int16_t*>(sample_ptr);
     const uint8_t* samples24 = reinterpret_cast<const uint8_t*>(sample_ptr);
-
-    // Reserve rough size after decimation
-    s_preview.reserve((end - start) / decim + 1);
 
     for (uint32_t i = start; i < end; i += decim) {
         int16_t v = 0;
@@ -1156,7 +1170,10 @@ void OnPreviewReq(const PreviewReqMessage& pr) {
                 s |= 0xFF000000;
             v = (int16_t)(s >> 8);
         }
-        s_preview.push_back(v);
+        s_preview[s_preview_len++] = v;
+        if (s_preview_len >= kMaxPreviewPoints) {
+            break;  // defensive; the decim widening above should prevent this
+        }
     }
 
     if (s_hw) {
@@ -1165,7 +1182,7 @@ void OnPreviewReq(const PreviewReqMessage& pr) {
             (unsigned)src.sample_id,
             (unsigned long)total_frames,
             (unsigned)decim,
-            (unsigned)s_preview.size());
+            (unsigned)s_preview_len);
     }
 
     SendPreviewChunks();
