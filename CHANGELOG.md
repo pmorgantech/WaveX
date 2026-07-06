@@ -11,6 +11,22 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Added — Voice manager extensions for the instrument model (Phase 2.5 stage 2)
+
+- `voice_manager.hpp` per `instrument-model.md` §3/§10: `Voice` gains `slot`
+  and `choke_group`; `VoiceTriggerParams` gains `slot`, `choke_group`, and
+  the identity-default multipliers `gain_mul` / `pitch_ratio_mul` (so the
+  instrument layer can fold in zone gain and coarse/fine/scale tuning without
+  re-deriving the base velocity/pitch). `VoiceManager::Choke(group,
+  fast_release_s)` mutually-excludes a choke group (open/closed hat) via a
+  forced fast release; `StopSlot(slot)` hard-stops only one slot's voices (so
+  rebinding one instrument slot doesn't cut the others). `Trigger()` applies
+  choke before allocating so a voice can't choke itself.
+- `envelope.hpp`: `SetReleaseTime()` (reconfigure release only, for choke).
+- 6 new host tests (gain/pitch multipliers, slot+choke storage, choke cuts
+  same-group / spares other groups, StopSlot scoping). Host tests green and
+  the Daisy ARM firmware links clean.
+
 ### Added — Sequencer message dispatch + engine forwarding (Phase 2 wiring)
 
 - `daisy_inter_mcu_message_handlers.cpp` now routes `MSG_SEQ_TRANSPORT`,

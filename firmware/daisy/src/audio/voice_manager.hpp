@@ -54,9 +54,11 @@ struct Voice {
     uint8_t src_channels = 1;  // interleave stride: 1 = mono, 2 = stereo (averaged to mono)
     float phase = 0.0f;        // fractional playback position, in frames
     float increment = 1.0f;    // playback rate (pitch), from note/root_note
-    float gain = 0.0f;         // 0..1, derived from velocity
+    float gain = 0.0f;         // 0..1, derived from velocity (× gain_mul)
     float pan = 0.5f;          // 0=left, 1=right, linear (not equal-power)
     uint8_t note = 0;          // MIDI note that triggered this voice
+    uint8_t slot = 0;          // instrument slot (kit/multitimbral) that owns this voice
+    uint8_t choke_group = 0;   // 0 = none; 1..N = mutual-exclusion group (open/closed hat)
     uint32_t age = 0;          // trigger order, for stealing/release-newest-first
 
     // Playback region + loop (item 4). end_frame/loop_end are exclusive.
@@ -92,6 +94,21 @@ struct VoiceTriggerParams {
     float pan = 0.5f;
     uint8_t root_note = 60;  // note at which `sample` plays at its recorded pitch
 
+    // Instrument-model routing (instrument-model.md §3). slot identifies the
+    // owning instrument (for StopSlot on rebind); choke_group != 0 mutes
+    // other voices in the same group at trigger time (open/closed hat).
+    uint8_t slot = 0;
+    uint8_t choke_group = 0;
+
+    // Post-resolution multipliers the instrument layer folds in without
+    // re-deriving the base velocity/pitch: gain_mul scales the velocity gain
+    // (zone gain, mixer trim, gain modulation); pitch_ratio_mul multiplies
+    // the note/root pitch ratio (coarse/fine tune, tuning tables, pitch
+    // modulation). Both default to 1.0 (identity) so the plain MIDI path is
+    // unchanged.
+    float gain_mul = 1.0f;
+    float pitch_ratio_mul = 1.0f;
+
     // The sample's native rate in Hz. 0 (default) means "same as the
     // engine" - no compensation. When set (e.g. 44100 for a 44.1kHz WAV on
     // the 48kHz engine), playback rate is scaled by native/engine so the
@@ -126,6 +143,10 @@ class VoiceManager {
     void Trigger(const VoiceTriggerParams& params) {
         if (!params.sample || params.sample_frames < 2)
             return;
+        // Choke: mute other voices in the same group before allocating this
+        // one (the new voice must not choke itself). No-op for group 0.
+        if (params.choke_group != 0)
+            Choke(params.choke_group);
         int idx = FindFreeVoice();
         if (idx < 0)
             idx = FindVoiceToSteal();
@@ -135,9 +156,11 @@ class VoiceManager {
         v.sample = params.sample;
         v.sample_frames = params.sample_frames;
         v.src_channels = (params.channels == 2) ? 2 : 1;
-        v.gain = static_cast<float>(params.velocity) / 127.0f;
+        v.gain = (static_cast<float>(params.velocity) / 127.0f) * params.gain_mul;
         v.pan = params.pan < 0.0f ? 0.0f : (params.pan > 1.0f ? 1.0f : params.pan);
         v.note = params.note;
+        v.slot = params.slot;
+        v.choke_group = params.choke_group;
         v.age = next_age_++;
 
         v.start_frame = params.start_frame < params.sample_frames ? params.start_frame : 0;
@@ -158,10 +181,11 @@ class VoiceManager {
             (params.sample_rate_hz > 0)
                 ? static_cast<float>(params.sample_rate_hz) / static_cast<float>(sample_rate_)
                 : 1.0f;
-        v.increment = rate_ratio * std::pow(2.0f,
-                                            static_cast<float>(static_cast<int>(params.note) -
-                                                               static_cast<int>(params.root_note)) /
-                                                12.0f);
+        v.increment = rate_ratio * params.pitch_ratio_mul *
+                      std::pow(2.0f,
+                               static_cast<float>(static_cast<int>(params.note) -
+                                                  static_cast<int>(params.root_note)) /
+                                   12.0f);
 
         v.filter.Init(sample_rate_);
         v.filter.SetCutoff(params.filter_cutoff_hz);
@@ -270,6 +294,35 @@ class VoiceManager {
     void StopAll() {
         for (auto& v: voices_) {
             v.state = VoiceState::Idle;
+        }
+    }
+
+    // Choke group (instrument-model.md §3): forces every playing voice in
+    // `group` that is not already releasing into a fast release, so the
+    // classic open-hat/closed-hat mutual exclusion cuts the open hat off
+    // near-instantly but click-free. `group` 0 is "no group" and never
+    // chokes anything. Called from Trigger() before allocating the new
+    // voice; callback-safe (no alloc/IO). fast_release_s default 5 ms.
+    void Choke(uint8_t group, float fast_release_s = 0.005f) {
+        if (group == 0)
+            return;
+        for (auto& v: voices_) {
+            if (v.state == VoiceState::Playing && v.choke_group == group &&
+                !v.envelope.IsReleasing()) {
+                v.envelope.SetReleaseTime(fast_release_s);
+                v.envelope.Release();
+            }
+        }
+    }
+
+    // Hard-stops (no release tail) only voices owned by `slot`. Used when an
+    // instrument slot is rebound to a new instrument whose sample memory is
+    // about to be released - scoped so rebinding slot 3 doesn't cut off
+    // slots 0-2 (instrument-model.md §4). Callback-safe.
+    void StopSlot(uint8_t slot) {
+        for (auto& v: voices_) {
+            if (v.slot == slot)
+                v.state = VoiceState::Idle;
         }
     }
 

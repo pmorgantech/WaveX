@@ -39,6 +39,12 @@ class Envelope {
             stage_ = Stage::Release;
     }
 
+    // Reconfigures just the release time (seconds), leaving A/D/S untouched.
+    // Used for choke groups (instrument-model.md §3): a choked voice gets a
+    // very short release forced onto it before Release(), so open/closed-hat
+    // cutoffs are near-instant but still click-free.
+    void SetReleaseTime(float release_s) { release_rate_ = RatePerSample(release_s, 1.0f); }
+
     // Advances one sample, returns the new envelope level (0..1).
     float Process() {
         switch (stage_) {

@@ -609,3 +609,128 @@ TEST(VoiceManagerTest, HeldVoiceCountExcludesReleasingVoices) {
     EXPECT_EQ(vm.HeldVoiceCount(), 0);
     EXPECT_EQ(vm.ActiveVoiceCount(), 0);
 }
+
+// ---- Instrument-model extensions (instrument-model.md §3/§10) ----
+
+// Helper: find the voice index currently playing `note` (first match), or -1.
+static int FindVoiceForNote(const VoiceManager& vm, uint8_t note) {
+    for (uint8_t i = 0; i < kNumVoices; ++i) {
+        const auto& v = vm.GetVoice(i);
+        if (v.state != VoiceState::Idle && v.note == note)
+            return i;
+    }
+    return -1;
+}
+
+TEST(VoiceManagerTest, GainMulScalesVelocityGain) {
+    VoiceManager vm;
+    vm.Init(48000);
+    auto sample = MakeRampSample(100, 1000, 0);
+    auto p = FlatParams(sample.data(), sample.size(), 60, 127, 0.5f);
+    p.gain_mul = 0.5f;  // half gain
+    vm.Trigger(p);
+
+    // velocity 127 => base gain 1.0, × gain_mul 0.5 => 0.5.
+    int idx = FindVoiceForNote(vm, 60);
+    ASSERT_GE(idx, 0);
+    EXPECT_FLOAT_EQ(vm.GetVoice(idx).gain, 0.5f);
+}
+
+TEST(VoiceManagerTest, PitchRatioMulMultipliesIncrement) {
+    VoiceManager vm;
+    vm.Init(48000);
+    auto sample = MakeRampSample(100, 0, 1);
+    auto p = FlatParams(sample.data(), sample.size(), 60, 127, 0.5f);
+    p.root_note = 60;          // base 12-TET ratio = 1.0
+    p.pitch_ratio_mul = 2.0f;  // one octave up via the multiplier
+    vm.Trigger(p);
+
+    int idx = FindVoiceForNote(vm, 60);
+    ASSERT_GE(idx, 0);
+    EXPECT_FLOAT_EQ(vm.GetVoice(idx).increment, 2.0f);
+}
+
+TEST(VoiceManagerTest, SlotAndChokeGroupAreStored) {
+    VoiceManager vm;
+    vm.Init(48000);
+    auto sample = MakeRampSample(100, 1000, 0);
+    auto p = FlatParams(sample.data(), sample.size(), 42, 100, 0.5f);
+    p.slot = 3;
+    p.choke_group = 2;
+    vm.Trigger(p);
+
+    int idx = FindVoiceForNote(vm, 42);
+    ASSERT_GE(idx, 0);
+    EXPECT_EQ(vm.GetVoice(idx).slot, 3);
+    EXPECT_EQ(vm.GetVoice(idx).choke_group, 2);
+}
+
+TEST(VoiceManagerTest, ChokeGroupCutsOffPreviousVoiceInSameGroup) {
+    VoiceManager vm;
+    vm.Init(48000);
+    auto sample = MakeRampSample(48000, 1000, 0);  // long, won't auto-release
+
+    // Open hat: group 1, long release so it would otherwise ring.
+    auto open_hat = FlatParams(sample.data(), sample.size(), 46, 100, 0.5f);
+    open_hat.choke_group = 1;
+    open_hat.release_s = 2.0f;
+    vm.Trigger(open_hat);
+    int open_idx = FindVoiceForNote(vm, 46);
+    ASSERT_GE(open_idx, 0);
+    EXPECT_EQ(vm.HeldVoiceCount(), 1);
+
+    // Closed hat: same group 1 -> chokes the open hat into a fast release.
+    auto closed_hat = FlatParams(sample.data(), sample.size(), 42, 100, 0.5f);
+    closed_hat.choke_group = 1;
+    vm.Trigger(closed_hat);
+
+    // The open hat is now releasing (choked), the closed hat is held.
+    EXPECT_TRUE(vm.GetVoice(open_idx).envelope.IsReleasing());
+    EXPECT_EQ(vm.HeldVoiceCount(), 1);  // only the closed hat is held
+}
+
+TEST(VoiceManagerTest, ChokeDoesNotAffectOtherGroups) {
+    VoiceManager vm;
+    vm.Init(48000);
+    auto sample = MakeRampSample(48000, 1000, 0);
+
+    auto g1 = FlatParams(sample.data(), sample.size(), 46, 100, 0.5f);
+    g1.choke_group = 1;
+    g1.release_s = 2.0f;
+    vm.Trigger(g1);
+
+    auto g2 = FlatParams(sample.data(), sample.size(), 50, 100, 0.5f);
+    g2.choke_group = 2;  // different group
+    vm.Trigger(g2);
+
+    // Trigger another group-1 voice - only the first (group 1) is choked.
+    auto g1b = FlatParams(sample.data(), sample.size(), 42, 100, 0.5f);
+    g1b.choke_group = 1;
+    vm.Trigger(g1b);
+
+    int g2_idx = FindVoiceForNote(vm, 50);
+    ASSERT_GE(g2_idx, 0);
+    EXPECT_FALSE(vm.GetVoice(g2_idx).envelope.IsReleasing());  // group 2 untouched
+}
+
+TEST(VoiceManagerTest, StopSlotStopsOnlyMatchingSlot) {
+    VoiceManager vm;
+    vm.Init(48000);
+    auto sample = MakeRampSample(100, 1000, 0);
+
+    auto a = FlatParams(sample.data(), sample.size(), 60, 100, 0.5f);
+    a.slot = 1;
+    vm.Trigger(a);
+    auto b = FlatParams(sample.data(), sample.size(), 62, 100, 0.5f);
+    b.slot = 2;
+    vm.Trigger(b);
+    auto c = FlatParams(sample.data(), sample.size(), 64, 100, 0.5f);
+    c.slot = 1;
+    vm.Trigger(c);
+    EXPECT_EQ(vm.ActiveVoiceCount(), 3);
+
+    vm.StopSlot(1);  // stops the two slot-1 voices, leaves slot 2
+    EXPECT_EQ(vm.ActiveVoiceCount(), 1);
+    int b_idx = FindVoiceForNote(vm, 62);
+    EXPECT_GE(b_idx, 0);  // slot-2 voice survives
+}
