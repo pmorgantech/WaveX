@@ -12,6 +12,7 @@
 #include "util/scopedirqblocker.h"
 
 #include "../../shared/spi_protocol/sequence_tracker.hpp"
+#include "../../shared/uart_protocol/frame_scanner.hpp"
 #include <algorithm>
 #include <cstring>
 
@@ -51,8 +52,11 @@ static DMA_BUFFER_MEM_SECTION uint8_t s_uart_rx_dma[RX_BUFFER_SIZE];
 static uint8_t s_rx_pending[RX_PENDING_CAPACITY];
 static volatile size_t s_rx_pending_len = 0;
 
-static uint8_t s_frame_buffer[RX_PENDING_CAPACITY];
-static size_t s_frame_len = 0;
+// RX frame extraction: shared scan/consume policy (frame_scanner.hpp,
+// review P3.14) over caller-provided storage. Single-context: only the
+// main loop touches it.
+static uint8_t s_frame_storage[RX_PENDING_CAPACITY];
+static WaveX::UartProtocol::FrameScanner s_scanner(s_frame_storage, sizeof(s_frame_storage));
 
 // TX queue in regular RAM: transmission is CPU-polled BlockingTransmit (DMA
 // TX can't run while DmaListen holds the UART's DMA stream), so these
@@ -65,7 +69,6 @@ static uart_msg_entry_t s_tx_queue[MSG_QUEUE_SIZE];
 static int s_tx_head = 0;
 static int s_tx_tail = 0;
 static int s_tx_count = 0;
-static uart_msg_entry_t* s_tx_inflight = nullptr;
 
 static uint16_t s_next_sequence = 1;
 static uart_stats_t s_stats;
@@ -116,120 +119,32 @@ void pull_pending_into_frame_buffer() {
     if (s_rx_pending_len == 0) {
         return;
     }
-
-    size_t available_space = RX_PENDING_CAPACITY - s_frame_len;
-    size_t pending_len = s_rx_pending_len;
-    size_t to_copy = std::min<size_t>(available_space, pending_len);
-    if (to_copy > 0) {
-        std::memcpy(s_frame_buffer + s_frame_len, s_rx_pending, to_copy);
-        s_frame_len += to_copy;
-    }
-
-    if (to_copy < pending_len) {
+    WaveX::UartProtocol::ScanStats append_stats{};
+    if (s_scanner.Append(s_rx_pending, s_rx_pending_len, append_stats) > 0) {
         s_stats.queue_overflows++;
     }
-
     s_rx_pending_len = 0;
 }
 
-void consume_frame_bytes(size_t count) {
-    if (count == 0) {
-        return;
-    }
-
-    if (count >= s_frame_len) {
-        s_frame_len = 0;
-        return;
-    }
-
-    size_t remaining = s_frame_len - count;
-    std::memmove(s_frame_buffer, s_frame_buffer + count, remaining);
-    s_frame_len = remaining;
-}
-
 void process_rx_frames() {
-    static uint32_t last_log = 0;
-    uint32_t now = daisy::System::GetNow();
-    bool should_log = (now - last_log > 5000);  // Log every 5 seconds
-
     pull_pending_into_frame_buffer();
 
-    size_t offset = 0;
-    while (s_frame_len - offset >= UART_FRAME_OVERHEAD) {
-        int start = FindFrameStart(s_frame_buffer + offset, s_frame_len - offset);
-        if (start < 0) {
-            // No start byte found; discard processed bytes
-            if (should_log && offset > 0) {
-                if (s_hw)
-                    s_hw->PrintLine("DAISY: No frame start in %u bytes",
-                                    (unsigned)(s_frame_len - offset));
-                // Dump first 32 bytes for diagnosis
-                char hex_buf[128] = {0};
-                int hex_pos = 0;
-                size_t to_dump = std::min<size_t>(32, s_frame_len - offset);
-                for (size_t i = 0; i < to_dump && hex_pos < 120; i++) {
-                    hex_pos += snprintf(
-                        hex_buf + hex_pos, 120 - hex_pos, "%02X ", s_frame_buffer[offset + i]);
-                }
-                if (s_hw)
-                    s_hw->PrintLine("DAISY: RX buffer: %s", hex_buf);
-            }
-            // Nothing in the scanned window can begin a frame. Keep only the
-            // last UART_FRAME_OVERHEAD-1 bytes (FindFrameStart doesn't scan
-            // them - a start byte there may complete a frame once more data
-            // arrives) and discard the rest. Previously this consumed only
-            // `offset` bytes - zero on a fresh call - so a frame buffer full
-            // of start-byte-free garbage never drained: new bytes were then
-            // discarded at pull_pending_into_frame_buffer (buffer full) and
-            // the "stuck" recovery below never fired because it requires
-            // s_frame_len == 0. Permanent RX wedge (review H2); the ESP32
-            // twin already had this guard.
-            const size_t keep = UART_FRAME_OVERHEAD - 1;
-            if (s_frame_len > keep) {
-                consume_frame_bytes(s_frame_len - keep);
-            }
-            if (should_log) {
-                last_log = now;
-            }
-            return;
-        }
+    WaveX::UartProtocol::ScanStats scan{};
+    s_scanner.Scan(
+        [&](const uint8_t* frame, size_t frame_len) {
+            uint8_t msg_type;
+            uint8_t flags;
+            uint16_t seq;
+            uint8_t payload[UART_MAX_PAYLOAD];
+            size_t payload_len = sizeof(payload);  // in: capacity, out: bytes copied
 
-        offset += static_cast<size_t>(start);
-        size_t available = s_frame_len - offset;
-        size_t frame_len = GetFrameLength(s_frame_buffer + offset, available);
-        if (frame_len == 0 || frame_len > available) {
-            if (should_log && frame_len > 0) {
-                if (s_hw)
-                    s_hw->PrintLine("DAISY: Incomplete frame: frame_len=%u available=%u",
-                                    (unsigned)frame_len,
-                                    (unsigned)available);
+            if (!ParseUartPacket(frame, frame_len, msg_type, payload, payload_len, seq, flags)) {
+                s_stats.crc_errors++;
+                UART_LOGE("daisy_uart",
+                          "Failed to parse UART packet len=%d",
+                          static_cast<int>(frame_len));
+                return;
             }
-            consume_frame_bytes(offset);
-            if (should_log) {
-                last_log = now;
-            }
-            return;
-        }
-
-        const uint8_t* frame = s_frame_buffer + offset;
-        if (!ValidateUartFrame(frame, frame_len)) {
-            UART_LOGE("daisy_uart", "Invalid UART frame len=%d", static_cast<int>(frame_len));
-            s_stats.crc_errors++;
-            if (should_log) {
-                if (s_hw)
-                    s_hw->PrintLine("DAISY: CRC/validation FAILED len=%u", (unsigned)frame_len);
-            }
-            offset += 1;
-            continue;
-        }
-
-        uint8_t msg_type;
-        uint8_t flags;
-        uint16_t seq;
-        uint8_t payload[UART_MAX_PAYLOAD];
-        size_t payload_len = sizeof(payload);  // in: capacity, out: bytes copied
-
-        if (ParseUartPacket(frame, frame_len, msg_type, payload, payload_len, seq, flags)) {
             s_stats.packets_received++;
             UART_LOGI("daisy_uart",
                       "RX msg=0x%02X len=%d seq=%u flags=0x%02X",
@@ -242,10 +157,9 @@ void process_rx_frames() {
             // Sequence gate: every frame from the peer shares one sequence
             // counter, so evaluate all of them (ACK/NACK included) to keep
             // the tracker in step; only Accept/ResyncAccept dispatch.
-            // Duplicates (peer retransmit) and severe out-of-order (stale
-            // or corrupted-but-CRC-valid) are dropped. A peer reboot (low,
-            // fresh-looking seq after real progress) resyncs and continues
-            // instead of wedging.
+            // Duplicates and severe out-of-order are dropped; a peer reboot
+            // (low, fresh-looking seq after real progress) resyncs and
+            // continues instead of wedging.
             const auto seq_result = s_rx_seq.Evaluate(seq);
             if (seq_result == WaveX::Protocol::SequenceTracker::Result::Duplicate ||
                 seq_result == WaveX::Protocol::SequenceTracker::Result::OutOfOrder) {
@@ -257,8 +171,7 @@ void process_rx_frames() {
                               ? "duplicate"
                               : "out-of-order",
                           s_rx_seq.ExpectedSeq());
-                offset += frame_len;
-                continue;
+                return;
             }
             if (seq_result == WaveX::Protocol::SequenceTracker::Result::ResyncAccept) {
                 s_stats.seq_resyncs++;
@@ -274,223 +187,81 @@ void process_rx_frames() {
             } else {
                 ProcessInterMcuMessage(msg_type, seq, payload, payload_len);
             }
-        } else {
-            s_stats.crc_errors++;
-            UART_LOGE(
-                "daisy_uart", "Failed to parse UART packet len=%d", static_cast<int>(frame_len));
-            if (s_hw)
-                s_hw->PrintLine("DAISY: Parse FAILED len=%u", (unsigned)frame_len);
-        }
+        },
+        scan);
 
-        offset += frame_len;
-    }
-
-    consume_frame_bytes(offset);
-    if (should_log) {
-        if (s_hw)
-            s_hw->PrintLine("DAISY: process_rx_frames: s_frame_len=%u parsed %u bytes",
-                            (unsigned)s_frame_len,
-                            (unsigned)offset);
-        last_log = now;
-    }
+    s_stats.crc_errors += scan.crc_errors;
+    s_stats.frame_sync_errors += scan.sync_errors;
 }
 
 // Note: uart_tx_complete is no longer used (BlockingTransmit handles cleanup synchronously)
 
 void process_tx_queue() {
-    // Check if we have messages to send
+    // Single-context: UartLinkSend (producer) and this function (consumer)
+    // both run on the main loop, and BlockingTransmit completes before this
+    // function returns - there is no cross-call "in flight" state. The old
+    // s_tx_inflight machinery (500 ms/1 s stuck-transmission force-clear)
+    // guarded an async-TX design that no longer exists, and worse: one
+    // transmit failure left the head entry claimed-but-never-retried,
+    // head-blocking the whole queue for a second and then dropping the
+    // frame without a single retransmit attempt (review M6). Now a failed
+    // transmit is retried on every pass, bounded by a 1 s per-frame give-up.
+    static uint32_t first_fail_ms = 0;
+
     uart_msg_entry_t* entry = nullptr;
-
-    // Static variables for transmission timeout tracking
-    static uint32_t tx_start_time = 0;
-    static bool tx_timeout_logged = false;
-    static uint32_t last_skip_log = 0;
-
-    // Removed verbose TX logging - TX is working fine
-
-    // Check for stuck transmissions (timeout after 500ms)
     {
         daisy::ScopedIrqBlocker lock;
-        if (s_tx_inflight) {
-            uint32_t now = daisy::System::GetNow();
-
-            if (tx_start_time == 0) {
-                // Record when transmission started
-                tx_start_time = now;
-                tx_timeout_logged = false;
-            } else if ((now - tx_start_time) > 500) {
-                // Transmission has been inflight for >500ms - likely stuck
-                if (!tx_timeout_logged) {
-                    UART_LOGE("daisy_uart",
-                              "TX TIMEOUT - transmission stuck for 500ms (seq=%u), clearing",
-                              s_tx_inflight->seq);
-                    tx_timeout_logged = true;
-                }
-
-                // After 1 second, forcefully clear the stuck transmission
-                if ((now - tx_start_time) > 1000) {
-                    UART_LOGE("daisy_uart",
-                              "TX FORCEFULLY CLEARED after 1s timeout (seq=%u)",
-                              s_tx_inflight->seq);
-                    s_tx_inflight->pending = false;
-                    s_tx_inflight = nullptr;
-                    s_tx_head = (s_tx_head + 1) % MSG_QUEUE_SIZE;
-                    if (s_tx_count > 0) {
-                        --s_tx_count;
-                    }
-                    tx_start_time = 0;
-                    s_stats.tx_errors++;
-                }
-            }
-        } else {
-            // Reset timeout tracking when no transmission in flight
-            tx_start_time = 0;
-        }
-    }
-
-    {
-        daisy::ScopedIrqBlocker lock;
-        if (s_tx_count > 0) {
+        while (s_tx_count > 0) {
             entry = &s_tx_queue[s_tx_head];
             if (entry->pending) {
-                // Only attempt transmission if not already in flight
-                if (!s_tx_inflight) {
-                    s_tx_inflight = entry;  // Mark as sending
-                } else {
-                    // Previous transmission still in flight, don't queue another
-                    uint32_t now = daisy::System::GetNow();
-                    if (now - last_skip_log > 1000) {
-                        UART_LOGI("daisy_uart",
-                                  "Skipping TX: previous transmission in flight (seq=%u)",
-                                  s_tx_inflight->seq);
-                        last_skip_log = now;
-                    }
-                    entry = nullptr;
-                }
-            } else {
-                // Entry not pending, skip it
-                s_tx_head = (s_tx_head + 1) % MSG_QUEUE_SIZE;
-                --s_tx_count;
-                entry = nullptr;
+                break;
             }
+            s_tx_head = (s_tx_head + 1) % MSG_QUEUE_SIZE;
+            --s_tx_count;
+            entry = nullptr;
         }
     }
-
     if (!entry) {
         return;
     }
 
-    // Validate frame format before sending
-    bool frame_valid = true;
-    if (entry->frame_len < 10) {
-        if (s_hw)
-            s_hw->PrintLine("DAISY: ERROR - Frame too short: %u bytes", (unsigned)entry->frame_len);
-        UART_LOGE("daisy_uart", "Frame too short: %u bytes", entry->frame_len);
-        frame_valid = false;
-    } else if (entry->frame[0] != 0xA5) {
-        if (s_hw)
-            s_hw->PrintLine("DAISY: ERROR - Frame start byte 0x%02X (expect 0xA5) len=%u",
-                            entry->frame[0],
-                            (unsigned)entry->frame_len);
-        UART_LOGE("daisy_uart", "Frame missing start byte! First byte: 0x%02X", entry->frame[0]);
-        // Dump frame for diagnosis
-        char hex_buf[128] = {0};
-        int hex_pos = 0;
-        for (size_t i = 0; i < std::min<size_t>(32, entry->frame_len) && hex_pos < 120; i++) {
-            hex_pos += snprintf(hex_buf + hex_pos, 120 - hex_pos, "%02X ", entry->frame[i]);
-        }
-        if (s_hw)
-            s_hw->PrintLine("DAISY: Frame hex: %s", hex_buf);
-        frame_valid = false;
-    } else if (entry->frame[entry->frame_len - 1] != 0x5A) {
-        if (s_hw)
-            s_hw->PrintLine("DAISY: ERROR - Frame end byte 0x%02X (expect 0x5A)",
-                            entry->frame[entry->frame_len - 1]);
-        UART_LOGE("daisy_uart",
-                  "Frame missing end byte! Last byte: 0x%02X",
-                  entry->frame[entry->frame_len - 1]);
-        frame_valid = false;
-    }
+    // DmaListen mode requires BlockingTransmit - DmaTransmit won't work
+    // while listening. The timeout is derived from the frame's own wire
+    // time (UartTxTimeoutMs): a fixed timeout shorter than the largest
+    // frame's wire time made that frame deterministically un-sendable
+    // (docs/dma-timing-review-2026-07-03.md Finding 2). Worst case: a
+    // max-size frame blocks ~13 ms - slightly over the §7.1.4 ~10 ms
+    // guideline, the honest interim tradeoff until TX moves to DMA.
+    auto res =
+        s_uart.BlockingTransmit(entry->frame,
+                                entry->frame_len,
+                                UartTxTimeoutMs(entry->frame_len, WAVEX_DAISY_UART_INTER_BAUD));
 
-    if (!frame_valid) {
+    if (res == daisy::UartHandler::Result::OK) {
+        s_stats.packets_sent++;
+        UART_LOGI("daisy_uart", "TX complete OK (seq=%u len=%u)", entry->seq, entry->frame_len);
+        first_fail_ms = 0;
+        daisy::ScopedIrqBlocker lock;
+        entry->pending = false;
+        s_tx_head = (s_tx_head + 1) % MSG_QUEUE_SIZE;
+        if (s_tx_count > 0) {
+            --s_tx_count;
+        }
+    } else {
         s_stats.tx_errors++;
-        // Mark entry as done and advance queue
-        {
+        UART_LOGE("daisy_uart", "TX FAILED result=%d seq=%u - will retry", (int)res, entry->seq);
+        const uint32_t now = daisy::System::GetNow();
+        if (first_fail_ms == 0) {
+            first_fail_ms = now;
+        } else if (now - first_fail_ms > 1000) {
+            UART_LOGE(
+                "daisy_uart", "TX gave up after 1s of failures - dropping seq=%u", entry->seq);
+            first_fail_ms = 0;
             daisy::ScopedIrqBlocker lock;
             entry->pending = false;
-            s_tx_inflight = nullptr;
             s_tx_head = (s_tx_head + 1) % MSG_QUEUE_SIZE;
             if (s_tx_count > 0) {
                 --s_tx_count;
-            }
-        }
-    } else {
-        // DmaListen mode requires BlockingTransmit - DmaTransmit won't work
-        // while listening. The timeout is derived from the frame's own wire
-        // time (UartTxTimeoutMs): the old fixed 10ms was SHORTER than a max
-        // frame's 10.29ms wire time at 2 Mbaud, so frames >= ~1990 bytes
-        // deterministically timed out mid-frame - spraying a truncated frame
-        // at the peer and retrying the whole frame every main-loop pass
-        // until the 1s stuck-TX force-clear dropped it, starving the audio
-        // pump throughout (review Finding 2). Worst case now: a max-size
-        // frame blocks ~13ms - slightly over the §7.1.4 ~10ms guideline,
-        // the honest interim tradeoff until TX moves to DMA; typical frames
-        // (browse pages ~1.3KB, wave chunks) stay well under 10ms. The
-        // 500ms/1000ms stuck-TX recovery remains for genuine peer-dead
-        // failures.
-        UART_LOGI("daisy_uart",
-                  "TX frame: len=%u seq=%u starting blocking transmission",
-                  entry->frame_len,
-                  entry->seq);
-        auto res =
-            s_uart.BlockingTransmit(entry->frame,
-                                    entry->frame_len,
-                                    UartTxTimeoutMs(entry->frame_len, WAVEX_DAISY_UART_INTER_BAUD));
-
-        if (res == daisy::UartHandler::Result::OK) {
-            // Transmission successful - immediately clean up and advance queue
-            s_stats.packets_sent++;
-            UART_LOGI("daisy_uart", "TX complete OK (seq=%u len=%u)", entry->seq, entry->frame_len);
-
-            // Advance queue
-            {
-                daisy::ScopedIrqBlocker lock;
-                entry->pending = false;
-                s_tx_inflight = nullptr;
-                s_tx_head = (s_tx_head + 1) % MSG_QUEUE_SIZE;
-                if (s_tx_count > 0) {
-                    --s_tx_count;
-                }
-            }
-            // Reset timeout tracking on success
-            tx_start_time = 0;
-            tx_timeout_logged = false;
-        } else {
-            s_stats.tx_errors++;
-            UART_LOGE("daisy_uart", "TX FAILED result=%d", (int)res);
-            if (s_hw)
-                s_hw->PrintLine("DAISY: TX FAILED result=%d seq=%u", (int)res, entry->seq);
-
-            // Track timeout for stuck transmissions
-            uint32_t now = daisy::System::GetNow();
-            if (tx_start_time == 0) {
-                tx_start_time = now;
-                tx_timeout_logged = false;
-            } else if ((now - tx_start_time) > 1000 && !tx_timeout_logged) {
-                // After 1 second of consecutive failures, forcefully clear
-                UART_LOGE("daisy_uart", "TX stuck for 1s - forcefully advancing queue");
-                tx_timeout_logged = true;
-
-                {
-                    daisy::ScopedIrqBlocker lock;
-                    entry->pending = false;
-                    s_tx_inflight = nullptr;
-                    s_tx_head = (s_tx_head + 1) % MSG_QUEUE_SIZE;
-                    if (s_tx_count > 0) {
-                        --s_tx_count;
-                    }
-                    tx_start_time = 0;
-                }
             }
         }
     }
@@ -584,7 +355,7 @@ void stop_dma_listener() {
     // Clear buffers after stopping
     std::memset(s_uart_rx_dma, 0, RX_BUFFER_SIZE);
     s_rx_pending_len = 0;
-    s_frame_len = 0;
+    s_scanner.Clear();
 }
 
 void reset_uart_dma_listener() {
@@ -622,11 +393,10 @@ void UartLinkInit(daisy::DaisySeed* hw) {
     std::memset(&s_stats, 0, sizeof(s_stats));
     s_next_sequence = 1;
     s_rx_pending_len = 0;
-    s_frame_len = 0;
+    s_scanner.Clear();
     s_tx_head = 0;
     s_tx_tail = 0;
     s_tx_count = 0;
-    s_tx_inflight = nullptr;
     s_hw = hw;  // Store the hw pointer
 
     s_initialized = true;
@@ -768,7 +538,7 @@ void UartLinkProcess() {
     // Detect frame buffer stuck in error state
     // If frame_len is zero repeatedly but DMA is still receiving data (s_rx_pending_len > 0),
     // the parser is unable to extract valid frames
-    if (s_frame_len == 0 && s_rx_pending_len > 0) {
+    if (s_scanner.Buffered() == 0 && s_rx_pending_len > 0) {
         consecutive_parse_failures++;
         if (consecutive_parse_failures > 50 && (now - last_error_recovery > 2000)) {
             if (s_hw)
@@ -791,9 +561,9 @@ void UartLinkProcess() {
     if (now - last_log > 1000) {  // Log every 1 second
         if (s_hw)
             s_hw->PrintLine(
-                "DAISY: UartLinkProcess() executed (s_rx_pending_len=%u s_tx_count=%d "
+                "DAISY: UartLinkProcess() executed (buffered=%u s_tx_count=%d "
                 "dma_listening=%d)",
-                (unsigned)s_rx_pending_len,
+                (unsigned)s_scanner.Buffered(),
                 s_tx_count,
                 s_dma_listening);
         last_log = now;

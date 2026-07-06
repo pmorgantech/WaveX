@@ -31,6 +31,23 @@ versioning and release process.
   never set). The message id stays reserved in `protocol.h`; the dispatcher
   logs and ignores it.
 
+### Changed — shared UART frame scanner; TX failures retry (review §6.2/M6)
+
+- Both links' RX byte-stream scanning (start-byte search, length/CRC
+  validation, resync, overflow and no-start-byte drain policy) now lives in
+  one shared, host-tested class (`firmware/shared/uart_protocol/
+  frame_scanner.hpp`, 9 tests including the H2 wedge regression). The two
+  hand-rolled copies had already diverged once with real consequences (H2
+  existed only on the Daisy). New behavior for both sides: a start byte
+  with an impossible length field resyncs immediately instead of stalling
+  the stream until buffer overflow.
+- Daisy TX (review M6): a failed `BlockingTransmit` now retries on every
+  main-loop pass (bounded by a 1 s per-frame give-up) instead of
+  head-blocking the queue for a second and dropping the frame without one
+  retransmit attempt. The `s_tx_inflight` stuck-transmission machinery —
+  built for an async-TX design that no longer exists — and the 30-line
+  validate-our-own-frame block are deleted.
+
 ### Fixed — sample-memory stats and handle semantics (review M8)
 
 - `SampleMemMgr` stats now cover both pools: `in_use_bytes`,

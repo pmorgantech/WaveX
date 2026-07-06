@@ -12,6 +12,7 @@
 #include "freertos/task.h"
 
 #include "../../shared/spi_protocol/sequence_tracker.hpp"
+#include "../../shared/uart_protocol/frame_scanner.hpp"
 #include <algorithm>
 #include <cstring>
 
@@ -64,8 +65,10 @@ static volatile int s_msg_head = 0;
 static volatile int s_msg_tail = 0;
 static volatile int s_msg_count = 0;
 
-static uint8_t s_rx_pending[RX_PENDING_CAPACITY];
-static size_t s_rx_pending_len = 0;
+// RX frame extraction: shared scan/consume policy (frame_scanner.hpp,
+// review P3.14) over caller-provided storage. Only uart_task touches it.
+static uint8_t s_rx_storage[RX_PENDING_CAPACITY];
+static WaveX::UartProtocol::FrameScanner s_scanner(s_rx_storage, sizeof(s_rx_storage));
 
 static volatile bool s_uart_running = false;
 static uint16_t s_next_sequence = 1;
@@ -91,105 +94,29 @@ static WaveX::Comm::PacketRouter& GetRouter() {
 }
 
 void append_rx_data(const uint8_t* data, size_t len) {
-    if (!data || len == 0) {
-        return;
+    WaveX::UartProtocol::ScanStats append_stats{};
+    size_t dropped = s_scanner.Append(data, len, append_stats);
+    if (dropped > 0) {
+        s_stats.queue_overflows++;
+        UART_LOGW(TAG, "RX buffer overflow - dropped %u oldest bytes", (unsigned)dropped);
     }
-
-    if (s_rx_pending_len + len > RX_PENDING_CAPACITY) {
-        // Buffer overflowing - log it
-        UART_LOGW(TAG,
-                  "RX buffer overflow! pending=%u + new=%u > capacity=%u",
-                  (unsigned)s_rx_pending_len,
-                  (unsigned)len,
-                  (unsigned)RX_PENDING_CAPACITY);
-        size_t to_drop = (s_rx_pending_len + len) - RX_PENDING_CAPACITY;
-
-        // Shift down to make room
-        if (to_drop >= s_rx_pending_len) {
-            s_rx_pending_len = 0;
-        } else {
-            std::memmove(s_rx_pending, s_rx_pending + to_drop, s_rx_pending_len - to_drop);
-            s_rx_pending_len -= to_drop;
-        }
-    }
-
-    std::memcpy(s_rx_pending + s_rx_pending_len, data, len);
-    s_rx_pending_len += len;
-
-    // Log first byte of new data to diagnose alignment
-    if (s_rx_pending_len - len == 0) {
-        // This is the first data we received
-        UART_LOGI(TAG, "First data: starts with 0x%02X (expect 0xA5)", data[0]);
-    }
-}
-
-void consume_pending_bytes(size_t count) {
-    if (count == 0 || count > s_rx_pending_len) {
-        s_rx_pending_len = 0;
-        return;
-    }
-
-    size_t remaining = s_rx_pending_len - count;
-    if (remaining > 0) {
-        std::memmove(s_rx_pending, s_rx_pending + count, remaining);
-    }
-    s_rx_pending_len = remaining;
 }
 
 void process_rx_frames() {
-    size_t offset = 0;
+    WaveX::UartProtocol::ScanStats scan{};
+    s_scanner.Scan(
+        [&](const uint8_t* frame, size_t frame_len) {
+            uint8_t msg_type;
+            uint8_t flags;
+            uint16_t seq;
+            uint8_t payload[UART_MAX_PAYLOAD];
+            size_t payload_len = sizeof(payload);  // in: capacity, out: bytes copied
 
-    while (s_rx_pending_len - offset >= UART_FRAME_OVERHEAD) {
-        int start = FindFrameStart(s_rx_pending + offset, s_rx_pending_len - offset);
-        if (start < 0) {
-            // No start byte found - dump the problematic data
-            UART_LOGW(
-                TAG, "No frame start found in %u bytes", (unsigned)(s_rx_pending_len - offset));
-            // Dump first 32 bytes for analysis
-            char hex_str[128];
-            snprintf(hex_str, sizeof(hex_str), "RX bytes: ");
-            for (size_t i = 0; i < std::min<size_t>(32, s_rx_pending_len); i++) {
-                snprintf(hex_str + strlen(hex_str),
-                         sizeof(hex_str) - strlen(hex_str),
-                         "%02X ",
-                         s_rx_pending[i]);
+            if (!ParseUartPacket(frame, frame_len, msg_type, payload, payload_len, seq, flags)) {
+                s_stats.crc_errors++;
+                UART_LOGE(TAG, "Failed to parse UART packet (len=%d)", static_cast<int>(frame_len));
+                return;
             }
-            ESP_LOGW(TAG, "%s", hex_str);
-
-            size_t guard = std::min<size_t>(s_rx_pending_len, UART_FRAME_OVERHEAD - 1);
-            if (guard < s_rx_pending_len) {
-                consume_pending_bytes(s_rx_pending_len - guard);
-            }
-            return;
-        }
-
-        offset += static_cast<size_t>(start);
-
-        size_t available = s_rx_pending_len - offset;
-        size_t frame_len = GetFrameLength(s_rx_pending + offset, available);
-        if (frame_len == 0 || frame_len > available) {
-            // Wait for more data
-            if (offset > 0) {
-                consume_pending_bytes(offset);
-            }
-            return;
-        }
-
-        const uint8_t* frame = s_rx_pending + offset;
-        if (!ValidateUartFrame(frame, frame_len)) {
-            UART_LOGE(TAG, "Invalid UART frame CRC (len=%d)", static_cast<int>(frame_len));
-            s_stats.crc_errors++;
-            offset += 1;
-            continue;
-        }
-
-        uint8_t msg_type;
-        uint8_t flags;
-        uint16_t seq;
-        uint8_t payload[UART_MAX_PAYLOAD];
-        size_t payload_len = sizeof(payload);  // in: capacity, out: bytes copied
-
-        if (ParseUartPacket(frame, frame_len, msg_type, payload, payload_len, seq, flags)) {
             s_stats.packets_received++;
             UART_LOGI(TAG,
                       "RX msg=0x%02X len=%d seq=%u flags=0x%02X",
@@ -213,8 +140,7 @@ void process_rx_frames() {
                               ? "duplicate"
                               : "out-of-order",
                           s_rx_seq.ExpectedSeq());
-                offset += frame_len;
-                continue;
+                return;
             }
             if (seq_result == WaveX::Protocol::SequenceTracker::Result::ResyncAccept) {
                 s_stats.seq_resyncs++;
@@ -223,17 +149,11 @@ void process_rx_frames() {
 
             GetRouter().route_uart_message(
                 msg_type, payload_len ? payload : nullptr, payload_len, flags, seq);
-        } else {
-            s_stats.crc_errors++;
-            UART_LOGE(TAG, "Failed to parse UART packet (len=%d)", static_cast<int>(frame_len));
-        }
+        },
+        scan);
 
-        offset += frame_len;
-    }
-
-    if (offset > 0) {
-        consume_pending_bytes(offset);
-    }
+    s_stats.crc_errors += scan.crc_errors;
+    s_stats.frame_sync_errors += scan.sync_errors;
 }
 
 bool dequeue_tx_entry(uart_msg_entry_t& out_entry) {
@@ -263,7 +183,7 @@ bool dequeue_tx_entry(uart_msg_entry_t& out_entry) {
     return has_entry;
 }
 
-// Drain everything currently in the driver ring into s_rx_pending. Events
+// Drain everything currently in the driver ring into the scanner. Events
 // only fire on NEW rx activity: bytes left in the ring after a partial read
 // generate no further UART_DATA event until more data arrives, so anything
 // not drained here would sit unread indefinitely (review Finding 9).
@@ -307,7 +227,7 @@ void uart_task(void* /*param*/) {
                     UART_LOGE(TAG, "UART overflow (%d), flushing", static_cast<int>(event.type));
                     uart_flush_input(WAVEX_ESP_UART_INTER_NUM);
                     xQueueReset(s_uart_event_queue);
-                    s_rx_pending_len = 0;
+                    s_scanner.Clear();
                     s_stats.queue_overflows++;
                     break;
                 case UART_BREAK:
@@ -433,7 +353,7 @@ esp_err_t uart_link_init(void) {
     s_uart_running = true;
     s_stats = uart_stats_t{};
     s_next_sequence = 1;
-    s_rx_pending_len = 0;
+    s_scanner.Clear();
     s_msg_head = 0;
     s_msg_tail = 0;
     s_msg_count = 0;
