@@ -47,3 +47,9 @@ graphify-out/
 **/examples/
 **/fixtures/
 .specstory/
+
+# Vendored/third-party code: exclude from the graph - 8k vendored files
+# drown the ~110 first-party ones (64k nodes vs ~7k; code review §8)
+firmware/daisy/libs/
+firmware/esp32/managed_components/
+firmware/shared/tests/_deps/

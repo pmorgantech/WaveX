@@ -10,7 +10,9 @@ unset OPENAI_API_KEY OPENAI_BASE_URL OPENAI_MODEL
 unset ANTHROPIC_API_KEY ANTHROPIC_MODEL
 unset GEMINI_API_KEY GOOGLE_API_KEY GOOGLE_MODEL
 
-graphify update --no-viz .
+# graphify >= 0.8.x: update takes no --no-viz (viz is skipped
+# automatically above the node limit)
+graphify update .
 
 echo
 echo "Graph updated:"

@@ -31,6 +31,18 @@ versioning and release process.
   never set). The message id stays reserved in `protocol.h`; the dispatcher
   logs and ignores it.
 
+### Changed (Tooling/Repo hygiene, review §8)
+
+- Untracked five stale committed binaries (`firmware/daisy/tests/lib/*.a`,
+  `libwavex_test_lib.a` — obsolete since the vendored-source GoogleTest
+  switch) and added `*.a` to `.gitignore`; removed `protocol.o` and an empty
+  `node_modules/` from the repo root.
+- `scripts/graphify-refresh.sh` works again with graphify 0.8.x (`update`
+  no longer takes `--no-viz`), and `.graphifyignore` now excludes vendored
+  code (libDaisy, DaisySP, managed components, vendored GoogleTest) so the
+  graph is first-party signal (~7k nodes) instead of 64k mostly-vendor
+  nodes. Pre-commit format hooks also exclude `firmware/**/_deps/`.
+
 ### Changed — hot-path logging gated (review M5/M11)
 
 - Daisy no longer logs unconditionally on hot paths: the per-received-frame

@@ -6,6 +6,7 @@ out/
 Debug/
 Release/
 *.o
+*.a
 *.obj
 *.elf
 *.bin
