@@ -135,6 +135,14 @@ function(add_wavex_test test_source)
         )
     endif()
 
+    # instrument.hpp is header-only and HAL-free (zone model + resolution over
+    # voice_manager.hpp's VoiceTriggerParams, no daisy_seed.h include).
+    if(test_name STREQUAL "instrument_test")
+        target_sources(${test_name} PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/../src/audio/instrument.hpp
+        )
+    endif()
+
     # sequencer_scheduler.hpp (+ pattern.hpp) is header-only and HAL-free
     # (plain arithmetic, no daisy_seed.h include) - safe to compile
     # directly on host.

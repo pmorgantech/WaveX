@@ -25,6 +25,7 @@ set(FIRMWARE_SOURCES
     src/metrics/metrics.cpp
     src/audio/output_sink.hpp
     src/audio/voice_manager.hpp
+    src/audio/instrument.hpp
     src/audio/envelope.hpp
     src/audio/one_pole_filter.hpp
     src/cv/cv_cal.hpp

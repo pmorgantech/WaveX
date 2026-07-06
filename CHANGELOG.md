@@ -11,6 +11,29 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Added — Instrument model core (Phase 2.5 stage 1)
+
+- `firmware/daisy/src/audio/instrument.hpp` per `instrument-model.md` §2-3:
+  the E-mu-lineage `Zone` / `Instrument` / `InstrumentBank` keymap model and
+  `ResolveNoteOn()`, which turns an incoming note into up to
+  `kMaxLayerTriggers` `VoiceTriggerParams` ready for `VoiceManager::Trigger`.
+  HAL-free — sample bytes are looked up through a caller-supplied
+  `SampleResolver` (function pointer + context, no `std::function`), so zone
+  key/velocity matching, velocity switch/layer/crossfade, coarse+fine tuning
+  fold (`TuneRatio` → `pitch_ratio_mul`), zone gain (→ `gain_mul`), choke
+  group, region/loop, and drum-vs-keyboard note handling are all testable
+  without SDRAM or the audio HAL. A kit is a drum-mode instrument
+  (`instrument-model.md` §8), so the Phase 2 sequencer's per-track sample
+  lookup resolves through exactly this path once wired.
+- 18 host tests (`instrument_test.cpp`): range matching, velocity
+  switch/layer, layer cap, unresolved-sample skip, drum root-forcing,
+  tune/gain/region flow-through, both crossfade directions, and bank slot
+  routing. Host tests green; `instrument.hpp` ARM-compiles clean.
+- Not yet wired: the sample table that populates a `SampleResolver` from
+  loaded WAVs (stage 4) and the callback note path calling `ResolveNoteOn`
+  (replaces the item-8 stopgap) land next, together enabling audible
+  sequencer/kit playback.
+
 ### Added — Voice manager extensions for the instrument model (Phase 2.5 stage 2)
 
 - `voice_manager.hpp` per `instrument-model.md` §3/§10: `Voice` gains `slot`
