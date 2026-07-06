@@ -58,6 +58,10 @@ struct WaveXPacket {           // packed
 | MSG_SAMPLE_STATUS | 0x34 | D→E | `SampleStatusMessage{sample_id, state, ch, rate, frames}` | playback/load notifications (state 0x10 = load complete) |
 | MSG_SAMPLE_PLAY_INDEX_REQ | 0x36 | E→D | `SamplePlayIndexMessage{index}` | audition by directory index |
 | MSG_SAMPLE_GET_PATH_REQ / RESP | 0x37/0x38 | E→D / D→E | index / `SamplePathResponseMessage{index, path[200]}` | resolve index → full path |
+| MSG_CV_CAL_SET | 0x40 | E→D | `CvCalMessage{group, persist, 7×float}` | apply one group's CV calibration; `persist=1` also writes the table to SD; Daisy replies with MSG_CV_CAL_RESP |
+| MSG_CV_CAL_GET | 0x41 | E→D | `CvCalGetMessage{group}` | request one group's calibration |
+| MSG_CV_CAL_RESP | 0x42 | D→E | `CvCalMessage` (persist unused) | reply to SET and GET |
+| MSG_CV_TEST | 0x43 | E→D | `CvTestMessage{group, enable, cutoff, resonance, vca}` | calibration procedure: while enabled, the control tick stages these fixed CVs instead of the paraphonic law |
 | MSG_ERROR | 0xFF | both | `ErrorMessage{code, msg[48]}` | error report |
 
 ## 4. Conventions & invariants

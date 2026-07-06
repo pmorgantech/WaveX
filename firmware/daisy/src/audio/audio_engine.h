@@ -67,6 +67,13 @@ void CheckAndLogUnderruns();
 // write for CV values staged at the control tick. Main-loop only.
 void FlushCv();
 
+// CV calibration workflow (item 5 stage 4) - main-loop message handlers.
+void OnCvCalSet(const WaveX::Protocol::CvCalMessage& m);
+void OnCvCalGet(const WaveX::Protocol::CvCalGetMessage& m);
+void OnCvTest(const WaveX::Protocol::CvTestMessage& m);
+// Load the persisted calibration table (call once at boot, after SD mount).
+void LoadCvCalFromSd();
+
 // Sample audition control (for Sample Load/Save page)
 bool AuditionSample(const char* path);
 void StopAudition();

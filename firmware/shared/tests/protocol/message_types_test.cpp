@@ -672,3 +672,53 @@ TEST_F(MessageTypeTest, CreateWaveXPacketRejectsPayloadBeyondLargestClass) {
         EXPECT_EQ(created, 0u) << "payload_size=" << oversize;
     }
 }
+
+// CV calibration messages (Stage A analog path, item 5 stage 4).
+TEST_F(MessageTypeTest, CvCalMessage) {
+    CvCalMessage original(3, 1, 1.1f, -0.05f, 0.9f, 0.02f, 1.05f, -0.01f, 2.7f);
+
+    size_t created = ProtocolHandler::CreatePacket(
+        buffer_.data(), buffer_.size(), MSG_CV_CAL_SET, &original, sizeof(original));
+    ASSERT_GT(created, 0u);
+    EXPECT_TRUE(ProtocolHandler::ValidatePacket(buffer_.data(), created));
+
+    CvCalMessage parsed;
+    ASSERT_TRUE(
+        ProtocolHandler::ParseMessage(buffer_.data(), MSG_CV_CAL_SET, &parsed, sizeof(parsed)));
+    EXPECT_EQ(parsed.group, 3);
+    EXPECT_EQ(parsed.persist, 1);
+    EXPECT_FLOAT_EQ(parsed.vcf_cut_gain, 1.1f);
+    EXPECT_FLOAT_EQ(parsed.vcf_cut_off, -0.05f);
+    EXPECT_FLOAT_EQ(parsed.vcf_q_gain, 0.9f);
+    EXPECT_FLOAT_EQ(parsed.vcf_q_off, 0.02f);
+    EXPECT_FLOAT_EQ(parsed.vca_gain, 1.05f);
+    EXPECT_FLOAT_EQ(parsed.vca_off, -0.01f);
+    EXPECT_FLOAT_EQ(parsed.cutoff_k, 2.7f);
+}
+
+TEST_F(MessageTypeTest, CvCalGetMessage) {
+    CvCalGetMessage original(5);
+    size_t created = ProtocolHandler::CreatePacket(
+        buffer_.data(), buffer_.size(), MSG_CV_CAL_GET, &original, sizeof(original));
+    ASSERT_GT(created, 0u);
+
+    CvCalGetMessage parsed;
+    ASSERT_TRUE(
+        ProtocolHandler::ParseMessage(buffer_.data(), MSG_CV_CAL_GET, &parsed, sizeof(parsed)));
+    EXPECT_EQ(parsed.group, 5);
+}
+
+TEST_F(MessageTypeTest, CvTestMessage) {
+    CvTestMessage original(0, 1, 0.75f, 0.25f, 1.0f);
+    size_t created = ProtocolHandler::CreatePacket(
+        buffer_.data(), buffer_.size(), MSG_CV_TEST, &original, sizeof(original));
+    ASSERT_GT(created, 0u);
+
+    CvTestMessage parsed;
+    ASSERT_TRUE(
+        ProtocolHandler::ParseMessage(buffer_.data(), MSG_CV_TEST, &parsed, sizeof(parsed)));
+    EXPECT_EQ(parsed.enable, 1);
+    EXPECT_FLOAT_EQ(parsed.cutoff, 0.75f);
+    EXPECT_FLOAT_EQ(parsed.resonance, 0.25f);
+    EXPECT_FLOAT_EQ(parsed.vca, 1.0f);
+}

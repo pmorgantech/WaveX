@@ -43,6 +43,9 @@ static void HandleSamplePlayIndexRequestMessage(const uint8_t* payload, size_t p
 static void HandleSampleGetPathRequestMessage(const uint8_t* payload, size_t payload_size);
 static void HandleSampleGetPathResponseMessage(const uint8_t* payload, size_t payload_size);
 static void HandleAckMessage(const uint8_t* payload, size_t payload_size);
+static void HandleCvCalSetMessage(const uint8_t* payload, size_t payload_size);
+static void HandleCvCalGetMessage(const uint8_t* payload, size_t payload_size);
+static void HandleCvTestMessage(const uint8_t* payload, size_t payload_size);
 static void HandleErrorMessage(const uint8_t* payload, size_t payload_size);
 
 // Message dispatcher - transport agnostic (works with both SPI and UART)
@@ -139,6 +142,15 @@ void ProcessInterMcuMessage(uint8_t msg_type,
             break;
         case MSG_ACK:
             HandleAckMessage(payload, payload_size);
+            break;
+        case MSG_CV_CAL_SET:
+            HandleCvCalSetMessage(payload, payload_size);
+            break;
+        case MSG_CV_CAL_GET:
+            HandleCvCalGetMessage(payload, payload_size);
+            break;
+        case MSG_CV_TEST:
+            HandleCvTestMessage(payload, payload_size);
             break;
         case MSG_ERROR:
             HandleErrorMessage(payload, payload_size);
@@ -380,6 +392,43 @@ static void HandleSamplePlayIndexRequestMessage(const uint8_t* payload, size_t p
 static void HandleSampleGetPathRequestMessage(const uint8_t* payload, size_t payload_size) {}
 
 static void HandleSampleGetPathResponseMessage(const uint8_t* payload, size_t payload_size) {}
+
+// CV calibration workflow (item 5 stage 4) - same validate-and-dispatch
+// shape as the note handlers; pinned by message_dispatch_test.
+static void HandleCvCalSetMessage(const uint8_t* payload, size_t payload_size) {
+    if (!payload || payload_size < sizeof(WaveX::Protocol::CvCalMessage)) {
+        UART_LOGE("daisy_msg", "CV_CAL_SET payload too small (%d)", (int)payload_size);
+        return;
+    }
+#if WAVEX_AUDIO_ENGINE_ENABLED
+    WaveX::Protocol::CvCalMessage msg;
+    memcpy(&msg, payload, sizeof(msg));  // float fields: byte-aligned payload
+    WaveX::AudioEngine::OnCvCalSet(msg);
+#endif
+}
+
+static void HandleCvCalGetMessage(const uint8_t* payload, size_t payload_size) {
+    if (!payload || payload_size < sizeof(WaveX::Protocol::CvCalGetMessage)) {
+        UART_LOGE("daisy_msg", "CV_CAL_GET payload too small (%d)", (int)payload_size);
+        return;
+    }
+#if WAVEX_AUDIO_ENGINE_ENABLED
+    const auto* msg = reinterpret_cast<const WaveX::Protocol::CvCalGetMessage*>(payload);
+    WaveX::AudioEngine::OnCvCalGet(*msg);
+#endif
+}
+
+static void HandleCvTestMessage(const uint8_t* payload, size_t payload_size) {
+    if (!payload || payload_size < sizeof(WaveX::Protocol::CvTestMessage)) {
+        UART_LOGE("daisy_msg", "CV_TEST payload too small (%d)", (int)payload_size);
+        return;
+    }
+#if WAVEX_AUDIO_ENGINE_ENABLED
+    WaveX::Protocol::CvTestMessage msg;
+    memcpy(&msg, payload, sizeof(msg));  // float fields: byte-aligned payload
+    WaveX::AudioEngine::OnCvTest(msg);
+#endif
+}
 
 static void HandleAckMessage(const uint8_t* payload, size_t payload_size) {}
 

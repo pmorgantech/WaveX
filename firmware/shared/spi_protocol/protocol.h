@@ -87,6 +87,11 @@ enum MessageType : uint8_t {
     MSG_SAMPLE_PLAY_INDEX_REQ = 0x36,  // Play sample by index
     MSG_SAMPLE_GET_PATH_REQ = 0x37,    // Get full path for index
     MSG_SAMPLE_GET_PATH_RESP = 0x38,   // Full path response
+    // CV calibration (Stage A analog path - analog-voice-board.md §3)
+    MSG_CV_CAL_SET = 0x40,   // ESP32 -> Daisy: apply (and optionally persist) one group's cal
+    MSG_CV_CAL_GET = 0x41,   // ESP32 -> Daisy: request one group's cal
+    MSG_CV_CAL_RESP = 0x42,  // Daisy -> ESP32: one group's cal (reply to SET and GET)
+    MSG_CV_TEST = 0x43,      // ESP32 -> Daisy: override CVs with fixed values (cal procedure)
     MSG_ERROR = 0xFF
 };
 
@@ -530,6 +535,85 @@ struct SampleMemStatusMessage {
         entries[sample_count++] = entry;
         return true;
     }
+} __attribute__((packed));
+
+// CV calibration for one analog group (Stage A/B - mirrors CvCal in
+// firmware/daisy/src/cv/cv_cal.hpp; see analog-voice-board.md §3).
+// Used by MSG_CV_CAL_SET (E->D) and MSG_CV_CAL_RESP (D->E).
+struct CvCalMessage {
+    uint8_t group;        // 0..WAVEX_ANALOG_CV_GROUPS_MAX-1
+    uint8_t persist;      // SET only: 1 = also write the table to SD
+    uint8_t reserved[2];  // alignment/future
+    float vcf_cut_gain;
+    float vcf_cut_off;
+    float vcf_q_gain;
+    float vcf_q_off;
+    float vca_gain;
+    float vca_off;
+    float cutoff_k;  // exponential cutoff-shaping curvature
+
+    CvCalMessage()
+        : group(0),
+          persist(0),
+          reserved{0, 0},
+          vcf_cut_gain(1.0f),
+          vcf_cut_off(0.0f),
+          vcf_q_gain(1.0f),
+          vcf_q_off(0.0f),
+          vca_gain(1.0f),
+          vca_off(0.0f),
+          cutoff_k(3.0f) {}
+    CvCalMessage(uint8_t group_,
+                 uint8_t persist_,
+                 float vcf_cut_gain_,
+                 float vcf_cut_off_,
+                 float vcf_q_gain_,
+                 float vcf_q_off_,
+                 float vca_gain_,
+                 float vca_off_,
+                 float cutoff_k_)
+        : group(group_),
+          persist(persist_),
+          reserved{0, 0},
+          vcf_cut_gain(vcf_cut_gain_),
+          vcf_cut_off(vcf_cut_off_),
+          vcf_q_gain(vcf_q_gain_),
+          vcf_q_off(vcf_q_off_),
+          vca_gain(vca_gain_),
+          vca_off(vca_off_),
+          cutoff_k(cutoff_k_) {}
+} __attribute__((packed));
+
+// Request one group's calibration (MSG_CV_CAL_GET, E->D).
+struct CvCalGetMessage {
+    uint8_t group;
+    uint8_t reserved[3];
+
+    CvCalGetMessage() : group(0), reserved{0, 0, 0} {}
+    explicit CvCalGetMessage(uint8_t group_) : group(group_), reserved{0, 0, 0} {}
+} __attribute__((packed));
+
+// Calibration-procedure CV override (MSG_CV_TEST, E->D): while enabled the
+// control tick stages these fixed values instead of the paraphonic law, so
+// the user can measure corner frequencies / verify VCA silence with a
+// steady CV. Disable returns control to the envelope.
+struct CvTestMessage {
+    uint8_t group;
+    uint8_t enable;  // 1 = override active, 0 = back to the paraphonic law
+    uint8_t reserved[2];
+    float cutoff;     // 0..1 pre-calibration control values
+    float resonance;  // 0..1
+    float vca;        // 0..1
+
+    CvTestMessage()
+        : group(0), enable(0), reserved{0, 0}, cutoff(0.0f), resonance(0.0f), vca(0.0f) {}
+    CvTestMessage(uint8_t group_, uint8_t enable_, float cutoff_, float resonance_, float vca_)
+        : group(group_),
+          enable(enable_),
+          reserved{0, 0},
+          cutoff(cutoff_),
+          resonance(resonance_),
+          vca(vca_) {}
 } __attribute__((packed));
 
 // Legacy packet structures completely removed - using new simplified format only

@@ -83,6 +83,18 @@ void OnSampleLoad(const WaveX::Protocol::SampleLoadMessage& m) {
     WaveX::Test::GetDispatchRecord().sample_loads.push_back(m);
 }
 
+void OnCvCalSet(const WaveX::Protocol::CvCalMessage& m) {
+    WaveX::Test::GetDispatchRecord().cv_cal_sets.push_back(m);
+}
+
+void OnCvCalGet(const WaveX::Protocol::CvCalGetMessage& m) {
+    WaveX::Test::GetDispatchRecord().cv_cal_gets.push_back(m.group);
+}
+
+void OnCvTest(const WaveX::Protocol::CvTestMessage& m) {
+    WaveX::Test::GetDispatchRecord().cv_tests.push_back(m);
+}
+
 void GetSampleMemStatus(WaveX::Protocol::SampleMemStatusMessage& out) {
     out = WaveX::Protocol::SampleMemStatusMessage();
     WaveX::Test::GetDispatchRecord().get_sample_mem_status_calls++;

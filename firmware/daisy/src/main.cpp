@@ -153,6 +153,12 @@ int main(void) {
     // Initialize DSP objects
     InitDSP();
     WAVEX_LOG_DAISY(AUDIO_ENGINE, "DSP objects initialized");
+
+    // Load the persisted CV calibration table (item 5 stage 4) - after
+    // SD mount and engine init, before audio starts flushing CVs.
+    if (sd_available) {
+        WaveX::AudioEngine::LoadCvCalFromSd();
+    }
 #else
     WAVEX_LOG_DAISY(AUDIO_ENGINE, "Audio engine disabled (WAVEX_AUDIO_ENGINE_ENABLED = 0)");
 #endif

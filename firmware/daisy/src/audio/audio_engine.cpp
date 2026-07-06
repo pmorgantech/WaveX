@@ -15,6 +15,7 @@
 #include "stm32h7xx_ll_cortex.h"  // For ARM atomic operations
 #include "sys/dma.h"              // For cache management
 
+#include "../cv/cv_cal_store.hpp"
 #include "../cv/cv_group_router.hpp"
 #include "../storage/fatfs_wav_reader.hpp"
 #include "../timebase.hpp"
@@ -119,6 +120,20 @@ static ParaphonicParams s_para_params;
 
 // Set by the tick after staging fresh CV values; consumed by FlushCv().
 static volatile bool s_cv_dirty = false;
+
+// Calibration-procedure CV override (MSG_CV_TEST): while active the tick
+// stages these fixed control values instead of the paraphonic law, so the
+// user can measure corner frequencies / verify VCA silence with a steady
+// CV. Main-loop writes, tick reads (same per-field atomicity contract as
+// s_para_params).
+static volatile bool s_cv_test_active = false;
+static uint8_t s_cv_test_group = 0;
+static float s_cv_test_cutoff = 0.0f;
+static float s_cv_test_res = 0.0f;
+static float s_cv_test_vca = 0.0f;
+
+// Dedicated FIL for the calibration table (main-loop file I/O only).
+static FIL s_cvcal_file;
 
 // --- MIDI note-event handoff (roadmap Phase 1 item 8) ---
 // Voice state must only be touched from one context: Trigger()/Release()
@@ -1037,9 +1052,14 @@ void Callback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t
         // previous tick - benign, self-corrects on the next flush.
         const bool any_held = s_voice_manager.HeldVoiceCount() > 0;
         const float env = s_para_env.Tick(any_note_on, any_held);
-        const float cutoff =
-            CvClamp01(s_para_params.cutoff_base + s_para_params.env_to_cutoff * env);
-        s_cv_router.QueueVoice(0, cutoff, s_para_params.resonance, env);
+        if (s_cv_test_active) {
+            // Calibration override: steady, user-commanded CVs.
+            s_cv_router.QueueVoice(s_cv_test_group, s_cv_test_cutoff, s_cv_test_res, s_cv_test_vca);
+        } else {
+            const float cutoff =
+                CvClamp01(s_para_params.cutoff_base + s_para_params.env_to_cutoff * env);
+            s_cv_router.QueueVoice(0, cutoff, s_para_params.resonance, env);
+        }
         __atomic_store_n(&s_cv_dirty, true, __ATOMIC_RELEASE);
     });
 
@@ -1095,6 +1115,90 @@ void OnControlChange(const ControlChangeMessage& ctrl_msg) {
             // the level control; a global LFO is future work).
             break;
     }
+}
+
+// --- CV calibration workflow (item 5 stage 4; analog-voice-board.md §3).
+// All main-loop message-handler context: SetGroupCal writes the backend's
+// cal table (read at the tick - float fields, same handoff contract as
+// s_para_params), SD I/O is blocking FatFS on the main loop.
+
+static void SendCvCalResp(uint8_t group) {
+    const CvCal& c = s_cv_backend.GroupCal(group);
+    CvCalMessage resp(group,
+                      0,
+                      c.vcf_cut_gain,
+                      c.vcf_cut_off,
+                      c.vcf_q_gain,
+                      c.vcf_q_off,
+                      c.vca_gain,
+                      c.vca_off,
+                      c.cutoff_k);
+    WaveX::Comm::UartLinkSend(WaveX::Protocol::MSG_CV_CAL_RESP, &resp, sizeof(resp));
+}
+
+void OnCvCalSet(const CvCalMessage& m) {
+    if (m.group >= WAVEX_ANALOG_CV_GROUPS_MAX) {
+        if (s_hw)
+            s_hw->PrintLine("CV CAL: group %u out of range", (unsigned)m.group);
+        return;
+    }
+    CvCal cal;
+    cal.vcf_cut_gain = m.vcf_cut_gain;
+    cal.vcf_cut_off = m.vcf_cut_off;
+    cal.vcf_q_gain = m.vcf_q_gain;
+    cal.vcf_q_off = m.vcf_q_off;
+    cal.vca_gain = m.vca_gain;
+    cal.vca_off = m.vca_off;
+    cal.cutoff_k = m.cutoff_k;
+    s_cv_backend.SetGroupCal(m.group, cal);
+
+    if (m.persist) {
+        CvCal table[WAVEX_ANALOG_CV_GROUPS_MAX];
+        for (uint8_t g = 0; g < WAVEX_ANALOG_CV_GROUPS_MAX; ++g) {
+            table[g] = s_cv_backend.GroupCal(g);
+        }
+        const bool saved = WaveX::Cv::SaveCvCalTable(s_cvcal_file, table);
+        if (s_hw)
+            s_hw->PrintLine(
+                "CV CAL: group %u applied, persist %s", (unsigned)m.group, saved ? "OK" : "FAILED");
+    }
+    SendCvCalResp(m.group);
+}
+
+void OnCvCalGet(const CvCalGetMessage& m) {
+    if (m.group >= WAVEX_ANALOG_CV_GROUPS_MAX) {
+        return;
+    }
+    SendCvCalResp(m.group);
+}
+
+void OnCvTest(const CvTestMessage& m) {
+    s_cv_test_group = m.group < WAVEX_ANALOG_CV_GROUPS_MAX ? m.group : 0;
+    s_cv_test_cutoff = m.cutoff;
+    s_cv_test_res = m.resonance;
+    s_cv_test_vca = m.vca;
+    // Write the flag last: once true, the tick may read the values above.
+    __atomic_store_n(&s_cv_test_active, m.enable != 0, __ATOMIC_RELEASE);
+    if (s_hw)
+        s_hw->PrintLine("CV TEST: %s (cut=%d res=%d vca=%d x1000)",
+                        m.enable ? "ON" : "off",
+                        (int)(m.cutoff * 1000),
+                        (int)(m.resonance * 1000),
+                        (int)(m.vca * 1000));
+}
+
+void LoadCvCalFromSd() {
+    CvCal table[WAVEX_ANALOG_CV_GROUPS_MAX];
+    if (!WaveX::Cv::LoadCvCalTable(s_cvcal_file, table)) {
+        if (s_hw)
+            s_hw->PrintLine("CV CAL: no stored table (using defaults)");
+        return;
+    }
+    for (uint8_t g = 0; g < WAVEX_ANALOG_CV_GROUPS_MAX; ++g) {
+        s_cv_backend.SetGroupCal(g, table[g]);
+    }
+    if (s_hw)
+        s_hw->PrintLine("CV CAL: table loaded from SD");
 }
 
 // Note-to-sample mapping policy for item 8: the most recently loaded

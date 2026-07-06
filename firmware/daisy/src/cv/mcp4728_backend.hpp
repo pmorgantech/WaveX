@@ -39,6 +39,9 @@ class Mcp4728Backend {
             cal_[group] = c;
     }
 
+    // Read-back for the calibration workflow (MSG_CV_CAL_GET / SD persist).
+    const CvCal& GroupCal(uint8_t group) const { return cal_[group < cal_.size() ? group : 0]; }
+
     // Callback-safe: only stages values into slot_.
     void QueueGroup(uint8_t group, float cutoff, float resonance, float vca) {
         if (group >= cal_.size())

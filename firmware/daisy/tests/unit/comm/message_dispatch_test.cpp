@@ -137,6 +137,41 @@ TEST_F(MessageDispatchTest, SampleStopReachesFilesystem) {
     ASSERT_EQ(GetDispatchRecord().stop_requests.size(), 1u);
 }
 
+TEST_F(MessageDispatchTest, CvCalSetReachesAudioEngine) {
+    CvCalMessage cal(2, 1, 1.1f, -0.05f, 0.9f, 0.02f, 1.05f, -0.01f, 2.7f);
+    Dispatch(MSG_CV_CAL_SET, cal);
+
+    ASSERT_EQ(GetDispatchRecord().cv_cal_sets.size(), 1u);
+    EXPECT_EQ(GetDispatchRecord().cv_cal_sets[0].group, 2);
+    EXPECT_EQ(GetDispatchRecord().cv_cal_sets[0].persist, 1);
+    EXPECT_FLOAT_EQ(GetDispatchRecord().cv_cal_sets[0].cutoff_k, 2.7f);
+}
+
+TEST_F(MessageDispatchTest, CvCalGetReachesAudioEngine) {
+    CvCalGetMessage get(4);
+    Dispatch(MSG_CV_CAL_GET, get);
+    ASSERT_EQ(GetDispatchRecord().cv_cal_gets.size(), 1u);
+    EXPECT_EQ(GetDispatchRecord().cv_cal_gets[0], 4);
+}
+
+TEST_F(MessageDispatchTest, CvTestReachesAudioEngine) {
+    CvTestMessage test(0, 1, 0.5f, 0.1f, 1.0f);
+    Dispatch(MSG_CV_TEST, test);
+    ASSERT_EQ(GetDispatchRecord().cv_tests.size(), 1u);
+    EXPECT_EQ(GetDispatchRecord().cv_tests[0].enable, 1);
+    EXPECT_FLOAT_EQ(GetDispatchRecord().cv_tests[0].vca, 1.0f);
+}
+
+TEST_F(MessageDispatchTest, TruncatedCvMessagesAreDropped) {
+    uint8_t small[2] = {0, 1};
+    ProcessInterMcuMessage(MSG_CV_CAL_SET, 1, small, sizeof(small));
+    ProcessInterMcuMessage(MSG_CV_CAL_GET, 2, small, 1);
+    ProcessInterMcuMessage(MSG_CV_TEST, 3, small, sizeof(small));
+    EXPECT_TRUE(GetDispatchRecord().cv_cal_sets.empty());
+    EXPECT_TRUE(GetDispatchRecord().cv_cal_gets.empty());
+    EXPECT_TRUE(GetDispatchRecord().cv_tests.empty());
+}
+
 // Truncated payloads must be rejected before touching the subsystem, for
 // every newly-wired handler (review H3's bug class, Daisy side).
 TEST_F(MessageDispatchTest, TruncatedPayloadsAreDroppedNotDispatched) {

@@ -28,6 +28,15 @@ versioning and release process.
   and the shared-envelope ADSR map onto the paraphonic path
   (`PARAM_MODULATION_MATRIX` temporarily carries env→cutoff depth).
   `Flush()` returns the transaction result through the CV backend concept.
+- CV calibration wire contract + Daisy workflow (item 5 stage 4): new
+  messages `MSG_CV_CAL_SET/GET/RESP` (`CvCalMessage`, mirrors `CvCal`) and
+  `MSG_CV_TEST` (steady CV override for the measurement procedure), with
+  round-trip tests and `inter-mcu-protocol.md` rows. The Daisy applies cal
+  to the CV backend (read-back via new `GroupCal()`), persists the full
+  8-group table to SD (`0:/wavex_cvcal.bin`, magic+version, format
+  documented in `cv_cal_store.hpp`), loads it at boot after SD mount, and
+  the control tick honors the CV-test override. Dispatcher routes pinned
+  by 4 new dispatch tests.
 - Outstanding for item 5: calibration workflow + UI page, and bench
   verification (CV-update-within-tick scope check, analog levels).
 
