@@ -46,6 +46,7 @@ include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/../spi_protocol
     ${CMAKE_CURRENT_SOURCE_DIR}/../uart_protocol
     ${CMAKE_CURRENT_SOURCE_DIR}/../wav
+    ${CMAKE_CURRENT_SOURCE_DIR}/..
     ${CMAKE_CURRENT_SOURCE_DIR}/utils
 )
 
@@ -109,7 +110,8 @@ file(GLOB_RECURSE protocol_tests "${CMAKE_CURRENT_SOURCE_DIR}/protocol/*_test.cp
 file(GLOB_RECURSE integration_tests "${CMAKE_CURRENT_SOURCE_DIR}/integration/*_test.cpp")
 file(GLOB_RECURSE midi_tests "${CMAKE_CURRENT_SOURCE_DIR}/midi/*_test.cpp")
 file(GLOB_RECURSE wav_tests "${CMAKE_CURRENT_SOURCE_DIR}/wav/*_test.cpp")
+file(GLOB_RECURSE wxcf_tests "${CMAKE_CURRENT_SOURCE_DIR}/wxcf/*_test.cpp")
 
-foreach(test_file IN LISTS protocol_tests integration_tests midi_tests wav_tests)
+foreach(test_file IN LISTS protocol_tests integration_tests midi_tests wav_tests wxcf_tests)
     add_wavex_shared_test(${test_file})
 endforeach()

@@ -11,6 +11,34 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Added — WXCF chunk container (roadmap Phase 2 item 6 / Phase 2.5 shared infra)
+
+- `firmware/shared/wxcf/wxcf.hpp`: `Writer`/`Reader` per
+  `docs/features/instrument-model.md` §5 - one versioned little-endian TLV
+  container format (`magic "WXCF" + file_type/file_version/total_len`
+  header, then `chunk_id/chunk_version/payload_len` chunks) shared by every
+  planned SD artifact: instruments (`.wxi`), tunings (`.wxt`), scenes/mixer
+  project chunks, and eventually patterns/projects (`.wxp`). HAL-free:
+  I/O goes through a context-pointer + function-pointer `IoContext`
+  (deliberately not `std::function`, so the header stays includable from
+  the Daisy's C++14 firmware build without pulling in heap-allocation-
+  capable machinery), so it round-trips against an in-memory buffer on
+  host and will wrap FatFs `f_read`/`f_write` on target with a thin
+  adapter (not implemented in this stage). Forward-compatibility is
+  provided by `Reader::SkipPayload()` (unrecognized `chunk_id`s can be
+  skipped without a schema-specific buffer) and `VersionMajor()`/
+  `VersionMinor()` helpers for the caller's own major-version-reject
+  policy - this class only frames bytes, it doesn't know any file_type's
+  chunk schema.
+  - Atomic-save (temp file + rename) is explicitly out of scope for this
+    class - it has no notion of files or paths, only a byte stream. That
+    discipline belongs to whatever wraps this with real FatFs calls.
+- 11 new host tests (`wxcf_test.cpp`): header/chunk round-trip, unknown-
+  chunk skip forward-compatibility, skip-payload across a multi-iteration
+  (>64 B) scratch buffer, bad magic / truncated header / truncated payload
+  error paths, version major/minor packing, on-wire little-endian byte
+  order, and I/O-callback-failure propagation.
+
 ### Added — MIDI clock PLL tempo follower (roadmap Phase 2 item 3)
 
 - `firmware/daisy/src/sequencer/tempo_follower.hpp`: `TempoFollower` per
