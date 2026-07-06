@@ -50,6 +50,7 @@ include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/comm
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/storage
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/metrics
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/sequencer
     ${CMAKE_CURRENT_SOURCE_DIR}/../../shared
     ${CMAKE_CURRENT_SOURCE_DIR}/../../shared/spi_protocol
     ${CMAKE_CURRENT_SOURCE_DIR}/../../shared/uart_protocol
@@ -131,6 +132,16 @@ function(add_wavex_test test_source)
     if(test_name STREQUAL "voice_manager_test")
         target_sources(${test_name} PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/audio/voice_manager.hpp
+        )
+    endif()
+
+    # sequencer_scheduler.hpp (+ pattern.hpp) is header-only and HAL-free
+    # (plain arithmetic, no daisy_seed.h include) - safe to compile
+    # directly on host.
+    if(test_name STREQUAL "sequencer_scheduler_test")
+        target_sources(${test_name} PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/../src/sequencer/pattern.hpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/../src/sequencer/sequencer_scheduler.hpp
         )
     endif()
 

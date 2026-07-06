@@ -23,7 +23,6 @@ set(FIRMWARE_SOURCES
     src/storage/sd_sdio.cpp
     src/storage/sd_log_bridge.cpp
     src/metrics/metrics.cpp
-    src/sampler.hpp
     src/audio/output_sink.hpp
     src/audio/voice_manager.hpp
     src/audio/envelope.hpp
@@ -32,6 +31,8 @@ set(FIRMWARE_SOURCES
     src/cv/cv_group_router.hpp
     src/cv/mcp4728_backend.hpp
     src/cv/mcp48_backend.hpp
+    src/sequencer/pattern.hpp
+    src/sequencer/sequencer_scheduler.hpp
     src/timebase.hpp
     src/profiling/profiler.cpp
     ../shared/spi_protocol/protocol.cpp

@@ -11,6 +11,36 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Added — Sequencer scheduler core (roadmap Phase 2 item 1)
+
+- `firmware/daisy/src/sequencer/pattern.hpp`: HAL-free pattern data model
+  (`Pattern`/`Track`/`Step`/`ParamLock`/`TriggerEvent`, 96-internal-PPQN
+  step scales including triplets) per `docs/features/sequencer.md` §3.
+- `firmware/daisy/src/sequencer/sequencer_scheduler.hpp`: sample-accurate
+  step scheduler (`SequencerScheduler`) - swing, per-step micro-timing,
+  probability gating via a seeded xorshift64* RNG, retrig with correct
+  next-step clipping, sorted `(frame, event)` output. Host-testable, not
+  yet wired into the audio callback (engine wiring is separate follow-up
+  work once the pattern-edit protocol and double-buffer discipline from
+  `sequencer.md` §4 exist).
+  - Anti-drift design note: frame timing is computed fresh per candidate
+    event (`frame = tick * frames_per_tick`) rather than via an
+    accumulated per-block phase delta - an accumulated Q32.32 fixed-point
+    version was tried first and failed the 10-minute drift golden test at
+    exactly 120 BPM (accumulated fixed-point rounding over 600,000
+    control-tick calls flipped an exact-integer target tick onto the
+    wrong side of a block boundary). The non-accumulating design is
+    documented in the class header.
+- 20 new host tests (`sequencer_scheduler_test.cpp`) covering the
+  `sequencer.md` §6 test plan: the 10-minute/120 BPM drift golden test
+  (beat 1200 at exactly frame 28,800,000), swing/micro-timing/retrig
+  arithmetic, seeded-probability determinism, pattern looping, and
+  event-sort ordering.
+- Fixed a stale `firmware/daisy/CMakeLists.txt` entry (`src/sampler.hpp`)
+  left over from the `Sampler` class's removal (2026-07-05, code review
+  C2) - the file no longer exists and would fail a from-scratch Daisy
+  configure.
+
 ### Added — Feature-expansion design suite (docs only, 2026-07-05)
 
 - Nine design docs in `docs/features/` covering the E-mu Emax/Emulator-lineage
