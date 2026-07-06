@@ -178,59 +178,9 @@ TEST_F(MessageTypeTest, HeartbeatMessage) {
     EXPECT_EQ(parsed.loop_counter, original.loop_counter);
 }
 
-// Test BrowseReq parsing
-TEST_F(MessageTypeTest, BrowseReqMessage) {
-    char path[96] = "/samples";
-    uint32_t start_index = 0;
-    uint8_t max_entries = 20;
-
-    // ParseBrowseReq expects format: path (null-terminated) + start_index (4 bytes) + max_entries
-    // (1 byte)
-    std::vector<uint8_t> payload;
-    payload.reserve(strlen(path) + 1 + 4 + 1);
-    payload.insert(payload.end(), path, path + strlen(path));
-    payload.push_back('\0');  // null terminator
-    payload.push_back(static_cast<uint8_t>(start_index & 0xFF));
-    payload.push_back(static_cast<uint8_t>((start_index >> 8) & 0xFF));
-    payload.push_back(static_cast<uint8_t>((start_index >> 16) & 0xFF));
-    payload.push_back(static_cast<uint8_t>((start_index >> 24) & 0xFF));
-    payload.push_back(max_entries);
-
-    size_t created = ProtocolHandler::CreatePacket(
-        buffer_.data(), buffer_.size(), MSG_BROWSE_REQ, payload.data(), payload.size());
-
-    ASSERT_GT(created, 0);
-
-    char parsed_path[96];
-    uint32_t parsed_start_index;
-    uint8_t parsed_max_entries;
-
-    // ParseBrowseReq expects the payload directly, not the full packet
-    // Extract payload from packet first
-    uint8_t msg_type;
-    uint16_t seq;
-    uint8_t flags;
-    std::vector<uint8_t> parsed_payload(payload.size());
-    size_t parsed_payload_size = parsed_payload.size();
-
-    bool parse_result = ProtocolHandler::ParseWaveXPacket(
-        buffer_.data(), created, msg_type, parsed_payload.data(), parsed_payload_size, seq, flags);
-
-    ASSERT_TRUE(parse_result);
-    ASSERT_EQ(msg_type, MSG_BROWSE_REQ);
-
-    // Now parse the browse request from the payload
-    bool result = ProtocolHandler::ParseBrowseReq(parsed_payload.data(),
-                                                  parsed_path,
-                                                  sizeof(parsed_path),
-                                                  parsed_start_index,
-                                                  parsed_max_entries);
-
-    EXPECT_TRUE(result);
-    EXPECT_EQ(parsed_start_index, start_index);
-    EXPECT_EQ(parsed_max_entries, max_entries);
-    EXPECT_STREQ(parsed_path, path);
-}
+// (BrowseReqMessage test deleted with ParseBrowseReq - it exercised a wire
+// format nothing sends. The live [start_index u8][path][NUL] format is
+// covered by daisy/tests/unit/comm/message_dispatch_test.cpp.)
 
 // Test BrowseResp creation and parsing (header + entries array)
 TEST_F(MessageTypeTest, BrowseRespMessage) {

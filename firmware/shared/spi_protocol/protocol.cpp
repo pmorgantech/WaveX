@@ -417,50 +417,12 @@ size_t ProtocolHandler::CreateWaveChunkPacket(uint8_t* buffer,
         buffer, buffer_size, MSG_WAVE_CHUNK, temp_payload, total_payload_size);
 }
 
-// Legacy parsing functions - simplified for new unified format
-bool ProtocolHandler::ParseBrowseReq(const uint8_t* buffer,
-                                     char* path_out,
-                                     size_t path_max,
-                                     uint32_t& start_index,
-                                     uint8_t& max_entries) {
-    if (buffer == NULL || path_out == NULL) {
-        return false;
-    }
-
-    // For browse request, parse the payload directly
-    // Format: path (null-terminated) + start_index (4 bytes) + max_entries (1 byte)
-    size_t path_len = strlen((const char*)buffer);
-    if (path_len >= path_max) {
-        return false;  // Path too long
-    }
-
-    // Extract path
-    strncpy(path_out, (const char*)buffer, path_max - 1);
-    path_out[path_max - 1] = '\0';
-
-    // Extract start_index and max_entries
-    const uint8_t* data_ptr = buffer + path_len + 1;
-    if (data_ptr + sizeof(uint32_t) + sizeof(uint8_t) > buffer + 1024) {  // Safety check
-        return false;
-    }
-
-    start_index = *(const uint32_t*)data_ptr;
-    data_ptr += sizeof(uint32_t);
-    max_entries = *data_ptr;
-
-    return true;
-}
-
-bool ProtocolHandler::ParseSamplePlayReq(const uint8_t* buffer, char* path_out, size_t path_max) {
-    if (buffer == NULL || path_out == NULL) {
-        return false;
-    }
-
-    // Parse sample play request payload: path (null-terminated)
-    strncpy(path_out, (const char*)buffer, path_max - 1);
-    path_out[path_max - 1] = '\0';
-    return true;
-}
+// (Review H6/M10: ParseBrowseReq/ParseSamplePlayReq were deleted here.
+// They parsed a browse-request wire format - path-first, u32 start_index,
+// u8 max_entries - that nothing ever sent: the live format is
+// [start_index u8][path][NUL], built by inter_mcu_send_browse_req and
+// parsed by HandleBrowseRequestMessage, pinned by the dispatch host test.
+// The wire contract must not exist in two disagreeing copies.)
 
 // Compatibility wrapper functions for tests
 bool ProtocolHandler::ValidatePacket(const uint8_t* buffer, size_t length) {

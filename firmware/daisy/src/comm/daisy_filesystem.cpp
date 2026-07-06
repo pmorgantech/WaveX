@@ -165,11 +165,13 @@ bool ParseWavMetadata(const WaveX::Storage::FileEntry& entry,
     FRESULT fr = f_open(&file, fs_path, FA_READ | FA_OPEN_EXISTING);
     uint32_t t_open = daisy::System::GetNow() - t_open_start;
     if (WaveX::Comm::s_hw) {
-        WaveX::Comm::s_hw->PrintLine("WAV META OPEN: %s t=%lu ms", entry.name, (unsigned long)t_open);
+        WaveX::Comm::s_hw->PrintLine(
+            "WAV META OPEN: %s t=%lu ms", entry.name, (unsigned long)t_open);
     }
     if (fr != FR_OK) {
         if (WaveX::Comm::s_hw) {
-            WaveX::Comm::s_hw->PrintLine("WAV META OPEN FAIL: %s err=%d", entry.name, static_cast<int>(fr));
+            WaveX::Comm::s_hw->PrintLine(
+                "WAV META OPEN FAIL: %s err=%d", entry.name, static_cast<int>(fr));
         }
         return false;
     }
@@ -192,11 +194,11 @@ bool ParseWavMetadata(const WaveX::Storage::FileEntry& entry,
     elapsed_ms = daisy::System::GetNow() - parse_start_ms;
     if (elapsed_ms > METADATA_TIMEOUT_MS) {
         if (WaveX::Comm::s_hw) {
-            WaveX::Comm::s_hw->PrintLine("WAV META TIMEOUT total=%lu ms file=%s",
-                                         (unsigned long)elapsed_ms,
-                                         entry.name);
+            WaveX::Comm::s_hw->PrintLine(
+                "WAV META TIMEOUT total=%lu ms file=%s", (unsigned long)elapsed_ms, entry.name);
         }
-        if (duration_ms_out) *duration_ms_out = elapsed_ms;
+        if (duration_ms_out)
+            *duration_ms_out = elapsed_ms;
         f_close(&file);
         return false;
     }
@@ -208,7 +210,8 @@ bool ParseWavMetadata(const WaveX::Storage::FileEntry& entry,
                                          (unsigned)bytes_read,
                                          (int)fr);
         }
-        if (duration_ms_out) *duration_ms_out = elapsed_ms;
+        if (duration_ms_out)
+            *duration_ms_out = elapsed_ms;
         f_close(&file);
         return false;
     }
@@ -219,7 +222,8 @@ bool ParseWavMetadata(const WaveX::Storage::FileEntry& entry,
         if (WaveX::Comm::s_hw) {
             WaveX::Comm::s_hw->PrintLine("WAV META NOT RIFF/WAVE: %s", entry.name);
         }
-        if (duration_ms_out) *duration_ms_out = elapsed_ms;
+        if (duration_ms_out)
+            *duration_ms_out = elapsed_ms;
         return false;
     }
 
@@ -272,7 +276,8 @@ bool ParseWavMetadata(const WaveX::Storage::FileEntry& entry,
         if (WaveX::Comm::s_hw) {
             WaveX::Comm::s_hw->PrintLine("WAV META MISSING fmt: %s", entry.name);
         }
-        if (duration_ms_out) *duration_ms_out = elapsed_ms;
+        if (duration_ms_out)
+            *duration_ms_out = elapsed_ms;
         return false;
     }
 
@@ -293,7 +298,8 @@ bool ParseWavMetadata(const WaveX::Storage::FileEntry& entry,
     }
 
     uint32_t parse_total_ms = daisy::System::GetNow() - parse_start_ms;
-    if (duration_ms_out) *duration_ms_out = parse_total_ms;
+    if (duration_ms_out)
+        *duration_ms_out = parse_total_ms;
     if (WaveX::Comm::s_hw) {
         WaveX::Comm::s_hw->PrintLine("WAV META DONE: %s total=%lu ms sr=%lu ch=%u bits=%u",
                                      entry.name,
@@ -327,9 +333,21 @@ void ProcessBrowseRequest(const char* path, size_t start_index, uint8_t max_entr
     strncpy(s_current_directory, path, sizeof(s_current_directory) - 1);
     s_current_directory[sizeof(s_current_directory) - 1] = '\0';
 
-    // Allocate buffer for file entries
-    FileEntry entries[50];  // Max 50 entries per response (matches cache size)
-    size_t actual_max_entries = (max_entries > 50) ? 50 : max_entries;
+    // Response staging. Static, not stack (review H6): together with the
+    // wire-entry and payload buffers below this path used ~11 KB of locals
+    // (plus ListDir's own page buffer) on the shared main-loop stack.
+    // Main-loop-only and non-reentrant, like the rest of this file.
+    // kMaxBrowseEntries is derived from the payload capacity: the old
+    // hard-coded clamp of 50 would have overflowed browse_payload at 32+
+    // entries (50 x 65 B + 5 > 2048) - only the callers' max_entries=20
+    // kept it safe.
+    static FileEntry entries[50];
+    static constexpr size_t kBrowsePayloadCapacity = 2048;
+    static constexpr size_t kMaxBrowseEntries =
+        (kBrowsePayloadCapacity - sizeof(uint32_t) - sizeof(uint8_t)) /
+        sizeof(WaveX::Protocol::FileEntryWire);  // = 31 today
+    static_assert(kMaxBrowseEntries <= 50, "browse staging arrays sized for 50 entries");
+    size_t actual_max_entries = (max_entries > kMaxBrowseEntries) ? kMaxBrowseEntries : max_entries;
 
     size_t total_count = 0;
     size_t entries_written = 0;
@@ -337,7 +355,7 @@ void ProcessBrowseRequest(const char* path, size_t start_index, uint8_t max_entr
     // Get directory listing from FatFS
     // OPTIMIZATION: If this is the first page (start_index == 0), get all entries first for
     // caching, then extract the paginated subset. This avoids calling ListDir twice.
-    FileEntry all_entries[50];  // Buffer for all entries when caching
+    static FileEntry all_entries[50];  // static: see staging note above
     size_t all_entries_count = 0;
 
     if (start_index == 0) {
@@ -397,7 +415,7 @@ void ProcessBrowseRequest(const char* path, size_t start_index, uint8_t max_entr
                             (uint32_t)entries_written);
 
     // Convert FileEntry to FileEntryWire for transmission
-    FileEntryWire wire_entries[50];
+    static FileEntryWire wire_entries[50];  // static: see staging note above
     for (size_t i = 0; i < entries_written && i < 50; i++) {
         wire_entries[i].is_dir = entries[i].is_dir;
         wire_entries[i].size_bytes = entries[i].size_bytes;
@@ -415,7 +433,7 @@ void ProcessBrowseRequest(const char* path, size_t start_index, uint8_t max_entr
     }
 
     // Create browse response payload: total_count (4 bytes) + n_entries (1 byte) + entries
-    uint8_t browse_payload[2048];
+    static uint8_t browse_payload[kBrowsePayloadCapacity];  // static: see staging note above
     size_t payload_size = 0;
 
     // Copy total_count

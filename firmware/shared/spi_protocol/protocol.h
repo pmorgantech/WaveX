@@ -11,19 +11,17 @@ namespace Protocol {
 #define WAVEX_SAMPLE_STATUS_MAX_ENTRIES 8
 
 // Protocol constants
-static const uint8_t MAX_PAYLOAD_SIZE = 220;  // allow multi-entry directory responses
 static const uint32_t PROTOCOL_VERSION = 1;
 
-// Simplified Packet Format - Clean and Efficient
-
-// Single Unified Packet Format - no command vs data distinction
-struct WaveXPacket {
-    uint8_t flags_size;  // 4 LSB = size code, 4 MSB = flags
-    uint8_t msg_type;    // Message type (MSG_SYNC, MSG_HEARTBEAT, etc.)
-    uint16_t seq;        // 16-bit sequence number (0-65535)
-    uint8_t payload[0];  // Variable length payload (structured message data)
-    uint16_t crc;        // CRC16-CCITT over entire packet except CRC (at end)
-} __attribute__((packed));
+// Wire layout (review M10: a packed `WaveXPacket` struct used to "document"
+// this but placed `crc` at offset 4 while the wire puts it at the packet
+// end - misleading and unused, so it was deleted):
+//   [0]      flags_size (4 LSB = size code, 4 MSB = flags)
+//   [1]      msg_type
+//   [2..3]   16-bit sequence number, little-endian (0 is reserved)
+//   [4..]    payload, zero-padded to the size class
+//   [N-2..]  CRC16-CCITT over bytes [0, N-2), little-endian
+// Total size N is one of the PKT_SIZE_* classes (32..2048 bytes).
 
 // Size encoding (4 LSB of flags_size)
 #define PKT_SIZE_32 0x00    // 32 bytes total
@@ -623,14 +621,6 @@ class ProtocolHandler {
                              MessageType expected_type,
                              void* out_payload,
                              size_t out_payload_size);
-
-    // Additional parsing functions
-    static bool ParseBrowseReq(const uint8_t* buffer,
-                               char* path_out,
-                               size_t path_max,
-                               uint32_t& start_index,
-                               uint8_t& max_entries);
-    static bool ParseSamplePlayReq(const uint8_t* buffer, char* path_out, size_t path_max);
 
     // New simplified packet system functions
     static size_t GetPacketSizeFromCode(uint8_t size_code);

@@ -57,8 +57,13 @@ bool ListDir(const char* path,
     bool is_root =
         (strcmp(path, "/") == 0 || strlen(path) == 0 || (path[0] == '/' && strlen(path) == 1));
 
-    // Single pass: collect all valid entries first, then paginate
-    FileEntry all_entries[256];  // Buffer for all entries
+    // Single pass: collect all valid entries first, then paginate.
+    // Static, not stack (review H6): 256 x sizeof(FileEntry) is ~14 KB,
+    // previously carved out of the shared main-loop stack per call.
+    // ListDir is main-loop-only and non-reentrant. Directories with more
+    // than 256 qualifying entries are silently truncated (pre-existing
+    // limit; the roadmap's 500-entry browse target needs a redesign here).
+    static FileEntry all_entries[256];
     size_t all_count = 0;
 
     // Manually insert ".." entry at the beginning if not at root

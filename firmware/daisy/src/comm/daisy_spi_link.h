@@ -2,17 +2,20 @@
 #define WAVEX_INTER_SPI_H
 
 #include <stdint.h>
-#include <cstdint>
-#include "daisy_seed.h"
-#include "../../shared/spi_protocol/spi_protocol.h"
+
 #include "config/link_config.h"
+#include "daisy_seed.h"
+
+#include <cstdint>
 
 // SPI link configuration is now handled by the shared link_config.h
 
 #if WAVEX_SPI_LINK_ENABLED
 
 // Forward declare the libDaisy SpiHandle
-namespace daisy { class SpiHandle; }
+namespace daisy {
+class SpiHandle;
+}
 
 namespace WaveX {
 namespace Comm {
@@ -56,9 +59,9 @@ void Spi_DebugState(void);
 // Poll the ATTN level and trigger a receive if asserted (fallback when EXTI edge is missed)
 bool Spi_PollAttnLevel(void);
 
-} // namespace Comm
-} // namespace WaveX
+}  // namespace Comm
+}  // namespace WaveX
 
-#endif // WAVEX_SPI_LINK_ENABLED
+#endif  // WAVEX_SPI_LINK_ENABLED
 
-#endif // WAVEX_INTER_SPI_H
+#endif  // WAVEX_INTER_SPI_H

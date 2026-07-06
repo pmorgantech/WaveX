@@ -31,6 +31,23 @@ versioning and release process.
   never set). The message id stays reserved in `protocol.h`; the dispatcher
   logs and ignores it.
 
+### Removed — dead protocol artifacts; browse path hardened (review H6/M10)
+
+- Deleted `spi_protocol.h` — a third, competing wire framing (`pkt_t`, its
+  own CRC, a barrier-free "lock-free" ring) with zero users; deleted the
+  misleading `WaveXPacket` struct (placed `crc` at offset 4 where the wire
+  puts it at the end) in favor of a layout comment; deleted
+  `ParseBrowseReq`/`ParseSamplePlayReq` (parsed a browse-request format
+  nothing sends — the live `[start_index u8][path][NUL]` format is pinned
+  by the dispatch host test); `MAX_PAYLOAD_SIZE` moved out of `protocol.h`
+  into its only user (`esp_spi_link.cpp`) with an SPI-revival warning that
+  220 B cannot carry browse pages.
+- Browse path (review H6): response staging buffers (~11 KB) and ListDir's
+  ~14 KB directory page buffer moved off the shared main-loop stack into
+  statics; the per-response entry clamp is now derived from the payload
+  capacity (31) instead of a hard-coded 50 that would have overflowed the
+  staging buffer at 32+ entries.
+
 ### Changed (Tooling/Repo hygiene, review §8)
 
 - Untracked five stale committed binaries (`firmware/daisy/tests/lib/*.a`,

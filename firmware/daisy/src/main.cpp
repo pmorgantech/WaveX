@@ -1,5 +1,4 @@
 #include "../shared/config/pin_config.h"
-#include "../shared/spi_protocol/spi_protocol.h"
 #include "comm/daisy_spi_link.h"
 #include "comm/daisy_uart_link.h"
 #include "config/link_config.h"

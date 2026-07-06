@@ -23,7 +23,6 @@
 #include "freertos/task.h"
 #include "link_config.h"
 #include "soc/spi_periph.h"
-#include "spi_protocol/spi_protocol.h"
 
 #include "../../shared/spi_protocol/attn_watchdog.hpp"
 #include "../../shared/spi_protocol/sequence_tracker.hpp"
@@ -39,6 +38,12 @@ extern "C" {
 // -----------------------------
 // Packet & CRC
 // -----------------------------
+// Local SPI-transaction payload cap (was protocol.h's misleadingly-global
+// MAX_PAYLOAD_SIZE=220, review M10). NOTE for SPI revival: 220 bytes cannot
+// carry the ~1.3 KB browse pages this link was supposed to bulk-transfer -
+// raise it (protocol packets go up to 2042 B of payload) when re-enabling.
+static constexpr size_t MAX_PAYLOAD_SIZE = 220;
+
 static const char* TAG = "esp_spi_link";
 
 // Logging component identifier
