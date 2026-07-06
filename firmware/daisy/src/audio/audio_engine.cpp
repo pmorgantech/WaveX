@@ -99,8 +99,8 @@ static WaveX::AudioEngine::VoiceManager s_voice_manager;
 // (blocking I2C ~225 us, §7.1.4) via FlushCv() below.
 static ParaphonicEnvelope s_para_env;
 
-// Shared-path control values. Written from main-loop context (stage 3 maps
-// MSG_CONTROL_CHANGE here), read at the tick in audio context: plain
+// Shared-path control values. Written from main-loop context (OnControlChange
+// maps MSG_CONTROL_CHANGE here), read at the tick in audio context: plain
 // aligned float stores are atomic on Cortex-M7 and each field has a single
 // writer, so per-field tearing cannot occur (same handoff contract as the
 // old parameter bank, now with an actual consumer).
@@ -108,6 +108,12 @@ struct ParaphonicParams {
     float cutoff_base = 0.2f;    // 0..1 filter cutoff floor
     float env_to_cutoff = 0.8f;  // envelope -> cutoff modulation depth
     float resonance = 0.2f;      // 0..1
+    // Shared-envelope ADSR (seconds at the 1 kHz tick). Pushed into
+    // s_para_env via SetParams whenever one of them changes.
+    float attack_s = 0.005f;
+    float decay_s = 0.050f;
+    float sustain = 0.8f;
+    float release_s = 0.150f;
 };
 static ParaphonicParams s_para_params;
 
@@ -909,7 +915,10 @@ void Init(DaisySeed& hw, float sample_rate) {
     // Defaults are musical bring-up values; stage 3 maps ENVELOPE_* wire
     // parameters onto SetParams.
     s_para_env.Init(1000);
-    s_para_env.SetParams(0.005f, 0.050f, 0.8f, 0.150f);
+    s_para_env.SetParams(s_para_params.attack_s,
+                         s_para_params.decay_s,
+                         s_para_params.sustain,
+                         s_para_params.release_s);
 
     // Test basic allocation to ensure SDRAM is working
     if (s_hw) {
@@ -1040,14 +1049,52 @@ void Callback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t
     s_dwt_callback_max = std::max(s_dwt_callback_max, s_dwt_callback_cycles);
 }
 
-// Wire hook for MSG_CONTROL_CHANGE. Deliberately a no-op today (review C2):
-// the legacy mono-synth parameter bank this used to write was never rendered
-// by Callback(), so the mapping was deleted rather than left pretending to
-// work. Real parameter routing (per-voice / kit parameters) is Phase 2
-// front-panel work; the dispatch route and its test stay so that work has a
-// pinned entry point.
+// MSG_CONTROL_CHANGE -> Stage A paraphonic path (item 5 stage 3). These
+// write s_para_params from main-loop message-handler context; the control
+// tick reads them in audio context (aligned float stores are atomic on
+// Cortex-M7, single writer per field). Envelope-time changes push the full
+// ADSR set into the shared envelope; a tick landing between two of those
+// field writes briefly mixes old/new rates - inaudible and self-correcting.
+// Per-voice / kit parameter routing remains Phase 2 front-panel work.
 void OnControlChange(const ControlChangeMessage& ctrl_msg) {
-    (void)ctrl_msg;
+    const float norm = static_cast<float>(ctrl_msg.value) / 65535.0f;
+    switch (ctrl_msg.parameter) {
+        case PARAM_FILTER_CUTOFF:
+            s_para_params.cutoff_base = norm;
+            break;
+        case PARAM_FILTER_RESONANCE:
+            s_para_params.resonance = norm;
+            break;
+        case PARAM_ENVELOPE_ATTACK:
+        case PARAM_ENVELOPE_DECAY:
+        case PARAM_ENVELOPE_SUSTAIN:
+        case PARAM_ENVELOPE_RELEASE: {
+            // Times span 1 ms .. 2 s; sustain is the raw 0..1 level.
+            const float seconds = 0.001f + norm * 2.0f;
+            if (ctrl_msg.parameter == PARAM_ENVELOPE_ATTACK)
+                s_para_params.attack_s = seconds;
+            else if (ctrl_msg.parameter == PARAM_ENVELOPE_DECAY)
+                s_para_params.decay_s = seconds;
+            else if (ctrl_msg.parameter == PARAM_ENVELOPE_SUSTAIN)
+                s_para_params.sustain = norm;
+            else
+                s_para_params.release_s = seconds;
+            s_para_env.SetParams(s_para_params.attack_s,
+                                 s_para_params.decay_s,
+                                 s_para_params.sustain,
+                                 s_para_params.release_s);
+            break;
+        }
+        case PARAM_MODULATION_MATRIX:
+            // Repurposed for Stage A as the envelope->cutoff modulation
+            // depth until Phase 2 defines a real mod matrix.
+            s_para_params.env_to_cutoff = norm;
+            break;
+        default:
+            // PARAM_VOLUME / LFO_*: no Stage A consumer (the analog VCA is
+            // the level control; a global LFO is future work).
+            break;
+    }
 }
 
 // Note-to-sample mapping policy for item 8: the most recently loaded

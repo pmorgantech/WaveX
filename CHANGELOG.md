@@ -11,6 +11,27 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Added — Stage A paraphonic analog path, engine side (Phase 1 item 5)
+
+- `ParaphonicEnvelope` (`firmware/daisy/src/audio/paraphonic_envelope.hpp`):
+  the shared VCF/VCA envelope law from `analog-voice-board.md` §0 —
+  retrigger on every note-on (from the drained note queue), release when
+  the last held voice releases (`VoiceManager::HeldVoiceCount()`), at the
+  1 kHz control tick. HAL-free, 6 new host tests.
+- The control tick now stages CV values each millisecond (cutoff =
+  base + envelope×depth through the exponential VCF shaping, resonance,
+  envelope→VCA with SSI2164 inversion) via the CV group router;
+  `AudioEngine::FlushCv()` performs the blocking MCP4728 fast-write from
+  the main loop (§7.1.4), with an absent-hardware backoff (8 consecutive
+  I2C failures disable the flush with one log).
+- `MSG_CONTROL_CHANGE` has a real consumer again: cutoff base, resonance,
+  and the shared-envelope ADSR map onto the paraphonic path
+  (`PARAM_MODULATION_MATRIX` temporarily carries env→cutoff depth).
+  `Flush()` returns the transaction result through the CV backend concept.
+- Outstanding for item 5: calibration workflow + UI page, and bench
+  verification (CV-update-within-tick scope check, analog levels).
+
+
 ### Removed — inert legacy DSP surface (review C2)
 
 - Deleted the Daisy audio engine's never-rendered mono-synth remnants: the
