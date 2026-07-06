@@ -162,6 +162,58 @@ TEST_F(MessageDispatchTest, CvTestReachesAudioEngine) {
     EXPECT_FLOAT_EQ(GetDispatchRecord().cv_tests[0].vca, 1.0f);
 }
 
+TEST_F(MessageDispatchTest, SeqTransportReachesAudioEngine) {
+    SeqTransportMessage m(SEQ_TRANSPORT_PLAY, SEQ_CLOCK_MIDI, SEQ_INPUT_LIVE_RECORD, 1, 13000, 16);
+    Dispatch(MSG_SEQ_TRANSPORT, m);
+
+    ASSERT_EQ(GetDispatchRecord().seq_transports.size(), 1u);
+    EXPECT_EQ(GetDispatchRecord().seq_transports[0].command, SEQ_TRANSPORT_PLAY);
+    EXPECT_EQ(GetDispatchRecord().seq_transports[0].clock_source, SEQ_CLOCK_MIDI);
+    EXPECT_EQ(GetDispatchRecord().seq_transports[0].tempo_bpm_x100, 13000);
+}
+
+TEST_F(MessageDispatchTest, SeqPatternOpReachesAudioEngine) {
+    SeqPatternOpMessage m(SEQ_OP_SET_STEP_MICRO, 2, 9, 3, 12, -7);
+    Dispatch(MSG_SEQ_PATTERN_OP, m);
+
+    ASSERT_EQ(GetDispatchRecord().seq_pattern_ops.size(), 1u);
+    EXPECT_EQ(GetDispatchRecord().seq_pattern_ops[0].op, SEQ_OP_SET_STEP_MICRO);
+    EXPECT_EQ(GetDispatchRecord().seq_pattern_ops[0].track, 2);
+    EXPECT_EQ(GetDispatchRecord().seq_pattern_ops[0].step, 9);
+    EXPECT_EQ(GetDispatchRecord().seq_pattern_ops[0].arg_s16, -7);
+}
+
+TEST_F(MessageDispatchTest, MidiClockEventReachesAudioEngine) {
+    MidiClockEventMessage m(MIDI_CLK_TICK, 1, 500, 20833, 0);
+    Dispatch(MSG_MIDI_CLOCK_EVENT, m);
+
+    ASSERT_EQ(GetDispatchRecord().midi_clock_events.size(), 1u);
+    EXPECT_EQ(GetDispatchRecord().midi_clock_events[0].event, MIDI_CLK_TICK);
+    EXPECT_EQ(GetDispatchRecord().midi_clock_events[0].esp_delta_us, 20833u);
+}
+
+TEST_F(MessageDispatchTest, MidiCcReachesAudioEngine) {
+    MidiCcMessage m(74 /*filter cutoff CC*/, 90, 4);
+    Dispatch(MSG_MIDI_CC, m);
+
+    ASSERT_EQ(GetDispatchRecord().midi_ccs.size(), 1u);
+    EXPECT_EQ(GetDispatchRecord().midi_ccs[0].cc, 74);
+    EXPECT_EQ(GetDispatchRecord().midi_ccs[0].value, 90);
+    EXPECT_EQ(GetDispatchRecord().midi_ccs[0].channel, 4);
+}
+
+TEST_F(MessageDispatchTest, TruncatedSeqAndMidiMessagesAreDropped) {
+    uint8_t small[2] = {0, 1};
+    ProcessInterMcuMessage(MSG_SEQ_TRANSPORT, 1, small, sizeof(small));
+    ProcessInterMcuMessage(MSG_SEQ_PATTERN_OP, 2, small, sizeof(small));
+    ProcessInterMcuMessage(MSG_MIDI_CLOCK_EVENT, 3, small, sizeof(small));
+    ProcessInterMcuMessage(MSG_MIDI_CC, 4, small, 1);
+    EXPECT_TRUE(GetDispatchRecord().seq_transports.empty());
+    EXPECT_TRUE(GetDispatchRecord().seq_pattern_ops.empty());
+    EXPECT_TRUE(GetDispatchRecord().midi_clock_events.empty());
+    EXPECT_TRUE(GetDispatchRecord().midi_ccs.empty());
+}
+
 TEST_F(MessageDispatchTest, TruncatedCvMessagesAreDropped) {
     uint8_t small[2] = {0, 1};
     ProcessInterMcuMessage(MSG_CV_CAL_SET, 1, small, sizeof(small));

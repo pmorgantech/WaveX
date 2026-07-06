@@ -17,6 +17,7 @@
 
 #include "../cv/cv_cal_store.hpp"
 #include "../cv/cv_group_router.hpp"
+#include "../sequencer/sequencer_transport.hpp"
 #include "../storage/fatfs_wav_reader.hpp"
 #include "../timebase.hpp"
 #include "output_sink.hpp"
@@ -92,6 +93,22 @@ static OutputSinkType s_output_sink;
 // (audio IRQ context) through the SPSC queue below; Callback() drains the
 // queue and mixes Render() output on top of the streaming path.
 static WaveX::AudioEngine::VoiceManager s_voice_manager;
+
+// Sequencer transport (roadmap Phase 2). Owns the step scheduler + MIDI
+// tempo follower. Edits/transport/clock arrive from main-loop message
+// handlers (OnSeqTransport / OnSeqPatternOp / OnMidiClockEvent / OnMidiCc)
+// and mutate this object in main-loop context only, so no locking is needed
+// yet. NOTE (deliberate next stage): Tick() is NOT yet driven from
+// Callback(). Advancing the scheduler from the 1 kHz control tick and
+// converting its TriggerEvents into voice triggers requires (a) the
+// double-buffered "edits applied between steps" discipline from
+// sequencer.md §4 so a main-loop edit can't tear a step the callback is
+// reading, and (b) a track->sample (kit) mapping that the instrument model
+// (Phase 2.5) provides. Until that lands the transport accumulates fully
+// unit-tested state (sequencer_transport_test) but does not yet drive audio
+// - the same honest intermediate the voice manager passed through before
+// its note mapping existed.
+static WaveX::Sequencer::SequencerTransport s_seq_transport;
 
 // --- Stage A paraphonic analog path (roadmap item 5; analog-voice-board.md
 // §0). One shared envelope drives the shared VCF/VCA CVs; values are
@@ -926,6 +943,10 @@ void Init(DaisySeed& hw, float sample_rate) {
 
     s_voice_manager.Init(static_cast<uint32_t>(sample_rate));
 
+    // Sequencer transport uses the same sample-rate/block-size timebase as
+    // the audio engine so its scheduler frames line up with the callback.
+    s_seq_transport.Init(static_cast<uint32_t>(sample_rate), Timebase::kBlockSize);
+
     // Stage A paraphonic envelope runs at the control-tick rate (1 kHz).
     // Defaults are musical bring-up values; stage 3 maps ENVELOPE_* wire
     // parameters onto SetParams.
@@ -1199,6 +1220,36 @@ void LoadCvCalFromSd() {
     }
     if (s_hw)
         s_hw->PrintLine("CV CAL: table loaded from SD");
+}
+
+// ---- Sequencer / transport / MIDI-clock (roadmap Phase 2) ----
+// All four run in main-loop message-handler context and forward to the
+// engine-owned SequencerTransport, which is only mutated from this context
+// (see the s_seq_transport declaration for why Tick() is not yet driven
+// from the callback). Real forwarding, not stubs - the transport's state
+// changes are covered by sequencer_transport_test; message_dispatch_test
+// pins that the wire message reaches here.
+void OnSeqTransport(const SeqTransportMessage& m) {
+    s_seq_transport.ApplyTransport(m);
+#if WAVEX_MCU_LINK_PACKET_DEBUG
+    if (s_hw)
+        s_hw->PrintLine("RX SEQ_TRANSPORT: cmd=%u src=%u bpm=%u",
+                        (unsigned)m.command,
+                        (unsigned)m.clock_source,
+                        (unsigned)m.tempo_bpm_x100);
+#endif
+}
+
+void OnSeqPatternOp(const SeqPatternOpMessage& m) {
+    s_seq_transport.ApplyPatternOp(m);
+}
+
+void OnMidiClockEvent(const MidiClockEventMessage& m) {
+    s_seq_transport.OnMidiClock(m);
+}
+
+void OnMidiCc(const MidiCcMessage& m) {
+    s_seq_transport.OnMidiCc(m);
 }
 
 // Note-to-sample mapping policy for item 8: the most recently loaded

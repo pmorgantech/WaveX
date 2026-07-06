@@ -100,5 +100,21 @@ void GetSampleMemStatus(WaveX::Protocol::SampleMemStatusMessage& out) {
     WaveX::Test::GetDispatchRecord().get_sample_mem_status_calls++;
 }
 
+void OnSeqTransport(const WaveX::Protocol::SeqTransportMessage& m) {
+    WaveX::Test::GetDispatchRecord().seq_transports.push_back(m);
+}
+
+void OnSeqPatternOp(const WaveX::Protocol::SeqPatternOpMessage& m) {
+    WaveX::Test::GetDispatchRecord().seq_pattern_ops.push_back(m);
+}
+
+void OnMidiClockEvent(const WaveX::Protocol::MidiClockEventMessage& m) {
+    WaveX::Test::GetDispatchRecord().midi_clock_events.push_back(m);
+}
+
+void OnMidiCc(const WaveX::Protocol::MidiCcMessage& m) {
+    WaveX::Test::GetDispatchRecord().midi_ccs.push_back(m);
+}
+
 }  // namespace AudioEngine
 }  // namespace WaveX

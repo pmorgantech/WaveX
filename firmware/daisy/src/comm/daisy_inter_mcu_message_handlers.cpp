@@ -46,6 +46,10 @@ static void HandleAckMessage(const uint8_t* payload, size_t payload_size);
 static void HandleCvCalSetMessage(const uint8_t* payload, size_t payload_size);
 static void HandleCvCalGetMessage(const uint8_t* payload, size_t payload_size);
 static void HandleCvTestMessage(const uint8_t* payload, size_t payload_size);
+static void HandleSeqTransportMessage(const uint8_t* payload, size_t payload_size);
+static void HandleSeqPatternOpMessage(const uint8_t* payload, size_t payload_size);
+static void HandleMidiClockEventMessage(const uint8_t* payload, size_t payload_size);
+static void HandleMidiCcMessage(const uint8_t* payload, size_t payload_size);
 static void HandleErrorMessage(const uint8_t* payload, size_t payload_size);
 
 // Message dispatcher - transport agnostic (works with both SPI and UART)
@@ -151,6 +155,18 @@ void ProcessInterMcuMessage(uint8_t msg_type,
             break;
         case MSG_CV_TEST:
             HandleCvTestMessage(payload, payload_size);
+            break;
+        case MSG_SEQ_TRANSPORT:
+            HandleSeqTransportMessage(payload, payload_size);
+            break;
+        case MSG_SEQ_PATTERN_OP:
+            HandleSeqPatternOpMessage(payload, payload_size);
+            break;
+        case MSG_MIDI_CLOCK_EVENT:
+            HandleMidiClockEventMessage(payload, payload_size);
+            break;
+        case MSG_MIDI_CC:
+            HandleMidiCcMessage(payload, payload_size);
             break;
         case MSG_ERROR:
             HandleErrorMessage(payload, payload_size);
@@ -427,6 +443,57 @@ static void HandleCvTestMessage(const uint8_t* payload, size_t payload_size) {
     WaveX::Protocol::CvTestMessage msg;
     memcpy(&msg, payload, sizeof(msg));  // float fields: byte-aligned payload
     WaveX::AudioEngine::OnCvTest(msg);
+#endif
+}
+
+// Sequencer / transport / MIDI-clock (Phase 2) - same validate-and-dispatch
+// shape as the note/CV handlers; pinned by message_dispatch_test so a stub
+// can't silently reappear (the C1 lesson). All forward to the engine-owned
+// SequencerTransport via AudioEngine::On*.
+static void HandleSeqTransportMessage(const uint8_t* payload, size_t payload_size) {
+    if (!payload || payload_size < sizeof(WaveX::Protocol::SeqTransportMessage)) {
+        UART_LOGE("daisy_msg", "SEQ_TRANSPORT payload too small (%d)", (int)payload_size);
+        return;
+    }
+#if WAVEX_AUDIO_ENGINE_ENABLED
+    WaveX::Protocol::SeqTransportMessage msg;
+    memcpy(&msg, payload, sizeof(msg));
+    WaveX::AudioEngine::OnSeqTransport(msg);
+#endif
+}
+
+static void HandleSeqPatternOpMessage(const uint8_t* payload, size_t payload_size) {
+    if (!payload || payload_size < sizeof(WaveX::Protocol::SeqPatternOpMessage)) {
+        UART_LOGE("daisy_msg", "SEQ_PATTERN_OP payload too small (%d)", (int)payload_size);
+        return;
+    }
+#if WAVEX_AUDIO_ENGINE_ENABLED
+    WaveX::Protocol::SeqPatternOpMessage msg;
+    memcpy(&msg, payload, sizeof(msg));  // int16 field: byte-aligned payload
+    WaveX::AudioEngine::OnSeqPatternOp(msg);
+#endif
+}
+
+static void HandleMidiClockEventMessage(const uint8_t* payload, size_t payload_size) {
+    if (!payload || payload_size < sizeof(WaveX::Protocol::MidiClockEventMessage)) {
+        UART_LOGE("daisy_msg", "MIDI_CLOCK_EVENT payload too small (%d)", (int)payload_size);
+        return;
+    }
+#if WAVEX_AUDIO_ENGINE_ENABLED
+    WaveX::Protocol::MidiClockEventMessage msg;
+    memcpy(&msg, payload, sizeof(msg));
+    WaveX::AudioEngine::OnMidiClockEvent(msg);
+#endif
+}
+
+static void HandleMidiCcMessage(const uint8_t* payload, size_t payload_size) {
+    if (!payload || payload_size < sizeof(WaveX::Protocol::MidiCcMessage)) {
+        UART_LOGE("daisy_msg", "MIDI_CC payload too small (%d)", (int)payload_size);
+        return;
+    }
+#if WAVEX_AUDIO_ENGINE_ENABLED
+    const auto* msg = reinterpret_cast<const WaveX::Protocol::MidiCcMessage*>(payload);
+    WaveX::AudioEngine::OnMidiCc(*msg);
 #endif
 }
 

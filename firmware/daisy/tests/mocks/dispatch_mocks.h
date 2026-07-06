@@ -31,6 +31,11 @@ struct DispatchRecord {
     std::vector<WaveX::Protocol::SampleLoadMessage> sample_loads;
     int get_sample_mem_status_calls = 0;
 
+    std::vector<WaveX::Protocol::SeqTransportMessage> seq_transports;
+    std::vector<WaveX::Protocol::SeqPatternOpMessage> seq_pattern_ops;
+    std::vector<WaveX::Protocol::MidiClockEventMessage> midi_clock_events;
+    std::vector<WaveX::Protocol::MidiCcMessage> midi_ccs;
+
     struct BrowseCall {
         std::string path;
         size_t start_index;

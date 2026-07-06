@@ -11,6 +11,27 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Added — Sequencer message dispatch + engine forwarding (Phase 2 wiring)
+
+- `daisy_inter_mcu_message_handlers.cpp` now routes `MSG_SEQ_TRANSPORT`,
+  `MSG_SEQ_PATTERN_OP`, `MSG_MIDI_CLOCK_EVENT`, and `MSG_MIDI_CC` (with
+  payload-size validation) to new `AudioEngine::OnSeqTransport` /
+  `OnSeqPatternOp` / `OnMidiClockEvent` / `OnMidiCc` hooks. `audio_engine.cpp`
+  implements them as **real forwarding** to an engine-owned
+  `SequencerTransport` (not log-only stubs — the C1 lesson).
+- 5 new dispatch host tests (`message_dispatch_test.cpp`, driving the real
+  dispatcher against recording mocks) pin each routed type to its subsystem
+  call plus truncated-payload rejection, so a handler can't silently regress
+  to a stub.
+- **Deliberately deferred to the next stage** (documented at the
+  `s_seq_transport` declaration): the transport is mutated only from
+  main-loop message context and is **not yet driven from the audio
+  callback**. Advancing the scheduler from the 1 kHz control tick and turning
+  its `TriggerEvent`s into voice triggers needs the double-buffered
+  edit-between-steps discipline (`sequencer.md` §4) and a track→sample kit
+  mapping (instrument model, Phase 2.5). Until then the transport accumulates
+  fully unit-tested state but does not yet produce audio.
+
 ### Added — Sequencer transport controller (host-tested glue)
 
 - `firmware/daisy/src/sequencer/sequencer_transport.hpp`: `SequencerTransport`

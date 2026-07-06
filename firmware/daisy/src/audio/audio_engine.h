@@ -74,6 +74,14 @@ void OnCvTest(const WaveX::Protocol::CvTestMessage& m);
 // Load the persisted calibration table (call once at boot, after SD mount).
 void LoadCvCalFromSd();
 
+// Sequencer / transport / MIDI-clock hooks (Phase 2). These forward to the
+// engine-owned SequencerTransport (firmware/daisy/src/sequencer/), which
+// drives the step scheduler from the control tick. Main-loop dispatch.
+void OnSeqTransport(const WaveX::Protocol::SeqTransportMessage& m);
+void OnSeqPatternOp(const WaveX::Protocol::SeqPatternOpMessage& m);
+void OnMidiClockEvent(const WaveX::Protocol::MidiClockEventMessage& m);
+void OnMidiCc(const WaveX::Protocol::MidiCcMessage& m);
+
 // Sample audition control (for Sample Load/Save page)
 bool AuditionSample(const char* path);
 void StopAudition();
