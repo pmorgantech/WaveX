@@ -80,7 +80,10 @@ class UISettingsPage : public UIPage {
      */
     std::array<Softkey, NUM_SOFTKEYS> getSoftkeys() override;
 
-   private:
+   protected:
+    // Protected (not private) so purpose-built settings pages - e.g. the CV
+    // calibration page - can subclass, reuse the list/edit mechanics, and
+    // provide their own softkeys and value refresh.
     std::string title_;
     std::vector<Setting> settings_;
     int selectedSetting_ = 0;

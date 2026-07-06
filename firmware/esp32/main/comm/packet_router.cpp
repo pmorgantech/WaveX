@@ -185,6 +185,12 @@ void PacketRouter::route_by_message_type(uint8_t msg_type,
                 handle_sample_stop_resp(msg);
         } break;
 
+        case WaveX::Protocol::MSG_CV_CAL_RESP: {
+            WaveX::Protocol::CvCalMessage msg;
+            if (CopyMessage(payload, payload_len, msg, "CV_CAL_RESP"))
+                handle_cv_cal_resp(msg);
+        } break;
+
         case WaveX::Protocol::MSG_ERROR: {
             WaveX::Protocol::ErrorMessage msg;
             if (CopyMessage(payload, payload_len, msg, "ERROR"))
@@ -321,6 +327,11 @@ WEAK_HANDLER void PacketRouter::handle_sample_stop_resp(const WaveX::Protocol::S
 
     // Forward to inter_mcu layer which can handle UI callbacks
     inter_mcu_handle_sample_stop_response(msg.success == 1);
+}
+
+WEAK_HANDLER void PacketRouter::handle_cv_cal_resp(const WaveX::Protocol::CvCalMessage& msg) {
+    ESP_LOGD("packet_router", "CV cal resp: group=%u", (unsigned)msg.group);
+    inter_mcu_invoke_cv_cal_callback(msg);
 }
 
 WEAK_HANDLER void PacketRouter::handle_error(const WaveX::Protocol::ErrorMessage& msg) {

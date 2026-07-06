@@ -37,8 +37,16 @@ versioning and release process.
   documented in `cv_cal_store.hpp`), loads it at boot after SD mount, and
   the control tick honors the CV-test override. Dispatcher routes pinned
   by 4 new dispatch tests.
-- Outstanding for item 5: calibration workflow + UI page, and bench
-  verification (CV-update-within-tick scope check, analog levels).
+- CV Calibration UI page (item 5 stage 5, Settings → CV Calibration):
+  per-control gain/offset/curvature editing applied live on the Daisy
+  (every change sends `MSG_CV_CAL_SET`), CV test mode with Cut=0/Cut=1
+  corner-measurement softkeys (steady CVs via `MSG_CV_TEST`, auto-disabled
+  on page exit), Save-to-SD, and read-back of the stored table on entry
+  (`MSG_CV_CAL_GET` → deferred `lv_timer` apply, never touching LVGL from
+  the UART task). `UISettingsPage` internals opened up (`protected`) for
+  purpose-built settings pages.
+- Item 5 is code-complete; outstanding is bench verification only
+  (CV-update-within-tick scope check, SSI2164 inversion, analog levels).
 
 
 ### Removed — inert legacy DSP surface (review C2)

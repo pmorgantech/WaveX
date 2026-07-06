@@ -99,6 +99,45 @@ esp_err_t inter_mcu_start() {
     return ESP_OK;
 }
 
+static wavex_cv_cal_cb_t s_cv_cal_listener = nullptr;
+static void* s_cv_cal_user_data = nullptr;
+
+esp_err_t inter_mcu_send_cv_cal_set(const WaveX::Protocol::CvCalMessage& cal) {
+    if (!s_initialized || s_suspended) {
+        return ESP_FAIL;
+    }
+    int result = send_uart_message(WaveX::Protocol::MSG_CV_CAL_SET, &cal, sizeof(cal));
+    return result >= 0 ? ESP_OK : ESP_FAIL;
+}
+
+esp_err_t inter_mcu_send_cv_cal_get(uint8_t group) {
+    if (!s_initialized || s_suspended) {
+        return ESP_FAIL;
+    }
+    WaveX::Protocol::CvCalGetMessage msg(group);
+    int result = send_uart_message(WaveX::Protocol::MSG_CV_CAL_GET, &msg, sizeof(msg));
+    return result >= 0 ? ESP_OK : ESP_FAIL;
+}
+
+esp_err_t inter_mcu_send_cv_test(const WaveX::Protocol::CvTestMessage& test) {
+    if (!s_initialized || s_suspended) {
+        return ESP_FAIL;
+    }
+    int result = send_uart_message(WaveX::Protocol::MSG_CV_TEST, &test, sizeof(test));
+    return result >= 0 ? ESP_OK : ESP_FAIL;
+}
+
+void inter_mcu_set_cv_cal_listener(wavex_cv_cal_cb_t cb, void* user_data) {
+    s_cv_cal_listener = cb;
+    s_cv_cal_user_data = user_data;
+}
+
+void inter_mcu_invoke_cv_cal_callback(const WaveX::Protocol::CvCalMessage& cal) {
+    if (s_cv_cal_listener) {
+        s_cv_cal_listener(cal, s_cv_cal_user_data);
+    }
+}
+
 esp_err_t inter_mcu_send_control_change(uint8_t parameter, uint8_t channel, uint16_t value) {
     if (!s_initialized || s_suspended) {
         return -1;  // ESP_ERR_INVALID_STATE

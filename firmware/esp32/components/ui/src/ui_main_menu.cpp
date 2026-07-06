@@ -4,6 +4,7 @@
 #include <esp_log.h>
 
 #include "ui/ui_api.h"
+#include "ui/ui_cv_cal_page.h"
 #include "ui/ui_diagnostics_page.h"
 #include "ui/ui_sample_browser.h"
 #include "ui/ui_sample_detail.h"
@@ -71,6 +72,10 @@ std::shared_ptr<UIPage> createModulationMenu() {
 
 std::shared_ptr<UIPage> createSettingsMenu() {
     auto menu = std::make_shared<UIMenuPage>("Settings");
+
+    menu->addItem("CV Calibration", []() {
+        ESP_LOGI(TAG, "CV Calibration selected");
+        UINavigator::instance().push(createCvCalPage()); });
 
     menu->addItem("Display", []() {
         ESP_LOGI(TAG, "Opening Display Settings");

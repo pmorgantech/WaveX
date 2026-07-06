@@ -25,6 +25,16 @@ class StatisticsManager;
 esp_err_t inter_mcu_init(StatisticsManager& statistics);
 esp_err_t inter_mcu_start(void);
 
+// CV calibration workflow (roadmap item 5 stage 5; analog-voice-board.md §3)
+esp_err_t inter_mcu_send_cv_cal_set(const WaveX::Protocol::CvCalMessage& cal);
+esp_err_t inter_mcu_send_cv_cal_get(uint8_t group);
+esp_err_t inter_mcu_send_cv_test(const WaveX::Protocol::CvTestMessage& test);
+// Fired from the UART task when MSG_CV_CAL_RESP arrives - do NOT touch
+// LVGL in the callback (deferred-update pattern, ui-architecture.md).
+typedef void (*wavex_cv_cal_cb_t)(const WaveX::Protocol::CvCalMessage& cal, void* user_data);
+void inter_mcu_set_cv_cal_listener(wavex_cv_cal_cb_t cb, void* user_data);
+void inter_mcu_invoke_cv_cal_callback(const WaveX::Protocol::CvCalMessage& cal);
+
 // Basic MIDI message sending
 esp_err_t inter_mcu_send_control_change(uint8_t parameter, uint8_t channel, uint16_t value);
 esp_err_t inter_mcu_send_note_on(uint8_t note, uint8_t velocity, uint8_t channel);

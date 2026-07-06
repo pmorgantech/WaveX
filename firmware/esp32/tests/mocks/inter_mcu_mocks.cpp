@@ -45,6 +45,10 @@ void inter_mcu_invoke_sample_status_callback(uint16_t sample_id,
     (void)frames_played;
 }
 
+void inter_mcu_invoke_cv_cal_callback(const WaveX::Protocol::CvCalMessage& cal) {
+    (void)cal;  // mock: no listener plumbing needed in host tests
+}
+
 void inter_mcu_invoke_wave_chunk_callback(uint32_t offset, const int16_t* samples, uint16_t count) {
     (void)offset;
     (void)samples;
