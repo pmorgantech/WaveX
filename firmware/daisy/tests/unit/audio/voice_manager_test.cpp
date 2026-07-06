@@ -580,3 +580,32 @@ TEST(VoiceManagerTest, StopAllSilencesEveryVoiceImmediately) {
         EXPECT_FLOAT_EQ(out_r[i], 0.0f);
     }
 }
+
+// HeldVoiceCount is the paraphonic envelope's gate (Stage A, item 5): only
+// voices that are sounding AND not yet releasing count as held.
+TEST(VoiceManagerTest, HeldVoiceCountExcludesReleasingVoices) {
+    VoiceManager vm;
+    vm.Init(48000);
+    auto sample = MakeRampSample(48000, 0, 0);  // long enough not to auto-release
+
+    auto p = FlatParams(sample.data(), sample.size(), 60, 127, 0.5f);
+    p.release_s = 1.0f;  // long release so the voice stays active after Release()
+    vm.Trigger(p);
+    p.note = 64;
+    vm.Trigger(p);
+    EXPECT_EQ(vm.HeldVoiceCount(), 2);
+    EXPECT_EQ(vm.ActiveVoiceCount(), 2);
+
+    vm.Release(64);
+    // The released voice is still sounding (release tail) but no longer held.
+    EXPECT_EQ(vm.HeldVoiceCount(), 1);
+    EXPECT_EQ(vm.ActiveVoiceCount(), 2);
+
+    vm.Release(60);
+    EXPECT_EQ(vm.HeldVoiceCount(), 0);
+    EXPECT_EQ(vm.ActiveVoiceCount(), 2);  // both in release tails
+
+    vm.StopAll();
+    EXPECT_EQ(vm.HeldVoiceCount(), 0);
+    EXPECT_EQ(vm.ActiveVoiceCount(), 0);
+}

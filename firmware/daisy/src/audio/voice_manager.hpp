@@ -282,6 +282,19 @@ class VoiceManager {
         return count;
     }
 
+    // Voices that are sounding and NOT yet in their release tail - the
+    // "held" gate for the Stage A paraphonic envelope law (a non-looping
+    // sample reaching its end auto-releases and stops counting; see
+    // paraphonic_envelope.hpp).
+    uint8_t HeldVoiceCount() const {
+        uint8_t count = 0;
+        for (const auto& v: voices_) {
+            if (v.state == VoiceState::Playing && !v.envelope.IsReleasing())
+                ++count;
+        }
+        return count;
+    }
+
     const Voice& GetVoice(uint8_t i) const { return voices_[i]; }
 
    private:
