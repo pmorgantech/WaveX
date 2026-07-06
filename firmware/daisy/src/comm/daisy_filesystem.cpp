@@ -25,6 +25,8 @@
 #include "spi_protocol/protocol.h"  // For WaveX::Protocol namespace
 #include "sys/dma.h"                // For DMA_BUFFER_MEM_SECTION
 
+#include "wav/wav_header_parser.hpp"
+
 // Hardware instance (shared with UART link) - accessed via WaveX::Comm::s_hw
 
 using namespace daisy;
@@ -92,15 +94,6 @@ bool FileSystem::GetFilePathByIndex(uint32_t file_index, char* file_path, size_t
 }
 }  // namespace Storage
 }  // namespace WaveX
-
-static inline uint16_t read_le16(const uint8_t* p) {
-    return static_cast<uint16_t>(p[0]) | (static_cast<uint16_t>(p[1]) << 8);
-}
-
-static inline uint32_t read_le32(const uint8_t* p) {
-    return (static_cast<uint32_t>(p[0])) | (static_cast<uint32_t>(p[1]) << 8) |
-           (static_cast<uint32_t>(p[2]) << 16) | (static_cast<uint32_t>(p[3]) << 24);
-}
 
 // WAV file metadata parsing
 // Returns true if fmt chunk was found; duration_ms_out (if provided) reports total parse time.
@@ -218,7 +211,14 @@ bool ParseWavMetadata(const WaveX::Storage::FileEntry& entry,
 
     f_close(&file);
 
-    if (memcmp(s_metadata_buf, "RIFF", 4) != 0 || memcmp(s_metadata_buf + 8, "WAVE", 4) != 0) {
+    // Shared RIFF walk over the probe (wav/wav_header_parser.hpp, review
+    // M12). On a partial parse (e.g. the data chunk lies beyond the 4 KB
+    // probe) the parser still yields whatever fmt fields it saw - exactly
+    // what the old hand-rolled loop did.
+    WaveX::Wav::WavInfo info;
+    WaveX::Wav::MemReader reader(s_metadata_buf, bytes_read);
+    const auto parse_result = WaveX::Wav::ParseWavHeader(reader, info);
+    if (parse_result == WaveX::Wav::ParseResult::NotRiffWave) {
         if (WaveX::Comm::s_hw) {
             WaveX::Comm::s_hw->PrintLine("WAV META NOT RIFF/WAVE: %s", entry.name);
         }
@@ -226,51 +226,12 @@ bool ParseWavMetadata(const WaveX::Storage::FileEntry& entry,
             *duration_ms_out = elapsed_ms;
         return false;
     }
-
-    bool fmt_found = false;
-    bool data_found = false;
-    uint32_t sample_rate = 0;
-    uint16_t channels = 0;
-    uint16_t bits_per_sample = 0;
-    uint32_t data_chunk_size = 0;
-
-    size_t offset = 12;  // Skip RIFF header
-    while (offset + 8 <= bytes_read) {
-        const uint8_t* chunk = s_metadata_buf + offset;
-        uint32_t chunk_size = read_le32(chunk + 4);
-        char chunk_id[5] = {static_cast<char>(chunk[0]),
-                            static_cast<char>(chunk[1]),
-                            static_cast<char>(chunk[2]),
-                            static_cast<char>(chunk[3]),
-                            0};
-        offset += 8;
-
-        size_t bytes_available = (bytes_read > offset) ? (bytes_read - offset) : 0;
-        if (chunk_size > bytes_available) {
-            // Not enough data in our probe to parse this chunk – stop scanning
-            break;
-        }
-
-        if (!fmt_found && memcmp(chunk_id, "fmt ", 4) == 0 && chunk_size >= 16) {
-            const uint8_t* fmt = s_metadata_buf + offset;
-            channels = read_le16(fmt + 2);
-            sample_rate = read_le32(fmt + 4);
-            bits_per_sample = read_le16(fmt + 14);
-            fmt_found = true;
-        } else if (!data_found && memcmp(chunk_id, "data", 4) == 0) {
-            data_chunk_size = chunk_size;
-            data_found = true;
-        }
-
-        offset += chunk_size;
-        if (chunk_size & 1) {
-            offset += 1;  // Pad byte alignment
-        }
-
-        if (fmt_found && data_found) {
-            break;
-        }
-    }
+    const bool fmt_found = (info.sample_rate != 0 || info.num_channels != 0);
+    const bool data_found = (parse_result == WaveX::Wav::ParseResult::Ok);
+    const uint32_t sample_rate = info.sample_rate;
+    const uint16_t channels = info.num_channels;
+    const uint16_t bits_per_sample = info.bits_per_sample;
+    const uint32_t data_chunk_size = info.data_size;
 
     if (!fmt_found) {
         if (WaveX::Comm::s_hw) {

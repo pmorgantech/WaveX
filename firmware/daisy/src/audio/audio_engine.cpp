@@ -16,9 +16,11 @@
 #include "sys/dma.h"              // For cache management
 
 #include "../cv/cv_group_router.hpp"
+#include "../storage/fatfs_wav_reader.hpp"
 #include "../timebase.hpp"
 #include "output_sink.hpp"
 #include "voice_manager.hpp"
+#include "wav/wav_header_parser.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -244,14 +246,6 @@ static void SendPreviewChunks() {
         }
         s_prev_sent += remaining;
     }
-}
-
-// Little-endian helpers
-static inline uint16_t read_le16(const uint8_t* p) {
-    return (uint16_t)p[0] | ((uint16_t)p[1] << 8);
-}
-static inline uint32_t read_le32(const uint8_t* p) {
-    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
 }
 
 // ============================
@@ -1232,68 +1226,29 @@ void OnSampleLoad(const SampleLoadMessage& sl) {
         return;
     }
 
-    // Read header into DMA-safe buffer (RAM_D2) so SDMMC DMA can access it.
-    uint8_t* hdr = s_sample_hdr;
-    UINT br = 0;
-    const UINT kHdrSize = 44;
-    fr = f_read(&file, hdr, kHdrSize, &br);
-    if (fr != FR_OK || br < 44 || memcmp(hdr + 0, "RIFF", 4) != 0 ||
-        memcmp(hdr + 8, "WAVE", 4) != 0) {
+    // Shared RIFF walk (wav/wav_header_parser.hpp, review M12 - the old
+    // hand-rolled copy here skipped odd-sized chunks without the RIFF pad
+    // byte and mis-parsed WAVs with odd LIST/INFO chunks before data).
+    WaveX::Wav::WavInfo wav_info;
+    WaveX::Storage::FatFsWavReader reader(file);
+    const auto parse_result = WaveX::Wav::ParseWavHeader(reader, wav_info);
+    if (parse_result != WaveX::Wav::ParseResult::Ok) {
         if (s_hw) {
-            s_hw->PrintLine(
-                "SAMPLE_LOAD: invalid WAV header (%d, bytes=%u)", (int)fr, (unsigned)br);
+            s_hw->PrintLine("SAMPLE_LOAD: invalid WAV header (parse result %d)", (int)parse_result);
         }
         f_close(&file);
         return;
     }
+    const uint16_t num_ch = wav_info.num_channels;
+    const uint32_t sample_rate = wav_info.sample_rate;
+    const uint16_t bits = wav_info.bits_per_sample;
+    const uint32_t data_off = wav_info.data_offset;
+    const uint32_t data_size = wav_info.data_size;
 
-    uint16_t audio_fmt = 0;
-    uint16_t num_ch = 0;
-    uint32_t sample_rate = 0;
-    uint16_t bits = 0;
-    uint32_t data_off = 0;
-    uint32_t data_size = 0;
-
-    f_lseek(&file, 12);
-    while (true) {
-        uint8_t* chdr = s_sample_hdr;  // reuse DMA-safe buffer
-        fr = f_read(&file, chdr, 8, &br);
-        if (fr != FR_OK || br < 8) {
-            f_close(&file);
-            return;
-        }
-        uint32_t cid = read_le32(chdr);
-        uint32_t csz = read_le32(chdr + 4);
-        if (cid == 0x20746d66) {          // 'fmt '
-            uint8_t* fmt = s_sample_hdr;  // reuse DMA-safe buffer
-            if (csz < 16) {
-                f_close(&file);
-                return;
-            }
-            fr = f_read(&file, fmt, 16, &br);
-            if (fr != FR_OK || br < 16) {
-                f_close(&file);
-                return;
-            }
-            audio_fmt = read_le16(fmt + 0);
-            num_ch = read_le16(fmt + 2);
-            sample_rate = read_le32(fmt + 4);
-            bits = read_le16(fmt + 14);
-            if (csz > 16)
-                f_lseek(&file, f_tell(&file) + (csz - 16));
-        } else if (cid == 0x61746164) {  // 'data'
-            data_off = f_tell(&file);
-            data_size = csz;
-            break;
-        } else {
-            f_lseek(&file, f_tell(&file) + csz);
-        }
-    }
-
-    if (audio_fmt != 1 || (bits != 16 && bits != 24) || (num_ch != 1 && num_ch != 2)) {
+    if (wav_info.audio_format != 1 || (bits != 16 && bits != 24) || (num_ch != 1 && num_ch != 2)) {
         if (s_hw) {
             s_hw->PrintLine("SAMPLE_LOAD: unsupported format fmt=%u bits=%u ch=%u",
-                            (unsigned)audio_fmt,
+                            (unsigned)wav_info.audio_format,
                             (unsigned)bits,
                             (unsigned)num_ch);
         }
@@ -1326,6 +1281,7 @@ void OnSampleLoad(const SampleLoadMessage& sl) {
     f_lseek(&file, data_off);
     uint32_t remaining = data_size;
     uint32_t written = 0;
+    UINT br = 0;
     // Use DMA-safe buffer in RAM_D2; stack (DTCM) is not accessible to SDMMC DMA.
     uint8_t* temp = s_sample_io;
     constexpr UINT kIoChunk = sizeof(s_sample_io);
@@ -1453,98 +1409,43 @@ bool OpenWav(const char* path) {
         return false;
     }
 
-    uint8_t hdr[44];
-    UINT br = 0;
-    fr = f_read(&s_wav.file, hdr, sizeof(hdr), &br);
-    if (fr != FR_OK || br < 44) {
+    // Shared RIFF walk (wav/wav_header_parser.hpp, review M12 - the old
+    // hand-rolled copy here skipped odd-sized chunks without the RIFF pad
+    // byte and mis-parsed WAVs with odd LIST/INFO chunks before data).
+    WaveX::Wav::WavInfo wav_info;
+    WaveX::Storage::FatFsWavReader reader(s_wav.file);
+    const auto parse_result = WaveX::Wav::ParseWavHeader(reader, wav_info);
+    if (parse_result != WaveX::Wav::ParseResult::Ok) {
         if (s_hw)
             s_hw->PrintLine(
-                "WAV open failed: header read error %d, bytes read %u", (int)fr, (unsigned)br);
+                "WAV open failed: header parse error %d for %s", (int)parse_result, path);
         f_close(&s_wav.file);
         return false;
-    }
-    // Validate RIFF/WAVE
-    if (memcmp(hdr + 0, "RIFF", 4) != 0 || memcmp(hdr + 8, "WAVE", 4) != 0) {
-        if (s_hw)
-            s_hw->PrintLine("WAV open failed: not a RIFF/WAVE file");
-        f_close(&s_wav.file);
-        return false;
-    }
-
-    // Parse chunks to find fmt and data
-    uint16_t audio_fmt = 0;
-    uint16_t num_ch = 0;
-    uint32_t sample_rate = 0;
-    uint16_t bits = 0;
-    uint32_t data_off = 0;
-    uint32_t data_size = 0;
-
-    // Rewind and iterate using f_lseek for generality
-    f_lseek(&s_wav.file, 12);
-    while (true) {
-        uint8_t chdr[8];
-        fr = f_read(&s_wav.file, chdr, 8, &br);
-        if (fr != FR_OK || br < 8) {
-            if (s_hw)
-                s_hw->PrintLine("WAV open failed: chunk header read error %d, bytes read %u",
-                                (int)fr,
-                                (unsigned)br);
-            f_close(&s_wav.file);
-            return false;
-        }
-        uint32_t cid = read_le32(chdr);
-        uint32_t csz = read_le32(chdr + 4);
-        if (cid == 0x20746d66) {  // 'fmt '
-            uint8_t fmt[16];
-            if (csz < 16) {
-                if (s_hw)
-                    s_hw->PrintLine("WAV open failed: fmt chunk too small");
-                f_close(&s_wav.file);
-                return false;
-            }
-            fr = f_read(&s_wav.file, fmt, 16, &br);
-            if (fr != FR_OK || br < 16) {
-                if (s_hw)
-                    s_hw->PrintLine("WAV open failed: fmt chunk read error");
-                f_close(&s_wav.file);
-                return false;
-            }
-            audio_fmt = read_le16(fmt + 0);
-            num_ch = read_le16(fmt + 2);
-            sample_rate = read_le32(fmt + 4);
-            bits = read_le16(fmt + 14);
-            // Skip any extra fmt bytes
-            if (csz > 16)
-                f_lseek(&s_wav.file, f_tell(&s_wav.file) + (csz - 16));
-        } else if (cid == 0x61746164) {  // 'data'
-            data_off = f_tell(&s_wav.file);
-            data_size = csz;
-            // Position after header for reading
-            break;
-        } else {
-            // skip unknown chunk
-            f_lseek(&s_wav.file, f_tell(&s_wav.file) + csz);
-        }
     }
 
     // Support PCM format (fmt=1), 16-bit or 24-bit, mono or stereo
-    if (audio_fmt != 1 || (bits != 16 && bits != 24) || (num_ch != 1 && num_ch != 2)) {
+    if (wav_info.audio_format != 1 ||
+        (wav_info.bits_per_sample != 16 && wav_info.bits_per_sample != 24) ||
+        (wav_info.num_channels != 1 && wav_info.num_channels != 2)) {
         if (s_hw)
             s_hw->PrintLine("WAV open failed: unsupported format fmt=%u bits=%u ch=%u",
-                            (unsigned)audio_fmt,
-                            (unsigned)bits,
-                            (unsigned)num_ch);
+                            (unsigned)wav_info.audio_format,
+                            (unsigned)wav_info.bits_per_sample,
+                            (unsigned)wav_info.num_channels);
         f_close(&s_wav.file);
         return false;  // only PCM16/24 mono/stereo supported
     }
 
+    // Leave the file positioned at the data payload for streaming.
+    f_lseek(&s_wav.file, wav_info.data_offset);
+
     s_wav.open = true;
-    s_wav.data_start = data_off;
-    s_wav.data_size = data_size;
-    s_wav.bytes_remaining = data_size;
-    s_wav.num_channels = num_ch;
-    s_wav.bits_per_sample = bits;
-    s_wav.sample_rate = sample_rate;
+    s_wav.data_start = wav_info.data_offset;
+    s_wav.data_size = wav_info.data_size;
+    s_wav.bytes_remaining = wav_info.data_size;
+    s_wav.num_channels = wav_info.num_channels;
+    s_wav.bits_per_sample = wav_info.bits_per_sample;
+    s_wav.sample_rate = wav_info.sample_rate;
 
     // Reset buffers
     s_rb_head = 0;
@@ -1554,10 +1455,10 @@ bool OpenWav(const char* path) {
     if (s_hw)
         s_hw->PrintLine("WAV open ok: %s ch=%u sr=%lu bits=%u size=%lu",
                         path,
-                        (unsigned)num_ch,
-                        (unsigned long)sample_rate,
-                        (unsigned)bits,
-                        (unsigned long)data_size);
+                        (unsigned)wav_info.num_channels,
+                        (unsigned long)wav_info.sample_rate,
+                        (unsigned)wav_info.bits_per_sample,
+                        (unsigned long)wav_info.data_size);
 #endif
 
     // Reset pre-buffer state and start pre-buffering

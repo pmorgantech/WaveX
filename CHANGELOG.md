@@ -31,6 +31,18 @@ versioning and release process.
   never set). The message id stays reserved in `protocol.h`; the dispatcher
   logs and ignores it.
 
+### Fixed — one shared WAV header parser, RIFF padding respected (review M12)
+
+- The three hand-rolled RIFF chunk walks (`OpenWav`, `OnSampleLoad`,
+  `ParseWavMetadata`) are replaced by one host-tested parser
+  (`firmware/shared/wav/wav_header_parser.hpp`, 10 tests) templated over a
+  Reader (FatFS adapter on device, `MemReader` for probes/tests). Real bug
+  fixed: the two audio-engine copies skipped odd-sized chunks **without the
+  RIFF pad byte**, so any WAV carrying an odd-length LIST/INFO chunk before
+  `data` mis-parsed (wrong data offset or unsupported-format rejection).
+  The walk is also bounded now (a corrupt size field can no longer loop or
+  stall the stream), and `data`-before-`fmt` files are tolerated.
+
 ### Changed — shared UART frame scanner; TX failures retry (review §6.2/M6)
 
 - Both links' RX byte-stream scanning (start-byte search, length/CRC
