@@ -722,3 +722,119 @@ TEST_F(MessageTypeTest, CvTestMessage) {
     EXPECT_FLOAT_EQ(parsed.resonance, 0.25f);
     EXPECT_FLOAT_EQ(parsed.vca, 1.0f);
 }
+
+// ---- Phase 2 sequencer / transport / MIDI clock messages ----
+
+TEST_F(MessageTypeTest, SeqTransportMessage) {
+    SeqTransportMessage original(
+        SEQ_TRANSPORT_CONTINUE, SEQ_CLOCK_MIDI, SEQ_INPUT_LIVE_RECORD, 1, 14025, 48);
+    size_t created = ProtocolHandler::CreatePacket(
+        buffer_.data(), buffer_.size(), MSG_SEQ_TRANSPORT, &original, sizeof(original));
+    ASSERT_GT(created, 0u);
+    EXPECT_TRUE(ProtocolHandler::ValidatePacket(buffer_.data(), created));
+
+    SeqTransportMessage parsed;
+    ASSERT_TRUE(
+        ProtocolHandler::ParseMessage(buffer_.data(), MSG_SEQ_TRANSPORT, &parsed, sizeof(parsed)));
+    EXPECT_EQ(parsed.command, SEQ_TRANSPORT_CONTINUE);
+    EXPECT_EQ(parsed.clock_source, SEQ_CLOCK_MIDI);
+    EXPECT_EQ(parsed.input_mode, SEQ_INPUT_LIVE_RECORD);
+    EXPECT_EQ(parsed.quantize, 1);
+    EXPECT_EQ(parsed.tempo_bpm_x100, 14025);
+    EXPECT_EQ(parsed.song_position, 48);
+}
+
+TEST_F(MessageTypeTest, SeqPatternOpMessage) {
+    // A SET_STEP op: track 3, step 12, on, velocity 110.
+    SeqPatternOpMessage original(SEQ_OP_SET_STEP, 3, 12, 1, 110, 0);
+    size_t created = ProtocolHandler::CreatePacket(
+        buffer_.data(), buffer_.size(), MSG_SEQ_PATTERN_OP, &original, sizeof(original));
+    ASSERT_GT(created, 0u);
+
+    SeqPatternOpMessage parsed;
+    ASSERT_TRUE(
+        ProtocolHandler::ParseMessage(buffer_.data(), MSG_SEQ_PATTERN_OP, &parsed, sizeof(parsed)));
+    EXPECT_EQ(parsed.op, SEQ_OP_SET_STEP);
+    EXPECT_EQ(parsed.track, 3);
+    EXPECT_EQ(parsed.step, 12);
+    EXPECT_EQ(parsed.arg_u8, 1);
+    EXPECT_EQ(parsed.arg_u16, 110);
+    EXPECT_EQ(parsed.arg_s16, 0);
+}
+
+TEST_F(MessageTypeTest, SeqPatternOpMessageSignedMicroOffset) {
+    // Micro-timing op carries a signed offset - verify negatives survive.
+    SeqPatternOpMessage original(SEQ_OP_SET_STEP_MICRO, 1, 4, 2, 8, -6);
+    size_t created = ProtocolHandler::CreatePacket(
+        buffer_.data(), buffer_.size(), MSG_SEQ_PATTERN_OP, &original, sizeof(original));
+    ASSERT_GT(created, 0u);
+
+    SeqPatternOpMessage parsed;
+    ASSERT_TRUE(
+        ProtocolHandler::ParseMessage(buffer_.data(), MSG_SEQ_PATTERN_OP, &parsed, sizeof(parsed)));
+    EXPECT_EQ(parsed.op, SEQ_OP_SET_STEP_MICRO);
+    EXPECT_EQ(parsed.arg_u8, 2);   // retrig_count
+    EXPECT_EQ(parsed.arg_u16, 8);  // retrig_rate_ticks
+    EXPECT_EQ(parsed.arg_s16, -6);
+}
+
+TEST_F(MessageTypeTest, SeqPlayheadMessage) {
+    SeqPlayheadMessage original(2, 47, 1, 2 /*locked*/, 13000, 9);
+    size_t created = ProtocolHandler::CreatePacket(
+        buffer_.data(), buffer_.size(), MSG_SEQ_PLAYHEAD, &original, sizeof(original));
+    ASSERT_GT(created, 0u);
+
+    SeqPlayheadMessage parsed;
+    ASSERT_TRUE(
+        ProtocolHandler::ParseMessage(buffer_.data(), MSG_SEQ_PLAYHEAD, &parsed, sizeof(parsed)));
+    EXPECT_EQ(parsed.pattern, 2);
+    EXPECT_EQ(parsed.step, 47);
+    EXPECT_EQ(parsed.playing, 1);
+    EXPECT_EQ(parsed.sync_state, 2);
+    EXPECT_EQ(parsed.measured_bpm_x100, 13000);
+    EXPECT_EQ(parsed.loop_count, 9u);
+}
+
+TEST_F(MessageTypeTest, MidiClockEventMessage) {
+    MidiClockEventMessage original(MIDI_CLK_TICK, 1 /*USB*/, 12345, 20833, 0);
+    size_t created = ProtocolHandler::CreatePacket(
+        buffer_.data(), buffer_.size(), MSG_MIDI_CLOCK_EVENT, &original, sizeof(original));
+    ASSERT_GT(created, 0u);
+
+    MidiClockEventMessage parsed;
+    ASSERT_TRUE(ProtocolHandler::ParseMessage(
+        buffer_.data(), MSG_MIDI_CLOCK_EVENT, &parsed, sizeof(parsed)));
+    EXPECT_EQ(parsed.event, MIDI_CLK_TICK);
+    EXPECT_EQ(parsed.source, 1);
+    EXPECT_EQ(parsed.tick_seq, 12345);
+    EXPECT_EQ(parsed.esp_delta_us, 20833u);
+    EXPECT_EQ(parsed.spp_beats16, 0);
+}
+
+TEST_F(MessageTypeTest, MidiCcMessage) {
+    MidiCcMessage original(1 /*modwheel*/, 64, 3);
+    size_t created = ProtocolHandler::CreatePacket(
+        buffer_.data(), buffer_.size(), MSG_MIDI_CC, &original, sizeof(original));
+    ASSERT_GT(created, 0u);
+
+    MidiCcMessage parsed;
+    ASSERT_TRUE(
+        ProtocolHandler::ParseMessage(buffer_.data(), MSG_MIDI_CC, &parsed, sizeof(parsed)));
+    EXPECT_EQ(parsed.cc, 1);
+    EXPECT_EQ(parsed.value, 64);
+    EXPECT_EQ(parsed.channel, 3);
+}
+
+TEST_F(MessageTypeTest, SeqClockOutMessage) {
+    SeqClockOutMessage original(MIDI_CLK_SPP, 777, 32);
+    size_t created = ProtocolHandler::CreatePacket(
+        buffer_.data(), buffer_.size(), MSG_SEQ_CLOCK_OUT, &original, sizeof(original));
+    ASSERT_GT(created, 0u);
+
+    SeqClockOutMessage parsed;
+    ASSERT_TRUE(
+        ProtocolHandler::ParseMessage(buffer_.data(), MSG_SEQ_CLOCK_OUT, &parsed, sizeof(parsed)));
+    EXPECT_EQ(parsed.event, MIDI_CLK_SPP);
+    EXPECT_EQ(parsed.tick_seq, 777);
+    EXPECT_EQ(parsed.spp_beats16, 32);
+}

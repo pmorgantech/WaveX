@@ -62,6 +62,13 @@ struct WaveXPacket {           // packed
 | MSG_CV_CAL_GET | 0x41 | E→D | `CvCalGetMessage{group}` | request one group's calibration |
 | MSG_CV_CAL_RESP | 0x42 | D→E | `CvCalMessage` (persist unused) | reply to SET and GET |
 | MSG_CV_TEST | 0x43 | E→D | `CvTestMessage{group, enable, cutoff, resonance, vca}` | calibration procedure: while enabled, the control tick stages these fixed CVs instead of the paraphonic law |
+| MSG_SEQ_TRANSPORT | 0x50 | E→D | `SeqTransportMessage{command, clock_source, input_mode, quantize, tempo_bpm_x100, song_position}` | play/stop/continue, tempo, clock source (internal/MIDI), input mode (play/step-rec/live-rec/erase) — `sequencer.md` §4, `midi-sync-tempo-follower.md` §3 |
+| MSG_SEQ_PATTERN_OP | 0x51 | E→D | `SeqPatternOpMessage{op, track, step, arg_u8, arg_u16, arg_s16}` | one small idempotent pattern edit; `op` (`SeqPatternOpCode`) selects which fields apply — see the table in `protocol.h` above the struct |
+| MSG_SEQ_PATTERN_SYNC | 0x52 | both | *(reserved — struct not yet defined)* | bulk pattern read/write for project load/save (`sequencer.md` §4); deferred, project persistence uses the WXCF container on SD |
+| MSG_SEQ_PLAYHEAD | 0x53 | D→E | `SeqPlayheadMessage{pattern, step, playing, sync_state, measured_bpm_x100, loop_count}` | coalesced playhead + sync-lock feedback for the UI (≤ 30 Hz) |
+| MSG_MIDI_CLOCK_EVENT | 0x55 | E→D | `MidiClockEventMessage{event, source, tick_seq, esp_delta_us, spp_beats16}` | forwarded MIDI real-time/transport byte; `esp_delta_us` is the ESP-domain **delta** (never an absolute timestamp) so the tempo follower can't mix clock domains — `midi-sync-tempo-follower.md` §2/§3 |
+| MSG_MIDI_CC | 0x56 | E→D | `MidiCcMessage{cc, value, channel}` | forwarded MIDI control change; Daisy owns the CC→mod-source map (`param-locks-and-modulation.md` §6) |
+| MSG_SEQ_CLOCK_OUT | 0x57 | D→E | `SeqClockOutMessage{event, tick_seq, spp_beats16}` | Daisy-generated MIDI clock/transport for the ESP32 to serialize onto DIN + USB immediately |
 | MSG_ERROR | 0xFF | both | `ErrorMessage{code, msg[48]}` | error report |
 
 ## 4. Conventions & invariants

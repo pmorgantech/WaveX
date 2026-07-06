@@ -92,6 +92,17 @@ enum MessageType : uint8_t {
     MSG_CV_CAL_GET = 0x41,   // ESP32 -> Daisy: request one group's cal
     MSG_CV_CAL_RESP = 0x42,  // Daisy -> ESP32: one group's cal (reply to SET and GET)
     MSG_CV_TEST = 0x43,      // ESP32 -> Daisy: override CVs with fixed values (cal procedure)
+    // Sequencer / transport / MIDI clock (Phase 2; docs/features/sequencer.md,
+    // midi-sync-tempo-follower.md, melodic-sequencing.md). ID block reserved in
+    // docs/features/feature-expansion-ideas.md - do not assign outside it.
+    MSG_SEQ_TRANSPORT = 0x50,   // E->D: play/stop/continue, tempo, clock source, input mode
+    MSG_SEQ_PATTERN_OP = 0x51,  // E->D: small idempotent pattern edits (step/track/pattern)
+    MSG_SEQ_PATTERN_SYNC =
+        0x52,                 // both: bulk pattern read/write (reserved; struct not yet defined)
+    MSG_SEQ_PLAYHEAD = 0x53,  // D->E: playhead/step/sync feedback (coalesced)
+    MSG_MIDI_CLOCK_EVENT = 0x55,  // E->D: forwarded MIDI real-time clock/transport byte
+    MSG_MIDI_CC = 0x56,           // E->D: forwarded MIDI control change
+    MSG_SEQ_CLOCK_OUT = 0x57,     // D->E: MIDI clock/transport for the ESP32 to serialize outbound
     MSG_ERROR = 0xFF
 };
 
@@ -614,6 +625,199 @@ struct CvTestMessage {
           cutoff(cutoff_),
           resonance(resonance_),
           vca(vca_) {}
+} __attribute__((packed));
+
+// ---- Sequencer / transport / MIDI clock (Phase 2) ----
+// See docs/features/sequencer.md §4, midi-sync-tempo-follower.md §3,
+// melodic-sequencing.md §4. The engine-internal Pattern model lives on the
+// Daisy (firmware/daisy/src/sequencer/pattern.hpp) and is NOT sent verbatim;
+// these are the small idempotent edit/feedback ops that drive it.
+
+enum SeqTransportCmd : uint8_t {
+    SEQ_TRANSPORT_STOP = 0,
+    SEQ_TRANSPORT_PLAY = 1,      // start from the top (resets playhead)
+    SEQ_TRANSPORT_CONTINUE = 2,  // resume from song_position (SPP-style)
+};
+enum SeqClockSource : uint8_t {
+    SEQ_CLOCK_INTERNAL = 0,
+    SEQ_CLOCK_MIDI = 1,
+};
+enum SeqInputMode : uint8_t {
+    SEQ_INPUT_PLAY = 0,
+    SEQ_INPUT_STEP_RECORD = 1,
+    SEQ_INPUT_LIVE_RECORD = 2,
+    SEQ_INPUT_LIVE_ERASE = 3,
+};
+
+// MSG_SEQ_TRANSPORT (E->D): transport + global sequencer mode. tempo_bpm_x100
+// is BPM*100 (12000 = 120.00 BPM); song_position is in MIDI beats (16th notes)
+// and is only consulted for SEQ_TRANSPORT_CONTINUE.
+struct SeqTransportMessage {
+    uint8_t command;       // SeqTransportCmd
+    uint8_t clock_source;  // SeqClockSource
+    uint8_t input_mode;    // SeqInputMode
+    uint8_t quantize;      // 0=off, 1=step, 2=half-step (live-record capture)
+    uint16_t tempo_bpm_x100;
+    uint16_t song_position;
+
+    SeqTransportMessage()
+        : command(0),
+          clock_source(0),
+          input_mode(0),
+          quantize(0),
+          tempo_bpm_x100(12000),
+          song_position(0) {}
+    SeqTransportMessage(uint8_t command_,
+                        uint8_t clock_source_,
+                        uint8_t input_mode_,
+                        uint8_t quantize_,
+                        uint16_t tempo_bpm_x100_,
+                        uint16_t song_position_)
+        : command(command_),
+          clock_source(clock_source_),
+          input_mode(input_mode_),
+          quantize(quantize_),
+          tempo_bpm_x100(tempo_bpm_x100_),
+          song_position(song_position_) {}
+} __attribute__((packed));
+
+// MSG_SEQ_PATTERN_OP (E->D): one small idempotent pattern edit. The op field
+// selects which of track/step/arg_* are meaningful:
+//   op                     | track | step | arg_u8            | arg_u16          | arg_s16
+//   SEQ_OP_SET_STEP        |  yes  | yes  | on(0/1)           | velocity(0..127) | -
+//   SEQ_OP_TOGGLE_STEP     |  yes  | yes  | -                 | -                | -
+//   SEQ_OP_SET_STEP_PROB   |  yes  | yes  | probability(0..100)| -               | -
+//   SEQ_OP_SET_STEP_MICRO  |  yes  | yes  | retrig_count      | retrig_rate_ticks| micro_offset
+//   SEQ_OP_TRACK_MUTE      |  yes  |  -   | enabled(0/1)      | -                | -
+//   SEQ_OP_PATTERN_LENGTH  |   -   |  -   | -                 | length(1..64)    | -
+//   SEQ_OP_PATTERN_SCALE   |   -   |  -   | scale(StepScale)  | -                | -
+//   SEQ_OP_PATTERN_SWING   |   -   |  -   | swing(50..75)     | -                | -
+//   SEQ_OP_SET_PARAM_LOCK  |  yes  | yes  | param_id(slot key)| value            | -
+//   SEQ_OP_CLEAR_PARAM_LOCKS| yes  | yes  | -                 | -                | -
+enum SeqPatternOpCode : uint8_t {
+    SEQ_OP_SET_STEP = 0,
+    SEQ_OP_TOGGLE_STEP = 1,
+    SEQ_OP_SET_STEP_PROB = 2,
+    SEQ_OP_SET_STEP_MICRO = 3,
+    SEQ_OP_TRACK_MUTE = 4,
+    SEQ_OP_PATTERN_LENGTH = 5,
+    SEQ_OP_PATTERN_SCALE = 6,
+    SEQ_OP_PATTERN_SWING = 7,
+    SEQ_OP_SET_PARAM_LOCK = 8,
+    SEQ_OP_CLEAR_PARAM_LOCKS = 9,
+};
+struct SeqPatternOpMessage {
+    uint8_t op;      // SeqPatternOpCode
+    uint8_t track;   // 0..15 (ignored for pattern-scoped ops)
+    uint8_t step;    // 0..63 (ignored for track/pattern-scoped ops)
+    uint8_t arg_u8;  // op-dependent (see table above)
+    uint16_t arg_u16;
+    int16_t arg_s16;
+
+    SeqPatternOpMessage() : op(0), track(0), step(0), arg_u8(0), arg_u16(0), arg_s16(0) {}
+    SeqPatternOpMessage(uint8_t op_,
+                        uint8_t track_,
+                        uint8_t step_,
+                        uint8_t arg_u8_,
+                        uint16_t arg_u16_,
+                        int16_t arg_s16_)
+        : op(op_),
+          track(track_),
+          step(step_),
+          arg_u8(arg_u8_),
+          arg_u16(arg_u16_),
+          arg_s16(arg_s16_) {}
+} __attribute__((packed));
+
+// MSG_SEQ_PLAYHEAD (D->E): coalesced playhead + sync feedback for the UI.
+// measured_bpm_x100 mirrors SeqTransportMessage's tempo encoding.
+struct SeqPlayheadMessage {
+    uint8_t pattern;     // active pattern index
+    uint8_t step;        // current step 0..63
+    uint8_t playing;     // 0=stopped, 1=playing
+    uint8_t sync_state;  // 0=internal,1=acquiring,2=locked,3=freewheel
+    uint16_t measured_bpm_x100;
+    uint32_t loop_count;  // patterns elapsed since transport start
+
+    SeqPlayheadMessage()
+        : pattern(0), step(0), playing(0), sync_state(0), measured_bpm_x100(12000), loop_count(0) {}
+    SeqPlayheadMessage(uint8_t pattern_,
+                       uint8_t step_,
+                       uint8_t playing_,
+                       uint8_t sync_state_,
+                       uint16_t measured_bpm_x100_,
+                       uint32_t loop_count_)
+        : pattern(pattern_),
+          step(step_),
+          playing(playing_),
+          sync_state(sync_state_),
+          measured_bpm_x100(measured_bpm_x100_),
+          loop_count(loop_count_) {}
+} __attribute__((packed));
+
+enum MidiClockEventType : uint8_t {
+    MIDI_CLK_TICK = 0,      // 0xF8
+    MIDI_CLK_START = 1,     // 0xFA
+    MIDI_CLK_CONTINUE = 2,  // 0xFB
+    MIDI_CLK_STOP = 3,      // 0xFC
+    MIDI_CLK_SPP = 4,       // 0xF2 (song position pointer)
+};
+// MSG_MIDI_CLOCK_EVENT (E->D): a forwarded MIDI real-time/transport byte. Per
+// midi-sync-tempo-follower.md §2/§3 the ESP32 sends the DELTA since the
+// previous event from this source (never an absolute foreign timestamp), so
+// the Daisy's tempo follower cannot mix clock domains.
+struct MidiClockEventMessage {
+    uint8_t event;          // MidiClockEventType
+    uint8_t source;         // 0=DIN, 1=USB
+    uint16_t tick_seq;      // wraps; gap detection for dropped ticks
+    uint32_t esp_delta_us;  // us since the previous event from this source (0 on first/START)
+    uint16_t spp_beats16;   // SPP payload in MIDI beats (16th notes); event==MIDI_CLK_SPP only
+    uint16_t reserved;
+
+    MidiClockEventMessage()
+        : event(0), source(0), tick_seq(0), esp_delta_us(0), spp_beats16(0), reserved(0) {}
+    MidiClockEventMessage(uint8_t event_,
+                          uint8_t source_,
+                          uint16_t tick_seq_,
+                          uint32_t esp_delta_us_,
+                          uint16_t spp_beats16_)
+        : event(event_),
+          source(source_),
+          tick_seq(tick_seq_),
+          esp_delta_us(esp_delta_us_),
+          spp_beats16(spp_beats16_),
+          reserved(0) {}
+} __attribute__((packed));
+
+// MSG_MIDI_CC (E->D): a forwarded MIDI control change. The Daisy owns the
+// CC->modulation-source mapping (param-locks-and-modulation.md §6).
+struct MidiCcMessage {
+    uint8_t cc;
+    uint8_t value;
+    uint8_t channel;
+    uint8_t reserved;
+
+    MidiCcMessage() : cc(0), value(0), channel(0), reserved(0) {}
+    MidiCcMessage(uint8_t cc_, uint8_t value_, uint8_t channel_)
+        : cc(cc_), value(value_), channel(channel_), reserved(0) {}
+} __attribute__((packed));
+
+// MSG_SEQ_CLOCK_OUT (D->E): the Daisy is the timing master; the ESP32 turns
+// these into 0xF8/0xFA/... bytes on DIN + USB immediately (no TX coalescing).
+struct SeqClockOutMessage {
+    uint8_t event;  // MidiClockEventType
+    uint8_t reserved;
+    uint16_t tick_seq;
+    uint16_t spp_beats16;  // event==MIDI_CLK_SPP only
+    uint16_t reserved2;
+
+    SeqClockOutMessage() : event(0), reserved(0), tick_seq(0), spp_beats16(0), reserved2(0) {}
+    SeqClockOutMessage(uint8_t event_, uint16_t tick_seq_, uint16_t spp_beats16_)
+        : event(event_),
+          reserved(0),
+          tick_seq(tick_seq_),
+          spp_beats16(spp_beats16_),
+          reserved2(0) {}
 } __attribute__((packed));
 
 // Legacy packet structures completely removed - using new simplified format only

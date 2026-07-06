@@ -11,6 +11,23 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Added — Phase 2 sequencer / transport / MIDI-clock protocol messages
+
+- `firmware/shared/spi_protocol/protocol.h`: seven new wire messages in the
+  reserved 0x50–0x57 block (`docs/features/feature-expansion-ideas.md`):
+  `MSG_SEQ_TRANSPORT` (0x50), `MSG_SEQ_PATTERN_OP` (0x51), `MSG_SEQ_PLAYHEAD`
+  (0x53), `MSG_MIDI_CLOCK_EVENT` (0x55), `MSG_MIDI_CC` (0x56),
+  `MSG_SEQ_CLOCK_OUT` (0x57), plus `MSG_SEQ_PATTERN_SYNC` (0x52) reserved as
+  an enum value (bulk sync deferred; project persistence uses WXCF on SD).
+  All structs follow the packed + named-constructor + zero-default
+  convention. `SeqPatternOpMessage` is a compact idempotent-op envelope
+  (op-code selects which of track/step/arg_* apply — table documented at the
+  struct). `MidiClockEventMessage` carries the ESP-domain **delta** between
+  events, never an absolute timestamp, baking the clock-domain-safety rule
+  (`midi-sync-tempo-follower.md` §2) into the wire contract.
+- 7 round-trip host tests (`message_types_test.cpp`), incl. signed
+  micro-offset survival; `docs/features/inter-mcu-protocol.md` catalog rows.
+
 ### Added — WXCF chunk container (roadmap Phase 2 item 6 / Phase 2.5 shared infra)
 
 - `firmware/shared/wxcf/wxcf.hpp`: `Writer`/`Reader` per
