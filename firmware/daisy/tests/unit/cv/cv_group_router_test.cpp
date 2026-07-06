@@ -21,7 +21,11 @@ struct FakeBackend {
     void QueueGroup(uint8_t group, float cutoff, float resonance, float vca) {
         queued.push_back({group, cutoff, resonance, vca});
     }
-    void Flush() { ++flush_count; }
+    bool flush_result = true;
+    bool Flush() {
+        ++flush_count;
+        return flush_result;
+    }
 };
 
 }  // namespace

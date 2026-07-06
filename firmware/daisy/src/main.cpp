@@ -391,6 +391,9 @@ int main(void) {
 // Check for audio underruns (logging handled here to avoid blocking audio callback)
 #if WAVEX_AUDIO_ENGINE_ENABLED
         WaveX::AudioEngine::CheckAndLogUnderruns();
+        // Stage A paraphonic CV: flush tick-staged DAC values (blocking
+        // I2C ~225 us; §7.1.4-compliant on the main loop, item 5).
+        WaveX::AudioEngine::FlushCv();
 #endif
 
 // Pump WAV I/O for audio playback (including audition)

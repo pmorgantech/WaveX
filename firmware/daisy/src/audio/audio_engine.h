@@ -63,6 +63,10 @@ float GetBlockPeriodMs();  // Block period in milliseconds
 // Underrun monitoring (called from main loop to avoid blocking audio)
 void CheckAndLogUnderruns();
 
+// Stage A CV flush (roadmap item 5): performs the blocking MCP4728 I2C
+// write for CV values staged at the control tick. Main-loop only.
+void FlushCv();
+
 // Sample audition control (for Sample Load/Save page)
 bool AuditionSample(const char* path);
 void StopAudition();

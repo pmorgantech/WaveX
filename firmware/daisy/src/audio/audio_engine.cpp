@@ -19,6 +19,7 @@
 #include "../storage/fatfs_wav_reader.hpp"
 #include "../timebase.hpp"
 #include "output_sink.hpp"
+#include "paraphonic_envelope.hpp"
 #include "voice_manager.hpp"
 #include "wav/wav_header_parser.hpp"
 #include <algorithm>
@@ -91,6 +92,28 @@ static OutputSinkType s_output_sink;
 // queue and mixes Render() output on top of the streaming path.
 static WaveX::AudioEngine::VoiceManager s_voice_manager;
 
+// --- Stage A paraphonic analog path (roadmap item 5; analog-voice-board.md
+// §0). One shared envelope drives the shared VCF/VCA CVs; values are
+// STAGED at the 1 kHz control tick (audio context, callback-safe - the
+// router/backend only write member fields) and FLUSHED from the main loop
+// (blocking I2C ~225 us, §7.1.4) via FlushCv() below.
+static ParaphonicEnvelope s_para_env;
+
+// Shared-path control values. Written from main-loop context (stage 3 maps
+// MSG_CONTROL_CHANGE here), read at the tick in audio context: plain
+// aligned float stores are atomic on Cortex-M7 and each field has a single
+// writer, so per-field tearing cannot occur (same handoff contract as the
+// old parameter bank, now with an actual consumer).
+struct ParaphonicParams {
+    float cutoff_base = 0.2f;    // 0..1 filter cutoff floor
+    float env_to_cutoff = 0.8f;  // envelope -> cutoff modulation depth
+    float resonance = 0.2f;      // 0..1
+};
+static ParaphonicParams s_para_params;
+
+// Set by the tick after staging fresh CV values; consumed by FlushCv().
+static volatile bool s_cv_dirty = false;
+
 // --- MIDI note-event handoff (roadmap Phase 1 item 8) ---
 // Voice state must only be touched from one context: Trigger()/Release()
 // write fields Render() reads, so calling them from the main loop while
@@ -130,13 +153,17 @@ static bool note_queue_push(const NoteEvent& ev) {
 // Audio-callback side: apply every pending note event, then honor a
 // pending hard-stop. Order matters - a stop request must also kill
 // triggers queued before it (they reference the memory being released).
-static void drain_note_queue() {
+// Returns true if any trigger was applied - the paraphonic envelope's
+// note-on edge (item 5).
+static bool drain_note_queue() {
+    bool any_trigger = false;
     const uint32_t w = __atomic_load_n(&s_note_q_write, __ATOMIC_ACQUIRE);
     uint32_t r = s_note_q_read;  // single consumer: plain read of own index
     while (r != w) {
         const NoteEvent& ev = s_note_queue[r % kNoteQueueSize];
         if (ev.is_trigger) {
             s_voice_manager.Trigger(ev.params);
+            any_trigger = true;
         } else {
             s_voice_manager.Release(ev.note);
         }
@@ -146,6 +173,7 @@ static void drain_note_queue() {
     if (__atomic_exchange_n(&s_voice_stop_all, false, __ATOMIC_ACQUIRE)) {
         s_voice_manager.StopAll();
     }
+    return any_trigger;
 }
 
 // Sample RAM Manager (for loaded samples)
@@ -877,6 +905,12 @@ void Init(DaisySeed& hw, float sample_rate) {
 
     s_voice_manager.Init(static_cast<uint32_t>(sample_rate));
 
+    // Stage A paraphonic envelope runs at the control-tick rate (1 kHz).
+    // Defaults are musical bring-up values; stage 3 maps ENVELOPE_* wire
+    // parameters onto SetParams.
+    s_para_env.Init(1000);
+    s_para_env.SetParams(0.005f, 0.050f, 0.8f, 0.150f);
+
     // Test basic allocation to ensure SDRAM is working
     if (s_hw) {
         s_hw->PrintLine("AUDIO_ENGINE: Testing Sample RAM allocation...");
@@ -953,7 +987,7 @@ void Callback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t
     // content above. Render() only runs when a voice is active, so the
     // startup silence requirement is preserved. All callback-safe: fixed
     // buffers, no allocation, no I/O, no logging.
-    drain_note_queue();
+    const bool any_note_on = drain_note_queue();
     if (s_voice_manager.ActiveVoiceCount() > 0 &&
         size <= static_cast<size_t>(Timebase::kBlockSize)) {
         static float vm_l[Timebase::kBlockSize];
@@ -985,8 +1019,19 @@ void Callback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t
     s_last_block_meters.peakL = pkL;
     s_last_block_meters.peakR = pkR;
 
-    Timebase::Tick1kHz([] {
-        // Future control logic
+    Timebase::Tick1kHz([&] {
+        // Stage A paraphonic control law (item 5): the shared envelope
+        // gates the analog VCA and modulates the shared VCF cutoff above
+        // its base. Staging is callback-safe (QueueGroup only writes
+        // fields); the I2C transaction happens in FlushCv() on the main
+        // loop. A flush racing a tick can read one channel from the
+        // previous tick - benign, self-corrects on the next flush.
+        const bool any_held = s_voice_manager.HeldVoiceCount() > 0;
+        const float env = s_para_env.Tick(any_note_on, any_held);
+        const float cutoff =
+            CvClamp01(s_para_params.cutoff_base + s_para_params.env_to_cutoff * env);
+        s_cv_router.QueueVoice(0, cutoff, s_para_params.resonance, env);
+        __atomic_store_n(&s_cv_dirty, true, __ATOMIC_RELEASE);
     });
 
     // End CPU load measurement for this audio block
@@ -1376,6 +1421,36 @@ void CheckAndLogUnderruns() {
     } else if (!s_underrun_detected && s_underrun_logged) {
         // Reset logging flag when underruns stop
         s_underrun_logged = false;
+    }
+}
+
+// Main-loop only: performs the blocking CV DAC transaction (~225 us
+// MCP4728 fast-write) for values staged at the control tick - never in the
+// callback (§7.1.4 / analog-voice-board.md §0 timing rules). If the DAC
+// is absent (bench without the Stage A breadboard), eight consecutive I2C
+// failures disable the flush with one log line instead of paying the
+// transaction timeout every millisecond forever.
+void FlushCv() {
+    static uint32_t consecutive_failures = 0;
+    static bool disabled_logged = false;
+    constexpr uint32_t kMaxConsecutiveFailures = 8;
+
+    if (consecutive_failures >= kMaxConsecutiveFailures) {
+        if (!disabled_logged) {
+            disabled_logged = true;
+            if (s_hw)
+                s_hw->PrintLine("CV: MCP4728 not responding after %u attempts - CV flush disabled",
+                                (unsigned)kMaxConsecutiveFailures);
+        }
+        return;
+    }
+    if (!__atomic_exchange_n(&s_cv_dirty, false, __ATOMIC_ACQUIRE)) {
+        return;  // nothing staged since the last flush
+    }
+    if (s_cv_router.Flush()) {
+        consecutive_failures = 0;
+    } else {
+        consecutive_failures++;
     }
 }
 

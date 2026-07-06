@@ -11,7 +11,7 @@
 //
 // Backend is any type exposing:
 //   void QueueGroup(uint8_t group, float cutoff, float resonance, float vca);
-//   void Flush();
+//   bool Flush();  // false = bus/transaction failure
 // (Mcp4728Backend for Stage A, Mcp48Backend for Stage B - see
 // mcp4728_backend.hpp / mcp48_backend.hpp). Compile-time (template)
 // polymorphism, not virtual dispatch, so there's no vtable indirection in
@@ -39,8 +39,9 @@ class CvGroupRouter {
         backend_.QueueGroup(FoldVoiceToGroup(voice), cutoff, resonance, vca);
     }
 
-    // Main-loop only - see class comment.
-    void Flush() { backend_.Flush(); }
+    // Main-loop only - see class comment. Returns the backend's result
+    // (false = transaction failure, e.g. DAC absent on the bench).
+    bool Flush() { return backend_.Flush(); }
 
     // Exposed for tests and callers that want to reason about the mapping
     // directly. NumGroups == 1 folds every voice onto group 0 (Stage A).

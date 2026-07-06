@@ -56,11 +56,13 @@ class Mcp4728Backend {
 
     // Main-loop only: performs the blocking I2C fast-write transaction. Per
     // docs/features/analog-voice-board.md §0, this is ~225us @400kHz and
-    // must never run in the audio callback.
-    void Flush() { WriteFastWrite(cutoff_dac_, res_dac_, vca_dac_, 0); }
+    // must never run in the audio callback. Returns false on I2C failure
+    // (e.g. no MCP4728 on the bus) so the caller can back off instead of
+    // paying the transaction timeout on every tick.
+    bool Flush() { return WriteFastWrite(cutoff_dac_, res_dac_, vca_dac_, 0); }
 
    private:
-    void WriteFastWrite(uint16_t ch0, uint16_t ch1, uint16_t ch2, uint16_t ch3) {
+    bool WriteFastWrite(uint16_t ch0, uint16_t ch1, uint16_t ch2, uint16_t ch3) {
         uint8_t buf[9];
         size_t k = 0;
         buf[k++] = 0x00;  // Fast Write
@@ -72,7 +74,8 @@ class Mcp4728Backend {
         emit(ch1);
         emit(ch2);
         emit(ch3);
-        i2c_.TransmitBlocking((uint16_t)(addr_ << 1), buf, k, 1);
+        return i2c_.TransmitBlocking((uint16_t)(addr_ << 1), buf, k, 1) ==
+               daisy::I2CHandle::Result::OK;
     }
 
     uint8_t addr_ = 0x60;

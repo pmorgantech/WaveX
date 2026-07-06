@@ -36,8 +36,9 @@ class Mcp48Backend {
     }
 
     // Main-loop only, once implemented - see class comment.
-    void Flush() {
+    bool Flush() {
         // TODO(roadmap Phase 3): shift staged_[] out over SPI per voice/group.
+        return true;
     }
 
    private:
