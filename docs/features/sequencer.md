@@ -32,8 +32,9 @@ Project
 └── Tempo, master params
 ```
 
-- **Param locks** (per-step parameter overrides, Elektron-style) reuse the existing `ControlParameter` ids — the step scheduler applies them through the same path as live control changes, so no new audio-engine surface is needed.
-- **Choke groups** live in the kit (e.g. open/closed hat), enforced by the voice manager.
+- **Param locks** (per-step parameter overrides, Elektron-style) reuse the existing `ControlParameter` ids — application semantics (trigger-param overrides, one-step lifetime for track-scoped ids) are pinned in `param-locks-and-modulation.md` §2.
+- **Kits are drum-mode instruments** (decision 2026-07-05): the kit structure above is the drum-mode subset of `instrument-model.md`'s zone model (pad *p* = zone with `key_lo == key_hi`), and `KIT_OP` is subsumed by `MSG_INST_OP` (0x54 stays reserved-unused). Melodic track types extend this pattern model in `melodic-sequencing.md`.
+- **Choke groups** live in the kit (e.g. open/closed hat), enforced by the voice manager (`VoiceManager::Choke`, `instrument-model.md` §3).
 - Serialization: versioned binary chunks on SD (`project.wxp`), written atomically (temp + rename). Design the format doc before code; include format version + per-chunk lengths so old firmware can skip unknown chunks.
 
 ## 4. Protocol extensions (design + round-trip tests before UI work)

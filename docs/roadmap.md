@@ -1,7 +1,7 @@
 # WaveX Implementation Roadmap
 
 **Status**: Canonical implementation-order document. Read `architecture.md` first.
-**Last updated**: 2026-07-02
+**Last updated**: 2026-07-05 (feature-design suite integrated: Phase 2 doc refs, new Phase 2.5, Phase 4/5 additions — index at `features/feature-expansion-ideas.md`)
 
 Phases are ordered by dependency, not calendar. Within a phase, items are listed in recommended implementation order. Every phase ends with the test gate that must be green before moving on.
 
@@ -75,13 +75,29 @@ Order of implementation:
 ## Phase 2 — Groovebox Core: Sequencer + Pads (see `features/sequencer.md`)
 
 1. Sequencer engine **on the Daisy** (sample-accurate, driven by the 1 kHz control tick with sample-offset scheduling inside the block).
-2. Pattern model: 16 steps × pages, per-step note/velocity/probability/micro-timing; kits map pads → samples + voice params.
-3. Transport & sync: internal clock, MIDI clock out, then MIDI clock in (slave) — tempo drift test against a reference clock.
-4. New protocol messages: pattern edit ops (UI → engine), playhead/step feedback (engine → UI, coalesced), kit management. Extend `protocol.h` with round-trip tests **before** UI work.
+2. Pattern model: 16 steps × pages, per-step note/velocity/probability/micro-timing; kits map pads → samples + voice params. **Kit representation decision (2026-07-05): a kit is a drum-mode instrument** — see `features/instrument-model.md` §8; the full instrument layer lands in Phase 2.5, but design Phase 2's kit structs so they *are* the drum-mode subset, not a parallel format to migrate later.
+3. Transport & sync: internal clock, MIDI clock out, then MIDI clock in (slave) — tempo drift test against a reference clock. **Full design now exists: `features/midi-sync-tempo-follower.md`** (PLL tempo follower, clock-domain rules, MSG_MIDI_CLOCK_EVENT 0x55 / MSG_SEQ_CLOCK_OUT 0x57, host jitter-test suite).
+4. New protocol messages: pattern edit ops (UI → engine), playhead/step feedback (engine → UI, coalesced), kit management. Extend `protocol.h` with round-trip tests **before** UI work. Message-ID blocks for this and all Phase 2.5+ work are reserved in `features/feature-expansion-ideas.md` — don't improvise IDs.
 5. UI: pad grid page (TCA8418 matrix + touch), step editor page, kit editor. LED feedback via TLC5947 (bring up SPI2 driver here — first real consumer).
-6. Project persistence on SD (kits/patterns/songs); atomic save (temp + rename). Format doc before code.
+6. Project persistence on SD (kits/patterns/songs); atomic save (temp + rename). Format doc before code — **use the WXCF chunk container** (`features/instrument-model.md` §5) rather than inventing a per-file format.
+7. P-lock application path per `features/param-locks-and-modulation.md` §2 (the pattern model above already carries `param_locks[≤4]`; that doc pins how they apply to trigger params without touching global state).
 
 **Gate**: program and perform a 4-track drum pattern with swing from the front panel; MIDI-clock-synced to a DAW without audible drift over 10 minutes.
+
+---
+
+## Phase 2.5 — Sampler Instrument Layer (E-mu lineage; added 2026-07-05)
+
+The groovebox core (Phase 2) plays kits; this phase makes WaveX an *instrument* in the Emax/Emulator sense: multisampled presets across key/velocity ranges, a closed sampling loop, melodic sequencing, and routed modulation. Index + rationale: `features/feature-expansion-ideas.md`. Order within the phase:
+
+1. **Instrument model** (`features/instrument-model.md`): zones/velocity layers/crossfade, choke groups, WXCF container + `.wxi` persistence, `MSG_INST_OP/STATUS/ZONE_SYNC` (0x60–0x62). Deletes the item-8 stopgap note→sample policy. Includes the `VoiceManager` extensions (`Voice::{slot, choke_group}`, `Choke()`, `StopSlot()`, `VoiceTriggerParams::{gain_mul, pitch_ratio_mul}`) every later feature reuses.
+2. **Mixer v1** (`features/output-routing-and-mixer.md` §1–2): 16-track gain/pan/mute/solo + per-track meters (0x78/0x79). Small, and performance work below wants it.
+3. **Melodic sequencing** (`features/melodic-sequencing.md`): melodic track type, chords/ties, step-record, live record/overdub/erase on the Daisy.
+4. **Modulation matrix + LFOs + filter envelope** (`features/param-locks-and-modulation.md` §3–5): 8 slots/instrument, block-rate evaluation, `MSG_MIDI_CC` (0x56). Land the param slew engine (`features/scenes-and-performance.md` §3) here — same control-tick surface.
+5. **Sampling/recording v1** (`features/sampling-and-recording.md`): threshold-armed capture with pre-roll, resample/bounce source, audition-before-save, non-destructive auto-trim markers, assign-to-zone. (Destructive trim/normalize stay in Phase 4; this closes the capture loop without them.)
+6. **Arpeggiator** (`features/arpeggiator.md`): per-slot, clock-synced, latch; feeds live record.
+
+**Gate**: build a multisampled keyboard instrument (≥ 3 key zones × 2 velocity layers) from freshly recorded samples entirely on-device; play it from MIDI through the Stage A analog path; live-record a chord progression + arp line over a drum pattern with p-locked filter moves; 1-hour zero-underrun soak with all of the above active; `make test` green with the new host suites.
 
 ---
 
@@ -102,8 +118,10 @@ This phase is the **Stage A → Stage B transition** (`features/analog-voice-boa
 
 ## Phase 4 — Offline Sample Editing & Mangling (see `features/offline-sample-editing.md`)
 
+Recording itself ships in Phase 2.5 (`features/sampling-and-recording.md`); this phase adds the destructive half of the loop. Render-job messages use the reserved 0xA0–0xA3 block.
+
 1. Render-job scheduler on the Daisy main loop (chunked SD→SD processing with progress messages; cancellation).
-2. Editing primitives: trim/crop, gain/normalize, fades, reverse, mono↔stereo, resample.
+2. Editing primitives: trim/crop, gain/normalize, fades, reverse, mono↔stereo, resample, **crossfade-loop render** (`xfade_loop` — seam-smoothing for zone loops, the Emax tool; added by `features/instrument-model.md` §11).
 3. Waveform editor UI: zoomable preview (decimated tiers cached on ESP32 PSRAM), region selection with encoder fine-adjust, non-destructive markers (start/end/loop/slices) stored in a sidecar, destructive ops via render jobs.
 4. Slicing: transient detection (offline), slice-to-pads workflow.
 5. Mangling effects (offline renders): bit-crush, drive/saturate, time-stretch, pitch-shift, granular freeze. CMSIS-DSP kernels where applicable — this is where the 1.17.0 upgrade pays off.
@@ -114,8 +132,9 @@ This phase is the **Stage A → Stage B transition** (`features/analog-voice-boa
 
 ## Phase 5 — Performance & Polish
 
-- Song mode / pattern chaining; performance macros (encoder-assignable).
-- Digital send FX (delay, reverb) in the stereo master section.
+- Song mode / pattern chaining; performance macros (encoder-assignable) + **scenes with morph** — full design in `features/scenes-and-performance.md` (macros route through the Phase-2.5 mod matrix; the slew engine lands in 2.5).
+- Digital send FX (delay, reverb) in the stereo master section — send levels/reserved fields already specified in `features/output-routing-and-mixer.md` §3.
+- **Tuning & scales** (`features/tuning-and-scales.md`): master tune, 12-degree tables, scale-constrained input surfaces. Small and independent; slot it wherever a gap appears after Phase 2.5 item 1.
 - Preset/kit browser richness (tagging, favorites), USB sample import (MSC or MTP — decide), settings persistence.
 - ESP-IDF 6.0 migration (after the ecosystem components support it — see 0.1).
 - CPU/memory headroom pass with DWT profiling; lock the final block-size and clock decisions.

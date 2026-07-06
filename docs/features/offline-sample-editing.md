@@ -49,7 +49,7 @@ while (job.active) {                       // one call per main-loop iteration
 | Tier | Operations | Notes |
 |---|---|---|
 | 1 — trivial, ship first | trim/crop, gain, normalize, fade in/out, reverse, mono↔stereo, DC removal | single-pass or two-pass (peak scan + apply); validates the whole pipeline |
-| 2 — resampling | sample-rate convert, pitch-shift-by-resample (speed change) | windowed-sinc polyphase; CMSIS-DSP FIR interpolate/decimate kernels (`arm_fir_interpolate_q15` etc. — one motivation for the CMSIS-DSP 1.17 upgrade, which fixes an OOB coefficient access in FIR interpolation) |
+| 2 — resampling | sample-rate convert, pitch-shift-by-resample (speed change), **crossfade loop** (`xfade_loop(loop_start, loop_end, xfade_ms)` — renders a crossfaded loop seam to a new file + sidecar loop markers; requested by `instrument-model.md` §11 for zone loops) | windowed-sinc polyphase; CMSIS-DSP FIR interpolate/decimate kernels (`arm_fir_interpolate_q15` etc. — one motivation for the CMSIS-DSP 1.17 upgrade, which fixes an OOB coefficient access in FIR interpolation) |
 | 3 — character/mangle | bit-crush, drive/saturation, ring-mod against an oscillator, comb/flanger print, filter print | stateless or short-state per chunk; cheap |
 | 4 — heavy DSP | time-stretch & pitch-shift (phase vocoder or WSOLA — recommend **WSOLA** first: integer math friendly, no FFT memory pressure), granular freeze/scatter, spectral gate | needs overlap state carried across chunks; design each as a streaming processor with explicit carry buffer |
 | 5 — analysis | transient detection for auto-slice, loudness scan, silence trim | feeds the slicer UI; runs as a render job that outputs markers (sidecar), not audio |

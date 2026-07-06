@@ -74,6 +74,10 @@ struct WaveXPacket {           // packed
 
 ## 5. Planned extensions (design first, then implement — see roadmap)
 
-- **Phase 2 (sequencer)**: pattern-edit ops, transport control, playhead/step feedback (coalesced), kit management.
-- **Phase 4 (offline editing)**: render-job submit/progress/cancel, sidecar marker sync.
+Message-ID blocks are **reserved** for the 2026-07-05 feature-design suite — see the reservation table in `feature-expansion-ideas.md` (0x50–0x5F sequencer/clock/arp, 0x60–0x6F instrument/tuning, 0x70–0x7F recording/mix/scenes, 0xA0–0xAF render jobs). Do not assign new IDs outside that table without updating it.
+
+- **Phase 2 (sequencer)**: pattern-edit ops, transport control, playhead/step feedback (coalesced), MIDI clock in/out (`midi-sync-tempo-follower.md`). Kit management is subsumed by instrument ops (`instrument-model.md` §8; 0x54 stays reserved-unused).
+- **Phase 2.5**: instrument ops (0x60–0x62), recording (0x70/0x71), mixer (0x78/0x79), MIDI CC forward (0x56), arp (0x58).
+- **Phase 4 (offline editing)**: render-job submit/progress/cancel (0xA0–0xA3), sidecar marker sync.
+- **Phase 5**: scene apply (0x7A), tuning (0x68).
 - Consider a generational "capabilities" handshake at boot (versions on both sides) before the first extension ships.

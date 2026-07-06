@@ -11,6 +11,20 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Added — Feature-expansion design suite (docs only, 2026-07-05)
+
+- Nine design docs in `docs/features/` covering the E-mu Emax/Emulator-lineage
+  feature set: instrument model (presets/zones/velocity layers + the shared
+  WXCF chunk container), MIDI clock sync (PLL tempo follower), melodic
+  sequencing/live record, param locks + mod matrix/LFOs, sampling & recording,
+  arpeggiator, scenes/macros/param slew, tuning & scales, output routing &
+  mixer. `feature-expansion-ideas.md` is the suite index and reserves
+  inter-MCU message-ID blocks (0x50–0x5F, 0x60–0x6F, 0x70–0x7F, 0xA0–0xAF).
+- `docs/roadmap.md`: new **Phase 2.5 — Sampler Instrument Layer** with its own
+  gate; Phase 2/4/5 items now reference the new designs. Kit representation
+  decision recorded: a kit is a drum-mode instrument (`KIT_OP` 0x54
+  reserved-unused, subsumed by `MSG_INST_OP`).
+
 ### Added — Stage A paraphonic analog path, engine side (Phase 1 item 5)
 
 - `ParaphonicEnvelope` (`firmware/daisy/src/audio/paraphonic_envelope.hpp`):
