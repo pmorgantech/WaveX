@@ -11,6 +11,32 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Added — Sequencer transport controller (host-tested glue)
+
+- `firmware/daisy/src/sequencer/sequencer_transport.hpp`: `SequencerTransport`
+  binds the two engine cores (`SequencerScheduler` + `TempoFollower`) to the
+  Phase 2 wire messages. HAL-free and host-tested; it is the layer the audio
+  callback will drive (`Tick()`) and the dispatcher will feed (`Apply*`/
+  `OnMidi*`), keeping all of that logic testable before touching
+  `audio_engine.cpp`.
+  - `ApplyPatternOp` maps every `SeqPatternOpCode` onto the `Pattern` model
+    with wire-untrusted bounds checks (out-of-range track/step is a silent
+    no-op) and value clamping (velocity ≤127, probability ≤100, swing
+    50–75, length 1–64). Param-lock set overwrites in place / evicts oldest.
+  - `ApplyTransport` handles play/stop/continue, tempo, and clock source.
+    Internal mode starts immediately; MIDI mode **arms** and starts the
+    scheduler on MIDI START so sequencer step 0 aligns to the master
+    downbeat. `Tick()` in MIDI mode syncs the scheduler tempo to the
+    follower's servo-corrected instantaneous BPM each tick.
+  - `BuildPlayhead()` produces the coalesced `SeqPlayheadMessage`.
+- Small additive core support: `TempoFollower::InstantaneousBpm()` (raw
+  estimate × phase-servo trim, factored via a new `CurrentTrim()` helper),
+  and `SequencerScheduler::PlayheadStep()`/`PlayheadLoop()` (track-0 grid
+  crossings define the global playhead).
+- 19 new host tests (`sequencer_transport_test.cpp`): pattern-op edits +
+  clamping + bounds, internal transport timing, tempo from wire, MIDI
+  arm→START→lock→tempo-track→STOP, playhead, MIDI-CC forwarding.
+
 ### Added — Phase 2 sequencer / transport / MIDI-clock protocol messages
 
 - `firmware/shared/spi_protocol/protocol.h`: seven new wire messages in the

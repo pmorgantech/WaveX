@@ -34,6 +34,7 @@ set(FIRMWARE_SOURCES
     src/sequencer/pattern.hpp
     src/sequencer/sequencer_scheduler.hpp
     src/sequencer/tempo_follower.hpp
+    src/sequencer/sequencer_transport.hpp
     src/timebase.hpp
     src/profiling/profiler.cpp
     ../shared/spi_protocol/protocol.cpp

@@ -153,6 +153,15 @@ function(add_wavex_test test_source)
         )
     endif()
 
+    # sequencer_transport.hpp is header-only and HAL-free (glue over the two
+    # sequencer cores + protocol.h structs, no daisy_seed.h include). It uses
+    # only header-defined protocol structs, so no protocol.cpp linkage needed.
+    if(test_name STREQUAL "sequencer_transport_test")
+        target_sources(${test_name} PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/../src/sequencer/sequencer_transport.hpp
+        )
+    endif()
+
     # Dispatch-level test (code review C1): compiles the REAL message
     # dispatcher against recording mocks of its subsystems, so a handler
     # regressing to a log-only stub fails a test instead of shipping.

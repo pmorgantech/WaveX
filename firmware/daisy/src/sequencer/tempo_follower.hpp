@@ -197,19 +197,7 @@ class TempoFollower {
     // trimmed by the phase servo while LOCKED).
     void Tick() {
         if (playing_) {
-            double dphase = DphaseFromBpm(effective_bpm_);
-            if (state_ == SyncLockState::Locked) {
-                double trim = -kProportionalGain * phase_error_;
-                // Manual clamp, not std::min/max: those take const T&, which
-                // would odr-use the static constexpr member below and fail
-                // to link without an out-of-class definition (this is a
-                // header-only class with none).
-                if (trim > kMaxTrimFraction)
-                    trim = kMaxTrimFraction;
-                if (trim < -kMaxTrimFraction)
-                    trim = -kMaxTrimFraction;
-                dphase *= (1.0 + trim);
-            }
+            double dphase = DphaseFromBpm(effective_bpm_) * (1.0 + CurrentTrim());
             phase_ += dphase;
         }
 
@@ -228,12 +216,34 @@ class TempoFollower {
 
     SyncLockState State() const { return state_; }
     bool IsPlaying() const { return playing_; }
+    // The raw period-estimate tempo, without the phase-servo trim.
     float MeasuredBpm() const { return static_cast<float>(effective_bpm_); }
+    // The tempo actually applied to the phase this tick, INCLUDING the servo
+    // rate trim while locked. This is what an external phase consumer (the
+    // sequencer scheduler, in MIDI-slave mode) should follow so it tracks the
+    // servo correction rather than free-running at the raw estimate.
+    double InstantaneousBpm() const { return effective_bpm_ * (1.0 + CurrentTrim()); }
     double PhaseTicks() const { return phase_; }
     double PhaseErrorTicks() const { return phase_error_; }
     uint64_t CurrentFrame() const { return frame_counter_; }
 
    private:
+    // Fractional rate trim applied by the phase servo this tick (0 unless
+    // locked). Factored out of Tick() so InstantaneousBpm() reports exactly
+    // the same correction the phase integrator uses. Manual clamp (not
+    // std::min/max): those take const T& and would odr-use the static
+    // constexpr members, which a header-only class can't provide.
+    double CurrentTrim() const {
+        if (state_ != SyncLockState::Locked)
+            return 0.0;
+        double trim = -kProportionalGain * phase_error_;
+        if (trim > kMaxTrimFraction)
+            trim = kMaxTrimFraction;
+        if (trim < -kMaxTrimFraction)
+            trim = -kMaxTrimFraction;
+        return trim;
+    }
+
     static constexpr uint8_t kHistorySize = 5;
     static constexpr uint8_t kAcquireStableCount = 5;
     static constexpr double kStableToleranceFrac = 0.02;

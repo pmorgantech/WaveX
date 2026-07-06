@@ -113,6 +113,8 @@ class SequencerScheduler {
         frame_counter_ = 0;
         rng_state_ = seed_;
         playing_ = true;
+        playhead_step_ = 0;
+        playhead_loop_ = 0;
         for (uint8_t t = 0; t < kMaxTracks; ++t) {
             track_state_[t] = TrackState{};
             if (pattern_)
@@ -123,6 +125,15 @@ class SequencerScheduler {
     void Stop() { playing_ = false; }
 
     bool IsPlaying() const { return playing_; }
+
+    // Playhead position on the shared pattern grid: the step index most
+    // recently crossed (i.e. currently sounding), and how many full pattern
+    // loops have elapsed since Start(). All tracks advance in lockstep on the
+    // shared grid (micro-offset/retrig shift frames within a step, not the
+    // step index), so track 0's crossings define the global playhead. Meant
+    // for coalesced UI feedback (SeqPlayheadMessage), not sample-accurate use.
+    uint8_t PlayheadStep() const { return playhead_step_; }
+    uint32_t PlayheadLoop() const { return playhead_loop_; }
 
     uint64_t CurrentFrame() const { return frame_counter_; }
 
@@ -184,6 +195,13 @@ class SequencerScheduler {
 
                 // Primary step boundary reached.
                 const Step& step = track.steps[ts.step_index];
+                // Track 0's grid crossings define the global playhead (all
+                // tracks share the grid and cross together). Capture the step
+                // being fired here, before advancing to the next one.
+                if (t == 0) {
+                    playhead_step_ = ts.step_index;
+                    playhead_loop_ = ts.loop_count;
+                }
                 const uint8_t len = PatternLength();
                 uint8_t next_step = static_cast<uint8_t>(ts.step_index + 1);
                 uint32_t next_loop = ts.loop_count;
@@ -411,6 +429,8 @@ class SequencerScheduler {
     bool playing_ = false;
     uint64_t seed_ = 0x9E3779B97F4A7C15ULL;
     uint64_t rng_state_ = 0x9E3779B97F4A7C15ULL;
+    uint8_t playhead_step_ = 0;
+    uint32_t playhead_loop_ = 0;
     TrackState track_state_[kMaxTracks];
 };
 
