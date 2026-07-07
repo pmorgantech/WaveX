@@ -141,6 +141,15 @@ Key subsystems:
 - **Sample RAM**: `memory.h` slab (32 B–1 KB classes) + extent (64 KB pages) allocator over the 64 MB SDRAM, with stats reported to the UI via `MSG_STATUS_RESPONSE`/`SampleMemStatusMessage`.
 - **Profiling**: DWT cycle counters (`profiling/`), `PROFILE_SCOPE` macros behind `WAVEX_PROFILING_ENABLED`, CPU load min/avg/max reported in heartbeats.
 
+**Why bare-metal, not an RTOS (decision, 2026-07-07).** The Daisy backend runs no RTOS by design, and musical timing *depends on* that choice rather than being limited by it:
+
+- **The timebase is the audio DMA clock, not a software scheduler.** The SAI/DMA block-complete interrupt fires the callback every 48 samples at a hardware-derived rate; the 1 kHz control tick and all sequencer events are counted in audio *frames* (`frame = tick × frames_per_tick`, placed at a sample offset within the block), so they are sample-accurate and phase-locked to the audio they trigger (§5.1). A FreeRTOS SysTick is a *separate* clock domain and would beat against the SAI clock, reintroducing exactly the drift the frame-counting design eliminates — the same failure class as the 44.1 kHz regression (`dma-timing-review-2026-07-03.md` Finding 1).
+- **Two priority levels don't need a scheduler.** The workload is audio (DMA IRQ) vs. everything-else (main loop) — the foreground/background split above. An RTOS earns its keep with many concurrent, I/O-bound tasks across several preemption levels; the Daisy has exactly one hard-real-time thread.
+- **Hand-off is lock-free, and must stay that way.** Audio↔main state passes single-writer-per-field with release/acquire atomics (`__atomic_store_n(..., __ATOMIC_RELEASE)`); a control tick racing a main-loop write is benign and self-correcting. The audio callback must **never** block on a mutex (priority inversion → xrun), so sequencer pattern edits between steps use an atomic buffer/pointer swap, not a lock. That is both safer and cheaper than an RTOS mutex here.
+- **The real risk is CPU budget, which an RTOS only worsens.** The timing failure mode is a callback exceeding its 1 ms budget (xrun), not scheduler jitter; it is measured continuously via DWT (§4.2 Profiling, §5.1). Context-switch and tick-ISR overhead would eat into that budget, not protect it.
+
+The ESP32 frontend *does* run FreeRTOS (§4.3) — correct there, because it juggles many I/O-bound tasks (UI, link, input). The asymmetry is intentional: RTOS where there is genuine task concurrency, bare-metal foreground/background where there is one real-time thread. **Do not add an RTOS to the Daisy image.**
+
 ### 4.3 ESP32 frontend runtime model
 
 FreeRTOS tasks:
@@ -172,7 +181,7 @@ See `features/inter-mcu-protocol.md` for the message catalog. Every message stru
 | Control tick work | envelopes, LFOs, mod matrix, CV staging, meter accumulation |
 | CPU load target | ≤ 70% average in callback, measured continuously via DWT |
 
-The 1-block = 1-ms identity is a deliberate design invariant: the control tick is derived from the audio callback, so CV, modulation, and (future) sequencer events are inherently phase-locked to the audio stream. Any change to block size must preserve an integer-ms tick or introduce a proper tick divider — `timebase.hpp` now enforces this with a `static_assert`. (The engine briefly ran at 44.1 kHz, silently making the "1 kHz" tick 918.75 Hz; found and reverted 2026-07-03 — `dma-timing-review-2026-07-03.md` Finding 1.) Non-48 kHz WAV content is rate-converted at playback: the streaming/audition path resamples in `PumpWavIO`, and RAM-resident samples use playback-rate compensation (`VoiceTriggerParams::sample_rate_hz` scales `Voice::increment` by native/engine rate).
+The 1-block = 1-ms identity is a deliberate design invariant: the control tick is derived from the audio callback, so CV, modulation, and (future) sequencer events are inherently phase-locked to the audio stream. Any change to block size must preserve an integer-ms tick or introduce a proper tick divider — `timebase.hpp` now enforces this with a `static_assert`. Because the tick is derived from the audio DMA clock rather than a software scheduler, no RTOS is used or needed on the Daisy — see §4.2 "Why bare-metal, not an RTOS" for the full rationale. (The engine briefly ran at 44.1 kHz, silently making the "1 kHz" tick 918.75 Hz; found and reverted 2026-07-03 — `dma-timing-review-2026-07-03.md` Finding 1.) Non-48 kHz WAV content is rate-converted at playback: the streaming/audition path resamples in `PumpWavIO`, and RAM-resident samples use playback-rate compensation (`VoiceTriggerParams::sample_rate_hz` scales `Voice::increment` by native/engine rate).
 
 ### 5.2 Voice architecture (target — partially implemented)
 

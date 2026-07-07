@@ -11,6 +11,15 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Docs
+
+- `architecture.md` §4.2: recorded the "Why bare-metal, not an RTOS" decision
+  for the Daisy backend — the audio DMA clock is the timebase (sequencer events
+  counted in audio frames, phase-locked to the callback), the workload is a
+  two-level foreground/background split, hand-off is lock-free (the callback
+  never blocks on a mutex), and the real timing risk is callback CPU budget,
+  which an RTOS would only worsen. Cross-linked from §5.1.
+
 ### Added — Instrument model core (Phase 2.5 stage 1)
 
 - `firmware/daisy/src/audio/instrument.hpp` per `instrument-model.md` §2-3:
