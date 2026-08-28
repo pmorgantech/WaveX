@@ -296,6 +296,16 @@ void UIDiagnosticsPage::updateCpuUsageFreertosStats() {
                 // Parse runtime value (absolute ticks)
                 uint32_t runtime = atoi(runtime_str);
 
+                // FreeRTOS pads task names with spaces to
+                // configMAX_TASK_NAME_LEN-1 (prvWriteNameToBuffer), so the
+                // field reads "IDLE0          ", never "IDLE0". Comparing
+                // with strcmp() never matched, both idle deltas stayed 0,
+                // and every sample reported exactly 100%.
+                size_t name_len = strlen(task_name);
+                while (name_len > 0 && task_name[name_len - 1] == ' ') {
+                    task_name[--name_len] = '\0';
+                }
+
                 // Check for per-core IDLE tasks
                 if (strcmp(task_name, "IDLE0") == 0) {
                     idle_runtime_core0 = runtime;
@@ -327,8 +337,13 @@ void UIDiagnosticsPage::updateCpuUsageFreertosStats() {
             // CPU usage calculation based on IDLE task runtime
             // CPU% = 100 - (idle_ticks / total_ticks) * 100
             if (total_diff > 0) {
-                float core0_usage = 100.0f - ((float)idle_diff_core0 / total_diff * 100.0f);
-                float core1_usage = 100.0f - ((float)idle_diff_core1 / total_diff * 100.0f);
+                // total_diff accumulates BOTH cores, so a single core's share
+                // of wall-clock time is half of it. Dividing one core's idle
+                // by the two-core total (as this did) halves every idle
+                // fraction, pinning a fully idle system at 50%.
+                const float per_core_diff = (float)total_diff / 2.0f;
+                float core0_usage = 100.0f - ((float)idle_diff_core0 / per_core_diff * 100.0f);
+                float core1_usage = 100.0f - ((float)idle_diff_core1 / per_core_diff * 100.0f);
 
                 // Overall CPU usage (average of both cores)
                 cpu_usage_percent = (core0_usage + core1_usage) / 2.0f;

@@ -73,6 +73,18 @@ versioning and release process.
   capability-specific internal/PSRAM DMA heap telemetry around display
   initialization.
 
+### Fixed — ESP32 CPU usage diagnostics
+
+- The diagnostics page reported a constant `Total=100.0% Core0=100.0%
+  Core1=100.0%`, which was a parsing artifact rather than a measurement.
+  FreeRTOS pads task names with spaces to `configMAX_TASK_NAME_LEN-1`, so
+  the run-time-stats field reads `"IDLE0          "` and never matched
+  `strcmp(name, "IDLE0")`; both idle deltas stayed zero and every sample
+  computed `100 - 0`. Trailing padding is now trimmed before comparison.
+- Per-core usage divided one core's idle time by the run-time total summed
+  across BOTH cores, halving every idle fraction — a fully idle system would
+  have read 50%, never 0%. The denominator is now per-core.
+
 ### Fixed — Daisy→ESP32 UART duplicate frames
 
 - The TX pump re-sent an already-delivered frame whenever its DMA completion
