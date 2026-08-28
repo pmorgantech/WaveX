@@ -193,6 +193,19 @@ void process_tx_queue() {
     // mutates queue ownership.
     static uint32_t first_fail_ms = 0;
 
+    // In-flight gate FIRST. The old order polled TakeTransmitResult() and
+    // then checked IsTransmitting(); a TX completing between those two calls
+    // left its success result pending and the head entry un-retired, and the
+    // send below then put an EXACT duplicate of the frame on the wire (the
+    // ESP32's steady "RX seq=N dropped (duplicate), expected=N+1" warnings)
+    // while StartTransmit() zeroed the un-taken result. No error fires
+    // anywhere, so this was invisible on the Daisy side. Checked in this
+    // order, "not transmitting" guarantees any pending result is final
+    // before we decide what to send.
+    if (Uart4Dma::IsTransmitting()) {
+        return;
+    }
+
     bool tx_success = false;
     if (Uart4Dma::TakeTransmitResult(tx_success)) {
         if (s_tx_count > 0) {
@@ -224,10 +237,6 @@ void process_tx_queue() {
         }
     }
 
-    if (Uart4Dma::IsTransmitting()) {
-        return;
-    }
-
     while (s_tx_count > 0 && !s_tx_queue[s_tx_head].pending) {
         s_tx_head = (s_tx_head + 1) % MSG_QUEUE_SIZE;
         --s_tx_count;
@@ -237,6 +246,18 @@ void process_tx_queue() {
     }
 
     uart_msg_entry_t& entry = s_tx_queue[s_tx_head];
+
+    // Any second start of the same seq is a retransmit. After the reorder
+    // above the only legitimate source is the explicit retry-after-failure
+    // policy, so this should stay rare and is worth a log line; if the
+    // ESP32 still reports duplicate drops while this stays silent, the
+    // cause is on its receive side, not here.
+    static uint16_t s_last_started_seq = 0;
+    if (entry.seq == s_last_started_seq && s_hw) {
+        s_hw->PrintLine("DAISY: UART TX resend seq=%u", entry.seq);
+    }
+    s_last_started_seq = entry.seq;
+
     std::memcpy(s_uart_tx_dma, entry.frame, entry.frame_len);
     if (!Uart4Dma::StartTransmit(s_uart_tx_dma, entry.frame_len)) {
         // StartTransmit records an asynchronous-style failure result so the

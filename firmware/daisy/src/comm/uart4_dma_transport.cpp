@@ -240,7 +240,17 @@ extern "C" void HAL_UART_TxCpltCallback(UART_HandleTypeDef* handle) {
 extern "C" void HAL_UART_ErrorCallback(UART_HandleTypeDef* handle) {
     if (handle == &s_uart) {
         s_error |= HAL_UART_GetError(handle);
-        if (s_transmitting) {
+        // PE/FE/NE/ORE are receive-path errors and say nothing about the
+        // in-flight transmit. The old unconditional block here marked the TX
+        // failed on ANY error, so an RX glitch during a successful send made
+        // process_tx_queue() re-send a frame the peer had already received -
+        // the ESP32's steady "RX seq=N dropped (duplicate)" warnings, scaling
+        // with TX volume (meters during playback). Worse, it cleared
+        // s_transmitting while TX DMA was still running, letting the next
+        // StartTransmit() memcpy into the DMA buffer mid-transfer. Only
+        // treat the transmit as dead when the HAL actually aborted it (TX
+        // DMA transfer error), which it reports by leaving BUSY_TX state.
+        if (s_transmitting && handle->gState != HAL_UART_STATE_BUSY_TX) {
             s_transmitting = false;
             s_tx_result = 2;
         }

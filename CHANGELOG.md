@@ -53,6 +53,25 @@ versioning and release process.
   capability-specific internal/PSRAM DMA heap telemetry around display
   initialization.
 
+### Fixed — Daisy→ESP32 UART duplicate frames
+
+- The TX pump re-sent an already-delivered frame whenever its DMA completion
+  landed between the result poll and the busy check: the completed head
+  entry was never retired, went out again with the same sequence number
+  (the ESP32's steady `RX seq=N dropped (duplicate), expected=N+1`
+  warnings, ~2–4% of frames), and `StartTransmit()` silently zeroed the
+  un-taken success result. The in-flight gate now runs first, so a taken
+  result is always final. Any remaining retransmit (the deliberate
+  retry-after-failure policy) now logs `UART TX resend seq=N`.
+- A UART receive error (PE/FE/NE/ORE) no longer fails the in-flight
+  transmit: the old handler marked the TX failed on any error and cleared
+  the busy flag while TX DMA could still be running, allowing the next send
+  to `memcpy` into the DMA buffer mid-transfer. TX is now only failed when
+  the HAL actually aborted it (gState left `BUSY_TX`). Latent on current
+  hardware — the error path has never been observed to fire — but it was a
+  real corruption window.
+
+
 ### Docs
 
 - `architecture.md` §4.2: recorded the "Why bare-metal, not an RTOS" decision
