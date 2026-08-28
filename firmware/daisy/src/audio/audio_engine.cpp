@@ -22,6 +22,7 @@
 #include "../storage/fatfs_wav_reader.hpp"
 #include "../timebase.hpp"
 #include "instrument.hpp"
+#include "linear_resampler.hpp"
 #include "output_sink.hpp"
 #include "paraphonic_envelope.hpp"
 #include "voice_manager.hpp"
@@ -567,59 +568,17 @@ static uint32_t ConvertFramesToOutput(
     return frames;
 }
 
-// Linear resampler using CMSIS-DSP arm_linear_interp_q15.
+// Multi-channel linear resample over an interleaved buffer. The math lives
+// in linear_resampler.hpp so it can be host-tested (see
+// tests/unit/audio/linear_resampler_test.cpp); this wrapper keeps the old
+// signature and the scratch-pool contract its callers were written against.
+//
+// The header reads each channel through a stride, so the per-channel
+// de-interleave copy the CMSIS version needed is gone - one fewer full pass
+// over the chunk, and the scratch buffer it used is no longer acquired here.
 static uint32_t LinearResampleFrames(
     const q15_t* src, uint32_t src_frames, q15_t* dst, uint32_t channels, float ratio) {
-    if (ratio <= 0.0f || src_frames < 2) {
-        return 0;
-    }
-
-    const float step = 1.0f / ratio;
-    // Upper bound on output frames; caller allocates using this ratio.
-    uint32_t max_output_frames =
-        static_cast<uint32_t>(std::ceil((static_cast<float>(src_frames - 1)) * ratio)) + 1;
-
-    // Determine exact output count with the chosen step so every channel uses the same positions.
-    uint32_t output_frames = 0;
-    {
-        float position = 0.0f;
-        while ((position + 1.0f) < static_cast<float>(src_frames) &&
-               output_frames < max_output_frames) {
-            output_frames++;
-            position += step;
-        }
-    }
-    if (output_frames == 0) {
-        return 0;
-    }
-
-    // Scratch buffer for one channel of contiguous samples
-    q15_t* ch_buf = AcquireScratch(src_frames);
-    if (!ch_buf) {
-        return 0;
-    }
-
-    // Interpolate per channel using CMSIS arm_linear_interp_q15
-    for (uint32_t ch = 0; ch < channels; ++ch) {
-        // De-interleave once per channel
-        for (uint32_t i = 0; i < src_frames; ++i) {
-            ch_buf[i] = src[i * channels + ch];
-        }
-
-        float position = 0.0f;
-        for (uint32_t out = 0; out < output_frames; ++out) {
-            if ((position + 1.0f) >= static_cast<float>(src_frames)) {
-                break;
-            }
-            // arm_linear_interp_q15 expects a 12.20 fixed-point fractional index
-            q31_t x_q31 = static_cast<q31_t>(position * 1048576.0f);
-            q15_t sample = arm_linear_interp_q15(ch_buf, x_q31, src_frames);
-            dst[out * channels + ch] = sample;
-            position += step;
-        }
-    }
-
-    return output_frames;
+    return ResampleInterleaved(src, src_frames, dst, channels, ratio);
 }
 
 // Resampling temporarily disabled
@@ -1702,15 +1661,38 @@ void GetMeters(BlockMeters& out) {
 
 // Check for underruns detected in audio callback and log them (called from main loop)
 void CheckAndLogUnderruns() {
+    // Rate-limited on purpose. This logged once per underrun EPISODE, which
+    // during intermittent starvation meant a blocking USB CDC write every few
+    // main-loop passes - 13k+ lines in a single audition - stealing the very
+    // main-loop time the ring refill needs. That is a feedback loop: the
+    // logging deepens the starvation it reports, exactly like the 1 ms
+    // LONG I/O threshold did. Count every episode, report at most once per
+    // second, and include the count so bursts stay visible.
+    static uint32_t episodes = 0;
+    static uint32_t last_report_ms = 0;
+
     if (s_underrun_detected && !s_underrun_logged) {
-        if (s_hw)
-            s_hw->PrintLine("AUDIO: Ring buffer underrun - outputting silence");
+        episodes++;
         s_underrun_logged = true;
         s_underrun_detected = false;  // Reset detection flag
     } else if (!s_underrun_detected && s_underrun_logged) {
         // Reset logging flag when underruns stop
         s_underrun_logged = false;
     }
+
+    if (episodes == 0) {
+        return;
+    }
+    const uint32_t now = System::GetNow();
+    if (last_report_ms != 0 && (now - last_report_ms) < 1000u) {
+        return;
+    }
+    last_report_ms = now;
+    if (s_hw) {
+        s_hw->PrintLine("AUDIO: Ring buffer underrun - outputting silence (%u in last ~1s)",
+                        (unsigned)episodes);
+    }
+    episodes = 0;
 }
 
 // Main-loop only: performs the blocking CV DAC transaction (~225 us

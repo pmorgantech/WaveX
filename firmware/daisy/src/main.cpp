@@ -467,7 +467,10 @@ int main(void) {
             // (the "LONG I/O: 4273494187 us" line). Ticks count at PCLK1*2 =
             // 200 MHz: libDaisy defaults to a 400 MHz SysClk and WaveX never
             // calls System::Config::Boost().
-            const uint32_t io_ticks_per_us = System::GetTickFreq() / 1000000u;
+            // Hoisted: GetTickFreq() reaches HAL_RCC_GetSysClockFreq(),
+            // which recomputes the PLL tree in floating point. Fine once,
+            // wasteful on every pump - which is where I first put it.
+            static const uint32_t io_ticks_per_us = System::GetTickFreq() / 1000000u;
             uint32_t io_start = System::GetTick();
             WaveX::AudioEngine::PumpWavIO();
             uint32_t io_duration = (System::GetTick() - io_start) / io_ticks_per_us;
@@ -507,8 +510,15 @@ int main(void) {
             last_stats_report = current_time;
             ++stats_report_tick;
 #if WAVEX_AUDIO_ENGINE_ENABLED
+            // Report every interval WHILE PLAYING and throttle to every 10th
+            // when idle - the inverse of the first cut. Throttling during
+            // playback produced zero stats for any audition shorter than
+            // 50 s, i.e. no data exactly when the ring is under load and
+            // something might be wrong. The block is 1-2 lines per interval;
+            // the log volume that actually hurt was the per-pump LONG I/O
+            // and per-episode underrun lines, both now rate-limited.
             const bool stats_throttled =
-                WaveX::AudioEngine::IsWavPlaying() && (stats_report_tick % 10 != 0);
+                !WaveX::AudioEngine::IsWavPlaying() && (stats_report_tick % 10 != 0);
             if (!stats_throttled) {
                 uint32_t io_count, max_io_duration, last_io_duration;
                 WaveX::AudioEngine::GetIOStats(io_count, max_io_duration, last_io_duration);

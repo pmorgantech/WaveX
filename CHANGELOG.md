@@ -19,6 +19,42 @@ versioning and release process.
 - Added CodeGraph configuration for focused repository indexing and installed
   `vim-tiny` in the devcontainer image.
 
+### Added — Resampler test coverage
+
+- Extracted the streaming linear resampler from `audio_engine.cpp` into
+  header-only, HAL-free `src/audio/linear_resampler.hpp` and added 12 host
+  tests. It had no coverage while being the subject of three playback-stall
+  fixes, all edge cases in how many frames a pass may consume or produce.
+- The per-channel core now reads through a stride, so the per-channel
+  de-interleave copy (and the scratch buffer it required) is gone — one fewer
+  full pass over each chunk. Mono, stereo and the Stage B 8-channel layout all
+  run through the same core, and callers may drive one channel at a time.
+- Arithmetic is bit-identical to the CMSIS `arm_linear_interp_q15` it
+  replaces, pinned by test. Retires that function's packed 12.20 index, whose
+  sign bit capped a usable source at 2047 frames and silently returned the
+  first sample for every position past it (latent — callers were bounded below
+  that by ring capacity).
+- Testing surfaced a pre-existing quirk, preserved deliberately and now
+  pinned: the interpolator weights sum to 2^20-1 rather than 2^20, so every
+  output is 1 LSB low and unity-ratio resampling is not bit-transparent.
+  ~-120 dBFS; worth correcting when the polyphase rewrite rebuilds the
+  weights anyway.
+
+### Fixed — Audition underruns from diagnostic logging
+
+- Rate-limited the ring-buffer underrun log to one line per second with an
+  episode count. It logged once per underrun episode, which under intermittent
+  starvation meant a blocking USB CDC write every few main-loop passes —
+  13k+ lines in a single audition — stealing the main-loop time the ring
+  refill needs. The logging deepened the starvation it was reporting.
+- Inverted the periodic stats throttle: report every interval while playing
+  and every 10th when idle. Throttling during playback produced no stats at
+  all for any audition shorter than 50 s — no data exactly when the ring is
+  under load.
+- Hoisted `System::GetTickFreq()` out of the per-pump I/O timing path; it
+  reaches `HAL_RCC_GetSysClockFreq()`, which recomputes the PLL tree in
+  floating point.
+
 ### Fixed — Daisy sample audition
 
 - Prevented non-48 kHz sample prebuffering from spinning when only one frame

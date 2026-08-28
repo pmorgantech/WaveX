@@ -143,6 +143,14 @@ function(add_wavex_test test_source)
         )
     endif()
 
+    # linear_resampler.hpp is header-only and HAL-free (int16_t arithmetic,
+    # caller-provided buffers, no daisy_seed.h and no CMSIS include).
+    if(test_name STREQUAL "linear_resampler_test")
+        target_sources(${test_name} PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/../src/audio/linear_resampler.hpp
+        )
+    endif()
+
     # sequencer_scheduler.hpp (+ pattern.hpp) is header-only and HAL-free
     # (plain arithmetic, no daisy_seed.h include) - safe to compile
     # directly on host.
