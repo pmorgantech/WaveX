@@ -50,7 +50,7 @@ bool IsPrebufferReady();  // Check if pre-buffering is complete
 // Performance monitoring
 void GetIOStats(uint32_t& count, uint32_t& max_duration, uint32_t& last_duration);
 
-// TEMPORARY audition diagnostic - remove with the STREAM log in main.cpp.
+// Streaming telemetry (see WAVEX_DAISY_STREAM_DEBUG in hardware_config.h).
 void GetStreamDebug(uint32_t& prebuf_filled,
                     uint32_t& prebuf_target,
                     uint32_t& wav_sample_rate,

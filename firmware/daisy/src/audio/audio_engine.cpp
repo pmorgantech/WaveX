@@ -498,8 +498,11 @@ static uint32_t s_io_start_time = 0;
 static uint32_t s_io_duration = 0;
 static uint32_t s_max_io_duration = 0;
 static uint32_t s_io_count = 0;
-// TEMPORARY audition diagnostic - remove with the STREAM log in main.cpp.
-// Records why the streaming path discarded its last pass without consuming.
+// Streaming telemetry counters (WAVEX_DAISY_STREAM_DEBUG in
+// hardware_config.h). Record why the streaming path discarded its last pass
+// without consuming. Always updated - the writes are a few registers and
+// keeping them unconditional avoids a second code path that only exists in
+// debug builds; only the reporting in main.cpp is gated.
 static uint32_t s_dbg_free = 0;       // rb_free_frames() at the top of the pass
 static uint32_t s_dbg_want = 0;       // frames_to_transfer after all caps
 static uint32_t s_dbg_resampled = 0;  // LinearResampleFrames() result
@@ -1873,7 +1876,7 @@ void GetIOStats(uint32_t& count, uint32_t& max_duration, uint32_t& last_duration
     last_duration = s_io_duration;
 }
 
-// TEMPORARY audition diagnostic - remove with the STREAM log in main.cpp.
+// Streaming telemetry accessor - see WAVEX_DAISY_STREAM_DEBUG.
 void GetStreamDebug(uint32_t& prebuf_filled,
                     uint32_t& prebuf_target,
                     uint32_t& wav_sample_rate,
@@ -1886,7 +1889,7 @@ void GetStreamDebug(uint32_t& prebuf_filled,
     wav_bits = s_wav.bits_per_sample;
 }
 
-// TEMPORARY audition diagnostic - remove with the STREAM log in main.cpp.
+// Streaming telemetry accessor - see WAVEX_DAISY_STREAM_DEBUG.
 void GetStreamDiscardDebug(uint32_t& free_frames,
                            uint32_t& want_frames,
                            uint32_t& resampled,

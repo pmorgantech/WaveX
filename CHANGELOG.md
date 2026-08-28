@@ -36,8 +36,15 @@ versioning and release process.
   normal resampling pump costs 1.7–5 ms, so the previous 1 ms threshold
   logged every pump and the blocking USB CDC writes starved the ring-buffer
   refill, causing the very underruns being reported.
-- Corrected Daisy I/O timing diagnostics to use microseconds and added
-  temporary stream-state telemetry for hardware audition troubleshooting.
+- Corrected Daisy I/O timing diagnostics to use microseconds and put the
+  stream-state telemetry behind `WAVEX_DAISY_STREAM_DEBUG` (off by default)
+  rather than deleting it, since resample-path stalls are invisible without
+  it.
+- Fixed bogus `LONG I/O: 4273494187 us` readings: the measurement subtracted
+  two `System::GetUs()` values, but that counter wraps at 2^32/200 =
+  21474836 (not a power of two), so any pump spanning the ~21.5 s wrap
+  produced garbage. Timing now subtracts raw `GetTick()` values, which wrap
+  exactly at 2^32, and converts once via `GetTickFreq()`.
 
 ### Fixed — DMA and memory allocation
 

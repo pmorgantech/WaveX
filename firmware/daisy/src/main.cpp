@@ -459,12 +459,18 @@ int main(void) {
 // Pump WAV I/O for audio playback (including audition)
 #if WAVEX_AUDIO_ENGINE_ENABLED
         if (WaveX::AudioEngine::ShouldPumpWavIO()) {
-            // GetTick() counts at PCLK1*2 (240 MHz here), NOT milliseconds -
-            // the old code compared raw ticks against 5 and printed them as
-            // "ms", so this fired on every pump. GetUs() is the honest unit.
-            uint32_t io_start = System::GetUs();
+            // Measure in ticks, convert once. GetTick() is the raw TIM2
+            // counter (period 0xFFFFFFFF), so an unsigned delta stays exact
+            // across its wrap. GetUs() is that counter divided by MHz, which
+            // wraps at 2^32/200 = 21474836 - NOT a power of two - so
+            // subtracting two GetUs() readings across a wrap yields garbage
+            // (the "LONG I/O: 4273494187 us" line). Ticks count at PCLK1*2 =
+            // 200 MHz: libDaisy defaults to a 400 MHz SysClk and WaveX never
+            // calls System::Config::Boost().
+            const uint32_t io_ticks_per_us = System::GetTickFreq() / 1000000u;
+            uint32_t io_start = System::GetTick();
             WaveX::AudioEngine::PumpWavIO();
-            uint32_t io_duration = System::GetUs() - io_start;
+            uint32_t io_duration = (System::GetTick() - io_start) / io_ticks_per_us;
 
             // Log long I/O operations that might cause audio pauses. A normal
             // pump with resampling costs 1.7-5 ms, so a 1 ms threshold fired
@@ -512,8 +518,8 @@ int main(void) {
                                 (unsigned)max_io_duration,
                                 (unsigned)last_io_duration);
 
-                // TEMPORARY audition diagnostic - remove once the no-audio issue
-                // is resolved. Tells us where the chain stops:
+#if WAVEX_DAISY_STREAM_DEBUG
+                // Where the chain stops when an audition goes silent:
                 //   playing=1 prebuf=0        -> stuck pre-buffering (SD/convert)
                 //   playing=1 prebuf=1 peak=0 -> data reaches the ring as silence
                 //   playing=1 prebuf=1 peak>0 -> DSP is fine; look at codec/analog
@@ -543,7 +549,8 @@ int main(void) {
                                 (unsigned)dbg_res,
                                 (unsigned)dbg_pushes);
 
-                // Log UART stats
+#endif  // WAVEX_DAISY_STREAM_DEBUG
+
                 WaveX::Comm::UartLinkLogStats();
             }  // !stats_throttled
 #else

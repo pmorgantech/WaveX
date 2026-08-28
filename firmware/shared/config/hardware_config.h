@@ -115,6 +115,17 @@
 #define WAVEX_DAISY_SD_DEBUG 0
 #endif
 
+// Audio streaming telemetry (Daisy only): periodic STREAM/STREAM2 lines
+// reporting pre-buffer fill, WAV format, output peaks, and why a streaming
+// pass discarded without consuming. Built for the 2026-08 audition stalls
+// (non-48 kHz files deadlocking in the resample path) and kept behind this
+// flag because that class of bug is invisible without it. Off by default:
+// each line is a blocking USB CDC write on the loop that refills the audio
+// ring, so leaving it on during playback starves the refill.
+#ifndef WAVEX_DAISY_STREAM_DEBUG
+#define WAVEX_DAISY_STREAM_DEBUG 0
+#endif
+
 // SD Card detect pin (Daisy only) - set to -1 to disable card detect
 #ifndef WAVEX_DAISY_SD_CARD_DETECT_PIN
 #define WAVEX_DAISY_SD_CARD_DETECT_PIN 15
