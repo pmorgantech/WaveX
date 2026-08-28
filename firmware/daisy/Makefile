@@ -18,24 +18,44 @@ TOOLCHAIN_ENV := CMAKE_C_COMPILER=$(COMPILER_C) CMAKE_CXX_COMPILER=$(COMPILER_CX
 OBJCOPY := /usr/bin/arm-none-eabi-objcopy
 BIN_FILE := $(BUILD_DIR)/wavex-daisy.bin
 
-.PHONY: all build clean help configure
-.PHONY: flash dfu sd usb bin run auto-flash
+.PHONY: all build clean help configure stale-cache-check
+.PHONY: flash dfu sd usb bin run auto-flash flash-auto
 
 # Default target: build the firmware
 all: build
 
+# A CMake build tree bakes in absolute paths, so one configured in the
+# devcontainer (/workspaces/WaveX, cmake under /opt/esp) breaks when reused on
+# the host (/home/<user>/..., /usr/bin/cmake) and vice versa - the failure is
+# an opaque "No such file or directory" from a generated makefile. Detect the
+# mismatch and reconfigure instead of making the user run `make clean`.
+stale-cache-check:
+	@if [ -f "$(BUILD_DIR)/CMakeCache.txt" ]; then \
+		cached_src=$$(sed -n 's/^CMAKE_HOME_DIRECTORY:INTERNAL=//p' $(BUILD_DIR)/CMakeCache.txt); \
+		cached_cmake=$$(sed -n 's/^CMAKE_COMMAND:INTERNAL=//p' $(BUILD_DIR)/CMakeCache.txt); \
+		if [ "$$cached_src" != "$(CMAKE_SOURCE_DIR)" ] || [ ! -x "$$cached_cmake" ]; then \
+			echo "Build dir was configured for a different environment:"; \
+			echo "  source: $$cached_src (now $(CMAKE_SOURCE_DIR))"; \
+			echo "  cmake:  $$cached_cmake"; \
+			echo "Reconfiguring $(BUILD_DIR) from scratch..."; \
+			rm -rf $(BUILD_DIR); \
+		fi; \
+	fi
+
 # Configure CMake if build directory doesn't exist or CMakeCache is missing
-configure:
+configure: stale-cache-check
 	@if [ ! -d "$(BUILD_DIR)" ] || [ ! -f "$(BUILD_DIR)/CMakeCache.txt" ]; then \
 		echo "Configuring CMake..."; \
 		mkdir -p $(BUILD_DIR); \
 		cd $(BUILD_DIR) && $(TOOLCHAIN_ENV) $(CMAKE) $(CMAKE_SOURCE_DIR) -DCMAKE_TOOLCHAIN_FILE=$(TOOLCHAIN_FILE) $(CMAKE_EXTRA_ARGS); \
 	fi
 
-# Build the firmware
+# Build the firmware. Parallel by default; override with e.g. JOBS=1 to get
+# readable serial output when chasing a compile error.
+JOBS ?= $(shell nproc 2>/dev/null || echo 4)
 build: configure
-	@echo "Building firmware..."
-	@cd $(BUILD_DIR) && $(MAKE)
+	@echo "Building firmware (-j$(JOBS))..."
+	@cd $(BUILD_DIR) && $(MAKE) -j$(JOBS)
 
 # Clean build artifacts
 clean:
@@ -68,6 +88,18 @@ flash: bin
 
 # Alias for flash
 dfu: flash
+
+# Build and flash with no button presses. The running firmware answers the
+# trigger token on its USB CDC port by rebooting into the bootloader's DFU
+# mode (see the DFU block in src/main.cpp), so dfu-util can take over. Needs
+# firmware that is alive enough to service its main loop - if the board is
+# wedged or blank, use the manual `flash` target instead.
+DFU_TRIGGER := $(CMAKE_SOURCE_DIR)/../../scripts/daisy_dfu_trigger.py
+
+flash-auto: bin
+	@python3 $(DFU_TRIGGER)
+	@dfu-util -d 0483:df11 -s 0x90040000:leave -D $(BUILD_DIR)/wavex-daisy.bin
+	@echo "Flashed via software-triggered DFU (no buttons)."
 
 # Build and prepare for SD card flashing
 sd: bin

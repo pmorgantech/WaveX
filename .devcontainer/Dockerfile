@@ -4,7 +4,24 @@ FROM espressif/idf:release-v5.5
 RUN apt-get update && apt-get install -y \
     gcc-arm-none-eabi udev \
     cmake ninja-build build-essential git python3-pip \
-    openocd dfu-util stlink-tools sudo usbutils locales && \
+    openocd dfu-util stlink-tools sudo usbutils locales \
+    curl ca-certificates \
+    vim-tiny && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# LANG/LC_ALL are set below, but the base image ships no generated locale, so
+# every shell prints "setlocale: LC_ALL: cannot change locale". Generate it.
+RUN sed -i 's/^# *en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen && \
+    locale-gen en_US.UTF-8
+
+# Node.js + the CodeGraph CLI (see CLAUDE.md - `codegraph explore` is the
+# preferred way to navigate this codebase). Pinned to the version used on the
+# host so both environments read the same index format. Distro nodejs is too
+# old for the CLI, hence NodeSource.
+RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
+    apt-get install -y nodejs && \
+    npm install -g @colbymchenry/codegraph@1.4.1 && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 

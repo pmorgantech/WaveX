@@ -11,6 +11,21 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Added — Daisy development and audition tooling
+
+- Added software-triggered Daisy DFU entry (`make daisy-flash-auto`), serial
+  logging with reconnect support (`make logs-start` / `make logs-stop`), and
+  USB serial-device discovery helpers.
+- Added CodeGraph configuration for focused repository indexing and installed
+  `vim-tiny` in the devcontainer image.
+
+### Fixed — Daisy sample audition
+
+- Prevented non-48 kHz sample prebuffering from spinning when only one frame
+  remains, allowing playback to proceed instead of stalling silently.
+- Corrected Daisy I/O timing diagnostics to use microseconds and added
+  temporary stream-state telemetry for hardware audition troubleshooting.
+
 ### Fixed — DMA and memory allocation
 
 - Daisy UART4 now uses simultaneous non-blocking DMA: continuous circular RX

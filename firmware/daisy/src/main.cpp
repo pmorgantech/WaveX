@@ -44,6 +44,43 @@ static daisy::SpiHandle spi_handle;
 
 // QueuedMessage removed - using SPI only
 
+// ---------------------------------------------------------------------------
+// Host-triggered DFU entry (scripts/daisy_dfu_trigger.py)
+//
+// The app runs from QSPI (CMakeLists.txt APP_TYPE BOOT_QSPI), so the Daisy
+// bootloader is present in internal flash and System::ResetToBootloader() is
+// valid - it refuses only when the program itself runs from internal flash.
+// Writing the token below to the USB CDC port reboots into the bootloader's
+// DFU mode with an infinite timeout, letting dfu-util flash without anyone
+// touching BOOT/RESET. Firmware that is already wedged cannot answer, so the
+// manual BOOT+RESET sequence behind `make daisy-flash` remains the recovery
+// path.
+// ---------------------------------------------------------------------------
+static constexpr char kDfuTriggerToken[] = "WAVEX-ENTER-DFU";
+static constexpr size_t kDfuTriggerLen = sizeof(kDfuTriggerToken) - 1;
+static volatile bool s_dfu_requested = false;
+
+// Runs in USB interrupt context: match bytes and set a flag, nothing else.
+// No logging, no allocation, and above all no reset from in here.
+static void UsbRxCallback(uint8_t* buff, uint32_t* len) {
+    if (buff == nullptr || len == nullptr) {
+        return;
+    }
+    static size_t matched = 0;
+    for (uint32_t i = 0; i < *len; ++i) {
+        const char c = static_cast<char>(buff[i]);
+        if (c == kDfuTriggerToken[matched]) {
+            if (++matched == kDfuTriggerLen) {
+                s_dfu_requested = true;
+                matched = 0;
+            }
+        } else {
+            // A mismatch can still be the start of a fresh match.
+            matched = (c == kDfuTriggerToken[0]) ? 1u : 0u;
+        }
+    }
+}
+
 // Initialize DSP objects via AudioEngine
 void InitDSP(bool sdram_available) {
     WaveX::AudioEngine::Init(hw, hw.AudioSampleRate(), sdram_available);
@@ -87,6 +124,11 @@ int main(void) {
     // attaches; the default 0 boots standalone and drops early logs instead
     // (hardware_config.h / review H8).
     hw.StartLog(WAVEX_DAISY_WAIT_FOR_SERIAL != 0);
+
+    // Listen for the host's DFU trigger token. Registered after StartLog so it
+    // cannot be clobbered by the logger's own USB bring-up; the logger only
+    // ever transmits, so there is no callback to conflict with.
+    hw.usb_handle.SetReceiveCallback(UsbRxCallback, UsbHandle::FS_INTERNAL);
 
     // Add delay to ensure USB CDC is ready before logging
     System::Delay(100);
@@ -376,6 +418,19 @@ int main(void) {
 
         loop_counter++;
 
+        // Host asked us to hand the USB port over to the bootloader. Do it
+        // from the main loop, not the USB ISR, and give the log a moment to
+        // drain over CDC before the port disappears.
+        if (s_dfu_requested) {
+            s_dfu_requested = false;
+            WAVEX_LOG_DAISY(INTER_MCU_LINK, "DFU trigger received - rebooting to bootloader");
+            System::Delay(50);
+#if WAVEX_AUDIO_ENGINE_ENABLED
+            hw.StopAudio();
+#endif
+            System::ResetToBootloader(System::BootloaderMode::DAISY_INFINITE_TIMEOUT);
+        }
+
         uint32_t current_time = System::GetNow();
 
         // Process any incoming SPI messages from ESP32
@@ -404,14 +459,17 @@ int main(void) {
 // Pump WAV I/O for audio playback (including audition)
 #if WAVEX_AUDIO_ENGINE_ENABLED
         if (WaveX::AudioEngine::ShouldPumpWavIO()) {
-            uint32_t io_start = System::GetTick();
+            // GetTick() counts at PCLK1*2 (240 MHz here), NOT milliseconds -
+            // the old code compared raw ticks against 5 and printed them as
+            // "ms", so this fired on every pump. GetUs() is the honest unit.
+            uint32_t io_start = System::GetUs();
             WaveX::AudioEngine::PumpWavIO();
-            uint32_t io_duration = System::GetTick() - io_start;
+            uint32_t io_duration = System::GetUs() - io_start;
 
             // Log long I/O operations that might cause audio pauses
-            if (io_duration > 5) {  // More than 5ms
+            if (io_duration > 1000) {  // More than 1ms
                 WAVEX_LOG_DAISY(AUDIO_ENGINE,
-                                "LONG I/O: %u ms (might cause audio pause)",
+                                "LONG I/O: %u us (might cause audio pause)",
                                 (unsigned)io_duration);
             }
         }
@@ -437,10 +495,33 @@ int main(void) {
             uint32_t io_count, max_io_duration, last_io_duration;
             WaveX::AudioEngine::GetIOStats(io_count, max_io_duration, last_io_duration);
             WAVEX_LOG_DAISY(AUDIO_ENGINE,
-                            "I/O Stats: count=%u, max=%u ms, last=%u ms",
+                            "I/O Stats: count=%u, max=%u ticks, last=%u ticks",
                             (unsigned)io_count,
                             (unsigned)max_io_duration,
                             (unsigned)last_io_duration);
+
+            // TEMPORARY audition diagnostic - remove once the no-audio issue
+            // is resolved. Tells us where the chain stops:
+            //   playing=1 prebuf=0        -> stuck pre-buffering (SD/convert)
+            //   playing=1 prebuf=1 peak=0 -> data reaches the ring as silence
+            //   playing=1 prebuf=1 peak>0 -> DSP is fine; look at codec/analog
+            WaveX::AudioEngine::BlockMeters dbg_meters;
+            WaveX::AudioEngine::GetMeters(dbg_meters);
+            uint32_t dbg_filled, dbg_target, dbg_sr;
+            uint8_t dbg_ch, dbg_bits;
+            WaveX::AudioEngine::GetStreamDebug(
+                dbg_filled, dbg_target, dbg_sr, dbg_ch, dbg_bits);
+            WAVEX_LOG_DAISY(AUDIO_ENGINE,
+                            "STREAM: playing=%d prebuf=%u/%u peakL=%d peakR=%d (x1000) "
+                            "wav=%luHz ch=%u bits=%u",
+                            (int)WaveX::AudioEngine::IsWavPlaying(),
+                            (unsigned)dbg_filled,
+                            (unsigned)dbg_target,
+                            (int)(dbg_meters.peakL * 1000.0f),
+                            (int)(dbg_meters.peakR * 1000.0f),
+                            (unsigned long)dbg_sr,
+                            (unsigned)dbg_ch,
+                            (unsigned)dbg_bits);
 #endif
 
             // Log UART stats

@@ -49,6 +49,13 @@ bool IsPrebufferReady();  // Check if pre-buffering is complete
 
 // Performance monitoring
 void GetIOStats(uint32_t& count, uint32_t& max_duration, uint32_t& last_duration);
+
+// TEMPORARY audition diagnostic - remove with the STREAM log in main.cpp.
+void GetStreamDebug(uint32_t& prebuf_filled,
+                    uint32_t& prebuf_target,
+                    uint32_t& wav_sample_rate,
+                    uint8_t& wav_channels,
+                    uint8_t& wav_bits);
 void SetOutputMode(AudioOutputMode mode);
 AudioOutputMode GetOutputMode();
 uint32_t GetOutputChannelCount();

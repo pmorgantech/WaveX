@@ -687,6 +687,22 @@ static bool prebuffer_audio() {
         if (req_frames > max_by_scratch) {
             req_frames = max_by_scratch;
         }
+
+        // LinearResampleFrames() returns 0 for fewer than 2 input frames, and
+        // a 0 return is treated below as "drop this chunk" - which does not
+        // advance s_prebuffer_filled. Once the remaining space caps the
+        // request at 1 frame, that combination spins forever: the pre-buffer
+        // parks a few frames short of PREBUFFER_FRAMES, never reports ready,
+        // nothing is ever handed to the ring buffer, and the main loop burns
+        // a 4-byte SD read per iteration while audio stays silent. The
+        // pre-buffer is latency headroom, not an exact target, so treat
+        // "cannot resample any further" as full. Only non-48kHz files reach
+        // this path at all (resample_ratio == 1.0 skips the whole branch).
+        if (req_frames < 2) {
+            s_prebuffer_ready = true;
+            s_prebuffering = false;
+            return true;
+        }
     }
     uint32_t req_bytes = req_frames * file_bpf;
 
@@ -1849,6 +1865,19 @@ void GetIOStats(uint32_t& count, uint32_t& max_duration, uint32_t& last_duration
     count = s_io_count;
     max_duration = s_max_io_duration;
     last_duration = s_io_duration;
+}
+
+// TEMPORARY audition diagnostic - remove with the STREAM log in main.cpp.
+void GetStreamDebug(uint32_t& prebuf_filled,
+                    uint32_t& prebuf_target,
+                    uint32_t& wav_sample_rate,
+                    uint8_t& wav_channels,
+                    uint8_t& wav_bits) {
+    prebuf_filled = s_prebuffer_filled;
+    prebuf_target = PREBUFFER_FRAMES;
+    wav_sample_rate = s_wav.sample_rate;
+    wav_channels = s_wav.num_channels;
+    wav_bits = s_wav.bits_per_sample;
 }
 
 void SetOutputMode(AudioOutputMode mode) {

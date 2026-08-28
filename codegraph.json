@@ -1,0 +1,14 @@
+{
+  "//": "Index the vendored libraries - this firmware calls into libDaisy constantly and the interesting bugs live at that boundary. Exclude the CMSIS reference tree inside libDaisy: ~2,000 of its ~2,300 C files, none of which this project reads. We call a few arm_* helpers via arm_math.h but never need their reference implementations.",
+  "exclude": [
+    "firmware/daisy/libs/libDaisy/Drivers/CMSIS_5/",
+    "firmware/daisy/libs/libDaisy/Drivers/CMSIS-DSP/Examples/",
+    "firmware/daisy/libs/libDaisy/Drivers/CMSIS-DSP/Testing/",
+    "firmware/daisy/libs/libDaisy/Drivers/CMSIS-DSP/PythonWrapper/",
+    "firmware/daisy/libs/libDaisy/Drivers/CMSIS-DSP/Source/",
+    "firmware/daisy/libs/libDaisy/tests/",
+    "firmware/daisy/libs/libDaisy/examples/",
+    "firmware/daisy/libs/DaisySP/examples/",
+    "firmware/shared/tests/_deps/"
+  ]
+}

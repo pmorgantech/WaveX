@@ -1,6 +1,5 @@
 # WaveX Dual-MCU Sampler/Synth Build System
-.PHONY: help all esp32 daisy daisy-stageb clean esp32-clean daisy-clean esp32-flash esp32-monitor esp32-flash-monitor esp32-menuconfig test test-all test-daisy test-esp32 test-shared test-clean ai-graph
-
+.PHONY: help all esp32 daisy daisy-stageb clean esp32-clean daisy-clean esp32-flash esp32-monitor esp32-flash-monitor esp32-menuconfig test test-all test-daisy test-esp32 test-shared test-clean ai-graph daisy-flash daisy-flash-auto logs-start logs-stop
 
 # Test targets
 test: test-all
@@ -98,6 +97,10 @@ help:
 	@echo "  esp32-clean      - Clean ESP32 build"
 	@echo "  daisy-clean      - Clean Daisy build"
 	@echo "  clean            - Clean all builds"
+	@echo "  daisy-flash      - Flash Daisy via DFU (needs BOOT+RESET by hand)"
+	@echo "  daisy-flash-auto - Flash Daisy with no button presses"
+	@echo "  logs-start       - Start serial loggers (tail -f logs/*.log)"
+	@echo "  logs-stop        - Stop serial loggers (do this before esp32-flash)"
 	@echo "  esp32-flash      - Flash ESP32 firmware"
 	@echo "  esp32-monitor    - Monitor ESP32 serial output"
 	@echo "  esp32-flash-monitor - Flash and monitor ESP32 (convenient)"
@@ -186,6 +189,40 @@ daisy-flash:
 	@echo "⚡ Flashing Daisy Seed Backend firmware..."
 	cd firmware/daisy && make flash
 	@echo "✅ Daisy Seed Backend flashed"
+
+# Touchless flash: no BOOT/RESET presses, no terminal to close first.
+daisy-flash-auto:
+	@echo "⚡ Flashing Daisy Seed Backend (software-triggered DFU)..."
+	cd firmware/daisy && make flash-auto
+	@echo "✅ Daisy Seed Backend flashed"
+
+# ---------------------------------------------------------------------------
+# Serial logging - replaces minicom so the ports stay scriptable.
+# Each logger appends to a file you can `tail -f`, and reconnects by itself
+# when a board resets or drops into DFU, so a flash does not interrupt it.
+# ---------------------------------------------------------------------------
+LOG_DIR ?= logs
+ESP32_PORT ?= /dev/ttyACM0
+
+logs-start: logs-stop
+	@mkdir -p $(LOG_DIR)
+	@nohup python3 scripts/serial_log.py --vid 0483 --pid 5740 \
+		--out $(LOG_DIR)/daisy.log --pidfile $(LOG_DIR)/daisy.pid >/dev/null 2>&1 &
+	@nohup python3 scripts/serial_log.py --port $(ESP32_PORT) --baud 115200 \
+		--out $(LOG_DIR)/esp32.log --pidfile $(LOG_DIR)/esp32.pid >/dev/null 2>&1 &
+	@sleep 1
+	@echo "📝 Logging started:"
+	@echo "   tail -f $(LOG_DIR)/daisy.log"
+	@echo "   tail -f $(LOG_DIR)/esp32.log"
+
+logs-stop:
+	@for pidfile in $(LOG_DIR)/daisy.pid $(LOG_DIR)/esp32.pid; do \
+		if [ -f "$$pidfile" ]; then \
+			kill "$$(cat $$pidfile)" 2>/dev/null || true; \
+			rm -f "$$pidfile"; \
+		fi; \
+	done
+	@echo "📝 Serial loggers stopped"
 
 # CMake-based builds (alternative to Make)
 esp32-cmake:
