@@ -4,6 +4,7 @@
 #include <daisy.h>  // For CpuLoadMeter
 
 #include "../memory.h"
+#include "../sdram_layout.h"
 #include "arm_math.h"  // For CMSIS-DSP helpers
 #include "audio_engine.h"
 #include "comm/daisy_uart_link.h"
@@ -20,6 +21,7 @@
 #include "../sequencer/sequencer_transport.hpp"
 #include "../storage/fatfs_wav_reader.hpp"
 #include "../timebase.hpp"
+#include "instrument.hpp"
 #include "output_sink.hpp"
 #include "paraphonic_envelope.hpp"
 #include "voice_manager.hpp"
@@ -28,7 +30,6 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
-#include <vector>
 
 // CV backend selection (architecture.md §5.3, roadmap Phase 1 item 1).
 #if WAVEX_CV_BACKEND == WAVEX_CV_BACKEND_MCP4728
@@ -68,6 +69,17 @@ PROFILE_DEFINE_ZONE(prebuffer_audio);
 PROFILE_DEFINE_ZONE(sd_refill);
 
 static DaisySeed* s_hw = nullptr;
+static bool s_sample_memory_available = false;
+
+static_assert(WaveX::SdramLayout::kSmallSamplePoolBytes <=
+                  WXM_SMALL_MAX_PAGES_PER_CLASS * WXM_SMALL_PAGE_BYTES,
+              "the production slab reservation exceeds one class's usable page capacity");
+static_assert((((WaveX::SdramLayout::kSampleArenaBytes -
+                 WaveX::SdramLayout::kSmallSamplePoolBytes) /
+                    WXM_LARGE_PAGE_BYTES +
+                1u) /
+               2u) <= WXM_LARGE_MAX_RUNS,
+              "large extent free-run table cannot represent worst-case fragmentation");
 
 static constexpr uint32_t kMaxMixChannels = 8;
 static constexpr uint32_t kScratchPoolBytes = 32 * 1024;
@@ -372,10 +384,13 @@ struct LoadedSampleInfo {
     uint8_t channels = 0;
     uint8_t bit_depth = 0;
 };
-static std::vector<LoadedSampleInfo> s_loaded_samples;
+static constexpr size_t kLoadedSampleCapacity = kMaxZones;
+static LoadedSampleInfo s_loaded_samples[kLoadedSampleCapacity];
+static size_t s_loaded_sample_count = 0;
 
 static LoadedSampleInfo* find_loaded_sample(uint16_t sample_id) {
-    for (auto& entry: s_loaded_samples) {
+    for (size_t i = 0; i < s_loaded_sample_count; ++i) {
+        auto& entry = s_loaded_samples[i];
         if (entry.sample_id == sample_id) {
             return &entry;
         }
@@ -383,21 +398,7 @@ static LoadedSampleInfo* find_loaded_sample(uint16_t sample_id) {
     return nullptr;
 }
 
-static void remove_loaded_sample(uint16_t sample_id) {
-    for (auto it = s_loaded_samples.begin(); it != s_loaded_samples.end(); ++it) {
-        if (it->sample_id == sample_id) {
-            // Release the allocation tied to this entry
-            s_sample_mem_mgr.release(&it->handle);
-            s_loaded_samples.erase(it);
-            return;
-        }
-    }
-}
-
-static void upsert_loaded_sample(const SampleLoadMessage& sl, const wxsamp_t& handle) {
-    // Replace any existing entry for this sample_id
-    remove_loaded_sample(sl.sample_id);
-
+static bool upsert_loaded_sample(const SampleLoadMessage& sl, const wxsamp_t& handle) {
     LoadedSampleInfo info;
     info.sample_id = sl.sample_id;
     info.handle = handle;
@@ -406,7 +407,17 @@ static void upsert_loaded_sample(const SampleLoadMessage& sl, const wxsamp_t& ha
     info.sample_rate = sl.sample_rate;
     info.channels = sl.channels;
     info.bit_depth = sl.bit_depth;
-    s_loaded_samples.push_back(info);
+
+    if (auto* existing = find_loaded_sample(sl.sample_id)) {
+        s_sample_mem_mgr.release(&existing->handle);
+        *existing = info;
+        return true;
+    }
+    if (s_loaded_sample_count >= kLoadedSampleCapacity) {
+        return false;
+    }
+    s_loaded_samples[s_loaded_sample_count++] = info;
+    return true;
 }
 
 static void update_loaded_sample_progress(uint16_t sample_id, uint32_t loaded_bytes) {
@@ -903,7 +914,7 @@ static inline bool rb_pop_stereo(int16_t& l, int16_t& r) {
 
 // Resampling temporarily disabled - using direct playback
 
-void Init(DaisySeed& hw, float sample_rate) {
+void Init(DaisySeed& hw, float sample_rate, bool sdram_available) {
     s_hw = &hw;
     s_sample_rate = sample_rate;
 
@@ -921,24 +932,18 @@ void Init(DaisySeed& hw, float sample_rate) {
     s_cv_backend.Init();
 #endif
 
-    // Initialize Sample RAM Manager (conditionally)
-    // SDRAM is mapped at 0xC0000000, typically 64MB available on Daisy Seed
-    // Use 32MB for sample storage, reserve 32MB for other uses
-    const uint32_t SDRAM_BASE = 0xC0000000;
-    const uint32_t SDRAM_SIZE = 64 * 1024 * 1024;       // 64MB
-    const uint32_t SAMPLE_MEM_SIZE = 32 * 1024 * 1024;  // 32MB for samples
-    const uint32_t SMALL_POOL_SIZE = 4 * 1024 * 1024;   // 4MB for small samples
-
-    // Initialize Sample RAM Manager
+    // Initialize only when hardware SDRAM bring-up succeeded. The centralized
+    // layout gives samples 60 MiB and reserves the final 4 MiB for the offline
+    // render scratch described in docs/features/offline-sample-editing.md.
+    s_sample_memory_available =
+        sdram_available && s_sample_mem_mgr.init(reinterpret_cast<void*>(WaveX::SdramLayout::kBase),
+                                                 WaveX::SdramLayout::kSampleArenaBytes,
+                                                 WaveX::SdramLayout::kSmallSamplePoolBytes);
     if (s_hw) {
-        s_hw->PrintLine("AUDIO_ENGINE: Initializing Sample RAM Manager...");
-    }
-    if (s_hw) {
-        s_hw->PrintLine("AUDIO_ENGINE: Calling SampleMemMgr.init()...");
-    }
-    s_sample_mem_mgr.init((void*)SDRAM_BASE, SAMPLE_MEM_SIZE, SMALL_POOL_SIZE);
-    if (s_hw) {
-        s_hw->PrintLine("AUDIO_ENGINE: SampleMemMgr.init() completed");
+        s_hw->PrintLine("AUDIO_ENGINE: Sample RAM %s (arena=%lu, render scratch=%lu)",
+                        s_sample_memory_available ? "ready" : "disabled",
+                        (unsigned long)WaveX::SdramLayout::kSampleArenaBytes,
+                        (unsigned long)WaveX::SdramLayout::kRenderScratchBytes);
     }
 
     s_voice_manager.Init(static_cast<uint32_t>(sample_rate));
@@ -1258,9 +1263,10 @@ void OnMidiCc(const MidiCcMessage& m) {
 // or stereo - the voice manager reads int16 interleaved data directly;
 // 24-bit files would need a load-time conversion pass (not yet built).
 static const LoadedSampleInfo* find_playable_sample() {
-    for (auto it = s_loaded_samples.rbegin(); it != s_loaded_samples.rend(); ++it) {
-        if (it->bit_depth == 16 && (it->channels == 1 || it->channels == 2)) {
-            return &(*it);
+    for (size_t i = s_loaded_sample_count; i > 0; --i) {
+        const auto& entry = s_loaded_samples[i - 1];
+        if (entry.bit_depth == 16 && (entry.channels == 1 || entry.channels == 2)) {
+            return &entry;
         }
     }
     return nullptr;
@@ -1346,14 +1352,14 @@ void OnPreviewReq(const PreviewReqMessage& pr) {
     s_preview_len = 0;
 
     // Pick the most recently loaded sample; fall back to empty if none.
-    if (s_loaded_samples.empty()) {
+    if (s_loaded_sample_count == 0) {
         if (s_hw) {
             s_hw->PrintLine("PREVIEW: No loaded samples; skipping preview");
         }
         return;
     }
 
-    const LoadedSampleInfo& src = s_loaded_samples.back();
+    const LoadedSampleInfo& src = s_loaded_samples[s_loaded_sample_count - 1];
     void* sample_ptr = nullptr;
     if (!s_sample_mem_mgr.ptr(src.handle, &sample_ptr) || !sample_ptr) {
         if (s_hw) {
@@ -1430,6 +1436,17 @@ void OnPreviewReq(const PreviewReqMessage& pr) {
 }
 
 void OnSampleLoad(const SampleLoadMessage& sl) {
+    if (!s_sample_memory_available) {
+        if (s_hw)
+            s_hw->PrintLine("SAMPLE_LOAD: rejected because SDRAM is unavailable");
+        return;
+    }
+    if (!find_loaded_sample(sl.sample_id) && s_loaded_sample_count >= kLoadedSampleCapacity) {
+        if (s_hw)
+            s_hw->PrintLine("SAMPLE_LOAD: registry full (%u entries)",
+                            (unsigned)kLoadedSampleCapacity);
+        return;
+    }
     if (s_hw) {
         s_hw->PrintLine("SAMPLE_LOAD: path='%s' id=%u", sl.path, (unsigned)sl.sample_id);
     }
@@ -1529,7 +1546,8 @@ void OnSampleLoad(const SampleLoadMessage& sl) {
     uint32_t remaining = data_size;
     uint32_t written = 0;
     UINT br = 0;
-    // Use DMA-safe buffer in RAM_D2; stack (DTCM) is not accessible to SDMMC DMA.
+    // Use a 32-byte-aligned AXI-SRAM staging buffer; stack/DTCM is not
+    // accessible to SDMMC IDMA.
     uint8_t* temp = s_sample_io;
     constexpr UINT kIoChunk = sizeof(s_sample_io);
 
@@ -1554,7 +1572,13 @@ void OnSampleLoad(const SampleLoadMessage& sl) {
 
     f_close(&file);
 
-    upsert_loaded_sample(sl, handle);
+    if (!upsert_loaded_sample(sl, handle)) {
+        if (s_hw)
+            s_hw->PrintLine("SAMPLE_LOAD: registry full (%u entries)",
+                            (unsigned)kLoadedSampleCapacity);
+        s_sample_mem_mgr.release(&handle);
+        return;
+    }
     update_loaded_sample_progress(sl.sample_id, data_size);
 
     if (s_hw) {
@@ -1588,7 +1612,7 @@ void GetSampleMemStatus(SampleMemStatusMessage& out) {
     out.in_use_bytes = stats.in_use_bytes;
     out.failed_allocs = stats.failed_allocs;
 
-    const size_t count = std::min<size_t>(s_loaded_samples.size(), WAVEX_SAMPLE_STATUS_MAX_ENTRIES);
+    const size_t count = std::min<size_t>(s_loaded_sample_count, WAVEX_SAMPLE_STATUS_MAX_ENTRIES);
     out.sample_count = static_cast<uint8_t>(count);
     for (size_t i = 0; i < count; ++i) {
         const auto& src = s_loaded_samples[i];

@@ -20,7 +20,7 @@ alignas(64) static uint8_t g_arena[kArenaBytes];
 
 class SampleMemTest : public ::testing::Test {
    protected:
-    void SetUp() override { mgr_.init(g_arena, kArenaBytes, kSmallBytes); }
+    void SetUp() override { ASSERT_TRUE(mgr_.init(g_arena, kArenaBytes, kSmallBytes)); }
 
     SampleMemMgr mgr_;
 };
@@ -116,6 +116,8 @@ TEST_F(SampleMemTest, LargePoolCoalescesOnRelease) {
 TEST_F(SampleMemTest, StatsReflectSmallPoolActivity) {
     wxsamp_stats_t before{};
     mgr_.stats(&before);
+    EXPECT_EQ(before.small_total_bytes, kSmallBytes);
+    EXPECT_EQ(before.small_free_bytes, kSmallBytes);
 
     wxsamp_t h{};
     ASSERT_TRUE(mgr_.alloc(500, &h));
@@ -124,6 +126,8 @@ TEST_F(SampleMemTest, StatsReflectSmallPoolActivity) {
     mgr_.stats(&during);
     EXPECT_GT(during.in_use_bytes, before.in_use_bytes);
     EXPECT_GE(during.objects_alive, 1u);
+    EXPECT_EQ(during.small_total_bytes, kSmallBytes);
+    EXPECT_LT(during.small_free_bytes, kSmallBytes);
 
     mgr_.release(&h);
 }
@@ -162,4 +166,20 @@ TEST_F(SampleMemTest, StatsCoverLargePoolToo) {
 TEST_F(SampleMemTest, ZeroByteAllocRejected) {
     wxsamp_t h{};
     EXPECT_FALSE(mgr_.alloc(0, &h));
+}
+
+TEST(SampleMemInitTest, RejectsUnavailableOrInvalidArena) {
+    SampleMemMgr mgr;
+    wxsamp_t h{};
+
+    EXPECT_FALSE(mgr.initialized());
+    EXPECT_FALSE(mgr.alloc(64, &h));
+    EXPECT_FALSE(mgr.init(nullptr, kArenaBytes, kSmallBytes));
+    EXPECT_FALSE(mgr.init(g_arena, kSmallBytes, kSmallBytes));
+    EXPECT_FALSE(mgr.alloc(64, &h));
+
+    wxsamp_stats_t stats{};
+    mgr.stats(&stats);
+    EXPECT_EQ(stats.small_total_bytes, 0u);
+    EXPECT_EQ(stats.large_total_bytes, 0u);
 }

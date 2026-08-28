@@ -42,7 +42,7 @@ while (job.active) {                       // one call per main-loop iteration
 
 **Priority rule**: if streaming playback is active, `PumpWavIO` runs first each loop; render steps are skipped whenever any stream's prebuffer is below its high-water mark. Renders are throughput-elastic; playback is not.
 
-**Memory**: render scratch comes from a dedicated SDRAM extent reserved at boot (e.g. 4 MB), never from the sample-RAM pools in use by playback. No heap allocation mid-job.
+**Memory**: render scratch is the dedicated final 4 MB SDRAM partition reserved in `firmware/daisy/src/sdram_layout.h`, never from the 60 MB sample-RAM arena in use by playback. No heap allocation mid-job.
 
 ## 4. Operation catalog (implementation order)
 

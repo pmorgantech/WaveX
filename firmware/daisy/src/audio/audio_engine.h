@@ -22,7 +22,7 @@ enum class AudioOutputMode : uint8_t {
     VoiceSAI2 = 8,
 };
 
-void Init(daisy::DaisySeed& hw, float sample_rate);
+void Init(daisy::DaisySeed& hw, float sample_rate, bool sdram_available);
 void Callback(daisy::AudioHandle::InputBuffer in,
               daisy::AudioHandle::OutputBuffer out,
               size_t size);

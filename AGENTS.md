@@ -5,13 +5,36 @@ WaveX is a dual-MCU sampler/groovebox: **ESP32-P4** frontend (ESP-IDF 5.5, LVGL 
 ## Orientation — read before designing or implementing
 
 1. **`docs/roadmap.md`** — canonical implementation order (Phases 0–5), current phase, and the test gate for each phase. Always check which phase is active before proposing new work; do not jump ahead of the gate.
-2. **`docs/architecture.md`** — single source of truth for system design: product vision, hardware split, real-time/DMA/cache rules (§7), memory layout, open decisions. When code and this doc disagree, code wins for *as-built* sections, the doc wins for *target design* sections (each section is labeled).
+2. **`docs/architecture.md`** — single source of truth for system design: product vision, hardware split, real-time/DMA/cache rules (§7), memory layout, open decisions. When code and this doc disagree, code wins for _as-built_ sections, the doc wins for _target design_ sections (each section is labeled).
 3. **`docs/features/*.md`** — as-built or target design for specific subsystems (inter-MCU protocol, sequencer, analog voice board, offline sample editing).
 4. **`docs/ui-architecture.md`**, **`docs/ui-system-implementation-guide.md`**, **`docs/testing_guide.md`**, **`docs/performance_monitoring.md`** — working guides for UI, testing, and profiling.
 5. **Never read or implement from `docs/archive/`.** Those documents are superseded, contain mutually contradictory hardware claims, or describe tests that were never run. They exist for historical context only.
 6. **Pin assignments and hardware feature flags are never in prose docs.** They live exclusively in `firmware/shared/config/pin_config.h` and `firmware/shared/config/hardware_config.h`. Do not trust pin tables in commit history or archived docs.
 
 If a task isn't clearly covered by the current roadmap phase or architecture doc, say so and propose where it fits rather than improvising a design.
+
+## Code intelligence
+
+Check for `.codegraph/` at the root of the checkout being edited. When it exists, use CodeGraph
+before recursive text search or direct file inspection for symbol, call-path, dependency, impact,
+or cross-file architecture questions. Treat this as a required preflight for cross-file code
+changes: query the graph first, then inspect only the exact files or non-code content needed to
+implement and verify the change.
+
+```bash
+codegraph explore "<question or symbol>"
+codegraph callers <symbol>
+codegraph impact <symbol>
+codegraph affected <changed-files>
+```
+
+Use `rg`/`rg --files` when no checkout-local graph exists, for docs/non-code searches, or to verify
+an edit just made. A nested worktree without its own graph can resolve the parent checkout's stale
+index, so never trust an index from another tree. Treat `.codegraph/` as derived data and never
+commit it.
+
+Use local source and tests first. Consult current upstream documentation before changing behavior
+that depends on an external crate or protocol.
 
 ## Non-negotiable engineering constraints
 

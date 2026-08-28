@@ -1,6 +1,6 @@
 # Inter-MCU Protocol — As-Built Wire Specification
 
-**Status**: As-built reference for `firmware/shared/spi_protocol/protocol.h` (PROTOCOL_VERSION 1).
+**Status**: As-built reference for the live UART framing in `firmware/shared/uart_protocol/uart_protocol.h` and the shared payload catalog in `firmware/shared/spi_protocol/protocol.h` (PROTOCOL_VERSION 1).
 **Rule**: `protocol.h` is the contract. This document explains it; if they diverge, fix one of them in the same commit that changed the other. Every message type must have a round-trip test in `firmware/shared/tests/`.
 **Supersedes**: `archive/communication-protocol.md` (described an ESP32-S3/ESP-master/0xAA-sync design that was never what shipped).
 
@@ -8,30 +8,25 @@
 
 | Property | Value |
 |---|---|
-| Transport | SPI, mode 0 (CPOL=0, CPHA=0), 8-bit, MSB first |
-| **Master** | **Daisy Seed** (SPI1, software CS on D7, pins in `pin_config.h`) |
-| **Slave** | **ESP32-P4** (`SPI3_HOST`, DMA via `spi_slave` driver, queue depth 8) |
-| Clock | SPI1 kernel clock ÷ 16 (`PS_16`, conservative bring-up setting; raising it is roadmap Phase 1.4) |
-| ATTN line | ESP32 GPIO31 → Daisy D0, active high: "slave has TX data queued, please clock a transaction" |
-| CRC | CRC16-CCITT over the whole packet except the CRC field; STM32 hardware CRC peripheral with software fallback |
+| Transport | UART, 8-N-1, full duplex, 2 Mbaud |
+| Endpoints | ESP32-P4 UART1 ↔ Daisy UART4; pins live only in `pin_config.h` |
+| Daisy RX | continuous circular DMA1 Stream 5 |
+| Daisy TX | asynchronous DMA2 Stream 4, one staged frame + four-entry software queue |
+| ESP32 | ESP-IDF legacy interrupt-driven UART with 8 KiB RX / 4 KiB TX rings |
+| CRC | CRC16-CCITT over flags/type/sequence/payload framing bytes |
 
-Because the slave can only talk when clocked, the duplex model is: the Daisy clocks transactions when (a) it has data to send, (b) ATTN is asserted, or (c) on a periodic poll. The ESP32 can also explicitly pull queued data with `MSG_DATA_REQUEST`.
+The Daisy streams RX and TX simultaneously through independent DMA streams; TX never waits for frame wire time in the main loop. The compiled-out SPI transport remains wired but `WAVEX_SPI_LINK_ENABLED=0`; its fixed-size `WaveXPacket` framing is dormant and is not the shipped wire format.
 
 ## 2. Packet framing
 
 ```
-struct WaveXPacket {           // packed
-    uint8_t  flags_size;       // low nibble: size code, high nibble: flags
-    uint8_t  msg_type;         // MessageType
-    uint16_t seq;              // sequence number
-    uint8_t  payload[...];     // structured message (zero-padded to packet size)
-    uint16_t crc;              // CRC16-CCITT, at the END of the fixed-size packet
-};
+start(0xA5) | payload_len(u16 LE) | flags(u8) | msg_type(u8) |
+sequence(u16 LE) | payload[0..2048] | crc16(u16 LE) | end(0x5A)
 ```
 
-- **Size codes** (low nibble): 0→32 B, 1→64, 2→128, 3→256, 4→512, 5→1024, 6→2048 total packet size. Fixed power-of-two transaction lengths keep DMA slave buffer management trivial on the ESP32. `ProtocolHandler::GetOptimalSizeCode()` picks the smallest class that fits.
-- **Flags** (high nibble): `PKT_FLAG_ACK` (0x80), `PKT_FLAG_NACK` (0x40 — corrupted, resend), two reserved.
-- `MAX_PAYLOAD_SIZE` = 220 B for single-struct messages; larger structured payloads (browse responses, wave chunks) use the bigger size classes.
+- Frame overhead is 10 bytes and maximum payload is 2048 bytes.
+- Flags: `UART_FLAG_ACK` (0x80), `UART_FLAG_NACK` (0x40), priority and fragmentation bits reserved.
+- `FrameScanner` resynchronizes on markers/length/CRC and `SequenceTracker` rejects duplicates or severe out-of-order frames while accepting a peer-reboot resync.
 
 ## 3. Message catalog (msg_type → payload struct)
 
@@ -76,7 +71,7 @@ struct WaveXPacket {           // packed
 1. **All payload structs are `__attribute__((packed))` and fixed-layout.** Never reorder fields; append only, or bump `PROTOCOL_VERSION`.
 2. **Every payload struct has a named constructor** (`Type(field1, field2, ...)`) plus a zero-initializing default constructor, and no other constructors — this makes the type a non-aggregate, so `Type x = {a, b, c};` / designated-initializer construction is a **compile error**, not just a style rule (field-order bugs have bitten before — see `archive/ARCHITECTURE_ASSESSMENT_20260626.md`). Build with the named constructor (`Type x(a, b, c);`); reserved/padding fields are not constructor parameters and are always zeroed internally. `SampleMemStatusMessage` additionally has `AddEntry()` for bounds-checked appends to its fixed `entries[]` array. When adding a new field, update the constructor's parameter list (and every call site the compiler then flags) in the same commit.
 3. **String fields** are fixed-size, null-terminated, `FILE_NAME_MAX=48`, `BROWSE_PATH_MAX=96` (path response uses 200).
-4. **Flow control**: packet statistics (per-type counters, CRC error counts) are tracked on both sides; NACK triggers resend; a stuck TX queue must self-recover within 1 s (regression requirement from the UART-era hang).
+4. **Flow control**: packet statistics (per-type counters, CRC error counts) are tracked on both sides; NACK triggers resend; a failed Daisy DMA frame retries and the queue self-recovers within 1 s.
 5. **Nothing latency-critical rides the link**: audio never crosses it; note events do (from MIDI on the ESP32), so keep the note path under 5 ms end-to-end — this bounds acceptable polling cadence.
 
 ## 5. Planned extensions (design first, then implement — see roadmap)

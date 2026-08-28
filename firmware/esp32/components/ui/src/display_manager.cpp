@@ -23,6 +23,18 @@ namespace {
 constexpr uint32_t LV_TICK_PERIOD_MS = 5;
 static const char* TAG = "DisplayManager";
 
+static void log_dma_heap(const char* phase) {
+    constexpr uint32_t kInternalDmaCaps = MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA;
+    constexpr uint32_t kPsramDmaCaps = MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA;
+    ESP_LOGI(TAG,
+             "DMA heap %s: internal free=%zu min=%zu, PSRAM free=%zu min=%zu",
+             phase,
+             heap_caps_get_free_size(kInternalDmaCaps),
+             heap_caps_get_minimum_free_size(kInternalDmaCaps),
+             heap_caps_get_free_size(kPsramDmaCaps),
+             heap_caps_get_minimum_free_size(kPsramDmaCaps));
+}
+
 #define LV_LOCK() lvgl_port_lock(portMAX_DELAY)
 #define LV_UNLOCK() lvgl_port_unlock()
 
@@ -106,7 +118,11 @@ esp_err_t DisplayManager::initLvglDisplay() {
     lv_log_register_print_cb(wavex_lvgl_log_cb);
 #endif
 
-    ESP_LOGI(TAG, "Memory before display init: free=%zu bytes, minimum=%zu bytes", esp_get_free_heap_size(), esp_get_minimum_free_heap_size());
+    ESP_LOGI(TAG,
+             "Memory before display init: free=%zu bytes, minimum=%zu bytes",
+             esp_get_free_heap_size(),
+             esp_get_minimum_free_heap_size());
+    log_dma_heap("before display init");
 
     ESP_LOGI(TAG, "Starting BSP display with optimised configuration...");
     bsp_display_cfg_t cfg = {.lvgl_port_cfg = ESP_LVGL_PORT_INIT_CONFIG(),
@@ -120,6 +136,7 @@ esp_err_t DisplayManager::initLvglDisplay() {
 
     display_ = bsp_display_start_with_config(&cfg);
     ESP_RETURN_ON_FALSE(display_, ESP_FAIL, TAG, "Failed to start BSP display");
+    log_dma_heap("after display init");
 
     LV_LOCK();
     lv_display_set_rotation(display_, LV_DISPLAY_ROTATION_90);

@@ -1,9 +1,6 @@
 # WaveX Dual-MCU Sampler/Synth Build System
 .PHONY: help all esp32 daisy daisy-stageb clean esp32-clean daisy-clean esp32-flash esp32-monitor esp32-flash-monitor esp32-menuconfig test test-all test-daisy test-esp32 test-shared test-clean ai-graph
 
-# Graphify
-ai-graph:
-	./scripts/graphify-refresh.sh
 
 # Test targets
 test: test-all
@@ -228,3 +225,20 @@ info:
 	@echo "ARM GCC Version: $$(arm-none-eabi-gcc --version 2>/dev/null | head -1 || echo '❌ Not found')"
 	@echo "CMake Version: $$(cmake --version 2>/dev/null | head -1 || echo '❌ Not found')"
 	@echo "Ninja Version: $$(ninja --version 2>/dev/null || echo '❌ Not found')" 
+
+ai-graph:
+	@if [ -d .codegraph ]; then \
+		codegraph sync .; \
+	else \
+		codegraph init .; \
+	fi
+
+ai-graph-init:
+	codegraph init .
+
+ai-graph-rebuild:
+	codegraph index --force .
+
+ai-graph-status:
+	codegraph status .
+

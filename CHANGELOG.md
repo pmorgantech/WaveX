@@ -11,6 +11,27 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Fixed — DMA and memory allocation
+
+- Daisy UART4 now uses simultaneous non-blocking DMA: continuous circular RX
+  on DMA1 Stream 5 and asynchronous TX on DMA2 Stream 4. A WaveX-owned HAL
+  transport bypasses libDaisy v8.1.0's single-operation UART scheduler; only
+  one in-flight TX frame occupies D2 DMA RAM while the queue remains in AXI
+  SRAM. UART RX position handling is placed in ITCM and all three IRQs remain
+  below audio.
+- SDRAM failure now disables sample-RAM operations instead of leaving an
+  allocator pointed at unavailable memory. The centralized layout gives the
+  sample allocator 60 MiB and reserves 4 MiB for offline render scratch.
+- The small-sample slab reservation is reduced from an unreachable 4 MiB to
+  256 KiB, and statistics now report the whole reserved slab arena rather
+  than only lazily formatted pages.
+- Replaced the Daisy loaded-sample `std::vector` with a fixed 32-entry registry
+  so sample loads do not grow or fragment the bare-metal heap.
+- Added a copied-at-boot ITCM section, a 30 KiB D2 DMA link-time ceiling, a
+  DTCM static-data ceiling that preserves 64 KiB for stacks, and ESP32
+  capability-specific internal/PSRAM DMA heap telemetry around display
+  initialization.
+
 ### Docs
 
 - `architecture.md` §4.2: recorded the "Why bare-metal, not an RTOS" decision

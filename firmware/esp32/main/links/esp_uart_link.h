@@ -26,7 +26,8 @@ typedef int esp_err_t;
 extern "C" {
 #endif
 
-// Initialize UART hardware and DMA (must be called before uart_link_start)
+// Initialize the ESP-IDF interrupt-driven UART and its software rings (must
+// be called before uart_link_start). The current legacy driver is not GDMA.
 esp_err_t uart_link_init(void);
 
 // Start UART tasks and begin communication

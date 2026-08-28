@@ -95,8 +95,10 @@ docs/archive/
 docs/docx2md.py
 docs/venv/
 
+.codegraph/
 graphify-out/
 node_modules/
 
 .analysis/
 .cursor/
+.claude/worktrees/

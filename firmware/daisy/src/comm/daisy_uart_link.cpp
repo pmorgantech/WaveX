@@ -7,8 +7,8 @@
 #include "../../shared/uart_protocol/uart_protocol.h"
 #include "daisy_inter_mcu_message_handlers.h"
 #include "daisy_seed.h"
-#include "per/uart.h"
 #include "sys/dma.h"
+#include "uart4_dma_transport.h"
 #include "util/scopedirqblocker.h"
 
 #include "../../shared/spi_protocol/sequence_tracker.hpp"
@@ -46,9 +46,9 @@ struct uart_stats_t {
     uint32_t seq_resyncs = 0;  // peer-reboot resyncs accepted by SequenceTracker
 };
 
-static daisy::UartHandler s_uart;
-
-static DMA_BUFFER_MEM_SECTION uint8_t s_uart_rx_dma[RX_BUFFER_SIZE];
+alignas(32) static DMA_BUFFER_MEM_SECTION uint8_t s_uart_rx_dma[RX_BUFFER_SIZE];
+alignas(32) static DMA_BUFFER_MEM_SECTION uint8_t
+    s_uart_tx_dma[UART_MAX_PAYLOAD + UART_FRAME_OVERHEAD];
 static uint8_t s_rx_pending[RX_PENDING_CAPACITY];
 static volatile size_t s_rx_pending_len = 0;
 
@@ -58,13 +58,9 @@ static volatile size_t s_rx_pending_len = 0;
 static uint8_t s_frame_storage[RX_PENDING_CAPACITY];
 static WaveX::UartProtocol::FrameScanner s_scanner(s_frame_storage, sizeof(s_frame_storage));
 
-// TX queue in regular RAM: transmission is CPU-polled BlockingTransmit (DMA
-// TX can't run while DmaListen holds the UART's DMA stream), so these
-// buffers are never DMA sources. They previously sat in
-// DMA_BUFFER_MEM_SECTION, spending ~8.3KB of the fixed 32KB non-cacheable
-// RAM_D2_DMA region - the scarcest memory in the system, 86% full - on
-// buffers that never touch DMA (review Finding 8). If TX ever moves to
-// DMA, this must move back (and re-check the region budget).
+// The four-deep software queue stays in ordinary AXI SRAM. Only the current
+// frame is copied to s_uart_tx_dma, keeping async TX DMA cache-safe without
+// spending ~8.3 KiB of the fixed 32 KiB D2 DMA pool on queued frames.
 static uart_msg_entry_t s_tx_queue[MSG_QUEUE_SIZE];
 static int s_tx_head = 0;
 static int s_tx_tail = 0;
@@ -87,9 +83,9 @@ void append_rx_data_isr(const uint8_t* data, size_t len) {
         return;
     }
 
-    // **CRITICAL**: The data pointer points into libDaisy's DMA circular buffer.
+    // **CRITICAL**: The data pointer points into the UART DMA circular buffer.
     // We must copy it immediately to avoid reading recycled data on the next wraparound.
-    // libDaisy already calls dsy_dma_invalidate_cache_for_buffer, so cache is valid.
+    // The transport already invalidated these cache lines, so the data is valid.
 
     if (len > RX_PENDING_CAPACITY) {
         data += (len - RX_PENDING_CAPACITY);
@@ -98,18 +94,15 @@ void append_rx_data_isr(const uint8_t* data, size_t len) {
     }
 
     if (s_rx_pending_len + len > RX_PENDING_CAPACITY) {
-        size_t overflow = (s_rx_pending_len + len) - RX_PENDING_CAPACITY;
-        if (overflow >= s_rx_pending_len) {
-            s_rx_pending_len = 0;
-        } else {
-            std::memmove(s_rx_pending, s_rx_pending + overflow, s_rx_pending_len - overflow);
-            s_rx_pending_len -= overflow;
-        }
+        // Overflow already means at least one frame is lost. Drop the stale
+        // pending span and let the scanner resynchronize instead of doing a
+        // multi-kilobyte memmove inside the UART DMA interrupt.
+        s_rx_pending_len = 0;
         s_stats.frame_sync_errors++;
     }
 
     // Copy from DMA buffer into our pending buffer
-    // This MUST happen before libDaisy's next callback overwrites the DMA circular buffer
+    // This MUST happen before the transport's next callback overwrites the DMA circular buffer.
     std::memcpy(s_rx_pending + s_rx_pending_len, data, len);
     s_rx_pending_len += len;
 }
@@ -194,114 +187,89 @@ void process_rx_frames() {
     s_stats.frame_sync_errors += scan.sync_errors;
 }
 
-// Note: uart_tx_complete is no longer used (BlockingTransmit handles cleanup synchronously)
-
 void process_tx_queue() {
-    // Single-context: UartLinkSend (producer) and this function (consumer)
-    // both run on the main loop, and BlockingTransmit completes before this
-    // function returns - there is no cross-call "in flight" state. The old
-    // s_tx_inflight machinery (500 ms/1 s stuck-transmission force-clear)
-    // guarded an async-TX design that no longer exists, and worse: one
-    // transmit failure left the head entry claimed-but-never-retried,
-    // head-blocking the whole queue for a second and then dropping the
-    // frame without a single retransmit attempt (review M6). Now a failed
-    // transmit is retried on every pass, bounded by a 1 s per-frame give-up.
+    // Producer and queue consumer remain main-loop-only. The DMA ISR touches
+    // only the transport's completion flag, so it never logs, allocates, or
+    // mutates queue ownership.
     static uint32_t first_fail_ms = 0;
 
-    uart_msg_entry_t* entry = nullptr;
-    {
-        daisy::ScopedIrqBlocker lock;
-        while (s_tx_count > 0) {
-            entry = &s_tx_queue[s_tx_head];
-            if (entry->pending) {
-                break;
+    bool tx_success = false;
+    if (Uart4Dma::TakeTransmitResult(tx_success)) {
+        if (s_tx_count > 0) {
+            uart_msg_entry_t& completed = s_tx_queue[s_tx_head];
+            if (tx_success) {
+                s_stats.packets_sent++;
+                UART_LOGI("daisy_uart",
+                          "TX DMA complete OK (seq=%u len=%u)",
+                          completed.seq,
+                          completed.frame_len);
+                completed.pending = false;
+                s_tx_head = (s_tx_head + 1) % MSG_QUEUE_SIZE;
+                --s_tx_count;
+                first_fail_ms = 0;
+            } else {
+                s_stats.tx_errors++;
+                const uint32_t now = daisy::System::GetNow();
+                if (first_fail_ms == 0) {
+                    first_fail_ms = now;
+                } else if (now - first_fail_ms > 1000) {
+                    UART_LOGE(
+                        "daisy_uart", "TX DMA gave up after 1s - dropping seq=%u", completed.seq);
+                    completed.pending = false;
+                    s_tx_head = (s_tx_head + 1) % MSG_QUEUE_SIZE;
+                    --s_tx_count;
+                    first_fail_ms = 0;
+                }
             }
-            s_tx_head = (s_tx_head + 1) % MSG_QUEUE_SIZE;
-            --s_tx_count;
-            entry = nullptr;
         }
     }
-    if (!entry) {
+
+    if (Uart4Dma::IsTransmitting()) {
         return;
     }
 
-    // DmaListen mode requires BlockingTransmit - DmaTransmit won't work
-    // while listening. The timeout is derived from the frame's own wire
-    // time (UartTxTimeoutMs): a fixed timeout shorter than the largest
-    // frame's wire time made that frame deterministically un-sendable
-    // (docs/dma-timing-review-2026-07-03.md Finding 2). Worst case: a
-    // max-size frame blocks ~13 ms - slightly over the §7.1.4 ~10 ms
-    // guideline, the honest interim tradeoff until TX moves to DMA.
-    auto res =
-        s_uart.BlockingTransmit(entry->frame,
-                                entry->frame_len,
-                                UartTxTimeoutMs(entry->frame_len, WAVEX_DAISY_UART_INTER_BAUD));
-
-    if (res == daisy::UartHandler::Result::OK) {
-        s_stats.packets_sent++;
-        UART_LOGI("daisy_uart", "TX complete OK (seq=%u len=%u)", entry->seq, entry->frame_len);
-        first_fail_ms = 0;
-        daisy::ScopedIrqBlocker lock;
-        entry->pending = false;
+    while (s_tx_count > 0 && !s_tx_queue[s_tx_head].pending) {
         s_tx_head = (s_tx_head + 1) % MSG_QUEUE_SIZE;
-        if (s_tx_count > 0) {
-            --s_tx_count;
-        }
-    } else {
-        s_stats.tx_errors++;
-        UART_LOGE("daisy_uart", "TX FAILED result=%d seq=%u - will retry", (int)res, entry->seq);
-        const uint32_t now = daisy::System::GetNow();
-        if (first_fail_ms == 0) {
-            first_fail_ms = now;
-        } else if (now - first_fail_ms > 1000) {
-            UART_LOGE(
-                "daisy_uart", "TX gave up after 1s of failures - dropping seq=%u", entry->seq);
-            first_fail_ms = 0;
-            daisy::ScopedIrqBlocker lock;
-            entry->pending = false;
-            s_tx_head = (s_tx_head + 1) % MSG_QUEUE_SIZE;
-            if (s_tx_count > 0) {
-                --s_tx_count;
-            }
+        --s_tx_count;
+    }
+    if (s_tx_count == 0) {
+        return;
+    }
+
+    uart_msg_entry_t& entry = s_tx_queue[s_tx_head];
+    std::memcpy(s_uart_tx_dma, entry.frame, entry.frame_len);
+    if (!Uart4Dma::StartTransmit(s_uart_tx_dma, entry.frame_len)) {
+        // StartTransmit records an asynchronous-style failure result so the
+        // same retry/drop policy runs on the next pump.
+        if (!Uart4Dma::IsTransmitting()) {
+            UART_LOGE("daisy_uart", "TX DMA start failed for seq=%u", entry.seq);
         }
     }
 }
 
-void uart_rx_listener(uint8_t* buffer,
-                      size_t size,
-                      void* /*context*/,
-                      daisy::UartHandler::Result result) {
-    if (result != daisy::UartHandler::Result::OK || size == 0) {
-        if (result != daisy::UartHandler::Result::OK) {
-            UART_LOGE("daisy_uart", "uart_rx_listener ERROR result=%d", (int)result);
-        }
+void uart_rx_listener(const uint8_t* buffer, size_t size) {
+    if (size == 0) {
         return;
     }
 
-    UART_LOGI("daisy_uart", "uart_rx_listener RX %u bytes", (unsigned)size);
     append_rx_data_isr(buffer, size);
 }
 
-void configure_uart() {
+bool configure_uart() {
     UART_LOGI("daisy_uart", "configure_uart: START");
-    daisy::UartHandler::Config cfg;
-    cfg.periph = daisy::UartHandler::Config::Peripheral::UART_4;
-    cfg.mode = daisy::UartHandler::Config::Mode::TX_RX;
-    cfg.baudrate = WAVEX_DAISY_UART_INTER_BAUD;
-    UART_LOGI("daisy_uart", "configure_uart: Config set, getting pins");
-    cfg.pin_config.tx = daisy::DaisySeed::GetPin(WAVEX_DAISY_UART_INTER_TX);
-    cfg.pin_config.rx = daisy::DaisySeed::GetPin(WAVEX_DAISY_UART_INTER_RX);
+    const daisy::Pin tx_pin = daisy::DaisySeed::GetPin(WAVEX_DAISY_UART_INTER_TX);
+    const daisy::Pin rx_pin = daisy::DaisySeed::GetPin(WAVEX_DAISY_UART_INTER_RX);
     UART_LOGI("daisy_uart",
               "configure_uart: Pins configured TX=D%d RX=D%d, calling Init",
               WAVEX_DAISY_UART_INTER_TX,
               WAVEX_DAISY_UART_INTER_RX);
 
-    auto res = s_uart.Init(cfg);
-    UART_LOGI("daisy_uart", "configure_uart: Init returned %d", (int)res);
-    if (res != daisy::UartHandler::Result::OK) {
+    const bool ok = Uart4Dma::Init(WAVEX_DAISY_UART_INTER_BAUD, tx_pin, rx_pin);
+    if (!ok) {
         UART_LOGE("daisy_uart", "Uart init failed");
     }
     UART_LOGI("daisy_uart", "configure_uart: COMPLETE");
+    return ok;
 }
 
 void start_dma_listener() {
@@ -320,8 +288,7 @@ void start_dma_listener() {
     // Clear the DMA buffer to remove any stale data
     std::memset(s_uart_rx_dma, 0, RX_BUFFER_SIZE);
 
-    if (s_uart.DmaListenStart(s_uart_rx_dma, RX_BUFFER_SIZE, uart_rx_listener, nullptr) !=
-        daisy::UartHandler::Result::OK) {
+    if (!Uart4Dma::StartReceive(s_uart_rx_dma, RX_BUFFER_SIZE, uart_rx_listener)) {
         if (s_hw)
             s_hw->PrintLine("DAISY: ERROR - Failed to start DMA listener");
         UART_LOGE("daisy_uart", "Failed to start DMA listener");
@@ -341,7 +308,7 @@ void stop_dma_listener() {
     if (s_hw)
         s_hw->PrintLine("DAISY: Stopping DMA listener on UART4...");
 
-    if (s_uart.DmaListenStop() != daisy::UartHandler::Result::OK) {
+    if (!Uart4Dma::StopReceive()) {
         if (s_hw)
             s_hw->PrintLine("DAISY: ERROR - Failed to stop DMA listener");
         UART_LOGE("daisy_uart", "Failed to stop DMA listener");
@@ -389,7 +356,11 @@ void UartLinkInit(daisy::DaisySeed* hw) {
     if (hw) {
         hw->PrintLine("DAISY: UART link init starting (UART4)");
     }
-    configure_uart();
+    if (!configure_uart()) {
+        if (hw)
+            hw->PrintLine("DAISY: UART4 DMA initialization failed");
+        return;
+    }
     std::memset(&s_stats, 0, sizeof(s_stats));
     s_next_sequence = 1;
     s_rx_pending_len = 0;
@@ -494,7 +465,7 @@ void UartLinkProcess() {
     // Check for UART hardware errors
     static uint32_t last_error_check = 0;
     if (now - last_error_check > 1000) {  // Check every 1 second
-        int uart_error = s_uart.CheckError();
+        uint32_t uart_error = Uart4Dma::TakeError();
         if (uart_error != 0) {
             if (s_hw)
                 s_hw->PrintLine("DAISY: UART hardware error detected: 0x%04X - resetting DMA",
@@ -502,6 +473,11 @@ void UartLinkProcess() {
             UART_LOGE("daisy_uart", "UART hardware error: 0x%04X", uart_error);
 
             // Reset the DMA listener to recover from error state
+            reset_uart_dma_listener();
+            last_error_recovery = now;
+        } else if (!Uart4Dma::IsReceiving()) {
+            if (s_hw)
+                s_hw->PrintLine("DAISY: UART RX DMA stopped unexpectedly - restarting");
             reset_uart_dma_listener();
             last_error_recovery = now;
         }

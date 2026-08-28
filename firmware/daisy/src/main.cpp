@@ -5,6 +5,7 @@
 #include "daisy_seed.h"
 #include "daisysp.h"
 #include "ff.h"
+#include "memory_sections.h"
 #include "metrics/metrics.h"
 #include "per/gpio.h"
 #include "stm32h7xx_hal.h"
@@ -44,8 +45,8 @@ static daisy::SpiHandle spi_handle;
 // QueuedMessage removed - using SPI only
 
 // Initialize DSP objects via AudioEngine
-void InitDSP() {
-    WaveX::AudioEngine::Init(hw, hw.AudioSampleRate());
+void InitDSP(bool sdram_available) {
+    WaveX::AudioEngine::Init(hw, hw.AudioSampleRate(), sdram_available);
 }
 
 static void PrintProfilingStats(DaisySeed& hw) {
@@ -76,6 +77,7 @@ int main(void) {
     // Initialize Daisy Seed hardware
     hw.Configure();
     hw.Init();
+    WaveX::MemorySections::InitItcm();
 
     // Initialize USB CDC for debugging
     hw.usb_handle.Init(UsbHandle::FS_INTERNAL);
@@ -132,7 +134,8 @@ int main(void) {
     if (sdram_result != SdramHandle::Result::OK) {
         WAVEX_LOG_DAISY(
             INTER_MCU_LINK, "SDRAM initialization FAILED! Result: %d", (int)sdram_result);
-        // Continue anyway - audio engine will handle gracefully
+        // Continue with streaming-only audio. The audio engine receives this
+        // state and leaves all SDRAM-backed sample operations disabled.
     } else {
         WAVEX_LOG_DAISY(INTER_MCU_LINK, "SDRAM initialized successfully");
     }
@@ -151,7 +154,7 @@ int main(void) {
     hw.SetAudioSampleRate(SaiHandle::Config::SampleRate::SAI_48KHZ);
 
     // Initialize DSP objects
-    InitDSP();
+    InitDSP(sdram_result == SdramHandle::Result::OK);
     WAVEX_LOG_DAISY(AUDIO_ENGINE, "DSP objects initialized");
 
     // Load the persisted CV calibration table (item 5 stage 4) - after
@@ -332,18 +335,14 @@ int main(void) {
 
     WaveX::Comm::UartLinkInit(&hw);
     WaveX::Comm::UartLinkStart();
-    // libDaisy hardcodes both halves of the UART RX chain to NVIC priority
-    // (0,0) - the maximum, ABOVE the audio SAI DMA at 5 configured earlier:
-    // UART4_IRQn in HAL_UART_MspInit (fires inside UartLinkInit) and
-    // DMA1_Stream5 (UART4 RX DMA) in dsy_dma_init (fires inside hw.Init()).
-    // That inverts the §7.1.5 hierarchy (audio highest) and lets the UART RX
-    // callback's multi-KB memmoves preempt the audio callback - Finding 3 of
-    // docs/dma-timing-review-2026-07-03.md. Re-set both AFTER UartLinkInit
-    // (which is what installs the (0,0) values) to sit below audio (5/6) and
-    // above the SPI link (10).
+    // dsy_dma_init installs UART DMA IRQs at priority 0. Restore the §7.1.5
+    // hierarchy after the WaveX UART4 driver initializes both streams:
+    // audio (5/6), UART full-duplex RX/TX (7), dormant SPI link (10).
     HAL_NVIC_SetPriority(UART4_IRQn, 7, 0);
     HAL_NVIC_SetPriority(DMA1_Stream5_IRQn, 7, 0);
-    WAVEX_LOG_DAISY(INTER_MCU_LINK, "DAISY: UART link started (IRQ priority 7, below audio)");
+    HAL_NVIC_SetPriority(DMA2_Stream4_IRQn, 7, 0);
+    WAVEX_LOG_DAISY(INTER_MCU_LINK,
+                    "DAISY: UART full-duplex DMA started (IRQ priority 7, below audio)");
 
 // Start audio callback system
 #if WAVEX_AUDIO_ENGINE_ENABLED

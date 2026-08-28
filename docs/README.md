@@ -22,6 +22,7 @@ Start here. Documents are grouped by whether they describe the system **as it sh
 | [ui-architecture.md](ui-architecture.md) | ESP32 UI framework: navigator, pages, softkeys, LVGL threading rules |
 | [ui-system-implementation-guide.md](ui-system-implementation-guide.md) | How to build a new UI page |
 | [testing_guide.md](testing_guide.md) | Running and writing host tests (GoogleTest) |
+| [flashing.md](flashing.md) | Build and flash the ESP32-P4 and Daisy Seed firmware from the devcontainer |
 | [performance_monitoring.md](performance_monitoring.md) | DWT cycle-counter / CPU-load measurement reference for the Daisy |
 | [LICENSES.md](LICENSES.md) | Third-party license inventory |
 

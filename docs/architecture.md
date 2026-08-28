@@ -138,7 +138,7 @@ Bare-metal cooperative model — **two execution contexts only**:
 Key subsystems:
 
 - **Sample streaming**: triple-buffered SD read slots with ready/consumed flags; `PumpWavIO()` refills while the callback drains; conversion (mono/stereo → output mode, resampling via CMSIS `arm_linear_interp_q15`) happens in the pump path, not the callback's per-sample loop; `rb_push_frames()` batches ring-buffer writes with minimal barriers.
-- **Sample RAM**: `memory.h` slab (32 B–1 KB classes) + extent (64 KB pages) allocator over the 64 MB SDRAM, with stats reported to the UI via `MSG_STATUS_RESPONSE`/`SampleMemStatusMessage`.
+- **Sample RAM**: `memory.h` slab (32 B–1 KB classes) + extent (64 KB pages) allocator over a 60 MB arena; the final 4 MB is reserved for offline-render scratch. `sdram_layout.h` is the single ownership map. Stats report the complete reserved pool to the UI via `MSG_STATUS_RESPONSE`/`SampleMemStatusMessage`.
 - **Profiling**: DWT cycle counters (`profiling/`), `PROFILE_SCOPE` macros behind `WAVEX_PROFILING_ENABLED`, CPU load min/avg/max reported in heartbeats.
 
 **Why bare-metal, not an RTOS (decision, 2026-07-07).** The Daisy backend runs no RTOS by design, and musical timing *depends on* that choice rather than being limited by it:
@@ -155,7 +155,8 @@ The ESP32 frontend *does* run FreeRTOS (§4.3) — correct there, because it jug
 FreeRTOS tasks:
 
 - **UI task**: LVGL handler loop (~30 FPS), deferred-update pattern for data arriving from other tasks (never call LVGL off the UI task — see `ui-architecture.md`).
-- **SPI slave task** (`esp_spi_link`): queues DMA slave transactions, raises **ATTN** (GPIO31) when TX data is pending so the Daisy master clocks a transaction, routes received packets to `PacketRouter`.
+- **UART link task** (`esp_uart_link`): drains the ESP-IDF driver's RX ring, scans framed packets, and pumps queued TX into its software TX ring. The driver is interrupt-driven rather than GDMA-backed.
+- **Dormant SPI slave task** (`esp_spi_link`): compiled only when `WAVEX_SPI_LINK_ENABLED=1`; its DMA transactions and ATTN signaling are not present in the shipped image.
 - **Input tasks**: PCNT encoder polling, TCA8418 interrupt-driven keypad.
 
 Known architectural debt (from the 2026-06-26 assessment, still valid): event/callback fan-out ownership is split across `inter_mcu`, `PacketRouter`, `ListenersManager`, and `StatisticsManager` — one owner must be chosen; raw packed wire structs leak into UI code — wrap in encode/decode helpers.
@@ -164,7 +165,7 @@ Known architectural debt (from the 2026-06-26 assessment, still valid): event/ca
 
 See `features/inter-mcu-protocol.md` for the message catalog. Every message struct lives in `firmware/shared/spi_protocol/protocol.h` regardless of transport. Transport status (**as-built; decision recorded 2026-07-05**):
 
-- **UART is the transport of record.** All inter-MCU traffic — heartbeat, meters, status, browse requests/responses, wave-preview chunks, note on/off, sample load/control — runs over UART1 (ESP32) ↔ UART4 (Daisy) at 2 Mbaud, using the framing in `firmware/shared/uart_protocol/uart_protocol.h` (0xA5/0x5A markers, 16-bit length, CRC16-CCITT, 16-bit sequence numbers) with `protocol.h` structs as payloads. RX is DMA-circular-buffer driven on the Daisy and event-driven on the ESP32; TX is a small queue pumped from the main loop (Daisy) / link task (ESP32). New messages target this link.
+- **UART is the transport of record.** All inter-MCU traffic — heartbeat, meters, status, browse requests/responses, wave-preview chunks, note on/off, sample load/control — runs over UART1 (ESP32) ↔ UART4 (Daisy) at 2 Mbaud, using the framing in `firmware/shared/uart_protocol/uart_protocol.h` (0xA5/0x5A markers, 16-bit length, CRC16-CCITT, 16-bit sequence numbers) with `protocol.h` structs as payloads. Daisy UART4 uses independent continuous RX DMA1 Stream 5 and asynchronous TX DMA2 Stream 4 through the WaveX-owned `uart4_dma_transport`; this bypasses libDaisy v8.1.0's single-operation UART DMA scheduler (upstream issue #653). The ESP32 legacy UART driver is interrupt/ring-buffer driven. New messages target this link.
 - **The SPI link is wired but compiled out**: `WAVEX_SPI_LINK_ENABLED` is `0` in `firmware/shared/config/link_config.h`, so `daisy_spi_link.cpp` / `esp_spi_link.cpp` (Daisy master / ESP32 slave, ATTN line, fixed power-of-two transaction sizes 32–2048 B) are in no shipped image. Re-enabling SPI — whether for bulk browse/wave data or full consolidation — is future work requiring bench re-validation, and roadmap Phase 1 item 6 ("raise SPI link clock") is blocked on it. Until then, do not extend the SPI path.
 - The pre-2026-07-05 revision of this section stated the opposite ("SPI active, UART legacy"); see `docs/code_review_20260705.md` finding C4 for the correction trail.
 
@@ -252,16 +253,16 @@ These rules are mandatory for all new code. Most past instability (SPI corruptio
 1. **D-Cache is enabled.** Every DMA buffer must be 32-byte aligned and padded to a multiple of 32 B (`__attribute__((aligned(32)))`), and either:
    - placed in a **non-cacheable region** (libDaisy `DMA_BUFFER_MEM_SECTION` → D2 SRAM configured non-cacheable), or
    - explicitly maintained: `SCB_CleanDCache_by_Addr` before TX, `SCB_InvalidateDCache_by_Addr` after RX. Never invalidate a buffer that shares a cache line with unrelated data.
-2. **DMA1/DMA2 cannot access DTCM** (0x20000000) or ITCM. Stack lives in DTCM by default — **never DMA to/from stack buffers**. SDMMC's IDMA requires AXI SRAM (D1); SDRAM is DMA-reachable but slow — stage SD reads through internal-RAM slots (the triple-buffer design does this). *Known exception*: `OnSampleLoad` DMAs SD reads directly into SDRAM — acceptable because it's a load-time (not real-time) path and libDaisy's clean-before/invalidate-after cache discipline keeps it coherent; don't copy that pattern into anything the audio path waits on (reviewed 2026-07-03, `dma-timing-review-2026-07-03.md` Finding 12).
+2. **DMA1/DMA2 cannot access DTCM** (0x20000000) or ITCM. Stack lives in DTCM by default — **never DMA to/from stack buffers**. SDMMC's IDMA requires AXI SRAM (D1); SDRAM is DMA-reachable but slow. All active SD paths, including `OnSampleLoad`, stage reads through aligned AXI-SRAM buffers before copying into SDRAM.
 3. **SDRAM accesses from the audio callback** should be sequential/batched (the q15 ring buffer does this); random single-word SDRAM access in the hot loop destroys the budget.
 4. **No blocking transactions on the main loop longer than ~10 ms** (lesson learned from the UART-era ESP32-restart hang: a 100 ms blocking TX froze the system when the peer disappeared). All link I/O needs a timeout and a stuck-queue recovery path.
-5. **Interrupt priorities**: audio SAI DMA highest; SPI link DMA below audio; EXTI (ATTN) below that; SysTick lowest. Any ISR added must be justified against the 1 ms budget.
-6. **QSPI-resident code** (app runs from QSPI via bootloader, `BOOT_QSPI`): hot paths (audio callback, ring buffer ops) should be `ITCM`/`IRAM`-placed or verified cached; measure with DWT before and after moving code.
+5. **Interrupt priorities**: audio SAI DMA highest (5/6); UART RX/TX DMA below audio (7); SPI link DMA below UART (10); SysTick lowest. Any ISR added must be justified against the 1 ms budget.
+6. **QSPI-resident code** (app runs from QSPI via bootloader, `BOOT_QSPI`): `WAVEX_ITCM_CODE` places measured hot functions in the copied-at-boot `.itcm_text` section. UART4 DMA RX position handling uses it; the IRQ entry points stay in QSPI so no vector can target ITCM during its early-boot copy. Audio callback code must move only after before/after DWT measurement.
 
 ### 7.2 ESP32-P4
 
 1. **SPI slave DMA buffers** must be in internal, DMA-capable memory (`MALLOC_CAP_DMA`), cache-line aligned (64 B on P4). Transactions use the fixed power-of-two sizes from the protocol.
-2. **LVGL framebuffers**: MIPI-DSI scans from PSRAM; keep the two LVGL partial buffers in internal RAM sized per `esp_lvgl_port` guidance, let the DSI peripheral + PPA handle blits. Avoid CPU-touching the active scanout buffer.
+2. **LVGL framebuffers**: MIPI-DSI scans from three full framebuffers in DMA-capable PSRAM; two LVGL partial buffers plus PPA rotation scratch use internal DMA-capable RAM. Log capability-specific free/minimum heap before and after display creation. Avoid CPU-touching the active scanout buffer.
 3. **PSRAM (hex-mode @200 MHz)** is fast but shared with display refresh — bulk copies during UI animation cause bandwidth contention; schedule waveform-preview decode between frames.
 4. **Never call LVGL from a non-UI task** (deadlocks under lock contention); use the deferred-update pattern (`ui-architecture.md`).
 
@@ -269,7 +270,7 @@ These rules are mandatory for all new code. Most past instability (SPI corruptio
 
 - Parameter changes (UI → audio): target < 5 ms end-to-end (touch → SPI → applied at next control tick).
 - Meters/heartbeat: 20–50 ms cadence, coalesced, lowest priority.
-- The link must degrade gracefully: either MCU rebooting must never wedge the other (timeouts + resync; regression-tested — roadmap Phase 1 item 7). UART's stuck-TX recovery (`daisy_uart_link.cpp`, wire-time-derived transmit timeout + 500ms/1000ms force-clear) implements the TX half. `SequenceTracker` (`firmware/shared/spi_protocol/sequence_tracker.hpp`) is wired into **both live UART RX paths** (duplicate/out-of-order drop + peer-reboot resync, counted in link stats) as well as the compiled-out SPI path; `AttnWatchdog` (`attn_watchdog.hpp`) is SPI-path-only by nature (there is no ATTN line on UART). Both are HAL-free and host-tested.
+- The link must degrade gracefully: either MCU rebooting must never wedge the other (recovery + resync; regression-tested — roadmap Phase 1 item 7). Daisy UART TX is asynchronous DMA with a bounded one-second retry/drop policy; it never waits for peer wire time in the main loop. `SequenceTracker` (`firmware/shared/spi_protocol/sequence_tracker.hpp`) is wired into **both live UART RX paths** (duplicate/out-of-order drop + peer-reboot resync, counted in link stats) as well as the compiled-out SPI path; `AttnWatchdog` (`attn_watchdog.hpp`) is SPI-path-only by nature (there is no ATTN line on UART). Both are HAL-free and host-tested.
 
 ---
 
@@ -279,9 +280,9 @@ These rules are mandatory for all new code. Most past instability (SPI corruptio
 
 | Region | Size | Use |
 |---|---|---|
-| ITCM/DTCM | 64/128 KB | hot code / stack, **not DMA-reachable** |
+| ITCM/DTCM | 64/128 KB | explicitly annotated hot code / stack, **not DMA-reachable**; static DTCM is link-capped at 64 KB to preserve at least 64 KB for descending stacks |
 | AXI + D2/D3 SRAM | ~512 KB total | audio ring buffer, DMA slots, link buffers, bss |
-| SDRAM (external) | 64 MB | sample RAM (slab+extent allocator), preview buffers, (future) offline-render scratch |
+| SDRAM (external) | 64 MB | 60 MB sample arena + 4 MB dedicated offline-render scratch (`sdram_layout.h`) |
 | QSPI flash | 8 MB | application (BOOT_QSPI via Daisy bootloader) |
 | SD card | up to SDXC | samples, projects/presets, rendered files |
 

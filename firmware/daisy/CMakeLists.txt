@@ -16,6 +16,7 @@ set(FIRMWARE_SOURCES
     src/comm/daisy_spi_link.cpp
     src/comm/daisy_inter_mcu_message_handlers.cpp
     src/comm/daisy_uart_link.cpp
+    src/comm/uart4_dma_transport.cpp
     src/comm/daisy_logging.cpp
     src/comm/daisy_filesystem.cpp
     src/audio/audio_engine.cpp
@@ -23,6 +24,7 @@ set(FIRMWARE_SOURCES
     src/storage/sd_sdio.cpp
     src/storage/sd_log_bridge.cpp
     src/metrics/metrics.cpp
+    src/memory_sections.cpp
     src/audio/output_sink.hpp
     src/audio/voice_manager.hpp
     src/audio/instrument.hpp
@@ -51,6 +53,17 @@ set(APP_TYPE BOOT_QSPI)
 # Add libDaisy and DaisySP
 add_subdirectory(libs/libDaisy)
 add_subdirectory(libs/DaisySP)
+
+# libDaisy v8.1.0's uart.cpp owns global UART/DMA IRQ callbacks and uses one
+# global DMA scheduler, which cannot transmit while circular RX listen mode is
+# active (upstream issue #653). WaveX owns UART4 through
+# uart4_dma_transport.cpp instead, so omit that one driver translation unit
+# without modifying the pinned libDaisy submodule. Any future use of
+# daisy::UartHandler in this target will fail to link and must be reconciled
+# explicitly with the WaveX-owned UART4 transport.
+get_target_property(LIBDAISY_SOURCES daisy SOURCES)
+list(FILTER LIBDAISY_SOURCES EXCLUDE REGEX "[/\\\\]per[/\\\\]uart\\.cpp$")
+set_property(TARGET daisy PROPERTY SOURCES "${LIBDAISY_SOURCES}")
 
 # ===== FIX HAL DRIVER CMSIS INCLUDES =====
 # libDaisy v8.0.0 HAL driver target is missing CMSIS Core includes
@@ -124,6 +137,10 @@ endif()
 
 # Include DaisyProject.cmake which handles all the STM32 configuration
 include(DaisyProject)
+
+target_link_options(${FIRMWARE_NAME} PRIVATE
+    "-Wl,-T,${CMAKE_CURRENT_LIST_DIR}/wavex_memory_sections.ld"
+)
 
 set(CMSIS_DSP_DIR ${CMAKE_CURRENT_LIST_DIR}/libs/libDaisy/Drivers/CMSIS-DSP)
 

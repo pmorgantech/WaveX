@@ -167,7 +167,6 @@ class SmallSlabPool {
 
     // Expose per-class stats snapshot
     void fill_small_stats(wxsamp_stats_t& s) const {
-        uint32_t total = 0, freeb = 0;
         for (uint8_t c = 0; c < WXM_SMALL_CLASS_COUNT; ++c) {
             uint16_t b = class_block_[c];
             uint32_t slots_total = 0, slots_free = 0;
@@ -176,13 +175,14 @@ class SmallSlabPool {
                 const auto& pg = class_pages_[c][p];
                 slots_total += pg.slots;
                 slots_free += (pg.slots - pg.used);
-                total += pg.slots * b;
-                freeb += (pg.slots - pg.used) * b;
             }
             s.small[c] = {b, pages, (uint16_t)slots_total, (uint16_t)slots_free};
         }
-        s.small_total_bytes = total;
-        s.small_free_bytes = freeb;
+        // Report the complete reserved slab arena, including pages that have
+        // not been formatted yet. Reporting formatted pages only hid most of
+        // the production reservation from the memory diagnostics UI.
+        s.small_total_bytes = size_;
+        s.small_free_bytes = (stats_.in_use_bytes <= size_) ? (size_ - stats_.in_use_bytes) : 0;
         s.in_use_bytes = stats_.in_use_bytes;
         s.objects_alive = stats_.objects_alive;
         s.failed_allocs = stats_.failed_allocs;
@@ -449,18 +449,25 @@ class LargeExtentPool {
 class SampleMemMgr {
    public:
     // Provide a single contiguous SDRAM region; we'll carve small/large split
-    void init(void* sdram_base, uint32_t sdram_bytes, uint32_t small_bytes) {
+    bool init(void* sdram_base, uint32_t sdram_bytes, uint32_t small_bytes) {
+        initialized_ = false;
+        if (!sdram_base || small_bytes > sdram_bytes ||
+            sdram_bytes - small_bytes < WXM_LARGE_PAGE_BYTES) {
+            return false;
+        }
         uint8_t* base = static_cast<uint8_t*>(sdram_base);
         uint32_t sb = (small_bytes / WXM_SMALL_PAGE_BYTES) * WXM_SMALL_PAGE_BYTES;
         small_.init(base, sb);
         large_.init(base + sb, sdram_bytes - sb);
+        initialized_ = true;
+        return true;
     }
 
     // Route allocation by threshold. Zero-byte requests are rejected: a
     // len==0 handle is the "released" sentinel, so allocating one would
     // leak its slot on release().
     bool alloc(uint32_t nbytes, wxsamp_t* out) {
-        if (nbytes == 0 || !out)
+        if (!initialized_ || nbytes == 0 || !out)
             return false;
         if (nbytes <= class_threshold_bytes()) {
             if (small_.alloc(nbytes, out))
@@ -473,6 +480,8 @@ class SampleMemMgr {
 
     // Direct pointer for read access
     bool ptr(const wxsamp_t& h, void** out_ptr) {
+        if (!initialized_ || !out_ptr)
+            return false;
         if (h.cls == 0xFF)
             return large_.ptr(h, out_ptr);
         return small_.ptr(h, out_ptr);
@@ -481,7 +490,7 @@ class SampleMemMgr {
     // Frees the allocation and zeroes the handle. Safe to call on an
     // already-released (zeroed) handle - it is a no-op.
     void release(wxsamp_t* h) {
-        if (!h || h->len == 0)
+        if (!initialized_ || !h || h->len == 0)
             return;
         if (h->cls == 0xFF)
             large_.release(h);
@@ -491,10 +500,16 @@ class SampleMemMgr {
     }
 
     void stats(wxsamp_stats_t* s) {
+        if (!s)
+            return;
         memset(s, 0, sizeof(*s));
+        if (!initialized_)
+            return;
         small_.fill_small_stats(*s);
         large_.fill_large_stats(*s);
     }
+
+    bool initialized() const { return initialized_; }
 
     // Optional: prewarm N pages for a class
     bool prewarm_small(uint8_t cls, uint16_t pages) {
@@ -509,6 +524,7 @@ class SampleMemMgr {
    private:
     SmallSlabPool small_;
     LargeExtentPool large_;
+    bool initialized_ = false;
 };
 
 /* =====================================================================
