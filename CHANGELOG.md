@@ -23,6 +23,19 @@ versioning and release process.
 
 - Prevented non-48 kHz sample prebuffering from spinning when only one frame
   remains, allowing playback to proceed instead of stalling silently.
+- Fixed the matching stall in the streaming path: a 1-frame SD-slot tail
+  cannot be resampled (the linear resampler needs ≥2 input frames), and the
+  skip-without-consume retry then re-requested the same frame forever —
+  playback of non-48 kHz files froze into permanent underrun after ~15 s.
+  The 1-frame tail is now retired with the slot. Both stalls date to the
+  2026-07-03 pair `bb3f2cb` (engine 44.1 → 48 kHz, so 44.1 kHz files began
+  resampling at all) + `db0b626` (Finding 6 made resample-failure paths skip
+  without consuming); needs a hardware listen test.
+- Raised the LONG I/O log threshold to 10 ms and report the periodic
+  I/O/stream stats only every 10th interval while a sample is playing — a
+  normal resampling pump costs 1.7–5 ms, so the previous 1 ms threshold
+  logged every pump and the blocking USB CDC writes starved the ring-buffer
+  refill, causing the very underruns being reported.
 - Corrected Daisy I/O timing diagnostics to use microseconds and added
   temporary stream-state telemetry for hardware audition troubleshooting.
 
@@ -70,7 +83,6 @@ versioning and release process.
   the HAL actually aborted it (gState left `BUSY_TX`). Latent on current
   hardware — the error path has never been observed to fire — but it was a
   real corruption window.
-
 
 ### Docs
 

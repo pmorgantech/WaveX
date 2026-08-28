@@ -56,6 +56,10 @@ void GetStreamDebug(uint32_t& prebuf_filled,
                     uint32_t& wav_sample_rate,
                     uint8_t& wav_channels,
                     uint8_t& wav_bits);
+void GetStreamDiscardDebug(uint32_t& free_frames,
+                           uint32_t& want_frames,
+                           uint32_t& resampled,
+                           uint32_t& pushes);
 void SetOutputMode(AudioOutputMode mode);
 AudioOutputMode GetOutputMode();
 uint32_t GetOutputChannelCount();

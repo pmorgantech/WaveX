@@ -466,8 +466,12 @@ int main(void) {
             WaveX::AudioEngine::PumpWavIO();
             uint32_t io_duration = System::GetUs() - io_start;
 
-            // Log long I/O operations that might cause audio pauses
-            if (io_duration > 1000) {  // More than 1ms
+            // Log long I/O operations that might cause audio pauses. A normal
+            // pump with resampling costs 1.7-5 ms, so a 1 ms threshold fired
+            // on every pump and the USB CDC write itself stole main-loop time
+            // from the refill - the logging caused the underruns it was
+            // reporting. Only flag genuine outliers.
+            if (io_duration > 10000) {  // More than 10ms
                 WAVEX_LOG_DAISY(AUDIO_ENGINE,
                                 "LONG I/O: %u us (might cause audio pause)",
                                 (unsigned)io_duration);
@@ -487,45 +491,65 @@ int main(void) {
 
         bool send_beacon = (current_time - last_beacon >= 1000);
 
-        // Report I/O performance stats every 5 seconds
+        // Report I/O performance stats every 5 seconds - but only every 10th
+        // report while a sample is playing. Each line is a blocking USB CDC
+        // write on the same loop that has to refill the audio ring, so during
+        // playback the reporting competes with the thing it reports on.
         static uint32_t last_stats_report = 0;
+        static uint32_t stats_report_tick = 0;
         if (current_time - last_stats_report >= 5000) {
             last_stats_report = current_time;
+            ++stats_report_tick;
 #if WAVEX_AUDIO_ENGINE_ENABLED
-            uint32_t io_count, max_io_duration, last_io_duration;
-            WaveX::AudioEngine::GetIOStats(io_count, max_io_duration, last_io_duration);
-            WAVEX_LOG_DAISY(AUDIO_ENGINE,
-                            "I/O Stats: count=%u, max=%u ticks, last=%u ticks",
-                            (unsigned)io_count,
-                            (unsigned)max_io_duration,
-                            (unsigned)last_io_duration);
+            const bool stats_throttled =
+                WaveX::AudioEngine::IsWavPlaying() && (stats_report_tick % 10 != 0);
+            if (!stats_throttled) {
+                uint32_t io_count, max_io_duration, last_io_duration;
+                WaveX::AudioEngine::GetIOStats(io_count, max_io_duration, last_io_duration);
+                WAVEX_LOG_DAISY(AUDIO_ENGINE,
+                                "I/O Stats: count=%u, max=%u ticks, last=%u ticks",
+                                (unsigned)io_count,
+                                (unsigned)max_io_duration,
+                                (unsigned)last_io_duration);
 
-            // TEMPORARY audition diagnostic - remove once the no-audio issue
-            // is resolved. Tells us where the chain stops:
-            //   playing=1 prebuf=0        -> stuck pre-buffering (SD/convert)
-            //   playing=1 prebuf=1 peak=0 -> data reaches the ring as silence
-            //   playing=1 prebuf=1 peak>0 -> DSP is fine; look at codec/analog
-            WaveX::AudioEngine::BlockMeters dbg_meters;
-            WaveX::AudioEngine::GetMeters(dbg_meters);
-            uint32_t dbg_filled, dbg_target, dbg_sr;
-            uint8_t dbg_ch, dbg_bits;
-            WaveX::AudioEngine::GetStreamDebug(
-                dbg_filled, dbg_target, dbg_sr, dbg_ch, dbg_bits);
-            WAVEX_LOG_DAISY(AUDIO_ENGINE,
-                            "STREAM: playing=%d prebuf=%u/%u peakL=%d peakR=%d (x1000) "
-                            "wav=%luHz ch=%u bits=%u",
-                            (int)WaveX::AudioEngine::IsWavPlaying(),
-                            (unsigned)dbg_filled,
-                            (unsigned)dbg_target,
-                            (int)(dbg_meters.peakL * 1000.0f),
-                            (int)(dbg_meters.peakR * 1000.0f),
-                            (unsigned long)dbg_sr,
-                            (unsigned)dbg_ch,
-                            (unsigned)dbg_bits);
-#endif
+                // TEMPORARY audition diagnostic - remove once the no-audio issue
+                // is resolved. Tells us where the chain stops:
+                //   playing=1 prebuf=0        -> stuck pre-buffering (SD/convert)
+                //   playing=1 prebuf=1 peak=0 -> data reaches the ring as silence
+                //   playing=1 prebuf=1 peak>0 -> DSP is fine; look at codec/analog
+                WaveX::AudioEngine::BlockMeters dbg_meters;
+                WaveX::AudioEngine::GetMeters(dbg_meters);
+                uint32_t dbg_filled, dbg_target, dbg_sr;
+                uint8_t dbg_ch, dbg_bits;
+                WaveX::AudioEngine::GetStreamDebug(
+                    dbg_filled, dbg_target, dbg_sr, dbg_ch, dbg_bits);
+                WAVEX_LOG_DAISY(AUDIO_ENGINE,
+                                "STREAM: playing=%d prebuf=%u/%u peakL=%d peakR=%d (x1000) "
+                                "wav=%luHz ch=%u bits=%u",
+                                (int)WaveX::AudioEngine::IsWavPlaying(),
+                                (unsigned)dbg_filled,
+                                (unsigned)dbg_target,
+                                (int)(dbg_meters.peakL * 1000.0f),
+                                (int)(dbg_meters.peakR * 1000.0f),
+                                (unsigned long)dbg_sr,
+                                (unsigned)dbg_ch,
+                                (unsigned)dbg_bits);
+                uint32_t dbg_free, dbg_want, dbg_res, dbg_pushes;
+                WaveX::AudioEngine::GetStreamDiscardDebug(dbg_free, dbg_want, dbg_res, dbg_pushes);
+                WAVEX_LOG_DAISY(AUDIO_ENGINE,
+                                "STREAM2: free=%u want=%u resampled=%u pushes=%u",
+                                (unsigned)dbg_free,
+                                (unsigned)dbg_want,
+                                (unsigned)dbg_res,
+                                (unsigned)dbg_pushes);
 
+                // Log UART stats
+                WaveX::Comm::UartLinkLogStats();
+            }  // !stats_throttled
+#else
             // Log UART stats
             WaveX::Comm::UartLinkLogStats();
+#endif
         }
 
         if (send_beacon) {

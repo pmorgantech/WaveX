@@ -498,6 +498,12 @@ static uint32_t s_io_start_time = 0;
 static uint32_t s_io_duration = 0;
 static uint32_t s_max_io_duration = 0;
 static uint32_t s_io_count = 0;
+// TEMPORARY audition diagnostic - remove with the STREAM log in main.cpp.
+// Records why the streaming path discarded its last pass without consuming.
+static uint32_t s_dbg_free = 0;       // rb_free_frames() at the top of the pass
+static uint32_t s_dbg_want = 0;       // frames_to_transfer after all caps
+static uint32_t s_dbg_resampled = 0;  // LinearResampleFrames() result
+static uint32_t s_dbg_pushes = 0;     // passes that actually reached rb_push_frames
 static uint32_t s_last_io_log = 0;
 static uint32_t s_last_io_time = 0;  // Last time we did SD I/O (for rate limiting)
 static uint32_t s_dwt_callback_cycles = 0;
@@ -1880,6 +1886,17 @@ void GetStreamDebug(uint32_t& prebuf_filled,
     wav_bits = s_wav.bits_per_sample;
 }
 
+// TEMPORARY audition diagnostic - remove with the STREAM log in main.cpp.
+void GetStreamDiscardDebug(uint32_t& free_frames,
+                           uint32_t& want_frames,
+                           uint32_t& resampled,
+                           uint32_t& pushes) {
+    free_frames = s_dbg_free;
+    want_frames = s_dbg_want;
+    resampled = s_dbg_resampled;
+    pushes = s_dbg_pushes;
+}
+
 void SetOutputMode(AudioOutputMode mode) {
     s_output_channels = static_cast<uint32_t>(mode);
 }
@@ -1993,6 +2010,7 @@ void PumpWavIO() {
     }
 
     uint32_t free_frames = rb_free_frames();
+    s_dbg_free = free_frames;
     if (free_frames == 0) {
         s_dwt_io_cycles = WaveX::Profiling::GetCycles() - block_cycles_start;
         s_dwt_io_max = std::max(s_dwt_io_max, s_dwt_io_cycles);
@@ -2004,6 +2022,23 @@ void PumpWavIO() {
         (s_wav.sample_rate != s_sample_rate)
             ? static_cast<float>(s_sample_rate) / static_cast<float>(s_wav.sample_rate)
             : 1.0f;
+
+    // A 1-frame slot tail cannot be resampled: LinearResampleFrames() needs
+    // >= 2 input frames to interpolate, and the skip-without-consume paths
+    // below would then retry this same 1-frame request on every pump forever
+    // - the ring drains, nothing refills it, and playback stalls into
+    // permanent underrun (the "stalls after ~15s" bug; STREAM2 caught it as
+    // free=2047 want=1 resampled=0 with pushes frozen). Retire the slot
+    // instead. The linear resampler already discards the final input frame
+    // of every chunk at chunk boundaries, so dropping this tail frame
+    // (~23 us of audio per affected 8KB slot) matches the existing quality.
+    if (resample_ratio != 1.0f && available_frames < 2) {
+        slot.ready = false;
+        slot.consumed = 0;
+        s_sd_consume_index = (s_sd_consume_index + 1) % kSdBufferCount;
+        return;
+    }
+
     uint32_t frames_to_transfer = std::min(available_frames, free_frames);
 
     // Prevent ring buffer overflow when upsampling (e.g., 22kHz -> 48kHz)
@@ -2053,6 +2088,7 @@ void PumpWavIO() {
         }
     }
 
+    s_dbg_want = frames_to_transfer;
     ResetScratchPool();
     uint32_t bytes_per_sample = (s_wav.bits_per_sample == 24) ? 3u : 2u;
     uint32_t file_bpf = (uint32_t)s_wav.num_channels * bytes_per_sample;
@@ -2080,6 +2116,7 @@ void PumpWavIO() {
                                              s_output_channels,
                                              resample_ratio);
         }
+        s_dbg_resampled = resampled;
         if (resampled == 0) {
             // Resampling unavailable this pass (scratch exhausted or the
             // resampler failed). The old fallback pushed conversion_output
@@ -2105,6 +2142,7 @@ void PumpWavIO() {
         return;
     }
 
+    ++s_dbg_pushes;
     rb_push_frames(final_buffer, final_frames);
     slot.consumed += frames_to_transfer;
     if (slot.consumed >= slot.frames) {
