@@ -398,6 +398,37 @@ static LoadedSampleInfo* find_loaded_sample(uint16_t sample_id) {
     return nullptr;
 }
 
+// Drops `sample_id` from the registry and returns its memory to the arena.
+// Entries stay in load order (oldest first), so removal closes the gap by
+// shifting rather than swapping with the tail: find_playable_sample() and
+// OnPreviewReq() both read the last entry as "most recently loaded", and a
+// swap would quietly hand them an older sample.
+static void remove_loaded_sample(uint16_t sample_id) {
+    for (size_t i = 0; i < s_loaded_sample_count; ++i) {
+        if (s_loaded_samples[i].sample_id != sample_id) {
+            continue;
+        }
+        s_sample_mem_mgr.release(&s_loaded_samples[i].handle);
+        for (size_t j = i + 1; j < s_loaded_sample_count; ++j) {
+            s_loaded_samples[j - 1] = s_loaded_samples[j];
+        }
+        --s_loaded_sample_count;
+        return;
+    }
+}
+
+// Retires the least recently loaded sample. Callers MUST have passed
+// OnSampleLoad's stop-all barrier first: this frees SDRAM that a playing
+// voice would otherwise still be reading through its non-owning
+// Voice::sample pointer.
+static bool evict_oldest_loaded_sample() {
+    if (s_loaded_sample_count == 0) {
+        return false;
+    }
+    remove_loaded_sample(s_loaded_samples[0].sample_id);
+    return true;
+}
+
 static bool upsert_loaded_sample(const SampleLoadMessage& sl, const wxsamp_t& handle) {
     LoadedSampleInfo info;
     info.sample_id = sl.sample_id;
@@ -408,13 +439,15 @@ static bool upsert_loaded_sample(const SampleLoadMessage& sl, const wxsamp_t& ha
     info.channels = sl.channels;
     info.bit_depth = sl.bit_depth;
 
-    if (auto* existing = find_loaded_sample(sl.sample_id)) {
-        s_sample_mem_mgr.release(&existing->handle);
-        *existing = info;
-        return true;
-    }
-    if (s_loaded_sample_count >= kLoadedSampleCapacity) {
-        return false;
+    // Re-loading an id retires the previous entry and appends a fresh one, so
+    // the reloaded sample becomes the newest rather than staying at its old
+    // index. Updating in place made "most recently loaded" wrong for any id
+    // that was ever loaded twice.
+    remove_loaded_sample(sl.sample_id);
+    while (s_loaded_sample_count >= kLoadedSampleCapacity) {
+        if (!evict_oldest_loaded_sample()) {
+            return false;
+        }
     }
     s_loaded_samples[s_loaded_sample_count++] = info;
     return true;
@@ -1441,12 +1474,6 @@ void OnSampleLoad(const SampleLoadMessage& sl) {
             s_hw->PrintLine("SAMPLE_LOAD: rejected because SDRAM is unavailable");
         return;
     }
-    if (!find_loaded_sample(sl.sample_id) && s_loaded_sample_count >= kLoadedSampleCapacity) {
-        if (s_hw)
-            s_hw->PrintLine("SAMPLE_LOAD: registry full (%u entries)",
-                            (unsigned)kLoadedSampleCapacity);
-        return;
-    }
     if (s_hw) {
         s_hw->PrintLine("SAMPLE_LOAD: path='%s' id=%u", sl.path, (unsigned)sl.sample_id);
     }
@@ -1520,19 +1547,30 @@ void OnSampleLoad(const SampleLoadMessage& sl) {
         return;
     }
 
+    // The browser hands out a fresh sample_id for every audition, so no load
+    // ever replaces an earlier one and nothing reclaims the arena on its own.
+    // Retire the least recently loaded samples until this one fits. The
+    // stop-all barrier above already drained the note queue and idled every
+    // voice, so the memory this releases has no remaining readers.
     wxsamp_t handle = {};
-    if (!s_sample_mem_mgr.alloc(data_size, &handle)) {
-        if (s_hw) {
-            wxsamp_stats_t st{};
-            s_sample_mem_mgr.stats(&st);
-            s_hw->PrintLine(
-                "SAMPLE_LOAD: alloc failed for %lu bytes (largest_free=%lu, free_total=%lu)",
-                (unsigned long)data_size,
-                (unsigned long)st.largest_free_bytes,
-                (unsigned long)st.large_free_bytes + (unsigned long)st.small_free_bytes);
+    while (!s_sample_mem_mgr.alloc(data_size, &handle)) {
+        if (!evict_oldest_loaded_sample()) {
+            if (s_hw) {
+                wxsamp_stats_t st{};
+                s_sample_mem_mgr.stats(&st);
+                s_hw->PrintLine(
+                    "SAMPLE_LOAD: alloc failed for %lu bytes (largest_free=%lu, free_total=%lu)",
+                    (unsigned long)data_size,
+                    (unsigned long)st.largest_free_bytes,
+                    (unsigned long)st.large_free_bytes + (unsigned long)st.small_free_bytes);
+            }
+            f_close(&file);
+            return;
         }
-        f_close(&file);
-        return;
+        if (s_hw) {
+            s_hw->PrintLine("SAMPLE_LOAD: evicted oldest sample to fit %lu bytes",
+                            (unsigned long)data_size);
+        }
     }
 
     void* sample_ptr = nullptr;

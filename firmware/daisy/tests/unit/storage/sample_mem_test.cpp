@@ -168,6 +168,47 @@ TEST_F(SampleMemTest, ZeroByteAllocRejected) {
     EXPECT_FALSE(mgr_.alloc(0, &h));
 }
 
+// The sample browser allocates a fresh sample_id per audition, so OnSampleLoad
+// never replaces an earlier load and instead retires the oldest registry entry
+// to make room (audio_engine.cpp evict_oldest_loaded_sample). That recovery is
+// only sound if releasing the oldest extent reliably reopens space for the next
+// one - otherwise audition dies after a few dozen loads, which is exactly the
+// regression this models: a long audition run in a arena that holds ~3 samples.
+TEST_F(SampleMemTest, RepeatedLoadEvictOldestNeverExhaustsArena) {
+    constexpr uint32_t kSampleBytes = 512 * 1024;  // ~3 fit in the large pool
+    constexpr int kAuditions = 200;
+
+    wxsamp_t live[4] = {};
+    size_t count = 0;
+
+    for (int i = 0; i < kAuditions; ++i) {
+        wxsamp_t h{};
+        while (!mgr_.alloc(kSampleBytes, &h)) {
+            ASSERT_GT(count, 0u) << "arena could not fit one sample at audition " << i;
+            mgr_.release(&live[0]);
+            for (size_t j = 1; j < count; ++j) {
+                live[j - 1] = live[j];
+            }
+            --count;
+        }
+
+        // Every audition must land on real, writable memory - a stale handle
+        // surviving eviction would show up here rather than as silent garbage.
+        void* p = nullptr;
+        ASSERT_TRUE(mgr_.ptr(h, &p)) << "audition " << i;
+        ASSERT_NE(p, nullptr) << "audition " << i;
+        memset(p, i & 0xFF, kSampleBytes);
+
+        ASSERT_LT(count, sizeof(live) / sizeof(live[0]));
+        live[count++] = h;
+    }
+
+    // Eviction must actually return the memory, not merely drop the handle.
+    wxsamp_stats_t st{};
+    mgr_.stats(&st);
+    EXPECT_EQ(st.objects_alive, count);
+}
+
 TEST(SampleMemInitTest, RejectsUnavailableOrInvalidArena) {
     SampleMemMgr mgr;
     wxsamp_t h{};

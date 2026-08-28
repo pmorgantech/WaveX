@@ -26,7 +26,13 @@ versioning and release process.
   256 KiB, and statistics now report the whole reserved slab arena rather
   than only lazily formatted pages.
 - Replaced the Daisy loaded-sample `std::vector` with a fixed 32-entry registry
-  so sample loads do not grow or fragment the bare-metal heap.
+  so sample loads do not grow or fragment the bare-metal heap. The registry
+  retires its least recently loaded entry when it runs out of slots or when the
+  sample arena cannot fit an incoming load, so auditioning is no longer capped
+  at 32 loads per boot and no longer strands SDRAM the browser can never
+  reclaim (it allocates a fresh `sample_id` per audition). Re-loading an
+  existing id now moves that entry to the newest slot, keeping the
+  "most recently loaded sample" that note playback and preview select correct.
 - Added a copied-at-boot ITCM section, a 30 KiB D2 DMA link-time ceiling, a
   DTCM static-data ceiling that preserves 64 KiB for stacks, and ESP32
   capability-specific internal/PSRAM DMA heap telemetry around display

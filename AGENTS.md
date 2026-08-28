@@ -77,8 +77,11 @@ that depends on an external crate or protocol.
 ## Building and the devcontainer
 
 - Full build/flash instructions (prerequisites, individual `idf.py`/`make` commands, debugging) live in **`setup.md`** and **`README.md`** — don't duplicate them here. Quick reference: `make all` (both MCUs), `make esp32` / `make daisy` (individually), `make test` (host tests).
+- The supported CLI entry point is `./devcontainer.sh` from the repository root. It starts `wavex-devcontainer:latest` with the repository mounted at `/workspaces/WaveX`, USB access enabled, and the serial groups/devices exposed. Build the image first when it is not present: `docker build -t wavex-devcontainer:latest -f .devcontainer/Dockerfile .devcontainer/`. The script requires Docker and, for hardware access, a host user/device setup that permits privileged USB/serial forwarding.
+- After cloning or when submodules are missing, run `git submodule update --init --recursive` (or `make setup`) before building. The Daisy libraries and the vendored GoogleTest source are required for reproducible builds/tests.
 - **Always build/test through the devcontainer** (`.devcontainer/Dockerfile` → image `wavex-devcontainer:latest`), not the host shell — the host toolchain is incomplete (no ESP-IDF env, `arm-none-eabi-gcc` present but the CMake toolchain file needs `CMAKE_C_COMPILER`/`CMAKE_CXX_COMPILER` set explicitly, which only the Daisy wrapper Makefile does correctly).
 - The container runs as non-root user `petem` (uid 1000) by default, so bind-mounted build output is owned by the host user — no `chown` workaround needed after a CLI-driven build.
+- A shell started by `./devcontainer.sh` is not the VS Code Dev Containers session: source `/opt/esp/idf/export.sh` before invoking `idf.py` directly. The top-level ESP32 Make targets source it themselves; VS Code sessions do so through `postCreateCommand`.
 - For a one-off CLI build/test without opening VS Code's Dev Containers UI:
   ```bash
   docker build -t wavex-devcontainer:latest -f .devcontainer/Dockerfile .devcontainer/
@@ -89,6 +92,13 @@ that depends on an external crate or protocol.
   `source /opt/esp/idf/export.sh` is required in a raw `docker run` even though `PATH`/`IDF_TOOLS_PATH` are already baked into the image, because it also activates the Python venv `idf.py` depends on; VS Code sessions get this for free via `postCreateCommand`.
 - **Use `-j$(nproc)`** on `make` invocations (top-level `make all`/`make daisy`, or inside `firmware/daisy`) — GNU Make's jobserver propagates through the nested `$(MAKE)` calls in the Daisy wrapper Makefile automatically. `idf.py build` (ESP32) already parallelizes via ninja without needing an explicit flag.
 - `build/` directories are gitignored; if compiles fail immediately with a compiler-not-found or path error, suspect a stale cache left by a build under a different mount path or an older toolchain version, and `make clean`/`idf.py fullclean` before re-investigating.
+
+## Current implementation state and transport
+
+- The roadmap is currently in **Phase 2 — Groovebox Core: Sequencer + Pads**. The host-tested scheduler/protocol core exists, but callback integration that turns scheduled events into audible voice triggers, MIDI-clock output, the pad/step-editor UI, persistence, and bench verification remain outstanding. Do not treat host compilation as hardware bring-up or as satisfying a phase gate.
+- The live inter-MCU transport is currently **UART**. `WAVEX_SPI_LINK_ENABLED` is `0`, so SPI code is compiled out and UART carries all current traffic, including browse and waveform data. Do not design new behavior around SPI availability without first re-validating the link and updating the architecture/roadmap decision.
+- The current analog configuration is **Stage A**: voices mix to the Daisy SAI1 stereo codec and use one shared MCP4728-driven VCF/VCA path. Stage B's TDM8 output and SPI CV backend are compile-time alternatives/stubs for later hardware bring-up; keep Stage A buildable as the fallback.
+- The roadmap and architecture distinguish code-complete from hardware-verified work. Clearly report when a change was only host-tested or compile-verified; real-panel rendering, MIDI/audio latency, CV timing, SD streaming, reboot recovery, and zero-underrun soak behavior require hardware tests.
 
 ## Testing
 

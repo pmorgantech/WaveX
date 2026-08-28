@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep -E '\\\\.\\(o|a|elf|bin\\)$')",
+      "Bash(git check-ignore *)"
+    ]
+  }
+}
