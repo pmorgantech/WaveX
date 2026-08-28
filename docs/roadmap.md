@@ -145,6 +145,7 @@ Recording itself ships in Phase 2.5 (`features/sampling-and-recording.md`); this
 - Preset/kit browser richness (tagging, favorites), USB sample import (MSC or MTP — decide), settings persistence.
 - ESP-IDF 6.0 migration (after the ecosystem components support it — see 0.1).
 - CPU/memory headroom pass with DWT profiling; lock the final block-size and clock decisions.
+- **Polyphase sample-rate conversion** to replace the linear interpolator in `audio_engine.cpp` (`LinearResampleFrames`). Today every non-48 kHz file is resampled by scalar `arm_linear_interp_q15` calls, one per output sample per channel — correct but both aliasing-prone (linear interpolation is a poor anti-imaging filter) and ~1.7 ms per ~1050-frame chunk. The common case, 44.1 → 48 kHz, is the rational ratio 160/147, so a polyphase FIR with 160 precomputed phases built on the CMSIS-DSP `arm_fir_*_q15` kernels replaces the per-sample interpolation with a filter bank. Two independent wins (quality and CPU), and it removes the ≥2-input-frame edge cases that caused the 2026-08 audition deadlocks. Not urgent: measured at roughly an 8% duty cycle during audition, this is not the streaming bottleneck — the ~2.9 ms 8 KB `f_read` is the larger half. Verify against a measured profile before starting, and keep the linear path for ratios that are not usefully rational.
 
 ---
 
