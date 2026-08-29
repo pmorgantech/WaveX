@@ -160,8 +160,6 @@ class SequencerScheduler {
             // multiple boundary crossings in one tick (see class comment);
             // cap so a pathological config can never spin unbounded.
             for (int guard = 0; guard < 8; ++guard) {
-                bool made_progress = false;
-
                 // Retrigs pending from a step already primary-fired.
                 while (ts.pending_retrigs > 0) {
                     if (ts.next_retrig_tick >= ts.retrig_clip_tick) {
@@ -186,7 +184,6 @@ class SequencerScheduler {
                     }
                     ts.next_retrig_tick += ts.retrig_rate_ticks;
                     --ts.pending_retrigs;
-                    made_progress = true;
                 }
 
                 const uint64_t tframe = TickToFrame(ts.next_trigger_tick);
@@ -249,13 +246,9 @@ class SequencerScheduler {
                 if (!scheduled_retrig)
                     ts.pending_retrigs = 0;
 
-                made_progress = true;
                 ts.step_index = next_step;
                 ts.loop_count = next_loop;
                 ts.next_trigger_tick = upcoming_tick;
-
-                if (!made_progress)
-                    break;
             }
         }
 

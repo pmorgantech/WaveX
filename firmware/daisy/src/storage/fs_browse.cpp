@@ -137,8 +137,6 @@ bool ListDir(const char* path,
     // Add remaining entries starting from adjusted start_index
     for (size_t i = start_index; i < all_count && written < max_entries; i++) {
         out[written++] = all_entries[i];
-        if (written <= 3) {
-        }
     }
 
     entries_written = written;
