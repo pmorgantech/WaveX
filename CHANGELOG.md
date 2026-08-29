@@ -11,6 +11,32 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Changed — ESP32 encoders move to the pulse_cnt driver
+
+- `pcnt_task` now uses `driver/pulse_cnt.h` instead of the legacy
+  `driver/pcnt.h`, which ESP-IDF removed in v6.0 along with the ADC, DAC,
+  I2S, Timer Group, MCPWM, RMT, temperature-sensor and sigma-delta legacy
+  drivers. The replacement API exists from IDF v5.0, so this builds on the
+  pinned v5.5 toolchain today and removes the project's only hard blocker to
+  a future 6.x upgrade (a full sweep of the removed 6.0 headers and symbols
+  found no other use, in WaveX sources or in resolved components).
+- Units and channels are opaque handles rather than fixed hardware indices,
+  so `WAVEX_ENCODER_PCNT_UNIT` / `WAVEX_PCNT1_UNIT` are now WaveX logical
+  indices (0/1) into this module's own table, and the `*_CH_A` / `*_CH_B`
+  macros are gone — the driver allocates both quadrature channels from the
+  unit handle, so there was no longer anything for them to select.
+- Quadrature decoding is preserved exactly: each channel counts both edges of
+  one signal and takes direction from the other's level, reproducing the
+  legacy pos/neg + lctrl/hctrl matrix. Glitch filtering moves from a raw APB
+  cycle count to `pcnt_unit_set_glitch_filter()`'s nanoseconds, so
+  `WAVEX_ENCODER_FILTER_NS` / `WAVEX_PCNT1_FILTER_NS` (10 µs, the previous
+  800 cycles at an assumed 80 MHz APB) are the new source of truth. **The
+  converted filter width is the one behavioural change and wants confirming
+  against real encoders.**
+- Polling cadence, delta accumulation, counter-clear-on-change and the public
+  entry points are unchanged, so `ui_task` and `wavex_application` call sites
+  are untouched.
+
 ### Fixed — SD bring-up, driver-link leak, and remount retries
 
 - `TrySpeed()` ran `f_mount(nullptr, ...)` and `HAL_SD_DeInit()` on every

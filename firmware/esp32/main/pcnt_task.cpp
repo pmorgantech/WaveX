@@ -2,143 +2,181 @@
  * @file pcnt_task.cpp
  * @brief PCNT (Pulse Counter) Task Implementation for ESP32 Encoder Handling
  *
- * This module provides PCNT-based encoder reading functionality for both
- * the main encoder (PCNT_UNIT_0) and additional PCNT unit (PCNT_UNIT_1).
+ * Polled quadrature decoding for the main encoder and a second PCNT input,
+ * built on `driver/pulse_cnt.h`. Units and channels are opaque handles owned
+ * by this module; callers address them through the WaveX logical unit index.
  */
 
 #include "pcnt_task.h"
 
+#include <inttypes.h>
+#include <stdint.h>
+
 #include "../../shared/config/hardware_config.h"
 #include "../../shared/config/pin_config.h"
-#include "driver/pcnt.h"
+#include "driver/pulse_cnt.h"
 #include "esp_log.h"
-
-// For interrupt handling
-#include "esp_intr_alloc.h"
-#include "soc/pcnt_reg.h"
 
 static const char *TAG = "PCNT_TASK";
 
 // PCNT unit configurations
 static wavex_pcnt_config_t s_pcnt_configs[] = {
-    // Main encoder (PCNT_UNIT_0)
+    // Main encoder
     {.unit = WAVEX_ENCODER_PCNT_UNIT,
-     .channel_a = WAVEX_ENCODER_PCNT_CH_A,
-     .channel_b = WAVEX_ENCODER_PCNT_CH_B,
      .gpio_a = WAVEX_ESP_ENCODER_A,
      .gpio_b = WAVEX_ESP_ENCODER_B,
-     .filter_value = WAVEX_ENCODER_FILTER_VALUE,
+     .max_glitch_ns = WAVEX_ENCODER_FILTER_NS,
      .enabled = WAVEX_ESP_ENCODER_PCNT_ENABLED},
-    // Additional PCNT unit (PCNT_UNIT_1)
+    // Additional PCNT unit
     {.unit = WAVEX_PCNT1_UNIT,
-     .channel_a = WAVEX_PCNT1_CH_A,
-     .channel_b = WAVEX_PCNT1_CH_B,
      .gpio_a = WAVEX_ESP_PCNT1_A,
      .gpio_b = WAVEX_ESP_PCNT1_B,
-     .filter_value = WAVEX_PCNT1_FILTER_VALUE,
+     .max_glitch_ns = WAVEX_PCNT1_FILTER_NS,
      .enabled = WAVEX_ESP_PCNT1_ENABLED}};
 
 #define PCNT_CONFIG_COUNT (sizeof(s_pcnt_configs) / sizeof(wavex_pcnt_config_t))
 
 // Encoder readings storage
-static encoder_reading_t s_encoder_readings[PCNT_UNIT_MAX] = {0};
+static encoder_reading_t s_encoder_readings[WAVEX_PCNT_UNIT_COUNT] = {};
+
+// Driver handles, indexed by WaveX logical unit. NULL means "not initialized".
+static pcnt_unit_handle_t s_pcnt_units[WAVEX_PCNT_UNIT_COUNT] = {};
 
 // Task handle
 static TaskHandle_t s_pcnt_task_handle = NULL;
 
 /**
  * @brief Initialize a single PCNT unit
+ *
+ * Quadrature decoding uses two channels that mirror each other: each counts
+ * both edges of one signal while taking its direction from the level of the
+ * other. This reproduces the legacy driver's pos/neg + lctrl/hctrl matrix
+ * (INC/DEC on A, DEC/INC on B, control-high reverses, control-low keeps).
  */
 static esp_err_t pcnt_init_unit(const wavex_pcnt_config_t *config) {
     ESP_LOGI(TAG,
-             "Initializing PCNT unit %d (GPIO A:%d, B:%d) - quadrature mode for PEC11R",
-             config->unit,
+             "Initializing PCNT unit %u (GPIO A:%d, B:%d) - quadrature mode for PEC11R",
+             (unsigned)config->unit,
              config->gpio_a,
              config->gpio_b);
 
-    // Configure PCNT unit for PEC11R quadrature encoder
-    // Try alternative quadrature configuration for PEC11R
-    pcnt_config_t esp_pcnt_config = {
-        .pulse_gpio_num = config->gpio_a,
-        .ctrl_gpio_num = config->gpio_b,
-        .lctrl_mode = PCNT_MODE_KEEP,     // Try KEEP instead of REVERSE
-        .hctrl_mode = PCNT_MODE_REVERSE,  // Try REVERSE instead of KEEP
-        .pos_mode = PCNT_COUNT_INC,       // Count up on positive edge
-        .neg_mode = PCNT_COUNT_DEC,       // Count down on negative edge
-        .counter_h_lim = INT16_MAX,
-        .counter_l_lim = INT16_MIN,
-        .unit = config->unit,
-        .channel = config->channel_a};
+    pcnt_unit_config_t unit_config = {};
+    unit_config.high_limit = INT16_MAX;
+    unit_config.low_limit = INT16_MIN;
 
-    esp_err_t ret = pcnt_unit_config(&esp_pcnt_config);
+    pcnt_unit_handle_t unit = NULL;
+    esp_err_t ret = pcnt_new_unit(&unit_config, &unit);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG,
-                 "Failed to configure PCNT unit %d channel A: %s",
-                 config->unit,
+                 "Failed to allocate PCNT unit %u: %s",
+                 (unsigned)config->unit,
                  esp_err_to_name(ret));
         return ret;
     }
 
-    // Configure channel B for quadrature decoding (alternative config)
-    esp_pcnt_config.pulse_gpio_num = config->gpio_b;
-    esp_pcnt_config.ctrl_gpio_num = config->gpio_a;
-    esp_pcnt_config.channel = config->channel_b;
-    esp_pcnt_config.pos_mode = PCNT_COUNT_DEC;  // Standard for channel B
-    esp_pcnt_config.neg_mode = PCNT_COUNT_INC;  // Standard for channel B
-
-    ret = pcnt_unit_config(&esp_pcnt_config);
+    // Glitch filter: the legacy driver counted APB clock cycles, the current
+    // one takes nanoseconds directly (see WAVEX_ENCODER_FILTER_NS).
+    pcnt_glitch_filter_config_t filter_config = {};
+    filter_config.max_glitch_ns = config->max_glitch_ns;
+    ret = pcnt_unit_set_glitch_filter(unit, &filter_config);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG,
-                 "Failed to configure PCNT unit %d channel B: %s",
-                 config->unit,
+                 "Failed to set glitch filter for PCNT unit %u: %s",
+                 (unsigned)config->unit,
                  esp_err_to_name(ret));
+        pcnt_del_unit(unit);
         return ret;
     }
 
-    // Configure glitch filter
-    ret = pcnt_set_filter_value(config->unit, config->filter_value);
+    // Channel A: edges on signal A, direction from the level of signal B.
+    pcnt_chan_config_t chan_a_config = {};
+    chan_a_config.edge_gpio_num = config->gpio_a;
+    chan_a_config.level_gpio_num = config->gpio_b;
+    pcnt_channel_handle_t chan_a = NULL;
+    ret = pcnt_new_channel(unit, &chan_a_config, &chan_a);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG,
-                 "Failed to set filter value for PCNT unit %d: %s",
-                 config->unit,
+                 "Failed to create PCNT unit %u channel A: %s",
+                 (unsigned)config->unit,
                  esp_err_to_name(ret));
+        pcnt_del_unit(unit);
         return ret;
     }
-
-    ret = pcnt_filter_enable(config->unit);
+    ret = pcnt_channel_set_edge_action(
+        chan_a, PCNT_CHANNEL_EDGE_ACTION_INCREASE, PCNT_CHANNEL_EDGE_ACTION_DECREASE);
+    if (ret == ESP_OK) {
+        ret = pcnt_channel_set_level_action(
+            chan_a, PCNT_CHANNEL_LEVEL_ACTION_INVERSE, PCNT_CHANNEL_LEVEL_ACTION_KEEP);
+    }
     if (ret != ESP_OK) {
         ESP_LOGE(TAG,
-                 "Failed to enable filter for PCNT unit %d: %s",
-                 config->unit,
+                 "Failed to configure PCNT unit %u channel A: %s",
+                 (unsigned)config->unit,
                  esp_err_to_name(ret));
+        pcnt_del_channel(chan_a);
+        pcnt_del_unit(unit);
         return ret;
     }
 
-    // Initialize counter
-    ret = pcnt_counter_pause(config->unit);
+    // Channel B: mirror of A - edges on signal B, direction from signal A.
+    pcnt_chan_config_t chan_b_config = {};
+    chan_b_config.edge_gpio_num = config->gpio_b;
+    chan_b_config.level_gpio_num = config->gpio_a;
+    pcnt_channel_handle_t chan_b = NULL;
+    ret = pcnt_new_channel(unit, &chan_b_config, &chan_b);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to pause PCNT unit %d: %s", config->unit, esp_err_to_name(ret));
+        ESP_LOGE(TAG,
+                 "Failed to create PCNT unit %u channel B: %s",
+                 (unsigned)config->unit,
+                 esp_err_to_name(ret));
+        pcnt_del_channel(chan_a);
+        pcnt_del_unit(unit);
         return ret;
     }
-
-    ret = pcnt_counter_clear(config->unit);
+    ret = pcnt_channel_set_edge_action(
+        chan_b, PCNT_CHANNEL_EDGE_ACTION_DECREASE, PCNT_CHANNEL_EDGE_ACTION_INCREASE);
+    if (ret == ESP_OK) {
+        ret = pcnt_channel_set_level_action(
+            chan_b, PCNT_CHANNEL_LEVEL_ACTION_INVERSE, PCNT_CHANNEL_LEVEL_ACTION_KEEP);
+    }
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to clear PCNT unit %d: %s", config->unit, esp_err_to_name(ret));
+        ESP_LOGE(TAG,
+                 "Failed to configure PCNT unit %u channel B: %s",
+                 (unsigned)config->unit,
+                 esp_err_to_name(ret));
+        pcnt_del_channel(chan_b);
+        pcnt_del_channel(chan_a);
+        pcnt_del_unit(unit);
         return ret;
     }
 
-    // Start counter
-    ret = pcnt_counter_resume(config->unit);
+    // Enable, zero, and start. The legacy sequence was pause/clear/resume;
+    // the current driver additionally requires an explicit enable before the
+    // unit will accept a start.
+    ret = pcnt_unit_enable(unit);
+    if (ret == ESP_OK) {
+        ret = pcnt_unit_clear_count(unit);
+    }
+    if (ret == ESP_OK) {
+        ret = pcnt_unit_start(unit);
+    }
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to resume PCNT unit %d: %s", config->unit, esp_err_to_name(ret));
+        ESP_LOGE(
+            TAG, "Failed to start PCNT unit %u: %s", (unsigned)config->unit, esp_err_to_name(ret));
+        pcnt_unit_disable(unit);
+        pcnt_del_channel(chan_b);
+        pcnt_del_channel(chan_a);
+        pcnt_del_unit(unit);
         return ret;
     }
 
-    ESP_LOGI(TAG, "PCNT unit %d initialized successfully", config->unit);
+    // Channel handles are not retained: they live as long as the unit, and
+    // nothing reconfigures them after init.
+    s_pcnt_units[config->unit] = unit;
+
+    ESP_LOGI(TAG, "PCNT unit %u initialized successfully", (unsigned)config->unit);
     return ESP_OK;
 }
-
-// ISR handler removed - using polling approach instead
 
 /**
  * @brief PCNT monitoring task (polling-based for reliable encoder reading)
@@ -146,22 +184,19 @@ static esp_err_t pcnt_init_unit(const wavex_pcnt_config_t *config) {
 static void pcnt_task(void *pvParameters) {
     ESP_LOGI(TAG, "PCNT monitoring task started (polling-based for reliable operation)");
 
-    // No ISR service needed for polling approach
-    // We'll periodically check counter values instead of using interrupts
-
     while (1) {
         // Poll encoder counters for changes
         for (int i = 0; i < PCNT_CONFIG_COUNT; i++) {
             const wavex_pcnt_config_t *config = &s_pcnt_configs[i];
-            if (!config->enabled) {
+            if (!config->enabled || s_pcnt_units[config->unit] == NULL) {
                 continue;
             }
 
             encoder_reading_t *reading = &s_encoder_readings[config->unit];
 
             // Read current hardware counter value
-            int16_t hw_count = 0;
-            pcnt_get_counter_value(config->unit, &hw_count);
+            int hw_count = 0;
+            pcnt_unit_get_count(s_pcnt_units[config->unit], &hw_count);
 
             // Calculate delta since last poll
             int32_t delta = (int32_t)hw_count - reading->count;
@@ -182,7 +217,7 @@ static void pcnt_task(void *pvParameters) {
                 reading->delta += delta;
 
                 // Clear hardware counter to prevent overflow
-                pcnt_counter_clear(config->unit);
+                pcnt_unit_clear_count(s_pcnt_units[config->unit]);
                 reading->count = 0;
                 reading->prev_count = 0;
             }
@@ -202,7 +237,7 @@ esp_err_t pcnt_task_init(void) {
         if (config->enabled) {
             esp_err_t ret = pcnt_init_unit(config);
             if (ret != ESP_OK) {
-                ESP_LOGE(TAG, "Failed to initialize PCNT unit %d", config->unit);
+                ESP_LOGE(TAG, "Failed to initialize PCNT unit %u", (unsigned)config->unit);
                 return ret;
             }
         }
@@ -242,8 +277,8 @@ esp_err_t pcnt_task_stop(void) {
     return ESP_OK;
 }
 
-esp_err_t pcnt_get_reading(pcnt_unit_t unit, encoder_reading_t *reading) {
-    if (unit >= PCNT_UNIT_MAX || reading == NULL) {
+esp_err_t pcnt_get_reading(uint8_t unit, encoder_reading_t *reading) {
+    if (unit >= WAVEX_PCNT_UNIT_COUNT || reading == NULL) {
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -264,12 +299,15 @@ esp_err_t pcnt_get_reading(pcnt_unit_t unit, encoder_reading_t *reading) {
     return ESP_OK;
 }
 
-esp_err_t pcnt_reset_counter(pcnt_unit_t unit) {
-    if (unit >= PCNT_UNIT_MAX) {
+esp_err_t pcnt_reset_counter(uint8_t unit) {
+    if (unit >= WAVEX_PCNT_UNIT_COUNT) {
         return ESP_ERR_INVALID_ARG;
     }
+    if (s_pcnt_units[unit] == NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
 
-    esp_err_t ret = pcnt_counter_clear(unit);
+    esp_err_t ret = pcnt_unit_clear_count(s_pcnt_units[unit]);
     if (ret == ESP_OK) {
         s_encoder_readings[unit].count = 0;
         s_encoder_readings[unit].prev_count = 0;
@@ -278,16 +316,19 @@ esp_err_t pcnt_reset_counter(pcnt_unit_t unit) {
     return ret;
 }
 
-esp_err_t pcnt_get_raw_count(pcnt_unit_t unit, int16_t *count) {
-    if (unit >= PCNT_UNIT_MAX || count == NULL) {
+esp_err_t pcnt_get_raw_count(uint8_t unit, int *count) {
+    if (unit >= WAVEX_PCNT_UNIT_COUNT || count == NULL) {
         return ESP_ERR_INVALID_ARG;
     }
+    if (s_pcnt_units[unit] == NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
 
-    return pcnt_get_counter_value(unit, count);
+    return pcnt_unit_get_count(s_pcnt_units[unit], count);
 }
 
-int32_t pcnt_consume_delta(pcnt_unit_t unit) {
-    if (unit >= PCNT_UNIT_MAX) {
+int32_t pcnt_consume_delta(uint8_t unit) {
+    if (unit >= WAVEX_PCNT_UNIT_COUNT) {
         return 0;
     }
     // Fetch and clear atomically with interrupts disabled to avoid ISR race.

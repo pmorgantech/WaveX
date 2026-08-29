@@ -2,55 +2,64 @@
  * @file pcnt_task.h
  * @brief PCNT (Pulse Counter) Task for ESP32 Encoder Handling
  *
- * This module provides interrupt-driven PCNT-based encoder reading functionality for both
- * the main encoder (PCNT_UNIT_0) and additional PCNT unit (PCNT_UNIT_1).
+ * This module provides polled PCNT-based encoder reading for the main encoder
+ * and a second quadrature input, built on the `driver/pulse_cnt.h` API.
  *
  * Features:
- * - Interrupt-driven encoder counting for low latency
- * - Threshold interrupts every 4 counts (typical encoder detent)
- * - Zero-crossing detection for full rotation tracking
- * - Glitch filtering for noise immunity
- * - Quadrature decoding for direction sensing
- * - Continuous change monitoring with immediate logging
+ * - Hardware quadrature decoding (4x, both channels, both edges)
+ * - Hardware glitch filter for contact-bounce immunity
+ * - Accumulated deltas consumed by the UI task
+ *
+ * The legacy `driver/pcnt.h` API this module used previously was removed in
+ * ESP-IDF v6.0. The replacement allocates units and channels as opaque
+ * handles rather than naming fixed hardware indices, so units are identified
+ * here by a WaveX-local index (see WAVEX_PCNT_UNIT_COUNT) that the
+ * WAVEX_*_PCNT_UNIT macros in hardware_config.h map onto.
  */
 
 #pragma once
 
+#include <stdbool.h>
+#include <stdint.h>
+
 #include "esp_err.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "driver/pcnt.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
+/** Number of logical PCNT units WaveX manages (main encoder + aux). */
+#define WAVEX_PCNT_UNIT_COUNT 2
+
 /**
  * @brief PCNT unit configuration structure
+ *
+ * There is no channel index: the pulse_cnt driver allocates both quadrature
+ * channels internally from the unit handle.
  */
 typedef struct {
-    pcnt_unit_t unit;           // PCNT unit number
-    pcnt_channel_t channel_a;   // Channel for signal A
-    pcnt_channel_t channel_b;   // Channel for signal B
-    int gpio_a;                 // GPIO pin for signal A
-    int gpio_b;                 // GPIO pin for signal B
-    int filter_value;           // Glitch filter value
-    bool enabled;               // Whether this unit is enabled
+    uint8_t unit;            // WaveX logical unit index (< WAVEX_PCNT_UNIT_COUNT)
+    int gpio_a;              // GPIO pin for signal A
+    int gpio_b;              // GPIO pin for signal B
+    uint32_t max_glitch_ns;  // Glitch filter width in nanoseconds
+    bool enabled;            // Whether this unit is enabled
 } wavex_pcnt_config_t;
 
 /**
  * @brief Encoder reading structure
  */
 typedef struct {
-    int32_t count;      // Current counter value
-    int32_t prev_count; // Previous counter value for delta calculation
-    int32_t delta;      // Change since last read
+    int32_t count;       // Current counter value
+    int32_t prev_count;  // Previous counter value for delta calculation
+    int32_t delta;       // Change since last read
 } encoder_reading_t;
 
 /**
  * @brief Initialize PCNT peripherals
  *
- * @return ESP_OK on success, ESP_FAIL on failure
+ * @return ESP_OK on success, an esp_err_t failure code otherwise
  */
 esp_err_t pcnt_task_init(void);
 
@@ -71,28 +80,28 @@ esp_err_t pcnt_task_stop(void);
 /**
  * @brief Get current encoder reading for specified unit
  *
- * @param unit PCNT unit to read from
+ * @param unit WaveX logical unit index
  * @param reading Pointer to store the reading
- * @return ESP_OK on success, ESP_FAIL on failure
+ * @return ESP_OK on success, an esp_err_t failure code otherwise
  */
-esp_err_t pcnt_get_reading(pcnt_unit_t unit, encoder_reading_t *reading);
+esp_err_t pcnt_get_reading(uint8_t unit, encoder_reading_t *reading);
 
 /**
  * @brief Reset encoder counter for specified unit
  *
- * @param unit PCNT unit to reset
- * @return ESP_OK on success, ESP_FAIL on failure
+ * @param unit WaveX logical unit index
+ * @return ESP_OK on success, an esp_err_t failure code otherwise
  */
-esp_err_t pcnt_reset_counter(pcnt_unit_t unit);
+esp_err_t pcnt_reset_counter(uint8_t unit);
 
 /**
  * @brief Get raw PCNT counter value (for debugging)
  *
- * @param unit PCNT unit to read from
+ * @param unit WaveX logical unit index
  * @param count Pointer to store the count
- * @return ESP_OK on success, ESP_FAIL on failure
+ * @return ESP_OK on success, an esp_err_t failure code otherwise
  */
-esp_err_t pcnt_get_raw_count(pcnt_unit_t unit, int16_t *count);
+esp_err_t pcnt_get_raw_count(uint8_t unit, int *count);
 
 /**
  * @brief Atomically fetch and clear the most recent encoder delta for a unit
@@ -100,7 +109,7 @@ esp_err_t pcnt_get_raw_count(pcnt_unit_t unit, int16_t *count);
  * This returns the accumulated delta since the last call and resets it to 0.
  * If the unit is disabled or invalid, returns 0.
  */
-int32_t pcnt_consume_delta(pcnt_unit_t unit);
+int32_t pcnt_consume_delta(uint8_t unit);
 
 #ifdef __cplusplus
 }

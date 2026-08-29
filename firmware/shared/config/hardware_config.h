@@ -465,18 +465,12 @@
 #define WAVEX_ENCODER_IRQ_ENABLED 1
 #endif
 
-// PCNT unit selection
+// WaveX logical PCNT unit index. The pulse_cnt driver allocates hardware
+// units as opaque handles, so this is an index into WaveX's own table, not a
+// hardware unit number. Channel selection is gone with the legacy driver:
+// both quadrature channels are allocated from the unit handle.
 #ifndef WAVEX_ENCODER_PCNT_UNIT
-#define WAVEX_ENCODER_PCNT_UNIT PCNT_UNIT_0
-#endif
-
-// PCNT channel configuration
-#ifndef WAVEX_ENCODER_PCNT_CH_A
-#define WAVEX_ENCODER_PCNT_CH_A PCNT_CHANNEL_0
-#endif
-
-#ifndef WAVEX_ENCODER_PCNT_CH_B
-#define WAVEX_ENCODER_PCNT_CH_B PCNT_CHANNEL_1
+#define WAVEX_ENCODER_PCNT_UNIT 0
 #endif
 
 // Encoder filter configuration
@@ -484,25 +478,23 @@
 #define WAVEX_ENCODER_FILTER_ENABLED 1
 #endif
 
+// Glitch filter width. The legacy driver counted APB clock cycles (800 @
+// 80 MHz = 10 us); pulse_cnt takes nanoseconds directly, so the ns value is
+// now the source of truth and the cycle count is retained only for reference.
 #ifndef WAVEX_ENCODER_FILTER_VALUE
 #define WAVEX_ENCODER_FILTER_VALUE 800
+#endif
+
+#ifndef WAVEX_ENCODER_FILTER_NS
+#define WAVEX_ENCODER_FILTER_NS 10000
 #endif
 #endif
 
 // PCNT1 Configuration
 #if WAVEX_ESP_PCNT1_ENABLED
-// PCNT unit selection for PCNT1
+// WaveX logical PCNT unit index for PCNT1 (see WAVEX_ENCODER_PCNT_UNIT).
 #ifndef WAVEX_PCNT1_UNIT
-#define WAVEX_PCNT1_UNIT PCNT_UNIT_1
-#endif
-
-// PCNT channel configuration for PCNT1
-#ifndef WAVEX_PCNT1_CH_A
-#define WAVEX_PCNT1_CH_A PCNT_CHANNEL_0
-#endif
-
-#ifndef WAVEX_PCNT1_CH_B
-#define WAVEX_PCNT1_CH_B PCNT_CHANNEL_1
+#define WAVEX_PCNT1_UNIT 1
 #endif
 
 // PCNT1 filter configuration
@@ -512,6 +504,10 @@
 
 #ifndef WAVEX_PCNT1_FILTER_VALUE
 #define WAVEX_PCNT1_FILTER_VALUE 800
+#endif
+
+#ifndef WAVEX_PCNT1_FILTER_NS
+#define WAVEX_PCNT1_FILTER_NS 10000
 #endif
 
 // PCNT1 interrupt thresholds

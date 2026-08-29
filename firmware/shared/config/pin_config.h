@@ -59,12 +59,9 @@ extern "C" {
 #define WAVEX_ESP_ENCODER_B 34    // J3-8: PCNT Channel B
 #define WAVEX_ESP_ENCODER_BTN 40  // J3-12: Encoder Push Button (optional)
 
-// Additional PCNT Unit (PCNT_UNIT_1)
+// Additional PCNT Unit (WaveX logical unit 1)
 #define WAVEX_ESP_PCNT1_A 46  // GPIO46: PCNT Unit 1 Channel A
 #define WAVEX_ESP_PCNT1_B 47  // GPIO47: PCNT Unit 1 Channel B
-#define WAVEX_ESP_PCNT1_UNIT PCNT_UNIT_1
-#define WAVEX_ESP_PCNT1_CH_A PCNT_CHANNEL_0
-#define WAVEX_ESP_PCNT1_CH_B PCNT_CHANNEL_1
 
 // MIDI UART (UART2)
 // -----------------------------------------------------------------------------
