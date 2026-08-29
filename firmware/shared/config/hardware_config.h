@@ -183,14 +183,13 @@
  * This is the STARTING point, not a fixed setting. SdSdio::InitAndMount()
  * negotiates down from here until the card mounts and reads, and a data CRC
  * failure under load steps it down again at runtime
- * (SdSdio::DowngradeSpeed()). So the default is 3 (FAST): ask for the fastest
- * rate the hardware is specified for and let a card or harness that cannot
- * hold it settle where it can, rather than pinning every board to the slowest
- * rate any board needs. Watch for "SD: negotiated DOWN" or "SD: downgrading"
- * in the log - either means this board is not holding the configured rate.
+ * (SdSdio::DowngradeSpeed()).
  *
- * Lower it if a board proves marginal even with negotiation, since starting
- * too high costs a failed mount attempt per step at boot.
+ * Set to 3 (FAST): reach for 50 MHz and let negotiation settle lower if this
+ * board cannot hold it. Watch for "SD: negotiated DOWN" (fell back at boot)
+ * or "SD: downgrading" (fell back later, under load) - either means the card
+ * or wiring is not holding the configured rate, and the line names the rate
+ * it settled on.
  */
 #ifndef WAVEX_DAISY_SD_CARD_SPEED
 #define WAVEX_DAISY_SD_CARD_SPEED 3

@@ -57,11 +57,31 @@ constexpr uint32_t kCardDebounceMs = 250;
 bool s_card_present = false;
 bool s_pending_level = false;
 uint32_t s_pending_since_ms = 0;
+// A card can report ready before it is actually readable, so a remount that
+// fails is retried rather than being abandoned until the next physical
+// insertion - otherwise one unlucky attempt leaves the slot dead.
+uint32_t s_remount_retry_after_ms = 0;
+constexpr uint32_t kRemountRetryMs = 2000;
 #endif
 
 // Applies one bus clock and proves it by mounting and reading a directory.
 // A mount that succeeds but cannot be read is exactly what a marginal clock
 // looks like, so the read is part of the test rather than a separate step.
+// s_sd_brought_up tracks whether the SDMMC peripheral has ever been
+// initialized. The teardown below must NOT run before that: HAL_SD_DeInit()
+// on a handle that was never initialized invokes HAL_SD_MspDeInit and tears
+// down clocks and GPIOs that libDaisy only ever configures from
+// HAL_SD_MspInit inside HAL_SD_Init - which runs later, at first disk
+// access. Doing it on the first attempt left the interface unusable at every
+// speed, which is what "no card opens any more" was.
+bool s_sd_brought_up = false;
+// FATFS_LinkDriver() claims a slot in a fixed-size global volume table and is
+// NOT idempotent, so calling FatFSInterface::Init() per attempt leaked a slot
+// each time and quickly returned ERR_TOO_MANY_VOLUMES - the "FatFS link
+// failed" on the second and third speeds. The link is independent of the
+// mount (unmounting does not release it), so it is done exactly once.
+bool s_fs_linked = false;
+
 bool TrySpeed(int index, bool auto_format) {
     SdmmcHandler::Config sd_cfg;
     sd_cfg.Defaults();
@@ -74,26 +94,55 @@ bool TrySpeed(int index, bool auto_format) {
                           kSpeeds[index].name,
                           WAVEX_DAISY_SD_CARD_BUS_WIDTH == 4 ? "4-bit" : "1-bit");
 
-    // Drop any previous mount and card state so the new clock is applied from
-    // a clean start; HAL_SD_Init runs again on the next disk access.
-    f_mount(nullptr, "/", 0);
-    HAL_SD_DeInit(&hsd1);
+    // Only tear down when there is something to tear down. On the very first
+    // bring-up this path is skipped entirely, so boot follows exactly the
+    // sequence that worked before negotiation existed.
+    if (s_sd_brought_up) {
+        f_mount(nullptr, "/", 0);
+        HAL_SD_DeInit(&hsd1);
+    }
+    s_sd_brought_up = true;
 
     if (s_sdmmc.Init(sd_cfg) != SdmmcHandler::Result::OK) {
         WaveX::Log::PrintLine("SD: SDMMC init FAILED at %s", kSpeeds[index].name);
         return false;
     }
 
-    FatFSInterface::Config fcfg{};
-    fcfg.media = FatFSInterface::Config::MEDIA_SD;
-    if (s_fsi.Init(fcfg) != FatFSInterface::Result::OK) {
-        WaveX::Log::PrintLine("SD: FatFS link failed at %s", kSpeeds[index].name);
-        return false;
+    if (!s_fs_linked) {
+        FatFSInterface::Config fcfg{};
+        fcfg.media = FatFSInterface::Config::MEDIA_SD;
+        if (s_fsi.Init(fcfg) != FatFSInterface::Result::OK) {
+            WaveX::Log::PrintLine("SD: FatFS link failed at %s", kSpeeds[index].name);
+            return false;
+        }
+        s_fs_linked = true;
     }
 
     FATFS& fs = s_fsi.GetSDFileSystem();
     if (f_mount(&fs, "/", 0) != FR_OK) {
         return false;
+    }
+
+    // Report what the card actually is. Capacity decides whether FR_NO_FILESYSTEM
+    // means "corrupt" or simply "exFAT": this FatFS build has _FS_EXFAT 0, and
+    // anything over 32 GB is exFAT out of the box (SDXC), so it can never mount
+    // regardless of bus clock. Card info is only valid once HAL_SD_Init has run,
+    // which the mount above triggers.
+    {
+        HAL_SD_CardInfoTypeDef info{};
+        if (HAL_SD_GetCardInfo(&hsd1, &info) == HAL_OK && info.LogBlockNbr > 0) {
+            const uint32_t mib = (uint32_t)(((uint64_t)info.LogBlockNbr * info.LogBlockSize) >> 20);
+            WaveX::Log::PrintLine("SD: card type=%lu capacity=%lu MiB (%lu blocks x %lu B)",
+                                  (unsigned long)info.CardType,
+                                  (unsigned long)mib,
+                                  (unsigned long)info.LogBlockNbr,
+                                  (unsigned long)info.LogBlockSize);
+            if (mib > 32768u) {
+                WaveX::Log::PrintLine(
+                    "SD: >32 GiB card - if this reports FR_NO_FILESYSTEM (13) it is almost "
+                    "certainly exFAT, which this FatFS build cannot read. Reformat as FAT32.");
+            }
+        }
     }
 
     // Exercise the bus. Delayed mount means this is the first real access, so
@@ -128,7 +177,15 @@ bool TrySpeed(int index, bool auto_format) {
         }
     }
 
-    WaveX::Log::PrintLine("SD: %s unusable (FatFS result %d)", kSpeeds[index].name, (int)fr);
+    const char* why = "";
+    if (fr == FR_NO_FILESYSTEM) {
+        why = " (FR_NO_FILESYSTEM - not FAT12/16/32; exFAT is not supported by this build)";
+    } else if (fr == FR_DISK_ERR) {
+        why = " (FR_DISK_ERR - the read itself failed; see hal_err on the next read failure)";
+    } else if (fr == FR_NOT_READY) {
+        why = " (FR_NOT_READY - card did not become ready in time)";
+    }
+    WaveX::Log::PrintLine("SD: %s unusable (FatFS result %d)%s", kSpeeds[index].name, (int)fr, why);
     return false;
 }
 
@@ -180,6 +237,9 @@ void Poll() {
     if ((now - s_pending_since_ms) < kCardDebounceMs) {
         return;  // still bouncing
     }
+    if (s_remount_retry_after_ms != 0 && now < s_remount_retry_after_ms) {
+        return;  // waiting out a failed remount
+    }
 
     s_card_present = present_now;
     if (!present_now) {
@@ -199,11 +259,18 @@ void Poll() {
     // different clock, so inheriting the previous card's negotiated rate
     // would be wrong in both directions.
     if (ConfigureAndMount(static_cast<int>(WAVEX_DAISY_SD_CARD_SPEED), s_auto_format)) {
+        s_remount_retry_after_ms = 0;
         if (s_card_cb) {
             s_card_cb(true);
         }
     } else {
-        WaveX::Log::PrintLine("SD: remount FAILED after insertion");
+        // Leave the state as "absent" so the still-present card reads as a
+        // fresh insertion next time round and the attempt repeats, spaced out
+        // so a card that never mounts does not spin the loop or the log.
+        s_card_present = false;
+        s_remount_retry_after_ms = now + kRemountRetryMs;
+        WaveX::Log::PrintLine("SD: remount FAILED - retrying in %lu ms",
+                              (unsigned long)kRemountRetryMs);
     }
 #endif
 }

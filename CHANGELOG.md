@@ -11,6 +11,26 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Fixed — SD bring-up, driver-link leak, and remount retries
+
+- `TrySpeed()` ran `f_mount(nullptr, ...)` and `HAL_SD_DeInit()` on every
+  attempt including the first, de-initializing a peripheral that had never
+  been brought up. `HAL_SD_DeInit()` invokes `HAL_SD_MspDeInit`, releasing
+  clocks and GPIOs that libDaisy configures only from `HAL_SD_MspInit` inside
+  `HAL_SD_Init` — which does not run until first disk access. No card would
+  mount at any speed. Teardown is now gated on the peripheral actually having
+  been brought up, so boot follows the sequence that worked before
+  negotiation existed.
+- `FatFSInterface::Init()` was called per attempt. It calls
+  `FATFS_LinkDriver()`, which claims a slot in a fixed table of `_VOLUMES`
+  (2) and is not idempotent, so the third speed always failed with
+  "FatFS link failed". The driver is linked exactly once; the link is
+  independent of the mount.
+- A failed remount is retried every 2 s instead of being abandoned until the
+  card is physically reseated — a card can report ready before it is readable.
+- Mount attempts now log card type and capacity, and name the FatFS result
+  (`FR_NO_FILESYSTEM` calls out exFAT, which this build cannot read).
+
 ### Added — Daisy development and audition tooling
 
 - Added software-triggered Daisy DFU entry (`make daisy-flash-auto`), serial
