@@ -404,8 +404,9 @@ esp_err_t wavex_ui_task_start(WaveX::Comm::ICommInterface& comm_interface) {
 }
 
 // Additional inter_mcu mock functions for CommInterfaceImpl
-esp_err_t inter_mcu_send_sample_play_index_req(uint32_t file_index) {
+esp_err_t inter_mcu_send_sample_play_index_req(uint32_t file_index, uint16_t loop_gap_ms) {
     (void)file_index;
+    (void)loop_gap_ms;
     return ESP_OK;
 }
 

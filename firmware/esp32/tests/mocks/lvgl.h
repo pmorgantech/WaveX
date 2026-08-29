@@ -37,6 +37,7 @@ extern const lv_font_t lv_font_montserrat_36;
 #define LV_ALIGN_TOP_LEFT 0
 #define LV_ALIGN_TOP_MID 1
 #define LV_ALIGN_TOP_RIGHT 2
+#define LV_ALIGN_RIGHT_MID 3
 #define LV_PART_MAIN 0
 #define LV_EVENT_CLICKED 0
 
@@ -44,6 +45,12 @@ extern const lv_font_t lv_font_montserrat_36;
 lv_obj_t* lv_obj_create(lv_obj_t* parent);
 void lv_obj_set_size(lv_obj_t* obj, lv_coord_t w, lv_coord_t h);
 void lv_obj_set_style_bg_color(lv_obj_t* obj, lv_color_t color, lv_style_selector_t selector);
+lv_color_t lv_color_hex(uint32_t c);
+extern const lv_font_t lv_font_montserrat_22;
+void lv_obj_set_height(lv_obj_t* obj, int32_t h);
+void lv_obj_set_style_radius(lv_obj_t* obj, int32_t value, lv_style_selector_t selector);
+void lv_obj_set_style_pad_left(lv_obj_t* obj, int32_t value, lv_style_selector_t selector);
+void lv_obj_set_style_pad_right(lv_obj_t* obj, int32_t value, lv_style_selector_t selector);
 void lv_obj_set_style_border_width(lv_obj_t* obj, int32_t width, lv_style_selector_t selector);
 void lv_obj_set_style_pad_all(lv_obj_t* obj, int32_t pad, lv_style_selector_t selector);
 void lv_obj_align(lv_obj_t* obj, lv_align_t align, lv_coord_t x_ofs, lv_coord_t y_ofs);

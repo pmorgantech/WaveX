@@ -373,6 +373,10 @@ struct WavState {
 };
 static WavState s_wav = {};
 
+// Loop gap (browser audition). Frames of silence still owed after a rewind.
+static uint32_t s_loop_gap_frames = 0;  // configured length
+static uint32_t s_loop_gap_remaining = 0;
+
 // ============================
 // Sample audition state (separate from main WAV playback)
 // ============================
@@ -443,6 +447,11 @@ static LoadedSampleInfo* find_loaded_sample(uint16_t sample_id) {
 // frontend never derives these values, it is told them.
 static void PushSampleMeta(const LoadedSampleInfo& info) {
     WaveX::Comm::UartLinkSend(WaveX::Protocol::MSG_SAMPLE_META, &info.meta, sizeof(info.meta));
+}
+
+void SetLoopGapMs(uint16_t gap_ms) {
+    s_loop_gap_frames = (static_cast<uint32_t>(gap_ms) * s_sample_rate) / 1000u;
+    s_loop_gap_remaining = 0;  // never start an audition mid-gap
 }
 
 void PushAllSampleMeta(uint16_t sample_id) {
@@ -980,6 +989,8 @@ static bool refill_sd_buffer() {
             // invisible - it sat behind WAVEX_DAISY_SD_DEBUG, and f_lseek is
             // outside the s_io_duration timer that only wraps f_read, so the
             // rewind cost never appeared in I/O Stats either.
+            // Owe the gap before the next pass starts.
+            s_loop_gap_remaining = s_loop_gap_frames;
             const uint32_t rewind_to = s_wav.loop_enabled ? s_wav.loop_start : s_wav.region_start;
             const uint32_t seek_start = System::GetTick();
             f_lseek(&s_wav.file, rewind_to);
@@ -1903,6 +1914,30 @@ void OnSampleLoad(const SampleLoadMessage& sl) {
         memcpy(static_cast<uint8_t*>(sample_ptr) + written, temp, br);
         written += br;
         remaining -= br;
+
+        // Progress, rate-limited to whole percent. A large sample off a slow
+        // card takes seconds; without this the frontend has nothing to show
+        // but an indeterminate spinner. state 0x11 is progress, distinct from
+        // 0x10 (complete), so an existing frontend ignores it.
+        if (data_size > 0) {
+            const uint8_t pct =
+                static_cast<uint8_t>((static_cast<uint64_t>(written) * 100ull) / data_size);
+            static uint8_t s_last_pct = 0xFF;
+            if (pct != s_last_pct) {
+                s_last_pct = pct;
+                SampleStatusMessage progress{};
+                progress.sample_id = sl.sample_id;
+                progress.state = 0x11;  // loading, frames_played carries percent
+                progress.channels = num_ch;
+                progress.sample_rate = sample_rate;
+                progress.frames_played = pct;
+                WaveX::Comm::UartLinkSend(
+                    WaveX::Protocol::MSG_SAMPLE_STATUS, &progress, sizeof(progress));
+                // The link is not pumped from here, so drain one frame or the
+                // 4-deep TX queue fills and later progress is silently lost.
+                WaveX::Comm::UartLinkPumpTx();
+            }
+        }
     }
 
     f_close(&file);
@@ -2374,6 +2409,25 @@ void PumpWavIO() {
         s_dwt_io_cycles = WaveX::Profiling::GetCycles() - block_cycles_start;
         s_dwt_io_max = std::max(s_dwt_io_max, s_dwt_io_cycles);
         return;
+    }
+
+    // Owed silence after a loop rewind (browser audition). Pushed into the
+    // ring rather than skipped, so the gap is genuine silence instead of an
+    // underrun - and it costs no SD read, which makes it free.
+    if (s_loop_gap_remaining > 0) {
+        const uint32_t room = rb_free_frames();
+        uint32_t silent = std::min(s_loop_gap_remaining, room);
+        if (silent > 0) {
+            ResetScratchPool();
+            q15_t* zeros = AcquireScratch(silent * s_output_channels);
+            if (zeros != nullptr) {
+                std::memset(zeros, 0, silent * s_output_channels * sizeof(q15_t));
+                rb_push_frames(zeros, silent);
+                s_loop_gap_remaining -= silent;
+                ++s_diag_pushes;
+            }
+        }
+        return;  // no file reading while the gap is owed
     }
 
     // Normal I/O pumping (when pre-buffer is empty)

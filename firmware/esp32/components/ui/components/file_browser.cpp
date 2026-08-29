@@ -36,6 +36,72 @@ using namespace WaveX::Protocol;
 
 static const char* TAG = "FILE_BROWSER";
 
+// ---------------------------------------------------------------------------
+// Row rendering (design 1b)
+// ---------------------------------------------------------------------------
+// One place, called from all three row-building sites. They had drifted:
+// different fonts, different selection colours, and the duration was not shown
+// at all. A row is 54px, directories read dim, and the duration sits right.
+
+#define FB_ROW_H 54
+#define FB_COL_LIST_BG lv_color_hex(0x0E0E0E)
+#define FB_COL_SEL_BG lv_color_hex(0x14261A)
+#define FB_COL_SEL_RING lv_color_hex(0x4CAF50)
+#define FB_COL_BORDER lv_color_hex(0x222222)
+#define FB_COL_DIM lv_color_hex(0x8FA0AA)
+#define FB_COL_META lv_color_hex(0x7F8A90)
+
+static void fb_format_duration(char* out, size_t n, uint32_t ms) {
+    if (ms == 0) {
+        out[0] = '\0';
+        return;
+    }
+    const uint32_t total_s = ms / 1000;
+    snprintf(out, n, "%lu:%02lu", (unsigned long)(total_s / 60), (unsigned long)(total_s % 60));
+}
+
+// Applies the row chrome and adds the right-aligned duration. `entry` may be
+// null for placeholder rows ("No files found...").
+static void fb_style_row(lv_obj_t* btn, const wavex_file_entry_t* entry, bool selected) {
+    if (!btn) {
+        return;
+    }
+    lv_obj_set_height(btn, FB_ROW_H);
+    lv_obj_set_style_radius(btn, 4, LV_PART_MAIN);
+    lv_obj_set_style_pad_left(btn, 14, LV_PART_MAIN);
+    lv_obj_set_style_pad_right(btn, 16, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(btn, selected ? FB_COL_SEL_BG : FB_COL_LIST_BG, LV_PART_MAIN);
+    lv_obj_set_style_border_color(btn, selected ? FB_COL_SEL_RING : FB_COL_BORDER, LV_PART_MAIN);
+    lv_obj_set_style_border_width(btn, selected ? 2 : 1, LV_PART_MAIN);
+
+    lv_obj_t* name_label = lv_obj_get_child(btn, 0);
+    if (name_label) {
+        lv_obj_set_style_text_font(name_label, &lv_font_montserrat_22, LV_PART_MAIN);
+        // Directories read dim: they are navigation, not material.
+        const bool dir = entry && entry->is_directory;
+        lv_obj_set_style_text_color(name_label, dir ? FB_COL_DIM : UI_COLOR_TEXT, LV_PART_MAIN);
+    }
+
+    if (!entry || entry->is_directory || entry->duration_ms == 0) {
+        return;
+    }
+    char dur[16];
+    fb_format_duration(dur, sizeof(dur), entry->duration_ms);
+    if (dur[0] == '\0') {
+        return;
+    }
+    // One duration label per row, reused rather than appended - this styler
+    // runs again on every selection change.
+    lv_obj_t* meta = (lv_obj_get_child_cnt(btn) > 1) ? lv_obj_get_child(btn, 1) : nullptr;
+    if (!meta) {
+        meta = lv_label_create(btn);
+        lv_obj_set_style_text_font(meta, &lv_font_montserrat_18, LV_PART_MAIN);
+        lv_obj_set_style_text_color(meta, FB_COL_META, LV_PART_MAIN);
+    }
+    lv_label_set_text(meta, dur);
+    lv_obj_align(meta, LV_ALIGN_RIGHT_MID, 0, 0);
+}
+
 // Browser instances are passed via user_data in callbacks - no global needed
 
 // Forward declarations
@@ -1012,10 +1078,8 @@ static void browse_resp_callback(const uint8_t* data, size_t length, void* user_
                             continue;
                         }
 
-                        // Apply styling
                         ui_theme_apply_button_style(btn, true);
-                        lv_obj_set_style_text_color(btn, UI_COLOR_TEXT, LV_PART_MAIN);
-                        lv_obj_set_style_text_font(btn, UI_FONT_TITLE, LV_PART_MAIN);
+                        fb_style_row(btn, &b->entries[i], i == b->selected_index);
 
                         // Add directory indicator
                         if (b->entries[i].is_directory) {
@@ -1175,8 +1239,7 @@ static void update_file_browser_ui(wavex_file_browser_t* browser) {
             ui_theme_apply_button_style(btn, true);
 
             // Set text color to white and increase font size to 18px
-            lv_obj_set_style_text_color(btn, UI_COLOR_TEXT, LV_PART_MAIN);
-            lv_obj_set_style_text_font(btn, UI_FONT_TITLE, LV_PART_MAIN);
+            fb_style_row(btn, &browser->entries[i], i == browser->selected_index);
 
             // Add directory indicator
             if (browser->entries[i].is_directory) {
@@ -1239,17 +1302,9 @@ static void update_visual_selection(wavex_file_browser_t* browser) {
             // Get the actual entry index from user data
             uint32_t entry_index = (uint32_t)(uintptr_t)lv_obj_get_user_data(btn);
 
-            if (entry_index == browser->selected_index) {
-                // Highlight selected item
-                lv_obj_set_style_bg_color(btn, lv_color_make(0x33, 0x66, 0x99), LV_PART_MAIN);
-                lv_obj_set_style_border_color(btn, lv_color_make(0x66, 0x99, 0xCC), LV_PART_MAIN);
-                lv_obj_set_style_border_width(btn, 2, LV_PART_MAIN);
-            } else {
-                // Reset to normal style
-                lv_obj_set_style_bg_color(btn, lv_color_make(0x22, 0x22, 0x22), LV_PART_MAIN);
-                lv_obj_set_style_border_color(btn, lv_color_make(0x44, 0x44, 0x44), LV_PART_MAIN);
-                lv_obj_set_style_border_width(btn, 1, LV_PART_MAIN);
-            }
+            const wavex_file_entry_t* entry =
+                (entry_index < browser->entry_count) ? &browser->entries[entry_index] : nullptr;
+            fb_style_row(btn, entry, entry_index == browser->selected_index);
         }
     }
     // Mark content as changed to trigger refresh (lock held by caller)

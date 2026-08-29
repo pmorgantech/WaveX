@@ -116,7 +116,10 @@ void inter_mcu_handle_sample_stop_response(bool success);
 
 // Direct SPI API functions (replacing LinkManager)
 esp_err_t inter_mcu_send_browse_req(const char* path, uint8_t start_index);
-esp_err_t inter_mcu_send_sample_play_index_req(uint32_t file_index);
+// loop_gap_ms: silence between loop passes. The sample browser passes ~300 so
+// a short file does not sound like a drone; the editor passes 0 so the loop
+// seam is heard exactly as it will play.
+esp_err_t inter_mcu_send_sample_play_index_req(uint32_t file_index, uint16_t loop_gap_ms = 0);
 esp_err_t inter_mcu_send_sample_stop_req();
 esp_err_t inter_mcu_send_sample_load_req(uint16_t sample_id,
                                          uint32_t sample_size,

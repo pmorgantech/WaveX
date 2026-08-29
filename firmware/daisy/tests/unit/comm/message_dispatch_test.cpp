@@ -111,6 +111,29 @@ TEST_F(MessageDispatchTest, SampleEditReachesAudioEngine) {
 // repopulating after its own restart without the backend tracking who has
 // seen what. A dispatcher that dropped this would leave the UI permanently
 // showing whatever it had cached.
+// The loop gap rides on the play request, not on the sample's record,
+// because it belongs to THIS audition: the browser wants a gap so a short
+// file does not read as a drone, the editor wants none so the seam is heard
+// as it will play. A dispatcher that dropped it would silently give both the
+// same behaviour.
+TEST_F(MessageDispatchTest, SamplePlayIndexCarriesTheLoopGap) {
+    SamplePlayIndexMessage play(4, 300);
+    Dispatch(MSG_SAMPLE_PLAY_INDEX_REQ, play);
+
+    ASSERT_EQ(GetDispatchRecord().loop_gaps_ms.size(), 1u);
+    EXPECT_EQ(GetDispatchRecord().loop_gaps_ms[0], 300);
+    ASSERT_EQ(GetDispatchRecord().play_index_requests.size(), 1u);
+    EXPECT_EQ(GetDispatchRecord().play_index_requests[0], 4u);
+}
+
+TEST_F(MessageDispatchTest, SamplePlayIndexDefaultsToGapless) {
+    SamplePlayIndexMessage play(4);
+    Dispatch(MSG_SAMPLE_PLAY_INDEX_REQ, play);
+
+    ASSERT_EQ(GetDispatchRecord().loop_gaps_ms.size(), 1u);
+    EXPECT_EQ(GetDispatchRecord().loop_gaps_ms[0], 0);
+}
+
 TEST_F(MessageDispatchTest, SampleMetaRequestReachesAudioEngine) {
     SampleMetaReqMessage req(0);
     Dispatch(MSG_SAMPLE_META_REQ, req);

@@ -27,6 +27,37 @@ void lv_obj_set_size(lv_obj_t* obj, lv_coord_t w, lv_coord_t h) {
     (void)w;
     (void)h;
 }
+lv_color_t lv_color_hex(uint32_t c) {
+    lv_color_t out{};
+    (void)c;
+    return out;
+}
+
+const lv_font_t lv_font_montserrat_22{};
+
+void lv_obj_set_height(lv_obj_t* obj, int32_t h) {
+    (void)obj;
+    (void)h;
+}
+
+void lv_obj_set_style_radius(lv_obj_t* obj, int32_t value, lv_style_selector_t selector) {
+    (void)obj;
+    (void)value;
+    (void)selector;
+}
+
+void lv_obj_set_style_pad_left(lv_obj_t* obj, int32_t value, lv_style_selector_t selector) {
+    (void)obj;
+    (void)value;
+    (void)selector;
+}
+
+void lv_obj_set_style_pad_right(lv_obj_t* obj, int32_t value, lv_style_selector_t selector) {
+    (void)obj;
+    (void)value;
+    (void)selector;
+}
+
 void lv_obj_set_style_bg_color(lv_obj_t* obj, lv_color_t color, lv_style_selector_t selector) {
     (void)obj;
     (void)color;

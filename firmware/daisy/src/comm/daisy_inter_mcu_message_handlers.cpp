@@ -453,6 +453,9 @@ static void HandleSamplePlayIndexRequestMessage(const uint8_t* payload, size_t p
                               static_cast<unsigned long>(msg->index));
     }
 
+    // The gap belongs to this audition, not to the sample, so it is set here
+    // rather than stored on the record.
+    WaveX::AudioEngine::SetLoopGapMs(msg->loop_gap_ms);
     WaveX::Comm::ProcessSamplePlayIndexRequest(msg->index);
 }
 

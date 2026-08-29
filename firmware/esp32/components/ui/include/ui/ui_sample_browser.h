@@ -162,6 +162,12 @@ class UISampleBrowser : public UIPage {
     // Persistent state (owned by caller, injected via constructor)
     SampleBrowserState& persistent_state_;
 
+    // Detail panel (design 1b).
+    lv_obj_t* listing_label_ = nullptr;  // "1-20 of 63 - name ^"
+    lv_obj_t* card_label_ = nullptr;     // "SD 12.4 GB free" / card state
+    lv_obj_t* detail_name_ = nullptr;
+    lv_obj_t* play_bar_ = nullptr;
+
     // State
     bool is_playing_ = false;
     bool is_initialized_ = false;

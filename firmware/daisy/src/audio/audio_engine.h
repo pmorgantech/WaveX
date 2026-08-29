@@ -52,6 +52,12 @@ void SetEditParams(uint8_t slot,
                    uint32_t loop_start_frame,
                    uint32_t loop_end_frame);
 
+// Silence inserted between loop passes of the streaming audition, in ms.
+// A property of the current audition rather than of the sample: the browser
+// asks for a gap so a short file does not read as a drone, the editor asks
+// for none so the loop seam is heard as it will actually play.
+void SetLoopGapMs(uint16_t gap_ms);
+
 // Re-sends the per-sample record. sample_id 0 means every loaded sample.
 void PushAllSampleMeta(uint16_t sample_id);
 

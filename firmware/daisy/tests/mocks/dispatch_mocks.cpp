@@ -63,6 +63,10 @@ void ProcessSampleGetPathRequest(uint32_t /*file_index*/) {}
 namespace WaveX {
 namespace AudioEngine {
 
+void SetLoopGapMs(uint16_t gap_ms) {
+    WaveX::Test::GetDispatchRecord().loop_gaps_ms.push_back(gap_ms);
+}
+
 void PushAllSampleMeta(uint16_t sample_id) {
     WaveX::Test::GetDispatchRecord().meta_requests.push_back(sample_id);
 }

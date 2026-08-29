@@ -14,6 +14,33 @@ static const char* TAG = "UI_SAMPLE_BROWSER";
 
 namespace wavex_ui {
 
+namespace {
+// Silence between loop passes when auditioning from the browser. Long enough
+// to hear where the file ends - without it a one-shot loops seamlessly and
+// reads as a drone - short enough not to feel like a fault.
+constexpr uint16_t kBrowserLoopGapMs = 300;
+
+// Design 1b, page-relative (the content area already starts below the header).
+constexpr int kMargin = 12;
+constexpr int kStatusY = 12;
+constexpr int kListY = 46;
+constexpr int kListW = 770;
+constexpr int kListH = 487;
+constexpr int kDetailX = 794;
+constexpr int kDetailY = 12;
+constexpr int kDetailW = 474;
+constexpr int kDetailH = 521;
+
+constexpr uint32_t kColPanel = 0x0E0E0E;
+constexpr uint32_t kColBorder = 0x222222;
+constexpr uint32_t kColDim = 0x8FA0AA;
+constexpr uint32_t kColGreen = 0x4CAF50;
+
+esp_err_t inter_mcu_send_sample_play_index_req_browser(uint32_t index) {
+    return inter_mcu_send_sample_play_index_req(index, kBrowserLoopGapMs);
+}
+}  // namespace
+
 // Active instance for callbacks
 UISampleBrowser* UISampleBrowser::s_active_instance_ = nullptr;
 
@@ -40,32 +67,77 @@ void UISampleBrowser::onEnter(lv_obj_t* parent) {
     lv_obj_set_style_pad_all(root_, 0, LV_PART_MAIN);
     lv_obj_align(root_, LV_ALIGN_TOP_LEFT, 0, 0);
 
-    // Create file browser container (left side, 70% width)
+    lv_obj_set_style_pad_all(root_, 0, LV_PART_MAIN);
+    lv_obj_remove_flag(root_, LV_OBJ_FLAG_SCROLLABLE);
+
+    // Status strip above the list: position in the listing on the left, card
+    // state on the right. Both were previously buried in the info panel.
+    listing_label_ = lv_label_create(root_);
+    lv_obj_set_style_text_font(listing_label_, &lv_font_montserrat_18, LV_PART_MAIN);
+    lv_obj_set_style_text_color(listing_label_, lv_color_hex(kColDim), LV_PART_MAIN);
+    lv_label_set_text(listing_label_, "");
+    lv_obj_set_pos(listing_label_, kMargin, kStatusY);
+
+    card_label_ = lv_label_create(root_);
+    lv_obj_set_style_text_font(card_label_, &lv_font_montserrat_18, LV_PART_MAIN);
+    lv_obj_set_style_text_color(card_label_, lv_color_hex(kColDim), LV_PART_MAIN);
+    lv_label_set_text(card_label_, "");
+    lv_obj_set_pos(card_label_, 600, kStatusY);
+
+    // File list, 770x487 (design 1b).
     browser_container_ = lv_obj_create(root_);
-    lv_obj_set_size(browser_container_, lv_pct(70), lv_pct(100));
-    lv_obj_align(browser_container_, LV_ALIGN_TOP_LEFT, 0, 0);
-    lv_obj_set_style_bg_color(browser_container_, UI_COLOR_CONTENT, LV_PART_MAIN);
-    lv_obj_set_style_border_width(browser_container_, 0, LV_PART_MAIN);
+    lv_obj_set_size(browser_container_, kListW, kListH);
+    lv_obj_set_pos(browser_container_, kMargin, kListY);
+    lv_obj_set_style_bg_color(browser_container_, lv_color_hex(kColPanel), LV_PART_MAIN);
+    lv_obj_set_style_border_width(browser_container_, 1, LV_PART_MAIN);
+    lv_obj_set_style_border_color(browser_container_, lv_color_hex(kColBorder), LV_PART_MAIN);
     lv_obj_set_style_pad_all(browser_container_, 0, LV_PART_MAIN);
 
-    // Create info panel (right side, 30% width)
+    // Detail panel, 474x521.
     info_panel_ = lv_obj_create(root_);
-    lv_obj_set_size(info_panel_, lv_pct(30), lv_pct(100));
-    ui_theme_apply_container_style(info_panel_, true);
-    lv_obj_align(info_panel_, LV_ALIGN_TOP_RIGHT, -UI_PADDING_MEDIUM, UI_PADDING_MEDIUM);
+    lv_obj_set_size(info_panel_, kDetailW, kDetailH);
+    lv_obj_set_pos(info_panel_, kDetailX, kDetailY);
+    lv_obj_set_style_bg_color(info_panel_, lv_color_hex(kColPanel), LV_PART_MAIN);
+    lv_obj_set_style_border_width(info_panel_, 1, LV_PART_MAIN);
+    lv_obj_set_style_border_color(info_panel_, lv_color_hex(kColBorder), LV_PART_MAIN);
+    lv_obj_set_style_pad_all(info_panel_, 0, LV_PART_MAIN);
+    lv_obj_remove_flag(info_panel_, LV_OBJ_FLAG_SCROLLABLE);
 
-    // Create status label in info panel
-    status_label_ = lv_label_create(info_panel_);
-    lv_label_set_text(status_label_, "Ready");
-    ui_theme_apply_label_style(status_label_, false);
-    lv_obj_align(status_label_, LV_ALIGN_TOP_LEFT, UI_PADDING_MEDIUM, UI_PADDING_MEDIUM);
+    // Filename headline.
+    detail_name_ = lv_label_create(info_panel_);
+    lv_obj_set_style_text_font(detail_name_, &lv_font_montserrat_26, LV_PART_MAIN);
+    lv_obj_set_style_text_color(detail_name_, UI_COLOR_TEXT, LV_PART_MAIN);
+    lv_obj_set_pos(detail_name_, 16, 14);
+    lv_obj_set_width(detail_name_, kDetailW - 32);
+    lv_label_set_long_mode(detail_name_, LV_LABEL_LONG_DOT);
+    lv_label_set_text(detail_name_, "Select a file");
 
-    // Create metadata label in info panel
+    // Metadata rows. Kept as one wrapped label rather than a table: the
+    // fields are fixed and a table's chrome costs more than it adds here.
     metadata_label_ = lv_label_create(info_panel_);
-    lv_label_set_text(metadata_label_, "Select a file to view metadata");
-    ui_theme_apply_label_style(metadata_label_, false);
-    lv_obj_align(metadata_label_, LV_ALIGN_TOP_LEFT, UI_PADDING_MEDIUM, 60);
-    lv_obj_set_style_text_align(metadata_label_, LV_TEXT_ALIGN_LEFT, LV_PART_MAIN);
+    lv_obj_set_style_text_font(metadata_label_, &lv_font_montserrat_18, LV_PART_MAIN);
+    lv_obj_set_style_text_color(metadata_label_, lv_color_hex(kColDim), LV_PART_MAIN);
+    lv_obj_set_pos(metadata_label_, 16, 222);
+    lv_obj_set_width(metadata_label_, kDetailW - 32);
+    lv_label_set_long_mode(metadata_label_, LV_LABEL_LONG_WRAP);
+    lv_label_set_text(metadata_label_, "");
+
+    // Audition state and progress along the bottom.
+    status_label_ = lv_label_create(info_panel_);
+    lv_obj_set_style_text_font(status_label_, &lv_font_montserrat_18, LV_PART_MAIN);
+    lv_obj_set_style_text_color(status_label_, lv_color_hex(kColGreen), LV_PART_MAIN);
+    lv_obj_set_pos(status_label_, 16, 458);
+    lv_obj_set_width(status_label_, kDetailW - 32);
+    lv_label_set_long_mode(status_label_, LV_LABEL_LONG_DOT);
+    lv_label_set_text(status_label_, "Ready");
+
+    play_bar_ = lv_bar_create(info_panel_);
+    lv_obj_set_size(play_bar_, kDetailW - 32, 10);
+    lv_obj_set_pos(play_bar_, 16, 490);
+    lv_bar_set_range(play_bar_, 0, 100);
+    lv_bar_set_value(play_bar_, 0, LV_ANIM_OFF);
+    lv_obj_set_style_bg_color(play_bar_, lv_color_hex(0x1F1F1F), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(play_bar_, lv_color_hex(kColGreen), LV_PART_INDICATOR);
 
     // Configure file browser - restore last directory path if available
     wavex_file_browser_config_t browser_config = {.root_path = persistent_state_.current_directory_path.c_str(), .file_extension = ".wav", .max_entries = 50, .show_hidden = false, .comm_interface = comm_interface_};
@@ -590,29 +662,32 @@ void UISampleBrowser::processDeferredUpdates_() {
                     ESP_LOGD(TAG, "No WAV metadata available for: %s", entry->name);
                 }
 
+                // Three labelled rows, per design 1b - the old block repeated
+                // the filename (now the headline above) and told the user
+                // which softkeys exist, which the softkey bar already does.
+                // Two labelled rows, per design 1b. The old block repeated the
+                // filename (now the headline above) and listed which softkeys
+                // exist, which the softkey bar already shows.
+                //
+                // The design's third row - "Data offset 44 (aligned)" - is NOT
+                // here: data_start is not carried by FileEntryWire or
+                // SampleMetadata, and inventing a number for the one field
+                // that correlated with the stutter would be worse than
+                // omitting it. Plumbing it is a roadmap item.
                 snprintf(info_text,
                          sizeof(info_text),
-                         "Sample Information:\n"
-                         "-----------------\n"
-                         "Name: %.47s\n"
-                         "Size: %s\n"
-                         "Duration: %s\n"
-                         "Sample Rate: %s\n"
-                         "Bit Depth: %s\n"
-                         "Channels: %s\n"
-                         "Format: WAV PCM\n"
-                         "Path: %.95s\n\n"
-                         "Use Audition to preview\n"
-                         "Use Load to load sample",
-                         entry->name,
-                         size_str,
-                         duration_str,
+                         "Format    %s - %s - %s\n"
+                         "Length    %s - %s",
                          sample_rate_str,
                          bit_depth_str,
                          channels_str,
-                         entry->path);
+                         duration_str,
+                         size_str);
             }
 
+            if (detail_name_ && lv_obj_is_valid(detail_name_)) {
+                lv_label_set_text(detail_name_, entry->name);
+            }
             lv_label_set_text(metadata_label_, info_text);
 
             metadata_update_pending_ = false;
@@ -798,6 +873,9 @@ void UISampleBrowser::sample_status_callback(uint16_t sample_id,
             ESP_LOGW(TAG,
                      "=== SAMPLE PLAYING RESPONSE: Skipping UI update - not fully initialized ===");
         }
+    } else if (state == 0x11) {
+        // Loading progress: frames_played carries the percentage, not frames.
+        BusyOverlay::setProgress(static_cast<int>(frames_played));
     } else if (state == 0x10) {
         ESP_LOGI(TAG, "=== SAMPLE LOAD COMPLETE: id=%u ===", (unsigned)sample_id);
         BusyOverlay::hide();

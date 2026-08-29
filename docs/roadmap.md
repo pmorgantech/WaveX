@@ -61,7 +61,7 @@ Current state: the page draws the wireframe layout and START/END/ZOOM move the *
    - **Whether Save As copies audio or writes a sidecar.** These edits are non-destructive, so a sidecar is far cheaper and instant. But "Save As" implies a new file the user can see in the browser and load independently, which a sidecar is not. Probably: sidecar for markers, and a genuine render-to-new-file when Phase 4's render jobs exist.
 
    A text-entry surface (on-screen keyboard) is worth having eventually regardless, and is reusable for preset and pattern names — but it should not block Save As.
-6. **Loop gap in the browser, gapless in the editor.** Auditioning from the sample browser should leave roughly **0.3 s of silence between passes**; auditioning in the edit page with looping on should be gapless. Same mechanism, different intent: in the browser the gap tells you where the file ends and stops a short sample sounding like a drone, whereas in the editor the whole point is hearing the seam as it will actually play. The backend already owns the rewind (`SetEditParams`), so this is a flag on the edit message plus a silent countdown in the refill path — and the silence needs no SD reads, so it is free.
+6. ~~**Loop gap in the browser, gapless in the editor.**~~ Done. `loop_gap_ms` rides on `SamplePlayIndexMessage`, **not** on `SampleMetadata`: it belongs to the audition, not to the sample, so the caller decides — the browser passes 300, the editor 0. The Daisy pushes silence into the ring at the rewind point rather than skipping the pass, so the gap is genuine silence rather than an underrun, and it costs no SD read.
 
 7. **Sample selection from the edit page.** Currently the page edits whatever the browser last loaded, with no way to change it. Either a picker, or make the edit page accept a sample argument and have the browser push it. The Shift row has a `Select` key reserved for it.
 8. **Partial load for oversized samples.** The browser now refuses a sample larger than the allocator's largest free block, showing both figures. Loading a truncated head instead would need a length field on `MSG_SAMPLE_LOAD` and a truncating reader on the Daisy. Worth doing — but the refusal-with-numbers is the honest interim, where the old behaviour was a load that failed with no explanation.
@@ -87,9 +87,14 @@ Specific items:
 
 ### 1.5.3 Sample browser
 
-Port to the wireframe (design 1b): 54 px rows, green selection ring, per-row loading spinner for in-flight pagination, and the 474×521 detail panel with waveform, format/length/data-offset table and audition progress. The list rows live in the shared `wavex_file_browser` component, so this reaches beyond `ui_sample_browser.cpp`.
+**Mostly done.** 54 px rows with a green selection ring, dim directories, right-aligned durations, and the design 1b geometry (list 770×487, detail panel 474×521 with filename headline, format/length rows, audition state and progress bar). The three row-building sites in `wavex_file_browser` had drifted apart — different fonts, different selection colours, no duration at all — and now share one `fb_style_row`.
 
-Keep the `data_start` offset row: `data_start % 4` correlated exactly with the stutter across three files. See `docs/backlog.md`, which warns specifically against "fixing" that by rounding `data_start` up — the mechanism is still unproven.
+Still open:
+
+- **The `data_start` row is missing, deliberately.** `data_start` is carried by neither `FileEntryWire` nor `SampleMetadata`, and inventing a number for the one field that correlated exactly with the stutter would be worse than omitting it. Plumbing it needs a wire change: adding 4 bytes to `FileEntryWire` reduces entries per browse packet, so measure that cost first. See `docs/backlog.md`, which warns specifically against "fixing" the correlation by rounding `data_start` up — the mechanism is still unproven.
+- **Waveform in the detail panel.** Needs the envelope cache (1.5.5) to be worth doing; a per-selection round trip would make scrolling the list unusable.
+- **Per-row loading spinner** for in-flight pagination (design 1b). The busy overlay is the wrong tool here — it is modal, and pagination should not block the list.
+- **The audition progress bar exists but nothing drives it.** Needs playback position from the backend; `MSG_SAMPLE_STATUS` already carries `frames_played` for the RAM path but the streaming audition does not report it.
 
 ### 1.5.4 Busy feedback
 
@@ -97,7 +102,7 @@ Keep the `data_start` offset row: `data_start % 4` correlated exactly with the s
 
 Still open:
 
-- **Real progress.** The bar exists but nothing drives it; `MSG_SAMPLE_STATUS` reports progress and `MSG_SAMPLE_LOAD` carries `sample_size`, so a determinate percentage is available without protocol work.
+- ~~**Real progress.**~~ Done. The Daisy emits `MSG_SAMPLE_STATUS` state `0x11` during the load read loop, rate-limited to whole percent, with `frames_played` carrying the percentage. State `0x11` is distinct from `0x10` (complete) so an older frontend ignores it. The sender pumps the TX queue itself — it is only 4 deep and nothing else drains it from that context, so progress would otherwise be silently dropped.
 - **Use it elsewhere.** Preview fetch and card remount should show the same overlay rather than each inventing something.
 
 ### 1.5.5 Sample metadata and waveform caching (added 2026-08-29)

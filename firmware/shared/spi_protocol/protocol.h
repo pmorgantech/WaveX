@@ -691,9 +691,19 @@ struct HeartbeatMessage {
 // Index-based file selection messages
 struct SamplePlayIndexMessage {
     uint32_t index;  // File index in current directory
+    // Silence inserted between loop passes, in milliseconds.
+    //
+    // A property of THIS audition, not of the sample - which is why it rides
+    // on the play request rather than on SampleMetadata. The browser asks for
+    // a gap so a short file does not sound like a drone and you can hear
+    // where it ends; the editor asks for none, because the whole point there
+    // is hearing the seam exactly as it will play.
+    uint16_t loop_gap_ms;
+    uint8_t reserved[2];
 
-    SamplePlayIndexMessage() : index(0) {}
-    explicit SamplePlayIndexMessage(uint32_t index_) : index(index_) {}
+    SamplePlayIndexMessage() : index(0), loop_gap_ms(0), reserved{0, 0} {}
+    explicit SamplePlayIndexMessage(uint32_t index_, uint16_t loop_gap_ms_ = 0)
+        : index(index_), loop_gap_ms(loop_gap_ms_), reserved{0, 0} {}
 } __attribute__((packed));
 
 struct SampleGetPathMessage {

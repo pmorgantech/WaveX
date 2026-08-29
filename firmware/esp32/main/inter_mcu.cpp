@@ -699,13 +699,14 @@ esp_err_t inter_mcu_send_browse_req(const char* path, uint8_t start_index) {
     return result >= 0 ? ESP_OK : ESP_FAIL;
 }
 
-esp_err_t inter_mcu_send_sample_play_index_req(uint32_t file_index) {
+esp_err_t inter_mcu_send_sample_play_index_req(uint32_t file_index, uint16_t loop_gap_ms) {
     if (!s_initialized) {
         return -1;  // ESP_ERR_INVALID_STATE
     }
 
     WaveX::Protocol::SamplePlayIndexMessage msg;
     msg.index = file_index;
+    msg.loop_gap_ms = loop_gap_ms;
 
     int result = send_uart_message(WaveX::Protocol::MSG_SAMPLE_PLAY_INDEX_REQ, &msg, sizeof(msg));
     return result >= 0 ? ESP_OK : ESP_FAIL;
