@@ -220,6 +220,19 @@ versioning and release process.
   logger; `--direct` reads the port when no logger holds it. Decoder
   round-trip verified against a synthetic dump.
 
+### Added — Diagnostics page specification
+
+- New `docs/ui-diagnostics-spec.md`: tab-by-tab content for the diagnostics
+  screen (System / Audio / Link / Storage / MIDI), each stat marked as already
+  available on the ESP32, present on the Daisy but needing a wire message, or
+  needing new instrumentation — plus the reason each figure earns its place,
+  drawn from the August 2026 audition debugging where none of the numbers that
+  actually identified faults were on the page.
+- Specifies `MSG_DIAG_SUBSCRIBE`/`MSG_DIAG_PUSH` (94 bytes, fits `PKT_SIZE_128`,
+  ~188 B/s at 2 Hz) as the single addition that unblocks most of the content,
+  and two presentation rules: per-interval counters that reset on read, and
+  sparklines over bare numbers.
+
 ### Added — Firmware flash and serial log workflow
 
 - Added `make flash-all` to stop serial loggers, flash Daisy and ESP32 in

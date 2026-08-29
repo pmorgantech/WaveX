@@ -20,6 +20,7 @@ Start here. Documents are grouped by whether they describe the system **as it sh
 
 | Document | Contents |
 |---|---|
+| [ui-diagnostics-spec.md](ui-diagnostics-spec.md) | What the diagnostics screen should show, why each figure earns its place, and the `MSG_DIAG_PUSH` addition it needs |
 | [ui-design-constraints.md](ui-design-constraints.md) | One-page brief for UI/UX design passes: display, fonts, palette, rendering budget, widget inventory — each claim with its source in code |
 | [ui-architecture.md](ui-architecture.md) | ESP32 UI framework: navigator, pages, softkeys, LVGL threading rules |
 | [ui-system-implementation-guide.md](ui-system-implementation-guide.md) | How to build a new UI page |
