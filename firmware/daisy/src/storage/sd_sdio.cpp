@@ -1,5 +1,7 @@
 #include "sd_sdio.h"
 
+#include "comm/log_ring.h"
+
 #if WAVEX_DAISY_SD_CARD_ENABLED && (WAVEX_DAISY_SD_CARD_BACKEND == 1)
 
 #include "fatfs.h"
@@ -27,12 +29,13 @@ bool InitAndMount(DaisySeed& hw, bool auto_format) {
     // Check if SD card is physically present
     if (s_cd_pin.Read())  // HIGH = no card (pulled up)
     {
-        hw.PrintLine("SD: No card detected (CD pin D%d HIGH)", WAVEX_DAISY_SD_CARD_DETECT_PIN);
+        WaveX::Log::PrintLine("SD: No card detected (CD pin D%d HIGH)",
+                              WAVEX_DAISY_SD_CARD_DETECT_PIN);
         return false;
     }
-    hw.PrintLine("SD: Card detected (CD pin D%d LOW)", WAVEX_DAISY_SD_CARD_DETECT_PIN);
+    WaveX::Log::PrintLine("SD: Card detected (CD pin D%d LOW)", WAVEX_DAISY_SD_CARD_DETECT_PIN);
 #else
-    hw.PrintLine("SD: Card detect disabled - assuming card present");
+    WaveX::Log::PrintLine("SD: Card detect disabled - assuming card present");
 #endif
 
     SdmmcHandler::Config sd_cfg;
@@ -65,41 +68,41 @@ bool InitAndMount(DaisySeed& hw, bool auto_format) {
 
     const char* speed_names[] = {"SLOW", "MEDIUM_SLOW", "STANDARD", "FAST"};
     const char* width_names[] = {"1-bit", "4-bit"};
-    hw.PrintLine("SD: Configuring SDMMC - Speed: %s, Width: %s",
-                 speed_names[WAVEX_DAISY_SD_CARD_SPEED],
-                 width_names[WAVEX_DAISY_SD_CARD_BUS_WIDTH == 4 ? 1 : 0]);
+    WaveX::Log::PrintLine("SD: Configuring SDMMC - Speed: %s, Width: %s",
+                          speed_names[WAVEX_DAISY_SD_CARD_SPEED],
+                          width_names[WAVEX_DAISY_SD_CARD_BUS_WIDTH == 4 ? 1 : 0]);
 
     if (s_sdmmc.Init(sd_cfg) != SdmmcHandler::Result::OK) {
-        hw.PrintLine("SD: SDMMC init FAILED");
+        WaveX::Log::PrintLine("SD: SDMMC init FAILED");
         return false;
     }
-    hw.PrintLine("SD: SDMMC init OK (4-bit, STANDARD)");
+    WaveX::Log::PrintLine("SD: SDMMC init OK (4-bit, STANDARD)");
 
     FatFSInterface::Config fcfg{};
     fcfg.media = FatFSInterface::Config::MEDIA_SD;
     if (s_fsi.Init(fcfg) != FatFSInterface::Result::OK) {
-        hw.PrintLine("SD: FatFS link failed");
+        WaveX::Log::PrintLine("SD: FatFS link failed");
         return false;
     }
-    hw.PrintLine("SD: FatFS interface initialized successfully");
+    WaveX::Log::PrintLine("SD: FatFS interface initialized successfully");
 
     // Try to get some card information before mounting
-    hw.PrintLine("SD: Checking SDMMC status before mount...");
+    WaveX::Log::PrintLine("SD: Checking SDMMC status before mount...");
 
     FATFS& fs = s_fsi.GetSDFileSystem();
     // Use delayed mount (0) as per libDaisy standard - mount happens on first filesystem access
-    hw.PrintLine("SD: Mounting filesystem (delayed mount)...");
+    WaveX::Log::PrintLine("SD: Mounting filesystem (delayed mount)...");
 
     FRESULT fr = f_mount(&fs, "/", 0);
-    hw.PrintLine("SD: Mount setup result: %d", (int)fr);
+    WaveX::Log::PrintLine("SD: Mount setup result: %d", (int)fr);
 
     if (fr == FR_OK) {
-        hw.PrintLine("SD: Mount setup successful");
+        WaveX::Log::PrintLine("SD: Mount setup successful");
 
         // Test actual filesystem access (this triggers the delayed mount)
         // With delayed mount, the first access may return FR_NOT_READY if the disk
         // hasn't finished initializing yet. Retry with small delays to handle this.
-        hw.PrintLine("SD: Testing filesystem access...");
+        WaveX::Log::PrintLine("SD: Testing filesystem access...");
         DIR dir;
         FRESULT test_fr;
         const int max_retries = 5;
@@ -117,10 +120,10 @@ bool InitAndMount(DaisySeed& hw, bool auto_format) {
 
             // If it's a "not ready" error and we haven't exhausted retries, wait and retry
             if (test_fr == FR_NOT_READY && retry < max_retries - 1) {
-                hw.PrintLine("SD: Drive not ready, retrying in %d ms (attempt %d/%d)...",
-                             retry_delay_ms,
-                             retry + 1,
-                             max_retries);
+                WaveX::Log::PrintLine("SD: Drive not ready, retrying in %d ms (attempt %d/%d)...",
+                                      retry_delay_ms,
+                                      retry + 1,
+                                      max_retries);
                 System::Delay(retry_delay_ms);
                 continue;
             }
@@ -131,20 +134,20 @@ bool InitAndMount(DaisySeed& hw, bool auto_format) {
 
         // Handle the actual mount result
         if (!test_success && test_fr == FR_NO_FILESYSTEM && auto_format) {
-            hw.PrintLine("SD: No filesystem detected; formatting...");
+            WaveX::Log::PrintLine("SD: No filesystem detected; formatting...");
             static BYTE workbuf[4096];
             test_fr = f_mkfs("/", FM_FAT | FM_SFD, 0, workbuf, sizeof(workbuf));
-            hw.PrintLine("SD: Format result: %d", (int)test_fr);
+            WaveX::Log::PrintLine("SD: Format result: %d", (int)test_fr);
             if (test_fr == FR_OK) {
                 test_fr = f_opendir(&dir, "/");  // Try again after format
-                hw.PrintLine("SD: Re-test after format result: %d", (int)test_fr);
+                WaveX::Log::PrintLine("SD: Re-test after format result: %d", (int)test_fr);
                 test_success = (test_fr == FR_OK);
             }
         }
 
         if (test_success) {
             f_closedir(&dir);
-            hw.PrintLine("SD: Filesystem access successful - SD card ready");
+            WaveX::Log::PrintLine("SD: Filesystem access successful - SD card ready");
             return true;
         } else {
             // Provide detailed error information
@@ -188,24 +191,26 @@ bool InitAndMount(DaisySeed& hw, bool auto_format) {
             // using delayed mount, the filesystem will be mounted on first actual access.
             // This timing issue shouldn't fail initialization.
             if (test_fr == FR_NOT_READY) {
-                hw.PrintLine("SD: Initial access test failed (drive not ready after %d retries)",
-                             max_retries);
-                hw.PrintLine(
+                WaveX::Log::PrintLine(
+                    "SD: Initial access test failed (drive not ready after %d retries)",
+                    max_retries);
+                WaveX::Log::PrintLine(
                     "SD: Mount setup was successful - delayed mount will work on first actual "
                     "access");
-                hw.PrintLine("SD: SD card initialization completed (may need moment to stabilize)");
+                WaveX::Log::PrintLine(
+                    "SD: SD card initialization completed (may need moment to stabilize)");
                 return true;  // Return true since mount setup succeeded
             }
 
             // For other errors, fail initialization
-            hw.PrintLine("SD: Filesystem access failed after %d retries - %s (%d)",
-                         max_retries,
-                         error_msg,
-                         (int)test_fr);
+            WaveX::Log::PrintLine("SD: Filesystem access failed after %d retries - %s (%d)",
+                                  max_retries,
+                                  error_msg,
+                                  (int)test_fr);
             return false;
         }
     } else {
-        hw.PrintLine("SD: Mount setup failed: %d", (int)fr);
+        WaveX::Log::PrintLine("SD: Mount setup failed: %d", (int)fr);
         return false;
     }
 }

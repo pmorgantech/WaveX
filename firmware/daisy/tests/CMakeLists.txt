@@ -187,6 +187,9 @@ function(add_wavex_test test_source)
         target_sources(${test_name} PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/comm/daisy_inter_mcu_message_handlers.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/mocks/dispatch_mocks.cpp
+            # log_ring.cpp itself needs the USB CDC endpoint; the stub just
+            # satisfies the linker for firmware sources that log.
+            ${CMAKE_CURRENT_SOURCE_DIR}/mocks/log_ring_mock.cpp
         )
     endif()
 

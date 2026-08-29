@@ -5,6 +5,7 @@
 #include "../../shared/config/uart_debug_config.h"
 #include "../../shared/spi_protocol/protocol.h"
 #include "../../shared/uart_protocol/uart_protocol.h"
+#include "comm/log_ring.h"
 #include "daisy_inter_mcu_message_handlers.h"
 #include "daisy_seed.h"
 #include "sys/dma.h"
@@ -170,7 +171,7 @@ void process_rx_frames() {
                 s_stats.seq_resyncs++;
                 UART_LOGW("daisy_uart", "peer reboot detected - seq resynced to %u", seq);
                 if (s_hw)
-                    s_hw->PrintLine("DAISY: peer reboot detected - seq resynced to %u", seq);
+                    WaveX::Log::PrintLine("DAISY: peer reboot detected - seq resynced to %u", seq);
             }
 
             if (flags & UART_FLAG_ACK) {
@@ -254,7 +255,7 @@ void process_tx_queue() {
     // cause is on its receive side, not here.
     static uint16_t s_last_started_seq = 0;
     if (entry.seq == s_last_started_seq && s_hw) {
-        s_hw->PrintLine("DAISY: UART TX resend seq=%u", entry.seq);
+        WaveX::Log::PrintLine("DAISY: UART TX resend seq=%u", entry.seq);
     }
     s_last_started_seq = entry.seq;
 
@@ -296,14 +297,14 @@ bool configure_uart() {
 void start_dma_listener() {
     if (s_dma_listening) {
         if (s_hw)
-            s_hw->PrintLine("DAISY: DMA listener already started");
+            WaveX::Log::PrintLine("DAISY: DMA listener already started");
         return;
     }
 
     if (s_hw)
-        s_hw->PrintLine("DAISY: Attempting to start DMA listener on UART4...");
+        WaveX::Log::PrintLine("DAISY: Attempting to start DMA listener on UART4...");
     if (s_hw)
-        s_hw->PrintLine(
+        WaveX::Log::PrintLine(
             "DAISY: DMA RX buffer at %p, size=%u", s_uart_rx_dma, (unsigned)RX_BUFFER_SIZE);
 
     // Clear the DMA buffer to remove any stale data
@@ -311,11 +312,11 @@ void start_dma_listener() {
 
     if (!Uart4Dma::StartReceive(s_uart_rx_dma, RX_BUFFER_SIZE, uart_rx_listener)) {
         if (s_hw)
-            s_hw->PrintLine("DAISY: ERROR - Failed to start DMA listener");
+            WaveX::Log::PrintLine("DAISY: ERROR - Failed to start DMA listener");
         UART_LOGE("daisy_uart", "Failed to start DMA listener");
     } else {
         if (s_hw)
-            s_hw->PrintLine("DAISY: SUCCESS - DMA listener started");
+            WaveX::Log::PrintLine("DAISY: SUCCESS - DMA listener started");
         s_dma_listening = true;
         UART_LOGI("daisy_uart", "DMA listener started successfully");
     }
@@ -327,15 +328,15 @@ void stop_dma_listener() {
     }
 
     if (s_hw)
-        s_hw->PrintLine("DAISY: Stopping DMA listener on UART4...");
+        WaveX::Log::PrintLine("DAISY: Stopping DMA listener on UART4...");
 
     if (!Uart4Dma::StopReceive()) {
         if (s_hw)
-            s_hw->PrintLine("DAISY: ERROR - Failed to stop DMA listener");
+            WaveX::Log::PrintLine("DAISY: ERROR - Failed to stop DMA listener");
         UART_LOGE("daisy_uart", "Failed to stop DMA listener");
     } else {
         if (s_hw)
-            s_hw->PrintLine("DAISY: SUCCESS - DMA listener stopped");
+            WaveX::Log::PrintLine("DAISY: SUCCESS - DMA listener stopped");
         s_dma_listening = false;
         UART_LOGI("daisy_uart", "DMA listener stopped successfully");
     }
@@ -348,7 +349,7 @@ void stop_dma_listener() {
 
 void reset_uart_dma_listener() {
     if (s_hw)
-        s_hw->PrintLine("DAISY: UART recovery - resetting DMA listener");
+        WaveX::Log::PrintLine("DAISY: UART recovery - resetting DMA listener");
     UART_LOGI("daisy_uart", "Resetting UART DMA listener");
 
     stop_dma_listener();
@@ -369,17 +370,17 @@ void UartLinkInit(daisy::DaisySeed* hw) {
     if (s_initialized) {
         UART_LOGI("daisy_uart", "UART link already initialized");
         if (hw) {
-            hw->PrintLine("DAISY: UART link already initialized");
+            WaveX::Log::PrintLine("DAISY: UART link already initialized");
         }
         return;
     }
 
     if (hw) {
-        hw->PrintLine("DAISY: UART link init starting (UART4)");
+        WaveX::Log::PrintLine("DAISY: UART link init starting (UART4)");
     }
     if (!configure_uart()) {
         if (hw)
-            hw->PrintLine("DAISY: UART4 DMA initialization failed");
+            WaveX::Log::PrintLine("DAISY: UART4 DMA initialization failed");
         return;
     }
     std::memset(&s_stats, 0, sizeof(s_stats));
@@ -394,7 +395,8 @@ void UartLinkInit(daisy::DaisySeed* hw) {
     s_initialized = true;
     UART_LOGI("daisy_uart", "UART link initialized: UART4 @ %d baud", WAVEX_DAISY_UART_INTER_BAUD);
     if (hw) {
-        hw->PrintLine("DAISY: UART link initialized: UART4 @ %d baud", WAVEX_DAISY_UART_INTER_BAUD);
+        WaveX::Log::PrintLine("DAISY: UART link initialized: UART4 @ %d baud",
+                              WAVEX_DAISY_UART_INTER_BAUD);
     }
 }
 
@@ -402,14 +404,15 @@ void UartLinkStart() {
     if (!s_initialized) {
         UART_LOGE("daisy_uart", "UartLinkStart before init");
         if (s_hw)
-            s_hw->PrintLine("DAISY: ERROR - UartLinkStart called before init");
+            WaveX::Log::PrintLine("DAISY: ERROR - UartLinkStart called before init");
         return;
     }
     if (s_hw)
-        s_hw->PrintLine("DAISY: UartLinkStart() called - starting DMA listener");
+        WaveX::Log::PrintLine("DAISY: UartLinkStart() called - starting DMA listener");
     start_dma_listener();
     if (s_hw)
-        s_hw->PrintLine("DAISY: UartLinkStart() complete - s_dma_listening=%d", s_dma_listening);
+        WaveX::Log::PrintLine("DAISY: UartLinkStart() complete - s_dma_listening=%d",
+                              s_dma_listening);
     UART_LOGI("daisy_uart", "UART link started - DMA listener active");
 }
 
@@ -489,8 +492,8 @@ void UartLinkProcess() {
         uint32_t uart_error = Uart4Dma::TakeError();
         if (uart_error != 0) {
             if (s_hw)
-                s_hw->PrintLine("DAISY: UART hardware error detected: 0x%04X - resetting DMA",
-                                uart_error);
+                WaveX::Log::PrintLine("DAISY: UART hardware error detected: 0x%04X - resetting DMA",
+                                      uart_error);
             UART_LOGE("daisy_uart", "UART hardware error: 0x%04X", uart_error);
 
             // Reset the DMA listener to recover from error state
@@ -498,7 +501,7 @@ void UartLinkProcess() {
             last_error_recovery = now;
         } else if (!Uart4Dma::IsReceiving()) {
             if (s_hw)
-                s_hw->PrintLine("DAISY: UART RX DMA stopped unexpectedly - restarting");
+                WaveX::Log::PrintLine("DAISY: UART RX DMA stopped unexpectedly - restarting");
             reset_uart_dma_listener();
             last_error_recovery = now;
         }
@@ -518,7 +521,7 @@ void UartLinkProcess() {
         uint32_t errors_this_window = s_stats.crc_errors - crc_count_at_window_start;
         if (errors_this_window > 10 && (now - last_error_recovery > 2000)) {
             if (s_hw)
-                s_hw->PrintLine(
+                WaveX::Log::PrintLine(
                     "DAISY: Excessive CRC errors detected (%u in 1 sec) - resetting DMA",
                     errors_this_window);
             UART_LOGE("daisy_uart",
@@ -539,7 +542,7 @@ void UartLinkProcess() {
         consecutive_parse_failures++;
         if (consecutive_parse_failures > 50 && (now - last_error_recovery > 2000)) {
             if (s_hw)
-                s_hw->PrintLine(
+                WaveX::Log::PrintLine(
                     "DAISY: Frame buffer stuck in error state (%u failures) - resetting DMA",
                     consecutive_parse_failures);
             UART_LOGE("daisy_uart",
@@ -557,7 +560,7 @@ void UartLinkProcess() {
 #if WAVEX_MCU_LINK_DEBUG
     if (now - last_log > 1000) {  // Log every 1 second
         if (s_hw)
-            s_hw->PrintLine(
+            WaveX::Log::PrintLine(
                 "DAISY: UartLinkProcess() executed (buffered=%u s_tx_count=%d "
                 "dma_listening=%d)",
                 (unsigned)s_scanner.Buffered(),

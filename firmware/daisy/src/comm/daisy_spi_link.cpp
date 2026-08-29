@@ -1,5 +1,7 @@
 #include "daisy_spi_link.h"
 
+#include "comm/log_ring.h"
+
 #if WAVEX_SPI_LINK_ENABLED
 
 // Force platform define for linter
@@ -119,7 +121,7 @@ static bool is_duplicate_packet(uint16_t seq_num) {
             return false;
         case SequenceTracker::Result::ResyncAccept:
             if (s_hw)
-                s_hw->PrintLine(
+                WaveX::Log::PrintLine(
                     "DAISY: Peer resync detected: seq=%u (expected>=%u) - treating as reboot, "
                     "not corruption (resync count: %u)",
                     seq_num,
@@ -128,16 +130,17 @@ static bool is_duplicate_packet(uint16_t seq_num) {
             return false;
         case SequenceTracker::Result::Duplicate:
             if (s_hw)
-                s_hw->PrintLine("DAISY: Duplicate packet detected: seq=%u (duplicate count: %u)",
-                                seq_num,
-                                s_seq_tracker.DuplicateCount());
+                WaveX::Log::PrintLine(
+                    "DAISY: Duplicate packet detected: seq=%u (duplicate count: %u)",
+                    seq_num,
+                    s_seq_tracker.DuplicateCount());
             return true;
         case SequenceTracker::Result::OutOfOrder:
         default:
             if (s_hw)
-                s_hw->PrintLine("DAISY: Out-of-order packet: seq=%u (out-of-order count: %u)",
-                                seq_num,
-                                s_seq_tracker.OutOfOrderCount());
+                WaveX::Log::PrintLine("DAISY: Out-of-order packet: seq=%u (out-of-order count: %u)",
+                                      seq_num,
+                                      s_seq_tracker.OutOfOrderCount());
             return true;
     }
 }
@@ -169,7 +172,7 @@ static uint16_t calculate_hardware_crc16(const uint8_t* data, size_t length) {
 // CRC16 initialization (software implementation - no hardware needed)
 static bool init_hardware_crc() {
     if (s_hw)
-        s_hw->PrintLine("DAISY: CRC16 initialized (software implementation matching ESP32)");
+        WaveX::Log::PrintLine("DAISY: CRC16 initialized (software implementation matching ESP32)");
     return true;
 }
 
@@ -291,7 +294,7 @@ static void release_packet_buffer(uint8_t* buffer) {
 static daisy::SpiHandle::Result Spi_SendPacket(const uint8_t* tx_buf, size_t packet_size) {
     if (!g_spi_handle) {
         if (s_hw)
-            s_hw->PrintLine("Spi_SendPacket ERROR: g_spi_handle is NULL!");
+            WaveX::Log::PrintLine("Spi_SendPacket ERROR: g_spi_handle is NULL!");
         return daisy::SpiHandle::Result::ERR;
     }
 
@@ -299,18 +302,20 @@ static daisy::SpiHandle::Result Spi_SendPacket(const uint8_t* tx_buf, size_t pac
     if (packet_size != 32 && packet_size != 64 && packet_size != 128 && packet_size != 256 &&
         packet_size != 512 && packet_size != 1024 && packet_size != 2048) {
         if (s_hw)
-            s_hw->PrintLine("Spi_SendPacket ERROR: Invalid packet size: %d", (int)packet_size);
+            WaveX::Log::PrintLine("Spi_SendPacket ERROR: Invalid packet size: %d",
+                                  (int)packet_size);
         return daisy::SpiHandle::Result::ERR;
     }
 
 #if WAVEX_SPI_DMA_ENABLED
     if (s_tx_inflight) {
         if (s_hw)
-            s_hw->PrintLine("Spi_SendPacket: DMA transaction already in flight, returning ERR");
+            WaveX::Log::PrintLine(
+                "Spi_SendPacket: DMA transaction already in flight, returning ERR");
         if (s_hw)
-            s_hw->PrintLine("DAISY: Previous transaction started at time=%u, current time=%u",
-                            s_dma_start_time,
-                            System::GetTick());
+            WaveX::Log::PrintLine("DAISY: Previous transaction started at time=%u, current time=%u",
+                                  s_dma_start_time,
+                                  System::GetTick());
         return daisy::SpiHandle::Result::ERR;
     }
 
@@ -331,14 +336,14 @@ static daisy::SpiHandle::Result Spi_SendPacket(const uint8_t* tx_buf, size_t pac
 
     if (!found_free) {
         if (s_hw)
-            s_hw->PrintLine("DAISY: All TX buffers in use - dropping packet");
+            WaveX::Log::PrintLine("DAISY: All TX buffers in use - dropping packet");
         return daisy::SpiHandle::Result::ERR;
     }
 
     // Check if packet fits in DMA buffer
     if (packet_size > MAX_PKT_SIZE) {
         if (s_hw)
-            s_hw->PrintLine(
+            WaveX::Log::PrintLine(
                 "DAISY: Packet too large for DMA buffer (%d > %d)", (int)packet_size, MAX_PKT_SIZE);
         return daisy::SpiHandle::Result::ERR;
     }
@@ -355,9 +360,9 @@ static daisy::SpiHandle::Result Spi_SendPacket(const uint8_t* tx_buf, size_t pac
 
     // Cache operations removed - buffers are in non-cacheable DMA memory
 
-    // if (s_hw) s_hw->PrintLine("DAISY: Starting DMA duplex transaction, packet_size=%d",
-    // (int)packet_size); if (s_hw) s_hw->PrintLine("DAISY: TX buffer contents: %02X %02X %02X %02X
-    // %02X %02X %02X %02X",
+    // if (s_hw) WaveX::Log::PrintLine("DAISY: Starting DMA duplex transaction, packet_size=%d",
+    // (int)packet_size); if (s_hw) WaveX::Log::PrintLine("DAISY: TX buffer contents: %02X %02X %02X
+    // %02X %02X %02X %02X %02X",
     //                            s_tx_dma_buf[0], s_tx_dma_buf[1], s_tx_dma_buf[2],
     //                            s_tx_dma_buf[3], s_tx_dma_buf[4], s_tx_dma_buf[5],
     //                            s_tx_dma_buf[6], s_tx_dma_buf[7]);
@@ -379,15 +384,15 @@ static daisy::SpiHandle::Result Spi_SendPacket(const uint8_t* tx_buf, size_t pac
     uint32_t call_end_time = System::GetTick();
     uint32_t call_duration = call_end_time - call_start_time;
 
-    // if (s_hw) s_hw->PrintLine("DAISY: DmaTransmitAndReceive call completed at time=%u,
-    // duration=%u ms", call_end_time, call_duration); if (s_hw) s_hw->PrintLine("DAISY:
-    // DmaTransmitAndReceive returned: %d", (int)dma_result); if (s_hw) s_hw->PrintLine("DAISY:
-    // Post-DMA state: inflight=%s, start_time=%u", s_tx_inflight ? "true" : "false",
-    // s_dma_start_time);
+    // if (s_hw) WaveX::Log::PrintLine("DAISY: DmaTransmitAndReceive call completed at time=%u,
+    // duration=%u ms", call_end_time, call_duration); if (s_hw) WaveX::Log::PrintLine("DAISY:
+    // DmaTransmitAndReceive returned: %d", (int)dma_result); if (s_hw)
+    // WaveX::Log::PrintLine("DAISY: Post-DMA state: inflight=%s, start_time=%u", s_tx_inflight ?
+    // "true" : "false", s_dma_start_time);
 
     if (dma_result != daisy::SpiHandle::Result::OK) {
         if (s_hw)
-            s_hw->PrintLine(
+            WaveX::Log::PrintLine(
                 "DAISY: DMA transaction failed to start - result=%d, clearing inflight flag",
                 (int)dma_result);
         s_tx_inflight = false;
@@ -407,7 +412,7 @@ static daisy::SpiHandle::Result Spi_SendPacket(const uint8_t* tx_buf, size_t pac
                 break;
         }
         if (s_hw)
-            s_hw->PrintLine("DAISY: DMA error details: %s", error_msg);
+            WaveX::Log::PrintLine("DAISY: DMA error details: %s", error_msg);
     }
 
     // Removed fixed delay: ESP32 now keeps the slave queue continuously filled.
@@ -418,8 +423,8 @@ static daisy::SpiHandle::Result Spi_SendPacket(const uint8_t* tx_buf, size_t pac
     // Fallback: blocking duplex transmit with software CS
     // ESP32 slave expects duplex transactions, so we need to transmit AND receive
     if (s_hw)
-        s_hw->PrintLine("DAISY: Starting blocking duplex transmit, packet_size=%d",
-                        (int)packet_size);
+        WaveX::Log::PrintLine("DAISY: Starting blocking duplex transmit, packet_size=%d",
+                              (int)packet_size);
 
     // Prepare RX buffer for any response from ESP32
     uint8_t rx_buf[MAX_PKT_SIZE];
@@ -436,18 +441,18 @@ static daisy::SpiHandle::Result Spi_SendPacket(const uint8_t* tx_buf, size_t pac
     cs_pin.Write(true);
 
     if (s_hw)
-        s_hw->PrintLine("DAISY: Blocking duplex transmit %s, duration=%u ms",
-                        res == daisy::SpiHandle::Result::OK ? "successful" : "failed",
-                        (unsigned)blocking_duration);
+        WaveX::Log::PrintLine("DAISY: Blocking duplex transmit %s, duration=%u ms",
+                              res == daisy::SpiHandle::Result::OK ? "successful" : "failed",
+                              (unsigned)blocking_duration);
 
     if (res == daisy::SpiHandle::Result::OK) {
         if (s_hw)
-            s_hw->PrintLine("DAISY: Blocking duplex transmit successful");
+            WaveX::Log::PrintLine("DAISY: Blocking duplex transmit successful");
         // Process any received data (though we mainly care about transmit succeeding)
         // ESP32 slave may send ACKs or other data
     } else {
         if (s_hw)
-            s_hw->PrintLine("DAISY: Blocking duplex transmit failed: %d", (int)res);
+            WaveX::Log::PrintLine("DAISY: Blocking duplex transmit failed: %d", (int)res);
     }
 
     return res;
@@ -492,16 +497,17 @@ static bool ProcessReceivedPacket(const uint8_t* rx_buf, size_t transfer_size);
 
 void Spi_Init(daisy::DaisySeed& hw, daisy::SpiHandle* hspi) {
     s_hw = &hw;
-    hw.PrintLine("SPI Init: Daisy Master for ESP32 Slave");
-    hw.PrintLine("Spi_Init called with hspi=%p", hspi);
+    WaveX::Log::PrintLine("SPI Init: Daisy Master for ESP32 Slave");
+    WaveX::Log::PrintLine("Spi_Init called with hspi=%p", hspi);
 
     // Initialize hardware CRC peripheral
     if (!init_hardware_crc()) {
-        hw.PrintLine("WARNING: Hardware CRC initialization failed, falling back to software CRC");
+        WaveX::Log::PrintLine(
+            "WARNING: Hardware CRC initialization failed, falling back to software CRC");
     }
 
     if (!hspi) {
-        hw.PrintLine("ERROR: SPI handle is null.");
+        WaveX::Log::PrintLine("ERROR: SPI handle is null.");
         return;
     }
 
@@ -527,7 +533,7 @@ void Spi_Init(daisy::DaisySeed& hw, daisy::SpiHandle* hspi) {
     spi_config.pin_config.miso = hw.GetPin(WAVEX_DAISY_SPI_MISO);
     spi_config.pin_config.nss = Pin();  // IMPORTANT: leave unassigned for software CS
 
-    hw.PrintLine("Spi_Init: About to call hspi->Init");
+    WaveX::Log::PrintLine("Spi_Init: About to call hspi->Init");
     SpiHandle::Result result = hspi->Init(spi_config);
 
     // Access DMA streams directly (libDaisy uses DMA2_Stream2/3 for SPI1)
@@ -535,30 +541,30 @@ void Spi_Init(daisy::DaisySeed& hw, daisy::SpiHandle* hspi) {
         DMA_Stream_TypeDef* tx_stream = DMA2_Stream3;  // libDaisy TX stream
         DMA_Stream_TypeDef* rx_stream = DMA2_Stream2;  // libDaisy RX stream
 
-        hw.PrintLine("TX DMA (DMA2_Stream3): CR=0x%08lx NDTR=%lu PAR=0x%08lx M0AR=0x%08lx",
-                     tx_stream->CR,
-                     tx_stream->NDTR,
-                     tx_stream->PAR,
-                     tx_stream->M0AR);
+        WaveX::Log::PrintLine("TX DMA (DMA2_Stream3): CR=0x%08lx NDTR=%lu PAR=0x%08lx M0AR=0x%08lx",
+                              tx_stream->CR,
+                              tx_stream->NDTR,
+                              tx_stream->PAR,
+                              tx_stream->M0AR);
 
-        hw.PrintLine("RX DMA (DMA2_Stream2): CR=0x%08lx NDTR=%lu PAR=0x%08lx M0AR=0x%08lx",
-                     rx_stream->CR,
-                     rx_stream->NDTR,
-                     rx_stream->PAR,
-                     rx_stream->M0AR);
+        WaveX::Log::PrintLine("RX DMA (DMA2_Stream2): CR=0x%08lx NDTR=%lu PAR=0x%08lx M0AR=0x%08lx",
+                              rx_stream->CR,
+                              rx_stream->NDTR,
+                              rx_stream->PAR,
+                              rx_stream->M0AR);
     }
 
     if (result == SpiHandle::Result::OK) {
-        hw.PrintLine("SUCCESS: SPI master configured correctly!");
+        WaveX::Log::PrintLine("SUCCESS: SPI master configured correctly!");
         // Set g_spi_handle and initialize stats
         g_spi_handle = hspi;
-        hw.PrintLine("Spi_Init: g_spi_handle set to %p", g_spi_handle);
+        WaveX::Log::PrintLine("Spi_Init: g_spi_handle set to %p", g_spi_handle);
         memset(&s_stats, 0, sizeof(s_stats));
-        hw.PrintLine("Spi_Init: Stats initialized");
+        WaveX::Log::PrintLine("Spi_Init: Stats initialized");
     } else {
-        hw.PrintLine("ERROR: SPI init failed with result: %d", (int)result);
+        WaveX::Log::PrintLine("ERROR: SPI init failed with result: %d", (int)result);
         g_spi_handle = NULL;
-        hw.PrintLine("Spi_Init: g_spi_handle set to NULL");
+        WaveX::Log::PrintLine("Spi_Init: g_spi_handle set to NULL");
     }
 
     // Configure D0 as input to receive attention signal from ESP32 GPIO31
@@ -567,7 +573,8 @@ void Spi_Init(daisy::DaisySeed& hw, daisy::SpiHandle* hspi) {
                   daisy::GPIO::Mode::INPUT,
                   daisy::GPIO::Pull::PULLDOWN,
                   daisy::GPIO::Speed::VERY_HIGH);
-    hw.PrintLine("Attention pin D%d configured as input from ESP32 GPIO31", WAVEX_DAISY_ATTN_IN);
+    WaveX::Log::PrintLine("Attention pin D%d configured as input from ESP32 GPIO31",
+                          WAVEX_DAISY_ATTN_IN);
 
     // Configure GPIO interrupt for the attention pin (D0 is PB12, which uses EXTI15_10)
     GPIO_InitTypeDef GPIO_InitStruct = {0};
@@ -582,13 +589,13 @@ void Spi_Init(daisy::DaisySeed& hw, daisy::SpiHandle* hspi) {
     HAL_NVIC_SetPriority(EXTI15_10_IRQn, 14, 0);  // Priority 14, as per plan
     HAL_NVIC_EnableIRQ(EXTI15_10_IRQn);
 
-    hw.PrintLine(
+    WaveX::Log::PrintLine(
         "ATTN pin interrupt configured - will trigger DMA duplex transaction on ESP32 signal");
 
     // If ATTN is already asserted at init time, kick a receive to avoid missing the first edge
 #if WAVEX_SPI_DMA_ENABLED
     if (attn_pin.Read()) {
-        hw.PrintLine("DAISY: ATTN was high at init - starting immediate receive");
+        WaveX::Log::PrintLine("DAISY: ATTN was high at init - starting immediate receive");
         WaveX::Comm::Spi_ReceivePacket();
     }
 #endif
@@ -633,8 +640,8 @@ static void PrepareTxBuffer(uint8_t* tx_buf, size_t buf_size) {
 
         if (packet_size > 0) {
             if (s_hw)
-                s_hw->PrintLine("DAISY: Prepared no-data response packet: size=%d",
-                                (int)packet_size);
+                WaveX::Log::PrintLine("DAISY: Prepared no-data response packet: size=%d",
+                                      (int)packet_size);
         } else {
             // Fallback to zeros if packet creation failed
             memset(tx_buf, 0, buf_size);
@@ -662,27 +669,27 @@ static bool QueueOutgoingMessage(const uint8_t* packet_data, size_t packet_size)
 // Process received packet - validates, parses, and routes to message handlers
 static bool ProcessReceivedPacket(const uint8_t* rx_buf, size_t transfer_size) {
     // if (s_hw) {
-    //     s_hw->PrintLine("DAISY: ProcessReceivedPacket called - transfer_size=%d",
+    //     WaveX::Log::PrintLine("DAISY: ProcessReceivedPacket called - transfer_size=%d",
     //     (int)transfer_size);
     // }
 
     if (!rx_buf || transfer_size == 0) {
         if (s_hw)
-            s_hw->PrintLine("DAISY: Invalid rx_buf or transfer_size=0");
+            WaveX::Log::PrintLine("DAISY: Invalid rx_buf or transfer_size=0");
         return false;
     }
 
     // Debug: Always show first 8 bytes of received data
     if (s_hw) {
-        s_hw->PrintLine("DAISY: Raw RX data: %02X %02X %02X %02X %02X %02X %02X %02X",
-                        rx_buf[0],
-                        rx_buf[1],
-                        rx_buf[2],
-                        rx_buf[3],
-                        rx_buf[4],
-                        rx_buf[5],
-                        rx_buf[6],
-                        rx_buf[7]);
+        WaveX::Log::PrintLine("DAISY: Raw RX data: %02X %02X %02X %02X %02X %02X %02X %02X",
+                              rx_buf[0],
+                              rx_buf[1],
+                              rx_buf[2],
+                              rx_buf[3],
+                              rx_buf[4],
+                              rx_buf[5],
+                              rx_buf[6],
+                              rx_buf[7]);
     }
 
     // Check for all-zero packet (ESP32 sends this when it has no data)
@@ -696,27 +703,27 @@ static bool ProcessReceivedPacket(const uint8_t* rx_buf, size_t transfer_size) {
     }
 
     if (all_zeros) {
-        // if (s_hw) s_hw->PrintLine("DAISY: Received all-zero packet - ignoring");
+        // if (s_hw) WaveX::Log::PrintLine("DAISY: Received all-zero packet - ignoring");
         return true;  // Successfully ignored
     }
 
     // Debug: Print received packet details
     if (s_hw) {
-        s_hw->PrintLine("DAISY: Received packet size: %d", (int)transfer_size);
-        s_hw->PrintLine("DAISY: First 8 bytes: %02X %02X %02X %02X %02X %02X %02X %02X",
-                        rx_buf[0],
-                        rx_buf[1],
-                        rx_buf[2],
-                        rx_buf[3],
-                        rx_buf[4],
-                        rx_buf[5],
-                        rx_buf[6],
-                        rx_buf[7]);
-        s_hw->PrintLine("DAISY: Last 4 bytes: %02X %02X %02X %02X",
-                        rx_buf[transfer_size - 4],
-                        rx_buf[transfer_size - 3],
-                        rx_buf[transfer_size - 2],
-                        rx_buf[transfer_size - 1]);
+        WaveX::Log::PrintLine("DAISY: Received packet size: %d", (int)transfer_size);
+        WaveX::Log::PrintLine("DAISY: First 8 bytes: %02X %02X %02X %02X %02X %02X %02X %02X",
+                              rx_buf[0],
+                              rx_buf[1],
+                              rx_buf[2],
+                              rx_buf[3],
+                              rx_buf[4],
+                              rx_buf[5],
+                              rx_buf[6],
+                              rx_buf[7]);
+        WaveX::Log::PrintLine("DAISY: Last 4 bytes: %02X %02X %02X %02X",
+                              rx_buf[transfer_size - 4],
+                              rx_buf[transfer_size - 3],
+                              rx_buf[transfer_size - 2],
+                              rx_buf[transfer_size - 1]);
     }
 
     // Try to determine actual packet size from first byte
@@ -724,11 +731,12 @@ static bool ProcessReceivedPacket(const uint8_t* rx_buf, size_t transfer_size) {
     size_t expected_size = get_packet_size_from_code(size_code);
 
     if (s_hw) {
-        s_hw->PrintLine("DAISY: Size code=0x%02X, expected_size=%d", size_code, (int)expected_size);
-        s_hw->PrintLine("DAISY: First byte analysis: 0x%02X (flags=0x%02X, size_code=0x%02X)",
-                        rx_buf[0],
-                        (rx_buf[0] & 0xF0) >> 4,
-                        rx_buf[0] & 0x0F);
+        WaveX::Log::PrintLine(
+            "DAISY: Size code=0x%02X, expected_size=%d", size_code, (int)expected_size);
+        WaveX::Log::PrintLine("DAISY: First byte analysis: 0x%02X (flags=0x%02X, size_code=0x%02X)",
+                              rx_buf[0],
+                              (rx_buf[0] & 0xF0) >> 4,
+                              rx_buf[0] & 0x0F);
     }
 
     // Use expected size if valid, otherwise use full buffer
@@ -737,7 +745,7 @@ static bool ProcessReceivedPacket(const uint8_t* rx_buf, size_t transfer_size) {
     // Validate and parse the unified packet
     if (!validate_wave_packet(rx_buf, parse_size)) {
         if (s_hw)
-            s_hw->PrintLine("DAISY: Invalid packet received - CRC validation failed");
+            WaveX::Log::PrintLine("DAISY: Invalid packet received - CRC validation failed");
         return false;
     }
 
@@ -752,28 +760,28 @@ static bool ProcessReceivedPacket(const uint8_t* rx_buf, size_t transfer_size) {
 
     if (!parsed_ok) {
         if (s_hw)
-            s_hw->PrintLine("DAISY: Failed to parse packet");
+            WaveX::Log::PrintLine("DAISY: Failed to parse packet");
         return false;
     }
 
     // Check for duplicate packets using sequence numbers (packet-level concern)
     if (is_duplicate_packet(sequence_number)) {
         if (s_hw)
-            s_hw->PrintLine("DAISY: Dropping duplicate/out-of-order packet: seq=%u",
-                            sequence_number);
+            WaveX::Log::PrintLine("DAISY: Dropping duplicate/out-of-order packet: seq=%u",
+                                  sequence_number);
         return true;  // Successfully handled (by ignoring)
     }
 
     // Handle packet-level flags (ACK/NACK) here
     if (msg_type == WaveX::Protocol::MSG_BROWSE_REQ && s_hw) {
-        s_hw->PrintLine(
+        WaveX::Log::PrintLine(
             "DAISY: Browse request packet received - seq=%u payload=%u bytes flags=0x%02X",
             sequence_number,
             (unsigned)payload_size,
             flags);
         if (payload_size > 0) {
             const uint32_t preview_count = payload_size > 8 ? 8 : payload_size;
-            s_hw->PrintLine(
+            WaveX::Log::PrintLine(
                 "DAISY: Browse request payload bytes: %02X %02X %02X %02X %02X %02X %02X %02X",
                 payload[0],
                 (preview_count > 1) ? payload[1] : 0,
@@ -788,7 +796,7 @@ static bool ProcessReceivedPacket(const uint8_t* rx_buf, size_t transfer_size) {
 
     if (flags & PKT_FLAG_ACK) {
         if (s_hw) {
-            s_hw->PrintLine(
+            WaveX::Log::PrintLine(
                 "DAISY: Received ACK for msg_type=0x%02X, seq=%u", msg_type, sequence_number);
         }
         // Handle acknowledgment - remove from retry queue if needed
@@ -797,7 +805,7 @@ static bool ProcessReceivedPacket(const uint8_t* rx_buf, size_t transfer_size) {
 
     if (flags & PKT_FLAG_NACK) {
         if (s_hw) {
-            s_hw->PrintLine(
+            WaveX::Log::PrintLine(
                 "DAISY: Received NACK for msg_type=0x%02X, seq=%u", msg_type, sequence_number);
         }
         // Handle negative acknowledgment - retry if needed
@@ -828,16 +836,17 @@ static bool PerformBidirectionalPoll() {
             if (s_hw) {
                 uint8_t msg_type = outgoing_msg[1];
                 uint16_t seq_num = outgoing_msg[2] | (outgoing_msg[3] << 8);
-                s_hw->PrintLine("DAISY: Sent packet type=0x%02X, seq=%u, size=%d, remaining=%d",
-                                msg_type,
-                                seq_num,
-                                (int)packet_size,
-                                outgoing_count);
+                WaveX::Log::PrintLine(
+                    "DAISY: Sent packet type=0x%02X, seq=%u, size=%d, remaining=%d",
+                    msg_type,
+                    seq_num,
+                    (int)packet_size,
+                    outgoing_count);
             }
             return true;
         } else {
             if (s_hw) {
-                s_hw->PrintLine("DAISY: Failed to send packet, result=%d", (int)result);
+                WaveX::Log::PrintLine("DAISY: Failed to send packet, result=%d", (int)result);
             }
             return false;
         }
@@ -867,36 +876,36 @@ void Spi_GetStats(spi_link_stats_t* stats) {
 
 void Spi_DebugState() {
     if (s_hw) {
-        s_hw->PrintLine("DAISY: SPI Debug State");
-        s_hw->PrintLine(
+        WaveX::Log::PrintLine("DAISY: SPI Debug State");
+        WaveX::Log::PrintLine(
             "  Incoming Queue: head=%d, tail=%d, count=%d", queue_head, queue_tail, queue_count);
-        s_hw->PrintLine("  Outgoing Queue: head=%d, tail=%d, count=%d",
-                        outgoing_head,
-                        outgoing_tail,
-                        outgoing_count);
+        WaveX::Log::PrintLine("  Outgoing Queue: head=%d, tail=%d, count=%d",
+                              outgoing_head,
+                              outgoing_tail,
+                              outgoing_count);
 #if WAVEX_SPI_DMA_ENABLED
-        s_hw->PrintLine("  DMA RX Buffers: current=%u, ready=%u",
-                        (unsigned)s_current_rx_buffer,
-                        (unsigned)s_packets_ready_for_processing);
-        s_hw->PrintLine("  RX Buffer Status: [%u,%u,%u,%u]",
-                        (unsigned)s_ready_rx_buffers[0],
-                        (unsigned)s_ready_rx_buffers[1],
-                        (unsigned)s_ready_rx_buffers[2],
-                        (unsigned)s_ready_rx_buffers[3]);
-        s_hw->PrintLine("  TX Buffer Status: [%u,%u,%u,%u]",
-                        (unsigned)s_tx_buffer_states[0],
-                        (unsigned)s_tx_buffer_states[1],
-                        (unsigned)s_tx_buffer_states[2],
-                        (unsigned)s_tx_buffer_states[3]);
-        s_hw->PrintLine("  DMA State: tx_inflight=%s, duplex_inflight=%s",
-                        s_tx_inflight ? "true" : "false",
-                        s_duplex_inflight ? "true" : "false");
+        WaveX::Log::PrintLine("  DMA RX Buffers: current=%u, ready=%u",
+                              (unsigned)s_current_rx_buffer,
+                              (unsigned)s_packets_ready_for_processing);
+        WaveX::Log::PrintLine("  RX Buffer Status: [%u,%u,%u,%u]",
+                              (unsigned)s_ready_rx_buffers[0],
+                              (unsigned)s_ready_rx_buffers[1],
+                              (unsigned)s_ready_rx_buffers[2],
+                              (unsigned)s_ready_rx_buffers[3]);
+        WaveX::Log::PrintLine("  TX Buffer Status: [%u,%u,%u,%u]",
+                              (unsigned)s_tx_buffer_states[0],
+                              (unsigned)s_tx_buffer_states[1],
+                              (unsigned)s_tx_buffer_states[2],
+                              (unsigned)s_tx_buffer_states[3]);
+        WaveX::Log::PrintLine("  DMA State: tx_inflight=%s, duplex_inflight=%s",
+                              s_tx_inflight ? "true" : "false",
+                              s_duplex_inflight ? "true" : "false");
 #endif
-        s_hw->PrintLine("  Stats: sent=%lu, received=%lu, crc_errors=%lu, rx_overflows=%lu",
-                        (unsigned long)s_stats.packets_sent,
-                        (unsigned long)s_stats.packets_received,
-                        (unsigned long)s_stats.crc_errors,
-                        (unsigned long)s_stats.rx_q_overflows);
+        WaveX::Log::PrintLine("  Stats: sent=%lu, received=%lu, crc_errors=%lu, rx_overflows=%lu",
+                              (unsigned long)s_stats.packets_sent,
+                              (unsigned long)s_stats.packets_received,
+                              (unsigned long)s_stats.crc_errors,
+                              (unsigned long)s_stats.rx_q_overflows);
     }
 }
 
@@ -908,9 +917,9 @@ void Spi_CheckTimeout() {
 
         if (elapsed > DMA_TIMEOUT_MS) {
             if (s_hw)
-                s_hw->PrintLine("DAISY: DMA timeout after %u ms - forcing abort", elapsed);
+                WaveX::Log::PrintLine("DAISY: DMA timeout after %u ms - forcing abort", elapsed);
             if (s_hw)
-                s_hw->PrintLine(
+                WaveX::Log::PrintLine(
                     "DAISY: Timeout details: start_time=%u, current_time=%u, inflight=%s",
                     s_dma_start_time,
                     current_time,
@@ -921,7 +930,7 @@ void Spi_CheckTimeout() {
             s_tx_inflight = false;
 
             if (s_hw)
-                s_hw->PrintLine(
+                WaveX::Log::PrintLine(
                     "DAISY: DMA timeout recovery - CS deasserted, ready for next packet");
         }
     }
@@ -934,7 +943,7 @@ bool Spi_PollAttnLevel(void) {
     // If attention line is high and we are not already receiving, kick a duplex transfer
     if (attn_pin.Read() && !s_duplex_inflight) {
         if (s_hw)
-            s_hw->PrintLine("DAISY: ATTN level high detected in poll - starting receive");
+            WaveX::Log::PrintLine("DAISY: ATTN level high detected in poll - starting receive");
         return Spi_ReceivePacket() == daisy::SpiHandle::Result::OK;
     }
 #endif
@@ -962,7 +971,7 @@ void ProcessQueuedSpiMessage() {
 
         if (!found_free) {
             if (s_hw)
-                s_hw->PrintLine("DAISY: No free RX storage buffers - dropping packet");
+                WaveX::Log::PrintLine("DAISY: No free RX storage buffers - dropping packet");
             s_packets_ready_for_processing--;
             continue;
         }
@@ -971,8 +980,8 @@ void ProcessQueuedSpiMessage() {
         memcpy(s_rx_buffers[storage_buffer], s_rx_dma_buf, MAX_PKT_SIZE);
 
         if (s_hw) {
-            s_hw->PrintLine("DAISY: Processing DMA packet (remaining: %u)",
-                            s_packets_ready_for_processing);
+            WaveX::Log::PrintLine("DAISY: Processing DMA packet (remaining: %u)",
+                                  s_packets_ready_for_processing);
         }
 
         // Process the packet from storage buffer
@@ -1007,16 +1016,18 @@ void ProcessQueuedSpiMessage() {
             if (s_hw) {
                 uint8_t msg_type = outgoing_msg[1];
                 uint16_t seq_num = outgoing_msg[2] | (outgoing_msg[3] << 8);
-                s_hw->PrintLine("DAISY: Sent packet type=0x%02X, seq=%u, size=%d, remaining=%d",
-                                msg_type,
-                                seq_num,
-                                (int)packet_size,
-                                outgoing_count);
+                WaveX::Log::PrintLine(
+                    "DAISY: Sent packet type=0x%02X, seq=%u, size=%d, remaining=%d",
+                    msg_type,
+                    seq_num,
+                    (int)packet_size,
+                    outgoing_count);
             }
             processed_count++;
         } else {
             if (s_hw)
-                s_hw->PrintLine("DAISY: Send failed with result %d - stopping batch", (int)result);
+                WaveX::Log::PrintLine("DAISY: Send failed with result %d - stopping batch",
+                                      (int)result);
             break;  // Stop on send error
         }
     }
@@ -1042,15 +1053,15 @@ void ProcessQueuedSpiMessage() {
         // Handle ACK/NACK flags here
         if (flags & PKT_FLAG_ACK) {
             if (s_hw) {
-                s_hw->PrintLine("DAISY: Queue - Received ACK for msg_type=0x%02X, seq=%u",
-                                msg_type,
-                                sequence_number);
+                WaveX::Log::PrintLine("DAISY: Queue - Received ACK for msg_type=0x%02X, seq=%u",
+                                      msg_type,
+                                      sequence_number);
             }
         } else if (flags & PKT_FLAG_NACK) {
             if (s_hw) {
-                s_hw->PrintLine("DAISY: Queue - Received NACK for msg_type=0x%02X, seq=%u",
-                                msg_type,
-                                sequence_number);
+                WaveX::Log::PrintLine("DAISY: Queue - Received NACK for msg_type=0x%02X, seq=%u",
+                                      msg_type,
+                                      sequence_number);
             }
         } else {
             // Extract payload and process message
@@ -1075,7 +1086,8 @@ void ProcessQueuedSpiMessage() {
     if (processed_count > 1 && (System::GetTick() - s_last_batch_log) > 1000) {
         s_last_batch_log = System::GetTick();
         if (s_hw)
-            s_hw->PrintLine("DAISY: Batch processed %d packets in single call", processed_count);
+            WaveX::Log::PrintLine("DAISY: Batch processed %d packets in single call",
+                                  processed_count);
     }
 }
 
@@ -1085,14 +1097,14 @@ void ProcessQueuedSpiMessage() {
 daisy::SpiHandle::Result Spi_ReceivePacket() {
     if (!g_spi_handle) {
         if (s_hw)
-            s_hw->PrintLine("Spi_ReceivePacket ERROR: g_spi_handle is NULL!");
+            WaveX::Log::PrintLine("Spi_ReceivePacket ERROR: g_spi_handle is NULL!");
         return daisy::SpiHandle::Result::ERR;
     }
 
 #if WAVEX_SPI_DMA_ENABLED
     if (s_duplex_inflight) {
         if (s_hw)
-            s_hw->PrintLine("Spi_ReceivePacket: Duplex transaction already in flight");
+            WaveX::Log::PrintLine("Spi_ReceivePacket: Duplex transaction already in flight");
         return daisy::SpiHandle::Result::ERR;
     }
 
@@ -1105,7 +1117,8 @@ daisy::SpiHandle::Result Spi_ReceivePacket() {
 
     // Cache operations removed - buffers are in non-cacheable DMA memory
 
-    // if (s_hw) s_hw->PrintLine("DAISY: Starting DMA duplex transaction to receive from ESP32");
+    // if (s_hw) WaveX::Log::PrintLine("DAISY: Starting DMA duplex transaction to receive from
+    // ESP32");
 
     // Start DMA duplex transfer (bidirectional); CS low/high handled in callbacks
     // cs_pin.Write(false);
@@ -1119,13 +1132,13 @@ daisy::SpiHandle::Result Spi_ReceivePacket() {
     // cs_pin.Write(true);
 
     if (s_hw)
-        s_hw->PrintLine("DAISY: DmaTransmitAndReceive returned: %d", (int)dma_result);
+        WaveX::Log::PrintLine("DAISY: DmaTransmitAndReceive returned: %d", (int)dma_result);
 
     return dma_result;
 #else
     // Fallback: blocking duplex with software CS
     if (s_hw)
-        s_hw->PrintLine("DAISY: Starting blocking duplex transaction");
+        WaveX::Log::PrintLine("DAISY: Starting blocking duplex transaction");
 
     uint8_t tx_buf[MAX_PKT_SIZE];
     uint8_t rx_buf[MAX_PKT_SIZE];
@@ -1139,13 +1152,13 @@ daisy::SpiHandle::Result Spi_ReceivePacket() {
     // Check if ESP32 is still signaling data ready
     if (!attn_pin.Read()) {
         if (s_hw)
-            s_hw->PrintLine("DAISY: ESP32 attention signal lost, aborting transaction");
+            WaveX::Log::PrintLine("DAISY: ESP32 attention signal lost, aborting transaction");
         return daisy::SpiHandle::Result::ERR;
     }
 
     // Try a different approach - use smaller packet size first with retry
     if (s_hw)
-        s_hw->PrintLine("DAISY: Starting transaction with smaller packet size");
+        WaveX::Log::PrintLine("DAISY: Starting transaction with smaller packet size");
     daisy::SpiHandle::Result res = daisy::SpiHandle::Result::ERR;
 
     // Retry up to 3 times for reliability
@@ -1160,11 +1173,11 @@ daisy::SpiHandle::Result Spi_ReceivePacket() {
 
         if (res == daisy::SpiHandle::Result::OK) {
             if (s_hw)
-                s_hw->PrintLine("DAISY: Transaction successful on attempt %d", attempt + 1);
+                WaveX::Log::PrintLine("DAISY: Transaction successful on attempt %d", attempt + 1);
             break;
         } else {
             if (s_hw)
-                s_hw->PrintLine(
+                WaveX::Log::PrintLine(
                     "DAISY: Transaction failed on attempt %d, result=%d", attempt + 1, (int)res);
             System::DelayUs(100);  // Small delay between retries
         }
@@ -1173,15 +1186,16 @@ daisy::SpiHandle::Result Spi_ReceivePacket() {
     // Simple success/failure check
     if (res != daisy::SpiHandle::Result::OK) {
         if (s_hw)
-            s_hw->PrintLine("DAISY: Small packet transaction failed with result: %d", (int)res);
+            WaveX::Log::PrintLine("DAISY: Small packet transaction failed with result: %d",
+                                  (int)res);
 
         // Fallback: just signal completion without data exchange
         if (s_hw)
-            s_hw->PrintLine("DAISY: Using fallback - no data exchange");
+            WaveX::Log::PrintLine("DAISY: Using fallback - no data exchange");
         res = daisy::SpiHandle::Result::OK;  // Mark as successful to continue
     } else {
         if (s_hw)
-            s_hw->PrintLine("DAISY: Small packet transaction completed successfully");
+            WaveX::Log::PrintLine("DAISY: Small packet transaction completed successfully");
     }
 
     // Process the received data if transaction was successful
@@ -1198,7 +1212,7 @@ daisy::SpiHandle::Result Spi_ReceivePacket() {
     //     clear_attempts++;
     // }
 
-    // if (s_hw) s_hw->PrintLine("DAISY: Attention signal cleared after %d attempts",
+    // if (s_hw) WaveX::Log::PrintLine("DAISY: Attention signal cleared after %d attempts",
     // clear_attempts);
 
     return res;
@@ -1225,8 +1239,8 @@ extern "C" void EXTI15_10_IRQHandler(void) {
         // Check if attention pin is high (ESP32 signaling data ready)
         if (attn_pin.Read() && !s_interrupt_processing) {
             if (s_hw)
-                s_hw->PrintLine("DAISY: ATTN interrupt #%lu - ESP32 has data ready",
-                                (unsigned long)s_interrupt_count);
+                WaveX::Log::PrintLine("DAISY: ATTN interrupt #%lu - ESP32 has data ready",
+                                      (unsigned long)s_interrupt_count);
 
             // Initiate non-blocking DMA duplex transaction to receive data
             s_interrupt_processing = true;
@@ -1235,10 +1249,10 @@ extern "C" void EXTI15_10_IRQHandler(void) {
         } else {
             s_interrupt_ignored++;
             if (s_hw)
-                s_hw->PrintLine("DAISY: ATTN interrupt #%lu IGNORED - pin=%d processing=%d",
-                                (unsigned long)s_interrupt_count,
-                                attn_pin.Read() ? 1 : 0,
-                                s_interrupt_processing ? 1 : 0);
+                WaveX::Log::PrintLine("DAISY: ATTN interrupt #%lu IGNORED - pin=%d processing=%d",
+                                      (unsigned long)s_interrupt_count,
+                                      attn_pin.Read() ? 1 : 0,
+                                      s_interrupt_processing ? 1 : 0);
         }
     }
 }

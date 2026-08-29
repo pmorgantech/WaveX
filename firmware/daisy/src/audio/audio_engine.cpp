@@ -1,3 +1,5 @@
+#include "comm/log_ring.h"
+
 #include "../config.hpp"
 #if WAVEX_AUDIO_ENGINE_ENABLED
 
@@ -315,8 +317,8 @@ static void SendPreviewChunks() {
         if (res < 0) {
             if (pumps_remaining == 0) {
                 if (s_hw)
-                    s_hw->PrintLine("DAISY: preview send aborted at offset %u (TX stalled)",
-                                    (unsigned)s_prev_sent);
+                    WaveX::Log::PrintLine("DAISY: preview send aborted at offset %u (TX stalled)",
+                                          (unsigned)s_prev_sent);
                 return;  // partial preview; chunk offsets make the gap visible upstream
             }
             --pumps_remaining;
@@ -608,7 +610,8 @@ static bool prebuffer_audio() {
         s_prebuffering = false;
 #if WAVEX_DAISY_SD_DEBUG
         if (s_hw)
-            s_hw->PrintLine("Pre-buffer complete: %u frames ready", (unsigned)PREBUFFER_FRAMES);
+            WaveX::Log::PrintLine("Pre-buffer complete: %u frames ready",
+                                  (unsigned)PREBUFFER_FRAMES);
 #endif
         return true;
     }
@@ -685,8 +688,8 @@ static bool prebuffer_audio() {
         s_prebuffering = false;
 #if WAVEX_DAISY_SD_DEBUG
         if (s_hw)
-            s_hw->PrintLine("Pre-buffer complete: %u frames (end of file)",
-                            (unsigned)s_prebuffer_filled);
+            WaveX::Log::PrintLine("Pre-buffer complete: %u frames (end of file)",
+                                  (unsigned)s_prebuffer_filled);
 #endif
         return true;
     }
@@ -707,17 +710,17 @@ static bool prebuffer_audio() {
     // Log I/O performance every 100 operations
     if (s_io_count % 100 == 0) {
         if (s_hw)
-            s_hw->PrintLine("SD I/O Stats: count=%u, max_duration=%u ms, last_duration=%u ms",
-                            (unsigned)s_io_count,
-                            (unsigned)s_max_io_duration,
-                            (unsigned)s_io_duration);
+            WaveX::Log::PrintLine("SD I/O Stats: count=%u, max_duration=%u ms, last_duration=%u ms",
+                                  (unsigned)s_io_count,
+                                  (unsigned)s_max_io_duration,
+                                  (unsigned)s_io_duration);
     }
 #endif
 
     if (fr != FR_OK || br == 0) {
 #if WAVEX_DAISY_SD_DEBUG
         if (s_hw)
-            s_hw->PrintLine("Pre-buffer read error: fr=%d, br=%u", (int)fr, (unsigned)br);
+            WaveX::Log::PrintLine("Pre-buffer read error: fr=%d, br=%u", (int)fr, (unsigned)br);
 #endif
         s_prebuffering = false;
         return false;
@@ -778,9 +781,9 @@ static bool prebuffer_audio() {
 
 #if WAVEX_DAISY_SD_DEBUG
     if (s_hw)
-        s_hw->PrintLine("Pre-buffer progress: %u/%u frames",
-                        (unsigned)s_prebuffer_filled,
-                        (unsigned)PREBUFFER_FRAMES);
+        WaveX::Log::PrintLine("Pre-buffer progress: %u/%u frames",
+                              (unsigned)s_prebuffer_filled,
+                              (unsigned)PREBUFFER_FRAMES);
 #endif
 
     if (s_prebuffer_filled >= PREBUFFER_FRAMES) {
@@ -824,7 +827,7 @@ static bool refill_sd_buffer() {
             req_bytes = req_frames * file_bpf;
 #if WAVEX_DAISY_SD_DEBUG
             if (s_hw)
-                s_hw->PrintLine("WAV loop: rewinding to data start");
+                WaveX::Log::PrintLine("WAV loop: rewinding to data start");
 #endif
         }
 
@@ -839,7 +842,7 @@ static bool refill_sd_buffer() {
         if (fr != FR_OK || br == 0) {
 #if WAVEX_DAISY_SD_DEBUG
             if (s_hw)
-                s_hw->PrintLine("WAV read error: fr=%d, br=%u", (int)fr, (unsigned)br);
+                WaveX::Log::PrintLine("WAV read error: fr=%d, br=%u", (int)fr, (unsigned)br);
 #endif
             return false;
         }
@@ -957,10 +960,10 @@ void Init(DaisySeed& hw, float sample_rate, bool sdram_available) {
                                                  WaveX::SdramLayout::kSampleArenaBytes,
                                                  WaveX::SdramLayout::kSmallSamplePoolBytes);
     if (s_hw) {
-        s_hw->PrintLine("AUDIO_ENGINE: Sample RAM %s (arena=%lu, render scratch=%lu)",
-                        s_sample_memory_available ? "ready" : "disabled",
-                        (unsigned long)WaveX::SdramLayout::kSampleArenaBytes,
-                        (unsigned long)WaveX::SdramLayout::kRenderScratchBytes);
+        WaveX::Log::PrintLine("AUDIO_ENGINE: Sample RAM %s (arena=%lu, render scratch=%lu)",
+                              s_sample_memory_available ? "ready" : "disabled",
+                              (unsigned long)WaveX::SdramLayout::kSampleArenaBytes,
+                              (unsigned long)WaveX::SdramLayout::kRenderScratchBytes);
     }
 
     s_voice_manager.Init(static_cast<uint32_t>(sample_rate));
@@ -980,13 +983,13 @@ void Init(DaisySeed& hw, float sample_rate, bool sdram_available) {
 
     // Test basic allocation to ensure SDRAM is working
     if (s_hw) {
-        s_hw->PrintLine("AUDIO_ENGINE: Testing Sample RAM allocation...");
+        WaveX::Log::PrintLine("AUDIO_ENGINE: Testing Sample RAM allocation...");
     }
     wxsamp_t test_handle = {};
     bool test_alloc = s_sample_mem_mgr.alloc(1024, &test_handle);  // Try to allocate 1KB
     if (test_alloc) {
         if (s_hw) {
-            s_hw->PrintLine(
+            WaveX::Log::PrintLine(
                 "AUDIO_ENGINE: Sample RAM test allocation successful (handle: cls=%u page=%u "
                 "slot=%u)",
                 (unsigned)test_handle.cls,
@@ -995,11 +998,11 @@ void Init(DaisySeed& hw, float sample_rate, bool sdram_available) {
         }
         s_sample_mem_mgr.release(&test_handle);  // Clean up test allocation
         if (s_hw) {
-            s_hw->PrintLine("AUDIO_ENGINE: Sample RAM test completed successfully");
+            WaveX::Log::PrintLine("AUDIO_ENGINE: Sample RAM test completed successfully");
         }
     } else {
         if (s_hw) {
-            s_hw->PrintLine(
+            WaveX::Log::PrintLine(
                 "AUDIO_ENGINE: Sample RAM test allocation FAILED - SDRAM may not be initialized");
         }
     }
@@ -1182,7 +1185,7 @@ static void SendCvCalResp(uint8_t group) {
 void OnCvCalSet(const CvCalMessage& m) {
     if (m.group >= WAVEX_ANALOG_CV_GROUPS_MAX) {
         if (s_hw)
-            s_hw->PrintLine("CV CAL: group %u out of range", (unsigned)m.group);
+            WaveX::Log::PrintLine("CV CAL: group %u out of range", (unsigned)m.group);
         return;
     }
     CvCal cal;
@@ -1202,7 +1205,7 @@ void OnCvCalSet(const CvCalMessage& m) {
         }
         const bool saved = WaveX::Cv::SaveCvCalTable(s_cvcal_file, table);
         if (s_hw)
-            s_hw->PrintLine(
+            WaveX::Log::PrintLine(
                 "CV CAL: group %u applied, persist %s", (unsigned)m.group, saved ? "OK" : "FAILED");
     }
     SendCvCalResp(m.group);
@@ -1223,25 +1226,25 @@ void OnCvTest(const CvTestMessage& m) {
     // Write the flag last: once true, the tick may read the values above.
     __atomic_store_n(&s_cv_test_active, m.enable != 0, __ATOMIC_RELEASE);
     if (s_hw)
-        s_hw->PrintLine("CV TEST: %s (cut=%d res=%d vca=%d x1000)",
-                        m.enable ? "ON" : "off",
-                        (int)(m.cutoff * 1000),
-                        (int)(m.resonance * 1000),
-                        (int)(m.vca * 1000));
+        WaveX::Log::PrintLine("CV TEST: %s (cut=%d res=%d vca=%d x1000)",
+                              m.enable ? "ON" : "off",
+                              (int)(m.cutoff * 1000),
+                              (int)(m.resonance * 1000),
+                              (int)(m.vca * 1000));
 }
 
 void LoadCvCalFromSd() {
     CvCal table[WAVEX_ANALOG_CV_GROUPS_MAX];
     if (!WaveX::Cv::LoadCvCalTable(s_cvcal_file, table)) {
         if (s_hw)
-            s_hw->PrintLine("CV CAL: no stored table (using defaults)");
+            WaveX::Log::PrintLine("CV CAL: no stored table (using defaults)");
         return;
     }
     for (uint8_t g = 0; g < WAVEX_ANALOG_CV_GROUPS_MAX; ++g) {
         s_cv_backend.SetGroupCal(g, table[g]);
     }
     if (s_hw)
-        s_hw->PrintLine("CV CAL: table loaded from SD");
+        WaveX::Log::PrintLine("CV CAL: table loaded from SD");
 }
 
 // ---- Sequencer / transport / MIDI-clock (roadmap Phase 2) ----
@@ -1255,10 +1258,10 @@ void OnSeqTransport(const SeqTransportMessage& m) {
     s_seq_transport.ApplyTransport(m);
 #if WAVEX_MCU_LINK_PACKET_DEBUG
     if (s_hw)
-        s_hw->PrintLine("RX SEQ_TRANSPORT: cmd=%u src=%u bpm=%u",
-                        (unsigned)m.command,
-                        (unsigned)m.clock_source,
-                        (unsigned)m.tempo_bpm_x100);
+        WaveX::Log::PrintLine("RX SEQ_TRANSPORT: cmd=%u src=%u bpm=%u",
+                              (unsigned)m.command,
+                              (unsigned)m.clock_source,
+                              (unsigned)m.tempo_bpm_x100);
 #endif
 }
 
@@ -1304,10 +1307,11 @@ void OnNoteOn(const NoteMessage& note_msg) {
         // otherwise (review C2) - so it was removed rather than fixed;
         // load a 16-bit sample to verify the MIDI path end-to-end.
         if (s_hw)
-            s_hw->PrintLine("RX NOTE_ON: note=%u vel=%u ch=%u -> dropped (no playable sample)",
-                            (unsigned)note_msg.note,
-                            (unsigned)note_msg.velocity,
-                            (unsigned)note_msg.channel);
+            WaveX::Log::PrintLine(
+                "RX NOTE_ON: note=%u vel=%u ch=%u -> dropped (no playable sample)",
+                (unsigned)note_msg.note,
+                (unsigned)note_msg.velocity,
+                (unsigned)note_msg.channel);
         return;
     }
 
@@ -1327,15 +1331,16 @@ void OnNoteOn(const NoteMessage& note_msg) {
 
     const bool queued = note_queue_push(ev);
     if (!queued && s_hw)
-        s_hw->PrintLine("RX NOTE_ON: note=%u DROPPED - note queue full", (unsigned)note_msg.note);
+        WaveX::Log::PrintLine("RX NOTE_ON: note=%u DROPPED - note queue full",
+                              (unsigned)note_msg.note);
 #if WAVEX_MCU_LINK_PACKET_DEBUG
     if (queued && s_hw)
-        s_hw->PrintLine("RX NOTE_ON: note=%u vel=%u ch=%u -> sample_id=%u (%lu frames)",
-                        (unsigned)note_msg.note,
-                        (unsigned)note_msg.velocity,
-                        (unsigned)note_msg.channel,
-                        (unsigned)src->sample_id,
-                        (unsigned long)ev.params.sample_frames);
+        WaveX::Log::PrintLine("RX NOTE_ON: note=%u vel=%u ch=%u -> sample_id=%u (%lu frames)",
+                              (unsigned)note_msg.note,
+                              (unsigned)note_msg.velocity,
+                              (unsigned)note_msg.channel,
+                              (unsigned)src->sample_id,
+                              (unsigned long)ev.params.sample_frames);
 #endif
 }
 
@@ -1347,7 +1352,7 @@ void OnNoteOff(const NoteMessage& note_msg) {
 
 #if WAVEX_MCU_LINK_PACKET_DEBUG
     if (s_hw)
-        s_hw->PrintLine(
+        WaveX::Log::PrintLine(
             "RX NOTE_OFF: note=%u ch=%u", (unsigned)note_msg.note, (unsigned)note_msg.channel);
 #endif
 }
@@ -1360,8 +1365,8 @@ void OnNoteOff(const NoteMessage& note_msg) {
 // is actually scheduled (offline-editing work, Phase 4).
 void OnSampleCtrl(const SampleCtrlMessage& sc) {
     if (s_hw)
-        s_hw->PrintLine("SAMPLE_CTRL cmd=%u ignored (recording not implemented - review C2)",
-                        (unsigned)sc.cmd);
+        WaveX::Log::PrintLine("SAMPLE_CTRL cmd=%u ignored (recording not implemented - review C2)",
+                              (unsigned)sc.cmd);
 }
 
 void OnPreviewReq(const PreviewReqMessage& pr) {
@@ -1371,7 +1376,7 @@ void OnPreviewReq(const PreviewReqMessage& pr) {
     // Pick the most recently loaded sample; fall back to empty if none.
     if (s_loaded_sample_count == 0) {
         if (s_hw) {
-            s_hw->PrintLine("PREVIEW: No loaded samples; skipping preview");
+            WaveX::Log::PrintLine("PREVIEW: No loaded samples; skipping preview");
         }
         return;
     }
@@ -1380,8 +1385,8 @@ void OnPreviewReq(const PreviewReqMessage& pr) {
     void* sample_ptr = nullptr;
     if (!s_sample_mem_mgr.ptr(src.handle, &sample_ptr) || !sample_ptr) {
         if (s_hw) {
-            s_hw->PrintLine("PREVIEW: Failed to get pointer for sample_id=%u",
-                            (unsigned)src.sample_id);
+            WaveX::Log::PrintLine("PREVIEW: Failed to get pointer for sample_id=%u",
+                                  (unsigned)src.sample_id);
         }
         return;
     }
@@ -1390,8 +1395,8 @@ void OnPreviewReq(const PreviewReqMessage& pr) {
     const uint32_t bytes_per_frame = (src.bit_depth / 8) * src.channels;
     if (bytes_per_frame == 0) {
         if (s_hw) {
-            s_hw->PrintLine("PREVIEW: Invalid bytes_per_frame=0 for sample_id=%u",
-                            (unsigned)src.sample_id);
+            WaveX::Log::PrintLine("PREVIEW: Invalid bytes_per_frame=0 for sample_id=%u",
+                                  (unsigned)src.sample_id);
         }
         return;
     }
@@ -1441,7 +1446,7 @@ void OnPreviewReq(const PreviewReqMessage& pr) {
     }
 
     if (s_hw) {
-        s_hw->PrintLine(
+        WaveX::Log::PrintLine(
             "PREVIEW: Built preview for sample_id=%u frames=%lu decim=%u preview_len=%u",
             (unsigned)src.sample_id,
             (unsigned long)total_frames,
@@ -1455,11 +1460,11 @@ void OnPreviewReq(const PreviewReqMessage& pr) {
 void OnSampleLoad(const SampleLoadMessage& sl) {
     if (!s_sample_memory_available) {
         if (s_hw)
-            s_hw->PrintLine("SAMPLE_LOAD: rejected because SDRAM is unavailable");
+            WaveX::Log::PrintLine("SAMPLE_LOAD: rejected because SDRAM is unavailable");
         return;
     }
     if (s_hw) {
-        s_hw->PrintLine("SAMPLE_LOAD: path='%s' id=%u", sl.path, (unsigned)sl.sample_id);
+        WaveX::Log::PrintLine("SAMPLE_LOAD: path='%s' id=%u", sl.path, (unsigned)sl.sample_id);
     }
     // CRITICAL: Stop ALL SD activity (audition/playback) and ensure PumpWavIO is not running.
     // FatFS + SDMMC are NOT thread-safe or re-entrant. The main loop calls PumpWavIO() which
@@ -1489,13 +1494,13 @@ void OnSampleLoad(const SampleLoadMessage& sl) {
         snprintf(alt_path, sizeof(alt_path), "0:%s", sl.path);
         fr = f_open(&file, alt_path, FA_READ);
         if (fr != FR_OK && s_hw) {
-            s_hw->PrintLine("SAMPLE_LOAD: f_open failed (%d) for '%s' and alt '%s'",
-                            (int)fr,
-                            sl.path,
-                            alt_path);
+            WaveX::Log::PrintLine("SAMPLE_LOAD: f_open failed (%d) for '%s' and alt '%s'",
+                                  (int)fr,
+                                  sl.path,
+                                  alt_path);
         }
     } else if (fr != FR_OK && s_hw) {
-        s_hw->PrintLine("SAMPLE_LOAD: f_open failed (%d) for '%s'", (int)fr, sl.path);
+        WaveX::Log::PrintLine("SAMPLE_LOAD: f_open failed (%d) for '%s'", (int)fr, sl.path);
     }
     if (fr != FR_OK) {
         return;
@@ -1509,7 +1514,8 @@ void OnSampleLoad(const SampleLoadMessage& sl) {
     const auto parse_result = WaveX::Wav::ParseWavHeader(reader, wav_info);
     if (parse_result != WaveX::Wav::ParseResult::Ok) {
         if (s_hw) {
-            s_hw->PrintLine("SAMPLE_LOAD: invalid WAV header (parse result %d)", (int)parse_result);
+            WaveX::Log::PrintLine("SAMPLE_LOAD: invalid WAV header (parse result %d)",
+                                  (int)parse_result);
         }
         f_close(&file);
         return;
@@ -1522,10 +1528,10 @@ void OnSampleLoad(const SampleLoadMessage& sl) {
 
     if (wav_info.audio_format != 1 || (bits != 16 && bits != 24) || (num_ch != 1 && num_ch != 2)) {
         if (s_hw) {
-            s_hw->PrintLine("SAMPLE_LOAD: unsupported format fmt=%u bits=%u ch=%u",
-                            (unsigned)wav_info.audio_format,
-                            (unsigned)bits,
-                            (unsigned)num_ch);
+            WaveX::Log::PrintLine("SAMPLE_LOAD: unsupported format fmt=%u bits=%u ch=%u",
+                                  (unsigned)wav_info.audio_format,
+                                  (unsigned)bits,
+                                  (unsigned)num_ch);
         }
         f_close(&file);
         return;
@@ -1542,7 +1548,7 @@ void OnSampleLoad(const SampleLoadMessage& sl) {
             if (s_hw) {
                 wxsamp_stats_t st{};
                 s_sample_mem_mgr.stats(&st);
-                s_hw->PrintLine(
+                WaveX::Log::PrintLine(
                     "SAMPLE_LOAD: alloc failed for %lu bytes (largest_free=%lu, free_total=%lu)",
                     (unsigned long)data_size,
                     (unsigned long)st.largest_free_bytes,
@@ -1552,8 +1558,8 @@ void OnSampleLoad(const SampleLoadMessage& sl) {
             return;
         }
         if (s_hw) {
-            s_hw->PrintLine("SAMPLE_LOAD: evicted oldest sample to fit %lu bytes",
-                            (unsigned long)data_size);
+            WaveX::Log::PrintLine("SAMPLE_LOAD: evicted oldest sample to fit %lu bytes",
+                                  (unsigned long)data_size);
         }
     }
 
@@ -1580,7 +1586,7 @@ void OnSampleLoad(const SampleLoadMessage& sl) {
 
         if (fr != FR_OK || br == 0) {
             if (s_hw) {
-                s_hw->PrintLine(
+                WaveX::Log::PrintLine(
                     "SAMPLE_LOAD: read error %d after %lu bytes", (int)fr, (unsigned long)written);
             }
             s_sample_mem_mgr.release(&handle);
@@ -1596,17 +1602,17 @@ void OnSampleLoad(const SampleLoadMessage& sl) {
 
     if (!upsert_loaded_sample(sl, handle)) {
         if (s_hw)
-            s_hw->PrintLine("SAMPLE_LOAD: registry full (%u entries)",
-                            (unsigned)kLoadedSampleCapacity);
+            WaveX::Log::PrintLine("SAMPLE_LOAD: registry full (%u entries)",
+                                  (unsigned)kLoadedSampleCapacity);
         s_sample_mem_mgr.release(&handle);
         return;
     }
     update_loaded_sample_progress(sl.sample_id, data_size);
 
     if (s_hw) {
-        s_hw->PrintLine("SAMPLE_LOAD: Loaded %lu bytes for sample %u",
-                        (unsigned long)data_size,
-                        (unsigned)sl.sample_id);
+        WaveX::Log::PrintLine("SAMPLE_LOAD: Loaded %lu bytes for sample %u",
+                              (unsigned long)data_size,
+                              (unsigned)sl.sample_id);
     }
 
     // Notify host (ESP32) that sample load completed.
@@ -1689,8 +1695,8 @@ void CheckAndLogUnderruns() {
     }
     last_report_ms = now;
     if (s_hw) {
-        s_hw->PrintLine("AUDIO: Ring buffer underrun - outputting silence (%u in last ~1s)",
-                        (unsigned)episodes);
+        WaveX::Log::PrintLine("AUDIO: Ring buffer underrun - outputting silence (%u in last ~1s)",
+                              (unsigned)episodes);
     }
     episodes = 0;
 }
@@ -1710,8 +1716,9 @@ void FlushCv() {
         if (!disabled_logged) {
             disabled_logged = true;
             if (s_hw)
-                s_hw->PrintLine("CV: MCP4728 not responding after %u attempts - CV flush disabled",
-                                (unsigned)kMaxConsecutiveFailures);
+                WaveX::Log::PrintLine(
+                    "CV: MCP4728 not responding after %u attempts - CV flush disabled",
+                    (unsigned)kMaxConsecutiveFailures);
         }
         return;
     }
@@ -1751,7 +1758,7 @@ bool OpenWav(const char* path) {
     FRESULT fr = f_open(&s_wav.file, path, FA_READ);
     if (fr != FR_OK) {
         if (s_hw)
-            s_hw->PrintLine("WAV open failed: f_open error %d for path %s", (int)fr, path);
+            WaveX::Log::PrintLine("WAV open failed: f_open error %d for path %s", (int)fr, path);
         return false;
     }
 
@@ -1763,7 +1770,7 @@ bool OpenWav(const char* path) {
     const auto parse_result = WaveX::Wav::ParseWavHeader(reader, wav_info);
     if (parse_result != WaveX::Wav::ParseResult::Ok) {
         if (s_hw)
-            s_hw->PrintLine(
+            WaveX::Log::PrintLine(
                 "WAV open failed: header parse error %d for %s", (int)parse_result, path);
         f_close(&s_wav.file);
         return false;
@@ -1774,10 +1781,10 @@ bool OpenWav(const char* path) {
         (wav_info.bits_per_sample != 16 && wav_info.bits_per_sample != 24) ||
         (wav_info.num_channels != 1 && wav_info.num_channels != 2)) {
         if (s_hw)
-            s_hw->PrintLine("WAV open failed: unsupported format fmt=%u bits=%u ch=%u",
-                            (unsigned)wav_info.audio_format,
-                            (unsigned)wav_info.bits_per_sample,
-                            (unsigned)wav_info.num_channels);
+            WaveX::Log::PrintLine("WAV open failed: unsupported format fmt=%u bits=%u ch=%u",
+                                  (unsigned)wav_info.audio_format,
+                                  (unsigned)wav_info.bits_per_sample,
+                                  (unsigned)wav_info.num_channels);
         f_close(&s_wav.file);
         return false;  // only PCM16/24 mono/stereo supported
     }
@@ -1799,12 +1806,12 @@ bool OpenWav(const char* path) {
 
 #if WAVEX_DAISY_SD_DEBUG
     if (s_hw)
-        s_hw->PrintLine("WAV open ok: %s ch=%u sr=%lu bits=%u size=%lu",
-                        path,
-                        (unsigned)wav_info.num_channels,
-                        (unsigned long)wav_info.sample_rate,
-                        (unsigned)wav_info.bits_per_sample,
-                        (unsigned long)wav_info.data_size);
+        WaveX::Log::PrintLine("WAV open ok: %s ch=%u sr=%lu bits=%u size=%lu",
+                              path,
+                              (unsigned)wav_info.num_channels,
+                              (unsigned long)wav_info.sample_rate,
+                              (unsigned)wav_info.bits_per_sample,
+                              (unsigned long)wav_info.data_size);
 #endif
 
     // Reset pre-buffer state and start pre-buffering
@@ -1818,7 +1825,7 @@ bool OpenWav(const char* path) {
 void CloseWav() {
     if (s_wav.open) {
         if (s_hw)
-            s_hw->PrintLine("CloseWav: closing WAV file and clearing state");
+            WaveX::Log::PrintLine("CloseWav: closing WAV file and clearing state");
         f_close(&s_wav.file);
         s_wav = {};
     }
@@ -1975,8 +1982,8 @@ void PumpWavIO() {
 
 #if WAVEX_DAISY_SD_DEBUG
         if (s_hw)
-            s_hw->PrintLine("Transferred %u frames from pre-buffer to ring buffer",
-                            (unsigned)frames_to_transfer);
+            WaveX::Log::PrintLine("Transferred %u frames from pre-buffer to ring buffer",
+                                  (unsigned)frames_to_transfer);
 #endif
 
         s_dwt_io_cycles = WaveX::Profiling::GetCycles() - block_cycles_start;
@@ -2141,8 +2148,8 @@ void PumpWavIO() {
 
 #if WAVEX_DAISY_SD_DEBUG
     if (s_hw)
-        s_hw->PrintLine("Transferred %u frames from SD buffer to ring buffer",
-                        (unsigned)final_frames);
+        WaveX::Log::PrintLine("Transferred %u frames from SD buffer to ring buffer",
+                              (unsigned)final_frames);
 #endif
 }
 
@@ -2158,7 +2165,7 @@ bool AuditionSample(const char* path) {
     // This integrates with the pre-buffering system and avoids blocking I/O
     if (!OpenWav(path)) {
         if (s_hw)
-            s_hw->PrintLine("AuditionSample: Failed to open WAV file for %s", path);
+            WaveX::Log::PrintLine("AuditionSample: Failed to open WAV file for %s", path);
         return false;
     }
 
@@ -2168,7 +2175,8 @@ bool AuditionSample(const char* path) {
     s_audition.current_path[sizeof(s_audition.current_path) - 1] = '\0';
 
     if (s_hw) {
-        s_hw->PrintLine("AuditionSample: Started audition of %s using WAV playback system", path);
+        WaveX::Log::PrintLine("AuditionSample: Started audition of %s using WAV playback system",
+                              path);
     }
 
     return true;
@@ -2180,7 +2188,7 @@ void StopAudition() {
         CloseWav();
         s_audition.active = false;
         if (s_hw)
-            s_hw->PrintLine("AuditionSample: Stopped audition");
+            WaveX::Log::PrintLine("AuditionSample: Stopped audition");
     }
 }
 

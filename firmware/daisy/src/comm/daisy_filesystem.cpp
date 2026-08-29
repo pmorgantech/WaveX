@@ -1,3 +1,4 @@
+#include "comm/log_ring.h"
 #include "config/hardware_config.h"  // For WAVEX_INTER_MCU_LINK_ENABLED
 #include "daisy_spi_link.h"
 
@@ -129,7 +130,7 @@ bool ParseWavMetadata(const WaveX::Storage::FileEntry& entry,
     strcat(full_path, entry.name);
 
     if (WaveX::Comm::s_hw) {
-        WaveX::Comm::s_hw->PrintLine("WAV META PARSE START: %s", entry.name);
+        WaveX::Log::PrintLine("WAV META PARSE START: %s", entry.name);
     }
 
     // FatFS paths require an explicit drive prefix (0:/) when using f_open
@@ -158,12 +159,11 @@ bool ParseWavMetadata(const WaveX::Storage::FileEntry& entry,
     FRESULT fr = f_open(&file, fs_path, FA_READ | FA_OPEN_EXISTING);
     uint32_t t_open = daisy::System::GetNow() - t_open_start;
     if (WaveX::Comm::s_hw) {
-        WaveX::Comm::s_hw->PrintLine(
-            "WAV META OPEN: %s t=%lu ms", entry.name, (unsigned long)t_open);
+        WaveX::Log::PrintLine("WAV META OPEN: %s t=%lu ms", entry.name, (unsigned long)t_open);
     }
     if (fr != FR_OK) {
         if (WaveX::Comm::s_hw) {
-            WaveX::Comm::s_hw->PrintLine(
+            WaveX::Log::PrintLine(
                 "WAV META OPEN FAIL: %s err=%d", entry.name, static_cast<int>(fr));
         }
         return false;
@@ -177,17 +177,17 @@ bool ParseWavMetadata(const WaveX::Storage::FileEntry& entry,
     fr = f_read(&file, s_metadata_buf, kHeaderProbeSize, &bytes_read);
     uint32_t t_read = daisy::System::GetNow() - t_read_start;
     if (WaveX::Comm::s_hw) {
-        WaveX::Comm::s_hw->PrintLine("WAV META READ: %s t=%lu ms bytes=%u",
-                                     entry.name,
-                                     (unsigned long)t_read,
-                                     (unsigned)bytes_read);
+        WaveX::Log::PrintLine("WAV META READ: %s t=%lu ms bytes=%u",
+                              entry.name,
+                              (unsigned long)t_read,
+                              (unsigned)bytes_read);
     }
 
     // Final timeout check happens after read
     elapsed_ms = daisy::System::GetNow() - parse_start_ms;
     if (elapsed_ms > METADATA_TIMEOUT_MS) {
         if (WaveX::Comm::s_hw) {
-            WaveX::Comm::s_hw->PrintLine(
+            WaveX::Log::PrintLine(
                 "WAV META TIMEOUT total=%lu ms file=%s", (unsigned long)elapsed_ms, entry.name);
         }
         if (duration_ms_out)
@@ -198,10 +198,10 @@ bool ParseWavMetadata(const WaveX::Storage::FileEntry& entry,
 
     if (fr != FR_OK || bytes_read < 12) {
         if (WaveX::Comm::s_hw) {
-            WaveX::Comm::s_hw->PrintLine("WAV META HEADER FAIL %s bytes=%u fr=%d",
-                                         entry.name,
-                                         (unsigned)bytes_read,
-                                         (int)fr);
+            WaveX::Log::PrintLine("WAV META HEADER FAIL %s bytes=%u fr=%d",
+                                  entry.name,
+                                  (unsigned)bytes_read,
+                                  (int)fr);
         }
         if (duration_ms_out)
             *duration_ms_out = elapsed_ms;
@@ -220,7 +220,7 @@ bool ParseWavMetadata(const WaveX::Storage::FileEntry& entry,
     const auto parse_result = WaveX::Wav::ParseWavHeader(reader, info);
     if (parse_result == WaveX::Wav::ParseResult::NotRiffWave) {
         if (WaveX::Comm::s_hw) {
-            WaveX::Comm::s_hw->PrintLine("WAV META NOT RIFF/WAVE: %s", entry.name);
+            WaveX::Log::PrintLine("WAV META NOT RIFF/WAVE: %s", entry.name);
         }
         if (duration_ms_out)
             *duration_ms_out = elapsed_ms;
@@ -235,7 +235,7 @@ bool ParseWavMetadata(const WaveX::Storage::FileEntry& entry,
 
     if (!fmt_found) {
         if (WaveX::Comm::s_hw) {
-            WaveX::Comm::s_hw->PrintLine("WAV META MISSING fmt: %s", entry.name);
+            WaveX::Log::PrintLine("WAV META MISSING fmt: %s", entry.name);
         }
         if (duration_ms_out)
             *duration_ms_out = elapsed_ms;
@@ -262,12 +262,12 @@ bool ParseWavMetadata(const WaveX::Storage::FileEntry& entry,
     if (duration_ms_out)
         *duration_ms_out = parse_total_ms;
     if (WaveX::Comm::s_hw) {
-        WaveX::Comm::s_hw->PrintLine("WAV META DONE: %s total=%lu ms sr=%lu ch=%u bits=%u",
-                                     entry.name,
-                                     (unsigned long)parse_total_ms,
-                                     (unsigned long)wire_entry.sample_rate,
-                                     wire_entry.channels,
-                                     wire_entry.bits_per_sample);
+        WaveX::Log::PrintLine("WAV META DONE: %s total=%lu ms sr=%lu ch=%u bits=%u",
+                              entry.name,
+                              (unsigned long)parse_total_ms,
+                              (unsigned long)wire_entry.sample_rate,
+                              wire_entry.channels,
+                              wire_entry.bits_per_sample);
     }
     return true;
 }
@@ -327,9 +327,9 @@ void ProcessBrowseRequest(const char* path, size_t start_index, uint8_t max_entr
         uint32_t listdir_duration_ms = listdir_end_ms - listdir_start_ms;
 
         if (WaveX::Comm::s_hw) {
-            WaveX::Comm::s_hw->PrintLine("DAISY: ListDir completed: t=%lu ms, duration=%lu ms",
-                                         (unsigned long)listdir_end_ms,
-                                         (unsigned long)listdir_duration_ms);
+            WaveX::Log::PrintLine("DAISY: ListDir completed: t=%lu ms, duration=%lu ms",
+                                  (unsigned long)listdir_end_ms,
+                                  (unsigned long)listdir_duration_ms);
         }
 
         if (!success) {
@@ -353,7 +353,7 @@ void ProcessBrowseRequest(const char* path, size_t start_index, uint8_t max_entr
         }
 
         if (WaveX::Comm::s_hw) {
-            WaveX::Comm::s_hw->PrintLine(
+            WaveX::Log::PrintLine(
                 "DAISY: Cached directory state: %u entries from '%s' (sending %u)",
                 (uint32_t)s_current_file_count,
                 path,
@@ -431,8 +431,7 @@ void ProcessSamplePlayRequest(const char* file_path) {
     using namespace WaveX::AudioEngine;
 
     if (WaveX::Comm::s_hw) {
-        WaveX::Comm::s_hw->PrintLine("DAISY: ProcessSamplePlayRequest called with path: '%s'",
-                                     file_path);
+        WaveX::Log::PrintLine("DAISY: ProcessSamplePlayRequest called with path: '%s'", file_path);
     }
 
     // Send immediate ACK to keep SPI responsive while we start playback
@@ -448,8 +447,7 @@ void ProcessSamplePlayRequest(const char* file_path) {
     // Start playback using the existing WAV playback system
     if (!OpenWav(file_path)) {
         if (WaveX::Comm::s_hw) {
-            WaveX::Comm::s_hw->PrintLine("DAISY: Failed to open WAV file for playback: '%s'",
-                                         file_path);
+            WaveX::Log::PrintLine("DAISY: Failed to open WAV file for playback: '%s'", file_path);
         }
 
         // Send error response
@@ -463,8 +461,7 @@ void ProcessSamplePlayRequest(const char* file_path) {
     }
 
     if (WaveX::Comm::s_hw) {
-        WaveX::Comm::s_hw->PrintLine("DAISY: Sample playback started successfully for: '%s'",
-                                     file_path);
+        WaveX::Log::PrintLine("DAISY: Sample playback started successfully for: '%s'", file_path);
     }
 }
 
@@ -474,8 +471,7 @@ void ProcessSampleStopRequest(uint8_t slot) {
     using namespace WaveX::AudioEngine;
 
     if (WaveX::Comm::s_hw) {
-        WaveX::Comm::s_hw->PrintLine("DAISY: ProcessSampleStopRequest called (slot=%u)",
-                                     (unsigned)slot);
+        WaveX::Log::PrintLine("DAISY: ProcessSampleStopRequest called (slot=%u)", (unsigned)slot);
     }
 
     // Stop current playback. Call CloseWav() to stop any WAV playback,
@@ -485,7 +481,7 @@ void ProcessSampleStopRequest(uint8_t slot) {
     // Debug: report playback state after attempting stop
     if (WaveX::Comm::s_hw) {
         bool wav_playing = WaveX::AudioEngine::IsWavPlaying();
-        WaveX::Comm::s_hw->PrintLine("DAISY: After stop - IsWavPlaying=%d", wav_playing ? 1 : 0);
+        WaveX::Log::PrintLine("DAISY: After stop - IsWavPlaying=%d", wav_playing ? 1 : 0);
     }
 
     // Send sample stop response
@@ -498,7 +494,7 @@ void ProcessSampleStopRequest(uint8_t slot) {
     WaveX::Comm::UartLinkSend(WaveX::Protocol::MSG_SAMPLE_STOP_RESP, &stop_resp, sizeof(stop_resp));
 
     if (WaveX::Comm::s_hw) {
-        WaveX::Comm::s_hw->PrintLine("DAISY: Sample stop response sent");
+        WaveX::Log::PrintLine("DAISY: Sample stop response sent");
     }
 }
 
@@ -508,23 +504,23 @@ void ProcessSamplePlayIndexRequest(uint32_t file_index) {
     using namespace WaveX::Protocol;
 
     if (WaveX::Comm::s_hw) {
-        WaveX::Comm::s_hw->PrintLine("DAISY: ProcessSamplePlayIndexRequest called with index: %lu",
-                                     (unsigned long)file_index);
+        WaveX::Log::PrintLine("DAISY: ProcessSamplePlayIndexRequest called with index: %lu",
+                              (unsigned long)file_index);
     }
 
     // Get file path for index
     char file_path[200] = {0};
     if (FileSystem::GetFilePathByIndex(file_index, file_path, sizeof(file_path))) {
         if (WaveX::Comm::s_hw) {
-            WaveX::Comm::s_hw->PrintLine("DAISY: Playing sample at path: '%s'", file_path);
+            WaveX::Log::PrintLine("DAISY: Playing sample at path: '%s'", file_path);
         }
 
         // Call the regular play request function
         ProcessSamplePlayRequest(file_path);
     } else {
         if (WaveX::Comm::s_hw) {
-            WaveX::Comm::s_hw->PrintLine("DAISY: Failed to get file path for index %lu",
-                                         (unsigned long)file_index);
+            WaveX::Log::PrintLine("DAISY: Failed to get file path for index %lu",
+                                  (unsigned long)file_index);
         }
     }
 }
@@ -535,8 +531,8 @@ void ProcessSampleGetPathRequest(uint32_t file_index) {
     using namespace WaveX::Protocol;
 
     if (WaveX::Comm::s_hw) {
-        WaveX::Comm::s_hw->PrintLine("DAISY: ProcessSampleGetPathRequest called with index: %lu",
-                                     (unsigned long)file_index);
+        WaveX::Log::PrintLine("DAISY: ProcessSampleGetPathRequest called with index: %lu",
+                              (unsigned long)file_index);
     }
 
     // Get file path for index
@@ -551,14 +547,14 @@ void ProcessSampleGetPathRequest(uint32_t file_index) {
             WaveX::Protocol::MSG_SAMPLE_GET_PATH_RESP, &response, sizeof(response));
 
         if (WaveX::Comm::s_hw) {
-            WaveX::Comm::s_hw->PrintLine("DAISY: Sent file path response: index=%lu path='%s'",
-                                         (unsigned long)file_index,
-                                         file_path);
+            WaveX::Log::PrintLine("DAISY: Sent file path response: index=%lu path='%s'",
+                                  (unsigned long)file_index,
+                                  file_path);
         }
     } else {
         if (WaveX::Comm::s_hw) {
-            WaveX::Comm::s_hw->PrintLine("DAISY: Failed to get file path for index %lu",
-                                         (unsigned long)file_index);
+            WaveX::Log::PrintLine("DAISY: Failed to get file path for index %lu",
+                                  (unsigned long)file_index);
         }
     }
 }

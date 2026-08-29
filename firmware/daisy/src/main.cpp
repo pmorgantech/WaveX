@@ -1,6 +1,7 @@
 #include "../shared/config/pin_config.h"
 #include "comm/daisy_spi_link.h"
 #include "comm/daisy_uart_link.h"
+#include "comm/log_ring.h"
 #include "config/link_config.h"
 #include "daisy_seed.h"
 #include "daisysp.h"
@@ -88,7 +89,7 @@ void InitDSP(bool sdram_available) {
 
 static void PrintProfilingStats(DaisySeed& hw) {
 #if WAVEX_PROFILING_ENABLED
-    hw.PrintLine("\n=== Profiling Stats ===");
+    WaveX::Log::PrintLine("\n=== Profiling Stats ===");
     uint32_t zone_count = WaveX::Profiling::Profiler::GetZoneCount();
     for (uint32_t i = 0; i < zone_count; ++i) {
         const auto* zone = WaveX::Profiling::Profiler::GetZone(i);
@@ -96,15 +97,15 @@ static void PrintProfilingStats(DaisySeed& hw) {
             continue;
         float avg_us, min_us, max_us;
         zone->GetStats(avg_us, min_us, max_us);
-        hw.PrintLine("%s: calls=%u avg=%.2f max=%.2f min=%.2f last=%.2f",
-                     zone->name,
-                     zone->entry_count,
-                     avg_us,
-                     max_us,
-                     min_us,
-                     WaveX::Profiling::CyclesToMicroseconds(zone->last_cycles));
+        WaveX::Log::PrintLine("%s: calls=%u avg=%.2f max=%.2f min=%.2f last=%.2f",
+                              zone->name,
+                              zone->entry_count,
+                              avg_us,
+                              max_us,
+                              min_us,
+                              WaveX::Profiling::CyclesToMicroseconds(zone->last_cycles));
     }
-    hw.PrintLine("=======================\n");
+    WaveX::Log::PrintLine("=======================\n");
 #else
     (void)hw;
 #endif
@@ -118,6 +119,11 @@ int main(void) {
 
     // Initialize USB CDC for debugging
     hw.usb_handle.Init(UsbHandle::FS_INTERNAL);
+
+    // Route logging through the non-blocking ring before anything logs. See
+    // comm/log_ring.h: libDaisy's Logger spins unbounded on a busy CDC
+    // endpoint, which stalls the loop that refills the audio ring.
+    WaveX::Log::Init(&hw);
 
     // Start USB CDC logging. WAVEX_DAISY_WAIT_FOR_SERIAL=1 (bench builds)
     // blocks here - and on every subsequent PrintLine - until a terminal
@@ -447,6 +453,10 @@ int main(void) {
 #endif
 
         WaveX::Comm::UartLinkProcess();
+
+        // Push at most one USB packet of buffered log output. Non-blocking:
+        // a busy or unread endpoint costs nothing here.
+        WaveX::Log::Drain();
 
 // Check for audio underruns (logging handled here to avoid blocking audio callback)
 #if WAVEX_AUDIO_ENGINE_ENABLED

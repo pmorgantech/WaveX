@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "audio/audio_engine.h"
+#include "comm/log_ring.h"
 #include "config/link_config.h"
 #include "config/logging_config.h"
 #include "config/uart_debug_config.h"
@@ -61,7 +62,7 @@ void ProcessInterMcuMessage(uint8_t msg_type,
     // Per-message tracing: compile-gated (review M5 - this ran unconditionally
     // for every frame, including 20 Hz meter pushes, over blocking USB-CDC).
     if (s_hw) {
-        s_hw->PrintLine(
+        WaveX::Log::PrintLine(
             "DAISY: Processing message - msg_type=0x%02X, seq=%u, payload_size=%d bytes",
             msg_type,
             sequence_number,
@@ -73,7 +74,7 @@ void ProcessInterMcuMessage(uint8_t msg_type,
             for (size_t i = 0; i < preview; ++i) {
                 pos += snprintf(hex + pos, sizeof(hex) - pos, "%02X ", payload[i]);
             }
-            s_hw->PrintLine("DAISY: Payload bytes: %s", hex);
+            WaveX::Log::PrintLine("DAISY: Payload bytes: %s", hex);
         }
     }
 #else
@@ -173,7 +174,7 @@ void ProcessInterMcuMessage(uint8_t msg_type,
             break;
         default:
             if (s_hw) {
-                s_hw->PrintLine("DAISY: Unknown message type: 0x%02X", msg_type);
+                WaveX::Log::PrintLine("DAISY: Unknown message type: 0x%02X", msg_type);
             }
             break;
     }
@@ -227,9 +228,10 @@ static void HandleNoteOffMessage(const uint8_t* payload, size_t payload_size) {
 static void HandleSampleLoadMessage(const uint8_t* payload, size_t payload_size) {
     if (!payload || payload_size < sizeof(WaveX::Protocol::SampleLoadMessage)) {
         if (s_hw) {
-            s_hw->PrintLine("DAISY: Invalid payload size for SampleLoadMessage: %d (expected %d)",
-                            (int)payload_size,
-                            (int)sizeof(WaveX::Protocol::SampleLoadMessage));
+            WaveX::Log::PrintLine(
+                "DAISY: Invalid payload size for SampleLoadMessage: %d (expected %d)",
+                (int)payload_size,
+                (int)sizeof(WaveX::Protocol::SampleLoadMessage));
         }
         return;
     }
@@ -266,9 +268,9 @@ static void HandleSampleControlMessage(const uint8_t* payload, size_t payload_si
 static void HandlePreviewRequestMessage(const uint8_t* payload, size_t payload_size) {
     if (!payload || payload_size < sizeof(PreviewReqMessage)) {
         if (s_hw) {
-            s_hw->PrintLine("DAISY: PreviewReq invalid size %d (expected %d)",
-                            (int)payload_size,
-                            (int)sizeof(PreviewReqMessage));
+            WaveX::Log::PrintLine("DAISY: PreviewReq invalid size %d (expected %d)",
+                                  (int)payload_size,
+                                  (int)sizeof(PreviewReqMessage));
         }
         return;
     }
@@ -277,18 +279,18 @@ static void HandlePreviewRequestMessage(const uint8_t* payload, size_t payload_s
     memcpy(&req, payload, sizeof(req));
 
     if (s_hw) {
-        s_hw->PrintLine("DAISY: PreviewReq slot=%u start=%lu end=%lu decim=%u",
-                        (unsigned)req.slot,
-                        (unsigned long)req.start,
-                        (unsigned long)req.end,
-                        (unsigned)req.decim);
+        WaveX::Log::PrintLine("DAISY: PreviewReq slot=%u start=%lu end=%lu decim=%u",
+                              (unsigned)req.slot,
+                              (unsigned long)req.start,
+                              (unsigned long)req.end,
+                              (unsigned)req.decim);
     }
 
 #if WAVEX_AUDIO_ENGINE_ENABLED
     WaveX::AudioEngine::OnPreviewReq(req);
 #else
     if (s_hw) {
-        s_hw->PrintLine("DAISY: Audio engine disabled; cannot process preview req");
+        WaveX::Log::PrintLine("DAISY: Audio engine disabled; cannot process preview req");
     }
 #endif
 }
@@ -304,7 +306,8 @@ static void HandleHeartbeatMessage(const uint8_t* payload, size_t payload_size) 
 static void HandleStatusRequestMessage(const uint8_t* payload, size_t payload_size) {
     if (!payload || payload_size < sizeof(WaveX::Protocol::StatusRequestMessage)) {
         if (s_hw) {
-            s_hw->PrintLine("DAISY: Invalid status request payload (size=%d)", (int)payload_size);
+            WaveX::Log::PrintLine("DAISY: Invalid status request payload (size=%d)",
+                                  (int)payload_size);
         }
         return;
     }
@@ -331,7 +334,7 @@ static void HandleBrowseRequestMessage(const uint8_t* payload, size_t payload_si
     const char* path_ptr = reinterpret_cast<const char*>(payload + 1);
 
     if (s_hw) {
-        s_hw->PrintLine("DAISY: Parsed start_index=%d, path_ptr='%s'", start_index, path_ptr);
+        WaveX::Log::PrintLine("DAISY: Parsed start_index=%d, path_ptr='%s'", start_index, path_ptr);
     }
     UART_LOGI(
         "daisy_uart", "BROWSE_REQ: start_index=%u path='%s'", (unsigned)start_index, path_ptr);
@@ -347,7 +350,7 @@ static void HandleBrowseRequestMessage(const uint8_t* payload, size_t payload_si
     uint8_t max_entries = 20;  // Default to 20 entries
 
     if (s_hw) {
-        s_hw->PrintLine(
+        WaveX::Log::PrintLine(
             "DAISY: Calling ProcessBrowseRequest with path='%s', start_index=%d, max_entries=%d",
             path,
             start_index,
@@ -387,7 +390,7 @@ static void HandleSampleStatusMessage(const uint8_t* payload, size_t payload_siz
 static void HandleSamplePlayIndexRequestMessage(const uint8_t* payload, size_t payload_size) {
     if (!payload || payload_size < sizeof(WaveX::Protocol::SamplePlayIndexMessage)) {
         if (s_hw) {
-            s_hw->PrintLine(
+            WaveX::Log::PrintLine(
                 "DAISY: Invalid payload size for SamplePlayIndexMessage: %d (expected %d)",
                 (int)payload_size,
                 (int)sizeof(WaveX::Protocol::SamplePlayIndexMessage));
@@ -398,8 +401,8 @@ static void HandleSamplePlayIndexRequestMessage(const uint8_t* payload, size_t p
     const auto* msg = reinterpret_cast<const WaveX::Protocol::SamplePlayIndexMessage*>(payload);
 
     if (s_hw) {
-        s_hw->PrintLine("DAISY: Parsed sample play index request - index=%lu",
-                        static_cast<unsigned long>(msg->index));
+        WaveX::Log::PrintLine("DAISY: Parsed sample play index request - index=%lu",
+                              static_cast<unsigned long>(msg->index));
     }
 
     WaveX::Comm::ProcessSamplePlayIndexRequest(msg->index);

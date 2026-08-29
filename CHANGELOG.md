@@ -19,6 +19,20 @@ versioning and release process.
 - Added CodeGraph configuration for focused repository indexing and installed
   `vim-tiny` in the devcontainer image.
 
+### Fixed — Logging no longer stalls the audio ring refill
+
+- Daisy logging now goes through a non-blocking ring buffer
+  (`src/comm/log_ring.h`) drained one USB packet per main-loop pass, replacing
+  `DaisySeed::PrintLine`. libDaisy's `Logger` latches into blocking mode after
+  two successful packets (`hid/logger.cpp:73`) and then spins unbounded —
+  `while(false == impl_.Transmit(...)) {}`, no timeout — waiting for the USB
+  host to drain the CDC endpoint. This happens even with `StartLog(false)`.
+  Since the main loop is the only thing refilling the audio ring, every log
+  line was an unbounded stall bounded only by how fast the host read the port:
+  the root cause behind the audition underruns, and why each reduction in log
+  volume improved audio. Overflow now drops the oldest bytes and counts them
+  (`WaveX::Log::DroppedBytes()`) instead of ever blocking audio.
+
 ### Added — Resampler test coverage
 
 - Extracted the streaming linear resampler from `audio_engine.cpp` into
