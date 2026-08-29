@@ -5,6 +5,8 @@
 
 #include <daisy.h>  // For CpuLoadMeter
 
+extern "C" SD_HandleTypeDef hsd1;  // libDaisy per/sdmmc.cpp
+
 #include "../memory.h"
 #include "../sdram_layout.h"
 #include "arm_math.h"  // For CMSIS-DSP helpers
@@ -519,6 +521,12 @@ static uint32_t s_io_count = 0;
 static uint32_t s_io_errors = 0;
 static uint32_t s_io_last_err = 0;
 static uint32_t s_io_recoveries = 0;
+// Retries are held off after a failure. Without this the pump spins as fast
+// as the loop runs - measured at ~40,000 failed reads per second, each
+// returning in ~8 us - which burns the main loop and floods the log to no
+// purpose, since a poisoned FIL cannot succeed until it is reopened.
+static uint32_t s_io_backoff_until_ms = 0;
+constexpr uint32_t kIoBackoffMs = 20;
 // A couple of failures can be a transient card hiccup; a run of them means
 // the FIL is poisoned and only a reopen will clear it. Recoveries are capped
 // so a genuinely dead card ends playback instead of reopening forever.
@@ -822,6 +830,16 @@ static bool refill_sd_buffer() {
     if (!s_wav.open)
         return false;
 
+    // Hold off after a failure rather than hammering a handle that cannot
+    // succeed. 20 ms is well inside the ring's ~42 ms of headroom, so a
+    // transient error costs no audio if the next attempt works.
+    if (s_io_backoff_until_ms != 0) {
+        if (System::GetNow() < s_io_backoff_until_ms) {
+            return false;
+        }
+        s_io_backoff_until_ms = 0;
+    }
+
     PROFILE_SCOPE(sd_refill);
 
     uint32_t bytes_per_sample = (s_wav.bits_per_sample == 24) ? 3u : 2u;
@@ -887,14 +905,20 @@ static bool refill_sd_buffer() {
             // cannot log per occurrence either.
             s_io_errors++;
             s_io_last_err = static_cast<uint32_t>(fr);
+            s_io_backoff_until_ms = System::GetNow() + kIoBackoffMs;
             static uint32_t last_err_log_ms = 0;
             const uint32_t now = System::GetNow();
             if (last_err_log_ms == 0 || (now - last_err_log_ms) >= 1000u) {
                 last_err_log_ms = now;
+                // hal_err is the SDMMC layer's own reason for the failure;
+                // FR_DISK_ERR (1) only says "disk_read said no".
                 WaveX::Log::PrintLine(
-                    "WAV read FAILED: fr=%d br=%u (%lu errors, %lu bytes left) - audio will stop",
+                    "WAV read FAILED: fr=%d br=%u hal_err=0x%08lX state=%u (%lu errors, %lu "
+                    "bytes left)",
                     (int)fr,
                     (unsigned)br,
+                    (unsigned long)HAL_SD_GetError(&hsd1),
+                    (unsigned)HAL_SD_GetCardState(&hsd1),
                     (unsigned long)s_io_errors,
                     (unsigned long)s_wav.bytes_remaining);
             }
@@ -1887,6 +1911,7 @@ bool OpenWav(const char* path) {
 
     s_io_errors = 0;
     s_io_recoveries = 0;
+    s_io_backoff_until_ms = 0;
     s_wav.open = true;
     std::strncpy(s_wav.path, path, sizeof(s_wav.path) - 1);
     s_wav.path[sizeof(s_wav.path) - 1] = '\0';

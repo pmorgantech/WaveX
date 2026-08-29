@@ -31,6 +31,17 @@ versioning and release process.
   recoveries per file so a genuinely dead card ends playback cleanly instead
   of reopening forever.
 
+### Fixed — Failed SD reads no longer spin the main loop
+
+- After a read failure the pump retried as fast as the loop ran — measured at
+  ~40,000 failed reads per second, each returning in ~8 µs — burning the main
+  loop and flooding the log, when a poisoned `FIL` cannot succeed until it is
+  reopened. Retries now back off 20 ms, well inside the ring's ~42 ms of
+  headroom, so a transient error costs no audio if the next attempt succeeds.
+- The failure line now reports `HAL_SD_GetError()` and the card state
+  alongside the FatFS code, since `FR_DISK_ERR` only means "disk_read said
+  no" and says nothing about why the SDMMC layer refused.
+
 ### Fixed — Silent SD read failures
 
 - A failing `f_read` in the streaming refill was invisible: the error log sat
