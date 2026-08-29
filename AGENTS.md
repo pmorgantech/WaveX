@@ -8,8 +8,10 @@ WaveX is a dual-MCU sampler/groovebox: **ESP32-P4** frontend (ESP-IDF 5.5, LVGL 
 2. **`docs/architecture.md`** — single source of truth for system design: product vision, hardware split, real-time/DMA/cache rules (§7), memory layout, open decisions. When code and this doc disagree, code wins for _as-built_ sections, the doc wins for _target design_ sections (each section is labeled).
 3. **`docs/features/*.md`** — as-built or target design for specific subsystems (inter-MCU protocol, sequencer, analog voice board, offline sample editing).
 4. **`docs/ui-architecture.md`**, **`docs/ui-system-implementation-guide.md`**, **`docs/testing_guide.md`**, **`docs/performance_monitoring.md`** — working guides for UI, testing, and profiling.
-5. **Never read or implement from `docs/archive/`.** Those documents are superseded, contain mutually contradictory hardware claims, or describe tests that were never run. They exist for historical context only.
-6. **Pin assignments and hardware feature flags are never in prose docs.** They live exclusively in `firmware/shared/config/pin_config.h` and `firmware/shared/config/hardware_config.h`. Do not trust pin tables in commit history or archived docs.
+5. **`docs/daisy_rt_audio_coding_guide.md`** — required guidance for Daisy Seed / STM32H750 / libDaisy / CMSIS-DSP real-time audio code. Load the `daisy` project skill as well whenever designing, implementing, or reviewing code for that platform.
+6. **`docs/esp32p4_coding_guide.md`** — required guidance for ESP32-P4 / ESP-IDF embedded code. Load the `esp32p4` project skill as well whenever designing, implementing, or reviewing code for that platform.
+7. **Never read or implement from `docs/archive/`.** Those documents are superseded, contain mutually contradictory hardware claims, or describe tests that were never run. They exist for historical context only.
+8. **Pin assignments and hardware feature flags are never in prose docs.** They live exclusively in `firmware/shared/config/pin_config.h` and `firmware/shared/config/hardware_config.h`. Do not trust pin tables in commit history or archived docs.
 
 If a task isn't clearly covered by the current roadmap phase or architecture doc, say so and propose where it fits rather than improvising a design.
 
@@ -64,7 +66,7 @@ that depends on an external crate or protocol.
 
 ## Versioning and changelog
 
-- NEVER place AI metadata into git commit messages: "Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>" 
+- NEVER place AI metadata into git commit messages: "Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 - **Frontend (ESP32) and backend (Daisy) firmware share one version number**, defined in the single root **[`VERSION`](VERSION)** file (plain `MAJOR.MINOR.PATCH`, no prefix/suffix — required by CMake's `project(... VERSION ...)` parser). Both builds read it:
   - `firmware/daisy/CMakeLists.txt` reads `VERSION` into `project(wavex-daisy VERSION ...)`.
   - `firmware/esp32/CMakeLists.txt` reads `VERSION` into `PROJECT_VER` before the ESP-IDF `project()` call, which embeds it in `esp_app_desc_t`.
