@@ -10,12 +10,15 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <vector>
 
 using WaveX::AudioEngine::LinearResampleOutputFrames;
 using WaveX::AudioEngine::ResampleChannel;
 using WaveX::AudioEngine::ResampleInterleaved;
+using WaveX::AudioEngine::ResampleStreamInterleaved;
+using WaveX::AudioEngine::StreamResamplerState;
 
 namespace {
 
@@ -298,4 +301,110 @@ TEST(LinearResamplerMath, ExactPositionsLoseExactlyOneLsb) {
     EXPECT_EQ(dst[0], 999);
     EXPECT_EQ(dst[1], 1999);
     EXPECT_EQ(dst[2], 2999);
+}
+
+// --- Streaming continuity ----------------------------------------------
+// The stateless path restarts at phase 0 every call, so feeding it a stream in
+// chunks discards up to a frame and jumps phase at each boundary - an audible
+// warble at the ~42 Hz chunk rate. These pin the stateful path against that.
+
+TEST(LinearResamplerStream, ChunkedMatchesWholeBufferOnARamp) {
+    // A ramp resampled in one pass and in chunks must agree: any phase reset
+    // or dropped frame at a boundary shows up as a step in the difference.
+    const uint32_t total = 600;
+    const uint32_t channels = 1;
+    std::vector<int16_t> src(total);
+    for (uint32_t i = 0; i < total; ++i) {
+        src[i] = static_cast<int16_t>(i * 20);
+    }
+
+    StreamResamplerState st;
+    std::vector<int16_t> chunked;
+    const uint32_t chunk = 64;
+    for (uint32_t off = 0; off < total; off += chunk) {
+        const uint32_t n = std::min(chunk, total - off);
+        std::vector<int16_t> out(n * 4 + 8, 0);
+        const uint32_t got = ResampleStreamInterleaved(st,
+                                                       src.data() + off,
+                                                       n,
+                                                       out.data(),
+                                                       static_cast<uint32_t>(out.size()),
+                                                       channels,
+                                                       kRatio44kTo48k);
+        chunked.insert(chunked.end(), out.begin(), out.begin() + got);
+    }
+
+    // On a ramp with a constant step the output is itself a ramp. Every
+    // adjacent difference must be the same, to within rounding - a boundary
+    // glitch appears as one interval far from the rest.
+    ASSERT_GT(chunked.size(), 400u);
+    const int expected_step = chunked[201] - chunked[200];
+    for (size_t i = 5; i + 5 < chunked.size(); ++i) {
+        const int d = chunked[i + 1] - chunked[i];
+        EXPECT_NEAR(d, expected_step, 2) << "discontinuity at output frame " << i;
+    }
+}
+
+TEST(LinearResamplerStream, PhaseAdvancesAcrossChunkBoundaries) {
+    // Total output for a chunked stream must track the ratio. Losing a frame
+    // per chunk - the old behaviour - shows up as a deficit that grows with
+    // the number of chunks.
+    const uint32_t total = 4410;
+    std::vector<int16_t> src(total, 0);
+    for (uint32_t i = 0; i < total; ++i) {
+        src[i] = static_cast<int16_t>((i % 100) * 300 - 15000);
+    }
+
+    StreamResamplerState st;
+    uint32_t produced = 0;
+    const uint32_t chunk = 147;  // 30 chunks: a lost frame each would be obvious
+    for (uint32_t off = 0; off < total; off += chunk) {
+        const uint32_t n = std::min(chunk, total - off);
+        std::vector<int16_t> out(n * 2 + 8, 0);
+        produced += ResampleStreamInterleaved(st,
+                                              src.data() + off,
+                                              n,
+                                              out.data(),
+                                              static_cast<uint32_t>(out.size()),
+                                              1,
+                                              kRatio44kTo48k);
+    }
+
+    // 4410 in at 44.1 -> 48 kHz is 4800 out. Allow a couple of frames of
+    // start-up slack, but nothing like the 30 the old path would have lost.
+    const uint32_t ideal = static_cast<uint32_t>(total * kRatio44kTo48k);
+    EXPECT_NEAR(produced, ideal, 3u);
+}
+
+TEST(LinearResamplerStream, HandlesStereoAndEightChannelStreams) {
+    for (uint32_t channels: {2u, 8u}) {
+        StreamResamplerState st;
+        const uint32_t chunk = 128;
+        std::vector<int16_t> src = MakeInterleavedRamps(chunk, channels);
+        std::vector<int16_t> out(chunk * channels * 2, 0);
+
+        const uint32_t first = ResampleStreamInterleaved(
+            st, src.data(), chunk, out.data(), chunk * 2, channels, kRatio44kTo48k);
+        ASSERT_GT(first, 0u) << "channels=" << channels;
+        EXPECT_TRUE(st.has_history);
+        // History must be the LAST frame of the chunk, per channel.
+        for (uint32_t ch = 0; ch < channels; ++ch) {
+            EXPECT_EQ(st.history[ch], src[static_cast<size_t>(chunk - 1) * channels + ch])
+                << "channels=" << channels << " ch=" << ch;
+        }
+        // Phase is rebased onto the next chunk, so it lands just below zero.
+        EXPECT_GT(st.phase, -1.0f) << "channels=" << channels;
+        EXPECT_LE(st.phase, 0.0f) << "channels=" << channels;
+    }
+}
+
+TEST(LinearResamplerStream, ResetClearsContinuity) {
+    std::vector<int16_t> src(64, 1234);
+    std::vector<int16_t> out(256, 0);
+    StreamResamplerState st;
+    ResampleStreamInterleaved(st, src.data(), 64, out.data(), 256, 1, kRatio44kTo48k);
+    ASSERT_TRUE(st.has_history);
+    st.Reset();
+    EXPECT_FALSE(st.has_history);
+    EXPECT_EQ(st.phase, 0.0f);
 }

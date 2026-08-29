@@ -122,5 +122,88 @@ inline uint32_t ResampleInterleaved(
     return output_frames;
 }
 
+// ---------------------------------------------------------------------------
+// Streaming resampler
+//
+// The stateless calls above restart at phase 0 and stop one frame short of the
+// end of their input, which is correct for a self-contained buffer and WRONG
+// for successive chunks of one continuous stream: each chunk boundary discards
+// up to a frame of audio and jumps the fractional phase. At the ~1050-frame
+// chunks the WAV pump uses, that is a discontinuity every ~24 ms - an audible
+// ~42 Hz warble once dropouts stop masking it.
+//
+// This carries the phase across calls, and one history frame so the first
+// output of a chunk can interpolate against the last input of the previous
+// one. The whole chunk is consumed every call; continuity lives in the state,
+// not in leftover input.
+// ---------------------------------------------------------------------------
+
+constexpr uint32_t kMaxResamplerChannels = 8;
+
+struct StreamResamplerState {
+    // Position for the next chunk, relative to that chunk's frame 0. Normally
+    // negative (between the history frame and the next chunk's first frame);
+    // may be positive when downsampling far enough to skip frames.
+    float phase = 0.0f;
+    bool has_history = false;
+    int16_t history[kMaxResamplerChannels] = {};
+
+    void Reset() {
+        phase = 0.0f;
+        has_history = false;
+    }
+};
+
+// Resamples one chunk of a continuous stream. Consumes ALL src_frames; returns
+// frames written, capped by dst_capacity_frames.
+inline uint32_t ResampleStreamInterleaved(StreamResamplerState& st,
+                                          const int16_t* src,
+                                          uint32_t src_frames,
+                                          int16_t* dst,
+                                          uint32_t dst_capacity_frames,
+                                          uint32_t channels,
+                                          float ratio) {
+    if (src == nullptr || dst == nullptr || channels == 0 || channels > kMaxResamplerChannels ||
+        ratio <= 0.0f || src_frames == 0) {
+        return 0;
+    }
+
+    const float step = 1.0f / ratio;
+    // A chunk with no history has nothing to interpolate its first output
+    // against, so it starts at frame 0 like the stateless path.
+    float position = st.has_history ? st.phase : 0.0f;
+    const float limit = static_cast<float>(src_frames) - 1.0f;
+
+    uint32_t out = 0;
+    while (out < dst_capacity_frames && position < limit) {
+        // Strictly less than limit, so index+1 is always within the chunk.
+        const int64_t fixed = static_cast<int64_t>(position * 1048576.0);
+        const int64_t index = fixed >> 20;  // arithmetic shift floors negatives
+        const int64_t fract = fixed & 0xFFFFF;
+
+        for (uint32_t ch = 0; ch < channels; ++ch) {
+            // index < 0 only ever means -1: the sample carried over from the
+            // previous chunk.
+            const int16_t y0 =
+                (index < 0) ? st.history[ch] : src[static_cast<size_t>(index) * channels + ch];
+            const int16_t y1 = src[static_cast<size_t>(index + 1) * channels + ch];
+            int64_t y = static_cast<int64_t>(y0) * (0xFFFFF - fract);
+            y += static_cast<int64_t>(y1) * fract;
+            dst[static_cast<size_t>(out) * channels + ch] = static_cast<int16_t>(y >> 20);
+        }
+        ++out;
+        position += step;
+    }
+
+    // Rebase the phase onto the next chunk and keep its last frame, so the
+    // boundary is interpolated across rather than jumped over.
+    st.phase = position - static_cast<float>(src_frames);
+    for (uint32_t ch = 0; ch < channels; ++ch) {
+        st.history[ch] = src[static_cast<size_t>(src_frames - 1) * channels + ch];
+    }
+    st.has_history = true;
+    return out;
+}
+
 }  // namespace AudioEngine
 }  // namespace WaveX

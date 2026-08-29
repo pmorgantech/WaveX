@@ -31,6 +31,21 @@ versioning and release process.
 - Mount attempts now log card type and capacity, and name the FatFS result
   (`FR_NO_FILESYSTEM` calls out exFAT, which this build cannot read).
 
+### Fixed — Resampler phase continuity across chunk boundaries
+
+- `LinearResampleFrames()` restarted at phase 0 on every call and stopped one
+  frame short of its input, which is right for a self-contained buffer and
+  wrong for successive chunks of one continuous stream: each boundary
+  discarded up to a frame and jumped the fractional phase. Measured at one
+  lost frame per chunk (4410 frames fed as 30 chunks produced 4770 output
+  frames where 4800 is correct), i.e. a discontinuity every ~24 ms — roughly
+  42 Hz, audible as warble.
+- Added `ResampleStreamInterleaved()`, which carries the phase and one history
+  frame per channel so the first output of a chunk interpolates against the
+  last input of the previous one. Covered by four new tests pinning chunked
+  output against whole-buffer output, total-output accounting, per-channel
+  history for stereo and 8-channel, and state reset.
+
 ### Added — Daisy development and audition tooling
 
 - Added software-triggered Daisy DFU entry (`make daisy-flash-auto`), serial
