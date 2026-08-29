@@ -134,3 +134,45 @@ this is the first suspect (verify by tapping all four corners). Do not fix
 blind: change it with the panel attached and corner-tap before/after, since
 the correct values depend on how the driver interacts with the panel's own
 configuration.
+
+---
+
+## ITCM placement for the per-voice render loop
+
+**Want:** `VoiceManager::Render()` in ITCM (`WAVEX_ITCM_CODE`). It is the
+hottest code in the system — an inner loop over 8 voices × every frame of
+every block, running in the audio callback — and its *data* is already in DTCM
+(`s_voice_manager WAVEX_DTCM_DATA`). Instruction fetch is the half that is
+still going through the cache from QSPI-backed flash, where a miss is
+expensive and, worse, variable.
+
+**Current state:** the mechanism exists and is proven — `memory_sections.h`
+defines `WAVEX_ITCM_CODE`, `wavex_memory_sections.ld` copies the section from
+its QSPI load image, `main.cpp` calls `InitItcm()` before IRQs are enabled, and
+`uart4_dma_transport.cpp`'s `ProcessRxPosition` already uses it. ITCMRAM is
+528 B of 64 KB — essentially empty.
+
+**Why it is not urgent — and what would have to be solved first:**
+
+1. **No number justifies it.** `daisy_rt_audio_coding_guide.md` and AGENTS.md
+   both require a DWT cycle-counter measurement before claiming a placement
+   win. Nobody has measured the callback with and without, so moving it now
+   would be a guess that happens to be plausible. This is the same standard
+   the existing DTCM placements are held to, and they have not met it either
+   (see roadmap § Outstanding hardware verification).
+2. **The attribute does not fit where the code lives.** `Render()` is an inline
+   member function of `voice_manager.hpp`, which is deliberately HAL-free and
+   compiled on the host for `voice_manager_test`. `WAVEX_ITCM_CODE` is a GCC
+   section attribute naming a section that exists only in the Daisy linker
+   script, so applying it there needs per-target guarding, and a section
+   attribute on an inline function in a header is fragile besides (it applies
+   per translation unit, and the linker is free to keep only one copy).
+   Solving this probably means moving the hot loop out of line into a `.cpp`
+   compiled only for the target — which costs the host-testability that makes
+   this class easy to work on.
+
+**When to revisit:** when there is a DWT profile of the audio callback. If the
+callback has comfortable headroom, leave it alone — the host-testability is
+worth more than an unmeasured win. If it is tight, item 2 becomes worth paying
+for, and it should be measured before *and* after the restructure so the
+out-of-lining and the placement are not credited to each other.
