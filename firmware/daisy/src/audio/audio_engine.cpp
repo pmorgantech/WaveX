@@ -8,6 +8,7 @@
 extern "C" SD_HandleTypeDef hsd1;  // libDaisy per/sdmmc.cpp
 
 #include "../memory.h"
+#include "../memory_sections.h"  // For WAVEX_DTCM_DATA
 #include "../sdram_layout.h"
 #include "arm_math.h"  // For CMSIS-DSP helpers
 #include "audio_engine.h"
@@ -112,7 +113,11 @@ static OutputSinkType s_output_sink;
 // context) resolve notes to loaded samples and hand events to Callback()
 // (audio IRQ context) through the SPSC queue below; Callback() drains the
 // queue and mixes Render() output on top of the streaming path.
-static WaveX::AudioEngine::VoiceManager s_voice_manager;
+// DTCM: read/written every sample for every active voice from Callback()
+// itself, CPU-only (never DMA'd), and small (~1 KB for 8 voices) - the
+// canonical "hot DSP state" case for the Cortex-M7 tightly-coupled RAM
+// (docs/daisy_rt_audio_coding_guide.md §2/§8).
+static WaveX::AudioEngine::VoiceManager s_voice_manager WAVEX_DTCM_DATA;
 
 // Sequencer transport (roadmap Phase 2). Owns the step scheduler + MIDI
 // tempo follower. Edits/transport/clock arrive from main-loop message
