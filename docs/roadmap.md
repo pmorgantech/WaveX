@@ -196,6 +196,8 @@ Decisions this raises, roughly in order:
 
 The host-testable core is built: `pattern.hpp`, `sequencer_scheduler.hpp`, `tempo_follower.hpp`, `sequencer_transport.hpp` (all HAL-free, ~60 host tests), and the 0x50–0x57 protocol messages with round-trip and dispatch tests.
 
+> **Active work order (2026-08-29): [`features/digital-voice-audition.md`](features/digital-voice-audition.md).** The consolidated, ordered path to a playable and sequenceable **all-digital** voice — items 1, 3 and 5 below, plus only the slice of Phase 2.5 needed to hear anything. It exists because this work was spread across five documents interleaved with work the goal does not need. Its load-bearing finding, verified against the source: **the only live-editable parameter path in the engine today is the Stage A analog one** — `OnControlChange` routes `PARAM_FILTER_CUTOFF`/`RESONANCE`/`ENVELOPE_*` to `s_para_params`/`s_para_env` and nowhere else, while the digital per-voice filter and envelope are written once at `Trigger()` time (`voice_manager.hpp`: `SetCutoff` appears only there). On an all-digital path a filter or envelope knob therefore does nothing today. That is missing engine plumbing, not a UI gap, and it is that document's first stage.
+
 Open:
 
 1. **The audible half**: drive `SequencerTransport::Tick()` from the audio callback and turn `TriggerEvent`s into voice triggers. Needs the double-buffered edit-between-steps discipline (`sequencer.md` §4), a track→sample kit mapping (instrument model, Phase 2.5), and the intra-block sample-offset trigger path. Requires hardware audition to verify.
