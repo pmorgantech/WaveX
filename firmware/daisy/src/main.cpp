@@ -690,6 +690,31 @@ int main(void) {
 
 #endif  // WAVEX_DAISY_STREAM_DEBUG
 
+#if WAVEX_DAISY_UART_PERF_DEBUG
+                // total_us against the interval says what fraction of the
+                // main loop the link consumed; max_us says whether any single
+                // pass was long enough to matter to the ring refill.
+                WaveX::Comm::UartPerfSample uart_perf;
+                WaveX::Comm::TakeUartPerf(uart_perf);
+                WAVEX_LOG_DAISY(INTER_MCU_LINK,
+                                "UART PERF: %lu calls, %lu us total (%lu.%02lu%% of loop) "
+                                "avg=%lu us max=%lu us | rx %lu B/%lu fr, tx %lu B/%lu fr | "
+                                "err=%lu seqdrop=%lu ovf=%lu",
+                                (unsigned long)uart_perf.calls,
+                                (unsigned long)uart_perf.total_us,
+                                (unsigned long)(uart_perf.total_us / (dt_ms * 10u)),
+                                (unsigned long)((uart_perf.total_us * 100u / (dt_ms * 10u)) % 100u),
+                                (unsigned long)uart_perf.avg_us,
+                                (unsigned long)uart_perf.max_us,
+                                (unsigned long)uart_perf.rx_bytes,
+                                (unsigned long)uart_perf.rx_frames,
+                                (unsigned long)uart_perf.tx_bytes,
+                                (unsigned long)uart_perf.tx_frames,
+                                (unsigned long)uart_perf.errors,
+                                (unsigned long)uart_perf.seq_drops,
+                                (unsigned long)uart_perf.queue_overflows);
+#endif
+
                 WaveX::Comm::UartLinkLogStats();
             }  // !stats_throttled
 #else

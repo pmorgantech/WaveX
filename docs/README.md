@@ -7,6 +7,7 @@ Start here. Documents are grouped by whether they describe the system **as it sh
 | Document | Contents |
 |---|---|
 | [architecture.md](architecture.md) | **Single source of truth** for system design: product vision, hardware, firmware structure, real-time/DMA/timing rules, memory layout, open decisions |
+| [backlog.md](backlog.md) | Unscheduled work, each entry recording why it is not urgent so the reasoning can be re-checked later |
 | [roadmap.md](roadmap.md) | Implementation order (Phases 0–5), library upgrade recommendations (libDaisy, CMSIS-DSP, ESP-IDF) with risk callouts, per-phase test gates |
 | [features/inter-mcu-protocol.md](features/inter-mcu-protocol.md) | As-built SPI wire specification (mirrors `firmware/shared/spi_protocol/protocol.h`) |
 | [features/sequencer.md](features/sequencer.md) | Groovebox sequencer engine design (Phase 2) |

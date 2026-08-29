@@ -74,6 +74,19 @@
 #define WAVEX_LOG_USB_MIDI WAVEX_DEBUG_LOGGING_ENABLED
 #endif
 
+/**
+ * @def WAVEX_DAISY_UART_PERF_DEBUG
+ * @brief Per-interval UART link cost, throughput and error deltas.
+ *
+ * Answers the question the existing counters cannot: how much main-loop time
+ * the inter-MCU link costs, and therefore whether it is competing with the
+ * audio ring refill. Off by default - the report is one line per interval,
+ * but the measurement itself is on the hot path.
+ */
+#ifndef WAVEX_DAISY_UART_PERF_DEBUG
+#define WAVEX_DAISY_UART_PERF_DEBUG 0
+#endif
+
 // Daisy SPI Outbound Packet Logging (Daisy only)
 #ifndef WAVEX_LOG_DAISY_OUTBOUND_SPI
 #define WAVEX_LOG_DAISY_OUTBOUND_SPI 0
@@ -175,10 +188,7 @@ void wavex_daisy_log(const char* format, ...);
 void wavex_daisy_log_raw(const char* format, ...);
 
 // Helper wrappers to keep per-component log gating while using the raw logging helpers directly.
-inline void wavex_daisy_log_if(bool enabled,
-                               const char* component,
-                               const char* format,
-                               ...) {
+inline void wavex_daisy_log_if(bool enabled, const char* component, const char* format, ...) {
     if (!enabled) {
         return;
     }
@@ -206,20 +216,18 @@ inline void wavex_daisy_log_raw_if(bool enabled, const char* format, ...) {
     wavex_daisy_log_raw("%s", buf);
 }
 
-#define WAVEX_LOG_DAISY(component, format, ...)        \
-    do {                                              \
-        if (WAVEX_LOG_##component) {                  \
-            wavex_daisy_log("[WAVEX-%s] " format,     \
-                            #component,               \
-                            ##__VA_ARGS__);           \
-        }                                             \
+#define WAVEX_LOG_DAISY(component, format, ...)                               \
+    do {                                                                      \
+        if (WAVEX_LOG_##component) {                                          \
+            wavex_daisy_log("[WAVEX-%s] " format, #component, ##__VA_ARGS__); \
+        }                                                                     \
     } while (0)
 
-#define WAVEX_LOG_DAISY_RAW(component, format, ...) \
-    do {                                           \
-        if (WAVEX_LOG_##component) {               \
+#define WAVEX_LOG_DAISY_RAW(component, format, ...)     \
+    do {                                                \
+        if (WAVEX_LOG_##component) {                    \
             wavex_daisy_log_raw(format, ##__VA_ARGS__); \
-        }                                          \
+        }                                               \
     } while (0)
 #endif
 

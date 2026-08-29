@@ -45,7 +45,26 @@ struct uart_stats_t {
     uint32_t tx_errors = 0;
     uint32_t seq_drops = 0;    // duplicate/out-of-order frames dropped by SequenceTracker
     uint32_t seq_resyncs = 0;  // peer-reboot resyncs accepted by SequenceTracker
+    uint32_t rx_bytes = 0;     // payload bytes accepted from the DMA buffer
+    uint32_t tx_bytes = 0;     // frame bytes handed to TX DMA
 };
+
+#if WAVEX_DAISY_UART_PERF_DEBUG
+// Per-interval link cost. Ticks rather than microseconds: GetTick() is the raw
+// counter, so a delta stays exact across its wrap, and one conversion happens
+// at report time instead of on every pass.
+struct uart_perf_t {
+    uint32_t calls = 0;
+    uint32_t ticks_total = 0;
+    uint32_t ticks_max = 0;
+    uint32_t rx_bytes_at_mark = 0;
+    uint32_t tx_bytes_at_mark = 0;
+    uint32_t rx_frames_at_mark = 0;
+    uint32_t tx_frames_at_mark = 0;
+    uint32_t errors_at_mark = 0;
+};
+static uart_perf_t s_perf;
+#endif
 
 alignas(32) static DMA_BUFFER_MEM_SECTION uint8_t s_uart_rx_dma[RX_BUFFER_SIZE];
 alignas(32) static DMA_BUFFER_MEM_SECTION uint8_t
@@ -106,6 +125,7 @@ void append_rx_data_isr(const uint8_t* data, size_t len) {
     // This MUST happen before the transport's next callback overwrites the DMA circular buffer.
     std::memcpy(s_rx_pending + s_rx_pending_len, data, len);
     s_rx_pending_len += len;
+    s_stats.rx_bytes += len;
 }
 
 void pull_pending_into_frame_buffer() {
@@ -213,6 +233,7 @@ void process_tx_queue() {
             uart_msg_entry_t& completed = s_tx_queue[s_tx_head];
             if (tx_success) {
                 s_stats.packets_sent++;
+                s_stats.tx_bytes += completed.frame_len;
                 UART_LOGI("daisy_uart",
                           "TX DMA complete OK (seq=%u len=%u)",
                           completed.seq,
@@ -480,8 +501,23 @@ void UartLinkProcess() {
     static uint32_t consecutive_parse_failures = 0;
     uint32_t now = daisy::System::GetNow();
 
+#if WAVEX_DAISY_UART_PERF_DEBUG
+    const uint32_t perf_start = daisy::System::GetTick();
+#endif
+
     process_rx_frames();
     process_tx_queue();
+
+#if WAVEX_DAISY_UART_PERF_DEBUG
+    {
+        const uint32_t elapsed = daisy::System::GetTick() - perf_start;
+        s_perf.calls++;
+        s_perf.ticks_total += elapsed;
+        if (elapsed > s_perf.ticks_max) {
+            s_perf.ticks_max = elapsed;
+        }
+    }
+#endif
 
     // ========== UART ERROR DETECTION AND RECOVERY ==========
     // Detect when UART is in a broken state (e.g., after ESP32 reset with garbage data)
@@ -610,6 +646,40 @@ void UartLinkProcess() {
     (void)last_log;
 #endif
 }
+
+#if WAVEX_DAISY_UART_PERF_DEBUG
+void TakeUartPerf(UartPerfSample& out) {
+    const uint32_t per_us = daisy::System::GetTickFreq() / 1000000u;
+    const uint32_t ticks_per_us = per_us ? per_us : 1u;
+
+    out.calls = s_perf.calls;
+    out.avg_us = s_perf.calls ? (s_perf.ticks_total / s_perf.calls / ticks_per_us) : 0u;
+    out.max_us = s_perf.ticks_max / ticks_per_us;
+    // Total time the loop spent in the link this interval - the figure that
+    // says whether it competes with the audio ring refill.
+    out.total_us = s_perf.ticks_total / ticks_per_us;
+
+    // Deltas, so a report describes its own interval rather than all of boot.
+    const uint32_t errors_now = s_stats.crc_errors + s_stats.frame_sync_errors +
+                                s_stats.queue_overflows + s_stats.tx_errors;
+    out.rx_bytes = s_stats.rx_bytes - s_perf.rx_bytes_at_mark;
+    out.tx_bytes = s_stats.tx_bytes - s_perf.tx_bytes_at_mark;
+    out.rx_frames = s_stats.packets_received - s_perf.rx_frames_at_mark;
+    out.tx_frames = s_stats.packets_sent - s_perf.tx_frames_at_mark;
+    out.errors = errors_now - s_perf.errors_at_mark;
+    out.seq_drops = s_stats.seq_drops;
+    out.queue_overflows = s_stats.queue_overflows;
+
+    s_perf.rx_bytes_at_mark = s_stats.rx_bytes;
+    s_perf.tx_bytes_at_mark = s_stats.tx_bytes;
+    s_perf.rx_frames_at_mark = s_stats.packets_received;
+    s_perf.tx_frames_at_mark = s_stats.packets_sent;
+    s_perf.errors_at_mark = errors_now;
+    s_perf.calls = 0;
+    s_perf.ticks_total = 0;
+    s_perf.ticks_max = 0;
+}
+#endif
 
 void UartLinkLogStats() {
     UART_LOGI("daisy_uart",

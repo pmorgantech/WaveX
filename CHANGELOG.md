@@ -110,6 +110,25 @@ versioning and release process.
   card is electrically ready, and the debounce covers switch bounce, not
   power-up.
 
+### Added — UART link instrumentation
+
+- `WAVEX_DAISY_UART_PERF_DEBUG` (default 0) reports per-interval link cost:
+  call count, total/avg/max microseconds spent in `UartLinkProcess()`, the
+  percentage of the interval that represents, RX/TX bytes and frames, and error
+  deltas. `total_us` is the figure that answers whether the link competes with
+  the audio ring refill — nothing previously measured it. Accumulators reset on
+  read, so each line describes its own interval.
+- Added RX/TX byte counters to the link stats.
+
+### Added — docs/backlog.md
+
+- New home for unscheduled work, kept out of `roadmap.md` so phase gates stay
+  readable. Each entry records why the item is not urgent, so the reasoning can
+  be re-checked rather than re-derived. Seeded with the runtime-tunable logging
+  bitmask, the SPI-link question (with the measurements arguing against it for
+  now), the non-frame-aligned WAV `data` chunk finding, and the open SD remount
+  verification.
+
 ### Added — Daisy development and audition tooling
 
 - Added software-triggered Daisy DFU entry (`make daisy-flash-auto`), serial
