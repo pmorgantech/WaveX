@@ -140,7 +140,9 @@ static WaveX::Sequencer::SequencerTransport s_seq_transport;
 // STAGED at the 1 kHz control tick (audio context, callback-safe - the
 // router/backend only write member fields) and FLUSHED from the main loop
 // (blocking I2C ~225 us, §7.1.4) via FlushCv() below.
-static ParaphonicEnvelope s_para_env;
+// DTCM: ticked once per block from Callback() itself, CPU-only, small - same
+// case as s_voice_manager above.
+static ParaphonicEnvelope s_para_env WAVEX_DTCM_DATA;
 
 // Shared-path control values. Written from main-loop context (OnControlChange
 // maps MSG_CONTROL_CHANGE here), read at the tick in audio context: plain
@@ -242,20 +244,24 @@ static bool drain_note_queue() {
 // Sample RAM Manager (for loaded samples)
 static SampleMemMgr s_sample_mem_mgr;
 
-static BlockMeters s_last_block_meters = {0, 0, 0, 0};
+// The four statics below are all written every audio block from Callback()
+// itself (CPU-only, never DMA'd) and are individually tiny - DTCM per the
+// same reasoning as s_voice_manager/s_para_env above, extended to the
+// per-block performance-stat counters rather than just DSP state.
+static BlockMeters s_last_block_meters WAVEX_DTCM_DATA = {0, 0, 0, 0};
 
 // CPU Load Meter for audio processing performance monitoring
-static CpuLoadMeter s_cpu_load_meter;
+static CpuLoadMeter s_cpu_load_meter WAVEX_DTCM_DATA;
 // Counts audio callbacks. The callback is driven by SAI DMA interrupts, not
 // the main loop, so comparing its rate against the expected 1 kHz separates
 // "the ring starved" from "the callback stopped running" - the latter reports
 // no underrun at all, because underruns are only detected inside it.
-static volatile uint32_t s_callback_blocks = 0;
+static volatile uint32_t s_callback_blocks WAVEX_DTCM_DATA = 0;
 // Lowest ring occupancy seen since the last report, sampled once per audio
 // callback. Zero underruns only proves the ring never hit empty; it says
 // nothing about how close it came. A dip toward empty is what a brief gap
 // sounds like, and this is the only thing that can show it.
-static volatile uint32_t s_rb_low_water = 0xFFFFFFFFu;
+static volatile uint32_t s_rb_low_water WAVEX_DTCM_DATA = 0xFFFFFFFFu;
 static float s_sample_rate = 48000.0f;
 static int s_block_size = 48;
 
