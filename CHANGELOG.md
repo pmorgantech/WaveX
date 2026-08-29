@@ -220,6 +220,19 @@ versioning and release process.
   logger; `--direct` reads the port when no logger holds it. Decoder
   round-trip verified against a synthetic dump.
 
+### Added — WaveX Wireframes v2 rendered in LVGL
+
+- `tools/ui_preview` now implements all seven screens from the Claude Design
+  project *WaveX Wireframes v2* using that design's own coordinates, colours
+  and sample content: Diagnostics System/Audio/Link/Storage/MIDI, the refined
+  sample browser, and a new sample-edit screen. Renders are pixel-true at
+  1280×720 with the device's fonts, so they can be compared against the
+  wireframe directly and reused as the reference for the firmware port.
+- Two design rules are encoded rather than approximated: gauge fills only turn
+  orange at a real warning threshold (a full pre-buffer or plenty of free
+  space stays green — high is not universally bad), and cards omit the gauge
+  entirely when the metric has no budget, so there are no empty tracks.
+
 ### Added — Diagnostics page specification
 
 - New `docs/ui-diagnostics-spec.md`: tab-by-tab content for the diagnostics
