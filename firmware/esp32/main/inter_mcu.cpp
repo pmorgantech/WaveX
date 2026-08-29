@@ -4,6 +4,7 @@
 
 #include "../../shared/config/link_config.h"
 #include "../../shared/spi_protocol/protocol.h"
+#include "comm/listener_slot.h"
 #include "comm/shared_packet_handler.h"
 #include "comm/statistics.h"
 #include "links/esp_uart_link.h"
@@ -39,10 +40,11 @@ static volatile bool s_initialized = false;
 // Cached sample memory diagnostics
 static wavex_sample_mem_status_t s_sample_mem_status = {};
 static portMUX_TYPE s_sample_mem_lock = portMUX_INITIALIZER_UNLOCKED;
-static wavex_wave_chunk_cb_t s_wave_chunk_listener = nullptr;
-static void* s_wave_chunk_user_data = nullptr;
-static wavex_envelope_chunk_cb_t s_envelope_chunk_listener = nullptr;
-static void* s_envelope_chunk_user_data = nullptr;
+// Pages register these with `this` and clear them in onExit; the UART task
+// invokes them. ListenerSlot makes the pair swap atomic and makes a clear
+// block until any in-flight callback has returned - see listener_slot.h.
+static WaveX::Comm::ListenerSlot<wavex_wave_chunk_cb_t> s_wave_chunk_listener;
+static WaveX::Comm::ListenerSlot<wavex_envelope_chunk_cb_t> s_envelope_chunk_listener;
 
 static int send_uart_message(uint8_t msg_type, const void* payload, uint16_t len) {
     if (!s_uart_initialized || !s_uart_started) {
@@ -101,8 +103,7 @@ esp_err_t inter_mcu_start() {
     return ESP_OK;
 }
 
-static wavex_cv_cal_cb_t s_cv_cal_listener = nullptr;
-static void* s_cv_cal_user_data = nullptr;
+static WaveX::Comm::ListenerSlot<wavex_cv_cal_cb_t> s_cv_cal_listener;
 
 esp_err_t inter_mcu_send_cv_cal_set(const WaveX::Protocol::CvCalMessage& cal) {
     if (!s_initialized || s_suspended) {
@@ -130,14 +131,11 @@ esp_err_t inter_mcu_send_cv_test(const WaveX::Protocol::CvTestMessage& test) {
 }
 
 void inter_mcu_set_cv_cal_listener(wavex_cv_cal_cb_t cb, void* user_data) {
-    s_cv_cal_listener = cb;
-    s_cv_cal_user_data = user_data;
+    s_cv_cal_listener.set(cb, user_data);
 }
 
 void inter_mcu_invoke_cv_cal_callback(const WaveX::Protocol::CvCalMessage& cal) {
-    if (s_cv_cal_listener) {
-        s_cv_cal_listener(cal, s_cv_cal_user_data);
-    }
+    s_cv_cal_listener.invoke(cal);
 }
 
 esp_err_t inter_mcu_send_control_change(uint8_t parameter, uint8_t channel, uint16_t value) {
@@ -425,22 +423,18 @@ void inter_mcu_get_sample_mem_status(wavex_sample_mem_status_t* out) {
 // Implement missing functions that are declared in the header
 
 void inter_mcu_set_wave_chunk_listener(wavex_wave_chunk_cb_t cb, void* user_data) {
-    s_wave_chunk_listener = cb;
-    s_wave_chunk_user_data = user_data;
+    s_wave_chunk_listener.set(cb, user_data);
     ESP_LOGI(TAG, "Wave chunk listener registered: %p", cb);
 }
 
 void inter_mcu_set_envelope_chunk_listener(wavex_envelope_chunk_cb_t cb, void* user_data) {
-    s_envelope_chunk_listener = cb;
-    s_envelope_chunk_user_data = user_data;
+    s_envelope_chunk_listener.set(cb, user_data);
 }
 
 void inter_mcu_invoke_envelope_chunk_callback(const WaveX::Protocol::EnvelopeChunkMessage& header,
                                               const WaveX::Protocol::EnvelopeColumn* columns) {
-    if (!s_envelope_chunk_listener) {
-        return;  // no page open that wants a waveform; not worth a log line
-    }
-    s_envelope_chunk_listener(header, columns, s_envelope_chunk_user_data);
+    // No page open that wants a waveform is the normal case; not worth a log line.
+    s_envelope_chunk_listener.invoke(header, columns);
 }
 
 void inter_mcu_invoke_browse_resp_callback(const uint8_t* data, size_t length) {
@@ -460,12 +454,11 @@ void inter_mcu_invoke_storage_status_callback(bool mounted) {
 }
 
 void inter_mcu_invoke_wave_chunk_callback(uint32_t offset, const int16_t* samples, uint16_t count) {
-    if (!s_wave_chunk_listener) {
+    if (!s_wave_chunk_listener.registered()) {
         ESP_LOGW(TAG, "Wave chunk received but no listener registered");
         return;
     }
-
-    s_wave_chunk_listener(offset, samples, count, s_wave_chunk_user_data);
+    s_wave_chunk_listener.invoke(offset, samples, count);
 }
 
 void inter_mcu_set_sample_status_listener(wavex_sample_status_cb_t cb, void* user_data) {

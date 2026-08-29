@@ -280,6 +280,8 @@ wavex_file_browser_t* wavex_file_browser_create(lv_obj_t* parent,
         config->comm_interface->setStorageStatusListener(storage_status_callback, browser);
     } else {
         ESP_LOGE(TAG, "No comm interface provided to file browser");
+        free(browser->entries);
+        free(browser);
         return NULL;
     }
 
@@ -305,7 +307,19 @@ void wavex_file_browser_destroy(wavex_file_browser_t* browser) {
     if (!browser)
         return;
 
-    // Browser cleanup handled via user_data parameter in callbacks
+    // Deregister BEFORE freeing anything. Both listeners were registered with
+    // `browser` as user_data and are invoked from the UART task, so without
+    // this a browse response or an SD-eject notification arriving after the
+    // page was popped would write through freed memory - reachable in practice
+    // by pressing Back while a directory listing is still paginating.
+    //
+    // This is also why the clear has to be the blocking kind: ListenerSlot
+    // holds its mutex across the invocation, so by the time these return, no
+    // callback is still running and the free below is safe.
+    if (browser->config.comm_interface) {
+        browser->config.comm_interface->setBrowseResponseListener(nullptr, nullptr);
+        browser->config.comm_interface->setStorageStatusListener(nullptr, nullptr);
+    }
 
     if (browser->entries) {
         free(browser->entries);
@@ -766,7 +780,11 @@ static bool parse_browse_response(const uint8_t* data,
         strncpy(entry->path, entry->name, sizeof(entry->path) - 1);
         entry->path[sizeof(entry->path) - 1] = '\0';
 
-        ESP_LOGI(TAG,
+        // DEBUG, not INFO: this runs once per entry inside the browse callback,
+        // which is now invoked with the listener mutex held. At 115200 baud a
+        // 20-entry page of INFO lines is a few hundred ms of console-blocked
+        // time, and a page deregistering in onExit would wait all of it.
+        ESP_LOGD(TAG,
                  "Parsed entry %d: '%s' (%s) - %lu bytes",
                  i,
                  entry->name,
@@ -901,7 +919,11 @@ static bool parse_browse_response_with_pagination(const uint8_t* data,
 
         parsed_count++;
 
-        ESP_LOGI(TAG,
+        // DEBUG, not INFO: this runs once per entry inside the browse callback,
+        // which is now invoked with the listener mutex held. At 115200 baud a
+        // 20-entry page of INFO lines is a few hundred ms of console-blocked
+        // time, and a page deregistering in onExit would wait all of it.
+        ESP_LOGD(TAG,
                  "Parsed entry %d: '%s' (%s) - %lu bytes",
                  i,
                  entry->name,

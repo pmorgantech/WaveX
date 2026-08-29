@@ -11,6 +11,39 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Fixed — Comm listener lifetime: a page can no longer be destroyed under a running callback
+
+Found by the 2026-08-29 ESP32-P4 review (items E-LIFE1/2/3). Listener
+`{callback, user_data}` pairs are registered by UI pages passing `this` and
+invoked from the UART RX task, so both halves of this were live use-after-free
+windows on the normal path.
+
+- **One mechanism for all seven listener slots** (`main/comm/listener_slot.h`).
+  They were previously four different disciplines in `StatisticsManager` alone —
+  one mutex held across the call, one *deliberately released before* it
+  ("to avoid deadlocks", which threw away the only thing it was buying), one
+  spinlock covering just the write, and one with no locking at all — plus three
+  unguarded global pairs in `inter_mcu.cpp`. `ListenerSlot` holds its mutex
+  across the invocation, so a page's `set(nullptr, nullptr)` in `onExit` cannot
+  return while its handler is still running, and the pair can no longer tear.
+  The mutex is recursive so a callback that re-registers itself works rather
+  than hanging.
+- **The file browser now deregisters on destroy.** It registered two listeners
+  with `browser` as user_data and cleared neither, so a browse response or an
+  SD-eject notification arriving after the page was popped wrote through freed
+  memory — reachable by pressing Back while a listing was still paginating.
+- **Per-entry browse logging dropped to `ESP_LOGD`.** At 115200 baud a 20-entry
+  page of INFO lines is a few hundred ms; once the listener mutex spans the
+  callback, that became a stall for any page deregistering in `onExit`. The
+  `StatisticsManager` mutex-trace INFO lines went with them.
+- Also fixed while in the same function: the file browser leaked `browser` and
+  its entry array when created without a comm interface.
+
+Covered by six new host tests (`listener_slot_test.cpp`) pinning the contract
+the concurrency is wrapped around: user_data paired with its own callback,
+clearing stops invocation, and re-registering from inside a callback does not
+deadlock.
+
 ### Fixed — LVGL thread safety: widgets are no longer touched from the UART task
 
 Found by the 2026-08-29 ESP32-P4 review

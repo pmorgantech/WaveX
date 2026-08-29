@@ -151,6 +151,22 @@ BaseType_t xSemaphoreGiveFromISR(SemaphoreHandle_t xSemaphore,
     return pdTRUE;
 }
 
+// The host suite is single-threaded, so these only need to satisfy the caller:
+// take always succeeds and there is no state to keep. What the tests exercise
+// is the surrounding ordering (pair swapped as a unit, callback observed under
+// the lock), not FreeRTOS itself.
+SemaphoreHandle_t xSemaphoreCreateRecursiveMutex(void) {
+    return reinterpret_cast<SemaphoreHandle_t>(1);
+}
+
+BaseType_t xSemaphoreTakeRecursive(SemaphoreHandle_t xSemaphore, TickType_t xBlockTime) {
+    return pdTRUE;
+}
+
+BaseType_t xSemaphoreGiveRecursive(SemaphoreHandle_t xSemaphore) {
+    return pdTRUE;
+}
+
 // Mock GPIO functions
 static std::map<gpio_num_t, int> g_gpio_levels;
 static std::map<gpio_num_t, gpio_mode_t> g_gpio_modes;

@@ -7,7 +7,7 @@
 
 Findings carry stable IDs (`E-…`) so implementation can be tracked in this file. **Completed items leave this document** — detail goes to `CHANGELOG.md`, matching the roadmap's convention — so what remains here is always the open list. A partially-addressed item keeps its row, marked `[~]`, and says what is left.
 
-**Already remediated** (see `CHANGELOG.md` § Unreleased): E-LVGL1/2/3, the LVGL thread-safety cluster, fixed 2026-08-29 in `21304be` and `222b2b4`.
+**Already remediated** (see `CHANGELOG.md` § Unreleased): E-LVGL1/2/3, the LVGL thread-safety cluster (`21304be`, `222b2b4`); E-LIFE1/2/3, the callback-lifetime cluster. All fixed 2026-08-29.
 
 ---
 
@@ -18,12 +18,12 @@ The live UART transport story has improved a lot since the 2026-07-05 review: th
 The debt is concentrated in three themes:
 
 1. **LVGL thread-safety was systematically violated** — ~~the UART RX task mutating widgets directly in comm callbacks, the whole input dispatch path running outside the port lock, and `lv_async_call` issued from the wrong task~~. **Fixed 2026-08-29**; see `CHANGELOG.md`. Kept in this list because it is the reason themes 2 and 3 matter more than they look: the corruption this caused was the most likely explanation for "random" UI failures, so misbehaviour that survives these fixes is now much more likely to be one of the remaining items than a mystery.
-2. **Callback lifetime and cross-core publication are unmanaged.** `inter_mcu` listener `{callback, user_data}` pairs are plain globals written by UI pages (with `this`) and read by the UART task with no synchronization; the file browser never unregisters its listeners on destroy. Both are use-after-free windows on the live path. Relatedly, three comm-driven pages solve the same producer/consumer handoff three different ways — correct `__atomic` release/acquire (file browser), plain `bool`s (sample browser), and `volatile` (the new sample-edit page, a guide-§9 regression on the current branch).
+2. **Callback lifetime was unmanaged** — ~~listener pairs as unsynchronized globals, a file browser that never deregistered, and four different locking disciplines across four slots in one class~~. **Fixed 2026-08-29**; see `CHANGELOG.md`. What remains of this theme is the *publication* half: comm-driven pages still solve the producer/consumer handoff three different ways — correct `__atomic` release/acquire (file browser), atomics (sample browser, converted), and `volatile` (the sample-edit page, a guide-§9 regression). That is E-SYNC1.
 3. **The physical control surface has real functional bugs.** The TCA8418 keypad path, as committed, either never sees a key (the driver never enables the chip's interrupt output) or busy-spins core 1 at priority 5 (nothing clears `INT_STAT`, and the INT-asserted branch has no delay); its event decode also ignores the press/release bit, so presses would fire on release. The encoder path drops or replays detents under SMP: interrupt masking is used as cross-core synchronization (the exact anti-pattern §1 of the guide opens with) on top of a hardware read-then-clear window.
 
 Two systemic build findings round it out: the `-Os`/LTO compile options in the top-level CMakeLists are added after `project()` and apply to nothing (the image is `-O2`), and the `EXCLUDE_COMPONENTS` list excludes nothing. Both misdescribe the shipped image to anyone reading the build files.
 
-**Suggested order**: the callback-lifetime cluster (E-LIFE1..3) next — with the LVGL cluster done, these are the remaining active crash risks, and they touch the same comm callbacks the LVGL fix just reshaped, so the context is fresh. Then the keypad (E-KEY1..2) and encoder (E-ENC1) correctness fixes, which are what stands between the hardware controls and working at all. Then E-INIT1 and the build-file repairs (E-BLD1..2), the latter before anyone tunes performance against flags that are not applied. The SPI findings (§7) do not need fixing now but must gate any re-enable of `WAVEX_SPI_LINK_ENABLED`.
+**Suggested order**: with the two crash-risk clusters closed, the next work is correctness the user can actually feel — the keypad (E-KEY1..2) and encoder (E-ENC1), which are what stands between the hardware controls and working at all, and which are best done together because both need the same bench session to confirm. Then E-INIT1, then the build-file repairs (E-BLD1..2) before anyone tunes performance against flags that are not applied. E-SYNC1's remaining half (the sample-edit page's `volatile`) is cheap and can ride along with any edit-page work. The SPI findings (§7) do not need fixing now but must gate any re-enable of `WAVEX_SPI_LINK_ENABLED`.
 
 ---
 
@@ -31,9 +31,6 @@ Two systemic build findings round it out: the `-Os`/LTO compile options in the t
 
 | ID | Sev | Area | Summary |
 |---|---|---|---|
-| [ ] E-LIFE1 | Critical | comm | `inter_mcu` listener pairs are unsynchronized cross-core globals → torn pair / UAF |
-| [ ] E-LIFE2 | Critical | UI | File browser never unregisters browse/storage listeners on destroy → UAF |
-| [ ] E-LIFE3 | Major | comm | `StatisticsManager` callback pairs half-locked; browse-resp mutex held across UI callback |
 | [ ] E-KEY1 | Critical | input | TCA8418 INT lifecycle unmanaged: keypad dead or busy-spins core 1 |
 | [ ] E-KEY2 | Critical | input | KEY_EVENT_A bit 7 never masked: press/release inverted, chords impossible |
 | [ ] E-INIT1 | Critical | core | `app_main` returns on failed init, destructing the context under live tasks (UAF) |
@@ -55,9 +52,9 @@ Two systemic build findings round it out: the `-Os`/LTO compile options in the t
 | [ ] E-SEQ1 | Minor | shared | `SequenceTracker` non-modular compare misbehaves at 64K wrap |
 | [ ] E-CFG1 | Minor | config | Hardware-truth pass: pin_config contradictions, unused TCA8418 macros, broken guard |
 | [ ] E-INQ1 | Minor | UI | Input queue drops are silent and uncounted |
-| [ ] E-UIM1 | Minor | UI | Browser leak on failed create; `loading_row` ABA; `uint8_t` page-start truncation |
+| [~] E-UIM1 | Minor | UI | Browser leak on failed create fixed 2026-08-29 (same function as the E-LIFE2 deregistration); `loading_row` ABA and `uint8_t` page-start truncation still open |
 | [ ] E-KBD1 | Minor | UI | Keyboard page "All Off" leaves latched pads lit (current branch) |
-| [ ] E-LOG1 | Minor | all | Hot-path log storms on the UART task (hex dumps, per-entry INFO, mutex-trace lines) |
+| [~] E-LOG1 | Minor | all | Hot-path log storms on the UART task — per-entry browse INFO and the statistics mutex-trace lines removed 2026-08-29 (they became a UI stall once the listener mutex spanned the callback); hex dumps and remaining per-packet INFO still open |
 | [ ] E-SDK1 | Minor | build | Watchdog/assert posture: INT WDT 5 s, task WDT off, assertions compiled out |
 | [ ] E-STD1 | Minor | build | C++ standard not pinned anywhere (guide §8 requires it) |
 | [ ] E-VER1 | Minor | core | Duplicate version truth (`version.h` vs root `VERSION`); `__DATE__`/`__TIME__` |
@@ -71,21 +68,6 @@ Two systemic build findings round it out: the `-Os`/LTO compile options in the t
 ---
 
 ## 3. Critical
-
-### E-LIFE1 — `inter_mcu` listener pairs: torn reads and a UAF window across cores
-
-`main/inter_mcu.cpp:42-45,104-105,427-436` — every listener is a plain global pair:
-
-```cpp
-static wavex_wave_chunk_cb_t s_wave_chunk_listener = nullptr;
-static void* s_wave_chunk_user_data = nullptr;
-```
-
-written from the UI task (`inter_mcu_set_*_listener`) and read/invoked from the UART task with no atomics or critical section. Pages register `this` and deregister in `onExit` (`ui_sample_edit_page.cpp:164/289`, `ui_sample_record_page.cpp:47/53`, `ui_cv_cal_page.cpp:146/164`). On SMP: (a) new callback observed with old `user_data`; (b) the UART task passes the null check, is descheduled, the page deregisters and is destroyed, the callback then fires into the freed page. The file already does this correctly for `s_diag` under `s_diag_lock` — extend that pattern. **Fix**: snapshot each `{cb, user_data}` under a `portMUX` on both set and invoke; teardown must synchronize with in-flight invocation (invoke under the lock, or generation-check).
-
-### E-LIFE2 — file browser comm listeners never unregistered
-
-`components/ui/components/file_browser.cpp:276,280` registers `browse_resp_callback`/`storage_status_callback` with `browser` as user_data; `wavex_file_browser_destroy` (:304-321) frees `browser->entries` and `browser` without clearing either (only the sample-status listener is cleared, in `ui_sample_browser.cpp:214`). Open browser → pagination in flight → Back: the next browse response or SD-eject notification writes through the freed struct from the UART task (`browser->entries[write_index] = …`, :1042). **Fix**: clear both listeners in destroy; give `ICommInterface` a clear-on-match API so a newer registration isn't stomped by an older page's teardown.
 
 ### E-KEY1 — TCA8418 INT lifecycle unmanaged: keypad dead or busy-spinning core 1
 

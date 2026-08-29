@@ -3,6 +3,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "comm/listener_slot.h"
+
 #ifdef ESP_PLATFORM
 #include "freertos/FreeRTOS.h"
 #include "freertos/portmacro.h"
@@ -171,28 +173,27 @@ class StatisticsManager {
     mutable wavex_meter_data_t m_meter_data;
     mutable portMUX_TYPE m_meter_lock;
 
-    // Meter callback
-    void (*m_meter_callback)(
-        float rms_left, float rms_right, float peak_left, float peak_right, void* user_data);
-    void* m_meter_user_data;
+    // Listener slots. These four used to be four different disciplines - one
+    // mutex held across the call, one deliberately released before it, one
+    // spinlock covering only the write, and one with no locking at all - which
+    // is how three of them ended up with torn-pair or use-after-free windows.
+    // They are one mechanism now; see listener_slot.h.
+    WaveX::Comm::ListenerSlot<void (*)(
+        float rms_left, float rms_right, float peak_left, float peak_right, void* user_data)>
+        m_meter_listener;
 
-    // Browse response callback
-    void (*m_browse_resp_callback)(const uint8_t* data, size_t length, void* user_data);
-    void (*m_storage_status_callback)(bool mounted, void* user_data);
-    void* m_storage_status_user_data;
-    void* m_browse_resp_user_data;
-    mutable SemaphoreHandle_t m_browse_resp_mutex;
+    WaveX::Comm::ListenerSlot<void (*)(const uint8_t* data, size_t length, void* user_data)>
+        m_browse_resp_listener;
 
-    // Sample status callback
-    void (*m_sample_status_callback)(uint16_t sample_id,
-                                     uint8_t state,
-                                     uint32_t sample_rate,
-                                     uint8_t channels,
-                                     uint32_t frames_played,
-                                     void* user_data);
-    void* m_sample_status_user_data;
-    SemaphoreHandle_t m_sample_status_mutex;
-    mutable portMUX_TYPE m_sample_status_lock;
+    WaveX::Comm::ListenerSlot<void (*)(bool mounted, void* user_data)> m_storage_status_listener;
+
+    WaveX::Comm::ListenerSlot<void (*)(uint16_t sample_id,
+                                       uint8_t state,
+                                       uint32_t sample_rate,
+                                       uint8_t channels,
+                                       uint32_t frames_played,
+                                       void* user_data)>
+        m_sample_status_listener;
 
     // Helper methods
     const char* get_packet_type_name(uint8_t packet_type) const;

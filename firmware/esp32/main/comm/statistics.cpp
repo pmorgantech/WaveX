@@ -27,14 +27,6 @@ StatisticsManager::StatisticsManager() {
     memset(&m_tx_stats, 0, sizeof(m_tx_stats));
     memset(&m_backend_hb, 0, sizeof(m_backend_hb));
     memset(&m_meter_data, 0, sizeof(m_meter_data));
-    m_meter_callback = NULL;
-    m_meter_user_data = NULL;
-    m_browse_resp_callback = NULL;
-    m_storage_status_callback = NULL;
-    m_storage_status_user_data = NULL;
-    m_browse_resp_user_data = NULL;
-    m_sample_status_callback = NULL;
-    m_sample_status_user_data = NULL;
 
 #ifdef ESP_PLATFORM
     ESP_LOGI("StatisticsManager", "=== Initializing locks for ESP_PLATFORM ===");
@@ -42,9 +34,6 @@ StatisticsManager::StatisticsManager() {
     m_tx_stats_lock = portMUX_INITIALIZER_UNLOCKED;
     m_hb_lock = portMUX_INITIALIZER_UNLOCKED;
     m_meter_lock = portMUX_INITIALIZER_UNLOCKED;
-    m_browse_resp_mutex = xSemaphoreCreateMutex();
-    m_sample_status_mutex = xSemaphoreCreateMutex();
-    m_sample_status_lock = portMUX_INITIALIZER_UNLOCKED;
     ESP_LOGI("StatisticsManager", "=== Locks initialized successfully ===");
 #else
     ESP_LOGI("StatisticsManager", "=== Initializing locks for non-ESP_PLATFORM ===");
@@ -52,9 +41,6 @@ StatisticsManager::StatisticsManager() {
     memset(&m_tx_stats_lock, 0, sizeof(m_tx_stats_lock));
     memset(&m_hb_lock, 0, sizeof(m_hb_lock));
     memset(&m_meter_lock, 0, sizeof(m_meter_lock));
-    m_browse_resp_mutex = NULL;
-    m_sample_status_mutex = NULL;
-    memset(&m_sample_status_lock, 0, sizeof(m_sample_status_lock));
     ESP_LOGI("StatisticsManager", "=== Locks initialized successfully ===");
 #endif
 }
@@ -381,11 +367,9 @@ void StatisticsManager::update_meter_data(float rms_left,
     m_meter_data.valid = true;
     taskEXIT_CRITICAL(&m_meter_lock);
 
-    // Call registered callback if any
-    if (m_meter_callback) {
-        // Send full stereo meter data
-        m_meter_callback(rms_left, rms_right, peak_left, peak_right, m_meter_user_data);
-    }
+    // Outside the spinlock above: that one guards the meter snapshot, and a
+    // spinlock must not span a callback. The slot has its own mutex.
+    m_meter_listener.invoke(rms_left, rms_right, peak_left, peak_right);
 }
 
 void StatisticsManager::get_meter_data(wavex_meter_data_t* out) const {
@@ -403,52 +387,26 @@ void StatisticsManager::set_meter_callback(void (*callback)(float rms_left,
                                                             float peak_right,
                                                             void* user_data),
                                            void* user_data) {
-    taskENTER_CRITICAL(&m_meter_lock);
-    m_meter_callback = callback;
-    m_meter_user_data = user_data;
-    taskEXIT_CRITICAL(&m_meter_lock);
+    m_meter_listener.set(callback, user_data);
 }
 
 void StatisticsManager::set_storage_status_callback(void (*callback)(bool mounted, void* user_data),
                                                     void* user_data) {
-    m_storage_status_callback = callback;
-    m_storage_status_user_data = user_data;
+    m_storage_status_listener.set(callback, user_data);
 }
 
 void StatisticsManager::invoke_storage_status_callback(bool mounted) {
-    if (m_storage_status_callback) {
-        m_storage_status_callback(mounted, m_storage_status_user_data);
-    }
+    m_storage_status_listener.invoke(mounted);
 }
 
-void StatisticsManager::set_browse_resp_callback(void (*callback)(const uint8_t* data, size_t length, void* user_data), void* user_data) {
-    ESP_LOGI("StatisticsManager", "=== About to acquire mutex for browse resp callback ===");
-    if (m_browse_resp_mutex && xSemaphoreTake(m_browse_resp_mutex, portMAX_DELAY) == pdTRUE) {
-        ESP_LOGI("StatisticsManager", "=== Successfully acquired mutex ===");
-        m_browse_resp_callback = callback;
-        m_browse_resp_user_data = user_data;
-        ESP_LOGI("StatisticsManager", "Browse response callback registered: %p", callback);
-        ESP_LOGI("StatisticsManager", "=== About to release mutex ===");
-        xSemaphoreGive(m_browse_resp_mutex);
-        ESP_LOGI("StatisticsManager", "=== Successfully released mutex ===");
-    } else {
-        ESP_LOGE("StatisticsManager", "Failed to acquire browse resp mutex");
-    }
+void StatisticsManager::set_browse_resp_callback(
+    void (*callback)(const uint8_t* data, size_t length, void* user_data), void* user_data) {
+    m_browse_resp_listener.set(callback, user_data);
+    ESP_LOGD("StatisticsManager", "Browse response callback registered: %p", callback);
 }
 
 void StatisticsManager::invoke_browse_resp_callback(const uint8_t* data, size_t length) {
-    if (m_browse_resp_mutex && xSemaphoreTake(m_browse_resp_mutex, portMAX_DELAY) == pdTRUE) {
-        if (m_browse_resp_callback) {
-            ESP_LOGI(
-                "StatisticsManager", "Invoking browse response callback: %d bytes", (int)length);
-            m_browse_resp_callback(data, length, m_browse_resp_user_data);
-        } else {
-            ESP_LOGW("StatisticsManager", "No browse response callback registered");
-        }
-        xSemaphoreGive(m_browse_resp_mutex);
-    } else {
-        ESP_LOGE("StatisticsManager", "Failed to acquire browse resp mutex for invoke");
-    }
+    m_browse_resp_listener.invoke(data, length);
 }
 
 void StatisticsManager::set_sample_status_callback(void (*callback)(uint16_t sample_id,
@@ -458,16 +416,7 @@ void StatisticsManager::set_sample_status_callback(void (*callback)(uint16_t sam
                                                                     uint32_t frames_played,
                                                                     void* user_data),
                                                    void* user_data) {
-    if (m_sample_status_mutex) {
-        xSemaphoreTake(m_sample_status_mutex, portMAX_DELAY);
-        m_sample_status_callback = callback;
-        m_sample_status_user_data = user_data;
-        xSemaphoreGive(m_sample_status_mutex);
-    } else {
-        // Fallback for non-ESP_PLATFORM
-        m_sample_status_callback = callback;
-        m_sample_status_user_data = user_data;
-    }
+    m_sample_status_listener.set(callback, user_data);
 }
 
 void StatisticsManager::invoke_sample_status_callback(uint16_t sample_id,
@@ -475,36 +424,10 @@ void StatisticsManager::invoke_sample_status_callback(uint16_t sample_id,
                                                       uint32_t sample_rate,
                                                       uint8_t channels,
                                                       uint32_t frames_played) {
-    ESP_LOGI("StatisticsManager",
-             "invoke_sample_status_callback: state=%d, callback=%p, user_data=%p",
-             state,
-             m_sample_status_callback,
-             m_sample_status_user_data);
-
-    if (m_sample_status_mutex) {
-        ESP_LOGI("StatisticsManager", "Taking sample status mutex");
-        if (xSemaphoreTake(m_sample_status_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
-            if (m_sample_status_callback) {
-                ESP_LOGI("StatisticsManager", "About to call sample status callback");
-                // Release mutex before calling callback to avoid deadlocks
-                xSemaphoreGive(m_sample_status_mutex);
-                m_sample_status_callback(sample_id, state, sample_rate, channels, frames_played, m_sample_status_user_data);
-                ESP_LOGI("StatisticsManager", "Sample status callback returned");
-            } else {
-                ESP_LOGW("StatisticsManager", "No sample status callback registered");
-                xSemaphoreGive(m_sample_status_mutex);
-            }
-        } else {
-            ESP_LOGE("StatisticsManager", "Failed to acquire sample status mutex for invoke");
-        }
-    } else {
-        // Fallback for non-ESP_PLATFORM
-        if (m_sample_status_callback) {
-            ESP_LOGI("StatisticsManager", "About to call sample status callback (no mutex)");
-            m_sample_status_callback(sample_id, state, sample_rate, channels, frames_played, m_sample_status_user_data);
-            ESP_LOGI("StatisticsManager", "Sample status callback returned");
-        } else {
-            ESP_LOGW("StatisticsManager", "No sample status callback registered");
-        }
-    }
+    // This used to release the mutex before calling, commented "to avoid
+    // deadlocks". That gave up the only thing the mutex was buying - a page
+    // deregistering in onExit could return while its handler was still running
+    // and then be destroyed under it - and read m_sample_status_user_data after
+    // releasing, so the pair could tear as well.
+    m_sample_status_listener.invoke(sample_id, state, sample_rate, channels, frames_played);
 }
