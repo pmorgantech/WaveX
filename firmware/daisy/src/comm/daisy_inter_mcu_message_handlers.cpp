@@ -37,6 +37,7 @@ static void HandleWaveChunkMessage(const uint8_t* payload, size_t payload_size);
 static void HandleHeartbeatMessage(const uint8_t* payload, size_t payload_size);
 static void HandleDiagSubscribeMessage(const uint8_t* payload, size_t payload_size);
 static void HandleSampleEditMessage(const uint8_t* payload, size_t payload_size);
+static void HandleSampleMetaReqMessage(const uint8_t* payload, size_t payload_size);
 static void HandleStatusRequestMessage(const uint8_t* payload, size_t payload_size);
 static void HandleBrowseRequestMessage(const uint8_t* payload, size_t payload_size);
 static void HandleBrowseResponseMessage(const uint8_t* payload, size_t payload_size);
@@ -141,6 +142,9 @@ void ProcessInterMcuMessage(uint8_t msg_type,
             break;
         case MSG_SAMPLE_EDIT_SET:
             HandleSampleEditMessage(payload, payload_size);
+            break;
+        case MSG_SAMPLE_META_REQ:
+            HandleSampleMetaReqMessage(payload, payload_size);
             break;
         case MSG_DIAG_SUBSCRIBE:
             HandleDiagSubscribeMessage(payload, payload_size);
@@ -325,6 +329,17 @@ static void HandleSampleEditMessage(const uint8_t* payload, size_t payload_size)
                                       msg.end_frame,
                                       msg.loop_start,
                                       msg.loop_end);
+}
+
+static void HandleSampleMetaReqMessage(const uint8_t* payload, size_t payload_size) {
+    if (!payload || payload_size < sizeof(SampleMetaReqMessage)) {
+        return;
+    }
+    SampleMetaReqMessage msg;
+    memcpy(&msg, payload, sizeof(msg));
+    // 0 = every loaded sample, so the frontend can repopulate after its own
+    // restart without the backend tracking who has seen what.
+    WaveX::AudioEngine::PushAllSampleMeta(msg.sample_id);
 }
 
 static void HandleDiagSubscribeMessage(const uint8_t* payload, size_t payload_size) {

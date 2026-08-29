@@ -211,6 +211,64 @@ esp_err_t inter_mcu_send_preview_req(uint8_t slot, uint32_t start, uint32_t end,
     return result >= 0 ? ESP_OK : ESP_FAIL;
 }
 
+namespace {
+// Small fixed cache. The Daisy holds a bounded number of loaded samples, so a
+// fixed ring here cannot fall behind it, and a fixed array avoids allocating
+// from the UART RX task.
+constexpr size_t kMetaCacheSize = 8;
+portMUX_TYPE s_meta_lock = portMUX_INITIALIZER_UNLOCKED;
+WaveX::Protocol::SampleMetadata s_meta[kMetaCacheSize];
+bool s_meta_valid[kMetaCacheSize] = {};
+size_t s_meta_next = 0;
+uint16_t s_meta_newest_id = 0;
+}  // namespace
+
+void inter_mcu_store_sample_meta(const WaveX::Protocol::SampleMetadata& msg) {
+    taskENTER_CRITICAL(&s_meta_lock);
+    size_t slot = kMetaCacheSize;
+    for (size_t i = 0; i < kMetaCacheSize; ++i) {
+        if (s_meta_valid[i] && s_meta[i].sample_id == msg.sample_id) {
+            slot = i;  // update in place, so an edit does not consume a slot
+            break;
+        }
+    }
+    if (slot == kMetaCacheSize) {
+        slot = s_meta_next;
+        s_meta_next = (s_meta_next + 1) % kMetaCacheSize;
+    }
+    s_meta[slot] = msg;
+    s_meta_valid[slot] = true;
+    s_meta_newest_id = msg.sample_id;
+    taskEXIT_CRITICAL(&s_meta_lock);
+}
+
+bool inter_mcu_get_sample_meta(uint16_t sample_id, WaveX::Protocol::SampleMetadata* out) {
+    if (!out) {
+        return false;
+    }
+    bool found = false;
+    taskENTER_CRITICAL(&s_meta_lock);
+    const uint16_t want = sample_id ? sample_id : s_meta_newest_id;
+    for (size_t i = 0; i < kMetaCacheSize; ++i) {
+        if (s_meta_valid[i] && s_meta[i].sample_id == want) {
+            *out = s_meta[i];
+            found = true;
+            break;
+        }
+    }
+    taskEXIT_CRITICAL(&s_meta_lock);
+    return found;
+}
+
+esp_err_t inter_mcu_request_sample_meta(uint16_t sample_id) {
+    if (!s_initialized || s_suspended) {
+        return -1;  // ESP_ERR_INVALID_STATE
+    }
+    WaveX::Protocol::SampleMetaReqMessage msg(sample_id);
+    int result = send_uart_message(WaveX::Protocol::MSG_SAMPLE_META_REQ, &msg, sizeof(msg));
+    return result >= 0 ? ESP_OK : ESP_FAIL;
+}
+
 esp_err_t inter_mcu_send_sample_edit(uint8_t slot,
                                      bool loop_enabled,
                                      int16_t gain_db_x10,

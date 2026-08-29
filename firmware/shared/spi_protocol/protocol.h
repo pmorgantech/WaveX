@@ -93,7 +93,9 @@ enum MessageType : uint8_t {
     // nothing the rest of the time.
     MSG_DIAG_SUBSCRIBE = 0x3A,   // ESP32 -> Daisy: start/stop the push
     MSG_DIAG_PUSH = 0x3B,        // Daisy -> ESP32: one interval of telemetry
-    MSG_SAMPLE_EDIT_SET = 0x3C,  // ESP32 -> Daisy: playback region, loop, gain
+    MSG_SAMPLE_EDIT_SET = 0x3C,  // ESP32 -> Daisy: playback region, loop, gain (command)
+    MSG_SAMPLE_META = 0x3D,      // Daisy -> ESP32: authoritative per-sample record (state)
+    MSG_SAMPLE_META_REQ = 0x3E,  // ESP32 -> Daisy: resend metadata (all, or one id)
     // CV calibration (Stage A analog path - analog-voice-board.md §3)
     MSG_CV_CAL_SET = 0x40,   // ESP32 -> Daisy: apply (and optionally persist) one group's cal
     MSG_CV_CAL_GET = 0x41,   // ESP32 -> Daisy: request one group's cal
@@ -396,6 +398,100 @@ struct StorageStatusMessage {
     explicit StorageStatusMessage(uint8_t mounted_) : mounted(mounted_), reserved{0, 0, 0} {}
 } __attribute__((packed));
 
+// How a sample's channels are rendered, wherever it is played.
+enum SampleChannelMode : uint8_t {
+    SAMPLE_CH_AS_RECORDED = 0,  // stereo stays stereo, mono stays mono
+    SAMPLE_CH_LEFT = 1,         // left only
+    SAMPLE_CH_RIGHT = 2,        // right only
+    SAMPLE_CH_MONO_SUM = 3,     // (L+R)/2
+};
+
+/**
+ * The authoritative per-sample record. Owned by the Daisy, pushed to the
+ * frontend on every change (MSG_SAMPLE_META).
+ *
+ * This exists because the same facts were previously scattered and diverging:
+ * geometry arrived incidentally through the browse listing, edit markers went
+ * out through MSG_SAMPLE_EDIT_SET with nothing coming back, the streaming
+ * audition kept its own copy of the region, VoiceManager ignored markers
+ * entirely, and the preview generator silently rendered the left channel. Any
+ * playback or display path that needs to know something about a sample reads
+ * it from here, so those paths cannot disagree.
+ *
+ * `generation` increments whenever the AUDIO CONTENT changes (a destructive
+ * render), not when markers move - so a waveform cache keyed on
+ * (sample_id, generation) survives marker edits and is invalidated by a
+ * re-render, which is exactly the desired behaviour.
+ */
+struct SampleMetadata {
+    uint16_t sample_id;
+    uint16_t generation;  // bumps on content change, not on marker edits
+    uint32_t sample_rate;
+    uint32_t total_frames;
+
+    // Non-destructive playback edit. Frames, absolute, at the file's rate.
+    uint32_t start_frame;
+    uint32_t end_frame;  // exclusive; 0 = total_frames
+    uint32_t loop_start;
+    uint32_t loop_end;    // exclusive; 0 = end_frame
+    int16_t gain_db_x10;  // -240..+120
+
+    uint8_t channels;         // as stored: 1 or 2
+    uint8_t bits_per_sample;  // 8 / 16 / 24
+    uint8_t loop_enabled;
+    uint8_t channel_mode;  // SampleChannelMode
+    uint8_t flags;         // bit 0 = resident in sample RAM
+    uint8_t reserved;
+
+    char name[FILE_NAME_MAX];
+
+    SampleMetadata()
+        : sample_id(0),
+          generation(0),
+          sample_rate(0),
+          total_frames(0),
+          start_frame(0),
+          end_frame(0),
+          loop_start(0),
+          loop_end(0),
+          gain_db_x10(0),
+          channels(0),
+          bits_per_sample(0),
+          loop_enabled(0),
+          channel_mode(SAMPLE_CH_AS_RECORDED),
+          flags(0),
+          reserved(0) {
+        name[0] = '\0';
+    }
+
+    /** Resolves the 0 sentinels against total_frames. Safe on a zeroed record. */
+    void Resolve() {
+        if (end_frame == 0 || end_frame > total_frames) {
+            end_frame = total_frames;
+        }
+        if (start_frame >= end_frame) {
+            start_frame = 0;
+        }
+        if (loop_end == 0 || loop_end > end_frame) {
+            loop_end = end_frame;
+        }
+        if (loop_start < start_frame || loop_start >= loop_end) {
+            loop_start = start_frame;
+        }
+    }
+} __attribute__((packed));
+
+// Request a metadata resend. sample_id 0 means "every loaded sample", which
+// is how the frontend repopulates after its own restart without the backend
+// having to track who has seen what.
+struct SampleMetaReqMessage {
+    uint16_t sample_id;
+    uint8_t reserved[2];
+
+    SampleMetaReqMessage() : sample_id(0), reserved{0, 0} {}
+    explicit SampleMetaReqMessage(uint16_t sample_id_) : sample_id(sample_id_), reserved{0, 0} {}
+} __attribute__((packed));
+
 // Non-destructive playback edit (frontend -> backend).
 //
 // All positions are FRAMES, absolute within the file, at the file's own rate.
@@ -409,7 +505,10 @@ struct StorageStatusMessage {
 struct SampleEditMessage {
     uint8_t slot;
     uint8_t loop_enabled;
-    int16_t gain_db_x10;  // -240..+120 (-24.0 .. +12.0 dB)
+    int16_t gain_db_x10;
+    // NOTE: this is the COMMAND. The backend's reply is a full SampleMetadata
+    // (MSG_SAMPLE_META) carrying what it actually applied after clamping -
+    // never assume these values were taken verbatim.  // -240..+120 (-24.0 .. +12.0 dB)
     uint32_t start_frame;
     uint32_t end_frame;  // 0 = end of file
     uint32_t loop_start;
@@ -1061,6 +1160,15 @@ class ProtocolHandler {
     static size_t CreateSampleGetPathPacket(uint8_t* buffer,
                                             size_t buffer_size,
                                             const SampleGetPathMessage& msg);
+    /** Authoritative per-sample record (backend -> frontend). */
+    static size_t CreateSampleMetaPacket(uint8_t* buffer,
+                                         size_t buffer_size,
+                                         const SampleMetadata& msg);
+    /** Metadata resend request (frontend -> backend). */
+    static size_t CreateSampleMetaReqPacket(uint8_t* buffer,
+                                            size_t buffer_size,
+                                            const SampleMetaReqMessage& msg);
+
     /** Non-destructive playback edit (frontend -> backend). */
     static size_t CreateSampleEditPacket(uint8_t* buffer,
                                          size_t buffer_size,

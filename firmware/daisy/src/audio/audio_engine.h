@@ -52,6 +52,9 @@ void SetEditParams(uint8_t slot,
                    uint32_t loop_start_frame,
                    uint32_t loop_end_frame);
 
+// Re-sends the per-sample record. sample_id 0 means every loaded sample.
+void PushAllSampleMeta(uint16_t sample_id);
+
 // WAV playback control
 bool OpenWav(const char* path);
 void CloseWav();

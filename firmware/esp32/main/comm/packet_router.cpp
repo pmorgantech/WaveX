@@ -185,6 +185,12 @@ void PacketRouter::route_by_message_type(uint8_t msg_type,
                 handle_storage_status(msg);
         } break;
 
+        case WaveX::Protocol::MSG_SAMPLE_META: {
+            WaveX::Protocol::SampleMetadata msg;
+            if (CopyMessage(payload, payload_len, msg, "SAMPLE_META"))
+                handle_sample_meta(msg);
+        } break;
+
         case WaveX::Protocol::MSG_DIAG_PUSH: {
             WaveX::Protocol::DiagPushMessage msg;
             if (CopyMessage(payload, payload_len, msg, "DIAG_PUSH"))
@@ -337,6 +343,20 @@ WEAK_HANDLER void PacketRouter::handle_sample_status(
 WEAK_HANDLER void PacketRouter::handle_storage_status(const WaveX::Protocol::StorageStatusMessage& msg) {
     ESP_LOGI("packet_router", "Storage status: mounted=%u", (unsigned)msg.mounted);
     inter_mcu_invoke_storage_status_callback(msg.mounted != 0);
+}
+
+WEAK_HANDLER void PacketRouter::handle_sample_meta(const WaveX::Protocol::SampleMetadata& msg) {
+    ESP_LOGI("packet_router",
+             "Sample meta: id=%u %lu frames @%lu Hz, region %lu..%lu loop %lu..%lu %s",
+             (unsigned)msg.sample_id,
+             (unsigned long)msg.total_frames,
+             (unsigned long)msg.sample_rate,
+             (unsigned long)msg.start_frame,
+             (unsigned long)msg.end_frame,
+             (unsigned long)msg.loop_start,
+             (unsigned long)msg.loop_end,
+             msg.loop_enabled ? "on" : "off");
+    inter_mcu_store_sample_meta(msg);
 }
 
 WEAK_HANDLER void PacketRouter::handle_diag_push(const WaveX::Protocol::DiagPushMessage& msg) {

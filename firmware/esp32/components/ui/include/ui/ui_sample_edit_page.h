@@ -1,6 +1,7 @@
 #pragma once
 
 #include "input_event.h"
+#include "spi_protocol/protocol.h"
 #include "ui_page.h"
 
 #include <array>
@@ -119,6 +120,7 @@ class UISampleEditPage : public UIPage {
     void zoomToFit();
     void clampMarkers();
     void sendEdit();
+    void applyMeta(const WaveX::Protocol::SampleMetadata& m);
     void refreshParams();
     void refreshFocusRing();
     void requestWaveform();

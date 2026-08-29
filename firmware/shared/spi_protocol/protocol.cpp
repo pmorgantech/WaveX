@@ -250,6 +250,19 @@ size_t ProtocolHandler::CreateStorageStatusPacket(uint8_t* buffer,
         buffer, buffer_size, MSG_STORAGE_STATUS, &status, sizeof(StorageStatusMessage));
 }
 
+size_t ProtocolHandler::CreateSampleMetaPacket(uint8_t* buffer,
+                                               size_t buffer_size,
+                                               const SampleMetadata& msg) {
+    return CreateUnifiedPacket(buffer, buffer_size, MSG_SAMPLE_META, &msg, sizeof(SampleMetadata));
+}
+
+size_t ProtocolHandler::CreateSampleMetaReqPacket(uint8_t* buffer,
+                                                  size_t buffer_size,
+                                                  const SampleMetaReqMessage& msg) {
+    return CreateUnifiedPacket(
+        buffer, buffer_size, MSG_SAMPLE_META_REQ, &msg, sizeof(SampleMetaReqMessage));
+}
+
 size_t ProtocolHandler::CreateSampleEditPacket(uint8_t* buffer,
                                                size_t buffer_size,
                                                const SampleEditMessage& msg) {

@@ -63,6 +63,10 @@ void ProcessSampleGetPathRequest(uint32_t /*file_index*/) {}
 namespace WaveX {
 namespace AudioEngine {
 
+void PushAllSampleMeta(uint16_t sample_id) {
+    WaveX::Test::GetDispatchRecord().meta_requests.push_back(sample_id);
+}
+
 void SetEditParams(uint8_t slot,
                    bool loop_enabled,
                    int16_t gain_db_x10,

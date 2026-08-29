@@ -107,6 +107,26 @@ TEST_F(MessageDispatchTest, SampleEditReachesAudioEngine) {
     EXPECT_EQ(got.loop_end, 352800u);
 }
 
+// sample_id 0 means "every loaded sample" - the frontend's way of
+// repopulating after its own restart without the backend tracking who has
+// seen what. A dispatcher that dropped this would leave the UI permanently
+// showing whatever it had cached.
+TEST_F(MessageDispatchTest, SampleMetaRequestReachesAudioEngine) {
+    SampleMetaReqMessage req(0);
+    Dispatch(MSG_SAMPLE_META_REQ, req);
+
+    ASSERT_EQ(GetDispatchRecord().meta_requests.size(), 1u);
+    EXPECT_EQ(GetDispatchRecord().meta_requests[0], 0);
+}
+
+TEST_F(MessageDispatchTest, SampleMetaRequestCanNameOneSample) {
+    SampleMetaReqMessage req(9);
+    Dispatch(MSG_SAMPLE_META_REQ, req);
+
+    ASSERT_EQ(GetDispatchRecord().meta_requests.size(), 1u);
+    EXPECT_EQ(GetDispatchRecord().meta_requests[0], 9);
+}
+
 TEST_F(MessageDispatchTest, DiagSubscribeReachesTelemetry) {
     DiagSubscribeMessage sub(1, 4);
     Dispatch(MSG_DIAG_SUBSCRIBE, sub);

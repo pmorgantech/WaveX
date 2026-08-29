@@ -306,6 +306,21 @@ bool inter_mcu_get_diag_push(WaveX::Protocol::DiagPushMessage* out, uint32_t max
     return false;
 }
 
+void inter_mcu_store_sample_meta(const WaveX::Protocol::SampleMetadata& msg) {
+    (void)msg;
+}
+
+bool inter_mcu_get_sample_meta(uint16_t sample_id, WaveX::Protocol::SampleMetadata* out) {
+    (void)sample_id;
+    (void)out;
+    return false;
+}
+
+esp_err_t inter_mcu_request_sample_meta(uint16_t sample_id) {
+    (void)sample_id;
+    return ESP_OK;
+}
+
 esp_err_t inter_mcu_send_sample_edit(uint8_t slot,
                                      bool loop_enabled,
                                      int16_t gain_db_x10,

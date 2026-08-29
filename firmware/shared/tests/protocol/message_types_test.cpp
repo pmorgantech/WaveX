@@ -1039,3 +1039,109 @@ TEST_F(MessageTypeTest, SampleEditMessageCarriesNegativeGain) {
         buffer_.data(), MSG_SAMPLE_EDIT_SET, &parsed, sizeof(parsed)));
     EXPECT_EQ(parsed.gain_db_x10, -240);
 }
+
+// The record is the single source of truth for every playback and display
+// path, so its round trip and its clamping are both load-bearing.
+TEST_F(MessageTypeTest, SampleMetadataRoundTrip) {
+    EXPECT_EQ(sizeof(SampleMetadata), 84u);  // + 4 header + 2 CRC fits PKT_SIZE_128
+
+    SampleMetadata original;
+    original.sample_id = 7;
+    original.generation = 3;
+    original.sample_rate = 44100;
+    original.total_frames = 7938000;  // 3:00, past the old 32-bit duration wrap
+    original.start_frame = 44100;
+    original.end_frame = 7000000;
+    original.loop_start = 100000;
+    original.loop_end = 6000000;
+    original.gain_db_x10 = -35;
+    original.channels = 2;
+    original.bits_per_sample = 24;
+    original.loop_enabled = 1;
+    original.channel_mode = SAMPLE_CH_MONO_SUM;
+    original.flags = 1;
+    detail::CopyWireString(original.name, sizeof(original.name), "amen-full.wav");
+
+    size_t created =
+        ProtocolHandler::CreateSampleMetaPacket(buffer_.data(), buffer_.size(), original);
+    ASSERT_GT(created, 0u);
+    EXPECT_EQ(created, 128u);
+    EXPECT_TRUE(ProtocolHandler::ValidatePacket(buffer_.data(), created));
+    EXPECT_EQ(ProtocolHandler::GetMessageType(buffer_.data()), MSG_SAMPLE_META);
+
+    SampleMetadata parsed;
+    ASSERT_TRUE(
+        ProtocolHandler::ParseMessage(buffer_.data(), MSG_SAMPLE_META, &parsed, sizeof(parsed)));
+    EXPECT_EQ(parsed.sample_id, original.sample_id);
+    EXPECT_EQ(parsed.generation, original.generation);
+    EXPECT_EQ(parsed.sample_rate, original.sample_rate);
+    EXPECT_EQ(parsed.total_frames, original.total_frames);
+    EXPECT_EQ(parsed.start_frame, original.start_frame);
+    EXPECT_EQ(parsed.end_frame, original.end_frame);
+    EXPECT_EQ(parsed.loop_start, original.loop_start);
+    EXPECT_EQ(parsed.loop_end, original.loop_end);
+    EXPECT_EQ(parsed.gain_db_x10, original.gain_db_x10);
+    EXPECT_EQ(parsed.channels, original.channels);
+    EXPECT_EQ(parsed.bits_per_sample, original.bits_per_sample);
+    EXPECT_EQ(parsed.loop_enabled, original.loop_enabled);
+    EXPECT_EQ(parsed.channel_mode, SAMPLE_CH_MONO_SUM);
+    EXPECT_EQ(parsed.flags, original.flags);
+    EXPECT_STREQ(parsed.name, "amen-full.wav");
+}
+
+// Resolve() is what every consumer relies on to turn the 0 sentinels into
+// real bounds. If it were wrong, streaming audition, RAM voices and the
+// preview would all be wrong together - which is the point of sharing it.
+TEST_F(MessageTypeTest, SampleMetadataResolveExpandsSentinels) {
+    SampleMetadata m;
+    m.total_frames = 1000;
+    m.Resolve();
+    EXPECT_EQ(m.start_frame, 0u);
+    EXPECT_EQ(m.end_frame, 1000u);
+    EXPECT_EQ(m.loop_start, 0u);
+    EXPECT_EQ(m.loop_end, 1000u);
+}
+
+TEST_F(MessageTypeTest, SampleMetadataResolveClampsToTheRegion) {
+    SampleMetadata m;
+    m.total_frames = 1000;
+    m.start_frame = 200;
+    m.end_frame = 800;
+    m.loop_start = 100;  // before start
+    m.loop_end = 900;    // past end
+    m.Resolve();
+    EXPECT_EQ(m.loop_end, 800u);    // pulled back to end_frame
+    EXPECT_EQ(m.loop_start, 200u);  // pushed up to start_frame
+}
+
+TEST_F(MessageTypeTest, SampleMetadataResolveRejectsInvertedRegion) {
+    SampleMetadata m;
+    m.total_frames = 1000;
+    m.start_frame = 900;
+    m.end_frame = 400;  // before start: nonsense, must not survive
+    m.Resolve();
+    EXPECT_LT(m.start_frame, m.end_frame);
+}
+
+// A zeroed record must not divide by zero or produce a region: an unloaded
+// sample is a real state, and every consumer calls Resolve() unconditionally.
+TEST_F(MessageTypeTest, SampleMetadataResolveIsSafeWhenEmpty) {
+    SampleMetadata m;
+    m.Resolve();
+    EXPECT_EQ(m.total_frames, 0u);
+    EXPECT_EQ(m.end_frame, 0u);
+    EXPECT_EQ(m.loop_end, 0u);
+}
+
+TEST_F(MessageTypeTest, SampleMetaReqMessage) {
+    SampleMetaReqMessage original(42);
+    size_t created =
+        ProtocolHandler::CreateSampleMetaReqPacket(buffer_.data(), buffer_.size(), original);
+    ASSERT_GT(created, 0u);
+    EXPECT_TRUE(ProtocolHandler::ValidatePacket(buffer_.data(), created));
+
+    SampleMetaReqMessage parsed;
+    ASSERT_TRUE(ProtocolHandler::ParseMessage(
+        buffer_.data(), MSG_SAMPLE_META_REQ, &parsed, sizeof(parsed)));
+    EXPECT_EQ(parsed.sample_id, 42);
+}

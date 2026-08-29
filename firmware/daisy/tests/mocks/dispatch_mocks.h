@@ -47,6 +47,7 @@ struct DispatchRecord {
     std::vector<uint32_t> play_index_requests;
 
     std::vector<WaveX::Protocol::SampleEditMessage> sample_edits;
+    std::vector<uint16_t> meta_requests;
 
     struct DiagSubscribeCall {
         bool enable;

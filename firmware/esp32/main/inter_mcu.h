@@ -63,6 +63,16 @@ esp_err_t inter_mcu_send_sample_edit(uint8_t slot,
                                      uint32_t loop_start,
                                      uint32_t loop_end);
 
+// Per-sample metadata cache (MSG_SAMPLE_META). The Daisy is authoritative and
+// pushes on every change; the frontend never derives these values.
+void inter_mcu_store_sample_meta(const WaveX::Protocol::SampleMetadata& msg);
+
+/** Newest record for an id, or the most recent record when sample_id is 0. */
+bool inter_mcu_get_sample_meta(uint16_t sample_id, WaveX::Protocol::SampleMetadata* out);
+
+/** Ask the backend to resend. sample_id 0 = every loaded sample. */
+esp_err_t inter_mcu_request_sample_meta(uint16_t sample_id);
+
 // Diagnostics telemetry (MSG_DIAG_SUBSCRIBE / MSG_DIAG_PUSH). Subscribe only
 // while the diagnostics page is open; the backend sends nothing otherwise.
 esp_err_t inter_mcu_send_diag_subscribe(bool enable, uint8_t interval_hz);

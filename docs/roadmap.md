@@ -50,9 +50,9 @@ Current state: the page draws the wireframe layout and START/END/ZOOM move the *
 ### 1.5.1 Marker model and protocol
 
 1. ~~**Four independent markers**: start, end, loop start, loop end.~~ Done — `MSG_SAMPLE_EDIT_SET` (0x3C) carries all four plus gain and a loop flag. The backend clamps (`start <= loop_start < loop_end <= end`) and refuses loops under 256 frames, which would re-seek every refill pass and starve the ring.
-2. ~~**Audition must honour the markers.**~~ Done for the streaming audition path: the refill reader caps at the region (or loop) end and rewinds to the loop point rather than the file start. **Not** done for RAM-resident `VoiceManager` playback, which has its own `start_frame`/`loop_*` fields and is fed by a different path — worth unifying before Phase 2.5.
-3. ~~**Gain**~~ Done for streaming audition (saturating q15 on the converted block). Still to do: apply it at RAM-voice trigger via `VoiceTriggerParams::gain_mul`, so a sample sounds the same however it is played.
-4. **No status reply yet.** The backend clamps but reports nothing, so the UI can display a region the engine quietly narrowed. Either echo the applied values, or extend `MSG_DIAG_PUSH`. Until then the UI applies the same clamp rules locally, which is duplication waiting to diverge.
+2. ~~**Audition must honour the markers.**~~ Done for both paths. Streaming caps at the region (or loop) end and rewinds to the loop point; `OnNoteOn` now fills `VoiceTriggerParams` from the record, so a note-triggered voice plays the same region the editor auditioned. `VoiceTriggerParams` already had every field — nothing was filling them.
+3. ~~**Gain**~~ Done for both paths: saturating q15 on the streaming block, and `gain_mul` (dB converted to linear) at RAM-voice trigger.
+4. ~~**No status reply yet.**~~ Done — `MSG_SAMPLE_META` (0x3D) is the authoritative record and is pushed on every change, so the UI shows what the engine applied rather than what it asked for. `MSG_SAMPLE_EDIT_SET` is now explicitly the *command* and the record is the *state*.
 5. **Save / Save As**: persist markers and gain. Prefer a WXCF sidecar (`features/instrument-model.md` §5) over a new per-file format — this is the same data a zone carries, and duplicating it invites divergence.
 
    **Naming needs a decision.** Auto-numbering (`amen.wav` → `amen1.wav` → `amen2.wav`) is the cheap option and needs no text-entry UI, but three things have to be settled first, and each has bitten samplers before:
@@ -104,7 +104,9 @@ Still open:
 
 Today every waveform redraw is a round trip: the ESP32 sends `MSG_PREVIEW_REQ`, the Daisy re-reads from SD, decimates, and streams `MSG_WAVE_CHUNK` back. Zooming or moving a marker off-window refetches from scratch. That is the reason the page needs a 150 ms request debounce at all.
 
-1. **A per-sample metadata record, synced to the ESP32.** One structure carrying rate, channels, bits, total frames, `data_start`, markers, loop points and gain — the authoritative description of a sample, held on the Daisy and pushed on change. Today this is scattered: geometry arrives incidentally via the browse listing, markers go out via `MSG_SAMPLE_EDIT_SET` with nothing coming back, and the frontend duplicates the backend's clamp rules because it has no way to read the applied values. One record replaces all of that, and it is the same data a zone carries (`features/instrument-model.md`), so define it once.
+1. ~~**A per-sample metadata record, synced to the ESP32.**~~ **Done.** `SampleMetadata` (84 B, `MSG_SAMPLE_META` 0x3D) is owned by the Daisy and pushed on every change; `MSG_SAMPLE_META_REQ` (0x3E) asks for a resend, with id 0 meaning "all". Every playback and display path now reads it, so they cannot disagree: streaming audition, RAM voices and the preview generator all consult the same record. `Resolve()` — the sentinel expansion and clamping — lives on the struct and is therefore shared rather than reimplemented per consumer.
+
+   Still to fold in: it should also become the zone's source of truth (`features/instrument-model.md`), and `generation` is defined but nothing bumps it yet (nothing renders destructively).
 
 2. **Send an envelope, not decimated samples.** The current preview sends every *n*th sample, which aliases badly — a single-sample-per-column decimation of a bright sample draws a waveform that does not resemble it, and transients disappear entirely. The standard answer is a **min/max pair per display column**. At the panel's 1256 px waveform width that is 1256 × 2 × int16 = **~5 KB for an entire file at full screen resolution**, whatever its length. That is the "minimal data over the wire" the request asks for, and it fits a handful of `MSG_WAVE_CHUNK` packets.
 

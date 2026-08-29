@@ -502,6 +502,24 @@ void UISampleEditPage::setZoom(int direction) {
     request_due_ms_ = (uint32_t)(esp_timer_get_time() / 1000) + kRequestSettleMs;
 }
 
+// Adopts the backend's view. Called on entry and whenever a fresh record
+// arrives, so the display always shows what the engine actually applied -
+// which matters because the backend clamps and can refuse a short loop.
+void UISampleEditPage::applyMeta(const WaveX::Protocol::SampleMetadata& m) {
+    sample_rate_ = m.sample_rate ? m.sample_rate : 48000;
+    total_frames_ = m.total_frames;
+    start_frame_ = m.start_frame;
+    end_frame_ = m.end_frame;
+    loop_start_ = m.loop_start;
+    loop_end_ = m.loop_end;
+    loop_enabled_ = (m.loop_enabled != 0);
+    gain_db_x10_ = m.gain_db_x10;
+    if (view_frames_ == 0 || view_frames_ > total_frames_) {
+        zoomToFit();
+    }
+    params_dirty_ = true;
+}
+
 void UISampleEditPage::sendEdit() {
     if (!has_sample_) {
         return;
@@ -509,13 +527,10 @@ void UISampleEditPage::sendEdit() {
     // end_frame/loop_end are sent verbatim rather than as the 0 sentinel: we
     // know the real length here, so let the backend clamp against the file
     // rather than guessing what "to the end" meant.
-    inter_mcu_send_sample_edit(kPreviewSlot,
-                               loop_enabled_,
-                               gain_db_x10_,
-                               start_frame_,
-                               end_frame_,
-                               loop_start_,
-                               loop_end_);
+    auto* state = getSampleBrowserState();
+    const uint8_t slot = state ? static_cast<uint8_t>(state->last_load_sample_id) : 0;
+    inter_mcu_send_sample_edit(
+        slot, loop_enabled_, gain_db_x10_, start_frame_, end_frame_, loop_start_, loop_end_);
 }
 
 void UISampleEditPage::refreshParams() {
@@ -668,6 +683,19 @@ void UISampleEditPage::serviceUi() {
         if ((int32_t)(now - request_due_ms_) >= 0) {
             request_due_ms_ = 0;
             requestWaveform();
+        }
+    }
+    // Adopt any newer record. The backend clamps, so this is how a refused
+    // short loop or a narrowed region becomes visible instead of the UI
+    // continuing to display a request the engine did not honour.
+    auto* state = getSampleBrowserState();
+    if (state) {
+        WaveX::Protocol::SampleMetadata m;
+        if (inter_mcu_get_sample_meta(state->last_load_sample_id, &m) && m.total_frames > 0 &&
+            (m.start_frame != start_frame_ || m.end_frame != end_frame_ ||
+             m.loop_start != loop_start_ || m.loop_end != loop_end_ ||
+             (m.loop_enabled != 0) != loop_enabled_ || m.gain_db_x10 != gain_db_x10_)) {
+            applyMeta(m);
         }
     }
     if (params_dirty_) {

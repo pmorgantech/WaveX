@@ -415,6 +415,10 @@ struct LoadedSampleInfo {
     uint16_t sample_rate = 0;
     uint8_t channels = 0;
     uint8_t bit_depth = 0;
+    // The authoritative record. Every playback and display path reads its
+    // markers, gain and channel mode from here, so streaming audition, RAM
+    // voices and the preview generator cannot disagree about the same sample.
+    WaveX::Protocol::SampleMetadata meta = {};
 };
 static constexpr size_t kLoadedSampleCapacity = kMaxZones;
 static LoadedSampleInfo s_loaded_samples[kLoadedSampleCapacity];
@@ -435,6 +439,20 @@ static LoadedSampleInfo* find_loaded_sample(uint16_t sample_id) {
 // shifting rather than swapping with the tail: find_playable_sample() and
 // OnPreviewReq() both read the last entry as "most recently loaded", and a
 // swap would quietly hand them an older sample.
+// Sends one sample's record. Called on load, on edit, and on request - the
+// frontend never derives these values, it is told them.
+static void PushSampleMeta(const LoadedSampleInfo& info) {
+    WaveX::Comm::UartLinkSend(WaveX::Protocol::MSG_SAMPLE_META, &info.meta, sizeof(info.meta));
+}
+
+void PushAllSampleMeta(uint16_t sample_id) {
+    for (size_t i = 0; i < s_loaded_sample_count; ++i) {
+        if (sample_id == 0 || s_loaded_samples[i].sample_id == sample_id) {
+            PushSampleMeta(s_loaded_samples[i]);
+        }
+    }
+}
+
 static void remove_loaded_sample(uint16_t sample_id) {
     for (size_t i = 0; i < s_loaded_sample_count; ++i) {
         if (s_loaded_samples[i].sample_id != sample_id) {
@@ -471,6 +489,21 @@ static bool upsert_loaded_sample(const SampleLoadMessage& sl, const wxsamp_t& ha
     info.channels = sl.channels;
     info.bit_depth = sl.bit_depth;
 
+    // Seed the record. Markers default to the whole sample and gain to unity,
+    // so an unedited sample behaves as it always has; every later change goes
+    // through SetEditParams, which re-pushes.
+    const uint32_t bpf = (sl.bit_depth / 8u) * (sl.channels ? sl.channels : 1u);
+    info.meta = WaveX::Protocol::SampleMetadata();
+    info.meta.sample_id = sl.sample_id;
+    info.meta.sample_rate = sl.sample_rate;
+    info.meta.total_frames = bpf ? (info.allocated_bytes / bpf) : 0;
+    info.meta.end_frame = info.meta.total_frames;
+    info.meta.loop_end = info.meta.total_frames;
+    info.meta.channels = sl.channels;
+    info.meta.bits_per_sample = sl.bit_depth;
+    info.meta.channel_mode = WaveX::Protocol::SAMPLE_CH_AS_RECORDED;
+    WaveX::Protocol::detail::CopyWireString(info.meta.name, sizeof(info.meta.name), sl.path);
+
     // Re-loading an id retires the previous entry and appends a fresh one, so
     // the reloaded sample becomes the newest rather than staying at its old
     // index. Updating in place made "most recently loaded" wrong for any id
@@ -482,6 +515,7 @@ static bool upsert_loaded_sample(const SampleLoadMessage& sl, const wxsamp_t& ha
         }
     }
     s_loaded_samples[s_loaded_sample_count++] = info;
+    PushSampleMeta(s_loaded_samples[s_loaded_sample_count - 1]);
     return true;
 }
 
@@ -1549,6 +1583,28 @@ void OnNoteOn(const NoteMessage& note_msg) {
     ev.params.root_note = kDefaultRootNote;
     ev.params.sample_rate_hz = src->sample_rate;  // 44.1k content pitches correctly on 48k engine
 
+    // Markers and gain come from the sample's record, so a note-triggered
+    // voice plays exactly the region the editor auditioned. Previously
+    // VoiceManager ignored both and the same file sounded different depending
+    // on how it was triggered.
+    {
+        WaveX::Protocol::SampleMetadata m = src->meta;
+        if (m.total_frames == 0) {
+            m.total_frames = ev.params.sample_frames;
+        }
+        m.Resolve();
+        ev.params.start_frame = m.start_frame;
+        ev.params.end_frame = m.end_frame;
+        ev.params.loop = m.loop_enabled != 0;
+        ev.params.loop_start = m.loop_start;
+        ev.params.loop_end = m.loop_end;
+        // gain_mul is linear and multiplies the velocity gain, so the dB
+        // figure has to be converted here rather than passed through.
+        ev.params.gain_mul = (m.gain_db_x10 == 0)
+                                 ? 1.0f
+                                 : std::pow(10.0f, static_cast<float>(m.gain_db_x10) / 200.0f);
+    }
+
     const bool queued = note_queue_push(ev);
     if (!queued && s_hw)
         WaveX::Log::PrintLine("RX NOTE_ON: note=%u DROPPED - note queue full",
@@ -1642,22 +1698,53 @@ void OnPreviewReq(const PreviewReqMessage& pr) {
 
     for (uint32_t i = start; i < end; i += decim) {
         int16_t v = 0;
+        // Channel selection comes from the record, not a hard-coded "left".
+        // Silently previewing only the left channel drew a misleading trace
+        // for anything panned, and a near-flat line for a hard-panned sample
+        // that is plainly audible - with nothing on screen saying so.
+        const uint8_t ch_count = src.channels ? src.channels : 1;
+        uint8_t pick = 0;
+        bool sum = false;
+        switch (src.meta.channel_mode) {
+            case WaveX::Protocol::SAMPLE_CH_RIGHT:
+                pick = (ch_count > 1) ? 1 : 0;
+                break;
+            case WaveX::Protocol::SAMPLE_CH_MONO_SUM:
+                sum = (ch_count > 1);
+                break;
+            case WaveX::Protocol::SAMPLE_CH_LEFT:
+            default:
+                pick = 0;
+                break;
+        }
+
         if (src.bit_depth == 16) {
-            if (src.channels == 1) {
+            if (ch_count == 1) {
                 v = samples16[i];
+            } else if (sum) {
+                const int32_t l = samples16[i * ch_count];
+                const int32_t r = samples16[i * ch_count + 1];
+                v = static_cast<int16_t>((l + r) / 2);
             } else {
-                // Interleaved stereo: take left channel
-                v = samples16[i * src.channels];
+                v = samples16[i * ch_count + pick];
             }
         } else if (src.bit_depth == 24) {
-            // 24-bit little endian; take left channel, sign-extend to 16-bit for display
-            uint32_t byte_index = i * bytes_per_frame;
-            int32_t s = (int32_t)(samples24[byte_index] | (samples24[byte_index + 1] << 8) |
-                                  (samples24[byte_index + 2] << 16));
-            // sign extend 24-bit to 32-bit then scale down to 16-bit
-            if (s & 0x00800000)
-                s |= 0xFF000000;
-            v = (int16_t)(s >> 8);
+            auto read24 = [&](uint32_t frame, uint8_t ch) -> int32_t {
+                const uint32_t bi = frame * bytes_per_frame + ch * 3u;
+                int32_t x =
+                    (int32_t)(samples24[bi] | (samples24[bi + 1] << 8) | (samples24[bi + 2] << 16));
+                if (x & 0x00800000) {
+                    x |= 0xFF000000;  // sign-extend 24 -> 32
+                }
+                return x >> 8;  // scale to 16-bit for display
+            };
+            if (ch_count == 1) {
+                v = (int16_t)read24(i, 0);
+            } else if (sum) {
+                v = (int16_t)((read24(i, 0) + read24(i, 1)) / 2);
+            } else {
+                v = (int16_t)read24(i, pick);
+            }
         }
         s_preview[s_preview_len++] = v;
         if (s_preview_len >= kMaxPreviewPoints) {
@@ -2465,6 +2552,13 @@ void PumpWavIO() {
 // Sample Audition Functions (for Sample Load/Save page)
 // ============================================================================
 
+// Shortest loop the streaming refill can sustain without re-seeking every
+// pass and starving the ring.
+static constexpr uint32_t kMinLoopFrames = 256;
+
+struct LoadedSampleInfo;
+static void ApplyMetaToStreaming(const LoadedSampleInfo* info);
+
 // dB -> q15 linear, clamped. Table-free: this runs once per edit message, not
 // per sample, so powf is affordable and exact beats fast here.
 static q15_t GainDbToQ15(int16_t db_x10) {
@@ -2482,19 +2576,52 @@ static q15_t GainDbToQ15(int16_t db_x10) {
     return static_cast<q15_t>(scaled);
 }
 
-void SetEditParams(uint8_t /*slot*/,
+// Applies an edit to the sample's record, then pushes the result back. The
+// backend clamps and is the authority; the frontend is told what was applied
+// rather than assuming its request was taken verbatim.
+void SetEditParams(uint8_t slot,
                    bool loop_enabled,
                    int16_t gain_db_x10,
                    uint32_t start_frame,
                    uint32_t end_frame,
                    uint32_t loop_start_frame,
                    uint32_t loop_end_frame) {
-    s_wav.gain_q15 = GainDbToQ15(gain_db_x10);
-    if (!s_wav.open) {
-        // Gain still lands; the region needs a file to be measured against.
-        return;
+    // slot is the sample id. 0 means "whatever the audition is playing",
+    // which is how the edit page addresses a sample it did not load itself.
+    LoadedSampleInfo* info = slot ? find_loaded_sample(slot) : nullptr;
+    if (!info && s_loaded_sample_count > 0) {
+        info = &s_loaded_samples[s_loaded_sample_count - 1];  // most recent
     }
 
+    if (info) {
+        auto& m = info->meta;
+        if (gain_db_x10 < -240) {
+            gain_db_x10 = -240;
+        } else if (gain_db_x10 > 120) {
+            gain_db_x10 = 120;
+        }
+        m.gain_db_x10 = gain_db_x10;
+        m.start_frame = start_frame;
+        m.end_frame = end_frame;
+        m.loop_start = loop_start_frame;
+        m.loop_end = loop_end_frame;
+        m.Resolve();
+        // A loop shorter than one SD slot would re-seek on every refill pass
+        // and starve the ring. The frontend cannot know this limit, so it is
+        // enforced here and reported back rather than silently obeyed.
+        m.loop_enabled = (loop_enabled && (m.loop_end - m.loop_start) >= kMinLoopFrames) ? 1 : 0;
+        PushSampleMeta(*info);
+    }
+
+    ApplyMetaToStreaming(info);
+}
+
+// Mirrors a record onto the streaming reader's byte offsets. Called whenever
+// either the record or the open file changes, so the two cannot drift.
+static void ApplyMetaToStreaming(const LoadedSampleInfo* info) {
+    if (!s_wav.open) {
+        return;
+    }
     const uint32_t bytes_per_sample = (s_wav.bits_per_sample == 24) ? 3u : 2u;
     const uint32_t file_bpf = (uint32_t)s_wav.num_channels * bytes_per_sample;
     if (file_bpf == 0) {
@@ -2502,42 +2629,31 @@ void SetEditParams(uint8_t /*slot*/,
     }
     const uint32_t total_frames = s_wav.data_size / file_bpf;
 
-    // Sentinels: 0 means "to the end". Resolve before clamping so a frontend
-    // that does not know the file length still gets a sensible region.
-    if (end_frame == 0 || end_frame > total_frames) {
-        end_frame = total_frames;
+    WaveX::Protocol::SampleMetadata m;
+    if (info) {
+        m = info->meta;
     }
-    if (start_frame >= end_frame) {
-        start_frame = 0;
-    }
-    if (loop_end_frame == 0 || loop_end_frame > end_frame) {
-        loop_end_frame = end_frame;
-    }
-    if (loop_start_frame < start_frame || loop_start_frame >= loop_end_frame) {
-        loop_start_frame = start_frame;
-    }
-    // A loop shorter than one SD slot would re-seek every pass and starve the
-    // ring; refuse rather than let it stutter. The frontend cannot know this
-    // limit, so the backend enforces it.
-    const uint32_t kMinLoopFrames = 256;
-    if (loop_enabled && (loop_end_frame - loop_start_frame) < kMinLoopFrames) {
-        loop_enabled = false;
-    }
+    // The streaming file is the authority on its own length: a record seeded
+    // from a load request can describe a different (or not yet complete)
+    // buffer.
+    m.total_frames = total_frames;
+    m.Resolve();
 
-    s_wav.region_start = s_wav.data_start + start_frame * file_bpf;
-    s_wav.region_end = s_wav.data_start + end_frame * file_bpf;
-    s_wav.loop_start = s_wav.data_start + loop_start_frame * file_bpf;
-    s_wav.loop_end = s_wav.data_start + loop_end_frame * file_bpf;
-    s_wav.loop_enabled = loop_enabled;
+    s_wav.region_start = s_wav.data_start + m.start_frame * file_bpf;
+    s_wav.region_end = s_wav.data_start + m.end_frame * file_bpf;
+    s_wav.loop_start = s_wav.data_start + m.loop_start * file_bpf;
+    s_wav.loop_end = s_wav.data_start + m.loop_end * file_bpf;
+    s_wav.loop_enabled = m.loop_enabled != 0;
+    s_wav.gain_q15 = GainDbToQ15(m.gain_db_x10);
 
     WaveX::Log::PrintLine("WAV edit: region %lu..%lu loop %lu..%lu %s gain %d.%ddB",
-                          (unsigned long)start_frame,
-                          (unsigned long)end_frame,
-                          (unsigned long)loop_start_frame,
-                          (unsigned long)loop_end_frame,
-                          loop_enabled ? "on" : "off",
-                          gain_db_x10 / 10,
-                          (gain_db_x10 < 0 ? -gain_db_x10 : gain_db_x10) % 10);
+                          (unsigned long)m.start_frame,
+                          (unsigned long)m.end_frame,
+                          (unsigned long)m.loop_start,
+                          (unsigned long)m.loop_end,
+                          s_wav.loop_enabled ? "on" : "off",
+                          m.gain_db_x10 / 10,
+                          (m.gain_db_x10 < 0 ? -m.gain_db_x10 : m.gain_db_x10) % 10);
 }
 
 bool AuditionSample(const char* path) {
