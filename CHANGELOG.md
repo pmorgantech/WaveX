@@ -24,6 +24,12 @@ versioning and release process.
   the one that removes it; 0 turns it off and is a real, reachable value. 1 ms
   is short enough to be inaudible against a drum transient, whose rise time is
   5–20 ms.
+- The curve is **tabulated**, not computed. `VoiceManager::Render()` evaluates
+  it per sample in the audio callback, where `cosf` is a library call of
+  50–150 cycles with no worst-case guarantee — precisely what the real-time
+  rules keep out of the callback. 257 entries (~1 KB) plus one interpolation
+  is a handful of cycles and, more importantly, the same handful every time.
+  Built at static-init time so no `__cxa_guard` lands on the callback's path.
 - **Raised cosine, not linear** (`src/audio/fade.hpp`, host-tested): a linear
   ramp has a corner at each end, and a corner in amplitude is a discontinuity
   in the first derivative — audible as a faint thump on exactly the material a

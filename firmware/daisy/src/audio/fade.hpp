@@ -21,9 +21,9 @@
 // zero - which is a step, i.e. the thing being fixed.
 //
 // HAL-free and header-only so both playback paths and the host tests share one
-// definition. The q15 form exists because the streaming path is fixed-point
-// (AGENTS.md: don't introduce float conversions into an integer loop); the
-// float form because VoiceManager's per-voice chain already is float.
+// definition. The curve is tabulated rather than computed: VoiceManager
+// evaluates it per sample in the audio callback, where a cosf call is a
+// library call with no worst-case guarantee. See detail::FadeTable below.
 
 #include <cmath>
 #include <cstdint>
@@ -35,21 +35,81 @@ namespace AudioEngine {
 /// frames and does not reliably remove the step it exists for.
 static constexpr uint32_t kMinFadeFrames = 4;
 
+namespace detail {
+
+// The curve, tabulated. VoiceManager::Render() evaluates this per sample in
+// the AUDIO CALLBACK, and cosf there is a library call of 50-150 cycles with
+// no worst-case guarantee - which is precisely the shape of thing the
+// real-time rules say must not go in the callback. A table lookup plus one
+// lerp is a handful of cycles and, more importantly, the SAME handful every
+// time. 257 entries (256 intervals + the endpoint) is ~1 KB and holds the
+// interpolation error near 1e-5, far below the q15 floor either caller
+// quantises to.
+//
+// Built at static-init time rather than on first use: a function-local static
+// would put a __cxa_guard acquire on the callback's fast path, and its first
+// execution would be the initialisation itself - inside the callback. This
+// target is C++14, so the header-only global is a static member of a class
+// template rather than an inline variable; either way it is dynamically
+// initialised before main(), and audio starts well after that.
+struct FadeTable {
+    static constexpr uint32_t kSteps = 256;
+    float g[kSteps + 1];
+
+    FadeTable() {
+        for (uint32_t i = 0; i <= kSteps; ++i) {
+            const double t = static_cast<double>(i) / static_cast<double>(kSteps);
+            g[i] = static_cast<float>(0.5 * (1.0 - std::cos(3.14159265358979323846 * t)));
+        }
+        // Pin the endpoints exactly. cos() is within an ulp of +/-1 here, but
+        // "within an ulp" of zero is not zero, and a fade that starts at 1e-8
+        // instead of 0 still starts on a step - a much smaller one, but the
+        // property being relied on is exactness at the boundary.
+        g[0] = 0.0f;
+        g[kSteps] = 1.0f;
+    }
+};
+
+template <typename Tag = void>
+struct FadeTableHolder {
+    static const FadeTable instance;
+};
+template <typename Tag>
+const FadeTable FadeTableHolder<Tag>::instance;
+
+inline const FadeTable& Table() {
+    return FadeTableHolder<>::instance;
+}
+
+}  // namespace detail
+
 /**
  * @brief Raised-cosine fade gain at `position` of a `length`-frame ramp.
  *
- * Returns 0.0 at position 0 and 1.0 at position >= length. `length` 0 means
- * no fade, which returns 1.0 - an absent fade must be unity, never silence.
+ * Returns exactly 0.0 at position 0 and exactly 1.0 at position >= length.
+ * `length` 0 means no fade, which returns 1.0 - an absent fade must be unity,
+ * never silence.
+ *
+ * Callback-safe: a table lookup and one interpolation, no transcendental and
+ * no branch whose cost depends on the input.
  */
 inline float FadeGain(uint32_t position, uint32_t length) {
-    if (length == 0) {
+    if (length == 0 || position >= length) {
         return 1.0f;
     }
-    if (position >= length) {
-        return 1.0f;
+    if (position == 0) {
+        return 0.0f;
     }
-    const float t = static_cast<float>(position) / static_cast<float>(length);
-    return 0.5f * (1.0f - std::cos(3.14159265358979323846f * t));
+    const detail::FadeTable& t = detail::Table();
+    // Index in table steps, with the fractional part kept for the lerp.
+    const uint64_t scaled =
+        (static_cast<uint64_t>(position) * detail::FadeTable::kSteps * 256u) / length;
+    const uint32_t index = static_cast<uint32_t>(scaled >> 8);
+    const float frac = static_cast<float>(scaled & 0xFFu) * (1.0f / 256.0f);
+    if (index >= detail::FadeTable::kSteps) {
+        return t.g[detail::FadeTable::kSteps];
+    }
+    return t.g[index] + (t.g[index + 1] - t.g[index]) * frac;
 }
 
 /**
