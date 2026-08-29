@@ -11,6 +11,28 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Changed — ESP32 links against Picolibc instead of Newlib
+
+- `CONFIG_LIBC_PICOLIBC=y`. Picolibc has been selectable since ESP-IDF v5.0
+  and becomes the default in v6.0, so this is available on the pinned v5.5
+  toolchain today and removes one more difference from a future 6.x baseline.
+- Measured on this project, not quoted from the vendor benchmark: the app
+  image drops from 912,992 to 884,624 bytes, a 27.7 KiB (3.1%) saving. That
+  is well short of the ~20% Espressif reports because their figure comes from
+  a stdio-dominated microbenchmark, whereas this image is mostly LVGL and
+  application code. The flash saving is therefore incidental — the reason to
+  do it is the per-task stack and heap-allocation overhead on stdio paths,
+  which is a runtime property this build cannot show and which wants
+  confirming on hardware against `display_manager`'s DMA-heap telemetry.
+- Safe for this project, checked rather than assumed: nothing in WaveX
+  touches `struct _reent` or redirects `stdin`/`stdout`/`stderr` per task
+  (the two documented `LIBC_PICOLIBC_NEWLIB_COMPATIBILITY` limitations), and
+  no prebuilt archive in the dependency tree targets RISC-V — the NemaGFX
+  libraries are ARM Cortex-M builds and the zl38063 blob is codec firmware,
+  neither of which links on ESP32-P4. Revert with `CONFIG_LIBC_NEWLIB=y`.
+- Note the project was on full Newlib, not newlib-nano, which is the
+  comparison where Picolibc has the most room to help.
+
 ### Changed — ESP32 encoders move to the pulse_cnt driver
 
 - `pcnt_task` now uses `driver/pulse_cnt.h` instead of the legacy

@@ -42,3 +42,15 @@ CONFIG_TINYUSB_MIDI_COUNT=1
 
 # LVGL snapshot support (ui_screenshot.cpp, debug builds)
 CONFIG_LV_USE_SNAPSHOT=y
+
+# Picolibc instead of Newlib. Smaller image and, more usefully here, lower
+# per-task stack and heap-allocation overhead on stdio paths - internal DMA
+# heap is the scarce resource on this board (see display_manager's heap
+# telemetry). Available from IDF v5.0 and the default from v6.0, so this also
+# de-risks that upgrade. Safe for this project: nothing here touches
+# "struct _reent" or redirects stdin/stdout/stderr per task, and no prebuilt
+# library in the dependency tree targets RISC-V (the NemaGFX and zl38063
+# archives are ARM/codec blobs that never link on ESP32-P4), so the
+# LIBC_PICOLIBC_NEWLIB_COMPATIBILITY caveats do not apply. Revert with
+# CONFIG_LIBC_NEWLIB=y if stdio behaviour ever looks wrong.
+CONFIG_LIBC_PICOLIBC=y
