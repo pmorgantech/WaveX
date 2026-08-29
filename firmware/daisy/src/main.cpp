@@ -566,6 +566,20 @@ int main(void) {
                                 (unsigned long)(blocks - last_blocks),
                                 (int)(WaveX::AudioEngine::GetAvgCpuLoad() * 100.0f),
                                 (unsigned long)WaveX::Log::DroppedBytes());
+
+                // Output level, so a healthy-looking clock can be told apart
+                // from a healthy clock emitting silence. blocks advancing with
+                // peak at zero means the DSP is producing nothing (a data
+                // problem); peak non-zero while audio is inaudible puts the
+                // fault after the DSP - codec, SAI, or analog.
+                WaveX::AudioEngine::BlockMeters lvl;
+                WaveX::AudioEngine::GetMeters(lvl);
+                WAVEX_LOG_DAISY(AUDIO_ENGINE,
+                                "LEVEL: peakL=%d peakR=%d rmsL=%d rmsR=%d (x1000)",
+                                (int)(lvl.peakL * 1000.0f),
+                                (int)(lvl.peakR * 1000.0f),
+                                (int)(lvl.rmsL * 1000.0f),
+                                (int)(lvl.rmsR * 1000.0f));
                 last_blocks = blocks;
                 last_now = now_ms;
 

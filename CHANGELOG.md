@@ -19,6 +19,17 @@ versioning and release process.
 - Added CodeGraph configuration for focused repository indexing and installed
   `vim-tiny` in the devcontainer image.
 
+### Added — Loop-point and output-level telemetry
+
+- The WAV loop point (EOF rewind) is now logged unconditionally with its
+  period and `f_lseek` duration. It previously sat behind
+  `WAVEX_DAISY_SD_DEBUG`, and `f_lseek` falls outside the timer that wraps
+  only `f_read`, so a file looping — and any cost of doing so — was invisible
+  in `I/O Stats`. It fires once per pass through the file, so it cannot spam.
+- The periodic stats now include output peak/RMS, separating a healthy audio
+  clock that is emitting silence (a data problem) from one whose output never
+  reaches the ear (codec, SAI, or analog).
+
 ### Fixed — SDMMC interrupt outranked audio
 
 - `SDMMC1_IRQn` ran at priority 0 (installed by libDaisy `per/sdmmc.cpp:84`),

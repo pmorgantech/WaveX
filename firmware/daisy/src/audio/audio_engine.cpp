@@ -826,7 +826,25 @@ static bool refill_sd_buffer() {
         }
 
         if (req_bytes == 0) {
+            // End of file: seek back and keep playing. Logged unconditionally
+            // (it happens once per pass through the file, so it cannot spam)
+            // because a periodic audible artefact with every other metric
+            // healthy points straight here, and this event was previously
+            // invisible - it sat behind WAVEX_DAISY_SD_DEBUG, and f_lseek is
+            // outside the s_io_duration timer that only wraps f_read, so the
+            // rewind cost never appeared in I/O Stats either.
+            const uint32_t seek_start = System::GetTick();
             f_lseek(&s_wav.file, s_wav.data_start);
+            const uint32_t seek_ticks = System::GetTick() - seek_start;
+            const uint32_t ticks_per_us = System::GetTickFreq() / 1000000u;
+            const uint32_t now_ms = System::GetNow();
+            static uint32_t s_last_loop_ms = 0;
+            WaveX::Log::PrintLine("WAV loop: rewind at %lu ms (period %lu ms, lseek %lu us)",
+                                  (unsigned long)now_ms,
+                                  (unsigned long)(now_ms - s_last_loop_ms),
+                                  (unsigned long)(seek_ticks / (ticks_per_us ? ticks_per_us : 1u)));
+            s_last_loop_ms = now_ms;
+
             s_wav.bytes_remaining = s_wav.data_size;
             req_frames = std::min(max_frames, s_wav.bytes_remaining / file_bpf);
             req_bytes = req_frames * file_bpf;
