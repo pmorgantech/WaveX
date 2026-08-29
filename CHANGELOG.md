@@ -11,6 +11,168 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Added — Sample browser status strip, audition progress and pagination row
+
+- The audition progress bar had no data source: the Daisy never reported
+  playback position at all. It now emits position at a fifth of the meter
+  rate — a progress bar does not need 20–50 Hz, and sharing the audition's
+  existing send budget beats adding a second periodic sender. It reuses
+  `MSG_SAMPLE_STATUS` state 1 with `sample_rate` carrying the *region*
+  length, so the UI scales without a second message. This is the **read**
+  position: it leads the audible one by the ring (~42 ms), which is invisible
+  on a bar but makes it useless as a playhead.
+- Status strip: directory and position in the listing on the left, card state
+  on the right, tracked by a `storage_mounted` flag on the browser widget. It
+  defaults to true, since the frontend cannot poll the slot — "unknown" and
+  "present" are the same thing until `MSG_STORAGE_STATUS` says otherwise.
+- Free space is **not** shown. The design's "SD 12.4 GB free" would have to be
+  invented; neither `FileEntryWire` nor `StorageStatusMessage` carries
+  capacity. The gap is recorded in `docs/roadmap.md` § 1.5.3 instead.
+- Pagination spinner row (design 1b), deliberately not the modal busy overlay:
+  pagination must not block the list, and rows already fetched stay usable
+  while more load. It is polled from the UI task rather than created at each
+  of the nine `pagination_in_progress` sites — several of those run on the
+  UART task, and creating LVGL objects off the UI task is what froze the
+  sample edit page.
+
+### Added — Audition loop gap, sample-load progress, design 1b sample browser
+
+- **Loop gap** rides on `SamplePlayIndexMessage`, *not* on `SampleMetadata`:
+  it is a property of this audition rather than of the sample, so the caller
+  decides. The browser passes 300 ms so a short file does not loop seamlessly
+  and read as a drone; the editor passes 0 so the loop seam is heard exactly
+  as it will play. The Daisy pushes silence into the ring at the rewind point
+  rather than skipping the pass, so the gap is genuine silence and not an
+  underrun — and it needs no SD read, which makes it free.
+- **Load progress**: the Daisy emits `MSG_SAMPLE_STATUS` state `0x11` from
+  inside the read loop, rate-limited to whole percent, with `frames_played`
+  carrying the percentage. `0x11` is distinct from `0x10` (complete) so an
+  older frontend ignores it rather than misreading a percentage as a frame
+  count. The sender pumps the TX queue itself — it is 4 deep and nothing
+  drains it from that context, so progress would otherwise be dropped.
+- **Browser port to design 1b**: list 770×487, detail panel 474×521 with a
+  filename headline, format and length rows, audition state and a progress
+  bar. The three row-building sites in `wavex_file_browser` had drifted apart
+  — different fonts, different selection colours, no duration at all — and now
+  share one `fb_style_row` (54 px rows, green selection ring, dim
+  directories, right-aligned duration), so the selection restyle cannot
+  diverge from the initial build as it had.
+- Two things deliberately **not** built: the design's "Data offset 44
+  (aligned)" row, because `data_start` is carried by neither `FileEntryWire`
+  nor `SampleMetadata` and inventing the one field that correlated exactly
+  with the stutter would be worse than omitting it; and a waveform in the
+  detail panel, because without an envelope cache a per-selection round trip
+  would make scrolling unusable.
+
+### Added — `SampleMetadata`: one authoritative record per sample
+
+- Markers and gain applied to streaming audition only; `VoiceManager` ignored
+  both, and the preview generator silently rendered the left channel. Those
+  looked like three bugs but were one: there was no record for the playback
+  and display paths to agree on, so each carried its own partial view.
+- `SampleMetadata` (84 B, `MSG_SAMPLE_META` 0x3D) is owned by the Daisy and
+  pushed on every change. `MSG_SAMPLE_META_REQ` (0x3E) asks for a resend, with
+  id 0 meaning "every loaded sample" — which is how the frontend repopulates
+  after its own restart without the backend tracking who has seen what.
+- `MSG_SAMPLE_EDIT_SET` is now explicitly the **command** and the record is
+  the **state**. That closes the gap where the backend clamped silently (it
+  refuses loops under 256 frames and narrows out-of-order regions) while the
+  UI kept displaying the request rather than the result. The edit page adopts
+  any newer record, so a refused loop becomes visible instead of believed.
+- Three consumers now read it: `OnNoteOn` fills `VoiceTriggerParams` from the
+  record (every field it needed already existed; nothing was filling them), so
+  a note-triggered voice plays the region the editor auditioned; the streaming
+  reader derives its byte offsets through one `ApplyMetaToStreaming`; and
+  `OnPreviewReq` takes its channel selection from `channel_mode` instead of a
+  hard-coded left, with the 24-bit branch rewritten around a `read24` helper
+  that had the same left-only assumption baked into its index arithmetic.
+- `Resolve()` — sentinel expansion plus clamping — lives on the struct, so the
+  rule is shared rather than reimplemented per consumer.
+
+### Added — Sample edit page: real geometry, four markers, loop, gain
+
+- The reported faults shared one root cause: `kSampleFrames` was hard-coded to
+  48000, exactly one second at 48 kHz. That is why Start and End would not move
+  past 1 s and why zoom appeared not to open out — it was already showing the
+  whole "sample" it believed existed. Geometry now comes from the browse
+  listing (rate, duration, channels, bits, size) via `SampleBrowserState`, so
+  the page opens fully zoomed out with the region spanning the whole clip.
+- New `MSG_SAMPLE_EDIT_SET` (0x3C) carries start, end, loop start, loop end, a
+  loop flag and gain. The backend clamps and is the authority; it refuses a
+  loop shorter than 256 frames, which would re-seek on every refill pass and
+  starve the ring. `0` means "to the end" for `end_frame` and `loop_end`, so a
+  frontend that does not know the file length can still send a region.
+- Daisy: the refill reader caps at the region (or loop) end and rewinds to the
+  loop point instead of the file start. Gain is a **saturating** q15 multiply
+  on the converted block, written out rather than `arm_scale_q15` (not in this
+  target's linked CMSIS set). Saturating deliberately: a wrapping multiply
+  turns a hot sample into full-scale noise at the moment the user raises gain.
+- UI: five parameters in four card slots, scrolled by `< Param` / `Param >` so
+  the design's 305 px card pitch survives. Encoder steps scale to the *visible*
+  span, not the whole sample, or a three-minute file would be unadjustable.
+  Zoom anchors on the focused marker. Loop handles sit on the bottom edge so
+  they never collide with S/E when the loop is at the region bounds.
+- Sample loading shows the shared `ui_busy_overlay`, which is honest because
+  the ESP32 is not blocked during a load — the Daisy does the SD work and
+  answers over the link.
+- Oversized samples are refused with both numbers on screen, checked against
+  the allocator's **largest free block** rather than total free: extents are
+  contiguous, so a fragmented pool with plenty of total space still cannot
+  take a big sample.
+
+### Added — Global Shift modifier for alternate softkey rows
+
+- The sample edit page needs more operations than six softkeys hold.
+  `UIPage::getShiftedSoftkeys()` opts a page in, `UINavigator` owns the state,
+  and `BUTTON_SHIFT` is intercepted in `InputDispatcher` so no page can
+  swallow the modifier by consuming `ButtonPress` for something else.
+- **Latched, not held** — hold-and-press is awkward one-handed on a touch
+  panel, and holding a key while turning the encoder is worse. **Sticky** — it
+  clears after one shifted key fires, and on navigation, because a plain
+  toggle gets left on and the next press does the wrong thing. **Inert rather
+  than hidden** on pages with no alternate row, because a control that appears
+  and disappears as you navigate is harder to learn than one that is always
+  present and sometimes dim.
+- Sample edit gets the first shifted row: Select / Loop / Gain / Save /
+  Save As / Reset. All but Reset are disabled with their reason attached,
+  since each needs protocol work that does not exist yet
+  (`docs/roadmap.md` § 1.5.1). Its unshifted row is Back / Audition / Zoom − /
+  Zoom + / `< Param` / `Param >`, with Audition toggling to Stop like the
+  browser and stopping on page exit — it used to play on under a page that no
+  longer existed.
+- Physical Shift still needs a key: keycode 4 maps to `BUTTON_SHIFT`, but the
+  matrix mapping is a three-key stub, so the header chip is the only way in.
+
+### Fixed — WAV duration overflow, blank diagnostics tabs, sample-edit freeze
+
+- **WAV duration was silently wrong.** `(frames * 1000u)` is a 32-bit multiply
+  and overflows above 4,294,967 frames — 97.4 s at 44.1 kHz. A 3:00 file
+  wrapped to 82 s and longer files wrapped repeatedly, so the reported figure
+  looked like a plausible duration rather than like garbage, which is why it
+  survived. Moved to a shared `WaveX::Wav::DurationMs` that promotes the
+  multiply, with tests straddling the wrap point at 44.1 and 48 kHz. Every
+  existing WAV fixture is a few seconds long, which is exactly how this
+  reached hardware.
+- **Blank diagnostics tabs.** The page refreshed only the tab named by
+  `active_tab`, but nothing updated that member when the tab bar was touched —
+  `lv_tabview` switches pages itself. `active_tab` stayed at `TAB_SYSTEM` and
+  the refresh timer kept updating a tab nobody was looking at. Touch and
+  softkey now share one `setActiveTab()` path, which also refreshes
+  immediately rather than waiting for the next 500 ms tick.
+- **Sample edit page froze on Audition and zoom.** `handleWaveChunk` runs in
+  the UART RX task and called `lv_chart`/`lv_label` directly — LVGL from a
+  non-UI task with no lock. The callback now only fills the buffer and raises
+  a flag; a 50 ms `lv_timer` draws on the UI task. Two things had to change
+  with it: the preview buffer is allocated once at a fixed ceiling and never
+  resized, because a reallocation while the RX task is mid-copy is a
+  use-after-free where a torn value is merely one stale frame; and encoder
+  movement is coalesced into a single request after 150 ms instead of one
+  preview request per detent.
+- **CPU tiles merged.** ESP32 CPU is one tile (busier core as the headline, a
+  bar per core, one sparkline) and the freed slot became DAISY CPU with its
+  own sparkline — `HeartbeatMessage` already carries it, so no protocol
+  change. Its old spot on the Link tab became FRAMES/s as a rate.
+
 ### Fixed — Sample Browser scrolling responsiveness (ESP32)
 
 - Scrolling was never waiting on the Daisy — file metadata is served from the
