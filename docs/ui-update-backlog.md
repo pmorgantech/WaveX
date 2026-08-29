@@ -11,7 +11,7 @@ document was written; the rest are marked as unconfirmed.
 
 ---
 
-## B1. Diagnostics tabs show no data unless reached by softkey — **root cause found**
+## B1. Diagnostics tabs show no data unless reached by softkey — **FIXED**
 
 **Reported:** Audio, Link and Storage show empty cards even while a sample is
 streaming from SD and playing.
@@ -33,7 +33,7 @@ timer tick, or a freshly-opened tab shows stale content for up to a second.
 
 ---
 
-## B2. Sample edit page freezes on Audition and on zoom — **root cause found**
+## B2. Sample edit page freezes on Audition and on zoom — **FIXED**
 
 **Reported:** pressing Audition plays the sample and then the UI freezes; zoom
 in/out also locks the display.
@@ -65,7 +65,7 @@ the wrong task.
 
 ---
 
-## B3. WAV duration is wrong for files over ~97 seconds — **root cause found**
+## B3. WAV duration is wrong for files over ~97 seconds — **FIXED**
 
 **Reported:** multi-minute songs list as e.g. 38 s.
 
@@ -94,7 +94,7 @@ survived.
 
 ---
 
-## B4. Combine the CPU tiles (requested)
+## B4. Combine the CPU tiles (requested) — **DONE**
 
 Merge `CPU CORE 0` and `CPU CORE 1` into a single **ESP32 CPU** tile carrying
 a sparkline plus two bars (one per core), and repurpose the freed tile for
@@ -115,6 +115,12 @@ Notes for whoever implements it:
   but see B6.
 
 **Confirmed working, do not regress:** the header status strip (meters + CPU).
+
+Implemented: `ESP32 CPU` (busier core as the headline, a bar per core, one
+sparkline) and `DAISY CPU` (sparkline + bar, from `HeartbeatMessage`). The
+Link tab's freed card became `FRAMES/s`, derived from the frontend's own
+packet counter as a rate rather than a since-boot total - free, and it needs
+neither `MSG_DIAG_PUSH` nor `WAVEX_DAISY_UART_PERF_DEBUG`.
 
 ---
 
@@ -190,6 +196,10 @@ covers pagination specifically and is cheaper than a modal.
 ---
 
 ## B9. Unverified / needs a look
+
+**All four fixes above are unverified on hardware.** B1 in particular was
+diagnosed by reading the code, and B9 notes that Audio/Storage blankness is
+attributed to it but not proven to be only it.
 
 - The MIDI tab reads all zeros. Expected — the Daisy has no sequencer or tempo
   follower yet — but it has not been confirmed that the zeros are *arriving*

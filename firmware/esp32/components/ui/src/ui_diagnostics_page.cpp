@@ -359,20 +359,17 @@ void UIDiagnosticsPage::buildSystemTab(lv_obj_t* tab) {
 }
 
 void UIDiagnosticsPage::buildLinkTab(lv_obj_t* tab) {
-    static const char* titles[4] = {"LINK", "DAISY CPU", "PACKETS", "ERRORS"};
-    // DAISY CPU is the only backend figure the heartbeat already carries; the
-    // rest of the Daisy telemetry waits on MSG_DIAG_PUSH.
-    static const bool gauge[4] = {false, true, false, false};
+    static const char* titles[4] = {"LINK", "FRAMES/s", "PACKETS", "ERRORS"};
+    // Daisy CPU moved to the System tab, where it sits beside the ESP32's own
+    // and can be compared at a glance. Frames/s takes its place here, derived
+    // from the frontend's own packet counter - free, and it needs neither
+    // MSG_DIAG_PUSH nor WAVEX_DAISY_UART_PERF_DEBUG.
+    static const bool gauge[4] = {false, false, false, false};
     for (int i = 0; i < 4; i++) {
-        link_cards[i] = makeCard(tab,
-                                 kColX[i % 2],
-                                 kRowY[i / 2],
-                                 kCardW,
-                                 titles[i],
-                                 i == 1 ? "wire" : "esp32",
-                                 gauge[i],
-                                 gauge[i] ? 60 : 0);
+        link_cards[i] =
+            makeCard(tab, kColX[i % 2], kRowY[i / 2], kCardW, titles[i], "esp32", gauge[i], 0);
     }
+    addSpark(link_cards[1], kColBlue);
 
     // Per-message-type counts. wavex_packet_stats_t already tracks these, so
     // the table needs no new plumbing at all.
@@ -508,8 +505,7 @@ std::array<Softkey, NUM_SOFTKEYS> UIDiagnosticsPage::getSoftkeys() {
 
     // Tab </> move the active tab. The tab bar itself stays out of the encoder
     // focus ring, so tabs are reachable without an extra focus mode.
-    keys[1] = {"Tab <",
-               [this]() { setActiveTab((active_tab + TAB_COUNT - 1) % TAB_COUNT); }};
+    keys[1] = {"Tab <", [this]() { setActiveTab((active_tab + TAB_COUNT - 1) % TAB_COUNT); }};
     keys[2] = {"Tab >", [this]() { setActiveTab((active_tab + 1) % TAB_COUNT); }};
     // Freeze: values often change faster than they can be read.
     keys[3] = {"Freeze", [this]() {
@@ -1072,7 +1068,10 @@ void UIDiagnosticsPage::refreshSystemTab() {
     inter_mcu_get_backend_heartbeat_detailed(&hb_sys);
     if (hb_sys.valid) {
         snprintf(v, sizeof(v), "%.1f", hb_sys.cpu_avg_percent);
-        snprintf(sub, sizeof(sub), "min %.1f%%  max %.1f%%", hb_sys.cpu_min_percent,
+        snprintf(sub,
+                 sizeof(sub),
+                 "min %.1f%%  max %.1f%%",
+                 hb_sys.cpu_min_percent,
                  hb_sys.cpu_max_percent);
         setCard(sys_cards[1], v, "%", sub, (int)hb_sys.cpu_avg_percent);
         pushSpark(sys_cards[1], (int)hb_sys.cpu_avg_percent);

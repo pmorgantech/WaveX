@@ -55,10 +55,10 @@ class UIDiagnosticsPage : public UIPage {
         int warn_pct;  // fill turns orange at/above this; 0 = never
     };
 
-    // Sparkline width. 60 samples at the 1 Hz collection cadence is a minute
-    // of history - long enough to show a trend, which is the whole reason a
-    // sparkline beats a number: "low-water is 180" versus "low-water has been
-    // sliding for 20 s" is the difference between noticing and diagnosing.
+    // Sparkline width. The sampling timer runs at 500 ms, so 60 points is
+    // 30 s of history - long enough to show a trend, which is the whole reason
+    // a sparkline beats a number: "CPU is 40%" versus "CPU has been climbing
+    // for half a minute" is the difference between noticing and diagnosing.
     static constexpr uint16_t kSparkPoints = 60;
 
     // UI creation
