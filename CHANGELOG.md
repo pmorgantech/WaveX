@@ -11,6 +11,32 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Added — Voice parameter editing on the keyboard page (digital voice audition, stage 4)
+
+- CUTOFF, RES, ATTACK, DECAY, SUSTAIN and RELEASE are editable from the
+  Keyboard page and sent as `MSG_CONTROL_CHANGE`, completing the chain Stage 1
+  built: an edit reaches sounding voices *and* the next trigger.
+  `inter_mcu_send_control_change()` existed but had never had a caller.
+- **The parameters live on the keyboard page rather than a page of their own,
+  and that is forced, not a layout preference.** Leaving a page releases every
+  held note, so a control on another page could never be swept against a
+  sounding one.
+- **Two ways to change a value, because the touchscreen alone cannot do it.**
+  The LVGL port is single-touch, so a finger holding a pad cannot also drag a
+  slider - "hold a note and sweep" is physically impossible with touch alone.
+  So: the **physical encoder** (hold a pad, turn with the other hand), and
+  **Latch** (tap to sustain, both hands free). `Value -` / `Value +` softkeys
+  duplicate the encoder because the encoder is exactly the part that cannot be
+  verified from here. Latched pads stay lit so what is sounding is visible.
+- Values display in engine units (Hz, ms, percent) using the *same* mapping the
+  Daisy applies, so the number on screen is the number the engine used rather
+  than a second opinion about it. Initial values mirror `VoiceLiveParams`
+  defaults, so opening the page does not change the sound before anything is
+  touched.
+- Root-note controls moved to the Shift row to make space; encoder direction
+  takes the magnitude of `delta` and lets the event type supply the sign, per
+  the global contract.
+
 ### Added — On-screen keyboard / pad grid (digital voice audition, stage 3)
 
 - A 4x4 grid of touch pads under **Main Menu → Keyboard**, where cell *n* sends
