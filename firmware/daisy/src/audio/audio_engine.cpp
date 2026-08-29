@@ -18,7 +18,8 @@ extern "C" SD_HandleTypeDef hsd1;  // libDaisy per/sdmmc.cpp
 #include "ff.h"
 #include "profiling/profiler.h"
 #include "stm32h7xx_ll_cortex.h"  // For ARM atomic operations
-#include "sys/dma.h"              // For cache management
+#include "storage/sd_sdio.h"
+#include "sys/dma.h"  // For cache management
 
 #include "../cv/cv_cal_store.hpp"
 #include "../cv/cv_group_router.hpp"
@@ -929,6 +930,17 @@ static bool refill_sd_buffer() {
             // playback continues instead of dying silently.
             if (s_io_errors >= kIoErrorsBeforeRecover && s_io_recoveries < kMaxIoRecoveries) {
                 s_io_recoveries++;
+
+                // A data CRC failure is bit corruption on the wire, not a sick
+                // card (the card reports TRANSFER state throughout), so
+                // reopening at the same bus clock just fails again. Step the
+                // clock down first and reopen at the slower rate. Only for
+                // CRC: a timeout or a genuinely absent card is not fixed by
+                // going slower, and downgrading on those would quietly cost
+                // throughput for no reason.
+                if ((HAL_SD_GetError(&hsd1) & SDMMC_ERROR_DATA_CRC_FAIL) != 0u) {
+                    WaveX::Storage::SdSdio::DowngradeSpeed();
+                }
                 const uint32_t resume_at =
                     s_wav.data_start + (s_wav.data_size - s_wav.bytes_remaining);
                 f_close(&s_wav.file);

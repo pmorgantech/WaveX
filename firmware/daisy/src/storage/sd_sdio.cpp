@@ -10,6 +10,8 @@
 #include "per/sdmmc.h"
 #include "sys/system.h"
 
+extern "C" SD_HandleTypeDef hsd1;  // libDaisy per/sdmmc.cpp
+
 using namespace daisy;
 
 namespace WaveX {
@@ -19,6 +21,135 @@ namespace SdSdio {
 static SdmmcHandler s_sdmmc;
 static FatFSInterface s_fsi;
 static GPIO s_cd_pin;
+
+namespace {
+
+struct SpeedEntry {
+    SdmmcHandler::Speed speed;
+    const char* name;
+};
+
+// Index order matches WAVEX_DAISY_SD_CARD_SPEED (0..4).
+constexpr SpeedEntry kSpeeds[] = {
+    {SdmmcHandler::Speed::SLOW, "SLOW/400kHz"},
+    {SdmmcHandler::Speed::MEDIUM_SLOW, "MEDIUM_SLOW/12.5MHz"},
+    {SdmmcHandler::Speed::STANDARD, "STANDARD/25MHz"},
+    {SdmmcHandler::Speed::FAST, "FAST/50MHz"},
+    {SdmmcHandler::Speed::VERY_FAST, "VERY_FAST/100MHz"},
+};
+constexpr int kSpeedCount = static_cast<int>(sizeof(kSpeeds) / sizeof(kSpeeds[0]));
+
+static_assert(WAVEX_DAISY_SD_CARD_SPEED >= 0 && WAVEX_DAISY_SD_CARD_SPEED < kSpeedCount,
+              "WAVEX_DAISY_SD_CARD_SPEED must be 0..4 (SdmmcHandler::Speed)");
+
+int s_speed_index = WAVEX_DAISY_SD_CARD_SPEED;
+
+// Applies one bus clock and proves it by mounting and reading a directory.
+// A mount that succeeds but cannot be read is exactly what a marginal clock
+// looks like, so the read is part of the test rather than a separate step.
+bool TrySpeed(int index, bool auto_format) {
+    SdmmcHandler::Config sd_cfg;
+    sd_cfg.Defaults();
+    sd_cfg.speed = kSpeeds[index].speed;
+    sd_cfg.width = (WAVEX_DAISY_SD_CARD_BUS_WIDTH == 1) ? SdmmcHandler::BusWidth::BITS_1
+                                                        : SdmmcHandler::BusWidth::BITS_4;
+    sd_cfg.clock_powersave = false;
+
+    WaveX::Log::PrintLine("SD: trying %s, %s",
+                          kSpeeds[index].name,
+                          WAVEX_DAISY_SD_CARD_BUS_WIDTH == 4 ? "4-bit" : "1-bit");
+
+    // Drop any previous mount and card state so the new clock is applied from
+    // a clean start; HAL_SD_Init runs again on the next disk access.
+    f_mount(nullptr, "/", 0);
+    HAL_SD_DeInit(&hsd1);
+
+    if (s_sdmmc.Init(sd_cfg) != SdmmcHandler::Result::OK) {
+        WaveX::Log::PrintLine("SD: SDMMC init FAILED at %s", kSpeeds[index].name);
+        return false;
+    }
+
+    FatFSInterface::Config fcfg{};
+    fcfg.media = FatFSInterface::Config::MEDIA_SD;
+    if (s_fsi.Init(fcfg) != FatFSInterface::Result::OK) {
+        WaveX::Log::PrintLine("SD: FatFS link failed at %s", kSpeeds[index].name);
+        return false;
+    }
+
+    FATFS& fs = s_fsi.GetSDFileSystem();
+    if (f_mount(&fs, "/", 0) != FR_OK) {
+        return false;
+    }
+
+    // Exercise the bus. Delayed mount means this is the first real access, so
+    // it is also where a clock the card cannot hold will fail.
+    DIR dir;
+    FRESULT fr = FR_NOT_READY;
+    for (int retry = 0; retry < 5; ++retry) {
+        fr = f_opendir(&dir, "/");
+        if (fr == FR_OK) {
+            f_closedir(&dir);
+            s_speed_index = index;
+            WaveX::Log::PrintLine("SD: mounted at %s", kSpeeds[index].name);
+            return true;
+        }
+        if (fr != FR_NOT_READY) {
+            break;
+        }
+        System::Delay(50);
+    }
+
+    if (fr == FR_NO_FILESYSTEM && auto_format) {
+        WaveX::Log::PrintLine("SD: No filesystem detected; formatting...");
+        static BYTE workbuf[4096];
+        if (f_mkfs("/", FM_FAT | FM_SFD, 0, workbuf, sizeof(workbuf)) == FR_OK &&
+            f_opendir(&dir, "/") == FR_OK) {
+            f_closedir(&dir);
+            s_speed_index = index;
+            WaveX::Log::PrintLine("SD: mounted at %s (after format)", kSpeeds[index].name);
+            return true;
+        }
+    }
+
+    WaveX::Log::PrintLine("SD: %s unusable (FatFS result %d)", kSpeeds[index].name, (int)fr);
+    return false;
+}
+
+// Walks down from `start_index` to the slowest rate.
+bool ConfigureAndMount(int start_index, bool auto_format) {
+    for (int i = start_index; i >= 0; --i) {
+        if (TrySpeed(i, auto_format)) {
+            if (i != start_index) {
+                WaveX::Log::PrintLine(
+                    "SD: negotiated DOWN from %s to %s - the card or wiring "
+                    "cannot hold the configured rate",
+                    kSpeeds[start_index].name,
+                    kSpeeds[i].name);
+            }
+            return true;
+        }
+    }
+    WaveX::Log::PrintLine("SD: unusable at every bus clock");
+    return false;
+}
+
+}  // namespace
+
+bool DowngradeSpeed() {
+    if (s_speed_index <= 0) {
+        WaveX::Log::PrintLine("SD: already at %s; cannot go slower", kSpeeds[0].name);
+        return false;
+    }
+    const int target = s_speed_index - 1;
+    WaveX::Log::PrintLine("SD: downgrading %s -> %s after read errors",
+                          kSpeeds[s_speed_index].name,
+                          kSpeeds[target].name);
+    return TrySpeed(target, false);
+}
+
+const char* CurrentSpeedName() {
+    return kSpeeds[s_speed_index].name;
+}
 
 bool InitAndMount(DaisySeed& hw, bool auto_format) {
 // Check for Card Detect pin if configured
@@ -38,71 +169,13 @@ bool InitAndMount(DaisySeed& hw, bool auto_format) {
     WaveX::Log::PrintLine("SD: Card detect disabled - assuming card present");
 #endif
 
-    SdmmcHandler::Config sd_cfg;
-    sd_cfg.Defaults();
-
-    // Configure speed based on macro
-    switch (WAVEX_DAISY_SD_CARD_SPEED) {
-        case 0:
-            sd_cfg.speed = SdmmcHandler::Speed::SLOW;
-            break;
-        case 1:
-            sd_cfg.speed = SdmmcHandler::Speed::MEDIUM_SLOW;
-            break;
-        case 2:
-            sd_cfg.speed = SdmmcHandler::Speed::STANDARD;
-            break;
-        case 3:
-            sd_cfg.speed = SdmmcHandler::Speed::FAST;
-            break;
-        case 4:
-            // Was missing, so VERY_FAST fell through to the default below and
-            // silently ran at STANDARD - a setting that could be selected but
-            // never took effect.
-            sd_cfg.speed = SdmmcHandler::Speed::VERY_FAST;
-            break;
-        default:
-            sd_cfg.speed = SdmmcHandler::Speed::STANDARD;
-            break;
-    }
-
-    // Configure bus width based on macro
-    sd_cfg.width = (WAVEX_DAISY_SD_CARD_BUS_WIDTH == 1) ? SdmmcHandler::BusWidth::BITS_1
-                                                        : SdmmcHandler::BusWidth::BITS_4;
-
-    sd_cfg.clock_powersave = false;
-
-    // Indexed directly by the macro, so it must cover every selectable value
-    // - it had four entries while the enum has five, and adding the VERY_FAST
-    // case above would otherwise have made setting 4 read out of bounds.
-    // Clock figures derived in hardware_config.h.
-    const char* speed_names[] = {
-        "SLOW/400kHz", "MEDIUM_SLOW/12.5MHz", "STANDARD/25MHz", "FAST/50MHz", "VERY_FAST/100MHz"};
-    static_assert(WAVEX_DAISY_SD_CARD_SPEED >= 0 &&
-                      WAVEX_DAISY_SD_CARD_SPEED <
-                          static_cast<int>(sizeof(speed_names) / sizeof(speed_names[0])),
-                  "WAVEX_DAISY_SD_CARD_SPEED must be 0..4 (SdmmcHandler::Speed)");
-    const char* width_names[] = {"1-bit", "4-bit"};
-    WaveX::Log::PrintLine("SD: Configuring SDMMC - Speed: %s, Width: %s",
-                          speed_names[WAVEX_DAISY_SD_CARD_SPEED],
-                          width_names[WAVEX_DAISY_SD_CARD_BUS_WIDTH == 4 ? 1 : 0]);
-
-    if (s_sdmmc.Init(sd_cfg) != SdmmcHandler::Result::OK) {
-        WaveX::Log::PrintLine("SD: SDMMC init FAILED");
+    // Bus clocks, fastest first. Negotiation walks DOWN this list: a card or
+    // harness that cannot hold the configured rate settles on the fastest one
+    // it can, rather than failing outright or being pinned low for everyone.
+    // Figures derived in hardware_config.h.
+    if (!ConfigureAndMount(static_cast<int>(WAVEX_DAISY_SD_CARD_SPEED), auto_format)) {
         return false;
     }
-    WaveX::Log::PrintLine("SD: SDMMC init OK (4-bit, STANDARD)");
-
-    FatFSInterface::Config fcfg{};
-    fcfg.media = FatFSInterface::Config::MEDIA_SD;
-    if (s_fsi.Init(fcfg) != FatFSInterface::Result::OK) {
-        WaveX::Log::PrintLine("SD: FatFS link failed");
-        return false;
-    }
-    WaveX::Log::PrintLine("SD: FatFS interface initialized successfully");
-
-    // Try to get some card information before mounting
-    WaveX::Log::PrintLine("SD: Checking SDMMC status before mount...");
 
     FATFS& fs = s_fsi.GetSDFileSystem();
     // Use delayed mount (0) as per libDaisy standard - mount happens on first filesystem access

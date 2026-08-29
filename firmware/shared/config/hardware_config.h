@@ -164,13 +164,20 @@
  * Raising this setting only shrinks the transfer portion, so expect roughly a
  * 10% improvement from STANDARD to FAST, not 2x.
  *
- * The default is 2 (STANDARD), deliberately one step below libDaisy's own
- * default of FAST. A lower speed may be necessary to avoid data corruption or
- * initialization failures with long cables or particular cards; raising it is
- * a hardware-validation decision, not a code change.
+ * This is the STARTING point, not a fixed setting. SdSdio::InitAndMount()
+ * negotiates down from here until the card mounts and reads, and a data CRC
+ * failure under load steps it down again at runtime
+ * (SdSdio::DowngradeSpeed()). So the default is 3 (FAST): ask for the fastest
+ * rate the hardware is specified for and let a card or harness that cannot
+ * hold it settle where it can, rather than pinning every board to the slowest
+ * rate any board needs. Watch for "SD: negotiated DOWN" or "SD: downgrading"
+ * in the log - either means this board is not holding the configured rate.
+ *
+ * Lower it if a board proves marginal even with negotiation, since starting
+ * too high costs a failed mount attempt per step at boot.
  */
 #ifndef WAVEX_DAISY_SD_CARD_SPEED
-#define WAVEX_DAISY_SD_CARD_SPEED 2
+#define WAVEX_DAISY_SD_CARD_SPEED 3
 #endif
 
 // External Flash (Daisy only)

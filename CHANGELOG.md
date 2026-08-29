@@ -31,6 +31,23 @@ versioning and release process.
   recoveries per file so a genuinely dead card ends playback cleanly instead
   of reopening forever.
 
+### Added — SD bus clock negotiation
+
+- `SdSdio::InitAndMount()` now starts at `WAVEX_DAISY_SD_CARD_SPEED` and steps
+  down one bus clock at a time until the card both mounts and reads, so a card
+  or harness that cannot hold the configured rate lands on the fastest rate it
+  can instead of failing. Each candidate is proven with a real directory read,
+  since a mount that succeeds but cannot be read is exactly what a marginal
+  clock looks like.
+- Added `SdSdio::DowngradeSpeed()`, invoked from the streaming recovery path
+  when `HAL_SD_GetError()` reports `SDMMC_ERROR_DATA_CRC_FAIL`. Marginal timing
+  only shows up after sustained transfer, so a boot probe cannot catch it;
+  reopening at the same clock would just fail again. Restricted to CRC:
+  timeouts and absent cards are not fixed by going slower.
+- The default start moves from STANDARD (25 MHz) to FAST (50 MHz), which
+  negotiation makes safe. Watch for `SD: negotiated DOWN` or `SD: downgrading`
+  — either means that board is not holding the configured rate.
+
 ### Fixed — Failed SD reads no longer spin the main loop
 
 - After a read failure the pump retried as fast as the loop ran — measured at
