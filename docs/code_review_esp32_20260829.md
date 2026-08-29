@@ -95,7 +95,11 @@ Consequence: LVGL object-tree/heap corruption — the same failure class the cod
 
 **Fix**: the port lock is recursive — take `LV_LOCK()` around `processAll()` in `ui_task.cpp` (and inside `toggleShift`), as `UISettingsPage::rebuildList()` already does correctly. Cheap, fixes four pages at once.
 
-**Fixed 2026-08-29.** `LV_LOCK()` now wraps `processAll()` in `ui_task.cpp`, which covers `toggleShift` and all four pages. Verified safe against deadlock first: `process_rx_frames` routes without holding `s_uart_mutex`, so the lock never nests inside it, and no input handler blocks. The stale lock-usage guidelines at the top of `ui_navigator.cpp` (which claimed `LV_LOCK()` would "compete with LVGL's own lock") were rewritten to state the new invariant.
+**Fixed 2026-08-29.** `processAll()` now takes the port lock around **each event**, covering `toggleShift` and all four pages. Per event rather than once around the drain: a backlog (fast encoder spin queued while a page was building) would otherwise hold the lock across every queued event back to back, stalling the render task for as many frames as there are events; per event the hold is one handler long. The extra acquire/release is a few hundred cycles against a queue carrying single-digit events per 32 ms pass.
+
+Verified safe against deadlock before extending the lock: `process_rx_frames` routes without holding `s_uart_mutex`, so the LVGL lock never nests inside it; both `s_uart_mutex` holders are brief and bounded (`uart_link_send` 10 ms timeout, `dequeue_tx_entry` 2 ms, and neither spans `uart_write_bytes`); and no input handler blocks. This establishes a **lock order of LVGL → UART** — recorded in `input_dispatcher.cpp`, because the E-LIFE1 fix must not reintroduce an LVGL acquire on the UART side. The stale guidelines at the top of `ui_navigator.cpp` (which claimed `LV_LOCK()` would "compete with LVGL's own lock") were rewritten to state the new invariant.
+
+Hold time is argued, not measured — logged in roadmap § Outstanding hardware verification. The structural argument is that the lock was never the dominant term: `lv_refr_now()` in `adaptiveRefreshControl()` holds it across a full 720×1280 refresh up to every 16 ms, which dwarfs any handler, and the page-push path already took the lock internally before this change.
 
 ### E-LVGL3 — `lv_async_call` from the UART task with freeable captures
 

@@ -17,7 +17,7 @@
 // already holds it is free. Prefer taking it to reasoning about whether some
 // caller already did.
 //
-// - UI task: holds the lock across InputDispatcher::processAll(), so every
+// - UI task: InputDispatcher::processAll() locks around each event, so every
 //   UIPage::onInput handler and anything it calls already runs locked.
 // - UINavigator::push/pop: take the lock; they are also called outside dispatch.
 // - UIPage::onEnter/onExit: NO lock - called from push/pop, which hold it.

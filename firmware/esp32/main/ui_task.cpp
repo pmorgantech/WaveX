@@ -517,16 +517,10 @@ void UITask::run() {
             }
         }
 #endif
-        // Dispatch queued input events to current context. onInput handlers
-        // build and restyle widgets (see ui_navigator.cpp's lock guidelines),
-        // so the port lock is held across dispatch rather than left to each
-        // page to remember - the LVGL task renders on the other core and a
-        // handler running unlocked corrupts the object tree. The lock is
-        // recursive, so handlers that take it again (UINavigator::push,
-        // UISettingsPage::rebuildList) are unaffected.
-        LV_LOCK();
+        // Dispatch queued input events to current context. processAll() takes
+        // the LVGL port lock around each event itself (see input_dispatcher.cpp
+        // for why per event and not around the drain), so no lock here.
         wavex_ui::InputDispatcher::instance().processAll();
-        LV_UNLOCK();
 
         // Debug-build serial screenshots (no-op stub in release; manages
         // its own LVGL locking, so called outside LV_LOCK).
