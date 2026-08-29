@@ -64,6 +64,7 @@ that depends on an external crate or protocol.
 
 ## Versioning and changelog
 
+- NEVER place AI metadata into git commit messages: "Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>" 
 - **Frontend (ESP32) and backend (Daisy) firmware share one version number**, defined in the single root **[`VERSION`](VERSION)** file (plain `MAJOR.MINOR.PATCH`, no prefix/suffix — required by CMake's `project(... VERSION ...)` parser). Both builds read it:
   - `firmware/daisy/CMakeLists.txt` reads `VERSION` into `project(wavex-daisy VERSION ...)`.
   - `firmware/esp32/CMakeLists.txt` reads `VERSION` into `PROJECT_VER` before the ESP-IDF `project()` call, which embeds it in `esp_app_desc_t`.

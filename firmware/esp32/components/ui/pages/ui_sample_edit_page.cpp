@@ -1,6 +1,7 @@
 #include "ui/ui_sample_edit_page.h"
 
 #include <esp_log.h>
+#include <esp_timer.h>
 
 #include "components/waveform_view.h"
 #include "inter_mcu.h"
@@ -20,7 +21,18 @@ constexpr uint8_t kPreviewSlot = 0;
 // we treat this window as the sample. Zoom narrows it, it never grows past it.
 constexpr uint32_t kSampleFrames = 48000;
 constexpr uint16_t kPreviewPoints = 512;
+// Hard ceiling on the preview buffer. It is allocated once at this size and
+// never resized, because the UART task writes into it while the UI task reads
+// it: a reallocation mid-copy is a use-after-free, where a torn value is just
+// one stale frame. Decimation is chosen so a window yields at most this many
+// points, and any reply claiming more is dropped.
+constexpr uint16_t kMaxPreviewPoints = 1024;
 constexpr uint32_t kMinWindow = 512;
+
+// Coalescing window for encoder-driven preview requests. Long enough that a
+// continuous turn produces one request rather than one per detent, short
+// enough that the waveform still feels like it is tracking the knob.
+constexpr uint32_t kRequestSettleMs = 150;
 
 // Layout, page-relative (the navigator's content area already starts below the
 // 75px header). Design 2e: waveform 1256x250 @ y12, param strip y278, info y434.
@@ -89,10 +101,16 @@ void UISampleEditPage::onEnter(lv_obj_t* parent) {
     lv_obj_set_style_bg_opa(root_, LV_OPA_COVER, 0);
     lv_obj_remove_flag(root_, LV_OBJ_FLAG_SCROLLABLE);
 
+    // Allocated once, before any chunk can arrive, and never resized after.
+    preview_buffer_.assign(kMaxPreviewPoints, 0);
+
     buildWaveformPanel(root_);
     buildParamStrip(root_);
     buildInfoStrip(root_);
 
+    ui_timer_ = lv_timer_create(&UISampleEditPage::uiTimerCb, 50, this);
+    // Only after the timer exists: a chunk arriving before it would set a flag
+    // nothing is watching, and the first waveform would never be drawn.
     inter_mcu_set_wave_chunk_listener(&UISampleEditPage::waveChunkStatic, this);
 
     auto* state = getSampleBrowserState();
@@ -107,7 +125,6 @@ void UISampleEditPage::onEnter(lv_obj_t* parent) {
     start_frame_ = 0;
     end_frame_ = window_frames_;
     expected_len_ = kPreviewPoints;
-    preview_buffer_.assign(expected_len_, 0);
 
     refreshStatus(state->last_load_sample_path.c_str());
     refreshParams();
@@ -174,7 +191,13 @@ void UISampleEditPage::buildInfoStrip(lv_obj_t* parent) {
 }
 
 void UISampleEditPage::onExit() {
+    // Unregister first. Deleting the timer or the widgets while a chunk can
+    // still arrive would leave the RX task writing through a freed page.
     inter_mcu_set_wave_chunk_listener(nullptr, nullptr);
+    if (ui_timer_) {
+        lv_timer_delete(ui_timer_);
+        ui_timer_ = nullptr;
+    }
     waveform_.reset();
     if (root_) {
         lv_obj_del(root_);
@@ -253,8 +276,8 @@ void UISampleEditPage::adjustFocused(int steps) {
                               std::min<int64_t>(v, static_cast<int64_t>(kSampleFrames)));
         end_frame_ = static_cast<uint32_t>(v);
     }
-    refreshParams();
-    requestWaveform();
+    params_dirty_ = true;
+    request_due_ms_ = (uint32_t)(esp_timer_get_time() / 1000) + kRequestSettleMs;
 }
 
 void UISampleEditPage::setZoom(int direction) {
@@ -274,8 +297,8 @@ void UISampleEditPage::setZoom(int direction) {
     if (start_frame_ >= end_frame_) {
         start_frame_ = end_frame_ > 0 ? end_frame_ - 1 : 0;
     }
-    refreshParams();
-    requestWaveform();
+    params_dirty_ = true;
+    request_due_ms_ = (uint32_t)(esp_timer_get_time() / 1000) + kRequestSettleMs;
 }
 
 void UISampleEditPage::refreshParams() {
@@ -343,32 +366,55 @@ void UISampleEditPage::waveChunkStatic(uint32_t offset,
     static_cast<UISampleEditPage*>(user)->handleWaveChunk(offset, samples, count);
 }
 
+// UART RX task context. Touching LVGL from here is what froze the display:
+// lv_chart and lv_label are not safe outside the UI task without the port
+// lock, and a chunk train from one preview request lands dozens of times.
+// Copy into the buffer, raise a flag, and let serviceUi() draw.
 void UISampleEditPage::handleWaveChunk(uint32_t offset, const int16_t* samples, uint16_t count) {
     if (!samples || count == 0) {
-        refreshStatus("Waveform: no data");
-        if (waveform_)
-            waveform_->clear();
+        waveform_dirty_ = true;
         return;
     }
 
-    ESP_LOGI(TAG, "Wave chunk received: offset=%u count=%u", (unsigned)offset, (unsigned)count);
-
-    if (expected_len_ == 0) {
-        expected_len_ = kPreviewPoints;
-        preview_buffer_.assign(expected_len_, 0);
-    }
-
     const uint32_t needed = offset + count;
-    if (preview_buffer_.size() < needed) {
-        preview_buffer_.resize(needed, 0);
+    if (preview_buffer_.size() < kMaxPreviewPoints || needed > expected_len_) {
+        // Bound the growth. A malformed or superseded reply with a large
+        // offset would otherwise resize the buffer without limit from a task
+        // that must not block.
+        return;  // superseded or malformed reply; never grow the buffer here
     }
 
     std::copy(samples, samples + count, preview_buffer_.begin() + offset);
+    waveform_dirty_ = true;
+}
 
-    const uint32_t filled =
-        std::min<uint32_t>(static_cast<uint32_t>(preview_buffer_.size()), expected_len_);
-    if (waveform_ && filled > 0) {
-        waveform_->setSamples(preview_buffer_.data(), static_cast<uint16_t>(filled));
+void UISampleEditPage::uiTimerCb(lv_timer_t* t) {
+    auto* self = static_cast<UISampleEditPage*>(lv_timer_get_user_data(t));
+    if (self) {
+        self->serviceUi();
+    }
+}
+
+// UI task. The only place this page touches LVGL after onEnter.
+void UISampleEditPage::serviceUi() {
+    if (request_due_ms_ != 0) {
+        const uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
+        if ((int32_t)(now - request_due_ms_) >= 0) {
+            request_due_ms_ = 0;
+            requestWaveform();
+        }
+    }
+    if (params_dirty_) {
+        params_dirty_ = false;
+        refreshParams();
+    }
+    if (waveform_dirty_) {
+        waveform_dirty_ = false;
+        const uint32_t filled =
+            std::min<uint32_t>(static_cast<uint32_t>(preview_buffer_.size()), expected_len_);
+        if (waveform_ && filled > 0) {
+            waveform_->setSamples(preview_buffer_.data(), static_cast<uint16_t>(filled));
+        }
     }
 }
 
@@ -385,8 +431,10 @@ void UISampleEditPage::requestWaveform() {
     if (decim == 0) {
         decim = 1;
     }
-    expected_len_ = span / decim;
-    preview_buffer_.assign(expected_len_, 0);
+    expected_len_ = std::min<uint32_t>(span / decim, kMaxPreviewPoints);
+    // Cleared in place - assign() would reallocate, and the UART task may be
+    // writing into this buffer right now.
+    std::fill(preview_buffer_.begin(), preview_buffer_.end(), 0);
 
     const esp_err_t res =
         inter_mcu_send_preview_req(kPreviewSlot, 0, span, static_cast<uint16_t>(decim));

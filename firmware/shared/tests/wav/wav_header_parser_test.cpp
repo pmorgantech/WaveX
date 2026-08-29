@@ -200,3 +200,72 @@ TEST(WavHeaderParserTest, ChunkFloodTerminates) {
 }
 
 }  // namespace
+
+// Duration is computed from data_size, and the obvious 32-bit multiply
+// overflows above 4,294,967 frames - 97.4 s at 44.1 kHz. Every fixture above
+// is short, which is exactly why that bug reached hardware: three-minute
+// songs listed as 38 seconds. These cases are all longer than the wrap point.
+TEST(WavDurationTest, ShortFileIsExact) {
+    WaveX::Wav::WavInfo info;
+    info.sample_rate = 44100;
+    info.num_channels = 2;
+    info.bits_per_sample = 16;
+    info.data_size = 44100 * 4 * 5;  // 5.000 s
+    EXPECT_EQ(WaveX::Wav::DurationMs(info), 5000u);
+}
+
+TEST(WavDurationTest, SurvivesThePointWhere32BitWraps) {
+    WaveX::Wav::WavInfo info;
+    info.sample_rate = 44100;
+    info.num_channels = 2;
+    info.bits_per_sample = 16;
+
+    // 97.4 s is where frames * 1000 exceeds UINT32_MAX. Straddle it.
+    info.data_size = static_cast<uint32_t>(97ull * 44100 * 4);
+    EXPECT_EQ(WaveX::Wav::DurationMs(info), 97000u);
+    info.data_size = static_cast<uint32_t>(98ull * 44100 * 4);
+    EXPECT_EQ(WaveX::Wav::DurationMs(info), 98000u);
+}
+
+TEST(WavDurationTest, ThreeMinuteFileAt44k) {
+    WaveX::Wav::WavInfo info;
+    info.sample_rate = 44100;
+    info.num_channels = 2;
+    info.bits_per_sample = 16;
+    info.data_size = static_cast<uint32_t>(180ull * 44100 * 4);
+    // The 32-bit form reported 82608 ms here.
+    EXPECT_EQ(WaveX::Wav::DurationMs(info), 180000u);
+}
+
+TEST(WavDurationTest, TenMinuteFileAt48k) {
+    WaveX::Wav::WavInfo info;
+    info.sample_rate = 48000;
+    info.num_channels = 2;
+    info.bits_per_sample = 24;
+    info.data_size = static_cast<uint32_t>(600ull * 48000 * 6);
+    EXPECT_EQ(WaveX::Wav::DurationMs(info), 600000u);
+}
+
+TEST(WavDurationTest, MonoAnd8BitAreNotSpecialCased) {
+    WaveX::Wav::WavInfo info;
+    info.sample_rate = 22050;
+    info.num_channels = 1;
+    info.bits_per_sample = 8;
+    info.data_size = 22050 * 300;  // 300 s
+    EXPECT_EQ(WaveX::Wav::DurationMs(info), 300000u);
+}
+
+// Undeterminable rather than a divide-by-zero or a nonsense figure.
+TEST(WavDurationTest, ReturnsZeroWhenFormatIsUnknown) {
+    WaveX::Wav::WavInfo info;
+    info.data_size = 1000000;
+    EXPECT_EQ(WaveX::Wav::DurationMs(info), 0u);
+
+    info.sample_rate = 44100;
+    info.num_channels = 0;
+    EXPECT_EQ(WaveX::Wav::DurationMs(info), 0u);
+
+    info.num_channels = 2;
+    info.bits_per_sample = 4;  // below one whole byte per sample
+    EXPECT_EQ(WaveX::Wav::DurationMs(info), 0u);
+}

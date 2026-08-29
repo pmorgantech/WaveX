@@ -49,8 +49,17 @@ class UIDiagnosticsPage : public UIPage {
         lv_obj_t* unit;   // suffix, font 22
         lv_obj_t* sub;    // context line, font 18
         lv_obj_t* bar;    // gauge, or nullptr when the metric has no budget
-        int warn_pct;     // fill turns orange at/above this; 0 = never
+        lv_obj_t* bar2;   // second gauge (dual-core tile), or nullptr
+        lv_obj_t* spark;  // lv_chart sparkline, or nullptr
+        lv_chart_series_t* series;
+        int warn_pct;  // fill turns orange at/above this; 0 = never
     };
+
+    // Sparkline width. 60 samples at the 1 Hz collection cadence is a minute
+    // of history - long enough to show a trend, which is the whole reason a
+    // sparkline beats a number: "low-water is 180" versus "low-water has been
+    // sliding for 20 s" is the difference between noticing and diagnosing.
+    static constexpr uint16_t kSparkPoints = 60;
 
     // UI creation
     void buildTabs(lv_obj_t* parent);
@@ -68,6 +77,10 @@ class UIDiagnosticsPage : public UIPage {
                   bool gauge,
                   int warn_pct);
     void setCard(Card& c, const char* value, const char* unit, const char* sub, int pct);
+    // Add a sparkline and, optionally, a second gauge bar to an existing card.
+    void addSpark(Card& c, uint32_t colour);
+    void addSecondBar(Card& c, uint32_t colour);
+    void pushSpark(Card& c, int value);
 
     // Per-tab refresh
     void refreshSystemTab();
@@ -91,6 +104,12 @@ class UIDiagnosticsPage : public UIPage {
     // Data collection and UI update methods
     void collectDiagnosticsData();
     void applyUiUpdates();
+
+    // Single path for changing tabs, whether by touch or by softkey. Touch
+    // goes through the tabview's own event, so both must land here or the
+    // refresh loop and the visible tab drift apart.
+    static void onTabChanged(lv_event_t* e);
+    void setActiveTab(uint8_t tab);
 
     // Static callbacks
     static void diagnosticsUpdateCallback(void* arg);

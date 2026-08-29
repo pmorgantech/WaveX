@@ -247,15 +247,10 @@ bool ParseWavMetadata(const WaveX::Storage::FileEntry& entry,
     wire_entry.bits_per_sample = bits_per_sample;
     wire_entry.duration_ms = 0;
 
-    if (data_found && sample_rate > 0 && channels > 0 && bits_per_sample > 0) {
-        uint32_t bytes_per_sample = bits_per_sample / 8;
-        if (bytes_per_sample > 0) {
-            uint32_t bytes_per_frame = bytes_per_sample * channels;
-            if (bytes_per_frame > 0) {
-                uint32_t frames = data_chunk_size / bytes_per_frame;
-                wire_entry.duration_ms = (frames * 1000u) / sample_rate;
-            }
-        }
+    if (data_found) {
+        // Shared helper, not an inline multiply: the 32-bit form overflows
+        // above 97 s at 44.1 kHz. See WaveX::Wav::DurationMs.
+        wire_entry.duration_ms = WaveX::Wav::DurationMs(info);
     }
 
     uint32_t parse_total_ms = daisy::System::GetNow() - parse_start_ms;

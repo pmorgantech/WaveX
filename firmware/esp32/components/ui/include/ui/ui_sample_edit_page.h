@@ -55,6 +55,17 @@ class UISampleEditPage : public UIPage {
     std::vector<int16_t> preview_buffer_;
     uint32_t expected_len_ = 0;
 
+    // Wave chunks arrive on the UART RX task, which must not touch LVGL
+    // (inter_mcu.h; ui-architecture.md). The callback only fills the buffer
+    // and raises these flags; ui_timer_ applies them on the UI task.
+    lv_timer_t* ui_timer_ = nullptr;
+    volatile bool waveform_dirty_ = false;
+    volatile bool params_dirty_ = false;
+
+    // Encoder movement coalescing. One detent used to fire a preview request
+    // of its own, so a single turn queued a burst of them.
+    uint32_t request_due_ms_ = 0;
+
     // Region, in frames, within the previewable window.
     uint32_t start_frame_ = 0;
     uint32_t end_frame_ = 0;
@@ -70,6 +81,9 @@ class UISampleEditPage : public UIPage {
     void buildWaveformPanel(lv_obj_t* parent);
     void buildParamStrip(lv_obj_t* parent);
     void buildInfoStrip(lv_obj_t* parent);
+
+    static void uiTimerCb(lv_timer_t* t);
+    void serviceUi();
 
     void adjustFocused(int steps);
     void setZoom(int direction);

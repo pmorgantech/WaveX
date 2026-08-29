@@ -30,6 +30,28 @@ struct WavInfo {
     uint32_t data_size = 0;    // bytes in the data chunk
 };
 
+/**
+ * @brief Playing time of a parsed WAV, in milliseconds. 0 if undeterminable.
+ *
+ * Lives here, next to the struct it reads, because the obvious inline version
+ * is wrong: `(frames * 1000u) / sample_rate` in 32-bit overflows once frames
+ * exceeds 4,294,967 - only 97 seconds at 44.1 kHz - and the wrapped result
+ * bears no visible relationship to the truth, so it reads as a plausible
+ * duration rather than as garbage. That shipped, and three-minute songs
+ * listed as 38 seconds.
+ */
+inline uint32_t DurationMs(const WavInfo& info) {
+    if (info.sample_rate == 0 || info.num_channels == 0 || info.bits_per_sample < 8) {
+        return 0;
+    }
+    const uint32_t bytes_per_frame = (info.bits_per_sample / 8u) * info.num_channels;
+    if (bytes_per_frame == 0) {
+        return 0;
+    }
+    const uint64_t frames = info.data_size / bytes_per_frame;
+    return static_cast<uint32_t>((frames * 1000ull) / info.sample_rate);
+}
+
 enum class ParseResult : uint8_t {
     Ok,
     NotRiffWave,  // missing RIFF/WAVE magic

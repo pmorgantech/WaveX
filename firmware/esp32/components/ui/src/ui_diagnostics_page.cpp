@@ -154,7 +154,35 @@ void UIDiagnosticsPage::buildTabs(lv_obj_t* parent) {
     buildStorageTab(t_storage);
     buildMidiTab(t_midi);
 
+    // The tab bar switches pages by itself. Without this, touching a tab
+    // changed the view but left active_tab at TAB_SYSTEM, so the refresh timer
+    // kept updating a tab nobody was looking at and the visible one stayed
+    // blank - which is exactly how Audio, Link and Storage read as broken.
+    lv_obj_add_event_cb(tabview, &UIDiagnosticsPage::onTabChanged, LV_EVENT_VALUE_CHANGED, this);
     lv_tabview_set_active(tabview, active_tab, LV_ANIM_OFF);
+}
+
+void UIDiagnosticsPage::onTabChanged(lv_event_t* e) {
+    auto* self = static_cast<UIDiagnosticsPage*>(lv_event_get_user_data(e));
+    if (!self || !self->tabview) {
+        return;
+    }
+    self->setActiveTab(static_cast<uint8_t>(lv_tabview_get_tab_active(self->tabview)));
+}
+
+void UIDiagnosticsPage::setActiveTab(uint8_t tab) {
+    if (tab >= TAB_COUNT) {
+        return;
+    }
+    active_tab = tab;
+    if (tabview && lv_tabview_get_tab_active(tabview) != tab) {
+        lv_tabview_set_active(tabview, tab, LV_ANIM_OFF);
+    }
+    // Refresh now rather than waiting for the next timer tick: otherwise a
+    // freshly-opened tab shows whatever it was built with for up to a second,
+    // which reads as "this tab has no data".
+    ui_update_pending = true;
+    applyUiUpdates();
 }
 
 UIDiagnosticsPage::Card UIDiagnosticsPage::makeCard(lv_obj_t* parent,
@@ -212,6 +240,66 @@ UIDiagnosticsPage::Card UIDiagnosticsPage::makeCard(lv_obj_t* parent,
     return c;
 }
 
+// Sparkline: an lv_chart line series across the card's mid band. Cheap, and
+// per docs/ui-diagnostics-spec.md a trend beats a number - it turns "CPU is
+// 40%" into "CPU has been climbing for half a minute".
+void UIDiagnosticsPage::addSpark(Card& c, uint32_t colour) {
+    if (!c.value) {
+        return;
+    }
+    lv_obj_t* card = lv_obj_get_parent(c.value);
+    c.spark = lv_chart_create(card);
+    lv_obj_set_size(c.spark, kGaugeW, 52);
+    lv_obj_set_pos(c.spark, 16, 118);
+    lv_chart_set_type(c.spark, LV_CHART_TYPE_LINE);
+    lv_chart_set_point_count(c.spark, kSparkPoints);
+    lv_chart_set_range(c.spark, LV_CHART_AXIS_PRIMARY_Y, 0, 100);
+    lv_chart_set_div_line_count(c.spark, 0, 0);
+    lv_chart_set_update_mode(c.spark, LV_CHART_UPDATE_MODE_SHIFT);
+    lv_obj_set_style_bg_color(c.spark, lv_color_hex(0x0C0C0C), LV_PART_MAIN);
+    lv_obj_set_style_border_width(c.spark, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(c.spark, 0, LV_PART_MAIN);
+    lv_obj_set_style_radius(c.spark, 2, LV_PART_MAIN);
+    lv_obj_set_style_size(c.spark, 0, 0, LV_PART_INDICATOR);  // line only, no dots
+    lv_obj_set_style_line_width(c.spark, 2, LV_PART_ITEMS);
+    c.series = lv_chart_add_series(c.spark, lv_color_hex(colour), LV_CHART_AXIS_PRIMARY_Y);
+    // Start flat at zero rather than at LV_CHART_POINT_NONE, so the trace
+    // reads as "no load yet" instead of leaving a blank panel that looks
+    // like the tile is broken.
+    for (uint16_t i = 0; i < kSparkPoints; i++) {
+        lv_chart_set_next_value(c.spark, c.series, 0);
+    }
+}
+
+void UIDiagnosticsPage::addSecondBar(Card& c, uint32_t colour) {
+    if (!c.bar) {
+        return;
+    }
+    lv_obj_t* card = lv_obj_get_parent(c.bar);
+    // Sits directly under the first, so the two cores read as one pair.
+    c.bar2 = lv_bar_create(card);
+    lv_obj_set_size(c.bar2, kGaugeW, 14);
+    lv_obj_set_pos(c.bar2, 16, 196);
+    lv_obj_set_pos(c.bar, 16, 176);
+    lv_bar_set_range(c.bar2, 0, 100);
+    lv_bar_set_value(c.bar2, 0, LV_ANIM_OFF);
+    lv_obj_set_style_bg_color(c.bar2, lv_color_hex(kColTrack), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(c.bar2, lv_color_hex(colour), LV_PART_INDICATOR);
+    lv_obj_set_style_radius(c.bar2, 2, LV_PART_MAIN);
+    lv_obj_set_style_radius(c.bar2, 2, LV_PART_INDICATOR);
+}
+
+void UIDiagnosticsPage::pushSpark(Card& c, int value) {
+    if (!c.spark || !c.series) {
+        return;
+    }
+    if (value < 0)
+        value = 0;
+    if (value > 100)
+        value = 100;
+    lv_chart_set_next_value(c.spark, c.series, static_cast<int32_t>(value));
+}
+
 void UIDiagnosticsPage::setCard(
     Card& c, const char* value, const char* unit, const char* sub, int pct) {
     if (!c.value)
@@ -241,8 +329,8 @@ void UIDiagnosticsPage::buildSystemTab(lv_obj_t* tab) {
         int warn;
     };
     static const Def defs[8] = {
-        {"CPU CORE 0", true, 85},
-        {"CPU CORE 1", true, 85},
+        {"ESP32 CPU", true, 85},
+        {"DAISY CPU", true, 85},
         {"HEAP INTERNAL", true, 85},
         {"PSRAM", true, 85},
         {"LVGL POOL", true, 85},
@@ -256,10 +344,18 @@ void UIDiagnosticsPage::buildSystemTab(lv_obj_t* tab) {
                                 kRowY[i / 4],
                                 kCardW,
                                 defs[i].title,
-                                "esp32",
+                                i == 1 ? "wire" : "esp32",
                                 defs[i].gauge,
                                 defs[i].warn);
     }
+    // ESP32 CPU carries both cores: one sparkline of the busier core plus a
+    // bar each. Two near-identical tiles side by side made the pair hard to
+    // read and cost a slot the Daisy needed.
+    addSpark(sys_cards[0], kColBlue);
+    addSecondBar(sys_cards[0], kColBlue);
+    // Daisy CPU is the figure that predicts an underrun, so it earns a trend
+    // of its own. It comes free from HeartbeatMessage - no protocol change.
+    addSpark(sys_cards[1], kColGreen);
 }
 
 void UIDiagnosticsPage::buildLinkTab(lv_obj_t* tab) {
@@ -412,16 +508,9 @@ std::array<Softkey, NUM_SOFTKEYS> UIDiagnosticsPage::getSoftkeys() {
 
     // Tab </> move the active tab. The tab bar itself stays out of the encoder
     // focus ring, so tabs are reachable without an extra focus mode.
-    keys[1] = {"Tab <", [this]() {
-                   active_tab = (active_tab + TAB_COUNT - 1) % TAB_COUNT;
-                   if (tabview)
-                       lv_tabview_set_active(tabview, active_tab, LV_ANIM_OFF);
-               }};
-    keys[2] = {"Tab >", [this]() {
-                   active_tab = (active_tab + 1) % TAB_COUNT;
-                   if (tabview)
-                       lv_tabview_set_active(tabview, active_tab, LV_ANIM_OFF);
-               }};
+    keys[1] = {"Tab <",
+               [this]() { setActiveTab((active_tab + TAB_COUNT - 1) % TAB_COUNT); }};
+    keys[2] = {"Tab >", [this]() { setActiveTab((active_tab + 1) % TAB_COUNT); }};
     // Freeze: values often change faster than they can be read.
     keys[3] = {"Freeze", [this]() {
                    frozen = !frozen;
@@ -968,10 +1057,28 @@ void UIDiagnosticsPage::refreshSystemTab() {
     }
     char v[48], u[32], sub[64];
 
-    snprintf(v, sizeof(v), "%.1f", cpu_usage_core0);
-    setCard(sys_cards[0], v, "%", "", (int)cpu_usage_core0);
-    snprintf(v, sizeof(v), "%.1f", cpu_usage_core1);
-    setCard(sys_cards[1], v, "%", "", (int)cpu_usage_core1);
+    // The tile shows the busier core, because that is the one that will run
+    // out first; both are still visible as separate bars underneath.
+    const float busier = cpu_usage_core0 > cpu_usage_core1 ? cpu_usage_core0 : cpu_usage_core1;
+    snprintf(v, sizeof(v), "%.1f", busier);
+    snprintf(sub, sizeof(sub), "core0 %.1f%%  core1 %.1f%%", cpu_usage_core0, cpu_usage_core1);
+    setCard(sys_cards[0], v, "%", sub, (int)cpu_usage_core0);
+    if (sys_cards[0].bar2) {
+        lv_bar_set_value(sys_cards[0].bar2, (int)cpu_usage_core1, LV_ANIM_OFF);
+    }
+    pushSpark(sys_cards[0], (int)busier);
+
+    wavex_backend_heartbeat_t hb_sys;
+    inter_mcu_get_backend_heartbeat_detailed(&hb_sys);
+    if (hb_sys.valid) {
+        snprintf(v, sizeof(v), "%.1f", hb_sys.cpu_avg_percent);
+        snprintf(sub, sizeof(sub), "min %.1f%%  max %.1f%%", hb_sys.cpu_min_percent,
+                 hb_sys.cpu_max_percent);
+        setCard(sys_cards[1], v, "%", sub, (int)hb_sys.cpu_avg_percent);
+        pushSpark(sys_cards[1], (int)hb_sys.cpu_avg_percent);
+    } else {
+        setCard(sys_cards[1], "-", "%", "no heartbeat from backend", 0);
+    }
 
     const size_t heap_free = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
     const size_t heap_total = heap_caps_get_total_size(MALLOC_CAP_INTERNAL);
