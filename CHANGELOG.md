@@ -11,6 +11,37 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Added — Live voice-parameter editing on the digital path (digital voice audition, stage 1)
+
+- `MSG_CONTROL_CHANGE` now reaches the **digital** per-voice filter and
+  envelope, not only the Stage A analog VCF/VCA. Previously the per-voice
+  filter and ADSR were written once at `Trigger()` time, so on an all-digital
+  configuration a cutoff, resonance or envelope knob did nothing at all.
+- `VoiceLiveParams` + `VoiceManager::ApplyLiveParams()` push edits onto
+  **sounding** voices, driven at block rate from the audio callback behind a
+  dirty flag so an unchanged parameter set costs nothing. `OnNoteOn` reads the
+  same record, so an edit also carries forward to the next note instead of
+  surviving only until one is played.
+- **Filter and envelope edits are deliberately asymmetric.** Filter changes
+  reach every sounding voice including ones in their release tail — a sweep
+  that froze at note-off would sound like the filter jammed. Envelope changes
+  skip releasing voices, because `Choke()` forces a short release onto a voice
+  immediately before releasing it and rewriting the ADSR would hand back the
+  full-length release mid-choke, so an open hat would not cut off.
+- Each parameter now has **two** destinations rather than moving: the analog
+  board is optional hardware and the digital voices always render, so a knob
+  has to reach both. Cutoff needed a mapping the analog path does not — it
+  passes the normalized value through as a CV — so the digital side maps
+  exponentially over 20 Hz – 20 kHz; a linear map spends most of its travel
+  above 10 kHz and crosses the whole musically useful range in the first few
+  percent.
+- Scoped **engine-global, not per-slot**, deliberately. `param-locks-and-
+  modulation.md` scopes base values to an instrument slot, but nothing can
+  address a slot differently yet, so a 16-entry table would be 16 copies with
+  no way to reach 15 of them. It becomes per-slot with the instrument model.
+- 5 host tests. **Not verified on hardware**: nobody has heard a sweep, and
+  the block-rate cadence is exactly where zipper noise would appear.
+
 ### Changed — Resonant state-variable filter per voice (digital voice audition, stage 1)
 
 - `OnePoleFilter` is replaced by `SvfFilter` (`src/audio/svf_filter.hpp`), a

@@ -119,6 +119,31 @@ static OutputSinkType s_output_sink;
 // (docs/daisy_rt_audio_coding_guide.md §2/§8).
 static WaveX::AudioEngine::VoiceManager s_voice_manager WAVEX_DTCM_DATA;
 
+// Digital voice base parameters - what MSG_CONTROL_CHANGE edits for the
+// all-digital path (features/digital-voice-audition.md stage 1). Written from
+// main-loop message-handler context, read in audio context: the same handoff
+// contract as s_para_params below (aligned float stores are atomic on
+// Cortex-M7, single writer per field). A block landing between two field
+// writes of one gesture briefly mixes old and new values, which is inaudible
+// and self-correcting.
+//
+// ENGINE-GLOBAL, not per-slot, and deliberately so. param-locks-and-
+// modulation.md scopes base values to an instrument slot, but nothing can
+// address a slot differently yet - OnNoteOn does not even set one - so a
+// 16-entry table would be 16 copies of the same values with no way to reach
+// 15 of them. This mirrors s_para_params, which is engine-global for the
+// analog path for the same reason. It becomes per-slot with the instrument
+// model (Phase 2.5), which is also when a slot becomes addressable.
+//
+// DTCM for the same reason as s_voice_manager: read from Callback(), CPU-only,
+// tiny.
+static WaveX::AudioEngine::VoiceLiveParams s_voice_live_params WAVEX_DTCM_DATA;
+
+// Set by OnControlChange (main loop), consumed by Callback() (audio context).
+// Without it every block would push identical values onto all 8 voices and
+// recompute a filter coefficient per voice for nothing.
+static volatile bool s_voice_live_dirty WAVEX_DTCM_DATA = false;
+
 // Sequencer transport (roadmap Phase 2). Owns the step scheduler + MIDI
 // tempo follower. Edits/transport/clock arrive from main-loop message
 // handlers (OnSeqTransport / OnSeqPatternOp / OnMidiClockEvent / OnMidiCc)
@@ -1467,6 +1492,16 @@ void Callback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t
     // startup silence requirement is preserved. All callback-safe: fixed
     // buffers, no allocation, no I/O, no logging.
     const bool any_note_on = drain_note_queue();
+
+    // Push live parameter edits onto sounding voices before rendering them,
+    // so a filter sweep is heard on the notes already playing and not only on
+    // the next trigger. Consume-and-clear: a write landing after the exchange
+    // is picked up by the next block (1 ms later), which is far below the
+    // resolution of a knob gesture.
+    if (__atomic_exchange_n(&s_voice_live_dirty, false, __ATOMIC_ACQUIRE)) {
+        s_voice_manager.ApplyLiveParams(s_voice_live_params);
+    }
+
     if (s_voice_manager.ActiveVoiceCount() > 0 &&
         size <= static_cast<size_t>(Timebase::kBlockSize)) {
         static float vm_l[Timebase::kBlockSize];
@@ -1530,15 +1565,31 @@ void Callback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t
 // Cortex-M7, single writer per field). Envelope-time changes push the full
 // ADSR set into the shared envelope; a tick landing between two of those
 // field writes briefly mixes old/new rates - inaudible and self-correcting.
-// Per-voice / kit parameter routing remains Phase 2 front-panel work.
+// Each parameter now has TWO destinations, deliberately: the Stage A analog
+// path (s_para_params, one shared VCF/VCA) and the digital per-voice path
+// (s_voice_live_params). They are not alternatives - the analog board is
+// optional hardware and the digital voices always render - so a knob has to
+// reach both or it would do nothing on whichever configuration is in use.
+// Per-slot (kit) scoping of these values remains Phase 2.5 instrument-model
+// work; see s_voice_live_params for why engine-global is the honest interim.
 void OnControlChange(const ControlChangeMessage& ctrl_msg) {
     const float norm = static_cast<float>(ctrl_msg.value) / 65535.0f;
     switch (ctrl_msg.parameter) {
         case PARAM_FILTER_CUTOFF:
             s_para_params.cutoff_base = norm;
+            // Digital path: the analog side takes `norm` straight through as a
+            // CV, but a digital cutoff is a frequency and has to be mapped.
+            // Exponential over 20 Hz .. 20 kHz, because pitch perception is
+            // logarithmic - a linear map spends most of its travel above
+            // 10 kHz, where almost nothing audible happens, and crosses the
+            // entire musically useful range in the first few percent.
+            s_voice_live_params.filter_cutoff_hz = 20.0f * std::pow(1000.0f, norm);
+            s_voice_live_dirty = true;
             break;
         case PARAM_FILTER_RESONANCE:
             s_para_params.resonance = norm;
+            s_voice_live_params.filter_resonance = norm;  // svf_filter.hpp maps 0..1 onto Q
+            s_voice_live_dirty = true;
             break;
         case PARAM_ENVELOPE_ATTACK:
         case PARAM_ENVELOPE_DECAY:
@@ -1546,18 +1597,24 @@ void OnControlChange(const ControlChangeMessage& ctrl_msg) {
         case PARAM_ENVELOPE_RELEASE: {
             // Times span 1 ms .. 2 s; sustain is the raw 0..1 level.
             const float seconds = 0.001f + norm * 2.0f;
-            if (ctrl_msg.parameter == PARAM_ENVELOPE_ATTACK)
+            if (ctrl_msg.parameter == PARAM_ENVELOPE_ATTACK) {
                 s_para_params.attack_s = seconds;
-            else if (ctrl_msg.parameter == PARAM_ENVELOPE_DECAY)
+                s_voice_live_params.attack_s = seconds;
+            } else if (ctrl_msg.parameter == PARAM_ENVELOPE_DECAY) {
                 s_para_params.decay_s = seconds;
-            else if (ctrl_msg.parameter == PARAM_ENVELOPE_SUSTAIN)
+                s_voice_live_params.decay_s = seconds;
+            } else if (ctrl_msg.parameter == PARAM_ENVELOPE_SUSTAIN) {
                 s_para_params.sustain = norm;
-            else
+                s_voice_live_params.sustain_level = norm;
+            } else {
                 s_para_params.release_s = seconds;
+                s_voice_live_params.release_s = seconds;
+            }
             s_para_env.SetParams(s_para_params.attack_s,
                                  s_para_params.decay_s,
                                  s_para_params.sustain,
                                  s_para_params.release_s);
+            s_voice_live_dirty = true;
             break;
         }
         case PARAM_MODULATION_MATRIX:
@@ -1737,6 +1794,17 @@ void OnNoteOn(const NoteMessage& note_msg) {
     ev.params.velocity = note_msg.velocity;
     ev.params.root_note = kDefaultRootNote;
     ev.params.sample_rate_hz = src->sample_rate;  // 44.1k content pitches correctly on 48k engine
+
+    // Filter and envelope come from the live base params, so a note triggered
+    // after a knob move sounds like the sweep the user just heard. Without
+    // this the trigger would reset every voice to the struct defaults and an
+    // edit would survive only until the next note.
+    ev.params.filter_cutoff_hz = s_voice_live_params.filter_cutoff_hz;
+    ev.params.filter_resonance = s_voice_live_params.filter_resonance;
+    ev.params.attack_s = s_voice_live_params.attack_s;
+    ev.params.decay_s = s_voice_live_params.decay_s;
+    ev.params.sustain_level = s_voice_live_params.sustain_level;
+    ev.params.release_s = s_voice_live_params.release_s;
 
     // Markers and gain come from the sample's record, so a note-triggered
     // voice plays exactly the region the editor auditioned. Previously

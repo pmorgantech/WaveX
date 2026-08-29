@@ -149,9 +149,58 @@ struct VoiceTriggerParams {
     float release_s = 0.1f;
 };
 
+// Live (base) voice parameters - the values a knob edits, as opposed to the
+// per-trigger snapshot VoiceTriggerParams carries.
+//
+// These exist because the per-voice filter and envelope were previously
+// written ONCE, at Trigger() time, so nothing could change a sounding voice
+// and nothing carried an edit forward to the next note. On the all-digital
+// path that meant a filter or envelope knob did nothing at all
+// (features/digital-voice-audition.md stage 1).
+//
+// Defaults deliberately match VoiceTriggerParams field for field, so an
+// engine that never applies a live edit behaves exactly as before.
+struct VoiceLiveParams {
+    float filter_cutoff_hz = 20000.0f;
+    float filter_resonance = 0.0f;
+    float attack_s = 0.001f;
+    float decay_s = 0.05f;
+    float sustain_level = 0.8f;
+    float release_s = 0.1f;
+};
+
 class VoiceManager {
    public:
     void Init(uint32_t sample_rate) { sample_rate_ = sample_rate > 0 ? sample_rate : 48000; }
+
+    // Pushes live parameter edits onto every SOUNDING voice, so a filter
+    // sweep is audible on notes that are already playing rather than only on
+    // the next one. Callback-safe: fixed iteration, no allocation, no I/O.
+    //
+    // Intended to be driven at block rate from the audio callback, and only
+    // when something actually changed - see the caller's dirty flag. It is
+    // cheap but not free: SetCutoff() recomputes coefficients (a tan()) per
+    // voice. Every voice is handed the SAME cutoff and resonance here, so if
+    // this ever shows up in a DWT profile the fix is to compute the
+    // coefficients once and share them, not to update less often.
+    //
+    // Envelope rates are deliberately NOT written to a voice that is already
+    // releasing. Choke() forces a short release onto a voice immediately
+    // before Release() (open/closed hat), and rewriting the ADSR here would
+    // hand that voice its full-length release back mid-choke - the hat would
+    // not cut off. Filter changes still apply to releasing voices, because a
+    // sweep should stay audible through the release tail.
+    void ApplyLiveParams(const VoiceLiveParams& p) {
+        for (auto& v: voices_) {
+            if (v.state != VoiceState::Playing)
+                continue;
+            v.filter.SetResonance(p.filter_resonance);
+            v.filter.SetCutoff(p.filter_cutoff_hz);
+            if (!v.envelope.IsReleasing()) {
+                v.envelope.SetParams(p.attack_s, p.decay_s, p.sustain_level, p.release_s);
+            }
+        }
+    }
 
     // Triggers a new voice, or steals one if all 8 are busy (prefers a
     // voice already in its release tail, else the oldest-triggered - see

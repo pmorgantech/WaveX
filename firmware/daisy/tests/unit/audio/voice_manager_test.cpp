@@ -791,3 +791,157 @@ TEST(VoiceManagerFadeTest, NoFadeRequestedMeansUnityNotSilence) {
     vm.Render(l.data(), r.data(), l.size());
     EXPECT_GT(l[0], 0.1f) << "an absent fade must not mute the head";
 }
+
+// --- Live parameter edits (digital-voice-audition.md stage 1) --------------
+//
+// Before ApplyLiveParams existed, the per-voice filter and envelope were
+// written once at Trigger() time, so nothing could change a voice that was
+// already sounding. These pin the behaviour that makes "sweep the filter
+// while a note plays" work, and the one case where it must NOT reach in.
+
+namespace {
+
+// A steady full-scale square at Nyquist - entirely high-frequency content, so
+// a lowpass acting on it shows up as an amplitude drop.
+std::vector<int16_t> NyquistTone(size_t frames) {
+    std::vector<int16_t> s(frames);
+    for (size_t i = 0; i < frames; ++i)
+        s[i] = (i % 2 == 0) ? 32767 : -32768;
+    return s;
+}
+
+float PeakOf(const std::vector<float>& v, size_t from) {
+    float peak = 0.0f;
+    for (size_t i = from; i < v.size(); ++i)
+        peak = std::max(peak, std::fabs(v[i]));
+    return peak;
+}
+
+}  // namespace
+
+TEST(VoiceManagerLiveParamsTest, CutoffChangeReachesASoundingVoice) {
+    const std::vector<int16_t> tone = NyquistTone(4096);
+
+    WaveX::AudioEngine::VoiceManager vm;
+    vm.Init(48000);
+    vm.Trigger(FlatParams(tone.data(), static_cast<uint32_t>(tone.size()), 60, 127, 0.5f));
+
+    // Wide open (FlatParams bypasses the filter): the tone passes.
+    std::vector<float> l(64), r(64);
+    vm.Render(l.data(), r.data(), l.size());
+    const float open_peak = PeakOf(l, 48);
+    ASSERT_GT(open_peak, 0.1f);
+
+    // Close the filter on the ALREADY SOUNDING voice - no retrigger.
+    WaveX::AudioEngine::VoiceLiveParams live;
+    live.filter_cutoff_hz = 200.0f;
+    vm.ApplyLiveParams(live);
+
+    std::vector<float> l2(256), r2(256);
+    vm.Render(l2.data(), r2.data(), l2.size());
+    EXPECT_LT(PeakOf(l2, 192), open_peak * 0.5f)
+        << "closing the cutoff must attenuate a voice that is already playing";
+}
+
+TEST(VoiceManagerLiveParamsTest, IdleVoicesAreUntouched) {
+    WaveX::AudioEngine::VoiceManager vm;
+    vm.Init(48000);
+    WaveX::AudioEngine::VoiceLiveParams live;
+    live.filter_cutoff_hz = 200.0f;
+    vm.ApplyLiveParams(live);  // must not fault or wake anything
+    EXPECT_EQ(vm.ActiveVoiceCount(), 0);
+}
+
+TEST(VoiceManagerLiveParamsTest, SustainChangeReachesASoundingVoice) {
+    std::vector<int16_t> dc(8192, 20000);
+
+    WaveX::AudioEngine::VoiceManager vm;
+    vm.Init(48000);
+    WaveX::AudioEngine::VoiceTriggerParams p =
+        FlatParams(dc.data(), static_cast<uint32_t>(dc.size()), 60, 127, 0.5f);
+    p.sustain_level = 1.0f;
+    vm.Trigger(p);
+
+    std::vector<float> l(64), r(64);
+    vm.Render(l.data(), r.data(), l.size());
+    const float full = PeakOf(l, 32);
+    ASSERT_GT(full, 0.1f);
+
+    WaveX::AudioEngine::VoiceLiveParams live;
+    live.attack_s = 0.0f;
+    live.decay_s = 0.0f;
+    live.sustain_level = 0.25f;  // quarter level
+    live.release_s = 0.0f;
+    vm.ApplyLiveParams(live);
+
+    std::vector<float> l2(256), r2(256);
+    vm.Render(l2.data(), r2.data(), l2.size());
+    EXPECT_LT(PeakOf(l2, 192), full * 0.5f)
+        << "lowering sustain must be audible on a voice that is already playing";
+}
+
+// The important negative case. Choke() forces a ~5 ms release onto a voice and
+// then releases it; if a live ADSR edit rewrote that release time mid-choke,
+// the choked voice would get its full-length release back and an open hat
+// would not cut off when the closed hat fired.
+TEST(VoiceManagerLiveParamsTest, DoesNotResurrectAChokedVoicesReleaseTime) {
+    std::vector<int16_t> dc(48000, 20000);
+
+    WaveX::AudioEngine::VoiceManager vm;
+    vm.Init(48000);
+    WaveX::AudioEngine::VoiceTriggerParams p =
+        FlatParams(dc.data(), static_cast<uint32_t>(dc.size()), 60, 127, 0.5f);
+    p.choke_group = 1;
+    p.release_s = 5.0f;  // a very long natural release
+    vm.Trigger(p);
+
+    // Render first so the envelope actually reaches its sustain level. Choking
+    // a voice whose level is still 0 frees it on the next sample whatever its
+    // release time is, which would make this test pass for the wrong reason.
+    std::vector<float> warm(64), warm_r(64);
+    vm.Render(warm.data(), warm_r.data(), warm.size());
+    ASSERT_GT(PeakOf(warm, 32), 0.1f) << "voice should be sounding before the choke";
+
+    vm.Choke(1, 0.005f);  // 5 ms forced release
+
+    // A live edit arrives mid-choke asking for a long release again.
+    WaveX::AudioEngine::VoiceLiveParams live;
+    live.release_s = 5.0f;
+    vm.ApplyLiveParams(live);
+
+    // 5 ms at 48 kHz is 240 frames; render well past that.
+    std::vector<float> l(2048), r(2048);
+    vm.Render(l.data(), r.data(), l.size());
+    EXPECT_EQ(vm.ActiveVoiceCount(), 0)
+        << "a live ADSR edit must not extend a choked voice's forced release";
+}
+
+TEST(VoiceManagerLiveParamsTest, FilterStillTracksThroughTheReleaseTail) {
+    // Filter edits, unlike envelope edits, SHOULD reach a releasing voice - a
+    // sweep that stopped at note-off would sound like the filter jammed.
+    const std::vector<int16_t> tone = NyquistTone(48000);
+
+    WaveX::AudioEngine::VoiceManager vm;
+    vm.Init(48000);
+    WaveX::AudioEngine::VoiceTriggerParams p =
+        FlatParams(tone.data(), static_cast<uint32_t>(tone.size()), 60, 127, 0.5f);
+    p.release_s = 2.0f;  // long tail so the voice stays alive while we look
+    vm.Trigger(p);
+
+    std::vector<float> warm(64), warm_r(64);
+    vm.Render(warm.data(), warm_r.data(), warm.size());
+    const float open_peak = PeakOf(warm, 48);
+    ASSERT_GT(open_peak, 0.1f);
+
+    vm.Release(60);
+    ASSERT_EQ(vm.ActiveVoiceCount(), 1) << "voice should still be in its release tail";
+
+    WaveX::AudioEngine::VoiceLiveParams live;
+    live.filter_cutoff_hz = 200.0f;
+    vm.ApplyLiveParams(live);
+
+    std::vector<float> l(256), r(256);
+    vm.Render(l.data(), r.data(), l.size());
+    EXPECT_LT(PeakOf(l, 192), open_peak * 0.5f)
+        << "a filter sweep must stay audible through the release tail";
+}
