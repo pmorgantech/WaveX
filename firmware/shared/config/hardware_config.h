@@ -510,6 +510,12 @@
 #define WAVEX_PCNT1_FILTER_NS 10000
 #endif
 
+// Quadrature counts per mechanical detent. The PEC11R is decoded 4x (both
+// edges of both signals), so one detent click moves the counter by 4.
+#ifndef WAVEX_PCNT1_COUNTS_PER_DETENT
+#define WAVEX_PCNT1_COUNTS_PER_DETENT 4
+#endif
+
 // PCNT1 interrupt thresholds
 #ifndef WAVEX_PCNT1_THRESH_POS
 #define WAVEX_PCNT1_THRESH_POS 4

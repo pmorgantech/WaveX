@@ -11,6 +11,29 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Fixed — Sample Browser scrolling responsiveness (ESP32)
+
+- Scrolling was never waiting on the Daisy — file metadata is served from the
+  cached browse response — but each encoder detent paid for ~1 KiB of
+  INFO-level logging pushed synchronously through the 115200-baud console
+  (~100 ms per detent, much of it under the LVGL lock). `ESP_LOGx` output now
+  goes through a non-blocking ring buffer (`main/log_ring`, mirroring the
+  Daisy's `comm/log_ring`): writers append and never block, a lowest-priority
+  task drains to the console, and on overflow the oldest bytes are dropped
+  and counted, with gaps marked inline.
+- Scroll-path log messages dropped from INFO to DEBUG (one INFO line per
+  selection change remains). This includes the PCNT task's per-poll delta
+  log, which fired every 2 ms while a knob turned.
+- The PCNT1 detent accumulator previously posted one step and then reset to
+  zero, discarding every count beyond the first detent per 32 ms poll window
+  — fast turns lost most of their steps. It now consumes whole detents
+  (`WAVEX_PCNT1_COUNTS_PER_DETENT` = 4, PEC11R 4x quadrature), carries the
+  remainder, and posts the full detent count in one event.
+- Moving the file-browser selection within the visible page now restyles the
+  highlight in place; the destroy-and-recreate rebuild of all visible list
+  buttons only runs when the viewport actually scrolls (or the entry list
+  changes).
+
 ### Changed — ESP32 links against Picolibc instead of Newlib
 
 - `CONFIG_LIBC_PICOLIBC=y`. Picolibc has been selectable since ESP-IDF v5.0

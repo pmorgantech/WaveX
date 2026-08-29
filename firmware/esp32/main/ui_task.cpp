@@ -484,39 +484,35 @@ void UITask::run() {
 #if WAVEX_ESP_PCNT1_ENABLED
         int32_t pot_delta = pcnt_consume_delta(WAVEX_PCNT1_UNIT);
         if (pot_delta != 0) {
-            // Accumulate deltas to detect complete detent movements
+            // Accumulate raw counts and consume whole detents, carrying the
+            // remainder forward. The old reset-to-zero logic discarded every
+            // count beyond one detent per poll window, so fast turns lost
+            // most of their steps - the list moved far less than the knob.
             m_context.pcnt1_delta_accumulator += pot_delta;
 
-            // Check if we've accumulated enough for a detent (quadrature = ±4, single = ±1)
-            // Use higher threshold to prevent partial detent triggers
-            const int32_t DETENT_THRESHOLD = 3;
-            if (abs(m_context.pcnt1_delta_accumulator) >= DETENT_THRESHOLD) {
-                // Send one event per accumulated detent
+            const int32_t detents =
+                m_context.pcnt1_delta_accumulator / WAVEX_PCNT1_COUNTS_PER_DETENT;
+            if (detents != 0) {
+                m_context.pcnt1_delta_accumulator -= detents * WAVEX_PCNT1_COUNTS_PER_DETENT;
+
+                // One event carrying the full detent count; onInput walks the
+                // delta one entry at a time.
                 wavex_ui::InputEvent pot_evt;
-                pot_evt.type = (m_context.pcnt1_delta_accumulator > 0)
-                                   ? wavex_ui::InputType::EncoderUp
-                                   : wavex_ui::InputType::EncoderDown;
-                pot_evt.delta = 1;  // One step per detent
+                pot_evt.type = (detents > 0) ? wavex_ui::InputType::EncoderUp
+                                             : wavex_ui::InputType::EncoderDown;
+                pot_evt.delta = (int16_t)((detents > 0) ? detents : -detents);
                 pot_evt.timestamp_ms = (uint32_t)(esp_timer_get_time() / 1000);
 
-                ESP_LOGI(TAG,
-                         "PCNT1 encoder: accumulated=%d, threshold=%d, posting %s event",
-                         m_context.pcnt1_delta_accumulator,
-                         DETENT_THRESHOLD,
-                         (m_context.pcnt1_delta_accumulator > 0) ? "EncoderUp" : "EncoderDown");
+                ESP_LOGD(TAG,
+                         "PCNT1 encoder: %ld detent(s), posting %s (remainder=%d)",
+                         (long)detents,
+                         (detents > 0) ? "EncoderUp" : "EncoderDown",
+                         m_context.pcnt1_delta_accumulator);
 
                 bool posted = wavex_ui::InputDispatcher::instance().post(pot_evt);
                 if (!posted) {
                     ESP_LOGW(TAG, "Failed to post PCNT1 encoder event to queue");
                 }
-
-                // Reset accumulator for next detent
-                m_context.pcnt1_delta_accumulator = 0;
-            } else {
-                ESP_LOGD(TAG,
-                         "PCNT1 encoder: accumulated=%d (waiting for threshold %d)",
-                         m_context.pcnt1_delta_accumulator,
-                         DETENT_THRESHOLD);
             }
         }
 #endif

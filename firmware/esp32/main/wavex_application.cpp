@@ -44,6 +44,7 @@ typedef int esp_err_t;
 
 // Bring in the PCNT task API
 #ifndef WAVEX_TEST_BUILD
+#include "log_ring.h"
 #include "pcnt_task.h"
 // MIDI input tasks (roadmap Phase 1 item 8)
 #include "midi_task.h"
@@ -67,6 +68,14 @@ bool WaveXApplication::initialize() {
         ESP_LOGW(TAG, "Application already initialized");
         return true;
     }
+
+#ifndef WAVEX_TEST_BUILD
+    // Reroute ESP_LOGx through the non-blocking ring before anything chatty
+    // starts; see log_ring.h for why the default blocking sink is a problem.
+    if (wavex_log_ring_install() != ESP_OK) {
+        ESP_LOGW(TAG, "log ring install failed - console logging stays blocking");
+    }
+#endif
 
     ESP_LOGI(TAG, "=== WaveX ESP32 Frontend Starting ===");
     ESP_LOGI(TAG, "Version: %s", WAVEX_FRONTEND_VERSION_STRING);
