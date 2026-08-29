@@ -1,5 +1,5 @@
 # WaveX Dual-MCU Sampler/Synth Build System
-.PHONY: help all esp32 daisy daisy-stageb clean esp32-clean daisy-clean esp32-flash esp32-monitor esp32-flash-monitor esp32-menuconfig test test-all test-daisy test-esp32 test-shared test-clean ai-graph daisy-flash daisy-flash-auto logs-start logs-stop
+.PHONY: help all esp32 daisy daisy-stageb clean esp32-clean daisy-clean esp32-flash esp32-monitor esp32-flash-monitor esp32-menuconfig test test-all test-daisy test-esp32 test-shared test-clean ai-graph daisy-flash daisy-flash-auto flash-all start-logs stop-logs logs-start logs-stop
 
 # Test targets
 test: test-all
@@ -99,8 +99,9 @@ help:
 	@echo "  clean            - Clean all builds"
 	@echo "  daisy-flash      - Flash Daisy via DFU (needs BOOT+RESET by hand)"
 	@echo "  daisy-flash-auto - Flash Daisy with no button presses"
-	@echo "  logs-start       - Start serial loggers (tail -f logs/*.log)"
-	@echo "  logs-stop        - Stop serial loggers (do this before esp32-flash)"
+	@echo "  flash-all        - Stop logs, flash both MCUs in parallel, restart logs"
+	@echo "  start-logs       - Rotate and start serial loggers"
+	@echo "  stop-logs        - Stop serial loggers before flashing"
 	@echo "  esp32-flash      - Flash ESP32 firmware"
 	@echo "  esp32-monitor    - Monitor ESP32 serial output"
 	@echo "  esp32-flash-monitor - Flash and monitor ESP32 (convenient)"
@@ -196,16 +197,47 @@ daisy-flash-auto:
 	cd firmware/daisy && make flash-auto
 	@echo "✅ Daisy Seed Backend flashed"
 
+# Flash both MCUs concurrently. The serial ports must be free while flashing;
+# logging is restarted only after both flash jobs have exited.
+flash-all: stop-logs
+	@set -eu; \
+		daisy_status=0; esp32_status=0; \
+		$(MAKE) daisy-flash-auto & daisy_pid=$$!; \
+		$(MAKE) esp32-flash & esp32_pid=$$!; \
+		wait $$daisy_pid || daisy_status=$$?; \
+		wait $$esp32_pid || esp32_status=$$?; \
+		$(MAKE) start-logs; \
+		if [ $$daisy_status -ne 0 ] || [ $$esp32_status -ne 0 ]; then \
+			echo "❌ One or more firmware flashes failed (Daisy=$$daisy_status ESP32=$$esp32_status)"; \
+			exit 1; \
+		fi
+
 # ---------------------------------------------------------------------------
 # Serial logging - replaces minicom so the ports stay scriptable.
 # Each logger appends to a file you can `tail -f`, and reconnects by itself
-# when a board resets or drops into DFU, so a flash does not interrupt it.
+# when a board resets or drops into DFU. Starting logs rotates old files first.
 # ---------------------------------------------------------------------------
 LOG_DIR ?= logs
 ESP32_PORT ?= /dev/ttyACM0
+LOG_KEEP ?= 4
 
-logs-start: logs-stop
+start-logs: stop-logs
 	@mkdir -p $(LOG_DIR)
+	@for board in daisy esp32; do \
+		log="$(LOG_DIR)/$$board.log"; \
+		i=$(LOG_KEEP); \
+		if [ $$i -gt 0 ]; then \
+			rm -f "$$log.$$i"; \
+			while [ $$i -gt 1 ]; do \
+				prev=$$((i - 1)); \
+				if [ -f "$$log.$$prev" ]; then cp "$$log.$$prev" "$$log.$$i"; fi; \
+				i=$$prev; \
+			done; \
+			if [ -f "$$log" ]; then cp "$$log" "$$log.1"; : > "$$log"; fi; \
+		else \
+			rm -f "$$log"; \
+		fi; \
+	done
 	@nohup python3 scripts/serial_log.py --vid 0483 --pid 5740 \
 		--out $(LOG_DIR)/daisy.log --pidfile $(LOG_DIR)/daisy.pid >/dev/null 2>&1 &
 	@nohup python3 scripts/serial_log.py --port $(ESP32_PORT) --baud 115200 \
@@ -215,14 +247,23 @@ logs-start: logs-stop
 	@echo "   tail -f $(LOG_DIR)/daisy.log"
 	@echo "   tail -f $(LOG_DIR)/esp32.log"
 
-logs-stop:
+stop-logs:
 	@for pidfile in $(LOG_DIR)/daisy.pid $(LOG_DIR)/esp32.pid; do \
 		if [ -f "$$pidfile" ]; then \
-			kill "$$(cat $$pidfile)" 2>/dev/null || true; \
+			pid="$$(cat $$pidfile)"; \
+			kill "$$pid" 2>/dev/null || true; \
+			for attempt in $$(seq 1 20); do \
+				if ! kill -0 "$$pid" 2>/dev/null; then break; fi; \
+				sleep 0.1; \
+			done; \
 			rm -f "$$pidfile"; \
 		fi; \
 	done
 	@echo "📝 Serial loggers stopped"
+
+# Backward-compatible aliases for the original target names.
+logs-start: start-logs
+logs-stop: stop-logs
 
 # CMake-based builds (alternative to Make)
 esp32-cmake:
@@ -278,4 +319,3 @@ ai-graph-rebuild:
 
 ai-graph-status:
 	codegraph status .
-

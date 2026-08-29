@@ -172,6 +172,17 @@ versioning and release process.
   logger; `--direct` reads the port when no logger holds it. Decoder
   round-trip verified against a synthetic dump.
 
+### Added — Firmware flash and serial log workflow
+
+- Added `make flash-all` to stop serial loggers, flash Daisy and ESP32 in
+  parallel, wait for both operations, and restart logging with the result
+  status preserved.
+- Added canonical `make start-logs` and `make stop-logs` targets with
+  configurable log rotation (`LOG_KEEP`, default 4); the existing
+  `logs-start` and `logs-stop` names remain compatible aliases.
+- Log rotation now copies and truncates the primary `.log` files in place,
+  preserving their inodes for existing `tail -f` sessions.
+
 ### Added — Daisy development and audition tooling
 
 - Added software-triggered Daisy DFU entry (`make daisy-flash-auto`), serial
