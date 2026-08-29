@@ -90,6 +90,23 @@ TEST_F(MessageDispatchTest, PreviewReqReachesAudioEngine) {
     EXPECT_EQ(GetDispatchRecord().preview_reqs[0].decim, 4);
 }
 
+// The edit message is the only thing that makes the sample-edit page's
+// markers audible, so a silent dispatcher stub here would look exactly like
+// "loop doesn't work" - which is how it presented before this path existed.
+TEST_F(MessageDispatchTest, SampleEditReachesAudioEngine) {
+    SampleEditMessage edit(0, 1, -35, 44100, 396900, 88200, 352800);
+    Dispatch(MSG_SAMPLE_EDIT_SET, edit);
+
+    ASSERT_EQ(GetDispatchRecord().sample_edits.size(), 1u);
+    const auto& got = GetDispatchRecord().sample_edits[0];
+    EXPECT_EQ(got.loop_enabled, 1);
+    EXPECT_EQ(got.gain_db_x10, -35);
+    EXPECT_EQ(got.start_frame, 44100u);
+    EXPECT_EQ(got.end_frame, 396900u);
+    EXPECT_EQ(got.loop_start, 88200u);
+    EXPECT_EQ(got.loop_end, 352800u);
+}
+
 TEST_F(MessageDispatchTest, DiagSubscribeReachesTelemetry) {
     DiagSubscribeMessage sub(1, 4);
     Dispatch(MSG_DIAG_SUBSCRIBE, sub);

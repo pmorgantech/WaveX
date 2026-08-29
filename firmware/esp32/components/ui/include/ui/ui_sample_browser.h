@@ -33,6 +33,26 @@ struct SampleBrowserState {
     uint16_t last_load_sample_id = 0;
     std::string last_load_sample_path = "";
 
+    // Geometry of the loaded sample, captured from the browse listing. The
+    // edit page previously assumed a fixed 48000 frames, which is exactly one
+    // second at 48 kHz - hence markers that could not move past 1 s and a zoom
+    // that would not open out. Nothing else tells the frontend how long a
+    // sample is: MSG_SAMPLE_STATUS reports frames *played*, not total.
+    uint32_t last_load_sample_rate = 0;  // Hz, 0 if unknown
+    uint32_t last_load_duration_ms = 0;  // 0 if unknown
+    uint16_t last_load_channels = 0;
+    uint16_t last_load_bits = 0;
+    uint32_t last_load_size_bytes = 0;
+
+    /** Total frames, or 0 if the geometry is unknown. */
+    uint32_t lastLoadFrames() const {
+        if (last_load_sample_rate == 0 || last_load_duration_ms == 0) {
+            return 0;
+        }
+        return static_cast<uint32_t>(
+            (static_cast<uint64_t>(last_load_duration_ms) * last_load_sample_rate) / 1000ull);
+    }
+
     // Default constructor
     SampleBrowserState() = default;
 
@@ -49,6 +69,11 @@ struct SampleBrowserState {
         playing_sample_index = 0;
         last_load_sample_id = 0;
         last_load_sample_path.clear();
+        last_load_sample_rate = 0;
+        last_load_duration_ms = 0;
+        last_load_channels = 0;
+        last_load_bits = 0;
+        last_load_size_bytes = 0;
     }
 
     // Check if state is valid

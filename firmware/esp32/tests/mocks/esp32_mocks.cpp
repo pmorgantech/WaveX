@@ -306,6 +306,23 @@ bool inter_mcu_get_diag_push(WaveX::Protocol::DiagPushMessage* out, uint32_t max
     return false;
 }
 
+esp_err_t inter_mcu_send_sample_edit(uint8_t slot,
+                                     bool loop_enabled,
+                                     int16_t gain_db_x10,
+                                     uint32_t start_frame,
+                                     uint32_t end_frame,
+                                     uint32_t loop_start,
+                                     uint32_t loop_end) {
+    (void)slot;
+    (void)loop_enabled;
+    (void)gain_db_x10;
+    (void)start_frame;
+    (void)end_frame;
+    (void)loop_start;
+    (void)loop_end;
+    return ESP_OK;
+}
+
 esp_err_t inter_mcu_send_diag_subscribe(bool enable, uint8_t interval_hz) {
     (void)enable;
     (void)interval_hz;

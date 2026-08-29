@@ -999,3 +999,43 @@ TEST_F(MessageTypeTest, SeqClockOutMessage) {
     EXPECT_EQ(parsed.tick_seq, 777);
     EXPECT_EQ(parsed.spp_beats16, 32);
 }
+
+// Playback region / loop / gain. The sentinels are the part worth pinning: a
+// frontend that does not know the file length sends end_frame 0 and expects
+// the backend to read it as "to the end", not as "an empty region".
+TEST_F(MessageTypeTest, SampleEditMessage) {
+    SampleEditMessage original(2, 1, -35, 44100, 396900, 88200, 352800);
+
+    size_t created =
+        ProtocolHandler::CreateSampleEditPacket(buffer_.data(), buffer_.size(), original);
+
+    ASSERT_GT(created, 0u);
+    EXPECT_TRUE(ProtocolHandler::ValidatePacket(buffer_.data(), created));
+    EXPECT_EQ(ProtocolHandler::GetMessageType(buffer_.data()), MSG_SAMPLE_EDIT_SET);
+
+    SampleEditMessage parsed;
+    ASSERT_TRUE(ProtocolHandler::ParseMessage(
+        buffer_.data(), MSG_SAMPLE_EDIT_SET, &parsed, sizeof(parsed)));
+    EXPECT_EQ(parsed.slot, original.slot);
+    EXPECT_EQ(parsed.loop_enabled, original.loop_enabled);
+    EXPECT_EQ(parsed.gain_db_x10, original.gain_db_x10);
+    EXPECT_EQ(parsed.start_frame, original.start_frame);
+    EXPECT_EQ(parsed.end_frame, original.end_frame);
+    EXPECT_EQ(parsed.loop_start, original.loop_start);
+    EXPECT_EQ(parsed.loop_end, original.loop_end);
+}
+
+// Negative gain must survive the wire. gain_db_x10 is the only signed field
+// in the message, and attenuation is its common case.
+TEST_F(MessageTypeTest, SampleEditMessageCarriesNegativeGain) {
+    SampleEditMessage original(0, 0, -240, 0, 0, 0, 0);
+
+    size_t created =
+        ProtocolHandler::CreateSampleEditPacket(buffer_.data(), buffer_.size(), original);
+    ASSERT_GT(created, 0u);
+
+    SampleEditMessage parsed;
+    ASSERT_TRUE(ProtocolHandler::ParseMessage(
+        buffer_.data(), MSG_SAMPLE_EDIT_SET, &parsed, sizeof(parsed)));
+    EXPECT_EQ(parsed.gain_db_x10, -240);
+}

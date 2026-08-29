@@ -91,8 +91,9 @@ enum MessageType : uint8_t {
     // Diagnostics telemetry (docs/ui-diagnostics-spec.md). Subscription-gated:
     // the push flows only while the diagnostics page is open, so it costs
     // nothing the rest of the time.
-    MSG_DIAG_SUBSCRIBE = 0x3A,  // ESP32 -> Daisy: start/stop the push
-    MSG_DIAG_PUSH = 0x3B,       // Daisy -> ESP32: one interval of telemetry
+    MSG_DIAG_SUBSCRIBE = 0x3A,   // ESP32 -> Daisy: start/stop the push
+    MSG_DIAG_PUSH = 0x3B,        // Daisy -> ESP32: one interval of telemetry
+    MSG_SAMPLE_EDIT_SET = 0x3C,  // ESP32 -> Daisy: playback region, loop, gain
     // CV calibration (Stage A analog path - analog-voice-board.md §3)
     MSG_CV_CAL_SET = 0x40,   // ESP32 -> Daisy: apply (and optionally persist) one group's cal
     MSG_CV_CAL_GET = 0x41,   // ESP32 -> Daisy: request one group's cal
@@ -393,6 +394,49 @@ struct StorageStatusMessage {
 
     StorageStatusMessage() : mounted(0), reserved{0, 0, 0} {}
     explicit StorageStatusMessage(uint8_t mounted_) : mounted(mounted_), reserved{0, 0, 0} {}
+} __attribute__((packed));
+
+// Non-destructive playback edit (frontend -> backend).
+//
+// All positions are FRAMES, absolute within the file, at the file's own rate.
+// The backend clamps and is the authority: it applies start <= loop_start <
+// loop_end <= end and reports nothing back, so the frontend must not assume
+// its values were taken verbatim.
+//
+// Sentinels rather than a separate "valid" flag: end_frame 0 means "to the
+// end of the file" and loop_end 0 means "to end_frame". A frontend that does
+// not know the file length can still send a meaningful region.
+struct SampleEditMessage {
+    uint8_t slot;
+    uint8_t loop_enabled;
+    int16_t gain_db_x10;  // -240..+120 (-24.0 .. +12.0 dB)
+    uint32_t start_frame;
+    uint32_t end_frame;  // 0 = end of file
+    uint32_t loop_start;
+    uint32_t loop_end;  // 0 = end_frame
+
+    SampleEditMessage()
+        : slot(0),
+          loop_enabled(0),
+          gain_db_x10(0),
+          start_frame(0),
+          end_frame(0),
+          loop_start(0),
+          loop_end(0) {}
+    SampleEditMessage(uint8_t slot_,
+                      uint8_t loop_enabled_,
+                      int16_t gain_db_x10_,
+                      uint32_t start_frame_,
+                      uint32_t end_frame_,
+                      uint32_t loop_start_,
+                      uint32_t loop_end_)
+        : slot(slot_),
+          loop_enabled(loop_enabled_),
+          gain_db_x10(gain_db_x10_),
+          start_frame(start_frame_),
+          end_frame(end_frame_),
+          loop_start(loop_start_),
+          loop_end(loop_end_) {}
 } __attribute__((packed));
 
 // Diagnostics subscription (frontend -> backend).
@@ -1017,6 +1061,11 @@ class ProtocolHandler {
     static size_t CreateSampleGetPathPacket(uint8_t* buffer,
                                             size_t buffer_size,
                                             const SampleGetPathMessage& msg);
+    /** Non-destructive playback edit (frontend -> backend). */
+    static size_t CreateSampleEditPacket(uint8_t* buffer,
+                                         size_t buffer_size,
+                                         const SampleEditMessage& msg);
+
     /** Diagnostics subscription (frontend -> backend). */
     static size_t CreateDiagSubscribePacket(uint8_t* buffer,
                                             size_t buffer_size,

@@ -46,6 +46,8 @@ struct DispatchRecord {
     std::vector<uint8_t> stop_requests;
     std::vector<uint32_t> play_index_requests;
 
+    std::vector<WaveX::Protocol::SampleEditMessage> sample_edits;
+
     struct DiagSubscribeCall {
         bool enable;
         uint8_t interval_hz;

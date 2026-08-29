@@ -359,6 +359,17 @@ struct WavState {
     // and only a fresh f_open clears it - which is exactly why stopping and
     // re-triggering the audition by hand was the only way back.
     char path[128];
+
+    // Non-destructive edit (MSG_SAMPLE_EDIT_SET). Byte offsets, not frames:
+    // every consumer below works in bytes, and converting once here keeps the
+    // per-pass arithmetic out of the refill path. Defaults are the whole file
+    // with looping off, so an un-edited sample behaves exactly as before.
+    uint32_t region_start;  // absolute file offset
+    uint32_t region_end;    // absolute file offset, exclusive
+    uint32_t loop_start;
+    uint32_t loop_end;
+    bool loop_enabled;
+    q15_t gain_q15;  // 32767 = unity
 };
 static WavState s_wav = {};
 
@@ -600,6 +611,29 @@ static inline q15_t ReadSample24(const uint8_t* src) {
     return static_cast<q15_t>(sample >> 8);
 }
 
+// Playback gain, applied once on the converted block. Written out rather than
+// calling arm_scale_q15: CMSIS-DSP's BasicMathFunctions are not in the linked
+// set for this target, and this is a two-line multiply.
+//
+// Saturating on purpose. A wrapping multiply turns a hot sample into
+// full-scale noise at the exact moment the user pushes gain up, which is the
+// worst possible failure mode for a gain control - clipping is merely loud.
+static void ApplyWavGain(q15_t* buf, uint32_t samples) {
+    if (s_wav.gain_q15 == 32767 || samples == 0) {
+        return;  // unity: skip the pass entirely
+    }
+    const int32_t g = s_wav.gain_q15;
+    for (uint32_t i = 0; i < samples; ++i) {
+        int32_t v = (static_cast<int32_t>(buf[i]) * g) >> 15;
+        if (v > 32767) {
+            v = 32767;
+        } else if (v < -32768) {
+            v = -32768;
+        }
+        buf[i] = static_cast<q15_t>(v);
+    }
+}
+
 static uint32_t ConvertFramesToOutput(
     const uint8_t* src, q15_t* dst, uint32_t frames, uint16_t src_channels, uint8_t bit_depth) {
     const uint32_t bytes_per_sample = (bit_depth == 24) ? 3u : 2u;
@@ -801,6 +835,7 @@ static bool prebuffer_audio() {
     PROFILE_SCOPE(format_conversion);
     ConvertFramesToOutput(
         src, conversion_output, frames_read, s_wav.num_channels, s_wav.bits_per_sample);
+    ApplyWavGain(conversion_output, frames_read * s_output_channels);
 
     q15_t* to_push = conversion_output;
     uint32_t output_frames = frames_read;
@@ -888,16 +923,32 @@ static bool refill_sd_buffer() {
             req_frames = req_bytes / file_bpf;
         }
 
+        // Cap the request at the region (or loop) end. Without this the reader
+        // runs to the end of the file and the markers have no audible effect.
+        const uint32_t stop_at = s_wav.loop_enabled ? s_wav.loop_end : s_wav.region_end;
+        const uint32_t pos = f_tell(&s_wav.file);
+        if (pos < stop_at) {
+            const uint32_t to_stop = stop_at - pos;
+            if (req_bytes > to_stop) {
+                req_bytes = (to_stop / file_bpf) * file_bpf;
+                req_frames = req_bytes / file_bpf;
+            }
+        } else {
+            req_bytes = 0;  // at or past the boundary: rewind or stop below
+        }
+
         if (req_bytes == 0) {
-            // End of file: seek back and keep playing. Logged unconditionally
+            // Region end reached. Loop back to the loop point if looping, to
+            // the region start otherwise. Logged unconditionally
             // (it happens once per pass through the file, so it cannot spam)
             // because a periodic audible artefact with every other metric
             // healthy points straight here, and this event was previously
             // invisible - it sat behind WAVEX_DAISY_SD_DEBUG, and f_lseek is
             // outside the s_io_duration timer that only wraps f_read, so the
             // rewind cost never appeared in I/O Stats either.
+            const uint32_t rewind_to = s_wav.loop_enabled ? s_wav.loop_start : s_wav.region_start;
             const uint32_t seek_start = System::GetTick();
-            f_lseek(&s_wav.file, s_wav.data_start);
+            f_lseek(&s_wav.file, rewind_to);
             const uint32_t seek_ticks = System::GetTick() - seek_start;
             const uint32_t ticks_per_us = System::GetTickFreq() / 1000000u;
             const uint32_t now_ms = System::GetNow();
@@ -908,7 +959,8 @@ static bool refill_sd_buffer() {
                                   (unsigned long)(seek_ticks / (ticks_per_us ? ticks_per_us : 1u)));
             s_last_loop_ms = now_ms;
 
-            s_wav.bytes_remaining = s_wav.data_size;
+            const uint32_t rewind_stop = s_wav.loop_enabled ? s_wav.loop_end : s_wav.region_end;
+            s_wav.bytes_remaining = (rewind_stop > rewind_to) ? (rewind_stop - rewind_to) : 0u;
             req_frames = std::min(max_frames, s_wav.bytes_remaining / file_bpf);
             req_bytes = req_frames * file_bpf;
 #if WAVEX_DAISY_SD_DEBUG
@@ -1994,6 +2046,18 @@ bool OpenWav(const char* path) {
     s_wav.num_channels = wav_info.num_channels;
     s_wav.bits_per_sample = wav_info.bits_per_sample;
     s_wav.sample_rate = wav_info.sample_rate;
+    // Whole file, no loop, by default - an un-edited sample behaves exactly
+    // as it did before edits existed. Gain deliberately survives the open:
+    // it is a property of the sample being auditioned, and re-opening the
+    // same file to hear a marker change should not silently reset it.
+    s_wav.region_start = wav_info.data_offset;
+    s_wav.region_end = wav_info.data_offset + wav_info.data_size;
+    s_wav.loop_start = s_wav.region_start;
+    s_wav.loop_end = s_wav.region_end;
+    s_wav.loop_enabled = false;
+    if (s_wav.gain_q15 == 0) {
+        s_wav.gain_q15 = 32767;  // first open of the session
+    }
 
     // Reset buffers
     s_rb_head = 0;
@@ -2327,6 +2391,7 @@ void PumpWavIO() {
     PROFILE_SCOPE(format_conversion);
     ConvertFramesToOutput(
         src, conversion_output, frames_to_transfer, s_wav.num_channels, s_wav.bits_per_sample);
+    ApplyWavGain(conversion_output, frames_to_transfer * s_output_channels);
 
     q15_t* final_buffer = conversion_output;
     uint32_t final_frames = frames_to_transfer;
@@ -2399,6 +2464,81 @@ void PumpWavIO() {
 // ============================================================================
 // Sample Audition Functions (for Sample Load/Save page)
 // ============================================================================
+
+// dB -> q15 linear, clamped. Table-free: this runs once per edit message, not
+// per sample, so powf is affordable and exact beats fast here.
+static q15_t GainDbToQ15(int16_t db_x10) {
+    if (db_x10 <= -240) {
+        return 0;  // -24 dB and below reads as silence on this control
+    }
+    if (db_x10 > 120) {
+        db_x10 = 120;
+    }
+    const float lin = std::pow(10.0f, static_cast<float>(db_x10) / 200.0f);
+    const float scaled = lin * 32767.0f;
+    if (scaled >= 32767.0f) {
+        return 32767;
+    }
+    return static_cast<q15_t>(scaled);
+}
+
+void SetEditParams(uint8_t /*slot*/,
+                   bool loop_enabled,
+                   int16_t gain_db_x10,
+                   uint32_t start_frame,
+                   uint32_t end_frame,
+                   uint32_t loop_start_frame,
+                   uint32_t loop_end_frame) {
+    s_wav.gain_q15 = GainDbToQ15(gain_db_x10);
+    if (!s_wav.open) {
+        // Gain still lands; the region needs a file to be measured against.
+        return;
+    }
+
+    const uint32_t bytes_per_sample = (s_wav.bits_per_sample == 24) ? 3u : 2u;
+    const uint32_t file_bpf = (uint32_t)s_wav.num_channels * bytes_per_sample;
+    if (file_bpf == 0) {
+        return;
+    }
+    const uint32_t total_frames = s_wav.data_size / file_bpf;
+
+    // Sentinels: 0 means "to the end". Resolve before clamping so a frontend
+    // that does not know the file length still gets a sensible region.
+    if (end_frame == 0 || end_frame > total_frames) {
+        end_frame = total_frames;
+    }
+    if (start_frame >= end_frame) {
+        start_frame = 0;
+    }
+    if (loop_end_frame == 0 || loop_end_frame > end_frame) {
+        loop_end_frame = end_frame;
+    }
+    if (loop_start_frame < start_frame || loop_start_frame >= loop_end_frame) {
+        loop_start_frame = start_frame;
+    }
+    // A loop shorter than one SD slot would re-seek every pass and starve the
+    // ring; refuse rather than let it stutter. The frontend cannot know this
+    // limit, so the backend enforces it.
+    const uint32_t kMinLoopFrames = 256;
+    if (loop_enabled && (loop_end_frame - loop_start_frame) < kMinLoopFrames) {
+        loop_enabled = false;
+    }
+
+    s_wav.region_start = s_wav.data_start + start_frame * file_bpf;
+    s_wav.region_end = s_wav.data_start + end_frame * file_bpf;
+    s_wav.loop_start = s_wav.data_start + loop_start_frame * file_bpf;
+    s_wav.loop_end = s_wav.data_start + loop_end_frame * file_bpf;
+    s_wav.loop_enabled = loop_enabled;
+
+    WaveX::Log::PrintLine("WAV edit: region %lu..%lu loop %lu..%lu %s gain %d.%ddB",
+                          (unsigned long)start_frame,
+                          (unsigned long)end_frame,
+                          (unsigned long)loop_start_frame,
+                          (unsigned long)loop_end_frame,
+                          loop_enabled ? "on" : "off",
+                          gain_db_x10 / 10,
+                          (gain_db_x10 < 0 ? -gain_db_x10 : gain_db_x10) % 10);
+}
 
 bool AuditionSample(const char* path) {
     // Stop any current audition first

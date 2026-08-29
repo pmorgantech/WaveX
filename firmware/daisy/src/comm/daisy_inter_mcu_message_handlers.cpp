@@ -36,6 +36,7 @@ static void HandleMeterPushMessage(const uint8_t* payload, size_t payload_size);
 static void HandleWaveChunkMessage(const uint8_t* payload, size_t payload_size);
 static void HandleHeartbeatMessage(const uint8_t* payload, size_t payload_size);
 static void HandleDiagSubscribeMessage(const uint8_t* payload, size_t payload_size);
+static void HandleSampleEditMessage(const uint8_t* payload, size_t payload_size);
 static void HandleStatusRequestMessage(const uint8_t* payload, size_t payload_size);
 static void HandleBrowseRequestMessage(const uint8_t* payload, size_t payload_size);
 static void HandleBrowseResponseMessage(const uint8_t* payload, size_t payload_size);
@@ -137,6 +138,9 @@ void ProcessInterMcuMessage(uint8_t msg_type,
             break;
         case MSG_SAMPLE_STATUS:
             HandleSampleStatusMessage(payload, payload_size);
+            break;
+        case MSG_SAMPLE_EDIT_SET:
+            HandleSampleEditMessage(payload, payload_size);
             break;
         case MSG_DIAG_SUBSCRIBE:
             HandleDiagSubscribeMessage(payload, payload_size);
@@ -307,6 +311,21 @@ static void HandleMeterPushMessage(const uint8_t* payload, size_t payload_size) 
 static void HandleWaveChunkMessage(const uint8_t* payload, size_t payload_size) {}
 
 static void HandleHeartbeatMessage(const uint8_t* payload, size_t payload_size) {}
+
+static void HandleSampleEditMessage(const uint8_t* payload, size_t payload_size) {
+    if (!payload || payload_size < sizeof(SampleEditMessage)) {
+        return;
+    }
+    SampleEditMessage msg;
+    memcpy(&msg, payload, sizeof(msg));
+    WaveX::AudioEngine::SetEditParams(msg.slot,
+                                      msg.loop_enabled != 0,
+                                      msg.gain_db_x10,
+                                      msg.start_frame,
+                                      msg.end_frame,
+                                      msg.loop_start,
+                                      msg.loop_end);
+}
 
 static void HandleDiagSubscribeMessage(const uint8_t* payload, size_t payload_size) {
     if (!payload || payload_size < sizeof(DiagSubscribeMessage)) {

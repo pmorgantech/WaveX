@@ -10,6 +10,7 @@ set(COMPONENT_SRCS
     "src/input_dispatcher.cpp"
     "src/tca8418_keypad.cpp"
     "src/ui_api.cpp"
+    "src/ui_busy_overlay.cpp"
     "src/ui_main_menu.cpp"
     "src/ui_main.cpp"
     "src/ui_menu_page.cpp"

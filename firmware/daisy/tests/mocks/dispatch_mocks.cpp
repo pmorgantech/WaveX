@@ -63,6 +63,23 @@ void ProcessSampleGetPathRequest(uint32_t /*file_index*/) {}
 namespace WaveX {
 namespace AudioEngine {
 
+void SetEditParams(uint8_t slot,
+                   bool loop_enabled,
+                   int16_t gain_db_x10,
+                   uint32_t start_frame,
+                   uint32_t end_frame,
+                   uint32_t loop_start_frame,
+                   uint32_t loop_end_frame) {
+    WaveX::Test::GetDispatchRecord().sample_edits.push_back(
+        WaveX::Protocol::SampleEditMessage(slot,
+                                           loop_enabled ? 1 : 0,
+                                           gain_db_x10,
+                                           start_frame,
+                                           end_frame,
+                                           loop_start_frame,
+                                           loop_end_frame));
+}
+
 void OnControlChange(const WaveX::Protocol::ControlChangeMessage& m) {
     WaveX::Test::GetDispatchRecord().control_changes.push_back(m);
 }

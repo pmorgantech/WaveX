@@ -51,6 +51,18 @@ typedef enum {
 esp_err_t inter_mcu_send_sample_ctrl(uint8_t slot, wavex_sample_ctrl_cmd_t cmd, float rate);
 esp_err_t inter_mcu_send_preview_req(uint8_t slot, uint32_t start, uint32_t end, uint16_t decim);
 
+// Non-destructive playback edit (MSG_SAMPLE_EDIT_SET). Frames are absolute at
+// the file's own rate; 0 means "to the end" for end_frame and loop_end. The
+// backend clamps and is the authority - do not assume the values were taken
+// verbatim.
+esp_err_t inter_mcu_send_sample_edit(uint8_t slot,
+                                     bool loop_enabled,
+                                     int16_t gain_db_x10,
+                                     uint32_t start_frame,
+                                     uint32_t end_frame,
+                                     uint32_t loop_start,
+                                     uint32_t loop_end);
+
 // Diagnostics telemetry (MSG_DIAG_SUBSCRIBE / MSG_DIAG_PUSH). Subscribe only
 // while the diagnostics page is open; the backend sends nothing otherwise.
 esp_err_t inter_mcu_send_diag_subscribe(bool enable, uint8_t interval_hz);

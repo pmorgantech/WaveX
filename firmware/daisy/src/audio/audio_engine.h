@@ -39,6 +39,19 @@ void GetSampleMemStatus(WaveX::Protocol::SampleMemStatusMessage& out);
 // Meter helpers
 void GetMeters(BlockMeters& out);
 
+// Non-destructive playback edit for the streaming audition (frames, absolute,
+// at the file's own rate). The backend clamps: start <= loop_start <
+// loop_end <= end, with 0 meaning "to the end" for end_frame and loop_end. A
+// loop shorter than 256 frames is refused rather than allowed to re-seek every
+// pass and starve the ring - the frontend cannot know that limit.
+void SetEditParams(uint8_t slot,
+                   bool loop_enabled,
+                   int16_t gain_db_x10,
+                   uint32_t start_frame,
+                   uint32_t end_frame,
+                   uint32_t loop_start_frame,
+                   uint32_t loop_end_frame);
+
 // WAV playback control
 bool OpenWav(const char* path);
 void CloseWav();

@@ -250,6 +250,13 @@ size_t ProtocolHandler::CreateStorageStatusPacket(uint8_t* buffer,
         buffer, buffer_size, MSG_STORAGE_STATUS, &status, sizeof(StorageStatusMessage));
 }
 
+size_t ProtocolHandler::CreateSampleEditPacket(uint8_t* buffer,
+                                               size_t buffer_size,
+                                               const SampleEditMessage& msg) {
+    return CreateUnifiedPacket(
+        buffer, buffer_size, MSG_SAMPLE_EDIT_SET, &msg, sizeof(SampleEditMessage));
+}
+
 size_t ProtocolHandler::CreateDiagSubscribePacket(uint8_t* buffer,
                                                   size_t buffer_size,
                                                   const DiagSubscribeMessage& msg) {

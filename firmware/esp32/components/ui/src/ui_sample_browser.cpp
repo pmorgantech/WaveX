@@ -7,6 +7,7 @@
 #include "comm/i_comm_interface.h"
 #include "esp_lvgl_port.h"
 #include "inter_mcu.h"
+#include "ui/ui_busy_overlay.h"
 #include "ui_task.h"
 
 static const char* TAG = "UI_SAMPLE_BROWSER";
@@ -76,6 +77,10 @@ void UISampleBrowser::onEnter(lv_obj_t* parent) {
         ESP_LOGE(TAG, "Failed to create file browser");
         return;
     }
+
+    // Warm the allocator view so the first load's fit check has real numbers
+    // rather than a zeroed cache (which the check reads as "unknown, allow").
+    inter_mcu_request_sample_mem_status();
 
     // Set callbacks
     wavex_file_browser_set_file_selected_callback(file_browser_, file_selected_callback, this);
@@ -795,6 +800,10 @@ void UISampleBrowser::sample_status_callback(uint16_t sample_id,
         }
     } else if (state == 0x10) {
         ESP_LOGI(TAG, "=== SAMPLE LOAD COMPLETE: id=%u ===", (unsigned)sample_id);
+        BusyOverlay::hide();
+        // Refresh the allocator view so the next load's fit check is against
+        // what is actually free now, not what was free before this one.
+        inter_mcu_request_sample_mem_status();
         if (browser->is_initialized_ && browser->status_label_ && browser->root_) {
             char status_text[256];
             const char* path = browser->persistent_state_.last_load_sample_path.c_str();
@@ -855,11 +864,49 @@ bool UISampleBrowser::loadSample(const wavex_file_entry_t* entry) {
         return false;
     }
 
+    // Will it fit? The Daisy reports its allocator state in
+    // SampleMemStatusMessage, cached here from the last status. Checking the
+    // LARGEST FREE BLOCK, not total free: the allocator hands out contiguous
+    // extents, so a fragmented pool with plenty of total space still cannot
+    // take a big sample.
+    wavex_sample_mem_status_t mem{};
+    inter_mcu_get_sample_mem_status(&mem);
+    if (mem.largest_free_bytes > 0 && entry->size_bytes > mem.largest_free_bytes) {
+        char warn[192];
+        snprintf(warn, sizeof(warn), "%.1f MB sample, largest free block is %.1f MB", entry->size_bytes / (1024.0f * 1024.0f), mem.largest_free_bytes / (1024.0f * 1024.0f));
+        ESP_LOGW(TAG, "Sample will not fit: %s", warn);
+        BusyOverlay::show("Sample will not fit", warn, 6000);
+        // Partial load would need a length field on MSG_SAMPLE_LOAD and a
+        // truncating reader on the Daisy - roadmap Phase 1.5.5. Refusing with
+        // the numbers on screen beats a failed load with no explanation.
+        updateStatus("Error: sample too large for free sample RAM");
+        return false;
+    }
+
     // Daisy will load from its SD card; assign a unique sample ID per request
     uint16_t sample_id = persistent_state_.allocateSampleId();
     persistent_state_.last_load_sample_id = sample_id;
     persistent_state_.last_load_sample_path = entry->path;
+    // Capture the geometry too - the edit page has no other source for it.
+    persistent_state_.last_load_sample_rate = sample_rate;
+    persistent_state_.last_load_duration_ms = entry->duration_ms;
+    persistent_state_.last_load_channels = channels;
+    persistent_state_.last_load_bits = bits_per_sample;
+    persistent_state_.last_load_size_bytes = entry->size_bytes;
 
+    {
+        // The ESP32 is not blocked here - the Daisy does the SD read and
+        // answers over the link - so LVGL keeps redrawing and this spinner
+        // genuinely spins. Timeout is generous: a large sample off a slow card
+        // legitimately takes seconds.
+        char detail[160];
+        snprintf(detail,
+                 sizeof(detail),
+                 "%s  -  %.1f MB",
+                 entry->name,
+                 entry->size_bytes / (1024.0f * 1024.0f));
+        BusyOverlay::show("Loading sample", detail, 20000);
+    }
     updateStatus("Loading sample on Daisy...");
     esp_err_t result =
         comm_interface_
@@ -869,6 +916,7 @@ bool UISampleBrowser::loadSample(const wavex_file_entry_t* entry) {
 
     if (result != ESP_OK) {
         ESP_LOGE(TAG, "Failed to send sample load request: %d", result);
+        BusyOverlay::hide();
         updateStatus("Error: Load request failed");
         return false;
     }

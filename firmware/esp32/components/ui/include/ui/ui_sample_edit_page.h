@@ -35,7 +35,17 @@ class UISampleEditPage : public UIPage {
 
    private:
     // Encoder-focusable parameters, in the order the strip shows them.
-    enum Param : uint8_t { PARAM_START = 0, PARAM_END, PARAM_COUNT };
+    enum Param : uint8_t {
+        PARAM_START = 0,
+        PARAM_END,
+        PARAM_LOOP_START,
+        PARAM_LOOP_END,
+        PARAM_GAIN,
+        PARAM_COUNT
+    };
+    // Four cards fit the strip; the fifth (GAIN) shares the last slot and is
+    // reached by paging, so the row stays at the design's 305px pitch.
+    static constexpr int kVisibleCards = 4;
 
     struct ParamCard {
         lv_obj_t* card;
@@ -50,6 +60,8 @@ class UISampleEditPage : public UIPage {
     lv_obj_t* marker_s_ = nullptr;
     lv_obj_t* marker_e_ = nullptr;
     ParamCard cards_[PARAM_COUNT] = {};
+    lv_obj_t* marker_ls_ = nullptr;
+    lv_obj_t* marker_le_ = nullptr;
 
     std::unique_ptr<class WaveformView> waveform_;
     bool has_sample_ = false;
@@ -67,10 +79,23 @@ class UISampleEditPage : public UIPage {
     // of its own, so a single turn queued a burst of them.
     uint32_t request_due_ms_ = 0;
 
-    // Region, in frames, within the previewable window.
+    // Sample geometry, from the browse listing via SampleBrowserState.
+    uint32_t total_frames_ = 0;
+    uint32_t sample_rate_ = 48000;
+
+    // Markers, in frames, absolute within the sample.
     uint32_t start_frame_ = 0;
     uint32_t end_frame_ = 0;
-    uint32_t window_frames_ = 0;  // zoom: how much of the sample the view spans
+    uint32_t loop_start_ = 0;
+    uint32_t loop_end_ = 0;
+    bool loop_enabled_ = false;
+    int16_t gain_db_x10_ = 0;  // -240..+120, i.e. -24.0 to +12.0 dB
+
+    // Zoom: the visible span, and where it starts. Zooming keeps the focused
+    // marker in view rather than always anchoring at zero, or zooming in far
+    // enough to be useful would push the thing you are adjusting off-screen.
+    uint32_t view_start_ = 0;
+    uint32_t view_frames_ = 0;
     uint8_t focus_ = PARAM_START;
     bool auditioning_ = false;
 
@@ -82,6 +107,7 @@ class UISampleEditPage : public UIPage {
 
     void buildWaveformPanel(lv_obj_t* parent);
     void buildParamStrip(lv_obj_t* parent);
+    void layoutParamStrip();
     void buildInfoStrip(lv_obj_t* parent);
 
     static void uiTimerCb(lv_timer_t* t);
@@ -90,6 +116,9 @@ class UISampleEditPage : public UIPage {
     void toggleAudition();
     void adjustFocused(int steps);
     void setZoom(int direction);
+    void zoomToFit();
+    void clampMarkers();
+    void sendEdit();
     void refreshParams();
     void refreshFocusRing();
     void requestWaveform();

@@ -49,11 +49,20 @@ Current state: the page draws the wireframe layout and START/END/ZOOM move the *
 
 ### 1.5.1 Marker model and protocol
 
-1. **Four independent markers**: start, end, loop start, loop end. The voice already has all four; the wire does not. Needs a message carrying them per slot, plus a status reply so the UI can read back what the engine actually applied (clamping matters: loop points must stay inside start/end, and the engine is the authority on that, not the UI).
-2. **Audition must honour the markers.** Today `MSG_SAMPLE_PLAY_INDEX_REQ` has no range field, so Audition plays the whole file. Playback should start at `start`, stop at `end`, and loop between `loop_start` and `loop_end` while looping is enabled. This is the single highest-value item here — without it the markers are decorative.
-3. **Gain**: wire the GAIN card. Non-destructive playback gain per sample, applied at trigger (`VoiceTriggerParams::gain_mul` already exists).
-4. **Save / Save As**: persist markers and gain. Prefer a WXCF sidecar (`features/instrument-model.md` §5) over a new per-file format — this is the same data a zone carries, and duplicating it invites divergence. Save As implies a filename entry surface, which does not exist yet.
-5. **Sample selection from the edit page.** Currently the page edits whatever the browser last loaded, with no way to change it. Either a picker, or make the edit page accept a sample argument and have the browser push it.
+1. ~~**Four independent markers**: start, end, loop start, loop end.~~ Done — `MSG_SAMPLE_EDIT_SET` (0x3C) carries all four plus gain and a loop flag. The backend clamps (`start <= loop_start < loop_end <= end`) and refuses loops under 256 frames, which would re-seek every refill pass and starve the ring.
+2. ~~**Audition must honour the markers.**~~ Done for the streaming audition path: the refill reader caps at the region (or loop) end and rewinds to the loop point rather than the file start. **Not** done for RAM-resident `VoiceManager` playback, which has its own `start_frame`/`loop_*` fields and is fed by a different path — worth unifying before Phase 2.5.
+3. ~~**Gain**~~ Done for streaming audition (saturating q15 on the converted block). Still to do: apply it at RAM-voice trigger via `VoiceTriggerParams::gain_mul`, so a sample sounds the same however it is played.
+4. **No status reply yet.** The backend clamps but reports nothing, so the UI can display a region the engine quietly narrowed. Either echo the applied values, or extend `MSG_DIAG_PUSH`. Until then the UI applies the same clamp rules locally, which is duplication waiting to diverge.
+5. **Save / Save As**: persist markers and gain. Prefer a WXCF sidecar (`features/instrument-model.md` §5) over a new per-file format — this is the same data a zone carries, and duplicating it invites divergence.
+
+   **Naming needs a decision.** Auto-numbering (`amen.wav` → `amen1.wav` → `amen2.wav`) is the cheap option and needs no text-entry UI, but three things have to be settled first, and each has bitten samplers before:
+   - **Collision policy.** Scan for the first free suffix, or track a counter? A counter goes stale the moment a file is deleted or the card is swapped; scanning costs a directory listing per save but is always right. Scanning, given how often cards get swapped here.
+   - **Where the number goes.** Before the extension (`amen1.wav`), never after (`amen.wav1`), and the base must be truncated so the result fits `FILE_NAME_MAX` (48) — silently truncating the *number* off the end would overwrite the original.
+   - **Whether Save As copies audio or writes a sidecar.** These edits are non-destructive, so a sidecar is far cheaper and instant. But "Save As" implies a new file the user can see in the browser and load independently, which a sidecar is not. Probably: sidecar for markers, and a genuine render-to-new-file when Phase 4's render jobs exist.
+
+   A text-entry surface (on-screen keyboard) is worth having eventually regardless, and is reusable for preset and pattern names — but it should not block Save As.
+6. **Sample selection from the edit page.** Currently the page edits whatever the browser last loaded, with no way to change it. Either a picker, or make the edit page accept a sample argument and have the browser push it. The Shift row has a `Select` key reserved for it.
+7. **Partial load for oversized samples.** The browser now refuses a sample larger than the allocator's largest free block, showing both figures. Loading a truncated head instead would need a length field on `MSG_SAMPLE_LOAD` and a truncating reader on the Daisy. Worth doing — but the refusal-with-numbers is the honest interim, where the old behaviour was a load that failed with no explanation.
 
 ### 1.5.2 Interaction model
 
@@ -67,7 +76,7 @@ Physical Shift still needs a key: `tca8418_keypad.cpp` maps keycode 4 → `BUTTO
 
 Specific items:
 
-1. **Draggable handles.** S, E and the not-yet-existing LS/LE should be touch-draggable on the waveform, not only encoder-driven. LVGL gives this via `LV_OBJ_FLAG_ADHESIVE`/drag events; the constraint work (ordering, clamping, minimum separation) is the real content.
+1. **Draggable handles.** All four handles (S, E on the top edge; LS, LE on the bottom) are drawn and track the zoom window, but are not yet touch-draggable — they move only by encoder. LVGL supplies the drag events; the constraint work (ordering, clamping, minimum separation, and mapping pixels back to frames at the current zoom) is the real content.
 2. ~~**`< Param` / `Param >`** replace `Param >` and `Refresh`.~~ Done.
 3. ~~**Audition toggles to Stop**, matching the browser.~~ Done, and it stops on page exit — audition used to play on under a page that no longer existed.
 4. **Encoder direction is a global contract, not a per-page choice.** Clockwise increases, always. The edit page shipped inverted because `InputEvent::delta` is already signed *and* the event type names the sign, so negating on the Left case flipped it back. Anything reading `delta` must take its magnitude and let the type supply direction. Worth a shared helper so the next page cannot repeat it.
@@ -81,9 +90,12 @@ Keep the `data_start` offset row: `data_start % 4` correlated exactly with the s
 
 ### 1.5.4 Busy feedback
 
-Long operations look like a freeze. Before building an overlay, determine whether the UI is genuinely blocked: if a sample load runs on the UI task, LVGL never redraws and a spinner will not spin — a frozen spinner is worse than no feedback. If blocked, move the work off the UI task first.
+**Built.** The question of whether the UI was genuinely blocked resolved in our favour: the ESP32 only sends `MSG_SAMPLE_LOAD` and waits, while the Daisy does the SD work, so LVGL keeps redrawing and a spinner genuinely spins. `ui_busy_overlay` (scrim + spinner + caption + optional bar) is shared, always timeout-bounded, and only dismissable by touch *after* it has failed — cancelling a live operation would leave the backend loading into a UI that has moved on.
 
-Then a shared `ui_busy_overlay` (scrim + spinner + caption) used by every page, preferring a determinate bar where a total is known — `MSG_SAMPLE_LOAD` carries `sample_size` and `MSG_SAMPLE_STATUS` reports progress, so sample load can show a real percentage. Always pair with a timeout and an error path: a spinner that never resolves is indistinguishable from the freeze it was added to explain, and the backend can genuinely fail to answer (card pulled mid-load).
+Still open:
+
+- **Real progress.** The bar exists but nothing drives it; `MSG_SAMPLE_STATUS` reports progress and `MSG_SAMPLE_LOAD` carries `sample_size`, so a determinate percentage is available without protocol work.
+- **Use it elsewhere.** Preview fetch and card remount should show the same overlay rather than each inventing something.
 
 **Gate**: set all four markers on a multi-minute WAV, audition the looped region, save, reboot, reload, and hear the same region. Markers survive a power cycle; no UI freeze during audition, zoom or load.
 
