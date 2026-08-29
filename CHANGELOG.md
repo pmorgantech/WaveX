@@ -11,6 +11,29 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Added — On-screen keyboard / pad grid (digital voice audition, stage 3)
+
+- A 4x4 grid of touch pads under **Main Menu → Keyboard**, where cell *n* sends
+  note `root + n` — which *is* a chromatic keyboard spanning 16 semitones, so
+  the "virtual piano" and "pad grid" surfaces are one widget differing only in
+  note map and labels. Softkeys shift the root by octave or semitone; pads are
+  labelled with note names in scientific pitch notation (MIDI 60 = C4).
+- **This is currently the only way to trigger a digital voice without external
+  MIDI hardware**, and therefore the only way to hear the per-voice filter,
+  envelope and live parameter edits at all. It needed no new protocol work:
+  `inter_mcu_send_note_on/off()` already existed and were already in service
+  from the MIDI task — nothing in the UI had ever called them.
+- Uses `LV_EVENT_PRESSED`/`RELEASED` rather than the `LV_EVENT_CLICKED` every
+  other button in this UI uses, because CLICKED fires on release only and would
+  make every note zero-length; gate length follows the finger instead.
+  `LV_EVENT_PRESS_LOST` is handled too — a finger that slides off a pad emits
+  it *instead of* RELEASED, so without it that note would hang.
+- Held notes are released on page exit and on any root change, and the note
+  number sent at press is remembered per pad rather than recomputed at release,
+  so a root change mid-press cannot end a note that was never started. An
+  "All Off" panic softkey is there as cheap insurance while this page is the
+  only note source.
+
 ### Added — Live voice-parameter editing on the digital path (digital voice audition, stage 1)
 
 - `MSG_CONTROL_CHANGE` now reaches the **digital** per-voice filter and

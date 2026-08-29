@@ -6,6 +6,7 @@
 #include "ui/ui_api.h"
 #include "ui/ui_cv_cal_page.h"
 #include "ui/ui_diagnostics_page.h"
+#include "ui/ui_keyboard_page.h"
 #include "ui/ui_sample_browser.h"
 #include "ui/ui_sample_detail.h"
 #include "ui/ui_sample_edit_page.h"
@@ -30,6 +31,10 @@ std::shared_ptr<UIPage> createMainMenu() {
     menu->addItem("Edit Sample", []() {
         ESP_LOGI(TAG, "Edit Sample selected");
         UINavigator::instance().push(createSampleEditPage()); });
+
+    menu->addItem("Keyboard", []() {
+        ESP_LOGI(TAG, "Opening Keyboard");
+        UINavigator::instance().push(createKeyboardPage()); });
 
     menu->addItem("Modulation", []() {
         ESP_LOGI(TAG, "Opening Modulation Menu");
