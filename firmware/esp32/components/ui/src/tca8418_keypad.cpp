@@ -51,49 +51,59 @@ static void post_button(bool pressed, uint8_t button_id) {
     InputDispatcher::instance().post(evt);
 }
 
+// Poll period. The controller debounces in hardware and buffers up to ten
+// events, so this only bounds latency, not whether a key is seen at all.
+static constexpr uint32_t kPollIntervalMs = 10;
+
+// The FIFO is ten deep; the cap only stops a wedged controller reporting a
+// non-zero count forever from spinning this task.
+static constexpr int kMaxEventsPerPass = 16;
+
 static void keypad_task(void* arg) {
     ESP_LOGI(TAG, "Keypad task started");
 
-    // Track pressed keys to detect release events
-    static uint8_t last_keycode = 0;
-
     while (true) {
-        // If INT available, wait for it, otherwise poll periodically
-        if (s_int_gpio != GPIO_NUM_NC) {
-            // Simple polling of GPIO level; could use ISR+queue for lower latency
-            if (gpio_get_level(s_int_gpio) == 0) {
-                // INT asserted (active low)
-            } else {
-                vTaskDelay(pdMS_TO_TICKS(10));
-                continue;
-            }
-        } else {
-            vTaskDelay(pdMS_TO_TICKS(20));
-        }
-
-        // Check for key events
+        // The INT line is deliberately not consulted.
+        //
+        // Nothing configures the controller to drive it: the driver's hw_init()
+        // sets the GPIO/keypad/debounce registers but never writes CFG, so the
+        // key-event interrupt enable stays at its reset default. Gating reads on
+        // INT therefore meant either no key was ever read, or - if INT did
+        // assert - a 100% busy-spin, because INT latches until INT_STAT is
+        // written back and the asserted branch had no delay. At priority 5
+        // pinned to core 1 that starves the UI task on the same core.
+        //
+        // Polling the event count is the authority instead, which works
+        // whatever CFG holds. Clearing INT_STAT is left undone on purpose: the
+        // only public way to do it is flush(), which also discards queued
+        // events, so calling it would open a window where a key pressed between
+        // our last read and the clear is silently dropped. A latched INT line
+        // nobody reads is harmless.
+        //
+        // An interrupt-driven path is still the better design (guide §2/§3) but
+        // needs CFG configured and confirmed on the bench; see roadmap
+        // § Outstanding hardware verification.
 #if defined(ESP_PLATFORM) && WAVEX_ESP_BUTTON_MATRIX_ENABLED
-        if (s_dev && s_dev->get_event_count() > 0) {
-            uint8_t keycode = s_dev->get_key();
-            if (keycode != last_keycode) {
-                // Key changed - release previous key if any
-                if (last_keycode != 0) {
-                    uint8_t button = map_keycode_to_button(last_keycode);
-                    if (button != 0) {
-                        post_button(false, button);  // Release
-                    }
-                }
-                // Press new key if valid
-                if (keycode != 0) {
-                    uint8_t button = map_keycode_to_button(keycode);
-                    if (button != 0) {
-                        post_button(true, button);  // Press
-                    }
-                }
-                last_keycode = keycode;
+        int drained = 0;
+        while (s_dev && s_dev->get_event_count() > 0 && drained < kMaxEventsPerPass) {
+            const uint8_t event = s_dev->get_key();
+            if (event == 0) {
+                break;  // count and FIFO disagree; nothing to decode
             }
+            drained++;
+
+            // KEY_EVENT_A packs the transition in bit 7 (1 = press) and the
+            // key code in bits 0-6. Masking it is not optional: reading the
+            // register raw made a press of key 1 arrive as 0x81, which fell
+            // through the keycode mapping and was dropped, while its release
+            // arrived as 0x01 and was posted as a *press*. Every button
+            // therefore fired on release, and chords were unrepresentable.
+            const bool pressed = (event & 0x80) != 0;
+            const uint8_t keycode = static_cast<uint8_t>(event & 0x7F);
+            post_button(pressed, map_keycode_to_button(keycode));
         }
 #endif
+        vTaskDelay(pdMS_TO_TICKS(kPollIntervalMs));
     }
 }
 
@@ -125,7 +135,11 @@ esp_err_t tca8418_keypad_start(int int_gpio, uint8_t i2c_addr) {
     (void)i2c_addr;
 #endif
 
-    // Configure INT GPIO if provided (from pin_config macro in caller)
+    // Configure the INT GPIO if provided (from the pin_config macro in the
+    // caller). The task does not read it - see keypad_task() for why - but
+    // leaving the pin floating on a controller that may drive it low is worse
+    // than parking it as a pulled-up input, and an interrupt-driven path will
+    // want it configured exactly like this.
     if (int_gpio >= 0) {
         s_int_gpio = (gpio_num_t)int_gpio;
         gpio_config_t io = {};

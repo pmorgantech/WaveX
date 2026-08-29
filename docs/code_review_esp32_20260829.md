@@ -7,7 +7,7 @@
 
 Findings carry stable IDs (`E-…`) so implementation can be tracked in this file. **Completed items leave this document** — detail goes to `CHANGELOG.md`, matching the roadmap's convention — so what remains here is always the open list. A partially-addressed item keeps its row, marked `[~]`, and says what is left.
 
-**Already remediated** (see `CHANGELOG.md` § Unreleased): E-LVGL1/2/3, the LVGL thread-safety cluster (`21304be`, `222b2b4`); E-LIFE1/2/3, the callback-lifetime cluster. All fixed 2026-08-29.
+**Already remediated** (see `CHANGELOG.md` § Unreleased): E-LVGL1/2/3, the LVGL thread-safety cluster (`21304be`, `222b2b4`); E-LIFE1/2/3, the callback-lifetime cluster (`41f4cdd`); E-KEY1/2, the keypad decode and INT busy-spin. All fixed 2026-08-29. **E-KEY1/2 and E-ENC1 change hardware behaviour and are the ones most needing a bench pass** — they were diagnosed entirely by reading code and the controller datasheet.
 
 ---
 
@@ -19,11 +19,11 @@ The debt is concentrated in three themes:
 
 1. **LVGL thread-safety was systematically violated** — ~~the UART RX task mutating widgets directly in comm callbacks, the whole input dispatch path running outside the port lock, and `lv_async_call` issued from the wrong task~~. **Fixed 2026-08-29**; see `CHANGELOG.md`. Kept in this list because it is the reason themes 2 and 3 matter more than they look: the corruption this caused was the most likely explanation for "random" UI failures, so misbehaviour that survives these fixes is now much more likely to be one of the remaining items than a mystery.
 2. **Callback lifetime was unmanaged** — ~~listener pairs as unsynchronized globals, a file browser that never deregistered, and four different locking disciplines across four slots in one class~~. **Fixed 2026-08-29**; see `CHANGELOG.md`. What remains of this theme is the *publication* half: comm-driven pages still solve the producer/consumer handoff three different ways — correct `__atomic` release/acquire (file browser), atomics (sample browser, converted), and `volatile` (the sample-edit page, a guide-§9 regression). That is E-SYNC1.
-3. **The physical control surface has real functional bugs.** The TCA8418 keypad path, as committed, either never sees a key (the driver never enables the chip's interrupt output) or busy-spins core 1 at priority 5 (nothing clears `INT_STAT`, and the INT-asserted branch has no delay); its event decode also ignores the press/release bit, so presses would fire on release. The encoder path drops or replays detents under SMP: interrupt masking is used as cross-core synchronization (the exact anti-pattern §1 of the guide opens with) on top of a hardware read-then-clear window.
+3. **The physical control surface had real functional bugs** — ~~a keypad that either never saw a key or busy-spun core 1, decoding presses as releases, and an encoder using interrupt masking as cross-core synchronization~~. **Fixed 2026-08-29**; see `CHANGELOG.md`. These were found by reading code and the TI datasheet, not by observing hardware, so they are the highest-value items in this review to confirm on the bench: if the keypad still misbehaves, the remaining suspect is the CFG register the vendored driver never writes.
 
 Two systemic build findings round it out: the `-Os`/LTO compile options in the top-level CMakeLists are added after `project()` and apply to nothing (the image is `-O2`), and the `EXCLUDE_COMPONENTS` list excludes nothing. Both misdescribe the shipped image to anyone reading the build files.
 
-**Suggested order**: with the two crash-risk clusters closed, the next work is correctness the user can actually feel — the keypad (E-KEY1..2) and encoder (E-ENC1), which are what stands between the hardware controls and working at all, and which are best done together because both need the same bench session to confirm. Then E-INIT1, then the build-file repairs (E-BLD1..2) before anyone tunes performance against flags that are not applied. E-SYNC1's remaining half (the sample-edit page's `volatile`) is cheap and can ride along with any edit-page work. The SPI findings (§7) do not need fixing now but must gate any re-enable of `WAVEX_SPI_LINK_ENABLED`.
+**Suggested order**: next is E-INIT1 (the last Critical), then the build-file repairs (E-BLD1..2) before anyone tunes performance against flags that are not applied, then the UI correctness batch (E-TICK1, E-TOUCH1, E-BRWS1, E-MENU1) which is mostly small and independent. E-SYNC1's remaining half (the sample-edit page's `volatile`) is cheap and can ride along with any edit-page work. The SPI findings (§7) do not need fixing now but must gate any re-enable of `WAVEX_SPI_LINK_ENABLED`. **Before any of that, a bench pass on the keypad and encoder** — three fixes now depend on hardware behaviour nobody has watched.
 
 ---
 
@@ -31,10 +31,8 @@ Two systemic build findings round it out: the `-Os`/LTO compile options in the t
 
 | ID | Sev | Area | Summary |
 |---|---|---|---|
-| [ ] E-KEY1 | Critical | input | TCA8418 INT lifecycle unmanaged: keypad dead or busy-spins core 1 |
-| [ ] E-KEY2 | Critical | input | KEY_EVENT_A bit 7 never masked: press/release inverted, chords impossible |
 | [ ] E-INIT1 | Critical | core | `app_main` returns on failed init, destructing the context under live tasks (UAF) |
-| [ ] E-ENC1 | Major | input | Encoder delta race: interrupt masking as SMP sync + PCNT read-then-clear window |
+| [~] E-ENC1 | Major | input | Encoder SMP race fixed 2026-08-29 (atomics replace interrupt masking); the read-then-clear window is narrowed from every movement poll to ~1 per 8000 counts, not closed — closing it needs the driver's watch-point ISR and bench time |
 | [~] E-SYNC1 | Major | UI/core | `volatile`/plain-`bool` cross-task handoffs — sample browser converted to atomics 2026-08-29; edit page (`volatile`) and `ui_task.h` meter state still open |
 | [ ] E-TICK1 | Major | UI | LVGL time runs at 2×: duplicate 5 ms tick timer |
 | [ ] E-TOUCH1 | Major | UI | Second GT911 instance created on the BSP-owned touch controller, wrong geometry |
@@ -69,19 +67,6 @@ Two systemic build findings round it out: the `-Os`/LTO compile options in the t
 
 ## 3. Critical
 
-### E-KEY1 — TCA8418 INT lifecycle unmanaged: keypad dead or busy-spinning core 1
-
-`components/ui/src/tca8418_keypad.cpp:60-97`: the task reads keys only while `gpio_get_level(s_int_gpio) == 0`, else sleeps 10 ms. Verified against the managed component: `esp_tca8418.cpp::hw_init` (:52-165) never writes the CFG register (KE_IEN/GPI_IEN interrupt enables) and nothing anywhere clears `INT_STAT` (`flush()` exists but has no first-party caller). Two branches, both bad:
-
-- If the chip's INT output is never enabled (CFG resets to 0), INT never asserts and **no key is ever read** — the keypad is nonfunctional as wired (`ui_task.cpp:106` starts it in INT mode).
-- If INT does assert, the datasheet holds it low until the status bit is written clear — which never happens — and the INT-asserted path has **no delay in the loop**: a 100 % busy-spin at prio 5 pinned to core 1, starving `ui_task` (prio 2, core 1) → frozen UI.
-
-**Fix**: enable key-event interrupts in CFG at init, drain the FIFO in a `while (get_event_count())` loop, write-1-clear `INT_STAT` after draining, and either block on a real GPIO ISR + task notification (guide §2/§3) or at minimum put an unconditional `vTaskDelay` in the loop. Bench-verify on hardware after the fix.
-
-### E-KEY2 — press/release bit never masked; event synthesis inverted
-
-`tca8418_keypad.cpp:76-94` with `esp_tca8418.cpp:172-175`: `get_key()` returns the raw KEY_EVENT_A register where bit 7 = press(1)/release(0). A press of key 1 arrives as 0x81, which `map_keycode_to_button` (cases 1–4 only) maps to 0 → dropped; the release arrives as 0x01 → posted as **ButtonPress**. Once E-KEY1 is fixed, `ButtonPress` fires on physical release, `ButtonRelease` at the start of the next press, and simultaneous keys (the Shift modifier, `ui_softkey.h:38`) are unrepresentable in the single `last_keycode` model. Also only one FIFO event is consumed per wake, and `static uint8_t last_keycode` survives stop/start (phantom release). **Fix**: `pressed = ev & 0x80; code = ev & 0x7F;`, post per event, drain the FIFO, delete the synthesis logic.
-
 ### E-INIT1 — failed init destructs the dependency container under live tasks
 
 `main/main.cpp:25-28` / `wavex_application.cpp:113-116`: `WaveXApplication app;` is stack-local; `initialize()` starts the UART link task (prio 6) and PCNT/MIDI tasks *before* UI init. If a later init step fails, `app_main` returns → `~ApplicationContext` frees `statistics_`/`packet_router_` (`application_context.h:62-64`) while the running `uart_link` task dereferences them through raw statics (`inter_mcu.cpp:33`, `esp_uart_link.cpp:84`). Next received packet is a UAF. **Fix**: on init failure, log and `esp_restart()` (or `abort()`) instead of returning; or tear tasks down before destruction.
@@ -98,6 +83,10 @@ Two stacked defects in the primary control:
 2. `pcnt_task.cpp:199-223` — hardware counts arriving between `pcnt_unit_get_count` and `pcnt_unit_clear_count` are destroyed; and both calls' `esp_err_t` results are ignored, so a failed clear re-applies the full count as fresh delta every 2 ms poll thereafter.
 
 **Fix**: make `delta` a `std::atomic<int32_t>` (`fetch_add` / `exchange(0)`); stop clearing the hardware counter — track `last_hw` and compute `delta = hw - last_hw` (free-running within ±INT16 at a 2 ms poll never wraps); check the driver returns. Consider folding the 500 Hz poll into the UI task's own loop (sole consumer, 31 Hz) or PCNT watch-point callbacks (E-TASK1).
+
+**Partly fixed 2026-08-29.** Defect 1 is closed: `__atomic_fetch_add`/`__atomic_exchange_n` replace the interrupt masking (builtins rather than `std::atomic` because `pcnt_task.h` is `extern "C"`; same precedent as `file_browser.cpp`). Both `esp_err_t` returns are now checked, and a failed clear no longer zeroes the baseline — which was the bug that re-applied the whole count as fresh delta on every later poll.
+
+**Still open — the read-then-clear window is narrowed, not closed.** The review's suggested fix (free-run and never clear) is not safe as written: the unit is configured `high_limit = INT16_MAX` / `low_limit = INT16_MIN`, and the `pulse_cnt` driver **resets the count to zero on reaching either limit**, so a free-running counter produces one large bogus delta per ±32767 counts rather than never wrapping. Instead the counter is now re-centred only when it passes ±8000, so the lossy window went from *every poll during movement* to roughly one per 8000 counts (~85 revolutions), where losing a fraction of a detent is imperceptible. Closing it properly means the driver's watch-point callbacks — an ISR, needing an IRAM-safety audit and bench time.
 
 ### E-SYNC1 — `volatile`/plain-`bool` cross-core handoffs (guide §9 ban)
 

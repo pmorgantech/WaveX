@@ -196,10 +196,20 @@ static void pcnt_task(void *pvParameters) {
 
             // Read current hardware counter value
             int hw_count = 0;
-            pcnt_unit_get_count(s_pcnt_units[config->unit], &hw_count);
+            esp_err_t get_err = pcnt_unit_get_count(s_pcnt_units[config->unit], &hw_count);
+            if (get_err != ESP_OK) {
+                // Leave last_hw alone: the next successful read then reports
+                // the movement across both polls instead of losing it.
+                ESP_LOGW(TAG,
+                         "PCNT unit %u get_count failed: %s",
+                         (unsigned)config->unit,
+                         esp_err_to_name(get_err));
+                continue;
+            }
 
             // Calculate delta since last poll
-            int32_t delta = (int32_t)hw_count - reading->count;
+            int32_t delta = (int32_t)hw_count - reading->last_hw;
+            reading->last_hw = (int32_t)hw_count;
             if (delta != 0) {
                 const char *unit_name = (config->unit == WAVEX_ENCODER_PCNT_UNIT)
                                             ? "Main Encoder"
@@ -212,16 +222,40 @@ static void pcnt_task(void *pvParameters) {
                          (int32_t)hw_count,
                          delta);
 
-                // For now, process all deltas to restore functionality
-                // TODO: Add noise filtering back once we understand the delta patterns
-                reading->prev_count = reading->count;
-                reading->count = (int32_t)hw_count;
-                reading->delta += delta;
+                // Atomic add: the UI task takes this with an exchange from the
+                // other core, and this task is unpinned. A plain `+=` here let
+                // a consumer's zeroing land between the read and the write, so
+                // detents were silently dropped under load. Relaxed ordering is
+                // enough - the delta is a self-contained count, not a flag
+                // publishing some other buffer.
+                __atomic_fetch_add(&reading->delta, delta, __ATOMIC_RELAXED);
+            }
 
-                // Clear hardware counter to prevent overflow
-                pcnt_unit_clear_count(s_pcnt_units[config->unit]);
-                reading->count = 0;
-                reading->prev_count = 0;
+            // Re-centre well before the driver's ±INT16 limit, where it would
+            // reset the count to zero on its own and make the next delta a
+            // large bogus jump.
+            //
+            // The counter is NOT cleared on every poll any more. Doing that
+            // discarded any edge landing between get_count() and clear_count(),
+            // which is every poll during movement; now the window is hit once
+            // per ~8000 counts (~85 revolutions), where losing a fraction of a
+            // detent is imperceptible. Closing it completely needs the driver's
+            // watch-point callbacks, which is an ISR and wants bench time.
+            constexpr int32_t kRecentreThreshold = 8000;
+            if (hw_count > kRecentreThreshold || hw_count < -kRecentreThreshold) {
+                esp_err_t clear_err = pcnt_unit_clear_count(s_pcnt_units[config->unit]);
+                if (clear_err == ESP_OK) {
+                    reading->last_hw = 0;
+                } else {
+                    // last_hw still matches the hardware, so the baseline stays
+                    // true and the next poll just tries again. The old code
+                    // zeroed it regardless, which re-applied the whole count as
+                    // fresh delta on every subsequent poll.
+                    ESP_LOGW(TAG,
+                             "PCNT unit %u clear_count failed: %s",
+                             (unsigned)config->unit,
+                             esp_err_to_name(clear_err));
+                }
             }
         }
 
@@ -311,9 +345,9 @@ esp_err_t pcnt_reset_counter(uint8_t unit) {
 
     esp_err_t ret = pcnt_unit_clear_count(s_pcnt_units[unit]);
     if (ret == ESP_OK) {
-        s_encoder_readings[unit].count = 0;
+        s_encoder_readings[unit].last_hw = 0;
         s_encoder_readings[unit].prev_count = 0;
-        s_encoder_readings[unit].delta = 0;
+        __atomic_store_n(&s_encoder_readings[unit].delta, 0, __ATOMIC_RELAXED);
     }
     return ret;
 }
@@ -333,10 +367,13 @@ int32_t pcnt_consume_delta(uint8_t unit) {
     if (unit >= WAVEX_PCNT_UNIT_COUNT) {
         return 0;
     }
-    // Fetch and clear atomically with interrupts disabled to avoid ISR race.
-    uint32_t prev_level = portSET_INTERRUPT_MASK_FROM_ISR();
-    int32_t delta = s_encoder_readings[unit].delta;
-    s_encoder_readings[unit].delta = 0;
-    portCLEAR_INTERRUPT_MASK_FROM_ISR(prev_level);
-    return delta;
+    // Fetch-and-clear in one atomic step.
+    //
+    // This previously bracketed a plain read and write with
+    // portSET_INTERRUPT_MASK_FROM_ISR(), described as avoiding "an ISR race".
+    // There is no ISR - the producer is pcnt_task - and masking interrupts
+    // only affects the calling core, so it did nothing about a producer
+    // running on the other one. That is the anti-pattern the ESP32-P4 guide
+    // opens with (§1).
+    return __atomic_exchange_n(&s_encoder_readings[unit].delta, 0, __ATOMIC_RELAXED);
 }

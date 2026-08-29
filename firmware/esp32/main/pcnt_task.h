@@ -51,9 +51,13 @@ typedef struct {
  * @brief Encoder reading structure
  */
 typedef struct {
-    int32_t count;       // Current counter value
-    int32_t prev_count;  // Previous counter value for delta calculation
-    int32_t delta;       // Change since last read
+    int32_t last_hw;     // Hardware count at the previous poll
+    int32_t prev_count;  // Unused; retained so the struct layout is unchanged
+    // Accumulated movement not yet consumed. Written by the PCNT task and
+    // taken by the UI task, on either core, so every access goes through
+    // __atomic_* builtins rather than a plain read-modify-write. Kept as a
+    // plain int32_t here because this header is `extern "C"`.
+    int32_t delta;
 } encoder_reading_t;
 
 /**

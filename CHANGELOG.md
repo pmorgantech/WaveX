@@ -11,6 +11,36 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Fixed — Keypad and encoder: the physical controls now decode correctly
+
+Found by the 2026-08-29 ESP32-P4 review (items E-KEY1/2, E-ENC1). All three were
+diagnosed from source and the TI datasheet, so they want a bench pass.
+
+- **The TCA8418 keypad no longer gates reads on the INT line.** Nothing
+  configures the controller to drive it — the vendored driver's `hw_init()`
+  never writes the CFG register — so gating on INT meant either no key was ever
+  read, or, if INT did assert, a 100% busy-spin at priority 5 pinned to core 1,
+  starving the UI task on that same core. It now polls the event count, which
+  works whatever CFG holds, and always yields.
+- **`KEY_EVENT_A` bit 7 is masked.** It carries the press/release flag, so
+  reading the register raw made a press of key 1 arrive as `0x81` and get
+  dropped by the keycode mapping, while its release arrived as `0x01` and was
+  posted as a **press**. Every button fired on release, and simultaneous keys
+  (the Shift modifier) were unrepresentable. The FIFO is now drained per pass
+  and each event decoded on its own, replacing the single-`last_keycode`
+  press/release synthesis.
+- **Encoder deltas are exchanged atomically.** `pcnt_consume_delta` bracketed a
+  plain read/write with `portSET_INTERRUPT_MASK_FROM_ISR()` against "an ISR
+  race" — but there is no ISR, and masking interrupts only affects the calling
+  core, so it did nothing about the unpinned producer task on the other one.
+  Detents were silently dropped under load.
+- **The PCNT counter is re-centred rather than cleared every poll.** Counts
+  landing between `get_count()` and `clear_count()` were destroyed; that window
+  is now hit about once per 8000 counts instead of on every poll during
+  movement. Both driver return codes are checked, and a failed clear no longer
+  zeroes the baseline — which had re-applied the whole count as fresh delta on
+  every later poll.
+
 ### Fixed — Comm listener lifetime: a page can no longer be destroyed under a running callback
 
 Found by the 2026-08-29 ESP32-P4 review (items E-LIFE1/2/3). Listener
