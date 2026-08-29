@@ -96,11 +96,17 @@ enum MessageType : uint8_t {
     MSG_SAMPLE_EDIT_SET = 0x3C,  // ESP32 -> Daisy: playback region, loop, gain (command)
     MSG_SAMPLE_META = 0x3D,      // Daisy -> ESP32: authoritative per-sample record (state)
     MSG_SAMPLE_META_REQ = 0x3E,  // ESP32 -> Daisy: resend metadata (all, or one id)
+    MSG_ENVELOPE_REQ = 0x3F,     // ESP32 -> Daisy: min/max envelope for a frame window
     // CV calibration (Stage A analog path - analog-voice-board.md §3)
     MSG_CV_CAL_SET = 0x40,   // ESP32 -> Daisy: apply (and optionally persist) one group's cal
     MSG_CV_CAL_GET = 0x41,   // ESP32 -> Daisy: request one group's cal
     MSG_CV_CAL_RESP = 0x42,  // Daisy -> ESP32: one group's cal (reply to SET and GET)
     MSG_CV_TEST = 0x43,      // ESP32 -> Daisy: override CVs with fixed values (cal procedure)
+    // Reply to MSG_ENVELOPE_REQ. Not adjacent to the request because the
+    // 0x3F..0x43 run was already taken by CV calibration when the envelope
+    // path was added; the pair is documented rather than renumbered, since
+    // renumbering a shipped id is worse than a gap.
+    MSG_ENVELOPE_CHUNK = 0x44,  // Daisy -> ESP32: one run of envelope columns
     // Sequencer / transport / MIDI clock (Phase 2; docs/features/sequencer.md,
     // midi-sync-tempo-follower.md, melodic-sequencing.md). ID block reserved in
     // docs/features/feature-expansion-ideas.md - do not assign outside it.
@@ -536,6 +542,95 @@ struct SampleEditMessage {
           end_frame(end_frame_),
           loop_start(loop_start_),
           loop_end(loop_end_) {}
+} __attribute__((packed));
+
+// ---------------------------------------------------------------------------
+// Waveform envelope (roadmap 1.5.5 item 2)
+//
+// The old preview (MSG_PREVIEW_REQ / MSG_WAVE_CHUNK) sends every n-th sample.
+// That aliases: on bright material a one-sample-per-column decimation draws a
+// trace that does not resemble the audio, and transients vanish entirely
+// because the single sample kept is almost never the peak.
+//
+// An envelope sends the MIN and MAX of every sample falling in a display
+// column instead. The payload is a function of the display width, not of the
+// file length: 1256 columns x 2 channels x 2 int16 is ~10 KB for a whole file
+// at full panel width, whatever its duration.
+//
+// Per channel, not summed (roadmap 1.5.7 item 2): an out-of-phase stereo
+// sample sums to near silence and would draw as a flat line for audio that is
+// perfectly fine, and a loop seam has to be judged on both channels. The
+// frontend decides what to draw; the wire carries what was measured.
+// ---------------------------------------------------------------------------
+
+// Widest envelope a single request may ask for. The waveform panel is 1256 px,
+// so this is that rounded up - asking for more columns than pixels buys
+// nothing and only costs link time.
+static const uint16_t MAX_ENVELOPE_COLUMNS = 1280;
+
+// One display column of one channel. Signed 16-bit regardless of the file's
+// bit depth: 24-bit sources are scaled down for display, where the bottom
+// 8 bits are far below one pixel.
+struct EnvelopeColumn {
+    int16_t min_sample;
+    int16_t max_sample;
+
+    EnvelopeColumn() : min_sample(0), max_sample(0) {}
+    EnvelopeColumn(int16_t min_, int16_t max_) : min_sample(min_), max_sample(max_) {}
+} __attribute__((packed));
+
+// Envelope request (frontend -> backend).
+//
+// sample_id 0 means "the most recently loaded sample", matching how
+// MSG_SAMPLE_EDIT_SET addresses a sample the edit page did not load itself.
+// end_frame 0 means "to the end", the same sentinel SampleMetadata uses.
+struct EnvelopeReqMessage {
+    uint16_t sample_id;
+    uint16_t columns;      // 1..MAX_ENVELOPE_COLUMNS; the backend clamps
+    uint32_t start_frame;  // window start, absolute, at the file's own rate
+    uint32_t end_frame;    // exclusive; 0 = the sample's total_frames
+
+    EnvelopeReqMessage() : sample_id(0), columns(0), start_frame(0), end_frame(0) {}
+    EnvelopeReqMessage(uint16_t sample_id_,
+                       uint16_t columns_,
+                       uint32_t start_frame_,
+                       uint32_t end_frame_)
+        : sample_id(sample_id_),
+          columns(columns_),
+          start_frame(start_frame_),
+          end_frame(end_frame_) {}
+} __attribute__((packed));
+
+// Envelope chunk (backend -> frontend). Header, then
+// `columns * channels` EnvelopeColumn values, channel-interleaved per column
+// (col0 ch0, col0 ch1, col1 ch0, ...).
+//
+// Every chunk repeats the whole window and the generation, so a chunk is
+// self-describing: a frontend that missed the first chunk of a run, or that
+// has since moved the view, can tell without keeping request state. That is
+// also what makes the cache safe to key (roadmap 1.5.5 item 4) - a chunk
+// built from generation N can never be filed under generation N+1.
+struct EnvelopeChunkMessage {
+    uint16_t sample_id;
+    uint16_t generation;     // SampleMetadata::generation this was measured from
+    uint32_t start_frame;    // window this envelope run covers
+    uint32_t end_frame;      // exclusive
+    uint16_t total_columns;  // columns in the whole run
+    uint16_t first_column;   // index of this chunk's first column within the run
+    uint16_t columns;        // columns in THIS chunk
+    uint8_t channels;        // EnvelopeColumn values per column: 1 or 2
+    uint8_t reserved;
+
+    EnvelopeChunkMessage()
+        : sample_id(0),
+          generation(0),
+          start_frame(0),
+          end_frame(0),
+          total_columns(0),
+          first_column(0),
+          columns(0),
+          channels(1),
+          reserved(0) {}
 } __attribute__((packed));
 
 // Diagnostics subscription (frontend -> backend).
@@ -1183,6 +1278,17 @@ class ProtocolHandler {
     static size_t CreateSampleEditPacket(uint8_t* buffer,
                                          size_t buffer_size,
                                          const SampleEditMessage& msg);
+
+    /** Waveform envelope request (frontend -> backend). */
+    static size_t CreateEnvelopeReqPacket(uint8_t* buffer,
+                                          size_t buffer_size,
+                                          const EnvelopeReqMessage& msg);
+    /** One run of envelope columns (backend -> frontend). Header + columns. */
+    static size_t CreateEnvelopeChunkPacket(uint8_t* buffer,
+                                            size_t buffer_size,
+                                            const EnvelopeChunkMessage& msg,
+                                            const EnvelopeColumn* columns,
+                                            size_t column_count);
 
     /** Diagnostics subscription (frontend -> backend). */
     static size_t CreateDiagSubscribePacket(uint8_t* buffer,

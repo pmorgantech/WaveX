@@ -66,17 +66,39 @@ class UISampleEditPage : public UIPage {
 
     std::unique_ptr<class WaveformView> waveform_;
     bool has_sample_ = false;
-    std::vector<int16_t> preview_buffer_;
-    uint32_t expected_len_ = 0;
 
-    // Wave chunks arrive on the UART RX task, which must not touch LVGL
-    // (inter_mcu.h; ui-architecture.md). The callback only fills the buffer
-    // and raises these flags; ui_timer_ applies them on the UI task.
+    // One envelope run in flight, staged into a buffer allocated once at its
+    // ceiling and never resized: the UART task writes into it while the UI
+    // task reads, so a reallocation mid-copy would be a use-after-free where
+    // a torn value is merely one stale column.
+    std::vector<WaveX::Protocol::EnvelopeColumn> run_columns_;
+    std::vector<WaveX::Protocol::EnvelopeColumn> display_columns_;
+
+    // Identity of the request in flight, read by the RX task to decide
+    // whether a chunk still belongs to the view on screen. run_epoch_ is
+    // bumped before each arming and re-checked after the copy, so a chunk
+    // cannot be filed against a request that changed underneath it.
+    volatile uint32_t run_epoch_ = 0;
+    uint16_t pending_sample_id_ = 0;
+    uint16_t pending_generation_ = 0;
+    uint32_t pending_start_ = 0;
+    uint32_t pending_end_ = 0;
+    uint16_t pending_columns_ = 0;
+    volatile uint16_t run_received_ = 0;
+    volatile uint8_t run_channels_ = 0;
+    volatile bool run_ready_ = false;
+    bool request_in_flight_ = false;
+    uint32_t request_sent_ms_ = 0;
+
+    // Envelope chunks arrive on the UART RX task, which must not touch LVGL
+    // (inter_mcu.h; ui-architecture.md) and must not touch the cache either,
+    // since the cache allocates. The callback only fills the buffer and
+    // raises these flags; ui_timer_ applies them on the UI task.
     lv_timer_t* ui_timer_ = nullptr;
     volatile bool waveform_dirty_ = false;
     volatile bool params_dirty_ = false;
 
-    // Encoder movement coalescing. One detent used to fire a preview request
+    // Encoder movement coalescing. One detent used to fire an envelope request
     // of its own, so a single turn queued a burst of them.
     uint32_t request_due_ms_ = 0;
 
@@ -100,11 +122,11 @@ class UISampleEditPage : public UIPage {
     uint8_t focus_ = PARAM_START;
     bool auditioning_ = false;
 
-    static void waveChunkStatic(uint32_t offset,
-                                const int16_t* samples,
-                                uint16_t count,
-                                void* user);
-    void handleWaveChunk(uint32_t offset, const int16_t* samples, uint16_t count);
+    static void envelopeChunkStatic(const WaveX::Protocol::EnvelopeChunkMessage& header,
+                                    const WaveX::Protocol::EnvelopeColumn* columns,
+                                    void* user);
+    void handleEnvelopeChunk(const WaveX::Protocol::EnvelopeChunkMessage& header,
+                             const WaveX::Protocol::EnvelopeColumn* columns);
 
     void buildWaveformPanel(lv_obj_t* parent);
     void buildParamStrip(lv_obj_t* parent);
@@ -124,6 +146,9 @@ class UISampleEditPage : public UIPage {
     void refreshParams();
     void refreshFocusRing();
     void requestWaveform();
+    void drawWaveform();  ///< UI task only: cache -> WaveformView.
+    uint16_t currentSampleId() const;
+    uint16_t currentGeneration() const;
     void refreshStatus(const char* text);
 };
 

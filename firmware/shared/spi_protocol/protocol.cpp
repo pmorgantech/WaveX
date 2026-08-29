@@ -429,6 +429,40 @@ size_t ProtocolHandler::CreateSampleGetPathPacket(uint8_t* buffer,
         buffer, buffer_size, MSG_SAMPLE_GET_PATH_REQ, &msg, sizeof(SampleGetPathMessage));
 }
 
+// Envelope request (frontend -> backend).
+size_t ProtocolHandler::CreateEnvelopeReqPacket(uint8_t* buffer,
+                                                size_t buffer_size,
+                                                const EnvelopeReqMessage& msg) {
+    return CreateUnifiedPacket(
+        buffer, buffer_size, MSG_ENVELOPE_REQ, &msg, sizeof(EnvelopeReqMessage));
+}
+
+// One run of envelope columns (backend -> frontend). Header then
+// column_count EnvelopeColumn values; the caller is responsible for having
+// sized the run to fit a packet (header + count * 4 <= the largest payload).
+size_t ProtocolHandler::CreateEnvelopeChunkPacket(uint8_t* buffer,
+                                                  size_t buffer_size,
+                                                  const EnvelopeChunkMessage& msg,
+                                                  const EnvelopeColumn* columns,
+                                                  size_t column_count) {
+    const size_t header_size = sizeof(EnvelopeChunkMessage);
+    const size_t data_size = column_count * sizeof(EnvelopeColumn);
+    const size_t total_payload_size = header_size + data_size;
+
+    uint8_t temp_payload[MAX_PKT_SIZE];
+    if (total_payload_size > sizeof(temp_payload)) {
+        return 0;
+    }
+
+    memcpy(temp_payload, &msg, header_size);
+    if (columns && data_size > 0) {
+        memcpy(temp_payload + header_size, columns, data_size);
+    }
+
+    return CreateUnifiedPacket(
+        buffer, buffer_size, MSG_ENVELOPE_CHUNK, temp_payload, total_payload_size);
+}
+
 // Create wave chunk packet using unified packet system
 size_t ProtocolHandler::CreateWaveChunkPacket(uint8_t* buffer,
                                               size_t buffer_size,

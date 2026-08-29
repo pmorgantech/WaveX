@@ -546,6 +546,15 @@ int main(void) {
         }
 #endif
 
+// Advance any waveform envelope scan (roadmap 1.5.5), after the WAV pump:
+// the refill is the thing with a deadline, so the envelope gets what is left
+// over rather than competing for it. PumpEnvelopeJob is itself budgeted
+// (~0.25 ms of SDRAM reads per pass) and returns immediately when no scan is
+// in flight, which is the normal state.
+#if WAVEX_AUDIO_ENGINE_ENABLED
+        WaveX::AudioEngine::PumpEnvelopeJob();
+#endif
+
 // Log SPI processing to verify it continues during auditioning
 #if WAVEX_MCU_LINK_PACKET_DEBUG
         static uint32_t spi_debug_count = 0;

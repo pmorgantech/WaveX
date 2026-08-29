@@ -90,6 +90,17 @@ TEST_F(MessageDispatchTest, PreviewReqReachesAudioEngine) {
     EXPECT_EQ(GetDispatchRecord().preview_reqs[0].decim, 4);
 }
 
+TEST_F(MessageDispatchTest, EnvelopeReqReachesAudioEngine) {
+    EnvelopeReqMessage req(7, 1256, 44100, 7000000);
+    Dispatch(MSG_ENVELOPE_REQ, req);
+
+    ASSERT_EQ(GetDispatchRecord().envelope_reqs.size(), 1u);
+    EXPECT_EQ(GetDispatchRecord().envelope_reqs[0].sample_id, 7);
+    EXPECT_EQ(GetDispatchRecord().envelope_reqs[0].columns, 1256);
+    EXPECT_EQ(GetDispatchRecord().envelope_reqs[0].start_frame, 44100u);
+    EXPECT_EQ(GetDispatchRecord().envelope_reqs[0].end_frame, 7000000u);
+}
+
 // The edit message is the only thing that makes the sample-edit page's
 // markers audible, so a silent dispatcher stub here would look exactly like
 // "loop doesn't work" - which is how it presented before this path existed.

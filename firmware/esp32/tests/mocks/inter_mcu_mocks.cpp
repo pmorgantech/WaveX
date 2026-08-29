@@ -54,3 +54,9 @@ void inter_mcu_invoke_wave_chunk_callback(uint32_t offset, const int16_t* sample
     (void)samples;
     (void)count;
 }
+
+void inter_mcu_invoke_envelope_chunk_callback(const WaveX::Protocol::EnvelopeChunkMessage& header,
+                                              const WaveX::Protocol::EnvelopeColumn* columns) {
+    (void)header;
+    (void)columns;
+}

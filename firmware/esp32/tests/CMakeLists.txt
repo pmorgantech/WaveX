@@ -47,7 +47,7 @@ include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/../main
     ${CMAKE_CURRENT_SOURCE_DIR}/../main/comm
     ${CMAKE_CURRENT_SOURCE_DIR}/../main/links
-    ${CMAKE_CURRENT_SOURCE_DIR}/../components/ui/components  # For file_browser.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/../components/ui/components  # For file_browser.h, envelope_cache.h
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/ui/include
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/ui/styles  # For ui_theme.h (will use mock)
     ${CMAKE_CURRENT_SOURCE_DIR}/../../shared
@@ -67,6 +67,7 @@ add_library(wavex_esp32_test_lib STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/../main/comm/packet_router.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../main/comm/statistics.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../main/comm/comm_interface_impl.cpp  # Include for testing
+    ${CMAKE_CURRENT_SOURCE_DIR}/../components/ui/components/envelope_cache.cpp  # Waveform envelope cache
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/ui/components/file_browser.cpp  # File browser navigation logic
     ${CMAKE_CURRENT_SOURCE_DIR}/../../shared/uart_protocol/uart_protocol.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../../shared/spi_protocol/protocol.cpp  # Add protocol.cpp for ProtocolHandler
@@ -101,6 +102,7 @@ add_library(wavex_esp32_test_lib_no_router STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/../main/comm/packet_router.cpp   # Include packet_router but with weak handlers
     ${CMAKE_CURRENT_SOURCE_DIR}/../main/comm/statistics.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../main/comm/comm_interface_impl.cpp  # Include for testing
+    ${CMAKE_CURRENT_SOURCE_DIR}/../components/ui/components/envelope_cache.cpp  # Waveform envelope cache
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/ui/components/file_browser.cpp  # File browser navigation logic
     ${CMAKE_CURRENT_SOURCE_DIR}/../../shared/uart_protocol/uart_protocol.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../../shared/spi_protocol/protocol.cpp  # Add protocol.cpp for ProtocolHandler

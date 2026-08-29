@@ -50,6 +50,9 @@ class PacketRouter {
     void handle_wave_chunk(const WaveX::Protocol::WaveChunkMessage& msg,
                            const uint8_t* payload,
                            size_t length);
+    void handle_envelope_chunk(const WaveX::Protocol::EnvelopeChunkMessage& msg,
+                               const uint8_t* payload,
+                               size_t length);
     void handle_browse_resp(const uint8_t* data, size_t length);
     void handle_status_response(const WaveX::Protocol::SampleMemStatusMessage& msg);
     void handle_sample_status(const WaveX::Protocol::SampleStatusMessage& msg);

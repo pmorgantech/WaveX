@@ -25,6 +25,7 @@ struct DispatchRecord {
     std::vector<WaveX::Protocol::ControlChangeMessage> control_changes;
     std::vector<WaveX::Protocol::SampleCtrlMessage> sample_ctrls;
     std::vector<WaveX::Protocol::PreviewReqMessage> preview_reqs;
+    std::vector<WaveX::Protocol::EnvelopeReqMessage> envelope_reqs;
     std::vector<WaveX::Protocol::CvCalMessage> cv_cal_sets;
     std::vector<uint8_t> cv_cal_gets;
     std::vector<WaveX::Protocol::CvTestMessage> cv_tests;

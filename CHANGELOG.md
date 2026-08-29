@@ -11,6 +11,58 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Added — Waveform envelopes, cached and mip-mapped (roadmap 1.5.5)
+
+- **The preview aliased.** It sent every *n*th sample, so a bright sample drew
+  a trace that did not resemble it and transients vanished entirely — the one
+  sample kept per column is almost never the peak. `MSG_ENVELOPE_REQ` (0x3F) /
+  `MSG_ENVELOPE_CHUNK` (0x44) send a min/max pair **per channel** per display
+  column instead. The payload follows the display width, not the file length:
+  1256 columns of stereo is ~10 KB for a whole file, whatever its duration.
+- **Per channel, not summed**, decided now rather than after the format ships.
+  An out-of-phase stereo sample sums to near silence and would draw as a flat
+  line for audio that is perfectly fine, and a loop seam has to be judged on
+  both channels.
+- **The scan is a job, not a message handler.** A true envelope reads *every*
+  sample in the window — that is the difference from decimation and the reason
+  it does not alias — which is ~16 M reads for a three-minute stereo file.
+  Doing that inline would stall the Daisy's main loop for ~100 ms, four times
+  the audio ring's headroom, i.e. an audible dropout on every zoom.
+  `PumpEnvelopeJob` measures ~24 k frames per main-loop pass, after the WAV
+  refill, and sends each chunk as it completes. On a full TX queue it rewinds
+  and retries next pass rather than blocking or punching a hole.
+- **Mip-mapped cache in PSRAM** (`components/envelope_cache`), host-tested with
+  an instrumented allocator. Tiers are powers of two derived from the view — the
+  largest that still fits inside one display column — so merging tier columns
+  into display columns is exact rather than approximate. Entries are contiguous
+  windowed runs; `nextRequest()` returns only the part of the view not already
+  held, so scrolling sideways fetches the newly exposed edge and nothing else,
+  and a zoom step that lands inside a cached tier costs no round trip at all.
+- The budget is measured, not assumed: an eighth of **free** PSRAM at page
+  open, clamped to 128 KB–2 MB, with LRU eviction. LVGL's draw buffers and the
+  display rotation path share that pool, and a cache that starves them would
+  trade a fast waveform for a slow UI.
+- **`generation` is part of the cache key**, not a field checked afterwards, so
+  an entry from generation N can never be read for N+1. The Daisy now bumps it
+  when a load rewrites a sample id that was already in use — a content change
+  even though nothing renders destructively yet. Marker and gain edits do not
+  bump it: they change what plays, not what the sample contains.
+- Chunks still arrive on the UART RX task, which now must not touch the cache
+  either, since the cache allocates. The callback assembles the run in a buffer
+  allocated once at its ceiling; the UI timer hands the completed run over. An
+  epoch counter is bumped before each request and re-checked after the copy, so
+  a chunk cannot be filed against a request that changed underneath it, and an
+  unanswered run times out after 3 s rather than wedging the page — the backend
+  drops a scan when the sample under it is reloaded and does not say so.
+- `WaveformView` gained `setEnvelope()`, drawn against a **fixed** full-scale
+  range. An envelope that rescales itself cannot be read as a level, which is
+  most of what it is for. It currently collapses stereo to the widest excursion
+  of either channel; two stacked traces is roadmap 1.5.7 and the format no
+  longer blocks it.
+- The Link tab counts ENVELOPE_CHUNK, so the per-message table stays complete.
+- The legacy `MSG_PREVIEW_REQ` / `MSG_WAVE_CHUNK` path stays for the record
+  page and is unchanged.
+
 ### Added — Sample browser status strip, audition progress and pagination row
 
 - The audition progress bar had no data source: the Daisy never reported

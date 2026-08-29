@@ -161,6 +161,12 @@ void PacketRouter::route_by_message_type(uint8_t msg_type,
                 handle_wave_chunk(msg, payload, payload_len);
         } break;
 
+        case WaveX::Protocol::MSG_ENVELOPE_CHUNK: {
+            WaveX::Protocol::EnvelopeChunkMessage msg;
+            if (CopyMessage(payload, payload_len, msg, "ENVELOPE_CHUNK"))
+                handle_envelope_chunk(msg, payload, payload_len);
+        } break;
+
         case WaveX::Protocol::MSG_BROWSE_RESP: {
             // Browse responses are handled differently - they don't have message type in payload
             int64_t response_arrival_time_us = esp_timer_get_time();
@@ -380,6 +386,29 @@ WEAK_HANDLER void PacketRouter::handle_cv_cal_resp(const WaveX::Protocol::CvCalM
 WEAK_HANDLER void PacketRouter::handle_error(const WaveX::Protocol::ErrorMessage& msg) {
     ESP_LOGE("packet_router", "Error: code=0x%02X, message=%s", msg.code, msg.msg);
     // TODO: Implement error handling
+}
+
+WEAK_HANDLER void PacketRouter::handle_envelope_chunk(
+    const WaveX::Protocol::EnvelopeChunkMessage& msg, const uint8_t* payload, size_t length) {
+    // channels is on the wire, so the payload length is not implied by the
+    // header alone - validate it rather than trusting a count that a truncated
+    // frame would make us read past the buffer for.
+    const size_t values = static_cast<size_t>(msg.columns) * msg.channels;
+    const size_t expected = sizeof(WaveX::Protocol::EnvelopeChunkMessage) +
+                            values * sizeof(WaveX::Protocol::EnvelopeColumn);
+    if (msg.channels == 0 || msg.channels > 2 || length < expected) {
+        ESP_LOGW("packet_router",
+                 "Envelope chunk malformed: channels=%u columns=%u len=%zu (expected >= %zu)",
+                 (unsigned)msg.channels,
+                 (unsigned)msg.columns,
+                 length,
+                 expected);
+        return;
+    }
+
+    const auto* columns = reinterpret_cast<const WaveX::Protocol::EnvelopeColumn*>(
+        payload + sizeof(WaveX::Protocol::EnvelopeChunkMessage));
+    inter_mcu_invoke_envelope_chunk_callback(msg, columns);
 }
 
 WEAK_HANDLER void PacketRouter::handle_wave_chunk(const WaveX::Protocol::WaveChunkMessage& msg, const uint8_t* payload, size_t length) {

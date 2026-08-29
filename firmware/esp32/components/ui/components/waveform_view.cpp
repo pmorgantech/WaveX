@@ -16,6 +16,10 @@ WaveformView::WaveformView(lv_obj_t* parent, lv_coord_t width, lv_coord_t height
     lv_chart_set_update_mode(chart_, LV_CHART_UPDATE_MODE_CIRCULAR);
     series_ = lv_chart_add_series(
         chart_, lv_palette_main(LV_PALETTE_LIGHT_BLUE), LV_CHART_AXIS_PRIMARY_Y);
+    // Second series so an envelope can draw its lower edge. Same colour as the
+    // upper one: they are two halves of one silhouette, not two quantities.
+    min_series_ = lv_chart_add_series(
+        chart_, lv_palette_main(LV_PALETTE_LIGHT_BLUE), LV_CHART_AXIS_PRIMARY_Y);
     clear();
 }
 
@@ -24,7 +28,45 @@ void WaveformView::clear() {
         return;
     for (uint16_t i = 0; i < kPointCount; ++i) {
         lv_chart_set_value_by_id(chart_, series_, i, 0);
+        if (min_series_) {
+            lv_chart_set_value_by_id(chart_, min_series_, i, 0);
+        }
     }
+    lv_chart_refresh(chart_);
+}
+
+void WaveformView::setEnvelope(const WaveX::Protocol::EnvelopeColumn* columns,
+                               uint16_t count,
+                               uint8_t channels) {
+    if (!columns || count == 0 || channels == 0 || !chart_ || !series_ || !min_series_) {
+        clear();
+        return;
+    }
+
+    // Fixed full-scale range. See the header: an envelope that rescales itself
+    // cannot be read as a level, which is most of what it is for.
+    lv_chart_set_range(chart_, LV_CHART_AXIS_PRIMARY_Y, -32768, 32767);
+
+    for (uint16_t i = 0; i < kPointCount; ++i) {
+        uint32_t idx = static_cast<uint32_t>((static_cast<uint64_t>(i) * count) / kPointCount);
+        if (idx >= count) {
+            idx = count - 1;
+        }
+
+        // Widest excursion across the channels in this column - never an
+        // average, which is what would let phase cancellation draw silence.
+        int32_t lo = 32767;
+        int32_t hi = -32768;
+        for (uint8_t ch = 0; ch < channels; ++ch) {
+            const WaveX::Protocol::EnvelopeColumn& c = columns[idx * channels + ch];
+            lo = std::min<int32_t>(lo, c.min_sample);
+            hi = std::max<int32_t>(hi, c.max_sample);
+        }
+
+        lv_chart_set_value_by_id(chart_, series_, i, hi);
+        lv_chart_set_value_by_id(chart_, min_series_, i, lo);
+    }
+
     lv_chart_refresh(chart_);
 }
 
@@ -59,6 +101,12 @@ void WaveformView::setSamples(const int16_t* samples, uint16_t count) {
         if (idx >= count)
             idx = count - 1;
         lv_chart_set_value_by_id(chart_, series_, i, samples[idx]);
+        if (min_series_) {
+            // Flatten the envelope's lower edge: leaving it where a previous
+            // setEnvelope() put it would draw half of the old waveform under
+            // the new one.
+            lv_chart_set_value_by_id(chart_, min_series_, i, 0);
+        }
     }
 
     lv_chart_refresh(chart_);

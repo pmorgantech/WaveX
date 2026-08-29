@@ -41,6 +41,8 @@ static wavex_sample_mem_status_t s_sample_mem_status = {};
 static portMUX_TYPE s_sample_mem_lock = portMUX_INITIALIZER_UNLOCKED;
 static wavex_wave_chunk_cb_t s_wave_chunk_listener = nullptr;
 static void* s_wave_chunk_user_data = nullptr;
+static wavex_envelope_chunk_cb_t s_envelope_chunk_listener = nullptr;
+static void* s_envelope_chunk_user_data = nullptr;
 
 static int send_uart_message(uint8_t msg_type, const void* payload, uint16_t len) {
     if (!s_uart_initialized || !s_uart_started) {
@@ -208,6 +210,19 @@ esp_err_t inter_mcu_send_preview_req(uint8_t slot, uint32_t start, uint32_t end,
     msg.decim = decim;
 
     int result = send_uart_message(WaveX::Protocol::MSG_PREVIEW_REQ, &msg, sizeof(msg));
+    return result >= 0 ? ESP_OK : ESP_FAIL;
+}
+
+esp_err_t inter_mcu_send_envelope_req(uint16_t sample_id,
+                                      uint16_t columns,
+                                      uint32_t start_frame,
+                                      uint32_t end_frame) {
+    if (!s_initialized || s_suspended) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    WaveX::Protocol::EnvelopeReqMessage msg(sample_id, columns, start_frame, end_frame);
+    int result = send_uart_message(WaveX::Protocol::MSG_ENVELOPE_REQ, &msg, sizeof(msg));
     return result >= 0 ? ESP_OK : ESP_FAIL;
 }
 
@@ -404,6 +419,19 @@ void inter_mcu_set_wave_chunk_listener(wavex_wave_chunk_cb_t cb, void* user_data
     s_wave_chunk_listener = cb;
     s_wave_chunk_user_data = user_data;
     ESP_LOGI(TAG, "Wave chunk listener registered: %p", cb);
+}
+
+void inter_mcu_set_envelope_chunk_listener(wavex_envelope_chunk_cb_t cb, void* user_data) {
+    s_envelope_chunk_listener = cb;
+    s_envelope_chunk_user_data = user_data;
+}
+
+void inter_mcu_invoke_envelope_chunk_callback(const WaveX::Protocol::EnvelopeChunkMessage& header,
+                                              const WaveX::Protocol::EnvelopeColumn* columns) {
+    if (!s_envelope_chunk_listener) {
+        return;  // no page open that wants a waveform; not worth a log line
+    }
+    s_envelope_chunk_listener(header, columns, s_envelope_chunk_user_data);
 }
 
 void inter_mcu_invoke_browse_resp_callback(const uint8_t* data, size_t length) {

@@ -108,6 +108,10 @@ void OnPreviewReq(const WaveX::Protocol::PreviewReqMessage& m) {
     WaveX::Test::GetDispatchRecord().preview_reqs.push_back(m);
 }
 
+void OnEnvelopeReq(const WaveX::Protocol::EnvelopeReqMessage& m) {
+    WaveX::Test::GetDispatchRecord().envelope_reqs.push_back(m);
+}
+
 void OnSampleLoad(const WaveX::Protocol::SampleLoadMessage& m) {
     WaveX::Test::GetDispatchRecord().sample_loads.push_back(m);
 }

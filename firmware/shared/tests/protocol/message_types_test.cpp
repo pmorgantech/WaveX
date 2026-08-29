@@ -1089,6 +1089,89 @@ TEST_F(MessageTypeTest, SampleMetadataRoundTrip) {
     EXPECT_STREQ(parsed.name, "amen-full.wav");
 }
 
+// The envelope is the reason the preview does not have to alias. Its wire
+// shape is worth pinning: the payload length depends on `channels`, which is
+// data, not a constant - get that wrong and the receiver reads past the frame.
+TEST_F(MessageTypeTest, EnvelopeReqRoundTrip) {
+    EXPECT_EQ(sizeof(EnvelopeReqMessage), 12u);
+
+    EnvelopeReqMessage original(7, 1256, 44100, 7000000);
+    size_t created =
+        ProtocolHandler::CreateEnvelopeReqPacket(buffer_.data(), buffer_.size(), original);
+    ASSERT_GT(created, 0u);
+    EXPECT_TRUE(ProtocolHandler::ValidatePacket(buffer_.data(), created));
+    EXPECT_EQ(ProtocolHandler::GetMessageType(buffer_.data()), MSG_ENVELOPE_REQ);
+
+    EnvelopeReqMessage parsed;
+    ASSERT_TRUE(
+        ProtocolHandler::ParseMessage(buffer_.data(), MSG_ENVELOPE_REQ, &parsed, sizeof(parsed)));
+    EXPECT_EQ(parsed.sample_id, 7);
+    EXPECT_EQ(parsed.columns, 1256);
+    EXPECT_EQ(parsed.start_frame, 44100u);
+    EXPECT_EQ(parsed.end_frame, 7000000u);
+}
+
+TEST_F(MessageTypeTest, EnvelopeChunkCarriesBothChannels) {
+    EXPECT_EQ(sizeof(EnvelopeChunkMessage), 20u);
+    EXPECT_EQ(sizeof(EnvelopeColumn), 4u);
+
+    constexpr uint16_t kColumns = 3;
+    EnvelopeChunkMessage header;
+    header.sample_id = 7;
+    header.generation = 2;
+    header.start_frame = 1000;
+    header.end_frame = 5000;
+    header.total_columns = 96;
+    header.first_column = 12;
+    header.columns = kColumns;
+    header.channels = 2;
+
+    // Deliberately asymmetric L/R: a summed-to-mono format would lose this,
+    // and a loop seam has to be judged on both channels (roadmap 1.5.7).
+    const EnvelopeColumn columns[kColumns * 2] = {
+        {-32768, 32767}, {0, 0}, {-100, 200}, {-3000, 4000}, {-1, 1}, {-20000, 100}};
+
+    size_t created = ProtocolHandler::CreateEnvelopeChunkPacket(
+        buffer_.data(), buffer_.size(), header, columns, kColumns * 2);
+    ASSERT_GT(created, 0u);
+    EXPECT_TRUE(ProtocolHandler::ValidatePacket(buffer_.data(), created));
+    EXPECT_EQ(ProtocolHandler::GetMessageType(buffer_.data()), MSG_ENVELOPE_CHUNK);
+
+    // The header lands first, then the columns, so a receiver can size the
+    // rest of the payload from what it has already read.
+    const uint8_t* payload = buffer_.data() + 4;
+    EnvelopeChunkMessage parsed_header;
+    memcpy(&parsed_header, payload, sizeof(parsed_header));
+    EXPECT_EQ(parsed_header.sample_id, 7);
+    EXPECT_EQ(parsed_header.generation, 2);
+    EXPECT_EQ(parsed_header.start_frame, 1000u);
+    EXPECT_EQ(parsed_header.end_frame, 5000u);
+    EXPECT_EQ(parsed_header.total_columns, 96);
+    EXPECT_EQ(parsed_header.first_column, 12);
+    EXPECT_EQ(parsed_header.columns, kColumns);
+    EXPECT_EQ(parsed_header.channels, 2);
+
+    const auto* parsed_columns =
+        reinterpret_cast<const EnvelopeColumn*>(payload + sizeof(EnvelopeChunkMessage));
+    for (size_t i = 0; i < kColumns * 2; ++i) {
+        EXPECT_EQ(parsed_columns[i].min_sample, columns[i].min_sample) << "column " << i;
+        EXPECT_EQ(parsed_columns[i].max_sample, columns[i].max_sample) << "column " << i;
+    }
+}
+
+// A full-width stereo run is 1280 x 2 x 4 = 10240 bytes, well past one packet,
+// so an over-large run must be refused rather than truncated into a waveform
+// that silently omits its tail.
+TEST_F(MessageTypeTest, EnvelopeChunkRefusesAnOversizedRun) {
+    EnvelopeChunkMessage header;
+    header.channels = 2;
+    header.columns = MAX_ENVELOPE_COLUMNS;
+    std::vector<EnvelopeColumn> columns(MAX_ENVELOPE_COLUMNS * 2);
+    EXPECT_EQ(ProtocolHandler::CreateEnvelopeChunkPacket(
+                  buffer_.data(), buffer_.size(), header, columns.data(), columns.size()),
+              0u);
+}
+
 // Resolve() is what every consumer relies on to turn the 0 sentinels into
 // real bounds. If it were wrong, streaming audition, RAM voices and the
 // preview would all be wrong together - which is the point of sharing it.

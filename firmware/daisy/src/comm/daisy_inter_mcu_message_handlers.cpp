@@ -38,6 +38,7 @@ static void HandleHeartbeatMessage(const uint8_t* payload, size_t payload_size);
 static void HandleDiagSubscribeMessage(const uint8_t* payload, size_t payload_size);
 static void HandleSampleEditMessage(const uint8_t* payload, size_t payload_size);
 static void HandleSampleMetaReqMessage(const uint8_t* payload, size_t payload_size);
+static void HandleEnvelopeReqMessage(const uint8_t* payload, size_t payload_size);
 static void HandleStatusRequestMessage(const uint8_t* payload, size_t payload_size);
 static void HandleBrowseRequestMessage(const uint8_t* payload, size_t payload_size);
 static void HandleBrowseResponseMessage(const uint8_t* payload, size_t payload_size);
@@ -145,6 +146,9 @@ void ProcessInterMcuMessage(uint8_t msg_type,
             break;
         case MSG_SAMPLE_META_REQ:
             HandleSampleMetaReqMessage(payload, payload_size);
+            break;
+        case MSG_ENVELOPE_REQ:
+            HandleEnvelopeReqMessage(payload, payload_size);
             break;
         case MSG_DIAG_SUBSCRIBE:
             HandleDiagSubscribeMessage(payload, payload_size);
@@ -304,6 +308,28 @@ static void HandlePreviewRequestMessage(const uint8_t* payload, size_t payload_s
 #else
     if (s_hw) {
         WaveX::Log::PrintLine("DAISY: Audio engine disabled; cannot process preview req");
+    }
+#endif
+}
+
+static void HandleEnvelopeReqMessage(const uint8_t* payload, size_t payload_size) {
+    if (!payload || payload_size < sizeof(EnvelopeReqMessage)) {
+        if (s_hw) {
+            WaveX::Log::PrintLine("DAISY: EnvelopeReq invalid size %d (expected %d)",
+                                  (int)payload_size,
+                                  (int)sizeof(EnvelopeReqMessage));
+        }
+        return;
+    }
+
+    EnvelopeReqMessage req{};
+    memcpy(&req, payload, sizeof(req));
+
+#if WAVEX_AUDIO_ENGINE_ENABLED
+    WaveX::AudioEngine::OnEnvelopeReq(req);
+#else
+    if (s_hw) {
+        WaveX::Log::PrintLine("DAISY: Audio engine disabled; cannot process envelope req");
     }
 #endif
 }

@@ -33,6 +33,15 @@ void OnNoteOn(const WaveX::Protocol::NoteMessage& m);
 void OnNoteOff(const WaveX::Protocol::NoteMessage& m);
 void OnSampleCtrl(const WaveX::Protocol::SampleCtrlMessage& m);
 void OnPreviewReq(const WaveX::Protocol::PreviewReqMessage& m);
+
+// Waveform envelope (roadmap 1.5.5 item 2). OnEnvelopeReq only accepts the
+// request - measuring a min/max envelope touches every sample in the window,
+// which is ~16 M reads for a three-minute stereo file and would stall the main
+// loop past the ring's headroom if it ran here. PumpEnvelopeJob does the work
+// in budgeted slices from the main loop and sends each chunk as it is
+// measured; a new request replaces whatever was in flight.
+void OnEnvelopeReq(const WaveX::Protocol::EnvelopeReqMessage& m);
+void PumpEnvelopeJob();
 void OnSampleLoad(const WaveX::Protocol::SampleLoadMessage& m);
 void GetSampleMemStatus(WaveX::Protocol::SampleMemStatusMessage& out);
 

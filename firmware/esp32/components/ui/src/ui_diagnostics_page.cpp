@@ -1179,6 +1179,7 @@ void UIDiagnosticsPage::refreshLinkTab() {
         {"HEARTBEAT", st.heartbeat_packets},
         {"METER_PUSH", st.meter_push_packets},
         {"WAVE_CHUNK", st.wave_chunk_packets},
+        {"ENVELOPE_CHUNK", st.envelope_chunk_packets},
         {"STATUS_RESPONSE", st.status_response_packets},
         {"STATUS_REQUEST", st.status_request_packets},
         {"SAMPLE_CTRL", st.sample_ctrl_packets},

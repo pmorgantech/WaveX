@@ -115,13 +115,24 @@ Today every waveform redraw is a round trip: the ESP32 sends `MSG_PREVIEW_REQ`, 
 
    Still to fold in: it should also become the zone's source of truth (`features/instrument-model.md`), and `generation` is defined but nothing bumps it yet (nothing renders destructively).
 
-2. **Send an envelope, not decimated samples.** The current preview sends every *n*th sample, which aliases badly — a single-sample-per-column decimation of a bright sample draws a waveform that does not resemble it, and transients disappear entirely. The standard answer is a **min/max pair per display column**. At the panel's 1256 px waveform width that is 1256 × 2 × int16 = **~5 KB for an entire file at full screen resolution**, whatever its length. That is the "minimal data over the wire" the request asks for, and it fits a handful of `MSG_WAVE_CHUNK` packets.
+2. ~~**Send an envelope, not decimated samples.**~~ **Done.** `MSG_ENVELOPE_REQ` (0x3F) / `MSG_ENVELOPE_CHUNK` (0x44) carry a min/max pair **per channel** per display column. Per channel rather than summed was decided here rather than deferred, because 1.5.7 item 2 is right that a second format later is the expensive outcome: an out-of-phase stereo sample sums to near silence and would draw as a flat line for audio that is fine.
 
-3. **Mip-mapped tiers cached in PSRAM.** Generate the envelope at several decimation levels (say ÷1024, ÷256, ÷64, ÷16, ÷4) and cache them on the ESP32. Zooming then picks the nearest tier already held and only asks the Daisy for the gap. Sizing: a 3-minute 44.1 kHz file is ~8 M frames; all five tiers together are roughly 8M/4 × 2 × 2 bytes ≈ 8 MB worst case at the finest tier, so the finest tiers must be **windowed, not whole-file** — cache the visible span plus a margin, and evict by LRU.
+   Two things about the backend side are worth knowing before extending it. A true envelope has to read *every* sample in the window — that is exactly what decimation does not do, and why it does not alias — which is ~16 M reads for a three-minute stereo file. Doing that in the message handler would stall the main loop past the ring's ~42 ms of headroom, so it is a budgeted job (`PumpEnvelopeJob`, ~24 k frames per main-loop pass) that sends each chunk as it is measured. And each chunk repeats the whole window plus the generation, so a chunk is self-describing and cannot be filed under the wrong content.
 
-   **Measure the budget before sizing this.** The System tab now reports free PSRAM; use that figure rather than a nominal board spec. LVGL's draw buffers and the display rotation path are already the largest PSRAM consumers, and a cache that starves them trades a fast waveform for a slow UI.
+3. ~~**Mip-mapped tiers cached in PSRAM.**~~ **Done** — `components/envelope_cache.{h,cpp}`, host-tested. Two departures from the sketch above, both deliberate:
 
-4. **Invalidate on edit.** Markers and gain do not change the envelope; a destructive render (Phase 4) does. Key the cache on sample id plus a content generation counter carried in the metadata record, so a re-render invalidates cleanly and a marker move does not.
+   - **Tiers are powers of two derived from the view, not a fixed ÷1024/÷256/… ladder.** The tier is the largest power of two that still fits inside one display column, so a tier column never spans more audio than a pixel does and the merge into display columns is exact — the min of a set of minima is the true minimum. A fixed ladder cannot promise that at an arbitrary zoom.
+   - **Every tier is windowed, not just the fine ones.** An entry is one contiguous run per (sample, generation, tier), capped at 4096 columns, and `nextRequest()` returns only the part of the view the cache does not already hold — so scrolling sideways asks for the newly exposed edge and nothing else. Coarse tiers happen to fit whole files, but nothing special-cases them.
+
+   The budget is measured, as asked: an eighth of *free* PSRAM at page open, clamped to 128 KB–2 MB, with LRU eviction against it.
+
+4. ~~**Invalidate on edit.**~~ **Done.** `generation` is part of the cache key, not a field checked afterwards, so an entry from generation N can never be read for N+1. The Daisy bumps it when a load rewrites an id that was already in use — that is a content change even though nothing renders destructively yet. Marker and gain edits deliberately do not bump it.
+
+Still open here:
+
+- **The waveform still draws one trace.** The wire and the cache carry both channels, but `WaveformView` currently collapses them to the widest excursion of either. That is honest — it cannot hide anything the way summing can — but it is not the two stacked traces 1.5.7 item 1 argues for, and it does not let a loop seam be judged per channel. The layout decision belongs to 1.5.7; the format no longer blocks it.
+- **The browser detail panel does not use the cache yet** (1.5.3), which is now the cheap version of that item.
+- **The legacy decimated preview (`MSG_PREVIEW_REQ` / `MSG_WAVE_CHUNK`) is still live**, used only by the record page. Retire it when that page is rebuilt with recording (Phase 1 item 2) rather than leaving two waveform paths indefinitely.
 
 ---
 

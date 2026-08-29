@@ -116,6 +116,9 @@ void StatisticsManager::increment_packet_stat(uint8_t packet_type) {
         case 0x3B:
             m_packet_stats.diag_push_packets++;
             break;  // MSG_DIAG_PUSH
+        case 0x44:
+            m_packet_stats.envelope_chunk_packets++;
+            break;  // MSG_ENVELOPE_CHUNK
         case 0xFF:
             m_packet_stats.error_packets++;
             break;  // MSG_ERROR

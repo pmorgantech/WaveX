@@ -520,7 +520,13 @@ static bool evict_oldest_loaded_sample() {
     return true;
 }
 
+// Defined with the envelope job below; declared here because loading is the
+// one event that can pull the audio out from under a scan in flight.
+static void CancelEnvelopeJob();
+
 static bool upsert_loaded_sample(const SampleLoadMessage& sl, const wxsamp_t& handle) {
+    CancelEnvelopeJob();
+
     LoadedSampleInfo info;
     info.sample_id = sl.sample_id;
     info.handle = handle;
@@ -534,7 +540,19 @@ static bool upsert_loaded_sample(const SampleLoadMessage& sl, const wxsamp_t& ha
     // so an unedited sample behaves as it always has; every later change goes
     // through SetEditParams, which re-pushes.
     const uint32_t bpf = (sl.bit_depth / 8u) * (sl.channels ? sl.channels : 1u);
+    //
+    // generation is the cache-invalidation hook (roadmap 1.5.5 item 4).
+    // Loading a different file into an id that is already in use IS a content
+    // change, even though nothing renders destructively yet: a frontend
+    // holding an envelope for the old audio must not keep drawing it. Marker
+    // and gain edits deliberately do not bump it - they change what plays,
+    // not what the sample contains, so the cached envelope stays valid.
+    const LoadedSampleInfo* previous = find_loaded_sample(sl.sample_id);
+    const uint16_t next_generation =
+        previous ? static_cast<uint16_t>(previous->meta.generation + 1) : 0;
+
     info.meta = WaveX::Protocol::SampleMetadata();
+    info.meta.generation = next_generation;
     info.meta.sample_id = sl.sample_id;
     info.meta.sample_rate = sl.sample_rate;
     info.meta.total_frames = bpf ? (info.allocated_bytes / bpf) : 0;
@@ -1688,6 +1706,50 @@ void OnSampleCtrl(const SampleCtrlMessage& sc) {
                               (unsigned)sc.cmd);
 }
 
+// How a sample's channels map onto what the display asks for. Shared by the
+// legacy decimated preview and the envelope job so the two cannot disagree
+// about which channel the user is looking at.
+struct DisplayChannelPlan {
+    uint8_t src_channels;  // interleave stride in the stored data: 1 or 2
+    uint8_t out_channels;  // traces to produce: 1 or 2
+    bool sum;              // out_channels == 1 and both source channels averaged
+    uint8_t pick[2];       // source channel index feeding each output trace
+};
+
+// allow_stereo lets a caller opt into two traces. SAMPLE_CH_AS_RECORDED on a
+// stereo file is the only case that produces two: an explicit LEFT/RIGHT/SUM
+// choice is a request for one specific trace, and honouring it as two would
+// contradict what the same record tells the playback paths.
+static DisplayChannelPlan ResolveDisplayChannels(const LoadedSampleInfo& src, bool allow_stereo) {
+    DisplayChannelPlan plan{};
+    plan.src_channels = src.channels ? src.channels : 1;
+    plan.out_channels = 1;
+    plan.sum = false;
+    plan.pick[0] = 0;
+    plan.pick[1] = 0;
+
+    switch (src.meta.channel_mode) {
+        case WaveX::Protocol::SAMPLE_CH_RIGHT:
+            plan.pick[0] = (plan.src_channels > 1) ? 1 : 0;
+            break;
+        case WaveX::Protocol::SAMPLE_CH_MONO_SUM:
+            plan.sum = (plan.src_channels > 1);
+            break;
+        case WaveX::Protocol::SAMPLE_CH_LEFT:
+            plan.pick[0] = 0;
+            break;
+        case WaveX::Protocol::SAMPLE_CH_AS_RECORDED:
+        default:
+            if (allow_stereo && plan.src_channels > 1) {
+                plan.out_channels = 2;
+                plan.pick[0] = 0;
+                plan.pick[1] = 1;
+            }
+            break;
+    }
+    return plan;
+}
+
 void OnPreviewReq(const PreviewReqMessage& pr) {
     s_prev_sent = 0;
     s_preview_len = 0;
@@ -1739,28 +1801,17 @@ void OnPreviewReq(const PreviewReqMessage& pr) {
     const int16_t* samples16 = reinterpret_cast<const int16_t*>(sample_ptr);
     const uint8_t* samples24 = reinterpret_cast<const uint8_t*>(sample_ptr);
 
+    // Channel selection comes from the record, not a hard-coded "left".
+    // Silently previewing only the left channel drew a misleading trace for
+    // anything panned, and a near-flat line for a hard-panned sample that is
+    // plainly audible - with nothing on screen saying so.
+    const DisplayChannelPlan plan = ResolveDisplayChannels(src, /*allow_stereo=*/false);
+    const uint8_t ch_count = plan.src_channels;
+    const uint8_t pick = plan.pick[0];
+    const bool sum = plan.sum;
+
     for (uint32_t i = start; i < end; i += decim) {
         int16_t v = 0;
-        // Channel selection comes from the record, not a hard-coded "left".
-        // Silently previewing only the left channel drew a misleading trace
-        // for anything panned, and a near-flat line for a hard-panned sample
-        // that is plainly audible - with nothing on screen saying so.
-        const uint8_t ch_count = src.channels ? src.channels : 1;
-        uint8_t pick = 0;
-        bool sum = false;
-        switch (src.meta.channel_mode) {
-            case WaveX::Protocol::SAMPLE_CH_RIGHT:
-                pick = (ch_count > 1) ? 1 : 0;
-                break;
-            case WaveX::Protocol::SAMPLE_CH_MONO_SUM:
-                sum = (ch_count > 1);
-                break;
-            case WaveX::Protocol::SAMPLE_CH_LEFT:
-            default:
-                pick = 0;
-                break;
-        }
-
         if (src.bit_depth == 16) {
             if (ch_count == 1) {
                 v = samples16[i];
@@ -1805,6 +1856,240 @@ void OnPreviewReq(const PreviewReqMessage& pr) {
     }
 
     SendPreviewChunks();
+}
+
+// ============================
+// Waveform envelope job (roadmap 1.5.5 item 2)
+// ============================
+//
+// A true min/max envelope has to touch EVERY sample in the window - that is
+// the whole difference from decimation, which is why it does not alias. For a
+// three-minute stereo file that is ~16 M reads, and doing them in one go from
+// a message handler would stall the main loop for ~100 ms: four times the
+// ring's ~42 ms of headroom, i.e. an audible dropout every time the user
+// zooms out. So the scan is a job, budgeted per main-loop pass, and each
+// chunk goes out as soon as it is measured rather than at the end.
+//
+// The chunk is also the staging buffer: at 1920 payload bytes a chunk holds
+// 480 mono or 240 stereo columns, and nothing larger than one packet is ever
+// held. That is 10 KB of internal RAM this does NOT take (review H1 reclaimed
+// ~254 KB; spending 4% of it on a display buffer would be a poor trade).
+static constexpr uint32_t kEnvChunkPayloadBytes = 1920;
+static constexpr uint32_t kEnvMaxChunkColumns =
+    kEnvChunkPayloadBytes / sizeof(WaveX::Protocol::EnvelopeColumn);  // 480, mono
+
+// Frames scanned per pass. 24576 frames is ~0.25 ms of SDRAM reads on this
+// part - well inside a main-loop pass, and small enough that a full-file
+// envelope of a long sample interleaves with SD refill instead of displacing
+// it. A whole 8 M-frame file therefore takes ~340 passes, which is well under
+// a second of wall clock at the loop rate.
+static constexpr uint32_t kEnvFramesPerPass = 24576;
+
+struct EnvelopeJob {
+    bool active = false;
+    uint16_t sample_id = 0;
+    uint16_t generation = 0;
+    uint32_t start_frame = 0;
+    uint32_t end_frame = 0;
+    uint16_t total_columns = 0;
+    uint16_t next_column = 0;  // first column not yet measured
+    uint8_t channels = 1;      // traces per column on the wire
+};
+static EnvelopeJob s_env_job;
+
+alignas(4) static uint8_t
+    s_env_frame[sizeof(WaveX::Protocol::EnvelopeChunkMessage) + kEnvChunkPayloadBytes];
+
+// Cancels any envelope in flight. Called when the sample it is measuring is
+// about to be replaced or released: the job holds a sample_id, not a pointer,
+// but finishing a scan against rewritten memory would send a waveform of the
+// wrong audio under the old generation, which the frontend would then cache.
+static void CancelEnvelopeJob() {
+    s_env_job.active = false;
+}
+
+// Reads one display sample of one source channel, scaled to int16.
+static inline int32_t EnvReadSample(const LoadedSampleInfo& src,
+                                    const void* base,
+                                    uint32_t frame,
+                                    uint8_t channel) {
+    if (src.bit_depth == 24) {
+        const uint8_t* p =
+            static_cast<const uint8_t*>(base) + (frame * src.channels + channel) * 3u;
+        int32_t x = static_cast<int32_t>(p[0] | (p[1] << 8) | (p[2] << 16));
+        if (x & 0x00800000) {
+            x |= static_cast<int32_t>(0xFF000000u);  // sign-extend 24 -> 32
+        }
+        return x >> 8;  // scale to 16-bit for display
+    }
+    return static_cast<const int16_t*>(base)[frame * src.channels + channel];
+}
+
+void OnEnvelopeReq(const WaveX::Protocol::EnvelopeReqMessage& req) {
+    CancelEnvelopeJob();
+
+    // sample_id 0 means "the most recently loaded", matching how
+    // MSG_SAMPLE_EDIT_SET addresses a sample the edit page did not load.
+    LoadedSampleInfo* info = req.sample_id ? find_loaded_sample(req.sample_id) : nullptr;
+    if (!info && req.sample_id == 0 && s_loaded_sample_count > 0) {
+        info = &s_loaded_samples[s_loaded_sample_count - 1];
+    }
+    if (!info) {
+        if (s_hw) {
+            WaveX::Log::PrintLine("ENVELOPE: no sample for id=%u", (unsigned)req.sample_id);
+        }
+        return;
+    }
+
+    const uint32_t total_frames = info->meta.total_frames;
+    if (total_frames == 0) {
+        return;
+    }
+
+    uint32_t start = std::min<uint32_t>(req.start_frame, total_frames);
+    uint32_t end =
+        (req.end_frame == 0) ? total_frames : std::min<uint32_t>(req.end_frame, total_frames);
+    if (end <= start) {
+        return;
+    }
+
+    uint32_t columns = req.columns ? req.columns : 1;
+    if (columns > WaveX::Protocol::MAX_ENVELOPE_COLUMNS) {
+        columns = WaveX::Protocol::MAX_ENVELOPE_COLUMNS;
+    }
+    // Never more columns than frames: an empty column has no min/max to
+    // report, and padding one would draw audio that is not there.
+    const uint32_t span = end - start;
+    if (columns > span) {
+        columns = span;
+    }
+
+    const DisplayChannelPlan plan = ResolveDisplayChannels(*info, /*allow_stereo=*/true);
+
+    s_env_job.active = true;
+    s_env_job.sample_id = info->sample_id;
+    s_env_job.generation = info->meta.generation;
+    s_env_job.start_frame = start;
+    s_env_job.end_frame = end;
+    s_env_job.total_columns = static_cast<uint16_t>(columns);
+    s_env_job.next_column = 0;
+    s_env_job.channels = plan.out_channels;
+}
+
+void PumpEnvelopeJob() {
+    if (!s_env_job.active) {
+        return;
+    }
+
+    // Re-resolve every pass. The sample can be unloaded or reloaded while a
+    // scan is in flight, and a generation bump means the audio under us
+    // changed - both make the rest of this envelope a description of
+    // something that no longer exists.
+    LoadedSampleInfo* info = find_loaded_sample(s_env_job.sample_id);
+    void* base = nullptr;
+    if (!info || info->meta.generation != s_env_job.generation ||
+        !s_sample_mem_mgr.ptr(info->handle, &base) || base == nullptr) {
+        CancelEnvelopeJob();
+        return;
+    }
+
+    const DisplayChannelPlan plan = ResolveDisplayChannels(*info, /*allow_stereo=*/true);
+    if (plan.out_channels != s_env_job.channels) {
+        CancelEnvelopeJob();  // channel_mode changed mid-scan; the frontend will re-ask
+        return;
+    }
+
+    const uint32_t columns_per_chunk = std::max<uint32_t>(
+        1u, kEnvChunkPayloadBytes / (s_env_job.channels * sizeof(WaveX::Protocol::EnvelopeColumn)));
+
+    auto* header = reinterpret_cast<WaveX::Protocol::EnvelopeChunkMessage*>(s_env_frame);
+    auto* out = reinterpret_cast<WaveX::Protocol::EnvelopeColumn*>(
+        s_env_frame + sizeof(WaveX::Protocol::EnvelopeChunkMessage));
+
+    const uint16_t first_column = s_env_job.next_column;
+    const uint64_t span = s_env_job.end_frame - s_env_job.start_frame;
+    const uint32_t total_columns = s_env_job.total_columns;
+
+    uint32_t columns_done = 0;
+    uint32_t frames_scanned = 0;
+    while (s_env_job.next_column < total_columns && columns_done < columns_per_chunk &&
+           frames_scanned < kEnvFramesPerPass) {
+        const uint32_t c = s_env_job.next_column;
+        // 64-bit throughout: span * column index overflows 32 bits for any
+        // file past ~3.3 M frames at 1280 columns, which is under 80 seconds.
+        uint32_t f0 = s_env_job.start_frame + static_cast<uint32_t>((span * c) / total_columns);
+        uint32_t f1 =
+            s_env_job.start_frame + static_cast<uint32_t>((span * (c + 1)) / total_columns);
+        if (f1 <= f0) {
+            f1 = f0 + 1;  // sub-frame column: report the one frame it lands on
+        }
+        if (f1 > s_env_job.end_frame) {
+            f1 = s_env_job.end_frame;
+        }
+
+        for (uint8_t ch = 0; ch < s_env_job.channels; ++ch) {
+            const uint8_t src_ch = plan.pick[ch];
+            int32_t lo = 32767;
+            int32_t hi = -32768;
+            for (uint32_t f = f0; f < f1; ++f) {
+                int32_t v;
+                if (plan.sum) {
+                    v = (EnvReadSample(*info, base, f, 0) + EnvReadSample(*info, base, f, 1)) / 2;
+                } else {
+                    v = EnvReadSample(*info, base, f, src_ch);
+                }
+                if (v < lo) {
+                    lo = v;
+                }
+                if (v > hi) {
+                    hi = v;
+                }
+            }
+            if (hi < lo) {  // empty column, cannot happen after the f1 fixups
+                lo = hi = 0;
+            }
+            out[columns_done * s_env_job.channels + ch] =
+                WaveX::Protocol::EnvelopeColumn(static_cast<int16_t>(lo), static_cast<int16_t>(hi));
+        }
+
+        frames_scanned += (f1 - f0) * s_env_job.channels;
+        ++columns_done;
+        ++s_env_job.next_column;
+    }
+
+    if (columns_done == 0) {
+        CancelEnvelopeJob();
+        return;
+    }
+
+    header->sample_id = s_env_job.sample_id;
+    header->generation = s_env_job.generation;
+    header->start_frame = s_env_job.start_frame;
+    header->end_frame = s_env_job.end_frame;
+    header->total_columns = static_cast<uint16_t>(total_columns);
+    header->first_column = first_column;
+    header->columns = static_cast<uint16_t>(columns_done);
+    header->channels = s_env_job.channels;
+    header->reserved = 0;
+
+    const size_t payload_bytes =
+        sizeof(WaveX::Protocol::EnvelopeChunkMessage) +
+        columns_done * s_env_job.channels * sizeof(WaveX::Protocol::EnvelopeColumn);
+    const int res = WaveX::Comm::UartLinkSend(
+        WaveX::Protocol::MSG_ENVELOPE_CHUNK, s_env_frame, static_cast<uint16_t>(payload_bytes));
+    if (res < 0) {
+        // Queue full. Unlike the preview sender - which runs inside a message
+        // handler and has to pump the TX queue itself - this is already on the
+        // main loop, so the honest move is to rewind and let the next pass
+        // retry. No blocking, and the columns are re-measured rather than
+        // punching a hole in the envelope.
+        s_env_job.next_column = first_column;
+        return;
+    }
+
+    if (s_env_job.next_column >= total_columns) {
+        s_env_job.active = false;
+    }
 }
 
 void OnSampleLoad(const SampleLoadMessage& sl) {
