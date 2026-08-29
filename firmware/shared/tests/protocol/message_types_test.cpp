@@ -298,6 +298,146 @@ TEST_F(MessageTypeTest, StorageStatusMessage) {
     }
 }
 
+// Diagnostics telemetry, like storage status, is unsolicited: the frontend has
+// no request to correlate it with, so this round trip is the only thing
+// pinning the wire format. Every field is set to a distinct value - a
+// memcmp-style check would pass even if two same-width neighbours were swapped
+// during a later edit.
+TEST_F(MessageTypeTest, DiagPushMessage) {
+    // 94 bytes of payload + 4 header + 2 CRC = 100, so this must fit the
+    // 128-byte class. If a field is added that pushes it past 122 the packet
+    // silently promotes to 256 and doubles its cost on the link.
+    EXPECT_EQ(sizeof(DiagPushMessage), 94u);
+
+    DiagPushMessage original;
+    original.callback_hz_x10 = 10002;
+    original.ring_low_water = 1420;
+    original.underruns = 3;
+    original.prebuffer_filled = 1024;
+    original.engine_cpu_x10 = 74;
+    original.engine_cpu_max_x10 = 121;
+    original.wav_sample_rate = 44100;
+    original.wav_channels = 2;
+    original.wav_bits = 16;
+    original.playing = 1;
+    original.resampling = 1;
+    original.ring_pushes = 4321;
+    original.ring_discards = 7;
+    original.sd_mounted = 1;
+    original.sd_speed_index = 3;
+    original.sd_reads = 210;
+    original.sd_bytes = 1720320;
+    original.sd_lat_avg_us = 1700;
+    original.sd_lat_max_us = 2900;
+    original.sd_errors = 2;
+    original.sd_recoveries = 1;
+    original.sd_last_fatfs = 1;  // FR_DISK_ERR
+    original.sd_hal_err = 0x00000002;
+    original.sample_ram_free = 33554432;
+    original.sample_ram_largest = 16777216;
+    original.sample_failed_allocs = 4;
+    original.sample_count = 12;
+    original.link_total_us = 1234;
+    original.link_max_us = 89;
+    original.link_rx_frames = 21;
+    original.link_tx_frames = 43;
+    original.link_errors = 5;
+    original.link_seq_drops = 6;
+    original.link_queue_overflows = 8;
+    original.midi_notes = 12;
+    original.midi_ccs = 40;
+    original.midi_clock_ticks = 48;
+    original.measured_bpm_x100 = 12004;
+    original.sync_state = 2;
+    original.transport_playing = 1;
+    original.pattern = 3;
+    original.step = 9;
+    original.interval_ms = 500;
+
+    size_t created =
+        ProtocolHandler::CreateDiagPushPacket(buffer_.data(), buffer_.size(), original);
+
+    ASSERT_GT(created, 0u);
+    EXPECT_EQ(created, 128u);
+    EXPECT_TRUE(ProtocolHandler::ValidatePacket(buffer_.data(), created));
+    EXPECT_EQ(ProtocolHandler::GetMessageType(buffer_.data()), MSG_DIAG_PUSH);
+
+    DiagPushMessage parsed;
+    ASSERT_TRUE(
+        ProtocolHandler::ParseMessage(buffer_.data(), MSG_DIAG_PUSH, &parsed, sizeof(parsed)));
+
+    EXPECT_EQ(parsed.callback_hz_x10, original.callback_hz_x10);
+    EXPECT_EQ(parsed.ring_low_water, original.ring_low_water);
+    EXPECT_EQ(parsed.underruns, original.underruns);
+    EXPECT_EQ(parsed.prebuffer_filled, original.prebuffer_filled);
+    EXPECT_EQ(parsed.engine_cpu_x10, original.engine_cpu_x10);
+    EXPECT_EQ(parsed.engine_cpu_max_x10, original.engine_cpu_max_x10);
+    EXPECT_EQ(parsed.wav_sample_rate, original.wav_sample_rate);
+    EXPECT_EQ(parsed.wav_channels, original.wav_channels);
+    EXPECT_EQ(parsed.wav_bits, original.wav_bits);
+    EXPECT_EQ(parsed.playing, original.playing);
+    EXPECT_EQ(parsed.resampling, original.resampling);
+    EXPECT_EQ(parsed.ring_pushes, original.ring_pushes);
+    EXPECT_EQ(parsed.ring_discards, original.ring_discards);
+    EXPECT_EQ(parsed.sd_mounted, original.sd_mounted);
+    EXPECT_EQ(parsed.sd_speed_index, original.sd_speed_index);
+    EXPECT_EQ(parsed.sd_reads, original.sd_reads);
+    EXPECT_EQ(parsed.sd_bytes, original.sd_bytes);
+    EXPECT_EQ(parsed.sd_lat_avg_us, original.sd_lat_avg_us);
+    EXPECT_EQ(parsed.sd_lat_max_us, original.sd_lat_max_us);
+    EXPECT_EQ(parsed.sd_errors, original.sd_errors);
+    EXPECT_EQ(parsed.sd_recoveries, original.sd_recoveries);
+    EXPECT_EQ(parsed.sd_last_fatfs, original.sd_last_fatfs);
+    EXPECT_EQ(parsed.sd_hal_err, original.sd_hal_err);
+    EXPECT_EQ(parsed.sample_ram_free, original.sample_ram_free);
+    EXPECT_EQ(parsed.sample_ram_largest, original.sample_ram_largest);
+    EXPECT_EQ(parsed.sample_failed_allocs, original.sample_failed_allocs);
+    EXPECT_EQ(parsed.sample_count, original.sample_count);
+    EXPECT_EQ(parsed.link_total_us, original.link_total_us);
+    EXPECT_EQ(parsed.link_max_us, original.link_max_us);
+    EXPECT_EQ(parsed.link_rx_frames, original.link_rx_frames);
+    EXPECT_EQ(parsed.link_tx_frames, original.link_tx_frames);
+    EXPECT_EQ(parsed.link_errors, original.link_errors);
+    EXPECT_EQ(parsed.link_seq_drops, original.link_seq_drops);
+    EXPECT_EQ(parsed.link_queue_overflows, original.link_queue_overflows);
+    EXPECT_EQ(parsed.midi_notes, original.midi_notes);
+    EXPECT_EQ(parsed.midi_ccs, original.midi_ccs);
+    EXPECT_EQ(parsed.midi_clock_ticks, original.midi_clock_ticks);
+    EXPECT_EQ(parsed.measured_bpm_x100, original.measured_bpm_x100);
+    EXPECT_EQ(parsed.sync_state, original.sync_state);
+    EXPECT_EQ(parsed.transport_playing, original.transport_playing);
+    EXPECT_EQ(parsed.pattern, original.pattern);
+    EXPECT_EQ(parsed.step, original.step);
+    EXPECT_EQ(parsed.interval_ms, original.interval_ms);
+}
+
+// A default-constructed telemetry message must be all zeros: the collector
+// fills only the fields it has, and a garbage default would show as real data.
+TEST_F(MessageTypeTest, DiagPushMessageDefaultsToZero) {
+    DiagPushMessage msg;
+    const uint8_t* raw = reinterpret_cast<const uint8_t*>(&msg);
+    for (size_t i = 0; i < sizeof(msg); ++i) {
+        EXPECT_EQ(raw[i], 0u) << "byte " << i << " not zeroed";
+    }
+}
+
+TEST_F(MessageTypeTest, DiagSubscribeMessage) {
+    DiagSubscribeMessage original(1, 2);
+
+    size_t created =
+        ProtocolHandler::CreateDiagSubscribePacket(buffer_.data(), buffer_.size(), original);
+
+    ASSERT_GT(created, 0u);
+    EXPECT_TRUE(ProtocolHandler::ValidatePacket(buffer_.data(), created));
+    EXPECT_EQ(ProtocolHandler::GetMessageType(buffer_.data()), MSG_DIAG_SUBSCRIBE);
+
+    DiagSubscribeMessage parsed;
+    ASSERT_TRUE(
+        ProtocolHandler::ParseMessage(buffer_.data(), MSG_DIAG_SUBSCRIBE, &parsed, sizeof(parsed)));
+    EXPECT_EQ(parsed.enable, original.enable);
+    EXPECT_EQ(parsed.interval_hz, original.interval_hz);
+}
+
 // Test ErrorMessage creation and parsing
 TEST_F(MessageTypeTest, ErrorMessage) {
     ErrorMessage original(0x0001, "Test error message");

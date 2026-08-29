@@ -88,6 +88,11 @@ enum MessageType : uint8_t {
     MSG_SAMPLE_GET_PATH_REQ = 0x37,    // Get full path for index
     MSG_SAMPLE_GET_PATH_RESP = 0x38,   // Full path response
     MSG_STORAGE_STATUS = 0x39,         // Daisy -> ESP32: SD mounted/unmounted (unsolicited)
+    // Diagnostics telemetry (docs/ui-diagnostics-spec.md). Subscription-gated:
+    // the push flows only while the diagnostics page is open, so it costs
+    // nothing the rest of the time.
+    MSG_DIAG_SUBSCRIBE = 0x3A,  // ESP32 -> Daisy: start/stop the push
+    MSG_DIAG_PUSH = 0x3B,       // Daisy -> ESP32: one interval of telemetry
     // CV calibration (Stage A analog path - analog-voice-board.md §3)
     MSG_CV_CAL_SET = 0x40,   // ESP32 -> Daisy: apply (and optionally persist) one group's cal
     MSG_CV_CAL_GET = 0x41,   // ESP32 -> Daisy: request one group's cal
@@ -140,6 +145,15 @@ inline void CopyWireString(char* dest, size_t dest_size, const char* src) {
         dest[i] = src[i];
     }
     dest[i] = '\0';
+}
+
+// Zero a wire struct without pulling <cstring> into this header, which is
+// included by both the Daisy and ESP32 builds.
+inline void ZeroWire(void* dest, size_t size) {
+    uint8_t* p = static_cast<uint8_t*>(dest);
+    for (size_t i = 0; i < size; ++i) {
+        p[i] = 0;
+    }
 }
 }  // namespace detail
 
@@ -379,6 +393,97 @@ struct StorageStatusMessage {
 
     StorageStatusMessage() : mounted(0), reserved{0, 0, 0} {}
     explicit StorageStatusMessage(uint8_t mounted_) : mounted(mounted_), reserved{0, 0, 0} {}
+} __attribute__((packed));
+
+// Diagnostics subscription (frontend -> backend).
+struct DiagSubscribeMessage {
+    uint8_t enable;       // 1 = push while subscribed, 0 = stop
+    uint8_t interval_hz;  // pushes per second, clamped 1..10 by the backend
+    uint8_t reserved[2];
+
+    DiagSubscribeMessage() : enable(0), interval_hz(2), reserved{0, 0} {}
+    DiagSubscribeMessage(uint8_t enable_, uint8_t interval_hz_)
+        : enable(enable_), interval_hz(interval_hz_), reserved{0, 0} {}
+} __attribute__((packed));
+
+// Diagnostics telemetry (backend -> frontend, unsolicited while subscribed).
+//
+// Counters are DELTAS over interval_ms and reset on read, matching the
+// convention the Daisy's SD PERF / UART PERF telemetry already uses. A
+// since-boot total hides a fault that started thirty seconds ago - during the
+// August 2026 audition debugging a frozen read count was misread as "idle"
+// when in fact every read was failing. Absolute values are used only for
+// levels and states, where a delta would be meaningless.
+struct DiagPushMessage {
+    // --- audio ---
+    uint16_t callback_hz_x10;   // 10000 = 1000.0 Hz; separates "engine
+                                // stopped" from "ring starved", which is
+                                // otherwise undetectable: if the callback
+                                // stops, the ring stays full and no
+                                // underrun is ever logged
+    uint16_t ring_low_water;    // frames, of RB_CAP_FRAMES
+    uint16_t underruns;         // episodes this interval
+    uint16_t prebuffer_filled;  // frames, of PREBUFFER_FRAMES
+    uint16_t engine_cpu_x10;    // average over the interval
+    uint16_t engine_cpu_max_x10;
+    uint32_t wav_sample_rate;
+    uint8_t wav_channels;
+    uint8_t wav_bits;
+    uint8_t playing;
+    uint8_t resampling;  // ratio != 1.0
+    uint32_t ring_pushes;
+    uint32_t ring_discards;  // skip-without-consume; invisible in every other
+                             // figure, and how two playback stalls began
+
+    // --- storage ---
+    uint8_t sd_mounted;
+    uint8_t sd_speed_index;  // 0..4; the speed names live on the frontend
+    uint16_t sd_reads;
+    uint32_t sd_bytes;
+    uint16_t sd_lat_avg_us;
+    uint16_t sd_lat_max_us;  // latency creeping before errors appear is the
+                             // marginal-timing tell
+    uint16_t sd_errors;
+    uint16_t sd_recoveries;
+    uint8_t sd_last_fatfs;  // FRESULT
+    uint8_t reserved0;
+    uint32_t sd_hal_err;  // HAL_SD_GetError(); carried alongside the FRESULT
+                          // because FR_DISK_ERR alone says only "the read
+                          // failed", where SDMMC_ERROR_DATA_CRC_FAIL with the
+                          // card in TRANSFER state says "card healthy,
+                          // wiring marginal" - a different action entirely
+    uint32_t sample_ram_free;
+    uint32_t sample_ram_largest;
+    uint16_t sample_failed_allocs;
+    uint16_t sample_count;
+
+    // --- link (the backend's own view; the frontend keeps its own) ---
+    uint32_t link_total_us;  // time spent in UartLinkProcess this interval
+    uint16_t link_max_us;
+    uint16_t link_rx_frames;
+    uint16_t link_tx_frames;
+    uint16_t link_errors;
+    uint16_t link_seq_drops;
+    uint16_t link_queue_overflows;
+
+    // --- midi / transport ---
+    uint16_t midi_notes;
+    uint16_t midi_ccs;
+    uint16_t midi_clock_ticks;
+    uint16_t measured_bpm_x100;
+    uint8_t sync_state;  // 0=internal 1=acquiring 2=locked 3=freewheel
+    uint8_t transport_playing;
+    uint8_t pattern;
+    uint8_t step;
+
+    uint32_t interval_ms;  // the window these deltas cover
+
+    // Zeroing default constructor only. The named-argument constructor the
+    // other wire structs carry exists to force call sites to be re-checked
+    // when a field moves; with ~40 fields filled one at a time by a collector
+    // that would be unreadable and would not achieve that. Fields are assigned
+    // by name instead, which fails loudly on a rename and ignores reordering.
+    DiagPushMessage() { detail::ZeroWire(this, sizeof(*this)); }
 } __attribute__((packed));
 
 // Error message (short)
@@ -912,6 +1017,14 @@ class ProtocolHandler {
     static size_t CreateSampleGetPathPacket(uint8_t* buffer,
                                             size_t buffer_size,
                                             const SampleGetPathMessage& msg);
+    /** Diagnostics subscription (frontend -> backend). */
+    static size_t CreateDiagSubscribePacket(uint8_t* buffer,
+                                            size_t buffer_size,
+                                            const DiagSubscribeMessage& msg);
+    /** Diagnostics telemetry (backend -> frontend, unsolicited). */
+    static size_t CreateDiagPushPacket(uint8_t* buffer,
+                                       size_t buffer_size,
+                                       const DiagPushMessage& msg);
 
     // Packet parsing
     static bool ValidatePacket(const uint8_t* buffer, size_t length);

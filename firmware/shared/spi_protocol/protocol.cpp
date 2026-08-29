@@ -250,6 +250,19 @@ size_t ProtocolHandler::CreateStorageStatusPacket(uint8_t* buffer,
         buffer, buffer_size, MSG_STORAGE_STATUS, &status, sizeof(StorageStatusMessage));
 }
 
+size_t ProtocolHandler::CreateDiagSubscribePacket(uint8_t* buffer,
+                                                  size_t buffer_size,
+                                                  const DiagSubscribeMessage& msg) {
+    return CreateUnifiedPacket(
+        buffer, buffer_size, MSG_DIAG_SUBSCRIBE, &msg, sizeof(DiagSubscribeMessage));
+}
+
+size_t ProtocolHandler::CreateDiagPushPacket(uint8_t* buffer,
+                                             size_t buffer_size,
+                                             const DiagPushMessage& msg) {
+    return CreateUnifiedPacket(buffer, buffer_size, MSG_DIAG_PUSH, &msg, sizeof(DiagPushMessage));
+}
+
 size_t ProtocolHandler::CreateSampleStopRespPacket(uint8_t* buffer,
                                                    size_t buffer_size,
                                                    const SampleStopRespMessage& msg) {
