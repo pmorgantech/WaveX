@@ -17,6 +17,8 @@ struct CvCal {
 };
 
 inline float CvClamp01(float x) {
+    if (!std::isfinite(x))
+        return 0.0f;
     return x < 0.0f ? 0.0f : (x > 1.0f ? 1.0f : x);
 }
 
