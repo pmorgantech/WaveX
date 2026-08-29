@@ -14,6 +14,7 @@
 #include "../../shared/spi_protocol/sequence_tracker.hpp"
 #include "../../shared/uart_protocol/frame_scanner.hpp"
 #include <algorithm>
+#include <atomic>
 #include <cstring>
 
 namespace {
@@ -71,6 +72,37 @@ static uint8_t s_rx_storage[RX_PENDING_CAPACITY];
 static WaveX::UartProtocol::FrameScanner s_scanner(s_rx_storage, sizeof(s_rx_storage));
 
 static volatile bool s_uart_running = false;
+
+// Waking the TX side.
+//
+// uart_link_send() used to only enqueue, leaving the frame to be picked up
+// whenever uart_task's 10 ms event wait next expired - so a note-on could sit
+// for most of that before reaching the wire, and a full queue drained one frame
+// per tick (~80 ms). For a sequencer that jitter *is* the product.
+//
+// The task blocks on the driver's event queue, so the cheapest wake is to post
+// a marker onto that same queue rather than introduce a second primitive and a
+// queue set. The queue is only 20 deep and shared with the driver's own RX
+// events, so at most one marker is ever outstanding: this flag is set before
+// posting and cleared when the task takes it back off.
+constexpr int kTxWakeEvent = 0x7F;  // outside uart_event_type_t; only we post it
+static std::atomic<bool> s_tx_wake_pending{false};
+
+static void post_tx_wake() {
+    if (!s_uart_event_queue) {
+        return;
+    }
+    if (s_tx_wake_pending.exchange(true)) {
+        return;  // a marker is already queued; the task will drain everything
+    }
+    uart_event_t wake{};
+    wake.type = static_cast<uart_event_type_t>(kTxWakeEvent);
+    if (xQueueSend(s_uart_event_queue, &wake, 0) != pdTRUE) {
+        // Queue full: drop the marker rather than block a caller that may be
+        // the UI task. The 10 ms wait still picks the frame up.
+        s_tx_wake_pending.store(false);
+    }
+}
 static uint16_t s_next_sequence = 1;
 static uart_stats_t s_stats;
 
@@ -213,35 +245,45 @@ void uart_task(void* /*param*/) {
                       (now - last_event_time));
             last_event_time = now;
 
-            switch (event.type) {
-                case UART_DATA: {
-                    UART_LOGI(TAG, "UART_DATA event size=%d", (int)event.size);
-                    // Drain the whole ring, not just up to event.size /
-                    // RX_TEMP_BUFFER bytes of it (review Finding 9).
-                    drain_driver_rx(temp);
-                    process_rx_frames();
-                    break;
+            if (static_cast<int>(event.type) == kTxWakeEvent) {
+                // Our own marker: a frame was queued for transmit. No work
+                // needed here - the TX drain below runs every pass - but
+                // clearing the flag lets the next send post a new marker.
+                // Handled before the switch because a case label outside
+                // uart_event_type_t does not compile under -Werror=switch.
+                s_tx_wake_pending.store(false);
+            } else {
+                switch (event.type) {
+                    case UART_DATA: {
+                        UART_LOGI(TAG, "UART_DATA event size=%d", (int)event.size);
+                        // Drain the whole ring, not just up to event.size /
+                        // RX_TEMP_BUFFER bytes of it (review Finding 9).
+                        drain_driver_rx(temp);
+                        process_rx_frames();
+                        break;
+                    }
+                    case UART_FIFO_OVF:
+                    case UART_BUFFER_FULL:
+                        UART_LOGE(
+                            TAG, "UART overflow (%d), flushing", static_cast<int>(event.type));
+                        uart_flush_input(WAVEX_ESP_UART_INTER_NUM);
+                        xQueueReset(s_uart_event_queue);
+                        s_scanner.Clear();
+                        s_stats.queue_overflows++;
+                        break;
+                    case UART_BREAK:
+                        UART_LOGW(TAG, "UART break detected");
+                        break;
+                    case UART_PARITY_ERR:
+                        UART_LOGW(TAG, "UART parity error");
+                        break;
+                    case UART_FRAME_ERR:
+                        UART_LOGW(TAG, "UART frame error");
+                        break;
+                    default:
+                        UART_LOGW(TAG, "Unknown UART event type=%d", event.type);
+                        break;
                 }
-                case UART_FIFO_OVF:
-                case UART_BUFFER_FULL:
-                    UART_LOGE(TAG, "UART overflow (%d), flushing", static_cast<int>(event.type));
-                    uart_flush_input(WAVEX_ESP_UART_INTER_NUM);
-                    xQueueReset(s_uart_event_queue);
-                    s_scanner.Clear();
-                    s_stats.queue_overflows++;
-                    break;
-                case UART_BREAK:
-                    UART_LOGW(TAG, "UART break detected");
-                    break;
-                case UART_PARITY_ERR:
-                    UART_LOGW(TAG, "UART parity error");
-                    break;
-                case UART_FRAME_ERR:
-                    UART_LOGW(TAG, "UART frame error");
-                    break;
-                default:
-                    UART_LOGW(TAG, "Unknown UART event type=%d", event.type);
-                    break;
             }
         } else {
             // Periodic processing even without events. Also drain the
@@ -260,8 +302,12 @@ void uart_task(void* /*param*/) {
             process_rx_frames();
         }
 
+        // Drain everything queued, not one frame per pass. One-per-pass meant
+        // a backlog left the wire idle for 10 ms between frames; the bound is
+        // the queue's own capacity, so a flooding producer cannot livelock
+        // this loop and starve RX.
         uart_msg_entry_t entry;
-        if (dequeue_tx_entry(entry)) {
+        for (size_t sent = 0; sent < MSG_QUEUE_SIZE && dequeue_tx_entry(entry); ++sent) {
             UART_LOGI(TAG, "TX: About to write %u bytes to UART", (unsigned)entry.frame_len);
             int written = uart_write_bytes(WAVEX_ESP_UART_INTER_NUM,
                                            reinterpret_cast<const char*>(entry.frame),
@@ -446,6 +492,10 @@ int uart_link_send(uint16_t msg_type, const void* payload, uint16_t len) {
     s_msg_count = s_msg_count + 1;
 
     xSemaphoreGive(s_uart_mutex);
+
+    // Outside the mutex: post_tx_wake() touches only the event queue, and the
+    // task it wakes will want this mutex immediately.
+    post_tx_wake();
 
     UART_LOGI(TAG, "TX queued msg=0x%02X len=%u seq=%u", msg_type, len, seq);
     UART_LOG_DUMP_PACKET(TAG, entry.frame, frame_len);

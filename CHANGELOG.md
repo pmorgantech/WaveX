@@ -11,6 +11,22 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Fixed — Outbound link frames go out when queued, not on the next poll tick
+
+Found by the 2026-08-29 ESP32-P4 review (item E-TX1). `uart_link_send()` only
+enqueued: nothing woke the UART task, which sat in a 10 ms event wait, and it
+serviced at most one frame per pass. A queued note-on could wait most of that
+10 ms, and a full 8-deep queue drained at roughly one frame per tick (~80 ms).
+On the sequencer/audition path that jitter is the product.
+
+Sending now posts a wake marker onto the driver's own event queue — the queue
+the task already blocks on, so no second primitive or queue set is needed — and
+the task drains the whole TX queue per pass instead of one frame. At most one
+marker is ever outstanding, since that queue is only 20 deep and shared with the
+driver's RX events; if it is full the marker is dropped rather than blocking a
+caller that may be the UI task, and the existing 10 ms wait still picks the
+frame up.
+
 ### Fixed — UI correctness: LVGL tick, touch driver, browser taps and menu activation
 
 Found by the 2026-08-29 ESP32-P4 review (items E-TICK1, E-TOUCH1, E-BRWS1,
