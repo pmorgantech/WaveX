@@ -61,8 +61,10 @@ Current state: the page draws the wireframe layout and START/END/ZOOM move the *
    - **Whether Save As copies audio or writes a sidecar.** These edits are non-destructive, so a sidecar is far cheaper and instant. But "Save As" implies a new file the user can see in the browser and load independently, which a sidecar is not. Probably: sidecar for markers, and a genuine render-to-new-file when Phase 4's render jobs exist.
 
    A text-entry surface (on-screen keyboard) is worth having eventually regardless, and is reusable for preset and pattern names — but it should not block Save As.
-6. **Sample selection from the edit page.** Currently the page edits whatever the browser last loaded, with no way to change it. Either a picker, or make the edit page accept a sample argument and have the browser push it. The Shift row has a `Select` key reserved for it.
-7. **Partial load for oversized samples.** The browser now refuses a sample larger than the allocator's largest free block, showing both figures. Loading a truncated head instead would need a length field on `MSG_SAMPLE_LOAD` and a truncating reader on the Daisy. Worth doing — but the refusal-with-numbers is the honest interim, where the old behaviour was a load that failed with no explanation.
+6. **Loop gap in the browser, gapless in the editor.** Auditioning from the sample browser should leave roughly **0.3 s of silence between passes**; auditioning in the edit page with looping on should be gapless. Same mechanism, different intent: in the browser the gap tells you where the file ends and stops a short sample sounding like a drone, whereas in the editor the whole point is hearing the seam as it will actually play. The backend already owns the rewind (`SetEditParams`), so this is a flag on the edit message plus a silent countdown in the refill path — and the silence needs no SD reads, so it is free.
+
+7. **Sample selection from the edit page.** Currently the page edits whatever the browser last loaded, with no way to change it. Either a picker, or make the edit page accept a sample argument and have the browser push it. The Shift row has a `Select` key reserved for it.
+8. **Partial load for oversized samples.** The browser now refuses a sample larger than the allocator's largest free block, showing both figures. Loading a truncated head instead would need a length field on `MSG_SAMPLE_LOAD` and a truncating reader on the Daisy. Worth doing — but the refusal-with-numbers is the honest interim, where the old behaviour was a load that failed with no explanation.
 
 ### 1.5.2 Interaction model
 
@@ -76,11 +78,12 @@ Physical Shift still needs a key: `tca8418_keypad.cpp` maps keycode 4 → `BUTTO
 
 Specific items:
 
-1. **Draggable handles.** All four handles (S, E on the top edge; LS, LE on the bottom) are drawn and track the zoom window, but are not yet touch-draggable — they move only by encoder. LVGL supplies the drag events; the constraint work (ordering, clamping, minimum separation, and mapping pixels back to frames at the current zoom) is the real content.
-2. ~~**`< Param` / `Param >`** replace `Param >` and `Refresh`.~~ Done.
-3. ~~**Audition toggles to Stop**, matching the browser.~~ Done, and it stops on page exit — audition used to play on under a page that no longer existed.
-4. **Encoder direction is a global contract, not a per-page choice.** Clockwise increases, always. The edit page shipped inverted because `InputEvent::delta` is already signed *and* the event type names the sign, so negating on the Left case flipped it back. Anything reading `delta` must take its magnitude and let the type supply direction. Worth a shared helper so the next page cannot repeat it.
-5. **Two different physical controls are conflated.** `EncoderLeft`/`Right` come from the rotary encoder; `EncoderUp`/`Down` come from a pot (`ui_task.cpp`). Pages currently treat them as one input. Decide whether that is intended before building marker editing on top of it.
+1. **Loop splice view** (see 1.5.6 item 1) is the one interaction on this page that is not a variation of "move a marker" — it needs two synchronised waveform panes and its own scroll behaviour. Worth designing before the drag work below, since dragging inside the splice view has different semantics: there, dragging moves the *audio* under a fixed centre line.
+2. **Draggable handles.** All four handles (S, E on the top edge; LS, LE on the bottom) are drawn and track the zoom window, but are not yet touch-draggable — they move only by encoder. LVGL supplies the drag events; the constraint work (ordering, clamping, minimum separation, and mapping pixels back to frames at the current zoom) is the real content.
+3. ~~**`< Param` / `Param >`** replace `Param >` and `Refresh`.~~ Done.
+4. ~~**Audition toggles to Stop**, matching the browser.~~ Done, and it stops on page exit — audition used to play on under a page that no longer existed.
+5. **Encoder direction is a global contract, not a per-page choice.** Clockwise increases, always. The edit page shipped inverted because `InputEvent::delta` is already signed *and* the event type names the sign, so negating on the Left case flipped it back. Anything reading `delta` must take its magnitude and let the type supply direction. Worth a shared helper so the next page cannot repeat it.
+6. **Two different physical controls are conflated.** `EncoderLeft`/`Right` come from the rotary encoder; `EncoderUp`/`Down` come from a pot (`ui_task.cpp`). Pages currently treat them as one input. Decide whether that is intended before building marker editing on top of it.
 
 ### 1.5.3 Sample browser
 
@@ -96,6 +99,36 @@ Still open:
 
 - **Real progress.** The bar exists but nothing drives it; `MSG_SAMPLE_STATUS` reports progress and `MSG_SAMPLE_LOAD` carries `sample_size`, so a determinate percentage is available without protocol work.
 - **Use it elsewhere.** Preview fetch and card remount should show the same overlay rather than each inventing something.
+
+### 1.5.5 Sample metadata and waveform caching (added 2026-08-29)
+
+Today every waveform redraw is a round trip: the ESP32 sends `MSG_PREVIEW_REQ`, the Daisy re-reads from SD, decimates, and streams `MSG_WAVE_CHUNK` back. Zooming or moving a marker off-window refetches from scratch. That is the reason the page needs a 150 ms request debounce at all.
+
+1. **A per-sample metadata record, synced to the ESP32.** One structure carrying rate, channels, bits, total frames, `data_start`, markers, loop points and gain — the authoritative description of a sample, held on the Daisy and pushed on change. Today this is scattered: geometry arrives incidentally via the browse listing, markers go out via `MSG_SAMPLE_EDIT_SET` with nothing coming back, and the frontend duplicates the backend's clamp rules because it has no way to read the applied values. One record replaces all of that, and it is the same data a zone carries (`features/instrument-model.md`), so define it once.
+
+2. **Send an envelope, not decimated samples.** The current preview sends every *n*th sample, which aliases badly — a single-sample-per-column decimation of a bright sample draws a waveform that does not resemble it, and transients disappear entirely. The standard answer is a **min/max pair per display column**. At the panel's 1256 px waveform width that is 1256 × 2 × int16 = **~5 KB for an entire file at full screen resolution**, whatever its length. That is the "minimal data over the wire" the request asks for, and it fits a handful of `MSG_WAVE_CHUNK` packets.
+
+3. **Mip-mapped tiers cached in PSRAM.** Generate the envelope at several decimation levels (say ÷1024, ÷256, ÷64, ÷16, ÷4) and cache them on the ESP32. Zooming then picks the nearest tier already held and only asks the Daisy for the gap. Sizing: a 3-minute 44.1 kHz file is ~8 M frames; all five tiers together are roughly 8M/4 × 2 × 2 bytes ≈ 8 MB worst case at the finest tier, so the finest tiers must be **windowed, not whole-file** — cache the visible span plus a margin, and evict by LRU.
+
+   **Measure the budget before sizing this.** The System tab now reports free PSRAM; use that figure rather than a nominal board spec. LVGL's draw buffers and the display rotation path are already the largest PSRAM consumers, and a cache that starves them trades a fast waveform for a slow UI.
+
+4. **Invalidate on edit.** Markers and gain do not change the envelope; a destructive render (Phase 4) does. Key the cache on sample id plus a content generation counter carried in the metadata record, so a re-render invalidates cleanly and a marker move does not.
+
+---
+
+### 1.5.6 Loop editing and de-clicking (added 2026-08-29)
+
+1. **Loop splice view.** When editing a loop, show the audio *before* the loop end on the left and the audio *after* the loop start on the right, butted together at the centre line — what the loop will actually sound like at the seam. Scrolling either point slides its half, so the two waveforms can be aligned by eye. This is the loop-tuning display from the Emax/Akai lineage and it is the only practical way to place a loop by sight; a single continuous waveform view cannot show a discontinuity that exists between two distant points.
+
+   Cheap to build on top of 1.5.5: it is two envelope windows drawn side by side, both from the cache, with a zero-crossing indicator on each side. Worth adding **snap-to-zero-crossing** at the same time — most loop clicks are just a sign discontinuity, and snapping removes them without any DSP.
+
+2. **Crossfade loop.** Where alignment cannot remove the seam, blend it. Two forms, and they are different features:
+   - **Playback-time crossfade** (non-destructive): the engine overlaps *n* ms around the loop point on every pass. Costs a little CPU per loop, changes no file, and can be tuned live while listening — which is what makes it the right one to build first.
+   - **Rendered crossfade** (destructive): `xfade_loop` in Phase 4 item 2. Permanent, free at playback, but needs the render-job scheduler.
+
+3. **Fade in / fade out / de-click.** Short fades at the region start and end. Again both forms: a playback-time ramp of a few milliseconds costs nothing and kills the click from starting mid-waveform, while true rendered fades belong with Phase 4's editing primitives. **Build the playback-time version first** — it fixes the audible problem immediately and needs no file rewriting, and the destructive one is then a convenience rather than a prerequisite.
+
+4. Fade shape matters more than it looks: an equal-power (sin/cos) crossfade holds level through the blend where a linear one dips, which on a sustained loop is audible as a dip once per pass.
 
 **Gate**: set all four markers on a multi-minute WAV, audition the looped region, save, reboot, reload, and hear the same region. Markers survive a power cycle; no UI freeze during audition, zoom or load.
 
@@ -156,8 +189,8 @@ The **Stage A → Stage B transition** (`features/analog-voice-board.md` §0). T
 Recording ships in Phase 2.5; non-destructive marker editing ships in Phase 1.5. This phase adds the destructive half. Render-job messages use the reserved 0xA0–0xA3 block.
 
 1. Render-job scheduler on the Daisy main loop (chunked SD→SD processing with progress messages; cancellation).
-2. Editing primitives: trim/crop, gain/normalize, fades, reverse, mono↔stereo, resample, **crossfade-loop render** (`xfade_loop` — seam-smoothing for zone loops, the Emax tool; `features/instrument-model.md` §11).
-3. Waveform editor UI, destructive half: decimated preview tiers cached in ESP32 PSRAM, destructive ops via render jobs. The non-destructive marker UI is Phase 1.5; this extends it rather than replacing it.
+2. Editing primitives: trim/crop, gain/normalize, fades, reverse, mono↔stereo, resample, **crossfade-loop render** (`xfade_loop` — seam-smoothing for zone loops, the Emax tool; `features/instrument-model.md` §11). The *playback-time* crossfade and fades land first in Phase 1.5.6; these are the permanent, rendered forms, and should reuse the same fade shapes so a rendered file sounds like what was auditioned.
+3. Waveform editor UI, destructive half: destructive ops via render jobs. The non-destructive marker UI is Phase 1.5, and the cached preview tiers moved there too (1.5.5) — they are needed long before destructive editing, and the cache invalidation hook (a content generation counter) is what render jobs will trip. This phase extends that UI rather than replacing it.
 4. Slicing: transient detection (offline), slice-to-pads workflow.
 5. Mangling effects (offline renders): bit-crush, drive/saturate, time-stretch, pitch-shift, granular freeze. CMSIS-DSP kernels where applicable — where the 1.17.0 upgrade pays off.
 
