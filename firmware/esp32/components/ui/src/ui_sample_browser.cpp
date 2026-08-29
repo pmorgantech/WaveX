@@ -459,34 +459,14 @@ void UISampleBrowser::directory_changed_callback(const char* path, void* user_da
 
     // Clear metadata display initially
     strcpy(browser->pending_metadata_text_, "Select a file to view metadata");
-    browser->metadata_update_pending_ = true;
     browser->pending_metadata_entry_ = nullptr;
+    browser->metadata_update_pending_.store(true, std::memory_order_release);
     wavex_ui_mark_content_changed();
 
-    // Try to show metadata for currently selected file after directory loads
-    // This will be called again when the browse response is fully processed
-    lv_async_call(
-        [](void* data) {
-            UISampleBrowser* b = static_cast<UISampleBrowser*>(data);
-            if (b && b->file_browser_ && b->is_initialized_) {
-                uint32_t entry_count = wavex_file_browser_get_entry_count(b->file_browser_);
-                if (entry_count > 0 && b->selected_file_index_ < entry_count) {
-                    // Set the selection in the file browser
-                    wavex_file_browser_set_selection(b->file_browser_, b->selected_file_index_);
-
-                    // Get the selected entry and update metadata
-                    const wavex_file_entry_t* selected_entry =
-                        wavex_file_browser_get_selected(b->file_browser_);
-                    if (selected_entry) {
-                        b->updateMetadata(selected_entry);
-            ESP_LOGI("UISampleBrowser",
-                                 "Updated metadata for selected file: %s",
-                                 selected_entry->name);
-                    }
-                }
-            }
-        },
-        browser);
+    // Show metadata for the selected file once the listing has landed. This
+    // runs on the UART task, so it only raises a flag; processDeferredUpdates_()
+    // reads the selection and updates the label on the UI task.
+    browser->selection_metadata_pending_.store(true, std::memory_order_release);
 
     // Update status - show playing status if we're currently playing, otherwise browsing
     char status_text[256];
@@ -555,9 +535,9 @@ void UISampleBrowser::updateStatus(const char* status) {
     // Store status text for deferred update (may be called from non-LVGL context)
     strncpy(pending_status_text_, status, sizeof(pending_status_text_) - 1);
     pending_status_text_[sizeof(pending_status_text_) - 1] = '\0';
-    status_update_pending_ = true;
+    status_update_pending_.store(true, std::memory_order_release);
     wavex_ui_mark_content_changed();
-    ESP_LOGI(TAG, "Status update queued: %s", status);
+    ESP_LOGD(TAG, "Status update queued: %s", status);
 }
 
 void UISampleBrowser::updateMetadata(const wavex_file_entry_t* entry) {
@@ -572,7 +552,7 @@ void UISampleBrowser::updateMetadata(const wavex_file_entry_t* entry) {
 
     // Store entry pointer for deferred update (may be called from non-LVGL context)
     pending_metadata_entry_ = entry;
-    metadata_update_pending_ = true;
+    metadata_update_pending_.store(true, std::memory_order_release);
     wavex_ui_mark_content_changed();
     ESP_LOGD(TAG, "Metadata update queued for: %s", entry->name);
 }
@@ -591,10 +571,42 @@ void UISampleBrowser::processDeferredUpdates_() {
     // This should be called from UI task loop with LVGL lock held
 
     // Process status update
-    if (status_update_pending_ && status_label_) {
+    if (status_update_pending_.load(std::memory_order_acquire) && status_label_) {
         lv_label_set_text(status_label_, pending_status_text_);
-        status_update_pending_ = false;
-        ESP_LOGI(TAG, "Status label updated: %s", pending_status_text_);
+        status_update_pending_.store(false, std::memory_order_relaxed);
+        ESP_LOGD(TAG, "Status label updated: %s", pending_status_text_);
+    }
+
+    // Playback position published by the sample-status callback.
+    if (play_bar_update_pending_.load(std::memory_order_acquire)) {
+        play_bar_update_pending_.store(false, std::memory_order_relaxed);
+        if (play_bar_ && lv_obj_is_valid(play_bar_)) {
+            lv_bar_set_value(
+                play_bar_, pending_play_bar_pct_.load(std::memory_order_relaxed), LV_ANIM_OFF);
+        }
+    }
+
+    // Softkey labels track is_playing_, which the status callback flips.
+    if (softkey_refresh_pending_.exchange(false, std::memory_order_acquire)) {
+        if (is_initialized_ && root_) {
+            UINavigator::instance().refreshSoftkeys();
+        }
+    }
+
+    // A directory listing landed: re-read the selection so metadata shows the
+    // entry the cursor is actually on.
+    if (selection_metadata_pending_.exchange(false, std::memory_order_acquire)) {
+        if (file_browser_ && is_initialized_) {
+            const uint32_t entry_count = wavex_file_browser_get_entry_count(file_browser_);
+            if (entry_count > 0 && selected_file_index_ < entry_count) {
+                wavex_file_browser_set_selection(file_browser_, selected_file_index_);
+                const wavex_file_entry_t* selected_entry =
+                    wavex_file_browser_get_selected(file_browser_);
+                if (selected_entry) {
+                    updateMetadata(selected_entry);
+                }
+            }
+        }
     }
 
     // Process metadata update
@@ -603,7 +615,7 @@ void UISampleBrowser::processDeferredUpdates_() {
         wavex_file_browser_update_loading_row(file_browser_);
     }
 
-    if (metadata_update_pending_ && metadata_label_) {
+    if (metadata_update_pending_.load(std::memory_order_acquire) && metadata_label_) {
         char info_text[512];
 
         if (pending_metadata_entry_) {
@@ -731,14 +743,14 @@ void UISampleBrowser::processDeferredUpdates_() {
             }
             lv_label_set_text(metadata_label_, info_text);
 
-            metadata_update_pending_ = false;
+            metadata_update_pending_.store(false, std::memory_order_relaxed);
             pending_metadata_entry_ = nullptr;
             ESP_LOGD(TAG, "Metadata label updated for: %s", entry->name);
         } else if (strlen(pending_metadata_text_) > 0) {
             lv_label_set_text(metadata_label_, pending_metadata_text_);
-            metadata_update_pending_ = false;
+            metadata_update_pending_.store(false, std::memory_order_relaxed);
             pending_metadata_text_[0] = '\0';
-            ESP_LOGI(TAG, "Metadata label updated with pending text");
+            ESP_LOGD(TAG, "Metadata label updated with pending text");
         }
     }
 
@@ -822,15 +834,16 @@ void UISampleBrowser::refreshSoftkeys() {
         return;
     }
 
-    // Use lv_async_call to ensure we're in LVGL context
-    lv_async_call(
-        [](void* data) {
-            UISampleBrowser* browser = static_cast<UISampleBrowser*>(data);
-            if (browser && browser->is_initialized_ && browser->root_) {
-                UINavigator::instance().refreshSoftkeys();
-            }
-        },
-        this);
+    // Queued rather than applied here: this is reached from the sample-status
+    // callback on the UART task as well as from UI-task code, and rebuilding
+    // the softkey row touches widgets. processDeferredUpdates_() applies it on
+    // the UI task under the LVGL lock.
+    //
+    // This used to lv_async_call() instead, which is not a way out of the wrong
+    // task: lv_async_call itself allocates and links an lv_timer, so calling it
+    // off the LVGL context races the timer list it is trying to defer onto.
+    softkey_refresh_pending_.store(true, std::memory_order_release);
+    wavex_ui_mark_content_changed();
 }
 
 void UISampleBrowser::sample_status_callback(uint16_t sample_id,
@@ -891,10 +904,9 @@ void UISampleBrowser::sample_status_callback(uint16_t sample_id,
 
         // Only update UI if we're still properly initialized
         if (browser->is_initialized_ && browser->status_label_ && browser->root_) {
-            ESP_LOGI(TAG, "=== SAMPLE STOP RESPONSE: Updating UI ===");
-            if (browser->play_bar_ && lv_obj_is_valid(browser->play_bar_)) {
-                lv_bar_set_value(browser->play_bar_, 0, LV_ANIM_OFF);
-            }
+            ESP_LOGD(TAG, "=== SAMPLE STOP RESPONSE: Updating UI ===");
+            browser->pending_play_bar_pct_.store(0, std::memory_order_relaxed);
+            browser->play_bar_update_pending_.store(true, std::memory_order_release);
             browser->updateStatus("Stopped");
             browser->refreshSoftkeys();
         } else {
@@ -908,12 +920,13 @@ void UISampleBrowser::sample_status_callback(uint16_t sample_id,
         // leads the audible one by the ring (~42 ms): fine for a bar.
         if (browser->is_initialized_ && browser->root_) {
             const uint32_t region = sample_rate;
-            if (region > 0 && browser->play_bar_ && lv_obj_is_valid(browser->play_bar_)) {
+            if (region > 0) {
                 const int pct = static_cast<int>(std::min<uint64_t>(
                     100, (static_cast<uint64_t>(frames_played) * 100ull) / region));
-                lv_bar_set_value(browser->play_bar_, pct, LV_ANIM_OFF);
+                browser->pending_play_bar_pct_.store(pct, std::memory_order_relaxed);
+                browser->play_bar_update_pending_.store(true, std::memory_order_release);
             }
-            if (browser->status_label_ && lv_obj_is_valid(browser->status_label_)) {
+            if (browser->status_label_) {
                 // Elapsed of total, at the sample's own rate where known.
                 const uint32_t rate = browser->persistent_state_.last_load_sample_rate
                                           ? browser->persistent_state_.last_load_sample_rate
@@ -928,15 +941,17 @@ void UISampleBrowser::sample_status_callback(uint16_t sample_id,
                          (unsigned long)(elapsed_s % 60),
                          (unsigned long)(total_s / 60),
                          (unsigned long)(total_s % 60));
-                lv_label_set_text(browser->status_label_, status_text);
+                browser->updateStatus(status_text);
             }
         }
     } else if (state == 0x11) {
         // Loading progress: frames_played carries the percentage, not frames.
-        BusyOverlay::setProgress(static_cast<int>(frames_played));
+        BusyOverlay::requestProgress(static_cast<int>(frames_played));
+        wavex_ui_mark_content_changed();
     } else if (state == 0x10) {
         ESP_LOGI(TAG, "=== SAMPLE LOAD COMPLETE: id=%u ===", (unsigned)sample_id);
-        BusyOverlay::hide();
+        BusyOverlay::requestHide();
+        wavex_ui_mark_content_changed();
         // Refresh the allocator view so the next load's fit check is against
         // what is actually free now, not what was free before this one.
         inter_mcu_request_sample_mem_status();

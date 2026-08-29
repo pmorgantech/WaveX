@@ -6,6 +6,8 @@
 #include "inter_mcu.h"
 #include "ui/ui_navigator.h"
 
+#include <cstring>
+
 namespace wavex_ui {
 
 namespace {
@@ -44,6 +46,10 @@ void UISampleRecordPage::onEnter(lv_obj_t* parent) {
 
     waveform_ = std::make_unique<WaveformView>(waveform_container, lv_pct(100), lv_pct(100));
 
+    // Drains what the wave-chunk listener staged. Created before the listener
+    // is registered so no chunk can land with nowhere to be applied from.
+    ui_timer_ = lv_timer_create(&UISampleRecordPage::uiTimerCb, 50, this);
+
     inter_mcu_set_wave_chunk_listener(&UISampleRecordPage::waveChunkStatic, this);
     requestWaveform();
     updateStatus("Ready");
@@ -51,11 +57,16 @@ void UISampleRecordPage::onEnter(lv_obj_t* parent) {
 
 void UISampleRecordPage::onExit() {
     inter_mcu_set_wave_chunk_listener(nullptr, nullptr);
+    if (ui_timer_) {
+        lv_timer_delete(ui_timer_);
+        ui_timer_ = nullptr;
+    }
     waveform_.reset();
     if (root_) {
         lv_obj_del(root_);
         root_ = nullptr;
     }
+    status_label_ = nullptr;
 }
 
 void UISampleRecordPage::onInput(const InputEvent& evt) {
@@ -90,20 +101,48 @@ void UISampleRecordPage::waveChunkStatic(uint32_t offset,
     static_cast<UISampleRecordPage*>(user)->handleWaveChunk(offset, samples, count);
 }
 
+// Runs on the UART RX task: stage only, never draw.
 void UISampleRecordPage::handleWaveChunk(uint32_t offset, const int16_t* samples, uint16_t count) {
     (void)offset;
     if (!samples || count == 0) {
+        wave_clear_pending_.store(true, std::memory_order_release);
         updateStatus("Waveform: no data");
-        if (waveform_)
-            waveform_->clear();
         return;
     }
 
-    ESP_LOGI(TAG, "Wave chunk received: count=%u", (unsigned)count);
-    if (waveform_) {
-        waveform_->setSamples(samples, count);
-    }
+    ESP_LOGD(TAG, "Wave chunk received: count=%u", (unsigned)count);
+    const uint16_t staged = count > kWaveStageCapacity ? kWaveStageCapacity : count;
+    memcpy(staged_samples_, samples, staged * sizeof(int16_t));
+    staged_count_ = staged;
+    wave_pending_.store(true, std::memory_order_release);
     updateStatus("Waveform updated");
+}
+
+void UISampleRecordPage::uiTimerCb(lv_timer_t* timer) {
+    auto* self = static_cast<UISampleRecordPage*>(lv_timer_get_user_data(timer));
+    if (self) {
+        self->serviceUi();
+    }
+}
+
+// Runs on the UI task inside an lv_timer, i.e. in LVGL context.
+void UISampleRecordPage::serviceUi() {
+    if (wave_clear_pending_.exchange(false, std::memory_order_acquire)) {
+        wave_pending_.store(false, std::memory_order_relaxed);
+        if (waveform_) {
+            waveform_->clear();
+        }
+    } else if (wave_pending_.exchange(false, std::memory_order_acquire)) {
+        if (waveform_) {
+            waveform_->setSamples(staged_samples_, staged_count_);
+        }
+    }
+
+    if (status_pending_.exchange(false, std::memory_order_acquire)) {
+        if (status_label_) {
+            lv_label_set_text(status_label_, staged_status_);
+        }
+    }
 }
 
 void UISampleRecordPage::requestWaveform() {
@@ -127,10 +166,17 @@ void UISampleRecordPage::toggleRecording() {
     updateStatus(is_recording_ ? "Recording..." : "Stopped");
 }
 
+// Staged rather than applied directly: this is reached both from UI-task code
+// and from the wave-chunk listener on the UART task, and one path that is
+// always safe beats two that have to be told apart at every call site. The
+// cost is up to one timer period (50 ms) before a caption appears.
 void UISampleRecordPage::updateStatus(const char* text) {
-    if (status_label_) {
-        lv_label_set_text(status_label_, text);
+    if (!text) {
+        return;
     }
+    strncpy(staged_status_, text, sizeof(staged_status_) - 1);
+    staged_status_[sizeof(staged_status_) - 1] = '\0';
+    status_pending_.store(true, std::memory_order_release);
 }
 
 std::shared_ptr<UIPage> createSampleRecordPage() {

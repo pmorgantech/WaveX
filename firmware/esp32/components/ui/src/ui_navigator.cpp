@@ -12,11 +12,21 @@
 #define LV_UNLOCK() lvgl_port_unlock()
 
 // LVGL Lock Usage Guidelines:
-// - UINavigator::push/pop: Acquire lock because they're called from UI task (not LVGL context)
-// - UINavigator::refreshSoftkeys: NO lock - only called from LVGL context or via lv_async_call
-// - UIPage::onEnter/onExit: NO lock - called from push/pop which already holds lock
-// - UIPage::onInput handlers: NEED locks - called from UI task via InputDispatcher
-// - Functions called from both onEnter and onInput: NEED locks (FreeRTOS mutex supports recursion)
+//
+// The port lock is a recursive mutex, so taking it again on a path that
+// already holds it is free. Prefer taking it to reasoning about whether some
+// caller already did.
+//
+// - UI task: holds the lock across InputDispatcher::processAll(), so every
+//   UIPage::onInput handler and anything it calls already runs locked.
+// - UINavigator::push/pop: take the lock; they are also called outside dispatch.
+// - UIPage::onEnter/onExit: NO lock - called from push/pop, which hold it.
+// - lv_timer and lv_obj event callbacks: NO lock - LVGL context already.
+// - UART RX task (comm callbacks): must NOT touch widgets at all, with or
+//   without the lock. Stage the data behind an atomic flag and let the owning
+//   page apply it from its lv_timer or processDeferredUpdates_(). Note that
+//   lv_async_call is not an escape hatch: it links an lv_timer itself, so
+//   calling it off-context races the list it is deferring onto.
 
 static const char* TAG = "UI_NAVIGATOR";
 
@@ -166,9 +176,9 @@ void UINavigator::refreshSoftkeys() {
         return;
     }
 
-    // NOTE: This function should only be called from LVGL context (where lock is already held)
-    // or via lv_async_call(). If called from non-LVGL context, use lv_async_call.
-    // DO NOT call with LV_LOCK() - it will compete with LVGL's own lock.
+    // Rebuilds widgets, so LVGL context only: an lv_obj/lv_timer callback, or
+    // the UI task, which holds the port lock across input dispatch. Callers
+    // reached from the UART task must queue instead (see UISampleBrowser).
     const bool shifted = shifted_ && activePageHasShiftedKeys();
     softkeyBar_.setSoftkeys(shifted ? active_->getShiftedSoftkeys() : active_->getSoftkeys(),
                             shifted);

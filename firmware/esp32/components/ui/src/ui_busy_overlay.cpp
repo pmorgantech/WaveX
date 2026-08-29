@@ -4,6 +4,7 @@
 #include <esp_log.h>
 #include <esp_timer.h>
 
+#include <atomic>
 #include <cstdio>
 
 namespace wavex_ui {
@@ -24,6 +25,12 @@ lv_obj_t* s_caption = nullptr;
 lv_obj_t* s_detail = nullptr;
 lv_obj_t* s_bar = nullptr;
 lv_timer_t* s_timeout = nullptr;
+
+// Requests raised off the UI task; drained by service(). The flags are
+// release-stored after their payload and acquire-loaded before it.
+std::atomic<bool> s_progress_requested{false};
+std::atomic<int> s_requested_progress{0};
+std::atomic<bool> s_hide_requested{false};
 
 // Timed out: the operation never answered. Say so and stop spinning, rather
 // than leaving a spinner turning forever over a dead backend.
@@ -174,6 +181,28 @@ void hide() {
 
 bool isVisible() {
     return s_scrim && lv_obj_is_valid(s_scrim) && !lv_obj_has_flag(s_scrim, LV_OBJ_FLAG_HIDDEN);
+}
+
+void requestProgress(int percent) {
+    s_requested_progress.store(percent, std::memory_order_relaxed);
+    s_progress_requested.store(true, std::memory_order_release);
+}
+
+void requestHide() {
+    s_hide_requested.store(true, std::memory_order_release);
+}
+
+void service() {
+    // A pending hide wins: progress that raced it belongs to the operation
+    // that has just finished, and applying it after would re-show the bar.
+    if (s_hide_requested.exchange(false, std::memory_order_acquire)) {
+        s_progress_requested.store(false, std::memory_order_relaxed);
+        hide();
+        return;
+    }
+    if (s_progress_requested.exchange(false, std::memory_order_acquire)) {
+        setProgress(s_requested_progress.load(std::memory_order_relaxed));
+    }
 }
 
 }  // namespace BusyOverlay

@@ -11,6 +11,37 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Fixed — LVGL thread safety: widgets are no longer touched from the UART task
+
+Found by the 2026-08-29 ESP32-P4 review
+([`docs/code_review_esp32_20260829.md`](docs/code_review_esp32_20260829.md),
+items E-LVGL1/2/3). The LVGL port task renders on the other core, so every one
+of these was a live object-tree/heap corruption race — the "display freeze"
+class the code's own comments already described.
+
+- **Input dispatch now holds the port lock.** `InputDispatcher::processAll()`
+  ran unlocked while `onInput` handlers built and restyled widgets, contradicting
+  the contract written down in `ui_navigator.cpp`. Four pages were affected
+  (keyboard, sample edit, menu, and the global Shift softkey rebuild); one
+  recursive lock around dispatch covers them all.
+- **Sample browser status callbacks no longer draw.** Play-bar position,
+  status text, softkey rebuilds and load progress arrived on the UART RX task
+  and wrote to LVGL directly; they are now staged behind release/acquire atomics
+  and applied by the UI task in `processDeferredUpdates_()`.
+- **Record page wave chunks no longer draw.** `handleWaveChunk` pushed 512
+  chart writes per packet from the UART task; it now stages the chunk and a
+  50 ms `lv_timer` renders it, matching the sample edit page.
+- **`lv_async_call` is no longer used as an escape hatch from the wrong task.**
+  It links an `lv_timer` itself, so calling it off the LVGL context races the
+  list it is deferring onto. Removed from the file browser (an ~90-line
+  `DEBUG: Direct refresh test` block that duplicated `update_file_browser_ui()`
+  and dereferenced a browser that page teardown can free) and from two sample
+  browser paths.
+- **Busy overlay progress/hide are now task-safe** (`requestProgress`/
+  `requestHide`/`service`), and live on the overlay rather than the page that
+  started the load, so a completion still dismisses it after the user navigates
+  away.
+
 ### Added — Voice parameter editing on the keyboard page (digital voice audition, stage 4)
 
 - CUTOFF, RES, ATTACK, DECAY, SUSTAIN and RELEASE are editable from the

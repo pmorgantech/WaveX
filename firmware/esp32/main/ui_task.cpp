@@ -24,6 +24,7 @@
 #include "links/esp_spi_link.h"
 #include "pcnt_task.h"
 #include "ui/ui_api.h"
+#include "ui/ui_busy_overlay.h"
 #include "ui/ui_sample_browser.h"
 #include "ui/ui_screenshot.h"
 
@@ -516,16 +517,25 @@ void UITask::run() {
             }
         }
 #endif
-        // Dispatch queued input events to current context
+        // Dispatch queued input events to current context. onInput handlers
+        // build and restyle widgets (see ui_navigator.cpp's lock guidelines),
+        // so the port lock is held across dispatch rather than left to each
+        // page to remember - the LVGL task renders on the other core and a
+        // handler running unlocked corrupts the object tree. The lock is
+        // recursive, so handlers that take it again (UINavigator::push,
+        // UISettingsPage::rebuildList) are unaffected.
+        LV_LOCK();
         wavex_ui::InputDispatcher::instance().processAll();
+        LV_UNLOCK();
 
         // Debug-build serial screenshots (no-op stub in release; manages
         // its own LVGL locking, so called outside LV_LOCK).
         wavex_screenshot_poll();
 
-        // Process deferred sample browser updates (prevents deadlock from SPI/UART task)
-        // Acquire LVGL lock before processing deferred updates
+        // Apply what the comm callbacks staged. Those run on the UART task and
+        // may only raise flags; this is where the widgets actually change.
         LV_LOCK();
+        wavex_ui::BusyOverlay::service();
         wavex_ui::UISampleBrowser::processDeferredUpdates();
         LV_UNLOCK();
 

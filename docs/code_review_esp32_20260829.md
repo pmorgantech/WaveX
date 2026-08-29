@@ -29,9 +29,9 @@ Two systemic build findings round it out: the `-Os`/LTO compile options in the t
 
 | ID | Sev | Area | Summary |
 |---|---|---|---|
-| [ ] E-LVGL1 | Critical | UI/comm | UART RX task mutates LVGL directly (sample browser status cb, record page wave chunks) |
-| [ ] E-LVGL2 | Critical | UI | Entire input dispatch path (`processAll`, `toggleShift`) runs outside the LVGL lock |
-| [ ] E-LVGL3 | Critical | UI | `lv_async_call` from the UART task; captures can outlive their pages |
+| [x] E-LVGL1 | Critical | UI/comm | UART RX task mutates LVGL directly (sample browser status cb, record page wave chunks) — fixed 2026-08-29 |
+| [x] E-LVGL2 | Critical | UI | Entire input dispatch path (`processAll`, `toggleShift`) runs outside the LVGL lock — fixed 2026-08-29 |
+| [x] E-LVGL3 | Critical | UI | `lv_async_call` from the UART task; captures can outlive their pages — fixed 2026-08-29 |
 | [ ] E-LIFE1 | Critical | comm | `inter_mcu` listener pairs are unsynchronized cross-core globals → torn pair / UAF |
 | [ ] E-LIFE2 | Critical | UI | File browser never unregisters browse/storage listeners on destroy → UAF |
 | [ ] E-LIFE3 | Major | comm | `StatisticsManager` callback pairs half-locked; browse-resp mutex held across UI callback |
@@ -39,7 +39,7 @@ Two systemic build findings round it out: the `-Os`/LTO compile options in the t
 | [ ] E-KEY2 | Critical | input | KEY_EVENT_A bit 7 never masked: press/release inverted, chords impossible |
 | [ ] E-INIT1 | Critical | core | `app_main` returns on failed init, destructing the context under live tasks (UAF) |
 | [ ] E-ENC1 | Major | input | Encoder delta race: interrupt masking as SMP sync + PCNT read-then-clear window |
-| [ ] E-SYNC1 | Major | UI/core | `volatile`/plain-`bool` cross-task handoffs (edit page, sample browser, meter state) |
+| [~] E-SYNC1 | Major | UI/core | `volatile`/plain-`bool` cross-task handoffs — sample browser converted to atomics 2026-08-29; edit page (`volatile`) and `ui_task.h` meter state still open |
 | [ ] E-TICK1 | Major | UI | LVGL time runs at 2×: duplicate 5 ms tick timer |
 | [ ] E-TOUCH1 | Major | UI | Second GT911 instance created on the BSP-owned touch controller, wrong geometry |
 | [ ] E-BRWS1 | Major | UI | Browser tap selects the wrong entry once the list has scrolled |
@@ -82,6 +82,8 @@ The browse/sample-status/wave-chunk/envelope listeners are invoked from the UART
 
 Consequence: LVGL object-tree/heap corruption — the same failure class the codebase's own comments describe as the edit-page freeze (`file_browser.cpp:974`). **Fix**: convert both to the deferred-snapshot-plus-flag pattern already used by `UISampleBrowser::updateStatus()`/`processDeferredUpdates()`, with release/acquire publication (see E-SYNC1).
 
+**Fixed 2026-08-29.** Both converted. The browser stages play-bar percentage, status text, softkey rebuilds and selection metadata behind release/acquire atomics drained in `processDeferredUpdates_()`; its existing plain-`bool` flags were converted to `std::atomic` at the same time (partial E-SYNC1). The record page stages the chunk into a fixed buffer and renders from a 50 ms `lv_timer`. Busy-overlay progress/hide moved into `BusyOverlay::requestProgress`/`requestHide`/`service` so a completion still dismisses the overlay after the user navigates away. Note this does **not** close E-LIFE1/E-LIFE2: the callbacks now write only to page memory rather than to LVGL, but that memory can still be freed underneath them.
+
 ### E-LVGL2 — input dispatch path runs outside the LVGL lock
 
 `main/ui_task.cpp:520` calls `InputDispatcher::instance().processAll()` before `LV_LOCK()` (the lock is taken only for `processDeferredUpdates()` at :528). `ui_navigator.cpp:18` documents the opposite contract ("UIPage::onInput handlers: NEED locks"). Unlocked `lv_*` mutation reached from `onInput`:
@@ -93,12 +95,16 @@ Consequence: LVGL object-tree/heap corruption — the same failure class the cod
 
 **Fix**: the port lock is recursive — take `LV_LOCK()` around `processAll()` in `ui_task.cpp` (and inside `toggleShift`), as `UISettingsPage::rebuildList()` already does correctly. Cheap, fixes four pages at once.
 
+**Fixed 2026-08-29.** `LV_LOCK()` now wraps `processAll()` in `ui_task.cpp`, which covers `toggleShift` and all four pages. Verified safe against deadlock first: `process_rx_frames` routes without holding `s_uart_mutex`, so the lock never nests inside it, and no input handler blocks. The stale lock-usage guidelines at the top of `ui_navigator.cpp` (which claimed `LV_LOCK()` would "compete with LVGL's own lock") were rewritten to state the new invariant.
+
 ### E-LVGL3 — `lv_async_call` from the UART task with freeable captures
 
 - `components/ui/components/file_browser.cpp:1081-1167` — `browse_resp_callback` (UART task) issues `lv_async_call` directly (`lv_async_call` creates an `lv_timer` on LVGL's timer list — itself a cross-task race), and the ~90-line "DEBUG: Direct refresh test - bypass normal update mechanism" lambda duplicates `update_file_browser_ui()` and dereferences `browser`, which E-LIFE2 shows can be freed before the async fires.
 - `src/ui_sample_browser.cpp:468-489` — `directory_changed_callback` (reachable from the UART task) captures `this`; the `is_initialized_` guard itself reads freed memory once the page is popped.
 
 **Fix**: delete the DEBUG block (the deferred path already does the work); never issue `lv_async_call` from non-LVGL context; route page-bound updates through the page's own timer with a pending flag.
+
+**Fixed 2026-08-29.** The DEBUG block is deleted — `browser_set_ui_update()` two lines above it already schedules the real rebuild, so it was pure duplication. `UISampleBrowser::refreshSoftkeys()` and `directory_changed_callback` now raise flags drained by `processDeferredUpdates_()` instead. The remaining `lv_async_call` sites (`ui_menu_page.cpp`, `ui_softkey_bar.cpp`) are in LVGL event context, which is its legitimate use.
 
 ### E-LIFE1 — `inter_mcu` listener pairs: torn reads and a UAF window across cores
 

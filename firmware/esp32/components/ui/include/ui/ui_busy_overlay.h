@@ -47,5 +47,22 @@ void hide();
 /** True while visible. */
 bool isVisible();
 
+/**
+ * @brief setProgress()/hide() equivalents that are safe from any task.
+ *
+ * Progress and completion arrive on the UART RX task, which must not touch
+ * widgets - the LVGL task renders on the other core. These only record the
+ * request; service() applies it on the UI task.
+ *
+ * They live here rather than on the page that started the operation so a
+ * completion still dismisses the overlay after the user has navigated away,
+ * which is exactly when a stuck modal is most confusing.
+ */
+void requestProgress(int percent);
+void requestHide();
+
+/** Apply any pending request. UI task only, with the LVGL lock held. */
+void service();
+
 }  // namespace BusyOverlay
 }  // namespace wavex_ui

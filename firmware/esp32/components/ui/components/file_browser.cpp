@@ -1073,98 +1073,11 @@ static void browse_resp_callback(const uint8_t* data, size_t length, void* user_
 
         ESP_LOGI(TAG, "First page loaded: marking %d entries for UI update", browser->entry_count);
 
-        // Set flag for UI task to process (thread-safe deferred update)
+        // Set flag for UI task to process (thread-safe deferred update). This
+        // runs on the UART task, so the rebuild itself must happen on the UI
+        // task: update_file_browser_ui() picks the flag up under the LVGL lock.
         browser_set_ui_update(browser);
         wavex_ui_mark_content_changed();
-
-        // DEBUG: Direct refresh test - bypass normal update mechanism
-        ESP_LOGI(TAG, "DEBUG: Adding direct refresh via lv_async_call");
-        lv_async_call(
-            [](void* data) {
-                wavex_file_browser_t* b = (wavex_file_browser_t*)data;
-                if (!b || !b->list) {
-                ESP_LOGE(TAG, "DIRECT REFRESH: invalid browser or list");
-                    return;
-                }
-
-                ESP_LOGI(TAG,
-                         "DIRECT REFRESH: list valid=%d, entry_count=%d",
-                         lv_obj_is_valid(b->list) ? 1 : 0,
-                         b->entry_count);
-
-                if (!lv_obj_is_valid(b->list)) {
-                ESP_LOGE(TAG, "DIRECT REFRESH: list object is invalid!");
-                    return;
-                }
-
-                // Clear existing items
-                lv_obj_clean(b->list);
-
-                // Update path label
-                if (b->path_label && lv_obj_is_valid(b->path_label)) {
-                    lv_label_set_text(b->path_label, b->current_path);
-                }
-
-                if (b->entry_count > 0 && b->entries) {
-                    // Calculate which entries to display (scrolling viewport)
-                    uint32_t start_index = b->first_visible_index;
-                    uint32_t end_index = start_index + b->visible_count;
-                    if (end_index > b->entry_count) {
-                        end_index = b->entry_count;
-                    }
-
-                ESP_LOGI(TAG,
-                             "DIRECT REFRESH: adding %d items (start=%d, end=%d)",
-                             end_index - start_index,
-                             start_index,
-                             end_index);
-
-                    // Create list items for visible entries
-                    for (uint32_t i = start_index; i < end_index; i++) {
-                        // Safety check for entry access
-                        if (!b->entries[i].name[0]) {
-                ESP_LOGW(TAG, "DIRECT REFRESH: Skipping empty entry at index %d", i);
-                            continue;
-                        }
-
-                        lv_obj_t* btn = lv_list_add_btn(b->list, NULL, b->entries[i].name);
-                        if (!btn) {
-                ESP_LOGE(
-                                TAG, "DIRECT REFRESH: Failed to create button for entry %d", i);
-                            continue;
-                        }
-
-                        ui_theme_apply_button_style(btn, true);
-                        fb_style_row(btn, &b->entries[i], i == b->selected_index);
-
-                        // Add directory indicator
-                        if (b->entries[i].is_directory) {
-                            lv_obj_t* label = lv_obj_get_child(btn, 0);
-                            if (label) {
-                                char dir_text[64];
-                                snprintf(
-                                    dir_text, sizeof(dir_text), "[DIR] %s", b->entries[i].name);
-                                lv_label_set_text(label, dir_text);
-                            }
-                        }
-
-                        // Store entry index for selection
-                        lv_obj_set_user_data(btn, (void*)(uintptr_t)i);
-                    }
-
-                ESP_LOGI(TAG, "DIRECT REFRESH: successfully added items to list");
-                } else {
-                ESP_LOGI(TAG, "DIRECT REFRESH: no entries to display");
-                    // Show "No files found..." message
-                    lv_obj_t* btn = lv_list_add_btn(b->list, NULL, "No files found...");
-                    ui_theme_apply_button_style(btn, false);
-                    lv_obj_set_style_text_color(btn, UI_COLOR_TEXT, LV_PART_MAIN);
-                    lv_obj_set_style_text_font(btn, UI_FONT_TITLE, LV_PART_MAIN);
-                }
-
-                ESP_LOGI(TAG, "DIRECT REFRESH: completed UI update");
-            },
-            browser);
 
         // Notify directory changed callback
         if (browser->dir_changed_cb) {

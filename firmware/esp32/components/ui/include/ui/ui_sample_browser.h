@@ -10,6 +10,7 @@
 #include "ui_navigator.h"
 #include "ui_page.h"
 
+#include <atomic>
 #include <cstdio>
 #include <cstring>
 #include <memory>
@@ -178,12 +179,31 @@ class UISampleBrowser : public UIPage {
     uint32_t selected_file_index_ = 0;
     char selected_file_path_[96] = {0};
 
-    // Deferred UI update flags (for thread-safe updates from callbacks)
-    bool status_update_pending_ = false;
-    bool metadata_update_pending_ = false;
+    // Deferred UI updates. The producer is the UART RX task (sample-status and
+    // browse callbacks); the consumer is the UI task, which drains these under
+    // the LVGL lock in processDeferredUpdates_(). Widgets must never be touched
+    // from the producer side - the LVGL task renders on the other core.
+    //
+    // The flags are release-stored after their payload is written and
+    // acquire-loaded before it is read, so the consumer cannot see a raised
+    // flag ahead of the data it advertises. Plain bools (or volatile) give no
+    // such ordering on this dual-core part.
+    std::atomic<bool> status_update_pending_{false};
+    std::atomic<bool> metadata_update_pending_{false};
     char pending_status_text_[256] = {0};
     char pending_metadata_text_[512] = {0};
     const wavex_file_entry_t* pending_metadata_entry_ = nullptr;
+
+    // Playback bar position, published as a percentage by the status callback.
+    std::atomic<bool> play_bar_update_pending_{false};
+    std::atomic<int> pending_play_bar_pct_{0};
+
+    // Softkey row needs rebuilding (play/stop labels follow is_playing_).
+    std::atomic<bool> softkey_refresh_pending_{false};
+
+    // Selection metadata should be re-read from the file browser once a
+    // directory listing has landed.
+    std::atomic<bool> selection_metadata_pending_{false};
 
     // State is now managed by the caller (UI navigator) to avoid static globals
 
