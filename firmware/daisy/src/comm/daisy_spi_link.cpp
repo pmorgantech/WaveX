@@ -308,10 +308,19 @@ static daisy::SpiHandle::Result Spi_SendPacket(const uint8_t* tx_buf, size_t pac
     }
 
 #if WAVEX_SPI_DMA_ENABLED
-    if (s_tx_inflight) {
+    // Cross-check BOTH inflight flags: Spi_SendPacket() and Spi_ReceivePacket() drive the same
+    // SPI1 peripheral and share the same s_tx_dma_buf/s_rx_dma_buf DMA buffers (Spi_SendPacket
+    // passes s_rx_dma_buf as its dummy RX target below; Spi_ReceivePacket uses it as the real RX
+    // target). The two paths cannot safely run concurrently, so either flag being set must block
+    // entry here - checking s_tx_inflight alone let a receive in flight clobber the buffers a
+    // send was about to (re)use.
+    if (s_tx_inflight || s_duplex_inflight) {
         if (s_hw)
             WaveX::Log::PrintLine(
-                "Spi_SendPacket: DMA transaction already in flight, returning ERR");
+                "Spi_SendPacket: DMA transaction already in flight (tx=%s, duplex=%s), "
+                "returning ERR",
+                s_tx_inflight ? "true" : "false",
+                s_duplex_inflight ? "true" : "false");
         if (s_hw)
             WaveX::Log::PrintLine("DAISY: Previous transaction started at time=%u, current time=%u",
                                   s_dma_start_time,
@@ -396,7 +405,10 @@ static daisy::SpiHandle::Result Spi_SendPacket(const uint8_t* tx_buf, size_t pac
                 "DAISY: DMA transaction failed to start - result=%d, clearing inflight flag",
                 (int)dma_result);
         s_tx_inflight = false;
-        cs_pin.Write(true);  // Ensure CS is high
+        // Launch failed - spi_dma_end_cb() never ran, so the slot must be freed here or it
+        // stays marked "sending" (2) forever, eventually starving the whole TX pool.
+        s_tx_buffer_states[tx_buffer_idx] = 0;  // Mark as free
+        cs_pin.Write(true);                     // Ensure CS is high
 
         // Provide detailed error information
         const char* error_msg = "Unknown error";
@@ -1102,9 +1114,30 @@ daisy::SpiHandle::Result Spi_ReceivePacket() {
     }
 
 #if WAVEX_SPI_DMA_ENABLED
-    if (s_duplex_inflight) {
+    // Cross-check BOTH inflight flags - see comment in Spi_SendPacket(). This function is also
+    // invoked directly from EXTI15_10_IRQHandler() (ISR context), so a send in progress must
+    // block a receive here just as a receive in progress blocks a send there.
+    if (s_duplex_inflight || s_tx_inflight) {
         if (s_hw)
-            WaveX::Log::PrintLine("Spi_ReceivePacket: Duplex transaction already in flight");
+            WaveX::Log::PrintLine(
+                "Spi_ReceivePacket: DMA transaction already in flight (duplex=%s, tx=%s)",
+                s_duplex_inflight ? "true" : "false",
+                s_tx_inflight ? "true" : "false");
+        return daisy::SpiHandle::Result::ERR;
+    }
+
+    // s_rx_dma_buf is single-buffered. s_packets_ready_for_processing counts DMA payloads that
+    // have completed (incremented in spi_duplex_end_cb) but not yet been copied out into the
+    // s_rx_buffers pool by ProcessQueuedSpiMessage(). If that copy hasn't happened yet, starting
+    // a new DMA here would overwrite the still-unread payload in s_rx_dma_buf. Reject/defer
+    // instead of clobbering it; Spi_PollAttnLevel()/the next EXTI edge will retry.
+    if (s_packets_ready_for_processing > 0) {
+        if (s_hw)
+            WaveX::Log::PrintLine(
+                "Spi_ReceivePacket: previous RX payload not yet consumed (pending=%u) - "
+                "rejecting receive to avoid overwriting s_rx_dma_buf",
+                (unsigned)s_packets_ready_for_processing);
+        s_stats.rx_q_overflows++;
         return daisy::SpiHandle::Result::ERR;
     }
 
