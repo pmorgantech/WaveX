@@ -7,7 +7,7 @@
 
 Findings carry stable IDs (`E-…`) so implementation can be tracked in this file. **Completed items leave this document** — detail goes to `CHANGELOG.md`, matching the roadmap's convention — so what remains here is always the open list. A partially-addressed item keeps its row, marked `[~]`, and says what is left.
 
-**Already remediated** (see `CHANGELOG.md` § Unreleased): E-LVGL1/2/3, the LVGL thread-safety cluster (`21304be`, `222b2b4`); E-LIFE1/2/3, the callback-lifetime cluster (`41f4cdd`); E-KEY1/2, the keypad decode and INT busy-spin (`cdab47d`); E-INIT1; E-BLD1/2, the two misleading build blocks. All fixed 2026-08-29. **E-KEY1/2 and E-ENC1 change hardware behaviour and are the ones most needing a bench pass** — they were diagnosed entirely by reading code and the controller datasheet.
+**Already remediated** (see `CHANGELOG.md` § Unreleased): E-LVGL1/2/3, the LVGL thread-safety cluster (`21304be`, `222b2b4`); E-LIFE1/2/3, the callback-lifetime cluster (`41f4cdd`); E-KEY1/2, the keypad decode and INT busy-spin (`cdab47d`); E-INIT1 and E-BLD1/2 (`f6b7394`); E-TICK1, E-TOUCH1, E-BRWS1 and E-MENU1, the UI correctness batch. All fixed 2026-08-29. **E-KEY1/2 and E-ENC1 change hardware behaviour and are the ones most needing a bench pass** — they were diagnosed entirely by reading code and the controller datasheet.
 
 ---
 
@@ -23,7 +23,7 @@ The debt is concentrated in three themes:
 
 Two systemic build findings rounded it out — ~~inert `-Os`/LTO options added after `project()`, and an `EXCLUDE_COMPONENTS` list that excluded nothing~~. **Fixed 2026-08-29**, and the fix confirmed both diagnoses: a clean rebuild came out within 48 bytes of the old image, which is what it should be if the options really were applying to nothing and the pruned exclusions really were being built anyway.
 
-**Suggested order**: all Criticals are now closed. Next is the UI correctness batch (E-TICK1, E-TOUCH1, E-BRWS1, E-MENU1) — mostly small, independent, and E-TICK1/E-TOUCH1 in particular are deletions of code that duplicates what the BSP already does. Then E-TX1 and E-METER1, then the Minor/Smell batches. E-SYNC1's remaining half (the sample-edit page's `volatile`) is cheap and can ride along with any edit-page work. The SPI findings (§7) do not need fixing now but must gate any re-enable of `WAVEX_SPI_LINK_ENABLED`. **Before any of that, a bench pass on the keypad and encoder** — three fixes now depend on hardware behaviour nobody has watched.
+**Suggested order**: all Criticals and most Majors are closed. What remains in Major is E-TX1 (note-timing jitter, worth doing before sequencer work), E-DIAG1, E-METER1 and E-STOP1. E-METER1 is worth pairing with the `lv_refr_now` question in roadmap § Outstanding hardware verification, since both concern the same duplicated refresh path. Then the Minor/Smell batches. E-SYNC1's remaining half (the sample-edit page's `volatile`) is cheap and can ride along with any edit-page work. The SPI findings (§7) do not need fixing now but must gate any re-enable of `WAVEX_SPI_LINK_ENABLED`. **Before any of that, a bench pass on the keypad and encoder** — three fixes now depend on hardware behaviour nobody has watched.
 
 ---
 
@@ -33,11 +33,7 @@ Two systemic build findings rounded it out — ~~inert `-Os`/LTO options added a
 |---|---|---|---|
 | [~] E-ENC1 | Major | input | Encoder SMP race fixed 2026-08-29 (atomics replace interrupt masking); the read-then-clear window is narrowed from every movement poll to ~1 per 8000 counts, not closed — closing it needs the driver's watch-point ISR and bench time |
 | [~] E-SYNC1 | Major | UI/core | `volatile`/plain-`bool` cross-task handoffs — sample browser converted to atomics 2026-08-29; edit page (`volatile`) and `ui_task.h` meter state still open |
-| [ ] E-TICK1 | Major | UI | LVGL time runs at 2×: duplicate 5 ms tick timer |
-| [ ] E-TOUCH1 | Major | UI | Second GT911 instance created on the BSP-owned touch controller, wrong geometry |
-| [ ] E-BRWS1 | Major | UI | Browser tap selects the wrong entry once the list has scrolled |
 | [ ] E-TX1 | Major | comm | Outbound UART frames wait for the 10 ms poll tick; one frame drained per tick |
-| [ ] E-MENU1 | Major | UI | Menu fallback handler destroys the list mid-event-dispatch |
 | [ ] E-DIAG1 | Major | UI | `malloc` + `vTaskGetRunTimeStats` every 500 ms in the shared esp_timer task |
 | [ ] E-METER1 | Major | core | Orphaned meter pipeline forces continuous full-display refreshes |
 | [ ] E-STOP1 | Major | all | Every `stop()`/teardown API is unsafe (vTaskDelete over held locks / blocked queues) |
@@ -53,7 +49,7 @@ Two systemic build findings rounded it out — ~~inert `-Os`/LTO options added a
 | [ ] E-SDK1 | Minor | build | Watchdog/assert posture: INT WDT 5 s, task WDT off, assertions compiled out |
 | [ ] E-STD1 | Minor | build | C++ standard not pinned anywhere (guide §8 requires it) |
 | [ ] E-VER1 | Minor | core | Duplicate version truth (`version.h` vs root `VERSION`); `__DATE__`/`__TIME__` |
-| [ ] E-DEAD1 | Smell | all | Dead-code batch (grep-verified) incl. `shared_packet_handler` fossil |
+| [~] E-DEAD1 | Smell | all | Dead-code batch — `parse_browse_response` (~85 lines) deleted 2026-08-29 once the compiler confirmed it unused; `shared_packet_handler` fossil and the rest still open |
 | [ ] E-ODR1 | Smell | UI | Duplicate-symbol landmine (`ui_main.cpp`/`ui_api.cpp`); stale `waveform_view.h` copy |
 | [ ] E-ARCH1 | Smell | arch | `components/ui` ⇄ `main` dependency cycle blocks host-testing the UI |
 | [ ] E-TASK1 | Smell | docs | No ESP32 task table; ad-hoc inline priorities/stacks; polling where events belong |
@@ -93,25 +89,9 @@ The repo already contains the correct pattern — `file_browser.cpp:169-186` use
 
 **Fix**: one shared helper implementing the file-browser pattern (`std::atomic` flag with release store/acquire load around a snapshot buffer); use it in all three places; copy metadata out of `entries[]` at publication time.
 
-### E-TICK1 — LVGL time runs at 2×
-
-`src/display_manager.cpp:77,254-268` starts a 5 ms `esp_timer` calling `lv_tick_inc(5)` — but `bsp_display_start_with_config` → `lvgl_port_init` already runs its own 5 ms tick (`esp_lvgl_port.c:293`, default `timer_period_ms = 5` from `ESP_LVGL_PORT_INIT_CONFIG()`, confirmed in `esp_lvgl_port.h:72`). Every animation, `lv_timer` period, long-press threshold, and the BusyOverlay timeout runs at double speed; the edit page's 50 ms service timer effectively runs at 25 ms. `lv_init()` at :115 likewise duplicates lvgl_port's own init. **Fix**: delete `startLvglTick`/`stopLvglTick` and the explicit `lv_init()`.
-
-### E-TOUCH1 — second GT911 driver instance on a BSP-owned controller
-
-`src/display_manager.cpp:76,148-252`: the BSP already created and registered a GT911 indev inside `bsp_display_start_with_config` (`esp32_p4_nano.c:807,816` — verified). `initTouchController` then hard-resets the chip via the RST GPIO while the live indev polls it, creates a second `esp_lcd_touch` handle on the same address with wrong geometry (`x_max=800, y_max=480` on a 720×1280 panel), and registers it nowhere (grep: no `lvgl_port_add_touch`/indev use of `touch_handle_` in first-party code). Dead weight that can glitch working touch during init. **Fix**: delete `initTouchController`.
-
-### E-BRWS1 — tap selects the wrong entry once the list has scrolled
-
-`components/ui/components/file_browser.cpp:604-613`: the click handler derives the entry index by scanning the list's children from 0, but rows are created only for the visible window (starting at `first_visible_index`, cf. the scroll logic at :391-408) and the real entry index is already stored on each button (`lv_obj_set_user_data(btn, (void*)(uintptr_t)i)`, e.g. :1152) — and ignored. Scrolled lists resolve taps to the wrong directory entry (entering the wrong folder / auditioning the wrong sample); the pagination spinner row shifts indices further. **Fix**: `entry_index = (uintptr_t)lv_obj_get_user_data(btn);`.
-
 ### E-TX1 — outbound frames wait for the 10 ms event-poll tick
 
 `main/links/esp_uart_link.cpp:205,263-264`: `uart_link_send()` only enqueues; nothing wakes `uart_task` (it sits in `xQueueReceive(events, 10 ms)`), and at most **one** TX frame is serviced per loop pass. A queued note-on waits up to ~10 ms; a full 8-deep queue drains at ~80 ms. For the sequencer/audition path where note timing is the product, that is audible nondeterministic jitter (guide §10). **Fix**: wake the task on send (post a user event to the same queue, or task notification + wait-on-both) and drain the whole TX queue per wake.
-
-### E-MENU1 — menu fallback activates synchronously during event dispatch
-
-`src/ui_menu_page.cpp:142-155`: the list-level `LV_EVENT_CLICKED` fallback calls `activateSelection()` directly; a menu action pushes a page → `lv_obj_clean(content_)` deletes the list *while its event is being dispatched*. The per-item handler directly above (:104-108) defers via `lv_async_call` with a comment explaining exactly this hazard. The fallback's match condition (checks `LV_OBJ_FLAG_EVENT_BUBBLE`, selecting item *i* regardless of the row hit) is also wrong. **Fix**: delete the fallback or make it defer like the item handler.
 
 ### E-DIAG1 — heavy work in the shared esp_timer task
 

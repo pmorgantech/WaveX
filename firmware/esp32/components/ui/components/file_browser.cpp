@@ -51,6 +51,11 @@ static const char* TAG = "FILE_BROWSER";
 #define FB_COL_DIM lv_color_hex(0x8FA0AA)
 #define FB_COL_META lv_color_hex(0x7F8A90)
 
+// Rows that are not file entries (the spinner, "No files found") carry this in
+// their user_data so a tap on one is ignored rather than resolving to entry 0,
+// which is what an unset user_data would look like.
+static constexpr uint32_t FB_ROW_NOT_AN_ENTRY = UINT32_MAX;
+
 // A spinner row pinned at the end of the list while a page is in flight
 // (design 1b). Deliberately not the modal busy overlay: pagination must not
 // block the list, and the rows already fetched stay usable while it loads.
@@ -70,6 +75,7 @@ static void fb_show_loading_row(wavex_file_browser_t* browser, bool show) {
         return;  // already up
     }
     lv_obj_t* row = lv_obj_create(browser->list);
+    lv_obj_set_user_data(row, (void*)(uintptr_t)FB_ROW_NOT_AN_ENTRY);
     lv_obj_set_size(row, lv_pct(100), FB_ROW_H);
     lv_obj_set_style_bg_color(row, FB_COL_LIST_BG, LV_PART_MAIN);
     lv_obj_set_style_border_width(row, 0, LV_PART_MAIN);
@@ -147,10 +153,6 @@ static void fb_style_row(lv_obj_t* btn, const wavex_file_entry_t* entry, bool se
 // Forward declarations
 static void file_list_event_cb(lv_event_t* e);
 static bool refresh_file_list(wavex_file_browser_t* browser);
-static bool parse_browse_response(const uint8_t* data,
-                                  size_t length,
-                                  wavex_file_entry_t* entries,
-                                  uint32_t* count);
 static bool parse_browse_response_with_pagination(const uint8_t* data,
                                                   size_t length,
                                                   wavex_file_entry_t* entries,
@@ -615,16 +617,18 @@ static void file_list_event_cb(lv_event_t* e) {
         lv_obj_t* list = (lv_obj_t*)lv_event_get_current_target(e);
         lv_obj_t* btn = (lv_obj_t*)lv_event_get_target(e);
 
-        // Find the button index by iterating through the list
-        uint32_t ui_index = 0;
-        lv_obj_t* child = lv_obj_get_child(list, 0);
-        while (child && child != btn) {
-            child = lv_obj_get_child(list, ui_index + 1);
-            ui_index++;
+        // The entry index was stored on the button when the row was built.
+        // Deriving it from the child position instead - which is what this did
+        // - is only correct while the list starts at entry 0: rows exist only
+        // for the visible window starting at first_visible_index, and the
+        // pagination spinner is a child of the same list, so once the user had
+        // scrolled, a tap selected the wrong file (or entered the wrong
+        // directory).
+        (void)list;
+        const uint32_t entry_index = (uint32_t)(uintptr_t)lv_obj_get_user_data(btn);
+        if (entry_index == FB_ROW_NOT_AN_ENTRY) {
+            return;  // spinner or placeholder row
         }
-
-        // Handle ".." entries that come from Daisy
-        uint32_t entry_index = ui_index;
 
         if (entry_index < browser->entry_count) {
             const wavex_file_entry_t* entry = &browser->entries[entry_index];
@@ -707,93 +711,6 @@ static bool refresh_file_list(wavex_file_browser_t* browser) {
         ESP_LOGI(TAG, "Sent browse request for page 0, waiting for response...");
         return true;
     }
-}
-
-// Parse browse response from Daisy using payload format (not full packet)
-static bool parse_browse_response(const uint8_t* data,
-                                  size_t length,
-                                  wavex_file_entry_t* entries,
-                                  uint32_t* count) {
-    if (!data || length < sizeof(BrowseRespHeader)) {
-        ESP_LOGE(TAG,
-                 "Browse response payload too short: %d bytes (need at least %d)",
-                 (int)length,
-                 (int)sizeof(BrowseRespHeader));
-        *count = 0;
-        return false;
-    }
-
-    // Parse payload directly: BrowseRespHeader + FileEntryWire entries
-    const BrowseRespHeader* browse_header = (const BrowseRespHeader*)data;
-    uint32_t total_count = browse_header->total_count;
-    uint8_t n_entries = browse_header->n;
-
-    ESP_LOGI(TAG,
-             "Browse response: total_count=%lu, n_entries=%u",
-             (unsigned long)total_count,
-             n_entries);
-
-    // Debug: Show raw payload data
-    ESP_LOGI(TAG, "Raw payload (first 64 bytes):");
-    for (int i = 0; i < 64 && i < (int)length; i++) {
-        if (i % 16 == 0)
-            ESP_LOGI(TAG, "");
-        ESP_LOGI(TAG, "%02X ", data[i]);
-    }
-    ESP_LOGI(TAG, "");
-
-    // Validate we have enough data for the header + entries
-    size_t expected_size = sizeof(BrowseRespHeader) + (n_entries * sizeof(FileEntryWire));
-    if (length < expected_size) {
-        ESP_LOGE(TAG,
-                 "Browse response payload too short: got %d bytes, expected %d",
-                 (int)length,
-                 (int)expected_size);
-        *count = 0;
-        return false;
-    }
-
-    // Parse file entries
-    uint32_t parsed_count = 0;
-    const FileEntryWire* wire_entries = (const FileEntryWire*)(data + sizeof(BrowseRespHeader));
-
-    ESP_LOGI(TAG, "Starting file entry parsing: n_entries=%u, max_count=%u", n_entries, *count);
-
-    for (uint8_t i = 0; i < n_entries && parsed_count < *count; i++) {
-        const FileEntryWire* wire = &wire_entries[i];
-
-        ESP_LOGI(TAG,
-                 "Parsing entry %d: is_dir=%d, size=%lu, name='%.50s'",
-                 i,
-                 wire->is_dir,
-                 (unsigned long)wire->size_bytes,
-                 wire->name);
-
-        // Copy to our file entry structure
-        wavex_file_entry_t* entry = &entries[parsed_count++];
-        entry->is_directory = wire->is_dir != 0;
-        entry->size_bytes = wire->size_bytes;
-        strncpy(entry->name, wire->name, sizeof(entry->name) - 1);
-        entry->name[sizeof(entry->name) - 1] = '\0';
-
-        // Create full path - for now just use the name, full path will be constructed when needed
-        strncpy(entry->path, entry->name, sizeof(entry->path) - 1);
-        entry->path[sizeof(entry->path) - 1] = '\0';
-
-        // DEBUG, not INFO: this runs once per entry inside the browse callback,
-        // which is now invoked with the listener mutex held. At 115200 baud a
-        // 20-entry page of INFO lines is a few hundred ms of console-blocked
-        // time, and a page deregistering in onExit would wait all of it.
-        ESP_LOGD(TAG,
-                 "Parsed entry %d: '%s' (%s) - %lu bytes",
-                 i,
-                 entry->name,
-                 entry->is_directory ? "DIR" : "FILE",
-                 (unsigned long)entry->size_bytes);
-    }
-
-    *count = parsed_count;
-    return true;
 }
 
 // Parse browse response with pagination information using payload format
@@ -1253,6 +1170,7 @@ static void update_file_browser_ui(wavex_file_browser_t* browser) {
     } else if (browser->entry_count == 0 && browser->pagination_in_progress == false) {
         // Show "No files found..." message (pagination complete but no entries)
         lv_obj_t* btn = lv_list_add_btn(browser->list, NULL, "No files found...");
+        lv_obj_set_user_data(btn, (void*)(uintptr_t)FB_ROW_NOT_AN_ENTRY);
         ui_theme_apply_button_style(btn, false);
         lv_obj_set_style_text_color(btn, UI_COLOR_TEXT, LV_PART_MAIN);
         lv_obj_set_style_text_font(btn, &lv_font_montserrat_18, LV_PART_MAIN);
@@ -1261,6 +1179,7 @@ static void update_file_browser_ui(wavex_file_browser_t* browser) {
         // Error state - show error message (entry_count is 0 but pagination not in progress =
         // error)
         lv_obj_t* btn = lv_list_add_btn(browser->list, NULL, "Error loading files");
+        lv_obj_set_user_data(btn, (void*)(uintptr_t)FB_ROW_NOT_AN_ENTRY);
         ui_theme_apply_button_style(btn, false);
         lv_obj_set_style_text_color(btn, UI_COLOR_TEXT, LV_PART_MAIN);
         lv_obj_set_style_text_font(btn, &lv_font_montserrat_18, LV_PART_MAIN);

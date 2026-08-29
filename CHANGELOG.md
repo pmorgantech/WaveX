@@ -11,6 +11,40 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Fixed — UI correctness: LVGL tick, touch driver, browser taps and menu activation
+
+Found by the 2026-08-29 ESP32-P4 review (items E-TICK1, E-TOUCH1, E-BRWS1,
+E-MENU1). The first two are deletions of code that duplicated what the BSP and
+`esp_lvgl_port` already do.
+
+- **LVGL time no longer runs at double speed.** `DisplayManager` ran its own
+  5 ms `esp_timer` calling `lv_tick_inc(5)` while `lvgl_port_init()` was already
+  running one. Every animation, `lv_timer` period, long-press threshold and
+  overlay timeout was firing twice as fast as written — the sample edit page's
+  50 ms service timer was effectively 25 ms. The redundant `lv_init()` went with
+  it; the LVGL log callback moved after the port's init, since `lv_init()` zeroes
+  the global that holds it.
+- **Removed the second GT911 touch driver.** The BSP already creates and
+  registers the touch indev, so `initTouchController()` was hard-resetting the
+  controller over the RST line *while the live indev polled it*, then creating a
+  second driver on the same I2C address configured with the wrong panel geometry
+  (800×480 on a 720×1280 panel). The second handle was registered nowhere.
+- **A browser tap selects the row you touched.** The click handler derived the
+  entry index by counting the list's children, but rows exist only for the
+  visible window, so once the list had scrolled a tap opened the wrong directory
+  or auditioned the wrong file. It now reads the index stored on the row when it
+  was built. Non-entry rows (the pagination spinner, "No files found") are
+  tagged so a tap on one is ignored rather than selecting entry 0.
+- **The menu list fallback no longer destroys the list mid-dispatch.** It called
+  `activateSelection()` synchronously, and activating pushes a page, which
+  `lv_obj_clean()`s the list while its own event is still being dispatched — the
+  hazard the per-item handler right above it defers around. Its match condition
+  was also wrong: it accepted any target with `LV_OBJ_FLAG_EVENT_BUBBLE`, true of
+  any bubbling child, so it selected item 0 regardless of what was pressed.
+
+Also deleted `parse_browse_response` (~85 lines), which the compiler confirmed
+unused once the surrounding changes landed; the build is warning-free again.
+
 ### Fixed — Startup failure now restarts instead of corrupting itself; build files no longer misdescribe the image
 
 Found by the 2026-08-29 ESP32-P4 review (items E-INIT1, E-BLD1, E-BLD2).

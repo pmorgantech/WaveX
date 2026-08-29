@@ -143,14 +143,21 @@ void UIMenuPage::list_event_cb(lv_event_t* e) {
     auto* self = static_cast<UIMenuPage*>(lv_event_get_user_data(e));
     lv_obj_t* target = static_cast<lv_obj_t*>(lv_event_get_target(e));
 
-    // As a fallback, try to map the clicked object to a list item
+    // Fallback for a click that reached the list rather than an item. Only an
+    // exact match counts: the previous version also accepted any target with
+    // LV_OBJ_FLAG_EVENT_BUBBLE set, which is true of the bubbling child of any
+    // row, so it selected whichever index the loop happened to be on - item 0
+    // in practice, regardless of what was pressed.
     for (int i = 0; i < (int)self->items_.size(); ++i) {
-        lv_obj_t* item = lv_obj_get_child(self->list_, i);
-        if (item == target || lv_obj_has_flag(target, LV_OBJ_FLAG_EVENT_BUBBLE)) {
-            self->selected_ = i;
-            self->activateSelection();
-            break;
+        if (lv_obj_get_child(self->list_, i) != target) {
+            continue;
         }
+        self->selected_ = i;
+        // Deferred for the same reason as the per-item handler above:
+        // activating pushes a page, which lv_obj_clean()s this list while its
+        // own event is still being dispatched.
+        lv_async_call([](void* ud) { static_cast<UIMenuPage*>(ud)->activateSelection(); }, self);
+        break;
     }
 }
 
