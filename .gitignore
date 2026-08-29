@@ -105,3 +105,7 @@ node_modules/
 
 # Serial logs from scripts/serial_log.py (make logs-start)
 /logs/
+
+# ui_preview host build + renders
+tools/ui_preview/build/
+tools/ui_preview/out/

@@ -145,6 +145,17 @@ versioning and release process.
   `x_max=800, y_max=480` configured against a 720×1280 panel; flagged for
   corner-tap verification rather than a blind fix.
 
+### Added — Off-host UI preview harness (tools/ui_preview)
+
+- Compiles the same vendored LVGL 9.4 the firmware uses for the host and
+  renders WaveX screens to BMP at the logical 1280×720 — same fonts, palette
+  and chrome geometry as the device, no hardware or serial dump needed.
+  Renders a replica of the current diagnostics page plus proposed tabbed
+  diagnostics and sample-browser designs, for iterating with design tools.
+- These are previews for design work, not captures of the firmware pages
+  (those depend on ESP-IDF services; compiling them against the existing test
+  mocks is the natural next step).
+
 ### Added — Daisy development and audition tooling
 
 - Added software-triggered Daisy DFU entry (`make daisy-flash-auto`), serial
