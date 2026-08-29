@@ -124,7 +124,7 @@ neither `MSG_DIAG_PUSH` nor `WAVEX_DAISY_UART_PERF_DEBUG`.
 
 ---
 
-## B5. Sample browser not yet ported to the wireframe
+## B5. Sample browser not yet ported to the wireframe — **moved to roadmap Phase 1.5.3**
 
 The only screen from the design that has not been touched. The page's own
 layout is about 40 lines, but the file list rows live in the shared
@@ -152,7 +152,7 @@ gated; or accept the timing cost permanently now that we have a number for it.
 
 ---
 
-## B7. Sample edit assumes a 48 kHz, 48000-frame sample
+## B7. Sample edit assumes a 48 kHz, 48000-frame sample — **moved to roadmap Phase 1.5.1**
 
 `kSampleFrames = 48000` and `formatFrames()`'s hard-coded 48 kHz are
 placeholders: nothing tells the frontend how long the loaded sample actually
@@ -164,7 +164,7 @@ Until then the labels say "at 48k" rather than implying a measured duration.
 
 ---
 
-## B8. No busy feedback for long operations (requested)
+## B8. No busy feedback for long operations (requested) — **moved to roadmap Phase 1.5.4**
 
 **Reported:** loading a sample looks like a freeze — nothing indicates work is
 in progress.
@@ -197,7 +197,20 @@ covers pagination specifically and is cheaper than a modal.
 
 ## B9. Unverified / needs a look
 
-**All four fixes above are unverified on hardware.** B1 in particular was
+## B10. Encoder direction was inverted on the sample edit page — **FIXED**
+
+`InputEvent::delta` is already signed *and* the event type names the sign, so
+negating it in the Left/Down branch flipped it back to positive: turning
+counter-clockwise increased the value. The sample browser gets this right by
+taking the magnitude and letting the event type supply direction; the edit
+page now does the same.
+
+Promoted to a cross-cutting rule in the roadmap, because the next page to read
+`delta` can make the identical mistake.
+
+---
+
+**All fixes above are unverified on hardware.** B1 in particular was
 diagnosed by reading the code, and B9 notes that Audio/Storage blankness is
 attributed to it but not proven to be only it.
 
