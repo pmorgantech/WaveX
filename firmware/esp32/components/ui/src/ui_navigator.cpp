@@ -1,11 +1,14 @@
 // WaveX UI Navigation Manager Implementation
 #include "ui/ui_navigator.h"
-#include "../styles/ui_theme.h"
+
 #include <esp_log.h>
+
+#include "../styles/ui_theme.h"
 #include "esp_lvgl_port.h"
+#include "ui/ui_status_strip.h"
 
 // LVGL locking macros
-#define LV_LOCK()   lvgl_port_lock(portMAX_DELAY)
+#define LV_LOCK() lvgl_port_lock(portMAX_DELAY)
 #define LV_UNLOCK() lvgl_port_unlock()
 
 // LVGL Lock Usage Guidelines:
@@ -49,9 +52,14 @@ void UINavigator::push(std::shared_ptr<UIPage> page) {
         lv_obj_set_style_text_font(title_label_, UI_FONT_HEADER, LV_PART_MAIN);
         lv_obj_center(title_label_);
 
+        // Output meters and engine CPU live in the header so they are visible
+        // from every page, not just diagnostics.
+        statusStripCreate(header_);
+
         // Content area fills between header and softkeys (we create softkeys later)
         content_ = lv_obj_create(screen_);
-        lv_obj_set_size(content_, lv_pct(100), lv_pct(100)); // temporary; corrected after softkey create
+        lv_obj_set_size(
+            content_, lv_pct(100), lv_pct(100));  // temporary; corrected after softkey create
         lv_obj_set_style_bg_color(content_, UI_COLOR_CONTENT, LV_PART_MAIN);
         lv_obj_set_style_border_width(content_, 0, LV_PART_MAIN);
         lv_obj_align(content_, LV_ALIGN_TOP_LEFT, 0, UI_HEADER_HEIGHT);
@@ -157,4 +165,4 @@ void UINavigator::refreshSoftkeys() {
     softkeyBar_.setSoftkeys(active_->getSoftkeys());
 }
 
-} // namespace wavex_ui
+}  // namespace wavex_ui

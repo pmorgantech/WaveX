@@ -21,6 +21,7 @@ set(COMPONENT_SRCS
     "src/ui_sample_detail.cpp"
     "src/ui_settings_page.cpp"
     "src/ui_softkey_bar.cpp"
+    "src/ui_status_strip.cpp"
     "src/ui_sample_browser.cpp"
     "src/ui_sample_memory_page.cpp"
     "pages/ui_sample_record_page.cpp"
