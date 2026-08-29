@@ -22,10 +22,15 @@
 #define UI_COLOR_TEXT lv_color_make(0xFF, 0xFF, 0xFF)            // White
 #define UI_COLOR_BUTTON lv_color_make(0x21, 0x96, 0xF3)          // Blue
 #define UI_COLOR_BUTTON_PRESSED lv_color_make(0x19, 0x76, 0xD2)  // Darker blue
-#define UI_COLOR_BUTTON_BORDER lv_color_make(0x15, 0x65, 0xC0)   // Darker blue
-#define UI_COLOR_SELECTED lv_color_make(0x4C, 0xAF, 0x50)        // Green
-#define UI_COLOR_METER lv_color_make(0x4C, 0xAF, 0x50)           // Green
-#define UI_COLOR_PEAK lv_color_make(0xFF, 0x57, 0x22)            // Orange
+// Shifted softkey row: amber, deliberately far from the blue of the normal row
+// so which row is showing reads at a glance rather than needing the indicator.
+#define UI_COLOR_BUTTON_SHIFTED lv_color_make(0xFF, 0x98, 0x00)   // Amber
+#define UI_COLOR_BUTTON_DISABLED lv_color_make(0x24, 0x28, 0x2C)  // Inert slate
+#define UI_COLOR_TEXT_DISABLED lv_color_make(0x6A, 0x74, 0x7C)    // Muted grey
+#define UI_COLOR_BUTTON_BORDER lv_color_make(0x15, 0x65, 0xC0)    // Darker blue
+#define UI_COLOR_SELECTED lv_color_make(0x4C, 0xAF, 0x50)         // Green
+#define UI_COLOR_METER lv_color_make(0x4C, 0xAF, 0x50)            // Green
+#define UI_COLOR_PEAK lv_color_make(0xFF, 0x57, 0x22)             // Orange
 
 // Font definitions
 #define UI_FONT_NORMAL &lv_font_montserrat_18

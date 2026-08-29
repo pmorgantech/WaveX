@@ -1,14 +1,14 @@
 #include "ui/tca8418_keypad.h"
+
+#include "bsp/esp32_p4_nano.h"
+#include "config/hardware_config.h"
+#include "driver/gpio.h"
+#include "esp_check.h"
+#include "esp_log.h"
+#include "esp_timer.h"
+#include "pin_config.h"
 #include "ui/input_dispatcher.h"
 #include "ui/input_event.h"
-#include "esp_log.h"
-#include "esp_check.h"
-#include "driver/gpio.h"
-#include "esp_timer.h"
-#include "bsp/esp32_p4_nano.h"
-#include "pin_config.h"
-
-#include "config/hardware_config.h"
 #if defined(ESP_PLATFORM) && WAVEX_ESP_BUTTON_MATRIX_ENABLED
 #include "esp_tca8418.hxx"
 #endif
@@ -27,15 +27,23 @@ static uint8_t map_keycode_to_button(uint8_t keycode) {
     // Keycode per TCA8418: 1..80 => R/C encoded; adjust as needed
     // Example: return 1 for Select, 2 for Back, 3 for EncoderClick
     switch (keycode) {
-        case 1: return 1; // Select
-        case 2: return 2; // Back
-        case 3: return 3; // EncoderClick
-        default: return 0; // Unknown
+        case 1:
+            return 1;  // Select
+        case 2:
+            return 2;  // Back
+        case 3:
+            return 3;  // EncoderClick
+        case 4:
+            return 4;  // Shift (BUTTON_SHIFT) - reveals the alternate
+                       // softkey row; handled globally in InputDispatcher
+        default:
+            return 0;  // Unknown
     }
 }
 
 static void post_button(bool pressed, uint8_t button_id) {
-    if (button_id == 0) return;
+    if (button_id == 0)
+        return;
     InputEvent evt{};
     evt.type = pressed ? InputType::ButtonPress : InputType::ButtonRelease;
     evt.source_id = button_id;
@@ -72,14 +80,14 @@ static void keypad_task(void* arg) {
                 if (last_keycode != 0) {
                     uint8_t button = map_keycode_to_button(last_keycode);
                     if (button != 0) {
-                        post_button(false, button); // Release
+                        post_button(false, button);  // Release
                     }
                 }
                 // Press new key if valid
                 if (keycode != 0) {
                     uint8_t button = map_keycode_to_button(keycode);
                     if (button != 0) {
-                        post_button(true, button); // Press
+                        post_button(true, button);  // Press
                     }
                 }
                 last_keycode = keycode;
@@ -90,7 +98,8 @@ static void keypad_task(void* arg) {
 }
 
 esp_err_t tca8418_keypad_start(int int_gpio, uint8_t i2c_addr) {
-    if (s_task) return ESP_OK;
+    if (s_task)
+        return ESP_OK;
 
     // Use BSP I2C bus (shared with touch per pin_config)
     i2c_master_bus_handle_t i2c = bsp_i2c_get_handle();
@@ -129,13 +138,14 @@ esp_err_t tca8418_keypad_start(int int_gpio, uint8_t i2c_addr) {
     }
 
     // Start task
-    BaseType_t ok = xTaskCreatePinnedToCore(keypad_task, "tca8418_task", 4096, nullptr, 5, &s_task, 1);
+    BaseType_t ok =
+        xTaskCreatePinnedToCore(keypad_task, "tca8418_task", 4096, nullptr, 5, &s_task, 1);
     if (ok != pdPASS) {
         ESP_LOGE(TAG, "Failed to create keypad task");
-        #if defined(ESP_PLATFORM) && WAVEX_ESP_BUTTON_MATRIX_ENABLED
+#if defined(ESP_PLATFORM) && WAVEX_ESP_BUTTON_MATRIX_ENABLED
         delete s_dev;
         s_dev = nullptr;
-        #endif
+#endif
         return ESP_FAIL;
     }
     return ESP_OK;
@@ -146,16 +156,14 @@ esp_err_t tca8418_keypad_stop() {
         vTaskDelete(s_task);
         s_task = nullptr;
     }
-    #if defined(ESP_PLATFORM) && WAVEX_ESP_BUTTON_MATRIX_ENABLED
+#if defined(ESP_PLATFORM) && WAVEX_ESP_BUTTON_MATRIX_ENABLED
     if (s_dev) {
         delete s_dev;
         s_dev = nullptr;
     }
-    #endif
+#endif
     s_int_gpio = GPIO_NUM_NC;
     return ESP_OK;
 }
 
-} // namespace wavex_ui
-
-
+}  // namespace wavex_ui

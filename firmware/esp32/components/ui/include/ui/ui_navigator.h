@@ -62,6 +62,25 @@ class UINavigator {
      */
     size_t depth() const { return stack_.size(); }
 
+    /**
+     * @brief Shift modifier: reveals the active page's alternate softkey row.
+     *
+     * Latched, not held. A touch panel makes hold-and-press awkward with one
+     * hand, and holding a physical key while turning the encoder is worse. It
+     * is *sticky*: it clears itself after one shifted key is used, so it
+     * cannot be left on by accident, which is the usual failure of a plain
+     * toggle.
+     */
+    void toggleShift();
+    void setShift(bool on);
+    bool isShifted() const { return shifted_; }
+
+    /** True if the active page actually defines an alternate row. */
+    bool activePageHasShiftedKeys() const;
+
+    /** Called by the softkey bar after a shifted key fires, to unstick Shift. */
+    void notifySoftkeyUsed();
+
    private:
     UINavigator() = default;
     ~UINavigator() = default;
@@ -70,6 +89,13 @@ class UINavigator {
     lv_obj_t* header_ = nullptr;
     lv_obj_t* title_label_ = nullptr;
     lv_obj_t* content_ = nullptr;
+    lv_obj_t* shift_chip_ = nullptr;
+    lv_obj_t* shift_label_ = nullptr;
+    bool shifted_ = false;
+
+    void buildShiftChip();
+    void refreshShiftChip();
+    static void shiftChipEventCb(lv_event_t* e);
     std::stack<std::shared_ptr<UIPage>> stack_;
     std::shared_ptr<UIPage> active_;
     SoftkeyBar softkeyBar_;

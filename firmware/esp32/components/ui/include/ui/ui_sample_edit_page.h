@@ -31,6 +31,7 @@ class UISampleEditPage : public UIPage {
     void onExit() override;
     void onInput(const InputEvent& evt) override;
     std::array<Softkey, NUM_SOFTKEYS> getSoftkeys() override;
+    std::array<Softkey, NUM_SOFTKEYS> getShiftedSoftkeys() override;
 
    private:
     // Encoder-focusable parameters, in the order the strip shows them.
@@ -71,6 +72,7 @@ class UISampleEditPage : public UIPage {
     uint32_t end_frame_ = 0;
     uint32_t window_frames_ = 0;  // zoom: how much of the sample the view spans
     uint8_t focus_ = PARAM_START;
+    bool auditioning_ = false;
 
     static void waveChunkStatic(uint32_t offset,
                                 const int16_t* samples,
@@ -85,6 +87,7 @@ class UISampleEditPage : public UIPage {
     static void uiTimerCb(lv_timer_t* t);
     void serviceUi();
 
+    void toggleAudition();
     void adjustFocused(int steps);
     void setZoom(int direction);
     void refreshParams();

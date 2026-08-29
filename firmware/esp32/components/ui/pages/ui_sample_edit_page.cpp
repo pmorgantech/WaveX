@@ -194,6 +194,10 @@ void UISampleEditPage::onExit() {
     // Unregister first. Deleting the timer or the widgets while a chunk can
     // still arrive would leave the RX task writing through a freed page.
     inter_mcu_set_wave_chunk_listener(nullptr, nullptr);
+    if (auditioning_) {
+        inter_mcu_send_sample_stop_req();
+        auditioning_ = false;
+    }
     if (ui_timer_) {
         lv_timer_delete(ui_timer_);
         ui_timer_ = nullptr;
@@ -240,27 +244,63 @@ void UISampleEditPage::onInput(const InputEvent& evt) {
 std::array<Softkey, NUM_SOFTKEYS> UISampleEditPage::getSoftkeys() {
     std::array<Softkey, NUM_SOFTKEYS> keys{};
     keys[0] = {"Back", []() { UINavigator::instance().pop(); }};
-    // Audition replays the whole file: MSG_SAMPLE_PLAY_INDEX_REQ carries no
-    // range, so the region below is not honoured by playback yet.
-    keys[1] = {"Audition", [this]() {
-                   auto* state = getSampleBrowserState();
-                   if (!state) {
-                       return;
-                   }
-                   if (inter_mcu_send_sample_play_index_req(state->selected_file_index) == ESP_OK) {
-                       refreshStatus("Auditioning whole file (range not sent - no protocol)");
-                   } else {
-                       refreshStatus("Audition request failed");
-                   }
-               }};
+    // Toggles to Stop while playing, matching the sample browser. Two keys for
+    // one mutually-exclusive action would waste a slot on a row that is
+    // already short.
+    keys[1] = {auditioning_ ? "Stop" : "Audition", [this]() { toggleAudition(); }};
     keys[2] = {"Zoom -", [this]() { setZoom(-1); }};
     keys[3] = {"Zoom +", [this]() { setZoom(1); }};
-    keys[4] = {"Param >", [this]() {
+    keys[4] = {"< Param", [this]() {
+                   focus_ = static_cast<uint8_t>((focus_ + PARAM_COUNT - 1) % PARAM_COUNT);
+                   refreshFocusRing();
+               }};
+    keys[5] = {"Param >", [this]() {
                    focus_ = static_cast<uint8_t>((focus_ + 1) % PARAM_COUNT);
                    refreshFocusRing();
                }};
-    keys[5] = {"Refresh", [this]() { requestWaveform(); }};
     return keys;
+}
+
+// Shifted row: the file- and parameter-level operations. All of these need
+// protocol work that does not exist yet (roadmap Phase 1.5.1), so they are
+// present but disabled with the reason attached - a key that silently does
+// nothing is worse than one that says why it cannot.
+std::array<Softkey, NUM_SOFTKEYS> UISampleEditPage::getShiftedSoftkeys() {
+    std::array<Softkey, NUM_SOFTKEYS> keys{};
+    keys[0] = {"Select", nullptr, false, "no sample picker yet"};
+    keys[1] = {"Loop", nullptr, false, "needs loop-point protocol"};
+    keys[2] = {"Gain", nullptr, false, "needs per-sample gain protocol"};
+    keys[3] = {"Save", nullptr, false, "needs marker persistence"};
+    keys[4] = {"Save As", nullptr, false, "needs filename entry"};
+    keys[5] = {"Reset", [this]() {
+                   start_frame_ = 0;
+                   end_frame_ = window_frames_;
+                   params_dirty_ = true;
+               }};
+    return keys;
+}
+
+void UISampleEditPage::toggleAudition() {
+    auto* state = getSampleBrowserState();
+    if (!state) {
+        return;
+    }
+    if (auditioning_) {
+        if (inter_mcu_send_sample_stop_req() == ESP_OK) {
+            auditioning_ = false;
+            refreshStatus("Stopped");
+        } else {
+            refreshStatus("Stop request failed");
+        }
+    } else {
+        if (inter_mcu_send_sample_play_index_req(state->selected_file_index) == ESP_OK) {
+            auditioning_ = true;
+            refreshStatus("Auditioning whole file (range not sent - no protocol)");
+        } else {
+            refreshStatus("Audition request failed");
+        }
+    }
+    UINavigator::instance().refreshSoftkeys();
 }
 
 void UISampleEditPage::adjustFocused(int steps) {

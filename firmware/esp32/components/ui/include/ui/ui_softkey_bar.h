@@ -27,7 +27,7 @@ class SoftkeyBar {
      * @brief Update softkey labels and callbacks
      * @param keys Array of 6 softkey definitions
      */
-    void setSoftkeys(const std::array<Softkey, NUM_SOFTKEYS>& keys);
+    void setSoftkeys(const std::array<Softkey, NUM_SOFTKEYS>& keys, bool shifted = false);
 
     /**
      * @brief Get the container object

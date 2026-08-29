@@ -55,6 +55,7 @@ void UINavigator::push(std::shared_ptr<UIPage> page) {
         // Output meters and engine CPU live in the header so they are visible
         // from every page, not just diagnostics.
         statusStripCreate(header_);
+        buildShiftChip();
 
         // Content area fills between header and softkeys (we create softkeys later)
         content_ = lv_obj_create(screen_);
@@ -78,6 +79,9 @@ void UINavigator::push(std::shared_ptr<UIPage> page) {
     // Push new page onto stack
     stack_.push(page);
     active_ = page;
+    // Shift does not survive navigation - the next page's alternate row is a
+    // different set of actions, and arriving already shifted is surprising.
+    shifted_ = false;
 
     // Clear content area only and create new page content
     LV_LOCK();
@@ -96,6 +100,7 @@ void UINavigator::push(std::shared_ptr<UIPage> page) {
     LV_LOCK();
     softkeyBar_.create(screen_);
     softkeyBar_.setSoftkeys(page->getSoftkeys());
+    refreshShiftChip();
 
     // Compute content height: full screen minus header and softkey heights
     const int16_t total_h = lv_obj_get_height(lv_screen_active());
@@ -142,7 +147,9 @@ void UINavigator::pop() {
         // Update softkey bar and layout
         LV_LOCK();
         softkeyBar_.create(screen_);
+        shifted_ = false;  // see push(): Shift does not survive navigation
         softkeyBar_.setSoftkeys(prev->getSoftkeys());
+        refreshShiftChip();
 
         const int16_t total_h = lv_obj_get_height(lv_screen_active());
         const int16_t content_h = total_h - UI_HEADER_HEIGHT - UI_HOTKEY_HEIGHT;
@@ -162,7 +169,93 @@ void UINavigator::refreshSoftkeys() {
     // NOTE: This function should only be called from LVGL context (where lock is already held)
     // or via lv_async_call(). If called from non-LVGL context, use lv_async_call.
     // DO NOT call with LV_LOCK() - it will compete with LVGL's own lock.
-    softkeyBar_.setSoftkeys(active_->getSoftkeys());
+    const bool shifted = shifted_ && activePageHasShiftedKeys();
+    softkeyBar_.setSoftkeys(shifted ? active_->getShiftedSoftkeys() : active_->getSoftkeys(),
+                            shifted);
+    refreshShiftChip();
+}
+
+bool UINavigator::activePageHasShiftedKeys() const {
+    if (!active_) {
+        return false;
+    }
+    // A page opts in by returning at least one labelled key. Anything else is
+    // "no alternates", and Shift then leaves the row alone instead of blanking
+    // it - pressing Shift on a page that does not use it should do nothing,
+    // not strand the user with six empty buttons.
+    for (const auto& k: active_->getShiftedSoftkeys()) {
+        if (!k.label.empty()) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void UINavigator::setShift(bool on) {
+    if (shifted_ == on) {
+        return;
+    }
+    shifted_ = on;
+    refreshSoftkeys();
+}
+
+void UINavigator::toggleShift() {
+    setShift(!shifted_);
+}
+
+void UINavigator::notifySoftkeyUsed() {
+    // Sticky: one shifted action, then back to the normal row. A plain toggle
+    // gets left on and the next press does the wrong thing.
+    if (shifted_) {
+        setShift(false);
+    }
+}
+
+void UINavigator::buildShiftChip() {
+    if (!header_) {
+        return;
+    }
+    // Left of the header. The title is centred and the meters are anchored
+    // right, so this corner is the only free space in the chrome.
+    shift_chip_ = lv_btn_create(header_);
+    lv_obj_set_size(shift_chip_, 104, 44);
+    lv_obj_set_pos(shift_chip_, 12, 16);
+    lv_obj_set_style_radius(shift_chip_, 4, 0);
+    lv_obj_set_style_border_width(shift_chip_, 1, 0);
+
+    shift_label_ = lv_label_create(shift_chip_);
+    lv_label_set_text(shift_label_, "SHIFT");
+    lv_obj_set_style_text_font(shift_label_, &lv_font_montserrat_18, 0);
+    lv_obj_center(shift_label_);
+
+    lv_obj_add_event_cb(shift_chip_, shiftChipEventCb, LV_EVENT_CLICKED, this);
+    refreshShiftChip();
+}
+
+void UINavigator::refreshShiftChip() {
+    if (!shift_chip_ || !lv_obj_is_valid(shift_chip_)) {
+        return;
+    }
+    const bool available = activePageHasShiftedKeys();
+    const bool on = shifted_ && available;
+
+    lv_obj_set_style_bg_color(
+        shift_chip_, on ? UI_COLOR_BUTTON_SHIFTED : UI_COLOR_BUTTON_DISABLED, LV_PART_MAIN);
+    lv_obj_set_style_border_color(
+        shift_chip_, on ? UI_COLOR_BUTTON_SHIFTED : UI_COLOR_BORDER, LV_PART_MAIN);
+    // Dimmed rather than hidden on pages with no alternates: a control that
+    // disappears and reappears as you navigate is harder to learn than one
+    // that is always there and sometimes inert.
+    lv_obj_set_style_text_color(
+        shift_label_, available ? UI_COLOR_TEXT : UI_COLOR_TEXT_DISABLED, LV_PART_MAIN);
+    lv_obj_set_style_opa(shift_chip_, available ? LV_OPA_COVER : LV_OPA_60, LV_PART_MAIN);
+}
+
+void UINavigator::shiftChipEventCb(lv_event_t* e) {
+    auto* self = static_cast<UINavigator*>(lv_event_get_user_data(e));
+    if (self && self->activePageHasShiftedKeys()) {
+        self->toggleShift();
+    }
 }
 
 }  // namespace wavex_ui

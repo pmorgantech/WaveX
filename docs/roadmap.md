@@ -57,17 +57,19 @@ Current state: the page draws the wireframe layout and START/END/ZOOM move the *
 
 ### 1.5.2 Interaction model
 
-The screen needs more operations than six softkeys hold. Decide the mechanism before adding more features, or it will need redoing:
+**Decided (2026-08-29): a Shift modifier reveals an alternate softkey row.** Built and global — `UIPage::getShiftedSoftkeys()`, `UINavigator::toggleShift()`, a SHIFT chip in the header, and `BUTTON_SHIFT` intercepted in `InputDispatcher` so no page can swallow it. Three properties worth keeping:
 
-- **Softkey paging / shift**: a `More >` or held-shift key that swaps the row. Cheap, familiar from hardware samplers, and scales.
-- **Modal zoom**: hold a Zoom key and turn the encoder, freeing two softkeys. Fewer keys, but adds a hold-and-turn idiom used nowhere else yet.
-- Whichever is chosen, apply it consistently across pages — a per-page interaction model is worse than a slightly clumsy global one.
+- **Latched, not held.** Hold-and-press is awkward one-handed on a touch panel, and holding a key while turning the encoder is worse.
+- **Sticky**: clears after one shifted key fires, and on navigation. A plain toggle gets left on and the next press does the wrong thing.
+- **Inert, not hidden, on pages with no alternate row.** A control that appears and disappears as you navigate is harder to learn than one that is always there and sometimes dim.
+
+Physical Shift still needs a key: `tca8418_keypad.cpp` maps keycode 4 → `BUTTON_SHIFT`, but the matrix mapping is a three-key stub and `WAVEX_ESP_BUTTON_MATRIX_ENABLED` gates it. Until then the header chip is the only way in.
 
 Specific items:
 
 1. **Draggable handles.** S, E and the not-yet-existing LS/LE should be touch-draggable on the waveform, not only encoder-driven. LVGL gives this via `LV_OBJ_FLAG_ADHESIVE`/drag events; the constraint work (ordering, clamping, minimum separation) is the real content.
-2. **`< Param` / `Param >`** replace the current `Param >` and `Refresh`. Refresh is redundant once requests are event-driven.
-3. **Audition toggles to Stop**, matching the browser. The browser already has this pattern (`persistent_state_.is_playing`); reuse it rather than inventing a second one.
+2. ~~**`< Param` / `Param >`** replace `Param >` and `Refresh`.~~ Done.
+3. ~~**Audition toggles to Stop**, matching the browser.~~ Done, and it stops on page exit — audition used to play on under a page that no longer existed.
 4. **Encoder direction is a global contract, not a per-page choice.** Clockwise increases, always. The edit page shipped inverted because `InputEvent::delta` is already signed *and* the event type names the sign, so negating on the Left case flipped it back. Anything reading `delta` must take its magnitude and let the type supply direction. Worth a shared helper so the next page cannot repeat it.
 5. **Two different physical controls are conflated.** `EncoderLeft`/`Right` come from the rotary encoder; `EncoderUp`/`Down` come from a pot (`ui_task.cpp`). Pages currently treat them as one input. Decide whether that is intended before building marker editing on top of it.
 

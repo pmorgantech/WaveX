@@ -53,6 +53,15 @@ class UIPage {
     }
 
     /**
+     * @brief Alternate softkey row, revealed while Shift is latched.
+     *
+     * Default is empty, which the navigator reads as "this page has no
+     * alternates" - Shift then does nothing visible rather than blanking the
+     * row, so pressing it on a page that does not use it is harmless.
+     */
+    virtual std::array<Softkey, NUM_SOFTKEYS> getShiftedSoftkeys() { return {}; }
+
+    /**
      * @brief Get the root LVGL object for this page
      */
     lv_obj_t* root() const { return root_; }

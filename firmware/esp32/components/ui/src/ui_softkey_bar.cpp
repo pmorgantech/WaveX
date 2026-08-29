@@ -59,20 +59,35 @@ void SoftkeyBar::create(lv_obj_t* parent) {
     }
 }
 
-void SoftkeyBar::setSoftkeys(const std::array<Softkey, NUM_SOFTKEYS>& keys) {
+void SoftkeyBar::setSoftkeys(const std::array<Softkey, NUM_SOFTKEYS>& keys, bool shifted) {
     keys_ = keys;
     for (int i = 0; i < NUM_SOFTKEYS; ++i) {
+        const bool empty = keys_[i].label.empty();
+        const bool live = keys_[i].enabled && !empty;
+
         lv_label_set_text(labels_[i], keys_[i].label.c_str());
 
-        // Update button appearance based on enabled state
-        if (keys_[i].enabled) {
-            lv_obj_clear_flag(btns_[i], LV_OBJ_FLAG_HIDDEN);
+        // Every slot stays visible and the same width. Hiding a disabled key
+        // collapses the flex row and moves every other key, so muscle memory
+        // for "Back is bottom-left" breaks the moment one becomes unavailable.
+        lv_obj_clear_flag(btns_[i], LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_style_bg_opa(btns_[i], LV_OPA_COVER, LV_PART_MAIN);
+
+        if (live) {
             lv_obj_add_flag(btns_[i], LV_OBJ_FLAG_CLICKABLE);
-            lv_obj_set_style_bg_opa(btns_[i], LV_OPA_COVER, LV_PART_MAIN);
+            // The shifted row is tinted, so which row is showing is readable
+            // from the keys themselves and not only from the Shift indicator.
+            lv_obj_set_style_bg_color(
+                btns_[i], shifted ? UI_COLOR_BUTTON_SHIFTED : UI_COLOR_BUTTON, LV_PART_MAIN);
+            lv_obj_set_style_text_color(labels_[i], UI_COLOR_TEXT, LV_PART_MAIN);
         } else {
-            lv_obj_add_flag(btns_[i], LV_OBJ_FLAG_HIDDEN);
             lv_obj_clear_flag(btns_[i], LV_OBJ_FLAG_CLICKABLE);
-            lv_obj_set_style_bg_opa(btns_[i], LV_OPA_30, LV_PART_MAIN);
+            // An empty slot is background; a disabled one still reads as a key
+            // that exists but cannot be used right now. Those are different
+            // things and should not look the same.
+            lv_obj_set_style_bg_color(
+                btns_[i], empty ? UI_COLOR_HOTKEY : UI_COLOR_BUTTON_DISABLED, LV_PART_MAIN);
+            lv_obj_set_style_text_color(labels_[i], UI_COLOR_TEXT_DISABLED, LV_PART_MAIN);
         }
     }
 }
@@ -92,6 +107,7 @@ void SoftkeyBar::focusNext(int delta) {
 
 void SoftkeyBar::pressFocused() {
     if (keys_[focused_].enabled && keys_[focused_].onPress) {
+        UINavigator::instance().notifySoftkeyUsed();
         // Defer to avoid modifying UI during LVGL event processing/draw
         auto cb = keys_[focused_].onPress;
         lv_async_call(
@@ -111,6 +127,9 @@ void SoftkeyBar::event_cb(lv_event_t* e) {
     for (int i = 0; i < NUM_SOFTKEYS; ++i) {
         if (target == bar->btns_[i] && bar->keys_[i].enabled) {
             ESP_LOGI(TAG, "Softkey %d pressed: %s", i, bar->keys_[i].label.c_str());
+            // Before the callback, not after: the callback may push a page,
+            // and clearing Shift on the page we just left is the intent.
+            UINavigator::instance().notifySoftkeyUsed();
             if (bar->keys_[i].onPress) {
                 // Defer to avoid modifying UI during LVGL event processing/draw
                 auto cb = bar->keys_[i].onPress;
