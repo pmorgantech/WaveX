@@ -15,6 +15,10 @@ void ProcessSamplePlayRequest(const char* file_path);
 // Tell the frontend storage is gone: exit audition mode and clear the browser
 // list. Safe to call when nothing is playing.
 void NotifyStorageLost();
+
+// Tell the frontend storage is usable again, so it can re-list. Sent on a
+// successful remount after insertion.
+void NotifyStorageAvailable();
 void ProcessSampleStopRequest(uint8_t slot);
 void ProcessSamplePlayIndexRequest(uint32_t file_index);
 void ProcessSampleGetPathRequest(uint32_t file_index);

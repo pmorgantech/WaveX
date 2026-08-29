@@ -68,6 +68,7 @@ typedef void (*wavex_sample_status_cb_t)(uint16_t sample_id,
 
 void inter_mcu_set_wave_chunk_listener(wavex_wave_chunk_cb_t cb, void* user_data);
 void inter_mcu_invoke_browse_resp_callback(const uint8_t* data, size_t length);
+void inter_mcu_invoke_storage_status_callback(bool mounted);
 void inter_mcu_invoke_wave_chunk_callback(uint32_t offset, const int16_t* samples, uint16_t count);
 void inter_mcu_set_sample_status_listener(wavex_sample_status_cb_t cb, void* user_data);
 void inter_mcu_invoke_sample_status_callback(uint16_t sample_id,

@@ -29,6 +29,9 @@ typedef int esp_err_t;
 typedef void (*wavex_meter_cb_t)(
     float rms_left, float rms_right, float peak_left, float peak_right, void* user_data);
 typedef void (*wavex_browse_resp_cb_t)(const uint8_t* data, size_t length, void* user_data);
+// Storage came or went. Unsolicited from the backend - the frontend has no
+// view of the card slot and cannot poll for it.
+typedef void (*wavex_storage_status_cb_t)(bool mounted, void* user_data);
 typedef void (*wavex_sample_status_cb_t)(uint16_t sample_id,
                                          uint8_t state,
                                          uint32_t sample_rate,
@@ -55,6 +58,7 @@ class ICommInterface {
 
     // File browsing operations
     virtual void setBrowseResponseListener(wavex_browse_resp_cb_t cb, void* user_data) = 0;
+    virtual void setStorageStatusListener(wavex_storage_status_cb_t cb, void* user_data) = 0;
     virtual esp_err_t sendBrowseRequest(const char* path, uint8_t start_index) = 0;
 
     // Sample control operations

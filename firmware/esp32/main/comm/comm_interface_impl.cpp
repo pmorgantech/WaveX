@@ -23,6 +23,10 @@ void CommInterfaceImpl::setBrowseResponseListener(wavex_browse_resp_cb_t cb, voi
     statistics_.set_browse_resp_callback(cb, user_data);
 }
 
+void CommInterfaceImpl::setStorageStatusListener(wavex_storage_status_cb_t cb, void* user_data) {
+    statistics_.set_storage_status_callback(cb, user_data);
+}
+
 esp_err_t CommInterfaceImpl::sendBrowseRequest(const char* path, uint8_t start_index) {
     return inter_mcu_send_browse_req(path, start_index);
 }

@@ -296,6 +296,13 @@ void inter_mcu_invoke_browse_resp_callback(const uint8_t* data, size_t length) {
     s_statistics->invoke_browse_resp_callback(data, length);
 }
 
+void inter_mcu_invoke_storage_status_callback(bool mounted) {
+    if (!s_statistics) {
+        return;
+    }
+    s_statistics->invoke_storage_status_callback(mounted);
+}
+
 void inter_mcu_invoke_wave_chunk_callback(uint32_t offset, const int16_t* samples, uint16_t count) {
     if (!s_wave_chunk_listener) {
         ESP_LOGW(TAG, "Wave chunk received but no listener registered");

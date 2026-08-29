@@ -491,9 +491,47 @@ void UartLinkProcess() {
     if (now - last_error_check > 1000) {  // Check every 1 second
         uint32_t uart_error = Uart4Dma::TakeError();
         if (uart_error != 0) {
-            if (s_hw)
-                WaveX::Log::PrintLine("DAISY: UART hardware error detected: 0x%04X - resetting DMA",
-                                      uart_error);
+            // Name the bits. A bare code sends the reader to the reference
+            // manual for something that is usually self-explanatory, and one
+            // case in particular is not a fault at all: until the ESP32 has
+            // booted and configured its UART pin, our RX line is undriven, so
+            // the receiver sees a start bit with no valid stop bit and reports
+            // a framing error. The Daisy is up long before the ESP32 finishes
+            // ESP-IDF, LVGL and display init, so exactly one FE at boot is
+            // expected rather than alarming. The DMA reset below is still the
+            // right response - it just is not an incident.
+            char bits[48];
+            bits[0] = '\0';
+            const struct {
+                uint32_t mask;
+                const char* name;
+            } kUartErrorBits[] = {
+                {HAL_UART_ERROR_PE, "PE "},
+                {HAL_UART_ERROR_NE, "NE "},
+                {HAL_UART_ERROR_FE, "FE "},
+                {HAL_UART_ERROR_ORE, "ORE "},
+                {HAL_UART_ERROR_DMA, "DMA "},
+            };
+            for (const auto& bit: kUartErrorBits) {
+                if (uart_error & bit.mask) {
+                    strncat(bits, bit.name, sizeof(bits) - strlen(bits) - 1);
+                }
+            }
+
+            // Only the first error, before any frame has ever arrived, gets
+            // the benign reading; after that the peer is up and errors mean
+            // something.
+            const bool peer_never_seen = (s_stats.packets_received == 0);
+            if (peer_never_seen && uart_error == HAL_UART_ERROR_FE) {
+                if (s_hw)
+                    WaveX::Log::PrintLine(
+                        "DAISY: UART framing error before first frame (peer still booting) "
+                        "- resetting DMA");
+            } else if (s_hw) {
+                WaveX::Log::PrintLine("DAISY: UART hardware error: 0x%04X [%s]- resetting DMA",
+                                      (unsigned)uart_error,
+                                      bits);
+            }
             UART_LOGE("daisy_uart", "UART hardware error: 0x%04X", uart_error);
 
             // Reset the DMA listener to recover from error state

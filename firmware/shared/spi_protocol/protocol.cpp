@@ -243,6 +243,13 @@ size_t ProtocolHandler::CreateSampleStatusPacket(uint8_t* buffer,
 }
 
 // Create sample stop response packet using unified packet system
+size_t ProtocolHandler::CreateStorageStatusPacket(uint8_t* buffer,
+                                                  size_t buffer_size,
+                                                  const StorageStatusMessage& status) {
+    return CreateUnifiedPacket(
+        buffer, buffer_size, MSG_STORAGE_STATUS, &status, sizeof(StorageStatusMessage));
+}
+
 size_t ProtocolHandler::CreateSampleStopRespPacket(uint8_t* buffer,
                                                    size_t buffer_size,
                                                    const SampleStopRespMessage& msg) {

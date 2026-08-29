@@ -120,6 +120,10 @@ class StatisticsManager {
                             void* user_data);
 
     // Browse response callback
+    void set_storage_status_callback(void (*callback)(bool mounted, void* user_data),
+                                     void* user_data);
+    void invoke_storage_status_callback(bool mounted);
+
     void set_browse_resp_callback(
         void (*callback)(const uint8_t* data, size_t length, void* user_data), void* user_data);
     void invoke_browse_resp_callback(const uint8_t* data, size_t length);
@@ -172,6 +176,8 @@ class StatisticsManager {
 
     // Browse response callback
     void (*m_browse_resp_callback)(const uint8_t* data, size_t length, void* user_data);
+    void (*m_storage_status_callback)(bool mounted, void* user_data);
+    void* m_storage_status_user_data;
     void* m_browse_resp_user_data;
     mutable SemaphoreHandle_t m_browse_resp_mutex;
 

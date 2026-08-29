@@ -30,6 +30,8 @@ StatisticsManager::StatisticsManager() {
     m_meter_callback = NULL;
     m_meter_user_data = NULL;
     m_browse_resp_callback = NULL;
+    m_storage_status_callback = NULL;
+    m_storage_status_user_data = NULL;
     m_browse_resp_user_data = NULL;
     m_sample_status_callback = NULL;
     m_sample_status_user_data = NULL;
@@ -399,6 +401,18 @@ void StatisticsManager::set_meter_callback(void (*callback)(float rms_left,
     m_meter_callback = callback;
     m_meter_user_data = user_data;
     taskEXIT_CRITICAL(&m_meter_lock);
+}
+
+void StatisticsManager::set_storage_status_callback(void (*callback)(bool mounted, void* user_data),
+                                                    void* user_data) {
+    m_storage_status_callback = callback;
+    m_storage_status_user_data = user_data;
+}
+
+void StatisticsManager::invoke_storage_status_callback(bool mounted) {
+    if (m_storage_status_callback) {
+        m_storage_status_callback(mounted, m_storage_status_user_data);
+    }
 }
 
 void StatisticsManager::set_browse_resp_callback(void (*callback)(const uint8_t* data, size_t length, void* user_data), void* user_data) {

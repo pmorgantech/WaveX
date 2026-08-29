@@ -277,6 +277,27 @@ TEST_F(MessageTypeTest, SampleStopMessages) {
     EXPECT_EQ(parsed_resp.success, resp.success);
 }
 
+// Storage availability is sent UNSOLICITED by the backend, so the frontend has
+// no request to correlate it with - the round trip is the only thing pinning
+// the wire format.
+TEST_F(MessageTypeTest, StorageStatusMessage) {
+    for (uint8_t mounted: {uint8_t{0}, uint8_t{1}}) {
+        StorageStatusMessage original(mounted);
+
+        size_t created =
+            ProtocolHandler::CreateStorageStatusPacket(buffer_.data(), buffer_.size(), original);
+
+        ASSERT_GT(created, 0u);
+        EXPECT_TRUE(ProtocolHandler::ValidatePacket(buffer_.data(), created));
+        EXPECT_EQ(ProtocolHandler::GetMessageType(buffer_.data()), MSG_STORAGE_STATUS);
+
+        StorageStatusMessage parsed;
+        EXPECT_TRUE(ProtocolHandler::ParseMessage(
+            buffer_.data(), MSG_STORAGE_STATUS, &parsed, sizeof(parsed)));
+        EXPECT_EQ(parsed.mounted, original.mounted);
+    }
+}
+
 // Test ErrorMessage creation and parsing
 TEST_F(MessageTypeTest, ErrorMessage) {
     ErrorMessage original(0x0001, "Test error message");

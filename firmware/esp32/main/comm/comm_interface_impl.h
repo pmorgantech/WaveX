@@ -28,6 +28,7 @@ class CommInterfaceImpl : public ICommInterface {
 
     // File browsing operations
     void setBrowseResponseListener(wavex_browse_resp_cb_t cb, void* user_data) override;
+    void setStorageStatusListener(wavex_storage_status_cb_t cb, void* user_data) override;
     esp_err_t sendBrowseRequest(const char* path, uint8_t start_index) override;
 
     // Sample control operations

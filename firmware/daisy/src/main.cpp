@@ -88,7 +88,10 @@ static void UsbRxCallback(uint8_t* buff, uint32_t* len) {
 // rather than let the streaming path keep failing reads against it.
 static void OnSdCardEvent(bool inserted) {
     if (inserted) {
-        return;  // Remount already logged; the browser refreshes on its own.
+        // The browser does NOT refresh by itself - it only re-lists when the
+        // user leaves the page and returns - so it has to be told.
+        WaveX::Comm::NotifyStorageAvailable();
+        return;
     }
 #if WAVEX_AUDIO_ENGINE_ENABLED
     if (WaveX::AudioEngine::IsWavPlaying()) {

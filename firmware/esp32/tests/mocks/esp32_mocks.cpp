@@ -290,6 +290,11 @@ void inter_mcu_invoke_browse_resp_callback(const uint8_t* data, size_t length) {
     // Stub implementation for tests
 }
 
+void inter_mcu_invoke_storage_status_callback(bool mounted) {
+    (void)mounted;
+    // Stub implementation for tests
+}
+
 void inter_mcu_handle_sample_stop_response(bool success) {
     (void)success;
     // Stub implementation for tests

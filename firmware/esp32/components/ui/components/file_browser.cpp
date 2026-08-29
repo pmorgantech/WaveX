@@ -57,6 +57,7 @@ static bool send_browse_request(WaveX::Comm::ICommInterface* comm_interface,
                                 uint8_t start_index = 0);
 static void update_visual_selection(wavex_file_browser_t* browser);
 static void browse_resp_callback(const uint8_t* data, size_t length, void* user_data);
+static void storage_status_callback(bool mounted, void* user_data);
 static void update_file_browser_ui(wavex_file_browser_t* browser);
 
 // Cross-task handoff for ui_update_pending (dma-timing-review-2026-07-03.md
@@ -152,6 +153,10 @@ wavex_file_browser_t* wavex_file_browser_create(lv_obj_t* parent,
     // Register browse response callback with comm interface
     if (config->comm_interface) {
         config->comm_interface->setBrowseResponseListener(browse_resp_callback, browser);
+        // Re-list automatically when a card appears. The backend owns the card
+        // slot; without this the browser only refreshes when the user leaves
+        // the page and comes back.
+        config->comm_interface->setStorageStatusListener(storage_status_callback, browser);
     } else {
         ESP_LOGE(TAG, "No comm interface provided to file browser");
         return NULL;
@@ -1210,4 +1215,23 @@ static void update_visual_selection(wavex_file_browser_t* browser) {
     }
     // Mark content as changed to trigger refresh (lock held by caller)
     wavex_ui_mark_content_changed();
+}
+
+// Storage appeared or vanished. Runs on the UART task, so it must not touch
+// LVGL - refresh_file_list() only sends a browse request and sets the deferred
+// UI-update flag, which is safe from here.
+static void storage_status_callback(bool mounted, void* user_data) {
+    wavex_file_browser_t* browser = (wavex_file_browser_t*)user_data;
+    if (!browser) {
+        return;
+    }
+    if (!mounted) {
+        // The empty browse response that accompanies a loss already clears the
+        // list; nothing to do but stop any pagination still in flight.
+        browser->pagination_in_progress = false;
+        ESP_LOGI(TAG, "Storage lost - browser idle");
+        return;
+    }
+    ESP_LOGI(TAG, "Storage available - re-listing '%s'", browser->current_path);
+    refresh_file_list(browser);
 }

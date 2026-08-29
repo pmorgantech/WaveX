@@ -99,12 +99,42 @@ bool TrySpeed(int index, bool auto_format) {
     // sequence that worked before negotiation existed.
     if (s_sd_brought_up) {
         f_mount(nullptr, "/", 0);
-        HAL_SD_DeInit(&hsd1);
+        HAL_SD_DeInit(&hsd1);  // also returns hsd1.State to RESET
     }
     s_sd_brought_up = true;
 
     if (s_sdmmc.Init(sd_cfg) != SdmmcHandler::Result::OK) {
         WaveX::Log::PrintLine("SD: SDMMC init FAILED at %s", kSpeeds[index].name);
+        return false;
+    }
+
+    // Bring the card up here rather than leaving it to FatFS, because
+    // SD_initialize() (sd_diskio.c:106) hides the failure:
+    //
+    //     if (BSP_SD_Init() == MSD_OK) { Stat = SD_CheckStatus(lun); }
+    //     return Stat;                 // unchanged when BSP_SD_Init FAILED
+    //
+    // Stat is a file static that still says "ready" from the successful boot,
+    // so a failed re-init returns ready anyway, FatFS skips its STA_NOINIT
+    // check, and reads go to an uninitialized peripheral. Every bus clock
+    // then reports FR_DISK_ERR and the real cause is never visible - which is
+    // exactly what re-inserting a card produced. Doing it explicitly means a
+    // failure aborts this attempt and names itself.
+    HAL_StatusTypeDef hal = HAL_SD_Init(&hsd1);
+    if (hal != HAL_OK) {
+        WaveX::Log::PrintLine("SD: HAL_SD_Init failed at %s (hal=%d err=0x%08lX state=%u)",
+                              kSpeeds[index].name,
+                              (int)hal,
+                              (unsigned long)HAL_SD_GetError(&hsd1),
+                              (unsigned)HAL_SD_GetCardState(&hsd1));
+        return false;
+    }
+    hal = HAL_SD_ConfigWideBusOperation(&hsd1, hsd1.Init.BusWide);
+    if (hal != HAL_OK) {
+        WaveX::Log::PrintLine("SD: bus-width config failed at %s (hal=%d err=0x%08lX)",
+                              kSpeeds[index].name,
+                              (int)hal,
+                              (unsigned long)HAL_SD_GetError(&hsd1));
         return false;
     }
 
@@ -255,6 +285,11 @@ void Poll() {
     }
 
     WaveX::Log::PrintLine("SD: card INSERTED - remounting");
+    // Card-detect closes before the card is electrically ready; the debounce
+    // above covers switch bounce, not power-up. Identification issued too
+    // early fails, and every later attempt then inherits a half-initialized
+    // peripheral. Cheap here - audio is already stopped, the card is gone.
+    System::Delay(200);
     // Renegotiate from the configured start: a different card may hold a
     // different clock, so inheriting the previous card's negotiated rate
     // would be wrong in both directions.

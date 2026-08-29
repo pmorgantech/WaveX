@@ -87,6 +87,7 @@ enum MessageType : uint8_t {
     MSG_SAMPLE_PLAY_INDEX_REQ = 0x36,  // Play sample by index
     MSG_SAMPLE_GET_PATH_REQ = 0x37,    // Get full path for index
     MSG_SAMPLE_GET_PATH_RESP = 0x38,   // Full path response
+    MSG_STORAGE_STATUS = 0x39,         // Daisy -> ESP32: SD mounted/unmounted (unsolicited)
     // CV calibration (Stage A analog path - analog-voice-board.md §3)
     MSG_CV_CAL_SET = 0x40,   // ESP32 -> Daisy: apply (and optionally persist) one group's cal
     MSG_CV_CAL_GET = 0x41,   // ESP32 -> Daisy: request one group's cal
@@ -366,6 +367,18 @@ struct SampleStopRespMessage {
 
     SampleStopRespMessage() : success(0), reserved{0, 0, 0} {}
     explicit SampleStopRespMessage(uint8_t success_) : success(success_), reserved{0, 0, 0} {}
+} __attribute__((packed));
+
+// Storage availability, sent unsolicited by the backend when the SD card is
+// mounted or lost. The frontend cannot poll for this - it has no view of the
+// card slot - so without it the browser keeps showing a listing for a card
+// that is gone, or an empty one for a card that has been re-inserted.
+struct StorageStatusMessage {
+    uint8_t mounted;      // 1 = mounted and readable, 0 = absent or unusable
+    uint8_t reserved[3];  // Reserved for future use
+
+    StorageStatusMessage() : mounted(0), reserved{0, 0, 0} {}
+    explicit StorageStatusMessage(uint8_t mounted_) : mounted(mounted_), reserved{0, 0, 0} {}
 } __attribute__((packed));
 
 // Error message (short)
@@ -872,6 +885,11 @@ class ProtocolHandler {
     static size_t CreateSampleStatusPacket(uint8_t* buffer,
                                            size_t buffer_size,
                                            const SampleStatusMessage& msg);
+    /** Storage availability notification (backend -> frontend, unsolicited). */
+    static size_t CreateStorageStatusPacket(uint8_t* buffer,
+                                            size_t buffer_size,
+                                            const StorageStatusMessage& status);
+
     static size_t CreateSampleStopRespPacket(uint8_t* buffer,
                                              size_t buffer_size,
                                              const SampleStopRespMessage& msg);

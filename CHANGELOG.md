@@ -76,6 +76,40 @@ versioning and release process.
   not: `data_start % 4 == 2` stutters, `== 0` does not.
 - Fixed `SD PERF` KB/s integer truncation, which read about 3% low.
 
+### Added — Sample browser responds to card insertion
+
+- New `MSG_STORAGE_STATUS` (0x39, backend → frontend, unsolicited) reports the
+  SD card mounting or being lost. The frontend has no view of the card slot
+  and cannot poll for this, so insertion was previously invisible: the browser
+  only re-listed when the user left the page and came back.
+- The file browser subscribes to it and re-lists its current path when a card
+  appears, so swapping cards while the browser is open now works without
+  leaving the menu.
+- Sent on successful (re)mount and alongside the existing loss notification.
+
+### Fixed — Boot-time UART framing error reported as a fault
+
+- `0x0004` is `HAL_UART_ERROR_FE`. Until the ESP32 boots and drives its UART
+  pin, the Daisy's RX line is undriven, so the receiver sees a start bit with
+  no valid stop bit. The Daisy is up long before the ESP32 finishes ESP-IDF,
+  LVGL and display init, so exactly one framing error at boot is expected. It
+  is now reported as such before the first frame arrives, and error bits are
+  named rather than printed as a bare hex code. The DMA reset still runs — it
+  is the right response, just not an incident.
+
+### Fixed — SD remount after card insertion
+
+- `SD_initialize()` (libDaisy `sd_diskio.c:106`) leaves its `Stat` static
+  unchanged when `BSP_SD_Init()` fails, so a failed re-init returned the stale
+  "ready" status from boot. FatFS then skipped its `STA_NOINIT` check and read
+  from an uninitialized peripheral, making every bus clock report
+  `FR_DISK_ERR` while the real failure stayed invisible. The card is now
+  brought up explicitly with `HAL_SD_Init()` + `HAL_SD_ConfigWideBusOperation()`,
+  checked, and logged with the HAL error and card state on failure.
+- Added a 200 ms settle delay after insertion: card-detect closes before the
+  card is electrically ready, and the debounce covers switch bounce, not
+  power-up.
+
 ### Added — Daisy development and audition tooling
 
 - Added software-triggered Daisy DFU entry (`make daisy-flash-auto`), serial

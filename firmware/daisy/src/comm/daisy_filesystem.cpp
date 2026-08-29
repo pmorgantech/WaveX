@@ -447,7 +447,20 @@ void NotifyStorageLost() {
     uint8_t empty_browse[sizeof(uint32_t) + sizeof(uint8_t)] = {0, 0, 0, 0, 0};
     WaveX::Comm::UartLinkSend(MSG_BROWSE_RESP, empty_browse, sizeof(empty_browse));
 
+    StorageStatusMessage status(0);
+    WaveX::Comm::UartLinkSend(MSG_STORAGE_STATUS, &status, sizeof(status));
+
     WaveX::Log::PrintLine("DAISY: storage lost - told frontend to exit audition and clear list");
+}
+
+// Storage is back. The frontend cannot poll for this - it has no view of the
+// card slot - so it has to be told, or the browser sits on an empty listing
+// until the user leaves the page and comes back.
+void NotifyStorageAvailable() {
+    using namespace WaveX::Protocol;
+    StorageStatusMessage status(1);
+    WaveX::Comm::UartLinkSend(MSG_STORAGE_STATUS, &status, sizeof(status));
+    WaveX::Log::PrintLine("DAISY: storage available - frontend can re-list");
 }
 
 // Process sample play request (existing function)
