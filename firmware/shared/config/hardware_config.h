@@ -111,8 +111,11 @@
 #endif
 
 // SD Card debug logging (Daisy only)
+// TEMPORARY (2026-08-28): both debug streams enabled to exercise the
+// non-blocking log ring under playback load. Revert both to 0 once that has
+// been confirmed on hardware - verbose logging is not a shipping default.
 #ifndef WAVEX_DAISY_SD_DEBUG
-#define WAVEX_DAISY_SD_DEBUG 0
+#define WAVEX_DAISY_SD_DEBUG 1
 #endif
 
 // Audio streaming telemetry (Daisy only): periodic STREAM/STREAM2 lines
@@ -123,7 +126,7 @@
 // each line is a blocking USB CDC write on the loop that refills the audio
 // ring, so leaving it on during playback starves the refill.
 #ifndef WAVEX_DAISY_STREAM_DEBUG
-#define WAVEX_DAISY_STREAM_DEBUG 0
+#define WAVEX_DAISY_STREAM_DEBUG 1
 #endif
 
 // SD Card detect pin (Daisy only) - set to -1 to disable card detect

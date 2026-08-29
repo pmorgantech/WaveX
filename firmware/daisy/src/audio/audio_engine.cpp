@@ -506,6 +506,13 @@ static uint32_t s_io_start_time = 0;
 static uint32_t s_io_duration = 0;
 static uint32_t s_max_io_duration = 0;
 static uint32_t s_io_count = 0;
+// Failed f_read attempts. Kept separate from s_io_count, which only counts
+// SUCCESSFUL reads: the failure path recorded s_io_duration and returned
+// before incrementing the count, so a card that had stopped responding
+// presented as "count frozen, last still changing" with no error anywhere -
+// the read error itself was compiled out behind WAVEX_DAISY_SD_DEBUG.
+static uint32_t s_io_errors = 0;
+static uint32_t s_io_last_err = 0;
 // Streaming telemetry counters (WAVEX_DAISY_STREAM_DEBUG in
 // hardware_config.h). Record why the streaming path discarded its last pass
 // without consuming. Always updated - the writes are a few registers and
@@ -863,10 +870,23 @@ static bool refill_sd_buffer() {
         s_io_duration = System::GetTick() - s_io_start_time;
 
         if (fr != FR_OK || br == 0) {
-#if WAVEX_DAISY_SD_DEBUG
-            if (s_hw)
-                WaveX::Log::PrintLine("WAV read error: fr=%d, br=%u", (int)fr, (unsigned)br);
-#endif
+            // Logged unconditionally and rate-limited. A failing card is the
+            // difference between "playing" and "silent", so it must never be
+            // a compile-time option; but it can fail on every pump, so it
+            // cannot log per occurrence either.
+            s_io_errors++;
+            s_io_last_err = static_cast<uint32_t>(fr);
+            static uint32_t last_err_log_ms = 0;
+            const uint32_t now = System::GetNow();
+            if (last_err_log_ms == 0 || (now - last_err_log_ms) >= 1000u) {
+                last_err_log_ms = now;
+                WaveX::Log::PrintLine(
+                    "WAV read FAILED: fr=%d br=%u (%lu errors, %lu bytes left) - audio will stop",
+                    (int)fr,
+                    (unsigned)br,
+                    (unsigned long)s_io_errors,
+                    (unsigned long)s_wav.bytes_remaining);
+            }
             return false;
         }
 
@@ -1891,6 +1911,11 @@ void GetIOStats(uint32_t& count, uint32_t& max_duration, uint32_t& last_duration
     count = s_io_count;
     max_duration = s_max_io_duration;
     last_duration = s_io_duration;
+}
+
+void GetIOErrors(uint32_t& errors, uint32_t& last_result) {
+    errors = s_io_errors;
+    last_result = s_io_last_err;
 }
 
 // Streaming telemetry accessor - see WAVEX_DAISY_STREAM_DEBUG.

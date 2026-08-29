@@ -567,6 +567,15 @@ int main(void) {
                                 (int)(WaveX::AudioEngine::GetAvgCpuLoad() * 100.0f),
                                 (unsigned long)WaveX::Log::DroppedBytes());
 
+                uint32_t io_errors = 0, io_last_err = 0;
+                WaveX::AudioEngine::GetIOErrors(io_errors, io_last_err);
+                if (io_errors > 0) {
+                    WAVEX_LOG_DAISY(AUDIO_ENGINE,
+                                    "SD ERRORS: %lu failed reads, last FatFS result=%lu",
+                                    (unsigned long)io_errors,
+                                    (unsigned long)io_last_err);
+                }
+
                 // Output level, so a healthy-looking clock can be told apart
                 // from a healthy clock emitting silence. blocks advancing with
                 // peak at zero means the DSP is producing nothing (a data

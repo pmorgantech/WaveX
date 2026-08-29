@@ -54,6 +54,10 @@ void GetIOStats(uint32_t& count, uint32_t& max_duration, uint32_t& last_duration
 // (1 kHz here) whenever the SAI DMA is running, independent of the main loop.
 uint32_t GetCallbackBlocks();
 
+// Failed SD reads and the last FatFS result code. Counted separately from
+// GetIOStats()'s count, which only tracks successful reads.
+void GetIOErrors(uint32_t& errors, uint32_t& last_result);
+
 // Streaming telemetry (see WAVEX_DAISY_STREAM_DEBUG in hardware_config.h).
 void GetStreamDebug(uint32_t& prebuf_filled,
                     uint32_t& prebuf_target,

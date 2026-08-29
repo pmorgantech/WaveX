@@ -19,6 +19,20 @@ versioning and release process.
 - Added CodeGraph configuration for focused repository indexing and installed
   `vim-tiny` in the devcontainer image.
 
+### Fixed — Silent SD read failures
+
+- A failing `f_read` in the streaming refill was invisible: the error log sat
+  behind `WAVEX_DAISY_SD_DEBUG`, and `s_io_duration` was recorded before the
+  error check while `s_io_count++` came after it. A card that stopped
+  responding therefore presented as "count frozen, last still changing" with
+  no error anywhere — audio stopped while the log looked healthy. Read
+  failures are now logged unconditionally (rate-limited to 1/s) with the
+  FatFS result code, counted separately from successful reads, and surfaced
+  in the periodic stats.
+- `WAVEX_DAISY_SD_DEBUG` and `WAVEX_DAISY_STREAM_DEBUG` temporarily default to
+  1 to exercise the non-blocking log ring under playback load. Both revert to
+  0 once confirmed.
+
 ### Added — Loop-point and output-level telemetry
 
 - The WAV loop point (EOF rewind) is now logged unconditionally with its
