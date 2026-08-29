@@ -19,6 +19,23 @@ versioning and release process.
 - Added CodeGraph configuration for focused repository indexing and installed
   `vim-tiny` in the devcontainer image.
 
+### Fixed — SD card speed configuration
+
+- `WAVEX_DAISY_SD_CARD_SPEED` documented three mutually contradictory sets of
+  clock figures (20/40 MHz in one comment, 12.5/25 MHz in another, neither
+  matching libDaisy). Replaced with values derived from the clock tree:
+  `SDMMC_CK = sdmmc_ker_ck / (2 x ClockDiv)` with `sdmmc_ker_ck = PLL2R =
+  200 MHz`, giving 400 kHz / 12.5 / 25 / 50 / 100 MHz. The speed itself is
+  unchanged (STANDARD, 25 MHz).
+- Setting 4 (VERY_FAST) was selectable but unreachable: the switch in
+  `sd_sdio.cpp` had no case for it and fell through to `default: STANDARD`,
+  and the `speed_names[]` log array had only four entries, so that setting
+  would also have read out of bounds. Both fixed, with a `static_assert`
+  binding the array to the macro's range.
+- Documented that raising this setting yields roughly 10%, not 2x: most of an
+  8 KiB read is command and card-state polling overhead in libDaisy's
+  `SD_read()`, not transfer time.
+
 ### Fixed — Logging no longer stalls the audio ring refill
 
 - Daisy logging now goes through a non-blocking ring buffer

@@ -55,6 +55,12 @@ bool InitAndMount(DaisySeed& hw, bool auto_format) {
         case 3:
             sd_cfg.speed = SdmmcHandler::Speed::FAST;
             break;
+        case 4:
+            // Was missing, so VERY_FAST fell through to the default below and
+            // silently ran at STANDARD - a setting that could be selected but
+            // never took effect.
+            sd_cfg.speed = SdmmcHandler::Speed::VERY_FAST;
+            break;
         default:
             sd_cfg.speed = SdmmcHandler::Speed::STANDARD;
             break;
@@ -66,7 +72,16 @@ bool InitAndMount(DaisySeed& hw, bool auto_format) {
 
     sd_cfg.clock_powersave = false;
 
-    const char* speed_names[] = {"SLOW", "MEDIUM_SLOW", "STANDARD", "FAST"};
+    // Indexed directly by the macro, so it must cover every selectable value
+    // - it had four entries while the enum has five, and adding the VERY_FAST
+    // case above would otherwise have made setting 4 read out of bounds.
+    // Clock figures derived in hardware_config.h.
+    const char* speed_names[] = {
+        "SLOW/400kHz", "MEDIUM_SLOW/12.5MHz", "STANDARD/25MHz", "FAST/50MHz", "VERY_FAST/100MHz"};
+    static_assert(WAVEX_DAISY_SD_CARD_SPEED >= 0 &&
+                      WAVEX_DAISY_SD_CARD_SPEED <
+                          static_cast<int>(sizeof(speed_names) / sizeof(speed_names[0])),
+                  "WAVEX_DAISY_SD_CARD_SPEED must be 0..4 (SdmmcHandler::Speed)");
     const char* width_names[] = {"1-bit", "4-bit"};
     WaveX::Log::PrintLine("SD: Configuring SDMMC - Speed: %s, Width: %s",
                           speed_names[WAVEX_DAISY_SD_CARD_SPEED],

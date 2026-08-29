@@ -138,20 +138,33 @@
 
 /**
  * @def WAVEX_DAISY_SD_CARD_SPEED
- * @brief Sets the speed of the SD card interface.
+ * @brief Selects the SDMMC bus clock, as a SdmmcHandler::Speed enumerator.
  *
- * This macro configures the speed of the SD card communication. The available
- * options are:
- * - 0: SLOW (~400 KHz) - Recommended for maximum compatibility and debugging.
- * - 1: MEDIUM_SLOW (~11 MHz)
- * - 2: STANDARD (~20 MHz)
- * - 3: FAST (~40 MHz)
+ * Bus clock per setting. These are derived, not estimated:
+ *   SDMMC_CK = sdmmc_ker_ck / (2 x ClockDiv)          [RM0433, SDMMC_CLKCR]
+ *   sdmmc_ker_ck = PLL2R = 200 MHz
+ *     (RCC_SDMMCCLKSOURCE_PLL2 with HSE 16 MHz, PLL2 M=1, N=12,
+ *      FRACN=4096 -> VCO 16 x 12.5 = 200 MHz, R=1; libDaisy system.cpp)
+ *   ClockDiv per enumerator from libDaisy per/sdmmc.cpp:21-25.
  *
- * The default value is 2 (STANDARD). A lower speed might be necessary if you
- * encounter data corruption or initialization issues, especially with long
- * cables or certain SD card models.
- *   @note Speed settings correspond to SdmmcHandler::Speed enum
- *   0: SLOW (~400 KHz), 1: MEDIUM_SLOW, 2: STANDARD (~12.5 MHz), 3: FAST (~25 MHz)
+ * - 0: SLOW         ClockDiv 250 ->   400 kHz  (also the mandatory
+ *                                              identification-phase rate)
+ * - 1: MEDIUM_SLOW  ClockDiv 8   ->  12.5 MHz
+ * - 2: STANDARD     ClockDiv 4   ->    25 MHz  (SD Default Speed)
+ * - 3: FAST         ClockDiv 2   ->    50 MHz  (SD High Speed)
+ * - 4: VERY_FAST    ClockDiv 1   ->   100 MHz  (SDR50, overclocked)
+ *
+ * At 4-bit width the theoretical ceiling is SDMMC_CK x 4 bits, so STANDARD
+ * is 12.5 MB/s. Measured throughput is far below that (~2.8 MB/s for an 8 KiB
+ * f_read) because most of a read is command and card-state polling overhead,
+ * not transfer - see the busy-wait loops in libDaisy's sd_diskio.c SD_read().
+ * Raising this setting only shrinks the transfer portion, so expect roughly a
+ * 10% improvement from STANDARD to FAST, not 2x.
+ *
+ * The default is 2 (STANDARD), deliberately one step below libDaisy's own
+ * default of FAST. A lower speed may be necessary to avoid data corruption or
+ * initialization failures with long cables or particular cards; raising it is
+ * a hardware-validation decision, not a code change.
  */
 #ifndef WAVEX_DAISY_SD_CARD_SPEED
 #define WAVEX_DAISY_SD_CARD_SPEED 2
