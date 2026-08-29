@@ -244,6 +244,11 @@ static CpuLoadMeter s_cpu_load_meter;
 // "the ring starved" from "the callback stopped running" - the latter reports
 // no underrun at all, because underruns are only detected inside it.
 static volatile uint32_t s_callback_blocks = 0;
+// Lowest ring occupancy seen since the last report, sampled once per audio
+// callback. Zero underruns only proves the ring never hit empty; it says
+// nothing about how close it came. A dip toward empty is what a brief gap
+// sounds like, and this is the only thing that can show it.
+static volatile uint32_t s_rb_low_water = 0xFFFFFFFFu;
 static float s_sample_rate = 48000.0f;
 static int s_block_size = 48;
 
@@ -522,6 +527,10 @@ static uint32_t s_io_count = 0;
 static uint32_t s_io_errors = 0;
 static uint32_t s_io_last_err = 0;
 static uint32_t s_io_recoveries = 0;
+// Set when playback stops for a STORAGE reason rather than a user request, so
+// the frontend can be told. Without it the Daisy goes quiet while the ESP32
+// still believes it is auditioning - the UI sits on "Playing" forever.
+static bool s_playback_aborted = false;
 // Retries are held off after a failure. Without this the pump spins as fast
 // as the loop runs - measured at ~40,000 failed reads per second, each
 // returning in ~8 us - which burns the main loop and floods the log to no
@@ -619,6 +628,11 @@ static uint32_t ConvertFramesToOutput(
 // The header reads each channel through a stride, so the per-channel
 // de-interleave copy the CMSIS version needed is gone - one fewer full pass
 // over the chunk, and the scratch buffer it used is no longer acquired here.
+// One state for the whole stream: prebuffer_audio() fills the head of a file
+// and PumpWavIO() takes over from there, so they are consecutive chunks of the
+// SAME stream and must share the phase. Reset when a file is opened or closed.
+static StreamResamplerState s_resampler;
+
 static uint32_t LinearResampleFrames(
     const q15_t* src, uint32_t src_frames, q15_t* dst, uint32_t channels, float ratio) {
     return ResampleInterleaved(src, src_frames, dst, channels, ratio);
@@ -747,17 +761,6 @@ static bool prebuffer_audio() {
         s_max_io_duration = s_io_duration;
     }
 
-#if WAVEX_DAISY_SD_DEBUG
-    // Log I/O performance every 100 operations
-    if (s_io_count % 100 == 0) {
-        if (s_hw)
-            WaveX::Log::PrintLine("SD I/O Stats: count=%u, max_duration=%u ms, last_duration=%u ms",
-                                  (unsigned)s_io_count,
-                                  (unsigned)s_max_io_duration,
-                                  (unsigned)s_io_duration);
-    }
-#endif
-
     if (fr != FR_OK || br == 0) {
 #if WAVEX_DAISY_SD_DEBUG
         if (s_hw)
@@ -798,13 +801,22 @@ static bool prebuffer_audio() {
             static_cast<uint32_t>(std::ceil(frames_read * resample_ratio)) + 1;
         q15_t* resample_buffer = AcquireScratch(max_out_frames * s_output_channels);
         uint32_t resampled = 0;
+        // Same snapshot reasoning as the streaming path: the drop below
+        // discards this pass's output, so the phase must not stay advanced.
+        const StreamResamplerState resampler_before = s_resampler;
         if (resample_buffer != nullptr) {
-            resampled = LinearResampleFrames(
-                conversion_output, frames_read, resample_buffer, s_output_channels, resample_ratio);
+            resampled = ResampleStreamInterleaved(s_resampler,
+                                                  conversion_output,
+                                                  frames_read,
+                                                  resample_buffer,
+                                                  max_out_frames,
+                                                  s_output_channels,
+                                                  resample_ratio);
         }
         if (resampled == 0) {
             // Same reasoning as the null-scratch case above: drop, don't
             // push unresampled (wrong-pitch) audio (review Finding 6).
+            s_resampler = resampler_before;
             return true;
         }
         to_push = resample_buffer;
@@ -812,6 +824,10 @@ static bool prebuffer_audio() {
     }
 
     if (output_frames > free_prebuffer_frames) {
+        // Truncating here would discard output whose input the resampler has
+        // already consumed and phase-advanced past - a silent gap. The
+        // pre-buffer is latency headroom, so stop short and let the streaming
+        // path continue from the correct phase instead.
         output_frames = free_prebuffer_frames;
     }
 
@@ -819,13 +835,6 @@ static bool prebuffer_audio() {
     q15_t* dst = &s_prebuffer[s_prebuffer_filled * s_output_channels];
     arm_copy_q15(to_push, dst, output_frames * s_output_channels);
     s_prebuffer_filled += output_frames;
-
-#if WAVEX_DAISY_SD_DEBUG
-    if (s_hw)
-        WaveX::Log::PrintLine("Pre-buffer progress: %u/%u frames",
-                              (unsigned)s_prebuffer_filled,
-                              (unsigned)PREBUFFER_FRAMES);
-#endif
 
     if (s_prebuffer_filled >= PREBUFFER_FRAMES) {
         s_prebuffer_ready = true;
@@ -970,11 +979,13 @@ static bool refill_sd_buffer() {
                     // clears the ring, so the callback reports silence rather
                     // than looping stale audio forever.
                     WaveX::Log::PrintLine("WAV: playback aborted - SD unreadable");
+                    s_playback_aborted = true;
                     CloseWav();
                 }
             } else if (s_io_recoveries >= kMaxIoRecoveries) {
                 WaveX::Log::PrintLine("WAV: playback aborted - SD unreadable after %lu recoveries",
                                       (unsigned long)s_io_recoveries);
+                s_playback_aborted = true;
                 CloseWav();
             }
             return false;
@@ -1160,6 +1171,12 @@ void Callback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t
     // Start CPU load measurement for this audio block
     s_cpu_load_meter.OnBlockStart();
     ++s_callback_blocks;
+    {
+        const uint32_t occupancy = rb_count_frames();
+        if (occupancy < s_rb_low_water) {
+            s_rb_low_water = occupancy;
+        }
+    }
 
     (void)in;
     for (size_t i = 0; i < size; i++) {
@@ -1879,6 +1896,22 @@ uint32_t GetCallbackBlocks() {
     return s_callback_blocks;
 }
 
+bool TakePlaybackAborted() {
+    const bool aborted = s_playback_aborted;
+    s_playback_aborted = false;
+    return aborted;
+}
+
+void MarkPlaybackAborted() {
+    s_playback_aborted = true;
+}
+
+uint32_t TakeRingLowWater() {
+    const uint32_t low = s_rb_low_water;
+    s_rb_low_water = 0xFFFFFFFFu;
+    return (low == 0xFFFFFFFFu) ? 0u : low;
+}
+
 float GetAvgCpuLoad() {
     return s_cpu_load_meter.GetAvgCpuLoad();
 }
@@ -1942,6 +1975,7 @@ bool OpenWav(const char* path) {
     s_io_errors = 0;
     s_io_recoveries = 0;
     s_io_backoff_until_ms = 0;
+    s_resampler.Reset();
     s_wav.open = true;
     std::strncpy(s_wav.path, path, sizeof(s_wav.path) - 1);
     s_wav.path[sizeof(s_wav.path) - 1] = '\0';
@@ -1956,15 +1990,30 @@ bool OpenWav(const char* path) {
     s_rb_head = 0;
     s_rb_tail = 0;
 
-#if WAVEX_DAISY_SD_DEBUG
-    if (s_hw)
-        WaveX::Log::PrintLine("WAV open ok: %s ch=%u sr=%lu bits=%u size=%lu",
-                              path,
-                              (unsigned)wav_info.num_channels,
-                              (unsigned long)wav_info.sample_rate,
-                              (unsigned)wav_info.bits_per_sample,
-                              (unsigned long)wav_info.data_size);
-#endif
+    // Logged unconditionally: once per file open, so it cannot spam, and it
+    // is the only place the per-file variables are visible. When some files
+    // play cleanly and others of the SAME format do not, the difference has
+    // to be here.
+    //
+    // data_start%4 != 0 means the data chunk is not frame-aligned for 16-bit
+    // stereo, so every read starts mid-frame and the channels are read
+    // swapped and shifted. data_start%512 != 0 means reads never land on a
+    // sector boundary, forcing FatFS through its window buffer for the head
+    // and tail of every transfer. Odd offsets are legal in RIFF - a LIST or
+    // fact chunk of odd length before `data` produces them - and this player
+    // does not compensate for either.
+    const uint32_t frame_bytes =
+        (uint32_t)wav_info.num_channels * ((wav_info.bits_per_sample == 24) ? 3u : 2u);
+    WaveX::Log::PrintLine(
+        "WAV open: '%s' %luHz ch=%u bits=%u data_start=%lu (frame%%=%lu sector%%=%lu) size=%lu",
+        path,
+        (unsigned long)wav_info.sample_rate,
+        (unsigned)wav_info.num_channels,
+        (unsigned)wav_info.bits_per_sample,
+        (unsigned long)wav_info.data_offset,
+        (unsigned long)(frame_bytes ? (wav_info.data_offset % frame_bytes) : 0u),
+        (unsigned long)(wav_info.data_offset % 512u),
+        (unsigned long)wav_info.data_size);
 
     // Reset pre-buffer state and start pre-buffering
     s_prebuffer_filled = 0;
@@ -2153,12 +2202,6 @@ void PumpWavIO() {
                     s_prebuffer_filled * s_output_channels * sizeof(q15_t));
         }
 
-#if WAVEX_DAISY_SD_DEBUG
-        if (s_hw)
-            WaveX::Log::PrintLine("Transferred %u frames from pre-buffer to ring buffer",
-                                  (unsigned)frames_to_transfer);
-#endif
-
         s_dwt_io_cycles = WaveX::Profiling::GetCycles() - block_cycles_start;
         s_dwt_io_max = std::max(s_dwt_io_max, s_dwt_io_cycles);
         return;
@@ -2269,17 +2312,25 @@ void PumpWavIO() {
 
     q15_t* final_buffer = conversion_output;
     uint32_t final_frames = frames_to_transfer;
+    // The resampler carries phase and history across calls, but the skip
+    // paths below return WITHOUT consuming the slot, so this same input is
+    // retried on a later pump. Retrying against advanced state resamples the
+    // same audio at the wrong phase - duplicated, discontinuous output, i.e.
+    // a stutter. Snapshot at function scope so every skip can rewind it.
+    const StreamResamplerState resampler_before = s_resampler;
     if (resample_ratio != 1.0f) {
         uint32_t max_out_frames =
             static_cast<uint32_t>(std::ceil(frames_to_transfer * resample_ratio)) + 1;
         q15_t* resample_buffer = AcquireScratch(max_out_frames * s_output_channels);
         uint32_t resampled = 0;
         if (resample_buffer != nullptr) {
-            resampled = LinearResampleFrames(conversion_output,
-                                             frames_to_transfer,
-                                             resample_buffer,
-                                             s_output_channels,
-                                             resample_ratio);
+            resampled = ResampleStreamInterleaved(s_resampler,
+                                                  conversion_output,
+                                                  frames_to_transfer,
+                                                  resample_buffer,
+                                                  max_out_frames,
+                                                  s_output_channels,
+                                                  resample_ratio);
         }
         s_dbg_resampled = resampled;
         if (resampled == 0) {
@@ -2288,6 +2339,7 @@ void PumpWavIO() {
             // UNRESAMPLED - audio at the wrong pitch (review Finding 6).
             // Skip instead: nothing is consumed from the slot, so the same
             // data is retried next pump with a fresh scratch pool.
+            s_resampler = resampler_before;
             s_dwt_io_cycles = WaveX::Profiling::GetCycles() - block_cycles_start;
             s_dwt_io_max = std::max(s_dwt_io_max, s_dwt_io_cycles);
             return;
@@ -2302,6 +2354,9 @@ void PumpWavIO() {
         // still consuming the full input - silently dropping frames (review
         // Finding 6). Skip instead; the ring drains ~48 frames/ms, so the
         // retry lands almost immediately.
+        if (resample_ratio != 1.0f) {
+            s_resampler = resampler_before;  // see the snapshot above
+        }
         s_dwt_io_cycles = WaveX::Profiling::GetCycles() - block_cycles_start;
         s_dwt_io_max = std::max(s_dwt_io_max, s_dwt_io_cycles);
         return;
@@ -2318,12 +2373,6 @@ void PumpWavIO() {
 
     s_dwt_io_cycles = WaveX::Profiling::GetCycles() - block_cycles_start;
     s_dwt_io_max = std::max(s_dwt_io_max, s_dwt_io_cycles);
-
-#if WAVEX_DAISY_SD_DEBUG
-    if (s_hw)
-        WaveX::Log::PrintLine("Transferred %u frames from SD buffer to ring buffer",
-                              (unsigned)final_frames);
-#endif
 }
 
 // ============================================================================

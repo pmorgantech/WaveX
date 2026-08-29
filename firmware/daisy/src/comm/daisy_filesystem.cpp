@@ -425,6 +425,31 @@ void ProcessBrowseRequest(const char* path, size_t start_index, uint8_t max_entr
     }
 }
 
+// Tells the frontend that storage went away: leave audition mode, and empty
+// the browser listing because nothing on the card is reachable any more.
+// Sent on card ejection and when reads fail past recovery. Without this the
+// Daisy falls silent while the ESP32 still shows "Playing" over a file list
+// it can no longer open.
+void NotifyStorageLost() {
+    using namespace WaveX::Protocol;
+
+    // Same message a user-requested stop sends, so the browser's existing
+    // stop handling takes it - no new frontend state to get wrong.
+    SampleStopRespMessage stop_resp;
+    stop_resp.success = 1;
+    stop_resp.reserved[0] = 0;
+    stop_resp.reserved[1] = 0;
+    stop_resp.reserved[2] = 0;
+    WaveX::Comm::UartLinkSend(MSG_SAMPLE_STOP_RESP, &stop_resp, sizeof(stop_resp));
+
+    // An empty browse response: total_count 0, n 0. Same shape the browser
+    // already parses, so it clears the list through its normal path.
+    uint8_t empty_browse[sizeof(uint32_t) + sizeof(uint8_t)] = {0, 0, 0, 0, 0};
+    WaveX::Comm::UartLinkSend(MSG_BROWSE_RESP, empty_browse, sizeof(empty_browse));
+
+    WaveX::Log::PrintLine("DAISY: storage lost - told frontend to exit audition and clear list");
+}
+
 // Process sample play request (existing function)
 void ProcessSamplePlayRequest(const char* file_path) {
     using namespace WaveX::Protocol;

@@ -818,6 +818,27 @@ static void browse_resp_callback(const uint8_t* data, size_t length, void* user_
         return;
     }
 
+    // An empty listing is authoritative, and it can arrive UNSOLICITED: the
+    // Daisy sends one when the card is ejected or becomes unreadable. The
+    // accumulate path below cannot express it - loaded_entries is only reset
+    // by refresh_file_list(), so an unsolicited response would re-adopt the
+    // stale count and leave the old files on screen, and if current_page were
+    // non-zero it would not even mark a UI update. Handle it directly.
+    if (total_files == 0 && current_page_entries == 0) {
+        free(temp_entries);
+        ESP_LOGI(TAG, "Empty browse response - clearing file list");
+        browser->total_files = 0;
+        browser->loaded_entries = 0;
+        browser->entry_count = 0;
+        browser->current_page = 0;
+        browser->first_visible_index = 0;
+        browser->selected_index = 0;
+        browser->pagination_in_progress = false;
+        browser_set_ui_update(browser);
+        wavex_ui_mark_content_changed();
+        return;
+    }
+
     // Update browser state
     if (browser->current_page == 0) {
         // First page - initialize total count

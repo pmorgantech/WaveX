@@ -54,6 +54,16 @@ void GetIOStats(uint32_t& count, uint32_t& max_duration, uint32_t& last_duration
 // (1 kHz here) whenever the SAI DMA is running, independent of the main loop.
 uint32_t GetCallbackBlocks();
 
+// Lowest ring-buffer occupancy (frames) seen since the previous call, sampled
+// per audio callback. Reading resets it. Ring capacity is 2048 frames / ~42 ms.
+uint32_t TakeRingLowWater();
+
+// True once if playback stopped for a storage reason (card removed, or reads
+// failing past recovery) rather than a user request. Reading clears it. The
+// frontend must be told, or it stays in audition mode over a dead card.
+bool TakePlaybackAborted();
+void MarkPlaybackAborted();
+
 // Failed SD reads and the last FatFS result code. Counted separately from
 // GetIOStats()'s count, which only tracks successful reads.
 void GetIOErrors(uint32_t& errors, uint32_t& last_result);

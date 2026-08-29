@@ -1,4 +1,5 @@
 #include "../shared/config/pin_config.h"
+#include "comm/daisy_filesystem.h"
 #include "comm/daisy_spi_link.h"
 #include "comm/daisy_uart_link.h"
 #include "comm/log_ring.h"
@@ -86,14 +87,18 @@ static void UsbRxCallback(uint8_t* buff, uint32_t* len) {
 // the card is physically gone, so the open WAV handle is dead: drop playback
 // rather than let the streaming path keep failing reads against it.
 static void OnSdCardEvent(bool inserted) {
+    if (inserted) {
+        return;  // Remount already logged; the browser refreshes on its own.
+    }
 #if WAVEX_AUDIO_ENGINE_ENABLED
-    if (!inserted && WaveX::AudioEngine::IsWavPlaying()) {
+    if (WaveX::AudioEngine::IsWavPlaying()) {
         WaveX::AudioEngine::CloseWav();
         WAVEX_LOG_DAISY(AUDIO_ENGINE, "SD card removed during playback - audio stopped");
     }
-#else
-    (void)inserted;
 #endif
+    // Sent even when nothing was playing: the browser's list refers to files
+    // that no longer exist, so it has to be cleared either way.
+    WaveX::Comm::NotifyStorageLost();
 }
 
 // Initialize DSP objects via AudioEngine
@@ -489,6 +494,14 @@ int main(void) {
         WaveX::Storage::SdSdio::Poll();
 #endif
 
+#if WAVEX_AUDIO_ENGINE_ENABLED
+        // The audio engine aborts playback itself when reads stop working;
+        // the frontend has no way to learn that except by being told.
+        if (WaveX::AudioEngine::TakePlaybackAborted()) {
+            WaveX::Comm::NotifyStorageLost();
+        }
+#endif
+
 // Check for audio underruns (logging handled here to avoid blocking audio callback)
 #if WAVEX_AUDIO_ENGINE_ENABLED
         WaveX::AudioEngine::CheckAndLogUnderruns();
@@ -587,6 +600,15 @@ int main(void) {
                                 (int)(WaveX::AudioEngine::GetAvgCpuLoad() * 100.0f),
                                 (unsigned long)WaveX::Log::DroppedBytes());
 
+                // How close the ring came to empty this interval. 2048 frames
+                // is full (~42 ms); a low figure with no underruns means the
+                // margin is being eaten periodically, which is audible long
+                // before it ever reaches zero.
+                WAVEX_LOG_DAISY(AUDIO_ENGINE,
+                                "RING: low_water=%lu of %u frames",
+                                (unsigned long)WaveX::AudioEngine::TakeRingLowWater(),
+                                2048u);
+
 #if WAVEX_DAISY_SD_DEBUG
                 // Throughput/latency for THIS interval. Rates are derived from
                 // the measured dt rather than the nominal 5 s, so a late
@@ -598,7 +620,7 @@ int main(void) {
                 WAVEX_LOG_DAISY(AUDIO_ENGINE,
                                 "SD PERF: %lu KB/s (%lu reads, %lu B) latency avg=%lu us "
                                 "min=%lu us max=%lu us @ %s",
-                                (unsigned long)((sd_bytes / dt_ms) * 1000u / 1024u),
+                                (unsigned long)((uint64_t)sd_bytes * 1000u / dt_ms / 1024u),
                                 (unsigned long)sd_reads,
                                 (unsigned long)sd_bytes,
                                 (unsigned long)sd_avg_us,

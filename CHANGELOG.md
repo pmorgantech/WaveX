@@ -46,6 +46,36 @@ versioning and release process.
   output against whole-buffer output, total-output accounting, per-channel
   history for stereo and 8-channel, and state reset.
 
+### Added — Audition exits automatically when storage goes away
+
+- Ejecting the card, or exhausting SD read recovery, now tells the frontend
+  via `Comm::NotifyStorageLost()`: a `MSG_SAMPLE_STOP_RESP` so the UI leaves
+  audition mode, and an empty `MSG_BROWSE_RESP` so the browser clears its
+  listing. Previously the Daisy fell silent while the ESP32 kept showing
+  "Playing" over a file list it could no longer open. Both reuse existing
+  message shapes, so no protocol change and no version bump.
+- Sent on ejection even when nothing is playing, since the listing refers to
+  files that are no longer reachable.
+- ESP32: an empty browse response now clears the list. `loaded_entries` is
+  reset only by `refresh_file_list()`, so an *unsolicited* empty response
+  re-adopted the stale count and left the old files on screen — and with
+  `current_page` non-zero it did not even mark a UI update.
+
+### Changed — Audition telemetry
+
+- Removed the per-pump `Transferred N frames` logging (96% of log volume
+  during playback), the per-pass pre-buffer progress line, and the
+  per-100-reads `SD I/O Stats` line that duplicated `SD PERF` and still
+  printed ticks labelled as milliseconds.
+- Added `RING: low_water`, the lowest ring occupancy seen per interval,
+  sampled in the audio callback. Zero underruns only proves the ring never
+  reached empty; it says nothing about how close it came, and a dip toward
+  empty is audible well before zero.
+- `WAV open:` now reports `data_start` with its frame and sector remainders.
+  This identified the difference between files that stutter and files that do
+  not: `data_start % 4 == 2` stutters, `== 0` does not.
+- Fixed `SD PERF` KB/s integer truncation, which read about 3% low.
+
 ### Added — Daisy development and audition tooling
 
 - Added software-triggered Daisy DFU entry (`make daisy-flash-auto`), serial
