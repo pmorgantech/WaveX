@@ -62,6 +62,22 @@ uint32_t s_pending_since_ms = 0;
 // insertion - otherwise one unlucky attempt leaves the slot dead.
 uint32_t s_remount_retry_after_ms = 0;
 constexpr uint32_t kRemountRetryMs = 2000;
+
+// Card-detect closes before the card is electrically ready; this settle
+// window covers power-up, not switch bounce (kCardDebounceMs above already
+// covers that). Re-identification then walks the speed table one entry per
+// Poll() call instead of in one shot: the previous single-shot version could
+// block the main loop (audio ring/CV/UART all serviced from the same loop)
+// for the settle delay plus every speed's own FR_NOT_READY retry loop -
+// worst case around 1.5 s. Spreading it out bounds any one Poll() call to a
+// single TrySpeed() attempt's own worst case (~250 ms from its internal
+// retry loop, left untouched - see TrySpeed's comments on why that
+// sequencing is hardware-sensitive) instead of the full negotiation.
+enum class ReinitState { Idle, AwaitingSettle, Negotiating };
+ReinitState s_reinit_state = ReinitState::Idle;
+constexpr uint32_t kInsertSettleMs = 200;
+uint32_t s_settle_since_ms = 0;
+int s_negotiate_index = 0;
 #endif
 
 // Applies one bus clock and proves it by mounting and reading a directory.
@@ -252,6 +268,51 @@ void Poll() {
     if (s_hw == nullptr) {
         return;
     }
+
+    // Drive an in-progress reinsertion sequence first, one bounded step per
+    // call, instead of blocking the whole main loop until the card is fully
+    // renegotiated. Removal can't be observed while this is running (same as
+    // the previous single-shot version - TrySpeed() will simply fail at
+    // every speed if the card is actually gone, and the sequence below gives
+    // up gracefully after the last one).
+    if (s_reinit_state == ReinitState::AwaitingSettle) {
+        if ((System::GetNow() - s_settle_since_ms) < kInsertSettleMs) {
+            return;
+        }
+        s_reinit_state = ReinitState::Negotiating;
+        s_negotiate_index = static_cast<int>(WAVEX_DAISY_SD_CARD_SPEED);
+    }
+    if (s_reinit_state == ReinitState::Negotiating) {
+        if (TrySpeed(s_negotiate_index, s_auto_format)) {
+            if (s_negotiate_index != static_cast<int>(WAVEX_DAISY_SD_CARD_SPEED)) {
+                WaveX::Log::PrintLine(
+                    "SD: negotiated DOWN from %s to %s - the card or wiring cannot hold the "
+                    "configured rate",
+                    kSpeeds[static_cast<int>(WAVEX_DAISY_SD_CARD_SPEED)].name,
+                    kSpeeds[s_negotiate_index].name);
+            }
+            s_reinit_state = ReinitState::Idle;
+            s_remount_retry_after_ms = 0;
+            if (s_card_cb) {
+                s_card_cb(true);
+            }
+        } else if (--s_negotiate_index < 0) {
+            WaveX::Log::PrintLine("SD: unusable at every bus clock");
+            s_reinit_state = ReinitState::Idle;
+            // Leave the state as "absent" so the still-present card reads as
+            // a fresh insertion next time round and the attempt repeats,
+            // spaced out so a card that never mounts does not spin the loop
+            // or the log.
+            s_card_present = false;
+            s_remount_retry_after_ms = System::GetNow() + kRemountRetryMs;
+            WaveX::Log::PrintLine("SD: remount FAILED - retrying in %lu ms",
+                                  (unsigned long)kRemountRetryMs);
+        }
+        // Else: still negotiating, try s_negotiate_index (now one step lower)
+        // on the next Poll() call.
+        return;
+    }
+
     // Active low: LOW means a card is seated.
     const bool present_now = !s_cd_pin.Read();
     const uint32_t now = System::GetNow();
@@ -285,28 +346,12 @@ void Poll() {
     }
 
     WaveX::Log::PrintLine("SD: card INSERTED - remounting");
-    // Card-detect closes before the card is electrically ready; the debounce
-    // above covers switch bounce, not power-up. Identification issued too
-    // early fails, and every later attempt then inherits a half-initialized
-    // peripheral. Cheap here - audio is already stopped, the card is gone.
-    System::Delay(200);
-    // Renegotiate from the configured start: a different card may hold a
-    // different clock, so inheriting the previous card's negotiated rate
-    // would be wrong in both directions.
-    if (ConfigureAndMount(static_cast<int>(WAVEX_DAISY_SD_CARD_SPEED), s_auto_format)) {
-        s_remount_retry_after_ms = 0;
-        if (s_card_cb) {
-            s_card_cb(true);
-        }
-    } else {
-        // Leave the state as "absent" so the still-present card reads as a
-        // fresh insertion next time round and the attempt repeats, spaced out
-        // so a card that never mounts does not spin the loop or the log.
-        s_card_present = false;
-        s_remount_retry_after_ms = now + kRemountRetryMs;
-        WaveX::Log::PrintLine("SD: remount FAILED - retrying in %lu ms",
-                              (unsigned long)kRemountRetryMs);
-    }
+    // Card-detect closes before the card is electrically ready; this settle
+    // window covers power-up, not switch bounce (kCardDebounceMs above
+    // already covers that). Handed off to the state machine at the top of
+    // this function instead of blocking here - see its declaration comment.
+    s_reinit_state = ReinitState::AwaitingSettle;
+    s_settle_since_ms = now;
 #endif
 }
 
