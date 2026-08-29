@@ -22,8 +22,16 @@ class the code's own comments already described.
 - **Input dispatch now holds the port lock.** `InputDispatcher::processAll()`
   ran unlocked while `onInput` handlers built and restyled widgets, contradicting
   the contract written down in `ui_navigator.cpp`. Four pages were affected
-  (keyboard, sample edit, menu, and the global Shift softkey rebuild); one
-  recursive lock around dispatch covers them all.
+  (keyboard, sample edit, menu, and the global Shift softkey rebuild). The lock
+  is taken around **each event** rather than around the whole queue drain: a
+  backlog — a fast encoder spin queued while a page was still building — would
+  otherwise hold it across every queued event back to back, stalling the render
+  task for as many frames as there are events.
+- **Lock order is now LVGL → UART**, recorded at the lock site. Handlers send
+  over the link while holding the LVGL lock; `s_uart_mutex` is only ever held
+  briefly and with a timeout, and never across `uart_write_bytes`. Nothing may
+  take these in the other order — in particular the UART RX task's callbacks
+  must stay flag-only.
 - **Sample browser status callbacks no longer draw.** Play-bar position,
   status text, softkey rebuilds and load progress arrived on the UART RX task
   and wrote to LVGL directly; they are now staged behind release/acquire atomics

@@ -5,7 +5,9 @@
 **Method**: four parallel subsystem reviews (core app/tasks, comm/links, input peripherals, LVGL UI) reading every first-party line, with all dead-code claims grep-verified against the whole repo. Every Critical and Major finding below was then independently re-verified against source (including the `esp_tca8418` and `esp_lvgl_port` managed components and the Waveshare BSP) before inclusion. No device build or hardware test was run for this review; nothing below depends on one, but E-KEY1/E-KEY2 predict hardware behaviour that should be confirmed on the bench.
 **Branch**: `feature/sequencer-voice-audition` at `41013e1`.
 
-Findings carry stable IDs (`E-…`) with checkboxes so implementation can be tracked in this file. Tick the box and append a commit hash when an item lands.
+Findings carry stable IDs (`E-…`) so implementation can be tracked in this file. **Completed items leave this document** — detail goes to `CHANGELOG.md`, matching the roadmap's convention — so what remains here is always the open list. A partially-addressed item keeps its row, marked `[~]`, and says what is left.
+
+**Already remediated** (see `CHANGELOG.md` § Unreleased): E-LVGL1/2/3, the LVGL thread-safety cluster, fixed 2026-08-29 in `21304be` and `222b2b4`.
 
 ---
 
@@ -15,13 +17,13 @@ The live UART transport story has improved a lot since the 2026-07-05 review: th
 
 The debt is concentrated in three themes:
 
-1. **LVGL thread-safety is systematically violated.** The UART RX task mutates widgets directly in several comm callbacks, the entire encoder/keypad input dispatch path runs outside the LVGL port lock, and `lv_async_call` is issued from the wrong task with captures that can outlive their pages. This is the known "display freeze" class — the codebase's own comments describe it — and it will also present as "random" heap corruption. One lock around `processAll()` plus converting the remaining comm callbacks to the deferred-flag pattern (which the file browser already implements correctly, with proper atomics) fixes most of it.
+1. **LVGL thread-safety was systematically violated** — ~~the UART RX task mutating widgets directly in comm callbacks, the whole input dispatch path running outside the port lock, and `lv_async_call` issued from the wrong task~~. **Fixed 2026-08-29**; see `CHANGELOG.md`. Kept in this list because it is the reason themes 2 and 3 matter more than they look: the corruption this caused was the most likely explanation for "random" UI failures, so misbehaviour that survives these fixes is now much more likely to be one of the remaining items than a mystery.
 2. **Callback lifetime and cross-core publication are unmanaged.** `inter_mcu` listener `{callback, user_data}` pairs are plain globals written by UI pages (with `this`) and read by the UART task with no synchronization; the file browser never unregisters its listeners on destroy. Both are use-after-free windows on the live path. Relatedly, three comm-driven pages solve the same producer/consumer handoff three different ways — correct `__atomic` release/acquire (file browser), plain `bool`s (sample browser), and `volatile` (the new sample-edit page, a guide-§9 regression on the current branch).
 3. **The physical control surface has real functional bugs.** The TCA8418 keypad path, as committed, either never sees a key (the driver never enables the chip's interrupt output) or busy-spins core 1 at priority 5 (nothing clears `INT_STAT`, and the INT-asserted branch has no delay); its event decode also ignores the press/release bit, so presses would fire on release. The encoder path drops or replays detents under SMP: interrupt masking is used as cross-core synchronization (the exact anti-pattern §1 of the guide opens with) on top of a hardware read-then-clear window.
 
 Two systemic build findings round it out: the `-Os`/LTO compile options in the top-level CMakeLists are added after `project()` and apply to nothing (the image is `-O2`), and the `EXCLUDE_COMPONENTS` list excludes nothing. Both misdescribe the shipped image to anyone reading the build files.
 
-**Suggested order**: the LVGL locking cluster (E-LVGL1..3) and callback-lifetime cluster (E-LIFE1..3) first — they are the active crash/corruption risks; then the keypad (E-KEY1..2) and encoder (E-ENC1) correctness fixes; then the build-file repairs (E-BLD1..2) before anyone tunes performance. The SPI findings (§7) do not need fixing now but must gate any re-enable of `WAVEX_SPI_LINK_ENABLED`.
+**Suggested order**: the callback-lifetime cluster (E-LIFE1..3) next — with the LVGL cluster done, these are the remaining active crash risks, and they touch the same comm callbacks the LVGL fix just reshaped, so the context is fresh. Then the keypad (E-KEY1..2) and encoder (E-ENC1) correctness fixes, which are what stands between the hardware controls and working at all. Then E-INIT1 and the build-file repairs (E-BLD1..2), the latter before anyone tunes performance against flags that are not applied. The SPI findings (§7) do not need fixing now but must gate any re-enable of `WAVEX_SPI_LINK_ENABLED`.
 
 ---
 
@@ -29,9 +31,6 @@ Two systemic build findings round it out: the `-Os`/LTO compile options in the t
 
 | ID | Sev | Area | Summary |
 |---|---|---|---|
-| [x] E-LVGL1 | Critical | UI/comm | UART RX task mutates LVGL directly (sample browser status cb, record page wave chunks) — fixed 2026-08-29 |
-| [x] E-LVGL2 | Critical | UI | Entire input dispatch path (`processAll`, `toggleShift`) runs outside the LVGL lock — fixed 2026-08-29 |
-| [x] E-LVGL3 | Critical | UI | `lv_async_call` from the UART task; captures can outlive their pages — fixed 2026-08-29 |
 | [ ] E-LIFE1 | Critical | comm | `inter_mcu` listener pairs are unsynchronized cross-core globals → torn pair / UAF |
 | [ ] E-LIFE2 | Critical | UI | File browser never unregisters browse/storage listeners on destroy → UAF |
 | [ ] E-LIFE3 | Major | comm | `StatisticsManager` callback pairs half-locked; browse-resp mutex held across UI callback |
@@ -72,43 +71,6 @@ Two systemic build findings round it out: the `-Os`/LTO compile options in the t
 ---
 
 ## 3. Critical
-
-### E-LVGL1 — UART RX task mutates LVGL widgets directly
-
-The browse/sample-status/wave-chunk/envelope listeners are invoked from the UART RX task (`packet_router.cpp:345,411` ← `uart_task`, `esp_uart_link.cpp:197`), which races the LVGL port task (prio 4, unpinned) on the other core. Direct violations:
-
-- `components/ui/src/ui_sample_browser.cpp:896,914,931,936` — `sample_status_callback` calls `lv_bar_set_value`, `lv_label_set_text`, `BusyOverlay::setProgress/hide` (the latter ends in `lv_timer_delete`) with no `lvgl_port_lock`. Playback-position pushes make this a continuous race during audition.
-- `pages/ui_sample_record_page.cpp:93-107` — `handleWaveChunk` calls `WaveformView::setSamples` (512× `lv_chart_set_value_by_id` + `lv_chart_refresh`) plus `lv_label_set_text` per packet.
-
-Consequence: LVGL object-tree/heap corruption — the same failure class the codebase's own comments describe as the edit-page freeze (`file_browser.cpp:974`). **Fix**: convert both to the deferred-snapshot-plus-flag pattern already used by `UISampleBrowser::updateStatus()`/`processDeferredUpdates()`, with release/acquire publication (see E-SYNC1).
-
-**Fixed 2026-08-29.** Both converted. The browser stages play-bar percentage, status text, softkey rebuilds and selection metadata behind release/acquire atomics drained in `processDeferredUpdates_()`; its existing plain-`bool` flags were converted to `std::atomic` at the same time (partial E-SYNC1). The record page stages the chunk into a fixed buffer and renders from a 50 ms `lv_timer`. Busy-overlay progress/hide moved into `BusyOverlay::requestProgress`/`requestHide`/`service` so a completion still dismisses the overlay after the user navigates away. Note this does **not** close E-LIFE1/E-LIFE2: the callbacks now write only to page memory rather than to LVGL, but that memory can still be freed underneath them.
-
-### E-LVGL2 — input dispatch path runs outside the LVGL lock
-
-`main/ui_task.cpp:520` calls `InputDispatcher::instance().processAll()` before `LV_LOCK()` (the lock is taken only for `processDeferredUpdates()` at :528). `ui_navigator.cpp:18` documents the opposite contract ("UIPage::onInput handlers: NEED locks"). Unlocked `lv_*` mutation reached from `onInput`:
-
-- `pages/ui_keyboard_page.cpp:271` → `refreshParamLabel()` → `lv_label_set_text_fmt` *(current branch)*
-- `pages/ui_sample_edit_page.cpp:329-330` → `refreshFocusRing()` → style writes *(current branch)*
-- `src/ui_menu_page.cpp:123-131` → `rebuildList()` → `lv_obj_clean` + full rebuild
-- `src/input_dispatcher.cpp:42` → `UINavigator::toggleShift()` → `SoftkeyBar::setSoftkeys` (dozens of calls; `ui_navigator.cpp:170` itself says LVGL-context-only)
-
-**Fix**: the port lock is recursive — take `LV_LOCK()` around `processAll()` in `ui_task.cpp` (and inside `toggleShift`), as `UISettingsPage::rebuildList()` already does correctly. Cheap, fixes four pages at once.
-
-**Fixed 2026-08-29.** `processAll()` now takes the port lock around **each event**, covering `toggleShift` and all four pages. Per event rather than once around the drain: a backlog (fast encoder spin queued while a page was building) would otherwise hold the lock across every queued event back to back, stalling the render task for as many frames as there are events; per event the hold is one handler long. The extra acquire/release is a few hundred cycles against a queue carrying single-digit events per 32 ms pass.
-
-Verified safe against deadlock before extending the lock: `process_rx_frames` routes without holding `s_uart_mutex`, so the LVGL lock never nests inside it; both `s_uart_mutex` holders are brief and bounded (`uart_link_send` 10 ms timeout, `dequeue_tx_entry` 2 ms, and neither spans `uart_write_bytes`); and no input handler blocks. This establishes a **lock order of LVGL → UART** — recorded in `input_dispatcher.cpp`, because the E-LIFE1 fix must not reintroduce an LVGL acquire on the UART side. The stale guidelines at the top of `ui_navigator.cpp` (which claimed `LV_LOCK()` would "compete with LVGL's own lock") were rewritten to state the new invariant.
-
-Hold time is argued, not measured — logged in roadmap § Outstanding hardware verification. The structural argument is that the lock was never the dominant term: `lv_refr_now()` in `adaptiveRefreshControl()` holds it across a full 720×1280 refresh up to every 16 ms, which dwarfs any handler, and the page-push path already took the lock internally before this change.
-
-### E-LVGL3 — `lv_async_call` from the UART task with freeable captures
-
-- `components/ui/components/file_browser.cpp:1081-1167` — `browse_resp_callback` (UART task) issues `lv_async_call` directly (`lv_async_call` creates an `lv_timer` on LVGL's timer list — itself a cross-task race), and the ~90-line "DEBUG: Direct refresh test - bypass normal update mechanism" lambda duplicates `update_file_browser_ui()` and dereferences `browser`, which E-LIFE2 shows can be freed before the async fires.
-- `src/ui_sample_browser.cpp:468-489` — `directory_changed_callback` (reachable from the UART task) captures `this`; the `is_initialized_` guard itself reads freed memory once the page is popped.
-
-**Fix**: delete the DEBUG block (the deferred path already does the work); never issue `lv_async_call` from non-LVGL context; route page-bound updates through the page's own timer with a pending flag.
-
-**Fixed 2026-08-29.** The DEBUG block is deleted — `browser_set_ui_update()` two lines above it already schedules the real rebuild, so it was pure duplication. `UISampleBrowser::refreshSoftkeys()` and `directory_changed_callback` now raise flags drained by `processDeferredUpdates_()` instead. The remaining `lv_async_call` sites (`ui_menu_page.cpp`, `ui_softkey_bar.cpp`) are in LVGL event context, which is its legitimate use.
 
 ### E-LIFE1 — `inter_mcu` listener pairs: torn reads and a UAF window across cores
 
