@@ -176,3 +176,28 @@ callback has comfortable headroom, leave it alone — the host-testability is
 worth more than an unmeasured win. If it is tight, item 2 becomes worth paying
 for, and it should be measured before *and* after the restructure so the
 out-of-lining and the placement are not credited to each other.
+
+---
+
+## SPI-link revival is gated on five recorded defects
+
+**Want:** when the SPI link is re-enabled (`WAVEX_SPI_LINK_ENABLED`,
+`link_config.h` — decision of 2026-07-05 made UART the transport of record),
+the quarantined `esp_spi_link.cpp` must first be fixed.
+
+**Current state:** the 2026-08-29 ESP32 review recorded five blockers as
+SPI-1..SPI-5 in
+[`code_review_esp32_20260829.md` §7](code_review_esp32_20260829.md): driver-owned
+transaction descriptors/RX buffers reused on result timeout, no sequence
+gating on the live SPI RX path, an uninitialized in/out capacity that can
+overflow a 220-byte stack buffer, an 8-bit TX sequence wrapping through the
+reserved value 0, and configured-vs-actual transfer length confusion.
+
+**Why it is not urgent:** the code is compiled out of every image today, so
+none of it is reachable. It becomes urgent the moment anyone flips the flag —
+which is why it is recorded here rather than fixed opportunistically: fixing
+dead code cannot be verified on hardware, and the project's standard is not to
+claim fixes without a way to observe them.
+
+**When to revisit:** at SPI revival planning. Copy SPI-1..SPI-5 into that
+roadmap item's gate before any bring-up work starts.

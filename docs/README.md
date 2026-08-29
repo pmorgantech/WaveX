@@ -49,6 +49,8 @@ Dated snapshots of implementation progress against `roadmap.md`, not living docu
 |---|---|
 | [status-2026-07-02.md](status-2026-07-02.md) | Phase 0 (Foundation Hardening) complete + Phase 1 items 1–3 (output/CV seam, RAM-resident voice manager, real-time-safe recording buffer); bugs found along the way; what still needs hardware verification |
 | [dma-timing-review-2026-07-03.md](dma-timing-review-2026-07-03.md) | DMA/timing code review of the UART link + audio path: 12 findings (3 high: 918.75 Hz control tick vs the 1 kHz invariant → **48 kHz decision recorded**, oversize-frame transmit wedge, UART-over-audio priority inversion); fix order lives in `roadmap.md` Phase 1 |
+| [code_review_20260705.md](code_review_20260705.md) | Full first-party tree review (shared + Daisy + ESP32): broken MIDI note dispatch, inert legacy DSP surface, inverted send-error results, transport docs backwards; several items since fixed (see the 2026-08-29 review §8 for ESP32 status) |
+| [code_review_esp32_20260829.md](code_review_esp32_20260829.md) | ESP32-P4-only review against `docs/esp32p4_coding_guide.md`: ~40 tracked findings with checkboxes (LVGL locking violations, callback-lifetime UAFs, nonfunctional keypad decode, cross-core encoder race, inert CMake options) + SPI-link revival gate (§7) |
 
 ## Housekeeping notes
 
