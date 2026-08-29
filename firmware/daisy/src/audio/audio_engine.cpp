@@ -34,6 +34,7 @@ extern "C" SD_HandleTypeDef hsd1;  // libDaisy per/sdmmc.cpp
 #include "voice_manager.hpp"
 #include "wav/wav_header_parser.hpp"
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -600,8 +601,22 @@ static void update_loaded_sample_progress(uint16_t sample_id, uint32_t loaded_by
 // callback Using regular memory - this buffer is NOT accessed by DMA, only by CPU (main loop
 // writes, IRQ reads) Moving out of DMA memory saves 8KB from the 32KB RAM_D2_DMA limit
 static const uint32_t RB_CAP_FRAMES = 2048;
-static volatile uint32_t s_rb_head = 0;
-static volatile uint32_t s_rb_tail = 0;
+// Lock-free by construction on Cortex-M7 (aligned 32-bit load/store is a single
+// instruction); std::atomic<uint32_t>::is_always_lock_free isn't usable here because this
+// target's <atomic> predates the C++17 addition of that member despite compiling as C++17.
+static std::atomic<uint32_t> s_rb_head{0};
+static std::atomic<uint32_t> s_rb_tail{0};
+// Gates whether rb_pop_stereo() (audio ISR, sole consumer) may touch
+// s_rb_head/s_rb_tail at all. OpenWav()/CloseWav() run on the main loop
+// (producer context) and are the only callers that reset BOTH indices
+// together; a direct write to s_rb_tail from there raced the ISR's own
+// tail update if an audio block landed mid-reset (same-core IRQ
+// preemption, not a multi-core race), which could lose one of the two
+// writes and leave (head - tail) briefly huge, playing stale ring
+// contents. Clearing this first makes the consumer bail out before it
+// reads or writes either index, so the producer-side reset below is
+// never observed half-applied.
+static std::atomic<bool> s_rb_live{false};
 static q15_t s_rb[RB_CAP_FRAMES * kMaxMixChannels];
 
 // Pre-buffering system for smooth playback start
@@ -1238,13 +1253,14 @@ static bool refill_sd_buffer() {
     return true;
 }
 
-// Thread-safe ring buffer operations with atomic access and memory barriers
+// Thread-safe ring buffer operations. s_rb_head/s_rb_tail are std::atomic;
+// acquire/release on the cross-context handoffs give the same ordering the
+// old __DMB() pairs were reaching for, but tied to the actual publish
+// (data-then-head, head-then-data-read-then-tail) instead of the index
+// reads/writes in isolation.
 static inline uint32_t rb_count_frames() {
-    // Atomic read with memory barrier to ensure consistency
-    __DMB();  // Data Memory Barrier - ensure all previous memory operations complete
-    uint32_t head = s_rb_head;
-    uint32_t tail = s_rb_tail;
-    __DMB();  // Ensure reads are completed before calculation
+    uint32_t head = s_rb_head.load(std::memory_order_acquire);
+    uint32_t tail = s_rb_tail.load(std::memory_order_acquire);
     return (head - tail) & (RB_CAP_FRAMES - 1u);
 }
 
@@ -1257,7 +1273,9 @@ static inline void rb_push_frames(const q15_t* samples, uint32_t frames) {
         return;
 
     const uint32_t mask = RB_CAP_FRAMES - 1u;
-    uint32_t head = s_rb_head;
+    // Producer-owned index; only this function and OpenWav/CloseWav (same
+    // main-loop context, never concurrent with this call) ever write it.
+    uint32_t head = s_rb_head.load(std::memory_order_relaxed);
     uint32_t first_chunk = RB_CAP_FRAMES - (head & mask);
     uint32_t chunk = (frames < first_chunk) ? frames : first_chunk;
     uint32_t samples_per_channel = s_output_channels;
@@ -1270,20 +1288,25 @@ static inline void rb_push_frames(const q15_t* samples, uint32_t frames) {
             samples + chunk * samples_per_channel, s_rb, (frames - chunk) * samples_per_channel);
     }
 
-    __DMB();  // Ensure writes complete before updating head
-    s_rb_head = head + frames;
-    __DMB();  // Ensure head is visible to consumer
+    // Release: publish the sample writes above before the consumer can see
+    // the new head and read them.
+    s_rb_head.store(head + frames, std::memory_order_release);
 }
 
 static inline bool rb_pop_stereo(int16_t& l, int16_t& r) {
-    // Atomic read with memory barriers for thread safety
-    __DMB();  // Data Memory Barrier - ensure all previous operations complete
-    uint32_t tail = s_rb_tail;
-    uint32_t head = s_rb_head;
+    // If the main loop is mid-reset (OpenWav/CloseWav), treat the ring as
+    // empty and touch neither index - see s_rb_live's declaration comment.
+    if (!s_rb_live.load(std::memory_order_acquire)) {
+        return false;
+    }
 
-    // Check if buffer is empty (atomic comparison)
+    // Consumer-owned index; only this function ever writes it.
+    uint32_t tail = s_rb_tail.load(std::memory_order_relaxed);
+    // Acquire: synchronizes with rb_push_frames' release store, so the
+    // sample data below is guaranteed visible once head has advanced past it.
+    uint32_t head = s_rb_head.load(std::memory_order_acquire);
+
     if (tail == head) {
-        __DMB();  // Ensure comparison is complete
         return false;
     }
 
@@ -1293,14 +1316,9 @@ static inline bool rb_pop_stereo(int16_t& l, int16_t& r) {
     l = s_rb[idx + 0];
     r = (stride > 1) ? s_rb[idx + 1] : s_rb[idx + 0];
 
-    // Memory barrier to ensure data is read before updating tail
-    __DMB();  // Data Memory Barrier - ensure data reads complete
-
-    // Atomic update of tail pointer
-    s_rb_tail = tail + 1u;
-
-    // Final memory barrier to ensure tail update is visible
-    __DMB();  // Ensure tail update is committed to memory
+    // Release: the data read above is complete before the freed slot is
+    // republished to the producer via the advanced tail.
+    s_rb_tail.store(tail + 1u, std::memory_order_release);
 
     return true;
 }
@@ -2565,9 +2583,14 @@ bool OpenWav(const char* path) {
         s_wav.gain_q15 = 32767;  // first open of the session
     }
 
-    // Reset buffers
-    s_rb_head = 0;
-    s_rb_tail = 0;
+    // Reset buffers. CloseWav() above already cleared s_rb_live and no
+    // producer call (rb_push_frames) runs between here and there, so the
+    // consumer is guaranteed to still be treating the ring as empty - these
+    // stores can't race rb_pop_stereo(). Publish head/tail before flipping
+    // s_rb_live back on so the ISR never observes "live" with stale indices.
+    s_rb_head.store(0, std::memory_order_relaxed);
+    s_rb_tail.store(0, std::memory_order_release);
+    s_rb_live.store(true, std::memory_order_release);
 
     // Logged unconditionally: once per file open, so it cannot spam, and it
     // is the only place the per-file variables are visible. When some files
@@ -2603,6 +2626,11 @@ bool OpenWav(const char* path) {
 }
 
 void CloseWav() {
+    // First: tell rb_pop_stereo() (audio ISR) to stop touching the ring
+    // indices at all. Until this is observed, the ISR may still be
+    // advancing s_rb_tail; the stores below must not race that.
+    s_rb_live.store(false, std::memory_order_release);
+
     if (s_wav.open) {
         if (s_hw)
             WaveX::Log::PrintLine("CloseWav: closing WAV file and clearing state");
@@ -2626,9 +2654,11 @@ void CloseWav() {
     s_prebuffer_ready = false;
     s_prebuffering = false;
 
-    // Clear ring buffer to stop any remaining audio immediately
-    s_rb_head = 0;
-    s_rb_tail = 0;
+    // Clear ring buffer to stop any remaining audio immediately. Safe: the
+    // ISR bailed out on s_rb_live above before touching either index, so
+    // there is no writer left to race here.
+    s_rb_head.store(0, std::memory_order_relaxed);
+    s_rb_tail.store(0, std::memory_order_release);
 }
 
 bool IsWavPlaying() {
