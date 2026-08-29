@@ -31,6 +31,26 @@ versioning and release process.
   recoveries per file so a genuinely dead card ends playback cleanly instead
   of reopening forever.
 
+### Added — SD card hot-swap, and auto-format disabled by default
+
+- `SdSdio::Poll()` watches the card-detect pin (debounced 250 ms) and handles
+  hot-swap: unmount on removal, remount with a fresh bus-clock negotiation on
+  insertion, so a different card can be swapped in without a reboot. A new
+  card renegotiates from the configured start rather than inheriting the
+  previous card's rate. Playback stops cleanly on removal instead of failing
+  reads against a card that is physically gone.
+- **`WAVEX_DAISY_SD_AUTO_FORMAT` added, defaulting to 0, and `main()` no longer
+  passes `true`.** FatFS reports `FR_NO_FILESYSTEM` for a card whose boot
+  sector could not be *read*, not only for one that has no filesystem — and
+  read corruption is a demonstrated failure mode here (SDMMC data CRC errors).
+  The previous unconditional `auto_format = true` meant a single corrupted
+  boot-sector read could erase a user's card.
+- Added per-interval SD throughput and latency reporting under
+  `WAVEX_DAISY_SD_DEBUG` (`SD PERF:` — KB/s, read count, avg/min/max latency,
+  and the negotiated bus clock). Accumulators reset on read so each report
+  describes its own interval, and rates use the measured `dt` rather than the
+  nominal 5 s.
+
 ### Added — SD bus clock negotiation
 
 - `SdSdio::InitAndMount()` now starts at `WAVEX_DAISY_SD_CARD_SPEED` and steps

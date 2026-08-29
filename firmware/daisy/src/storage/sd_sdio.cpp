@@ -43,6 +43,21 @@ static_assert(WAVEX_DAISY_SD_CARD_SPEED >= 0 && WAVEX_DAISY_SD_CARD_SPEED < kSpe
               "WAVEX_DAISY_SD_CARD_SPEED must be 0..4 (SdmmcHandler::Speed)");
 
 int s_speed_index = WAVEX_DAISY_SD_CARD_SPEED;
+bool s_mounted = false;
+daisy::DaisySeed* s_hw = nullptr;
+bool s_auto_format = false;
+CardEventCallback s_card_cb = nullptr;
+
+#if WAVEX_DAISY_SD_CARD_DETECT_PIN >= 0
+// Card-detect is a mechanical switch, so it bounces on insertion and
+// removal. Require the level to hold for this long before acting - acting on
+// a bounce would tear down a working mount or try to mount a card that is
+// still moving in its socket.
+constexpr uint32_t kCardDebounceMs = 250;
+bool s_card_present = false;
+bool s_pending_level = false;
+uint32_t s_pending_since_ms = 0;
+#endif
 
 // Applies one bus clock and proves it by mounting and reading a directory.
 // A mount that succeeds but cannot be read is exactly what a marginal clock
@@ -90,6 +105,7 @@ bool TrySpeed(int index, bool auto_format) {
         if (fr == FR_OK) {
             f_closedir(&dir);
             s_speed_index = index;
+            s_mounted = true;
             WaveX::Log::PrintLine("SD: mounted at %s", kSpeeds[index].name);
             return true;
         }
@@ -106,6 +122,7 @@ bool TrySpeed(int index, bool auto_format) {
             f_opendir(&dir, "/") == FR_OK) {
             f_closedir(&dir);
             s_speed_index = index;
+            s_mounted = true;
             WaveX::Log::PrintLine("SD: mounted at %s (after format)", kSpeeds[index].name);
             return true;
         }
@@ -135,6 +152,62 @@ bool ConfigureAndMount(int start_index, bool auto_format) {
 
 }  // namespace
 
+bool IsMounted() {
+    return s_mounted;
+}
+
+void SetCardEventCallback(CardEventCallback cb) {
+    s_card_cb = cb;
+}
+
+void Poll() {
+#if WAVEX_DAISY_SD_CARD_DETECT_PIN >= 0
+    if (s_hw == nullptr) {
+        return;
+    }
+    // Active low: LOW means a card is seated.
+    const bool present_now = !s_cd_pin.Read();
+    const uint32_t now = System::GetNow();
+
+    if (present_now != s_pending_level) {
+        s_pending_level = present_now;
+        s_pending_since_ms = now;
+        return;
+    }
+    if (present_now == s_card_present) {
+        return;  // already settled in this state
+    }
+    if ((now - s_pending_since_ms) < kCardDebounceMs) {
+        return;  // still bouncing
+    }
+
+    s_card_present = present_now;
+    if (!present_now) {
+        // Unmount FIRST, then notify: a handler must never touch a file on a
+        // card that is physically gone.
+        f_mount(nullptr, "/", 0);
+        s_mounted = false;
+        WaveX::Log::PrintLine("SD: card REMOVED - filesystem unmounted");
+        if (s_card_cb) {
+            s_card_cb(false);
+        }
+        return;
+    }
+
+    WaveX::Log::PrintLine("SD: card INSERTED - remounting");
+    // Renegotiate from the configured start: a different card may hold a
+    // different clock, so inheriting the previous card's negotiated rate
+    // would be wrong in both directions.
+    if (ConfigureAndMount(static_cast<int>(WAVEX_DAISY_SD_CARD_SPEED), s_auto_format)) {
+        if (s_card_cb) {
+            s_card_cb(true);
+        }
+    } else {
+        WaveX::Log::PrintLine("SD: remount FAILED after insertion");
+    }
+#endif
+}
+
 bool DowngradeSpeed() {
     if (s_speed_index <= 0) {
         WaveX::Log::PrintLine("SD: already at %s; cannot go slower", kSpeeds[0].name);
@@ -152,6 +225,8 @@ const char* CurrentSpeedName() {
 }
 
 bool InitAndMount(DaisySeed& hw, bool auto_format) {
+    s_hw = &hw;
+    s_auto_format = auto_format;
 // Check for Card Detect pin if configured
 #if WAVEX_DAISY_SD_CARD_DETECT_PIN >= 0
     // Initialize Card Detect pin (active low - card present when pin reads LOW)
@@ -165,6 +240,9 @@ bool InitAndMount(DaisySeed& hw, bool auto_format) {
         return false;
     }
     WaveX::Log::PrintLine("SD: Card detected (CD pin D%d LOW)", WAVEX_DAISY_SD_CARD_DETECT_PIN);
+    s_card_present = true;
+    s_pending_level = true;
+    s_pending_since_ms = System::GetNow();
 #else
     WaveX::Log::PrintLine("SD: Card detect disabled - assuming card present");
 #endif

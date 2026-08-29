@@ -82,6 +82,20 @@ static void UsbRxCallback(uint8_t* buff, uint32_t* len) {
     }
 }
 
+// Card insertion/removal. On removal the filesystem is already unmounted and
+// the card is physically gone, so the open WAV handle is dead: drop playback
+// rather than let the streaming path keep failing reads against it.
+static void OnSdCardEvent(bool inserted) {
+#if WAVEX_AUDIO_ENGINE_ENABLED
+    if (!inserted && WaveX::AudioEngine::IsWavPlaying()) {
+        WaveX::AudioEngine::CloseWav();
+        WAVEX_LOG_DAISY(AUDIO_ENGINE, "SD card removed during playback - audio stopped");
+    }
+#else
+    (void)inserted;
+#endif
+}
+
 // Initialize DSP objects via AudioEngine
 void InitDSP(bool sdram_available) {
     WaveX::AudioEngine::Init(hw, hw.AudioSampleRate(), sdram_available);
@@ -154,7 +168,8 @@ int main(void) {
 #if WAVEX_DAISY_SD_DEBUG
     WAVEX_LOG_DAISY(INTER_MCU_LINK, "SD: InitAndMount start");
 #endif
-    sd_available = WaveX::Storage::SdSdio::InitAndMount(hw, true);
+    WaveX::Storage::SdSdio::SetCardEventCallback(OnSdCardEvent);
+    sd_available = WaveX::Storage::SdSdio::InitAndMount(hw, WAVEX_DAISY_SD_AUTO_FORMAT != 0);
 
     uint32_t sd_init_time = System::GetNow() - sd_start_time;
     WAVEX_LOG_DAISY(
@@ -469,6 +484,11 @@ int main(void) {
         // a busy or unread endpoint costs nothing here.
         WaveX::Log::Drain();
 
+#if WAVEX_DAISY_SD_CARD_ENABLED && (WAVEX_DAISY_SD_CARD_BACKEND == 1)
+        // Debounced card-detect read; handles hot-swap without a reboot.
+        WaveX::Storage::SdSdio::Poll();
+#endif
+
 // Check for audio underruns (logging handled here to avoid blocking audio callback)
 #if WAVEX_AUDIO_ENGINE_ENABLED
         WaveX::AudioEngine::CheckAndLogUnderruns();
@@ -566,6 +586,26 @@ int main(void) {
                                 (unsigned long)(blocks - last_blocks),
                                 (int)(WaveX::AudioEngine::GetAvgCpuLoad() * 100.0f),
                                 (unsigned long)WaveX::Log::DroppedBytes());
+
+#if WAVEX_DAISY_SD_DEBUG
+                // Throughput/latency for THIS interval. Rates are derived from
+                // the measured dt rather than the nominal 5 s, so a late
+                // report does not read as a throughput drop.
+                uint32_t sd_bytes, sd_reads, sd_avg_us, sd_min_us, sd_max_us;
+                WaveX::AudioEngine::TakeIOThroughput(
+                    sd_bytes, sd_reads, sd_avg_us, sd_min_us, sd_max_us);
+                const uint32_t dt_ms = (now_ms - last_now) ? (now_ms - last_now) : 1u;
+                WAVEX_LOG_DAISY(AUDIO_ENGINE,
+                                "SD PERF: %lu KB/s (%lu reads, %lu B) latency avg=%lu us "
+                                "min=%lu us max=%lu us @ %s",
+                                (unsigned long)((sd_bytes / dt_ms) * 1000u / 1024u),
+                                (unsigned long)sd_reads,
+                                (unsigned long)sd_bytes,
+                                (unsigned long)sd_avg_us,
+                                (unsigned long)sd_min_us,
+                                (unsigned long)sd_max_us,
+                                WaveX::Storage::SdSdio::CurrentSpeedName());
+#endif
 
                 uint32_t io_errors = 0, io_last_err = 0;
                 WaveX::AudioEngine::GetIOErrors(io_errors, io_last_err);

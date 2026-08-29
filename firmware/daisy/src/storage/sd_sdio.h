@@ -29,6 +29,22 @@ bool DowngradeSpeed();
 // Current bus clock, e.g. "STANDARD/25MHz". Never null.
 const char* CurrentSpeedName();
 
+// True while a card is mounted and usable.
+bool IsMounted();
+
+// Polls the card-detect pin and handles hot-swap: unmounts on removal and
+// remounts (renegotiating the bus clock) on insertion, so a different card
+// can be swapped in without a reboot. Cheap - a debounced GPIO read - and
+// intended to be called every main-loop pass. No-op when no card-detect pin
+// is configured, since removal cannot be observed without one.
+void Poll();
+
+// Notified on card insertion (true) and removal (false). Removal fires while
+// the filesystem is already unmounted, so a handler must drop any open file
+// handles rather than try to close them.
+using CardEventCallback = void (*)(bool inserted);
+void SetCardEventCallback(CardEventCallback cb);
+
 }  // namespace SdSdio
 }  // namespace Storage
 }  // namespace WaveX

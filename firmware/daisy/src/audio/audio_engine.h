@@ -58,6 +58,12 @@ uint32_t GetCallbackBlocks();
 // GetIOStats()'s count, which only tracks successful reads.
 void GetIOErrors(uint32_t& errors, uint32_t& last_result);
 
+// SD read throughput and latency for the interval since the previous call.
+// Reading RESETS the accumulators, so each report describes its own interval
+// rather than the whole run - which is what makes a degradation visible.
+void TakeIOThroughput(
+    uint32_t& bytes, uint32_t& reads, uint32_t& avg_us, uint32_t& min_us, uint32_t& max_us);
+
 // Streaming telemetry (see WAVEX_DAISY_STREAM_DEBUG in hardware_config.h).
 void GetStreamDebug(uint32_t& prebuf_filled,
                     uint32_t& prebuf_target,

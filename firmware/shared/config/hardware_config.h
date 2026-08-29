@@ -110,6 +110,22 @@
 #define DISABLE_SD_SPI_BACKEND 0
 #endif
 
+/**
+ * @def WAVEX_DAISY_SD_AUTO_FORMAT
+ * @brief Whether an unreadable card may be FORMATTED automatically.
+ *
+ * Default 0, and it should stay there on any board a user puts their own card
+ * into. FatFS reports FR_NO_FILESYSTEM for a card whose boot sector could not
+ * be READ, not only for one that genuinely has no filesystem - and read
+ * corruption is a demonstrated failure mode on this hardware (SDMMC data CRC
+ * errors). With auto-format enabled, one corrupted read of the boot sector is
+ * enough to erase the card. Set to 1 only for a bring-up rig with scratch
+ * media.
+ */
+#ifndef WAVEX_DAISY_SD_AUTO_FORMAT
+#define WAVEX_DAISY_SD_AUTO_FORMAT 0
+#endif
+
 // SD Card debug logging (Daisy only)
 // TEMPORARY (2026-08-28): both debug streams enabled to exercise the
 // non-blocking log ring under playback load. Revert both to 0 once that has

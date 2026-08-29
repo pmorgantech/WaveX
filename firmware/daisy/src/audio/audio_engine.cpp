@@ -527,6 +527,15 @@ static uint32_t s_io_recoveries = 0;
 // returning in ~8 us - which burns the main loop and floods the log to no
 // purpose, since a poisoned FIL cannot succeed until it is reopened.
 static uint32_t s_io_backoff_until_ms = 0;
+// Per-interval throughput/latency accumulators, reset each time they are
+// read. Kept separate from the since-boot totals so a report describes the
+// interval it covers rather than the whole run, which is what makes a
+// degradation visible.
+static uint32_t s_iv_bytes = 0;
+static uint32_t s_iv_reads = 0;
+static uint32_t s_iv_ticks = 0;
+static uint32_t s_iv_min_ticks = 0xFFFFFFFFu;
+static uint32_t s_iv_max_ticks = 0;
 constexpr uint32_t kIoBackoffMs = 20;
 // A couple of failures can be a transient card hiccup; a run of them means
 // the FIL is poisoned and only a reopen will clear it. Recoveries are capped
@@ -981,6 +990,15 @@ static bool refill_sd_buffer() {
         s_io_count++;
         if (s_io_duration > s_max_io_duration) {
             s_max_io_duration = s_io_duration;
+        }
+        s_iv_bytes += br;
+        s_iv_reads++;
+        s_iv_ticks += s_io_duration;
+        if (s_io_duration < s_iv_min_ticks) {
+            s_iv_min_ticks = s_io_duration;
+        }
+        if (s_io_duration > s_iv_max_ticks) {
+            s_iv_max_ticks = s_io_duration;
         }
 
         return true;
@@ -1997,6 +2015,22 @@ void GetIOStats(uint32_t& count, uint32_t& max_duration, uint32_t& last_duration
     count = s_io_count;
     max_duration = s_max_io_duration;
     last_duration = s_io_duration;
+}
+
+void TakeIOThroughput(
+    uint32_t& bytes, uint32_t& reads, uint32_t& avg_us, uint32_t& min_us, uint32_t& max_us) {
+    const uint32_t per_us = System::GetTickFreq() / 1000000u;
+    const uint32_t ticks_per_us = per_us ? per_us : 1u;
+    bytes = s_iv_bytes;
+    reads = s_iv_reads;
+    avg_us = s_iv_reads ? (s_iv_ticks / s_iv_reads / ticks_per_us) : 0u;
+    min_us = (s_iv_min_ticks == 0xFFFFFFFFu) ? 0u : (s_iv_min_ticks / ticks_per_us);
+    max_us = s_iv_max_ticks / ticks_per_us;
+    s_iv_bytes = 0;
+    s_iv_reads = 0;
+    s_iv_ticks = 0;
+    s_iv_min_ticks = 0xFFFFFFFFu;
+    s_iv_max_ticks = 0;
 }
 
 void GetIOErrors(uint32_t& errors, uint32_t& last_result) {
