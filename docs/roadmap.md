@@ -94,8 +94,9 @@ Still open:
 
 - **The `data_start` row is missing, deliberately.** `data_start` is carried by neither `FileEntryWire` nor `SampleMetadata`, and inventing a number for the one field that correlated exactly with the stutter would be worse than omitting it. Plumbing it needs a wire change: adding 4 bytes to `FileEntryWire` reduces entries per browse packet, so measure that cost first. See `docs/backlog.md`, which warns specifically against "fixing" the correlation by rounding `data_start` up — the mechanism is still unproven.
 - **Waveform in the detail panel.** Needs the envelope cache (1.5.5) to be worth doing; a per-selection round trip would make scrolling the list unusable.
-- **Per-row loading spinner** for in-flight pagination (design 1b). The busy overlay is the wrong tool here — it is modal, and pagination should not block the list.
-- **The audition progress bar exists but nothing drives it.** Needs playback position from the backend; `MSG_SAMPLE_STATUS` already carries `frames_played` for the RAM path but the streaming audition does not report it.
+- ~~**Per-row loading spinner**~~ Done, and polled from the UI task rather than created at each of the nine `pagination_in_progress` sites — several of those run on the UART task, and creating LVGL objects there is the mistake that froze the edit page.
+- ~~**The audition progress bar exists but nothing drives it.**~~ Done. The Daisy emits position at a fifth of the meter rate (a bar does not need 20–50 Hz) reusing `MSG_SAMPLE_STATUS` state 1, with `sample_rate` carrying the region length so the UI can scale without a second message. Note it is the **read** position, ahead of what is audible by the ring (~42 ms) — fine for a bar, not a playhead.
+- **Free space is not shown.** The design's "SD 12.4 GB free" would have to be invented: neither `FileEntryWire` nor `StorageStatusMessage` carries capacity. The strip shows mount state instead. Adding free/total bytes to `StorageStatusMessage` is cheap if wanted.
 
 ### 1.5.4 Busy feedback
 

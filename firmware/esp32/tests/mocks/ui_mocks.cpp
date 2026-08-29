@@ -27,6 +27,31 @@ void lv_obj_set_size(lv_obj_t* obj, lv_coord_t w, lv_coord_t h) {
     (void)w;
     (void)h;
 }
+lv_obj_t* lv_spinner_create(lv_obj_t* parent) {
+    return lv_obj_create(parent);
+}
+
+void lv_obj_move_foreground(lv_obj_t* obj) {
+    (void)obj;
+}
+
+void lv_obj_remove_flag(lv_obj_t* obj, uint32_t flag) {
+    (void)obj;
+    (void)flag;
+}
+
+void lv_obj_set_style_arc_color(lv_obj_t* obj, lv_color_t color, lv_style_selector_t selector) {
+    (void)obj;
+    (void)color;
+    (void)selector;
+}
+
+void lv_obj_set_style_arc_width(lv_obj_t* obj, int32_t w, lv_style_selector_t selector) {
+    (void)obj;
+    (void)w;
+    (void)selector;
+}
+
 lv_color_t lv_color_hex(uint32_t c) {
     lv_color_t out{};
     (void)c;

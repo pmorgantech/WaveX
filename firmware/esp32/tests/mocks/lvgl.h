@@ -38,6 +38,9 @@ extern const lv_font_t lv_font_montserrat_36;
 #define LV_ALIGN_TOP_MID 1
 #define LV_ALIGN_TOP_RIGHT 2
 #define LV_ALIGN_RIGHT_MID 3
+#define LV_ALIGN_LEFT_MID 4
+#define LV_OBJ_FLAG_SCROLLABLE 1
+#define LV_PART_INDICATOR 1
 #define LV_PART_MAIN 0
 #define LV_EVENT_CLICKED 0
 
@@ -46,6 +49,11 @@ lv_obj_t* lv_obj_create(lv_obj_t* parent);
 void lv_obj_set_size(lv_obj_t* obj, lv_coord_t w, lv_coord_t h);
 void lv_obj_set_style_bg_color(lv_obj_t* obj, lv_color_t color, lv_style_selector_t selector);
 lv_color_t lv_color_hex(uint32_t c);
+lv_obj_t* lv_spinner_create(lv_obj_t* parent);
+void lv_obj_move_foreground(lv_obj_t* obj);
+void lv_obj_remove_flag(lv_obj_t* obj, uint32_t flag);
+void lv_obj_set_style_arc_color(lv_obj_t* obj, lv_color_t color, lv_style_selector_t selector);
+void lv_obj_set_style_arc_width(lv_obj_t* obj, int32_t w, lv_style_selector_t selector);
 extern const lv_font_t lv_font_montserrat_22;
 void lv_obj_set_height(lv_obj_t* obj, int32_t h);
 void lv_obj_set_style_radius(lv_obj_t* obj, int32_t value, lv_style_selector_t selector);

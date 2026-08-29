@@ -10,6 +10,8 @@
 #include "ui/ui_busy_overlay.h"
 #include "ui_task.h"
 
+#include <algorithm>
+
 static const char* TAG = "UI_SAMPLE_BROWSER";
 
 namespace wavex_ui {
@@ -506,6 +508,40 @@ void UISampleBrowser::directory_changed_callback(const char* path, void* user_da
     browser->updateStatus(status_text);
 }
 
+// Left: where we are in the listing. Right: card state. Both were drawn by
+// onEnter and never populated.
+void UISampleBrowser::refreshStatusStrip() {
+    if (!is_initialized_ || !listing_label_ || !lv_obj_is_valid(listing_label_)) {
+        return;
+    }
+    const uint32_t total = file_browser_ ? wavex_file_browser_get_entry_count(file_browser_) : 0;
+    const uint32_t sel = file_browser_ ? wavex_file_browser_get_selected_index(file_browser_) : 0;
+    char line[96];
+    if (total == 0) {
+        snprintf(
+            line, sizeof(line), "%s  -  empty", persistent_state_.current_directory_path.c_str());
+    } else {
+        snprintf(line,
+                 sizeof(line),
+                 "%s  -  %lu of %lu",
+                 persistent_state_.current_directory_path.c_str(),
+                 (unsigned long)(sel + 1),
+                 (unsigned long)total);
+    }
+    lv_label_set_text(listing_label_, line);
+
+    if (card_label_ && lv_obj_is_valid(card_label_)) {
+        // Mount state only. Free space is not on the wire - neither
+        // FileEntryWire nor StorageStatusMessage carries it - and the design's
+        // "SD 12.4 GB free" would have to be invented.
+        const bool mounted =
+            file_browser_ ? wavex_file_browser_is_storage_mounted(file_browser_) : false;
+        lv_label_set_text(card_label_, mounted ? "SD card mounted" : "No SD card");
+        lv_obj_set_style_text_color(
+            card_label_, lv_color_hex(mounted ? kColDim : 0xFF9800), LV_PART_MAIN);
+    }
+}
+
 void UISampleBrowser::updateStatus(const char* status) {
     if (!status)
         return;
@@ -562,6 +598,11 @@ void UISampleBrowser::processDeferredUpdates_() {
     }
 
     // Process metadata update
+    refreshStatusStrip();
+    if (file_browser_) {
+        wavex_file_browser_update_loading_row(file_browser_);
+    }
+
     if (metadata_update_pending_ && metadata_label_) {
         char info_text[512];
 
@@ -851,6 +892,9 @@ void UISampleBrowser::sample_status_callback(uint16_t sample_id,
         // Only update UI if we're still properly initialized
         if (browser->is_initialized_ && browser->status_label_ && browser->root_) {
             ESP_LOGI(TAG, "=== SAMPLE STOP RESPONSE: Updating UI ===");
+            if (browser->play_bar_ && lv_obj_is_valid(browser->play_bar_)) {
+                lv_bar_set_value(browser->play_bar_, 0, LV_ANIM_OFF);
+            }
             browser->updateStatus("Stopped");
             browser->refreshSoftkeys();
         } else {
@@ -858,20 +902,34 @@ void UISampleBrowser::sample_status_callback(uint16_t sample_id,
                      "=== SAMPLE STOP RESPONSE: Skipping UI update - not fully initialized ===");
         }
     } else if (state == 1) {
-        ESP_LOGI(TAG, "=== SAMPLE PLAYING RESPONSE: Processing play callback ===");
-        // Only update UI if we're still properly initialized
-        if (browser->is_initialized_ && browser->status_label_ && browser->root_) {
-            char status_text[256];
-            snprintf(status_text,
-                     sizeof(status_text),
-                     "Playing: %lu Hz, %u ch, %lu frames",
-                     (unsigned long)sample_rate,
-                     channels,
-                     (unsigned long)frames_played);
-            browser->updateStatus(status_text);
-        } else {
-            ESP_LOGW(TAG,
-                     "=== SAMPLE PLAYING RESPONSE: Skipping UI update - not fully initialized ===");
+        // Playback position. sample_rate carries the REGION LENGTH in frames
+        // here, not a rate - the backend reuses the field so the UI can scale
+        // without a second message. frames_played is the read position, which
+        // leads the audible one by the ring (~42 ms): fine for a bar.
+        if (browser->is_initialized_ && browser->root_) {
+            const uint32_t region = sample_rate;
+            if (region > 0 && browser->play_bar_ && lv_obj_is_valid(browser->play_bar_)) {
+                const int pct = static_cast<int>(std::min<uint64_t>(
+                    100, (static_cast<uint64_t>(frames_played) * 100ull) / region));
+                lv_bar_set_value(browser->play_bar_, pct, LV_ANIM_OFF);
+            }
+            if (browser->status_label_ && lv_obj_is_valid(browser->status_label_)) {
+                // Elapsed of total, at the sample's own rate where known.
+                const uint32_t rate = browser->persistent_state_.last_load_sample_rate
+                                          ? browser->persistent_state_.last_load_sample_rate
+                                          : 48000u;
+                const uint32_t elapsed_s = frames_played / rate;
+                const uint32_t total_s = region / rate;
+                char status_text[96];
+                snprintf(status_text,
+                         sizeof(status_text),
+                         "AUDITIONING  -  %lu:%02lu / %lu:%02lu",
+                         (unsigned long)(elapsed_s / 60),
+                         (unsigned long)(elapsed_s % 60),
+                         (unsigned long)(total_s / 60),
+                         (unsigned long)(total_s % 60));
+                lv_label_set_text(browser->status_label_, status_text);
+            }
         }
     } else if (state == 0x11) {
         // Loading progress: frames_played carries the percentage, not frames.

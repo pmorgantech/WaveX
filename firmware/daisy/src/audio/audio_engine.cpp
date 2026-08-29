@@ -449,6 +449,38 @@ static void PushSampleMeta(const LoadedSampleInfo& info) {
     WaveX::Comm::UartLinkSend(WaveX::Protocol::MSG_SAMPLE_META, &info.meta, sizeof(info.meta));
 }
 
+// Position of the streaming audition within its region, in frames.
+//
+// This is the READ position, which runs ahead of what is audible by the ring
+// contents (2048 frames, ~42 ms) plus any filled SD slots. That is under a
+// tenth of a second and invisible on a progress bar, but it is not a playhead
+// - do not use it to drive anything sample-accurate.
+bool GetPlaybackPosition(uint32_t& frames_played, uint32_t& region_frames) {
+    frames_played = 0;
+    region_frames = 0;
+    if (!s_wav.open) {
+        return false;
+    }
+    const uint32_t bytes_per_sample = (s_wav.bits_per_sample == 24) ? 3u : 2u;
+    const uint32_t file_bpf = (uint32_t)s_wav.num_channels * bytes_per_sample;
+    if (file_bpf == 0) {
+        return false;
+    }
+    const uint32_t start = s_wav.region_start;
+    const uint32_t end = s_wav.region_end;
+    if (end <= start) {
+        return false;
+    }
+    region_frames = (end - start) / file_bpf;
+
+    const uint32_t pos = f_tell(&s_wav.file);
+    frames_played = (pos > start) ? ((pos - start) / file_bpf) : 0u;
+    if (frames_played > region_frames) {
+        frames_played = region_frames;
+    }
+    return true;
+}
+
 void SetLoopGapMs(uint16_t gap_ms) {
     s_loop_gap_frames = (static_cast<uint32_t>(gap_ms) * s_sample_rate) / 1000u;
     s_loop_gap_remaining = 0;  // never start an audition mid-gap

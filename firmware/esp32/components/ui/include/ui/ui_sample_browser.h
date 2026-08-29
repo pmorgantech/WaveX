@@ -168,6 +168,8 @@ class UISampleBrowser : public UIPage {
     lv_obj_t* detail_name_ = nullptr;
     lv_obj_t* play_bar_ = nullptr;
 
+    void refreshStatusStrip();
+
     // State
     bool is_playing_ = false;
     bool is_initialized_ = false;

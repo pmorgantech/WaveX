@@ -51,6 +51,46 @@ static const char* TAG = "FILE_BROWSER";
 #define FB_COL_DIM lv_color_hex(0x8FA0AA)
 #define FB_COL_META lv_color_hex(0x7F8A90)
 
+// A spinner row pinned at the end of the list while a page is in flight
+// (design 1b). Deliberately not the modal busy overlay: pagination must not
+// block the list, and the rows already fetched stay usable while it loads.
+static void fb_show_loading_row(wavex_file_browser_t* browser, bool show) {
+    if (!browser || !browser->list) {
+        return;
+    }
+    if (!show) {
+        if (browser->loading_row && lv_obj_is_valid(browser->loading_row)) {
+            lv_obj_del(browser->loading_row);
+        }
+        browser->loading_row = nullptr;
+        return;
+    }
+    if (browser->loading_row && lv_obj_is_valid(browser->loading_row)) {
+        lv_obj_move_foreground(browser->loading_row);
+        return;  // already up
+    }
+    lv_obj_t* row = lv_obj_create(browser->list);
+    lv_obj_set_size(row, lv_pct(100), FB_ROW_H);
+    lv_obj_set_style_bg_color(row, FB_COL_LIST_BG, LV_PART_MAIN);
+    lv_obj_set_style_border_width(row, 0, LV_PART_MAIN);
+    lv_obj_remove_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t* sp = lv_spinner_create(row);
+    lv_obj_set_size(sp, 24, 24);
+    lv_obj_align(sp, LV_ALIGN_LEFT_MID, 0, 0);
+    lv_obj_set_style_arc_color(sp, FB_COL_SEL_RING, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_width(sp, 3, LV_PART_MAIN);
+    lv_obj_set_style_arc_width(sp, 3, LV_PART_INDICATOR);
+
+    lv_obj_t* txt = lv_label_create(row);
+    lv_label_set_text(txt, "Loading more...");
+    lv_obj_set_style_text_font(txt, &lv_font_montserrat_18, LV_PART_MAIN);
+    lv_obj_set_style_text_color(txt, FB_COL_DIM, LV_PART_MAIN);
+    lv_obj_align(txt, LV_ALIGN_LEFT_MID, 36, 0);
+
+    browser->loading_row = row;
+}
+
 static void fb_format_duration(char* out, size_t n, uint32_t ms) {
     if (ms == 0) {
         out[0] = '\0';
@@ -176,6 +216,7 @@ wavex_file_browser_t* wavex_file_browser_create(lv_obj_t* parent,
     memset(browser, 0, sizeof(wavex_file_browser_t));
     browser->config = *config;
     browser->selected_index = 0;
+    browser->storage_mounted = true;
     browser->first_visible_index = 0;
     browser->visible_count =
         8;  // Approximately 8 entries visible on screen (adjust based on screen size)
@@ -377,6 +418,21 @@ const wavex_file_entry_t* wavex_file_browser_get_selected(wavex_file_browser_t* 
         return NULL;
 
     return &browser->entries[browser->selected_index];
+}
+
+// Called from the UI task only. pagination_in_progress is set from several
+// places including the UART task, so the flag is polled here rather than the
+// row being created at each of those sites - creating LVGL objects off the UI
+// task is the mistake that froze the edit page.
+void wavex_file_browser_update_loading_row(wavex_file_browser_t* browser) {
+    if (!browser) {
+        return;
+    }
+    fb_show_loading_row(browser, browser->pagination_in_progress);
+}
+
+bool wavex_file_browser_is_storage_mounted(wavex_file_browser_t* browser) {
+    return browser ? browser->storage_mounted : false;
 }
 
 uint32_t wavex_file_browser_get_selected_index(wavex_file_browser_t* browser) {
@@ -1319,6 +1375,7 @@ static void storage_status_callback(bool mounted, void* user_data) {
     if (!browser) {
         return;
     }
+    browser->storage_mounted = mounted;
     if (!mounted) {
         // The empty browse response that accompanies a loss already clears the
         // list; nothing to do but stop any pagination still in flight.

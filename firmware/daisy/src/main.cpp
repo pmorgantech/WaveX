@@ -785,6 +785,21 @@ int main(void) {
         bool should_send_meters = false;
 #endif
 
+        // Playback position, at a fifth of the meter rate. A progress bar does
+        // not need 20-50 Hz, and this shares the audition's send budget with
+        // the meters rather than adding a second periodic sender.
+        static uint32_t s_pos_divider = 0;
+        if (should_send_meters && (++s_pos_divider % 5u) == 0u) {
+            uint32_t played = 0, region = 0;
+            if (WaveX::AudioEngine::GetPlaybackPosition(played, region) && region > 0) {
+                WaveX::Protocol::SampleStatusMessage pos{};
+                pos.state = 1;  // playing
+                pos.frames_played = played;
+                pos.sample_rate = region;  // region length, so the UI can scale
+                WaveX::Comm::UartLinkSend(WaveX::Protocol::MSG_SAMPLE_STATUS, &pos, sizeof(pos));
+            }
+        }
+
         if (should_send_meters) {
             last_meter_send = current_time;
 #if WAVEX_MCU_LINK_PACKET_DEBUG

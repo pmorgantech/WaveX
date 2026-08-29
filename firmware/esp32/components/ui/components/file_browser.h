@@ -59,6 +59,8 @@ typedef struct {
     lv_obj_t* path_label;         // Current path display
     wavex_file_entry_t* entries;  // File entries array
     uint32_t entry_count;         // Number of entries
+    bool storage_mounted;         // Last state reported by MSG_STORAGE_STATUS
+    lv_obj_t* loading_row;        // Pagination spinner row, or NULL
     uint32_t selected_index;      // Currently selected entry
     char current_path[96];        // Current directory path
     wavex_file_browser_config_t config;
@@ -121,6 +123,15 @@ void wavex_file_browser_process_pending_updates(wavex_file_browser_t* browser);
 // Utility functions
 const char* wavex_file_browser_get_current_path(wavex_file_browser_t* browser);
 uint32_t wavex_file_browser_get_entry_count(wavex_file_browser_t* browser);
+
+/** Last SD state reported by the backend. Defaults to true until told otherwise:
+ *  the frontend cannot poll the slot, so "unknown" and "present" are the same
+ *  thing until a MSG_STORAGE_STATUS arrives. */
+bool wavex_file_browser_is_storage_mounted(wavex_file_browser_t* browser);
+
+/** Shows or hides the pagination spinner row to match the in-flight state.
+ *  UI task only. */
+void wavex_file_browser_update_loading_row(wavex_file_browser_t* browser);
 const wavex_file_entry_t* wavex_file_browser_get_entry(wavex_file_browser_t* browser,
                                                        uint32_t index);
 

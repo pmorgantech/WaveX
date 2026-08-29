@@ -52,6 +52,11 @@ void SetEditParams(uint8_t slot,
                    uint32_t loop_start_frame,
                    uint32_t loop_end_frame);
 
+// Read position of the streaming audition within its region, in frames.
+// Runs ahead of the audible position by the ring + filled SD slots (~42 ms):
+// fine for a progress bar, not a playhead. False when nothing is open.
+bool GetPlaybackPosition(uint32_t& frames_played, uint32_t& region_frames);
+
 // Silence inserted between loop passes of the streaming audition, in ms.
 // A property of the current audition rather than of the sample: the browser
 // asks for a gap so a short file does not read as a drone, the editor asks
