@@ -107,6 +107,13 @@ bool ListDir(const char* path,
                 e.name[sizeof(e.name) - 1] = '\0';
             }
         }
+
+        // all_entries is full: further f_readdir() calls would only be
+        // discarded, but each one still does real SD I/O on the main loop
+        // (shared with the WAV streaming ring buffer). Stop scanning here
+        // instead of walking the rest of a large directory.
+        if (all_count >= 256)
+            break;
     }
     f_closedir(&dir);
 
