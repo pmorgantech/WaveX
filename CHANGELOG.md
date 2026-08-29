@@ -11,6 +11,33 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Changed — Diagnostics page rebuilt as a five-tab layout
+
+- Replaces three static text columns (roughly 90% empty space, every figure a
+  since-boot total) with an `lv_tabview`: System / Audio / Link / Storage /
+  MIDI, following `docs/ui-diagnostics-spec.md` and the WaveX Wireframes v2
+  card anatomy (305x226 cards, 273x14 gauges).
+- **System** shows eight cards from sources the ESP32 already has: CPU per
+  core, internal heap, PSRAM, LVGL pool with fragmentation, task count,
+  uptime and minimum-free-heap watermark. Gauges carry a per-card warning
+  threshold rather than one blanket 85% rule, because on several of these a
+  full bar is the healthy state.
+- **Link** shows link state with heartbeat age, Daisy CPU (avg/min/max, the
+  only backend figure `HeartbeatMessage` already carries), packet totals and
+  error counts, plus a scrollable per-message-type table driven straight from
+  `wavex_packet_stats_t` — 19 message types with no new plumbing.
+- **Audio**, **Storage** and **MIDI** state what they are waiting for instead
+  of rendering invented numbers: those figures live on the Daisy and do not
+  cross the link until `MSG_DIAG_PUSH` exists.
+- Softkeys are now Back / Tab < / Tab > / Freeze / — / Samples. **Freeze**
+  holds the last values so a transient can actually be read; during the
+  August audition debugging, values routinely changed faster than they could
+  be noted.
+- The sampling timer no longer formats display text. It samples the CPU
+  counters (which need a steady cadence to mean anything) and flags the UI;
+  each tab reads its own sources on the UI task when it is the visible one,
+  so hidden tabs cost nothing.
+
 ### Changed — ESP32 links against Picolibc instead of Newlib
 
 - `CONFIG_LIBC_PICOLIBC=y`. Picolibc has been selectable since ESP-IDF v5.0

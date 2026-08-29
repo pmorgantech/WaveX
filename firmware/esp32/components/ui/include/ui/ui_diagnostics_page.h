@@ -39,10 +39,37 @@ class UIDiagnosticsPage : public UIPage {
     std::array<Softkey, NUM_SOFTKEYS> getSoftkeys() override;
 
    private:
-    // UI creation methods
-    void createEsp32StatusColumn(lv_obj_t* parent);
-    void createDaisyStatusColumn(lv_obj_t* parent);
-    void createMetersColumn(lv_obj_t* parent);
+    // Tabs, in the order the tab bar shows them.
+    enum Tab : uint8_t { TAB_SYSTEM = 0, TAB_AUDIO, TAB_LINK, TAB_STORAGE, TAB_MIDI, TAB_COUNT };
+
+    // A metric card: title / value / optional gauge, per docs/ui-design-constraints.md
+    // and the WaveX Wireframes v2 card anatomy (305x226, gauge 273x14).
+    struct Card {
+        lv_obj_t* value;  // the number, font 36
+        lv_obj_t* unit;   // suffix, font 22
+        lv_obj_t* sub;    // context line, font 18
+        lv_obj_t* bar;    // gauge, or nullptr when the metric has no budget
+        int warn_pct;     // fill turns orange at/above this; 0 = never
+    };
+
+    // UI creation
+    void buildTabs(lv_obj_t* parent);
+    void buildSystemTab(lv_obj_t* tab);
+    void buildLinkTab(lv_obj_t* tab);
+    void buildPendingTab(lv_obj_t* tab, const char* what);
+    Card makeCard(lv_obj_t* parent,
+                  int x,
+                  int y,
+                  int w,
+                  const char* title,
+                  const char* tag,
+                  bool gauge,
+                  int warn_pct);
+    void setCard(Card& c, const char* value, const char* unit, const char* sub, int pct);
+
+    // Per-tab refresh
+    void refreshSystemTab();
+    void refreshLinkTab();
 
     // Diagnostics monitoring
     void startDiagnosticsMonitoring();
@@ -83,13 +110,16 @@ class UIDiagnosticsPage : public UIPage {
     lv_timer_t* lvgl_update_timer;
 
     // UI elements
-    lv_obj_t* diagnostics_label;
-    lv_obj_t* daisy_label;
+    lv_obj_t* tabview;
+    uint8_t active_tab;
+    bool frozen;  // Freeze softkey: stop refreshing so a transient can be read
 
-    // Deferred update state
+    Card sys_cards[8];
+    Card link_cards[4];
+    lv_obj_t* msg_table;  // per-message-type counts, from wavex_packet_stats_t
+
+    // Set by the sampling timer, consumed by the UI task.
     volatile bool ui_update_pending;
-    char deferred_esp32_text[512];
-    char deferred_daisy_text[512];
 };
 
 /**

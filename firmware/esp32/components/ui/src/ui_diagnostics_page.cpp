@@ -40,12 +40,14 @@ UIDiagnosticsPage::UIDiagnosticsPage()
       last_esp_idf_check_time(0),
       diagnostics_timer_handle(nullptr),
       lvgl_update_timer(nullptr),
-      diagnostics_label(nullptr),
-      daisy_label(nullptr),
+      tabview(nullptr),
+      active_tab(TAB_SYSTEM),
+      frozen(false),
+      msg_table(nullptr),
       ui_update_pending(false) {
+    memset(sys_cards, 0, sizeof(sys_cards));
+    memset(link_cards, 0, sizeof(link_cards));
     memset(cpu_usage_history, 0, sizeof(cpu_usage_history));
-    memset(deferred_esp32_text, 0, sizeof(deferred_esp32_text));
-    memset(deferred_daisy_text, 0, sizeof(deferred_daisy_text));
 }
 
 UIDiagnosticsPage::~UIDiagnosticsPage() {
@@ -56,40 +58,267 @@ const char* UIDiagnosticsPage::name() const {
     return "Diagnostics";
 }
 
+namespace {
+
+// Design palette (WaveX Wireframes v2). ui_theme.h covers the shared subset;
+// these are the additional greys the diagnostics cards use.
+constexpr uint32_t kColBg = 0x000000;
+constexpr uint32_t kColCard = 0x141414;
+constexpr uint32_t kColBorder = 0x333333;
+constexpr uint32_t kColDim = 0x8FA0AA;
+constexpr uint32_t kColDimmer = 0x6E7A82;
+constexpr uint32_t kColTrack = 0x262B2E;
+constexpr uint32_t kColTabOn = 0x10293B;
+constexpr uint32_t kColGreen = 0x4CAF50;
+constexpr uint32_t kColOrange = 0xFF5722;
+constexpr uint32_t kColBlue = 0x2196F3;
+
+// Card grid, from the design: 4 across, 305x226, gutters 12.
+constexpr int kCardW = 305;
+constexpr int kCardH = 226;
+constexpr int kGaugeW = 273;
+constexpr int kColX[4] = {12, 329, 646, 963};
+constexpr int kRowY[2] = {0, 238};  // relative to the tab body
+
+lv_obj_t* mkLabel(
+    lv_obj_t* parent, int x, int y, const char* txt, const lv_font_t* font, uint32_t colour) {
+    lv_obj_t* l = lv_label_create(parent);
+    lv_label_set_text(l, txt);
+    lv_obj_set_style_text_font(l, font, 0);
+    lv_obj_set_style_text_color(l, lv_color_hex(colour), 0);
+    lv_obj_set_pos(l, x, y);
+    return l;
+}
+
+}  // namespace
+
 void UIDiagnosticsPage::onEnter(lv_obj_t* parent) {
     ESP_LOGI(TAG, "Diagnostics page entering");
 
-    // Clean the parent
     lv_obj_clean(parent);
+    msg_table = nullptr;
+    frozen = false;
+    memset(sys_cards, 0, sizeof(sys_cards));
+    memset(link_cards, 0, sizeof(link_cards));
 
-    // Initialize UI elements
-    diagnostics_label = nullptr;
-    daisy_label = nullptr;
-
-    // Create main content container
-    lv_obj_t* content = lv_obj_create(parent);
-    lv_obj_set_size(content, lv_pct(100), lv_pct(100));
-    lv_obj_set_style_bg_color(content, lv_color_make(0x00, 0x00, 0x00), LV_PART_MAIN);
-    lv_obj_set_style_border_width(content, 1, LV_PART_MAIN);
-    lv_obj_set_style_border_color(content, lv_color_make(0x33, 0x33, 0x33), LV_PART_MAIN);
-    lv_obj_align(content, LV_ALIGN_TOP_MID, 0, 0);
-    lv_obj_set_style_pad_all(content, 8, LV_PART_MAIN);
-
-    lv_obj_set_flex_flow(content, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(
-        content, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
-
-    // ESP32 Status Column
-    createEsp32StatusColumn(content);
-
-    // Daisy Link Column
-    createDaisyStatusColumn(content);
-
-    // Meters Column
-    createMetersColumn(content);
-
-    // Start diagnostics monitoring
+    buildTabs(parent);
     startDiagnosticsMonitoring();
+}
+
+void UIDiagnosticsPage::buildTabs(lv_obj_t* parent) {
+    tabview = lv_tabview_create(parent);
+    lv_tabview_set_tab_bar_size(tabview, 56);
+    lv_obj_set_size(tabview, lv_pct(100), lv_pct(100));
+    lv_obj_set_style_bg_color(tabview, lv_color_hex(kColBg), 0);
+    lv_obj_set_style_border_width(tabview, 0, 0);
+    lv_obj_set_style_pad_all(tabview, 0, 0);
+
+    lv_obj_t* bar = lv_tabview_get_tab_bar(tabview);
+    lv_obj_set_style_bg_color(bar, lv_color_hex(kColBg), 0);
+    lv_obj_set_style_text_font(bar, &lv_font_montserrat_22, 0);
+    lv_obj_set_style_text_color(bar, lv_color_hex(kColDimmer), 0);
+    // Selected tab cell: filled, white text, 4px blue underline. Composed once
+    // because mixing lv_part_t with lv_state_t warns under C++20.
+    const lv_style_selector_t sel_on = static_cast<lv_style_selector_t>(LV_PART_ITEMS) |
+                                       static_cast<lv_style_selector_t>(LV_STATE_CHECKED);
+    lv_obj_set_style_bg_color(bar, lv_color_hex(kColTabOn), sel_on);
+    lv_obj_set_style_text_color(bar, lv_color_white(), sel_on);
+    lv_obj_set_style_border_color(bar, lv_color_hex(kColBlue), sel_on);
+    lv_obj_set_style_border_width(bar, 4, sel_on);
+    lv_obj_set_style_border_side(bar, LV_BORDER_SIDE_BOTTOM, sel_on);
+
+    lv_obj_t* t_sys = lv_tabview_add_tab(tabview, "System");
+    lv_obj_t* t_audio = lv_tabview_add_tab(tabview, "Audio");
+    lv_obj_t* t_link = lv_tabview_add_tab(tabview, "Link");
+    lv_obj_t* t_storage = lv_tabview_add_tab(tabview, "Storage");
+    lv_obj_t* t_midi = lv_tabview_add_tab(tabview, "MIDI");
+
+    lv_obj_t* tabs[TAB_COUNT] = {t_sys, t_audio, t_link, t_storage, t_midi};
+    for (int i = 0; i < TAB_COUNT; i++) {
+        lv_obj_set_style_bg_color(tabs[i], lv_color_hex(kColBg), 0);
+        lv_obj_set_style_pad_all(tabs[i], 0, 0);
+        lv_obj_set_style_border_width(tabs[i], 0, 0);
+        lv_obj_remove_flag(tabs[i], LV_OBJ_FLAG_SCROLLABLE);
+    }
+
+    buildSystemTab(t_sys);
+    buildLinkTab(t_link);
+    // Audio / Storage / MIDI are mostly Daisy-side figures that do not cross
+    // the link yet. Showing the layout with invented numbers would be worse
+    // than saying so - see docs/ui-diagnostics-spec.md (MSG_DIAG_PUSH).
+    buildPendingTab(t_audio, "Audio");
+    buildPendingTab(t_storage, "Storage");
+    buildPendingTab(t_midi, "MIDI");
+
+    lv_tabview_set_active(tabview, active_tab, LV_ANIM_OFF);
+}
+
+UIDiagnosticsPage::Card UIDiagnosticsPage::makeCard(lv_obj_t* parent,
+                                                    int x,
+                                                    int y,
+                                                    int w,
+                                                    const char* title,
+                                                    const char* tag,
+                                                    bool gauge,
+                                                    int warn_pct) {
+    Card c = {};
+    c.warn_pct = warn_pct;
+
+    lv_obj_t* card = lv_obj_create(parent);
+    lv_obj_set_size(card, w, kCardH);
+    lv_obj_set_pos(card, x, y);
+    lv_obj_set_style_bg_color(card, lv_color_hex(kColCard), 0);
+    lv_obj_set_style_border_width(card, 1, 0);
+    lv_obj_set_style_border_color(card, lv_color_hex(kColBorder), 0);
+    lv_obj_set_style_radius(card, 4, 0);
+    lv_obj_set_style_pad_all(card, 0, 0);
+    lv_obj_remove_flag(card, LV_OBJ_FLAG_SCROLLABLE);
+
+    mkLabel(card, 16, 14, title, &lv_font_montserrat_18, kColDim);
+    if (tag) {
+        // Source tag ("esp32" / "wire" / "new") - which side owns the number.
+        uint32_t tc = kColDimmer;
+        if (strcmp(tag, "wire") == 0)
+            tc = kColBlue;
+        else if (strcmp(tag, "new") == 0)
+            tc = kColOrange;
+        lv_obj_t* l = mkLabel(card, 0, 0, tag, &lv_font_montserrat_14, tc);
+        lv_obj_align(l, LV_ALIGN_TOP_RIGHT, -16, 14);
+    }
+
+    c.value = mkLabel(card, 16, 64, "-", &lv_font_montserrat_36, 0xFFFFFF);
+    c.unit = mkLabel(card, 0, 0, "", &lv_font_montserrat_22, kColDim);
+    lv_obj_align_to(c.unit, c.value, LV_ALIGN_OUT_RIGHT_BOTTOM, 10, -6);
+
+    c.sub = mkLabel(card, 16, 112, "", &lv_font_montserrat_18, kColDim);
+    lv_obj_set_width(c.sub, w - 32);
+    lv_label_set_long_mode(c.sub, LV_LABEL_LONG_WRAP);
+
+    if (gauge) {
+        c.bar = lv_bar_create(card);
+        lv_obj_set_size(c.bar, kGaugeW, 14);
+        lv_obj_set_pos(c.bar, 16, 196);
+        lv_bar_set_range(c.bar, 0, 100);
+        lv_bar_set_value(c.bar, 0, LV_ANIM_OFF);
+        lv_obj_set_style_bg_color(c.bar, lv_color_hex(kColTrack), LV_PART_MAIN);
+        lv_obj_set_style_bg_color(c.bar, lv_color_hex(kColGreen), LV_PART_INDICATOR);
+        lv_obj_set_style_radius(c.bar, 2, LV_PART_MAIN);
+        lv_obj_set_style_radius(c.bar, 2, LV_PART_INDICATOR);
+    }
+    return c;
+}
+
+void UIDiagnosticsPage::setCard(
+    Card& c, const char* value, const char* unit, const char* sub, int pct) {
+    if (!c.value)
+        return;
+    lv_label_set_text(c.value, value);
+    lv_label_set_text(c.unit, unit ? unit : "");
+    lv_obj_align_to(c.unit, c.value, LV_ALIGN_OUT_RIGHT_BOTTOM, 10, -6);
+    lv_label_set_text(c.sub, sub ? sub : "");
+    if (c.bar) {
+        if (pct < 0)
+            pct = 0;
+        if (pct > 100)
+            pct = 100;
+        lv_bar_set_value(c.bar, pct, LV_ANIM_OFF);
+        // Orange is a real warning, not decoration: only where high is bad.
+        const bool warn = (c.warn_pct > 0 && pct >= c.warn_pct);
+        lv_obj_set_style_bg_color(
+            c.bar, lv_color_hex(warn ? kColOrange : kColGreen), LV_PART_INDICATOR);
+    }
+}
+
+void UIDiagnosticsPage::buildSystemTab(lv_obj_t* tab) {
+    // Every figure here is ESP32-local, so this tab is fully live today.
+    struct Def {
+        const char* title;
+        bool gauge;
+        int warn;
+    };
+    static const Def defs[8] = {
+        {"CPU CORE 0", true, 85},
+        {"CPU CORE 1", true, 85},
+        {"HEAP INTERNAL", true, 85},
+        {"PSRAM", true, 85},
+        {"LVGL POOL", true, 85},
+        {"TASKS", false, 0},
+        {"UPTIME", false, 0},
+        {"MIN FREE HEAP", false, 0},
+    };
+    for (int i = 0; i < 8; i++) {
+        sys_cards[i] = makeCard(tab,
+                                kColX[i % 4],
+                                kRowY[i / 4],
+                                kCardW,
+                                defs[i].title,
+                                "esp32",
+                                defs[i].gauge,
+                                defs[i].warn);
+    }
+}
+
+void UIDiagnosticsPage::buildLinkTab(lv_obj_t* tab) {
+    static const char* titles[4] = {"LINK", "DAISY CPU", "PACKETS", "ERRORS"};
+    // DAISY CPU is the only backend figure the heartbeat already carries; the
+    // rest of the Daisy telemetry waits on MSG_DIAG_PUSH.
+    static const bool gauge[4] = {false, true, false, false};
+    for (int i = 0; i < 4; i++) {
+        link_cards[i] = makeCard(tab,
+                                 kColX[i % 2],
+                                 kRowY[i / 2],
+                                 kCardW,
+                                 titles[i],
+                                 i == 1 ? "wire" : "esp32",
+                                 gauge[i],
+                                 gauge[i] ? 60 : 0);
+    }
+
+    // Per-message-type counts. wavex_packet_stats_t already tracks these, so
+    // the table needs no new plumbing at all.
+    lv_obj_t* panel = lv_obj_create(tab);
+    lv_obj_set_size(panel, 622, 464);
+    lv_obj_set_pos(panel, kColX[2], 0);
+    lv_obj_set_style_bg_color(panel, lv_color_hex(kColCard), 0);
+    lv_obj_set_style_border_width(panel, 1, 0);
+    lv_obj_set_style_border_color(panel, lv_color_hex(kColBorder), 0);
+    lv_obj_set_style_radius(panel, 4, 0);
+    lv_obj_set_style_pad_all(panel, 0, 0);
+
+    msg_table = lv_table_create(panel);
+    lv_obj_set_size(msg_table, 620, 462);
+    lv_obj_set_pos(msg_table, 0, 0);
+    lv_table_set_column_count(msg_table, 2);
+    lv_table_set_column_width(msg_table, 0, 430);
+    lv_table_set_column_width(msg_table, 1, 180);
+    lv_obj_set_style_bg_color(msg_table, lv_color_hex(kColCard), LV_PART_ITEMS);
+    lv_obj_set_style_text_color(msg_table, lv_color_white(), LV_PART_ITEMS);
+    lv_obj_set_style_text_font(msg_table, &lv_font_montserrat_18, LV_PART_ITEMS);
+    lv_obj_set_style_border_color(msg_table, lv_color_hex(0x222222), LV_PART_ITEMS);
+    lv_obj_set_style_border_width(msg_table, 1, LV_PART_ITEMS);
+    lv_obj_set_style_bg_color(msg_table, lv_color_hex(kColCard), LV_PART_MAIN);
+    lv_obj_set_style_border_width(msg_table, 0, LV_PART_MAIN);
+}
+
+void UIDiagnosticsPage::buildPendingTab(lv_obj_t* tab, const char* what) {
+    char line[160];
+    snprintf(line,
+             sizeof(line),
+             "%s telemetry lives on the Daisy and does not cross the link yet.",
+             what);
+    mkLabel(tab, 24, 40, line, &lv_font_montserrat_22, kColDim);
+    mkLabel(tab,
+            24,
+            90,
+            "Needs MSG_DIAG_PUSH - see docs/ui-diagnostics-spec.md",
+            &lv_font_montserrat_18,
+            kColDimmer);
+    mkLabel(tab,
+            24,
+            130,
+            "Showing placeholder numbers here would be worse than showing none.",
+            &lv_font_montserrat_18,
+            kColDimmer);
 }
 
 void UIDiagnosticsPage::onExit() {
@@ -99,8 +328,6 @@ void UIDiagnosticsPage::onExit() {
     stopDiagnosticsMonitoring();
 
     // Clear UI element references
-    diagnostics_label = nullptr;
-    daisy_label = nullptr;
     ui_update_pending = false;
 }
 
@@ -112,90 +339,31 @@ void UIDiagnosticsPage::onInput(const InputEvent& evt) {
 std::array<Softkey, NUM_SOFTKEYS> UIDiagnosticsPage::getSoftkeys() {
     std::array<Softkey, NUM_SOFTKEYS> keys{};
 
-    // Back button
     keys[0] = {"Back", [this]() { UINavigator::instance().pop(); }};
 
-    // Sample memory diagnostics
-    keys[1] = {"Samples", []() { UINavigator::instance().push(createSampleMemoryPage()); }};
+    // Tab </> move the active tab. The tab bar itself stays out of the encoder
+    // focus ring, so tabs are reachable without an extra focus mode.
+    keys[1] = {"Tab <", [this]() {
+                   active_tab = (active_tab + TAB_COUNT - 1) % TAB_COUNT;
+                   if (tabview)
+                       lv_tabview_set_active(tabview, active_tab, LV_ANIM_OFF);
+               }};
+    keys[2] = {"Tab >", [this]() {
+                   active_tab = (active_tab + 1) % TAB_COUNT;
+                   if (tabview)
+                       lv_tabview_set_active(tabview, active_tab, LV_ANIM_OFF);
+               }};
+    // Freeze: values often change faster than they can be read.
+    keys[3] = {"Freeze", [this]() {
+                   frozen = !frozen;
+                   UINavigator::instance().refreshSoftkeys();
+               }};
+    keys[5] = {"Samples", []() { UINavigator::instance().push(createSampleMemoryPage()); }};
 
+    if (frozen) {
+        keys[3].label = "Live";
+    }
     return keys;
-}
-
-void UIDiagnosticsPage::createEsp32StatusColumn(lv_obj_t* parent) {
-    lv_obj_t* esp32_column = lv_obj_create(parent);
-    lv_obj_set_size(esp32_column, lv_pct(30), lv_pct(100));
-    lv_obj_set_style_bg_color(esp32_column, lv_color_make(0x1A, 0x1A, 0x1A), LV_PART_MAIN);
-    lv_obj_set_style_border_width(esp32_column, 1, LV_PART_MAIN);
-    lv_obj_set_style_border_color(esp32_column, lv_color_make(0x33, 0x33, 0x33), LV_PART_MAIN);
-    lv_obj_set_style_pad_all(esp32_column, 10, LV_PART_MAIN);
-
-    lv_obj_t* esp32_title = lv_label_create(esp32_column);
-    lv_label_set_text(esp32_title, "ESP32 Status");
-    lv_obj_set_style_text_font(esp32_title, &lv_font_montserrat_26, LV_PART_MAIN);
-    lv_obj_set_style_text_color(esp32_title, lv_color_white(), LV_PART_MAIN);
-    lv_obj_align(esp32_title, LV_ALIGN_TOP_MID, 0, 5);
-
-    diagnostics_label = lv_label_create(esp32_column);
-    char esp32_text[512];
-    snprintf(esp32_text,
-             sizeof(esp32_text),
-             "Uptime: 0 sec\n"
-             "Free RAM: %zu KB\n"
-             "Min RAM: %zu KB\n"
-             "CPU: ESP32-P4\n"
-             "CPU Total: 0.0%%\n"
-             "CPU Core 0: 0.0%%\n"
-             "CPU Core 1: 0.0%%",
-             (size_t)(esp_get_free_heap_size() / 1024),
-             (size_t)(esp_get_minimum_free_heap_size() / 1024));
-    lv_label_set_text(diagnostics_label, esp32_text);
-    lv_obj_set_style_text_font(diagnostics_label, &lv_font_montserrat_22, LV_PART_MAIN);
-    lv_obj_set_style_text_color(diagnostics_label, lv_color_white(), LV_PART_MAIN);
-    lv_obj_align(diagnostics_label, LV_ALIGN_TOP_LEFT, 0, 30);
-}
-
-void UIDiagnosticsPage::createDaisyStatusColumn(lv_obj_t* parent) {
-    lv_obj_t* daisy_column = lv_obj_create(parent);
-    lv_obj_set_size(daisy_column, lv_pct(30), lv_pct(100));
-    lv_obj_set_style_bg_color(daisy_column, lv_color_make(0x1A, 0x1A, 0x1A), LV_PART_MAIN);
-    lv_obj_set_style_border_width(daisy_column, 1, LV_PART_MAIN);
-    lv_obj_set_style_border_color(daisy_column, lv_color_make(0x33, 0x33, 0x33), LV_PART_MAIN);
-    lv_obj_set_style_pad_all(daisy_column, 10, LV_PART_MAIN);
-
-    lv_obj_t* daisy_title = lv_label_create(daisy_column);
-    lv_label_set_text(daisy_title, "Daisy Link");
-    lv_obj_set_style_text_font(daisy_title, &lv_font_montserrat_28, LV_PART_MAIN);
-    lv_obj_set_style_text_color(daisy_title, lv_color_white(), LV_PART_MAIN);
-    lv_obj_align(daisy_title, LV_ALIGN_TOP_MID, 0, 5);
-
-    daisy_label = lv_label_create(daisy_column);
-    char daisy_text[512];
-    snprintf(daisy_text,
-             sizeof(daisy_text),
-             "Status: CHECKING...\n"
-             "Last RX: -- ms ago\n"
-             "Total Packets: 0\n"
-             "Heartbeat: 0\n"
-             "Meter Packets: 0\n"
-             "CRC Errors: 0\n"
-             "IRQ Count: 0\n"
-             "SPI Active: NO\n"
-             "Daisy CPU: 0.0%%");
-    lv_label_set_text(daisy_label, daisy_text);
-    lv_obj_set_style_text_font(daisy_label, &lv_font_montserrat_22, LV_PART_MAIN);
-    lv_obj_set_style_text_color(daisy_label, lv_color_white(), LV_PART_MAIN);
-    lv_obj_align(daisy_label, LV_ALIGN_TOP_LEFT, 0, 30);
-}
-
-void UIDiagnosticsPage::createMetersColumn(lv_obj_t* parent) {
-    lv_obj_t* meters_column = lv_obj_create(parent);
-    lv_obj_set_size(meters_column, lv_pct(35), lv_pct(100));
-    lv_obj_set_style_bg_color(meters_column, lv_color_make(0x1A, 0x1A, 0x1A), LV_PART_MAIN);
-    lv_obj_set_style_border_width(meters_column, 1, LV_PART_MAIN);
-    lv_obj_set_style_border_color(meters_column, lv_color_make(0x33, 0x33, 0x33), LV_PART_MAIN);
-    lv_obj_set_style_pad_all(meters_column, 10, LV_PART_MAIN);
-
-    wavex_ui_create_meter_display(meters_column);
 }
 
 void UIDiagnosticsPage::startDiagnosticsMonitoring() {
@@ -481,93 +649,11 @@ void UIDiagnosticsPage::updateCpuUsageEspIdfBuiltin() {
     }
 }
 
+// Timer context: sample the CPU counters (which must be read at a steady
+// cadence to be meaningful) and flag the UI. Every other figure is read
+// straight from its source in the per-tab refresh, on the UI task.
 void UIDiagnosticsPage::collectDiagnosticsData() {
     updateCpuUsage();
-
-    size_t free_heap = esp_get_free_heap_size();
-    size_t min_free_heap = esp_get_minimum_free_heap_size();
-    uint32_t uptime_ms = (uint32_t)(esp_timer_get_time() / 1000);
-
-    wavex_backend_heartbeat_t heartbeat;
-    inter_mcu_get_backend_heartbeat_detailed(&heartbeat);
-
-#if WAVEX_SPI_LINK_ENABLED
-    spi_link_stats_t spi_stats;
-    spi_link_get_stats(&spi_stats);
-    bool spi_active = spi_link_is_active();
-#else
-    struct {
-        uint32_t packets_sent, packets_received, crc_errors, irq_count, rx_pool_empty,
-            last_activity_ms;
-    } spi_stats = {};
-    bool spi_active = false;
-#endif
-
-    wavex_packet_stats_t packet_stats;
-    inter_mcu_get_packet_stats(&packet_stats);
-
-    uint32_t time_since_last_rx = 999999;
-    if (heartbeat.valid && heartbeat.last_rx_ms > 0) {
-        time_since_last_rx = uptime_ms - heartbeat.last_rx_ms;
-    }
-
-    const char* link_status = "INACTIVE";
-    if (heartbeat.valid && time_since_last_rx < 2000) {
-        link_status = "ACTIVE";
-    } else if (heartbeat.valid && time_since_last_rx < 5000) {
-        link_status = "STALE";
-    } else if (spi_stats.packets_received > 0) {
-        link_status = "PARTIAL";
-    } else if (spi_active) {
-        link_status = "INIT";
-    }
-
-    // Prepare text data
-    int esp32_len = snprintf(deferred_esp32_text,
-                             sizeof(deferred_esp32_text),
-                             "Uptime: %lu sec\n"
-                             "Free RAM: %zu KB\n"
-                             "Min RAM: %zu KB\n"
-                             "CPU: ESP32-P4\n"
-                             "CPU Total: %.1f%%\n"
-                             "CPU Core 0: %.1f%%\n"
-                             "CPU Core 1: %.1f%%",
-                             uptime_ms / 1000,
-                             free_heap / 1024,
-                             min_free_heap / 1024,
-                             cpu_usage_percent,
-                             cpu_usage_core0,
-                             cpu_usage_core1);
-
-    int daisy_len = snprintf(deferred_daisy_text,
-                             sizeof(deferred_daisy_text),
-                             "Status: %s\n"
-                             "Last RX: %lu ms ago\n"
-                             "Total Packets: %lu\n"
-                             "Heartbeat: %lu\n"
-                             "Meter Packets: %lu\n"
-                             "CRC Errors: %lu\n"
-                             "IRQ Count: %lu\n"
-                             "SPI Active: %s\n"
-                             "Daisy CPU: avg=%.1f%% min=%.1f%% max=%.1f%%",
-                             link_status,
-                             time_since_last_rx,
-                             packet_stats.total_packets,
-                             packet_stats.heartbeat_packets,
-                             packet_stats.meter_push_packets,
-                             spi_stats.crc_errors,
-                             spi_stats.irq_count,
-                             spi_active ? "YES" : "NO",
-                             heartbeat.cpu_avg_percent,
-                             heartbeat.cpu_min_percent,
-                             heartbeat.cpu_max_percent);
-
-    // Safety check
-    if (esp32_len >= sizeof(deferred_esp32_text) || daisy_len >= sizeof(deferred_daisy_text)) {
-        ESP_LOGE(TAG, "Buffer overflow in diagnostics text formatting");
-        return;
-    }
-
     ui_update_pending = true;
     wavex_ui_mark_content_changed();
 }
@@ -576,19 +662,161 @@ void UIDiagnosticsPage::applyUiUpdates() {
     if (!ui_update_pending) {
         return;
     }
+    ui_update_pending = false;
+    if (frozen) {
+        return;  // hold the last values so a transient can be read
+    }
 
-    if (!diagnostics_label || !daisy_label) {
+    switch (active_tab) {
+        case TAB_SYSTEM:
+            refreshSystemTab();
+            break;
+        case TAB_LINK:
+            refreshLinkTab();
+            break;
+        default:
+            break;  // pending tabs are static until MSG_DIAG_PUSH exists
+    }
+}
+
+void UIDiagnosticsPage::refreshSystemTab() {
+    if (!sys_cards[0].value || !lv_obj_is_valid(sys_cards[0].value)) {
         return;
     }
+    char v[48], u[32], sub[64];
 
-    if (lv_obj_is_valid(diagnostics_label)) {
-        lv_label_set_text(diagnostics_label, deferred_esp32_text);
+    snprintf(v, sizeof(v), "%.1f", cpu_usage_core0);
+    setCard(sys_cards[0], v, "%", "", (int)cpu_usage_core0);
+    snprintf(v, sizeof(v), "%.1f", cpu_usage_core1);
+    setCard(sys_cards[1], v, "%", "", (int)cpu_usage_core1);
+
+    const size_t heap_free = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+    const size_t heap_total = heap_caps_get_total_size(MALLOC_CAP_INTERNAL);
+    snprintf(v, sizeof(v), "%u", (unsigned)(heap_free / 1024));
+    snprintf(sub, sizeof(sub), "of %u KB", (unsigned)(heap_total / 1024));
+    setCard(sys_cards[2],
+            v,
+            "KB free",
+            sub,
+            heap_total ? (int)(100 - (heap_free * 100) / heap_total) : 0);
+
+    const size_t ps_free = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+    const size_t ps_total = heap_caps_get_total_size(MALLOC_CAP_SPIRAM);
+    snprintf(v, sizeof(v), "%.1f", ps_free / (1024.0 * 1024.0));
+    snprintf(sub, sizeof(sub), "of %u MB", (unsigned)(ps_total / (1024 * 1024)));
+    setCard(
+        sys_cards[3], v, "MB free", sub, ps_total ? (int)(100 - (ps_free * 100) / ps_total) : 0);
+
+    lv_mem_monitor_t mon;
+    lv_mem_monitor(&mon);
+    snprintf(v, sizeof(v), "%u", (unsigned)((mon.total_size - mon.free_size) / 1024));
+    snprintf(u, sizeof(u), "/ %u KB", (unsigned)(mon.total_size / 1024));
+    snprintf(sub, sizeof(sub), "fragmentation %u%%", (unsigned)mon.frag_pct);
+    setCard(sys_cards[4], v, u, sub, (int)mon.used_pct);
+
+    snprintf(v, sizeof(v), "%u", (unsigned)uxTaskGetNumberOfTasks());
+    setCard(sys_cards[5], v, "running", "", -1);
+
+    const uint32_t up_s = (uint32_t)(esp_timer_get_time() / 1000000);
+    snprintf(v,
+             sizeof(v),
+             "%luh %02lum",
+             (unsigned long)(up_s / 3600),
+             (unsigned long)((up_s % 3600) / 60));
+    setCard(sys_cards[6], v, "", "", -1);
+
+    snprintf(v, sizeof(v), "%u", (unsigned)(esp_get_minimum_free_heap_size() / 1024));
+    setCard(sys_cards[7], v, "KB", "lowest since boot", -1);
+}
+
+void UIDiagnosticsPage::refreshLinkTab() {
+    if (!link_cards[0].value || !lv_obj_is_valid(link_cards[0].value)) {
+        return;
     }
-    if (lv_obj_is_valid(daisy_label)) {
-        lv_label_set_text(daisy_label, deferred_daisy_text);
+    wavex_packet_stats_t st;
+    inter_mcu_get_packet_stats(&st);
+    wavex_backend_heartbeat_t hb;
+    inter_mcu_get_backend_heartbeat_detailed(&hb);
+
+    const uint32_t uptime_ms = (uint32_t)(esp_timer_get_time() / 1000);
+    char v[48], sub[64];
+
+    uint32_t age_ms = 0;
+    const char* state = "NO LINK";
+    if (hb.valid && hb.last_rx_ms > 0) {
+        age_ms = uptime_ms - hb.last_rx_ms;
+        state = (age_ms < 2000) ? "OK" : (age_ms < 5000 ? "STALE" : "LOST");
+    }
+    snprintf(sub,
+             sizeof(sub),
+             "heartbeat %lu.%lu s ago",
+             (unsigned long)(age_ms / 1000),
+             (unsigned long)((age_ms % 1000) / 100));
+    setCard(link_cards[0], state, "", hb.valid ? sub : "no heartbeat seen", -1);
+
+    if (hb.valid) {
+        snprintf(v, sizeof(v), "%.1f", hb.cpu_avg_percent);
+        snprintf(sub, sizeof(sub), "min %.1f - max %.1f", hb.cpu_min_percent, hb.cpu_max_percent);
+        setCard(link_cards[1], v, "%", sub, (int)hb.cpu_avg_percent);
+    } else {
+        setCard(link_cards[1], "-", "%", "no heartbeat", 0);
     }
 
-    ui_update_pending = false;
+    snprintf(v, sizeof(v), "%lu", (unsigned long)st.total_packets);
+    snprintf(sub,
+             sizeof(sub),
+             "%lu meter - %lu wave",
+             (unsigned long)st.meter_push_packets,
+             (unsigned long)st.wave_chunk_packets);
+    setCard(link_cards[2], v, "total", sub, -1);
+
+    snprintf(v, sizeof(v), "%lu", (unsigned long)(st.invalid_packets + st.error_packets));
+    snprintf(sub,
+             sizeof(sub),
+             "%lu invalid - %lu error - %lu unknown",
+             (unsigned long)st.invalid_packets,
+             (unsigned long)st.error_packets,
+             (unsigned long)st.unknown_packets);
+    setCard(link_cards[3], v, "bad", sub, -1);
+
+    if (!msg_table || !lv_obj_is_valid(msg_table)) {
+        return;
+    }
+    struct Row {
+        const char* name;
+        uint32_t count;
+    };
+    const Row rows[] = {
+        {"HEARTBEAT", st.heartbeat_packets},
+        {"METER_PUSH", st.meter_push_packets},
+        {"WAVE_CHUNK", st.wave_chunk_packets},
+        {"STATUS_RESPONSE", st.status_response_packets},
+        {"STATUS_REQUEST", st.status_request_packets},
+        {"SAMPLE_CTRL", st.sample_ctrl_packets},
+        {"SAMPLE_LOAD", st.sample_load_packets},
+        {"SAMPLE_DATA", st.sample_data_packets},
+        {"PREVIEW_REQ", st.preview_req_packets},
+        {"DATA_REQUEST", st.data_request_packets},
+        {"CONTROL_CHANGE", st.control_change_packets},
+        {"NOTE_ON", st.note_on_packets},
+        {"NOTE_OFF", st.note_off_packets},
+        {"PARAMETER_UPDATE", st.parameter_update_packets},
+        {"SYNC", st.sync_packets},
+        {"ERROR", st.error_packets},
+        {"UNKNOWN", st.unknown_packets},
+        {"INVALID", st.invalid_packets},
+        {"TOTAL", st.total_packets},
+    };
+    const int n = (int)(sizeof(rows) / sizeof(rows[0]));
+    lv_table_set_row_count(msg_table, n + 1);
+    lv_table_set_cell_value(msg_table, 0, 0, "MESSAGE");
+    lv_table_set_cell_value(msg_table, 0, 1, "COUNT");
+    for (int i = 0; i < n; i++) {
+        char cnt[24];
+        snprintf(cnt, sizeof(cnt), "%lu", (unsigned long)rows[i].count);
+        lv_table_set_cell_value(msg_table, i + 1, 0, rows[i].name);
+        lv_table_set_cell_value(msg_table, i + 1, 1, cnt);
+    }
 }
 
 void UIDiagnosticsPage::diagnosticsUpdateCallback(void* arg) {
