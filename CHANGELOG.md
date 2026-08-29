@@ -129,6 +129,22 @@ versioning and release process.
   now), the non-frame-aligned WAV `data` chunk finding, and the open SD remount
   verification.
 
+### Added — UI design constraints brief
+
+- New `docs/ui-design-constraints.md`: a one-page, paste-ready brief for
+  design passes (Claude Design or human), with every claim sourced to code —
+  1280×720 landscape (720×1280 panel, software-rotated), LVGL 9.4 at RGB565,
+  75 px header + 100 px six-softkey bar leaving a 1280×545 content area,
+  Montserrat-only typography at the eight compiled-in sizes, the existing dark
+  palette, the 20-line-strip rendering budget that rules out large animated
+  regions, the enabled widget inventory, and encoder-first input.
+- `ui-architecture.md` re-verified against code and updated: hardware summary
+  added, dead `.cursor/rules` reference corrected (untracked local file, not
+  shared truth).
+- Backlog: recorded a GT911 touch-range mismatch found during the audit —
+  `x_max=800, y_max=480` configured against a 720×1280 panel; flagged for
+  corner-tap verification rather than a blind fix.
+
 ### Added — Daisy development and audition tooling
 
 - Added software-triggered Daisy DFU entry (`make daisy-flash-auto`), serial

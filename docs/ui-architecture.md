@@ -1,7 +1,13 @@
 # WaveX UI Architecture (Navigator-First Design)
 
-**Last Updated**: 2025-11-02
-**Version**: 2.0 (Major Refactor - Global State Reduction)
+**Last Updated**: 2026-08-28 (verified against code; hardware facts moved to
+[`ui-design-constraints.md`](ui-design-constraints.md))
+**Version**: 2.1
+
+**Hardware/toolkit summary** (full detail + sources in the constraints doc):
+LVGL 9.4 on ESP32-P4, 5-inch 720×1280 MIPI-DSI panel software-rotated to
+1280×720 landscape, RGB565, 30 FPS UI task, 75 px header + 100 px six-button
+softkey bar → 1280×545 content area, Montserrat fonts only.
 
 ## Overview
 
@@ -316,7 +322,11 @@ LV_UNLOCK();
 
 ## References
 
-- **LVGL Threading Rules**: `.cursor/rules/lvgl-threading.mdc`
+- **Design constraints (for UI/UX work)**: `docs/ui-design-constraints.md`
+- **LVGL Threading Rules**: the "LVGL Threading Compliance" section above is
+  the canonical statement. (`.cursor/rules/lvgl-threading.mdc` exists only as
+  an untracked local file - `.cursor/` is gitignored - so do not cite it as
+  shared truth.)
 - **System Architecture**: `docs/architecture.md`
 - **Page implementation how-to**: `docs/ui-system-implementation-guide.md`
 - Historical: `docs/archive/navigation-integration-guide.md`, `docs/archive/sample-browser-redesign.md`

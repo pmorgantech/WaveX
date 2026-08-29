@@ -117,3 +117,20 @@ Explicit `HAL_SD_Init()` + settle delay landed, along with a fix for
 `SD_initialize()` masking failures behind a stale `Stat`. Whether the
 underlying re-identification now succeeds is unconfirmed on hardware; the log
 will name the HAL error if it does not.
+
+---
+
+## GT911 touch range mismatch
+
+`display_manager.cpp` passes `x_max = 800, y_max = 480` to the GT911 driver,
+which matches neither the native panel (720×1280,
+`CONFIG_BSP_LCD_TYPE_720_1280_5_INCH_A`) nor the rotated canvas (1280×720).
+The values look inherited from an 800×480 board variant.
+
+**Why it is not urgent:** touch has been working well enough that nobody
+noticed — the GT911 reports its own coordinates and the softkey targets are
+large. But if touch ever feels offset, compressed, or dead near two edges,
+this is the first suspect (verify by tapping all four corners). Do not fix
+blind: change it with the panel attached and corner-tap before/after, since
+the correct values depend on how the driver interacts with the panel's own
+configuration.
