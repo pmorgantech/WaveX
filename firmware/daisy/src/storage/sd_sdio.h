@@ -29,6 +29,11 @@ bool DowngradeSpeed();
 // Current bus clock, e.g. "STANDARD/25MHz". Never null.
 const char* CurrentSpeedName();
 
+// Index into the same speed table CurrentSpeedName() names, for the wire.
+// The names stay on the Daisy; the frontend maps the index back, so adding a
+// speed does not need a protocol change.
+int CurrentSpeedIndex();
+
 // True while a card is mounted and usable.
 bool IsMounted();
 

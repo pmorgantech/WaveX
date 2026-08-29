@@ -79,6 +79,20 @@ static inline bool browser_ui_update_pending(const wavex_file_browser_t* browser
     return __atomic_load_n(&browser->ui_update_pending, __ATOMIC_ACQUIRE);
 }
 
+// Cheap sibling of the flag above for selection moves that leave the viewport
+// where it is: the UI task only restyles the highlight instead of destroying
+// and recreating every visible LVGL button. Same release/acquire discipline -
+// selection can move from the UI task (encoder) and the LVGL task (softkeys).
+static inline void browser_set_selection_update(wavex_file_browser_t* browser) {
+    __atomic_store_n(&browser->selection_update_pending, true, __ATOMIC_RELEASE);
+}
+static inline void browser_clear_selection_update(wavex_file_browser_t* browser) {
+    __atomic_store_n(&browser->selection_update_pending, false, __ATOMIC_RELAXED);
+}
+static inline bool browser_selection_update_pending(const wavex_file_browser_t* browser) {
+    return __atomic_load_n(&browser->selection_update_pending, __ATOMIC_ACQUIRE);
+}
+
 wavex_file_browser_t* wavex_file_browser_create(lv_obj_t* parent,
                                                 const wavex_file_browser_config_t* config) {
     if (!parent || !config) {
@@ -267,6 +281,7 @@ void wavex_file_browser_set_selection(wavex_file_browser_t* browser, uint32_t in
     browser->selected_index = index;
 
     // Update viewport to ensure selected entry is visible
+    uint32_t prev_first_visible = browser->first_visible_index;
     if (browser->selected_index < browser->first_visible_index) {
         browser->first_visible_index = browser->selected_index;
     } else {
@@ -279,10 +294,15 @@ void wavex_file_browser_set_selection(wavex_file_browser_t* browser, uint32_t in
         }
     }
 
-    ESP_LOGI(TAG, "Selected entry %d: %s", index, browser->entries[index].name);
+    ESP_LOGD(TAG, "Selected entry %d: %s", index, browser->entries[index].name);
 
-    // Mark visual selection update as pending (selection may be changed from non-LVGL context)
-    browser_set_ui_update(browser);
+    // Mark the update as pending (selection may be changed from non-LVGL
+    // context): full rebuild if the viewport scrolled, highlight-only if not.
+    if (browser->first_visible_index != prev_first_visible) {
+        browser_set_ui_update(browser);
+    } else {
+        browser_set_selection_update(browser);
+    }
     wavex_ui_mark_content_changed();
 }
 
@@ -315,11 +335,13 @@ bool wavex_file_browser_navigate_up_entry(wavex_file_browser_t* browser) {
 
     uint32_t new_index = browser->selected_index - 1;
     browser->selected_index = new_index;
-    ESP_LOGI(TAG, "navigate_up: moved from %u to %u", browser->selected_index + 1, new_index);
+    ESP_LOGD(TAG, "navigate_up: moved from %u to %u", browser->selected_index + 1, new_index);
 
     // Update viewport if selection moved above visible area
+    bool viewport_moved = false;
     if (browser->selected_index < browser->first_visible_index) {
         browser->first_visible_index = browser->selected_index;
+        viewport_moved = true;
         ESP_LOGD(TAG, "navigate_up: scrolled viewport to %u", browser->first_visible_index);
     }
 
@@ -330,8 +352,13 @@ bool wavex_file_browser_navigate_up_entry(wavex_file_browser_t* browser) {
                                         browser->user_data);
     }
 
-    // Update visual highlighting - refresh UI if viewport might have changed
-    browser_set_ui_update(browser);
+    // Full rebuild only when the viewport scrolled; otherwise just move the
+    // highlight.
+    if (viewport_moved) {
+        browser_set_ui_update(browser);
+    } else {
+        browser_set_selection_update(browser);
+    }
     wavex_ui_mark_content_changed();
 
     return true;
@@ -354,9 +381,10 @@ bool wavex_file_browser_navigate_down_entry(wavex_file_browser_t* browser) {
 
     uint32_t new_index = browser->selected_index + 1;
     browser->selected_index = new_index;
-    ESP_LOGI(TAG, "navigate_down: moved from %u to %u", browser->selected_index - 1, new_index);
+    ESP_LOGD(TAG, "navigate_down: moved from %u to %u", browser->selected_index - 1, new_index);
 
     // Update viewport if selection moved below visible area
+    bool viewport_moved = false;
     uint32_t last_visible_index = browser->first_visible_index + browser->visible_count - 1;
     if (browser->selected_index > last_visible_index) {
         // Scroll down to show the selected entry
@@ -365,6 +393,7 @@ bool wavex_file_browser_navigate_down_entry(wavex_file_browser_t* browser) {
         if (browser->first_visible_index > browser->selected_index) {
             browser->first_visible_index = 0;
         }
+        viewport_moved = true;
         ESP_LOGD(TAG, "navigate_down: scrolled viewport to %u", browser->first_visible_index);
     }
 
@@ -375,8 +404,13 @@ bool wavex_file_browser_navigate_down_entry(wavex_file_browser_t* browser) {
                                         browser->user_data);
     }
 
-    // Update visual highlighting - refresh UI if viewport might have changed
-    browser_set_ui_update(browser);
+    // Full rebuild only when the viewport scrolled; otherwise just move the
+    // highlight.
+    if (viewport_moved) {
+        browser_set_ui_update(browser);
+    } else {
+        browser_set_selection_update(browser);
+    }
     wavex_ui_mark_content_changed();
 
     return true;
@@ -1069,26 +1103,31 @@ void wavex_file_browser_process_pending_updates(wavex_file_browser_t* browser) {
     // Acquire-load pairs with browser_set_ui_update's release-store: once we
     // see the flag, the UART task's writes to entries[]/entry_count are
     // guaranteed visible (review Finding 11).
-    bool pending = browser_ui_update_pending(browser);
-    ESP_LOGD(TAG,
-             "process_pending_updates: ui_update_pending=%d, entry_count=%d",
-             pending ? 1 : 0,
-             browser->entry_count);
-
-    if (!pending) {
+    bool full = browser_ui_update_pending(browser);
+    bool selection_only = browser_selection_update_pending(browser);
+    if (!full && !selection_only) {
         return;  // No update needed
     }
 
-    ESP_LOGI(
-        TAG, "Processing pending UI update for file browser with %d entries", browser->entry_count);
+    if (full) {
+        ESP_LOGD(TAG,
+                 "Processing pending UI update for file browser with %d entries",
+                 browser->entry_count);
+        // A rebuild ends with update_visual_selection, so it satisfies any
+        // concurrent highlight request too.
+        browser_clear_ui_update(browser);
+        browser_clear_selection_update(browser);
 
-    // Clear flag first
-    browser_clear_ui_update(browser);
+        // Update UI (caller must hold LVGL lock - this is called from UI task loop)
+        update_file_browser_ui(browser);
+    } else {
+        // Selection moved within the current viewport: restyle the existing
+        // buttons instead of destroying and recreating them.
+        browser_clear_selection_update(browser);
+        update_visual_selection(browser);
+    }
 
-    // Update UI (caller must hold LVGL lock - this is called from UI task loop)
-    update_file_browser_ui(browser);
-
-    ESP_LOGI(TAG, "UI update complete");
+    ESP_LOGD(TAG, "UI update complete");
 }
 
 // Helper function to update the file browser UI
@@ -1156,7 +1195,7 @@ static void update_file_browser_ui(wavex_file_browser_t* browser) {
         // Update visual selection (maps selected_index to visible button)
         update_visual_selection(browser);
 
-        ESP_LOGI(TAG, "Updated file browser UI with %d entries", browser->entry_count);
+        ESP_LOGD(TAG, "Updated file browser UI with %d entries", browser->entry_count);
     } else if (browser->entry_count == 0 && browser->pagination_in_progress == false) {
         // Show "No files found..." message (pagination complete but no entries)
         lv_obj_t* btn = lv_list_add_btn(browser->list, NULL, "No files found...");

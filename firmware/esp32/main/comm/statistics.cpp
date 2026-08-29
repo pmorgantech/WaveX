@@ -113,6 +113,9 @@ void StatisticsManager::increment_packet_stat(uint8_t packet_type) {
         case 0x12:
             m_packet_stats.heartbeat_packets++;
             break;  // Current MSG_HEARTBEAT (0x12)
+        case 0x3B:
+            m_packet_stats.diag_push_packets++;
+            break;  // MSG_DIAG_PUSH
         case 0xFF:
             m_packet_stats.error_packets++;
             break;  // MSG_ERROR

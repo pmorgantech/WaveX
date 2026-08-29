@@ -204,7 +204,9 @@ static void pcnt_task(void *pvParameters) {
                 const char *unit_name = (config->unit == WAVEX_ENCODER_PCNT_UNIT)
                                             ? "Main Encoder"
                                             : "PCNT1 Encoder (PEC11R quadrature)";
-                ESP_LOGI(TAG,
+                // DEBUG, not INFO: this fires on every 2ms poll while a knob
+                // turns, which at console baud rate would stall this task.
+                ESP_LOGD(TAG,
                          "%s - Count: %" PRId32 ", Delta: %" PRId32,
                          unit_name,
                          (int32_t)hw_count,

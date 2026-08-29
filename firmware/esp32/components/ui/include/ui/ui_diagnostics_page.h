@@ -56,7 +56,9 @@ class UIDiagnosticsPage : public UIPage {
     void buildTabs(lv_obj_t* parent);
     void buildSystemTab(lv_obj_t* tab);
     void buildLinkTab(lv_obj_t* tab);
-    void buildPendingTab(lv_obj_t* tab, const char* what);
+    void buildAudioTab(lv_obj_t* tab);
+    void buildStorageTab(lv_obj_t* tab);
+    void buildMidiTab(lv_obj_t* tab);
     Card makeCard(lv_obj_t* parent,
                   int x,
                   int y,
@@ -70,6 +72,12 @@ class UIDiagnosticsPage : public UIPage {
     // Per-tab refresh
     void refreshSystemTab();
     void refreshLinkTab();
+    void refreshAudioTab();
+    void refreshStorageTab();
+    void refreshMidiTab();
+    // Shared "backend has gone quiet" rendering, so a stale figure is never
+    // presented as a current one.
+    void showTabOffline(Card* cards, int n, const char* why);
 
     // Diagnostics monitoring
     void startDiagnosticsMonitoring();
@@ -116,6 +124,10 @@ class UIDiagnosticsPage : public UIPage {
 
     Card sys_cards[8];
     Card link_cards[4];
+    Card audio_cards[8];
+    Card storage_cards[8];
+    Card midi_cards[4];
+    lv_obj_t* midi_note;  // "no sequencer yet" explainer on the MIDI tab
     lv_obj_t* msg_table;  // per-message-type counts, from wavex_packet_stats_t
 
     // Set by the sampling timer, consumed by the UI task.

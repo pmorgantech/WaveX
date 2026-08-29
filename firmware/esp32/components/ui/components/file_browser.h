@@ -75,7 +75,8 @@ typedef struct {
     uint32_t loaded_entries;      // Number of entries loaded so far
 
     // UI update flags (for thread-safe deferred updates)
-    bool ui_update_pending;  // True if UI needs to be updated
+    bool ui_update_pending;         // True if the list must be rebuilt
+    bool selection_update_pending;  // True if only the highlight moved (viewport unchanged)
 
     // Scrolling/viewport state
     uint32_t first_visible_index;  // Index of first visible entry (for scrolling)

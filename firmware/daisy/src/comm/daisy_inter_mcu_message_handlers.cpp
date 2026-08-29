@@ -10,6 +10,7 @@
 #include "daisy_filesystem.h"
 #include "daisy_seed.h"
 #include "daisy_uart_link.h"
+#include "diag_push.h"
 #include "spi_protocol/protocol.h"
 
 #if WAVEX_SPI_LINK_ENABLED
@@ -34,6 +35,7 @@ static void HandleDataRequestMessage(const uint8_t* payload, size_t payload_size
 static void HandleMeterPushMessage(const uint8_t* payload, size_t payload_size);
 static void HandleWaveChunkMessage(const uint8_t* payload, size_t payload_size);
 static void HandleHeartbeatMessage(const uint8_t* payload, size_t payload_size);
+static void HandleDiagSubscribeMessage(const uint8_t* payload, size_t payload_size);
 static void HandleStatusRequestMessage(const uint8_t* payload, size_t payload_size);
 static void HandleBrowseRequestMessage(const uint8_t* payload, size_t payload_size);
 static void HandleBrowseResponseMessage(const uint8_t* payload, size_t payload_size);
@@ -135,6 +137,9 @@ void ProcessInterMcuMessage(uint8_t msg_type,
             break;
         case MSG_SAMPLE_STATUS:
             HandleSampleStatusMessage(payload, payload_size);
+            break;
+        case MSG_DIAG_SUBSCRIBE:
+            HandleDiagSubscribeMessage(payload, payload_size);
             break;
         case MSG_SAMPLE_PLAY_INDEX_REQ:
             HandleSamplePlayIndexRequestMessage(payload, payload_size);
@@ -302,6 +307,15 @@ static void HandleMeterPushMessage(const uint8_t* payload, size_t payload_size) 
 static void HandleWaveChunkMessage(const uint8_t* payload, size_t payload_size) {}
 
 static void HandleHeartbeatMessage(const uint8_t* payload, size_t payload_size) {}
+
+static void HandleDiagSubscribeMessage(const uint8_t* payload, size_t payload_size) {
+    if (!payload || payload_size < sizeof(DiagSubscribeMessage)) {
+        return;
+    }
+    DiagSubscribeMessage msg;
+    memcpy(&msg, payload, sizeof(msg));
+    WaveX::Comm::DiagSubscribe(msg.enable != 0, msg.interval_hz);
+}
 
 static void HandleStatusRequestMessage(const uint8_t* payload, size_t payload_size) {
     if (!payload || payload_size < sizeof(WaveX::Protocol::StatusRequestMessage)) {

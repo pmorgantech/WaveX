@@ -43,10 +43,14 @@ UIDiagnosticsPage::UIDiagnosticsPage()
       tabview(nullptr),
       active_tab(TAB_SYSTEM),
       frozen(false),
+      midi_note(nullptr),
       msg_table(nullptr),
       ui_update_pending(false) {
     memset(sys_cards, 0, sizeof(sys_cards));
     memset(link_cards, 0, sizeof(link_cards));
+    memset(audio_cards, 0, sizeof(audio_cards));
+    memset(storage_cards, 0, sizeof(storage_cards));
+    memset(midi_cards, 0, sizeof(midi_cards));
     memset(cpu_usage_history, 0, sizeof(cpu_usage_history));
 }
 
@@ -103,6 +107,9 @@ void UIDiagnosticsPage::onEnter(lv_obj_t* parent) {
 
     buildTabs(parent);
     startDiagnosticsMonitoring();
+    // Subscribe only while this page is open. 2 Hz is ~188 B/s against a
+    // 200 KB/s link; closed, the backend sends nothing at all.
+    inter_mcu_send_diag_subscribe(true, 2);
 }
 
 void UIDiagnosticsPage::buildTabs(lv_obj_t* parent) {
@@ -143,12 +150,9 @@ void UIDiagnosticsPage::buildTabs(lv_obj_t* parent) {
 
     buildSystemTab(t_sys);
     buildLinkTab(t_link);
-    // Audio / Storage / MIDI are mostly Daisy-side figures that do not cross
-    // the link yet. Showing the layout with invented numbers would be worse
-    // than saying so - see docs/ui-diagnostics-spec.md (MSG_DIAG_PUSH).
-    buildPendingTab(t_audio, "Audio");
-    buildPendingTab(t_storage, "Storage");
-    buildPendingTab(t_midi, "MIDI");
+    buildAudioTab(t_audio);
+    buildStorageTab(t_storage);
+    buildMidiTab(t_midi);
 
     lv_tabview_set_active(tabview, active_tab, LV_ANIM_OFF);
 }
@@ -300,31 +304,96 @@ void UIDiagnosticsPage::buildLinkTab(lv_obj_t* tab) {
     lv_obj_set_style_border_width(msg_table, 0, LV_PART_MAIN);
 }
 
-void UIDiagnosticsPage::buildPendingTab(lv_obj_t* tab, const char* what) {
-    char line[160];
-    snprintf(line,
-             sizeof(line),
-             "%s telemetry lives on the Daisy and does not cross the link yet.",
-             what);
-    mkLabel(tab, 24, 40, line, &lv_font_montserrat_22, kColDim);
-    mkLabel(tab,
-            24,
-            90,
-            "Needs MSG_DIAG_PUSH - see docs/ui-diagnostics-spec.md",
-            &lv_font_montserrat_18,
-            kColDimmer);
-    mkLabel(tab,
-            24,
-            130,
-            "Showing placeholder numbers here would be worse than showing none.",
-            &lv_font_montserrat_18,
-            kColDimmer);
+void UIDiagnosticsPage::buildAudioTab(lv_obj_t* tab) {
+    struct Def {
+        const char* title;
+        bool gauge;
+        int warn;
+    };
+    // Callback rate first: it is the most valuable single number on the page.
+    // It separates "the engine stopped" from "the ring starved" - an ambiguity
+    // that cost hours, because an underrun is only detectable INSIDE the
+    // callback. If the callback stops, the ring stays full and the log stays
+    // clean, so silence looks identical to health everywhere else.
+    static const Def defs[8] = {
+        {"CALLBACK RATE", false, 0},
+        {"RING LOW WATER", true, 0},  // low is bad; coloured explicitly below
+        {"UNDERRUNS", false, 0},
+        {"ENGINE CPU", true, 60},
+        {"PRE-BUFFER", true, 0},  // a full pre-buffer is the healthy state
+        {"CURRENT WAV", false, 0},
+        {"RING PUSHES", false, 0},
+        {"DISCARDED", false, 0},
+    };
+    for (int i = 0; i < 8; i++) {
+        audio_cards[i] = makeCard(tab,
+                                  kColX[i % 4],
+                                  kRowY[i / 4],
+                                  kCardW,
+                                  defs[i].title,
+                                  "wire",
+                                  defs[i].gauge,
+                                  defs[i].warn);
+    }
+}
+
+void UIDiagnosticsPage::buildStorageTab(lv_obj_t* tab) {
+    struct Def {
+        const char* title;
+        bool gauge;
+        int warn;
+    };
+    static const Def defs[8] = {
+        {"CARD", false, 0},
+        {"THROUGHPUT", false, 0},
+        {"READ LATENCY", false, 0},
+        {"ERRORS", false, 0},
+        {"LAST RESULT", false, 0},
+        {"SAMPLE RAM", true, 85},
+        {"LARGEST BLOCK", false, 0},
+        {"SAMPLES", false, 0},
+    };
+    for (int i = 0; i < 8; i++) {
+        storage_cards[i] = makeCard(tab,
+                                    kColX[i % 4],
+                                    kRowY[i / 4],
+                                    kCardW,
+                                    defs[i].title,
+                                    "wire",
+                                    defs[i].gauge,
+                                    defs[i].warn);
+    }
+}
+
+void UIDiagnosticsPage::buildMidiTab(lv_obj_t* tab) {
+    static const char* titles[4] = {"SYNC STATE", "TEMPO", "NOTES", "CONTROL CHANGE"};
+    for (int i = 0; i < 4; i++) {
+        midi_cards[i] = makeCard(tab, kColX[i], kRowY[0], kCardW, titles[i], "wire", false, 0);
+    }
+    // These fields exist on the wire but nothing fills them yet: the sequencer
+    // and tempo follower are Phase 2. Saying so beats four cards reading zero
+    // with no explanation, which looks like a fault rather than a gap.
+    midi_note = mkLabel(tab,
+                        kColX[0],
+                        kRowY[1] + 20,
+                        "MSG_DIAG_PUSH carries these fields, but the Daisy has no sequencer or\n"
+                        "tempo follower to fill them yet (Phase 2). They will read zero until\n"
+                        "those land - see docs/roadmap.md.",
+                        &lv_font_montserrat_18,
+                        kColDimmer);
+}
+
+void UIDiagnosticsPage::showTabOffline(Card* cards, int n, const char* why) {
+    for (int i = 0; i < n; i++) {
+        setCard(cards[i], "-", "", why, -1);
+    }
 }
 
 void UIDiagnosticsPage::onExit() {
     ESP_LOGI(TAG, "Diagnostics page exiting");
 
     // Stop diagnostics monitoring
+    inter_mcu_send_diag_subscribe(false, 2);
     stopDiagnosticsMonitoring();
 
     // Clear UI element references
@@ -674,9 +743,223 @@ void UIDiagnosticsPage::applyUiUpdates() {
         case TAB_LINK:
             refreshLinkTab();
             break;
+        case TAB_AUDIO:
+            refreshAudioTab();
+            break;
+        case TAB_STORAGE:
+            refreshStorageTab();
+            break;
+        case TAB_MIDI:
+            refreshMidiTab();
+            break;
         default:
-            break;  // pending tabs are static until MSG_DIAG_PUSH exists
+            break;
     }
+}
+
+namespace {
+// Names for DiagPushMessage::sd_speed_index. The Daisy sends the index and
+// keeps the table, so adding a speed there needs no protocol change - but the
+// two lists must stay in step, hence the explicit unknown fallback.
+const char* SdSpeedName(uint8_t index) {
+    static const char* kNames[] = {
+        "SLOW 400kHz", "MEDIUM 12.5MHz", "STANDARD 25MHz", "FAST 50MHz", "VERY FAST 100MHz"};
+    return index < (sizeof(kNames) / sizeof(kNames[0])) ? kNames[index] : "unknown";
+}
+
+const char* SyncStateName(uint8_t state) {
+    switch (state) {
+        case 0:
+            return "INTERNAL";
+        case 1:
+            return "ACQUIRING";
+        case 2:
+            return "LOCKED";
+        case 3:
+            return "FREEWHEEL";
+        default:
+            return "?";
+    }
+}
+
+// FatFS FRESULT names, for the ones a streaming read can actually produce.
+const char* FatFsName(uint8_t fr) {
+    switch (fr) {
+        case 0:
+            return "FR_OK";
+        case 1:
+            return "FR_DISK_ERR";
+        case 2:
+            return "FR_INT_ERR";
+        case 3:
+            return "FR_NOT_READY";
+        case 4:
+            return "FR_NO_FILE";
+        case 9:
+            return "FR_INVALID_OBJECT";
+        case 13:
+            return "FR_NO_FILESYSTEM";
+        default:
+            return "FRESULT";
+    }
+}
+}  // namespace
+
+// Telemetry older than this is not shown. At the 2 Hz subscription rate three
+// missed pushes means the backend or the link is in trouble, and a frozen
+// figure presented as current is exactly how a dead link reads as a healthy
+// one - the failure mode this page exists to catch.
+static constexpr uint32_t kDiagMaxAgeMs = 1500;
+
+void UIDiagnosticsPage::refreshAudioTab() {
+    if (!audio_cards[0].value || !lv_obj_is_valid(audio_cards[0].value)) {
+        return;
+    }
+    WaveX::Protocol::DiagPushMessage d;
+    if (!inter_mcu_get_diag_push(&d, kDiagMaxAgeMs)) {
+        showTabOffline(audio_cards, 8, "no telemetry from backend");
+        return;
+    }
+    char v[48], u[32], sub[80];
+
+    snprintf(v, sizeof(v), "%u.%u", d.callback_hz_x10 / 10, d.callback_hz_x10 % 10);
+    // Below ~990 Hz the engine is missing blocks; that is a stopped or
+    // starved callback, not jitter.
+    const bool cb_bad = d.callback_hz_x10 < 9900;
+    setCard(audio_cards[0], v, "Hz", cb_bad ? "BELOW NOMINAL 1000 Hz" : "nominal 1000 Hz", -1);
+
+    snprintf(v, sizeof(v), "%u", d.ring_low_water);
+    snprintf(u, sizeof(u), "/ 2048");
+    const int ring_pct = (d.ring_low_water * 100) / 2048;
+    // Inverted on purpose: on this gauge LOW is the problem, so the warning
+    // threshold is expressed against the empty end.
+    snprintf(sub, sizeof(sub), "%s", ring_pct < 20 ? "STARVING" : "lowest this interval");
+    setCard(audio_cards[1], v, u, sub, ring_pct);
+    if (audio_cards[1].bar) {
+        lv_obj_set_style_bg_color(audio_cards[1].bar,
+                                  lv_color_hex(ring_pct < 20 ? kColOrange : kColGreen),
+                                  LV_PART_INDICATOR);
+    }
+
+    snprintf(v, sizeof(v), "%u", d.underruns);
+    snprintf(sub, sizeof(sub), "episodes in %lu ms", (unsigned long)d.interval_ms);
+    setCard(audio_cards[2], v, "", sub, -1);
+
+    snprintf(v, sizeof(v), "%u.%u", d.engine_cpu_x10 / 10, d.engine_cpu_x10 % 10);
+    snprintf(sub, sizeof(sub), "max %u.%u%%", d.engine_cpu_max_x10 / 10, d.engine_cpu_max_x10 % 10);
+    setCard(audio_cards[3], v, "%", sub, d.engine_cpu_x10 / 10);
+
+    snprintf(v, sizeof(v), "%u", d.prebuffer_filled);
+    setCard(audio_cards[4], v, "/ 1024", "full is healthy", (d.prebuffer_filled * 100) / 1024);
+
+    if (d.wav_sample_rate) {
+        snprintf(v, sizeof(v), "%lu", (unsigned long)(d.wav_sample_rate / 1000));
+        snprintf(sub,
+                 sizeof(sub),
+                 "%u-bit %s%s",
+                 d.wav_bits,
+                 d.wav_channels == 2 ? "stereo" : "mono",
+                 d.resampling ? " - RESAMPLING" : "");
+        setCard(audio_cards[5], v, "kHz", sub, -1);
+    } else {
+        setCard(audio_cards[5], "-", "", d.playing ? "playing, no format yet" : "not playing", -1);
+    }
+
+    snprintf(v, sizeof(v), "%lu", (unsigned long)d.ring_pushes);
+    setCard(audio_cards[6], v, "", "this interval", -1);
+
+    // Its own card because skip-without-consume is invisible in every other
+    // figure: the ring simply stops filling, and both playback stalls began
+    // exactly this way.
+    snprintf(v, sizeof(v), "%lu", (unsigned long)d.ring_discards);
+    setCard(audio_cards[7],
+            v,
+            "",
+            d.ring_discards ? "SKIPPED WITHOUT CONSUMING" : "passes skipped",
+            -1);
+}
+
+void UIDiagnosticsPage::refreshStorageTab() {
+    if (!storage_cards[0].value || !lv_obj_is_valid(storage_cards[0].value)) {
+        return;
+    }
+    WaveX::Protocol::DiagPushMessage d;
+    if (!inter_mcu_get_diag_push(&d, kDiagMaxAgeMs)) {
+        showTabOffline(storage_cards, 8, "no telemetry from backend");
+        return;
+    }
+    char v[48], sub[80];
+
+    setCard(storage_cards[0],
+            d.sd_mounted ? "MOUNTED" : "ABSENT",
+            "",
+            d.sd_mounted ? SdSpeedName(d.sd_speed_index) : "no card",
+            -1);
+
+    if (d.interval_ms) {
+        const uint32_t kbps =
+            (uint32_t)(((uint64_t)d.sd_bytes * 1000ull) / d.interval_ms / 1024ull);
+        snprintf(v, sizeof(v), "%lu", (unsigned long)kbps);
+        snprintf(sub, sizeof(sub), "%u reads this interval", d.sd_reads);
+        setCard(storage_cards[1], v, "KB/s", sub, -1);
+    }
+
+    snprintf(v, sizeof(v), "%u.%u", d.sd_lat_avg_us / 1000, (d.sd_lat_avg_us % 1000) / 100);
+    // Max belongs on the face of the card, not in a detail row: latency
+    // creeping before any error appears is the marginal-timing tell.
+    snprintf(
+        sub, sizeof(sub), "max %u.%u ms", d.sd_lat_max_us / 1000, (d.sd_lat_max_us % 1000) / 100);
+    setCard(storage_cards[2], v, "ms avg", sub, -1);
+
+    snprintf(v, sizeof(v), "%u", d.sd_errors);
+    snprintf(sub, sizeof(sub), "%u recoveries", d.sd_recoveries);
+    setCard(storage_cards[3], v, "", sub, -1);
+
+    // FRESULT and HAL error together: FR_DISK_ERR alone says only "the read
+    // failed", where SDMMC_ERROR_DATA_CRC_FAIL with the card in TRANSFER
+    // state says "card healthy, wiring marginal" - a different action.
+    snprintf(sub, sizeof(sub), "HAL 0x%08lx", (unsigned long)d.sd_hal_err);
+    setCard(storage_cards[4], FatFsName(d.sd_last_fatfs), "", sub, -1);
+
+    const uint32_t ram_free_kb = d.sample_ram_free / 1024;
+    snprintf(v, sizeof(v), "%lu", (unsigned long)(ram_free_kb / 1024));
+    snprintf(sub, sizeof(sub), "%lu KB free", (unsigned long)ram_free_kb);
+    setCard(storage_cards[5], v, "MB free", sub, -1);
+
+    snprintf(v, sizeof(v), "%lu", (unsigned long)(d.sample_ram_largest / 1024));
+    setCard(storage_cards[6], v, "KB", "largest contiguous block", -1);
+
+    snprintf(v, sizeof(v), "%u", d.sample_count);
+    snprintf(sub, sizeof(sub), "%u failed allocs", d.sample_failed_allocs);
+    setCard(storage_cards[7], v, "loaded", sub, -1);
+}
+
+void UIDiagnosticsPage::refreshMidiTab() {
+    if (!midi_cards[0].value || !lv_obj_is_valid(midi_cards[0].value)) {
+        return;
+    }
+    WaveX::Protocol::DiagPushMessage d;
+    if (!inter_mcu_get_diag_push(&d, kDiagMaxAgeMs)) {
+        showTabOffline(midi_cards, 4, "no telemetry from backend");
+        return;
+    }
+    char v[48], sub[64];
+
+    setCard(midi_cards[0],
+            SyncStateName(d.sync_state),
+            "",
+            d.transport_playing ? "transport playing" : "transport stopped",
+            -1);
+
+    snprintf(v, sizeof(v), "%u.%02u", d.measured_bpm_x100 / 100, d.measured_bpm_x100 % 100);
+    snprintf(sub, sizeof(sub), "%u clock ticks", d.midi_clock_ticks);
+    setCard(midi_cards[1], v, "BPM", sub, -1);
+
+    snprintf(v, sizeof(v), "%u", d.midi_notes);
+    setCard(midi_cards[2], v, "", "this interval", -1);
+
+    snprintf(v, sizeof(v), "%u", d.midi_ccs);
+    setCard(midi_cards[3], v, "", "this interval", -1);
 }
 
 void UIDiagnosticsPage::refreshSystemTab() {

@@ -211,6 +211,51 @@ esp_err_t inter_mcu_send_preview_req(uint8_t slot, uint32_t start, uint32_t end,
     return result >= 0 ? ESP_OK : ESP_FAIL;
 }
 
+esp_err_t inter_mcu_send_diag_subscribe(bool enable, uint8_t interval_hz) {
+    if (!s_initialized || s_suspended) {
+        return -1;  // ESP_ERR_INVALID_STATE
+    }
+    WaveX::Protocol::DiagSubscribeMessage msg(enable ? 1 : 0, interval_hz);
+    int result = send_uart_message(WaveX::Protocol::MSG_DIAG_SUBSCRIBE, &msg, sizeof(msg));
+    return result >= 0 ? ESP_OK : ESP_FAIL;
+}
+
+namespace {
+// Written by the UART RX task, read by the UI task. A portMUX critical
+// section, matching the meter and heartbeat snapshots either side of it - the
+// struct is 94 bytes, so a torn read would mix two intervals.
+portMUX_TYPE s_diag_lock = portMUX_INITIALIZER_UNLOCKED;
+WaveX::Protocol::DiagPushMessage s_diag;
+uint32_t s_diag_rx_ms = 0;
+bool s_diag_valid = false;
+}  // namespace
+
+void inter_mcu_store_diag_push(const WaveX::Protocol::DiagPushMessage& msg) {
+    taskENTER_CRITICAL(&s_diag_lock);
+    s_diag = msg;
+    s_diag_rx_ms = (uint32_t)(esp_timer_get_time() / 1000);
+    s_diag_valid = true;
+    taskEXIT_CRITICAL(&s_diag_lock);
+}
+
+bool inter_mcu_get_diag_push(WaveX::Protocol::DiagPushMessage* out, uint32_t max_age_ms) {
+    if (!out) {
+        return false;
+    }
+    taskENTER_CRITICAL(&s_diag_lock);
+    const bool valid = s_diag_valid;
+    const uint32_t rx_ms = s_diag_rx_ms;
+    if (valid) {
+        *out = s_diag;
+    }
+    taskEXIT_CRITICAL(&s_diag_lock);
+    if (!valid) {
+        return false;
+    }
+    const uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
+    return (now_ms - rx_ms) <= max_age_ms;
+}
+
 void inter_mcu_send_test_messages() {
     if (!s_initialized) {
         ESP_LOGE(TAG, "Inter-MCU communication not initialized");

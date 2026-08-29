@@ -16,6 +16,7 @@ set(FIRMWARE_SOURCES
     src/comm/daisy_spi_link.cpp
     src/comm/daisy_inter_mcu_message_handlers.cpp
     src/comm/daisy_uart_link.cpp
+    src/comm/diag_push.cpp
     src/comm/uart4_dma_transport.cpp
     src/comm/daisy_logging.cpp
     src/comm/log_ring.cpp

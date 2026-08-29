@@ -184,7 +184,7 @@ void UISampleBrowser::onInput(const InputEvent& evt) {
             if (!file_browser_)
                 break;
 
-            ESP_LOGI(TAG,
+            ESP_LOGD(TAG,
                      "Received %s event for file browser scrolling (delta=%d)",
                      (evt.type == InputType::EncoderUp) ? "EncoderUp" : "EncoderDown",
                      evt.delta);
@@ -214,7 +214,7 @@ void UISampleBrowser::onInput(const InputEvent& evt) {
             }
 
             uint32_t new_index = wavex_file_browser_get_selected_index(file_browser_);
-            ESP_LOGI(TAG,
+            ESP_LOGD(TAG,
                      "After nav: new_index=%u, moved=%d steps",
                      new_index,
                      (new_index != current_index) ? 1 : 0);
@@ -348,6 +348,7 @@ void UISampleBrowser::file_selected_index_callback(uint32_t file_index,
     if (!browser || !entry)
         return;
 
+    // The one INFO line the scroll path keeps: where the selection landed.
     ESP_LOGI(TAG, "File selected by index %lu: %s", (unsigned long)file_index, entry->name);
     browser->updateMetadata(entry);
     browser->selected_file_index_ = file_index;
@@ -460,7 +461,7 @@ void UISampleBrowser::updateMetadata(const wavex_file_entry_t* entry) {
     pending_metadata_entry_ = entry;
     metadata_update_pending_ = true;
     wavex_ui_mark_content_changed();
-    ESP_LOGI(TAG, "Metadata update queued for: %s", entry->name);
+    ESP_LOGD(TAG, "Metadata update queued for: %s", entry->name);
 }
 
 // Static method to process updates for active instance (called from UI task)
@@ -491,7 +492,7 @@ void UISampleBrowser::processDeferredUpdates_() {
             const wavex_file_entry_t* entry = pending_metadata_entry_;
 
             if (entry->is_directory) {
-                ESP_LOGI(TAG,
+                ESP_LOGD(TAG,
                          "=== METADATA: Directory - name='%s', path='%s'",
                          entry->name,
                          entry->path);
@@ -506,7 +507,7 @@ void UISampleBrowser::processDeferredUpdates_() {
                          entry->name,
                          entry->path);
             } else {
-                ESP_LOGI(TAG,
+                ESP_LOGD(TAG,
                          "=== METADATA: File - name='%s', size=%lu, path='%s'",
                          entry->name,
                          (unsigned long)entry->size_bytes,
@@ -574,7 +575,7 @@ void UISampleBrowser::processDeferredUpdates_() {
                         snprintf(channels_str, sizeof(channels_str), "%u ch", entry->channels);
                     }
 
-                    ESP_LOGI(TAG,
+                    ESP_LOGD(TAG,
                              "=== WAV METADATA: duration='%s', rate='%s', channels='%s', bits=%s",
                              duration_str,
                              sample_rate_str,
@@ -607,22 +608,11 @@ void UISampleBrowser::processDeferredUpdates_() {
                          entry->path);
             }
 
-            ESP_LOGI(TAG,
-                     "Setting metadata label text (length=%d): %.100s...",
-                     strlen(info_text),
-                     info_text);
             lv_label_set_text(metadata_label_, info_text);
-
-            // Verify the label got the text
-            const char* label_text = lv_label_get_text(metadata_label_);
-            ESP_LOGI(TAG,
-                     "Label text after set (length=%d): %.100s...",
-                     label_text ? strlen(label_text) : 0,
-                     label_text ? label_text : "NULL");
 
             metadata_update_pending_ = false;
             pending_metadata_entry_ = nullptr;
-            ESP_LOGI(TAG, "Metadata label updated for: %s", entry->name);
+            ESP_LOGD(TAG, "Metadata label updated for: %s", entry->name);
         } else if (strlen(pending_metadata_text_) > 0) {
             lv_label_set_text(metadata_label_, pending_metadata_text_);
             metadata_update_pending_ = false;

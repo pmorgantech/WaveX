@@ -30,6 +30,7 @@ typedef struct {
     uint32_t meter_push_packets;
     uint32_t wave_chunk_packets;
     uint32_t heartbeat_packets;
+    uint32_t diag_push_packets;
     uint32_t error_packets;
     uint32_t unknown_packets;
     uint32_t total_packets;

@@ -51,6 +51,18 @@ typedef enum {
 esp_err_t inter_mcu_send_sample_ctrl(uint8_t slot, wavex_sample_ctrl_cmd_t cmd, float rate);
 esp_err_t inter_mcu_send_preview_req(uint8_t slot, uint32_t start, uint32_t end, uint16_t decim);
 
+// Diagnostics telemetry (MSG_DIAG_SUBSCRIBE / MSG_DIAG_PUSH). Subscribe only
+// while the diagnostics page is open; the backend sends nothing otherwise.
+esp_err_t inter_mcu_send_diag_subscribe(bool enable, uint8_t interval_hz);
+
+// Called by the packet router on each push. Not for application use.
+void inter_mcu_store_diag_push(const WaveX::Protocol::DiagPushMessage& msg);
+
+// Latest telemetry. Returns false if no push has arrived, or if the most
+// recent one is older than max_age_ms - a stale figure presented as current is
+// how a dead link reads as a healthy one.
+bool inter_mcu_get_diag_push(WaveX::Protocol::DiagPushMessage* out, uint32_t max_age_ms);
+
 // Listener registration for backend->frontend messages
 typedef void (*wavex_meter_cb_t)(
     float rms_left, float rms_right, float peak_left, float peak_right, void* user_data);

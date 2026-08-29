@@ -2,6 +2,7 @@
 #include "comm/daisy_filesystem.h"
 #include "comm/daisy_spi_link.h"
 #include "comm/daisy_uart_link.h"
+#include "comm/diag_push.h"
 #include "comm/log_ring.h"
 #include "config/link_config.h"
 #include "daisy_seed.h"
@@ -768,6 +769,10 @@ int main(void) {
 #endif
             last_beacon = current_time;
         }
+
+        // Diagnostics telemetry. No-op unless the frontend has subscribed, so
+        // this costs one comparison per pass while the page is closed.
+        WaveX::Comm::DiagPushTick(current_time);
 
 // Periodic meter update - Daisy (backend) sends to ESP32 (frontend)
 // Enable during audition for audio level display

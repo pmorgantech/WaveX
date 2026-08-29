@@ -46,6 +46,12 @@ struct DispatchRecord {
     std::vector<uint8_t> stop_requests;
     std::vector<uint32_t> play_index_requests;
 
+    struct DiagSubscribeCall {
+        bool enable;
+        uint8_t interval_hz;
+    };
+    std::vector<DiagSubscribeCall> diag_subscribes;
+
     struct UartSend {
         uint16_t msg_type;
         uint16_t len;

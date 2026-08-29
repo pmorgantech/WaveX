@@ -295,6 +295,23 @@ void inter_mcu_invoke_storage_status_callback(bool mounted) {
     // Stub implementation for tests
 }
 
+void inter_mcu_store_diag_push(const WaveX::Protocol::DiagPushMessage& msg) {
+    (void)msg;
+    // Stub implementation for tests
+}
+
+bool inter_mcu_get_diag_push(WaveX::Protocol::DiagPushMessage* out, uint32_t max_age_ms) {
+    (void)out;
+    (void)max_age_ms;
+    return false;
+}
+
+esp_err_t inter_mcu_send_diag_subscribe(bool enable, uint8_t interval_hz) {
+    (void)enable;
+    (void)interval_hz;
+    return ESP_OK;
+}
+
 void inter_mcu_handle_sample_stop_response(bool success) {
     (void)success;
     // Stub implementation for tests

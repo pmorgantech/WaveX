@@ -322,6 +322,10 @@ bool DowngradeSpeed() {
     return TrySpeed(target, false);
 }
 
+int CurrentSpeedIndex() {
+    return s_speed_index;
+}
+
 const char* CurrentSpeedName() {
     return kSpeeds[s_speed_index].name;
 }

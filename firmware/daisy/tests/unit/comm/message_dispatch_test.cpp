@@ -90,6 +90,26 @@ TEST_F(MessageDispatchTest, PreviewReqReachesAudioEngine) {
     EXPECT_EQ(GetDispatchRecord().preview_reqs[0].decim, 4);
 }
 
+TEST_F(MessageDispatchTest, DiagSubscribeReachesTelemetry) {
+    DiagSubscribeMessage sub(1, 4);
+    Dispatch(MSG_DIAG_SUBSCRIBE, sub);
+
+    ASSERT_EQ(GetDispatchRecord().diag_subscribes.size(), 1u);
+    EXPECT_TRUE(GetDispatchRecord().diag_subscribes[0].enable);
+    EXPECT_EQ(GetDispatchRecord().diag_subscribes[0].interval_hz, 4);
+}
+
+// Unsubscribing must reach the backend too: without it the push keeps flowing
+// after the diagnostics page closes, which is the whole cost the subscription
+// exists to avoid.
+TEST_F(MessageDispatchTest, DiagUnsubscribeReachesTelemetry) {
+    DiagSubscribeMessage sub(0, 2);
+    Dispatch(MSG_DIAG_SUBSCRIBE, sub);
+
+    ASSERT_EQ(GetDispatchRecord().diag_subscribes.size(), 1u);
+    EXPECT_FALSE(GetDispatchRecord().diag_subscribes[0].enable);
+}
+
 TEST_F(MessageDispatchTest, SampleLoadReachesAudioEngine) {
     SampleLoadMessage load(7, 44100, 44100, 1, 16, "/SAMPLES/kick.wav");
     Dispatch(MSG_SAMPLE_LOAD, load);

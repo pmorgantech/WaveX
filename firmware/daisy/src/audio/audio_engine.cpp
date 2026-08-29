@@ -560,6 +560,14 @@ static uint32_t s_dbg_free = 0;       // rb_free_frames() at the top of the pass
 static uint32_t s_dbg_want = 0;       // frames_to_transfer after all caps
 static uint32_t s_dbg_resampled = 0;  // LinearResampleFrames() result
 static uint32_t s_dbg_pushes = 0;     // passes that actually reached rb_push_frames
+
+// Interval counters for MSG_DIAG_PUSH. Deltas, reset on read - a since-boot
+// total cannot show that discards started thirty seconds ago, which is exactly
+// the shape both playback stalls had.
+static uint32_t s_diag_pushes = 0;
+static uint32_t s_diag_discards = 0;   // passes that produced frames and then
+                                       // skipped without consuming the slot
+static uint32_t s_diag_underruns = 0;  // underrun episodes
 static uint32_t s_last_io_log = 0;
 static uint32_t s_last_io_time = 0;  // Last time we did SD I/O (for rate limiting)
 static uint32_t s_dwt_callback_cycles = 0;
@@ -1840,6 +1848,7 @@ void CheckAndLogUnderruns() {
     if (s_underrun_detected && !s_underrun_logged) {
         episodes++;
         s_underrun_logged = true;
+        ++s_diag_underruns;
         s_underrun_detected = false;  // Reset detection flag
     } else if (!s_underrun_detected && s_underrun_logged) {
         // Reset logging flag when underruns stop
@@ -2101,6 +2110,15 @@ void GetStreamDebug(uint32_t& prebuf_filled,
 }
 
 // Streaming telemetry accessor - see WAVEX_DAISY_STREAM_DEBUG.
+void TakeStreamCounters(uint32_t& pushes, uint32_t& discards, uint32_t& underruns) {
+    pushes = s_diag_pushes;
+    discards = s_diag_discards;
+    underruns = s_diag_underruns;
+    s_diag_pushes = 0;
+    s_diag_discards = 0;
+    s_diag_underruns = 0;
+}
+
 void GetStreamDiscardDebug(uint32_t& free_frames,
                            uint32_t& want_frames,
                            uint32_t& resampled,
@@ -2340,6 +2358,7 @@ void PumpWavIO() {
             // Skip instead: nothing is consumed from the slot, so the same
             // data is retried next pump with a fresh scratch pool.
             s_resampler = resampler_before;
+            ++s_diag_discards;
             s_dwt_io_cycles = WaveX::Profiling::GetCycles() - block_cycles_start;
             s_dwt_io_max = std::max(s_dwt_io_max, s_dwt_io_cycles);
             return;
@@ -2357,12 +2376,14 @@ void PumpWavIO() {
         if (resample_ratio != 1.0f) {
             s_resampler = resampler_before;  // see the snapshot above
         }
+        ++s_diag_discards;
         s_dwt_io_cycles = WaveX::Profiling::GetCycles() - block_cycles_start;
         s_dwt_io_max = std::max(s_dwt_io_max, s_dwt_io_cycles);
         return;
     }
 
     ++s_dbg_pushes;
+    ++s_diag_pushes;
     rb_push_frames(final_buffer, final_frames);
     slot.consumed += frames_to_transfer;
     if (slot.consumed >= slot.frames) {

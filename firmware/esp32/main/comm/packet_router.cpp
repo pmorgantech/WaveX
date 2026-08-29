@@ -185,6 +185,12 @@ void PacketRouter::route_by_message_type(uint8_t msg_type,
                 handle_storage_status(msg);
         } break;
 
+        case WaveX::Protocol::MSG_DIAG_PUSH: {
+            WaveX::Protocol::DiagPushMessage msg;
+            if (CopyMessage(payload, payload_len, msg, "DIAG_PUSH"))
+                handle_diag_push(msg);
+        } break;
+
         case WaveX::Protocol::MSG_SAMPLE_STOP_RESP: {
             WaveX::Protocol::SampleStopRespMessage msg;
             if (CopyMessage(payload, payload_len, msg, "SAMPLE_STOP_RESP"))
@@ -331,6 +337,12 @@ WEAK_HANDLER void PacketRouter::handle_sample_status(
 WEAK_HANDLER void PacketRouter::handle_storage_status(const WaveX::Protocol::StorageStatusMessage& msg) {
     ESP_LOGI("packet_router", "Storage status: mounted=%u", (unsigned)msg.mounted);
     inter_mcu_invoke_storage_status_callback(msg.mounted != 0);
+}
+
+WEAK_HANDLER void PacketRouter::handle_diag_push(const WaveX::Protocol::DiagPushMessage& msg) {
+    // Not logged: this arrives up to 10x/s while the diagnostics page is open,
+    // and logging it would cost more than the telemetry is worth.
+    inter_mcu_store_diag_push(msg);
 }
 
 WEAK_HANDLER void PacketRouter::handle_sample_stop_resp(const WaveX::Protocol::SampleStopRespMessage& msg) {

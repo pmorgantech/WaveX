@@ -249,6 +249,27 @@ diagnostics page is open, so it costs exactly nothing the rest of the time.
 Per `AGENTS.md`, adding these means `protocol.h` + a round-trip test +
 `features/inter-mcu-protocol.md` in the same commit.
 
+## Status (August 2026)
+
+Steps 1 and 2 below have landed on `ui-update`. What is live:
+
+- **System** and **Link** tabs — fully live, ESP32-local sources.
+- `MSG_DIAG_SUBSCRIBE` / `MSG_DIAG_PUSH` — implemented, subscription driven by
+  the diagnostics page's `onEnter`/`onExit`.
+- **Audio** and **Storage** tabs — live from the push. Telemetry older than
+  1.5 s (three missed pushes at 2 Hz) renders as "no telemetry from backend"
+  rather than a frozen figure, because a stale number presented as current is
+  precisely how a dead link reads as a healthy one.
+- **MIDI** tab — the wire fields exist and are parsed, but the Daisy has no
+  sequencer or tempo follower to fill them, so they read zero and the tab says
+  so.
+
+Still 🆕 and not yet instrumented: round-trip latency, active voices, per-CC
+and per-note detail, dropped/late MIDI events. Backend link fields
+(`link_*`) are only populated when `WAVEX_DAISY_UART_PERF_DEBUG` is on —
+timing every `UartLinkProcess` call is the overhead that flag exists to gate,
+and the frontend already shows its own view of the link.
+
 ## Suggested order
 
 1. `MSG_DIAG_SUBSCRIBE` / `MSG_DIAG_PUSH` — unblocks every 🔌, which is most

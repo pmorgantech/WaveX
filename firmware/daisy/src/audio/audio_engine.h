@@ -74,6 +74,12 @@ void GetIOErrors(uint32_t& errors, uint32_t& last_result);
 void TakeIOThroughput(
     uint32_t& bytes, uint32_t& reads, uint32_t& avg_us, uint32_t& min_us, uint32_t& max_us);
 
+// Ring pushes, discarded passes and underrun episodes for the interval since
+// the previous call. Reading RESETS them. Discards deserve their own counter:
+// skip-without-consume is how two separate playback stalls began, and it is
+// invisible in every other figure - the ring simply stops filling.
+void TakeStreamCounters(uint32_t& pushes, uint32_t& discards, uint32_t& underruns);
+
 // Streaming telemetry (see WAVEX_DAISY_STREAM_DEBUG in hardware_config.h).
 void GetStreamDebug(uint32_t& prebuf_filled,
                     uint32_t& prebuf_target,

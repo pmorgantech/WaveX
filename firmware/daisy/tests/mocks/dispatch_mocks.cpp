@@ -33,6 +33,10 @@ int UartLinkSend(uint16_t msg_type, const void* /*payload*/, uint16_t len) {
     return static_cast<int>(len);
 }
 
+void DiagSubscribe(bool enable, uint8_t interval_hz) {
+    WaveX::Test::GetDispatchRecord().diag_subscribes.push_back({enable, interval_hz});
+}
+
 void ProcessBrowseRequest(const char* path, size_t start_index, uint8_t max_entries) {
     WaveX::Test::GetDispatchRecord().browse_requests.push_back(
         {path ? std::string(path) : std::string(), start_index, max_entries});
