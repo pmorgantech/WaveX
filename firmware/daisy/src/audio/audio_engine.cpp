@@ -346,6 +346,11 @@ struct WavState {
     uint16_t num_channels;
     uint16_t bits_per_sample;
     uint32_t sample_rate;
+    // Kept so a poisoned file object can be reopened in place. FatFS latches
+    // a disk error into the FIL, after which every f_read fails immediately
+    // and only a fresh f_open clears it - which is exactly why stopping and
+    // re-triggering the audition by hand was the only way back.
+    char path[128];
 };
 static WavState s_wav = {};
 
@@ -513,6 +518,12 @@ static uint32_t s_io_count = 0;
 // the read error itself was compiled out behind WAVEX_DAISY_SD_DEBUG.
 static uint32_t s_io_errors = 0;
 static uint32_t s_io_last_err = 0;
+static uint32_t s_io_recoveries = 0;
+// A couple of failures can be a transient card hiccup; a run of them means
+// the FIL is poisoned and only a reopen will clear it. Recoveries are capped
+// so a genuinely dead card ends playback instead of reopening forever.
+constexpr uint32_t kIoErrorsBeforeRecover = 3;
+constexpr uint32_t kMaxIoRecoveries = 5;
 // Streaming telemetry counters (WAVEX_DAISY_STREAM_DEBUG in
 // hardware_config.h). Record why the streaming path discarded its last pass
 // without consuming. Always updated - the writes are a few registers and
@@ -886,6 +897,40 @@ static bool refill_sd_buffer() {
                     (unsigned)br,
                     (unsigned long)s_io_errors,
                     (unsigned long)s_wav.bytes_remaining);
+            }
+            // Recover in place. FatFS latches the disk error into the FIL,
+            // so nothing short of a reopen clears it - which is why the only
+            // working remedy was stopping the audition and re-triggering it
+            // by hand. Do that automatically, from the current position, so
+            // playback continues instead of dying silently.
+            if (s_io_errors >= kIoErrorsBeforeRecover && s_io_recoveries < kMaxIoRecoveries) {
+                s_io_recoveries++;
+                const uint32_t resume_at =
+                    s_wav.data_start + (s_wav.data_size - s_wav.bytes_remaining);
+                f_close(&s_wav.file);
+                FRESULT reopen = f_open(&s_wav.file, s_wav.path, FA_READ);
+                if (reopen == FR_OK) {
+                    reopen = f_lseek(&s_wav.file, resume_at);
+                }
+                WaveX::Log::PrintLine("WAV recovery %lu/%lu: reopen '%s' at %lu -> %s",
+                                      (unsigned long)s_io_recoveries,
+                                      (unsigned long)kMaxIoRecoveries,
+                                      s_wav.path,
+                                      (unsigned long)resume_at,
+                                      reopen == FR_OK ? "ok" : "FAILED");
+                if (reopen == FR_OK) {
+                    s_io_errors = 0;  // fresh budget for the next incident
+                } else {
+                    // Unrecoverable: stop pretending to play. CloseWav()
+                    // clears the ring, so the callback reports silence rather
+                    // than looping stale audio forever.
+                    WaveX::Log::PrintLine("WAV: playback aborted - SD unreadable");
+                    CloseWav();
+                }
+            } else if (s_io_recoveries >= kMaxIoRecoveries) {
+                WaveX::Log::PrintLine("WAV: playback aborted - SD unreadable after %lu recoveries",
+                                      (unsigned long)s_io_recoveries);
+                CloseWav();
             }
             return false;
         }
@@ -1840,7 +1885,11 @@ bool OpenWav(const char* path) {
     // Leave the file positioned at the data payload for streaming.
     f_lseek(&s_wav.file, wav_info.data_offset);
 
+    s_io_errors = 0;
+    s_io_recoveries = 0;
     s_wav.open = true;
+    std::strncpy(s_wav.path, path, sizeof(s_wav.path) - 1);
+    s_wav.path[sizeof(s_wav.path) - 1] = '\0';
     s_wav.data_start = wav_info.data_offset;
     s_wav.data_size = wav_info.data_size;
     s_wav.bytes_remaining = wav_info.data_size;

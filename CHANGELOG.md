@@ -19,6 +19,18 @@ versioning and release process.
 - Added CodeGraph configuration for focused repository indexing and installed
   `vim-tiny` in the devcontainer image.
 
+### Fixed — SD read failures now recover instead of killing playback
+
+- A failed streaming read had no recovery path: `refill_sd_buffer()` returned
+  `false` on every subsequent pump forever, so audio stopped permanently and
+  only stopping and re-triggering the audition by hand brought it back. FatFS
+  latches a disk error into the `FIL`, after which every `f_read` fails
+  immediately and nothing short of a fresh `f_open` clears it — which is
+  exactly what the manual workaround was doing. The engine now performs that
+  reopen automatically, resuming from the current byte offset, capped at 5
+  recoveries per file so a genuinely dead card ends playback cleanly instead
+  of reopening forever.
+
 ### Fixed — Silent SD read failures
 
 - A failing `f_read` in the streaming refill was invisible: the error log sat
