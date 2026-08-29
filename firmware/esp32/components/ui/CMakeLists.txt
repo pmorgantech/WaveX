@@ -6,6 +6,7 @@ set(COMPONENT_SRCS
     "components/file_browser.cpp"
     "components/waveform_view.cpp"
     "src/ui_diagnostics_page.cpp"
+    "src/ui_screenshot.cpp"
     "src/input_dispatcher.cpp"
     "src/tca8418_keypad.cpp"
     "src/ui_api.cpp"

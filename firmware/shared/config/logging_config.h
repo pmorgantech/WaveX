@@ -29,6 +29,22 @@
 // COMPONENT-SPECIFIC LOGGING MACROS
 // ============================================================================
 
+/**
+ * @def WAVEX_ESP_SCREENSHOT_DEBUG
+ * @brief Serial screenshot capture (ESP32, debug builds only).
+ *
+ * Listens on the console UART for the token "WAVEX-SCREENSHOT" and dumps the
+ * active LVGL screen as RLE+base64 RGB565 between BEGIN/END markers, decoded
+ * by scripts/esp32_screenshot.py. Follows WAVEX_DEBUG_LOGGING_ENABLED because
+ * that is this codebase's debug/release switch (the ESP32 compiles with
+ * OPTIMIZATION_PERF even in day-to-day use, so the compiler's notion of a
+ * debug build would never enable it). Costs a small UART-listener task and,
+ * per capture, a transient ~4.5 MB of PSRAM.
+ */
+#ifndef WAVEX_ESP_SCREENSHOT_DEBUG
+#define WAVEX_ESP_SCREENSHOT_DEBUG WAVEX_DEBUG_LOGGING_ENABLED
+#endif
+
 // Meter Data Logging (ESP32 only)
 #ifndef WAVEX_LOG_METER_DATA
 #define WAVEX_LOG_METER_DATA 0
@@ -84,7 +100,7 @@
  * but the measurement itself is on the hot path.
  */
 #ifndef WAVEX_DAISY_UART_PERF_DEBUG
-#define WAVEX_DAISY_UART_PERF_DEBUG 0
+#define WAVEX_DAISY_UART_PERF_DEBUG 1
 #endif
 
 // Daisy SPI Outbound Packet Logging (Daisy only)

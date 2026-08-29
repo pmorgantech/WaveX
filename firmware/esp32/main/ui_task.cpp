@@ -25,6 +25,7 @@
 #include "pcnt_task.h"
 #include "ui/ui_api.h"
 #include "ui/ui_sample_browser.h"
+#include "ui/ui_screenshot.h"
 
 // LVGL includes
 #include "esp_heap_caps.h"
@@ -521,6 +522,10 @@ void UITask::run() {
 #endif
         // Dispatch queued input events to current context
         wavex_ui::InputDispatcher::instance().processAll();
+
+        // Debug-build serial screenshots (no-op stub in release; manages
+        // its own LVGL locking, so called outside LV_LOCK).
+        wavex_screenshot_poll();
 
         // Process deferred sample browser updates (prevents deadlock from SPI/UART task)
         // Acquire LVGL lock before processing deferred updates

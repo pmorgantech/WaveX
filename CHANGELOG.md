@@ -156,6 +156,22 @@ versioning and release process.
   (those depend on ESP-IDF services; compiling them against the existing test
   mocks is the natural next step).
 
+### Added — On-device screenshots over serial (debug builds)
+
+- `WAVEX_ESP_SCREENSHOT_DEBUG` (follows `WAVEX_DEBUG_LOGGING_ENABLED`, this
+  codebase's debug/release switch — the ESP32 compiles `OPTIMIZATION_PERF`
+  even day-to-day, so the compiler's notion of a debug build would never
+  fire): a listener task watches the console UART for `WAVEX-SCREENSHOT`,
+  the UI task captures the active LVGL screen into PSRAM under the LVGL lock
+  (`lv_snapshot`, now enabled in sdkconfig), and the listener prints it as
+  RLE+base64 RGB565 between markers — so the UI never blocks on the
+  seconds-long 115200-baud dump.
+- `scripts/esp32_screenshot.py` triggers a capture and decodes to PNG with
+  CRC verification. By default it writes the trigger to the tty and harvests
+  the dump from `logs/esp32.log`, so it coexists with the running serial
+  logger; `--direct` reads the port when no logger holds it. Decoder
+  round-trip verified against a synthetic dump.
+
 ### Added — Daisy development and audition tooling
 
 - Added software-triggered Daisy DFU entry (`make daisy-flash-auto`), serial
