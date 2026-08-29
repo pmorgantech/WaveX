@@ -260,21 +260,37 @@ class VoiceManager {
             const float last_valid_loop_phase = static_cast<float>(v.loop_end - 1);
 
             for (size_t i = 0; i < block_size; ++i) {
+                bool holding_release_tail = false;
                 if (v.loop && v.phase >= last_valid_loop_phase) {
                     v.phase = static_cast<float>(v.loop_start);
                 } else if (!v.loop && v.phase >= last_valid_phase) {
                     // Reached the end of a non-looping sample: start the
                     // release tail (or, if already releasing, this just
                     // confirms we're done - the envelope-idle check below
-                    // frees the voice).
+                    // frees the voice). Freeze the read position at the
+                    // region boundary instead of continuing to advance
+                    // phase - for a trimmed sample (end_frame <
+                    // sample_frames) letting phase run on would read
+                    // whatever raw audio follows the trim point for the
+                    // whole release time.
                     v.envelope.Release();
+                    holding_release_tail = true;
                 }
 
-                uint32_t idx0 = static_cast<uint32_t>(v.phase);
-                if (idx0 >= v.sample_frames - 1)
-                    idx0 = v.sample_frames - 2;  // clamp: envelope release masks the tail anyway
-                uint32_t idx1 = idx0 + 1;
-                float frac = v.phase - static_cast<float>(idx0);
+                uint32_t idx0, idx1;
+                float frac;
+                if (holding_release_tail) {
+                    idx0 = static_cast<uint32_t>(last_valid_phase);
+                    idx1 = idx0 + 1;
+                    frac = 0.0f;
+                } else {
+                    idx0 = static_cast<uint32_t>(v.phase);
+                    if (idx0 >= v.sample_frames - 1)
+                        idx0 =
+                            v.sample_frames - 2;  // clamp: envelope release masks the tail anyway
+                    idx1 = idx0 + 1;
+                    frac = v.phase - static_cast<float>(idx0);
+                }
                 float s0, s1;
                 if (v.src_channels == 2) {
                     // Interleaved stereo source: average L/R to mono.
