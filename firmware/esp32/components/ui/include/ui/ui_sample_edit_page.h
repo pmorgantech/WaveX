@@ -42,6 +42,8 @@ class UISampleEditPage : public UIPage {
         PARAM_LOOP_START,
         PARAM_LOOP_END,
         PARAM_GAIN,
+        PARAM_FADE_IN,
+        PARAM_FADE_OUT,
         PARAM_COUNT
     };
     // Four cards fit the strip; the fifth (GAIN) shares the last slot and is
@@ -113,6 +115,11 @@ class UISampleEditPage : public UIPage {
     uint32_t loop_end_ = 0;
     bool loop_enabled_ = false;
     int16_t gain_db_x10_ = 0;  // -240..+120, i.e. -24.0 to +12.0 dB
+    // Region fades, milliseconds. Default to the de-click length rather than
+    // 0: a region that starts mid-waveform starts on a step, so de-clicking is
+    // the default state and turning it off is the deliberate act.
+    uint16_t fade_in_ms_ = WaveX::Protocol::kDefaultDeclickMs;
+    uint16_t fade_out_ms_ = WaveX::Protocol::kDefaultDeclickMs;
 
     // Zoom: the visible span, and where it starts. Zooming keeps the focused
     // marker in view rather than always anchoring at zero, or zooming in far

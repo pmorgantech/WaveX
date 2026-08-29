@@ -53,13 +53,19 @@ void GetMeters(BlockMeters& out);
 // loop_end <= end, with 0 meaning "to the end" for end_frame and loop_end. A
 // loop shorter than 256 frames is refused rather than allowed to re-seek every
 // pass and starve the ring - the frontend cannot know that limit.
+// fade_in_ms / fade_out_ms are the playback-time region fades (roadmap 1.5.6
+// item 3): a region that starts mid-waveform starts on a step, and a step is a
+// click. Clamped to the region length here, since only the backend knows what
+// the region ended up being after its own clamping.
 void SetEditParams(uint8_t slot,
                    bool loop_enabled,
                    int16_t gain_db_x10,
                    uint32_t start_frame,
                    uint32_t end_frame,
                    uint32_t loop_start_frame,
-                   uint32_t loop_end_frame);
+                   uint32_t loop_end_frame,
+                   uint16_t fade_in_ms,
+                   uint16_t fade_out_ms);
 
 // Read position of the streaming audition within its region, in frames.
 // Runs ahead of the audible position by the ring + filled SD slots (~42 ms):

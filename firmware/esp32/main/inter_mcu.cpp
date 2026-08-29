@@ -290,12 +290,21 @@ esp_err_t inter_mcu_send_sample_edit(uint8_t slot,
                                      uint32_t start_frame,
                                      uint32_t end_frame,
                                      uint32_t loop_start,
-                                     uint32_t loop_end) {
+                                     uint32_t loop_end,
+                                     uint16_t fade_in_ms,
+                                     uint16_t fade_out_ms) {
     if (!s_initialized || s_suspended) {
         return -1;  // ESP_ERR_INVALID_STATE
     }
-    WaveX::Protocol::SampleEditMessage msg(
-        slot, loop_enabled ? 1 : 0, gain_db_x10, start_frame, end_frame, loop_start, loop_end);
+    WaveX::Protocol::SampleEditMessage msg(slot,
+                                           loop_enabled ? 1 : 0,
+                                           gain_db_x10,
+                                           start_frame,
+                                           end_frame,
+                                           loop_start,
+                                           loop_end,
+                                           fade_in_ms,
+                                           fade_out_ms);
     int result = send_uart_message(WaveX::Protocol::MSG_SAMPLE_EDIT_SET, &msg, sizeof(msg));
     return result >= 0 ? ESP_OK : ESP_FAIL;
 }

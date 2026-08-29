@@ -146,9 +146,20 @@ Still open here:
    - **Playback-time crossfade** (non-destructive): the engine overlaps *n* ms around the loop point on every pass. Costs a little CPU per loop, changes no file, and can be tuned live while listening — which is what makes it the right one to build first.
    - **Rendered crossfade** (destructive): `xfade_loop` in Phase 4 item 2. Permanent, free at playback, but needs the render-job scheduler.
 
-3. **Fade in / fade out / de-click.** Short fades at the region start and end. Again both forms: a playback-time ramp of a few milliseconds costs nothing and kills the click from starting mid-waveform, while true rendered fades belong with Phase 4's editing primitives. **Build the playback-time version first** — it fixes the audible problem immediately and needs no file rewriting, and the destructive one is then a convenience rather than a prerequisite.
+3. ~~**Fade in / fade out / de-click.**~~ **Done** for the playback-time form, which is the one that fixes the audible problem. `fade_in_ms` / `fade_out_ms` ride on `SampleMetadata` and `MSG_SAMPLE_EDIT_SET`, and are applied on **both** playback paths — the streaming audition (pre-resample, since the fade position is a source frame index) and RAM voices — so the editor auditions what a pad plays. Two things settled while building it:
 
-4. Fade shape matters more than it looks: an equal-power (sin/cos) crossfade holds level through the blend where a linear one dips, which on a sustained loop is audible as a dip once per pass.
+   - **De-click is the default, not an opt-in.** Both fields default to `kDefaultDeclickMs` (1 ms). A region that starts mid-waveform starts on a step whether or not anyone asked, so the honest default is the one that removes it; 0 turns it off and is a real, reachable value. 1 ms is short enough to be inaudible against a drum transient, whose rise time is 5–20 ms.
+   - **The backend clamps the fades to the region**, because only it knows what the region ended up being after its own clamping — and a fade longer than the audio it shapes never reaches unity, which reads as "the sample got quieter" rather than as a fade.
+
+   The edit page carries FADE IN and FADE OUT as two more paged params (1 ms per detent up to 20 ms, then 5 ms — a de-click lives in the first few milliseconds and an audible fade lives above 50, so one linear step would make one of the two useless).
+
+   **The loop seam is deliberately not covered.** Fades are anchored to the *region* start and end, so with looping on and `loop_start == region_start` the fade-in re-fires each pass — a short dip, which is better than the click but is not seam smoothing. Smoothing the seam is item 2's crossfade, and it is the right tool for it.
+
+   Rendered (destructive) fades stay in Phase 4 item 2, and should reuse `fade.hpp`'s shape so a rendered file sounds like what was auditioned.
+
+4. ~~Fade shape matters more than it looks.~~ **Settled for fades; still open for crossfades.** `fade.hpp` uses a raised cosine, `g(t) = (1 - cos(pi·t))/2`, host-tested for exact 0/1 endpoints and flat slope at both ends. A linear ramp has a corner at each end, and a corner in amplitude is a discontinuity in the first derivative — audible as a faint thump on exactly the material a click was the problem on.
+
+   Note this is **not** the equal-power pair recommended above for crossfades, and the distinction matters when item 2 is built: equal power is right when two signals sum and the sum must hold level, but a fade to or from *silence* has nothing to hold level against, and an equal-power fade-in would start at −3 dB rather than at zero — which is a step, i.e. the thing being fixed.
 
 ### 1.5.7 Mono vs stereo in the editor (added 2026-08-29)
 

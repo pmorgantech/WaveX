@@ -70,7 +70,9 @@ esp_err_t inter_mcu_send_sample_edit(uint8_t slot,
                                      uint32_t start_frame,
                                      uint32_t end_frame,
                                      uint32_t loop_start,
-                                     uint32_t loop_end);
+                                     uint32_t loop_end,
+                                     uint16_t fade_in_ms,
+                                     uint16_t fade_out_ms);
 
 // Per-sample metadata cache (MSG_SAMPLE_META). The Daisy is authoritative and
 // pushes on every change; the frontend never derives these values.

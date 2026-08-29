@@ -1004,7 +1004,7 @@ TEST_F(MessageTypeTest, SeqClockOutMessage) {
 // frontend that does not know the file length sends end_frame 0 and expects
 // the backend to read it as "to the end", not as "an empty region".
 TEST_F(MessageTypeTest, SampleEditMessage) {
-    SampleEditMessage original(2, 1, -35, 44100, 396900, 88200, 352800);
+    SampleEditMessage original(2, 1, -35, 44100, 396900, 88200, 352800, 5, 120);
 
     size_t created =
         ProtocolHandler::CreateSampleEditPacket(buffer_.data(), buffer_.size(), original);
@@ -1023,6 +1023,27 @@ TEST_F(MessageTypeTest, SampleEditMessage) {
     EXPECT_EQ(parsed.end_frame, original.end_frame);
     EXPECT_EQ(parsed.loop_start, original.loop_start);
     EXPECT_EQ(parsed.loop_end, original.loop_end);
+    EXPECT_EQ(parsed.fade_in_ms, 5);
+    EXPECT_EQ(parsed.fade_out_ms, 120);
+}
+
+// De-click is the DEFAULT, not an opt-in: a region that starts mid-waveform
+// starts on a step. A default-constructed command must therefore carry a
+// non-zero fade, and 0 must be reachable as a deliberate "off".
+TEST_F(MessageTypeTest, SampleEditDefaultsToDeclickAndZeroMeansOff) {
+    SampleEditMessage defaulted;
+    EXPECT_EQ(defaulted.fade_in_ms, kDefaultDeclickMs);
+    EXPECT_EQ(defaulted.fade_out_ms, kDefaultDeclickMs);
+    EXPECT_GT(kDefaultDeclickMs, 0);
+
+    SampleEditMessage off(0, 0, 0, 0, 0, 0, 0, 0, 0);
+    size_t created = ProtocolHandler::CreateSampleEditPacket(buffer_.data(), buffer_.size(), off);
+    ASSERT_GT(created, 0u);
+    SampleEditMessage parsed;
+    ASSERT_TRUE(ProtocolHandler::ParseMessage(
+        buffer_.data(), MSG_SAMPLE_EDIT_SET, &parsed, sizeof(parsed)));
+    EXPECT_EQ(parsed.fade_in_ms, 0);
+    EXPECT_EQ(parsed.fade_out_ms, 0);
 }
 
 // Negative gain must survive the wire. gain_db_x10 is the only signed field
@@ -1043,7 +1064,7 @@ TEST_F(MessageTypeTest, SampleEditMessageCarriesNegativeGain) {
 // The record is the single source of truth for every playback and display
 // path, so its round trip and its clamping are both load-bearing.
 TEST_F(MessageTypeTest, SampleMetadataRoundTrip) {
-    EXPECT_EQ(sizeof(SampleMetadata), 84u);  // + 4 header + 2 CRC fits PKT_SIZE_128
+    EXPECT_EQ(sizeof(SampleMetadata), 88u);  // + 4 header + 2 CRC fits PKT_SIZE_128
 
     SampleMetadata original;
     original.sample_id = 7;
@@ -1055,6 +1076,8 @@ TEST_F(MessageTypeTest, SampleMetadataRoundTrip) {
     original.loop_start = 100000;
     original.loop_end = 6000000;
     original.gain_db_x10 = -35;
+    original.fade_in_ms = 12;
+    original.fade_out_ms = 250;
     original.channels = 2;
     original.bits_per_sample = 24;
     original.loop_enabled = 1;
@@ -1081,6 +1104,8 @@ TEST_F(MessageTypeTest, SampleMetadataRoundTrip) {
     EXPECT_EQ(parsed.loop_start, original.loop_start);
     EXPECT_EQ(parsed.loop_end, original.loop_end);
     EXPECT_EQ(parsed.gain_db_x10, original.gain_db_x10);
+    EXPECT_EQ(parsed.fade_in_ms, 12);
+    EXPECT_EQ(parsed.fade_out_ms, 250);
     EXPECT_EQ(parsed.channels, original.channels);
     EXPECT_EQ(parsed.bits_per_sample, original.bits_per_sample);
     EXPECT_EQ(parsed.loop_enabled, original.loop_enabled);

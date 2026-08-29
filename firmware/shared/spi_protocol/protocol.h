@@ -429,6 +429,11 @@ enum SampleChannelMode : uint8_t {
  * (sample_id, generation) survives marker edits and is invalidated by a
  * re-render, which is exactly the desired behaviour.
  */
+// De-click applied to a region boundary unless the user asks for something
+// else. 1 ms is long enough to turn a step into a slope and short enough to be
+// inaudible against a drum transient, whose rise time is 5-20 ms.
+static const uint16_t kDefaultDeclickMs = 1;
+
 struct SampleMetadata {
     uint16_t sample_id;
     uint16_t generation;  // bumps on content change, not on marker edits
@@ -441,6 +446,15 @@ struct SampleMetadata {
     uint32_t loop_start;
     uint32_t loop_end;    // exclusive; 0 = end_frame
     int16_t gain_db_x10;  // -240..+120
+
+    // Playback-time region fades (roadmap 1.5.6 item 3). Milliseconds at the
+    // file's own rate, applied at the region head and tail on BOTH playback
+    // paths. Defaults to kDefaultDeclickMs rather than 0: a region that starts
+    // mid-waveform starts on a step, and a step is a click - so de-clicking is
+    // the default behaviour, visible in this record, and turned off by asking
+    // for 0 rather than by being absent.
+    uint16_t fade_in_ms;
+    uint16_t fade_out_ms;
 
     uint8_t channels;         // as stored: 1 or 2
     uint8_t bits_per_sample;  // 8 / 16 / 24
@@ -461,6 +475,8 @@ struct SampleMetadata {
           loop_start(0),
           loop_end(0),
           gain_db_x10(0),
+          fade_in_ms(kDefaultDeclickMs),
+          fade_out_ms(kDefaultDeclickMs),
           channels(0),
           bits_per_sample(0),
           loop_enabled(0),
@@ -519,6 +535,11 @@ struct SampleEditMessage {
     uint32_t end_frame;  // 0 = end of file
     uint32_t loop_start;
     uint32_t loop_end;  // 0 = end_frame
+    // Region fades, milliseconds. 0 means no fade, which is a real choice -
+    // there is no sentinel for "leave as is", because a command that silently
+    // preserves half its fields is how a UI and a backend drift apart.
+    uint16_t fade_in_ms;
+    uint16_t fade_out_ms;
 
     SampleEditMessage()
         : slot(0),
@@ -527,21 +548,27 @@ struct SampleEditMessage {
           start_frame(0),
           end_frame(0),
           loop_start(0),
-          loop_end(0) {}
+          loop_end(0),
+          fade_in_ms(kDefaultDeclickMs),
+          fade_out_ms(kDefaultDeclickMs) {}
     SampleEditMessage(uint8_t slot_,
                       uint8_t loop_enabled_,
                       int16_t gain_db_x10_,
                       uint32_t start_frame_,
                       uint32_t end_frame_,
                       uint32_t loop_start_,
-                      uint32_t loop_end_)
+                      uint32_t loop_end_,
+                      uint16_t fade_in_ms_ = kDefaultDeclickMs,
+                      uint16_t fade_out_ms_ = kDefaultDeclickMs)
         : slot(slot_),
           loop_enabled(loop_enabled_),
           gain_db_x10(gain_db_x10_),
           start_frame(start_frame_),
           end_frame(end_frame_),
           loop_start(loop_start_),
-          loop_end(loop_end_) {}
+          loop_end(loop_end_),
+          fade_in_ms(fade_in_ms_),
+          fade_out_ms(fade_out_ms_) {}
 } __attribute__((packed));
 
 // ---------------------------------------------------------------------------

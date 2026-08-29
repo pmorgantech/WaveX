@@ -734,3 +734,60 @@ TEST(VoiceManagerTest, StopSlotStopsOnlyMatchingSlot) {
     int b_idx = FindVoiceForNote(vm, 62);
     EXPECT_GE(b_idx, 0);  // slot-2 voice survives
 }
+
+// Region fades on the RAM path (roadmap 1.5.6 item 3). The streaming audition
+// and a note-triggered voice must agree about a sample's fades, or the editor
+// would audition something a pad does not play - which is the same divergence
+// SampleMetadata exists to close.
+TEST(VoiceManagerFadeTest, RegionFadeRampsTheHeadOfTheSample) {
+    // Constant full-scale source, so anything below full scale in the output
+    // is the fade and nothing else.
+    std::vector<int16_t> sample(4096, 16000);
+
+    WaveX::AudioEngine::VoiceManager vm;
+    vm.Init(48000);
+
+    WaveX::AudioEngine::VoiceTriggerParams p;
+    p.sample = sample.data();
+    p.sample_frames = static_cast<uint32_t>(sample.size());
+    p.sample_rate_hz = 48000;
+    p.velocity = 127;
+    p.pan = 0.5f;
+    p.attack_s = 0.0f;  // isolate the fade from the ADSR
+    p.decay_s = 0.0f;
+    p.sustain_level = 1.0f;
+    p.fade_in_ms = 10;  // 480 frames
+    p.fade_out_ms = 0;
+    vm.Trigger(p);
+
+    std::vector<float> l(256), r(256);
+    vm.Render(l.data(), r.data(), l.size());
+
+    EXPECT_NEAR(l[0], 0.0f, 1e-4f) << "the first frame must start from silence";
+    EXPECT_LT(l[10], l[100]) << "the fade must be rising";
+    EXPECT_LT(l[100], l[250]);
+}
+
+TEST(VoiceManagerFadeTest, NoFadeRequestedMeansUnityNotSilence) {
+    std::vector<int16_t> sample(4096, 16000);
+
+    WaveX::AudioEngine::VoiceManager vm;
+    vm.Init(48000);
+
+    WaveX::AudioEngine::VoiceTriggerParams p;
+    p.sample = sample.data();
+    p.sample_frames = static_cast<uint32_t>(sample.size());
+    p.sample_rate_hz = 48000;
+    p.velocity = 127;
+    p.pan = 0.5f;
+    p.attack_s = 0.0f;
+    p.decay_s = 0.0f;
+    p.sustain_level = 1.0f;
+    p.fade_in_ms = 0;
+    p.fade_out_ms = 0;
+    vm.Trigger(p);
+
+    std::vector<float> l(16), r(16);
+    vm.Render(l.data(), r.data(), l.size());
+    EXPECT_GT(l[0], 0.1f) << "an absent fade must not mute the head";
+}

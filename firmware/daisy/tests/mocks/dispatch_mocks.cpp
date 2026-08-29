@@ -77,7 +77,9 @@ void SetEditParams(uint8_t slot,
                    uint32_t start_frame,
                    uint32_t end_frame,
                    uint32_t loop_start_frame,
-                   uint32_t loop_end_frame) {
+                   uint32_t loop_end_frame,
+                   uint16_t fade_in_ms,
+                   uint16_t fade_out_ms) {
     WaveX::Test::GetDispatchRecord().sample_edits.push_back(
         WaveX::Protocol::SampleEditMessage(slot,
                                            loop_enabled ? 1 : 0,
@@ -85,7 +87,9 @@ void SetEditParams(uint8_t slot,
                                            start_frame,
                                            end_frame,
                                            loop_start_frame,
-                                           loop_end_frame));
+                                           loop_end_frame,
+                                           fade_in_ms,
+                                           fade_out_ms));
 }
 
 void OnControlChange(const WaveX::Protocol::ControlChangeMessage& m) {

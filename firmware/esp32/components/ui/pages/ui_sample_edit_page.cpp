@@ -32,6 +32,10 @@ constexpr uint16_t kDisplayColumns = 1256;
 constexpr uint16_t kMaxRunColumns = WaveX::Protocol::MAX_ENVELOPE_COLUMNS;
 constexpr uint32_t kMinWindow = 256;
 
+// Longest region fade the page offers. Past a second this stops being a fade
+// on a sample and becomes an envelope, which is the instrument's job.
+constexpr uint16_t kMaxFadeMs = 1000;
+
 // Coalescing window for encoder-driven envelope requests. Long enough that a
 // continuous turn produces one request rather than one per detent, short
 // enough that the waveform still feels like it is tracking the knob.
@@ -184,6 +188,8 @@ void UISampleEditPage::onEnter(lv_obj_t* parent) {
     loop_end_ = total_frames_;
     loop_enabled_ = false;
     gain_db_x10_ = 0;
+    fade_in_ms_ = WaveX::Protocol::kDefaultDeclickMs;
+    fade_out_ms_ = WaveX::Protocol::kDefaultDeclickMs;
     zoomToFit();
 
     refreshStatus(state->last_load_sample_path.c_str());
@@ -219,10 +225,11 @@ void UISampleEditPage::buildWaveformPanel(lv_obj_t* parent) {
 }
 
 void UISampleEditPage::buildParamStrip(lv_obj_t* parent) {
-    static const char* titles[PARAM_COUNT] = {"START", "END", "LOOP START", "LOOP END", "GAIN"};
-    // Five parameters, four card slots. The strip shows a window onto the
+    static const char* titles[PARAM_COUNT] = {
+        "START", "END", "LOOP START", "LOOP END", "GAIN", "FADE IN", "FADE OUT"};
+    // Seven parameters, four card slots. The strip shows a window onto the
     // parameter list so the design's 305px card pitch survives; < Param /
-    // Param > scroll it. Cramming five into the same width would shrink every
+    // Param > scroll it. Cramming them into the same width would shrink every
     // card below the readable-from-a-metre size the layout is built around.
     for (int i = 0; i < PARAM_COUNT; i++) {
         lv_obj_t* c = box(parent, kMargin, kStripY, kCardW, kCardH, kColCard);
@@ -432,6 +439,27 @@ void UISampleEditPage::adjustFocused(int steps) {
     if (!has_sample_ || total_frames_ == 0) {
         return;
     }
+    if (focus_ == PARAM_FADE_IN || focus_ == PARAM_FADE_OUT) {
+        // 1 ms a detent up to 20 ms, then 5 ms - a de-click lives in the first
+        // few milliseconds, and a fade you can hear as a fade lives above 50,
+        // so a single linear step would make one of the two useless.
+        uint16_t& target = (focus_ == PARAM_FADE_IN) ? fade_in_ms_ : fade_out_ms_;
+        int32_t v = target;
+        for (int i = 0; i < (steps < 0 ? -steps : steps); ++i) {
+            const int32_t step = (v >= 20) ? 5 : 1;
+            v += (steps < 0) ? -step : step;
+            if (v < 0) {
+                v = 0;
+            }
+        }
+        if (v > kMaxFadeMs) {
+            v = kMaxFadeMs;
+        }
+        target = static_cast<uint16_t>(v);
+        params_dirty_ = true;
+        sendEdit();
+        return;
+    }
     if (focus_ == PARAM_GAIN) {
         // 0.5 dB a detent over -24..+12 dB.
         int32_t g = gain_db_x10_ + steps * 5;
@@ -556,6 +584,8 @@ void UISampleEditPage::applyMeta(const WaveX::Protocol::SampleMetadata& m) {
     loop_end_ = m.loop_end;
     loop_enabled_ = (m.loop_enabled != 0);
     gain_db_x10_ = m.gain_db_x10;
+    fade_in_ms_ = m.fade_in_ms;
+    fade_out_ms_ = m.fade_out_ms;
     if (view_frames_ == 0 || view_frames_ > total_frames_) {
         zoomToFit();
     }
@@ -571,8 +601,15 @@ void UISampleEditPage::sendEdit() {
     // rather than guessing what "to the end" meant.
     auto* state = getSampleBrowserState();
     const uint8_t slot = state ? static_cast<uint8_t>(state->last_load_sample_id) : 0;
-    inter_mcu_send_sample_edit(
-        slot, loop_enabled_, gain_db_x10_, start_frame_, end_frame_, loop_start_, loop_end_);
+    inter_mcu_send_sample_edit(slot,
+                               loop_enabled_,
+                               gain_db_x10_,
+                               start_frame_,
+                               end_frame_,
+                               loop_start_,
+                               loop_end_,
+                               fade_in_ms_,
+                               fade_out_ms_);
 }
 
 void UISampleEditPage::refreshParams() {
@@ -616,6 +653,26 @@ void UISampleEditPage::refreshParams() {
         lv_obj_set_x(cards_[PARAM_GAIN].knob, 16 + (kGaugeW * pct) / 100 - 4);
         lv_obj_set_style_bg_color(
             cards_[PARAM_GAIN].bar, lv_color_hex(gain_db_x10_ > 0 ? kColOrange : kColBlue), 0);
+    }
+
+    for (uint8_t p: {static_cast<uint8_t>(PARAM_FADE_IN), static_cast<uint8_t>(PARAM_FADE_OUT)}) {
+        if (!cards_[p].value) {
+            continue;
+        }
+        const uint16_t ms = (p == PARAM_FADE_IN) ? fade_in_ms_ : fade_out_ms_;
+        if (ms == 0) {
+            snprintf(buf, sizeof(buf), "off");
+        } else {
+            snprintf(buf, sizeof(buf), "%u ms", (unsigned)ms);
+        }
+        lv_label_set_text(cards_[p].value, buf);
+        const int pct = (ms * 100) / kMaxFadeMs;
+        lv_obj_set_width(cards_[p].bar, (kGaugeW * pct) / 100);
+        lv_obj_set_x(cards_[p].knob, 16 + (kGaugeW * pct) / 100 - 4);
+        // Green while it is doing the de-click job, blue once it is long
+        // enough to be heard as a fade - the two are different intentions and
+        // the number alone does not say which one you are setting.
+        lv_obj_set_style_bg_color(cards_[p].bar, lv_color_hex(ms <= 5 ? kColGreen : kColBlue), 0);
     }
 
     layoutParamStrip();
@@ -778,7 +835,8 @@ void UISampleEditPage::serviceUi() {
         if (inter_mcu_get_sample_meta(state->last_load_sample_id, &m) && m.total_frames > 0 &&
             (m.start_frame != start_frame_ || m.end_frame != end_frame_ ||
              m.loop_start != loop_start_ || m.loop_end != loop_end_ ||
-             (m.loop_enabled != 0) != loop_enabled_ || m.gain_db_x10 != gain_db_x10_)) {
+             (m.loop_enabled != 0) != loop_enabled_ || m.gain_db_x10 != gain_db_x10_ ||
+             m.fade_in_ms != fade_in_ms_ || m.fade_out_ms != fade_out_ms_)) {
             applyMeta(m);
         }
     }

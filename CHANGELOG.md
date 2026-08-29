@@ -11,6 +11,58 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Added — Region fades and de-click at playback time (roadmap 1.5.6 item 3)
+
+- A region that starts mid-waveform starts on a step from silence to whatever
+  the sample happened to be doing at that frame, and a step is a click.
+  `fade_in_ms` / `fade_out_ms` now ride on `SampleMetadata` (0x3D) and
+  `MSG_SAMPLE_EDIT_SET` (0x3C), and are applied on **both** playback paths —
+  the streaming audition and RAM voices — so the editor auditions what a pad
+  plays. `SampleMetadata` grows 84 → 88 bytes and still fits `PKT_SIZE_128`.
+- **De-click is the default, not an opt-in.** Both fields default to 1 ms. The
+  step exists whether or not anyone asked for a fade, so the honest default is
+  the one that removes it; 0 turns it off and is a real, reachable value. 1 ms
+  is short enough to be inaudible against a drum transient, whose rise time is
+  5–20 ms.
+- **Raised cosine, not linear** (`src/audio/fade.hpp`, host-tested): a linear
+  ramp has a corner at each end, and a corner in amplitude is a discontinuity
+  in the first derivative — audible as a faint thump on exactly the material a
+  click was the problem on. Deliberately *not* the equal-power (sin/cos) shape
+  the roadmap recommends for crossfades: equal power is right when two signals
+  sum and the sum must hold level, but a fade to or from silence has nothing to
+  hold level against, and an equal-power fade-in would start at −3 dB rather
+  than zero — which is a step, i.e. the thing being fixed.
+- The streaming fade is applied **before** resampling, because the fade
+  position is a *source* frame index: after resampling the block no longer maps
+  one-to-one onto file frames and the ramp would drift against the boundary it
+  covers. That needed the SD buffer slots to record the file offset they were
+  read from — by the time a block is converted the file handle has moved on.
+- Fade lengths are counted at the **file's** rate, not the engine's. A 44.1 kHz
+  sample on a 48 kHz engine advances 0.919 source frames per output frame, so
+  using the engine rate would make the ramp 9% short in source terms.
+- The backend clamps fades to the region, since only it knows what the region
+  ended up being after its own clamping; a fade longer than the audio it shapes
+  never reaches unity, which reads as "the sample got quieter" rather than as a
+  fade. Overlapping fades share the region proportionally instead of
+  multiplying into a permanent dip.
+- The per-voice fade is separate from the ADSR and multiplied with it: the ADSR
+  belongs to the instrument (how this note is played), the fade belongs to the
+  sample (where its region was cut). Folding one into the other would make a
+  marker move change the envelope.
+- Sample edit page: FADE IN and FADE OUT join the paged parameter strip, 1 ms
+  per detent up to 20 ms and 5 ms above it — a de-click lives in the first few
+  milliseconds and a fade you hear as a fade lives above 50, so a single linear
+  step would make one of the two useless. The gauge reads green while the value
+  is doing the de-click job and blue once it is long enough to be a fade.
+- **The loop seam is deliberately not covered.** Fades are anchored to the
+  region start and end, so with looping on and the loop starting at the region
+  start the fade-in re-fires each pass — a short dip, better than the click but
+  not seam smoothing. That is the crossfade in roadmap 1.5.6 item 2.
+
+### Changed
+
+- Added required Daisy and ESP32-P4 coding-guide references to `AGENTS.md` and project-local platform skills under `skills/`.
+
 ### Added — Waveform envelopes, cached and mip-mapped (roadmap 1.5.5)
 
 - **The preview aliased.** It sent every *n*th sample, so a bright sample drew

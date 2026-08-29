@@ -327,7 +327,9 @@ esp_err_t inter_mcu_send_sample_edit(uint8_t slot,
                                      uint32_t start_frame,
                                      uint32_t end_frame,
                                      uint32_t loop_start,
-                                     uint32_t loop_end) {
+                                     uint32_t loop_end,
+                                     uint16_t fade_in_ms,
+                                     uint16_t fade_out_ms) {
     (void)slot;
     (void)loop_enabled;
     (void)gain_db_x10;
@@ -335,6 +337,8 @@ esp_err_t inter_mcu_send_sample_edit(uint8_t slot,
     (void)end_frame;
     (void)loop_start;
     (void)loop_end;
+    (void)fade_in_ms;
+    (void)fade_out_ms;
     return ESP_OK;
 }
 
@@ -419,3 +423,14 @@ bool inter_mcu_is_busy() {
 }
 
 // FreeRTOS tick conversion macros are defined in esp32_mocks.h
+
+esp_err_t inter_mcu_send_envelope_req(uint16_t sample_id,
+                                      uint16_t columns,
+                                      uint32_t start_frame,
+                                      uint32_t end_frame) {
+    (void)sample_id;
+    (void)columns;
+    (void)start_frame;
+    (void)end_frame;
+    return ESP_OK;
+}

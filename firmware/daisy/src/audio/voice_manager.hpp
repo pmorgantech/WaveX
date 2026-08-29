@@ -34,6 +34,7 @@
 // (AGENTS.md constraint #1 / architecture.md §7.1).
 
 #include "envelope.hpp"
+#include "fade.hpp"
 #include "one_pole_filter.hpp"
 #include <array>
 #include <cmath>
@@ -67,6 +68,13 @@ struct Voice {
     bool loop = false;
     uint32_t loop_start = 0;
     uint32_t loop_end = 0;
+    // Region fades (roadmap 1.5.6 item 3), in frames of the SOURCE sample.
+    // Separate from the ADSR below and multiplied with it: the ADSR belongs to
+    // the instrument (how this note is played), the fade belongs to the sample
+    // (where its region was cut). Folding one into the other would make a
+    // marker move change the envelope, or an envelope change move the de-click.
+    uint32_t fade_in_frames = 0;
+    uint32_t fade_out_frames = 0;
 
     OnePoleFilter filter;
     Envelope envelope;
@@ -123,6 +131,10 @@ struct VoiceTriggerParams {
     bool loop = false;
     uint32_t loop_start = 0;
     uint32_t loop_end = 0;  // 0 => end_frame
+    // Region fades in milliseconds, at the sample's own rate. Converted to
+    // frames at Trigger() so Render() does no division per block.
+    uint16_t fade_in_ms = 0;
+    uint16_t fade_out_ms = 0;
 
     float filter_cutoff_hz = 20000.0f;  // effectively open/bypass by default
 
@@ -172,6 +184,15 @@ class VoiceManager {
         v.loop_end =
             (params.loop_end == 0 || params.loop_end > v.end_frame) ? v.end_frame : params.loop_end;
         v.phase = static_cast<float>(v.start_frame);
+
+        // Fades count in source frames, so they use the sample's own rate -
+        // not the engine's. A 44.1 kHz sample on a 48 kHz engine advances
+        // 0.919 source frames per output frame, and using the engine rate here
+        // would make the ramp 9% short in source terms, i.e. it would end
+        // before the region boundary it exists to cover.
+        const uint32_t src_rate = params.sample_rate_hz ? params.sample_rate_hz : sample_rate_;
+        v.fade_in_frames = FadeFrames(params.fade_in_ms, src_rate);
+        v.fade_out_frames = FadeFrames(params.fade_out_ms, src_rate);
 
         // Pitch: 12-TET ratio relative to the sample's recorded root note,
         // times native-rate/engine-rate compensation (a 44.1kHz sample on a
@@ -272,6 +293,10 @@ class VoiceManager {
                 s = v.filter.Process(s);
                 float env = v.envelope.Process();
                 s *= env;
+                if (v.fade_in_frames != 0 || v.fade_out_frames != 0) {
+                    s *= RegionFadeGain(
+                        idx0, v.start_frame, v.end_frame, v.fade_in_frames, v.fade_out_frames);
+                }
 
                 out_l[i] += s * left_gain;
                 out_r[i] += s * right_gain;

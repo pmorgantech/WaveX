@@ -26,6 +26,7 @@ extern "C" SD_HandleTypeDef hsd1;  // libDaisy per/sdmmc.cpp
 #include "../sequencer/sequencer_transport.hpp"
 #include "../storage/fatfs_wav_reader.hpp"
 #include "../timebase.hpp"
+#include "fade.hpp"
 #include "instrument.hpp"
 #include "linear_resampler.hpp"
 #include "output_sink.hpp"
@@ -370,6 +371,15 @@ struct WavState {
     uint32_t loop_end;
     bool loop_enabled;
     q15_t gain_q15;  // 32767 = unity
+
+    // Region fades (roadmap 1.5.6 item 3), in FRAMES at the file's own rate.
+    // Held in frames rather than bytes because the fade position is compared
+    // against a frame index inside the conversion loop, where the byte offsets
+    // above have already been turned back into frames anyway.
+    uint32_t region_start_frame;
+    uint32_t region_end_frame;
+    uint32_t fade_in_frames;
+    uint32_t fade_out_frames;
 };
 static WavState s_wav = {};
 
@@ -609,6 +619,11 @@ struct SdBufferSlot {
     uint32_t bytes = 0;
     uint32_t frames = 0;
     uint32_t consumed = 0;
+    // Absolute file offset this slot's first frame was read from. The fade
+    // needs to know WHERE in the region a block sits, and by the time the
+    // block is converted the file handle has already moved on - so the
+    // position has to be captured at read time, not derived at use time.
+    uint32_t file_offset = 0;
     bool ready = false;
 };
 static SdBufferSlot s_sd_buffers[kSdBufferCount];
@@ -724,6 +739,54 @@ static void ApplyWavGain(q15_t* buf, uint32_t samples) {
             v = -32768;
         }
         buf[i] = static_cast<q15_t>(v);
+    }
+}
+
+// Region fade / de-click, applied to the converted block before resampling
+// (roadmap 1.5.6 item 3). Pre-resample because the fade position is a SOURCE
+// frame index: after resampling the block no longer maps one-to-one onto file
+// frames, and the ramp would drift against the region boundary it exists to
+// cover.
+//
+// `first_frame` is the region-relative index of the block's first frame.
+// Costs nothing on the common path: with no fade in range the whole call is
+// two comparisons.
+static void ApplyWavFade(q15_t* buf, uint32_t frames, uint32_t first_frame) {
+    if (frames == 0) {
+        return;
+    }
+    const uint32_t fade_in = s_wav.fade_in_frames;
+    const uint32_t fade_out = s_wav.fade_out_frames;
+    if (fade_in == 0 && fade_out == 0) {
+        return;
+    }
+    const uint32_t start = s_wav.region_start_frame;
+    const uint32_t end = s_wav.region_end_frame;
+    if (end <= start) {
+        return;
+    }
+
+    const uint32_t block_start = start + first_frame;
+    const uint32_t block_end = block_start + frames;
+    // Skip the pass entirely unless the block actually overlaps a ramp. A
+    // three-minute file is thousands of blocks and two of them are fades.
+    const bool touches_in = (fade_in > 0) && (block_start < start + fade_in);
+    const bool touches_out = (fade_out > 0) && (block_end > end - std::min(fade_out, end - start));
+    if (!touches_in && !touches_out) {
+        return;
+    }
+
+    for (uint32_t i = 0; i < frames; ++i) {
+        const float g =
+            WaveX::AudioEngine::RegionFadeGain(block_start + i, start, end, fade_in, fade_out);
+        if (g >= 0.999999f) {
+            continue;
+        }
+        const int32_t gq = static_cast<int32_t>(g * 32768.0f);
+        q15_t* frame_ptr = buf + i * s_output_channels;
+        for (uint32_t ch = 0; ch < s_output_channels; ++ch) {
+            frame_ptr[ch] = static_cast<q15_t>((static_cast<int32_t>(frame_ptr[ch]) * gq) >> 15);
+        }
     }
 }
 
@@ -1068,6 +1131,7 @@ static bool refill_sd_buffer() {
             return false;
 
         UINT br = 0;
+        const uint32_t read_at = f_tell(&s_wav.file);
         s_io_start_time = System::GetTick();
         FRESULT fr = f_read(&s_wav.file, slot.data, req_bytes, &br);
         s_io_duration = System::GetTick() - s_io_start_time;
@@ -1149,6 +1213,7 @@ static bool refill_sd_buffer() {
         slot.bytes = br;
         slot.frames = br / file_bpf;
         slot.consumed = 0;
+        slot.file_offset = read_at;
         slot.ready = true;
         s_sd_fill_index = (idx + 1) % kSdBufferCount;
         s_wav.bytes_remaining -= br;
@@ -1659,6 +1724,8 @@ void OnNoteOn(const NoteMessage& note_msg) {
         ev.params.loop = m.loop_enabled != 0;
         ev.params.loop_start = m.loop_start;
         ev.params.loop_end = m.loop_end;
+        ev.params.fade_in_ms = m.fade_in_ms;
+        ev.params.fade_out_ms = m.fade_out_ms;
         // gain_mul is linear and multiplies the velocity gain, so the dB
         // figure has to be converted here rather than passed through.
         ev.params.gain_mul = (m.gain_db_x10 == 0)
@@ -2850,6 +2917,13 @@ void PumpWavIO() {
     ConvertFramesToOutput(
         src, conversion_output, frames_to_transfer, s_wav.num_channels, s_wav.bits_per_sample);
     ApplyWavGain(conversion_output, frames_to_transfer * s_output_channels);
+    // Region-relative index of this block's first frame. slot.file_offset is
+    // where the read started; consumed is how far into the slot we are.
+    const uint32_t block_file_pos = slot.file_offset + slot.consumed * file_bpf;
+    const uint32_t block_first_frame = (block_file_pos > s_wav.region_start)
+                                           ? ((block_file_pos - s_wav.region_start) / file_bpf)
+                                           : 0u;
+    ApplyWavFade(conversion_output, frames_to_transfer, block_first_frame);
 
     q15_t* final_buffer = conversion_output;
     uint32_t final_frames = frames_to_transfer;
@@ -2956,7 +3030,9 @@ void SetEditParams(uint8_t slot,
                    uint32_t start_frame,
                    uint32_t end_frame,
                    uint32_t loop_start_frame,
-                   uint32_t loop_end_frame) {
+                   uint32_t loop_end_frame,
+                   uint16_t fade_in_ms,
+                   uint16_t fade_out_ms) {
     // slot is the sample id. 0 means "whatever the audition is playing",
     // which is how the edit page addresses a sample it did not load itself.
     LoadedSampleInfo* info = slot ? find_loaded_sample(slot) : nullptr;
@@ -2981,6 +3057,17 @@ void SetEditParams(uint8_t slot,
         // and starve the ring. The frontend cannot know this limit, so it is
         // enforced here and reported back rather than silently obeyed.
         m.loop_enabled = (loop_enabled && (m.loop_end - m.loop_start) >= kMinLoopFrames) ? 1 : 0;
+        // Clamp fades to the region. A fade longer than the audio it shapes
+        // never reaches unity, which reads as "the sample got quieter" rather
+        // than as a fade - and the frontend cannot clamp it, because the
+        // backend is the one that just decided what the region is.
+        const uint32_t rate = m.sample_rate ? m.sample_rate : s_sample_rate;
+        const uint32_t span_ms =
+            rate ? static_cast<uint32_t>(
+                       (static_cast<uint64_t>(m.end_frame - m.start_frame) * 1000u) / rate)
+                 : 0u;
+        m.fade_in_ms = static_cast<uint16_t>(std::min<uint32_t>(fade_in_ms, span_ms));
+        m.fade_out_ms = static_cast<uint16_t>(std::min<uint32_t>(fade_out_ms, span_ms));
         PushSampleMeta(*info);
     }
 
@@ -3016,15 +3103,27 @@ static void ApplyMetaToStreaming(const LoadedSampleInfo* info) {
     s_wav.loop_end = s_wav.data_start + m.loop_end * file_bpf;
     s_wav.loop_enabled = m.loop_enabled != 0;
     s_wav.gain_q15 = GainDbToQ15(m.gain_db_x10);
+    s_wav.region_start_frame = m.start_frame;
+    s_wav.region_end_frame = m.end_frame;
+    // Fades are specified against the FILE's rate, which is what m carries and
+    // what the region frames above are counted in. Converting against the
+    // engine rate here would make a 1 ms de-click come out 1.09 ms long on a
+    // 44.1 kHz file - inaudible, but wrong in a way that compounds if a later
+    // change reuses the figure.
+    const uint32_t file_rate = s_wav.sample_rate ? s_wav.sample_rate : s_sample_rate;
+    s_wav.fade_in_frames = WaveX::AudioEngine::FadeFrames(m.fade_in_ms, file_rate);
+    s_wav.fade_out_frames = WaveX::AudioEngine::FadeFrames(m.fade_out_ms, file_rate);
 
-    WaveX::Log::PrintLine("WAV edit: region %lu..%lu loop %lu..%lu %s gain %d.%ddB",
+    WaveX::Log::PrintLine("WAV edit: region %lu..%lu loop %lu..%lu %s gain %d.%ddB fade %u/%u ms",
                           (unsigned long)m.start_frame,
                           (unsigned long)m.end_frame,
                           (unsigned long)m.loop_start,
                           (unsigned long)m.loop_end,
                           s_wav.loop_enabled ? "on" : "off",
                           m.gain_db_x10 / 10,
-                          (m.gain_db_x10 < 0 ? -m.gain_db_x10 : m.gain_db_x10) % 10);
+                          (m.gain_db_x10 < 0 ? -m.gain_db_x10 : m.gain_db_x10) % 10,
+                          (unsigned)m.fade_in_ms,
+                          (unsigned)m.fade_out_ms);
 }
 
 bool AuditionSample(const char* path) {

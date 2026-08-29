@@ -105,7 +105,7 @@ TEST_F(MessageDispatchTest, EnvelopeReqReachesAudioEngine) {
 // markers audible, so a silent dispatcher stub here would look exactly like
 // "loop doesn't work" - which is how it presented before this path existed.
 TEST_F(MessageDispatchTest, SampleEditReachesAudioEngine) {
-    SampleEditMessage edit(0, 1, -35, 44100, 396900, 88200, 352800);
+    SampleEditMessage edit(0, 1, -35, 44100, 396900, 88200, 352800, 3, 250);
     Dispatch(MSG_SAMPLE_EDIT_SET, edit);
 
     ASSERT_EQ(GetDispatchRecord().sample_edits.size(), 1u);
@@ -116,6 +116,10 @@ TEST_F(MessageDispatchTest, SampleEditReachesAudioEngine) {
     EXPECT_EQ(got.end_frame, 396900u);
     EXPECT_EQ(got.loop_start, 88200u);
     EXPECT_EQ(got.loop_end, 352800u);
+    // The fades ride on the same command, so a dispatcher that drops them
+    // would present as "de-click does nothing" with everything else working.
+    EXPECT_EQ(got.fade_in_ms, 3);
+    EXPECT_EQ(got.fade_out_ms, 250);
 }
 
 // sample_id 0 means "every loaded sample" - the frontend's way of
