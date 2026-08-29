@@ -130,6 +130,33 @@ Today every waveform redraw is a round trip: the ESP32 sends `MSG_PREVIEW_REQ`, 
 
 4. Fade shape matters more than it looks: an equal-power (sin/cos) crossfade holds level through the blend where a linear one dips, which on a sustained loop is audible as a dip once per pass.
 
+### 1.5.7 Mono vs stereo in the editor (added 2026-08-29)
+
+**Finding, from reading `OnPreviewReq` while writing this up: the waveform you are editing is the LEFT CHANNEL ONLY, silently.** For a stereo file the preview loop takes `samples16[i * src.channels]` and discards the rest. Frame indexing is correct — markers land where they should — but a sample with its content weighted to the right channel draws a misleading trace, and a hard-panned one can draw a near-flat line for audio that is plainly audible. Nothing on screen says so.
+
+That is the first thing to fix here, and it does not need the whole caching design: summing to mono, or drawing both channels, is a change to that one loop plus the wire format.
+
+Decisions this raises, roughly in order:
+
+1. **What the waveform shows.** Three options, and they are not equivalent:
+   - **Summed mono** — one trace, cheapest, matches what you hear from a mono monitor. Hides phase problems entirely, and an out-of-phase stereo sample sums to near silence, which draws as a flat line for audio that is fine.
+   - **Two stacked traces** — honest, and the only view in which you can align a loop on both channels. Halves the vertical resolution of each.
+   - **Overlaid L/R in two colours** — full height for both, and phase differences are visible as divergence. Busy on dense material.
+
+   Two stacked traces is the safe default for an editor, with mono files simply using the full height. Whatever is chosen, **say which on screen** — the current silent left-only behaviour is the failure mode to avoid repeating.
+
+2. **The envelope format must carry both channels** (1.5.5). A min/max pair *per channel* per column doubles the payload to ~10 KB for a whole file at full width, which is still small. Deciding this after the format ships means a second format.
+
+3. **Zero-crossing snap is per-channel and they disagree.** A zero crossing in L is generally not one in R, so snapping (1.5.6) has no single right answer for stereo. Options: snap to L and accept it, snap to the nearest crossing of the summed signal, or snap where both channels are within a threshold of zero. The last is the most useful and the least likely to find a candidate; needs a fallback.
+
+4. **Loop seams must be judged on both channels.** The splice view (1.5.6) has to show both, or a loop tuned to look clean on L can click audibly on R. This is the concrete reason two stacked traces beats summed mono for this page.
+
+5. **Streamed and RAM playback disagree about stereo today.** The streaming audition path preserves stereo through `ConvertFramesToOutput`, while `VoiceManager` averages stereo to mono per voice (a Phase 1 stopgap). The same file therefore sounds different depending on how it is triggered, and markers auditioned in the editor will not match what a pad plays. Reconcile before Phase 2.5 — it is the same unification item already noted in 1.5.1.
+
+6. **The preview reads from sample RAM, not SD.** `OnPreviewReq` indexes a loaded sample, so a file too large to load has no waveform at all — which ties this to the partial-load item (1.5.1 item 8). A stereo file is twice the RAM of the mono equivalent, so this bites sooner than expected.
+
+7. **Mono↔stereo conversion** is already a Phase 4 editing primitive. Non-destructive channel *selection* for playback (play L, R, or sum) is a different, cheaper thing and might belong here — it needs a field on the metadata record, not a render job.
+
 **Gate**: set all four markers on a multi-minute WAV, audition the looped region, save, reboot, reload, and hear the same region. Markers survive a power cycle; no UI freeze during audition, zoom or load.
 
 ---
