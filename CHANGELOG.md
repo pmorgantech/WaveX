@@ -11,6 +11,40 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Changed — Resonant state-variable filter per voice (digital voice audition, stage 1)
+
+- `OnePoleFilter` is replaced by `SvfFilter` (`src/audio/svf_filter.hpp`), a
+  topology-preserving-transform state-variable lowpass with both cutoff and
+  **resonance**. `VoiceTriggerParams` gains `filter_resonance` (0–1, default 0).
+  The old header anticipated this swap; the reason to make it now is that
+  `PARAM_FILTER_RESONANCE` had **no digital consumer at all** — a one-pole has
+  no resonance state to give it, and a filter that cannot resonate barely
+  exercises the voice architecture.
+- **Chosen over a CMSIS-DSP biquad deliberately.** `arm_biquad_cascade_df1_f32`
+  covers the *static* resonant lowpass, but it is a block kernel with fixed
+  coefficients, and direct-form biquads behave badly when coefficients are
+  modulated — the state no longer means what it meant under the previous
+  coefficients, which is audible as zipper noise and, at high Q, as blow-ups.
+  The TPT structure tolerates cutoff and resonance changing between samples,
+  which is the whole point of the stage it serves: sweeping the filter *while a
+  note sounds*. The block-kernel route stays open as a measured optimization.
+- Rolloff goes 6 → 12 dB/octave, so existing material is filtered more steeply
+  at the same cutoff. Resonance defaults to 0 (Q = 0.5, no peak) so a trigger
+  that never asked for resonance does not get one. Cutoff at or above Nyquist
+  remains an **exact** bypass, resonance included — the voice-manager tests
+  depend on that contract to mean "no filtering at all".
+- Filter state is in DTCM automatically, by containment in the DTCM-placed
+  `s_voice_manager`; the measured cost is 872 → 1144 B of the 128 KB region.
+  Coefficients are computed on tuning change rather than tabulated partly to
+  keep it that way — a shared static table would land in cacheable AXI SRAM,
+  not DTCM, however hot it is.
+- 14 host tests (`svf_filter_test`) pin the bypass contract, monotone rolloff,
+  the resonant peak, clamping of out-of-range resonance, and stability under
+  per-sample cutoff and resonance sweeps. **Not measured on hardware**: the
+  per-sample cost of a 2-pole against the old 1-pole across 8 voices still
+  needs a DWT number, and FPSCR flush-to-zero should be confirmed rather than
+  paying for a denormal guard on a guess.
+
 ### Added — Region fades and de-click at playback time (roadmap 1.5.6 item 3)
 
 - A region that starts mid-waveform starts on a step from silence to whatever

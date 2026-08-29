@@ -135,6 +135,14 @@ function(add_wavex_test test_source)
         )
     endif()
 
+    # svf_filter.hpp is header-only and HAL-free (plain float arithmetic, no
+    # daisy_seed.h include).
+    if(test_name STREQUAL "svf_filter_test")
+        target_sources(${test_name} PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/../src/audio/svf_filter.hpp
+        )
+    endif()
+
     # voice_manager.hpp is header-only and HAL-free (plain int16_t*/float
     # arithmetic, no daisy_seed.h include) - safe to compile directly on host.
     if(test_name STREQUAL "voice_manager_test")

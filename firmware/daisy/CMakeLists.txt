@@ -31,7 +31,7 @@ set(FIRMWARE_SOURCES
     src/audio/voice_manager.hpp
     src/audio/instrument.hpp
     src/audio/envelope.hpp
-    src/audio/one_pole_filter.hpp
+    src/audio/svf_filter.hpp
     src/cv/cv_cal.hpp
     src/cv/cv_group_router.hpp
     src/cv/mcp4728_backend.hpp

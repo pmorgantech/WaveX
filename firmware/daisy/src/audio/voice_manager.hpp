@@ -35,7 +35,7 @@
 
 #include "envelope.hpp"
 #include "fade.hpp"
-#include "one_pole_filter.hpp"
+#include "svf_filter.hpp"
 #include <array>
 #include <cmath>
 #include <cstddef>
@@ -76,7 +76,7 @@ struct Voice {
     uint32_t fade_in_frames = 0;
     uint32_t fade_out_frames = 0;
 
-    OnePoleFilter filter;
+    SvfFilter filter;
     Envelope envelope;
 
     bool IsFree() const { return state == VoiceState::Idle; }
@@ -136,7 +136,12 @@ struct VoiceTriggerParams {
     uint16_t fade_in_ms = 0;
     uint16_t fade_out_ms = 0;
 
-    float filter_cutoff_hz = 20000.0f;  // effectively open/bypass by default
+    float filter_cutoff_hz = 20000.0f;  // effectively open by default
+    // 0 = no resonance, 1 = strongly resonant (svf_filter.hpp maps this onto
+    // Q). Defaults to 0 so an unset trigger sounds like the plain lowpass the
+    // one-pole used to give - adding the SVF must not put a peak on every
+    // voice that never asked for one.
+    float filter_resonance = 0.0f;
 
     float attack_s = 0.001f;
     float decay_s = 0.05f;
@@ -209,6 +214,7 @@ class VoiceManager {
                                    12.0f);
 
         v.filter.Init(sample_rate_);
+        v.filter.SetResonance(params.filter_resonance);
         v.filter.SetCutoff(params.filter_cutoff_hz);
         v.filter.Reset();
 

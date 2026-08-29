@@ -19,7 +19,7 @@ Two goals, in order:
 
 **The only live-editable parameter path that exists today is the analog one this scope excludes.** `MSG_CONTROL_CHANGE` for cutoff / resonance / ADSR is consumed in `audio_engine.cpp` (`OnControlChange`) into `s_para_params` and `s_para_env`, staged to the MCP4728 at the 1 kHz control tick. That is genuinely real-time audible — and it is the analog path.
 
-The digital per-voice chain is real DSP (`voice_manager.hpp`: each of `kNumVoices = 8` voices owns an `OnePoleFilter` and an `Envelope`, processed inline in `Render()`), but its cutoff and ADSR are written **once, at `Trigger()` time**, from `VoiceTriggerParams`. There is no message, no API, and no state that lets a control change reach either a sounding voice or the next note to be triggered.
+The digital per-voice chain is real DSP (`voice_manager.hpp`: each of `kNumVoices = 8` voices owns its own filter and `Envelope`, processed inline in `Render()`), but its cutoff and ADSR are written **once, at `Trigger()` time**, from `VoiceTriggerParams`. There is no message, no API, and no state that lets a control change reach either a sounding voice or the next note to be triggered.
 
 Consequence: on an all-digital engine, turning a filter knob currently does nothing. "Audition while editing" is therefore not a UI feature layered on top — it is missing engine plumbing, and it is Stage 1 regardless of which UI surface gets built first.
 
@@ -48,7 +48,7 @@ The load-bearing stage. Three parts:
    There is already a precedent for the *shape* of this: `VoiceManager::Choke()` mutates a playing voice's envelope in place (`SetReleaseTime` then `Release`) and is documented callback-safe. So mutating live voice DSP state is established practice here — what is missing is a parameter path that reaches it, not permission to touch a sounding voice.
 3. **Routing** `PARAM_FILTER_CUTOFF`, `PARAM_FILTER_RESONANCE` and `PARAM_ENVELOPE_*` to the digital path. The analog consumers stay; this is an added destination, not a replacement.
 
-**Filter replacement (decided 2026-08-29): `OnePoleFilter` → a state-variable filter.** `PARAM_FILTER_RESONANCE` has no digital consumer today because the one-pole has no resonance state — and a filter that cannot resonate barely exercises the voice architecture this work exists to exercise. `one_pole_filter.hpp`'s own header comment anticipates exactly this ("upgrading to an SVF (for resonance) is a drop-in follow-up once there's a reason to need it").
+**Filter replacement (decided 2026-08-29; ~~done~~ — `svf_filter.hpp`, 14 host tests): `OnePoleFilter` → a state-variable filter.** `PARAM_FILTER_RESONANCE` has no digital consumer today because the one-pole has no resonance state — and a filter that cannot resonate barely exercises the voice architecture this work exists to exercise. `one_pole_filter.hpp`'s own header comment anticipates exactly this ("upgrading to an SVF (for resonance) is a drop-in follow-up once there's a reason to need it").
 
 Constraints on that replacement:
 
