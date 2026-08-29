@@ -225,12 +225,23 @@ int main(void) {
     HAL_NVIC_SetPriority(DMA1_Stream3_IRQn, 6, 0);  // SAI2 DMA A
     HAL_NVIC_SetPriority(DMA1_Stream4_IRQn, 6, 0);  // SAI2 DMA B
 
+    // libDaisy's SdmmcHandler installs SDMMC1_IRQn at priority 0
+    // (per/sdmmc.cpp:84) - ABOVE audio - and SD init runs earlier in this
+    // function, so nothing had corrected it. Every SD transfer's interrupt
+    // could therefore preempt the audio callback, inverting the §7.1.5
+    // hierarchy (audio highest). Re-set below audio and above the SPI link.
+    // Safe to demote: SDMMC1 moves data through its own IDMA, so this IRQ
+    // only signals completion; a few microseconds of added latency cannot
+    // overrun the FIFO.
+    HAL_NVIC_SetPriority(SDMMC1_IRQn, 8, 0);
+
     // Set SPI DMA to lower priority than audio (higher number = lower priority)
     HAL_NVIC_SetPriority(DMA2_Stream2_IRQn, 10, 0);  // SPI1 DMA RX
     HAL_NVIC_SetPriority(DMA2_Stream3_IRQn, 10, 0);  // SPI1 DMA TX
     HAL_NVIC_EnableIRQ(DMA2_Stream2_IRQn);
     HAL_NVIC_EnableIRQ(DMA2_Stream3_IRQn);
-    WAVEX_LOG_DAISY(INTER_MCU_LINK, "Interrupt priorities configured: Audio DMA=5/6, SPI DMA=10");
+    WAVEX_LOG_DAISY(INTER_MCU_LINK,
+                    "Interrupt priorities configured: Audio DMA=5/6, SDMMC=8, SPI DMA=10");
 #endif
 
     // Initialize communication with ESP32
@@ -532,11 +543,31 @@ int main(void) {
             if (!stats_throttled) {
                 uint32_t io_count, max_io_duration, last_io_duration;
                 WaveX::AudioEngine::GetIOStats(io_count, max_io_duration, last_io_duration);
+                // now/blocks give every other number a time base and say
+                // which clock stopped. blocks advances at 1 kHz from the SAI
+                // DMA interrupt, so over a nominal 5 s interval:
+                //   dt ~5000, blocks ~5000 -> both healthy; a stall is
+                //                             downstream (codec/analog)
+                //   dt ~5000, blocks <<5000 -> audio callback starved: look
+                //                              at IRQ priorities, not I/O
+                //   dt >>5000              -> the main loop itself stalled
+                static uint32_t last_blocks = 0;
+                static uint32_t last_now = 0;
+                const uint32_t now_ms = System::GetNow();
+                const uint32_t blocks = WaveX::AudioEngine::GetCallbackBlocks();
                 WAVEX_LOG_DAISY(AUDIO_ENGINE,
-                                "I/O Stats: count=%u, max=%u ticks, last=%u ticks",
+                                "I/O Stats: count=%u, max=%u ticks, last=%u ticks | "
+                                "now=%lu dt=%lu blocks=+%lu cpu=%d%% logdrop=%lu",
                                 (unsigned)io_count,
                                 (unsigned)max_io_duration,
-                                (unsigned)last_io_duration);
+                                (unsigned)last_io_duration,
+                                (unsigned long)now_ms,
+                                (unsigned long)(now_ms - last_now),
+                                (unsigned long)(blocks - last_blocks),
+                                (int)(WaveX::AudioEngine::GetAvgCpuLoad() * 100.0f),
+                                (unsigned long)WaveX::Log::DroppedBytes());
+                last_blocks = blocks;
+                last_now = now_ms;
 
 #if WAVEX_DAISY_STREAM_DEBUG
                 // Where the chain stops when an audition goes silent:

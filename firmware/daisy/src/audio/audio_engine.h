@@ -50,6 +50,10 @@ bool IsPrebufferReady();  // Check if pre-buffering is complete
 // Performance monitoring
 void GetIOStats(uint32_t& count, uint32_t& max_duration, uint32_t& last_duration);
 
+// Audio callbacks executed since boot. Advances at sample_rate/block_size
+// (1 kHz here) whenever the SAI DMA is running, independent of the main loop.
+uint32_t GetCallbackBlocks();
+
 // Streaming telemetry (see WAVEX_DAISY_STREAM_DEBUG in hardware_config.h).
 void GetStreamDebug(uint32_t& prebuf_filled,
                     uint32_t& prebuf_target,

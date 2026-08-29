@@ -19,6 +19,21 @@ versioning and release process.
 - Added CodeGraph configuration for focused repository indexing and installed
   `vim-tiny` in the devcontainer image.
 
+### Fixed — SDMMC interrupt outranked audio
+
+- `SDMMC1_IRQn` ran at priority 0 (installed by libDaisy `per/sdmmc.cpp:84`),
+  above the audio SAI DMA at 5, inverting the architecture.md §7.1.5 rule that
+  audio is highest. SD init runs before the priority block in `main()`, so
+  nothing had corrected it and every SD transfer's interrupt could preempt the
+  audio callback. Now set to 8 — below audio, above the SPI link. Safe to
+  demote: SDMMC1 moves data through its own IDMA, so this IRQ only signals
+  completion.
+- The periodic stats line now carries `now`/`dt`/`blocks`/`cpu`/`logdrop`.
+  `blocks` counts audio callbacks, which the SAI DMA drives independently of
+  the main loop, so it distinguishes a starved ring from a callback that
+  stopped running — the latter reports no underrun at all, since underruns are
+  only detected inside the callback.
+
 ### Fixed — SD card speed configuration
 
 - `WAVEX_DAISY_SD_CARD_SPEED` documented three mutually contradictory sets of

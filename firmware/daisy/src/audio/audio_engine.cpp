@@ -236,6 +236,11 @@ static BlockMeters s_last_block_meters = {0, 0, 0, 0};
 
 // CPU Load Meter for audio processing performance monitoring
 static CpuLoadMeter s_cpu_load_meter;
+// Counts audio callbacks. The callback is driven by SAI DMA interrupts, not
+// the main loop, so comparing its rate against the expected 1 kHz separates
+// "the ring starved" from "the callback stopped running" - the latter reports
+// no underrun at all, because underruns are only detected inside it.
+static volatile uint32_t s_callback_blocks = 0;
 static float s_sample_rate = 48000.0f;
 static int s_block_size = 48;
 
@@ -1017,6 +1022,7 @@ void Callback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t
     uint32_t callback_cycles_start = WaveX::Profiling::GetCycles();
     // Start CPU load measurement for this audio block
     s_cpu_load_meter.OnBlockStart();
+    ++s_callback_blocks;
 
     (void)in;
     for (size_t i = 0; i < size; i++) {
@@ -1730,6 +1736,10 @@ void FlushCv() {
     } else {
         consecutive_failures++;
     }
+}
+
+uint32_t GetCallbackBlocks() {
+    return s_callback_blocks;
 }
 
 float GetAvgCpuLoad() {
