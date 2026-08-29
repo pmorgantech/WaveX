@@ -134,7 +134,7 @@ class SequencerTransport {
             case SEQ_OP_SET_STEP_MICRO:
                 if (StepValid(m.track, m.step)) {
                     Step& s = pattern_.tracks[m.track].steps[m.step];
-                    s.retrig_count = m.arg_u8;
+                    s.retrig_count = m.arg_u8 > kMaxRetrigCount ? kMaxRetrigCount : m.arg_u8;
                     s.retrig_rate_ticks = static_cast<uint8_t>(m.arg_u16 & 0xFF);
                     s.micro_offset = m.arg_s16;
                 }
