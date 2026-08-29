@@ -11,6 +11,30 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Fixed — Startup failure now restarts instead of corrupting itself; build files no longer misdescribe the image
+
+Found by the 2026-08-29 ESP32-P4 review (items E-INIT1, E-BLD1, E-BLD2).
+
+- **A failed init restarts the chip.** `WaveXApplication` is stack-local in
+  `app_main`, so returning on failure ran its destructor and freed the
+  `StatisticsManager` and `PacketRouter` — while the UART link task, started
+  earlier in the same `initialize()`, still reached both through file-scope
+  pointers. The next frame off the wire was a use-after-free. A reboot loop is
+  a visible failure; a silently corrupted one is not.
+- **Removed the inert `-Os -flto …` compile/link options.** They were added
+  *after* `project()`, and ESP-IDF configures every component target inside it,
+  so they applied to nothing: the image builds `-O2` with no LTO. Anyone tuning
+  against those flags was reading fiction. Optimisation level belongs in
+  sdkconfig.
+- **Pruned `EXCLUDE_COMPONENTS` to the entries that take effect.** Twelve of
+  the 32 were being built anyway (IDF pulls back anything still depended on),
+  including two that contradicted the rest of the tree — `main/` `REQUIRES
+  esp_mm`, and sdkconfig sets `CONFIG_ESP_GDBSTUB_ENABLED=y`.
+
+A clean rebuild after both build changes came out within 48 bytes of the
+previous image, which is the expected result if the options really were
+applying to nothing and the pruned exclusions really were being built anyway.
+
 ### Fixed — Keypad and encoder: the physical controls now decode correctly
 
 Found by the 2026-08-29 ESP32-P4 review (items E-KEY1/2, E-ENC1). All three were

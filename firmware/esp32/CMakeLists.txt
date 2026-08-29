@@ -8,34 +8,33 @@ set(EXTRA_COMPONENT_DIRS
     "../shared"
 )
 
-# Exclude unnecessary components to reduce build size and prevent compilation errors
+# Exclude unnecessary components to reduce build size and prevent compilation errors.
+#
+# Only entries that actually take effect belong here. EXCLUDE_COMPONENTS cannot
+# drop a component that something still depends on - IDF pulls it back in - so a
+# listed-but-required name is not a smaller image, just a misleading file.
+# Twelve former entries were removed after checking build/project_description.json
+# and finding them in the built set regardless: esp_wifi, wpa_supplicant,
+# esp_netif, esp_netif_stack, esp_mm, esp_gdbstub, wear_levelling, fatfs, spiffs,
+# usb, vfs and unity. Two of those were self-contradictory as well - main/
+# REQUIRES esp_mm, and sdkconfig sets CONFIG_ESP_GDBSTUB_ENABLED=y.
+#
+# Re-check with project_description.json before adding to this list.
 set(EXCLUDE_COMPONENTS
     "esp_http_server"
     "esp_http_client"
     "esp_https_ota"
     "esp_https_server"
-    "esp_wifi"
     "wifi_provisioning"
-    "wpa_supplicant"
     "esp_bt"
     "esp_hid"
     "esp_eth"
-    "esp_netif"
-    "esp_netif_stack"
     "esp_local_ctrl"
-    "esp_mm"
-    "esp_gdbstub"
     "espcoredump"
     "mqtt"
     "protocomm"
     "protobuf-c"
     "touch_element"
-    "wear_levelling"
-    "fatfs"
-    "spiffs"
-    "usb"
-    "vfs"
-    "unity"
     "idf_test"
     "openthread"
     "ieee802154"
@@ -50,5 +49,12 @@ file(STRINGS "${CMAKE_CURRENT_LIST_DIR}/../../VERSION" PROJECT_VER)
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(wavex-esp32)
-add_compile_options(-Os -flto -ffunction-sections -fdata-sections)
-add_link_options(-flto -Wl,--gc-sections -Wl,--relax)
+
+# NOTE: do not add add_compile_options()/add_link_options() here. ESP-IDF
+# configures every component target inside project() above, so anything added
+# after it applies to nothing. This file used to carry
+# `-Os -flto -ffunction-sections -fdata-sections` at this point, which read as
+# a size-optimised LTO build while the image was in fact built -O2 with no LTO
+# (CONFIG_COMPILER_OPTIMIZATION_PERF, confirmed in build/compile_commands.json).
+# Optimisation level belongs in sdkconfig; per-component flags belong in that
+# component's CMakeLists via target_compile_options().

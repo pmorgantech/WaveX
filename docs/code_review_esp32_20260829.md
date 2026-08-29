@@ -7,7 +7,7 @@
 
 Findings carry stable IDs (`E-…`) so implementation can be tracked in this file. **Completed items leave this document** — detail goes to `CHANGELOG.md`, matching the roadmap's convention — so what remains here is always the open list. A partially-addressed item keeps its row, marked `[~]`, and says what is left.
 
-**Already remediated** (see `CHANGELOG.md` § Unreleased): E-LVGL1/2/3, the LVGL thread-safety cluster (`21304be`, `222b2b4`); E-LIFE1/2/3, the callback-lifetime cluster (`41f4cdd`); E-KEY1/2, the keypad decode and INT busy-spin. All fixed 2026-08-29. **E-KEY1/2 and E-ENC1 change hardware behaviour and are the ones most needing a bench pass** — they were diagnosed entirely by reading code and the controller datasheet.
+**Already remediated** (see `CHANGELOG.md` § Unreleased): E-LVGL1/2/3, the LVGL thread-safety cluster (`21304be`, `222b2b4`); E-LIFE1/2/3, the callback-lifetime cluster (`41f4cdd`); E-KEY1/2, the keypad decode and INT busy-spin (`cdab47d`); E-INIT1; E-BLD1/2, the two misleading build blocks. All fixed 2026-08-29. **E-KEY1/2 and E-ENC1 change hardware behaviour and are the ones most needing a bench pass** — they were diagnosed entirely by reading code and the controller datasheet.
 
 ---
 
@@ -21,9 +21,9 @@ The debt is concentrated in three themes:
 2. **Callback lifetime was unmanaged** — ~~listener pairs as unsynchronized globals, a file browser that never deregistered, and four different locking disciplines across four slots in one class~~. **Fixed 2026-08-29**; see `CHANGELOG.md`. What remains of this theme is the *publication* half: comm-driven pages still solve the producer/consumer handoff three different ways — correct `__atomic` release/acquire (file browser), atomics (sample browser, converted), and `volatile` (the sample-edit page, a guide-§9 regression). That is E-SYNC1.
 3. **The physical control surface had real functional bugs** — ~~a keypad that either never saw a key or busy-spun core 1, decoding presses as releases, and an encoder using interrupt masking as cross-core synchronization~~. **Fixed 2026-08-29**; see `CHANGELOG.md`. These were found by reading code and the TI datasheet, not by observing hardware, so they are the highest-value items in this review to confirm on the bench: if the keypad still misbehaves, the remaining suspect is the CFG register the vendored driver never writes.
 
-Two systemic build findings round it out: the `-Os`/LTO compile options in the top-level CMakeLists are added after `project()` and apply to nothing (the image is `-O2`), and the `EXCLUDE_COMPONENTS` list excludes nothing. Both misdescribe the shipped image to anyone reading the build files.
+Two systemic build findings rounded it out — ~~inert `-Os`/LTO options added after `project()`, and an `EXCLUDE_COMPONENTS` list that excluded nothing~~. **Fixed 2026-08-29**, and the fix confirmed both diagnoses: a clean rebuild came out within 48 bytes of the old image, which is what it should be if the options really were applying to nothing and the pruned exclusions really were being built anyway.
 
-**Suggested order**: next is E-INIT1 (the last Critical), then the build-file repairs (E-BLD1..2) before anyone tunes performance against flags that are not applied, then the UI correctness batch (E-TICK1, E-TOUCH1, E-BRWS1, E-MENU1) which is mostly small and independent. E-SYNC1's remaining half (the sample-edit page's `volatile`) is cheap and can ride along with any edit-page work. The SPI findings (§7) do not need fixing now but must gate any re-enable of `WAVEX_SPI_LINK_ENABLED`. **Before any of that, a bench pass on the keypad and encoder** — three fixes now depend on hardware behaviour nobody has watched.
+**Suggested order**: all Criticals are now closed. Next is the UI correctness batch (E-TICK1, E-TOUCH1, E-BRWS1, E-MENU1) — mostly small, independent, and E-TICK1/E-TOUCH1 in particular are deletions of code that duplicates what the BSP already does. Then E-TX1 and E-METER1, then the Minor/Smell batches. E-SYNC1's remaining half (the sample-edit page's `volatile`) is cheap and can ride along with any edit-page work. The SPI findings (§7) do not need fixing now but must gate any re-enable of `WAVEX_SPI_LINK_ENABLED`. **Before any of that, a bench pass on the keypad and encoder** — three fixes now depend on hardware behaviour nobody has watched.
 
 ---
 
@@ -31,7 +31,6 @@ Two systemic build findings round it out: the `-Os`/LTO compile options in the t
 
 | ID | Sev | Area | Summary |
 |---|---|---|---|
-| [ ] E-INIT1 | Critical | core | `app_main` returns on failed init, destructing the context under live tasks (UAF) |
 | [~] E-ENC1 | Major | input | Encoder SMP race fixed 2026-08-29 (atomics replace interrupt masking); the read-then-clear window is narrowed from every movement poll to ~1 per 8000 counts, not closed — closing it needs the driver's watch-point ISR and bench time |
 | [~] E-SYNC1 | Major | UI/core | `volatile`/plain-`bool` cross-task handoffs — sample browser converted to atomics 2026-08-29; edit page (`volatile`) and `ui_task.h` meter state still open |
 | [ ] E-TICK1 | Major | UI | LVGL time runs at 2×: duplicate 5 ms tick timer |
@@ -42,8 +41,6 @@ Two systemic build findings round it out: the `-Os`/LTO compile options in the t
 | [ ] E-DIAG1 | Major | UI | `malloc` + `vTaskGetRunTimeStats` every 500 ms in the shared esp_timer task |
 | [ ] E-METER1 | Major | core | Orphaned meter pipeline forces continuous full-display refreshes |
 | [ ] E-STOP1 | Major | all | Every `stop()`/teardown API is unsafe (vTaskDelete over held locks / blocked queues) |
-| [ ] E-BLD1 | Major | build | Post-`project()` `-Os`/LTO options are inert; image actually builds `-O2` |
-| [ ] E-BLD2 | Major | build | `EXCLUDE_COMPONENTS` list excludes nothing and contradicts itself |
 | [ ] E-MIDI1 | Minor | shared | MIDI parser: stale `pending_system_data_` can swallow the next message's data bytes |
 | [ ] E-PROTO1 | Minor | comm | Router logs non-NUL-guaranteed wire string; silent length truncation in sample-data send |
 | [ ] E-STAT1 | Minor | comm | Packet statistics misclassify all 0x30-block traffic; dead type-name table is shifted |
@@ -67,9 +64,7 @@ Two systemic build findings round it out: the `-Os`/LTO compile options in the t
 
 ## 3. Critical
 
-### E-INIT1 — failed init destructs the dependency container under live tasks
-
-`main/main.cpp:25-28` / `wavex_application.cpp:113-116`: `WaveXApplication app;` is stack-local; `initialize()` starts the UART link task (prio 6) and PCNT/MIDI tasks *before* UI init. If a later init step fails, `app_main` returns → `~ApplicationContext` frees `statistics_`/`packet_router_` (`application_context.h:62-64`) while the running `uart_link` task dereferences them through raw statics (`inter_mcu.cpp:33`, `esp_uart_link.cpp:84`). Next received packet is a UAF. **Fix**: on init failure, log and `esp_restart()` (or `abort()`) instead of returning; or tear tasks down before destruction.
+None open. All six Criticals from this review were fixed on 2026-08-29; see `CHANGELOG.md`.
 
 ---
 
@@ -136,14 +131,6 @@ A single pattern repeated across the tree: `vTaskDelete(handle)` on a task that 
 - `usb_midi_task.cpp:145-148` — TinyUSB still live; `tud_midi_rx_cb` can notify the deleted handle. `midi_task.cpp:152-159`, `pcnt_task.cpp:273-280` — same shape.
 
 **Fix (one pattern everywhere)**: signal the task, let it release resources and self-delete, join via notification, then free. These are public APIs; the first caller gets a heisencrash.
-
-### E-BLD1 — post-`project()` compile/link options are inert
-
-`firmware/esp32/CMakeLists.txt:53-54` adds `-Os -flto -ffunction-sections …` **after** `project()`; ESP-IDF configures all component targets inside `project()`, so they apply to nothing — `build/compile_commands.json` shows `-O2 … -std=gnu++2b -fno-exceptions` (from `CONFIG_COMPILER_OPTIMIZATION_PERF=y`). Anyone reading the file believes the image is `-Os`+LTO. **Fix**: delete the lines (LTO is risky with IRAM placement anyway); express intent via sdkconfig.
-
-### E-BLD2 — `EXCLUDE_COMPONENTS` excludes nothing
-
-`firmware/esp32/CMakeLists.txt:12-45` lists `esp_mm`, `esp_gdbstub`, `usb`, `vfs`, `fatfs`, `esp_netif`, … yet `build/project_description.json` shows all present (pulled back as dependencies); `main/CMakeLists.txt:37` itself `REQUIRES esp_mm`, and sdkconfig enables `esp_gdbstub`. Dead config that misdescribes the image. **Fix**: prune to entries that take effect, or remove the block.
 
 ---
 
