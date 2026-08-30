@@ -105,6 +105,42 @@ def drop_warmup(samples, warmup):
     return kept
 
 
+def entry_samples(samples):
+    """Keep only the first sample of each contiguous page run.
+
+    Page-entry cost is a different measurement from steady state, and it is
+    the one that matches "slow to render" meaning "slow to appear". Every
+    other view here deliberately discards it as warmup noise, which is how it
+    stayed invisible: the discarded sample was the complaint.
+    """
+    out = []
+    last = object()
+    for row in samples:
+        if row["page"] != last:
+            last = row["page"]
+            out.append(row)
+    return out
+
+
+def print_entries(label, samples, min_samples):
+    order = []
+    for r in samples:
+        if r["page"] not in order:
+            order.append(r["page"])
+    print(f"\n{label}: first frame after entering each page")
+    head = f"  {'page':<28} {'n':>4} {'med':>7} {'p95':>7}"
+    print(head + f" {'max':>7}   render ms")
+    for page in order:
+        rows = [r["render"] for r in samples if r["page"] == page]
+        if len(rows) < min_samples:
+            continue
+        print(
+            f"  {page[:28]:<28} {len(rows):>4} "
+            f"{statistics.median(rows):>7.1f} {p95(rows):>7.1f} "
+            f"{max(rows):>7.1f}"
+        )
+
+
 def columns(samples):
     return {f: [r[f] for r in samples] for f in FIELDS}
 
@@ -196,6 +232,11 @@ def main():
     ap.add_argument("--page", help="only samples on this page (substring)")
     ap.add_argument("--no-pages", action="store_true", help="no page table")
     ap.add_argument(
+        "--entry",
+        action="store_true",
+        help="first frame after each page entry, not steady state",
+    )
+    ap.add_argument(
         "--min-samples",
         type=int,
         default=4,
@@ -205,7 +246,11 @@ def main():
 
     parsed = []
     for path in args.logs:
-        samples = drop_warmup(parse(path), args.warmup)
+        raw = parse(path)
+        if args.entry:
+            samples = entry_samples(raw)
+        else:
+            samples = drop_warmup(raw, args.warmup)
         if args.page:
             want = args.page.lower()
             samples = [r for r in samples if want in r["page"].lower()]
@@ -220,7 +265,11 @@ def main():
             return 1
         parsed.append((path, samples))
         print_table(path, samples)
-        if not args.no_pages and not args.page:
+        if args.no_pages or args.page:
+            pass
+        elif args.entry:
+            print_entries(path, samples, args.min_samples)
+        else:
             print_pages(path, samples, args.min_samples)
 
     if len(parsed) == 2:
