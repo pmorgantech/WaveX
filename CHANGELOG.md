@@ -11,6 +11,15 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Fixed — file browser built `//name` paths at root
+
+- The browse-response parser stripped the leading slash from entry names,
+  which made its root special case dead code, so every root-level entry's
+  path was built as `//name`. Harmless in practice (playback is
+  index-based) but wrong; root entries now join as `/name`. The parser's
+  `static` path-trimming scratch buffer is also now a local — it runs on
+  the UART RX task and the static made it non-reentrant.
+
 ### Fixed — `ListDir` swallowed mid-directory read errors
 
 - A mid-listing `f_readdir` error was indistinguishable from

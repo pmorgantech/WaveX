@@ -453,6 +453,21 @@ TEST_F(FileBrowserResponseTest, SubdirectoryPathsAreJoinedCorrectly) {
     EXPECT_STREQ(second->path, "/SOUNDS/snare.wav");
 }
 
+// At root the join must produce "/name", not "//name" (the pre-fix behavior:
+// the leading slash was stripped from the name, then "%s/%s" of "/" + name
+// doubled it back).
+TEST_F(FileBrowserResponseTest, RootPathsAreJoinedWithoutDoubleSlash) {
+    Respond(2, {FileEntryWire(0, 100, "/kick.wav"), FileEntryWire(1, 0, "DRUMS")});
+
+    ASSERT_EQ(wavex_file_browser_get_entry_count(browser_), 2u);
+    const wavex_file_entry_t* file = wavex_file_browser_get_entry(browser_, 0);
+    ASSERT_NE(file, nullptr);
+    EXPECT_STREQ(file->path, "/kick.wav");
+    const wavex_file_entry_t* dir = wavex_file_browser_get_entry(browser_, 1);
+    ASSERT_NE(dir, nullptr);
+    EXPECT_STREQ(dir->path, "/DRUMS");
+}
+
 // ".." must be hoisted to the top of the first page when not at root, so the
 // user can always leave a directory without scrolling.
 TEST_F(FileBrowserResponseTest, ParentDirEntryIsSortedFirstOutsideRoot) {

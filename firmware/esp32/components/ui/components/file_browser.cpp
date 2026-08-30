@@ -818,34 +818,32 @@ static bool parse_browse_response_with_pagination(const uint8_t* data,
 
         ESP_LOGD(TAG, "Entry %d: current_path='%s', entry->name='%s'", i, path_base, entry->name);
 
-        // Ensure we don't have double slashes - remove trailing slash from current_path if present
+        // Ensure we don't have double slashes - remove trailing slash from
+        // current_path if present. Local, not static: this parser runs on the
+        // UART RX task, and a static buffer here was non-reentrant.
+        char trimmed_base[96];
         const char* base_path = path_base;
         if (strlen(path_base) > 1 && path_base[strlen(path_base) - 1] == '/') {
-            // Create a temporary string without trailing slash
-            static char temp_path[96];
-            strncpy(temp_path, path_base, sizeof(temp_path) - 1);
-            temp_path[sizeof(temp_path) - 1] = '\0';
-            temp_path[strlen(temp_path) - 1] = '\0';  // Remove trailing slash
-            base_path = temp_path;
+            strncpy(trimmed_base, path_base, sizeof(trimmed_base) - 1);
+            trimmed_base[sizeof(trimmed_base) - 1] = '\0';
+            trimmed_base[strlen(trimmed_base) - 1] = '\0';  // Remove trailing slash
+            base_path = trimmed_base;
         }
 
-        // Special case: if base_path is "/" and entry->name starts with "/", avoid double slash
+        // At root, "%s/%s" of "/" + name would produce "//name" - the
+        // leading slash was already stripped from entry->name above, so
+        // join with a single slash instead.
         int path_len;
-        if (strcmp(base_path, "/") == 0 && entry->name[0] == '/') {
-            path_len = snprintf(entry->path, sizeof(entry->path), "%s", entry->name);
-            ESP_LOGD(TAG,
-                     "Path construction (root case): base='%s', name='%s' -> path='%s'",
-                     base_path,
-                     entry->name,
-                     entry->path);
+        if (strcmp(base_path, "/") == 0) {
+            path_len = snprintf(entry->path, sizeof(entry->path), "/%s", entry->name);
         } else {
             path_len = snprintf(entry->path, sizeof(entry->path), "%s/%s", base_path, entry->name);
-            ESP_LOGD(TAG,
-                     "Path construction (normal case): base='%s', name='%s' -> path='%s'",
-                     base_path,
-                     entry->name,
-                     entry->path);
         }
+        ESP_LOGD(TAG,
+                 "Path construction: base='%s', name='%s' -> path='%s'",
+                 base_path,
+                 entry->name,
+                 entry->path);
         if (path_len >= (int)sizeof(entry->path)) {
             // Path was truncated, ensure null termination
             entry->path[sizeof(entry->path) - 1] = '\0';
