@@ -60,22 +60,4 @@ bool isNavigationActive();
  */
 std::shared_ptr<UIPage> createMainMenu();
 
-/**
- * @brief Create sample menu for navigation system
- *
- * Creates the sample menu with Record, Edit, Load/Save options.
- *
- * @return Sample menu page
- */
-std::shared_ptr<UIPage> createSampleMenu();
-
-/**
- * @brief Create system menu for navigation system
- *
- * Creates the system menu with Diagnostics and Settings options.
- *
- * @return System menu page
- */
-std::shared_ptr<UIPage> createSystemMenu();
-
 }  // namespace wavex_ui

@@ -244,6 +244,16 @@ esp_err_t DisplayManager::initLvglDisplay() {
     lv_display_set_rotation(display_, LV_DISPLAY_ROTATION_90);
     LV_UNLOCK();
 
+    // Drive the backlight to a known level. bsp_display_new() only *inits* the
+    // brightness path (an I2C bus handle); it never sets a level, so without
+    // this the panel sits at whatever the backlight driver powers up at and
+    // Settings > Display would open showing a number that is not the truth.
+    // The BSP offers no getter, so a known write is the only way to make the
+    // UI's model and the hardware agree.
+    if (esp_err_t err = bsp_display_brightness_set(100); err != ESP_OK) {
+        ESP_LOGW(TAG, "Backlight set to 100%% failed (%d); brightness readout may be wrong", err);
+    }
+
     return ESP_OK;
 }
 

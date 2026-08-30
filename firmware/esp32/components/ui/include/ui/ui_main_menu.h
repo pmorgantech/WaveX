@@ -9,10 +9,8 @@
 namespace wavex_ui {
 
 /**
- * @brief Main menu page factory functions
- *
- * Creates the hierarchical menu structure as described in the document:
- * Main Menu -> Sample Browser, Edit Sample, Modulation, Settings, Diagnostics
+ * @brief Top-level navigation, per docs/ui-information-architecture.md §1:
+ *        Play, Sample, Voice, Settings, Diagnostics.
  */
 
 /**
@@ -21,22 +19,32 @@ namespace wavex_ui {
 std::shared_ptr<UIPage> createMainMenu();
 
 /**
- * @brief Create the modulation submenu
+ * @brief Create the Sample tab group (Manage / Browse / Edit / Record)
  */
 std::shared_ptr<UIPage> createSampleGroup();
 
 /**
- * @brief Create the settings submenu
+ * @brief Create the Settings tab group (Display / Storage / MIDI / System /
+ *        Calibrate).
+ *
+ * Tabs rather than a menu list: five short screens, none deep enough to be
+ * worth a push/pop each, and CV Calibration - previously a list entry two
+ * levels down - is one of them.
  */
-std::shared_ptr<UIPage> createSettingsMenu();
+std::shared_ptr<UIPage> createSettingsGroup();
 
 /**
- * @brief Create the display settings page
+ * @brief Create the display settings page (Settings ▸ Display)
  */
 std::shared_ptr<UIPage> createDisplaySettingsPage();
 
 /**
- * @brief Create the MIDI settings page
+ * @brief Create the storage settings page (Settings ▸ Storage)
+ */
+std::shared_ptr<UIPage> createStorageSettingsPage();
+
+/**
+ * @brief Create the MIDI settings page (Settings ▸ MIDI)
  */
 std::shared_ptr<UIPage> createMidiSettingsPage();
 

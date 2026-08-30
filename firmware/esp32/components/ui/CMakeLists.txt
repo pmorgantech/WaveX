@@ -26,6 +26,7 @@ set(COMPONENT_SRCS
     "src/ui_sample_memory_page.cpp"
     "pages/ui_play_page.cpp"
     "pages/ui_sample_manager_page.cpp"
+    "pages/ui_system_info_page.cpp"
     "pages/ui_voice_page.cpp"
     "pages/ui_sample_record_page.cpp"
     "pages/ui_cv_cal_page.cpp"
@@ -57,6 +58,8 @@ idf_component_register(
         esp_driver_spi
         esp32_p4_nano
         esp_common
+        esp_app_format
+        esp_timer
         shared
         main
 )

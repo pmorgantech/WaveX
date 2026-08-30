@@ -36,6 +36,26 @@ esp_err_t midi_task_start(void);
  */
 esp_err_t midi_task_stop(void);
 
+/**
+ * @brief Receive-channel filter applied to incoming notes (DIN and USB).
+ *
+ * @param channel 0 = Omni (accept every channel), 1..16 = that channel only.
+ *                Out-of-range values are ignored.
+ *
+ * Only Note On is filtered. Note Off is always forwarded, whatever the
+ * filter says: dropping a note-off because the filter moved between press
+ * and release would strand a voice sounding with nothing left to stop it.
+ *
+ * Callable from any task (the value is a relaxed atomic read on the MIDI
+ * path); today it is set from the UI task by Settings > MIDI.
+ */
+void midi_set_input_channel(int channel);
+
+/**
+ * @brief Current receive-channel filter. 0 = Omni, 1..16 = that channel.
+ */
+int midi_get_input_channel(void);
+
 #ifdef __cplusplus
 }
 

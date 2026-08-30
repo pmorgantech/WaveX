@@ -38,8 +38,20 @@ One rule, so the structure is predictable rather than per-page taste:
   of *the current sample*; Voice's five are all parameter groups of *one voice*;
   Diagnostics' six are all facets of *the running system*. Tabs make switching
   cheap and, more importantly, carry the subject across the switch.
-- **A menu list when the children are unrelated.** Settings' children are
-  independent configuration screens that share nothing but the word "settings".
+- **A menu list when the children are unrelated**, *and* deep enough that
+  arriving at one is worth a navigation step.
+
+**Settings is tabbed, against the second rule as originally written.** This
+document first put Settings in a menu list because its children share no
+subject, and that reasoning still holds — Display and MIDI have nothing to do
+with each other. What the rule missed is that sharing a subject is not the only
+thing that makes tabs the right shape. Settings' five children are *short*: two
+of them are four rows, one is read-only, and CV Calibration is the only one deep
+enough to feel like a place. A menu list makes the user pay a push and a pop to
+cross between five screens that each fit on one, and it buried CV Calibration
+two levels down from the main menu. So the rule is really two conditions, either
+of which is enough: **tab children that share a subject, or that are individually
+too small to be worth a navigation step.** Settings qualifies on the second.
 
 This is not only cosmetic. The Sample group's shared subject fixes a real gap:
 roadmap 1.5.1 item 7 records that the edit page "edits whatever the browser last
@@ -98,7 +110,7 @@ Latch and the encoder path must exist on both.
 | `Voice` | Voice ▸ tabs | Split its current single view into Sample/Env/Amp/Filter/Mod |
 | `Modulation` menu | Voice ▸ Mod | **Deleted.** Its three entries are logging stubs; nothing is lost |
 | `ui_sample_memory_page` | Diagnostics ▸ Daisy | It is a memory breakdown, which is what that tab is for |
-| `CV Calibration` | Settings ▸ Calibrate | Moves out of Settings' top level into the same list |
+| `CV Calibration` | Settings ▸ Calibrate | Was already a Settings *list* entry, two levels from the main menu; becomes a tab |
 | `Keyboard` | Play ▸ Pads | Stays top level, regrouped (§3) |
 | — | Play ▸ Keys | New: piano layout sharing the pads' behaviour |
 
@@ -129,23 +141,39 @@ than as zero: a zero uptime looks like a crash loop.
 
 ## 6. Staging
 
-One verified commit each.
+One verified commit each. Status is the state of the code, checked against it
+rather than carried forward from the previous edit of this document.
 
-1. **This document.**
+1. **This document.** — *Done.*
 2. **Shared tab-group scaffolding** — factor the diagnostics tabview styling into
    a reusable helper so the new groups cannot drift from it, with diagnostics
    itself converted to use it (proving it is really shared, not a copy).
+   *Done:* `ui_tab_group.{h,cpp}` (`tabGroupCreate`/`tabGroupAddTab`) and
+   `ui_palette.h`.
 3. **Play group** — extract the shared play-surface base from the existing
-   keyboard page, re-land it as Pads, add Keys, tab them together.
+   keyboard page, re-land it as Pads, add Keys, tab them together. *Done:*
+   `ui_play_page.cpp`.
 4. **Sample group** — tabs over the existing browse/edit/manage/record pages;
-   main menu entry replaces three.
-5. **Voice group** — tabs; absorb Modulation and delete that menu.
+   main menu entry replaces three. *Done:* `createSampleGroup()` over
+   `UITabHostPage`.
+5. **Voice group** — tabs; absorb Modulation and delete that menu. *Partly
+   done.* The Modulation menu is gone and its content is absorbed, but Voice is
+   **one page laid out as a signal chain**, not a tab group — see
+   `ui_voice_page.h`, which argues the chain order is the information the page
+   exists to convey and that tabs would hide it. Either finish it as tabs or
+   amend §1 to say Voice is deliberately not tabbed; do not leave the two
+   disagreeing.
 6. **Settings group** — fold CV Calibration in; fill the remaining stubs or mark
-   them plainly as unimplemented rather than logging and returning.
+   them plainly as unimplemented rather than logging and returning. *Done:*
+   `createSettingsGroup()` with Display / Storage / MIDI / System / Calibrate.
+   Brightness, MIDI receive channel and the System page are real; every other
+   control is drawn dimmed and states on the panel what it does not do. Nothing
+   persists — the frontend has no NVS code at all — and the pages say so.
 7. **Diagnostics split** — ESP32 (CPU0/CPU1 separate) and Daisy tabs; move the
-   sample-memory page's content into the Daisy tab.
+   sample-memory page's content into the Daisy tab. *Not started:* the page
+   still has one combined `System` tab.
 8. **Daisy heap + uptime** — the protocol addition, with its round-trip test and
-   doc row, so the two placeholder cards become live.
+   doc row, so the two placeholder cards become live. *Not started.*
 
 ## 7. Risks worth stating
 

@@ -11,6 +11,57 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Added — Settings tab group (UI IA stage 6)
+
+- `Settings` is now a tab group in the shared tab chrome
+  (`tabGroupCreate`/`UITabHostPage`), with tabs **Display, Storage, MIDI,
+  System, Calibrate**. **CV Calibration** moves into it as the `Calibrate`
+  tab, so it is one tap from the main menu instead of two.
+- **Display ▸ Brightness** is real: it drives the panel's I2C backlight
+  through `bsp_display_brightness_set()`. `display_manager` now sets 100% at
+  start-up, because the BSP inits the brightness path but never sets a level
+  and offers no getter — without that the row would open showing a number
+  that was not the truth.
+- **MIDI ▸ Receive channel** is real: `Omni` or 1–16, applied in
+  `midi_forward_event()` so it covers the DIN and USB readers alike. Note On
+  only — a Note Off is always forwarded, or moving the filter between press
+  and release would strand a sounding voice.
+- **System** replaces the `System Info` entry that logged and returned:
+  firmware version, build stamp, ESP-IDF version, silicon revision and core
+  count, last reset reason, and live uptime / internal heap / heap low-water
+  / PSRAM on a 1 Hz timer.
+
+### Changed — settings entries either work or say they do not
+
+- Every remaining Settings control used to log its new value and return. Each
+  is now either implemented (above) or drawn dimmed with a plain statement in
+  the value column of what it does not do. Marked, not implemented: Display
+  (Screen blanking, Rotation, Save on power-off), Storage (Format SD card,
+  Sample folder), MIDI (Velocity curve, Clock source, MIDI out, CC mapping,
+  Save on power-off), System (Save settings, Factory reset).
+- **No setting persists across a reboot**, and the pages say so. The frontend
+  has no NVS code at all today; adding a store is its own decision, not a
+  side effect of this page.
+- `Setting` rows carry a kind (`Value`, `Info`, `Unimplemented`). The encoder
+  skips anything it cannot change, and `Edit` is rendered disabled with a
+  reason on read-only tabs.
+- The settings page was laid out for a 480x320 screen with a fixed 460x250
+  list, which clipped its own contents past six rows — CV Calibration has
+  eleven. It now fills the content area, scrolls, and keeps the selection in
+  view.
+- Settings rows render from shared `lv_style_t` after
+  `lv_obj_remove_style_all()`, per `docs/backlog.md`: page entry is what this
+  UI pays for. A selection change restyles two rows instead of rebuilding the
+  list.
+
+### Removed — Display ▸ Contrast, and two unreachable menu builders
+
+- `Contrast` is deleted rather than marked: the panel is MIPI-DSI driven by
+  an HX8394 with no contrast control, so the row could never have done
+  anything.
+- `createSampleMenu()` and `createSystemMenu()` (`ui_navigation_integration`)
+  were unreachable — nothing had called them since the tab groups landed.
+
 ### Removed — LVGL PPA draw unit (measured, then reverted)
 
 - `CONFIG_LV_USE_PPA` is off again, and `CONFIG_LV_DRAW_BUF_ALIGN` back to 4
