@@ -43,6 +43,16 @@ jobs:
       - name: Run Daisy unit tests
         run: make test-daisy
 
+      # The same test bodies again under AddressSanitizer + UBSan. This is not
+      # redundant with the three steps above: an out-of-bounds read produces a
+      # plausible value in an ordinary build and every assertion still passes,
+      # so the suite executes such defects without observing them. Verified
+      # against the August 2026 audit - the release-tail overread in
+      # VoiceManager::Render was already covered by a passing test, and only
+      # ASan reports it. See docs/testing-remediation.md.
+      - name: Run all host tests under ASan + UBSan
+        run: make test-asan
+
       - name: Build ESP32 firmware
         run: make esp32
 

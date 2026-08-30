@@ -1,5 +1,5 @@
 # WaveX Dual-MCU Sampler/Synth Build System
-.PHONY: help all esp32 daisy daisy-stageb clean esp32-clean daisy-clean esp32-flash esp32-monitor esp32-flash-monitor esp32-menuconfig test test-all test-daisy test-esp32 test-shared test-clean ai-graph daisy-flash daisy-flash-auto flash-all start-logs stop-logs logs-start logs-stop
+.PHONY: help all esp32 daisy daisy-stageb clean esp32-clean daisy-clean esp32-flash esp32-monitor esp32-flash-monitor esp32-menuconfig test test-all test-asan test-daisy test-esp32 test-shared test-clean ai-graph daisy-flash daisy-flash-auto flash-all start-logs stop-logs logs-start logs-stop
 
 # Test targets
 test: test-all
@@ -16,6 +16,32 @@ test-all:
 	@echo ""
 	@echo "========================================================================"
 	@echo "                         ALL TESTS COMPLETE"
+	@echo "========================================================================"
+
+# Runs the same test bodies as `make test` with AddressSanitizer +
+# UndefinedBehaviorSanitizer. This is a bug detector, not extra tests: an
+# out-of-bounds read produces a plausible number under a normal build and the
+# assertions still pass, so the existing suite executes those defects without
+# observing them. Uses separate build-asan/ dirs so it never clobbers the
+# ordinary test build's cache.
+test-asan:
+	@echo "========================================================================"
+	@echo "            Running All WaveX Tests under ASan + UBSan"
+	@echo "========================================================================"
+	@rc=0; for suite in shared daisy esp32; do \
+		echo ""; echo "--- $$suite (asan) ---"; \
+		mkdir -p firmware/$$suite/tests/build-asan && \
+		cd firmware/$$suite/tests/build-asan && \
+		cmake -DWAVEX_TEST_SANITIZE=address .. >/dev/null && \
+		$(MAKE) -j$$(nproc) >/dev/null || { rc=1; cd - >/dev/null; continue; }; \
+		ctest --output-on-failure || rc=1; \
+		cd - >/dev/null; \
+	done; \
+	if [ $$rc -ne 0 ]; then echo "SANITIZER FAILURES - see above"; fi; \
+	exit $$rc
+	@echo ""
+	@echo "========================================================================"
+	@echo "                    ALL SANITIZER TESTS COMPLETE"
 	@echo "========================================================================"
 
 test-daisy:
@@ -62,6 +88,9 @@ test-clean:
 	@cd firmware/daisy && $(MAKE) test-clean || true
 	@rm -rf firmware/esp32/tests/build
 	@rm -rf firmware/shared/tests/build
+	@rm -rf firmware/daisy/tests/build-asan
+	@rm -rf firmware/esp32/tests/build-asan
+	@rm -rf firmware/shared/tests/build-asan
 	@echo "Test clean complete!"
 
 # Default target

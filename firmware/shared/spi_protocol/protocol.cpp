@@ -80,6 +80,13 @@ uint16_t ProtocolHandler::CalculateSpiCrc(const uint8_t* data, size_t length) {
 }
 
 uint16_t ProtocolHandler::CalculatePacketCrc(const uint8_t* packet_data, size_t packet_size) {
+    // Same size_t underflow ValidateWaveXPacket guards below: a packet_size
+    // under 2 makes this subtraction wrap to ~SIZE_MAX and the CRC pass walk
+    // off the buffer. Guarded here too rather than only at the caller,
+    // because both of these are public entry points on ProtocolHandler.
+    if (!packet_data || packet_size < sizeof(uint16_t)) {
+        return 0;
+    }
     // Calculate CRC over entire packet except last 2 bytes (CRC field)
     return CalculateWaveXCrc(packet_data, packet_size - sizeof(uint16_t));
 }
@@ -148,8 +155,16 @@ size_t ProtocolHandler::CreateWaveXPacket(uint8_t* buffer,
     buffer[2] = sequence_number & 0xFF;                 // Sequence number (low byte)
     buffer[3] = (sequence_number >> 8) & 0xFF;          // Sequence number (high byte)
 
-    // Copy payload
-    memcpy(buffer + 4, payload, payload_size);
+    // Copy payload. The guard is not redundant with payload_size: a
+    // zero-length payload is a legitimate frame (heartbeats, ACKs) and
+    // callers pass payload == nullptr for it, but memcpy declares both
+    // pointers non-null, so memcpy(dst, nullptr, 0) is undefined even though
+    // it copies nothing. Caught by UBSan on the first `make test-asan` run.
+    // It matters beyond pedantry: the compiler may infer from the nonnull
+    // attribute that `payload` cannot be null and delete later null checks.
+    if (payload && payload_size > 0) {
+        memcpy(buffer + 4, payload, payload_size);
+    }
 
     // Zero-pad remaining space
     memset(buffer + 4 + payload_size, 0, total_size - 4 - payload_size - 2);
@@ -208,6 +223,12 @@ bool ProtocolHandler::ParseWaveXPacket(const uint8_t* buffer,
 
 // Optimized CRC validation (legacy - kept for compatibility)
 bool ProtocolHandler::ValidatePacketCrc(const uint8_t* packet_data, size_t packet_size) {
+    // A frame is a 4-byte header plus the 2-byte CRC; anything shorter cannot
+    // carry a CRC to check, and indexing [packet_size - 2] would read out of
+    // bounds. Matches the minimum ValidateWaveXPacket enforces.
+    if (!packet_data || packet_size < 4 + sizeof(uint16_t)) {
+        return false;
+    }
     uint16_t calculated_crc = CalculatePacketCrc(packet_data, packet_size);
     uint16_t received_crc = packet_data[packet_size - 2] | (packet_data[packet_size - 1] << 8);
     return calculated_crc == received_crc;

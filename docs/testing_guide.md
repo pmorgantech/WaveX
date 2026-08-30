@@ -42,6 +42,22 @@ firmware/
 make test
 ```
 
+### Run All Tests Under Sanitizers
+```bash
+make test-asan
+```
+
+Same test bodies, built with AddressSanitizer + UndefinedBehaviorSanitizer
+into separate `build-asan/` directories. **This finds a class of defect the
+ordinary run cannot**: an out-of-bounds read returns a plausible value, so
+value assertions still pass and the suite runs over the bug without noticing.
+Two of the August 2026 audit findings were exactly that shape. Run it before
+sending anything that touches buffer indexing, payload parsing, or DSP read
+positions. It also runs in CI.
+
+Individual suites can be built the same way with
+`cmake -DWAVEX_TEST_SANITIZE=address ..` (or `=thread`).
+
 ### Run Tests for Specific Platform
 ```bash
 make test-daisy      # Daisy Seed tests
@@ -169,6 +185,24 @@ Daisy hardware mocks live in `firmware/daisy/tests/mocks/`: `daisy_mocks.h`,
 that genuinely need real hardware timing (e.g. `daisy_uart_link_test.cpp`,
 `metrics_test.cpp`), not as the general pattern for hardware-dependent code —
 most of it is mocked and runs on the host.
+
+## Writing a regression test for a fix
+
+A fix's test must **fail against the pre-fix code**. That is the only thing
+separating a regression test from a test that happens to pass, and it is cheap
+to check:
+
+```bash
+git show <fix-sha>^:path/to/file.hpp > path/to/file.hpp   # restore pre-fix
+# build + run the new test -> confirm it FAILS
+git checkout path/to/file.hpp                             # restore
+```
+
+If the defect cannot be caught this way (HAL-bound code, an excluded
+translation unit, or a property like "no `lv_*` call happens off the LVGL
+task"), say so in the commit message rather than writing a test that passes
+either way. `docs/testing-remediation.md` records which of the August 2026
+defects fall into that category and why.
 
 ## Test Coverage Goals
 
@@ -316,3 +350,15 @@ Tests should run automatically in CI/CD:
 `docs/archive/testing_strategy.md` predates this test suite and describes
 results for tests that were never run — do not use it as a current
 reference (see `docs/README.md`'s archive notes).
+
+### Known gaps
+
+Two Daisy test files are **excluded from the build** by
+`firmware/daisy/tests/CMakeLists.txt`, and their contents are `DISABLED_`
+besides: `audio_engine_test.cpp` (3 tests) and `daisy_uart_link_test.cpp`
+(5). Both need STM32 HAL headers. Treat them as placeholders, not coverage —
+`audio_engine.cpp` is 3476 lines with no host tests at all, which is why
+several of the August 2026 audit defects in it have no regression test.
+
+The remediation plan for this and the other gaps, with the defect classes it
+is organised around, is [`testing-remediation.md`](testing-remediation.md).

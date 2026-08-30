@@ -13,6 +13,21 @@ find_package(Threads REQUIRED)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Address/UB sanitizers, off by default so the default `make test` stays fast.
+# Enable with -DWAVEX_TEST_SANITIZE=address (or =thread); `make test-asan`
+# wires this up. See firmware/daisy/tests/CMakeLists.txt for the rationale.
+set(WAVEX_TEST_SANITIZE "" CACHE STRING "Sanitizer for host tests: address, thread, or empty")
+
+if(WAVEX_TEST_SANITIZE)
+    add_compile_options(-fsanitize=${WAVEX_TEST_SANITIZE} -fno-omit-frame-pointer
+                        -fno-sanitize-recover=all -g -O1)
+    add_link_options(-fsanitize=${WAVEX_TEST_SANITIZE})
+    if(WAVEX_TEST_SANITIZE STREQUAL "address")
+        add_compile_options(-fsanitize=undefined)
+        add_link_options(-fsanitize=undefined)
+    endif()
+endif()
+
 # GoogleTest is vendored as a submodule (firmware/shared/tests/_deps/googletest-src)
 # and shared across all three test suites, so `make test` works offline and
 # doesn't refetch on every fresh build dir.

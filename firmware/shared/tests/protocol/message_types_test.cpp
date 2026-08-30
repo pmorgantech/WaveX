@@ -1498,3 +1498,59 @@ TEST_F(MessageTypeTest, ValidateRejectsBuffersSmallerThanMinimumFrame) {
         EXPECT_FALSE(ProtocolHandler::ValidatePacket(tiny, size)) << "size " << size;
     }
 }
+
+// The August 2026 hardening added a minimum-size guard to ValidateWaveXPacket
+// and left the two "legacy" CRC entry points 120 lines away with the same
+// size_t underflow (`packet_size - 2` wrapping to ~SIZE_MAX). A test written
+// against one function could not catch that; this one sweeps EVERY public
+// entry point that takes a raw (buffer, size) pair, so a new one added
+// without a guard - or an old one that drifts - fails here.
+//
+// The buffer is a heap allocation sized EXACTLY to the length under test, not
+// a fixed stack array: an overread off a stack array lands in adjacent stack
+// and reads a plausible byte, whereas one byte past a heap allocation is an
+// ASan redzone. Under `make test-asan` this turns the whole sweep into an
+// out-of-bounds detector rather than a return-value check.
+TEST_F(MessageTypeTest, EveryRawBufferEntryPointRejectsUndersizedFrames) {
+    // Smallest legal frame is a 4-byte header plus a 2-byte CRC.
+    constexpr size_t kMinFrame = 6;
+
+    for (size_t size = 0; size < kMinFrame; ++size) {
+        std::vector<uint8_t> exact(size, 0xA5);
+        const uint8_t* data = exact.empty() ? nullptr : exact.data();
+
+        // A null buffer must be rejected at every size, including plausible ones.
+        EXPECT_FALSE(ProtocolHandler::ValidatePacket(nullptr, size)) << "size " << size;
+        EXPECT_FALSE(ProtocolHandler::ValidatePacketCrc(nullptr, size)) << "size " << size;
+        EXPECT_EQ(ProtocolHandler::CalculatePacketCrc(nullptr, size), 0) << "size " << size;
+
+        if (!data) {
+            continue;
+        }
+
+        EXPECT_FALSE(ProtocolHandler::ValidatePacket(data, size)) << "size " << size;
+        EXPECT_FALSE(ProtocolHandler::ValidatePacketCrc(data, size)) << "size " << size;
+
+        // CalculatePacketCrc is the lower-level primitive - "CRC every byte
+        // but the trailing 2" - so a 2..5 byte buffer is a legal, if useless,
+        // call that reads entirely in bounds. Only a size under 2 underflows.
+        // Below that it must return the sentinel; at or above it the contract
+        // is simply "does not read outside the buffer", and the sanitizer is
+        // the assertion. Calling it here is what puts it under ASan's watch.
+        const uint16_t crc = ProtocolHandler::CalculatePacketCrc(data, size);
+        if (size < sizeof(uint16_t)) {
+            EXPECT_EQ(crc, 0) << "size " << size;
+        }
+    }
+}
+
+// A null buffer paired with a large, entirely plausible size is the other half
+// of the guard - the size check alone would let it through to a CRC pass over
+// a null pointer.
+TEST_F(MessageTypeTest, RawBufferEntryPointsRejectNullWithPlausibleSize) {
+    for (size_t size: {size_t{6}, size_t{64}, size_t{1024}}) {
+        EXPECT_FALSE(ProtocolHandler::ValidatePacket(nullptr, size)) << "size " << size;
+        EXPECT_FALSE(ProtocolHandler::ValidatePacketCrc(nullptr, size)) << "size " << size;
+        EXPECT_EQ(ProtocolHandler::CalculatePacketCrc(nullptr, size), 0) << "size " << size;
+    }
+}

@@ -11,6 +11,32 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Added — host tests can run under AddressSanitizer/UBSan
+
+- `make test-asan` builds and runs all three host test suites with
+  `-fsanitize=address,undefined` into separate `build-asan/` directories, and
+  CI runs it as its own step. Individual suites take
+  `-DWAVEX_TEST_SANITIZE=address` (or `=thread`).
+  `-fno-sanitize-recover=all` is set so a UBSan diagnostic fails the test
+  rather than printing and continuing. Rationale: an out-of-bounds read
+  returns a plausible value, so the existing suite executed two of the August
+  2026 audit defects on every run without observing them — the release-tail
+  overread in `VoiceManager::Render` is reported by ASan under the *existing*
+  `voice_manager_test`, with no new test body. See
+  `docs/testing-remediation.md`.
+
+### Fixed — protocol packet helpers mishandled undersized and empty inputs
+
+- `ProtocolHandler::CalculatePacketCrc` and `ValidatePacketCrc` had the same
+  `size_t` underflow that was fixed in `ValidateWaveXPacket` in August 2026
+  but not in these two siblings: a `packet_size` below the minimum wrapped
+  `packet_size - 2` to ~`SIZE_MAX`, running the CRC pass off the end of the
+  buffer. Both now reject null buffers and undersized frames.
+- `CreateWaveXPacket` called `memcpy(dst, nullptr, 0)` for the legitimate
+  empty-payload case (heartbeats, ACKs). `memcpy` declares both pointers
+  non-null, so this was undefined behaviour that a compiler may use to elide
+  later null checks. Found by UBSan on the first `make test-asan` run.
+
 ### Changed — pre-commit hooks are devcontainer-only, host commits blocked
 
 - `pre-commit` now lives in the devcontainer image (with a
