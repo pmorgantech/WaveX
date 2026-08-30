@@ -70,11 +70,17 @@ typedef struct {
     void* user_data;
 
     // Pagination state
-    uint32_t total_files;         // Total number of files in directory
-    uint32_t current_page;        // Current page being displayed
-    uint32_t entries_per_page;    // Entries per page (typically 4)
-    bool pagination_in_progress;  // True if we're currently loading more pages
-    uint32_t loaded_entries;      // Number of entries loaded so far
+    uint32_t total_files;       // Total number of files in directory
+    uint32_t current_page;      // Current page being displayed
+    uint32_t entries_per_page;  // Entries per page (typically 4)
+    // True if we're currently loading more pages. Written from the UART RX
+    // task (browse_resp_callback and friends), read from the UI task
+    // (fb_show_loading_row / update_file_browser_ui) - always through the
+    // browser_{set,clear,}_pagination_in_progress() release/acquire helpers
+    // in file_browser.cpp, same discipline as ui_update_pending below. Never
+    // write or read this field directly.
+    bool pagination_in_progress;
+    uint32_t loaded_entries;  // Number of entries loaded so far
 
     // UI update flags (for thread-safe deferred updates)
     bool ui_update_pending;         // True if the list must be rebuilt

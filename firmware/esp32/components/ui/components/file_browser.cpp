@@ -201,6 +201,21 @@ static inline bool browser_selection_update_pending(const wavex_file_browser_t* 
     return __atomic_load_n(&browser->selection_update_pending, __ATOMIC_ACQUIRE);
 }
 
+// Same cross-task hazard as ui_update_pending above, and previously missed:
+// pagination_in_progress is written from the UART RX task
+// (browse_resp_callback and friends) and read from the UI task
+// (fb_show_loading_row / update_file_browser_ui) as a plain bool, with no
+// ordering guarantee between the two cores.
+static inline void browser_set_pagination_in_progress(wavex_file_browser_t* browser) {
+    __atomic_store_n(&browser->pagination_in_progress, true, __ATOMIC_RELEASE);
+}
+static inline void browser_clear_pagination_in_progress(wavex_file_browser_t* browser) {
+    __atomic_store_n(&browser->pagination_in_progress, false, __ATOMIC_RELAXED);
+}
+static inline bool browser_pagination_in_progress(const wavex_file_browser_t* browser) {
+    return __atomic_load_n(&browser->pagination_in_progress, __ATOMIC_ACQUIRE);
+}
+
 wavex_file_browser_t* wavex_file_browser_create(lv_obj_t* parent,
                                                 const wavex_file_browser_config_t* config) {
     if (!parent || !config) {
@@ -228,7 +243,7 @@ wavex_file_browser_t* wavex_file_browser_create(lv_obj_t* parent,
     browser->current_page = 0;
     browser->entries_per_page =
         20;  // Daisy now sends 20 entries per page with flexible packet system
-    browser->pagination_in_progress = false;
+    browser_clear_pagination_in_progress(browser);
     browser->loaded_entries = 0;
 
     // Copy root path
@@ -445,7 +460,7 @@ void wavex_file_browser_update_loading_row(wavex_file_browser_t* browser) {
     if (!browser) {
         return;
     }
-    fb_show_loading_row(browser, browser->pagination_in_progress);
+    fb_show_loading_row(browser, browser_pagination_in_progress(browser));
 }
 
 bool wavex_file_browser_is_storage_mounted(wavex_file_browser_t* browser) {
@@ -693,7 +708,7 @@ static bool refresh_file_list(wavex_file_browser_t* browser) {
     // Reset pagination state
     browser->total_files = 0;
     browser->current_page = 0;
-    browser->pagination_in_progress = true;
+    browser_set_pagination_in_progress(browser);
     browser->loaded_entries = 0;
     browser->entry_count = 0;
 
@@ -704,7 +719,7 @@ static bool refresh_file_list(wavex_file_browser_t* browser) {
     // Send first browse request (page 0)
     if (!send_browse_request(browser->config.comm_interface, browser->current_path, 0)) {
         ESP_LOGE(TAG, "Failed to send browse request");
-        browser->pagination_in_progress = false;
+        browser_clear_pagination_in_progress(browser);
         // Mark error state for deferred UI update
         browser->entry_count = 0;
         browser_set_ui_update(browser);
@@ -893,7 +908,7 @@ static void browse_resp_callback(const uint8_t* data, size_t length, void* user_
     wavex_file_entry_t* temp_entries = (wavex_file_entry_t*)malloc(20 * sizeof(wavex_file_entry_t));
     if (!temp_entries) {
         ESP_LOGE(TAG, "Failed to allocate memory for browse response parsing");
-        browser->pagination_in_progress = false;
+        browser_clear_pagination_in_progress(browser);
         return;
     }
 
@@ -912,7 +927,7 @@ static void browse_resp_callback(const uint8_t* data, size_t length, void* user_
     if (!parse_success) {
         free(temp_entries);
         ESP_LOGE(TAG, "Failed to parse browse response");
-        browser->pagination_in_progress = false;
+        browser_clear_pagination_in_progress(browser);
         // Mark error state for deferred UI update (this callback runs from UART task, not LVGL
         // context)
         browser->entry_count = 0;
@@ -936,7 +951,7 @@ static void browse_resp_callback(const uint8_t* data, size_t length, void* user_
         browser->current_page = 0;
         browser->first_visible_index = 0;
         browser->selected_index = 0;
-        browser->pagination_in_progress = false;
+        browser_clear_pagination_in_progress(browser);
         browser_set_ui_update(browser);
         wavex_ui_mark_content_changed();
         return;
@@ -1043,7 +1058,7 @@ static void browse_resp_callback(const uint8_t* data, size_t length, void* user_
                      "showing the first %lu",
                      UINT8_MAX,
                      (unsigned long)browser->loaded_entries);
-            browser->pagination_in_progress = false;
+            browser_clear_pagination_in_progress(browser);
             browser->entry_count = browser->loaded_entries;
             browser_set_ui_update(browser);
             wavex_ui_mark_content_changed();
@@ -1058,13 +1073,13 @@ static void browse_resp_callback(const uint8_t* data, size_t length, void* user_
                  next_start_index);
         if (!send_browse_request(browser->config.comm_interface, browser->current_path, next_start_index)) {
             ESP_LOGE(TAG, "Failed to request next page");
-            browser->pagination_in_progress = false;
+            browser_clear_pagination_in_progress(browser);
         }
         // Continue loading additional pages in background
         return;
     } else {
         // All pages loaded (or reached max entries)
-        browser->pagination_in_progress = false;
+        browser_clear_pagination_in_progress(browser);
         browser->entry_count = browser->loaded_entries;
 
         // Ensure selected_index is within bounds
@@ -1204,7 +1219,7 @@ static void update_file_browser_ui(wavex_file_browser_t* browser) {
         update_visual_selection(browser);
 
         ESP_LOGD(TAG, "Updated file browser UI with %d entries", browser->entry_count);
-    } else if (browser->entry_count == 0 && browser->pagination_in_progress == false) {
+    } else if (browser->entry_count == 0 && !browser_pagination_in_progress(browser)) {
         // Show "No files found..." message (pagination complete but no entries)
         lv_obj_t* btn = lv_list_add_btn(browser->list, NULL, "No files found...");
         lv_obj_set_user_data(btn, (void*)(uintptr_t)FB_ROW_NOT_AN_ENTRY);
@@ -1270,7 +1285,7 @@ static void storage_status_callback(bool mounted, void* user_data) {
     if (!mounted) {
         // The empty browse response that accompanies a loss already clears the
         // list; nothing to do but stop any pagination still in flight.
-        browser->pagination_in_progress = false;
+        browser_clear_pagination_in_progress(browser);
         ESP_LOGI(TAG, "Storage lost - browser idle");
         return;
     }

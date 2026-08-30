@@ -11,6 +11,18 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Fixed — file browser pagination flag raced across tasks
+
+- `wavex_file_browser_t::pagination_in_progress` is written from the UART RX
+  task (`browse_resp_callback` and its siblings) and read from the UI task
+  (the loading-row spinner and the empty-directory check) as a plain `bool`,
+  with no ordering guarantee between the two cores — unlike every other
+  cross-task field on the same struct, which already goes through a
+  release/acquire pair (`ui_update_pending`, `selection_update_pending`).
+  This one was missed. Worst case: the spinner lingers after pagination
+  finished or never shows at all. Now goes through the same
+  `browser_{set,clear,}_pagination_in_progress()` helper pattern.
+
 ### Fixed — inter-MCU link layer used `volatile` for cross-task state
 
 - `inter_mcu.cpp`'s `s_suspended`/`s_initialized` gate every public entry
