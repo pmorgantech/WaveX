@@ -11,6 +11,18 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Fixed — `ListDir` swallowed mid-directory read errors
+
+- A mid-listing `f_readdir` error was indistinguishable from
+  end-of-directory: `ListDir` returned `true` with a silently truncated
+  listing presented as complete. It now fails the listing (`false`, zeroed
+  outputs). `entries_written` is also zeroed on every failure path (it was
+  previously left untouched), and a filesystem-returned `".."` is now
+  always dropped — non-root listings insert their own, and root has no
+  parent (unreachable on real FAT, but the contract no longer depends on
+  that). The 256-entry listing cap is unchanged: serving more requires the
+  paging redesign recorded in `docs/backlog.md`.
+
 ### Fixed — `SampleMemMgr::ptr()` "succeeded" on released handles
 
 - `ptr()` had no guard for the `len == 0` released-handle sentinel, so a

@@ -202,20 +202,17 @@ TEST_F(FsBrowseTest, SubdirectoryPaginationWithParent) {
     EXPECT_STREQ("file00.wav", out_entries[1].name);
 }
 
-// Test: ListDir filters out "." entries - verified by NAME, not count alone
-// (a count of 2 can't distinguish "filtered '.'" from "filtered the file").
-//
-// NOTE (pins current production behavior, fs_browse.cpp): a filesystem-
-// returned ".." at the ROOT is NOT filtered - is_root suppresses only the
-// manual ".." insertion, and the parent-dir branch then admits the FS one.
-// Real FatFS does not return ".." for the root of a FAT volume, so this is
-// unreachable on hardware, but it is the function's actual contract today;
-// if root-level ".." filtering is ever added, this test must change with it.
+// Test: ListDir filters dot entries by NAME, not count alone (a count can't
+// distinguish "filtered '.'" from "filtered the file"). A filesystem-returned
+// ".." is always dropped: non-root listings get one inserted manually, and at
+// root there is no parent to navigate to (real FatFS never returns dot
+// entries at the root of a FAT volume, but the contract shouldn't depend on
+// that).
 TEST_F(FsBrowseTest, FiltersDotEntriesByName) {
     CreateTestDirectory("/",
                         {
                             MockFileEntry(".", true),   // filtered
-                            MockFileEntry("..", true),  // admitted (see note above)
+                            MockFileEntry("..", true),  // filtered: no parent at root
                             MockFileEntry("test.wav", false, 1024),
                         });
 
@@ -226,12 +223,10 @@ TEST_F(FsBrowseTest, FiltersDotEntriesByName) {
     bool result = ListDir("/", entries, 10, total_count, 0, entries_written);
 
     EXPECT_TRUE(result);
-    ASSERT_EQ(2, entries_written);
-    EXPECT_EQ(2, total_count);
-    EXPECT_STREQ("..", entries[0].name);
-    EXPECT_EQ(1, entries[0].is_dir);
-    EXPECT_STREQ("test.wav", entries[1].name);
-    EXPECT_EQ(0, entries[1].is_dir);
+    ASSERT_EQ(1, entries_written);
+    EXPECT_EQ(1, total_count);
+    EXPECT_STREQ("test.wav", entries[0].name);
+    EXPECT_EQ(0, entries[0].is_dir);
 }
 
 // Test: ListDir with invalid path
@@ -259,19 +254,21 @@ TEST_F(FsBrowseTest, NullParameters) {
     size_t entries_written = 999;
     EXPECT_FALSE(ListDir(nullptr, entries, 10, total_count, 0, entries_written));
     EXPECT_EQ(0u, total_count) << "failure must zero total_count";
-    // Pins current behavior: entries_written is NOT written on the guard
-    // path - a caller may not read it unless ListDir returned true.
-    EXPECT_EQ(999u, entries_written);
+    EXPECT_EQ(0u, entries_written) << "failure must zero entries_written";
 
     // Null output array.
     total_count = 999;
+    entries_written = 999;
     EXPECT_FALSE(ListDir("/", nullptr, 10, total_count, 0, entries_written));
     EXPECT_EQ(0u, total_count);
+    EXPECT_EQ(0u, entries_written);
 
     // Zero max_entries.
     total_count = 999;
+    entries_written = 999;
     EXPECT_FALSE(ListDir("/", entries, 0, total_count, 0, entries_written));
     EXPECT_EQ(0u, total_count);
+    EXPECT_EQ(0u, entries_written);
 }
 
 // Test: an injected f_opendir hard failure (dead card, not merely a missing
@@ -285,17 +282,13 @@ TEST_F(FsBrowseTest, OpendirDiskErrorReturnsFalse) {
     size_t entries_written = 999;
     EXPECT_FALSE(ListDir("/", entries, 10, total_count, 0, entries_written));
     EXPECT_EQ(0u, total_count);
+    EXPECT_EQ(0u, entries_written);
 }
 
-// Test: an f_readdir error PART-WAY through the directory.
-//
-// NOTE (pins current production behavior, fs_browse.cpp read loop): a
-// mid-listing FRESULT error is indistinguishable from end-of-directory -
-// the loop breaks on `fr != FR_OK` and ListDir still returns TRUE with a
-// silently truncated listing. The browser would show a partial directory
-// with no error. If error propagation is ever added, flip the EXPECT_TRUE
-// below deliberately.
-TEST_F(FsBrowseTest, MidListingReaddirErrorTruncatesSilently) {
+// Test: an f_readdir error PART-WAY through the directory is a FAILURE, not
+// end-of-directory - a partial listing presented as complete would show the
+// browser a silently truncated directory.
+TEST_F(FsBrowseTest, MidListingReaddirErrorFailsTheListing) {
     CreateTestDirectory("/",
                         {
                             MockFileEntry("a.wav", false, 1),
@@ -306,15 +299,13 @@ TEST_F(FsBrowseTest, MidListingReaddirErrorTruncatesSilently) {
     MockFatFS::Instance().FailReaddirAfter(2, FR_DISK_ERR);
 
     FileEntry entries[10];
-    size_t total_count = 0;
-    size_t entries_written = 0;
+    size_t total_count = 999;
+    size_t entries_written = 999;
     bool result = ListDir("/", entries, 10, total_count, 0, entries_written);
 
-    EXPECT_TRUE(result);  // current contract: truncation, not failure
-    ASSERT_EQ(2u, entries_written);
-    EXPECT_EQ(2u, total_count);
-    EXPECT_STREQ("a.wav", entries[0].name);
-    EXPECT_STREQ("b.wav", entries[1].name);
+    EXPECT_FALSE(result);
+    EXPECT_EQ(0u, total_count);
+    EXPECT_EQ(0u, entries_written);
 }
 
 // Test: the internal scratch array caps a listing at 256 entries (documented

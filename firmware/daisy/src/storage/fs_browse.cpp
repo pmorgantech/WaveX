@@ -36,6 +36,7 @@ bool ListDir(const char* path,
              size_t& entries_written) {
     if (!path || !out || max_entries == 0) {
         total_count = 0;
+        entries_written = 0;
         return false;
     }
 
@@ -50,6 +51,7 @@ bool ListDir(const char* path,
     FRESULT fr = f_opendir(&dir, path);
     if (fr != FR_OK) {
         total_count = 0;
+        entries_written = 0;
         return false;
     }
 
@@ -76,11 +78,18 @@ bool ListDir(const char* path,
         e.name[sizeof(e.name) - 1] = '\0';
     }
 
-    bool found_dotdot = !is_root;  // Track if we already added ".." manually
+    bool read_error = false;
 
     for (;;) {
         fr = f_readdir(&dir, &fno);
-        if (fr != FR_OK || !fno.fname[0])
+        if (fr != FR_OK) {
+            // A mid-directory read error is NOT end-of-directory: returning
+            // true here would hand the caller a silently truncated listing
+            // presented as complete.
+            read_error = true;
+            break;
+        }
+        if (!fno.fname[0])
             break;
 #if FF_USE_LFN
         const char* name = (fno.lfname && fno.lfname[0]) ? fno.lfname : fno.fname;
@@ -90,18 +99,20 @@ bool ListDir(const char* path,
         if (is_dot_entry(name))
             continue;
 
-        // Skip ".." from filesystem if we already added it manually
-        if (found_dotdot && strcmp(name, "..") == 0) {
+        // Always skip a filesystem-returned "..": non-root listings get one
+        // inserted manually above, and at root there is no parent to
+        // navigate to (real FAT never returns dot entries at root, but the
+        // contract shouldn't depend on that).
+        if (strcmp(name, "..") == 0) {
             continue;
         }
 
-        // Include directories, WAV files, and ".." entries
+        // Include directories and WAV files
         bool is_dir = (fno.fattrib & AM_DIR) ? true : false;
-        bool is_parent_dir = (strcmp(name, "..") == 0);
-        if (is_dir || has_wav_extension(name) || is_parent_dir) {
+        if (is_dir || has_wav_extension(name)) {
             if (all_count < 256) {  // Prevent buffer overflow
                 FileEntry& e = all_entries[all_count++];
-                e.is_dir = (is_dir || is_parent_dir) ? 1 : 0;
+                e.is_dir = is_dir ? 1 : 0;
                 e.size_bytes = e.is_dir ? 0u : (uint32_t)fno.fsize;
                 std::strncpy(e.name, name, sizeof(e.name) - 1);
                 e.name[sizeof(e.name) - 1] = '\0';
@@ -116,6 +127,12 @@ bool ListDir(const char* path,
             break;
     }
     f_closedir(&dir);
+
+    if (read_error) {
+        total_count = 0;
+        entries_written = 0;
+        return false;
+    }
 
     // Set total count
     total_count = all_count;
