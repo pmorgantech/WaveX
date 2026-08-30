@@ -138,6 +138,9 @@ int main(void) {
     // Initialize Daisy Seed hardware
     hw.Configure();
     hw.Init();
+    // Before anything reads DTCM-placed state: the section is (NOLOAD) and
+    // libDaisy's startup does not cover it, so its initializers never landed.
+    WaveX::MemorySections::InitDtcmBss();
     WaveX::MemorySections::InitItcm();
 
     // Initialize USB CDC for debugging

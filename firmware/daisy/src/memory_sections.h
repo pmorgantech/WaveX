@@ -8,6 +8,7 @@ namespace MemorySections {
 
 // Copies explicitly annotated code from its QSPI load image into ITCM.
 // Call once after System::Init and before enabling any IRQ that uses it.
+void InitDtcmBss();
 void InitItcm();
 
 }  // namespace MemorySections

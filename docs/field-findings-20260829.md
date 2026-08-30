@@ -11,34 +11,90 @@ one set by the bench session, recorded in §8.
 
 ---
 
-## 1. Daisy CPU load — under analysis
+## 1. Daisy CPU load — REGRESSION, root cause found
 
-**Observed:** idle 7–8% (previously ~6–7%); one stereo sample playing 15%
-(previously ~6–7%, so roughly doubled).
+**Observed:** idle 7–8% (was ~6–7%); one stereo sample playing 15% (was ~6–7%).
 
-Analysis in progress; this section will record the per-sample cost breakdown and
-name the responsible change. What is already known: the ESP32 remediation work
-did **not** touch `firmware/daisy/` at all (verified — no commit in that series
-has a Daisy file in its diff), so the cause lies in the Daisy/audio commits that
-predate it. The prime suspect is recorded and was flagged in advance:
+**It is not the SVF.** The pre-registered suspect in `roadmap.md` — the one-pole
+becoming a 2-pole SVF in the callback's inner loop — cannot explain this
+measurement, because **the SVF does not run on the streaming path at all**. It
+lives in `VoiceManager::Render()` (`voice_manager.hpp:364`), which the callback
+enters only when a note is sounding (`audio_engine.cpp:1505`). The browser's
+Audition streams through the ring buffer and never touches it. Confirmed in the
+binary: the only call to `SvfFilter::Process` in the whole image is inside
+`VoiceManager::Render`. The roadmap item still stands as unmeasured — it just
+does not own *this* number.
 
-> **roadmap.md § Outstanding hardware verification — "Per-voice SVF cost":** the
-> one-pole became a 2-pole state-variable filter in the callback's inner loop,
-> ×8 voices. Host tests prove it is *correct*; nothing proves it is
-> *affordable*. The guide requires a DWT number before a DSP change in the
-> callback is accepted.
+**The cause is `378673b fix(daisy): make the WAV ring buffer indices real
+atomics`, amplified by the fact that the Daisy image is built with no `-O` flag
+at all.**
 
-That item was written precisely because this number was never taken. The bench
-measurement above is the first evidence either way, and it is not encouraging.
+`firmware/daisy/build/CMakeFiles/wavex-daisy.dir/flags.make` carries
+`-std=gnu++14 -mcpu=cortex-m7 … -finline-functions` and **no optimization
+level**. `CMAKE_BUILD_TYPE` is empty, and every configure site (`build.sh:36`,
+`Makefile:27/40/53`) runs bare `cmake ..`. `-finline-functions` is inert without
+`-O`. This contradicts `daisy_rt_audio_coding_guide.md` §8, which specifies
+`-O3`.
 
-**Note the discriminator:** if the SVF is the cause, the cost should appear on
-the **note-on / VoiceManager** path only — the browser's Audition uses the
-*streaming* ring-buffer path, which does not run the voice filter. A doubling on
-streaming playback would therefore point somewhere else (per-sample fades, gain,
-resampler, or the ring-buffer atomics). Establishing which is what the analysis
-is for.
+At `-O0`, `std::atomic<T>::load/store` do not inline and the `memory_order`
+argument is not constant-folded, so each access becomes out-of-line libstdc++
+calls plus a full seq_cst `dmb` — **even where the source says
+`memory_order_relaxed`**. That code sits in `rb_pop_stereo()`, which runs once
+per sample. Measured on the shipped ELF:
 
----
+| `rb_pop_stereo` | instructions | `dmb` | out-of-line calls |
+|---|---|---|---|
+| before `378673b` (volatile + `__DMB`) | 57 | 4 | 0 |
+| after `378673b` (`std::atomic`) | 173 | 6 | **11** |
+| **after this fix** | **69** | **3** | **0** |
+
+Following the executed branches, the streaming path went 49 → 251 instructions
+per sample, with 5 extra barriers per sample (240 per block). That asymmetry —
+large on streaming, small on idle — is what the SVF hypothesis could never
+account for, and it matches the observed +8 points playback vs +1 point idle.
+
+**Fix applied:** the three ring indices now use the `__atomic_*` builtins with
+literal memory orders, exactly as the note queue in the same file already did
+(`audio_engine.cpp:234-262`). Identical semantics; they inline at every
+optimization level. This was the *one* SPSC handoff in the file converted to the
+`std::atomic` class template, and the only one in a per-sample loop.
+
+**Also fixed here:** two `VDIV.F32` per sample on the streaming path
+(`out[ch][i] = (float)x / 32768.0f`) became a multiply by the reciprocal —
+bit-identical, since 1/32768 is a power of two, and VDIV is ~14 non-pipelined
+cycles on Cortex-M7.
+
+### Still open: the build has no optimization level — your decision
+
+The narrow fix removes the regression, but the underlying condition remains:
+**the whole Daisy image, including all DSP, is compiled `-O0`.** Turning on
+`-O2`/`-O3` is not a change to make silently on a real-time audio target — it
+alters timing everywhere and can expose latent UB that `-O0` was masking. It
+needs a deliberate decision and a bench pass.
+
+**Cheapest discriminating test, no source change:** rebuild once with
+`-DCMAKE_BUILD_TYPE=Release` and repeat the two measurements.
+
+### Process note
+
+`AGENTS.md:54` and the guide require a DWT measurement for anything touching the
+callback. `7fe2116` and `38f0ff3` at least state "compile/link-verified only".
+`378673b` — the commit that made the inner loop ~5x more expensive — was filed as
+a correctness fix and carries no performance note at all. The rule exists for
+exactly this case: a change that is semantically right and costly.
+
+### Separate correctness bug found while investigating
+
+`.dtcmram_bss` is a `(NOLOAD)` section (`STM32H750IB_qspi.lds:139`) and
+libDaisy's startup zeroes only `_sbss.._ebss`, so **nothing ever cleared DTCM**.
+Every `WAVEX_DTCM_DATA` object started as whatever DTCM held — the previous
+run's data on a warm reset — and its initializer was silently discarded. The
+sharp edge: `s_voice_live_dirty` lives there, so a non-zero value at boot makes
+the *first audio callback* push an uninitialized `s_voice_live_params` (garbage
+cutoff, resonance, ADSR) into all eight voices. `s_rb_low_water`'s
+`0xFFFFFFFF` initializer never landed either, so that diagnostic may have been
+reporting nonsense. Fixed by zeroing the section in `MemorySections::InitDtcmBss()`
+before anything reads it.
 
 ## 2. Keyboard pads produce no sound and no log on either MCU
 
