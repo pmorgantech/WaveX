@@ -329,3 +329,88 @@ TEST_F(EnvelopeCacheTest, InvalidateSampleDropsItsEntries) {
     EXPECT_EQ(cache_.render(1, 0, 0, 65536, 256, out.data(), out.size(), channels), 0);
     EXPECT_GT(cache_.render(2, 0, 0, 65536, 256, out.data(), out.size(), channels), 0);
 }
+
+// The defect behind "Sample Edit shows an empty waveform": noteRequest() arms a
+// run and nextRequest() refuses everything until it commits, but a run that is
+// abandoned rather than completed (send failed, or the backend silently dropped
+// the scan when the sample under it was reloaded) used to leave the cache armed
+// forever. The guard is not per-sample, so ONE lost run stopped the whole
+// process from requesting any envelope again - and with nothing cached,
+// render() returned 0 and the waveform never drew.
+TEST_F(EnvelopeCacheTest, AbandonedRunDoesNotBlockLaterRequests) {
+    uint32_t req_start = 0, req_end = 0;
+    uint16_t req_columns = 0;
+    ASSERT_TRUE(
+        cache_.nextRequest(1, 0, 0, 65536, 65536, 256, 1280, req_start, req_end, req_columns));
+    cache_.noteRequest(1, 0, req_start, req_end, req_columns);
+    EXPECT_TRUE(cache_.requestPending());
+
+    // While armed, nothing else can be asked for - not even a different sample.
+    uint32_t s = 0, e = 0;
+    uint16_t c = 0;
+    EXPECT_FALSE(cache_.nextRequest(1, 0, 0, 65536, 65536, 256, 1280, s, e, c));
+    EXPECT_FALSE(cache_.nextRequest(2, 0, 0, 65536, 65536, 256, 1280, s, e, c));
+
+    // The reply never comes and the caller gives up.
+    cache_.abortPending();
+    EXPECT_FALSE(cache_.requestPending());
+
+    // The cache must be usable again, for this sample and for any other.
+    EXPECT_TRUE(cache_.nextRequest(1, 0, 0, 65536, 65536, 256, 1280, s, e, c));
+    EXPECT_EQ(s, req_start);
+    EXPECT_EQ(e, req_end);
+    EXPECT_EQ(c, req_columns);
+    EXPECT_TRUE(cache_.nextRequest(2, 0, 0, 65536, 65536, 256, 1280, s, e, c));
+}
+
+// Aborting must discard the partial run, not let its columns be completed by a
+// later run's chunks - that would file measurements from two different windows
+// under one entry.
+TEST_F(EnvelopeCacheTest, AbortDiscardsPartiallyReceivedColumns) {
+    uint32_t req_start = 0, req_end = 0;
+    uint16_t req_columns = 0;
+    ASSERT_TRUE(
+        cache_.nextRequest(1, 0, 0, 65536, 65536, 256, 1280, req_start, req_end, req_columns));
+    cache_.noteRequest(1, 0, req_start, req_end, req_columns);
+    ASSERT_GE(req_columns, 4);
+
+    std::vector<EnvelopeColumn> cols(req_columns, EnvelopeColumn(-1, 1));
+    EnvelopeChunkMessage header;
+    header.sample_id = 1;
+    header.generation = 0;
+    header.start_frame = req_start;
+    header.end_frame = req_end;
+    header.total_columns = req_columns;
+    header.first_column = 0;
+    header.columns = 2;  // only the head of the run arrives
+    header.channels = 1;
+    EXPECT_FALSE(cache_.ingest(header, cols.data()));
+    EXPECT_EQ(cache_.entryCount(), 0u);
+
+    cache_.abortPending();
+
+    // A chunk from the dead run must not be accepted afterwards.
+    header.first_column = 2;
+    header.columns = static_cast<uint16_t>(req_columns - 2);
+    EXPECT_FALSE(cache_.ingest(header, cols.data()));
+    EXPECT_EQ(cache_.entryCount(), 0u);
+
+    // A fresh run still commits normally.
+    EXPECT_TRUE(FillRun(1, 0, 0, 65536, 65536, 256));
+    EXPECT_EQ(cache_.entryCount(), 1u);
+}
+
+// abortPending() on an idle cache is a no-op, so callers can use it as an
+// unconditional "nothing is in flight" assertion on page entry.
+TEST_F(EnvelopeCacheTest, AbortOnIdleCacheKeepsEntries) {
+    ASSERT_TRUE(FillRun(1, 0, 0, 262144, 262144, 256));
+    ASSERT_EQ(cache_.entryCount(), 1u);
+    EXPECT_FALSE(cache_.requestPending());
+
+    cache_.abortPending();
+
+    EXPECT_EQ(cache_.entryCount(), 1u);
+    uint32_t s = 0, e = 0;
+    uint16_t c = 0;
+    EXPECT_FALSE(cache_.nextRequest(1, 0, 0, 262144, 262144, 256, 1280, s, e, c));
+}
