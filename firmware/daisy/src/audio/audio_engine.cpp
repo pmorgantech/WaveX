@@ -453,7 +453,58 @@ static AuditionState s_audition = {};
 // so cache maintenance in the SD driver works correctly.
 static FIL s_sample_load_file;
 alignas(32) static uint8_t s_sample_hdr[64];
-alignas(32) static uint8_t s_sample_io[1024];
+// Sample-load staging buffer. Read size is the dominant factor in load time:
+// FatFS and the SDMMC driver charge a largely FIXED cost per f_read (cluster
+// walk, bookkeeping, IDMA setup), so cutting the call count cuts most of the
+// overhead rather than a proportional slice. This was 1 KB while the streaming
+// path next door used 8 KB (SD_BUFFER_SIZE) - loading issued eight times the
+// calls to move the same bytes, for no reason anyone recorded.
+//
+// WHY 64 KB AND NOT MORE. The obvious ceiling would be main-loop blocking: a
+// long f_read starves the WAV ring, which has only ~42 ms of headroom. It does
+// not bind here, because OnSampleLoad calls StopAudition() and CloseWav()
+// before this loop - nothing is streaming during a load, so there is no ring to
+// starve. What does bind is AXI SRAM: this is a permanent static allocation for
+// a transient purpose, and 64 KB is already ~29% of the free region. Beyond one
+// cluster the read is a contiguous multi-block transfer running at the card's
+// streaming rate, so there is no mechanism left for a larger buffer to exploit
+// - going to 128 KB would spend another 64 KB of SRAM to save call overhead
+// that is already amortised.
+//
+// 64 KB also happens to be the largest cluster FAT32 uses in practice, so one
+// read covers a whole cluster on any card we will see (exFAT is disabled -
+// _FS_EXFAT 0 - so FAT32 is the only format that mounts).
+static constexpr UINT kSampleLoadChunkMax = 65536;
+alignas(32) static uint8_t s_sample_io[kSampleLoadChunkMax];
+
+// Picks the read size from the mounted filesystem's actual geometry rather than
+// a constant that guesses at it. FatFS is most efficient reading whole
+// clusters: a read that ends mid-cluster leaves the next one straddling a
+// boundary, which costs an extra FAT walk on every pass.
+//
+// Cluster size comes free from the open file (FIL::obj.fs->csize) - no
+// f_getfree(), which would scan the entire FAT to count free clusters and can
+// take seconds on a large card. Sector size is a compile-time 512 here
+// (_MAX_SS == _MIN_SS == 512), so FATFS::ssize does not even exist to read.
+//
+// Refinement not taken: the first read starts at the WAV's data offset, which
+// is not cluster-aligned (typically 44 B in), so every read straddles a
+// boundary by that much. Sizing the first read to reach the next boundary would
+// align all the rest. Worth doing only if a measurement says the boundary
+// crossings cost more than the extra branch - for a contiguous file FatFS
+// already issues one multi-sector transfer across it.
+static UINT pick_sample_load_chunk(const FIL& file) {
+    if (!file.obj.fs || file.obj.fs->csize == 0) {
+        return kSampleLoadChunkMax;
+    }
+    const UINT cluster_bytes = static_cast<UINT>(file.obj.fs->csize) * 512u;
+    if (cluster_bytes == 0 || cluster_bytes > kSampleLoadChunkMax) {
+        // One cluster is bigger than the buffer: read the whole buffer, which
+        // is still a whole number of sectors.
+        return kSampleLoadChunkMax;
+    }
+    return (kSampleLoadChunkMax / cluster_bytes) * cluster_bytes;
+}
 
 // ============================
 // Loaded sample registry (for diagnostics)
@@ -2515,10 +2566,20 @@ void OnSampleLoad(const SampleLoadMessage& sl) {
     uint32_t remaining = data_size;
     uint32_t written = 0;
     UINT br = 0;
+    // Wall-clock for the read loop, so load throughput is a number rather than
+    // an impression. AGENTS.md wants a measurement before a performance claim,
+    // and this is the one place a stopwatch is both cheap and meaningful - the
+    // loop runs on the main loop for seconds, so a millisecond timer is ample
+    // and there is no callback budget to protect.
+    const uint32_t load_start_ms = System::GetNow();
     // Use a 32-byte-aligned AXI-SRAM staging buffer; stack/DTCM is not
     // accessible to SDMMC IDMA.
     uint8_t* temp = s_sample_io;
-    constexpr UINT kIoChunk = sizeof(s_sample_io);
+    const UINT kIoChunk = pick_sample_load_chunk(file);
+    // Captured before the loop because f_close() below invalidates obj.fs, and
+    // the completion log (after the close) reports it.
+    const unsigned cluster_bytes =
+        file.obj.fs ? static_cast<unsigned>(file.obj.fs->csize) * 512u : 0u;
 
     while (remaining > 0) {
         UINT to_read = (remaining > kIoChunk) ? kIoChunk : remaining;
@@ -2575,9 +2636,23 @@ void OnSampleLoad(const SampleLoadMessage& sl) {
     update_loaded_sample_progress(sl.sample_id, data_size);
 
     if (s_hw) {
-        WaveX::Log::PrintLine("SAMPLE_LOAD: Loaded %lu bytes for sample %u",
-                              (unsigned long)data_size,
-                              (unsigned)sl.sample_id);
+        // Report throughput and the geometry it was achieved with, not just the
+        // size. "3.1 MB in 900 ms (3444 KB/s, 65536 B reads, 32768 B clusters)"
+        // is directly comparable across cards and buffer sizes, and shows
+        // whether the read size actually tracked the filesystem; "loaded 3.1 MB"
+        // is comparable to nothing.
+        const uint32_t elapsed_ms = System::GetNow() - load_start_ms;
+        const unsigned long kbps =
+            elapsed_ms > 0 ? (unsigned long)((uint64_t)data_size / elapsed_ms) : 0;
+        WaveX::Log::PrintLine(
+            "SAMPLE_LOAD: Loaded %lu bytes for sample %u in %lu ms "
+            "(%lu KB/s, %u B reads, %u B clusters)",
+            (unsigned long)data_size,
+            (unsigned)sl.sample_id,
+            (unsigned long)elapsed_ms,
+            kbps,
+            (unsigned)kIoChunk,
+            cluster_bytes);
     }
 
     // Notify host (ESP32) that sample load completed.

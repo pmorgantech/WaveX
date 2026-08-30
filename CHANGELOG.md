@@ -11,6 +11,33 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Changed — Sample load reads sized from the filesystem, not a guess
+
+- The load path staged through a **1 KB** buffer while the streaming path next
+  door used 8 KB, so loading issued eight times the `f_read` calls to move the
+  same bytes. FatFS and the SDMMC driver charge a largely fixed cost per call
+  (cluster walk, bookkeeping, IDMA setup), so it is the call count — not the
+  transfer — that dominated load time.
+- The read size is now **derived from the mounted filesystem**: the largest
+  whole multiple of the cluster size that fits a 64 KB buffer. Cluster size
+  comes free from the open file (`FIL::obj.fs->csize`), avoiding `f_getfree()`,
+  which scans the entire FAT and can take seconds on a large card. Reading whole
+  clusters matters because a read ending mid-cluster leaves the next one
+  straddling a boundary, costing an extra FAT walk every pass.
+- **64 KB and not more, for a specific reason.** The expected ceiling — a long
+  blocking read starving the WAV ring's ~42 ms of headroom — does not apply:
+  `OnSampleLoad` calls `StopAudition()` and `CloseWav()` first, so nothing is
+  streaming during a load. The real limit is AXI SRAM (a permanent static
+  allocation for a transient job, now 55% → 64.5% of the region), and beyond one
+  cluster the transfer is already contiguous multi-block at the card's streaming
+  rate, so a larger buffer has no mechanism left to exploit.
+- Load completion logs elapsed time, throughput, read size **and cluster size**,
+  so the next bench session can confirm the read size tracked the card instead
+  of trusting the reasoning. **Not measured on hardware.**
+- Not bundled: the loop still `memcpy`s each chunk into SDRAM, a second full
+  pass. Reading straight into SDRAM would remove it but needs SDMMC IDMA
+  reachability of the FMC region and cache discipline verified first.
+
 ### Fixed — Unload now removes the sample from the frontend's list
 
 - Unload freed the sample on the Daisy but the row stayed on screen, so it
