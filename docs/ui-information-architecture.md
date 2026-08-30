@@ -114,8 +114,17 @@ comment admitting the two-core ESP32 figures were folded into one tile because
   which hides an imbalance between them. Plus internal heap, PSRAM, LVGL pool,
   task count, min-free-heap, uptime. All ESP32-local and live today.
 - **Daisy tab**: engine CPU (average and max), sample RAM breakdown (small pool,
-  large pool, largest free block, failed allocs, resident count), SD counters,
-  heap, uptime.
+  large pool, largest free block, failed allocs, resident count), heap, uptime,
+  and the resident-sample table absorbed from the standalone Sample Memory page.
+
+  **Correction (stage 7, as built).** This list originally also said "SD
+  counters". It should not: the Storage tab already carries the SD card, its
+  throughput, latency, errors and last FRESULT/HAL result across five cards, and
+  duplicating them onto Daisy would give two places to read one number and two
+  places for them to disagree. The split is by *which machine owns the figure*
+  only where that resolves an ambiguity; SD is unambiguous already because only
+  the Daisy has the card. The Daisy tab's six card slots go to engine CPU, the
+  two pools, largest-free-block, and the two placeholders.
 
 **What is available and what is not.** `DiagPushMessage` already carries
 `engine_cpu_x10`, `engine_cpu_max_x10`, `sample_ram_free`, `sample_ram_largest`,
@@ -154,7 +163,26 @@ menu, leaving only the tabbing to do).
    done**: CV Calibration is already a Settings entry; `Storage` and
    `System Info` still log and return.
 7. **Diagnostics split** — ESP32 (CPU0/CPU1 separate) and Daisy tabs; move the
-   sample-memory page's content into the Daisy tab. **Not started.**
+   sample-memory page's content into the Daisy tab. **Done.** Six tabs: ESP32,
+   Daisy, Audio, Link, Storage, MIDI. `ui_sample_memory_page.{h,cpp}` is deleted
+   and the Diagnostics softkey that pushed it is gone; its pool figures are
+   cards and its loaded-sample text block is a table on the Daisy tab. Three
+   things were found in passing and fixed in the same commit, since each was a
+   figure the page was reporting wrongly:
+   - Sample-memory was never a **main menu** entry, contrary to how this stage
+     was scoped. It was only ever reachable from Diagnostics softkey 5, so
+     `ui_main_menu.cpp` needed no change at all.
+   - The Link tab's `FRAMES/s` card rendered the Daisy's CPU *percentage* — the
+     title had been updated when Daisy CPU moved to the System tab but the
+     refresh had not. It now shows the packet rate over a 1 s window, which is
+     what the card has claimed to show since that move.
+   - The sparkline was drawn at y=118 over the sub-text line at y=112, so the
+     context line on every sparkline card was invisible. Moved to y=140.
+
+   Tab bodies are now built on first show rather than at page entry (§7's
+   vertical-space and timer notes still hold; this is the page-entry cost noted
+   in `docs/backlog.md`). Six tabs of eight cards would otherwise have made the
+   worst page-entry cost in the UI about 20% worse.
 8. **Daisy heap + uptime** — the protocol addition, with its round-trip test and
    doc row, so the two placeholder cards become live. **Not started.**
 

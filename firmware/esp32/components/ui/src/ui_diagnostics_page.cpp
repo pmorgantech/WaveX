@@ -20,7 +20,6 @@
 #include "ui/input_dispatcher.h"
 #include "ui/ui_navigator.h"
 #include "ui/ui_palette.h"
-#include "ui/ui_sample_memory_page.h"
 #include "ui/ui_tab_group.h"
 #include "ui_task.h"
 
@@ -42,17 +41,36 @@ UIDiagnosticsPage::UIDiagnosticsPage()
       diagnostics_timer_handle(nullptr),
       lvgl_update_timer(nullptr),
       tabview(nullptr),
-      active_tab(TAB_SYSTEM),
+      active_tab(TAB_ESP32),
       frozen(false),
       midi_note(nullptr),
       msg_table(nullptr),
+      sample_table(nullptr),
+      sample_req_ms(0),
+      frames_ref_ms(0),
+      frames_ref_pkts(0),
+      frames_per_s(0),
       ui_update_pending(false) {
-    memset(sys_cards, 0, sizeof(sys_cards));
+    resetUiState();
+    memset(cpu_usage_history, 0, sizeof(cpu_usage_history));
+}
+
+// Everything that points at an LVGL object, in one place. onEnter() rebuilds
+// the whole page from a cleaned parent, so every one of these is dangling by
+// then; forgetting one is how a refresh writes through a freed pointer.
+void UIDiagnosticsPage::resetUiState() {
+    memset(tab_body, 0, sizeof(tab_body));
+    memset(tab_built, 0, sizeof(tab_built));
+    memset(esp32_cards, 0, sizeof(esp32_cards));
+    memset(daisy_cards, 0, sizeof(daisy_cards));
     memset(link_cards, 0, sizeof(link_cards));
     memset(audio_cards, 0, sizeof(audio_cards));
     memset(storage_cards, 0, sizeof(storage_cards));
     memset(midi_cards, 0, sizeof(midi_cards));
-    memset(cpu_usage_history, 0, sizeof(cpu_usage_history));
+    tabview = nullptr;
+    midi_note = nullptr;
+    msg_table = nullptr;
+    sample_table = nullptr;
 }
 
 UIDiagnosticsPage::~UIDiagnosticsPage() {
@@ -86,16 +104,97 @@ lv_obj_t* mkLabel(
     return l;
 }
 
+// Shared card styles.
+//
+// Every lv_obj_set_style_*() call stores a property in the object's OWN style
+// list, which allocates. A card is a container, four labels and often a bar,
+// and a tab builds up to eight of them - so the invariant properties were
+// ~18 property stores per card, paid again for every card on every tab. They
+// are identical across every card on the page, so they belong in one style
+// each card references. Same reasoning, and the same lv_obj_remove_style_all()
+// step to drop the theme defaults first, as ui_play_page.cpp makeKey().
+//
+// Statics: initialised once, never reset, which is what an lv_style_t
+// referenced by live objects requires. Built and read only on the UI task, so
+// the one-time init needs no locking.
+lv_style_t s_card;
+lv_style_t s_bar_main;
+lv_style_t s_bar_ind;
+lv_style_t s_title;
+lv_style_t s_value;
+lv_style_t s_unit;
+lv_style_t s_sub;
+bool s_styles_ready = false;
+
+void initCardStyles() {
+    if (s_styles_ready) {
+        return;
+    }
+    lv_style_init(&s_card);
+    // remove_style_all() takes the theme's opaque background with it, so the
+    // shared style has to restore the parts a card actually needs.
+    lv_style_set_bg_opa(&s_card, LV_OPA_COVER);
+    lv_style_set_bg_color(&s_card, lv_color_hex(kColCard));
+    lv_style_set_border_width(&s_card, 1);
+    lv_style_set_border_color(&s_card, lv_color_hex(kColBorder));
+    lv_style_set_border_opa(&s_card, LV_OPA_COVER);
+    lv_style_set_radius(&s_card, 4);
+    lv_style_set_pad_all(&s_card, 0);
+
+    lv_style_init(&s_bar_main);
+    lv_style_set_bg_opa(&s_bar_main, LV_OPA_COVER);
+    lv_style_set_bg_color(&s_bar_main, lv_color_hex(kColTrack));
+    lv_style_set_radius(&s_bar_main, 2);
+
+    lv_style_init(&s_bar_ind);
+    lv_style_set_bg_opa(&s_bar_ind, LV_OPA_COVER);
+    lv_style_set_bg_color(&s_bar_ind, lv_color_hex(kColGreen));
+    lv_style_set_radius(&s_bar_ind, 2);
+
+    lv_style_init(&s_title);
+    lv_style_set_text_font(&s_title, &lv_font_montserrat_18);
+    lv_style_set_text_color(&s_title, lv_color_hex(kColDim));
+
+    lv_style_init(&s_value);
+    lv_style_set_text_font(&s_value, &lv_font_montserrat_36);
+    lv_style_set_text_color(&s_value, lv_color_white());
+
+    lv_style_init(&s_unit);
+    lv_style_set_text_font(&s_unit, &lv_font_montserrat_22);
+    lv_style_set_text_color(&s_unit, lv_color_hex(kColDim));
+
+    lv_style_init(&s_sub);
+    lv_style_set_text_font(&s_sub, &lv_font_montserrat_18);
+    lv_style_set_text_color(&s_sub, lv_color_hex(kColDim));
+
+    s_styles_ready = true;
+}
+
+// A label carrying one of the shared styles rather than its own copy of a font
+// and a colour.
+lv_obj_t* mkStyledLabel(lv_obj_t* parent, int x, int y, const char* txt, lv_style_t* style) {
+    lv_obj_t* l = lv_label_create(parent);
+    lv_obj_remove_style_all(l);
+    lv_obj_add_style(l, style, LV_PART_MAIN);
+    lv_label_set_text(l, txt);
+    lv_obj_set_pos(l, x, y);
+    return l;
+}
+
 }  // namespace
 
 void UIDiagnosticsPage::onEnter(lv_obj_t* parent) {
     ESP_LOGI(TAG, "Diagnostics page entering");
 
     lv_obj_clean(parent);
-    msg_table = nullptr;
     frozen = false;
-    memset(sys_cards, 0, sizeof(sys_cards));
-    memset(link_cards, 0, sizeof(link_cards));
+    resetUiState();
+    // Windowed measurements start fresh: a reference point left over from the
+    // last visit would produce one absurd first reading spanning the gap.
+    sample_req_ms = 0;
+    frames_ref_ms = 0;
+    frames_ref_pkts = 0;
+    frames_per_s = 0;
 
     buildTabs(parent);
     startDiagnosticsMonitoring();
@@ -110,24 +209,69 @@ void UIDiagnosticsPage::buildTabs(lv_obj_t* parent) {
     // consumes the shared helper rather than owning a private copy of it.
     tabview = tabGroupCreate(parent);
 
-    lv_obj_t* t_sys = tabGroupAddTab(tabview, "System");
-    lv_obj_t* t_audio = tabGroupAddTab(tabview, "Audio");
-    lv_obj_t* t_link = tabGroupAddTab(tabview, "Link");
-    lv_obj_t* t_storage = tabGroupAddTab(tabview, "Storage");
-    lv_obj_t* t_midi = tabGroupAddTab(tabview, "MIDI");
+    // Order is the one docs/ui-information-architecture.md §1 pins: the two
+    // machines first, then the four subsystem views.
+    static const char* kTitles[TAB_COUNT] = {"ESP32", "Daisy", "Audio", "Link", "Storage", "MIDI"};
+    for (uint8_t i = 0; i < TAB_COUNT; i++) {
+        tab_body[i] = tabGroupAddTab(tabview, kTitles[i]);
+    }
 
-    buildSystemTab(t_sys);
-    buildLinkTab(t_link);
-    buildAudioTab(t_audio);
-    buildStorageTab(t_storage);
-    buildMidiTab(t_midi);
+    // Tab CONTENT is built on first show, not here.
+    //
+    // Six tabs of eight cards is ~250 LVGL objects, and page entry is this
+    // page's entire cost (docs/backlog.md: 30-47 ms, the worst in the UI)
+    // because every object is laid out and drawn in the frame the user is
+    // waiting on. Five of the six tabs are, at that moment, invisible. Building
+    // one tab instead of six is a straight ~6x cut to that frame, and the
+    // deferred cost is paid only for tabs somebody actually opens - the common
+    // case being that they open Diagnostics to look at exactly one.
+    //
+    // Built tabs are kept, not torn down on switch away: the sparklines hold
+    // 30 s of history that a rebuild would discard, and re-entering a tab must
+    // not cost what entering the page costs. Worst case (visit all six) is what
+    // page entry cost before; best case is a sixth of it.
+    //
+    // The tab bar needs the tab objects themselves to exist for its labels, so
+    // those are created up front - six empty containers, which is free.
 
     // The tab bar switches pages by itself. Without this, touching a tab
-    // changed the view but left active_tab at TAB_SYSTEM, so the refresh timer
+    // changed the view but left active_tab where it was, so the refresh timer
     // kept updating a tab nobody was looking at and the visible one stayed
     // blank - which is exactly how Audio, Link and Storage read as broken.
     lv_obj_add_event_cb(tabview, &UIDiagnosticsPage::onTabChanged, LV_EVENT_VALUE_CHANGED, this);
+    ensureTabBuilt(active_tab);
     lv_tabview_set_active(tabview, active_tab, LV_ANIM_OFF);
+}
+
+void UIDiagnosticsPage::ensureTabBuilt(uint8_t tab) {
+    if (tab >= TAB_COUNT || tab_built[tab] || !tab_body[tab]) {
+        return;
+    }
+    // Set first: the build functions are pure LVGL construction, but marking
+    // afterwards would let a re-entrant tab event build the same tab twice.
+    tab_built[tab] = true;
+    switch (tab) {
+        case TAB_ESP32:
+            buildEsp32Tab(tab_body[tab]);
+            break;
+        case TAB_DAISY:
+            buildDaisyTab(tab_body[tab]);
+            break;
+        case TAB_AUDIO:
+            buildAudioTab(tab_body[tab]);
+            break;
+        case TAB_LINK:
+            buildLinkTab(tab_body[tab]);
+            break;
+        case TAB_STORAGE:
+            buildStorageTab(tab_body[tab]);
+            break;
+        case TAB_MIDI:
+            buildMidiTab(tab_body[tab]);
+            break;
+        default:
+            break;
+    }
 }
 
 void UIDiagnosticsPage::onTabChanged(lv_event_t* e) {
@@ -143,6 +287,9 @@ void UIDiagnosticsPage::setActiveTab(uint8_t tab) {
         return;
     }
     active_tab = tab;
+    // First visit to this tab pays for its content here rather than at page
+    // entry. This runs on the UI task, from a touch event or a softkey.
+    ensureTabBuilt(tab);
     if (tabview && lv_tabview_get_tab_active(tabview) != tab) {
         lv_tabview_set_active(tabview, tab, LV_ANIM_OFF);
     }
@@ -164,17 +311,19 @@ UIDiagnosticsPage::Card UIDiagnosticsPage::makeCard(lv_obj_t* parent,
     Card c = {};
     c.warn_pct = warn_pct;
 
+    initCardStyles();
+
     lv_obj_t* card = lv_obj_create(parent);
+    // Drop the theme's default container styling before adding ours. None of it
+    // survives visually, so applying it to every card and then overriding it is
+    // pure page-entry cost.
+    lv_obj_remove_style_all(card);
+    lv_obj_add_style(card, &s_card, LV_PART_MAIN);
     lv_obj_set_size(card, w, kCardH);
     lv_obj_set_pos(card, x, y);
-    lv_obj_set_style_bg_color(card, lv_color_hex(kColCard), 0);
-    lv_obj_set_style_border_width(card, 1, 0);
-    lv_obj_set_style_border_color(card, lv_color_hex(kColBorder), 0);
-    lv_obj_set_style_radius(card, 4, 0);
-    lv_obj_set_style_pad_all(card, 0, 0);
     lv_obj_remove_flag(card, LV_OBJ_FLAG_SCROLLABLE);
 
-    mkLabel(card, 16, 14, title, &lv_font_montserrat_18, kColDim);
+    mkStyledLabel(card, 16, 14, title, &s_title);
     if (tag) {
         // Source tag ("esp32" / "wire" / "new") - which side owns the number.
         uint32_t tc = kColDimmer;
@@ -186,24 +335,23 @@ UIDiagnosticsPage::Card UIDiagnosticsPage::makeCard(lv_obj_t* parent,
         lv_obj_align(l, LV_ALIGN_TOP_RIGHT, -16, 14);
     }
 
-    c.value = mkLabel(card, 16, 64, "-", &lv_font_montserrat_36, 0xFFFFFF);
-    c.unit = mkLabel(card, 0, 0, "", &lv_font_montserrat_22, kColDim);
+    c.value = mkStyledLabel(card, 16, 64, "-", &s_value);
+    c.unit = mkStyledLabel(card, 0, 0, "", &s_unit);
     lv_obj_align_to(c.unit, c.value, LV_ALIGN_OUT_RIGHT_BOTTOM, 10, -6);
 
-    c.sub = mkLabel(card, 16, 112, "", &lv_font_montserrat_18, kColDim);
+    c.sub = mkStyledLabel(card, 16, 112, "", &s_sub);
     lv_obj_set_width(c.sub, w - 32);
     lv_label_set_long_mode(c.sub, LV_LABEL_LONG_WRAP);
 
     if (gauge) {
         c.bar = lv_bar_create(card);
+        lv_obj_remove_style_all(c.bar);
+        lv_obj_add_style(c.bar, &s_bar_main, LV_PART_MAIN);
+        lv_obj_add_style(c.bar, &s_bar_ind, LV_PART_INDICATOR);
         lv_obj_set_size(c.bar, kGaugeW, 14);
         lv_obj_set_pos(c.bar, 16, 196);
         lv_bar_set_range(c.bar, 0, 100);
         lv_bar_set_value(c.bar, 0, LV_ANIM_OFF);
-        lv_obj_set_style_bg_color(c.bar, lv_color_hex(kColTrack), LV_PART_MAIN);
-        lv_obj_set_style_bg_color(c.bar, lv_color_hex(kColGreen), LV_PART_INDICATOR);
-        lv_obj_set_style_radius(c.bar, 2, LV_PART_MAIN);
-        lv_obj_set_style_radius(c.bar, 2, LV_PART_INDICATOR);
     }
     return c;
 }
@@ -217,8 +365,11 @@ void UIDiagnosticsPage::addSpark(Card& c, uint32_t colour) {
     }
     lv_obj_t* card = lv_obj_get_parent(c.value);
     c.spark = lv_chart_create(card);
-    lv_obj_set_size(c.spark, kGaugeW, 52);
-    lv_obj_set_pos(c.spark, 16, 118);
+    // Below the sub line (y 112, ~22 px tall) and above the gauge (y 196).
+    // It used to start at 118, drawing straight over the sub text, so the
+    // context line on every sparkline card was invisible.
+    lv_obj_set_size(c.spark, kGaugeW, 48);
+    lv_obj_set_pos(c.spark, 16, 140);
     lv_chart_set_type(c.spark, LV_CHART_TYPE_LINE);
     lv_chart_set_point_count(c.spark, kSparkPoints);
     lv_chart_set_range(c.spark, LV_CHART_AXIS_PRIMARY_Y, 0, 100);
@@ -237,24 +388,6 @@ void UIDiagnosticsPage::addSpark(Card& c, uint32_t colour) {
     for (uint16_t i = 0; i < kSparkPoints; i++) {
         lv_chart_set_next_value(c.spark, c.series, 0);
     }
-}
-
-void UIDiagnosticsPage::addSecondBar(Card& c, uint32_t colour) {
-    if (!c.bar) {
-        return;
-    }
-    lv_obj_t* card = lv_obj_get_parent(c.bar);
-    // Sits directly under the first, so the two cores read as one pair.
-    c.bar2 = lv_bar_create(card);
-    lv_obj_set_size(c.bar2, kGaugeW, 14);
-    lv_obj_set_pos(c.bar2, 16, 196);
-    lv_obj_set_pos(c.bar, 16, 176);
-    lv_bar_set_range(c.bar2, 0, 100);
-    lv_bar_set_value(c.bar2, 0, LV_ANIM_OFF);
-    lv_obj_set_style_bg_color(c.bar2, lv_color_hex(kColTrack), LV_PART_MAIN);
-    lv_obj_set_style_bg_color(c.bar2, lv_color_hex(colour), LV_PART_INDICATOR);
-    lv_obj_set_style_radius(c.bar2, 2, LV_PART_MAIN);
-    lv_obj_set_style_radius(c.bar2, 2, LV_PART_INDICATOR);
 }
 
 void UIDiagnosticsPage::pushSpark(Card& c, int value) {
@@ -289,16 +422,21 @@ void UIDiagnosticsPage::setCard(
     }
 }
 
-void UIDiagnosticsPage::buildSystemTab(lv_obj_t* tab) {
+void UIDiagnosticsPage::buildEsp32Tab(lv_obj_t* tab) {
     // Every figure here is ESP32-local, so this tab is fully live today.
     struct Def {
         const char* title;
         bool gauge;
         int warn;
     };
+    // The two cores are separate tiles now. They used to share one, with a
+    // single sparkline of whichever was busier - which is exactly the shape
+    // that hides an imbalance, and an imbalance between an audio/link core and
+    // a UI core is a thing worth seeing. The slot this used to cost the Daisy
+    // is no longer contended: the Daisy has its own tab.
     static const Def defs[8] = {
-        {"ESP32 CPU", true, 85},
-        {"DAISY CPU", true, 85},
+        {"CPU0", true, 85},
+        {"CPU1", true, 85},
         {"HEAP INTERNAL", true, 85},
         {"PSRAM", true, 85},
         {"LVGL POOL", true, 85},
@@ -307,48 +445,115 @@ void UIDiagnosticsPage::buildSystemTab(lv_obj_t* tab) {
         {"MIN FREE HEAP", false, 0},
     };
     for (int i = 0; i < 8; i++) {
-        sys_cards[i] = makeCard(tab,
-                                kColX[i % 4],
-                                kRowY[i / 4],
-                                kCardW,
-                                defs[i].title,
-                                i == 1 ? "wire" : "esp32",
-                                defs[i].gauge,
-                                defs[i].warn);
+        esp32_cards[i] = makeCard(tab,
+                                  kColX[i % 4],
+                                  kRowY[i / 4],
+                                  kCardW,
+                                  defs[i].title,
+                                  "esp32",
+                                  defs[i].gauge,
+                                  defs[i].warn);
     }
-    // ESP32 CPU carries both cores: one sparkline of the busier core plus a
-    // bar each. Two near-identical tiles side by side made the pair hard to
-    // read and cost a slot the Daisy needed.
-    addSpark(sys_cards[0], kColBlue);
-    addSecondBar(sys_cards[0], kColBlue);
+    addSpark(esp32_cards[0], kColBlue);
+    addSpark(esp32_cards[1], kColBlue);
+}
+
+void UIDiagnosticsPage::buildDaisyTab(lv_obj_t* tab) {
+    struct Def {
+        const char* title;
+        const char* tag;
+        bool gauge;
+        int warn;
+    };
+    // Top row: the backend's CPU and the sample-RAM pool breakdown that the
+    // standalone Sample Memory page used to render as a block of text.
+    // Bottom row: the two figures the wire does not carry yet, then the
+    // resident-sample list.
+    static const Def defs[6] = {
+        {"DAISY CPU", "wire", true, 85},
+        {"SMALL POOL", "wire", true, 85},
+        {"LARGE POOL", "wire", true, 85},
+        {"LARGEST BLOCK", "wire", false, 0},
+        {"DAISY HEAP", "new", false, 0},
+        {"DAISY UPTIME", "new", false, 0},
+    };
+    for (int i = 0; i < 6; i++) {
+        daisy_cards[i] = makeCard(tab,
+                                  kColX[i % 4],
+                                  kRowY[i / 4],
+                                  kCardW,
+                                  defs[i].title,
+                                  defs[i].tag,
+                                  defs[i].gauge,
+                                  defs[i].warn);
+    }
     // Daisy CPU is the figure that predicts an underrun, so it earns a trend
     // of its own. It comes free from HeartbeatMessage - no protocol change.
-    addSpark(sys_cards[1], kColGreen);
+    addSpark(daisy_cards[0], kColGreen);
+
+    // Neither Daisy heap nor Daisy uptime is carried by DiagPushMessage or
+    // HeartbeatMessage; adding them is stage 8 of
+    // docs/ui-information-architecture.md §6. Until then they say so, because a
+    // zero uptime does not read as "unknown", it reads as a crash loop.
+    setCard(daisy_cards[4], "-", "", "not on the wire yet", -1);
+    setCard(daisy_cards[5], "-", "", "not on the wire yet", -1);
+
+    // Resident samples, from SampleMemStatusMessage. This is the substance of
+    // the former Sample Memory page: a table rather than the block of
+    // snprintf'd text it used, because eight rows of six fields is a table.
+    lv_obj_t* panel = lv_obj_create(tab);
+    lv_obj_remove_style_all(panel);
+    lv_obj_add_style(panel, &s_card, LV_PART_MAIN);
+    lv_obj_set_size(panel, 622, kCardH);
+    lv_obj_set_pos(panel, kColX[2], kRowY[1]);
+    lv_obj_remove_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
+
+    mkStyledLabel(panel, 16, 10, "RESIDENT SAMPLES", &s_title);
+
+    sample_table = lv_table_create(panel);
+    lv_obj_set_size(sample_table, 620, kCardH - 42);
+    lv_obj_set_pos(sample_table, 0, 40);
+    lv_table_set_column_count(sample_table, 5);
+    lv_table_set_column_width(sample_table, 0, 60);   // ID
+    lv_table_set_column_width(sample_table, 1, 90);   // pool
+    lv_table_set_column_width(sample_table, 2, 110);  // allocated
+    lv_table_set_column_width(sample_table, 3, 110);  // loaded
+    lv_table_set_column_width(sample_table, 4, 240);  // format / placement
+    lv_obj_set_style_bg_color(sample_table, lv_color_hex(kColCard), LV_PART_ITEMS);
+    lv_obj_set_style_text_color(sample_table, lv_color_white(), LV_PART_ITEMS);
+    lv_obj_set_style_text_font(sample_table, &lv_font_montserrat_14, LV_PART_ITEMS);
+    lv_obj_set_style_border_color(sample_table, lv_color_hex(0x222222), LV_PART_ITEMS);
+    lv_obj_set_style_border_width(sample_table, 1, LV_PART_ITEMS);
+    lv_obj_set_style_bg_color(sample_table, lv_color_hex(kColCard), LV_PART_MAIN);
+    lv_obj_set_style_border_width(sample_table, 0, LV_PART_MAIN);
 }
 
 void UIDiagnosticsPage::buildLinkTab(lv_obj_t* tab) {
     static const char* titles[4] = {"LINK", "FRAMES/s", "PACKETS", "ERRORS"};
-    // Daisy CPU moved to the System tab, where it sits beside the ESP32's own
-    // and can be compared at a glance. Frames/s takes its place here, derived
-    // from the frontend's own packet counter - free, and it needs neither
+    // Every figure on this tab is now the frontend's own view of the link.
+    // Daisy CPU moved to the Daisy tab; this card kept its "FRAMES/s" title
+    // but went on rendering that CPU figure, so the tab showed a percentage
+    // under a per-second heading. It now shows what it says: the packet rate
+    // derived from the frontend's own counter, which needs neither
     // MSG_DIAG_PUSH nor WAVEX_DAISY_UART_PERF_DEBUG.
+    //
+    // No sparkline here: pushSpark clamps to 0..100 and the packet rate runs
+    // well past that during a preview stream, so the trace would flatline at
+    // the top and claim the link had stopped varying.
     static const bool gauge[4] = {false, false, false, false};
     for (int i = 0; i < 4; i++) {
         link_cards[i] =
             makeCard(tab, kColX[i % 2], kRowY[i / 2], kCardW, titles[i], "esp32", gauge[i], 0);
     }
-    addSpark(link_cards[1], kColBlue);
 
     // Per-message-type counts. wavex_packet_stats_t already tracks these, so
     // the table needs no new plumbing at all.
     lv_obj_t* panel = lv_obj_create(tab);
+    lv_obj_remove_style_all(panel);
+    lv_obj_add_style(panel, &s_card, LV_PART_MAIN);
     lv_obj_set_size(panel, 622, 464);
     lv_obj_set_pos(panel, kColX[2], 0);
-    lv_obj_set_style_bg_color(panel, lv_color_hex(kColCard), 0);
-    lv_obj_set_style_border_width(panel, 1, 0);
-    lv_obj_set_style_border_color(panel, lv_color_hex(kColBorder), 0);
-    lv_obj_set_style_radius(panel, 4, 0);
-    lv_obj_set_style_pad_all(panel, 0, 0);
+    lv_obj_remove_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
 
     msg_table = lv_table_create(panel);
     lv_obj_set_size(msg_table, 620, 462);
@@ -480,7 +685,9 @@ std::array<Softkey, NUM_SOFTKEYS> UIDiagnosticsPage::getSoftkeys() {
                    frozen = !frozen;
                    UINavigator::instance().refreshSoftkeys();
                }};
-    keys[5] = {"Samples", []() { UINavigator::instance().push(createSampleMemoryPage()); }};
+    // Slot 5 used to push a standalone Sample Memory page. Its content is the
+    // Daisy tab now, so the key would only be a second route to a tab that is
+    // already one press of Tab > away.
 
     if (frozen) {
         keys[3].label = "Live";
@@ -668,8 +875,11 @@ void UIDiagnosticsPage::applyUiUpdates() {
     }
 
     switch (active_tab) {
-        case TAB_SYSTEM:
-            refreshSystemTab();
+        case TAB_ESP32:
+            refreshEsp32Tab();
+            break;
+        case TAB_DAISY:
+            refreshDaisyTab();
             break;
         case TAB_LINK:
             refreshLinkTab();
@@ -893,43 +1103,30 @@ void UIDiagnosticsPage::refreshMidiTab() {
     setCard(midi_cards[3], v, "", "this interval", -1);
 }
 
-void UIDiagnosticsPage::refreshSystemTab() {
-    if (!sys_cards[0].value || !lv_obj_is_valid(sys_cards[0].value)) {
+void UIDiagnosticsPage::refreshEsp32Tab() {
+    if (!esp32_cards[0].value || !lv_obj_is_valid(esp32_cards[0].value)) {
         return;
     }
     char v[48], u[32], sub[64];
 
-    // The tile shows the busier core, because that is the one that will run
-    // out first; both are still visible as separate bars underneath.
-    const float busier = cpu_usage_core0 > cpu_usage_core1 ? cpu_usage_core0 : cpu_usage_core1;
-    snprintf(v, sizeof(v), "%.1f", busier);
-    snprintf(sub, sizeof(sub), "core0 %.1f%%  core1 %.1f%%", cpu_usage_core0, cpu_usage_core1);
-    setCard(sys_cards[0], v, "%", sub, (int)cpu_usage_core0);
-    if (sys_cards[0].bar2) {
-        lv_bar_set_value(sys_cards[0].bar2, (int)cpu_usage_core1, LV_ANIM_OFF);
-    }
-    pushSpark(sys_cards[0], (int)busier);
+    // One tile per core, each with its own trend. The old shared tile showed
+    // only the busier core's trace, which is precisely the case where the two
+    // differ and the difference matters.
+    // No sub line naming what runs on each core: task affinity is set in
+    // several places and this page must not assert something it does not read.
+    snprintf(v, sizeof(v), "%.1f", cpu_usage_core0);
+    setCard(esp32_cards[0], v, "%", "", (int)cpu_usage_core0);
+    pushSpark(esp32_cards[0], (int)cpu_usage_core0);
 
-    wavex_backend_heartbeat_t hb_sys;
-    inter_mcu_get_backend_heartbeat_detailed(&hb_sys);
-    if (hb_sys.valid) {
-        snprintf(v, sizeof(v), "%.1f", hb_sys.cpu_avg_percent);
-        snprintf(sub,
-                 sizeof(sub),
-                 "min %.1f%%  max %.1f%%",
-                 hb_sys.cpu_min_percent,
-                 hb_sys.cpu_max_percent);
-        setCard(sys_cards[1], v, "%", sub, (int)hb_sys.cpu_avg_percent);
-        pushSpark(sys_cards[1], (int)hb_sys.cpu_avg_percent);
-    } else {
-        setCard(sys_cards[1], "-", "%", "no heartbeat from backend", 0);
-    }
+    snprintf(v, sizeof(v), "%.1f", cpu_usage_core1);
+    setCard(esp32_cards[1], v, "%", "", (int)cpu_usage_core1);
+    pushSpark(esp32_cards[1], (int)cpu_usage_core1);
 
     const size_t heap_free = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
     const size_t heap_total = heap_caps_get_total_size(MALLOC_CAP_INTERNAL);
     snprintf(v, sizeof(v), "%u", (unsigned)(heap_free / 1024));
     snprintf(sub, sizeof(sub), "of %u KB", (unsigned)(heap_total / 1024));
-    setCard(sys_cards[2],
+    setCard(esp32_cards[2],
             v,
             "KB free",
             sub,
@@ -940,14 +1137,14 @@ void UIDiagnosticsPage::refreshSystemTab() {
     snprintf(v, sizeof(v), "%.1f", ps_free / (1024.0 * 1024.0));
     snprintf(sub, sizeof(sub), "of %u MB", (unsigned)(ps_total / (1024 * 1024)));
     setCard(
-        sys_cards[3], v, "MB free", sub, ps_total ? (int)(100 - (ps_free * 100) / ps_total) : 0);
+        esp32_cards[3], v, "MB free", sub, ps_total ? (int)(100 - (ps_free * 100) / ps_total) : 0);
 
     lv_mem_monitor_t mon;
     lv_mem_monitor(&mon);
     snprintf(v, sizeof(v), "%u", (unsigned)((mon.total_size - mon.free_size) / 1024));
     snprintf(u, sizeof(u), "/ %u KB", (unsigned)(mon.total_size / 1024));
     snprintf(sub, sizeof(sub), "fragmentation %u%%", (unsigned)mon.frag_pct);
-    setCard(sys_cards[4], v, u, sub, (int)mon.used_pct);
+    setCard(esp32_cards[4], v, u, sub, (int)mon.used_pct);
 
     // The LVGL task's stack headroom rides on the TASKS card, because an
     // overflow there is a panic, not a slow page - it is what "Stack protection
@@ -957,7 +1154,7 @@ void UIDiagnosticsPage::refreshSystemTab() {
     const UBaseType_t lvgl_free = uxTaskGetStackHighWaterMark(nullptr);
     snprintf(v, sizeof(v), "%u", (unsigned)uxTaskGetNumberOfTasks());
     snprintf(sub, sizeof(sub), "LVGL stack free %u B", (unsigned)lvgl_free);
-    setCard(sys_cards[5], v, "running", sub, -1);
+    setCard(esp32_cards[5], v, "running", sub, -1);
 
     const uint32_t up_s = (uint32_t)(esp_timer_get_time() / 1000000);
     snprintf(v,
@@ -965,10 +1162,134 @@ void UIDiagnosticsPage::refreshSystemTab() {
              "%luh %02lum",
              (unsigned long)(up_s / 3600),
              (unsigned long)((up_s % 3600) / 60));
-    setCard(sys_cards[6], v, "", "", -1);
+    setCard(esp32_cards[6], v, "", "", -1);
 
     snprintf(v, sizeof(v), "%u", (unsigned)(esp_get_minimum_free_heap_size() / 1024));
-    setCard(sys_cards[7], v, "KB", "lowest since boot", -1);
+    setCard(esp32_cards[7], v, "KB", "lowest since boot", -1);
+}
+
+void UIDiagnosticsPage::refreshDaisyTab() {
+    if (!daisy_cards[0].value || !lv_obj_is_valid(daisy_cards[0].value)) {
+        return;
+    }
+    char v[48], u[32], sub[80];
+
+    // --- engine CPU, from the heartbeat (no subscription needed) ---
+    wavex_backend_heartbeat_t hb;
+    inter_mcu_get_backend_heartbeat_detailed(&hb);
+    if (hb.valid) {
+        snprintf(v, sizeof(v), "%.1f", hb.cpu_avg_percent);
+        snprintf(
+            sub, sizeof(sub), "min %.1f%%  max %.1f%%", hb.cpu_min_percent, hb.cpu_max_percent);
+        setCard(daisy_cards[0], v, "%", sub, (int)hb.cpu_avg_percent);
+        pushSpark(daisy_cards[0], (int)hb.cpu_avg_percent);
+    } else {
+        setCard(daisy_cards[0], "-", "%", "no heartbeat from backend", 0);
+    }
+
+    // --- sample memory ---
+    //
+    // SampleMemStatus is request/response, not part of the diagnostics
+    // subscription, so this tab has to ask for it. The request is issued from
+    // here, which runs only while this tab is the active one, rather than from
+    // a timer of its own: a per-tab timer is exactly the thing §7 of
+    // docs/ui-information-architecture.md warns about, because it outlives the
+    // tab that started it. Rate-limited to 1 Hz; the refresh itself runs at
+    // 2 Hz behind the sampling timer.
+    //
+    // inter_mcu_request_sample_mem_status() only enqueues a UART frame, so it
+    // does not block the UI task. The reply is stored by the RX task and read
+    // back here - store and flag, draw from the timer.
+    const uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
+    if (sample_req_ms == 0 || (now_ms - sample_req_ms) >= 1000) {
+        sample_req_ms = now_ms;
+        inter_mcu_request_sample_mem_status();
+    }
+
+    wavex_sample_mem_status_t mem;
+    inter_mcu_get_sample_mem_status(&mem);
+    // A live backend always reports non-zero pool totals, so both being zero
+    // means no reply has landed yet rather than "the pools are empty".
+    const bool mem_valid = (mem.small_total_bytes != 0 || mem.large_total_bytes != 0);
+
+    if (!mem_valid) {
+        for (int i = 1; i <= 3; i++) {
+            setCard(daisy_cards[i], "-", "", "no sample memory status yet", -1);
+        }
+    } else {
+        const uint32_t small_used = mem.small_total_bytes - mem.small_free_bytes;
+        snprintf(v, sizeof(v), "%lu", (unsigned long)(small_used / 1024));
+        snprintf(u, sizeof(u), "/ %lu KB", (unsigned long)(mem.small_total_bytes / 1024));
+        snprintf(sub, sizeof(sub), "%lu KB free", (unsigned long)(mem.small_free_bytes / 1024));
+        setCard(
+            daisy_cards[1], v, u, sub, (int)((uint64_t)small_used * 100 / mem.small_total_bytes));
+
+        const uint32_t large_used = mem.large_total_bytes - mem.large_free_bytes;
+        snprintf(v, sizeof(v), "%.1f", large_used / (1024.0 * 1024.0));
+        snprintf(u, sizeof(u), "/ %lu MB", (unsigned long)(mem.large_total_bytes / (1024 * 1024)));
+        snprintf(sub, sizeof(sub), "%.1f MB free", mem.large_free_bytes / (1024.0 * 1024.0));
+        setCard(
+            daisy_cards[2],
+            v,
+            u,
+            sub,
+            mem.large_total_bytes ? (int)((uint64_t)large_used * 100 / mem.large_total_bytes) : 0);
+
+        // The largest contiguous extent, not the total free: a load fails on
+        // this number, not on the sum, and that difference is the whole reason
+        // the failed-alloc counter rides alongside it.
+        snprintf(v, sizeof(v), "%lu", (unsigned long)(mem.largest_free_bytes / 1024));
+        snprintf(sub, sizeof(sub), "%lu failed allocs", (unsigned long)mem.failed_allocs);
+        setCard(daisy_cards[3], v, "KB", sub, -1);
+    }
+
+    // --- resident samples ---
+    if (!sample_table || !lv_obj_is_valid(sample_table)) {
+        return;
+    }
+    // sample_count comes off the wire, so it is clamped rather than trusted:
+    // entries[] is fixed at WAVEX_SAMPLE_STATUS_MAX_ENTRIES and a larger count
+    // would otherwise size the table for rows there is no data behind.
+    const uint8_t n = mem.sample_count < WAVEX_SAMPLE_STATUS_MAX_ENTRIES
+                          ? mem.sample_count
+                          : (uint8_t)WAVEX_SAMPLE_STATUS_MAX_ENTRIES;
+    lv_table_set_row_count(sample_table, n ? (uint32_t)n + 1 : 2);
+    lv_table_set_cell_value(sample_table, 0, 0, "ID");
+    lv_table_set_cell_value(sample_table, 0, 1, "POOL");
+    lv_table_set_cell_value(sample_table, 0, 2, "ALLOC");
+    lv_table_set_cell_value(sample_table, 0, 3, "LOADED");
+    lv_table_set_cell_value(sample_table, 0, 4, "FORMAT / PLACEMENT");
+    for (uint8_t i = 0; i < n; i++) {
+        const auto& e = mem.entries[i];
+        char cell[64];
+        snprintf(cell, sizeof(cell), "%u", (unsigned)e.sample_id);
+        lv_table_set_cell_value(sample_table, i + 1, 0, cell);
+        // cls 0xFF is the large-pool sentinel; anything else is a small-pool
+        // size class.
+        lv_table_set_cell_value(sample_table, i + 1, 1, e.cls == 0xFF ? "Large" : "Small");
+        snprintf(cell, sizeof(cell), "%lu KB", (unsigned long)(e.allocated_bytes / 1024));
+        lv_table_set_cell_value(sample_table, i + 1, 2, cell);
+        snprintf(cell, sizeof(cell), "%lu KB", (unsigned long)(e.loaded_bytes / 1024));
+        lv_table_set_cell_value(sample_table, i + 1, 3, cell);
+        snprintf(cell,
+                 sizeof(cell),
+                 "%lu Hz %uch %ub  cls=%u p=%u s=%u",
+                 (unsigned long)e.sample_rate,
+                 (unsigned)e.channels,
+                 (unsigned)e.bit_depth,
+                 (unsigned)e.cls,
+                 (unsigned)e.page,
+                 (unsigned)e.slot);
+        lv_table_set_cell_value(sample_table, i + 1, 4, cell);
+    }
+    if (n == 0) {
+        lv_table_set_cell_value(sample_table, 1, 0, "-");
+        lv_table_set_cell_value(sample_table, 1, 1, "");
+        lv_table_set_cell_value(sample_table, 1, 2, "");
+        lv_table_set_cell_value(sample_table, 1, 3, "");
+        lv_table_set_cell_value(
+            sample_table, 1, 4, mem_valid ? "none resident" : "awaiting backend");
+    }
 }
 
 void UIDiagnosticsPage::refreshLinkTab() {
@@ -996,13 +1317,25 @@ void UIDiagnosticsPage::refreshLinkTab() {
              (unsigned long)((age_ms % 1000) / 100));
     setCard(link_cards[0], state, "", hb.valid ? sub : "no heartbeat seen", -1);
 
-    if (hb.valid) {
-        snprintf(v, sizeof(v), "%.1f", hb.cpu_avg_percent);
-        snprintf(sub, sizeof(sub), "min %.1f - max %.1f", hb.cpu_min_percent, hb.cpu_max_percent);
-        setCard(link_cards[1], v, "%", sub, (int)hb.cpu_avg_percent);
-    } else {
-        setCard(link_cards[1], "-", "%", "no heartbeat", 0);
+    // Frames/s over a >=1 s window of the frontend's own packet counter. The
+    // card is titled FRAMES/s and used to render the Daisy's CPU percentage,
+    // which now has a tab of its own; a rate needs a window, so the reference
+    // point is held between refreshes rather than recomputed from nothing.
+    if (frames_ref_ms == 0) {
+        frames_ref_ms = uptime_ms;
+        frames_ref_pkts = st.total_packets;
+    } else if (uptime_ms - frames_ref_ms >= 1000) {
+        const uint32_t d_ms = uptime_ms - frames_ref_ms;
+        // Counters are monotonic, but a reset would wrap this; clamp rather
+        // than print a nonsense spike.
+        const uint32_t d_pkts =
+            st.total_packets >= frames_ref_pkts ? st.total_packets - frames_ref_pkts : 0;
+        frames_per_s = (uint32_t)(((uint64_t)d_pkts * 1000ull) / d_ms);
+        frames_ref_ms = uptime_ms;
+        frames_ref_pkts = st.total_packets;
     }
+    snprintf(v, sizeof(v), "%lu", (unsigned long)frames_per_s);
+    setCard(link_cards[1], v, "/s", "packets, 1 s window", -1);
 
     snprintf(v, sizeof(v), "%lu", (unsigned long)st.total_packets);
     snprintf(sub,
