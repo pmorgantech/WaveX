@@ -11,6 +11,27 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Fixed — The last `volatile` cross-core handoff, and diagnostics that called known traffic "unknown"
+
+Found by the 2026-08-29 ESP32-P4 review (items E-SYNC1, E-STAT1).
+
+- **The sample edit page's envelope handoff uses release/acquire atomics.** Its
+  run state was `volatile`, which orders nothing between cores on the P4, so the
+  UI task could observe `run_ready_` before the column data that flag advertises
+  — a torn waveform rather than a crash, but the guide bans `volatile` here for
+  exactly this reason. With this and the earlier browser conversions, all three
+  comm-driven pages now use the same pattern and no `volatile` cross-task
+  handoff remains in the tree.
+- **Recognised link messages no longer count as "unknown".** Every message in
+  the 0x30/0x40 response blocks — browse replies, sample status, storage status,
+  sample metadata, CV calibration — fell through to `unknown_packets`. Those are
+  the busiest messages on the live link, so the counter that should mean
+  "corruption or version mismatch" was dominated by normal traffic. They now
+  have their own bucket, shown separately on the diagnostics Link tab. Also
+  corrected a comment claiming `MSG_DATA_REQUEST` is 0x0C (it is 0x0B) and
+  deleted `get_packet_type_name()`, which was both unused and shifted one type
+  off across the board.
+
 ### Fixed — MIDI: a truncated System Common message no longer swallows the next message
 
 Found by the 2026-08-29 ESP32-P4 review (item E-MIDI1). `StreamParser` tracked

@@ -751,10 +751,10 @@ void UISampleEditPage::envelopeChunkStatic(const WaveX::Protocol::EnvelopeChunkM
 // only assembles the run in a fixed buffer and raises a flag.
 void UISampleEditPage::handleEnvelopeChunk(const WaveX::Protocol::EnvelopeChunkMessage& header,
                                            const WaveX::Protocol::EnvelopeColumn* columns) {
-    if (!columns || run_ready_ || run_columns_.empty()) {
+    if (!columns || run_ready_.load(std::memory_order_acquire) || run_columns_.empty()) {
         return;  // nothing armed, or the last run is still waiting to be drawn
     }
-    const uint32_t epoch = run_epoch_;
+    const uint32_t epoch = run_epoch_.load(std::memory_order_acquire);
     if (header.sample_id != pending_sample_id_ || header.generation != pending_generation_ ||
         header.start_frame != pending_start_ || header.total_columns != pending_columns_) {
         return;  // a reply to a view the user has already left
@@ -762,7 +762,8 @@ void UISampleEditPage::handleEnvelopeChunk(const WaveX::Protocol::EnvelopeChunkM
     if (header.channels == 0 || header.channels > 2 || header.columns == 0) {
         return;
     }
-    if (run_channels_ != 0 && header.channels != run_channels_) {
+    const uint8_t seen_channels = run_channels_.load(std::memory_order_relaxed);
+    if (seen_channels != 0 && header.channels != seen_channels) {
         return;
     }
     const uint32_t end_column = static_cast<uint32_t>(header.first_column) + header.columns;
@@ -772,7 +773,7 @@ void UISampleEditPage::handleEnvelopeChunk(const WaveX::Protocol::EnvelopeChunkM
     }
     // A resend after a full TX queue repeats columns rather than reordering
     // them, so overlap is expected and a real gap is not.
-    if (header.first_column > run_received_) {
+    if (header.first_column > run_received_.load(std::memory_order_relaxed)) {
         return;
     }
 
@@ -782,15 +783,17 @@ void UISampleEditPage::handleEnvelopeChunk(const WaveX::Protocol::EnvelopeChunkM
 
     // Re-check: requestWaveform() may have re-armed while this was copying,
     // in which case what was just written belongs to neither run.
-    if (run_epoch_ != epoch) {
+    if (run_epoch_.load(std::memory_order_acquire) != epoch) {
         return;
     }
-    run_channels_ = header.channels;
-    if (end_column > run_received_) {
-        run_received_ = static_cast<uint16_t>(end_column);
+    run_channels_.store(header.channels, std::memory_order_relaxed);
+    if (end_column > run_received_.load(std::memory_order_relaxed)) {
+        run_received_.store(static_cast<uint16_t>(end_column), std::memory_order_relaxed);
     }
-    if (run_received_ >= pending_columns_) {
-        run_ready_ = true;
+    if (run_received_.load(std::memory_order_relaxed) >= pending_columns_) {
+        // Release: everything written above, including the column data, must
+        // be visible to the UI task before it can observe this flag.
+        run_ready_.store(true, std::memory_order_release);
     }
 }
 
@@ -846,7 +849,7 @@ void UISampleEditPage::serviceUi() {
     }
     // Hand a completed run to the cache. This is the only place the cache is
     // touched, which is what lets it stay lock-free.
-    if (run_ready_) {
+    if (run_ready_.load(std::memory_order_acquire)) {
         WaveX::Protocol::EnvelopeChunkMessage header;
         header.sample_id = pending_sample_id_;
         header.generation = pending_generation_;
@@ -855,12 +858,13 @@ void UISampleEditPage::serviceUi() {
         header.total_columns = pending_columns_;
         header.first_column = 0;
         header.columns = pending_columns_;
-        header.channels = run_channels_ ? run_channels_ : 1;
+        const uint8_t channels = run_channels_.load(std::memory_order_relaxed);
+        header.channels = channels ? channels : 1;
 
         GetEnvelopeCache().ingest(header, run_columns_.data());
-        run_ready_ = false;
+        run_ready_.store(false, std::memory_order_relaxed);
         request_in_flight_ = false;
-        waveform_dirty_ = true;
+        waveform_dirty_.store(true, std::memory_order_relaxed);
         // A wide view can need more columns than one run holds; ask for the
         // rest now that this one is filed.
         requestWaveform();
@@ -937,10 +941,12 @@ void UISampleEditPage::requestWaveform() {
 
     // Arm the receiver before sending, and bump the epoch first so a chunk
     // from the previous run cannot be filed against this one.
-    ++run_epoch_;
-    run_ready_ = false;
-    run_received_ = 0;
-    run_channels_ = 0;
+    // acq_rel so a chunk copying concurrently sees the new epoch on its
+    // re-check and discards itself rather than filing against this run.
+    run_epoch_.fetch_add(1, std::memory_order_acq_rel);
+    run_ready_.store(false, std::memory_order_relaxed);
+    run_received_.store(0, std::memory_order_relaxed);
+    run_channels_.store(0, std::memory_order_relaxed);
     pending_sample_id_ = sample_id;
     pending_generation_ = generation;
     pending_start_ = req_start;

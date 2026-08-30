@@ -35,6 +35,11 @@ typedef struct {
     uint32_t heartbeat_packets;
     uint32_t diag_push_packets;
     uint32_t error_packets;
+    // Recognised message types with no counter of their own (the 0x30/0x40
+    // response blocks). Separate from unknown_packets so that counter keeps
+    // its diagnostic meaning: a non-zero UNKNOWN should mean corruption or a
+    // version mismatch, not "the frontend has no bucket for browse replies".
+    uint32_t other_known_packets;
     uint32_t unknown_packets;
     uint32_t total_packets;
     uint32_t invalid_packets;
@@ -196,6 +201,5 @@ class StatisticsManager {
         m_sample_status_listener;
 
     // Helper methods
-    const char* get_packet_type_name(uint8_t packet_type) const;
     void update_tx_stats(uint8_t message_type);
 };

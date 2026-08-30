@@ -1162,6 +1162,7 @@ void UIDiagnosticsPage::refreshLinkTab() {
         {"PARAMETER_UPDATE", st.parameter_update_packets},
         {"SYNC", st.sync_packets},
         {"ERROR", st.error_packets},
+        {"OTHER (known)", st.other_known_packets},
         {"UNKNOWN", st.unknown_packets},
         {"INVALID", st.invalid_packets},
         {"TOTAL", st.total_packets},

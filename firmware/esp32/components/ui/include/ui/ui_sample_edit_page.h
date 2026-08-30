@@ -5,6 +5,7 @@
 #include "ui_page.h"
 
 #include <array>
+#include <atomic>
 #include <memory>
 #include <vector>
 
@@ -80,25 +81,35 @@ class UISampleEditPage : public UIPage {
     // whether a chunk still belongs to the view on screen. run_epoch_ is
     // bumped before each arming and re-checked after the copy, so a chunk
     // cannot be filed against a request that changed underneath it.
-    volatile uint32_t run_epoch_ = 0;
+    // std::atomic, not volatile: the producer is the UART RX task and the
+    // consumer is the UI task, on either core. volatile orders nothing between
+    // them, so the consumer could observe run_ready_ before the column data it
+    // advertises. Guide §9 bans volatile for exactly this. The file browser
+    // has used release/acquire here since the 2026-07-03 DMA/timing review;
+    // this page had regressed to the older pattern.
+    std::atomic<uint32_t> run_epoch_{0};
     uint16_t pending_sample_id_ = 0;
     uint16_t pending_generation_ = 0;
     uint32_t pending_start_ = 0;
     uint32_t pending_end_ = 0;
     uint16_t pending_columns_ = 0;
-    volatile uint16_t run_received_ = 0;
-    volatile uint8_t run_channels_ = 0;
-    volatile bool run_ready_ = false;
+    std::atomic<uint16_t> run_received_{0};
+    std::atomic<uint8_t> run_channels_{0};
+    std::atomic<bool> run_ready_{false};
     bool request_in_flight_ = false;
     uint32_t request_sent_ms_ = 0;
 
-    // Envelope chunks arrive on the UART RX task, which must not touch LVGL
-    // (inter_mcu.h; ui-architecture.md) and must not touch the cache either,
-    // since the cache allocates. The callback only fills the buffer and
-    // raises these flags; ui_timer_ applies them on the UI task.
+    // Redraw requests, applied by ui_timer_ on the UI task.
+    //
+    // Unlike the run_* state above, these are raised only from UI-task code -
+    // the envelope callback signals completion through run_ready_, not through
+    // these. They are atomic defensively rather than by necessity, so that a
+    // future comm-side caller is correct by default; do not read this as
+    // evidence that the RX task touches them today, and do not add one without
+    // reading the ordering note above first.
     lv_timer_t* ui_timer_ = nullptr;
-    volatile bool waveform_dirty_ = false;
-    volatile bool params_dirty_ = false;
+    std::atomic<bool> waveform_dirty_{false};
+    std::atomic<bool> params_dirty_{false};
 
     // Encoder movement coalescing. One detent used to fire an envelope request
     // of its own, so a single turn queued a burst of them.

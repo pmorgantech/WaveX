@@ -7,7 +7,7 @@
 
 Findings carry stable IDs (`E-…`) so implementation can be tracked in this file. **Completed items leave this document** — detail goes to `CHANGELOG.md`, matching the roadmap's convention — so what remains here is always the open list. A partially-addressed item keeps its row, marked `[~]`, and says what is left.
 
-**Already remediated** (see `CHANGELOG.md` § Unreleased): E-LVGL1/2/3, the LVGL thread-safety cluster (`21304be`, `222b2b4`); E-LIFE1/2/3, the callback-lifetime cluster (`41f4cdd`); E-KEY1/2, the keypad decode and INT busy-spin (`cdab47d`); E-INIT1 and E-BLD1/2 (`f6b7394`); E-TICK1/E-TOUCH1/E-BRWS1/E-MENU1, the UI correctness batch (`edd9981`); E-TX1, the outbound-frame latency (`6a0912c`); E-METER1 and E-DIAG1, the two periodic-work wastes (`b64ae32`); E-MIDI1 and E-KBD1. All fixed 2026-08-29. **E-KEY1/2 and E-ENC1 change hardware behaviour and are the ones most needing a bench pass** — they were diagnosed entirely by reading code and the controller datasheet.
+**Already remediated** (see `CHANGELOG.md` § Unreleased): E-LVGL1/2/3, the LVGL thread-safety cluster (`21304be`, `222b2b4`); E-LIFE1/2/3, the callback-lifetime cluster (`41f4cdd`); E-KEY1/2, the keypad decode and INT busy-spin (`cdab47d`); E-INIT1 and E-BLD1/2 (`f6b7394`); E-TICK1/E-TOUCH1/E-BRWS1/E-MENU1, the UI correctness batch (`edd9981`); E-TX1, the outbound-frame latency (`6a0912c`); E-METER1 and E-DIAG1, the two periodic-work wastes (`b64ae32`); E-MIDI1, E-KBD1 and the defect half of E-PROTO1 (`1d16237`); E-SYNC1 and E-STAT1. All fixed 2026-08-29. **E-KEY1/2 and E-ENC1 change hardware behaviour and are the ones most needing a bench pass** — they were diagnosed entirely by reading code and the controller datasheet.
 
 ---
 
@@ -18,12 +18,12 @@ The live UART transport story has improved a lot since the 2026-07-05 review: th
 The debt is concentrated in three themes:
 
 1. **LVGL thread-safety was systematically violated** — ~~the UART RX task mutating widgets directly in comm callbacks, the whole input dispatch path running outside the port lock, and `lv_async_call` issued from the wrong task~~. **Fixed 2026-08-29**; see `CHANGELOG.md`. Kept in this list because it is the reason themes 2 and 3 matter more than they look: the corruption this caused was the most likely explanation for "random" UI failures, so misbehaviour that survives these fixes is now much more likely to be one of the remaining items than a mystery.
-2. **Callback lifetime was unmanaged** — ~~listener pairs as unsynchronized globals, a file browser that never deregistered, and four different locking disciplines across four slots in one class~~. **Fixed 2026-08-29**; see `CHANGELOG.md`. What remains of this theme is the *publication* half: comm-driven pages still solve the producer/consumer handoff three different ways — correct `__atomic` release/acquire (file browser), atomics (sample browser, converted), and `volatile` (the sample-edit page, a guide-§9 regression). That is E-SYNC1.
+2. **Callback lifetime and cross-core publication were unmanaged** — ~~listener pairs as unsynchronized globals, a file browser that never deregistered, and four different locking disciplines across four slots in one class~~. **Fixed 2026-08-29**; see `CHANGELOG.md`. The publication half is closed too: all three comm-driven pages now use release/acquire atomics, and the `volatile` handoffs the guide bans are gone from this tree.
 3. **The physical control surface had real functional bugs** — ~~a keypad that either never saw a key or busy-spun core 1, decoding presses as releases, and an encoder using interrupt masking as cross-core synchronization~~. **Fixed 2026-08-29**; see `CHANGELOG.md`. These were found by reading code and the TI datasheet, not by observing hardware, so they are the highest-value items in this review to confirm on the bench: if the keypad still misbehaves, the remaining suspect is the CFG register the vendored driver never writes.
 
 Two systemic build findings rounded it out — ~~inert `-Os`/LTO options added after `project()`, and an `EXCLUDE_COMPONENTS` list that excluded nothing~~. **Fixed 2026-08-29**, and the fix confirmed both diagnoses: a clean rebuild came out within 48 bytes of the old image, which is what it should be if the options really were applying to nothing and the pruned exclusions really were being built anyway.
 
-**Suggested order**: all Criticals are closed and the only whole Major left is E-STOP1 (latent — every teardown API is unsafe, but none has a caller). After that it is the Minor and Smell batches, plus the two partials (E-ENC1's watch-point ISR and E-SYNC1's edit page). E-METER1 is worth pairing with the `lv_refr_now` question in roadmap § Outstanding hardware verification, since both concern the same duplicated refresh path. Then the Minor/Smell batches. E-SYNC1's remaining half (the sample-edit page's `volatile`) is cheap and can ride along with any edit-page work. The SPI findings (§7) do not need fixing now but must gate any re-enable of `WAVEX_SPI_LINK_ENABLED`. **Before any of that, a bench pass on the keypad and encoder** — three fixes now depend on hardware behaviour nobody has watched.
+**Suggested order**: all Criticals are closed, and Major is down to E-STOP1 (latent — every teardown API is unsafe, but grep confirms none has a caller) plus E-ENC1's remaining watch-point-ISR half. What is left otherwise is the Minor and Smell batches: mostly hardware-truth cleanup (E-CFG1), deletions (E-DEAD1, E-ODR1) and build posture (E-SDK1, E-STD1). E-METER1 is worth pairing with the `lv_refr_now` question in roadmap § Outstanding hardware verification, since both concern the same duplicated refresh path. Then the Minor/Smell batches. E-SYNC1's remaining half (the sample-edit page's `volatile`) is cheap and can ride along with any edit-page work. The SPI findings (§7) do not need fixing now but must gate any re-enable of `WAVEX_SPI_LINK_ENABLED`. **Before any of that, a bench pass on the keypad and encoder** — three fixes now depend on hardware behaviour nobody has watched.
 
 ---
 
@@ -32,10 +32,8 @@ Two systemic build findings rounded it out — ~~inert `-Os`/LTO options added a
 | ID | Sev | Area | Summary |
 |---|---|---|---|
 | [~] E-ENC1 | Major | input | Encoder SMP race fixed 2026-08-29 (atomics replace interrupt masking); the read-then-clear window is narrowed from every movement poll to ~1 per 8000 counts, not closed — closing it needs the driver's watch-point ISR and bench time |
-| [~] E-SYNC1 | Major | UI/core | `volatile`/plain-`bool` cross-task handoffs — sample browser converted to atomics and `ui_task.h`'s `volatile` meter state deleted outright with the dead pipeline, 2026-08-29; the sample-edit page's `volatile` run state is what remains |
 | [ ] E-STOP1 | Major | all | Every `stop()`/teardown API is unsafe (vTaskDelete over held locks / blocked queues) |
 | [~] E-PROTO1 | Minor | comm | Router NUL guard, sample-data length truncation and the residual `if (result)` fixed 2026-08-29; the ~10 sites returning bare `-1` with a comment claiming `ESP_ERR_INVALID_STATE` are still open |
-| [ ] E-STAT1 | Minor | comm | Packet statistics misclassify all 0x30-block traffic; dead type-name table is shifted |
 | [ ] E-SEQ1 | Minor | shared | `SequenceTracker` non-modular compare misbehaves at 64K wrap |
 | [ ] E-CFG1 | Minor | config | Hardware-truth pass: pin_config contradictions, unused TCA8418 macros, broken guard |
 | [ ] E-INQ1 | Minor | UI | Input queue drops are silent and uncounted |
@@ -74,16 +72,6 @@ Two stacked defects in the primary control:
 
 **Still open — the read-then-clear window is narrowed, not closed.** The review's suggested fix (free-run and never clear) is not safe as written: the unit is configured `high_limit = INT16_MAX` / `low_limit = INT16_MIN`, and the `pulse_cnt` driver **resets the count to zero on reaching either limit**, so a free-running counter produces one large bogus delta per ±32767 counts rather than never wrapping. Instead the counter is now re-centred only when it passes ±8000, so the lossy window went from *every poll during movement* to roughly one per 8000 counts (~85 revolutions), where losing a fraction of a detent is imperceptible. Closing it properly means the driver's watch-point callbacks — an ISR, needing an IRAM-safety audit and bench time.
 
-### E-SYNC1 — `volatile`/plain-`bool` cross-core handoffs (guide §9 ban)
-
-The repo already contains the correct pattern — `file_browser.cpp:169-186` uses `__atomic_*` release/acquire, citing "dma-timing-review Finding 11" — but newer code regressed:
-
-- `include/ui/ui_sample_edit_page.h:83-101` *(current branch)* — `volatile uint32_t run_epoch_; volatile bool run_ready_; …`: `handleEnvelopeChunk` (UART task) fills `run_columns_` then sets `run_ready_`; `serviceUi` (LVGL task) consumes. `volatile` provides no inter-core ordering on the P4 — the consumer can see the flag before the column data.
-- `include/ui/ui_sample_browser.h:181-186` — deferred-update flags and buffers are plain `bool`s; additionally `pending_metadata_entry_` points into `file_browser_->entries[]`, which the UART task rewrites during pagination while the UI task formats it (torn text).
-- `main/ui_task.h:73-94` — `volatile` meter floats + `meter_callback_data_valid`, and plain `content_changed`, written from the uart/esp_timer tasks and read on core 1.
-
-**Fix**: one shared helper implementing the file-browser pattern (`std::atomic` flag with release store/acquire load around a snapshot buffer); use it in all three places; copy metadata out of `entries[]` at publication time.
-
 ### E-STOP1 — every teardown API is unsafe (latent; all currently caller-less, grep-verified)
 
 A single pattern repeated across the tree: `vTaskDelete(handle)` on a task that may hold a lock or be blocked on an object that is then freed.
@@ -105,10 +93,6 @@ A single pattern repeated across the tree: `vTaskDelete(handle)` on a task that 
 - `inter_mcu.cpp:794-806`: `size_t length` silently truncates through the `uint16_t` parameter — `65536+n` sends `n` bytes and returns `ESP_OK`. Range-check before the cast (same latent cast at :734).
 - `inter_mcu.cpp:371-376`: residual old-C3 instance — `if (result)` treats `-1` as success (log-only, function has no callers).
 - ~10 sites return `-1` with a comment claiming `ESP_ERR_INVALID_STATE` (e.g. `inter_mcu.cpp:87,145,158,174,188,280,399,712`) — return the named constant so callers can distinguish not-initialized from send-failed.
-
-### E-STAT1 — statistics misclassification
-
-`main/comm/statistics.cpp:100-103`: every 0x30-block message (BROWSE_RESP, SAMPLE_STATUS, STORAGE_STATUS, SAMPLE_META, CV_*) counts as `unknown_packets`, so the most frequent live traffic reads "unknown" in diagnostics; the comment misstates `MSG_DATA_REQUEST` as 0x0C (enum: 0x0B). `get_packet_type_name` (:324-361) is both dead (no callers) and shifted one type off across the board — delete or fix.
 
 ### E-SEQ1 — `SequenceTracker` 64K-wrap edge
 

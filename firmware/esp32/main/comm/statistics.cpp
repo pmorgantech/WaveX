@@ -83,10 +83,9 @@ void StatisticsManager::increment_packet_stat(uint8_t packet_type) {
         case 0x0A:
             m_packet_stats.preview_req_packets++;
             break;  // MSG_PREVIEW_REQ
-        case 0x0B:  // Legacy MSG_DATA_REQUEST (pre-unified)
-        case 0x0C:
+        case 0x0B:  // MSG_DATA_REQUEST
             m_packet_stats.data_request_packets++;
-            break;  // Current MSG_DATA_REQUEST (0x0C)
+            break;
         case 0x0D:  // Legacy MSG_METER_PUSH
         case 0x10:
             m_packet_stats.meter_push_packets++;
@@ -108,6 +107,16 @@ void StatisticsManager::increment_packet_stat(uint8_t packet_type) {
         case 0xFF:
             m_packet_stats.error_packets++;
             break;  // MSG_ERROR
+        // Recognised, but with no counter of their own. These are the busiest
+        // messages on the live link, and counting them as "unknown" - which is
+        // what happened before - drowned the signal that counter exists for.
+        case 0x31:  // MSG_BROWSE_RESP
+        case 0x34:  // MSG_SAMPLE_STATUS
+        case 0x39:  // MSG_STORAGE_STATUS
+        case 0x3D:  // MSG_SAMPLE_META
+        case 0x42:  // MSG_CV_CAL_RESP
+            m_packet_stats.other_known_packets++;
+            break;
         default:
             m_packet_stats.unknown_packets++;
             break;
@@ -305,45 +314,6 @@ void StatisticsManager::get_backend_heartbeat_detailed(uint32_t* uptime_ms,
     *cpu_max_percent = m_backend_hb.cpu_max_percent;
     *valid = m_backend_hb.valid;
     taskEXIT_CRITICAL(&m_hb_lock);
-}
-
-const char* StatisticsManager::get_packet_type_name(uint8_t packet_type) const {
-    switch (packet_type) {
-        case 0x01:
-            return "SYNC";
-        case 0x02:
-            return "CONTROL_CHANGE";
-        case 0x03:
-            return "NOTE_ON";
-        case 0x04:
-            return "NOTE_OFF";
-        case 0x05:
-            return "SAMPLE_LOAD";
-        case 0x06:
-            return "SAMPLE_DATA";
-        case 0x07:
-            return "PARAMETER_UPDATE";
-        case 0x08:
-            return "STATUS_REQUEST";
-        case 0x09:
-            return "STATUS_RESPONSE";
-        case 0x0A:
-            return "SAMPLE_CTRL";
-        case 0x0B:
-            return "PREVIEW_REQ";
-        case 0x0C:
-            return "DATA_REQUEST";
-        case 0x0D:
-            return "METER_PUSH";
-        case 0x0E:
-            return "WAVE_CHUNK";
-        case 0x0F:
-            return "HEARTBEAT";
-        case 0xFF:
-            return "ERROR";
-        default:
-            return "UNKNOWN";
-    }
 }
 
 void StatisticsManager::update_tx_stats(uint8_t message_type) {
