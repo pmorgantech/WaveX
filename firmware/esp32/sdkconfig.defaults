@@ -37,19 +37,17 @@ CONFIG_BSP_LCD_TYPE_720_1280_5_INCH_A=y
 CONFIG_IDF_EXPERIMENTAL_FEATURES=y
 CONFIG_LVGL_PORT_ENABLE_PPA=y
 
-# LVGL's own PPA draw unit (roadmap 0.3 item 1). This is a DIFFERENT PPA
-# consumer from CONFIG_LVGL_PORT_ENABLE_PPA above: that one offloads display
-# rotation inside esp_lvgl_port, this one installs a draw unit inside LVGL's
-# renderer that accelerates unrounded, fully-opaque rectangle fills.
+# LVGL's own PPA draw unit (CONFIG_LV_USE_PPA) was enabled in df672c5,
+# measured, and turned back off in favour of software drawing. It made drawing
+# genuinely faster - render median -25%, p95 37->29ms, max 95->47ms on the
+# Diagnostics page - but cost ~14% more CPU and ~7% FPS overall, because
+# ppa_evaluate() applies no minimum-area threshold and lv_draw_ppa_fill.c uses
+# PPA_TRANS_MODE_BLOCKING: every tiny fill becomes a blocking hardware
+# round-trip. That is not fixable without forking a managed component.
+# Full numbers and method: docs/roadmap.md 0.3 item 1.
 #
-# LV_DRAW_BUF_ALIGN is not incidental - lv_draw_ppa_private.h hard #errors
-# unless it equals CONFIG_CACHE_L2_CACHE_LINE_SIZE, which is 128 on the P4.
-# LV_USE_PPA_IMG is deliberately left off: it accelerates image blits and this
-# firmware draws no images (no lv_image_*/lv_canvas_* call exists outside the
-# host preview harness), so it would be pure code size.
-CONFIG_LV_USE_PPA=y
-CONFIG_LV_PPA_BURST_LENGTH=128
-CONFIG_LV_DRAW_BUF_ALIGN=128
+# LV_DRAW_BUF_ALIGN goes back to 4 with it; 128 was a hard requirement of
+# LV_USE_PPA (lv_draw_ppa_private.h #errors otherwise), not a tuning choice.
 
 # USB MIDI device class (roadmap Phase 1 item 8)
 CONFIG_TINYUSB_MIDI_COUNT=1

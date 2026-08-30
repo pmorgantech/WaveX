@@ -11,6 +11,24 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Removed — LVGL PPA draw unit (measured, then reverted)
+
+- `CONFIG_LV_USE_PPA` is off again, and `CONFIG_LV_DRAW_BUF_ALIGN` back to 4
+  (128 was a hard requirement of the PPA, not a tuning choice). Saves 5,760
+  bytes.
+- It was not a simple failure: on the Diagnostics page it cut render median
+  25%, p95 37→29 ms and max 95→47 ms. But it cost ~14% more CPU and ~7% FPS,
+  because `ppa_evaluate()` applies no minimum-area threshold and
+  `lv_draw_ppa_fill.c:39` uses `PPA_TRANS_MODE_BLOCKING` — so a 4×4-pixel fill
+  becomes a blocking hardware round-trip. Large fills win, the many small ones
+  lose, and the sum is negative. Fixing that means editing
+  `managed_components/`, which the component manager regenerates.
+- `wavexInvalidateCacheArea()` from the previous entry is **retained**. It
+  compiles out with `LV_USE_PPA`, and it corrects a real upstream defect, so
+  any future retry starts from the fixed version rather than rediscovering it.
+- Full numbers, method and the conditions for a retry: `docs/roadmap.md` § 0.3
+  item 1.
+
 ### Changed — LVGL cache invalidation narrowed to the dirty area
 
 - `CONFIG_LV_USE_PPA` does more than add a draw unit: `lv_draw_ppa_init()`
