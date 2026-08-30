@@ -309,75 +309,49 @@ static uint32_t s_prev_sent = 0;
 static uint8_t s_preview_frame[sizeof(WaveX::Protocol::WaveChunkMessage) +
                                kMaxPreviewPoints * sizeof(int16_t)];
 
-static void SendPreviewChunks() {
-    // Prefer to send the entire preview in one frame if it fits.
+// Sends one preview frame per call and is driven from the main loop every
+// pass (like PumpEnvelopeJob/PumpWavIO), NOT looped-and-retried inline.
+//
+// UartLinkPumpTx() (== process_tx_queue()) only ever STARTS or RETIRES a DMA
+// transfer; it never waits for one to complete. A frame takes ~2.6 ms of wire
+// time at 2 Mbaud, so spin-calling it dozens of times back-to-back (the old
+// approach) burns microseconds, not milliseconds, and the queue-full retry
+// budget exhausts before the in-flight frame has actually drained - previews
+// past ~1150 points (4 queued chunks) were truncated on nearly every
+// request. UartLinkProcess() already calls process_tx_queue() once per
+// main-loop pass regardless, so simply trying one send per pass and leaving
+// the rest of the preview queued for the next pass(es) needs no pumping of
+// its own and cannot truncate: it only ever waits, never gives up.
+void PumpPreviewSend() {
+    if (s_prev_sent >= s_preview_len) {
+        return;  // nothing pending (also covers preview_len == 0)
+    }
+
+    // Prefer to send the entire preview in one frame if it fits - only
+    // meaningful for the first chunk, since a partially-sent preview by
+    // definition no longer fits in one frame the way this check means it.
     constexpr uint16_t kMaxSingleFrameSamples = 900;  // header + 900*2 < 2048 payload limit
-    if (s_preview_len <= kMaxSingleFrameSamples) {
-        WaveX::Protocol::WaveChunkMessage header{};
-        header.offset = 0;
-        header.count = static_cast<uint16_t>(s_preview_len);
-
-        const size_t payload_bytes =
-            sizeof(header) + static_cast<size_t>(header.count) * sizeof(int16_t);
-        memcpy(s_preview_frame, &header, sizeof(header));
-        memcpy(s_preview_frame + sizeof(header), s_preview, header.count * sizeof(int16_t));
-
-        int res = WaveX::Comm::UartLinkSend(
-            WaveX::Protocol::MSG_WAVE_CHUNK, s_preview_frame, static_cast<uint16_t>(payload_bytes));
-        if (res < 0) {
-            // Queue full: drain one frame and retry once (review Finding 5).
-            WaveX::Comm::UartLinkPumpTx();
-            res = WaveX::Comm::UartLinkSend(WaveX::Protocol::MSG_WAVE_CHUNK,
-                                            s_preview_frame,
-                                            static_cast<uint16_t>(payload_bytes));
-        }
-        return;
-    }
-
     constexpr uint16_t kChunkSamples = 256;
+    const bool whole_fits = (s_prev_sent == 0) && (s_preview_len <= kMaxSingleFrameSamples);
+    const uint16_t count =
+        whole_fits
+            ? static_cast<uint16_t>(s_preview_len)
+            : static_cast<uint16_t>(std::min<uint32_t>(kChunkSamples, s_preview_len - s_prev_sent));
 
-    // The TX queue is only 4 deep and normally drains one frame per
-    // main-loop pass; the old version queued every chunk in a tight loop,
-    // ignored the queue-full return, and advanced s_prev_sent regardless -
-    // silently dropping everything past the 4th chunk and leaving holes in
-    // the waveform preview (review Finding 5). Now: on queue-full, pump the
-    // TX queue directly (UartLinkPumpTx is TX-only, safe from this
-    // message-handler context) and retry the same chunk. kMaxPumps bounds
-    // the extra main-loop blocking this adds (~2.6ms wire time per 522-byte
-    // chunk pumped at 2 Mbaud); if the link is genuinely stalled we abort
-    // loudly with the tail missing rather than punching silent mid-stream
-    // gaps.
-    uint32_t pumps_remaining = 32;
+    WaveX::Protocol::WaveChunkMessage header{};
+    header.offset = s_prev_sent;
+    header.count = count;
 
-    while (s_prev_sent < s_preview_len) {
-        uint16_t remaining =
-            static_cast<uint16_t>(std::min<uint32_t>(kChunkSamples, s_preview_len - s_prev_sent));
+    const size_t payload_bytes = sizeof(header) + static_cast<size_t>(count) * sizeof(int16_t);
+    memcpy(s_preview_frame, &header, sizeof(header));
+    memcpy(s_preview_frame + sizeof(header), s_preview + s_prev_sent, count * sizeof(int16_t));
 
-        WaveX::Protocol::WaveChunkMessage header{};
-        header.offset = s_prev_sent;
-        header.count = remaining;
-
-        const size_t payload_bytes =
-            sizeof(header) + static_cast<size_t>(remaining) * sizeof(int16_t);
-        memcpy(s_preview_frame, &header, sizeof(header));
-        memcpy(
-            s_preview_frame + sizeof(header), s_preview + s_prev_sent, remaining * sizeof(int16_t));
-
-        int res = WaveX::Comm::UartLinkSend(
-            WaveX::Protocol::MSG_WAVE_CHUNK, s_preview_frame, static_cast<uint16_t>(payload_bytes));
-        if (res < 0) {
-            if (pumps_remaining == 0) {
-                if (s_hw)
-                    WaveX::Log::PrintLine("DAISY: preview send aborted at offset %u (TX stalled)",
-                                          (unsigned)s_prev_sent);
-                return;  // partial preview; chunk offsets make the gap visible upstream
-            }
-            --pumps_remaining;
-            WaveX::Comm::UartLinkPumpTx();
-            continue;  // retry the same chunk; s_prev_sent unchanged
-        }
-        s_prev_sent += remaining;
+    const int res = WaveX::Comm::UartLinkSend(
+        WaveX::Protocol::MSG_WAVE_CHUNK, s_preview_frame, static_cast<uint16_t>(payload_bytes));
+    if (res < 0) {
+        return;  // TX queue full; retry the same chunk next pass, state unchanged
     }
+    s_prev_sent += count;
 }
 
 // ============================
@@ -2229,7 +2203,8 @@ void OnPreviewReq(const PreviewReqMessage& pr) {
             (unsigned)s_preview_len);
     }
 
-    SendPreviewChunks();
+    // s_prev_sent is already 0 (reset at the top of this function); the main
+    // loop's PumpPreviewSend() picks the job up starting next pass.
 }
 
 // ============================

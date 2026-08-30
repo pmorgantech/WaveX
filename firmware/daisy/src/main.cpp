@@ -561,6 +561,7 @@ int main(void) {
 // in flight, which is the normal state.
 #if WAVEX_AUDIO_ENGINE_ENABLED
         WaveX::AudioEngine::PumpEnvelopeJob();
+        WaveX::AudioEngine::PumpPreviewSend();
 #endif
 
 // Log SPI processing to verify it continues during auditioning
