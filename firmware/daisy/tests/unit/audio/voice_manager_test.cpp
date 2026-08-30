@@ -482,12 +482,12 @@ TEST(VoiceManagerTest, LoopingVoiceWrapsInsteadOfStopping) {
     EXPECT_EQ(vm.GetVoice(0).state, VoiceState::Playing);
 }
 
-// The loop must wrap back to loop_start and keep replaying the loop window's
-// CONTENT - deliberately not pinning the exact wrap boundary sample (whether
-// the final loop frame renders before the wrap is a separate question; this
-// asserts the audible property either way: values stay inside the window and
-// the window's start keeps coming back around).
-TEST(VoiceManagerTest, LoopWrapsBackToLoopStartContent) {
+// The loop window is [loop_start, loop_end): every frame of it renders,
+// including the final one, and the wrap returns exactly to loop_start. A
+// 6-frame window must produce an exact 6-sample cycle - the previous
+// implementation skipped the final frame (a 5-sample cycle), truncating loop
+// content and sharpening loop pitch by one frame per pass.
+TEST(VoiceManagerTest, LoopRendersFullWindowAsExactCycle) {
     VoiceManager vm;
     vm.Init(48000);
     auto sample = MakeRampSample(16, 0, 1000);  // sample[i] = i*1000
@@ -504,18 +504,11 @@ TEST(VoiceManagerTest, LoopWrapsBackToLoopStartContent) {
     vm.Render(out_l, out_r, 30);
     ASSERT_EQ(vm.ActiveVoiceCount(), 1);
 
-    const float lo = (2000.0f / 32768.0f) * 0.5f;
-    const float hi = (7000.0f / 32768.0f) * 0.5f;
-    int returns_to_start = 0;
     for (int i = 0; i < 30; ++i) {
-        EXPECT_GE(out_l[i], lo - 1e-4f) << "sample " << i << " read below the loop window";
-        EXPECT_LE(out_l[i], hi + 1e-4f) << "sample " << i << " read past the loop window";
-        if (std::fabs(out_l[i] - lo) < 1e-4f)
-            ++returns_to_start;
+        const float expected = (static_cast<float>((2 + i % 6) * 1000) / 32768.0f) * 0.5f;
+        EXPECT_NEAR(out_l[i], expected, 1e-4f)
+            << "sample " << i << " is not frame " << (2 + i % 6) << " of the loop window";
     }
-    // 30 samples over a <=6-frame window: the start value must recur several
-    // times, proving the wrap targets loop_start rather than 0 or end_frame.
-    EXPECT_GE(returns_to_start, 3);
 }
 
 // A degenerate loop region (loop_end <= loop_start + 1) has no playable

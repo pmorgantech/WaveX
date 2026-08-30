@@ -11,6 +11,19 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Fixed — loop windows dropped their final frame
+
+- `VoiceManager::Render()`'s wrap check fired at `loop_end - 1`, before the
+  current frame was read, so the last frame of every loop window was never
+  rendered: a 6-frame loop played a 5-sample cycle, truncating loop content
+  and sharpening loop pitch by one frame per pass. The wrap now happens at
+  `loop_end`, subtracts the loop length (preserving fractional phase, so
+  loop pitch is exact rather than re-quantized every pass, with a snap
+  fallback for phases far outside the window), and the window's final frame
+  interpolates circularly toward `loop_start` instead of reading the frame
+  after the window. `voice_manager_test.cpp` now asserts the exact
+  full-period cycle.
+
 ### Removed — dead `ui_sample_detail` page
 
 - `UISampleDetail`/`createSampleDetailPage()` had no callers anywhere in the

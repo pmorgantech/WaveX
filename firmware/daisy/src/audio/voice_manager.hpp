@@ -358,12 +358,23 @@ class VoiceManager {
             const float left_gain = v.gain * (1.0f - v.pan);
             const float right_gain = v.gain * v.pan;
             const float last_valid_phase = static_cast<float>(v.end_frame - 1);
-            const float last_valid_loop_phase = static_cast<float>(v.loop_end - 1);
+            const float loop_end_phase = static_cast<float>(v.loop_end);
+            const float loop_len = static_cast<float>(v.loop_end - v.loop_start);
 
             for (size_t i = 0; i < block_size; ++i) {
                 bool holding_release_tail = false;
-                if (v.loop && v.phase >= last_valid_loop_phase) {
-                    v.phase = static_cast<float>(v.loop_start);
+                if (v.loop && v.phase >= loop_end_phase) {
+                    // Wrap by the loop length so the fractional phase (and
+                    // with it the exact loop period/pitch) is preserved. The
+                    // window is [loop_start, loop_end): its final frame does
+                    // get rendered, interpolating toward loop_start below.
+                    v.phase -= loop_len;
+                    if (v.phase >= loop_end_phase || v.phase < static_cast<float>(v.loop_start)) {
+                        // Phase far outside the window (start_frame beyond
+                        // loop_end, or increment > loop length): snap rather
+                        // than loop an unbounded number of subtractions here.
+                        v.phase = static_cast<float>(v.loop_start);
+                    }
                 } else if (!v.loop && v.phase >= last_valid_phase) {
                     // Reached the end of a non-looping sample: start the
                     // release tail (or, if already releasing, this just
@@ -391,10 +402,19 @@ class VoiceManager {
                     frac = 0.0f;
                 } else {
                     idx0 = static_cast<uint32_t>(v.phase);
-                    if (idx0 >= v.sample_frames - 1)
-                        idx0 =
-                            v.sample_frames - 2;  // clamp: envelope release masks the tail anyway
-                    idx1 = idx0 + 1;
+                    if (v.loop && idx0 + 1 >= v.loop_end && idx0 >= v.loop_start) {
+                        // Circular seam: the loop window's final frame
+                        // interpolates toward loop_start, not toward the
+                        // frame after the window (which may be trimmed-off
+                        // audio, or out of bounds when loop_end ==
+                        // sample_frames).
+                        idx1 = v.loop_start;
+                    } else {
+                        if (idx0 >= v.sample_frames - 1)
+                            idx0 = v.sample_frames -
+                                   2;  // clamp: envelope release masks the tail anyway
+                        idx1 = idx0 + 1;
+                    }
                     frac = v.phase - static_cast<float>(idx0);
                 }
                 float s0, s1;
