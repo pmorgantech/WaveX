@@ -380,6 +380,52 @@ and a poor absolute one. For true core load, use FreeRTOS run-time stats.
 **This is not a shipping configuration.** The overlays draw on top of the
 product UI. Turn both off before any build that is not a measurement build.
 
+### Getting numbers instead of impressions
+
+The on-screen overlay is fine for a glance and useless for a comparison — the
+values move, and "it felt slower" is not a measurement. For anything you intend
+to act on, use log mode:
+
+```
+CONFIG_LV_USE_LOG=y
+CONFIG_LV_LOG_LEVEL_USER=y        # only the sysmon line; suppresses LVGL's own chatter
+CONFIG_LV_LOG_PRINTF=y            # route to stdout, i.e. the console UART
+CONFIG_LV_USE_PERF_MONITOR_LOG_MODE=y
+```
+
+LVGL then prints one line roughly every 300 ms and hides the perf overlay
+(`lv_sysmon.c:125`), which also removes the overlay's own draw cost from what
+you are measuring:
+
+```
+sysmon: 42 FPS (refr_cnt: 13 | redraw_cnt: 13), refr 21ms (render 18ms | flush 3ms), CPU 61%
+```
+
+**The `render` / `flush` split is the most useful thing here**, and the overlay
+does not show it. `render` is LVGL drawing into the buffer — the part a draw
+unit like the PPA can accelerate. `flush` is getting those pixels onto the
+panel, which it cannot. A page dominated by `flush` will not be helped by any
+amount of draw acceleration, and that single distinction decides whether a slow
+page is worth optimising in LVGL at all.
+
+Capture and summarise:
+
+```
+python3 scripts/serial_log.py --vid 303a --out logs/ppa-off.log
+# ... drive the UI, one page at a time ...
+python3 scripts/sysmon_stats.py logs/ppa-off.log logs/ppa-on.log
+```
+
+`sysmon_stats.py` prints mean, median, p95, min and max per field, and for two
+captures a median-to-median delta plus each run's interquartile range. Use the
+IQR: **if the two runs' middle-50% ranges overlap, a moving median is not yet
+evidence.** It drops the first few samples by default (`--warmup`), because a
+freshly opened page redraws everything once and those samples describe the
+transition rather than the steady state.
+
+Capture one page per file. FPS is not comparable across pages, so a single log
+covering three screens averages away the thing you wanted to see.
+
 ### A/B procedure: is `CONFIG_LV_USE_PPA` actually faster?
 
 The roadmap's outstanding item. The PPA draw unit accelerates unrounded,
