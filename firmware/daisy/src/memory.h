@@ -478,9 +478,12 @@ class SampleMemMgr {
         return large_.alloc(nbytes, out);
     }
 
-    // Direct pointer for read access
+    // Direct pointer for read access. len == 0 is the released-handle
+    // sentinel (see release() below): without this guard a zeroed handle
+    // would "succeed" with a pointer to small-pool class 0 / page 0 /
+    // slot 0 instead of failing.
     bool ptr(const wxsamp_t& h, void** out_ptr) {
-        if (!initialized_ || !out_ptr)
+        if (!initialized_ || !out_ptr || h.len == 0)
             return false;
         if (h.cls == 0xFF)
             return large_.ptr(h, out_ptr);

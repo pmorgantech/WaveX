@@ -169,14 +169,10 @@ TEST_F(SampleMemTest, ZeroByteAllocRejected) {
 }
 
 // release() zeroes the WHOLE handle, not just len - len==0 is the documented
-// "released" sentinel a caller must check before ptr().
-//
-// CAUTION (production footgun, src/memory.h SampleMemMgr::ptr): ptr() itself
-// does NOT check len==0 - called on a zeroed handle it routes to small class
-// 0 / page 0 / slot 0 and "succeeds" with a pointer into the small pool.
-// Deliberately not pinned here (it depends on pool internals); callers must
-// gate on h.len, which this test keeps honest.
-TEST_F(SampleMemTest, ReleaseZeroesEveryHandleField) {
+// "released" sentinel, and ptr() itself must honour it: a released handle
+// must fail cleanly rather than "succeed" with a pointer to small-pool
+// class 0 / page 0 / slot 0 (the pre-fix behavior).
+TEST_F(SampleMemTest, ReleaseZeroesEveryHandleFieldAndPtrRejectsIt) {
     wxsamp_t h{};
     ASSERT_TRUE(mgr_.alloc(128, &h));
     mgr_.release(&h);
@@ -185,6 +181,10 @@ TEST_F(SampleMemTest, ReleaseZeroesEveryHandleField) {
     EXPECT_EQ(h.cls, 0);
     EXPECT_EQ(h.page, 0);
     EXPECT_EQ(h.slot, 0);
+
+    void* p = nullptr;
+    EXPECT_FALSE(mgr_.ptr(h, &p)) << "ptr() must reject a released (zeroed) handle";
+    EXPECT_EQ(p, nullptr);
 }
 
 // The sample browser allocates a fresh sample_id per audition, so OnSampleLoad

@@ -11,6 +11,13 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Fixed — `SampleMemMgr::ptr()` "succeeded" on released handles
+
+- `ptr()` had no guard for the `len == 0` released-handle sentinel, so a
+  zeroed handle routed to small-pool class 0 / page 0 / slot 0 and returned
+  a live pointer instead of failing. It now rejects released handles, so
+  callers no longer have to remember to gate on `h.len` themselves.
+
 ### Fixed — sample-play-request path could be read past the frame
 
 - `HandleSamplePlayRequestMessage` forwarded the payload as a `const char*`
