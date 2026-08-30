@@ -1,8 +1,9 @@
 # WaveX UI Architecture (Navigator-First Design)
 
-**Last Updated**: 2026-08-28 (verified against code; hardware facts moved to
-[`ui-design-constraints.md`](ui-design-constraints.md))
-**Version**: 2.1
+**Last Updated**: 2026-08-30 (re-verified against code — the `UIPage` sample,
+tab-group and Shift-modifier sections were stale since 2026-08-28; hardware
+facts moved to [`ui-design-constraints.md`](ui-design-constraints.md))
+**Version**: 2.2
 
 **Hardware/toolkit summary** (full detail + sources in the constraints doc):
 LVGL 9.4 on ESP32-P4, 5-inch 720×1280 MIPI-DSI panel software-rotated to
@@ -78,15 +79,18 @@ class UIPage {
 public:
     virtual ~UIPage() = default;
     virtual const char* name() const = 0;
-    virtual std::vector<SoftkeyDef> getSoftkeys() const = 0;
     virtual void onEnter(lv_obj_t* parent) = 0;
-    virtual void onExit() = 0;
+    virtual void onExit() {}
+    virtual void onInput(const InputEvent& evt) {}
+    virtual std::array<Softkey, NUM_SOFTKEYS> getSoftkeys() { return {}; }
+    virtual std::array<Softkey, NUM_SOFTKEYS> getShiftedSoftkeys() { return {}; }
 };
 ```
 
 **Responsibilities**:
 - Define page name (shown in header)
-- Define softkey labels and actions
+- Define softkey labels/actions, and optionally a Shift-revealed alternate row (`getShiftedSoftkeys()` — see "Shift Modifier" below)
+- Handle input directly via `onInput()` when a page needs more than softkeys (encoder deltas, touch)
 - Create/destroy page UI in `onEnter`/`onExit`
 - Never manipulate LVGL outside `onEnter`/`onExit` (these run with `LV_LOCK()` held)
 
@@ -113,6 +117,42 @@ Central event router for:
 - Hardware keypad events
 
 Routes events to the currently active navigation context (typically the `SoftkeyBar`).
+
+### Shift Modifier
+
+`BUTTON_SHIFT` is intercepted globally by `InputDispatcher::processAll()`
+before dispatch to the active context, so every page gets the same modifier
+for free and none can accidentally swallow it (`ui_softkey.h`,
+`input_dispatcher.cpp`).
+
+`UINavigator::toggleShift()` / `setShift(bool)` flip a **latched, not held**
+state (`isShifted()`), shown as a SHIFT chip in the header. It is *sticky*:
+it clears itself after one shifted key fires, and on navigation — a plain
+toggle left on would make the next press do the wrong thing. A page that
+defines no alternate row (`getShiftedSoftkeys()` returns the empty default)
+is simply inert while shifted rather than blanking the softkey row —
+`UINavigator::activePageHasShiftedKeys()` is what the header chip and input
+routing check before treating Shift as meaningful on the current page.
+
+### Tab Groups
+
+Two distinct shapes exist for grouping related pages, per
+[`ui-information-architecture.md`](ui-information-architecture.md) §2's rule
+("tabs when the children share a subject, a menu list when they do not"):
+
+- **`UITabHostPage`** (`ui_tab_host_page.h`) hosts existing, independent
+  `UIPage`s unchanged — each keeps its own `onEnter`/`onExit`/softkeys/input
+  handling, and the host forwards the page contract to whichever tab is
+  selected. Used for groups like Sample (Browse/Manage/Edit/Record) and
+  Settings, where converting the children into tab-body builders would be a
+  large, risky rewrite. Children are entered lazily and exited when switched
+  away from, so a hidden tab holds no LVGL objects and runs no timers.
+- **A page building its own `lv_tabview`** (`tabGroupCreate()` /
+  `tabGroupAddTab()` in `ui_tab_group.h`) is for stages that share state
+  across the tab switch — e.g. `UIVoicePage`'s five stages (Sample, Env,
+  Amp, Filter, Mod) share the voice being edited, so the header and status
+  line must survive switching tabs. The Diagnostics page uses the same
+  helper for its six tabs.
 
 ## Data Flow & Threading
 
@@ -144,41 +184,26 @@ UI Task (in main loop)
 
 ## Global State Reduction
 
-### What Was Removed
-1. **ui_globals.cpp/h**: Global pointer to sample load/save page
-2. **ui_task.cpp statics**:
-   - `s_content_area`, `s_hotkey_region`, `s_hotkey_buttons`, `s_hotkey_labels`
-   - `s_current_screen`
-   - Procedural menu creation functions (`create_main_menu`, `create_sample_menu`)
-   - Direct hotkey label management functions
+The original migration (this section historically described) replaced global
+page pointers and procedural menu-creation functions (`ui_globals.cpp/h`,
+`create_main_menu`/`create_sample_menu`, and a `sample_load_save.cpp` page
+that predates the current `UIPage` hierarchy) with the `UINavigator`
+push/pop model above. All of those files are gone from the tree today —
+pages are `UIPage` subclasses constructed by factory functions in
+`ui_main_menu.cpp` (see "Page Implementation Guide" below) and owned by the
+navigator stack, not by global pointers.
 
-### What Remains (Justified)
-1. **Meter display objects** (`s_meter_bar_l`, `s_meter_bar_r`, etc.)
-   - Must persist between page switches for real-time updates
-   - Managed by `process_deferred_meter_updates()`
-2. **Deferred state** (`s_meter_update_pending`, `s_deferred_rms_left`, etc.)
-   - Synchronization between meter timer and UI task
-   - Prevents LVGL lock contention
+What remains, and is justified: meter display objects (`s_meter_bar_l`,
+`s_meter_bar_r`, etc.) persist across page switches for real-time updates,
+and deferred state (`s_meter_update_pending`, `s_deferred_rms_left`, etc.)
+synchronizes the meter timer with the UI task without LVGL lock contention —
+see "Deferred Update Pattern" above.
 
-### How Pages Access Shared Services
-**Before** (Anti-pattern):
-```cpp
-// In sample_load_save.cpp
-extern wavex_sample_load_save_page_t* g_sample_load_save_page;
-if (g_sample_load_save_page) {
-    wavex_sample_load_save_update(g_sample_load_save_page);
-}
-```
-
-**After** (Preferred):
-```cpp
-// Pages no longer exposed globally
-// Navigator manages page lifecycle
-// Shared services accessed via dependency injection or context
-if (auto* sample_page = wavex_sample_load_save_get_active()) {
-    wavex_sample_load_save_update(sample_page);
-}
-```
+**Known gap, not yet fixed**: `components/ui` still depends on `main`
+(`inter_mcu_*` free functions called directly from pages) rather than
+through injected context — tracked in `docs/backlog.md` ("Break the
+`components/ui` ⇄ `main` dependency cycle") as `E-ARCH1`, deliberately
+deferred until after the current hardware bring-up pass.
 
 ## Page Implementation Guide
 
@@ -188,11 +213,11 @@ class MyCustomPage : public UIPage {
 public:
     const char* name() const override { return "My Page"; }
 
-    std::vector<SoftkeyDef> getSoftkeys() const override {
-        return {
-            {0, "Back", [](void*) { UINavigator::instance().pop(); }},
-            {5, "Select", [](void*) { /* handle select */ }}
-        };
+    std::array<Softkey, NUM_SOFTKEYS> getSoftkeys() override {
+        std::array<Softkey, NUM_SOFTKEYS> keys{};
+        keys[0] = {"Back", []() { UINavigator::instance().pop(); }};
+        keys[5] = {"Select", []() { /* handle select */ }};
+        return keys;
     }
 
     void onEnter(lv_obj_t* parent) override {
@@ -234,7 +259,7 @@ void onAuditionStateChange(bool is_playing) {
 }
 ```
 
-**See**: `sample_load_save.cpp` lines 210, 259
+**See**: `ui_play_page.cpp` — `getSoftkeys()` builds the paged-param label from state, and the state-changing callbacks call `UINavigator::instance().refreshSoftkeys()` after updating it.
 
 ## LVGL Threading Compliance
 
@@ -299,8 +324,8 @@ LV_UNLOCK();
 
 ### If Adding a New Page
 1. Create class extending `UIPage`
-2. Implement `name()`, `getSoftkeys()`, `onEnter()`, `onExit()`
-3. Register in navigator initialization (typically in `ui_navigation_integration.cpp`)
+2. Implement `name()`, `onEnter()`, and whichever of `onExit()`/`onInput()`/`getSoftkeys()`/`getShiftedSoftkeys()` the page needs (all have empty defaults)
+3. Add a factory function and register it as a menu item or tab in `ui_main_menu.cpp` (`ui_navigation_integration.cpp` only bootstraps the root menu via `initNavigationSystem()` — it is not where individual pages are registered)
 4. Do NOT add global static pointers to the page
 
 ### If Sharing State Between Pages

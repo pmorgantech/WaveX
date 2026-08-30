@@ -320,104 +320,77 @@ std::array<wavex_ui::Softkey, wavex_ui::NUM_SOFTKEYS> getSoftkeys() override {
 ## Page-by-Page Implementation
 
 ### Main Menu (UIMenuPage)
-- **Layout**: Two-button grid (Sample, System)
+- **Layout**: Flat 5-item list — Sample, Voice, Play, Settings, Diagnostics (`ui_main_menu.cpp::createMainMenu()`)
 - **Navigation**: Encoder rotates between options, click/press selects
 - **Softkeys**: None (uses direct selection)
 
-### Sample Menu (UIMenuPage)
-- **Items**: Record, Edit, Load/Save
-- **Softkeys**: Back button (when stack allows pop)
-- **Navigation**: Encoder moves selection highlight, click/press activates
+### Sample (UITabHostPage)
+- **Tabs**: Manage, Browse (omitted if no comm interface), Edit, Record — `createSampleGroup()`
+- Each tab is a full, independent `UIPage` (file manager, file browser, marker editor, recorder) hosted unchanged; see "Tab Groups" in `ui-architecture.md`.
 
-### System Menu (UIMenuPage)
-- **Items**: Diagnostics, Settings
-- **Softkeys**: Back button (when stack allows pop)
-- **Navigation**: Same as Sample menu
+### Settings (UITabHostPage)
+- **Tabs**: Display, Storage, MIDI, System, Calibrate — `createSettingsGroup()`
 
-### Sample Load/Save Page (UISampleLoadSavePage)
-- **Layout**: File browser (left) + metadata panel (right)
-- **Softkeys**: Back, Audition, Load, Save
-- **Navigation**: Touch selection + encoder navigation through files
+### Voice (own `lv_tabview`, not a UITabHostPage)
+- **Tabs**: Sample, Env, Amp, Filter, Mod (`ui_voice_page.cpp`) — one page builds its own tabview because the five stages share the voice being edited, so the header/status line must survive a tab switch (`UITabHostPage` would tear that down per tab).
 
-### Diagnostics Page (UIDiagnosticsPage)
-- **Layout**: Three-column layout (ESP32 status, Daisy link, audio meters)
-- **Softkeys**: Back button
-- **Updates**: Live data every 500ms via timer
+### Diagnostics (own `lv_tabview`)
+- **Tabs**: ESP32, Daisy, Audio, Link, Storage, MIDI (`ui_diagnostics_page.cpp`)
+- **Softkeys**: Freeze, Tab navigation
+- **Updates**: Live via `MSG_DIAG_PUSH`, subscription-gated to only while the page is open — see `ui-diagnostics-spec.md`
+
+### Play (UIPlayPage)
+- **Layout**: Grid of playable keys (press = note-on, release/press-lost = note-off) plus a paged live-parameter softkey row (Cutoff, Res, Attack, Decay, Sustain, Release) sending `MSG_CONTROL_CHANGE`
+- See `features/digital-voice-audition.md` stages 3–4 for the design rationale
 
 ### Custom Pages
-- **Layout**: Flexible - use full content area (1280×545px)
+- **Layout**: Flexible - use full content area (1280×545px), or the tab body height if hosted in a tab group (content area minus the 56px tab bar)
 - **Navigation**: Encoder for parameter control, touch for direct interaction
 - **Softkeys**: Context-specific actions (Back, Save, Cancel, etc.)
 
 ## Adding to Navigation System
 
-### Adding to Existing Menus
+`ui_navigation_integration.cpp` only bootstraps the root: `initNavigationSystem()`
+pushes the main menu and `createNavigationContext()` wires input dispatch to
+the active page. It is not where pages are registered — that happens in
+`ui_main_menu.cpp`.
 
-Edit `firmware/esp32/components/ui/src/ui_navigation_integration.cpp`:
-
-#### Under Sample Menu
+### Adding a menu item
 
 ```cpp
-std::shared_ptr<wavex_ui::UIPage> createSampleMenu() {
-    auto menu = std::make_shared<wavex_ui::UIMenuPage>("Sample Menu");
-
-    // Existing items...
-    menu->addItem("Record", []() { /* ... */ });
-    menu->addItem("Edit", []() { /* ... */ });
-    menu->addItem("Load/Save", []() { /* ... */ });
-
-    // Add your new page
-    menu->addItem("My Custom", []() {
-        wavex_ui::UINavigator::instance().push(std::make_shared<MyCustomPage>());
-    });
-
-    return menu;
-}
+// In ui_main_menu.cpp::createMainMenu(), or inside a group factory
+// (createSampleGroup(), createSettingsGroup()) for a tab instead of a
+// top-level item:
+menu->addItem("My Custom", []() {
+    UINavigator::instance().push(std::make_shared<MyCustomPage>());
+});
 ```
 
-#### Under System Menu
+### Adding a tab to an existing group
 
 ```cpp
-std::shared_ptr<wavex_ui::UIPage> createSystemMenu() {
-    auto menu = std::make_shared<wavex_ui::UIMenuPage>("System Menu");
-
-    // Existing items...
-    menu->addItem("Diagnostics", []() { /* ... */ });
-    menu->addItem("Settings", []() { /* ... */ });
-
-    // Add your new page
-    menu->addItem("My Settings", []() {
-        wavex_ui::UINavigator::instance().push(std::make_shared<MyCustomPage>());
-    });
-
-    return menu;
-}
+// In the relevant createXGroup() function in ui_main_menu.cpp:
+group->addTab("My Tab", createMyCustomPage());
 ```
 
-### Creating New Menu Hierarchies
+### Creating a new tab group
 
-Create new menu functions for complex hierarchies:
+Use `UITabHostPage` when the new pages are independent and substantial (see
+"Tab Groups" in `ui-architecture.md`); build your own `lv_tabview` via
+`tabGroupCreate()`/`tabGroupAddTab()` (`ui_tab_group.h`) only if the tabs
+must share state across a switch, the way `UIVoicePage` does.
 
 ```cpp
-// In ui_navigation_integration.cpp or your own file
-
-std::shared_ptr<wavex_ui::UIPage> createToolsMenu() {
-    auto menu = std::make_shared<wavex_ui::UIMenuPage>("Tools");
-
-    menu->addItem("Analyzer", []() {
-        wavex_ui::UINavigator::instance().push(std::make_shared<AnalyzerPage>());
-    });
-
-    menu->addItem("Generator", []() {
-        wavex_ui::UINavigator::instance().push(std::make_shared<GeneratorPage>());
-    });
-
-    return menu;
+std::shared_ptr<UIPage> createToolsGroup() {
+    auto group = std::make_shared<UITabHostPage>("Tools");
+    group->addTab("Analyzer", std::make_shared<AnalyzerPage>());
+    group->addTab("Generator", std::make_shared<GeneratorPage>());
+    return group;
 }
 
-// Then add to main menu:
+// Then, in createMainMenu():
 menu->addItem("Tools", []() {
-    wavex_ui::UINavigator::instance().push(createToolsMenu());
+    UINavigator::instance().push(createToolsGroup());
 });
 ```
 
@@ -468,9 +441,10 @@ UI_PADDING_SMALL (5px), UI_PADDING_MEDIUM (10px), UI_PADDING_LARGE (15px)
 
 See the following files for complete examples:
 
-- `ui_main_menu.cpp` - Main menu implementation
-- `ui_file_browser.cpp` - File browser with state preservation
-- `ui_settings_page.cpp` - Settings page with parameter editing
-- `ui_navigation_demo.cpp` - Complete integration example
+- `ui_main_menu.cpp` - Main menu and every `createXGroup()` factory (page registration)
+- `ui_sample_browser.cpp` - File browser with state preservation
+- `ui_settings_page.cpp` - `UITabHostPage` group with parameter-editing tabs
+- `ui_voice_page.cpp` - A page building its own `lv_tabview` to share state across tabs
+- `ui_navigation_integration.cpp` - Root bootstrap (`initNavigationSystem()`, input context wiring)
 
 These examples demonstrate the full capabilities of the navigation system and provide templates for creating new pages and menus.

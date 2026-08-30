@@ -1,6 +1,6 @@
 # Digital Voice Audition — Playable Grid, Live Params, Sequenced Playback
 
-**Status**: Target design (unimplemented). Consolidates the near-term path through Phase 2, borrowing narrowly from Phase 2.5.
+**Status**: Stages 1, 3 and 4 done (grid page, live params, playable from the front panel; unverified on hardware). Stage 2 (root-note correctness) still open, so Goal A is not yet complete. Goal B (Stages 5–8, the sequencer path) not started. Consolidates the near-term path through Phase 2, borrowing narrowly from Phase 2.5.
 **Dependencies**: `VoiceManager` + `Envelope` (built, host-tested), `Instrument::ResolveNoteOn` (built, host-tested), sequencer cores `pattern.hpp` / `sequencer_scheduler.hpp` / `sequencer_transport.hpp` (built, host-tested), `MSG_NOTE_ON` transport (built, in service via MIDI).
 **Scope decision (2026-08-29)**: **all-digital sound engine**. The Stage A analog VCF/VCA path (`cv_group_router.hpp`, `ParaphonicParams`, `paraphonic_envelope.hpp`) is out of scope here and is neither removed nor extended — it keeps working, it is simply not the path this document builds on.
 
@@ -61,22 +61,15 @@ Constraints on that replacement:
 
 `OnNoteOn` assigns a fixed `root_note = kDefaultRootNote` when building its trigger params — a named constant, but still a hardcoded assumption, not a resolved value. `Instrument::ResolveNoteOn` — which resolves note + velocity into `VoiceTriggerParams` through the zone model, including the zone's own root note, tuning and gain — is built and host-tested but is not wired into the live note path. Wire it. Without this, every sample is assumed to be recorded at C4 and anything else plays at the wrong pitch, which makes the whole grid misleading.
 
-### Stage 3 — The grid page
+### Stage 3 — The grid page — **DONE**
 
-New LVGL page: a 4×4 grid of tappable cells with a swappable note-map (§3), calling the existing `inter_mcu_send_note_on/off`.
+`UIPlayPage` (`ui_play_page.cpp`), registered under "Play" in the main menu (`ui_main_menu.cpp`). Keys use `LV_EVENT_PRESSED` → `inter_mcu_send_note_on`, `LV_EVENT_RELEASED` / `LV_EVENT_PRESS_LOST` → `inter_mcu_send_note_off`, matching the press/release-gated design this stage called for (`PRESS_LOST` covers the slid-off-finger case).
 
-- Extends the proven construction pattern in `ui_softkey_bar.cpp` (a loop of button creates, each with a per-index event callback) — also used by `file_browser.cpp` and `ui_menu_page.cpp`.
-- **One genuine departure**: those all use `LV_EVENT_CLICKED`, which fires on release. A playable key needs `LV_EVENT_PRESSED` → note-on and `LV_EVENT_RELEASED` → note-off, so gate length follows the finger. `LV_EVENT_PRESS_LOST` must also send note-off or a slid-off finger leaves a hung note.
-- Registered in the main menu (`ui_main_menu.cpp`), which is a list of `addItem` + `UINavigator::instance().push(...)` entries.
-- **Nothing here may block, and nothing outside the UI task may touch LVGL** (roadmap cross-cutting rule; both have been broken before and both froze the display).
+### Stage 4 — Live parameter editing on that page — **DONE**
 
-### Stage 4 — Live parameter editing on that page
+`kParams[]` in `ui_play_page.cpp` pages through Cutoff, Resonance, Attack, Decay, Sustain, Release on the softkey row, each sending `MSG_CONTROL_CHANGE` via `inter_mcu_send_control_change` (also wired on `ui_voice_page.cpp`, the Voice group's live-edit surface). Stage 1 is what makes these audible.
 
-Cutoff, resonance, attack, decay, sustain, release as paged params on the grid page's softkey row, emitting `MSG_CONTROL_CHANGE`. Stage 1 is what makes these audible; this stage is UI only.
-
-Encoder direction is a global contract — clockwise increases — and `InputEvent::delta` is already signed *and* the event type names the sign. Take the magnitude and let the type supply direction (roadmap 1.5.2 item 5; the sample edit page shipped inverted by negating both).
-
-**Goal A is complete at the end of this stage.**
+**Goal A is not yet complete**, even though Stages 3–4 shipped ahead of Stage 2: root-note correctness is still open, so pitch is wrong for any sample not recorded at the default root.
 
 ### Stage 5 — The sequencer's audible half
 

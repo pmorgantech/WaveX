@@ -265,18 +265,23 @@ will name the HAL error if it does not.
 
 ## GT911 touch range mismatch
 
-`display_manager.cpp` passes `x_max = 800, y_max = 480` to the GT911 driver,
-which matches neither the native panel (720×1280,
-`CONFIG_BSP_LCD_TYPE_720_1280_5_INCH_A`) nor the rotated canvas (1280×720).
-The values look inherited from an 800×480 board variant.
+The vendored BSP's `bsp_touch_new()` (`esp32_p4_nano.c` in
+`managed_components/waveshare__esp32_p4_nano/`) configures the GT911 with
+`x_max = 720, y_max = 1280` for our panel
+(`CONFIG_BSP_LCD_TYPE_720_1280_5_INCH_A` falls through to the native-orientation
+branch), but LVGL draws to the software-rotated 1280×720 landscape canvas
+(`LV_DISPLAY_ROTATION_90`, `display_manager.cpp`). Touch is configured in the
+panel's native portrait orientation while the display it's reporting against
+is rotated to landscape.
 
 **Why it is not urgent:** touch has been working well enough that nobody
 noticed — the GT911 reports its own coordinates and the softkey targets are
-large. But if touch ever feels offset, compressed, or dead near two edges,
-this is the first suspect (verify by tapping all four corners). Do not fix
-blind: change it with the panel attached and corner-tap before/after, since
-the correct values depend on how the driver interacts with the panel's own
-configuration.
+large. But if touch ever feels offset, swapped, or dead near two edges, this
+is the first suspect (verify by tapping all four corners). Do not fix blind:
+change it with the panel attached and corner-tap before/after, since the
+correct values depend on how the driver interacts with the panel's own
+configuration, and the fix likely lives in how `esp_lvgl_port`'s indev is set
+up to consume BSP touch coordinates, not in this vendored file directly.
 
 ---
 
@@ -322,7 +327,7 @@ out-of-lining and the placement are not credited to each other.
 
 ---
 
-## SPI-link revival is gated on five recorded defects
+## SPI-link revival is gated on six recorded defects
 
 **Want:** when the SPI link is re-enabled (`WAVEX_SPI_LINK_ENABLED`,
 `link_config.h` — decision of 2026-07-05 made UART the transport of record),
@@ -334,7 +339,13 @@ SPI-1..SPI-5 in
 transaction descriptors/RX buffers reused on result timeout, no sequence
 gating on the live SPI RX path, an uninitialized in/out capacity that can
 overflow a 220-byte stack buffer, an 8-bit TX sequence wrapping through the
-reserved value 0, and configured-vs-actual transfer length confusion.
+reserved value 0, and configured-vs-actual transfer length confusion. A later
+2026-08-30 ESP32 coding-guide pass (`roadmap.md` §0.2 item 3) found a sixth,
+**SPI-6**: `spi_post_trans_cb` is registered as the SPI slave driver's ISR
+callback and calls `gpio_set_level()` and `AttnWatchdog::MarkCleared()`,
+neither audited for IRAM-safety (guide §4) — the driver instance doesn't
+request `ESP_INTR_FLAG_IRAM` today, so it likely works by accident rather than
+by audit.
 
 **Why it is not urgent:** the code is compiled out of every image today, so
 none of it is reachable. It becomes urgent the moment anyone flips the flag —
@@ -342,8 +353,9 @@ which is why it is recorded here rather than fixed opportunistically: fixing
 dead code cannot be verified on hardware, and the project's standard is not to
 claim fixes without a way to observe them.
 
-**When to revisit:** at SPI revival planning. Copy SPI-1..SPI-5 into that
-roadmap item's gate before any bring-up work starts.
+**When to revisit:** at SPI revival planning. Copy SPI-1..SPI-6 into that
+roadmap item's gate before any bring-up work starts. `roadmap.md` §0.2 item 3
+should point back at this list rather than restate a subset of it.
 
 ---
 

@@ -10,9 +10,22 @@ Start here. Documents are grouped by whether they describe the system **as it sh
 | [backlog.md](backlog.md) | Unscheduled work, each entry recording why it is not urgent so the reasoning can be re-checked later |
 | [roadmap.md](roadmap.md) | Implementation order (Phases 0–5), library upgrade recommendations (libDaisy, CMSIS-DSP, ESP-IDF) with risk callouts, per-phase test gates |
 | [features/inter-mcu-protocol.md](features/inter-mcu-protocol.md) | As-built SPI wire specification (mirrors `firmware/shared/spi_protocol/protocol.h`) |
+| [features/digital-voice-audition.md](features/digital-voice-audition.md) | **Active work order.** Consolidated ordered path to a playable, sequenceable all-digital voice (Phase 2, borrowing narrowly from Phase 2.5) |
 | [features/sequencer.md](features/sequencer.md) | Groovebox sequencer engine design (Phase 2) |
+| [features/instrument-model.md](features/instrument-model.md) | Presets, zones, multisampling, velocity layers — the Emax/Emulator lineage (Phase 2.5) |
+| [features/melodic-sequencing.md](features/melodic-sequencing.md) | Melodic track type, chords/ties, step-record, live record/overdub/erase (Phase 2.5) |
+| [features/param-locks-and-modulation.md](features/param-locks-and-modulation.md) | Parameter locks, modulation matrix, LFOs, filter envelope (Phase 2.5) |
+| [features/sampling-and-recording.md](features/sampling-and-recording.md) | Threshold-armed capture, pre-roll, resample/bounce, assign-to-zone (Phase 2.5) |
+| [features/output-routing-and-mixer.md](features/output-routing-and-mixer.md) | Mixer v1: 16-track gain/pan/mute/solo, per-track meters (Phase 2.5) |
+| [features/arpeggiator.md](features/arpeggiator.md) | Per-slot, clock-synced arpeggiator with latch (Phase 2.5) |
+| [features/midi-sync-tempo-follower.md](features/midi-sync-tempo-follower.md) | MIDI clock in/out and tempo-follower design |
 | [features/analog-voice-board.md](features/analog-voice-board.md) | PCM1690 TDM-8, per-voice VCF/VCA, CV calibration (Phase 3) |
 | [features/offline-sample-editing.md](features/offline-sample-editing.md) | Offline render-job design for sample editing/mangling DSP (Phase 4) |
+| [features/scenes-and-performance.md](features/scenes-and-performance.md) | Song mode/pattern chaining, performance macros, scenes with morph (Phase 5) |
+| [features/tuning-and-scales.md](features/tuning-and-scales.md) | Master tune, 12-degree tables, scale-constrained input surfaces (Phase 5) |
+| [features/feature-expansion-ideas.md](features/feature-expansion-ideas.md) | Index/rationale for the 2026-07-05 feature-design suite, plus the protocol message-ID reservation table |
+| [daisy_rt_audio_coding_guide.md](daisy_rt_audio_coding_guide.md) | Required guidance for Daisy Seed / STM32H750 / libDaisy / CMSIS-DSP real-time audio code |
+| [esp32p4_coding_guide.md](esp32p4_coding_guide.md) | Required guidance for ESP32-P4 / ESP-IDF embedded code |
 
 **Pin assignments and hardware flags are never documented in prose** — they live in `firmware/shared/config/pin_config.h` and `hardware_config.h` only.
 
@@ -23,7 +36,9 @@ Start here. Documents are grouped by whether they describe the system **as it sh
 | [ui-diagnostics-spec.md](ui-diagnostics-spec.md) | What the diagnostics screen should show, why each figure earns its place, and the `MSG_DIAG_PUSH` addition it needs |
 | [ui-design-constraints.md](ui-design-constraints.md) | One-page brief for UI/UX design passes: display, fonts, palette, rendering budget, widget inventory — each claim with its source in code |
 | [ui-architecture.md](ui-architecture.md) | ESP32 UI framework: navigator, pages, softkeys, LVGL threading rules |
+| [ui-information-architecture.md](ui-information-architecture.md) | Page/tab inventory and navigation structure: menu vs. tab group, current screen-by-screen layout |
 | [ui-system-implementation-guide.md](ui-system-implementation-guide.md) | How to build a new UI page |
+| [ui-update-backlog.md](ui-update-backlog.md) | Tracked UI fixes found by reading code (tab tracking, edit-page threading, CPU tiles, etc.) — see `roadmap.md` § Outstanding hardware verification |
 | [testing_guide.md](testing_guide.md) | Running and writing host tests (GoogleTest) |
 | [flashing.md](flashing.md) | Build and flash the ESP32-P4 and Daisy Seed firmware from the devcontainer |
 | [performance_monitoring.md](performance_monitoring.md) | DWT cycle-counter / CPU-load measurement reference for the Daisy |
@@ -55,4 +70,4 @@ Dated snapshots of implementation progress against `roadmap.md`, not living docu
 
 ## Housekeeping notes
 
-- `docs/venv/` is a stray Python virtualenv (used by `docx2md.py`); it should be removed or gitignored.
+- `docs/venv/` is a stray Python virtualenv (used by `docx2md.py`); already gitignored (`.gitignore`), but still present on disk here — safe to `rm -rf docs/venv` locally.

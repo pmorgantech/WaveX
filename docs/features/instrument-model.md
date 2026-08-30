@@ -1,6 +1,6 @@
 # Instrument Model — Presets, Zones, Multisampling, Velocity Layers
 
-**Status**: Target design (nothing implemented). Phase 2.5 in `roadmap.md`.
+**Status**: Core built and host-tested — `audio/instrument.hpp` (zones, velocity layers, crossfade, choke, tuning fold; 18 host tests) and the WXCF container. Remaining: the sample table that populates a `SampleResolver` from loaded WAVs, the `MSG_INST_OP/STATUS/ZONE_SYNC` protocol (0x60–0x62), deleting the Phase-1 stopgap note→sample policy, the ESP32 UI, and callback wiring. Phase 2.5 in `roadmap.md`.
 **Lineage**: E-mu Emulator III / Emax "preset" architecture — a keyboard-wide performance object mapping samples across key and velocity ranges, feeding per-voice filter/VCA. WaveX's Stage B signal path (sample → SSI2144 VCF → SSI2164 VCA per voice) *is* the Emax voice architecture; this doc supplies the missing front half.
 **Dependencies**: Phase 1 voice manager (done), Phase 1 item 8 note path (done). Supersedes the item-8 stopgap mapping policy in `audio_engine.cpp::OnNoteOn` ("most-recently-loaded sample, root note 60").
 **Consumers**: `melodic-sequencing.md`, `param-locks-and-modulation.md`, `sampling-and-recording.md`, `arpeggiator.md`, `output-routing-and-mixer.md`, and the sequencer kit model (`sequencer.md` §3 — see §8 below).

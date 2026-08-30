@@ -8,7 +8,7 @@
 
 ## 1. Signal path and contexts
 
-Input: **Daisy SAI1 codec stereo in** (as-built, currently discarded by `Callback()` — roadmap Phase 1 item 3 noted this).
+Input: **Daisy SAI1 codec stereo in** (as-built, currently discarded by `Callback()` — roadmap Phase 1 item 2 noted this).
 
 ```
 Callback (1 ms, RT):    in[] → int16 convert → SPSC record ring (staged pre-roll + capture)

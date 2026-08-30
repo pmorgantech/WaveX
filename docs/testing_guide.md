@@ -27,6 +27,9 @@ firmware/
 │   └── CMakeLists.txt
 └── shared/tests/
     ├── protocol/      # Protocol validation tests
+    ├── midi/          # MIDI parsing/forwarding tests
+    ├── wav/           # WAV file parsing tests
+    ├── wxcf/          # WXCF chunk-container tests
     ├── integration/   # Inter-MCU integration tests
     ├── utils/         # Shared test utilities
     └── CMakeLists.txt
@@ -48,20 +51,23 @@ make test-shared     # Shared protocol tests
 
 ### Run Tests from Individual Directories
 ```bash
-# Daisy tests
-cd firmware/daisy
-make test
+# Daisy tests (firmware/daisy/Makefile has no `test` target - build the
+# CMake test tree directly, same pattern as ESP32/shared below)
+cd firmware/daisy/tests/build
+cmake ..
+make -j$(nproc)
+ctest --output-on-failure
 
 # ESP32 tests
 cd firmware/esp32/tests/build
 cmake ..
-make
+make -j$(nproc)
 ctest --output-on-failure
 
 # Shared tests
 cd firmware/shared/tests/build
 cmake ..
-make
+make -j$(nproc)
 ctest --output-on-failure
 ```
 
@@ -157,15 +163,12 @@ xQueueSend(queue, &data, 0);
 
 #### Daisy Mocks
 
-Daisy hardware mocks should be created in `firmware/daisy/tests/mocks/`:
-
-```cpp
-// TODO: Implement libDaisy hardware mocks
-// For now, hardware-dependent tests are disabled with DISABLED_ prefix
-TEST_F(DaisyComponentTest, DISABLED_HardwareTest) {
-    // Requires hardware mocking
-}
-```
+Daisy hardware mocks live in `firmware/daisy/tests/mocks/`: `daisy_mocks.h`,
+`daisy_seed.h`, `dispatch_mocks.cpp/.h`, `fatfs_mock.cpp/.h`, `ff.h`,
+`log_ring_mock.cpp`. `DISABLED_` is only still used for the handful of tests
+that genuinely need real hardware timing (e.g. `daisy_uart_link_test.cpp`,
+`metrics_test.cpp`), not as the general pattern for hardware-dependent code —
+most of it is mocked and runs on the host.
 
 ## Test Coverage Goals
 
@@ -301,12 +304,15 @@ Tests should run automatically in CI/CD:
 
 ## Test Status
 
-Current test coverage:
-- ✅ UART Protocol Tests: Complete
-- ✅ Message Type Tests: Complete
-- ✅ Packet Router Tests: Complete
-- ⏳ Daisy Component Tests: In Progress (require hardware mocks)
-- ⏳ ESP32 Component Tests: In Progress
-- ⏳ Integration Tests: Planned
+- ✅ UART Protocol, Message Type, Packet Router tests: Complete
+- ✅ Daisy Component Tests: substantial coverage under
+  `firmware/daisy/tests/unit/{audio,comm,cv,cv_bus,metrics,sequencer,storage}/`
+- ✅ ESP32 Component Tests: substantial coverage under
+  `firmware/esp32/tests/unit/{comm,ui}/`
+- ⏳ Integration Tests: only `firmware/esp32/tests/integration/inter_mcu_protocol_test.cpp`
+  has content; `firmware/shared/tests/integration/` and
+  `firmware/daisy/tests/integration/` are still empty
 
-See `docs/testing_strategy.md` for detailed test plan and objectives.
+`docs/archive/testing_strategy.md` predates this test suite and describes
+results for tests that were never run — do not use it as a current
+reference (see `docs/README.md`'s archive notes).

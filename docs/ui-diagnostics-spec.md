@@ -36,7 +36,7 @@ Content area is 1280×545 (see constraints doc). A `lv_tabview` with a 52 px
 tab bar leaves **1280×493** per tab.
 
 ```
-┌ tab bar 52px ─ System │ Audio │ Link │ Storage │ MIDI ──────────────┐
+┌ tab bar 52px ─ ESP32 │ Daisy │ Audio │ Link │ Storage │ MIDI ────────┐
 │ ┌ hero tiles: 4 across, ~150px tall ───────────────────────────────┐│
 │ │  LABEL 18/grey                                                   ││
 │ │  VALUE 32/white          ← the number you read from a metre away ││
@@ -46,6 +46,12 @@ tab bar leaves **1280×493** per tab.
 │ └──────────────────────────────────────────────────────────────────┘│
 └──────────────────────────────────────────────────────────────────────┘
 ```
+
+**As built, this layout is not applied uniformly.** ESP32, Audio and Storage
+are flat 8-card grids with no separate detail table; only Link and Daisy got
+the hero-tiles-plus-side-table split (per-message counts on Link, resident
+samples on Daisy). Treat the diagram above as the original design brief, not
+a description of every tab.
 
 Softkeys are shared across tabs: `Back · Tab < · Tab > · Freeze · (Log) ·
 Reset`. **Freeze** stops updating so a transient can be read — during this
@@ -93,11 +99,14 @@ separate playback stalls began, and it is invisible in every other figure.
 |---|---|---|
 | Link state | `OK · hb 0.4s` (red if age >3 s) | ✅ |
 | Frames/s | `21 rx / 43 tx` | ✅🔌 |
-| Link CPU cost | `0.02% of loop` | 🔌 |
+| Packets | plain packet counter, built in place of a CPU-cost figure | ✅ |
 | Error rate | `0 /min` | ✅🔌 |
 
-Link CPU cost is what settles the "should we move to SPI?" question with data
-rather than opinion — see `docs/backlog.md`.
+**As built, the third tile is a packet counter, not the CPU-cost figure
+below.** Link CPU cost is what would settle the "should we move to SPI?"
+question with data rather than opinion — see `docs/backlog.md` — but it's
+still gated behind `WAVEX_DAISY_UART_PERF_DEBUG` (§ Status below) and hasn't
+been surfaced on this tile yet.
 
 **Detail table**
 
@@ -255,9 +264,14 @@ Per `AGENTS.md`, adding these means `protocol.h` + a round-trip test +
 
 ## Status (August 2026)
 
-Steps 1 and 2 below have landed on `ui-update`. What is live:
+Steps 1 and 2 below have landed. The original "System" tab this section
+described has since been split into **ESP32** and **Daisy** tabs (see
+`ui-information-architecture.md` for the current 6-tab structure and layout;
+this doc only specifies Audio/Link/Storage/MIDI in detail). What is live:
 
-- **System** and **Link** tabs — fully live, ESP32-local sources.
+- **ESP32** and **Link** tabs — fully live, ESP32-local sources. **Daisy**
+  tab is also live, fed by the heartbeat's uptime/heap fields rather than
+  `MSG_DIAG_PUSH`.
 - `MSG_DIAG_SUBSCRIBE` / `MSG_DIAG_PUSH` — implemented, subscription driven by
   the diagnostics page's `onEnter`/`onExit`.
 - **Audio** and **Storage** tabs — live from the push. Telemetry older than

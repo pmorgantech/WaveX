@@ -35,7 +35,7 @@ Dual-MCU split, each processor doing what it is best at:
 ```
 ┌──────────────────────────────┐          ┌──────────────────────────────────┐
 │  ESP32-P4 "Frontend"         │          │  Daisy Seed (STM32H750) "Backend"│
-│  ESP-IDF 5.5.1 / FreeRTOS    │   UART   │  libDaisy v8.0.0 (bare-metal)    │
+│  ESP-IDF 5.5.1 / FreeRTOS    │   UART   │  libDaisy v8.1.0 (bare-metal)    │
 │                              │ 2 Mbaud  │                                  │
 │  • LVGL 9.3 touchscreen UI   │ UART1 ↔  │  • Audio engine @48 kHz          │
 │    (1280×720 MIPI-DSI+GT911) │◄────────►│  • Sample streaming from SD      │
@@ -114,7 +114,7 @@ firmware/
 │   │   └── inter_mcu.cpp   # facade over link + router (large; slated for split)
 │   ├── components/ui/      # navigator/page/softkey UI framework + pages
 │   └── managed_components/ # lvgl 9.3, esp_lvgl_port, hx8394, gt911, p4 BSP
-├── daisy/                  # CMake + arm-gcc project (libDaisy v8.0.0, DaisySP)
+├── daisy/                  # CMake + arm-gcc project (libDaisy v8.1.0, DaisySP)
 │   └── src/
 │       ├── audio/          # audio_engine (callback, streaming, q15 pipeline), voice_manager
 │       ├── comm/           # daisy_uart_link (live), daisy_spi_link (compiled out), msg handlers
@@ -217,7 +217,7 @@ The 1-block = 1-ms identity is a deliberate design invariant: the control tick i
 
 8 voices, each: sample oscillator (streamed or RAM-resident) + optional VA oscillator + noise, 4 ADSR, 3 LFO, per-voice mod matrix.
 
-**Implementation status (roadmap Phase 1 items 2 + 4 + 8)**: `firmware/daisy/src/audio/voice_manager.hpp` implements the RAM-resident half — 8-voice allocation/stealing (preferring a releasing voice when stealing), per-voice gain/pan, a note-relative pitch ratio, start/end/loop points, a resonant state-variable lowpass (`audio/svf_filter.hpp` — TPT topology, cutoff + resonance, stable under modulation; it replaced the one-pole stand-in so `PARAM_FILTER_RESONANCE` has a digital consumer), and a linear ADSR (`audio/envelope.hpp`). It **is** wired into `Callback()` via an SPSC note-event queue (item 8 stage 2) — but as of 2026-07-05 the UART message dispatcher never feeds that path (`HandleNoteMessage` is a stub; see `code_review_20260705.md` C1), so it is not yet reachable from hardware MIDI input until that fix lands. Not yet implemented: streamed voices (still the old singleton WAV-ring-buffer path, not voice-manager-owned), VA oscillator/noise/LFO/mod matrix.
+**Implementation status (roadmap Phase 1 items 2 + 4 + 8)**: `firmware/daisy/src/audio/voice_manager.hpp` implements the RAM-resident half — 8-voice allocation/stealing (preferring a releasing voice when stealing), per-voice gain/pan, a note-relative pitch ratio, start/end/loop points, a resonant state-variable lowpass (`audio/svf_filter.hpp` — TPT topology, cutoff + resonance, stable under modulation; it replaced the one-pole stand-in so `PARAM_FILTER_RESONANCE` has a digital consumer), and a linear ADSR (`audio/envelope.hpp`). It **is** wired into `Callback()` via an SPSC note-event queue (item 8 stage 2), and the UART message dispatcher feeds that path — `HandleNoteMessage` calls `AudioEngine::OnNoteOn()` (`daisy_inter_mcu_message_handlers.cpp`), fixed 2026-07-05 (`code_review_20260705.md` C1) — so it is reachable from hardware MIDI input, pending the hardware verification tracked in `roadmap.md` § Outstanding hardware verification. Not yet implemented: streamed voices (still the old singleton WAV-ring-buffer path, not voice-manager-owned), VA oscillator/noise/LFO/mod matrix.
 
 The analog output section is deliberately **two-stage**, selected by build flags (see §5.3):
 

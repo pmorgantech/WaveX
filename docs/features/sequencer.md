@@ -1,6 +1,6 @@
 # Sequencer / Groovebox Engine — Design
 
-**Status**: Target design (nothing implemented). Phase 2 in `roadmap.md`. This is the defining groovebox feature and currently the largest gap between the product vision and the code.
+**Status**: Core scheduler/protocol built and host-tested — `pattern.hpp`, `sequencer_scheduler.hpp`, `tempo_follower.hpp`, `sequencer_transport.hpp` (all HAL-free, ~60 host tests), plus the 0x50–0x57 protocol messages with round-trip and dispatch tests. Callback integration (turning scheduled events into audible voice triggers), MIDI clock out, the pad/step-editor UI, and persistence are open — see `roadmap.md` Phase 2 and `features/digital-voice-audition.md` stages 5–8. This is still the defining groovebox feature and the largest gap between the product vision and what's audible.
 
 ## 1. Placement: the sequencer engine lives on the Daisy
 

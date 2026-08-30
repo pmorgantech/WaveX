@@ -79,11 +79,14 @@ structured), [`ui-system-implementation-guide.md`](ui-system-implementation-guid
 
 ## Known discrepancy (do not design around it — it should be fixed)
 
-`display_manager.cpp` configures the GT911 touch controller with
-`x_max = 800, y_max = 480`, which matches neither the panel (720×1280) nor
-the rotated canvas (1280×720). If touch positions feel offset or compressed,
-this is the first suspect; verify by tapping the four corners. Tracked in
-`docs/backlog.md`.
+The vendored BSP's `bsp_touch_new()` (`esp32_p4_nano.c`, in
+`managed_components/waveshare__esp32_p4_nano/`) configures the GT911 touch
+controller with `x_max = 720, y_max = 1280` — the panel's **native**
+orientation — while LVGL draws to the software-rotated 1280×720 landscape
+canvas (`LV_DISPLAY_ROTATION_90` in `display_manager.cpp`). Touch and
+display disagree about which axis is which. If touch positions feel offset,
+swapped, or compressed, this is the first suspect; verify by tapping the
+four corners. Tracked in `docs/backlog.md`.
 
 ## Iterating with Claude Design
 
