@@ -9,7 +9,6 @@
 #include "daisysp.h"
 #include "ff.h"
 #include "memory_sections.h"
-#include "metrics/metrics.h"
 #include "per/gpio.h"
 #include "stm32h7xx_hal.h"
 

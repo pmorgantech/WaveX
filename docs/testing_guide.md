@@ -183,7 +183,7 @@ Daisy hardware mocks live in `firmware/daisy/tests/mocks/`: `daisy_mocks.h`,
 `daisy_seed.h`, `dispatch_mocks.cpp/.h`, `fatfs_mock.cpp/.h`, `ff.h`,
 `log_ring_mock.cpp`. `DISABLED_` is only still used for the handful of tests
 that genuinely need real hardware timing (e.g. `daisy_uart_link_test.cpp`,
-`metrics_test.cpp`), not as the general pattern for hardware-dependent code —
+`audio_engine_test.cpp`), not as the general pattern for hardware-dependent code —
 most of it is mocked and runs on the host.
 
 ## Writing a regression test for a fix
@@ -340,7 +340,7 @@ Tests should run automatically in CI/CD:
 
 - ✅ UART Protocol, Message Type, Packet Router tests: Complete
 - ✅ Daisy Component Tests: substantial coverage under
-  `firmware/daisy/tests/unit/{audio,comm,cv,cv_bus,metrics,sequencer,storage}/`
+  `firmware/daisy/tests/unit/{audio,comm,cv,sequencer,storage}/`
 - ✅ ESP32 Component Tests: substantial coverage under
   `firmware/esp32/tests/unit/{comm,ui}/`
 - ⏳ Integration Tests: only `firmware/esp32/tests/integration/inter_mcu_protocol_test.cpp`

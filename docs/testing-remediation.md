@@ -196,10 +196,10 @@ read-modify-write over-predicts, exactly as the lint discussion above argues.
   exists to catch. Now an `__atomic_exchange_n`, matching what `cf8ee4b` did
   for `s_underrun_detected`. The callback's own RMW needs no atomic: main-loop
   code cannot run partway through an ISR.
-- **`g_message_count` (`metrics.h`) — not a defect: dead code.** The
-  non-atomic `++` is real, but nothing calls it. `main.cpp`'s include is
-  vestigial and the only caller is its own test file. Recorded in
-  `backlog.md` with a recommendation to delete the module.
+- **`g_message_count` (`metrics.h`) — not a defect: dead code, now deleted.**
+  The non-atomic `++` was real, but nothing called it: `main.cpp`'s include
+  never referenced the namespace and the only caller was its own test file.
+  The module and its five tests are gone.
 - **`log_ring.cpp` — not currently racing, now enforced.** It genuinely is not
   an SPSC ring (`Write()` advances `s_tail` on overflow, and so does
   `Drain()`), but the audit found no ISR logs: the audio callback has none,
@@ -257,6 +257,36 @@ Lower priority precisely because no shipped bug traces to them.
   `sequencer_scheduler_test.cpp`. Phase 2's edit-between-steps discipline
   (`features/sequencer.md` §4) is the reason to give it its own tests before
   the callback integration lands.
+
+## What counts as a test worth deleting
+
+Audited 2026-08-30 against every test file in the tree. The distinction that
+matters is **dead** versus **not yet wired** versus **compiled out**, and only
+the first is deletable:
+
+- **Dead — deleted.** `src/metrics/` and `metrics_test.cpp`. The production
+  code had no caller at all, so the suite was testing a counter nothing
+  incremented.
+- **Compiled out, but the code exists — kept.** `attn_watchdog_test.cpp`
+  covers `AttnWatchdog`, whose only consumer is `esp_spi_link.cpp` behind
+  `WAVEX_SPI_LINK_ENABLED = 0`. The header is HAL-free and its tests pass on
+  the host regardless of that flag, so **they are deliberately not gated on
+  it**: gating them would remove the only thing keeping the logic honest while
+  the link sleeps, and SPI revival is already gated on six recorded defects
+  (`backlog.md`). A test that still runs is worth more than a matching
+  `#if`. The same reasoning covers `sequence_tracker_test.cpp`, though that
+  one is not SPI-specific — `daisy_uart_link.cpp` uses it on the live path.
+- **Not yet wired — kept.** `wxcf_test.cpp` covers the WXCF chunk container,
+  which is built ahead of its consumer for instrument-model stage 5
+  (`features/instrument-model.md` §5). Forward-looking code with a design
+  behind it is not dead code.
+- **Placeholders for live code — kept.** `audio_engine_test.cpp` and
+  `daisy_uart_link_test.cpp` contain only `DISABLED_` stubs and are excluded
+  from the build, but the code they describe is very much alive. Each carries
+  a written explanation of why host coverage is absent and what a real suite
+  would need. They are documentation of a gap, not coverage of a corpse —
+  deleting them would lose the checklist and hide the gap. They stay until
+  the extraction work in Tier 4 replaces them.
 
 ## Working rule going forward
 

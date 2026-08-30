@@ -25,6 +25,18 @@ versioning and release process.
   `voice_manager_test`, with no new test body. See
   `docs/testing-remediation.md`.
 
+### Removed — the dead `metrics` message counter
+
+- `firmware/daisy/src/metrics/` and its five host tests are gone. The module
+  held one `volatile uint32_t g_message_count` plus a getter and a
+  non-atomic incrementer, and **nothing called any of it**: `main.cpp`
+  included the header without referencing the namespace, and the only caller
+  was its own test file. Deleted rather than made atomic, since a counter
+  nothing increments cannot race — same treatment as the dead
+  `Utils::CircularBuffer` and `ui_sample_detail` page. If a real message
+  counter is wanted later it should be `std::atomic<uint32_t>` with
+  `fetch_add`, landed together with a caller.
+
 ### Fixed — protocol packet helpers mishandled undersized and empty inputs
 
 - `ProtocolHandler::CalculatePacketCrc` and `ValidatePacketCrc` had the same

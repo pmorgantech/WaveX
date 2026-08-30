@@ -69,7 +69,6 @@ include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/audio
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/comm
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/storage
-    ${CMAKE_CURRENT_SOURCE_DIR}/../src/metrics
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/sequencer
     ${CMAKE_CURRENT_SOURCE_DIR}/../../shared
     ${CMAKE_CURRENT_SOURCE_DIR}/../../shared/spi_protocol
@@ -82,8 +81,6 @@ include_directories(
 # Test library with WaveX source files (excluding hardware-dependent code)
 # Only include components that can be tested without full hardware dependencies
 add_library(wavex_test_lib STATIC
-    # Metrics is self-contained and testable
-    ${CMAKE_CURRENT_SOURCE_DIR}/../src/metrics/metrics.cpp
     # Storage filesystem browsing (uses FatFS mock)
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/storage/fs_browse.cpp
     # FatFS mock implementation
