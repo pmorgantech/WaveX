@@ -69,6 +69,36 @@ Important: normal DMA1/DMA2 cannot access DTCM.
 
 Do NOT put DMA1/DMA2 buffers in DTCM.
 
+#### DTCM objects get NO static initialization
+
+WaveX places DTCM statics in `.dtcmram_bss` (`WAVEX_DTCM_DATA`). That section is
+`(NOLOAD)` and nothing runs constructors for it, so **a default member
+initializer written on a DTCM-resident type never executes.** `MemorySections::
+InitDtcmBss()` zeroes the section, which makes the state deterministic — but
+zero is not the same as correct.
+
+The rule: **every non-zero default on a DTCM-resident object must be assigned at
+runtime**, either in that object's `Init()` or in the explicit block in
+`AudioEngine::Init()`. An initializer at the member is documentation, not
+behaviour.
+
+This has caused silent-audio bugs twice:
+
+- `VoiceLiveParams` zeroed meant `filter_cutoff_hz == 0` (filter shut) and
+  `sustain_level == 0`, and `OnNoteOn` copied both into every voice.
+- `VoiceManager::live_pitch_scale_` was added with `= 1.0f` but no line in
+  `Init()`, so it was 0, `increment = base_increment * 0`, and every voice froze
+  on one sample.
+
+Note the second case defeated the obvious guard: "the object has an `Init()`, so
+it is covered" is only true if that `Init()` assigns *every* such member — the
+one there set only `sample_rate_`. Adding a member to a class that already has
+an `Init()` is exactly when this is easiest to miss.
+
+`VoiceManagerLiveParamsTest.InitEstablishesDefaultsFromZeroedMemory` pins the
+invariant on the host by zeroing the object before `Init()`; copy that pattern
+for other DTCM-resident types rather than relying on a bench check.
+
 libDaisy provides:
 
     DTCM_MEM_SECTION

@@ -179,7 +179,25 @@ struct VoiceLiveParams {
 
 class VoiceManager {
    public:
-    void Init(uint32_t sample_rate) { sample_rate_ = sample_rate > 0 ? sample_rate : 48000; }
+    // MUST establish every non-zero default this class declares, not just the
+    // sample rate. The engine's instance lives in .dtcmram_bss, which is
+    // (NOLOAD) and is zeroed at startup: no constructor and no default member
+    // initializer ever runs on it, so an initializer written at the member is
+    // documentation rather than behaviour. Init() is the only thing that
+    // actually sets anything.
+    //
+    // This is not hypothetical. live_pitch_scale_ was added with `= 1.0f` and
+    // no line here, so it was 0 on hardware, every Trigger() computed
+    // increment = base_increment * 0, the phase never advanced, and every voice
+    // froze on a single sample - silencing both the keyboard and the sample
+    // edit page's audition, which also triggers a RAM voice.
+    //
+    // Anything added below with a non-zero default needs a line here.
+    // InitEstablishesDefaultsFromZeroedMemory pins that.
+    void Init(uint32_t sample_rate) {
+        sample_rate_ = sample_rate > 0 ? sample_rate : 48000;
+        live_pitch_scale_ = 1.0f;
+    }
 
     // Pushes live parameter edits onto every SOUNDING voice, so a filter
     // sweep is audible on notes that are already playing rather than only on

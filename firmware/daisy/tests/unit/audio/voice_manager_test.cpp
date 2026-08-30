@@ -3,6 +3,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <cstring>
 #include <vector>
 
 using WaveX::AudioEngine::kNumVoices;
@@ -944,4 +945,46 @@ TEST(VoiceManagerLiveParamsTest, FilterStillTracksThroughTheReleaseTail) {
     vm.Render(l.data(), r.data(), l.size());
     EXPECT_LT(PeakOf(l, 192), open_peak * 0.5f)
         << "a filter sweep must stay audible through the release tail";
+}
+
+// Regression: s_voice_manager lives in .dtcmram_bss, which is (NOLOAD) and is
+// zeroed at startup - no constructor and no default member initializer ever
+// runs on it. Init() is therefore the ONLY thing that can establish a non-zero
+// default, and a member added without extending Init() silently becomes 0.
+//
+// That is not hypothetical: live_pitch_scale_ defaulted to 1.0f, never ran, and
+// zeroed meant every Trigger() computed increment = base_increment * 0. The
+// phase then never advanced, so every voice froze on one sample and both the
+// keyboard and the edit page's audition went silent.
+//
+// This test recreates the zeroed section on the host so the invariant is
+// checkable without a bench.
+TEST(VoiceManagerLiveParamsTest, InitEstablishesDefaultsFromZeroedMemory) {
+    std::vector<int16_t> tone(4096);
+    for (size_t i = 0; i < tone.size(); ++i) {
+        tone[i] = static_cast<int16_t>((i % 64) * 500 - 16000);
+    }
+
+    WaveX::AudioEngine::VoiceManager vm;
+    // Simulate .dtcmram_bss: every byte zero, no initializers having run.
+    std::memset(static_cast<void*>(&vm), 0, sizeof(vm));
+    vm.Init(48000);
+
+    vm.Trigger(FlatParams(tone.data(), static_cast<uint32_t>(tone.size()), 60, 127, 0.5f));
+
+    std::vector<float> l(64), r(64);
+    vm.Render(l.data(), r.data(), l.size());
+
+    // A frozen phase re-reads frame 0 forever, so the block is a constant. Any
+    // real playback varies. This catches the whole class of bug, not just the
+    // one member that caused it.
+    bool varies = false;
+    for (size_t i = 1; i < l.size(); ++i) {
+        if (std::fabs(l[i] - l[0]) > 1.0e-6f) {
+            varies = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(varies) << "playback froze on one sample: a DTCM-resident member "
+                           "with a non-zero default is not being set by Init()";
 }
