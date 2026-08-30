@@ -2,6 +2,10 @@
 
 #include <cstring>
 
+#if WAVEX_PROFILING_ENABLED
+#include "util/scopedirqblocker.h"
+#endif
+
 namespace WaveX {
 namespace Profiling {
 
@@ -133,6 +137,12 @@ const ProfileZone* Profiler::GetZone(uint32_t zone_id) {
 
 void Profiler::ResetAll() {
 #if WAVEX_PROFILING_ENABLED
+    // Runs from the main loop while End() runs from the audio ISR and does a
+    // non-atomic 64-bit total_cycles += (two 32-bit stores on Cortex-M7).
+    // Without this, ResetAll() can interleave mid-update and leave a
+    // zone's total_cycles torn (high/low word from different values), not
+    // just lose a sample.
+    daisy::ScopedIrqBlocker lock;
     for (uint32_t i = 0; i < zone_count_; ++i) {
         zones_[i].Reset();
     }
@@ -149,7 +159,8 @@ uint32_t Profiler::GetZoneCount() {
 
 ProfileScope::ProfileScope(uint32_t zone_id)
 #if WAVEX_PROFILING_ENABLED
-    : zone_id_(zone_id), start_cycles_(Profiler::Begin())
+    : zone_id_(zone_id),
+      start_cycles_(Profiler::Begin())
 #endif
 {
 }
@@ -162,6 +173,3 @@ ProfileScope::~ProfileScope() {
 
 }  // namespace Profiling
 }  // namespace WaveX
-
-
-
