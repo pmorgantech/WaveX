@@ -113,8 +113,8 @@ void UINavigator::push(std::shared_ptr<UIPage> page) {
     refreshShiftChip();
 
     // Compute content height: full screen minus header and softkey heights
-    const int16_t total_h = lv_obj_get_height(lv_screen_active());
-    const int16_t content_h = total_h - UI_HEADER_HEIGHT - UI_HOTKEY_HEIGHT;
+    const int32_t total_h = lv_obj_get_height(lv_screen_active());
+    const int32_t content_h = total_h - UI_HEADER_HEIGHT - UI_HOTKEY_HEIGHT;
     lv_obj_set_size(content_, lv_pct(100), content_h > 0 ? content_h : 0);
     lv_obj_align(content_, LV_ALIGN_TOP_LEFT, 0, UI_HEADER_HEIGHT);
     LV_UNLOCK();
@@ -161,8 +161,8 @@ void UINavigator::pop() {
         softkeyBar_.setSoftkeys(prev->getSoftkeys());
         refreshShiftChip();
 
-        const int16_t total_h = lv_obj_get_height(lv_screen_active());
-        const int16_t content_h = total_h - UI_HEADER_HEIGHT - UI_HOTKEY_HEIGHT;
+        const int32_t total_h = lv_obj_get_height(lv_screen_active());
+        const int32_t content_h = total_h - UI_HEADER_HEIGHT - UI_HOTKEY_HEIGHT;
         lv_obj_set_size(content_, lv_pct(100), content_h > 0 ? content_h : 0);
         lv_obj_align(content_, LV_ALIGN_TOP_LEFT, 0, UI_HEADER_HEIGHT);
         LV_UNLOCK();

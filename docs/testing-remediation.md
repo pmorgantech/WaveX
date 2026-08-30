@@ -91,10 +91,26 @@ attribute was silently ignored by GCC from day one (non-POD member), so the
 persisted format is and always was the natural layout — now pinned by
 `static_assert` instead of an inert attribute; `s_output_sink` is constructed
 but never driven (see `docs/backlog.md`); the browse-response `size_t`
-narrowings were in range but unproven until now. The ESP32 firmware build is
-the remaining half: IDF already applies `-Wall -Wextra`, so the delta there
-is `-Wconversion` (plus IDF's global `-Wno-unused-parameter
--Wno-sign-compare`) on the three first-party components.
+narrowings were in range but unproven until now.
+
+**Follow-on, ESP32 side: done.** IDF already applies `-Wall -Wextra`, so the
+delta on `main`, `ui` and `shared` is `-Wconversion` plus re-enabling IDF's
+globally-suppressed `-Wunused-parameter`/`-Wsign-compare` (a later flag wins
+in GCC), each with an explicit `-Wno-error=` because IDF's `-Werror=all`
+would otherwise escalate the re-enabled `-Wall`-family warnings — same
+warnings-not-errors policy as the host suites. LVGL's interface include dirs are re-declared `SYSTEM` in the `ui`
+and `main` components — its `lv_draw_buf.h` inline helpers fired 56 warnings
+in our TUs. `shared` was already clean; the warnings sat almost entirely in
+`ui` (97), plus two in `main`'s `esp_uart_link.cpp` that only a full
+reconfigure surfaced. Two finds with substance: the sample-load request's
+`sample_rate` field is a `uint16_t` hint, so >65535 Hz wrapped (96 kHz →
+30464) — it now degrades to 0 = unknown and Daisy re-reads the real rate
+from the file; and the UART TX wake marker was `0x7F` cast into
+`uart_event_type_t`, outside the enum's value range where the result is
+formally unspecified — now `UART_EVENT_MAX`, well-defined and never posted
+by the driver. ~60 warnings shared one root cause (`Softkey::why` lacked a
+default member initializer). Both firmware builds and all three host suites
+now compile first-party code at the same warning level.
 
 ## Tier 1 — the untrusted-input class (Daisy side done)
 

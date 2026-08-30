@@ -20,7 +20,6 @@ namespace {
 // Silence between loop passes when auditioning from the browser. Long enough
 // to hear where the file ends - without it a one-shot loops seamlessly and
 // reads as a drone - short enough not to feel like a fault.
-constexpr uint16_t kBrowserLoopGapMs = 300;
 
 // Design 1b, page-relative (the content area already starts below the header).
 constexpr int kMargin = 12;
@@ -38,9 +37,6 @@ constexpr uint32_t kColBorder = 0x222222;
 constexpr uint32_t kColDim = 0x8FA0AA;
 constexpr uint32_t kColGreen = 0x4CAF50;
 
-esp_err_t inter_mcu_send_sample_play_index_req_browser(uint32_t index) {
-    return inter_mcu_send_sample_play_index_req(index, kBrowserLoopGapMs);
-}
 }  // namespace
 
 // Active instance for callbacks
@@ -444,9 +440,6 @@ void UISampleBrowser::directory_changed_callback(const char* path, void* user_da
     ESP_LOGI(
         TAG, "Directory changed to: %s (current: %s)", path, browser->current_directory_.c_str());
 
-    // Check if directory actually changed (not just refreshed)
-    bool directory_actually_changed = (browser->current_directory_ != path);
-
     // Update current directory tracking
     browser->current_directory_ = path;
 
@@ -648,12 +641,15 @@ void UISampleBrowser::processDeferredUpdates_() {
                 if (entry->size_bytes < 1024) {
                     snprintf(size_str, sizeof(size_str), "%lu B", entry->size_bytes);
                 } else if (entry->size_bytes < 1024 * 1024) {
-                    snprintf(size_str, sizeof(size_str), "%.1f KB", entry->size_bytes / 1024.0f);
+                    snprintf(size_str,
+                             sizeof(size_str),
+                             "%.1f KB",
+                             static_cast<float>(entry->size_bytes) / 1024.0f);
                 } else {
                     snprintf(size_str,
                              sizeof(size_str),
                              "%.1f MB",
-                             entry->size_bytes / (1024.0f * 1024.0f));
+                             static_cast<float>(entry->size_bytes) / (1024.0f * 1024.0f));
                 }
 
                 // Use WAV metadata from the file entry (provided by backend)
@@ -677,8 +673,10 @@ void UISampleBrowser::processDeferredUpdates_() {
                         int seconds = (duration_ms % 60000) / 1000;
                         snprintf(duration_str, sizeof(duration_str), "%dm %ds", minutes, seconds);
                     } else if (duration_ms >= 1000) {
-                        snprintf(
-                            duration_str, sizeof(duration_str), "%.1fs", duration_ms / 1000.0f);
+                        snprintf(duration_str,
+                                 sizeof(duration_str),
+                                 "%.1fs",
+                                 static_cast<float>(duration_ms) / 1000.0f);
                     } else {
                         snprintf(duration_str, sizeof(duration_str), "%lums", duration_ms);
                     }
@@ -688,7 +686,7 @@ void UISampleBrowser::processDeferredUpdates_() {
                         snprintf(sample_rate_str,
                                  sizeof(sample_rate_str),
                                  "%.1f kHz",
-                                 entry->sample_rate / 1000.0f);
+                                 static_cast<float>(entry->sample_rate) / 1000.0f);
                     } else {
                         snprintf(sample_rate_str,
                                  sizeof(sample_rate_str),
@@ -993,8 +991,9 @@ bool UISampleBrowser::loadSample(const wavex_file_entry_t* entry) {
     // Gracefully fall back if metadata isn't available from the backend yet.
     // TODO(todo1): revert to strict validation once Daisy browse metadata is populated.
     uint32_t sample_rate = entry->sample_rate ? entry->sample_rate : 44100;
-    uint8_t channels = entry->channels ? entry->channels : 2;
-    uint8_t bits_per_sample = entry->bits_per_sample ? entry->bits_per_sample : 16;
+    uint8_t channels = static_cast<uint8_t>(entry->channels ? entry->channels : 2);
+    uint8_t bits_per_sample =
+        static_cast<uint8_t>(entry->bits_per_sample ? entry->bits_per_sample : 16);
 
     if (entry->sample_rate == 0 || entry->channels == 0 || entry->bits_per_sample == 0) {
         ESP_LOGW(TAG,
@@ -1024,7 +1023,7 @@ bool UISampleBrowser::loadSample(const wavex_file_entry_t* entry) {
     inter_mcu_get_sample_mem_status(&mem);
     if (mem.largest_free_bytes > 0 && entry->size_bytes > mem.largest_free_bytes) {
         char warn[192];
-        snprintf(warn, sizeof(warn), "%.1f MB sample, largest free block is %.1f MB", entry->size_bytes / (1024.0f * 1024.0f), mem.largest_free_bytes / (1024.0f * 1024.0f));
+        snprintf(warn, sizeof(warn), "%.1f MB sample, largest free block is %.1f MB", static_cast<float>(entry->size_bytes) / (1024.0f * 1024.0f), static_cast<float>(mem.largest_free_bytes) / (1024.0f * 1024.0f));
         ESP_LOGW(TAG, "Sample will not fit: %s", warn);
         BusyOverlay::show("Sample will not fit", warn, 6000);
         // Partial load would need a length field on MSG_SAMPLE_LOAD and a
@@ -1055,14 +1054,18 @@ bool UISampleBrowser::loadSample(const wavex_file_entry_t* entry) {
                  sizeof(detail),
                  "%s  -  %.1f MB",
                  entry->name,
-                 entry->size_bytes / (1024.0f * 1024.0f));
+                 static_cast<float>(entry->size_bytes) / (1024.0f * 1024.0f));
         BusyOverlay::show("Loading sample", detail, 20000);
     }
     updateStatus("Loading sample on Daisy...");
+    // The wire's sample_rate is a uint16_t hint (Daisy re-reads the real rate
+    // from the file); a rate that cannot fit degrades to 0 = unknown rather
+    // than wrapping to a wrong-but-plausible value.
+    const uint16_t rate_hint = sample_rate <= UINT16_MAX ? static_cast<uint16_t>(sample_rate) : 0;
     esp_err_t result =
         comm_interface_
             ? inter_mcu_send_sample_load_req(
-                  sample_id, entry->size_bytes, sample_rate, channels, bits_per_sample, entry->path)
+                  sample_id, entry->size_bytes, rate_hint, channels, bits_per_sample, entry->path)
             : ESP_FAIL;
 
     if (result != ESP_OK) {

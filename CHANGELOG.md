@@ -25,6 +25,25 @@ versioning and release process.
   `voice_manager_test`, with no new test body. See
   `docs/testing-remediation.md`.
 
+### Added — the ESP32 firmware builds its first-party components with `-Wconversion`
+
+- ESP-IDF already applies `-Wall -Wextra` everywhere, so the delta on the
+  `main`, `ui` and `shared` components is `-Wconversion` plus re-enabling the
+  `-Wunused-parameter`/`-Wsign-compare` warnings IDF suppresses globally.
+  LVGL's interface headers are re-declared `SYSTEM` in the `ui` and `main`
+  components (inline helpers in `lv_draw_buf.h` fired in every TU that sees
+  lvgl.h). `shared` was already clean; nearly all first-party warnings were
+  in `ui`, plus two in `main`'s `esp_uart_link.cpp`. The count is now zero.
+- Two finds with substance: the sample-load request's `sample_rate` is a
+  `uint16_t` hint, so a >65535 Hz rate silently wrapped (96 kHz → 30464) —
+  it now degrades to 0 = unknown, which Daisy treats as "re-read from the
+  file"; and the UART TX wake marker was `0x7F` cast into
+  `uart_event_type_t`, a value outside the enum's range where the cast's
+  result is formally unspecified — it is now `UART_EVENT_MAX`, a real
+  enumerator the driver never posts. ~60 warnings were one root cause —
+  `Softkey::why` added without a default member initializer — fixed with
+  one `{}`.
+
 ### Added — the Daisy firmware image builds with `-Wall -Wextra -Wconversion`
 
 - The Daisy firmware target previously compiled with **no warning flags at

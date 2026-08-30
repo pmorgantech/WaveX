@@ -66,6 +66,7 @@ static constexpr uint32_t kPollIntervalMs = 10;
 static constexpr int kMaxEventsPerPass = 16;
 
 static void keypad_task(void* arg) {
+    (void)arg;
     ESP_LOGI(TAG, "Keypad task started");
 
     while (s_running) {

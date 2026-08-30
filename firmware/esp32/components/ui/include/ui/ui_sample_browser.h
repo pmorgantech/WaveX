@@ -78,7 +78,9 @@ struct SampleBrowserState {
     }
 
     // Check if state is valid
-    bool isValid() const { return !current_directory_path.empty() && selected_file_index >= 0; }
+    // Note: no index check - selected_file_index is unsigned and 0 (the
+    // first entry) is a valid selection, so a directory is all it takes.
+    bool isValid() const { return !current_directory_path.empty(); }
 
     // Update directory and reset selection
     void changeDirectory(const std::string& new_path) {

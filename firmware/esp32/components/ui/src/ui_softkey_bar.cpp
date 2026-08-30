@@ -44,7 +44,9 @@ void SoftkeyBar::create(lv_obj_t* parent) {
         // Blue button styling with white text (matching existing UI)
         lv_obj_set_style_bg_color(btns_[i], UI_COLOR_BUTTON, LV_PART_MAIN);
         lv_obj_set_style_bg_color(
-            btns_[i], UI_COLOR_BUTTON_PRESSED, LV_PART_MAIN | LV_STATE_PRESSED);
+            btns_[i],
+            UI_COLOR_BUTTON_PRESSED,
+            LV_PART_MAIN | static_cast<lv_style_selector_t>(LV_STATE_PRESSED));
         lv_obj_set_style_border_width(btns_[i], UI_BORDER_WIDTH, LV_PART_MAIN);
         lv_obj_set_style_border_color(btns_[i], UI_COLOR_BUTTON_BORDER, LV_PART_MAIN);
         lv_obj_set_style_radius(btns_[i], UI_BORDER_RADIUS, LV_PART_MAIN);

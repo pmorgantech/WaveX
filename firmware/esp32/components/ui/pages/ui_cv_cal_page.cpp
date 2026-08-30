@@ -54,13 +54,13 @@ std::atomic<bool> s_pending_flag{false};
 WaveX::Protocol::CvCalMessage ModelToMessage(uint8_t persist) {
     return WaveX::Protocol::CvCalMessage(static_cast<uint8_t>(s_model.group),
                                          persist,
-                                         s_model.cut_gain / 1000.0f,
-                                         s_model.cut_off / 1000.0f,
-                                         s_model.q_gain / 1000.0f,
-                                         s_model.q_off / 1000.0f,
-                                         s_model.vca_gain / 1000.0f,
-                                         s_model.vca_off / 1000.0f,
-                                         s_model.curve_k / 100.0f);
+                                         static_cast<float>(s_model.cut_gain) / 1000.0f,
+                                         static_cast<float>(s_model.cut_off) / 1000.0f,
+                                         static_cast<float>(s_model.q_gain) / 1000.0f,
+                                         static_cast<float>(s_model.q_off) / 1000.0f,
+                                         static_cast<float>(s_model.vca_gain) / 1000.0f,
+                                         static_cast<float>(s_model.vca_off) / 1000.0f,
+                                         static_cast<float>(s_model.curve_k) / 100.0f);
 }
 
 void SendCal(uint8_t persist) {
@@ -72,9 +72,9 @@ void SendCal(uint8_t persist) {
 void SendTest() {
     WaveX::Protocol::CvTestMessage test(static_cast<uint8_t>(s_model.group),
                                         s_test_active ? 1 : 0,
-                                        s_model.test_cut / 100.0f,
-                                        s_model.test_res / 100.0f,
-                                        s_model.test_vca / 100.0f);
+                                        static_cast<float>(s_model.test_cut) / 100.0f,
+                                        static_cast<float>(s_model.test_res) / 100.0f,
+                                        static_cast<float>(s_model.test_vca) / 100.0f);
     if (inter_mcu_send_cv_test(test) != ESP_OK) {
         ESP_LOGW(TAG, "CV test send failed");
     }

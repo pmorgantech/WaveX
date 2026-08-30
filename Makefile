@@ -151,7 +151,14 @@ esp32:
 	@echo "Target: ESP32-P4 (UI, Controls, MIDI, Communication)"
 	@echo "Toolchain: ESP-IDF release-v5.5"
 	@echo "------------------------------------------------------------------------"
-	cd firmware/esp32 && . /opt/esp/idf/export.sh && idf.py build
+	# env -u GIT_*: `git commit` exports a RELATIVE GIT_INDEX_FILE
+	# (.git/index) to its hooks. The IDF Component Manager checks git-sourced
+	# components out via `git --work-tree /tmp/<tmp> --git-dir <cache>`, where
+	# that inherited relative path resolves to /tmp/<tmp>/.git/index - which
+	# does not exist - and the configure step dies with "Unable to create
+	# index.lock". The firmware build must not see commit-time git env.
+	cd firmware/esp32 && . /opt/esp/idf/export.sh && \
+		env -u GIT_INDEX_FILE -u GIT_DIR -u GIT_WORK_TREE idf.py build
 	@echo "------------------------------------------------------------------------"
 	@echo "✅ ESP32 Frontend build completed successfully!"
 	@echo "========================================================================"

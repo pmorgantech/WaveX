@@ -19,8 +19,6 @@ using namespace wavex_ui::palette;
 
 namespace {
 
-static const char* TAG = "UI_PLAY";
-
 constexpr int kMidiNoteMax = 127;
 
 // Content geometry. The panel is 720x1280 rotated to 1280x720; the navigator
@@ -232,7 +230,8 @@ lv_obj_t* UIPlayPage::makeKey(
     // to apply it 41 times and then override it is pure page-entry cost.
     lv_obj_remove_style_all(btn);
     lv_obj_add_style(btn, &s_key_base, LV_PART_MAIN);
-    lv_obj_add_style(btn, &s_key_pressed, LV_PART_MAIN | LV_STATE_PRESSED);
+    lv_obj_add_style(
+        btn, &s_key_pressed, LV_PART_MAIN | static_cast<lv_style_selector_t>(LV_STATE_PRESSED));
     lv_obj_set_style_bg_color(btn, lv_color_hex(bg), LV_PART_MAIN);
 
     lv_obj_t* label = lv_label_create(btn);

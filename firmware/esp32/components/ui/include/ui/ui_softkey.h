@@ -17,7 +17,10 @@ struct Softkey {
     bool enabled = true;            ///< False renders it dimmed, not hidden - the
                                     ///< row is a fixed six positions and a key
                                     ///< that vanishes moves every other one
-    std::string why;                ///< Shown when disabled: why it does nothing
+    std::string why{};              ///< Shown when disabled: why it does nothing.
+                                    ///< The {} is load-bearing: an NSDMI keeps
+                                    ///< -Wmissing-field-initializers quiet at the
+                                    ///< dozens of {label, cb} aggregate inits.
 };
 
 /**

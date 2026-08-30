@@ -662,7 +662,7 @@ void UIDiagnosticsPage::onExit() {
     ui_update_pending = false;
 }
 
-void UIDiagnosticsPage::onInput(const InputEvent& evt) {
+void UIDiagnosticsPage::onInput(const InputEvent& /*evt*/) {
     // Handle input events if needed
     // For now, diagnostics page is read-only
 }
@@ -674,8 +674,11 @@ std::array<Softkey, NUM_SOFTKEYS> UIDiagnosticsPage::getSoftkeys() {
 
     // Tab </> move the active tab. The tab bar itself stays out of the encoder
     // focus ring, so tabs are reachable without an extra focus mode.
-    keys[1] = {"Tab <", [this]() { setActiveTab((active_tab + TAB_COUNT - 1) % TAB_COUNT); }};
-    keys[2] = {"Tab >", [this]() { setActiveTab((active_tab + 1) % TAB_COUNT); }};
+    keys[1] = {"Tab <", [this]() {
+                   setActiveTab(static_cast<uint8_t>((active_tab + TAB_COUNT - 1) % TAB_COUNT));
+               }};
+    keys[2] = {"Tab >",
+               [this]() { setActiveTab(static_cast<uint8_t>((active_tab + 1) % TAB_COUNT)); }};
     // Freeze: values often change faster than they can be read.
     keys[3] = {"Freeze", [this]() {
                    frozen = !frozen;
@@ -696,7 +699,9 @@ void UIDiagnosticsPage::startDiagnosticsMonitoring() {
     const esp_timer_create_args_t diag_timer_args = {
         .callback = &UIDiagnosticsPage::diagnosticsUpdateCallback,
         .arg = this,
-        .name = "diagnostics_timer"};
+        .dispatch_method = ESP_TIMER_TASK,
+        .name = "diagnostics_timer",
+        .skip_unhandled_events = false};
 
     esp_err_t timer_ret = esp_timer_create(&diag_timer_args, &diagnostics_timer_handle);
     if (timer_ret == ESP_OK) {
@@ -822,7 +827,7 @@ void UIDiagnosticsPage::updateCpuUsageFreertosStats() {
                 for (int i = 0; i < count; i++) {
                     sum += cpu_usage_history[i];
                 }
-                cpu_usage_percent = sum / count;
+                cpu_usage_percent = sum / static_cast<float>(count);
 
                 // Set per-core values
                 cpu_usage_core0 = core0_usage;

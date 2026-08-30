@@ -89,7 +89,10 @@ static std::atomic<bool> s_uart_running{false};
 // queue set. The queue is only 20 deep and shared with the driver's own RX
 // events, so at most one marker is ever outstanding: this flag is set before
 // posting and cleared when the task takes it back off.
-constexpr int kTxWakeEvent = 0x7F;  // outside uart_event_type_t; only we post it
+// UART_EVENT_MAX is a real enumerator the driver never posts, so it is a
+// well-defined marker value. The previous 0x7F was outside the enum's value
+// range, where the cast's result is formally unspecified (-Wconversion).
+constexpr uart_event_type_t kTxWakeEvent = UART_EVENT_MAX;  // only we post it
 static std::atomic<bool> s_tx_wake_pending{false};
 
 static void post_tx_wake() {
@@ -100,7 +103,7 @@ static void post_tx_wake() {
         return;  // a marker is already queued; the task will drain everything
     }
     uart_event_t wake{};
-    wake.type = static_cast<uart_event_type_t>(kTxWakeEvent);
+    wake.type = kTxWakeEvent;
     if (xQueueSend(s_uart_event_queue, &wake, 0) != pdTRUE) {
         // Queue full: drop the marker rather than block a caller that may be
         // the UI task. The 10 ms wait still picks the frame up.
@@ -250,12 +253,12 @@ void uart_task(void* /*param*/) {
                       (now - last_event_time));
             last_event_time = now;
 
-            if (static_cast<int>(event.type) == kTxWakeEvent) {
+            if (event.type == kTxWakeEvent) {
                 // Our own marker: a frame was queued for transmit. No work
                 // needed here - the TX drain below runs every pass - but
                 // clearing the flag lets the next send post a new marker.
-                // Handled before the switch because a case label outside
-                // uart_event_type_t does not compile under -Werror=switch.
+                // Handled before the switch to keep the marker visibly
+                // separate from the events the driver actually posts.
                 s_tx_wake_pending.store(false);
             } else {
                 switch (event.type) {
@@ -372,7 +375,7 @@ esp_err_t uart_link_init(void) {
         .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
         .rx_flow_ctrl_thresh = 0,
         .source_clk = UART_SCLK_DEFAULT,
-        .flags = 0,
+        .flags = {},
     };
 
     esp_err_t err = uart_param_config(WAVEX_ESP_UART_INTER_NUM, &config);
@@ -474,7 +477,7 @@ int uart_link_send(uint16_t msg_type, const void* payload, uint16_t len) {
         return -1;
     }
 
-    if (s_msg_count >= MSG_QUEUE_SIZE) {
+    if (s_msg_count >= static_cast<int>(MSG_QUEUE_SIZE)) {
         s_stats.queue_overflows++;
         UART_LOGE(TAG, "UART TX queue full (size=%d)", MSG_QUEUE_SIZE);
         xSemaphoreGive(s_uart_mutex);

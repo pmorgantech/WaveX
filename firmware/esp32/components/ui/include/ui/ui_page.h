@@ -42,7 +42,7 @@ class UIPage {
      * @brief Handle input events for this page
      * @param evt Input event
      */
-    virtual void onInput(const InputEvent& evt) {}
+    virtual void onInput(const InputEvent& /*evt*/) {}
 
     /**
      * @brief Get softkey configuration for this page

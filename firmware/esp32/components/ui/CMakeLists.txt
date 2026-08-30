@@ -70,3 +70,41 @@ idf_component_register(
 # firmware/daisy/tests - so anything under firmware/shared/ has to compile as
 # C++14.
 target_compile_options(${COMPONENT_LIB} PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-std=gnu++2b>)
+
+# First-party warning flags - same delta as main/CMakeLists.txt: IDF already
+# applies -Wall -Wextra, this adds -Wconversion and re-enables what IDF
+# suppresses globally. Scoped per component; LVGL and the managed components
+# do not build clean under -Wconversion.
+target_compile_options(
+    ${COMPONENT_LIB}
+    PRIVATE -Wconversion
+            -Wunused-parameter
+            -Wsign-compare
+            # Warnings, not errors (same policy as the host suites) - IDF's
+            # -Werror=all would otherwise escalate the re-enabled -Wall-family
+            # warnings, and a hard failure on a toolchain bump is worse than a
+            # visible warning.
+            -Wno-error=conversion
+            -Wno-error=unused-parameter
+            -Wno-error=sign-compare)
+
+# LVGL's own headers do not build clean under -Wconversion (inline helpers in
+# lv_draw_buf.h fire in every TU that includes lvgl.h). Re-declare its
+# interface include dirs as SYSTEM so GCC consumes them via -isystem and
+# ignores IDF's duplicate -I. Extend the loop if another vendor component's
+# headers start warning; first-party components stay out of it on purpose.
+# Both names guarded: the managed component registers as lvgl__lvgl on a
+# fresh dependency resolution, but a build tree configured before the manager
+# ran may know it as plain lvgl - resolving a name that does not exist is a
+# hard CMake error, so membership is checked first.
+idf_build_get_property(wavex_build_components BUILD_COMPONENTS)
+foreach(dep lvgl__lvgl lvgl)
+    if(NOT dep IN_LIST wavex_build_components)
+        continue()
+    endif()
+    idf_component_get_property(dep_lib ${dep} COMPONENT_LIB)
+    get_target_property(dep_incs ${dep_lib} INTERFACE_INCLUDE_DIRECTORIES)
+    if(dep_incs)
+        target_include_directories(${COMPONENT_LIB} SYSTEM PRIVATE ${dep_incs})
+    endif()
+endforeach()

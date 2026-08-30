@@ -187,11 +187,12 @@ static esp_err_t pcnt_init_unit(const wavex_pcnt_config_t *config) {
  * @brief PCNT monitoring task (polling-based for reliable encoder reading)
  */
 static void pcnt_task(void *pvParameters) {
+    (void)pvParameters;
     ESP_LOGI(TAG, "PCNT monitoring task started (polling-based for reliable operation)");
 
     while (s_pcnt_running) {
         // Poll encoder counters for changes
-        for (int i = 0; i < PCNT_CONFIG_COUNT; i++) {
+        for (size_t i = 0; i < PCNT_CONFIG_COUNT; i++) {
             const wavex_pcnt_config_t *config = &s_pcnt_configs[i];
             if (!config->enabled || s_pcnt_units[config->unit] == NULL) {
                 continue;
@@ -276,7 +277,7 @@ esp_err_t pcnt_task_init(void) {
     ESP_LOGI(TAG, "Initializing PCNT task...");
 
     // Initialize all enabled PCNT units
-    for (int i = 0; i < PCNT_CONFIG_COUNT; i++) {
+    for (size_t i = 0; i < PCNT_CONFIG_COUNT; i++) {
         const wavex_pcnt_config_t *config = &s_pcnt_configs[i];
         if (config->enabled) {
             esp_err_t ret = pcnt_init_unit(config);
@@ -336,7 +337,7 @@ esp_err_t pcnt_get_reading(uint8_t unit, encoder_reading_t *reading) {
 
     // Check if unit is enabled
     bool unit_enabled = false;
-    for (int i = 0; i < PCNT_CONFIG_COUNT; i++) {
+    for (size_t i = 0; i < PCNT_CONFIG_COUNT; i++) {
         if (s_pcnt_configs[i].unit == unit && s_pcnt_configs[i].enabled) {
             unit_enabled = true;
             break;

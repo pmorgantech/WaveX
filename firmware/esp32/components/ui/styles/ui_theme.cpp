@@ -7,8 +7,6 @@
 
 #include "esp_log.h"
 
-static const char* TAG = "UI_THEME";
-
 void ui_theme_apply_button_style(lv_obj_t* button, bool is_pressed_style) {
     if (!button)
         return;
@@ -16,7 +14,10 @@ void ui_theme_apply_button_style(lv_obj_t* button, bool is_pressed_style) {
     // Background colors
     lv_obj_set_style_bg_color(button, UI_COLOR_BUTTON, LV_PART_MAIN);
     if (is_pressed_style) {
-        lv_obj_set_style_bg_color(button, UI_COLOR_BUTTON_PRESSED, LV_PART_MAIN | LV_STATE_PRESSED);
+        lv_obj_set_style_bg_color(
+            button,
+            UI_COLOR_BUTTON_PRESSED,
+            LV_PART_MAIN | static_cast<lv_style_selector_t>(LV_STATE_PRESSED));
     }
 
     // Border styling
