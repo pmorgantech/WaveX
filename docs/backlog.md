@@ -11,6 +11,64 @@ more useful than an item with no justification at all.
 
 ---
 
+## Page-entry render cost: the waveform chart and the Play keyboard
+
+**Measured 2026-08-30.** The pages reported as "slow to render" - Sample Edit,
+Sample Record and Play/Keys - are not slow to *run*. Steady-state render is
+0-5 ms on every page in the product. The entire cost is the **first frame after
+entering the page**, and it is large:
+
+| Page | First-frame render | Steady state |
+|---|---|---|
+| Sample -> Edit | 35-**205** ms (typically 66-102) | 0-5 ms |
+| Sample -> Record | 50-77 ms | 0-5 ms |
+| Play | 40-45 ms | 0-2 ms |
+| Diagnostics | 30-47 ms | 0-6 ms |
+| Sample -> Browse | 11-28 ms | 1-3 ms |
+| Main Menu | 11-18 ms | 0-5 ms |
+
+Method: `scripts/sysmon_stats.py` over a serial capture, reading the samples
+immediately after each `UI_NAVIGATOR: Entering page` marker rather than the
+steady-state medians. **This is why it went unnoticed for so long** - every
+aggregate view of this data, including the tool's own default, drops warmup
+samples precisely because a page-entry redraw is "not the steady state". The
+thing being discarded as noise *was* the complaint.
+
+Confirmed not the cause: invalidation scope. With `CONFIG_LV_USE_REFR_DEBUG=y`
+only the touched key redraws on the Play page, so redraw regions are already
+tight. Also not the cause: the PPA draw unit - the same first-frame costs
+appear with it on and off.
+
+**Prime suspect for the two worst pages is `WaveformView`.** It is used by
+exactly Sample Edit and Sample Record (`ui_sample_edit_page.cpp:206`,
+`ui_sample_record_page.cpp:47`) and nowhere else, which matches the ranking
+precisely. It builds an `lv_chart` of `LV_CHART_TYPE_LINE` with
+`kPointCount = 512` (`waveform_view.h:48`) and **two** series - the upper and
+lower halves of the envelope silhouette - so LVGL software-renders roughly 1022
+anti-aliased line segments on the first draw. Sample Edit is worse than Record
+because it draws that chart plus the rest of the edit chrome.
+
+Play has no chart; its ~40 ms is a different shape of the same problem, roughly
+82 objects (41 keys, each a button plus a label) laid out and drawn in one go.
+
+**Ideas, cheapest first, none yet measured:**
+
+1. Drop `kPointCount`. 512 columns across a panel narrower than 512 px buys
+   nothing that survives rasterisation.
+2. Stop drawing the envelope as a two-series AA polyline. A waveform silhouette
+   is a filled shape; vertical spans on a canvas would replace ~1022 line
+   segments with a fill and would not need anti-aliasing at all.
+3. Build the page incrementally - show chrome first, populate the waveform from
+   an `lv_timer` - so the cost is spread rather than concentrated in the frame
+   the user is waiting on. This hides it rather than fixing it.
+
+**Why it is not urgent:** it is a one-off cost on page entry, not a sustained
+frame-rate problem, and the UI is otherwise comfortably inside budget at
+0-5 ms steady state. It is worth doing because ~200 ms is perceptible as lag
+when opening a page, not because anything is at risk.
+
+---
+
 ## Build speed and size: LTO is unavailable, and the obvious LVGL trim does not work
 
 **Investigated 2026-08-30.** The ask was to use LTO and to exclude cruft so the
