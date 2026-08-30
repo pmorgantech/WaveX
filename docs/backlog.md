@@ -59,6 +59,43 @@ carries 64 KB of `.rodata` that nobody has explained.
 
 ---
 
+## LTO on the Daisy image
+
+**Investigated 2026-08-30 only far enough to say it is not blocked.** Unlike
+ESP-IDF — where LTO does not exist at all, see the entry above — the Daisy is
+built with `arm-none-eabi-gcc`, which supports `-flto` normally. So the
+question is live here in a way it is not on the ESP32.
+
+**It is second in line, not first.** The Daisy firmware compiles at `-O0`
+(`firmware/daisy/CMakeLists.txt:30`, `WAVEX_DAISY_OPT`), and LTO at `-O0` buys
+essentially nothing: the inter-procedural passes it enables have no
+optimization pipeline to feed. Raising the optimization level is both the
+larger win and a prerequisite, and it is already recorded — that file explains
+why `-O0` is the default (it is what the firmware has always been built with,
+unintentionally) and `docs/daisy_rt_audio_coding_guide.md` §8 asks for `-O3`.
+Measure `-O2` with DWT first. Only then does `-flto` become an interesting
+follow-on question.
+
+**Two hazards specific to this firmware,** worth knowing before anyone spends a
+day on it. Both are the same class of problem that keeps LTO out of ESP-IDF:
+
+- **Section placements.** This codebase deliberately places state in DTCM
+  (`s_voice_manager`, `s_para_env`, per-block DSP/stat state — see roadmap
+  § Outstanding hardware verification) and has ITCM placement queued in this
+  backlog. LTO is free to merge, clone and move symbols, which is exactly what
+  `__attribute__((section(...)))` placement assumes will not happen.
+- **The HAL's weak symbols.** ST's HAL relies on weak definitions overridden by
+  strong ones, and interrupt vectors are referenced only from the vector table.
+  LTO's whole-program view is where those get miscompiled or discarded, and the
+  failure mode is a hard fault at run time rather than a link error.
+
+**Why it is not urgent:** the Daisy is not currently short of flash, and the
+real-time budget question in front of us is `-O0` → `-O2`, which is a bigger,
+simpler and far safer lever. Revisit only after that has been measured and
+banked.
+
+---
+
 ## Runtime-tunable debug logging (bitmask)
 
 **Want:** a 32- or 64-bit mask of debug toggles in one config header, so
