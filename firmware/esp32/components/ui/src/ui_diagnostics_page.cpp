@@ -19,7 +19,9 @@
 #include "links/esp_spi_link.h"
 #include "ui/input_dispatcher.h"
 #include "ui/ui_navigator.h"
+#include "ui/ui_palette.h"
 #include "ui/ui_sample_memory_page.h"
+#include "ui/ui_tab_group.h"
 #include "ui_task.h"
 
 #include <memory>
@@ -63,18 +65,9 @@ const char* UIDiagnosticsPage::name() const {
 
 namespace {
 
-// Design palette (WaveX Wireframes v2). ui_theme.h covers the shared subset;
-// these are the additional greys the diagnostics cards use.
-constexpr uint32_t kColBg = 0x000000;
-constexpr uint32_t kColCard = 0x141414;
-constexpr uint32_t kColBorder = 0x333333;
-constexpr uint32_t kColDim = 0x8FA0AA;
-constexpr uint32_t kColDimmer = 0x6E7A82;
-constexpr uint32_t kColTrack = 0x262B2E;
-constexpr uint32_t kColTabOn = 0x10293B;
-constexpr uint32_t kColGreen = 0x4CAF50;
-constexpr uint32_t kColOrange = 0xFF5722;
-constexpr uint32_t kColBlue = 0x2196F3;
+// Design palette (WaveX Wireframes v2) now lives in ui/ui_palette.h so tab
+// groups and cards on other pages match by construction rather than by copy.
+using namespace wavex_ui::palette;
 
 // Card grid, from the design: 4 across, 305x226, gutters 12.
 constexpr int kCardW = 305;
@@ -112,40 +105,16 @@ void UIDiagnosticsPage::onEnter(lv_obj_t* parent) {
 }
 
 void UIDiagnosticsPage::buildTabs(lv_obj_t* parent) {
-    tabview = lv_tabview_create(parent);
-    lv_tabview_set_tab_bar_size(tabview, 56);
-    lv_obj_set_size(tabview, lv_pct(100), lv_pct(100));
-    lv_obj_set_style_bg_color(tabview, lv_color_hex(kColBg), 0);
-    lv_obj_set_style_border_width(tabview, 0, 0);
-    lv_obj_set_style_pad_all(tabview, 0, 0);
+    // Chrome comes from ui_tab_group so every tabbed page in the UI matches by
+    // construction. This page was where the styling was written; it now
+    // consumes the shared helper rather than owning a private copy of it.
+    tabview = tabGroupCreate(parent);
 
-    lv_obj_t* bar = lv_tabview_get_tab_bar(tabview);
-    lv_obj_set_style_bg_color(bar, lv_color_hex(kColBg), 0);
-    lv_obj_set_style_text_font(bar, &lv_font_montserrat_22, 0);
-    lv_obj_set_style_text_color(bar, lv_color_hex(kColDimmer), 0);
-    // Selected tab cell: filled, white text, 4px blue underline. Composed once
-    // because mixing lv_part_t with lv_state_t warns under C++20.
-    const lv_style_selector_t sel_on = static_cast<lv_style_selector_t>(LV_PART_ITEMS) |
-                                       static_cast<lv_style_selector_t>(LV_STATE_CHECKED);
-    lv_obj_set_style_bg_color(bar, lv_color_hex(kColTabOn), sel_on);
-    lv_obj_set_style_text_color(bar, lv_color_white(), sel_on);
-    lv_obj_set_style_border_color(bar, lv_color_hex(kColBlue), sel_on);
-    lv_obj_set_style_border_width(bar, 4, sel_on);
-    lv_obj_set_style_border_side(bar, LV_BORDER_SIDE_BOTTOM, sel_on);
-
-    lv_obj_t* t_sys = lv_tabview_add_tab(tabview, "System");
-    lv_obj_t* t_audio = lv_tabview_add_tab(tabview, "Audio");
-    lv_obj_t* t_link = lv_tabview_add_tab(tabview, "Link");
-    lv_obj_t* t_storage = lv_tabview_add_tab(tabview, "Storage");
-    lv_obj_t* t_midi = lv_tabview_add_tab(tabview, "MIDI");
-
-    lv_obj_t* tabs[TAB_COUNT] = {t_sys, t_audio, t_link, t_storage, t_midi};
-    for (int i = 0; i < TAB_COUNT; i++) {
-        lv_obj_set_style_bg_color(tabs[i], lv_color_hex(kColBg), 0);
-        lv_obj_set_style_pad_all(tabs[i], 0, 0);
-        lv_obj_set_style_border_width(tabs[i], 0, 0);
-        lv_obj_remove_flag(tabs[i], LV_OBJ_FLAG_SCROLLABLE);
-    }
+    lv_obj_t* t_sys = tabGroupAddTab(tabview, "System");
+    lv_obj_t* t_audio = tabGroupAddTab(tabview, "Audio");
+    lv_obj_t* t_link = tabGroupAddTab(tabview, "Link");
+    lv_obj_t* t_storage = tabGroupAddTab(tabview, "Storage");
+    lv_obj_t* t_midi = tabGroupAddTab(tabview, "MIDI");
 
     buildSystemTab(t_sys);
     buildLinkTab(t_link);
