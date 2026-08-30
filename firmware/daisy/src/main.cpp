@@ -625,29 +625,51 @@ int main(void) {
                 // is full (~42 ms); a low figure with no underruns means the
                 // margin is being eaten periodically, which is audible long
                 // before it ever reaches zero.
-                WAVEX_LOG_DAISY(AUDIO_ENGINE,
-                                "RING: low_water=%lu of %u frames",
-                                (unsigned long)WaveX::AudioEngine::TakeRingLowWater(),
-                                2048u);
+                //
+                // TakeRingLowWater()/TakeIOThroughput() are destructive
+                // reads (they reset the interval on every call). DiagPushTick
+                // drains the same counters whenever a diagnostics client is
+                // subscribed, and two destructive consumers on independent
+                // timers silently steal each other's window - the low-water
+                // figure this block reports can read "healthy" solely
+                // because diag_push already claimed the real dip a moment
+                // earlier. Cede ownership to diag_push while it is active
+                // rather than fight it over the same counters.
+                const bool diag_owns_counters = WaveX::Comm::DiagIsSubscribed();
+                if (!diag_owns_counters) {
+                    WAVEX_LOG_DAISY(AUDIO_ENGINE,
+                                    "RING: low_water=%lu of %u frames",
+                                    (unsigned long)WaveX::AudioEngine::TakeRingLowWater(),
+                                    2048u);
+                } else {
+                    WAVEX_LOG_DAISY(AUDIO_ENGINE, "RING: low_water owned by diag subscriber");
+                }
 
 #if WAVEX_DAISY_SD_DEBUG
                 // Throughput/latency for THIS interval. Rates are derived from
                 // the measured dt rather than the nominal 5 s, so a late
-                // report does not read as a throughput drop.
-                uint32_t sd_bytes, sd_reads, sd_avg_us, sd_min_us, sd_max_us;
-                WaveX::AudioEngine::TakeIOThroughput(
-                    sd_bytes, sd_reads, sd_avg_us, sd_min_us, sd_max_us);
+                // report does not read as a throughput drop. Computed
+                // unconditionally (not just when this block owns the
+                // counters): the WAVEX_DAISY_UART_PERF_DEBUG block further
+                // down reuses dt_ms and needs it in scope either way.
                 const uint32_t dt_ms = (now_ms - last_now) ? (now_ms - last_now) : 1u;
-                WAVEX_LOG_DAISY(AUDIO_ENGINE,
-                                "SD PERF: %lu KB/s (%lu reads, %lu B) latency avg=%lu us "
-                                "min=%lu us max=%lu us @ %s",
-                                (unsigned long)((uint64_t)sd_bytes * 1000u / dt_ms / 1024u),
-                                (unsigned long)sd_reads,
-                                (unsigned long)sd_bytes,
-                                (unsigned long)sd_avg_us,
-                                (unsigned long)sd_min_us,
-                                (unsigned long)sd_max_us,
-                                WaveX::Storage::SdSdio::CurrentSpeedName());
+                if (!diag_owns_counters) {
+                    uint32_t sd_bytes, sd_reads, sd_avg_us, sd_min_us, sd_max_us;
+                    WaveX::AudioEngine::TakeIOThroughput(
+                        sd_bytes, sd_reads, sd_avg_us, sd_min_us, sd_max_us);
+                    WAVEX_LOG_DAISY(AUDIO_ENGINE,
+                                    "SD PERF: %lu KB/s (%lu reads, %lu B) latency avg=%lu us "
+                                    "min=%lu us max=%lu us @ %s",
+                                    (unsigned long)((uint64_t)sd_bytes * 1000u / dt_ms / 1024u),
+                                    (unsigned long)sd_reads,
+                                    (unsigned long)sd_bytes,
+                                    (unsigned long)sd_avg_us,
+                                    (unsigned long)sd_min_us,
+                                    (unsigned long)sd_max_us,
+                                    WaveX::Storage::SdSdio::CurrentSpeedName());
+                } else {
+                    WAVEX_LOG_DAISY(AUDIO_ENGINE, "SD PERF: owned by diag subscriber");
+                }
 #endif
 
                 uint32_t io_errors = 0, io_last_err = 0;
