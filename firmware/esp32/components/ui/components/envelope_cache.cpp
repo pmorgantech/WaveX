@@ -250,6 +250,15 @@ void EnvelopeCache::noteRequest(uint16_t sample_id,
     pending_.first_column = req_start / pending_.fpc;
 }
 
+// Keeps the staging buffer: the next run is almost always the same size, and
+// this is called from the UI task where a free/alloc pair costs more than the
+// few kilobytes it would return.
+void EnvelopeCache::abortPending() {
+    pending_.active = false;
+    pending_.received = 0;
+    pending_.channels = 0;
+}
+
 bool EnvelopeCache::ingest(const EnvelopeChunkMessage& header, const EnvelopeColumn* columns) {
     if (!initialized() || !columns || !pending_.active) {
         return false;

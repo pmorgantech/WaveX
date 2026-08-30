@@ -98,6 +98,9 @@ class UISampleEditPage : public UIPage {
     std::atomic<bool> run_ready_{false};
     bool request_in_flight_ = false;
     uint32_t request_sent_ms_ = 0;
+    // Consecutive timeouts. Reset by a run that completes, so a sample that
+    // simply took a slow scan does not spend the budget a broken one needs.
+    uint8_t request_retries_ = 0;
 
     // Redraw requests, applied by ui_timer_ on the UI task.
     //

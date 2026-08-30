@@ -45,6 +45,12 @@ constexpr uint32_t kRequestSettleMs = 150;
 // scan when the sample it was measuring is reloaded, and says nothing.
 constexpr uint32_t kRequestTimeoutMs = 3000;
 
+// Consecutive timeouts before the page stops asking. A dropped scan is usually
+// transient (the sample was being reloaded underneath it), so retrying is worth
+// it; a sample the backend does not have would otherwise poll forever, and a
+// status line that says so is more use than silent traffic.
+constexpr uint8_t kMaxRequestRetries = 3;
+
 // PSRAM the envelope cache may take. Measured against what is actually free
 // rather than a board spec, and capped: LVGL's draw buffers and the display
 // rotation path are already the largest consumers of the same pool, and a
@@ -153,6 +159,13 @@ void UISampleEditPage::onEnter(lv_obj_t* parent) {
     display_columns_.assign(static_cast<size_t>(kDisplayColumns) * 2,
                             WaveX::Protocol::EnvelopeColumn());
     EnsureCacheInitialised();
+    // The cache outlives this page - it is a process-wide singleton shared with
+    // the browser's detail panel - so a run abandoned by a previous instance
+    // would still be blocking nextRequest() here. Nothing can be in flight at
+    // the moment a page is built, so say so.
+    GetEnvelopeCache().abortPending();
+    request_in_flight_ = false;
+    request_retries_ = 0;
 
     buildWaveformPanel(root_);
     buildParamStrip(root_);
@@ -287,6 +300,14 @@ void UISampleEditPage::onExit() {
     // Unregister first. Deleting the timer or the widgets while a chunk can
     // still arrive would leave the RX task writing through a freed page.
     inter_mcu_set_envelope_chunk_listener(nullptr, nullptr);
+    // With the listener gone every remaining chunk of a run in flight is
+    // dropped, so that run can never commit. Release the cache's arming with
+    // it, or leaving this tab mid-run would wedge the shared cache for whatever
+    // draws a waveform next.
+    if (request_in_flight_) {
+        request_in_flight_ = false;
+        GetEnvelopeCache().abortPending();
+    }
     if (auditioning_) {
         inter_mcu_send_sample_stop_req();
         auditioning_ = false;
@@ -892,6 +913,7 @@ void UISampleEditPage::serviceUi() {
         GetEnvelopeCache().ingest(header, run_columns_.data());
         run_ready_.store(false, std::memory_order_relaxed);
         request_in_flight_ = false;
+        request_retries_ = 0;
         waveform_dirty_.store(true, std::memory_order_relaxed);
         // A wide view can need more columns than one run holds; ask for the
         // rest now that this one is filed.
@@ -902,8 +924,23 @@ void UISampleEditPage::serviceUi() {
             // The backend drops a scan when the sample under it is reloaded,
             // and does not say so. Give up on this run rather than leaving the
             // page unable to ask for anything ever again.
+            //
+            // Clearing request_in_flight_ alone was not enough, and that was
+            // the bug: the CACHE was still armed from noteRequest(), and its
+            // guard is not per-sample, so one dropped run stopped the whole
+            // process from ever requesting another envelope - the waveform then
+            // stayed empty for every sample until reboot. Release both.
             request_in_flight_ = false;
-            refreshStatus("Waveform request timed out");
+            GetEnvelopeCache().abortPending();
+            // Draw whatever did arrive rather than holding the panel blank.
+            waveform_dirty_.store(true, std::memory_order_relaxed);
+            if (request_retries_ < kMaxRequestRetries) {
+                ++request_retries_;
+                refreshStatus("Waveform request timed out - retrying");
+                request_due_ms_ = now + kRequestSettleMs;
+            } else {
+                refreshStatus("Waveform unavailable - reopen the page to retry");
+            }
         }
     }
 
@@ -980,13 +1017,20 @@ void UISampleEditPage::requestWaveform() {
     pending_start_ = req_start;
     pending_end_ = req_end;
     pending_columns_ = req_columns;
-    GetEnvelopeCache().noteRequest(sample_id, generation, req_start, req_end, req_columns);
-
+    // Send BEFORE arming the cache. noteRequest() blocks every later
+    // nextRequest() until the run commits, so arming first and then failing to
+    // send left the cache waiting on a reply that was never asked for - and
+    // because the send failure also skips request_in_flight_, the timeout below
+    // never ran either. Both halves of the state have to be armed together or
+    // not at all. Safe to order this way: ingest() is only ever reached from
+    // serviceUi() on this same task, so no chunk can be filed between the send
+    // and the noteRequest().
     const esp_err_t res = inter_mcu_send_envelope_req(sample_id, req_columns, req_start, req_end);
     if (res != ESP_OK) {
         refreshStatus("Waveform request failed");
         return;
     }
+    GetEnvelopeCache().noteRequest(sample_id, generation, req_start, req_end, req_columns);
     request_in_flight_ = true;
     request_sent_ms_ = (uint32_t)(esp_timer_get_time() / 1000);
 }

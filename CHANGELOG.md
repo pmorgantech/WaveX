@@ -11,6 +11,36 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Fixed — Sample Edit drew an empty waveform because an abandoned envelope run wedged the cache
+
+- `EnvelopeCache::noteRequest()` armed `pending_.active`, and `nextRequest()`
+  refuses to issue anything while it is set. Only a run that *completed* ever
+  cleared it, so any run that was abandoned instead left the cache armed for a
+  reply that was never coming. The guard is not per-sample, and the cache is a
+  process-wide singleton, so **one** lost run stopped every waveform request for
+  the rest of the boot: `requestWaveform()` fell into its "already cached"
+  branch, `render()` found nothing, and `WaveformView::setEnvelope()` was never
+  called — matching the observed `has_data=0` with correct draw geometry, and
+  zero envelope traffic in either direction.
+- Three routes reached that state, all now released via a new
+  `EnvelopeCache::abortPending()`:
+  - **Send failure.** `requestWaveform()` armed the cache *before* sending, and
+    the failure path returned without setting `request_in_flight_` — so the
+    timeout below could not fire either. The send now happens first and the
+    cache is armed only once the request is actually on the wire.
+  - **Timeout.** The 3 s timeout cleared only `request_in_flight_`, never the
+    cache. It now clears both, redraws whatever partial data arrived, and
+    retries up to 3 times before reporting that the waveform is unavailable.
+  - **Leaving the page mid-run.** `onExit()` unregisters the chunk listener, so
+    the remaining chunks are dropped and the run can never commit; it now
+    disarms the cache too. `onEnter()` also clears any stale arming, since
+    nothing can be in flight when a page is built.
+- Sample Record was unaffected because it draws through `setSamples()` and does
+  not use the envelope cache at all.
+- Regression tests in `firmware/esp32/tests/unit/ui/envelope_cache_test.cpp`
+  cover the abort path, discarding a partially received run, and `abortPending()`
+  being a no-op on an idle cache.
+
 ### Removed — LVGL PPA draw unit (measured, then reverted)
 
 - `CONFIG_LV_USE_PPA` is off again, and `CONFIG_LV_DRAW_BUF_ALIGN` back to 4

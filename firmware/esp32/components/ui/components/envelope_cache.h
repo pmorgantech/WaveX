@@ -110,6 +110,24 @@ class EnvelopeCache {
                 const WaveX::Protocol::EnvelopeColumn* columns);
 
     /**
+     * @brief Disarms a run that will never complete.
+     *
+     * noteRequest() blocks every further nextRequest() until the run it armed
+     * commits, which is what keeps the staging buffer to a single run. But a
+     * run can be abandoned rather than completed - the send can fail, or the
+     * backend can drop a scan silently when the sample under it is reloaded -
+     * and without this there is no way back: the cache stays armed for a reply
+     * that is not coming, nextRequest() refuses everything (the guard is not
+     * per-sample), and nothing is ever requested or drawn again for the rest of
+     * the boot. Every caller that gives up on a run MUST call this.
+     */
+    void abortPending();
+
+    /// True while a run is armed and not yet committed. For assertions and
+    /// tests; callers drive the lifecycle with noteRequest()/abortPending().
+    bool requestPending() const { return pending_.active; }
+
+    /**
      * @brief Merges cached tier columns into display columns.
      *
      * Writes `display_columns * out_channels` values, channel-interleaved per
