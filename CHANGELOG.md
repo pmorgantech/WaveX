@@ -11,6 +11,23 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Added — LVGL performance and memory overlays
+
+- `CONFIG_LV_USE_SYSMON` with `CONFIG_LV_USE_PERF_MONITOR` (FPS and CPU,
+  top-left) and `CONFIG_LV_USE_MEM_MONITOR` (LVGL pool use and fragmentation,
+  top-right), aligned to stay clear of the softkey bar. Nothing measured LVGL
+  rendering before this, which is why the roadmap's "LVGL 9.5 performance
+  claim" could not be settled either way.
+- `docs/performance_monitoring.md` gained a Part 2 covering ESP32 UI rendering,
+  including the A/B procedure for deciding whether `CONFIG_LV_USE_PPA` actually
+  helps, and how to attribute a slow page with `LV_USE_REFR_DEBUG`. The roadmap
+  had been citing this document for ESP32 FPS work while it covered only the
+  Daisy audio callback.
+- **Measurement instrumentation, not a shipping setting** — the overlays draw
+  on top of the product UI and must be turned off for a release build.
+- LVGL's CPU figure comes from its own idle time, not the scheduler, so it is a
+  valid relative measure for A/B comparisons and a poor absolute one.
+
 ### Removed — Card drop shadows (tried and reverted)
 
 - LVGL 9.5's native `drop_shadow_*` properties were applied to the diagnostics

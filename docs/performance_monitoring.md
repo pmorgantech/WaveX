@@ -1,4 +1,18 @@
-# Performance Monitoring - Daisy
+# Performance Monitoring
+
+Two unrelated measurement problems live here, because `docs/roadmap.md` cites
+this file for both.
+
+- **[Part 1 - Daisy audio callback](#part-1---daisy-audio-callback)**: DWT cycle
+  counting for per-block DSP cost. This is what the roadmap's DWT items mean.
+- **[Part 2 - ESP32 UI rendering](#part-2---esp32-ui-rendering)**: LVGL FPS and
+  render cost. This is what the roadmap's "FPS + UI-task CPU" items mean, and
+  it was missing until 2026-08-30 - the roadmap had been pointing at a document
+  that only covered the Daisy.
+
+---
+
+## Part 1 - Daisy audio callback
 
 Great—here’s a drop-in way to measure timing with the **DWT cycle counter** (and a light SysTick fallback). It gives you per-block duration, average/max over a window, and a computed “CPU load” vs. the audio block period.
 
@@ -336,3 +350,77 @@ System::Delay(500);
 * If you later enable DMA and caches, remember to align any DMA buffers to 32-byte cache lines; this meter is unaffected.
 
 If you prefer **no `<algorithm>`**, I can swap in a tiny quickselect implementation.
+
+
+---
+
+## Part 2 - ESP32 UI rendering
+
+### What is instrumented
+
+`CONFIG_LV_USE_SYSMON=y` with `CONFIG_LV_USE_PERF_MONITOR=y` and
+`CONFIG_LV_USE_MEM_MONITOR=y` (both in `firmware/esp32/sdkconfig` and
+`sdkconfig.defaults`) draw two small overlays that LVGL maintains itself:
+
+- **Top left - performance.** Frames per second and LVGL's CPU figure.
+- **Top right - memory.** Used bytes and fragmentation of the LVGL pool
+  (`CONFIG_LV_MEM_SIZE_KILOBYTES=128`). This one is not decoration: the drop
+  shadow experiment (roadmap § 0.3 item 2) hung the UI purely by asking for a
+  layer the pool could not satisfy, and that overlay is where such a thing
+  becomes visible before it becomes a freeze.
+
+They are aligned top-left and top-right specifically to stay clear of the
+softkey bar along the bottom.
+
+**Read the CPU number with care.** LVGL derives it from its own idle time, not
+from the scheduler, so it describes how busy LVGL's refresh loop is, not core
+load. It is a valid *relative* measure for A/B comparisons like the one below
+and a poor absolute one. For true core load, use FreeRTOS run-time stats.
+
+**This is not a shipping configuration.** The overlays draw on top of the
+product UI. Turn both off before any build that is not a measurement build.
+
+### A/B procedure: is `CONFIG_LV_USE_PPA` actually faster?
+
+The roadmap's outstanding item. The PPA draw unit accelerates unrounded,
+fully-opaque rectangle fills, but it also replaces LVGL's global
+cache-invalidation callback (previously a free no-op) with a whole-buffer
+`esp_cache_msync` called twice per draw task - so it can plausibly lose. The
+only way to know is to measure both ways.
+
+1. Build and flash with `CONFIG_LV_USE_PPA=y` (current state).
+2. Open a page and let the FPS reading settle. Use the same page, the same
+   content and the same interaction each time - FPS is meaningless across
+   different pages. Good choices: the diagnostics tab (many cards, live
+   updating) and a page the panel visibly struggles with.
+3. Record FPS and the CPU figure.
+4. Flip **only** `CONFIG_LV_USE_PPA` to `n` in `sdkconfig`. Leave
+   `CONFIG_LVGL_PORT_ENABLE_PPA` alone - it is a different PPA consumer, and
+   changing both at once makes the result unattributable. Note that
+   `CONFIG_LV_DRAW_BUF_ALIGN` must stay 128 while PPA is on and may go back to
+   4 when it is off; changing it also changes allocation behaviour, so for a
+   clean comparison leave it at 128 for both runs.
+5. Rebuild, reflash, repeat step 2 on the same page.
+
+A difference smaller than the run-to-run spread is not a difference. If PPA
+comes out slower, the cache-invalidation callback is the first suspect, not the
+PPA hardware - see roadmap § 0.3 item 1.
+
+### Attributing a slow page
+
+FPS tells you *that* a page is slow, not *why*. Two LVGL settings turn the
+question into an answerable one, both off by default and both worth enabling
+temporarily rather than shipping:
+
+- `CONFIG_LV_USE_REFR_DEBUG=y` tints each redrawn area a random colour. If a
+  page is slow because it redraws far more than it changed, this shows it
+  immediately - large flashing regions on a page where only one label updated
+  means the invalidation is too coarse, which is a layout problem, not a
+  rendering one.
+- `CONFIG_LV_USE_PROFILER` with `CONFIG_LV_USE_PROFILER_BUILTIN` gives
+  per-draw-task timings, which is what distinguishes "one expensive widget"
+  from "a thousand cheap ones".
+
+Check `LV_USE_REFR_DEBUG` first. It is cheaper to interpret and, on this
+codebase, coarse invalidation is the more likely cause: a full-width redraw
+costs the same whether the PPA is helping or not.
