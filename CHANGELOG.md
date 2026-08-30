@@ -11,6 +11,28 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Fixed — Unload now removes the sample from the frontend's list
+
+- Unload freed the sample on the Daisy but the row stayed on screen, so it
+  looked like nothing happened. The backend was right; the frontend had no way
+  to find out. `MSG_SAMPLE_META` can only ever describe a sample that *exists*,
+  so pushing the remaining set is silent about what left — and unloading the
+  last sample pushes nothing at all. The frontend's metadata cache is
+  add/update-only with no invalidation path, so a freed sample stayed cached
+  forever and every consumer of that cache kept listing RAM that was gone.
+- `SampleMemStatus` is now used as the authority on what is resident, since it
+  is the only message carrying a count plus every id — so it can express both a
+  deletion and "nothing is loaded". The frontend prunes its cache against it,
+  which also fixes **eviction**, a path that notifies nobody at all.
+- The Daisy now sends that status unsolicited after a successful unload, so the
+  row disappears on the keypress rather than up to a second later at the next
+  poll.
+- Pruning is skipped when `sample_count` reaches
+  `WAVEX_SAMPLE_STATUS_MAX_ENTRIES`, because the list is then possibly truncated
+  and cannot prove absence — the Daisy holds up to 32 samples and this message
+  carries 8. See `docs/backlog.md` for the consequence and the proper fix.
+
+
 ### Removed — A diagnostics path that invented its CPU figure
 
 Found by the 2026-08-29 ESP32-P4 review (item E-MISC1). A second CPU-usage

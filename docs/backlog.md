@@ -241,3 +241,39 @@ the twenty behavioural fixes?" Do the hardware pass first.
   currently in `main` only by accident of where it was written.
 - Drop `main` from the UI component's `REQUIRES` last: that is the check that
   the job is finished, not a step along the way.
+
+---
+
+## Sample status can only describe 8 of up to 32 loaded samples
+
+**What:** the Daisy holds up to `kLoadedSampleCapacity` (= `kMaxZones`, 32)
+loaded samples, but `SampleMemStatusMessage` carries
+`WAVEX_SAMPLE_STATUS_MAX_ENTRIES` (8) and `GetSampleMemStatus()` clamps to it.
+The frontend's metadata cache is also 8 (`kMetaCacheSize`), and the Sample
+Manager builds its list by probing that cache.
+
+**Why it matters beyond a short list.** The status message is the only one that
+carries a count plus the full resident set, so it is what the frontend uses to
+work out that a sample has been *removed* — a metadata push can only describe
+samples that exist, and unloading the last one pushes nothing at all. That makes
+status the authority on deletion, and a truncated authority cannot prove absence.
+
+`prune_sample_meta_to()` therefore refuses to prune when
+`sample_count >= WAVEX_SAMPLE_STATUS_MAX_ENTRIES`, because the truncation keeps
+the *first* 8 loaded while the cache holds the 8 most recently *pushed*, and
+those sets need not overlap — pruning against a truncated list would drop live
+entries. The consequence: **with 8 or more samples loaded, an unloaded sample
+can linger in the frontend's list until the count drops below 8 again.**
+
+**Why it is not urgent:** the cache is 8 entries, so the frontend cannot track
+more than 8 regardless, and loading 8+ samples is not a normal workflow yet
+(there is no kit or multisample UI to drive it). The guard makes the failure
+conservative — a stale row — rather than the alternative, which is silently
+dropping samples that are genuinely loaded.
+
+**When to revisit:** when kits or multisampled instruments start loading more
+than a handful of samples at once — Phase 2 item 4 or Phase 2.5 item 1. Fixing
+it properly means either paging the status (a `first_index` field and repeated
+responses) or a dedicated D→E "sample N unloaded" message, which expresses the
+deletion directly instead of inferring it from a set difference. Prefer the
+explicit message: it also covers eviction, which today notifies nobody at all.

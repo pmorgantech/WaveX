@@ -391,7 +391,23 @@ static void HandleSampleUnloadMessage(const uint8_t* payload, size_t payload_siz
 #if WAVEX_AUDIO_ENGINE_ENABLED
     if (WaveX::AudioEngine::UnloadSample(msg->sample_id)) {
         // Tell the frontend what is left, so its list cannot drift from RAM.
+        //
+        // The metadata push alone cannot do that. MSG_SAMPLE_META only ever
+        // describes a sample that exists, so pushing the remainder is silent
+        // about what was removed - and unloading the last sample pushes nothing
+        // at all. The frontend's meta cache is add/update-only and would keep
+        // the freed entry forever, which is exactly why Unload appeared to do
+        // nothing while the backend really had freed the memory.
+        //
+        // The status message is what carries a count and the full resident set,
+        // so it is the one that can express a deletion. Send it unsolicited
+        // here rather than waiting for the frontend's next poll, so the row
+        // disappears when the user presses the key instead of up to a second
+        // later.
         WaveX::AudioEngine::PushAllSampleMeta(0);
+        WaveX::Protocol::SampleMemStatusMessage status{};
+        WaveX::AudioEngine::GetSampleMemStatus(status);
+        WaveX::Comm::UartLinkSend(WaveX::Protocol::MSG_STATUS_RESPONSE, &status, sizeof(status));
     }
 #else
     (void)msg;

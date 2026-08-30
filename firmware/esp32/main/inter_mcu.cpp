@@ -396,10 +396,79 @@ esp_err_t inter_mcu_request_sample_mem_status() {
     return result >= 0 ? ESP_OK : ESP_FAIL;
 }
 
+namespace {
+
+// Drops meta-cache entries for samples the backend no longer holds.
+//
+// The meta cache is otherwise add/update-only and there is no way to express a
+// deletion through it: MSG_SAMPLE_META can only ever describe a sample that
+// EXISTS, and a push of the remaining set says nothing about what left.
+// Unloading the LAST sample pushes nothing at all, so even "replace the whole
+// set on receive" would never fire. Without this, an unloaded (or evicted -
+// that path notifies nobody at all) sample stayed cached forever, and every
+// consumer reading the cache kept listing RAM that had been freed. That is what
+// made Unload look like it did nothing: the backend really did free it, and the
+// UI had no way to find out.
+//
+// SampleMemStatus is used as the authority because it is the only message that
+// carries a COUNT plus every resident id, so it can express both deletion and
+// "nothing is loaded".
+//
+// IMPORTANT: it can only do so when it is not truncated. The Daisy holds up to
+// kLoadedSampleCapacity (32) samples but this message carries at most
+// WAVEX_SAMPLE_STATUS_MAX_ENTRIES (8) and GetSampleMemStatus() clamps to that.
+// A full list is therefore possibly-truncated, and pruning against it would
+// drop live entries - the truncation keeps the FIRST 8 loaded, while this cache
+// holds the 8 most recently pushed, so the two sets need not overlap. Prune
+// only when the count proves the list complete.
+void prune_sample_meta_to(const wavex_sample_mem_status_t& status) {
+    if (status.sample_count >= WAVEX_SAMPLE_STATUS_MAX_ENTRIES) {
+        return;  // possibly truncated: cannot prove absence
+    }
+    taskENTER_CRITICAL(&s_meta_lock);
+    for (size_t i = 0; i < kMetaCacheSize; ++i) {
+        if (!s_meta_valid[i]) {
+            continue;
+        }
+        bool live = false;
+        for (uint8_t e = 0; e < status.sample_count; ++e) {
+            if (status.entries[e].sample_id == s_meta[i].sample_id) {
+                live = true;
+                break;
+            }
+        }
+        if (!live) {
+            s_meta_valid[i] = false;
+        }
+    }
+    // "Newest" may have been what was just unloaded. Re-point it at the
+    // backend's last entry (the most recently loaded, since loads append)
+    // rather than leaving it naming freed memory - callers pass id 0 to mean
+    // "whatever is current" and would otherwise get nothing, or worse, a stale
+    // hit if the id were reused.
+    bool newest_live = false;
+    for (uint8_t e = 0; e < status.sample_count; ++e) {
+        if (status.entries[e].sample_id == s_meta_newest_id) {
+            newest_live = true;
+            break;
+        }
+    }
+    if (!newest_live) {
+        s_meta_newest_id =
+            status.sample_count > 0 ? status.entries[status.sample_count - 1].sample_id : 0;
+    }
+    taskEXIT_CRITICAL(&s_meta_lock);
+}
+
+}  // namespace
+
 void inter_mcu_update_sample_mem_status(const wavex_sample_mem_status_t& status) {
     taskENTER_CRITICAL(&s_sample_mem_lock);
     s_sample_mem_status = status;
     taskEXIT_CRITICAL(&s_sample_mem_lock);
+    // Outside the lock above: this takes s_meta_lock, and nesting the two
+    // spinlocks would create the only lock ordering in this file.
+    prune_sample_meta_to(status);
 }
 
 void inter_mcu_get_sample_mem_status(wavex_sample_mem_status_t* out) {
