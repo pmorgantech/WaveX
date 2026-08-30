@@ -126,7 +126,6 @@ class UIDiagnosticsPage : public UIPage {
     uint32_t last_total_runtime;
     uint32_t last_idle_runtime_core0;
     uint32_t last_idle_runtime_core1;
-    uint32_t last_system_ticks;
     uint32_t last_check_time_ms;
 
     // ESP-IDF CPU monitoring

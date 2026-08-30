@@ -11,6 +11,36 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Removed — The unreachable meter pipeline in `ui_task`, and the refresh storm it caused
+
+Found by the 2026-08-29 ESP32-P4 review (item E-METER1). `UITask` carried a
+complete second meter implementation — display widgets, an LVGL apply timer, a
+33 ms `esp_timer`, a comm listener and a set of `volatile` meter fields — whose
+entry point `createMeterDisplay()` was never called from anywhere.
+
+Because nothing created the widgets, the LVGL timer that was supposed to clear
+`meter_update_pending` never ran, so the 33 ms timer set that flag and marked
+content changed on every tick forever. That drove `lv_refr_now()` at its ~16 ms
+cap continuously while the Daisy streamed meter packets, and once a second even
+with no data — full-display refreshes for a screen that had not changed.
+
+The live meters were never this code: they are in the header status strip, which
+drives itself from an `lv_timer` and reads `inter_mcu_get_meter_data()`. Deleting
+the dead path also removed the fake meter values injected at startup, a comm
+listener that was registered and never unregistered, and the `volatile` meter
+fields the review flagged separately under E-SYNC1.
+
+### Changed — Diagnostics CPU sampling no longer formats and reparses every task
+
+Found by the same review (item E-DIAG1). `updateCpuUsageFreertosStats()` ran
+`malloc(2048)` plus `vTaskGetRunTimeStats()` — which formats every task in the
+system into text — and then `strtok`-parsed that text straight back into
+numbers, all inside the shared `esp_timer` task that also delivers LVGL's tick.
+
+It now calls `uxTaskGetSystemState()` into a static array and reads the counters
+directly: no allocation, no formatting, no reparse. The name-padding workaround
+the old text path needed is gone with it, since `pcTaskName` is the real name.
+
 ### Fixed — Outbound link frames go out when queued, not on the next poll tick
 
 Found by the 2026-08-29 ESP32-P4 review (item E-TX1). `uart_link_send()` only

@@ -35,7 +35,6 @@ UIDiagnosticsPage::UIDiagnosticsPage()
       last_total_runtime(0),
       last_idle_runtime_core0(0),
       last_idle_runtime_core1(0),
-      last_system_ticks(0),
       last_check_time_ms(0),
       last_esp_idf_check_time(0),
       diagnostics_timer_handle(nullptr),
@@ -569,6 +568,11 @@ void UIDiagnosticsPage::updateCpuUsage() {
 #endif
 }
 
+// Upper bound for uxTaskGetSystemState(). Comfortably above the ~15 tasks this
+// firmware runs; tasks beyond it are simply not sampled, which skews the total
+// rather than corrupting anything.
+static constexpr UBaseType_t kMaxTrackedTasks = 32;
+
 void UIDiagnosticsPage::updateCpuUsageFreertosStats() {
     uint32_t current_time_ms = (uint32_t)(esp_timer_get_time() / 1000);
 
@@ -577,78 +581,44 @@ void UIDiagnosticsPage::updateCpuUsageFreertosStats() {
         last_total_runtime = 0;
         last_idle_runtime_core0 = 0;
         last_idle_runtime_core1 = 0;
-        last_system_ticks = xTaskGetTickCount();
         last_check_time_ms = current_time_ms;
         return;
     }
 
     uint32_t time_diff = current_time_ms - last_check_time_ms;
     if (time_diff >= 2000) {  // Update every 2 seconds (reduce frequency to avoid watchdog timeout)
-        char* runtime_stats = (char*)malloc(2048);
-        if (!runtime_stats) {
-            ESP_LOGE(TAG, "Failed to allocate memory for runtime stats");
-            return;
-        }
+        // uxTaskGetSystemState() rather than vTaskGetRunTimeStats(): the
+        // latter formats every task into a 2 KB heap buffer that this function
+        // then strtok-parsed straight back into numbers. Asking for the numbers
+        // directly drops the allocation, the formatting and the reparse - which
+        // matters because this runs in the shared esp_timer task, the same one
+        // that delivers LVGL's tick, so whatever it spends here delays frames.
+        //
+        // pcTaskName here is the real task name. The old path had to strip
+        // trailing spaces because vTaskGetRunTimeStats pads names to a fixed
+        // width; do not reintroduce that trimming, it would corrupt any name
+        // that legitimately ends in a space.
+        static TaskStatus_t task_status[kMaxTrackedTasks];
+        uint32_t sampled_total = 0;
+        const UBaseType_t task_count =
+            uxTaskGetSystemState(task_status, kMaxTrackedTasks, &sampled_total);
 
-        // vTaskGetRunTimeStats can be expensive, add a safety margin
-        vTaskGetRunTimeStats(runtime_stats);
-
-        // Parse FreeRTOS runtime statistics for multicore ESP32-P4
-        // ESP32 FreeRTOS creates IDLE0, IDLE1, etc. tasks for each core
         uint32_t idle_runtime_core0 = 0;
         uint32_t idle_runtime_core1 = 0;
         uint32_t total_system_runtime = 0;
-        uint32_t elapsed_ticks = 0;
-
-        // Reset strtok for parsing
-        char* saveptr = nullptr;
-        char* line = strtok_r(runtime_stats, "\n", &saveptr);
-
-        while (line != NULL) {
-            // Parse each task line: "TaskName\tRuntime\t..."
-            char* task_name = line;
-            char* runtime_str = nullptr;
-
-            // Find first tab (separates task name from runtime)
-            char* tab = strchr(line, '\t');
-            if (tab) {
-                *tab = '\0';  // Null terminate task name
-                runtime_str = tab + 1;
-
-                // Parse runtime value (absolute ticks)
-                uint32_t runtime = atoi(runtime_str);
-
-                // FreeRTOS pads task names with spaces to
-                // configMAX_TASK_NAME_LEN-1 (prvWriteNameToBuffer), so the
-                // field reads "IDLE0          ", never "IDLE0". Comparing
-                // with strcmp() never matched, both idle deltas stayed 0,
-                // and every sample reported exactly 100%.
-                size_t name_len = strlen(task_name);
-                while (name_len > 0 && task_name[name_len - 1] == ' ') {
-                    task_name[--name_len] = '\0';
-                }
-
-                // Check for per-core IDLE tasks
-                if (strcmp(task_name, "IDLE0") == 0) {
-                    idle_runtime_core0 = runtime;
-                } else if (strcmp(task_name, "IDLE1") == 0) {
-                    idle_runtime_core1 = runtime;
-                }
-
-                // Accumulate total runtime from all tasks
-                total_system_runtime += runtime;
+        for (UBaseType_t i = 0; i < task_count; i++) {
+            const uint32_t runtime = static_cast<uint32_t>(task_status[i].ulRunTimeCounter);
+            total_system_runtime += runtime;
+            const char* task_name = task_status[i].pcTaskName;
+            if (strcmp(task_name, "IDLE0") == 0) {
+                idle_runtime_core0 = runtime;
+            } else if (strcmp(task_name, "IDLE1") == 0) {
+                idle_runtime_core1 = runtime;
             }
-
-            line = strtok_r(NULL, "\n", &saveptr);
         }
 
         // Calculate per-core CPU usage using idle time
         // CPU usage = (total_time - idle_time) / total_time * 100
-
-        // Get elapsed system ticks for proper time measurement
-        uint32_t current_ticks = xTaskGetTickCount();
-        elapsed_ticks = current_ticks - last_system_ticks;
-        last_system_ticks = current_ticks;
 
         if (total_system_runtime > last_total_runtime && last_total_runtime > 0) {
             // Calculate idle time differences
@@ -705,7 +675,6 @@ void UIDiagnosticsPage::updateCpuUsageFreertosStats() {
         last_idle_runtime_core0 = idle_runtime_core0;
         last_idle_runtime_core1 = idle_runtime_core1;
 
-        free(runtime_stats);
         last_check_time_ms = current_time_ms;
     }
 }

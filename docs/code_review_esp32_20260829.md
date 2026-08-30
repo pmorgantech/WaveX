@@ -7,7 +7,7 @@
 
 Findings carry stable IDs (`E-…`) so implementation can be tracked in this file. **Completed items leave this document** — detail goes to `CHANGELOG.md`, matching the roadmap's convention — so what remains here is always the open list. A partially-addressed item keeps its row, marked `[~]`, and says what is left.
 
-**Already remediated** (see `CHANGELOG.md` § Unreleased): E-LVGL1/2/3, the LVGL thread-safety cluster (`21304be`, `222b2b4`); E-LIFE1/2/3, the callback-lifetime cluster (`41f4cdd`); E-KEY1/2, the keypad decode and INT busy-spin (`cdab47d`); E-INIT1 and E-BLD1/2 (`f6b7394`); E-TICK1/E-TOUCH1/E-BRWS1/E-MENU1, the UI correctness batch (`edd9981`); E-TX1, the outbound-frame latency. All fixed 2026-08-29. **E-KEY1/2 and E-ENC1 change hardware behaviour and are the ones most needing a bench pass** — they were diagnosed entirely by reading code and the controller datasheet.
+**Already remediated** (see `CHANGELOG.md` § Unreleased): E-LVGL1/2/3, the LVGL thread-safety cluster (`21304be`, `222b2b4`); E-LIFE1/2/3, the callback-lifetime cluster (`41f4cdd`); E-KEY1/2, the keypad decode and INT busy-spin (`cdab47d`); E-INIT1 and E-BLD1/2 (`f6b7394`); E-TICK1/E-TOUCH1/E-BRWS1/E-MENU1, the UI correctness batch (`edd9981`); E-TX1, the outbound-frame latency (`6a0912c`); E-METER1 and E-DIAG1, the two periodic-work wastes. All fixed 2026-08-29. **E-KEY1/2 and E-ENC1 change hardware behaviour and are the ones most needing a bench pass** — they were diagnosed entirely by reading code and the controller datasheet.
 
 ---
 
@@ -23,7 +23,7 @@ The debt is concentrated in three themes:
 
 Two systemic build findings rounded it out — ~~inert `-Os`/LTO options added after `project()`, and an `EXCLUDE_COMPONENTS` list that excluded nothing~~. **Fixed 2026-08-29**, and the fix confirmed both diagnoses: a clean rebuild came out within 48 bytes of the old image, which is what it should be if the options really were applying to nothing and the pruned exclusions really were being built anyway.
 
-**Suggested order**: all Criticals are closed and Major is down to E-DIAG1, E-METER1 and E-STOP1. E-METER1 is worth pairing with the `lv_refr_now` question in roadmap § Outstanding hardware verification, since both concern the same duplicated refresh path. Then the Minor/Smell batches. E-SYNC1's remaining half (the sample-edit page's `volatile`) is cheap and can ride along with any edit-page work. The SPI findings (§7) do not need fixing now but must gate any re-enable of `WAVEX_SPI_LINK_ENABLED`. **Before any of that, a bench pass on the keypad and encoder** — three fixes now depend on hardware behaviour nobody has watched.
+**Suggested order**: all Criticals are closed and the only whole Major left is E-STOP1 (latent — every teardown API is unsafe, but none has a caller). After that it is the Minor and Smell batches, plus the two partials (E-ENC1's watch-point ISR and E-SYNC1's edit page). E-METER1 is worth pairing with the `lv_refr_now` question in roadmap § Outstanding hardware verification, since both concern the same duplicated refresh path. Then the Minor/Smell batches. E-SYNC1's remaining half (the sample-edit page's `volatile`) is cheap and can ride along with any edit-page work. The SPI findings (§7) do not need fixing now but must gate any re-enable of `WAVEX_SPI_LINK_ENABLED`. **Before any of that, a bench pass on the keypad and encoder** — three fixes now depend on hardware behaviour nobody has watched.
 
 ---
 
@@ -32,9 +32,7 @@ Two systemic build findings rounded it out — ~~inert `-Os`/LTO options added a
 | ID | Sev | Area | Summary |
 |---|---|---|---|
 | [~] E-ENC1 | Major | input | Encoder SMP race fixed 2026-08-29 (atomics replace interrupt masking); the read-then-clear window is narrowed from every movement poll to ~1 per 8000 counts, not closed — closing it needs the driver's watch-point ISR and bench time |
-| [~] E-SYNC1 | Major | UI/core | `volatile`/plain-`bool` cross-task handoffs — sample browser converted to atomics 2026-08-29; edit page (`volatile`) and `ui_task.h` meter state still open |
-| [ ] E-DIAG1 | Major | UI | `malloc` + `vTaskGetRunTimeStats` every 500 ms in the shared esp_timer task |
-| [ ] E-METER1 | Major | core | Orphaned meter pipeline forces continuous full-display refreshes |
+| [~] E-SYNC1 | Major | UI/core | `volatile`/plain-`bool` cross-task handoffs — sample browser converted to atomics and `ui_task.h`'s `volatile` meter state deleted outright with the dead pipeline, 2026-08-29; the sample-edit page's `volatile` run state is what remains |
 | [ ] E-STOP1 | Major | all | Every `stop()`/teardown API is unsafe (vTaskDelete over held locks / blocked queues) |
 | [ ] E-MIDI1 | Minor | shared | MIDI parser: stale `pending_system_data_` can swallow the next message's data bytes |
 | [ ] E-PROTO1 | Minor | comm | Router logs non-NUL-guaranteed wire string; silent length truncation in sample-data send |
@@ -87,14 +85,6 @@ The repo already contains the correct pattern — `file_browser.cpp:169-186` use
 - `main/ui_task.h:73-94` — `volatile` meter floats + `meter_callback_data_valid`, and plain `content_changed`, written from the uart/esp_timer tasks and read on core 1.
 
 **Fix**: one shared helper implementing the file-browser pattern (`std::atomic` flag with release store/acquire load around a snapshot buffer); use it in all three places; copy metadata out of `entries[]` at publication time.
-
-### E-DIAG1 — heavy work in the shared esp_timer task
-
-`src/ui_diagnostics_page.cpp:530-532,587-594`: `diagnosticsUpdateCallback` (500 ms esp_timer) does `malloc(2048)` + `vTaskGetRunTimeStats()` (suspends the scheduler to walk/format every task) in the esp_timer task — the same task delivering LVGL ticks and the 33 ms meter timer (guide §11). **Fix**: flag from the timer, collect in the page's LVGL timer or a low-prio worker, reuse a static buffer.
-
-### E-METER1 — orphaned meter pipeline forces continuous refreshes
-
-`main/ui_task.cpp:122-134,196-258,678-683`: `createMeterDisplay` has zero callers (grep-verified), so `lvglMeterApplyCallback` — the only code clearing `meter_update_pending` — never runs; meanwhile `meterUpdateCallback` fires every 33 ms unconditionally, and while the Daisy streams meter packets it marks content changed every tick, driving `adaptiveRefreshControl()` to `lv_refr_now` at the ~16 ms cap even when nothing on screen changed (and once per second with no meter data at all). Related: the startup call injects fake meter values (`meterDataCallback(0.5f, 0.4f, 0.8f, 0.7f, …)`, :98-100), and the listener registered at :95 is never unregistered (see E-STOP1). **Fix**: create the timer only when a meter view exists; gate `markContentChanged()` on the widgets existing; delete the dummy data.
 
 ### E-STOP1 — every teardown API is unsafe (latent; all currently caller-less, grep-verified)
 
