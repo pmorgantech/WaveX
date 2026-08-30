@@ -129,23 +129,43 @@ than as zero: a zero uptime looks like a crash loop.
 
 ## 6. Staging
 
-One verified commit each.
+One verified commit each. Status is recorded against the code, not against the
+plan — this list has already been overtaken once (stage 5 was written as
+"absorb Modulation and delete that menu", but stage 4's commit had deleted the
+menu, leaving only the tabbing to do).
 
-1. **This document.**
+1. **This document.** — **Done.**
 2. **Shared tab-group scaffolding** — factor the diagnostics tabview styling into
    a reusable helper so the new groups cannot drift from it, with diagnostics
    itself converted to use it (proving it is really shared, not a copy).
+   **Done**: `ui_tab_group.{h,cpp}` (`tabGroupCreate`/`tabGroupAddTab`) plus
+   `ui_palette.h`.
 3. **Play group** — extract the shared play-surface base from the existing
    keyboard page, re-land it as Pads, add Keys, tab them together.
+   **Done**: `pages/ui_play_page.cpp`, one page owning its own tabview.
 4. **Sample group** — tabs over the existing browse/edit/manage/record pages;
-   main menu entry replaces three.
-5. **Voice group** — tabs; absorb Modulation and delete that menu.
+   main menu entry replaces three. **Done**: `UITabHostPage` +
+   `createSampleGroup()`. The same commit deleted the Modulation menu.
+5. **Voice group** — tabs over the five stages. **Done**:
+   `pages/ui_voice_page.cpp` builds its own tabview with the shared chrome,
+   tabs `Sample / Env / Amp / Filter / Mod` per §4. *Not verified on the panel.*
 6. **Settings group** — fold CV Calibration in; fill the remaining stubs or mark
-   them plainly as unimplemented rather than logging and returning.
+   them plainly as unimplemented rather than logging and returning. **Partly
+   done**: CV Calibration is already a Settings entry; `Storage` and
+   `System Info` still log and return.
 7. **Diagnostics split** — ESP32 (CPU0/CPU1 separate) and Daisy tabs; move the
-   sample-memory page's content into the Daisy tab.
+   sample-memory page's content into the Daisy tab. **Not started.**
 8. **Daisy heap + uptime** — the protocol addition, with its round-trip test and
-   doc row, so the two placeholder cards become live.
+   doc row, so the two placeholder cards become live. **Not started.**
+
+**Two shapes of tab group, not one.** Stage 2 shares the *chrome*, not the
+hosting. Where the children are substantial independent pages (Sample), a
+`UITabHostPage` hosts them as `UIPage`s and forwards the page contract to
+whichever tab is selected. Where the children are views of one page's own state
+(Play, Voice), the page builds its own tabview, because the readouts that state
+needs — Play's parameter strip, Voice's name and status line — must survive a
+tab switch and so cannot live in a tab body. Both call `tabGroupCreate()`, which
+is what stage 2 was for.
 
 ## 7. Risks worth stating
 

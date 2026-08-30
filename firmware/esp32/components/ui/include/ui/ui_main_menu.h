@@ -11,8 +11,14 @@ namespace wavex_ui {
 /**
  * @brief Main menu page factory functions
  *
- * Creates the hierarchical menu structure as described in the document:
- * Main Menu -> Sample Browser, Edit Sample, Modulation, Settings, Diagnostics
+ * Builds the structure `docs/ui-information-architecture.md` §1 specifies:
+ * Main Menu -> Sample, Voice, Play, Settings, Diagnostics. Sample and Voice
+ * are tab groups (§2: tabs when the children share a subject); Settings is a
+ * list, because its children share nothing but the word.
+ *
+ * The old `Modulation` entry is gone - its three items were logging stubs, and
+ * modulation is a property of a voice rather than a peer of one, so it lives
+ * as Voice's Mod tab.
  */
 
 /**
@@ -21,7 +27,7 @@ namespace wavex_ui {
 std::shared_ptr<UIPage> createMainMenu();
 
 /**
- * @brief Create the modulation submenu
+ * @brief Create the Sample tab group (Manage / Browse / Edit / Record)
  */
 std::shared_ptr<UIPage> createSampleGroup();
 
