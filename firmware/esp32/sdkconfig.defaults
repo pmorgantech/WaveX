@@ -37,6 +37,20 @@ CONFIG_BSP_LCD_TYPE_720_1280_5_INCH_A=y
 CONFIG_IDF_EXPERIMENTAL_FEATURES=y
 CONFIG_LVGL_PORT_ENABLE_PPA=y
 
+# LVGL's own PPA draw unit (roadmap 0.3 item 1). This is a DIFFERENT PPA
+# consumer from CONFIG_LVGL_PORT_ENABLE_PPA above: that one offloads display
+# rotation inside esp_lvgl_port, this one installs a draw unit inside LVGL's
+# renderer that accelerates unrounded, fully-opaque rectangle fills.
+#
+# LV_DRAW_BUF_ALIGN is not incidental - lv_draw_ppa_private.h hard #errors
+# unless it equals CONFIG_CACHE_L2_CACHE_LINE_SIZE, which is 128 on the P4.
+# LV_USE_PPA_IMG is deliberately left off: it accelerates image blits and this
+# firmware draws no images (no lv_image_*/lv_canvas_* call exists outside the
+# host preview harness), so it would be pure code size.
+CONFIG_LV_USE_PPA=y
+CONFIG_LV_PPA_BURST_LENGTH=128
+CONFIG_LV_DRAW_BUF_ALIGN=128
+
 # USB MIDI device class (roadmap Phase 1 item 8)
 CONFIG_TINYUSB_MIDI_COUNT=1
 

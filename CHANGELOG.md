@@ -11,6 +11,34 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Changed — LVGL PPA draw unit enabled
+
+- Enabled `CONFIG_LV_USE_PPA` (plus `CONFIG_LV_PPA_BURST_LENGTH=128`) in both
+  `sdkconfig` and `sdkconfig.defaults`. This is LVGL's own PPA draw unit, which
+  accelerates unrounded fully-opaque rectangle fills inside LVGL's renderer. It
+  is a **different** PPA consumer from the already-enabled
+  `CONFIG_LVGL_PORT_ENABLE_PPA`, which offloads display rotation inside
+  `esp_lvgl_port` — enabling that one never accelerated any drawing, which is
+  why the original "~30% faster" rationale for the 9.5 upgrade did not follow
+  from the flag that was actually set.
+- `CONFIG_LV_DRAW_BUF_ALIGN` raised 4 → 128 as a hard requirement, not a tuning
+  choice: `lv_draw_ppa_private.h` `#error`s unless it equals
+  `CONFIG_CACHE_L2_CACHE_LINE_SIZE` (128 on the ESP32-P4). It raises alignment
+  for every LVGL draw-buffer allocation, not just PPA ones.
+- `CONFIG_LV_USE_PPA_IMG` deliberately left off: it accelerates image blits and
+  this firmware draws no images — no `lv_image_*` or `lv_canvas_*` call exists
+  outside the host preview harness — so it would be pure code size.
+- Cost: +5,368 bytes, entirely External RAM `.text`/`.rodata`; DIRAM unchanged.
+- **Not verified on hardware.** Build- and link-verified only: the four
+  `lv_draw_ppa*.c.obj` objects compile, the symbols are in the map, and
+  `lv_init.c` calls `lv_draw_ppa_init()`, so the flag is genuinely active
+  rather than a no-op. What is unproven is whether it helps. Two known risks
+  are recorded in `docs/roadmap.md` § 0.3 and § Outstanding hardware
+  verification: the fill path rejects rounded corners (and nearly all our
+  chrome is rounded), and `lv_draw_ppa_init()` overrides LVGL's *global*
+  cache-invalidation handler — previously `NULL`, i.e. free — with an
+  `esp_cache_msync` over the entire draw buffer, called twice per draw task.
+
 ### Changed — Sample group; Modulation menu removed
 
 - `Sample Browser`, `Edit Sample` and `Sample Manager` were three top-level
