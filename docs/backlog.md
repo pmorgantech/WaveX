@@ -452,3 +452,25 @@ while `0x08` is the one on the wire.
 and edit §1 to match, since a target design should not renumber ids that are
 already shipping. Whoever does it should also decide what `0x0B`/`0x0C` become
 once `PAN` no longer needs `0x0C`.
+
+---
+
+## Softkey press heap-allocates a `std::function` per event
+
+**Found in the 2026-08-30 ESP32 coding-guide review.** Every softkey press
+(`SoftkeyBar::pressFocused()` and `event_cb()`, `ui_softkey_bar.cpp`) does
+`new std::function<void()>(cb)` to carry the callback across `lv_async_call`'s
+deferral, freed inside the deferred call. `docs/esp32p4_coding_guide.md` §8
+flags `std::function` heap churn as worth suspicion in long-running embedded
+code.
+
+**Why it is not urgent:** the deferral exists specifically because handling a
+softkey press synchronously inside LVGL event processing is unsafe (it may
+push/pop a page while LVGL is mid-draw), and the allocation rate is bounded by
+human button-press cadence — a few Hz at most, nothing like a per-frame or
+per-sample path. No fragmentation symptom has been observed or reported.
+
+**Fix if picked up:** a small fixed-capacity ring of pending closures (sized
+to the softkey count) would remove the allocation without changing the
+deferral semantics. Not worth disturbing this code for its own sake; do it if
+something else already touches `ui_softkey_bar.cpp`.
