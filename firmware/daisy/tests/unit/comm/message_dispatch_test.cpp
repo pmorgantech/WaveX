@@ -255,6 +255,29 @@ TEST_F(MessageDispatchTest, SamplePlayRequestForwardsThePath) {
     EXPECT_EQ(GetDispatchRecord().play_requests[0], "/SAMPLES/kick.wav");
 }
 
+// Same contract as the browse path above: a play-request path that fills the
+// payload with no NUL anywhere must be bounded to the payload's bytes, and an
+// overlong one truncated to the handler's 95-char buffer - never strlen()ed
+// past the frame.
+TEST_F(MessageDispatchTest, SamplePlayPathWithoutTerminatorIsBoundedToPayload) {
+    const uint8_t payload[4] = {'A', 'B', 'C', 'D'};  // deliberately no NUL
+    ProcessInterMcuMessage(MSG_SAMPLE_PLAY_REQ, 1, payload, sizeof(payload));
+
+    ASSERT_EQ(GetDispatchRecord().play_requests.size(), 1u);
+    EXPECT_EQ(GetDispatchRecord().play_requests[0], "ABCD");
+}
+
+TEST_F(MessageDispatchTest, OverlongSamplePlayPathIsTruncatedTo95Chars) {
+    std::string long_path(120, 'y');
+    ProcessInterMcuMessage(MSG_SAMPLE_PLAY_REQ,
+                           1,
+                           reinterpret_cast<const uint8_t*>(long_path.c_str()),
+                           long_path.size());  // no NUL within payload_size
+
+    ASSERT_EQ(GetDispatchRecord().play_requests.size(), 1u);
+    EXPECT_EQ(GetDispatchRecord().play_requests[0], std::string(95, 'y'));
+}
+
 // A message type nothing routes must fall through the switch without
 // touching any subsystem - the record must stay completely empty.
 TEST_F(MessageDispatchTest, UnknownMessageTypeReachesNothing) {

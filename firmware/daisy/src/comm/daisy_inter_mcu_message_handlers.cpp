@@ -527,10 +527,22 @@ static void HandleBrowseResponseMessage(const uint8_t* payload, size_t payload_s
 
 // Sample play request handler - requires inter-MCU comm and audio/filesystem support
 static void HandleSamplePlayRequestMessage(const uint8_t* payload, size_t payload_size) {
-    if (payload_size > 0 && payload) {
-        const char* file_path = reinterpret_cast<const char*>(payload);
-        WaveX::Comm::ProcessSamplePlayRequest(file_path);
+    if (!payload || payload_size == 0) {
+        return;
     }
+    // Same hazard as HandleBrowseRequestMessage above: a CRC-valid frame
+    // carries no guarantee the path is NUL-terminated within payload_size,
+    // and ProcessSamplePlayRequest takes a plain const char*. Bound the scan
+    // and copy into a terminated buffer before handing it on.
+    const char* path_ptr = reinterpret_cast<const char*>(payload);
+    size_t path_len = strnlen(path_ptr, payload_size);
+    char path[96] = {0};
+    if (path_len >= sizeof(path)) {
+        path_len = sizeof(path) - 1;
+    }
+    memcpy(path, path_ptr, path_len);
+    path[path_len] = '\0';
+    WaveX::Comm::ProcessSamplePlayRequest(path);
 }
 
 // Sample stop request handler - requires inter-MCU comm and audio support

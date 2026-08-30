@@ -11,6 +11,14 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Fixed — sample-play-request path could be read past the frame
+
+- `HandleSamplePlayRequestMessage` forwarded the payload as a `const char*`
+  with no guarantee of a NUL within `payload_size`, so a malformed frame's
+  path was `strlen()`ed past the frame into adjacent memory. Now bounded
+  with `strnlen` and copied into a terminated 95-char buffer — the same
+  hardening the browse handler directly above it already had.
+
 ### Fixed — `ValidateWaveXPacket` size-underflow guard
 
 - A 0- or 1-byte buffer made `buffer_size - 2` underflow `size_t`, turning
