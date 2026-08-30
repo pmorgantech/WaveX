@@ -3,6 +3,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <vector>
 
@@ -585,6 +586,44 @@ TEST(VoiceManagerTest, EndFrameTruncatesPlaybackRegion) {
 
     EXPECT_EQ(vm.ActiveVoiceCount(), 0)
         << "voice should have released at end_frame=10, not played the full 100 frames";
+}
+
+// Regression for f09a423. The test above looks like it covers a trimmed
+// region, but FlatParams sets release_s = 0, so the voice ends instantly and
+// the release tail - the part that was broken - never renders at all.
+//
+// Pre-fix the tail clamped the read position against sample_frames rather than
+// end_frame, so a trimmed sample played the audio AFTER the trim point for the
+// whole release. The sample here is 30x louder past frame 10 so the defect is
+// unmistakable in the output: peak 0.4577 pre-fix against 0.0153 post-fix.
+TEST(VoiceManagerTest, ReleaseTailDoesNotPlayAudioPastATrimmedEndFrame) {
+    VoiceManager vm;
+    vm.Init(48000);
+
+    std::vector<int16_t> sample(100);
+    for (size_t i = 0; i < 10; ++i) {
+        sample[i] = 1000;  // the audible region
+    }
+    for (size_t i = 10; i < sample.size(); ++i) {
+        sample[i] = 30000;  // trimmed-off audio that must never be heard
+    }
+
+    VoiceTriggerParams p = FlatParams(sample.data(), sample.size(), 60, 127, 0.5f);
+    p.end_frame = 10;
+    p.release_s = 0.5f;  // long tail, so the clamped read position matters
+    vm.Trigger(p);
+
+    float out_l[256] = {0};
+    float out_r[256] = {0};
+    vm.Render(out_l, out_r, 256);
+
+    // Everything in the region is at amplitude 1000/32768, scaled by the
+    // centre-pan gain. Anything approaching the 30000-valued frames is the bug.
+    const float in_region_max = (1000.0f / 32768.0f);
+    for (int i = 0; i < 256; ++i) {
+        EXPECT_LE(std::fabs(out_l[i]), in_region_max + 1e-4f)
+            << "frame " << i << " played audio from past end_frame";
+    }
 }
 
 TEST(VoiceManagerTest, FilterAttenuatesHighFrequencyContent) {
