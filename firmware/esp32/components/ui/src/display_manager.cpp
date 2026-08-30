@@ -11,6 +11,13 @@
 #include "esp_lcd_touch_gt911.h"
 #include "esp_log.h"
 #include "esp_lvgl_port.h"
+#if CONFIG_LV_USE_PPA
+#include "esp_cache.h"
+// lv_draw_buf_handlers_t is opaque in the public header; the struct we
+// need to poke one callback on lives behind lvgl_private.h.
+#include "lvgl.h"
+#include "lvgl_private.h"
+#endif
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -33,6 +40,76 @@ static void log_dma_heap(const char* phase) {
              heap_caps_get_free_size(kPsramDmaCaps),
              heap_caps_get_minimum_free_size(kPsramDmaCaps));
 }
+
+#if CONFIG_LV_USE_PPA
+// Narrowed cache invalidation for the PPA draw unit.
+//
+// Enabling CONFIG_LV_USE_PPA does more than add a draw unit: lv_draw_ppa_init()
+// calls lv_draw_buf_ppa_init_handlers(), which overrides LVGL's *global*
+// invalidate_cache_cb. LVGL's own default for that callback is NULL, and
+// lv_draw_buf_invalidate_cache() early-returns on NULL - so before the PPA,
+// cache invalidation cost nothing at all. The PPA's replacement
+// (lv_draw_ppa_buf.c) esp_cache_msync's draw_buf->data_size, the WHOLE buffer,
+// ignoring the lv_area_t it is handed, and ppa_execute_drawing() calls it twice
+// per draw task.
+//
+// Measured on the Diagnostics page (docs/performance_monitoring.md Part 2): the
+// PPA cut the render p95 from 37 ms to 21 ms - it does accelerate what it
+// claims to - while refr went 3->8 ms, flush 1->3 ms and CPU 18.5%->23%. Flush
+// tripling is the tell, because a draw unit cannot make flushing slower; that
+// cost is the global sync landing outside render. The hardware was winning and
+// the callback was losing by more.
+//
+// So: same sync, but only over the rows the area actually covers. Correctness
+// rests on it being a superset of the dirty region - we round out to cache-line
+// boundaries and clamp to the buffer, and the direction is cache-to-memory
+// (writeback), where flushing extra already-clean lines is harmless.
+void wavexInvalidateCacheArea(const lv_draw_buf_t* draw_buf, const lv_area_t* area) {
+    if (draw_buf == nullptr || draw_buf->data == nullptr || area == nullptr)
+        return;
+
+    const uint32_t stride = draw_buf->header.stride;
+    const uint32_t data_size = draw_buf->data_size;
+    if (stride == 0 || data_size == 0)
+        return;
+
+    int32_t y1 = area->y1 < 0 ? 0 : area->y1;
+    int32_t height = lv_area_get_height(area);
+    if (height <= 0)
+        return;
+
+    uint32_t begin = static_cast<uint32_t>(y1) * stride;
+    if (begin >= data_size)
+        return;
+    uint32_t end = begin + static_cast<uint32_t>(height) * stride;
+    if (end > data_size)
+        end = data_size;
+
+    // esp_cache_msync requires cache-line alignment. draw_buf->data is already
+    // 128-byte aligned (CONFIG_LV_DRAW_BUF_ALIGN, which LV_USE_PPA forces to
+    // equal the line size), so aligning the offsets keeps the address aligned.
+    constexpr uint32_t kLine = CONFIG_CACHE_L2_CACHE_LINE_SIZE;
+    begin &= ~(kLine - 1);
+    end = (end + kLine - 1) & ~(kLine - 1);
+    if (end > data_size)
+        end = data_size;
+    if (end <= begin)
+        return;
+
+    esp_err_t err = esp_cache_msync(draw_buf->data + begin,
+                                    end - begin,
+                                    ESP_CACHE_MSYNC_FLAG_DIR_C2M | ESP_CACHE_MSYNC_FLAG_TYPE_DATA);
+    // Once, not per frame: this runs on every draw task and a repeating log
+    // would cost more than the sync it is complaining about.
+    static bool reported = false;
+    if (err != ESP_OK && !reported) {
+        reported = true;
+        ESP_LOGW(TAG,
+                 "esp_cache_msync failed (%s); PPA cache sync may be a no-op",
+                 esp_err_to_name(err));
+    }
+}
+#endif  // CONFIG_LV_USE_PPA
 
 #define LV_LOCK() lvgl_port_lock(portMAX_DELAY)
 #define LV_UNLOCK() lvgl_port_unlock()
@@ -153,6 +230,14 @@ esp_err_t DisplayManager::initLvglDisplay() {
     // function.
 #if CONFIG_LV_USE_LOG
     lv_log_register_print_cb(wavex_lvgl_log_cb);
+#endif
+
+#if CONFIG_LV_USE_PPA
+    // Must come after the port's lv_init(): lv_draw_ppa_init() installs the
+    // whole-buffer callback we are replacing, so registering earlier would just
+    // be overwritten. See wavexInvalidateCacheArea above for the measurements.
+    lv_draw_buf_get_handlers()->invalidate_cache_cb = wavexInvalidateCacheArea;
+    ESP_LOGI(TAG, "LVGL cache invalidation narrowed to the dirty area");
 #endif
 
     LV_LOCK();

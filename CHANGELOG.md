@@ -11,6 +11,26 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Changed — LVGL cache invalidation narrowed to the dirty area
+
+- `CONFIG_LV_USE_PPA` does more than add a draw unit: `lv_draw_ppa_init()`
+  overrides LVGL's **global** `invalidate_cache_cb` with one that
+  `esp_cache_msync`s the entire draw buffer, ignoring the `lv_area_t` it is
+  handed, twice per draw task. LVGL's own default for that callback is `NULL`
+  and the caller early-returns on `NULL`, so before the PPA this cost nothing.
+- `display_manager.cpp` now installs `wavexInvalidateCacheArea()` after the
+  port's `lv_init()`, syncing only the rows the dirty area covers — rounded out
+  to cache-line boundaries, clamped to the buffer, cache-to-memory direction so
+  flushing extra already-clean lines is harmless.
+- Measured on the Diagnostics page before this change (`docs/performance_
+  monitoring.md` Part 2): the PPA cut render p95 from 37 ms to 21 ms, so the
+  hardware genuinely accelerates what it claims to — but `refr` went 3→8 ms,
+  `flush` 1→3 ms and CPU 18.5%→23%. `flush` tripling is the tell, since a draw
+  unit cannot make flushing slower; that was the global sync landing outside
+  render. The hardware was winning and the callback was losing by more.
+- Whether this recovers the difference is **not yet measured** — that is the
+  next capture.
+
 ### Added — LVGL performance and memory overlays
 
 - `CONFIG_LV_USE_SYSMON` with `CONFIG_LV_USE_PERF_MONITOR` (FPS and CPU,
