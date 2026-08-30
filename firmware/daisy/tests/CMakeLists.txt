@@ -47,6 +47,17 @@ FetchContent_MakeAvailable(googletest)
 
 include(GoogleTest)
 
+# Warning flags for FIRST-PARTY test code only - placed after
+# FetchContent_MakeAvailable(googletest) so GoogleTest's own sources, which do
+# not build clean under -Wconversion, are not affected.
+#
+# -Wconversion is the point of this block. 1d16237 was a size_t -> uint16_t
+# narrowing that silently truncated a length and returned success; the
+# compiler could have said so. Kept as warnings rather than -Werror: CI
+# surfaces them, and a hard failure on a toolchain bump is worse than a
+# visible warning.
+add_compile_options(-Wall -Wextra -Wconversion)
+
 # Ensure GoogleTest targets use C++14
 if(TARGET gtest)
     set_target_properties(gtest PROPERTIES

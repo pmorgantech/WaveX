@@ -147,11 +147,11 @@ TEST(VoiceManagerSafetyTest, RenderStaysInsideTheSampleForAnyTriggerParameters) 
         // Region and loop bounds, deliberately including degenerate and
         // out-of-order combinations - rejecting those is the code's job, and
         // rejecting them without an overread is what is under test.
-        p.start_frame = rng() % (kFrames + 8);
-        p.end_frame = rng() % (kFrames + 8);
+        p.start_frame = static_cast<uint32_t>(rng() % (kFrames + 8));
+        p.end_frame = static_cast<uint32_t>(rng() % (kFrames + 8));
         p.loop = (rng() % 2) == 0;
-        p.loop_start = rng() % (kFrames + 8);
-        p.loop_end = rng() % (kFrames + 8);
+        p.loop_start = static_cast<uint32_t>(rng() % (kFrames + 8));
+        p.loop_end = static_cast<uint32_t>(rng() % (kFrames + 8));
         p.pitch_ratio_mul = 0.25f + static_cast<float>(rng() % 800) / 100.0f;
 
         vm.Trigger(p);

@@ -304,7 +304,8 @@ TEST(InstrumentTest, OppositeCrossfadeZonesBlend) {
     // 128/127 - the property that makes the crossfade level-preserving.
     EXPECT_NEAR(out[0].gain_mul, 64.0f / 127.0f, 1e-5f);
     EXPECT_NEAR(out[1].gain_mul, 64.0f / 127.0f, 1e-5f);
-    for (uint8_t vel: {1, 30, 100, 127}) {
+    for (int vel_i: {1, 30, 100, 127}) {
+        const uint8_t vel = static_cast<uint8_t>(vel_i);
         uint8_t m = ResolveNoteOn(ins, 0, 60, vel, bank.Resolver(), out, kMaxLayerTriggers);
         ASSERT_EQ(m, 2) << "vel " << int(vel);
         EXPECT_NEAR(out[0].gain_mul + out[1].gain_mul, 128.0f / 127.0f, 1e-5f)

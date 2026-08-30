@@ -207,7 +207,7 @@ void ProcessInterMcuMessage(uint8_t msg_type,
 
 // ---- Individual handler implementations ----
 
-static void HandleSyncMessage(const uint8_t* payload, size_t payload_size) {}
+static void HandleSyncMessage(const uint8_t*, size_t) {}
 
 // NOTE_ON/NOTE_OFF/CONTROL_CHANGE/SAMPLE_CTRL were log-only stubs until
 // 2026-07-05 - the engine side (SPSC note queue -> VoiceManager) existed
@@ -290,6 +290,7 @@ static void HandleSampleLoadMessage(const uint8_t* payload, size_t payload_size)
 // The message id stays reserved in protocol.h.
 static void HandleSampleDataMessage(const uint8_t* payload, size_t payload_size) {
     (void)payload;
+    (void)payload_size;  // only read by UART_LOGW, which compiles away
     UART_LOGW("daisy_msg",
               "MSG_SAMPLE_DATA ignored (%d bytes) - not implemented (review C2)",
               (int)payload_size);
@@ -361,13 +362,13 @@ static void HandleEnvelopeReqMessage(const uint8_t* payload, size_t payload_size
 #endif
 }
 
-static void HandleDataRequestMessage(const uint8_t* payload, size_t payload_size) {}
+static void HandleDataRequestMessage(const uint8_t*, size_t) {}
 
-static void HandleMeterPushMessage(const uint8_t* payload, size_t payload_size) {}
+static void HandleMeterPushMessage(const uint8_t*, size_t) {}
 
-static void HandleWaveChunkMessage(const uint8_t* payload, size_t payload_size) {}
+static void HandleWaveChunkMessage(const uint8_t*, size_t) {}
 
-static void HandleHeartbeatMessage(const uint8_t* payload, size_t payload_size) {}
+static void HandleHeartbeatMessage(const uint8_t*, size_t) {}
 
 static void HandleSampleSelectMessage(const uint8_t* payload, size_t payload_size) {
     if (!payload || payload_size < sizeof(WaveX::Protocol::SampleSelectMessage)) {
@@ -523,7 +524,7 @@ static void HandleBrowseRequestMessage(const uint8_t* payload, size_t payload_si
     WaveX::Comm::ProcessBrowseRequest(path, start_index, max_entries);
 }
 
-static void HandleBrowseResponseMessage(const uint8_t* payload, size_t payload_size) {}
+static void HandleBrowseResponseMessage(const uint8_t*, size_t) {}
 
 // Sample play request handler - requires inter-MCU comm and audio/filesystem support
 static void HandleSamplePlayRequestMessage(const uint8_t* payload, size_t payload_size) {
@@ -554,7 +555,7 @@ static void HandleSampleStopRequestMessage(const uint8_t* payload, size_t payloa
     WaveX::Comm::ProcessSampleStopRequest(msg->slot);
 }
 
-static void HandleSampleStatusMessage(const uint8_t* payload, size_t payload_size) {}
+static void HandleSampleStatusMessage(const uint8_t*, size_t) {}
 
 // Sample play index request handler - requires inter-MCU comm and audio/filesystem support
 static void HandleSamplePlayIndexRequestMessage(const uint8_t* payload, size_t payload_size) {
@@ -581,9 +582,9 @@ static void HandleSamplePlayIndexRequestMessage(const uint8_t* payload, size_t p
     WaveX::Comm::ProcessSamplePlayIndexRequest(msg->index);
 }
 
-static void HandleSampleGetPathRequestMessage(const uint8_t* payload, size_t payload_size) {}
+static void HandleSampleGetPathRequestMessage(const uint8_t*, size_t) {}
 
-static void HandleSampleGetPathResponseMessage(const uint8_t* payload, size_t payload_size) {}
+static void HandleSampleGetPathResponseMessage(const uint8_t*, size_t) {}
 
 // CV calibration workflow (item 5 stage 4) - same validate-and-dispatch
 // shape as the note handlers; pinned by message_dispatch_test.
@@ -673,9 +674,9 @@ static void HandleMidiCcMessage(const uint8_t* payload, size_t payload_size) {
 #endif
 }
 
-static void HandleAckMessage(const uint8_t* payload, size_t payload_size) {}
+static void HandleAckMessage(const uint8_t*, size_t) {}
 
-static void HandleErrorMessage(const uint8_t* payload, size_t payload_size) {}
+static void HandleErrorMessage(const uint8_t*, size_t) {}
 
 }  // namespace Comm
 }  // namespace WaveX

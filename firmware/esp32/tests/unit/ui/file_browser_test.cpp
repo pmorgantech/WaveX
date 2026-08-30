@@ -289,10 +289,13 @@ TEST_F(FileBrowserTest, NavigateToPath) {
     wavex_file_browser_t* browser = CreateMinimalBrowser("/", 5);
     ASSERT_NE(browser, nullptr);
 
-    bool result = wavex_file_browser_navigate_to(browser, "/SOUNDS");
-
-    // Note: This will fail because refresh_file_list needs inter-MCU communication
-    // But we can test the path update logic
+    // The return value was previously computed and discarded, so the
+    // function's contract in the mocked environment was untested and a change
+    // to it could not fail anything. Pin it: the listing refresh needs
+    // inter-MCU traffic that the mock does not answer, so the call reports
+    // failure while still having updated the path.
+    const bool result = wavex_file_browser_navigate_to(browser, "/SOUNDS");
+    EXPECT_FALSE(result) << "navigate_to unexpectedly reported success without a browse response";
     EXPECT_STREQ("/SOUNDS", browser->current_path);
 
     DestroyBrowser(browser);

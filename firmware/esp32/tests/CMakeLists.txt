@@ -42,6 +42,25 @@ FetchContent_MakeAvailable(googletest)
 
 include(GoogleTest)
 
+# Warning flags for FIRST-PARTY test code only - placed after
+# FetchContent_MakeAvailable(googletest) so GoogleTest's own sources, which do
+# not build clean under -Wconversion, are not affected.
+#
+# -Wconversion is the point of this block. 1d16237 was a size_t -> uint16_t
+# narrowing that silently truncated a length and returned success; the
+# compiler could have said so. Kept as warnings rather than -Werror: CI
+# surfaces them, and a hard failure on a toolchain bump is worse than a
+# visible warning.
+add_compile_options(-Wall -Wextra -Wconversion)
+
+# The ESP-IDF/FreeRTOS mocks must match vendor signatures exactly, so most of
+# their parameters are unused by construction - that is what a stub is. Only
+# -Wunused-parameter is suppressed, and only here: -Wconversion still applies,
+# because a narrowing bug in a mock produces a wrong test result.
+set_source_files_properties(${CMAKE_CURRENT_SOURCE_DIR}/mocks/esp32_mocks.cpp
+    PROPERTIES COMPILE_OPTIONS "-Wno-unused-parameter"
+)
+
 # Ensure GoogleTest targets use C++17
 if(TARGET gtest)
     set_target_properties(gtest PROPERTIES

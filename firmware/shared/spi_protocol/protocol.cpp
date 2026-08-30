@@ -152,8 +152,10 @@ size_t ProtocolHandler::CreateWaveXPacket(uint8_t* buffer,
     // Create packet header (4 bytes)
     buffer[0] = PKT_MAKE_FLAGS_SIZE(size_code, flags);  // flags + size
     buffer[1] = msg_type;                               // Message type
-    buffer[2] = sequence_number & 0xFF;                 // Sequence number (low byte)
-    buffer[3] = (sequence_number >> 8) & 0xFF;          // Sequence number (high byte)
+    // The masks make these provably in range; the casts keep -Wconversion
+    // quiet so a genuinely lossy narrowing stands out here later.
+    buffer[2] = static_cast<uint8_t>(sequence_number & 0xFF);         // seq low byte
+    buffer[3] = static_cast<uint8_t>((sequence_number >> 8) & 0xFF);  // seq high byte
 
     // Copy payload. The guard is not redundant with payload_size: a
     // zero-length payload is a legitimate frame (heartbeats, ACKs) and
@@ -171,8 +173,8 @@ size_t ProtocolHandler::CreateWaveXPacket(uint8_t* buffer,
 
     // Calculate CRC over entire packet except CRC field
     uint16_t crc = CalculateWaveXCrc(buffer, total_size - 2);
-    buffer[total_size - 2] = crc & 0xFF;
-    buffer[total_size - 1] = (crc >> 8) & 0xFF;
+    buffer[total_size - 2] = static_cast<uint8_t>(crc & 0xFF);
+    buffer[total_size - 1] = static_cast<uint8_t>((crc >> 8) & 0xFF);
 
     return total_size;
 }

@@ -95,7 +95,7 @@ uint32_t uxQueueMessagesWaiting(QueueHandle_t xQueue) {
         return 0;
 
     std::lock_guard<std::mutex> queue_lock(it->second->mutex);
-    return it->second->items.size();
+    return static_cast<uint32_t>(it->second->items.size());
 }
 
 void vQueueDelete(QueueHandle_t xQueue) {
@@ -211,7 +211,7 @@ int uart_set_pin(
 int uart_write_bytes(uart_port_t uart_num, const void* src, size_t size) {
     const uint8_t* bytes = static_cast<const uint8_t*>(src);
     g_uart_tx_buffers[uart_num].insert(g_uart_tx_buffers[uart_num].end(), bytes, bytes + size);
-    return size;
+    return static_cast<int>(size);
 }
 
 int uart_read_bytes(uart_port_t uart_num, void* buf, uint32_t length, TickType_t ticks_to_wait) {
@@ -224,7 +224,7 @@ int uart_read_bytes(uart_port_t uart_num, void* buf, uint32_t length, TickType_t
         rx_buffer.pop();
     }
 
-    return read;
+    return static_cast<int>(read);
 }
 
 // Mock DMA functions

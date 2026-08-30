@@ -25,6 +25,17 @@ versioning and release process.
   `voice_manager_test`, with no new test body. See
   `docs/testing-remediation.md`.
 
+### Added — host tests build with `-Wall -Wextra -Wconversion`
+
+- All three test suites now compile first-party code with warnings enabled,
+  placed after GoogleTest is configured so the vendored library (which does
+  not build clean under `-Wconversion`) is unaffected. Warnings, not
+  `-Werror`. First-party warning count is zero, which is what makes a new one
+  worth reading. Note the limitation: `1d16237`'s `size_t` → `uint16_t`
+  narrowing, which motivated the flag, is in `inter_mcu.cpp` — a translation
+  unit the test build excludes — so this covers shared and test-compiled code
+  only.
+
 ### Removed — the dead `metrics` message counter
 
 - `firmware/daisy/src/metrics/` and its five host tests are gone. The module

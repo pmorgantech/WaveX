@@ -415,7 +415,7 @@ class LargeExtentPool {
                 free_runs_[w++] = cur;
             }
         }
-        run_count_ = w;
+        run_count_ = static_cast<uint16_t>(w);  // bounded by free_runs_ capacity
     }
 
     uint32_t free_bytes() const {

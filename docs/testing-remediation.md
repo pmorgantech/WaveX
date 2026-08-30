@@ -53,14 +53,32 @@ class with no new test bodies.
 `-fno-sanitize-recover=all` is deliberate — without it UBSan prints and
 continues, and ctest still reports a pass.
 
-Remaining Tier 0 work:
+**Both remaining Tier 0 items are now done**: `make test-asan` runs as its own
+CI step, and all three suites build with `-Wall -Wextra -Wconversion`.
 
-1. **A CI job** running `make test-asan`, alongside the existing per-suite jobs
-   in `.github/workflows/ci.yml`. Without this the option exists and nobody
-   runs it.
-2. **`-Wall -Wextra` on the test targets.** There are no warning flags at all
-   today. `-Wconversion` would have caught `1d16237`'s `size_t` → `uint16_t`
-   narrowing at compile time, for free.
+The warning flags are placed after `FetchContent_MakeAvailable(googletest)` so
+vendored GoogleTest, which does not build clean under `-Wconversion`, is
+unaffected. They are warnings rather than `-Werror`: CI surfaces them, and a
+hard failure on a toolchain bump is worse than a visible warning. First-party
+warning count is **zero** across all three suites, which is the state that
+makes a new one worth reading.
+
+Honest result: **`-Wconversion` surfaced no live bugs.** All 13 conversion
+sites were provably in range — masked byte writes (`x & 0xFF`), a `uint32_t`
+diagnostic counter, and test-file literals. The 28 `-Wunused-parameter` hits
+were empty no-op message handlers and a deliberately-unimplemented stub, not
+handlers ignoring a length they should check. Two things were still worth
+having:
+
+- `file_browser_test.cpp`'s `NavigateToPath` computed a `bool result` and
+  never asserted on it, so the function's contract in the mocked environment
+  was untested. Now pinned with `EXPECT_FALSE`.
+- The flag cannot have caught the bug that motivated it. `1d16237`'s
+  `size_t` → `uint16_t` narrowing is in `inter_mcu.cpp`, which is
+  **excluded from the test build** — so this protects shared and
+  test-compiled code only. Extending warnings to the two firmware builds is
+  the follow-on, and is a larger job because ESP-IDF and the STM32 HAL
+  headers do not build clean under `-Wconversion`.
 
 ## Tier 1 — the untrusted-input class (Daisy side done)
 

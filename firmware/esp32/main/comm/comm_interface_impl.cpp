@@ -44,11 +44,11 @@ esp_err_t CommInterfaceImpl::sendSampleStopRequest() {
     return inter_mcu_send_sample_stop_req();
 }
 
-esp_err_t CommInterfaceImpl::sendSampleLoadRequest(uint16_t sample_id,
-                                                   uint32_t sample_size,
-                                                   uint16_t sample_rate,
-                                                   uint8_t channels,
-                                                   uint8_t bit_depth) {
+esp_err_t CommInterfaceImpl::sendSampleLoadRequest(uint16_t /*sample_id*/,
+                                                   uint32_t /*sample_size*/,
+                                                   uint16_t /*sample_rate*/,
+                                                   uint8_t /*channels*/,
+                                                   uint8_t /*bit_depth*/) {
     // Not used in this implementation; use the path-based overload directly via inter_mcu
     return ESP_ERR_INVALID_ARG;
 }

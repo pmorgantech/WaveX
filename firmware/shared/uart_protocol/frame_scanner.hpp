@@ -55,7 +55,10 @@ class FrameScanner {
         }
         std::memcpy(buf_ + len_, data, len);
         len_ += len;
-        stats.dropped_bytes += dropped;
+        // dropped_bytes is a uint32_t diagnostic counter; a single Append
+        // cannot drop more than the buffer capacity, so this cannot lose
+        // information for any capacity this firmware uses.
+        stats.dropped_bytes += static_cast<uint32_t>(dropped);
         return dropped;
     }
 

@@ -27,11 +27,13 @@ std::vector<int16_t> MakeRampSample(size_t frames, int16_t start, int16_t step) 
 // no envelope ramp/decay and no filtering, matching the pre-ADSR/pre-filter
 // test semantics: instant attack, no decay (sustain=1.0), instant release,
 // filter wide open.
+// Takes size_t so callers can pass vector::size() directly; the single
+// narrowing lives here rather than at every call site.
 VoiceTriggerParams FlatParams(
-    const int16_t* sample, uint32_t frames, uint8_t note, uint8_t velocity, float pan) {
+    const int16_t* sample, size_t frames, uint8_t note, uint8_t velocity, float pan) {
     VoiceTriggerParams p;
     p.sample = sample;
-    p.sample_frames = frames;
+    p.sample_frames = static_cast<uint32_t>(frames);
     p.note = note;
     p.velocity = velocity;
     p.pan = pan;
@@ -813,6 +815,13 @@ TEST(VoiceManagerTest, HeldVoiceCountExcludesReleasingVoices) {
 // ---- Instrument-model extensions (instrument-model.md §3/§10) ----
 
 // Helper: find the voice index currently playing `note` (first match), or -1.
+// FindVoiceForNote returns int so it can signal "not found" as -1. VoiceAt
+// does the narrowing once, after the caller's ASSERT_GE(idx, 0) has ruled
+// that out, rather than casting at each use.
+static const WaveX::AudioEngine::Voice& VoiceAt(const VoiceManager& vm, int idx) {
+    return vm.GetVoice(static_cast<uint8_t>(idx));
+}
+
 static int FindVoiceForNote(const VoiceManager& vm, uint8_t note) {
     for (uint8_t i = 0; i < kNumVoices; ++i) {
         const auto& v = vm.GetVoice(i);
@@ -833,7 +842,7 @@ TEST(VoiceManagerTest, GainMulScalesVelocityGain) {
     // velocity 127 => base gain 1.0, × gain_mul 0.5 => 0.5.
     int idx = FindVoiceForNote(vm, 60);
     ASSERT_GE(idx, 0);
-    EXPECT_FLOAT_EQ(vm.GetVoice(idx).gain, 0.5f);
+    EXPECT_FLOAT_EQ(VoiceAt(vm, idx).gain, 0.5f);
 }
 
 TEST(VoiceManagerTest, PitchRatioMulMultipliesIncrement) {
@@ -847,7 +856,7 @@ TEST(VoiceManagerTest, PitchRatioMulMultipliesIncrement) {
 
     int idx = FindVoiceForNote(vm, 60);
     ASSERT_GE(idx, 0);
-    EXPECT_FLOAT_EQ(vm.GetVoice(idx).increment, 2.0f);
+    EXPECT_FLOAT_EQ(VoiceAt(vm, idx).increment, 2.0f);
 }
 
 TEST(VoiceManagerTest, SlotAndChokeGroupAreStored) {
@@ -861,8 +870,8 @@ TEST(VoiceManagerTest, SlotAndChokeGroupAreStored) {
 
     int idx = FindVoiceForNote(vm, 42);
     ASSERT_GE(idx, 0);
-    EXPECT_EQ(vm.GetVoice(idx).slot, 3);
-    EXPECT_EQ(vm.GetVoice(idx).choke_group, 2);
+    EXPECT_EQ(VoiceAt(vm, idx).slot, 3);
+    EXPECT_EQ(VoiceAt(vm, idx).choke_group, 2);
 }
 
 TEST(VoiceManagerTest, ChokeGroupCutsOffPreviousVoiceInSameGroup) {
@@ -885,7 +894,7 @@ TEST(VoiceManagerTest, ChokeGroupCutsOffPreviousVoiceInSameGroup) {
     vm.Trigger(closed_hat);
 
     // The open hat is now releasing (choked), the closed hat is held.
-    EXPECT_TRUE(vm.GetVoice(open_idx).envelope.IsReleasing());
+    EXPECT_TRUE(VoiceAt(vm, open_idx).envelope.IsReleasing());
     EXPECT_EQ(vm.HeldVoiceCount(), 1);  // only the closed hat is held
 }
 
@@ -910,7 +919,7 @@ TEST(VoiceManagerTest, ChokeDoesNotAffectOtherGroups) {
 
     int g2_idx = FindVoiceForNote(vm, 50);
     ASSERT_GE(g2_idx, 0);
-    EXPECT_FALSE(vm.GetVoice(g2_idx).envelope.IsReleasing());  // group 2 untouched
+    EXPECT_FALSE(VoiceAt(vm, g2_idx).envelope.IsReleasing());  // group 2 untouched
 }
 
 TEST(VoiceManagerTest, StopSlotStopsOnlyMatchingSlot) {

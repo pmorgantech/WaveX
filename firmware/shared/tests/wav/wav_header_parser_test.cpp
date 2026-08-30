@@ -16,14 +16,14 @@ using namespace WaveX::Wav;
 namespace {
 
 void PushLe16(std::vector<uint8_t>& v, uint16_t x) {
-    v.push_back(x & 0xFF);
-    v.push_back((x >> 8) & 0xFF);
+    v.push_back(static_cast<uint8_t>(x & 0xFF));
+    v.push_back(static_cast<uint8_t>((x >> 8) & 0xFF));
 }
 void PushLe32(std::vector<uint8_t>& v, uint32_t x) {
-    v.push_back(x & 0xFF);
-    v.push_back((x >> 8) & 0xFF);
-    v.push_back((x >> 16) & 0xFF);
-    v.push_back((x >> 24) & 0xFF);
+    v.push_back(static_cast<uint8_t>(x & 0xFF));
+    v.push_back(static_cast<uint8_t>((x >> 8) & 0xFF));
+    v.push_back(static_cast<uint8_t>((x >> 16) & 0xFF));
+    v.push_back(static_cast<uint8_t>((x >> 24) & 0xFF));
 }
 void PushTag(std::vector<uint8_t>& v, const char* tag) {
     v.insert(v.end(), tag, tag + 4);
@@ -48,8 +48,8 @@ void PushFmt(std::vector<uint8_t>& v,
     PushLe16(v, fmt);
     PushLe16(v, ch);
     PushLe32(v, sr);
-    PushLe32(v, sr * ch * bits / 8);  // byte rate
-    PushLe16(v, ch * bits / 8);       // block align
+    PushLe32(v, sr * ch * bits / 8);                    // byte rate
+    PushLe16(v, static_cast<uint16_t>(ch * bits / 8));  // block align
     PushLe16(v, bits);
     for (uint16_t i = 0; i < extra_bytes; ++i) {
         v.push_back(0xEE);
