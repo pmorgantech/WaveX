@@ -61,6 +61,10 @@ void midi_forward_event(const WaveX::Midi::Event& ev) {
 
 static TaskHandle_t s_midi_task_handle = nullptr;
 static bool s_driver_installed = false;
+// Shutdown handshake. Deleting a task that is blocked inside the UART driver
+// and then deleting that driver is undefined behaviour, so stop() asks the
+// task to leave and waits for it to say it has.
+static volatile bool s_midi_running = false;
 
 static void midi_task(void* arg) {
     (void)arg;
@@ -73,11 +77,13 @@ static void midi_task(void* arg) {
              (int)WAVEX_ESP_MIDI_UART_NUM,
              (int)WAVEX_ESP_MIDI_BAUD);
 
-    for (;;) {
-        // Block until at least one byte arrives, then drain the backlog
-        // without blocking so bursts (chords, running-status streams) are
-        // processed in one pass.
-        int n = uart_read_bytes(WAVEX_ESP_MIDI_UART_NUM, buf, 1, portMAX_DELAY);
+    while (s_midi_running) {
+        // Block for one byte, then drain the backlog without blocking so
+        // bursts (chords, running-status streams) are processed in one pass.
+        // The wait is bounded rather than portMAX_DELAY purely so the loop
+        // notices a stop request; an idle wakeup every 100 ms costs nothing
+        // next to being unable to shut down without undefined behaviour.
+        int n = uart_read_bytes(WAVEX_ESP_MIDI_UART_NUM, buf, 1, pdMS_TO_TICKS(100));
         while (n > 0) {
             for (int i = 0; i < n; ++i) {
                 if (parser.Feed(buf[i], ev)) {
@@ -87,6 +93,11 @@ static void midi_task(void* arg) {
             n = uart_read_bytes(WAVEX_ESP_MIDI_UART_NUM, buf, sizeof(buf), 0);
         }
     }
+
+    // Publish the exit before self-deleting: stop() waits on this, and only
+    // then is it safe to delete the driver this task was reading from.
+    s_midi_task_handle = nullptr;
+    vTaskDelete(nullptr);
 }
 
 extern "C" esp_err_t midi_task_start(void) {
@@ -134,6 +145,7 @@ extern "C" esp_err_t midi_task_start(void) {
         return err;
     }
 
+    s_midi_running = true;
     BaseType_t rc = xTaskCreate(midi_task,
                                 "din_midi",
                                 WAVEX_DIN_MIDI_TASK_STACK_SIZE,
@@ -143,6 +155,7 @@ extern "C" esp_err_t midi_task_start(void) {
     if (rc != pdPASS) {
         ESP_LOGE(TAG, "task create failed");
         s_midi_task_handle = nullptr;
+        s_midi_running = false;
         midi_task_stop();
         return ESP_ERR_NO_MEM;
     }
@@ -150,9 +163,19 @@ extern "C" esp_err_t midi_task_start(void) {
 }
 
 extern "C" esp_err_t midi_task_stop(void) {
+    s_midi_running = false;
+    // Wait for the task to leave its loop and self-delete rather than killing
+    // it: vTaskDelete() on a task blocked inside uart_read_bytes() leaves the
+    // driver's internals inconsistent, and the uart_driver_delete() below then
+    // frees objects it is still parked on.
+    for (int waited_ms = 0; s_midi_task_handle && waited_ms < 300; waited_ms += 10) {
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
     if (s_midi_task_handle) {
-        vTaskDelete(s_midi_task_handle);
-        s_midi_task_handle = nullptr;
+        // It did not leave. Deleting the driver now would be worse than
+        // leaking the task, so keep the driver and say so.
+        ESP_LOGE(TAG, "DIN MIDI task did not exit; leaving the UART driver installed");
+        return ESP_ERR_TIMEOUT;
     }
     if (s_driver_installed) {
         uart_driver_delete(WAVEX_ESP_MIDI_UART_NUM);

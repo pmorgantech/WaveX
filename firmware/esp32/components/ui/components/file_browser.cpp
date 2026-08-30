@@ -1027,9 +1027,28 @@ static void browse_resp_callback(const uint8_t* data, size_t length, void* user_
     if (has_more_pages) {
         // Request next page
         browser->current_page++;
-        uint8_t next_start_index = browser->current_page * browser->entries_per_page;
+        const uint32_t next_start =
+            static_cast<uint32_t>(browser->current_page) * browser->entries_per_page;
 
-        ESP_LOGI(TAG,
+        // The wire field is uint8_t, so pagination cannot address past entry
+        // 255. Stop rather than truncate: wrapping would silently re-request
+        // an earlier page and loop over it forever. Unreachable at the current
+        // 50-entry cap, but the cap is the only thing preventing it.
+        if (next_start > UINT8_MAX) {
+            ESP_LOGW(TAG,
+                     "Listing exceeds the %d entries the browse protocol can address; "
+                     "showing the first %lu",
+                     UINT8_MAX,
+                     (unsigned long)browser->loaded_entries);
+            browser->pagination_in_progress = false;
+            browser->entry_count = browser->loaded_entries;
+            browser_set_ui_update(browser);
+            wavex_ui_mark_content_changed();
+            return;
+        }
+        const uint8_t next_start_index = static_cast<uint8_t>(next_start);
+
+        ESP_LOGD(TAG,
                  "Requesting next page: current_page=%d, entries_per_page=%d, start_index=%d",
                  browser->current_page,
                  browser->entries_per_page,
@@ -1114,7 +1133,12 @@ static void update_file_browser_ui(wavex_file_browser_t* browser) {
         lv_label_set_text(browser->path_label, browser->current_path);
     }
 
+    // Clearing the list destroys the spinner row along with everything else,
+    // so drop our handle to it. Leaving it dangling made fb_show_loading_row()
+    // delete whatever LVGL later allocated at the same address - the pointer
+    // compares "valid" again once the allocator reuses it.
     lv_obj_clean(browser->list);
+    browser->loading_row = nullptr;
 
     if (browser->entry_count > 0 && browser->entries) {
         // Ensure first_visible_index is valid

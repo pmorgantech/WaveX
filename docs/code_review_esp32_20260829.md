@@ -7,7 +7,7 @@
 
 Findings carry stable IDs (`E-…`) so implementation can be tracked in this file. **Completed items leave this document** — detail goes to `CHANGELOG.md`, matching the roadmap's convention — so what remains here is always the open list. A partially-addressed item keeps its row, marked `[~]`, and says what is left.
 
-**Already remediated** (see `CHANGELOG.md` § Unreleased): E-LVGL1/2/3, the LVGL thread-safety cluster (`21304be`, `222b2b4`); E-LIFE1/2/3, the callback-lifetime cluster (`41f4cdd`); E-KEY1/2, the keypad decode and INT busy-spin (`cdab47d`); E-INIT1 and E-BLD1/2 (`f6b7394`); E-TICK1/E-TOUCH1/E-BRWS1/E-MENU1, the UI correctness batch (`edd9981`); E-TX1, the outbound-frame latency (`6a0912c`); E-METER1 and E-DIAG1, the two periodic-work wastes (`b64ae32`); E-MIDI1, E-KBD1 and the defect half of E-PROTO1 (`1d16237`); E-SYNC1 and E-STAT1 (`4b63c37`); E-ODR1 (`4e535c2`); E-INQ1 and E-STD1. All fixed 2026-08-29. **E-SEQ1 was withdrawn as a false positive** - see below. **E-KEY1/2 and E-ENC1 change hardware behaviour and are the ones most needing a bench pass** — they were diagnosed entirely by reading code and the controller datasheet.
+**Already remediated** (see `CHANGELOG.md` § Unreleased): E-LVGL1/2/3, the LVGL thread-safety cluster (`21304be`, `222b2b4`); E-LIFE1/2/3, the callback-lifetime cluster (`41f4cdd`); E-KEY1/2, the keypad decode and INT busy-spin (`cdab47d`); E-INIT1 and E-BLD1/2 (`f6b7394`); E-TICK1/E-TOUCH1/E-BRWS1/E-MENU1, the UI correctness batch (`edd9981`); E-TX1, the outbound-frame latency (`6a0912c`); E-METER1 and E-DIAG1, the two periodic-work wastes (`b64ae32`); E-MIDI1, E-KBD1 and the defect half of E-PROTO1 (`1d16237`); E-SYNC1 and E-STAT1 (`4b63c37`); E-ODR1 (`4e535c2`); E-INQ1 and E-STD1 (`0be797a`); E-STOP1, E-PROTO1, E-UIM1 and E-VER1. All fixed 2026-08-29. **E-SEQ1 was withdrawn as a false positive** - see below. **E-KEY1/2 and E-ENC1 change hardware behaviour and are the ones most needing a bench pass** — they were diagnosed entirely by reading code and the controller datasheet.
 
 ---
 
@@ -32,13 +32,9 @@ Two systemic build findings rounded it out — ~~inert `-Os`/LTO options added a
 | ID | Sev | Area | Summary |
 |---|---|---|---|
 | [~] E-ENC1 | Major | input | Encoder SMP race fixed 2026-08-29 (atomics replace interrupt masking); the read-then-clear window is narrowed from every movement poll to ~1 per 8000 counts, not closed — closing it needs the driver's watch-point ISR and bench time |
-| [ ] E-STOP1 | Major | all | Every `stop()`/teardown API is unsafe (vTaskDelete over held locks / blocked queues) |
-| [~] E-PROTO1 | Minor | comm | Router NUL guard, sample-data length truncation and the residual `if (result)` fixed 2026-08-29; the ~10 sites returning bare `-1` with a comment claiming `ESP_ERR_INVALID_STATE` are still open |
 | [ ] E-CFG1 | Minor | config | Hardware-truth pass: pin_config contradictions, unused TCA8418 macros, broken guard |
-| [~] E-UIM1 | Minor | UI | Browser leak on failed create fixed 2026-08-29 (same function as the E-LIFE2 deregistration); `loading_row` ABA and `uint8_t` page-start truncation still open |
 | [~] E-LOG1 | Minor | all | Hot-path log storms on the UART task — per-entry browse INFO and the statistics mutex-trace lines removed 2026-08-29 (they became a UI stall once the listener mutex spanned the callback); hex dumps and remaining per-packet INFO still open |
 | [ ] E-SDK1 | Minor | build | Watchdog/assert posture: INT WDT 5 s, task WDT off, assertions compiled out |
-| [ ] E-VER1 | Minor | core | Duplicate version truth (`version.h` vs root `VERSION`); `__DATE__`/`__TIME__` |
 | [~] E-DEAD1 | Smell | all | Dead-code batch — `parse_browse_response`, the `shared_packet_handler` fossil and the demo page trio deleted 2026-08-29; the caller-less `inter_mcu_*`/`pcnt_*` API surface and `window_manager.cpp` still open |
 | [ ] E-ARCH1 | Smell | arch | `components/ui` ⇄ `main` dependency cycle blocks host-testing the UI |
 | [ ] E-TASK1 | Smell | docs | No ESP32 task table; ad-hoc inline priorities/stacks; polling where events belong |
@@ -68,27 +64,9 @@ Two stacked defects in the primary control:
 
 **Still open — the read-then-clear window is narrowed, not closed.** The review's suggested fix (free-run and never clear) is not safe as written: the unit is configured `high_limit = INT16_MAX` / `low_limit = INT16_MIN`, and the `pulse_cnt` driver **resets the count to zero on reaching either limit**, so a free-running counter produces one large bogus delta per ±32767 counts rather than never wrapping. Instead the counter is now re-centred only when it passes ±8000, so the lossy window went from *every poll during movement* to roughly one per 8000 counts (~85 revolutions), where losing a fraction of a detent is imperceptible. Closing it properly means the driver's watch-point callbacks — an ISR, needing an IRAM-safety audit and bench time.
 
-### E-STOP1 — every teardown API is unsafe (latent; all currently caller-less, grep-verified)
-
-A single pattern repeated across the tree: `vTaskDelete(handle)` on a task that may hold a lock or be blocked on an object that is then freed.
-
-- `ui_task.cpp:159-185,711-721` — kills the UI task possibly inside `LV_LOCK()` (permanently wedging the LVGL port task); deletes the instance while the meter listener still points at it.
-- `links/esp_uart_link.cpp:456-478` — `xTaskNotifyGive` does not wake a task in `xQueueReceive`; then deletes the queue/mutex/driver the task may be blocked on.
-- `tca8418_keypad.cpp:154-157` — can kill the task mid-I2C transaction, leaking the shared touch/keypad bus mutex → touch dies permanently.
-- `usb_midi_task.cpp:145-148` — TinyUSB still live; `tud_midi_rx_cb` can notify the deleted handle. `midi_task.cpp:152-159`, `pcnt_task.cpp:273-280` — same shape.
-
-**Fix (one pattern everywhere)**: signal the task, let it release resources and self-delete, join via notification, then free. These are public APIs; the first caller gets a heisencrash.
-
 ---
 
 ## 5. Minor
-
-### E-PROTO1 — router/format hardening
-
-- `main/comm/packet_router.cpp:387`: `%s` on `msg.msg` without forcing NUL termination — a corrupt 48-byte `ErrorMessage` reads past the struct. Set the last byte to `'\0'` first.
-- `inter_mcu.cpp:794-806`: `size_t length` silently truncates through the `uint16_t` parameter — `65536+n` sends `n` bytes and returns `ESP_OK`. Range-check before the cast (same latent cast at :734).
-- `inter_mcu.cpp:371-376`: residual old-C3 instance — `if (result)` treats `-1` as success (log-only, function has no callers).
-- ~10 sites return `-1` with a comment claiming `ESP_ERR_INVALID_STATE` (e.g. `inter_mcu.cpp:87,145,158,174,188,280,399,712`) — return the named constant so callers can distinguish not-initialized from send-failed.
 
 ### E-SEQ1 — WITHDRAWN, not a defect
 
@@ -112,14 +90,6 @@ All in the two files that are supposed to be the single source of truth, or cont
 - Pin values in comments — the thing AGENTS.md forbids — and both wrong: `ui_task.cpp:102-104` says "GPIO31", `tca8418_keypad.h:9` says "e.g., 52"; `pin_config.h:88` says 30. Delete the comments.
 - `uart_debug_config.h:16`: `#define WAVEX_UART_DEBUG_LEVEL 2  // Enable INFO level` — 2 is WARN; INFO logging is actually compiled out (good for the hot path, but the comment lies).
 
-### E-INQ1 — silent input drops
-
-`src/input_dispatcher.cpp:26-29`: `post()` drops on a full queue with no counter; all callers ignore the result. Guide §13/§14 want dropped-event accounting — add a counter and surface it on the diagnostics page.
-
-### E-UIM1 — file-browser small bugs
-
-Leak on failed create (`file_browser.cpp:281-284` — `browser`/`entries`/container leak when `comm_interface` is missing); `loading_row` ABA (`:1265` cleans the list without nulling the pointer; `fb_show_loading_row` later deletes whatever object reuses the address); `uint8_t next_start_index` (`:1178`) wraps past 255 entries — unreachable at today's 50-entry cap, silent when raised.
-
 ### E-LOG1 — hot-path log storms on the UART task
 
 `file_browser.cpp:723-729` hex-dumps 64 bytes as ~64 `ESP_LOGI` lines plus one INFO per parsed entry per browse page; `statistics.cpp:425-433` logs "=== About to acquire mutex ===" per browse response; `statistics.cpp:478-492` four INFO lines per sample-status; `packet_router.cpp` per-packet INFO. Seconds of UART-task stall per directory listing; route through the existing log gates at DEBUG.
@@ -127,16 +97,6 @@ Leak on failed create (`file_browser.cpp:281-284` — `browser`/`entries`/contai
 ### E-SDK1 — watchdog/assert posture
 
 `sdkconfig.defaults`: `CONFIG_ESP_INT_WDT_TIMEOUT_MS=5000` (default 300 — hides exactly the critical-section bugs §14 checks for), `CONFIG_ESP_TASK_WDT_INIT=n` (a hung polling task — three exist — freezes the instrument silently), `CONFIG_COMPILER_OPTIMIZATION_ASSERTIONS_DISABLE=y`, `PANIC_PRINT_HALT`. Fine on the bench; record it as a deliberate dev-only posture and revisit before hardware sign-off.
-
-### E-STD1 — C++ standard not pinned
-
-No `-std`/`CXX_STANDARD` anywhere in project CMake; the build rides IDF 5.5's default `gnu++2b`. Guide §8 explicitly requires recording the standard; AGENTS.md even points contributors at a declaration that doesn't exist.
-
-### E-VER1 — duplicate version truth
-
-`main/version.h` hardcodes 0.1.0 alongside the root `VERSION` file (already flowing in via `PROJECT_VER`); `WAVEX_BACKEND_VERSION_*` has zero users; unprefixed `STRINGIFY`/`TOSTRING` macros in a widely-included header; `__DATE__`/`__TIME__` breaks reproducible builds. Generate from `PROJECT_VER`, delete the rest.
-
----
 
 ## 6. Smells / cleanup batch
 

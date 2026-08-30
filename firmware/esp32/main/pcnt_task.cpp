@@ -44,6 +44,9 @@ static pcnt_unit_handle_t s_pcnt_units[WAVEX_PCNT_UNIT_COUNT] = {};
 
 // Task handle
 static TaskHandle_t s_pcnt_task_handle = NULL;
+// Shutdown handshake; see midi_task.cpp. This task touches PCNT driver
+// internals, so it has to leave its loop on its own rather than be deleted.
+static volatile bool s_pcnt_running = false;
 
 /**
  * @brief Initialize a single PCNT unit
@@ -184,7 +187,7 @@ static esp_err_t pcnt_init_unit(const wavex_pcnt_config_t *config) {
 static void pcnt_task(void *pvParameters) {
     ESP_LOGI(TAG, "PCNT monitoring task started (polling-based for reliable operation)");
 
-    while (1) {
+    while (s_pcnt_running) {
         // Poll encoder counters for changes
         for (int i = 0; i < PCNT_CONFIG_COUNT; i++) {
             const wavex_pcnt_config_t *config = &s_pcnt_configs[i];
@@ -262,6 +265,9 @@ static void pcnt_task(void *pvParameters) {
         // Brief delay for polling frequency (faster polling for better responsiveness)
         vTaskDelay(pdMS_TO_TICKS(2));
     }
+
+    s_pcnt_task_handle = NULL;
+    vTaskDelete(NULL);
 }
 
 esp_err_t pcnt_task_init(void) {
@@ -287,6 +293,7 @@ esp_err_t pcnt_task_start(void) {
     ESP_LOGI(TAG, "Starting PCNT reading task...");
 
     // Create PCNT reading task
+    s_pcnt_running = true;
     BaseType_t ret = xTaskCreate(pcnt_task,           // Task function
                                  "pcnt_task",         // Task name
                                  4096,                // Stack size
@@ -297,6 +304,7 @@ esp_err_t pcnt_task_start(void) {
 
     if (ret != pdPASS) {
         ESP_LOGE(TAG, "Failed to create PCNT task");
+        s_pcnt_running = false;
         return ESP_FAIL;
     }
 
@@ -305,11 +313,15 @@ esp_err_t pcnt_task_start(void) {
 }
 
 esp_err_t pcnt_task_stop(void) {
-    if (s_pcnt_task_handle != NULL) {
-        vTaskDelete(s_pcnt_task_handle);
-        s_pcnt_task_handle = NULL;
-        ESP_LOGI(TAG, "PCNT task stopped");
+    s_pcnt_running = false;
+    for (int waited_ms = 0; s_pcnt_task_handle != NULL && waited_ms < 200; waited_ms += 10) {
+        vTaskDelay(pdMS_TO_TICKS(10));
     }
+    if (s_pcnt_task_handle != NULL) {
+        ESP_LOGE(TAG, "PCNT task did not exit");
+        return ESP_ERR_TIMEOUT;
+    }
+    ESP_LOGI(TAG, "PCNT task stopped");
     return ESP_OK;
 }
 

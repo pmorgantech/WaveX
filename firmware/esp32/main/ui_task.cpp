@@ -54,6 +54,10 @@ static const uint32_t MAX_REFRESH_INTERVAL_MS = 100;  // 10 FPS minimum
 // Global UITask instance (singleton pattern)
 static UITask *g_ui_task_instance = nullptr;
 
+// Shutdown handshake. The UI task takes the LVGL port lock, so deleting it
+// outright could leave that lock held forever and wedge the LVGL port task.
+static volatile bool s_ui_running = false;
+
 // UITask class implementation
 UITask::UITask(WaveX::Comm::ICommInterface &comm_interface) : m_comm_interface(comm_interface) {
     // Initialize the UI context with injected dependencies
@@ -113,6 +117,7 @@ esp_err_t UITask::start() {
     wavex_ui::InputDispatcher::instance().setActiveContext(wavex_ui::createNavigationContext());
 
     // Create UI task
+    s_ui_running = true;
     BaseType_t task_ret =
         xTaskCreatePinnedToCore(uiTaskFunction,
                                 "ui_task",
@@ -125,6 +130,7 @@ esp_err_t UITask::start() {
 
     if (task_ret != pdPASS) {
         ESP_LOGE(TAG, "Failed to create UI task");
+        s_ui_running = false;
         return ESP_FAIL;
     }
 
@@ -138,9 +144,18 @@ esp_err_t UITask::start() {
 esp_err_t UITask::stop() {
     ESP_LOGI(TAG, "Stopping UITask");
 
+    // Ask the task to leave rather than deleting it. Its loop takes the LVGL
+    // port lock (input dispatch, deferred updates, lv_refr_now), and killing
+    // it inside one of those regions would leave the lock held forever and
+    // wedge the LVGL port task with it. It exits between passes, always
+    // unlocked, and clears its own handle.
+    s_ui_running = false;
+    for (int waited_ms = 0; m_context.ui_task_handle != NULL && waited_ms < 500; waited_ms += 10) {
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
     if (m_context.ui_task_handle != NULL) {
-        vTaskDelete(m_context.ui_task_handle);
-        m_context.ui_task_handle = NULL;
+        ESP_LOGE(TAG, "UI task did not exit; leaving the display up");
+        return ESP_ERR_TIMEOUT;
     }
 
     // Let display manager clean up LVGL and touch resources
@@ -204,7 +219,7 @@ void UITask::run() {
 
     // Main UI loop with adaptive refresh rate control
     ESP_LOGI(TAG, "UI loop started with adaptive refresh rate control");
-    while (1) {
+    while (s_ui_running) {
         // Apply encoder movement to active UI when applicable
         int32_t enc_delta = pcnt_consume_delta(WAVEX_ENCODER_PCNT_UNIT);
         if (enc_delta != 0) {
@@ -278,6 +293,12 @@ void UITask::run() {
         // Short delay to prevent excessive CPU usage
         vTaskDelay(pdMS_TO_TICKS(32));  // 32ms delay for 30 FPS theoretical maximum
     }
+
+    // Reached only via stop(). Published before self-deleting, and always
+    // outside LV_LOCK, so the port lock cannot be left held.
+    ESP_LOGI(TAG, "UI task exiting");
+    m_context.ui_task_handle = NULL;
+    vTaskDelete(NULL);
 }
 
 // Global functions for C compatibility

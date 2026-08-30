@@ -11,6 +11,57 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Fixed — Every task teardown path now signals and joins instead of killing
+
+Found by the 2026-08-29 ESP32-P4 review (item E-STOP1). All six `stop()` APIs
+called `vTaskDelete()` on a task that could be blocked inside a driver or
+holding a lock, and then freed the very objects it was parked on — deleting a
+FreeRTOS object a task is blocked on is undefined behaviour. Each now clears a
+running flag, waits for the task to leave its loop and clear its own handle, and
+only then releases resources; if the task does not exit in time the resources
+are deliberately leaked rather than freed underneath it.
+
+Specifically: the UI task takes the LVGL port lock, so killing it could leave
+that lock held forever and wedge the LVGL port task; the keypad task talks I2C
+on the bus shared with the touch controller, so a kill mid-transaction would
+leak the bus mutex and take touch down permanently; TinyUSB's device task
+notifies the USB MIDI handle, so deleting that task left a live callback
+notifying freed memory. `uart_link_stop()` had sent a task notification and
+slept 20 ms, but the task blocks in `xQueueReceive()`, which a notification does
+not wake — so neither half did what it looked like. The DIN MIDI reader's
+`portMAX_DELAY` UART read became a 100 ms bounded wait so it can observe the
+flag at all.
+
+These paths have no production callers today (the instrument runs until power
+off), so this is not a behaviour change — it makes an API that could not be
+called safely into one that can.
+
+### Changed — Firmware version comes from the single source
+
+Found by the same review (item E-VER1). `version.h` hardcoded 0.1.0 alongside
+the repo-root `VERSION` file, so a release bump would have left the startup
+banner reporting the old number. The banner now reads `esp_app_desc_t`, which
+CMake fills from `VERSION` via `PROJECT_VER`. `version.h` is deleted — the
+duplicate backend block in it had no users, and the `__DATE__`/`__TIME__` macros
+that broke reproducible builds went with it.
+
+### Fixed — File browser pagination and error-code contract
+
+Found by the same review (items E-UIM1, E-PROTO1 remainder).
+
+- The browse protocol's `start_index` is a `uint8_t`, and the page-start
+  calculation truncated silently past 255 entries — which would have
+  re-requested an earlier page and looped over it forever. It now stops
+  paginating and says so. Unreachable at the current 50-entry cap, but the cap
+  was the only thing preventing it.
+- Clearing the file list destroys the pagination spinner row, but the handle to
+  it was left dangling, so a later `lv_obj_del()` could delete whatever LVGL had
+  since allocated at the same address.
+- Sixteen sites returned a bare `-1` under a comment claiming
+  `ESP_ERR_INVALID_STATE` or `ESP_ERR_INVALID_ARG`. `-1` is `ESP_FAIL`, so
+  callers could not tell "not initialised" from "send failed"; they now return
+  what the comments promised.
+
 ### Added — Dropped input events are counted and shown on the diagnostics page
 
 Found by the 2026-08-29 ESP32-P4 review (item E-INQ1). `InputDispatcher::post()`

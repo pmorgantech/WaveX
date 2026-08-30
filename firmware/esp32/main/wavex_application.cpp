@@ -33,9 +33,9 @@ typedef int esp_err_t;
 #include "config.h"
 
 // esp_err.h is brought in transitively by ESP-IDF headers when building on target
+#include "esp_app_desc.h"
 #include "inter_mcu.h"
 #include "ui_task.h"
-#include "version.h"
 
 // Bring in the SPI link API
 #if WAVEX_SPI_LINK_ENABLED
@@ -51,7 +51,7 @@ typedef int esp_err_t;
 #include "usb_midi_task.h"
 #endif
 
-static const char *TAG = "WaveXApplication";
+static const char* TAG = "WaveXApplication";
 
 #ifdef WAVEX_TEST_BUILD
 // Mock function declarations for test builds are in the test files
@@ -78,8 +78,12 @@ bool WaveXApplication::initialize() {
 #endif
 
     ESP_LOGI(TAG, "=== WaveX ESP32 Frontend Starting ===");
-    ESP_LOGI(TAG, "Version: %s", WAVEX_FRONTEND_VERSION_STRING);
-    ESP_LOGI(TAG, "Built: %s %s", WAVEX_COMPILE_DATE, WAVEX_COMPILE_TIME);
+    // From esp_app_desc_t, which CMake fills from the repo-root VERSION file
+    // via PROJECT_VER. version.h used to hardcode the same numbers a second
+    // time, so a release bump silently left this line reporting the old one.
+    const esp_app_desc_t* app_desc = esp_app_get_description();
+    ESP_LOGI(TAG, "Version: %s", app_desc->version);
+    ESP_LOGI(TAG, "Built: %s %s", app_desc->date, app_desc->time);
     ESP_LOGI(TAG, "Free heap: %" PRIu32 " bytes", esp_get_free_heap_size());
 
     // Initialize subsystems in order

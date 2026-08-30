@@ -35,6 +35,7 @@ idf_component_register(
         "esp_lcd_touch"
         "esp_lcd_touch_gt911"
         "esp_mm"
+        "esp_app_format"  # esp_app_get_description(): version from the root VERSION file
     PRIV_REQUIRES
         "shared"
         "ui"

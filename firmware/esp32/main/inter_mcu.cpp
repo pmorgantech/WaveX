@@ -86,7 +86,7 @@ esp_err_t inter_mcu_init(StatisticsManager& statistics) {
 esp_err_t inter_mcu_start() {
     if (!s_initialized) {
         ESP_LOGE(TAG, "Inter-MCU communication not initialized");
-        return -1;  // ESP_ERR_INVALID_STATE
+        return ESP_ERR_INVALID_STATE;
     }
 
     ESP_LOGI(TAG, "Starting inter-MCU communication (UART only)...");
@@ -140,7 +140,7 @@ void inter_mcu_invoke_cv_cal_callback(const WaveX::Protocol::CvCalMessage& cal) 
 
 esp_err_t inter_mcu_send_control_change(uint8_t parameter, uint8_t channel, uint16_t value) {
     if (!s_initialized || s_suspended) {
-        return -1;  // ESP_ERR_INVALID_STATE
+        return ESP_ERR_INVALID_STATE;
     }
 
     WaveX::Protocol::ControlChangeMessage msg;
@@ -154,7 +154,7 @@ esp_err_t inter_mcu_send_control_change(uint8_t parameter, uint8_t channel, uint
 
 esp_err_t inter_mcu_send_note_on(uint8_t note, uint8_t velocity, uint8_t channel) {
     if (!s_initialized || s_suspended) {
-        return -1;  // ESP_ERR_INVALID_STATE
+        return ESP_ERR_INVALID_STATE;
     }
 
     WaveX::Protocol::NoteMessage msg;
@@ -169,7 +169,7 @@ esp_err_t inter_mcu_send_note_on(uint8_t note, uint8_t velocity, uint8_t channel
 
 esp_err_t inter_mcu_send_note_off(uint8_t note, uint8_t channel) {
     if (!s_initialized || s_suspended) {
-        return -1;  // ESP_ERR_INVALID_STATE
+        return ESP_ERR_INVALID_STATE;
     }
 
     WaveX::Protocol::NoteMessage msg;
@@ -184,7 +184,7 @@ esp_err_t inter_mcu_send_note_off(uint8_t note, uint8_t channel) {
 
 esp_err_t inter_mcu_send_sample_ctrl(uint8_t slot, wavex_sample_ctrl_cmd_t cmd, float rate) {
     if (!s_initialized || s_suspended) {
-        return -1;  // ESP_ERR_INVALID_STATE
+        return ESP_ERR_INVALID_STATE;
     }
 
     WaveX::Protocol::SampleCtrlMessage msg;
@@ -198,7 +198,7 @@ esp_err_t inter_mcu_send_sample_ctrl(uint8_t slot, wavex_sample_ctrl_cmd_t cmd, 
 
 esp_err_t inter_mcu_send_preview_req(uint8_t slot, uint32_t start, uint32_t end, uint16_t decim) {
     if (!s_initialized || s_suspended) {
-        return -1;  // ESP_ERR_INVALID_STATE
+        return ESP_ERR_INVALID_STATE;
     }
 
     WaveX::Protocol::PreviewReqMessage msg;
@@ -275,7 +275,7 @@ bool inter_mcu_get_sample_meta(uint16_t sample_id, WaveX::Protocol::SampleMetada
 
 esp_err_t inter_mcu_request_sample_meta(uint16_t sample_id) {
     if (!s_initialized || s_suspended) {
-        return -1;  // ESP_ERR_INVALID_STATE
+        return ESP_ERR_INVALID_STATE;
     }
     WaveX::Protocol::SampleMetaReqMessage msg(sample_id);
     int result = send_uart_message(WaveX::Protocol::MSG_SAMPLE_META_REQ, &msg, sizeof(msg));
@@ -292,7 +292,7 @@ esp_err_t inter_mcu_send_sample_edit(uint8_t slot,
                                      uint16_t fade_in_ms,
                                      uint16_t fade_out_ms) {
     if (!s_initialized || s_suspended) {
-        return -1;  // ESP_ERR_INVALID_STATE
+        return ESP_ERR_INVALID_STATE;
     }
     WaveX::Protocol::SampleEditMessage msg(slot,
                                            loop_enabled ? 1 : 0,
@@ -309,7 +309,7 @@ esp_err_t inter_mcu_send_sample_edit(uint8_t slot,
 
 esp_err_t inter_mcu_send_diag_subscribe(bool enable, uint8_t interval_hz) {
     if (!s_initialized || s_suspended) {
-        return -1;  // ESP_ERR_INVALID_STATE
+        return ESP_ERR_INVALID_STATE;
     }
     WaveX::Protocol::DiagSubscribeMessage msg(enable ? 1 : 0, interval_hz);
     int result = send_uart_message(WaveX::Protocol::MSG_DIAG_SUBSCRIBE, &msg, sizeof(msg));
@@ -394,7 +394,7 @@ void inter_mcu_toggle_debug() {
 
 esp_err_t inter_mcu_request_sample_mem_status() {
     if (!s_initialized || s_suspended) {
-        return -1;  // ESP_ERR_INVALID_STATE
+        return ESP_ERR_INVALID_STATE;
     }
 
     WaveX::Protocol::StatusRequestMessage req{};
@@ -702,12 +702,12 @@ esp_err_t inter_mcu_send_browse_req(const char* path, uint8_t start_index) {
 
     if (!s_initialized) {
         ESP_LOGE("inter_mcu", "inter_mcu not initialized");
-        return -1;  // ESP_ERR_INVALID_STATE
+        return ESP_ERR_INVALID_STATE;
     }
 
     if (!path) {
         ESP_LOGE("inter_mcu", "path is NULL");
-        return -1;
+        return ESP_ERR_INVALID_ARG;
     }
 
     // Flexible payload: [start_index][path bytes...][\0]
@@ -731,7 +731,7 @@ esp_err_t inter_mcu_send_browse_req(const char* path, uint8_t start_index) {
 
 esp_err_t inter_mcu_send_sample_play_index_req(uint32_t file_index, uint16_t loop_gap_ms) {
     if (!s_initialized) {
-        return -1;  // ESP_ERR_INVALID_STATE
+        return ESP_ERR_INVALID_STATE;
     }
 
     WaveX::Protocol::SamplePlayIndexMessage msg;
@@ -744,7 +744,7 @@ esp_err_t inter_mcu_send_sample_play_index_req(uint32_t file_index, uint16_t loo
 
 esp_err_t inter_mcu_send_sample_stop_req() {
     if (!s_initialized) {
-        return -1;  // ESP_ERR_INVALID_STATE
+        return ESP_ERR_INVALID_STATE;
     }
 
     WaveX::Protocol::SampleStopReqMessage msg;
@@ -764,7 +764,7 @@ esp_err_t inter_mcu_send_sample_load_req(uint16_t sample_id,
                                          uint8_t bit_depth,
                                          const char* path) {
     if (!s_initialized) {
-        return -1;  // ESP_ERR_INVALID_STATE
+        return ESP_ERR_INVALID_STATE;
     }
 
     WaveX::Protocol::SampleLoadMessage msg;
@@ -786,11 +786,11 @@ esp_err_t inter_mcu_send_sample_load_req(uint16_t sample_id,
 
 esp_err_t inter_mcu_send_sample_data(const uint8_t* data, size_t length) {
     if (!s_initialized) {
-        return -1;  // ESP_ERR_INVALID_STATE
+        return ESP_ERR_INVALID_STATE;
     }
 
     if (!data || length == 0) {
-        return -1;  // ESP_ERR_INVALID_ARG
+        return ESP_ERR_INVALID_ARG;
     }
 
     // send_uart_message takes a uint16_t length. Without this check a length

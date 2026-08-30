@@ -17,6 +17,10 @@ namespace wavex_ui {
 
 static const char* TAG = "TCA8418";
 static TaskHandle_t s_task = nullptr;
+// Shutdown handshake: the task talks I2C on a bus shared with the touch
+// controller, so killing it mid-transaction would leak the bus mutex and take
+// touch down with it permanently.
+static volatile bool s_running = false;
 static gpio_num_t s_int_gpio = GPIO_NUM_NC;
 #if defined(ESP_PLATFORM) && WAVEX_ESP_BUTTON_MATRIX_ENABLED
 static TCA8418* s_dev = nullptr;
@@ -62,7 +66,7 @@ static constexpr int kMaxEventsPerPass = 16;
 static void keypad_task(void* arg) {
     ESP_LOGI(TAG, "Keypad task started");
 
-    while (true) {
+    while (s_running) {
         // The INT line is deliberately not consulted.
         //
         // Nothing configures the controller to drive it: the driver's hw_init()
@@ -105,6 +109,9 @@ static void keypad_task(void* arg) {
 #endif
         vTaskDelay(pdMS_TO_TICKS(kPollIntervalMs));
     }
+
+    s_task = nullptr;
+    vTaskDelete(nullptr);
 }
 
 esp_err_t tca8418_keypad_start(int int_gpio, uint8_t i2c_addr) {
@@ -152,10 +159,12 @@ esp_err_t tca8418_keypad_start(int int_gpio, uint8_t i2c_addr) {
     }
 
     // Start task
+    s_running = true;
     BaseType_t ok =
         xTaskCreatePinnedToCore(keypad_task, "tca8418_task", 4096, nullptr, 5, &s_task, 1);
     if (ok != pdPASS) {
         ESP_LOGE(TAG, "Failed to create keypad task");
+        s_running = false;
 #if defined(ESP_PLATFORM) && WAVEX_ESP_BUTTON_MATRIX_ENABLED
         delete s_dev;
         s_dev = nullptr;
@@ -166,9 +175,15 @@ esp_err_t tca8418_keypad_start(int int_gpio, uint8_t i2c_addr) {
 }
 
 esp_err_t tca8418_keypad_stop() {
+    s_running = false;
+    // Let the task finish any I2C transaction and self-delete before the
+    // device object goes away underneath it.
+    for (int waited_ms = 0; s_task && waited_ms < 300; waited_ms += 10) {
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
     if (s_task) {
-        vTaskDelete(s_task);
-        s_task = nullptr;
+        ESP_LOGE(TAG, "keypad task did not exit; leaving the device allocated");
+        return ESP_ERR_TIMEOUT;
     }
 #if defined(ESP_PLATFORM) && WAVEX_ESP_BUTTON_MATRIX_ENABLED
     if (s_dev) {
