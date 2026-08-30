@@ -11,6 +11,16 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Removed — dead `ui_sample_detail` page
+
+- `UISampleDetail`/`createSampleDetailPage()` had no callers anywhere in the
+  frontend — `ui_main_menu.cpp` included the header but never referenced it.
+  It also fabricated fixed placeholder strings ("Sample Rate: 44.1 kHz",
+  "Duration: 2:34", ...) regardless of the actual sample, the exact
+  anti-pattern the Diagnostics page's own comments warn against elsewhere.
+  Deleted rather than fixed, since nothing could reach it to show the fake
+  data in the first place.
+
 ### Fixed — debug screenshot capture handoff used `volatile` instead of `std::atomic`
 
 - `wavex_screenshot_poll()` (UI task) fills `s_pixels`/`s_w`/`s_h`/`s_stride`

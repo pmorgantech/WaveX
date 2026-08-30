@@ -16,7 +16,6 @@ set(COMPONENT_SRCS
     "src/ui_navigation_integration.cpp"
     "src/ui_navigator.cpp"
     "src/display_manager.cpp"
-    "src/ui_sample_detail.cpp"
     "src/ui_settings_page.cpp"
     "src/ui_softkey_bar.cpp"
     "src/ui_tab_group.cpp"

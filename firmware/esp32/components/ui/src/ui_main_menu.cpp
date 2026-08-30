@@ -11,7 +11,6 @@
 #include "ui/ui_diagnostics_page.h"
 #include "ui/ui_play_page.h"
 #include "ui/ui_sample_browser.h"
-#include "ui/ui_sample_detail.h"
 #include "ui/ui_sample_edit_page.h"
 #include "ui/ui_sample_manager_page.h"
 #include "ui/ui_sample_record_page.h"
