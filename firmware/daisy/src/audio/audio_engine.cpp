@@ -1576,9 +1576,13 @@ void Init(DaisySeed& hw, float sample_rate, bool sdram_available) {
         }
     }
 
-    // Initialize CPU load meter for audio processing performance monitoring
-    // Use default block size of 48 and 200-block averaging window
-    s_cpu_load_meter.Init(sample_rate, 48, 200);
+    // Initialize CPU load meter for audio processing performance monitoring.
+    // The third argument is a smoothing-filter CUTOFF IN HZ, not a block
+    // count - libDaisy's CpuLoadMeter::Init() defaults it to 1.0f for a
+    // ~1 Hz-smoothed average. Passing 200 (Hz) against a 1 kHz block rate
+    // gave a smoothing constant of ~0.56, i.e. GetAvgCpuLoad() was reporting
+    // essentially per-block instantaneous load, not an average.
+    s_cpu_load_meter.Init(sample_rate, 48);
 }
 
 void Callback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t size) {
