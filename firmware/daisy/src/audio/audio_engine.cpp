@@ -2826,6 +2826,12 @@ float GetBlockPeriodMs() {
 // ============================
 
 bool OpenWav(const char* path) {
+    // CloseWav() zeroes the whole s_wav struct (s_wav = {}), including
+    // gain_q15 - which defeats the "gain survives the open" contract below:
+    // every open, first or not, saw gain_q15 == 0 and reset to unity. Capture
+    // it before the close so a real prior value (set via SetEditParams) makes
+    // it across.
+    const q15_t prev_gain_q15 = s_wav.gain_q15;
     CloseWav();
 
     FRESULT fr = f_open(&s_wav.file, path, FA_READ);
@@ -2887,14 +2893,14 @@ bool OpenWav(const char* path) {
     s_wav.loop_start = s_wav.region_start;
     s_wav.loop_end = s_wav.region_end;
     s_wav.loop_enabled = false;
-    if (s_wav.gain_q15 == 0) {
-        s_wav.gain_q15 = 32767;  // first open of the session
-    }
+    s_wav.gain_q15 = (prev_gain_q15 != 0)
+                         ? prev_gain_q15
+                         : static_cast<q15_t>(32767);  // 32767 = unity, first open of the session
 
     // Reset buffers. CloseWav() above already cleared s_rb_live and no
     // producer call (rb_push_frames) runs between here and there, so the
     // consumer is guaranteed to still be treating the ring as empty - these
-    // stores can't race rb_pop_stereo(). Publish head/tail before flipping
+    // stores can't race rb_pop_stereo_batch(). Publish head/tail before flipping
     // s_rb_live back on so the ISR never observes "live" with stale indices.
     __atomic_store_n(&s_rb_head, 0u, __ATOMIC_RELAXED);
     __atomic_store_n(&s_rb_tail, 0u, __ATOMIC_RELEASE);
@@ -2934,7 +2940,7 @@ bool OpenWav(const char* path) {
 }
 
 void CloseWav() {
-    // First: tell rb_pop_stereo() (audio ISR) to stop touching the ring
+    // First: tell rb_pop_stereo_batch() (audio ISR) to stop touching the ring
     // indices at all. Until this is observed, the ISR may still be
     // advancing s_rb_tail; the stores below must not race that.
     __atomic_store_n(&s_rb_live, false, __ATOMIC_RELEASE);
