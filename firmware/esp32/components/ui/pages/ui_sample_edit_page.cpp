@@ -388,22 +388,45 @@ std::array<Softkey, NUM_SOFTKEYS> UISampleEditPage::getShiftedSoftkeys() {
     return keys;
 }
 
+// Preview the sample being edited, not a file on disk.
+//
+// This used to send MSG_SAMPLE_PLAY_INDEX_REQ with the *browser's* cursor
+// position, which streamed a file straight off the card through the ring
+// buffer. Two things were wrong with that: it played whatever the browser
+// happened to be sitting on rather than the sample this page is editing, and
+// the streaming path knows nothing about markers, loop, gain or fades - so no
+// edit made here was ever audible through this button. The status line even
+// admitted half of it ("range not sent - no protocol").
+//
+// A note-on instead runs the RAM-resident voice path, and OnNoteOn builds the
+// voice from the sample's own record: start/end, loop points, gain and fades
+// all apply. So the preview is what the UI says it is.
+//
+// kAuditionNote is the engine's default root note, so the sample plays at its
+// original pitch rather than transposed.
 void UISampleEditPage::toggleAudition() {
-    auto* state = getSampleBrowserState();
-    if (!state) {
+    static constexpr uint8_t kAuditionNote = 60;  // engine's kDefaultRootNote
+    static constexpr uint8_t kAuditionVelocity = 100;
+
+    if (!has_sample_) {
+        refreshStatus("No sample loaded. Load via Sample Browser first.");
         return;
     }
+
     if (auditioning_) {
-        if (inter_mcu_send_sample_stop_req() == ESP_OK) {
+        if (inter_mcu_send_note_off(kAuditionNote, 0) == ESP_OK) {
             auditioning_ = false;
             refreshStatus("Stopped");
         } else {
             refreshStatus("Stop request failed");
         }
     } else {
-        if (inter_mcu_send_sample_play_index_req(state->selected_file_index) == ESP_OK) {
+        // Push the current UI values first so the voice is built from what is
+        // on screen, not from whatever was last committed.
+        sendEdit();
+        if (inter_mcu_send_note_on(kAuditionNote, kAuditionVelocity, 0) == ESP_OK) {
             auditioning_ = true;
-            refreshStatus("Auditioning whole file (range not sent - no protocol)");
+            refreshStatus("Previewing edited sample (region, loop, gain and fades applied)");
         } else {
             refreshStatus("Audition request failed");
         }

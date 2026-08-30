@@ -8,6 +8,29 @@ set(CMAKE_TOOLCHAIN_FILE ${CMAKE_CURRENT_LIST_DIR}/libs/libDaisy/cmake/toolchain
 file(STRINGS "${CMAKE_CURRENT_LIST_DIR}/../../VERSION" WAVEX_VERSION)
 project(wavex-daisy VERSION ${WAVEX_VERSION})
 
+# Optimization level for the Daisy image.
+#
+# This has to live here. libDaisy's toolchain file sets
+# CMAKE_{C,CXX}_FLAGS_{DEBUG,RELEASE} to "" as CACHE INTERNAL - a forced cache
+# write - so -DCMAKE_BUILD_TYPE=Release contributes nothing and a
+# -DCMAKE_CXX_FLAGS_RELEASE=... on the command line is overwritten on every
+# configure. Nothing outside this file can set it.
+#
+# The default is -O0 because that is what this firmware has always been built
+# with (unintentionally: no -O was ever specified, and -finline-functions is
+# inert without one). Raising it changes real-time behaviour everywhere and can
+# expose undefined behaviour that -O0 was masking, so it is opt-in rather than
+# a silent default change - see docs/field-findings-20260829.md §1.
+#
+# To A/B it without disturbing the current build:
+#   cd firmware/daisy && make BUILD_DIR=build-O2 CMAKE_EXTRA_ARGS="-DWAVEX_DAISY_OPT=-O2"
+#
+# docs/daisy_rt_audio_coding_guide.md §8 asks for -O3; treat -O2 as the first
+# step and measure each move with DWT rather than assuming.
+set(WAVEX_DAISY_OPT "-O0" CACHE STRING "Optimization flag for the Daisy firmware (e.g. -O0, -O2, -O3)")
+add_compile_options(${WAVEX_DAISY_OPT})
+message(STATUS "WaveX Daisy optimization: ${WAVEX_DAISY_OPT}")
+
 # Set the project name and sources
 set(FIRMWARE_NAME wavex-daisy)
 set(FIRMWARE_SOURCES

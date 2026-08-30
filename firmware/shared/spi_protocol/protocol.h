@@ -1382,6 +1382,111 @@ class ProtocolHandler {
     static size_t GetPacketSize(const uint8_t* buffer);
 };
 
+// Human-readable message name, for logs on both MCUs.
+//
+// Logs used to print the raw type byte only ("msg=0x02"), which meant reading
+// the wire required keeping this enum in your head - and the one previous
+// attempt at a name table had drifted a full type out of step with the enum,
+// so it would have mislabelled every line. This is generated from the
+// enumerators directly and returns the enumerator's own spelling; add a case
+// when you add a type.
+inline const char* MessageTypeName(uint8_t type) {
+    switch (static_cast<MessageType>(type)) {
+        case MSG_SYNC:
+            return "SYNC";
+        case MSG_CONTROL_CHANGE:
+            return "CONTROL_CHANGE";
+        case MSG_NOTE_ON:
+            return "NOTE_ON";
+        case MSG_NOTE_OFF:
+            return "NOTE_OFF";
+        case MSG_SAMPLE_LOAD:
+            return "SAMPLE_LOAD";
+        case MSG_SAMPLE_DATA:
+            return "SAMPLE_DATA";
+        case MSG_PARAMETER_UPDATE:
+            return "PARAMETER_UPDATE";
+        case MSG_STATUS_REQUEST:
+            return "STATUS_REQUEST";
+        case MSG_STATUS_RESPONSE:
+            return "STATUS_RESPONSE";
+        case MSG_SAMPLE_CTRL:
+            return "SAMPLE_CTRL";
+        case MSG_PREVIEW_REQ:
+            return "PREVIEW_REQ";
+        case MSG_DATA_REQUEST:
+            return "DATA_REQUEST";
+        case MSG_METER_PUSH:
+            return "METER_PUSH";
+        case MSG_WAVE_CHUNK:
+            return "WAVE_CHUNK";
+        case MSG_HEARTBEAT:
+            return "HEARTBEAT";
+        case MSG_ACK:
+            return "ACK";
+        case MSG_BROWSE_REQ:
+            return "BROWSE_REQ";
+        case MSG_BROWSE_RESP:
+            return "BROWSE_RESP";
+        case MSG_SAMPLE_PLAY_REQ:
+            return "SAMPLE_PLAY_REQ";
+        case MSG_SAMPLE_STOP_REQ:
+            return "SAMPLE_STOP_REQ";
+        case MSG_SAMPLE_STATUS:
+            return "SAMPLE_STATUS";
+        case MSG_SAMPLE_STOP_RESP:
+            return "SAMPLE_STOP_RESP";
+        case MSG_SAMPLE_PLAY_INDEX_REQ:
+            return "SAMPLE_PLAY_INDEX_REQ";
+        case MSG_SAMPLE_GET_PATH_REQ:
+            return "SAMPLE_GET_PATH_REQ";
+        case MSG_SAMPLE_GET_PATH_RESP:
+            return "SAMPLE_GET_PATH_RESP";
+        case MSG_STORAGE_STATUS:
+            return "STORAGE_STATUS";
+        case MSG_DIAG_SUBSCRIBE:
+            return "DIAG_SUBSCRIBE";
+        case MSG_DIAG_PUSH:
+            return "DIAG_PUSH";
+        case MSG_SAMPLE_EDIT_SET:
+            return "SAMPLE_EDIT_SET";
+        case MSG_SAMPLE_META:
+            return "SAMPLE_META";
+        case MSG_SAMPLE_META_REQ:
+            return "SAMPLE_META_REQ";
+        case MSG_ENVELOPE_REQ:
+            return "ENVELOPE_REQ";
+        case MSG_CV_CAL_SET:
+            return "CV_CAL_SET";
+        case MSG_CV_CAL_GET:
+            return "CV_CAL_GET";
+        case MSG_CV_CAL_RESP:
+            return "CV_CAL_RESP";
+        case MSG_CV_TEST:
+            return "CV_TEST";
+        case MSG_ENVELOPE_CHUNK:
+            return "ENVELOPE_CHUNK";
+        case MSG_SEQ_TRANSPORT:
+            return "SEQ_TRANSPORT";
+        case MSG_SEQ_PATTERN_OP:
+            return "SEQ_PATTERN_OP";
+        case MSG_SEQ_PATTERN_SYNC:
+            return "SEQ_PATTERN_SYNC";
+        case MSG_SEQ_PLAYHEAD:
+            return "SEQ_PLAYHEAD";
+        case MSG_MIDI_CLOCK_EVENT:
+            return "MIDI_CLOCK_EVENT";
+        case MSG_MIDI_CC:
+            return "MIDI_CC";
+        case MSG_SEQ_CLOCK_OUT:
+            return "SEQ_CLOCK_OUT";
+        case MSG_ERROR:
+            return "ERROR";
+        default:
+            return "UNKNOWN";
+    }
+}
+
 }  // namespace Protocol
 }  // namespace WaveX
 

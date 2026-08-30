@@ -72,8 +72,25 @@ The narrow fix removes the regression, but the underlying condition remains:
 alters timing everywhere and can expose latent UB that `-O0` was masking. It
 needs a deliberate decision and a bench pass.
 
-**Cheapest discriminating test, no source change:** rebuild once with
-`-DCMAKE_BUILD_TYPE=Release` and repeat the two measurements.
+**`-DCMAKE_BUILD_TYPE=Release` does not work here** — worth knowing before
+anyone tries it. libDaisy's toolchain file sets
+`CMAKE_{C,CXX}_FLAGS_{DEBUG,RELEASE}` to `""` as `CACHE INTERNAL`
+(`ArmGNUToolchain.cmake:50-58`), which is a *forced* cache write, so the Release
+flag set is empty and a `-DCMAKE_CXX_FLAGS_RELEASE=...` on the command line is
+overwritten on every configure. `firmware/daisy/CMakeLists.txt` sets no compile
+flags of its own either, which is how the image ended up at `-O0` without anyone
+choosing it.
+
+There is now a knob that does work, defaulting to the current `-O0` so nothing
+changes silently:
+
+```
+cd firmware/daisy && make BUILD_DIR=build-O2 CMAKE_EXTRA_ARGS="-DWAVEX_DAISY_OPT=-O2"
+```
+
+A separate `BUILD_DIR` keeps the `-O0` image intact for A/B. First results from
+that build: `rb_pop_stereo` is inlined into `Callback()` entirely, and the image
+drops from 694 KB to 562 KB (-19%).
 
 ### Process note
 

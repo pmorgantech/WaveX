@@ -1378,6 +1378,30 @@ void Init(DaisySeed& hw, float sample_rate, bool sdram_available) {
     s_hw = &hw;
     s_sample_rate = sample_rate;
 
+    // Give the DTCM-placed state its intended values.
+    //
+    // Objects in .dtcmram_bss get no static initialization at all: the section
+    // is (NOLOAD) and nothing runs their constructors, so the default member
+    // initializers written on these types never execute. MemorySections::
+    // InitDtcmBss() now zeroes the section, which makes the state deterministic
+    // - but zero is not the same as correct, and for two of these it is
+    // actively wrong:
+    //
+    //   VoiceLiveParams zeroed means filter_cutoff_hz == 0 Hz (filter shut) and
+    //   sustain_level == 0, so every triggered voice is silent. That is not a
+    //   theoretical concern: it is what a zeroed section produced on the bench.
+    //
+    //   s_rb_low_water only ever latches downward, so starting at 0 pins the
+    //   ring low-water diagnostic at "hit empty" forever.
+    //
+    // Assigning a default-constructed temporary runs the member initializers on
+    // the stack and copies them in, which is the cheapest way to get the values
+    // the type declares. Anything added to DTCM that has non-zero defaults
+    // belongs in this block too.
+    s_voice_live_params = WaveX::AudioEngine::VoiceLiveParams{};
+    s_voice_live_dirty = false;
+    s_rb_low_water = 0xFFFFFFFFu;
+
     WaveX::Profiling::InitHardware();
     PROFILE_REGISTER_ZONE(audio_callback);
     PROFILE_REGISTER_ZONE(wav_pump_io);
@@ -1790,12 +1814,15 @@ void OnNoteOn(const NoteMessage& note_msg) {
         // objects Callback() never rendered - silent while claiming
         // otherwise (review C2) - so it was removed rather than fixed;
         // load a 16-bit sample to verify the MIDI path end-to-end.
-        if (s_hw)
-            WaveX::Log::PrintLine(
-                "RX NOTE_ON: note=%u vel=%u ch=%u -> dropped (no playable sample)",
-                (unsigned)note_msg.note,
-                (unsigned)note_msg.velocity,
-                (unsigned)note_msg.channel);
+        //
+        // No s_hw guard: this is the one line that explains why the instrument
+        // is silent, and gating it behind a pointer that may be null is how a
+        // whole bench session went to working out whether notes were even
+        // arriving. It runs on the main loop, well after init.
+        WaveX::Log::PrintLine(
+            "  -> dropped: no playable sample (need a RAM-resident 16-bit mono/stereo WAV; "
+            "%u loaded)",
+            (unsigned)s_loaded_sample_count);
         return;
     }
 

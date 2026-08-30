@@ -225,9 +225,24 @@ static void HandleNoteMessage(const uint8_t* payload, size_t payload_size) {
         UART_LOGE("daisy_msg", "NOTE_ON payload too small (%d)", (int)payload_size);
         return;
     }
-#if WAVEX_AUDIO_ENGINE_ENABLED
     const auto* msg = reinterpret_cast<const WaveX::Protocol::NoteMessage*>(payload);
+
+    // Logged on arrival, unconditionally.
+    //
+    // A note that played and a note that never arrived both produced exactly
+    // nothing here: this handler had no log of its own, the per-message
+    // dispatch trace is compiled out (WAVEX_MCU_LINK_PACKET_DEBUG defaults to
+    // 0), and OnNoteOn's drop message sits behind an s_hw guard. So silence on
+    // the console distinguished nothing, and cost a bench session working that
+    // out. An instrument has to be able to say whether it heard you.
+    WaveX::Log::PrintLine("RX NOTE_ON note=%u vel=%u ch=%u",
+                          (unsigned)msg->note,
+                          (unsigned)msg->velocity,
+                          (unsigned)msg->channel);
+#if WAVEX_AUDIO_ENGINE_ENABLED
     WaveX::AudioEngine::OnNoteOn(*msg);
+#else
+    WaveX::Log::PrintLine("  -> ignored: WAVEX_AUDIO_ENGINE_ENABLED is 0");
 #endif
 }
 
@@ -235,6 +250,10 @@ static void HandleNoteOffMessage(const uint8_t* payload, size_t payload_size) {
     if (!payload || payload_size < sizeof(WaveX::Protocol::NoteMessage)) {
         UART_LOGE("daisy_msg", "NOTE_OFF payload too small (%d)", (int)payload_size);
         return;
+    }
+    {
+        const auto* m = reinterpret_cast<const WaveX::Protocol::NoteMessage*>(payload);
+        WaveX::Log::PrintLine("RX NOTE_OFF note=%u ch=%u", (unsigned)m->note, (unsigned)m->channel);
     }
 #if WAVEX_AUDIO_ENGINE_ENABLED
     const auto* msg = reinterpret_cast<const WaveX::Protocol::NoteMessage*>(payload);

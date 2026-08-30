@@ -1,6 +1,7 @@
 #include "esp_uart_link.h"
 
 #include "../../shared/config/uart_debug_config.h"
+#include "../../shared/spi_protocol/protocol.h"
 #include "../../shared/uart_protocol/uart_protocol.h"
 #include "../comm/packet_router.h"
 #include "../inter_mcu.h"
@@ -151,7 +152,8 @@ void process_rx_frames() {
             }
             s_stats.packets_received++;
             UART_LOGI(TAG,
-                      "RX msg=0x%02X len=%d seq=%u flags=0x%02X",
+                      "RX %s (0x%02X) len=%d seq=%u flags=0x%02X",
+                      WaveX::Protocol::MessageTypeName(msg_type),
                       msg_type,
                       static_cast<int>(payload_len),
                       seq,
@@ -500,7 +502,12 @@ int uart_link_send(uint16_t msg_type, const void* payload, uint16_t len) {
     // task it wakes will want this mutex immediately.
     post_tx_wake();
 
-    UART_LOGI(TAG, "TX queued msg=0x%02X len=%u seq=%u", msg_type, len, seq);
+    UART_LOGI(TAG,
+              "TX queued %s (0x%02X) len=%u seq=%u",
+              WaveX::Protocol::MessageTypeName(msg_type),
+              msg_type,
+              len,
+              seq);
     UART_LOG_DUMP_PACKET(TAG, entry.frame, frame_len);
 
     return len;
