@@ -61,7 +61,7 @@ that depends on an external crate or protocol.
 - No heap allocation in the audio callback or any interrupt context — this includes hidden allocations from `std::vector::push_back` past capacity, `std::string` growth, lambdas that capture by value into `std::function`, etc. Preallocate from the SDRAM allocator (`memory.h`) or use fixed-capacity containers.
 - Avoid `<iostream>`/`<sstream>` and other heavyweight STL on-device; prefer the existing logging/metrics facilities.
 - Templates and constexpr are fine and encouraged for zero-cost abstraction; avoid patterns that bloat code size unpredictably (heavy recursive template instantiation, excessive `std::variant`/`std::function` in hot paths) without checking the resulting binary size.
-- Match the C++ standard already declared in each target's build files (see `firmware/daisy/tests/CMakeLists.txt`, ESP-IDF `sdkconfig`) — don't introduce a newer standard's features than what the toolchain for that MCU is configured to accept.
+- **The same code is built at three different C++ standards, so target the lowest that will compile it.** The ESP32 device image is `gnu++2b` (pinned in `firmware/esp32/main/CMakeLists.txt` and `components/ui/CMakeLists.txt` — not inherited from ESP-IDF's default, so a toolchain bump cannot move it silently); the ESP32 host tests are C++17; the Daisy host tests are C++14. Anything under `firmware/shared/` is compiled by all three, so **shared code must be valid C++14** or the Daisy test build breaks. Target-specific code may use its own target's standard.
 - Follow `.clang-format` for style; run pre-commit (`pre-commit install` per `README.md`) rather than hand-formatting.
 
 ## Versioning and changelog

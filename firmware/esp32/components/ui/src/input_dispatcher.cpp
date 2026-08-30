@@ -21,13 +21,24 @@ InputDispatcher::InputDispatcher() {
 bool InputDispatcher::postFromISR(const InputEvent& evt, BaseType_t* hpTaskWoken) {
     if (!queue_)
         return false;
-    return xQueueSendFromISR(queue_, &evt, hpTaskWoken) == pdTRUE;
+    const bool posted = xQueueSendFromISR(queue_, &evt, hpTaskWoken) == pdTRUE;
+    if (!posted) {
+        dropped_events_.fetch_add(1, std::memory_order_relaxed);
+    }
+    return posted;
 }
 
 bool InputDispatcher::post(const InputEvent& evt, TickType_t ticksToWait) {
     if (!queue_)
         return false;
-    return xQueueSend(queue_, &evt, ticksToWait) == pdTRUE;
+    // Callers mostly ignore the return value, and a dropped event is a
+    // keypress or detent the instrument never saw. Counting it here means the
+    // loss is visible on the diagnostics page instead of being silent.
+    const bool posted = xQueueSend(queue_, &evt, ticksToWait) == pdTRUE;
+    if (!posted) {
+        dropped_events_.fetch_add(1, std::memory_order_relaxed);
+    }
+    return posted;
 }
 
 void InputDispatcher::processAll() {

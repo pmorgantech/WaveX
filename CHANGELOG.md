@@ -11,6 +11,31 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Added — Dropped input events are counted and shown on the diagnostics page
+
+Found by the 2026-08-29 ESP32-P4 review (item E-INQ1). `InputDispatcher::post()`
+drops on a full queue and every caller ignores the return value, so a keypress
+or encoder detent the instrument never saw left no trace at all. Drops are now
+counted and shown as INPUT DROPPED on the diagnostics Link tab — that table is
+where someone looks when input feels lost, and a non-zero value there is the
+direct answer.
+
+### Changed — The C++ standard is pinned rather than inherited
+
+Found by the same review (item E-STD1). The device build rode whatever ESP-IDF
+defaulted to, which the guide explicitly warns against because a toolchain bump
+then moves it silently. It is now pinned to `gnu++2b` in the two first-party
+component build files — the standard already in use, so nothing changes today.
+
+Investigating this turned up something the review had not: **the same
+first-party code is compiled at three different standards** — C++23 for the
+ESP32 device image, C++17 for the ESP32 host tests, C++14 for the Daisy host
+tests. Anything under `firmware/shared/` is built by all three, so shared code
+has to be valid C++14 or the Daisy test build breaks. `AGENTS.md` said only
+"match the standard already declared in each target's build files" and pointed
+at an ESP-IDF `sdkconfig` that declares none; it now states the three values and
+the constraint they impose.
+
 ### Removed — Duplicate-symbol landmine, the demo page trio, and the pre-unified protocol fossil
 
 Found by the 2026-08-29 ESP32-P4 review (items E-ODR1, E-DEAD1 in part).

@@ -17,6 +17,7 @@
 #include "freertos/task.h"
 #include "inter_mcu.h"
 #include "links/esp_spi_link.h"
+#include "ui/input_dispatcher.h"
 #include "ui/ui_navigator.h"
 #include "ui/ui_sample_memory_page.h"
 #include "ui_task.h"
@@ -1163,6 +1164,9 @@ void UIDiagnosticsPage::refreshLinkTab() {
         {"SYNC", st.sync_packets},
         {"ERROR", st.error_packets},
         {"OTHER (known)", st.other_known_packets},
+        // Not a link statistic, but this table is where someone looks when
+        // input feels lost, and a non-zero value here is the direct answer.
+        {"INPUT DROPPED", InputDispatcher::instance().droppedEvents()},
         {"UNKNOWN", st.unknown_packets},
         {"INVALID", st.invalid_packets},
         {"TOTAL", st.total_packets},

@@ -7,7 +7,7 @@
 
 Findings carry stable IDs (`E-…`) so implementation can be tracked in this file. **Completed items leave this document** — detail goes to `CHANGELOG.md`, matching the roadmap's convention — so what remains here is always the open list. A partially-addressed item keeps its row, marked `[~]`, and says what is left.
 
-**Already remediated** (see `CHANGELOG.md` § Unreleased): E-LVGL1/2/3, the LVGL thread-safety cluster (`21304be`, `222b2b4`); E-LIFE1/2/3, the callback-lifetime cluster (`41f4cdd`); E-KEY1/2, the keypad decode and INT busy-spin (`cdab47d`); E-INIT1 and E-BLD1/2 (`f6b7394`); E-TICK1/E-TOUCH1/E-BRWS1/E-MENU1, the UI correctness batch (`edd9981`); E-TX1, the outbound-frame latency (`6a0912c`); E-METER1 and E-DIAG1, the two periodic-work wastes (`b64ae32`); E-MIDI1, E-KBD1 and the defect half of E-PROTO1 (`1d16237`); E-SYNC1 and E-STAT1 (`4b63c37`); E-ODR1. All fixed 2026-08-29. **E-KEY1/2 and E-ENC1 change hardware behaviour and are the ones most needing a bench pass** — they were diagnosed entirely by reading code and the controller datasheet.
+**Already remediated** (see `CHANGELOG.md` § Unreleased): E-LVGL1/2/3, the LVGL thread-safety cluster (`21304be`, `222b2b4`); E-LIFE1/2/3, the callback-lifetime cluster (`41f4cdd`); E-KEY1/2, the keypad decode and INT busy-spin (`cdab47d`); E-INIT1 and E-BLD1/2 (`f6b7394`); E-TICK1/E-TOUCH1/E-BRWS1/E-MENU1, the UI correctness batch (`edd9981`); E-TX1, the outbound-frame latency (`6a0912c`); E-METER1 and E-DIAG1, the two periodic-work wastes (`b64ae32`); E-MIDI1, E-KBD1 and the defect half of E-PROTO1 (`1d16237`); E-SYNC1 and E-STAT1 (`4b63c37`); E-ODR1 (`4e535c2`); E-INQ1 and E-STD1. All fixed 2026-08-29. **E-SEQ1 was withdrawn as a false positive** - see below. **E-KEY1/2 and E-ENC1 change hardware behaviour and are the ones most needing a bench pass** — they were diagnosed entirely by reading code and the controller datasheet.
 
 ---
 
@@ -34,13 +34,10 @@ Two systemic build findings rounded it out — ~~inert `-Os`/LTO options added a
 | [~] E-ENC1 | Major | input | Encoder SMP race fixed 2026-08-29 (atomics replace interrupt masking); the read-then-clear window is narrowed from every movement poll to ~1 per 8000 counts, not closed — closing it needs the driver's watch-point ISR and bench time |
 | [ ] E-STOP1 | Major | all | Every `stop()`/teardown API is unsafe (vTaskDelete over held locks / blocked queues) |
 | [~] E-PROTO1 | Minor | comm | Router NUL guard, sample-data length truncation and the residual `if (result)` fixed 2026-08-29; the ~10 sites returning bare `-1` with a comment claiming `ESP_ERR_INVALID_STATE` are still open |
-| [ ] E-SEQ1 | Minor | shared | `SequenceTracker` non-modular compare misbehaves at 64K wrap |
 | [ ] E-CFG1 | Minor | config | Hardware-truth pass: pin_config contradictions, unused TCA8418 macros, broken guard |
-| [ ] E-INQ1 | Minor | UI | Input queue drops are silent and uncounted |
 | [~] E-UIM1 | Minor | UI | Browser leak on failed create fixed 2026-08-29 (same function as the E-LIFE2 deregistration); `loading_row` ABA and `uint8_t` page-start truncation still open |
 | [~] E-LOG1 | Minor | all | Hot-path log storms on the UART task — per-entry browse INFO and the statistics mutex-trace lines removed 2026-08-29 (they became a UI stall once the listener mutex spanned the callback); hex dumps and remaining per-packet INFO still open |
 | [ ] E-SDK1 | Minor | build | Watchdog/assert posture: INT WDT 5 s, task WDT off, assertions compiled out |
-| [ ] E-STD1 | Minor | build | C++ standard not pinned anywhere (guide §8 requires it) |
 | [ ] E-VER1 | Minor | core | Duplicate version truth (`version.h` vs root `VERSION`); `__DATE__`/`__TIME__` |
 | [~] E-DEAD1 | Smell | all | Dead-code batch — `parse_browse_response`, the `shared_packet_handler` fossil and the demo page trio deleted 2026-08-29; the caller-less `inter_mcu_*`/`pcnt_*` API surface and `window_manager.cpp` still open |
 | [ ] E-ARCH1 | Smell | arch | `components/ui` ⇄ `main` dependency cycle blocks host-testing the UI |
@@ -93,9 +90,17 @@ A single pattern repeated across the tree: `vTaskDelete(handle)` on a task that 
 - `inter_mcu.cpp:371-376`: residual old-C3 instance — `if (result)` treats `-1` as success (log-only, function has no callers).
 - ~10 sites return `-1` with a comment claiming `ESP_ERR_INVALID_STATE` (e.g. `inter_mcu.cpp:87,145,158,174,188,280,399,712`) — return the named constant so callers can distinguish not-initialized from send-failed.
 
-### E-SEQ1 — `SequenceTracker` 64K-wrap edge
+### E-SEQ1 — WITHDRAWN, not a defect
 
-`firmware/shared/spi_protocol/sequence_tracker.hpp:57-71` compares absolutely, so 65535→1 takes the reboot-resync branch (spurious resync per 64K frames) and a stale pre-wrap frame post-wrap is accepted and drags `expected_seq_` backwards. Self-recovering; fix with serial-number arithmetic or document.
+The finding claimed the 65535 -> 1 wrap takes the reboot-resync branch, giving a spurious "peer reboot detected" and a resync count per 64K frames. **That is wrong, and the code is correct as written.**
+
+Accepting seq 65535 sets `expected_seq_ = seq + 1`, which truncates to 0 in `uint16_t`. The next comparison is `expected_min = (expected_seq_ > kReorderTolerance) ? (expected_seq_ - kReorderTolerance) : 1`, and with `expected_seq_ == 0` that falls to the `: 1` branch — so seq 1 is not below `expected_min` and is plainly `Accept`ed. The fallback written for startup happens to cover the wrap too. Confirmed by running the tracker through a full 1..65535 cycle: `Accept`, `ResyncCount() == 0`.
+
+It is also **already regression-tested** — `sequence_tracker_test.cpp` walks to 65535, wraps, and asserts both `ResyncCount()` and `OutOfOrderCount()` are zero, plus a second test for a sender that fails to skip 0 on wrap. The finding was reasoned from the source without checking the existing suite.
+
+The secondary claim — a stale pre-wrap frame arriving *after* the wrap is accepted and drags `expected_seq_` back up — is arithmetically true but needs frame reordering, which a point-to-point UART does not produce; frames arrive in transmission order. It would matter only on a transport that can reorder.
+
+**Do not "fix" this.** Changing `expected_min` to make the wrap look more symmetrical is what would actually break it.
 
 ### E-CFG1 — hardware-truth pass (pin/flag truth violations)
 
