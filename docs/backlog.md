@@ -467,6 +467,75 @@ once `PAN` no longer needs `0x0C`.
 
 ---
 
+## The last frame of a loop window is never rendered
+
+**Found by the 2026-08-30 test-quality audit.** In `VoiceManager::Render()`
+(`firmware/daisy/src/audio/voice_manager.hpp`, the loop-wrap branch), the wrap
+check `v.phase >= last_valid_loop_phase` (= `loop_end - 1`) fires *before* the
+current frame is read, so the final frame of the loop window is skipped on
+every pass: a 4-frame loop plays 3 samples (`0,1,2,0,1,2,…`). Contrast the
+non-loop end-of-sample path below it, which does render the final frame before
+releasing. Effects: loop content is truncated by one frame and the effective
+loop period is one frame short, slightly sharpening looped pitch.
+
+**Why it is not urgent:** audible only as a subtle pitch/content error on
+looped playback, and any fix must be made deliberately in the voice manager —
+`voice_manager_test.cpp`'s loop test is intentionally tolerant of either
+behavior so a correct fix will not break it.
+
+**When to revisit:** next deliberate pass over `voice_manager.hpp`. Fix by
+reading the frame at the current phase first and wrapping afterwards (or by
+making `last_valid_loop_phase` exclusive), then tighten the loop test to assert
+the full loop period.
+
+---
+
+## Robustness gaps pinned by the 2026-08-30 test-quality audit
+
+The audit that hardened all three host-test suites (601 tests green) surfaced
+these latent defects in production code. None is reachable through a
+currently-failing path, which is why they are recorded here rather than fixed
+opportunistically; the tests named below pin today's behavior so a fix will
+show up as a deliberate test change, not a silent one.
+
+- **`firmware/shared/spi_protocol/protocol.cpp:88` — `ValidateWaveXPacket` has
+  no minimum-size guard.** `buffer_size` of 0 or 1 makes `buffer_size - 2`
+  underflow `size_t` (CRC over ~`SIZE_MAX` bytes, OOB reads). Latent: all
+  current callers pass ≥ 4. A two-line guard; do it with the next protocol.cpp
+  change.
+- **`firmware/daisy/src/comm/daisy_inter_mcu_message_handlers.cpp` (~529),
+  `HandleSamplePlayRequestMessage`** forwards the payload as a `const char*`
+  with no guarantee of a NUL inside `payload_size` — a malformed frame walks
+  `strlen` past the frame into adjacent memory. The browse handler directly
+  above was hardened for exactly this (`strnlen` bound); mirror it. Malformed
+  frames are CRC-gated today, which is the only reason this is latent.
+- **`firmware/daisy/src/storage/fs_browse.cpp`** — (a) a mid-directory
+  `f_readdir` error is indistinguishable from end-of-directory: `ListDir`
+  returns `true` with a silently truncated listing (~line 83); (b) the internal
+  static 256-entry scratch silently caps `total_count` (the roadmap's
+  500-entry target needs a redesign, not a bigger array); (c) `entries_written`
+  is not written on failure paths; (d) a filesystem-returned `".."` at root is
+  not filtered (unreachable on real FAT). All pinned in `fs_browse_test.cpp`
+  with loud comments.
+- **`firmware/daisy/src/memory.h:482` — `SampleMemMgr::ptr()` has no
+  `len == 0` guard**, so calling it on a released (zeroed) handle "succeeds"
+  with a pointer to class-0/page-0/slot-0 instead of failing. Callers must gate
+  on `h.len`; documented in `sample_mem_test.cpp`.
+- **`firmware/esp32/components/ui/components/file_browser.cpp:806-848`** — at
+  root, entry paths are built as `"//name"`: the leading slash is stripped from
+  `entry->name` first, making the root special case at line 834 dead code.
+  Harmless today (playback is index-based) but the path field is wrong at
+  root. Also line 825: a `static char temp_path[96]` inside the pagination
+  parser is non-reentrant if two browsers ever parse concurrently (single
+  browser today).
+
+**When to revisit:** each item individually, whenever its file is next touched
+for other reasons — none justifies its own bench cycle. The two CRC-gated
+parser items (protocol.cpp, play-request handler) should both go in whichever
+protocol-hardening pass happens first.
+
+---
+
 ## Softkey press heap-allocates a `std::function` per event
 
 **Found in the 2026-08-30 ESP32 coding-guide review.** Every softkey press
