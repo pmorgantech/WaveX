@@ -62,7 +62,21 @@ Remaining Tier 0 work:
    today. `-Wconversion` would have caught `1d16237`'s `size_t` → `uint16_t`
    narrowing at compile time, for free.
 
-## Tier 1 — the untrusted-input class
+## Tier 1 — the untrusted-input class (Daisy side done)
+
+**Status: the Daisy dispatch sweep is implemented**, as two `TEST_F`s in
+`message_dispatch_test.cpp` (no CMake change needed). 256 msg_types × 301
+payload lengths × 4 fill patterns ≈ 308k dispatches in 443 ms, deterministic.
+
+Verified against pre-`b34c814` handlers: ASan reports
+`heap-buffer-overflow ... in strlen`, the exact defect. All three ingredients
+were necessary — the `0x41` fill (no NUL anywhere), the exact-sized heap
+allocation (so byte `[len]` is a redzone), and ASan itself.
+
+Still to do here: the same sweep against `PacketRouter::route_uart_message` /
+`route_packet` on the ESP32 side, and against `ParseUartPacket` on the shared
+side.
+
 
 Seven of the audited defects are one shape: a length or pointer from the wire
 is trusted, and the code reads outside the buffer it was handed

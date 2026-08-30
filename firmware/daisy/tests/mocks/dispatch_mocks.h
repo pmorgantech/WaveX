@@ -66,6 +66,26 @@ struct DispatchRecord {
     std::vector<UartSend> uart_sends;
 
     void Clear() { *this = DispatchRecord{}; }
+
+    // Total observable subsystem calls across every recorded kind. The
+    // per-type tests assert on specific vectors; the malformed-payload sweep
+    // needs the aggregate, because its assertion is "an undersized payload
+    // reaches NO handler" without caring which one it would have reached.
+    // Anything added above must be added here too, or the sweep silently
+    // stops covering it. uart_sends is deliberately NOT counted: it records
+    // replies rather than subsystem dispatches, and a handler is entitled to
+    // answer a malformed request with an error frame.
+    size_t TotalCalls() const {
+        return note_ons.size() + note_offs.size() + control_changes.size() + sample_ctrls.size() +
+               preview_reqs.size() + envelope_reqs.size() + cv_cal_sets.size() +
+               cv_cal_gets.size() + cv_tests.size() + sample_loads.size() +
+               selected_samples.size() + unloaded_samples.size() +
+               static_cast<size_t>(get_sample_mem_status_calls) + seq_transports.size() +
+               seq_pattern_ops.size() + midi_clock_events.size() + midi_ccs.size() +
+               browse_requests.size() + play_requests.size() + stop_requests.size() +
+               play_index_requests.size() + sample_edits.size() + meta_requests.size() +
+               loop_gaps_ms.size() + diag_subscribes.size();
+    }
 };
 
 DispatchRecord& GetDispatchRecord();

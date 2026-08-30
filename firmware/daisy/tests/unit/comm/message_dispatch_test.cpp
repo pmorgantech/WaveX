@@ -19,6 +19,8 @@
 #include "spi_protocol/protocol.h"
 
 #include <cstring>
+#include <ios>
+#include <vector>
 
 using namespace WaveX::Protocol;
 using WaveX::Comm::ProcessInterMcuMessage;
@@ -488,6 +490,81 @@ TEST_F(MessageDispatchTest, UndersizedSampleSelectIsRejected) {
 
     EXPECT_TRUE(GetDispatchRecord().selected_samples.empty());
     EXPECT_TRUE(GetDispatchRecord().unloaded_samples.empty());
+}
+
+// --- Malformed-payload sweep ----------------------------------------------
+//
+// Everything above is a case test: one message type, one crafted input. Three
+// of the August 2026 audit defects were bounds bugs in this dispatcher
+// (af359b5 and b34c814 strlen'd a payload with no NUL inside it; 44b0215 was
+// the same class one layer down), and case tests did not generalise - 44b0215
+// hardened ValidateWaveXPacket and left the identical underflow in two public
+// siblings 120 lines away, which survived until this remediation pass.
+//
+// So this sweeps the whole surface instead: every msg_type value including
+// the unrouted ones, every payload length from empty to past the largest
+// message struct, and several fill patterns. It is a deterministic cartesian
+// product, not a fuzzer - no corpus, no RNG, no flakiness.
+//
+// TWO DETAILS CARRY THE TEST:
+//
+// 1. The payload is a heap vector sized EXACTLY to the length under test.
+//    Every case test above uses a fixed stack array, so a read past the
+//    intended length lands in adjacent stack and returns a plausible byte -
+//    which is why BrowsePathWithoutTerminatorIsBoundedToPayload would have
+//    passed against pre-fix code in some builds. One byte past a right-sized
+//    heap allocation is an ASan redzone.
+// 2. The 0x41 fill contains no NUL anywhere. That is precisely the input
+//    class that broke the browse and sample-play handlers: a path field the
+//    handler treated as a C string when the frame never terminated it.
+//
+// Under an ordinary build the assertion is only "did not crash"; under
+// `make test-asan` this becomes a real out-of-bounds detector across the
+// entire dispatch surface. Run it that way when touching a handler.
+
+namespace {
+
+// Comfortably past the largest routed message struct, so every handler sees
+// lengths on both sides of its own boundary. Not UART_MAX_PAYLOAD (2048):
+// that would multiply the sweep by 8x for lengths no handler distinguishes.
+constexpr size_t kMaxSweptPayload = 300;
+
+const uint8_t kFillPatterns[] = {
+    0x00,  // all-zero: NUL-terminated everywhere, the benign case
+    0xFF,  // all-ones: maximal enum/index/length values
+    0x41,  // 'A': no NUL anywhere, the unterminated-string class
+    0x80,  // high bit set: sign-extension and signed-char paths
+};
+
+}  // namespace
+
+TEST_F(MessageDispatchTest, MalformedPayloadSweepStaysInsideThePayload) {
+    for (unsigned type = 0; type <= 0xFF; ++type) {
+        for (uint8_t fill: kFillPatterns) {
+            for (size_t len = 0; len <= kMaxSweptPayload; ++len) {
+                GetDispatchRecord().Clear();
+
+                // Exact-size heap allocation: byte [len] is a redzone.
+                std::vector<uint8_t> payload(len, fill);
+                ProcessInterMcuMessage(
+                    static_cast<uint8_t>(type), 1, payload.empty() ? nullptr : payload.data(), len);
+            }
+        }
+    }
+}
+
+// A zero-length payload cannot satisfy any handler's minimum, so none may
+// run. This is the generalised form of the four hand-written Truncated*
+// tests above, and it holds for message types that do not exist yet - which
+// is how af359b5 got in, a handler written without the length guard that the
+// handler directly above it already had.
+TEST_F(MessageDispatchTest, EmptyPayloadReachesNoHandlerForAnyMessageType) {
+    for (unsigned type = 0; type <= 0xFF; ++type) {
+        GetDispatchRecord().Clear();
+        ProcessInterMcuMessage(static_cast<uint8_t>(type), 1, nullptr, 0);
+        EXPECT_EQ(GetDispatchRecord().TotalCalls(), 0u)
+            << "msg_type 0x" << std::hex << type << " dispatched on an empty payload";
+    }
 }
 
 }  // namespace
