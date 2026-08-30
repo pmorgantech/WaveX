@@ -19,7 +19,6 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <vector>
 
 // Feature macros moved to config.hpp
 #include "audio/audio_engine.h"
@@ -34,7 +33,13 @@ using namespace WaveX::Protocol;
 // Hardware
 DaisySeed hw;
 static FATFS s_fs;  // FatFs object
+#if WAVEX_SPI_LINK_ENABLED
+// Every use of spi_handle lives inside a WAVEX_SPI_LINK_ENABLED block below;
+// UART is the transport of record (roadmap 0.2) and this flag is hard-coded
+// 0, so the declaration is guarded to match rather than carrying a permanently
+// unused static in every image.
 static daisy::SpiHandle spi_handle;
+#endif
 
 #if WAVEX_DAISY_SD_CARD_ENABLED && (WAVEX_DAISY_SD_CARD_BACKEND == 1)
 #include "storage/sd_sdio.h"
