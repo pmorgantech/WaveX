@@ -38,8 +38,20 @@ One rule, so the structure is predictable rather than per-page taste:
   of *the current sample*; Voice's five are all parameter groups of *one voice*;
   Diagnostics' six are all facets of *the running system*. Tabs make switching
   cheap and, more importantly, carry the subject across the switch.
-- **A menu list when the children are unrelated.** Settings' children are
-  independent configuration screens that share nothing but the word "settings".
+- **A menu list when the children are unrelated**, *and* deep enough that
+  arriving at one is worth a navigation step.
+
+**Settings is tabbed, against the second rule as originally written.** This
+document first put Settings in a menu list because its children share no
+subject, and that reasoning still holds — Display and MIDI have nothing to do
+with each other. What the rule missed is that sharing a subject is not the only
+thing that makes tabs the right shape. Settings' five children are *short*: two
+of them are four rows, one is read-only, and CV Calibration is the only one deep
+enough to feel like a place. A menu list makes the user pay a push and a pop to
+cross between five screens that each fit on one, and it buried CV Calibration
+two levels down from the main menu. So the rule is really two conditions, either
+of which is enough: **tab children that share a subject, or that are individually
+too small to be worth a navigation step.** Settings qualifies on the second.
 
 This is not only cosmetic. The Sample group's shared subject fixes a real gap:
 roadmap 1.5.1 item 7 records that the edit page "edits whatever the browser last
@@ -98,7 +110,7 @@ Latch and the encoder path must exist on both.
 | `Voice` | Voice ▸ tabs | Split its current single view into Sample/Env/Amp/Filter/Mod |
 | `Modulation` menu | Voice ▸ Mod | **Deleted.** Its three entries are logging stubs; nothing is lost |
 | `ui_sample_memory_page` | Diagnostics ▸ Daisy | It is a memory breakdown, which is what that tab is for |
-| `CV Calibration` | Settings ▸ Calibrate | Moves out of Settings' top level into the same list |
+| `CV Calibration` | Settings ▸ Calibrate | Was already a Settings *list* entry, two levels from the main menu; becomes a tab |
 | `Keyboard` | Play ▸ Pads | Stays top level, regrouped (§3) |
 | — | Play ▸ Keys | New: piano layout sharing the pads' behaviour |
 
@@ -159,9 +171,16 @@ menu, leaving only the tabbing to do).
    `pages/ui_voice_page.cpp` builds its own tabview with the shared chrome,
    tabs `Sample / Env / Amp / Filter / Mod` per §4. *Not verified on the panel.*
 6. **Settings group** — fold CV Calibration in; fill the remaining stubs or mark
-   them plainly as unimplemented rather than logging and returning. **Partly
-   done**: CV Calibration is already a Settings entry; `Storage` and
-   `System Info` still log and return.
+   them plainly as unimplemented rather than logging and returning. **Done**:
+   `createSettingsGroup()` with Display / Storage / MIDI / System / Calibrate.
+   Brightness, MIDI receive channel and the System tab are real; every other
+   control states on the panel what it does not do rather than logging and
+   returning. `Display ▸ Contrast` was deleted rather than marked — MIPI-DSI /
+   HX8394 has no contrast control, so the row could never have done anything.
+   Nothing persists: the frontend has no NVS code at all, and the pages say so.
+   The page was also laid out for a 480x320 screen with a fixed 460x250 list,
+   so it clipped past six rows — which had made CV Calibration's eleven
+   unusable.
 7. **Diagnostics split** — ESP32 (CPU0/CPU1 separate) and Daisy tabs; move the
    sample-memory page's content into the Daisy tab. **Done.** Six tabs: ESP32,
    Daisy, Audio, Link, Storage, MIDI. `ui_sample_memory_page.{h,cpp}` is deleted

@@ -19,7 +19,32 @@
 #include "esp_log.h"
 #include "inter_mcu.h"
 
+#include <atomic>
+
 static const char* TAG = "midi_task";
+
+// Receive-channel filter. 0 = Omni, 1..16 = that MIDI channel (the wire
+// channel is 0-based, so the comparison subtracts one). Written by the UI
+// task from Settings > MIDI, read on the DIN and USB reader tasks - hence
+// an atomic. Relaxed is enough: it guards nothing but itself, and a note
+// either side of the change is equally correct.
+//
+// Not persisted. The frontend has no NVS code at all today, and inventing a
+// store for one integer is a bigger decision than this page should make; the
+// setting reads Omni again after a reboot, and the page says so.
+static std::atomic<int> s_input_channel{0};
+
+void midi_set_input_channel(int channel) {
+    if (channel < 0 || channel > 16) {
+        return;
+    }
+    s_input_channel.store(channel, std::memory_order_relaxed);
+    ESP_LOGI(TAG, "MIDI input channel filter: %s", channel == 0 ? "Omni" : "single");
+}
+
+int midi_get_input_channel(void) {
+    return s_input_channel.load(std::memory_order_relaxed);
+}
 
 // Shared with the USB MIDI reader (usb_midi_task.cpp) - declared in
 // midi_task.h. Not gated on WAVEX_ESP_DIN_MIDI_ENABLED so either
@@ -27,6 +52,12 @@ static const char* TAG = "midi_task";
 void midi_forward_event(const WaveX::Midi::Event& ev) {
     switch (ev.type) {
         case WaveX::Midi::EventType::NoteOn: {
+            // Note On is the only filtered message; see midi_task.h for why
+            // Note Off is not.
+            const int filter = s_input_channel.load(std::memory_order_relaxed);
+            if (filter != 0 && ev.channel != static_cast<uint8_t>(filter - 1)) {
+                break;
+            }
             esp_err_t err = inter_mcu_send_note_on(ev.data1, ev.data2, ev.channel);
             if (err != ESP_OK) {
                 ESP_LOGW(
