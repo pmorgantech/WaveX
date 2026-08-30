@@ -2,7 +2,6 @@
 
 # Add UI source files
 set(COMPONENT_SRCS
-    "common/window_manager.cpp"
     "components/envelope_cache.cpp"
     "components/file_browser.cpp"
     "components/waveform_view.cpp"
@@ -33,7 +32,6 @@ set(COMPONENT_SRCS
 # Add UI include directories
 set(COMPONENT_INCLUDE_DIRS
     "styles"
-    "common"
     "components"
     "pages"
     "."

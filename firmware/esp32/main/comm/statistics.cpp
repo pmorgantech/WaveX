@@ -29,19 +29,19 @@ StatisticsManager::StatisticsManager() {
     memset(&m_meter_data, 0, sizeof(m_meter_data));
 
 #ifdef ESP_PLATFORM
-    ESP_LOGI("StatisticsManager", "=== Initializing locks for ESP_PLATFORM ===");
+    ESP_LOGD("StatisticsManager", "=== Initializing locks for ESP_PLATFORM ===");
     m_stats_lock = portMUX_INITIALIZER_UNLOCKED;
     m_tx_stats_lock = portMUX_INITIALIZER_UNLOCKED;
     m_hb_lock = portMUX_INITIALIZER_UNLOCKED;
     m_meter_lock = portMUX_INITIALIZER_UNLOCKED;
-    ESP_LOGI("StatisticsManager", "=== Locks initialized successfully ===");
+    ESP_LOGD("StatisticsManager", "=== Locks initialized successfully ===");
 #else
-    ESP_LOGI("StatisticsManager", "=== Initializing locks for non-ESP_PLATFORM ===");
+    ESP_LOGD("StatisticsManager", "=== Initializing locks for non-ESP_PLATFORM ===");
     memset(&m_stats_lock, 0, sizeof(m_stats_lock));
     memset(&m_tx_stats_lock, 0, sizeof(m_tx_stats_lock));
     memset(&m_hb_lock, 0, sizeof(m_hb_lock));
     memset(&m_meter_lock, 0, sizeof(m_meter_lock));
-    ESP_LOGI("StatisticsManager", "=== Locks initialized successfully ===");
+    ESP_LOGD("StatisticsManager", "=== Locks initialized successfully ===");
 #endif
 }
 

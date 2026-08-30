@@ -7,7 +7,7 @@
 
 Findings carry stable IDs (`E-…`) so implementation can be tracked in this file. **Completed items leave this document** — detail goes to `CHANGELOG.md`, matching the roadmap's convention — so what remains here is always the open list. A partially-addressed item keeps its row, marked `[~]`, and says what is left.
 
-**Already remediated** (see `CHANGELOG.md` § Unreleased): E-LVGL1/2/3, the LVGL thread-safety cluster (`21304be`, `222b2b4`); E-LIFE1/2/3, the callback-lifetime cluster (`41f4cdd`); E-KEY1/2, the keypad decode and INT busy-spin (`cdab47d`); E-INIT1 and E-BLD1/2 (`f6b7394`); E-TICK1/E-TOUCH1/E-BRWS1/E-MENU1, the UI correctness batch (`edd9981`); E-TX1, the outbound-frame latency (`6a0912c`); E-METER1 and E-DIAG1, the two periodic-work wastes (`b64ae32`); E-MIDI1, E-KBD1 and the defect half of E-PROTO1 (`1d16237`); E-SYNC1 and E-STAT1 (`4b63c37`); E-ODR1 (`4e535c2`); E-INQ1 and E-STD1 (`0be797a`); E-STOP1, E-PROTO1, E-UIM1 and E-VER1 (`043d0d1`); E-CFG1. All fixed 2026-08-29. **E-SEQ1 was withdrawn as a false positive** - see below. **E-KEY1/2 and E-ENC1 change hardware behaviour and are the ones most needing a bench pass** — they were diagnosed entirely by reading code and the controller datasheet.
+**Already remediated** (see `CHANGELOG.md` § Unreleased): E-LVGL1/2/3, the LVGL thread-safety cluster (`21304be`, `222b2b4`); E-LIFE1/2/3, the callback-lifetime cluster (`41f4cdd`); E-KEY1/2, the keypad decode and INT busy-spin (`cdab47d`); E-INIT1 and E-BLD1/2 (`f6b7394`); E-TICK1/E-TOUCH1/E-BRWS1/E-MENU1, the UI correctness batch (`edd9981`); E-TX1, the outbound-frame latency (`6a0912c`); E-METER1 and E-DIAG1, the two periodic-work wastes (`b64ae32`); E-MIDI1, E-KBD1 and the defect half of E-PROTO1 (`1d16237`); E-SYNC1 and E-STAT1 (`4b63c37`); E-ODR1 (`4e535c2`); E-INQ1 and E-STD1 (`0be797a`); E-STOP1, E-PROTO1, E-UIM1 and E-VER1 (`043d0d1`); E-CFG1, E-LOG1, E-TASK1 and E-SDK1. All addressed 2026-08-29. **E-SEQ1 was withdrawn as a false positive** - see below. **E-KEY1/2 and E-ENC1 change hardware behaviour and are the ones most needing a bench pass** — they were diagnosed entirely by reading code and the controller datasheet.
 
 ---
 
@@ -32,11 +32,8 @@ Two systemic build findings rounded it out — ~~inert `-Os`/LTO options added a
 | ID | Sev | Area | Summary |
 |---|---|---|---|
 | [~] E-ENC1 | Major | input | Encoder SMP race fixed 2026-08-29 (atomics replace interrupt masking); the read-then-clear window is narrowed from every movement poll to ~1 per 8000 counts, not closed — closing it needs the driver's watch-point ISR and bench time |
-| [~] E-LOG1 | Minor | all | Hot-path log storms on the UART task — per-entry browse INFO and the statistics mutex-trace lines removed 2026-08-29 (they became a UI stall once the listener mutex spanned the callback); hex dumps and remaining per-packet INFO still open |
-| [ ] E-SDK1 | Minor | build | Watchdog/assert posture: INT WDT 5 s, task WDT off, assertions compiled out |
 | [~] E-DEAD1 | Smell | all | Dead-code batch — `parse_browse_response`, the `shared_packet_handler` fossil and the demo page trio deleted 2026-08-29; the caller-less `inter_mcu_*`/`pcnt_*` API surface and `window_manager.cpp` still open |
 | [ ] E-ARCH1 | Smell | arch | `components/ui` ⇄ `main` dependency cycle blocks host-testing the UI |
-| [ ] E-TASK1 | Smell | docs | No ESP32 task table; ad-hoc inline priorities/stacks; polling where events belong |
 | [ ] E-MISC1 | Smell | all | Smaller items batch (fake diagnostics metric, dummy meter data, stack copies, doc drift) |
 | — SPI-1..5 | Gate | comm | SPI-link revival blockers — must be fixed before `WAVEX_SPI_LINK_ENABLED=1` (§7) |
 
@@ -96,14 +93,6 @@ The secondary claim — a stale pre-wrap frame arriving *after* the wrap is acce
 - The keypad matrix is configured 8x10 because that is what the code has always passed. `WAVEX_TCA8418_COLUMNS` now records it, but nobody has checked how many columns are wired. Getting this wrong silently stops a column being scanned.
 - The board-availability comment (`pin_config.h`) excludes assigned pins 6, 14, 15, 34 and 40.
 
-### E-LOG1 — hot-path log storms on the UART task
-
-`file_browser.cpp:723-729` hex-dumps 64 bytes as ~64 `ESP_LOGI` lines plus one INFO per parsed entry per browse page; `statistics.cpp:425-433` logs "=== About to acquire mutex ===" per browse response; `statistics.cpp:478-492` four INFO lines per sample-status; `packet_router.cpp` per-packet INFO. Seconds of UART-task stall per directory listing; route through the existing log gates at DEBUG.
-
-### E-SDK1 — watchdog/assert posture
-
-`sdkconfig.defaults`: `CONFIG_ESP_INT_WDT_TIMEOUT_MS=5000` (default 300 — hides exactly the critical-section bugs §14 checks for), `CONFIG_ESP_TASK_WDT_INIT=n` (a hung polling task — three exist — freezes the instrument silently), `CONFIG_COMPILER_OPTIMIZATION_ASSERTIONS_DISABLE=y`, `PANIC_PRINT_HALT`. Fine on the bench; record it as a deliberate dev-only posture and revisit before hardware sign-off.
-
 ## 6. Smells / cleanup batch
 
 ### E-DEAD1 — dead code (all grep-verified against the whole repo)
@@ -118,24 +107,6 @@ The secondary claim — a stale pre-wrap frame arriving *after* the wrap is acce
 ### E-ARCH1 — `components/ui` ⇄ `main` cycle
 
 `components/ui/CMakeLists.txt` `REQUIRES … main`; UI sources include `inter_mcu.h`, `ui_task.h`, `comm/i_comm_interface.h` directly, and diag/edit/keyboard pages call `inter_mcu_*` free functions, growing the coupling. This blocks host-testing the UI component and is stronger than `docs/ui-architecture.md` admits (its `UISharedContext` injection is the right fix). Also `i_comm_interface.h:29-40` hand-duplicates the callback typedefs from `inter_mcu.h`; `CommInterfaceImpl::sendSampleLoadRequest` unconditionally returns `ESP_ERR_INVALID_ARG`; `sendSamplePlayRequest` silently drops the loop-gap semantics.
-
-### E-TASK1 — task architecture is undocumented and partly polling-based
-
-Eleven tasks/contexts exist (inventory below); priorities and stacks are inline magic numbers with guess-comments; the UI task (prio 2) sits below the LVGL port task (prio 4) it contends with; no doc records the table (`docs/architecture.md` covers only the Daisy). Three tasks poll where events belong (guide §10): `pcnt_task` at 500 Hz for a 31 Hz consumer, the keypad task polls a GPIO level with the INT line wired, `ui_task` polls at 32 ms. No stack high-water measurements back the "increased" sizes (§13). **Fix**: adopt the table below into `docs/architecture.md`, move numbers to `hardware_config.h`, and convert the pollers opportunistically.
-
-| Task | Prio | Stack | Core | Style |
-|---|---|---|---|---|
-| `main` (app_main) | 1 | 32768 | 0 | 1 s delay loop, logs heap/60 s |
-| `uart_link` | 6 | 16384 | — | 10 ms event poll + TX drain (E-TX1) |
-| `pcnt_task` | 5 | 4096 | — | 2 ms poll (E-ENC1, E-TASK1) |
-| `din_midi` | 5 | 4096 | — | blocks on UART read ✓ |
-| `usb_midi` | 5 | 4096 | — | blocks on task notification ✓ |
-| `tca8418_task` | 5 | 4096 | 1 | 10 ms GPIO poll (E-KEY1) |
-| `ui_task` | 2 | 16384 | 1 | 32 ms poll |
-| LVGL port task | 4 | 7168 | — | esp_lvgl_port default |
-| `log_drain` | 1 | 3072 | — | 20 ms drain ✓ |
-| `scrshot` (debug) | 3 | 4096 | — | 200 ms UART read |
-| TinyUSB device task | esp_tinyusb default | — | — | event queue ✓ |
 
 ### E-MISC1 — smaller items batch
 

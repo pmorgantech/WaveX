@@ -157,7 +157,36 @@ FreeRTOS tasks:
 - **UI task**: LVGL handler loop (~30 FPS), deferred-update pattern for data arriving from other tasks (never call LVGL off the UI task — see `ui-architecture.md`).
 - **UART link task** (`esp_uart_link`): drains the ESP-IDF driver's RX ring, scans framed packets, and pumps queued TX into its software TX ring. The driver is interrupt-driven rather than GDMA-backed.
 - **Dormant SPI slave task** (`esp_spi_link`): compiled only when `WAVEX_SPI_LINK_ENABLED=1`; its DMA transactions and ATTN signaling are not present in the shipped image.
-- **Input tasks**: PCNT encoder polling, TCA8418 interrupt-driven keypad.
+- **Input tasks**: PCNT encoder polling, TCA8418 keypad FIFO polling.
+
+Full task inventory (as-built, 2026-08-29). The guide requires name, priority,
+stack, affinity and blocking behaviour to be written down; these were previously
+only inline magic numbers:
+
+| Task | Prio | Stack | Core | Blocks on | Notes |
+|---|---|---|---|---|---|
+| `main` (app_main) | 1 | 32768 | 0 | 1 s delay loop | Logs heap every 60 s; otherwise idle |
+| `uart_link` | 6 | 16384 | any | driver event queue, 10 ms timeout | Woken on TX by a marker posted to the same queue |
+| `ui_task` | 2 | 16384 | 1 | 32 ms delay | Takes the LVGL port lock per input event |
+| LVGL port task | 4 | 7168 | any | esp_lvgl_port | Owns the tick and the display; created by the BSP |
+| `pcnt_task` | 5 | 4096 | any | 2 ms delay | Polls quadrature counters; consumer runs at ~31 Hz |
+| `tca8418_task` | 5 | 4096 | 1 | 10 ms delay | Polls the keypad event FIFO; does not use the INT line |
+| `din_midi` | 5 | 4096 | any | UART read, 100 ms timeout | Bounded so it can observe a stop request |
+| `usb_midi` | 5 | 4096 | any | task notification | Woken by TinyUSB's device task |
+| `log_drain` | 1 | 3072 | any | 20 ms delay | Drains the log ring to the console |
+| `scrshot` | 3 | 4096 | any | UART read, 200 ms | Debug builds only |
+| TinyUSB device | esp_tinyusb default | — | — | USB events | Calls `tud_midi_rx_cb` |
+| esp_timer task | 22 | — | 0 | timer queue | Shared; keep callbacks short (guide §11) |
+
+Two of these still poll where an interrupt would do (`pcnt_task` at 500 Hz for a
+31 Hz consumer, and the keypad at 100 Hz). Both are deliberate for now and
+explained at the call site; converting either needs bench time.
+
+**Lock order is LVGL → UART.** UI-task code takes the LVGL port lock and then
+sends over the link, which briefly takes `s_uart_mutex`. Nothing may take them
+in the other order — in particular, comm callbacks running on the UART task must
+never touch LVGL; they stage data behind an atomic flag and let the owning page
+draw it.
 
 Known architectural debt (from the 2026-06-26 assessment, still valid): event/callback fan-out ownership is split across `inter_mcu`, `PacketRouter`, `ListenersManager`, and `StatisticsManager` — one owner must be chosen; raw packed wire structs leak into UI code — wrap in encode/decode helpers.
 

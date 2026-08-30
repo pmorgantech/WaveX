@@ -11,6 +11,34 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Removed — The rest of the dead ESP32 surface; quietened the browse path
+
+Found by the 2026-08-29 ESP32-P4 review (items E-DEAD1, E-LOG1).
+
+- Deleted `common/window_manager.{cpp,h}` (no external callers, and it did pixel
+  arithmetic on `lv_pct`-encoded values — a bug waiting for whoever revived it),
+  `inter_mcu_toggle_debug`, `inter_mcu_send_test_messages`,
+  `inter_mcu_process_packet_data`, and the `inter_mcu_toggle_inversion`
+  declaration that had no definition anywhere — an undefined-reference trap for
+  the first caller.
+- The browse-response path logged seven lines at INFO per response while holding
+  the listener mutex on the UART task. Dropped to DEBUG, along with the
+  `StatisticsManager` lock-init banners.
+
+### Added — The ESP32 task architecture is written down
+
+Found by the same review (item E-TASK1). Task names, priorities, stack sizes,
+core affinity and what each blocks on existed only as inline magic numbers, with
+no table anywhere — `architecture.md` documented the Daisy split only. §4.3 now
+carries the full inventory, notes the two tasks that still poll where an
+interrupt would do, and records the **LVGL → UART lock order** that the comm and
+input paths both depend on.
+
+The watchdog and assertion posture (`ESP_INT_WDT_TIMEOUT_MS=5000`,
+`ESP_TASK_WDT_INIT=n`, assertions compiled out) is now explained in
+`sdkconfig.defaults` as the deliberate bench-time choice it is, with what to
+change before hardware sign-off (item E-SDK1).
+
 ### Fixed — Configuration headers now describe the hardware the firmware runs on
 
 Found by the 2026-08-29 ESP32-P4 review (item E-CFG1). Everything decidable from

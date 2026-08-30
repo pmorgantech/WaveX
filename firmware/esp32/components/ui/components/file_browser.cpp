@@ -732,14 +732,14 @@ static bool parse_browse_response_with_pagination(const uint8_t* data,
         return false;
     }
 
-    ESP_LOGI(TAG, "Parsing browse response payload: %d bytes", (int)length);
+    ESP_LOGD(TAG, "Parsing browse response payload: %d bytes", (int)length);
 
     // Parse payload directly: BrowseRespHeader + FileEntryWire entries
     const BrowseRespHeader* browse_header = (const BrowseRespHeader*)data;
     *total_files = browse_header->total_count;
     *current_page_entries = browse_header->n;
 
-    ESP_LOGI(TAG,
+    ESP_LOGD(TAG,
              "Browse response: total_count=%lu, n_entries=%u",
              (unsigned long)*total_files,
              *current_page_entries);
@@ -762,7 +762,7 @@ static bool parse_browse_response_with_pagination(const uint8_t* data,
     uint32_t parsed_count = 0;
     const FileEntryWire* wire_entries = (const FileEntryWire*)(data + sizeof(BrowseRespHeader));
 
-    ESP_LOGI(TAG,
+    ESP_LOGD(TAG,
              "Starting file entry parsing: n_entries=%u, max_count=%u",
              *current_page_entries,
              *count);
@@ -866,7 +866,7 @@ static bool send_browse_request(WaveX::Comm::ICommInterface* comm_interface,
         ESP_LOGE(TAG, "Failed to send browse request: %d", result);
         return false;
     }
-    ESP_LOGI(
+    ESP_LOGD(
         TAG,
         "=== INTERFACE MESSAGE: Successfully sent browse request for path: %s, start_index: %d ===",
         path,
@@ -882,7 +882,7 @@ static void browse_resp_callback(const uint8_t* data, size_t length, void* user_
         return;
     }
 
-    ESP_LOGI(TAG, "Received browse response: %d bytes", (int)length);
+    ESP_LOGD(TAG, "Received browse response: %d bytes", (int)length);
 
     // Parse the browse response to get total count and current page entries
     // Allocate on heap instead of stack to prevent stack overflow in uart_link task
@@ -926,7 +926,7 @@ static void browse_resp_callback(const uint8_t* data, size_t length, void* user_
     // non-zero it would not even mark a UI update. Handle it directly.
     if (total_files == 0 && current_page_entries == 0) {
         free(temp_entries);
-        ESP_LOGI(TAG, "Empty browse response - clearing file list");
+        ESP_LOGD(TAG, "Empty browse response - clearing file list");
         browser->total_files = 0;
         browser->loaded_entries = 0;
         browser->entry_count = 0;
@@ -943,7 +943,7 @@ static void browse_resp_callback(const uint8_t* data, size_t length, void* user_
     if (browser->current_page == 0) {
         // First page - initialize total count
         browser->total_files = total_files;
-        ESP_LOGI(TAG, "Total files in directory: %d", total_files);
+        ESP_LOGD(TAG, "Total files in directory: %d", total_files);
     }
 
     // Add current page entries to the browser's entry array

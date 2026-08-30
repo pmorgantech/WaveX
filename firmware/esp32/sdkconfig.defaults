@@ -54,3 +54,23 @@ CONFIG_LV_USE_SNAPSHOT=y
 # LIBC_PICOLIBC_NEWLIB_COMPATIBILITY caveats do not apply. Revert with
 # CONFIG_LIBC_NEWLIB=y if stdio behaviour ever looks wrong.
 CONFIG_LIBC_PICOLIBC=y
+
+# -----------------------------------------------------------------------------
+# Watchdog and assertion posture - DELIBERATE, and a bench choice, not a
+# shipping one. Recorded here because the 2026-08-29 review flagged all three
+# and the reasoning was nowhere.
+#
+# CONFIG_ESP_INT_WDT_TIMEOUT_MS=5000 (default 300): hides interrupts-disabled
+#   and long-critical-section bugs, which is the class the ESP32-P4 guide's
+#   review checklist exists to catch. Raise the bar back before hardware
+#   sign-off, and treat any stall it then reports as a real defect rather than
+#   re-raising the timeout.
+# CONFIG_ESP_TASK_WDT_INIT=n: a hung task freezes the instrument silently.
+#   Several tasks poll on a delay, so a wedged one looks exactly like an idle
+#   one. Worth enabling once the input paths are confirmed on the bench.
+# CONFIG_COMPILER_OPTIMIZATION_ASSERTIONS_DISABLE=y: removes configASSERT and
+#   driver argument checks - the fastest way to turn a caught misuse into
+#   undefined behaviour.
+#
+# Tracked as E-SDK1 in docs/code_review_esp32_20260829.md.
+# -----------------------------------------------------------------------------

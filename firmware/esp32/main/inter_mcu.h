@@ -153,7 +153,6 @@ esp_err_t inter_mcu_send_sample_data(const uint8_t* data, size_t length);
 // Control RX task behavior
 extern "C" void inter_mcu_set_suspended(bool suspended);
 extern "C" bool inter_mcu_is_busy(void);
-extern "C" void inter_mcu_toggle_inversion(void);
 
 // Backend heartbeat diagnostics (from Daisy)
 typedef struct {
@@ -202,7 +201,6 @@ void inter_mcu_update_sample_mem_status(const wavex_sample_mem_status_t& status)
 int inter_mcu_format_packet_stats(char* buffer, size_t buffer_size);
 
 // Manually trigger test messages to Daisy (for debugging)
-void inter_mcu_send_test_messages(void);
 
 // Get TX statistics (messages sent to Daisy)
 void inter_mcu_get_tx_stats(wavex_tx_stats_t* out);
@@ -231,7 +229,6 @@ void inter_mcu_update_backend_meters(float rms_left,
 void inter_mcu_get_meter_data(wavex_meter_data_t* out);
 
 // Process packet data through the packet processor (for SPI link integration)
-void inter_mcu_process_packet_data(const uint8_t* data, size_t length);
 
 // Increment packet statistics (for SPI link integration)
 void inter_mcu_increment_packet_stat(uint8_t packet_type);

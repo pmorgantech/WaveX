@@ -352,28 +352,6 @@ bool inter_mcu_get_diag_push(WaveX::Protocol::DiagPushMessage* out, uint32_t max
     return (now_ms - rx_ms) <= max_age_ms;
 }
 
-void inter_mcu_send_test_messages() {
-    if (!s_initialized) {
-        ESP_LOGE(TAG, "Inter-MCU communication not initialized");
-        return;
-    }
-
-    ESP_LOGI(TAG, "Sending test messages via UART link...");
-
-    // Send a simple control change test message
-    WaveX::Protocol::ControlChangeMessage msg;
-    msg.parameter = WaveX::Protocol::PARAM_VOLUME;
-    msg.channel = 0;
-    msg.value = 100;
-
-    int result = send_uart_message(WaveX::Protocol::MSG_CONTROL_CHANGE, &msg, sizeof(msg));
-    if (result) {
-        ESP_LOGI(TAG, "Test message sent successfully");
-    } else {
-        ESP_LOGE(TAG, "Failed to send test message");
-    }
-}
-
 bool inter_mcu_is_busy() {
     if (!s_initialized) {
         return false;
@@ -386,10 +364,6 @@ bool inter_mcu_is_busy() {
 void inter_mcu_set_suspended(bool suspended) {
     s_suspended = suspended;
     ESP_LOGI(TAG, "Inter-MCU communication %s", suspended ? "suspended" : "resumed");
-}
-
-void inter_mcu_toggle_debug() {
-    ESP_LOGI(TAG, "Debug mode toggled (UART link)");
 }
 
 esp_err_t inter_mcu_request_sample_mem_status() {
@@ -666,22 +640,6 @@ void inter_mcu_get_meter_data(wavex_meter_data_t* out) {
     }
 
     s_statistics->get_meter_data(out);
-}
-
-void inter_mcu_process_packet_data(const uint8_t* data, size_t length) {
-    if (!s_statistics) {
-        ESP_LOGE(TAG, "StatisticsManager not initialized");
-        return;
-    }
-    if (!data || length == 0) {
-        ESP_LOGE(TAG, "Invalid packet data for processing");
-        return;
-    }
-
-    // TODO: Implement packet processing through the packet processor
-    // For now, just increment the total packet count
-    s_statistics->increment_packet_stat(0xFF); // Unknown packet type
-    ESP_LOGD(TAG, "Packet data processing not yet implemented, length: %zu", length);
 }
 
 void inter_mcu_increment_packet_stat(uint8_t packet_type) {
