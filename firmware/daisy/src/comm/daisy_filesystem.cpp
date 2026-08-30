@@ -231,7 +231,6 @@ bool ParseWavMetadata(const WaveX::Storage::FileEntry& entry,
     const uint32_t sample_rate = info.sample_rate;
     const uint16_t channels = info.num_channels;
     const uint16_t bits_per_sample = info.bits_per_sample;
-    const uint32_t data_chunk_size = info.data_size;
 
     if (!fmt_found) {
         if (WaveX::Comm::s_hw) {
@@ -349,10 +348,10 @@ void ProcessBrowseRequest(const char* path, size_t start_index, uint8_t max_entr
 
         if (WaveX::Comm::s_hw) {
             WaveX::Log::PrintLine(
-                "DAISY: Cached directory state: %u entries from '%s' (sending %u)",
-                (uint32_t)s_current_file_count,
+                "DAISY: Cached directory state: %lu entries from '%s' (sending %lu)",
+                (unsigned long)s_current_file_count,
                 path,
-                (uint32_t)entries_written);
+                (unsigned long)entries_written);
         }
     } else {
         // For subsequent pages, just get the paginated entries (no caching needed)
@@ -397,8 +396,9 @@ void ProcessBrowseRequest(const char* path, size_t start_index, uint8_t max_entr
     memcpy(browse_payload, &total_count_le, sizeof(uint32_t));
     payload_size += sizeof(uint32_t);
 
-    // Copy n_entries count
-    browse_payload[payload_size++] = entries_written;
+    // Copy n_entries count. In range: both branches bound entries_written by
+    // actual_max_entries <= kMaxBrowseEntries (31).
+    browse_payload[payload_size++] = static_cast<uint8_t>(entries_written);
 
     // Copy entries array
     if (entries_written > 0) {
@@ -414,7 +414,9 @@ void ProcessBrowseRequest(const char* path, size_t start_index, uint8_t max_entr
                     (uint32_t)entries_written,
                     (uint32_t)payload_size);
 
-    int send_result = UartLinkSend(WaveX::Protocol::MSG_BROWSE_RESP, browse_payload, payload_size);
+    // In range: payload_size <= kBrowsePayloadCapacity (2048) by construction.
+    int send_result = UartLinkSend(
+        WaveX::Protocol::MSG_BROWSE_RESP, browse_payload, static_cast<uint16_t>(payload_size));
     if (send_result < 0) {
         WAVEX_LOG_DAISY(STORAGE, "Failed to send browse response (queue full?)");
     }

@@ -129,7 +129,9 @@ add_compile_definitions(
     DAISY_PLATFORM
     HSE_VALUE=16000000
     ARM_MATH_CM7
-    __FPU_PRESENT=1
+    # 1U, not 1: must match stm32h750xx.h's own definition textually, or every
+    # TU that includes the device header warns "__FPU_PRESENT" redefined.
+    __FPU_PRESENT=1U
 )
 
 # Profiling option
@@ -161,6 +163,20 @@ endif()
 
 # Include DaisyProject.cmake which handles all the STM32 configuration
 include(DaisyProject)
+
+# First-party warning flags, matching the host test suites (see
+# docs/testing-remediation.md). Warnings, not -Werror: CI surfaces them, and a
+# hard failure on a toolchain bump is worse than a visible warning. Scoped to
+# our executable target only; the vendor targets below are marked SYSTEM so
+# their interface headers are consumed via -isystem and do not drown the
+# first-party signal (libDaisy and the STM32 HAL do not build clean under
+# -Wconversion).
+target_compile_options(${FIRMWARE_NAME} PRIVATE -Wall -Wextra -Wconversion)
+foreach(vendor_target daisy DaisySP STM32H7xx_HAL_Driver cmsis_dsp_support)
+    if(TARGET ${vendor_target})
+        set_target_properties(${vendor_target} PROPERTIES SYSTEM TRUE)
+    endif()
+endforeach()
 
 target_link_options(${FIRMWARE_NAME} PRIVATE
     "-Wl,-T,${CMAKE_CURRENT_LIST_DIR}/wavex_memory_sections.ld"

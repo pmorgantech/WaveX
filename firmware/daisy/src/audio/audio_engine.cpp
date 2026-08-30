@@ -106,7 +106,11 @@ static uint32_t s_scratch_offset = 0;
 // routing arrives with Phase 2.)
 static CvBackendType s_cv_backend;
 static WaveX::Cv::CvGroupRouter<CvBackendType, WAVEX_ANALOG_CV_GROUPS> s_cv_router(s_cv_backend);
-static OutputSinkType s_output_sink;
+// Constructed but not yet driven: nothing calls into the sink today, so the
+// StereoMix/TDM8 backend flag currently selects only which sink type must
+// keep compiling (CI builds both flag sets). Kept so Stage B wiring has its
+// object and both sinks stay in the build; see docs/backlog.md.
+__attribute__((unused)) static OutputSinkType s_output_sink;
 // Roadmap Phase 1 items 2+8: 8-voice RAM-resident player (allocation/
 // stealing, per-voice gain/pan/pitch - see voice_manager.hpp), driven by
 // the MIDI note path: OnNoteOn/OnNoteOff (main-loop message-handler
@@ -410,7 +414,6 @@ static uint32_t s_loop_gap_remaining = 0;
 // (matches the audition/playback path). Keep I/O buffers in normal BSS as well, but 32-byte aligned
 // so cache maintenance in the SD driver works correctly.
 static FIL s_sample_load_file;
-alignas(32) static uint8_t s_sample_hdr[64];
 // Sample-load staging buffer. Read size is the dominant factor in load time:
 // FatFS and the SDMMC driver charge a largely FIXED cost per f_read (cluster
 // walk, bookkeeping, IDMA setup), so cutting the call count cuts most of the
@@ -559,7 +562,8 @@ bool GetPlaybackPosition(uint32_t& frames_played, uint32_t& region_frames) {
 }
 
 void SetLoopGapMs(uint16_t gap_ms) {
-    s_loop_gap_frames = (static_cast<uint32_t>(gap_ms) * s_sample_rate) / 1000u;
+    s_loop_gap_frames =
+        static_cast<uint32_t>((static_cast<float>(gap_ms) * s_sample_rate) / 1000.0f);
     s_loop_gap_remaining = 0;  // never start an audition mid-gap
 }
 
@@ -815,7 +819,7 @@ constexpr uint32_t kMaxIoRecoveries = 5;
 // debug builds; only the reporting in main.cpp is gated.
 static uint32_t s_dbg_free = 0;       // rb_free_frames() at the top of the pass
 static uint32_t s_dbg_want = 0;       // frames_to_transfer after all caps
-static uint32_t s_dbg_resampled = 0;  // LinearResampleFrames() result
+static uint32_t s_dbg_resampled = 0;  // ResampleStreamInterleaved() result
 static uint32_t s_dbg_pushes = 0;     // passes that actually reached rb_push_frames
 
 // Interval counters for MSG_DIAG_PUSH. Deltas, reset on read - a since-boot
@@ -825,8 +829,7 @@ static uint32_t s_diag_pushes = 0;
 static uint32_t s_diag_discards = 0;   // passes that produced frames and then
                                        // skipped without consuming the slot
 static uint32_t s_diag_underruns = 0;  // underrun episodes
-static uint32_t s_last_io_log = 0;
-static uint32_t s_last_io_time = 0;  // Last time we did SD I/O (for rate limiting)
+static uint32_t s_last_io_time = 0;    // Last time we did SD I/O (for rate limiting)
 static uint32_t s_dwt_callback_cycles = 0;
 static uint32_t s_dwt_callback_max = 0;
 static uint32_t s_dwt_io_cycles = 0;
@@ -969,13 +972,6 @@ static uint32_t ConvertFramesToOutput(
 // SAME stream and must share the phase. Reset when a file is opened or closed.
 static StreamResamplerState s_resampler;
 
-static uint32_t LinearResampleFrames(
-    const q15_t* src, uint32_t src_frames, q15_t* dst, uint32_t channels, float ratio) {
-    return ResampleInterleaved(src, src_frames, dst, channels, ratio);
-}
-
-// Resampling temporarily disabled
-
 // Pre-buffering functions
 static bool prebuffer_audio() {
     PROFILE_SCOPE(prebuffer_audio);
@@ -991,7 +987,7 @@ static bool prebuffer_audio() {
     uint32_t file_bpf = (uint32_t)s_wav.num_channels * bytes_per_sample;
     uint32_t free_prebuffer_frames = PREBUFFER_FRAMES - s_prebuffer_filled;
     float resample_ratio = 1.0f;
-    if (s_wav.sample_rate != s_sample_rate) {
+    if (static_cast<float>(s_wav.sample_rate) != s_sample_rate) {
         resample_ratio = static_cast<float>(s_sample_rate) / static_cast<float>(s_wav.sample_rate);
     }
     uint32_t frames_to_read = free_prebuffer_frames;
@@ -1050,7 +1046,7 @@ static bool prebuffer_audio() {
             req_frames = max_by_scratch;
         }
 
-        // LinearResampleFrames() returns 0 for fewer than 2 input frames, and
+        // ResampleStreamInterleaved() returns 0 for fewer than 2 input frames, and
         // a 0 return is treated below as "drop this chunk" - which does not
         // advance s_prebuffer_filled. Once the remaining space caps the
         // request at 1 frame, that combination spins forever: the pre-buffer
@@ -1127,15 +1123,18 @@ static bool prebuffer_audio() {
 
     const uint8_t* src = s_prebuffer_sd;
     PROFILE_SCOPE(format_conversion);
-    ConvertFramesToOutput(
-        src, conversion_output, frames_read, s_wav.num_channels, s_wav.bits_per_sample);
+    ConvertFramesToOutput(src,
+                          conversion_output,
+                          frames_read,
+                          s_wav.num_channels,
+                          static_cast<uint8_t>(s_wav.bits_per_sample));
     ApplyWavGain(conversion_output, frames_read * s_output_channels);
 
     q15_t* to_push = conversion_output;
     uint32_t output_frames = frames_read;
     if (resample_ratio != 1.0f) {
         uint32_t max_out_frames =
-            static_cast<uint32_t>(std::ceil(frames_read * resample_ratio)) + 1;
+            static_cast<uint32_t>(std::ceil(static_cast<float>(frames_read) * resample_ratio)) + 1;
         q15_t* resample_buffer = AcquireScratch(max_out_frames * s_output_channels);
         uint32_t resampled = 0;
         // Same snapshot reasoning as the streaming path: the drop below
@@ -2604,7 +2603,7 @@ void OnSampleLoad(const SampleLoadMessage& sl) {
                 SampleStatusMessage progress{};
                 progress.sample_id = sl.sample_id;
                 progress.state = 0x11;  // loading, frames_played carries percent
-                progress.channels = num_ch;
+                progress.channels = static_cast<uint8_t>(num_ch);
                 progress.sample_rate = sample_rate;
                 progress.frames_played = pct;
                 WaveX::Comm::UartLinkSend(
@@ -2651,14 +2650,17 @@ void OnSampleLoad(const SampleLoadMessage& sl) {
     SampleStatusMessage status{};
     status.sample_id = sl.sample_id;
     status.state = 0x10;  // load complete
-    status.channels = num_ch;
+    status.channels = static_cast<uint8_t>(num_ch);
     status.sample_rate = sample_rate;
     status.frames_played = data_size / ((bits / 8) * num_ch);  // total frames loaded
     WaveX::Comm::UartLinkSend(WaveX::Protocol::MSG_SAMPLE_STATUS, &status, sizeof(status));
 }
 
 void GetSampleMemStatus(SampleMemStatusMessage& out) {
-    memset(&out, 0, sizeof(out));
+    // Deliberate byte-wise zero of a wire struct: the default constructor
+    // does not clear entries[], and every byte of sizeof(out) goes on the
+    // UART. void* cast acknowledges the non-trivial type for GCC.
+    memset(static_cast<void*>(&out), 0, sizeof(out));
     out.category = STATUS_CATEGORY_SAMPLE_MEM;
 
     wxsamp_stats_t stats = {};
@@ -3027,8 +3029,8 @@ void GetStreamDebug(uint32_t& prebuf_filled,
     prebuf_filled = s_prebuffer_filled;
     prebuf_target = PREBUFFER_FRAMES;
     wav_sample_rate = s_wav.sample_rate;
-    wav_channels = s_wav.num_channels;
-    wav_bits = s_wav.bits_per_sample;
+    wav_channels = static_cast<uint8_t>(s_wav.num_channels);
+    wav_bits = static_cast<uint8_t>(s_wav.bits_per_sample);
 }
 
 // Streaming telemetry accessor - see WAVEX_DAISY_STREAM_DEBUG.
@@ -3186,11 +3188,11 @@ void PumpWavIO() {
 
     uint32_t available_frames = slot.frames - slot.consumed;
     float resample_ratio =
-        (s_wav.sample_rate != s_sample_rate)
+        (static_cast<float>(s_wav.sample_rate) != s_sample_rate)
             ? static_cast<float>(s_sample_rate) / static_cast<float>(s_wav.sample_rate)
             : 1.0f;
 
-    // A 1-frame slot tail cannot be resampled: LinearResampleFrames() needs
+    // A 1-frame slot tail cannot be resampled: ResampleStreamInterleaved() needs
     // >= 2 input frames to interpolate, and the skip-without-consume paths
     // below would then retry this same 1-frame request on every pump forever
     // - the ring drains, nothing refills it, and playback stalls into
@@ -3233,7 +3235,7 @@ void PumpWavIO() {
     }
 
     // When resampling, cap the input so ALL scratch users of this pass fit
-    // the pool together: conversion (f x out_ch) + LinearResampleFrames'
+    // the pool together: conversion (f x out_ch) + ResampleStreamInterleaved's
     // internal per-channel buffer (f) + the resample output
     // ((ceil(f x ratio) + 1) x out_ch). Without this cap, a full 8KB slot of
     // mono audio needing resample (e.g. a 44.1kHz file on the 48kHz engine)
@@ -3266,8 +3268,11 @@ void PumpWavIO() {
         return;
 
     PROFILE_SCOPE(format_conversion);
-    ConvertFramesToOutput(
-        src, conversion_output, frames_to_transfer, s_wav.num_channels, s_wav.bits_per_sample);
+    ConvertFramesToOutput(src,
+                          conversion_output,
+                          frames_to_transfer,
+                          s_wav.num_channels,
+                          static_cast<uint8_t>(s_wav.bits_per_sample));
     ApplyWavGain(conversion_output, frames_to_transfer * s_output_channels);
     // Region-relative index of this block's first frame. slot.file_offset is
     // where the read started; consumed is how far into the slot we are.
@@ -3286,8 +3291,9 @@ void PumpWavIO() {
     // a stutter. Snapshot at function scope so every skip can rewind it.
     const StreamResamplerState resampler_before = s_resampler;
     if (resample_ratio != 1.0f) {
-        uint32_t max_out_frames =
-            static_cast<uint32_t>(std::ceil(frames_to_transfer * resample_ratio)) + 1;
+        uint32_t max_out_frames = static_cast<uint32_t>(std::ceil(
+                                      static_cast<float>(frames_to_transfer) * resample_ratio)) +
+                                  1;
         q15_t* resample_buffer = AcquireScratch(max_out_frames * s_output_channels);
         uint32_t resampled = 0;
         if (resample_buffer != nullptr) {
@@ -3413,7 +3419,7 @@ void SetEditParams(uint8_t slot,
         // never reaches unity, which reads as "the sample got quieter" rather
         // than as a fade - and the frontend cannot clamp it, because the
         // backend is the one that just decided what the region is.
-        const uint32_t rate = m.sample_rate ? m.sample_rate : s_sample_rate;
+        const uint32_t rate = m.sample_rate ? m.sample_rate : static_cast<uint32_t>(s_sample_rate);
         const uint32_t span_ms =
             rate ? static_cast<uint32_t>(
                        (static_cast<uint64_t>(m.end_frame - m.start_frame) * 1000u) / rate)
@@ -3462,7 +3468,8 @@ static void ApplyMetaToStreaming(const LoadedSampleInfo* info) {
     // engine rate here would make a 1 ms de-click come out 1.09 ms long on a
     // 44.1 kHz file - inaudible, but wrong in a way that compounds if a later
     // change reuses the figure.
-    const uint32_t file_rate = s_wav.sample_rate ? s_wav.sample_rate : s_sample_rate;
+    const uint32_t file_rate =
+        s_wav.sample_rate ? s_wav.sample_rate : static_cast<uint32_t>(s_sample_rate);
     s_wav.fade_in_frames = WaveX::AudioEngine::FadeFrames(m.fade_in_ms, file_rate);
     s_wav.fade_out_frames = WaveX::AudioEngine::FadeFrames(m.fade_out_ms, file_rate);
 

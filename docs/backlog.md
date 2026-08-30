@@ -515,3 +515,24 @@ per-sample path. No fragmentation symptom has been observed or reported.
 to the softkey count) would remove the allocation without changing the
 deferral semantics. Not worth disturbing this code for its own sake; do it if
 something else already touches `ui_softkey_bar.cpp`.
+
+---
+
+## The output sink object exists but nothing drives it
+
+**Found by the 2026-08-30 firmware warning sweep** (`-Wall` flagged it as
+unused). `audio_engine.cpp` constructs `s_output_sink` — the
+`StereoMixSink`/`TdmVoiceSink` selected by `WAVEX_VOICE_OUTPUT_BACKEND` — but
+no code path calls into it. Audio reaches the codec without going through the
+sink, so the Stage A/B *output* backend flag today selects only which sink
+type must keep compiling, not which one runs. (The CV backend flag, by
+contrast, is live through `s_cv_router`.) The object is kept, marked
+`__attribute__((unused))`, so both sink types stay compiled under CI's two
+flag sets.
+
+**Why it is not urgent:** Stage A audio output works without the sink, and
+Stage B (TDM8 voice board) is not the active phase. The risk is only that
+someone reads the flag as routing audio when it does not yet.
+
+**Fix if picked up:** route the audio callback's output through
+`s_output_sink` when Stage B wiring lands, and drop the unused attribute.

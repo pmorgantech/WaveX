@@ -7,7 +7,6 @@
 #include "config/link_config.h"
 #include "daisy_seed.h"
 #include "daisysp.h"
-#include "ff.h"
 #include "memory_sections.h"
 #include "per/gpio.h"
 #include "stm32h7xx_hal.h"
@@ -31,7 +30,6 @@ using namespace WaveX::Protocol;
 
 // Hardware
 DaisySeed hw;
-static FATFS s_fs;  // FatFs object
 #if WAVEX_SPI_LINK_ENABLED
 // Every use of spi_handle lives inside a WAVEX_SPI_LINK_ENABLED block below;
 // UART is the transport of record (roadmap 0.2) and this flag is hard-coded
@@ -114,8 +112,8 @@ void InitDSP(bool sdram_available) {
     WaveX::AudioEngine::Init(hw, hw.AudioSampleRate(), sdram_available);
 }
 
-static void PrintProfilingStats(DaisySeed& hw) {
 #if WAVEX_PROFILING_ENABLED
+static void PrintProfilingStats(DaisySeed& hw) {
     WaveX::Log::PrintLine("\n=== Profiling Stats ===");
     uint32_t zone_count = WaveX::Profiling::Profiler::GetZoneCount();
     for (uint32_t i = 0; i < zone_count; ++i) {
@@ -133,10 +131,8 @@ static void PrintProfilingStats(DaisySeed& hw) {
                               WaveX::Profiling::CyclesToMicroseconds(zone->last_cycles));
     }
     WaveX::Log::PrintLine("=======================\n");
-#else
-    (void)hw;
-#endif
 }
+#endif
 
 int main(void) {
     // Initialize Daisy Seed hardware
@@ -446,7 +442,9 @@ int main(void) {
     // Periodic liveness beacon: respond proactively every ~1s with basic health
     uint32_t last_beacon = System::GetNow();
     uint32_t last_meter_send = System::GetNow();
+#if WAVEX_PROFILING_ENABLED
     uint32_t last_profile_print = 0;
+#endif
     bool wav_started = false;
     static uint32_t loop_counter = 0;
 
@@ -785,6 +783,7 @@ int main(void) {
 
             int heartbeat_result = WaveX::Comm::UartLinkSend(
                 WaveX::Protocol::MSG_HEARTBEAT, &heartbeat_msg, sizeof(heartbeat_msg));
+            (void)heartbeat_result;  // read only by the packet-debug log below
 #if WAVEX_MCU_LINK_PACKET_DEBUG
             WAVEX_LOG_DAISY(INTER_MCU_LINK, "Heartbeat send result: %d", heartbeat_result);
 #endif
@@ -862,6 +861,7 @@ int main(void) {
             // Send meter data via UART (not SPI - SPI reserved for browse/wave only)
             int result = WaveX::Comm::UartLinkSend(
                 WaveX::Protocol::MSG_METER_PUSH, &meter_msg, sizeof(meter_msg));
+            (void)result;  // read only by the packet-debug log below
 #if WAVEX_MCU_LINK_PACKET_DEBUG
             if (result > 0) {
                 WAVEX_LOG_DAISY(INTER_MCU_LINK,

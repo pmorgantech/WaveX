@@ -40,7 +40,7 @@ uint32_t GetCycles() {
 }
 
 float CyclesToMicroseconds(uint32_t cycles) {
-    return cycles / ((float)SystemCoreClock / 1000000.0f);
+    return (float)cycles / ((float)SystemCoreClock / 1000000.0f);
 }
 
 void ProfileZone::Reset() {
@@ -163,6 +163,9 @@ ProfileScope::ProfileScope(uint32_t zone_id)
       start_cycles_(Profiler::Begin())
 #endif
 {
+#if !WAVEX_PROFILING_ENABLED
+    (void)zone_id;
+#endif
 }
 
 ProfileScope::~ProfileScope() {

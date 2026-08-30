@@ -25,11 +25,19 @@ static constexpr char kCvCalPath[] = "0:/wavex_cvcal.bin";
 static constexpr char kCvCalMagic[4] = {'W', 'X', 'C', 'V'};
 static constexpr uint32_t kCvCalVersion = 1;
 
+// No packed attribute: GCC ignores packed on the non-POD CvCal field (its
+// default member initializers make it non-POD), so every file ever written
+// used the natural layout below. The asserts pin that layout - CvCal is
+// seven 4-byte floats and the header is 8 bytes, so there is no padding
+// and the format is identical on both counts.
 struct CvCalFile {
     char magic[4];
     uint32_t version;
     CvCal groups[WAVEX_ANALOG_CV_GROUPS_MAX];
-} __attribute__((packed));
+};
+static_assert(sizeof(CvCal) == 7 * sizeof(float), "CvCal layout is the on-disk format");
+static_assert(sizeof(CvCalFile) == 8 + WAVEX_ANALOG_CV_GROUPS_MAX * sizeof(CvCal),
+              "CvCalFile layout is the on-disk format");
 
 // Loads the table into `out` (must hold WAVEX_ANALOG_CV_GROUPS_MAX
 // entries). Returns false (out untouched) if the file is missing, short,

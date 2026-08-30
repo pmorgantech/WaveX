@@ -410,7 +410,7 @@ void UartLinkInit(daisy::DaisySeed* hw) {
             WaveX::Log::PrintLine("DAISY: UART4 DMA initialization failed");
         return;
     }
-    std::memset(&s_stats, 0, sizeof(s_stats));
+    s_stats = {};
     s_next_sequence = 1;
     s_rx_pending_len = 0;
     s_scanner.Clear();
@@ -465,7 +465,7 @@ int UartLinkSend(uint16_t msg_type, const void* payload, uint16_t len) {
     // If a future caller sends from ISR context, synchronization must be
     // reintroduced here AND in process_tx_queue.
 
-    if (s_tx_count >= MSG_QUEUE_SIZE) {
+    if (s_tx_count >= static_cast<int>(MSG_QUEUE_SIZE)) {
         s_stats.queue_overflows++;
         UART_LOGE("daisy_uart", "TX queue full");
         return -1;
@@ -602,8 +602,8 @@ void UartLinkProcess() {
         if (errors_this_window > 10 && (now - last_error_recovery > 2000)) {
             if (s_hw)
                 WaveX::Log::PrintLine(
-                    "DAISY: Excessive CRC errors detected (%u in 1 sec) - resetting DMA",
-                    errors_this_window);
+                    "DAISY: Excessive CRC errors detected (%lu in 1 sec) - resetting DMA",
+                    (unsigned long)errors_this_window);
             UART_LOGE("daisy_uart",
                       "Excessive CRC errors: %u/sec - resetting DMA listener",
                       errors_this_window);
@@ -623,8 +623,8 @@ void UartLinkProcess() {
         if (consecutive_parse_failures > 50 && (now - last_error_recovery > 2000)) {
             if (s_hw)
                 WaveX::Log::PrintLine(
-                    "DAISY: Frame buffer stuck in error state (%u failures) - resetting DMA",
-                    consecutive_parse_failures);
+                    "DAISY: Frame buffer stuck in error state (%lu failures) - resetting DMA",
+                    (unsigned long)consecutive_parse_failures);
             UART_LOGE("daisy_uart",
                       "Frame buffer stuck: %u consecutive failures",
                       consecutive_parse_failures);

@@ -25,6 +25,25 @@ versioning and release process.
   `voice_manager_test`, with no new test body. See
   `docs/testing-remediation.md`.
 
+### Added — the Daisy firmware image builds with `-Wall -Wextra -Wconversion`
+
+- The Daisy firmware target previously compiled with **no warning flags at
+  all**. It now builds with the same set as the host tests, scoped to
+  first-party code: `daisy`, `DaisySP`, the STM32 HAL and the CMSIS-DSP
+  object library are marked `SYSTEM` so their headers are consumed via
+  `-isystem` (none of them build clean under `-Wconversion`). Warnings, not
+  `-Werror`, for the same reason as the host suites. First-party warning
+  count is zero in both the Stage A and Stage B flag-set builds.
+- The sweep's findings: `CvCalFile`'s `packed` attribute had **always been
+  ignored** by GCC (non-POD field), so it was deleted and the actual on-disk
+  layout — which never changed — is now pinned by `static_assert`s;
+  `s_output_sink` is constructed but driven by nothing, meaning the
+  `WAVEX_VOICE_OUTPUT_BACKEND` flag currently selects which sink *compiles*,
+  not which one runs (recorded in `docs/backlog.md`); two `size_t`
+  narrowings in the browse-response path were provably in range; dead
+  statics (`s_fs`, `s_sample_hdr`, `s_last_io_log`) and the unused
+  `LinearResampleFrames` wrapper are gone.
+
 ### Added — host tests build with `-Wall -Wextra -Wconversion`
 
 - All three test suites now compile first-party code with warnings enabled,

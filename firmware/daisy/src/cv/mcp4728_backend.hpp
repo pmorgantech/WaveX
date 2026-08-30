@@ -77,7 +77,7 @@ class Mcp4728Backend {
         emit(ch1);
         emit(ch2);
         emit(ch3);
-        return i2c_.TransmitBlocking((uint16_t)(addr_ << 1), buf, k, 1) ==
+        return i2c_.TransmitBlocking((uint16_t)(addr_ << 1), buf, static_cast<uint16_t>(k), 1) ==
                daisy::I2CHandle::Result::OK;
     }
 

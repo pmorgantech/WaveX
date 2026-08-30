@@ -80,6 +80,22 @@ having:
   the follow-on, and is a larger job because ESP-IDF and the STM32 HAL
   headers do not build clean under `-Wconversion`.
 
+**Follow-on, Daisy side: done.** The firmware image had no warning flags at
+all; it now builds with `-Wall -Wextra -Wconversion` on the executable
+target, with `daisy`/`DaisySP`/HAL/CMSIS-DSP marked `SYSTEM` (CMake ≥3.25)
+so vendor headers arrive via `-isystem`. That scoping worked: 49 warnings on
+first build, only 3 from vendor code (a self-inflicted `__FPU_PRESENT`
+redefinition). Zero warnings now in both the Stage A and Stage B flag sets.
+Notable finds, in decreasing order of substance: `CvCalFile`'s `packed`
+attribute was silently ignored by GCC from day one (non-POD member), so the
+persisted format is and always was the natural layout — now pinned by
+`static_assert` instead of an inert attribute; `s_output_sink` is constructed
+but never driven (see `docs/backlog.md`); the browse-response `size_t`
+narrowings were in range but unproven until now. The ESP32 firmware build is
+the remaining half: IDF already applies `-Wall -Wextra`, so the delta there
+is `-Wconversion` (plus IDF's global `-Wno-unused-parameter
+-Wno-sign-compare`) on the three first-party components.
+
 ## Tier 1 — the untrusted-input class (Daisy side done)
 
 **Status: the Daisy dispatch sweep is implemented**, as two `TEST_F`s in
