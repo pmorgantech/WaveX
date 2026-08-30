@@ -2741,24 +2741,36 @@ void CheckAndLogUnderruns() {
 
 // Main-loop only: performs the blocking CV DAC transaction (~225 us
 // MCP4728 fast-write) for values staged at the control tick - never in the
-// callback (§7.1.4 / analog-voice-board.md §0 timing rules). If the DAC
-// is absent (bench without the Stage A breadboard), eight consecutive I2C
-// failures disable the flush with one log line instead of paying the
-// transaction timeout every millisecond forever.
+// callback (§7.1.4 / analog-voice-board.md §0 timing rules). If the DAC is
+// absent (bench without the Stage A breadboard) or wedged, eight consecutive
+// I2C failures pause the flush so the ~1 ms transaction timeout is not paid
+// forever; a periodic long-backoff retry (rather than a permanent latch)
+// means a transient wedge on real hardware recovers on its own instead of
+// requiring a reboot to get the analog path back.
 void FlushCv() {
     static uint32_t consecutive_failures = 0;
     static bool disabled_logged = false;
+    static uint32_t disabled_since_ms = 0;
     constexpr uint32_t kMaxConsecutiveFailures = 8;
+    constexpr uint32_t kRetryBackoffMs = 10000;
 
     if (consecutive_failures >= kMaxConsecutiveFailures) {
-        if (!disabled_logged) {
-            disabled_logged = true;
-            if (s_hw)
-                WaveX::Log::PrintLine(
-                    "CV: MCP4728 not responding after %u attempts - CV flush disabled",
-                    (unsigned)kMaxConsecutiveFailures);
+        if (System::GetNow() - disabled_since_ms < kRetryBackoffMs) {
+            if (!disabled_logged) {
+                disabled_logged = true;
+                if (s_hw)
+                    WaveX::Log::PrintLine(
+                        "CV: MCP4728 not responding after %u attempts - CV flush paused, "
+                        "retrying every %u ms",
+                        (unsigned)kMaxConsecutiveFailures,
+                        (unsigned)kRetryBackoffMs);
+            }
+            return;
         }
-        return;
+        // Backoff elapsed: give the DAC another chance rather than staying
+        // disabled for the rest of the session.
+        consecutive_failures = 0;
+        disabled_logged = false;
     }
     if (!__atomic_exchange_n(&s_cv_dirty, false, __ATOMIC_ACQUIRE)) {
         return;  // nothing staged since the last flush
@@ -2766,7 +2778,10 @@ void FlushCv() {
     if (s_cv_router.Flush()) {
         consecutive_failures = 0;
     } else {
-        consecutive_failures++;
+        ++consecutive_failures;
+        if (consecutive_failures >= kMaxConsecutiveFailures) {
+            disabled_since_ms = System::GetNow();
+        }
     }
 }
 
