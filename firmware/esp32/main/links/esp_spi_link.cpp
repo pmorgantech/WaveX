@@ -99,11 +99,14 @@ typedef struct {
     bool pending;
 } msg_queue_entry_t;
 
-// TX queue for messages to send TO Daisy
+// TX queue for messages to send TO Daisy. Guarded by s_spi_mutex on every
+// access; plain ints rather than volatile, which would be a second,
+// misleading claim of synchronization on top of the mutex that actually
+// provides it (docs/esp32p4_coding_guide.md SS9).
 static msg_queue_entry_t msg_queue[MSG_QUEUE_SIZE];
-static volatile int msg_queue_head = 0;
-static volatile int msg_queue_tail = 0;
-static volatile int msg_queue_count = 0;
+static int msg_queue_head = 0;
+static int msg_queue_tail = 0;
+static int msg_queue_count = 0;
 static uint8_t next_seq_num =
     1;  // Sequence number for message tracking (0 reserved for no message)
 
@@ -611,8 +614,15 @@ static void spi_slave_task(void* pvParameters) {
         ret = spi_slave_get_trans_result(WAVEX_ESP_SPI_HOST, &trans_result, pdMS_TO_TICKS(50));
         if (ret != ESP_OK) {
             if (ret == ESP_ERR_TIMEOUT) {
-                // Timeout is NORMAL - check if we now have a message to send
-                bool now_has_message = (msg_queue_count > 0);
+                // Timeout is NORMAL - check if we now have a message to send.
+                // Unlike every other access to msg_queue_count, this one has to
+                // take the mutex explicitly rather than inheriting it from an
+                // enclosing prepare/consume call.
+                bool now_has_message = false;
+                if (xSemaphoreTake(s_spi_mutex, (TickType_t)10) == pdTRUE) {
+                    now_has_message = (msg_queue_count > 0);
+                    xSemaphoreGive(s_spi_mutex);
+                }
                 if (now_has_message && !has_message) {
                     ESP_LOGI(TAG, "New message arrived while waiting! Re-queuing with data...");
                     // Don't continue - loop will re-prepare and re-queue

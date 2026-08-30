@@ -11,6 +11,24 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Fixed — inter-MCU link layer used `volatile` for cross-task state
+
+- `inter_mcu.cpp`'s `s_suspended`/`s_initialized` gate every public entry
+  point (called from whichever task owns the caller) and are written from
+  `init()`/`deinit()`/`suspend()` on a different task; `esp_uart_link.cpp`'s
+  `s_uart_running` and its task handle have the same shape. All were
+  `volatile`, which `docs/esp32p4_coding_guide.md` §9 flags as giving no
+  cross-core ordering or visibility guarantee. Now `std::atomic`.
+- `esp_uart_link.cpp`'s and `esp_spi_link.cpp`'s TX queue head/tail/count
+  counters were also `volatile`, but every access already goes through
+  `s_uart_mutex`/`s_spi_mutex` — the mutex is the real synchronization, and
+  `volatile` on top of it was a second, misleading claim. Changed to plain
+  `int`. `esp_spi_link.cpp`'s one read that skipped the mutex (the "did a
+  message arrive while we were waiting" check in the SPI slave task) now
+  takes it like every other access. `esp_spi_link.cpp` is compiled out today
+  (`WAVEX_SPI_LINK_ENABLED=0`); verified by temporarily building with it
+  enabled in the devcontainer.
+
 ### Fixed — ESP32 task shutdown handshakes used `volatile` instead of `std::atomic`
 
 - `pcnt_task.cpp`, `ui_task.cpp`/`.h`, `midi_task.cpp`, `usb_midi_task.cpp` and

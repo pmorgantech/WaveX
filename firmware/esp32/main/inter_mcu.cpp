@@ -9,6 +9,8 @@
 #include "comm/statistics.h"
 #include "links/esp_uart_link.h"
 
+#include <atomic>
+
 #ifdef ESP_PLATFORM
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -31,9 +33,11 @@ static bool s_uart_started = false;
 // Statistics tracking (injected dependency)
 static StatisticsManager* s_statistics = nullptr;
 
-// Communication state
-static volatile bool s_suspended = false;
-static volatile bool s_initialized = false;
+// Communication state. Read from every public entry point below (called from
+// whichever task owns the caller - UI task, comm callbacks) and written from
+// init()/deinit()/suspend(); atomic per docs/esp32p4_coding_guide.md SS9.
+static std::atomic<bool> s_suspended{false};
+static std::atomic<bool> s_initialized{false};
 
 // Cached sample memory diagnostics
 static wavex_sample_mem_status_t s_sample_mem_status = {};

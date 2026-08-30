@@ -58,21 +58,24 @@ struct uart_stats_t {
     uint32_t seq_resyncs = 0;  // peer-reboot resyncs accepted by SequenceTracker
 };
 
-TaskHandle_t s_uart_task_handle = nullptr;
+std::atomic<TaskHandle_t> s_uart_task_handle{nullptr};
 QueueHandle_t s_uart_event_queue = nullptr;
 SemaphoreHandle_t s_uart_mutex = nullptr;
 
+// Guarded by s_uart_mutex on every access below; plain ints rather than
+// volatile/atomic because the mutex already provides the ordering guarantee -
+// volatile here would be a second, misleading claim of synchronization.
 static uart_msg_entry_t s_msg_queue[MSG_QUEUE_SIZE];
-static volatile int s_msg_head = 0;
-static volatile int s_msg_tail = 0;
-static volatile int s_msg_count = 0;
+static int s_msg_head = 0;
+static int s_msg_tail = 0;
+static int s_msg_count = 0;
 
 // RX frame extraction: shared scan/consume policy (frame_scanner.hpp,
 // review P3.14) over caller-provided storage. Only uart_task touches it.
 static uint8_t s_rx_storage[RX_PENDING_CAPACITY];
 static WaveX::UartProtocol::FrameScanner s_scanner(s_rx_storage, sizeof(s_rx_storage));
 
-static volatile bool s_uart_running = false;
+static std::atomic<bool> s_uart_running{false};
 
 // Waking the TX side.
 //
@@ -437,7 +440,9 @@ esp_err_t uart_link_start(void) {
 
     // Increased stack size to 16384 bytes to prevent stack overflow when processing
     // browse response callbacks which allocate large temporary arrays
-    BaseType_t rc = xTaskCreate(uart_task, "uart_link", 16384, nullptr, 6, &s_uart_task_handle);
+    TaskHandle_t handle = nullptr;
+    BaseType_t rc = xTaskCreate(uart_task, "uart_link", 16384, nullptr, 6, &handle);
+    s_uart_task_handle = handle;
     if (rc != pdPASS) {
         UART_LOGE(TAG, "Failed to create UART task");
         s_uart_task_handle = nullptr;
