@@ -11,6 +11,18 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Fixed — diagnostics page update flag used `volatile` instead of `std::atomic`
+
+- `UIDiagnosticsPage::ui_update_pending` is set by `collectDiagnosticsData()`
+  (the `esp_timer` Timer Service task, not the UI task) and read/cleared by
+  `applyUiUpdates()` (the UI task's `lv_timer`) — the same cross-task publish
+  pattern this codebase already handles correctly elsewhere with
+  `std::atomic` (`ui_sample_edit_page.h`, `file_browser.h`). This one was
+  still `volatile`. Worst case was a stale read delaying a diagnostics-tab
+  refresh by one 500 ms sampling cycle, self-correcting on the next tick —
+  low severity, but the same anti-pattern `docs/esp32p4_coding_guide.md` §9
+  calls out.
+
 ### Fixed — file browser pagination flag raced across tasks
 
 - `wavex_file_browser_t::pagination_in_progress` is written from the UART RX

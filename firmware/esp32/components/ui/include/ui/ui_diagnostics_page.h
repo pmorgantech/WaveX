@@ -7,6 +7,7 @@
 #include "ui_page.h"
 
 #include <array>
+#include <atomic>
 #include <memory>
 
 #ifdef ESP_PLATFORM
@@ -174,8 +175,13 @@ class UIDiagnosticsPage : public UIPage {
     uint32_t frames_ref_pkts;
     uint32_t frames_per_s;
 
-    // Set by the sampling timer, consumed by the UI task.
-    volatile bool ui_update_pending;
+    // Set by the sampling timer, consumed by the UI task. atomic, not
+    // volatile: the two run on different execution contexts (esp_timer
+    // Timer Service task vs. the UI task's lv_timer) with no other
+    // synchronization between them - same discipline as
+    // ui_sample_edit_page.h's run_ready_ and file_browser.h's
+    // pagination_in_progress.
+    std::atomic<bool> ui_update_pending;
 };
 
 /**
