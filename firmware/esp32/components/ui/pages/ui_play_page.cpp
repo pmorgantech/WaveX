@@ -187,15 +187,57 @@ lv_obj_t* UIPlayPage::makeKey(
     if (key_count_ >= kMaxKeys) {
         return nullptr;
     }
+    // Shared styles, not per-object local ones.
+    //
+    // Every lv_obj_set_style_*() call stores a property in the object's OWN
+    // style list, which allocates. This page builds 41 keys, each a button
+    // plus a label, so the six local properties these used to set were ~500
+    // property stores on a single page entry - and page entry is the whole
+    // cost of this page (docs/backlog.md). What genuinely varies per key is
+    // the two colours; the border, radius and pressed fill are identical
+    // across all 41, so they belong in one style every key references.
+    //
+    // Function-local statics: initialised once, never destroyed, which is what
+    // an lv_style_t referenced by live objects requires. UI task only, so the
+    // one-time init needs no locking beyond what C++ already guarantees.
+    static lv_style_t s_key_base;
+    static lv_style_t s_key_pressed;
+    static lv_style_t s_label_base;
+    static bool s_styles_ready = false;
+    if (!s_styles_ready) {
+        lv_style_init(&s_key_base);
+        // remove_style_all() takes the theme's opaque background with it, so
+        // the base style has to restore the parts a key actually needs.
+        lv_style_set_bg_opa(&s_key_base, LV_OPA_COVER);
+        lv_style_set_border_width(&s_key_base, 1);
+        lv_style_set_border_color(&s_key_base, lv_color_hex(kColBorder));
+        lv_style_set_radius(&s_key_base, 4);
+
+        lv_style_init(&s_key_pressed);
+        lv_style_set_bg_opa(&s_key_pressed, LV_OPA_COVER);
+        lv_style_set_bg_color(&s_key_pressed, lv_color_hex(kColGreen));
+
+        lv_style_init(&s_label_base);
+        lv_style_set_text_font(&s_label_base, &lv_font_montserrat_18);
+        lv_style_set_text_align(&s_label_base, LV_TEXT_ALIGN_CENTER);
+
+        s_styles_ready = true;
+    }
+
     lv_obj_t* btn = lv_btn_create(parent);
-    lv_obj_set_style_border_width(btn, 1, LV_PART_MAIN);
-    lv_obj_set_style_border_color(btn, lv_color_hex(kColBorder), LV_PART_MAIN);
-    lv_obj_set_style_radius(btn, 4, LV_PART_MAIN);
+    // Drop the theme's default button styling before adding ours. The default
+    // theme applies a substantial style to every button it sees - gradients,
+    // shadows, transitions, pressed transforms - and this page creates 41 of
+    // them in one go. None of it survives our own styling visually, so paying
+    // to apply it 41 times and then override it is pure page-entry cost.
+    lv_obj_remove_style_all(btn);
+    lv_obj_add_style(btn, &s_key_base, LV_PART_MAIN);
+    lv_obj_add_style(btn, &s_key_pressed, LV_PART_MAIN | LV_STATE_PRESSED);
     lv_obj_set_style_bg_color(btn, lv_color_hex(bg), LV_PART_MAIN);
-    lv_obj_set_style_bg_color(btn, lv_color_hex(kColGreen), LV_PART_MAIN | LV_STATE_PRESSED);
 
     lv_obj_t* label = lv_label_create(btn);
-    lv_obj_set_style_text_font(label, &lv_font_montserrat_18, LV_PART_MAIN);
+    lv_obj_remove_style_all(label);
+    lv_obj_add_style(label, &s_label_base, LV_PART_MAIN);
     lv_obj_set_style_text_color(label, lv_color_hex(text), LV_PART_MAIN);
     lv_obj_align(label, LV_ALIGN_BOTTOM_MID, 0, -4);
 
