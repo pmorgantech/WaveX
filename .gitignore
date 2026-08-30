@@ -102,9 +102,13 @@ node_modules/
 .analysis/
 .cursor/
 .claude/worktrees/
+.claude/hooks/.state/
 
 # Serial logs from scripts/serial_log.py (make logs-start)
 /logs/
+
+# Auto-generated session history (SessionEnd hook / cron sweep) - local only
+/docs/history/
 
 # ui_preview host build + renders
 tools/ui_preview/build/

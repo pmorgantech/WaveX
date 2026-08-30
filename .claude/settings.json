@@ -1,0 +1,80 @@
+{
+  "attribution": {
+    "commit": ""
+  },
+  "hooks": {
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR/.claude/hooks/session-history.sh\"",
+            "timeout": 90,
+            "statusMessage": "Summarizing session into docs/history..."
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR/.claude/hooks/devcontainer-build-guard.sh\"",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR/.claude/hooks/no-ai-trailer-guard.sh\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit",
+        "hooks": [
+          {
+            "type": "prompt",
+            "if": "Edit(docs/**)",
+            "prompt": "A file under docs/ was just edited (hook input: $ARGUMENTS). Does the new content introduce a specific GPIO pin number, ADC/DAC channel, SPI/I2C bus or chip-select assignment, or a hardware feature-flag definition/value directly in this prose/markdown file, rather than just referencing pin_config.h or hardware_config.h by name? Pin and hardware-flag truth must live only in firmware/shared/config/pin_config.h and hardware_config.h, never in docs (see AGENTS.md). Answer whether this edit is safe.",
+            "continueOnBlock": true,
+            "model": "claude-haiku-4-5-20251001",
+            "timeout": 30
+          },
+          {
+            "type": "prompt",
+            "if": "Edit(firmware/daisy/src/audio/**)",
+            "prompt": "A file in the Daisy real-time audio path was just edited (hook input: $ARGUMENTS). The audio callback must never block, allocate heap memory, perform SD/I2C/SPI I/O, or log - see AGENTS.md 'Non-negotiable engineering constraints' #1. Does this edit introduce any of: heap allocation (new, malloc, std::vector/std::string growth past capacity, a std::function capturing by value), blocking I/O, or logging calls in code on the audio callback's call path? Answer whether this edit is safe.",
+            "continueOnBlock": true,
+            "model": "claude-haiku-4-5-20251001",
+            "timeout": 30
+          }
+        ]
+      },
+      {
+        "matcher": "Write",
+        "hooks": [
+          {
+            "type": "prompt",
+            "if": "Write(docs/**)",
+            "prompt": "A file under docs/ was just written (hook input: $ARGUMENTS). Does the new content introduce a specific GPIO pin number, ADC/DAC channel, SPI/I2C bus or chip-select assignment, or a hardware feature-flag definition/value directly in this prose/markdown file, rather than just referencing pin_config.h or hardware_config.h by name? Pin and hardware-flag truth must live only in firmware/shared/config/pin_config.h and hardware_config.h, never in docs (see AGENTS.md). Answer whether this edit is safe.",
+            "continueOnBlock": true,
+            "model": "claude-haiku-4-5-20251001",
+            "timeout": 30
+          },
+          {
+            "type": "prompt",
+            "if": "Write(firmware/daisy/src/audio/**)",
+            "prompt": "A file in the Daisy real-time audio path was just written (hook input: $ARGUMENTS). The audio callback must never block, allocate heap memory, perform SD/I2C/SPI I/O, or log - see AGENTS.md 'Non-negotiable engineering constraints' #1. Does this content introduce any of: heap allocation (new, malloc, std::vector/std::string growth past capacity, a std::function capturing by value), blocking I/O, or logging calls in code on the audio callback's call path? Answer whether this content is safe.",
+            "continueOnBlock": true,
+            "model": "claude-haiku-4-5-20251001",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}
