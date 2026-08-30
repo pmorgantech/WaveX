@@ -507,10 +507,8 @@ void ProcessSampleStopRequest(uint8_t slot) {
         WaveX::Log::PrintLine("DAISY: ProcessSampleStopRequest called (slot=%u)", (unsigned)slot);
     }
 
-    // Stop current playback. Call CloseWav() to stop any WAV playback,
-    // then call StopAudition() to clear audition state if active.
+    // Stop current playback.
     CloseWav();
-    StopAudition();
     // Debug: report playback state after attempting stop
     if (WaveX::Comm::s_hw) {
         bool wav_playing = WaveX::AudioEngine::IsWavPlaying();

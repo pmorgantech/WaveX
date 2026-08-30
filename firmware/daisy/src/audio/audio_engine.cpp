@@ -399,22 +399,6 @@ static uint32_t s_loop_gap_frames = 0;  // configured length
 static uint32_t s_loop_gap_remaining = 0;
 
 // ============================
-// Sample audition state (separate from main WAV playback)
-// ============================
-struct AuditionState {
-    bool active;
-    FIL file;
-    uint32_t data_start;
-    uint32_t data_size;
-    uint32_t bytes_remaining;
-    uint16_t num_channels;
-    uint16_t bits_per_sample;
-    uint32_t sample_rate;
-    char current_path[96];
-};
-static AuditionState s_audition = {};
-
-// ============================
 // Sample loading state
 // ============================
 // (Review C2: a SampleLoadState tracker for MSG_SAMPLE_DATA streaming sat
@@ -436,9 +420,9 @@ alignas(32) static uint8_t s_sample_hdr[64];
 //
 // WHY 32 KB AND NOT MORE. The obvious ceiling would be main-loop blocking: a
 // long f_read starves the WAV ring, which has only ~42 ms of headroom. It does
-// not bind here, because OnSampleLoad calls StopAudition() and CloseWav()
-// before this loop - nothing is streaming during a load, so there is no ring to
-// starve. What binds is the SD driver's own sector-count contract (below),
+// not bind here, because OnSampleLoad calls CloseWav() before this loop -
+// nothing is streaming during a load, so there is no ring to starve. What
+// binds is the SD driver's own sector-count contract (below),
 // and after that AXI SRAM - this is a permanent static allocation for a
 // transient purpose. Beyond one cluster the read is a contiguous multi-block
 // transfer running at the card's streaming rate anyway, so a larger buffer has
@@ -745,7 +729,7 @@ static const uint32_t RB_CAP_FRAMES = 2048;
 // target's <atomic> predates the C++17 addition of that member despite compiling as C++17.
 static uint32_t s_rb_head = 0;
 static uint32_t s_rb_tail = 0;
-// Gates whether rb_pop_stereo() (audio ISR, sole consumer) may touch
+// Gates whether rb_pop_stereo_batch() (audio ISR, sole consumer) may touch
 // s_rb_head/s_rb_tail at all. OpenWav()/CloseWav() run on the main loop
 // (producer context) and are the only callers that reset BOTH indices
 // together; a direct write to s_rb_tail from there raced the ISR's own
@@ -1445,34 +1429,52 @@ static inline void rb_push_frames(const q15_t* samples, uint32_t frames) {
     __atomic_store_n(&s_rb_head, head + frames, __ATOMIC_RELEASE);
 }
 
-static inline bool rb_pop_stereo(int16_t& l, int16_t& r) {
-    // If the main loop is mid-reset (OpenWav/CloseWav), treat the ring as
-    // empty and touch neither index - see s_rb_live's declaration comment.
+// Consumer-side batch pop, called once per Callback() rather than once per
+// sample (review D2). Both s_rb_live and s_rb_head are written only from
+// main-loop context, which cannot run concurrently with this ISR - they are
+// therefore constant for the full duration of one Callback() invocation, so
+// reading each of them once here and computing the whole block's worth of
+// available frames up front is exactly equivalent to the old per-sample
+// rb_pop_stereo() (one acquire-load of s_rb_live, one relaxed-load of tail,
+// one acquire-load of head, per sample: ~190 atomics/barriers per 48-frame
+// block that this removes), not an approximation of it.
+//
+// Pops min(size, available) frames into out_l/out_r starting at out index 0
+// and returns that count; the caller silences and handles underrun/startup
+// accounting for any remaining samples itself, exactly as the old per-sample
+// loop did on a failed pop.
+static inline size_t rb_pop_stereo_batch(float* out_l, float* out_r, size_t size) {
     if (!__atomic_load_n(&s_rb_live, __ATOMIC_ACQUIRE)) {
-        return false;
+        // Main loop is mid-reset (OpenWav/CloseWav) - treat the ring as
+        // empty and touch neither index, matching rb_push_frames' contract.
+        return 0;
     }
 
-    // Consumer-owned index; only this function ever writes it.
     uint32_t tail = __atomic_load_n(&s_rb_tail, __ATOMIC_RELAXED);
     // Acquire: synchronizes with rb_push_frames' release store, so the
     // sample data below is guaranteed visible once head has advanced past it.
-    uint32_t head = __atomic_load_n(&s_rb_head, __ATOMIC_ACQUIRE);
+    const uint32_t head = __atomic_load_n(&s_rb_head, __ATOMIC_ACQUIRE);
+    const uint32_t mask = RB_CAP_FRAMES - 1u;
+    const uint32_t available = (head - tail) & mask;
+    const uint32_t stride = s_output_channels;  // Must match writer stride
+    constexpr float kInt16ToFloat = 1.0f / 32768.0f;
 
-    if (tail == head) {
-        return false;
+    const size_t popped = std::min<size_t>(size, available);
+    for (size_t i = 0; i < popped; ++i) {
+        const uint32_t idx = (tail & mask) * stride;
+        const int16_t l16 = s_rb[idx + 0];
+        const int16_t r16 = (stride > 1) ? s_rb[idx + 1] : s_rb[idx + 0];
+        out_l[i] = static_cast<float>(l16) * kInt16ToFloat;
+        out_r[i] = static_cast<float>(r16) * kInt16ToFloat;
+        ++tail;
     }
 
-    // Read data
-    uint32_t stride = s_output_channels;  // Must match writer stride
-    uint32_t idx = (tail & (RB_CAP_FRAMES - 1u)) * stride;
-    l = s_rb[idx + 0];
-    r = (stride > 1) ? s_rb[idx + 1] : s_rb[idx + 0];
-
-    // Release: the data read above is complete before the freed slot is
-    // republished to the producer via the advanced tail.
-    __atomic_store_n(&s_rb_tail, tail + 1u, __ATOMIC_RELEASE);
-
-    return true;
+    if (popped > 0) {
+        // Release: the data reads above are complete before the freed slots
+        // are republished to the producer via the advanced tail.
+        __atomic_store_n(&s_rb_tail, tail, __ATOMIC_RELEASE);
+    }
+    return popped;
 }
 
 // Resampling temporarily disabled - using direct playback
@@ -1593,42 +1595,32 @@ void Callback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t
     }
 
     (void)in;
-    for (size_t i = 0; i < size; i++) {
-        int16_t l16 = 0, r16 = 0;
-        if (!rb_pop_stereo(l16, r16)) {
-            // Check if we have audition playback active
-            if (s_audition.active && s_wav.open) {
-                // Use pre-buffering system for audition to avoid blocking audio callback
-                // The main loop will handle file I/O via PumpWavIO()
-                // For now, output silence and let the pre-buffering system handle the data
-                l16 = 0;
-                r16 = 0;
-
-                // Check if audition is complete (this will be handled by the main loop)
-                // The audio callback should never do file I/O
-            } else if (!s_wav.open) {
-                // No audio should play on startup - output silence until audition commands
-                // Requirement: "When daisy starts, no audio plays (no oscillator, no .wavs)"
-                out[0][i] = 0.0f;
-                out[1][i] = 0.0f;
-                continue;
-            } else {
-                // WAV is playing but buffer is empty - output silence to prevent glitches
-                out[0][i] = 0.0f;
-                out[1][i] = 0.0f;
-                // Signal underrun detection (logging handled in main loop)
-                s_underrun_detected = true;
-                continue;
-            }
+    // Batched pop (review D2): one head/tail/live read for the whole block
+    // instead of one rb_pop_stereo() call per sample. s_rb_live and s_wav.open
+    // are both main-loop-only fields that cannot change while this ISR is
+    // running (same-core preemption, not a multi-core race), so reading them
+    // once up front is exactly equivalent to the old per-sample re-checks.
+    const bool ring_live = __atomic_load_n(&s_rb_live, __ATOMIC_ACQUIRE);
+    const size_t popped = ring_live ? rb_pop_stereo_batch(out[0], out[1], size) : 0;
+    if (popped < size) {
+        // !ring_live also covers CloseWav()'s teardown window: it clears
+        // s_rb_live before clearing s_wav.open, so a callback landing in
+        // that gap sees open==true with a dead ring. That is a stop in
+        // progress, not a genuine buffer-starved underrun - counting it
+        // pollutes the "zero underruns" diagnostic on every stop.
+        const bool genuine_underrun = ring_live && s_wav.open;
+        for (size_t i = popped; i < size; ++i) {
+            // No audio should play on startup - output silence until audition
+            // commands. Requirement: "When daisy starts, no audio plays (no
+            // oscillator, no .wavs)". Also covers a mid-block ring-empty:
+            // output silence to prevent glitches.
+            out[0][i] = 0.0f;
+            out[1][i] = 0.0f;
         }
-
-        // Multiply by the reciprocal, not divide. VDIV.F32 on Cortex-M7 is
-        // ~14 cycles and does not pipeline, so two per sample is ~96 blocking
-        // divides per block on the streaming path. 1/32768 is an exact power
-        // of two, so this is bit-identical, not an approximation.
-        constexpr float kInt16ToFloat = 1.0f / 32768.0f;
-        out[0][i] = (float)l16 * kInt16ToFloat;
-        out[1][i] = (float)r16 * kInt16ToFloat;
+        if (genuine_underrun) {
+            // Signal underrun detection (logging handled in main loop)
+            __atomic_store_n(&s_underrun_detected, true, __ATOMIC_RELEASE);
+        }
     }
 
     // MIDI note path (roadmap Phase 1 item 8): apply pending note events,
@@ -2450,11 +2442,9 @@ void OnSampleLoad(const SampleLoadMessage& sl) {
     if (s_hw) {
         WaveX::Log::PrintLine("SAMPLE_LOAD: path='%s' id=%u", sl.path, (unsigned)sl.sample_id);
     }
-    // CRITICAL: Stop ALL SD activity (audition/playback) and ensure PumpWavIO is not running.
+    // CRITICAL: Stop ALL SD activity (playback) and ensure PumpWavIO is not running.
     // FatFS + SDMMC are NOT thread-safe or re-entrant. The main loop calls PumpWavIO() which
     // will conflict with f_open/f_read calls here if s_wav.open is true.
-    StopAudition();
-
     CloseWav();
 
     // Voices may still be reading the sample memory this load is about to
@@ -3312,7 +3302,7 @@ void PumpWavIO() {
 }
 
 // ============================================================================
-// Sample Audition Functions (for Sample Load/Save page)
+// Sample edit params (gain/loop/fade) for the Sample Load/Save page
 // ============================================================================
 
 // Shortest loop the streaming refill can sustain without re-seeking every
@@ -3442,41 +3432,6 @@ static void ApplyMetaToStreaming(const LoadedSampleInfo* info) {
                           (m.gain_db_x10 < 0 ? -m.gain_db_x10 : m.gain_db_x10) % 10,
                           (unsigned)m.fade_in_ms,
                           (unsigned)m.fade_out_ms);
-}
-
-bool AuditionSample(const char* path) {
-    // Stop any current audition first
-    StopAudition();
-
-    // Use the existing WAV playback system for audition
-    // This integrates with the pre-buffering system and avoids blocking I/O
-    if (!OpenWav(path)) {
-        if (s_hw)
-            WaveX::Log::PrintLine("AuditionSample: Failed to open WAV file for %s", path);
-        return false;
-    }
-
-    // Mark audition as active for tracking
-    s_audition.active = true;
-    std::strncpy(s_audition.current_path, path, sizeof(s_audition.current_path) - 1);
-    s_audition.current_path[sizeof(s_audition.current_path) - 1] = '\0';
-
-    if (s_hw) {
-        WaveX::Log::PrintLine("AuditionSample: Started audition of %s using WAV playback system",
-                              path);
-    }
-
-    return true;
-}
-
-void StopAudition() {
-    if (s_audition.active) {
-        // Stop the WAV playback system
-        CloseWav();
-        s_audition.active = false;
-        if (s_hw)
-            WaveX::Log::PrintLine("AuditionSample: Stopped audition");
-    }
 }
 
 }  // namespace AudioEngine

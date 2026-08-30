@@ -179,10 +179,6 @@ void OnSeqPatternOp(const WaveX::Protocol::SeqPatternOpMessage& m);
 void OnMidiClockEvent(const WaveX::Protocol::MidiClockEventMessage& m);
 void OnMidiCc(const WaveX::Protocol::MidiCcMessage& m);
 
-// Sample audition control (for Sample Load/Save page)
-bool AuditionSample(const char* path);
-void StopAudition();
-
 }  // namespace AudioEngine
 }  // namespace WaveX
 
