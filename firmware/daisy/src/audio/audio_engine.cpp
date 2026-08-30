@@ -1725,13 +1725,19 @@ void OnControlChange(const ControlChangeMessage& ctrl_msg) {
             // 10 kHz, where almost nothing audible happens, and crosses the
             // entire musically useful range in the first few percent.
             s_voice_live_params.filter_cutoff_hz = 20.0f * std::pow(1000.0f, norm);
-            s_voice_live_dirty = true;
+            // Release-store the flag: a plain/volatile write to the flag alone
+            // does not stop the compiler reordering the plain field stores
+            // above it past this one, which would let the callback's acquire-
+            // exchange observe dirty=true with a stale field (guide §6 - not a
+            // theoretical concern once this builds at -O2 instead of today's
+            // -O0). Same pattern as s_cv_dirty below.
+            __atomic_store_n(&s_voice_live_dirty, true, __ATOMIC_RELEASE);
             break;
         case PARAM_PAN:
             // Linear 0..1 across the wire's full range. Voice::pan is applied
             // as a gain pair per block, so this is click-free without smoothing.
             s_voice_live_params.pan = norm;
-            s_voice_live_dirty = true;
+            __atomic_store_n(&s_voice_live_dirty, true, __ATOMIC_RELEASE);
             break;
 
         case PARAM_PITCH: {
@@ -1740,14 +1746,14 @@ void OnControlChange(const ControlChangeMessage& ctrl_msg) {
             // far from unity that the interpolation artefacts dominate.
             constexpr float kPitchRangeSemis = 24.0f;
             s_voice_live_params.pitch_semitones = (norm * 2.0f - 1.0f) * kPitchRangeSemis;
-            s_voice_live_dirty = true;
+            __atomic_store_n(&s_voice_live_dirty, true, __ATOMIC_RELEASE);
             break;
         }
 
         case PARAM_FILTER_RESONANCE:
             s_para_params.resonance = norm;
             s_voice_live_params.filter_resonance = norm;  // svf_filter.hpp maps 0..1 onto Q
-            s_voice_live_dirty = true;
+            __atomic_store_n(&s_voice_live_dirty, true, __ATOMIC_RELEASE);
             break;
         case PARAM_ENVELOPE_ATTACK:
         case PARAM_ENVELOPE_DECAY:
@@ -1772,7 +1778,7 @@ void OnControlChange(const ControlChangeMessage& ctrl_msg) {
                                  s_para_params.decay_s,
                                  s_para_params.sustain,
                                  s_para_params.release_s);
-            s_voice_live_dirty = true;
+            __atomic_store_n(&s_voice_live_dirty, true, __ATOMIC_RELEASE);
             break;
         }
         case PARAM_MODULATION_MATRIX:
