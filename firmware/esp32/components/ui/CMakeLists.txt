@@ -23,6 +23,8 @@ set(COMPONENT_SRCS
     "src/ui_sample_browser.cpp"
     "src/ui_sample_memory_page.cpp"
     "pages/ui_keyboard_page.cpp"
+    "pages/ui_sample_manager_page.cpp"
+    "pages/ui_voice_page.cpp"
     "pages/ui_sample_record_page.cpp"
     "pages/ui_cv_cal_page.cpp"
     "pages/ui_sample_edit_page.cpp"

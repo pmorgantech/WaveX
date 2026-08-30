@@ -10,7 +10,9 @@
 #include "ui/ui_sample_browser.h"
 #include "ui/ui_sample_detail.h"
 #include "ui/ui_sample_edit_page.h"
+#include "ui/ui_sample_manager_page.h"
 #include "ui/ui_settings_page.h"
+#include "ui/ui_voice_page.h"
 
 static const char* TAG = "UI_MAIN_MENU";
 
@@ -31,6 +33,14 @@ std::shared_ptr<UIPage> createMainMenu() {
     menu->addItem("Edit Sample", []() {
         ESP_LOGI(TAG, "Edit Sample selected");
         UINavigator::instance().push(createSampleEditPage()); });
+
+    menu->addItem("Sample Manager", []() {
+        ESP_LOGI(TAG, "Opening Sample Manager");
+        UINavigator::instance().push(createSampleManagerPage()); });
+
+    menu->addItem("Voice", []() {
+        ESP_LOGI(TAG, "Opening Voice");
+        UINavigator::instance().push(createVoicePage()); });
 
     menu->addItem("Keyboard", []() {
         ESP_LOGI(TAG, "Opening Keyboard");

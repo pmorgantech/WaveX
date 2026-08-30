@@ -55,12 +55,16 @@ struct Voice {
     uint8_t src_channels = 1;  // interleave stride: 1 = mono, 2 = stereo (averaged to mono)
     float phase = 0.0f;        // fractional playback position, in frames
     float increment = 1.0f;    // playback rate (pitch), from note/root_note
-    float gain = 0.0f;         // 0..1, derived from velocity (× gain_mul)
-    float pan = 0.5f;          // 0=left, 1=right, linear (not equal-power)
-    uint8_t note = 0;          // MIDI note that triggered this voice
-    uint8_t slot = 0;          // instrument slot (kit/multitimbral) that owns this voice
-    uint8_t choke_group = 0;   // 0 = none; 1..N = mutual-exclusion group (open/closed hat)
-    uint32_t age = 0;          // trigger order, for stealing/release-newest-first
+    // The increment this voice's own note implies, before any live transpose.
+    // Kept so ApplyLiveParams can re-apply a pitch offset without losing key
+    // tracking - recomputing from `increment` would compound each edit.
+    float base_increment = 1.0f;
+    float gain = 0.0f;        // 0..1, derived from velocity (× gain_mul)
+    float pan = 0.5f;         // 0=left, 1=right, linear (not equal-power)
+    uint8_t note = 0;         // MIDI note that triggered this voice
+    uint8_t slot = 0;         // instrument slot (kit/multitimbral) that owns this voice
+    uint8_t choke_group = 0;  // 0 = none; 1..N = mutual-exclusion group (open/closed hat)
+    uint32_t age = 0;         // trigger order, for stealing/release-newest-first
 
     // Playback region + loop (item 4). end_frame/loop_end are exclusive.
     uint32_t start_frame = 0;
@@ -163,6 +167,10 @@ struct VoiceTriggerParams {
 struct VoiceLiveParams {
     float filter_cutoff_hz = 20000.0f;
     float filter_resonance = 0.0f;
+    // Sample-stage controls. 0.5 is centre; a semitone offset of 0 leaves the
+    // sample at its recorded pitch, so an untouched voice is unchanged.
+    float pan = 0.5f;
+    float pitch_semitones = 0.0f;
     float attack_s = 0.001f;
     float decay_s = 0.05f;
     float sustain_level = 0.8f;
@@ -191,6 +199,10 @@ class VoiceManager {
     // not cut off. Filter changes still apply to releasing voices, because a
     // sweep should stay audible through the release tail.
     void ApplyLiveParams(const VoiceLiveParams& p) {
+        // One pow() per call, not one per voice: this runs at block rate from
+        // the audio callback whenever a control moved, and eight of them would
+        // be eight transcendentals inside the deadline for no benefit.
+        live_pitch_scale_ = std::pow(2.0f, p.pitch_semitones / 12.0f);
         for (auto& v: voices_) {
             if (v.state != VoiceState::Playing)
                 continue;
@@ -199,6 +211,13 @@ class VoiceManager {
             if (!v.envelope.IsReleasing()) {
                 v.envelope.SetParams(p.attack_s, p.decay_s, p.sustain_level, p.release_s);
             }
+            // Pan is a gain pair recomputed per block in Render(), so writing
+            // it here is heard on the next block without a click.
+            v.pan = p.pan;
+            // Multiply the note's own increment rather than overwrite it, so a
+            // live transpose stacks on key tracking instead of flattening every
+            // voice to the same rate.
+            v.increment = v.base_increment * live_pitch_scale_;
         }
     }
 
@@ -256,11 +275,12 @@ class VoiceManager {
             (params.sample_rate_hz > 0)
                 ? static_cast<float>(params.sample_rate_hz) / static_cast<float>(sample_rate_)
                 : 1.0f;
-        v.increment = rate_ratio * params.pitch_ratio_mul *
-                      std::pow(2.0f,
-                               static_cast<float>(static_cast<int>(params.note) -
-                                                  static_cast<int>(params.root_note)) /
-                                   12.0f);
+        v.base_increment = rate_ratio * params.pitch_ratio_mul *
+                           std::pow(2.0f,
+                                    static_cast<float>(static_cast<int>(params.note) -
+                                                       static_cast<int>(params.root_note)) /
+                                        12.0f);
+        v.increment = v.base_increment * live_pitch_scale_;
 
         v.filter.Init(sample_rate_);
         v.filter.SetResonance(params.filter_resonance);
@@ -476,6 +496,9 @@ class VoiceManager {
     std::array<Voice, kNumVoices> voices_{};
     uint32_t next_age_ = 0;
     uint32_t sample_rate_ = 48000;
+    // Live transpose as a rate multiplier. 1.0 until something moves PARAM_PITCH,
+    // so a voice triggered before any edit sounds exactly as it did before.
+    float live_pitch_scale_ = 1.0f;
 };
 
 }  // namespace AudioEngine

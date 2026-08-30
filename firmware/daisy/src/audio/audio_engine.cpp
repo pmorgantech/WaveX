@@ -1689,6 +1689,23 @@ void OnControlChange(const ControlChangeMessage& ctrl_msg) {
             s_voice_live_params.filter_cutoff_hz = 20.0f * std::pow(1000.0f, norm);
             s_voice_live_dirty = true;
             break;
+        case PARAM_PAN:
+            // Linear 0..1 across the wire's full range. Voice::pan is applied
+            // as a gain pair per block, so this is click-free without smoothing.
+            s_voice_live_params.pan = norm;
+            s_voice_live_dirty = true;
+            break;
+
+        case PARAM_PITCH: {
+            // +/- 24 semitones around centre. Two octaves each way is enough to
+            // play a sample as an instrument without the resampler running so
+            // far from unity that the interpolation artefacts dominate.
+            constexpr float kPitchRangeSemis = 24.0f;
+            s_voice_live_params.pitch_semitones = (norm * 2.0f - 1.0f) * kPitchRangeSemis;
+            s_voice_live_dirty = true;
+            break;
+        }
+
         case PARAM_FILTER_RESONANCE:
             s_para_params.resonance = norm;
             s_voice_live_params.filter_resonance = norm;  // svf_filter.hpp maps 0..1 onto Q

@@ -139,6 +139,12 @@ enum ControlParameter : uint8_t {
     PARAM_ENVELOPE_DECAY = 0x05,
     PARAM_ENVELOPE_SUSTAIN = 0x06,
     PARAM_ENVELOPE_RELEASE = 0x07,
+    // Sample-stage controls. Added with the Voice page: the chain it draws
+    // starts at the sample (pitch, pan, gain), and shipping two of those three
+    // as controls the protocol cannot carry would repeat the "drawn but inert"
+    // problem the sample edit page already had.
+    PARAM_PAN = 0x08,    // 0 = hard left, 32768 = centre, 65535 = hard right
+    PARAM_PITCH = 0x09,  // semitone offset, 32768 = no transposition
     PARAM_LFO_RATE = 0x08,
     PARAM_LFO_DEPTH = 0x09,
     PARAM_MODULATION_MATRIX = 0x0A
