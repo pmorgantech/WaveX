@@ -2,6 +2,7 @@
 
 #include "comm/i_comm_interface.h"
 #include "comm/statistics.h"
+#include "esp_app_desc.h"
 #include "esp_log.h"
 #include "freertos/task.h"
 
@@ -287,33 +288,54 @@ UBaseType_t uxTaskGetStackHighWaterMark(TaskHandle_t xTask) {
     return 1024;  // Mock stack high water mark
 }
 
-// Mock inter_mcu functions (stubs for testing)
-// These are called from packet_router.cpp
+// Mock inter_mcu functions. These are called from packet_router.cpp's real
+// handlers; every call is recorded so tests can assert content at the
+// production/inter_mcu boundary rather than just "did not crash".
+namespace WaveX {
+namespace Test {
+
+InterMcuCapture& GetInterMcuCapture() {
+    static InterMcuCapture capture;
+    return capture;
+}
+
+void ResetInterMcuCapture() {
+    GetInterMcuCapture() = InterMcuCapture{};
+}
+
+}  // namespace Test
+}  // namespace WaveX
+
+using WaveX::Test::GetInterMcuCapture;
+
 void inter_mcu_update_backend_meters(float rms_left,
                                      float rms_right,
                                      float peak_left,
                                      float peak_right) {
-    (void)rms_left;
-    (void)rms_right;
-    (void)peak_left;
-    (void)peak_right;
-    // Stub implementation for tests
+    auto& cap = GetInterMcuCapture();
+    cap.meter_calls++;
+    cap.meter_rms_left = rms_left;
+    cap.meter_rms_right = rms_right;
+    cap.meter_peak_left = peak_left;
+    cap.meter_peak_right = peak_right;
 }
 
 void inter_mcu_invoke_browse_resp_callback(const uint8_t* data, size_t length) {
-    (void)data;
-    (void)length;
-    // Stub implementation for tests
+    auto& cap = GetInterMcuCapture();
+    cap.browse_resp_calls++;
+    cap.browse_resp_data.assign(data, data + length);
 }
 
 void inter_mcu_invoke_storage_status_callback(bool mounted) {
-    (void)mounted;
-    // Stub implementation for tests
+    auto& cap = GetInterMcuCapture();
+    cap.storage_status_calls++;
+    cap.storage_status_mounted = mounted;
 }
 
 void inter_mcu_store_diag_push(const WaveX::Protocol::DiagPushMessage& msg) {
-    (void)msg;
-    // Stub implementation for tests
+    auto& cap = GetInterMcuCapture();
+    cap.diag_push_calls++;
+    cap.last_diag_push = msg;
 }
 
 bool inter_mcu_get_diag_push(WaveX::Protocol::DiagPushMessage* out, uint32_t max_age_ms) {
@@ -323,7 +345,9 @@ bool inter_mcu_get_diag_push(WaveX::Protocol::DiagPushMessage* out, uint32_t max
 }
 
 void inter_mcu_store_sample_meta(const WaveX::Protocol::SampleMetadata& msg) {
-    (void)msg;
+    auto& cap = GetInterMcuCapture();
+    cap.sample_meta_calls++;
+    cap.last_sample_meta = msg;
 }
 
 bool inter_mcu_get_sample_meta(uint16_t sample_id, WaveX::Protocol::SampleMetadata* out) {
@@ -365,8 +389,9 @@ esp_err_t inter_mcu_send_diag_subscribe(bool enable, uint8_t interval_hz) {
 }
 
 void inter_mcu_handle_sample_stop_response(bool success) {
-    (void)success;
-    // Stub implementation for tests
+    auto& cap = GetInterMcuCapture();
+    cap.stop_resp_calls++;
+    cap.stop_resp_success = success;
 }
 
 void inter_mcu_update_backend_heartbeat_detailed(uint32_t uptime_ms,
@@ -375,18 +400,25 @@ void inter_mcu_update_backend_heartbeat_detailed(uint32_t uptime_ms,
                                                  float cpu_avg_percent,
                                                  float cpu_min_percent,
                                                  float cpu_max_percent) {
-    (void)uptime_ms;
-    (void)rx_total;
-    (void)loop_counter;
-    (void)cpu_avg_percent;
-    (void)cpu_min_percent;
-    (void)cpu_max_percent;
-    // Stub implementation for tests
+    auto& cap = GetInterMcuCapture();
+    cap.heartbeat_calls++;
+    cap.hb_uptime_ms = uptime_ms;
+    cap.hb_rx_total = rx_total;
+    cap.hb_loop_counter = loop_counter;
+    cap.hb_cpu_avg = cpu_avg_percent;
+    cap.hb_cpu_min = cpu_min_percent;
+    cap.hb_cpu_max = cpu_max_percent;
 }
 
 // Additional ESP-IDF mock functions
 unsigned int esp_get_free_heap_size() {
     return 1024 * 1024;  // Mock 1MB free heap
+}
+
+extern "C" const esp_app_desc_t* esp_app_get_description(void) {
+    static const esp_app_desc_t desc = {
+        "0.0.0-test", "wavex-test", "00:00:00", "1970-01-01", "mock"};
+    return &desc;
 }
 
 const char* esp_err_to_name(esp_err_t code) {
@@ -400,42 +432,57 @@ const char* esp_err_to_name(esp_err_t code) {
     }
 }
 
-// Additional mock functions for WaveXApplication tests
+// WaveXApplication lifecycle mocks. Results are configurable through
+// InterMcuCapture so init-failure ordering can be tested.
 esp_err_t inter_mcu_init(StatisticsManager& statistics) {
     (void)statistics;
-    return ESP_OK;
+    auto& cap = GetInterMcuCapture();
+    cap.inter_mcu_init_calls++;
+    return cap.inter_mcu_init_result;
 }
 
 esp_err_t inter_mcu_start() {
-    return ESP_OK;
+    auto& cap = GetInterMcuCapture();
+    cap.inter_mcu_start_calls++;
+    return cap.inter_mcu_start_result;
 }
 
 esp_err_t pcnt_task_init() {
-    return ESP_OK;
+    auto& cap = GetInterMcuCapture();
+    cap.pcnt_init_calls++;
+    return cap.pcnt_init_result;
 }
 
 esp_err_t pcnt_task_start() {
-    return ESP_OK;
+    auto& cap = GetInterMcuCapture();
+    cap.pcnt_start_calls++;
+    return cap.pcnt_start_result;
 }
 
 esp_err_t wavex_ui_task_start(WaveX::Comm::ICommInterface& comm_interface) {
     (void)comm_interface;
-    return ESP_OK;
+    auto& cap = GetInterMcuCapture();
+    cap.ui_start_calls++;
+    return cap.ui_start_result;
 }
 
 // Additional inter_mcu mock functions for CommInterfaceImpl
 esp_err_t inter_mcu_send_sample_play_index_req(uint32_t file_index, uint16_t loop_gap_ms) {
-    (void)file_index;
     (void)loop_gap_ms;
-    return ESP_OK;
+    auto& cap = GetInterMcuCapture();
+    cap.play_index_req_calls++;
+    cap.play_index_file_index = file_index;
+    return cap.send_result;
 }
 
 esp_err_t inter_mcu_send_sample_stop_req() {
-    return ESP_OK;
+    auto& cap = GetInterMcuCapture();
+    cap.stop_req_calls++;
+    return cap.send_result;
 }
 
 bool inter_mcu_is_busy() {
-    return false;
+    return GetInterMcuCapture().busy;
 }
 
 // FreeRTOS tick conversion macros are defined in esp32_mocks.h

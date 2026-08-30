@@ -216,13 +216,23 @@ void wavex_ui_mark_content_changed(void) {
 }
 
 // Mock inter-MCU functions (C++ linkage - declared without extern "C" in inter_mcu.h)
+#include "esp32_mocks.h"
+
+#include <cstring>
+
 typedef void (*wavex_browse_resp_cb_t)(const uint8_t* data, size_t length, void* user_data);
 void inter_mcu_set_browse_resp_listener(wavex_browse_resp_cb_t cb, void* user_data) {
     (void)cb;
     (void)user_data;
 }
 esp_err_t inter_mcu_send_browse_req(const char* path, uint8_t start_index) {
-    (void)path;
-    (void)start_index;
-    return ESP_OK;  // Return success for testing
+    auto& cap = WaveX::Test::GetInterMcuCapture();
+    cap.browse_req_calls++;
+    cap.browse_req_path[0] = '\0';
+    if (path) {
+        strncpy(cap.browse_req_path, path, sizeof(cap.browse_req_path) - 1);
+        cap.browse_req_path[sizeof(cap.browse_req_path) - 1] = '\0';
+    }
+    cap.browse_req_start_index = start_index;
+    return cap.send_result;
 }

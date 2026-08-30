@@ -3,31 +3,21 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <string>
+#include <vector>
 
 // Include mock headers to get type definitions
+#include "../../mocks/esp32_mocks.h"
+#include "comm/comm_interface_impl.h"
+#include "comm/statistics.h"
 #include "file_browser.h"
 #include "lvgl.h"
+#include "spi_protocol/protocol.h"
 #include "ui_theme.h"
 
-// Mock inter-MCU functions (implementations are in ui_mocks.cpp, but we need declarations here)
-extern "C" {
-void wavex_ui_mark_content_changed() {}
-}
-
-// Mock ESP-IDF functions
-extern "C" {
-void esp_log_write(int level, const char* tag, const char* format, ...) {
-    (void)level;
-    (void)tag;
-    (void)format;
-}
-int64_t esp_timer_get_time(void) {
-    static int64_t t = 0;
-    return t++;
-}
-}
-
-// Mock ESP-LVGL port
+// wavex_ui_mark_content_changed and esp_timer_get_time are provided by
+// ui_mocks.cpp / esp32_mocks.cpp; only the LVGL port lock has no other
+// definition in the test build.
 extern "C" {
 void esp_lvgl_port_lock(void) {}
 void esp_lvgl_port_unlock(void) {}
@@ -342,4 +332,286 @@ TEST_F(FileBrowserTest, MultipleNavigateUp) {
     EXPECT_EQ(4u, browser->selected_index);
 
     DestroyBrowser(browser);
+}
+
+// ===========================================================================
+// Browse-response path: a browser created over a REAL CommInterfaceImpl and
+// StatisticsManager, fed real wire payloads through the same listener slot
+// production uses. This exercises file_browser.cpp's response parsing,
+// pagination, ".." sorting, and truncation handling - the logic the
+// navigation tests above cannot reach.
+// ===========================================================================
+
+using WaveX::Protocol::BrowseRespHeader;
+using WaveX::Protocol::FileEntryWire;
+using WaveX::Test::GetInterMcuCapture;
+using WaveX::Test::ResetInterMcuCapture;
+
+namespace {
+
+std::vector<uint8_t> BuildBrowsePayload(uint32_t total_count,
+                                        const std::vector<FileEntryWire>& entries) {
+    BrowseRespHeader header(total_count, static_cast<uint8_t>(entries.size()));
+    std::vector<uint8_t> payload(sizeof(header) + entries.size() * sizeof(FileEntryWire));
+    memcpy(payload.data(), &header, sizeof(header));
+    if (!entries.empty()) {
+        memcpy(payload.data() + sizeof(header),
+               entries.data(),
+               entries.size() * sizeof(FileEntryWire));
+    }
+    return payload;
+}
+
+}  // namespace
+
+class FileBrowserResponseTest : public ::testing::Test {
+   protected:
+    void SetUp() override {
+        ResetInterMcuCapture();
+        stats_ = new StatisticsManager();
+        comm_ = new WaveX::Comm::CommInterfaceImpl(*stats_);
+
+        config_ = wavex_file_browser_config_t{};
+        config_.root_path = "/";
+        config_.file_extension = ".wav";
+        config_.max_entries = 50;
+        config_.show_hidden = false;
+        config_.comm_interface = comm_;
+
+        browser_ = wavex_file_browser_create(reinterpret_cast<lv_obj_t*>(&parent_), &config_);
+        ASSERT_NE(browser_, nullptr);
+    }
+
+    void TearDown() override {
+        if (browser_) {
+            wavex_file_browser_destroy(browser_);
+        }
+        delete comm_;
+        comm_ = nullptr;
+        delete stats_;
+        stats_ = nullptr;
+    }
+
+    // Delivers a browse response exactly the way the UART RX task does: via
+    // the statistics manager's listener slot.
+    void Respond(uint32_t total_count, const std::vector<FileEntryWire>& entries) {
+        std::vector<uint8_t> payload = BuildBrowsePayload(total_count, entries);
+        stats_->invoke_browse_resp_callback(payload.data(), payload.size());
+    }
+
+    int parent_ = 0;  // opaque dummy for the LVGL mock
+    StatisticsManager* stats_ = nullptr;
+    WaveX::Comm::CommInterfaceImpl* comm_ = nullptr;
+    wavex_file_browser_config_t config_{};
+    wavex_file_browser_t* browser_ = nullptr;
+};
+
+TEST_F(FileBrowserResponseTest, CreateSendsInitialBrowseRequestForRoot) {
+    const auto& cap = GetInterMcuCapture();
+    EXPECT_EQ(cap.browse_req_calls, 1);
+    EXPECT_STREQ(cap.browse_req_path, "/");
+    EXPECT_EQ(cap.browse_req_start_index, 0);
+    // Unknown storage state must present as mounted until told otherwise.
+    EXPECT_TRUE(wavex_file_browser_is_storage_mounted(browser_));
+}
+
+TEST_F(FileBrowserResponseTest, SinglePageResponsePopulatesEntriesWithMetadata) {
+    Respond(2,
+            {FileEntryWire(1, 0, "DRUMS"), FileEntryWire(0, 88200, "kick.wav", 44100, 2, 16, 500)});
+
+    ASSERT_EQ(wavex_file_browser_get_entry_count(browser_), 2u);
+
+    const wavex_file_entry_t* dir = wavex_file_browser_get_entry(browser_, 0);
+    ASSERT_NE(dir, nullptr);
+    EXPECT_STREQ(dir->name, "DRUMS");
+    EXPECT_TRUE(dir->is_directory);
+
+    const wavex_file_entry_t* file = wavex_file_browser_get_entry(browser_, 1);
+    ASSERT_NE(file, nullptr);
+    EXPECT_STREQ(file->name, "kick.wav");
+    EXPECT_FALSE(file->is_directory);
+    EXPECT_EQ(file->size_bytes, 88200u);
+    EXPECT_EQ(file->sample_rate, 44100u);
+    EXPECT_EQ(file->channels, 2);
+    EXPECT_EQ(file->bits_per_sample, 16);
+    EXPECT_EQ(file->duration_ms, 500u);
+}
+
+// A leading slash in the wire name (the Daisy sometimes sends one) must be
+// stripped, and paths under a subdirectory must join without double slashes.
+TEST_F(FileBrowserResponseTest, SubdirectoryPathsAreJoinedCorrectly) {
+    wavex_file_browser_navigate_to(browser_, "/SOUNDS");
+    Respond(2, {FileEntryWire(0, 100, "/kick.wav"), FileEntryWire(0, 200, "snare.wav")});
+
+    ASSERT_EQ(wavex_file_browser_get_entry_count(browser_), 2u);
+    const wavex_file_entry_t* first = wavex_file_browser_get_entry(browser_, 0);
+    ASSERT_NE(first, nullptr);
+    EXPECT_STREQ(first->name, "kick.wav") << "leading slash was not stripped";
+    EXPECT_STREQ(first->path, "/SOUNDS/kick.wav");
+    const wavex_file_entry_t* second = wavex_file_browser_get_entry(browser_, 1);
+    ASSERT_NE(second, nullptr);
+    EXPECT_STREQ(second->path, "/SOUNDS/snare.wav");
+}
+
+// ".." must be hoisted to the top of the first page when not at root, so the
+// user can always leave a directory without scrolling.
+TEST_F(FileBrowserResponseTest, ParentDirEntryIsSortedFirstOutsideRoot) {
+    wavex_file_browser_navigate_to(browser_, "/SOUNDS");
+    Respond(3,
+            {FileEntryWire(0, 100, "a.wav"),
+             FileEntryWire(1, 0, ".."),
+             FileEntryWire(0, 200, "b.wav")});
+
+    ASSERT_EQ(wavex_file_browser_get_entry_count(browser_), 3u);
+    EXPECT_STREQ(wavex_file_browser_get_entry(browser_, 0)->name, "..");
+    EXPECT_STREQ(wavex_file_browser_get_entry(browser_, 1)->name, "a.wav");
+    EXPECT_STREQ(wavex_file_browser_get_entry(browser_, 2)->name, "b.wav");
+}
+
+// More files than one page: the first page must display immediately AND
+// trigger a follow-up request at the right start index; the second response
+// must append, not replace.
+TEST_F(FileBrowserResponseTest, PaginationRequestsNextPageAndAccumulates) {
+    const auto& cap = GetInterMcuCapture();
+    ASSERT_EQ(cap.browse_req_calls, 1);  // from create
+
+    std::vector<FileEntryWire> page0;
+    for (int i = 0; i < 20; ++i) {
+        char name[16];
+        snprintf(name, sizeof(name), "f%02d.wav", i);
+        page0.push_back(FileEntryWire(0, 100 + i, name));
+    }
+    Respond(25, page0);
+
+    // First page is visible immediately...
+    EXPECT_EQ(wavex_file_browser_get_entry_count(browser_), 20u);
+    // ...and the next page was requested where this one ended.
+    EXPECT_EQ(cap.browse_req_calls, 2);
+    EXPECT_EQ(cap.browse_req_start_index, 20);
+
+    std::vector<FileEntryWire> page1;
+    for (int i = 20; i < 25; ++i) {
+        char name[16];
+        snprintf(name, sizeof(name), "f%02d.wav", i);
+        page1.push_back(FileEntryWire(0, 100 + i, name));
+    }
+    Respond(25, page1);
+
+    ASSERT_EQ(wavex_file_browser_get_entry_count(browser_), 25u);
+    EXPECT_STREQ(wavex_file_browser_get_entry(browser_, 0)->name, "f00.wav");
+    EXPECT_STREQ(wavex_file_browser_get_entry(browser_, 24)->name, "f24.wav");
+    // Pagination is complete: no third request.
+    EXPECT_EQ(cap.browse_req_calls, 2);
+}
+
+// An empty listing is authoritative and can arrive UNSOLICITED (SD ejected):
+// it must clear the stale listing and reset the selection.
+TEST_F(FileBrowserResponseTest, UnsolicitedEmptyResponseClearsStaleListing) {
+    Respond(2, {FileEntryWire(0, 100, "a.wav"), FileEntryWire(0, 200, "b.wav")});
+    ASSERT_EQ(wavex_file_browser_get_entry_count(browser_), 2u);
+    wavex_file_browser_set_selection(browser_, 1);
+
+    Respond(0, {});
+
+    EXPECT_EQ(wavex_file_browser_get_entry_count(browser_), 0u);
+    EXPECT_EQ(wavex_file_browser_get_selected_index(browser_), 0u);
+    EXPECT_EQ(wavex_file_browser_get_selected(browser_), nullptr);
+}
+
+// Truncated / malformed payloads must be rejected without touching memory
+// past the buffer; the browser presents an empty (error) listing.
+TEST_F(FileBrowserResponseTest, MalformedPayloadsAreRejected) {
+    Respond(1, {FileEntryWire(0, 100, "a.wav")});
+    ASSERT_EQ(wavex_file_browser_get_entry_count(browser_), 1u);
+
+    // Shorter than the header.
+    uint8_t junk[3] = {0x01, 0x02, 0x03};
+    stats_->invoke_browse_resp_callback(junk, sizeof(junk));
+    EXPECT_EQ(wavex_file_browser_get_entry_count(browser_), 0u);
+
+    // Header claims more entries than the payload carries. Refresh first so
+    // the browser is in a clean listing cycle.
+    wavex_file_browser_refresh(browser_);
+    Respond(1, {FileEntryWire(0, 100, "a.wav")});
+    ASSERT_EQ(wavex_file_browser_get_entry_count(browser_), 1u);
+    std::vector<uint8_t> lying = BuildBrowsePayload(5, {FileEntryWire(0, 100, "a.wav")});
+    BrowseRespHeader bad_header(5, 5);  // claims 5 entries, carries 1
+    memcpy(lying.data(), &bad_header, sizeof(bad_header));
+    stats_->invoke_browse_resp_callback(lying.data(), lying.size());
+    EXPECT_EQ(wavex_file_browser_get_entry_count(browser_), 0u);
+}
+
+// A name at the wire-format maximum (47 chars + NUL) must survive intact,
+// and a full path longer than the 96-byte path field must be truncated with
+// termination, not overflowed.
+TEST_F(FileBrowserResponseTest, NamesAtBufferLimitAreBoundedAndTerminated) {
+    std::string long_name(43, 'n');
+    long_name += ".wav";  // 47 chars: the longest name the wire can carry
+    ASSERT_EQ(long_name.size(), 47u);
+
+    std::string deep_path = "/";
+    deep_path += std::string(70, 'd');  // 71-char directory path
+    wavex_file_browser_navigate_to(browser_, deep_path.c_str());
+
+    Respond(1, {FileEntryWire(0, 100, long_name.c_str())});
+
+    ASSERT_EQ(wavex_file_browser_get_entry_count(browser_), 1u);
+    const wavex_file_entry_t* entry = wavex_file_browser_get_entry(browser_, 0);
+    ASSERT_NE(entry, nullptr);
+    EXPECT_STREQ(entry->name, long_name.c_str());
+
+    // 71 (dir) + 1 (slash) + 47 (name) = 119 > 95: must truncate in-bounds.
+    EXPECT_EQ(strlen(entry->path), sizeof(entry->path) - 1);
+    EXPECT_EQ(strncmp(entry->path, deep_path.c_str(), deep_path.size()), 0);
+}
+
+TEST_F(FileBrowserResponseTest, MaxEntriesCapIsRespected) {
+    // Rebuild with a small cap.
+    wavex_file_browser_destroy(browser_);
+    config_.max_entries = 5;
+    browser_ = wavex_file_browser_create(reinterpret_cast<lv_obj_t*>(&parent_), &config_);
+    ASSERT_NE(browser_, nullptr);
+
+    std::vector<FileEntryWire> page;
+    for (int i = 0; i < 10; ++i) {
+        char name[16];
+        snprintf(name, sizeof(name), "f%02d.wav", i);
+        page.push_back(FileEntryWire(0, 100, name));
+    }
+    Respond(10, page);
+
+    EXPECT_EQ(wavex_file_browser_get_entry_count(browser_), 5u);
+    // The cap also ends pagination: no follow-up request for entries that
+    // could never be stored.
+    EXPECT_EQ(GetInterMcuCapture().browse_req_calls, 2);  // create + rebuild only
+}
+
+// SD-eject then re-insert: the mounted flag must track the notifications, and
+// a re-insert must re-list the current directory automatically.
+TEST_F(FileBrowserResponseTest, StorageStatusUpdatesFlagAndRelistsOnMount) {
+    const auto& cap = GetInterMcuCapture();
+    ASSERT_EQ(cap.browse_req_calls, 1);
+
+    stats_->invoke_storage_status_callback(false);
+    EXPECT_FALSE(wavex_file_browser_is_storage_mounted(browser_));
+    EXPECT_EQ(cap.browse_req_calls, 1) << "loss must not trigger a re-list";
+
+    stats_->invoke_storage_status_callback(true);
+    EXPECT_TRUE(wavex_file_browser_is_storage_mounted(browser_));
+    EXPECT_EQ(cap.browse_req_calls, 2) << "re-insert must re-list";
+    EXPECT_STREQ(cap.browse_req_path, "/");
+}
+
+// Destroy must deregister both listeners BEFORE freeing: a response arriving
+// after destroy (reachable by pressing Back mid-pagination) must be a no-op,
+// not a write through freed memory.
+TEST_F(FileBrowserResponseTest, DestroyDeregistersListeners) {
+    wavex_file_browser_destroy(browser_);
+    browser_ = nullptr;
+
+    Respond(1, {FileEntryWire(0, 100, "late.wav")});
+    stats_->invoke_storage_status_callback(true);
+    // Reaching here without touching freed memory is the point; ASan/valgrind
+    // turns a regression into a hard failure.
+    SUCCEED();
 }

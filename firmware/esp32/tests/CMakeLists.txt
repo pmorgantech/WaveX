@@ -61,9 +61,24 @@ include_directories(
 # Test library with ESP32 source files (excluding problematic files)
 # Exclude shared_packet_handler.cpp as it uses functions not in ProtocolHandler
 # Exclude inter_mcu.cpp as it has external dependencies (uart_link, UI functions)
-# Exclude wavex_application.cpp as it has many ESP-IDF dependencies
+#
+# packet_router.cpp's message handlers are declared weak under
+# WAVEX_TEST_BUILD, so a test TU may provide strong overrides for the handlers
+# it wants to observe; tests that don't override them get the real handlers,
+# which report into the inter_mcu capture mocks. This is why a single library
+# serves every test executable.
+#
+# wavex_application.cpp calls three functions whose headers (pcnt_task.h,
+# ui_task.h) only declare them on-target; the forced include supplies host
+# declarations, and esp32_mocks.cpp supplies configurable definitions.
+set_source_files_properties(${CMAKE_CURRENT_SOURCE_DIR}/../main/wavex_application.cpp
+    PROPERTIES COMPILE_OPTIONS
+    "-include;${CMAKE_CURRENT_SOURCE_DIR}/mocks/wavex_application_host_decls.h"
+)
+
 add_library(wavex_esp32_test_lib STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/../main/application_context.cpp  # Include for testing
+    ${CMAKE_CURRENT_SOURCE_DIR}/../main/wavex_application.cpp  # Application lifecycle
     ${CMAKE_CURRENT_SOURCE_DIR}/../main/comm/packet_router.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../main/comm/statistics.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../main/comm/comm_interface_impl.cpp  # Include for testing
@@ -96,41 +111,6 @@ target_link_libraries(wavex_esp32_test_lib PUBLIC
     GTest::gtest
 )
 
-# Separate test library for packet_router_test with mock handlers
-add_library(wavex_esp32_test_lib_no_router STATIC
-    ${CMAKE_CURRENT_SOURCE_DIR}/../main/application_context.cpp  # Include for testing
-    ${CMAKE_CURRENT_SOURCE_DIR}/../main/comm/packet_router.cpp   # Include packet_router but with weak handlers
-    ${CMAKE_CURRENT_SOURCE_DIR}/../main/comm/statistics.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../main/comm/comm_interface_impl.cpp  # Include for testing
-    ${CMAKE_CURRENT_SOURCE_DIR}/../components/ui/components/envelope_cache.cpp  # Waveform envelope cache
-    ${CMAKE_CURRENT_SOURCE_DIR}/../components/ui/components/file_browser.cpp  # File browser navigation logic
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../shared/uart_protocol/uart_protocol.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../shared/spi_protocol/protocol.cpp  # Add protocol.cpp for ProtocolHandler
-    ${CMAKE_CURRENT_SOURCE_DIR}/mocks/esp32_mocks.cpp  # Include mock implementations
-    ${CMAKE_CURRENT_SOURCE_DIR}/mocks/ui_mocks.cpp  # Include UI mock implementations
-    ${CMAKE_CURRENT_SOURCE_DIR}/mocks/inter_mcu_mocks.cpp  # Mock inter-mcu linkage
-    ${CMAKE_CURRENT_SOURCE_DIR}/utils/test_helpers.cpp  # Include test helpers
-)
-
-target_include_directories(wavex_esp32_test_lib_no_router PUBLIC
-    ${CMAKE_CURRENT_SOURCE_DIR}/../main
-    ${CMAKE_CURRENT_SOURCE_DIR}/../main/comm
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../shared
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../shared/config
-    ${CMAKE_CURRENT_SOURCE_DIR}/mocks  # For esp_err.h, esp_timer.h mocks
-)
-
-target_compile_definitions(wavex_esp32_test_lib_no_router PUBLIC
-    UNIT_TEST
-    ESP_PLATFORM
-    WAVEX_TEST_BUILD
-)
-
-target_link_libraries(wavex_esp32_test_lib_no_router PUBLIC
-    Threads::Threads
-    GTest::gtest
-)
-
 enable_testing()
 
 # Function to add a test executable
@@ -139,15 +119,8 @@ function(add_wavex_esp32_test test_source)
 
     add_executable(${test_name} ${test_source})
 
-    # Use different library for packet_router_test to avoid linking real handlers
-    if(${test_name} STREQUAL "packet_router_test")
-        set(TEST_LIB wavex_esp32_test_lib_no_router)
-    else()
-        set(TEST_LIB wavex_esp32_test_lib)
-    endif()
-
     target_link_libraries(${test_name} PUBLIC
-        ${TEST_LIB}
+        wavex_esp32_test_lib
         Threads::Threads
         GTest::gtest_main
     )
@@ -172,9 +145,6 @@ endfunction()
 # Auto-discover and add all test files
 file(GLOB_RECURSE unit_tests "${CMAKE_CURRENT_SOURCE_DIR}/unit/*_test.cpp")
 file(GLOB_RECURSE integration_tests "${CMAKE_CURRENT_SOURCE_DIR}/integration/*_test.cpp")
-
-# Exclude WaveXApplication test as it has many ESP-IDF dependencies
-list(FILTER unit_tests EXCLUDE REGEX ".*wavex_application_test\.cpp$")
 
 foreach(test_file IN LISTS unit_tests integration_tests)
     add_wavex_esp32_test(${test_file})

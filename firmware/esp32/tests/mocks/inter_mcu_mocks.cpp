@@ -1,5 +1,8 @@
 #include "../main/comm/packet_router.h"
 #include "../main/inter_mcu.h"
+#include "esp32_mocks.h"
+
+using WaveX::Test::GetInterMcuCapture;
 
 // esp_uart_link.cpp (real UART/FreeRTOS driver code) isn't compiled into the
 // host test libraries; application_context.cpp still calls this at
@@ -24,13 +27,15 @@ esp_err_t inter_mcu_send_sample_load_req(uint16_t sample_id,
 }
 
 esp_err_t inter_mcu_send_sample_data(const uint8_t* data, size_t length) {
-    (void)data;
-    (void)length;
-    return ESP_OK;
+    auto& cap = GetInterMcuCapture();
+    cap.sample_data_calls++;
+    cap.sample_data.assign(data, data + length);
+    return cap.send_result;
 }
 
 void inter_mcu_update_sample_mem_status(const wavex_sample_mem_status_t& status) {
     (void)status;
+    GetInterMcuCapture().sample_mem_status_calls++;
 }
 
 void inter_mcu_invoke_sample_status_callback(uint16_t sample_id,
@@ -38,25 +43,32 @@ void inter_mcu_invoke_sample_status_callback(uint16_t sample_id,
                                              uint32_t sample_rate,
                                              uint8_t channels,
                                              uint32_t frames_played) {
-    (void)sample_id;
-    (void)state;
-    (void)sample_rate;
-    (void)channels;
-    (void)frames_played;
+    auto& cap = GetInterMcuCapture();
+    cap.sample_status_calls++;
+    cap.sample_status_id = sample_id;
+    cap.sample_status_state = state;
+    cap.sample_status_rate = sample_rate;
+    cap.sample_status_channels = channels;
+    cap.sample_status_frames = frames_played;
 }
 
 void inter_mcu_invoke_cv_cal_callback(const WaveX::Protocol::CvCalMessage& cal) {
-    (void)cal;  // mock: no listener plumbing needed in host tests
+    (void)cal;
+    GetInterMcuCapture().cv_cal_calls++;
 }
 
 void inter_mcu_invoke_wave_chunk_callback(uint32_t offset, const int16_t* samples, uint16_t count) {
-    (void)offset;
-    (void)samples;
-    (void)count;
+    auto& cap = GetInterMcuCapture();
+    cap.wave_chunk_calls++;
+    cap.wave_chunk_offset = offset;
+    cap.wave_chunk_samples.assign(samples, samples + count);
 }
 
 void inter_mcu_invoke_envelope_chunk_callback(const WaveX::Protocol::EnvelopeChunkMessage& header,
                                               const WaveX::Protocol::EnvelopeColumn* columns) {
-    (void)header;
-    (void)columns;
+    auto& cap = GetInterMcuCapture();
+    cap.envelope_chunk_calls++;
+    cap.envelope_header = header;
+    cap.envelope_columns.assign(columns,
+                                columns + static_cast<size_t>(header.columns) * header.channels);
 }

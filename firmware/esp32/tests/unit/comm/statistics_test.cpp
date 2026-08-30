@@ -7,23 +7,11 @@
 
 #include <gtest/gtest.h>
 
-// Mock FreeRTOS functions for unit testing
-#ifdef WAVEX_TEST_BUILD
-extern "C" {
-// Undefine FreeRTOS macros to avoid conflicts
-#undef taskENTER_CRITICAL
-#undef taskEXIT_CRITICAL
+#include <cstring>
 
-// Mock critical section functions
-void taskENTER_CRITICAL(portMUX_TYPE* mux) {
-    (void)mux;  // No-op for tests
-}
-
-void taskEXIT_CRITICAL(portMUX_TYPE* mux) {
-    (void)mux;  // No-op for tests
-}
-}
-#endif
+// The critical-section macros are provided as no-ops by the portmacro.h mock;
+// statistics.cpp compiles against those directly, so nothing needs redefining
+// here.
 
 namespace {
 
@@ -349,6 +337,199 @@ TEST_F(StatisticsManagerTest, GetTotalPacketCount) {
 
     stats->increment_invalid_packet();
     EXPECT_EQ(stats->get_total_packet_count(), 2);
+}
+
+// The Daisy used to send meter/wave/heartbeat under 0x0D/0x0E/0x0F; the
+// legacy ids must still land in the same buckets as the current ones.
+TEST_F(StatisticsManagerTest, LegacyMessageTypeAliasesShareBuckets) {
+    stats->increment_packet_stat(0x0D);  // legacy METER_PUSH
+    stats->increment_packet_stat(0x10);  // current METER_PUSH
+    stats->increment_packet_stat(0x0E);  // legacy WAVE_CHUNK
+    stats->increment_packet_stat(0x11);  // current WAVE_CHUNK
+    stats->increment_packet_stat(0x0F);  // legacy HEARTBEAT
+    stats->increment_packet_stat(0x12);  // current HEARTBEAT
+
+    wavex_packet_stats_t s;
+    stats->get_packet_stats(&s);
+    EXPECT_EQ(s.meter_push_packets, 2u);
+    EXPECT_EQ(s.wave_chunk_packets, 2u);
+    EXPECT_EQ(s.heartbeat_packets, 2u);
+    EXPECT_EQ(s.unknown_packets, 0u);
+    EXPECT_EQ(s.total_packets, 6u);
+}
+
+// The 0x30/0x40 response blocks are recognised but have no counter of their
+// own. They must land in other_known so a non-zero UNKNOWN keeps meaning
+// corruption or a version mismatch, not "browse replies have no bucket".
+TEST_F(StatisticsManagerTest, KnownResponsesCountAsOtherKnownNotUnknown) {
+    const uint8_t known_without_bucket[] = {0x31, 0x34, 0x39, 0x3D, 0x42};
+    for (uint8_t type: known_without_bucket) {
+        stats->increment_packet_stat(type);
+    }
+    stats->increment_packet_stat(0xEE);  // genuinely unknown
+    stats->increment_packet_stat(0xFF);  // MSG_ERROR has its own bucket
+
+    wavex_packet_stats_t s;
+    stats->get_packet_stats(&s);
+    EXPECT_EQ(s.other_known_packets, 5u);
+    EXPECT_EQ(s.unknown_packets, 1u);
+    EXPECT_EQ(s.error_packets, 1u);
+    EXPECT_EQ(s.total_packets, 7u);
+}
+
+TEST_F(StatisticsManagerTest, DiagAndEnvelopeTypesHaveTheirOwnBuckets) {
+    stats->increment_packet_stat(0x3B);  // MSG_DIAG_PUSH
+    stats->increment_packet_stat(0x44);  // MSG_ENVELOPE_CHUNK
+
+    wavex_packet_stats_t s;
+    stats->get_packet_stats(&s);
+    EXPECT_EQ(s.diag_push_packets, 1u);
+    EXPECT_EQ(s.envelope_chunk_packets, 1u);
+    EXPECT_EQ(s.other_known_packets, 0u);
+    EXPECT_EQ(s.unknown_packets, 0u);
+}
+
+// snprintf contract at the truncation boundary: the return value is the
+// would-be length, and the buffer stays NUL-terminated inside its size. The
+// diagnostics page sizes its buffer from this return value.
+TEST_F(StatisticsManagerTest, FormatPacketStatsTruncatesSafely) {
+    stats->increment_packet_stat(0x00);
+    stats->increment_invalid_packet();
+
+    char big[512];
+    int full_len = stats->format_packet_stats(big, sizeof(big));
+    ASSERT_GT(full_len, 0);
+    ASSERT_LT(full_len, (int)sizeof(big));
+
+    char small[8];
+    memset(small, 'X', sizeof(small));
+    int result = stats->format_packet_stats(small, sizeof(small));
+    EXPECT_EQ(result, full_len) << "truncated call must still report the full length";
+    EXPECT_EQ(small[sizeof(small) - 1], '\0');
+    EXPECT_EQ(strncmp(small, big, sizeof(small) - 1), 0);
+
+    EXPECT_EQ(stats->format_packet_stats(nullptr, 100), 0);
+    EXPECT_EQ(stats->format_packet_stats(big, 0), 0);
+}
+
+// Null out-pointers must be ignored without touching state.
+TEST_F(StatisticsManagerTest, NullOutputPointersAreSafe) {
+    stats->increment_packet_stat(0x00);
+
+    stats->get_packet_stats(nullptr);
+    stats->get_packet_summary(nullptr);
+    stats->get_tx_stats(nullptr);
+    stats->get_meter_data(nullptr);
+
+    // State must be intact afterwards.
+    wavex_packet_stats_t s;
+    stats->get_packet_stats(&s);
+    EXPECT_EQ(s.sync_packets, 1u);
+}
+
+// Clearing a listener must stop further invocations - the use-after-free
+// guard every UI page relies on in onExit.
+TEST_F(StatisticsManagerTest, ClearedMeterCallbackIsNotInvoked) {
+    float user_data = 0.0f;
+    stats->set_meter_callback(meter_callback, &user_data);
+    stats->update_meter_data(0.5f, 0.5f, 0.5f, 0.5f);
+    ASSERT_FLOAT_EQ(g_callback_rms_left, 0.5f);
+
+    stats->set_meter_callback(nullptr, nullptr);
+    g_callback_rms_left = 0.0f;
+    stats->update_meter_data(0.9f, 0.9f, 0.9f, 0.9f);
+
+    EXPECT_FLOAT_EQ(g_callback_rms_left, 0.0f) << "callback ran after being cleared";
+
+    // The snapshot must still update even with no listener.
+    wavex_meter_data_t meter_data;
+    stats->get_meter_data(&meter_data);
+    EXPECT_FLOAT_EQ(meter_data.rms_left, 0.9f);
+}
+
+TEST_F(StatisticsManagerTest, SampleStatusReRegistrationUsesLatestUserData) {
+    bool first = false;
+    bool second = false;
+    stats->set_sample_status_callback(sample_status_callback, &first);
+    stats->set_sample_status_callback(sample_status_callback, &second);
+
+    stats->invoke_sample_status_callback(1, 1, 44100, 2, 100);
+
+    EXPECT_FALSE(first) << "superseded registration's user_data was used";
+    EXPECT_TRUE(second);
+}
+
+TEST_F(StatisticsManagerTest, InvokingUnregisteredCallbacksIsSafe) {
+    // No listeners registered: these must be no-ops, not crashes.
+    stats->invoke_browse_resp_callback(nullptr, 0);
+    stats->invoke_sample_status_callback(1, 1, 44100, 2, 100);
+    stats->invoke_storage_status_callback(true);
+
+    EXPECT_EQ(g_callback_state, 0);
+}
+
+TEST_F(StatisticsManagerTest, StorageStatusCallbackDeliversMountedFlag) {
+    static bool s_mounted;
+    static int s_calls;
+    s_mounted = false;
+    s_calls = 0;
+
+    stats->set_storage_status_callback(
+        [](bool mounted, void* user_data) {
+            (void)user_data;
+            s_mounted = mounted;
+            s_calls++;
+        },
+        nullptr);
+
+    stats->invoke_storage_status_callback(true);
+    EXPECT_EQ(s_calls, 1);
+    EXPECT_TRUE(s_mounted);
+
+    stats->invoke_storage_status_callback(false);
+    EXPECT_EQ(s_calls, 2);
+    EXPECT_FALSE(s_mounted);
+}
+
+// TX side: unknown message types count toward the total only.
+TEST_F(StatisticsManagerTest, TxUnknownTypeCountsTowardTotalOnly) {
+    stats->increment_tx_message(0x30);  // no dedicated TX bucket
+
+    wavex_tx_stats_t tx;
+    stats->get_tx_stats(&tx);
+    EXPECT_EQ(tx.total_messages_sent, 1u);
+    EXPECT_EQ(tx.ping_messages_sent, 0u);
+    EXPECT_EQ(tx.test_messages_sent, 0u);
+}
+
+// reset_packet_stats() is scoped to packet counters: TX stats and the backend
+// heartbeat must survive it (the diagnostics page resets one, not the other).
+TEST_F(StatisticsManagerTest, ResetPacketStatsLeavesTxAndHeartbeatIntact) {
+    stats->increment_packet_stat(0x00);
+    stats->increment_tx_message(0x01);
+    stats->update_backend_heartbeat(1000, 1, 1, 10.0f);
+
+    stats->reset_packet_stats();
+
+    wavex_packet_stats_t s;
+    stats->get_packet_stats(&s);
+    EXPECT_EQ(s.total_packets, 0u);
+
+    wavex_tx_stats_t tx;
+    stats->get_tx_stats(&tx);
+    EXPECT_EQ(tx.total_messages_sent, 1u);
+
+    uint32_t uptime, rx, loop, last_rx;
+    float cpu;
+    bool valid = false;
+    stats->get_backend_heartbeat(&uptime, &rx, &loop, &last_rx, &cpu, &valid);
+    EXPECT_TRUE(valid);
+    EXPECT_EQ(uptime, 1000u);
+
+    // And the packet counters keep working after the reset.
+    stats->increment_packet_stat(0x10);
+    EXPECT_EQ(stats->get_meter_packet_count(), 1u);
+    EXPECT_EQ(stats->get_total_packet_count(), 1u);
 }
 
 }  // namespace

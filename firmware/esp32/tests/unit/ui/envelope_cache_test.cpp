@@ -59,29 +59,30 @@ class EnvelopeCacheTest : public ::testing::Test {
 
     // Requests one run and feeds it back as a single chunk whose columns
     // ramp, so a test can tell which column it is looking at.
-    bool FillRun(uint16_t sample_id,
-                 uint16_t generation,
-                 uint32_t view_start,
-                 uint32_t view_end,
-                 uint32_t total_frames,
-                 uint16_t display_columns,
-                 uint8_t channels = 1,
-                 uint16_t max_per_request = 1280) {
+    bool FillRunIn(EnvelopeCache& cache,
+                   uint16_t sample_id,
+                   uint16_t generation,
+                   uint32_t view_start,
+                   uint32_t view_end,
+                   uint32_t total_frames,
+                   uint16_t display_columns,
+                   uint8_t channels = 1,
+                   uint16_t max_per_request = 1280) {
         uint32_t req_start = 0, req_end = 0;
         uint16_t req_columns = 0;
-        if (!cache_.nextRequest(sample_id,
-                                generation,
-                                view_start,
-                                view_end,
-                                total_frames,
-                                display_columns,
-                                max_per_request,
-                                req_start,
-                                req_end,
-                                req_columns)) {
+        if (!cache.nextRequest(sample_id,
+                               generation,
+                               view_start,
+                               view_end,
+                               total_frames,
+                               display_columns,
+                               max_per_request,
+                               req_start,
+                               req_end,
+                               req_columns)) {
             return false;
         }
-        cache_.noteRequest(sample_id, generation, req_start, req_end, req_columns);
+        cache.noteRequest(sample_id, generation, req_start, req_end, req_columns);
 
         EnvelopeChunkMessage header;
         header.sample_id = sample_id;
@@ -100,7 +101,26 @@ class EnvelopeCacheTest : public ::testing::Test {
                     EnvelopeColumn(static_cast<int16_t>(-(c + 1)), static_cast<int16_t>(c + 1));
             }
         }
-        return cache_.ingest(header, cols.data());
+        return cache.ingest(header, cols.data());
+    }
+
+    bool FillRun(uint16_t sample_id,
+                 uint16_t generation,
+                 uint32_t view_start,
+                 uint32_t view_end,
+                 uint32_t total_frames,
+                 uint16_t display_columns,
+                 uint8_t channels = 1,
+                 uint16_t max_per_request = 1280) {
+        return FillRunIn(cache_,
+                         sample_id,
+                         generation,
+                         view_start,
+                         view_end,
+                         total_frames,
+                         display_columns,
+                         channels,
+                         max_per_request);
     }
 
     EnvelopeCache cache_;
@@ -398,6 +418,139 @@ TEST_F(EnvelopeCacheTest, AbortDiscardsPartiallyReceivedColumns) {
     // A fresh run still commits normally.
     EXPECT_TRUE(FillRun(1, 0, 0, 65536, 65536, 256));
     EXPECT_EQ(cache_.entryCount(), 1u);
+}
+
+// Eviction must be LRU, not insertion order: the entry a render() just
+// touched is the one the user is looking at and must survive.
+TEST_F(EnvelopeCacheTest, EvictionPrefersLeastRecentlyUsedEntry) {
+    EnvelopeCache small;
+    small.init(8 * 1024, TestAllocator());  // room for exactly 2 mono 1024-column runs
+
+    ASSERT_TRUE(FillRunIn(small, 1, 0, 0, 4096, 4096, 1024));
+    ASSERT_TRUE(FillRunIn(small, 2, 0, 0, 4096, 4096, 1024));
+    ASSERT_EQ(small.entryCount(), 2u);
+
+    // Touch sample 1 so sample 2 becomes the LRU entry.
+    uint8_t channels = 0;
+    std::vector<EnvelopeColumn> out(1024);
+    ASSERT_GT(small.render(1, 0, 0, 4096, 1024, out.data(), out.size(), channels), 0);
+
+    // Committing sample 3 must evict sample 2, not the just-used sample 1.
+    ASSERT_TRUE(FillRunIn(small, 3, 0, 0, 4096, 4096, 1024));
+
+    EXPECT_GT(small.render(1, 0, 0, 4096, 1024, out.data(), out.size(), channels), 0)
+        << "recently used entry was evicted";
+    EXPECT_EQ(small.render(2, 0, 0, 4096, 1024, out.data(), out.size(), channels), 0)
+        << "LRU entry survived";
+    EXPECT_GT(small.render(3, 0, 0, 4096, 1024, out.data(), out.size(), channels), 0);
+
+    small.reset();
+}
+
+// Two adjacent runs at the same tier must merge into ONE entry whose columns
+// sit at the right offsets - the scroll-sideways case. A wrong merge offset
+// would draw the second half of the waveform from the wrong audio.
+TEST_F(EnvelopeCacheTest, AdjacentRunsMergeWithContentAtCorrectOffsets) {
+    const uint32_t total = 1u << 20;
+    // Both windows use tier fpc 1024 (262144 frames / 256 columns).
+    ASSERT_TRUE(FillRun(1, 0, 0, 262144, total, 256));
+    ASSERT_TRUE(FillRun(1, 0, 262144, 524288, total, 256));
+    EXPECT_EQ(cache_.entryCount(), 1u) << "adjacent runs did not merge";
+
+    // Render the doubled window 1:1 (512 display columns over 512 tier
+    // columns): every column must be backed by data, and the ramp pattern
+    // must restart where the second run begins.
+    uint8_t channels = 0;
+    std::vector<EnvelopeColumn> out(512);
+    const uint16_t drawn = cache_.render(1, 0, 0, 524288, 512, out.data(), out.size(), channels);
+    ASSERT_EQ(drawn, 512);
+    EXPECT_EQ(out[0].max_sample, 1);
+    EXPECT_EQ(out[255].max_sample, 256);  // last column of the first run
+    EXPECT_EQ(out[256].max_sample, 1);    // first column of the second run
+    EXPECT_EQ(out[511].max_sample, 256);
+    EXPECT_EQ(out[511].min_sample, -256);
+}
+
+// invalidateSample must also kill a pending run for that sample - otherwise a
+// reload while a scan is in flight would file the OLD sample's columns under
+// the new listing, or block requests forever.
+TEST_F(EnvelopeCacheTest, InvalidateSampleCancelsItsPendingRun) {
+    uint32_t req_start = 0, req_end = 0;
+    uint16_t req_columns = 0;
+    ASSERT_TRUE(
+        cache_.nextRequest(1, 0, 0, 65536, 65536, 256, 1280, req_start, req_end, req_columns));
+    cache_.noteRequest(1, 0, req_start, req_end, req_columns);
+    ASSERT_TRUE(cache_.requestPending());
+
+    cache_.invalidateSample(1);
+    EXPECT_FALSE(cache_.requestPending());
+
+    // A late chunk from the dead run must be rejected.
+    EnvelopeChunkMessage header;
+    header.sample_id = 1;
+    header.generation = 0;
+    header.start_frame = req_start;
+    header.end_frame = req_end;
+    header.total_columns = req_columns;
+    header.first_column = 0;
+    header.columns = req_columns;
+    header.channels = 1;
+    std::vector<EnvelopeColumn> cols(req_columns, EnvelopeColumn(-1, 1));
+    EXPECT_FALSE(cache_.ingest(header, cols.data()));
+    EXPECT_EQ(cache_.entryCount(), 0u);
+
+    // And the cache must be free to request again.
+    uint32_t s = 0, e = 0;
+    uint16_t c = 0;
+    EXPECT_TRUE(cache_.nextRequest(1, 0, 0, 65536, 65536, 256, 1280, s, e, c));
+}
+
+// Invalidating a DIFFERENT sample must leave a pending run armed - killing an
+// unrelated in-flight scan would drop a run the backend is still sending.
+TEST_F(EnvelopeCacheTest, InvalidateOtherSampleKeepsPendingRun) {
+    uint32_t req_start = 0, req_end = 0;
+    uint16_t req_columns = 0;
+    ASSERT_TRUE(
+        cache_.nextRequest(1, 0, 0, 65536, 65536, 256, 1280, req_start, req_end, req_columns));
+    cache_.noteRequest(1, 0, req_start, req_end, req_columns);
+
+    cache_.invalidateSample(2);
+    EXPECT_TRUE(cache_.requestPending());
+}
+
+// A run that cannot fit the budget at all must fail its commit cleanly and
+// leave the cache usable, not wedge it half-filled.
+TEST_F(EnvelopeCacheTest, RunLargerThanBudgetFailsCleanly) {
+    EnvelopeCache tiny;
+    tiny.init(1024, TestAllocator());  // 1 KB: a 1024-column run needs 4 KB
+
+    uint32_t req_start = 0, req_end = 0;
+    uint16_t req_columns = 0;
+    ASSERT_TRUE(tiny.nextRequest(1, 0, 0, 4096, 4096, 1024, 1280, req_start, req_end, req_columns));
+    tiny.noteRequest(1, 0, req_start, req_end, req_columns);
+
+    EnvelopeChunkMessage header;
+    header.sample_id = 1;
+    header.generation = 0;
+    header.start_frame = req_start;
+    header.end_frame = req_end;
+    header.total_columns = req_columns;
+    header.first_column = 0;
+    header.columns = req_columns;
+    header.channels = 1;
+    std::vector<EnvelopeColumn> cols(req_columns, EnvelopeColumn(-1, 1));
+
+    EXPECT_FALSE(tiny.ingest(header, cols.data()));
+    EXPECT_EQ(tiny.entryCount(), 0u);
+    EXPECT_EQ(tiny.bytesUsed(), 0u);
+
+    // The failed commit must not leave the pending guard armed.
+    uint32_t s = 0, e = 0;
+    uint16_t c = 0;
+    EXPECT_TRUE(tiny.nextRequest(1, 0, 0, 4096, 4096, 1024, 1280, s, e, c))
+        << "cache wedged after an over-budget run";
+
+    tiny.reset();
 }
 
 // abortPending() on an idle cache is a no-op, so callers can use it as an

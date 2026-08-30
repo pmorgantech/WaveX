@@ -1,19 +1,33 @@
 /**
  * @file application_context_test.cpp
- * @brief Unit tests for ApplicationContext class
+ * @brief Unit tests for ApplicationContext wiring.
+ *
+ * ApplicationContext's one job is to own the components and wire them to the
+ * same instances. These tests assert observable wiring (data written through
+ * one accessor is readable through another), not merely that references
+ * exist - a reference returned by getX() can never be null, so checking its
+ * address proves nothing.
  */
 
 #include "application_context.h"
 
 #include <gtest/gtest.h>
 
+#include "../mocks/esp32_mocks.h"
+#include "../utils/test_helpers.h"
+
+#include <vector>
+
 namespace {
 
-// Test fixture for ApplicationContext
+using WaveX::Test::GetInterMcuCapture;
+using WaveX::Test::ProtocolTestHelper;
+using WaveX::Test::ResetInterMcuCapture;
+
 class ApplicationContextTest : public ::testing::Test {
    protected:
     void SetUp() override {
-        // ApplicationContext constructor initializes all dependencies
+        ResetInterMcuCapture();
         context = new WaveX::ApplicationContext();
     }
 
@@ -25,143 +39,95 @@ class ApplicationContextTest : public ::testing::Test {
     WaveX::ApplicationContext* context = nullptr;
 };
 
-// Test constructor initializes all components
-TEST_F(ApplicationContextTest, Constructor_InitializesAllComponents) {
-    ASSERT_NE(context, nullptr);
-
-    // Verify StatisticsManager is created
-    EXPECT_NE(&context->getStatistics(), nullptr);
-
-    // Verify PacketRouter is created
-    EXPECT_NE(&context->getPacketRouter(), nullptr);
-
-    // Verify CommInterface is created
-    EXPECT_NE(&context->getCommInterface(), nullptr);
-
-    // Verify CommInterface is properly initialized with StatisticsManager
-    // We can't directly verify the internal dependency, but we can verify it's not null
-}
-
-// Test component accessors return valid objects
-TEST_F(ApplicationContextTest, Getters_ReturnValidObjects) {
+// Accessors must hand back the same instances on every call - components are
+// owned, not created per accessor.
+TEST_F(ApplicationContextTest, GettersReturnStableInstances) {
     auto& stats = context->getStatistics();
     auto& router = context->getPacketRouter();
     auto& comm = context->getCommInterface();
 
-    // All getters should return references to valid objects
-    EXPECT_NE(&stats, nullptr);
-    EXPECT_NE(&router, nullptr);
-    EXPECT_NE(&comm, nullptr);
-
-    // Objects should be the same instance across multiple calls
     EXPECT_EQ(&context->getStatistics(), &stats);
     EXPECT_EQ(&context->getPacketRouter(), &router);
     EXPECT_EQ(&context->getCommInterface(), &comm);
 }
 
-// Test StatisticsManager integration
-TEST_F(ApplicationContextTest, StatisticsManagerIntegration) {
-    auto& stats = context->getStatistics();
+// The CommInterface must be constructed over the SAME StatisticsManager the
+// context exposes: data pushed through getStatistics() must be readable
+// through getCommInterface(). This is the wiring the whole UI depends on.
+TEST_F(ApplicationContextTest, CommInterfaceSharesTheContextsStatisticsManager) {
+    context->getStatistics().update_backend_heartbeat(4242, 17, 99, 33.5f);
 
-    // Test basic StatisticsManager functionality
-    EXPECT_EQ(stats.get_meter_packet_count(), 0);
+    wavex_backend_heartbeat_t hb;
+    context->getCommInterface().getBackendHeartbeat(&hb);
+    ASSERT_TRUE(hb.valid);
+    EXPECT_EQ(hb.uptime_ms, 4242u);
+    EXPECT_EQ(hb.rx_total, 17u);
+    EXPECT_EQ(hb.loop_counter, 99u);
+    EXPECT_FLOAT_EQ(hb.cpu_usage_percent, 33.5f);
 
-    // Increment some statistics
-    stats.increment_packet_stat(0x00);  // SYNC packet
-    stats.increment_packet_stat(0x10);  // METER_PUSH packet
-
-    EXPECT_EQ(stats.get_meter_packet_count(), 1);
-    EXPECT_EQ(stats.get_total_packet_count(), 2);
+    context->getStatistics().increment_packet_stat(0x10);
+    wavex_packet_stats_t s;
+    context->getCommInterface().getPacketStats(&s);
+    EXPECT_EQ(s.meter_push_packets, 1u);
 }
 
-// Test PacketRouter integration
-TEST_F(ApplicationContextTest, PacketRouterIntegration) {
-    auto& router = context->getPacketRouter();
+// Listener registration through the interface and invocation through the
+// statistics manager must meet at the same slot.
+TEST_F(ApplicationContextTest, ListenersRegisteredViaCommInterfaceFire) {
+    static float s_last_rms;
+    s_last_rms = -1.0f;
 
-    // Test basic PacketRouter functionality - it should not crash
-    const uint8_t test_packet[] = {0x01, 0x02, 0x03, 0x04};
-    router.route_packet(test_packet, sizeof(test_packet));
+    context->getCommInterface().setMeterListener(
+        [](float rms_left, float rms_right, float peak_left, float peak_right, void* user_data) {
+            (void)rms_right;
+            (void)peak_left;
+            (void)peak_right;
+            (void)user_data;
+            s_last_rms = rms_left;
+        },
+        nullptr);
 
-    // Router should handle the packet without throwing
-    SUCCEED();
+    context->getStatistics().update_meter_data(0.75f, 0.5f, 0.9f, 0.8f);
+    EXPECT_FLOAT_EQ(s_last_rms, 0.75f);
 }
 
-// Test CommInterface integration
-TEST_F(ApplicationContextTest, CommInterfaceIntegration) {
-    auto& comm = context->getCommInterface();
+// The context's router must actually route: a real heartbeat packet through
+// getPacketRouter() must reach the inter_mcu boundary with its content.
+TEST_F(ApplicationContextTest, RouterRoutesRealPacketsToHandlers) {
+    std::vector<uint8_t> packet = ProtocolTestHelper::CreateHeartbeatPacket(1000, 5000, 10000);
+    ASSERT_FALSE(packet.empty());
 
-    // Test that CommInterface is properly initialized
-    // We can't directly test all methods without more complex mocking,
-    // but we can verify the interface exists and basic state
-    EXPECT_NE(&comm, nullptr);
+    context->getPacketRouter().route_packet(packet.data(), packet.size());
+
+    const auto& cap = GetInterMcuCapture();
+    ASSERT_EQ(cap.heartbeat_calls, 1);
+    EXPECT_EQ(cap.hb_uptime_ms, 1000u);
+    EXPECT_EQ(cap.hb_rx_total, 5000u);
+    EXPECT_EQ(cap.hb_loop_counter, 10000u);
 }
 
-// Test that components are properly wired together
-TEST_F(ApplicationContextTest, ComponentWiring) {
-    // This test verifies that the ApplicationContext properly connects components
-    // The StatisticsManager should be shared between CommInterface and ApplicationContext
+TEST_F(ApplicationContextTest, RouterDropsGarbageWithoutDispatching) {
+    const uint8_t garbage[] = {0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07};
+    context->getPacketRouter().route_packet(garbage, sizeof(garbage));
 
-    auto& context_stats = context->getStatistics();
-    auto& context_comm = context->getCommInterface();
-
-    // Both should exist
-    ASSERT_NE(&context_stats, nullptr);
-    ASSERT_NE(&context_comm, nullptr);
-
-    // Update statistics through StatisticsManager
-    context_stats.increment_packet_stat(0x00);
-
-    // Verify the count is reflected
-    EXPECT_EQ(context_stats.get_total_packet_count(), 1);
+    const auto& cap = GetInterMcuCapture();
+    EXPECT_EQ(cap.heartbeat_calls, 0);
+    EXPECT_EQ(cap.meter_calls, 0);
+    EXPECT_EQ(cap.browse_resp_calls, 0);
 }
 
-// Test destructor cleanup
-TEST_F(ApplicationContextTest, Destructor_CleansUpProperly) {
-    // Create a context and let it go out of scope
-    {
-        WaveX::ApplicationContext temp_context;
-        // Components should be properly initialized
-        EXPECT_NE(temp_context.getStatistics().get_total_packet_count(), static_cast<uint32_t>(-1));
-    }
-    // Destructor should clean up without issues
-    SUCCEED();
-}
-
-// Test multiple ApplicationContext instances are independent
-TEST_F(ApplicationContextTest, MultipleInstances_AreIndependent) {
+TEST_F(ApplicationContextTest, MultipleInstancesAreIndependent) {
     WaveX::ApplicationContext context2;
 
-    // Each context should have its own instances
     auto& stats1 = context->getStatistics();
     auto& stats2 = context2.getStatistics();
+    ASSERT_NE(&stats1, &stats2);
 
-    // Modify stats in first context
     stats1.increment_packet_stat(0x00);
     stats1.increment_packet_stat(0x00);
 
-    // Second context should be unaffected
-    EXPECT_EQ(stats1.get_total_packet_count(), 2);
-    EXPECT_EQ(stats2.get_total_packet_count(), 0);
-}
-
-// Test packet routing through the full chain
-TEST_F(ApplicationContextTest, PacketRoutingThroughComponents) {
-    auto& router = context->getPacketRouter();
-    auto& stats = context->getStatistics();
-
-    // Create a minimal valid packet (this would normally be more complex)
-    // For now, just test that routing doesn't crash
-    const uint8_t test_packet[] = {0x01, 0x02, 0x03, 0x04, 0x05};
-
-    uint32_t initial_count = stats.get_total_packet_count();
-
-    // Route packet through PacketRouter
-    router.route_packet(test_packet, sizeof(test_packet));
-
-    // Statistics should be updated (or at least not crash)
-    // Note: In real implementation, this would depend on packet content
-    EXPECT_EQ(stats.get_total_packet_count(),
-              initial_count);  // May not increment depending on packet
+    EXPECT_EQ(stats1.get_total_packet_count(), 2u);
+    EXPECT_EQ(stats2.get_total_packet_count(), 0u);
 }
 
 }  // namespace
