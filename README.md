@@ -47,16 +47,20 @@ WaveX/
    ```bash
    git clone --recursive <repo-url> && cd WaveX
    ```
-2. Open in VS Code → F1 → "Reopen in Container".
-3. Set up hooks:
-   ```bash
-   source .env/bin/activate
-   pre-commit install
-   ```
-4. Build everything: `make all`
-5. Flash: `make esp32-flash` (or `./flash-esp32.sh`); Daisy via DFU (`make -C firmware/daisy flash`, hold BOOT on power-up).
+2. Open in VS Code → F1 → "Reopen in Container" (or `./devcontainer.sh` for a CLI shell).
+   Either entry point points `core.hooksPath` at the tracked `.githooks/`
+   directory automatically — do **not** run `pre-commit install`.
+3. Build everything: `make all`
+4. Flash: `make esp32-flash` (or `./flash-esp32.sh`); Daisy via DFU (`make -C firmware/daisy flash`, hold BOOT on power-up).
 
-See [`setup.md`](setup.md) for local (non-container) setup and detailed flash/debug workflows.
+**All work happens inside the devcontainer — including `git commit`.** The
+pre-commit suite (formatting, firmware builds, host tests) only exists in the
+container image, and the tracked hook wrapper (`.githooks/pre-commit`) blocks
+commits made from the host with instructions to re-run from the container.
+Emergency escape hatch: `WAVEX_ALLOW_HOST_COMMIT=1 git commit ...` commits
+with **no checks at all** — use sparingly.
+
+See [`setup.md`](setup.md) for detailed flash/debug workflows.
 
 ### Build & test commands
 
@@ -79,9 +83,10 @@ The ESP32 side builds with ESP-IDF's `idf.py` (component-based); the Daisy side 
 ## CI and Code Quality
 
 - **GitHub Actions** on pushes/PRs to `main`/`develop`: unit tests (shared protocol, ESP32, Daisy) + build verification for both firmwares, with artifact caching.
-- **Pre-commit hooks** handle formatting locally: clang-format (Google style, 4-space indent, 100 col), black + isort, prettier for YAML, plus whitespace/EOF/merge-conflict/large-file checks.
+- **Pre-commit hooks** handle formatting and verification: clang-format (Google style, 4-space indent, 100 col), black + isort, prettier for YAML, whitespace/EOF/merge-conflict/large-file checks, plus firmware builds and host test runs. They run **only inside the devcontainer** (see Quick start above); commits from the host are blocked by `.githooks/pre-commit`.
 
 ```bash
+# All from a devcontainer shell:
 pre-commit run            # staged files
 pre-commit run --all-files
 pre-commit autoupdate

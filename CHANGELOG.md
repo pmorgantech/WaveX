@@ -11,6 +11,21 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Changed — pre-commit hooks are devcontainer-only, host commits blocked
+
+- `pre-commit` now lives in the devcontainer image (with a
+  `WAVEX_DEVCONTAINER=1` marker), and hooks are wired through the tracked
+  `.githooks/pre-commit` wrapper via `core.hooksPath` (set automatically by
+  `./devcontainer.sh` and the VS Code `postCreateCommand`; `pre-commit
+  install` must no longer be run). Commits from the host are blocked with
+  instructions to commit from a container shell —
+  `WAVEX_ALLOW_HOST_COMMIT=1` is the no-checks emergency escape hatch.
+  `./devcontainer.sh` also sources the ESP-IDF env, mounts `~/.gitconfig`
+  read-only for commit identity, and persists pre-commit's hook
+  environments in a named volume. Rationale: hook builds/tests assume the
+  container toolchain, and host-side hook runs left stale-pathed build
+  caches that then broke container builds.
+
 ### Fixed — file browser built `//name` paths at root
 
 - The browse-response parser stripped the leading slash from entry names,

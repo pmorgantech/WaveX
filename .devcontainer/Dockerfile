@@ -28,6 +28,14 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
 # TyTools optional high-level ESP32 monitor
 RUN pip install --no-cache-dir --break-system-packages esptool pyserial
 
+# pre-commit lives in the image, not on the host: the hook suite (clang-format,
+# firmware builds, host tests) assumes this container's toolchain, and the
+# tracked .githooks/pre-commit wrapper refuses to run outside it. This env
+# marker is what the wrapper keys on - it identifies "inside the WaveX
+# devcontainer", so don't set it anywhere else.
+RUN pip install --no-cache-dir --break-system-packages pre-commit
+ENV WAVEX_DEVCONTAINER=1
+
 # Daisy libraries (for reference, actual code is in submodules)
 RUN git clone --depth=1 https://github.com/electro-smith/libDaisy /opt/libDaisy && \
     git clone --depth=1 https://github.com/electro-smith/DaisySP /opt/DaisySP
@@ -77,3 +85,9 @@ ENV LC_ALL=en_US.UTF-8
 # for interactive sessions; this default matters for `docker run` / CI use.
 USER petem
 WORKDIR /home/petem
+
+# Pre-create pre-commit's cache dir AS PETEM so the wavex-precommit-cache
+# named volume (mounted here by devcontainer.sh) inherits this ownership on
+# first use - a fresh named volume otherwise materializes root-owned and
+# pre-commit dies on its .lock file.
+RUN mkdir -p /home/petem/.cache/pre-commit

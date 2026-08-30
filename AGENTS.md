@@ -62,7 +62,7 @@ that depends on an external crate or protocol.
 - Avoid `<iostream>`/`<sstream>` and other heavyweight STL on-device; prefer the existing logging/metrics facilities.
 - Templates and constexpr are fine and encouraged for zero-cost abstraction; avoid patterns that bloat code size unpredictably (heavy recursive template instantiation, excessive `std::variant`/`std::function` in hot paths) without checking the resulting binary size.
 - **The same code is built at three different C++ standards, so target the lowest that will compile it.** The ESP32 device image is `gnu++2b` (pinned in `firmware/esp32/main/CMakeLists.txt` and `components/ui/CMakeLists.txt` — not inherited from ESP-IDF's default, so a toolchain bump cannot move it silently); the ESP32 host tests are C++17; the Daisy host tests are C++14. Anything under `firmware/shared/` is compiled by all three, so **shared code must be valid C++14** or the Daisy test build breaks. Target-specific code may use its own target's standard.
-- Follow `.clang-format` for style; run pre-commit (`pre-commit install` per `README.md`) rather than hand-formatting.
+- Follow `.clang-format` for style; run pre-commit (from a devcontainer shell — see "Building and the devcontainer") rather than hand-formatting. Never run `pre-commit install`; hooks are wired through the tracked `.githooks/` directory.
 
 ## Versioning and changelog
 
@@ -82,7 +82,14 @@ that depends on an external crate or protocol.
 - Full build/flash instructions (prerequisites, individual `idf.py`/`make` commands, debugging) live in **`setup.md`** and **`README.md`** — don't duplicate them here. Quick reference: `make all` (both MCUs), `make esp32` / `make daisy` (individually), `make test` (host tests).
 - The supported CLI entry point is `./devcontainer.sh` from the repository root. It starts `wavex-devcontainer:latest` with the repository mounted at `/workspaces/WaveX`, USB access enabled, and the serial groups/devices exposed. Build the image first when it is not present: `docker build -t wavex-devcontainer:latest -f .devcontainer/Dockerfile .devcontainer/`. The script requires Docker and, for hardware access, a host user/device setup that permits privileged USB/serial forwarding.
 - After cloning or when submodules are missing, run `git submodule update --init --recursive` (or `make setup`) before building. The Daisy libraries and the vendored GoogleTest source are required for reproducible builds/tests.
-- **Always build/test through the devcontainer** (`.devcontainer/Dockerfile` → image `wavex-devcontainer:latest`), not the host shell — the host toolchain is incomplete (no ESP-IDF env, `arm-none-eabi-gcc` present but the CMake toolchain file needs `CMAKE_C_COMPILER`/`CMAKE_CXX_COMPILER` set explicitly, which only the Daisy wrapper Makefile does correctly).
+- **ALL work happens inside the devcontainer — builds, tests, AND `git commit`** (`.devcontainer/Dockerfile` → image `wavex-devcontainer:latest`), never the host shell. The host toolchain is incomplete (no ESP-IDF env, `arm-none-eabi-gcc` present but the CMake toolchain file needs `CMAKE_C_COMPILER`/`CMAKE_CXX_COMPILER` set explicitly, which only the Daisy wrapper Makefile does correctly), and host-side hook runs leave stale-pathed build caches that then break container builds.
+- **Commits are enforced container-only.** `pre-commit` is installed only in the image, and the tracked hook wrapper `.githooks/pre-commit` (wired via `core.hooksPath`, set automatically by `./devcontainer.sh` and the VS Code `postCreateCommand`) blocks any `git commit` where the image's `WAVEX_DEVCONTAINER=1` marker is absent. Commit from a `./devcontainer.sh` shell (it mounts `~/.gitconfig` read-only for identity and a named volume for pre-commit's hook environments), or non-interactively:
+  ```bash
+  docker run --rm -v "$(pwd)":/workspaces/WaveX -v "$HOME/.gitconfig":/home/petem/.gitconfig:ro \
+    -v wavex-precommit-cache:/home/petem/.cache/pre-commit -w /workspaces/WaveX \
+    wavex-devcontainer:latest bash -lc 'source /opt/esp/idf/export.sh && git commit ...'
+  ```
+  `WAVEX_ALLOW_HOST_COMMIT=1` is an emergency escape hatch that commits with **no checks at all** — don't reach for it to save a build cycle.
 - The container runs as non-root user `petem` (uid 1000) by default, so bind-mounted build output is owned by the host user — no `chown` workaround needed after a CLI-driven build.
 - A shell started by `./devcontainer.sh` is not the VS Code Dev Containers session: source `/opt/esp/idf/export.sh` before invoking `idf.py` directly. The top-level ESP32 Make targets source it themselves; VS Code sessions do so through `postCreateCommand`.
 - For a one-off CLI build/test without opening VS Code's Dev Containers UI:

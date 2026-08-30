@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# WaveX pre-commit gate.
+#
+# The hook suite (.pre-commit-config.yaml: clang-format, firmware builds,
+# host tests) assumes the devcontainer toolchain - running it on the host
+# produces stale-cache build trees and unvalidated commits. So commits are
+# only validated, and only allowed, inside the devcontainer: the Dockerfile
+# bakes WAVEX_DEVCONTAINER=1 into the image, and this wrapper refuses to
+# proceed without it. See AGENTS.md "Building and the devcontainer".
+#
+# Installed via `git config core.hooksPath .githooks` (done by
+# devcontainer.sh and the devcontainer postCreateCommand). Do not run
+# `pre-commit install` - it refuses when core.hooksPath is set, and the
+# generated hook would bypass this gate.
+
+if [ -z "${WAVEX_DEVCONTAINER:-}" ]; then
+    if [ -n "${WAVEX_ALLOW_HOST_COMMIT:-}" ]; then
+        echo "WaveX: WAVEX_ALLOW_HOST_COMMIT set - committing WITHOUT pre-commit checks." >&2
+        exit 0
+    fi
+    cat >&2 <<'EOF'
+WaveX: commits must be made from inside the devcontainer, where the
+pre-commit suite (formatting, firmware builds, host tests) can run:
+
+    ./devcontainer.sh        # then git commit from that shell
+
+Emergency escape hatch (commit with NO checks - use sparingly):
+
+    WAVEX_ALLOW_HOST_COMMIT=1 git commit ...
+EOF
+    exit 1
+fi
+
+exec pre-commit run

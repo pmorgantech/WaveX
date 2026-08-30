@@ -1,5 +1,9 @@
 # WaveX Pre-commit Configuration
-# Ensures code quality, formatting, and builds before commits
+# Ensures code quality, formatting, and builds before commits.
+#
+# Runs ONLY inside the devcontainer: pre-commit is installed in the image,
+# and the tracked .githooks/pre-commit wrapper (wired via core.hooksPath)
+# blocks host commits outright. Do not run `pre-commit install`.
 
 repos:
   # Code formatting and linting
@@ -63,8 +67,8 @@ repos:
   # hook below silently skipped on every commit (found 2026-07-05; see
   # docs/code_review_20260705.md §8 follow-up). Shared code is compiled into
   # both firmware images and both test suites, so firmware/shared/ triggers
-  # them all. Device builds need the devcontainer toolchain; on a bare host
-  # use SKIP=check-build-esp32,check-build-daisy and build in the container.
+  # them all. These always have the full toolchain available, because the
+  # .githooks wrapper guarantees hooks only ever execute in the devcontainer.
   - repo: local
     hooks:
       - id: check-build-esp32
