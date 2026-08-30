@@ -84,6 +84,14 @@ bool inter_mcu_get_sample_meta(uint16_t sample_id, WaveX::Protocol::SampleMetada
 /** Ask the backend to resend. sample_id 0 = every loaded sample. */
 esp_err_t inter_mcu_request_sample_meta(uint16_t sample_id);
 
+/// Selects which loaded sample subsequent note-ons address. 0 restores the
+/// backend's default of "most recently loaded playable sample".
+esp_err_t inter_mcu_send_sample_select(uint16_t sample_id);
+
+/// Frees a loaded sample's RAM on the backend. Sounding voices are stopped
+/// first. sample_id 0 is rejected by the backend rather than treated as "all".
+esp_err_t inter_mcu_send_sample_unload(uint16_t sample_id);
+
 // Diagnostics telemetry (MSG_DIAG_SUBSCRIBE / MSG_DIAG_PUSH). Subscribe only
 // while the diagnostics page is open; the backend sends nothing otherwise.
 esp_err_t inter_mcu_send_diag_subscribe(bool enable, uint8_t interval_hz);

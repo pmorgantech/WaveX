@@ -475,6 +475,10 @@ static constexpr size_t kLoadedSampleCapacity = kMaxZones;
 static LoadedSampleInfo s_loaded_samples[kLoadedSampleCapacity];
 static size_t s_loaded_sample_count = 0;
 
+// Which sample MSG_NOTE_ON addresses. 0 means "most recently loaded playable
+// one", which is what the engine did before there was any way to choose.
+static uint16_t s_selected_sample_id = 0;
+
 static LoadedSampleInfo* find_loaded_sample(uint16_t sample_id) {
     for (size_t i = 0; i < s_loaded_sample_count; ++i) {
         auto& entry = s_loaded_samples[i];
@@ -553,6 +557,63 @@ static void remove_loaded_sample(uint16_t sample_id) {
         --s_loaded_sample_count;
         return;
     }
+}
+
+void SelectSample(uint16_t sample_id) {
+    s_selected_sample_id = sample_id;
+    WaveX::Log::PrintLine("SAMPLE_SELECT: id=%u", (unsigned)sample_id);
+}
+
+uint16_t SelectedSample() {
+    return s_selected_sample_id;
+}
+
+bool UnloadSample(uint16_t sample_id) {
+    if (sample_id == 0) {
+        WaveX::Log::PrintLine("SAMPLE_UNLOAD: id=0 rejected (not a wildcard)");
+        return false;
+    }
+    bool found = false;
+    for (size_t i = 0; i < s_loaded_sample_count; ++i) {
+        if (s_loaded_samples[i].sample_id == sample_id) {
+            found = true;
+            break;
+        }
+    }
+    if (!found) {
+        WaveX::Log::PrintLine("SAMPLE_UNLOAD: id=%u not loaded", (unsigned)sample_id);
+        return false;
+    }
+
+    // Stop every voice before releasing the memory. Voices hold a non-owning
+    // pointer into the sample's block, so freeing it under a sounding voice is
+    // a use-after-free in the audio path.
+    //
+    // Ask the CALLBACK to do the stopping rather than calling StopAll() from
+    // here. This function runs on the main loop, and a direct call would leave
+    // a window where the callback is already inside Render() holding a voice's
+    // sample pointer - stopping a voice it has finished reading for this block
+    // does nothing about the block it is in the middle of. drain_note_queue()
+    // consumes this flag at the top of the callback, so after one block period
+    // no voice can still be reading. Same barrier OnSampleLoad takes before it
+    // evicts; the 10 ms is its margin over the 1 ms block, kept identical
+    // rather than tuned, since nothing here is latency-sensitive.
+    __atomic_store_n(&s_voice_stop_all, true, __ATOMIC_RELEASE);
+    System::Delay(10);
+
+    remove_loaded_sample(sample_id);
+
+    // A selection pointing at what we just freed would otherwise silently fall
+    // back to "most recent", which is a different sample than the user asked
+    // for. Clearing it makes the fallback explicit instead.
+    if (s_selected_sample_id == sample_id) {
+        s_selected_sample_id = 0;
+    }
+
+    WaveX::Log::PrintLine("SAMPLE_UNLOAD: id=%u freed (%u still loaded)",
+                          (unsigned)sample_id,
+                          (unsigned)s_loaded_sample_count);
+    return true;
 }
 
 // Retires the least recently loaded sample. Callers MUST have passed
@@ -1790,10 +1851,29 @@ void OnMidiCc(const MidiCcMessage& m) {
 // arrives with the Phase 2 sequencer). "Playable" means 16-bit PCM, mono
 // or stereo - the voice manager reads int16 interleaved data directly;
 // 24-bit files would need a load-time conversion pass (not yet built).
+static bool sample_is_playable(const LoadedSampleInfo& e) {
+    return e.bit_depth == 16 && (e.channels == 1 || e.channels == 2);
+}
+
 static const LoadedSampleInfo* find_playable_sample() {
+    // An explicit selection wins, but only if it is still loaded and playable -
+    // otherwise a stale id (its sample unloaded, or a 24-bit file selected)
+    // would silence the keyboard with no way to tell why from the outside.
+    if (s_selected_sample_id != 0) {
+        for (size_t i = 0; i < s_loaded_sample_count; ++i) {
+            const auto& entry = s_loaded_samples[i];
+            if (entry.sample_id == s_selected_sample_id && sample_is_playable(entry)) {
+                return &entry;
+            }
+        }
+        WaveX::Log::PrintLine(
+            "  -> selected sample %u is not loaded or not playable; "
+            "falling back to most recent",
+            (unsigned)s_selected_sample_id);
+    }
     for (size_t i = s_loaded_sample_count; i > 0; --i) {
         const auto& entry = s_loaded_samples[i - 1];
-        if (entry.bit_depth == 16 && (entry.channels == 1 || entry.channels == 2)) {
+        if (sample_is_playable(entry)) {
             return &entry;
         }
     }

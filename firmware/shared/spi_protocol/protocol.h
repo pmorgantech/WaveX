@@ -107,6 +107,15 @@ enum MessageType : uint8_t {
     // path was added; the pair is documented rather than renumbered, since
     // renumbering a shipped id is worse than a gap.
     MSG_ENVELOPE_CHUNK = 0x44,  // Daisy -> ESP32: one run of envelope columns
+
+    // Which loaded sample notes address, and freeing them again.
+    //
+    // Until these existed the backend had no concept of a *selected* sample:
+    // OnNoteOn just took the most recently loaded playable one. That made the
+    // keyboard and the edit page's preview unaddressable - load a second sample
+    // and the first became unreachable - and left no way to reclaim its RAM.
+    MSG_SAMPLE_SELECT = 0x45,  // ESP32 -> Daisy: sample that notes trigger
+    MSG_SAMPLE_UNLOAD = 0x46,  // ESP32 -> Daisy: free a loaded sample
     // Sequencer / transport / MIDI clock (Phase 2; docs/features/sequencer.md,
     // midi-sync-tempo-follower.md, melodic-sequencing.md). ID block reserved in
     // docs/features/feature-expansion-ideas.md - do not assign outside it.
@@ -297,6 +306,26 @@ struct MeterPushMessage {
           rms_right(rms_right_),
           peak_left(peak_left_),
           peak_right(peak_right_) {}
+} __attribute__((packed));
+
+// Selects which loaded sample subsequent MSG_NOTE_ON events address.
+// sample_id 0 means "the most recently loaded playable sample", which is the
+// behaviour that predates this message.
+struct SampleSelectMessage {
+    uint16_t sample_id;
+
+    SampleSelectMessage() : sample_id(0) {}
+    explicit SampleSelectMessage(uint16_t id) : sample_id(id) {}
+} __attribute__((packed));
+
+// Frees a loaded sample's RAM. Voices sounding from it are stopped first;
+// sample_id 0 is rejected rather than treated as a wildcard, because "unload
+// everything" should be an explicit decision, not a default-constructed one.
+struct SampleUnloadMessage {
+    uint16_t sample_id;
+
+    SampleUnloadMessage() : sample_id(0) {}
+    explicit SampleUnloadMessage(uint16_t id) : sample_id(id) {}
 } __attribute__((packed));
 
 // Wave chunk (backend->frontend)
@@ -1466,6 +1495,10 @@ inline const char* MessageTypeName(uint8_t type) {
             return "CV_TEST";
         case MSG_ENVELOPE_CHUNK:
             return "ENVELOPE_CHUNK";
+        case MSG_SAMPLE_SELECT:
+            return "SAMPLE_SELECT";
+        case MSG_SAMPLE_UNLOAD:
+            return "SAMPLE_UNLOAD";
         case MSG_SEQ_TRANSPORT:
             return "SEQ_TRANSPORT";
         case MSG_SEQ_PATTERN_OP:

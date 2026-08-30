@@ -365,4 +365,49 @@ TEST_F(MessageDispatchTest, NullPayloadIsSafeForAllRoutedTypes) {
     EXPECT_TRUE(r.play_index_requests.empty());
 }
 
+// Sample selection and unload reach the engine.
+//
+// This is the class of bug the dispatch suite exists for: MSG_NOTE_ON once had
+// a log-only stub here and nothing noticed, because every unit test around it
+// tested units rather than the routing between them. A new message is not
+// wired until a test says the byte on the wire reaches the engine call.
+TEST_F(MessageDispatchTest, SampleSelectReachesEngine) {
+    WaveX::Protocol::SampleSelectMessage msg(7);
+    ProcessInterMcuMessage(
+        MSG_SAMPLE_SELECT, 1, reinterpret_cast<const uint8_t*>(&msg), sizeof(msg));
+
+    const DispatchRecord& r = GetDispatchRecord();
+    ASSERT_EQ(r.selected_samples.size(), 1u);
+    EXPECT_EQ(r.selected_samples[0], 7);
+}
+
+TEST_F(MessageDispatchTest, SampleSelectZeroIsForwarded) {
+    // 0 is meaningful, not a no-op: it restores "most recently loaded".
+    WaveX::Protocol::SampleSelectMessage msg(0);
+    ProcessInterMcuMessage(
+        MSG_SAMPLE_SELECT, 1, reinterpret_cast<const uint8_t*>(&msg), sizeof(msg));
+
+    ASSERT_EQ(GetDispatchRecord().selected_samples.size(), 1u);
+    EXPECT_EQ(GetDispatchRecord().selected_samples[0], 0);
+}
+
+TEST_F(MessageDispatchTest, SampleUnloadReachesEngine) {
+    WaveX::Protocol::SampleUnloadMessage msg(3);
+    ProcessInterMcuMessage(
+        MSG_SAMPLE_UNLOAD, 1, reinterpret_cast<const uint8_t*>(&msg), sizeof(msg));
+
+    const DispatchRecord& r = GetDispatchRecord();
+    ASSERT_EQ(r.unloaded_samples.size(), 1u);
+    EXPECT_EQ(r.unloaded_samples[0], 3);
+}
+
+TEST_F(MessageDispatchTest, UndersizedSampleSelectIsRejected) {
+    uint8_t truncated[1] = {0};
+    ProcessInterMcuMessage(MSG_SAMPLE_SELECT, 1, truncated, sizeof(truncated));
+    ProcessInterMcuMessage(MSG_SAMPLE_UNLOAD, 1, truncated, sizeof(truncated));
+
+    EXPECT_TRUE(GetDispatchRecord().selected_samples.empty());
+    EXPECT_TRUE(GetDispatchRecord().unloaded_samples.empty());
+}
+
 }  // namespace

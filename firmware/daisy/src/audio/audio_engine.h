@@ -78,6 +78,15 @@ bool GetPlaybackPosition(uint32_t& frames_played, uint32_t& region_frames);
 // for none so the loop seam is heard as it will actually play.
 void SetLoopGapMs(uint16_t gap_ms);
 
+// Which loaded sample MSG_NOTE_ON addresses. 0 restores the pre-selection
+// behaviour: the most recently loaded playable sample.
+void SelectSample(uint16_t sample_id);
+uint16_t SelectedSample();
+
+// Frees a loaded sample's RAM, stopping any voice sounding from it first.
+// Returns false if the id is 0 or is not loaded.
+bool UnloadSample(uint16_t sample_id);
+
 // Re-sends the per-sample record. sample_id 0 means every loaded sample.
 void PushAllSampleMeta(uint16_t sample_id);
 

@@ -280,6 +280,27 @@ esp_err_t inter_mcu_request_sample_meta(uint16_t sample_id) {
     return result >= 0 ? ESP_OK : ESP_FAIL;
 }
 
+esp_err_t inter_mcu_send_sample_select(uint16_t sample_id) {
+    if (!s_initialized || s_suspended) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    WaveX::Protocol::SampleSelectMessage msg(sample_id);
+    int result = send_uart_message(WaveX::Protocol::MSG_SAMPLE_SELECT, &msg, sizeof(msg));
+    return result >= 0 ? ESP_OK : ESP_FAIL;
+}
+
+esp_err_t inter_mcu_send_sample_unload(uint16_t sample_id) {
+    if (!s_initialized || s_suspended) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (sample_id == 0) {
+        return ESP_ERR_INVALID_ARG;  // the backend rejects it; fail here rather than round-trip
+    }
+    WaveX::Protocol::SampleUnloadMessage msg(sample_id);
+    int result = send_uart_message(WaveX::Protocol::MSG_SAMPLE_UNLOAD, &msg, sizeof(msg));
+    return result >= 0 ? ESP_OK : ESP_FAIL;
+}
+
 esp_err_t inter_mcu_send_sample_edit(uint8_t slot,
                                      bool loop_enabled,
                                      int16_t gain_db_x10,

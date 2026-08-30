@@ -67,6 +67,20 @@ void SetLoopGapMs(uint16_t gap_ms) {
     WaveX::Test::GetDispatchRecord().loop_gaps_ms.push_back(gap_ms);
 }
 
+void SelectSample(uint16_t sample_id) {
+    WaveX::Test::GetDispatchRecord().selected_samples.push_back(sample_id);
+}
+
+uint16_t SelectedSample() {
+    auto& sel = WaveX::Test::GetDispatchRecord().selected_samples;
+    return sel.empty() ? 0 : sel.back();
+}
+
+bool UnloadSample(uint16_t sample_id) {
+    WaveX::Test::GetDispatchRecord().unloaded_samples.push_back(sample_id);
+    return sample_id != 0;  // mirrors the engine: 0 is rejected, not a wildcard
+}
+
 void PushAllSampleMeta(uint16_t sample_id) {
     WaveX::Test::GetDispatchRecord().meta_requests.push_back(sample_id);
 }

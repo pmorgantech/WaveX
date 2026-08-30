@@ -38,6 +38,8 @@ static void HandleHeartbeatMessage(const uint8_t* payload, size_t payload_size);
 static void HandleDiagSubscribeMessage(const uint8_t* payload, size_t payload_size);
 static void HandleSampleEditMessage(const uint8_t* payload, size_t payload_size);
 static void HandleSampleMetaReqMessage(const uint8_t* payload, size_t payload_size);
+static void HandleSampleSelectMessage(const uint8_t* payload, size_t payload_size);
+static void HandleSampleUnloadMessage(const uint8_t* payload, size_t payload_size);
 static void HandleEnvelopeReqMessage(const uint8_t* payload, size_t payload_size);
 static void HandleStatusRequestMessage(const uint8_t* payload, size_t payload_size);
 static void HandleBrowseRequestMessage(const uint8_t* payload, size_t payload_size);
@@ -143,6 +145,12 @@ void ProcessInterMcuMessage(uint8_t msg_type,
             break;
         case MSG_SAMPLE_EDIT_SET:
             HandleSampleEditMessage(payload, payload_size);
+            break;
+        case MSG_SAMPLE_SELECT:
+            HandleSampleSelectMessage(payload, payload_size);
+            break;
+        case MSG_SAMPLE_UNLOAD:
+            HandleSampleUnloadMessage(payload, payload_size);
             break;
         case MSG_SAMPLE_META_REQ:
             HandleSampleMetaReqMessage(payload, payload_size);
@@ -360,6 +368,35 @@ static void HandleMeterPushMessage(const uint8_t* payload, size_t payload_size) 
 static void HandleWaveChunkMessage(const uint8_t* payload, size_t payload_size) {}
 
 static void HandleHeartbeatMessage(const uint8_t* payload, size_t payload_size) {}
+
+static void HandleSampleSelectMessage(const uint8_t* payload, size_t payload_size) {
+    if (!payload || payload_size < sizeof(WaveX::Protocol::SampleSelectMessage)) {
+        UART_LOGE("daisy_msg", "SAMPLE_SELECT payload too small (%d)", (int)payload_size);
+        return;
+    }
+    const auto* msg = reinterpret_cast<const WaveX::Protocol::SampleSelectMessage*>(payload);
+#if WAVEX_AUDIO_ENGINE_ENABLED
+    WaveX::AudioEngine::SelectSample(msg->sample_id);
+#else
+    (void)msg;
+#endif
+}
+
+static void HandleSampleUnloadMessage(const uint8_t* payload, size_t payload_size) {
+    if (!payload || payload_size < sizeof(WaveX::Protocol::SampleUnloadMessage)) {
+        UART_LOGE("daisy_msg", "SAMPLE_UNLOAD payload too small (%d)", (int)payload_size);
+        return;
+    }
+    const auto* msg = reinterpret_cast<const WaveX::Protocol::SampleUnloadMessage*>(payload);
+#if WAVEX_AUDIO_ENGINE_ENABLED
+    if (WaveX::AudioEngine::UnloadSample(msg->sample_id)) {
+        // Tell the frontend what is left, so its list cannot drift from RAM.
+        WaveX::AudioEngine::PushAllSampleMeta(0);
+    }
+#else
+    (void)msg;
+#endif
+}
 
 static void HandleSampleEditMessage(const uint8_t* payload, size_t payload_size) {
     if (!payload || payload_size < sizeof(SampleEditMessage)) {

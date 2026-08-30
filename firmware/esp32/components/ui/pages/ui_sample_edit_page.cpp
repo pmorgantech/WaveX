@@ -421,8 +421,13 @@ void UISampleEditPage::toggleAudition() {
             refreshStatus("Stop request failed");
         }
     } else {
-        // Push the current UI values first so the voice is built from what is
-        // on screen, not from whatever was last committed.
+        // Address the sample this page is editing, not whatever was loaded
+        // last. Without this the preview silently followed the most recent
+        // load, so opening the editor on an earlier sample previewed a
+        // different one.
+        inter_mcu_send_sample_select(currentSampleId());
+        // Push the current UI values so the voice is built from what is on
+        // screen, not from whatever was last committed.
         sendEdit();
         if (inter_mcu_send_note_on(kAuditionNote, kAuditionVelocity, 0) == ESP_OK) {
             auditioning_ = true;
