@@ -1,0 +1,11 @@
+# In-source CMake/CTest output. This tree was configured in-source at least
+# once, which is how three built test binaries (including sampler_test, whose
+# source no longer exists) ended up committed in fe361d1. The root .gitignore
+# covers build*/ and CMakeFiles/ but not these.
+bin/
+Testing/
+CTestTestfile.cmake
+cmake_install.cmake
+CMakeCache.txt
+*_tests.cmake
+*_include.cmake
