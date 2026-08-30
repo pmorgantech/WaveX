@@ -33,7 +33,7 @@ sequence(u16 LE) | payload[0..2048] | crc16(u16 LE) | end(0x5A)
 | Type | Value | Direction | Payload | Purpose |
 |---|---|---|---|---|
 | MSG_SYNC | 0x00 | both | `SyncMessage{timestamp_ms}` | keepalive/resync |
-| MSG_CONTROL_CHANGE | 0x01 | E→D | `ControlChangeMessage{param, channel, value}` | parameter set (see `ControlParameter` enum) |
+| MSG_CONTROL_CHANGE | 0x01 | E→D | `ControlChangeMessage{param, channel, value}` | parameter set (see `ControlParameter` enum). Live ids are 0x01–0x0A; 0x0B–0x15 are reserved for `param-locks-and-modulation.md` §1. `PARAM_LFO_RATE`/`PARAM_LFO_DEPTH` sit at 0x16/0x17 — they used to duplicate `PARAM_PAN`/`PARAM_PITCH` at 0x08/0x09 in the same enum, dead but one wiring-up away from a mis-route. |
 | MSG_NOTE_ON / OFF | 0x02/0x03 | E→D | `NoteMessage{note, velocity, channel}` | note events (MIDI-shaped) |
 | MSG_SAMPLE_LOAD | 0x04 | E→D | `SampleLoadMessage{sample_id, hints, path[96]}` | load sample from Daisy SD into sample RAM (path-based; metadata fields are hints, Daisy re-reads) |
 | MSG_SAMPLE_DATA | 0x05 | E→D | raw chunk | sample bytes pushed from ESP32 (rare path; SD-local loads preferred) |
@@ -45,7 +45,7 @@ sequence(u16 LE) | payload[0..2048] | crc16(u16 LE) | end(0x5A)
 | MSG_DATA_REQUEST | 0x0B | E→D | `DataRequestMessage{request_type}` | slave pulls queued data (any/meter/wave) |
 | MSG_METER_PUSH | 0x10 | D→E | `MeterPushMessage{rms L/R, peak L/R}` | level meters (20–50 ms cadence) |
 | MSG_WAVE_CHUNK | 0x11 | D→E | `WaveChunkMessage{offset, count}` + int16[] | preview waveform data |
-| MSG_HEARTBEAT | 0x12 | both | `HeartbeatMessage{uptime, rx_total, loop_counter, cpu avg/min/max ×10}` | health + CPU load telemetry |
+| MSG_HEARTBEAT | 0x12 | both | `HeartbeatMessage{uptime, rx_total, loop_counter, cpu avg/min/max ×10}` | health + CPU load telemetry. `uptime` is the **only** source of backend uptime and needs no diagnostics subscription — the Diagnostics Daisy tab reads it from here rather than from `MSG_DIAG_PUSH`, so there is one copy of the number and one cadence for it. |
 | MSG_ACK | 0x13 | both | `AckMessage{serial_id}` | explicit ack of a sequence number |
 | MSG_BROWSE_REQ / RESP | 0x30/0x31 | E→D / D→E | path + start_index + max_entries / `BrowseRespHeader` + `FileEntryWire[]` | paginated SD directory listing; entries carry WAV metadata (rate, channels, bits, duration_ms) |
 | MSG_SAMPLE_PLAY_REQ | 0x32 | E→D | path string | audition by path |
@@ -55,7 +55,7 @@ sequence(u16 LE) | payload[0..2048] | crc16(u16 LE) | end(0x5A)
 | MSG_SAMPLE_GET_PATH_REQ / RESP | 0x37/0x38 | E→D / D→E | index / `SamplePathResponseMessage{index, path[200]}` | resolve index → full path |
 | MSG_STORAGE_STATUS | 0x39 | D→E | `StorageStatusMessage{mounted, reserved[3]}` | **unsolicited**: SD mounted (1) or lost (0). The frontend has no view of the card slot and cannot poll for this, so ejection/insertion is only observable if the backend says so. On loss the backend also sends `MSG_SAMPLE_STOP_RESP` + an empty `MSG_BROWSE_RESP` so audition exits and the listing clears; on mount the browser re-lists its current path. |
 | MSG_DIAG_SUBSCRIBE | 0x3A | E→D | `DiagSubscribeMessage{enable, interval_hz, reserved[2]}` | start/stop the telemetry push. Subscription-gated on purpose: the push flows only while the diagnostics page is open, so it costs nothing the rest of the time. `interval_hz` is clamped 1–10 by the backend. |
-| MSG_DIAG_PUSH | 0x3B | D→E | `DiagPushMessage` (94 B → `PKT_SIZE_128`) | **unsolicited** while subscribed: one interval of audio/storage/link/MIDI telemetry. Counters are **deltas over `interval_ms`, reset on read**; absolute values only for levels and states. See `docs/ui-diagnostics-spec.md` for what each figure is for. At 2 Hz this is ~188 B/s against a 200 KB/s link — under 0.1%. |
+| MSG_DIAG_PUSH | 0x3B | D→E | `DiagPushMessage` (102 B → `PKT_SIZE_128`) | **unsolicited** while subscribed: one interval of audio/storage/link/MIDI telemetry plus the backend's system-heap level. Counters are **deltas over `interval_ms`, reset on read**; absolute values only for levels and states. See `docs/ui-diagnostics-spec.md` for what each figure is for. At 2 Hz this is ~216 B/s against a 200 KB/s link — under 0.15%. |
 | MSG_CV_CAL_SET | 0x40 | E→D | `CvCalMessage{group, persist, 7×float}` | apply one group's CV calibration; `persist=1` also writes the table to SD; Daisy replies with MSG_CV_CAL_RESP |
 | MSG_CV_CAL_GET | 0x41 | E→D | `CvCalGetMessage{group}` | request one group's calibration |
 | MSG_CV_CAL_RESP | 0x42 | D→E | `CvCalMessage` (persist unused) | reply to SET and GET |

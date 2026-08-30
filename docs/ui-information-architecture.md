@@ -148,6 +148,25 @@ is two fields on `DiagPushMessage`, and per the cross-cutting rules that means
 commit. Until then those two cards must render as explicitly unavailable rather
 than as zero: a zero uptime looks like a crash loop.
 
+**Correction (stage 8, as built).** Half of that paragraph was wrong, and this
+is the third time this document's premises have been. Uptime *was* already on
+the wire: `HeartbeatMessage::uptime_ms` has carried it since the link existed,
+the ESP32 has always stored it in `wavex_backend_heartbeat_t`, and the Daisy tab
+was already reading that same struct one card over for engine CPU. So the gap
+was one field, not two, and the fix was one protocol change plus one render that
+needed no protocol change at all.
+
+Uptime is therefore rendered from the heartbeat rather than copied into
+`MSG_DIAG_PUSH`. That is the same argument this document makes above for keeping
+SD counters off the Daisy tab — two places to read one number is two places for
+them to disagree — and it has a second payoff: the heartbeat is unconditional,
+so uptime survives the diagnostics subscription being closed, where a
+`MSG_DIAG_PUSH` copy would not. Only `heap_total` / `heap_free` were added, and
+they were appended **after** `interval_ms` rather than filed next to the other
+memory fields, so every pre-existing field keeps its offset and a backend still
+running the 94-byte layout parses with the two new fields reading zero. That is
+why `PROTOCOL_VERSION` did not move.
+
 ## 6. Staging
 
 One verified commit each. Status is recorded against the code, not against the
@@ -203,7 +222,37 @@ menu, leaving only the tabbing to do).
    in `docs/backlog.md`). Six tabs of eight cards would otherwise have made the
    worst page-entry cost in the UI about 20% worse.
 8. **Daisy heap + uptime** — the protocol addition, with its round-trip test and
-   doc row, so the two placeholder cards become live. **Not started.**
+   doc row, so the two placeholder cards become live. **Done**, with the scope
+   corrected in §5: only heap needed the wire. `DiagPushMessage` gains
+   `heap_total`/`heap_free` (appended after `interval_ms`, so no
+   `PROTOCOL_VERSION` bump — see §5); uptime comes from the heartbeat the tab
+   was already reading. Both cards now carry the `wire` tag instead of `new`,
+   and each falls back to `-` with a stated reason when its source is stale,
+   which is what the placeholders were protecting.
+
+   The Daisy's free-heap figure is **headroom**, not the allocator's true free
+   total: it is the gap between `_sbrk(0)` and the top of the SRAM heap region,
+   because `--specs=nano.specs` means `mallinfo()` cannot be linked (it drags
+   full newlib's `mallocr.o` in beside `nano-mallocr.o` and the link fails on a
+   duplicate `_malloc_r`). A block taken and later freed therefore still reads
+   as used. That errs toward under-reporting free, which is the right direction
+   for a headroom gauge, and this firmware allocates during init and forbids it
+   in the audio path, so the discrepancy is small and static.
+
+   Two things were found in passing, both in `protocol.h`:
+   - `PARAM_LFO_RATE`/`PARAM_LFO_DEPTH` were `0x08`/`0x09` — the same values as
+     `PARAM_PAN`/`PARAM_PITCH`, in the same enum. Dead (nothing sends or handles
+     the LFO ids), so never a live mis-route, but one wiring-up away from being
+     one. Moved to `0x16`/`0x17`, clear of the `0x0B`–`0x15` block
+     `param-locks-and-modulation.md` §1 reserves. `PAN`/`PITCH` keep their wire
+     values, so nothing on the wire changed.
+   - That same design doc still lists `PARAM_PAN = 0x0C` as a *future* id, but
+     `PAN` has been live at `0x08` since the Voice page shipped. Recorded in
+     `docs/backlog.md` rather than resolved here — reconciling a target id space
+     is not a diagnostics-card change.
+
+   *Not verified on hardware:* both figures are compile- and host-test-verified
+   only. Neither has been read off a running Daisy.
 
 **Two shapes of tab group, not one.** Stage 2 shares the *chrome*, not the
 hosting. Where the children are substantial independent pages (Sample), a

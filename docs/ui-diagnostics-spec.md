@@ -186,7 +186,7 @@ the entire set:
 // Daisy -> ESP32, unsolicited while subscribed. All counters are DELTAS over
 // interval_ms, matching the reset-on-read convention the Daisy telemetry
 // already uses; absolute values are only for levels and states.
-struct DiagPushMessage {          // 94 bytes -> PKT_SIZE_128
+struct DiagPushMessage {          // 102 bytes -> PKT_SIZE_128
     // audio
     uint16_t callback_hz_x10;     // 10000 = 1000.0 Hz
     uint16_t ring_low_water;      // frames, of RB_CAP_FRAMES (2048)
@@ -235,6 +235,10 @@ struct DiagPushMessage {          // 94 bytes -> PKT_SIZE_128
     uint8_t  pattern;
     uint8_t  step;
     uint32_t interval_ms;         // window these deltas cover
+    // backend runtime (appended after interval_ms, so every field above keeps
+    // its offset and a pre-stage-8 backend's 94-byte push still parses)
+    uint32_t heap_total;          // linker-reserved heap region, bytes
+    uint32_t heap_free;           // headroom above the allocator's break
 } __attribute__((packed));
 ```
 
@@ -242,7 +246,7 @@ Suggested IDs: `MSG_DIAG_SUBSCRIBE = 0x3A` (E→D, `{uint8_t enable; uint8_t
 interval_hz;}`) and `MSG_DIAG_PUSH = 0x3B` (D→E). `0x39` is taken by
 `MSG_STORAGE_STATUS`.
 
-**Cost:** 94 bytes at 2 Hz is ~188 B/s against a 200 KB/s link — under 0.1%.
+**Cost:** 102 bytes at 2 Hz is ~216 B/s against a 200 KB/s link — under 0.15%.
 Subscription matters more than the size: it should flow only while the
 diagnostics page is open, so it costs exactly nothing the rest of the time.
 

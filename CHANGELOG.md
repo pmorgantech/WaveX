@@ -11,6 +11,39 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Added — Daisy heap and uptime on the Diagnostics Daisy tab
+
+- `DiagPushMessage` (`MSG_DIAG_PUSH`) gains `heap_total` and `heap_free`, the
+  backend's **system** heap — a different allocator from the SDRAM sample pools
+  reported beside it, with a different failure mode. The Daisy fills them from
+  the main loop, never the audio callback.
+- Both fields are appended **after** `interval_ms`, so every pre-existing field
+  keeps its offset. A backend still running the old 94-byte layout parses
+  against the new 102-byte one with the two new fields reading zero — which is
+  also the "not reported" sentinel the UI renders as unknown. `PROTOCOL_VERSION`
+  is therefore unchanged, and the packet stays in the 128-byte size class.
+- The two Diagnostics cards that read `-` / "not on the wire yet" are live.
+  Uptime turned out to need no protocol change at all: `HeartbeatMessage`
+  has always carried it and the frontend has always stored it, so the card
+  renders it from the heartbeat the same tab already reads for engine CPU —
+  one copy of the number, and it survives the diagnostics subscription closing.
+- Free heap is **headroom** (the gap between the allocator's break and the top
+  of the heap region), not the allocator's true free total: `--specs=nano.specs`
+  makes `mallinfo()` unlinkable, since referencing it pulls full newlib's
+  `mallocr.o` in beside `nano-mallocr.o` and the link fails on a duplicate
+  `_malloc_r`. This under-reports free rather than over-reporting it.
+
+### Fixed — two `ControlParameter` ids had duplicate values
+
+- `PARAM_LFO_RATE` was `0x08`, the same value as `PARAM_PAN`, and
+  `PARAM_LFO_DEPTH` was `0x09`, the same as `PARAM_PITCH` — in one flat enum
+  used as a wire id space. Never a live mis-route, because nothing sends or
+  handles the LFO ids, but one wiring-up away from being one.
+- The LFO ids move to `0x16`/`0x17`, clear of the `0x0B`–`0x15` block reserved
+  by `docs/features/param-locks-and-modulation.md` §1. `PARAM_PAN` and
+  `PARAM_PITCH` keep their values, so nothing on the wire changed. A round-trip
+  test now asserts the whole enum is collision-free.
+
 ### Added — Settings tab group (UI IA stage 6)
 
 - `Settings` is now a tab group in the shared tab chrome

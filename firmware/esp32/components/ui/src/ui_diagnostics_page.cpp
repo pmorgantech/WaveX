@@ -467,15 +467,18 @@ void UIDiagnosticsPage::buildDaisyTab(lv_obj_t* tab) {
     };
     // Top row: the backend's CPU and the sample-RAM pool breakdown that the
     // standalone Sample Memory page used to render as a block of text.
-    // Bottom row: the two figures the wire does not carry yet, then the
-    // resident-sample list.
+    // Bottom row: system heap and uptime, then the resident-sample list.
+    //
+    // DAISY HEAP is the backend's newlib heap, which is a different allocator
+    // from the SDRAM sample pools next to it and fails in a different way -
+    // that is why it gets a card rather than being folded into them.
     static const Def defs[6] = {
         {"DAISY CPU", "wire", true, 85},
         {"SMALL POOL", "wire", true, 85},
         {"LARGE POOL", "wire", true, 85},
         {"LARGEST BLOCK", "wire", false, 0},
-        {"DAISY HEAP", "new", false, 0},
-        {"DAISY UPTIME", "new", false, 0},
+        {"DAISY HEAP", "wire", true, 85},
+        {"DAISY UPTIME", "wire", false, 0},
     };
     for (int i = 0; i < 6; i++) {
         daisy_cards[i] = makeCard(tab,
@@ -490,13 +493,6 @@ void UIDiagnosticsPage::buildDaisyTab(lv_obj_t* tab) {
     // Daisy CPU is the figure that predicts an underrun, so it earns a trend
     // of its own. It comes free from HeartbeatMessage - no protocol change.
     addSpark(daisy_cards[0], kColGreen);
-
-    // Neither Daisy heap nor Daisy uptime is carried by DiagPushMessage or
-    // HeartbeatMessage; adding them is stage 8 of
-    // docs/ui-information-architecture.md §6. Until then they say so, because a
-    // zero uptime does not read as "unknown", it reads as a crash loop.
-    setCard(daisy_cards[4], "-", "", "not on the wire yet", -1);
-    setCard(daisy_cards[5], "-", "", "not on the wire yet", -1);
 
     // Resident samples, from SampleMemStatusMessage. This is the substance of
     // the former Sample Memory page: a table rather than the block of
@@ -1174,7 +1170,7 @@ void UIDiagnosticsPage::refreshDaisyTab() {
     }
     char v[48], u[32], sub[80];
 
-    // --- engine CPU, from the heartbeat (no subscription needed) ---
+    // --- engine CPU and uptime, from the heartbeat (no subscription needed) ---
     wavex_backend_heartbeat_t hb;
     inter_mcu_get_backend_heartbeat_detailed(&hb);
     if (hb.valid) {
@@ -1185,6 +1181,56 @@ void UIDiagnosticsPage::refreshDaisyTab() {
         pushSpark(daisy_cards[0], (int)hb.cpu_avg_percent);
     } else {
         setCard(daisy_cards[0], "-", "%", "no heartbeat from backend", 0);
+    }
+
+    // Uptime rides on the heartbeat, not on the diagnostics subscription -
+    // HeartbeatMessage::uptime_ms has carried it since the link existed, and
+    // stage 8 found it there rather than adding a second copy to
+    // MSG_DIAG_PUSH. Two cadences reporting one number is two things to
+    // disagree.
+    //
+    // hb.valid gates it for the same reason the placeholder used to say "not
+    // on the wire yet": a zero here does not read as "unknown", it reads as a
+    // crash loop.
+    if (hb.valid) {
+        const uint32_t secs = hb.uptime_ms / 1000u;
+        snprintf(v,
+                 sizeof(v),
+                 "%lu:%02lu:%02lu",
+                 (unsigned long)(secs / 3600u),
+                 (unsigned long)((secs / 60u) % 60u),
+                 (unsigned long)(secs % 60u));
+        // The heartbeat is the only proof the backend is alive at all, so its
+        // own age belongs on the face of the card next to the uptime it
+        // carries: a frozen uptime with a stale beat is a hung backend, and a
+        // frozen uptime with a fresh beat is impossible.
+        const uint32_t beat_now_ms = (uint32_t)(esp_timer_get_time() / 1000);
+        snprintf(sub, sizeof(sub), "beat %lu ms ago", (unsigned long)(beat_now_ms - hb.last_rx_ms));
+        setCard(daisy_cards[5], v, "", sub, -1);
+    } else {
+        setCard(daisy_cards[5], "-", "", "no heartbeat from backend", -1);
+    }
+
+    // --- system heap, from the diagnostics push ---
+    //
+    // A different allocator from the sample pools below: newlib's heap in
+    // SRAM, where the pools are the SDRAM sample RAM. heap_total == 0 means
+    // the backend does not report it - either no push has landed or it is
+    // running firmware from before this field existed, since the payload
+    // region is zero-padded and an older 94-byte push parses with these two
+    // reading zero. A live backend cannot have a zero-byte heap region.
+    WaveX::Protocol::DiagPushMessage dp;
+    if (inter_mcu_get_diag_push(&dp, kDiagMaxAgeMs) && dp.heap_total != 0) {
+        // Used on the face, free in the sub-line and the total in the unit -
+        // the same reading order as the two pool cards beside it, so a glance
+        // along the row compares like with like.
+        const uint32_t used = dp.heap_total - dp.heap_free;
+        snprintf(v, sizeof(v), "%lu", (unsigned long)(used / 1024));
+        snprintf(u, sizeof(u), "/ %lu KB", (unsigned long)(dp.heap_total / 1024));
+        snprintf(sub, sizeof(sub), "%lu KB free", (unsigned long)(dp.heap_free / 1024));
+        setCard(daisy_cards[4], v, u, sub, (int)((uint64_t)used * 100 / dp.heap_total));
+    } else {
+        setCard(daisy_cards[4], "-", "", "no telemetry from backend", 0);
     }
 
     // --- sample memory ---
