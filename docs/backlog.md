@@ -201,3 +201,43 @@ claim fixes without a way to observe them.
 
 **When to revisit:** at SPI revival planning. Copy SPI-1..SPI-5 into that
 roadmap item's gate before any bring-up work starts.
+
+---
+
+## Break the `components/ui` ⇄ `main` dependency cycle
+
+**Want:** the UI component to stop depending on `main`, so it can be built and
+host-tested on its own.
+
+**Current state:** `components/ui/CMakeLists.txt` declares `REQUIRES ... main`,
+and 18 include sites across ten UI files reach into `inter_mcu.h`, `ui_task.h`
+and `comm/i_comm_interface.h`. Pages call `inter_mcu_*` free functions directly.
+`docs/ui-architecture.md` already names the intended fix — a `UISharedContext`
+injected into pages instead of global reach-through — and lists it as future
+work; the cycle is stronger than that doc admits. Tracked as E-ARCH1 in
+[`code_review_esp32_20260829.md`](code_review_esp32_20260829.md).
+
+**Why it is not urgent:** nothing is broken by it. The cost is paid in
+testability rather than behaviour: the UI component cannot be compiled without
+the whole frontend, so pages have no host tests, which is why the LVGL-threading
+and listener-lifetime defects fixed in August were found by reading rather than
+by a failing test.
+
+**Why it is explicitly deferred right now:** it touches every page, and the
+August remediation pass changed input decoding, the LVGL tick, touch ownership,
+refresh cadence and link timing without any of it running on hardware. Layering
+a wide refactor on top of that would make a bench failure impossible to
+attribute — the first question would be "is this the new architecture or one of
+the twenty behavioural fixes?" Do the hardware pass first.
+
+**If picked up, the shape that seems right:**
+
+- Define `UISharedContext` with the handful of operations pages actually use
+  (send note, request envelope, request browse, read meters) rather than
+  exposing `inter_mcu.h` wholesale — the narrow interface is the point.
+- Inject it at page construction via the existing `UINavigator` factory
+  functions, so no page reaches for a global.
+- Move `ICommInterface` into the UI component or a third shared component; it is
+  currently in `main` only by accident of where it was written.
+- Drop `main` from the UI component's `REQUIRES` last: that is the check that
+  the job is finished, not a step along the way.

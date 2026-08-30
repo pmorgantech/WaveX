@@ -143,7 +143,7 @@ void WaveXApplication::run() {
         // UART operations are handled by inter_mcu
 
 #ifdef ESP_PLATFORM
-        vTaskDelay(pdMS_TO_TICKS(1000));  // 2 second loop - slower to reduce load
+        vTaskDelay(pdMS_TO_TICKS(1000));  // 1 s; the loop only logs heap every 60 s
 #endif
     }
 }

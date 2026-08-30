@@ -15,8 +15,6 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
-
-#include <vector>
 #else
 #include <stdio.h>
 #define ESP_LOGI(tag, fmt, ...) printf("[%s] " fmt "\n", tag, ##__VA_ARGS__)
@@ -672,7 +670,16 @@ esp_err_t inter_mcu_send_browse_req(const char* path, uint8_t start_index) {
     const size_t path_len = strlen(path);
     const size_t payload_len = 1 + path_len + 1;  // start_index + path + null terminator
 
-    std::vector<uint8_t> payload(payload_len, 0);
+    // Fixed buffer, not std::vector: this is a send path, the maximum size is
+    // known from the protocol, and <vector> was only included under
+    // ESP_PLATFORM while the use was unconditional - so the non-ESP branch of
+    // this translation unit could not compile at all. That went unnoticed
+    // because the host tests exclude this file.
+    if (payload_len > 1 + WaveX::Protocol::BROWSE_PATH_MAX + 1) {
+        ESP_LOGE("inter_mcu", "browse path too long (%u)", (unsigned)path_len);
+        return ESP_ERR_INVALID_SIZE;
+    }
+    uint8_t payload[1 + WaveX::Protocol::BROWSE_PATH_MAX + 1] = {0};
     payload[0] = start_index;
     memcpy(&payload[1], path, path_len);
     payload[payload_len - 1] = '\0';
@@ -681,8 +688,7 @@ esp_err_t inter_mcu_send_browse_req(const char* path, uint8_t start_index) {
         ESP_LOGD("inter_mcu", "  [%d] = 0x%02X", (int)i, payload[i]);
     }
 
-    int result =
-        send_uart_message(WaveX::Protocol::MSG_BROWSE_REQ, payload.data(), (uint16_t)payload_len);
+    int result = send_uart_message(WaveX::Protocol::MSG_BROWSE_REQ, payload, (uint16_t)payload_len);
 
     return result >= 0 ? ESP_OK : ESP_FAIL;
 }

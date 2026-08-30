@@ -23,11 +23,14 @@
 #if WAVEX_ESP_USB_MIDI_ENABLED && WAVEX_USB_MIDI_INPUT_ENABLED
 
 #include "esp_log.h"
+#include "esp_mac.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "midi_task.h"  // midi_forward_event()
 #include "tinyusb.h"
 #include "tinyusb_default_config.h"
+
+#include <cstdio>
 
 static const char* TAG = "usb_midi";
 
@@ -52,11 +55,34 @@ enum {  // endpoint numbers (0 is reserved)
 
 #define TUSB_DESCRIPTOR_TOTAL_LEN (TUD_CONFIG_DESC_LEN + TUD_MIDI_DESC_LEN)
 
+// Per-unit serial, derived from the factory MAC. A hardcoded string means two
+// WaveX units on one host present the same serial, and DAWs key their saved
+// port assignments on it - so the second unit silently inherits the first's
+// routing.
+static char s_serial[13] = "000000000000";
+
+static void init_serial_from_mac() {
+    uint8_t mac[6] = {0};
+    if (esp_read_mac(mac, ESP_MAC_EFUSE_FACTORY) != ESP_OK &&
+        esp_efuse_mac_get_default(mac) != ESP_OK) {
+        return;  // keep the placeholder; a wrong serial beats no enumeration
+    }
+    snprintf(s_serial,
+             sizeof(s_serial),
+             "%02X%02X%02X%02X%02X%02X",
+             mac[0],
+             mac[1],
+             mac[2],
+             mac[3],
+             mac[4],
+             mac[5]);
+}
+
 static const char* s_str_desc[] = {
     (const char[]){0x09, 0x04},  // 0: language = English (0x0409)
     "WaveX",                     // 1: manufacturer
     "WaveX Sampler",             // 2: product
-    "0001",                      // 3: serial
+    s_serial,                    // 3: serial, from the eFuse MAC (see below)
     "WaveX MIDI",                // 4: MIDI interface name
 };
 
@@ -129,6 +155,8 @@ extern "C" esp_err_t usb_midi_task_start(void) {
     tusb_cfg.descriptor.high_speed_config = s_midi_hs_cfg_desc;
     tusb_cfg.descriptor.qualifier = NULL;
 #endif  // TUD_OPT_HIGH_SPEED
+
+    init_serial_from_mac();
 
     esp_err_t err = tinyusb_driver_install(&tusb_cfg);
     if (err != ESP_OK) {

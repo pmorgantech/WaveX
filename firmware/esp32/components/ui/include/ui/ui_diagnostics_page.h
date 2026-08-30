@@ -99,7 +99,6 @@ class UIDiagnosticsPage : public UIPage {
     // CPU monitoring methods
     void updateCpuUsage();
     void updateCpuUsageFreertosStats();
-    void updateCpuUsageEspIdfBuiltin();
 
     // Data collection and UI update methods
     void collectDiagnosticsData();
@@ -129,7 +128,6 @@ class UIDiagnosticsPage : public UIPage {
     uint32_t last_check_time_ms;
 
     // ESP-IDF CPU monitoring
-    uint32_t last_esp_idf_check_time;
 
     // Timer handles
     esp_timer_handle_t diagnostics_timer_handle;

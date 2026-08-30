@@ -17,11 +17,11 @@ namespace wavex_ui {
  * Shows the loaded sample's waveform with a start/end region and a zoom
  * window, laid out per the WaveX Wireframes v2 edit screen.
  *
- * Scope note: START, END and ZOOM are real - they set the range the backend
- * is asked to render, so moving them changes what you see. GAIN, LOOP,
- * Normalize and Save are drawn but inert: nothing in the protocol carries a
- * per-sample gain, loop point, or a write-back, so they are marked as such
- * rather than wired to controls that would silently do nothing.
+ * Scope note: START, END, ZOOM, GAIN, LOOP and the fades are all real - they
+ * are sent to the backend via MSG_SAMPLE_EDIT, so moving them changes what you
+ * hear. (This comment previously said GAIN and LOOP were "drawn but inert",
+ * which stopped being true when sendEdit() started carrying them.) Normalize
+ * and Save remain unwired: nothing in the protocol carries a write-back.
  */
 class UISampleEditPage : public UIPage {
    public:

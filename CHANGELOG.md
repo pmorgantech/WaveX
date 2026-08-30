@@ -11,6 +11,33 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Removed — A diagnostics path that invented its CPU figure
+
+Found by the 2026-08-29 ESP32-P4 review (item E-MISC1). A second CPU-usage
+implementation, selectable by `WAVEX_CPU_USAGE_METHOD`, derived its percentage
+from the number of runnable tasks and how much heap was free — a plausible-looking
+number with no relationship to CPU time. It was unreachable at the configured
+value, but a diagnostics page that can be switched into reporting a fabricated
+metric is worse than one that reports nothing, because the entire purpose of the
+page is to be believed. Deleted along with the selector.
+
+### Changed — USB serial is per-unit; browse requests no longer allocate
+
+Also from item E-MISC1.
+
+- The USB MIDI serial was the literal `"0001"`, so two WaveX units on one host
+  present the same serial — and DAWs key saved port assignments on it, so the
+  second unit silently inherits the first's routing. Now derived from the eFuse
+  MAC.
+- `inter_mcu_send_browse_req()` built its payload in a `std::vector` on a send
+  path, and `<vector>` was included only under `ESP_PLATFORM` while the use was
+  unconditional — so the non-ESP branch of that file could not compile at all.
+  It went unnoticed because the host tests exclude the file. Now a fixed buffer
+  sized from the protocol.
+- Two comments that had drifted from the code: a main loop labelled "2 second"
+  that delays 1 s, and a sample-edit page header still calling GAIN and LOOP
+  "drawn but inert" after they were wired to `MSG_SAMPLE_EDIT`.
+
 ### Removed — The rest of the dead ESP32 surface; quietened the browse path
 
 Found by the 2026-08-29 ESP32-P4 review (items E-DEAD1, E-LOG1).

@@ -37,7 +37,6 @@ UIDiagnosticsPage::UIDiagnosticsPage()
       last_idle_runtime_core0(0),
       last_idle_runtime_core1(0),
       last_check_time_ms(0),
-      last_esp_idf_check_time(0),
       diagnostics_timer_handle(nullptr),
       lvgl_update_timer(nullptr),
       tabview(nullptr),
@@ -560,13 +559,14 @@ void UIDiagnosticsPage::stopDiagnosticsMonitoring() {
 }
 
 void UIDiagnosticsPage::updateCpuUsage() {
-#if WAVEX_CPU_USAGE_METHOD == 1
+    // One implementation, reading real idle-task runtime. There used to be a
+    // second, selectable by WAVEX_CPU_USAGE_METHOD, which *invented* a figure
+    // from the number of runnable tasks and how much heap was free. It was
+    // unreachable at the configured value, but a diagnostics page that can be
+    // switched into reporting a plausible-looking fabricated number is worse
+    // than one that reports nothing: the whole purpose of the page is to be
+    // believed.
     updateCpuUsageFreertosStats();
-#elif WAVEX_CPU_USAGE_METHOD == 2
-    updateCpuUsageEspIdfBuiltin();
-#else
-#error "Invalid WAVEX_CPU_USAGE_METHOD value. Must be 1 or 2."
-#endif
 }
 
 // Upper bound for uxTaskGetSystemState(). Comfortably above the ~15 tasks this
@@ -677,99 +677,6 @@ void UIDiagnosticsPage::updateCpuUsageFreertosStats() {
         last_idle_runtime_core1 = idle_runtime_core1;
 
         last_check_time_ms = current_time_ms;
-    }
-}
-
-void UIDiagnosticsPage::updateCpuUsageEspIdfBuiltin() {
-    uint32_t current_time_ms = (uint32_t)(esp_timer_get_time() / 1000);
-
-    if (last_esp_idf_check_time == 0) {
-        last_esp_idf_check_time = current_time_ms;
-        return;
-    }
-
-    uint32_t time_diff = current_time_ms - last_esp_idf_check_time;
-    if (time_diff >= 1000) {  // Update every 1 second
-        UBaseType_t task_count = uxTaskGetNumberOfTasks();
-        size_t free_heap = esp_get_free_heap_size();
-        size_t min_free_heap = esp_get_minimum_free_heap_size();
-
-        // Get task list to analyze task states
-        TaskStatus_t* task_status_array = nullptr;
-        UBaseType_t task_status_array_size = task_count + 10;  // Extra space
-        task_status_array = (TaskStatus_t*)malloc(sizeof(TaskStatus_t) * task_status_array_size);
-
-        uint32_t running_tasks = 0;
-        uint32_t blocked_tasks = 0;
-
-        if (task_status_array) {
-            UBaseType_t returned_task_count =
-                uxTaskGetSystemState(task_status_array, task_status_array_size, nullptr);
-
-            for (UBaseType_t i = 0; i < returned_task_count; i++) {
-                eTaskState state = task_status_array[i].eCurrentState;
-                if (state == eRunning || state == eReady) {
-                    running_tasks++;
-                } else if (state == eBlocked) {
-                    blocked_tasks++;
-                }
-            }
-
-            free(task_status_array);
-        }
-
-        // Calculate CPU usage based on system load indicators
-        float base_load = 2.0f;  // Base system overhead
-
-        // Task-based load (more tasks = more CPU usage)
-        float task_load = (float)task_count * 0.2f;
-
-        // Running task load (tasks that are actually executing)
-        float running_load = (float)running_tasks * 1.5f;
-
-        // Memory pressure load (low memory = more CPU usage from GC/compaction)
-        float memory_load = 0.0f;
-        if (free_heap < 30000) {
-            memory_load = 25.0f;  // High memory pressure
-        } else if (free_heap < 60000) {
-            memory_load = 15.0f;  // Medium memory pressure
-        } else if (free_heap < 100000) {
-            memory_load = 8.0f;  // Light memory pressure
-        }
-
-        cpu_usage_percent = base_load + task_load + running_load + memory_load;
-
-        // For ESP32-P4 (dual core), distribute usage across cores
-        cpu_usage_core0 = cpu_usage_percent * 0.6f;  // Approximate core 0 usage
-        cpu_usage_core1 = cpu_usage_percent * 0.4f;  // Approximate core 1 usage
-
-        // Clamp values to reasonable ranges
-        cpu_usage_percent = std::max(0.0f, std::min(100.0f, cpu_usage_percent));
-        cpu_usage_core0 = std::max(0.0f, std::min(100.0f, cpu_usage_core0));
-        cpu_usage_core1 = std::max(0.0f, std::min(100.0f, cpu_usage_core1));
-
-        // Update rolling average for stability
-        cpu_usage_history[cpu_measurement_count % 10] = cpu_usage_percent;
-        cpu_measurement_count++;
-
-        float sum = 0.0f;
-        int count = std::min(10, (int)cpu_measurement_count);
-        for (int i = 0; i < count; i++) {
-            sum += cpu_usage_history[i];
-        }
-        cpu_usage_percent = sum / count;
-
-        if (cpu_measurement_count % 10 == 0) {
-            ESP_LOGI(TAG,
-                     "ESP-IDF CPU Usage: %.1f%% (Tasks: %d running/%d total, Heap: %zu/%zu KB)",
-                     cpu_usage_percent,
-                     running_tasks,
-                     task_count,
-                     free_heap / 1024,
-                     min_free_heap / 1024);
-        }
-
-        last_esp_idf_check_time = current_time_ms;
     }
 }
 

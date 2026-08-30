@@ -5,9 +5,9 @@
 **Method**: four parallel subsystem reviews (core app/tasks, comm/links, input peripherals, LVGL UI) reading every first-party line, with all dead-code claims grep-verified against the whole repo. Every Critical and Major finding below was then independently re-verified against source (including the `esp_tca8418` and `esp_lvgl_port` managed components and the Waveshare BSP) before inclusion. No device build or hardware test was run for this review; nothing below depends on one, but E-KEY1/E-KEY2 predict hardware behaviour that should be confirmed on the bench.
 **Branch**: `feature/sequencer-voice-audition` at `41013e1`.
 
-Findings carry stable IDs (`E-…`) so implementation can be tracked in this file. **Completed items leave this document** — detail goes to `CHANGELOG.md`, matching the roadmap's convention — so what remains here is always the open list. A partially-addressed item keeps its row, marked `[~]`, and says what is left.
+Findings carry stable IDs (`E-…`) so implementation can be tracked in this file. **Completed items leave this document** — detail goes to `CHANGELOG.md`, matching the roadmap's convention — so what remains here is always the open list. A partially-addressed item keeps its row, marked `[~]`, and says what is left; `[>]` means deferred by an explicit decision, with the reasoning recorded rather than the item quietly dropped.
 
-**Already remediated** (see `CHANGELOG.md` § Unreleased): E-LVGL1/2/3, the LVGL thread-safety cluster (`21304be`, `222b2b4`); E-LIFE1/2/3, the callback-lifetime cluster (`41f4cdd`); E-KEY1/2, the keypad decode and INT busy-spin (`cdab47d`); E-INIT1 and E-BLD1/2 (`f6b7394`); E-TICK1/E-TOUCH1/E-BRWS1/E-MENU1, the UI correctness batch (`edd9981`); E-TX1, the outbound-frame latency (`6a0912c`); E-METER1 and E-DIAG1, the two periodic-work wastes (`b64ae32`); E-MIDI1, E-KBD1 and the defect half of E-PROTO1 (`1d16237`); E-SYNC1 and E-STAT1 (`4b63c37`); E-ODR1 (`4e535c2`); E-INQ1 and E-STD1 (`0be797a`); E-STOP1, E-PROTO1, E-UIM1 and E-VER1 (`043d0d1`); E-CFG1, E-LOG1, E-TASK1 and E-SDK1. All addressed 2026-08-29. **E-SEQ1 was withdrawn as a false positive** - see below. **E-KEY1/2 and E-ENC1 change hardware behaviour and are the ones most needing a bench pass** — they were diagnosed entirely by reading code and the controller datasheet.
+**Already remediated** (see `CHANGELOG.md` § Unreleased): E-LVGL1/2/3, the LVGL thread-safety cluster (`21304be`, `222b2b4`); E-LIFE1/2/3, the callback-lifetime cluster (`41f4cdd`); E-KEY1/2, the keypad decode and INT busy-spin (`cdab47d`); E-INIT1 and E-BLD1/2 (`f6b7394`); E-TICK1/E-TOUCH1/E-BRWS1/E-MENU1, the UI correctness batch (`edd9981`); E-TX1, the outbound-frame latency (`6a0912c`); E-METER1 and E-DIAG1, the two periodic-work wastes (`b64ae32`); E-MIDI1, E-KBD1 and the defect half of E-PROTO1 (`1d16237`); E-SYNC1 and E-STAT1 (`4b63c37`); E-ODR1 (`4e535c2`); E-INQ1 and E-STD1 (`0be797a`); E-STOP1, E-PROTO1, E-UIM1 and E-VER1 (`043d0d1`); E-CFG1, E-LOG1, E-TASK1, E-SDK1 and E-MISC1. All addressed 2026-08-29. **E-SEQ1 was withdrawn as a false positive** - see below. **E-KEY1/2 and E-ENC1 change hardware behaviour and are the ones most needing a bench pass** — they were diagnosed entirely by reading code and the controller datasheet.
 
 ---
 
@@ -33,8 +33,7 @@ Two systemic build findings rounded it out — ~~inert `-Os`/LTO options added a
 |---|---|---|---|
 | [~] E-ENC1 | Major | input | Encoder SMP race fixed 2026-08-29 (atomics replace interrupt masking); the read-then-clear window is narrowed from every movement poll to ~1 per 8000 counts, not closed — closing it needs the driver's watch-point ISR and bench time |
 | [~] E-DEAD1 | Smell | all | Dead-code batch — `parse_browse_response`, the `shared_packet_handler` fossil and the demo page trio deleted 2026-08-29; the caller-less `inter_mcu_*`/`pcnt_*` API surface and `window_manager.cpp` still open |
-| [ ] E-ARCH1 | Smell | arch | `components/ui` ⇄ `main` dependency cycle blocks host-testing the UI |
-| [ ] E-MISC1 | Smell | all | Smaller items batch (fake diagnostics metric, dummy meter data, stack copies, doc drift) |
+| [>] E-ARCH1 | Smell | arch | `components/ui` ⇄ `main` dependency cycle — **deferred by decision**, scoped in `backlog.md`. Touches every page; deliberately not stacked on top of twenty unverified behavioural changes |
 | — SPI-1..5 | Gate | comm | SPI-link revival blockers — must be fixed before `WAVEX_SPI_LINK_ENABLED=1` (§7) |
 
 ---
@@ -107,19 +106,6 @@ The secondary claim — a stale pre-wrap frame arriving *after* the wrap is acce
 ### E-ARCH1 — `components/ui` ⇄ `main` cycle
 
 `components/ui/CMakeLists.txt` `REQUIRES … main`; UI sources include `inter_mcu.h`, `ui_task.h`, `comm/i_comm_interface.h` directly, and diag/edit/keyboard pages call `inter_mcu_*` free functions, growing the coupling. This blocks host-testing the UI component and is stronger than `docs/ui-architecture.md` admits (its `UISharedContext` injection is the right fix). Also `i_comm_interface.h:29-40` hand-duplicates the callback typedefs from `inter_mcu.h`; `CommInterfaceImpl::sendSampleLoadRequest` unconditionally returns `ESP_ERR_INVALID_ARG`; `sendSamplePlayRequest` silently drops the loop-gap semantics.
-
-### E-MISC1 — smaller items batch
-
-- Fabricated diagnostics metric: `ui_diagnostics_page.cpp:751-774` invents CPU% from task counts + heap pressure (dead under the current `WAVEX_CPU_USAGE_METHOD 1`, but a diagnostics page must never ship a synthesized path).
-- `uart_task` carries ~4.5 KB of per-loop stack copies of data already in static storage (`esp_uart_link.cpp:170-172,263`); transmit-in-place would remove them.
-- `inter_mcu.cpp:724` heap-allocates a `std::vector` per browse request, and `<vector>` is included only under `ESP_PLATFORM` while the use is unconditional — the non-ESP branch of the TU can't compile (masked because tests exclude the file). A fixed array suffices.
-- `usb_midi_task.cpp:55` hardcodes USB serial "0001" — two units collide in DAW port persistence; derive from the eFuse MAC.
-- `midi_task.cpp:108` installs the UART driver with no event queue, so RX-FIFO overflow/framing errors are invisible; an event queue would make byte loss observable.
-- Comment/code drift: `wavex_application.cpp:142` ("2 second loop" vs 1 s); `include/ui/ui_sample_edit_page.h:19-23` still calls GAIN/LOOP "inert" though the .cpp wires them *(current branch)*; `docs/ui-architecture.md` shows a `std::vector` softkey API vs the actual `std::array`.
-- Recurring UI patterns worth one cleanup pass: `box()`/`label()` helpers and near-identical palettes re-declared privately in four files instead of `ui_theme`; list pages rebuild the whole widget tree per encoder detent; `refreshLinkTab` re-sets 21 table cells (strdup churn) every 500 ms; `SoftkeyBar` heap-allocates a `std::function` per press; `adaptiveRefreshControl`'s `lv_refr_now` duplicates the lvgl_port task's own refresh loop.
-- `main.cpp:15-20` bring-up debris (`ESP_LOGE` banner + printf/fflush).
-
----
 
 ## 7. SPI-link revival gate
 
