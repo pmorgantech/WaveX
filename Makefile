@@ -132,16 +132,31 @@ esp32-clean:
 	cd firmware/esp32 && . /opt/esp/idf/export.sh && idf.py clean
 	@echo "✅ ESP32 Frontend cleaned"
 
+# ---------------------------------------------------------------------------
+# ESP32 port resolution. A fixed /dev/ttyACM number is not stable: the Daisy
+# re-enumerates on every reset and DFU cycle, so it can claim ACM0 and push the
+# ESP32 to ACM1. esptool then talks to the Daisy's CDC port and fails with the
+# unhelpful "No serial data received". Resolve by USB VID:PID instead, the same
+# way the Daisy DFU trigger already does. Override with
+# `make ESP32_PORT=/dev/ttyACMn` when you need to force a port.
+# ---------------------------------------------------------------------------
+ESP32_PORT ?=
+ESP32_BAUD ?= 2000000
+esp32_port = $(if $(ESP32_PORT),echo '$(ESP32_PORT)',python3 scripts/serial_ports.py esp32)
+
 esp32-flash:
 	@echo "⚡ Flashing ESP32 Frontend firmware..."
-	@echo "Port: /dev/ttyACM0, Baudrate: 2000000"
-	cd firmware/esp32 && . /opt/esp/idf/export.sh && idf.py -p /dev/ttyACM0 -b 2000000 flash
+	@port=$$($(esp32_port)) && \
+		echo "Port: $$port, Baudrate: $(ESP32_BAUD)" && \
+		cd firmware/esp32 && . /opt/esp/idf/export.sh && \
+		idf.py -p "$$port" -b $(ESP32_BAUD) flash
 	@echo "✅ ESP32 Frontend flashed"
 
 esp32-monitor:
 	@echo "📺 Monitoring ESP32 Frontend..."
-	@echo "Port: /dev/ttyACM0"
-	cd firmware/esp32 && . /opt/esp/idf/export.sh && idf.py -p /dev/ttyACM0 monitor
+	@port=$$($(esp32_port)) && \
+		echo "Port: $$port" && \
+		cd firmware/esp32 && . /opt/esp/idf/export.sh && idf.py -p "$$port" monitor
 
 esp32-menuconfig:
 	@echo "⚙️  Configuring ESP32 Frontend..."
@@ -149,8 +164,10 @@ esp32-menuconfig:
 
 esp32-flash-monitor:
 	@echo "⚡ Flashing and monitoring ESP32 Frontend..."
-	@echo "Port: /dev/ttyACM0, Baudrate: 2000000"
-	cd firmware/esp32 && . /opt/esp/idf/export.sh && idf.py -p /dev/ttyACM0 -b 2000000 flash monitor
+	@port=$$($(esp32_port)) && \
+		echo "Port: $$port, Baudrate: $(ESP32_BAUD)" && \
+		cd firmware/esp32 && . /opt/esp/idf/export.sh && \
+		idf.py -p "$$port" -b $(ESP32_BAUD) flash monitor
 
 # Daisy targets (using native ARM GCC toolchain)
 daisy:
@@ -218,7 +235,6 @@ flash-all: stop-logs
 # when a board resets or drops into DFU. Starting logs rotates old files first.
 # ---------------------------------------------------------------------------
 LOG_DIR ?= logs
-ESP32_PORT ?= /dev/ttyACM0
 LOG_KEEP ?= 4
 
 start-logs: stop-logs
@@ -240,7 +256,8 @@ start-logs: stop-logs
 	done
 	@nohup python3 scripts/serial_log.py --vid 0483 --pid 5740 \
 		--out $(LOG_DIR)/daisy.log --pidfile $(LOG_DIR)/daisy.pid >/dev/null 2>&1 &
-	@nohup python3 scripts/serial_log.py --port $(ESP32_PORT) --baud 115200 \
+	@nohup python3 scripts/serial_log.py \
+		$(if $(ESP32_PORT),--port $(ESP32_PORT),--vid 1a86 --pid 55d3) --baud 115200 \
 		--out $(LOG_DIR)/esp32.log --pidfile $(LOG_DIR)/esp32.pid >/dev/null 2>&1 &
 	@sleep 1
 	@echo "📝 Logging started:"

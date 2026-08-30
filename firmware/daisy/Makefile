@@ -17,6 +17,11 @@ COMPILER_CXX := /usr/bin/arm-none-eabi-g++
 TOOLCHAIN_ENV := CMAKE_C_COMPILER=$(COMPILER_C) CMAKE_CXX_COMPILER=$(COMPILER_CXX)
 OBJCOPY := /usr/bin/arm-none-eabi-objcopy
 BIN_FILE := $(BUILD_DIR)/wavex-daisy.bin
+# Shared USB board resolver - nothing here should name a /dev/ttyACM number,
+# since enumeration order shifts every time a board re-enumerates.
+SERIAL_PORTS := $(CMAKE_SOURCE_DIR)/../../scripts/serial_ports.py
+# How long `flash` waits for you to hold BOOT and tap RESET.
+DFU_WAIT ?= 20
 
 .PHONY: all build clean help configure stale-cache-check
 .PHONY: flash dfu sd usb bin run auto-flash flash-auto
@@ -77,9 +82,14 @@ flash: bin
 		echo "Error: Binary file not found. Build failed?"; \
 		exit 1; \
 	fi
-	@echo "Put Daisy into DFU mode (hold BOOT while powering on) just before this step finishes."
 	@if ! command -v dfu-util >/dev/null 2>&1; then \
 		echo "Error: dfu-util not found. Install with: sudo apt install dfu-util"; \
+		exit 1; \
+	fi
+	@echo "Waiting up to $(DFU_WAIT)s for the Daisy in DFU mode (hold BOOT, tap RESET)..."
+	@if ! python3 $(SERIAL_PORTS) --present daisy-dfu --wait $(DFU_WAIT); then \
+		echo "Daisy never entered DFU. Hold BOOT, tap RESET, then re-run."; \
+		echo "If the firmware is alive, \`make flash-auto\` needs no buttons."; \
 		exit 1; \
 	fi
 	@dfu-util -d 0483:df11 -s 0x90040000:leave -D $(BUILD_DIR)/wavex-daisy.bin

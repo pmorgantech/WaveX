@@ -4,8 +4,11 @@
 
 set -e
 
-# Configuration
-ESP32_PORT="/dev/ttyACM0"
+# Configuration. Resolve the ESP32 by USB VID:PID rather than a fixed ttyACM
+# number: the Daisy re-enumerates on every reset and DFU cycle, so it can claim
+# ACM0 and push the ESP32 to ACM1, and esptool then fails against the Daisy's
+# CDC port with "No serial data received". Override with ESP32_PORT=/dev/ttyACMn.
+ESP32_PORT="${ESP32_PORT:-$(python3 "$(dirname "$0")/scripts/serial_ports.py" esp32)}"
 ESP32_DIR="firmware/esp32"
 
 echo "========================================================================"
@@ -21,11 +24,11 @@ if [ ! -d "$ESP32_DIR" ]; then
     exit 1
 fi
 
-# Check if port exists
+# Catches a stale explicit ESP32_PORT override; detection already failed loudly.
 if [ ! -e "$ESP32_PORT" ]; then
     echo "❌ Error: Serial port not found: $ESP32_PORT"
-    echo "Available ports:"
-    ls /dev/tty* | grep -E "(ACM|USB|S)" | head -5 || echo "  No ports found"
+    echo "Detected ports:"
+    ls -l /dev/serial/by-id/ 2>/dev/null || echo "  none"
     exit 1
 fi
 
