@@ -11,6 +11,35 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Changed — Voice is a tab group
+
+- The Voice page's five stages are now tabs over the shared chrome
+  (`tabGroupCreate`/`tabGroupAddTab`), replacing the row of chain tiles it drew
+  itself. Tab set and order come from `docs/ui-information-architecture.md` §4:
+  **Sample, Env, Amp, Filter, Mod**. That is deliberately not the signal order
+  (Mod sits second in the chain) — Mod is the one stage the protocol cannot
+  carry, so the doc puts the unwired tab last, out of the way of the four that
+  work.
+- The voice name, the sample it is editing and the status line moved **above**
+  the tabview into a page-scoped strip. Built into a tab body they would have
+  vanished on every tab switch, taking the only readout of what the encoder is
+  editing with them — the same reason the Play page's parameter strip sits
+  outside its tabs.
+- The Modulation menu was already deleted (previous release note, "Sample
+  group; Modulation menu removed"); this completes the other half of that move
+  by giving its subject a real home. `ui_main_menu.h`'s header comment still
+  described the pre-redesign menu and labelled `createSampleGroup()` as "the
+  modulation submenu"; corrected.
+- Softkeys are unchanged (`Back / < Stage / Stage > / Value - / Value + /
+  Edit`), so the encoder-first workflow still moves between stages without
+  reaching for the tab bar. `< Stage`/`Stage >` now drive the tabview rather
+  than a second copy of the selection, so the bar always shows where focus is.
+- A tab's parameter rows are built the first time that tab is shown, so
+  entering the page costs one stage's widgets rather than five, and the rows,
+  bars and panel now share `lv_style_t` objects instead of setting properties
+  per object. Both target page-entry cost, which `docs/backlog.md` identifies
+  as what these pages actually pay for.
+
 ### Removed — LVGL PPA draw unit (measured, then reverted)
 
 - `CONFIG_LV_USE_PPA` is off again, and `CONFIG_LV_DRAW_BUF_ALIGN` back to 4

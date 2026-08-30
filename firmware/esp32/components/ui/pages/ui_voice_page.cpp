@@ -6,34 +6,50 @@
 #include "../styles/ui_theme.h"
 #include "inter_mcu.h"
 #include "ui/ui_navigator.h"
+#include "ui/ui_palette.h"
 #include "ui/ui_sample_browser.h"
+#include "ui/ui_tab_group.h"
 
 #include <cstdio>
 #include <cstring>
 
 namespace wavex_ui {
 
+using namespace wavex_ui::palette;
+
 namespace {
 static const char* TAG = "UI_VOICE";
 
-constexpr uint32_t kColPanel = 0x0E0E0E;
-constexpr uint32_t kColBorder = 0x222222;
-constexpr uint32_t kColDim = 0x8FA0AA;
-constexpr uint32_t kColGreen = 0x4CAF50;
+// Not in the shared palette: "this control cannot be driven yet" is a state
+// only this page and the softkey bar have, and it is not part of the card /
+// tab design vocabulary the palette describes.
 constexpr uint32_t kColInert = 0x5A5A5A;
 
 // 64 detents end to end: fine enough to sound continuous, coarse enough to
-// cross the range without grinding. Matches the keyboard page's feel.
+// cross the range without grinding. Matches the Play page's feel.
 constexpr int kParamStep = 65535 / 64;
 
-const char* const kStageNames[] = {"SAMPLE", "MOD", "ENV", "AMP", "FILTER"};
+// Tab bar labels, in the same order as UIVoicePage::Stage. Kept short because
+// the bar divides evenly - one long label shrinks every other tab's target.
+const char* const kStageNames[] = {"Sample", "Env", "Amp", "Filter", "Mod"};
 
-// Chain geometry. One row of stage tiles across the top, in signal order, so
-// the page reads as the path the audio takes rather than as a form.
-constexpr int kTileW = 236;
-constexpr int kTileH = 74;
-constexpr int kTilePitch = 250;
-constexpr int kTileY = 8;
+// Content geometry. The panel is 720x1280 rotated to 1280x720; the navigator
+// takes UI_HEADER_HEIGHT (75) off the top and UI_HOTKEY_HEIGHT (100) off the
+// bottom, the voice strip takes 84 more and the tab bar 56. Positions are
+// absolute against that, matching the Play and diagnostics pages rather than
+// introducing a second convention.
+constexpr int kDesignW = 1280;
+constexpr int kContentH = 720 - UI_HEADER_HEIGHT - UI_HOTKEY_HEIGHT;  // 545
+constexpr int kStripH = 84;
+constexpr int kTabBodyH = kContentH - kStripH - 56;  // 405, after the tab bar
+
+constexpr int kPanelX = 12;
+constexpr int kPanelY = 8;
+constexpr int kPanelW = kDesignW - 2 * kPanelX;   // 1256
+constexpr int kPanelH = kTabBodyH - 2 * kPanelY;  // 389
+constexpr int kRowPitch = 72;
+constexpr int kBarX = 480;
+constexpr int kBarW = 700;
 }  // namespace
 
 int UIVoicePage::paramsForStage(Stage s, Param* out, int max) const {
@@ -50,14 +66,6 @@ int UIVoicePage::paramsForStage(Stage s, Param* out, int max) const {
             add("PITCH", WaveX::Protocol::PARAM_PITCH, 32768, "semi");
             add("PAN", WaveX::Protocol::PARAM_PAN, 32768, "");
             add("GAIN", WaveX::Protocol::PARAM_VOLUME, 52428, "");
-            break;
-        case Stage::Mod:
-            // Inert, and labelled so. Nothing on the wire carries a modulation
-            // source, destination or depth yet; drawing a matrix that silently
-            // does nothing is the failure this codebase has already had once.
-            add("SOURCE", kParamNone, 0, "");
-            add("DEST", kParamNone, 0, "");
-            add("DEPTH", kParamNone, 0, "");
             break;
         case Stage::Envelopes:
             add("ATTACK", WaveX::Protocol::PARAM_ENVELOPE_ATTACK, 0, "");
@@ -78,6 +86,14 @@ int UIVoicePage::paramsForStage(Stage s, Param* out, int max) const {
             add("RES", WaveX::Protocol::PARAM_FILTER_RESONANCE, 0, "");
             add("ENV->FLT", kParamNone, 0, "");
             break;
+        case Stage::Mod:
+            // Inert, and labelled so. Nothing on the wire carries a modulation
+            // source, destination or depth yet; drawing a matrix that silently
+            // does nothing is the failure this codebase has already had once.
+            add("SOURCE", kParamNone, 0, "");
+            add("DEST", kParamNone, 0, "");
+            add("DEPTH", kParamNone, 0, "");
+            break;
         default:
             break;
     }
@@ -97,8 +113,8 @@ int UIVoicePage::paramsForStage(Stage s, Param* out, int max) const {
 // and the engine start from the same numbers.
 void UIVoicePage::seedValues() {
     for (int s = 0; s < kStageCount; ++s) {
-        Param params[6];
-        const int n = paramsForStage(static_cast<Stage>(s), params, 6);
+        Param params[kMaxParams];
+        const int n = paramsForStage(static_cast<Stage>(s), params, kMaxParams);
         for (int i = 0; i < n; ++i) {
             stage_values_[s][i] = params[i].value;
         }
@@ -108,27 +124,42 @@ void UIVoicePage::seedValues() {
 
 void UIVoicePage::onEnter(lv_obj_t* parent) {
     lv_obj_clean(parent);
+    stage_ = 0;
+    param_ = 0;
+    editing_ = false;
+    for (auto& b: stage_built_) {
+        b = false;
+    }
+    for (int s = 0; s < kStageCount; ++s) {
+        for (int i = 0; i < kMaxParams; ++i) {
+            param_rows_[s][i] = nullptr;
+            param_bars_[s][i] = nullptr;
+        }
+    }
 
     root_ = lv_obj_create(parent);
     lv_obj_set_size(root_, lv_pct(100), lv_pct(100));
-    ui_theme_apply_container_style(root_, true);
+    lv_obj_set_style_bg_color(root_, lv_color_hex(kColBg), LV_PART_MAIN);
+    lv_obj_set_style_border_width(root_, 0, LV_PART_MAIN);
     lv_obj_set_style_pad_all(root_, 0, LV_PART_MAIN);
     lv_obj_remove_flag(root_, LV_OBJ_FLAG_SCROLLABLE);
 
-    name_label_ = lv_label_create(root_);
-    ui_theme_apply_label_style(name_label_, false);
-    lv_obj_set_pos(name_label_, 12, kTileY + kTileH + 14);
+    buildStrip(root_);
 
-    buildChain(root_);
-    buildParamPanel(root_);
+    // Tabview sits below the strip and takes the rest.
+    lv_obj_t* tab_host = lv_obj_create(root_);
+    lv_obj_set_size(tab_host, lv_pct(100), kContentH - kStripH);
+    lv_obj_set_pos(tab_host, 0, kStripH);
+    lv_obj_set_style_bg_color(tab_host, lv_color_hex(kColBg), LV_PART_MAIN);
+    lv_obj_set_style_border_width(tab_host, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(tab_host, 0, LV_PART_MAIN);
+    lv_obj_remove_flag(tab_host, LV_OBJ_FLAG_SCROLLABLE);
 
-    status_label_ = lv_label_create(root_);
-    ui_theme_apply_label_style(status_label_, false);
-    lv_obj_set_style_text_color(status_label_, lv_color_hex(kColDim), LV_PART_MAIN);
-    lv_obj_set_width(status_label_, 1240);
-    lv_label_set_long_mode(status_label_, LV_LABEL_LONG_DOT);
-    lv_obj_set_pos(status_label_, 12, 500);
-    lv_label_set_text(status_label_, "");
+    tabview_ = tabGroupCreate(tab_host);
+    for (int s = 0; s < kStageCount; ++s) {
+        tab_body_[s] = tabGroupAddTab(tabview_, kStageNames[s]);
+    }
+    lv_obj_add_event_cb(tabview_, &UIVoicePage::tabChangedCb, LV_EVENT_VALUE_CHANGED, this);
 
     // The voice edits whatever sample is selected. Asking for metadata means
     // the header can name it rather than showing a bare id.
@@ -143,7 +174,10 @@ void UIVoicePage::onEnter(lv_obj_t* parent) {
         inter_mcu_send_sample_select(sample_id_);
     }
 
-    refreshChain();
+    // Only the first tab's widgets exist after this; the rest are built when
+    // first shown.
+    buildStageRows(stage_);
+    refreshHeader();
     refreshParams();
 }
 
@@ -152,124 +186,191 @@ void UIVoicePage::onExit() {
         lv_obj_del(root_);
         root_ = nullptr;
         name_label_ = nullptr;
-        param_panel_ = nullptr;
         status_label_ = nullptr;
-        for (auto& c: chain_) {
-            c = nullptr;
-        }
-        for (auto& c: chain_label_) {
-            c = nullptr;
-        }
-        for (auto& r: param_rows_) {
-            r = nullptr;
-        }
-        for (auto& b: param_bars_) {
-            b = nullptr;
+        tabview_ = nullptr;
+        for (int s = 0; s < kStageCount; ++s) {
+            tab_body_[s] = nullptr;
+            stage_built_[s] = false;
+            for (int i = 0; i < kMaxParams; ++i) {
+                param_rows_[s][i] = nullptr;
+                param_bars_[s][i] = nullptr;
+            }
         }
     }
 }
 
-void UIVoicePage::buildChain(lv_obj_t* parent) {
-    for (int i = 0; i < kStageCount; ++i) {
-        lv_obj_t* tile = lv_obj_create(parent);
-        lv_obj_set_size(tile, kTileW, kTileH);
-        lv_obj_set_pos(tile, 12 + i * kTilePitch, kTileY);
-        lv_obj_set_style_bg_color(tile, lv_color_hex(kColPanel), LV_PART_MAIN);
-        lv_obj_set_style_border_width(tile, 1, LV_PART_MAIN);
-        lv_obj_set_style_border_color(tile, lv_color_hex(kColBorder), LV_PART_MAIN);
-        lv_obj_set_style_radius(tile, 4, LV_PART_MAIN);
-        lv_obj_remove_flag(tile, LV_OBJ_FLAG_SCROLLABLE);
+// The voice-scoped strip: which voice and sample on the first line, the last
+// thing the page had to say on the second. Above the tabview rather than in a
+// tab body, so switching stage does not hide it (see the class note).
+void UIVoicePage::buildStrip(lv_obj_t* parent) {
+    lv_obj_t* strip = lv_obj_create(parent);
+    lv_obj_set_size(strip, lv_pct(100), kStripH);
+    lv_obj_set_pos(strip, 0, 0);
+    lv_obj_set_style_bg_color(strip, lv_color_hex(kColBg), LV_PART_MAIN);
+    lv_obj_set_style_border_width(strip, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(strip, 0, LV_PART_MAIN);
+    lv_obj_remove_flag(strip, LV_OBJ_FLAG_SCROLLABLE);
 
-        lv_obj_t* label = lv_label_create(tile);
-        lv_obj_set_style_text_font(label, &lv_font_montserrat_22, LV_PART_MAIN);
-        lv_label_set_text(label, kStageNames[i]);
-        lv_obj_center(label);
+    name_label_ = lv_label_create(strip);
+    lv_obj_set_style_text_font(name_label_, &lv_font_montserrat_22, LV_PART_MAIN);
+    lv_obj_set_width(name_label_, kPanelW);
+    lv_label_set_long_mode(name_label_, LV_LABEL_LONG_DOT);
+    lv_obj_set_pos(name_label_, kPanelX, 8);
+    lv_label_set_text(name_label_, "");
 
-        chain_[i] = tile;
-        chain_label_[i] = label;
-    }
+    status_label_ = lv_label_create(strip);
+    lv_obj_set_style_text_font(status_label_, &lv_font_montserrat_18, LV_PART_MAIN);
+    lv_obj_set_style_text_color(status_label_, lv_color_hex(kColDim), LV_PART_MAIN);
+    lv_obj_set_width(status_label_, kPanelW);
+    lv_label_set_long_mode(status_label_, LV_LABEL_LONG_DOT);
+    lv_obj_set_pos(status_label_, kPanelX, 46);
+    lv_label_set_text(status_label_, "");
 }
 
-void UIVoicePage::buildParamPanel(lv_obj_t* parent) {
-    param_panel_ = lv_obj_create(parent);
-    lv_obj_set_size(param_panel_, 1256, 300);
-    lv_obj_set_pos(param_panel_, 12, kTileY + kTileH + 46);
-    lv_obj_set_style_bg_color(param_panel_, lv_color_hex(kColPanel), LV_PART_MAIN);
-    lv_obj_set_style_border_width(param_panel_, 1, LV_PART_MAIN);
-    lv_obj_set_style_border_color(param_panel_, lv_color_hex(kColBorder), LV_PART_MAIN);
-    lv_obj_remove_flag(param_panel_, LV_OBJ_FLAG_SCROLLABLE);
+// Builds one tab's parameter rows. Called on first display of that tab, not up
+// front: entering the page then costs three rows rather than seventeen, and
+// page entry is what this UI pays for (docs/backlog.md).
+void UIVoicePage::buildStageRows(int stage) {
+    if (stage < 0 || stage >= kStageCount || stage_built_[stage] || !tab_body_[stage]) {
+        return;
+    }
 
-    for (int i = 0; i < 6; ++i) {
-        lv_obj_t* row = lv_label_create(param_panel_);
-        ui_theme_apply_label_style(row, false);
-        lv_obj_set_pos(row, 16, 14 + i * 46);
+    // Shared styles, not per-object local ones.
+    //
+    // Every lv_obj_set_style_*() call stores a property in the object's OWN
+    // style list, which allocates. What genuinely varies per row is the label
+    // text and its colour; the panel chrome, row font and bar fills are
+    // identical everywhere, so they belong in one style each row references.
+    //
+    // Function-local statics: initialised once, never destroyed, which is what
+    // an lv_style_t referenced by live objects requires. UI task only, so the
+    // one-time init needs no locking beyond what C++ already guarantees.
+    static lv_style_t s_panel;
+    static lv_style_t s_row;
+    static lv_style_t s_bar_main;
+    static lv_style_t s_bar_ind;
+    static bool s_styles_ready = false;
+    if (!s_styles_ready) {
+        lv_style_init(&s_panel);
+        // remove_style_all() takes the theme's opaque background with it, so
+        // the base style has to restore the parts a panel actually needs.
+        lv_style_set_bg_opa(&s_panel, LV_OPA_COVER);
+        lv_style_set_bg_color(&s_panel, lv_color_hex(kColCard));
+        lv_style_set_border_width(&s_panel, 1);
+        lv_style_set_border_color(&s_panel, lv_color_hex(kColBorder));
+        lv_style_set_radius(&s_panel, 4);
+
+        lv_style_init(&s_row);
+        lv_style_set_text_font(&s_row, &lv_font_montserrat_22);
+
+        lv_style_init(&s_bar_main);
+        lv_style_set_bg_opa(&s_bar_main, LV_OPA_COVER);
+        lv_style_set_bg_color(&s_bar_main, lv_color_hex(kColTrack));
+        lv_style_set_radius(&s_bar_main, 5);
+
+        lv_style_init(&s_bar_ind);
+        lv_style_set_bg_opa(&s_bar_ind, LV_OPA_COVER);
+        lv_style_set_bg_color(&s_bar_ind, lv_color_hex(kColGreen));
+        lv_style_set_radius(&s_bar_ind, 5);
+
+        s_styles_ready = true;
+    }
+
+    lv_obj_t* panel = lv_obj_create(tab_body_[stage]);
+    // Drop the theme's default styling before adding ours; none of it survives
+    // visually, so applying it and then overriding it is pure page-entry cost.
+    lv_obj_remove_style_all(panel);
+    lv_obj_add_style(panel, &s_panel, LV_PART_MAIN);
+    lv_obj_set_size(panel, kPanelW, kPanelH);
+    lv_obj_set_pos(panel, kPanelX, kPanelY);
+    lv_obj_remove_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
+
+    Param params[kMaxParams];
+    const int n = paramsForStage(static_cast<Stage>(stage), params, kMaxParams);
+    for (int i = 0; i < n; ++i) {
+        lv_obj_t* row = lv_label_create(panel);
+        lv_obj_remove_style_all(row);
+        lv_obj_add_style(row, &s_row, LV_PART_MAIN);
+        lv_obj_set_pos(row, 16, 18 + i * kRowPitch);
         lv_label_set_text(row, "");
-        param_rows_[i] = row;
+        param_rows_[stage][i] = row;
 
-        lv_obj_t* bar = lv_bar_create(param_panel_);
-        lv_obj_set_size(bar, 700, 10);
-        lv_obj_set_pos(bar, 480, 26 + i * 46);
+        lv_obj_t* bar = lv_bar_create(panel);
+        lv_obj_remove_style_all(bar);
+        lv_obj_add_style(bar, &s_bar_main, LV_PART_MAIN);
+        lv_obj_add_style(bar, &s_bar_ind, LV_PART_INDICATOR);
+        lv_obj_set_size(bar, kBarW, 10);
+        lv_obj_set_pos(bar, kBarX, 32 + i * kRowPitch);
         lv_bar_set_range(bar, 0, 65535);
         lv_bar_set_value(bar, 0, LV_ANIM_OFF);
-        lv_obj_set_style_bg_color(bar, lv_color_hex(0x1F1F1F), LV_PART_MAIN);
-        lv_obj_set_style_bg_color(bar, lv_color_hex(kColGreen), LV_PART_INDICATOR);
         lv_obj_add_flag(bar, LV_OBJ_FLAG_HIDDEN);
-        param_bars_[i] = bar;
+        param_bars_[stage][i] = bar;
     }
+
+    stage_built_[stage] = true;
 }
 
-void UIVoicePage::refreshChain() {
-    for (int i = 0; i < kStageCount; ++i) {
-        if (!chain_[i] || !lv_obj_is_valid(chain_[i])) {
-            continue;
-        }
-        const bool focused = (i == stage_);
-        lv_obj_set_style_border_color(
-            chain_[i], lv_color_hex(focused ? kColGreen : kColBorder), LV_PART_MAIN);
-        lv_obj_set_style_border_width(chain_[i], focused ? 2 : 1, LV_PART_MAIN);
-        // MOD reads dim because it is not wired, not because it is unfocused.
-        const bool inert = (i == static_cast<int>(Stage::Mod));
-        lv_obj_set_style_text_color(
-            chain_label_[i], lv_color_hex(inert ? kColInert : 0xFFFFFF), LV_PART_MAIN);
+void UIVoicePage::tabChangedCb(lv_event_t* e) {
+    auto* self = static_cast<UIVoicePage*>(lv_event_get_user_data(e));
+    if (!self || !self->tabview_) {
+        return;
     }
+    self->selectStage(static_cast<int>(lv_tabview_get_tab_active(self->tabview_)));
+}
 
-    if (name_label_) {
-        char header[128];
-        WaveX::Protocol::SampleMetadata m;
-        if (sample_id_ != 0 && inter_mcu_get_sample_meta(sample_id_, &m)) {
-            snprintf(header,
-                     sizeof(header),
-                     "%s   -   sample %u  %.32s",
-                     voice_name_,
-                     (unsigned)sample_id_,
-                     m.name);
-        } else if (sample_id_ != 0) {
-            snprintf(
-                header, sizeof(header), "%s   -   sample %u", voice_name_, (unsigned)sample_id_);
-        } else {
-            snprintf(
-                header, sizeof(header), "%s   -   no sample (load one from Browse)", voice_name_);
-        }
-        lv_label_set_text(name_label_, header);
+// Single entry point for "the visible stage is now this one", whether the user
+// tapped the bar or the softkeys/encoder drove it. moveStage() sets the active
+// tab, which re-enters here through the event callback, so this has to be a
+// no-op when the stage has not actually changed.
+void UIVoicePage::selectStage(int stage) {
+    if (stage < 0 || stage >= kStageCount || stage == stage_) {
+        return;
     }
+    stage_ = stage;
+    param_ = 0;
+    buildStageRows(stage_);
+    // Sample metadata arrives asynchronously, so the header may only be able to
+    // name the sample some time after onEnter() first drew it.
+    refreshHeader();
+    refreshParams();
+    UINavigator::instance().refreshSoftkeys();
+    ESP_LOGI(TAG, "Voice -> %s", kStageNames[stage_]);
+}
+
+void UIVoicePage::refreshHeader() {
+    if (!name_label_ || !lv_obj_is_valid(name_label_)) {
+        return;
+    }
+    char header[128];
+    WaveX::Protocol::SampleMetadata m;
+    if (sample_id_ != 0 && inter_mcu_get_sample_meta(sample_id_, &m)) {
+        snprintf(header,
+                 sizeof(header),
+                 "%s   -   sample %u  %.32s",
+                 voice_name_,
+                 (unsigned)sample_id_,
+                 m.name);
+    } else if (sample_id_ != 0) {
+        snprintf(header, sizeof(header), "%s   -   sample %u", voice_name_, (unsigned)sample_id_);
+    } else {
+        snprintf(header,
+                 sizeof(header),
+                 "%s   -   no sample (load one from Sample > Browse)",
+                 voice_name_);
+    }
+    lv_label_set_text(name_label_, header);
 }
 
 void UIVoicePage::refreshParams() {
-    Param params[6];
-    const int n = paramsForStage(static_cast<Stage>(stage_), params, 6);
+    Param params[kMaxParams];
+    const int n = paramsForStage(static_cast<Stage>(stage_), params, kMaxParams);
     if (param_ >= n) {
         param_ = n > 0 ? n - 1 : 0;
     }
 
-    for (int i = 0; i < 6; ++i) {
-        if (!param_rows_[i] || !lv_obj_is_valid(param_rows_[i])) {
-            continue;
-        }
-        if (i >= n) {
-            lv_label_set_text(param_rows_[i], "");
-            if (param_bars_[i]) {
-                lv_obj_add_flag(param_bars_[i], LV_OBJ_FLAG_HIDDEN);
-            }
+    for (int i = 0; i < n; ++i) {
+        lv_obj_t* row = param_rows_[stage_][i];
+        if (!row || !lv_obj_is_valid(row)) {
             continue;
         }
 
@@ -289,18 +390,17 @@ void UIVoicePage::refreshParams() {
                      (unsigned)p.value,
                      p.unit);
         }
-        lv_label_set_text(param_rows_[i], line);
+        lv_label_set_text(row, line);
         lv_obj_set_style_text_color(
-            param_rows_[i],
-            lv_color_hex(inert ? kColInert : (focused ? kColGreen : 0xFFFFFF)),
-            LV_PART_MAIN);
+            row, lv_color_hex(inert ? kColInert : (focused ? kColGreen : 0xFFFFFF)), LV_PART_MAIN);
 
-        if (param_bars_[i]) {
+        lv_obj_t* bar = param_bars_[stage_][i];
+        if (bar && lv_obj_is_valid(bar)) {
             if (inert) {
-                lv_obj_add_flag(param_bars_[i], LV_OBJ_FLAG_HIDDEN);
+                lv_obj_add_flag(bar, LV_OBJ_FLAG_HIDDEN);
             } else {
-                lv_obj_remove_flag(param_bars_[i], LV_OBJ_FLAG_HIDDEN);
-                lv_bar_set_value(param_bars_[i], p.value, LV_ANIM_OFF);
+                lv_obj_remove_flag(bar, LV_OBJ_FLAG_HIDDEN);
+                lv_bar_set_value(bar, p.value, LV_ANIM_OFF);
             }
         }
     }
@@ -323,8 +423,8 @@ void UIVoicePage::sendParam(const Param& p) {
 }
 
 void UIVoicePage::stepParam(int steps) {
-    Param params[6];
-    const int n = paramsForStage(static_cast<Stage>(stage_), params, 6);
+    Param params[kMaxParams];
+    const int n = paramsForStage(static_cast<Stage>(stage_), params, kMaxParams);
     if (param_ < 0 || param_ >= n) {
         return;
     }
@@ -348,17 +448,22 @@ void UIVoicePage::stepParam(int steps) {
     refreshParams();
 }
 
+// Softkey/encoder stage movement drives the tab bar rather than a second piece
+// of state, so the bar always shows where the focus actually is.
 void UIVoicePage::moveStage(int delta) {
-    stage_ = (stage_ + delta + kStageCount) % kStageCount;
-    param_ = 0;
-    refreshChain();
-    refreshParams();
-    UINavigator::instance().refreshSoftkeys();
+    const int next = (stage_ + delta + kStageCount) % kStageCount;
+    if (tabview_ && lv_obj_is_valid(tabview_)) {
+        lv_tabview_set_active(tabview_, static_cast<uint32_t>(next), LV_ANIM_OFF);
+    }
+    // lv_tabview_set_active() fires LV_EVENT_VALUE_CHANGED, so selectStage()
+    // has usually already run by here; calling it again is the no-op guard's
+    // job and covers the case where the tabview is gone.
+    selectStage(next);
 }
 
 void UIVoicePage::moveParam(int delta) {
-    Param params[6];
-    const int n = paramsForStage(static_cast<Stage>(stage_), params, 6);
+    Param params[kMaxParams];
+    const int n = paramsForStage(static_cast<Stage>(stage_), params, kMaxParams);
     if (n == 0) {
         return;
     }
@@ -403,6 +508,9 @@ void UIVoicePage::onInput(const InputEvent& evt) {
 std::array<Softkey, NUM_SOFTKEYS> UIVoicePage::getSoftkeys() {
     std::array<Softkey, NUM_SOFTKEYS> keys{};
     keys[0] = {"Back", []() { UINavigator::instance().pop(); }};
+    // The tab bar is the touch route between stages; these are the same move
+    // without reaching for the screen, which the panel's encoder-first
+    // workflow still needs.
     keys[1] = {"< Stage", [this]() { moveStage(-1); }};
     keys[2] = {"Stage >", [this]() { moveStage(+1); }};
     keys[3] = {"Value -", [this]() { stepParam(-1); }};
@@ -428,8 +536,8 @@ std::array<Softkey, NUM_SOFTKEYS> UIVoicePage::getShiftedSoftkeys() {
                    // Re-send every wired parameter at its default so the engine
                    // and the page agree again.
                    for (int s = 0; s < kStageCount; ++s) {
-                       Param params[6];
-                       const int n = paramsForStage(static_cast<Stage>(s), params, 6);
+                       Param params[kMaxParams];
+                       const int n = paramsForStage(static_cast<Stage>(s), params, kMaxParams);
                        for (int i = 0; i < n; ++i) {
                            stage_values_[s][i] = params[i].value;
                            if (params[i].wire_param != kParamNone) {
@@ -438,7 +546,7 @@ std::array<Softkey, NUM_SOFTKEYS> UIVoicePage::getShiftedSoftkeys() {
                        }
                    }
                    snprintf(voice_name_, sizeof(voice_name_), "Init Voice");
-                   refreshChain();
+                   refreshHeader();
                    refreshParams();
                    refreshStatus("Voice reset to defaults");
                }};
