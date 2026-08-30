@@ -28,9 +28,8 @@ class ProtocolTestHelper {
     static std::vector<uint8_t> CreateHeartbeatPacket(uint32_t uptime_ms,
                                                       uint32_t rx_total,
                                                       uint32_t loop_counter);
-    static std::vector<uint8_t> CreateBrowseReqPacket(const std::string& path,
-                                                      uint32_t start_index,
-                                                      uint8_t max_entries);
+    // (CreateBrowseReqPacket removed - it emitted the dead browse-request
+    // wire format deleted from protocol.cpp in review H6/M10.)
     static std::vector<uint8_t> CreateBrowseRespPacket(
         uint32_t total_count, const std::vector<Protocol::FileEntryWire>& entries);
 

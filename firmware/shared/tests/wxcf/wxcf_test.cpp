@@ -271,6 +271,97 @@ TEST(WxcfTest, LittleEndianByteOrderOnWire) {
     EXPECT_EQ(mem.buf[11], 0x05);
 }
 
+// The file ends inside a chunk HEADER (torn write / truncated copy): the
+// framing read itself must fail, and must not consume a partial header in a
+// way that fabricates a chunk.
+TEST(WxcfTest, TruncatedChunkHeaderIsIoError) {
+    MemoryIo mem;
+    Writer w(mem.AsWriter());
+    ASSERT_EQ(w.WriteHeader(1, MakeVersion(1, 0), 0), Result::Ok);
+    ASSERT_EQ(w.WriteChunk(7, MakeVersion(1, 0), "abc", 3), Result::Ok);
+
+    // Keep the file header plus only 5 of the 8 chunk-header bytes.
+    mem.buf.resize(WaveX::Wxcf::kHeaderSize + 5);
+
+    Reader r(mem.AsReader());
+    uint16_t file_type = 0, file_version = 0;
+    uint32_t total_len = 0;
+    ASSERT_EQ(r.ReadHeader(file_type, file_version, total_len), Result::Ok);
+
+    ChunkHeader ch{};
+    EXPECT_EQ(r.NextChunkHeader(ch), Result::IoError);
+}
+
+// SkipPayload on a truncated file must report the I/O error, not pretend
+// the skip succeeded and leave the stream position mid-chunk.
+TEST(WxcfTest, SkipPayloadOnTruncatedFileIsIoError) {
+    MemoryIo mem;
+    Writer w(mem.AsWriter());
+    ASSERT_EQ(w.WriteHeader(1, MakeVersion(1, 0), 0), Result::Ok);
+    std::vector<uint8_t> payload(200, 0x42);
+    ASSERT_EQ(w.WriteChunk(1, MakeVersion(1, 0), payload.data(), 200), Result::Ok);
+    mem.buf.resize(mem.buf.size() - 100);  // cut the payload in half
+
+    Reader r(mem.AsReader());
+    uint16_t file_type = 0, file_version = 0;
+    uint32_t total_len = 0;
+    ASSERT_EQ(r.ReadHeader(file_type, file_version, total_len), Result::Ok);
+
+    ChunkHeader ch{};
+    ASSERT_EQ(r.NextChunkHeader(ch), Result::Ok);
+    ASSERT_EQ(ch.payload_len, 200u);
+    EXPECT_EQ(r.SkipPayload(ch.payload_len), Result::IoError);
+}
+
+// Skip lengths at the internal 64-byte scratch boundary (exactly one
+// scratch, exactly two) must land byte-exact - an off-by-one here silently
+// shifts every later chunk.
+TEST(WxcfTest, SkipPayloadExactScratchMultiples) {
+    for (uint32_t skip_len: {64u, 128u}) {
+        MemoryIo mem;
+        Writer w(mem.AsWriter());
+        ASSERT_EQ(w.WriteHeader(1, MakeVersion(1, 0), 0), Result::Ok);
+        std::vector<uint8_t> payload(skip_len, 0x24);
+        ASSERT_EQ(w.WriteChunk(1, MakeVersion(1, 0), payload.data(), skip_len), Result::Ok);
+        ASSERT_EQ(w.WriteChunk(9, MakeVersion(1, 0), "tail", 5), Result::Ok);
+
+        Reader r(mem.AsReader());
+        uint16_t file_type = 0, file_version = 0;
+        uint32_t total_len = 0;
+        ASSERT_EQ(r.ReadHeader(file_type, file_version, total_len), Result::Ok);
+
+        ChunkHeader ch{};
+        ASSERT_EQ(r.NextChunkHeader(ch), Result::Ok);
+        ASSERT_EQ(r.SkipPayload(ch.payload_len), Result::Ok) << "skip_len=" << skip_len;
+
+        ASSERT_EQ(r.NextChunkHeader(ch), Result::Ok) << "skip_len=" << skip_len;
+        EXPECT_EQ(ch.chunk_id, 9);
+        char out[5];
+        ASSERT_EQ(r.ReadPayload(out, 5), Result::Ok);
+        EXPECT_STREQ(out, "tail");
+    }
+}
+
+// Skipping zero bytes is a no-op even at EOF - an empty unknown chunk at
+// the end of a file must not be reported as corruption.
+TEST(WxcfTest, SkipZeroBytesAtEofIsOk) {
+    MemoryIo mem;
+    Writer w(mem.AsWriter());
+    ASSERT_EQ(w.WriteHeader(1, MakeVersion(1, 0), 0), Result::Ok);
+    ASSERT_EQ(w.WriteChunk(0x9999, MakeVersion(1, 0), nullptr, 0), Result::Ok);
+
+    Reader r(mem.AsReader());
+    uint16_t file_type = 0, file_version = 0;
+    uint32_t total_len = 0;
+    ASSERT_EQ(r.ReadHeader(file_type, file_version, total_len), Result::Ok);
+
+    ChunkHeader ch{};
+    ASSERT_EQ(r.NextChunkHeader(ch), Result::Ok);
+    EXPECT_EQ(ch.payload_len, 0u);
+    EXPECT_EQ(r.SkipPayload(0), Result::Ok);
+    EXPECT_EQ(r.NextChunkHeader(ch), Result::IoError);  // clean EOF
+}
+
 TEST(WxcfTest, WriteFailurePropagatesAsIoError) {
     IoContext io;
     io.user_data = nullptr;

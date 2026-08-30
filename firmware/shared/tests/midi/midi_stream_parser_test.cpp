@@ -238,4 +238,30 @@ TEST(MidiStreamParser, CompleteSystemCommonStillConsumesItsData) {
     EXPECT_EQ(events[0].data2, 0x64);
 }
 
+// Tune Request (0xF6) carries no data bytes: it must cancel running status
+// (it is a System Common) without owing the stream anything, so the very
+// next status byte parses normally and post-F6 orphan data is discarded.
+TEST(MidiStreamParser, TuneRequestCancelsRunningStatusWithoutConsumingData) {
+    StreamParser p;
+    // Running-status note, then F6, then orphan data (must be dropped, since
+    // F6 cancelled the 0x90 running status), then a full note-on.
+    auto events = FeedAll(p, {0x90, 60, 100, 0xF6, 61, 99, 0x90, 62, 98});
+    ASSERT_EQ(events.size(), 2u);
+    EXPECT_EQ(events[0].data1, 60);
+    EXPECT_EQ(events[1].data1, 62);
+    EXPECT_EQ(events[1].data2, 98);
+}
+
+// A status byte arriving mid-message (sender aborted the previous message)
+// must discard the half-assembled data, not splice old data1 with new data.
+TEST(MidiStreamParser, InterruptedMessageIsAbandoned) {
+    StreamParser p;
+    // 0x90 60 (one data byte short), then a fresh complete note-on.
+    auto events = FeedAll(p, {0x90, 60, 0x90, 72, 88});
+    ASSERT_EQ(events.size(), 1u);
+    EXPECT_EQ(events[0].type, EventType::NoteOn);
+    EXPECT_EQ(events[0].data1, 72);
+    EXPECT_EQ(events[0].data2, 88);
+}
+
 }  // namespace

@@ -168,6 +168,38 @@ TEST_F(FrameScannerTest, OverflowDropsOldestAndRecovers) {
     EXPECT_EQ(frames_[0].msg_type, 0x42);
 }
 
+// A payload full of 0xA5 bytes must not be mistaken for frame starts: the
+// scanner consumes whole validated frames, so start bytes INSIDE a frame
+// are data, and the frame dispatches exactly once with its payload intact.
+TEST_F(FrameScannerTest, StartBytesInsidePayloadDoNotSplitFrame) {
+    std::vector<uint8_t> payload(40, UART_START_BYTE);
+    Append(MakeFrame(0x19, 11, payload));
+    Append(MakeFrame(0x20, 12, {1}));
+    ScanAll();
+    ASSERT_EQ(frames_.size(), 2u);
+    EXPECT_EQ(frames_[0].msg_type, 0x19);
+    EXPECT_EQ(frames_[0].payload, payload);
+    EXPECT_EQ(frames_[1].msg_type, 0x20);
+    EXPECT_EQ(stats_.crc_errors, 0u);
+    EXPECT_EQ(stats_.sync_errors, 0u);
+    EXPECT_EQ(scanner_.Buffered(), 0u);
+}
+
+// Clear() (a link reset) must drop any half-received frame so its bytes
+// cannot be prepended to post-reset traffic.
+TEST_F(FrameScannerTest, ClearDropsPartialFrame) {
+    auto frame = MakeFrame(0x31, 21, {9, 9, 9});
+    scanner_.Append(frame.data(), frame.size() - 4, stats_);  // partial
+    EXPECT_GT(scanner_.Buffered(), 0u);
+    scanner_.Clear();
+    EXPECT_EQ(scanner_.Buffered(), 0u);
+
+    Append(MakeFrame(0x32, 22, {1}));
+    ScanAll();
+    ASSERT_EQ(frames_.size(), 1u);
+    EXPECT_EQ(frames_[0].msg_type, 0x32);
+}
+
 TEST_F(FrameScannerTest, MaxSizeFrameRoundTrips) {
     std::vector<uint8_t> payload(UART_MAX_PAYLOAD, 0x5A);
     // Scanner capacity must fit the largest frame; use a dedicated scanner

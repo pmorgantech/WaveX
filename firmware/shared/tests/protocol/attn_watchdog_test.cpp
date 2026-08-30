@@ -55,3 +55,22 @@ TEST(AttnWatchdogTest, ClearThenReassertStartsANewWindow) {
     EXPECT_FALSE(w.ShouldForceDeassert(5000 + AttnWatchdog::kForceDeassertMs - 1));
     EXPECT_TRUE(w.ShouldForceDeassert(5000 + AttnWatchdog::kForceDeassertMs));
 }
+
+// The millisecond clock is uint32 and wraps every ~49.7 days. An assertion
+// straddling the wrap must still time out correctly (unsigned subtraction
+// handles this) - a signed or widened comparison here would either trip
+// instantly or never trip for the whole next epoch.
+TEST(AttnWatchdogTest, SurvivesUint32ClockWraparound) {
+    AttnWatchdog w;
+    const uint32_t just_before_wrap = 0xFFFFFF00u;
+    w.MarkAsserted(just_before_wrap);
+
+    // 255 ms later, still pre-wrap: below threshold.
+    EXPECT_FALSE(w.ShouldForceDeassert(0xFFFFFFFFu));
+    // Post-wrap (the clock now reads a small value), exactly kForceDeassertMs
+    // after the assertion: trips.
+    const uint32_t after_wrap = just_before_wrap + AttnWatchdog::kForceDeassertMs;  // wraps
+    ASSERT_LT(after_wrap, just_before_wrap);  // proves the wrap happened
+    EXPECT_TRUE(w.ShouldForceDeassert(after_wrap));
+    EXPECT_FALSE(w.ShouldForceDeassert(after_wrap - 1));
+}

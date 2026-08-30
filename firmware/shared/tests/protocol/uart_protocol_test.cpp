@@ -244,9 +244,14 @@ TEST_F(UartProtocolTest, FlagsEncoding) {
     }
 }
 
-// Test maximum payload size
+// Test maximum payload size - and that the max-size frame round-trips
+// byte-exact (previously only "result > 0" was checked, so a frame that
+// truncated or corrupted the payload at the boundary still passed).
 TEST_F(UartProtocolTest, MaximumPayloadSize) {
-    std::vector<uint8_t> large_payload(UART_MAX_PAYLOAD, 0xAA);
+    std::vector<uint8_t> large_payload(UART_MAX_PAYLOAD);
+    for (size_t i = 0; i < large_payload.size(); ++i) {
+        large_payload[i] = static_cast<uint8_t>(i * 31 + 7);  // non-repeating pattern
+    }
 
     size_t result = CreateUartPacket(buffer_.data(),
                                      buffer_.size(),
@@ -256,7 +261,24 @@ TEST_F(UartProtocolTest, MaximumPayloadSize) {
                                      0x0001,
                                      0);
 
-    EXPECT_GT(result, 0);
+    ASSERT_EQ(result, UART_FRAME_OVERHEAD + UART_MAX_PAYLOAD);
+    EXPECT_EQ(buffer_[0], UART_START_BYTE);
+    EXPECT_EQ(buffer_[result - 1], UART_END_BYTE);
+
+    uint8_t parsed_type;
+    uint8_t parsed_flags;
+    uint16_t parsed_seq;
+    std::vector<uint8_t> parsed_payload(UART_MAX_PAYLOAD);
+    size_t parsed_payload_size = parsed_payload.size();
+    ASSERT_TRUE(ParseUartPacket(buffer_.data(),
+                                result,
+                                parsed_type,
+                                parsed_payload.data(),
+                                parsed_payload_size,
+                                parsed_seq,
+                                parsed_flags));
+    EXPECT_EQ(parsed_payload_size, UART_MAX_PAYLOAD);
+    EXPECT_EQ(memcmp(parsed_payload.data(), large_payload.data(), UART_MAX_PAYLOAD), 0);
 }
 
 // Test payload size exceeds maximum
@@ -317,6 +339,93 @@ TEST_F(UartProtocolTest, CRCDifferentData) {
 TEST_F(UartProtocolTest, CRCEmptyData) {
     uint16_t crc = CalculateUartCrc(nullptr, 0);
     EXPECT_EQ(crc, 0);
+}
+
+// Known-answer vectors pin the actual CRC variant (CRC-16/CCITT-FALSE).
+// Consistency checks above pass for any hash; only fixed expected values
+// catch a changed polynomial, init value, or bit order - which on this link
+// would mean the two MCUs silently rejecting every frame from each other.
+TEST_F(UartProtocolTest, CRCKnownAnswers) {
+    const uint8_t check[] = "123456789";
+    EXPECT_EQ(CalculateUartCrc(check, sizeof(check) - 1), 0x29B1);  // published check value
+
+    const CRCTestVectors::TestVector* vectors = CRCTestVectors::GetTestVectors();
+    for (size_t i = 0; i < CRCTestVectors::GetTestVectorCount(); ++i) {
+        EXPECT_EQ(CalculateUartCrc(vectors[i].data, vectors[i].length), vectors[i].expected_crc)
+            << "vector " << i;
+    }
+}
+
+// A corrupted length field must fail validation (the frame's byte count no
+// longer matches), not read a CRC from the wrong offset and "pass".
+TEST_F(UartProtocolTest, ValidateFrameRejectsCorruptedLengthField) {
+    size_t created = CreateUartPacket(buffer_.data(), buffer_.size(), 0x12, nullptr, 0, 0x0001, 0);
+    ASSERT_GT(created, 0u);
+
+    buffer_[1] ^= 0x04;  // low byte of the length field
+    EXPECT_FALSE(ValidateUartFrame(buffer_.data(), created));
+}
+
+// A frame cut short by even one byte (a DMA window boundary, a dropped
+// byte) must be rejected outright.
+TEST_F(UartProtocolTest, ValidateFrameRejectsTruncatedFrame) {
+    std::vector<uint8_t> payload(20, 0x3C);
+    size_t created = CreateUartPacket(
+        buffer_.data(), buffer_.size(), 0x12, payload.data(), payload.size(), 0x0001, 0);
+    ASSERT_GT(created, 0u);
+
+    EXPECT_FALSE(ValidateUartFrame(buffer_.data(), created - 1));
+}
+
+// GetFrameLength must refuse to derive a length from anything that cannot
+// begin a frame: no start byte, an impossible length field, or a window too
+// small to hold the minimum frame. The scanner uses 0 as its "not a frame
+// boundary" signal, so a wrong non-zero answer here desyncs the stream.
+TEST_F(UartProtocolTest, GetFrameLengthRejectsNonFrames) {
+    size_t created = CreateUartPacket(buffer_.data(), buffer_.size(), 0x12, nullptr, 0, 0x0001, 0);
+    ASSERT_GT(created, 0u);
+
+    // Window smaller than the minimum frame.
+    EXPECT_EQ(GetFrameLength(buffer_.data(), UART_FRAME_OVERHEAD - 1), 0u);
+    EXPECT_EQ(GetFrameLength(nullptr, 4096), 0u);
+
+    // Wrong start byte.
+    uint8_t bad_start[UART_FRAME_OVERHEAD] = {0};
+    EXPECT_EQ(GetFrameLength(bad_start, sizeof(bad_start)), 0u);
+
+    // Start byte with an impossible length field (larger than any frame).
+    uint8_t bogus_len[UART_FRAME_OVERHEAD] = {UART_START_BYTE, 0xFF, 0xFF};
+    EXPECT_EQ(GetFrameLength(bogus_len, sizeof(bogus_len)), 0u);
+
+    // Start byte with a length field below the fixed body size.
+    uint8_t tiny_len[UART_FRAME_OVERHEAD] = {UART_START_BYTE, 0x01, 0x00};
+    EXPECT_EQ(GetFrameLength(tiny_len, sizeof(tiny_len)), 0u);
+}
+
+// FindFrameStart on a window too small to hold a frame must give up, not
+// report a start it can never complete.
+TEST_F(UartProtocolTest, FindFrameStartWindowTooSmall) {
+    uint8_t tiny[UART_FRAME_OVERHEAD - 1];
+    memset(tiny, UART_START_BYTE, sizeof(tiny));
+    EXPECT_LT(FindFrameStart(tiny, sizeof(tiny)), 0);
+    EXPECT_LT(FindFrameStart(nullptr, 4096), 0);
+}
+
+// Empty-payload frame parsed with a zero-capacity (null) destination: legal,
+// and must report zero payload bytes.
+TEST_F(UartProtocolTest, ParseEmptyPayloadWithNullDestination) {
+    size_t created = CreateUartPacket(buffer_.data(), buffer_.size(), 0x12, nullptr, 0, 0x0042, 0);
+    ASSERT_GT(created, 0u);
+
+    uint8_t parsed_type;
+    uint8_t parsed_flags;
+    uint16_t parsed_seq;
+    size_t capacity = 0;
+    ASSERT_TRUE(ParseUartPacket(
+        buffer_.data(), created, parsed_type, nullptr, capacity, parsed_seq, parsed_flags));
+    EXPECT_EQ(capacity, 0u);
+    EXPECT_EQ(parsed_type, 0x12);
+    EXPECT_EQ(parsed_seq, 0x0042);
 }
 
 // Test round-trip: create -> parse -> verify

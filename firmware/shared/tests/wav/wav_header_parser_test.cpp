@@ -199,6 +199,79 @@ TEST(WavHeaderParserTest, ChunkFloodTerminates) {
     EXPECT_NE(ParseWavHeader(r, info), ParseResult::Ok);
 }
 
+// "RIFF" alone is not enough - the form type must be WAVE. A RIFF AVI (or
+// WEBP) offered to the sampler must be refused at the magic, not walked.
+TEST(WavHeaderParserTest, RiffButNotWaveRejected) {
+    std::vector<uint8_t> avi;
+    PushTag(avi, "RIFF");
+    PushLe32(avi, 0);
+    PushTag(avi, "AVI ");
+    avi.resize(avi.size() + 32, 0);
+
+    MemReader r(avi.data(), avi.size());
+    WavInfo info;
+    EXPECT_EQ(ParseWavHeader(r, info), ParseResult::NotRiffWave);
+}
+
+TEST(WavHeaderParserTest, EmptyBufferIsIoError) {
+    uint8_t dummy = 0;  // valid pointer, zero readable bytes
+    MemReader r(&dummy, 0);
+    WavInfo info;
+    EXPECT_EQ(ParseWavHeader(r, info), ParseResult::IoError);
+}
+
+// A zero-length data chunk is a legal (if pointless) WAV; it must parse,
+// not be confused with "no data chunk".
+TEST(WavHeaderParserTest, ZeroLengthDataChunkParses) {
+    auto wav = RiffHeader();
+    PushFmt(wav);
+    const uint32_t expect_offset = static_cast<uint32_t>(wav.size()) + 8;
+    PushData(wav, 0);
+
+    MemReader r(wav.data(), wav.size());
+    WavInfo info;
+    ASSERT_EQ(ParseWavHeader(r, info), ParseResult::Ok);
+    EXPECT_EQ(info.data_offset, expect_offset);
+    EXPECT_EQ(info.data_size, 0u);
+    EXPECT_EQ(DurationMs(info), 0u);
+}
+
+// A corrupt chunk size pointing far past the end of the file must surface
+// as an I/O error (the seek fails), not as a chunk that "parsed".
+TEST(WavHeaderParserTest, ChunkSizeBeyondFileIsIoError) {
+    auto wav = RiffHeader();
+    PushTag(wav, "LIST");
+    PushLe32(wav, 0x7FFFFFF0);  // way past EOF, but no uint32 wraparound
+
+    MemReader r(wav.data(), wav.size());
+    WavInfo info;
+    EXPECT_EQ(ParseWavHeader(r, info), ParseResult::IoError);
+}
+
+// Only a data chunk, never a fmt: the walk must report the missing fmt (the
+// data-before-fmt tolerance must not turn into "fmt optional").
+TEST(WavHeaderParserTest, MissingFmtReported) {
+    auto wav = RiffHeader();
+    PushData(wav, 16);
+
+    MemReader r(wav.data(), wav.size());
+    WavInfo info;
+    EXPECT_EQ(ParseWavHeader(r, info), ParseResult::NoFmtChunk);
+    // The data chunk's geometry was still captured for whoever can use it.
+    EXPECT_EQ(info.data_size, 16u);
+}
+
+// A chunk header cut off mid-way (truncated download, torn SD write) ends
+// the walk; with neither fmt nor data seen, that reports NoFmtChunk.
+TEST(WavHeaderParserTest, TruncatedChunkHeaderEndsWalk) {
+    auto wav = RiffHeader();
+    PushTag(wav, "fmt ");  // tag but no size field, then EOF
+
+    MemReader r(wav.data(), wav.size());
+    WavInfo info;
+    EXPECT_EQ(ParseWavHeader(r, info), ParseResult::NoFmtChunk);
+}
+
 }  // namespace
 
 // Duration is computed from data_size, and the obvious 32-bit multiply

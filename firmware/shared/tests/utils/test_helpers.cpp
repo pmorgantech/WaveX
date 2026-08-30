@@ -10,9 +10,10 @@ namespace Test {
 
 std::vector<uint8_t> ProtocolTestHelper::CreateWaveXPacket(
     uint8_t msg_type, const void* payload, size_t payload_size, uint16_t sequence, uint8_t flags) {
-    // Determine optimal packet size
-    uint8_t size_code =
-        Protocol::ProtocolHandler::GetOptimalSizeCode(payload_size + 5);  // +5 for header
+    // Determine optimal packet size. GetOptimalSizeCode takes the PAYLOAD
+    // size (it accounts for header+CRC itself); CreateWaveXPacket below
+    // repeats the same computation, so the vector is sized exactly.
+    uint8_t size_code = Protocol::ProtocolHandler::GetOptimalSizeCode(payload_size);
     size_t packet_size = Protocol::ProtocolHandler::GetPacketSizeFromCode(size_code);
 
     std::vector<uint8_t> packet(packet_size, 0);
@@ -50,20 +51,11 @@ std::vector<uint8_t> ProtocolTestHelper::CreateHeartbeatPacket(uint32_t uptime_m
     return CreateWaveXPacket(Protocol::MSG_HEARTBEAT, &msg, sizeof(msg));
 }
 
-std::vector<uint8_t> ProtocolTestHelper::CreateBrowseReqPacket(const std::string& path,
-                                                               uint32_t start_index,
-                                                               uint8_t max_entries) {
-    std::vector<uint8_t> payload;
-    payload.reserve(5 + path.length());
-    payload.push_back(static_cast<uint8_t>(start_index & 0xFF));
-    payload.push_back(static_cast<uint8_t>((start_index >> 8) & 0xFF));
-    payload.push_back(static_cast<uint8_t>((start_index >> 16) & 0xFF));
-    payload.push_back(static_cast<uint8_t>((start_index >> 24) & 0xFF));
-    payload.push_back(max_entries);
-    payload.insert(payload.end(), path.begin(), path.end());
-
-    return CreateWaveXPacket(Protocol::MSG_BROWSE_REQ, payload.data(), payload.size());
-}
+// (CreateBrowseReqPacket was deleted: it built the dead u32-start-index
+// browse-request wire format that ParseBrowseReq used to parse, which was
+// removed from protocol.cpp in review H6/M10. The live format is
+// [start_index u8][path][NUL]; a helper emitting the dead layout was a trap
+// for the next test author.)
 
 std::vector<uint8_t> ProtocolTestHelper::CreateBrowseRespPacket(
     uint32_t total_count, const std::vector<Protocol::FileEntryWire>& entries) {
@@ -105,12 +97,12 @@ std::vector<uint8_t> ProtocolTestHelper::CreateOversizedPacket(size_t size) {
 }
 
 bool ProtocolTestHelper::ValidatePacketStructure(const uint8_t* packet, size_t length) {
-    if (length < 5)
-        return false;  // Minimum packet size
+    if (!packet || length < 6)
+        return false;  // header(4) + crc(2) is the minimum wire size
 
     // Check if packet size matches size code
     uint8_t flags_size = packet[0];
-    uint8_t size_code = flags_size & 0x0F;
+    uint8_t size_code = flags_size & PKT_SIZE_MASK;
     size_t expected_size = Protocol::ProtocolHandler::GetPacketSizeFromCode(size_code);
 
     return length >= expected_size;
@@ -122,33 +114,49 @@ bool ProtocolTestHelper::ExtractPacketComponents(const uint8_t* packet,
                                                  uint16_t& sequence,
                                                  uint8_t& flags,
                                                  std::vector<uint8_t>& payload) {
-    if (length < 5)
-        return false;
+    if (!packet || length < 6)
+        return false;  // header(4) + crc(2)
 
     uint8_t flags_size = packet[0];
     msg_type = packet[1];
-    sequence = packet[2] | (packet[3] << 8);
-    flags = (flags_size >> 4) & 0xF0;
+    sequence = static_cast<uint16_t>(packet[2] | (packet[3] << 8));
+    // Flags live in the 4 MSB of flags_size and stay there on extraction.
+    // (This used to be `(flags_size >> 4) & 0xF0`, which shifts the flags
+    // into the low nibble and then masks the now-empty high nibble - the
+    // result was always 0, so any flags assertion written against this
+    // helper passed vacuously.)
+    flags = PKT_GET_FLAGS(flags_size);
 
-    uint8_t size_code = flags_size & 0x0F;
+    uint8_t size_code = flags_size & PKT_SIZE_MASK;
     size_t packet_size = Protocol::ProtocolHandler::GetPacketSizeFromCode(size_code);
 
     if (length < packet_size)
         return false;
 
-    size_t payload_size = packet_size - 5 - 2;  // -5 for header, -2 for CRC
+    // Header is 4 bytes ([0] flags_size, [1] msg_type, [2..3] seq); the CRC
+    // takes the last 2. (The old `- 5 - 2` dropped the payload's final byte.)
+    size_t payload_size = packet_size - 4 - 2;
     payload.assign(packet + 4, packet + 4 + payload_size);
 
     return true;
 }
 
-// CRC test vectors
+// CRC known-answer vectors for CRC-16/CCITT-FALSE (poly 0x1021, init
+// 0xFFFF, no reflection, no final XOR), the algorithm CalculateWaveXCrc /
+// CalculateUartCrc implement. "123456789" -> 0x29B1 is the published check
+// value for this CRC; the others were computed independently against the
+// algorithm's definition. The empty-input entry is 0x0000, NOT the 0xFFFF a
+// textbook CRC would give: CalculateWaveXCrc deliberately special-cases
+// null/empty input to 0, and these vectors pin that contract too.
+// (The previous values for "A", "Hello, World!", the binary vector, and ""
+// were wrong for this CRC variant - they never failed anything only because
+// no test compiled this file.)
 static const CRCTestVectors::TestVector crc_test_vectors[] = {
-    {(const uint8_t*)"", 0, 0xFFFF},
-    {(const uint8_t*)"A", 1, 0x538D},
+    {(const uint8_t*)"", 0, 0x0000},
+    {(const uint8_t*)"A", 1, 0xB915},
     {(const uint8_t*)"123456789", 9, 0x29B1},
-    {(const uint8_t*)"Hello, World!", 13, 0xE5CC},
-    {(const uint8_t*)"\x00\x01\x02\x03", 4, 0x89C3},
+    {(const uint8_t*)"Hello, World!", 13, 0x67DA},
+    {(const uint8_t*)"\x00\x01\x02\x03", 4, 0xE5F1},
 };
 
 const CRCTestVectors::TestVector* CRCTestVectors::GetTestVectors() {

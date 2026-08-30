@@ -50,12 +50,20 @@ TEST_F(MessageTypeTest, NoteMessage) {
     EXPECT_EQ(parsed.velocity, original.velocity);
     EXPECT_EQ(parsed.channel, original.channel);
 
-    // Test NoteOff
+    // Test NoteOff - parse it back too (previously only created+validated,
+    // so a NoteOff that carried the wrong type byte or velocity passed).
     size_t created_off = ProtocolHandler::CreateNoteOffPacket(
         buffer_.data(), buffer_.size(), original.note, original.channel);
 
     ASSERT_GT(created_off, 0);
     EXPECT_TRUE(ProtocolHandler::ValidatePacket(buffer_.data(), created_off));
+    EXPECT_EQ(ProtocolHandler::GetMessageType(buffer_.data()), MSG_NOTE_OFF);
+
+    NoteMessage parsed_off;
+    ASSERT_TRUE(ProtocolHandler::ParseNoteMessage(buffer_.data(), parsed_off));
+    EXPECT_EQ(parsed_off.note, original.note);
+    EXPECT_EQ(parsed_off.channel, original.channel);
+    EXPECT_EQ(parsed_off.velocity, 0);  // NoteOff is sent with velocity 0
 }
 
 // Test SampleCtrlMessage creation and parsing
@@ -585,9 +593,11 @@ TEST_F(MessageTypeTest, AckMessage) {
     EXPECT_EQ(parsed.serial_id, original.serial_id);
 }
 
-// Test SamplePlayIndexMessage creation and parsing
+// Test SamplePlayIndexMessage creation and parsing. loop_gap_ms rides on the
+// play request (a property of the audition, not the sample), so it must
+// survive the wire alongside the index.
 TEST_F(MessageTypeTest, SamplePlayIndexMessage) {
-    SamplePlayIndexMessage original(5);
+    SamplePlayIndexMessage original(5, /*loop_gap_ms=*/250);
 
     size_t created =
         ProtocolHandler::CreateSamplePlayIndexPacket(buffer_.data(), buffer_.size(), original);
@@ -602,6 +612,7 @@ TEST_F(MessageTypeTest, SamplePlayIndexMessage) {
 
     EXPECT_TRUE(result);
     EXPECT_EQ(parsed.index, original.index);
+    EXPECT_EQ(parsed.loop_gap_ms, 250);
 }
 
 // Test SampleGetPathMessage creation and parsing
@@ -1347,4 +1358,132 @@ TEST_F(MessageTypeTest, SampleMetaReqMessage) {
     ASSERT_TRUE(ProtocolHandler::ParseMessage(
         buffer_.data(), MSG_SAMPLE_META_REQ, &parsed, sizeof(parsed)));
     EXPECT_EQ(parsed.sample_id, 42);
+}
+
+// MSG_SAMPLE_SELECT (previously the only live E->D wire message with no
+// round-trip test). id 0 is a meaningful sentinel ("most recently loaded
+// playable sample"), so both a real id and the sentinel must survive.
+TEST_F(MessageTypeTest, SampleSelectMessage) {
+    for (uint16_t id: {uint16_t{0}, uint16_t{7}, uint16_t{0xFFFF}}) {
+        SampleSelectMessage original(id);
+
+        size_t created = ProtocolHandler::CreatePacket(
+            buffer_.data(), buffer_.size(), MSG_SAMPLE_SELECT, &original, sizeof(original));
+        ASSERT_GT(created, 0u);
+        EXPECT_TRUE(ProtocolHandler::ValidatePacket(buffer_.data(), created));
+        EXPECT_EQ(ProtocolHandler::GetMessageType(buffer_.data()), MSG_SAMPLE_SELECT);
+
+        SampleSelectMessage parsed(1);  // non-zero so a zero id is a real read
+        ASSERT_TRUE(ProtocolHandler::ParseMessage(
+            buffer_.data(), MSG_SAMPLE_SELECT, &parsed, sizeof(parsed)));
+        EXPECT_EQ(parsed.sample_id, id);
+    }
+}
+
+// MSG_SAMPLE_UNLOAD (previously untested). Unlike SampleSelect, id 0 is
+// REJECTED by the receiver rather than treated as a wildcard, so the id
+// arriving intact is what stands between "free this sample" and "free
+// nothing" (or, with a wildcard-permissive receiver, "free everything").
+TEST_F(MessageTypeTest, SampleUnloadMessage) {
+    SampleUnloadMessage original(311);
+
+    size_t created = ProtocolHandler::CreatePacket(
+        buffer_.data(), buffer_.size(), MSG_SAMPLE_UNLOAD, &original, sizeof(original));
+    ASSERT_GT(created, 0u);
+    EXPECT_TRUE(ProtocolHandler::ValidatePacket(buffer_.data(), created));
+    EXPECT_EQ(ProtocolHandler::GetMessageType(buffer_.data()), MSG_SAMPLE_UNLOAD);
+
+    SampleUnloadMessage parsed;
+    ASSERT_TRUE(
+        ProtocolHandler::ParseMessage(buffer_.data(), MSG_SAMPLE_UNLOAD, &parsed, sizeof(parsed)));
+    EXPECT_EQ(parsed.sample_id, 311);
+}
+
+// MSG_CV_CAL_RESP reuses CvCalMessage (the reply to both SET and GET); the
+// SET round trip alone does not pin the RESP type byte.
+TEST_F(MessageTypeTest, CvCalRespRoundTrip) {
+    CvCalMessage original(2, 0, 0.98f, 0.01f, 1.02f, -0.03f, 0.97f, 0.04f, 3.1f);
+
+    size_t created = ProtocolHandler::CreatePacket(
+        buffer_.data(), buffer_.size(), MSG_CV_CAL_RESP, &original, sizeof(original));
+    ASSERT_GT(created, 0u);
+    EXPECT_TRUE(ProtocolHandler::ValidatePacket(buffer_.data(), created));
+    EXPECT_EQ(ProtocolHandler::GetMessageType(buffer_.data()), MSG_CV_CAL_RESP);
+
+    CvCalMessage parsed;
+    ASSERT_TRUE(
+        ProtocolHandler::ParseMessage(buffer_.data(), MSG_CV_CAL_RESP, &parsed, sizeof(parsed)));
+    EXPECT_EQ(parsed.group, 2);
+    EXPECT_FLOAT_EQ(parsed.vcf_cut_gain, 0.98f);
+    EXPECT_FLOAT_EQ(parsed.vca_off, 0.04f);
+    EXPECT_FLOAT_EQ(parsed.cutoff_k, 3.1f);
+}
+
+// ParseMessage's expected-type check is the only thing standing between a
+// dispatcher and interpreting one message's bytes as another's - it must
+// actually reject a mismatch, not just be a comment.
+TEST_F(MessageTypeTest, ParseMessageRejectsMismatchedType) {
+    HeartbeatMessage hb(1, 2, 3);
+    size_t created = ProtocolHandler::CreateHeartbeatPacket(buffer_.data(), buffer_.size(), hb);
+    ASSERT_GT(created, 0u);
+
+    SyncMessage sync_parsed;
+    EXPECT_FALSE(
+        ProtocolHandler::ParseMessage(buffer_.data(), MSG_SYNC, &sync_parsed, sizeof(sync_parsed)));
+
+    HeartbeatMessage hb_parsed;
+    EXPECT_TRUE(ProtocolHandler::ParseMessage(buffer_.data(), hb_parsed));
+}
+
+// Known-answer CRC vectors (CRC-16/CCITT-FALSE): consistency checks
+// (crc(x) == crc(x)) pass for ANY function of the input, so only fixed
+// expected values pin the polynomial, init value, and the deliberate
+// empty-input-returns-0 special case.
+TEST_F(MessageTypeTest, CrcMatchesKnownAnswerVectors) {
+    const CRCTestVectors::TestVector* vectors = CRCTestVectors::GetTestVectors();
+    const size_t count = CRCTestVectors::GetTestVectorCount();
+    ASSERT_GE(count, 5u);
+    for (size_t i = 0; i < count; ++i) {
+        EXPECT_EQ(ProtocolHandler::CalculateWaveXCrc(vectors[i].data, vectors[i].length),
+                  vectors[i].expected_crc)
+            << "vector " << i;
+    }
+}
+
+// The shared test helpers must agree with the production packet layout -
+// this is also the regression test for ExtractPacketComponents' old flags
+// extraction, which always produced 0 and made any flags assertion vacuous.
+TEST_F(MessageTypeTest, HelperExtractsFlagsSequenceAndPayload) {
+    ControlChangeMessage msg(PARAM_FILTER_CUTOFF, 4, 0x1234);
+    auto packet = ProtocolTestHelper::CreateWaveXPacket(
+        MSG_CONTROL_CHANGE, &msg, sizeof(msg), /*sequence=*/0x0BAD, PKT_FLAG_ACK | PKT_FLAG_NACK);
+    ASSERT_FALSE(packet.empty());
+    EXPECT_TRUE(ProtocolHandler::ValidatePacket(packet.data(), packet.size()));
+    EXPECT_TRUE(ProtocolTestHelper::ValidatePacketStructure(packet.data(), packet.size()));
+
+    uint8_t msg_type = 0;
+    uint16_t sequence = 0;
+    uint8_t flags = 0;
+    std::vector<uint8_t> payload;
+    ASSERT_TRUE(ProtocolTestHelper::ExtractPacketComponents(
+        packet.data(), packet.size(), msg_type, sequence, flags, payload));
+    EXPECT_EQ(msg_type, MSG_CONTROL_CHANGE);
+    EXPECT_EQ(sequence, 0x0BAD);
+    EXPECT_EQ(flags, PKT_FLAG_ACK | PKT_FLAG_NACK);
+    // Payload is the packet's whole zero-padded payload region; the message
+    // must sit at its head, byte-exact.
+    ASSERT_GE(payload.size(), sizeof(msg));
+    EXPECT_EQ(memcmp(payload.data(), &msg, sizeof(msg)), 0);
+}
+
+// The invalid-packet helpers must actually produce invalid packets.
+TEST_F(MessageTypeTest, HelperInvalidPacketsFailValidation) {
+    NoteMessage msg(60, 100, 0);
+    auto bad_crc = ProtocolTestHelper::CreateInvalidCRCPacket(MSG_NOTE_ON, &msg, sizeof(msg));
+    ASSERT_FALSE(bad_crc.empty());
+    EXPECT_FALSE(ProtocolHandler::ValidatePacket(bad_crc.data(), bad_crc.size()));
+
+    auto malformed = ProtocolTestHelper::CreateMalformedPacket();
+    EXPECT_FALSE(ProtocolHandler::ValidatePacket(malformed.data(), malformed.size()));
+    EXPECT_FALSE(ProtocolTestHelper::ValidatePacketStructure(malformed.data(), malformed.size()));
 }

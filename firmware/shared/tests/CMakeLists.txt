@@ -50,10 +50,14 @@ include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/utils
 )
 
-# Test library with shared protocol source files
+# Test library with shared protocol source files plus the test helpers
+# (utils/test_helpers.cpp). The helpers were previously never compiled, so
+# ProtocolTestHelper / CRCTestVectors silently rotted as dead code; they are
+# now linked into every test binary and exercised by the protocol tests.
 add_library(wavex_shared_test_lib STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/../spi_protocol/protocol.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../uart_protocol/uart_protocol.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/utils/test_helpers.cpp
 )
 
 target_include_directories(wavex_shared_test_lib PUBLIC
