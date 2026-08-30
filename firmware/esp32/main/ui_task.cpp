@@ -35,7 +35,6 @@
 #include "lvgl.h"
 #include "ui/display_manager.h"
 #include "ui/input_dispatcher.h"
-#include "ui/ui_demo.h"
 #include "ui/ui_navigation_integration.h"
 
 // LVGL port lock macros for thread safety

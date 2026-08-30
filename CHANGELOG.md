@@ -11,6 +11,30 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Removed — Duplicate-symbol landmine, the demo page trio, and the pre-unified protocol fossil
+
+Found by the 2026-08-29 ESP32-P4 review (items E-ODR1, E-DEAD1 in part).
+
+- `ui_main.cpp` and `ui_api.cpp` both defined `ui_init_demo()` and
+  `ui_set_active_context()`, and both were compiled. It linked only because
+  `ui_main.o` was never pulled from the static archive — the first reference to
+  anything unique in that file would have turned into a multiple-definition
+  error. `ui_api.cpp` is the live one; the duplicate is gone.
+- Both entry points had no callers, and `ui_init_demo()` was the last reference
+  to the demo pages, so `ui_patch_list.cpp`, `ui_param_edit.cpp` and `ui_demo.h`
+  went with it. Those handlers also made unlocked `lv_*` calls and reassigned
+  the active context from inside their own event dispatch — a use-after-free
+  waiting for anyone who wired them up.
+- `include/ui/waveform_view.h` was a stale divergent copy of
+  `components/waveform_view.h` (256 vs 512 points, different layout) with both
+  directories on the include path — one wrong `#include` from an ODR violation
+  against the compiled class.
+- `comm/shared_packet_handler.{h,cpp}` described a pre-unified wire format,
+  called `ProtocolHandler` functions that do not exist (so it could not compile
+  if built), was excluded from the test build for that reason, and was never in
+  the source list — while `inter_mcu.cpp` still included its header. AGENTS.md
+  rule 4 forbids a competing message format; this was one on paper.
+
 ### Fixed — The last `volatile` cross-core handoff, and diagnostics that called known traffic "unknown"
 
 Found by the 2026-08-29 ESP32-P4 review (items E-SYNC1, E-STAT1).

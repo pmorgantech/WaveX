@@ -6,7 +6,6 @@
 #include "../../shared/spi_protocol/protocol.h"
 #include "../../shared/uart_protocol/uart_protocol.h"
 #include "comm/listener_slot.h"
-#include "comm/shared_packet_handler.h"
 #include "comm/statistics.h"
 #include "links/esp_uart_link.h"
 

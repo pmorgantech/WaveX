@@ -7,7 +7,7 @@
 
 Findings carry stable IDs (`E-…`) so implementation can be tracked in this file. **Completed items leave this document** — detail goes to `CHANGELOG.md`, matching the roadmap's convention — so what remains here is always the open list. A partially-addressed item keeps its row, marked `[~]`, and says what is left.
 
-**Already remediated** (see `CHANGELOG.md` § Unreleased): E-LVGL1/2/3, the LVGL thread-safety cluster (`21304be`, `222b2b4`); E-LIFE1/2/3, the callback-lifetime cluster (`41f4cdd`); E-KEY1/2, the keypad decode and INT busy-spin (`cdab47d`); E-INIT1 and E-BLD1/2 (`f6b7394`); E-TICK1/E-TOUCH1/E-BRWS1/E-MENU1, the UI correctness batch (`edd9981`); E-TX1, the outbound-frame latency (`6a0912c`); E-METER1 and E-DIAG1, the two periodic-work wastes (`b64ae32`); E-MIDI1, E-KBD1 and the defect half of E-PROTO1 (`1d16237`); E-SYNC1 and E-STAT1. All fixed 2026-08-29. **E-KEY1/2 and E-ENC1 change hardware behaviour and are the ones most needing a bench pass** — they were diagnosed entirely by reading code and the controller datasheet.
+**Already remediated** (see `CHANGELOG.md` § Unreleased): E-LVGL1/2/3, the LVGL thread-safety cluster (`21304be`, `222b2b4`); E-LIFE1/2/3, the callback-lifetime cluster (`41f4cdd`); E-KEY1/2, the keypad decode and INT busy-spin (`cdab47d`); E-INIT1 and E-BLD1/2 (`f6b7394`); E-TICK1/E-TOUCH1/E-BRWS1/E-MENU1, the UI correctness batch (`edd9981`); E-TX1, the outbound-frame latency (`6a0912c`); E-METER1 and E-DIAG1, the two periodic-work wastes (`b64ae32`); E-MIDI1, E-KBD1 and the defect half of E-PROTO1 (`1d16237`); E-SYNC1 and E-STAT1 (`4b63c37`); E-ODR1. All fixed 2026-08-29. **E-KEY1/2 and E-ENC1 change hardware behaviour and are the ones most needing a bench pass** — they were diagnosed entirely by reading code and the controller datasheet.
 
 ---
 
@@ -42,8 +42,7 @@ Two systemic build findings rounded it out — ~~inert `-Os`/LTO options added a
 | [ ] E-SDK1 | Minor | build | Watchdog/assert posture: INT WDT 5 s, task WDT off, assertions compiled out |
 | [ ] E-STD1 | Minor | build | C++ standard not pinned anywhere (guide §8 requires it) |
 | [ ] E-VER1 | Minor | core | Duplicate version truth (`version.h` vs root `VERSION`); `__DATE__`/`__TIME__` |
-| [~] E-DEAD1 | Smell | all | Dead-code batch — `parse_browse_response` (~85 lines) deleted 2026-08-29 once the compiler confirmed it unused; `shared_packet_handler` fossil and the rest still open |
-| [ ] E-ODR1 | Smell | UI | Duplicate-symbol landmine (`ui_main.cpp`/`ui_api.cpp`); stale `waveform_view.h` copy |
+| [~] E-DEAD1 | Smell | all | Dead-code batch — `parse_browse_response`, the `shared_packet_handler` fossil and the demo page trio deleted 2026-08-29; the caller-less `inter_mcu_*`/`pcnt_*` API surface and `window_manager.cpp` still open |
 | [ ] E-ARCH1 | Smell | arch | `components/ui` ⇄ `main` dependency cycle blocks host-testing the UI |
 | [ ] E-TASK1 | Smell | docs | No ESP32 task table; ad-hoc inline priorities/stacks; polling where events belong |
 | [ ] E-MISC1 | Smell | all | Smaller items batch (fake diagnostics metric, dummy meter data, stack copies, doc drift) |
@@ -144,10 +143,6 @@ No `-std`/`CXX_STANDARD` anywhere in project CMake; the build rides IDF 5.5's de
 - `pcnt_task.cpp`: `pcnt_get_reading`/`pcnt_get_raw_count`/`pcnt_reset_counter` caller-less; `prev_count`/`count` bookkeeping is immediately zeroed, so `pcnt_get_reading` can only return `{0,0,…}`.
 - `file_browser.cpp:699-779` `parse_browse_response` (~80 lines, no callers); `statistics.h:195` `m_sample_status_lock` initialized, never used; `esp_uart_link.cpp:87-94` silent fallback `dummy_router` (prefer abort-on-missing-injection); `config.h:36` `WAVEX_ESP32_CONFIG_INCLUDED` has no readers.
 - UI legacy: `common/window_manager.cpp` (no external callers, plus a real `lv_pct` arithmetic bug at :60,:187 for whoever revives it); `SoftkeyBar::focusNext/pressFocused` — the encoder-drives-softkey-focus model in `docs/ui-architecture.md` was never wired; demo trio `ui_param_edit.cpp`/`ui_patch_list.cpp`/`ui_demo.h`; `ui_sample_detail.cpp` shows hard-coded "44.1 kHz / 2:34" and appears unreachable.
-
-### E-ODR1 — link-time landmines
-
-`src/ui_main.cpp` and `src/ui_api.cpp` both define `wavex_ui::ui_init_demo`/`ui_set_active_context` and both are compiled — it links only because `ui_main.o` is never pulled from the archive; the first unique-symbol reference turns into a multiple-definition error. `include/ui/waveform_view.h` is a stale divergent copy of `components/waveform_view.h` (256 vs 512 points, different layout) with both dirs on the include path — one wrong `#include` from an ODR violation. Delete both.
 
 ### E-ARCH1 — `components/ui` ⇄ `main` cycle
 
