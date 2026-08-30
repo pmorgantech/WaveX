@@ -480,15 +480,25 @@ static void HandleBrowseRequestMessage(const uint8_t* payload, size_t payload_si
 
     uint8_t start_index = payload[0];
     const char* path_ptr = reinterpret_cast<const char*>(payload + 1);
+    // A CRC-valid frame carries no guarantee that the path field is
+    // NUL-terminated within payload_size; strlen()/'%s' on it directly can
+    // walk past the payload into whatever follows the stack buffer it was
+    // copied into. Bound the scan to the remaining payload before doing
+    // anything else with path_ptr, including logging it.
+    const size_t max_path_len = payload_size - 1;
+    size_t path_len = strnlen(path_ptr, max_path_len);
 
     if (s_hw) {
-        WaveX::Log::PrintLine("DAISY: Parsed start_index=%d, path_ptr='%s'", start_index, path_ptr);
+        WaveX::Log::PrintLine(
+            "DAISY: Parsed start_index=%d, path_ptr='%.*s'", start_index, (int)path_len, path_ptr);
     }
-    UART_LOGI(
-        "daisy_uart", "BROWSE_REQ: start_index=%u path='%s'", (unsigned)start_index, path_ptr);
+    UART_LOGI("daisy_uart",
+              "BROWSE_REQ: start_index=%u path='%.*s'",
+              (unsigned)start_index,
+              (int)path_len,
+              path_ptr);
 
     char path[96] = {0};
-    size_t path_len = strlen(path_ptr);
     if (path_len >= sizeof(path)) {
         path_len = sizeof(path) - 1;
     }
