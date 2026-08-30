@@ -384,7 +384,13 @@ WEAK_HANDLER void PacketRouter::handle_cv_cal_resp(const WaveX::Protocol::CvCalM
 }
 
 WEAK_HANDLER void PacketRouter::handle_error(const WaveX::Protocol::ErrorMessage& msg) {
-    ESP_LOGE("packet_router", "Error: code=0x%02X, message=%s", msg.code, msg.msg);
+    // The message text comes off the wire and is not guaranteed NUL-terminated,
+    // so bound it explicitly: %s on a full 48-byte field would read past the
+    // struct into the caller's stack frame.
+    char text[sizeof(msg.msg) + 1];
+    memcpy(text, msg.msg, sizeof(msg.msg));
+    text[sizeof(msg.msg)] = '\0';
+    ESP_LOGE("packet_router", "Error: code=0x%02X, message=%s", msg.code, text);
     // TODO: Implement error handling
 }
 

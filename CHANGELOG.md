@@ -11,6 +11,42 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Fixed — MIDI: a truncated System Common message no longer swallows the next message
+
+Found by the 2026-08-29 ESP32-P4 review (item E-MIDI1). `StreamParser` tracked
+how many data bytes a System Common message still owed, but never cleared that
+count when a new status byte arrived. So a Song Position (`F2`) whose own data
+was lost — a glitched cable, a peer reset mid-message — left the parser expecting
+two more bytes, and it took them from whatever came next: `F2` followed by
+`90 3C 64` lost the note number and velocity, and the note never sounded.
+
+Any status byte now abandons an unfinished System Common, which is what the MIDI
+spec means by one. Three regression tests cover it, including that a *complete*
+System Common still consumes exactly its own data bytes — the fix must not make
+the parser under-consume and misread them as notes. All three fail against the
+old parser.
+
+### Fixed — Keyboard "All Off" no longer leaves pads lit
+
+Found by the same review (item E-KBD1). The softkey released every held note but
+did not repaint, so latched pads stayed green with nothing sounding — the display
+claiming notes were held that had just been released. `releaseAll()` now
+repaints, so the invariant holds for every caller rather than each one having to
+remember (the two other call sites already did).
+
+### Fixed — Protocol hardening on the receive and send paths
+
+Found by the same review (item E-PROTO1, partial).
+
+- The packet router logged `ErrorMessage::msg` with `%s` directly off the wire,
+  with no guarantee of NUL termination — a full 48-byte field would read past the
+  struct into the caller's stack frame. Bounded explicitly.
+- `inter_mcu_send_sample_data()` passed a `size_t` length into a `uint16_t`
+  parameter, so a length of 65536+n truncated to n, passed the internal
+  payload-size check, sent the wrong bytes and returned `ESP_OK`. Range-checked.
+- One residual instance of the 2026-07-05 review's inverted error check
+  (`if (result)` treating `-1` as success) in a log line.
+
 ### Removed — The unreachable meter pipeline in `ui_task`, and the refresh storm it caused
 
 Found by the 2026-08-29 ESP32-P4 review (item E-METER1). `UITask` carried a

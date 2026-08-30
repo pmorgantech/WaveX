@@ -4,6 +4,7 @@
 
 #include "../../shared/config/link_config.h"
 #include "../../shared/spi_protocol/protocol.h"
+#include "../../shared/uart_protocol/uart_protocol.h"
 #include "comm/listener_slot.h"
 #include "comm/shared_packet_handler.h"
 #include "comm/statistics.h"
@@ -793,9 +794,16 @@ esp_err_t inter_mcu_send_sample_data(const uint8_t* data, size_t length) {
         return -1;  // ESP_ERR_INVALID_ARG
     }
 
-    // For large data, we may need to chunk it, but for now send as one message
-    // The protocol handler will handle packet sizing
-    int result = send_uart_message(WaveX::Protocol::MSG_SAMPLE_DATA, data, length);
+    // send_uart_message takes a uint16_t length. Without this check a length
+    // of 65536+n truncates to n, passes the payload-size test inside, and
+    // sends the wrong bytes while returning ESP_OK.
+    if (length > WaveX::UartProtocol::UART_MAX_PAYLOAD) {
+        ESP_LOGE(TAG, "sample data too large (%u bytes)", (unsigned)length);
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    int result =
+        send_uart_message(WaveX::Protocol::MSG_SAMPLE_DATA, data, static_cast<uint16_t>(length));
     return result >= 0 ? ESP_OK : ESP_FAIL;
 }
 

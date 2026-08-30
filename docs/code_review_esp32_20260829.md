@@ -7,7 +7,7 @@
 
 Findings carry stable IDs (`E-…`) so implementation can be tracked in this file. **Completed items leave this document** — detail goes to `CHANGELOG.md`, matching the roadmap's convention — so what remains here is always the open list. A partially-addressed item keeps its row, marked `[~]`, and says what is left.
 
-**Already remediated** (see `CHANGELOG.md` § Unreleased): E-LVGL1/2/3, the LVGL thread-safety cluster (`21304be`, `222b2b4`); E-LIFE1/2/3, the callback-lifetime cluster (`41f4cdd`); E-KEY1/2, the keypad decode and INT busy-spin (`cdab47d`); E-INIT1 and E-BLD1/2 (`f6b7394`); E-TICK1/E-TOUCH1/E-BRWS1/E-MENU1, the UI correctness batch (`edd9981`); E-TX1, the outbound-frame latency (`6a0912c`); E-METER1 and E-DIAG1, the two periodic-work wastes. All fixed 2026-08-29. **E-KEY1/2 and E-ENC1 change hardware behaviour and are the ones most needing a bench pass** — they were diagnosed entirely by reading code and the controller datasheet.
+**Already remediated** (see `CHANGELOG.md` § Unreleased): E-LVGL1/2/3, the LVGL thread-safety cluster (`21304be`, `222b2b4`); E-LIFE1/2/3, the callback-lifetime cluster (`41f4cdd`); E-KEY1/2, the keypad decode and INT busy-spin (`cdab47d`); E-INIT1 and E-BLD1/2 (`f6b7394`); E-TICK1/E-TOUCH1/E-BRWS1/E-MENU1, the UI correctness batch (`edd9981`); E-TX1, the outbound-frame latency (`6a0912c`); E-METER1 and E-DIAG1, the two periodic-work wastes (`b64ae32`); E-MIDI1 and E-KBD1. All fixed 2026-08-29. **E-KEY1/2 and E-ENC1 change hardware behaviour and are the ones most needing a bench pass** — they were diagnosed entirely by reading code and the controller datasheet.
 
 ---
 
@@ -34,14 +34,12 @@ Two systemic build findings rounded it out — ~~inert `-Os`/LTO options added a
 | [~] E-ENC1 | Major | input | Encoder SMP race fixed 2026-08-29 (atomics replace interrupt masking); the read-then-clear window is narrowed from every movement poll to ~1 per 8000 counts, not closed — closing it needs the driver's watch-point ISR and bench time |
 | [~] E-SYNC1 | Major | UI/core | `volatile`/plain-`bool` cross-task handoffs — sample browser converted to atomics and `ui_task.h`'s `volatile` meter state deleted outright with the dead pipeline, 2026-08-29; the sample-edit page's `volatile` run state is what remains |
 | [ ] E-STOP1 | Major | all | Every `stop()`/teardown API is unsafe (vTaskDelete over held locks / blocked queues) |
-| [ ] E-MIDI1 | Minor | shared | MIDI parser: stale `pending_system_data_` can swallow the next message's data bytes |
-| [ ] E-PROTO1 | Minor | comm | Router logs non-NUL-guaranteed wire string; silent length truncation in sample-data send |
+| [~] E-PROTO1 | Minor | comm | Router NUL guard, sample-data length truncation and the residual `if (result)` fixed 2026-08-29; the ~10 sites returning bare `-1` with a comment claiming `ESP_ERR_INVALID_STATE` are still open |
 | [ ] E-STAT1 | Minor | comm | Packet statistics misclassify all 0x30-block traffic; dead type-name table is shifted |
 | [ ] E-SEQ1 | Minor | shared | `SequenceTracker` non-modular compare misbehaves at 64K wrap |
 | [ ] E-CFG1 | Minor | config | Hardware-truth pass: pin_config contradictions, unused TCA8418 macros, broken guard |
 | [ ] E-INQ1 | Minor | UI | Input queue drops are silent and uncounted |
 | [~] E-UIM1 | Minor | UI | Browser leak on failed create fixed 2026-08-29 (same function as the E-LIFE2 deregistration); `loading_row` ABA and `uint8_t` page-start truncation still open |
-| [ ] E-KBD1 | Minor | UI | Keyboard page "All Off" leaves latched pads lit (current branch) |
 | [~] E-LOG1 | Minor | all | Hot-path log storms on the UART task — per-entry browse INFO and the statistics mutex-trace lines removed 2026-08-29 (they became a UI stall once the listener mutex spanned the callback); hex dumps and remaining per-packet INFO still open |
 | [ ] E-SDK1 | Minor | build | Watchdog/assert posture: INT WDT 5 s, task WDT off, assertions compiled out |
 | [ ] E-STD1 | Minor | build | C++ standard not pinned anywhere (guide §8 requires it) |
@@ -101,10 +99,6 @@ A single pattern repeated across the tree: `vTaskDelete(handle)` on a task that 
 
 ## 5. Minor
 
-### E-MIDI1 — parser: stale `pending_system_data_` swallows the next message
-
-`firmware/shared/midi/midi_stream_parser.hpp:56-79`: the status-byte branch never resets `pending_system_data_`. A System Common message whose data bytes were lost (cable glitch) followed by `90 3C 64` has its data bytes consumed as leftover system data — the note never sounds. One line: zero it on any status byte (and in the `F0` branch). The rest of the parser is solid (running status, realtime transparency, SysEx skip all verified correct).
-
 ### E-PROTO1 — router/format hardening
 
 - `main/comm/packet_router.cpp:387`: `%s` on `msg.msg` without forcing NUL termination — a corrupt 48-byte `ErrorMessage` reads past the struct. Set the last byte to `'\0'` first.
@@ -137,10 +131,6 @@ All in the two files that are supposed to be the single source of truth, or cont
 ### E-UIM1 — file-browser small bugs
 
 Leak on failed create (`file_browser.cpp:281-284` — `browser`/`entries`/container leak when `comm_interface` is missing); `loading_row` ABA (`:1265` cleans the list without nulling the pointer; `fb_show_loading_row` later deletes whatever object reuses the address); `uint8_t next_start_index` (`:1178`) wraps past 255 entries — unreachable at today's 50-entry cap, silent when raised.
-
-### E-KBD1 — "All Off" leaves latched pads lit *(current branch)*
-
-`pages/ui_keyboard_page.cpp:206`: the softkey calls `releaseAll()` which clears `pad_down_` but never `refreshLabels()` — pads stay green with no sound. The Latch-off path (:189-191) gets it right.
 
 ### E-LOG1 — hot-path log storms on the UART task
 

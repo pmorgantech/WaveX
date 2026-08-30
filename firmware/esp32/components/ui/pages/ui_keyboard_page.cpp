@@ -339,6 +339,10 @@ void UIKeyboardPage::releaseAll() {
     for (int i = 0; i < kPads; ++i) {
         release(i);
     }
+    // Repaint here rather than leaving it to each caller. The "All Off"
+    // softkey did not, so latched pads stayed lit with nothing sounding -
+    // the display claiming notes were held that had just been released.
+    refreshLabels();
 }
 
 void UIKeyboardPage::setRoot(int root) {

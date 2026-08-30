@@ -198,4 +198,44 @@ TEST(MidiStreamParser, InterleavedRunningStatusStream) {
     EXPECT_EQ(events[3].type, EventType::NoteOff);
 }
 
+// A System Common message whose data bytes never arrive - a glitched cable, a
+// peer reset mid-message - must not eat the next message's data. The parser
+// used to keep the outstanding count across the following status byte, so the
+// note below lost its number and velocity and never sounded.
+TEST(MidiStreamParser, TruncatedSystemCommonDoesNotSwallowTheNextMessage) {
+    StreamParser parser;
+    // F2 (Song Position) promises two data bytes; only the status arrives.
+    auto events = FeedAll(parser, {0xF2, 0x90, 0x3C, 0x64});
+
+    ASSERT_EQ(events.size(), 1u);
+    EXPECT_EQ(events[0].type, EventType::NoteOn);
+    EXPECT_EQ(events[0].data1, 0x3C);
+    EXPECT_EQ(events[0].data2, 0x64);
+}
+
+// The same, with the System Common cut short by SysEx rather than by a
+// channel-voice status.
+TEST(MidiStreamParser, TruncatedSystemCommonClearedBySysEx) {
+    StreamParser parser;
+    auto events = FeedAll(parser, {0xF1, 0xF0, 0x7D, 0xF7, 0x90, 0x40, 0x50});
+
+    ASSERT_EQ(events.size(), 1u);
+    EXPECT_EQ(events[0].type, EventType::NoteOn);
+    EXPECT_EQ(events[0].data1, 0x40);
+    EXPECT_EQ(events[0].data2, 0x50);
+}
+
+// A complete System Common still consumes exactly its own data bytes, so the
+// fix above must not make the parser under-consume and misread them as notes.
+TEST(MidiStreamParser, CompleteSystemCommonStillConsumesItsData) {
+    StreamParser parser;
+    // F2 with both data bytes, then a note. Only the note should emerge.
+    auto events = FeedAll(parser, {0xF2, 0x10, 0x20, 0x90, 0x3C, 0x64});
+
+    ASSERT_EQ(events.size(), 1u);
+    EXPECT_EQ(events[0].type, EventType::NoteOn);
+    EXPECT_EQ(events[0].data1, 0x3C);
+    EXPECT_EQ(events[0].data2, 0x64);
+}
+
 }  // namespace

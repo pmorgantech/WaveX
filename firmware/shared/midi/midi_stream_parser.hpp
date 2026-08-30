@@ -56,15 +56,25 @@ class StreamParser {
         if (byte >= 0x80) {  // status byte
             if (byte == 0xF0) {
                 in_sysex_ = true;
-                status_ = 0;  // system messages cancel running status
+                status_ = 0;               // system messages cancel running status
+                pending_system_data_ = 0;  // abandons any unfinished System Common
                 return false;
             }
             if (byte == 0xF7) {  // EOX - also terminates a dangling SysEx
                 in_sysex_ = false;
                 status_ = 0;
+                pending_system_data_ = 0;
                 return false;
             }
             in_sysex_ = false;  // a status byte implicitly ends SysEx
+            // Any status byte abandons an unfinished System Common message.
+            // Without this, data bytes still owed by an F1/F2/F3 whose own
+            // data was lost (a cable glitch, a peer reset mid-message) get
+            // taken from the *next* message instead: 'F2' then '90 3C 64'
+            // swallowed the note number and velocity, and the note never
+            // sounded. The count is only meaningful while that message is
+            // still being assembled.
+            pending_system_data_ = 0;
             if (byte >= 0xF1) {
                 // System common: cancels running status; consume any data
                 // bytes so the stream stays aligned (F1/F3: 1, F2: 2).
