@@ -18,7 +18,6 @@
 #include "inter_mcu.h"
 #include "links/esp_spi_link.h"
 #include "ui/input_dispatcher.h"
-#include "ui/ui_card.h"
 #include "ui/ui_navigator.h"
 #include "ui/ui_palette.h"
 #include "ui/ui_sample_memory_page.h"
@@ -174,7 +173,6 @@ UIDiagnosticsPage::Card UIDiagnosticsPage::makeCard(lv_obj_t* parent,
     lv_obj_set_style_radius(card, 4, 0);
     lv_obj_set_style_pad_all(card, 0, 0);
     lv_obj_remove_flag(card, LV_OBJ_FLAG_SCROLLABLE);
-    cardApplyDropShadow(card);
 
     mkLabel(card, 16, 14, title, &lv_font_montserrat_18, kColDim);
     if (tag) {
@@ -351,7 +349,6 @@ void UIDiagnosticsPage::buildLinkTab(lv_obj_t* tab) {
     lv_obj_set_style_border_color(panel, lv_color_hex(kColBorder), 0);
     lv_obj_set_style_radius(panel, 4, 0);
     lv_obj_set_style_pad_all(panel, 0, 0);
-    cardApplyDropShadow(panel);
 
     msg_table = lv_table_create(panel);
     lv_obj_set_size(msg_table, 620, 462);

@@ -29,18 +29,5 @@ constexpr uint32_t kColGreen = 0x4CAF50;   // ok / selected
 constexpr uint32_t kColOrange = 0xFF5722;  // warning / peak
 constexpr uint32_t kColBlue = 0x2196F3;    // accent, selected-tab underline
 
-// Card drop shadow (LVGL 9.5 native drop shadow - see docs/roadmap.md 0.3
-// item 2). These drive the `drop_shadow_*` style properties, which are a
-// different feature from LVGL's older `shadow_*` box-shadow properties.
-//
-// Values are deliberately restrained. Against kColBg a shadow can only darken
-// what is already black, so what reads is the separation at a card's lit
-// edges, not a visible drop; a larger radius buys blur cost and no legibility.
-constexpr uint32_t kShadowColor = 0x000000;  // shadow tint
-constexpr int32_t kShadowRadius = 8;         // blur radius, px
-constexpr int32_t kShadowOffsetX = 0;        // straight down, no light angle
-constexpr int32_t kShadowOffsetY = 3;        // px
-constexpr uint8_t kShadowOpa = 160;          // ~63%
-
 }  // namespace palette
 }  // namespace wavex_ui

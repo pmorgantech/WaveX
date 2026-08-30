@@ -11,35 +11,22 @@ versioning and release process.
 
 ## [Unreleased]
 
-### Added — Card drop shadows (LVGL 9.5)
+### Removed — Card drop shadows (tried and reverted)
 
-- `wavex_ui::cardApplyDropShadow()` (`ui/ui_card.h`, `src/ui_card.cpp`) applies
-  the house drop shadow to a card-like container, using LVGL 9.5's native
-  `drop_shadow_*` style properties. These blur the object's own alpha
-  silhouette and are a **different** feature from LVGL's older `shadow_*`
-  box-shadow properties.
-- Values live in `ui_palette.h` as `kShadowColor`/`kShadowRadius`/
-  `kShadowOffsetX`/`kShadowOffsetY`/`kShadowOpa`, in one place, because a
-  shadow copied per page is how two surfaces drift into looking almost the
-  same — the same reason the palette itself was extracted in `6dbf399`.
-- The helper is additive on purpose: it sets only the shadow properties and
-  leaves fill, border, radius and padding to the caller, so it can be dropped
-  onto an existing card without restyling it.
-- Applied at four sites: the diagnostics stat card and link message-count
-  panel, and the voice page's chain tiles and parameter panel.
-- Costs 256 bytes. The blur renderer was already in every image and could not
-  have been garbage-collected — `lv_draw_rect.c:78` reaches it through a
-  runtime `if(dsc->base.drop_shadow_opa)` inside the always-linked rect draw
-  path — so this only starts asking for what we were already carrying.
-- Uses `LV_BLUR_QUALITY_SPEED` rather than leaving quality `AUTO`: each
-  shadowed object costs an `lv_draw_layer_create_drop_shadow()` layer
-  allocation and a blur pass on every redraw, so a nicer kernel would be paid
-  for continuously rather than once.
-- **Not verified visually.** `tools/ui_preview` compiles only `preview.c` plus
-  the LVGL sources, not `components/ui`, so the real cards cannot be rendered
-  off-device. Whether the shadow reads at all against the black page
-  background, and what it costs in FPS, are recorded in `docs/roadmap.md`
-  § Outstanding hardware verification.
+- LVGL 9.5's native `drop_shadow_*` properties were applied to the diagnostics
+  cards and voice page tiles, and **froze the display on both pages** — half
+  rendered, then hung. Reverted.
+- Cause: a drop shadow allocates a whole extra A8 layer sized to the object
+  plus twice the blur radius on each side, then blurs and composites it. The
+  diagnostics message panel needs 654x496 = 324 KB and the voice parameter
+  panel 1288x332 = 428 KB, against `CONFIG_LV_MEM_SIZE_KILOBYTES=128`. The
+  allocation returns NULL, and `lv_draw_rect.c:79` follows it with
+  `LV_ASSERT_NULL`, whose default handler is `while(1);` — so the UI task
+  spins forever mid-frame, with no message because `CONFIG_LV_USE_LOG` is off.
+- Recorded in `docs/roadmap.md` § 0.3 item 2 with the layer-size arithmetic and
+  what would have to change to retry. The short version: the earlier claim that
+  these properties are "already compiled in, so the only cost is render time"
+  was true about flash and wrong about RAM.
 
 ### Changed — LVGL PPA draw unit enabled
 

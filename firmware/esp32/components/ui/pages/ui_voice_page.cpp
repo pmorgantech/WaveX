@@ -5,7 +5,6 @@
 
 #include "../styles/ui_theme.h"
 #include "inter_mcu.h"
-#include "ui/ui_card.h"
 #include "ui/ui_navigator.h"
 #include "ui/ui_sample_browser.h"
 
@@ -180,7 +179,6 @@ void UIVoicePage::buildChain(lv_obj_t* parent) {
         lv_obj_set_style_border_color(tile, lv_color_hex(kColBorder), LV_PART_MAIN);
         lv_obj_set_style_radius(tile, 4, LV_PART_MAIN);
         lv_obj_remove_flag(tile, LV_OBJ_FLAG_SCROLLABLE);
-        cardApplyDropShadow(tile);
 
         lv_obj_t* label = lv_label_create(tile);
         lv_obj_set_style_text_font(label, &lv_font_montserrat_22, LV_PART_MAIN);
@@ -200,7 +198,6 @@ void UIVoicePage::buildParamPanel(lv_obj_t* parent) {
     lv_obj_set_style_border_width(param_panel_, 1, LV_PART_MAIN);
     lv_obj_set_style_border_color(param_panel_, lv_color_hex(kColBorder), LV_PART_MAIN);
     lv_obj_remove_flag(param_panel_, LV_OBJ_FLAG_SCROLLABLE);
-    cardApplyDropShadow(param_panel_);
 
     for (int i = 0; i < 6; ++i) {
         lv_obj_t* row = lv_label_create(param_panel_);
