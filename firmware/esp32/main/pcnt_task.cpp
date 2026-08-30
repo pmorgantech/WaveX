@@ -17,6 +17,8 @@
 #include "driver/pulse_cnt.h"
 #include "esp_log.h"
 
+#include <atomic>
+
 static const char *TAG = "PCNT_TASK";
 
 // PCNT unit configurations
@@ -43,10 +45,10 @@ static encoder_reading_t s_encoder_readings[WAVEX_PCNT_UNIT_COUNT] = {};
 static pcnt_unit_handle_t s_pcnt_units[WAVEX_PCNT_UNIT_COUNT] = {};
 
 // Task handle
-static TaskHandle_t s_pcnt_task_handle = NULL;
+static std::atomic<TaskHandle_t> s_pcnt_task_handle{NULL};
 // Shutdown handshake; see midi_task.cpp. This task touches PCNT driver
 // internals, so it has to leave its loop on its own rather than be deleted.
-static volatile bool s_pcnt_running = false;
+static std::atomic<bool> s_pcnt_running{false};
 
 /**
  * @brief Initialize a single PCNT unit
@@ -294,13 +296,15 @@ esp_err_t pcnt_task_start(void) {
 
     // Create PCNT reading task
     s_pcnt_running = true;
-    BaseType_t ret = xTaskCreate(pcnt_task,           // Task function
-                                 "pcnt_task",         // Task name
-                                 4096,                // Stack size
-                                 NULL,                // Parameters
-                                 5,                   // Priority (higher than UI task)
-                                 &s_pcnt_task_handle  // Task handle
+    TaskHandle_t handle = NULL;
+    BaseType_t ret = xTaskCreate(pcnt_task,    // Task function
+                                 "pcnt_task",  // Task name
+                                 4096,         // Stack size
+                                 NULL,         // Parameters
+                                 5,            // Priority (higher than UI task)
+                                 &handle       // Task handle
     );
+    s_pcnt_task_handle = handle;
 
     if (ret != pdPASS) {
         ESP_LOGE(TAG, "Failed to create PCNT task");

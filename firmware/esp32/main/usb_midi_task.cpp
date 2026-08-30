@@ -30,14 +30,18 @@
 #include "tinyusb.h"
 #include "tinyusb_default_config.h"
 
+#include <atomic>
 #include <cstdio>
 
 static const char* TAG = "usb_midi";
 
-static TaskHandle_t s_usb_midi_task_handle = nullptr;
 // Shutdown handshake; see midi_task.cpp for the reasoning. Here the extra
-// hazard is tud_midi_rx_cb() notifying a handle that vTaskDelete() has freed.
-static volatile bool s_usb_midi_running = false;
+// hazard is tud_midi_rx_cb() notifying a handle that vTaskDelete() has freed:
+// both s_usb_midi_task_handle and s_usb_midi_running are atomic so the
+// callback's read-then-notify in tud_midi_rx_cb() below sees a consistent
+// value rather than racing the task that clears it just before self-deleting.
+static std::atomic<TaskHandle_t> s_usb_midi_task_handle{nullptr};
+static std::atomic<bool> s_usb_midi_running{false};
 static bool s_driver_installed = false;
 
 // --- TinyUSB descriptors (tusb_midi example layout) ---
@@ -137,8 +141,9 @@ static void usb_midi_task(void* arg) {
 // ISR) whenever MIDI data arrives, so the plain task-notify API is safe.
 extern "C" void tud_midi_rx_cb(uint8_t itf) {
     (void)itf;
-    if (s_usb_midi_task_handle) {
-        xTaskNotifyGive(s_usb_midi_task_handle);
+    TaskHandle_t handle = s_usb_midi_task_handle;
+    if (handle) {
+        xTaskNotifyGive(handle);
     }
 }
 
@@ -166,12 +171,14 @@ extern "C" esp_err_t usb_midi_task_start(void) {
     s_driver_installed = true;
 
     s_usb_midi_running = true;
+    TaskHandle_t handle = nullptr;
     BaseType_t rc = xTaskCreate(usb_midi_task,
                                 "usb_midi",
                                 WAVEX_USB_MIDI_TASK_STACK_SIZE,
                                 nullptr,
                                 WAVEX_USB_MIDI_TASK_PRIORITY,
-                                &s_usb_midi_task_handle);
+                                &handle);
+    s_usb_midi_task_handle = handle;
     if (rc != pdPASS) {
         ESP_LOGE(TAG, "task create failed");
         s_usb_midi_task_handle = nullptr;
@@ -185,8 +192,8 @@ extern "C" esp_err_t usb_midi_task_start(void) {
 extern "C" esp_err_t usb_midi_task_stop(void) {
     s_usb_midi_running = false;
     // Wake it out of ulTaskNotifyTake so it can observe the flag and leave.
-    if (s_usb_midi_task_handle) {
-        xTaskNotifyGive(s_usb_midi_task_handle);
+    if (TaskHandle_t handle = s_usb_midi_task_handle) {
+        xTaskNotifyGive(handle);
     }
     // Wait for the task to self-delete before uninstalling the driver. The
     // ordering matters twice over: TinyUSB's device task calls

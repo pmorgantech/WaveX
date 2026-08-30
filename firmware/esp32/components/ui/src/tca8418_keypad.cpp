@@ -9,6 +9,8 @@
 #include "pin_config.h"
 #include "ui/input_dispatcher.h"
 #include "ui/input_event.h"
+
+#include <atomic>
 #if defined(ESP_PLATFORM) && WAVEX_ESP_BUTTON_MATRIX_ENABLED
 #include "esp_tca8418.hxx"
 #endif
@@ -16,11 +18,11 @@
 namespace wavex_ui {
 
 static const char* TAG = "TCA8418";
-static TaskHandle_t s_task = nullptr;
+static std::atomic<TaskHandle_t> s_task{nullptr};
 // Shutdown handshake: the task talks I2C on a bus shared with the touch
 // controller, so killing it mid-transaction would leak the bus mutex and take
 // touch down with it permanently.
-static volatile bool s_running = false;
+static std::atomic<bool> s_running{false};
 static gpio_num_t s_int_gpio = GPIO_NUM_NC;
 #if defined(ESP_PLATFORM) && WAVEX_ESP_BUTTON_MATRIX_ENABLED
 static TCA8418* s_dev = nullptr;
@@ -160,13 +162,15 @@ esp_err_t tca8418_keypad_start(int int_gpio, uint8_t i2c_addr) {
 
     // Start task
     s_running = true;
+    TaskHandle_t handle = nullptr;
     BaseType_t ok = xTaskCreatePinnedToCore(keypad_task,
                                             "tca8418_task",
                                             WAVEX_TCA8418_TASK_STACK_SIZE,
                                             nullptr,
                                             WAVEX_TCA8418_TASK_PRIORITY,
-                                            &s_task,
+                                            &handle,
                                             1);
+    s_task = handle;
     if (ok != pdPASS) {
         ESP_LOGE(TAG, "Failed to create keypad task");
         s_running = false;

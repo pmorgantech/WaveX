@@ -28,6 +28,8 @@
 #include "ui/ui_sample_browser.h"
 #include "ui/ui_screenshot.h"
 
+#include <atomic>
+
 // LVGL includes
 #include "esp_heap_caps.h"
 #include "esp_lvgl_port.h"
@@ -56,7 +58,7 @@ static UITask *g_ui_task_instance = nullptr;
 
 // Shutdown handshake. The UI task takes the LVGL port lock, so deleting it
 // outright could leave that lock held forever and wedge the LVGL port task.
-static volatile bool s_ui_running = false;
+static std::atomic<bool> s_ui_running{false};
 
 // UITask class implementation
 UITask::UITask(WaveX::Comm::ICommInterface &comm_interface) : m_comm_interface(comm_interface) {
@@ -118,15 +120,17 @@ esp_err_t UITask::start() {
 
     // Create UI task
     s_ui_running = true;
+    TaskHandle_t handle = NULL;
     BaseType_t task_ret =
         xTaskCreatePinnedToCore(uiTaskFunction,
                                 "ui_task",
                                 16384,  // Increased stack size for LVGL and diagnostics
                                 this,   // Pass this instance as parameter
                                 2,      // Priority
-                                &m_context.ui_task_handle,
+                                &handle,
                                 1  // Run on Core 1
         );
+    m_context.ui_task_handle = handle;
 
     if (task_ret != pdPASS) {
         ESP_LOGE(TAG, "Failed to create UI task");

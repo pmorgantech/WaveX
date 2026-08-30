@@ -25,6 +25,8 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+#include <atomic>
+
 // Forward declarations - only define when not in test mode
 #ifndef WAVEX_TEST_BUILD
 typedef struct _lv_obj_t lv_obj_t;
@@ -38,8 +40,11 @@ typedef struct esp_lcd_panel_t *esp_lcd_panel_handle_t;
 
 // UI Context - encapsulates all UI state (moved from global to class)
 struct UiContext {
-    // Task handle
-    TaskHandle_t ui_task_handle = NULL;
+    // Task handle. Written by start()/run() (different tasks/cores) and
+    // polled by stop() from whichever task calls it - atomic per
+    // docs/esp32p4_coding_guide.md (do not use a plain pointer or `volatile`
+    // for cross-task synchronization).
+    std::atomic<TaskHandle_t> ui_task_handle{NULL};
 
     // Communication interface
     WaveX::Comm::ICommInterface *comm_interface = nullptr;

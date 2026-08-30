@@ -11,6 +11,24 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Fixed — ESP32 task shutdown handshakes used `volatile` instead of `std::atomic`
+
+- `pcnt_task.cpp`, `ui_task.cpp`/`.h`, `midi_task.cpp`, `usb_midi_task.cpp` and
+  `tca8418_keypad.cpp` each stop their task by clearing a `running` flag and
+  polling the task handle to `NULL` from a different task (sometimes a
+  different core). All were `volatile bool`/plain `TaskHandle_t`, which
+  `docs/esp32p4_coding_guide.md` §9 explicitly calls out: `volatile` gives no
+  cross-core visibility or ordering guarantee, only that the compiler won't
+  elide the access. Every one is now `std::atomic`, matching the pattern
+  already used correctly elsewhere in this codebase (`esp_uart_link.cpp`'s
+  `s_tx_wake_pending`, `midi_task.cpp`'s `s_input_channel`).
+- `usb_midi_task.cpp` had a real race, not just a missing-guarantee risk:
+  `tud_midi_rx_cb()` (running on the TinyUSB device task) checked
+  `s_usb_midi_task_handle` and called `xTaskNotifyGive()` on it, while
+  `usb_midi_task()` clears that handle and self-deletes right beforehand.
+  The callback now takes a single atomic snapshot before the null check and
+  notify, closing the check-then-use window.
+
 ### Added — Daisy heap and uptime on the Diagnostics Daisy tab
 
 - `DiagPushMessage` (`MSG_DIAG_PUSH`) gains `heap_total` and `heap_free`, the

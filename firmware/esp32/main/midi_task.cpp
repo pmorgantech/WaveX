@@ -90,12 +90,12 @@ void midi_forward_event(const WaveX::Midi::Event& ev) {
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
-static TaskHandle_t s_midi_task_handle = nullptr;
+static std::atomic<TaskHandle_t> s_midi_task_handle{nullptr};
 static bool s_driver_installed = false;
 // Shutdown handshake. Deleting a task that is blocked inside the UART driver
 // and then deleting that driver is undefined behaviour, so stop() asks the
 // task to leave and waits for it to say it has.
-static volatile bool s_midi_running = false;
+static std::atomic<bool> s_midi_running{false};
 
 static void midi_task(void* arg) {
     (void)arg;
@@ -177,12 +177,14 @@ extern "C" esp_err_t midi_task_start(void) {
     }
 
     s_midi_running = true;
+    TaskHandle_t handle = nullptr;
     BaseType_t rc = xTaskCreate(midi_task,
                                 "din_midi",
                                 WAVEX_DIN_MIDI_TASK_STACK_SIZE,
                                 nullptr,
                                 WAVEX_DIN_MIDI_TASK_PRIORITY,
-                                &s_midi_task_handle);
+                                &handle);
+    s_midi_task_handle = handle;
     if (rc != pdPASS) {
         ESP_LOGE(TAG, "task create failed");
         s_midi_task_handle = nullptr;
