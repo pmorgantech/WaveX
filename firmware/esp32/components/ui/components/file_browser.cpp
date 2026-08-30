@@ -270,8 +270,9 @@ wavex_file_browser_t* wavex_file_browser_create(lv_obj_t* parent,
     lv_obj_set_style_border_width(browser->list, 0, LV_PART_MAIN);
     lv_obj_set_style_pad_all(browser->list, UI_PADDING_SMALL, LV_PART_MAIN);
 
-    // Add event callback for list
-    lv_obj_add_event_cb(browser->list, file_list_event_cb, LV_EVENT_CLICKED, browser);
+    // The row handler is attached per row in update_file_browser_ui(), on
+    // LV_EVENT_SHORT_CLICKED - see the note there. Nothing is attached to the
+    // list itself: a list-level LV_EVENT_CLICKED is exactly what did not work.
 
     // Register browse response callback with comm interface
     if (config->comm_interface) {
@@ -611,11 +612,14 @@ static void file_list_event_cb(lv_event_t* e) {
     lv_event_code_t code = lv_event_get_code(e);
     wavex_file_browser_t* browser = (wavex_file_browser_t*)lv_event_get_user_data(e);
 
-    if (code == LV_EVENT_CLICKED) {
-        // lv_event_get_current_target returns the object the callback was attached to (the list)
-        // lv_event_get_target returns the actual object that was clicked (the button)
-        lv_obj_t* list = (lv_obj_t*)lv_event_get_current_target(e);
-        lv_obj_t* btn = (lv_obj_t*)lv_event_get_target(e);
+    // Registered per row for SHORT_CLICKED; the CLICKED arm is kept so a
+    // programmatic click or a non-scrollable future container still works.
+    if (code == LV_EVENT_SHORT_CLICKED || code == LV_EVENT_CLICKED) {
+        // The handler is attached to the row, so current_target is the row.
+        // Use it rather than get_target: if the touch lands on the row's label
+        // rather than its background, get_target reports the label, whose
+        // user_data is unset and would decode as entry 0.
+        lv_obj_t* btn = (lv_obj_t*)lv_event_get_current_target(e);
 
         // The entry index was stored on the button when the row was built.
         // Deriving it from the child position instead - which is what this did
@@ -624,7 +628,6 @@ static void file_list_event_cb(lv_event_t* e) {
         // pagination spinner is a child of the same list, so once the user had
         // scrolled, a tap selected the wrong file (or entered the wrong
         // directory).
-        (void)list;
         const uint32_t entry_index = (uint32_t)(uintptr_t)lv_obj_get_user_data(btn);
         if (entry_index == FB_ROW_NOT_AN_ENTRY) {
             return;  // spinner or placeholder row
@@ -1185,6 +1188,16 @@ static void update_file_browser_ui(wavex_file_browser_t* browser) {
 
             // Store the actual entry index in user data for selection highlighting
             lv_obj_set_user_data(btn, (void*)(uintptr_t)i);
+            // SHORT_CLICKED on the row, not CLICKED on the list.
+            //
+            // The list is scrollable, and LVGL suppresses LV_EVENT_CLICKED when
+            // a press on a scrollable object is taken as the start of a scroll
+            // gesture - which on a touch panel is most taps, because a finger
+            // rarely lands and lifts without moving. The row still showed its
+            // pressed style, so the tap looked registered while the selection
+            // never moved. SHORT_CLICKED fires on a quick press-release and is
+            // what UIMenuPage's items already use.
+            lv_obj_add_event_cb(btn, file_list_event_cb, LV_EVENT_SHORT_CLICKED, browser);
         }
 
         // Update visual selection (maps selected_index to visible button)

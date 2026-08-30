@@ -43,6 +43,7 @@ extern const lv_font_t lv_font_montserrat_36;
 #define LV_PART_INDICATOR 1
 #define LV_PART_MAIN 0
 #define LV_EVENT_CLICKED 0
+#define LV_EVENT_SHORT_CLICKED 1
 
 // LVGL functions (implemented in test file)
 lv_obj_t* lv_obj_create(lv_obj_t* parent);
