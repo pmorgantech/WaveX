@@ -11,6 +11,51 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Changed — Diagnostics split into ESP32 and Daisy tabs
+
+- Diagnostics now has six tabs — **ESP32, Daisy, Audio, Link, Storage, MIDI** —
+  replacing the single `System` tab that mixed both machines across eight cards
+  (`docs/ui-information-architecture.md` §5).
+- **ESP32 tab**: CPU0 and CPU1 are separate tiles, each with its own sparkline
+  and gauge. They previously shared one tile whose single sparkline tracked
+  whichever core was busier, which is exactly the presentation that hides an
+  imbalance between them. Heap, PSRAM, LVGL pool, tasks, uptime and
+  min-free-heap are unchanged.
+- **Daisy tab**: engine CPU with its trend, the small/large sample-RAM pools,
+  largest contiguous free block with the failed-alloc count, and a table of
+  resident samples.
+- **Sample Memory page removed.** `ui_sample_memory_page.{h,cpp}` is deleted and
+  the Diagnostics `Samples` softkey with it; that content is the Daisy tab now.
+  It was never reachable from the main menu, only from that softkey.
+
+### Fixed — Diagnostics Link tab showed a CPU percentage under a `FRAMES/s` heading
+
+- When Daisy CPU moved to the System tab, the Link tab's second card was
+  retitled `FRAMES/s` but its refresh kept writing `heartbeat.cpu_avg_percent`.
+  It now shows the packet rate over a 1 s window of the frontend's own counter.
+
+### Fixed — Diagnostics sparklines were drawn over the card's context line
+
+- The sparkline sat at y=118 and the sub-text at y=112, so the context line
+  ("min/max", "core0/core1") was hidden behind the chart on every card that had
+  one. The chart now starts at y=140, below the text and above the gauge.
+
+### Changed — Diagnostics builds tab content on first show
+
+- Only the visible tab's cards are built at page entry; the other five are built
+  the first time they are shown and then kept, so a sparkline's 30 s of history
+  survives tab switching. Six tabs built eagerly would have made the worst
+  page-entry cost in the UI (`docs/backlog.md`: 30–47 ms) worse; this makes the
+  common case — open Diagnostics, read one tab — roughly a sixth of the work.
+- Card chrome (container, gauge, and the title/value/unit/sub labels) now comes
+  from shared `lv_style_t` objects applied with `lv_obj_add_style` after
+  `lv_obj_remove_style_all`, rather than ~18 per-object style property stores
+  per card. Same pattern as `ui_play_page.cpp` `makeKey()`. ESP32 image is 1,504
+  bytes smaller.
+- Not yet measured on the panel: the page-entry figures above are the expected
+  shape of the change, not a measurement. `scripts/sysmon_stats.py` over a
+  serial capture is the check.
+
 ### Removed — LVGL PPA draw unit (measured, then reverted)
 
 - `CONFIG_LV_USE_PPA` is off again, and `CONFIG_LV_DRAW_BUF_ALIGN` back to 4

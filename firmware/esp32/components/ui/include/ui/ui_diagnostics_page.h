@@ -18,13 +18,17 @@ namespace wavex_ui {
 /**
  * @brief Diagnostics page for system monitoring
  *
- * Displays real-time ESP32 and Daisy system information including:
- * - CPU usage (cores 0 and 1)
- * - Memory usage (heap)
- * - Uptime
- * - Daisy communication link status
- * - Packet statistics
- * - Audio meter display
+ * Six tabs, split by which machine owns the numbers rather than by topic, so
+ * a figure's provenance is never in doubt (docs/ui-information-architecture.md
+ * Â§5):
+ * - ESP32: the two cores as separate tiles, heap, PSRAM, LVGL pool, tasks,
+ *   uptime, min-free-heap. All ESP32-local.
+ * - Daisy: engine CPU, the sample-RAM pool breakdown and the resident-sample
+ *   list (absorbed from the former standalone Sample Memory page), plus heap
+ *   and uptime placeholders awaiting the protocol fields.
+ * - Audio / Link / Storage / MIDI: as before.
+ *
+ * Tab bodies are populated on first show, not at page entry (see buildTabs).
  */
 class UIDiagnosticsPage : public UIPage {
    public:
@@ -40,7 +44,15 @@ class UIDiagnosticsPage : public UIPage {
 
    private:
     // Tabs, in the order the tab bar shows them.
-    enum Tab : uint8_t { TAB_SYSTEM = 0, TAB_AUDIO, TAB_LINK, TAB_STORAGE, TAB_MIDI, TAB_COUNT };
+    enum Tab : uint8_t {
+        TAB_ESP32 = 0,
+        TAB_DAISY,
+        TAB_AUDIO,
+        TAB_LINK,
+        TAB_STORAGE,
+        TAB_MIDI,
+        TAB_COUNT
+    };
 
     // A metric card: title / value / optional gauge, per docs/ui-design-constraints.md
     // and the WaveX Wireframes v2 card anatomy (305x226, gauge 273x14).
@@ -49,7 +61,6 @@ class UIDiagnosticsPage : public UIPage {
         lv_obj_t* unit;   // suffix, font 22
         lv_obj_t* sub;    // context line, font 18
         lv_obj_t* bar;    // gauge, or nullptr when the metric has no budget
-        lv_obj_t* bar2;   // second gauge (dual-core tile), or nullptr
         lv_obj_t* spark;  // lv_chart sparkline, or nullptr
         lv_chart_series_t* series;
         int warn_pct;  // fill turns orange at/above this; 0 = never
@@ -61,9 +72,18 @@ class UIDiagnosticsPage : public UIPage {
     // for half a minute" is the difference between noticing and diagnosing.
     static constexpr uint16_t kSparkPoints = 60;
 
+    // Clears every pointer into the LVGL tree. Called from the constructor and
+    // from onEnter() after the parent is cleaned.
+    void resetUiState();
+
     // UI creation
     void buildTabs(lv_obj_t* parent);
-    void buildSystemTab(lv_obj_t* tab);
+    // Populates one tab's body if it has not been populated yet. Page entry
+    // builds only the tab that is about to be visible; the other five cost
+    // nothing until someone looks at them.
+    void ensureTabBuilt(uint8_t tab);
+    void buildEsp32Tab(lv_obj_t* tab);
+    void buildDaisyTab(lv_obj_t* tab);
     void buildLinkTab(lv_obj_t* tab);
     void buildAudioTab(lv_obj_t* tab);
     void buildStorageTab(lv_obj_t* tab);
@@ -77,13 +97,13 @@ class UIDiagnosticsPage : public UIPage {
                   bool gauge,
                   int warn_pct);
     void setCard(Card& c, const char* value, const char* unit, const char* sub, int pct);
-    // Add a sparkline and, optionally, a second gauge bar to an existing card.
+    // Add a sparkline to an existing card.
     void addSpark(Card& c, uint32_t colour);
-    void addSecondBar(Card& c, uint32_t colour);
     void pushSpark(Card& c, int value);
 
     // Per-tab refresh
-    void refreshSystemTab();
+    void refreshEsp32Tab();
+    void refreshDaisyTab();
     void refreshLinkTab();
     void refreshAudioTab();
     void refreshStorageTab();
@@ -135,16 +155,24 @@ class UIDiagnosticsPage : public UIPage {
 
     // UI elements
     lv_obj_t* tabview;
+    lv_obj_t* tab_body[TAB_COUNT];  // empty containers; populated on first show
+    bool tab_built[TAB_COUNT];
     uint8_t active_tab;
     bool frozen;  // Freeze softkey: stop refreshing so a transient can be read
 
-    Card sys_cards[8];
+    Card esp32_cards[8];
+    Card daisy_cards[6];
     Card link_cards[4];
     Card audio_cards[8];
     Card storage_cards[8];
     Card midi_cards[4];
-    lv_obj_t* midi_note;  // "no sequencer yet" explainer on the MIDI tab
-    lv_obj_t* msg_table;  // per-message-type counts, from wavex_packet_stats_t
+    lv_obj_t* midi_note;     // "no sequencer yet" explainer on the MIDI tab
+    lv_obj_t* msg_table;     // per-message-type counts, from wavex_packet_stats_t
+    lv_obj_t* sample_table;  // resident samples, from SampleMemStatusMessage
+    uint32_t sample_req_ms;  // last MSG_STATUS_REQUEST for sample memory
+    uint32_t frames_ref_ms;  // frames/s window start
+    uint32_t frames_ref_pkts;
+    uint32_t frames_per_s;
 
     // Set by the sampling timer, consumed by the UI task.
     volatile bool ui_update_pending;
