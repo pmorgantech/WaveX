@@ -20,6 +20,7 @@ set(COMPONENT_SRCS
     "src/ui_settings_page.cpp"
     "src/ui_softkey_bar.cpp"
     "src/ui_tab_group.cpp"
+    "src/ui_tab_host_page.cpp"
     "src/ui_status_strip.cpp"
     "src/ui_sample_browser.cpp"
     "src/ui_sample_memory_page.cpp"

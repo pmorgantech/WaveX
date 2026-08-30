@@ -23,7 +23,7 @@ std::shared_ptr<UIPage> createMainMenu();
 /**
  * @brief Create the modulation submenu
  */
-std::shared_ptr<UIPage> createModulationMenu();
+std::shared_ptr<UIPage> createSampleGroup();
 
 /**
  * @brief Create the settings submenu

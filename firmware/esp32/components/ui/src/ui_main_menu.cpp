@@ -11,7 +11,9 @@
 #include "ui/ui_sample_detail.h"
 #include "ui/ui_sample_edit_page.h"
 #include "ui/ui_sample_manager_page.h"
+#include "ui/ui_sample_record_page.h"
 #include "ui/ui_settings_page.h"
+#include "ui/ui_tab_host_page.h"
 #include "ui/ui_voice_page.h"
 
 static const char* TAG = "UI_MAIN_MENU";
@@ -21,22 +23,9 @@ namespace wavex_ui {
 std::shared_ptr<UIPage> createMainMenu() {
     auto menu = std::make_shared<UIMenuPage>("Main Menu");
 
-    menu->addItem("Sample Browser", []() {
-        ESP_LOGI(TAG, "Opening Sample Browser");
-        auto comm_interface = wavex_ui::ui_get_comm_interface();
-        if (comm_interface) {
-            UINavigator::instance().push(createSampleBrowserPage(*comm_interface));
-        } else {
-            ESP_LOGE(TAG, "No comm interface available for Sample Browser");
-        } });
-
-    menu->addItem("Edit Sample", []() {
-        ESP_LOGI(TAG, "Edit Sample selected");
-        UINavigator::instance().push(createSampleEditPage()); });
-
-    menu->addItem("Sample Manager", []() {
-        ESP_LOGI(TAG, "Opening Sample Manager");
-        UINavigator::instance().push(createSampleManagerPage()); });
+    menu->addItem("Sample", []() {
+        ESP_LOGI(TAG, "Opening Sample");
+        UINavigator::instance().push(createSampleGroup()); });
 
     menu->addItem("Voice", []() {
         ESP_LOGI(TAG, "Opening Voice");
@@ -45,10 +34,6 @@ std::shared_ptr<UIPage> createMainMenu() {
     menu->addItem("Play", []() {
         ESP_LOGI(TAG, "Opening Play");
         UINavigator::instance().push(createPlayPage()); });
-
-    menu->addItem("Modulation", []() {
-        ESP_LOGI(TAG, "Opening Modulation Menu");
-        UINavigator::instance().push(createModulationMenu()); });
 
     menu->addItem("Settings", []() {
         ESP_LOGI(TAG, "Opening Settings Menu");
@@ -61,28 +46,23 @@ std::shared_ptr<UIPage> createMainMenu() {
     return menu;
 }
 
-std::shared_ptr<UIPage> createModulationMenu() {
-    auto menu = std::make_shared<UIMenuPage>("Modulation");
-
-    menu->addItem("LFO 1",
-                  []() {
-        ESP_LOGI(TAG, "LFO 1 selected");
-        // TODO: Implement LFO 1 editor
-    });
-
-    menu->addItem("LFO 2",
-                  []() {
-        ESP_LOGI(TAG, "LFO 2 selected");
-        // TODO: Implement LFO 2 editor
-    });
-
-    menu->addItem("Envelopes",
-                  []() {
-        ESP_LOGI(TAG, "Envelopes selected");
-        // TODO: Implement envelope editor
-    });
-
-    return menu;
+// Sample: four views of the CURRENT sample, so they are tabs rather than menu
+// entries (docs/ui-information-architecture.md §2). Grouping them is also what
+// gives the edit page a way to change which sample it edits - selecting in
+// Browse or Manage is now that mechanism, closing roadmap 1.5.1 item 7.
+std::shared_ptr<UIPage> createSampleGroup() {
+    auto group = std::make_shared<UITabHostPage>("Sample");
+    group->addTab("Manage", createSampleManagerPage());
+    if (auto comm = wavex_ui::ui_get_comm_interface()) {
+        group->addTab("Browse", createSampleBrowserPage(*comm));
+    } else {
+        // Browse needs the link; without it the tab would build an empty list
+        // and look broken rather than absent.
+        ESP_LOGE(TAG, "No comm interface - Browse tab omitted");
+    }
+    group->addTab("Edit", createSampleEditPage());
+    group->addTab("Record", createSampleRecordPage());
+    return group;
 }
 
 std::shared_ptr<UIPage> createSettingsMenu() {

@@ -11,6 +11,26 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Changed — Sample group; Modulation menu removed
+
+- `Sample Browser`, `Edit Sample` and `Sample Manager` were three top-level
+  entries for three views of *the same sample*. They are now tabs under one
+  **Sample** entry (Manage / Browse / Edit / Record), joined by the record page,
+  which had no menu entry at all and was therefore unreachable.
+- Grouping them is what gives the edit page a way to change *which* sample it
+  edits — selecting in Browse or Manage is now that mechanism, closing roadmap
+  1.5.1 item 7 without the Shift-row `Select` key it reserved.
+- New `UITabHostPage` hosts existing pages unchanged: each child keeps its own
+  `onEnter`/`onExit`, softkeys and input handling, and the host forwards the
+  page contract to the selected tab. Converting four substantial working pages
+  into tab-body builders would have been a large rewrite for a navigation
+  change. Children are entered lazily and exited when switched away from, so a
+  page that polls the backend stops polling once its tab is hidden.
+- **`Modulation` is deleted from the main menu.** Its three entries (LFO 1,
+  LFO 2, Envelopes) were stubs that logged and returned; modulation belongs to a
+  voice, and lands under Voice when there is a mod matrix to edit.
+
+
 ### Changed — Play page: Pads and Keys, replacing the Keyboard page
 
 - The main menu's `Keyboard` becomes **Play**, a tabbed group with two
