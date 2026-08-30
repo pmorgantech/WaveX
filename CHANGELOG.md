@@ -11,6 +11,36 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Added — Card drop shadows (LVGL 9.5)
+
+- `wavex_ui::cardApplyDropShadow()` (`ui/ui_card.h`, `src/ui_card.cpp`) applies
+  the house drop shadow to a card-like container, using LVGL 9.5's native
+  `drop_shadow_*` style properties. These blur the object's own alpha
+  silhouette and are a **different** feature from LVGL's older `shadow_*`
+  box-shadow properties.
+- Values live in `ui_palette.h` as `kShadowColor`/`kShadowRadius`/
+  `kShadowOffsetX`/`kShadowOffsetY`/`kShadowOpa`, in one place, because a
+  shadow copied per page is how two surfaces drift into looking almost the
+  same — the same reason the palette itself was extracted in `6dbf399`.
+- The helper is additive on purpose: it sets only the shadow properties and
+  leaves fill, border, radius and padding to the caller, so it can be dropped
+  onto an existing card without restyling it.
+- Applied at four sites: the diagnostics stat card and link message-count
+  panel, and the voice page's chain tiles and parameter panel.
+- Costs 256 bytes. The blur renderer was already in every image and could not
+  have been garbage-collected — `lv_draw_rect.c:78` reaches it through a
+  runtime `if(dsc->base.drop_shadow_opa)` inside the always-linked rect draw
+  path — so this only starts asking for what we were already carrying.
+- Uses `LV_BLUR_QUALITY_SPEED` rather than leaving quality `AUTO`: each
+  shadowed object costs an `lv_draw_layer_create_drop_shadow()` layer
+  allocation and a blur pass on every redraw, so a nicer kernel would be paid
+  for continuously rather than once.
+- **Not verified visually.** `tools/ui_preview` compiles only `preview.c` plus
+  the LVGL sources, not `components/ui`, so the real cards cannot be rendered
+  off-device. Whether the shadow reads at all against the black page
+  background, and what it costs in FPS, are recorded in `docs/roadmap.md`
+  § Outstanding hardware verification.
+
 ### Changed — LVGL PPA draw unit enabled
 
 - Enabled `CONFIG_LV_USE_PPA` (plus `CONFIG_LV_PPA_BURST_LENGTH=128`) in both
