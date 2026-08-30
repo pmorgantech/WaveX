@@ -11,6 +11,7 @@
 #include "freertos/task.h"
 #include "lvgl.h"
 
+#include <atomic>
 #include <cstdio>
 #include <cstring>
 
@@ -31,7 +32,12 @@ enum class State : uint8_t {
     Failed,
 };
 
-volatile State s_state = State::Idle;
+// atomic with release/acquire, not volatile: wavex_screenshot_poll() (UI task)
+// fills s_pixels/s_w/s_h/s_stride and only then publishes Captured; the
+// listener task must not observe Captured before those writes are visible.
+// volatile guarantees neither the ordering nor the cross-core visibility this
+// handoff needs (docs/esp32p4_coding_guide.md SS9).
+std::atomic<State> s_state{State::Idle};
 bool s_started = false;
 
 lv_draw_buf_t s_buf;

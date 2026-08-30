@@ -11,6 +11,17 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Fixed — debug screenshot capture handoff used `volatile` instead of `std::atomic`
+
+- `wavex_screenshot_poll()` (UI task) fills `s_pixels`/`s_w`/`s_h`/`s_stride`
+  and only then publishes `State::Captured`; the listener task reads the
+  state and consumes those buffer fields. This is exactly the
+  producer/consumer publication pattern `docs/esp32p4_coding_guide.md` §9
+  documents — fill the buffer, then a release-store a reader acquire-loads —
+  but the flag was `volatile`, which gives neither the ordering nor the
+  cross-core visibility that handoff needs. Debug-only feature
+  (`WAVEX_ESP_SCREENSHOT_DEBUG`), so no production impact.
+
 ### Fixed — diagnostics page update flag used `volatile` instead of `std::atomic`
 
 - `UIDiagnosticsPage::ui_update_pending` is set by `collectDiagnosticsData()`
