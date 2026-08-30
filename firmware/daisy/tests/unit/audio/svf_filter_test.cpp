@@ -106,6 +106,48 @@ TEST(SvfFilterTest, TwoPoleIsSteeperThanOnePoleWas) {
     EXPECT_LT(SteadyStatePeak(f, 2000.0f), 0.40f);
 }
 
+// --- Known filter math -----------------------------------------------------
+//
+// The TPT/bilinear structure matches the analog 2nd-order lowpass prototype
+// |H(r)| = 1 / sqrt((1 - r^2)^2 + (r/Q)^2) with the frequency axis prewarped:
+// r_eff = tan(pi*f/fs) / tan(pi*fc/fs). g = tan(pi*fc/fs) makes the mapping
+// exact AT the cutoff, so these are hand-computable expected values, not
+// loose "it attenuates" bounds. Test frequencies divide fs exactly, so the
+// sampled sine hits its true crest and SteadyStatePeak measures the real
+// amplitude rather than an off-crest sample.
+
+namespace {
+
+float AnalogPrototypeMagnitude(float f_hz, float cutoff_hz, float q) {
+    const double r = std::tan(3.14159265358979323846 * f_hz / kSr) /
+                     std::tan(3.14159265358979323846 * cutoff_hz / kSr);
+    const double a = 1.0 - r * r;
+    const double b = r / q;
+    return static_cast<float>(1.0 / std::sqrt(a * a + b * b));
+}
+
+}  // namespace
+
+// At Q = 0.5 (resonance 0) the response is exactly 1/(1 + r^2): 0.5 at the
+// cutoff, 0.2 one octave up, 1/17 two octaves up. A one-pole - or any other
+// slope - cannot produce these numbers.
+TEST(SvfFilterTest, MagnitudeMatchesAnalogPrototypeAtQHalf) {
+    for (float hz: {500.0f, 1000.0f, 2000.0f, 4000.0f}) {
+        SvfFilter f = MakeFilter(1000.0f, 0.0f);
+        const float expected = AnalogPrototypeMagnitude(hz, 1000.0f, 0.5f);
+        EXPECT_NEAR(SteadyStatePeak(f, hz), expected, expected * 0.02f + 0.002f)
+            << "at " << hz << " Hz (expected |H| = " << expected << ")";
+    }
+}
+
+// Peak gain of a 2-pole lowpass driven exactly at cutoff is Q. resonance=1
+// maps to kMaxQ, so the resonant peak must measure ~kMaxQ - not merely "more
+// than flat".
+TEST(SvfFilterTest, ResonantGainAtCutoffEqualsQ) {
+    SvfFilter f = MakeFilter(1000.0f, 1.0f);
+    EXPECT_NEAR(SteadyStatePeak(f, 1000.0f), SvfFilter::kMaxQ, SvfFilter::kMaxQ * 0.03f);
+}
+
 // --- Resonance -------------------------------------------------------------
 
 TEST(SvfFilterTest, ResonanceProducesPeakAtCutoff) {

@@ -9,6 +9,11 @@ FRESULT f_opendir(DIR* dp, const char* path) {
         return FR_INT_ERR;
 
     MockFatFS& fs = MockFatFS::Instance();
+
+    // Injected hard failure (dead card etc.) takes precedence over lookup.
+    if (fs.OpendirResult() != FR_OK)
+        return fs.OpendirResult();
+
     std::string path_str(path);
 
     // Normalize path
@@ -35,6 +40,11 @@ FRESULT f_readdir(DIR* dp, FILINFO* fno) {
         return FR_INT_ERR;
 
     MockFatFS& fs = MockFatFS::Instance();
+
+    // Injected mid-listing failure (SD error part-way through a directory).
+    if (fs.ConsumeReaddirFailure())
+        return fs.ReaddirFailResult();
+
     MockFileEntry entry;
 
     if (!fs.GetNextEntry(dp->handle, entry)) {

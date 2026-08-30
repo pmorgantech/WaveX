@@ -462,6 +462,145 @@ TEST(SequencerSchedulerTest, EventsAreSortedByFrame) {
     }
 }
 
+// --- Tempo extremes / tick boundaries ---------------------------------------
+
+// SetTempo clamps at 1 BPM instead of dividing by zero or going negative.
+// Even at the floor the scheduler must still fire the downbeat at frame 0.
+TEST(SequencerSchedulerTest, TempoIsClampedToOneBpmMinimum) {
+    Pattern p;
+    p.length = 1;
+    p.scale = StepScale::Quarter;
+    p.tracks[0].steps[0].on = true;
+
+    SequencerScheduler sched;
+    sched.Init(48000, 48);
+    sched.SetTempo(0.0f);
+    EXPECT_FLOAT_EQ(sched.Tempo(), 1.0f);
+    sched.SetTempo(-30.0f);
+    EXPECT_FLOAT_EQ(sched.Tempo(), 1.0f);
+
+    sched.SetPattern(&p);
+    sched.Start();
+    auto events = RunAll(sched, 1000);
+    // At 1 BPM a quarter-note step is 2,880,000 frames; only the immediate
+    // downbeat fits in 48,000 frames.
+    ASSERT_EQ(events.size(), 1u);
+    EXPECT_EQ(events[0].frame, 0u);
+}
+
+// 960 BPM: frames_per_tick = 60*48000/(96*960) = 31.25 exactly, so a quarter
+// -note step is 3000.0 frames with zero rounding - beats must land on exact
+// 3000-frame multiples even at a tempo far above musical range.
+TEST(SequencerSchedulerTest, HighTempoStaysExactOnTickBoundaries) {
+    Pattern p;
+    p.length = 1;
+    p.scale = StepScale::Quarter;
+    p.tracks[0].steps[0].on = true;
+
+    SequencerScheduler sched;
+    sched.Init(48000, 48);
+    sched.SetTempo(960.0f);
+    sched.SetPattern(&p);
+    sched.Start();
+
+    // 1000 blocks = 48000 frames; beat 16 (frame 48000) is excluded by the
+    // half-open convention, leaving beats 0..15.
+    auto events = RunAll(sched, 1000);
+    ASSERT_EQ(events.size(), 16u);
+    for (size_t i = 0; i < events.size(); ++i) {
+        EXPECT_EQ(events[i].frame, i * 3000u) << "beat " << i;
+    }
+}
+
+// A zero-length pattern has no steps to schedule; Process must be a no-op,
+// not a modulo-by-zero or an infinite boundary loop.
+TEST(SequencerSchedulerTest, ZeroLengthPatternProducesNoEvents) {
+    Pattern p;
+    p.length = 0;
+    p.tracks[0].steps[0].on = true;
+
+    SequencerScheduler sched;
+    sched.Init(48000, 48);
+    sched.SetPattern(&p);
+    sched.Start();
+
+    TriggerEvent buf[8];
+    for (int i = 0; i < 100; ++i)
+        EXPECT_EQ(sched.Process(buf, 8), 0u);
+}
+
+// SetPattern(nullptr) mid-playback stops scheduling without needing Stop().
+TEST(SequencerSchedulerTest, NullPatternMidRunStopsScheduling) {
+    Pattern p;
+    p.length = 1;
+    p.scale = StepScale::Sixteenth;
+    p.tracks[0].steps[0].on = true;
+
+    SequencerScheduler sched;
+    sched.Init(48000, 48);
+    sched.SetTempo(120.0f);
+    sched.SetPattern(&p);
+    sched.Start();
+    ASSERT_FALSE(RunAll(sched, 200).empty());
+
+    sched.SetPattern(nullptr);
+    EXPECT_TRUE(RunAll(sched, 1000).empty());
+    EXPECT_TRUE(sched.IsPlaying()) << "nulling the pattern mutes scheduling, not the transport";
+}
+
+// The caller's max_events budget truncates deterministically: lowest frames
+// first, ties broken by ascending track index.
+TEST(SequencerSchedulerTest, MaxEventsCapKeepsEarliestSortedEvents) {
+    Pattern p;
+    p.length = 1;
+    p.scale = StepScale::Quarter;
+    for (uint8_t t = 0; t < 8; ++t)
+        p.tracks[t].steps[0].on = true;
+
+    SequencerScheduler sched;
+    sched.Init(48000, 48);
+    sched.SetTempo(120.0f);
+    sched.SetPattern(&p);
+    sched.Start();
+
+    TriggerEvent buf[3];
+    size_t n = sched.Process(buf, 3);
+    ASSERT_EQ(n, 3u);
+    for (size_t i = 0; i < n; ++i) {
+        EXPECT_EQ(buf[i].frame, 0u);
+        EXPECT_EQ(buf[i].track, i) << "tie-break must keep the lowest track indices";
+    }
+}
+
+// --- Playhead feedback ------------------------------------------------------
+
+// PlayheadStep/PlayheadLoop track the most recently crossed step on the
+// shared grid (used for MSG_SEQ_PLAYHEAD): step interval at 120 BPM /
+// sixteenth = 24 ticks = 6000 frames = 125 blocks.
+TEST(SequencerSchedulerTest, PlayheadTracksStepAndLoop) {
+    Pattern p;
+    p.length = 4;
+    p.scale = StepScale::Sixteenth;
+    p.tracks[0].steps[0].on = true;
+
+    SequencerScheduler sched;
+    sched.Init(48000, 48);
+    sched.SetTempo(120.0f);
+    sched.SetPattern(&p);
+    sched.Start();
+
+    EXPECT_EQ(sched.PlayheadStep(), 0);
+    EXPECT_EQ(sched.PlayheadLoop(), 0u);
+
+    RunAll(sched, 126);  // crosses the step-1 boundary at frame 6000
+    EXPECT_EQ(sched.PlayheadStep(), 1);
+    EXPECT_EQ(sched.PlayheadLoop(), 0u);
+
+    RunAll(sched, 399);  // 525 blocks = 25200 frames: last crossing at 24000
+    EXPECT_EQ(sched.PlayheadStep(), 0);
+    EXPECT_EQ(sched.PlayheadLoop(), 1u) << "wrap back to step 0 increments the loop count";
+}
+
 // Multi-step pattern with a longer run covers correct looping (loop_count
 // advancing, step_index wrapping) beyond the first pass.
 TEST(SequencerSchedulerTest, PatternLoopsCorrectly) {

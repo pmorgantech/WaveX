@@ -116,6 +116,27 @@ TEST(SequencerTransportTest, OutOfRangeEditsAreSilentNoOps) {
             EXPECT_FALSE(t.pattern().tracks[tr].steps[st].on);
 }
 
+TEST(SequencerTransportTest, PatternLengthAndSwingClampAtTheLowEndToo) {
+    SequencerTransport t = MakeTransport();
+    t.ApplyPatternOp(SeqPatternOpMessage(SEQ_OP_PATTERN_LENGTH, 0, 0, 0, 0 /*len*/, 0));
+    EXPECT_EQ(t.pattern().length, 1) << "length 0 must clamp to 1, not disable the pattern";
+    t.ApplyPatternOp(SeqPatternOpMessage(SEQ_OP_PATTERN_SWING, 0, 0, 10 /*swing*/, 0, 0));
+    EXPECT_EQ(t.pattern().swing, 50) << "swing below straight must clamp to 50";
+}
+
+TEST(SequencerTransportTest, InvalidScaleValueIsIgnored) {
+    SequencerTransport t = MakeTransport();
+    const StepScale before = t.pattern().scale;
+    t.ApplyPatternOp(SeqPatternOpMessage(SEQ_OP_PATTERN_SCALE, 0, 0, 200 /*bogus*/, 0, 0));
+    EXPECT_EQ(t.pattern().scale, before) << "an unknown scale byte from the wire must not land";
+}
+
+TEST(SequencerTransportTest, RetrigCountIsClampedToMax) {
+    SequencerTransport t = MakeTransport();
+    t.ApplyPatternOp(SeqPatternOpMessage(SEQ_OP_SET_STEP_MICRO, 0, 0, 200 /*count*/, 8, 0));
+    EXPECT_EQ(t.pattern().tracks[0].steps[0].retrig_count, WaveX::Sequencer::kMaxRetrigCount);
+}
+
 TEST(SequencerTransportTest, ParamLockSetOverwriteAndClear) {
     SequencerTransport t = MakeTransport();
     t.ApplyPatternOp(SeqPatternOpMessage(SEQ_OP_SET_PARAM_LOCK, 0, 0, 5 /*param*/, 200, 0));
@@ -128,6 +149,33 @@ TEST(SequencerTransportTest, ParamLockSetOverwriteAndClear) {
 
     t.ApplyPatternOp(SeqPatternOpMessage(SEQ_OP_CLEAR_PARAM_LOCKS, 0, 0, 0, 0, 0));
     EXPECT_EQ(t.pattern().tracks[0].steps[0].param_locks[0].param_id, 0);
+}
+
+TEST(SequencerTransportTest, ParamLockIdZeroIsRejected) {
+    SequencerTransport t = MakeTransport();
+    // param_id 0 marks a free slot; accepting it from the wire would create
+    // an "unused" lock carrying a value.
+    t.ApplyPatternOp(SeqPatternOpMessage(SEQ_OP_SET_PARAM_LOCK, 0, 0, 0 /*param*/, 123, 0));
+    EXPECT_EQ(t.pattern().tracks[0].steps[0].param_locks[0].param_id, 0);
+    EXPECT_EQ(t.pattern().tracks[0].steps[0].param_locks[0].value, 0);
+}
+
+// A 5th distinct lock on a 4-slot step evicts the OLDEST (slot 0 shifts
+// out), per param-locks-and-modulation.md §2 - not the newest, and not a
+// silent drop.
+TEST(SequencerTransportTest, FifthParamLockEvictsTheOldest) {
+    SequencerTransport t = MakeTransport();
+    for (uint8_t id = 1; id <= 4; ++id)
+        t.ApplyPatternOp(SeqPatternOpMessage(SEQ_OP_SET_PARAM_LOCK, 0, 0, id, id * 100, 0));
+    t.ApplyPatternOp(SeqPatternOpMessage(SEQ_OP_SET_PARAM_LOCK, 0, 0, 5, 500, 0));
+
+    const auto& s = t.pattern().tracks[0].steps[0];
+    // Locks 2..5 survive, in shifted order; lock 1 is gone.
+    EXPECT_EQ(s.param_locks[0].param_id, 2);
+    EXPECT_EQ(s.param_locks[1].param_id, 3);
+    EXPECT_EQ(s.param_locks[2].param_id, 4);
+    EXPECT_EQ(s.param_locks[3].param_id, 5);
+    EXPECT_EQ(s.param_locks[3].value, 500);
 }
 
 // ---- Internal-clock transport ----
@@ -181,6 +229,84 @@ TEST(SequencerTransportTest, TempoFromTransportMessageDrivesTiming) {
     ASSERT_GE(events.size(), 2u);
     EXPECT_EQ(events[0].frame, 0u);
     EXPECT_EQ(events[1].frame, 48000u);
+}
+
+TEST(SequencerTransportTest, TempoIsClampedToOneBpmMinimum) {
+    SequencerTransport t = MakeTransport();
+    t.ApplyTransport(
+        SeqTransportMessage(SEQ_TRANSPORT_STOP, SEQ_CLOCK_INTERNAL, SEQ_INPUT_PLAY, 0, 0, 0));
+    EXPECT_DOUBLE_EQ(t.TempoBpm(), 1.0) << "tempo_bpm_x100 = 0 must clamp, not stop time";
+}
+
+// CONTINUE in internal mode restarts from the top (documented limitation:
+// no native mid-pattern resume in the scheduler core yet). Pinning it keeps
+// the eventual real resume an intentional change.
+TEST(SequencerTransportTest, InternalContinueRestartsFromStepZero) {
+    SequencerTransport t = MakeTransport();
+    t.pattern().length = 4;
+    t.pattern().scale = StepScale::Quarter;
+    t.pattern().tracks[0].steps[0].on = true;
+    t.pattern().tracks[0].steps[2].on = true;
+
+    t.ApplyTransport(
+        SeqTransportMessage(SEQ_TRANSPORT_PLAY, SEQ_CLOCK_INTERNAL, SEQ_INPUT_PLAY, 0, 12000, 0));
+    RunTicks(t, 300);  // partway into the pattern
+    t.ApplyTransport(
+        SeqTransportMessage(SEQ_TRANSPORT_STOP, SEQ_CLOCK_INTERNAL, SEQ_INPUT_PLAY, 0, 12000, 0));
+    ASSERT_FALSE(t.IsPlaying());
+
+    t.ApplyTransport(SeqTransportMessage(
+        SEQ_TRANSPORT_CONTINUE, SEQ_CLOCK_INTERNAL, SEQ_INPUT_PLAY, 0, 12000, 8));
+    EXPECT_TRUE(t.IsPlaying());
+    auto events = RunTicks(t, 10);
+    ASSERT_FALSE(events.empty());
+    EXPECT_EQ(events[0].step, 0) << "internal CONTINUE restarts at step 0";
+    EXPECT_EQ(events[0].frame, 0u) << "and the downbeat fires immediately";
+}
+
+// CONTINUE in MIDI mode arms (like PLAY) and starts on the master's
+// MIDI CONTINUE, not by itself.
+TEST(SequencerTransportTest, MidiContinueArmsAndStartsOnClockContinue) {
+    SequencerTransport t = MakeTransport();
+    t.pattern().length = 1;
+    t.pattern().scale = StepScale::Quarter;
+    t.pattern().tracks[0].steps[0].on = true;
+
+    t.ApplyTransport(
+        SeqTransportMessage(SEQ_TRANSPORT_CONTINUE, SEQ_CLOCK_MIDI, SEQ_INPUT_PLAY, 0, 12000, 0));
+    EXPECT_TRUE(t.IsArmed());
+    EXPECT_FALSE(t.IsPlaying());
+
+    // MIDI CONTINUE with SPP 8 (sixteenths) = 8 * 24 internal ticks.
+    t.OnMidiClock(MidiClockEventMessage(MIDI_CLK_CONTINUE, 0, 0, 0, /*spp_beats16=*/8));
+    EXPECT_TRUE(t.IsPlaying());
+    EXPECT_FALSE(t.IsArmed());
+    EXPECT_DOUBLE_EQ(t.follower().PhaseTicks(), 8.0 * 24.0);
+}
+
+// A standalone SPP message repositions the follower without touching the
+// scheduler's armed/playing state.
+TEST(SequencerTransportTest, SppRepositionsFollowerPhase) {
+    SequencerTransport t = MakeTransport();
+    t.ApplyTransport(
+        SeqTransportMessage(SEQ_TRANSPORT_STOP, SEQ_CLOCK_MIDI, SEQ_INPUT_PLAY, 0, 12000, 0));
+    ASSERT_FALSE(t.IsPlaying());
+
+    t.OnMidiClock(MidiClockEventMessage(MIDI_CLK_SPP, 0, 0, 0, /*spp_beats16=*/32));
+    EXPECT_DOUBLE_EQ(t.follower().PhaseTicks(), 32.0 * 24.0);
+    EXPECT_FALSE(t.IsPlaying()) << "SPP alone must not start the scheduler";
+}
+
+// MIDI START while NOT armed (no PLAY from the UI) must not start playback -
+// the user's transport intent gates the master's.
+TEST(SequencerTransportTest, UnarmedMidiStartDoesNotStartScheduler) {
+    SequencerTransport t = MakeTransport();
+    t.pattern().tracks[0].steps[0].on = true;
+    t.ApplyTransport(
+        SeqTransportMessage(SEQ_TRANSPORT_STOP, SEQ_CLOCK_MIDI, SEQ_INPUT_PLAY, 0, 12000, 0));
+
+    t.OnMidiClock(MidiClockEventMessage(MIDI_CLK_START, 0, 0, 0, 0));
+    EXPECT_FALSE(t.IsPlaying());
 }
 
 // ---- Playhead feedback ----

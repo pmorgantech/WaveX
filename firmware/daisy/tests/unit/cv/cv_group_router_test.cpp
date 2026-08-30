@@ -78,10 +78,21 @@ TEST(CvGroupRouterTest, FlushForwardsToBackend) {
     FakeBackend backend;
     WaveX::Cv::CvGroupRouter<FakeBackend, 1> router(backend);
 
-    router.Flush();
-    router.Flush();
+    EXPECT_TRUE(router.Flush());
+    EXPECT_TRUE(router.Flush());
 
     EXPECT_EQ(backend.flush_count, 2);
+}
+
+// A failed DAC transaction (e.g. DAC absent on the bench) must propagate as
+// false, not be swallowed - callers use it to log/derate.
+TEST(CvGroupRouterTest, FlushPropagatesBackendFailure) {
+    FakeBackend backend;
+    backend.flush_result = false;
+    WaveX::Cv::CvGroupRouter<FakeBackend, 1> router(backend);
+
+    EXPECT_FALSE(router.Flush());
+    EXPECT_EQ(backend.flush_count, 1);
 }
 
 // A voice index at or beyond NumGroups clamps to the last group rather than

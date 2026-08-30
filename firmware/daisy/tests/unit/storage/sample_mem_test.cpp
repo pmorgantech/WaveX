@@ -168,6 +168,25 @@ TEST_F(SampleMemTest, ZeroByteAllocRejected) {
     EXPECT_FALSE(mgr_.alloc(0, &h));
 }
 
+// release() zeroes the WHOLE handle, not just len - len==0 is the documented
+// "released" sentinel a caller must check before ptr().
+//
+// CAUTION (production footgun, src/memory.h SampleMemMgr::ptr): ptr() itself
+// does NOT check len==0 - called on a zeroed handle it routes to small class
+// 0 / page 0 / slot 0 and "succeeds" with a pointer into the small pool.
+// Deliberately not pinned here (it depends on pool internals); callers must
+// gate on h.len, which this test keeps honest.
+TEST_F(SampleMemTest, ReleaseZeroesEveryHandleField) {
+    wxsamp_t h{};
+    ASSERT_TRUE(mgr_.alloc(128, &h));
+    mgr_.release(&h);
+
+    EXPECT_EQ(h.len, 0u);
+    EXPECT_EQ(h.cls, 0);
+    EXPECT_EQ(h.page, 0);
+    EXPECT_EQ(h.slot, 0);
+}
+
 // The sample browser allocates a fresh sample_id per audition, so OnSampleLoad
 // never replaces an earlier load and instead retires the oldest registry entry
 // to make room (audio_engine.cpp evict_oldest_loaded_sample). That recovery is

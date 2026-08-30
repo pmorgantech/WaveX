@@ -11,7 +11,11 @@ using namespace WaveX::AudioEngine;
 namespace {
 
 // A tiny fake sample bank keyed by sample_id. Two frames minimum so
-// SampleRef::valid() passes and VoiceManager would accept it.
+// SampleRef::valid() passes and VoiceManager would accept it. The frame
+// count ENCODES the sample_id (frames = 2 + id), so a test can tell from a
+// trigger's sample_frames WHICH zone actually resolved it - count-only
+// assertions can't distinguish "the right zone fired" from "the wrong zone
+// fired".
 struct FakeSampleBank {
     std::array<int16_t, 8> data{{100, 100, 100, 100, 100, 100, 100, 100}};
 
@@ -21,7 +25,7 @@ struct FakeSampleBank {
             return SampleRef{};  // id 0 = "no sample loaded"
         SampleRef r;
         r.data = self->data.data();
-        r.frames = 4;
+        r.frames = 2u + sample_id;  // identifies the zone that resolved
         r.channels = 1;
         r.sample_rate_hz = 44100;
         return r;
@@ -29,6 +33,11 @@ struct FakeSampleBank {
 
     SampleResolver Resolver() const { return SampleResolver{this, &Resolve}; }
 };
+
+// The frame count FakeSampleBank reports for a given sample_id.
+uint32_t FramesFor(uint16_t sample_id) {
+    return 2u + sample_id;
+}
 
 Zone MakeZone(uint16_t sample_id,
               uint8_t key_lo,
@@ -68,8 +77,39 @@ TEST(InstrumentTest, SingleZoneInRangeMatches) {
     EXPECT_EQ(out[0].velocity, 100);
     EXPECT_EQ(out[0].root_note, 60);
     EXPECT_EQ(out[0].slot, 5);
-    EXPECT_EQ(out[0].sample_frames, 4u);
+    EXPECT_EQ(out[0].sample_frames, FramesFor(1));
     EXPECT_EQ(out[0].sample_rate_hz, 44100u);
+}
+
+// Key and velocity ranges are documented INCLUSIVE at both ends - an
+// off-by-one on either boundary silences (or doubles) real notes.
+TEST(InstrumentTest, KeyAndVelocityBoundariesAreInclusive) {
+    Instrument ins;
+    ins.zones[0] = MakeZone(1, 48, 72, 10, 90);
+    FakeSampleBank bank;
+    VoiceTriggerParams out[kMaxLayerTriggers];
+
+    // Exactly on each boundary: matches.
+    EXPECT_EQ(ResolveNoteOn(ins, 0, 48, 50, bank.Resolver(), out, kMaxLayerTriggers), 1);
+    EXPECT_EQ(ResolveNoteOn(ins, 0, 72, 50, bank.Resolver(), out, kMaxLayerTriggers), 1);
+    EXPECT_EQ(ResolveNoteOn(ins, 0, 60, 10, bank.Resolver(), out, kMaxLayerTriggers), 1);
+    EXPECT_EQ(ResolveNoteOn(ins, 0, 60, 90, bank.Resolver(), out, kMaxLayerTriggers), 1);
+
+    // One outside each boundary: no match.
+    EXPECT_EQ(ResolveNoteOn(ins, 0, 47, 50, bank.Resolver(), out, kMaxLayerTriggers), 0);
+    EXPECT_EQ(ResolveNoteOn(ins, 0, 73, 50, bank.Resolver(), out, kMaxLayerTriggers), 0);
+    EXPECT_EQ(ResolveNoteOn(ins, 0, 60, 9, bank.Resolver(), out, kMaxLayerTriggers), 0);
+    EXPECT_EQ(ResolveNoteOn(ins, 0, 60, 91, bank.Resolver(), out, kMaxLayerTriggers), 0);
+}
+
+// Velocity 0 sits below the default vel_lo of 1, so a zone left at defaults
+// never fires on it (velocity-0 note-ons are note-offs in MIDI).
+TEST(InstrumentTest, VelocityZeroDoesNotMatchDefaultZone) {
+    Instrument ins;
+    ins.zones[0] = MakeZone(1, 0, 127, 1, 127);
+    FakeSampleBank bank;
+    VoiceTriggerParams out[kMaxLayerTriggers];
+    EXPECT_EQ(ResolveNoteOn(ins, 0, 60, 0, bank.Resolver(), out, kMaxLayerTriggers), 0);
 }
 
 TEST(InstrumentTest, NoteOutOfKeyRangeDoesNotMatch) {
@@ -92,9 +132,17 @@ TEST(InstrumentTest, VelocitySwitchSelectsOneZone) {
 
     uint8_t soft = ResolveNoteOn(ins, 0, 60, 30, bank.Resolver(), out, kMaxLayerTriggers);
     ASSERT_EQ(soft, 1);
+    EXPECT_EQ(out[0].sample_frames, FramesFor(1)) << "velocity 30 must select the SOFT zone";
 
     uint8_t hard = ResolveNoteOn(ins, 0, 60, 120, bank.Resolver(), out, kMaxLayerTriggers);
     ASSERT_EQ(hard, 1);
+    EXPECT_EQ(out[0].sample_frames, FramesFor(2)) << "velocity 120 must select the HARD zone";
+
+    // The switch point itself: 63 is the top of soft, 64 the bottom of hard.
+    ASSERT_EQ(ResolveNoteOn(ins, 0, 60, 63, bank.Resolver(), out, kMaxLayerTriggers), 1);
+    EXPECT_EQ(out[0].sample_frames, FramesFor(1));
+    ASSERT_EQ(ResolveNoteOn(ins, 0, 60, 64, bank.Resolver(), out, kMaxLayerTriggers), 1);
+    EXPECT_EQ(out[0].sample_frames, FramesFor(2));
 }
 
 // Overlapping ranges layer: both fire (bounded by kMaxLayerTriggers).
@@ -106,7 +154,10 @@ TEST(InstrumentTest, OverlappingZonesLayer) {
     VoiceTriggerParams out[kMaxLayerTriggers];
 
     uint8_t n = ResolveNoteOn(ins, 0, 60, 100, bank.Resolver(), out, kMaxLayerTriggers);
-    EXPECT_EQ(n, 2);
+    ASSERT_EQ(n, 2);
+    // Both zones fired, in zone order, each carrying its own sample.
+    EXPECT_EQ(out[0].sample_frames, FramesFor(1));
+    EXPECT_EQ(out[1].sample_frames, FramesFor(2));
 }
 
 TEST(InstrumentTest, LayerCountIsCappedByMax) {
@@ -135,7 +186,18 @@ TEST(InstrumentTest, ZoneWithUnresolvableSampleIsSkipped) {
     // Only the valid zone produces a trigger; the invalid one doesn't consume
     // a slot.
     uint8_t n = ResolveNoteOn(ins, 0, 60, 100, bank.Resolver(), out, kMaxLayerTriggers);
-    EXPECT_EQ(n, 1);
+    ASSERT_EQ(n, 1);
+    EXPECT_EQ(out[0].sample_frames, FramesFor(1)) << "the trigger must come from the VALID zone";
+}
+
+TEST(InstrumentTest, NullOutputOrZeroMaxIsRejected) {
+    Instrument ins;
+    ins.zones[0] = MakeZone(1, 0, 127, 1, 127);
+    FakeSampleBank bank;
+    VoiceTriggerParams out[kMaxLayerTriggers];
+
+    EXPECT_EQ(ResolveNoteOn(ins, 0, 60, 100, bank.Resolver(), nullptr, kMaxLayerTriggers), 0);
+    EXPECT_EQ(ResolveNoteOn(ins, 0, 60, 100, bank.Resolver(), out, 0), 0);
 }
 
 // Drum mode: note is forced to root (no pitch tracking), so every pad plays
@@ -236,10 +298,18 @@ TEST(InstrumentTest, OppositeCrossfadeZonesBlend) {
 
     uint8_t n = ResolveNoteOn(ins, 0, 60, 64, bank.Resolver(), out, kMaxLayerTriggers);
     ASSERT_EQ(n, 2);
-    // Both non-zero at a mid velocity; the up-zone louder above center is a
-    // separate check - here just confirm both layers are audible.
-    EXPECT_GT(out[0].gain_mul, 0.0f);
-    EXPECT_GT(out[1].gain_mul, 0.0f);
+    // Exact ramp arithmetic over the shared [1,127] span (span = 127):
+    // up = velocity/127, down = (128 - velocity)/127. At velocity 64 the two
+    // meet at 64/127 each, and at ANY velocity they sum to the constant
+    // 128/127 - the property that makes the crossfade level-preserving.
+    EXPECT_NEAR(out[0].gain_mul, 64.0f / 127.0f, 1e-5f);
+    EXPECT_NEAR(out[1].gain_mul, 64.0f / 127.0f, 1e-5f);
+    for (uint8_t vel: {1, 30, 100, 127}) {
+        uint8_t m = ResolveNoteOn(ins, 0, 60, vel, bank.Resolver(), out, kMaxLayerTriggers);
+        ASSERT_EQ(m, 2) << "vel " << int(vel);
+        EXPECT_NEAR(out[0].gain_mul + out[1].gain_mul, 128.0f / 127.0f, 1e-5f)
+            << "vel " << int(vel);
+    }
 }
 
 TEST(InstrumentTest, ChokeGroupAndRegionFlowThrough) {

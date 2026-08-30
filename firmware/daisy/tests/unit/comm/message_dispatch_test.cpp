@@ -217,6 +217,63 @@ TEST_F(MessageDispatchTest, BrowseRequestReachesFilesystem) {
     EXPECT_EQ(GetDispatchRecord().browse_requests[0].start_index, 3u);
 }
 
+// The path field of a CRC-valid frame carries NO guarantee of an in-payload
+// NUL terminator; the handler must bound its scan to the payload instead of
+// strlen()ing into whatever follows. A path that fills the payload exactly
+// (no NUL anywhere) must come through truncated to the payload's bytes.
+TEST_F(MessageDispatchTest, BrowsePathWithoutTerminatorIsBoundedToPayload) {
+    uint8_t payload[1 + 4];
+    payload[0] = 0;                       // start_index
+    std::memcpy(payload + 1, "ABCD", 4);  // 4 bytes, deliberately no NUL
+    ProcessInterMcuMessage(MSG_BROWSE_REQ, 1, payload, sizeof(payload));
+
+    ASSERT_EQ(GetDispatchRecord().browse_requests.size(), 1u);
+    EXPECT_EQ(GetDispatchRecord().browse_requests[0].path, "ABCD");
+}
+
+// The handler's stack buffer holds 95 characters + NUL; a longer wire path
+// must be truncated there, not overflow it.
+TEST_F(MessageDispatchTest, OverlongBrowsePathIsTruncatedTo95Chars) {
+    std::string long_path(120, 'x');
+    std::vector<uint8_t> payload(1 + long_path.size() + 1);
+    payload[0] = 0;
+    std::memcpy(payload.data() + 1, long_path.c_str(), long_path.size() + 1);
+    ProcessInterMcuMessage(MSG_BROWSE_REQ, 1, payload.data(), static_cast<size_t>(payload.size()));
+
+    ASSERT_EQ(GetDispatchRecord().browse_requests.size(), 1u);
+    EXPECT_EQ(GetDispatchRecord().browse_requests[0].path, std::string(95, 'x'));
+}
+
+TEST_F(MessageDispatchTest, SamplePlayRequestForwardsThePath) {
+    const char path[] = "/SAMPLES/kick.wav";
+    ProcessInterMcuMessage(MSG_SAMPLE_PLAY_REQ,
+                           1,
+                           reinterpret_cast<const uint8_t*>(path),
+                           sizeof(path));  // includes the NUL
+
+    ASSERT_EQ(GetDispatchRecord().play_requests.size(), 1u);
+    EXPECT_EQ(GetDispatchRecord().play_requests[0], "/SAMPLES/kick.wav");
+}
+
+// A message type nothing routes must fall through the switch without
+// touching any subsystem - the record must stay completely empty.
+TEST_F(MessageDispatchTest, UnknownMessageTypeReachesNothing) {
+    uint8_t payload[8] = {1, 2, 3, 4, 5, 6, 7, 8};
+    ProcessInterMcuMessage(0xEE, 1, payload, sizeof(payload));
+
+    const DispatchRecord& r = GetDispatchRecord();
+    EXPECT_TRUE(r.note_ons.empty());
+    EXPECT_TRUE(r.note_offs.empty());
+    EXPECT_TRUE(r.control_changes.empty());
+    EXPECT_TRUE(r.sample_ctrls.empty());
+    EXPECT_TRUE(r.sample_loads.empty());
+    EXPECT_TRUE(r.browse_requests.empty());
+    EXPECT_TRUE(r.play_requests.empty());
+    EXPECT_TRUE(r.uart_sends.empty());
+    EXPECT_TRUE(r.seq_transports.empty());
+    EXPECT_TRUE(r.midi_ccs.empty());
+}
+
 TEST_F(MessageDispatchTest, SamplePlayIndexReachesFilesystem) {
     SamplePlayIndexMessage msg(42);
     Dispatch(MSG_SAMPLE_PLAY_INDEX_REQ, msg);

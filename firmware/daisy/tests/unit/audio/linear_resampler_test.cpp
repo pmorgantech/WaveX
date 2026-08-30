@@ -398,6 +398,70 @@ TEST(LinearResamplerStream, HandlesStereoAndEightChannelStreams) {
     }
 }
 
+TEST(LinearResamplerStream, RejectsInvalidArgumentsWithoutTouchingState) {
+    std::vector<int16_t> src(64, 100);
+    std::vector<int16_t> out(256, 0);
+    StreamResamplerState st;
+
+    EXPECT_EQ(ResampleStreamInterleaved(st, nullptr, 64, out.data(), 256, 1, 1.0f), 0u);
+    EXPECT_EQ(ResampleStreamInterleaved(st, src.data(), 64, nullptr, 256, 1, 1.0f), 0u);
+    EXPECT_EQ(ResampleStreamInterleaved(st, src.data(), 0, out.data(), 256, 1, 1.0f), 0u);
+    EXPECT_EQ(ResampleStreamInterleaved(st, src.data(), 64, out.data(), 256, 0, 1.0f), 0u);
+    EXPECT_EQ(ResampleStreamInterleaved(st,
+                                        src.data(),
+                                        64,
+                                        out.data(),
+                                        256,
+                                        WaveX::AudioEngine::kMaxResamplerChannels + 1,
+                                        1.0f),
+              0u);
+    EXPECT_EQ(ResampleStreamInterleaved(st, src.data(), 64, out.data(), 256, 1, 0.0f), 0u);
+    EXPECT_EQ(ResampleStreamInterleaved(st, src.data(), 64, out.data(), 256, 1, -2.0f), 0u);
+
+    // A rejected call must not fabricate continuity state: the next valid
+    // chunk still starts like a first chunk.
+    EXPECT_FALSE(st.has_history);
+    EXPECT_EQ(st.phase, 0.0f);
+}
+
+// Zero destination capacity consumes the chunk (phase rebases, history
+// updates) but writes nothing - the documented "consumes ALL src_frames"
+// contract holds even when the caller has nowhere to put output.
+TEST(LinearResamplerStream, ZeroCapacityStillConsumesTheChunk) {
+    std::vector<int16_t> src(32);
+    for (uint32_t i = 0; i < 32; ++i)
+        src[i] = static_cast<int16_t>(i * 100);
+    std::vector<int16_t> out(4, -999);
+    StreamResamplerState st;
+
+    EXPECT_EQ(ResampleStreamInterleaved(st, src.data(), 32, out.data(), 0, 1, 1.0f), 0u);
+    EXPECT_EQ(out[0], -999) << "nothing may be written at zero capacity";
+    EXPECT_TRUE(st.has_history);
+    EXPECT_EQ(st.history[0], src[31]);
+}
+
+// Downsampling far enough that the phase lands PAST the next chunk's frame 0
+// (positive phase, the case called out in StreamResamplerState's comment)
+// must still track the ratio across chunks with no drift.
+TEST(LinearResamplerStream, DownsamplingCarriesPositivePhaseAcrossChunks) {
+    const uint32_t total = 4800;
+    std::vector<int16_t> src(total);
+    for (uint32_t i = 0; i < total; ++i)
+        src[i] = static_cast<int16_t>(i % 3000);
+
+    StreamResamplerState st;
+    uint32_t produced = 0;
+    const uint32_t chunk = 100;
+    for (uint32_t off = 0; off < total; off += chunk) {
+        std::vector<int16_t> out(chunk, 0);
+        produced += ResampleStreamInterleaved(
+            st, src.data() + off, chunk, out.data(), chunk, 1, kRatio96kTo48k);
+    }
+
+    // 4800 frames at ratio 0.5 -> 2400 out, give or take start-up.
+    EXPECT_NEAR(produced, total / 2, 2u);
+}
+
 TEST(LinearResamplerStream, ResetClearsContinuity) {
     std::vector<int16_t> src(64, 1234);
     std::vector<int16_t> out(256, 0);

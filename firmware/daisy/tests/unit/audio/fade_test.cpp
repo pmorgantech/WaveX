@@ -2,6 +2,8 @@
 
 #include <gtest/gtest.h>
 
+#include <cmath>
+
 using WaveX::AudioEngine::FadeFrames;
 using WaveX::AudioEngine::FadeGain;
 using WaveX::AudioEngine::kMinFadeFrames;
@@ -47,6 +49,25 @@ TEST(FadeTest, SlopeIsFlatAtBothEnds) {
     EXPECT_LT(slope_at_end, slope_mid / 10.0f);
     // A linear ramp would have every slope equal; this must not.
     EXPECT_GT(slope_mid, slope_at_start * 10.0f);
+}
+
+// The table + lerp must actually BE the raised cosine, not merely something
+// monotonic: compare against the closed form g(t) = (1 - cos(pi*t))/2 across
+// lengths that do and do not divide the 256-step table evenly. The header
+// promises interpolation error near 1e-5; 5e-5 leaves margin without letting
+// a wrong curve (linear, equal-power sine) anywhere near passing - a linear
+// ramp differs from the raised cosine by up to ~0.1 at the quarter points.
+TEST(FadeTest, MatchesClosedFormRaisedCosineEverywhere) {
+    for (uint32_t len: {7u, 100u, 256u, 1000u, 48000u}) {
+        for (uint32_t step = 1, pos = 0; pos <= len; pos += step, step = len / 17 + 1) {
+            const double t = static_cast<double>(pos) / static_cast<double>(len);
+            const float expected =
+                (pos >= len)
+                    ? 1.0f
+                    : static_cast<float>(0.5 * (1.0 - std::cos(3.14159265358979323846 * t)));
+            EXPECT_NEAR(FadeGain(pos, len), expected, 5e-5f) << "pos=" << pos << " len=" << len;
+        }
+    }
 }
 
 TEST(FadeTest, RegionFadeShapesBothEndsAndLeavesTheMiddleAlone) {

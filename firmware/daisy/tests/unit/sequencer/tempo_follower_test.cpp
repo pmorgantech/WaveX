@@ -353,6 +353,33 @@ TEST(TempoFollowerTest, ResumeAfterDropoutDoesNotStepPhase) {
     EXPECT_DOUBLE_EQ(tf.PhaseTicks(), phase_just_before_resume);
 }
 
+// --- Dropped clock bytes ----------------------------------------------------
+
+// A delta spanning N missed clocks arrives with clocks_elapsed = N; the
+// period estimate must divide the gap out instead of reading a sudden
+// half-tempo change (which would either flap to Acquiring or bend the BPM).
+TEST(TempoFollowerTest, DroppedClockCountDividesTheDelta) {
+    TempoFollower tf;
+    tf.Init(48000, 48);
+    tf.SetNominalBpm(120.0f);
+    tf.SetSyncSource(true);
+
+    SimulateClocks(tf, 8, [](int) { return PeriodUsForBpm(120.0); });
+    ASSERT_EQ(tf.State(), SyncLockState::Locked);
+
+    // Three clocks' worth of time, two bytes lost in between.
+    tf.OnMidiClock(static_cast<uint32_t>(3.0 * PeriodUsForBpm(120.0)), 3);
+    EXPECT_EQ(tf.State(), SyncLockState::Locked)
+        << "a correctly-annotated gap must not be treated as an outlier";
+    EXPECT_NEAR(tf.MeasuredBpm(), 120.0f, 0.5f);
+
+    // clocks_elapsed = 0 is nonsense from the wire; it must be treated as 1,
+    // not divide by zero.
+    tf.OnMidiClock(static_cast<uint32_t>(PeriodUsForBpm(120.0)), 0);
+    EXPECT_EQ(tf.State(), SyncLockState::Locked);
+    EXPECT_NEAR(tf.MeasuredBpm(), 120.0f, 0.5f);
+}
+
 // --- Outlier rejection / hard re-acquire -----------------------------------
 
 TEST(TempoFollowerTest, SingleGlitchDeltaDoesNotDeragLock) {

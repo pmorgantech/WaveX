@@ -86,8 +86,35 @@ class MockFatFS {
     void Reset() {
         directories_.clear();
         current_dir_handles_.clear();
+        dir_positions_.clear();
         next_handle_ = 1;
+        opendir_result_ = FR_OK;
+        readdir_successes_before_failure_ = -1;
+        readdir_fail_result_ = FR_DISK_ERR;
     }
+
+    // --- Failure injection -------------------------------------------------
+    // f_opendir(): force the next (and every subsequent) open to fail with
+    // `r` until Reset(). Models a dead/removed card rather than a missing
+    // directory (which AddDirectory-less paths already cover).
+    void SetOpendirResult(FRESULT r) { opendir_result_ = r; }
+    FRESULT OpendirResult() const { return opendir_result_; }
+
+    // f_readdir(): the next `successes` calls behave normally, then every
+    // call fails with `r` until Reset(). Models an SD error mid-listing.
+    void FailReaddirAfter(int successes, FRESULT r = FR_DISK_ERR) {
+        readdir_successes_before_failure_ = successes;
+        readdir_fail_result_ = r;
+    }
+    bool ConsumeReaddirFailure() {
+        if (readdir_successes_before_failure_ < 0)
+            return false;  // injection not armed
+        if (readdir_successes_before_failure_ == 0)
+            return true;
+        --readdir_successes_before_failure_;
+        return false;
+    }
+    FRESULT ReaddirFailResult() const { return readdir_fail_result_; }
 
     // Add a directory with entries
     void AddDirectory(const std::string& path, const std::vector<MockFileEntry>& entries) {
@@ -157,6 +184,11 @@ class MockFatFS {
     std::map<void*, std::string> current_dir_handles_;
     std::map<void*, size_t> dir_positions_;
     uintptr_t next_handle_ = 1;
+
+    // Failure injection state (see accessors above).
+    FRESULT opendir_result_ = FR_OK;
+    int readdir_successes_before_failure_ = -1;
+    FRESULT readdir_fail_result_ = FR_DISK_ERR;
 };
 
 // Mock FatFS functions

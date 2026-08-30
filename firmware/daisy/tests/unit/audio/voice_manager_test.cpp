@@ -286,6 +286,98 @@ TEST(VoiceManagerTest, RenderSumsMultipleConcurrentVoices) {
     EXPECT_NEAR(out_r[0], 0.5f, 1e-3f);
 }
 
+// At unity rate every output sample must be the corresponding source sample
+// exactly (scaled by gain/pan) on BOTH channels - a constant-filled source
+// cannot catch a phase/indexing bug, a ramp catches an off-by-one anywhere
+// in the chain.
+TEST(VoiceManagerTest, RampSamplePlaysBackSampleForSampleOnBothChannels) {
+    VoiceManager vm;
+    vm.Init(48000);
+    auto sample = MakeRampSample(64, 0, 250);  // sample[i] = i*250
+    vm.Trigger(FlatParams(sample.data(), sample.size(), 60, 127, 0.5f));
+
+    float out_l[16] = {0};
+    float out_r[16] = {0};
+    vm.Render(out_l, out_r, 16);
+
+    for (int i = 0; i < 16; ++i) {
+        const float expected = (static_cast<float>(i) * 250.0f / 32768.0f) * 0.5f;
+        EXPECT_NEAR(out_l[i], expected, 1e-4f) << "L sample " << i;
+        EXPECT_NEAR(out_r[i], expected, 1e-4f) << "R sample " << i;
+    }
+}
+
+TEST(VoiceManagerTest, ZeroBlockSizeRenderIsANoOp) {
+    VoiceManager vm;
+    vm.Init(48000);
+    auto sample = MakeRampSample(100, 0, 100);
+    vm.Trigger(FlatParams(sample.data(), sample.size(), 60, 127, 0.5f));
+
+    float sentinel_l[2] = {123.0f, 456.0f};
+    float sentinel_r[2] = {789.0f, -12.0f};
+    vm.Render(sentinel_l, sentinel_r, 0);
+
+    // Nothing written, nothing advanced, voice untouched.
+    EXPECT_FLOAT_EQ(sentinel_l[0], 123.0f);
+    EXPECT_FLOAT_EQ(sentinel_r[0], 789.0f);
+    EXPECT_EQ(vm.ActiveVoiceCount(), 1);
+    EXPECT_FLOAT_EQ(vm.GetVoice(0).phase, 0.0f);
+}
+
+// Releasing a note twice, with two voices holding that note, must release
+// them newest-first, one per call - and a third call is a no-op, not a
+// crash or a re-release.
+TEST(VoiceManagerTest, RepeatedReleaseTakesVoicesNewestFirst) {
+    VoiceManager vm;
+    vm.Init(48000);
+    auto sample = MakeRampSample(48000, 1000, 0);
+    auto p = FlatParams(sample.data(), sample.size(), 60, 100, 0.5f);
+    p.release_s = 2.0f;  // long tails so released voices stay allocated
+    vm.Trigger(p);       // voice 0, age 0
+    vm.Trigger(p);       // voice 1, age 1 (same note)
+    ASSERT_EQ(vm.HeldVoiceCount(), 2);
+
+    vm.Release(60);
+    EXPECT_EQ(vm.HeldVoiceCount(), 1);
+    EXPECT_TRUE(vm.GetVoice(1).envelope.IsReleasing()) << "newest voice releases first";
+    EXPECT_FALSE(vm.GetVoice(0).envelope.IsReleasing());
+
+    vm.Release(60);
+    EXPECT_EQ(vm.HeldVoiceCount(), 0);
+    EXPECT_TRUE(vm.GetVoice(0).envelope.IsReleasing());
+
+    vm.Release(60);  // nothing left to release - must be a harmless no-op
+    EXPECT_EQ(vm.ActiveVoiceCount(), 2);
+}
+
+// With several voices in their release tails, stealing takes the OLDEST
+// releasing one, not just any releasing one.
+TEST(VoiceManagerTest, StealingTakesOldestReleasingVoice) {
+    VoiceManager vm;
+    vm.Init(48000);
+    auto sample = MakeRampSample(48000, 1000, 0);
+    for (uint8_t note = 0; note < kNumVoices; ++note) {
+        auto p = FlatParams(sample.data(), sample.size(), note, 100, 0.5f);
+        p.release_s = 5.0f;
+        vm.Trigger(p);
+    }
+    // Note 5 (age 5) and note 3 (age 3) both releasing; 3 is older.
+    vm.Release(5);
+    vm.Release(3);
+
+    vm.Trigger(FlatParams(sample.data(), sample.size(), /*note=*/99, 100, 0.5f));
+
+    bool found_3 = false, found_5 = false;
+    for (uint8_t i = 0; i < kNumVoices; ++i) {
+        if (vm.GetVoice(i).note == 3)
+            found_3 = true;
+        if (vm.GetVoice(i).note == 5)
+            found_5 = true;
+    }
+    EXPECT_FALSE(found_3) << "the OLDEST releasing voice should be stolen";
+    EXPECT_TRUE(found_5) << "the newer releasing voice should survive";
+}
+
 // --- Phase 1 item 4: pitch, loop points, filter, ADSR ------------------
 
 TEST(VoiceManagerTest, PitchRatioFromNoteRelativeToRootNote) {
@@ -388,6 +480,81 @@ TEST(VoiceManagerTest, LoopingVoiceWrapsInsteadOfStopping) {
     // natural sample length - it wraps instead of releasing/stopping.
     EXPECT_EQ(vm.ActiveVoiceCount(), 1);
     EXPECT_EQ(vm.GetVoice(0).state, VoiceState::Playing);
+}
+
+// The loop must wrap back to loop_start and keep replaying the loop window's
+// CONTENT - deliberately not pinning the exact wrap boundary sample (whether
+// the final loop frame renders before the wrap is a separate question; this
+// asserts the audible property either way: values stay inside the window and
+// the window's start keeps coming back around).
+TEST(VoiceManagerTest, LoopWrapsBackToLoopStartContent) {
+    VoiceManager vm;
+    vm.Init(48000);
+    auto sample = MakeRampSample(16, 0, 1000);  // sample[i] = i*1000
+
+    VoiceTriggerParams p = FlatParams(sample.data(), sample.size(), 60, 127, 0.5f);
+    p.start_frame = 2;
+    p.loop = true;
+    p.loop_start = 2;
+    p.loop_end = 8;  // window holds values 2000..7000
+    vm.Trigger(p);
+
+    float out_l[30] = {0};
+    float out_r[30] = {0};
+    vm.Render(out_l, out_r, 30);
+    ASSERT_EQ(vm.ActiveVoiceCount(), 1);
+
+    const float lo = (2000.0f / 32768.0f) * 0.5f;
+    const float hi = (7000.0f / 32768.0f) * 0.5f;
+    int returns_to_start = 0;
+    for (int i = 0; i < 30; ++i) {
+        EXPECT_GE(out_l[i], lo - 1e-4f) << "sample " << i << " read below the loop window";
+        EXPECT_LE(out_l[i], hi + 1e-4f) << "sample " << i << " read past the loop window";
+        if (std::fabs(out_l[i] - lo) < 1e-4f)
+            ++returns_to_start;
+    }
+    // 30 samples over a <=6-frame window: the start value must recur several
+    // times, proving the wrap targets loop_start rather than 0 or end_frame.
+    EXPECT_GE(returns_to_start, 3);
+}
+
+// A degenerate loop region (loop_end <= loop_start + 1) has no playable
+// length. Trigger() must disable the loop so the voice plays through and
+// frees itself, instead of freezing on one sample forever.
+TEST(VoiceManagerTest, DegenerateLoopRegionFallsBackToOneShot) {
+    VoiceManager vm;
+    vm.Init(48000);
+    auto sample = MakeRampSample(16, 0, 100);
+
+    VoiceTriggerParams p = FlatParams(sample.data(), sample.size(), 60, 100, 0.5f);
+    p.loop = true;
+    p.loop_start = 5;
+    p.loop_end = 6;  // one frame: unplayable as a loop
+    vm.Trigger(p);
+    EXPECT_FALSE(vm.GetVoice(0).loop) << "degenerate loop must be disabled at Trigger()";
+
+    float out_l[64] = {0};
+    float out_r[64] = {0};
+    vm.Render(out_l, out_r, 64);
+    EXPECT_EQ(vm.ActiveVoiceCount(), 0) << "voice should have played out, not frozen";
+}
+
+// start_frame at or past the end of the sample cannot be honoured; Trigger()
+// falls back to 0 rather than starting the read out of bounds.
+TEST(VoiceManagerTest, OutOfRangeStartFrameFallsBackToZero) {
+    VoiceManager vm;
+    vm.Init(48000);
+    auto sample = MakeRampSample(10, 0, 100);
+
+    VoiceTriggerParams p = FlatParams(sample.data(), sample.size(), 60, 127, 0.5f);
+    p.start_frame = 10;  // == sample_frames, one past the last frame
+    vm.Trigger(p);
+
+    EXPECT_FLOAT_EQ(vm.GetVoice(0).phase, 0.0f);
+
+    float out_l[1] = {0}, out_r[1] = {0};
+    vm.Render(out_l, out_r, 1);
+    EXPECT_NEAR(out_l[0], 0.0f, 1e-4f) << "first frame should be sample[0]";
 }
 
 TEST(VoiceManagerTest, StartFrameOffsetsInitialPlaybackPosition) {
