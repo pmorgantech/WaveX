@@ -9,7 +9,9 @@
  * It serves as the single source of truth for all hardware pin configurations.
  *
  * ⚠️  IMPORTANT: Edit pin assignments ONLY in this file
- * ✅  VERIFIED: All pin assignments verified for ESP32-S3-DevKitC-1 and Daisy Seed
+ * ⚠️  UNVERIFIED: the ESP32 assignments below were written for an
+ *     ESP32-S3-DevKitC-1 and have not been re-checked against the
+ *     ESP32-P4 board this firmware actually targets.
  * 🔧  UPDATED: Complete SPI inter-MCU link configuration
  */
 
@@ -18,7 +20,7 @@ extern "C" {
 #endif
 
 // =============================================================================
-// ESP32-S3 Frontend Pin Assignments
+// ESP32-P4 Frontend Pin Assignments
 // =============================================================================
 
 #ifdef ESP_PLATFORM
@@ -177,7 +179,7 @@ extern "C" {
 
 // ESP32 SPI configuration (slave mode)
 #define WAVEX_ESP_SPI_HOST SPI3_HOST  // ESP32-P4 uses SPI3_HOST for slave mode
-#define WAVEX_ESP_SPI_CLK_HZ 4000000  // 10 MHz (master controls)
+#define WAVEX_ESP_SPI_CLK_HZ 4000000  // 4 MHz (master controls)
 #define WAVEX_ESP_SPI_QUEUE_SIZE 8
 #define WAVEX_ESP_SPI_DMA_CH \
     SPI_DMA_CH_AUTO  // Reverting: P4 slave only supports auto-alloc for DMA
@@ -195,8 +197,10 @@ extern "C" {
 // =============================================================================
 
 #ifdef ESP_PLATFORM
-// Verify ESP32 pins are within valid range (0-48)
-#define WAVEX_VALIDATE_ESP_PIN(pin) ((pin) >= 0 && (pin) <= 48)
+// Verify ESP32 pins are within valid range. The ESP32-P4 has GPIO0-GPIO54;
+// the old bound of 48 was an ESP32-S3 number and would have rejected this
+// file's own SPI pins (49-51) had anything used the macro.
+#define WAVEX_VALIDATE_ESP_PIN(pin) ((pin) >= 0 && (pin) <= 54)
 #define WAVEX_ASSERT_ESP_PIN(pin) \
     static_assert(WAVEX_VALIDATE_ESP_PIN(pin), "Invalid ESP32 pin number")
 #endif

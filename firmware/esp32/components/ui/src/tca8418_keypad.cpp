@@ -132,7 +132,7 @@ esp_err_t tca8418_keypad_start(int int_gpio, uint8_t i2c_addr) {
         ESP_LOGE(TAG, "Failed to create TCA8418 instance");
         return ESP_FAIL;
     }
-    if (!s_dev->hw_init(8, 10)) {
+    if (!s_dev->hw_init(WAVEX_TCA8418_ROWS, WAVEX_TCA8418_COLUMNS)) {
         ESP_LOGE(TAG, "TCA8418 hardware initialization failed");
         delete s_dev;
         s_dev = nullptr;
@@ -160,8 +160,13 @@ esp_err_t tca8418_keypad_start(int int_gpio, uint8_t i2c_addr) {
 
     // Start task
     s_running = true;
-    BaseType_t ok =
-        xTaskCreatePinnedToCore(keypad_task, "tca8418_task", 4096, nullptr, 5, &s_task, 1);
+    BaseType_t ok = xTaskCreatePinnedToCore(keypad_task,
+                                            "tca8418_task",
+                                            WAVEX_TCA8418_TASK_STACK_SIZE,
+                                            nullptr,
+                                            WAVEX_TCA8418_TASK_PRIORITY,
+                                            &s_task,
+                                            1);
     if (ok != pdPASS) {
         ESP_LOGE(TAG, "Failed to create keypad task");
         s_running = false;

@@ -97,10 +97,10 @@ esp_err_t UITask::start() {
     // inter_mcu_get_meter_data(); this class's parallel meter pipeline was
     // never reachable and is gone.
 
-    // Start TCA8418 keypad on BSP I2C; INT on GPIO31 per pin_config
+    // Start TCA8418 keypad on the BSP I2C bus; pin and address from config.
     {
-        const int tca_int_gpio = WAVEX_ESP_BTN_INT;  // GPIO31
-        const uint8_t tca_addr = 0x34;
+        const int tca_int_gpio = WAVEX_ESP_BTN_INT;
+        const uint8_t tca_addr = WAVEX_TCA8418_I2C_ADDR;
         esp_err_t kret = wavex_ui::tca8418_keypad_start(tca_int_gpio, tca_addr);
         if (kret != ESP_OK) {
             ESP_LOGE(TAG, "Failed to start TCA8418 keypad: %s", esp_err_to_name(kret));

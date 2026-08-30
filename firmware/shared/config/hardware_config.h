@@ -648,6 +648,13 @@
 // TCA8418 Button Matrix Configuration
 #if WAVEX_ESP_BUTTON_MATRIX_ENABLED
 // I2C configuration
+// I2C address of the keypad controller. The bus itself belongs to the BSP
+// (shared with the touch controller), which is why the port/clock macros below
+// are unused - they describe a bus this firmware does not open itself.
+#ifndef WAVEX_TCA8418_I2C_ADDR
+#define WAVEX_TCA8418_I2C_ADDR 0x34
+#endif
+
 #ifndef WAVEX_TCA8418_I2C_PORT
 #define WAVEX_TCA8418_I2C_PORT I2C_NUM_0
 #endif
@@ -657,21 +664,25 @@
 #endif
 
 // Button matrix dimensions
+// Matrix geometry passed to the controller. These describe what the firmware
+// currently configures, not a verified reading of the schematic: the columns
+// value in particular is unconfirmed (see roadmap § Outstanding hardware
+// verification). Change them here, not at the call site.
 #ifndef WAVEX_TCA8418_ROWS
 #define WAVEX_TCA8418_ROWS 8
 #endif
 
 #ifndef WAVEX_TCA8418_COLUMNS
-#define WAVEX_TCA8418_COLUMNS 8
+#define WAVEX_TCA8418_COLUMNS 10
 #endif
 
 // Task configuration
 #ifndef WAVEX_TCA8418_TASK_PRIORITY
-#define WAVEX_TCA8418_TASK_PRIORITY 4
+#define WAVEX_TCA8418_TASK_PRIORITY 5
 #endif
 
 #ifndef WAVEX_TCA8418_TASK_STACK_SIZE
-#define WAVEX_TCA8418_TASK_STACK_SIZE 2048
+#define WAVEX_TCA8418_TASK_STACK_SIZE 4096
 #endif
 #endif
 
@@ -679,10 +690,16 @@
 // DEPENDENCY CHECKS
 // ============================================================================
 
-// Ensure inter-MCU link is enabled if any component that depends on it is enabled
-#if (WAVEX_AUDIO_ENGINE_ENABLED || WAVEX_DAC_CV_OUTPUTS_ENABLED || WAVEX_ENCODER_PCNT_ENABLED || \
-     WAVEX_PCNT1_ENABLED || WAVEX_4067_MUX_ENABLED || WAVEX_TCA8418_BUTTON_MATRIX_ENABLED ||     \
-     WAVEX_LCD_DISPLAY_ENABLED || WAVEX_USB_MIDI_ENABLED) &&                                     \
+// Ensure inter-MCU link is enabled if any component that depends on it is enabled.
+//
+// Five of the names this used to test did not exist - WAVEX_ENCODER_PCNT_ENABLED,
+// WAVEX_PCNT1_ENABLED, WAVEX_4067_MUX_ENABLED, WAVEX_TCA8418_BUTTON_MATRIX_ENABLED
+// and WAVEX_USB_MIDI_ENABLED - and an undefined identifier in #if expands to 0,
+// so the guard silently covered only the audio engine and the LCD. The real
+// names all carry the WAVEX_ESP_ prefix.
+#if (WAVEX_AUDIO_ENGINE_ENABLED || WAVEX_ESP_ENCODER_PCNT_ENABLED || WAVEX_ESP_PCNT1_ENABLED || \
+     WAVEX_ESP_MUX_ENABLED || WAVEX_ESP_BUTTON_MATRIX_ENABLED || WAVEX_LCD_DISPLAY_ENABLED ||   \
+     WAVEX_ESP_USB_MIDI_ENABLED) &&                                                             \
     !WAVEX_INTER_MCU_LINK_ENABLED
 #error "Inter-MCU link must be enabled when using components that depend on it"
 #endif

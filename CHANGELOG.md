@@ -11,6 +11,33 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Fixed — Configuration headers now describe the hardware the firmware runs on
+
+Found by the 2026-08-29 ESP32-P4 review (item E-CFG1). Everything decidable from
+source is fixed; the parts that need a schematic are recorded as open rather
+than guessed at.
+
+- `hardware_config.h`'s inter-MCU dependency guard tested five macro names that
+  do not exist. An undefined identifier in `#if` evaluates to 0, so a guard that
+  looked like it covered eight subsystems actually covered two. It now uses the
+  real `WAVEX_ESP_*` names.
+- `pin_config.h` announced the assignments as "VERIFIED for ESP32-S3-DevKitC-1"
+  and headed the block "ESP32-S3 Frontend" — on an ESP32-P4 target. It now names
+  the right chip and states plainly that the pins are unverified against this
+  board, which is the honest position.
+- The pin-range validator capped at 48, an S3 number, and would have rejected
+  this same file's SPI pins 49-51. Raised to the P4's GPIO54.
+- The five `WAVEX_TCA8418_*` macros had no users while the keypad hardcoded its
+  own values. The macros were set to what the firmware actually runs and the
+  call sites now use them — **behaviour is unchanged**; adopting the macros'
+  previous numbers would have silently altered the matrix geometry, task
+  priority and stack size. The I2C address moved into a macro too.
+- Pin numbers written into comments (two of them wrong) are gone. AGENTS.md
+  forbids this precisely because the copies drift.
+
+Still open and flagged in the review: the PCNT1/SPI2 pin collision on 46/47, and
+whether the keypad matrix really has 10 columns. Both need the schematic.
+
 ### Fixed — Every task teardown path now signals and joins instead of killing
 
 Found by the 2026-08-29 ESP32-P4 review (item E-STOP1). All six `stop()` APIs

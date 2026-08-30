@@ -7,7 +7,7 @@
 
 Findings carry stable IDs (`E-…`) so implementation can be tracked in this file. **Completed items leave this document** — detail goes to `CHANGELOG.md`, matching the roadmap's convention — so what remains here is always the open list. A partially-addressed item keeps its row, marked `[~]`, and says what is left.
 
-**Already remediated** (see `CHANGELOG.md` § Unreleased): E-LVGL1/2/3, the LVGL thread-safety cluster (`21304be`, `222b2b4`); E-LIFE1/2/3, the callback-lifetime cluster (`41f4cdd`); E-KEY1/2, the keypad decode and INT busy-spin (`cdab47d`); E-INIT1 and E-BLD1/2 (`f6b7394`); E-TICK1/E-TOUCH1/E-BRWS1/E-MENU1, the UI correctness batch (`edd9981`); E-TX1, the outbound-frame latency (`6a0912c`); E-METER1 and E-DIAG1, the two periodic-work wastes (`b64ae32`); E-MIDI1, E-KBD1 and the defect half of E-PROTO1 (`1d16237`); E-SYNC1 and E-STAT1 (`4b63c37`); E-ODR1 (`4e535c2`); E-INQ1 and E-STD1 (`0be797a`); E-STOP1, E-PROTO1, E-UIM1 and E-VER1. All fixed 2026-08-29. **E-SEQ1 was withdrawn as a false positive** - see below. **E-KEY1/2 and E-ENC1 change hardware behaviour and are the ones most needing a bench pass** — they were diagnosed entirely by reading code and the controller datasheet.
+**Already remediated** (see `CHANGELOG.md` § Unreleased): E-LVGL1/2/3, the LVGL thread-safety cluster (`21304be`, `222b2b4`); E-LIFE1/2/3, the callback-lifetime cluster (`41f4cdd`); E-KEY1/2, the keypad decode and INT busy-spin (`cdab47d`); E-INIT1 and E-BLD1/2 (`f6b7394`); E-TICK1/E-TOUCH1/E-BRWS1/E-MENU1, the UI correctness batch (`edd9981`); E-TX1, the outbound-frame latency (`6a0912c`); E-METER1 and E-DIAG1, the two periodic-work wastes (`b64ae32`); E-MIDI1, E-KBD1 and the defect half of E-PROTO1 (`1d16237`); E-SYNC1 and E-STAT1 (`4b63c37`); E-ODR1 (`4e535c2`); E-INQ1 and E-STD1 (`0be797a`); E-STOP1, E-PROTO1, E-UIM1 and E-VER1 (`043d0d1`); E-CFG1. All fixed 2026-08-29. **E-SEQ1 was withdrawn as a false positive** - see below. **E-KEY1/2 and E-ENC1 change hardware behaviour and are the ones most needing a bench pass** — they were diagnosed entirely by reading code and the controller datasheet.
 
 ---
 
@@ -32,7 +32,6 @@ Two systemic build findings rounded it out — ~~inert `-Os`/LTO options added a
 | ID | Sev | Area | Summary |
 |---|---|---|---|
 | [~] E-ENC1 | Major | input | Encoder SMP race fixed 2026-08-29 (atomics replace interrupt masking); the read-then-clear window is narrowed from every movement poll to ~1 per 8000 counts, not closed — closing it needs the driver's watch-point ISR and bench time |
-| [ ] E-CFG1 | Minor | config | Hardware-truth pass: pin_config contradictions, unused TCA8418 macros, broken guard |
 | [~] E-LOG1 | Minor | all | Hot-path log storms on the UART task — per-entry browse INFO and the statistics mutex-trace lines removed 2026-08-29 (they became a UI stall once the listener mutex spanned the callback); hex dumps and remaining per-packet INFO still open |
 | [ ] E-SDK1 | Minor | build | Watchdog/assert posture: INT WDT 5 s, task WDT off, assertions compiled out |
 | [~] E-DEAD1 | Smell | all | Dead-code batch — `parse_browse_response`, the `shared_packet_handler` fossil and the demo page trio deleted 2026-08-29; the caller-less `inter_mcu_*`/`pcnt_*` API surface and `window_manager.cpp` still open |
@@ -80,15 +79,22 @@ The secondary claim — a stale pre-wrap frame arriving *after* the wrap is acce
 
 **Do not "fix" this.** Changing `expected_min` to make the wrap look more symmetrical is what would actually break it.
 
-### E-CFG1 — hardware-truth pass (pin/flag truth violations)
+### E-CFG1 — hardware-truth pass: what was fixed, and what is deliberately still open
 
-All in the two files that are supposed to be the single source of truth, or contradicting them:
+**Fixed 2026-08-29** — everything decidable from source alone:
 
-- `pin_config.h`: header still says "ESP32-S3 … VERIFIED for ESP32-S3-DevKitC-1" (:12,:21); `WAVEX_ESP_PCNT1_A/B` 46/47 (:63-64) collide with `WAVEX_ESP_SPI2_SCLK/MOSI` 46/47 (:94-96) — PCNT1 claims them at boot, detonating at TLC5947/MCP3008 bring-up; the board-availability comment (:28) excludes assigned pins 6/14/15/34/40; `WAVEX_VALIDATE_ESP_PIN` caps at 48 (:199) while pins 49–52 are assigned (and the macro has no users); `WAVEX_ESP_SPI_CLK_HZ 4000000` commented "10 MHz" (:180).
-- `hardware_config.h:683-688`: the dependency guard tests macro names that don't exist (`WAVEX_ENCODER_PCNT_ENABLED`, `WAVEX_TCA8418_BUTTON_MATRIX_ENABLED`, …) — they expand to 0, so the guard protects almost nothing.
-- Keypad ignores its config: `tca8418_keypad.cpp:118` `hw_init(8, 10)` vs `WAVEX_TCA8418_ROWS/COLUMNS` 8×8; :142 hardcodes prio 5/stack 4096 vs the unused `WAVEX_TCA8418_TASK_PRIORITY`/`_STACK_SIZE` macros; `ui_task.cpp:105` hardcodes I2C address `0x34` (no macro exists).
-- Pin values in comments — the thing AGENTS.md forbids — and both wrong: `ui_task.cpp:102-104` says "GPIO31", `tca8418_keypad.h:9` says "e.g., 52"; `pin_config.h:88` says 30. Delete the comments.
-- `uart_debug_config.h:16`: `#define WAVEX_UART_DEBUG_LEVEL 2  // Enable INFO level` — 2 is WARN; INFO logging is actually compiled out (good for the hot path, but the comment lies).
+- `hardware_config.h`'s inter-MCU dependency guard tested five macro names that do not exist (`WAVEX_ENCODER_PCNT_ENABLED`, `WAVEX_PCNT1_ENABLED`, `WAVEX_4067_MUX_ENABLED`, `WAVEX_TCA8418_BUTTON_MATRIX_ENABLED`, `WAVEX_USB_MIDI_ENABLED`). An undefined identifier in `#if` is 0, so the guard silently covered only the audio engine and the LCD. Now uses the real `WAVEX_ESP_*` names, and still passes.
+- `pin_config.h` claimed the assignments were "VERIFIED for ESP32-S3-DevKitC-1" and headed the block "ESP32-S3 Frontend", on a P4 target. Now says P4 and says plainly that the assignments are unverified against this board.
+- `WAVEX_VALIDATE_ESP_PIN` capped at 48 (an S3 number) and would have rejected this file's own SPI pins 49-51. Raised to the P4's GPIO54.
+- `WAVEX_ESP_SPI_CLK_HZ 4000000` was commented "10 MHz".
+- The five `WAVEX_TCA8418_*` macros had no users while the code hardcoded its own values. Rather than adopt the macros' numbers and change behaviour blind, **the macros were set to what the firmware actually runs** (8x10 matrix, priority 5, stack 4096) and the call sites now use them. The I2C address moved out of `ui_task.cpp` into `WAVEX_TCA8418_I2C_ADDR`. Behaviour is unchanged; the header is now the single source it was supposed to be.
+- Pin values in comments — `ui_task.cpp` said "GPIO31", `tca8418_keypad.h` said "e.g., 52", and `pin_config.h` says 30 — removed. AGENTS.md forbids exactly this, and both copies were wrong.
+
+**Still open, and needs a schematic rather than a guess:**
+
+- `WAVEX_ESP_PCNT1_A/B` (46/47) collide with `WAVEX_ESP_SPI2_SCLK/MOSI` (46/47). PCNT1 is enabled and claims those pins at boot; no SPI2 driver exists yet, so nothing fails today, and it detonates at TLC5947/MCP3008 bring-up.
+- The keypad matrix is configured 8x10 because that is what the code has always passed. `WAVEX_TCA8418_COLUMNS` now records it, but nobody has checked how many columns are wired. Getting this wrong silently stops a column being scanned.
+- The board-availability comment (`pin_config.h`) excludes assigned pins 6, 14, 15, 34 and 40.
 
 ### E-LOG1 — hot-path log storms on the UART task
 
