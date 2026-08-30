@@ -382,7 +382,12 @@ class VoiceManager {
                 float frac;
                 if (holding_release_tail) {
                     idx0 = static_cast<uint32_t>(last_valid_phase);
-                    idx1 = idx0 + 1;
+                    // frac is 0, so idx1's sample is never blended in - but the
+                    // read still happens, and idx0 == end_frame - 1 means
+                    // idx0 + 1 == end_frame, one frame past this voice's region
+                    // (the whole allocation when end_frame == sample_frames).
+                    // Mirror the non-tail branch's clamp instead of reading it.
+                    idx1 = idx0;
                     frac = 0.0f;
                 } else {
                     idx0 = static_cast<uint32_t>(v.phase);
