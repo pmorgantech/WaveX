@@ -86,6 +86,12 @@ uint16_t ProtocolHandler::CalculatePacketCrc(const uint8_t* packet_data, size_t 
 
 // New simplified CRC validation
 bool ProtocolHandler::ValidateWaveXPacket(const uint8_t* buffer, size_t buffer_size) {
+    // Guard the subtractions below: a 4-byte header + 2-byte CRC is the
+    // smallest possible frame, and buffer_size < 2 would underflow size_t
+    // (CRC over ~SIZE_MAX bytes, out-of-bounds reads of buffer[size - 2]).
+    if (!buffer || buffer_size < 4 + 2) {
+        return false;
+    }
     uint16_t calculated_crc = CalculateWaveXCrc(buffer, buffer_size - 2);
     uint16_t received_crc = buffer[buffer_size - 2] | (buffer[buffer_size - 1] << 8);
     return calculated_crc == received_crc;

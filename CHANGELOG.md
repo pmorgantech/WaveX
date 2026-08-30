@@ -11,6 +11,14 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Fixed — `ValidateWaveXPacket` size-underflow guard
+
+- A 0- or 1-byte buffer made `buffer_size - 2` underflow `size_t`, turning
+  the CRC pass into a ~`SIZE_MAX`-byte scan with out-of-bounds reads. Latent
+  (all callers passed ≥ 4 bytes), now rejected up front: anything smaller
+  than the 4-byte header + 2-byte CRC minimum frame, or a null buffer,
+  fails validation.
+
 ### Fixed — loop windows dropped their final frame
 
 - `VoiceManager::Render()`'s wrap check fired at `loop_end - 1`, before the

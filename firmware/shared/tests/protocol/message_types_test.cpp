@@ -1487,3 +1487,14 @@ TEST_F(MessageTypeTest, HelperInvalidPacketsFailValidation) {
     EXPECT_FALSE(ProtocolHandler::ValidatePacket(malformed.data(), malformed.size()));
     EXPECT_FALSE(ProtocolTestHelper::ValidatePacketStructure(malformed.data(), malformed.size()));
 }
+
+// A frame smaller than header (4) + CRC (2) must be rejected up front:
+// buffer_size - 2 on a 0- or 1-byte buffer underflows size_t, turning the
+// CRC pass into a ~SIZE_MAX-byte scan with out-of-bounds reads.
+TEST_F(MessageTypeTest, ValidateRejectsBuffersSmallerThanMinimumFrame) {
+    uint8_t tiny[8] = {0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x11, 0x22};
+    EXPECT_FALSE(ProtocolHandler::ValidatePacket(nullptr, sizeof(tiny)));
+    for (size_t size = 0; size < 6; ++size) {
+        EXPECT_FALSE(ProtocolHandler::ValidatePacket(tiny, size)) << "size " << size;
+    }
+}
