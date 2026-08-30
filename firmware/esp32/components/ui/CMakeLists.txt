@@ -23,7 +23,7 @@ set(COMPONENT_SRCS
     "src/ui_status_strip.cpp"
     "src/ui_sample_browser.cpp"
     "src/ui_sample_memory_page.cpp"
-    "pages/ui_keyboard_page.cpp"
+    "pages/ui_play_page.cpp"
     "pages/ui_sample_manager_page.cpp"
     "pages/ui_voice_page.cpp"
     "pages/ui_sample_record_page.cpp"

@@ -11,6 +11,28 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Changed — Play page: Pads and Keys, replacing the Keyboard page
+
+- The main menu's `Keyboard` becomes **Play**, a tabbed group with two
+  surfaces: **Pads** (the existing 4×4 chromatic grid) and **Keys** (a new
+  two-octave piano — 15 white keys with 10 black keys overlaid at the correct
+  seams). First step of `docs/ui-information-architecture.md`.
+- **One behaviour, two layouts.** Note handling, latch, panic, transpose and the
+  voice-parameter strip are shared; each surface supplies only its geometry and
+  the semitone each key carries. Keys store an *offset from the root* rather
+  than an absolute note, so a transpose is one root change instead of a rewrite.
+- White keys are created before black ones because LVGL hit-tests later siblings
+  on top — a black key drawn first would be unreachable wherever it overlaps a
+  white one, which is everywhere.
+- The status/parameter strip sits **above** the tabview rather than inside a
+  tab, because parameters are page-scoped: a strip built into one tab body would
+  disappear when the other tab was selected, taking the only readout of what the
+  encoder is editing with it.
+- Switching tabs releases all held notes, for the same reason latched keys are
+  drawn lit: a sustaining note whose key is on the tab you just left is one you
+  cannot see and will not think to stop.
+
+
 ### Changed — Sample load reads sized from the filesystem, not a guess
 
 - The load path staged through a **1 KB** buffer while the streaming path next

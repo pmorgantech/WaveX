@@ -6,7 +6,7 @@
 #include "ui/ui_api.h"
 #include "ui/ui_cv_cal_page.h"
 #include "ui/ui_diagnostics_page.h"
-#include "ui/ui_keyboard_page.h"
+#include "ui/ui_play_page.h"
 #include "ui/ui_sample_browser.h"
 #include "ui/ui_sample_detail.h"
 #include "ui/ui_sample_edit_page.h"
@@ -42,9 +42,9 @@ std::shared_ptr<UIPage> createMainMenu() {
         ESP_LOGI(TAG, "Opening Voice");
         UINavigator::instance().push(createVoicePage()); });
 
-    menu->addItem("Keyboard", []() {
-        ESP_LOGI(TAG, "Opening Keyboard");
-        UINavigator::instance().push(createKeyboardPage()); });
+    menu->addItem("Play", []() {
+        ESP_LOGI(TAG, "Opening Play");
+        UINavigator::instance().push(createPlayPage()); });
 
     menu->addItem("Modulation", []() {
         ESP_LOGI(TAG, "Opening Modulation Menu");
