@@ -145,9 +145,20 @@ enum ControlParameter : uint8_t {
     // problem the sample edit page already had.
     PARAM_PAN = 0x08,    // 0 = hard left, 32768 = centre, 65535 = hard right
     PARAM_PITCH = 0x09,  // semitone offset, 32768 = no transposition
-    PARAM_LFO_RATE = 0x08,
-    PARAM_LFO_DEPTH = 0x09,
-    PARAM_MODULATION_MATRIX = 0x0A
+    PARAM_MODULATION_MATRIX = 0x0A,
+    // 0x0B..0x15 are reserved for the id space in
+    // docs/features/param-locks-and-modulation.md §1 - do not fill them here.
+    //
+    // These two used to be 0x08 and 0x09: the same values as PARAM_PAN and
+    // PARAM_PITCH, in the same enum. Harmless only because nothing has ever
+    // sent or handled them - the Voice page sends PAN/PITCH and the engine's
+    // switch has cases for PAN/PITCH, so the duplicates were dead aliases
+    // rather than a live mis-route. Moved clear of both the live ids and the
+    // reserved block so the collision cannot come back the day an LFO is
+    // wired up. PAN and PITCH keep their wire values, so this is not a
+    // wire-format change.
+    PARAM_LFO_RATE = 0x16,
+    PARAM_LFO_DEPTH = 0x17
 };
 
 // Common string limits (used by multiple messages)
@@ -777,6 +788,40 @@ struct DiagPushMessage {
     uint8_t step;
 
     uint32_t interval_ms;  // the window these deltas cover
+
+    // --- backend runtime -------------------------------------------------
+    //
+    // The backend's SYSTEM heap (newlib, in D1 AXI SRAM), not the SDRAM
+    // sample pools - those are already reported by sample_ram_free /
+    // sample_ram_largest and by SampleMemStatusMessage. The two are separate
+    // allocators with separate failure modes, so one number cannot stand for
+    // both.
+    //
+    // Absolute levels, not deltas: a heap figure only means anything against
+    // its total.
+    //
+    // Appended after interval_ms rather than filed next to the memory fields
+    // on purpose. The two MCUs are flashed independently, and a packet's
+    // payload region is zero-padded up to its size class, so a backend still
+    // running the 94-byte layout parses here with both fields reading zero
+    // instead of shifting every field after the insertion point. That is why
+    // PROTOCOL_VERSION does not move for this change.
+    //
+    // heap_total == 0 therefore means "this backend does not report it",
+    // which is the same thing the frontend must render as unknown - a live
+    // backend can never have a zero-byte heap region.
+    uint32_t heap_total;  // bytes in the linker-reserved heap region
+    uint32_t heap_free;   // headroom: bytes between the allocator's break and
+                          // the top of that region. A block taken and later
+                          // freed still counts as used, because the break
+                          // never retreats - so this under-reports free
+                          // rather than over-reporting it, which is the
+                          // direction a headroom figure should err in.
+
+    // Uptime is deliberately NOT here. HeartbeatMessage::uptime_ms already
+    // carries it, unconditionally and without a diagnostics subscription, and
+    // the frontend already stores it. A second copy on a second cadence would
+    // be two places to read one number and two places for them to disagree.
 
     // Zeroing default constructor only. The named-argument constructor the
     // other wire structs carry exists to force call sites to be re-checked

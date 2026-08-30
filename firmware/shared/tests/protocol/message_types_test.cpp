@@ -304,10 +304,10 @@ TEST_F(MessageTypeTest, StorageStatusMessage) {
 // memcmp-style check would pass even if two same-width neighbours were swapped
 // during a later edit.
 TEST_F(MessageTypeTest, DiagPushMessage) {
-    // 94 bytes of payload + 4 header + 2 CRC = 100, so this must fit the
+    // 102 bytes of payload + 4 header + 2 CRC = 108, so this must fit the
     // 128-byte class. If a field is added that pushes it past 122 the packet
     // silently promotes to 256 and doubles its cost on the link.
-    EXPECT_EQ(sizeof(DiagPushMessage), 94u);
+    EXPECT_EQ(sizeof(DiagPushMessage), 102u);
 
     DiagPushMessage original;
     original.callback_hz_x10 = 10002;
@@ -353,6 +353,8 @@ TEST_F(MessageTypeTest, DiagPushMessage) {
     original.pattern = 3;
     original.step = 9;
     original.interval_ms = 500;
+    original.heap_total = 393216;
+    original.heap_free = 271360;
 
     size_t created =
         ProtocolHandler::CreateDiagPushPacket(buffer_.data(), buffer_.size(), original);
@@ -409,6 +411,99 @@ TEST_F(MessageTypeTest, DiagPushMessage) {
     EXPECT_EQ(parsed.pattern, original.pattern);
     EXPECT_EQ(parsed.step, original.step);
     EXPECT_EQ(parsed.interval_ms, original.interval_ms);
+    EXPECT_EQ(parsed.heap_total, original.heap_total);
+    EXPECT_EQ(parsed.heap_free, original.heap_free);
+}
+
+// heap_total / heap_free were appended to the END of DiagPushMessage rather
+// than filed next to the other memory fields, specifically so that a backend
+// still running the 94-byte layout keeps working against a frontend built
+// with the 102-byte one. The two MCUs are flashed independently, so that is a
+// real configuration, not a hypothetical.
+//
+// This is the test that pins that property: it forges the OLD payload (the
+// first 94 bytes, which is every field up to and including interval_ms),
+// packs it, and parses it as the new struct. Every pre-existing field must
+// survive unshifted and the two new ones must read zero - which is exactly
+// the "not reported" sentinel the Daisy tab renders as unknown. Without this,
+// nothing stops a later edit from inserting a field mid-struct and silently
+// re-interpreting an older backend's sd_bytes as its heap size.
+TEST_F(MessageTypeTest, DiagPushMessageParsesPreHeapLayout) {
+    static const size_t kLegacySize = 94u;
+    ASSERT_EQ(offsetof(DiagPushMessage, heap_total), kLegacySize);
+
+    DiagPushMessage source;
+    source.callback_hz_x10 = 10000;
+    source.ring_low_water = 1420;
+    source.underruns = 3;
+    source.sd_mounted = 1;
+    source.sample_ram_free = 33554432;
+    source.sample_count = 12;
+    source.link_rx_frames = 21;
+    source.measured_bpm_x100 = 12004;
+    source.step = 9;
+    source.interval_ms = 500;
+    // Set on the sender side but deliberately NOT transmitted: they live past
+    // the 94-byte cut, which is the whole point of the exercise.
+    source.heap_total = 393216;
+    source.heap_free = 271360;
+
+    // A pre-stage-8 backend emits only the first 94 bytes; the packet's
+    // payload region is zero-padded out to the size class from there.
+    size_t created = ProtocolHandler::CreatePacket(
+        buffer_.data(), buffer_.size(), MSG_DIAG_PUSH, &source, kLegacySize);
+    ASSERT_GT(created, 0u);
+    // Same size class as the 102-byte message, so this change did not move
+    // the packet's cost on the link either.
+    EXPECT_EQ(created, 128u);
+    ASSERT_TRUE(ProtocolHandler::ValidatePacket(buffer_.data(), created));
+
+    DiagPushMessage parsed;
+    ASSERT_TRUE(
+        ProtocolHandler::ParseMessage(buffer_.data(), MSG_DIAG_PUSH, &parsed, sizeof(parsed)));
+
+    EXPECT_EQ(parsed.callback_hz_x10, source.callback_hz_x10);
+    EXPECT_EQ(parsed.ring_low_water, source.ring_low_water);
+    EXPECT_EQ(parsed.underruns, source.underruns);
+    EXPECT_EQ(parsed.sd_mounted, source.sd_mounted);
+    EXPECT_EQ(parsed.sample_ram_free, source.sample_ram_free);
+    EXPECT_EQ(parsed.sample_count, source.sample_count);
+    EXPECT_EQ(parsed.link_rx_frames, source.link_rx_frames);
+    EXPECT_EQ(parsed.measured_bpm_x100, source.measured_bpm_x100);
+    EXPECT_EQ(parsed.step, source.step);
+    EXPECT_EQ(parsed.interval_ms, source.interval_ms);
+
+    EXPECT_EQ(parsed.heap_total, 0u);
+    EXPECT_EQ(parsed.heap_free, 0u);
+}
+
+// The control-parameter IDs are a single flat enum on the wire, so two labels
+// sharing a value is a routing bug waiting for the second one to be used.
+// PARAM_LFO_RATE/PARAM_LFO_DEPTH used to be 0x08/0x09 - the same values as
+// PARAM_PAN/PARAM_PITCH, which the Voice page sends and the engine handles.
+TEST_F(MessageTypeTest, ControlParameterIdsAreUnique) {
+    const uint8_t ids[] = {PARAM_VOLUME,
+                           PARAM_FILTER_CUTOFF,
+                           PARAM_FILTER_RESONANCE,
+                           PARAM_ENVELOPE_ATTACK,
+                           PARAM_ENVELOPE_DECAY,
+                           PARAM_ENVELOPE_SUSTAIN,
+                           PARAM_ENVELOPE_RELEASE,
+                           PARAM_PAN,
+                           PARAM_PITCH,
+                           PARAM_MODULATION_MATRIX,
+                           PARAM_LFO_RATE,
+                           PARAM_LFO_DEPTH};
+    for (size_t i = 0; i < sizeof(ids) / sizeof(ids[0]); ++i) {
+        for (size_t j = i + 1; j < sizeof(ids) / sizeof(ids[0]); ++j) {
+            EXPECT_NE(ids[i], ids[j])
+                << "control parameter ids " << i << " and " << j << " collide";
+        }
+    }
+    // The two that are already live keep their wire values; renumbering the
+    // dead LFO labels must not have moved them.
+    EXPECT_EQ(PARAM_PAN, 0x08);
+    EXPECT_EQ(PARAM_PITCH, 0x09);
 }
 
 // A default-constructed telemetry message must be all zeros: the collector

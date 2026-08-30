@@ -420,3 +420,35 @@ it properly means either paging the status (a `first_index` field and repeated
 responses) or a dedicated D→E "sample N unloaded" message, which expresses the
 deletion directly instead of inferring it from a set difference. Prefer the
 explicit message: it also covers eviction, which today notifies nobody at all.
+
+---
+
+## `ControlParameter`'s target id space contradicts what is already live
+
+**What:** `docs/features/param-locks-and-modulation.md` §1 specifies the future
+`ControlParameter` layout and assigns `PARAM_PAN = 0x0C` and
+`PARAM_PITCH_OFFSET = 0x0B`. But `PARAM_PAN` is already live at `0x08` and
+`PARAM_PITCH` at `0x09`: the Voice page sends both and the Daisy's parameter
+switch handles both. The design doc's preamble — "0x01..0x0A existing (…
+LFO_RATE, LFO_DEPTH, MODULATION_MATRIX)" — describes the enum as it was before
+the Voice page landed, when `0x08`/`0x09` carried only the LFO labels.
+
+**Found:** stage 8 of `ui-information-architecture.md`, while fixing a genuine
+duplicate-value defect in the same enum (`PARAM_LFO_RATE` and `PARAM_PAN` both
+`0x08`; `PARAM_LFO_DEPTH` and `PARAM_PITCH` both `0x09`). That fix moved the two
+dead LFO ids to `0x16`/`0x17`, deliberately *clear* of the `0x0B`–`0x15` block
+the design doc reserves, so the reserved block is still intact and this item is
+purely about reconciling the doc with the code.
+
+**Why it is not urgent:** nothing is broken. `PAN`/`PITCH` work at their live
+values on both sides, the reserved block is unoccupied, and no p-lock or
+mod-matrix code exists yet to be confused by the discrepancy. The cost of
+getting it wrong is paid only when someone implements §1 and either renumbers
+two live ids (a wire break for no benefit) or leaves `0x0C` documented as `PAN`
+while `0x08` is the one on the wire.
+
+**When to revisit:** when param locks or the modulation matrix are implemented
+(Phase 2 / 2.5). The likely resolution is to leave `PAN`/`PITCH` where they are
+and edit §1 to match, since a target design should not renumber ids that are
+already shipping. Whoever does it should also decide what `0x0B`/`0x0C` become
+once `PAN` no longer needs `0x0C`.

@@ -6,6 +6,27 @@
 #include "spi_protocol/protocol.h"
 #include "storage/sd_sdio.h"
 
+// System-heap bounds, taken from the linker rather than restated as literals:
+// `end` is libDaisy's base-of-heap symbol and __wavex_heap_limit is provided by
+// wavex_memory_sections.ld as the top of the SRAM region the heap grows into.
+// Declared through asm labels because `end` is not a name C++ can reference
+// directly from inside a namespace.
+//
+// _sbrk(0) reports the current break without moving it. It is the allocator's
+// own bookkeeping, not ours, so it cannot drift out of step with what malloc
+// has actually taken.
+//
+// mallinfo() would give a finer answer - it can see blocks freed back into the
+// free list, which the break cannot - but it is not usable on this target. The
+// build links --specs=nano.specs, and newlib-nano's malloc does not provide
+// mallinfo; referencing it drags full newlib's mallocr.o in alongside
+// nano-mallocr.o and the link fails on a duplicate _malloc_r.
+extern "C" {
+extern char g_wavex_heap_start __asm__("end");
+extern char g_wavex_heap_limit __asm__("__wavex_heap_limit");
+void* _sbrk(int incr);
+}
+
 namespace WaveX {
 namespace Comm {
 
@@ -145,6 +166,26 @@ void DiagPushTick(uint32_t now_ms) {
     // UartLinkProcess call is exactly the overhead that flag gates, and the
     // frontend already shows its own view of the link, so the fields are left
     // unfilled rather than paid for on every build.
+
+    // --- backend runtime -----------------------------------------------
+    //
+    // Read here, in the main loop, and never from the audio callback. Two
+    // pointer reads and a subtraction, with no allocation, no I/O and no
+    // lock - but the callback has no business asking the allocator anything,
+    // and putting it here keeps that rule simple rather than conditional.
+    {
+        const char* const brk = static_cast<const char*>(_sbrk(0));
+        m.heap_total = static_cast<uint32_t>(&g_wavex_heap_limit - &g_wavex_heap_start);
+        // Headroom, deliberately: bytes between the break and the ceiling.
+        // This counts a block the allocator has taken and later freed as
+        // still in use, because the break never retreats. That is the
+        // conservative direction - it can under-report free, never
+        // over-report it - and on this firmware the heap is claimed during
+        // init and the audio path is forbidden from allocating at all, so
+        // the difference is small and static.
+        m.heap_free =
+            (brk < &g_wavex_heap_limit) ? static_cast<uint32_t>(&g_wavex_heap_limit - brk) : 0;
+    }
 
     // MIDI and transport counters are left zero: the sequencer and tempo
     // follower are Phase 2 work and none of those counters exist yet. Sending
