@@ -274,6 +274,14 @@ class VoiceManager {
         v.loop_start = params.loop_start < v.end_frame ? params.loop_start : v.start_frame;
         v.loop_end =
             (params.loop_end == 0 || params.loop_end > v.end_frame) ? v.end_frame : params.loop_end;
+        // A degenerate loop region (loop_end <= loop_start + 1) has no playable
+        // length: Render()'s wrap check would reset phase to loop_start every
+        // sample, freezing the voice on one value for as long as it's held.
+        // Trigger() is the single place that establishes region invariants, so
+        // enforce it here rather than trusting every future caller (e.g. the
+        // Phase 2.5 zone-sync path) to pre-validate.
+        if (v.loop && v.loop_end <= v.loop_start + 1)
+            v.loop = false;
         v.phase = static_cast<float>(v.start_frame);
 
         // Fades count in source frames, so they use the sample's own rate -
