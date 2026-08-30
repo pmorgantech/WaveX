@@ -124,6 +124,27 @@ esp_err_t DisplayManager::initLvglDisplay() {
                                  .sw_rotate = true,
                              }};
 
+    // The LVGL task stack is OURS to size, not the library's.
+    //
+    // ESP_LVGL_PORT_INIT_CONFIG() defaults task_stack to 7168 bytes, which is a
+    // generic default for a port, not a considered figure for this UI. Every
+    // page build runs on this task, and a page that creates ~80 objects in one
+    // onEnter (the Play page's 41 keys, each a button plus a label) plus nested
+    // page frames (a tab host entering a child) plus lv_label_set_text_fmt -
+    // which reaches vsnprintf, itself no small stack consumer - overran it. The
+    // symptom was "Guru Meditation Error: Core 0 panic'ed (Stack protection
+    // fault)" in task taskLVGL, with reported bounds of exactly 7024 bytes.
+    //
+    // 16 KB against ~500 KB of internal RAM is cheap insurance for the one task
+    // that runs all UI construction. This is NOT a licence to be careless with
+    // stack in page code; it is an admission that 7 KB was never sized for what
+    // this UI does.
+    //
+    // Measured, not assumed: the high-water mark is logged below so the real
+    // headroom is a number. docs/esp32p4_coding_guide.md asks for exactly that
+    // rather than a guessed size.
+    cfg.lvgl_port_cfg.task_stack = 16384;
+
     display_ = bsp_display_start_with_config(&cfg);
     ESP_RETURN_ON_FALSE(display_, ESP_FAIL, TAG, "Failed to start BSP display");
     log_dma_heap("after display init");

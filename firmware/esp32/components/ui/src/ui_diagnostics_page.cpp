@@ -949,8 +949,15 @@ void UIDiagnosticsPage::refreshSystemTab() {
     snprintf(sub, sizeof(sub), "fragmentation %u%%", (unsigned)mon.frag_pct);
     setCard(sys_cards[4], v, u, sub, (int)mon.used_pct);
 
+    // The LVGL task's stack headroom rides on the TASKS card, because an
+    // overflow there is a panic, not a slow page - it is what "Stack protection
+    // fault in task taskLVGL" was, and the only reason its stack size is now a
+    // deliberate 16 KB rather than the port's 7 KB default. High-water mark is
+    // the LOW-WATER remaining, so smaller is worse.
+    const UBaseType_t lvgl_free = uxTaskGetStackHighWaterMark(nullptr);
     snprintf(v, sizeof(v), "%u", (unsigned)uxTaskGetNumberOfTasks());
-    setCard(sys_cards[5], v, "running", "", -1);
+    snprintf(sub, sizeof(sub), "LVGL stack free %u B", (unsigned)lvgl_free);
+    setCard(sys_cards[5], v, "running", sub, -1);
 
     const uint32_t up_s = (uint32_t)(esp_timer_get_time() / 1000000);
     snprintf(v,

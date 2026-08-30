@@ -460,21 +460,38 @@ alignas(32) static uint8_t s_sample_hdr[64];
 // path next door used 8 KB (SD_BUFFER_SIZE) - loading issued eight times the
 // calls to move the same bytes, for no reason anyone recorded.
 //
-// WHY 64 KB AND NOT MORE. The obvious ceiling would be main-loop blocking: a
+// WHY 32 KB AND NOT MORE. The obvious ceiling would be main-loop blocking: a
 // long f_read starves the WAV ring, which has only ~42 ms of headroom. It does
 // not bind here, because OnSampleLoad calls StopAudition() and CloseWav()
 // before this loop - nothing is streaming during a load, so there is no ring to
-// starve. What does bind is AXI SRAM: this is a permanent static allocation for
-// a transient purpose, and 64 KB is already ~29% of the free region. Beyond one
-// cluster the read is a contiguous multi-block transfer running at the card's
-// streaming rate, so there is no mechanism left for a larger buffer to exploit
-// - going to 128 KB would spend another 64 KB of SRAM to save call overhead
-// that is already amortised.
+// starve. What binds is the SD driver's own sector-count contract (below),
+// and after that AXI SRAM - this is a permanent static allocation for a
+// transient purpose. Beyond one cluster the read is a contiguous multi-block
+// transfer running at the card's streaming rate anyway, so a larger buffer has
+// little left to exploit even where the driver would allow it.
 //
-// 64 KB also happens to be the largest cluster FAT32 uses in practice, so one
-// read covers a whole cluster on any card we will see (exFAT is disabled -
-// _FS_EXFAT 0 - so FAT32 is the only format that mounts).
-static constexpr UINT kSampleLoadChunkMax = 65536;
+// HARD CEILING, learned the hard way: libDaisy's SD_read() (sd_diskio.c)
+// documents "count: Number of sectors to read (1..128)", and FatFS passes the
+// contiguous sector count straight through - ff.c clips it at the CLUSTER
+// boundary, not at 128. A 64 KB request on a 64 KB-cluster card therefore
+// becomes a single 128-sector disk_read, sitting exactly on the documented
+// limit, against a driver this firmware had only ever run at 16 sectors (the
+// 8 KB streaming path). That is what a first attempt at 64 KB did, and it
+// crashed on load.
+//
+// 32 KB keeps the sector count at or below 64 whatever the cluster size:
+// FatFS's clip means cc <= min(request, cluster), so bounding the request
+// bounds cc. That is half the documented ceiling and four times the size this
+// driver is proven at, which is the right side of a limit to sit on.
+//
+// The static_assert below is the point: this is enforced rather than
+// remembered, so raising the constant fails the build instead of the card.
+static constexpr UINT kSdSectorBytes = 512;
+static constexpr UINT kSdMaxSectorsPerRead = 128;  // sd_diskio.c SD_read() contract
+static constexpr UINT kSampleLoadChunkMax = 32768;
+static_assert(kSampleLoadChunkMax / kSdSectorBytes <= kSdMaxSectorsPerRead / 2,
+              "Sample-load reads must stay well inside SD_read()'s 1..128 sector contract; "
+              "FatFS clips only at the cluster boundary, so the request size is the bound.");
 alignas(32) static uint8_t s_sample_io[kSampleLoadChunkMax];
 
 // Picks the read size from the mounted filesystem's actual geometry rather than
@@ -497,7 +514,7 @@ static UINT pick_sample_load_chunk(const FIL& file) {
     if (!file.obj.fs || file.obj.fs->csize == 0) {
         return kSampleLoadChunkMax;
     }
-    const UINT cluster_bytes = static_cast<UINT>(file.obj.fs->csize) * 512u;
+    const UINT cluster_bytes = static_cast<UINT>(file.obj.fs->csize) * kSdSectorBytes;
     if (cluster_bytes == 0 || cluster_bytes > kSampleLoadChunkMax) {
         // One cluster is bigger than the buffer: read the whole buffer, which
         // is still a whole number of sectors.
@@ -2579,7 +2596,7 @@ void OnSampleLoad(const SampleLoadMessage& sl) {
     // Captured before the loop because f_close() below invalidates obj.fs, and
     // the completion log (after the close) reports it.
     const unsigned cluster_bytes =
-        file.obj.fs ? static_cast<unsigned>(file.obj.fs->csize) * 512u : 0u;
+        file.obj.fs ? static_cast<unsigned>(file.obj.fs->csize) * kSdSectorBytes : 0u;
 
     while (remaining > 0) {
         UINT to_read = (remaining > kIoChunk) ? kIoChunk : remaining;

@@ -421,11 +421,26 @@ namespace {
 // drop live entries - the truncation keeps the FIRST 8 loaded, while this cache
 // holds the 8 most recently pushed, so the two sets need not overlap. Prune
 // only when the count proves the list complete.
+// The comparison is done OUTSIDE the critical section and only the resulting
+// flags are written inside it.
+//
+// The first version ran the whole nested scan - up to 8x8 comparisons plus a
+// second pass - under taskENTER_CRITICAL, on the UART RX task. That disables
+// interrupts on the core for the duration, and this runs on the path every
+// sample-status message takes, including the burst a load emits. Long critical
+// sections are exactly what docs/esp32p4_coding_guide.md and the esp32p4 skill
+// warn against ("short portMUX_TYPE critical sections"), and a section held too
+// long is how the interrupt watchdog fires.
+//
+// Reading s_meta[] unlocked is safe here: this task is the only writer, and a
+// concurrent UI-task reader is also only reading. The worst a race can do is
+// mark a slot that changed in between, which the next status corrects.
 void prune_sample_meta_to(const wavex_sample_mem_status_t& status) {
     if (status.sample_count >= WAVEX_SAMPLE_STATUS_MAX_ENTRIES) {
         return;  // possibly truncated: cannot prove absence
     }
-    taskENTER_CRITICAL(&s_meta_lock);
+
+    bool drop[kMetaCacheSize] = {};
     for (size_t i = 0; i < kMetaCacheSize; ++i) {
         if (!s_meta_valid[i]) {
             continue;
@@ -437,10 +452,9 @@ void prune_sample_meta_to(const wavex_sample_mem_status_t& status) {
                 break;
             }
         }
-        if (!live) {
-            s_meta_valid[i] = false;
-        }
+        drop[i] = !live;
     }
+
     // "Newest" may have been what was just unloaded. Re-point it at the
     // backend's last entry (the most recently loaded, since loads append)
     // rather than leaving it naming freed memory - callers pass id 0 to mean
@@ -453,9 +467,18 @@ void prune_sample_meta_to(const wavex_sample_mem_status_t& status) {
             break;
         }
     }
+    const uint16_t new_newest =
+        status.sample_count > 0 ? status.entries[status.sample_count - 1].sample_id : 0;
+
+    // Only the writes are guarded, so the section is a handful of stores.
+    taskENTER_CRITICAL(&s_meta_lock);
+    for (size_t i = 0; i < kMetaCacheSize; ++i) {
+        if (drop[i]) {
+            s_meta_valid[i] = false;
+        }
+    }
     if (!newest_live) {
-        s_meta_newest_id =
-            status.sample_count > 0 ? status.entries[status.sample_count - 1].sample_id : 0;
+        s_meta_newest_id = new_newest;
     }
     taskEXIT_CRITICAL(&s_meta_lock);
 }
