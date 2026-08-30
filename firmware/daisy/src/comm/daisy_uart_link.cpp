@@ -204,6 +204,12 @@ void process_rx_frames() {
         },
         scan);
 
+    // append_rx_data_isr() (UART DMA ISR context) increments
+    // frame_sync_errors directly; a non-atomic += here racing that ISR can
+    // lose its increment (load-modify-store, ISR fires between the load and
+    // the store). Same protection pull_pending_into_frame_buffer() already
+    // uses for the analogous queue_overflows update above.
+    daisy::ScopedIrqBlocker lock;
     s_stats.crc_errors += scan.crc_errors;
     s_stats.frame_sync_errors += scan.sync_errors;
 }
