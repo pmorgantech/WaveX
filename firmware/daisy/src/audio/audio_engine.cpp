@@ -2709,12 +2709,17 @@ void CheckAndLogUnderruns() {
     static uint32_t episodes = 0;
     static uint32_t last_report_ms = 0;
 
-    if (s_underrun_detected && !s_underrun_logged) {
+    // Atomic consume-and-clear: a plain read-then-clear here can race the
+    // callback's plain write to s_underrun_detected (Callback() runs in ISR
+    // context and can preempt this function between the read and the
+    // clear), letting a fresh episode's flag be silently overwritten back to
+    // false before this function ever saw it as true.
+    const bool detected_now = __atomic_exchange_n(&s_underrun_detected, false, __ATOMIC_ACQUIRE);
+    if (detected_now && !s_underrun_logged) {
         episodes++;
         s_underrun_logged = true;
         ++s_diag_underruns;
-        s_underrun_detected = false;  // Reset detection flag
-    } else if (!s_underrun_detected && s_underrun_logged) {
+    } else if (!detected_now && s_underrun_logged) {
         // Reset logging flag when underruns stop
         s_underrun_logged = false;
     }
