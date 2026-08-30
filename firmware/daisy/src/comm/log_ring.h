@@ -40,6 +40,12 @@ void Init(daisy::DaisySeed* hw);
 // Appends bytes. Never blocks. On overflow the OLDEST buffered bytes are
 // dropped so the newest output - normally the interesting part when
 // something is going wrong - survives, and the loss is counted.
+//
+// MAIN-LOOP CONTEXT ONLY. The ring is not SPSC-safe: this function advances
+// the read index as well as the write index on overflow, and Drain() advances
+// it too, so two contexts writing it concurrently corrupts the ring rather
+// than losing a line. Calls from exception context are refused and counted
+// (see IsrWrites()) instead of being allowed to do that damage.
 void Write(const char* data, size_t len);
 
 // printf-style helpers. Formatting happens on the caller's stack; only the
@@ -54,6 +60,11 @@ void Drain();
 // Bytes discarded through overflow since boot. Non-zero means the host was
 // not keeping up, and the log has gaps.
 uint32_t DroppedBytes();
+
+// Write() calls refused because they came from exception context. Must stay
+// zero: a non-zero value means something on an ISR path started logging, and
+// names a real bug at that call site rather than here.
+uint32_t IsrWrites();
 
 }  // namespace Log
 }  // namespace WaveX

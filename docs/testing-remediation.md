@@ -169,18 +169,32 @@ What **is** worth doing, highest ROI first:
    Cortex-M7 ISR preemption** — it proves the algorithm, not the "aligned
    32-bit store is atomic on M7" assumption underneath it.
 
-### Live defects found while surveying, not yet fixed
+### Defects found while surveying — resolved 2026-08-30
 
-- **`s_rb_low_water` (`audio_engine.cpp:289`)** — ISR writes it at 1596-97,
-  the main loop does read-then-reset at 2803-04. This is the *identical*
-  consume/clear race `cf8ee4b` fixed for `s_underrun_detected`, still present.
-- **`g_message_count` (`metrics.h`)** — non-atomic `++` on a header-advertised
-  shared global. The unfixed twin of `e73b4c7`.
-- **`log_ring.cpp` is not an SPSC ring.** `Write()` writes both `s_head` and
-  `s_tail` (the overflow-discard path), and `Drain()` also writes `s_tail`.
-  Two writers to the consumer index, `volatile` with no barriers. Structurally
-  the same defect that got `Utils::CircularBuffer` deleted in `00da1d8`. Needs
-  an audit that no ISR ever logs.
+Three candidates came out of the survey. **Only one was a live race**, which is
+worth recording: reasoning from the `volatile` keyword or from the shape of a
+read-modify-write over-predicts, exactly as the lint discussion above argues.
+
+- **`s_rb_low_water` (`audio_engine.cpp:289`) — live, fixed.** The ISR
+  compare-and-latches it at 1596-97 while the main loop did a plain
+  read-then-reset in `TakeRingLowWater()`. A dip latched in that window was
+  discarded, so the losses fell precisely on the rare dips the diagnostic
+  exists to catch. Now an `__atomic_exchange_n`, matching what `cf8ee4b` did
+  for `s_underrun_detected`. The callback's own RMW needs no atomic: main-loop
+  code cannot run partway through an ISR.
+- **`g_message_count` (`metrics.h`) — not a defect: dead code.** The
+  non-atomic `++` is real, but nothing calls it. `main.cpp`'s include is
+  vestigial and the only caller is its own test file. Recorded in
+  `backlog.md` with a recommendation to delete the module.
+- **`log_ring.cpp` — not currently racing, now enforced.** It genuinely is not
+  an SPSC ring (`Write()` advances `s_tail` on overflow, and so does
+  `Drain()`), but the audit found no ISR logs: the audio callback has none,
+  and on the UART path the ISR half (`append_rx_data_isr`) does not log — the
+  logging is in `process_rx_frames()`, driven from the main loop. Rather than
+  leave that as an unenforced convention across 253 call sites, `Write()` now
+  refuses exception-context calls and counts them (`Log::IsrWrites()`, which
+  must stay zero). Dropping a line is the safe failure; corrupting the ring
+  indices is not.
 
 ### On a `volatile` lint
 

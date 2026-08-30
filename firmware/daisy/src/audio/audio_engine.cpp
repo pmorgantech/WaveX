@@ -2800,8 +2800,16 @@ void MarkPlaybackAborted() {
 }
 
 uint32_t TakeRingLowWater() {
-    const uint32_t low = s_rb_low_water;
-    s_rb_low_water = 0xFFFFFFFFu;
+    // Atomic consume-and-clear, for the same reason CheckAndLogUnderruns()
+    // uses one on s_underrun_detected: Callback() runs in ISR context and can
+    // preempt this function between the read and the reset. A plain
+    // read-then-reset therefore discards any dip the callback latches in that
+    // window - and a rare dip toward empty is precisely what this diagnostic
+    // exists to catch, so the losses are concentrated on the samples that
+    // matter. The callback's own compare-and-latch needs no atomic: main-loop
+    // code cannot run partway through an ISR, so its RMW is already indivisible
+    // with respect to this function.
+    const uint32_t low = __atomic_exchange_n(&s_rb_low_water, 0xFFFFFFFFu, __ATOMIC_ACQUIRE);
     return (low == 0xFFFFFFFFu) ? 0u : low;
 }
 

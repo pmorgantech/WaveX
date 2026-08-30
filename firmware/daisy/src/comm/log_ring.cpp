@@ -20,9 +20,24 @@ constexpr size_t kRingBytes = 8192;
 constexpr size_t kPacketBytes = 64;
 
 char s_ring[kRingBytes];
+// NOT an SPSC ring, and must not be treated as one. Write() advances s_tail
+// as well as s_head (the overflow-discard path below), and Drain() advances
+// s_tail too - so s_tail has two writers and neither index is protected by a
+// barrier. That is safe only while every caller runs in the same context.
+//
+// Audited 2026-08-30: no ISR logs. The audio Callback() has none (AGENTS.md
+// forbids it outright), and on the UART path the ISR half
+// (append_rx_data_isr) does not log - the logging lives in
+// process_rx_frames(), which UartLinkPoll() drives from the main loop.
+// s_isr_writes below keeps that true rather than trusting it to stay true
+// across 253 call sites.
 volatile size_t s_head = 0;  // write position
 volatile size_t s_tail = 0;  // read position
 uint32_t s_dropped = 0;
+// Count of Write() calls made from an exception context. Reported through
+// DroppedBytes()' sibling accessor rather than logged, because logging from
+// the context that must not log is not an option.
+uint32_t s_isr_writes = 0;
 
 daisy::DaisySeed* s_hw = nullptr;
 
@@ -48,6 +63,15 @@ void Init(daisy::DaisySeed* hw) {
 
 void Write(const char* data, size_t len) {
     if (data == nullptr || len == 0) {
+        return;
+    }
+    // Refuse writes from exception context. A non-zero IPSR means an ISR
+    // preempted whatever held the ring's indices mid-update, and continuing
+    // would corrupt s_head/s_tail rather than merely lose a line. Dropping
+    // the line is the safe failure: the counter makes the violation visible
+    // in diagnostics, which is what a silent convention could not do.
+    if (__get_IPSR() != 0u) {
+        ++s_isr_writes;
         return;
     }
     // A single write longer than the ring keeps only its tail; the newest
@@ -140,6 +164,10 @@ void Drain() {
 
 uint32_t DroppedBytes() {
     return s_dropped;
+}
+
+uint32_t IsrWrites() {
+    return s_isr_writes;
 }
 
 }  // namespace Log

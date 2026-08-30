@@ -515,3 +515,34 @@ per-sample path. No fragmentation symptom has been observed or reported.
 to the softkey count) would remove the allocation without changing the
 deferral semantics. Not worth disturbing this code for its own sake; do it if
 something else already touches `ui_softkey_bar.cpp`.
+
+---
+
+## The `metrics` module is dead code with a live test suite
+
+**Found 2026-08-30** while auditing the concurrency defects the August code
+reviews left behind. `src/metrics/` contains exactly one thing: a
+`volatile uint32_t g_message_count` plus `GetMessageCount()` and
+`IncrementMessageCount()`. The increment is a non-atomic read-modify-write on
+a global the header advertises with `extern`, which is the same shape as the
+UART stats counter race fixed in `e73b4c7`.
+
+**It is not a live defect, because nothing calls it.** `main.cpp:12` includes
+`metrics/metrics.h` and never references the namespace; there is no other
+caller in either firmware. The only code exercising it is
+`tests/unit/metrics/metrics_test.cpp`, whose five tests were rewritten on
+2026-08-30 to assert exact counts. So the suite is testing a counter that
+nothing increments.
+
+**Why it is not urgent:** dead code cannot race. The cost is that it reads as
+live infrastructure — a future caller would reasonably assume a
+header-exported counter is safe to increment from wherever they are, and it is
+not.
+
+**Recommended shape:** delete `src/metrics/`, its test file, and the vestigial
+include, matching the precedent of `00da1d8` (dead, non-SPSC `CircularBuffer`)
+and `932c26a` (dead `ui_sample_detail` page). It was left in place here only
+because deleting a recently-improved test file is a scope expansion the
+remediation pass did not ask for. If instead a real message counter is wanted,
+it should be `std::atomic<uint32_t>` with `fetch_add`, and it should have a
+caller in the same commit.
