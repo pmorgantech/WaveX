@@ -17,17 +17,13 @@ ApplicationContext::ApplicationContext()
     : statistics_(std::make_unique<StatisticsManager>()),
       packet_router_(std::make_unique<WaveX::Comm::PacketRouter>()),
       comm_interface_(std::make_unique<WaveX::Comm::CommInterfaceImpl>(*statistics_)) {
-    // Initialize link components with injected dependencies
     initializeLinks();
 }
 
 void ApplicationContext::initializeLinks() {
-    // Inject PacketRouter into SPI link if enabled
 #if WAVEX_SPI_LINK_ENABLED
     ::spi_link_set_packet_router(packet_router_.get());
 #endif
-
-    // Inject PacketRouter into UART link
     ::uart_link_set_packet_router(packet_router_.get());
 }
 

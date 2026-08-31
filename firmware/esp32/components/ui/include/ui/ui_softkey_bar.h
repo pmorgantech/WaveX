@@ -9,40 +9,16 @@
 
 namespace wavex_ui {
 
-/**
- * @brief Softkey bar widget for bottom navigation
- *
- * Creates 6 buttons at the bottom of the screen with dynamic labels
- * and touch/encoder support.
- */
+/// The 6 buttons fixed at the bottom of the screen, with dynamic labels and
+/// touch/encoder support.
 class SoftkeyBar {
    public:
-    /**
-     * @brief Create the softkey bar
-     * @param parent LVGL parent object
-     */
     void create(lv_obj_t* parent);
-
-    /**
-     * @brief Update softkey labels and callbacks
-     * @param keys Array of 6 softkey definitions
-     */
     void setSoftkeys(const std::array<Softkey, NUM_SOFTKEYS>& keys, bool shifted = false);
-
-    /**
-     * @brief Get the container object
-     */
     lv_obj_t* container() const { return container_; }
 
-    /**
-     * @brief Move focus to next/previous softkey
-     * @param delta Direction (+1 for next, -1 for previous)
-     */
+    /// delta: +1 for next, -1 for previous.
     void focusNext(int delta);
-
-    /**
-     * @brief Press the currently focused softkey
-     */
     void pressFocused();
 
    private:
@@ -52,7 +28,7 @@ class SoftkeyBar {
     std::array<lv_obj_t*, NUM_SOFTKEYS> btns_{};
     std::array<lv_obj_t*, NUM_SOFTKEYS> labels_{};
     std::array<Softkey, NUM_SOFTKEYS> keys_{};
-    int focused_ = 0;  ///< Currently focused softkey index
+    int focused_ = 0;
 };
 
 }  // namespace wavex_ui

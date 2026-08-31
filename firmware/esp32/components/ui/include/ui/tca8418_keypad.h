@@ -12,7 +12,6 @@ namespace wavex_ui {
 // event FIFO and does not read the INT line - see the implementation for why.
 esp_err_t tca8418_keypad_start(int int_gpio, uint8_t i2c_addr);
 
-// Stop keypad processing and free resources
 esp_err_t tca8418_keypad_stop();
 
 }  // namespace wavex_ui

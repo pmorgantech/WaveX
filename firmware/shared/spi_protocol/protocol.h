@@ -207,7 +207,7 @@ inline void ZeroWire(void* dest, size_t size) {
 struct ControlChangeMessage {
     uint8_t parameter;  // ControlParameter
     uint8_t channel;    // 0-15
-    uint16_t value;     // 0-65535
+    uint16_t value;
 
     ControlChangeMessage() : parameter(0), channel(0), value(0) {}
     ControlChangeMessage(uint8_t parameter_, uint8_t channel_, uint16_t value_)
@@ -564,8 +564,9 @@ struct SampleMetaReqMessage {
 //
 // All positions are FRAMES, absolute within the file, at the file's own rate.
 // The backend clamps and is the authority: it applies start <= loop_start <
-// loop_end <= end and reports nothing back, so the frontend must not assume
-// its values were taken verbatim.
+// loop_end <= end, and its reply is a full SampleMetadata (MSG_SAMPLE_META)
+// carrying what it actually applied - the frontend must not assume its
+// values were taken verbatim.
 //
 // Sentinels rather than a separate "valid" flag: end_frame 0 means "to the
 // end of the file" and loop_end 0 means "to end_frame". A frontend that does
@@ -573,10 +574,7 @@ struct SampleMetaReqMessage {
 struct SampleEditMessage {
     uint8_t slot;
     uint8_t loop_enabled;
-    int16_t gain_db_x10;
-    // NOTE: this is the COMMAND. The backend's reply is a full SampleMetadata
-    // (MSG_SAMPLE_META) carrying what it actually applied after clamping -
-    // never assume these values were taken verbatim.  // -240..+120 (-24.0 .. +12.0 dB)
+    int16_t gain_db_x10;  // -240..+120 (-24.0 .. +12.0 dB)
     uint32_t start_frame;
     uint32_t end_frame;  // 0 = end of file
     uint32_t loop_start;
@@ -1293,9 +1291,7 @@ struct SeqClockOutMessage {
           reserved2(0) {}
 } __attribute__((packed));
 
-// Legacy packet structures completely removed - using new simplified format only
-
-// Maximum packet size support
+// Largest PKT_SIZE_* class; sizes staging buffers for packet assembly.
 static const size_t MAX_PKT_SIZE = 2048;
 
 // Protocol functions
@@ -1421,7 +1417,7 @@ class ProtocolHandler {
                              void* out_payload,
                              size_t out_payload_size);
 
-    // New simplified packet system functions
+    // Low-level framing (all Create*Packet helpers above funnel through these)
     static size_t GetPacketSizeFromCode(uint8_t size_code);
     static uint8_t GetOptimalSizeCode(size_t payload_size);
     // Core packet creation with automatic sequence number management

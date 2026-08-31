@@ -18,12 +18,10 @@ static bool has_wav_extension(const char* name) {
     if (!name)
         return false;
 
-    // Find the last dot in the filename
     const char* last_dot = strrchr(name, '.');
     if (!last_dot)
         return false;
 
-    // Check if it ends with .wav (case insensitive)
     const char* ext = last_dot + 1;
     return (strcasecmp(ext, "wav") == 0);
 }
@@ -107,7 +105,6 @@ bool ListDir(const char* path,
             continue;
         }
 
-        // Include directories and WAV files
         bool is_dir = (fno.fattrib & AM_DIR) ? true : false;
         if (is_dir || has_wav_extension(name)) {
             if (all_count < 256) {  // Prevent buffer overflow
@@ -134,24 +131,19 @@ bool ListDir(const char* path,
         return false;
     }
 
-    // Set total count
     total_count = all_count;
 
-    // Now paginate the results
-    // Special handling: when start_index == 0 and we have ".." entry, ensure it's always included
-    // first
+    // Paginate. Special case: when start_index == 0 and a ".." entry exists,
+    // it must land first regardless of pagination math below.
     size_t written = 0;
     bool has_dotdot_at_start =
         (!is_root && all_count > 0 && strcmp(all_entries[0].name, "..") == 0);
 
-    // If we're requesting from start (index 0) and ".." exists, ensure it's first
     if (start_index == 0 && has_dotdot_at_start && written < max_entries) {
         out[written++] = all_entries[0];
-        // Adjust start_index to skip the ".." entry when iterating
-        start_index = 1;
+        start_index = 1;  // skip the ".." entry in the loop below
     }
 
-    // Add remaining entries starting from adjusted start_index
     for (size_t i = start_index; i < all_count && written < max_entries; i++) {
         out[written++] = all_entries[i];
     }

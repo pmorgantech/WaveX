@@ -12,7 +12,6 @@ namespace wavex_ui {
 void initNavigationSystem() {
     ESP_LOGI(TAG, "Initializing navigation system");
 
-    // Create and push the main menu as the root page
     auto mainMenu = createMainMenu();
     UINavigator::instance().push(mainMenu);
 

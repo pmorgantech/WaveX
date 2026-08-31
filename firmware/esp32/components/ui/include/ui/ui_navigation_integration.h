@@ -9,55 +9,21 @@
 
 namespace wavex_ui {
 
-/**
- * @brief Navigation system integration functions
- *
- * Provides integration between the navigation system and existing
- * UI task and input dispatcher.
- */
+// Glue between UINavigator and the input dispatcher/UI task.
 
-/**
- * @brief Initialize the navigation system
- *
- * Sets up the navigation stack with the main menu as the root page.
- * Should be called during UI initialization.
- */
+// Sets up the navigation stack with the main menu as the root page. Call
+// during UI initialization.
 void initNavigationSystem();
 
-/**
- * @brief Handle input events through the navigation system
- *
- * Routes input events to the currently active page.
- * Should be called from the input dispatcher.
- *
- * @param evt Input event to handle
- */
+// Routes an input event to the currently active page. Call from the input
+// dispatcher.
 void handleNavigationInput(const InputEvent& evt);
 
-/**
- * @brief Get the current navigation context for input handling
- *
- * Creates a UIContext that forwards input to the navigation system.
- *
- * @return UIContext for navigation input handling
- */
+/// A UIContext that forwards input to the navigation system.
 std::shared_ptr<UIContext> createNavigationContext();
 
-/**
- * @brief Check if navigation system is active
- *
- * @return true if navigation system is initialized and has pages
- */
 bool isNavigationActive();
 
-/**
- * @brief Create main menu for navigation system
- *
- * Creates the main menu with Sample and System options,
- * integrating with existing functionality.
- *
- * @return Main menu page
- */
 std::shared_ptr<UIPage> createMainMenu();
 
 }  // namespace wavex_ui

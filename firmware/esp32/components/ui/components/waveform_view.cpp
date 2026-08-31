@@ -83,7 +83,6 @@ void WaveformView::setSamples(const int16_t* samples, uint16_t count) {
         return;
     }
 
-    // Find dynamic range for autoscaling
     int16_t min_v = samples[0];
     int16_t max_v = samples[0];
     for (uint16_t i = 1; i < count; ++i) {

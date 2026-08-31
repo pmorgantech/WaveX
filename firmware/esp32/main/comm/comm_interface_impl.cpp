@@ -6,7 +6,6 @@
 namespace WaveX {
 namespace Comm {
 
-// Constructor with dependency injection
 CommInterfaceImpl::CommInterfaceImpl(StatisticsManager& statistics) : statistics_(statistics) {}
 
 // Meter data operations
@@ -73,7 +72,6 @@ void CommInterfaceImpl::getBackendHeartbeat(wavex_backend_heartbeat_t* out) {
     statistics_.get_backend_heartbeat(
         &uptime_ms, &rx_total, &loop_counter, &last_rx_ms, &cpu_usage_percent, &valid);
 
-    // Fill the output struct
     out->uptime_ms = uptime_ms;
     out->rx_total = rx_total;
     out->loop_counter = loop_counter;

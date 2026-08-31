@@ -16,7 +16,6 @@
 
 /* Keep headers C-friendly without forcing C linkage on downstream C++ headers */
 
-// File entry structure
 typedef struct {
     bool is_directory;
     uint32_t size_bytes;
@@ -29,40 +28,36 @@ typedef struct {
     uint32_t duration_ms;      // Duration in milliseconds (0 if unknown)
 } wavex_file_entry_t;
 
-// Forward declaration for comm interface
 namespace WaveX {
 namespace Comm {
 class ICommInterface;
 }
 }  // namespace WaveX
 
-// File browser configuration
 typedef struct {
-    const char* root_path;                        // Root directory path
-    const char* file_extension;                   // File extension filter (e.g., ".wav")
-    uint32_t max_entries;                         // Maximum number of entries to display
-    bool show_hidden;                             // Show hidden files
-    WaveX::Comm::ICommInterface* comm_interface;  // Communication interface
+    const char* root_path;
+    const char* file_extension;  // e.g., ".wav"
+    uint32_t max_entries;
+    bool show_hidden;
+    WaveX::Comm::ICommInterface* comm_interface;
 } wavex_file_browser_config_t;
 
-// File browser callbacks
 typedef void (*wavex_file_selected_cb_t)(const wavex_file_entry_t* entry, void* user_data);
 typedef void (*wavex_file_selected_index_cb_t)(uint32_t file_index,
                                                const wavex_file_entry_t* entry,
                                                void* user_data);
 typedef void (*wavex_directory_changed_cb_t)(const char* path, void* user_data);
 
-// File browser structure
 typedef struct {
-    lv_obj_t* container;          // Main container
-    lv_obj_t* list;               // List object for file entries
-    lv_obj_t* path_label;         // Current path display
-    wavex_file_entry_t* entries;  // File entries array
-    uint32_t entry_count;         // Number of entries
-    bool storage_mounted;         // Last state reported by MSG_STORAGE_STATUS
-    lv_obj_t* loading_row;        // Pagination spinner row, or NULL
-    uint32_t selected_index;      // Currently selected entry
-    char current_path[96];        // Current directory path
+    lv_obj_t* container;
+    lv_obj_t* list;
+    lv_obj_t* path_label;
+    wavex_file_entry_t* entries;
+    uint32_t entry_count;
+    bool storage_mounted;   // last state reported by MSG_STORAGE_STATUS
+    lv_obj_t* loading_row;  // pagination spinner row, or NULL
+    uint32_t selected_index;
+    char current_path[96];
     wavex_file_browser_config_t config;
     wavex_file_selected_cb_t file_selected_cb;
     wavex_file_selected_index_cb_t file_selected_index_cb;
@@ -70,9 +65,9 @@ typedef struct {
     void* user_data;
 
     // Pagination state
-    uint32_t total_files;       // Total number of files in directory
-    uint32_t current_page;      // Current page being displayed
-    uint32_t entries_per_page;  // Entries per page (typically 4)
+    uint32_t total_files;
+    uint32_t current_page;
+    uint32_t entries_per_page;  // typically 4
     // True if we're currently loading more pages. Written from the UART RX
     // task (browse_resp_callback and friends), read from the UI task
     // (fb_show_loading_row / update_file_browser_ui) - always through the
@@ -80,39 +75,33 @@ typedef struct {
     // in file_browser.cpp, same discipline as ui_update_pending below. Never
     // write or read this field directly.
     bool pagination_in_progress;
-    uint32_t loaded_entries;  // Number of entries loaded so far
+    uint32_t loaded_entries;
 
     // UI update flags (for thread-safe deferred updates)
-    bool ui_update_pending;         // True if the list must be rebuilt
-    bool selection_update_pending;  // True if only the highlight moved (viewport unchanged)
+    bool ui_update_pending;         // true if the list must be rebuilt
+    bool selection_update_pending;  // true if only the highlight moved (viewport unchanged)
 
     // Scrolling/viewport state
-    uint32_t first_visible_index;  // Index of first visible entry (for scrolling)
-    uint32_t visible_count;        // Number of entries visible on screen
+    uint32_t first_visible_index;
+    uint32_t visible_count;
 } wavex_file_browser_t;
 
-// File browser functions
 wavex_file_browser_t* wavex_file_browser_create(lv_obj_t* parent,
                                                 const wavex_file_browser_config_t* config);
 void wavex_file_browser_destroy(wavex_file_browser_t* browser);
 
-// Navigation functions
 bool wavex_file_browser_navigate_to(wavex_file_browser_t* browser, const char* path);
 bool wavex_file_browser_navigate_up(wavex_file_browser_t* browser);
 bool wavex_file_browser_refresh(wavex_file_browser_t* browser);
 
-// Selection functions
 void wavex_file_browser_set_selection(wavex_file_browser_t* browser, uint32_t index);
 const wavex_file_entry_t* wavex_file_browser_get_selected(wavex_file_browser_t* browser);
 uint32_t wavex_file_browser_get_selected_index(wavex_file_browser_t* browser);
 
-// Navigation functions with boundary checking and scrolling
-bool wavex_file_browser_navigate_up_entry(
-    wavex_file_browser_t* browser);  // Move selection up (respects boundaries)
-bool wavex_file_browser_navigate_down_entry(
-    wavex_file_browser_t* browser);  // Move selection down (respects boundaries)
+// Move selection by one entry; both respect list boundaries and adjust scroll.
+bool wavex_file_browser_navigate_up_entry(wavex_file_browser_t* browser);
+bool wavex_file_browser_navigate_down_entry(wavex_file_browser_t* browser);
 
-// Callback functions
 void wavex_file_browser_set_file_selected_callback(wavex_file_browser_t* browser,
                                                    wavex_file_selected_cb_t callback,
                                                    void* user_data);
@@ -123,10 +112,9 @@ void wavex_file_browser_set_directory_changed_callback(wavex_file_browser_t* bro
                                                        wavex_directory_changed_cb_t callback,
                                                        void* user_data);
 
-// Thread-safe UI update
+// Thread-safe: call from the UI task to apply updates queued by the RX task.
 void wavex_file_browser_process_pending_updates(wavex_file_browser_t* browser);
 
-// Utility functions
 const char* wavex_file_browser_get_current_path(wavex_file_browser_t* browser);
 uint32_t wavex_file_browser_get_entry_count(wavex_file_browser_t* browser);
 

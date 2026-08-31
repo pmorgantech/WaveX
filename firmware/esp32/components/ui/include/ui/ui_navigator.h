@@ -9,57 +9,25 @@
 
 namespace wavex_ui {
 
-/**
- * @brief Navigation manager with stack-based page navigation
- *
- * Manages a stack of UI pages with push/pop operations.
- * Automatically handles page lifecycle (onEnter/onExit) and softkey updates.
- */
+/// Stack-based navigation manager: push/pop UI pages, driving page lifecycle
+/// (onEnter/onExit) and softkey bar updates automatically.
 class UINavigator {
    public:
-    /**
-     * @brief Get the singleton instance
-     */
     static UINavigator& instance() {
         static UINavigator inst;
         return inst;
     }
 
-    /**
-     * @brief Push a new page onto the navigation stack
-     * @param page Page to push (takes ownership)
-     */
+    /// Takes ownership of `page`.
     void push(std::shared_ptr<UIPage> page);
 
-    /**
-     * @brief Pop the current page from the navigation stack
-     * Does nothing if only one page remains (root page)
-     */
+    /// Does nothing if only one page remains (root page).
     void pop();
 
-    /**
-     * @brief Get the currently active page
-     */
     std::shared_ptr<UIPage> active() const { return active_; }
-
-    /**
-     * @brief Get the softkey bar for encoder focus support
-     */
     SoftkeyBar* softkeyBar() { return &softkeyBar_; }
-
-    /**
-     * @brief Check if navigation stack has more than one page
-     */
     bool canPop() const { return stack_.size() > 1; }
-
-    /**
-     * @brief Refresh softkeys using the currently active page definition
-     */
     void refreshSoftkeys();
-
-    /**
-     * @brief Get the current stack depth
-     */
     size_t depth() const { return stack_.size(); }
 
     /**

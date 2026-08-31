@@ -46,13 +46,11 @@ static constexpr size_t MAX_PAYLOAD_SIZE = 220;
 
 static const char* TAG = "esp_spi_link";
 
-// Logging component identifier
 #define ESP32_INTER_SPI 1
 
 #define SPI_OPERATIONS_TIMEOUT_MS 1200
 
 // Use new unified packet system
-// #define wavex_crc16 calculate_hardware_crc16
 #define calculate_wave_crc ProtocolHandler::CalculateWaveXCrc
 #define validate_wave_packet ProtocolHandler::ValidateWaveXPacket
 #define create_wave_packet ProtocolHandler::CreateWaveXPacket
@@ -69,9 +67,9 @@ static uint8_t* s_tx_buffers[BUFFER_POOL_SIZE];
 static spi_slave_transaction_t s_transactions[BUFFER_POOL_SIZE];
 static int s_current_tx_index = 0;
 static int s_current_rx_index = 0;
-static int s_processing_index = -1;      // Index of buffer being processed (-1 = none)
-static uint32_t s_packet_counter = 0;    // Track total packets received
-static uint32_t s_last_packet_hash = 0;  // Hash of last packet to detect duplicates
+static int s_processing_index = -1;  // Index of buffer being processed (-1 = none)
+static uint32_t s_packet_counter = 0;
+static uint32_t s_last_packet_hash = 0;
 // Track which queued TX buffers contain a real message (vs zeros)
 static bool s_tx_has_message[BUFFER_POOL_SIZE] = {false, false, false};
 // Ensure we only queue a single real message at any time to avoid duplicates
@@ -93,8 +91,8 @@ static bool s_last_packet_was_one_way = false;
 
 #define MSG_QUEUE_SIZE 8
 typedef struct {
-    uint8_t packet_data[MAX_PKT_SIZE];  // Pre-created packet
-    size_t packet_size;                 // Actual packet size
+    uint8_t packet_data[MAX_PKT_SIZE];
+    size_t packet_size;
     uint8_t seq_num;
     bool pending;
 } msg_queue_entry_t;
@@ -110,11 +108,8 @@ static int msg_queue_count = 0;
 static uint8_t next_seq_num =
     1;  // Sequence number for message tracking (0 reserved for no message)
 
-// Mutex for protecting queue operations
-// static portMUX_TYPE s_spi_mutex = portMUX_INITIALIZER_UNLOCKED;
 static SemaphoreHandle_t s_spi_mutex = NULL;
 
-// Forward declarations
 static void spi_slave_task(void* pvParameters);
 static esp_err_t allocate_dma_buffers(void);
 static void free_dma_buffers(void);
@@ -151,17 +146,14 @@ static bool is_duplicate_packet(uint16_t seq_num) {
     }
 }
 
-// Initialize packet router
 static void init_packet_router() {
     // Packet router is now set via spi_link_set_packet_router()
     // This function is kept for backward compatibility but does nothing
 }
 
-// Allocate DMA-capable buffers
 static esp_err_t allocate_dma_buffers(void) {
     ESP_LOGI(TAG, "Allocating DMA-capable buffers");
 
-    // Allocate DMA-capable RX buffers - 2048 bytes each for triple buffering
     for (int i = 0; i < BUFFER_POOL_SIZE; i++) {
         s_rx_buffers[i] = (uint8_t*)heap_caps_aligned_alloc(
             64, MAX_PKT_SIZE, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
@@ -174,7 +166,6 @@ static esp_err_t allocate_dma_buffers(void) {
         ESP_LOGD(TAG, "Allocated RX buffer %d at %p", i, s_rx_buffers[i]);
     }
 
-    // Allocate DMA-capable TX buffers - 2048 bytes each for triple buffering
     for (int i = 0; i < BUFFER_POOL_SIZE; i++) {
         s_tx_buffers[i] = (uint8_t*)heap_caps_aligned_alloc(
             64, MAX_PKT_SIZE, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
@@ -194,7 +185,6 @@ static esp_err_t allocate_dma_buffers(void) {
     return ESP_OK;
 }
 
-// Free DMA-capable buffers
 static void free_dma_buffers(void) {
     ESP_LOGI(TAG, "Freeing DMA-capable buffers");
 
@@ -221,10 +211,9 @@ static void spi_post_trans_cb(spi_slave_transaction_t* trans) {
     }
 }
 
-// Signal Daisy for urgent control data (active high on GPIO31)
+// Signal Daisy for urgent control data via WAVEX_ESP_ATTN_OUT (active high; see pin_config.h).
 static void signal_daisy_urgent(bool urgent) {
 #ifdef ESP_PLATFORM
-    // Set GPIO level
     esp_err_t ret = gpio_set_level((gpio_num_t)WAVEX_ESP_ATTN_OUT, urgent ? 1 : 0);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to set GPIO%d level: %s", WAVEX_ESP_ATTN_OUT, esp_err_to_name(ret));
@@ -232,8 +221,7 @@ static void signal_daisy_urgent(bool urgent) {
     }
     ESP_LOGI(TAG, "************GPIO%d level set to %d", WAVEX_ESP_ATTN_OUT, urgent ? 1 : 0);
 
-    // Allow time for signal to stabilize before any operations
-    esp_rom_delay_us(100);  // Increased delay for stability
+    esp_rom_delay_us(100);  // Allow time for signal to stabilize before any operations
 
     if (urgent) {
         // Roadmap Phase 1 item 7 (ATTN-stuck-high recovery): start the
@@ -256,7 +244,6 @@ static void signal_daisy_urgent(bool urgent) {
 #endif
 }
 
-// Handle large packet format - route to packet router
 static void handle_large_packet(const uint8_t* packet_data, size_t packet_len) {
 #ifdef ESP_PLATFORM
     if (packet_len < 6) { // Minimum size for unified packet (4 header + 2 CRC)
@@ -264,13 +251,11 @@ static void handle_large_packet(const uint8_t* packet_data, size_t packet_len) {
         return;
     }
 
-    // Validate unified packet
     if (!validate_wave_packet(packet_data, packet_len)) {
         ESP_LOGE(TAG, "Large packet CRC validation failed");
         return;
     }
 
-    // Extract packet info using unified format
     uint8_t msg_type, flags;
     uint16_t sequence_number;
     uint8_t payload[MAX_PAYLOAD_SIZE];  // Max payload size
@@ -289,13 +274,11 @@ static void handle_large_packet(const uint8_t* packet_data, size_t packet_len) {
              (int)payload_size,
              (int)packet_len);
 
-    // Check for duplicate packets using sequence numbers
     if (is_duplicate_packet(sequence_number)) {
         ESP_LOGW(TAG, "Dropping duplicate/out-of-order packet: seq=%u", sequence_number);
         return;
     }
 
-    // Route to unified packet router
     if (s_packet_router) {
         s_packet_router->route_packet(packet_data, packet_len);
     } else {
@@ -311,8 +294,7 @@ static void handle_large_packet(const uint8_t* packet_data, size_t packet_len) {
 // SPI Link Functions
 // ============================================================================
 
-// Prepare TX buffer with queued message without consuming from queue
-// Returns true if a message was found and prepared, false if sending zeros
+// Returns true if a message was found and prepared, false if sending zeros.
 static bool prepare_tx_buffer_without_consuming(uint8_t* tx_buf, size_t len) {
     // Always clear the response buffer first
     if (tx_buf && len > 0) {
@@ -323,12 +305,7 @@ static bool prepare_tx_buffer_without_consuming(uint8_t* tx_buf, size_t len) {
     uint8_t seq_num = 0;
     size_t packet_size = 0;
 
-    // Enter critical section to protect queue operations
     if (xSemaphoreTake(s_spi_mutex, portMAX_DELAY) == pdTRUE) {
-        // ESP_LOGI(TAG, "prepare_tx_buffer: msg_queue_count=%d, head=%d, tail=%d",
-        //          msg_queue_count, msg_queue_head, msg_queue_tail);
-
-        // Check if we have messages to send
         if (msg_queue_count > 0) {
             // Get the next message from queue (with bounds checking) - DON'T consume it yet
             int idx = msg_queue_head;
@@ -344,11 +321,9 @@ static bool prepare_tx_buffer_without_consuming(uint8_t* tx_buf, size_t len) {
                     seq_num = entry->seq_num;
                     message_found = true;
 
-                    // Copy the complete packet
                     if (packet_size <= len) {
                         memcpy(tx_buf, entry->packet_data, packet_size);
 
-                        // Debug: Log the packet being sent
                         uint8_t msg_type = entry->packet_data[1];  // Message type is at offset 1
                         ESP_LOGI(TAG,
                                  "DEBUG - Sending pre-created packet: msg_type=0x%02X (%s), "
@@ -387,13 +362,12 @@ static bool prepare_tx_buffer_without_consuming(uint8_t* tx_buf, size_t len) {
     if (!message_found) {
         // If the last packet was one-way, don't send a response
         if (s_last_packet_was_one_way) {
-            s_last_packet_was_one_way = false;  // Reset flag
-            return false;                       // No message to send
+            s_last_packet_was_one_way = false;
+            return false;
         }
 
-        // No messages in queue - send all zeros instead of ACK packet
-        // This prevents ACK ping-pong between ESP32 and Daisy
-        // The buffer is already zeroed at the beginning of this function
+        // Send all zeros instead of an ACK packet: this prevents ACK ping-pong
+        // between ESP32 and Daisy. The buffer is already zeroed above.
         ESP_LOGD(TAG, "No messages in queue (count=%d), sending all zeros", msg_queue_count);
     }
 
@@ -401,14 +375,12 @@ static bool prepare_tx_buffer_without_consuming(uint8_t* tx_buf, size_t len) {
 }
 
 static void clear_transmitted_message_from_queue() {
-    // Enter critical section to protect queue operations
     if (xSemaphoreTake(s_spi_mutex, portMAX_DELAY) == pdTRUE) {
         if (msg_queue_count == 0) {
             xSemaphoreGive(s_spi_mutex);
             return;
         }
 
-        // Get the next message from queue (with bounds checking)
         int idx = msg_queue_head;
         if (idx >= MSG_QUEUE_SIZE) {
             xSemaphoreGive(s_spi_mutex);
@@ -423,7 +395,6 @@ static void clear_transmitted_message_from_queue() {
             return;
         }
 
-        // Mark message as transmitted and remove from queue
         entry->pending = false;
         msg_queue_head = (msg_queue_head + 1) % MSG_QUEUE_SIZE;
         msg_queue_count = msg_queue_count - 1;
@@ -444,17 +415,14 @@ static void clear_transmitted_message_from_queue() {
 esp_err_t spi_link_init(void) {
     ESP_LOGI(TAG, "Initializing SPI link");
 
-    // Create the mutex
     s_spi_mutex = xSemaphoreCreateMutex();
     if (s_spi_mutex == NULL) {
         ESP_LOGE(TAG, "Failed to create SPI mutex");
         return ESP_FAIL;
     }
 
-    // Initialize packet router
     init_packet_router();
 
-    // Allocate DMA-capable buffers
     esp_err_t ret = allocate_dma_buffers();
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to allocate DMA buffers: %s", esp_err_to_name(ret));
@@ -481,7 +449,6 @@ esp_err_t spi_link_init(void) {
     // Initialize attention signal to low (no urgent data)
     gpio_set_level((gpio_num_t)WAVEX_ESP_ATTN_OUT, 0);
 
-    // Verify initial state
     int initial_level = gpio_get_level((gpio_num_t)WAVEX_ESP_ATTN_OUT);
     ESP_LOGI(TAG, "GPIO%d initial level: %s", WAVEX_ESP_ATTN_OUT, initial_level ? "HIGH" : "LOW");
 
@@ -493,7 +460,6 @@ esp_err_t spi_link_start(void) {
     ESP_LOGI(TAG, "Starting SPI link");
     ESP_LOGI(TAG, "DEBUG: About to configure SPI slave");
 
-    // Configure SPI slave
     spi_bus_config_t buscfg = {};
     buscfg.mosi_io_num = WAVEX_ESP_SPI_MOSI;
     buscfg.miso_io_num = WAVEX_ESP_SPI_MISO;
@@ -526,7 +492,6 @@ esp_err_t spi_link_start(void) {
              WAVEX_ESP_SPI_MISO,
              WAVEX_ESP_SPI_CS);
 
-    // Create SPI slave task
     BaseType_t task_ret =
         xTaskCreate(spi_slave_task,
                     "spi_slave",
@@ -550,7 +515,6 @@ static void spi_slave_task(void* pvParameters) {
     ESP_LOGI(TAG, "SPI slave task started");
     ESP_LOGI(TAG, "DEBUG: SPI slave task is running and ready to receive transactions");
 
-    // Initialize first transaction
     ESP_LOGI(TAG, "=== INITIALIZING FIRST TRANSACTION ===");
 
     while (1) {
@@ -577,10 +541,8 @@ static void spi_slave_task(void* pvParameters) {
         int tx_idx = s_current_tx_index;
         int rx_idx = s_current_rx_index;
 
-        // Prepare TX buffer with queued message
         bool has_message = prepare_tx_buffer_without_consuming(s_tx_buffers[tx_idx], MAX_PKT_SIZE);
 
-        // Set up transaction - use maximum packet size for SPI communication
         memset(&s_transactions[rx_idx], 0, sizeof(s_transactions[rx_idx]));
         s_transactions[rx_idx].length = MAX_PKT_SIZE * 8;
         s_transactions[rx_idx].tx_buffer = s_tx_buffers[tx_idx];
@@ -589,8 +551,6 @@ static void spi_slave_task(void* pvParameters) {
 
         // Clear RX buffer before transaction to prevent stale data
         memset(s_rx_buffers[rx_idx], 0, MAX_PKT_SIZE);
-
-        // Queue transaction
 
         esp_err_t ret = spi_slave_queue_trans(
             WAVEX_ESP_SPI_HOST, &s_transactions[rx_idx], pdMS_TO_TICKS(SPI_OPERATIONS_TIMEOUT_MS));
@@ -645,7 +605,6 @@ static void spi_slave_task(void* pvParameters) {
             ESP_LOGI(TAG, "Consumed message from queue after successful transmission");
         }
 
-        // Process received data - determine actual packet size from received data
         size_t rx_len = trans_result->length / 8;  // Convert bits to bytes
         if (rx_len > 0) {
             s_packet_counter++;
@@ -655,7 +614,6 @@ static void spi_slave_task(void* pvParameters) {
             uint8_t* rx_data = (uint8_t*)trans_result->rx_buffer;
 
 #if WAVEX_MCU_LINK_PACKET_DEBUG
-            // Log first bytes to see what we received
             ESP_LOGI(
                 TAG,
                 "RX: Received %d bytes, first 8 bytes: %02X %02X %02X %02X %02X %02X %02X %02X",
@@ -669,7 +627,6 @@ static void spi_slave_task(void* pvParameters) {
                 rx_data[6],
                 rx_data[7]);
 #endif
-            // Determine packet size from protocol size code in first byte
             uint8_t size_code = rx_data[0] & PKT_SIZE_MASK;
             size_t expected_packet_size = ProtocolHandler::GetPacketSizeFromCode(size_code);
 
@@ -687,7 +644,6 @@ static void spi_slave_task(void* pvParameters) {
                          (int)expected_packet_size,
                          size_code);
 #endif
-                // Validate and process the packet using the expected size
                 if (validate_wave_packet(rx_data, expected_packet_size)) {
 #if WAVEX_MCU_LINK_PACKET_DEBUG
                     ESP_LOGI(TAG, "CRC validation PASSED, routing packet type=0x%02X", rx_data[1]);
@@ -719,7 +675,6 @@ static void spi_slave_task(void* pvParameters) {
 }
 
 int spi_link_send(uint16_t type, const void* payload, uint16_t len) {
-    // Allow flexible payload sizes up to protocol maximum
     if (len == 0 || len > MAX_PAYLOAD_SIZE) {
         ESP_LOGE(
             TAG, "spi_link_send: Invalid payload length %d (max=%d)", len, (int)MAX_PAYLOAD_SIZE);
@@ -731,7 +686,6 @@ int spi_link_send(uint16_t type, const void* payload, uint16_t len) {
         return -1;
     }
 
-    // Check if queue is full
     if (xSemaphoreTake(s_spi_mutex, (TickType_t)10) == pdTRUE) {
         if (msg_queue_count >= MSG_QUEUE_SIZE) {
             ESP_LOGW(TAG, "Message queue full, dropping packet");
@@ -739,7 +693,6 @@ int spi_link_send(uint16_t type, const void* payload, uint16_t len) {
             return -1;
         }
 
-        // Additional bounds checking
         if (msg_queue_tail >= MSG_QUEUE_SIZE) {
             ESP_LOGE(TAG, "spi_link_send: Invalid queue tail index: %d", msg_queue_tail);
             xSemaphoreGive(s_spi_mutex);
@@ -749,7 +702,6 @@ int spi_link_send(uint16_t type, const void* payload, uint16_t len) {
         // Create packet immediately when queuing
         msg_queue_entry_t* entry = &msg_queue[msg_queue_tail];
 
-        // Create the packet with the message data
         ESP_LOGI(TAG,
                  "Creating packet: type=0x%02X, payload_len=%d, seq=%d, flags=0",
                  type,
@@ -822,10 +774,8 @@ void spi_link_get_stats(spi_link_stats_t* stats) {
     if (!stats)
         return;
 
-    // Initialize stats structure
     memset(stats, 0, sizeof(spi_link_stats_t));
 
-    // Fill in basic stats
     stats->packets_sent = 0;      // TODO: implement packet counting
     stats->packets_received = 0;  // TODO: implement packet counting
     stats->crc_errors = 0;        // TODO: implement error counting
@@ -848,7 +798,6 @@ void spi_link_log_stats(void) {
 }
 
 bool spi_link_is_active(void) {
-    // Return true if the SPI link is active
     return true;  // TODO: implement proper active state tracking
 }
 
@@ -858,10 +807,8 @@ void spi_link_set_packet_callback(void (*callback)(const uint8_t* data, size_t l
     (void)callback;
 }
 
-// Set PacketRouter reference for dependency injection
 void spi_link_set_packet_router(WaveX::Comm::PacketRouter* packet_router) {
     s_packet_router = packet_router;
-    // Initialize the packet router with stats callback
     if (s_packet_router) {
         s_packet_router->set_stats_callback(
             [](uint8_t packet_type) { inter_mcu_increment_packet_stat(packet_type); });

@@ -12,7 +12,6 @@
  * ⚠️  UNVERIFIED: the ESP32 assignments below were written for an
  *     ESP32-S3-DevKitC-1 and have not been re-checked against the
  *     ESP32-P4 board this firmware actually targets.
- * 🔧  UPDATED: Complete SPI inter-MCU link configuration
  */
 
 #ifdef __cplusplus
@@ -49,10 +48,10 @@ extern "C" {
 #define WAVEX_ESP_TOUCH_INT 15  // J1-21: Touch Interrupt
 
 // Inter-MCU Communication (SPI slave to Daisy master) - using user-verified available pins
-#define WAVEX_ESP_SPI_SCLK 48  // Using GPIO48 for SCK
-#define WAVEX_ESP_SPI_MOSI 49  // Using GPIO49 for MOSI
-#define WAVEX_ESP_SPI_MISO 50  // Using GPIO50 for MISO
-#define WAVEX_ESP_SPI_CS 51    // Using GPIO51 for CS
+#define WAVEX_ESP_SPI_SCLK 48
+#define WAVEX_ESP_SPI_MOSI 49
+#define WAVEX_ESP_SPI_MISO 50
+#define WAVEX_ESP_SPI_CS 51
 // IRQ/ATTN lines for Daisy <-> ESP signaling
 #define WAVEX_ESP_ATTN_OUT 31  // J3-14: ESP Attention output to Daisy (active high)
 
@@ -160,7 +159,9 @@ extern "C" {
 #define WAVEX_DAISY_CTRL_3 -1  // A2: Potentiometer/CV Input 3
 #define WAVEX_DAISY_CTRL_4 -1  // A3: Potentiometer/CV Input 4
 
-// Available Pins (D0-D30, excluding used pins)
+// Bookkeeping list of unclaimed Daisy pins. Stale and consumed by nothing:
+// it overlaps assignments above (D0 = ATTN_IN, D7/D8 = SPI CS/SCK). Trust
+// the sections above, not this list.
 #define WAVEX_DAISY_AVAIL_1 0  // D0: Available
 #define WAVEX_DAISY_AVAIL_2 1  // D1: Available
 #define WAVEX_DAISY_AVAIL_3 2  // D2: Available
@@ -182,7 +183,7 @@ extern "C" {
 #define WAVEX_ESP_SPI_CLK_HZ 4000000  // 4 MHz (master controls)
 #define WAVEX_ESP_SPI_QUEUE_SIZE 8
 #define WAVEX_ESP_SPI_DMA_CH \
-    SPI_DMA_CH_AUTO  // Reverting: P4 slave only supports auto-alloc for DMA
+    SPI_DMA_CH_AUTO  // P4 slave mode supports only auto-allocated DMA channels
 
 // Daisy SPI configuration (master mode)
 #define WAVEX_DAISY_SPI_PERIPH 1  // SPI1

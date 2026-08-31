@@ -13,7 +13,7 @@
 #endif
 
 #ifndef WAVEX_UART_DEBUG_LEVEL
-#define WAVEX_UART_DEBUG_LEVEL 1  // Enable INFO level for UART debugging
+#define WAVEX_UART_DEBUG_LEVEL 1  // 1 = errors only; raise toward UART_LOG_DUMP (5) for more
 #endif
 
 #define UART_LOG_ERROR 1

@@ -96,8 +96,9 @@
  *
  * Answers the question the existing counters cannot: how much main-loop time
  * the inter-MCU link costs, and therefore whether it is competing with the
- * audio ring refill. Off by default - the report is one line per interval,
- * but the measurement itself is on the hot path.
+ * audio ring refill. The report is one line per interval, but the
+ * measurement itself rides the hot path - turn this off when not
+ * investigating link cost.
  */
 #ifndef WAVEX_DAISY_UART_PERF_DEBUG
 #define WAVEX_DAISY_UART_PERF_DEBUG 1
@@ -127,8 +128,6 @@
 #ifndef WAVEX_LOG_ESP32_INTER_SPI
 #define WAVEX_LOG_ESP32_INTER_SPI 0
 #endif
-
-// ESP32 SPI component logging (for token pasting)
 
 // Storage/Filesystem Logging (Daisy only)
 #ifndef WAVEX_LOG_STORAGE
@@ -251,7 +250,6 @@ inline void wavex_daisy_log_raw_if(bool enabled, const char* format, ...) {
 // CONVENIENCE MACROS FOR COMMON LOGGING PATTERNS
 // ============================================================================
 
-// Component initialization logging
 #define WAVEX_LOG_INIT(component, format, ...) \
     WAVEX_LOG(component, "Initializing: " format, ##__VA_ARGS__)
 
@@ -261,19 +259,15 @@ inline void wavex_daisy_log_raw_if(bool enabled, const char* format, ...) {
 #define WAVEX_LOG_INIT_FAILED(component, format, ...) \
     WAVEX_LOG(component, "Initialization failed: " format, ##__VA_ARGS__)
 
-// Component state change logging
 #define WAVEX_LOG_STATE_CHANGE(component, format, ...) \
     WAVEX_LOG(component, "State change: " format, ##__VA_ARGS__)
 
-// Component error logging
 #define WAVEX_LOG_ERROR(component, format, ...) \
     WAVEX_LOG(component, "ERROR: " format, ##__VA_ARGS__)
 
-// Component warning logging
 #define WAVEX_LOG_WARN(component, format, ...) \
     WAVEX_LOG(component, "WARNING: " format, ##__VA_ARGS__)
 
-// Component debug logging
 #define WAVEX_LOG_DEBUG(component, format, ...) \
     WAVEX_LOG(component, "DEBUG: " format, ##__VA_ARGS__)
 
@@ -281,19 +275,18 @@ inline void wavex_daisy_log_raw_if(bool enabled, const char* format, ...) {
 // SPI-SPECIFIC LOGGING MACROS
 // ============================================================================
 
-// Daisy outbound SPI packet logging
+// All four are aliases of WAVEX_LOG_DAISY; they exist so call sites name the
+// traffic direction/stage they log, gated by the matching WAVEX_LOG_DAISY_*
+// component switch above.
 #define WAVEX_LOG_DAISY_OUTBOUND(component, format, ...) \
     WAVEX_LOG_DAISY(component, format, ##__VA_ARGS__)
 
-// Daisy inbound SPI packet logging
 #define WAVEX_LOG_DAISY_INBOUND(component, format, ...) \
     WAVEX_LOG_DAISY(component, format, ##__VA_ARGS__)
 
-// Daisy SPI packet summary logging
 #define WAVEX_LOG_DAISY_PACKET(component, format, ...) \
     WAVEX_LOG_DAISY(component, format, ##__VA_ARGS__)
 
-// Daisy SPI message decoding logging
 #define WAVEX_LOG_DAISY_MESSAGE(component, format, ...) \
     WAVEX_LOG_DAISY(component, format, ##__VA_ARGS__)
 

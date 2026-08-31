@@ -29,9 +29,6 @@ enum class SettingKind {
     Unimplemented,  ///< Read-only, dimmed, value column says it does nothing
 };
 
-/**
- * @brief Setting definition for settings pages
- */
 struct Setting {
     std::string label;
     int value = 0;
@@ -66,26 +63,11 @@ struct Setting {
  */
 class UISettingsPage : public UIPage {
    public:
-    /**
-     * @brief Constructor
-     * @param title Page title
-     */
     explicit UISettingsPage(std::string title) : title_(std::move(title)) {}
 
-    /**
-     * @brief Get page name
-     */
     const char* name() const override { return title_.c_str(); }
 
-    /**
-     * @brief Add an editable numeric setting.
-     * @param label Setting name
-     * @param value Current value
-     * @param minValue Minimum value
-     * @param maxValue Maximum value
-     * @param onChange Callback when value changes (UI task context)
-     * @param format Optional value renderer; null prints the integer
-     */
+    /// onChange fires on the UI task when the encoder commits a new value.
     void addSetting(const std::string& label,
                     int value,
                     int minValue,
@@ -103,9 +85,7 @@ class UISettingsPage : public UIPage {
         settings_.push_back(std::move(s));
     }
 
-    /**
-     * @brief Add a read-only row (a fact about the system, not a control).
-     */
+    /// A read-only row stating a fact about the system, not a control.
     void addInfo(const std::string& label, const std::string& text) {
         Setting s;
         s.label = label;
@@ -128,24 +108,9 @@ class UISettingsPage : public UIPage {
         settings_.push_back(std::move(s));
     }
 
-    /**
-     * @brief Called when page becomes active
-     */
     void onEnter(lv_obj_t* parent) override;
-
-    /**
-     * @brief Called when page becomes inactive
-     */
     void onExit() override;
-
-    /**
-     * @brief Handle input events
-     */
     void onInput(const InputEvent& evt) override;
-
-    /**
-     * @brief Get softkey configuration
-     */
     std::array<Softkey, NUM_SOFTKEYS> getSoftkeys() override;
 
    protected:
@@ -177,38 +142,17 @@ class UISettingsPage : public UIPage {
      */
     void rebuildList();
 
-    /**
-     * @brief Restyle rows to match selectedSetting_/editingValue_.
-     */
+    /// Restyles rows to match selectedSetting_/editingValue_.
     void refreshSelection();
 
-    /**
-     * @brief Move selection up/down, skipping rows that cannot be edited.
-     * @param delta Direction (+1 down, -1 up)
-     */
+    /// +1 down, -1 up; skips rows that cannot be edited.
     void moveSelection(int delta);
 
-    /**
-     * @brief Adjust the current setting value
-     * @param delta Change amount (+1 increase, -1 decrease)
-     */
     void adjustValue(int delta);
-
-    /**
-     * @brief Toggle between selection and value editing mode
-     */
     void toggleEditMode();
-
-    /**
-     * @brief Update a setting's value
-     * @param settingIndex Index of setting to update
-     * @param newValue New value
-     */
     void updateSetting(int settingIndex, int newValue);
 
-    /**
-     * @brief Render one row's value column into `out`.
-     */
+    /// Renders one row's value column into `out`.
     void formatValue(const Setting& s, char* out, size_t out_len) const;
 };
 

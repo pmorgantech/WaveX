@@ -105,7 +105,9 @@
 #define WAVEX_DAISY_SD_CARD_BACKEND 1
 #endif
 
-// Ensure SPI SD backend is completely disabled when using SDMMC
+// Vestigial: nothing in the tree consumes DISABLE_SD_SPI_BACKEND, and
+// defining it to 0 disables nothing (the comment previously here claimed it
+// switched the SPI SD backend off under SDMMC - it never did).
 #if WAVEX_DAISY_SD_CARD_BACKEND == 1
 #define DISABLE_SD_SPI_BACKEND 0
 #endif
@@ -138,9 +140,10 @@
 // reporting pre-buffer fill, WAV format, output peaks, and why a streaming
 // pass discarded without consuming. Built for the 2026-08 audition stalls
 // (non-48 kHz files deadlocking in the resample path) and kept behind this
-// flag because that class of bug is invisible without it. Off by default:
-// each line is a blocking USB CDC write on the loop that refills the audio
-// ring, so leaving it on during playback starves the refill.
+// flag because that class of bug is invisible without it. Meant to stay off
+// outside debugging (see the TEMPORARY note above): each line is a blocking
+// USB CDC write on the loop that refills the audio ring, so leaving it on
+// during playback starves the refill.
 #ifndef WAVEX_DAISY_STREAM_DEBUG
 #define WAVEX_DAISY_STREAM_DEBUG 1
 #endif
@@ -235,7 +238,7 @@
 
 // TCA8418 8x8 Capacitive Button Matrix
 #ifndef WAVEX_ESP_BUTTON_MATRIX_ENABLED
-#define WAVEX_ESP_BUTTON_MATRIX_ENABLED 1  // Enabled for switch/button inputs
+#define WAVEX_ESP_BUTTON_MATRIX_ENABLED 1
 #endif
 
 // MIPI DSI LCD Display (5-DSI-TOUCH-A)
@@ -444,7 +447,7 @@
 
 // MIPI DSI Configuration
 #ifndef WAVEX_DSI_LANE_BITRATE_MBPS
-#define WAVEX_DSI_LANE_BITRATE_MBPS 1500  // Default bitrate
+#define WAVEX_DSI_LANE_BITRATE_MBPS 1500
 #endif
 
 #ifndef WAVEX_DSI_COLOR_FORMAT

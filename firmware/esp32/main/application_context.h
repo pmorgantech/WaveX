@@ -28,14 +28,7 @@ namespace WaveX {
 
 class ApplicationContext {
    public:
-    /**
-     * @brief Construct application context and initialize all components
-     */
     ApplicationContext();
-
-    /**
-     * @brief Destroy application context and cleanup all components
-     */
     ~ApplicationContext() = default;
 
     // Delete copy/move operations - context should be unique
@@ -44,18 +37,15 @@ class ApplicationContext {
     ApplicationContext(ApplicationContext&&) = delete;
     ApplicationContext& operator=(ApplicationContext&&) = delete;
 
-    // Component accessors for dependency injection
     StatisticsManager& getStatistics() { return *statistics_; }
     WaveX::Comm::PacketRouter& getPacketRouter() { return *packet_router_; }
     WaveX::Comm::ICommInterface& getCommInterface() { return *comm_interface_; }
 
-    // Component accessors (const versions)
     const StatisticsManager& getStatistics() const { return *statistics_; }
     const WaveX::Comm::PacketRouter& getPacketRouter() const { return *packet_router_; }
     const WaveX::Comm::ICommInterface& getCommInterface() const { return *comm_interface_; }
 
    private:
-    // Private initialization method
     void initializeLinks();
 
     // Owned components - no global state

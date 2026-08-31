@@ -18,12 +18,8 @@
 
 namespace wavex_ui {
 
-/**
- * @brief Persistent state for the Sample Browser
- *
- * This structure maintains the browser's state across page navigation,
- * allowing seamless restoration of the user's browsing context.
- */
+/// Browser state kept alive across page navigation (see createSampleBrowserPage),
+/// so leaving and returning to the browser restores the same directory/selection.
 struct SampleBrowserState {
     std::string current_directory_path = "/";
     uint32_t selected_file_index = 0;
@@ -54,14 +50,10 @@ struct SampleBrowserState {
             (static_cast<uint64_t>(last_load_duration_ms) * last_load_sample_rate) / 1000ull);
     }
 
-    // Default constructor
     SampleBrowserState() = default;
-
-    // Copy constructor and assignment
     SampleBrowserState(const SampleBrowserState&) = default;
     SampleBrowserState& operator=(const SampleBrowserState&) = default;
 
-    // Reset to default state
     void reset() {
         current_directory_path = "/";
         selected_file_index = 0;
@@ -77,19 +69,16 @@ struct SampleBrowserState {
         last_load_size_bytes = 0;
     }
 
-    // Check if state is valid
-    // Note: no index check - selected_file_index is unsigned and 0 (the
-    // first entry) is a valid selection, so a directory is all it takes.
+    // No index check: selected_file_index is unsigned and 0 (the first entry)
+    // is a valid selection, so a directory is all it takes.
     bool isValid() const { return !current_directory_path.empty(); }
 
-    // Update directory and reset selection
     void changeDirectory(const std::string& new_path) {
         current_directory_path = new_path;
         selected_file_index = 0;
-        // Note: We keep is_playing state when changing directories
+        // is_playing is deliberately kept across a directory change.
     }
 
-    // Update selected file
     void selectFile(uint32_t index, const std::string& path = "") {
         selected_file_index = index;
         if (!path.empty()) {
@@ -98,7 +87,6 @@ struct SampleBrowserState {
         }
     }
 
-    // Start playback
     void startPlayback(uint32_t index, const std::string& path = "") {
         is_playing = true;
         playing_sample_index = index;
@@ -107,14 +95,13 @@ struct SampleBrowserState {
         }
     }
 
-    // Stop playback
     void stopPlayback() {
         is_playing = false;
         playing_sample_path.clear();
         playing_sample_index = 0;
     }
 
-    // Reserve a new sample ID (skips 0 which is used as sentinel)
+    // Skips 0, which is reserved as a sentinel.
     uint16_t allocateSampleId() {
         uint16_t id = next_sample_id++;
         if (next_sample_id == 0) {
@@ -124,15 +111,8 @@ struct SampleBrowserState {
     }
 };
 
-/**
- * @brief Sample Browser page for browsing and auditioning audio samples
- *
- * This page provides file browsing functionality with the ability to:
- * - Browse directories and files on SD card
- * - View file metadata
- * - Audition samples (play/stop)
- * - Navigate with encoder and buttons
- */
+/// Browses and auditions SD-card samples: directory/file listing, metadata
+/// display, play/stop audition, and encoder/button navigation.
 class UISampleBrowser : public UIPage {
    public:
     explicit UISampleBrowser(WaveX::Comm::ICommInterface& comm_interface,
@@ -146,11 +126,10 @@ class UISampleBrowser : public UIPage {
     void onInput(const InputEvent& evt) override;
     std::array<Softkey, NUM_SOFTKEYS> getSoftkeys() override;
 
-    // Static method for UI task to process updates (public API)
+    // UI task calls this to drain the deferred updates queued by the RX task.
     static void processDeferredUpdates();
 
    private:
-    // UI components
     lv_obj_t* browser_container_ = nullptr;
     lv_obj_t* info_panel_ = nullptr;
     lv_obj_t* status_label_ = nullptr;
@@ -159,7 +138,6 @@ class UISampleBrowser : public UIPage {
     // File browser component (C-style, but we wrap it)
     wavex_file_browser_t* file_browser_ = nullptr;
 
-    // Communication interface
     WaveX::Comm::ICommInterface* comm_interface_ = nullptr;
 
     // Persistent state (owned by caller, injected via constructor)
@@ -173,11 +151,9 @@ class UISampleBrowser : public UIPage {
 
     void refreshStatusStrip();
 
-    // State
     bool is_playing_ = false;
-    bool is_initialized_ = false;
-    std::string current_directory_;  // Track current directory to detect actual changes  // Track
-                                     // if browser is fully initialized
+    bool is_initialized_ = false;    // true once the file browser is fully set up
+    std::string current_directory_;  // used to detect actual directory changes
     uint32_t selected_file_index_ = 0;
     char selected_file_path_[96] = {0};
 
@@ -207,16 +183,13 @@ class UISampleBrowser : public UIPage {
     // directory listing has landed.
     std::atomic<bool> selection_metadata_pending_{false};
 
-    // State is now managed by the caller (UI navigator) to avoid static globals
-
-    // Callback handlers
     static void file_selected_callback(const wavex_file_entry_t* entry, void* user_data);
     static void file_selected_index_callback(uint32_t file_index,
                                              const wavex_file_entry_t* entry,
                                              void* user_data);
     static void directory_changed_callback(const char* path, void* user_data);
 
-    // Sample status callback handler (called from inter-MCU system)
+    // Called from the inter-MCU RX path.
     static void sample_status_callback(uint16_t sample_id,
                                        uint8_t state,
                                        uint32_t sample_rate,
@@ -225,10 +198,9 @@ class UISampleBrowser : public UIPage {
                                        void* user_data);
 
    private:
-    // Internal methods
     void updateStatus(const char* status);
     void updateMetadata(const wavex_file_entry_t* entry);
-    void processDeferredUpdates_();  // Internal implementation
+    void processDeferredUpdates_();
     bool auditionSampleByIndex(uint32_t file_index);
     bool stopAudition();
     void refreshSoftkeys();
@@ -238,19 +210,11 @@ class UISampleBrowser : public UIPage {
     static UISampleBrowser* s_active_instance_;
 };
 
-/**
- * @brief Factory function to create a sample browser page
- *
- * This function maintains persistent state across page instances using
- * dependency injection rather than static variables in the class.
- */
+// Persistent state across page instances is injected rather than kept in
+// static variables - see SampleBrowserState.
 std::shared_ptr<UIPage> createSampleBrowserPage(WaveX::Comm::ICommInterface& comm_interface);
 
-/**
- * @brief Access the shared SampleBrowserState used by the browser page.
- *
- * Returns nullptr if the browser has not been created yet.
- */
+/// Returns nullptr if the browser has not been created yet.
 SampleBrowserState* getSampleBrowserState();
 
 }  // namespace wavex_ui

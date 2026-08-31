@@ -47,9 +47,6 @@ typedef struct {
     bool enabled;            // Whether this unit is enabled
 } wavex_pcnt_config_t;
 
-/**
- * @brief Encoder reading structure
- */
 typedef struct {
     int32_t last_hw;     // Hardware count at the previous poll
     int32_t prev_count;  // Unused; retained so the struct layout is unchanged
@@ -60,51 +57,15 @@ typedef struct {
     int32_t delta;
 } encoder_reading_t;
 
-/**
- * @brief Initialize PCNT peripherals
- *
- * @return ESP_OK on success, an esp_err_t failure code otherwise
- */
 esp_err_t pcnt_task_init(void);
-
-/**
- * @brief Start PCNT reading task
- *
- * @return ESP_OK on success, ESP_FAIL on failure
- */
 esp_err_t pcnt_task_start(void);
-
-/**
- * @brief Stop PCNT reading task
- *
- * @return ESP_OK on success, ESP_FAIL on failure
- */
 esp_err_t pcnt_task_stop(void);
 
-/**
- * @brief Get current encoder reading for specified unit
- *
- * @param unit WaveX logical unit index
- * @param reading Pointer to store the reading
- * @return ESP_OK on success, an esp_err_t failure code otherwise
- */
 esp_err_t pcnt_get_reading(uint8_t unit, encoder_reading_t *reading);
 
-/**
- * @brief Reset encoder counter for specified unit
- *
- * @param unit WaveX logical unit index
- * @return ESP_OK on success, an esp_err_t failure code otherwise
- */
 esp_err_t pcnt_reset_counter(uint8_t unit);
 
-/**
- * @brief Get raw PCNT counter value (for debugging)
- *
- * @param unit WaveX logical unit index
- * @param count Pointer to store the count
- * @return ESP_OK on success, an esp_err_t failure code otherwise
- */
+/** Raw hardware counter value for `unit`, bypassing delta tracking. Debugging only. */
 esp_err_t pcnt_get_raw_count(uint8_t unit, int *count);
 
 /**

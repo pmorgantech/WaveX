@@ -47,7 +47,6 @@ void PacketRouter::route_packet(const uint8_t* packet_data, size_t packet_len) {
         return;
     }
 
-    // Route using unified packet format
     route_unified_packet(packet_data, packet_len);
 }
 
@@ -71,13 +70,11 @@ void PacketRouter::route_uart_message(uint8_t msg_type,
 }
 
 void PacketRouter::route_unified_packet(const uint8_t* packet_data, size_t packet_len) {
-    // Validate unified packet
     if (!WaveX::Protocol::ProtocolHandler::ValidateWaveXPacket(packet_data, packet_len)) {
         ESP_LOGE("packet_router", "Unified packet CRC validation failed");
         return;
     }
 
-    // Extract packet info using unified format
     uint8_t msg_type, flags;
     uint16_t sequence_number;
     uint8_t payload[2048];                  // Max payload size
@@ -97,10 +94,8 @@ void PacketRouter::route_unified_packet(const uint8_t* packet_data, size_t packe
         (int)payload_size,
         (int)packet_len);
 
-    // Route based on message type
     route_by_message_type(msg_type, payload, payload_size, flags, sequence_number);
 
-    // Update statistics
     if (m_stats_callback) {
         m_stats_callback(msg_type);
     }
@@ -111,25 +106,22 @@ void PacketRouter::route_by_message_type(uint8_t msg_type,
                                          size_t payload_len,
                                          uint8_t flags,
                                          uint16_t sequence_number) {
-    // Handle acknowledgment packets
     if (flags & PKT_FLAG_ACK) {
         ESP_LOGI(
             "packet_router", "Received ACK for msg_type=0x%02X, seq=%u", msg_type, sequence_number);
-        // Handle acknowledgment - remove from retry queue if needed
+        // TODO: no retry queue exists yet to remove this from.
         return;
     }
 
-    // Handle negative acknowledgment packets
     if (flags & PKT_FLAG_NACK) {
         ESP_LOGW("packet_router",
                  "Received NACK for msg_type=0x%02X, seq=%u",
                  msg_type,
                  sequence_number);
-        // Handle negative acknowledgment - retry if needed
+        // TODO: no retry mechanism exists yet to act on this.
         return;
     }
 
-    // Route based on message type - clean and efficient
     switch (msg_type) {
         case WaveX::Protocol::MSG_SYNC: {
             WaveX::Protocol::SyncMessage msg;
@@ -258,7 +250,6 @@ WEAK_HANDLER void PacketRouter::handle_heartbeat(const WaveX::Protocol::Heartbea
              cpu_min,
              cpu_max);
 
-    // Update backend heartbeat data with detailed CPU metrics
     inter_mcu_update_backend_heartbeat_detailed(
         msg.uptime_ms, msg.rx_total, msg.loop_counter, cpu_avg, cpu_min, cpu_max);
 }
@@ -273,13 +264,11 @@ WEAK_HANDLER void PacketRouter::handle_meter_push(const WaveX::Protocol::MeterPu
              msg.peak_right);
 #endif
 
-    // Convert uint16_t to float (0-32767 -> 0.0-1.0)
     float rms_left = msg.rms_left / 32767.0f;
     float rms_right = msg.rms_right / 32767.0f;
     float peak_left = msg.peak_left / 32767.0f;
     float peak_right = msg.peak_right / 32767.0f;
 
-    // Update meter data
     inter_mcu_update_backend_meters(rms_left, rms_right, peak_left, peak_right);
 }
 
@@ -290,22 +279,6 @@ WEAK_HANDLER void PacketRouter::handle_browse_resp(const uint8_t* data, size_t l
              length,
              (long long)callback_start_time_us);
 
-    // // Log raw payload for debugging (first 64 bytes)
-    // ESP_LOGI("packet_router", "Browse response payload (first 64 bytes):");
-    // for (int i = 0; i < (int)length && i < 64; i++) {
-    //     if (i % 16 == 0) {
-    //         ESP_LOGI("packet_router", "  %04X: ", i);
-    //     }
-    //     ESP_LOGI("packet_router", "%02X ", data[i]);
-    //     if (i % 16 == 15) {
-    //         ESP_LOGI("packet_router", "");
-    //     }
-    // }
-    // if (length % 16 != 0) {
-    //     ESP_LOGI("packet_router", "");
-    // }
-
-    // Forward browse response to inter_mcu system for callback handling
     int64_t callback_invoke_time_us = esp_timer_get_time();
     ESP_LOGD("packet_router",
              "About to invoke browse callback (t=%lld us, since arrival=%lld us)",
@@ -374,7 +347,6 @@ WEAK_HANDLER void PacketRouter::handle_diag_push(const WaveX::Protocol::DiagPush
 WEAK_HANDLER void PacketRouter::handle_sample_stop_resp(const WaveX::Protocol::SampleStopRespMessage& msg) {
     ESP_LOGI("packet_router", "Sample stop response: success=%d", msg.success);
 
-    // Forward to inter_mcu layer which can handle UI callbacks
     inter_mcu_handle_sample_stop_response(msg.success == 1);
 }
 
@@ -420,7 +392,6 @@ WEAK_HANDLER void PacketRouter::handle_envelope_chunk(
 WEAK_HANDLER void PacketRouter::handle_wave_chunk(const WaveX::Protocol::WaveChunkMessage& msg, const uint8_t* payload, size_t length) {
     ESP_LOGD("packet_router", "Wave chunk: offset=%u, count=%u", msg.offset, msg.count);
 
-    // Validate payload size matches expected size
     size_t expected_size = sizeof(WaveX::Protocol::WaveChunkMessage) + msg.count * sizeof(int16_t);
     if (length >= expected_size) {
         const int16_t* samples =
@@ -435,7 +406,6 @@ WEAK_HANDLER void PacketRouter::handle_wave_chunk(const WaveX::Protocol::WaveChu
                      samples[3]);
         }
 
-        // Forward to inter-MCU layer for UI/UI consumers
         inter_mcu_invoke_wave_chunk_callback(msg.offset, samples, msg.count);
     } else {
         ESP_LOGW("packet_router",

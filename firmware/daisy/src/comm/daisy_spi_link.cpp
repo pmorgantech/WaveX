@@ -369,18 +369,10 @@ static daisy::SpiHandle::Result Spi_SendPacket(const uint8_t* tx_buf, size_t pac
 
     // Cache operations removed - buffers are in non-cacheable DMA memory
 
-    // if (s_hw) WaveX::Log::PrintLine("DAISY: Starting DMA duplex transaction, packet_size=%d",
-    // (int)packet_size); if (s_hw) WaveX::Log::PrintLine("DAISY: TX buffer contents: %02X %02X %02X
-    // %02X %02X %02X %02X %02X",
-    //                            s_tx_dma_buf[0], s_tx_dma_buf[1], s_tx_dma_buf[2],
-    //                            s_tx_dma_buf[3], s_tx_dma_buf[4], s_tx_dma_buf[5],
-    //                            s_tx_dma_buf[6], s_tx_dma_buf[7]);
-
     // Start DMA duplex transfer
     uint32_t call_start_time = System::GetTick();
     s_dma_start_time = call_start_time;  // Set timing before DMA starts
 
-    // cs_pin.Write(false);
     daisy::SpiHandle::Result dma_result = g_spi_handle->DmaTransmitAndReceive(
         s_tx_dma_buf,
         s_rx_dma_buf,  // Use RX buffer as dummy for send operations
@@ -388,16 +380,9 @@ static daisy::SpiHandle::Result Spi_SendPacket(const uint8_t* tx_buf, size_t pac
         spi_dma_start_cb,
         spi_dma_end_cb,
         NULL);
-    // cs_pin.Write(true); // REMOVED: Let callbacks handle CS timing
 
     uint32_t call_end_time = System::GetTick();
     uint32_t call_duration = call_end_time - call_start_time;
-
-    // if (s_hw) WaveX::Log::PrintLine("DAISY: DmaTransmitAndReceive call completed at time=%u,
-    // duration=%u ms", call_end_time, call_duration); if (s_hw) WaveX::Log::PrintLine("DAISY:
-    // DmaTransmitAndReceive returned: %d", (int)dma_result); if (s_hw)
-    // WaveX::Log::PrintLine("DAISY: Post-DMA state: inflight=%s, start_time=%u", s_tx_inflight ?
-    // "true" : "false", s_dma_start_time);
 
     if (dma_result != daisy::SpiHandle::Result::OK) {
         if (s_hw)
@@ -680,11 +665,6 @@ static bool QueueOutgoingMessage(const uint8_t* packet_data, size_t packet_size)
 
 // Process received packet - validates, parses, and routes to message handlers
 static bool ProcessReceivedPacket(const uint8_t* rx_buf, size_t transfer_size) {
-    // if (s_hw) {
-    //     WaveX::Log::PrintLine("DAISY: ProcessReceivedPacket called - transfer_size=%d",
-    //     (int)transfer_size);
-    // }
-
     if (!rx_buf || transfer_size == 0) {
         if (s_hw)
             WaveX::Log::PrintLine("DAISY: Invalid rx_buf or transfer_size=0");
@@ -715,7 +695,6 @@ static bool ProcessReceivedPacket(const uint8_t* rx_buf, size_t transfer_size) {
     }
 
     if (all_zeros) {
-        // if (s_hw) WaveX::Log::PrintLine("DAISY: Received all-zero packet - ignoring");
         return true;  // Successfully ignored
     }
 
@@ -1150,11 +1129,7 @@ daisy::SpiHandle::Result Spi_ReceivePacket() {
 
     // Cache operations removed - buffers are in non-cacheable DMA memory
 
-    // if (s_hw) WaveX::Log::PrintLine("DAISY: Starting DMA duplex transaction to receive from
-    // ESP32");
-
     // Start DMA duplex transfer (bidirectional); CS low/high handled in callbacks
-    // cs_pin.Write(false);
     daisy::SpiHandle::Result dma_result =
         g_spi_handle->DmaTransmitAndReceive(s_tx_dma_buf,
                                             s_rx_dma_buf,  // Use DMA buffer
@@ -1162,7 +1137,6 @@ daisy::SpiHandle::Result Spi_ReceivePacket() {
                                             spi_duplex_start_cb,
                                             spi_duplex_end_cb,
                                             NULL);
-    // cs_pin.Write(true);
 
     if (s_hw)
         WaveX::Log::PrintLine("DAISY: DmaTransmitAndReceive returned: %d", (int)dma_result);
@@ -1236,17 +1210,6 @@ daisy::SpiHandle::Result Spi_ReceivePacket() {
         // Process received packet with actual size used
         ProcessReceivedPacket(rx_buf, 32);
     }
-
-    // TODO: DELETE ME
-    // // Clear the attention signal by waiting for it to go low
-    // int clear_attempts = 0;
-    // while (attn_pin.Read() && clear_attempts < 10) {
-    //     System::DelayUs(100);
-    //     clear_attempts++;
-    // }
-
-    // if (s_hw) WaveX::Log::PrintLine("DAISY: Attention signal cleared after %d attempts",
-    // clear_attempts);
 
     return res;
 #endif

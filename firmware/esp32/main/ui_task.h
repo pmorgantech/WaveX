@@ -46,7 +46,6 @@ struct UiContext {
     // for cross-task synchronization).
     std::atomic<TaskHandle_t> ui_task_handle{NULL};
 
-    // Communication interface
     WaveX::Comm::ICommInterface *comm_interface = nullptr;
 
     // Adaptive refresh rate control
@@ -58,39 +57,27 @@ struct UiContext {
     int32_t pcnt1_delta_accumulator = 0;
 };
 
-// UI Task class - encapsulates UI task state and operations
 class UITask {
    public:
     explicit UITask(WaveX::Comm::ICommInterface &comm_interface);
     ~UITask() = default;
 
-    // Initialize the UI task
     esp_err_t init();
-
-    // Start the UI task
     esp_err_t start();
-
-    // Stop the UI task
     esp_err_t stop();
 
-    // Mark content as changed (for refresh triggering)
     void markContentChanged();
 
-    // Get display panel handle
     esp_err_t getPanelHandle(esp_lcd_panel_handle_t *panel_handle);
 
    private:
-    // Injected dependencies
     WaveX::Comm::ICommInterface &m_comm_interface;
 
-    // UI context (encapsulated state)
     UiContext m_context;
 
-    // Private methods
     static void uiTaskFunction(void *pvParameters);
     void run();
 
-    // Adaptive refresh control
     void adaptiveRefreshControl();
 };
 

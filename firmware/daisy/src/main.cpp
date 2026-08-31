@@ -47,8 +47,6 @@ static daisy::SpiHandle spi_handle;
 // results nothing ever read. Deleted; audio CPU load comes from libDaisy's
 // CpuLoadMeter in the audio engine and is reported in heartbeats.)
 
-// QueuedMessage removed - using SPI only
-
 // ---------------------------------------------------------------------------
 // Host-triggered DFU entry (scripts/daisy_dfu_trigger.py)
 //
@@ -479,13 +477,10 @@ int main(void) {
 
         uint32_t current_time = System::GetNow();
 
-        // Process any incoming SPI messages from ESP32
-// Fallback: if ATTN edge was missed, poll the level and start a receive
-// NOTE: Disabled - relying on GPIO interrupt (EXTI15_10) for edge detection
-// ESP32 now clears ATTN in post_trans_cb to eliminate race condition
-// #if WAVEX_SPI_LINK_ENABLED
-// WaveX::Comm::Spi_PollAttnLevel();
-// #endif
+        // Process any incoming SPI messages from ESP32. The level-poll fallback
+        // (for a missed ATTN edge) is not needed here: the GPIO interrupt
+        // (EXTI15_10) catches the edge, and the ESP32 clears ATTN in
+        // post_trans_cb, eliminating the race the fallback existed for.
 #if WAVEX_SPI_LINK_ENABLED
         // The new, correct approach is to call a function that handles polling,
         // dequeuing, and processing in one step, avoiding the legacy conversion.
@@ -762,9 +757,6 @@ int main(void) {
         }
 
         if (send_beacon) {
-// WAVEX_LOG_DAISY(INTER_MCU_LINK, "DEBUG: Preparing heartbeat packet");
-// Send heartbeat via UART with CPU usage
-// Log heartbeat sending to verify it continues during auditioning
 #if WAVEX_MCU_LINK_PACKET_DEBUG
             WAVEX_LOG_DAISY(INTER_MCU_LINK, "Sending heartbeat during auditioning (if active)");
 #endif

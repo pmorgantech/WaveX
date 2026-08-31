@@ -47,13 +47,8 @@
 #define UI_PADDING_MEDIUM 10
 #define UI_PADDING_LARGE 15
 
-// Button styling function
 void ui_theme_apply_button_style(lv_obj_t* button, bool is_pressed_style);
-
-// Container styling function
 void ui_theme_apply_container_style(lv_obj_t* container, bool has_border);
-
-// Label styling function
 void ui_theme_apply_label_style(lv_obj_t* label, bool is_title);
 
 #endif  // WAVEX_UI_THEME_H

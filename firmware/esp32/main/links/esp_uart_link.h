@@ -6,7 +6,6 @@
 
 #include "link_config.h"
 
-// Forward declaration for PacketRouter
 namespace WaveX {
 namespace Comm {
 class PacketRouter;
@@ -30,16 +29,13 @@ extern "C" {
 // be called before uart_link_start). The current legacy driver is not GDMA.
 esp_err_t uart_link_init(void);
 
-// Start UART tasks and begin communication
 esp_err_t uart_link_start(void);
 
-// Queue message for transmission over UART (returns payload length or <0 on error)
+// Returns payload length queued, or <0 on error.
 int uart_link_send(uint16_t msg_type, const void* payload, uint16_t len);
 
-// Stop UART subsystem and release resources
 esp_err_t uart_link_stop(void);
 
-// Log UART statistics for debugging
 void uart_link_log_stats(void);
 
 #ifdef __cplusplus

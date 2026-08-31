@@ -5,7 +5,6 @@
 
 #include "link_config.h"
 
-// Forward declaration for PacketRouter
 namespace WaveX {
 namespace Comm {
 class PacketRouter;
@@ -31,17 +30,12 @@ extern "C" {
 
 #if WAVEX_SPI_LINK_ENABLED
 
-// Pin definitions are now sourced from centralized pin_config.h via link_config.h
-// No duplicate definitions needed here
-
-// Function declarations
 esp_err_t spi_link_init(void);
 esp_err_t spi_link_start(void);
 int spi_link_send(uint16_t type, const void* payload, uint16_t len);
 int spi_link_recv(void** out);
 void spi_link_recycle(void* p, int is_rx);
 
-// Get link statistics
 typedef struct {
     uint32_t packets_sent;
     uint32_t packets_received;
@@ -53,13 +47,10 @@ typedef struct {
 
 void spi_link_get_stats(spi_link_stats_t* stats);
 
-// Log current statistics for debugging
 void spi_link_log_stats(void);
 
-// Check if SPI link is active and receiving data
 bool spi_link_is_active(void);
 
-// Set packet processing callback for received packets
 void spi_link_set_packet_callback(void (*callback)(const uint8_t* data, size_t length));
 
 #endif  // WAVEX_SPI_LINK_ENABLED

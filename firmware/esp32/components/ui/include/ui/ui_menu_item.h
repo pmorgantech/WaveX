@@ -6,12 +6,9 @@
 
 namespace wavex_ui {
 
-/**
- * @brief Menu item definition for hierarchical menus
- */
 struct MenuItem {
-    std::string label;                    ///< Display text for the menu item
-    std::function<void()> onSelect;      ///< Callback when item is selected
+    std::string label;
+    std::function<void()> onSelect;
 };
 
-} // namespace wavex_ui
+}  // namespace wavex_ui

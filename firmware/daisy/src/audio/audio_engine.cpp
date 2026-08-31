@@ -982,7 +982,6 @@ static bool prebuffer_audio() {
 
     s_prebuffering = true;
     ResetScratchPool();
-    // Calculate bytes per frame (bytes per sample * channels)
     uint32_t bytes_per_sample = (s_wav.bits_per_sample == 24) ? 3u : 2u;
     uint32_t file_bpf = (uint32_t)s_wav.num_channels * bytes_per_sample;
     uint32_t free_prebuffer_frames = PREBUFFER_FRAMES - s_prebuffer_filled;
@@ -1003,7 +1002,6 @@ static bool prebuffer_audio() {
         return true;
     }
 
-    // Calculate how much to read
     uint32_t max_frames = SD_BUFFER_SIZE / file_bpf;
     uint32_t req_frames = (frames_to_read < max_frames) ? frames_to_read : max_frames;
 
@@ -1081,11 +1079,10 @@ static bool prebuffer_audio() {
         return true;
     }
 
-    // Read from SD card
     UINT br = 0;
-    s_io_start_time = System::GetTick();  // Start timing
+    s_io_start_time = System::GetTick();
     FRESULT fr = f_read(&s_wav.file, s_prebuffer_sd, req_bytes, &br);
-    s_io_duration = System::GetTick() - s_io_start_time;  // End timing
+    s_io_duration = System::GetTick() - s_io_start_time;
 
     // Track I/O performance
     s_io_count++;
@@ -1476,8 +1473,6 @@ static inline size_t rb_pop_stereo_batch(float* out_l, float* out_r, size_t size
     return popped;
 }
 
-// Resampling temporarily disabled - using direct playback
-
 void Init(DaisySeed& hw, float sample_rate, bool sdram_available) {
     s_hw = &hw;
     s_sample_rate = sample_rate;
@@ -1554,7 +1549,7 @@ void Init(DaisySeed& hw, float sample_rate, bool sdram_available) {
         WaveX::Log::PrintLine("AUDIO_ENGINE: Testing Sample RAM allocation...");
     }
     wxsamp_t test_handle = {};
-    bool test_alloc = s_sample_mem_mgr.alloc(1024, &test_handle);  // Try to allocate 1KB
+    bool test_alloc = s_sample_mem_mgr.alloc(1024, &test_handle);
     if (test_alloc) {
         if (s_hw) {
             WaveX::Log::PrintLine(
@@ -1587,7 +1582,6 @@ void Init(DaisySeed& hw, float sample_rate, bool sdram_available) {
 void Callback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t size) {
     PROFILE_SCOPE(audio_callback);
     uint32_t callback_cycles_start = WaveX::Profiling::GetCycles();
-    // Start CPU load measurement for this audio block
     s_cpu_load_meter.OnBlockStart();
     ++s_callback_blocks;
     {
@@ -1693,7 +1687,6 @@ void Callback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t
         __atomic_store_n(&s_cv_dirty, true, __ATOMIC_RELEASE);
     });
 
-    // End CPU load measurement for this audio block
     s_cpu_load_meter.OnBlockEnd();
     s_dwt_callback_cycles = WaveX::Profiling::GetCycles() - callback_cycles_start;
     s_dwt_callback_max = std::max(s_dwt_callback_max, s_dwt_callback_cycles);
@@ -2722,7 +2715,6 @@ void CheckAndLogUnderruns() {
         s_underrun_logged = true;
         ++s_diag_underruns;
     } else if (!detected_now && s_underrun_logged) {
-        // Reset logging flag when underruns stop
         s_underrun_logged = false;
     }
 

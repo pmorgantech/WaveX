@@ -1,3 +1,8 @@
+/**
+ * @file inter_mcu.h
+ * @brief High-level API for communicating with the Daisy backend over the active link (UART).
+ */
+
 #pragma once
 
 #include <stdbool.h>
@@ -14,14 +19,8 @@ typedef int esp_err_t;
 #endif
 #endif
 
-// Forward declarations
 class StatisticsManager;
 
-// Inter-MCU communication interface
-// This provides a high-level API for communicating with the Daisy backend
-// over SPI or UART links.
-
-// Main inter-MCU interface (simplified)
 esp_err_t inter_mcu_init(StatisticsManager& statistics);
 esp_err_t inter_mcu_start(void);
 
@@ -140,10 +139,10 @@ void inter_mcu_invoke_sample_status_callback(uint16_t sample_id,
                                              uint8_t channels,
                                              uint32_t frames_played);
 
-// Sample stop response handling
 void inter_mcu_handle_sample_stop_response(bool success);
 
-// Direct SPI API functions (replacing LinkManager)
+// Request/command functions sent to the backend over the active link (replaces
+// the earlier LinkManager abstraction).
 esp_err_t inter_mcu_send_browse_req(const char* path, uint8_t start_index);
 // loop_gap_ms: silence between loop passes. The sample browser passes ~300 so
 // a short file does not sound like a drone; the editor passes 0 so the loop
@@ -169,9 +168,9 @@ typedef struct {
     uint32_t loop_counter;
     uint32_t last_rx_ms;      // esp_timer (ms) when last heartbeat was received
     float cpu_usage_percent;  // CPU usage percentage from Daisy (legacy)
-    float cpu_avg_percent;    // Average CPU usage percentage
-    float cpu_min_percent;    // Minimum CPU usage percentage
-    float cpu_max_percent;    // Maximum CPU usage percentage
+    float cpu_avg_percent;
+    float cpu_min_percent;
+    float cpu_max_percent;
     bool valid;
 } wavex_backend_heartbeat_t;
 
@@ -187,16 +186,12 @@ void inter_mcu_get_backend_heartbeat_detailed(wavex_backend_heartbeat_t* out);
 // Thread-safe snapshot of current packet statistics
 void inter_mcu_get_packet_stats(wavex_packet_stats_t* out);
 
-// Reset packet statistics (useful for testing/debugging)
 void inter_mcu_reset_packet_stats(void);
 
-// Quick packet summary (most common types)
 void inter_mcu_get_packet_summary(wavex_packet_summary_t* out);
 
-// Get current METER_PUSH packet count (useful for throttled logging)
 uint32_t inter_mcu_get_meter_packet_count(void);
 
-// Get total packet count
 uint32_t inter_mcu_get_total_packet_count(void);
 
 // Sample memory diagnostics
@@ -204,22 +199,17 @@ esp_err_t inter_mcu_request_sample_mem_status();
 void inter_mcu_get_sample_mem_status(wavex_sample_mem_status_t* out);
 void inter_mcu_update_sample_mem_status(const wavex_sample_mem_status_t& status);
 
-// Get packet statistics as formatted string (for logging/debugging)
 // Returns the number of characters written (excluding null terminator)
 int inter_mcu_format_packet_stats(char* buffer, size_t buffer_size);
 
-// Manually trigger test messages to Daisy (for debugging)
-
-// Get TX statistics (messages sent to Daisy)
 void inter_mcu_get_tx_stats(wavex_tx_stats_t* out);
 
-// Update backend heartbeat statistics directly (for SPI link processing)
 void inter_mcu_update_backend_heartbeat(uint32_t uptime_ms,
                                         uint32_t rx_total,
                                         uint32_t loop_counter,
                                         float cpu_usage_percent);
 
-// Update backend heartbeat statistics with detailed CPU metrics (for SPI link processing)
+// Called by the packet router as it decodes MSG_HEARTBEAT off the link.
 void inter_mcu_update_backend_heartbeat_detailed(uint32_t uptime_ms,
                                                  uint32_t rx_total,
                                                  uint32_t loop_counter,
@@ -227,16 +217,13 @@ void inter_mcu_update_backend_heartbeat_detailed(uint32_t uptime_ms,
                                                  float cpu_min_percent,
                                                  float cpu_max_percent);
 
-// Update backend meter data directly (for SPI link processing)
+// Called by the packet router as it decodes MSG_METER_PUSH off the link.
 void inter_mcu_update_backend_meters(float rms_left,
                                      float rms_right,
                                      float peak_left,
                                      float peak_right);
 
-// Get current meter data
 void inter_mcu_get_meter_data(wavex_meter_data_t* out);
 
-// Process packet data through the packet processor (for SPI link integration)
-
-// Increment packet statistics (for SPI link integration)
+// Called by both link backends as each packet is classified.
 void inter_mcu_increment_packet_stat(uint8_t packet_type);

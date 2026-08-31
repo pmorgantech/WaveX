@@ -9,6 +9,9 @@
 
 namespace wavex_ui {
 
+/// Owns the LCD panel handle and the LVGL display it drives. Does not own
+/// touch input or the LVGL tick - see the note on panel_handle_/display_
+/// below for why those live elsewhere.
 class DisplayManager {
    public:
     static DisplayManager& instance();

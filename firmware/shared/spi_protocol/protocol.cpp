@@ -7,12 +7,10 @@
 namespace WaveX {
 namespace Protocol {
 
-// Sequence number management - one per platform
+// Outbound sequence counter - one per firmware image, so each MCU numbers
+// its own transmit stream independently.
 static uint16_t s_next_seq_num = 1;  // Start from 1, 0 is reserved
 
-// New simplified packet system functions - single unified format
-
-// Get packet size from size code (4 bits)
 size_t ProtocolHandler::GetPacketSizeFromCode(uint8_t size_code) {
     switch (size_code & PKT_SIZE_MASK) {
         case PKT_SIZE_32:
@@ -34,7 +32,9 @@ size_t ProtocolHandler::GetPacketSizeFromCode(uint8_t size_code) {
     }
 }
 
-// Get optimal size code for payload size
+// Smallest size class whose capacity (class - 4-byte header - 2-byte CRC)
+// fits the payload; saturates to PKT_SIZE_2048 (CreateWaveXPacket rejects
+// what then still doesn't fit).
 uint8_t ProtocolHandler::GetOptimalSizeCode(size_t payload_size) {
     if (payload_size <= 26)
         return PKT_SIZE_32;  // 32-4-2 = 26 bytes payload
@@ -53,13 +53,12 @@ uint8_t ProtocolHandler::GetOptimalSizeCode(size_t payload_size) {
     return PKT_SIZE_2048;      // Maximum 2048-byte packets (2048-4-2 = 2042 bytes payload)
 }
 
-// CRC16 calculation using CRC-16-CCITT to match Daisy hardware implementation
+// CRC-16-CCITT (polynomial 0x1021, init 0xFFFF), matching the Daisy's
+// hardware CRC configuration. Both MCUs must compute this identically.
 uint16_t ProtocolHandler::CalculateWaveXCrc(const uint8_t* data, size_t length) {
     if (!data || length == 0)
         return 0;
 
-    // Use CRC-16-CCITT algorithm matching Daisy hardware CRC
-    // Polynomial: 0x1021 (CRC-16-CCITT)
     uint16_t crc = 0xFFFF;
     for (size_t i = 0; i < length; i++) {
         crc ^= (uint16_t)(data[i]) << 8;
@@ -91,7 +90,6 @@ uint16_t ProtocolHandler::CalculatePacketCrc(const uint8_t* packet_data, size_t 
     return CalculateWaveXCrc(packet_data, packet_size - sizeof(uint16_t));
 }
 
-// New simplified CRC validation
 bool ProtocolHandler::ValidateWaveXPacket(const uint8_t* buffer, size_t buffer_size) {
     // Guard the subtractions below: a 4-byte header + 2-byte CRC is the
     // smallest possible frame, and buffer_size < 2 would underflow size_t
@@ -118,11 +116,9 @@ size_t ProtocolHandler::CreatePacket(uint8_t* buffer,
         seq_num = s_next_seq_num++;
     }
 
-    // Use the existing CreateWaveXPacket method
     return CreateWaveXPacket(buffer, buffer_size, msg_type, payload, payload_size, seq_num, flags);
 }
 
-// Single packet creation function for all message types
 size_t ProtocolHandler::CreateWaveXPacket(uint8_t* buffer,
                                           size_t buffer_size,
                                           uint8_t msg_type,
@@ -130,10 +126,7 @@ size_t ProtocolHandler::CreateWaveXPacket(uint8_t* buffer,
                                           size_t payload_size,
                                           uint16_t sequence_number,
                                           uint8_t flags) {
-    // Determine optimal packet size based on payload size
     uint8_t size_code = GetOptimalSizeCode(payload_size);
-
-    // Calculate total packet size
     size_t total_size = GetPacketSizeFromCode(size_code);
     if (total_size == 0 || total_size > buffer_size) {
         return 0;  // Invalid size or buffer too small
@@ -149,9 +142,8 @@ size_t ProtocolHandler::CreateWaveXPacket(uint8_t* buffer,
         return 0;
     }
 
-    // Create packet header (4 bytes)
-    buffer[0] = PKT_MAKE_FLAGS_SIZE(size_code, flags);  // flags + size
-    buffer[1] = msg_type;                               // Message type
+    buffer[0] = PKT_MAKE_FLAGS_SIZE(size_code, flags);
+    buffer[1] = msg_type;
     // The masks make these provably in range; the casts keep -Wconversion
     // quiet so a genuinely lossy narrowing stands out here later.
     buffer[2] = static_cast<uint8_t>(sequence_number & 0xFF);         // seq low byte
@@ -168,7 +160,9 @@ size_t ProtocolHandler::CreateWaveXPacket(uint8_t* buffer,
         memcpy(buffer + 4, payload, payload_size);
     }
 
-    // Zero-pad remaining space
+    // Zero the padding up to the size class. Receivers rely on this: fields
+    // appended to a message parse as zero on a peer still sending the older,
+    // shorter layout (see DiagPushMessage's heap fields).
     memset(buffer + 4 + payload_size, 0, total_size - 4 - payload_size - 2);
 
     // Calculate CRC over entire packet except CRC field
@@ -179,7 +173,6 @@ size_t ProtocolHandler::CreateWaveXPacket(uint8_t* buffer,
     return total_size;
 }
 
-// Single packet parsing function
 bool ProtocolHandler::ParseWaveXPacket(const uint8_t* buffer,
                                        size_t buffer_size,
                                        uint8_t& msg_type,
@@ -223,7 +216,7 @@ bool ProtocolHandler::ParseWaveXPacket(const uint8_t* buffer,
     return true;
 }
 
-// Optimized CRC validation (legacy - kept for compatibility)
+// Legacy entry point, kept for compatibility.
 bool ProtocolHandler::ValidatePacketCrc(const uint8_t* packet_data, size_t packet_size) {
     // A frame is a 4-byte header plus the 2-byte CRC; anything shorter cannot
     // carry a CRC to check, and indexing [packet_size - 2] would read out of
@@ -236,16 +229,13 @@ bool ProtocolHandler::ValidatePacketCrc(const uint8_t* packet_data, size_t packe
     return calculated_crc == received_crc;
 }
 
-// Zero-pad unused packet areas
 void ProtocolHandler::ZeroPadPacket(uint8_t* packet_data, size_t packet_size, size_t used_size) {
     if (used_size < packet_size) {
         memset(packet_data + used_size, 0, packet_size - used_size);
     }
 }
 
-// Simplified packet creation functions using new unified format
-
-// Generic packet creation function - DRY principle
+// Shared funnel for the per-message Create*Packet wrappers below.
 static size_t CreateUnifiedPacket(uint8_t* buffer,
                                   size_t buffer_size,
                                   uint8_t msg_type,
@@ -256,14 +246,12 @@ static size_t CreateUnifiedPacket(uint8_t* buffer,
         buffer, buffer_size, msg_type, payload_data, payload_size, flags);
 }
 
-// Create error packet using unified packet system
 size_t ProtocolHandler::CreateErrorPacket(uint8_t* buffer,
                                           size_t buffer_size,
                                           const ErrorMessage& err) {
     return CreateUnifiedPacket(buffer, buffer_size, MSG_ERROR, &err, sizeof(ErrorMessage));
 }
 
-// Create sample status packet using unified packet system
 size_t ProtocolHandler::CreateSampleStatusPacket(uint8_t* buffer,
                                                  size_t buffer_size,
                                                  const SampleStatusMessage& msg) {
@@ -271,7 +259,6 @@ size_t ProtocolHandler::CreateSampleStatusPacket(uint8_t* buffer,
         buffer, buffer_size, MSG_SAMPLE_STATUS, &msg, sizeof(SampleStatusMessage));
 }
 
-// Create sample stop response packet using unified packet system
 size_t ProtocolHandler::CreateStorageStatusPacket(uint8_t* buffer,
                                                   size_t buffer_size,
                                                   const StorageStatusMessage& status) {
@@ -319,7 +306,6 @@ size_t ProtocolHandler::CreateSampleStopRespPacket(uint8_t* buffer,
         buffer, buffer_size, MSG_SAMPLE_STOP_RESP, &msg, sizeof(SampleStopRespMessage));
 }
 
-// Create sample stop request packet using unified packet system
 size_t ProtocolHandler::CreateSampleStopReqPacket(uint8_t* buffer,
                                                   size_t buffer_size,
                                                   const SampleStopReqMessage& msg) {
@@ -327,28 +313,21 @@ size_t ProtocolHandler::CreateSampleStopReqPacket(uint8_t* buffer,
         buffer, buffer_size, MSG_SAMPLE_STOP_REQ, &msg, sizeof(SampleStopReqMessage));
 }
 
-// Create browse response packet using unified packet system
 size_t ProtocolHandler::CreateBrowseRespPacket(uint8_t* buffer,
                                                size_t buffer_size,
                                                uint32_t total_count,
                                                const FileEntryWire* entries,
                                                uint8_t n) {
-    // Calculate payload size: total_count (4 bytes) + n_entries (1 byte) + entries array
+    // Payload layout: [total_count u32][n u8][n * FileEntryWire]
     size_t payload_size = sizeof(uint32_t) + sizeof(uint8_t) + (size_t)n * sizeof(FileEntryWire);
 
-    // Create temporary payload buffer - increased size to handle max entries
-    uint8_t temp_payload[2048];  // Increased from 1024 to 2048 bytes to handle 20+ entries
+    uint8_t temp_payload[2048];  // staging; MAX_PKT_SIZE-sized
     if (payload_size > sizeof(temp_payload)) {
-        return 0;  // Payload too large
+        return 0;
     }
 
-    // Copy total_count first
     memcpy(temp_payload, &total_count, sizeof(uint32_t));
-
-    // Copy n_entries count
     temp_payload[sizeof(uint32_t)] = n;
-
-    // Copy entries array
     if (n > 0 && entries != NULL) {
         memcpy(temp_payload + sizeof(uint32_t) + sizeof(uint8_t),
                entries,
@@ -358,7 +337,6 @@ size_t ProtocolHandler::CreateBrowseRespPacket(uint8_t* buffer,
     return CreateUnifiedPacket(buffer, buffer_size, MSG_BROWSE_RESP, temp_payload, payload_size);
 }
 
-// Create sample path response packet using unified packet system
 size_t ProtocolHandler::CreateSamplePathResponsePacket(uint8_t* buffer,
                                                        size_t buffer_size,
                                                        const SamplePathResponseMessage& msg) {
@@ -366,7 +344,6 @@ size_t ProtocolHandler::CreateSamplePathResponsePacket(uint8_t* buffer,
         buffer, buffer_size, MSG_SAMPLE_GET_PATH_RESP, &msg, sizeof(SamplePathResponseMessage));
 }
 
-// Create control change packet using unified packet system
 size_t ProtocolHandler::CreateControlChangePacket(
     uint8_t* buffer, size_t buffer_size, uint8_t parameter, uint8_t channel, uint16_t value) {
     ControlChangeMessage msg(parameter, channel, value);
@@ -374,14 +351,12 @@ size_t ProtocolHandler::CreateControlChangePacket(
         buffer, buffer_size, MSG_CONTROL_CHANGE, &msg, sizeof(ControlChangeMessage));
 }
 
-// Create note on packet using unified packet system
 size_t ProtocolHandler::CreateNoteOnPacket(
     uint8_t* buffer, size_t buffer_size, uint8_t note, uint8_t velocity, uint8_t channel) {
     NoteMessage msg(note, velocity, channel);
     return CreateUnifiedPacket(buffer, buffer_size, MSG_NOTE_ON, &msg, sizeof(NoteMessage));
 }
 
-// Create note off packet using unified packet system
 size_t ProtocolHandler::CreateNoteOffPacket(uint8_t* buffer,
                                             size_t buffer_size,
                                             uint8_t note,
@@ -390,7 +365,6 @@ size_t ProtocolHandler::CreateNoteOffPacket(uint8_t* buffer,
     return CreateUnifiedPacket(buffer, buffer_size, MSG_NOTE_OFF, &msg, sizeof(NoteMessage));
 }
 
-// Create sample control packet using unified packet system
 size_t ProtocolHandler::CreateSampleCtrlPacket(uint8_t* buffer,
                                                size_t buffer_size,
                                                const SampleCtrlMessage& msg) {
@@ -398,7 +372,6 @@ size_t ProtocolHandler::CreateSampleCtrlPacket(uint8_t* buffer,
         buffer, buffer_size, MSG_SAMPLE_CTRL, &msg, sizeof(SampleCtrlMessage));
 }
 
-// Create preview request packet using unified packet system
 size_t ProtocolHandler::CreatePreviewReqPacket(uint8_t* buffer,
                                                size_t buffer_size,
                                                const PreviewReqMessage& msg) {
@@ -406,7 +379,6 @@ size_t ProtocolHandler::CreatePreviewReqPacket(uint8_t* buffer,
         buffer, buffer_size, MSG_PREVIEW_REQ, &msg, sizeof(PreviewReqMessage));
 }
 
-// Create data request packet using unified packet system
 size_t ProtocolHandler::CreateDataRequestPacket(uint8_t* buffer,
                                                 size_t buffer_size,
                                                 const DataRequestMessage& msg) {
@@ -414,35 +386,30 @@ size_t ProtocolHandler::CreateDataRequestPacket(uint8_t* buffer,
         buffer, buffer_size, MSG_DATA_REQUEST, &msg, sizeof(DataRequestMessage));
 }
 
-// Create meter push packet using unified packet system
 size_t ProtocolHandler::CreateMeterPushPacket(uint8_t* buffer,
                                               size_t buffer_size,
                                               const MeterPushMessage& msg) {
     return CreateUnifiedPacket(buffer, buffer_size, MSG_METER_PUSH, &msg, sizeof(MeterPushMessage));
 }
 
-// Create sync packet using unified packet system - force 32-byte packets for SPI
 size_t ProtocolHandler::CreateSyncPacket(uint8_t* buffer,
                                          size_t buffer_size,
                                          const SyncMessage& msg) {
     return CreatePacket(buffer, buffer_size, MSG_SYNC, &msg, sizeof(SyncMessage), 0);
 }
 
-// Create heartbeat packet using unified packet system - force 32-byte packets for SPI
 size_t ProtocolHandler::CreateHeartbeatPacket(uint8_t* buffer,
                                               size_t buffer_size,
                                               const HeartbeatMessage& msg) {
     return CreatePacket(buffer, buffer_size, MSG_HEARTBEAT, &msg, sizeof(HeartbeatMessage), 0);
 }
 
-// Create ACK packet using unified packet system
 size_t ProtocolHandler::CreateAckPacket(uint8_t* buffer,
                                         size_t buffer_size,
                                         const AckMessage& ack) {
     return CreateUnifiedPacket(buffer, buffer_size, MSG_ACK, &ack, sizeof(AckMessage));
 }
 
-// Create sample play index packet using unified packet system
 size_t ProtocolHandler::CreateSamplePlayIndexPacket(uint8_t* buffer,
                                                     size_t buffer_size,
                                                     const SamplePlayIndexMessage& msg) {
@@ -450,7 +417,6 @@ size_t ProtocolHandler::CreateSamplePlayIndexPacket(uint8_t* buffer,
         buffer, buffer_size, MSG_SAMPLE_PLAY_INDEX_REQ, &msg, sizeof(SamplePlayIndexMessage));
 }
 
-// Create sample get path packet using unified packet system
 size_t ProtocolHandler::CreateSampleGetPathPacket(uint8_t* buffer,
                                                   size_t buffer_size,
                                                   const SampleGetPathMessage& msg) {
@@ -492,26 +458,21 @@ size_t ProtocolHandler::CreateEnvelopeChunkPacket(uint8_t* buffer,
         buffer, buffer_size, MSG_ENVELOPE_CHUNK, temp_payload, total_payload_size);
 }
 
-// Create wave chunk packet using unified packet system
 size_t ProtocolHandler::CreateWaveChunkPacket(uint8_t* buffer,
                                               size_t buffer_size,
                                               const WaveChunkMessage& msg,
                                               const void* sample_data,
                                               size_t sample_data_size) {
-    // Calculate total payload size: header + sample data
+    // Payload layout: WaveChunkMessage header, then msg.count int16 samples.
     size_t header_size = sizeof(WaveChunkMessage);
     size_t total_payload_size = header_size + sample_data_size;
 
-    // Create temporary payload buffer
-    uint8_t temp_payload[2048];
+    uint8_t temp_payload[2048];  // staging; MAX_PKT_SIZE-sized
     if (total_payload_size > sizeof(temp_payload)) {
-        return 0;  // Payload too large
+        return 0;
     }
 
-    // Copy header
     memcpy(temp_payload, &msg, header_size);
-
-    // Copy sample data
     if (sample_data && sample_data_size > 0) {
         memcpy(temp_payload + header_size, sample_data, sample_data_size);
     }

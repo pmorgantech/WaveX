@@ -61,27 +61,22 @@ alignas(32) static uint8_t s_metadata_buf[4096];
 // FileSystem Implementation
 // ============================================================================
 
-// Implementation of FileSystem::GetFilePathByIndex
 namespace WaveX {
 namespace Storage {
 bool FileSystem::GetFilePathByIndex(uint32_t file_index, char* file_path, size_t max_len) {
-    // Use cached directory state to get file path by index
     if (!s_directory_state_valid || file_index >= s_current_file_count) {
         return false;  // No valid directory state or index out of range
     }
 
     const WaveX::Storage::FileEntry& entry = s_current_file_entries[file_index];
 
-    // Build full path: current_directory + "/" + filename
     size_t dir_len = strlen(s_current_directory);
     size_t name_len = strlen(entry.name);
 
-    // Check if we have enough space
     if (dir_len + 1 + name_len + 1 > max_len) {
         return false;  // Path too long
     }
 
-    // Build the path
     strcpy(file_path, s_current_directory);
 
     // Add "/" if current directory is not root and doesn't end with "/"
@@ -113,7 +108,6 @@ bool ParseWavMetadata(const WaveX::Storage::FileEntry& entry,
         *duration_ms_out = 0;
     }
 
-    // Build full file path
     char full_path[256];
     size_t dir_len = strlen(s_current_directory);
     size_t name_len = strlen(entry.name);
@@ -273,7 +267,6 @@ bool ParseWavMetadata(const WaveX::Storage::FileEntry& entry,
 namespace WaveX {
 namespace Comm {
 
-// Process browse request (existing function - updated for new format)
 void ProcessBrowseRequest(const char* path, size_t start_index, uint8_t max_entries) {
     using namespace WaveX::Storage;
     using namespace WaveX::Protocol;
@@ -460,7 +453,6 @@ void NotifyStorageAvailable() {
     WaveX::Log::PrintLine("DAISY: storage available - frontend can re-list");
 }
 
-// Process sample play request (existing function)
 void ProcessSamplePlayRequest(const char* file_path) {
     using namespace WaveX::Protocol;
     using namespace WaveX::AudioEngine;
@@ -500,7 +492,6 @@ void ProcessSamplePlayRequest(const char* file_path) {
     }
 }
 
-// Process sample stop request (existing function)
 void ProcessSampleStopRequest(uint8_t slot) {
     using namespace WaveX::Protocol;
     using namespace WaveX::AudioEngine;
@@ -531,7 +522,6 @@ void ProcessSampleStopRequest(uint8_t slot) {
     }
 }
 
-// Process sample play index request (existing function)
 void ProcessSamplePlayIndexRequest(uint32_t file_index) {
     using namespace WaveX::Storage;
     using namespace WaveX::Protocol;
@@ -558,7 +548,6 @@ void ProcessSamplePlayIndexRequest(uint32_t file_index) {
     }
 }
 
-// Process sample get path request (existing function)
 void ProcessSampleGetPathRequest(uint32_t file_index) {
     using namespace WaveX::Storage;
     using namespace WaveX::Protocol;

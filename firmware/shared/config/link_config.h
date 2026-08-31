@@ -4,12 +4,13 @@
 // Include centralized pin configuration
 #include "pin_config.h"
 
-// Set to 1 to enable debug logging for inter-MCU packet traffic
+// Set to 1 for link-level debug logging (connection/dispatch events)
 #ifndef WAVEX_MCU_LINK_DEBUG
 #define WAVEX_MCU_LINK_DEBUG 0
 #endif
 
-// Set to 1 to enable debug logging for inter-MCU packet traffic
+// Set to 1 for per-packet trace/dump logging - far noisier than
+// WAVEX_MCU_LINK_DEBUG, and each dump is a blocking log write
 #ifndef WAVEX_MCU_LINK_PACKET_DEBUG
 #define WAVEX_MCU_LINK_PACKET_DEBUG 0
 #endif
@@ -47,7 +48,7 @@
 #define PIN_IRQ_DAISY2ESP WAVEX_DAISY_IRQ_OUT
 #define PIN_IRQ_ESP2DAISY WAVEX_DAISY_ATTN_IN
 
-#define SPI_CLOCK_SPEED_HZ 10000000  // 8 MHz
+#define SPI_CLOCK_SPEED_HZ 10000000
 #define SPI_QUEUE_SIZE 4
 #define SPI_DMA_CHANNEL SPI_DMA_CH_AUTO
 #endif

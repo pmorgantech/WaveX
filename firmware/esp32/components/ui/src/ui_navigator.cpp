@@ -45,12 +45,10 @@ void UINavigator::push(std::shared_ptr<UIPage> page) {
         lv_scr_load(screen_);
         ESP_LOGI(TAG, "Created navigation screen");
 
-        // Full-screen container background
         lv_obj_set_size(screen_, lv_pct(100), lv_pct(100));
         lv_obj_set_style_bg_color(screen_, UI_COLOR_BACKGROUND, LV_PART_MAIN);
         lv_obj_set_style_border_width(screen_, 0, LV_PART_MAIN);
 
-        // Header
         header_ = lv_obj_create(screen_);
         lv_obj_set_size(header_, lv_pct(100), UI_HEADER_HEIGHT);
         lv_obj_set_style_bg_color(header_, UI_COLOR_HEADER, LV_PART_MAIN);
@@ -77,7 +75,6 @@ void UINavigator::push(std::shared_ptr<UIPage> page) {
         LV_UNLOCK();
     }
 
-    // Call onExit for current page if any
     if (!stack_.empty()) {
         auto current = stack_.top();
         ESP_LOGI(TAG, "Exiting page: %s", current->name());
@@ -86,18 +83,14 @@ void UINavigator::push(std::shared_ptr<UIPage> page) {
         LV_UNLOCK();
     }
 
-    // Push new page onto stack
     stack_.push(page);
     active_ = page;
     // Shift does not survive navigation - the next page's alternate row is a
     // different set of actions, and arriving already shifted is surprising.
     shifted_ = false;
 
-    // Clear content area only and create new page content
     LV_LOCK();
     lv_obj_clean(content_);
-
-    // Title
     lv_label_set_text(title_label_, page->name());
     LV_UNLOCK();
 
@@ -106,13 +99,11 @@ void UINavigator::push(std::shared_ptr<UIPage> page) {
     page->onEnter(content_);
     LV_UNLOCK();
 
-    // Create/update softkey bar and then correct content height
     LV_LOCK();
     softkeyBar_.create(screen_);
     softkeyBar_.setSoftkeys(page->getSoftkeys());
     refreshShiftChip();
 
-    // Compute content height: full screen minus header and softkey heights
     const int32_t total_h = lv_obj_get_height(lv_screen_active());
     const int32_t content_h = total_h - UI_HEADER_HEIGHT - UI_HOTKEY_HEIGHT;
     lv_obj_set_size(content_, lv_pct(100), content_h > 0 ? content_h : 0);
@@ -128,7 +119,6 @@ void UINavigator::pop() {
         return;
     }
 
-    // Exit current page
     if (!stack_.empty()) {
         auto current = stack_.top();
         ESP_LOGI(TAG, "Exiting page: %s", current->name());
@@ -138,12 +128,10 @@ void UINavigator::pop() {
         stack_.pop();
     }
 
-    // Get previous page
     if (!stack_.empty()) {
         auto prev = stack_.top();
         active_ = prev;
 
-        // Clear content and recreate previous page content
         LV_LOCK();
         lv_obj_clean(content_);
         lv_label_set_text(title_label_, prev->name());
@@ -154,7 +142,6 @@ void UINavigator::pop() {
         prev->onEnter(content_);
         LV_UNLOCK();
 
-        // Update softkey bar and layout
         LV_LOCK();
         softkeyBar_.create(screen_);
         shifted_ = false;  // see push(): Shift does not survive navigation

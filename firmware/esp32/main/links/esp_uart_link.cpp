@@ -122,7 +122,6 @@ static WaveX::Protocol::SequenceTracker s_rx_seq;
 // PacketRouter reference (injected via uart_link_set_packet_router)
 static WaveX::Comm::PacketRouter* s_packet_router = nullptr;
 
-// Get the injected PacketRouter reference
 static WaveX::Comm::PacketRouter& GetRouter() {
     if (!s_packet_router) {
         // Fallback for tests or uninitialized state - this should not happen in production
@@ -352,10 +351,8 @@ void uart_task(void* /*param*/) {
 
 }  // namespace
 
-// Set PacketRouter reference for dependency injection
 void uart_link_set_packet_router(WaveX::Comm::PacketRouter* packet_router) {
     s_packet_router = packet_router;
-    // Initialize the packet router with stats callback
     if (s_packet_router) {
         s_packet_router->set_stats_callback(
             [](uint8_t packet_type) { inter_mcu_increment_packet_stat(packet_type); });

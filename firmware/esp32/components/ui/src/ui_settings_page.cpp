@@ -318,7 +318,7 @@ void UISettingsPage::moveSelection(int delta) {
         }
     }
     selectedSetting_ = idx;
-    editingValue_ = false;  // Exit edit mode when changing selection
+    editingValue_ = false;
     refreshSelection();
 
     ESP_LOGD(TAG,
@@ -337,7 +337,6 @@ void UISettingsPage::adjustValue(int delta) {
 
     int newValue = setting.value + delta;
 
-    // Clamp to min/max range
     if (newValue < setting.minValue)
         newValue = setting.minValue;
     if (newValue > setting.maxValue)
@@ -370,7 +369,6 @@ void UISettingsPage::updateSetting(int settingIndex, int newValue) {
     auto& setting = settings_[settingIndex];
     setting.value = newValue;
 
-    // Update display
     if (settingIndex < (int)valueLabels_.size() && valueLabels_[settingIndex]) {
         LV_LOCK();
         char valueText[64];
@@ -379,7 +377,6 @@ void UISettingsPage::updateSetting(int settingIndex, int newValue) {
         LV_UNLOCK();
     }
 
-    // Call change callback
     if (setting.onChange) {
         setting.onChange(newValue);
     }

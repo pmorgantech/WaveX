@@ -17,10 +17,6 @@ static const char* TAG = "UI_SAMPLE_BROWSER";
 namespace wavex_ui {
 
 namespace {
-// Silence between loop passes when auditioning from the browser. Long enough
-// to hear where the file ends - without it a one-shot loops seamlessly and
-// reads as a drone - short enough not to feel like a fault.
-
 // Design 1b, page-relative (the content area already starts below the header).
 constexpr int kMargin = 12;
 constexpr int kStatusY = 12;
@@ -101,7 +97,6 @@ void UISampleBrowser::onEnter(lv_obj_t* parent) {
     lv_obj_set_style_pad_all(info_panel_, 0, LV_PART_MAIN);
     lv_obj_remove_flag(info_panel_, LV_OBJ_FLAG_SCROLLABLE);
 
-    // Filename headline.
     detail_name_ = lv_label_create(info_panel_);
     lv_obj_set_style_text_font(detail_name_, &lv_font_montserrat_26, LV_PART_MAIN);
     lv_obj_set_style_text_color(detail_name_, UI_COLOR_TEXT, LV_PART_MAIN);
@@ -120,7 +115,6 @@ void UISampleBrowser::onEnter(lv_obj_t* parent) {
     lv_label_set_long_mode(metadata_label_, LV_LABEL_LONG_WRAP);
     lv_label_set_text(metadata_label_, "");
 
-    // Audition state and progress along the bottom.
     status_label_ = lv_label_create(info_panel_);
     lv_obj_set_style_text_font(status_label_, &lv_font_montserrat_18, LV_PART_MAIN);
     lv_obj_set_style_text_color(status_label_, lv_color_hex(kColGreen), LV_PART_MAIN);
@@ -137,7 +131,6 @@ void UISampleBrowser::onEnter(lv_obj_t* parent) {
     lv_obj_set_style_bg_color(play_bar_, lv_color_hex(0x1F1F1F), LV_PART_MAIN);
     lv_obj_set_style_bg_color(play_bar_, lv_color_hex(kColGreen), LV_PART_INDICATOR);
 
-    // Configure file browser - restore last directory path if available
     wavex_file_browser_config_t browser_config = {.root_path = persistent_state_.current_directory_path.c_str(), .file_extension = ".wav", .max_entries = 50, .show_hidden = false, .comm_interface = comm_interface_};
 
     ESP_LOGI(TAG, "Creating file browser with root_path: %s", browser_config.root_path);
@@ -152,14 +145,12 @@ void UISampleBrowser::onEnter(lv_obj_t* parent) {
     // rather than a zeroed cache (which the check reads as "unknown, allow").
     inter_mcu_request_sample_mem_status();
 
-    // Set callbacks
     wavex_file_browser_set_file_selected_callback(file_browser_, file_selected_callback, this);
     wavex_file_browser_set_file_selected_index_callback(
         file_browser_, file_selected_index_callback, this);
     wavex_file_browser_set_directory_changed_callback(
         file_browser_, directory_changed_callback, this);
 
-    // Restore previous state
     is_playing_ = persistent_state_.is_playing;
     selected_file_index_ = persistent_state_.selected_file_index;
     current_directory_ = persistent_state_.current_directory_path;
@@ -171,11 +162,9 @@ void UISampleBrowser::onEnter(lv_obj_t* parent) {
              persistent_state_.playing_sample_path.c_str(),
              selected_file_index_);
 
-    // Set the selected index if we have entries
     if (file_browser_ && wavex_file_browser_get_entry_count(file_browser_) > 0) {
         wavex_file_browser_set_selection(file_browser_, persistent_state_.selected_file_index);
 
-        // Get the selected entry and update metadata
         const wavex_file_entry_t* selected_entry = wavex_file_browser_get_selected(file_browser_);
         if (selected_entry) {
             updateMetadata(selected_entry);
@@ -185,7 +174,6 @@ void UISampleBrowser::onEnter(lv_obj_t* parent) {
         }
     }
 
-    // Register sample status callback and set active instance (after everything is initialized)
     ESP_LOGI(TAG, "=== SAMPLE BROWSER ON_ENTER: Registering callback and setting active instance");
     inter_mcu_set_sample_status_listener(sample_status_callback, this);
     s_active_instance_ = this;
@@ -218,7 +206,6 @@ void UISampleBrowser::onExit() {
     // NOTE: Do NOT stop playback when navigating away - allow playback to continue
     // This allows users to browse other pages while audio plays in the background
 
-    // Preserve state before destroying
     if (file_browser_) {
         const char* current_path = wavex_file_browser_get_current_path(file_browser_);
         if (current_path) {
@@ -232,12 +219,10 @@ void UISampleBrowser::onExit() {
         file_browser_ = nullptr;
     }
 
-    // Clear active instance
     if (s_active_instance_ == this) {
         s_active_instance_ = nullptr;
     }
 
-    // Clean up UI objects
     if (root_) {
         lv_obj_del(root_);
         root_ = nullptr;
@@ -251,8 +236,6 @@ void UISampleBrowser::onExit() {
 }
 
 void UISampleBrowser::onInput(const InputEvent& evt) {
-    // NOTE: onInput is called from UI task (not LVGL context), so we need locks for LVGL operations
-
     switch (evt.type) {
         case InputType::EncoderUp:
         case InputType::EncoderDown: {
@@ -308,10 +291,8 @@ void UISampleBrowser::onInput(const InputEvent& evt) {
 std::array<Softkey, NUM_SOFTKEYS> UISampleBrowser::getSoftkeys() {
     std::array<Softkey, NUM_SOFTKEYS> keys{};
 
-    // Back button
     keys[0] = {"Back", [this]() { UINavigator::instance().pop(); }};
 
-    // Audition/Stop button
     if (is_playing_) {
         keys[1] = {"Stop", [this]() {
             ESP_LOGI(TAG, "Stop audition requested");
@@ -347,19 +328,15 @@ std::array<Softkey, NUM_SOFTKEYS> UISampleBrowser::getSoftkeys() {
             return;
         }
 
-        // Check if it's ".." entry (parent directory)
         if (strcmp(selected->name, "..") == 0) {
             ESP_LOGI(TAG, "Navigating up to parent directory");
             wavex_file_browser_navigate_up(file_browser_);
-            // Refresh softkeys after navigation
             refreshSoftkeys();
             return;
         }
 
-        // Check if it's a directory
         if (selected->is_directory) {
             ESP_LOGI(TAG, "Navigating into directory: %s", selected->name);
-            // Normalize path to avoid double slashes
             char normalized_path[96];
             const char* path_to_use = selected->path;
 
@@ -380,7 +357,6 @@ std::array<Softkey, NUM_SOFTKEYS> UISampleBrowser::getSoftkeys() {
 
             ESP_LOGI(TAG, "Normalized path: '%s' -> '%s'", selected->path, path_to_use);
             wavex_file_browser_navigate_to(file_browser_, path_to_use);
-            // Refresh softkeys after navigation
             refreshSoftkeys();
         } else {
             // Regular file - load sample into sample RAM
@@ -390,13 +366,11 @@ std::array<Softkey, NUM_SOFTKEYS> UISampleBrowser::getSoftkeys() {
             }
         } } };
 
-    // Up arrow button
     keys[3] = {"Up", [this]() {
         ESP_LOGI(TAG, "Up button pressed");
         if (!file_browser_) return;
         wavex_file_browser_navigate_up_entry(file_browser_); } };
 
-    // Down arrow button
     keys[4] = {"Down", [this]() {
         ESP_LOGI(TAG, "Down button pressed");
         if (!file_browser_) return;
@@ -440,17 +414,12 @@ void UISampleBrowser::directory_changed_callback(const char* path, void* user_da
     ESP_LOGI(
         TAG, "Directory changed to: %s (current: %s)", path, browser->current_directory_.c_str());
 
-    // Update current directory tracking
     browser->current_directory_ = path;
-
-    // Update persistent state
     browser->persistent_state_.changeDirectory(path);
 
-    // Clear previous state
     browser->selected_file_index_ = 0;
     memset(browser->selected_file_path_, 0, sizeof(browser->selected_file_path_));
 
-    // Clear metadata display initially
     strcpy(browser->pending_metadata_text_, "Select a file to view metadata");
     browser->pending_metadata_entry_ = nullptr;
     browser->metadata_update_pending_.store(true, std::memory_order_release);
@@ -461,7 +430,6 @@ void UISampleBrowser::directory_changed_callback(const char* path, void* user_da
     // reads the selection and updates the label on the UI task.
     browser->selection_metadata_pending_.store(true, std::memory_order_release);
 
-    // Update status - show playing status if we're currently playing, otherwise browsing
     char status_text[256];
     if (browser->is_playing_ && !browser->persistent_state_.playing_sample_path.empty()) {
         snprintf(status_text,
@@ -519,7 +487,6 @@ void UISampleBrowser::updateStatus(const char* status) {
     if (!status)
         return;
 
-    // Safety check - don't queue updates if UI isn't ready
     if (!is_initialized_ || !status_label_ || !root_) {
         ESP_LOGW(TAG, "updateStatus called but UI not ready - status: %s", status);
         return;
@@ -537,7 +504,6 @@ void UISampleBrowser::updateMetadata(const wavex_file_entry_t* entry) {
     if (!entry)
         return;
 
-    // Safety check - don't queue updates if UI isn't ready
     if (!is_initialized_ || !metadata_label_ || !root_) {
         ESP_LOGW(TAG, "updateMetadata called but UI not ready - entry: %s", entry->name);
         return;
@@ -563,7 +529,6 @@ void UISampleBrowser::processDeferredUpdates() {
 void UISampleBrowser::processDeferredUpdates_() {
     // This should be called from UI task loop with LVGL lock held
 
-    // Process status update
     if (status_update_pending_.load(std::memory_order_acquire) && status_label_) {
         lv_label_set_text(status_label_, pending_status_text_);
         status_update_pending_.store(false, std::memory_order_relaxed);
@@ -602,7 +567,6 @@ void UISampleBrowser::processDeferredUpdates_() {
         }
     }
 
-    // Process metadata update
     refreshStatusStrip();
     if (file_browser_) {
         wavex_file_browser_update_loading_row(file_browser_);
@@ -636,7 +600,6 @@ void UISampleBrowser::processDeferredUpdates_() {
                          (unsigned long)entry->size_bytes,
                          entry->path);
 
-                // Format file size
                 char size_str[32];
                 if (entry->size_bytes < 1024) {
                     snprintf(size_str, sizeof(size_str), "%lu B", entry->size_bytes);
@@ -666,7 +629,6 @@ void UISampleBrowser::processDeferredUpdates_() {
                 }
 
                 if (entry->sample_rate > 0) {
-                    // Format duration from milliseconds
                     uint32_t duration_ms = entry->duration_ms;
                     if (duration_ms >= 60000) {  // >= 1 minute
                         int minutes = duration_ms / 60000;
@@ -681,7 +643,6 @@ void UISampleBrowser::processDeferredUpdates_() {
                         snprintf(duration_str, sizeof(duration_str), "%lums", duration_ms);
                     }
 
-                    // Format sample rate
                     if (entry->sample_rate >= 1000) {
                         snprintf(sample_rate_str,
                                  sizeof(sample_rate_str),
@@ -694,7 +655,6 @@ void UISampleBrowser::processDeferredUpdates_() {
                                  (unsigned long)entry->sample_rate);
                     }
 
-                    // Format channels
                     if (entry->channels == 1) {
                         snprintf(channels_str, sizeof(channels_str), "Mono");
                     } else if (entry->channels == 2) {
@@ -713,9 +673,6 @@ void UISampleBrowser::processDeferredUpdates_() {
                     ESP_LOGD(TAG, "No WAV metadata available for: %s", entry->name);
                 }
 
-                // Three labelled rows, per design 1b - the old block repeated
-                // the filename (now the headline above) and told the user
-                // which softkeys exist, which the softkey bar already does.
                 // Two labelled rows, per design 1b. The old block repeated the
                 // filename (now the headline above) and listed which softkeys
                 // exist, which the softkey bar already shows.
@@ -752,7 +709,6 @@ void UISampleBrowser::processDeferredUpdates_() {
         }
     }
 
-    // Process file browser pending updates
     if (file_browser_) {
         wavex_file_browser_process_pending_updates(file_browser_);
     }
@@ -775,7 +731,6 @@ bool UISampleBrowser::auditionSampleByIndex(uint32_t file_index) {
     ESP_LOGI(TAG, "=== SAMPLE PLAY INDEX OPERATION: Request sent successfully ===");
     is_playing_ = true;
 
-    // Get the file name for status display
     const wavex_file_entry_t* entry = wavex_file_browser_get_entry(file_browser_, file_index);
     std::string filename = entry ? entry->name : "Unknown";
 
@@ -788,12 +743,10 @@ bool UISampleBrowser::auditionSampleByIndex(uint32_t file_index) {
              filename.c_str(),
              persistent_state_.playing_sample_path.c_str());
 
-    // Update status
     char status_text[256];
     snprintf(status_text, sizeof(status_text), "Playing: %s", filename.c_str());
     updateStatus(status_text);
 
-    // Refresh softkeys to reflect playing state
     refreshSoftkeys();
 
     return true;
@@ -826,7 +779,6 @@ bool UISampleBrowser::stopAudition() {
 }
 
 void UISampleBrowser::refreshSoftkeys() {
-    // Safety check - don't refresh if UI isn't ready
     if (!is_initialized_ || !root_) {
         ESP_LOGW(TAG, "refreshSoftkeys called but UI not ready");
         return;
@@ -862,7 +814,6 @@ void UISampleBrowser::sample_status_callback(uint16_t sample_id,
 
     UISampleBrowser* browser = static_cast<UISampleBrowser*>(user_data);
 
-    // Comprehensive validation with detailed logging
     if (!browser) {
         ESP_LOGE(TAG, "=== CALLBACK ERROR: browser is NULL!");
         return;
@@ -881,7 +832,6 @@ void UISampleBrowser::sample_status_callback(uint16_t sample_id,
         return;
     }
 
-    // Validate UI objects exist
     if (!browser->status_label_) {
         ESP_LOGE(TAG, "=== CALLBACK ERROR: status_label_ is NULL!");
         return;
@@ -900,7 +850,6 @@ void UISampleBrowser::sample_status_callback(uint16_t sample_id,
         browser->is_playing_ = false;
         browser->persistent_state_.stopPlayback();
 
-        // Only update UI if we're still properly initialized
         if (browser->is_initialized_ && browser->status_label_ && browser->root_) {
             ESP_LOGD(TAG, "=== SAMPLE STOP RESPONSE: Updating UI ===");
             browser->pending_play_bar_pct_.store(0, std::memory_order_relaxed);
@@ -962,7 +911,6 @@ void UISampleBrowser::sample_status_callback(uint16_t sample_id,
                      (unsigned)sample_id,
                      path && path[0] ? " (" : "",
                      path && path[0] ? path : "");
-            // If path was appended, close paren
             if (path && path[0]) {
                 size_t len = strlen(status_text);
                 if (len < sizeof(status_text) - 1) {

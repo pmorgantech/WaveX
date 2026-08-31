@@ -26,21 +26,17 @@ class PacketRouter {
                             uint8_t flags,
                             uint16_t sequence_number);
 
-    // Statistics callback
     void set_stats_callback(std::function<void(uint8_t)> callback) { m_stats_callback = callback; }
 
    private:
-    // Route unified packets (single format)
     void route_unified_packet(const uint8_t* packet_data, size_t packet_len);
 
-    // Route by message type (extracted from unified packet)
     void route_by_message_type(uint8_t msg_type,
                                const uint8_t* payload,
                                size_t payload_len,
                                uint8_t flags,
                                uint16_t sequence_number);
 
-    // Route browse responses (large data packets)
     void route_browse_response(const uint8_t* packet_data, size_t packet_len);
 
     // Message handlers
@@ -64,7 +60,6 @@ class PacketRouter {
     void handle_cv_cal_resp(const WaveX::Protocol::CvCalMessage& msg);
     void handle_unknown_message(uint8_t type, const uint8_t* payload, size_t length);
 
-    // Statistics callback
     std::function<void(uint8_t)> m_stats_callback;
 };
 

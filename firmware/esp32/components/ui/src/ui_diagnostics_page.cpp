@@ -654,17 +654,14 @@ void UIDiagnosticsPage::showTabOffline(Card* cards, int n, const char* why) {
 void UIDiagnosticsPage::onExit() {
     ESP_LOGI(TAG, "Diagnostics page exiting");
 
-    // Stop diagnostics monitoring
     inter_mcu_send_diag_subscribe(false, 2);
     stopDiagnosticsMonitoring();
 
-    // Clear UI element references
     ui_update_pending = false;
 }
 
 void UIDiagnosticsPage::onInput(const InputEvent& /*evt*/) {
-    // Handle input events if needed
-    // For now, diagnostics page is read-only
+    // Diagnostics page is read-only.
 }
 
 std::array<Softkey, NUM_SOFTKEYS> UIDiagnosticsPage::getSoftkeys() {
@@ -695,7 +692,6 @@ std::array<Softkey, NUM_SOFTKEYS> UIDiagnosticsPage::getSoftkeys() {
 }
 
 void UIDiagnosticsPage::startDiagnosticsMonitoring() {
-    // Create ESP timer for data collection
     const esp_timer_create_args_t diag_timer_args = {
         .callback = &UIDiagnosticsPage::diagnosticsUpdateCallback,
         .arg = this,
@@ -711,7 +707,6 @@ void UIDiagnosticsPage::startDiagnosticsMonitoring() {
         ESP_LOGE(TAG, "Failed to create diagnostics timer: %s", esp_err_to_name(timer_ret));
     }
 
-    // Create LVGL timer for UI updates
     lvgl_update_timer = lv_timer_create(lvglUpdateTimerCallback, 50, this);  // Check every 50ms
     if (!lvgl_update_timer) {
         ESP_LOGE(TAG, "Failed to create LVGL update timer");
@@ -719,13 +714,11 @@ void UIDiagnosticsPage::startDiagnosticsMonitoring() {
 }
 
 void UIDiagnosticsPage::stopDiagnosticsMonitoring() {
-    // Stop and delete LVGL timer first
     if (lvgl_update_timer) {
         lv_timer_del(lvgl_update_timer);
         lvgl_update_timer = nullptr;
     }
 
-    // Stop and delete ESP timer
     if (diagnostics_timer_handle) {
         esp_timer_stop(diagnostics_timer_handle);
         esp_timer_delete(diagnostics_timer_handle);
@@ -755,7 +748,6 @@ void UIDiagnosticsPage::updateCpuUsageFreertosStats() {
     uint32_t current_time_ms = (uint32_t)(esp_timer_get_time() / 1000);
 
     if (last_check_time_ms == 0) {
-        // Initialize previous runtime counters
         last_total_runtime = 0;
         last_idle_runtime_core0 = 0;
         last_idle_runtime_core1 = 0;
@@ -795,17 +787,11 @@ void UIDiagnosticsPage::updateCpuUsageFreertosStats() {
             }
         }
 
-        // Calculate per-core CPU usage using idle time
-        // CPU usage = (total_time - idle_time) / total_time * 100
-
         if (total_system_runtime > last_total_runtime && last_total_runtime > 0) {
-            // Calculate idle time differences
             uint32_t idle_diff_core0 = idle_runtime_core0 - last_idle_runtime_core0;
             uint32_t idle_diff_core1 = idle_runtime_core1 - last_idle_runtime_core1;
             uint32_t total_diff = total_system_runtime - last_total_runtime;
 
-            // CPU usage calculation based on IDLE task runtime
-            // CPU% = 100 - (idle_ticks / total_ticks) * 100
             if (total_diff > 0) {
                 // total_diff accumulates BOTH cores, so a single core's share
                 // of wall-clock time is half of it. Dividing one core's idle
@@ -815,10 +801,8 @@ void UIDiagnosticsPage::updateCpuUsageFreertosStats() {
                 float core0_usage = 100.0f - ((float)idle_diff_core0 / per_core_diff * 100.0f);
                 float core1_usage = 100.0f - ((float)idle_diff_core1 / per_core_diff * 100.0f);
 
-                // Overall CPU usage (average of both cores)
                 cpu_usage_percent = (core0_usage + core1_usage) / 2.0f;
 
-                // Update rolling average for stability
                 cpu_usage_history[cpu_measurement_count % 10] = cpu_usage_percent;
                 cpu_measurement_count++;
 
@@ -829,11 +813,9 @@ void UIDiagnosticsPage::updateCpuUsageFreertosStats() {
                 }
                 cpu_usage_percent = sum / static_cast<float>(count);
 
-                // Set per-core values
                 cpu_usage_core0 = core0_usage;
                 cpu_usage_core1 = core1_usage;
 
-                // Clamp values to reasonable ranges
                 cpu_usage_percent = std::max(0.0f, std::min(100.0f, cpu_usage_percent));
                 cpu_usage_core0 = std::max(0.0f, std::min(100.0f, cpu_usage_core0));
                 cpu_usage_core1 = std::max(0.0f, std::min(100.0f, cpu_usage_core1));
@@ -848,7 +830,6 @@ void UIDiagnosticsPage::updateCpuUsageFreertosStats() {
             }
         }
 
-        // Store values for next iteration
         last_total_runtime = total_system_runtime;
         last_idle_runtime_core0 = idle_runtime_core0;
         last_idle_runtime_core1 = idle_runtime_core1;

@@ -15,7 +15,6 @@ typedef void* portMUX_TYPE;
 #define portMUX_INITIALIZER_UNLOCKED {0}
 #endif
 
-// Packet statistics structure
 typedef struct {
     uint32_t sync_packets;
     uint32_t control_change_packets;
@@ -45,7 +44,6 @@ typedef struct {
     uint32_t invalid_packets;
 } wavex_packet_stats_t;
 
-// TX statistics structure
 typedef struct {
     uint32_t total_messages_sent;
     uint32_t ping_messages_sent;
@@ -53,7 +51,6 @@ typedef struct {
     uint32_t last_send_time;
 } wavex_tx_stats_t;
 
-// Packet summary structure
 typedef struct {
     uint32_t total_packets;
     uint32_t meter_packets;
@@ -62,7 +59,6 @@ typedef struct {
     uint32_t invalid_packets;
 } wavex_packet_summary_t;
 
-// Meter data structure
 typedef struct {
     float rms_left;
     float rms_right;
@@ -72,7 +68,15 @@ typedef struct {
     bool valid;
 } wavex_meter_data_t;
 
-// Statistics manager that handles all statistics tracking
+/**
+ * @brief Thread-safe aggregator for link statistics, backend heartbeat, and meter data.
+ *
+ * Each stat group (packet counters, TX counters, heartbeat, meter data) is guarded
+ * by its own spinlock, written from the UART RX task and read from the UI task. The
+ * UI-facing callbacks (meter/browse/storage/sample-status) are separate from those
+ * spinlocks - they go through ListenerSlot (listener_slot.h), which is mutex-guarded
+ * across the invocation so a page can safely deregister while a callback may be in flight.
+ */
 class StatisticsManager {
    public:
     StatisticsManager();
@@ -128,7 +132,7 @@ class StatisticsManager {
                                              void* user_data),
                             void* user_data);
 
-    // Browse response callback
+    // Storage status and browse response callbacks
     void set_storage_status_callback(void (*callback)(bool mounted, void* user_data),
                                      void* user_data);
     void invoke_storage_status_callback(bool mounted);
@@ -200,6 +204,5 @@ class StatisticsManager {
                                        void* user_data)>
         m_sample_status_listener;
 
-    // Helper methods
     void update_tx_stats(uint8_t message_type);
 };

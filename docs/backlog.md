@@ -536,3 +536,23 @@ someone reads the flag as routing audio when it does not yet.
 
 **Fix if picked up:** route the audio callback's output through
 `s_output_sink` when Stage B wiring lands, and drop the unused attribute.
+
+---
+
+## `WAVEX_ESP_SPI2_*` pins collide with `WAVEX_ESP_PCNT1_*`
+
+**Found in the 2026-08-30 comment audit of `firmware/shared`.**
+`pin_config.h` assigns `WAVEX_ESP_SPI2_SCLK/MOSI` to GPIO 46/47, the same
+pins as `WAVEX_ESP_PCNT1_A/B` — consistent with that header's own UNVERIFIED
+warning that the ESP32 assignments were written for an S3 DevKit and never
+re-checked against the P4 board.
+
+**Why it is not urgent:** the SPI link is compiled out
+(`WAVEX_SPI_LINK_ENABLED` is 0), so only the PCNT assignment is live; the
+collision cannot bite until the SPI link is revived. Resolving it now would
+mean guessing new pins without the hardware in hand, which is exactly what
+the UNVERIFIED warning exists to prevent.
+
+**Fix if picked up:** assign non-conflicting SPI2 pins as part of the pin
+re-verification pass `pin_config.h` already calls for, before re-enabling
+`WAVEX_SPI_LINK_ENABLED`.

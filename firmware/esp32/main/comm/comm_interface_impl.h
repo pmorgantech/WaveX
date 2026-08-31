@@ -50,7 +50,7 @@ class CommInterfaceImpl : public ICommInterface {
     bool isBusy() override;
 
    private:
-    StatisticsManager& statistics_;  // Injected dependency reference
+    StatisticsManager& statistics_;
 };
 
 }  // namespace Comm

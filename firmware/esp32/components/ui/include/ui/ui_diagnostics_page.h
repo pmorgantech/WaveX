@@ -98,7 +98,6 @@ class UIDiagnosticsPage : public UIPage {
                   bool gauge,
                   int warn_pct);
     void setCard(Card& c, const char* value, const char* unit, const char* sub, int pct);
-    // Add a sparkline to an existing card.
     void addSpark(Card& c, uint32_t colour);
     void pushSpark(Card& c, int value);
 
@@ -148,8 +147,6 @@ class UIDiagnosticsPage : public UIPage {
     uint32_t last_idle_runtime_core1;
     uint32_t last_check_time_ms;
 
-    // ESP-IDF CPU monitoring
-
     // Timer handles
     esp_timer_handle_t diagnostics_timer_handle;
     lv_timer_t* lvgl_update_timer;
@@ -184,9 +181,6 @@ class UIDiagnosticsPage : public UIPage {
     std::atomic<bool> ui_update_pending;
 };
 
-/**
- * @brief Factory function for diagnostics page
- */
 std::shared_ptr<UIPage> createDiagnosticsPage();
 
 }  // namespace wavex_ui

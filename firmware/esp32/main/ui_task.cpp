@@ -62,7 +62,6 @@ static std::atomic<bool> s_ui_running{false};
 
 // UITask class implementation
 UITask::UITask(WaveX::Comm::ICommInterface &comm_interface) : m_comm_interface(comm_interface) {
-    // Initialize the UI context with injected dependencies
     m_context.comm_interface = &m_comm_interface;
 
     // Register comm interface with UI system for page creation
@@ -74,7 +73,6 @@ UITask::UITask(WaveX::Comm::ICommInterface &comm_interface) : m_comm_interface(c
 esp_err_t UITask::init() {
     ESP_LOGI(TAG, "Initializing UITask");
 
-    // Initialize LVGL display
     ESP_LOGI(TAG, "Initializing LVGL display...");
     esp_err_t lvgl_ret = wavex_ui::DisplayManager::instance().init();
     if (lvgl_ret != ESP_OK) {
@@ -84,7 +82,6 @@ esp_err_t UITask::init() {
 
     ESP_LOGI(TAG, "LVGL display initialized successfully");
 
-    // Log memory status
     ESP_LOGI(TAG, "Memory after display init:");
     ESP_LOGI(TAG, "  Free heap: %zu bytes", esp_get_free_heap_size());
 
@@ -112,13 +109,10 @@ esp_err_t UITask::start() {
         }
     }
 
-    // Initialize navigation system
     wavex_ui::initNavigationSystem();
 
-    // Set navigation context as active input handler
     wavex_ui::InputDispatcher::instance().setActiveContext(wavex_ui::createNavigationContext());
 
-    // Create UI task
     s_ui_running = true;
     TaskHandle_t handle = NULL;
     BaseType_t task_ret =
@@ -138,7 +132,6 @@ esp_err_t UITask::start() {
         return ESP_FAIL;
     }
 
-    // Set global instance
     g_ui_task_instance = this;
 
     ESP_LOGI(TAG, "UITask started successfully");
@@ -162,7 +155,6 @@ esp_err_t UITask::stop() {
         return ESP_ERR_TIMEOUT;
     }
 
-    // Let display manager clean up LVGL and touch resources
     wavex_ui::DisplayManager::instance().deinit();
 
     ESP_LOGI(TAG, "UITask stopped");
@@ -180,11 +172,9 @@ esp_err_t UITask::getPanelHandle(esp_lcd_panel_handle_t *panel_handle) {
 void UITask::adaptiveRefreshControl() {
     uint32_t current_time = (uint32_t)(esp_timer_get_time() / 1000);  // Convert to ms
 
-    // Only refresh if content has changed and enough time has passed
     if (m_context.content_changed) {
         uint32_t time_since_last_refresh = current_time - m_context.last_refresh_time;
 
-        // Use minimum refresh interval for responsive updates
         if (time_since_last_refresh >= MIN_REFRESH_INTERVAL_MS) {
             if (auto *display = wavex_ui::DisplayManager::instance().display()) {
                 LV_LOCK();
@@ -196,7 +186,6 @@ void UITask::adaptiveRefreshControl() {
             m_context.last_refresh_time = current_time;
             m_context.refresh_count++;
 
-            // Log refresh rate every 100 refreshes for monitoring
             if (m_context.refresh_count % 100 == 0) {
                 ESP_LOGD(TAG, "Display refresh count: %lu", m_context.refresh_count);
             }
@@ -218,16 +207,12 @@ void UITask::uiTaskFunction(void *pvParameters) {
 void UITask::run() {
     ESP_LOGI(TAG, "UI task started with full UI support");
 
-    // Defer layout construction to the navigator stack
     ESP_LOGI(TAG, "Handing layout control to navigator stack");
 
-    // Main UI loop with adaptive refresh rate control
     ESP_LOGI(TAG, "UI loop started with adaptive refresh rate control");
     while (s_ui_running) {
-        // Apply encoder movement to active UI when applicable
         int32_t enc_delta = pcnt_consume_delta(WAVEX_ENCODER_PCNT_UNIT);
         if (enc_delta != 0) {
-            // Post unified input events for encoder movement
             wavex_ui::InputEvent evt;
             evt.type = (enc_delta > 0) ? wavex_ui::InputType::EncoderRight
                                        : wavex_ui::InputType::EncoderLeft;
@@ -239,7 +224,6 @@ void UITask::run() {
             // No need for manual encoder handling here
         }
 
-        // Read potentiometer encoder (PCNT1) for scrolling
 #if WAVEX_ESP_PCNT1_ENABLED
         int32_t pot_delta = pcnt_consume_delta(WAVEX_PCNT1_UNIT);
         if (pot_delta != 0) {
@@ -291,10 +275,8 @@ void UITask::run() {
         wavex_ui::UISampleBrowser::processDeferredUpdates();
         LV_UNLOCK();
 
-        // Use adaptive refresh control for optimal performance
         adaptiveRefreshControl();
 
-        // Short delay to prevent excessive CPU usage
         vTaskDelay(pdMS_TO_TICKS(32));  // 32ms delay for 30 FPS theoretical maximum
     }
 

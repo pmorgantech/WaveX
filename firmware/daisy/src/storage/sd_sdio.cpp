@@ -383,7 +383,6 @@ bool InitAndMount(DaisySeed& hw, bool auto_format) {
     // Initialize Card Detect pin (active low - card present when pin reads LOW)
     s_cd_pin.Init(hw.GetPin(WAVEX_DAISY_SD_CARD_DETECT_PIN), GPIO::Mode::INPUT, GPIO::Pull::PULLUP);
 
-    // Check if SD card is physically present
     if (s_cd_pin.Read())  // HIGH = no card (pulled up)
     {
         WaveX::Log::PrintLine("SD: No card detected (CD pin D%d HIGH)",
@@ -429,13 +428,11 @@ bool InitAndMount(DaisySeed& hw, bool auto_format) {
         for (int retry = 0; retry < max_retries; retry++) {
             test_fr = f_opendir(&dir, "/");
 
-            // If successful, break out of retry loop
             if (test_fr == FR_OK) {
                 test_success = true;
                 break;
             }
 
-            // If it's a "not ready" error and we haven't exhausted retries, wait and retry
             if (test_fr == FR_NOT_READY && retry < max_retries - 1) {
                 WaveX::Log::PrintLine("SD: Drive not ready, retrying in %d ms (attempt %d/%d)...",
                                       retry_delay_ms,
@@ -467,7 +464,6 @@ bool InitAndMount(DaisySeed& hw, bool auto_format) {
             WaveX::Log::PrintLine("SD: Filesystem access successful - SD card ready");
             return true;
         } else {
-            // Provide detailed error information
             const char* error_msg = "Unknown error";
             switch (test_fr) {
                 case FR_NO_FILE:
@@ -519,7 +515,6 @@ bool InitAndMount(DaisySeed& hw, bool auto_format) {
                 return true;  // Return true since mount setup succeeded
             }
 
-            // For other errors, fail initialization
             WaveX::Log::PrintLine("SD: Filesystem access failed after %d retries - %s (%d)",
                                   max_retries,
                                   error_msg,

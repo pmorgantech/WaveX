@@ -28,10 +28,8 @@ static gpio_num_t s_int_gpio = GPIO_NUM_NC;
 static TCA8418* s_dev = nullptr;
 #endif
 
-// Simple example mapping: map TCA keycode -> logical button id
+// Keycode per TCA8418: 1..80 => R/C encoded.
 static uint8_t map_keycode_to_button(uint8_t keycode) {
-    // Keycode per TCA8418: 1..80 => R/C encoded; adjust as needed
-    // Example: return 1 for Select, 2 for Back, 3 for EncoderClick
     switch (keycode) {
         case 1:
             return 1;  // Select
@@ -128,7 +126,6 @@ esp_err_t tca8418_keypad_start(int int_gpio, uint8_t i2c_addr) {
         i2c = bsp_i2c_get_handle();
     }
 
-    // Create device
 #if defined(ESP_PLATFORM) && WAVEX_ESP_BUTTON_MATRIX_ENABLED
     s_dev = new TCA8418(i2c, GPIO_NUM_NC, i2c_addr);
     if (!s_dev) {
@@ -161,7 +158,6 @@ esp_err_t tca8418_keypad_start(int int_gpio, uint8_t i2c_addr) {
         ESP_RETURN_ON_ERROR(gpio_config(&io), TAG, "gpio_config failed");
     }
 
-    // Start task
     s_running = true;
     TaskHandle_t handle = nullptr;
     BaseType_t ok = xTaskCreatePinnedToCore(keypad_task,

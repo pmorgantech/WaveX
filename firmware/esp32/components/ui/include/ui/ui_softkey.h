@@ -8,9 +8,6 @@
 
 namespace wavex_ui {
 
-/**
- * @brief Softkey definition for bottom navigation bar
- */
 struct Softkey {
     std::string label;              ///< Display text; empty renders an inert slot
     std::function<void()> onPress;  ///< Callback when button is pressed
@@ -23,9 +20,6 @@ struct Softkey {
                                     ///< dozens of {label, cb} aggregate inits.
 };
 
-/**
- * @brief Number of softkeys in the navigation bar
- */
 constexpr int NUM_SOFTKEYS = 6;
 
 /**

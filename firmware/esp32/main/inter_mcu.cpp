@@ -67,12 +67,10 @@ esp_err_t inter_mcu_init(StatisticsManager& statistics) {
         return ESP_OK;
     }
 
-    // Store injected StatisticsManager reference
     s_statistics = &statistics;
 
     ESP_LOGI(TAG, "Initializing inter-MCU communication (UART only)...");
 
-    // Initialize UART link only
     esp_err_t ret = uart_link_init();
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "UART link initialization failed");
@@ -509,8 +507,6 @@ void inter_mcu_get_sample_mem_status(wavex_sample_mem_status_t* out) {
     taskEXIT_CRITICAL(&s_sample_mem_lock);
 }
 
-// Implement missing functions that are declared in the header
-
 void inter_mcu_set_wave_chunk_listener(wavex_wave_chunk_cb_t cb, void* user_data) {
     s_wave_chunk_listener.set(cb, user_data);
     ESP_LOGI(TAG, "Wave chunk listener registered: %p", cb);
@@ -765,8 +761,6 @@ void inter_mcu_increment_packet_stat(uint8_t packet_type) {
     s_statistics->increment_packet_stat(packet_type);
 }
 
-// Direct SPI API functions (replacing LinkManager)
-
 esp_err_t inter_mcu_send_browse_req(const char* path, uint8_t start_index) {
     ESP_LOGD("inter_mcu",
              "inter_mcu_send_browse_req: path='%s', start_index=%d",
@@ -887,11 +881,8 @@ esp_err_t inter_mcu_send_sample_data(const uint8_t* data, size_t length) {
     return result >= 0 ? ESP_OK : ESP_FAIL;
 }
 
-// Handle sample stop response from communication layer
 void inter_mcu_handle_sample_stop_response(bool success) {
     ESP_LOGI("InterMCU", "inter_mcu_handle_sample_stop_response: success=%d", success ? 1 : 0);
-    // Trigger sample status callback with stopped state (0)
-    // This allows the UI layer to handle the response through the registered callback
     if (s_statistics) {
         s_statistics->invoke_sample_status_callback(
             0, 0, 0, 0, 0);  // sample_id=0, state=0 (stopped)

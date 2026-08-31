@@ -21,7 +21,6 @@
 
 static const char *TAG = "PCNT_TASK";
 
-// PCNT unit configurations
 static wavex_pcnt_config_t s_pcnt_configs[] = {
     // Main encoder
     {.unit = WAVEX_ENCODER_PCNT_UNIT,
@@ -38,13 +37,11 @@ static wavex_pcnt_config_t s_pcnt_configs[] = {
 
 #define PCNT_CONFIG_COUNT (sizeof(s_pcnt_configs) / sizeof(wavex_pcnt_config_t))
 
-// Encoder readings storage
 static encoder_reading_t s_encoder_readings[WAVEX_PCNT_UNIT_COUNT] = {};
 
 // Driver handles, indexed by WaveX logical unit. NULL means "not initialized".
 static pcnt_unit_handle_t s_pcnt_units[WAVEX_PCNT_UNIT_COUNT] = {};
 
-// Task handle
 static std::atomic<TaskHandle_t> s_pcnt_task_handle{NULL};
 // Shutdown handshake; see midi_task.cpp. This task touches PCNT driver
 // internals, so it has to leave its loop on its own rather than be deleted.
@@ -191,7 +188,6 @@ static void pcnt_task(void *pvParameters) {
     ESP_LOGI(TAG, "PCNT monitoring task started (polling-based for reliable operation)");
 
     while (s_pcnt_running) {
-        // Poll encoder counters for changes
         for (size_t i = 0; i < PCNT_CONFIG_COUNT; i++) {
             const wavex_pcnt_config_t *config = &s_pcnt_configs[i];
             if (!config->enabled || s_pcnt_units[config->unit] == NULL) {
@@ -200,7 +196,6 @@ static void pcnt_task(void *pvParameters) {
 
             encoder_reading_t *reading = &s_encoder_readings[config->unit];
 
-            // Read current hardware counter value
             int hw_count = 0;
             esp_err_t get_err = pcnt_unit_get_count(s_pcnt_units[config->unit], &hw_count);
             if (get_err != ESP_OK) {
@@ -213,7 +208,6 @@ static void pcnt_task(void *pvParameters) {
                 continue;
             }
 
-            // Calculate delta since last poll
             int32_t delta = (int32_t)hw_count - reading->last_hw;
             reading->last_hw = (int32_t)hw_count;
             if (delta != 0) {
@@ -265,7 +259,6 @@ static void pcnt_task(void *pvParameters) {
             }
         }
 
-        // Brief delay for polling frequency (faster polling for better responsiveness)
         vTaskDelay(pdMS_TO_TICKS(2));
     }
 
@@ -276,7 +269,6 @@ static void pcnt_task(void *pvParameters) {
 esp_err_t pcnt_task_init(void) {
     ESP_LOGI(TAG, "Initializing PCNT task...");
 
-    // Initialize all enabled PCNT units
     for (size_t i = 0; i < PCNT_CONFIG_COUNT; i++) {
         const wavex_pcnt_config_t *config = &s_pcnt_configs[i];
         if (config->enabled) {
@@ -295,7 +287,6 @@ esp_err_t pcnt_task_init(void) {
 esp_err_t pcnt_task_start(void) {
     ESP_LOGI(TAG, "Starting PCNT reading task...");
 
-    // Create PCNT reading task
     s_pcnt_running = true;
     TaskHandle_t handle = NULL;
     BaseType_t ret = xTaskCreate(pcnt_task,    // Task function
@@ -335,7 +326,6 @@ esp_err_t pcnt_get_reading(uint8_t unit, encoder_reading_t *reading) {
         return ESP_ERR_INVALID_ARG;
     }
 
-    // Check if unit is enabled
     bool unit_enabled = false;
     for (size_t i = 0; i < PCNT_CONFIG_COUNT; i++) {
         if (s_pcnt_configs[i].unit == unit && s_pcnt_configs[i].enabled) {

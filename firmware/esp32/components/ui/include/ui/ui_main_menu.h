@@ -26,14 +26,9 @@ namespace wavex_ui {
  * as Voice's Mod tab.
  */
 
-/**
- * @brief Create the main menu page
- */
 std::shared_ptr<UIPage> createMainMenu();
 
-/**
- * @brief Create the Sample tab group (Manage / Browse / Edit / Record)
- */
+/// Sample tab group: Manage / Browse / Edit / Record tabs.
 std::shared_ptr<UIPage> createSampleGroup();
 
 /**
@@ -46,19 +41,10 @@ std::shared_ptr<UIPage> createSampleGroup();
  */
 std::shared_ptr<UIPage> createSettingsGroup();
 
-/**
- * @brief Create the display settings page (Settings ▸ Display)
- */
 std::shared_ptr<UIPage> createDisplaySettingsPage();
 
-/**
- * @brief Create the storage settings page (Settings ▸ Storage)
- */
 std::shared_ptr<UIPage> createStorageSettingsPage();
 
-/**
- * @brief Create the MIDI settings page (Settings ▸ MIDI)
- */
 std::shared_ptr<UIPage> createMidiSettingsPage();
 
 }  // namespace wavex_ui

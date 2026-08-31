@@ -29,7 +29,6 @@ typedef int esp_err_t;
 #define ESP_OK 0
 #endif
 
-// Include WaveX configuration
 #include "config.h"
 
 // esp_err.h is brought in transitively by ESP-IDF headers when building on target
@@ -37,12 +36,10 @@ typedef int esp_err_t;
 #include "inter_mcu.h"
 #include "ui_task.h"
 
-// Bring in the SPI link API
 #if WAVEX_SPI_LINK_ENABLED
 #include "links/esp_spi_link.h"
 #endif
 
-// Bring in the PCNT task API
 #ifndef WAVEX_TEST_BUILD
 #include "log_ring.h"
 #include "pcnt_task.h"
@@ -86,7 +83,6 @@ bool WaveXApplication::initialize() {
     ESP_LOGI(TAG, "Built: %s %s", app_desc->date, app_desc->time);
     ESP_LOGI(TAG, "Free heap: %" PRIu32 " bytes", esp_get_free_heap_size());
 
-    // Initialize subsystems in order
     if (!initializeInterMCU()) {
         ESP_LOGE(TAG, "Failed to initialize inter-MCU communication");
         return false;
@@ -137,7 +133,6 @@ void WaveXApplication::run() {
     while (true) {
         m_loopCounter++;
 
-        // Log system status periodically
         logSystemStatus();
 
         // UART operations are handled by inter_mcu
@@ -157,7 +152,6 @@ bool WaveXApplication::initializeInterMCU() {
         return false;
     }
 
-    // Start inter-MCU communication (UART link)
     esp_err_t start_result = inter_mcu_start();
     if (start_result != ESP_OK) {
         ESP_LOGE(TAG, "Inter-MCU start failed: %s", esp_err_to_name(start_result));
@@ -177,7 +171,6 @@ bool WaveXApplication::initializePCNT() {
         return false;
     }
 
-    // Start PCNT reading task
     esp_err_t start_result = pcnt_task_start();
     if (start_result != ESP_OK) {
         ESP_LOGE(TAG, "PCNT task start failed: %s", esp_err_to_name(start_result));
@@ -209,7 +202,7 @@ bool WaveXApplication::initializeUI() {
 void WaveXApplication::logSystemStatus() {
     int current_time = (int)(esp_timer_get_time() / 1000000);
 
-    if (current_time - m_lastHeapLogTime >= 60) { // Log every 60 seconds
+    if (current_time - m_lastHeapLogTime >= 60) {
         ESP_LOGI(TAG,
                  "System status - Loop: %d, Free heap: %" PRIu32 " bytes",
                  m_loopCounter,

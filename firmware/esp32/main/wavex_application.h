@@ -16,14 +16,7 @@ namespace WaveX {
 
 class WaveXApplication {
    public:
-    /**
-     * @brief Construct a new WaveX Application object
-     */
     WaveXApplication();
-
-    /**
-     * @brief Destroy the WaveX Application object
-     */
     ~WaveXApplication() = default;
 
     // Delete copy/move operations - application should be unique
@@ -33,43 +26,21 @@ class WaveXApplication {
     WaveXApplication& operator=(WaveXApplication&&) = delete;
 
     /**
-     * @brief Initialize the application
+     * @brief Bring up inter-MCU, PCNT encoders, MIDI (DIN + USB), and UI, in that order.
      *
-     * Initializes all subsystems in the correct order.
-     * @return true if initialization succeeded, false otherwise
+     * MIDI failures are logged and skipped (the instrument works without MIDI);
+     * every other subsystem failing here aborts startup. See main.cpp's app_main
+     * for what a false return means for the caller (restart, not a plain return).
      */
     bool initialize();
 
-    /**
-     * @brief Run the main application loop
-     *
-     * This method contains the main application loop and should not return
-     * under normal circumstances.
-     */
+    /** Runs until reset; does not return under normal operation. */
     void run();
 
    private:
-    /**
-     * @brief Initialize inter-MCU communication
-     * @return true if successful
-     */
     bool initializeInterMCU();
-
-    /**
-     * @brief Initialize PCNT encoders
-     * @return true if successful
-     */
     bool initializePCNT();
-
-    /**
-     * @brief Initialize UI system
-     * @return true if successful
-     */
     bool initializeUI();
-
-    /**
-     * @brief Log system status periodically
-     */
     void logSystemStatus();
 
     // Application context owns all system components
