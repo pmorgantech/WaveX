@@ -5,6 +5,7 @@
 #include "comm/diag_push.h"
 #include "comm/log_ring.h"
 #include "config/link_config.h"
+#include "config/logging_config.h"
 #include "daisy_seed.h"
 #include "daisysp.h"
 #include "memory_sections.h"
@@ -12,6 +13,7 @@
 #include "stm32h7xx_hal.h"
 
 #include "config.hpp"
+#include <atomic>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -63,6 +65,22 @@ static constexpr char kDfuTriggerToken[] = "WAVEX-ENTER-DFU";
 static constexpr size_t kDfuTriggerLen = sizeof(kDfuTriggerToken) - 1;
 static volatile bool s_dfu_requested = false;
 
+// ---------------------------------------------------------------------------
+// Host-driven log-level control (scripts/wavex_log.py)
+//
+// "WAVEX-LOG <MODULE|*> <LEVEL>\n" on the same CDC port adjusts the runtime
+// level table (logging_config.h), and "WAVEX-LOG ?\n" lists every module's
+// current level - a deep dive into one subsystem without reflashing. Same
+// discipline as the DFU token: the USB ISR only captures bytes; parsing and
+// the reply happen on the main loop.
+// ---------------------------------------------------------------------------
+static constexpr char kLogCmdToken[] = "WAVEX-LOG ";
+static constexpr size_t kLogCmdTokenLen = sizeof(kLogCmdToken) - 1;
+static char s_log_cmd_buf[48];
+// release/acquire pair: the ISR fills s_log_cmd_buf and only then publishes
+// via this flag; the main loop must not observe true before those writes.
+static std::atomic<bool> s_log_cmd_pending{false};
+
 // Runs in USB interrupt context: match bytes and set a flag, nothing else.
 // No logging, no allocation, and above all no reset from in here.
 static void UsbRxCallback(uint8_t* buff, uint32_t* len) {
@@ -70,6 +88,9 @@ static void UsbRxCallback(uint8_t* buff, uint32_t* len) {
         return;
     }
     static size_t matched = 0;
+    static size_t log_matched = 0;
+    static size_t log_capture = 0;  // bytes of command captured; 0 = not capturing
+    static bool log_capturing = false;
     for (uint32_t i = 0; i < *len; ++i) {
         const char c = static_cast<char>(buff[i]);
         if (c == kDfuTriggerToken[matched]) {
@@ -80,6 +101,29 @@ static void UsbRxCallback(uint8_t* buff, uint32_t* len) {
         } else {
             // A mismatch can still be the start of a fresh match.
             matched = (c == kDfuTriggerToken[0]) ? 1u : 0u;
+        }
+
+        if (log_capturing) {
+            if (c == '\n' || c == '\r' || log_capture + 1 >= sizeof(s_log_cmd_buf)) {
+                s_log_cmd_buf[log_capture] = '\0';
+                log_capturing = false;
+                log_capture = 0;
+                s_log_cmd_pending.store(true, std::memory_order_release);
+            } else {
+                s_log_cmd_buf[log_capture++] = c;
+            }
+        } else if (c == kLogCmdToken[log_matched]) {
+            if (++log_matched == kLogCmdTokenLen) {
+                log_matched = 0;
+                // While a previous command awaits the main loop, drop this
+                // one rather than scribble over the buffer being parsed.
+                if (!s_log_cmd_pending.load(std::memory_order_acquire)) {
+                    log_capturing = true;
+                    log_capture = 0;
+                }
+            }
+        } else {
+            log_matched = (c == kLogCmdToken[0]) ? 1u : 0u;
         }
     }
 }
@@ -461,6 +505,25 @@ int main(void) {
 #endif
 
         loop_counter++;
+
+        // Host adjusted the runtime log levels over CDC. Parse on the main
+        // loop (log_ring context rules), reply through the ring so the host
+        // script gets confirmation on the same port it sent the command.
+        if (s_log_cmd_pending.load(std::memory_order_acquire)) {
+            if (s_log_cmd_buf[0] == '?' && s_log_cmd_buf[1] == '\0') {
+                for (size_t m = 0; m < WaveX::Log::kModuleCount; ++m) {
+                    WaveX::Log::PrintLine("WAVEX-LOG: %s=%s",
+                                          WaveX::Log::kModuleNames[m],
+                                          WaveX::Log::kLevelNames[WaveX::Log::GetLevel(
+                                              static_cast<WaveX::Log::Module>(m))]);
+                }
+            } else {
+                char reply[96];
+                WaveX::Log::ApplyLevelCommand(s_log_cmd_buf, reply, sizeof(reply));
+                WaveX::Log::PrintLine("%s", reply);
+            }
+            s_log_cmd_pending.store(false, std::memory_order_release);
+        }
 
         // Host asked us to hand the USB port over to the bootloader. Do it
         // from the main loop, not the USB ISR, and give the log a moment to

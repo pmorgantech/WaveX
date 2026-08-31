@@ -556,3 +556,28 @@ the UNVERIFIED warning exists to prevent.
 **Fix if picked up:** assign non-conflicting SPI2 pins as part of the pin
 re-verification pass `pin_config.h` already calls for, before re-enabling
 `WAVEX_SPI_LINK_ENABLED`.
+
+---
+
+## Logging: fold `UART_LOGx` into the module table; level the legacy Daisy call sites
+
+**Deferred from the 2026-08-31 logging rework** (see `docs/logging.md`).
+Two remainders:
+
+- The 88 `UART_LOGE/W/I/V` call sites (`uart_debug_config.h`) still use
+  their own compile-time-only level (`WAVEX_UART_DEBUG_LEVEL`, currently
+  errors-only). Folding them into the UART_PROTOCOL module would make link
+  protocol detail runtime-tunable like everything else.
+- The ~100 legacy `WAVEX_LOG_DAISY(MODULE, ...)` call sites are all INFO via
+  the compatibility alias. Each deserves a real level (boot landmarks stay
+  INFO; per-message chatter becomes DEBUG/TRACE), after which the alias can
+  go and chatty modules could default to WARN.
+
+**Why it is not urgent:** the new gates already deliver the goal — default
+output is quiet where it was migrated, and any module can be deep-dived at
+runtime. These remainders only widen coverage; they change no behavior
+until each call site is judged, which is exactly why they shouldn't be
+rushed inside the infrastructure commit.
+
+**Fix if picked up:** mechanical per-file passes, one module at a time, with
+the level-choice guidance in `docs/logging.md`.

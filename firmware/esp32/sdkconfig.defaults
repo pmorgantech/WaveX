@@ -101,3 +101,13 @@ CONFIG_LIBC_PICOLIBC=y
 #
 # Tracked as E-SDK1 in docs/code_review_esp32_20260829.md.
 # -----------------------------------------------------------------------------
+
+# -----------------------------------------------------------------------------
+# Logging: keep DEBUG/VERBOSE call sites compiled in (MAXIMUM=VERBOSE) while
+# the default output level stays INFO. This is what lets "WAVEX-LOG <tag>
+# DEBUG" / esp_log_level_set enable a subsystem's detail at runtime with no
+# rebuild - with MAXIMUM_EQUALS_DEFAULT those call sites don't exist in the
+# binary and can never be turned on.
+# -----------------------------------------------------------------------------
+CONFIG_LOG_MAXIMUM_EQUALS_DEFAULT=n
+CONFIG_LOG_MAXIMUM_LEVEL_VERBOSE=y

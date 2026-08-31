@@ -11,6 +11,32 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Added — runtime log-level control on both consoles, and a configurator
+
+- **Daisy**: `WAVEX-LOG <MODULE|*> <LEVEL>` (or `WAVEX-LOG ?` to list) on the
+  CDC port adjusts the runtime level table live. Same discipline as the DFU
+  trigger: the USB ISR only captures bytes; parsing and the reply happen on
+  the main loop through the log ring.
+- **ESP32**: the same grammar on the console UART (same listener as the
+  screenshot token). Module names also mirror into their `WAVEX-<MODULE>`
+  IDF tag — on the ESP32 both the module byte and IDF's per-tag level gate
+  output — and unmatched names apply as verbatim IDF tags via
+  `esp_log_level_set`, which makes the 400+ plain `ESP_LOGx` call sites
+  (`UI_NAVIGATOR`, `packet_router`, ...) individually tunable too.
+- **sdkconfig**: `CONFIG_LOG_MAXIMUM_LEVEL` raised to VERBOSE with the
+  default level still INFO, so DEBUG/VERBOSE call sites exist in the binary
+  and can be enabled per tag at runtime. Previously
+  `MAXIMUM_EQUALS_DEFAULT=y` compiled them out — detail could never be
+  turned on without a rebuild.
+- **`scripts/wavex_log.py`**: the configurator. `--list` prints the module
+  table (parsed from `logging_config.h`, the single source of truth);
+  `wavex_log.py <board> <MODULE|tag|*|?> [LEVEL]` sends the command over
+  the right serial port (without claiming it, so it coexists with
+  `serial_log.py`) and tails `logs/<board>.log` for the confirmation.
+- `docs/logging.md` documents the model, the commands, and level-choice
+  guidance; remaining migrations (UART_LOGx fold-in, leveling the legacy
+  Daisy call sites) are recorded in `docs/backlog.md`.
+
 ### Added — leveled, per-module debug logging core (`logging_config.h` rework)
 
 - `WAVEX_LOGE/W/I/D/T(MODULE, ...)` replace the flat per-component on/off
