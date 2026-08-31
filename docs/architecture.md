@@ -82,7 +82,7 @@ The **file browsing model** follows from the storage split: the SD card is on th
 | SD card | microSD, SDMMC 4-bit via libDaisy `SdmmcHandler` + FatFs | SDMMC | working (SPI-SD legacy code still in tree) |
 | CV DACs | **open decision — see §3.3** | I2C or SPI | prototype (MCP4728 I2C in code) |
 | Inter-MCU link (live) | UART @ 2 Mbaud, framing in `firmware/shared/uart_protocol/` | UART1 (ESP) ↔ UART4 (Daisy) | working — carries **all** inter-MCU traffic |
-| Inter-MCU link (SPI) | SPI: **Daisy master / ESP32 slave**, mode 0, software CS, ATTN line ESP GPIO31 → Daisy D0 | SPI1 (Daisy) / SPI3_HOST slave (ESP) | wired but **compiled out** (`WAVEX_SPI_LINK_ENABLED=0` in `link_config.h`); revival requires bench re-validation |
+| Inter-MCU link (SPI) | SPI: **Daisy master / ESP32 slave**, mode 0, software CS, ATTN line ESP → Daisy (`WAVEX_ESP_ATTN_OUT` / `WAVEX_DAISY_ATTN_IN`) | SPI1 (Daisy) / SPI3_HOST slave (ESP) | wired but **compiled out** (`WAVEX_SPI_LINK_ENABLED=0` in `link_config.h`); revival requires bench re-validation |
 
 ### 3.2 Authoritative configuration files
 
@@ -195,7 +195,7 @@ Known architectural debt (from the 2026-06-26 assessment, still valid): event/ca
 See `features/inter-mcu-protocol.md` for the message catalog. Every message struct lives in `firmware/shared/spi_protocol/protocol.h` regardless of transport. Transport status (**as-built; decision recorded 2026-07-05**):
 
 - **UART is the transport of record.** All inter-MCU traffic — heartbeat, meters, status, browse requests/responses, wave-preview chunks, note on/off, sample load/control — runs over UART1 (ESP32) ↔ UART4 (Daisy) at 2 Mbaud, using the framing in `firmware/shared/uart_protocol/uart_protocol.h` (0xA5/0x5A markers, 16-bit length, CRC16-CCITT, 16-bit sequence numbers) with `protocol.h` structs as payloads. Daisy UART4 uses independent continuous RX DMA1 Stream 5 and asynchronous TX DMA2 Stream 4 through the WaveX-owned `uart4_dma_transport`; this bypasses libDaisy v8.1.0's single-operation UART DMA scheduler (upstream issue #653). The ESP32 legacy UART driver is interrupt/ring-buffer driven. New messages target this link.
-- **The SPI link is wired but compiled out**: `WAVEX_SPI_LINK_ENABLED` is `0` in `firmware/shared/config/link_config.h`, so `daisy_spi_link.cpp` / `esp_spi_link.cpp` (Daisy master / ESP32 slave, ATTN line, fixed power-of-two transaction sizes 32–2048 B) are in no shipped image. Re-enabling SPI — whether for bulk browse/wave data or full consolidation — is future work requiring bench re-validation, and roadmap Phase 1 item 6 ("raise SPI link clock") is blocked on it. Until then, do not extend the SPI path.
+- **The SPI link is wired but compiled out**: `WAVEX_SPI_LINK_ENABLED` is `0` in `firmware/shared/config/link_config.h`, so `daisy_spi_link.cpp` / `esp_spi_link.cpp` (Daisy master / ESP32 slave, ATTN line, fixed power-of-two transaction sizes 32–2048 B) are in no shipped image. Re-enabling SPI — whether for bulk browse/wave data or full consolidation — is future work requiring bench re-validation, and roadmap Phase 1 item 3 ("raise SPI link clock") is blocked on it. Until then, do not extend the SPI path.
 - The pre-2026-07-05 revision of this section stated the opposite ("SPI active, UART legacy"); see `docs/code_review_20260705.md` finding C4 for the correction trail.
 
 ---

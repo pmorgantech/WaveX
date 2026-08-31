@@ -92,8 +92,8 @@ __pycache__/
 sdkconfig
 
 docs/archive/
-docs/docx2md.py
-docs/venv/
+tools/docx2md.py
+tools/docx2md-venv/
 
 .codegraph/
 graphify-out/

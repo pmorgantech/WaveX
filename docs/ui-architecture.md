@@ -6,7 +6,7 @@ facts moved to [`ui-design-constraints.md`](ui-design-constraints.md))
 **Version**: 2.2
 
 **Hardware/toolkit summary** (full detail + sources in the constraints doc):
-LVGL 9.4 on ESP32-P4, 5-inch 720×1280 MIPI-DSI panel software-rotated to
+LVGL 9.5.0 on ESP32-P4, 5-inch 720×1280 MIPI-DSI panel software-rotated to
 1280×720 landscape, RGB565, 30 FPS UI task, 75 px header + 100 px six-button
 softkey bar → 1280×545 content area, Montserrat fonts only.
 

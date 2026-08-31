@@ -4,7 +4,7 @@ WaveX is a modern **sampler / groovebox / drum machine** with a 5" touchscreen, 
 
 - **Frontend — ESP32-P4** (ESP-IDF 5.5, LVGL 9): 1280×720 MIPI-DSI touchscreen UI, encoders, button matrix, LEDs, MIDI I/O.
 - **Backend — Daisy Seed / STM32H750** (libDaisy, 480 MHz Cortex-M7, 64 MB SDRAM): real-time audio engine at 48 kHz, sample streaming from SD (SDMMC 4-bit), CV outputs, DSP.
-- **Inter-MCU link**: SPI (Daisy master, ESP32 slave) with a shared, tested wire protocol (`firmware/shared/spi_protocol/`), CRC16, sequence numbers, and an attention line for slave-initiated data.
+- **Inter-MCU link**: UART at 2 Mbaud (ESP32 UART1 ↔ Daisy UART4), full-duplex DMA both ends, carrying a shared, tested wire protocol (`firmware/shared/uart_protocol/` framing over `firmware/shared/spi_protocol/protocol.h` payloads) with CRC16 and sequence numbers. An SPI link is wired and an ATTN line exists, but both are **compiled out** (`WAVEX_SPI_LINK_ENABLED=0`) — see [`docs/architecture.md`](docs/architecture.md) §4.4.
 
 ## Documentation
 
@@ -104,7 +104,7 @@ Full component table and open hardware decisions: [`docs/architecture.md`](docs/
 | Storage | 16 MB flash | microSD via SDMMC 4-bit + FatFs |
 | MIDI | DIN (UART2) + USB | — |
 | CV/Gate | — | CV DAC bus (part selection in progress — see architecture §3.3) |
-| Link | SPI slave + ATTN out | SPI master |
+| Link | UART1 (2 Mbaud, DMA) | UART4 (2 Mbaud, DMA) — SPI + ATTN wired but compiled out |
 
 Note: the ESP32-P4 itself has **no radio**; the board's WiFi 6 comes from an onboard ESP32-C6 (currently unused).
 

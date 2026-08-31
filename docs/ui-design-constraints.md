@@ -13,7 +13,7 @@ structured), [`ui-system-implementation-guide.md`](ui-system-implementation-guid
 
 > Design screens for a hardware groovebox/sampler with a **5-inch 1280×720
 > landscape touchscreen** (720×1280 panel, software-rotated 90°), rendered
-> with **LVGL 9.4** at **RGB565** (16-bit color, no alpha-heavy effects).
+> with **LVGL 9.5** at **RGB565** (16-bit color, no alpha-heavy effects).
 >
 > **Fixed chrome, not negotiable:** a 75 px header strip (screen title) at the
 > top and a 100 px softkey bar at the bottom with **exactly 6 equal-width
@@ -67,7 +67,7 @@ structured), [`ui-system-implementation-guide.md`](ui-system-implementation-guid
 |---|---|
 | 720×1280 panel, 5-inch, MIPI DSI | `CONFIG_BSP_LCD_TYPE_720_1280_5_INCH_A` in `firmware/esp32/sdkconfig`; Waveshare ESP32-P4 Nano BSP |
 | Software rotation to landscape | `lv_display_set_rotation(display_, LV_DISPLAY_ROTATION_90)` + `.sw_rotate = true`, `display_manager.cpp` |
-| LVGL 9.4, RGB565 | `main/idf_component.yml` (`lvgl/lvgl: >=9.4,<10`), `CONFIG_LV_COLOR_DEPTH=16` |
+| LVGL 9.5.0, RGB565 | `main/idf_component.yml` pins `lvgl/lvgl: >=9.4,<10`; `firmware/esp32/dependencies.lock` resolves **9.5.0**. `CONFIG_LV_COLOR_DEPTH=16` |
 | 20-line strip buffer, DMA, internal RAM | `.buffer_size = 720 * 20, .double_buffer = true, .buff_dma = true, .buff_spiram = false`, `display_manager.cpp` |
 | Header 75 px / softkeys 100 px / 6 buttons | `UI_HEADER_HEIGHT`, `UI_HOTKEY_HEIGHT` in `components/ui/styles/ui_theme.h`; `NUM_SOFTKEYS = 6` in `ui_softkey.h` |
 | Fonts | `CONFIG_LV_FONT_MONTSERRAT_*` in `sdkconfig`; role mapping in `ui_theme.h` |

@@ -128,10 +128,10 @@ question is live here in a way it is not on the ESP32.
 (`firmware/daisy/CMakeLists.txt:30`, `WAVEX_DAISY_OPT`), and LTO at `-O0` buys
 essentially nothing: the inter-procedural passes it enables have no
 optimization pipeline to feed. Raising the optimization level is both the
-larger win and a prerequisite, and it is already recorded — that file explains
-why `-O0` is the default (it is what the firmware has always been built with,
-unintentionally) and `docs/daisy_rt_audio_coding_guide.md` §8 asks for `-O3`.
-Measure `-O2` with DWT first. Only then does `-flto` become an interesting
+larger win and a prerequisite; it is recorded separately as [its own
+entry](#the-daisy-image-is-compiled--o0-the--o2-decision-is-unmade), which
+explains why `-O0` is the default (it is what the firmware has always been
+built with, unintentionally). Measure `-O2` with DWT first. Only then does `-flto` become an interesting
 follow-on question.
 
 **Two hazards specific to this firmware,** worth knowing before anyone spends a
@@ -151,40 +151,6 @@ day on it. Both are the same class of problem that keeps LTO out of ESP-IDF:
 real-time budget question in front of us is `-O0` → `-O2`, which is a bigger,
 simpler and far safer lever. Revisit only after that has been measured and
 banked.
-
----
-
-## Runtime-tunable debug logging (bitmask)
-
-**Want:** a 32- or 64-bit mask of debug toggles in one config header, so
-logging can be tuned per subsystem for a given investigation and compiles away
-entirely in release builds.
-
-**Current state:** `firmware/shared/config/logging_config.h` already carries
-**39** individual `WAVEX_LOG_*` / `*_DEBUG` macros, each `#ifndef`-guarded and
-overridable from the build (`make daisy CMAKE_EXTRA_ARGS="-DCMAKE_CXX_FLAGS=-DWAVEX_DAISY_SD_DEBUG=1"`).
-They already compile away when zero. So the *capability* mostly exists; what is
-missing is discoverability and a single place to flip several at once.
-
-**Why it is not urgent:** the existing macros solve the compile-away
-requirement, which is the part that matters for release builds. A bitmask would
-mainly improve ergonomics. Converting 39 call sites across both firmwares is a
-wide, mechanical change with real regression surface — the kind of churn that
-has repeatedly turned out to be where bugs enter this codebase.
-
-**If picked up, the shape that seems right:**
-
-- One `WAVEX_DEBUG_MASK` constant (`uint64_t`) plus named bit constants, so a
-  build override sets several categories at once.
-- Keep every log site wrapped so a zero mask still compiles the code away:
-  `#if (WAVEX_DEBUG_MASK & WAVEX_DBG_SD)` rather than a runtime `if`, because a
-  runtime check leaves the format strings and argument evaluation in the binary.
-- Migrate one subsystem at a time, leaving the existing macros as aliases, so
-  the change is bisectable.
-- Runtime tuning (as opposed to build-time) needs a transport to set the mask
-  and would put a variable on the audio-adjacent path — worth a separate
-  decision, and probably not worth it at all given the log ring already keeps
-  logging off the critical path.
 
 ---
 
