@@ -230,16 +230,16 @@ static void signal_daisy_urgent(bool urgent) {
         // deasserts ATTN once the watchdog trips, instead of staying
         // wedged high forever.
         s_attn_watchdog.MarkAsserted(static_cast<uint32_t>(esp_timer_get_time() / 1000));
-        WAVEX_LOG_ESP32_SPI(ESP32_INTER_SPI,
-                            "Signaling Daisy for urgent control (GPIO%d HIGH) - queue_count=%d",
-                            WAVEX_ESP_ATTN_OUT,
-                            msg_queue_count);
+        WAVEX_LOGD(SPI_LINK,
+                   "Signaling Daisy for urgent control (GPIO%d HIGH) - queue_count=%d",
+                   WAVEX_ESP_ATTN_OUT,
+                   msg_queue_count);
     } else {
         s_attn_watchdog.MarkCleared();
-        WAVEX_LOG_ESP32_SPI(ESP32_INTER_SPI,
-                            "Cleared Daisy urgent signal (GPIO%d LOW) - queue_count=%d",
-                            WAVEX_ESP_ATTN_OUT,
-                            msg_queue_count);
+        WAVEX_LOGD(SPI_LINK,
+                   "Cleared Daisy urgent signal (GPIO%d LOW) - queue_count=%d",
+                   WAVEX_ESP_ATTN_OUT,
+                   msg_queue_count);
     }
 #endif
 }

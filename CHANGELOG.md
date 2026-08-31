@@ -11,6 +11,35 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Added — leveled, per-module debug logging core (`logging_config.h` rework)
+
+- `WAVEX_LOGE/W/I/D/T(MODULE, ...)` replace the flat per-component on/off
+  booleans. Two gates per call: a compile-time ceiling
+  (`WAVEX_LOG_CEILING_<MODULE>`, default TRACE — calls above it constant-fold
+  away for hot paths) and a runtime per-module level
+  (`WaveX::Log::SetLevel`), so one subsystem can be deep-dived without a
+  reflash and without dragging every other subsystem's chatter along. The
+  module list is a single X-macro table; levels are numerically
+  `esp_log_level_t`, and ESP32 emission routes through `ESP_LOG` (IDF per-tag
+  control stacks on top). Daisy emission still goes through the non-blocking
+  log ring with its main-loop-only contract.
+- `WaveX::Log::ApplyLevelCommand` parses the shared console grammar
+  `WAVEX-LOG <MODULE|*> <OFF|ERROR|WARN|INFO|DEBUG|TRACE|0-5>` used by both
+  boards' control channels (wired up in subsequent stages), host-tested in
+  `firmware/shared/tests/config/`.
+- Legacy `WAVEX_LOG_DAISY(component, ...)` call sites keep working as INFO
+  via an alias until each site is given a real level. Removed the unused
+  macro families (`WAVEX_LOG_ESP_*`, `WAVEX_IF_LOGGING`, convenience
+  wrappers) and the dead per-component booleans.
+
+### Changed — per-request browse tracing on the Daisy is DEBUG level now
+
+- The `BROWSE_REQ`/"Directory listing" trace lines in
+  `daisy_filesystem.cpp` printed on every file-browser page fetch; they are
+  now `WAVEX_LOGD(STORAGE, ...)` — silent at the default INFO level, one
+  `WAVEX-LOG STORAGE DEBUG` away when needed. Listing failures remain
+  errors.
+
 ### Fixed — file browser no longer flashes "Error loading files" on every navigation
 
 - `update_file_browser_ui()` labeled the gap before a fresh directory's first

@@ -1,33 +1,383 @@
 /**
  * @file logging_config.h
- * @brief WaveX Logging Configuration
+ * @brief WaveX leveled, per-module debug logging.
  *
- * This file defines logging macros for all hardware components
- * to allow selective debug output control at compile time.
+ * Two gates stand between a log call and output, so "what is logged" can be
+ * tuned finely without rebuilding, while hot paths can still compile logging
+ * out entirely:
  *
- * Each component has its own logging macro that can be set to 0
- * to completely compile out all debug logging for that component.
- * This allows for production builds with minimal debug overhead
- * and easy troubleshooting of specific components.
+ *  1. COMPILE-TIME CEILING (`WAVEX_LOG_CEILING_<MODULE>`). Calls above the
+ *     ceiling are constant-folded away - zero code, zero cost. The default
+ *     ceiling is TRACE (everything present in the binary); lower it per
+ *     module only where the disabled-check itself is too expensive, which in
+ *     practice means code that rides the audio or link hot path.
+ *  2. RUNTIME LEVEL (`WaveX::Log::SetLevel`). A per-module byte checked at
+ *     each call site. This is what the "WAVEX-LOG" console commands and
+ *     scripts/wavex_log.py adjust, so a deep dive into one subsystem does
+ *     not require a reflash and does not drag every other subsystem's
+ *     chatter along.
+ *
+ * Emission is platform-appropriate: ESP32 routes through ESP_LOG (so IDF's
+ * own per-tag runtime control and formatting apply, tag "WAVEX-<MODULE>"),
+ * the Daisy through the non-blocking log ring (comm/log_ring.h - its
+ * main-loop-only context rule applies to log calls exactly as before), and
+ * host builds through printf.
+ *
+ * Levels match esp_log_level_t numerically so the two systems translate 1:1.
  */
 
 #pragma once
 
 #include <cstdarg>
+#include <cstddef>
+#include <cstdint>
 #include <cstdio>
 
 // ============================================================================
-// GLOBAL LOGGING CONTROL
+// LEVELS (numeric equals esp_log_level_t: NONE..VERBOSE)
 // ============================================================================
 
-// Master switch for all debug logging (set to 0 to disable all debug output)
-#ifndef WAVEX_DEBUG_LOGGING_ENABLED
-#define WAVEX_DEBUG_LOGGING_ENABLED 1
+#define WAVEX_LOG_LEVEL_OFF 0
+#define WAVEX_LOG_LEVEL_ERROR 1
+#define WAVEX_LOG_LEVEL_WARN 2
+#define WAVEX_LOG_LEVEL_INFO 3
+#define WAVEX_LOG_LEVEL_DEBUG 4
+#define WAVEX_LOG_LEVEL_TRACE 5
+
+// ============================================================================
+// MODULE TABLE - the single source of truth.
+//
+// X(name, default_runtime_level). Adding a module here is all it takes: the
+// enum, name string, and default-level tables below are generated from this
+// list, and the console parser / configurator enumerate it by name.
+// ============================================================================
+
+#define WAVEX_LOG_MODULE_LIST(X)            \
+    X(SYSTEM, WAVEX_LOG_LEVEL_INFO)         \
+    X(INTER_MCU_LINK, WAVEX_LOG_LEVEL_INFO) \
+    X(UART_PROTOCOL, WAVEX_LOG_LEVEL_INFO)  \
+    X(UART_PERF, WAVEX_LOG_LEVEL_INFO)      \
+    X(SPI_LINK, WAVEX_LOG_LEVEL_INFO)       \
+    X(AUDIO_ENGINE, WAVEX_LOG_LEVEL_INFO)   \
+    X(STORAGE, WAVEX_LOG_LEVEL_INFO)        \
+    X(SD, WAVEX_LOG_LEVEL_INFO)             \
+    X(STREAM, WAVEX_LOG_LEVEL_INFO)         \
+    X(CV, WAVEX_LOG_LEVEL_INFO)             \
+    X(SEQUENCER, WAVEX_LOG_LEVEL_INFO)      \
+    X(MIDI, WAVEX_LOG_LEVEL_INFO)
+
+// ============================================================================
+// COMPILE-TIME CEILINGS
+//
+// Per-module override: -DWAVEX_LOG_CEILING_<MODULE>=WAVEX_LOG_LEVEL_x, or
+// define it before including this header. X-macros cannot emit #ifndef, so
+// the defaults are written out.
+// ============================================================================
+
+#ifndef WAVEX_LOG_CEILING_DEFAULT
+#define WAVEX_LOG_CEILING_DEFAULT WAVEX_LOG_LEVEL_TRACE
+#endif
+
+#ifndef WAVEX_LOG_CEILING_SYSTEM
+#define WAVEX_LOG_CEILING_SYSTEM WAVEX_LOG_CEILING_DEFAULT
+#endif
+#ifndef WAVEX_LOG_CEILING_INTER_MCU_LINK
+#define WAVEX_LOG_CEILING_INTER_MCU_LINK WAVEX_LOG_CEILING_DEFAULT
+#endif
+#ifndef WAVEX_LOG_CEILING_UART_PROTOCOL
+#define WAVEX_LOG_CEILING_UART_PROTOCOL WAVEX_LOG_CEILING_DEFAULT
+#endif
+#ifndef WAVEX_LOG_CEILING_UART_PERF
+#define WAVEX_LOG_CEILING_UART_PERF WAVEX_LOG_CEILING_DEFAULT
+#endif
+#ifndef WAVEX_LOG_CEILING_SPI_LINK
+#define WAVEX_LOG_CEILING_SPI_LINK WAVEX_LOG_CEILING_DEFAULT
+#endif
+#ifndef WAVEX_LOG_CEILING_AUDIO_ENGINE
+#define WAVEX_LOG_CEILING_AUDIO_ENGINE WAVEX_LOG_CEILING_DEFAULT
+#endif
+#ifndef WAVEX_LOG_CEILING_STORAGE
+#define WAVEX_LOG_CEILING_STORAGE WAVEX_LOG_CEILING_DEFAULT
+#endif
+#ifndef WAVEX_LOG_CEILING_SD
+#define WAVEX_LOG_CEILING_SD WAVEX_LOG_CEILING_DEFAULT
+#endif
+#ifndef WAVEX_LOG_CEILING_STREAM
+#define WAVEX_LOG_CEILING_STREAM WAVEX_LOG_CEILING_DEFAULT
+#endif
+#ifndef WAVEX_LOG_CEILING_CV
+#define WAVEX_LOG_CEILING_CV WAVEX_LOG_CEILING_DEFAULT
+#endif
+#ifndef WAVEX_LOG_CEILING_SEQUENCER
+#define WAVEX_LOG_CEILING_SEQUENCER WAVEX_LOG_CEILING_DEFAULT
+#endif
+#ifndef WAVEX_LOG_CEILING_MIDI
+#define WAVEX_LOG_CEILING_MIDI WAVEX_LOG_CEILING_DEFAULT
 #endif
 
 // ============================================================================
-// COMPONENT-SPECIFIC LOGGING MACROS
+// RUNTIME LEVEL TABLE
 // ============================================================================
+
+namespace WaveX {
+namespace Log {
+
+enum class Module : uint8_t {
+#define WAVEX_LOG_X(name, deflvl) name,
+    WAVEX_LOG_MODULE_LIST(WAVEX_LOG_X)
+#undef WAVEX_LOG_X
+        Count
+};
+
+constexpr size_t kModuleCount = static_cast<size_t>(Module::Count);
+
+// Written by the control path (Daisy main loop token handler / ESP32 console
+// task), read by every log call site. Plain bytes, deliberately not atomics:
+// a byte load cannot tear on either target, and the worst a stale read can
+// do is emit or drop one more line during the toggle itself. On the Daisy,
+// both control and emission are main-loop context anyway (log_ring.h).
+inline uint8_t g_module_levels[kModuleCount] = {
+#define WAVEX_LOG_X(name, deflvl) deflvl,
+    WAVEX_LOG_MODULE_LIST(WAVEX_LOG_X)
+#undef WAVEX_LOG_X
+};
+
+inline const char* const kModuleNames[kModuleCount] = {
+#define WAVEX_LOG_X(name, deflvl) #name,
+    WAVEX_LOG_MODULE_LIST(WAVEX_LOG_X)
+#undef WAVEX_LOG_X
+};
+
+inline uint8_t GetLevel(Module m) {
+    return g_module_levels[static_cast<uint8_t>(m)];
+}
+
+inline void SetLevel(Module m, uint8_t level) {
+    if (level > WAVEX_LOG_LEVEL_TRACE) {
+        level = WAVEX_LOG_LEVEL_TRACE;
+    }
+    g_module_levels[static_cast<uint8_t>(m)] = level;
+}
+
+inline void SetAllLevels(uint8_t level) {
+    for (size_t i = 0; i < kModuleCount; ++i) {
+        SetLevel(static_cast<Module>(i), level);
+    }
+}
+
+namespace Detail {
+// Case-insensitive ASCII equality; console input shouldn't fail on case.
+inline bool CiEq(const char* a, const char* b) {
+    while (*a && *b) {
+        char ca = (*a >= 'a' && *a <= 'z') ? static_cast<char>(*a - 32) : *a;
+        char cb = (*b >= 'a' && *b <= 'z') ? static_cast<char>(*b - 32) : *b;
+        if (ca != cb) {
+            return false;
+        }
+        ++a;
+        ++b;
+    }
+    return *a == '\0' && *b == '\0';
+}
+}  // namespace Detail
+
+// Case-insensitive module lookup ("inter_mcu_link"). Returns false when the
+// name matches no module; "*" is handled by the command parser, not here.
+inline bool SetLevelByName(const char* name, uint8_t level) {
+    if (!name) {
+        return false;
+    }
+    for (size_t i = 0; i < kModuleCount; ++i) {
+        if (Detail::CiEq(kModuleNames[i], name)) {
+            SetLevel(static_cast<Module>(i), level);
+            return true;
+        }
+    }
+    return false;
+}
+
+inline const char* const kLevelNames[6] = {"OFF", "ERROR", "WARN", "INFO", "DEBUG", "TRACE"};
+
+// Level token: a name from kLevelNames (case-insensitive) or a digit 0-5.
+// Returns -1 when the token is neither.
+inline int ParseLevelToken(const char* s) {
+    if (!s || !*s) {
+        return -1;
+    }
+    if (s[0] >= '0' && s[0] <= '5' && s[1] == '\0') {
+        return s[0] - '0';
+    }
+    for (int i = 0; i < 6; ++i) {
+        if (Detail::CiEq(kLevelNames[i], s)) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+// Applies a "WAVEX-LOG" console command's argument string:
+//
+//   "<MODULE|*> <OFF|ERROR|WARN|INFO|DEBUG|TRACE|0-5>"
+//
+// Shared verbatim by both MCUs' console channels so the command grammar
+// cannot drift between boards, and host-testable for the same reason. The
+// reply is a single human-readable line (confirmation or usage); `reply`
+// may be null when no channel exists to print it. Returns true only when a
+// level was actually applied.
+inline bool ApplyLevelCommand(const char* args, char* reply, size_t reply_cap) {
+    char mod_tok[32];
+    char lvl_tok[8];
+    size_t n = 0;
+
+    const char* p = args ? args : "";
+    while (*p == ' ') {
+        ++p;
+    }
+    while (*p && *p != ' ' && n + 1 < sizeof(mod_tok)) {
+        mod_tok[n++] = *p++;
+    }
+    mod_tok[n] = '\0';
+    while (*p == ' ') {
+        ++p;
+    }
+    n = 0;
+    while (*p && *p != ' ' && n + 1 < sizeof(lvl_tok)) {
+        lvl_tok[n++] = *p++;
+    }
+    lvl_tok[n] = '\0';
+
+    const int level = ParseLevelToken(lvl_tok);
+    const bool all = mod_tok[0] == '*' && mod_tok[1] == '\0';
+    bool ok = false;
+    if (mod_tok[0] != '\0' && level >= 0) {
+        if (all) {
+            SetAllLevels(static_cast<uint8_t>(level));
+            ok = true;
+        } else {
+            ok = SetLevelByName(mod_tok, static_cast<uint8_t>(level));
+        }
+    }
+
+    if (reply && reply_cap > 0) {
+        if (ok) {
+            snprintf(reply, reply_cap, "WAVEX-LOG: %s=%s", all ? "*" : mod_tok, kLevelNames[level]);
+        } else {
+            snprintf(reply,
+                     reply_cap,
+                     "WAVEX-LOG: bad command '%s' - usage: WAVEX-LOG "
+                     "<MODULE|*> <OFF|ERROR|WARN|INFO|DEBUG|TRACE|0-5>",
+                     args ? args : "");
+        }
+    }
+    return ok;
+}
+
+}  // namespace Log
+}  // namespace WaveX
+
+// ============================================================================
+// EMISSION (platform-specific back end)
+// ============================================================================
+
+#ifdef ESP_PLATFORM
+
+#include "esp_log.h"
+
+// Levels are numerically esp_log_level_t, so IDF's formatter and its own
+// per-tag runtime control both apply on top of the module gate.
+#define WAVEX_LOG_EMIT(lvl, letter, mod_str, format, ...) \
+    ESP_LOG_LEVEL((esp_log_level_t)(lvl), "WAVEX-" mod_str, format, ##__VA_ARGS__)
+
+#elif defined(DAISY_PLATFORM)
+
+// Daisy: route through the non-blocking log ring (comm/log_ring.h) via the
+// helpers in firmware/daisy/src/comm/daisy_logging.cpp. libDaisy's own
+// Logger blocks unboundedly on the USB host and starves the audio ring -
+// see log_ring.h for the full story. Main-loop context only.
+void wavex_daisy_log(const char* format, ...);
+void wavex_daisy_log_raw(const char* format, ...);
+
+#define WAVEX_LOG_EMIT(lvl, letter, mod_str, format, ...) \
+    wavex_daisy_log("[" letter "][" mod_str "] " format, ##__VA_ARGS__)
+
+#else
+
+// Host builds (unit tests, tools).
+#define WAVEX_LOG_EMIT(lvl, letter, mod_str, format, ...) \
+    printf("[" letter "][" mod_str "] " format "\n", ##__VA_ARGS__)
+
+#endif
+
+// ============================================================================
+// LOGGING MACROS
+//
+// WAVEX_LOGE/W/I/D/T(MODULE, fmt, ...). MODULE is a bare name from the
+// module table (token-pasted, so a typo is a compile error, not a silent
+// drop). The ceiling comparison is a constant fold; the runtime comparison
+// is one byte load when the ceiling admits the call.
+// ============================================================================
+
+#define WAVEX_LOG_AT(MOD, lvl, letter, format, ...)                                               \
+    do {                                                                                          \
+        if ((lvl) <= (WAVEX_LOG_CEILING_##MOD) &&                                                 \
+            (lvl) <=                                                                              \
+                ::WaveX::Log::g_module_levels[static_cast<uint8_t>(::WaveX::Log::Module::MOD)]) { \
+            WAVEX_LOG_EMIT(lvl, letter, #MOD, format, ##__VA_ARGS__);                             \
+        }                                                                                         \
+    } while (0)
+
+#define WAVEX_LOGE(MOD, format, ...) \
+    WAVEX_LOG_AT(MOD, WAVEX_LOG_LEVEL_ERROR, "E", format, ##__VA_ARGS__)
+#define WAVEX_LOGW(MOD, format, ...) \
+    WAVEX_LOG_AT(MOD, WAVEX_LOG_LEVEL_WARN, "W", format, ##__VA_ARGS__)
+#define WAVEX_LOGI(MOD, format, ...) \
+    WAVEX_LOG_AT(MOD, WAVEX_LOG_LEVEL_INFO, "I", format, ##__VA_ARGS__)
+#define WAVEX_LOGD(MOD, format, ...) \
+    WAVEX_LOG_AT(MOD, WAVEX_LOG_LEVEL_DEBUG, "D", format, ##__VA_ARGS__)
+#define WAVEX_LOGT(MOD, format, ...) \
+    WAVEX_LOG_AT(MOD, WAVEX_LOG_LEVEL_TRACE, "T", format, ##__VA_ARGS__)
+
+// ============================================================================
+// LEGACY ALIASES - existing call sites, migrated incrementally.
+//
+// WAVEX_LOG_DAISY predates levels; its calls are INFO until each site is
+// given a real level. The RAW variant bypasses the module prefix but not
+// the gates.
+// ============================================================================
+
+#define WAVEX_LOG_DAISY(MOD, format, ...) WAVEX_LOGI(MOD, format, ##__VA_ARGS__)
+
+#if !defined(DAISY_PLATFORM)
+#define WAVEX_LOG_DAISY_RAW(MOD, format, ...)                                                     \
+    do {                                                                                          \
+        if (WAVEX_LOG_LEVEL_INFO <= (WAVEX_LOG_CEILING_##MOD) &&                                  \
+            WAVEX_LOG_LEVEL_INFO <=                                                               \
+                ::WaveX::Log::g_module_levels[static_cast<uint8_t>(::WaveX::Log::Module::MOD)]) { \
+            printf(format, ##__VA_ARGS__);                                                        \
+        }                                                                                         \
+    } while (0)
+#else
+#define WAVEX_LOG_DAISY_RAW(MOD, format, ...)                                                     \
+    do {                                                                                          \
+        if (WAVEX_LOG_LEVEL_INFO <= (WAVEX_LOG_CEILING_##MOD) &&                                  \
+            WAVEX_LOG_LEVEL_INFO <=                                                               \
+                ::WaveX::Log::g_module_levels[static_cast<uint8_t>(::WaveX::Log::Module::MOD)]) { \
+            wavex_daisy_log_raw(format, ##__VA_ARGS__);                                           \
+        }                                                                                         \
+    } while (0)
+#endif
+
+// ============================================================================
+// FEATURE FLAGS that live here because they follow the debug/release notion
+// of the firmware, not because they gate log lines.
+// ============================================================================
+
+// Master debug/release switch. The ESP32 compiles with OPTIMIZATION_PERF even
+// in day-to-day use, so the compiler's notion of a debug build would never
+// serve this purpose.
+#ifndef WAVEX_DEBUG_LOGGING_ENABLED
+#define WAVEX_DEBUG_LOGGING_ENABLED 1
+#endif
 
 /**
  * @def WAVEX_ESP_SCREENSHOT_DEBUG
@@ -35,59 +385,11 @@
  *
  * Listens on the console UART for the token "WAVEX-SCREENSHOT" and dumps the
  * active LVGL screen as RLE+base64 RGB565 between BEGIN/END markers, decoded
- * by scripts/esp32_screenshot.py. Follows WAVEX_DEBUG_LOGGING_ENABLED because
- * that is this codebase's debug/release switch (the ESP32 compiles with
- * OPTIMIZATION_PERF even in day-to-day use, so the compiler's notion of a
- * debug build would never enable it). Costs a small UART-listener task and,
- * per capture, a transient ~4.5 MB of PSRAM.
+ * by scripts/esp32_screenshot.py. Costs a small UART-listener task and, per
+ * capture, a transient ~4.5 MB of PSRAM.
  */
 #ifndef WAVEX_ESP_SCREENSHOT_DEBUG
 #define WAVEX_ESP_SCREENSHOT_DEBUG WAVEX_DEBUG_LOGGING_ENABLED
-#endif
-
-// Meter Data Logging (ESP32 only)
-#ifndef WAVEX_LOG_METER_DATA
-#define WAVEX_LOG_METER_DATA 0
-#endif
-
-// Inter-MCU Communication Link Logging
-#ifndef WAVEX_LOG_INTER_MCU_LINK
-#define WAVEX_LOG_INTER_MCU_LINK WAVEX_DEBUG_LOGGING_ENABLED
-#endif
-
-// Audio Engine Logging (Daisy only)
-#ifndef WAVEX_LOG_AUDIO_ENGINE
-#define WAVEX_LOG_AUDIO_ENGINE WAVEX_DEBUG_LOGGING_ENABLED
-#endif
-
-// DAC CV Outputs Logging (Daisy only)
-#ifndef WAVEX_LOG_DAC_CV_OUTPUTS
-#define WAVEX_LOG_DAC_CV_OUTPUTS WAVEX_DEBUG_LOGGING_ENABLED
-#endif
-
-// Encoder Logging (ESP32 only)
-#ifndef WAVEX_LOG_ENCODER
-#define WAVEX_LOG_ENCODER WAVEX_DEBUG_LOGGING_ENABLED
-#endif
-
-// 4067 Mux Logging (ESP32 only)
-#ifndef WAVEX_LOG_4067_MUX
-#define WAVEX_LOG_4067_MUX WAVEX_DEBUG_LOGGING_ENABLED
-#endif
-
-// TCA8418 Button Matrix Logging (ESP32 only)
-#ifndef WAVEX_LOG_TCA8418_BUTTON_MATRIX
-#define WAVEX_LOG_TCA8418_BUTTON_MATRIX WAVEX_DEBUG_LOGGING_ENABLED
-#endif
-
-// LCD Display Logging (ESP32 only)
-#ifndef WAVEX_LOG_LCD_DISPLAY
-#define WAVEX_LOG_LCD_DISPLAY WAVEX_DEBUG_LOGGING_ENABLED
-#endif
-
-// USB MIDI Logging (ESP32 only)
-#ifndef WAVEX_LOG_USB_MIDI
-#define WAVEX_LOG_USB_MIDI WAVEX_DEBUG_LOGGING_ENABLED
 #endif
 
 /**
@@ -96,212 +398,10 @@
  *
  * Answers the question the existing counters cannot: how much main-loop time
  * the inter-MCU link costs, and therefore whether it is competing with the
- * audio ring refill. The report is one line per interval, but the
- * measurement itself rides the hot path - turn this off when not
- * investigating link cost.
+ * audio ring refill. This is a compile flag, not a module level, because the
+ * MEASUREMENT itself rides the hot path - the cost is incurred whether or
+ * not the report line prints. The report goes out at UART_PERF level INFO.
  */
 #ifndef WAVEX_DAISY_UART_PERF_DEBUG
 #define WAVEX_DAISY_UART_PERF_DEBUG 1
 #endif
-
-// Daisy SPI Outbound Packet Logging (Daisy only)
-#ifndef WAVEX_LOG_DAISY_OUTBOUND_SPI
-#define WAVEX_LOG_DAISY_OUTBOUND_SPI 0
-#endif
-
-// Daisy SPI Inbound Packet Logging (Daisy only)
-#ifndef WAVEX_LOG_DAISY_INBOUND_SPI
-#define WAVEX_LOG_DAISY_INBOUND_SPI 0
-#endif
-
-// Daisy SPI Packet Summary Logging (Daisy only)
-#ifndef WAVEX_LOG_DAISY_SPI_PACKET
-#define WAVEX_LOG_DAISY_SPI_PACKET WAVEX_DEBUG_LOGGING_ENABLED
-#endif
-
-// Daisy SPI Message Decoding Logging (Daisy only)
-#ifndef WAVEX_LOG_DAISY_SPI_MESSAGE
-#define WAVEX_LOG_DAISY_SPI_MESSAGE WAVEX_DEBUG_LOGGING_ENABLED
-#endif
-
-// ESP32_INTER_SPI component logging (for token pasting with ESP32_INTER_SPI)
-#ifndef WAVEX_LOG_ESP32_INTER_SPI
-#define WAVEX_LOG_ESP32_INTER_SPI 0
-#endif
-
-// Storage/Filesystem Logging (Daisy only)
-#ifndef WAVEX_LOG_STORAGE
-#define WAVEX_LOG_STORAGE WAVEX_DEBUG_LOGGING_ENABLED
-#endif
-
-// ============================================================================
-// LOGGING MACRO DEFINITIONS
-// ============================================================================
-
-// Generic logging macro that can be used across platforms
-#if WAVEX_DEBUG_LOGGING_ENABLED
-#define WAVEX_LOG(component, format, ...)                                 \
-    do {                                                                  \
-        if (WAVEX_LOG_##component) {                                      \
-            printf("[WAVEX-%s] " format "\n", #component, ##__VA_ARGS__); \
-        }                                                                 \
-    } while (0)
-
-#define WAVEX_LOG_RAW(component, format, ...) \
-    do {                                      \
-        if (WAVEX_LOG_##component) {          \
-            printf(format, ##__VA_ARGS__);    \
-        }                                     \
-    } while (0)
-#else
-#define WAVEX_LOG(component, format, ...) ((void)0)
-#define WAVEX_LOG_RAW(component, format, ...) ((void)0)
-#endif
-
-// ============================================================================
-// PLATFORM-SPECIFIC LOGGING MACROS
-// ============================================================================
-
-#ifdef ESP_PLATFORM
-// ESP32-specific logging using ESP_LOG macros
-#include "esp_log.h"
-
-#define WAVEX_LOG_ESP(component, level, format, ...)                     \
-    do {                                                                 \
-        if (WAVEX_LOG_##component) {                                     \
-            ESP_LOG_##level("WAVEX-" #component, format, ##__VA_ARGS__); \
-        }                                                                \
-    } while (0)
-
-#define WAVEX_LOG_ESP_INFO(component, format, ...) \
-    WAVEX_LOG_ESP(component, INFO, format, ##__VA_ARGS__)
-
-#define WAVEX_LOG_ESP_WARN(component, format, ...) \
-    WAVEX_LOG_ESP(component, WARN, format, ##__VA_ARGS__)
-
-#define WAVEX_LOG_ESP_ERROR(component, format, ...) \
-    WAVEX_LOG_ESP(component, ERROR, format, ##__VA_ARGS__)
-
-#define WAVEX_LOG_ESP_DEBUG(component, format, ...) \
-    WAVEX_LOG_ESP(component, DEBUG, format, ##__VA_ARGS__)
-
-#define WAVEX_LOG_ESP_VERBOSE(component, format, ...) \
-    WAVEX_LOG_ESP(component, VERBOSE, format, ##__VA_ARGS__)
-
-// ESP32 inter-SPI debugging logging
-#define WAVEX_LOG_ESP32_SPI(component, format, ...)               \
-    do {                                                          \
-        if (WAVEX_LOG_##component) {                              \
-            ESP_LOGI("WAVEX-" #component, format, ##__VA_ARGS__); \
-        }                                                         \
-    } while (0)
-
-#else
-// Daisy-specific logging routed through a helper that can use s_hw->PrintLine when available.
-// Implementations are in firmware/daisy/src/comm/daisy_logging.cpp
-void wavex_daisy_log(const char* format, ...);
-void wavex_daisy_log_raw(const char* format, ...);
-
-// Helper wrappers to keep per-component log gating while using the raw logging helpers directly.
-inline void wavex_daisy_log_if(bool enabled, const char* component, const char* format, ...) {
-    if (!enabled) {
-        return;
-    }
-
-    char buf[256];
-    va_list args;
-    va_start(args, format);
-    vsnprintf(buf, sizeof(buf), format, args);
-    va_end(args);
-
-    wavex_daisy_log("[WAVEX-%s] %s", component, buf);
-}
-
-inline void wavex_daisy_log_raw_if(bool enabled, const char* format, ...) {
-    if (!enabled) {
-        return;
-    }
-
-    char buf[256];
-    va_list args;
-    va_start(args, format);
-    vsnprintf(buf, sizeof(buf), format, args);
-    va_end(args);
-
-    wavex_daisy_log_raw("%s", buf);
-}
-
-#define WAVEX_LOG_DAISY(component, format, ...)                               \
-    do {                                                                      \
-        if (WAVEX_LOG_##component) {                                          \
-            wavex_daisy_log("[WAVEX-%s] " format, #component, ##__VA_ARGS__); \
-        }                                                                     \
-    } while (0)
-
-#define WAVEX_LOG_DAISY_RAW(component, format, ...)     \
-    do {                                                \
-        if (WAVEX_LOG_##component) {                    \
-            wavex_daisy_log_raw(format, ##__VA_ARGS__); \
-        }                                               \
-    } while (0)
-#endif
-
-// ============================================================================
-// CONVENIENCE MACROS FOR COMMON LOGGING PATTERNS
-// ============================================================================
-
-#define WAVEX_LOG_INIT(component, format, ...) \
-    WAVEX_LOG(component, "Initializing: " format, ##__VA_ARGS__)
-
-#define WAVEX_LOG_INIT_SUCCESS(component, format, ...) \
-    WAVEX_LOG(component, "Initialized successfully: " format, ##__VA_ARGS__)
-
-#define WAVEX_LOG_INIT_FAILED(component, format, ...) \
-    WAVEX_LOG(component, "Initialization failed: " format, ##__VA_ARGS__)
-
-#define WAVEX_LOG_STATE_CHANGE(component, format, ...) \
-    WAVEX_LOG(component, "State change: " format, ##__VA_ARGS__)
-
-#define WAVEX_LOG_ERROR(component, format, ...) \
-    WAVEX_LOG(component, "ERROR: " format, ##__VA_ARGS__)
-
-#define WAVEX_LOG_WARN(component, format, ...) \
-    WAVEX_LOG(component, "WARNING: " format, ##__VA_ARGS__)
-
-#define WAVEX_LOG_DEBUG(component, format, ...) \
-    WAVEX_LOG(component, "DEBUG: " format, ##__VA_ARGS__)
-
-// ============================================================================
-// SPI-SPECIFIC LOGGING MACROS
-// ============================================================================
-
-// All four are aliases of WAVEX_LOG_DAISY; they exist so call sites name the
-// traffic direction/stage they log, gated by the matching WAVEX_LOG_DAISY_*
-// component switch above.
-#define WAVEX_LOG_DAISY_OUTBOUND(component, format, ...) \
-    WAVEX_LOG_DAISY(component, format, ##__VA_ARGS__)
-
-#define WAVEX_LOG_DAISY_INBOUND(component, format, ...) \
-    WAVEX_LOG_DAISY(component, format, ##__VA_ARGS__)
-
-#define WAVEX_LOG_DAISY_PACKET(component, format, ...) \
-    WAVEX_LOG_DAISY(component, format, ##__VA_ARGS__)
-
-#define WAVEX_LOG_DAISY_MESSAGE(component, format, ...) \
-    WAVEX_LOG_DAISY(component, format, ##__VA_ARGS__)
-
-// ============================================================================
-// CONDITIONAL COMPILATION HELPERS
-// ============================================================================
-
-// Macro to check if a component is enabled and logging is enabled
-#define WAVEX_COMPONENT_LOGGING_ENABLED(component) \
-    (WAVEX_LOG_##component && WAVEX_DEBUG_LOGGING_ENABLED)
-
-// Macro to conditionally execute code only when logging is enabled for a component
-#define WAVEX_IF_LOGGING(component, code)                 \
-    do {                                                  \
-        if (WAVEX_COMPONENT_LOGGING_ENABLED(component)) { \
-            code;                                         \
-        }                                                 \
-    } while (0)

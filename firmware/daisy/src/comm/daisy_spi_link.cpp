@@ -614,11 +614,11 @@ static void PrepareTxBuffer(uint8_t* tx_buf, size_t buf_size) {
 
             // Log outgoing packet
             uint8_t msg_type = outgoing_msg[1];
-            WAVEX_LOG_DAISY_OUTBOUND(DAISY_OUTBOUND_SPI,
-                                     "Prepared outgoing message type=0x%02X, len=%d, remaining=%d",
-                                     msg_type,
-                                     (int)packet_size,
-                                     outgoing_count);
+            WAVEX_LOGT(SPI_LINK,
+                       "Prepared outgoing message type=0x%02X, len=%d, remaining=%d",
+                       msg_type,
+                       (int)packet_size,
+                       outgoing_count);
         } else {
             // Packet too large for buffer, send zeros
             memset(tx_buf, 0, buf_size);
@@ -1033,8 +1033,8 @@ void ProcessQueuedSpiMessage() {
         uint8_t flags = packet_data[0] & PKT_FLAG_MASK;
         uint16_t sequence_number = packet_data[2] | (packet_data[3] << 8);
 
-        WAVEX_LOG_DAISY_INBOUND(
-            DAISY_INBOUND_SPI,
+        WAVEX_LOGT(
+            SPI_LINK,
             "Dequeuing message for processing, msg_type=0x%02X, flags=0x%02X, seq=%u, size=%d",
             msg_type,
             flags,
@@ -1067,9 +1067,8 @@ void ProcessQueuedSpiMessage() {
         queue_count--;
         processed_count++;
 
-        WAVEX_LOG_DAISY_INBOUND(DAISY_INBOUND_SPI,
-                                "Message processed and dequeued, remaining queue_count=%d",
-                                queue_count);
+        WAVEX_LOGT(
+            SPI_LINK, "Message processed and dequeued, remaining queue_count=%d", queue_count);
     }
 
     // Log batch processing stats periodically

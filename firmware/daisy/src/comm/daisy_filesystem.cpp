@@ -271,11 +271,11 @@ void ProcessBrowseRequest(const char* path, size_t start_index, uint8_t max_entr
     using namespace WaveX::Storage;
     using namespace WaveX::Protocol;
 
-    WAVEX_LOG_DAISY_MESSAGE(DAISY_SPI_MESSAGE,
-                            "IN MSG BROWSE_REQ path=%s start_index=%u max_entries=%u",
-                            path,
-                            (uint32_t)start_index,
-                            max_entries);
+    WAVEX_LOGD(STORAGE,
+               "IN MSG BROWSE_REQ path=%s start_index=%u max_entries=%u",
+               path,
+               (uint32_t)start_index,
+               max_entries);
 
     // Cache the directory state for index-based lookups
     strncpy(s_current_directory, path, sizeof(s_current_directory) - 1);
@@ -320,7 +320,7 @@ void ProcessBrowseRequest(const char* path, size_t start_index, uint8_t max_entr
         }
 
         if (!success) {
-            WAVEX_LOG_DAISY_MESSAGE(DAISY_SPI_MESSAGE, "Failed to list directory: %s", path);
+            WAVEX_LOGE(STORAGE, "Failed to list directory: %s", path);
             return;
         }
 
@@ -352,15 +352,15 @@ void ProcessBrowseRequest(const char* path, size_t start_index, uint8_t max_entr
             ListDir(path, entries, actual_max_entries, total_count, start_index, entries_written);
 
         if (!success) {
-            WAVEX_LOG_DAISY_MESSAGE(DAISY_SPI_MESSAGE, "Failed to list directory: %s", path);
+            WAVEX_LOGE(STORAGE, "Failed to list directory: %s", path);
             return;
         }
     }
 
-    WAVEX_LOG_DAISY_MESSAGE(DAISY_SPI_MESSAGE,
-                            "Directory listing: total=%u written=%u",
-                            (uint32_t)total_count,
-                            (uint32_t)entries_written);
+    WAVEX_LOGD(STORAGE,
+               "Directory listing: total=%u written=%u",
+               (uint32_t)total_count,
+               (uint32_t)entries_written);
 
     // Convert FileEntry to FileEntryWire for transmission
     static FileEntryWire wire_entries[50];  // static: see staging note above
