@@ -204,12 +204,9 @@ void WaveformView::drawSpans(lv_event_t* e) const {
         if (y_bot < y_top) {
             std::swap(y_top, y_bot);
         }
-        // A column whose min and max collapse to one pixel still has to draw,
-        // or silence would render as nothing at all rather than a centre line.
-        if (y_bot == y_top) {
-            y_bot = y_top;
-        }
-
+        // lv_area_t bounds are inclusive, so a column whose min and max
+        // collapse (silence, DC) still draws as a 1 px line with no special
+        // casing - the grid lines above rely on the same property.
         lv_area_t span = {x1, y_top, std::max(x1, x2), y_bot};
         lv_draw_rect(layer, &dsc, &span);
 
