@@ -300,8 +300,8 @@ out-of-lining and the placement are not credited to each other.
 the quarantined `esp_spi_link.cpp` must first be fixed.
 
 **Current state:** the 2026-08-29 ESP32 review recorded five blockers as
-SPI-1..SPI-5 in
-[`code_review_esp32_20260829.md` §7](code_review_esp32_20260829.md): driver-owned
+SPI-1..SPI-5 (that review has since been deleted; the blockers are restated
+here in full): driver-owned
 transaction descriptors/RX buffers reused on result timeout, no sequence
 gating on the live SPI RX path, an uninitialized in/out capacity that can
 overflow a 220-byte stack buffer, an 8-bit TX sequence wrapping through the
@@ -335,8 +335,9 @@ and 18 include sites across ten UI files reach into `inter_mcu.h`, `ui_task.h`
 and `comm/i_comm_interface.h`. Pages call `inter_mcu_*` free functions directly.
 `docs/ui-architecture.md` already names the intended fix — a `UISharedContext`
 injected into pages instead of global reach-through — and lists it as future
-work; the cycle is stronger than that doc admits. Tracked as E-ARCH1 in
-[`code_review_esp32_20260829.md`](code_review_esp32_20260829.md).
+work; the cycle is stronger than that doc admits. Recorded as E-ARCH1 by the
+2026-08-29 ESP32 review, and deferred there by explicit decision rather than
+stacked on top of twenty unverified behavioural changes.
 
 **Why it is not urgent:** nothing is broken by it. The cost is paid in
 testability rather than behaviour: the UI component cannot be compiled without

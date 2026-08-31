@@ -8,10 +8,13 @@ WaveX is a modern **sampler / groovebox / drum machine** with a 5" touchscreen, 
 
 ## Documentation
 
-**Start with [`docs/README.md`](docs/README.md).** The two documents that matter most:
+**Start with [`docs/README.md`](docs/README.md)** — it indexes everything and says what each document is for. The three that matter most:
 
 - [`docs/architecture.md`](docs/architecture.md) — canonical system design, including the real-time / DMA / cache rules all code must follow.
-- [`docs/roadmap.md`](docs/roadmap.md) — implementation order and library upgrade plan.
+- [`docs/roadmap.md`](docs/roadmap.md) — implementation order, per-phase test gates, and the hardware verification still outstanding.
+- [`docs/backlog.md`](docs/backlog.md) — unscheduled work, each entry recording why it is not urgent.
+
+The docs describe what is and what will be; finished work lives in [`CHANGELOG.md`](CHANGELOG.md) and git history.
 
 **Hardware pins and feature flags are defined in code, not docs**: `firmware/shared/config/pin_config.h` (all pins, both MCUs) and `firmware/shared/config/hardware_config.h` (peripheral flags). Do not trust pin tables found in older documents or commit history — they went through several contradictory revisions; `pin_config.h` is the single source of truth.
 
@@ -28,9 +31,13 @@ WaveX/
 │   │   ├── src/               # audio/, comm/, storage/, metrics/, profiling/
 │   │   └── libs/              # libDaisy, DaisySP (submodules)
 │   └── shared/
-│       ├── spi_protocol/      # inter-MCU wire contract (protocol.h) + impl
-│       └── config/            # pin_config.h, hardware_config.h, link config
+│       ├── uart_protocol/     # live link framing (markers, CRC16, sequence)
+│       ├── spi_protocol/      # inter-MCU payload catalog (protocol.h) + impl
+│       ├── wav/ wxcf/ midi/   # container parsing and MIDI types
+│       └── config/            # pin_config.h, hardware_config.h, link + logging config
 ├── docs/                      # see docs/README.md
+├── tools/                     # ui_preview, docx2md.py
+├── scripts/                   # serial port resolution, DFU trigger, sysmon, log config
 ├── build.sh / Makefile        # top-level build orchestration
 └── flash-esp32.sh / monitor-esp32.sh
 ```

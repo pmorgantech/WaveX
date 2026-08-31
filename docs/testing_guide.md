@@ -333,7 +333,7 @@ Tests should run automatically in CI/CD:
 ## Resources
 
 - [GoogleTest Documentation](https://google.github.io/googletest/)
-- [libDaisy Testing Guide](firmware/daisy/libs/libDaisy/doc/md/_b1_Development-Unit-Testing.md)
+- [libDaisy Testing Guide](../firmware/daisy/libs/libDaisy/doc/md/_b1_Development-Unit-Testing.md)
 - [ESP-IDF Testing](https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-guides/tools/idf-python-scripts.html#unit-testing)
 
 ## Test Status
