@@ -581,3 +581,224 @@ rushed inside the infrastructure commit.
 
 **Fix if picked up:** mechanical per-file passes, one module at a time, with
 the level-choice guidance in `docs/logging.md`.
+
+---
+
+## The Daisy image is compiled `-O0`; the `-O2` decision is unmade
+
+**Found at the 2026-08-29 bench session.** The whole Daisy image, including
+all DSP, builds at `-O0`. Nobody chose that: `firmware/daisy/CMakeLists.txt`
+set no compile flags of its own, and libDaisy's toolchain file forces
+`CMAKE_{C,CXX}_FLAGS_{DEBUG,RELEASE}` to `""` as `CACHE INTERNAL`
+(`ArmGNUToolchain.cmake:50-58`), so `-DCMAKE_BUILD_TYPE=Release` contributes
+nothing and a command-line `-DCMAKE_CXX_FLAGS_RELEASE=...` is overwritten on
+every configure.
+
+A knob that does work now exists, defaulting to `-O0` so nothing changes
+silently:
+
+```
+cd firmware/daisy && make BUILD_DIR=build-O2 CMAKE_EXTRA_ARGS="-DWAVEX_DAISY_OPT=-O2"
+```
+
+A separate `BUILD_DIR` keeps the `-O0` image intact for A/B. First results
+from that build: `rb_pop_stereo` inlines into `Callback()` entirely and the
+image drops from 694 KB to 562 KB (-19%).
+`docs/daisy_rt_audio_coding_guide.md` §8 asks for `-O3`.
+
+**Why it is not urgent:** raising the optimization level on a real-time audio
+target alters timing everywhere and can expose latent UB that `-O0` was
+masking. It needs a deliberate decision and a bench pass with DWT numbers,
+not a flag flip — and the audio path is currently fast enough at `-O0` after
+the 2026-08-29 regression fix.
+
+**Fix if picked up:** measure `-O2` with the DWT counter against the `-O0`
+image (`docs/performance_monitoring.md` Part 1), soak for underruns, then
+decide. This is also the prerequisite for [LTO on the Daisy
+image](#lto-on-the-daisy-image) — LTO at `-O0` buys essentially nothing.
+
+---
+
+## No protocol message can act on a loaded sample
+
+**Observed at the 2026-08-29 bench session.** There is no way to unload,
+delete, rename or reorder samples in RAM. The Daisy owns `s_loaded_samples`
+plus a memory manager, and `SampleMetadata` already carries `name`,
+`sample_id`, `generation` and a resident flag; the frontend has a read-only
+Sample Memory page. What is missing is any *message to act on* a loaded
+sample.
+
+**Why it is not urgent:** this is a feature with a protocol design in front
+of it, not a defect — nothing misbehaves today, the capability is simply
+absent. It also wants the Voice/Preset entity below to be settled first, so
+that "unload" has a defined effect on anything referencing the sample.
+
+**Fix if picked up:** design the ops as a single `MSG_SAMPLE_OP` verb rather
+than one message per action, per the reservation table in
+`features/feature-expansion-ideas.md`; round-trip test in the same commit
+(AGENTS.md rule 4).
+
+---
+
+## Voice / Preset does not exist as an entity
+
+**Observed at the 2026-08-29 bench session.** Envelopes and filter settings
+are global page state on the Play page, not properties of anything nameable
+or saveable. The pieces exist but unowned: `VoiceLiveParams` /
+`VoiceTriggerParams` carry filter and envelope values on the Daisy, the Play
+page edits them globally via `MSG_CONTROL_CHANGE`, and nothing associates
+them with a sample or a name.
+
+**Target shape** (set at the bench): a **Voice/Preset** is a named entity,
+saveable to and loadable from the card, consisting of a sample with
+key-tracking settings, Env → Gain, Env → Filter, filter settings, and
+modulation settings and wirings.
+
+**Why it is not urgent:** it is the largest item recorded here and needs a
+protocol and an on-disk format decided before any UI is built — and
+`features/instrument-model.md` already owns most of that design space
+(presets, zones, velocity layers, the WXCF container). Building a second
+preset entity beside it is the expensive outcome.
+
+**Fix if picked up:** resolve it *as* the instrument model rather than
+alongside it — decide whether a Voice/Preset is an `Instrument` with one
+zone, or a distinct lighter entity, before writing either.
+
+---
+
+## Busy overlay presents errors as if they were work in flight
+
+**Observed at the 2026-08-29 bench session.** "Sample will not fit" spins for
+several seconds and then becomes "No response from backend — Tap to
+dismiss"; "Backend timeout" also lingers. Errors are shown with the same call
+used for operations genuinely in flight — `BusyOverlay::show(caption, detail,
+timeout_ms)` — so they get a spinner and a timeout, and when it expires
+`onTimeout()` (`ui_busy_overlay.cpp:37`) rewrites the caption into a
+different, wrong error. The header exposes no error entry point at all.
+
+**Why it is not urgent:** it misreports a failure that has already happened
+rather than causing one, and the overlay itself is correct for its intended
+case (see roadmap § 1.5.4).
+
+**Fix if picked up:** add a `BusyOverlay::showError()` with no spinner, no
+timeout mutation, and a ~2 s auto-dismiss; leave `show()` for in-flight work
+only.
+
+---
+
+## Encoder read-then-clear window is narrowed, not closed
+
+**From the 2026-08-29 ESP32-P4 review (E-ENC1), partly fixed the same day.**
+`__atomic_fetch_add` / `__atomic_exchange_n` replaced the cross-core-unsafe
+`portSET_INTERRUPT_MASK_FROM_ISR()`, both `esp_err_t` returns are now
+checked, and a failed clear no longer zeroes the baseline. What remains is
+the hardware read-then-clear race in `pcnt_task.cpp`: counts arriving between
+`pcnt_unit_get_count` and `pcnt_unit_clear_count` are lost.
+
+The review's suggested fix — free-run and never clear — is **not safe as
+written**: the unit is configured `high_limit = INT16_MAX` / `low_limit =
+INT16_MIN`, and the `pulse_cnt` driver resets the count to zero on reaching
+either limit, so a free-running counter yields one large bogus delta per
+±32767 counts. The counter is instead re-centred only past ±8000, so the
+lossy window went from every poll during movement to roughly one per 8000
+counts (~85 revolutions).
+
+**Why it is not urgent:** losing a fraction of a detent once per ~85
+revolutions is imperceptible. Closing it properly means the driver's
+watch-point callbacks — an ISR, needing an IRAM-safety audit
+(`docs/esp32p4_coding_guide.md` §4) and bench time.
+
+**Fix if picked up:** PCNT watch-point callbacks, or fold the 500 Hz poll
+into the UI task's own loop since it is the sole consumer at 31 Hz.
+
+---
+
+## Caller-less API surface on the ESP32, and `window_manager.cpp`
+
+**From the 2026-08-29 ESP32-P4 review (E-DEAD1), partly cleared the same
+day.** `parse_browse_response`, the `shared_packet_handler` fossil and the
+demo page trio were deleted. Still present and grep-verified caller-less:
+
+- `inter_mcu.h:156` declares `inter_mcu_toggle_inversion`, defined nowhere
+  (an undefined-reference trap); `inter_mcu_toggle_debug` is defined but
+  never declared or called; `inter_mcu_send_test_messages`,
+  `inter_mcu_process_packet_data` (books every byte as type 0xFF),
+  `inter_mcu_set_suspended` and `uart_link_stop` have no callers.
+- `pcnt_task.cpp`: `pcnt_get_reading` / `pcnt_get_raw_count` /
+  `pcnt_reset_counter` are caller-less, and the `prev_count`/`count`
+  bookkeeping is immediately zeroed, so `pcnt_get_reading` can only ever
+  return `{0,0,…}`.
+- `common/window_manager.cpp` — no external callers, and carries a real
+  `lv_pct` arithmetic bug at :60 and :187 for whoever revives it.
+- `SoftkeyBar::focusNext` / `pressFocused` — the encoder-drives-softkey-focus
+  model in `docs/ui-architecture.md` was never wired.
+- `ui_sample_detail.cpp` shows a hard-coded "44.1 kHz / 2:34" and appears
+  unreachable.
+
+**Why it is not urgent:** none of it executes. The risk is misleading a
+future reader, not misbehaviour — and `inter_mcu_toggle_inversion` fails at
+link time rather than silently if anyone does call it.
+
+**Fix if picked up:** delete in one pass rather than opportunistically, so
+the grep verification is done once against a known tree state.
+
+---
+
+## The keypad matrix is configured 8x10 because that is what the code passes
+
+**From the 2026-08-29 ESP32-P4 review (E-CFG1).** `WAVEX_TCA8418_COLUMNS`
+now records the configured value instead of leaving the code to hardcode its
+own, but **nobody has checked how many columns are actually wired.** Getting
+this wrong silently stops a column being scanned — there is no error, just
+keys that never report.
+
+Related and also unresolved from that pass: the board-availability comment in
+`pin_config.h` excludes assigned pins 6, 14, 15, 34 and 40.
+
+**Why it is not urgent:** it needs a schematic or a continuity check rather
+than a guess, and guessing is what the header's own UNVERIFIED warning
+exists to prevent. The keypad has never been confirmed working on hardware
+at all (roadmap § Outstanding hardware verification), so this is one input to
+that bench pass, not a separate task.
+
+**Fix if picked up:** settle it during the keypad bench pass — press a key in
+each physical column and confirm every one reports.
+
+---
+
+## Backend link counters are gated behind `WAVEX_DAISY_UART_PERF_DEBUG`
+
+**From the August 2026 hardware pass over the ported UI.**
+`DiagPushMessage::link_*` is populated only when that flag is on, because
+timing every `UartLinkProcess` call is the overhead the flag exists to gate.
+The Diagnostics Link tab therefore shows the frontend's view only.
+
+**Why it is not urgent:** the frontend's own view of the link is the one that
+matters for the common "is the link alive" question, and the tab is not
+currently claiming to show backend figures.
+
+**Fix if picked up:** decide one of — leave as-is and label the gap on the
+tab; split the flag so frame/byte counts (cheap) are always on and only the
+microsecond timing is gated; or accept the timing cost permanently, which
+needs a measured number first.
+
+---
+
+## Diagnostics stats that are still uninstrumented
+
+**Residual from the diagnostics page build-out** (spec retired 2026-08-31;
+the page itself shipped). Not measured anywhere today: round-trip link
+latency, active voice count, per-CC and per-note detail, and dropped/late
+MIDI event counts. The MIDI tab's wire fields exist and are parsed, but the
+Daisy has no sequencer or tempo follower to fill them, so they read zero and
+the tab says so.
+
+**Why it is not urgent:** the MIDI counters should follow the Phase 2
+sequencer work rather than lead it — there is nothing to count until the
+sequencer runs. Round-trip latency and active voices are genuinely useful
+now, but neither has blocked a diagnosis yet.
+
+**Fix if picked up:** active voices is nearly free (`VoiceManager` already
+knows); round-trip latency needs an echo message with an ingest timestamp,
+which is a protocol addition and wants the same round-trip test as any
+other.
