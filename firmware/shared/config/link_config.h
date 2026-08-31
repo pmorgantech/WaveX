@@ -42,7 +42,7 @@
 // Fallback pin definitions for non-ESP builds
 #define ESP_VSPI_HOST SPI3_HOST
 #define PIN_SPI_SCK WAVEX_DAISY_SPI_SCK
-#define PIN_SPI_MOSI WAVEX_DAISY_SPI_MISO
+#define PIN_SPI_MOSI WAVEX_DAISY_SPI_MOSI
 #define PIN_SPI_MISO WAVEX_DAISY_SPI_MISO
 #define PIN_SPI_CS WAVEX_DAISY_SPI_CS
 #define PIN_IRQ_DAISY2ESP WAVEX_DAISY_IRQ_OUT
@@ -56,7 +56,6 @@
 // Ring buffer sizes for SPI
 #define SPI_RX_RING_SIZE WAVEX_SPI_RX_RING_SIZE
 #define SPI_TX_RING_SIZE WAVEX_SPI_TX_RING_SIZE
-#define SPI_POOL_SIZE WAVEX_SPI_POOL_SIZE
 
 // HD Protocol Commands (Espressif SPI Slave HD Protocol)
 #define WAVEX_HD_WRDMA 0x03    // Master→slave data transfer command
