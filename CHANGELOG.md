@@ -11,6 +11,23 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Fixed — file browser no longer flashes "Error loading files" on every navigation
+
+- `update_file_browser_ui()` labeled the gap before a fresh directory's first
+  browse page arrives as an error row. It now shows the pagination spinner
+  row for that state, and the row's label reads "Loading..." (it previously
+  said "Loading more...", which was wrong for a first page). Found by the
+  2026-08-30 comment audit: the branch's own comment admitted the mislabel.
+
+### Fixed — SPI link config: Daisy `PIN_SPI_MOSI` aliased to the MISO pin
+
+- `link_config.h` defined the non-ESP fallback `PIN_SPI_MOSI` as
+  `WAVEX_DAISY_SPI_MISO`; corrected to `WAVEX_DAISY_SPI_MOSI` (D10). Also
+  removed `SPI_POOL_SIZE`, which expanded to a macro defined nowhere in the
+  tree. Both were latent — `WAVEX_SPI_LINK_ENABLED` is 0 — but would have
+  bitten a future SPI-link revival. The remaining SPI2/PCNT1 GPIO collision
+  stays in `docs/backlog.md` pending the P4 pin re-verification.
+
 ### Added — host tests can run under AddressSanitizer/UBSan
 
 - `make test-asan` builds and runs all three host test suites with

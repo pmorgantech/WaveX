@@ -89,7 +89,9 @@ static void fb_show_loading_row(wavex_file_browser_t* browser, bool show) {
     lv_obj_set_style_arc_width(sp, 3, LV_PART_INDICATOR);
 
     lv_obj_t* txt = lv_label_create(row);
-    lv_label_set_text(txt, "Loading more...");
+    // "Loading...", not "Loading more...": the same row now also covers the
+    // gap before the FIRST page of a fresh navigation arrives.
+    lv_label_set_text(txt, "Loading...");
     lv_obj_set_style_text_font(txt, &lv_font_montserrat_18, LV_PART_MAIN);
     lv_obj_set_style_text_color(txt, FB_COL_DIM, LV_PART_MAIN);
     lv_obj_align(txt, LV_ALIGN_LEFT_MID, 36, 0);
@@ -1164,17 +1166,14 @@ static void update_file_browser_ui(wavex_file_browser_t* browser) {
         lv_obj_set_style_text_font(btn, &lv_font_montserrat_18, LV_PART_MAIN);
         ESP_LOGI(TAG, "No files found in directory");
     } else {
-        // Reached only when entry_count is 0 and pagination is still in
-        // progress (browser->entries is always allocated once the browser
-        // exists, so the entry_count > 0 branch above covers every other
-        // case). This fires briefly on every navigation before the first
-        // page arrives, labeled here as an error rather than a loading state.
-        lv_obj_t* btn = lv_list_add_btn(browser->list, NULL, "Error loading files");
-        lv_obj_set_user_data(btn, (void*)(uintptr_t)FB_ROW_NOT_AN_ENTRY);
-        ui_theme_apply_button_style(btn, false);
-        lv_obj_set_style_text_color(btn, UI_COLOR_TEXT, LV_PART_MAIN);
-        lv_obj_set_style_text_font(btn, &lv_font_montserrat_18, LV_PART_MAIN);
-        ESP_LOGI(TAG, "Showing error message in file browser");
+        // entry_count is 0 and pagination is still in flight (entries is
+        // always allocated once the browser exists, so the branches above
+        // cover every other case): the first page of a fresh navigation
+        // hasn't arrived yet. This used to show "Error loading files",
+        // which flashed a false alarm on every directory change. Show the
+        // loading spinner instead; the rebuild that comes with the first
+        // page replaces it.
+        fb_show_loading_row(browser, true);
     }
 
     wavex_ui_mark_content_changed();
