@@ -17,7 +17,7 @@ Two goals, in order:
 
 ## 2. The finding that shapes the order
 
-**The only live-editable parameter path that exists today is the analog one this scope excludes.** `MSG_CONTROL_CHANGE` for cutoff / resonance / ADSR is consumed in `audio_engine.cpp` (`OnControlChange`) into `s_para_params` and `s_para_env`, staged to the MCP4728 at the 1 kHz control tick. That is genuinely real-time audible — and it is the analog path.
+**At the start of this work, the only live-editable parameter path was the analog one this scope excludes.** `MSG_CONTROL_CHANGE` for cutoff / resonance / ADSR was consumed in `audio_engine.cpp` (`OnControlChange`) into the paraphonic state and `s_para_env`, staged to the MCP4728 at the 1 kHz control tick. That was genuinely real-time audible — and it was the analog path.
 
 The digital per-voice chain is real DSP (`voice_manager.hpp`: each of `kNumVoices = 8` voices owns its own filter and `Envelope`, processed inline in `Render()`), but its cutoff and ADSR are written **once, at `Trigger()` time**, from `VoiceTriggerParams`. There is no message, no API, and no state that lets a control change reach either a sounding voice or the next note to be triggered.
 
@@ -42,11 +42,11 @@ One verified commit each, per project convention.
 
 The load-bearing stage. Three parts:
 
-1. ~~**A per-slot base-parameter record**~~ **Done, but engine-global rather than per-slot.** `VoiceLiveParams` / `s_voice_live_params`, written by `OnControlChange` and read when building `VoiceTriggerParams`. Per-slot was designed for and deliberately not built: nothing can address a slot differently yet — `OnNoteOn` does not even set one — so a 16-entry table would have been 16 copies of the same values with no way to reach 15 of them. It mirrors `s_para_params`, which is engine-global for the analog path for exactly the same reason, and it becomes per-slot with the instrument model (Phase 2.5), which is when a slot becomes addressable.
-2. ~~**A live-update surface on `VoiceManager`**~~ **Done** — `ApplyLiveParams(const VoiceLiveParams&)`, driven at block rate from `Callback()` behind a dirty flag so an unchanged parameter set costs nothing. `VoiceManager::Choke()` was the precedent for mutating a playing voice's DSP state from callback context, so this needed a parameter path, not permission.
+1. ~~**A per-slot base-parameter record**~~ **Done, but engine-global rather than per-slot.** `VoiceLiveParams` is owned as `s_voice_live_pending` by `OnControlChange`, published as a complete snapshot, and read when building `VoiceTriggerParams`. Per-slot was designed for and deliberately not built: nothing can address a slot differently yet — `OnNoteOn` does not even set one — so a 16-entry table would have been 16 copies of the same values with no way to reach 15 of them. It mirrors `s_para_pending`, which is engine-global for the analog path for exactly the same reason, and it becomes per-slot with the instrument model (Phase 2.5), which is when a slot becomes addressable.
+2. ~~**A live-update surface on `VoiceManager`**~~ **Done** — `ApplyLiveParams(const VoiceLiveParams&)`, driven at block rate from `Callback()` only when the mailbox publishes a new generation, so an unchanged parameter set costs nothing. `VoiceManager::Choke()` was the precedent for mutating a playing voice's DSP state from callback context, so this needed a parameter path, not permission.
 
    **One asymmetry was discovered while building it, and it is load-bearing.** Filter edits reach *every* sounding voice including those in their release tail — a sweep that froze at note-off would sound like the filter jammed. Envelope edits deliberately skip releasing voices, because `Choke()` forces a short release onto a voice immediately before releasing it, and rewriting the ADSR would hand that voice its full-length release back mid-choke: the open hat would not cut off. A host test pins this, and it was verified to fail without the guard rather than merely passing with it.
-3. ~~**Routing**~~ **Done.** `PARAM_FILTER_CUTOFF`, `PARAM_FILTER_RESONANCE` and `PARAM_ENVELOPE_*` now have two destinations each — the analog `s_para_params` and the digital `s_voice_live_params`. They are not alternatives: the analog board is optional hardware and the digital voices always render, so a knob has to reach both. Cutoff needed a mapping the analog path does not (it passes `norm` through as a CV): exponential over 20 Hz – 20 kHz, since a linear map spends most of its travel above 10 kHz and crosses the whole musically useful range in the first few percent.
+3. ~~**Routing**~~ **Done.** `PARAM_FILTER_CUTOFF`, `PARAM_FILTER_RESONANCE` and `PARAM_ENVELOPE_*` now have two destinations each — the analog `s_para_pending` and the digital `s_voice_live_pending`. They are not alternatives: the analog board is optional hardware and the digital voices always render, so a knob has to reach both. Cutoff needed a mapping the analog path does not (it passes `norm` through as a CV): exponential over 20 Hz – 20 kHz, since a linear map spends most of its travel above 10 kHz and crosses the whole musically useful range in the first few percent.
 
 **Filter replacement (decided 2026-08-29; ~~done~~ — `svf_filter.hpp`, 14 host tests): `OnePoleFilter` → a state-variable filter.** `PARAM_FILTER_RESONANCE` has no digital consumer today because the one-pole has no resonance state — and a filter that cannot resonate barely exercises the voice architecture this work exists to exercise. `one_pole_filter.hpp`'s own header comment anticipates exactly this ("upgrading to an SVF (for resonance) is a drop-in follow-up once there's a reason to need it").
 
@@ -80,13 +80,12 @@ with `WAVEX_AUDIO_ENGINE_ENABLED` at 1).
    tracked in `../backlog.md`; until then, an absence of log output carries no
    information here.
 
-2. **A 24-bit sample loads successfully and can never be triggered.**
-   `loadSample()` (`ui_sample_browser.cpp`) accepts 8, 16 and 24-bit;
-   `find_playable_sample()` (`audio_engine.cpp:1909`) accepts only
-   `bit_depth == 16` with 1–2 channels. A 24-bit file reports `Sample loaded:
-   id=…` and is then inert, with no feedback anywhere. Either widen the
-   playable set or refuse the load — silently accepting and then not playing is
-   the one option that must go.
+2. ~~**A 24-bit sample loads successfully and can never be triggered.**~~
+   **Fixed.** RAM-resident loading now accepts PCM16 mono/stereo only, matching
+   the voice renderer's actual data contract. The browser gives an actionable
+   error for known PCM24 metadata, and the Daisy independently validates the
+   parsed WAV header so missing or stale frontend metadata cannot admit an
+   unplayable allocation. **Audition** still streams PCM24 files.
 
 3. **Audition is not Load, and nothing says so.** The browser's **Audition**
    softkey sends `MSG_SAMPLE_PLAY_INDEX_REQ`, which streams a file by listing

@@ -280,8 +280,14 @@ static void HandleSampleLoadMessage(const uint8_t* payload, size_t payload_size)
         return;
     }
 
-    const auto* msg = reinterpret_cast<const WaveX::Protocol::SampleLoadMessage*>(payload);
-    WaveX::AudioEngine::OnSampleLoad(*msg);
+    // A CRC-valid fixed-size payload can still fill the path field without a
+    // terminator. Copy at the dispatch boundary so every downstream C-string
+    // consumer (logging, FatFS, prefix checks) sees a bounded path. memcpy also
+    // avoids binding a packed struct reference to a byte-aligned payload.
+    WaveX::Protocol::SampleLoadMessage msg;
+    memcpy(&msg, payload, sizeof(msg));
+    msg.path[sizeof(msg.path) - 1] = '\0';
+    WaveX::AudioEngine::OnSampleLoad(msg);
 }
 
 // MSG_SAMPLE_DATA (push sample bytes over the link) is not implemented:

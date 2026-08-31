@@ -45,6 +45,9 @@ set(FIRMWARE_SOURCES
     src/comm/log_ring.cpp
     src/comm/daisy_filesystem.cpp
     src/audio/audio_engine.cpp
+    src/audio/note_event_queue.hpp
+    src/audio/sample_load_info.hpp
+    src/audio/snapshot_mailbox.hpp
     src/storage/fs_browse.cpp
     src/storage/sd_sdio.cpp
     src/storage/sd_log_bridge.cpp
@@ -163,6 +166,14 @@ endif()
 
 # Include DaisyProject.cmake which handles all the STM32 configuration
 include(DaisyProject)
+
+# Shared logging state uses C++17 inline variables. Select the language level
+# explicitly instead of relying on the ARM toolchain's current gnu++14 default.
+set_target_properties(${FIRMWARE_NAME} PROPERTIES
+    CXX_STANDARD 17
+    CXX_STANDARD_REQUIRED YES
+    CXX_EXTENSIONS YES
+)
 
 # First-party warning flags, matching the host test suites (see
 # docs/testing-remediation.md). Warnings, not -Werror: CI surfaces them, and a

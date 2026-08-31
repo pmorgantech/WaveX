@@ -136,16 +136,19 @@ inline float RegionFadeGain(uint32_t frame,
 
     uint32_t fade_in = (fade_in_frames >= kMinFadeFrames) ? fade_in_frames : 0;
     uint32_t fade_out = (fade_out_frames >= kMinFadeFrames) ? fade_out_frames : 0;
-    if (fade_in + fade_out > span) {
+    const uint64_t requested_fade = static_cast<uint64_t>(fade_in) + fade_out;
+    if (requested_fade > span) {
         // Share the region proportionally rather than letting the head win and
         // the tail vanish; a request for a 1 s fade each way on a 100 ms region
         // is a UI that has not been clamped, and half each is the least
         // surprising reading of it.
         if (fade_in >= fade_out) {
-            fade_in = (span * fade_in) / (fade_in + fade_out);
+            fade_in =
+                static_cast<uint32_t>((static_cast<uint64_t>(span) * fade_in) / requested_fade);
             fade_out = span - fade_in;
         } else {
-            fade_out = (span * fade_out) / (fade_in + fade_out);
+            fade_out =
+                static_cast<uint32_t>((static_cast<uint64_t>(span) * fade_out) / requested_fade);
             fade_in = span - fade_out;
         }
     }

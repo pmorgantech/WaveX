@@ -33,6 +33,9 @@
 #include <cstdint>
 #include <cstdio>
 
+static_assert(__cplusplus >= 201703L,
+              "logging_config.h uses C++17 inline variables; compile first-party code as C++17");
+
 // ============================================================================
 // LEVELS (numeric equals esp_log_level_t: NONE..VERBOSE)
 // ============================================================================

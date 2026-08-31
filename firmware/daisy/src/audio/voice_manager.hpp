@@ -48,13 +48,67 @@ static constexpr uint8_t kNumVoices = 8;
 
 enum class VoiceState : uint8_t { Idle, Playing };
 
+// Playback position with an exact 32-bit frame index and a Q24 fractional
+// component. A single float cannot advance by one frame once it reaches 2^24,
+// which is well inside the duration of a mono sample that fits the SDRAM
+// arena. Keeping the integer and fraction separate also makes the callback's
+// per-sample advance two integer adds rather than a software double operation.
+class PlaybackPhase {
+   public:
+    static constexpr uint32_t kFractionOne = 16777216u;
+
+    void SetFrame(uint32_t frame) {
+        frame_ = frame;
+        fraction_ = 0;
+    }
+
+    uint32_t Frame() const { return frame_; }
+    float Fraction() const { return static_cast<float>(fraction_) * (1.0f / 16777216.0f); }
+
+    void Advance(uint32_t whole, uint32_t fraction) {
+        const uint32_t accumulated = fraction_ + fraction;
+        frame_ += whole + (accumulated / kFractionOne);
+        fraction_ = accumulated % kFractionOne;
+    }
+
+    void SubtractFrames(uint32_t frames) { frame_ = frame_ >= frames ? frame_ - frames : 0; }
+
+    static void SplitRate(float rate, uint32_t& whole, uint32_t& fraction) {
+        if (!(rate > 0.0f) || !std::isfinite(rate)) {
+            whole = 0;
+            fraction = 0;
+            return;
+        }
+        // UINT32_MAX itself rounds to 2^32 in binary32, so clamp before the
+        // float-to-uint32 conversion can leave the representable range.
+        if (rate >= 4294967040.0f) {
+            whole = 0xFFFFFFFFu;
+            fraction = 0;
+            return;
+        }
+        whole = static_cast<uint32_t>(rate);
+        const float fractional = rate - static_cast<float>(whole);
+        fraction = static_cast<uint32_t>(fractional * static_cast<float>(kFractionOne) + 0.5f);
+        if (fraction >= kFractionOne) {
+            ++whole;
+            fraction = 0;
+        }
+    }
+
+   private:
+    uint32_t frame_ = 0;
+    uint32_t fraction_ = 0;
+};
+
 struct Voice {
     VoiceState state = VoiceState::Idle;
     const int16_t* sample = nullptr;  // RAM-resident, interleaved; not owned by Voice
     uint32_t sample_frames = 0;
     uint8_t src_channels = 1;  // interleave stride: 1 = mono, 2 = stereo (averaged to mono)
-    float phase = 0.0f;        // fractional playback position, in frames
+    PlaybackPhase phase;       // exact frame + fractional playback position
     float increment = 1.0f;    // playback rate (pitch), from note/root_note
+    uint32_t increment_frames = 1;
+    uint32_t increment_fraction = 0;
     // The increment this voice's own note implies, before any live transpose.
     // Kept so ApplyLiveParams can re-apply a pitch offset without losing key
     // tracking - recomputing from `increment` would compound each edit.
@@ -84,6 +138,13 @@ struct Voice {
     Envelope envelope;
 
     bool IsFree() const { return state == VoiceState::Idle; }
+
+    void SetIncrement(float rate) {
+        increment = rate;
+        PlaybackPhase::SplitRate(rate, increment_frames, increment_fraction);
+    }
+
+    void AdvancePhase() { phase.Advance(increment_frames, increment_fraction); }
 };
 
 // Named-argument trigger parameters (roadmap-item-4-sized Trigger() calls
@@ -205,10 +266,11 @@ class VoiceManager {
     //
     // Intended to be driven at block rate from the audio callback, and only
     // when something actually changed - see the caller's dirty flag. It is
-    // cheap but not free: SetCutoff() recomputes coefficients (a tan()) per
-    // voice. Every voice is handed the SAME cutoff and resonance here, so if
-    // this ever shows up in a DWT profile the fix is to compute the
-    // coefficients once and share them, not to update less often.
+    // cheap but not free: SetResonance() and SetCutoff() each recompute the
+    // coefficients (including a tan()) per voice. Every voice is handed the
+    // SAME cutoff and resonance here, so if this ever shows up in a DWT profile
+    // the fix is to compute the coefficients once and share them, not to update
+    // less often.
     //
     // Envelope rates are deliberately NOT written to a voice that is already
     // releasing. Choke() forces a short release onto a voice immediately
@@ -235,7 +297,7 @@ class VoiceManager {
             // Multiply the note's own increment rather than overwrite it, so a
             // live transpose stacks on key tracking instead of flattening every
             // voice to the same rate.
-            v.increment = v.base_increment * live_pitch_scale_;
+            v.SetIncrement(v.base_increment * live_pitch_scale_);
         }
     }
 
@@ -282,7 +344,7 @@ class VoiceManager {
         // Phase 2.5 zone-sync path) to pre-validate.
         if (v.loop && v.loop_end <= v.loop_start + 1)
             v.loop = false;
-        v.phase = static_cast<float>(v.start_frame);
+        v.phase.SetFrame(v.start_frame);
 
         // Fades count in source frames, so they use the sample's own rate -
         // not the engine's. A 44.1 kHz sample on a 48 kHz engine advances
@@ -306,7 +368,7 @@ class VoiceManager {
                                     static_cast<float>(static_cast<int>(params.note) -
                                                        static_cast<int>(params.root_note)) /
                                         12.0f);
-        v.increment = v.base_increment * live_pitch_scale_;
+        v.SetIncrement(v.base_increment * live_pitch_scale_);
 
         v.filter.Init(sample_rate_);
         v.filter.SetResonance(params.filter_resonance);
@@ -357,25 +419,24 @@ class VoiceManager {
                 continue;
             const float left_gain = v.gain * (1.0f - v.pan);
             const float right_gain = v.gain * v.pan;
-            const float last_valid_phase = static_cast<float>(v.end_frame - 1);
-            const float loop_end_phase = static_cast<float>(v.loop_end);
-            const float loop_len = static_cast<float>(v.loop_end - v.loop_start);
+            const uint32_t last_valid_frame = v.end_frame - 1;
+            const uint32_t loop_len = v.loop_end - v.loop_start;
 
             for (size_t i = 0; i < block_size; ++i) {
                 bool holding_release_tail = false;
-                if (v.loop && v.phase >= loop_end_phase) {
+                if (v.loop && v.phase.Frame() >= v.loop_end) {
                     // Wrap by the loop length so the fractional phase (and
                     // with it the exact loop period/pitch) is preserved. The
                     // window is [loop_start, loop_end): its final frame does
                     // get rendered, interpolating toward loop_start below.
-                    v.phase -= loop_len;
-                    if (v.phase >= loop_end_phase || v.phase < static_cast<float>(v.loop_start)) {
+                    v.phase.SubtractFrames(loop_len);
+                    if (v.phase.Frame() >= v.loop_end || v.phase.Frame() < v.loop_start) {
                         // Phase far outside the window (start_frame beyond
                         // loop_end, or increment > loop length): snap rather
                         // than loop an unbounded number of subtractions here.
-                        v.phase = static_cast<float>(v.loop_start);
+                        v.phase.SetFrame(v.loop_start);
                     }
-                } else if (!v.loop && v.phase >= last_valid_phase) {
+                } else if (!v.loop && v.phase.Frame() >= last_valid_frame) {
                     // Reached the end of a non-looping sample: start the
                     // release tail (or, if already releasing, this just
                     // confirms we're done - the envelope-idle check below
@@ -392,7 +453,7 @@ class VoiceManager {
                 uint32_t idx0, idx1;
                 float frac;
                 if (holding_release_tail) {
-                    idx0 = static_cast<uint32_t>(last_valid_phase);
+                    idx0 = last_valid_frame;
                     // frac is 0, so idx1's sample is never blended in - but the
                     // read still happens, and idx0 == end_frame - 1 means
                     // idx0 + 1 == end_frame, one frame past this voice's region
@@ -401,7 +462,7 @@ class VoiceManager {
                     idx1 = idx0;
                     frac = 0.0f;
                 } else {
-                    idx0 = static_cast<uint32_t>(v.phase);
+                    idx0 = v.phase.Frame();
                     if (v.loop && idx0 + 1 >= v.loop_end && idx0 >= v.loop_start) {
                         // Circular seam: the loop window's final frame
                         // interpolates toward loop_start, not toward the
@@ -415,7 +476,7 @@ class VoiceManager {
                                    2;  // clamp: envelope release masks the tail anyway
                         idx1 = idx0 + 1;
                     }
-                    frac = v.phase - static_cast<float>(idx0);
+                    frac = v.phase.Fraction();
                 }
                 float s0, s1;
                 if (v.src_channels == 2) {
@@ -448,7 +509,7 @@ class VoiceManager {
                     break;
                 }
 
-                v.phase += v.increment;
+                v.AdvancePhase();
             }
         }
     }

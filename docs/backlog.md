@@ -229,6 +229,36 @@ will name the HAL error if it does not.
 
 ---
 
+## Streaming CRC recovery can outrun the audio ring
+
+**Found in the 2026-08-31 Daisy real-time review.** After three streaming read
+errors, `audio_engine.cpp` calls `SdSdio::DowngradeSpeed()` for an SDMMC data
+CRC failure. That enters `TrySpeed()`, which unmounts, deinitializes,
+reinitializes, remounts, and may perform five 50 ms `FR_NOT_READY` retries.
+This all runs synchronously in the main loop. One attempt can therefore take
+roughly 250 ms, while the 2,048-frame audio ring holds only about 42.7 ms at
+48 kHz. The audio callback remains non-blocking, but the ring can empty and
+the same stall also delays UART and CV servicing.
+
+**Why it is not being changed blind:** the failure path was added in response
+to a real marginal-card CRC problem, and removing it would restore permanent
+playback failure. Choosing between an audible pause with automatic recovery,
+an immediate abort, or a larger prebuffer is product behavior; proving a
+replacement also needs the problem card or an equivalent fault-injection
+bench setup. Host tests cannot model HAL/FatFS timing or SDMMC electrical
+failures faithfully.
+
+**Fix if picked up:** make recovery an explicit main-loop state machine. Stop
+or mark the stream as recovering, close the stale `FIL`, perform at most one
+bounded negotiation step per loop pass, refill to a defined high-water mark,
+then resume or report a terminal error. On hardware, inject/reproduce CRC
+failures and capture maximum main-loop latency, ring low-water, UART/CV
+service gaps, and the user-visible result. Acceptance requires no stale audio,
+no silent permanent failure, and a documented choice about whether playback
+may pause and resume.
+
+---
+
 ## GT911 touch range mismatch
 
 The vendored BSP's `bsp_touch_new()` (`esp32_p4_nano.c` in
@@ -579,10 +609,25 @@ masking. It needs a deliberate decision and a bench pass with DWT numbers,
 not a flag flip — and the audio path is currently fast enough at `-O0` after
 the 2026-08-29 regression fix.
 
-**Fix if picked up:** measure `-O2` with the DWT counter against the `-O0`
-image (`docs/performance_monitoring.md` Part 1), soak for underruns, then
-decide. This is also the prerequisite for [LTO on the Daisy
-image](#lto-on-the-daisy-image) — LTO at `-O0` buys essentially nothing.
+The 2026-08-31 review found a second reason this needs measurement rather than
+a paper decision. A live digital control update currently performs one
+`pow()` plus up to two SVF coefficient recomputations (`tan()`) for each of
+eight playing voices inside the callback. The 1 kHz analog control tick also
+evaluates `CvShapeCutoff()`, which contains two `expf()` calls. These paths are
+bounded and run only on control updates/ticks, but their worst-case callback
+cost at `-O0` has not been measured. If it is material, the likely code fix is
+to calculate immutable filter coefficients once per shared update and publish
+them, not merely to rely on optimization flags.
+
+**Fix if picked up:** flash separate `-O0` and `-O2` images and use the DWT
+counter (`docs/performance_monitoring.md` Part 1) while eight voices sound and
+cutoff/resonance controls sweep continuously. Record callback maximum, budget
+headroom, and underruns, then run at least a one-hour audio/SD soak on each
+image. Decide the default from those measurements. If coefficient publication
+is needed, add host tests for numerical equivalence and block-boundary update
+semantics before changing the callback. This is also the prerequisite for
+[LTO on the Daisy image](#lto-on-the-daisy-image) — LTO at `-O0` buys
+essentially nothing.
 
 ---
 

@@ -25,11 +25,10 @@ namespace MemorySections {
 // run's data on a warm reset, undefined on a cold one - and its initializer
 // was silently discarded.
 //
-// That is not just untidy. s_voice_live_dirty lives there: a non-zero value at
-// boot makes the first audio callback push an equally uninitialized
-// s_voice_live_params (garbage cutoff, resonance and ADSR) into all eight
-// voices. Must run before any DTCM-placed object is read, i.e. before the
-// audio callback starts.
+// That is not just untidy. The DTCM voice manager contains callback-visible
+// state, pointers, and counters that must start at zero; explicit Init() calls
+// then establish every non-zero default before audio starts. This clear must
+// therefore run before any DTCM-placed object is initialized or read.
 void InitDtcmBss() {
     const size_t size = static_cast<size_t>(&__dtcmram_bss_end__ - &__dtcmram_bss_start__);
     if (size > 0) {

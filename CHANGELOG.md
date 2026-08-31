@@ -11,6 +11,32 @@ versioning and release process.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-31
+
+### Fixed — Daisy resident-sample safety and long-playback correctness
+
+- Rejected malformed, empty, truncated, partial-frame, and over-capacity WAV
+  payloads before sample eviction/allocation; resident metadata now comes from
+  the Daisy-parsed WAV geometry rather than optional ESP32 hints, including
+  sample rates above 65,535 Hz.
+- Prevented near-4 GiB allocation sizes from wrapping the SDRAM extent count to
+  zero and returning an unreserved pointer, and bounded unterminated
+  `MSG_SAMPLE_LOAD` paths at the Daisy dispatch boundary.
+- Replaced RAM-voice float playback position with an exact frame plus fixed
+  fractional phase so long mono samples continue beyond binary32's 2^24-frame
+  adjacent-integer limit.
+- Kept proportional region-fade clamping correct for minute-long samples by
+  widening its intermediate arithmetic.
+- Preserved note-off events when the main-loop-to-audio queue is saturated by
+  coalescing overflow releases per MIDI note, preventing stuck voices without
+  converting dropped triggers into false releases.
+- Published live voice, paraphonic envelope, CV-test, calibration, and DAC
+  state as complete block-boundary snapshots instead of allowing the audio
+  callback and main loop to observe partially updated multi-field values.
+- Aligned resident loading with the PCM16 mono/stereo voice-renderer contract:
+  the ESP32 browser now rejects known PCM24 loads with an Audition hint, and
+  the Daisy validates the parsed WAV format authoritatively.
+
 ### Added — runtime log-level control on both consoles, and a configurator
 
 - **Daisy**: `WAVEX-LOG <MODULE|*> <LEVEL>` (or `WAVEX-LOG ?` to list) on the
@@ -2993,5 +3019,6 @@ class the code's own comments already described.
   audio engine, SD sample streaming, CV outputs), linked over SPI with a
   shared wire protocol.
 
-[Unreleased]: https://github.com/maxamplitude/WaveX/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/maxamplitude/WaveX/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/maxamplitude/WaveX/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/maxamplitude/WaveX/releases/tag/v0.1.0

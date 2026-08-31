@@ -10,6 +10,7 @@
 #include "ui/ui_busy_overlay.h"
 #include "ui_task.h"
 
+#include "wav/resident_sample_policy.hpp"
 #include <algorithm>
 
 static const char* TAG = "UI_SAMPLE_BROWSER";
@@ -928,13 +929,13 @@ void UISampleBrowser::sample_status_callback(uint16_t sample_id,
 }
 
 bool UISampleBrowser::loadSample(const wavex_file_entry_t* entry) {
-    ESP_LOGI(TAG, "=== SAMPLE LOAD OPERATION: Loading sample: %s ===", entry->name);
-
     if (!entry || strlen(entry->name) == 0) {
         ESP_LOGE(TAG, "Invalid file entry for sample loading");
         updateStatus("Error: Invalid file entry");
         return false;
     }
+
+    ESP_LOGI(TAG, "=== SAMPLE LOAD OPERATION: Loading sample: %s ===", entry->name);
 
     // Gracefully fall back if metadata isn't available from the backend yet.
     // TODO(todo1): revert to strict validation once Daisy browse metadata is populated.
@@ -956,9 +957,13 @@ bool UISampleBrowser::loadSample(const wavex_file_entry_t* entry) {
                  bits_per_sample);
     }
 
-    if (bits_per_sample != 8 && bits_per_sample != 16 && bits_per_sample != 24) {
-        ESP_LOGE(TAG, "Unsupported bit depth: %u (only 8/16/24-bit supported)", bits_per_sample);
-        updateStatus("Error: Unsupported bit depth");
+    if (!WaveX::Wav::IsResidentSampleFormatSupported(bits_per_sample, channels)) {
+        ESP_LOGE(TAG,
+                 "Unsupported resident sample format: %u-bit, %u channels (requires PCM16 "
+                 "mono/stereo)",
+                 bits_per_sample,
+                 channels);
+        updateStatus("Error: Load supports PCM16 mono/stereo; use Audition for PCM24");
         return false;
     }
 

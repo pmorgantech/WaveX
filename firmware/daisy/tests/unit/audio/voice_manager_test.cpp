@@ -8,6 +8,7 @@
 #include <vector>
 
 using WaveX::AudioEngine::kNumVoices;
+using WaveX::AudioEngine::Voice;
 using WaveX::AudioEngine::VoiceManager;
 using WaveX::AudioEngine::VoiceState;
 using WaveX::AudioEngine::VoiceTriggerParams;
@@ -47,6 +48,20 @@ VoiceTriggerParams FlatParams(
 }
 
 }  // namespace
+
+// Binary32 cannot represent adjacent frame indices above 2^24. At exactly
+// that point `phase += 1.0f` rounds back to the same value, freezing any
+// native-rate mono sample longer than about 5m49s even though the 60 MiB arena
+// can hold almost twice that duration.
+TEST(VoicePhaseTest, AdvancesPastTheFloatAdjacentIntegerLimit) {
+    Voice voice;
+    voice.phase.SetFrame(16777216u);
+    voice.SetIncrement(1.0f);
+
+    voice.AdvancePhase();
+
+    EXPECT_EQ(voice.phase.Frame(), 16777217u);
+}
 
 TEST(VoiceManagerTest, NoVoicesActiveProducesSilence) {
     VoiceManager vm;
@@ -324,7 +339,7 @@ TEST(VoiceManagerTest, ZeroBlockSizeRenderIsANoOp) {
     EXPECT_FLOAT_EQ(sentinel_l[0], 123.0f);
     EXPECT_FLOAT_EQ(sentinel_r[0], 789.0f);
     EXPECT_EQ(vm.ActiveVoiceCount(), 1);
-    EXPECT_FLOAT_EQ(vm.GetVoice(0).phase, 0.0f);
+    EXPECT_EQ(vm.GetVoice(0).phase.Frame(), 0u);
 }
 
 // Releasing a note twice, with two voices holding that note, must release
@@ -546,7 +561,7 @@ TEST(VoiceManagerTest, OutOfRangeStartFrameFallsBackToZero) {
     p.start_frame = 10;  // == sample_frames, one past the last frame
     vm.Trigger(p);
 
-    EXPECT_FLOAT_EQ(vm.GetVoice(0).phase, 0.0f);
+    EXPECT_EQ(vm.GetVoice(0).phase.Frame(), 0u);
 
     float out_l[1] = {0}, out_r[1] = {0};
     vm.Render(out_l, out_r, 1);
@@ -562,7 +577,7 @@ TEST(VoiceManagerTest, StartFrameOffsetsInitialPlaybackPosition) {
     p.start_frame = 5;
     vm.Trigger(p);
 
-    EXPECT_FLOAT_EQ(vm.GetVoice(0).phase, 5.0f);
+    EXPECT_EQ(vm.GetVoice(0).phase.Frame(), 5u);
 
     float out_l[1] = {0};
     float out_r[1] = {0};

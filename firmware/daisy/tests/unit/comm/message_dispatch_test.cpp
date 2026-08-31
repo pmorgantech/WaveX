@@ -196,6 +196,15 @@ TEST_F(MessageDispatchTest, SampleLoadReachesAudioEngine) {
     EXPECT_STREQ(GetDispatchRecord().sample_loads[0].path, "/SAMPLES/kick.wav");
 }
 
+TEST_F(MessageDispatchTest, SampleLoadPathIsTerminatedAtTheDispatchBoundary) {
+    std::vector<uint8_t> payload(sizeof(SampleLoadMessage), 0x41);
+    ProcessInterMcuMessage(MSG_SAMPLE_LOAD, 1, payload.data(), payload.size());
+
+    ASSERT_EQ(GetDispatchRecord().sample_loads.size(), 1u);
+    const auto& forwarded = GetDispatchRecord().sample_loads[0];
+    EXPECT_EQ(forwarded.path[sizeof(forwarded.path) - 1], '\0');
+}
+
 TEST_F(MessageDispatchTest, StatusRequestSendsSampleMemStatusResponse) {
     StatusRequestMessage req(STATUS_CATEGORY_SAMPLE_MEM);
     Dispatch(MSG_STATUS_REQUEST, req);

@@ -104,6 +104,20 @@ TEST(FadeTest, OverlongFadesShareTheRegionInsteadOfMultiplying) {
     EXPECT_GT(RegionFadeGain(100, start, end, 1000, 1000), 0.9f);
 }
 
+// Real edit values are measured in millions of frames. The proportional
+// clamp must not do `span * fade` in uint32_t: that wraps for ordinary
+// minute-long samples and turns two equal fades into a tiny head fade plus an
+// almost-full-length tail fade.
+TEST(FadeTest, LongEqualFadesSplitTheRegionWithoutUint32Overflow) {
+    constexpr uint32_t span = 2880000;  // 60 s at 48 kHz
+    const uint32_t midpoint = span / 2;
+
+    EXPECT_GT(RegionFadeGain(midpoint, 0, span, span, span), 0.99f);
+    EXPECT_NEAR(RegionFadeGain(span / 4, 0, span, span, span),
+                RegionFadeGain(span - 1 - span / 4, 0, span, span, span),
+                1e-5f);
+}
+
 // A ramp of a couple of frames does not reliably remove the step it exists
 // for, and a one-frame "fade" is just a smaller step.
 TEST(FadeTest, FadesShorterThanTheMinimumAreIgnored) {

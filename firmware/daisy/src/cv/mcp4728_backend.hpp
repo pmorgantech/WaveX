@@ -16,6 +16,7 @@
 #include "config/hardware_config.h"
 #include "daisy_seed.h"
 
+#include "audio/snapshot_mailbox.hpp"
 #include "cv_cal.hpp"
 #include <array>
 #include <cstdint>
@@ -24,8 +25,20 @@ namespace WaveX {
 namespace Cv {
 
 class Mcp4728Backend {
+   private:
+    struct DacFrame {
+        uint16_t cutoff = 0;
+        uint16_t resonance = 0;
+        uint16_t vca = 0;
+    };
+    using CalTable = std::array<CvCal, WAVEX_ANALOG_CV_GROUPS_MAX>;
+
    public:
     void Init(uint8_t i2c_addr = 0x60) {
+        cal_pending_.fill(CvCal{});
+        cal_active_ = cal_pending_;
+        cal_mailbox_.Init(cal_pending_);
+        dac_mailbox_.Init(DacFrame{});
         addr_ = i2c_addr;
         daisy::I2CHandle::Config cfg;
         cfg.periph = daisy::I2CHandle::Config::Peripheral::I2C_1;
@@ -35,26 +48,33 @@ class Mcp4728Backend {
     }
 
     void SetGroupCal(uint8_t group, const CvCal& c) {
-        if (group < cal_.size())
-            cal_[group] = c;
+        if (group < cal_pending_.size()) {
+            cal_pending_[group] = c;
+            cal_mailbox_.Publish(cal_pending_);
+        }
     }
 
     // Read-back for the calibration workflow (MSG_CV_CAL_GET / SD persist).
-    const CvCal& GroupCal(uint8_t group) const { return cal_[group < cal_.size() ? group : 0]; }
+    const CvCal& GroupCal(uint8_t group) const {
+        return cal_pending_[group < cal_pending_.size() ? group : 0];
+    }
 
-    // Callback-safe: only stages values into slot_.
+    // Callback-safe: computes and publishes one complete DAC frame.
     void QueueGroup(uint8_t group, float cutoff, float resonance, float vca) {
-        if (group >= cal_.size())
+        cal_mailbox_.ConsumeLatest(cal_active_);
+        if (group >= cal_active_.size())
             return;
-        const CvCal& c = cal_[group];
+        const CvCal& c = cal_active_[group];
         float cut = CvClamp01(c.vcf_cut_gain * CvShapeCutoff(CvClamp01(cutoff), c.cutoff_k) +
                               c.vcf_cut_off);
         float q = CvClamp01(c.vcf_q_gain * CvClamp01(resonance) + c.vcf_q_off);
         float vca_inv = 1.0f - CvClamp01(vca);
         float va = CvClamp01(c.vca_gain * vca_inv + c.vca_off);
-        cutoff_dac_ = (uint16_t)lrintf(cut * 4095.0f);
-        res_dac_ = (uint16_t)lrintf(q * 4095.0f);
-        vca_dac_ = (uint16_t)lrintf(va * 4095.0f);
+        DacFrame frame;
+        frame.cutoff = (uint16_t)lrintf(cut * 4095.0f);
+        frame.resonance = (uint16_t)lrintf(q * 4095.0f);
+        frame.vca = (uint16_t)lrintf(va * 4095.0f);
+        dac_mailbox_.Publish(frame);
     }
 
     // Main-loop only: performs the blocking I2C fast-write transaction. Per
@@ -62,7 +82,13 @@ class Mcp4728Backend {
     // must never run in the audio callback. Returns false on I2C failure
     // (e.g. no MCP4728 on the bus) so the caller can back off instead of
     // paying the transaction timeout on every tick.
-    bool Flush() { return WriteFastWrite(cutoff_dac_, res_dac_, vca_dac_, 0); }
+    bool Flush() {
+        DacFrame frame;
+        if (!dac_mailbox_.ConsumeLatest(frame)) {
+            return true;
+        }
+        return WriteFastWrite(frame.cutoff, frame.resonance, frame.vca, 0);
+    }
 
    private:
     bool WriteFastWrite(uint16_t ch0, uint16_t ch1, uint16_t ch2, uint16_t ch3) {
@@ -83,14 +109,14 @@ class Mcp4728Backend {
 
     uint8_t addr_ = 0x60;
     daisy::I2CHandle i2c_;
-    uint16_t cutoff_dac_ = 0;
-    uint16_t res_dac_ = 0;
-    uint16_t vca_dac_ = 0;
     // Calibration is per analog-voice-group and sized for the full 8-group
     // board even though Stage A only ever queries index 0, so the same
     // stored calibration table (SD-persisted) survives the Stage A -> B
     // transition without reformatting.
-    std::array<CvCal, WAVEX_ANALOG_CV_GROUPS_MAX> cal_{};
+    CalTable cal_pending_{};
+    CalTable cal_active_{};
+    WaveX::AudioEngine::SnapshotMailbox<CalTable> cal_mailbox_;
+    WaveX::AudioEngine::SnapshotMailbox<DacFrame> dac_mailbox_;
 };
 
 }  // namespace Cv

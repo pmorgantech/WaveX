@@ -301,7 +301,15 @@ class LargeExtentPool {
     }
 
     bool alloc(uint32_t nbytes, wxsamp_t* out) {
-        uint32_t need_pages = (nbytes + WXM_LARGE_PAGE_BYTES - 1u) / WXM_LARGE_PAGE_BYTES;
+        // Reject impossible requests before rounding. The conventional
+        // `(nbytes + page - 1) / page` expression wraps for RIFF data sizes
+        // near UINT32_MAX; need_pages then becomes zero and the allocator
+        // returns the arena base without reserving any pages.
+        if (nbytes == 0 || nbytes > size_ || out == nullptr) {
+            failed_allocs_++;
+            return false;
+        }
+        const uint32_t need_pages = 1u + ((nbytes - 1u) / WXM_LARGE_PAGE_BYTES);
         int idx = find_best_fit(need_pages);
         if (idx < 0) {
             failed_allocs_++;

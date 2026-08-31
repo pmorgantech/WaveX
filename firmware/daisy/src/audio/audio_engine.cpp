@@ -30,8 +30,11 @@ extern "C" SD_HandleTypeDef hsd1;  // libDaisy per/sdmmc.cpp
 #include "fade.hpp"
 #include "instrument.hpp"
 #include "linear_resampler.hpp"
+#include "note_event_queue.hpp"
 #include "output_sink.hpp"
 #include "paraphonic_envelope.hpp"
+#include "sample_load_info.hpp"
+#include "snapshot_mailbox.hpp"
 #include "voice_manager.hpp"
 #include "wav/wav_header_parser.hpp"
 #include <algorithm>
@@ -124,29 +127,24 @@ __attribute__((unused)) static OutputSinkType s_output_sink;
 static WaveX::AudioEngine::VoiceManager s_voice_manager WAVEX_DTCM_DATA;
 
 // Digital voice base parameters - what MSG_CONTROL_CHANGE edits for the
-// all-digital path (features/digital-voice-audition.md stage 1). Written from
-// main-loop message-handler context, read in audio context: the same handoff
-// contract as s_para_params below (aligned float stores are atomic on
-// Cortex-M7, single writer per field). A block landing between two field
-// writes of one gesture briefly mixes old and new values, which is inaudible
-// and self-correcting.
+// all-digital path (features/digital-voice-audition.md stage 1). The main loop
+// owns pending; the callback owns active. A double-buffered generation mailbox
+// publishes the complete struct at a block boundary, so the callback never
+// observes a mixed old/new parameter set.
 //
 // ENGINE-GLOBAL, not per-slot, and deliberately so. param-locks-and-
 // modulation.md scopes base values to an instrument slot, but nothing can
 // address a slot differently yet - OnNoteOn does not even set one - so a
 // 16-entry table would be 16 copies of the same values with no way to reach
-// 15 of them. This mirrors s_para_params, which is engine-global for the
+// 15 of them. This mirrors s_para_pending, which is engine-global for the
 // analog path for the same reason. It becomes per-slot with the instrument
 // model (Phase 2.5), which is also when a slot becomes addressable.
 //
 // DTCM for the same reason as s_voice_manager: read from Callback(), CPU-only,
 // tiny.
-static WaveX::AudioEngine::VoiceLiveParams s_voice_live_params WAVEX_DTCM_DATA;
-
-// Set by OnControlChange (main loop), consumed by Callback() (audio context).
-// Without it every block would push identical values onto all 8 voices and
-// recompute a filter coefficient per voice for nothing.
-static volatile bool s_voice_live_dirty WAVEX_DTCM_DATA = false;
+static WaveX::AudioEngine::VoiceLiveParams s_voice_live_active WAVEX_DTCM_DATA;
+static WaveX::AudioEngine::VoiceLiveParams s_voice_live_pending;
+static SnapshotMailbox<WaveX::AudioEngine::VoiceLiveParams> s_voice_live_mailbox;
 
 // Sequencer transport (roadmap Phase 2). Owns the step scheduler + MIDI
 // tempo follower. Edits/transport/clock arrive from main-loop message
@@ -167,17 +165,14 @@ static WaveX::Sequencer::SequencerTransport s_seq_transport;
 // --- Stage A paraphonic analog path (roadmap item 5; analog-voice-board.md
 // §0). One shared envelope drives the shared VCF/VCA CVs; values are
 // STAGED at the 1 kHz control tick (audio context, callback-safe - the
-// router/backend only write member fields) and FLUSHED from the main loop
+// router/backend publishes one complete frame) and FLUSHED from the main loop
 // (blocking I2C ~225 us, §7.1.4) via FlushCv() below.
 // DTCM: ticked once per block from Callback() itself, CPU-only, small - same
 // case as s_voice_manager above.
 static ParaphonicEnvelope s_para_env WAVEX_DTCM_DATA;
 
-// Shared-path control values. Written from main-loop context (OnControlChange
-// maps MSG_CONTROL_CHANGE here), read at the tick in audio context: plain
-// aligned float stores are atomic on Cortex-M7 and each field has a single
-// writer, so per-field tearing cannot occur (same handoff contract as the
-// old parameter bank, now with an actual consumer).
+// Shared-path control values. The main loop owns pending; the callback owns
+// active and consumes only complete mailbox snapshots at block boundaries.
 struct ParaphonicParams {
     float cutoff_base = 0.2f;    // 0..1 filter cutoff floor
     float env_to_cutoff = 0.8f;  // envelope -> cutoff modulation depth
@@ -189,21 +184,26 @@ struct ParaphonicParams {
     float sustain = 0.8f;
     float release_s = 0.150f;
 };
-static ParaphonicParams s_para_params;
+static ParaphonicParams s_para_active WAVEX_DTCM_DATA;
+static ParaphonicParams s_para_pending;
+static SnapshotMailbox<ParaphonicParams> s_para_mailbox;
 
 // Set by the tick after staging fresh CV values; consumed by FlushCv().
 static volatile bool s_cv_dirty = false;
 
 // Calibration-procedure CV override (MSG_CV_TEST): while active the tick
-// stages these fixed control values instead of the paraphonic law, so the
-// user can measure corner frequencies / verify VCA silence with a steady
-// CV. Main-loop writes, tick reads (same per-field atomicity contract as
-// s_para_params).
-static volatile bool s_cv_test_active = false;
-static uint8_t s_cv_test_group = 0;
-static float s_cv_test_cutoff = 0.0f;
-static float s_cv_test_res = 0.0f;
-static float s_cv_test_vca = 0.0f;
+// stages these fixed control values instead of the paraphonic law. Publish the
+// whole override together so enable can never pair with stale coordinates.
+struct CvTestParams {
+    bool active = false;
+    uint8_t group = 0;
+    float cutoff = 0.0f;
+    float resonance = 0.0f;
+    float vca = 0.0f;
+};
+static CvTestParams s_cv_test_active WAVEX_DTCM_DATA;
+static CvTestParams s_cv_test_pending;
+static SnapshotMailbox<CvTestParams> s_cv_test_mailbox;
 
 // Dedicated FIL for the calibration table (main-loop file I/O only).
 static FIL s_cvcal_file;
@@ -224,25 +224,12 @@ struct NoteEvent {
     WaveX::AudioEngine::VoiceTriggerParams params;
 };
 static constexpr uint32_t kNoteQueueSize = 16;  // power of two (index math wraps)
-static NoteEvent s_note_queue[kNoteQueueSize];
-static uint32_t s_note_q_write = 0;  // advanced by main loop only
-static uint32_t s_note_q_read = 0;   // advanced by audio callback only
+static NoteEventQueue<NoteEvent, kNoteQueueSize> s_note_queue;
 
 // Set by the main loop before releasing/rewriting loaded-sample memory
 // (OnSampleLoad); consumed by Callback(), which drains the queue and then
 // hard-stops every voice so nothing keeps reading freed SDRAM.
 static bool s_voice_stop_all = false;
-
-static bool note_queue_push(const NoteEvent& ev) {
-    const uint32_t w = s_note_q_write;  // single producer: plain read of own index
-    const uint32_t r = __atomic_load_n(&s_note_q_read, __ATOMIC_ACQUIRE);
-    if (w - r >= kNoteQueueSize) {
-        return false;  // full; caller logs (main-loop context)
-    }
-    s_note_queue[w % kNoteQueueSize] = ev;
-    __atomic_store_n(&s_note_q_write, w + 1, __ATOMIC_RELEASE);
-    return true;
-}
 
 // Audio-callback side: apply every pending note event, then honor a
 // pending hard-stop. Order matters - a stop request must also kill
@@ -251,19 +238,26 @@ static bool note_queue_push(const NoteEvent& ev) {
 // note-on edge (item 5).
 static bool drain_note_queue() {
     bool any_trigger = false;
-    const uint32_t w = __atomic_load_n(&s_note_q_write, __ATOMIC_ACQUIRE);
-    uint32_t r = s_note_q_read;  // single consumer: plain read of own index
-    while (r != w) {
-        const NoteEvent& ev = s_note_queue[r % kNoteQueueSize];
+    NoteEvent ev;
+    while (s_note_queue.Pop(ev)) {
         if (ev.is_trigger) {
             s_voice_manager.Trigger(ev.params);
             any_trigger = true;
         } else {
             s_voice_manager.Release(ev.note);
         }
-        ++r;
     }
-    __atomic_store_n(&s_note_q_read, r, __ATOMIC_RELEASE);
+    // A full queue may drop note-ons, but never note-offs: releases that could
+    // not enter the ring are coalesced by MIDI note and applied after all
+    // older queued events, preserving their arrival order relative to them.
+    for (uint32_t word = 0; word < decltype(s_note_queue)::kReleaseWordCount; ++word) {
+        uint32_t releases = s_note_queue.TakeOverflowReleaseWord(word);
+        while (releases != 0) {
+            const uint32_t bit = static_cast<uint32_t>(__builtin_ctz(releases));
+            s_voice_manager.Release(static_cast<uint8_t>(word * 32u + bit));
+            releases &= releases - 1u;
+        }
+    }
     if (__atomic_exchange_n(&s_voice_stop_all, false, __ATOMIC_ACQUIRE)) {
         s_voice_manager.StopAll();
     }
@@ -492,7 +486,7 @@ struct LoadedSampleInfo {
     uint16_t sample_id = 0;
     uint32_t allocated_bytes = 0;
     uint32_t loaded_bytes = 0;
-    uint16_t sample_rate = 0;
+    uint32_t sample_rate = 0;
     uint8_t channels = 0;
     uint8_t bit_depth = 0;
     // The authoritative record. Every playback and display path reads its
@@ -662,7 +656,9 @@ static bool evict_oldest_loaded_sample() {
 // one event that can pull the audio out from under a scan in flight.
 static void CancelEnvelopeJob();
 
-static bool upsert_loaded_sample(const SampleLoadMessage& sl, const wxsamp_t& handle) {
+static bool upsert_loaded_sample(const SampleLoadMessage& sl,
+                                 const ResidentSampleInfo& resident,
+                                 const wxsamp_t& handle) {
     CancelEnvelopeJob();
 
     LoadedSampleInfo info;
@@ -670,15 +666,13 @@ static bool upsert_loaded_sample(const SampleLoadMessage& sl, const wxsamp_t& ha
     info.handle = handle;
     info.allocated_bytes = handle.len ? handle.len : sl.sample_size;
     info.loaded_bytes = 0;
-    info.sample_rate = sl.sample_rate;
-    info.channels = sl.channels;
-    info.bit_depth = sl.bit_depth;
+    info.sample_rate = resident.sample_rate;
+    info.channels = resident.channels;
+    info.bit_depth = resident.bit_depth;
 
     // Seed the record. Markers default to the whole sample and gain to unity,
     // so an unedited sample behaves as it always has; every later change goes
     // through SetEditParams, which re-pushes.
-    const uint32_t bpf = (sl.bit_depth / 8u) * (sl.channels ? sl.channels : 1u);
-    //
     // generation is the cache-invalidation hook (roadmap 1.5.5 item 4).
     // Loading a different file into an id that is already in use IS a content
     // change, even though nothing renders destructively yet: a frontend
@@ -692,12 +686,12 @@ static bool upsert_loaded_sample(const SampleLoadMessage& sl, const wxsamp_t& ha
     info.meta = WaveX::Protocol::SampleMetadata();
     info.meta.generation = next_generation;
     info.meta.sample_id = sl.sample_id;
-    info.meta.sample_rate = sl.sample_rate;
-    info.meta.total_frames = bpf ? (info.allocated_bytes / bpf) : 0;
+    info.meta.sample_rate = resident.sample_rate;
+    info.meta.total_frames = resident.total_frames;
     info.meta.end_frame = info.meta.total_frames;
     info.meta.loop_end = info.meta.total_frames;
-    info.meta.channels = sl.channels;
-    info.meta.bits_per_sample = sl.bit_depth;
+    info.meta.channels = resident.channels;
+    info.meta.bits_per_sample = resident.bit_depth;
     info.meta.channel_mode = WaveX::Protocol::SAMPLE_CH_AS_RECORDED;
     WaveX::Protocol::detail::CopyWireString(info.meta.name, sizeof(info.meta.name), sl.path);
 
@@ -1497,8 +1491,16 @@ void Init(DaisySeed& hw, float sample_rate, bool sdram_available) {
     // the stack and copies them in, which is the cheapest way to get the values
     // the type declares. Anything added to DTCM that has non-zero defaults
     // belongs in this block too.
-    s_voice_live_params = WaveX::AudioEngine::VoiceLiveParams{};
-    s_voice_live_dirty = false;
+    s_voice_live_pending = WaveX::AudioEngine::VoiceLiveParams{};
+    s_voice_live_active = s_voice_live_pending;
+    s_voice_live_mailbox.Init(s_voice_live_pending);
+    s_para_pending = ParaphonicParams{};
+    s_para_active = s_para_pending;
+    s_para_mailbox.Init(s_para_pending);
+    s_cv_test_pending = CvTestParams{};
+    s_cv_test_active = s_cv_test_pending;
+    s_cv_test_mailbox.Init(s_cv_test_pending);
+    s_note_queue.Init();
     s_rb_low_water = 0xFFFFFFFFu;
 
     WaveX::Profiling::InitHardware();
@@ -1539,10 +1541,10 @@ void Init(DaisySeed& hw, float sample_rate, bool sdram_available) {
     // Defaults are musical bring-up values; stage 3 maps ENVELOPE_* wire
     // parameters onto SetParams.
     s_para_env.Init(1000);
-    s_para_env.SetParams(s_para_params.attack_s,
-                         s_para_params.decay_s,
-                         s_para_params.sustain,
-                         s_para_params.release_s);
+    s_para_env.SetParams(s_para_active.attack_s,
+                         s_para_active.decay_s,
+                         s_para_active.sustain,
+                         s_para_active.release_s);
 
     // Test basic allocation to ensure SDRAM is working
     if (s_hw) {
@@ -1627,14 +1629,19 @@ void Callback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t
     // buffers, no allocation, no I/O, no logging.
     const bool any_note_on = drain_note_queue();
 
-    // Push live parameter edits onto sounding voices before rendering them,
-    // so a filter sweep is heard on the notes already playing and not only on
-    // the next trigger. Consume-and-clear: a write landing after the exchange
-    // is picked up by the next block (1 ms later), which is far below the
-    // resolution of a knob gesture.
-    if (__atomic_exchange_n(&s_voice_live_dirty, false, __ATOMIC_ACQUIRE)) {
-        s_voice_manager.ApplyLiveParams(s_voice_live_params);
+    // Publish control-plane changes only at a block boundary. A callback that
+    // preempts the producer mid-copy keeps the previous complete snapshot and
+    // picks up the new generation one block later.
+    if (s_voice_live_mailbox.ConsumeLatest(s_voice_live_active)) {
+        s_voice_manager.ApplyLiveParams(s_voice_live_active);
     }
+    if (s_para_mailbox.ConsumeLatest(s_para_active)) {
+        s_para_env.SetParams(s_para_active.attack_s,
+                             s_para_active.decay_s,
+                             s_para_active.sustain,
+                             s_para_active.release_s);
+    }
+    s_cv_test_mailbox.ConsumeLatest(s_cv_test_active);
 
     if (s_voice_manager.ActiveVoiceCount() > 0 &&
         size <= static_cast<size_t>(Timebase::kBlockSize)) {
@@ -1670,19 +1677,21 @@ void Callback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t
     Timebase::Tick1kHz([&] {
         // Stage A paraphonic control law (item 5): the shared envelope
         // gates the analog VCA and modulates the shared VCF cutoff above
-        // its base. Staging is callback-safe (QueueGroup only writes
-        // fields); the I2C transaction happens in FlushCv() on the main
-        // loop. A flush racing a tick can read one channel from the
-        // previous tick - benign, self-corrects on the next flush.
+        // its base. Staging is callback-safe: QueueGroup publishes one
+        // complete frame; the I2C transaction happens in FlushCv() on the
+        // main loop.
         const bool any_held = s_voice_manager.HeldVoiceCount() > 0;
         const float env = s_para_env.Tick(any_note_on, any_held);
-        if (s_cv_test_active) {
+        if (s_cv_test_active.active) {
             // Calibration override: steady, user-commanded CVs.
-            s_cv_router.QueueVoice(s_cv_test_group, s_cv_test_cutoff, s_cv_test_res, s_cv_test_vca);
+            s_cv_router.QueueVoice(s_cv_test_active.group,
+                                   s_cv_test_active.cutoff,
+                                   s_cv_test_active.resonance,
+                                   s_cv_test_active.vca);
         } else {
             const float cutoff =
-                CvClamp01(s_para_params.cutoff_base + s_para_params.env_to_cutoff * env);
-            s_cv_router.QueueVoice(0, cutoff, s_para_params.resonance, env);
+                CvClamp01(s_para_active.cutoff_base + s_para_active.env_to_cutoff * env);
+            s_cv_router.QueueVoice(0, cutoff, s_para_active.resonance, env);
         }
         __atomic_store_n(&s_cv_dirty, true, __ATOMIC_RELEASE);
     });
@@ -1692,44 +1701,38 @@ void Callback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t
     s_dwt_callback_max = std::max(s_dwt_callback_max, s_dwt_callback_cycles);
 }
 
-// MSG_CONTROL_CHANGE -> Stage A paraphonic path (item 5 stage 3). These
-// write s_para_params from main-loop message-handler context; the control
-// tick reads them in audio context (aligned float stores are atomic on
-// Cortex-M7, single writer per field). Envelope-time changes push the full
-// ADSR set into the shared envelope; a tick landing between two of those
-// field writes briefly mixes old/new rates - inaudible and self-correcting.
+// MSG_CONTROL_CHANGE -> Stage A paraphonic path (item 5 stage 3). Main-loop
+// handlers update pending structs and publish complete snapshots. The callback
+// applies them at the next block boundary, including shared-envelope rates.
 // Each parameter now has TWO destinations, deliberately: the Stage A analog
-// path (s_para_params, one shared VCF/VCA) and the digital per-voice path
-// (s_voice_live_params). They are not alternatives - the analog board is
+// path (s_para_pending, one shared VCF/VCA) and the digital per-voice path
+// (s_voice_live_pending). They are not alternatives - the analog board is
 // optional hardware and the digital voices always render - so a knob has to
 // reach both or it would do nothing on whichever configuration is in use.
 // Per-slot (kit) scoping of these values remains Phase 2.5 instrument-model
-// work; see s_voice_live_params for why engine-global is the honest interim.
+// work; see s_voice_live_pending for why engine-global is the honest interim.
 void OnControlChange(const ControlChangeMessage& ctrl_msg) {
     const float norm = static_cast<float>(ctrl_msg.value) / 65535.0f;
+    bool para_changed = false;
+    bool voice_changed = false;
     switch (ctrl_msg.parameter) {
         case PARAM_FILTER_CUTOFF:
-            s_para_params.cutoff_base = norm;
+            s_para_pending.cutoff_base = norm;
+            para_changed = true;
             // Digital path: the analog side takes `norm` straight through as a
             // CV, but a digital cutoff is a frequency and has to be mapped.
             // Exponential over 20 Hz .. 20 kHz, because pitch perception is
             // logarithmic - a linear map spends most of its travel above
             // 10 kHz, where almost nothing audible happens, and crosses the
             // entire musically useful range in the first few percent.
-            s_voice_live_params.filter_cutoff_hz = 20.0f * std::pow(1000.0f, norm);
-            // Release-store the flag: a plain/volatile write to the flag alone
-            // does not stop the compiler reordering the plain field stores
-            // above it past this one, which would let the callback's acquire-
-            // exchange observe dirty=true with a stale field (guide §6 - not a
-            // theoretical concern once this builds at -O2 instead of today's
-            // -O0). Same pattern as s_cv_dirty below.
-            __atomic_store_n(&s_voice_live_dirty, true, __ATOMIC_RELEASE);
+            s_voice_live_pending.filter_cutoff_hz = 20.0f * std::pow(1000.0f, norm);
+            voice_changed = true;
             break;
         case PARAM_PAN:
             // Linear 0..1 across the wire's full range. Voice::pan is applied
             // as a gain pair per block, so this is click-free without smoothing.
-            s_voice_live_params.pan = norm;
-            __atomic_store_n(&s_voice_live_dirty, true, __ATOMIC_RELEASE);
+            s_voice_live_pending.pan = norm;
+            voice_changed = true;
             break;
 
         case PARAM_PITCH: {
@@ -1737,15 +1740,16 @@ void OnControlChange(const ControlChangeMessage& ctrl_msg) {
             // play a sample as an instrument without the resampler running so
             // far from unity that the interpolation artefacts dominate.
             constexpr float kPitchRangeSemis = 24.0f;
-            s_voice_live_params.pitch_semitones = (norm * 2.0f - 1.0f) * kPitchRangeSemis;
-            __atomic_store_n(&s_voice_live_dirty, true, __ATOMIC_RELEASE);
+            s_voice_live_pending.pitch_semitones = (norm * 2.0f - 1.0f) * kPitchRangeSemis;
+            voice_changed = true;
             break;
         }
 
         case PARAM_FILTER_RESONANCE:
-            s_para_params.resonance = norm;
-            s_voice_live_params.filter_resonance = norm;  // svf_filter.hpp maps 0..1 onto Q
-            __atomic_store_n(&s_voice_live_dirty, true, __ATOMIC_RELEASE);
+            s_para_pending.resonance = norm;
+            s_voice_live_pending.filter_resonance = norm;  // svf_filter.hpp maps 0..1 onto Q
+            para_changed = true;
+            voice_changed = true;
             break;
         case PARAM_ENVELOPE_ATTACK:
         case PARAM_ENVELOPE_DECAY:
@@ -1754,41 +1758,45 @@ void OnControlChange(const ControlChangeMessage& ctrl_msg) {
             // Times span 1 ms .. 2 s; sustain is the raw 0..1 level.
             const float seconds = 0.001f + norm * 2.0f;
             if (ctrl_msg.parameter == PARAM_ENVELOPE_ATTACK) {
-                s_para_params.attack_s = seconds;
-                s_voice_live_params.attack_s = seconds;
+                s_para_pending.attack_s = seconds;
+                s_voice_live_pending.attack_s = seconds;
             } else if (ctrl_msg.parameter == PARAM_ENVELOPE_DECAY) {
-                s_para_params.decay_s = seconds;
-                s_voice_live_params.decay_s = seconds;
+                s_para_pending.decay_s = seconds;
+                s_voice_live_pending.decay_s = seconds;
             } else if (ctrl_msg.parameter == PARAM_ENVELOPE_SUSTAIN) {
-                s_para_params.sustain = norm;
-                s_voice_live_params.sustain_level = norm;
+                s_para_pending.sustain = norm;
+                s_voice_live_pending.sustain_level = norm;
             } else {
-                s_para_params.release_s = seconds;
-                s_voice_live_params.release_s = seconds;
+                s_para_pending.release_s = seconds;
+                s_voice_live_pending.release_s = seconds;
             }
-            s_para_env.SetParams(s_para_params.attack_s,
-                                 s_para_params.decay_s,
-                                 s_para_params.sustain,
-                                 s_para_params.release_s);
-            __atomic_store_n(&s_voice_live_dirty, true, __ATOMIC_RELEASE);
+            para_changed = true;
+            voice_changed = true;
             break;
         }
         case PARAM_MODULATION_MATRIX:
             // Repurposed for Stage A as the envelope->cutoff modulation
             // depth until Phase 2 defines a real mod matrix.
-            s_para_params.env_to_cutoff = norm;
+            s_para_pending.env_to_cutoff = norm;
+            para_changed = true;
             break;
         default:
             // PARAM_VOLUME / LFO_*: no Stage A consumer (the analog VCA is
             // the level control; a global LFO is future work).
             break;
     }
+    if (para_changed) {
+        s_para_mailbox.Publish(s_para_pending);
+    }
+    if (voice_changed) {
+        s_voice_live_mailbox.Publish(s_voice_live_pending);
+    }
 }
 
 // --- CV calibration workflow (item 5 stage 4; analog-voice-board.md §3).
-// All main-loop message-handler context: SetGroupCal writes the backend's
-// cal table (read at the tick - float fields, same handoff contract as
-// s_para_params), SD I/O is blocking FatFS on the main loop.
+// All main-loop message-handler context: SetGroupCal publishes the backend's
+// complete calibration table for the next control tick; SD I/O is blocking
+// FatFS on the main loop.
 
 static void SendCvCalResp(uint8_t group) {
     const CvCal& c = s_cv_backend.GroupCal(group);
@@ -1841,12 +1849,12 @@ void OnCvCalGet(const CvCalGetMessage& m) {
 }
 
 void OnCvTest(const CvTestMessage& m) {
-    s_cv_test_group = m.group < WAVEX_ANALOG_CV_GROUPS_MAX ? m.group : 0;
-    s_cv_test_cutoff = m.cutoff;
-    s_cv_test_res = m.resonance;
-    s_cv_test_vca = m.vca;
-    // Write the flag last: once true, the tick may read the values above.
-    __atomic_store_n(&s_cv_test_active, m.enable != 0, __ATOMIC_RELEASE);
+    s_cv_test_pending.group = m.group < WAVEX_ANALOG_CV_GROUPS_MAX ? m.group : 0;
+    s_cv_test_pending.cutoff = m.cutoff;
+    s_cv_test_pending.resonance = m.resonance;
+    s_cv_test_pending.vca = m.vca;
+    s_cv_test_pending.active = m.enable != 0;
+    s_cv_test_mailbox.Publish(s_cv_test_pending);
     if (s_hw)
         WaveX::Log::PrintLine("CV TEST: %s (cut=%d res=%d vca=%d x1000)",
                               m.enable ? "ON" : "off",
@@ -1901,16 +1909,16 @@ void OnMidiCc(const MidiCcMessage& m) {
 
 // Note-to-sample mapping policy for item 8: the most recently loaded
 // playable sample, treated as root note 60 (a kit/pad mapping concept
-// arrives with the Phase 2 sequencer). "Playable" means 16-bit PCM, mono
-// or stereo - the voice manager reads int16 interleaved data directly;
-// 24-bit files would need a load-time conversion pass (not yet built).
+// arrives with the Phase 2 sequencer). "Playable" means resident PCM16,
+// mono or stereo - the voice manager reads int16 interleaved data directly;
+// the load boundary rejects formats that do not satisfy that contract.
 static bool sample_is_playable(const LoadedSampleInfo& e) {
     return e.bit_depth == 16 && (e.channels == 1 || e.channels == 2);
 }
 
 static const LoadedSampleInfo* find_playable_sample() {
     // An explicit selection wins, but only if it is still loaded and playable -
-    // otherwise a stale id (its sample unloaded, or a 24-bit file selected)
+    // otherwise a stale id (its sample unloaded, or invalid legacy metadata)
     // would silence the keyboard with no way to tell why from the outside.
     if (s_selected_sample_id != 0) {
         for (size_t i = 0; i < s_loaded_sample_count; ++i) {
@@ -1942,7 +1950,7 @@ void OnNoteOn(const NoteMessage& note_msg) {
         src = nullptr;
     }
     if (!src) {
-        // Nothing playable loaded (or only 24-bit files): drop the note.
+        // Nothing playable loaded: drop the note.
         // A previous "test oscillator fallback" here set state on DSP
         // objects Callback() never rendered - silent while claiming
         // otherwise (review C2) - so it was removed rather than fixed;
@@ -1977,12 +1985,12 @@ void OnNoteOn(const NoteMessage& note_msg) {
     // after a knob move sounds like the sweep the user just heard. Without
     // this the trigger would reset every voice to the struct defaults and an
     // edit would survive only until the next note.
-    ev.params.filter_cutoff_hz = s_voice_live_params.filter_cutoff_hz;
-    ev.params.filter_resonance = s_voice_live_params.filter_resonance;
-    ev.params.attack_s = s_voice_live_params.attack_s;
-    ev.params.decay_s = s_voice_live_params.decay_s;
-    ev.params.sustain_level = s_voice_live_params.sustain_level;
-    ev.params.release_s = s_voice_live_params.release_s;
+    ev.params.filter_cutoff_hz = s_voice_live_pending.filter_cutoff_hz;
+    ev.params.filter_resonance = s_voice_live_pending.filter_resonance;
+    ev.params.attack_s = s_voice_live_pending.attack_s;
+    ev.params.decay_s = s_voice_live_pending.decay_s;
+    ev.params.sustain_level = s_voice_live_pending.sustain_level;
+    ev.params.release_s = s_voice_live_pending.release_s;
 
     // Markers and gain come from the sample's record, so a note-triggered
     // voice plays exactly the region the editor auditioned. Previously
@@ -2008,7 +2016,7 @@ void OnNoteOn(const NoteMessage& note_msg) {
                                  : std::pow(10.0f, static_cast<float>(m.gain_db_x10) / 200.0f);
     }
 
-    const bool queued = note_queue_push(ev);
+    const bool queued = s_note_queue.Push(ev);
     if (!queued && s_hw)
         WaveX::Log::PrintLine("RX NOTE_ON: note=%u DROPPED - note queue full",
                               (unsigned)note_msg.note);
@@ -2027,7 +2035,11 @@ void OnNoteOff(const NoteMessage& note_msg) {
     NoteEvent ev;
     ev.is_trigger = false;
     ev.note = note_msg.note;
-    note_queue_push(ev);  // Release() of an unknown note is a no-op, safe to always send
+    const bool queued = s_note_queue.PushReleaseOrRemember(ev);
+    if (!queued && s_hw) {
+        WaveX::Log::PrintLine("RX NOTE_OFF: note=%u queue full - release preserved",
+                              (unsigned)note_msg.note);
+    }
 
 #if WAVEX_MCU_LINK_PACKET_DEBUG
     if (s_hw)
@@ -2496,22 +2508,33 @@ void OnSampleLoad(const SampleLoadMessage& sl) {
         f_close(&file);
         return;
     }
-    const uint16_t num_ch = wav_info.num_channels;
-    const uint32_t sample_rate = wav_info.sample_rate;
-    const uint16_t bits = wav_info.bits_per_sample;
-    const uint32_t data_off = wav_info.data_offset;
-    const uint32_t data_size = wav_info.data_size;
-
-    if (wav_info.audio_format != 1 || (bits != 16 && bits != 24) || (num_ch != 1 && num_ch != 2)) {
+    ResidentSampleInfo resident;
+    if (!BuildResidentSampleInfo(sl,
+                                 wav_info,
+                                 static_cast<uint32_t>(f_size(&file)),
+                                 WaveX::SdramLayout::kLargeSamplePoolBytes,
+                                 resident)) {
         if (s_hw) {
-            WaveX::Log::PrintLine("SAMPLE_LOAD: unsupported format fmt=%u bits=%u ch=%u",
-                                  (unsigned)wav_info.audio_format,
-                                  (unsigned)bits,
-                                  (unsigned)num_ch);
+            WaveX::Log::PrintLine(
+                "SAMPLE_LOAD: invalid or unsupported resident WAV rate=%lu bits=%u ch=%u "
+                "data_off=%lu data_size=%lu file_size=%lu resident_max=%lu",
+                (unsigned long)wav_info.sample_rate,
+                (unsigned)wav_info.bits_per_sample,
+                (unsigned)wav_info.num_channels,
+                (unsigned long)wav_info.data_offset,
+                (unsigned long)wav_info.data_size,
+                (unsigned long)f_size(&file),
+                (unsigned long)WaveX::SdramLayout::kLargeSamplePoolBytes);
         }
         f_close(&file);
         return;
     }
+
+    const uint16_t num_ch = resident.channels;
+    const uint32_t sample_rate = resident.sample_rate;
+    const uint16_t bits = resident.bit_depth;
+    const uint32_t data_off = wav_info.data_offset;
+    const uint32_t data_size = resident.data_size;
 
     // The browser hands out a fresh sample_id for every audition, so no load
     // ever replaces an earlier one and nothing reclaims the arena on its own.
@@ -2610,7 +2633,7 @@ void OnSampleLoad(const SampleLoadMessage& sl) {
 
     f_close(&file);
 
-    if (!upsert_loaded_sample(sl, handle)) {
+    if (!upsert_loaded_sample(sl, resident, handle)) {
         if (s_hw)
             WaveX::Log::PrintLine("SAMPLE_LOAD: registry full (%u entries)",
                                   (unsigned)kLoadedSampleCapacity);
@@ -2678,7 +2701,11 @@ void GetSampleMemStatus(SampleMemStatusMessage& out) {
         dst.cls = src.handle.cls;
         dst.page = src.handle.page;
         dst.slot = src.handle.slot;
-        dst.sample_rate = src.sample_rate;
+        // This legacy diagnostic field is only 16 bits on the wire. Keep
+        // high-rate samples authoritative in SampleMetadata instead of
+        // wrapping (for example, 96 kHz to 30464 Hz).
+        dst.sample_rate =
+            src.sample_rate <= UINT16_MAX ? static_cast<uint16_t>(src.sample_rate) : 0;
         dst.channels = src.channels;
         dst.bit_depth = src.bit_depth;
     }
@@ -2857,17 +2884,23 @@ bool OpenWav(const char* path) {
         return false;
     }
 
-    // Support PCM format (fmt=1), 16-bit or 24-bit, mono or stereo
-    if (wav_info.audio_format != 1 ||
-        (wav_info.bits_per_sample != 16 && wav_info.bits_per_sample != 24) ||
-        (wav_info.num_channels != 1 && wav_info.num_channels != 2)) {
+    // Validate semantic geometry as well as the RIFF chunk walk. In
+    // particular, a zero sample rate previously reached the resampler as an
+    // infinite ratio and left audition permanently open but unable to pump.
+    if (!ValidatePcmWavPayload(wav_info, static_cast<uint32_t>(f_size(&s_wav.file)), 0xFFFFFFFFu)) {
         if (s_hw)
-            WaveX::Log::PrintLine("WAV open failed: unsupported format fmt=%u bits=%u ch=%u",
-                                  (unsigned)wav_info.audio_format,
-                                  (unsigned)wav_info.bits_per_sample,
-                                  (unsigned)wav_info.num_channels);
+            WaveX::Log::PrintLine(
+                "WAV open failed: invalid geometry fmt=%u rate=%lu bits=%u ch=%u "
+                "data_off=%lu data_size=%lu file_size=%lu",
+                (unsigned)wav_info.audio_format,
+                (unsigned long)wav_info.sample_rate,
+                (unsigned)wav_info.bits_per_sample,
+                (unsigned)wav_info.num_channels,
+                (unsigned long)wav_info.data_offset,
+                (unsigned long)wav_info.data_size,
+                (unsigned long)f_size(&s_wav.file));
         f_close(&s_wav.file);
-        return false;  // only PCM16/24 mono/stereo supported
+        return false;
     }
 
     // Leave the file positioned at the data payload for streaming.

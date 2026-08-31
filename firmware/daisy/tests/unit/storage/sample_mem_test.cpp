@@ -168,6 +168,16 @@ TEST_F(SampleMemTest, ZeroByteAllocRejected) {
     EXPECT_FALSE(mgr_.alloc(0, &h));
 }
 
+// A RIFF data size can approach UINT32_MAX on FAT32. The large-pool page
+// rounding used to wrap `(nbytes + page - 1)` to zero for this range and hand
+// back the arena base without reserving any pages, after which the loader
+// memcpy wrote through the rest of SDRAM.
+TEST_F(SampleMemTest, NearUint32MaxAllocationCannotWrapToZeroPages) {
+    wxsamp_t h{};
+    EXPECT_FALSE(mgr_.alloc(0xFFFF0001u, &h));
+    EXPECT_EQ(h.len, 0u);
+}
+
 // release() zeroes the WHOLE handle, not just len - len==0 is the documented
 // "released" sentinel, and ptr() itself must honour it: a released handle
 // must fail cleanly rather than "succeed" with a pointer to small-pool

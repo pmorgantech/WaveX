@@ -9,8 +9,9 @@ endif()
 
 find_package(Threads REQUIRED)
 
-# Set C++ standard before adding GoogleTest
-set(CMAKE_CXX_STANDARD 14)
+# Set C++ standard before adding GoogleTest. Daisy first-party code shares the
+# C++17 inline-variable logging configuration with the other target and suites.
+set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Address/UB sanitizers, off by default so the default `make test` stays fast.
@@ -58,16 +59,16 @@ include(GoogleTest)
 # visible warning.
 add_compile_options(-Wall -Wextra -Wconversion)
 
-# Ensure GoogleTest targets use C++14
+# GoogleTest itself is compatible with the selected project standard.
 if(TARGET gtest)
     set_target_properties(gtest PROPERTIES
-        CXX_STANDARD 14
+        CXX_STANDARD 17
         CXX_STANDARD_REQUIRED YES
     )
 endif()
 if(TARGET gtest_main)
     set_target_properties(gtest_main PROPERTIES
-        CXX_STANDARD 14
+        CXX_STANDARD 17
         CXX_STANDARD_REQUIRED YES
     )
 endif()
@@ -125,7 +126,7 @@ target_link_libraries(wavex_test_lib PUBLIC
 )
 
 set_target_properties(wavex_test_lib PROPERTIES
-    CXX_STANDARD 14
+    CXX_STANDARD 17
     CXX_STANDARD_REQUIRED YES
     C_STANDARD 11
     C_STANDARD_REQUIRED YES
@@ -250,7 +251,7 @@ function(add_wavex_test test_source)
     )
 
     set_target_properties(${test_name} PROPERTIES
-        CXX_STANDARD 14
+        CXX_STANDARD 17
         CXX_STANDARD_REQUIRED YES
         C_STANDARD 11
         C_STANDARD_REQUIRED YES
