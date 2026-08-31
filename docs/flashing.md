@@ -78,6 +78,27 @@ dfu-util -d 0483:df11 -s 0x90040000:leave -D build/wavex-daisy.bin
 
 If the currently running Daisy firmware is still responsive over USB CDC, `make daisy-flash-auto` triggers DFU mode itself (`scripts/daisy_dfu_trigger.py`) instead of requiring the manual BOOT/RESET sequence above. Falls back to the manual sequence being needed only when the board isn't already running WaveX firmware (e.g. first flash, or after a crash).
 
+## Debug-probe workflows (SWD, not DFU)
+
+DFU is the normal path and needs no extra hardware. An ST-Link or CMSIS-DAP
+probe buys halt-mode stepping, which DFU cannot give you — worth wiring up
+when chasing a hard fault rather than a logic bug.
+
+| Task | Command |
+|---|---|
+| Flash + verify over SWD | `openocd -f interface/stlink.cfg -f target/stm32h7x.cfg -c "program build/wavex-daisy.elf verify reset exit"` |
+| GDB server | `openocd -f interface/stlink.cfg -f target/stm32h7x.cfg` — then attach on `localhost:3333` |
+| VS Code | Cortex-Debug launch config: `"servertype": "openocd"`, `"gdbTarget": "localhost:3333"` |
+
+Note that SWD programming writes internal flash, while the shipped image is a
+QSPI application loaded by the Daisy bootloader (`BOOT_QSPI`) — so an OpenOCD
+`program` of the `.elf` is a *different* boot path from `make daisy-flash`,
+not a faster version of it. Use it for debugging, and re-flash over DFU before
+judging anything about the real image.
+
+The ESP32-P4 can also flash over its native USB DFU (`idf.py dfu-flash`) if
+the UART pins are otherwise occupied; `make esp32-flash` does not need this.
+
 ## Troubleshooting
 
 If the ESP32 command cannot find the board, reconnect it and confirm it shows up with `ls /dev/ttyACM* /dev/ttyUSB*`; force the port with `make esp32-flash ESP32_PORT=/dev/ttyACMn` if VID:PID auto-detection picks the wrong device. If the port is visible on the host but not inside the container, reopen the devcontainer so its USB device mapping is refreshed.

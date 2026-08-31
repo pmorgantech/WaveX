@@ -60,7 +60,7 @@ commits made from the host with instructions to re-run from the container.
 Emergency escape hatch: `WAVEX_ALLOW_HOST_COMMIT=1 git commit ...` commits
 with **no checks at all** — use sparingly.
 
-See [`setup.md`](setup.md) for detailed flash/debug workflows.
+See [`docs/flashing.md`](docs/flashing.md) for detailed flash and debug-probe workflows.
 
 ### Build & test commands
 

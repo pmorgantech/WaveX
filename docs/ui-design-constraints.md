@@ -5,9 +5,8 @@ against the code as of 2026-08-28 — file references inline so it can be
 re-verified when things change. If a design conflicts with this page, the
 design loses.
 
-Companion docs: [`ui-architecture.md`](ui-architecture.md) (how the UI code is
-structured), [`ui-system-implementation-guide.md`](ui-system-implementation-guide.md)
-(how to build a page).
+Companion doc: [`ui-architecture.md`](ui-architecture.md) — how the UI code is
+structured, and how to build a page.
 
 ## The paste-ready brief
 

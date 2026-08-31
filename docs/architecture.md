@@ -329,7 +329,7 @@ These rules are mandatory for all new code. Most past instability (SPI corruptio
 
 | Topic | Document |
 |---|---|
-| UI framework (navigator, pages, softkeys, LVGL threading) | `ui-architecture.md` (canonical) + `ui-system-implementation-guide.md` (how-to) |
+| UI framework (navigator, pages, softkeys, LVGL threading, page how-to) | `ui-architecture.md` (canonical) |
 | Inter-MCU protocol wire spec | `features/inter-mcu-protocol.md` |
 | Offline sample editing & DSP | `features/offline-sample-editing.md` |
 | Sequencer / groovebox engine | `features/sequencer.md` |

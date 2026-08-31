@@ -243,6 +243,69 @@ void onEnter(lv_obj_t* parent) override {
 }
 ```
 
+### Registering a page
+
+`ui_navigation_integration.cpp` only bootstraps the root — `initNavigationSystem()`
+pushes the main menu and `createNavigationContext()` wires input dispatch to the
+active page. Pages are registered in `ui_main_menu.cpp`, not there.
+
+```cpp
+// Top-level menu item — in createMainMenu():
+menu->addItem("My Custom", []() {
+    UINavigator::instance().push(std::make_shared<MyCustomPage>());
+});
+
+// A tab inside an existing group — in the relevant createXGroup():
+group->addTab("My Tab", createMyCustomPage());
+```
+
+For a **new** tab group, use `UITabHostPage` when the pages are independent and
+substantial (see "Tab Groups" above). Build your own `lv_tabview` via
+`tabGroupCreate()` / `tabGroupAddTab()` (`ui_tab_group.h`) only when the tabs
+must share state across a switch, the way `UIVoicePage` does.
+
+```cpp
+std::shared_ptr<UIPage> createToolsGroup() {
+    auto group = std::make_shared<UITabHostPage>("Tools");
+    group->addTab("Analyzer", std::make_shared<AnalyzerPage>());
+    group->addTab("Generator", std::make_shared<GeneratorPage>());
+    return group;
+}
+// then, in createMainMenu():
+menu->addItem("Tools", []() { UINavigator::instance().push(createToolsGroup()); });
+```
+
+### Styling
+
+Use the theme constants (`styles/ui_theme.h`) rather than literals, so a
+palette or font change lands in one place:
+
+```
+Colors  UI_COLOR_BACKGROUND, UI_COLOR_HEADER, UI_COLOR_CONTENT,
+        UI_COLOR_TEXT, UI_COLOR_BUTTON, UI_COLOR_SELECTED
+Fonts   UI_FONT_NORMAL (14pt), UI_FONT_TITLE (22pt),
+        UI_FONT_HEADER (32pt), UI_FONT_HOTKEY (36pt)
+Sizes   UI_HEADER_HEIGHT (75px), UI_HOTKEY_HEIGHT (100px),
+        UI_PADDING_SMALL/MEDIUM/LARGE (5/10/15px)
+```
+
+The rendering budget these sit inside — 30 FPS, 1280x545 content area, RGB565,
+Montserrat only — is in [`ui-design-constraints.md`](ui-design-constraints.md).
+
+### Where the code lives
+
+| | Path under `firmware/esp32/components/ui/` |
+|---|---|
+| Headers | `include/ui/` |
+| Framework implementations | `src/` |
+| Page implementations | `pages/` |
+
+Worked examples, in rough order of complexity: `ui_main_menu.cpp` (registration
+and every `createXGroup()` factory), `ui_play_page.cpp` (paged softkey params,
+live `MSG_CONTROL_CHANGE` sends), `ui_sample_browser.cpp` (state preservation
+across navigation, paginated backend data), `ui_diagnostics_page.cpp` (tab group
+driven by pushed telemetry).
+
 ## Softkey Refresh Pattern
 
 For pages where softkey labels change based on state (e.g., "Audition" → "Stop"):
@@ -353,5 +416,5 @@ LV_UNLOCK();
   an untracked local file - `.cursor/` is gitignored - so do not cite it as
   shared truth.)
 - **System Architecture**: `docs/architecture.md`
-- **Page implementation how-to**: `docs/ui-system-implementation-guide.md`
+- **Design brief (display, palette, fonts, budget)**: `docs/ui-design-constraints.md`
 - Historical: the former `navigation-integration-guide.md` and `sample-browser-redesign.md`, both superseded by this document. Deleted; see git history.
