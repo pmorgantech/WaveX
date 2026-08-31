@@ -1,7 +1,7 @@
 # Analog Voice Board — PCM1690 TDM, VCF/VCA, CV Calibration
 
 **Status**: Target design with prototype fragments in code (`cv_bus.hpp`, `AudioOutputMode::VoiceSAI2`, PCM1690 config in `hardware_config.h`). Phase 3 in `roadmap.md`.
-**Consolidates**: the Phase-II material from `archive/daisy_devel.md`, minus its contradictions.
+**Consolidates**: the Phase-II material from the former `daisy_devel.md` (deleted; see git history), minus its contradictions.
 **Staging**: the analog section ships in two stages selected by build flags (`architecture.md` §5.2/§5.3). This doc's Stage A is buildable today; Stage B is the voice board proper.
 
 ## 0. Stage A — Paraphonic Prototype (stereo codec + MCP4728)

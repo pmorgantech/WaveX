@@ -354,4 +354,4 @@ LV_UNLOCK();
   shared truth.)
 - **System Architecture**: `docs/architecture.md`
 - **Page implementation how-to**: `docs/ui-system-implementation-guide.md`
-- Historical: `docs/archive/navigation-integration-guide.md`, `docs/archive/sample-browser-redesign.md`
+- Historical: the former `navigation-integration-guide.md` and `sample-browser-redesign.md`, both superseded by this document. Deleted; see git history.

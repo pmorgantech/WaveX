@@ -25,7 +25,17 @@ Phases are ordered by dependency, not calendar. Within a phase, items are listed
 
 ### 0.2 Repo cleanup still open
 
-1. **Split `daisy_spi_link.cpp`** along the boundaries in `archive/daisy_spi_link_splitup_plan.md` (transport / packet / message-processing / bridges). Opportunistic as other work touches those files, not a big-bang refactor.
+1. **Split `daisy_spi_link.cpp`** along five boundaries, opportunistically as other work touches those files rather than as a big-bang refactor. The file mixes concerns that have no reason to share a translation unit, and the seams are clean:
+
+   | New unit | Takes |
+   |---|---|
+   | `daisy_spi_transport` | DMA, hardware SPI, interrupt handlers, GPIO/CS configuration |
+   | `daisy_packet_manager` | Packet creation, parsing, validation, queue management, size determination |
+   | `daisy_message_processor` | Message routing/dispatch and the individual message processors |
+   | `daisy_storage_bridge` | Directory browsing and filesystem integration |
+   | `daisy_audio_bridge` | Sample playback integration |
+
+   Extract in that order — transport first, since everything else depends on it and nothing depends on the bridges. `daisy_spi_link.h` stays as the assembled public interface so call sites do not move. (The boundaries were originally worked out in a plan doc that has since been deleted; they are recorded here so the item does not depend on it.)
 2. **UART is the transport of record.** `WAVEX_SPI_LINK_ENABLED` is hard-coded `0`, so the SPI link is compiled out of every image and UART carries all traffic including browse pages and wave chunks. Consolidating onto SPI-only is real protocol work — extending `protocol.h` for the UART-only message types, rewiring every send call site, then hardware bring-up. Track separately if prioritized. See `architecture.md` §4.4.
 3. **`esp_spi_link.cpp` has six recorded defects gating revival — SPI-1..SPI-6, full list in [`backlog.md`](backlog.md#spi-link-revival-is-gated-on-six-recorded-defects).** All found while the file is compiled out, so none are reachable today; all six must be fixed before item 2 is ever picked up, not blindly patched now. The two most recent (2026-08-30 ESP32 coding-guide review, SPI-6 and its buffer-pool sibling) are the deepest: a real ownership-tracking redesign for `spi_slave_task()`'s buffer pool (guide §7/§10), and an IRAM-safety audit of `spi_post_trans_cb`'s call graph (guide §4) before trusting its `ESP_INTR_FLAG_IRAM` behavior.
 
@@ -364,6 +374,6 @@ Code-complete but unproven. Each is real work, not history — a build that link
 - Every protocol change: update `protocol.h` + round-trip test + `features/inter-mcu-protocol.md` in the same commit.
 - Every DMA buffer: alignment + placement per `architecture.md` §7 — reviewer checklist item.
 - Every phase gate includes: 1-hour zero-underrun soak, both-MCU-reboot recovery test, `make test` green.
-- Docs: new subsystems get a `docs/features/*.md` design doc **before** implementation; superseded docs move to `docs/archive/` (never silently deleted).
+- Docs: new subsystems get a `docs/features/*.md` design doc **before** implementation. **Superseded docs are deleted, and git history is the archive.** The old rule moved them to `docs/archive/` — but that directory is gitignored, so "archiving" a doc removed it from the repo anyway while leaving cross-references pointing at a file no clone contains. Deleting is the same outcome, stated honestly. Before deleting, move anything still *open* into `roadmap.md`, `backlog.md` or the relevant `features/*.md`; the commit message says what was salvaged and where it went. A doc that only records finished work leaves without ceremony — `CHANGELOG.md` and the log already have it.
 - **Nothing in the UI task may block**, and nothing outside it may touch LVGL. Backend callbacks arrive on the UART RX task: store and flag, then draw from an `lv_timer`. Both rules have been broken and both froze the display.
 - **Completed work leaves this document.** Detail goes to `CHANGELOG.md`; anything still unproven goes to § Outstanding hardware verification. A roadmap that accumulates finished items stops being read.

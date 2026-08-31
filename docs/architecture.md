@@ -2,7 +2,7 @@
 
 **Status**: Canonical architecture document — this file is the single source of truth for system design.
 **Last updated**: 2026-07-05 (transport-reality corrections from `code_review_20260705.md`)
-**Supersedes**: `system-architecture.md`, `communication-protocol.md`, `daisy_devel.md` (all moved to `docs/archive/`).
+**Supersedes**: the former `system-architecture.md`, `communication-protocol.md` and `daisy_devel.md`, which carried mutually contradictory hardware claims (ESP32-S3 vs P4, UART vs SPI link, conflicting pin tables). Deleted; see git history.
 
 When this document and the code disagree, the code wins for *as-built* sections and this document wins for *target design* sections; each section is labeled. Pin assignments live in exactly one place: `firmware/shared/config/pin_config.h`. Hardware feature flags live in `firmware/shared/config/hardware_config.h`. Do not duplicate pin tables into documentation.
 
@@ -347,7 +347,7 @@ These rules are mandatory for all new code. Most past instability (SPI corruptio
 | Implementation order & upgrades | `roadmap.md` |
 | Testing how-to | `testing_guide.md` |
 | DWT/CPU profiling reference | `performance_monitoring.md` |
-| Historical snapshots & superseded plans | `archive/` |
+| Historical snapshots & superseded plans | git history (`git log -- docs/`) |
 
 ---
 

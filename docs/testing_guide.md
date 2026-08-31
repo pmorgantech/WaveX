@@ -347,9 +347,9 @@ Tests should run automatically in CI/CD:
   has content; `firmware/shared/tests/integration/` and
   `firmware/daisy/tests/integration/` are still empty
 
-`docs/archive/testing_strategy.md` predates this test suite and describes
-results for tests that were never run — do not use it as a current
-reference (see `docs/README.md`'s archive notes).
+A former `testing_strategy.md` predated this test suite and reported results
+for tests that were never run against hardware we do not have. It has been
+deleted; if you find a copy, do not use it as a current reference.
 
 ### Known gaps
 

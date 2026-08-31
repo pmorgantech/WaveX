@@ -17,5 +17,5 @@ If a task starts as a design question and turns into implementation mid-conversa
 ## Reminders specific to this repo
 
 - Check `docs/roadmap.md` for the current phase before proposing new work — don't design ahead of the active phase's gate.
-- Never implement from `docs/archive/`.
+- Never implement from `docs/archive/` — it is gitignored, local-only, and superseded. Superseded docs are deleted, not archived; git history holds them.
 - Pin/flag truth lives only in `firmware/shared/config/pin_config.h` and `hardware_config.h` — never in docs or comments.
