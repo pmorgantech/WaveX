@@ -11,6 +11,8 @@ versioning and release process.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-01
+
 ### Added
 
 - Added debug and release build profiles on both MCUs, with
@@ -28,7 +30,6 @@ versioning and release process.
   build failure — a defect this project shipped for exactly one commit. Not
   enabled on the ESP32, where `#if CONFIG_FOO` on an unset Kconfig bool is the
   idiomatic spelling and the flag produces thousands of warnings.
-
 - Added SFZ v1 import on the Daisy: an optional boot instrument at
   `0:/wavex/sfz/default/default.sfz` maps up to 32 key/velocity zones onto the
   existing instrument model, deduplicates and loads resident PCM16 WAVs, and
