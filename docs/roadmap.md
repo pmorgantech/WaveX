@@ -1,7 +1,7 @@
 # WaveX Implementation Roadmap
 
 **Status**: Canonical implementation-order document. Read `architecture.md` first.
-**Last updated**: 2026-08-29 (pruned completed items; added Phase 1.5)
+**Last updated**: 2026-08-31 (project-principles audit remediation mapped)
 
 Phases are ordered by dependency, not calendar. Within a phase, items are listed in recommended implementation order. Every phase ends with the test gate that must be green before moving on.
 
@@ -93,6 +93,55 @@ We have been on LVGL 9.5.0 since `5da8d40` (2026-07-02), but that commit enabled
    **What would have to change to retry.** Not the shadow values — the geometry. Either shadow only objects small enough that their A8 layer fits the pool (roughly 350x350 at radius 8, and nothing on a page may exceed it), or raise `LV_MEM_SIZE` by hundreds of KB, which is not free on this board. A per-page audit of every shadowed object's dimensions is a hard prerequisite, because the failure mode is a silent hang rather than a missing shadow. **This is why the feature is worth its own note rather than a quiet revert**: "already compiled in, so the only cost is render time" was true about flash and wrong about RAM, and the RAM cost is the one that bites.
 
 Deliberately **not** taken up: `LV_CHART_TYPE_CURVE` (Bezier charts) needs `LV_USE_VECTOR_GRAPHICS` plus a vector draw unit — ThorVG, NanoVG or VGLite — which is not a sane ask on this target; our three `lv_chart_create` sites (`ui_diagnostics_page.cpp`, `components/waveform_view.cpp`) do not need it. Noted as available if a use appears: `LV_OBJ_FLAG_RADIO_BUTTON` (we hand-roll selection chrome in `ui_tab_group.cpp`), configurable `lv_indev` gesture thresholds and key remapping, `LV_STATE_ALT` with the new theme create/copy/delete and `lv_obj_bind_style_prop` API (we call no `lv_theme_*` today), and the `lv_canvas` skip-invalidation setter.
+
+### 0.4 Project-principles audit remediation (added 2026-08-31)
+
+The firmware-wide review against [`project-principles.md`](project-principles.md)
+found a sound real-time foundation but several incomplete ownership and
+abstraction boundaries. The work below is deliberately sliced; do not turn it
+into a foundation rewrite that violates Principle 8.
+
+| Audit debt | Roadmap owner | Completion evidence |
+|---|---|---|
+| Note-on still hardcodes MIDI root note 60 instead of using the built instrument resolver | Phase 2 active work order, Stage 2 | `OnNoteOn` uses `Instrument::ResolveNoteOn`; zone, velocity, and tuning tests pass; hardware notes play at the expected pitch |
+| Resident sample memory is freed after a requested stop plus a fixed 10 ms delay | 0.4 item 1 | Explicit callback acknowledgement proves no voice can reference the sample before it is freed; active-voice unload/reload stress has zero use-after-free and zero underruns |
+| Main-loop meter reads can observe a callback update partway through the struct | 0.4 item 2 | All multi-field callback telemetry crosses through one complete block snapshot; an interleaving regression test covers publication semantics |
+| Large coordination units and overlapping ESP32 globals obscure ownership | 0.4 items 3–4 | Each extracted subsystem has one owner/writer and a narrow facade; every slice builds and tests independently |
+| The output-sink abstraction exists but the callback still writes the stereo mix directly | Phase 3 item 3 | The selected `OutputSink` is the sole hardware-output boundary and DSP contains no DAC/codec-specific branch |
+| Callback DSP and DTCM placement gains are asserted without target measurements | § Outstanding hardware verification (`Per-voice SVF cost`, `SVF denormal behaviour`, `DTCM placements`) | Recorded DWT before/after data and the one-hour zero-underrun soak settle each claim |
+| The ESP-IDF devcontainer follows a moving release branch | Phase 0.1 | Image is pinned to an explicit 5.5.x tag and the listed panel, SD, and silicon-revision checks pass |
+| Canonical architecture dependency versions and output-sink commentary lag the code | 0.4 item 5 | Documentation states the locked versions and the as-built output boundary accurately |
+
+Work packages, in implementation order:
+
+1. **Replace timed sample retirement with a request/completion handshake.** Give
+   stop-all/sample-retire requests a monotonic generation. The callback stops
+   matching voices at a block boundary and publishes the completed generation;
+   the main loop frees or replaces sample memory only after observing it. Keep
+   load/unload non-blocking and state-machine-driven. This closes Principles 1,
+   2, 5, 6, and 14.
+2. **Publish callback telemetry as immutable snapshots.** Move `BlockMeters`
+   and any other multi-field callback state through the existing
+   `SnapshotMailbox` pattern, with one publication per complete block and one
+   coherent consumer copy. This closes Principles 5, 6, and 10.
+3. **Consolidate ESP32 application ownership.** Make `ApplicationContext` (or a
+   clearly named child) the sole owner of packet routing, statistics, and
+   injected listeners. Remove unused duplicate globals rather than preserving
+   two plausible owners. Change one collaboration seam at a time and retain a
+   stable facade for callers. This closes Principles 3, 5, 7, 14, and 15.
+4. **Extract focused modules when their code is next changed.** Start with the
+   cleanest seams in `audio_engine.cpp` (resident-sample lifecycle, streaming,
+   telemetry publication, output/CV routing), then separate diagnostics data
+   from rendering and browser state from presentation on the ESP32. File length
+   is evidence, not the acceptance criterion: the goal is one responsibility,
+   one owner, and an independently understandable interface. Each extraction
+   is its own buildable/testable change. This closes Principles 3, 7, 8, 14,
+   and 15.
+5. **Correct documentation drift.** Reconcile the ESP-IDF/LVGL versions in
+   `architecture.md` with the lockfiles and rewrite the stale `output_sink.hpp`
+   as-built commentary when the Phase 3 boundary lands. Documentation-only
+   corrections may land sooner; intentional design changes update code and
+   documentation together. This closes Principle 13.
 
 **Gate**: `make all` + `make test` clean from scratch; SD soak test passes.
 
@@ -264,7 +313,7 @@ Decisions this raises, roughly in order:
 
 The host-testable core is built: `pattern.hpp`, `sequencer_scheduler.hpp`, `tempo_follower.hpp`, `sequencer_transport.hpp` (all HAL-free, ~60 host tests), and the 0x50–0x57 protocol messages with round-trip and dispatch tests.
 
-> **Active work order: [`features/digital-voice-audition.md`](features/digital-voice-audition.md).** The consolidated, ordered path to a playable and sequenceable **all-digital** voice. It exists because this work was spread across five documents interleaved with work the goal does not need. Stages 1, 3 and 4 (Goal A: live digital voice parameters, the grid page, live parameter editing) are now done — `ui_play_page.cpp` sends `MSG_NOTE_ON`/`OFF` and `MSG_CONTROL_CHANGE`, and `OnControlChange` publishes both the analog `s_para_pending` and digital `s_voice_live_pending` state for the callback. **Stage 2 (root-note correctness) and the remaining Stage 2b UI diagnostics are the gaps in Goal A** — `OnNoteOn` still hardcodes `root_note = kDefaultRootNote` — and Goal B (the sequencer path, stages 5–8) has not started.
+> **Active work order: [`features/digital-voice-audition.md`](features/digital-voice-audition.md).** The consolidated, ordered path to a playable and sequenceable **all-digital** voice. It exists because this work was spread across five documents interleaved with work the goal does not need. Stages 1, 3 and 4 (Goal A: live digital voice parameters, the grid page, live parameter editing) are now done — `ui_play_page.cpp` sends `MSG_NOTE_ON`/`OFF` and `MSG_CONTROL_CHANGE`, and `OnControlChange` publishes both the analog `s_para_pending` and digital `s_voice_live_pending` state for the callback. **Stage 2 (root-note correctness) and the remaining Stage 2b UI diagnostics are the gaps in Goal A** — `OnNoteOn` still hardcodes `root_note = kDefaultRootNote`; use the existing `Instrument::ResolveNoteOn` path rather than creating a second mapping — and Goal B (the sequencer path, stages 5–8) has not started. This is the active remediation for Principles 2, 3, and 11.
 
 Open:
 
@@ -303,7 +352,7 @@ The **Stage A → Stage B transition** (`features/analog-voice-board.md` §0). T
 
 1. Decide Stage B CV DAC (recommendation: SPI MCP48CMB28 chain) and voice count; freeze PCB spec.
 2. PCM1690 bring-up: SAI2 TDM-8 master TX, 8 test tones to verify slot order; I2C register init (reset sequencing, 24-bit TDM format, unmute).
-3. `TdmVoiceSink` / `AudioOutputMode::VoiceSAI2` path: per-voice → TDM slot interleave; SAI1 stays stereo input + master mix.
+3. `TdmVoiceSink` / `AudioOutputMode::VoiceSAI2` path: make the selected `OutputSink` the sole hardware-output boundary, with per-voice → TDM slot interleave while SAI1 stays stereo input + master mix. The callback and voice DSP must not branch on DAC/codec type. This is the Principle 4 audit remediation; keep the Stage A sink buildable.
 4. `Mcp48Backend` behind the CV group router; flip flags to `TDM8` / `MCP48` / 8 groups; DMA/IT flush from the main loop — never blocking I2C/SPI in the callback.
 5. Re-run calibration per voice (procedure and UI page reused from Stage A); stored calibration table on SD.
 6. Keep Stage A buildable in CI as the fallback/bring-up configuration.
@@ -371,6 +420,7 @@ Code-complete but unproven. Each is real work, not history — a build that link
 
 ## Cross-Cutting Rules (apply to every phase)
 
+- Every significant design, implementation, and review applies the decision filter in `project-principles.md`. Review findings cite the relevant principle and a concrete failure mode; principle-driven cleanup remains incremental and phase-aligned.
 - Every protocol change: update `protocol.h` + round-trip test + `features/inter-mcu-protocol.md` in the same commit.
 - Every DMA buffer: alignment + placement per `architecture.md` §7 — reviewer checklist item.
 - Every phase gate includes: 1-hour zero-underrun soak, both-MCU-reboot recovery test, `make test` green.

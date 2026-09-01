@@ -5,8 +5,9 @@ in [`CHANGELOG.md`](../CHANGELOG.md) and git history, not in this directory —
 see `roadmap.md` § Cross-Cutting Rules for the rule and what happens to a doc
 when it is superseded.
 
-Start with `architecture.md` (how the system is built) and `roadmap.md` (what
-order it gets built in). Everything else hangs off those two.
+Start with `project-principles.md` (why the architecture exists),
+`architecture.md` (how the system is built), and `roadmap.md` (what order it
+gets built in). Everything else hangs off those three.
 
 **Pin assignments and hardware flags are never documented in prose** — they
 live in `firmware/shared/config/pin_config.h` and `hardware_config.h` only.
@@ -15,6 +16,7 @@ live in `firmware/shared/config/pin_config.h` and `hardware_config.h` only.
 
 | Document | Contents |
 |---|---|
+| [project-principles.md](project-principles.md) | **Architectural constitution**: the 15 engineering principles and decision filter that every significant design, implementation, and review must satisfy |
 | [architecture.md](architecture.md) | **Single source of truth** for system design: product vision, hardware, firmware structure, real-time/DMA/timing rules (§7), memory layout, open decisions |
 | [roadmap.md](roadmap.md) | Implementation order (Phases 0–5), per-phase test gates, library upgrade recommendations with risk callouts, and § Outstanding hardware verification — code-complete work that nothing has yet proven on the bench |
 | [backlog.md](backlog.md) | Work worth doing but not scheduled into a phase. Every entry records **why it is not urgent**, so a future reader can tell whether the reasoning still holds |

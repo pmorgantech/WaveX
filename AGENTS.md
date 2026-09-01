@@ -2,16 +2,17 @@
 
 WaveX is a dual-MCU sampler/groovebox: **ESP32-P4** frontend (ESP-IDF 5.5, LVGL 9, touchscreen UI) and **Daisy Seed / STM32H750** backend (libDaisy, real-time audio engine). Read `README.md` for the project map before touching code.
 
-## Orientation — read before designing or implementing
+## Orientation — read before designing, implementing, or reviewing
 
-1. **`docs/roadmap.md`** — canonical implementation order (Phases 0–5), current phase, and the test gate for each phase. Always check which phase is active before proposing new work; do not jump ahead of the gate.
-2. **`docs/architecture.md`** — single source of truth for system design: product vision, hardware split, real-time/DMA/cache rules (§7), memory layout, open decisions. When code and this doc disagree, code wins for _as-built_ sections, the doc wins for _target design_ sections (each section is labeled).
-3. **`docs/features/*.md`** — as-built or target design for specific subsystems (inter-MCU protocol, sequencer, analog voice board, offline sample editing).
-4. **`docs/ui-architecture.md`**, **`docs/ui-design-constraints.md`**, **`docs/testing_guide.md`**, **`docs/performance_monitoring.md`**, **`docs/flashing.md`**, **`docs/logging.md`** — working guides for UI, testing, profiling, flashing and debug logging.
-5. **`docs/daisy_rt_audio_coding_guide.md`** — required guidance for Daisy Seed / STM32H750 / libDaisy / CMSIS-DSP real-time audio code. Load the `daisy` project skill as well whenever designing, implementing, or reviewing code for that platform.
-6. **`docs/esp32p4_coding_guide.md`** — required guidance for ESP32-P4 / ESP-IDF embedded code. Load the `esp32p4` project skill as well whenever designing, implementing, or reviewing code for that platform.
-7. **Never read or implement from `docs/archive/`.** That directory is gitignored, so it exists only on machines that once held those files — it is not part of the repo and a clone will not have it. Its contents are superseded, carry mutually contradictory hardware claims, or report tests that were never run. Superseded docs are now deleted outright rather than moved there (`docs/roadmap.md` § Cross-Cutting Rules); git history is the archive.
-8. **Pin assignments and hardware feature flags are never in prose docs.** They live exclusively in `firmware/shared/config/pin_config.h` and `firmware/shared/config/hardware_config.h`. Do not trust pin tables in commit history or archived docs.
+1. **`docs/project-principles.md`** — WaveX's architectural constitution: why the architecture exists and the decision filter every significant design, implementation, and review must pass. Review findings that invoke it cite the violated principle and a concrete failure mode.
+2. **`docs/roadmap.md`** — canonical implementation order (Phases 0–5), current phase, and the test gate for each phase. Always check which phase is active before proposing new work; do not jump ahead of the gate.
+3. **`docs/architecture.md`** — single source of truth for system design: product vision, hardware split, real-time/DMA/cache rules (§7), memory layout, open decisions. When code and this doc disagree, code wins for _as-built_ sections, the doc wins for _target design_ sections (each section is labeled).
+4. **`docs/features/*.md`** — as-built or target design for specific subsystems (inter-MCU protocol, sequencer, analog voice board, offline sample editing).
+5. **`docs/ui-architecture.md`**, **`docs/ui-design-constraints.md`**, **`docs/testing_guide.md`**, **`docs/performance_monitoring.md`**, **`docs/flashing.md`**, **`docs/logging.md`** — working guides for UI, testing, profiling, flashing and debug logging.
+6. **`docs/daisy_rt_audio_coding_guide.md`** — required guidance for Daisy Seed / STM32H750 / libDaisy / CMSIS-DSP real-time audio code. Load the `daisy` project skill as well whenever designing, implementing, or reviewing code for that platform.
+7. **`docs/esp32p4_coding_guide.md`** — required guidance for ESP32-P4 / ESP-IDF embedded code. Load the `esp32p4` project skill as well whenever designing, implementing, or reviewing code for that platform.
+8. **Never read or implement from `docs/archive/`.** That directory is gitignored, so it exists only on machines that once held those files — it is not part of the repo and a clone will not have it. Its contents are superseded, carry mutually contradictory hardware claims, or report tests that were never run. Superseded docs are now deleted outright rather than moved there (`docs/roadmap.md` § Cross-Cutting Rules); git history is the archive.
+9. **Pin assignments and hardware feature flags are never in prose docs.** They live exclusively in `firmware/shared/config/pin_config.h` and `firmware/shared/config/hardware_config.h`. Do not trust pin tables in commit history or archived docs.
 
 If a task isn't clearly covered by the current roadmap phase or architecture doc, say so and propose where it fits rather than improvising a design.
 
@@ -115,6 +116,13 @@ that depends on an external crate or protocol.
 - Host tests run via GoogleTest (`make test`); see `docs/testing_guide.md`. Every roadmap phase ends with a stated test gate (`docs/roadmap.md`) — don't consider a phase's work done until its gate is green.
 - New wire-protocol messages require round-trip tests in `firmware/shared/tests/protocol/` before UI or engine work that depends on them.
 - For hardware-dependent behavior that can't be host-tested (SD soak tests, CV calibration, scope-verified timing), state explicitly what was and wasn't verified rather than claiming untested behavior works.
+
+## Review discipline
+
+- Apply the decision filter in `docs/project-principles.md` to every significant review. Constitutional findings cite the relevant principle number(s) and a concrete bug, risk, ownership conflict, or maintenance failure in the reviewed scope.
+- Trace audio stability and determinism first, then ownership and immutable cross-domain handoffs, responsibility and hardware boundaries, library reuse and measurement evidence, roadmap phase alignment, and documentation changes.
+- Do not manufacture style findings from the principles or demand a big-bang cleanup. Principle-driven remediation stays small, phase-aligned, and independently buildable; existing debt belongs in `docs/roadmap.md` or `docs/backlog.md`, not an unrelated patch.
+- Do not invent a new architectural principle during review. Propose an update to `docs/project-principles.md` when the constitution genuinely needs to evolve.
 
 ## General discipline
 

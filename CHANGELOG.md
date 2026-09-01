@@ -11,6 +11,14 @@ versioning and release process.
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-08-31
+
+### Changed
+
+- Added the WaveX architectural constitution and made its decision filter a
+  required gate in the Daisy and ESP32-P4 review skills; mapped every open
+  firmware-audit remediation to a roadmap phase and completion test.
+
 ## [0.2.0] - 2026-08-31
 
 ### Fixed — Daisy resident-sample safety and long-playback correctness
@@ -3019,6 +3027,7 @@ class the code's own comments already described.
   audio engine, SD sample streaming, CV outputs), linked over SPI with a
   shared wire protocol.
 
-[Unreleased]: https://github.com/maxamplitude/WaveX/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/maxamplitude/WaveX/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/maxamplitude/WaveX/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/maxamplitude/WaveX/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/maxamplitude/WaveX/releases/tag/v0.1.0
