@@ -40,6 +40,8 @@ implementation.
 | [sequencer.md](features/sequencer.md) | Core built, integration open | Groovebox sequencer engine (Phase 2) |
 | [instrument-model.md](features/instrument-model.md) | Core built, rest open | Presets, zones, multisampling, velocity layers — the Emax/Emulator lineage (Phase 2.5) |
 | [sfz-import.md](features/sfz-import.md) | Proposed | Loading third-party `.sfz` multisamples into the instrument model |
+| [debug-harness-and-hil.md](features/debug-harness-and-hil.md) | Proposed | Runtime input injection and machine-readable state query over the debug console, and the hardware-in-the-loop test suite they enable |
+| [build-profiles.md](features/build-profiles.md) | Proposed | Debug and release build profiles on both boards, and what a release image actually stops paying for. Prerequisite for the debug harness, but stands alone |
 | [melodic-sequencing.md](features/melodic-sequencing.md) | Target design | Melodic track type, chords/ties, step-record, live record/overdub/erase (Phase 2.5) |
 | [param-locks-and-modulation.md](features/param-locks-and-modulation.md) | Target design | Parameter locks, modulation matrix, LFOs, filter envelope (Phase 2/2.5) |
 | [sampling-and-recording.md](features/sampling-and-recording.md) | Target design | Threshold-armed capture, pre-roll, resample/bounce, assign-to-zone (Phase 2.5) |
