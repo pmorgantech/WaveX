@@ -72,7 +72,7 @@ See [`docs/flashing.md`](docs/flashing.md) for detailed flash and debug-probe wo
 ### Build & test commands
 
 ```bash
-make all           # Build ESP32 + Daisy
+make all           # Build ESP32 + Daisy (debug profile)
 make esp32         # ESP32 frontend only
 make daisy         # Daisy backend only
 make clean         # Clean both
@@ -83,7 +83,21 @@ make test-shared   # Shared protocol tests
 make test-esp32    # ESP32 component tests
 make test-daisy    # Daisy component tests
 make test-clean    # Clean test build artifacts
+
+make release       # Both MCUs, release profile, then verify the token gate
+make check-profiles # Assert tokens present in debug AND absent in release
 ```
+
+Builds default to the **debug profile**, which includes the serial console
+command surface — runtime log-level control on both boards
+([`docs/logging.md`](docs/logging.md)) and screenshots on the ESP32. `make
+release` sets `WAVEX_BUILD_DEBUG=0` to compile that surface out, into separate
+`build-release/` directories, and then checks that no console token string
+survived into either image. Details and the flag hierarchy:
+[`docs/features/build-profiles.md`](docs/features/build-profiles.md).
+
+`WAVEX-ENTER-DFU` deliberately survives into release builds — it is the only
+reflash path that needs no BOOT+RESET.
 
 The ESP32 side builds with ESP-IDF's `idf.py` (component-based); the Daisy side is CMake with the libDaisy toolchain file, app placed in QSPI flash via the Daisy bootloader (`BOOT_QSPI`). Testing details: [`docs/testing_guide.md`](docs/testing_guide.md).
 

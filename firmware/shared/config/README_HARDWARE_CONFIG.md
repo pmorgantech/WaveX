@@ -199,18 +199,50 @@ WAVEX_IF_LOGGING(LCD_DISPLAY, {
 
 ## Compiler Definitions
 
-You can override any configuration macro via compiler definitions:
+### Debug vs release: use the build profiles
+
+The debug feature surface is controlled by one flag, `WAVEX_BUILD_DEBUG`, and
+there are targets for it — do not hand-roll the definition:
 
 ```bash
-# Disable all debug logging
-make CFLAGS="-DWAVEX_DEBUG_LOGGING_ENABLED=0"
-
-# Disable specific components
-make CFLAGS="-DWAVEX_AUDIO_ENGINE_ENABLED=0 -DWAVEX_LCD_DISPLAY_ENABLED=0"
-
-# Disable specific logging
-make CFLAGS="-DWAVEX_LOG_AUDIO_ENGINE=0 -DWAVEX_LOG_LCD_DISPLAY=0"
+make release          # both MCUs with WAVEX_BUILD_DEBUG=0, then verify
+make daisy-release    # one board at a time
+make esp32-release
 ```
+
+Each profile builds into its own `build-release/` directory, which is required
+rather than tidy: the Daisy wrapper Makefile only re-runs CMake configure when
+`CMakeCache.txt` is absent, so reusing a build directory silently keeps
+whichever profile configured it first. See
+[`docs/features/build-profiles.md`](../../../docs/features/build-profiles.md).
+
+### Overriding an individual macro
+
+For a one-off experiment with a macro that has no profile target, pass it as a
+CMake cache variable on a **fresh** build directory:
+
+```bash
+# Daisy
+make -C firmware/daisy BUILD_DIR=build-expt \
+    CMAKE_EXTRA_ARGS="-DWAVEX_VOICE_OUTPUT_BACKEND=1"
+
+# ESP32
+idf.py -B build-expt -DWAVEX_BUILD_DEBUG=OFF build
+```
+
+Only macros the CMakeLists actually plumbs through can be set this way; adding
+a new one is a three-line `option()` + `add_compile_definitions()` pair beside
+the existing ones.
+
+> **`make CFLAGS="-D..."` does not work, despite what this section said until
+> 2026-09-01.** Measured on both targets: on the ESP32 it reaches nothing at
+> all (0 of 1768 translation units), because ESP-IDF builds its own flag set
+> and never consults `CFLAGS`. On the Daisy it *does* reach the compiler — GNU
+> Make exports command-line variables into the recipe environment and CMake
+> seeds `CMAKE_C_FLAGS` from there — but only `CFLAGS` for C translation units,
+> so a C++ macro like `WAVEX_DEBUG_LOGGING_ENABLED` needs `CXXFLAGS`, and only
+> on the first configure of a build directory. Reusing an existing one keeps
+> the original flags and warns about nothing.
 
 ## Migration Guide
 
