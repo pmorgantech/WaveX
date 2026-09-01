@@ -3,8 +3,8 @@
 **Status**: Proposed. Nothing here is built. Today there is one build
 configuration per board, and the only thing resembling a release switch is
 `WAVEX_DEBUG_LOGGING_ENABLED` defaulting to `1`
-(`firmware/shared/config/logging_config.h:381`) with no supported way to set it
-to `0` — see § *A documented override that does not work*.
+(`firmware/shared/config/logging_config.h:381`), whose only documented override
+was measured not to work on the board it matters on — see § 6.
 
 **Why it exists separately**: this began as one section of
 [`debug-harness-and-hil.md`](debug-harness-and-hil.md), which needs a real
@@ -143,7 +143,7 @@ Note the ESP32 is *already* built like a release image day to day:
 a debug build cannot carry this distinction, as `logging_config.h:378-380`
 already says.
 
-## 6. A documented override that does not work
+## 6. A documented override that does not do what it says
 
 `firmware/shared/config/README_HARDWARE_CONFIG.md:201-212` instructs the reader
 to disable features like this:
@@ -152,16 +152,36 @@ to disable features like this:
 make CFLAGS="-DWAVEX_DEBUG_LOGGING_ENABLED=0"
 ```
 
-**That cannot take effect on either target.** GNU Make does forward a
-command-line override down through the recursive sub-makes, but the innermost
-make on the Daisy is CMake-generated and never consults `$(CFLAGS)` — flags are
-baked into `flags.make` at configure time — and on the ESP32 the build is
-`idf.py`, which does not read `CFLAGS` at all.
+**Measured 2026-08-31**, by configuring both trees with probe defines in
+`CFLAGS` and `CXXFLAGS` and reading the generated compile commands:
 
-This is a mechanical conclusion from reading the build files, not an experiment;
-confirm it with one build before editing. It matters because it is currently the
-*only* documented way to turn debug logging off, so that section should be
-replaced by the profile targets above rather than simply deleted.
+| Target | Result |
+|---|---|
+| Daisy | **Reaches the compiler.** GNU Make exports command-line variables into the recipe environment, CMake seeds `CMAKE_C_FLAGS`/`CMAKE_CXX_FLAGS` from there, and both probes appear in `CMakeFiles/wavex-daisy.dir/flags.make`. |
+| ESP32 | **Reaches nothing.** 0 of 1768 translation units in `compile_commands.json` carried either probe. ESP-IDF constructs its own flag set and does not consult `CFLAGS`/`CXXFLAGS`. |
+
+So the documented command does not achieve its stated purpose — but the
+mechanism is not broken the way it looks. Three distinct problems, and it is
+worth separating them because only the third generalises:
+
+1. **On the ESP32 it is inert**, and the ESP32 is where
+   `WAVEX_DEBUG_LOGGING_ENABLED` actually gates anything today
+   (`WAVEX_ESP_SCREENSHOT_DEBUG` → the whole console listener). For the example
+   as written, on the board it matters on, it does nothing at all.
+2. **On the Daisy the variable is the wrong one.** `CFLAGS` reaches C
+   translation units; `logging_config.h` is C++ and every first-party Daisy TU
+   consuming the flag is `.cpp`, so `CXXFLAGS` is what would be required.
+3. **It only takes effect on the first configure of a build directory.**
+   `firmware/daisy/Makefile`'s `configure` runs CMake only when `CMakeCache.txt`
+   is absent, so re-running with a different value against an existing `build/`
+   was measured to keep the *original* flag and print no warning. This is the
+   same trap as § 4 and it applies to any flag delivered this way, including a
+   corrected one.
+
+Replace that README section with the profile targets rather than fixing the
+variable name. `-DWAVEX_BUILD_DEBUG=OFF` through `CMAKE_EXTRA_ARGS` works on
+both boards, is visible in review, and cannot be silently ignored because each
+profile owns its own build directory.
 
 ## 7. CI
 
@@ -189,8 +209,8 @@ that cannot survive without the code referencing it.
 2. The Daisy `WAVEX-LOG` guard (§2).
 3. Daisy and ESP32 profile plumbing and Make targets (§4, §5).
 4. CI release builds plus the `strings` gate (§7).
-5. Replace `README_HARDWARE_CONFIG.md`'s `CFLAGS` section (§6), after confirming
-   with a build.
+5. Replace `README_HARDWARE_CONFIG.md`'s `CFLAGS` section with the profile
+   targets (§6).
 6. Measure and record the release-profile size delta, with and without lowered
    log ceilings (§3).
 
