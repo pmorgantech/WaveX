@@ -86,8 +86,16 @@ default in force:
 
 ```cmake
 option(WAVEX_BUILD_DEBUG "Debug profile: logging, console harness" ON)
-add_compile_definitions(WAVEX_BUILD_DEBUG=$<BOOL:${WAVEX_BUILD_DEBUG}>)
+if(WAVEX_BUILD_DEBUG)
+    add_compile_definitions(WAVEX_BUILD_DEBUG=1)
+else()
+    add_compile_definitions(WAVEX_BUILD_DEBUG=0)
+endif()
 ```
+
+That is `WAVEX_PROFILING_ENABLED`'s shape character for character, deliberately:
+it is the form already proven in this tree, and both boards then spell the flag
+the same way.
 
 The release target is then a sibling of the existing `daisy-stageb`
 (`Makefile:227-233`):
@@ -109,22 +117,46 @@ It does not warn. That is why `daisy-stageb` already carries its own
 ## 5. Profiles: ESP32
 
 Nothing comparable exists: there is not one `add_compile_definitions` in the
-ESP32 tree and not one `Kconfig` file. The define has to be installed **before**
-`project()` in `firmware/esp32/CMakeLists.txt`, because ESP-IDF configures every
-component target inside that call:
+ESP32 tree and not one `Kconfig` file. The define goes in via
+`idf_build_set_property`, and **its placement is narrowly constrained — there is
+exactly one window that works**:
 
 ```cmake
-option(WAVEX_BUILD_DEBUG "Debug profile: logging, console harness" ON)
-idf_build_set_property(COMPILE_DEFINITIONS
-                       "WAVEX_BUILD_DEBUG=$<BOOL:${WAVEX_BUILD_DEBUG}>" APPEND)
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
+
+option(WAVEX_BUILD_DEBUG "Debug profile: logging, console harness" ON)
+if(WAVEX_BUILD_DEBUG)
+    set(_wavex_bd 1)
+else()
+    set(_wavex_bd 0)
+endif()
+idf_build_set_property(COMPILE_DEFINITIONS "WAVEX_BUILD_DEBUG=${_wavex_bd}" APPEND)
+
 project(wavex-esp32)
 ```
 
-Ordering is not a detail. That file already carries a warning comment recording
-this exact mistake: `-Os -flto -ffunction-sections -fdata-sections` once sat
-after `project()`, reading like a size-optimised LTO build while the image was
-in fact `-O2` with no LTO. Anything added after `project()` applies to nothing.
+**After `include()`, before `project()`.** Both bounds were measured, and both
+bite:
+
+- Earlier than the `include()` fails outright with `CMake Error: Unknown CMake
+  command "idf_build_set_property"` — that command is *defined by*
+  `project.cmake`, so it does not exist until the include has run.
+- Later than `project()` silently applies to nothing, because ESP-IDF
+  configures every component target inside that call. The file already carries a
+  warning comment recording exactly this: `-Os -flto -ffunction-sections
+  -fdata-sections` once sat after `project()`, reading like a size-optimised LTO
+  build while the image was in fact `-O2` with no LTO.
+
+**Verified 2026-08-31** against `compile_commands.json`: `-DWAVEX_BUILD_DEBUG=ON`
+puts `=1` on 1767 of 1768 translation units, `OFF` puts `=0` on the same 1767.
+The one TU without it is `build/project_elf_src_esp32p4.c`, a generated empty
+stub IDF hangs the ELF target from — no code, nothing of ours.
+
+The plain `if()`/`set()` form above is what was tested. A
+`$<BOOL:${WAVEX_BUILD_DEBUG}>` generator expression reads more neatly but was
+not verified in this property, and `COMPILE_DEFINITIONS` on the IDF build object
+is not a normal target property — do not substitute it without re-running the
+check.
 
 Release builds into its own directory for the same reason as the Daisy:
 
