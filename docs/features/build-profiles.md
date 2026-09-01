@@ -53,26 +53,45 @@ The tradeoff is that anything writing that token to the CDC port reboots the
 instrument into the bootloader; for a synth on a bench that is acceptable, and
 the convenience is worth more than the exposure.
 
-## 3. What release actually saves — stated honestly
+## 3. What release actually saves — measured
 
-Real removals: the console listener task and its buffers, and on the ESP32 the
-whole of `ui_screenshot.cpp`, which is already `#if`-wrapped as a single unit
-(lines 3–321) and takes the screenshot path with it.
+**Measured 2026-08-31.** There are two levers, they are independent, and they
+remove different things.
 
-**The runtime log-level table is not removed**, and claiming otherwise would be
-the kind of unmeasured assertion this repo has been bitten by more than once.
-`WaveX::Log::g_module_levels` is 12 bytes plus one byte-load per surviving call
-site. With the command channel compiled out nothing can ever change it — but no
-compiler will prove that, so the loads stay.
+**The master flag removes guarded code outright.** Built on the ESP32 with
+`WAVEX_DEBUG_LOGGING_ENABLED=0`, which already gates the whole of
+`ui_screenshot.cpp` (lines 3–321), console listener included:
 
-**The release win on logging comes from lowering `WAVEX_LOG_CEILING_*`, which
-deletes call sites outright** (`logging_config.h:80-119`) — not from the master
-flag. A release profile should therefore set the ceiling to `WARN`, and that is
-the number worth measuring.
+| | image (`.bin`) |
+|---|---|
+| debug | 989,936 |
+| release | 985,040 |
 
-No size or CPU figure appears in this document because none has been measured.
-Both belong in the implementing commit, per `AGENTS.md` § Audio/DSP performance
-discipline.
+**4,896 bytes**, and every console token string with it (§7).
+
+**Lowering the log ceiling removes call sites.** Built on the Daisy with
+`WAVEX_LOG_CEILING_DEFAULT` at WARN rather than TRACE:
+
+| | text | data | bss |
+|---|---|---|---|
+| ceiling TRACE | 262,560 | 30,784 | 299,496 |
+| ceiling WARN | 258,216 | 30,784 | 299,496 |
+
+**4,344 bytes of `.text`**; `data` and `bss` byte-identical.
+
+**The runtime log-level table survives both.** `WaveX::Log::g_module_levels`
+appears in the symbol table of every image built above, and the unchanged `bss`
+confirms its 12 bytes stay. With the command channel compiled out nothing can
+ever write it, but no compiler proves that, so the table and its per-call-site
+byte load remain. **The logging saving therefore comes from the ceiling, not
+from the master flag** — as assumed above, now with a number behind it.
+
+**Neither figure is dramatic**, and the honest conclusion is that size is not
+the argument. ~4–5 KB each, against a 262 KB Daisy text segment and a 990 KB
+ESP32 image. If the case for a release profile rested on bytes saved it would be
+a weak case. It does not: the case is not shipping a channel that can inject
+input, dump the framebuffer and reboot the instrument. The sizes are a secondary
+benefit, recorded here rather than inflated.
 
 ## 4. Profiles: Daisy
 
@@ -225,14 +244,30 @@ ESP32 release build.
 Then add the step that actually matters, which is **not** "release compiles":
 
 ```sh
-strings firmware/daisy/build-release/wavex-daisy.elf | grep -q 'WAVEX-DBG' && exit 1
+for elf in firmware/daisy/build-release/wavex-daisy.elf \
+           firmware/esp32/build-release/wavex-esp32.elf; do
+    strings "$elf" | grep -q 'WAVEX-DBG' && { echo "harness in $elf"; exit 1; }
+done
 ```
 
-That tests the property the profiles exist to guarantee — nothing of the debug
-surface in the release firmware — and it fails the day someone adds a guarded
-feature's call site outside its guard. "It compiled" would not catch that. The
-command token is the right artifact to grep for because it is a string literal
-that cannot survive without the code referencing it.
+**Verified 2026-08-31 that this detects what it claims**, in both directions —
+a grep that can only ever pass proves nothing. Token counts in the ESP32 ELF
+either side of the existing guard:
+
+| Token | debug | release |
+|---|---|---|
+| `WAVEX-SCREENSHOT` | 2 | 0 |
+| `WAVEX-LOG` | 6 | 0 |
+
+The tokens are present and greppable while the code is in — the Daisy image
+likewise carries `WAVEX-LOG` ×3 and `WAVEX-ENTER-DFU` ×1 — and go to exactly
+zero when it is compiled out. So the gate fails when the harness is present and
+passes when it is absent, which is the property a guard test needs and the one
+"it compiled" cannot supply.
+
+Grep for the command token rather than a function name: it is a string literal
+that cannot survive without the code referencing it, and unlike a symbol it is
+not removed by inlining or renamed by the linker.
 
 ## 8. Order of work
 
@@ -243,16 +278,16 @@ that cannot survive without the code referencing it.
 4. CI release builds plus the `strings` gate (§7).
 5. Replace `README_HARDWARE_CONFIG.md`'s `CFLAGS` section with the profile
    targets (§6).
-6. Measure and record the release-profile size delta, with and without lowered
-   log ceilings (§3).
+6. Lower `WAVEX_LOG_CEILING_*` in the release profile, once § 9 item 1 settles
+   what to lower it to. The size deltas either side are already measured (§3).
 
 ## 9. Decisions still open
 
 1. **Does the release profile lower `WAVEX_LOG_CEILING_*`, and to what?** §3
-   argues the real saving lives here rather than in the master flag. `WARN` is
-   the proposed default; confirm against a measured size delta before choosing,
-   since the answer also decides whether ERROR/WARN diagnostics survive in a
-   field image.
+   measured what WARN buys: 4,344 bytes of Daisy `.text`. The open half is not
+   the size but the policy — the ceiling decides which diagnostics survive in a
+   field image, and 4 KB is a small price for keeping INFO if a returned unit is
+   ever to be debugged from its own log.
 2. **Does anything else belong under `WAVEX_BUILD_DEBUG`?**
    `WAVEX_DAISY_UART_PERF_DEBUG` (`logging_config.h:408-410`) currently defaults
    to `1` independently, and its own comment says the measurement rides the hot
