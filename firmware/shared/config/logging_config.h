@@ -375,11 +375,41 @@ void wavex_daisy_log_raw(const char* format, ...);
 // of the firmware, not because they gate log lines.
 // ============================================================================
 
-// Master debug/release switch. The ESP32 compiles with OPTIMIZATION_PERF even
-// in day-to-day use, so the compiler's notion of a debug build would never
-// serve this purpose.
+// Master debug/release switch, set by the build profile
+// (docs/features/build-profiles.md). Everything below defaults from it, so one
+// -DWAVEX_BUILD_DEBUG=0 turns the whole debug surface off, while each flag
+// stays individually overridable for a bring-up image that wants one back.
+//
+// This cannot be derived from the compiler's own notion of a debug build: the
+// ESP32 is built OPTIMIZATION_PERF with assertions disabled in day-to-day use,
+// so NDEBUG and -O level say nothing about whether debug *features* are wanted.
+#ifndef WAVEX_BUILD_DEBUG
+#define WAVEX_BUILD_DEBUG 1
+#endif
+
 #ifndef WAVEX_DEBUG_LOGGING_ENABLED
-#define WAVEX_DEBUG_LOGGING_ENABLED 1
+#define WAVEX_DEBUG_LOGGING_ENABLED WAVEX_BUILD_DEBUG
+#endif
+
+/**
+ * @def WAVEX_DEBUG_HARNESS_ENABLED
+ * @brief Host-driven console command channel (both MCUs, debug builds only).
+ *
+ * Gates the console *command* surface - today the "WAVEX-LOG" runtime level
+ * control on both boards, and the input-injection/state-query harness of
+ * docs/features/debug-harness-and-hil.md once that exists. Costs a listener
+ * task (ESP32) or an ISR byte-matcher (Daisy) plus its line buffer.
+ *
+ * Deliberately does NOT gate "WAVEX-ENTER-DFU". That token is the only reflash
+ * path needing no BOOT+RESET, and a release image is the one most likely to
+ * need recovering; gating it behind the debug profile is exactly backwards.
+ *
+ * Note this gates *changing* levels, not logging itself. The runtime level
+ * table survives either way - a release build's saving comes from lowering
+ * WAVEX_LOG_CEILING_*, which deletes call sites outright.
+ */
+#ifndef WAVEX_DEBUG_HARNESS_ENABLED
+#define WAVEX_DEBUG_HARNESS_ENABLED WAVEX_BUILD_DEBUG
 #endif
 
 /**
