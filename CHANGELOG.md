@@ -13,6 +13,22 @@ versioning and release process.
 
 ### Added
 
+- Added debug and release build profiles on both MCUs, with
+  `WAVEX_BUILD_DEBUG` as the master switch (`docs/features/build-profiles.md`).
+  `make daisy-release` / `make esp32-release` build with it off, dropping the
+  console command surface — runtime log-level control on both boards, plus
+  screenshots on the ESP32 — from the image. `make release` builds both and runs
+  `make check-release-clean`, which fails if any console token string survives
+  into a release image. The Daisy's `WAVEX-LOG` handling previously had no
+  compile guard at all and shipped in every build; `WAVEX-ENTER-DFU`
+  deliberately still does, being the only reflash path needing no BOOT+RESET.
+- Added `-Wundef` to the Daisy's first-party warning flags. A `#if` on an
+  undefined macro evaluates to 0 silently, so a feature guard whose flag was
+  renamed or never included compiles the feature out with no diagnostic and no
+  build failure — a defect this project shipped for exactly one commit. Not
+  enabled on the ESP32, where `#if CONFIG_FOO` on an unset Kconfig bool is the
+  idiomatic spelling and the flag produces thousands of warnings.
+
 - Added SFZ v1 import on the Daisy: an optional boot instrument at
   `0:/wavex/sfz/default/default.sfz` maps up to 32 key/velocity zones onto the
   existing instrument model, deduplicates and loads resident PCM16 WAVs, and

@@ -44,10 +44,11 @@ idf_component_register(
 # Pin the C++ standard rather than inheriting whatever ESP-IDF defaults to.
 # IDF 5.5 compiles this as gnu++2b; the guide (docs/esp32p4_coding_guide.md §8)
 # asks for the choice to be recorded so a future IDF release cannot move it
-# silently. Note the same first-party code is built at three different
-# standards - C++23 here, C++17 in firmware/esp32/tests, C++14 in
-# firmware/daisy/tests - so anything under firmware/shared/ has to compile as
-# C++14.
+# silently. Note the same first-party code is built at more than one standard -
+# C++23 here, C++17 in all three test trees and in the Daisy device build - so
+# anything under firmware/shared/ has to compile as C++17. (This comment said
+# C++14 until 2026-09-01; that had been untrue since the Daisy build was raised
+# to 17 for logging_config.h's inline variables.)
 target_compile_options(${COMPONENT_LIB} PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-std=gnu++2b>)
 
 # First-party warning flags (docs/testing-remediation.md). IDF already builds

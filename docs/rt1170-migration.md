@@ -46,7 +46,7 @@ There is **no libDaisy equivalent** for the RT1170 — no focused, audio-callbac
 | NXP MCUXpresso SDK | Not present | **New dependency.** Provides device headers, IOMUXC/clock/eDMA/SAI/LPUART/LPI2C/USDHC/SEMC drivers for RT1170. | Add as a submodule/vendored drop, scoped to only the RT1170 device + drivers actually used (mirrors how libDaisy's CMSIS includes were hand-fixed in `CMakeLists.txt:92-113` — expect similar include-path surgery). |
 | CMSIS Core / device headers | From libDaisy's bundled CMSIS_5 + ST's STM32H7xx device pack | From NXP's device pack (bundled with MCUXpresso SDK) | Same class of "don't let two device headers collide" problem already solved once for libDaisy (`CMakeLists.txt:92-113`); expect to solve it again for the SDK's own CMSIS layer. |
 | FatFs | Bundled via libDaisy, thin diskio glue in `sd_sdio.cpp` | FatFs itself is portable and NXP's SDK ships its own FatFs+SDMMC example glue as a reference | **Keep FatFs, port the diskio layer** (`sd_sdio.cpp`) from libDaisy's `SdmmcHandler` to NXP's USDHC driver. Existing `fs_browse.cpp` (pure FatFs API usage) should need no changes. |
-| `firmware/shared/*` (protocol.h, uart_protocol.h, sequence_tracker, wxcf) | HAL-free, C++14 | Unchanged | **No changes.** This is the entire point of the shared/ split — verify host tests stay green as the proof. |
+| `firmware/shared/*` (protocol.h, uart_protocol.h, sequence_tracker, wxcf) | HAL-free, C++17 | Unchanged | **No changes.** This is the entire point of the shared/ split — verify host tests stay green as the proof. |
 
 ## 5. Build system changes
 

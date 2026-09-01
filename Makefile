@@ -1,5 +1,5 @@
 # WaveX Dual-MCU Sampler/Synth Build System
-.PHONY: help all esp32 daisy daisy-stageb clean esp32-clean daisy-clean esp32-flash esp32-monitor esp32-flash-monitor esp32-menuconfig test test-all test-asan test-daisy test-esp32 test-shared test-clean ai-graph daisy-flash daisy-flash-auto flash-all start-logs stop-logs logs-start logs-stop
+.PHONY: help all esp32 daisy daisy-stageb release esp32-release daisy-release check-release-clean clean esp32-clean daisy-clean esp32-flash esp32-monitor esp32-flash-monitor esp32-menuconfig test test-all test-asan test-daisy test-esp32 test-shared test-clean ai-graph daisy-flash daisy-flash-auto flash-all start-logs stop-logs logs-start logs-stop
 
 # Test targets
 test: test-all
@@ -123,6 +123,8 @@ help:
 	@echo "  all              - Build both ESP32 and Daisy firmware"
 	@echo "  esp32            - Build ESP32 firmware"
 	@echo "  daisy            - Build Daisy firmware"
+	@echo "  release          - Build both MCUs in the release profile, then verify"
+	@echo "  check-release-clean - Assert no debug console tokens in release images"
 	@echo "  esp32-clean      - Clean ESP32 build"
 	@echo "  daisy-clean      - Clean Daisy build"
 	@echo "  clean            - Clean all builds"
@@ -231,6 +233,50 @@ daisy-stageb:
 	cd firmware/daisy && make BUILD_DIR=build-stageb CMAKE_EXTRA_ARGS="-DWAVEX_VOICE_OUTPUT_BACKEND=1 -DWAVEX_CV_BACKEND=1 -DWAVEX_ANALOG_CV_GROUPS=8"
 	@echo "✅ Daisy Seed Backend (Stage B flag set) build completed successfully!"
 	@echo "========================================================================"
+
+# Release-profile builds (docs/features/build-profiles.md). WAVEX_BUILD_DEBUG=0
+# drops the console command surface - runtime log-level control on both boards,
+# plus screenshots on the ESP32 - from the image. Each profile builds into its
+# own directory: the Daisy wrapper only re-runs CMake configure when
+# CMakeCache.txt is absent, so sharing build/ between profiles would silently
+# keep whichever flags were configured first.
+#
+# WAVEX-ENTER-DFU deliberately survives into release; it is the only reflash
+# path that needs no BOOT+RESET.
+daisy-release:
+	@echo "🎵 Building Daisy Seed Backend (release profile)..."
+	cd firmware/daisy && $(MAKE) BUILD_DIR=build-release \
+		CMAKE_EXTRA_ARGS="-DWAVEX_BUILD_DEBUG=OFF"
+	@echo "✅ Daisy Seed Backend (release profile) built"
+
+esp32-release:
+	@echo "🔧 Building ESP32 Frontend (release profile)..."
+	cd firmware/esp32 && . /opt/esp/idf/export.sh && \
+		env -u GIT_INDEX_FILE -u GIT_DIR -u GIT_WORK_TREE \
+		idf.py -B build-release -DWAVEX_BUILD_DEBUG=OFF build
+	@echo "✅ ESP32 Frontend (release profile) built"
+
+release: esp32-release daisy-release
+	@$(MAKE) check-release-clean
+
+# The gate that matters is not "release compiles" - it is that no console
+# command token survives into the image. These are string literals, so they
+# cannot outlive the code referencing them, and unlike a symbol they are not
+# renamed by the linker or removed by inlining. Verified to go to zero when the
+# guards compile out, and to be present when they do not.
+check-release-clean:
+	@rc=0; \
+	for elf in firmware/daisy/build-release/wavex-daisy.elf \
+	           firmware/esp32/build-release/wavex-esp32.elf; do \
+		if [ ! -f "$$elf" ]; then echo "missing $$elf - run make release first"; rc=1; continue; fi; \
+		for tok in 'WAVEX-LOG' 'WAVEX-DBG' 'WAVEX-SCREENSHOT'; do \
+			if strings "$$elf" | grep -q "$$tok"; then \
+				echo "❌ $$tok present in $$elf"; rc=1; \
+			fi; \
+		done; \
+	done; \
+	if [ $$rc -eq 0 ]; then echo "✅ no debug console tokens in either release image"; fi; \
+	exit $$rc
 
 # Add Daisy flash target for convenience
 daisy-clean:

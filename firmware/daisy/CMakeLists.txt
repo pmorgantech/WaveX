@@ -148,6 +148,24 @@ else()
     add_compile_definitions(WAVEX_PROFILING_ENABLED=0)
 endif()
 
+# Debug/release build profile (docs/features/build-profiles.md §4). Master
+# switch for the debug feature surface: logging_config.h defaults
+# WAVEX_DEBUG_LOGGING_ENABLED and WAVEX_DEBUG_HARNESS_ENABLED from it, so
+# `make BUILD_DIR=build-release CMAKE_EXTRA_ARGS="-DWAVEX_BUILD_DEBUG=OFF"`
+# drops the console command surface from the image. Always emits a definition
+# rather than leaving the header's #ifndef default standing, so the value in
+# force is the one this build chose.
+#
+# Use a separate BUILD_DIR per profile: the wrapper Makefile only runs the
+# CMake configure step when CMakeCache.txt is absent, so reusing a build
+# directory silently keeps the previous profile's flags.
+option(WAVEX_BUILD_DEBUG "Debug profile: logging and the console harness" ON)
+if(WAVEX_BUILD_DEBUG)
+    add_compile_definitions(WAVEX_BUILD_DEBUG=1)
+else()
+    add_compile_definitions(WAVEX_BUILD_DEBUG=0)
+endif()
+
 # Voice output / CV backend selection (architecture.md §5.3, roadmap Phase 1
 # item 1). Empty (the default) leaves hardware_config.h's own #ifndef
 # defaults (Stage A) in effect. CI uses these to also compile the Stage B
@@ -185,12 +203,31 @@ set_target_properties(${FIRMWARE_NAME} PROPERTIES
 # their interface headers are consumed via -isystem and do not drown the
 # first-party signal (libDaisy and the STM32 HAL do not build clean under
 # -Wconversion).
-target_compile_options(${FIRMWARE_NAME} PRIVATE -Wall -Wextra -Wconversion)
+#
+# -Wundef is here for a specific defect class this project has already hit: a
+# `#if WAVEX_SOMETHING` whose macro is not defined evaluates to 0 silently, so
+# a feature guard whose flag was renamed or never included compiles the feature
+# OUT with no diagnostic and no build failure. That happened at 07c68c3, where
+# main.cpp's guards landed a commit ahead of the header defining them. It is
+# safe here because first-party Daisy code always defines its flags (the
+# #ifndef/#define default pattern in hardware_config.h and logging_config.h)
+# and builds clean under it - unlike the ESP32, where `#if CONFIG_FOO` on an
+# unset Kconfig bool is the idiomatic spelling and -Wundef is unusable.
+target_compile_options(${FIRMWARE_NAME} PRIVATE -Wall -Wextra -Wconversion -Wundef)
 foreach(vendor_target daisy DaisySP STM32H7xx_HAL_Driver cmsis_dsp_support)
     if(TARGET ${vendor_target})
         set_target_properties(${vendor_target} PROPERTIES SYSTEM TRUE)
     endif()
 endforeach()
+
+# The STM32 HAL headers reach us on a plain -I: they come from libDaisy's
+# directory-scoped include_directories(), which the SYSTEM property on the
+# targets above does not cover. Without this they contribute ~24 -Wundef
+# warnings of their own and drown the first-party signal the flag exists for.
+target_include_directories(${FIRMWARE_NAME} SYSTEM PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/libs/libDaisy/Drivers/STM32H7xx_HAL_Driver/Inc
+    ${CMAKE_CURRENT_SOURCE_DIR}/libs/libDaisy/Drivers/STM32H7xx_HAL_Driver/Inc/Legacy
+)
 
 target_link_options(${FIRMWARE_NAME} PRIVATE
     "-Wl,-T,${CMAKE_CURRENT_LIST_DIR}/wavex_memory_sections.ld"

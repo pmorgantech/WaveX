@@ -48,6 +48,28 @@ set(EXCLUDE_COMPONENTS
 file(STRINGS "${CMAKE_CURRENT_LIST_DIR}/../../VERSION" PROJECT_VER)
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
+
+# Debug/release build profile (docs/features/build-profiles.md §5). Master
+# switch for the debug feature surface: logging_config.h defaults
+# WAVEX_DEBUG_LOGGING_ENABLED, WAVEX_DEBUG_HARNESS_ENABLED and thus
+# WAVEX_ESP_SCREENSHOT_DEBUG from it, so
+# `idf.py -B build-release -DWAVEX_BUILD_DEBUG=OFF build` drops the console
+# listener, the screenshot path and the command surface from the image.
+#
+# The placement is load-bearing and the window is exactly one statement wide.
+# Earlier than the include() above fails with "Unknown CMake command
+# idf_build_set_property" - that command is defined BY project.cmake. Later
+# than the project() below applies to nothing, because ESP-IDF configures every
+# component target inside that call; see the note under project() for the
+# previous time this bit us.
+option(WAVEX_BUILD_DEBUG "Debug profile: logging, console harness, screenshots" ON)
+if(WAVEX_BUILD_DEBUG)
+    set(WAVEX_BUILD_DEBUG_VALUE 1)
+else()
+    set(WAVEX_BUILD_DEBUG_VALUE 0)
+endif()
+idf_build_set_property(COMPILE_DEFINITIONS "WAVEX_BUILD_DEBUG=${WAVEX_BUILD_DEBUG_VALUE}" APPEND)
+
 project(wavex-esp32)
 
 # NOTE: do not add add_compile_options()/add_link_options() here. ESP-IDF
