@@ -61,3 +61,20 @@ jobs:
 
       - name: Build Daisy firmware (Stage B flag set)
         run: make daisy-stageb
+
+      # Release profile: WAVEX_BUILD_DEBUG=0 drops the console command surface
+      # (runtime log-level control on both boards, screenshots on the ESP32).
+      # Built as separate steps from the gate below so a compile failure and a
+      # leaked-token failure are distinguishable at a glance in the run log.
+      - name: Build ESP32 firmware (release profile)
+        run: make esp32-release
+
+      - name: Build Daisy firmware (release profile)
+        run: make daisy-release
+
+      # Checks both directions: no console tokens in either release image, and
+      # the tokens still present in the debug images. The second half is what
+      # stops this decaying into a check that passes because a token was
+      # renamed and nothing is looked for any more.
+      - name: Verify debug/release token boundary
+        run: make check-profiles

@@ -1,5 +1,5 @@
 # WaveX Dual-MCU Sampler/Synth Build System
-.PHONY: help all esp32 daisy daisy-stageb release esp32-release daisy-release check-release-clean clean esp32-clean daisy-clean esp32-flash esp32-monitor esp32-flash-monitor esp32-menuconfig test test-all test-asan test-daisy test-esp32 test-shared test-clean ai-graph daisy-flash daisy-flash-auto flash-all start-logs stop-logs logs-start logs-stop
+.PHONY: help all esp32 daisy daisy-stageb release esp32-release daisy-release check-release-clean check-profiles require-strings clean esp32-clean daisy-clean esp32-flash esp32-monitor esp32-flash-monitor esp32-menuconfig test test-all test-asan test-daisy test-esp32 test-shared test-clean ai-graph daisy-flash daisy-flash-auto flash-all start-logs stop-logs logs-start logs-stop
 
 # Test targets
 test: test-all
@@ -125,6 +125,7 @@ help:
 	@echo "  daisy            - Build Daisy firmware"
 	@echo "  release          - Build both MCUs in the release profile, then verify"
 	@echo "  check-release-clean - Assert no debug console tokens in release images"
+	@echo "  check-profiles   - Assert tokens present in debug AND absent in release"
 	@echo "  esp32-clean      - Clean ESP32 build"
 	@echo "  daisy-clean      - Clean Daisy build"
 	@echo "  clean            - Clean all builds"
@@ -262,20 +263,52 @@ release: esp32-release daisy-release
 # The gate that matters is not "release compiles" - it is that no console
 # command token survives into the image. These are string literals, so they
 # cannot outlive the code referencing them, and unlike a symbol they are not
-# renamed by the linker or removed by inlining. Verified to go to zero when the
-# guards compile out, and to be present when they do not.
-check-release-clean:
+# renamed by the linker or removed by inlining.
+#
+# A gate that can only ever pass is worthless, and this one has two ways to
+# rot into exactly that: the tokens get renamed (so nothing is ever found), or
+# `strings` is missing (an absent command produces no output, `grep -q` returns
+# 1, and every check "passes"). require-strings closes the second;
+# check-profiles below closes the first by asserting the tokens ARE present in
+# a debug image.
+DEBUG_TOKENS := WAVEX-LOG WAVEX-DBG WAVEX-SCREENSHOT
+RELEASE_ELFS := firmware/daisy/build-release/wavex-daisy.elf \
+                firmware/esp32/build-release/wavex-esp32.elf
+DEBUG_ELFS := firmware/daisy/build/wavex-daisy.elf \
+              firmware/esp32/build/wavex-esp32.elf
+
+require-strings:
+	@command -v strings >/dev/null 2>&1 || { \
+		echo "❌ 'strings' not found - the token gate cannot run, refusing to report success"; \
+		exit 1; }
+
+check-release-clean: require-strings
 	@rc=0; \
-	for elf in firmware/daisy/build-release/wavex-daisy.elf \
-	           firmware/esp32/build-release/wavex-esp32.elf; do \
-		if [ ! -f "$$elf" ]; then echo "missing $$elf - run make release first"; rc=1; continue; fi; \
-		for tok in 'WAVEX-LOG' 'WAVEX-DBG' 'WAVEX-SCREENSHOT'; do \
+	for elf in $(RELEASE_ELFS); do \
+		if [ ! -f "$$elf" ]; then echo "❌ missing $$elf - run 'make release' first"; rc=1; continue; fi; \
+		for tok in $(DEBUG_TOKENS); do \
 			if strings "$$elf" | grep -q "$$tok"; then \
-				echo "❌ $$tok present in $$elf"; rc=1; \
+				echo "❌ $$tok present in release image $$elf"; rc=1; \
 			fi; \
 		done; \
 	done; \
 	if [ $$rc -eq 0 ]; then echo "✅ no debug console tokens in either release image"; fi; \
+	exit $$rc
+
+# Both directions, so it needs all four images - which is why CI runs this and
+# `make release` runs only the half that its own outputs can support. The
+# positive half checks WAVEX-LOG alone: it is the one token present on both
+# boards in a debug build, whereas WAVEX-SCREENSHOT is ESP32-only and
+# WAVEX-DBG does not exist until the harness is built.
+check-profiles: check-release-clean
+	@rc=0; \
+	for elf in $(DEBUG_ELFS); do \
+		if [ ! -f "$$elf" ]; then echo "❌ missing $$elf - build the debug profile first"; rc=1; continue; fi; \
+		if ! strings "$$elf" | grep -q 'WAVEX-LOG'; then \
+			echo "❌ WAVEX-LOG absent from DEBUG image $$elf - the release gate proves nothing"; rc=1; \
+		fi; \
+	done; \
+	if [ $$rc -eq 0 ]; then echo "✅ debug images carry the tokens, release images do not"; fi; \
 	exit $$rc
 
 # Add Daisy flash target for convenience
