@@ -36,7 +36,9 @@ class ICommInterface;
 
 typedef struct {
     const char* root_path;
-    const char* file_extension;  // e.g., ".wav"
+    // Optional frontend hint. The Daisy listing is authoritative and may
+    // return more than one supported type (currently WAV + SFZ).
+    const char* file_extension;
     uint32_t max_entries;
     bool show_hidden;
     WaveX::Comm::ICommInterface* comm_interface;

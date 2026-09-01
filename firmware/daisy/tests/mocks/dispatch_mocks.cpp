@@ -167,5 +167,9 @@ void OnMidiCc(const WaveX::Protocol::MidiCcMessage& m) {
     WaveX::Test::GetDispatchRecord().midi_ccs.push_back(m);
 }
 
+void OnInstrumentOp(const WaveX::Protocol::InstOpMessage& m) {
+    WaveX::Test::GetDispatchRecord().instrument_ops.push_back(m);
+}
+
 }  // namespace AudioEngine
 }  // namespace WaveX

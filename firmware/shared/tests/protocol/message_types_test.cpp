@@ -256,6 +256,53 @@ TEST_F(MessageTypeTest, SampleStatusMessage) {
     EXPECT_EQ(parsed.frames_played, original.frames_played);
 }
 
+TEST_F(MessageTypeTest, InstrumentMessagesRoundTrip) {
+    InstOpMessage request(0x12345678u, 2, INST_OP_SFZ_PROBE, "/Instruments/Grand Piano.sfz");
+    const size_t request_size = ProtocolHandler::CreatePacket(
+        buffer_.data(), buffer_.size(), MSG_INST_OP, &request, sizeof(request));
+    ASSERT_GT(request_size, 0u);
+    EXPECT_TRUE(ProtocolHandler::ValidatePacket(buffer_.data(), request_size));
+    InstOpMessage parsed_request;
+    ASSERT_TRUE(ProtocolHandler::ParseMessage(
+        buffer_.data(), MSG_INST_OP, &parsed_request, sizeof(parsed_request)));
+    EXPECT_EQ(parsed_request.request_id, request.request_id);
+    EXPECT_EQ(parsed_request.slot, 2);
+    EXPECT_EQ(parsed_request.op, INST_OP_SFZ_PROBE);
+    EXPECT_STREQ(parsed_request.path, request.path);
+
+    InstStatusMessage status;
+    status.request_id = request.request_id;
+    status.slot = request.slot;
+    status.op = INST_OP_SFZ_LOAD;
+    status.state = INST_STATUS_LOAD_PROGRESS;
+    status.flags = INST_STATUS_MISSING_FILES;
+    status.error = INST_ERROR_MISSING_SAMPLES;
+    status.zone_count = 12;
+    status.sample_count = 5;
+    status.current_index = 2;
+    status.missing_count = 1;
+    status.total_bytes = 24u * 1024u * 1024u;
+    status.available_bytes = 32u * 1024u * 1024u;
+    status.loaded_bytes = 9u * 1024u * 1024u;
+    status.current_bytes = 4u * 1024u * 1024u;
+    status.current_loaded_bytes = 2u * 1024u * 1024u;
+    detail::CopyWireString(status.current_name, sizeof(status.current_name), "velocity-3.wav");
+
+    const size_t status_size = ProtocolHandler::CreatePacket(
+        buffer_.data(), buffer_.size(), MSG_INST_STATUS, &status, sizeof(status));
+    ASSERT_GT(status_size, 0u);
+    EXPECT_TRUE(ProtocolHandler::ValidatePacket(buffer_.data(), status_size));
+    InstStatusMessage parsed_status;
+    ASSERT_TRUE(ProtocolHandler::ParseMessage(
+        buffer_.data(), MSG_INST_STATUS, &parsed_status, sizeof(parsed_status)));
+    EXPECT_EQ(parsed_status.request_id, status.request_id);
+    EXPECT_EQ(parsed_status.state, INST_STATUS_LOAD_PROGRESS);
+    EXPECT_EQ(parsed_status.total_bytes, status.total_bytes);
+    EXPECT_EQ(parsed_status.current_loaded_bytes, status.current_loaded_bytes);
+    EXPECT_STREQ(parsed_status.current_name, status.current_name);
+    EXPECT_STREQ(MessageTypeName(MSG_INST_STATUS), "INST_STATUS");
+}
+
 // Test SampleStopReq/Resp messages round trip
 TEST_F(MessageTypeTest, SampleStopMessages) {
     SampleStopReqMessage req(3);

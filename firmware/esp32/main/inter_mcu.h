@@ -124,6 +124,8 @@ typedef void (*wavex_sample_status_cb_t)(uint16_t sample_id,
                                          uint8_t channels,
                                          uint32_t frames_played,
                                          void* user_data);
+typedef void (*wavex_inst_status_cb_t)(const WaveX::Protocol::InstStatusMessage& status,
+                                       void* user_data);
 
 void inter_mcu_set_wave_chunk_listener(wavex_wave_chunk_cb_t cb, void* user_data);
 void inter_mcu_set_envelope_chunk_listener(wavex_envelope_chunk_cb_t cb, void* user_data);
@@ -138,6 +140,8 @@ void inter_mcu_invoke_sample_status_callback(uint16_t sample_id,
                                              uint32_t sample_rate,
                                              uint8_t channels,
                                              uint32_t frames_played);
+void inter_mcu_set_inst_status_listener(wavex_inst_status_cb_t cb, void* user_data);
+void inter_mcu_invoke_inst_status_callback(const WaveX::Protocol::InstStatusMessage& status);
 
 void inter_mcu_handle_sample_stop_response(bool success);
 
@@ -156,6 +160,10 @@ esp_err_t inter_mcu_send_sample_load_req(uint16_t sample_id,
                                          uint8_t bit_depth,
                                          const char* path);
 esp_err_t inter_mcu_send_sample_data(const uint8_t* data, size_t length);
+esp_err_t inter_mcu_send_inst_op(uint32_t request_id,
+                                 uint8_t slot,
+                                 WaveX::Protocol::InstOpCode op,
+                                 const char* path);
 
 // Control RX task behavior
 extern "C" void inter_mcu_set_suspended(bool suspended);

@@ -14,7 +14,7 @@ static bool is_dot_entry(const char* name) {
     return (name[0] == '.' && name[1] == '\0');
 }
 
-static bool has_wav_extension(const char* name) {
+static bool has_browser_extension(const char* name) {
     if (!name)
         return false;
 
@@ -23,7 +23,7 @@ static bool has_wav_extension(const char* name) {
         return false;
 
     const char* ext = last_dot + 1;
-    return (strcasecmp(ext, "wav") == 0);
+    return strcasecmp(ext, "wav") == 0 || strcasecmp(ext, "sfz") == 0;
 }
 
 bool ListDir(const char* path,
@@ -106,7 +106,7 @@ bool ListDir(const char* path,
         }
 
         bool is_dir = (fno.fattrib & AM_DIR) ? true : false;
-        if (is_dir || has_wav_extension(name)) {
+        if (is_dir || has_browser_extension(name)) {
             if (all_count < 256) {  // Prevent buffer overflow
                 FileEntry& e = all_entries[all_count++];
                 e.is_dir = is_dir ? 1 : 0;

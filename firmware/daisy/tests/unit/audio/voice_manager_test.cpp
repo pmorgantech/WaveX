@@ -1170,6 +1170,37 @@ TEST(VoiceManagerLiveParamsTest, FilterStillTracksThroughTheReleaseTail) {
         << "a filter sweep must stay audible through the release tail";
 }
 
+TEST(VoiceManagerInstrumentTest, ReleaseSlotReleasesLayersButNotOtherSlotsOrOneShots) {
+    std::vector<int16_t> sample(48000, 12000);
+    WaveX::AudioEngine::VoiceManager vm;
+    vm.Init(48000);
+
+    auto layer_a = FlatParams(sample.data(), static_cast<uint32_t>(sample.size()), 60, 127, 0.5f);
+    layer_a.slot = 2;
+    layer_a.trigger_note = 36;
+    layer_a.release_s = 1.0f;
+    vm.Trigger(layer_a);
+
+    auto layer_b = layer_a;
+    vm.Trigger(layer_b);
+
+    auto other_slot = layer_a;
+    other_slot.slot = 3;
+    vm.Trigger(other_slot);
+
+    auto one_shot = layer_a;
+    one_shot.one_shot = true;
+    vm.Trigger(one_shot);
+
+    ASSERT_EQ(vm.ActiveVoiceCount(), 4);
+    vm.ReleaseSlot(36, 2);
+
+    EXPECT_TRUE(vm.GetVoice(0).envelope.IsReleasing());
+    EXPECT_TRUE(vm.GetVoice(1).envelope.IsReleasing());
+    EXPECT_FALSE(vm.GetVoice(2).envelope.IsReleasing()) << "slot 3 must be untouched";
+    EXPECT_FALSE(vm.GetVoice(3).envelope.IsReleasing()) << "one-shot zone ignores note-off";
+}
+
 // Regression: s_voice_manager lives in .dtcmram_bss, which is (NOLOAD) and is
 // zeroed at startup - no constructor and no default member initializer ever
 // runs on it. Init() is therefore the ONLY thing that can establish a non-zero

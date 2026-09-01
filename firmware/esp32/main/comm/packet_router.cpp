@@ -177,6 +177,12 @@ void PacketRouter::route_by_message_type(uint8_t msg_type,
                 handle_sample_status(msg);
         } break;
 
+        case WaveX::Protocol::MSG_INST_STATUS: {
+            WaveX::Protocol::InstStatusMessage msg;
+            if (CopyMessage(payload, payload_len, msg, "INST_STATUS"))
+                handle_inst_status(msg);
+        } break;
+
         case WaveX::Protocol::MSG_STORAGE_STATUS: {
             WaveX::Protocol::StorageStatusMessage msg;
             if (CopyMessage(payload, payload_len, msg, "STORAGE_STATUS"))
@@ -317,6 +323,17 @@ WEAK_HANDLER void PacketRouter::handle_sample_status(
              (unsigned long)msg.frames_played);
     inter_mcu_invoke_sample_status_callback(
         msg.sample_id, msg.state, msg.sample_rate, msg.channels, msg.frames_played);
+}
+
+WEAK_HANDLER void PacketRouter::handle_inst_status(const WaveX::Protocol::InstStatusMessage& msg) {
+    ESP_LOGD("packet_router",
+             "Instrument status: req=%lu state=%u flags=0x%02x total=%lu loaded=%lu",
+             (unsigned long)msg.request_id,
+             (unsigned)msg.state,
+             (unsigned)msg.flags,
+             (unsigned long)msg.total_bytes,
+             (unsigned long)msg.loaded_bytes);
+    inter_mcu_invoke_inst_status_callback(msg);
 }
 
 WEAK_HANDLER void PacketRouter::handle_storage_status(const WaveX::Protocol::StorageStatusMessage& msg) {

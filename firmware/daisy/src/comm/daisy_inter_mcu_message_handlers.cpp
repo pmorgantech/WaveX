@@ -58,6 +58,7 @@ static void HandleSeqTransportMessage(const uint8_t* payload, size_t payload_siz
 static void HandleSeqPatternOpMessage(const uint8_t* payload, size_t payload_size);
 static void HandleMidiClockEventMessage(const uint8_t* payload, size_t payload_size);
 static void HandleMidiCcMessage(const uint8_t* payload, size_t payload_size);
+static void HandleInstrumentOpMessage(const uint8_t* payload, size_t payload_size);
 static void HandleErrorMessage(const uint8_t* payload, size_t payload_size);
 
 // Message dispatcher - transport agnostic (works with both SPI and UART)
@@ -193,6 +194,9 @@ void ProcessInterMcuMessage(uint8_t msg_type,
             break;
         case MSG_MIDI_CC:
             HandleMidiCcMessage(payload, payload_size);
+            break;
+        case MSG_INST_OP:
+            HandleInstrumentOpMessage(payload, payload_size);
             break;
         case MSG_ERROR:
             HandleErrorMessage(payload, payload_size);
@@ -677,6 +681,19 @@ static void HandleMidiCcMessage(const uint8_t* payload, size_t payload_size) {
 #if WAVEX_AUDIO_ENGINE_ENABLED
     const auto* msg = reinterpret_cast<const WaveX::Protocol::MidiCcMessage*>(payload);
     WaveX::AudioEngine::OnMidiCc(*msg);
+#endif
+}
+
+static void HandleInstrumentOpMessage(const uint8_t* payload, size_t payload_size) {
+    if (!payload || payload_size < sizeof(WaveX::Protocol::InstOpMessage)) {
+        UART_LOGE("daisy_msg", "INST_OP payload too small (%d)", (int)payload_size);
+        return;
+    }
+#if WAVEX_AUDIO_ENGINE_ENABLED
+    WaveX::Protocol::InstOpMessage msg;
+    memcpy(&msg, payload, sizeof(msg));
+    msg.path[sizeof(msg.path) - 1] = '\0';
+    WaveX::AudioEngine::OnInstrumentOp(msg);
 #endif
 }
 

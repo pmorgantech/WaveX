@@ -188,6 +188,15 @@ function(add_wavex_test test_source)
         )
     endif()
 
+    # sfz_import.hpp is header-only and HAL-free: parser, opcode mapper,
+    # path/dedup plan and resolver table. FatFs/SDRAM wiring stays in the
+    # target-only audio engine.
+    if(test_name STREQUAL "sfz_import_test")
+        target_sources(${test_name} PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/../src/audio/sfz_import.hpp
+        )
+    endif()
+
     # linear_resampler.hpp is header-only and HAL-free (int16_t arithmetic,
     # caller-provided buffers, no daisy_seed.h and no CMSIS include).
     if(test_name STREQUAL "linear_resampler_test")

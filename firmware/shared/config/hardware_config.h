@@ -99,6 +99,26 @@
 #define WAVEX_DAISY_SD_CARD_ENABLED 1
 #endif
 
+// SFZ v1 boot import (docs/features/sfz-import.md). The narrow first slice
+// intentionally has no browser/protocol surface: when the conventional file
+// exists it is loaded into instrument slot 0 before audio starts. A missing
+// file is non-fatal and leaves the Phase-1 single-sample route available.
+#ifndef WAVEX_DAISY_SFZ_BOOT_ENABLED
+#define WAVEX_DAISY_SFZ_BOOT_ENABLED 1
+#endif
+#ifndef WAVEX_DAISY_SFZ_BOOT_PATH
+#define WAVEX_DAISY_SFZ_BOOT_PATH "0:/wavex/sfz/default/default.sfz"
+#endif
+
+// Resident-instrument admission limits. Keep 8 MiB free for browser loads and
+// later runtime work; streamed SFZ zones are deliberately out of v1 scope.
+#ifndef WAVEX_INST_LOAD_RESERVE_BYTES
+#define WAVEX_INST_LOAD_RESERVE_BYTES (8u * 1024u * 1024u)
+#endif
+#ifndef WAVEX_INST_MAX_RAM_SAMPLE_BYTES
+#define WAVEX_INST_MAX_RAM_SAMPLE_BYTES (4u * 1024u * 1024u)
+#endif
+
 // Daisy SD Card Backend Selection
 // 0 = SPI-based SD (legacy), 1 = SDMMC (SDIO) 4-bit mode using libDaisy
 #ifndef WAVEX_DAISY_SD_CARD_BACKEND

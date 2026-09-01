@@ -34,6 +34,7 @@ extern "C" SD_HandleTypeDef hsd1;  // libDaisy per/sdmmc.cpp
 #include "output_sink.hpp"
 #include "paraphonic_envelope.hpp"
 #include "sample_load_info.hpp"
+#include "sfz_loader.hpp"
 #include "snapshot_mailbox.hpp"
 #include "voice_manager.hpp"
 #include "wav/wav_header_parser.hpp"
@@ -220,16 +221,31 @@ static FIL s_cvcal_file;
 // one block - well inside item 8's < 5 ms in-to-sound budget).
 struct NoteEvent {
     bool is_trigger = false;  // true = Trigger(params), false = Release(note)
+    bool scoped_release = false;
     uint8_t note = 0;
+    uint8_t slot = 0;
     WaveX::AudioEngine::VoiceTriggerParams params;
 };
 static constexpr uint32_t kNoteQueueSize = 16;  // power of two (index math wraps)
 static NoteEventQueue<NoteEvent, kNoteQueueSize> s_note_queue;
 
+// NoteEventQueue's legacy overflow bitmap is keyed only by note. Instrument
+// note-offs also need the slot, or a full queue could release a same-pitch
+// voice belonging to another MIDI channel. One bounded bitmap per slot keeps
+// that information without allocation or locks. Producer: main loop; consumer:
+// callback, same release/acquire discipline as NoteEventQueue.
+static uint32_t
+    s_scoped_release_overflow[kNumInstrumentSlots]
+                             [NoteEventQueue<NoteEvent, kNoteQueueSize>::kReleaseWordCount];
+static uint32_t s_scoped_release_pending_slots = 0;
+
 // Set by the main loop before releasing/rewriting loaded-sample memory
 // (OnSampleLoad); consumed by Callback(), which drains the queue and then
 // hard-stops every voice so nothing keeps reading freed SDRAM.
 static bool s_voice_stop_all = false;
+// Runtime SFZ replacement waits for this callback acknowledgement before it
+// releases the old bank's non-owning sample pointers.
+static bool s_voice_stop_ack = false;
 
 // Audio-callback side: apply every pending note event, then honor a
 // pending hard-stop. Order matters - a stop request must also kill
@@ -243,6 +259,8 @@ static bool drain_note_queue() {
         if (ev.is_trigger) {
             s_voice_manager.Trigger(ev.params);
             any_trigger = true;
+        } else if (ev.scoped_release) {
+            s_voice_manager.ReleaseSlot(ev.note, ev.slot);
         } else {
             s_voice_manager.Release(ev.note);
         }
@@ -258,8 +276,24 @@ static bool drain_note_queue() {
             releases &= releases - 1u;
         }
     }
+    uint32_t pending_slots =
+        __atomic_exchange_n(&s_scoped_release_pending_slots, 0u, __ATOMIC_ACQUIRE);
+    while (pending_slots != 0) {
+        const uint8_t slot = static_cast<uint8_t>(__builtin_ctz(pending_slots));
+        for (uint32_t word = 0; word < decltype(s_note_queue)::kReleaseWordCount; ++word) {
+            uint32_t releases =
+                __atomic_exchange_n(&s_scoped_release_overflow[slot][word], 0u, __ATOMIC_ACQUIRE);
+            while (releases != 0) {
+                const uint32_t bit = static_cast<uint32_t>(__builtin_ctz(releases));
+                s_voice_manager.ReleaseSlot(static_cast<uint8_t>(word * 32u + bit), slot);
+                releases &= releases - 1u;
+            }
+        }
+        pending_slots &= pending_slots - 1u;
+    }
     if (__atomic_exchange_n(&s_voice_stop_all, false, __ATOMIC_ACQUIRE)) {
         s_voice_manager.StopAll();
+        __atomic_store_n(&s_voice_stop_ack, true, __ATOMIC_RELEASE);
     }
     return any_trigger;
 }
@@ -1501,7 +1535,11 @@ void Init(DaisySeed& hw, float sample_rate, bool sdram_available) {
     s_cv_test_active = s_cv_test_pending;
     s_cv_test_mailbox.Init(s_cv_test_pending);
     s_note_queue.Init();
+    std::memset(s_scoped_release_overflow, 0, sizeof(s_scoped_release_overflow));
+    __atomic_store_n(&s_scoped_release_pending_slots, 0u, __ATOMIC_RELAXED);
     s_rb_low_water = 0xFFFFFFFFu;
+
+    SfzLoader::Reset();
 
     WaveX::Profiling::InitHardware();
     PROFILE_REGISTER_ZONE(audio_callback);
@@ -1944,6 +1982,41 @@ static const LoadedSampleInfo* find_playable_sample() {
 void OnNoteOn(const NoteMessage& note_msg) {
     static constexpr uint8_t kDefaultRootNote = 60;
 
+    const uint8_t slot = note_msg.channel & 0x0Fu;
+    // A replacement has stopped the old voices and is about to release their
+    // sample pointers. Do not queue a trigger resolved against that old table.
+    if (SfzLoader::SlotLoading(slot)) {
+        return;
+    }
+    if (SfzLoader::SlotLoaded(slot)) {
+        VoiceTriggerParams params[kMaxLayerTriggers];
+        const uint8_t count = SfzLoader::ResolveNote(
+            slot, note_msg.note, note_msg.velocity, params, kMaxLayerTriggers);
+        for (uint8_t i = 0; i < count; ++i) {
+            NoteEvent event;
+            event.is_trigger = true;
+            event.note = note_msg.note;
+            event.slot = slot;
+            event.params = params[i];
+            if (!s_note_queue.Push(event)) {
+                WaveX::Log::PrintLine(
+                    "RX NOTE_ON: SFZ slot=%u note=%u layer=%u DROPPED - note queue full",
+                    (unsigned)slot,
+                    (unsigned)note_msg.note,
+                    (unsigned)i);
+                break;
+            }
+        }
+#if WAVEX_MCU_LINK_PACKET_DEBUG
+        WaveX::Log::PrintLine("RX NOTE_ON: SFZ slot=%u note=%u vel=%u -> %u layers",
+                              (unsigned)slot,
+                              (unsigned)note_msg.note,
+                              (unsigned)note_msg.velocity,
+                              (unsigned)count);
+#endif
+        return;
+    }
+
     const LoadedSampleInfo* src = find_playable_sample();
     void* sample_ptr = nullptr;
     if (src && (!s_sample_mem_mgr.ptr(src->handle, &sample_ptr) || !sample_ptr)) {
@@ -2032,10 +2105,21 @@ void OnNoteOn(const NoteMessage& note_msg) {
 }
 
 void OnNoteOff(const NoteMessage& note_msg) {
+    const uint8_t slot = note_msg.channel & 0x0Fu;
     NoteEvent ev;
     ev.is_trigger = false;
     ev.note = note_msg.note;
-    const bool queued = s_note_queue.PushReleaseOrRemember(ev);
+    ev.slot = slot;
+    ev.scoped_release = SfzLoader::SlotLoaded(slot);
+    const bool queued =
+        ev.scoped_release ? s_note_queue.Push(ev) : s_note_queue.PushReleaseOrRemember(ev);
+    if (!queued && ev.scoped_release) {
+        const uint32_t word = static_cast<uint32_t>(note_msg.note) / 32u;
+        const uint32_t bit = 1u << (static_cast<uint32_t>(note_msg.note) % 32u);
+        __atomic_fetch_or(&s_scoped_release_overflow[slot][word], bit, __ATOMIC_RELEASE);
+        __atomic_fetch_or(
+            &s_scoped_release_pending_slots, 1u << static_cast<uint32_t>(slot), __ATOMIC_RELEASE);
+    }
     if (!queued && s_hw) {
         WaveX::Log::PrintLine("RX NOTE_OFF: note=%u queue full - release preserved",
                               (unsigned)note_msg.note);
@@ -2445,6 +2529,37 @@ void PumpEnvelopeJob() {
     if (s_env_job.next_column >= total_columns) {
         s_env_job.active = false;
     }
+}
+
+bool LoadSfzInstrument(const char* path, uint8_t slot) {
+    return SfzLoader::Load(path, slot, s_sample_mem_mgr, s_sample_io, sizeof(s_sample_io));
+}
+
+void OnInstrumentOp(const InstOpMessage& request) {
+    if (SfzLoader::Begin(request) && request.op == INST_OP_SFZ_LOAD) {
+        // Streaming audition and instrument import share FatFs/SD bandwidth.
+        // A load owns storage until its cooperative state machine completes.
+        CloseWav();
+    }
+}
+
+void PumpInstrumentLoad() {
+    static bool stop_requested = false;
+    if (SfzLoader::NeedsVoiceStop()) {
+        if (!stop_requested) {
+            __atomic_store_n(&s_voice_stop_ack, false, __ATOMIC_RELAXED);
+            __atomic_store_n(&s_voice_stop_all, true, __ATOMIC_RELEASE);
+            stop_requested = true;
+            return;
+        }
+        if (__atomic_exchange_n(&s_voice_stop_ack, false, __ATOMIC_ACQUIRE)) {
+            SfzLoader::ConfirmVoicesStopped(s_sample_mem_mgr);
+            stop_requested = false;
+        }
+        return;
+    }
+    stop_requested = false;
+    SfzLoader::Pump(s_sample_mem_mgr, s_sample_io, sizeof(s_sample_io));
 }
 
 void OnSampleLoad(const SampleLoadMessage& sl) {

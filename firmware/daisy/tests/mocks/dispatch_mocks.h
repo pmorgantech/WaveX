@@ -38,6 +38,7 @@ struct DispatchRecord {
     std::vector<WaveX::Protocol::SeqPatternOpMessage> seq_pattern_ops;
     std::vector<WaveX::Protocol::MidiClockEventMessage> midi_clock_events;
     std::vector<WaveX::Protocol::MidiCcMessage> midi_ccs;
+    std::vector<WaveX::Protocol::InstOpMessage> instrument_ops;
 
     struct BrowseCall {
         std::string path;
@@ -82,9 +83,9 @@ struct DispatchRecord {
                selected_samples.size() + unloaded_samples.size() +
                static_cast<size_t>(get_sample_mem_status_calls) + seq_transports.size() +
                seq_pattern_ops.size() + midi_clock_events.size() + midi_ccs.size() +
-               browse_requests.size() + play_requests.size() + stop_requests.size() +
-               play_index_requests.size() + sample_edits.size() + meta_requests.size() +
-               loop_gaps_ms.size() + diag_subscribes.size();
+               instrument_ops.size() + browse_requests.size() + play_requests.size() +
+               stop_requests.size() + play_index_requests.size() + sample_edits.size() +
+               meta_requests.size() + loop_gaps_ms.size() + diag_subscribes.size();
     }
 };
 

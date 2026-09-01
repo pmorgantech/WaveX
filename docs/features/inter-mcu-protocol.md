@@ -74,6 +74,9 @@ sequence(u16 LE) | payload[0..2048] | crc16(u16 LE) | end(0x5A)
 | MSG_MIDI_CLOCK_EVENT | 0x55 | E→D | `MidiClockEventMessage{event, source, tick_seq, esp_delta_us, spp_beats16}` | forwarded MIDI real-time/transport byte; `esp_delta_us` is the ESP-domain **delta** (never an absolute timestamp) so the tempo follower can't mix clock domains — `midi-sync-tempo-follower.md` §2/§3 |
 | MSG_MIDI_CC | 0x56 | E→D | `MidiCcMessage{cc, value, channel}` | forwarded MIDI control change; Daisy owns the CC→mod-source map (`param-locks-and-modulation.md` §6) |
 | MSG_SEQ_CLOCK_OUT | 0x57 | D→E | `SeqClockOutMessage{event, tick_seq, spp_beats16}` | Daisy-generated MIDI clock/transport for the ESP32 to serialize onto DIN + USB immediately |
+| MSG_INST_OP | 0x60 | E→D | `InstOpMessage{request_id, slot, op, path[96]}` | inspect or load an SFZ instrument; `request_id` rejects stale selection replies |
+| MSG_INST_STATUS | 0x61 | D→E | `InstStatusMessage{request_id, slot, op, state, flags, error, zone/sample counts, byte totals/progress, current_name[48]}` | preflight result plus total/current-WAV load progress; flags report missing/invalid WAVs and insufficient resident memory |
+| MSG_INST_ZONE_SYNC | 0x62 | both | *(reserved — struct not yet defined)* | future editable-zone synchronization |
 | MSG_ERROR | 0xFF | both | `ErrorMessage{code, msg[48]}` | error report |
 
 ## 4. Conventions & invariants
@@ -89,7 +92,7 @@ sequence(u16 LE) | payload[0..2048] | crc16(u16 LE) | end(0x5A)
 Message-ID blocks are **reserved** for the 2026-07-05 feature-design suite — see the reservation table in `feature-expansion-ideas.md` (0x50–0x5F sequencer/clock/arp, 0x60–0x6F instrument/tuning, 0x70–0x7F recording/mix/scenes, 0xA0–0xAF render jobs). Do not assign new IDs outside that table without updating it.
 
 - **Phase 2 (sequencer)**: pattern-edit ops, transport control, playhead/step feedback (coalesced), MIDI clock in/out (`midi-sync-tempo-follower.md`). Kit management is subsumed by instrument ops (`instrument-model.md` §8; 0x54 stays reserved-unused).
-- **Phase 2.5**: instrument ops (0x60–0x62), recording (0x70/0x71), mixer (0x78/0x79), MIDI CC forward (0x56), arp (0x58).
+- **Phase 2.5**: editable zone sync (0x62), recording (0x70/0x71), mixer (0x78/0x79), and arp (0x58). SFZ probe/load uses the now-live instrument ops at 0x60/0x61; MIDI CC forwarding at 0x56 is also live.
 - **Phase 4 (offline editing)**: render-job submit/progress/cancel (0xA0–0xA3), sidecar marker sync.
 - **Phase 5**: scene apply (0x7A), tuning (0x68).
 - Consider a generational "capabilities" handshake at boot (versions on both sides) before the first extension ships.

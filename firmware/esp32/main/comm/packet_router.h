@@ -52,6 +52,7 @@ class PacketRouter {
     void handle_browse_resp(const uint8_t* data, size_t length);
     void handle_status_response(const WaveX::Protocol::SampleMemStatusMessage& msg);
     void handle_sample_status(const WaveX::Protocol::SampleStatusMessage& msg);
+    void handle_inst_status(const WaveX::Protocol::InstStatusMessage& msg);
     void handle_storage_status(const WaveX::Protocol::StorageStatusMessage& msg);
     void handle_diag_push(const WaveX::Protocol::DiagPushMessage& msg);
     void handle_sample_meta(const WaveX::Protocol::SampleMetadata& msg);

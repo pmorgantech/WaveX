@@ -3,9 +3,12 @@
 
 #include <esp_log.h>
 #include <esp_timer.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/portmacro.h>
 
 #include <atomic>
 #include <cstdio>
+#include <cstring>
 
 namespace wavex_ui {
 namespace BusyOverlay {
@@ -24,6 +27,9 @@ lv_obj_t* s_spinner = nullptr;
 lv_obj_t* s_caption = nullptr;
 lv_obj_t* s_detail = nullptr;
 lv_obj_t* s_bar = nullptr;
+lv_obj_t* s_bar_label = nullptr;
+lv_obj_t* s_item_bar = nullptr;
+lv_obj_t* s_item_label = nullptr;
 lv_timer_t* s_timeout = nullptr;
 
 // Requests raised off the UI task; drained by service(). The flags are
@@ -31,6 +37,11 @@ lv_timer_t* s_timeout = nullptr;
 std::atomic<bool> s_progress_requested{false};
 std::atomic<int> s_requested_progress{0};
 std::atomic<bool> s_hide_requested{false};
+std::atomic<bool> s_dual_progress_requested{false};
+std::atomic<int> s_requested_total{0};
+std::atomic<int> s_requested_item{0};
+char s_requested_item_detail[96] = {};
+portMUX_TYPE s_dual_progress_lock = portMUX_INITIALIZER_UNLOCKED;
 
 // Timed out: the operation never answered. Say so and stop spinning, rather
 // than leaving a spinner turning forever over a dead backend.
@@ -79,7 +90,7 @@ void build() {
 
     s_panel = lv_obj_create(s_scrim);
     lv_obj_remove_style_all(s_panel);
-    lv_obj_set_size(s_panel, 640, 260);
+    lv_obj_set_size(s_panel, 640, 320);
     lv_obj_center(s_panel);
     lv_obj_set_style_bg_color(s_panel, lv_color_hex(kColPanel), 0);
     lv_obj_set_style_bg_opa(s_panel, LV_OPA_COVER, 0);
@@ -107,9 +118,15 @@ void build() {
     lv_obj_set_width(s_detail, 640 - 112 - 32);
     lv_label_set_long_mode(s_detail, LV_LABEL_LONG_DOT);
 
+    s_bar_label = lv_label_create(s_panel);
+    lv_obj_set_style_text_font(s_bar_label, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_color(s_bar_label, lv_color_hex(kColDim), 0);
+    lv_obj_set_pos(s_bar_label, 32, 140);
+    lv_label_set_text(s_bar_label, "Total");
+
     s_bar = lv_bar_create(s_panel);
     lv_obj_set_size(s_bar, 640 - 64, 16);
-    lv_obj_set_pos(s_bar, 32, 180);
+    lv_obj_set_pos(s_bar, 32, 165);
     lv_bar_set_range(s_bar, 0, 100);
     lv_bar_set_value(s_bar, 0, LV_ANIM_OFF);
     lv_obj_set_style_bg_color(s_bar, lv_color_hex(0x1F1F1F), LV_PART_MAIN);
@@ -117,6 +134,24 @@ void build() {
     // Hidden until setProgress() is called: an indeterminate operation showing
     // a bar stuck at zero reads as "stalled", not as "working".
     lv_obj_add_flag(s_bar, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_bar_label, LV_OBJ_FLAG_HIDDEN);
+
+    s_item_label = lv_label_create(s_panel);
+    lv_obj_set_style_text_font(s_item_label, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_color(s_item_label, lv_color_hex(kColDim), 0);
+    lv_obj_set_pos(s_item_label, 32, 205);
+    lv_obj_set_width(s_item_label, 640 - 64);
+    lv_label_set_long_mode(s_item_label, LV_LABEL_LONG_DOT);
+
+    s_item_bar = lv_bar_create(s_panel);
+    lv_obj_set_size(s_item_bar, 640 - 64, 16);
+    lv_obj_set_pos(s_item_bar, 32, 235);
+    lv_bar_set_range(s_item_bar, 0, 100);
+    lv_bar_set_value(s_item_bar, 0, LV_ANIM_OFF);
+    lv_obj_set_style_bg_color(s_item_bar, lv_color_hex(0x1F1F1F), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(s_item_bar, lv_color_hex(kColGreen), LV_PART_INDICATOR);
+    lv_obj_add_flag(s_item_label, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_item_bar, LV_OBJ_FLAG_HIDDEN);
 }
 
 }  // namespace
@@ -134,6 +169,9 @@ void show(const char* caption, const char* detail, uint32_t timeout_ms) {
 
     lv_obj_remove_flag(s_spinner, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_bar, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_bar_label, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_item_label, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_item_bar, LV_OBJ_FLAG_HIDDEN);
     lv_label_set_text(s_caption, caption ? caption : "Working");
     lv_obj_set_style_text_color(s_caption, lv_color_white(), 0);
     lv_label_set_text(s_detail, detail ? detail : "");
@@ -149,6 +187,19 @@ void show(const char* caption, const char* detail, uint32_t timeout_ms) {
     lv_timer_set_repeat_count(s_timeout, 1);
 }
 
+void showDual(const char* caption, const char* detail, uint32_t timeout_ms) {
+    show(caption, detail, timeout_ms);
+    if (!s_bar || !lv_obj_is_valid(s_bar))
+        return;
+    lv_obj_remove_flag(s_bar_label, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_remove_flag(s_bar, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_remove_flag(s_item_label, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_remove_flag(s_item_bar, LV_OBJ_FLAG_HIDDEN);
+    lv_bar_set_value(s_bar, 0, LV_ANIM_OFF);
+    lv_bar_set_value(s_item_bar, 0, LV_ANIM_OFF);
+    lv_label_set_text(s_item_label, "Waiting for first WAV");
+}
+
 void setProgress(int percent) {
     if (!s_bar || !lv_obj_is_valid(s_bar)) {
         return;
@@ -161,6 +212,18 @@ void setProgress(int percent) {
     }
     lv_obj_remove_flag(s_bar, LV_OBJ_FLAG_HIDDEN);
     lv_bar_set_value(s_bar, percent, LV_ANIM_OFF);
+}
+
+void setDualProgress(int total_percent, int item_percent, const char* item_detail) {
+    setProgress(total_percent);
+    if (!s_item_bar || !lv_obj_is_valid(s_item_bar))
+        return;
+    item_percent = item_percent < 0 ? 0 : (item_percent > 100 ? 100 : item_percent);
+    lv_obj_remove_flag(s_bar_label, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_remove_flag(s_item_label, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_remove_flag(s_item_bar, LV_OBJ_FLAG_HIDDEN);
+    lv_bar_set_value(s_item_bar, item_percent, LV_ANIM_OFF);
+    lv_label_set_text(s_item_label, item_detail ? item_detail : "Current WAV");
 }
 
 void setDetail(const char* detail) {
@@ -188,6 +251,18 @@ void requestProgress(int percent) {
     s_progress_requested.store(true, std::memory_order_release);
 }
 
+void requestDualProgress(int total_percent, int item_percent, const char* item_detail) {
+    taskENTER_CRITICAL(&s_dual_progress_lock);
+    s_requested_total.store(total_percent, std::memory_order_relaxed);
+    s_requested_item.store(item_percent, std::memory_order_relaxed);
+    snprintf(s_requested_item_detail,
+             sizeof(s_requested_item_detail),
+             "%s",
+             item_detail ? item_detail : "Current WAV");
+    taskEXIT_CRITICAL(&s_dual_progress_lock);
+    s_dual_progress_requested.store(true, std::memory_order_release);
+}
+
 void requestHide() {
     s_hide_requested.store(true, std::memory_order_release);
 }
@@ -197,8 +272,21 @@ void service() {
     // that has just finished, and applying it after would re-show the bar.
     if (s_hide_requested.exchange(false, std::memory_order_acquire)) {
         s_progress_requested.store(false, std::memory_order_relaxed);
+        s_dual_progress_requested.store(false, std::memory_order_relaxed);
         hide();
         return;
+    }
+    if (s_dual_progress_requested.exchange(false, std::memory_order_acquire)) {
+        char item_detail[sizeof(s_requested_item_detail)];
+        int total = 0;
+        int item = 0;
+        taskENTER_CRITICAL(&s_dual_progress_lock);
+        total = s_requested_total.load(std::memory_order_relaxed);
+        item = s_requested_item.load(std::memory_order_relaxed);
+        memcpy(item_detail, s_requested_item_detail, sizeof(item_detail));
+        taskEXIT_CRITICAL(&s_dual_progress_lock);
+        item_detail[sizeof(item_detail) - 1] = '\0';
+        setDualProgress(total, item, item_detail);
     }
     if (s_progress_requested.exchange(false, std::memory_order_acquire)) {
         setProgress(s_requested_progress.load(std::memory_order_relaxed));

@@ -125,6 +125,9 @@ struct InterMcuCapture {
     uint8_t sample_status_channels = 0;
     uint32_t sample_status_frames = 0;
 
+    int inst_status_calls = 0;
+    WaveX::Protocol::InstStatusMessage last_inst_status;
+
     int storage_status_calls = 0;
     bool storage_status_mounted = false;
 

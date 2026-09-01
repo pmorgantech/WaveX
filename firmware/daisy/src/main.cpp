@@ -73,13 +73,20 @@ static volatile bool s_dfu_requested = false;
 // current level - a deep dive into one subsystem without reflashing. Same
 // discipline as the DFU token: the USB ISR only captures bytes; parsing and
 // the reply happen on the main loop.
+//
+// Guarded by WAVEX_DEBUG_HARNESS_ENABLED so a release image carries neither
+// the buffer nor the ISR match state (docs/features/build-profiles.md SS2).
+// The DFU token above is deliberately NOT guarded - it is the only reflash
+// path that needs no BOOT+RESET.
 // ---------------------------------------------------------------------------
+#if WAVEX_DEBUG_HARNESS_ENABLED
 static constexpr char kLogCmdToken[] = "WAVEX-LOG ";
 static constexpr size_t kLogCmdTokenLen = sizeof(kLogCmdToken) - 1;
 static char s_log_cmd_buf[48];
 // release/acquire pair: the ISR fills s_log_cmd_buf and only then publishes
 // via this flag; the main loop must not observe true before those writes.
 static std::atomic<bool> s_log_cmd_pending{false};
+#endif
 
 // Runs in USB interrupt context: match bytes and set a flag, nothing else.
 // No logging, no allocation, and above all no reset from in here.
@@ -88,9 +95,11 @@ static void UsbRxCallback(uint8_t* buff, uint32_t* len) {
         return;
     }
     static size_t matched = 0;
+#if WAVEX_DEBUG_HARNESS_ENABLED
     static size_t log_matched = 0;
     static size_t log_capture = 0;  // bytes of command captured; 0 = not capturing
     static bool log_capturing = false;
+#endif
     for (uint32_t i = 0; i < *len; ++i) {
         const char c = static_cast<char>(buff[i]);
         if (c == kDfuTriggerToken[matched]) {
@@ -103,6 +112,7 @@ static void UsbRxCallback(uint8_t* buff, uint32_t* len) {
             matched = (c == kDfuTriggerToken[0]) ? 1u : 0u;
         }
 
+#if WAVEX_DEBUG_HARNESS_ENABLED
         if (log_capturing) {
             if (c == '\n' || c == '\r' || log_capture + 1 >= sizeof(s_log_cmd_buf)) {
                 s_log_cmd_buf[log_capture] = '\0';
@@ -125,6 +135,7 @@ static void UsbRxCallback(uint8_t* buff, uint32_t* len) {
         } else {
             log_matched = (c == kLogCmdToken[0]) ? 1u : 0u;
         }
+#endif
     }
 }
 
@@ -279,6 +290,15 @@ int main(void) {
     if (sd_available) {
         WaveX::AudioEngine::LoadCvCalFromSd();
     }
+#if WAVEX_DAISY_SFZ_BOOT_ENABLED
+    // Narrow SFZ v1 trigger (docs/features/sfz-import.md): load the
+    // conventional instrument into MIDI channel/slot 0 before audio starts.
+    // Missing/invalid files are non-fatal; the engine keeps its existing
+    // single-sample note route available.
+    if (sd_available && sdram_result == SdramHandle::Result::OK) {
+        WaveX::AudioEngine::LoadSfzInstrument(WAVEX_DAISY_SFZ_BOOT_PATH, 0);
+    }
+#endif
 #else
     WAVEX_LOG_DAISY(AUDIO_ENGINE, "Audio engine disabled (WAVEX_AUDIO_ENGINE_ENABLED = 0)");
 #endif
@@ -509,6 +529,7 @@ int main(void) {
         // Host adjusted the runtime log levels over CDC. Parse on the main
         // loop (log_ring context rules), reply through the ring so the host
         // script gets confirmation on the same port it sent the command.
+#if WAVEX_DEBUG_HARNESS_ENABLED
         if (s_log_cmd_pending.load(std::memory_order_acquire)) {
             if (s_log_cmd_buf[0] == '?' && s_log_cmd_buf[1] == '\0') {
                 for (size_t m = 0; m < WaveX::Log::kModuleCount; ++m) {
@@ -524,6 +545,7 @@ int main(void) {
             }
             s_log_cmd_pending.store(false, std::memory_order_release);
         }
+#endif
 
         // Host asked us to hand the USB port over to the bootloader. Do it
         // from the main loop, not the USB ISR, and give the log a moment to
@@ -615,6 +637,10 @@ int main(void) {
 // (~0.25 ms of SDRAM reads per pass) and returns immediately when no scan is
 // in flight, which is the normal state.
 #if WAVEX_AUDIO_ENGINE_ENABLED
+        // SFZ inspection/loading is one bounded cooperative step per pass.
+        // It follows the deadline-driven streaming refill; a LOAD closes the
+        // audition first, while a lightweight PROBE yields between files.
+        WaveX::AudioEngine::PumpInstrumentLoad();
         WaveX::AudioEngine::PumpEnvelopeJob();
         WaveX::AudioEngine::PumpPreviewSend();
 #endif

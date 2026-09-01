@@ -152,11 +152,13 @@ inline uint8_t ResolveNoteOn(const Instrument& ins,
         p.channels = ref.channels;
         p.sample_rate_hz = ref.sample_rate_hz;
         p.note = (ins.mode == InstrumentMode::Drum) ? zone.root_note : note;
+        p.trigger_note = note;
         p.velocity = velocity;
         p.root_note = zone.root_note;
         p.pan = zone.pan;
         p.slot = slot;
         p.choke_group = zone.choke_group;
+        p.one_shot = (zone.flags & ZONE_FLAG_ONE_SHOT) != 0;
 
         p.gain_mul = zone.gain * VelocityXfadeGain(zone, velocity);
         p.pitch_ratio_mul = TuneRatio(zone.coarse_tune, zone.fine_tune);

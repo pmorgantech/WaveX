@@ -47,6 +47,7 @@ static portMUX_TYPE s_sample_mem_lock = portMUX_INITIALIZER_UNLOCKED;
 // block until any in-flight callback has returned - see listener_slot.h.
 static WaveX::Comm::ListenerSlot<wavex_wave_chunk_cb_t> s_wave_chunk_listener;
 static WaveX::Comm::ListenerSlot<wavex_envelope_chunk_cb_t> s_envelope_chunk_listener;
+static WaveX::Comm::ListenerSlot<wavex_inst_status_cb_t> s_inst_status_listener;
 
 static int send_uart_message(uint8_t msg_type, const void* payload, uint16_t len) {
     if (!s_uart_initialized || !s_uart_started) {
@@ -566,6 +567,14 @@ void inter_mcu_invoke_sample_status_callback(uint16_t sample_id,
     }
 }
 
+void inter_mcu_set_inst_status_listener(wavex_inst_status_cb_t cb, void* user_data) {
+    s_inst_status_listener.set(cb, user_data);
+}
+
+void inter_mcu_invoke_inst_status_callback(const WaveX::Protocol::InstStatusMessage& status) {
+    s_inst_status_listener.invoke(status);
+}
+
 void inter_mcu_get_backend_heartbeat(wavex_backend_heartbeat_t* out) {
     if (!s_statistics) {
         ESP_LOGE(TAG, "StatisticsManager not initialized");
@@ -878,6 +887,18 @@ esp_err_t inter_mcu_send_sample_data(const uint8_t* data, size_t length) {
 
     int result =
         send_uart_message(WaveX::Protocol::MSG_SAMPLE_DATA, data, static_cast<uint16_t>(length));
+    return result >= 0 ? ESP_OK : ESP_FAIL;
+}
+
+esp_err_t inter_mcu_send_inst_op(uint32_t request_id,
+                                 uint8_t slot,
+                                 WaveX::Protocol::InstOpCode op,
+                                 const char* path) {
+    if (!s_initialized || s_suspended || !path || path[0] == '\0') {
+        return ESP_ERR_INVALID_STATE;
+    }
+    WaveX::Protocol::InstOpMessage msg(request_id, slot, static_cast<uint8_t>(op), path);
+    const int result = send_uart_message(WaveX::Protocol::MSG_INST_OP, &msg, sizeof(msg));
     return result >= 0 ? ESP_OK : ESP_FAIL;
 }
 

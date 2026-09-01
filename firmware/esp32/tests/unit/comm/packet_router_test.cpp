@@ -90,8 +90,9 @@ class PacketRouterTest : public ::testing::Test {
         return g_handlers.sync_calls + g_handlers.error_calls + g_handlers.unknown_calls +
                cap.heartbeat_calls + cap.meter_calls + cap.browse_resp_calls +
                cap.wave_chunk_calls + cap.envelope_chunk_calls + cap.sample_status_calls +
-               cap.storage_status_calls + cap.stop_resp_calls + cap.diag_push_calls +
-               cap.sample_meta_calls + cap.sample_mem_status_calls + cap.cv_cal_calls;
+               cap.inst_status_calls + cap.storage_status_calls + cap.stop_resp_calls +
+               cap.diag_push_calls + cap.sample_meta_calls + cap.sample_mem_status_calls +
+               cap.cv_cal_calls;
     }
 
     std::unique_ptr<PacketRouter> router_;
@@ -201,6 +202,29 @@ TEST_F(PacketRouterTest, RouteSampleStatusForwardsAllFields) {
     EXPECT_EQ(cap.sample_status_channels, 2);
     EXPECT_EQ(cap.sample_status_rate, 48000u);
     EXPECT_EQ(cap.sample_status_frames, 12345u);
+}
+
+TEST_F(PacketRouterTest, RouteInstrumentStatusForwardsInspectionAndProgressFields) {
+    InstStatusMessage msg;
+    msg.request_id = 41;
+    msg.op = INST_OP_SFZ_LOAD;
+    msg.state = INST_STATUS_LOAD_PROGRESS;
+    msg.total_bytes = 9000;
+    msg.loaded_bytes = 3000;
+    msg.current_bytes = 2000;
+    msg.current_loaded_bytes = 1000;
+    std::strcpy(msg.current_name, "soft.wav");
+    std::vector<uint8_t> packet =
+        ProtocolTestHelper::CreateWaveXPacket(MSG_INST_STATUS, &msg, sizeof(msg));
+    ASSERT_FALSE(packet.empty());
+
+    router_->route_packet(packet.data(), packet.size());
+
+    const auto& cap = GetInterMcuCapture();
+    ASSERT_EQ(cap.inst_status_calls, 1);
+    EXPECT_EQ(cap.last_inst_status.request_id, 41u);
+    EXPECT_EQ(cap.last_inst_status.loaded_bytes, 3000u);
+    EXPECT_STREQ(cap.last_inst_status.current_name, "soft.wav");
 }
 
 TEST_F(PacketRouterTest, RouteStorageStatusConvertsWireByteToBool) {

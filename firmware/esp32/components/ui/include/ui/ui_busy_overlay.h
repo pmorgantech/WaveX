@@ -35,8 +35,12 @@ namespace BusyOverlay {
  */
 void show(const char* caption, const char* detail, uint32_t timeout_ms);
 
+/** Show total + current-item bars for a multi-file operation. */
+void showDual(const char* caption, const char* detail, uint32_t timeout_ms);
+
 /** Switch to a determinate bar. Call after show(); 0..100. */
 void setProgress(int percent);
+void setDualProgress(int total_percent, int item_percent, const char* item_detail);
 
 /** Replace the detail line without disturbing the spinner. */
 void setDetail(const char* detail);
@@ -59,6 +63,7 @@ bool isVisible();
  * which is exactly when a stuck modal is most confusing.
  */
 void requestProgress(int percent);
+void requestDualProgress(int total_percent, int item_percent, const char* item_detail);
 void requestHide();
 
 /** Apply any pending request. UI task only, with the LVGL lock held. */

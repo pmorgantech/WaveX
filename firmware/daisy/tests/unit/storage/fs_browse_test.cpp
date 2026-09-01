@@ -70,6 +70,23 @@ TEST_F(FsBrowseTest, RootDirectoryWithEntries) {
     EXPECT_EQ(2048u, entries[2].size_bytes);
 }
 
+TEST_F(FsBrowseTest, ListsSfzInstrumentsCaseInsensitively) {
+    CreateTestDirectory("/",
+                        {MockFileEntry("piano.sfz", false, 900),
+                         MockFileEntry("STRINGS.SFZ", false, 1200),
+                         MockFileEntry("notes.txt", false, 20)});
+
+    FileEntry entries[10];
+    size_t total_count = 0;
+    size_t entries_written = 0;
+    ASSERT_TRUE(ListDir("/", entries, 10, total_count, 0, entries_written));
+
+    ASSERT_EQ(total_count, 2u);
+    ASSERT_EQ(entries_written, 2u);
+    EXPECT_STREQ(entries[0].name, "piano.sfz");
+    EXPECT_STREQ(entries[1].name, "STRINGS.SFZ");
+}
+
 // Test: ListDir with subdirectory (should include ".." entry)
 TEST_F(FsBrowseTest, SubdirectoryWithParentEntry) {
     CreateTestDirectory("/SOUNDS",

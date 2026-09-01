@@ -2,6 +2,7 @@
 #include "ui/ui_sample_browser.h"
 
 #include <esp_log.h>
+#include <strings.h>
 
 #include "../styles/ui_theme.h"
 #include "comm/i_comm_interface.h"
@@ -33,6 +34,23 @@ constexpr uint32_t kColPanel = 0x0E0E0E;
 constexpr uint32_t kColBorder = 0x222222;
 constexpr uint32_t kColDim = 0x8FA0AA;
 constexpr uint32_t kColGreen = 0x4CAF50;
+
+bool isSfzFile(const char* name) {
+    if (!name)
+        return false;
+    const char* dot = strrchr(name, '.');
+    return dot && strcasecmp(dot, ".sfz") == 0;
+}
+
+void formatBytes(uint32_t bytes, char* out, size_t out_size) {
+    if (bytes < 1024u) {
+        snprintf(out, out_size, "%lu B", (unsigned long)bytes);
+    } else if (bytes < 1024u * 1024u) {
+        snprintf(out, out_size, "%.1f KB", static_cast<double>(bytes) / 1024.0);
+    } else {
+        snprintf(out, out_size, "%.1f MB", static_cast<double>(bytes) / (1024.0 * 1024.0));
+    }
+}
 
 }  // namespace
 
@@ -132,7 +150,7 @@ void UISampleBrowser::onEnter(lv_obj_t* parent) {
     lv_obj_set_style_bg_color(play_bar_, lv_color_hex(0x1F1F1F), LV_PART_MAIN);
     lv_obj_set_style_bg_color(play_bar_, lv_color_hex(kColGreen), LV_PART_INDICATOR);
 
-    wavex_file_browser_config_t browser_config = {.root_path = persistent_state_.current_directory_path.c_str(), .file_extension = ".wav", .max_entries = 50, .show_hidden = false, .comm_interface = comm_interface_};
+    wavex_file_browser_config_t browser_config = {.root_path = persistent_state_.current_directory_path.c_str(), .file_extension = nullptr, .max_entries = 50, .show_hidden = false, .comm_interface = comm_interface_};
 
     ESP_LOGI(TAG, "Creating file browser with root_path: %s", browser_config.root_path);
 
@@ -151,6 +169,12 @@ void UISampleBrowser::onEnter(lv_obj_t* parent) {
         file_browser_, file_selected_index_callback, this);
     wavex_file_browser_set_directory_changed_callback(
         file_browser_, directory_changed_callback, this);
+
+    // Selection metadata below needs live widgets and may start an SFZ probe.
+    is_initialized_ = true;
+    inter_mcu_set_sample_status_listener(sample_status_callback, this);
+    inter_mcu_set_inst_status_listener(instrument_status_callback, this);
+    s_active_instance_ = this;
 
     is_playing_ = persistent_state_.is_playing;
     selected_file_index_ = persistent_state_.selected_file_index;
@@ -176,8 +200,6 @@ void UISampleBrowser::onEnter(lv_obj_t* parent) {
     }
 
     ESP_LOGI(TAG, "=== SAMPLE BROWSER ON_ENTER: Registering callback and setting active instance");
-    inter_mcu_set_sample_status_listener(sample_status_callback, this);
-    s_active_instance_ = this;
     is_initialized_ = true;
 
     ESP_LOGI(TAG,
@@ -197,6 +219,7 @@ void UISampleBrowser::onExit() {
     ESP_LOGI(TAG,
              "=== SAMPLE BROWSER ON_EXIT: Unregistering callback and clearing active instance");
     inter_mcu_set_sample_status_listener(nullptr, nullptr);
+    inter_mcu_set_inst_status_listener(nullptr, nullptr);
     if (s_active_instance_ == this) {
         s_active_instance_ = nullptr;
     }
@@ -291,6 +314,9 @@ void UISampleBrowser::onInput(const InputEvent& evt) {
 
 std::array<Softkey, NUM_SOFTKEYS> UISampleBrowser::getSoftkeys() {
     std::array<Softkey, NUM_SOFTKEYS> keys{};
+    const wavex_file_entry_t* selected =
+        file_browser_ ? wavex_file_browser_get_selected(file_browser_) : nullptr;
+    const bool selected_sfz = selected && !selected->is_directory && isSfzFile(selected->name);
 
     keys[0] = {"Back", [this]() { UINavigator::instance().pop(); }};
 
@@ -299,7 +325,10 @@ std::array<Softkey, NUM_SOFTKEYS> UISampleBrowser::getSoftkeys() {
             ESP_LOGI(TAG, "Stop audition requested");
             stopAudition(); } };
     } else {
-        keys[1] = {"Audition", [this]() {
+        if (selected_sfz) {
+            keys[1] = {"Audition", nullptr, false, "SFZ instruments cannot be auditioned"};
+        } else {
+            keys[1] = {"Audition", [this]() {
             ESP_LOGI(TAG, "Audition requested");
             if (!file_browser_) {
                 ESP_LOGW(TAG, "File browser not available");
@@ -313,6 +342,7 @@ std::array<Softkey, NUM_SOFTKEYS> UISampleBrowser::getSoftkeys() {
             } else {
                 ESP_LOGW(TAG, "No valid file selected for audition");
             } } };
+        }
     }
 
     // Load button - handles directory traversal
@@ -360,12 +390,25 @@ std::array<Softkey, NUM_SOFTKEYS> UISampleBrowser::getSoftkeys() {
             wavex_file_browser_navigate_to(file_browser_, path_to_use);
             refreshSoftkeys();
         } else {
-            // Regular file - load sample into sample RAM
-            ESP_LOGI(TAG, "Load sample requested for: %s", selected->name);
-            if (!loadSample(selected)) {
-                ESP_LOGE(TAG, "Failed to load sample: %s", selected->name);
+            if (isSfzFile(selected->name)) {
+                ESP_LOGI(TAG, "Load instrument requested for: %s", selected->name);
+                if (!loadInstrument(selected)) {
+                    ESP_LOGE(TAG, "Failed to request instrument load: %s", selected->name);
+                }
+            } else {
+                // Regular WAV - load sample into sample RAM.
+                ESP_LOGI(TAG, "Load sample requested for: %s", selected->name);
+                if (!loadSample(selected)) {
+                    ESP_LOGE(TAG, "Failed to load sample: %s", selected->name);
+                }
             }
         } } };
+
+    if (selected_sfz && (!sfz_probe_ready_ || !sfz_probe_loadable_)) {
+        keys[2].enabled = false;
+        keys[2].why = sfz_probe_ready_ ? "Resolve instrument warnings before loading"
+                                       : "Inspecting referenced WAV files";
+    }
 
     keys[3] = {"Up", [this]() {
         ESP_LOGI(TAG, "Up button pressed");
@@ -420,6 +463,12 @@ void UISampleBrowser::directory_changed_callback(const char* path, void* user_da
 
     browser->selected_file_index_ = 0;
     memset(browser->selected_file_path_, 0, sizeof(browser->selected_file_path_));
+    browser->sfz_selected_ = false;
+    browser->sfz_probe_ready_ = false;
+    browser->sfz_probe_loadable_ = false;
+    browser->sfz_sample_count_ = 0;
+    browser->sfz_probe_path_[0] = '\0';
+    browser->probe_request_id_.store(0, std::memory_order_release);
 
     strcpy(browser->pending_metadata_text_, "Select a file to view metadata");
     browser->pending_metadata_entry_ = nullptr;
@@ -509,6 +558,21 @@ void UISampleBrowser::updateMetadata(const wavex_file_entry_t* entry) {
         ESP_LOGW(TAG, "updateMetadata called but UI not ready - entry: %s", entry->name);
         return;
     }
+
+    const bool selected_sfz = !entry->is_directory && isSfzFile(entry->name);
+    sfz_selected_ = selected_sfz;
+    if (selected_sfz) {
+        if (strncmp(sfz_probe_path_, entry->path, sizeof(sfz_probe_path_)) != 0) {
+            requestInstrumentProbe(entry);
+        }
+    } else {
+        sfz_probe_ready_ = false;
+        sfz_probe_loadable_ = false;
+        sfz_sample_count_ = 0;
+        sfz_probe_path_[0] = '\0';
+        probe_request_id_.store(0, std::memory_order_release);
+    }
+    refreshSoftkeys();
 
     // Store entry pointer for deferred update (may be called from non-LVGL context)
     pending_metadata_entry_ = entry;
@@ -600,6 +664,20 @@ void UISampleBrowser::processDeferredUpdates_() {
                          entry->name,
                          (unsigned long)entry->size_bytes,
                          entry->path);
+
+                if (isSfzFile(entry->name)) {
+                    snprintf(info_text,
+                             sizeof(info_text),
+                             "SFZ instrument\nInspecting referenced WAV files...\n\n"
+                             "Audition is unavailable for instruments.");
+                    if (detail_name_ && lv_obj_is_valid(detail_name_)) {
+                        lv_label_set_text(detail_name_, entry->name);
+                    }
+                    lv_label_set_text(metadata_label_, info_text);
+                    metadata_update_pending_.store(false, std::memory_order_relaxed);
+                    pending_metadata_entry_ = nullptr;
+                    return;
+                }
 
                 char size_str[32];
                 if (entry->size_bytes < 1024) {
@@ -712,6 +790,60 @@ void UISampleBrowser::processDeferredUpdates_() {
 
     if (file_browser_) {
         wavex_file_browser_process_pending_updates(file_browser_);
+    }
+
+    if (inst_status_update_pending_.exchange(false, std::memory_order_acquire)) {
+        taskENTER_CRITICAL(&inst_status_lock_);
+        const WaveX::Protocol::InstStatusMessage status = pending_inst_status_;
+        taskEXIT_CRITICAL(&inst_status_lock_);
+        if (status.op == WaveX::Protocol::INST_OP_SFZ_PROBE &&
+            status.request_id == probe_request_id_.load(std::memory_order_acquire)) {
+            sfz_probe_ready_ = status.state == WaveX::Protocol::INST_STATUS_PROBE_COMPLETE ||
+                               status.state == WaveX::Protocol::INST_STATUS_FAILED;
+            sfz_probe_loadable_ =
+                status.state == WaveX::Protocol::INST_STATUS_PROBE_COMPLETE && status.flags == 0;
+            sfz_sample_count_ = status.sample_count;
+
+            char total[32], available[32], text[512];
+            formatBytes(status.total_bytes, total, sizeof(total));
+            formatBytes(status.available_bytes, available, sizeof(available));
+            int used = snprintf(text,
+                                sizeof(text),
+                                "SFZ instrument\nZones     %u\nSamples   %u\n"
+                                "Total     %s\nAvailable %s",
+                                (unsigned)status.zone_count,
+                                (unsigned)status.sample_count,
+                                total,
+                                available);
+            if (status.flags & WaveX::Protocol::INST_STATUS_MISSING_FILES) {
+                used += snprintf(text + std::min(used, static_cast<int>(sizeof(text) - 1)),
+                                 sizeof(text) - std::min(used, static_cast<int>(sizeof(text) - 1)),
+                                 "\n\nWARNING: %u referenced WAV%s not found; total is incomplete.",
+                                 (unsigned)status.missing_count,
+                                 status.missing_count == 1 ? " was" : "s were");
+            }
+            if (status.flags & WaveX::Protocol::INST_STATUS_EXCEEDS_MEMORY) {
+                used += snprintf(text + std::min(used, static_cast<int>(sizeof(text) - 1)),
+                                 sizeof(text) - std::min(used, static_cast<int>(sizeof(text) - 1)),
+                                 "\n\nWARNING: total exceeds available instrument memory.");
+            }
+            if (status.flags & WaveX::Protocol::INST_STATUS_INVALID_FILES) {
+                snprintf(text + std::min(used, static_cast<int>(sizeof(text) - 1)),
+                         sizeof(text) - std::min(used, static_cast<int>(sizeof(text) - 1)),
+                         "\n\nWARNING: %u WAV%s unsupported.",
+                         (unsigned)status.invalid_count,
+                         status.invalid_count == 1 ? " is" : "s are");
+            }
+            if (status.state == WaveX::Protocol::INST_STATUS_FAILED && status.flags == 0) {
+                snprintf(text, sizeof(text), "SFZ inspection failed (error %u).", status.error);
+            }
+            if (metadata_label_ && lv_obj_is_valid(metadata_label_)) {
+                lv_label_set_text(metadata_label_, text);
+            }
+            updateStatus(sfz_probe_loadable_ ? "Instrument ready to load"
+                                             : "Instrument has load warnings");
+            refreshSoftkeys();
+        }
     }
 }
 
@@ -926,6 +1058,116 @@ void UISampleBrowser::sample_status_callback(uint16_t sample_id,
     } else {
         ESP_LOGW(TAG, "=== UNKNOWN SAMPLE STATE: %d ===", state);
     }
+}
+
+void UISampleBrowser::instrument_status_callback(const WaveX::Protocol::InstStatusMessage& status,
+                                                 void* user_data) {
+    UISampleBrowser* browser = static_cast<UISampleBrowser*>(user_data);
+    if (!browser || browser != s_active_instance_ || !browser->is_initialized_) {
+        return;
+    }
+
+    if (status.op == WaveX::Protocol::INST_OP_SFZ_PROBE) {
+        if (status.request_id != browser->probe_request_id_.load(std::memory_order_acquire) ||
+            status.state == WaveX::Protocol::INST_STATUS_PROBING) {
+            return;
+        }
+        taskENTER_CRITICAL(&browser->inst_status_lock_);
+        browser->pending_inst_status_ = status;
+        taskEXIT_CRITICAL(&browser->inst_status_lock_);
+        browser->inst_status_update_pending_.store(true, std::memory_order_release);
+        wavex_ui_mark_content_changed();
+        return;
+    }
+
+    if (status.op != WaveX::Protocol::INST_OP_SFZ_LOAD ||
+        status.request_id != browser->load_request_id_.load(std::memory_order_acquire)) {
+        return;
+    }
+
+    if (status.state == WaveX::Protocol::INST_STATUS_LOAD_BEGIN ||
+        status.state == WaveX::Protocol::INST_STATUS_LOAD_PROGRESS) {
+        const int total_pct =
+            status.total_bytes == 0
+                ? 0
+                : static_cast<int>((static_cast<uint64_t>(status.loaded_bytes) * 100ull) /
+                                   status.total_bytes);
+        const int item_pct =
+            status.current_bytes == 0
+                ? 0
+                : static_cast<int>((static_cast<uint64_t>(status.current_loaded_bytes) * 100ull) /
+                                   status.current_bytes);
+        char item[96];
+        snprintf(item,
+                 sizeof(item),
+                 "WAV %u of %u  -  %.47s",
+                 (unsigned)(status.current_index + 1u),
+                 (unsigned)status.sample_count,
+                 status.current_name);
+        BusyOverlay::requestDualProgress(total_pct, item_pct, item);
+        wavex_ui_mark_content_changed();
+    } else if (status.state == WaveX::Protocol::INST_STATUS_LOAD_COMPLETE) {
+        BusyOverlay::requestHide();
+        browser->load_request_id_.store(0, std::memory_order_release);
+        browser->updateStatus("Instrument loaded");
+        wavex_ui_mark_content_changed();
+    } else if (status.state == WaveX::Protocol::INST_STATUS_FAILED) {
+        BusyOverlay::requestHide();
+        browser->load_request_id_.store(0, std::memory_order_release);
+        char message[96];
+        snprintf(message, sizeof(message), "Instrument load failed (error %u)", status.error);
+        browser->updateStatus(message);
+        wavex_ui_mark_content_changed();
+    }
+}
+
+void UISampleBrowser::requestInstrumentProbe(const wavex_file_entry_t* entry) {
+    if (!entry || entry->is_directory || !isSfzFile(entry->name))
+        return;
+    snprintf(sfz_probe_path_, sizeof(sfz_probe_path_), "%s", entry->path);
+    sfz_probe_ready_ = false;
+    sfz_probe_loadable_ = false;
+    sfz_sample_count_ = 0;
+    uint32_t request_id = next_instrument_request_id_++;
+    if (request_id == 0)
+        request_id = next_instrument_request_id_++;
+    probe_request_id_.store(request_id, std::memory_order_release);
+    updateStatus("Inspecting instrument references...");
+    if (inter_mcu_send_inst_op(request_id, 0, WaveX::Protocol::INST_OP_SFZ_PROBE, entry->path) !=
+        ESP_OK) {
+        sfz_probe_ready_ = true;
+        sfz_probe_loadable_ = false;
+        updateStatus("Instrument inspection request failed");
+    }
+}
+
+bool UISampleBrowser::loadInstrument(const wavex_file_entry_t* entry) {
+    if (!entry || !isSfzFile(entry->name) || !sfz_probe_ready_ || !sfz_probe_loadable_) {
+        updateStatus("Instrument is not ready to load");
+        return false;
+    }
+    uint32_t request_id = next_instrument_request_id_++;
+    if (request_id == 0)
+        request_id = next_instrument_request_id_++;
+    load_request_id_.store(request_id, std::memory_order_release);
+
+    char detail[160];
+    snprintf(detail,
+             sizeof(detail),
+             "%s  -  %u referenced WAVs",
+             entry->name,
+             (unsigned)sfz_sample_count_);
+    BusyOverlay::showDual("Loading instrument", detail, 120000);
+    updateStatus("Loading instrument on Daisy...");
+    const esp_err_t result =
+        inter_mcu_send_inst_op(request_id, 0, WaveX::Protocol::INST_OP_SFZ_LOAD, entry->path);
+    if (result != ESP_OK) {
+        load_request_id_.store(0, std::memory_order_release);
+        BusyOverlay::hide();
+        updateStatus("Instrument load request failed");
+        return false;
+    }
+    return true;
 }
 
 bool UISampleBrowser::loadSample(const wavex_file_entry_t* entry) {

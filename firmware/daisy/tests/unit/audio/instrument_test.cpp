@@ -213,7 +213,21 @@ TEST(InstrumentTest, DrumModeForcesRootNote) {
     ASSERT_EQ(n, 1);
     // note forced to root => 12-TET ratio 1.0 (no pitch tracking).
     EXPECT_EQ(out[0].note, 60);
+    EXPECT_EQ(out[0].trigger_note, 36);
     EXPECT_EQ(out[0].root_note, 60);
+}
+
+TEST(InstrumentTest, OneShotFlagFlowsIntoTriggerParams) {
+    Instrument ins;
+    Zone z = MakeZone(1, 0, 127, 1, 127);
+    z.flags = ZONE_FLAG_ONE_SHOT;
+    ins.zones[0] = z;
+    FakeSampleBank bank;
+    VoiceTriggerParams out[kMaxLayerTriggers];
+
+    ASSERT_EQ(ResolveNoteOn(ins, 2, 64, 100, bank.Resolver(), out, kMaxLayerTriggers), 1);
+    EXPECT_TRUE(out[0].one_shot);
+    EXPECT_EQ(out[0].trigger_note, 64);
 }
 
 TEST(InstrumentTest, KeyboardModeKeepsIncomingNote) {

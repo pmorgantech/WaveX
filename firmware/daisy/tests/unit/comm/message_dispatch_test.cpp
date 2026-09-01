@@ -388,16 +388,38 @@ TEST_F(MessageDispatchTest, MidiCcReachesAudioEngine) {
     EXPECT_EQ(GetDispatchRecord().midi_ccs[0].channel, 4);
 }
 
+TEST_F(MessageDispatchTest, InstrumentOpReachesAudioEngineWithBoundedPath) {
+    InstOpMessage op(77, 3, INST_OP_SFZ_PROBE, "/Instruments/piano.sfz");
+    Dispatch(MSG_INST_OP, op);
+
+    ASSERT_EQ(GetDispatchRecord().instrument_ops.size(), 1u);
+    const auto& got = GetDispatchRecord().instrument_ops[0];
+    EXPECT_EQ(got.request_id, 77u);
+    EXPECT_EQ(got.slot, 3);
+    EXPECT_EQ(got.op, INST_OP_SFZ_PROBE);
+    EXPECT_STREQ(got.path, "/Instruments/piano.sfz");
+}
+
+TEST_F(MessageDispatchTest, InstrumentOpPathIsTerminatedAtDispatchBoundary) {
+    std::vector<uint8_t> payload(sizeof(InstOpMessage), 0x41);
+    ProcessInterMcuMessage(MSG_INST_OP, 1, payload.data(), payload.size());
+
+    ASSERT_EQ(GetDispatchRecord().instrument_ops.size(), 1u);
+    EXPECT_EQ(GetDispatchRecord().instrument_ops[0].path[BROWSE_PATH_MAX - 1], '\0');
+}
+
 TEST_F(MessageDispatchTest, TruncatedSeqAndMidiMessagesAreDropped) {
     uint8_t small[2] = {0, 1};
     ProcessInterMcuMessage(MSG_SEQ_TRANSPORT, 1, small, sizeof(small));
     ProcessInterMcuMessage(MSG_SEQ_PATTERN_OP, 2, small, sizeof(small));
     ProcessInterMcuMessage(MSG_MIDI_CLOCK_EVENT, 3, small, sizeof(small));
     ProcessInterMcuMessage(MSG_MIDI_CC, 4, small, 1);
+    ProcessInterMcuMessage(MSG_INST_OP, 5, small, sizeof(small));
     EXPECT_TRUE(GetDispatchRecord().seq_transports.empty());
     EXPECT_TRUE(GetDispatchRecord().seq_pattern_ops.empty());
     EXPECT_TRUE(GetDispatchRecord().midi_clock_events.empty());
     EXPECT_TRUE(GetDispatchRecord().midi_ccs.empty());
+    EXPECT_TRUE(GetDispatchRecord().instrument_ops.empty());
 }
 
 TEST_F(MessageDispatchTest, TruncatedCvMessagesAreDropped) {

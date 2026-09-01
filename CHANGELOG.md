@@ -11,6 +11,19 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Added
+
+- Added SFZ v1 import on the Daisy: an optional boot instrument at
+  `0:/wavex/sfz/default/default.sfz` maps up to 32 key/velocity zones onto the
+  existing instrument model, deduplicates and loads resident PCM16 WAVs, and
+  supports tuning, gain/pan, regions/loops, cutoff, amp envelopes, choke
+  groups, and one-shot note behavior. Imports are all-or-nothing with a 4 MiB
+  per-sample cap and 8 MiB RAM reserve; unsupported SFZ opcodes are skipped.
+- Enabled `.sfz` files in the sample browser. SFZ selection disables Audition,
+  preflights referenced WAVs and resident-memory requirements in the info pane,
+  blocks invalid/oversized loads with explicit warnings, and shows separate
+  total-instrument and current-WAV progress bars during cooperative runtime load.
+
 ## [0.2.1] - 2026-08-31
 
 ### Changed

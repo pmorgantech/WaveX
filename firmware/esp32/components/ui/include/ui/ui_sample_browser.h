@@ -183,6 +183,21 @@ class UISampleBrowser : public UIPage {
     // directory listing has landed.
     std::atomic<bool> selection_metadata_pending_{false};
 
+    // SFZ inspection/load replies arrive on the UART task and are consumed by
+    // the UI task. Separate request ids keep selection probes and a live load
+    // from invalidating one another.
+    std::atomic<uint32_t> probe_request_id_{0};
+    std::atomic<uint32_t> load_request_id_{0};
+    uint32_t next_instrument_request_id_ = 1;
+    bool sfz_selected_ = false;
+    bool sfz_probe_ready_ = false;
+    bool sfz_probe_loadable_ = false;
+    uint8_t sfz_sample_count_ = 0;
+    char sfz_probe_path_[96] = {};
+    WaveX::Protocol::InstStatusMessage pending_inst_status_{};
+    portMUX_TYPE inst_status_lock_ = portMUX_INITIALIZER_UNLOCKED;
+    std::atomic<bool> inst_status_update_pending_{false};
+
     static void file_selected_callback(const wavex_file_entry_t* entry, void* user_data);
     static void file_selected_index_callback(uint32_t file_index,
                                              const wavex_file_entry_t* entry,
@@ -196,6 +211,8 @@ class UISampleBrowser : public UIPage {
                                        uint8_t channels,
                                        uint32_t frames_played,
                                        void* user_data);
+    static void instrument_status_callback(const WaveX::Protocol::InstStatusMessage& status,
+                                           void* user_data);
 
    private:
     void updateStatus(const char* status);
@@ -205,6 +222,8 @@ class UISampleBrowser : public UIPage {
     bool stopAudition();
     void refreshSoftkeys();
     bool loadSample(const wavex_file_entry_t* entry);
+    bool loadInstrument(const wavex_file_entry_t* entry);
+    void requestInstrumentProbe(const wavex_file_entry_t* entry);
 
     // Global instance for callbacks (temporary, until we have better callback architecture)
     static UISampleBrowser* s_active_instance_;

@@ -50,6 +50,14 @@ void PumpEnvelopeJob();
 void OnSampleLoad(const WaveX::Protocol::SampleLoadMessage& m);
 void GetSampleMemStatus(WaveX::Protocol::SampleMemStatusMessage& out);
 
+// SFZ v1 boot importer. Parses and loads one resident instrument into `slot`
+// from the main loop before StartAudio(); false is non-fatal (missing/invalid
+// file, unsupported WAV, or RAM budget refusal). Runtime rebinding and UI are
+// deliberately outside the narrow first slice.
+bool LoadSfzInstrument(const char* path, uint8_t slot);
+void OnInstrumentOp(const WaveX::Protocol::InstOpMessage& request);
+void PumpInstrumentLoad();
+
 // Meter helpers
 void GetMeters(BlockMeters& out);
 

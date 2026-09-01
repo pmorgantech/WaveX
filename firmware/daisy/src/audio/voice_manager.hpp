@@ -118,6 +118,7 @@ struct Voice {
     uint8_t note = 0;         // MIDI note that triggered this voice
     uint8_t slot = 0;         // instrument slot (kit/multitimbral) that owns this voice
     uint8_t choke_group = 0;  // 0 = none; 1..N = mutual-exclusion group (open/closed hat)
+    bool one_shot = false;    // ignore note-off; stop at the sample/region end
     uint32_t age = 0;         // trigger order, for stealing/release-newest-first
 
     // Playback region + loop (item 4). end_frame/loop_end are exclusive.
@@ -163,6 +164,10 @@ struct VoiceTriggerParams {
     // stereo files without a load-time downmix pass.
     uint8_t channels = 1;
     uint8_t note = 60;
+    // Incoming key used to release the voice. 0xFF means use `note`. This is
+    // distinct in drum mode, where `note` is forced to root_note to disable
+    // pitch tracking but note-off must still match the pad key that fired.
+    uint8_t trigger_note = 0xFF;
     uint8_t velocity = 127;
     float pan = 0.5f;
     uint8_t root_note = 60;  // note at which `sample` plays at its recorded pitch
@@ -172,6 +177,7 @@ struct VoiceTriggerParams {
     // other voices in the same group at trigger time (open/closed hat).
     uint8_t slot = 0;
     uint8_t choke_group = 0;
+    bool one_shot = false;
 
     // Post-resolution multipliers the instrument layer folds in without
     // re-deriving the base velocity/pitch: gain_mul scales the velocity gain
@@ -323,9 +329,10 @@ class VoiceManager {
         v.src_channels = (params.channels == 2) ? 2 : 1;
         v.gain = (static_cast<float>(params.velocity) / 127.0f) * params.gain_mul;
         v.pan = params.pan < 0.0f ? 0.0f : (params.pan > 1.0f ? 1.0f : params.pan);
-        v.note = params.note;
+        v.note = params.trigger_note == 0xFF ? params.note : params.trigger_note;
         v.slot = params.slot;
         v.choke_group = params.choke_group;
+        v.one_shot = params.one_shot;
         v.age = next_age_++;
 
         v.start_frame = params.start_frame < params.sample_frames ? params.start_frame : 0;
@@ -390,7 +397,7 @@ class VoiceManager {
         uint32_t newest_age = 0;
         for (uint8_t i = 0; i < kNumVoices; ++i) {
             if (voices_[i].state == VoiceState::Playing && voices_[i].note == note &&
-                !voices_[i].envelope.IsReleasing()) {
+                !voices_[i].one_shot && !voices_[i].envelope.IsReleasing()) {
                 if (found < 0 || voices_[i].age >= newest_age) {
                     found = i;
                     newest_age = voices_[i].age;
@@ -399,6 +406,19 @@ class VoiceManager {
         }
         if (found >= 0) {
             voices_[static_cast<size_t>(found)].envelope.Release();
+        }
+    }
+
+    // Releases every held voice fired by `note` in one instrument slot,
+    // except one-shot zones. Layered SFZ regions deliberately release
+    // together; the legacy unscoped Release(note) above keeps its
+    // newest-voice behavior for the Phase-1 single-sample fallback.
+    void ReleaseSlot(uint8_t note, uint8_t slot) {
+        for (auto& v: voices_) {
+            if (v.state == VoiceState::Playing && v.note == note && v.slot == slot && !v.one_shot &&
+                !v.envelope.IsReleasing()) {
+                v.envelope.Release();
+            }
         }
     }
 

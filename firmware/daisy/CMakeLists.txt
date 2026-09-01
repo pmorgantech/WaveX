@@ -47,6 +47,9 @@ set(FIRMWARE_SOURCES
     src/audio/audio_engine.cpp
     src/audio/note_event_queue.hpp
     src/audio/sample_load_info.hpp
+    src/audio/sfz_import.hpp
+    src/audio/sfz_loader.cpp
+    src/audio/sfz_loader.hpp
     src/audio/snapshot_mailbox.hpp
     src/storage/fs_browse.cpp
     src/storage/sd_sdio.cpp

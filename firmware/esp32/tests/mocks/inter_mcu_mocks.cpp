@@ -52,6 +52,12 @@ void inter_mcu_invoke_sample_status_callback(uint16_t sample_id,
     cap.sample_status_frames = frames_played;
 }
 
+void inter_mcu_invoke_inst_status_callback(const WaveX::Protocol::InstStatusMessage& status) {
+    auto& cap = GetInterMcuCapture();
+    cap.inst_status_calls++;
+    cap.last_inst_status = status;
+}
+
 void inter_mcu_invoke_cv_cal_callback(const WaveX::Protocol::CvCalMessage& cal) {
     (void)cal;
     GetInterMcuCapture().cv_cal_calls++;

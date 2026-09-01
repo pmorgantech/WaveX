@@ -127,6 +127,10 @@ enum MessageType : uint8_t {
     MSG_MIDI_CLOCK_EVENT = 0x55,  // E->D: forwarded MIDI real-time clock/transport byte
     MSG_MIDI_CC = 0x56,           // E->D: forwarded MIDI control change
     MSG_SEQ_CLOCK_OUT = 0x57,     // D->E: MIDI clock/transport for the ESP32 to serialize outbound
+    // Instrument browser/load lifecycle (instrument-model.md §6).
+    MSG_INST_OP = 0x60,         // E->D: inspect or load one instrument file
+    MSG_INST_STATUS = 0x61,     // D->E: inspection result and load progress
+    MSG_INST_ZONE_SYNC = 0x62,  // reserved: future editable-zone synchronization
     MSG_ERROR = 0xFF
 };
 
@@ -1291,6 +1295,102 @@ struct SeqClockOutMessage {
           reserved2(0) {}
 } __attribute__((packed));
 
+enum InstOpCode : uint8_t {
+    INST_OP_SFZ_PROBE = 1,
+    INST_OP_SFZ_LOAD = 2,
+};
+
+enum InstStatusState : uint8_t {
+    INST_STATUS_PROBING = 1,
+    INST_STATUS_PROBE_COMPLETE = 2,
+    INST_STATUS_LOAD_BEGIN = 3,
+    INST_STATUS_LOAD_PROGRESS = 4,
+    INST_STATUS_LOAD_COMPLETE = 5,
+    INST_STATUS_FAILED = 6,
+};
+
+enum InstStatusFlags : uint8_t {
+    INST_STATUS_MISSING_FILES = 1u << 0,
+    INST_STATUS_EXCEEDS_MEMORY = 1u << 1,
+    INST_STATUS_INVALID_FILES = 1u << 2,
+};
+
+enum InstError : uint8_t {
+    INST_ERROR_NONE = 0,
+    INST_ERROR_BAD_FILE = 1,
+    INST_ERROR_TOO_MANY_REGIONS = 2,
+    INST_ERROR_MISSING_SAMPLES = 3,
+    INST_ERROR_UNSUPPORTED_SAMPLE = 4,
+    INST_ERROR_TOO_LARGE = 5,
+    INST_ERROR_NO_MEMORY = 6,
+    INST_ERROR_BUSY = 7,
+    INST_ERROR_IO = 8,
+};
+
+// MSG_INST_OP (E->D). request_id lets the browser discard a probe response
+// that belongs to a selection the user has already moved away from.
+struct InstOpMessage {
+    uint32_t request_id;
+    uint8_t slot;
+    uint8_t op;  // InstOpCode
+    uint16_t reserved;
+    char path[BROWSE_PATH_MAX];
+
+    InstOpMessage() : request_id(0), slot(0), op(0), reserved(0) { path[0] = '\0'; }
+    InstOpMessage(uint32_t request_id_, uint8_t slot_, uint8_t op_, const char* path_)
+        : request_id(request_id_), slot(slot_), op(op_), reserved(0) {
+        detail::CopyWireString(path, sizeof(path), path_);
+    }
+} __attribute__((packed));
+
+// MSG_INST_STATUS (D->E). Byte counts describe resident WAV audio data, not
+// the small SFZ text file. During loading current_* identifies the individual
+// WAV while loaded_bytes/total_bytes drives the overall progress bar.
+struct InstStatusMessage {
+    uint32_t request_id;
+    uint8_t slot;
+    uint8_t op;     // InstOpCode
+    uint8_t state;  // InstStatusState
+    uint8_t flags;  // InstStatusFlags
+    uint8_t error;  // InstError
+    uint8_t zone_count;
+    uint8_t sample_count;
+    uint8_t current_index;  // zero based
+    uint8_t missing_count;
+    uint8_t invalid_count;
+    uint16_t reserved;
+    uint32_t total_bytes;
+    uint32_t available_bytes;
+    uint32_t loaded_bytes;
+    uint32_t current_bytes;
+    uint32_t current_loaded_bytes;
+    char current_name[FILE_NAME_MAX];
+
+    InstStatusMessage()
+        : request_id(0),
+          slot(0),
+          op(0),
+          state(0),
+          flags(0),
+          error(0),
+          zone_count(0),
+          sample_count(0),
+          current_index(0),
+          missing_count(0),
+          invalid_count(0),
+          reserved(0),
+          total_bytes(0),
+          available_bytes(0),
+          loaded_bytes(0),
+          current_bytes(0),
+          current_loaded_bytes(0) {
+        current_name[0] = '\0';
+    }
+} __attribute__((packed));
+
+static_assert(sizeof(InstOpMessage) <= 122, "instrument request must fit a 128-byte packet");
+static_assert(sizeof(InstStatusMessage) <= 122, "instrument status must fit a 128-byte packet");
+
 // Largest PKT_SIZE_* class; sizes staging buffers for packet assembly.
 static const size_t MAX_PKT_SIZE = 2048;
 
@@ -1560,6 +1660,12 @@ inline const char* MessageTypeName(uint8_t type) {
             return "MIDI_CC";
         case MSG_SEQ_CLOCK_OUT:
             return "SEQ_CLOCK_OUT";
+        case MSG_INST_OP:
+            return "INST_OP";
+        case MSG_INST_STATUS:
+            return "INST_STATUS";
+        case MSG_INST_ZONE_SYNC:
+            return "INST_ZONE_SYNC";
         case MSG_ERROR:
             return "ERROR";
         default:
