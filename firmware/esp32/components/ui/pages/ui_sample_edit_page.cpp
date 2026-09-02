@@ -73,6 +73,15 @@ constexpr int kCardW = 305;
 constexpr int kCardH = 132;
 constexpr int kCardPitch = 317;
 constexpr int kGaugeW = 273;
+// Splice-view geometry, inside the waveform panel's 4 px padding.
+constexpr int kWaveInnerW = kWaveW - 8;
+constexpr int kWaveInnerH = kWaveH - 8;
+constexpr int kSeamW = 2;
+constexpr int kSpliceHalfW = (kWaveInnerW - kSeamW) / 2;
+// One envelope column per pixel of a half. More would be discarded by
+// rasterisation, and this view is about alignment rather than detail.
+constexpr uint16_t kSpliceColumns = static_cast<uint16_t>(kSpliceHalfW);
+
 constexpr int kInfoY = 434;
 constexpr int kInfoH = 88;
 
@@ -203,7 +212,30 @@ void UISampleEditPage::buildWaveformPanel(lv_obj_t* parent) {
     lv_obj_set_style_border_color(panel, lv_color_hex(kColBorder), 0);
     lv_obj_set_style_pad_all(panel, 4, 0);
 
+    wave_panel_ = panel;
     waveform_ = std::make_unique<WaveformView>(panel, lv_pct(100), lv_pct(100));
+
+    // Splice pair, built alongside the continuous view and hidden until a loop
+    // marker is focused. Building both up front keeps the swap to a visibility
+    // change: creating widgets on a mode switch would put an allocation and a
+    // layout pass in the middle of an encoder turn.
+    splice_left_ = std::make_unique<WaveformView>(panel, kSpliceHalfW, kWaveInnerH);
+    lv_obj_set_pos(splice_left_->root(), 0, 0);
+    splice_right_ = std::make_unique<WaveformView>(panel, kSpliceHalfW, kWaveInnerH);
+    lv_obj_set_pos(splice_right_->root(), kSpliceHalfW + kSeamW, 0);
+
+    // The seam itself, in the region-end colour: what is to its left is the
+    // audio that plays last before the loop wraps.
+    splice_seam_ = box(panel, kSpliceHalfW, 0, kSeamW, kWaveInnerH, kColOrange);
+
+    // Name the view. A splice looks like an ordinary waveform with an
+    // unexplained line down it unless it says otherwise, and the whole point
+    // of this page's channel labelling was not to leave that ambiguous.
+    splice_label_ = label(panel, 8, 4, "LOOP SEAM   end |  start", &lv_font_montserrat_14, kColDim);
+
+    for (lv_obj_t* o: {splice_left_->root(), splice_right_->root(), splice_seam_, splice_label_}) {
+        lv_obj_add_flag(o, LV_OBJ_FLAG_HIDDEN);
+    }
 
     // Region handles: 30x26 tabs on the top edge, S green / E orange, matching
     // the marker colours the browser's preview already uses.
@@ -717,6 +749,11 @@ void UISampleEditPage::refreshParams() {
 
     layoutParamStrip();
 
+    // Turning Loop off while a loop marker is focused has to drop the seam
+    // view, and that path sets params_dirty_ rather than touching focus - so
+    // the mode is re-evaluated here as well as on focus changes.
+    updateWaveformMode();
+
     // Handles are placed against the ZOOM window, which is what the waveform
     // beneath them shows. A marker outside the window parks at the edge rather
     // than disappearing, so it stays reachable.
@@ -909,6 +946,10 @@ void UISampleEditPage::onHandleDrag(lv_event_t* e, lv_obj_t* target) {
 }
 
 void UISampleEditPage::refreshFocusRing() {
+    // Focus decides whether the seam is on screen, and every focus change
+    // comes through here - the encoder, the < Param / Param > keys and a
+    // handle drag all call it.
+    updateWaveformMode();
     for (uint8_t i = 0; i < PARAM_COUNT; i++) {
         if (!cards_[i].card) {
             continue;
@@ -1021,8 +1062,119 @@ void UISampleEditPage::serviceUi() {
     }
 }
 
+bool UISampleEditPage::spliceActive() const {
+    // "When editing a loop, show the seam" - so the view follows the focused
+    // parameter rather than a softkey. Both softkey rows are full, and a mode
+    // you have to remember to turn on is a mode that does not get used; this
+    // way focusing LS or LE is the gesture.
+    return has_sample_ && loop_enabled_ && (focus_ == PARAM_LOOP_START || focus_ == PARAM_LOOP_END);
+}
+
+uint32_t UISampleEditPage::spliceHalfSpan() const {
+    if (total_frames_ == 0 || loop_end_ <= loop_start_) {
+        return 0;
+    }
+    const uint32_t span = view_frames_ ? view_frames_ : total_frames_;
+    uint32_t half = span / 2;
+
+    // Both halves must cover the SAME number of frames, or the two waveforms
+    // are at different scales and cannot be aligned by eye - which is the only
+    // thing this view is for. So the span shrinks to whatever both sides can
+    // supply rather than each side showing as much as it happens to have.
+    half = std::min(half, loop_end_);
+    half = std::min(half, total_frames_ - loop_start_);
+    return half ? half : 1;
+}
+
+void UISampleEditPage::updateWaveformMode() {
+    if (!waveform_ || !splice_left_ || !splice_right_) {
+        return;
+    }
+    const bool splice = spliceActive();
+    if (splice == splice_shown_) {
+        return;  // called on every focus change; only act on a real switch
+    }
+    splice_shown_ = splice;
+
+    const auto set_hidden = [](lv_obj_t* o, bool hidden) {
+        if (!o) {
+            return;
+        }
+        if (hidden) {
+            lv_obj_add_flag(o, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_remove_flag(o, LV_OBJ_FLAG_HIDDEN);
+        }
+    };
+
+    set_hidden(waveform_->root(), splice);
+    set_hidden(splice_left_->root(), !splice);
+    set_hidden(splice_right_->root(), !splice);
+    set_hidden(splice_seam_, !splice);
+    set_hidden(splice_label_, !splice);
+
+    // The region handles describe positions in the continuous view and mean
+    // nothing against a seam, so they go with it rather than sitting over a
+    // view whose x axis they do not share.
+    for (lv_obj_t* handle: {marker_s_, marker_e_, marker_ls_, marker_le_}) {
+        set_hidden(handle, splice);
+    }
+
+    // The view that just appeared holds whatever it was last given, which for
+    // the seam pair is a different pair of windows entirely. Redraw from the
+    // cache now, and ask for anything it does not hold - through the existing
+    // settle delay, so flicking across the loop params does not queue a
+    // request per step.
+    waveform_dirty_.store(true, std::memory_order_relaxed);
+    request_due_ms_ = (uint32_t)(esp_timer_get_time() / 1000) + kRequestSettleMs;
+}
+
+void UISampleEditPage::drawSplice() {
+    if (!splice_left_ || !splice_right_ || display_columns_.empty()) {
+        return;
+    }
+    const uint32_t half = spliceHalfSpan();
+    if (half == 0) {
+        return;
+    }
+    const uint16_t sample_id = currentSampleId();
+    const uint16_t generation = currentGeneration();
+
+    // Left: the audio that plays last before the wrap. Right: what it wraps to.
+    const uint32_t left_start = loop_end_ - half;
+    const uint32_t right_start = loop_start_;
+
+    uint8_t channels = 1;
+    if (GetEnvelopeCache().render(sample_id,
+                                  generation,
+                                  left_start,
+                                  loop_end_,
+                                  kSpliceColumns,
+                                  display_columns_.data(),
+                                  display_columns_.size(),
+                                  channels) > 0) {
+        splice_left_->setEnvelope(display_columns_.data(), kSpliceColumns, channels);
+    }
+
+    channels = 1;
+    if (GetEnvelopeCache().render(sample_id,
+                                  generation,
+                                  right_start,
+                                  right_start + half,
+                                  kSpliceColumns,
+                                  display_columns_.data(),
+                                  display_columns_.size(),
+                                  channels) > 0) {
+        splice_right_->setEnvelope(display_columns_.data(), kSpliceColumns, channels);
+    }
+}
+
 void UISampleEditPage::drawWaveform() {
     if (!waveform_ || display_columns_.empty()) {
+        return;
+    }
+    if (spliceActive()) {
+        drawSplice();
         return;
     }
     const uint32_t span = view_frames_ ? view_frames_ : total_frames_;
@@ -1054,12 +1206,39 @@ void UISampleEditPage::requestWaveform() {
     const uint32_t span = view_frames_ ? view_frames_ : total_frames_;
     const uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
 
-    switch (fetcher_.request(currentSampleId(),
-                             currentGeneration(),
-                             view_start_,
-                             view_start_ + span,
-                             total_frames_,
-                             now)) {
+    uint32_t win_start = view_start_;
+    uint32_t win_end = view_start_ + span;
+    EnvelopeFetcher::Request result = EnvelopeFetcher::Request::AlreadyCached;
+
+    if (spliceActive()) {
+        // Two windows, one fetcher. Ask for the left; if it is already cached,
+        // fall through to the right in the same pass. A run in flight answers
+        // Busy and serviceUi() re-enters here when it lands, so the pair fills
+        // in over two commits rather than needing a second fetcher.
+        const uint32_t half = spliceHalfSpan();
+        if (half == 0) {
+            return;
+        }
+        result = fetcher_.request(currentSampleId(),
+                                  currentGeneration(),
+                                  loop_end_ - half,
+                                  loop_end_,
+                                  total_frames_,
+                                  now);
+        if (result == EnvelopeFetcher::Request::AlreadyCached) {
+            result = fetcher_.request(currentSampleId(),
+                                      currentGeneration(),
+                                      loop_start_,
+                                      loop_start_ + half,
+                                      total_frames_,
+                                      now);
+        }
+    } else {
+        result = fetcher_.request(
+            currentSampleId(), currentGeneration(), win_start, win_end, total_frames_, now);
+    }
+
+    switch (result) {
         case EnvelopeFetcher::Request::AlreadyCached:
             waveform_dirty_.store(true, std::memory_order_relaxed);
             break;

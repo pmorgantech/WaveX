@@ -68,7 +68,23 @@ class UISampleEditPage : public UIPage {
     lv_obj_t* marker_ls_ = nullptr;
     lv_obj_t* marker_le_ = nullptr;
 
+    lv_obj_t* wave_panel_ = nullptr;
     std::unique_ptr<class WaveformView> waveform_;
+
+    // Loop splice view (roadmap 1.5.6 item 1): the audio just BEFORE loop_end
+    // on the left and just AFTER loop_start on the right, butted at a centre
+    // seam - what the loop will actually sound like where it wraps. Two
+    // ordinary WaveformViews rather than a mode inside one: each half is a
+    // normal envelope render, so stacked L/R and everything else it already
+    // does come along unchanged, and the widget's tests keep covering it.
+    std::unique_ptr<class WaveformView> splice_left_;
+    std::unique_ptr<class WaveformView> splice_right_;
+    lv_obj_t* splice_seam_ = nullptr;
+    lv_obj_t* splice_label_ = nullptr;
+    /// What the panel is currently showing, so a mode change can be detected
+    /// and turned into a redraw plus a fetch of the two new windows.
+    bool splice_shown_ = false;
+
     bool has_sample_ = false;
 
     // The envelope run in flight, including the staging buffer, the
@@ -153,6 +169,15 @@ class UISampleEditPage : public UIPage {
     void refreshParams();
     void refreshFocusRing();
     void requestWaveform();
+
+    /// True while the panel should show the loop seam rather than the region.
+    bool spliceActive() const;
+    /// Frames either side of the seam. Equal on both halves so the two can be
+    /// compared by eye; 0 when there is nothing sensible to show.
+    uint32_t spliceHalfSpan() const;
+    /// Swaps the panel between the continuous view and the splice pair.
+    void updateWaveformMode();
+    void drawSplice();
 
     /// Touch handling for the four region/loop handles.
     static void handleEventCb(lv_event_t* e);

@@ -13,6 +13,15 @@ versioning and release process.
 
 ### Added
 
+- Added the **loop splice view** to the sample edit page (roadmap 1.5.6 item 1):
+  the audio before `loop_end` on the left and from `loop_start` on the right,
+  butted at a centre seam, so a loop can be aligned by eye — the only way to
+  see a discontinuity that exists between two distant points. It appears when a
+  loop marker is focused with Loop on, and both halves always span the same
+  number of frames, so they stay comparable even near the start or end of a
+  file. Built from two ordinary `WaveformView`s, so stacked L/R traces apply to
+  each half and a seam can be judged per channel.
+
 - The sample edit page's four marker handles (S, E, LS, LE) are now
   **touch-draggable** (roadmap 1.5.2 item 2), not encoder-only. Each is bounded
   by its neighbours so it stops against them instead of pushing them along, the
