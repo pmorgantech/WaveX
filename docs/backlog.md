@@ -890,9 +890,10 @@ other.
 **Found 2026-09-02 while scoping a Voice/Play-page slot selector.**
 `InstrumentBank` is shaped for 16 simultaneous slots (`Instrument
 slots_[kNumInstrumentSlots]`), but `SfzLoader`'s runtime load pipeline is not:
-`ConfirmVoicesStopped()` unconditionally resets the *whole* bank and clears
-the *whole* sample table before installing the newly-loaded instrument into
-its one target slot —
+`ConfirmVoicesStopped()` clears the *whole* sample table before installing
+the newly-loaded instrument into its one target slot — and, until the
+2026-09-02 branch unification narrowed it to the slot being replaced, reset
+the *whole* bank too:
 
 ```cpp
 s_bank = InstrumentBank{};        // wipes ALL 16 slots, not just the one being replaced
@@ -906,6 +907,19 @@ slot 1; it evicts slot 1 entirely (releases its sample RAM, clears its zones).
 True multi-timbral operation — different sounds bound to different
 channels/slots at once — does not exist yet at the runtime level, regardless
 of the 16-slot storage shape suggesting otherwise.
+
+**Narrowed 2026-09-02** by the `OnNoteOn` branch unification (roadmap Phase
+2.5 item 1): the bank reset is now scoped to the one slot that held the
+import, so a bare sample bound to another slot (`SfzLoader::BindSample`,
+origin `Built`, resolving against the WAV registry rather than the SFZ
+table) survives an import and *is* a second resident instrument in every
+sense but memory ownership. What remains single-residency is exactly the
+import: one `s_bound_slot`, one `s_sample_table`, one `s_loaded_samples[]`.
+A visible consequence: `MSG_SAMPLE_SELECT` onto the slot holding an import
+is **refused with a log line** rather than shadowed or honoured — honouring
+it would need the import's samples released through the voice-stop
+handshake, which is the slot-scoped release this entry describes. Until
+then the way to free that slot is to load an `.sfz` into a different one.
 
 **Why it is not urgent:** the immediate UI need (a slot selector so the Voice
 and Play pages, and the Sample Browser, can each address a chosen channel)

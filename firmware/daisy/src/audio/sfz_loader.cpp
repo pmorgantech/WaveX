@@ -42,6 +42,14 @@ enum class Phase : uint8_t {
 
 static InstrumentBank s_bank;
 static Sfz::SampleTable s_sample_table;
+// Resolver for Built instruments (BindSample). Registered by the engine
+// because the registry it reads lives there; a default-constructed one
+// resolves nothing, so an unregistered engine drops rather than crashes.
+static SampleResolver s_loaded_resolver;
+// The one slot holding an SFZ-imported instrument, whose samples
+// s_loaded_samples/s_sample_table hold. Built instruments on other slots do
+// not use this; see docs/backlog.md "Only one instrument slot can be
+// resident at a time" for why an import is still single-residency.
 static int8_t s_bound_slot = -1;
 static uint32_t s_active_bytes = 0;
 static uint8_t s_active_count = 0;
@@ -261,7 +269,13 @@ void ConfirmVoicesStopped(SampleMemMgr& memory) {
     if (s_active_count > 0) {
         ReleaseRange(memory, s_loaded_samples, s_active_count);
     }
-    s_bank = InstrumentBank{};
+    // Scoped to the slot whose samples were just released: a Built
+    // instrument on another slot references the WAV registry, not this
+    // memory, and must survive an import elsewhere. (Its mod slots too -
+    // the old whole-bank reset wiped those as a side effect.)
+    if (s_bound_slot >= 0) {
+        s_bank.Slot(static_cast<uint8_t>(s_bound_slot)) = Instrument{};
+    }
     s_sample_table.Clear();
     s_bound_slot = -1;
     s_active_count = 0;
@@ -496,14 +510,90 @@ bool Load(const char* path,
 }
 
 bool SlotLoaded(uint8_t slot) {
-    return s_bound_slot >= 0 && slot == static_cast<uint8_t>(s_bound_slot);
+    return slot < kNumInstrumentSlots && s_bank.Slot(slot).origin != InstrumentOrigin::None;
 }
 
-uint8_t ResolveNote(
-    uint8_t slot, uint8_t note, uint8_t velocity, VoiceTriggerParams* out, uint8_t max) {
-    if (!SlotLoaded(slot))
+void SetLoadedSampleResolver(const SampleResolver& resolver) {
+    s_loaded_resolver = resolver;
+}
+
+bool BindSample(uint8_t slot, uint16_t sample_id, uint8_t root_note) {
+    if (slot >= kNumInstrumentSlots)
+        return false;
+    Instrument& ins = s_bank.Slot(slot);
+    if (ins.origin == InstrumentOrigin::SfzImport)
+        return false;
+    // Zones only: the mod slots are the user's, set through their own op,
+    // and rebinding what sample plays is not a reason to lose them.
+    for (auto& zone: ins.zones) {
+        zone = Zone{};
+    }
+    if (sample_id == 0) {
+        ins.origin = InstrumentOrigin::None;
+        return true;
+    }
+    Zone& zone = ins.zones[0];
+    zone.sample_id = sample_id;
+    zone.root_note = root_note;
+    zone.flags = ZONE_FLAG_LIVE_FILTER_ENV;
+    zone.in_use = true;
+    ins.mode = InstrumentMode::Keyboard;
+    ins.origin = InstrumentOrigin::Built;
+    return true;
+}
+
+uint16_t BoundSample(uint8_t slot) {
+    if (slot >= kNumInstrumentSlots)
         return 0;
-    return s_bank.ResolveNote(slot, note, velocity, s_sample_table.Resolver(), out, max);
+    const Instrument& ins = s_bank.Slot(slot);
+    if (ins.origin != InstrumentOrigin::Built)
+        return 0;
+    for (const auto& zone: ins.zones) {
+        if (zone.in_use)
+            return zone.sample_id;
+    }
+    return 0;
+}
+
+void ForgetLoadedSample(uint16_t sample_id) {
+    if (sample_id == 0)
+        return;
+    for (uint8_t slot = 0; slot < kNumInstrumentSlots; ++slot) {
+        Instrument& ins = s_bank.Slot(slot);
+        if (ins.origin != InstrumentOrigin::Built)
+            continue;
+        bool any_left = false;
+        for (auto& zone: ins.zones) {
+            if (zone.in_use && zone.sample_id == sample_id) {
+                zone = Zone{};
+            }
+            any_left = any_left || zone.in_use;
+        }
+        if (!any_left) {
+            ins.origin = InstrumentOrigin::None;
+        }
+    }
+}
+
+uint8_t ResolveNote(uint8_t slot,
+                    uint8_t note,
+                    uint8_t velocity,
+                    const VoiceLiveParams* live,
+                    VoiceTriggerParams* out,
+                    uint8_t max) {
+    if (slot >= kNumInstrumentSlots)
+        return 0;
+    const Instrument& ins = s_bank.Slot(slot);
+    switch (ins.origin) {
+        case InstrumentOrigin::SfzImport:
+            return s_bank.ResolveNote(
+                slot, note, velocity, s_sample_table.Resolver(), out, max, live);
+        case InstrumentOrigin::Built:
+            return s_bank.ResolveNote(slot, note, velocity, s_loaded_resolver, out, max, live);
+        case InstrumentOrigin::None:
+        default:
+            return 0;
+    }
 }
 
 bool SetModSlot(uint8_t slot, uint8_t mod_slot_index, const ModSlot& value) {

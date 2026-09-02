@@ -408,3 +408,157 @@ TEST(InstrumentTest, ModSlotsAreIndependentPerInstrumentAndPerSlotIndex) {
     EXPECT_EQ(bank.Slot(2).mod_slots[3].dest, DEST_CUTOFF);
     EXPECT_EQ(bank.Slot(2).mod_slots[3].depth, 12345);
 }
+
+// --- Sample-record inheritance and the live-params flag ------------------
+//
+// These pin the two things a bare sample bound to a slot (SfzLoader::
+// BindSample, roadmap Phase 2.5 item 1's unification) needs from the
+// resolution path that an SFZ import never did: a zone that leaves its
+// region/loop/gain at 0 inherits the SampleRef's own record (the sidecar
+// markers the editor auditioned), and a zone flagged LIVE_FILTER_ENV takes
+// filter/ADSR from VoiceLiveParams at trigger time rather than its own
+// fields. Both are what let OnNoteOn's old bare-WAV branch be deleted
+// without changing what a pad plays.
+
+namespace {
+
+// A resolver whose SampleRef carries a full playback record.
+struct MarkedSampleBank {
+    std::array<int16_t, 200> data{};
+
+    static SampleRef Resolve(const void* ctx, uint16_t sample_id) {
+        auto* self = static_cast<const MarkedSampleBank*>(ctx);
+        if (sample_id == 0)
+            return SampleRef{};
+        SampleRef r;
+        r.data = self->data.data();
+        r.frames = 200;
+        r.channels = 1;
+        r.sample_rate_hz = 48000;
+        r.start_frame = 10;
+        r.end_frame = 150;
+        r.loop_enabled = true;
+        r.loop_start = 20;
+        r.loop_end = 140;
+        r.fade_in_ms = 5;
+        r.fade_out_ms = 7;
+        r.gain_mul = 0.5f;
+        return r;
+    }
+
+    SampleResolver Resolver() const { return SampleResolver{this, &Resolve}; }
+};
+
+}  // namespace
+
+TEST(InstrumentTest, ZoneInheritsSampleRecordWhereItLeavesZero) {
+    Instrument ins;
+    ins.zones[0] = MakeZone(1, 0, 127, 1, 127);  // region/loop/gain untouched
+    MarkedSampleBank samples;
+    VoiceTriggerParams out[kMaxLayerTriggers];
+
+    ASSERT_EQ(ResolveNoteOn(ins, 0, 60, 100, samples.Resolver(), out, kMaxLayerTriggers), 1);
+    EXPECT_EQ(out[0].start_frame, 10u);
+    EXPECT_EQ(out[0].end_frame, 150u);
+    EXPECT_TRUE(out[0].loop);
+    EXPECT_EQ(out[0].loop_start, 20u);
+    EXPECT_EQ(out[0].loop_end, 140u);
+    EXPECT_EQ(out[0].fade_in_ms, 5);
+    EXPECT_EQ(out[0].fade_out_ms, 7);
+    // zone.gain (1) x xfade (1) x the record's gain.
+    EXPECT_FLOAT_EQ(out[0].gain_mul, 0.5f);
+}
+
+TEST(InstrumentTest, ZoneOverridesSampleRecordWhereItSetsAValue) {
+    Instrument ins;
+    Zone z = MakeZone(1, 0, 127, 1, 127);
+    z.start_frame = 30;
+    z.end_frame = 80;
+    z.loop_start = 40;
+    z.loop_end = 70;
+    z.loop_mode = ZONE_LOOP_OFF;  // explicit off beats the record's loop
+    z.gain = 2.0f;
+    ins.zones[0] = z;
+    MarkedSampleBank samples;
+    VoiceTriggerParams out[kMaxLayerTriggers];
+
+    ASSERT_EQ(ResolveNoteOn(ins, 0, 60, 100, samples.Resolver(), out, kMaxLayerTriggers), 1);
+    EXPECT_EQ(out[0].start_frame, 30u);
+    EXPECT_EQ(out[0].end_frame, 80u);
+    EXPECT_FALSE(out[0].loop);
+    EXPECT_EQ(out[0].loop_start, 40u);
+    EXPECT_EQ(out[0].loop_end, 70u);
+    EXPECT_FLOAT_EQ(out[0].gain_mul, 1.0f);  // 2.0 x 0.5
+
+    // Forward loops regardless of what the record says.
+    ins.zones[0].loop_mode = ZONE_LOOP_FORWARD;
+    FakeSampleBank plain;  // no loop in its record
+    ASSERT_EQ(ResolveNoteOn(ins, 0, 60, 100, plain.Resolver(), out, kMaxLayerTriggers), 1);
+    EXPECT_TRUE(out[0].loop);
+}
+
+TEST(InstrumentTest, ResolverWithoutRecordLeavesWholeSampleNoLoopUnity) {
+    // An SFZ import's SampleTable carries no record: the previous behaviour
+    // (0 => whole sample, no loop, unity) must be exactly preserved.
+    Instrument ins;
+    ins.zones[0] = MakeZone(1, 0, 127, 1, 127);
+    FakeSampleBank samples;
+    VoiceTriggerParams out[kMaxLayerTriggers];
+
+    ASSERT_EQ(ResolveNoteOn(ins, 0, 60, 100, samples.Resolver(), out, kMaxLayerTriggers), 1);
+    EXPECT_EQ(out[0].start_frame, 0u);
+    EXPECT_EQ(out[0].end_frame, 0u);
+    EXPECT_FALSE(out[0].loop);
+    EXPECT_EQ(out[0].fade_in_ms, 0);
+    EXPECT_EQ(out[0].fade_out_ms, 0);
+    EXPECT_FLOAT_EQ(out[0].gain_mul, 1.0f);
+}
+
+TEST(InstrumentTest, LiveFilterEnvFlagReadsLiveParamsAtTrigger) {
+    Instrument ins;
+    Zone z = MakeZone(1, 0, 127, 1, 127);
+    z.cutoff_hz = 3000.0f;
+    z.attack_s = 0.9f;
+    z.flags = ZONE_FLAG_LIVE_FILTER_ENV;
+    ins.zones[0] = z;
+    FakeSampleBank samples;
+    VoiceTriggerParams out[kMaxLayerTriggers];
+
+    VoiceLiveParams live;
+    live.filter_cutoff_hz = 1234.0f;
+    live.filter_resonance = 0.3f;
+    live.attack_s = 0.2f;
+    live.decay_s = 0.3f;
+    live.sustain_level = 0.4f;
+    live.release_s = 0.5f;
+
+    ASSERT_EQ(ResolveNoteOn(ins, 0, 60, 100, samples.Resolver(), out, kMaxLayerTriggers, &live), 1);
+    EXPECT_FLOAT_EQ(out[0].filter_cutoff_hz, 1234.0f);
+    EXPECT_FLOAT_EQ(out[0].filter_resonance, 0.3f);
+    EXPECT_FLOAT_EQ(out[0].attack_s, 0.2f);
+    EXPECT_FLOAT_EQ(out[0].decay_s, 0.3f);
+    EXPECT_FLOAT_EQ(out[0].sustain_level, 0.4f);
+    EXPECT_FLOAT_EQ(out[0].release_s, 0.5f);
+
+    // No live state offered: the zone's own fields, not garbage.
+    ASSERT_EQ(ResolveNoteOn(ins, 0, 60, 100, samples.Resolver(), out, kMaxLayerTriggers), 1);
+    EXPECT_FLOAT_EQ(out[0].filter_cutoff_hz, 3000.0f);
+    EXPECT_FLOAT_EQ(out[0].attack_s, 0.9f);
+
+    // Flag clear: live state offered but ignored - the zone owns its values.
+    ins.zones[0].flags = 0;
+    ASSERT_EQ(ResolveNoteOn(ins, 0, 60, 100, samples.Resolver(), out, kMaxLayerTriggers, &live), 1);
+    EXPECT_FLOAT_EQ(out[0].filter_cutoff_hz, 3000.0f);
+    EXPECT_FLOAT_EQ(out[0].attack_s, 0.9f);
+}
+
+TEST(InstrumentTest, FreshInstrumentHasNoOrigin) {
+    // Origin::None is what makes an unbound slot drop its notes: nothing to
+    // resolve against, rather than a guess at a registry.
+    Instrument ins;
+    EXPECT_EQ(ins.origin, InstrumentOrigin::None);
+    InstrumentBank bank;
+    for (uint8_t s = 0; s < kNumInstrumentSlots; ++s) {
+        EXPECT_EQ(bank.Slot(s).origin, InstrumentOrigin::None);
+    }
+}

@@ -57,6 +57,37 @@ versioning and release process.
 
 ### Changed
 
+- Unified `OnNoteOn`'s two branches (roadmap Phase 2.5 item 1, the part left
+  open by the fallback retirement below): a bare sample bound to a slot with
+  `MSG_SAMPLE_SELECT` is now a one-zone Keyboard `Instrument` in
+  `SfzLoader`'s bank (`SfzLoader::BindSample()`) and resolves through exactly
+  the `InstrumentBank::ResolveNote()` path an `.sfz` import uses, so the note
+  path has one branch and no hardcoded root note - it is the zone's
+  `root_note`. To carry the old branch's behaviour across as zone/resolver
+  state rather than special cases: `SampleRef` gained the sample record's
+  resolved region/loop/fades/gain, which a zone inherits wherever it leaves
+  its own field at 0 (`instrument-model.md` §2's rule, now implemented;
+  `Zone::loop_mode` distinguishes an explicit `ZONE_LOOP_OFF` from
+  `ZONE_LOOP_INHERIT`, and the SFZ mapper emits Off for `no_loop`);
+  `ZONE_FLAG_LIVE_FILTER_ENV` makes a zone take filter/ADSR from
+  `VoiceLiveParams` at trigger (`ResolveNoteOn()` takes an optional `live`
+  pointer); and `Instrument::origin` (`None`/`SfzImport`/`Built`) says which
+  sample-id registry a zone's ids index - the SFZ table or the engine's WAV
+  registry, whose ids overlap - so `SfzLoader::ResolveNote()` picks the SFZ
+  table or a bridging resolver the engine registers with
+  `SetLoadedSampleResolver()`. This settles the `SampleResolver` question
+  `instrument-model.md` §12.1 had deferred. `audio_engine.cpp`'s parallel
+  `s_slot_sample_id[]` registry is gone (`SelectSample`/`SelectedSample`
+  delegate to `BindSample`/`BoundSample`; `UnloadSample` calls
+  `ForgetLoadedSample`). Two behaviour changes: note-offs on a bare-bound
+  slot are now slot-scoped like an import's, and the SFZ-replacement bank
+  reset is scoped to the slot being replaced, so bare bindings and mod slots
+  on other slots survive an import (previously wiped). One refusal: binding
+  a bare sample over a slot holding an SFZ import is rejected with a log line
+  rather than silently shadowed - see `docs/backlog.md`'s residency entry.
+  5 new `instrument_test` cases + 1 `sfz_import_test`; full Daisy host suite
+  (410) green; Daisy device build green. Not yet verified on hardware.
+
 - The Play page's parameter cycle gained a Slot control (0..15): notes now go
   out on the selected instrument slot instead of hardcoded channel 0. The
   Sample Manager page gained a Slot selector (Shift+Slot -/+) and its Select

@@ -152,6 +152,9 @@ TEST(SfzMapperTest, MapsSupportedOpcodesAndUnitConversions) {
                      "ampeg_decay=0.2 ampeg_sustain=75 ampeg_release=0.4 sample=tone.wav"});
 
     ASSERT_EQ(mapped.zone_count, 1);
+    // An import's ids index the loader's SampleTable, not the WAV registry;
+    // the origin is what tells SfzLoader::ResolveNote() which one to use.
+    EXPECT_EQ(mapped.instrument.origin, InstrumentOrigin::SfzImport);
     const Zone& zone = mapped.instrument.zones[0];
     EXPECT_EQ(zone.key_lo, 60);
     EXPECT_EQ(zone.key_hi, 60);
@@ -166,7 +169,7 @@ TEST(SfzMapperTest, MapsSupportedOpcodesAndUnitConversions) {
     EXPECT_EQ(zone.end_frame, 1000u);
     EXPECT_EQ(zone.loop_start, 100u);
     EXPECT_EQ(zone.loop_end, 900u);
-    EXPECT_EQ(zone.loop_mode, 1);
+    EXPECT_EQ(zone.loop_mode, ZONE_LOOP_FORWARD);
     EXPECT_EQ(zone.choke_group, 3);
     EXPECT_FLOAT_EQ(zone.cutoff_hz, 8000.0f);
     EXPECT_FLOAT_EQ(zone.attack_s, 0.01f);
@@ -238,8 +241,16 @@ TEST(SfzMapperTest, ClampsExtremeGainAndEnvelopeValuesToFiniteBounds) {
 TEST(SfzMapperTest, OneShotSetsZoneFlagWithoutLooping) {
     const MappedInstrument mapped = ParseAndMap({"<region> loop_mode=one_shot sample=hit.wav"});
     ASSERT_EQ(mapped.zone_count, 1);
-    EXPECT_EQ(mapped.instrument.zones[0].loop_mode, 0);
+    EXPECT_EQ(mapped.instrument.zones[0].loop_mode, ZONE_LOOP_INHERIT);
     EXPECT_NE(mapped.instrument.zones[0].flags & ZONE_FLAG_ONE_SHOT, 0);
+}
+
+TEST(SfzMapperTest, NoLoopIsAnExplicitOffNotInherit) {
+    // An explicit no_loop must stay off even if the resolved sample carried
+    // its own loop points; only an unset loop_mode inherits them.
+    const MappedInstrument mapped = ParseAndMap({"<region> loop_mode=no_loop sample=hit.wav"});
+    ASSERT_EQ(mapped.zone_count, 1);
+    EXPECT_EQ(mapped.instrument.zones[0].loop_mode, ZONE_LOOP_OFF);
 }
 
 TEST(SfzSamplePlanTest, DeduplicatesPathsAndAssignsStableIds) {

@@ -97,10 +97,13 @@ bool GetPlaybackPosition(uint32_t& frames_played, uint32_t& region_frames);
 void SetLoopGapMs(uint16_t gap_ms);
 
 // Which loaded sample plays on `slot` (0..15, MSG_NOTE_ON's channel & 0x0F -
-// param-locks-and-modulation.md's slot numbering). sample_id 0 clears that
+// param-locks-and-modulation.md's slot numbering). Binds it as a one-zone
+// Instrument in SfzLoader's bank (SfzLoader::BindSample) - the same
+// resolution path an .sfz import uses, so there is no separate bare-sample
+// note path any more (roadmap Phase 2.5 item 1). sample_id 0 clears that
 // slot's binding, so its note-on drops rather than falling back to any other
-// channel's or the most-recently-loaded sample (roadmap Phase 2.5 item 1,
-// "retire the fallback").
+// channel's or the most-recently-loaded sample. Refused with a log line when
+// the slot holds an SFZ import (see BindSample for why).
 void SelectSample(uint16_t sample_id, uint8_t slot);
 uint16_t SelectedSample(uint8_t slot);
 

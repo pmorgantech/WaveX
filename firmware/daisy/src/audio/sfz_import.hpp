@@ -706,6 +706,7 @@ inline bool MapDocument(const Document& document,
                         MappedInstrument& out,
                         Status& status) {
     out = MappedInstrument{};
+    out.instrument.origin = InstrumentOrigin::SfzImport;
     status = Status{};
     status.region_count = document.total_regions;
     status.unknown_opcodes = document.unknown_opcodes;
@@ -788,7 +789,9 @@ inline bool MapDocument(const Document& document,
                 static_cast<uint32_t>(source.loop_end.value < 0 ? 0 : source.loop_end.value);
         }
         if (source.loop_mode == LoopMode::Continuous || source.loop_mode == LoopMode::Sustain) {
-            zone.loop_mode = 1;
+            zone.loop_mode = ZONE_LOOP_FORWARD;
+        } else if (source.loop_mode == LoopMode::NoLoop) {
+            zone.loop_mode = ZONE_LOOP_OFF;
         } else if (source.loop_mode == LoopMode::OneShot) {
             zone.flags |= ZONE_FLAG_ONE_SHOT;
         }

@@ -576,18 +576,6 @@ static constexpr size_t kLoadedSampleCapacity = kMaxZones;
 static LoadedSampleInfo s_loaded_samples[kLoadedSampleCapacity];
 static size_t s_loaded_sample_count = 0;
 
-// Which loaded sample plays on each instrument slot's bare-WAV note-on path
-// (roadmap Phase 2.5 item 1, "retire the fallback"). Index by slot
-// (MSG_NOTE_ON's channel & 0x0F); 0 means that slot has nothing bound, so its
-// note-on drops - there is no more "any channel plays whatever's most
-// recently loaded" behaviour, which is what this array replaces.
-//
-// This is the bare-WAV analogue of SfzLoader's InstrumentBank: an SFZ
-// instrument bound to a slot always wins (OnNoteOn checks SlotLoaded() first)
-// and is unaffected by this array, so a slot is never resolved by both paths
-// at once.
-static uint16_t s_slot_sample_id[kNumInstrumentSlots] = {};
-
 static LoadedSampleInfo* find_loaded_sample(uint16_t sample_id) {
     for (size_t i = 0; i < s_loaded_sample_count; ++i) {
         auto& entry = s_loaded_samples[i];
@@ -596,6 +584,53 @@ static LoadedSampleInfo* find_loaded_sample(uint16_t sample_id) {
         }
     }
     return nullptr;
+}
+
+// "Playable" means resident PCM16, mono or stereo - the voice manager reads
+// int16 interleaved data directly; the load boundary rejects formats that do
+// not satisfy that contract.
+static bool sample_is_playable(const LoadedSampleInfo& e) {
+    return e.bit_depth == 16 && (e.channels == 1 || e.channels == 2);
+}
+
+// The SampleResolver for instruments built on-device (SfzLoader::BindSample)
+// - the bridge instrument-model.md §12.1 asks for, over this registry's ids.
+// Beyond the audio itself it hands over the sample's own resolved markers
+// and gain, so a zone that leaves its region/loop fields at 0 plays exactly
+// the region the editor auditioned: the same record every other playback
+// and display path reads (see LoadedSampleInfo::meta). Main-loop context
+// (OnNoteOn), same as the registry's other readers.
+static SampleRef ResolveLoadedSample(const void*, uint16_t sample_id) {
+    SampleRef ref;
+    const LoadedSampleInfo* src = find_loaded_sample(sample_id);
+    void* sample_ptr = nullptr;
+    if (!src || !sample_is_playable(*src) || !s_sample_mem_mgr.ptr(src->handle, &sample_ptr) ||
+        !sample_ptr) {
+        return ref;
+    }
+    const uint32_t bytes = src->loaded_bytes ? src->loaded_bytes : src->handle.len;
+    ref.data = static_cast<const int16_t*>(sample_ptr);
+    ref.frames = bytes / (2u * src->channels);
+    ref.channels = src->channels;
+    ref.sample_rate_hz = src->sample_rate;  // 44.1k content pitches correctly on 48k engine
+
+    WaveX::Protocol::SampleMetadata m = src->meta;
+    if (m.total_frames == 0) {
+        m.total_frames = ref.frames;
+    }
+    m.Resolve();
+    ref.start_frame = m.start_frame;
+    ref.end_frame = m.end_frame;
+    ref.loop_enabled = m.loop_enabled != 0;
+    ref.loop_start = m.loop_start;
+    ref.loop_end = m.loop_end;
+    ref.fade_in_ms = m.fade_in_ms;
+    ref.fade_out_ms = m.fade_out_ms;
+    // gain_mul is linear and multiplies the velocity gain, so the dB figure
+    // has to be converted here rather than passed through.
+    ref.gain_mul =
+        (m.gain_db_x10 == 0) ? 1.0f : std::pow(10.0f, static_cast<float>(m.gain_db_x10) / 200.0f);
+    return ref;
 }
 
 // Drops `sample_id` from the registry and returns its memory to the arena.
@@ -674,12 +709,20 @@ void SelectSample(uint16_t sample_id, uint8_t slot) {
         WaveX::Log::PrintLine("SAMPLE_SELECT: slot=%u out of range, ignored", (unsigned)slot);
         return;
     }
-    s_slot_sample_id[slot] = sample_id;
+    if (!SfzLoader::BindSample(slot, sample_id)) {
+        // The one refusal BindSample has for an in-range slot. Say so: a
+        // silently ignored Select is the kind of thing a bench session
+        // spends an hour on.
+        WaveX::Log::PrintLine(
+            "SAMPLE_SELECT: slot=%u holds an SFZ instrument - load it elsewhere first, ignored",
+            (unsigned)slot);
+        return;
+    }
     WaveX::Log::PrintLine("SAMPLE_SELECT: slot=%u id=%u", (unsigned)slot, (unsigned)sample_id);
 }
 
 uint16_t SelectedSample(uint8_t slot) {
-    return slot < kNumInstrumentSlots ? s_slot_sample_id[slot] : 0;
+    return SfzLoader::BoundSample(slot);
 }
 
 bool UnloadSample(uint16_t sample_id) {
@@ -715,17 +758,11 @@ bool UnloadSample(uint16_t sample_id) {
     __atomic_store_n(&s_voice_stop_all, true, __ATOMIC_RELEASE);
     System::Delay(10);
 
+    // A zone bound to what we are about to free must not keep resolving to
+    // a sample_id that no longer exists - drop the binding first rather than
+    // leave one that OnNoteOn would silently fail to resolve.
+    SfzLoader::ForgetLoadedSample(sample_id);
     remove_loaded_sample(sample_id);
-
-    // A slot bound to what we just freed must not keep resolving to a
-    // sample_id that no longer exists - clear every slot pointing at it
-    // rather than leave a stale binding that Render()'s trigger path would
-    // otherwise silently fail to find.
-    for (uint8_t slot = 0; slot < kNumInstrumentSlots; ++slot) {
-        if (s_slot_sample_id[slot] == sample_id) {
-            s_slot_sample_id[slot] = 0;
-        }
-    }
 
     WaveX::Log::PrintLine("SAMPLE_UNLOAD: id=%u freed (%u still loaded)",
                           (unsigned)sample_id,
@@ -1606,6 +1643,7 @@ void Init(DaisySeed& hw, float sample_rate, bool sdram_available) {
     s_rb_low_water = 0xFFFFFFFFu;
 
     SfzLoader::Reset();
+    SfzLoader::SetLoadedSampleResolver(SampleResolver{nullptr, &ResolveLoadedSample});
 
     WaveX::Profiling::InitHardware();
     PROFILE_REGISTER_ZONE(audio_callback);
@@ -2084,156 +2122,69 @@ void OnMidiCc(const MidiCcMessage& m) {
     s_seq_transport.OnMidiCc(m);
 }
 
-// Note-to-sample mapping policy for item 8: the most recently loaded
-// playable sample, treated as root note 60 (a kit/pad mapping concept
-// arrives with the Phase 2 sequencer). "Playable" means resident PCM16,
-// mono or stereo - the voice manager reads int16 interleaved data directly;
-// the load boundary rejects formats that do not satisfy that contract.
-static bool sample_is_playable(const LoadedSampleInfo& e) {
-    return e.bit_depth == 16 && (e.channels == 1 || e.channels == 2);
-}
-
-// The bare-WAV note-on path's sample lookup: exactly what `slot` is bound to
-// (SelectedSample()), or nothing. No "most recently loaded" fallback - a
-// slot with no binding stays silent rather than guessing, which is what
-// retiring the old any-channel fallback means (roadmap Phase 2.5 item 1).
-static const LoadedSampleInfo* find_playable_sample(uint8_t slot) {
-    const uint16_t bound_id = SelectedSample(slot);
-    if (bound_id == 0) {
-        return nullptr;
-    }
-    const LoadedSampleInfo* entry = find_loaded_sample(bound_id);
-    if (!entry || !sample_is_playable(*entry)) {
-        return nullptr;
-    }
-    return entry;
-}
-
 void OnNoteOn(const NoteMessage& note_msg) {
-    static constexpr uint8_t kDefaultRootNote = 60;
-
     const uint8_t slot = note_msg.channel & 0x0Fu;
     // A replacement has stopped the old voices and is about to release their
     // sample pointers. Do not queue a trigger resolved against that old table.
     if (SfzLoader::SlotLoading(slot)) {
         return;
     }
-    if (SfzLoader::SlotLoaded(slot)) {
-        VoiceTriggerParams params[kMaxLayerTriggers];
-        const uint8_t count = SfzLoader::ResolveNote(
-            slot, note_msg.note, note_msg.velocity, params, kMaxLayerTriggers);
-        for (uint8_t i = 0; i < count; ++i) {
-            NoteEvent event;
-            event.is_trigger = true;
-            event.note = note_msg.note;
-            event.slot = slot;
-            event.params = params[i];
-            if (!s_note_queue.Push(event)) {
-                WaveX::Log::PrintLine(
-                    "RX NOTE_ON: SFZ slot=%u note=%u layer=%u DROPPED - note queue full",
-                    (unsigned)slot,
-                    (unsigned)note_msg.note,
-                    (unsigned)i);
-                break;
-            }
+
+    // One resolution path for every kind of instrument (roadmap Phase 2.5
+    // item 1): an .sfz import and a bare sample bound with MSG_SAMPLE_SELECT
+    // are both Instruments in SfzLoader's bank, differing only in which
+    // sample registry their zones' ids index. The bare case is a one-zone
+    // Keyboard instrument whose zone inherits the sample's own markers/gain
+    // (ResolveLoadedSample) and takes filter/ADSR from the live params - so
+    // a note after a knob move still sounds like the sweep the user just
+    // heard, and the editor's auditioned region is what a pad plays.
+    VoiceTriggerParams params[kMaxLayerTriggers];
+    const uint8_t count = SfzLoader::ResolveNote(
+        slot, note_msg.note, note_msg.velocity, &s_voice_live_pending, params, kMaxLayerTriggers);
+    if (count == 0) {
+        // No s_hw guard: this is the one line that explains why the
+        // instrument is silent, and gating it behind a pointer that may be
+        // null is how a whole bench session went to working out whether
+        // notes were even arriving. It runs on the main loop, well after
+        // init. Two distinct reasons, named apart because they need
+        // different fixes.
+        if (!SfzLoader::SlotLoaded(slot)) {
+            WaveX::Log::PrintLine(
+                "  -> dropped: slot %u has no instrument loaded and no sample bound "
+                "(MSG_SAMPLE_SELECT; %u loaded)",
+                (unsigned)slot,
+                (unsigned)s_loaded_sample_count);
+        } else {
+            WaveX::Log::PrintLine(
+                "  -> dropped: slot %u has no zone for note=%u vel=%u with a resident sample",
+                (unsigned)slot,
+                (unsigned)note_msg.note,
+                (unsigned)note_msg.velocity);
         }
-#if WAVEX_MCU_LINK_PACKET_DEBUG
-        WaveX::Log::PrintLine("RX NOTE_ON: SFZ slot=%u note=%u vel=%u -> %u layers",
-                              (unsigned)slot,
-                              (unsigned)note_msg.note,
-                              (unsigned)note_msg.velocity,
-                              (unsigned)count);
-#endif
         return;
     }
 
-    const LoadedSampleInfo* src = find_playable_sample(slot);
-    void* sample_ptr = nullptr;
-    if (src && (!s_sample_mem_mgr.ptr(src->handle, &sample_ptr) || !sample_ptr)) {
-        src = nullptr;
-    }
-    if (!src) {
-        // Nothing playable bound to this slot: drop the note.
-        // A previous "test oscillator fallback" here set state on DSP
-        // objects Callback() never rendered - silent while claiming
-        // otherwise (review C2) - so it was removed rather than fixed;
-        // load a 16-bit sample and bind it (MSG_SAMPLE_SELECT) to verify the
-        // MIDI path end-to-end.
-        //
-        // No s_hw guard: this is the one line that explains why the instrument
-        // is silent, and gating it behind a pointer that may be null is how a
-        // whole bench session went to working out whether notes were even
-        // arriving. It runs on the main loop, well after init.
-        WaveX::Log::PrintLine(
-            "  -> dropped: slot %u has no instrument loaded and no sample bound "
-            "(MSG_SAMPLE_SELECT; %u loaded)",
-            (unsigned)slot,
-            (unsigned)s_loaded_sample_count);
-        return;
-    }
-
-    const uint32_t bytes = src->loaded_bytes ? src->loaded_bytes : src->handle.len;
-    const uint32_t bytes_per_frame = 2u * src->channels;
-
-    NoteEvent ev;
-    ev.is_trigger = true;
-    ev.note = note_msg.note;
-    ev.params.sample = static_cast<const int16_t*>(sample_ptr);
-    ev.params.sample_frames = bytes / bytes_per_frame;
-    ev.params.channels = src->channels;
-    ev.params.note = note_msg.note;
-    ev.params.velocity = note_msg.velocity;
-    ev.params.root_note = kDefaultRootNote;
-    ev.params.slot = slot;  // matches the SFZ path above, for the mixer/diagnostics
-    ev.params.sample_rate_hz = src->sample_rate;  // 44.1k content pitches correctly on 48k engine
-
-    // Filter and envelope come from the live base params, so a note triggered
-    // after a knob move sounds like the sweep the user just heard. Without
-    // this the trigger would reset every voice to the struct defaults and an
-    // edit would survive only until the next note.
-    ev.params.filter_cutoff_hz = s_voice_live_pending.filter_cutoff_hz;
-    ev.params.filter_resonance = s_voice_live_pending.filter_resonance;
-    ev.params.attack_s = s_voice_live_pending.attack_s;
-    ev.params.decay_s = s_voice_live_pending.decay_s;
-    ev.params.sustain_level = s_voice_live_pending.sustain_level;
-    ev.params.release_s = s_voice_live_pending.release_s;
-
-    // Markers and gain come from the sample's record, so a note-triggered
-    // voice plays exactly the region the editor auditioned. Previously
-    // VoiceManager ignored both and the same file sounded different depending
-    // on how it was triggered.
-    {
-        WaveX::Protocol::SampleMetadata m = src->meta;
-        if (m.total_frames == 0) {
-            m.total_frames = ev.params.sample_frames;
+    for (uint8_t i = 0; i < count; ++i) {
+        NoteEvent event;
+        event.is_trigger = true;
+        event.note = note_msg.note;
+        event.slot = slot;
+        event.params = params[i];
+        if (!s_note_queue.Push(event)) {
+            WaveX::Log::PrintLine("RX NOTE_ON: slot=%u note=%u layer=%u DROPPED - note queue full",
+                                  (unsigned)slot,
+                                  (unsigned)note_msg.note,
+                                  (unsigned)i);
+            break;
         }
-        m.Resolve();
-        ev.params.start_frame = m.start_frame;
-        ev.params.end_frame = m.end_frame;
-        ev.params.loop = m.loop_enabled != 0;
-        ev.params.loop_start = m.loop_start;
-        ev.params.loop_end = m.loop_end;
-        ev.params.fade_in_ms = m.fade_in_ms;
-        ev.params.fade_out_ms = m.fade_out_ms;
-        // gain_mul is linear and multiplies the velocity gain, so the dB
-        // figure has to be converted here rather than passed through.
-        ev.params.gain_mul = (m.gain_db_x10 == 0)
-                                 ? 1.0f
-                                 : std::pow(10.0f, static_cast<float>(m.gain_db_x10) / 200.0f);
     }
-
-    const bool queued = s_note_queue.Push(ev);
-    if (!queued && s_hw)
-        WaveX::Log::PrintLine("RX NOTE_ON: note=%u DROPPED - note queue full",
-                              (unsigned)note_msg.note);
 #if WAVEX_MCU_LINK_PACKET_DEBUG
-    if (queued && s_hw)
-        WaveX::Log::PrintLine("RX NOTE_ON: note=%u vel=%u ch=%u -> sample_id=%u (%lu frames)",
-                              (unsigned)note_msg.note,
-                              (unsigned)note_msg.velocity,
-                              (unsigned)note_msg.channel,
-                              (unsigned)src->sample_id,
-                              (unsigned long)ev.params.sample_frames);
+    WaveX::Log::PrintLine("RX NOTE_ON: slot=%u note=%u vel=%u -> %u layers (%lu frames)",
+                          (unsigned)slot,
+                          (unsigned)note_msg.note,
+                          (unsigned)note_msg.velocity,
+                          (unsigned)count,
+                          (unsigned long)params[0].sample_frames);
 #endif
 }
 
