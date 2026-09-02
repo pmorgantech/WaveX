@@ -13,6 +13,15 @@ versioning and release process.
 
 ### Added
 
+- The sample edit page's four marker handles (S, E, LS, LE) are now
+  **touch-draggable** (roadmap 1.5.2 item 2), not encoder-only. Each is bounded
+  by its neighbours so it stops against them instead of pushing them along, the
+  encoder focus follows the handle you drag, and edits are coalesced to ~12 Hz
+  during a drag rather than one per LVGL press event. The frontend now also
+  enforces the backend's 256-frame loop minimum: shorter loops were never
+  rejected, they silently cleared `loop_enabled`, so a tight loop could be
+  drawn as ON and then turn itself off a round trip later.
+
 - Added [`docs/spi-notes.md`](docs/spi-notes.md): what libDaisy 8.1 actually
   supports for SPI slave/DMA, a minimal fixed-frame bring-up recipe, and a
   source-level diagnosis of why the dormant inter-MCU SPI link was unstable

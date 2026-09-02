@@ -31,6 +31,18 @@ constexpr uint16_t kDisplayColumns = 1256;
 constexpr uint16_t kMaxRunColumns = WaveX::Protocol::MAX_ENVELOPE_COLUMNS;
 constexpr uint32_t kMinWindow = 256;
 
+// Shortest loop the backend will keep enabled (audio_engine.cpp
+// kMinLoopFrames). Note what it does with a shorter one: it does NOT reject
+// the edit, it silently clears loop_enabled - so without this the user drags a
+// tight loop, sees LOOP ON, and watches it turn itself off a round trip later.
+// Dragging makes that easy to hit in a way the encoder never did.
+constexpr uint32_t kMinLoopFrames = 256;
+
+// Coalescing window for drag-driven edits, ~12 sends/second while a handle is
+// moving. Fast enough that an audition follows the handle, slow enough that a
+// drag is not a burst on the link.
+constexpr uint32_t kEditSettleMs = 80;
+
 // Longest region fade the page offers. Past a second this stops being a fade
 // on a sample and becomes an envelope, which is the instrument's job.
 constexpr uint16_t kMaxFadeMs = 1000;
@@ -210,6 +222,17 @@ void UISampleEditPage::buildWaveformPanel(lv_obj_t* parent) {
     marker_le_ = box(parent, kMargin + kWaveW - 34, kWaveY + kWaveH - 26, 34, 26, kColBlue);
     lv_obj_t* lle = label(marker_le_, 0, 0, "LE", &lv_font_montserrat_14, 0x0A0A0A);
     lv_obj_center(lle);
+
+    // Touch-draggable (roadmap 1.5.2 item 2). The handles are 30-34 px wide,
+    // which is below a comfortable touch target, so the hit area is extended
+    // rather than the drawn tab made bigger - the design's geometry stays put
+    // and the thing you can hit is larger than the thing you can see.
+    for (lv_obj_t* handle: {marker_s_, marker_e_, marker_ls_, marker_le_}) {
+        lv_obj_add_flag(handle, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_ext_click_area(handle, 12);
+        lv_obj_add_event_cb(handle, &UISampleEditPage::handleEventCb, LV_EVENT_PRESSING, this);
+        lv_obj_add_event_cb(handle, &UISampleEditPage::handleEventCb, LV_EVENT_RELEASED, this);
+    }
 }
 
 void UISampleEditPage::buildParamStrip(lv_obj_t* parent) {
@@ -743,6 +766,148 @@ void UISampleEditPage::refreshParams() {
     }
 }
 
+// Touch events for the four handles. UI task, like every LVGL callback here.
+void UISampleEditPage::handleEventCb(lv_event_t* e) {
+    auto* self = static_cast<UISampleEditPage*>(lv_event_get_user_data(e));
+    if (!self) {
+        return;
+    }
+    // current_target, not target: the handles carry a label child, and an
+    // event bubbling up from it would otherwise match none of the four.
+    auto* target = static_cast<lv_obj_t*>(lv_event_get_current_target(e));
+    if (lv_event_get_code(e) == LV_EVENT_RELEASED) {
+        // Commit the final position immediately rather than waiting out the
+        // coalescing window: letting go is an explicit "this is where I want
+        // it", and an edit that lands 80 ms later feels like a bug.
+        //
+        // Only when one is actually owed. A non-zero deadline means the marker
+        // has moved since the last send; zero means the coalescing timer
+        // already flushed it, and re-sending would put a duplicate on the link
+        // for every tap that did not move anything.
+        if (self->edit_due_ms_ != 0) {
+            self->edit_due_ms_ = 0;
+            self->sendEdit();
+        }
+        return;
+    }
+    self->onHandleDrag(e, target);
+}
+
+bool UISampleEditPage::pointerFrame(lv_event_t* e, uint32_t& out_frame) const {
+    if (!root_ || total_frames_ == 0) {
+        return false;
+    }
+    lv_indev_t* indev = lv_event_get_indev(e);
+    if (!indev) {
+        return false;
+    }
+    lv_point_t point;
+    lv_indev_get_point(indev, &point);
+
+    // The pointer is in screen coordinates; the waveform starts kMargin into
+    // the page root. Taking the root's real coordinates rather than assuming
+    // the content area's origin keeps this correct if the chrome ever moves.
+    lv_area_t root_area;
+    lv_obj_get_coords(root_, &root_area);
+    int32_t x = point.x - (root_area.x1 + kMargin);
+    if (x < 0) {
+        x = 0;
+    }
+    if (x > kWaveW - 1) {
+        x = kWaveW - 1;
+    }
+
+    // Inverse of the mapping place() draws with, so a handle lands under the
+    // finger rather than near it.
+    const uint32_t span = view_frames_ ? view_frames_ : total_frames_;
+    const uint64_t frame =
+        static_cast<uint64_t>(view_start_) + (static_cast<uint64_t>(x) * span) / kWaveW;
+    out_frame = (frame > total_frames_) ? total_frames_ : static_cast<uint32_t>(frame);
+    return true;
+}
+
+void UISampleEditPage::onHandleDrag(lv_event_t* e, lv_obj_t* target) {
+    if (!has_sample_ || total_frames_ == 0) {
+        return;
+    }
+    uint32_t frame = 0;
+    if (!pointerFrame(e, frame)) {
+        return;
+    }
+
+    // Which handle, and the range it may occupy. Ordering is enforced here
+    // rather than left to clampMarkers() afterwards, because a clamp applied
+    // after the fact would drag the OTHER marker along: pushing E past S makes
+    // clampMarkers() move S, so the handle you are not touching walks across
+    // the screen. Bounding the dragged one instead makes it stop dead against
+    // its neighbour, which is what a handle should do.
+    uint32_t lower = 0;
+    uint32_t upper = total_frames_;
+    uint32_t* value = nullptr;
+    uint8_t param = focus_;
+
+    // A loop needs to stay long enough that the backend keeps it enabled, but
+    // only when the region can actually hold one - a region shorter than the
+    // minimum must not become undraggable.
+    const bool enforce_loop_min =
+        (end_frame_ > start_frame_) && (end_frame_ - start_frame_) >= kMinLoopFrames;
+    const uint32_t loop_min = enforce_loop_min ? kMinLoopFrames : 1;
+
+    if (target == marker_s_) {
+        value = &start_frame_;
+        param = PARAM_START;
+        upper = end_frame_ > 0 ? end_frame_ - 1 : 0;
+    } else if (target == marker_e_) {
+        value = &end_frame_;
+        param = PARAM_END;
+        lower = start_frame_ + 1;
+    } else if (target == marker_ls_) {
+        value = &loop_start_;
+        param = PARAM_LOOP_START;
+        lower = start_frame_;
+        upper = (loop_end_ > loop_min) ? loop_end_ - loop_min : start_frame_;
+    } else if (target == marker_le_) {
+        value = &loop_end_;
+        param = PARAM_LOOP_END;
+        lower = loop_start_ + loop_min;
+        upper = end_frame_;
+    } else {
+        return;
+    }
+
+    if (upper < lower) {
+        upper = lower;  // a region too small to hold the separation asked for
+    }
+    if (frame < lower) {
+        frame = lower;
+    }
+    if (frame > upper) {
+        frame = upper;
+    }
+    if (*value == frame) {
+        return;  // the finger moved, the marker did not: nothing to send
+    }
+    *value = frame;
+
+    // Dragging a handle is also a statement about which parameter you are
+    // working on, so the encoder and the zoom anchor follow it. Without this,
+    // Zoom + after a drag would jump to whatever was last focused.
+    if (focus_ != param) {
+        focus_ = param;
+        refreshFocusRing();
+    }
+
+    clampMarkers();
+    params_dirty_ = true;
+
+    // Coalesced rather than sent per event; see kEditSettleMs. Only armed when
+    // idle, so a continuous drag sends on a fixed cadence instead of pushing
+    // the deadline ahead of itself and going silent until release.
+    if (edit_due_ms_ == 0) {
+        edit_due_ms_ = (uint32_t)(esp_timer_get_time() / 1000) + kEditSettleMs;
+    }
+}
+
 void UISampleEditPage::refreshFocusRing() {
     for (uint8_t i = 0; i < PARAM_COUNT; i++) {
         if (!cards_[i].card) {
@@ -822,6 +987,11 @@ void UISampleEditPage::serviceUi() {
     if (params_dirty_) {
         params_dirty_ = false;
         refreshParams();
+    }
+    // A drag in progress owes the backend an edit.
+    if (edit_due_ms_ != 0 && (int32_t)(now - edit_due_ms_) >= 0) {
+        edit_due_ms_ = 0;
+        sendEdit();
     }
     // Drive the run in flight: commit it, or handle one that never answered.
     switch (fetcher_.service(now)) {

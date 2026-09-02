@@ -94,6 +94,12 @@ class UISampleEditPage : public UIPage {
     std::atomic<bool> waveform_dirty_{false};
     std::atomic<bool> params_dirty_{false};
 
+    // Touch-drag coalescing for the marker handles. LVGL fires PRESSING at the
+    // display refresh rate, so sending an edit per event would put ~30
+    // MSG_SAMPLE_EDIT_SET on the link per second of drag. Non-zero means one
+    // is owed; serviceUi() sends it and clears this.
+    uint32_t edit_due_ms_ = 0;
+
     // Encoder movement coalescing. One detent used to fire an envelope request
     // of its own, so a single turn queued a burst of them.
     uint32_t request_due_ms_ = 0;
@@ -147,6 +153,13 @@ class UISampleEditPage : public UIPage {
     void refreshParams();
     void refreshFocusRing();
     void requestWaveform();
+
+    /// Touch handling for the four region/loop handles.
+    static void handleEventCb(lv_event_t* e);
+    void onHandleDrag(lv_event_t* e, lv_obj_t* target);
+    /// Frame under the pointer, mapped through the current zoom window.
+    /// False when there is no pointer or the geometry is not ready.
+    bool pointerFrame(lv_event_t* e, uint32_t& out_frame) const;
     void drawWaveform();  ///< UI task only: cache -> WaveformView.
     uint16_t currentSampleId() const;
     uint16_t currentGeneration() const;
