@@ -13,6 +13,15 @@ versioning and release process.
 
 ### Added
 
+- Added the per-track mixer model, `firmware/shared/audio/track_mix.hpp`
+  (roadmap Phase 2.5 item 2, stage 1): a 16-track gain/pan/mute table with
+  click-free 5 ms soft-mute ramps, dB↔linear conversion, solo-set→mute-set
+  expansion, and the peak↔meter-byte mapping. Shared by both MCUs so the fader
+  the frontend draws and the gain the engine applies cannot disagree; solo is
+  expanded to mutes on the frontend by design, so a dropped link cannot leave a
+  hidden solo stranded on the backend. 22 host tests. Not yet wired into the
+  audio callback or the wire — that lands with the 0x78/0x79 protocol.
+
 - Added the **loop splice view** to the sample edit page (roadmap 1.5.6 item 1):
   the audio before `loop_end` on the left and from `loop_start` on the right,
   butted at a centre seam, so a loop can be aligned by eye — the only way to
