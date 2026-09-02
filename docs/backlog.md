@@ -665,6 +665,15 @@ cost at `-O0` has not been measured. If it is material, the likely code fix is
 to calculate immutable filter coefficients once per shared update and publish
 them, not merely to rely on optimization flags.
 
+**The baseline moved on 2026-09-01.** The Daisy now boots at 480 MHz rather
+than 400 (`hw.Init(true)`, see `roadmap.md` § Outstanding hardware
+verification), which is a ~20% core speed-up this entry's reasoning predates.
+Measure the boosted `-O0` image FIRST: if the callback now has comfortable
+headroom, the case for `-O2` weakens considerably, and the argument above for
+publishing precomputed filter coefficients weakens with it. Do not compare a
+new `-O2` image against an old 400 MHz `-O0` number — that conflates two
+changes, which is exactly the mistake the ITCM entry warns about.
+
 **Fix if picked up:** flash separate `-O0` and `-O2` images and use the DWT
 counter (`docs/performance_monitoring.md` Part 1) while eight voices sound and
 cutoff/resonance controls sweep continuously. Record callback maximum, budget

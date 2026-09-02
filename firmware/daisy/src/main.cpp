@@ -188,9 +188,23 @@ static void PrintProfilingStats(DaisySeed& hw) {
 #endif
 
 int main(void) {
-    // Initialize Daisy Seed hardware
+    // Initialize Daisy Seed hardware.
+    //
+    // Init(true) selects System::Config::Boost(): SysClk 480 MHz instead of
+    // the 400 MHz default, which is the STM32H750's rated maximum. Boost()
+    // differs from Defaults() in the CPU frequency and NOTHING else - both
+    // already set use_dcache and use_icache - so this does not change cache
+    // behaviour or the DMA coherency rules that depend on it.
+    //
+    // Safe for the peripherals that matter here because the clock tree keeps
+    // them off PLL1: SDRAM/FMC runs from PLL2 and the audio SAI from PLL3, so
+    // neither the sample memory timing nor the 48 kHz sample rate moves with
+    // the core clock. What does move is the TIM2 tick feeding System::GetTick()
+    // (PCLK1*2, 200 -> 240 MHz); every site converting ticks to microseconds
+    // derives the divisor from System::GetTickFreq() at runtime, so they follow
+    // it. Grep before adding a hard-coded one.
     hw.Configure();
-    hw.Init();
+    hw.Init(/*boost=*/true);
     // Before anything reads DTCM-placed state: the section is (NOLOAD) and
     // libDaisy's startup does not cover it, so its initializers never landed.
     WaveX::MemorySections::InitDtcmBss();
@@ -607,9 +621,11 @@ int main(void) {
             // across its wrap. GetUs() is that counter divided by MHz, which
             // wraps at 2^32/200 = 21474836 - NOT a power of two - so
             // subtracting two GetUs() readings across a wrap yields garbage
-            // (the "LONG I/O: 4273494187 us" line). Ticks count at PCLK1*2 =
-            // 200 MHz: libDaisy defaults to a 400 MHz SysClk and WaveX never
-            // calls System::Config::Boost().
+            // (the "LONG I/O: 4273494187 us" line). Ticks count at PCLK1*2,
+            // which is 240 MHz now that main() boosts SysClk to 480 MHz - and
+            // was 200 MHz before it did. Hence GetTickFreq() below rather than
+            // a constant: the rate is a consequence of the clock setup, not a
+            // property of the board.
             // Hoisted: GetTickFreq() reaches HAL_RCC_GetSysClockFreq(),
             // which recomputes the PLL tree in floating point. Fine once,
             // wasteful on every pump - which is where I first put it.

@@ -45,6 +45,16 @@ versioning and release process.
 
 ### Changed
 
+- The Daisy now runs at **480 MHz** instead of 400 MHz — `main()` calls
+  `hw.Init(true)` to select `System::Config::Boost()`, the STM32H750's rated
+  maximum. The project had been on libDaisy's 400 MHz default by omission
+  rather than by choice. `Boost()` differs from `Defaults()` only in CPU
+  frequency (both already enable D/I-cache), and SDRAM/FMC and the audio SAI
+  are clocked from PLL2/PLL3, so neither sample-memory timing nor the 48 kHz
+  rate is affected. **Unproven on hardware**: a 20% core clock change moves
+  every real-time margin, so it is listed in `docs/roadmap.md` § Outstanding
+  hardware verification with a soak and a DWT re-measurement.
+
 - `InputEvent::delta` is now a magnitude from both input producers, with
   direction carried solely by the event type, and `InputEvent::steps()` is the
   single supported way to read it — size from `delta`, sign from the type.
