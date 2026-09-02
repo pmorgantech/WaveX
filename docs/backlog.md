@@ -11,6 +11,55 @@ more useful than an item with no justification at all.
 
 ---
 
+## A host pixel test for LVGL widgets is possible today
+
+**Recorded 2026-09-01, correcting a claim made the same day.** The stacked
+L/R waveform work was justified as having no host coverage because "there is
+no LVGL on the host". **That is wrong**, and the mistaken version briefly went
+into `roadmap.md` § Outstanding hardware verification. The real situation is
+narrower and worth stating, because the wrong version argues for reaching for
+hardware when a host test would do.
+
+**Real LVGL already builds and renders on the host.** `tools/ui_preview`
+compiles the *same* vendored LVGL the firmware uses
+(`firmware/esp32/managed_components/lvgl__lvgl`), creates a real
+`lv_display_create(1280, 720)`, calls `lv_refr_now()`, and writes the resulting
+framebuffer to BMP (`preview.c:80`, `:376`). No hardware, no SDL, no display
+driver — LVGL's software renderer into plain memory.
+
+**There are two host LVGL setups and widgets are in neither:**
+
+| Setup | LVGL | Why a widget is not covered |
+|---|---|---|
+| `firmware/esp32/tests` | 96-line **stub** `mocks/lvgl.h`, written for `file_browser.cpp` | No `lv_area_t`, no draw API, so anything calling `lv_draw_*` will not compile |
+| `tools/ui_preview` | **Real** vendored LVGL, renders to BMP | C-only CMake project (`project(... C)`); it *reimplements* a waveform in C at `preview.c:750` instead of linking the C++ widget. Not wired into `make` or CI. |
+
+**What it would take**, and none of it is large: add CXX to the preview project
+(or add a third host target beside it), link the widget, and assert on pixels
+rather than eyeballing a BMP. `WaveformView`'s only non-LVGL dependency is
+`EnvelopeColumn` from `spi_protocol/protocol.h`, which is HAL-free and already
+host-compiled by the shared suite, and `LV_FONT_MONTSERRAT_14` is already
+enabled in `tools/ui_preview/lv_conf.h`.
+
+The test worth writing first is the one the stacked-traces change actually
+needs: feed a **hard-panned** stereo envelope (L loud, R silent), render, and
+assert trace-coloured pixels in the top half and none in the bottom. That
+settles the channel-swap question — the one real correctness risk in that
+change — without a panel. Legibility at half height still needs the bench;
+correctness does not.
+
+**Why it is not urgent:** it is new test infrastructure rather than a fix, and
+the widgets it would cover are few. But the cost of *not* having it is being
+paid every time a UI change is filed under "needs hardware" when only its
+appearance does, which inflates a hardware-verification list that is already
+long enough to discourage working through.
+
+**Related:** the `components/ui` ⇄ `main` cycle below is a *different*
+obstacle and blocks the pages, not the leaf widgets. `WaveformView` has no
+`main` dependency, which is exactly why it is the cheap place to start.
+
+---
+
 ## Page-entry render cost: the waveform chart and the Play keyboard
 
 **Measured 2026-08-30.** The pages reported as "slow to render" - Sample Edit,
