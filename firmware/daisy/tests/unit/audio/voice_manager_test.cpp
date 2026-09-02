@@ -1242,3 +1242,172 @@ TEST(VoiceManagerLiveParamsTest, InitEstablishesDefaultsFromZeroedMemory) {
     EXPECT_TRUE(varies) << "playback froze on one sample: a DTCM-resident member "
                            "with a non-zero default is not being set by Init()";
 }
+
+// --- per-track mixer application (roadmap Phase 2.5 item 2) ----------------
+//
+// The mixer folds into the voice's existing gain/pan once per block. These
+// pin that it applies at all, that it is scoped to the voice's slot, and that
+// an unbound mixer reproduces the old behaviour exactly - the last being what
+// lets every test above keep asserting an unmixed sum.
+
+namespace {
+
+// A short, loud, DC-valued mono sample makes the rendered level trivially
+// predictable, so a gain change shows up as an exact ratio.
+std::vector<int16_t> DcSample(size_t frames, int16_t value) {
+    return std::vector<int16_t>(frames, value);
+}
+
+float PeakAbs(const float* buf, size_t n) {
+    float peak = 0.0f;
+    for (size_t i = 0; i < n; ++i) {
+        const float a = buf[i] < 0.0f ? -buf[i] : buf[i];
+        if (a > peak) {
+            peak = a;
+        }
+    }
+    return peak;
+}
+
+WaveX::AudioEngine::VoiceTriggerParams DcTrigger(const std::vector<int16_t>& data, uint8_t slot) {
+    WaveX::AudioEngine::VoiceTriggerParams p;
+    p.sample = data.data();
+    p.sample_frames = static_cast<uint32_t>(data.size());
+    p.channels = 1;
+    p.sample_rate_hz = 48000;
+    p.note = 60;
+    p.root_note = 60;
+    p.velocity = 127;
+    p.slot = slot;
+    p.pan = 0.5f;
+    p.attack_s = 0.0f;
+    p.decay_s = 0.0f;
+    p.sustain_level = 1.0f;
+    p.release_s = 0.1f;
+    p.filter_cutoff_hz = 20000.0f;
+    return p;
+}
+
+}  // namespace
+
+TEST(VoiceManagerTrackMix, NoMixerReproducesTheUnmixedSum) {
+    const auto data = DcSample(512, 16000);
+    WaveX::AudioEngine::VoiceManager vm;
+    vm.Init(48000);
+    vm.Trigger(DcTrigger(data, 0));
+
+    float l[64], r[64];
+    vm.Render(l, r, 64);
+    const float baseline = PeakAbs(l, 64);
+    ASSERT_GT(baseline, 0.0f);
+
+    // Binding a default mixer must not change a single sample.
+    WaveX::Mix::TrackMixer mixer;
+    mixer.SetSampleRate(48000.0f);
+    WaveX::AudioEngine::VoiceManager vm2;
+    vm2.Init(48000);
+    vm2.SetTrackMixer(&mixer);
+    vm2.Trigger(DcTrigger(data, 0));
+    float l2[64], r2[64];
+    vm2.Render(l2, r2, 64);
+    EXPECT_NEAR(PeakAbs(l2, 64), baseline, 1e-6f);
+}
+
+TEST(VoiceManagerTrackMix, TrackGainScalesTheVoice) {
+    // Two voices in identical state rendering the SAME block, differing only
+    // in track gain. Comparing consecutive blocks of one voice instead would
+    // fold in the filter settling and the envelope, which move between block 1
+    // and block 2 for reasons that have nothing to do with the mixer - that is
+    // how the first version of this test failed against correct code.
+    const auto data = DcSample(512, 16000);
+
+    WaveX::Mix::TrackMixer unity;
+    unity.SetSampleRate(48000.0f);
+    WaveX::AudioEngine::VoiceManager vm_full;
+    vm_full.Init(48000);
+    vm_full.SetTrackMixer(&unity);
+    vm_full.Trigger(DcTrigger(data, 0));
+
+    WaveX::Mix::TrackMixer halved;
+    halved.SetSampleRate(48000.0f);
+    halved.SetGain(0, 0.5f);
+    WaveX::AudioEngine::VoiceManager vm_half;
+    vm_half.Init(48000);
+    vm_half.SetTrackMixer(&halved);
+    vm_half.Trigger(DcTrigger(data, 0));
+
+    float lf[64], rf[64], lh[64], rh[64];
+    vm_full.Render(lf, rf, 64);
+    vm_half.Render(lh, rh, 64);
+
+    const float full = PeakAbs(lf, 64);
+    ASSERT_GT(full, 0.0f);
+    EXPECT_NEAR(PeakAbs(lh, 64), full * 0.5f, 1e-5f);
+}
+
+// Scoping is the point of a per-track mixer: turning track 0 down must not
+// touch a voice playing on track 1.
+TEST(VoiceManagerTrackMix, GainIsScopedToTheVoiceSlot) {
+    const auto data = DcSample(512, 16000);
+    WaveX::Mix::TrackMixer mixer;
+    mixer.SetSampleRate(48000.0f);
+    mixer.SetGain(0, 0.0f);
+
+    WaveX::AudioEngine::VoiceManager vm;
+    vm.Init(48000);
+    vm.SetTrackMixer(&mixer);
+    vm.Trigger(DcTrigger(data, 1));  // plays on track 1
+
+    float l[64], r[64];
+    vm.Render(l, r, 64);
+    EXPECT_GT(PeakAbs(l, 64), 0.0f) << "track 0's gain silenced a track 1 voice";
+}
+
+TEST(VoiceManagerTrackMix, MuteRampReachesSilenceRatherThanCuttingAbruptly) {
+    const auto data = DcSample(48000, 16000);
+    WaveX::Mix::TrackMixer mixer;
+    mixer.SetSampleRate(48000.0f);
+
+    WaveX::AudioEngine::VoiceManager vm;
+    vm.Init(48000);
+    vm.SetTrackMixer(&mixer);
+    vm.Trigger(DcTrigger(data, 2));
+
+    float l[48], r[48];
+    vm.Render(l, r, 48);
+    ASSERT_GT(PeakAbs(l, 48), 0.0f);
+
+    mixer.SetMute(2, true);
+    // First block after the mute must be attenuated but not yet silent - that
+    // is what "ramp" means, and a hard cut would fail here.
+    mixer.Tick(48);
+    vm.Render(l, r, 48);
+    const float during = PeakAbs(l, 48);
+    EXPECT_GT(during, 0.0f) << "mute cut instantly instead of ramping";
+
+    for (int i = 0; i < 10; ++i) {
+        mixer.Tick(48);
+        vm.Render(l, r, 48);
+    }
+    EXPECT_NEAR(PeakAbs(l, 48), 0.0f, 1e-6f) << "mute never reached silence";
+}
+
+TEST(VoiceManagerTrackMix, PanOffsetShiftsTheStereoBalance) {
+    const auto data = DcSample(512, 16000);
+    WaveX::Mix::TrackMixer mixer;
+    mixer.SetSampleRate(48000.0f);
+
+    WaveX::AudioEngine::VoiceManager vm;
+    vm.Init(48000);
+    vm.SetTrackMixer(&mixer);
+    vm.Trigger(DcTrigger(data, 0));  // centred
+
+    float l[64], r[64];
+    vm.Render(l, r, 64);
+    EXPECT_NEAR(PeakAbs(l, 64), PeakAbs(r, 64), 1e-5f) << "centred voice was not balanced";
+
+    mixer.SetPanOffset(0, 1.0f);  // hard right
+    vm.Render(l, r, 64);
+    EXPECT_NEAR(PeakAbs(l, 64), 0.0f, 1e-6f);
+    EXPECT_GT(PeakAbs(r, 64), 0.0f);
+}

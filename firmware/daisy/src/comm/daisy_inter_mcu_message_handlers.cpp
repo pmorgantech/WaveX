@@ -38,6 +38,7 @@ static void HandleHeartbeatMessage(const uint8_t* payload, size_t payload_size);
 static void HandleDiagSubscribeMessage(const uint8_t* payload, size_t payload_size);
 static void HandleSampleEditMessage(const uint8_t* payload, size_t payload_size);
 static void HandleSampleMetaReqMessage(const uint8_t* payload, size_t payload_size);
+static void HandleMixOpMessage(const uint8_t* payload, size_t payload_size);
 static void HandleSampleSelectMessage(const uint8_t* payload, size_t payload_size);
 static void HandleSampleUnloadMessage(const uint8_t* payload, size_t payload_size);
 static void HandleEnvelopeReqMessage(const uint8_t* payload, size_t payload_size);
@@ -95,6 +96,9 @@ void ProcessInterMcuMessage(uint8_t msg_type,
             break;
         case MSG_CONTROL_CHANGE:
             HandleControlChangeMessage(payload, payload_size);
+            break;
+        case MSG_MIX_OP:
+            HandleMixOpMessage(payload, payload_size);
             break;
         case MSG_NOTE_ON:
             HandleNoteMessage(payload, payload_size);
@@ -440,6 +444,15 @@ static void HandleSampleEditMessage(const uint8_t* payload, size_t payload_size)
                                       msg.loop_end,
                                       msg.fade_in_ms,
                                       msg.fade_out_ms);
+}
+
+static void HandleMixOpMessage(const uint8_t* payload, size_t payload_size) {
+    if (!payload || payload_size < sizeof(MixOpMessage)) {
+        return;
+    }
+    MixOpMessage msg;
+    memcpy(&msg, payload, sizeof(msg));
+    WaveX::AudioEngine::OnMixOp(msg);
 }
 
 static void HandleSampleMetaReqMessage(const uint8_t* payload, size_t payload_size) {

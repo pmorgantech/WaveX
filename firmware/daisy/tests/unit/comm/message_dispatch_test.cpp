@@ -73,6 +73,26 @@ TEST_F(MessageDispatchTest, ControlChangeReachesAudioEngine) {
     EXPECT_EQ(GetDispatchRecord().control_changes[0].value, 0x1234);
 }
 
+TEST_F(MessageDispatchTest, MixOpReachesAudioEngine) {
+    MixOpMessage op(MIX_OP_SET_GAIN, 9, 6000);
+    Dispatch(MSG_MIX_OP, op);
+
+    ASSERT_EQ(GetDispatchRecord().mix_ops.size(), 1u);
+    EXPECT_EQ(GetDispatchRecord().mix_ops[0].op, MIX_OP_SET_GAIN);
+    EXPECT_EQ(GetDispatchRecord().mix_ops[0].track, 9);
+    EXPECT_EQ(GetDispatchRecord().mix_ops[0].value, 6000);
+}
+
+// The mute mask uses the whole 16-bit field, which is where a dispatch path
+// that copied only part of the payload would show up.
+TEST_F(MessageDispatchTest, MixOpMuteMaskArrivesIntact) {
+    MixOpMessage op(MIX_OP_SET_MUTE_MASK, 0, 0xBEEF);
+    Dispatch(MSG_MIX_OP, op);
+
+    ASSERT_EQ(GetDispatchRecord().mix_ops.size(), 1u);
+    EXPECT_EQ(GetDispatchRecord().mix_ops[0].value, 0xBEEF);
+}
+
 TEST_F(MessageDispatchTest, SampleCtrlReachesAudioEngine) {
     SampleCtrlMessage ctrl(0, SAMPLE_REC_START, 1.0f);
     Dispatch(MSG_SAMPLE_CTRL, ctrl);

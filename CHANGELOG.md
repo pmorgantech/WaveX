@@ -13,6 +13,16 @@ versioning and release process.
 
 ### Added
 
+- The Daisy now applies the per-track mixer in the voice render sum (roadmap
+  Phase 2.5 item 2, stage 2b) and drives it from `MSG_MIX_OP`. Track gain and
+  pan offset fold into each voice's existing gain/pan once per voice per block,
+  outside the sample loop, so the cost is two multiplies and an add per voice
+  per block and nothing per sample. A voice is scoped by its instrument slot,
+  and an unbound mixer reproduces the previous output exactly.
+  `MIX_OP_SET_MASTER` is accepted and stored but deliberately not applied yet —
+  `PARAM_VOLUME` still owns master gain, and two controls writing one value
+  with no defined winner is worse than waiting to reconcile them.
+
 - Added the mixer protocol (roadmap Phase 2.5 item 2, stage 2):
   `MSG_MIX_OP` (0x78, E→D) carrying one idempotent control change, and
   `MSG_MIX_METERS` (0x79, D→E) carrying per-track peak. Wire encodings are

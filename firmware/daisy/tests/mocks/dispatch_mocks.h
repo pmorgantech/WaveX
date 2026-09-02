@@ -23,6 +23,7 @@ struct DispatchRecord {
     std::vector<WaveX::Protocol::NoteMessage> note_ons;
     std::vector<WaveX::Protocol::NoteMessage> note_offs;
     std::vector<WaveX::Protocol::ControlChangeMessage> control_changes;
+    std::vector<WaveX::Protocol::MixOpMessage> mix_ops;
     std::vector<WaveX::Protocol::SampleCtrlMessage> sample_ctrls;
     std::vector<WaveX::Protocol::PreviewReqMessage> preview_reqs;
     std::vector<WaveX::Protocol::EnvelopeReqMessage> envelope_reqs;

@@ -110,6 +110,10 @@ void OnControlChange(const WaveX::Protocol::ControlChangeMessage& m) {
     WaveX::Test::GetDispatchRecord().control_changes.push_back(m);
 }
 
+void OnMixOp(const WaveX::Protocol::MixOpMessage& m) {
+    WaveX::Test::GetDispatchRecord().mix_ops.push_back(m);
+}
+
 void OnNoteOn(const WaveX::Protocol::NoteMessage& m) {
     WaveX::Test::GetDispatchRecord().note_ons.push_back(m);
 }

@@ -29,6 +29,11 @@ void Callback(daisy::AudioHandle::InputBuffer in,
 
 // Control/message hook APIs
 void OnControlChange(const WaveX::Protocol::ControlChangeMessage& m);
+
+/// Applies one mixer control change (MSG_MIX_OP). Main loop only: it writes
+/// the track table the audio callback reads, and every field is a single
+/// aligned word, so a change lands whole on the next block.
+void OnMixOp(const WaveX::Protocol::MixOpMessage& m);
 void OnNoteOn(const WaveX::Protocol::NoteMessage& m);
 void OnNoteOff(const WaveX::Protocol::NoteMessage& m);
 void OnSampleCtrl(const WaveX::Protocol::SampleCtrlMessage& m);

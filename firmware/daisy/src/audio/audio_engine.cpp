@@ -127,6 +127,19 @@ __attribute__((unused)) static OutputSinkType s_output_sink;
 // (docs/daisy_rt_audio_coding_guide.md §2/§8).
 static WaveX::AudioEngine::VoiceManager s_voice_manager WAVEX_DTCM_DATA;
 
+// Deliberately NOT in DTCM, unlike its neighbours. .dtcmram_bss is (NOLOAD)
+// and nothing runs constructors for objects placed there, so this would come
+// up all-zeroes - and a zeroed TrackMixer has every mute ramp at 0, i.e. all
+// 16 tracks silent. That is the exact hazard Init() below documents for
+// VoiceLiveParams. Init() also calls Reset() on it, so the correct state does
+// not depend on where the linker put it.
+static WaveX::Mix::TrackMixer s_track_mixer;
+
+// Meter subscription (MSG_MIX_OP SUB/UNSUB_METERS). Honoured as a flag now;
+// the MSG_MIX_METERS sender is stage 4 of output-routing-and-mixer.md §6, so
+// subscribing currently records intent and sends nothing.
+static bool s_mix_meters_subscribed = false;
+
 // Digital voice base parameters - what MSG_CONTROL_CHANGE edits for the
 // all-digital path (features/digital-voice-audition.md stage 1). The main loop
 // owns pending; the callback owns active. A double-buffered generation mailbox
@@ -1505,6 +1518,13 @@ void Init(DaisySeed& hw, float sample_rate, bool sdram_available) {
     s_hw = &hw;
     s_sample_rate = sample_rate;
 
+    // Explicit rather than relying on static initialization - see the note on
+    // s_track_mixer's placement. Reset() opens every track and settles the
+    // ramps, so nothing fades in at boot.
+    s_track_mixer.Reset();
+    s_track_mixer.SetSampleRate(sample_rate);
+    s_voice_manager.SetTrackMixer(&s_track_mixer);
+
     // Give the DTCM-placed state its intended values.
     //
     // Objects in .dtcmram_bss get no static initialization at all: the section
@@ -1685,6 +1705,8 @@ void Callback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t
         size <= static_cast<size_t>(Timebase::kBlockSize)) {
         static float vm_l[Timebase::kBlockSize];
         static float vm_r[Timebase::kBlockSize];
+        // Advance the mute ramps once per block, before the voices read them.
+        s_track_mixer.Tick(static_cast<uint32_t>(size));
         s_voice_manager.Render(vm_l, vm_r, size);
         for (size_t i = 0; i < size; ++i) {
             out[0][i] += vm_l[i];
@@ -1749,6 +1771,41 @@ void Callback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t
 // reach both or it would do nothing on whichever configuration is in use.
 // Per-slot (kit) scoping of these values remains Phase 2.5 instrument-model
 // work; see s_voice_live_pending for why engine-global is the honest interim.
+void OnMixOp(const MixOpMessage& m) {
+    switch (m.op) {
+        case MIX_OP_SET_GAIN:
+            s_track_mixer.SetGain(m.track,
+                                  WaveX::Mix::DbToLinear(WaveX::Mix::WireToGainDb(m.value)));
+            break;
+        case MIX_OP_SET_PAN:
+            s_track_mixer.SetPanOffset(m.track, WaveX::Mix::WireToPan(m.value));
+            break;
+        case MIX_OP_SET_MUTE:
+            s_track_mixer.SetMute(m.track, m.value != 0);
+            break;
+        case MIX_OP_SET_MUTE_MASK:
+            // One message for a whole solo change: sending 16 individual mutes
+            // would walk the ramps through states where the wrong tracks are
+            // down, and at 5 ms per ramp that is audible.
+            s_track_mixer.SetMuteMask(m.value);
+            break;
+        case MIX_OP_SET_MASTER:
+            // Stored, not yet applied. PARAM_VOLUME still owns the master gain;
+            // having both drive it would mean two controls fighting over one
+            // value with no defined winner. output-routing-and-mixer.md §1 says
+            // PARAM_VOLUME becomes explicitly master-scoped - that
+            // reconciliation belongs with the mixer page, not here.
+            s_track_mixer.SetMasterGain(WaveX::Mix::DbToLinear(WaveX::Mix::WireToGainDb(m.value)));
+            break;
+        case MIX_OP_SUB_METERS:
+        case MIX_OP_UNSUB_METERS:
+            s_mix_meters_subscribed = (m.op == MIX_OP_SUB_METERS);
+            break;
+        default:
+            break;
+    }
+}
+
 void OnControlChange(const ControlChangeMessage& ctrl_msg) {
     const float norm = static_cast<float>(ctrl_msg.value) / 65535.0f;
     bool para_changed = false;

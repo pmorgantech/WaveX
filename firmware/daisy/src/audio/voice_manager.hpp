@@ -33,6 +33,7 @@
 // fixed-size array, no heap allocation, no blocking I/O, no logging
 // (AGENTS.md constraint #1 / architecture.md §7.1).
 
+#include "audio/track_mix.hpp"
 #include "envelope.hpp"
 #include "fade.hpp"
 #include "svf_filter.hpp"
@@ -422,6 +423,16 @@ class VoiceManager {
         }
     }
 
+    /**
+     * @brief Binds the per-track mixer applied in Render(), or nullptr.
+     *
+     * Optional on purpose: nullptr reproduces the pre-mixer behaviour exactly,
+     * which is what lets the existing voice tests keep asserting the unmixed
+     * sum. The mixer is not owned and must outlive this object - on the device
+     * both are engine-global statics.
+     */
+    void SetTrackMixer(const WaveX::Mix::TrackMixer* mixer) { track_mixer_ = mixer; }
+
     // Renders one audio block: clears out_l/out_r, then sums every active
     // voice's linearly-interpolated, filtered, ADSR- and gain/pan-scaled
     // contribution. A voice frees its slot once its envelope reaches
@@ -437,8 +448,24 @@ class VoiceManager {
             Voice& v = voices_[vi];
             if (v.state != VoiceState::Playing)
                 continue;
-            const float left_gain = v.gain * (1.0f - v.pan);
-            const float right_gain = v.gain * v.pan;
+            // Track gain and pan fold in HERE - once per voice per block,
+            // outside the sample loop below - so the mixer costs two multiplies
+            // and an add per voice per block and nothing at all per sample.
+            // That is the whole reason output-routing-and-mixer.md §1 puts the
+            // application point at the voice's existing gain/pan rather than
+            // adding a stage to the sum.
+            float pan = v.pan;
+            float gain = v.gain;
+            if (track_mixer_) {
+                gain *= track_mixer_->GainFor(v.slot);
+                // pan_offset is -1..+1 added onto a 0..1 voice pan, per the
+                // design. Clamped, so a hard offset pins rather than wrapping
+                // through the opposite channel.
+                pan += track_mixer_->PanOffsetFor(v.slot);
+                pan = pan < 0.0f ? 0.0f : (pan > 1.0f ? 1.0f : pan);
+            }
+            const float left_gain = gain * (1.0f - pan);
+            const float right_gain = gain * pan;
             const uint32_t last_valid_frame = v.end_frame - 1;
             const uint32_t loop_len = v.loop_end - v.loop_start;
 
@@ -599,6 +626,9 @@ class VoiceManager {
     const Voice& GetVoice(uint8_t i) const { return voices_[i]; }
 
    private:
+    /// Optional per-track mixer; nullptr means the pre-mixer behaviour.
+    /// Not owned - see SetTrackMixer().
+    const WaveX::Mix::TrackMixer* track_mixer_ = nullptr;
     int FindFreeVoice() const {
         for (uint8_t i = 0; i < kNumVoices; ++i) {
             if (voices_[i].IsFree())
