@@ -1394,6 +1394,74 @@ TEST_F(MessageTypeTest, SampleMetadataResolveIsSafeWhenEmpty) {
     EXPECT_EQ(m.loop_end, 0u);
 }
 
+// Mixer ops (output-routing-and-mixer.md §4). Every op shares one struct, so
+// the round trip has to survive each `value` encoding rather than just one.
+TEST_F(MessageTypeTest, MixOpMessage) {
+    MixOpMessage original(MIX_OP_SET_GAIN, 7, 6000);  // 0 dB on track 7
+    size_t created = ProtocolHandler::CreateMixOpPacket(buffer_.data(), buffer_.size(), original);
+    ASSERT_GT(created, 0u);
+    EXPECT_TRUE(ProtocolHandler::ValidatePacket(buffer_.data(), created));
+
+    MixOpMessage parsed;
+    ASSERT_TRUE(ProtocolHandler::ParseMessage(buffer_.data(), MSG_MIX_OP, &parsed, sizeof(parsed)));
+    EXPECT_EQ(parsed.op, MIX_OP_SET_GAIN);
+    EXPECT_EQ(parsed.track, 7);
+    EXPECT_EQ(parsed.value, 6000);
+}
+
+// A full mute mask uses the top bit of `value`, which is the case an
+// accidentally-signed field would mangle.
+TEST_F(MessageTypeTest, MixOpMuteMaskSurvivesTheTopBit) {
+    MixOpMessage original(MIX_OP_SET_MUTE_MASK, 0, 0xFFFF);
+    size_t created = ProtocolHandler::CreateMixOpPacket(buffer_.data(), buffer_.size(), original);
+    ASSERT_GT(created, 0u);
+
+    MixOpMessage parsed;
+    ASSERT_TRUE(ProtocolHandler::ParseMessage(buffer_.data(), MSG_MIX_OP, &parsed, sizeof(parsed)));
+    EXPECT_EQ(parsed.value, 0xFFFF);
+    EXPECT_EQ(parsed.op, MIX_OP_SET_MUTE_MASK);
+}
+
+TEST_F(MessageTypeTest, MixOpPanExtremesSurvive) {
+    for (uint16_t pan: {uint16_t(0), uint16_t(32768), uint16_t(65535)}) {
+        MixOpMessage original(MIX_OP_SET_PAN, 3, pan);
+        size_t created =
+            ProtocolHandler::CreateMixOpPacket(buffer_.data(), buffer_.size(), original);
+        ASSERT_GT(created, 0u);
+        MixOpMessage parsed;
+        ASSERT_TRUE(
+            ProtocolHandler::ParseMessage(buffer_.data(), MSG_MIX_OP, &parsed, sizeof(parsed)));
+        EXPECT_EQ(parsed.value, pan);
+    }
+}
+
+TEST_F(MessageTypeTest, MixMetersMessage) {
+    MixMetersMessage original;
+    for (uint8_t i = 0; i < WAVEX_MIX_TRACKS; ++i) {
+        original.peak[i] = static_cast<uint8_t>(i * 17);
+    }
+    size_t created =
+        ProtocolHandler::CreateMixMetersPacket(buffer_.data(), buffer_.size(), original);
+    ASSERT_GT(created, 0u);
+    EXPECT_TRUE(ProtocolHandler::ValidatePacket(buffer_.data(), created));
+
+    MixMetersMessage parsed;
+    ASSERT_TRUE(
+        ProtocolHandler::ParseMessage(buffer_.data(), MSG_MIX_METERS, &parsed, sizeof(parsed)));
+    for (uint8_t i = 0; i < WAVEX_MIX_TRACKS; ++i) {
+        EXPECT_EQ(parsed.peak[i], static_cast<uint8_t>(i * 17)) << "track " << int(i);
+    }
+}
+
+// A default-constructed meter frame must read as silence on every track, not
+// as whatever the stack held - the frontend draws these directly.
+TEST_F(MessageTypeTest, MixMetersDefaultsToSilence) {
+    MixMetersMessage msg;
+    for (uint8_t i = 0; i < WAVEX_MIX_TRACKS; ++i) {
+        EXPECT_EQ(msg.peak[i], 0) << "track " << int(i);
+    }
+}
+
 TEST_F(MessageTypeTest, SampleMetaReqMessage) {
     SampleMetaReqMessage original(42);
     size_t created =

@@ -77,6 +77,8 @@ sequence(u16 LE) | payload[0..2048] | crc16(u16 LE) | end(0x5A)
 | MSG_INST_OP | 0x60 | E→D | `InstOpMessage{request_id, slot, op, path[96]}` | inspect or load an SFZ instrument; `request_id` rejects stale selection replies |
 | MSG_INST_STATUS | 0x61 | D→E | `InstStatusMessage{request_id, slot, op, state, flags, error, zone/sample counts, byte totals/progress, current_name[48]}` | preflight result plus total/current-WAV load progress; flags report missing/invalid WAVs and insufficient resident memory |
 | MSG_INST_ZONE_SYNC | 0x62 | both | *(reserved — struct not yet defined)* | future editable-zone synchronization |
+| MSG_MIX_OP | 0x78 | E→D | `MixOpMessage{op, track, value}` | one mixer control change. `value` is op-dependent: gain/master are **centi-dB above the −60 dB floor** (0 = silence, 6000 = 0 dB, 6600 = +6 dB); pan reuses PARAM_PAN's convention (0 left, 32768 centre, 65535 right); `SET_MUTE_MASK` carries a bit per track. Conversions live in `WaveX::Mix` (`shared/audio/track_mix.hpp`) so both ends use one implementation |
+| MSG_MIX_METERS | 0x79 | D→E | `MixMetersMessage{peak[16]}` | per-track peak, log-mapped by `Mix::PeakToMeterByte` with 0 reserved for true silence. Sent only between `SUB_METERS` and `UNSUB_METERS`, at the existing meter cadence; master stereo meters stay on MSG_METER_PUSH |
 | MSG_ERROR | 0xFF | both | `ErrorMessage{code, msg[48]}` | error report |
 
 ## 4. Conventions & invariants
@@ -92,7 +94,7 @@ sequence(u16 LE) | payload[0..2048] | crc16(u16 LE) | end(0x5A)
 Message-ID blocks are **reserved** for the 2026-07-05 feature-design suite — see the reservation table in `feature-expansion-ideas.md` (0x50–0x5F sequencer/clock/arp, 0x60–0x6F instrument/tuning, 0x70–0x7F recording/mix/scenes, 0xA0–0xAF render jobs). Do not assign new IDs outside that table without updating it.
 
 - **Phase 2 (sequencer)**: pattern-edit ops, transport control, playhead/step feedback (coalesced), MIDI clock in/out (`midi-sync-tempo-follower.md`). Kit management is subsumed by instrument ops (`instrument-model.md` §8; 0x54 stays reserved-unused).
-- **Phase 2.5**: editable zone sync (0x62), recording (0x70/0x71), mixer (0x78/0x79), and arp (0x58). SFZ probe/load uses the now-live instrument ops at 0x60/0x61; MIDI CC forwarding at 0x56 is also live.
+- **Phase 2.5**: editable zone sync (0x62), recording (0x70/0x71), and arp (0x58). The mixer ops at 0x78/0x79 are now defined and round-trip tested, though nothing drives them yet — the engine application and the mixer page are the next two stages of `output-routing-and-mixer.md` §6. SFZ probe/load uses the now-live instrument ops at 0x60/0x61; MIDI CC forwarding at 0x56 is also live.
 - **Phase 4 (offline editing)**: render-job submit/progress/cancel (0xA0–0xA3), sidecar marker sync.
 - **Phase 5**: scene apply (0x7A), tuning (0x68).
 - Consider a generational "capabilities" handshake at boot (versions on both sides) before the first extension ships.

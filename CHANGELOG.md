@@ -13,6 +13,16 @@ versioning and release process.
 
 ### Added
 
+- Added the mixer protocol (roadmap Phase 2.5 item 2, stage 2):
+  `MSG_MIX_OP` (0x78, E→D) carrying one idempotent control change, and
+  `MSG_MIX_METERS` (0x79, D→E) carrying per-track peak. Wire encodings are
+  documented per op and converted through `WaveX::Mix`, so the two ends cannot
+  disagree about what a fader position means; pan reuses `PARAM_PAN`'s existing
+  convention rather than inventing a second one. Adds `SET_MUTE_MASK` beyond
+  the original design list, because expanding a solo into up to 16 separate
+  mute messages walks the engine through intermediate states that are audible
+  through the 5 ms mute ramps. Round-trip tested; nothing drives it yet.
+
 - Added the per-track mixer model, `firmware/shared/audio/track_mix.hpp`
   (roadmap Phase 2.5 item 2, stage 1): a 16-track gain/pan/mute table with
   click-free 5 ms soft-mute ramps, dB↔linear conversion, solo-set→mute-set

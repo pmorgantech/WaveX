@@ -257,4 +257,41 @@ TEST(TrackMixer, ResetDoesNotFadeEverythingBackIn) {
     EXPECT_TRUE(mixer.Settled()) << "reset left a ramp running";
 }
 
+// --- wire encoding (MSG_MIX_OP) -------------------------------------------
+
+TEST(TrackMixWire, GainAnchorPoints) {
+    EXPECT_EQ(WaveX::Mix::GainDbToWire(kMinGainDb), 0) << "the floor must encode as 0";
+    EXPECT_EQ(WaveX::Mix::GainDbToWire(0.0f), 6000);
+    EXPECT_EQ(WaveX::Mix::GainDbToWire(6.0f), 6600);
+}
+
+TEST(TrackMixWire, GainRoundTripsWithinAStep) {
+    for (float db = kMinGainDb; db <= 6.0f; db += 0.37f) {
+        const uint16_t wire = WaveX::Mix::GainDbToWire(db);
+        EXPECT_NEAR(WaveX::Mix::WireToGainDb(wire), db, 0.01f) << "at " << db << " dB";
+    }
+}
+
+TEST(TrackMixWire, GainClampsRatherThanWrapping) {
+    // Unsigned wire field: an out-of-range dB must saturate, never wrap to a
+    // huge value that would decode as a loud track.
+    EXPECT_EQ(WaveX::Mix::GainDbToWire(-200.0f), 0);
+    EXPECT_EQ(WaveX::Mix::GainDbToWire(200.0f), WaveX::Mix::GainDbToWire(6.0f));
+    EXPECT_LE(WaveX::Mix::WireToGainDb(65535), 6.0f);
+}
+
+TEST(TrackMixWire, PanMatchesTheParamPanConvention) {
+    EXPECT_EQ(WaveX::Mix::PanToWire(-1.0f), 0);
+    EXPECT_EQ(WaveX::Mix::PanToWire(1.0f), 65535);
+    // Centre is 32768 per PARAM_PAN's documented convention.
+    EXPECT_NEAR(static_cast<float>(WaveX::Mix::PanToWire(0.0f)), 32768.0f, 1.0f);
+    EXPECT_NEAR(WaveX::Mix::WireToPan(32768), 0.0f, 0.001f);
+}
+
+TEST(TrackMixWire, PanRoundTrips) {
+    for (float pan = -1.0f; pan <= 1.0f; pan += 0.1f) {
+        EXPECT_NEAR(WaveX::Mix::WireToPan(WaveX::Mix::PanToWire(pan)), pan, 0.001f);
+    }
+}
+
 }  // namespace

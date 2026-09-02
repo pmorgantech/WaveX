@@ -279,6 +279,18 @@ size_t ProtocolHandler::CreateSampleMetaReqPacket(uint8_t* buffer,
         buffer, buffer_size, MSG_SAMPLE_META_REQ, &msg, sizeof(SampleMetaReqMessage));
 }
 
+size_t ProtocolHandler::CreateMixOpPacket(uint8_t* buffer,
+                                          size_t buffer_size,
+                                          const MixOpMessage& msg) {
+    return CreateUnifiedPacket(buffer, buffer_size, MSG_MIX_OP, &msg, sizeof(MixOpMessage));
+}
+
+size_t ProtocolHandler::CreateMixMetersPacket(uint8_t* buffer,
+                                              size_t buffer_size,
+                                              const MixMetersMessage& msg) {
+    return CreateUnifiedPacket(buffer, buffer_size, MSG_MIX_METERS, &msg, sizeof(MixMetersMessage));
+}
+
 size_t ProtocolHandler::CreateSampleEditPacket(uint8_t* buffer,
                                                size_t buffer_size,
                                                const SampleEditMessage& msg) {

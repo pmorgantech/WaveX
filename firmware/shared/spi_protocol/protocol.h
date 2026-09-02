@@ -131,8 +131,76 @@ enum MessageType : uint8_t {
     MSG_INST_OP = 0x60,         // E->D: inspect or load one instrument file
     MSG_INST_STATUS = 0x61,     // D->E: inspection result and load progress
     MSG_INST_ZONE_SYNC = 0x62,  // reserved: future editable-zone synchronization
+    // Mixer (output-routing-and-mixer.md §4). 0x70-0x7F is the recording /
+    // mix / scenes block reserved in features/feature-expansion-ideas.md.
+    MSG_MIX_OP = 0x78,      // E->D: one mixer control change
+    MSG_MIX_METERS = 0x79,  // D->E: per-track peak, while the mixer page is open
     MSG_ERROR = 0xFF
 };
+
+// Mixer ops (MSG_MIX_OP). One small idempotent verb per change rather than a
+// bulk state blob: a project load replays them, and a dropped one is corrected
+// by the next touch of that control instead of desynchronising a whole table.
+enum MixOp : uint8_t {
+    MIX_OP_SET_GAIN = 0x01,       // track, value = centi-dB above the floor
+    MIX_OP_SET_PAN = 0x02,        // track, value = pan offset (see MixWireToPan)
+    MIX_OP_SET_MUTE = 0x03,       // track, value = 0 or 1
+    MIX_OP_SET_MASTER = 0x04,     // value = centi-dB above the floor; track ignored
+    MIX_OP_SET_MUTE_MASK = 0x05,  // value = bit per track, 1 = muted; track ignored
+    MIX_OP_SUB_METERS = 0x06,     // start MSG_MIX_METERS; value/track ignored
+    MIX_OP_UNSUB_METERS = 0x07,   // stop it
+};
+
+/**
+ * One mixer control change (frontend -> backend).
+ *
+ * `value` is op-dependent and always unsigned, so every encoding is stated
+ * where the op is declared above rather than left to the reader:
+ *
+ * - Gain and master are **centi-dB above the mixer floor**: 0 = silence
+ *   (-60 dB), 6600 = +6 dB. An unsigned offset rather than a signed dB value
+ *   keeps the field's whole range meaningful and puts silence at 0.
+ * - Pan matches PARAM_PAN's existing convention exactly - 0 hard left, 32768
+ *   centre, 65535 hard right - because a second pan encoding on the same wire
+ *   is how the two ends end up disagreeing about centre.
+ *
+ * MIX_OP_SET_MUTE_MASK is not in the original design list. It is here because
+ * solo is expanded to a mute set on the frontend, and sending that expansion
+ * as up to 16 separate SET_MUTE messages walks the engine through
+ * intermediate states where the wrong tracks are muted. With 5 ms mute ramps
+ * those intermediates are audible, so the whole set moves in one message.
+ */
+struct MixOpMessage {
+    uint8_t op;      // MixOp
+    uint8_t track;   // 0..15; ignored by master/mask/meter ops
+    uint16_t value;  // op-dependent; see above
+
+    MixOpMessage() : op(0), track(0), value(0) {}
+    MixOpMessage(uint8_t op_, uint8_t track_, uint16_t value_)
+        : op(op_), track(track_), value(value_) {}
+} __attribute__((packed));
+
+/// Tracks a MixMetersMessage reports on. Matches WaveX::Mix::kNumTracks and
+/// the instrument slot count; static_asserted where they meet.
+#define WAVEX_MIX_TRACKS 16
+
+/**
+ * Per-track peak (backend -> frontend), sent only while the mixer page has
+ * subscribed. Each byte is a log-mapped peak with 0 reserved for true silence
+ * - see WaveX::Mix::PeakToMeterByte, which both ends must use so the bar drawn
+ * matches the level measured.
+ *
+ * Master stereo meters stay on MSG_METER_PUSH; this does not replace them.
+ */
+struct MixMetersMessage {
+    uint8_t peak[WAVEX_MIX_TRACKS];
+
+    MixMetersMessage() {
+        for (uint8_t i = 0; i < WAVEX_MIX_TRACKS; ++i) {
+            peak[i] = 0;
+        }
+    }
+} __attribute__((packed));
 
 // Control change parameters
 enum ControlParameter : uint8_t {
@@ -1482,6 +1550,13 @@ class ProtocolHandler {
                                          size_t buffer_size,
                                          const SampleEditMessage& msg);
 
+    /** One mixer control change (frontend -> backend). */
+    static size_t CreateMixOpPacket(uint8_t* buffer, size_t buffer_size, const MixOpMessage& msg);
+    /** Per-track peak levels (backend -> frontend). */
+    static size_t CreateMixMetersPacket(uint8_t* buffer,
+                                        size_t buffer_size,
+                                        const MixMetersMessage& msg);
+
     /** Waveform envelope request (frontend -> backend). */
     static size_t CreateEnvelopeReqPacket(uint8_t* buffer,
                                           size_t buffer_size,
@@ -1666,6 +1741,10 @@ inline const char* MessageTypeName(uint8_t type) {
             return "INST_STATUS";
         case MSG_INST_ZONE_SYNC:
             return "INST_ZONE_SYNC";
+        case MSG_MIX_OP:
+            return "MIX_OP";
+        case MSG_MIX_METERS:
+            return "MIX_METERS";
         case MSG_ERROR:
             return "ERROR";
         default:

@@ -118,6 +118,38 @@ inline float MeterByteToDb(uint8_t value) {
     return kMinGainDb + unit * (-kMinGainDb);
 }
 
+// ---------------------------------------------------------------------------
+// Wire encoding for MSG_MIX_OP. Lives here rather than in protocol.h so the
+// protocol header stays free of <cmath>, and so these convert through exactly
+// the same dB mapping as everything above - the failure this file exists to
+// prevent is the two ends disagreeing about what a fader position means.
+// ---------------------------------------------------------------------------
+
+/// Centi-dB above the floor, so 0 is silence and the whole unsigned range is
+/// meaningful. -60 dB -> 0, 0 dB -> 6000, +6 dB -> 6600.
+inline uint16_t GainDbToWire(float db) {
+    const float clamped = db < kMinGainDb ? kMinGainDb : (db > kMaxGainDb ? kMaxGainDb : db);
+    return static_cast<uint16_t>((clamped - kMinGainDb) * 100.0f + 0.5f);
+}
+
+inline float WireToGainDb(uint16_t value) {
+    const float db = kMinGainDb + static_cast<float>(value) / 100.0f;
+    return db > kMaxGainDb ? kMaxGainDb : db;
+}
+
+/// Matches PARAM_PAN's existing convention: 0 hard left, 32768 centre, 65535
+/// hard right. Reused rather than reinvented - a second pan encoding on the
+/// same wire is how two ends end up disagreeing about where centre is.
+inline uint16_t PanToWire(float offset) {
+    const float clamped = offset < -1.0f ? -1.0f : (offset > 1.0f ? 1.0f : offset);
+    const float scaled = (clamped + 1.0f) * 32767.5f;
+    return static_cast<uint16_t>(scaled < 0.0f ? 0.0f : (scaled > 65535.0f ? 65535.0f : scaled));
+}
+
+inline float WireToPan(uint16_t value) {
+    return (static_cast<float>(value) / 32767.5f) - 1.0f;
+}
+
 /// Per-track control state. Solo is absent on purpose - see the file header.
 struct TrackMix {
     float gain = 1.0f;        ///< linear, post-voice and pre-master
