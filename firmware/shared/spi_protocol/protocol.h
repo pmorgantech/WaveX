@@ -1366,6 +1366,13 @@ struct SeqClockOutMessage {
 enum InstOpCode : uint8_t {
     INST_OP_SFZ_PROBE = 1,
     INST_OP_SFZ_LOAD = 2,
+    // Modulation matrix (param-locks-and-modulation.md §3/§9 stage 4):
+    // writes one of an instrument's 8 mod-matrix slots. `slot` above still
+    // means the INSTRUMENT slot (0..15) an SFZ load also targets;
+    // InstOpMessage::mod_slot_index below is which of THAT instrument's 8
+    // matrix slots this particular write targets. `path` is unused for
+    // this op.
+    INST_OP_SET_MOD_SLOT = 3,
 };
 
 enum InstStatusState : uint8_t {
@@ -1397,17 +1404,74 @@ enum InstError : uint8_t {
 
 // MSG_INST_OP (E->D). request_id lets the browser discard a probe response
 // that belongs to a selection the user has already moved away from.
+//
+// mod_slot_index/mod_source/mod_dest/mod_depth/mod_curve/mod_flags are used
+// only by INST_OP_SET_MOD_SLOT and mirror mod_matrix.hpp's ModSlot
+// field-for-field (mod_source/mod_dest/mod_curve are that Daisy-only
+// header's ModSource/ModDest/ModCurve enums, carried here as raw bytes so
+// this shared protocol header does not depend on Daisy audio-engine code -
+// the same reasoning MidiCcMessage's `cc` byte already follows). `path` is
+// unused/empty for this op, the same way `path` is unused for a pure probe
+// vs. a load in the other direction.
 struct InstOpMessage {
     uint32_t request_id;
     uint8_t slot;
     uint8_t op;  // InstOpCode
     uint16_t reserved;
     char path[BROWSE_PATH_MAX];
+    uint8_t mod_slot_index;  // 0..kMaxModSlots-1 (mod_matrix.hpp)
+    uint8_t mod_source;      // ModSource
+    uint8_t mod_dest;        // ModDest
+    int16_t mod_depth;       // +-32767 -> +-100%
+    uint8_t mod_curve;       // ModCurve
+    uint8_t mod_flags;       // ModSlotFlags
 
-    InstOpMessage() : request_id(0), slot(0), op(0), reserved(0) { path[0] = '\0'; }
+    InstOpMessage()
+        : request_id(0),
+          slot(0),
+          op(0),
+          reserved(0),
+          mod_slot_index(0),
+          mod_source(0),
+          mod_dest(0),
+          mod_depth(0),
+          mod_curve(0),
+          mod_flags(0) {
+        path[0] = '\0';
+    }
     InstOpMessage(uint32_t request_id_, uint8_t slot_, uint8_t op_, const char* path_)
-        : request_id(request_id_), slot(slot_), op(op_), reserved(0) {
+        : request_id(request_id_),
+          slot(slot_),
+          op(op_),
+          reserved(0),
+          mod_slot_index(0),
+          mod_source(0),
+          mod_dest(0),
+          mod_depth(0),
+          mod_curve(0),
+          mod_flags(0) {
         detail::CopyWireString(path, sizeof(path), path_);
+    }
+    // INST_OP_SET_MOD_SLOT.
+    InstOpMessage(uint32_t request_id_,
+                  uint8_t slot_,
+                  uint8_t mod_slot_index_,
+                  uint8_t mod_source_,
+                  uint8_t mod_dest_,
+                  int16_t mod_depth_,
+                  uint8_t mod_curve_,
+                  uint8_t mod_flags_)
+        : request_id(request_id_),
+          slot(slot_),
+          op(INST_OP_SET_MOD_SLOT),
+          reserved(0),
+          mod_slot_index(mod_slot_index_),
+          mod_source(mod_source_),
+          mod_dest(mod_dest_),
+          mod_depth(mod_depth_),
+          mod_curve(mod_curve_),
+          mod_flags(mod_flags_) {
+        path[0] = '\0';
     }
 } __attribute__((packed));
 

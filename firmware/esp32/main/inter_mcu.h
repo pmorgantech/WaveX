@@ -164,6 +164,19 @@ esp_err_t inter_mcu_send_inst_op(uint32_t request_id,
                                  uint8_t slot,
                                  WaveX::Protocol::InstOpCode op,
                                  const char* path);
+// INST_OP_SET_MOD_SLOT (param-locks-and-modulation.md §9 stage 4). source/
+// dest/curve/flags are WaveX::AudioEngine::ModSource/ModDest/ModCurve/
+// ModSlotFlags values (mod_matrix.hpp) - that header is Daisy audio-engine
+// code the ESP32 side does not build against, so this takes the raw wire
+// bytes directly, the same way MidiCcMessage's `cc` is a raw byte here.
+esp_err_t inter_mcu_send_mod_slot(uint32_t request_id,
+                                  uint8_t instrument_slot,
+                                  uint8_t mod_slot_index,
+                                  uint8_t source,
+                                  uint8_t dest,
+                                  int16_t depth,
+                                  uint8_t curve,
+                                  uint8_t flags);
 
 // Control RX task behavior
 extern "C" void inter_mcu_set_suspended(bool suspended);

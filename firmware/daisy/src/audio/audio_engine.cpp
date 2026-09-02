@@ -163,22 +163,18 @@ static WaveX::AudioEngine::VoiceLiveParams s_voice_live_pending;
 static SnapshotMailbox<WaveX::AudioEngine::VoiceLiveParams> s_voice_live_mailbox;
 
 // Modulation matrix (roadmap Phase 2.5 item 4; param-locks-and-modulation.md
-// §3). ENGINE-GLOBAL slots, not per-instrument, for the same reason
-// s_voice_live_pending above is engine-global: nothing can address an
-// instrument slot differently yet, so a per-slot table would be N copies of
-// the same (empty) array. It becomes per-instrument when the mod-slot
-// protocol op lands (§9 stage 4) - that stage also needs a mailbox here, the
-// same double-buffering s_voice_live_pending/mailbox already do, since a
-// main-loop write must not tear mid-copy under the callback that reads it.
-// Until then this array is only ever zero-initialized and never written, so
-// plain (non-DTCM) storage is safe to read directly from the callback.
-//
-// All-zero is a well-defined "no slots configured" state: EvaluateModMatrix
-// skips any slot whose source/dest/depth is 0, which every field of a
-// zeroed ModSlot is. So today this is a no-op - every voice renders exactly
-// as it did before the matrix existed - until something populates it.
-static WaveX::AudioEngine::ModSlot s_mod_slots[WaveX::AudioEngine::kMaxModSlots];
-static uint8_t s_mod_slot_count = 0;
+// §3/§9 stage 4). Slots are instrument-scoped, stored on Instrument itself
+// (SfzLoader's InstrumentBank) rather than engine-global - unlike
+// s_voice_live_pending above, an instrument slot IS now addressable
+// (MSG_INST_OP's own `slot` field), so there is no more "N copies of the
+// same array" problem to work around. ResolveModSlots below is the
+// ModSlotResolver VoiceManager::TickModulation() uses to look up each
+// voice's OWN instrument's slots (Voice::slot) - see SfzLoader::GetModSlots's
+// own comment for why this reads SfzLoader's bank directly rather than
+// through a mailbox.
+static const WaveX::AudioEngine::ModSlot* ResolveModSlots(const void*, uint8_t slot) {
+    return SfzLoader::GetModSlots(slot);
+}
 
 // Two engine-global LFOs (§5) - global by design regardless of the
 // instrument model, so unlike the mod slots above they don't wait on it
@@ -1748,18 +1744,18 @@ void Callback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t
     // param-locks-and-modulation.md §3/§5). One callback IS one 1kHz control
     // tick (Timebase's own invariant - see its comment), so this runs once
     // per block: tick both global LFOs, then evaluate every sounding voice's
-    // modulation destinations so Render() below picks up this tick's values
-    // rather than the previous one's. Unconditional on
-    // WAVEX_ANALOG_CV_ENABLED - this is the all-digital path, unrelated to
-    // the optional analog CV stage further down. s_mod_slots starts (and
-    // currently stays) empty, so today this costs a tick of each LFO and a
-    // no-op matrix pass per voice until the mod-slot protocol op populates it.
+    // modulation destinations (against ITS OWN instrument's slots, via
+    // ResolveModSlots) so Render() below picks up this tick's values rather
+    // than the previous one's. Unconditional on WAVEX_ANALOG_CV_ENABLED -
+    // this is the all-digital path, unrelated to the optional analog CV
+    // stage further down.
     {
         WaveX::AudioEngine::ModSources mod_global_sources;
         mod_global_sources.lfo1 = s_mod_lfo1.Tick();
         mod_global_sources.lfo2 = s_mod_lfo2.Tick();
+        const WaveX::AudioEngine::ModSlotResolver mod_slot_resolver{nullptr, &ResolveModSlots};
         s_voice_manager.TickModulation(
-            s_mod_slots, s_mod_slot_count, mod_global_sources, static_cast<uint32_t>(size));
+            mod_slot_resolver, mod_global_sources, static_cast<uint32_t>(size));
     }
 
     if (s_voice_manager.ActiveVoiceCount() > 0 &&
@@ -1940,15 +1936,15 @@ void OnControlChange(const ControlChangeMessage& ctrl_msg) {
             voice_changed = true;
             break;
         }
-        case PARAM_MODULATION_MATRIX:
-            // Repurposed for Stage A as the envelope->cutoff modulation
-            // depth until Phase 2 defines a real mod matrix.
-            s_para_pending.env_to_cutoff = norm;
-            para_changed = true;
-            break;
         default:
-            // PARAM_VOLUME / LFO_*: no Stage A consumer (the analog VCA is
-            // the level control; a global LFO is future work).
+            // PARAM_MODULATION_MATRIX (0x0A): retired-but-reserved now that
+            // real mod-matrix slots exist (SET_MOD_SLOT, MSG_INST_OP) -
+            // param-locks-and-modulation.md's own note that this alias's
+            // behavior is deleted in the same commit the real thing lands.
+            // env_to_cutoff keeps its compiled-in default (0.8) since Stage A
+            // is deferred hardware anyway. PARAM_VOLUME / LFO_*: no Stage A
+            // consumer either (the analog VCA is the level control; a global
+            // LFO is future work).
             break;
     }
     if (para_changed) {
@@ -2664,6 +2660,20 @@ bool LoadSfzInstrument(const char* path, uint8_t slot) {
 }
 
 void OnInstrumentOp(const InstOpMessage& request) {
+    if (request.op == INST_OP_SET_MOD_SLOT) {
+        // Not a probe/load request - Begin()'s state machine (below) would
+        // reject it as a malformed one (empty path, unrecognised op) and send
+        // a spurious INST_STATUS_FAILED back to the ESP32. Handle it and
+        // return before Begin() ever sees it.
+        ModSlot slot;
+        slot.source = request.mod_source;
+        slot.dest = request.mod_dest;
+        slot.depth = request.mod_depth;
+        slot.curve = request.mod_curve;
+        slot.flags = request.mod_flags;
+        SfzLoader::SetModSlot(request.slot, request.mod_slot_index, slot);
+        return;
+    }
     if (SfzLoader::Begin(request) && request.op == INST_OP_SFZ_LOAD) {
         // Streaming audition and instrument import share FatFs/SD bandwidth.
         // A load owns storage until its cooperative state machine completes.

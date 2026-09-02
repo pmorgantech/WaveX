@@ -303,6 +303,31 @@ TEST_F(MessageTypeTest, InstrumentMessagesRoundTrip) {
     EXPECT_STREQ(MessageTypeName(MSG_INST_STATUS), "INST_STATUS");
 }
 
+TEST_F(MessageTypeTest, SetModSlotMessageRoundTrips) {
+    // param-locks-and-modulation.md §9 stage 4: INST_OP_SET_MOD_SLOT rides
+    // MSG_INST_OP via a second InstOpMessage constructor - path stays empty,
+    // the mod_* fields carry the payload instead.
+    InstOpMessage request(0xABCDEF01u, 9, 4 /*mod_slot_index*/, 5, 2, -32767, 1, 1);
+    const size_t size = ProtocolHandler::CreatePacket(
+        buffer_.data(), buffer_.size(), MSG_INST_OP, &request, sizeof(request));
+    ASSERT_GT(size, 0u);
+    EXPECT_TRUE(ProtocolHandler::ValidatePacket(buffer_.data(), size));
+
+    InstOpMessage parsed;
+    ASSERT_TRUE(
+        ProtocolHandler::ParseMessage(buffer_.data(), MSG_INST_OP, &parsed, sizeof(parsed)));
+    EXPECT_EQ(parsed.request_id, request.request_id);
+    EXPECT_EQ(parsed.slot, 9);
+    EXPECT_EQ(parsed.op, INST_OP_SET_MOD_SLOT);
+    EXPECT_EQ(parsed.mod_slot_index, 4);
+    EXPECT_EQ(parsed.mod_source, 5);
+    EXPECT_EQ(parsed.mod_dest, 2);
+    EXPECT_EQ(parsed.mod_depth, -32767);
+    EXPECT_EQ(parsed.mod_curve, 1);
+    EXPECT_EQ(parsed.mod_flags, 1);
+    EXPECT_STREQ(parsed.path, "");
+}
+
 // Test SampleStopReq/Resp messages round trip
 TEST_F(MessageTypeTest, SampleStopMessages) {
     SampleStopReqMessage req(3);

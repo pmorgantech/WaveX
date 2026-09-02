@@ -420,6 +420,27 @@ TEST_F(MessageDispatchTest, InstrumentOpReachesAudioEngineWithBoundedPath) {
     EXPECT_STREQ(got.path, "/Instruments/piano.sfz");
 }
 
+TEST_F(MessageDispatchTest, SetModSlotOpReachesAudioEngine) {
+    // param-locks-and-modulation.md §9 stage 4: INST_OP_SET_MOD_SLOT rides
+    // the same MSG_INST_OP/InstOpMessage as SFZ probe/load, distinguished by
+    // `op` - it reaches the same dispatch record as any other InstOpMessage.
+    InstOpMessage op(99, 5, 2, 6 /*SRC_LFO1*/, 1 /*DEST_CUTOFF*/, -12345, 2 /*CURVE_S*/, 1);
+    Dispatch(MSG_INST_OP, op);
+
+    ASSERT_EQ(GetDispatchRecord().instrument_ops.size(), 1u);
+    const auto& got = GetDispatchRecord().instrument_ops[0];
+    EXPECT_EQ(got.request_id, 99u);
+    EXPECT_EQ(got.slot, 5);
+    EXPECT_EQ(got.op, INST_OP_SET_MOD_SLOT);
+    EXPECT_EQ(got.mod_slot_index, 2);
+    EXPECT_EQ(got.mod_source, 6);
+    EXPECT_EQ(got.mod_dest, 1);
+    EXPECT_EQ(got.mod_depth, -12345);
+    EXPECT_EQ(got.mod_curve, 2);
+    EXPECT_EQ(got.mod_flags, 1);
+    EXPECT_STREQ(got.path, "");
+}
+
 TEST_F(MessageDispatchTest, InstrumentOpPathIsTerminatedAtDispatchBoundary) {
     std::vector<uint8_t> payload(sizeof(InstOpMessage), 0x41);
     ProcessInterMcuMessage(MSG_INST_OP, 1, payload.data(), payload.size());

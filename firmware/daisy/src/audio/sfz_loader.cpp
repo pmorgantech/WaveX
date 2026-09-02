@@ -506,6 +506,19 @@ uint8_t ResolveNote(
     return s_bank.ResolveNote(slot, note, velocity, s_sample_table.Resolver(), out, max);
 }
 
+bool SetModSlot(uint8_t slot, uint8_t mod_slot_index, const ModSlot& value) {
+    if (slot >= kNumInstrumentSlots || mod_slot_index >= kMaxModSlots)
+        return false;
+    s_bank.Slot(slot).mod_slots[mod_slot_index] = value;
+    return true;
+}
+
+const ModSlot* GetModSlots(uint8_t slot) {
+    if (slot >= kNumInstrumentSlots)
+        return nullptr;
+    return s_bank.Slot(slot).mod_slots;
+}
+
 }  // namespace SfzLoader
 }  // namespace AudioEngine
 }  // namespace WaveX

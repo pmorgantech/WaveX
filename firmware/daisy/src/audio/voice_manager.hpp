@@ -274,6 +274,21 @@ struct VoiceTriggerParams {
     float filter_env_release_s = 0.1f;
 };
 
+// Resolves a voice's owning instrument slot (Voice::slot) to that
+// instrument's fixed 8-entry ModSlot array (param-locks-and-modulation.md
+// §3/§9 stage 4). Function pointer + context, not std::function - the same
+// reasoning as instrument.hpp's SampleResolver: this keeps VoiceManager
+// HAL-free and independent of the instrument model, which sits a layer
+// above it (instrument.hpp includes voice_manager.hpp, not the reverse).
+// A null result (no resolver bound, or an out-of-range slot) means "no
+// slots" - EvaluateModMatrix() already treats that as an identity no-op.
+struct ModSlotResolver {
+    const void* ctx = nullptr;
+    const ModSlot* (*resolve)(const void* ctx, uint8_t slot) = nullptr;
+
+    const ModSlot* Get(uint8_t slot) const { return resolve ? resolve(ctx, slot) : nullptr; }
+};
+
 // Live (base) voice parameters - the values a knob edits, as opposed to the
 // per-trigger snapshot VoiceTriggerParams carries.
 //
@@ -737,12 +752,11 @@ class VoiceManager {
      *
      * Intended to run once per control tick from the audio callback - on
      * this engine one callback IS one 1kHz tick (timebase.hpp), so this is
-     * called once per block, not once per sample. `slots`/`slot_count` are
-     * engine-global for now, mirroring VoiceLiveParams: nothing can address
-     * an instrument slot differently yet, so a per-slot table would be N
-     * copies of the same array. It becomes per-instrument with the
-     * instrument model's mod-slot storage (protocol stage,
-     * param-locks-and-modulation.md §9 stage 4).
+     * called once per block, not once per sample. `resolver` looks up each
+     * voice's OWN instrument slot's matrix (Voice::slot, set at Trigger()
+     * from VoiceTriggerParams::slot) - the mod matrix is instrument-scoped
+     * (§3), so two voices from different slots can be modulated completely
+     * differently in the same tick.
      *
      * `global` carries this tick's engine-wide sources (LFO1/2, macros,
      * modwheel/aftertouch) shared by every voice. Per-trigger sources
@@ -762,19 +776,19 @@ class VoiceManager {
      * Release()/Choke() calls same as env1, so it needs no separate guard
      * either.)
      */
-    void TickModulation(const ModSlot* slots,
-                        uint8_t slot_count,
+    void TickModulation(const ModSlotResolver& resolver,
                         const ModSources& global,
                         uint32_t block_size) {
         for (auto& v: voices_) {
             if (v.state != VoiceState::Playing)
                 continue;
+            const ModSlot* slots = resolver.Get(v.slot);
             ModSources sources = global;
             sources.velocity = v.mod_velocity;
             sources.note = v.mod_note;
             sources.random = v.mod_random;
             sources.env_filter = v.env2.AdvanceBlock(block_size);
-            v.SetBlockModulation(EvaluateModMatrix(slots, slot_count, sources));
+            v.SetBlockModulation(EvaluateModMatrix(slots, slots ? kMaxModSlots : 0, sources));
         }
     }
 

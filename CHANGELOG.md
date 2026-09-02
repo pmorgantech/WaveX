@@ -13,6 +13,37 @@ versioning and release process.
 
 ### Added
 
+- Wired the modulation matrix's mod-slot protocol op end to end (roadmap
+  Phase 2.5 item 4, `param-locks-and-modulation.md` §9 stage 4):
+  `Instrument::mod_slots[8]` (`instrument.hpp`) replaces the previous
+  temporary engine-global slot array, written by a new `INST_OP_SET_MOD_SLOT`
+  op riding the existing `MSG_INST_OP` (extends `InstOpMessage` with
+  `mod_slot_index`/`mod_source`/`mod_dest`/`mod_depth`/`mod_curve`/
+  `mod_flags`; `path` is unused for this op) via `SfzLoader::SetModSlot()`.
+  `VoiceManager::TickModulation()` now takes a `ModSlotResolver` (function
+  pointer + context, mirroring `instrument.hpp`'s `SampleResolver`) and looks
+  up each voice's OWN instrument's slots via `Voice::slot` instead of
+  applying one shared array to every voice — two voices from different
+  instruments can now be modulated completely independently in the same
+  tick. ESP32 send wrapper `inter_mcu_send_mod_slot()`; round-trip test
+  (`message_types_test.cpp`) and dispatch test (`message_dispatch_test.cpp`);
+  `inter-mcu-protocol.md` updated. `PARAM_MODULATION_MATRIX`'s (0x0A)
+  temporary `OnControlChange` case is deleted now that real matrix slots
+  exist (enum value stays reserved, per the design doc's own note). Read
+  directly from the audio callback with no mailbox — a `ModSlot` is smaller
+  than this architecture's atomic word, but every field a torn read could
+  produce is still bounds-checked downstream (`ModSources::Get()`/
+  `EvaluateModMatrix()`'s `default` cases), so the worst case is one
+  self-correcting control tick, a different risk class from
+  `VoiceLiveParams`/`ParaphonicParams` where a torn read could reach
+  hardware CV or a sustained audible wrong state. 7 new tests (2 protocol,
+  2 `Instrument` storage, 3 `VoiceManagerModulationTest`, including one
+  proving two instrument slots are modulated independently — the actual
+  behavior this change exists for). No UI sends this op yet, so it remains a
+  no-op on hardware until something does; `SRC_MODWHEEL`/`SRC_AFTERTOUCH`
+  still read 0 (MIDI CC/aftertouch forwarding is a separate, still-open,
+  gap). Daisy device build and ESP32 build both verified green.
+
 - Added the second envelope, `Voice::env2` (roadmap Phase 2.5 item 4, `SRC_ENV_FILTER`):
   the same `Envelope` class as the amp envelope, triggered and released
   alongside it from `Trigger()`/`Release()`/`ReleaseSlot()`/`Choke()`. Unlike

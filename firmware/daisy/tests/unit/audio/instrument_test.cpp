@@ -373,3 +373,38 @@ TEST(InstrumentTest, BankSlotOutOfRangeIsSafe) {
     VoiceTriggerParams out[kMaxLayerTriggers];
     EXPECT_EQ(bank.ResolveNote(200, 60, 100, samples.Resolver(), out, kMaxLayerTriggers), 0);
 }
+
+// --- Modulation matrix storage (param-locks-and-modulation.md §9 stage 4) --
+//
+// mod_slots is a fixed 8-entry array with no separate "populated count" -
+// these pin that a fresh Instrument's array is all identity (SRC_NONE/
+// DEST_NONE), matching what EvaluateModMatrix() already treats as a no-op,
+// and that a slot is addressable and independent of every other slot and
+// every other instrument in the bank.
+
+TEST(InstrumentTest, FreshInstrumentHasIdentityModSlots) {
+    Instrument ins;
+    for (uint8_t i = 0; i < kMaxModSlots; ++i) {
+        EXPECT_EQ(ins.mod_slots[i].source, SRC_NONE);
+        EXPECT_EQ(ins.mod_slots[i].dest, DEST_NONE);
+        EXPECT_EQ(ins.mod_slots[i].depth, 0);
+    }
+}
+
+TEST(InstrumentTest, ModSlotsAreIndependentPerInstrumentAndPerSlotIndex) {
+    InstrumentBank bank;
+    ModSlot a;
+    a.source = SRC_LFO1;
+    a.dest = DEST_CUTOFF;
+    a.depth = 12345;
+    bank.Slot(2).mod_slots[3] = a;
+
+    // A different slot index on the same instrument is untouched.
+    EXPECT_EQ(bank.Slot(2).mod_slots[4].source, SRC_NONE);
+    // A different instrument slot entirely is untouched.
+    EXPECT_EQ(bank.Slot(5).mod_slots[3].source, SRC_NONE);
+    // The written entry reads back exactly.
+    EXPECT_EQ(bank.Slot(2).mod_slots[3].source, SRC_LFO1);
+    EXPECT_EQ(bank.Slot(2).mod_slots[3].dest, DEST_CUTOFF);
+    EXPECT_EQ(bank.Slot(2).mod_slots[3].depth, 12345);
+}

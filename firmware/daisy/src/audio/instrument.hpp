@@ -20,6 +20,7 @@
 // Phase 2 sequencer's per-track sample lookup will resolve through exactly
 // this path once wired.
 
+#include "mod_matrix.hpp"
 #include "voice_manager.hpp"
 #include <cmath>
 #include <cstddef>
@@ -66,6 +67,12 @@ struct Zone {
 struct Instrument {
     InstrumentMode mode = InstrumentMode::Keyboard;
     Zone zones[kMaxZones];
+    // Modulation matrix (param-locks-and-modulation.md §3/§9 stage 4).
+    // Always kMaxModSlots (8) entries - there is no separate "how many are
+    // populated" count, because a default-constructed ModSlot is already
+    // SRC_NONE/DEST_NONE, which EvaluateModMatrix() treats as a no-op. An
+    // instrument nothing has configured therefore modulates nothing.
+    ModSlot mod_slots[kMaxModSlots];
 };
 
 // The loaded audio a zone's sample_id resolves to. `valid()` gates whether a

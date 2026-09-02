@@ -1531,6 +1531,21 @@ TEST(VoiceManagerTrackMix, PanOffsetShiftsTheStereoBalance) {
 // snapshot, a stolen voice not inheriting the previous note's modulation, and
 // modulation staying audible through the release tail - the same guarantee
 // ApplyLiveParams's filter path already gives.
+//
+// TickModulation() takes a ModSlotResolver rather than a slots array
+// directly - per-instrument scoping (§9 stage 4) means it looks up each
+// voice's OWN instrument's slots via Voice::slot. Every test below uses one
+// resolver that ignores the slot argument and always returns the same
+// fixed-size array - these tests aren't exercising per-instrument scoping
+// (that's instrument_test.cpp/sfz_loader's job), just the matrix wiring
+// itself, so one shared array is the simplest stand-in for "this voice's
+// instrument".
+
+namespace {
+const WaveX::AudioEngine::ModSlot* SingleModSlotArray(const void* ctx, uint8_t /*slot*/) {
+    return static_cast<const WaveX::AudioEngine::ModSlot*>(ctx);
+}
+}  // namespace
 
 TEST(VoiceManagerModulationTest, PitchDestinationShiftsIncrementEachTick) {
     VoiceManager vm;
@@ -1543,13 +1558,14 @@ TEST(VoiceManagerModulationTest, PitchDestinationShiftsIncrementEachTick) {
     ASSERT_GE(idx, 0);
     ASSERT_FLOAT_EQ(VoiceAt(vm, idx).increment, 1.0f);
 
-    WaveX::AudioEngine::ModSlot slots[1];
+    WaveX::AudioEngine::ModSlot slots[WaveX::AudioEngine::kMaxModSlots];
+    const WaveX::AudioEngine::ModSlotResolver mod_resolver{slots, &SingleModSlotArray};
     slots[0].source = WaveX::AudioEngine::SRC_MACRO_1;
     slots[0].dest = WaveX::AudioEngine::DEST_PITCH;
     slots[0].depth = 32767;  // full depth
     WaveX::AudioEngine::ModSources global;
     global.macro[0] = 1.0f;
-    vm.TickModulation(slots, 1, global, 48);
+    vm.TickModulation(mod_resolver, global, 48);
 
     // SetBlockModulation() only writes the multiplier - it's Render() that
     // recomputes .increment from it, once per block, per §3 ("applied at the
@@ -1598,13 +1614,14 @@ TEST(VoiceManagerModulationTest, CutoffDestinationAttenuatesASoundingVoice) {
     // A full-negative-depth slot brings the modulated cutoff down to
     // base_cutoff_hz * 2^-4 = 1250 Hz, closing the filter on an
     // already-sounding voice with no retrigger.
-    WaveX::AudioEngine::ModSlot slots[1];
+    WaveX::AudioEngine::ModSlot slots[WaveX::AudioEngine::kMaxModSlots];
+    const WaveX::AudioEngine::ModSlotResolver mod_resolver{slots, &SingleModSlotArray};
     slots[0].source = WaveX::AudioEngine::SRC_MACRO_1;
     slots[0].dest = WaveX::AudioEngine::DEST_CUTOFF;
     slots[0].depth = -32767;
     WaveX::AudioEngine::ModSources global;
     global.macro[0] = 1.0f;
-    vm.TickModulation(slots, 1, global, 48);
+    vm.TickModulation(mod_resolver, global, 48);
 
     std::vector<float> l2(256), r2(256);
     vm.Render(l2.data(), r2.data(), l2.size());
@@ -1620,13 +1637,14 @@ TEST(VoiceManagerModulationTest, GainDestinationScalesTheVoice) {
     int idx = FindVoiceForNote(vm, 60);
     ASSERT_GE(idx, 0);
 
-    WaveX::AudioEngine::ModSlot slots[1];
+    WaveX::AudioEngine::ModSlot slots[WaveX::AudioEngine::kMaxModSlots];
+    const WaveX::AudioEngine::ModSlotResolver mod_resolver{slots, &SingleModSlotArray};
     slots[0].source = WaveX::AudioEngine::SRC_MACRO_1;
     slots[0].dest = WaveX::AudioEngine::DEST_GAIN;
     slots[0].depth = -16384;  // depth ~ -0.5 -> gain_mul ~0.5
     WaveX::AudioEngine::ModSources global;
     global.macro[0] = 1.0f;
-    vm.TickModulation(slots, 1, global, 48);
+    vm.TickModulation(mod_resolver, global, 48);
 
     // Unlike pitch/cutoff, gain (and pan) are read directly from the voice
     // every Render() call rather than recomputed into cached state, so the
@@ -1647,13 +1665,14 @@ TEST(VoiceManagerModulationTest, PanDestinationShiftsTheStereoBalance) {
     vm.Render(l, r, 64);
     EXPECT_NEAR(PeakAbs(l, 64), PeakAbs(r, 64), 1e-5f) << "centred voice was not balanced";
 
-    WaveX::AudioEngine::ModSlot slots[1];
+    WaveX::AudioEngine::ModSlot slots[WaveX::AudioEngine::kMaxModSlots];
+    const WaveX::AudioEngine::ModSlotResolver mod_resolver{slots, &SingleModSlotArray};
     slots[0].source = WaveX::AudioEngine::SRC_MACRO_1;
     slots[0].dest = WaveX::AudioEngine::DEST_PAN;
     slots[0].depth = 32767;  // full positive -> pan_offset +1 (hard right)
     WaveX::AudioEngine::ModSources global;
     global.macro[0] = 1.0f;
-    vm.TickModulation(slots, 1, global, 48);
+    vm.TickModulation(mod_resolver, global, 48);
 
     vm.Render(l, r, 64);
     EXPECT_NEAR(PeakAbs(l, 64), 0.0f, 1e-6f);
@@ -1670,7 +1689,8 @@ TEST(VoiceManagerModulationTest, VelocityAndNoteAreSampledOnceAtTriggerNotFromTh
     int idx = FindVoiceForNote(vm, 60);
     ASSERT_GE(idx, 0);
 
-    WaveX::AudioEngine::ModSlot slots[1];
+    WaveX::AudioEngine::ModSlot slots[WaveX::AudioEngine::kMaxModSlots];
+    const WaveX::AudioEngine::ModSlotResolver mod_resolver{slots, &SingleModSlotArray};
     slots[0].source = WaveX::AudioEngine::SRC_VELOCITY;
     slots[0].dest = WaveX::AudioEngine::DEST_PITCH;
     slots[0].depth = 32767;
@@ -1678,7 +1698,7 @@ TEST(VoiceManagerModulationTest, VelocityAndNoteAreSampledOnceAtTriggerNotFromTh
     // substitutes each voice's own sampled velocity in its place.
     WaveX::AudioEngine::ModSources global;
     global.velocity = 0.0f;
-    vm.TickModulation(slots, 1, global, 48);
+    vm.TickModulation(mod_resolver, global, 48);
     std::vector<float> l(8), r(8);
     vm.Render(l.data(), r.data(), l.size());
 
@@ -1700,13 +1720,14 @@ TEST(VoiceManagerModulationTest,
         vm.Trigger(p);
     }
 
-    WaveX::AudioEngine::ModSlot slots[1];
+    WaveX::AudioEngine::ModSlot slots[WaveX::AudioEngine::kMaxModSlots];
+    const WaveX::AudioEngine::ModSlotResolver mod_resolver{slots, &SingleModSlotArray};
     slots[0].source = WaveX::AudioEngine::SRC_MACRO_1;
     slots[0].dest = WaveX::AudioEngine::DEST_PITCH;
     slots[0].depth = 32767;
     WaveX::AudioEngine::ModSources global;
     global.macro[0] = 1.0f;
-    vm.TickModulation(slots, 1, global, 48);  // every voice now has mod_pitch_mul != 1.0
+    vm.TickModulation(mod_resolver, global, 48);  // every voice now has mod_pitch_mul != 1.0
     std::vector<float> warm(8), warm_r(8);
     vm.Render(warm.data(), warm_r.data(), warm.size());  // recomputes .increment from it
 
@@ -1754,13 +1775,14 @@ TEST(VoiceManagerModulationTest, ModulationStaysAudibleThroughTheReleaseTail) {
     vm.Release(60);
     ASSERT_EQ(vm.ActiveVoiceCount(), 1) << "voice should still be in its release tail";
 
-    WaveX::AudioEngine::ModSlot slots[1];
+    WaveX::AudioEngine::ModSlot slots[WaveX::AudioEngine::kMaxModSlots];
+    const WaveX::AudioEngine::ModSlotResolver mod_resolver{slots, &SingleModSlotArray};
     slots[0].source = WaveX::AudioEngine::SRC_MACRO_1;
     slots[0].dest = WaveX::AudioEngine::DEST_CUTOFF;
     slots[0].depth = -32767;
     WaveX::AudioEngine::ModSources global;
     global.macro[0] = 1.0f;
-    vm.TickModulation(slots, 1, global, 48);
+    vm.TickModulation(mod_resolver, global, 48);
 
     std::vector<float> l(256), r(256);
     vm.Render(l.data(), r.data(), l.size());
@@ -1771,13 +1793,64 @@ TEST(VoiceManagerModulationTest, ModulationStaysAudibleThroughTheReleaseTail) {
 TEST(VoiceManagerModulationTest, IdleVoicesAreUntouched) {
     VoiceManager vm;
     vm.Init(48000);
-    WaveX::AudioEngine::ModSlot slots[1];
+    WaveX::AudioEngine::ModSlot slots[WaveX::AudioEngine::kMaxModSlots];
+    const WaveX::AudioEngine::ModSlotResolver mod_resolver{slots, &SingleModSlotArray};
     slots[0].source = WaveX::AudioEngine::SRC_MACRO_1;
     slots[0].dest = WaveX::AudioEngine::DEST_CUTOFF;
     slots[0].depth = 32767;
     WaveX::AudioEngine::ModSources global;
-    vm.TickModulation(slots, 1, global, 48);  // must not fault or wake anything
+    vm.TickModulation(mod_resolver, global, 48);  // must not fault or wake anything
     EXPECT_EQ(vm.ActiveVoiceCount(), 0);
+}
+
+// The mod matrix is instrument-scoped (§3): two voices from different
+// instrument slots must be modulated independently. This is the behavior
+// the ModSlotResolver indirection exists for (§9 stage 4) - the earlier
+// tests above all use one resolver that ignores `slot` and always returns
+// the same array, which would pass even if per-instrument scoping were
+// silently broken. This one actually resolves differently per instrument.
+TEST(VoiceManagerModulationTest, DifferentInstrumentSlotsGetIndependentModulation) {
+    static WaveX::AudioEngine::ModSlot s_slot0[WaveX::AudioEngine::kMaxModSlots];
+    static WaveX::AudioEngine::ModSlot s_slot1[WaveX::AudioEngine::kMaxModSlots];
+    s_slot0[0].source = WaveX::AudioEngine::SRC_MACRO_1;
+    s_slot0[0].dest = WaveX::AudioEngine::DEST_PITCH;
+    s_slot0[0].depth = 32767;  // instrument slot 0: full pitch-up
+    // s_slot1 stays all-default (identity) - instrument slot 1 modulates nothing.
+
+    struct PerInstrumentResolver {
+        static const WaveX::AudioEngine::ModSlot* Resolve(const void*, uint8_t slot) {
+            return slot == 0 ? s_slot0 : s_slot1;
+        }
+    };
+    const WaveX::AudioEngine::ModSlotResolver resolver{nullptr, &PerInstrumentResolver::Resolve};
+
+    VoiceManager vm;
+    vm.Init(48000);
+    auto sample = MakeRampSample(100, 0, 1);
+    auto note_a = FlatParams(sample.data(), sample.size(), 60, 127, 0.5f);
+    note_a.root_note = 60;
+    note_a.slot = 0;
+    vm.Trigger(note_a);
+    auto note_b = FlatParams(sample.data(), sample.size(), 64, 127, 0.5f);
+    note_b.root_note = 64;
+    note_b.slot = 1;
+    vm.Trigger(note_b);
+
+    WaveX::AudioEngine::ModSources global;
+    global.macro[0] = 1.0f;
+    vm.TickModulation(resolver, global, 48);
+    std::vector<float> l(8), r(8);
+    vm.Render(l.data(), r.data(), l.size());  // recomputes .increment
+
+    int idx_a = FindVoiceForNote(vm, 60);
+    int idx_b = FindVoiceForNote(vm, 64);
+    ASSERT_GE(idx_a, 0);
+    ASSERT_GE(idx_b, 0);
+    const float expected_pitch_up = std::pow(2.0f, WaveX::AudioEngine::kModPitchSemitones / 12.0f);
+    EXPECT_NEAR(VoiceAt(vm, idx_a).increment, expected_pitch_up, 1e-5f)
+        << "instrument slot 0's voice should be pitched up by its own matrix";
+    EXPECT_FLOAT_EQ(VoiceAt(vm, idx_b).increment, 1.0f)
+        << "instrument slot 1's voice must not inherit slot 0's modulation";
 }
 
 // --- Second envelope / SRC_ENV_FILTER (param-locks-and-modulation.md §4) ---
@@ -1796,9 +1869,11 @@ TEST(VoiceManagerModulationTest, SecondEnvelopeAdvancesByTheWholeBlockNotOneSamp
     ASSERT_GE(idx, 0);
     ASSERT_NEAR(VoiceAt(vm, idx).env2.Level(), 0.0f, 1e-6f);
 
-    WaveX::AudioEngine::ModSlot slots[1];  // no slot needed - just advancing env2
+    WaveX::AudioEngine::ModSlot slots[WaveX::AudioEngine::kMaxModSlots];
+    const WaveX::AudioEngine::ModSlotResolver mod_resolver{
+        slots, &SingleModSlotArray};  // no slot needed - just advancing env2
     WaveX::AudioEngine::ModSources global;
-    vm.TickModulation(slots, 0, global, 48);  // one block
+    vm.TickModulation(mod_resolver, global, 48);  // one block
 
     // Reference: an identical envelope, advanced 48 samples via Process().
     WaveX::AudioEngine::Envelope reference;
@@ -1827,12 +1902,13 @@ TEST(VoiceManagerModulationTest, EnvFilterSourceReachesADestinationThroughAModSl
     vm.Render(l, r, 64);
     EXPECT_NEAR(PeakAbs(l, 64), PeakAbs(r, 64), 1e-5f) << "centred voice was not balanced";
 
-    WaveX::AudioEngine::ModSlot slots[1];
+    WaveX::AudioEngine::ModSlot slots[WaveX::AudioEngine::kMaxModSlots];
+    const WaveX::AudioEngine::ModSlotResolver mod_resolver{slots, &SingleModSlotArray};
     slots[0].source = WaveX::AudioEngine::SRC_ENV_FILTER;
     slots[0].dest = WaveX::AudioEngine::DEST_PAN;
     slots[0].depth = 32767;  // full positive -> pan_offset +1 once env2 is at 1.0
     WaveX::AudioEngine::ModSources global;
-    vm.TickModulation(slots, 1, global, 48);
+    vm.TickModulation(mod_resolver, global, 48);
 
     vm.Render(l, r, 64);
     EXPECT_NEAR(PeakAbs(l, 64), 0.0f, 1e-6f);
@@ -1853,16 +1929,17 @@ TEST(VoiceManagerModulationTest, EnvFilterReleasesWithTheVoiceButOutlivesNeither
     int idx = FindVoiceForNote(vm, 60);
     ASSERT_GE(idx, 0);
 
-    WaveX::AudioEngine::ModSlot slots[1];
+    WaveX::AudioEngine::ModSlot slots[WaveX::AudioEngine::kMaxModSlots];
+    const WaveX::AudioEngine::ModSlotResolver mod_resolver{slots, &SingleModSlotArray};
     WaveX::AudioEngine::ModSources global;
-    vm.TickModulation(slots, 0, global, 8);  // instant attack/decay -> sustain
+    vm.TickModulation(mod_resolver, global, 8);  // instant attack/decay -> sustain
     ASSERT_NEAR(VoiceAt(vm, idx).env2.Level(), 1.0f, 1e-6f);
 
     vm.Release(60);
     EXPECT_TRUE(VoiceAt(vm, idx).env2.IsReleasing())
         << "env2 must release alongside env1, not just the audio envelope";
 
-    vm.TickModulation(slots, 0, global, 480);  // past env2's own release
+    vm.TickModulation(mod_resolver, global, 480);  // past env2's own release
     EXPECT_TRUE(VoiceAt(vm, idx).env2.IsIdle());
     EXPECT_EQ(vm.ActiveVoiceCount(), 1)
         << "the voice itself must still be sounding - its own release is much longer";

@@ -902,6 +902,23 @@ esp_err_t inter_mcu_send_inst_op(uint32_t request_id,
     return result >= 0 ? ESP_OK : ESP_FAIL;
 }
 
+esp_err_t inter_mcu_send_mod_slot(uint32_t request_id,
+                                  uint8_t instrument_slot,
+                                  uint8_t mod_slot_index,
+                                  uint8_t source,
+                                  uint8_t dest,
+                                  int16_t depth,
+                                  uint8_t curve,
+                                  uint8_t flags) {
+    if (!s_initialized || s_suspended) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    WaveX::Protocol::InstOpMessage msg(
+        request_id, instrument_slot, mod_slot_index, source, dest, depth, curve, flags);
+    const int result = send_uart_message(WaveX::Protocol::MSG_INST_OP, &msg, sizeof(msg));
+    return result >= 0 ? ESP_OK : ESP_FAIL;
+}
+
 void inter_mcu_handle_sample_stop_response(bool success) {
     ESP_LOGI("InterMCU", "inter_mcu_handle_sample_stop_response: success=%d", success ? 1 : 0);
     if (s_statistics) {
