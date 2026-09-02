@@ -391,7 +391,7 @@ static void HandleSampleSelectMessage(const uint8_t* payload, size_t payload_siz
     }
     const auto* msg = reinterpret_cast<const WaveX::Protocol::SampleSelectMessage*>(payload);
 #if WAVEX_AUDIO_ENGINE_ENABLED
-    WaveX::AudioEngine::SelectSample(msg->sample_id);
+    WaveX::AudioEngine::SelectSample(msg->sample_id, msg->slot);
 #else
     (void)msg;
 #endif

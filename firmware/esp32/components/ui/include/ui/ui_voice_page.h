@@ -36,9 +36,15 @@ namespace wavex_ui {
  *
  * Scope, stated plainly because half of this chain is real and half is not yet:
  *
- * - **SAMPLE, ENV, AMP, FILTER are live.** They map onto MSG_SAMPLE_SELECT and
- *   the PARAM_* control changes the engine already applies to sounding voices,
- *   so edits are audible immediately.
+ * - **SAMPLE, ENV, AMP, FILTER are live.** SAMPLE cycles through resident
+ *   samples (probing inter_mcu_get_sample_meta() the same way the Sample
+ *   Manager page's list does - there is no dedicated "list of loaded ids"
+ *   query) and SLOT chooses which instrument slot (0..15, MSG_NOTE_ON's
+ *   channel) that sample is bound to; both ride MSG_SAMPLE_SELECT. ENV/AMP/
+ *   FILTER map onto the PARAM_* control changes the engine already applies to
+ *   sounding voices, so edits are audible immediately. Picking a DIFFERENT
+ *   already-resident sample for a slot can also be done from the Sample
+ *   Manager page, which has the fuller list UI.
  * - **MOD is a placeholder.** Nothing in the protocol carries a modulation
  *   source, destination or depth, and inventing a matrix in the UI before the
  *   engine has one would be drawing controls that do nothing - the mistake this
@@ -63,12 +69,14 @@ class UIVoicePage : public UIPage {
 
    private:
     static constexpr int kStageCount = static_cast<int>(Stage::kCount);
-    /// Widest stage is Envelopes, at four (A/D/S/R).
-    static constexpr int kMaxParams = 4;
+    /// Widest stage is now Sample, at five (SAMPLE/SLOT/PITCH/PAN/GAIN).
+    static constexpr int kMaxParams = 5;
 
     /// One editable parameter. `wire_param` is kParamNone for anything the
     /// protocol cannot carry yet, which is how a control declares itself inert
-    /// rather than pretending.
+    /// rather than pretending. kParamSample/kParamSlot are real and live, but
+    /// ride MSG_SAMPLE_SELECT rather than MSG_CONTROL_CHANGE, so stepParam()/
+    /// sendParam() special-case them instead of treating `value` as a raw CC.
     struct Param {
         const char* label;
         uint8_t wire_param;
@@ -78,6 +86,8 @@ class UIVoicePage : public UIPage {
     };
 
     static constexpr uint8_t kParamNone = 0xFF;
+    static constexpr uint8_t kParamSample = 0xFE;
+    static constexpr uint8_t kParamSlot = 0xFD;
 
     lv_obj_t* root_ = nullptr;
     lv_obj_t* name_label_ = nullptr;
@@ -116,6 +126,8 @@ class UIVoicePage : public UIPage {
     void moveParam(int delta);
     void sendParam(const Param& p);
     void seedValues();
+    void cycleSample(int direction);
+    uint8_t currentSlot() const;
 
     /// Parameters belonging to a stage, written into `out`.
     int paramsForStage(Stage s, Param* out, int max) const;

@@ -31,7 +31,7 @@ struct DispatchRecord {
     std::vector<uint8_t> cv_cal_gets;
     std::vector<WaveX::Protocol::CvTestMessage> cv_tests;
     std::vector<WaveX::Protocol::SampleLoadMessage> sample_loads;
-    std::vector<uint16_t> selected_samples;
+    std::vector<WaveX::Protocol::SampleSelectMessage> selected_samples;
     std::vector<uint16_t> unloaded_samples;
     int get_sample_mem_status_calls = 0;
 

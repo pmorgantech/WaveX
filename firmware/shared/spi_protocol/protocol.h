@@ -397,14 +397,21 @@ struct MeterPushMessage {
           peak_right(peak_right_) {}
 } __attribute__((packed));
 
-// Selects which loaded sample subsequent MSG_NOTE_ON events address.
-// sample_id 0 means "the most recently loaded playable sample", which is the
-// behaviour that predates this message.
+// Binds `sample_id` for playback on `slot` (0..15, the same instrument slot
+// MSG_NOTE_ON's channel & 0x0F addresses - instrument-model.md's numbering).
+// sample_id 0 clears that slot's binding: its note-on then drops rather than
+// falling back to "whatever was most recently loaded, on any channel", which
+// was this message's original (single, engine-global) behaviour before
+// per-slot addressing existed (roadmap Phase 2.5 item 1, "retire the
+// fallback").
 struct SampleSelectMessage {
     uint16_t sample_id;
+    uint8_t slot;
+    uint8_t reserved;
 
-    SampleSelectMessage() : sample_id(0) {}
-    explicit SampleSelectMessage(uint16_t id) : sample_id(id) {}
+    SampleSelectMessage() : sample_id(0), slot(0), reserved(0) {}
+    SampleSelectMessage(uint16_t sample_id_, uint8_t slot_)
+        : sample_id(sample_id_), slot(slot_), reserved(0) {}
 } __attribute__((packed));
 
 // Frees a loaded sample's RAM. Voices sounding from it are stopped first;

@@ -283,11 +283,11 @@ esp_err_t inter_mcu_request_sample_meta(uint16_t sample_id) {
     return result >= 0 ? ESP_OK : ESP_FAIL;
 }
 
-esp_err_t inter_mcu_send_sample_select(uint16_t sample_id) {
+esp_err_t inter_mcu_send_sample_select(uint16_t sample_id, uint8_t slot) {
     if (!s_initialized || s_suspended) {
         return ESP_ERR_INVALID_STATE;
     }
-    WaveX::Protocol::SampleSelectMessage msg(sample_id);
+    WaveX::Protocol::SampleSelectMessage msg(sample_id, slot);
     int result = send_uart_message(WaveX::Protocol::MSG_SAMPLE_SELECT, &msg, sizeof(msg));
     return result >= 0 ? ESP_OK : ESP_FAIL;
 }

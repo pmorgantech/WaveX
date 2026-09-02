@@ -526,23 +526,25 @@ TEST_F(MessageDispatchTest, NullPayloadIsSafeForAllRoutedTypes) {
 // tested units rather than the routing between them. A new message is not
 // wired until a test says the byte on the wire reaches the engine call.
 TEST_F(MessageDispatchTest, SampleSelectReachesEngine) {
-    WaveX::Protocol::SampleSelectMessage msg(7);
+    WaveX::Protocol::SampleSelectMessage msg(7, 3);
     ProcessInterMcuMessage(
         MSG_SAMPLE_SELECT, 1, reinterpret_cast<const uint8_t*>(&msg), sizeof(msg));
 
     const DispatchRecord& r = GetDispatchRecord();
     ASSERT_EQ(r.selected_samples.size(), 1u);
-    EXPECT_EQ(r.selected_samples[0], 7);
+    EXPECT_EQ(r.selected_samples[0].sample_id, 7);
+    EXPECT_EQ(r.selected_samples[0].slot, 3);
 }
 
 TEST_F(MessageDispatchTest, SampleSelectZeroIsForwarded) {
-    // 0 is meaningful, not a no-op: it restores "most recently loaded".
-    WaveX::Protocol::SampleSelectMessage msg(0);
+    // 0 is meaningful, not a no-op: it clears that slot's binding.
+    WaveX::Protocol::SampleSelectMessage msg(0, 5);
     ProcessInterMcuMessage(
         MSG_SAMPLE_SELECT, 1, reinterpret_cast<const uint8_t*>(&msg), sizeof(msg));
 
     ASSERT_EQ(GetDispatchRecord().selected_samples.size(), 1u);
-    EXPECT_EQ(GetDispatchRecord().selected_samples[0], 0);
+    EXPECT_EQ(GetDispatchRecord().selected_samples[0].sample_id, 0);
+    EXPECT_EQ(GetDispatchRecord().selected_samples[0].slot, 5);
 }
 
 TEST_F(MessageDispatchTest, SampleUnloadReachesEngine) {

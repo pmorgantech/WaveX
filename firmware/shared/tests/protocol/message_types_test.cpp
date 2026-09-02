@@ -1500,23 +1500,27 @@ TEST_F(MessageTypeTest, SampleMetaReqMessage) {
     EXPECT_EQ(parsed.sample_id, 42);
 }
 
-// MSG_SAMPLE_SELECT (previously the only live E->D wire message with no
-// round-trip test). id 0 is a meaningful sentinel ("most recently loaded
-// playable sample"), so both a real id and the sentinel must survive.
+// MSG_SAMPLE_SELECT. id 0 is a meaningful sentinel (clears that slot's
+// binding), so both a real id and the sentinel must survive, on more than
+// one slot so the field isn't mistaken for padding.
 TEST_F(MessageTypeTest, SampleSelectMessage) {
     for (uint16_t id: {uint16_t{0}, uint16_t{7}, uint16_t{0xFFFF}}) {
-        SampleSelectMessage original(id);
+        for (uint8_t slot: {uint8_t{0}, uint8_t{5}, uint8_t{15}}) {
+            SampleSelectMessage original(id, slot);
 
-        size_t created = ProtocolHandler::CreatePacket(
-            buffer_.data(), buffer_.size(), MSG_SAMPLE_SELECT, &original, sizeof(original));
-        ASSERT_GT(created, 0u);
-        EXPECT_TRUE(ProtocolHandler::ValidatePacket(buffer_.data(), created));
-        EXPECT_EQ(ProtocolHandler::GetMessageType(buffer_.data()), MSG_SAMPLE_SELECT);
+            size_t created = ProtocolHandler::CreatePacket(
+                buffer_.data(), buffer_.size(), MSG_SAMPLE_SELECT, &original, sizeof(original));
+            ASSERT_GT(created, 0u);
+            EXPECT_TRUE(ProtocolHandler::ValidatePacket(buffer_.data(), created));
+            EXPECT_EQ(ProtocolHandler::GetMessageType(buffer_.data()), MSG_SAMPLE_SELECT);
 
-        SampleSelectMessage parsed(1);  // non-zero so a zero id is a real read
-        ASSERT_TRUE(ProtocolHandler::ParseMessage(
-            buffer_.data(), MSG_SAMPLE_SELECT, &parsed, sizeof(parsed)));
-        EXPECT_EQ(parsed.sample_id, id);
+            // Non-matching sentinels so a zero read is a real read.
+            SampleSelectMessage parsed(1, 3);
+            ASSERT_TRUE(ProtocolHandler::ParseMessage(
+                buffer_.data(), MSG_SAMPLE_SELECT, &parsed, sizeof(parsed)));
+            EXPECT_EQ(parsed.sample_id, id);
+            EXPECT_EQ(parsed.slot, slot);
+        }
     }
 }
 

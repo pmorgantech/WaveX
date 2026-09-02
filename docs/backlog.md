@@ -874,3 +874,51 @@ now, but neither has blocked a diagnosis yet.
 knows); round-trip latency needs an echo message with an ingest timestamp,
 which is a protocol addition and wants the same round-trip test as any
 other.
+
+---
+
+## Only one instrument slot can be resident at a time
+
+**Found 2026-09-02 while scoping a Voice/Play-page slot selector.**
+`InstrumentBank` is shaped for 16 simultaneous slots (`Instrument
+slots_[kNumInstrumentSlots]`), but `SfzLoader`'s runtime load pipeline is not:
+`ConfirmVoicesStopped()` unconditionally resets the *whole* bank and clears
+the *whole* sample table before installing the newly-loaded instrument into
+its one target slot —
+
+```cpp
+s_bank = InstrumentBank{};        // wipes ALL 16 slots, not just the one being replaced
+s_sample_table.Clear();
+s_bound_slot = -1;
+```
+
+— and `SlotLoaded(slot)` only ever answers true for the single `s_bound_slot`
+last committed. Loading an instrument into slot 2 does not add it alongside
+slot 1; it evicts slot 1 entirely (releases its sample RAM, clears its zones).
+True multi-timbral operation — different sounds bound to different
+channels/slots at once — does not exist yet at the runtime level, regardless
+of the 16-slot storage shape suggesting otherwise.
+
+**Why it is not urgent:** the immediate UI need (a slot selector so the Voice
+and Play pages, and the Sample Browser, can each address a chosen channel)
+does not require multi-slot residency to be useful — it only requires that
+*which* slot the one resident instrument occupies be user-choosable, which is
+what shipped instead (see the commit retiring the bare-WAV note-on fallback).
+Building real per-slot-independent residency is a separate, larger project:
+`ConfirmVoicesStopped`'s reset would need to become slot-scoped (release only
+the slot being replaced), `s_sample_table` would need per-slot scoping
+instead of one shared table (today's SFZ `sample_id`s are only unique within
+one instrument's own load, per `Sfz::BuildSamplePlan`'s `plan.count + 1`
+numbering — reused across instruments, a real collision risk once more than
+one can be resident), and `s_bound_slot`'s single `int8_t` would need to
+become a per-slot bitmask/array. None of that is started.
+
+**Fix if picked up:** resolve it alongside `features/instrument-model.md`
+(the design that already owns `InstrumentBank`'s shape) rather than as a
+point patch to `sfz_loader.cpp` — the sample-memory accounting
+(`SampleMemMgr` allocations tracked per instrument, not just per slot) and
+the `Sfz::SampleTable` id-collision risk above both need deciding as part of
+that design, not worked around locally. Related: [Voice / Preset does not
+exist as an entity](#voice--preset-does-not-exist-as-an-entity) — a saveable
+per-slot Voice/Preset is close to meaningless without slots that can
+actually coexist.

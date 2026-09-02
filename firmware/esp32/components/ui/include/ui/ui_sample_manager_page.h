@@ -24,6 +24,13 @@ namespace wavex_ui {
  * flagged unplayable here rather than silently failing at note-on: the voice
  * path takes 16-bit mono/stereo only, while the browser will happily load 8 and
  * 24-bit files.
+ *
+ * "Select" binds the focused sample to an instrument SLOT (0..15, matches
+ * MSG_NOTE_ON's channel and the Play page's own Slot parameter) rather than
+ * to "notes on any channel" - that any-channel behavior was retired (roadmap
+ * Phase 2.5 item 1) because it made a slot's note-on resolve to whatever was
+ * most recently loaded ANYWHERE, not something this page's own binding
+ * controlled. Shift+Slot -/+ changes which slot Select targets.
  */
 class UISampleManagerPage : public UIPage {
    public:
@@ -33,6 +40,7 @@ class UISampleManagerPage : public UIPage {
     void onExit() override;
     void onInput(const InputEvent& evt) override;
     std::array<Softkey, NUM_SOFTKEYS> getSoftkeys() override;
+    std::array<Softkey, NUM_SOFTKEYS> getShiftedSoftkeys() override;
 
    private:
     // The backend's metadata cache holds this many; showing more rows than can
@@ -50,23 +58,31 @@ class UISampleManagerPage : public UIPage {
     lv_obj_t* list_ = nullptr;
     lv_obj_t* status_label_ = nullptr;
     lv_obj_t* detail_label_ = nullptr;
+    lv_obj_t* slot_label_ = nullptr;
     lv_timer_t* refresh_timer_ = nullptr;
 
     Row rows_[kMaxRows] = {};
     int row_count_ = 0;
     int focus_ = 0;
 
-    // Which sample notes address. Mirrors what we last told the backend; the
-    // backend is the authority, but it has no "what is selected" query, so this
-    // is the frontend's record of its own instruction.
-    uint16_t selected_id_ = 0;
+    // Which instrument slot Select targets (0..15).
+    uint8_t slot_ = 0;
+
+    // Which sample plays on each slot. Mirrors what we last told the backend
+    // for that slot; the backend is the authority, but it has no "what is
+    // bound" query, so this is the frontend's record of its own instructions -
+    // one per slot, since binding is now per-slot rather than a single global
+    // (roadmap Phase 2.5 item 1).
+    uint16_t bound_id_[16] = {};
 
     static void refreshTimerCb(lv_timer_t* timer);
     void rebuildList();    ///< UI task / LVGL context only.
     void refreshDetail();  ///< UI task / LVGL context only.
+    void refreshSlotLabel();
     void selectFocused();
     void unloadFocused();
     void moveFocus(int delta);
+    void changeSlot(int delta);
     const Row* focusedRow() const;
 };
 

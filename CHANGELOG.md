@@ -13,6 +13,33 @@ versioning and release process.
 
 ### Added
 
+- Retired the bare-WAV note-on fallback's any-channel behaviour (roadmap
+  Phase 2.5 item 1): `MSG_SAMPLE_SELECT` now binds a sample to one of 16
+  instrument slots (`SampleSelectMessage{sample_id, slot}`, matching
+  `MSG_NOTE_ON`'s channel), replacing the single engine-global "notes on any
+  channel play whatever was most recently loaded" selection. A slot with
+  nothing bound now drops the note rather than guessing. `SelectSample`/
+  `SelectedSample` are per-slot; `find_playable_sample()` looks up exactly
+  what a slot is bound to, nothing else. Updated round-trip and dispatch
+  tests; full host suites and both the Daisy device build and ESP32 build
+  verified green. `OnNoteOn` still has two separate branches (SFZ-instrument
+  vs. bare-WAV) — unifying them via a synthesised one-zone instrument is
+  still open, along with the single-instrument-residency limit found while
+  scoping this (recorded in `docs/backlog.md`).
+
+### Changed
+
+- The Play page's parameter cycle gained a Slot control (0..15): notes now go
+  out on the selected instrument slot instead of hardcoded channel 0. The
+  Sample Manager page gained a Slot selector (Shift+Slot -/+) and its Select
+  action now binds the focused sample to that slot rather than to "any
+  channel". The Voice page's Sample tab gained SAMPLE (cycle resident
+  samples) and SLOT controls, replacing the passive "mirror whatever the
+  Sample Browser last loaded" behaviour — it now genuinely lets a voice
+  choose which sample it plays and which slot that binding targets.
+  Compile-verified (both firmware images build); not yet verified on
+  hardware.
+
 - Wired the modulation matrix's mod-slot protocol op end to end (roadmap
   Phase 2.5 item 4, `param-locks-and-modulation.md` §9 stage 4):
   `Instrument::mod_slots[8]` (`instrument.hpp`) replaces the previous

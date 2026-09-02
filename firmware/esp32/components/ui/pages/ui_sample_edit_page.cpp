@@ -468,8 +468,10 @@ void UISampleEditPage::toggleAudition() {
         // Address the sample this page is editing, not whatever was loaded
         // last. Without this the preview silently followed the most recent
         // load, so opening the editor on an earlier sample previewed a
-        // different one.
-        inter_mcu_send_sample_select(currentSampleId());
+        // different one. Slot 0 to match the note-on/off below - this
+        // audition path is independent of whatever slot the Voice or Play
+        // page has selected.
+        inter_mcu_send_sample_select(currentSampleId(), 0);
         // Push the current UI values so the voice is built from what is on
         // screen, not from whatever was last committed.
         sendEdit();

@@ -84,6 +84,10 @@ const ParamSpec kParams[static_cast<size_t>(UIPlayPage::Param::kCount)] = {
     {"DECAY", WaveX::Protocol::PARAM_ENVELOPE_DECAY, 1638},
     {"SUSTAIN", WaveX::Protocol::PARAM_ENVELOPE_SUSTAIN, 52428},
     {"RELEASE", WaveX::Protocol::PARAM_ENVELOPE_RELEASE, 3277},
+    // wire_param is unused for Slot - stepParam()/sendParam() special-case it
+    // rather than sending MSG_CONTROL_CHANGE, since it addresses which
+    // instrument slot a note-on goes out on, not a voice parameter value.
+    {"SLOT", 0, 0},
 };
 
 // Mirrors the Daisy's own mapping so the number on screen is the number the
@@ -98,6 +102,10 @@ void FormatParamValue(UIPlayPage::Param p, uint16_t raw, char* out, size_t len) 
         case UIPlayPage::Param::Resonance:
         case UIPlayPage::Param::Sustain:
             snprintf(out, len, "%d%%", (int)(norm * 100.0f + 0.5f));
+            break;
+        case UIPlayPage::Param::Slot:
+            // Not a CC value - raw IS the slot number (0..15).
+            snprintf(out, len, "%d", (int)raw);
             break;
         default:  // envelope times: 1 ms .. 2 s
             snprintf(out, len, "%d ms", (int)((0.001f + norm * 2.0f) * 1000.0f));
@@ -346,6 +354,10 @@ int UIPlayPage::noteFor(const Key& k) const {
     return root_note_ + k.offset;
 }
 
+uint8_t UIPlayPage::currentSlot() const {
+    return static_cast<uint8_t>(param_value_[static_cast<size_t>(Param::Slot)]);
+}
+
 void UIPlayPage::keyEventCb(lv_event_t* e) {
     auto* self = static_cast<UIPlayPage*>(lv_event_get_user_data(e));
     auto* target = static_cast<lv_obj_t*>(lv_event_get_target(e));
@@ -386,7 +398,7 @@ void UIPlayPage::press(int index) {
     }
     k.sent_note = static_cast<uint8_t>(note);
     k.down = true;
-    inter_mcu_send_note_on(k.sent_note, velocity_, 0);
+    inter_mcu_send_note_on(k.sent_note, velocity_, currentSlot());
 }
 
 void UIPlayPage::release(int index) {
@@ -395,7 +407,7 @@ void UIPlayPage::release(int index) {
         return;  // no matching press (e.g. RELEASED after PRESS_LOST)
     }
     k.down = false;
-    inter_mcu_send_note_off(k.sent_note, 0);
+    inter_mcu_send_note_off(k.sent_note, currentSlot());
 }
 
 void UIPlayPage::releaseAll() {
@@ -499,6 +511,23 @@ void UIPlayPage::selectParam(int direction) {
 
 void UIPlayPage::stepParam(int direction) {
     const size_t i = static_cast<size_t>(current_param_);
+    // Slot is a 0..15 instrument-slot index, not a continuous CC value - one
+    // detent per step, and nothing rides the wire (it only takes effect on
+    // the next note-on/off, sent locally from press()/release()).
+    if (current_param_ == Param::Slot) {
+        int v = static_cast<int>(param_value_[i]) + direction;
+        if (v < 0) {
+            v = 0;
+        } else if (v > 15) {
+            v = 15;
+        }
+        if (static_cast<uint16_t>(v) == param_value_[i]) {
+            return;
+        }
+        param_value_[i] = static_cast<uint16_t>(v);
+        refreshParamLabel();
+        return;
+    }
     int v = static_cast<int>(param_value_[i]) + direction * kParamStep;
     if (v < 0) {
         v = 0;

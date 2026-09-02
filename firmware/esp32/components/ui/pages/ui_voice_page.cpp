@@ -62,7 +62,15 @@ int UIVoicePage::paramsForStage(Stage s, Param* out, int max) const {
 
     switch (s) {
         case Stage::Sample:
-            // Live: the engine applies all three to sounding voices.
+            // SAMPLE and SLOT are not MSG_CONTROL_CHANGE destinations -
+            // stepParam() special-cases both. SAMPLE cycles which resident
+            // sample this voice addresses; SLOT chooses which instrument slot
+            // (MIDI channel) that sample is bound to for note-on playback.
+            // Both ride MSG_SAMPLE_SELECT (roadmap Phase 2.5 item 1, "retire
+            // the fallback"). PITCH/PAN/GAIN are live: the engine applies all
+            // three to sounding voices.
+            add("SAMPLE", kParamSample, 0, "");
+            add("SLOT", kParamSlot, 0, "");
             add("PITCH", WaveX::Protocol::PARAM_PITCH, 32768, "semi");
             add("PAN", WaveX::Protocol::PARAM_PAN, 32768, "");
             add("GAIN", WaveX::Protocol::PARAM_VOLUME, 52428, "");
@@ -122,6 +130,45 @@ void UIVoicePage::seedValues() {
     values_seeded_ = true;
 }
 
+// Which instrument slot (0..15) the Sample tab's SLOT control currently
+// targets. Reads back through paramsForStage() rather than a dedicated
+// member so the SLOT param's stored value (in stage_values_, seeded and
+// edited exactly like every other param) stays the single source of truth.
+uint8_t UIVoicePage::currentSlot() const {
+    Param params[kMaxParams];
+    const int n = paramsForStage(Stage::Sample, params, kMaxParams);
+    for (int i = 0; i < n; ++i) {
+        if (params[i].wire_param == kParamSlot) {
+            return static_cast<uint8_t>(params[i].value);
+        }
+    }
+    return 0;
+}
+
+// Steps sample_id_ to the next/previous resident sample (wrapping) and
+// re-binds it to the currently-selected slot - the Sample tab's "which
+// sample this voice plays" control (roadmap Phase 2.5 item 1, "retire the
+// fallback"). There is no "list of loaded ids" query, so this probes
+// inter_mcu_get_sample_meta() over the same id range the Sample Manager
+// page's list does, rather than inventing a second source of truth for it.
+void UIVoicePage::cycleSample(int direction) {
+    constexpr int32_t kMaxProbeId = 64;
+    for (int32_t step = 1; step <= kMaxProbeId; ++step) {
+        int32_t candidate = static_cast<int32_t>(sample_id_) + direction * step;
+        // Wrap into 1..kMaxProbeId (0 is reserved for "no sample").
+        candidate = ((candidate - 1) % kMaxProbeId + kMaxProbeId) % kMaxProbeId + 1;
+        WaveX::Protocol::SampleMetadata m;
+        if (inter_mcu_get_sample_meta(static_cast<uint16_t>(candidate), &m)) {
+            sample_id_ = static_cast<uint16_t>(candidate);
+            inter_mcu_send_sample_select(sample_id_, currentSlot());
+            refreshHeader();
+            refreshParams();
+            return;
+        }
+    }
+    refreshStatus("No other samples resident - load one from Browse");
+}
+
 void UIVoicePage::onEnter(lv_obj_t* parent) {
     lv_obj_clean(parent);
     stage_ = 0;
@@ -171,7 +218,7 @@ void UIVoicePage::onEnter(lv_obj_t* parent) {
     }
     if (sample_id_ != 0) {
         inter_mcu_request_sample_meta(sample_id_);
-        inter_mcu_send_sample_select(sample_id_);
+        inter_mcu_send_sample_select(sample_id_, currentSlot());
     }
 
     // Only the first tab's widgets exist after this; the rest are built when
@@ -343,20 +390,28 @@ void UIVoicePage::refreshHeader() {
     }
     char header[128];
     WaveX::Protocol::SampleMetadata m;
+    const unsigned slot = currentSlot();
     if (sample_id_ != 0 && inter_mcu_get_sample_meta(sample_id_, &m)) {
         snprintf(header,
                  sizeof(header),
-                 "%s   -   sample %u  %.32s",
+                 "%s   -   slot %u   sample %u  %.32s",
                  voice_name_,
+                 slot,
                  (unsigned)sample_id_,
                  m.name);
     } else if (sample_id_ != 0) {
-        snprintf(header, sizeof(header), "%s   -   sample %u", voice_name_, (unsigned)sample_id_);
+        snprintf(header,
+                 sizeof(header),
+                 "%s   -   slot %u   sample %u",
+                 voice_name_,
+                 slot,
+                 (unsigned)sample_id_);
     } else {
         snprintf(header,
                  sizeof(header),
-                 "%s   -   no sample (load one from Sample > Browse)",
-                 voice_name_);
+                 "%s   -   slot %u   no sample (load one from Sample > Browse)",
+                 voice_name_,
+                 slot);
     }
     lv_label_set_text(name_label_, header);
 }
@@ -376,11 +431,41 @@ void UIVoicePage::refreshParams() {
 
         const Param& p = params[i];
         const bool inert = (p.wire_param == kParamNone);
+        // Discrete choices, not continuous CC values - shown as text, no bar.
+        const bool discrete = (p.wire_param == kParamSample || p.wire_param == kParamSlot);
         const bool focused = (i == param_);
 
         char line[96];
         if (inert) {
             snprintf(line, sizeof(line), "%s%-10s  --  not wired", focused ? "> " : "  ", p.label);
+        } else if (p.wire_param == kParamSample) {
+            WaveX::Protocol::SampleMetadata m;
+            if (sample_id_ == 0) {
+                snprintf(
+                    line, sizeof(line), "%s%-10s  none loaded", focused ? "> " : "  ", p.label);
+            } else if (inter_mcu_get_sample_meta(sample_id_, &m)) {
+                snprintf(line,
+                         sizeof(line),
+                         "%s%-10s  %u %.24s",
+                         focused ? "> " : "  ",
+                         p.label,
+                         (unsigned)sample_id_,
+                         m.name);
+            } else {
+                snprintf(line,
+                         sizeof(line),
+                         "%s%-10s  %u",
+                         focused ? "> " : "  ",
+                         p.label,
+                         (unsigned)sample_id_);
+            }
+        } else if (p.wire_param == kParamSlot) {
+            snprintf(line,
+                     sizeof(line),
+                     "%s%-10s  %u",
+                     focused ? "> " : "  ",
+                     p.label,
+                     (unsigned)p.value);
         } else {
             snprintf(line,
                      sizeof(line),
@@ -396,7 +481,7 @@ void UIVoicePage::refreshParams() {
 
         lv_obj_t* bar = param_bars_[stage_][i];
         if (bar && lv_obj_is_valid(bar)) {
-            if (inert) {
+            if (inert || discrete) {
                 lv_obj_add_flag(bar, LV_OBJ_FLAG_HIDDEN);
             } else {
                 lv_obj_remove_flag(bar, LV_OBJ_FLAG_HIDDEN);
@@ -431,6 +516,26 @@ void UIVoicePage::stepParam(int steps) {
     Param& p = params[param_];
     if (p.wire_param == kParamNone) {
         refreshStatus("Not wired: the protocol carries no modulation routing yet");
+        return;
+    }
+    if (p.wire_param == kParamSample) {
+        cycleSample(steps > 0 ? 1 : -1);
+        return;
+    }
+    if (p.wire_param == kParamSlot) {
+        int32_t next = static_cast<int32_t>(p.value) + steps;
+        next = next < 0 ? 0 : (next > 15 ? 15 : next);
+        p.value = static_cast<uint16_t>(next);
+        stage_values_[stage_][param_] = p.value;
+        // Re-bind whatever sample this page is tracking to the new slot, so
+        // moving SLOT genuinely changes which channel's note-on plays it
+        // rather than just relabelling a number nothing reads.
+        if (sample_id_ != 0 &&
+            inter_mcu_send_sample_select(sample_id_, static_cast<uint8_t>(p.value)) != ESP_OK) {
+            refreshStatus("Send failed - link busy?");
+        }
+        refreshHeader();
+        refreshParams();
         return;
     }
 

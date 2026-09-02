@@ -576,9 +576,17 @@ static constexpr size_t kLoadedSampleCapacity = kMaxZones;
 static LoadedSampleInfo s_loaded_samples[kLoadedSampleCapacity];
 static size_t s_loaded_sample_count = 0;
 
-// Which sample MSG_NOTE_ON addresses. 0 means "most recently loaded playable
-// one", which is what the engine did before there was any way to choose.
-static uint16_t s_selected_sample_id = 0;
+// Which loaded sample plays on each instrument slot's bare-WAV note-on path
+// (roadmap Phase 2.5 item 1, "retire the fallback"). Index by slot
+// (MSG_NOTE_ON's channel & 0x0F); 0 means that slot has nothing bound, so its
+// note-on drops - there is no more "any channel plays whatever's most
+// recently loaded" behaviour, which is what this array replaces.
+//
+// This is the bare-WAV analogue of SfzLoader's InstrumentBank: an SFZ
+// instrument bound to a slot always wins (OnNoteOn checks SlotLoaded() first)
+// and is unaffected by this array, so a slot is never resolved by both paths
+// at once.
+static uint16_t s_slot_sample_id[kNumInstrumentSlots] = {};
 
 static LoadedSampleInfo* find_loaded_sample(uint16_t sample_id) {
     for (size_t i = 0; i < s_loaded_sample_count; ++i) {
@@ -592,9 +600,9 @@ static LoadedSampleInfo* find_loaded_sample(uint16_t sample_id) {
 
 // Drops `sample_id` from the registry and returns its memory to the arena.
 // Entries stay in load order (oldest first), so removal closes the gap by
-// shifting rather than swapping with the tail: find_playable_sample() and
-// OnPreviewReq() both read the last entry as "most recently loaded", and a
-// swap would quietly hand them an older sample.
+// shifting rather than swapping with the tail: OnPreviewReq() reads the last
+// entry as "most recently loaded", and a swap would quietly hand it an older
+// sample.
 // Sends one sample's record. Called on load, on edit, and on request - the
 // frontend never derives these values, it is told them.
 static void PushSampleMeta(const LoadedSampleInfo& info) {
@@ -661,13 +669,17 @@ static void remove_loaded_sample(uint16_t sample_id) {
     }
 }
 
-void SelectSample(uint16_t sample_id) {
-    s_selected_sample_id = sample_id;
-    WaveX::Log::PrintLine("SAMPLE_SELECT: id=%u", (unsigned)sample_id);
+void SelectSample(uint16_t sample_id, uint8_t slot) {
+    if (slot >= kNumInstrumentSlots) {
+        WaveX::Log::PrintLine("SAMPLE_SELECT: slot=%u out of range, ignored", (unsigned)slot);
+        return;
+    }
+    s_slot_sample_id[slot] = sample_id;
+    WaveX::Log::PrintLine("SAMPLE_SELECT: slot=%u id=%u", (unsigned)slot, (unsigned)sample_id);
 }
 
-uint16_t SelectedSample() {
-    return s_selected_sample_id;
+uint16_t SelectedSample(uint8_t slot) {
+    return slot < kNumInstrumentSlots ? s_slot_sample_id[slot] : 0;
 }
 
 bool UnloadSample(uint16_t sample_id) {
@@ -705,11 +717,14 @@ bool UnloadSample(uint16_t sample_id) {
 
     remove_loaded_sample(sample_id);
 
-    // A selection pointing at what we just freed would otherwise silently fall
-    // back to "most recent", which is a different sample than the user asked
-    // for. Clearing it makes the fallback explicit instead.
-    if (s_selected_sample_id == sample_id) {
-        s_selected_sample_id = 0;
+    // A slot bound to what we just freed must not keep resolving to a
+    // sample_id that no longer exists - clear every slot pointing at it
+    // rather than leave a stale binding that Render()'s trigger path would
+    // otherwise silently fail to find.
+    for (uint8_t slot = 0; slot < kNumInstrumentSlots; ++slot) {
+        if (s_slot_sample_id[slot] == sample_id) {
+            s_slot_sample_id[slot] = 0;
+        }
     }
 
     WaveX::Log::PrintLine("SAMPLE_UNLOAD: id=%u freed (%u still loaded)",
@@ -2078,29 +2093,20 @@ static bool sample_is_playable(const LoadedSampleInfo& e) {
     return e.bit_depth == 16 && (e.channels == 1 || e.channels == 2);
 }
 
-static const LoadedSampleInfo* find_playable_sample() {
-    // An explicit selection wins, but only if it is still loaded and playable -
-    // otherwise a stale id (its sample unloaded, or invalid legacy metadata)
-    // would silence the keyboard with no way to tell why from the outside.
-    if (s_selected_sample_id != 0) {
-        for (size_t i = 0; i < s_loaded_sample_count; ++i) {
-            const auto& entry = s_loaded_samples[i];
-            if (entry.sample_id == s_selected_sample_id && sample_is_playable(entry)) {
-                return &entry;
-            }
-        }
-        WaveX::Log::PrintLine(
-            "  -> selected sample %u is not loaded or not playable; "
-            "falling back to most recent",
-            (unsigned)s_selected_sample_id);
+// The bare-WAV note-on path's sample lookup: exactly what `slot` is bound to
+// (SelectedSample()), or nothing. No "most recently loaded" fallback - a
+// slot with no binding stays silent rather than guessing, which is what
+// retiring the old any-channel fallback means (roadmap Phase 2.5 item 1).
+static const LoadedSampleInfo* find_playable_sample(uint8_t slot) {
+    const uint16_t bound_id = SelectedSample(slot);
+    if (bound_id == 0) {
+        return nullptr;
     }
-    for (size_t i = s_loaded_sample_count; i > 0; --i) {
-        const auto& entry = s_loaded_samples[i - 1];
-        if (sample_is_playable(entry)) {
-            return &entry;
-        }
+    const LoadedSampleInfo* entry = find_loaded_sample(bound_id);
+    if (!entry || !sample_is_playable(*entry)) {
+        return nullptr;
     }
-    return nullptr;
+    return entry;
 }
 
 void OnNoteOn(const NoteMessage& note_msg) {
@@ -2141,25 +2147,27 @@ void OnNoteOn(const NoteMessage& note_msg) {
         return;
     }
 
-    const LoadedSampleInfo* src = find_playable_sample();
+    const LoadedSampleInfo* src = find_playable_sample(slot);
     void* sample_ptr = nullptr;
     if (src && (!s_sample_mem_mgr.ptr(src->handle, &sample_ptr) || !sample_ptr)) {
         src = nullptr;
     }
     if (!src) {
-        // Nothing playable loaded: drop the note.
+        // Nothing playable bound to this slot: drop the note.
         // A previous "test oscillator fallback" here set state on DSP
         // objects Callback() never rendered - silent while claiming
         // otherwise (review C2) - so it was removed rather than fixed;
-        // load a 16-bit sample to verify the MIDI path end-to-end.
+        // load a 16-bit sample and bind it (MSG_SAMPLE_SELECT) to verify the
+        // MIDI path end-to-end.
         //
         // No s_hw guard: this is the one line that explains why the instrument
         // is silent, and gating it behind a pointer that may be null is how a
         // whole bench session went to working out whether notes were even
         // arriving. It runs on the main loop, well after init.
         WaveX::Log::PrintLine(
-            "  -> dropped: no playable sample (need a RAM-resident 16-bit mono/stereo WAV; "
-            "%u loaded)",
+            "  -> dropped: slot %u has no instrument loaded and no sample bound "
+            "(MSG_SAMPLE_SELECT; %u loaded)",
+            (unsigned)slot,
             (unsigned)s_loaded_sample_count);
         return;
     }
@@ -2176,6 +2184,7 @@ void OnNoteOn(const NoteMessage& note_msg) {
     ev.params.note = note_msg.note;
     ev.params.velocity = note_msg.velocity;
     ev.params.root_note = kDefaultRootNote;
+    ev.params.slot = slot;  // matches the SFZ path above, for the mixer/diagnostics
     ev.params.sample_rate_hz = src->sample_rate;  // 44.1k content pitches correctly on 48k engine
 
     // Filter and envelope come from the live base params, so a note triggered

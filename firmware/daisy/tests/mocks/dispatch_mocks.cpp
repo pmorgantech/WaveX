@@ -67,13 +67,17 @@ void SetLoopGapMs(uint16_t gap_ms) {
     WaveX::Test::GetDispatchRecord().loop_gaps_ms.push_back(gap_ms);
 }
 
-void SelectSample(uint16_t sample_id) {
-    WaveX::Test::GetDispatchRecord().selected_samples.push_back(sample_id);
+void SelectSample(uint16_t sample_id, uint8_t slot) {
+    WaveX::Test::GetDispatchRecord().selected_samples.push_back({sample_id, slot});
 }
 
-uint16_t SelectedSample() {
+uint16_t SelectedSample(uint8_t slot) {
     auto& sel = WaveX::Test::GetDispatchRecord().selected_samples;
-    return sel.empty() ? 0 : sel.back();
+    for (auto it = sel.rbegin(); it != sel.rend(); ++it) {
+        if (it->slot == slot)
+            return it->sample_id;
+    }
+    return 0;
 }
 
 bool UnloadSample(uint16_t sample_id) {

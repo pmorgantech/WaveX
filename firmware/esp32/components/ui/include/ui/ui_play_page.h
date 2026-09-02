@@ -26,15 +26,23 @@ namespace wavex_ui {
  * MIDI hardware, so it is also the only way to hear the per-voice filter,
  * envelope and live parameter edits at all. Note the sample browser's Audition
  * does NOT exercise this path - it streams through the ring buffer and bypasses
- * VoiceManager entirely - and a 16-bit sample must already be RAM-resident or
- * the Daisy has nothing to play and drops the note.
+ * VoiceManager entirely - and a 16-bit sample must already be RAM-resident,
+ * AND bound to the SLOT this page is currently sending notes on (Sample
+ * Manager page's slot selector, or an SFZ instrument loaded to that slot), or
+ * the Daisy drops the note (roadmap Phase 2.5 item 1).
  */
 class UIPlayPage : public UIPage {
    public:
-    /// Voice parameters editable here, in display order. These are the
-    /// digital-path destinations; values ride MSG_CONTROL_CHANGE and reach both
-    /// sounding voices and the next trigger.
-    enum class Param : uint8_t { Cutoff, Resonance, Attack, Decay, Sustain, Release, kCount };
+    /// Voice parameters editable here, in display order. Cutoff..Release are
+    /// the digital-path destinations; values ride MSG_CONTROL_CHANGE and reach
+    /// both sounding voices and the next trigger. Slot is different - it is
+    /// not a voice parameter at all, but which instrument slot (MIDI channel,
+    /// 0..15) subsequent note-on/off go out on (roadmap Phase 2.5 item 1,
+    /// "retire the fallback": a slot with no sample bound via the Sample
+    /// Manager page just drops the note). It rides the SAME encoder/softkey
+    /// cycle as the others purely so this page does not need a second input
+    /// surface, not because it is a live-voice parameter.
+    enum class Param : uint8_t { Cutoff, Resonance, Attack, Decay, Sustain, Release, Slot, kCount };
 
     // 16 pads + 25 piano keys, rounded up. Both surfaces are built at page
     // entry and coexist, so the table spans them rather than being per-tab -
@@ -95,6 +103,7 @@ class UIPlayPage : public UIPage {
     void refreshParamLabel();
 
     int noteFor(const Key& k) const;
+    uint8_t currentSlot() const;
 
     Key keys_[kMaxKeys];
     int key_count_ = 0;

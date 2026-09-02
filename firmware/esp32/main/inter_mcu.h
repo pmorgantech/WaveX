@@ -83,9 +83,11 @@ bool inter_mcu_get_sample_meta(uint16_t sample_id, WaveX::Protocol::SampleMetada
 /** Ask the backend to resend. sample_id 0 = every loaded sample. */
 esp_err_t inter_mcu_request_sample_meta(uint16_t sample_id);
 
-/// Selects which loaded sample subsequent note-ons address. 0 restores the
-/// backend's default of "most recently loaded playable sample".
-esp_err_t inter_mcu_send_sample_select(uint16_t sample_id);
+/// Binds `sample_id` for note-on playback on `slot` (0..15, matches
+/// inter_mcu_send_note_on's channel). sample_id 0 clears that slot's
+/// binding - its note-on then drops rather than falling back to any other
+/// slot's sample.
+esp_err_t inter_mcu_send_sample_select(uint16_t sample_id, uint8_t slot);
 
 /// Frees a loaded sample's RAM on the backend. Sounding voices are stopped
 /// first. sample_id 0 is rejected by the backend rather than treated as "all".

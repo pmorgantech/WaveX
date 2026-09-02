@@ -96,10 +96,13 @@ bool GetPlaybackPosition(uint32_t& frames_played, uint32_t& region_frames);
 // for none so the loop seam is heard as it will actually play.
 void SetLoopGapMs(uint16_t gap_ms);
 
-// Which loaded sample MSG_NOTE_ON addresses. 0 restores the pre-selection
-// behaviour: the most recently loaded playable sample.
-void SelectSample(uint16_t sample_id);
-uint16_t SelectedSample();
+// Which loaded sample plays on `slot` (0..15, MSG_NOTE_ON's channel & 0x0F -
+// param-locks-and-modulation.md's slot numbering). sample_id 0 clears that
+// slot's binding, so its note-on drops rather than falling back to any other
+// channel's or the most-recently-loaded sample (roadmap Phase 2.5 item 1,
+// "retire the fallback").
+void SelectSample(uint16_t sample_id, uint8_t slot);
+uint16_t SelectedSample(uint8_t slot);
 
 // Frees a loaded sample's RAM, stopping any voice sounding from it first.
 // Returns false if the id is 0 or is not loaded.
