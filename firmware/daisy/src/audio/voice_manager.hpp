@@ -33,6 +33,7 @@
 // fixed-size array, no heap allocation, no blocking I/O, no logging
 // (AGENTS.md constraint #1 / architecture.md §7.1).
 
+#include "audio/mod_matrix.hpp"
 #include "audio/track_mix.hpp"
 #include "envelope.hpp"
 #include "fade.hpp"
@@ -138,6 +139,29 @@ struct Voice {
 
     SvfFilter filter;
     Envelope envelope;
+    // The cutoff Trigger()/ApplyLiveParams last set, before modulation. Kept
+    // so the control tick can recompute filter.SetCutoff(base * mod_cutoff_mul)
+    // every block without compounding onto the previous block's modulated
+    // value - the same reason base_increment exists for pitch.
+    float base_cutoff_hz = 20000.0f;
+
+    // Block-rate modulation (param-locks-and-modulation.md §3), written once
+    // per control tick by SetBlockModulation() and consumed at the top of
+    // this voice's Render() slice - never per sample. Multipliers/offset
+    // rather than absolute values so modulation composes onto whatever the
+    // zone and live params already set. Identity by default, so a voice
+    // nothing modulates renders exactly as it did before the matrix existed.
+    float mod_cutoff_mul = 1.0f;
+    float mod_gain_mul = 1.0f;
+    float mod_pitch_mul = 1.0f;
+    float mod_pan_offset = 0.0f;
+
+    // Per-trigger modulation sources (SRC_VELOCITY/SRC_NOTE/SRC_RANDOM),
+    // sampled once at Trigger() and held constant for the voice's lifetime -
+    // §3 requires these NOT be re-sampled every control tick.
+    float mod_velocity = 0.0f;
+    float mod_note = 0.0f;
+    float mod_random = 0.0f;
 
     bool IsFree() const { return state == VoiceState::Idle; }
 
@@ -147,6 +171,16 @@ struct Voice {
     }
 
     void AdvancePhase() { phase.Advance(increment_frames, increment_fraction); }
+
+    // Writes this block's modulation multipliers - one struct write, called
+    // from the control tick (VoiceManager::TickModulation), consumed at the
+    // top of Render()'s per-voice slice. Callback-safe.
+    void SetBlockModulation(const ModDestinations& mods) {
+        mod_cutoff_mul = mods.cutoff_mul;
+        mod_gain_mul = mods.gain_mul;
+        mod_pitch_mul = mods.pitch_mul;
+        mod_pan_offset = mods.pan_offset;
+    }
 };
 
 // Named-argument trigger parameters (roadmap-item-4-sized Trigger() calls
@@ -265,6 +299,11 @@ class VoiceManager {
     void Init(uint32_t sample_rate) {
         sample_rate_ = sample_rate > 0 ? sample_rate : 48000;
         live_pitch_scale_ = 1.0f;
+        // A zeroed seed is a fixed point of xorshift (0 stays 0 forever), which
+        // would make SRC_RANDOM sample the same -1.0f on every voice for the
+        // life of the engine - exactly the live_pitch_scale_ bug this
+        // function's own comment warns about, so it gets the same treatment.
+        rng_ = 0x2545F491u;
     }
 
     // Pushes live parameter edits onto every SOUNDING voice, so a filter
@@ -294,7 +333,8 @@ class VoiceManager {
             if (v.state != VoiceState::Playing)
                 continue;
             v.filter.SetResonance(p.filter_resonance);
-            v.filter.SetCutoff(p.filter_cutoff_hz);
+            v.base_cutoff_hz = p.filter_cutoff_hz;
+            v.filter.SetCutoff(v.base_cutoff_hz * v.mod_cutoff_mul);
             if (!v.envelope.IsReleasing()) {
                 v.envelope.SetParams(p.attack_s, p.decay_s, p.sustain_level, p.release_s);
             }
@@ -335,6 +375,27 @@ class VoiceManager {
         v.choke_group = params.choke_group;
         v.one_shot = params.one_shot;
         v.age = next_age_++;
+
+        // A stolen voice keeps its struct - without this reset it would
+        // render its first block or two of the new note with the previous
+        // note's leftover modulation until the next control tick overwrites
+        // it. TickModulation() is expected to run before Render() each
+        // callback, but Trigger() must not depend on that ordering.
+        v.mod_cutoff_mul = 1.0f;
+        v.mod_gain_mul = 1.0f;
+        v.mod_pitch_mul = 1.0f;
+        v.mod_pan_offset = 0.0f;
+
+        // Per-trigger modulation sources (§3): sampled once, held constant
+        // for the voice's life. SRC_RANDOM reuses the sample-and-hold xorshift
+        // idiom lfo.hpp already established, seeded once at Init() so a host
+        // test sees the same sequence every run.
+        v.mod_velocity = static_cast<float>(params.velocity) / 127.0f;
+        v.mod_note = static_cast<float>(params.note) / 127.0f;
+        rng_ ^= rng_ << 13;
+        rng_ ^= rng_ >> 17;
+        rng_ ^= rng_ << 5;
+        v.mod_random = (static_cast<float>(rng_ >> 8) / 8388608.0f) - 1.0f;
 
         v.start_frame = params.start_frame < params.sample_frames ? params.start_frame : 0;
         v.end_frame = (params.end_frame == 0 || params.end_frame > params.sample_frames)
@@ -380,7 +441,8 @@ class VoiceManager {
 
         v.filter.Init(sample_rate_);
         v.filter.SetResonance(params.filter_resonance);
-        v.filter.SetCutoff(params.filter_cutoff_hz);
+        v.base_cutoff_hz = params.filter_cutoff_hz;
+        v.filter.SetCutoff(v.base_cutoff_hz);
         v.filter.Reset();
 
         v.envelope.Init(sample_rate_);
@@ -448,22 +510,36 @@ class VoiceManager {
             Voice& v = voices_[vi];
             if (v.state != VoiceState::Playing)
                 continue;
+
+            // Modulation-matrix destinations, applied once per voice per
+            // block (param-locks-and-modulation.md §3) - never per sample.
+            // Guarded on != 1.0 so a voice nothing modulates pays neither the
+            // filter's tan() recompute nor an increment rewrite; an active
+            // LFO/matrix slot drives its mod_*_mul away from identity every
+            // tick, so this still runs whenever modulation is actually live.
+            if (v.mod_pitch_mul != 1.0f) {
+                v.SetIncrement(v.base_increment * live_pitch_scale_ * v.mod_pitch_mul);
+            }
+            if (v.mod_cutoff_mul != 1.0f) {
+                v.filter.SetCutoff(v.base_cutoff_hz * v.mod_cutoff_mul);
+            }
+
             // Track gain and pan fold in HERE - once per voice per block,
             // outside the sample loop below - so the mixer costs two multiplies
             // and an add per voice per block and nothing at all per sample.
             // That is the whole reason output-routing-and-mixer.md §1 puts the
             // application point at the voice's existing gain/pan rather than
             // adding a stage to the sum.
-            float pan = v.pan;
-            float gain = v.gain;
+            float pan = v.pan + v.mod_pan_offset;
+            float gain = v.gain * v.mod_gain_mul;
             if (track_mixer_) {
                 gain *= track_mixer_->GainFor(v.slot);
                 // pan_offset is -1..+1 added onto a 0..1 voice pan, per the
                 // design. Clamped, so a hard offset pins rather than wrapping
                 // through the opposite channel.
                 pan += track_mixer_->PanOffsetFor(v.slot);
-                pan = pan < 0.0f ? 0.0f : (pan > 1.0f ? 1.0f : pan);
             }
+            pan = pan < 0.0f ? 0.0f : (pan > 1.0f ? 1.0f : pan);
             const float left_gain = gain * (1.0f - pan);
             const float right_gain = gain * pan;
             const uint32_t last_valid_frame = v.end_frame - 1;
@@ -625,6 +701,43 @@ class VoiceManager {
 
     const Voice& GetVoice(uint8_t i) const { return voices_[i]; }
 
+    /**
+     * @brief Evaluates the modulation matrix for every sounding voice and
+     * writes the result via Voice::SetBlockModulation() (§3).
+     *
+     * Intended to run once per control tick from the audio callback - on
+     * this engine one callback IS one 1kHz tick (timebase.hpp), so this is
+     * called once per block, not once per sample. `slots`/`slot_count` are
+     * engine-global for now, mirroring VoiceLiveParams: nothing can address
+     * an instrument slot differently yet, so a per-slot table would be N
+     * copies of the same array. It becomes per-instrument with the
+     * instrument model's mod-slot storage (protocol stage,
+     * param-locks-and-modulation.md §9 stage 4).
+     *
+     * `global` carries this tick's engine-wide sources (LFO1/2, macros,
+     * modwheel/aftertouch) shared by every voice. Per-trigger sources
+     * (velocity/note/random) were already sampled into the voice at
+     * Trigger() and are substituted in here, not read from `global`.
+     *
+     * Applies to every sounding voice, including one already in its release
+     * tail - a filter sweep or LFO wobble that froze at note-off would sound
+     * like the modulation jammed, the same reasoning ApplyLiveParams's filter
+     * path already follows. (Unlike ApplyLiveParams, there is no envelope
+     * write here to guard: the matrix's only destinations are cutoff, gain,
+     * pitch and pan.)
+     */
+    void TickModulation(const ModSlot* slots, uint8_t slot_count, const ModSources& global) {
+        for (auto& v: voices_) {
+            if (v.state != VoiceState::Playing)
+                continue;
+            ModSources sources = global;
+            sources.velocity = v.mod_velocity;
+            sources.note = v.mod_note;
+            sources.random = v.mod_random;
+            v.SetBlockModulation(EvaluateModMatrix(slots, slot_count, sources));
+        }
+    }
+
    private:
     /// Optional per-track mixer; nullptr means the pre-mixer behaviour.
     /// Not owned - see SetTrackMixer().
@@ -661,6 +774,10 @@ class VoiceManager {
     // Live transpose as a rate multiplier. 1.0 until something moves PARAM_PITCH,
     // so a voice triggered before any edit sounds exactly as it did before.
     float live_pitch_scale_ = 1.0f;
+    // SRC_RANDOM sample-and-hold seed (lfo.hpp's xorshift idiom), advanced
+    // once per Trigger(). Non-zero default MUST also be set in Init() -
+    // see that function's comment.
+    uint32_t rng_ = 0x2545F491u;
 };
 
 }  // namespace AudioEngine

@@ -1,6 +1,6 @@
 # Parameter Locks & Modulation Matrix — Design
 
-**Status**: Target design (unimplemented). P-locks are Phase 2 (already named in `sequencer.md` §3); the modulation matrix and LFOs are Phase 2.5.
+**Status**: Partially built (2026-09-02) — see §9 for exact stage status. The mod matrix, its two primitives (LFO, param slew) and the control-tick wiring into the audio callback exist and are host-tested; it is a no-op on hardware today because nothing yet populates a slot. P-locks (§2) have not been started. P-locks are Phase 2 (already named in `sequencer.md` §3); the modulation matrix and LFOs are Phase 2.5.
 **Dependencies**: sequencer step scheduler (Phase 2), `instrument-model.md` (matrix slots are instrument-scoped), voice manager (done).
 **Lineage**: two ancestries deliberately fused — Elektron parameter locks (per-step sound design) and the E-mu EIII **realtime controls matrix** (velocity/wheel/pedal → pitch, filter, level, LFO amount, attack — routed, not hardwired).
 
@@ -101,9 +101,9 @@ E-mu voices had filter + amp envelopes; WaveX `Voice` has one (amp). Add `Envelo
 
 ## 9. Implementation stages (one verified commit each)
 
-1. Param id extension + `ApplyParamLocks` + scheduler application path, host-tested (pure functions, no protocol).
-2. `Voice` block-modulation surface + env2 + per-voice LFO, host-tested (extends `VoiceManagerTest`).
-3. Global LFOs + matrix evaluator in the control tick, host-tested; DWT numbers recorded on bench.
-4. Protocol ops (INST_OP extensions, MSG_MIDI_CC 0x56) + round-trip + dispatch tests + `inter-mcu-protocol.md`, same commit; retire the 0x0A alias.
+1. Param id extension + `ApplyParamLocks` + scheduler application path, host-tested (pure functions, no protocol). **Not started** — only the `ParamLock` data model and its pass-through into `TriggerEvent` exist (`sequencer/pattern.hpp`, `sequencer_scheduler.hpp`); nothing applies a lock to a `VoiceTriggerParams`.
+2. ~~`Voice` block-modulation surface~~ + env2 + per-voice LFO, host-tested (extends `VoiceManagerTest`). **Block-modulation surface done**: `Voice::SetBlockModulation()`, plus the per-trigger sources (`SRC_VELOCITY`/`SRC_NOTE`/`SRC_RANDOM`) sampled once at `Trigger()`. **env2 and the per-voice LFO are not built** — `SRC_ENV_FILTER`/`SRC_LFO_VOICE` evaluate to 0 in the meantime, the same treatment `SRC_PARA_ENV` already gets.
+3. ~~Global LFOs~~ + matrix evaluator in the control tick, host-tested; DWT numbers recorded on bench. **Done, on host**: `VoiceManager::TickModulation()` runs once per callback (audio_engine.cpp's `Callback()` — one callback IS one 1kHz control tick), ticks two engine-global `Lfo` instances into `SRC_LFO1`/`SRC_LFO2`, and evaluates `EvaluateModMatrix()` per sounding voice. The instrument-scoped slot storage this evaluator reads from does not exist yet (`Instrument` has no `ModSlot` array) — `s_mod_slots` is a fixed engine-global array nothing currently writes, so this is a no-op on hardware until stage 4's protocol op lands. **DWT numbers not recorded** — no hardware bench session yet.
+4. Protocol ops (INST_OP extensions, MSG_MIDI_CC 0x56) + round-trip + dispatch tests + `inter-mcu-protocol.md`, same commit; retire the 0x0A alias. Also needs instrument-scoped `ModSlot` storage (`Instrument` has none today - stage 3 reads from a temporary engine-global array instead).
 5. UI: step-hold p-lock gesture + mod/LFO pages.
 6. Live p-lock recording (motion capture window logic host-tested first).

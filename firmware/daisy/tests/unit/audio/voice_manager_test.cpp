@@ -1411,3 +1411,283 @@ TEST(VoiceManagerTrackMix, PanOffsetShiftsTheStereoBalance) {
     EXPECT_NEAR(PeakAbs(l, 64), 0.0f, 1e-6f);
     EXPECT_GT(PeakAbs(r, 64), 0.0f);
 }
+
+// --- Modulation-matrix control tick (Voice::SetBlockModulation(),
+// VoiceManager::TickModulation() - param-locks-and-modulation.md §3) --------
+//
+// EvaluateModMatrix() itself is pure and already covered by mod_matrix_test.cpp;
+// these pin the wiring specific to VoiceManager: TickModulation() reaching a
+// sounding voice's actual increment/filter/gain/pan, per-trigger sources
+// staying constant across ticks instead of being read from the global
+// snapshot, a stolen voice not inheriting the previous note's modulation, and
+// modulation staying audible through the release tail - the same guarantee
+// ApplyLiveParams's filter path already gives.
+
+TEST(VoiceManagerModulationTest, PitchDestinationShiftsIncrementEachTick) {
+    VoiceManager vm;
+    vm.Init(48000);
+    auto sample = MakeRampSample(100, 0, 1);
+    auto p = FlatParams(sample.data(), sample.size(), 60, 127, 0.5f);
+    p.root_note = 60;  // base increment 1.0
+    vm.Trigger(p);
+    int idx = FindVoiceForNote(vm, 60);
+    ASSERT_GE(idx, 0);
+    ASSERT_FLOAT_EQ(VoiceAt(vm, idx).increment, 1.0f);
+
+    WaveX::AudioEngine::ModSlot slots[1];
+    slots[0].source = WaveX::AudioEngine::SRC_MACRO_1;
+    slots[0].dest = WaveX::AudioEngine::DEST_PITCH;
+    slots[0].depth = 32767;  // full depth
+    WaveX::AudioEngine::ModSources global;
+    global.macro[0] = 1.0f;
+    vm.TickModulation(slots, 1, global);
+
+    // SetBlockModulation() only writes the multiplier - it's Render() that
+    // recomputes .increment from it, once per block, per §3 ("applied at the
+    // top of its render slice").
+    std::vector<float> l(8), r(8);
+    vm.Render(l.data(), r.data(), l.size());
+
+    const float expected = std::pow(2.0f, WaveX::AudioEngine::kModPitchSemitones / 12.0f);
+    EXPECT_NEAR(VoiceAt(vm, idx).increment, expected, 1e-5f);
+}
+
+TEST(VoiceManagerModulationTest, CutoffDestinationAttenuatesASoundingVoice) {
+    // An 8kHz square wave - well below the 20kHz open base cutoff (passes
+    // through largely intact) but well above the fully-modulated 1250Hz
+    // cutoff (20000 * 2^-4, the full-depth multiplier below), so it's
+    // attenuated hard once modulation closes the filter.
+    //
+    // A literal Nyquist-rate probe (NyquistTone, used elsewhere in this file
+    // against a hard bypass-vs-200Hz comparison) is too extreme here: this
+    // engine's SVF already crushes it to near-silence at ANY real
+    // (non-bypass) cutoff, including 20kHz, leaving no room to see whether
+    // modulation moved anything at all.
+    constexpr size_t kFrames = 4096;
+    std::vector<int16_t> tone(kFrames);
+    for (size_t i = 0; i < kFrames; ++i) {
+        tone[i] = ((i / 3) % 2 == 0) ? 32767 : -32768;  // period 6 samples @ 48kHz = 8kHz
+    }
+
+    VoiceManager vm;
+    vm.Init(48000);
+    auto p = FlatParams(tone.data(), static_cast<uint32_t>(tone.size()), 60, 127, 0.5f);
+    // FlatParams's own cutoff is a deliberate bypass value (1e6 Hz, safely at
+    // or above Nyquist at any sample rate) so unrelated tests aren't affected
+    // by the filter at all. Use the class's own "effectively open" default
+    // instead, which the modulated multiplier below can actually pull down
+    // into the audible range - 1e6 * 2^-4 is still 62.5 kHz, still clamped to
+    // the same bypass behaviour as 1e6 itself.
+    p.filter_cutoff_hz = 20000.0f;
+    vm.Trigger(p);
+
+    std::vector<float> l(64), r(64);
+    vm.Render(l.data(), r.data(), l.size());
+    const float open_peak = PeakOf(l, 48);
+    ASSERT_GT(open_peak, 0.1f);
+
+    // A full-negative-depth slot brings the modulated cutoff down to
+    // base_cutoff_hz * 2^-4 = 1250 Hz, closing the filter on an
+    // already-sounding voice with no retrigger.
+    WaveX::AudioEngine::ModSlot slots[1];
+    slots[0].source = WaveX::AudioEngine::SRC_MACRO_1;
+    slots[0].dest = WaveX::AudioEngine::DEST_CUTOFF;
+    slots[0].depth = -32767;
+    WaveX::AudioEngine::ModSources global;
+    global.macro[0] = 1.0f;
+    vm.TickModulation(slots, 1, global);
+
+    std::vector<float> l2(256), r2(256);
+    vm.Render(l2.data(), r2.data(), l2.size());
+    EXPECT_LT(PeakOf(l2, 192), open_peak * 0.5f)
+        << "a cutoff-destination slot must reach a voice already sounding";
+}
+
+TEST(VoiceManagerModulationTest, GainDestinationScalesTheVoice) {
+    VoiceManager vm;
+    vm.Init(48000);
+    auto sample = MakeRampSample(100, 1000, 0);
+    vm.Trigger(FlatParams(sample.data(), sample.size(), 60, 127, 0.5f));
+    int idx = FindVoiceForNote(vm, 60);
+    ASSERT_GE(idx, 0);
+
+    WaveX::AudioEngine::ModSlot slots[1];
+    slots[0].source = WaveX::AudioEngine::SRC_MACRO_1;
+    slots[0].dest = WaveX::AudioEngine::DEST_GAIN;
+    slots[0].depth = -16384;  // depth ~ -0.5 -> gain_mul ~0.5
+    WaveX::AudioEngine::ModSources global;
+    global.macro[0] = 1.0f;
+    vm.TickModulation(slots, 1, global);
+
+    // Unlike pitch/cutoff, gain (and pan) are read directly from the voice
+    // every Render() call rather than recomputed into cached state, so the
+    // multiplier itself is the thing to check - it's exactly what Render()'s
+    // `gain = v.gain * v.mod_gain_mul` reads. A rendered-audio comparison
+    // here would also be measuring the SVF's own settling transient between
+    // two separate Render() calls, which is not what this test is about.
+    EXPECT_NEAR(VoiceAt(vm, idx).mod_gain_mul, 1.0f - (16384.0f / 32767.0f), 1e-4f);
+}
+
+TEST(VoiceManagerModulationTest, PanDestinationShiftsTheStereoBalance) {
+    const auto data = DcSample(512, 16000);
+    VoiceManager vm;
+    vm.Init(48000);
+    vm.Trigger(DcTrigger(data, 0));  // centred (pan 0.5)
+
+    float l[64], r[64];
+    vm.Render(l, r, 64);
+    EXPECT_NEAR(PeakAbs(l, 64), PeakAbs(r, 64), 1e-5f) << "centred voice was not balanced";
+
+    WaveX::AudioEngine::ModSlot slots[1];
+    slots[0].source = WaveX::AudioEngine::SRC_MACRO_1;
+    slots[0].dest = WaveX::AudioEngine::DEST_PAN;
+    slots[0].depth = 32767;  // full positive -> pan_offset +1 (hard right)
+    WaveX::AudioEngine::ModSources global;
+    global.macro[0] = 1.0f;
+    vm.TickModulation(slots, 1, global);
+
+    vm.Render(l, r, 64);
+    EXPECT_NEAR(PeakAbs(l, 64), 0.0f, 1e-6f);
+    EXPECT_GT(PeakAbs(r, 64), 0.0f);
+}
+
+TEST(VoiceManagerModulationTest, VelocityAndNoteAreSampledOnceAtTriggerNotFromTheGlobalSnapshot) {
+    VoiceManager vm;
+    vm.Init(48000);
+    auto sample = MakeRampSample(100, 0, 1);
+    auto p = FlatParams(sample.data(), sample.size(), 60, 64, 0.5f);  // velocity 64
+    p.root_note = 60;
+    vm.Trigger(p);
+    int idx = FindVoiceForNote(vm, 60);
+    ASSERT_GE(idx, 0);
+
+    WaveX::AudioEngine::ModSlot slots[1];
+    slots[0].source = WaveX::AudioEngine::SRC_VELOCITY;
+    slots[0].dest = WaveX::AudioEngine::DEST_PITCH;
+    slots[0].depth = 32767;
+    // The global snapshot's own velocity field must be ignored - TickModulation
+    // substitutes each voice's own sampled velocity in its place.
+    WaveX::AudioEngine::ModSources global;
+    global.velocity = 0.0f;
+    vm.TickModulation(slots, 1, global);
+    std::vector<float> l(8), r(8);
+    vm.Render(l.data(), r.data(), l.size());
+
+    const float voice_velocity = 64.0f / 127.0f;
+    const float expected =
+        std::pow(2.0f, (voice_velocity * WaveX::AudioEngine::kModPitchSemitones) / 12.0f);
+    EXPECT_NEAR(VoiceAt(vm, idx).increment, expected, 1e-5f);
+}
+
+TEST(VoiceManagerModulationTest,
+     StealingResetsModulationSoTheNewNoteDoesNotInheritTheOldOnesSweep) {
+    VoiceManager vm;
+    vm.Init(48000);
+    auto sample = MakeRampSample(48000, 0, 0);  // long, won't auto-release
+
+    for (uint8_t i = 0; i < kNumVoices; ++i) {
+        auto p = FlatParams(sample.data(), sample.size(), static_cast<uint8_t>(60 + i), 100, 0.5f);
+        p.release_s = 5.0f;
+        vm.Trigger(p);
+    }
+
+    WaveX::AudioEngine::ModSlot slots[1];
+    slots[0].source = WaveX::AudioEngine::SRC_MACRO_1;
+    slots[0].dest = WaveX::AudioEngine::DEST_PITCH;
+    slots[0].depth = 32767;
+    WaveX::AudioEngine::ModSources global;
+    global.macro[0] = 1.0f;
+    vm.TickModulation(slots, 1, global);  // every voice now has mod_pitch_mul != 1.0
+    std::vector<float> warm(8), warm_r(8);
+    vm.Render(warm.data(), warm_r.data(), warm.size());  // recomputes .increment from it
+
+    int stolen_idx = FindVoiceForNote(vm, 60);  // oldest -> next to be stolen
+    ASSERT_GE(stolen_idx, 0);
+    ASSERT_NE(VoiceAt(vm, stolen_idx).increment, 1.0f)
+        << "test setup: the voice about to be stolen must actually be modulated";
+
+    // A 9th trigger steals the oldest voice WITHOUT another TickModulation call
+    // in between - the ordering a stray note-on between control ticks would
+    // produce on hardware.
+    auto ninth = FlatParams(sample.data(), sample.size(), 70, 100, 0.5f);
+    ninth.root_note = 70;  // base increment 1.0, easy to check against
+    vm.Trigger(ninth);
+
+    int idx = FindVoiceForNote(vm, 70);
+    ASSERT_GE(idx, 0);
+    EXPECT_FLOAT_EQ(VoiceAt(vm, idx).increment, 1.0f)
+        << "a stolen voice must not render its first block with the previous "
+           "note's modulation still applied";
+}
+
+TEST(VoiceManagerModulationTest, ModulationStaysAudibleThroughTheReleaseTail) {
+    // Same 8kHz probe as CutoffDestinationAttenuatesASoundingVoice, for the
+    // same reason - a literal Nyquist tone would already be crushed by the
+    // 20kHz open base cutoff before modulation gets involved.
+    constexpr size_t kFrames = 48000;
+    std::vector<int16_t> tone(kFrames);
+    for (size_t i = 0; i < kFrames; ++i) {
+        tone[i] = ((i / 3) % 2 == 0) ? 32767 : -32768;
+    }
+
+    VoiceManager vm;
+    vm.Init(48000);
+    auto p = FlatParams(tone.data(), static_cast<uint32_t>(tone.size()), 60, 127, 0.5f);
+    p.filter_cutoff_hz = 20000.0f;  // see CutoffDestinationAttenuatesASoundingVoice
+    p.release_s = 2.0f;
+    vm.Trigger(p);
+
+    std::vector<float> warm(64), warm_r(64);
+    vm.Render(warm.data(), warm_r.data(), warm.size());
+    const float open_peak = PeakOf(warm, 48);
+    ASSERT_GT(open_peak, 0.1f);
+
+    vm.Release(60);
+    ASSERT_EQ(vm.ActiveVoiceCount(), 1) << "voice should still be in its release tail";
+
+    WaveX::AudioEngine::ModSlot slots[1];
+    slots[0].source = WaveX::AudioEngine::SRC_MACRO_1;
+    slots[0].dest = WaveX::AudioEngine::DEST_CUTOFF;
+    slots[0].depth = -32767;
+    WaveX::AudioEngine::ModSources global;
+    global.macro[0] = 1.0f;
+    vm.TickModulation(slots, 1, global);
+
+    std::vector<float> l(256), r(256);
+    vm.Render(l.data(), r.data(), l.size());
+    EXPECT_LT(PeakOf(l, 192), open_peak * 0.5f)
+        << "cutoff modulation must stay audible through the release tail";
+}
+
+TEST(VoiceManagerModulationTest, IdleVoicesAreUntouched) {
+    VoiceManager vm;
+    vm.Init(48000);
+    WaveX::AudioEngine::ModSlot slots[1];
+    slots[0].source = WaveX::AudioEngine::SRC_MACRO_1;
+    slots[0].dest = WaveX::AudioEngine::DEST_CUTOFF;
+    slots[0].depth = 32767;
+    WaveX::AudioEngine::ModSources global;
+    vm.TickModulation(slots, 1, global);  // must not fault or wake anything
+    EXPECT_EQ(vm.ActiveVoiceCount(), 0);
+}
+
+// Same DTCM hazard InitEstablishesDefaultsFromZeroedMemory pins for
+// live_pitch_scale_: rng_ needs Init() to set its non-zero seed, or a zeroed
+// xorshift state (a fixed point at 0) samples the same -1.0f for SRC_RANDOM
+// on every voice for the life of the engine.
+TEST(VoiceManagerModulationTest, RandomSourceSeedSurvivesZeroedMemory) {
+    VoiceManager vm;
+    std::memset(static_cast<void*>(&vm), 0, sizeof(vm));
+    vm.Init(48000);
+
+    auto sample = MakeRampSample(100, 0, 1);
+    vm.Trigger(FlatParams(sample.data(), sample.size(), 60, 127, 0.5f));
+    vm.Trigger(FlatParams(sample.data(), sample.size(), 61, 127, 0.5f));
+
+    int idx0 = FindVoiceForNote(vm, 60);
+    int idx1 = FindVoiceForNote(vm, 61);
+    ASSERT_GE(idx0, 0);
+    ASSERT_GE(idx1, 0);
+    EXPECT_NE(VoiceAt(vm, idx0).mod_random, VoiceAt(vm, idx1).mod_random)
+        << "a zeroed rng_ seed produces the same -1.0f for every voice";
+}

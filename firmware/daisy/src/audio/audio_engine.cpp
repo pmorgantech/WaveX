@@ -29,7 +29,9 @@ extern "C" SD_HandleTypeDef hsd1;  // libDaisy per/sdmmc.cpp
 #include "../timebase.hpp"
 #include "fade.hpp"
 #include "instrument.hpp"
+#include "lfo.hpp"
 #include "linear_resampler.hpp"
+#include "mod_matrix.hpp"
 #include "note_event_queue.hpp"
 #include "output_sink.hpp"
 #include "paraphonic_envelope.hpp"
@@ -159,6 +161,39 @@ static bool s_mix_meters_subscribed = false;
 static WaveX::AudioEngine::VoiceLiveParams s_voice_live_active WAVEX_DTCM_DATA;
 static WaveX::AudioEngine::VoiceLiveParams s_voice_live_pending;
 static SnapshotMailbox<WaveX::AudioEngine::VoiceLiveParams> s_voice_live_mailbox;
+
+// Modulation matrix (roadmap Phase 2.5 item 4; param-locks-and-modulation.md
+// §3). ENGINE-GLOBAL slots, not per-instrument, for the same reason
+// s_voice_live_pending above is engine-global: nothing can address an
+// instrument slot differently yet, so a per-slot table would be N copies of
+// the same (empty) array. It becomes per-instrument when the mod-slot
+// protocol op lands (§9 stage 4) - that stage also needs a mailbox here, the
+// same double-buffering s_voice_live_pending/mailbox already do, since a
+// main-loop write must not tear mid-copy under the callback that reads it.
+// Until then this array is only ever zero-initialized and never written, so
+// plain (non-DTCM) storage is safe to read directly from the callback.
+//
+// All-zero is a well-defined "no slots configured" state: EvaluateModMatrix
+// skips any slot whose source/dest/depth is 0, which every field of a
+// zeroed ModSlot is. So today this is a no-op - every voice renders exactly
+// as it did before the matrix existed - until something populates it.
+static WaveX::AudioEngine::ModSlot s_mod_slots[WaveX::AudioEngine::kMaxModSlots];
+static uint8_t s_mod_slot_count = 0;
+
+// Two engine-global LFOs (§5) - global by design regardless of the
+// instrument model, so unlike the mod slots above they don't wait on it
+// ("slot 3's wobble must not change because slot 5 loaded a new
+// instrument"). Ticked once per control tick (one callback == one 1kHz tick,
+// timebase.hpp) into the matrix's SRC_LFO1/SRC_LFO2 sources.
+// DTCM for the same reason as s_para_env: ticked once per block from
+// Callback() itself, CPU-only, tiny. Init() below MUST also set rate_hz_ -
+// Lfo::Init()/Reset() deliberately leave it untouched (a running LFO
+// shouldn't have its rate reset along with its phase), so on DTCM's zeroed
+// memory it would otherwise stay 0 forever and the LFO would never advance -
+// the exact hazard VoiceManager::Init()'s own comment warns about for
+// live_pitch_scale_.
+static WaveX::AudioEngine::Lfo s_mod_lfo1 WAVEX_DTCM_DATA;
+static WaveX::AudioEngine::Lfo s_mod_lfo2 WAVEX_DTCM_DATA;
 
 // Sequencer transport (roadmap Phase 2). Owns the step scheduler + MIDI
 // tempo follower. Edits/transport/clock arrive from main-loop message
@@ -1591,6 +1626,14 @@ void Init(DaisySeed& hw, float sample_rate, bool sdram_available) {
 
     s_voice_manager.Init(static_cast<uint32_t>(sample_rate));
 
+    // Global LFOs run at the 1kHz control-tick rate regardless of the audio
+    // sample rate. See s_mod_lfo1/2's own comment for why SetRateHz() must
+    // be called explicitly here rather than trusted to a member initializer.
+    s_mod_lfo1.Init(1000.0f);
+    s_mod_lfo1.SetRateHz(1.0f);
+    s_mod_lfo2.Init(1000.0f);
+    s_mod_lfo2.SetRateHz(1.0f);
+
     // Sequencer transport uses the same sample-rate/block-size timebase as
     // the audio engine so its scheduler frames line up with the callback.
     s_seq_transport.Init(static_cast<uint32_t>(sample_rate), Timebase::kBlockSize);
@@ -1700,6 +1743,23 @@ void Callback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t
                              s_para_active.release_s);
     }
     s_cv_test_mailbox.ConsumeLatest(s_cv_test_active);
+
+    // Modulation matrix + global LFOs (roadmap Phase 2.5 item 4;
+    // param-locks-and-modulation.md §3/§5). One callback IS one 1kHz control
+    // tick (Timebase's own invariant - see its comment), so this runs once
+    // per block: tick both global LFOs, then evaluate every sounding voice's
+    // modulation destinations so Render() below picks up this tick's values
+    // rather than the previous one's. Unconditional on
+    // WAVEX_ANALOG_CV_ENABLED - this is the all-digital path, unrelated to
+    // the optional analog CV stage further down. s_mod_slots starts (and
+    // currently stays) empty, so today this costs a tick of each LFO and a
+    // no-op matrix pass per voice until the mod-slot protocol op populates it.
+    {
+        WaveX::AudioEngine::ModSources mod_global_sources;
+        mod_global_sources.lfo1 = s_mod_lfo1.Tick();
+        mod_global_sources.lfo2 = s_mod_lfo2.Tick();
+        s_voice_manager.TickModulation(s_mod_slots, s_mod_slot_count, mod_global_sources);
+    }
 
     if (s_voice_manager.ActiveVoiceCount() > 0 &&
         size <= static_cast<size_t>(Timebase::kBlockSize)) {

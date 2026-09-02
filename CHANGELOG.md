@@ -13,6 +13,22 @@ versioning and release process.
 
 ### Added
 
+- Wired the modulation matrix and the two global LFOs into the audio callback
+  (roadmap Phase 2.5 item 4): `Voice::SetBlockModulation()` and
+  `VoiceManager::TickModulation()`, called once per callback from
+  `audio_engine.cpp` — one callback is one 1kHz control tick by construction
+  (`timebase.hpp`), so this ticks both LFOs and evaluates every sounding
+  voice's destinations exactly once per block, never per sample. Pitch and
+  cutoff are gated on the multiplier being away from identity, so an
+  unmodulated voice pays neither the filter's `tan()` recompute nor an
+  increment rewrite; gain and pan are unconditional (one multiply/add each,
+  already the mixer's application point). A stolen voice resets its
+  modulation to identity at `Trigger()` so it never renders a block with the
+  previous note's sweep still applied. The mod-slot array is engine-global
+  and currently empty — nothing writes it yet, so this is a no-op on hardware
+  until the mod-slot protocol op (Phase 2.5 item 4, still open) lands. 9 host
+  tests extending `VoiceManagerTest`.
+
 - Added the modulation matrix, `audio/mod_matrix.hpp` (roadmap Phase 2.5
   item 4): eight instrument-scoped slots routing a source to cutoff, gain,
   pitch or pan with a depth and a linear/exponential/S curve, evaluated at
