@@ -11,6 +11,17 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Added
+
+- The sample edit page's waveform now draws **two stacked traces for stereo** —
+  L above R, each labelled on the panel, each with its own grid zero line and
+  separated by a divider — with mono files using the full height (roadmap 1.5.7
+  item 1). A loop seam can now be judged per channel, which a combined trace
+  could not show: a loop tuned to look clean on L can click audibly on R. This
+  needed no protocol change; the wire, the envelope cache and the Daisy's
+  channel resolution already carried both channels, and `WaveformView` was
+  collapsing them to the widest excursion of either on arrival.
+
 ### Fixed
 
 - Fixed inverted encoder direction on the voice page: while editing a
