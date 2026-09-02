@@ -365,7 +365,11 @@ Built already, and more than this section long implied: the `VoiceManager` exten
    - Stage 3: mixer page and solo logic on the ESP32.
    - Stage 4: meter subscribe/unsubscribe path, plus the bench click and soak tests.
 3. **Melodic sequencing** (`features/melodic-sequencing.md`): melodic track type, chords/ties, step-record, live record/overdub/erase on the Daisy.
-4. **Modulation matrix + LFOs + filter envelope** (`features/param-locks-and-modulation.md` §3–5): 8 slots/instrument, block-rate evaluation, `MSG_MIDI_CC` (0x56). Land the param slew engine (`features/scenes-and-performance.md` §3) here — same control-tick surface.
+4. **Modulation matrix + LFOs + filter envelope** (`features/param-locks-and-modulation.md` §3–5): 8 slots/instrument, block-rate evaluation, `MSG_MIDI_CC` (0x56). Land the param slew engine (`features/scenes-and-performance.md` §3) here — same control-tick surface. Staged:
+   - ~~Primitives: the param slew engine and the LFO~~ — **done**, `audio/param_slew.hpp` and `audio/lfo.hpp`, 23 host tests. Both HAL-free and evaluated at control rate. The slew engine deliberately holds no parameter semantics and applies through a caller-supplied sink, which is how §3's "same apply path live CCs use" is enforced rather than merely intended.
+   - Open: the **mod matrix** itself (`ModSlot`, sources, curves, per-tick evaluation), the **second envelope** as `SRC_ENV_FILTER`, and `Voice::SetBlockModulation()` to apply the result.
+   - Open: `MSG_MIDI_CC` (0x56) is already defined on the wire but nothing consumes it; it becomes `SRC_MODWHEEL`/`SRC_AFTERTOUCH`.
+   - Note `SRC_PARA_ENV` in the design targets the analog stage, which is now deferred — it should be dropped or left unimplemented rather than wired to nothing.
 5. **Sampling/recording v1** (`features/sampling-and-recording.md`): threshold-armed capture with pre-roll, resample/bounce source, audition-before-save, non-destructive auto-trim markers, assign-to-zone. Depends on Phase 1 item 2.
 6. **Arpeggiator** (`features/arpeggiator.md`): per-slot, clock-synced, latch; feeds live record.
 

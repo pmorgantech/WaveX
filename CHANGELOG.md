@@ -13,6 +13,15 @@ versioning and release process.
 
 ### Added
 
+- Added the two modulation primitives (roadmap Phase 2.5 item 4):
+  `audio/param_slew.hpp`, a 32-entry control-tick ramp table used anywhere a
+  parameter step would zipper, and `audio/lfo.hpp`, a control-rate LFO with
+  sine/triangle/saw/square/sample-hold, a seeded and therefore repeatable S&H
+  sequence, and the delayed-vibrato ramp that gates amplitude without freezing
+  phase. 23 host tests. The slew engine applies through a caller-supplied sink
+  rather than writing parameters itself, which is what enforces the design's
+  requirement that ramped values and live CCs share one apply path.
+
 - The Daisy now applies the per-track mixer in the voice render sum (roadmap
   Phase 2.5 item 2, stage 2b) and drives it from `MSG_MIX_OP`. Track gain and
   pan offset fold into each voice's existing gain/pan once per voice per block,
