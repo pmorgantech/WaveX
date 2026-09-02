@@ -68,6 +68,7 @@ implementation.
 | [testing-remediation.md](testing-remediation.md) | Live plan for closing the gap between what the August 2026 audits found and what the suite can catch. Tier 0–1 largely done; Tiers 2–4 open |
 | [flashing.md](flashing.md) | Build and flash the ESP32-P4 and Daisy Seed from the devcontainer, plus SWD/GDB debug-probe workflows |
 | [performance_monitoring.md](performance_monitoring.md) | DWT cycle-counter and CPU-load measurement on the Daisy; LVGL render/flush/FPS instrumentation on the ESP32 |
+| [spi-notes.md](spi-notes.md) | libDaisy 8.1 SPI slave/DMA limits, a minimal bring-up recipe, and the source-level diagnosis of the dormant inter-MCU SPI link |
 | [LICENSES.md](LICENSES.md) | Third-party license inventory |
 
 For the development quickstart, build commands and CI, see the

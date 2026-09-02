@@ -13,6 +13,15 @@ versioning and release process.
 
 ### Added
 
+- Added [`docs/spi-notes.md`](docs/spi-notes.md): what libDaisy 8.1 actually
+  supports for SPI slave/DMA, a minimal fixed-frame bring-up recipe, and a
+  source-level diagnosis of why the dormant inter-MCU SPI link was unstable
+  (transaction ownership, a lossy ATTN handshake, recovery that does not reset
+  the peripheral, and an SPI IRQ at priority 0 that can preempt audio). Also
+  records that libDaisy funnels SPI1–SPI5 DMA through one shared stream pair,
+  which couples any future link to Phase 3's Stage B CV DAC bus. Conclusion is
+  unchanged: UART remains the transport of record.
+
 - The sample browser's detail panel now shows a **waveform preview** of the
   loaded sample (roadmap 1.5.3), with a "Load to preview" hint when the
   highlighted row is something else. `MSG_ENVELOPE_REQ` is served from sample

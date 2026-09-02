@@ -205,6 +205,10 @@ banked.
 **Want:** a faster, DMA-driven, non-blocking link between the MCUs, ideally
 with the ESP32 as master since most control actions originate there.
 
+See [`spi-notes.md`](spi-notes.md) for the libDaisy 8.1 slave/DMA constraints,
+the minimal fixed-frame bring-up gate, the dormant link diagnosis, and the
+planned Stage B CV SPI interaction.
+
 **Numbers, for the record:**
 
 | | UART4 (today) | SPI1 (hypothetical) |
