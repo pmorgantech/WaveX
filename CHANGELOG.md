@@ -13,6 +13,16 @@ versioning and release process.
 
 ### Added
 
+- Added `firmware/esp32/tests/widget/`, a host test target that renders LVGL
+  widgets with the **real vendored LVGL** and asserts on the resulting pixels.
+  LVGL's software renderer draws into a plain memory buffer, so a widget's
+  actual output is checkable without a panel — correcting a previously recorded
+  belief that UI widgets could not be host-tested. `waveform_view_test.cpp`
+  covers the stacked L/R traces, including the channel-swap case that was the
+  only real correctness risk there; the suite was verified by mutation to fail
+  against a deliberately swapped de-interleave. Adds ~12 s to `make test-esp32`.
+  See `docs/testing_guide.md` § *Testing LVGL widgets by pixel*.
+
 - The sample edit page's waveform now draws **two stacked traces for stereo** —
   L above R, each labelled on the panel, each with its own grid zero line and
   separated by a divider — with mono files using the full height (roadmap 1.5.7

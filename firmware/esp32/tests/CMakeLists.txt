@@ -183,3 +183,10 @@ file(GLOB_RECURSE integration_tests "${CMAKE_CURRENT_SOURCE_DIR}/integration/*_t
 foreach(test_file IN LISTS unit_tests integration_tests)
     add_wavex_esp32_test(${test_file})
 endforeach()
+
+# Widget tests live in their own directory because they must NOT inherit the
+# include_directories() above - `mocks/` is deliberately first there to shadow
+# lvgl.h, and these tests need the real one. See widget/CMakeLists.txt.
+if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/widget/CMakeLists.txt)
+    add_subdirectory(widget)
+endif()

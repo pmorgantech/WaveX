@@ -22,7 +22,8 @@ firmware/
 ├── esp32/tests/
 │   ├── unit/          # Unit tests for ESP32 components
 │   ├── integration/   # Integration tests
-│   ├── mocks/         # ESP-IDF API mocks
+│   ├── mocks/         # ESP-IDF API mocks (incl. a STUB lvgl.h)
+│   ├── widget/        # LVGL widgets rendered for real, asserted by pixel
 │   ├── utils/         # Test utilities
 │   └── CMakeLists.txt
 └── shared/tests/
@@ -203,6 +204,49 @@ translation unit, or a property like "no `lv_*` call happens off the LVGL
 task"), say so in the commit message rather than writing a test that passes
 either way. `docs/testing-remediation.md` records which of the August 2026
 defects fall into that category and why.
+
+**Before claiming a UI change cannot be tested, read the next section.** That
+claim was made once and was wrong.
+
+## Testing LVGL widgets by pixel
+
+`firmware/esp32/tests/widget/` renders widgets with the **real vendored LVGL**
+and asserts on the resulting pixels. LVGL's software renderer draws into a
+plain memory buffer — no display driver, no SDL, no hardware — so what a widget
+actually draws is checkable on the host. `tools/ui_preview` has rendered design
+previews this way since it was written.
+
+Three things to know before adding one:
+
+1. **It is a separate CMake directory for a reason.** The main ESP32 suite's
+   `include_directories()` puts `mocks/` first *specifically to shadow
+   `lvgl.h`* with a ~100-line stub. Directory-level include paths are inherited
+   by subdirectories, so `widget/CMakeLists.txt` clears them
+   (`set_property(DIRECTORY PROPERTY INCLUDE_DIRECTORIES "")`) before naming
+   its own. Without that, LVGL compiles against the stub and fails deep inside
+   the vendored font tables, pointing nowhere near the cause.
+2. **Measure pixels, not rows.** The grid draws a vertical line through every
+   row of a panel, so "rows containing any ink" saturates at 100% for a silent
+   channel and a loud one alike. The first version of `waveform_view_test.cpp`
+   did exactly this and failed against correct code. Counting pixels and
+   comparing regions keeps the constant grid contribution out of the answer.
+3. **Assert on structure, not appearance.** Colours, fonts and exact geometry
+   change whenever the design does, and a test that fails on a palette tweak
+   trains people to ignore it. Assert relationships — *this* region has far
+   more ink than *that* one — and leave legibility to the bench.
+
+The same "must fail against the broken version" rule applies, and for a widget
+it is easy to check by mutation:
+
+```bash
+# e.g. swap the channel lanes in the widget, rebuild, run
+#   -> the stereo tests must fail and the mono/empty ones must still pass
+git checkout firmware/esp32/components/ui/components/waveform_view.cpp
+```
+
+`WaveformView` was the cheap place to start because it has no dependency on
+`main`; the *pages* still cannot be tested this way until the `components/ui`
+⇄ `main` cycle in `docs/backlog.md` is broken.
 
 ## Test Coverage Goals
 

@@ -34,29 +34,26 @@ driver — LVGL's software renderer into plain memory.
 | `firmware/esp32/tests` | 96-line **stub** `mocks/lvgl.h`, written for `file_browser.cpp` | No `lv_area_t`, no draw API, so anything calling `lv_draw_*` will not compile |
 | `tools/ui_preview` | **Real** vendored LVGL, renders to BMP | C-only CMake project (`project(... C)`); it *reimplements* a waveform in C at `preview.c:750` instead of linking the C++ widget. Not wired into `make` or CI. |
 
-**What it would take**, and none of it is large: add CXX to the preview project
-(or add a third host target beside it), link the widget, and assert on pixels
-rather than eyeballing a BMP. `WaveformView`'s only non-LVGL dependency is
-`EnvelopeColumn` from `spi_protocol/protocol.h`, which is HAL-free and already
-host-compiled by the shared suite, and `LV_FONT_MONTSERRAT_14` is already
-enabled in `tools/ui_preview/lv_conf.h`.
+**Built, same day.** `firmware/esp32/tests/widget/` renders widgets with the
+real vendored LVGL and asserts on pixels; `waveform_view_test.cpp` covers the
+stacked L/R traces, including the channel-swap case that was the only real
+correctness risk in that change. Adds ~12 s to `make test-esp32`. The how, the
+`mocks/` shadowing trap, and the pixels-not-rows lesson are written up in
+`docs/testing_guide.md` § *Testing LVGL widgets by pixel*.
 
-The test worth writing first is the one the stacked-traces change actually
-needs: feed a **hard-panned** stereo envelope (L loud, R silent), render, and
-assert trace-coloured pixels in the top half and none in the bottom. That
-settles the channel-swap question — the one real correctness risk in that
-change — without a panel. Legibility at half height still needs the bench;
-correctness does not.
+**What remains open** is coverage, not capability:
 
-**Why it is not urgent:** it is new test infrastructure rather than a fix, and
-the widgets it would cover are few. But the cost of *not* having it is being
-paid every time a UI change is filed under "needs hardware" when only its
-appearance does, which inflates a hardware-verification list that is already
-long enough to discourage working through.
+- Only `WaveformView` is wired in. Other leaf widgets (`ui_softkey_bar`,
+  `ui_tab_group`, `ui_busy_overlay`) could follow the same pattern for the
+  cost of adding their `.cpp` to the target.
+- **The pages still cannot be reached this way**, and that is the
+  `components/ui` ⇄ `main` cycle below, not an LVGL problem. `WaveformView`
+  was the cheap place to start precisely because it has no `main` dependency.
 
-**Related:** the `components/ui` ⇄ `main` cycle below is a *different*
-obstacle and blocks the pages, not the leaf widgets. `WaveformView` has no
-`main` dependency, which is exactly why it is the cheap place to start.
+**Why the remainder is not urgent:** the widgets left are simpler than the one
+now covered, and none has a defect on record. The item that would genuinely
+pay is breaking the `main` cycle so pages become testable, which is already
+recorded separately and is a much larger job.
 
 ---
 
