@@ -13,6 +13,14 @@ versioning and release process.
 
 ### Added
 
+- Added the modulation matrix, `audio/mod_matrix.hpp` (roadmap Phase 2.5
+  item 4): eight instrument-scoped slots routing a source to cutoff, gain,
+  pitch or pan with a depth and a linear/exponential/S curve, evaluated at
+  control rate into block-rate multipliers. Slots on one destination sum. Gain
+  floors at silence rather than inverting, cutoff is exponential in octaves so
+  a depth means the same thing at 200 Hz and 2 kHz, and an empty matrix is an
+  exact identity so an unmodulated voice is unchanged. 19 host tests.
+
 - Added the two modulation primitives (roadmap Phase 2.5 item 4):
   `audio/param_slew.hpp`, a 32-entry control-tick ramp table used anywhere a
   parameter step would zipper, and `audio/lfo.hpp`, a control-rate LFO with
