@@ -216,7 +216,12 @@ void UITask::run() {
             wavex_ui::InputEvent evt;
             evt.type = (enc_delta > 0) ? wavex_ui::InputType::EncoderRight
                                        : wavex_ui::InputType::EncoderLeft;
-            evt.delta = (int16_t)enc_delta;
+            // Magnitude only - the type above carries the direction. Posting
+            // the raw signed count here is what let a page negating `delta` on
+            // an EncoderLeft come out positive, which is how counter-clockwise
+            // ended up increasing values. The pot below has always posted a
+            // magnitude; these two now agree. See InputEvent::steps().
+            evt.delta = (int16_t)((enc_delta > 0) ? enc_delta : -enc_delta);
             evt.timestamp_ms = (uint32_t)(esp_timer_get_time() / 1000);
             wavex_ui::InputDispatcher::instance().post(evt);
 

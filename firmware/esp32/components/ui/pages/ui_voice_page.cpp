@@ -473,18 +473,18 @@ void UIVoicePage::moveParam(int delta) {
 
 void UIVoicePage::onInput(const InputEvent& evt) {
     switch (evt.type) {
+        // steps() carries the direction, so neither case negates anything.
+        // Negating `delta` here used to invert the value: the rotary encoder
+        // posted a signed count, so counter-clockwise arrived negative and
+        // `-delta` made it an increase.
         case InputType::EncoderRight:
-            if (editing_) {
-                stepParam(evt.delta ? evt.delta : 1);
-            } else {
-                moveParam(+1);
-            }
-            break;
         case InputType::EncoderLeft:
             if (editing_) {
-                stepParam(-(evt.delta ? evt.delta : 1));
+                stepParam(evt.steps());
             } else {
-                moveParam(-1);
+                // Walking the list stays one entry per event however fast the
+                // knob is turned; only the value follows the magnitude.
+                moveParam(evt.steps() > 0 ? +1 : -1);
             }
             break;
         case InputType::EncoderDown:

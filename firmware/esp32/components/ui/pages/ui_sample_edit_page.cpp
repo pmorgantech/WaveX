@@ -331,20 +331,16 @@ void UISampleEditPage::onExit() {
 }
 
 void UISampleEditPage::onInput(const InputEvent& evt) {
-    // evt.delta is already SIGNED, and the event type only names the sign.
-    // Negating it for the Left/Down case therefore flipped it back to
-    // positive, which is why counter-clockwise increased the value. Take the
-    // magnitude and let the event type supply the direction, as the sample
-    // browser does.
-    const int steps = evt.delta < 0 ? -evt.delta : (evt.delta ? evt.delta : 1);
     switch (evt.type) {
+        // steps() is the shared encoder contract - magnitude from delta,
+        // direction from the event type. This page open-coded it after
+        // shipping inverted; the helper is what stops the next page repeating
+        // that (roadmap 1.5.2 item 5).
         case InputType::EncoderRight:
         case InputType::EncoderUp:
-            adjustFocused(steps);
-            break;
         case InputType::EncoderLeft:
         case InputType::EncoderDown:
-            adjustFocused(-steps);
+            adjustFocused(evt.steps());
             break;
         case InputType::EncoderClick:
             focus_ = static_cast<uint8_t>((focus_ + 1) % PARAM_COUNT);

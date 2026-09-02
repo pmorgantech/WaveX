@@ -11,6 +11,27 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed inverted encoder direction on the voice page: while editing a
+  parameter, turning the encoder counter-clockwise *increased* the value. The
+  cause was a disagreement between the two input producers rather than the page
+  itself — `ui_task.cpp` posted the rotary encoder's raw **signed** count as
+  `InputEvent::delta` while posting the pot's as a **magnitude**, so the same
+  `-delta` negation was correct for one control and inverting for the other.
+  The sample edit page shipped with this and patched it locally; the voice page
+  never was.
+
+### Changed
+
+- `InputEvent::delta` is now a magnitude from both input producers, with
+  direction carried solely by the event type, and `InputEvent::steps()` is the
+  single supported way to read it — size from `delta`, sign from the type.
+  Clockwise increases, always, on every page (roadmap 1.5.2 item 5). The helper
+  takes the magnitude defensively, so a producer regression can no longer
+  reverse a page, and host tests pin the contract including the signed-delta
+  case that caused both defects.
+
 ## [0.3.0] - 2026-09-01
 
 ### Added
