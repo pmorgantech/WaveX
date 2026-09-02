@@ -2,8 +2,11 @@
 #include "ui/ui_sample_browser.h"
 
 #include <esp_log.h>
+#include <esp_timer.h>
 #include <strings.h>
 
+#include "../components/envelope_cache.h"
+#include "../components/waveform_view.h"
 #include "../styles/ui_theme.h"
 #include "comm/i_comm_interface.h"
 #include "esp_lvgl_port.h"
@@ -34,6 +37,24 @@ constexpr uint32_t kColPanel = 0x0E0E0E;
 constexpr uint32_t kColBorder = 0x222222;
 constexpr uint32_t kColDim = 0x8FA0AA;
 constexpr uint32_t kColGreen = 0x4CAF50;
+
+// Waveform preview, in the gap the design leaves between the filename headline
+// and the metadata rows.
+constexpr int kWaveX = 16;
+constexpr int kWaveY = 58;
+constexpr int kWaveW = kDetailW - 32;
+constexpr int kWaveH = 150;
+
+// Columns asked of the envelope. The panel is 442 px wide, and asking for more
+// columns than pixels buys nothing; a coarse whole-file view is also the tier
+// most likely to be cached already from a previous visit.
+constexpr uint16_t kWaveColumns = 442;
+constexpr uint32_t kWaveTimeoutMs = 3000;
+constexpr uint8_t kWaveMaxRetries = 2;
+
+bool SendEnvelopeReq(uint16_t sample_id, uint16_t columns, uint32_t start, uint32_t end) {
+    return inter_mcu_send_envelope_req(sample_id, columns, start, end) == ESP_OK;
+}
 
 bool isSfzFile(const char* name) {
     if (!name)
@@ -123,6 +144,45 @@ void UISampleBrowser::onEnter(lv_obj_t* parent) {
     lv_obj_set_width(detail_name_, kDetailW - 32);
     lv_label_set_long_mode(detail_name_, LV_LABEL_LONG_DOT);
     lv_label_set_text(detail_name_, "Select a file");
+
+    // Waveform preview of the loaded sample. Built unconditionally so the
+    // panel's geometry does not shift when one appears; it simply draws its
+    // zero line until there is something to show.
+    EnsureEnvelopeCacheInitialised();
+    envelope_columns_.assign(static_cast<size_t>(kWaveColumns) * 2,
+                             WaveX::Protocol::EnvelopeColumn());
+
+    EnvelopeFetcher::Config wave_cfg;
+    wave_cfg.display_columns = kWaveColumns;
+    wave_cfg.max_run_columns = WaveX::Protocol::MAX_ENVELOPE_COLUMNS;
+    wave_cfg.timeout_ms = kWaveTimeoutMs;
+    // Fewer retries than the edit page: this is a preview beside the real
+    // information, not the thing the user came to look at, and a browser that
+    // keeps retrying in the background is traffic nobody asked for.
+    wave_cfg.max_retries = kWaveMaxRetries;
+    envelope_fetcher_.init(wave_cfg, &SendEnvelopeReq, &GetEnvelopeCache());
+
+    lv_obj_t* wave_panel = lv_obj_create(info_panel_);
+    lv_obj_remove_style_all(wave_panel);
+    lv_obj_set_size(wave_panel, kWaveW, kWaveH);
+    lv_obj_set_pos(wave_panel, kWaveX, kWaveY);
+    lv_obj_set_style_bg_color(wave_panel, lv_color_hex(0x0A0A0A), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(wave_panel, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_border_width(wave_panel, 1, LV_PART_MAIN);
+    lv_obj_set_style_border_color(wave_panel, lv_color_hex(kColBorder), LV_PART_MAIN);
+    lv_obj_remove_flag(wave_panel, LV_OBJ_FLAG_SCROLLABLE);
+    waveform_ = std::make_unique<WaveformView>(wave_panel, lv_pct(100), lv_pct(100));
+
+    // Says why the panel is empty. Without it an unloaded selection looks
+    // identical to a preview that failed, which is the ambiguity the busy
+    // overlay was criticised for elsewhere.
+    waveform_hint_ = lv_label_create(info_panel_);
+    lv_obj_set_style_text_font(waveform_hint_, &lv_font_montserrat_18, LV_PART_MAIN);
+    lv_obj_set_style_text_color(waveform_hint_, lv_color_hex(kColDim), LV_PART_MAIN);
+    lv_obj_set_pos(waveform_hint_, kWaveX + 10, kWaveY + (kWaveH / 2) - 12);
+    lv_label_set_text(waveform_hint_, "Load to preview");
+
+    inter_mcu_set_envelope_chunk_listener(&UISampleBrowser::envelopeChunkStatic, this);
 
     // Metadata rows. Kept as one wrapped label rather than a table: the
     // fields are fixed and a table's chrome costs more than it adds here.
@@ -220,6 +280,18 @@ void UISampleBrowser::onExit() {
              "=== SAMPLE BROWSER ON_EXIT: Unregistering callback and clearing active instance");
     inter_mcu_set_sample_status_listener(nullptr, nullptr);
     inter_mcu_set_inst_status_listener(nullptr, nullptr);
+    // Unregister before the widgets go, or the RX task would be writing
+    // through a freed page. abort() then releases the cache arming: skipping
+    // it would leave noteRequest() blocking every later waveform in the
+    // process, not just this page's.
+    inter_mcu_set_envelope_chunk_listener(nullptr, nullptr);
+    envelope_fetcher_.abort();
+    waveform_.reset();
+    waveform_hint_ = nullptr;
+    shown_sample_id_ = 0;
+    shown_generation_ = 0;
+    waveform_drawn_ = false;
+    waveform_gave_up_ = false;
     if (s_active_instance_ == this) {
         s_active_instance_ = nullptr;
     }
@@ -582,6 +654,150 @@ void UISampleBrowser::updateMetadata(const wavex_file_entry_t* entry) {
 }
 
 // Static method to process updates for active instance (called from UI task)
+// UART RX task. Ordering is the fetcher's problem; nothing here may touch
+// LVGL or the cache.
+void UISampleBrowser::envelopeChunkStatic(const WaveX::Protocol::EnvelopeChunkMessage& header,
+                                          const WaveX::Protocol::EnvelopeColumn* columns,
+                                          void* user) {
+    auto* self = static_cast<UISampleBrowser*>(user);
+    if (self) {
+        self->envelope_fetcher_.onChunk(header, columns);
+    }
+}
+
+bool UISampleBrowser::selectionIsLoadedSample() const {
+    if (persistent_state_.last_load_sample_id == 0 ||
+        persistent_state_.last_load_sample_path.empty()) {
+        return false;
+    }
+    return persistent_state_.last_load_sample_path == selected_file_path_;
+}
+
+// UI task. Keeps the preview in step with what is loaded and selected.
+void UISampleBrowser::serviceWaveform() {
+    if (!waveform_ || !is_initialized_) {
+        return;
+    }
+
+    // Only the loaded sample has an envelope to fetch - MSG_ENVELOPE_REQ is
+    // served from sample RAM, so a merely-selected file has nothing behind it.
+    if (!selectionIsLoadedSample()) {
+        if (shown_sample_id_ != 0) {
+            waveform_->clear();
+            shown_sample_id_ = 0;
+            shown_generation_ = 0;
+            waveform_drawn_ = false;
+            waveform_gave_up_ = false;
+        }
+        if (waveform_hint_) {
+            lv_obj_remove_flag(waveform_hint_, LV_OBJ_FLAG_HIDDEN);
+        }
+        return;
+    }
+
+    const uint16_t sample_id = persistent_state_.last_load_sample_id;
+    uint16_t generation = 0;
+    uint32_t total_frames = 0;
+    WaveX::Protocol::SampleMetadata meta;
+    if (inter_mcu_get_sample_meta(sample_id, &meta) && meta.total_frames > 0) {
+        generation = meta.generation;
+        total_frames = meta.total_frames;
+    } else {
+        // The record has not arrived yet. Fall back to the geometry the browse
+        // listing carried, so the first request is not delayed a whole round
+        // trip; if it turns out to overshoot, the backend clamps and the
+        // generation check below re-draws once the real record lands.
+        total_frames = persistent_state_.lastLoadFrames();
+    }
+    if (total_frames == 0) {
+        return;  // nothing to ask about yet
+    }
+
+    if (sample_id != shown_sample_id_ || generation != shown_generation_) {
+        shown_sample_id_ = sample_id;
+        shown_generation_ = generation;
+        waveform_drawn_ = false;
+        waveform_gave_up_ = false;
+    }
+
+    // The steady state, and the reason this function is cheap to call at the
+    // UI task's rate: once drawn with nothing in flight there is nothing to do
+    // until the selection or the sample's content changes.
+    if ((waveform_drawn_ || waveform_gave_up_) && !envelope_fetcher_.busy()) {
+        return;
+    }
+
+    const uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
+    bool redraw = false;
+
+    switch (envelope_fetcher_.service(now)) {
+        case EnvelopeFetcher::Service::Committed:
+            redraw = true;
+            break;
+        case EnvelopeFetcher::Service::Retrying:
+            // Draw the partial run rather than holding the panel blank.
+            redraw = true;
+            break;
+        case EnvelopeFetcher::Service::GaveUp:
+            // Silent by design. The edit page says so on its status line
+            // because the waveform is what that page is for; here it is a
+            // preview beside the real information, and a browser narrating its
+            // own background traffic is noise.
+            waveform_gave_up_ = true;
+            redraw = true;
+            break;
+        case EnvelopeFetcher::Service::Idle:
+            break;
+    }
+
+    if (!waveform_gave_up_) {
+        // Whole file, always: this panel does not zoom, so one coarse tier
+        // serves it and stays cached cheaply across selections.
+        if (envelope_fetcher_.request(sample_id, generation, 0, total_frames, total_frames, now) ==
+            EnvelopeFetcher::Request::AlreadyCached) {
+            redraw = true;
+        }
+    }
+
+    if (redraw) {
+        drawWaveform();
+    }
+}
+
+void UISampleBrowser::drawWaveform() {
+    if (!waveform_ || envelope_columns_.empty() || shown_sample_id_ == 0) {
+        return;
+    }
+    uint32_t total_frames = 0;
+    WaveX::Protocol::SampleMetadata meta;
+    if (inter_mcu_get_sample_meta(shown_sample_id_, &meta) && meta.total_frames > 0) {
+        total_frames = meta.total_frames;
+    } else {
+        total_frames = persistent_state_.lastLoadFrames();
+    }
+    if (total_frames == 0) {
+        return;
+    }
+
+    uint8_t channels = 1;
+    const uint16_t drawn = GetEnvelopeCache().render(shown_sample_id_,
+                                                     shown_generation_,
+                                                     0,
+                                                     total_frames,
+                                                     kWaveColumns,
+                                                     envelope_columns_.data(),
+                                                     envelope_columns_.size(),
+                                                     channels);
+    if (drawn == 0) {
+        return;  // nothing cached yet; the request is in flight
+    }
+    waveform_->setEnvelope(envelope_columns_.data(), kWaveColumns, channels);
+    waveform_drawn_ = true;
+    if (waveform_hint_) {
+        lv_obj_add_flag(waveform_hint_, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
 void UISampleBrowser::processDeferredUpdates() {
     if (s_active_instance_) {
         ESP_LOGD(TAG, "processDeferredUpdates: calling processDeferredUpdates_()");
@@ -593,6 +809,11 @@ void UISampleBrowser::processDeferredUpdates() {
 
 void UISampleBrowser::processDeferredUpdates_() {
     // This should be called from UI task loop with LVGL lock held
+
+    // The waveform rides the existing UI-task pass rather than adding an
+    // lv_timer of its own: this already runs at the cadence a preview needs,
+    // and one fewer timer is one fewer thing to tear down on exit.
+    serviceWaveform();
 
     if (status_update_pending_.load(std::memory_order_acquire) && status_label_) {
         lv_label_set_text(status_label_, pending_status_text_);

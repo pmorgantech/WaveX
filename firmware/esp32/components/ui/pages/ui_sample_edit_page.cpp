@@ -1,6 +1,5 @@
 #include "ui/ui_sample_edit_page.h"
 
-#include <esp_heap_caps.h>
 #include <esp_log.h>
 #include <esp_timer.h>
 
@@ -51,40 +50,6 @@ constexpr uint32_t kRequestTimeoutMs = 3000;
 // status line that says so is more use than silent traffic.
 constexpr uint8_t kMaxRequestRetries = 3;
 
-// PSRAM the envelope cache may take. Measured against what is actually free
-// rather than a board spec, and capped: LVGL's draw buffers and the display
-// rotation path are already the largest consumers of the same pool, and a
-// cache that starves them trades a fast waveform for a slow UI.
-constexpr size_t kCacheBudgetMin = 128u * 1024u;
-constexpr size_t kCacheBudgetMax = 2048u * 1024u;
-
-void* CacheAlloc(size_t bytes) {
-    void* p = heap_caps_malloc(bytes, MALLOC_CAP_SPIRAM);
-    return p ? p : heap_caps_malloc(bytes, MALLOC_CAP_8BIT);
-}
-void CacheFree(void* p) {
-    heap_caps_free(p);
-}
-
-void EnsureCacheInitialised() {
-    EnvelopeCache& cache = GetEnvelopeCache();
-    if (cache.initialized()) {
-        return;
-    }
-    const size_t free_psram = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
-    size_t budget = free_psram / 8;  // an eighth of what is left, not of the spec
-    if (budget < kCacheBudgetMin) {
-        budget = (free_psram > kCacheBudgetMin) ? kCacheBudgetMin : free_psram / 2;
-    }
-    if (budget > kCacheBudgetMax) {
-        budget = kCacheBudgetMax;
-    }
-    EnvelopeCache::Allocator allocator;
-    allocator.alloc = &CacheAlloc;
-    allocator.release = &CacheFree;
-    cache.init(budget, allocator);
-}
-
 // Layout, page-relative (the navigator's content area already starts below the
 // 75px header). Design 2e: waveform 1256x250 @ y12, param strip y278, info y434.
 constexpr int kMargin = 12;
@@ -108,6 +73,12 @@ constexpr uint32_t kColGreen = 0x4CAF50;
 constexpr uint32_t kColOrange = 0xFF9800;
 
 const char* TAG = "UI_SAMPLE_EDIT";
+
+// Adapter for EnvelopeFetcher, which takes a plain bool so the fetcher stays
+// free of ESP-IDF and can be host-tested.
+bool SendEnvelopeReq(uint16_t sample_id, uint16_t columns, uint32_t start, uint32_t end) {
+    return inter_mcu_send_envelope_req(sample_id, columns, start, end) == ESP_OK;
+}
 
 lv_obj_t* box(lv_obj_t* parent, int x, int y, int w, int h, uint32_t colour) {
     lv_obj_t* o = lv_obj_create(parent);
@@ -153,19 +124,23 @@ void UISampleEditPage::onEnter(lv_obj_t* parent) {
     lv_obj_set_style_bg_opa(root_, LV_OPA_COVER, 0);
     lv_obj_remove_flag(root_, LV_OBJ_FLAG_SCROLLABLE);
 
-    // Allocated once, before any chunk can arrive, and never resized after.
-    // Sized for the widest run the wire allows, in stereo.
-    run_columns_.assign(static_cast<size_t>(kMaxRunColumns) * 2, WaveX::Protocol::EnvelopeColumn());
+    // Allocated once and never resized: render() writes into it every redraw.
+    // Sized for this page's column count, in stereo.
     display_columns_.assign(static_cast<size_t>(kDisplayColumns) * 2,
                             WaveX::Protocol::EnvelopeColumn());
-    EnsureCacheInitialised();
+    EnsureEnvelopeCacheInitialised();
+
+    EnvelopeFetcher::Config fetch_cfg;
+    fetch_cfg.display_columns = kDisplayColumns;
+    fetch_cfg.max_run_columns = kMaxRunColumns;
+    fetch_cfg.timeout_ms = kRequestTimeoutMs;
+    fetch_cfg.max_retries = kMaxRequestRetries;
+    fetcher_.init(fetch_cfg, &SendEnvelopeReq, &GetEnvelopeCache());
     // The cache outlives this page - it is a process-wide singleton shared with
     // the browser's detail panel - so a run abandoned by a previous instance
     // would still be blocking nextRequest() here. Nothing can be in flight at
     // the moment a page is built, so say so.
     GetEnvelopeCache().abortPending();
-    request_in_flight_ = false;
-    request_retries_ = 0;
 
     buildWaveformPanel(root_);
     buildParamStrip(root_);
@@ -304,10 +279,7 @@ void UISampleEditPage::onExit() {
     // dropped, so that run can never commit. Release the cache's arming with
     // it, or leaving this tab mid-run would wedge the shared cache for whatever
     // draws a waveform next.
-    if (request_in_flight_) {
-        request_in_flight_ = false;
-        GetEnvelopeCache().abortPending();
-    }
+    fetcher_.abort();
     if (auditioning_) {
         inter_mcu_send_sample_stop_req();
         auditioning_ = false;
@@ -790,56 +762,14 @@ void UISampleEditPage::envelopeChunkStatic(const WaveX::Protocol::EnvelopeChunkM
     static_cast<UISampleEditPage*>(user)->handleEnvelopeChunk(header, columns);
 }
 
-// UART RX task context. Touching LVGL from here is what froze the display
-// once already, and the envelope cache is off limits too - it allocates, and
-// the whole cache is written to be single-threaded on the UI task. So this
-// only assembles the run in a fixed buffer and raises a flag.
+// UART RX task context. Touching LVGL from here is what froze the display once
+// already, and the envelope cache is off limits too - it allocates, and the
+// whole cache is written to be single-threaded on the UI task. The fetcher
+// honours both: it only assembles the run into a fixed buffer and publishes a
+// flag the UI task picks up in serviceUi().
 void UISampleEditPage::handleEnvelopeChunk(const WaveX::Protocol::EnvelopeChunkMessage& header,
                                            const WaveX::Protocol::EnvelopeColumn* columns) {
-    if (!columns || run_ready_.load(std::memory_order_acquire) || run_columns_.empty()) {
-        return;  // nothing armed, or the last run is still waiting to be drawn
-    }
-    const uint32_t epoch = run_epoch_.load(std::memory_order_acquire);
-    if (header.sample_id != pending_sample_id_ || header.generation != pending_generation_ ||
-        header.start_frame != pending_start_ || header.total_columns != pending_columns_) {
-        return;  // a reply to a view the user has already left
-    }
-    if (header.channels == 0 || header.channels > 2 || header.columns == 0) {
-        return;
-    }
-    const uint8_t seen_channels = run_channels_.load(std::memory_order_relaxed);
-    if (seen_channels != 0 && header.channels != seen_channels) {
-        return;
-    }
-    const uint32_t end_column = static_cast<uint32_t>(header.first_column) + header.columns;
-    if (end_column > pending_columns_ ||
-        static_cast<size_t>(end_column) * header.channels > run_columns_.size()) {
-        return;
-    }
-    // A resend after a full TX queue repeats columns rather than reordering
-    // them, so overlap is expected and a real gap is not.
-    if (header.first_column > run_received_.load(std::memory_order_relaxed)) {
-        return;
-    }
-
-    std::copy(columns,
-              columns + static_cast<size_t>(header.columns) * header.channels,
-              run_columns_.begin() + static_cast<size_t>(header.first_column) * header.channels);
-
-    // Re-check: requestWaveform() may have re-armed while this was copying,
-    // in which case what was just written belongs to neither run.
-    if (run_epoch_.load(std::memory_order_acquire) != epoch) {
-        return;
-    }
-    run_channels_.store(header.channels, std::memory_order_relaxed);
-    if (end_column > run_received_.load(std::memory_order_relaxed)) {
-        run_received_.store(static_cast<uint16_t>(end_column), std::memory_order_relaxed);
-    }
-    if (run_received_.load(std::memory_order_relaxed) >= pending_columns_) {
-        // Release: everything written above, including the column data, must
-        // be visible to the UI task before it can observe this flag.
-        run_ready_.store(true, std::memory_order_release);
-    }
+    fetcher_.onChunk(header, columns);
 }
 
 uint16_t UISampleEditPage::currentSampleId() const {
@@ -867,8 +797,9 @@ void UISampleEditPage::uiTimerCb(lv_timer_t* t) {
 
 // UI task. The only place this page touches LVGL after onEnter.
 void UISampleEditPage::serviceUi() {
+    const uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
+
     if (request_due_ms_ != 0) {
-        const uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
         if ((int32_t)(now - request_due_ms_) >= 0) {
             request_due_ms_ = 0;
             requestWaveform();
@@ -892,52 +823,26 @@ void UISampleEditPage::serviceUi() {
         params_dirty_ = false;
         refreshParams();
     }
-    // Hand a completed run to the cache. This is the only place the cache is
-    // touched, which is what lets it stay lock-free.
-    if (run_ready_.load(std::memory_order_acquire)) {
-        WaveX::Protocol::EnvelopeChunkMessage header;
-        header.sample_id = pending_sample_id_;
-        header.generation = pending_generation_;
-        header.start_frame = pending_start_;
-        header.end_frame = pending_end_;
-        header.total_columns = pending_columns_;
-        header.first_column = 0;
-        header.columns = pending_columns_;
-        const uint8_t channels = run_channels_.load(std::memory_order_relaxed);
-        header.channels = channels ? channels : 1;
-
-        GetEnvelopeCache().ingest(header, run_columns_.data());
-        run_ready_.store(false, std::memory_order_relaxed);
-        request_in_flight_ = false;
-        request_retries_ = 0;
-        waveform_dirty_.store(true, std::memory_order_relaxed);
-        // A wide view can need more columns than one run holds; ask for the
-        // rest now that this one is filed.
-        requestWaveform();
-    } else if (request_in_flight_) {
-        const uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
-        if (now - request_sent_ms_ >= kRequestTimeoutMs) {
-            // The backend drops a scan when the sample under it is reloaded,
-            // and does not say so. Give up on this run rather than leaving the
-            // page unable to ask for anything ever again.
-            //
-            // Clearing request_in_flight_ alone was not enough, and that was
-            // the bug: the CACHE was still armed from noteRequest(), and its
-            // guard is not per-sample, so one dropped run stopped the whole
-            // process from ever requesting another envelope - the waveform then
-            // stayed empty for every sample until reboot. Release both.
-            request_in_flight_ = false;
-            GetEnvelopeCache().abortPending();
+    // Drive the run in flight: commit it, or handle one that never answered.
+    switch (fetcher_.service(now)) {
+        case EnvelopeFetcher::Service::Committed:
+            waveform_dirty_.store(true, std::memory_order_relaxed);
+            // A wide view can need more columns than one run holds; ask for
+            // the rest now that this one is filed.
+            requestWaveform();
+            break;
+        case EnvelopeFetcher::Service::Retrying:
             // Draw whatever did arrive rather than holding the panel blank.
             waveform_dirty_.store(true, std::memory_order_relaxed);
-            if (request_retries_ < kMaxRequestRetries) {
-                ++request_retries_;
-                refreshStatus("Waveform request timed out - retrying");
-                request_due_ms_ = now + kRequestSettleMs;
-            } else {
-                refreshStatus("Waveform unavailable - reopen the page to retry");
-            }
-        }
+            refreshStatus("Waveform request timed out - retrying");
+            request_due_ms_ = now + kRequestSettleMs;
+            break;
+        case EnvelopeFetcher::Service::GaveUp:
+            waveform_dirty_.store(true, std::memory_order_relaxed);
+            refreshStatus("Waveform unavailable - reopen the page to retry");
+            break;
+        case EnvelopeFetcher::Service::Idle:
+            break;
     }
 
     if (waveform_dirty_) {
@@ -975,60 +880,30 @@ void UISampleEditPage::requestWaveform() {
         refreshStatus("No sample loaded. Load via Sample Browser first.");
         return;
     }
-    if (request_in_flight_) {
-        return;  // one run at a time; the reply path re-enters here
-    }
 
     const uint32_t span = view_frames_ ? view_frames_ : total_frames_;
-    const uint16_t sample_id = currentSampleId();
-    const uint16_t generation = currentGeneration();
+    const uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
 
-    uint32_t req_start = 0;
-    uint32_t req_end = 0;
-    uint16_t req_columns = 0;
-    if (!GetEnvelopeCache().nextRequest(sample_id,
-                                        generation,
-                                        view_start_,
-                                        view_start_ + span,
-                                        total_frames_,
-                                        kDisplayColumns,
-                                        kMaxRunColumns,
-                                        req_start,
-                                        req_end,
-                                        req_columns)) {
-        waveform_dirty_ = true;  // already cached: draw from what we hold
-        return;
+    switch (fetcher_.request(currentSampleId(),
+                             currentGeneration(),
+                             view_start_,
+                             view_start_ + span,
+                             total_frames_,
+                             now)) {
+        case EnvelopeFetcher::Request::AlreadyCached:
+            waveform_dirty_.store(true, std::memory_order_relaxed);
+            break;
+        case EnvelopeFetcher::Request::SendFailed:
+            refreshStatus("Waveform request failed");
+            break;
+        case EnvelopeFetcher::Request::Sent:
+        case EnvelopeFetcher::Request::Busy:
+        case EnvelopeFetcher::Request::NotReady:
+            // Busy is normal rather than an error: serviceUi() re-enters here
+            // once the run lands, which is how a view wider than a single run
+            // fills in progressively.
+            break;
     }
-
-    // Arm the receiver before sending, and bump the epoch first so a chunk
-    // from the previous run cannot be filed against this one.
-    // acq_rel so a chunk copying concurrently sees the new epoch on its
-    // re-check and discards itself rather than filing against this run.
-    run_epoch_.fetch_add(1, std::memory_order_acq_rel);
-    run_ready_.store(false, std::memory_order_relaxed);
-    run_received_.store(0, std::memory_order_relaxed);
-    run_channels_.store(0, std::memory_order_relaxed);
-    pending_sample_id_ = sample_id;
-    pending_generation_ = generation;
-    pending_start_ = req_start;
-    pending_end_ = req_end;
-    pending_columns_ = req_columns;
-    // Send BEFORE arming the cache. noteRequest() blocks every later
-    // nextRequest() until the run commits, so arming first and then failing to
-    // send left the cache waiting on a reply that was never asked for - and
-    // because the send failure also skips request_in_flight_, the timeout below
-    // never ran either. Both halves of the state have to be armed together or
-    // not at all. Safe to order this way: ingest() is only ever reached from
-    // serviceUi() on this same task, so no chunk can be filed between the send
-    // and the noteRequest().
-    const esp_err_t res = inter_mcu_send_envelope_req(sample_id, req_columns, req_start, req_end);
-    if (res != ESP_OK) {
-        refreshStatus("Waveform request failed");
-        return;
-    }
-    GetEnvelopeCache().noteRequest(sample_id, generation, req_start, req_end, req_columns);
-    request_in_flight_ = true;
-    request_sent_ms_ = (uint32_t)(esp_timer_get_time() / 1000);
 }
 
 void UISampleEditPage::refreshStatus(const char* text) {

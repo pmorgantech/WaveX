@@ -3,6 +3,7 @@
 
 #include <lvgl.h>
 
+#include "../components/envelope_fetcher.h"
 #include "../components/file_browser.h"
 #include "comm/i_comm_interface.h"
 #include "input_event.h"
@@ -15,6 +16,7 @@
 #include <cstring>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace wavex_ui {
 
@@ -148,6 +150,37 @@ class UISampleBrowser : public UIPage {
     lv_obj_t* card_label_ = nullptr;     // "SD 12.4 GB free" / card state
     lv_obj_t* detail_name_ = nullptr;
     lv_obj_t* play_bar_ = nullptr;
+
+    // Waveform preview of the LOADED sample (roadmap 1.5.3).
+    //
+    // Only the loaded sample can be shown: MSG_ENVELOPE_REQ is served from
+    // sample RAM on the Daisy, so there is nothing to draw for a file that has
+    // only been selected. That constraint is also what makes this affordable -
+    // the roadmap's worry was that a per-selection round trip would make
+    // scrolling unusable, and this asks for nothing while the cursor moves.
+    std::unique_ptr<class WaveformView> waveform_;
+    lv_obj_t* waveform_hint_ = nullptr;
+    EnvelopeFetcher envelope_fetcher_;
+    std::vector<WaveX::Protocol::EnvelopeColumn> envelope_columns_;
+
+    /// The sample the panel is currently drawing. serviceWaveform() runs on
+    /// every deferred-update pass (~30 Hz), so it needs to recognise its own
+    /// steady state: without these it would re-render 442 columns and
+    /// invalidate the widget on every pass for a waveform that has not moved.
+    uint16_t shown_sample_id_ = 0;
+    uint16_t shown_generation_ = 0;
+    bool waveform_drawn_ = false;
+    /// Stops re-asking forever once the fetcher has exhausted its retries.
+    /// Cleared when the sample changes, so a different selection tries again.
+    bool waveform_gave_up_ = false;
+
+    static void envelopeChunkStatic(const WaveX::Protocol::EnvelopeChunkMessage& header,
+                                    const WaveX::Protocol::EnvelopeColumn* columns,
+                                    void* user);
+    void serviceWaveform();
+    void drawWaveform();
+    /// True when the highlighted row is the sample that is actually loaded.
+    bool selectionIsLoadedSample() const;
 
     void refreshStatusStrip();
 

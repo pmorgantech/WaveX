@@ -203,4 +203,14 @@ class EnvelopeCache {
 /// same envelope.
 EnvelopeCache& GetEnvelopeCache();
 
+/**
+ * @brief Initialises the shared cache against actual free PSRAM, once.
+ *
+ * Idempotent, so every page that draws a waveform can call it on entry without
+ * caring who got there first. Defined in envelope_cache_init.cpp, which is
+ * firmware-only: the budget comes from heap_caps and there is no PSRAM on the
+ * host.
+ */
+void EnsureEnvelopeCacheInitialised();
+
 }  // namespace wavex_ui

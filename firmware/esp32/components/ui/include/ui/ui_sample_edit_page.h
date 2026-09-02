@@ -1,5 +1,6 @@
 #pragma once
 
+#include "envelope_fetcher.h"
 #include "input_event.h"
 #include "spi_protocol/protocol.h"
 #include "ui_page.h"
@@ -70,43 +71,22 @@ class UISampleEditPage : public UIPage {
     std::unique_ptr<class WaveformView> waveform_;
     bool has_sample_ = false;
 
-    // One envelope run in flight, staged into a buffer allocated once at its
-    // ceiling and never resized: the UART task writes into it while the UI
-    // task reads, so a reallocation mid-copy would be a use-after-free where
-    // a torn value is merely one stale column.
-    std::vector<WaveX::Protocol::EnvelopeColumn> run_columns_;
-    std::vector<WaveX::Protocol::EnvelopeColumn> display_columns_;
+    // The envelope run in flight, including the staging buffer, the
+    // cross-task chunk assembly and the timeout/retry budget. Shared with the
+    // sample browser's detail panel; see envelope_fetcher.h for why the
+    // release/acquire handling lives there rather than being written twice.
+    EnvelopeFetcher fetcher_;
 
-    // Identity of the request in flight, read by the RX task to decide
-    // whether a chunk still belongs to the view on screen. run_epoch_ is
-    // bumped before each arming and re-checked after the copy, so a chunk
-    // cannot be filed against a request that changed underneath it.
-    // std::atomic, not volatile: the producer is the UART RX task and the
-    // consumer is the UI task, on either core. volatile orders nothing between
-    // them, so the consumer could observe run_ready_ before the column data it
-    // advertises. Guide §9 bans volatile for exactly this. The file browser
-    // has used release/acquire here since the 2026-07-03 DMA/timing review;
-    // this page had regressed to the older pattern.
-    std::atomic<uint32_t> run_epoch_{0};
-    uint16_t pending_sample_id_ = 0;
-    uint16_t pending_generation_ = 0;
-    uint32_t pending_start_ = 0;
-    uint32_t pending_end_ = 0;
-    uint16_t pending_columns_ = 0;
-    std::atomic<uint16_t> run_received_{0};
-    std::atomic<uint8_t> run_channels_{0};
-    std::atomic<bool> run_ready_{false};
-    bool request_in_flight_ = false;
-    uint32_t request_sent_ms_ = 0;
-    // Consecutive timeouts. Reset by a run that completes, so a sample that
-    // simply took a slow scan does not spend the budget a broken one needs.
-    uint8_t request_retries_ = 0;
+    // Where render() merges cached tier columns for this view. Stays here
+    // rather than in the fetcher: it is sized by what this page displays, not
+    // by what one run can carry.
+    std::vector<WaveX::Protocol::EnvelopeColumn> display_columns_;
 
     // Redraw requests, applied by ui_timer_ on the UI task.
     //
-    // Unlike the run_* state above, these are raised only from UI-task code -
-    // the envelope callback signals completion through run_ready_, not through
-    // these. They are atomic defensively rather than by necessity, so that a
+    // Unlike the fetcher's own state, these are raised only from UI-task code
+    // - the envelope callback signals completion inside the fetcher, not
+    // through these. They are atomic defensively rather than by necessity, so that a
     // future comm-side caller is correct by default; do not read this as
     // evidence that the RX task touches them today, and do not add one without
     // reading the ordering note above first.

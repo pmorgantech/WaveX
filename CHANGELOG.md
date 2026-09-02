@@ -13,6 +13,21 @@ versioning and release process.
 
 ### Added
 
+- The sample browser's detail panel now shows a **waveform preview** of the
+  loaded sample (roadmap 1.5.3), with a "Load to preview" hint when the
+  highlighted row is something else. `MSG_ENVELOPE_REQ` is served from sample
+  RAM on the Daisy, so only a loaded sample has an envelope to fetch — which is
+  also why this costs nothing while scrolling, the concern that had kept the
+  item open. It shares the envelope cache with the edit page, so revisiting a
+  sample redraws without a round trip.
+- Added `EnvelopeFetcher` (`components/envelope_fetcher.{h,cpp}`): the envelope
+  request/assemble/commit/timeout state machine, extracted from the sample edit
+  page so the browser could share it rather than repeat its cross-task
+  release/acquire handling. Host-tested with 13 tests — coverage that logic
+  never had — including the case it was shaped by, where a run abandoned
+  without releasing the cache's arming blocked every subsequent waveform in the
+  process until reboot.
+
 - Added `firmware/esp32/tests/widget/`, a host test target that renders LVGL
   widgets with the **real vendored LVGL** and asserts on the resulting pixels.
   LVGL's software renderer draws into a plain memory buffer, so a widget's

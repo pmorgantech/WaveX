@@ -3,6 +3,8 @@
 # Add UI source files
 set(COMPONENT_SRCS
     "components/envelope_cache.cpp"
+    "components/envelope_cache_init.cpp"
+    "components/envelope_fetcher.cpp"
     "components/file_browser.cpp"
     "components/waveform_view.cpp"
     "src/ui_diagnostics_page.cpp"
