@@ -502,6 +502,13 @@ void UIVoicePage::sendParam(const Param& p) {
         refreshStatus("Not wired: the protocol carries no modulation routing yet");
         return;
     }
+    if (p.wire_param == kParamSample || p.wire_param == kParamSlot) {
+        // Not a CC destination - stepParam() is what actually sends
+        // MSG_SAMPLE_SELECT for these two. sendParam() is also called from
+        // Init's "resend every wired parameter" loop, which must not forward
+        // a sentinel as a bogus PARAM_* id.
+        return;
+    }
     if (inter_mcu_send_control_change(p.wire_param, 0, p.value) != ESP_OK) {
         refreshStatus("Send failed - link busy?");
     }
@@ -613,11 +620,13 @@ void UIVoicePage::onInput(const InputEvent& evt) {
 std::array<Softkey, NUM_SOFTKEYS> UIVoicePage::getSoftkeys() {
     std::array<Softkey, NUM_SOFTKEYS> keys{};
     keys[0] = {"Back", []() { UINavigator::instance().pop(); }};
-    // The tab bar is the touch route between stages; these are the same move
-    // without reaching for the screen, which the panel's encoder-first
-    // workflow still needs.
-    keys[1] = {"< Stage", [this]() { moveStage(-1); }};
-    keys[2] = {"Stage >", [this]() { moveStage(+1); }};
+    // Moving BETWEEN PARAMS has no touch equivalent - unlike stage, which the
+    // tab bar already exposes to touch, so it moved to the shifted bank
+    // below. Without this, reaching anything past the first param in a stage
+    // (e.g. SLOT, the second row on Sample) was encoder-only and easy to
+    // miss entirely - which is exactly the gap a bench session hit.
+    keys[1] = {"< Param", [this]() { moveParam(-1); }};
+    keys[2] = {"Param >", [this]() { moveParam(+1); }};
     keys[3] = {"Value -", [this]() { stepParam(-1); }};
     keys[4] = {"Value +", [this]() { stepParam(+1); }};
     keys[5] = {editing_ ? "Edit*" : "Edit", [this]() {
@@ -631,13 +640,18 @@ std::array<Softkey, NUM_SOFTKEYS> UIVoicePage::getSoftkeys() {
 std::array<Softkey, NUM_SOFTKEYS> UIVoicePage::getShiftedSoftkeys() {
     std::array<Softkey, NUM_SOFTKEYS> keys{};
     keys[0] = {"Back", []() { UINavigator::instance().pop(); }};
+    // The tab bar is also a touch route between stages; these are the same
+    // move without reaching for the screen. Moved here (off the primary
+    // bank) to make room for < Param/Param > above, which has no touch
+    // equivalent at all.
+    keys[1] = {"< Stage", [this]() { moveStage(-1); }};
+    keys[2] = {"Stage >", [this]() { moveStage(+1); }};
     // Save/Load are shown but unwired, and say why: a preset needs an on-disk
     // format and protocol messages that do not exist. Better a labelled gap
     // than a button that appears to work.
-    keys[1] = {"Save", nullptr, false, "needs a preset format on disk"};
-    keys[2] = {"Save As", nullptr, false, "needs filename entry"};
-    keys[3] = {"Load", nullptr, false, "needs a preset format on disk"};
-    keys[4] = {"Init", [this]() {
+    keys[3] = {"Save", nullptr, false, "needs a preset format on disk"};
+    keys[4] = {"Load", nullptr, false, "needs a preset format on disk"};
+    keys[5] = {"Init", [this]() {
                    // Re-send every wired parameter at its default so the engine
                    // and the page agree again.
                    for (int s = 0; s < kStageCount; ++s) {

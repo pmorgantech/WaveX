@@ -11,6 +11,34 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Documentation
+
+- `features/instrument-model.md` §12: a quick design for Voice/Preset bank
+  management and on-device pad→sample mapping, requested directly (a Voice/
+  Preset is already `Instrument`, not a new entity; a pad/key sample map is
+  already the `Zone` model - the gap is entirely the on-device workflow to
+  build one without hand-authoring an `.sfz` off-device). Corrected the
+  doc's Status line and §6 in the same pass: only `INST_OP_SFZ_PROBE`/
+  `_SFZ_LOAD`/`_SET_MOD_SLOT` were ever actually built: `BIND`/`SAVE`/`NEW`/
+  `SET_ZONE`/etc. were a target design that was never implemented, which the
+  doc previously did not distinguish from what shipped. Cross-referenced
+  from `docs/backlog.md`'s "Voice / Preset does not exist as an entity" and
+  `docs/roadmap.md`'s Phase 2.5 item 1.
+
+### Fixed
+
+- Voice page: SLOT (and every param past the first in a stage) had no
+  discoverable way to reach it — the only path was the rotary encoder while
+  not in "Edit" mode, with no touch or softkey equivalent, unlike the Play
+  page's dedicated Param</Param> keys. Added `< Param`/`Param >` to the
+  primary softkey bank (swapped with `< Stage`/`Stage >`, moved to the
+  shifted bank alongside Save/Load/Init - stage navigation already has a
+  touch equivalent via the tab bar, param navigation had none at all).
+  Also fixed `sendParam()` forwarding the new SAMPLE/SLOT sentinel
+  `wire_param` values as bogus `PARAM_*` ids when the shifted "Init"
+  softkey resent every parameter - it now skips them the same way
+  `stepParam()` already did.
+
 ### Added
 
 - Retired the bare-WAV note-on fallback's any-channel behaviour (roadmap

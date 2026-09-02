@@ -1,6 +1,6 @@
 # Instrument Model — Presets, Zones, Multisampling, Velocity Layers
 
-**Status**: Core built and host-tested — `audio/instrument.hpp` (zones, velocity layers, crossfade, choke, tuning fold; 18 host tests) and the WXCF container. Remaining: the sample table that populates a `SampleResolver` from loaded WAVs, the `MSG_INST_OP/STATUS/ZONE_SYNC` protocol (0x60–0x62), deleting the Phase-1 stopgap note→sample policy, the ESP32 UI, and callback wiring. Phase 2.5 in `roadmap.md`.
+**Status**: Core data model built and host-tested — `audio/instrument.hpp` (zones, velocity layers, crossfade, choke, tuning fold; 18 host tests), wired into `OnNoteOn` for SFZ-bound slots. **Corrected 2026-09-02** — §6's protocol table describes ops that were never built; what actually shipped is narrower: `MSG_INST_OP`/`MSG_INST_STATUS` (0x60/0x61) exist and are live, but only for `INST_OP_SFZ_PROBE`/`INST_OP_SFZ_LOAD` (load a complete, externally-authored `.sfz` file into a slot) and `INST_OP_SET_MOD_SLOT` (param-locks-and-modulation.md §9). None of §6's `INST_OP_BIND/SAVE/NEW/SET_ZONE/CLEAR_ZONE/SET_ZONE_SAMPLE/SET_META/SET_CHOKE` exist, there is no `.wxi` reader/writer despite the WXCF *container format* itself being built and shared, and `MSG_INST_ZONE_SYNC` (0x62) is still reserved-unused. In short: **an instrument can only be built by hand-authoring an `.sfz` file off-device today** — there is no on-device zone editor, no save, no "assign this pad to that sample" workflow. See §12 for the reconciled near-term plan (Voice/Preset bank management, on-device pad→sample mapping) that a 2026-09-02 user request asked for directly.
 **Lineage**: E-mu Emulator III / Emax "preset" architecture — a keyboard-wide performance object mapping samples across key and velocity ranges, feeding per-voice filter/VCA. WaveX's Stage B signal path (sample → SSI2144 VCF → SSI2164 VCA per voice) *is* the Emax voice architecture; this doc supplies the missing front half.
 **Dependencies**: Phase 1 voice manager (done), Phase 1 item 8 note path (done). Supersedes the item-8 stopgap mapping policy in `audio_engine.cpp::OnNoteOn` ("most-recently-loaded sample, root note 60").
 **Consumers**: `melodic-sequencing.md`, `param-locks-and-modulation.md`, `sampling-and-recording.md`, `arpeggiator.md`, `output-routing-and-mixer.md`, and the sequencer kit model (`sequencer.md` §3 — see §8 below).
@@ -123,6 +123,15 @@ Instrument file (`0:/wavex/instruments/<name>.wxi`, file_type=1): chunk 1 = inst
 
 ## 6. Protocol (reserved block 0x60–0x67; conventions per `inter-mcu-protocol.md` §4)
 
+> **This section is the original target design and does not describe what
+> shipped.** Only `INST_OP_SFZ_PROBE`, `INST_OP_SFZ_LOAD` and
+> `INST_OP_SET_MOD_SLOT` exist in `protocol.h` today, and the real
+> `InstOpMessage` uses named fields per op (matching every other multi-shape
+> message in this protocol, e.g. `SeqPatternOpMessage`), not the
+> union-by-op byte blob sketched below. Treat the op table and wire shape
+> here as unimplemented proposals to revise at build time, not as a
+> spec to implement literally — see §12 for what to actually build next.
+
 All structs get the standard named-constructor treatment and round-trip tests in `firmware/shared/tests/` in the same commit they're added.
 
 | Type | ID | Dir | Payload | Purpose |
@@ -191,3 +200,43 @@ UI never blocks on loads: `INST_STATUS` drives progress toasts (deferred-update 
 - Ping-pong loop mode needs a `Voice` render-loop change (direction flag) — defer until asked for.
 - Per-zone one_shot vs kit-level "gate mode" toggle — v1 ships zone flag only.
 - Crossfade *looping* (rendering a crossfaded loop seam — the famous Emax tool) is an **offline render op**: added to `offline-sample-editing.md` §4 Tier 2 by this design (`xfade_loop(loop_start, loop_end, xfade_ms)` → writes new file + sidecar loop markers).
+
+---
+
+## 12. Quick design: Voice/Preset bank management and pad→sample mapping (2026-09-02)
+
+Requested directly (bench session, not yet a roadmap phase): "manage a bank of voices/presets" and "map different samples to different pads/keys". Both are already this document's job — **`Instrument` *is* the Voice/Preset entity** (E-mu called it "preset"; this doc's own §1 table already names the mapping), and **a multi-sample pad/key map is already the `Zone` model** (§1: one zone = one sample × one key range; §8: "a kit is a drum-mode instrument", pad *p* ↔ a zone with `key_lo = key_hi = pad_note(p)`). Neither needs a new entity or a new data model. What's missing is entirely the on-device *workflow* to build and manage one without hand-authoring an `.sfz` file off-device — see the corrected Status line and §6's note above.
+
+This also answers the backlog's [Voice / Preset does not exist as an entity](../backlog.md#voice--preset-does-not-exist-as-an-entity): **resolved as this instrument model**, per that entry's own "fix if picked up" note — an `Instrument` with per-key (possibly single-key) zones, not a distinct lighter entity.
+
+**Deliberately out of scope here, per explicit instruction**: making more than one instrument slot resident at once ([backlog](../backlog.md#only-one-instrument-slot-can-be-resident-at-a-time)). "Managing a bank" below means browsing/saving/loading named files on SD — loading one still swaps whatever is currently resident, exactly like `INST_OP_SFZ_LOAD` already does. That is a real, useful capability on its own (an E-mu/Emax workflow is "load a preset, play it" more often than "layer many at once"), and nothing below is wasted if slot residency is later made concurrent.
+
+### 12.1 Pad→sample mapping (multi-sample keys/pads), v0
+
+The full zone editor (§7 item 2 — drag key/vel ranges on a mini-keyboard, per-zone tune/gain/pan/filter/ADSR) is real work and stays the eventual target. A much smaller slice covers "assign a resident sample to each pad" without it:
+
+- **Engine**: one new function alongside `SfzLoader::SetModSlot()` (same file, same pattern) — `SfzLoader::SetPadSample(uint8_t slot, uint8_t pad_index, uint16_t sample_id)`. Builds/overwrites a single one-key `Zone` (`key_lo = key_hi = pad_index`, `vel_lo = 1, vel_hi = 127`, `root_note = pad_index`, `in_use = true`) directly in `s_bank.Slot(slot).zones[pad_index]`, and sets `mode = InstrumentMode::Drum`. `sample_id` is one of the **plain-WAV loader's ids** (`s_loaded_samples[]`, `MSG_SAMPLE_LOAD`/`MSG_SAMPLE_SELECT`), not an SFZ-scoped id — this is the part that needs deciding (see below), and is why this is v0-sized rather than a full `SampleResolver` rework.
+- **The `SampleResolver` question**: `ResolveNoteOn()` resolves a zone's `sample_id` through whatever `SampleResolver` the caller passes it — today that is always `s_sample_table.Resolver()` (SFZ-scoped, cleared on every load, per §4/backlog's residency note). For a zone built by `SetPadSample()` to resolve against a **bare loaded WAV**, `SfzLoader::ResolveNote()` needs a resolver that can also reach `audio_engine.cpp`'s `s_loaded_samples[]` - the same "two disjoint sample_id registries" fact the residency backlog item already names. Simplest fix that doesn't touch the SFZ path: a small bridging `SampleResolver` in `audio_engine.cpp` whose `resolve()` calls `find_loaded_sample()` directly (a plain function pointer + context, mirroring `ModSlotResolver`'s precedent from param-locks-and-modulation.md §9 stage 4), passed to `SfzLoader::ResolveNote()` instead of the SFZ table only when the bound instrument's zones were built by `SetPadSample()` rather than an SFZ import. Needs a one-bit flag on `Instrument` (or inferred from mode + a "built, not imported" marker) to pick the right resolver — small, but a real decision to make at implementation time, not before.
+- **Protocol**: one narrow op, `INST_OP_SET_PAD_SAMPLE {slot, pad_index, sample_id}` (three small fields — far narrower than §6's full `INST_OP_SET_ZONE`), riding the same `MSG_INST_OP`/`InstOpMessage` extension pattern `INST_OP_SET_MOD_SLOT` just established (named fields, `path` unused for this op, same commit gets a round-trip + dispatch test).
+- **UI**: reuse the Voice page's sample-cycling technique (`UIVoicePage::cycleSample()`, `ui_voice_page.cpp`, added 2026-09-02) on a per-pad basis: a "Pad Map" tab or page listing 16 pads, each showing its currently-assigned sample (or "none"), with Value −/+ cycling the FOCUSED pad's assignment through resident samples via the same `inter_mcu_get_sample_meta()` probe. No new sample-list infrastructure needed - it is the third page to reuse that probe (Sample Manager, Voice, now this).
+
+This delivers "different pads play different samples" as a real on-device workflow without the WXCF save path or the full zone editor - it is one engine function, one protocol op, and one UI page/tab, each independently host-testable and small enough to be its own commit.
+
+### 12.2 Bank management (browse, save, load, rename, delete)
+
+Needs §5's WXCF *container format* (already built, shared, host-tested) plus an instrument-specific reader/writer and the save/load/list protocol ops §6 never got beyond proposing:
+
+- **`.wxi` reader/writer** (`firmware/shared/wxcf/` consumer, alongside the container itself): serializes an `Instrument` (name, mode, zones, mod slots) to/from the WXCF chunk layout §5 already specifies. Host-testable round-trip, no hardware needed.
+- **Protocol**: `INST_OP_SAVE {slot, path}` (persist the slot's current in-RAM instrument), `INST_OP_NEW {slot, mode}` (blank instrument, for building a pad map from scratch rather than starting from a loaded one). A **list** op is also needed and is not in §6 at all - the existing `MSG_BROWSE_REQ/RESP` (0x30/0x31) already lists directory contents generically and can list `0:/wavex/instruments/*.wxi` the same way the Sample Browser lists `.sfz`/`.wav`, so this may need no new message at all, just a browser page pointed at that directory.
+- **UI**: a "Preset Browser" page, structurally a near-clone of the existing Sample Browser (list a directory, preflight, load) pointed at `.wxi` files instead of samples/`.sfz`, plus a "Save As" action from the Voice page (currently a disabled placeholder button with the honest label "needs a preset format on disk" — this is exactly what removes that gap) that prompts a filename and sends `INST_OP_SAVE`.
+- **Naming**: `Instrument::name[24]` already exists in §2's data model (not yet in the currently-built `instrument.hpp` - `Instrument` there has no `name` field yet, only `mode` + `zones[]`; adding one is a small, additive change). The Voice page already carries a RAM-only `voice_name_` today (per its class doc: "the name is held in RAM so the entity is real even while its storage is not") - saving should read that field into the persisted `.wxi`, retiring the RAM-only caveat.
+
+### 12.3 Suggested stage order
+
+Independent of each other except where noted; either column can go first.
+
+1. `SfzLoader::SetPadSample()` + `INST_OP_SET_PAD_SAMPLE` + the bridging `SampleResolver` decision (§12.1) — host-tested, round-trip + dispatch tests, no UI yet.
+2. Pad Map UI (reuses the SAMPLE-cycling pattern already shipped on the Voice page).
+3. `.wxi` reader/writer, host-tested round-trip (no protocol yet - loadable only via the same boot-time `LoadSfzInstrument`-style path used today, to prove the format before wiring it to a message).
+4. `INST_OP_SAVE`/`INST_OP_NEW` + round-trip/dispatch tests + `inter-mcu-protocol.md` update.
+5. Preset Browser UI page + Voice page's "Save As"/"Load" wiring (retiring those two disabled placeholders).

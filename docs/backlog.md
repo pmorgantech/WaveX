@@ -726,15 +726,23 @@ saveable to and loadable from the card, consisting of a sample with
 key-tracking settings, Env → Gain, Env → Filter, filter settings, and
 modulation settings and wirings.
 
+**Resolved 2026-09-02, in response to a direct user request for this exact
+design question**: it is not a separate entity — see
+`features/instrument-model.md` §12, which confirms `Instrument` already *is*
+the Voice/Preset (the doc's own §1 vocabulary already names it "preset"),
+and multi-sample pad/key mapping is already its `Zone` model. §12 lays out
+the concrete gap (no on-device workflow exists yet - an instrument can only
+be built by hand-authoring an `.sfz` off-device today) and a staged plan:
+a small pad→sample assignment op first (reusing the Voice page's
+sample-cycling UI pattern), WXCF save/load after. Superseded by that
+section; kept here only as the historical record of when the question was
+first raised.
+
 **Why it is not urgent:** it is the largest item recorded here and needs a
 protocol and an on-disk format decided before any UI is built — and
 `features/instrument-model.md` already owns most of that design space
 (presets, zones, velocity layers, the WXCF container). Building a second
 preset entity beside it is the expensive outcome.
-
-**Fix if picked up:** resolve it *as* the instrument model rather than
-alongside it — decide whether a Voice/Preset is an `Instrument` with one
-zone, or a distinct lighter entity, before writing either.
 
 ---
 
