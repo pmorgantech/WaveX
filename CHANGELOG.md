@@ -116,6 +116,19 @@ versioning and release process.
 
 ### Changed
 
+- **The analog CV path is deferred and now compiled out by default.** WaveX's
+  filter and VCA are digital — a per-voice state-variable filter and gain — but
+  the earlier paraphonic analog plan (one MCP4728 quad-DAC feeding an external
+  SSI2164 across the stereo mix) was still compiled in unconditionally, with no
+  enable flag at all. Every 1 kHz control tick was computing a paraphonic
+  envelope and two `expf()` calls inside the audio callback for hardware that
+  is not fitted, and the main loop was flushing I2C to a DAC that never
+  answers. `WAVEX_ANALOG_CV_ENABLED` now defaults to 0 and guards both. Nothing
+  is deleted: the CV router, both backends and the calibration page remain, and
+  `make daisy-stageb` sets the flag so the enabled path keeps building in CI.
+  The Phase 1 and 2.5 gates no longer require analog bench work that no build
+  could have passed, and Phase 3 is marked deferred.
+
 - The Daisy now runs at **480 MHz** instead of 400 MHz — `main()` calls
   `hw.Init(true)` to select `System::Config::Boost()`, the STM32H750's rated
   maximum. The project had been on libDaisy's 400 MHz default by omission
