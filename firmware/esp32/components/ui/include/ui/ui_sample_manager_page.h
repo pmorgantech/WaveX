@@ -81,6 +81,7 @@ class UISampleManagerPage : public UIPage {
     void refreshSlotLabel();
     void selectFocused();
     void unloadFocused();
+    void editFocused();
     void moveFocus(int delta);
     void changeSlot(int delta);
     const Row* focusedRow() const;

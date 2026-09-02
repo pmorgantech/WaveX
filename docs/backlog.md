@@ -1010,3 +1010,12 @@ shared UI state beside `SampleBrowserState`, set by the Sample Manager (an
 reads it, and takes geometry (`total_frames`, `sample_rate`) from the cached
 `SampleMetadata` rather than from the browser's listing, so any resident
 sample is editable regardless of how it got there.
+
+**Resolved 2026-09-02.** `ui/current_sample.h`'s `getCurrentSampleId()`/
+`setCurrentSampleId()` is the shared state, set by `UISampleBrowser::loadSample()`
+and by a new "Edit" softkey on `UISampleManagerPage` (shifted bank).
+`UISampleEditPage::currentSampleId()` reads it; `onEnter()` and the periodic
+metadata-adopt in `serviceUi()` both source geometry and edit state from
+`inter_mcu_get_sample_meta()` rather than `SampleBrowserState`. The Edit tab
+still has to be opened by hand from the Sample group's tab bar - the softkey
+sets what it will show, it does not switch tabs.

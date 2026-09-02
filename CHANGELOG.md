@@ -59,6 +59,17 @@ versioning and release process.
   softkey resent every parameter - it now skips them the same way
   `stepParam()` already did.
 
+- Sample Edit could only ever edit the Sample Browser's most recent Load
+  (`track-and-patch-model.md` §8 stage 0, first of the 2026-09-02 bench
+  findings): a sample that arrived any other way - an import, a second
+  load, a reopened frontend - left the page with "no sample" and no way to
+  change that. Added a **current sample**, shared UI state
+  (`ui/current_sample.h`) set by the Browser's Load and by a new "Edit"
+  softkey on the Sample Manager (shifted bank); Sample Edit now reads it and
+  takes geometry from the backend's cached `SampleMetadata` rather than the
+  Browser's listing, so any resident sample is editable regardless of how
+  it got there. ESP32 build and full host suite (174 tests) verified green.
+
 ### Added
 
 - Retired the bare-WAV note-on fallback's any-channel behaviour (roadmap

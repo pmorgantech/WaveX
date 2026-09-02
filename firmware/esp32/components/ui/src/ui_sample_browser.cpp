@@ -11,6 +11,7 @@
 #include "comm/i_comm_interface.h"
 #include "esp_lvgl_port.h"
 #include "inter_mcu.h"
+#include "ui/current_sample.h"
 #include "ui/ui_busy_overlay.h"
 #include "ui_task.h"
 
@@ -1453,6 +1454,7 @@ bool UISampleBrowser::loadSample(const wavex_file_entry_t* entry) {
     uint16_t sample_id = persistent_state_.allocateSampleId();
     persistent_state_.last_load_sample_id = sample_id;
     persistent_state_.last_load_sample_path = entry->path;
+    setCurrentSampleId(sample_id);
     // Capture the geometry too - the edit page has no other source for it.
     persistent_state_.last_load_sample_rate = sample_rate;
     persistent_state_.last_load_duration_ms = entry->duration_ms;

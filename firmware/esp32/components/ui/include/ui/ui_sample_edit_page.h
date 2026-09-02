@@ -120,7 +120,8 @@ class UISampleEditPage : public UIPage {
     // of its own, so a single turn queued a burst of them.
     uint32_t request_due_ms_ = 0;
 
-    // Sample geometry, from the browse listing via SampleBrowserState.
+    // Sample geometry, from the backend's cached SampleMetadata for the
+    // current sample (see ui/current_sample.h).
     uint32_t total_frames_ = 0;
     uint32_t sample_rate_ = 48000;
 

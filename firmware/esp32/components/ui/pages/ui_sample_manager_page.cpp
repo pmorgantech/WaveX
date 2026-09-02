@@ -5,6 +5,7 @@
 
 #include "../styles/ui_theme.h"
 #include "inter_mcu.h"
+#include "ui/current_sample.h"
 #include "ui/ui_navigator.h"
 
 #include <cstdio>
@@ -334,6 +335,25 @@ void UISampleManagerPage::unloadFocused() {
     }
 }
 
+// Sets the row's sample as Sample Edit's current sample (track-and-patch-model.md
+// §6 stage 0). Does not switch tabs - the Edit tab already sits alongside this
+// page in the Sample group; this just decides what it will show when opened.
+void UISampleManagerPage::editFocused() {
+    const Row* row = focusedRow();
+    if (!row) {
+        return;
+    }
+    setCurrentSampleId(row->sample_id);
+    if (status_label_) {
+        char s[64];
+        snprintf(s,
+                 sizeof(s),
+                 "Sample %u set for editing - open the Edit tab",
+                 (unsigned)row->sample_id);
+        lv_label_set_text(status_label_, s);
+    }
+}
+
 void UISampleManagerPage::onInput(const InputEvent& evt) {
     switch (evt.type) {
         case InputType::EncoderRight:
@@ -371,6 +391,7 @@ std::array<Softkey, NUM_SOFTKEYS> UISampleManagerPage::getShiftedSoftkeys() {
     keys[0] = {"Back", []() { UINavigator::instance().pop(); }};
     keys[1] = {"Slot -", [this]() { changeSlot(-1); }};
     keys[2] = {"Slot +", [this]() { changeSlot(+1); }};
+    keys[3] = {"Edit", [this]() { editFocused(); }};
     return keys;
 }
 

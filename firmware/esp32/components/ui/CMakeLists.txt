@@ -24,6 +24,7 @@ set(COMPONENT_SRCS
     "src/ui_tab_host_page.cpp"
     "src/ui_status_strip.cpp"
     "src/ui_sample_browser.cpp"
+    "src/current_sample.cpp"
     "pages/ui_play_page.cpp"
     "pages/ui_sample_manager_page.cpp"
     "pages/ui_system_info_page.cpp"

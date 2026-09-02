@@ -6,8 +6,8 @@
 #include "components/envelope_cache.h"
 #include "components/waveform_view.h"
 #include "inter_mcu.h"
+#include "ui/current_sample.h"
 #include "ui/ui_navigator.h"
-#include "ui/ui_sample_browser.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -17,10 +17,10 @@ namespace wavex_ui {
 
 namespace {
 
-// Fallback only, used when the browse listing carried no usable duration.
-// This used to be the assumed sample length, which is exactly one second at
-// 48 kHz - the reason markers would not move past 1 s and zoom would not open
-// out. Real geometry now comes from SampleBrowserState.
+// Fallback only, used when the cached SampleMetadata carried no usable
+// duration. This used to be the assumed sample length, which is exactly one
+// second at 48 kHz - the reason markers would not move past 1 s and zoom
+// would not open out.
 constexpr uint32_t kFallbackFrames = 48000;
 
 // Display columns asked of the envelope. The waveform panel is 1256 px, and
@@ -172,36 +172,31 @@ void UISampleEditPage::onEnter(lv_obj_t* parent) {
     // nothing is watching, and the first waveform would never be drawn.
     inter_mcu_set_envelope_chunk_listener(&UISampleEditPage::envelopeChunkStatic, this);
 
-    auto* state = getSampleBrowserState();
-    has_sample_ = state && !state->last_load_sample_path.empty();
+    // The current sample: the Browser's Load, or the Sample Manager's Edit
+    // softkey (track-and-patch-model.md §6 stage 0), whichever set it last.
+    // Geometry comes from the backend's own cached SampleMetadata rather than
+    // the Browser's listing, so any resident sample is editable regardless of
+    // how it arrived.
+    WaveX::Protocol::SampleMetadata m;
+    has_sample_ = currentSampleId() != 0 && inter_mcu_get_sample_meta(currentSampleId(), &m);
     if (!has_sample_) {
-        refreshStatus("Load a sample in Sample Browser, then reopen Edit.");
+        refreshStatus("No sample selected. Load one, or Edit from Sample Manager.");
         refreshParams();
         return;
     }
 
-    // Real geometry from the browse listing. Opens fully zoomed out with the
-    // region spanning the whole clip, which is the only starting point from
-    // which every marker is reachable.
-    sample_rate_ = state->last_load_sample_rate ? state->last_load_sample_rate : 48000;
-    total_frames_ = state->lastLoadFrames();
+    // Opens fully zoomed out with the region spanning the whole clip, which is
+    // the only starting point from which every marker is reachable.
+    applyMeta(m);
     if (total_frames_ == 0) {
         total_frames_ = kFallbackFrames;
         ESP_LOGW(TAG,
-                 "No duration in browse metadata; falling back to %lu frames",
+                 "No duration in sample metadata; falling back to %lu frames",
                  (unsigned long)total_frames_);
     }
-    start_frame_ = 0;
-    end_frame_ = total_frames_;
-    loop_start_ = 0;
-    loop_end_ = total_frames_;
-    loop_enabled_ = false;
-    gain_db_x10_ = 0;
-    fade_in_ms_ = WaveX::Protocol::kDefaultDeclickMs;
-    fade_out_ms_ = WaveX::Protocol::kDefaultDeclickMs;
     zoomToFit();
 
-    refreshStatus(state->last_load_sample_path.c_str());
+    refreshStatus(m.name);
     refreshParams();
     requestWaveform();
 }
@@ -673,8 +668,7 @@ void UISampleEditPage::sendEdit() {
     // end_frame/loop_end are sent verbatim rather than as the 0 sentinel: we
     // know the real length here, so let the backend clamp against the file
     // rather than guessing what "to the end" meant.
-    auto* state = getSampleBrowserState();
-    const uint8_t slot = state ? static_cast<uint8_t>(state->last_load_sample_id) : 0;
+    const uint8_t slot = static_cast<uint8_t>(currentSampleId());
     inter_mcu_send_sample_edit(slot,
                                loop_enabled_,
                                gain_db_x10_,
@@ -981,8 +975,7 @@ void UISampleEditPage::handleEnvelopeChunk(const WaveX::Protocol::EnvelopeChunkM
 }
 
 uint16_t UISampleEditPage::currentSampleId() const {
-    auto* state = getSampleBrowserState();
-    return state ? state->last_load_sample_id : 0;
+    return getCurrentSampleId();
 }
 
 // The cache is keyed on generation, so a stale one would file the new audio
@@ -1016,10 +1009,9 @@ void UISampleEditPage::serviceUi() {
     // Adopt any newer record. The backend clamps, so this is how a refused
     // short loop or a narrowed region becomes visible instead of the UI
     // continuing to display a request the engine did not honour.
-    auto* state = getSampleBrowserState();
-    if (state) {
+    if (has_sample_) {
         WaveX::Protocol::SampleMetadata m;
-        if (inter_mcu_get_sample_meta(state->last_load_sample_id, &m) && m.total_frames > 0 &&
+        if (inter_mcu_get_sample_meta(currentSampleId(), &m) && m.total_frames > 0 &&
             (m.start_frame != start_frame_ || m.end_frame != end_frame_ ||
              m.loop_start != loop_start_ || m.loop_end != loop_end_ ||
              (m.loop_enabled != 0) != loop_enabled_ || m.gain_db_x10 != gain_db_x10_ ||
