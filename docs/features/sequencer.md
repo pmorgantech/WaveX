@@ -32,6 +32,7 @@ Project
 └── Tempo, master params
 ```
 
+- **Vocabulary and ownership, confirmed 2026-09-02** (`track-and-patch-model.md` §1/§3.5): a pattern's row *t* plays through **Track** *t*'s **Patch** — "Kits" above are drum-mode Patches loaded into Tracks, referenced by path, not a separate list. **Tempo moves to the Song** (project keeps a default for pattern mode); swing stays pattern-level with a Song default a pattern can follow; the default pattern length becomes **32** (2 bars of 16ths — `pattern.hpp` defaults to 16 today). `pattern.hpp`'s inner `Track` struct is to be renamed `TrackSteps` so "Track" means one thing.
 - **Param locks** (per-step parameter overrides, Elektron-style) reuse the existing `ControlParameter` ids — application semantics (trigger-param overrides, one-step lifetime for track-scoped ids) are pinned in `param-locks-and-modulation.md` §2.
 - **Kits are drum-mode instruments** (decision 2026-07-05): the kit structure above is the drum-mode subset of `instrument-model.md`'s zone model (pad *p* = zone with `key_lo == key_hi`), and `KIT_OP` is subsumed by `MSG_INST_OP` (0x54 stays reserved-unused). Melodic track types extend this pattern model in `melodic-sequencing.md`.
 - **Choke groups** live in the kit (e.g. open/closed hat), enforced by the voice manager (`VoiceManager::Choke`, `instrument-model.md` §3).

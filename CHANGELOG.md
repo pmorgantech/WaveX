@@ -13,6 +13,26 @@ versioning and release process.
 
 ### Documentation
 
+- `features/track-and-patch-model.md` (new, **proposed - decisions pending**):
+  the end-state paradigm for the UI/voice effort, requested directly. Renames
+  *slot* → Track and the *Voice* page/entity → Patch (Voice stays the engine
+  term for a polyphony channel); per-track MIDI receive (Omni / channel /
+  Off) routed on the Daisy with a `NOTE_ADDR_TRACK` addressing bit so
+  internal sources and MIDI input stay distinct; the Patch as `Instrument` +
+  name/tags/trim/transpose, saved as `.wxi` with `.sfz` as an import format;
+  one refcounted sample registry replacing today's two (makes two soundfonts
+  at once ordinary and dissolves the single-residency limit); a track-aware
+  voice-steal policy with a measure-first rule on the voice count; a page
+  map; ordered stages. Track, Patch, Pattern and Song definitions confirmed
+  the same day (§1/§3.5): tempo moves to the Song, swing stays per Pattern
+  with a Song default, default pattern length becomes 32, and `pattern.hpp`'s
+  inner `Track` struct is to become `TrackSteps` (`sequencer.md` §3 updated
+  to match). Three 2026-09-02 bench findings recorded in
+  `docs/backlog.md` as its stage 0: the Sample Manager cannot see an
+  import's samples (registry split; Audition-vs-Load to confirm), SFZ
+  import does not search subfolders, and Sample Edit can only edit the
+  Browser's last load.
+
 - `features/instrument-model.md` §12: a quick design for Voice/Preset bank
   management and on-device pad→sample mapping, requested directly (a Voice/
   Preset is already `Instrument`, not a new entity; a pad/key sample map is
@@ -86,7 +106,8 @@ versioning and release process.
   a bare sample over a slot holding an SFZ import is rejected with a log line
   rather than silently shadowed - see `docs/backlog.md`'s residency entry.
   5 new `instrument_test` cases + 1 `sfz_import_test`; full Daisy host suite
-  (410) green; Daisy device build green. Not yet verified on hardware.
+  (410) green; Daisy device build green. Bench 2026-09-02: notes play
+  through the unified path.
 
 - The Play page's parameter cycle gained a Slot control (0..15): notes now go
   out on the selected instrument slot instead of hardcoded channel 0. The

@@ -350,6 +350,8 @@ Kit representation is settled: a kit is a drum-mode instrument (`features/instru
 
 Makes WaveX an *instrument* in the Emax/Emulator sense: multisampled presets across key/velocity ranges, a closed sampling loop, melodic sequencing, routed modulation. Index and rationale: `features/feature-expansion-ideas.md`.
 
+> **End-state design (proposed 2026-09-02, decisions pending): [`features/track-and-patch-model.md`](features/track-and-patch-model.md).** Renames *slot* → **Track** and *Voice* (the page/entity) → **Patch**, adds per-track MIDI routing (omni/poly/off), a single refcounted sample registry (two soundfonts at once; dissolves the residency limit below), the Patch as a named/tagged/saveable `.wxi`, and a track-aware polyphony policy. Its §8 stage 0 is the 2026-09-02 bench findings (`backlog.md`: Sample Manager vs. imports, SFZ subfolder search, Sample Edit's sample selection). Item 1's remaining UI work below should be read through that document's §6 page map.
+
 Built already, and more than this section long implied: the `VoiceManager` extensions, the instrument-model core (`audio/instrument.hpp` — zones, velocity layers, crossfade, choke, tuning fold; 18 host tests), the WXCF container, **the SFZ v1 import path end to end** (`sfz_import.hpp`, `sfz_loader.cpp`, `Sfz::SampleTable`), and **the 0x60/0x61 instrument protocol** with browser-side probe and load.
 
 1. **Instrument model, remaining pieces** (`features/instrument-model.md`). **Most of this list was already built when it was written** — verified against the source 2026-09-02:

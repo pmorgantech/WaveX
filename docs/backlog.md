@@ -944,3 +944,69 @@ that design, not worked around locally. Related: [Voice / Preset does not
 exist as an entity](#voice--preset-does-not-exist-as-an-entity) — a saveable
 per-slot Voice/Preset is close to meaningless without slots that can
 actually coexist.
+
+---
+
+## Sample Manager cannot see an SFZ import's samples
+
+**Observed at the 2026-09-02 bench session** ("Sample Manager does not show
+loaded samples or SFZ"). Two causes, one certain and one to confirm from the
+bench log:
+
+- **Certain**: an `.sfz` import's samples live in `sfz_loader.cpp`'s private
+  registry (`s_loaded_samples[]` + `Sfz::SampleTable`), never in
+  `audio_engine.cpp`'s, so they never send `MSG_SAMPLE_META` and no page can
+  see, edit or unload them. `Instrument::origin` exists precisely to tell a
+  zone which of the two registries its ids mean.
+- **To confirm**: the Sample Browser's **Audition** streams from the card and
+  never makes a file RAM-resident; only **Load** sends `MSG_SAMPLE_LOAD`. A
+  bare WAV that was only auditioned is correctly absent. The plumbing for a
+  loaded one is complete (`upsert_loaded_sample` → `PushSampleMeta`; the page
+  requests `PushAllSampleMeta` on entry; `packet_router.cpp` caches it), so if
+  a *Loaded* WAV was missing, the log's `SAMPLE_LOAD`/`SAMPLE_META` lines say
+  where it stopped. `digital-voice-audition.md` Stage 2b item 3 already names
+  the Audition/Load ambiguity as a UI defect.
+
+**Fix**: the shared, refcounted sample registry in
+`features/track-and-patch-model.md` §4 (stage 3) — the same fix as
+[single residency](#only-one-instrument-slot-can-be-resident-at-a-time).
+Until then, the Sample Manager should *say* an import is resident and that
+its samples are not listable, rather than show an empty list.
+
+---
+
+## SFZ import does not search subfolders for samples
+
+**Observed at the 2026-09-02 bench session.** `Sfz::detail::ResolvePath`
+(`sfz_import.hpp`) is SFZ-spec-correct: `sample=` resolves relative to the
+`.sfz`'s directory, with `default_path=` prepended — so a file authored as
+`sample=Samples/kick.wav` is found. What it does not do is *look* for a sample
+that is not at that path, and real-world SFZ packs are routinely re-arranged
+(the `.sfz` moved next to, or above, its `Samples/` folder). The bench log's
+`SFZ_PROBE: sample N missing (fr): '<path>'` line records the exact path that
+was tried; check it before assuming the search is the whole story.
+
+**Fix** (`track-and-patch-model.md` §8 stage 0): when the resolved path does
+not open, search for the sample's basename in the `.sfz`'s directory and its
+subfolders, depth-limited (2 levels) and bounded by the existing probe budget,
+main-loop FatFs only. Log which path a fallback resolved to. Cache the
+directory the first hit was found in so a 32-sample instrument does not walk
+the tree 32 times.
+
+---
+
+## Sample Edit has no way to choose its sample
+
+**Observed at the 2026-09-02 bench session.** `UISampleEditPage` derives its
+sample from `SampleBrowserState::last_load_sample_path` (`has_sample_`,
+`currentSampleId()`): it can only ever edit the Sample Browser's most recent
+Load, and cannot select any other resident sample. A sample that arrived any
+other way (an import, a reboot of the frontend, a second load) leaves the page
+with "no sample" and no control to change that.
+
+**Fix** (`track-and-patch-model.md` §6, stage 0): a **current sample** as
+shared UI state beside `SampleBrowserState`, set by the Sample Manager (an
+"Edit" softkey on the focused row) and by the Browser's Load. Sample Edit
+reads it, and takes geometry (`total_frames`, `sample_rate`) from the cached
+`SampleMetadata` rather than from the browser's listing, so any resident
+sample is editable regardless of how it got there.
