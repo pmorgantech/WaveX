@@ -139,6 +139,13 @@ struct Voice {
 
     SvfFilter filter;
     Envelope envelope;
+    // Second envelope (param-locks-and-modulation.md §4), exposed only as
+    // SRC_ENV_FILTER. Unlike `envelope` above, this is a MODULATION SOURCE,
+    // not audio: nothing reads it between control ticks, so it advances via
+    // AdvanceBlock() once per block from TickModulation() rather than
+    // Process() once per sample - the same audible output either way, at a
+    // fraction of the cost.
+    Envelope env2;
     // The cutoff Trigger()/ApplyLiveParams last set, before modulation. Kept
     // so the control tick can recompute filter.SetCutoff(base * mod_cutoff_mul)
     // every block without compounding onto the previous block's modulated
@@ -253,6 +260,18 @@ struct VoiceTriggerParams {
     float decay_s = 0.05f;
     float sustain_level = 0.8f;
     float release_s = 0.1f;
+
+    // Second envelope (param-locks-and-modulation.md §4), exposed only as
+    // SRC_ENV_FILTER - it does not touch the filter itself except through a
+    // mod slot routing it there. Defaults match the amp envelope above
+    // rather than anything zone-derived: Zone has no ADSR-for-SRC_ENV_FILTER
+    // fields yet (that's a wire-Zone chunk version bump, roadmap Phase 2.5
+    // item 4, still open), so every trigger gets this same shape until a
+    // zone can carry its own.
+    float filter_env_attack_s = 0.001f;
+    float filter_env_decay_s = 0.05f;
+    float filter_env_sustain_level = 0.8f;
+    float filter_env_release_s = 0.1f;
 };
 
 // Live (base) voice parameters - the values a knob edits, as opposed to the
@@ -449,6 +468,13 @@ class VoiceManager {
         v.envelope.SetParams(
             params.attack_s, params.decay_s, params.sustain_level, params.release_s);
         v.envelope.Retrigger();
+
+        v.env2.Init(sample_rate_);
+        v.env2.SetParams(params.filter_env_attack_s,
+                         params.filter_env_decay_s,
+                         params.filter_env_sustain_level,
+                         params.filter_env_release_s);
+        v.env2.Retrigger();
     }
 
     // Starts the release phase of the most recently triggered still-active
@@ -469,6 +495,7 @@ class VoiceManager {
         }
         if (found >= 0) {
             voices_[static_cast<size_t>(found)].envelope.Release();
+            voices_[static_cast<size_t>(found)].env2.Release();
         }
     }
 
@@ -481,6 +508,7 @@ class VoiceManager {
             if (v.state == VoiceState::Playing && v.note == note && v.slot == slot && !v.one_shot &&
                 !v.envelope.IsReleasing()) {
                 v.envelope.Release();
+                v.env2.Release();
             }
         }
     }
@@ -662,6 +690,8 @@ class VoiceManager {
                 !v.envelope.IsReleasing()) {
                 v.envelope.SetReleaseTime(fast_release_s);
                 v.envelope.Release();
+                v.env2.SetReleaseTime(fast_release_s);
+                v.env2.Release();
             }
         }
     }
@@ -718,15 +748,24 @@ class VoiceManager {
      * modwheel/aftertouch) shared by every voice. Per-trigger sources
      * (velocity/note/random) were already sampled into the voice at
      * Trigger() and are substituted in here, not read from `global`.
+     * SRC_ENV_FILTER is likewise per-voice: `block_size` advances each
+     * voice's second envelope by one block (Envelope::AdvanceBlock(), §4) so
+     * its current level feeds this tick's evaluation - it is a control-rate
+     * source, so this is the only place it ever advances.
      *
      * Applies to every sounding voice, including one already in its release
      * tail - a filter sweep or LFO wobble that froze at note-off would sound
      * like the modulation jammed, the same reasoning ApplyLiveParams's filter
      * path already follows. (Unlike ApplyLiveParams, there is no envelope
-     * write here to guard: the matrix's only destinations are cutoff, gain,
-     * pitch and pan.)
+     * write here to guard for env1: the matrix's only destinations are
+     * cutoff, gain, pitch and pan. env2 releases normally through its own
+     * Release()/Choke() calls same as env1, so it needs no separate guard
+     * either.)
      */
-    void TickModulation(const ModSlot* slots, uint8_t slot_count, const ModSources& global) {
+    void TickModulation(const ModSlot* slots,
+                        uint8_t slot_count,
+                        const ModSources& global,
+                        uint32_t block_size) {
         for (auto& v: voices_) {
             if (v.state != VoiceState::Playing)
                 continue;
@@ -734,6 +773,7 @@ class VoiceManager {
             sources.velocity = v.mod_velocity;
             sources.note = v.mod_note;
             sources.random = v.mod_random;
+            sources.env_filter = v.env2.AdvanceBlock(block_size);
             v.SetBlockModulation(EvaluateModMatrix(slots, slot_count, sources));
         }
     }

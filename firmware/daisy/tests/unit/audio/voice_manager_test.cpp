@@ -63,6 +63,115 @@ TEST(VoicePhaseTest, AdvancesPastTheFloatAdjacentIntegerLimit) {
     EXPECT_EQ(voice.phase.Frame(), 16777217u);
 }
 
+// --- Envelope::AdvanceBlock() (param-locks-and-modulation.md §4) -----------
+//
+// The second (filter-modulation) envelope is a control-rate source, not
+// audio: it only needs to change once per block, so it uses AdvanceBlock()
+// instead of Process() in a per-sample loop. These pin that AdvanceBlock(n)
+// produces the SAME result n calls to Process() would, across every stage
+// transition a block boundary can land on - attack completing mid-block,
+// decay completing mid-block, sustain holding, release completing
+// mid-block, and idle staying silent - so the O(1) shortcut is not a
+// separate approximate model.
+namespace {
+float ProcessNTimes(WaveX::AudioEngine::Envelope& e, uint32_t n) {
+    float last = 0.0f;
+    for (uint32_t i = 0; i < n; ++i)
+        last = e.Process();
+    return last;
+}
+}  // namespace
+
+TEST(EnvelopeTest, AdvanceBlockMatchesProcessDuringAttack) {
+    WaveX::AudioEngine::Envelope reference;
+    reference.Init(48000);
+    reference.SetParams(0.01f, 0.05f, 0.7f, 0.1f);  // 480 sample attack
+    reference.Retrigger();
+
+    WaveX::AudioEngine::Envelope fast;
+    fast.Init(48000);
+    fast.SetParams(0.01f, 0.05f, 0.7f, 0.1f);
+    fast.Retrigger();
+
+    const float expected = ProcessNTimes(reference, 100);  // well inside attack
+    const float actual = fast.AdvanceBlock(100);
+    EXPECT_NEAR(actual, expected, 1e-5f);
+}
+
+TEST(EnvelopeTest, AdvanceBlockMatchesProcessAcrossAttackToDecayBoundary) {
+    WaveX::AudioEngine::Envelope reference;
+    reference.Init(48000);
+    reference.SetParams(0.01f, 0.05f, 0.7f, 0.1f);  // attack ~480 samples
+    reference.Retrigger();
+
+    WaveX::AudioEngine::Envelope fast;
+    fast.Init(48000);
+    fast.SetParams(0.01f, 0.05f, 0.7f, 0.1f);
+    fast.Retrigger();
+
+    const float expected = ProcessNTimes(reference, 600);  // past attack, into decay
+    const float actual = fast.AdvanceBlock(600);
+    EXPECT_NEAR(actual, expected, 1e-4f);
+}
+
+TEST(EnvelopeTest, AdvanceBlockMatchesProcessAcrossDecayToSustainBoundary) {
+    WaveX::AudioEngine::Envelope reference;
+    reference.Init(48000);
+    reference.SetParams(0.001f, 0.01f, 0.5f, 0.1f);  // decay ~480 samples, ends at 0.5
+    reference.Retrigger();
+
+    WaveX::AudioEngine::Envelope fast;
+    fast.Init(48000);
+    fast.SetParams(0.001f, 0.01f, 0.5f, 0.1f);
+    fast.Retrigger();
+
+    const float expected = ProcessNTimes(reference, 1000);  // well past decay
+    const float actual = fast.AdvanceBlock(1000);
+    EXPECT_NEAR(actual, expected, 1e-4f);
+    EXPECT_NEAR(actual, 0.5f, 1e-4f) << "should have settled into sustain";
+}
+
+TEST(EnvelopeTest, AdvanceBlockHoldsSustainIndefinitely) {
+    WaveX::AudioEngine::Envelope e;
+    e.Init(48000);
+    e.SetParams(0.0f, 0.0f, 0.6f, 0.1f);  // instant attack/decay
+    e.Retrigger();
+
+    EXPECT_NEAR(e.AdvanceBlock(1000000), 0.6f, 1e-6f);
+    EXPECT_NEAR(e.AdvanceBlock(1000000), 0.6f, 1e-6f);  // still sustaining
+}
+
+TEST(EnvelopeTest, AdvanceBlockMatchesProcessAcrossReleaseToIdleBoundary) {
+    WaveX::AudioEngine::Envelope reference;
+    reference.Init(48000);
+    reference.SetParams(0.0f, 0.0f, 1.0f, 0.01f);  // release ~480 samples
+    reference.Retrigger();
+    ProcessNTimes(reference, 4);  // reach sustain (1.0)
+    reference.Release();
+
+    WaveX::AudioEngine::Envelope fast;
+    fast.Init(48000);
+    fast.SetParams(0.0f, 0.0f, 1.0f, 0.01f);
+    fast.Retrigger();
+    fast.AdvanceBlock(4);
+    fast.Release();
+
+    const float expected = ProcessNTimes(reference, 600);  // past release
+    const float actual = fast.AdvanceBlock(600);
+    EXPECT_NEAR(actual, expected, 1e-4f);
+    EXPECT_NEAR(actual, 0.0f, 1e-4f);
+    EXPECT_TRUE(fast.IsIdle());
+}
+
+TEST(EnvelopeTest, AdvanceBlockOnIdleEnvelopeStaysSilent) {
+    WaveX::AudioEngine::Envelope e;
+    e.Init(48000);
+    e.SetParams(0.001f, 0.05f, 0.8f, 0.1f);
+    // Never retriggered - starts Idle.
+    EXPECT_NEAR(e.AdvanceBlock(48), 0.0f, 1e-9f);
+    EXPECT_TRUE(e.IsIdle());
+}
+
 TEST(VoiceManagerTest, NoVoicesActiveProducesSilence) {
     VoiceManager vm;
     vm.Init(48000);
@@ -1440,7 +1549,7 @@ TEST(VoiceManagerModulationTest, PitchDestinationShiftsIncrementEachTick) {
     slots[0].depth = 32767;  // full depth
     WaveX::AudioEngine::ModSources global;
     global.macro[0] = 1.0f;
-    vm.TickModulation(slots, 1, global);
+    vm.TickModulation(slots, 1, global, 48);
 
     // SetBlockModulation() only writes the multiplier - it's Render() that
     // recomputes .increment from it, once per block, per §3 ("applied at the
@@ -1495,7 +1604,7 @@ TEST(VoiceManagerModulationTest, CutoffDestinationAttenuatesASoundingVoice) {
     slots[0].depth = -32767;
     WaveX::AudioEngine::ModSources global;
     global.macro[0] = 1.0f;
-    vm.TickModulation(slots, 1, global);
+    vm.TickModulation(slots, 1, global, 48);
 
     std::vector<float> l2(256), r2(256);
     vm.Render(l2.data(), r2.data(), l2.size());
@@ -1517,7 +1626,7 @@ TEST(VoiceManagerModulationTest, GainDestinationScalesTheVoice) {
     slots[0].depth = -16384;  // depth ~ -0.5 -> gain_mul ~0.5
     WaveX::AudioEngine::ModSources global;
     global.macro[0] = 1.0f;
-    vm.TickModulation(slots, 1, global);
+    vm.TickModulation(slots, 1, global, 48);
 
     // Unlike pitch/cutoff, gain (and pan) are read directly from the voice
     // every Render() call rather than recomputed into cached state, so the
@@ -1544,7 +1653,7 @@ TEST(VoiceManagerModulationTest, PanDestinationShiftsTheStereoBalance) {
     slots[0].depth = 32767;  // full positive -> pan_offset +1 (hard right)
     WaveX::AudioEngine::ModSources global;
     global.macro[0] = 1.0f;
-    vm.TickModulation(slots, 1, global);
+    vm.TickModulation(slots, 1, global, 48);
 
     vm.Render(l, r, 64);
     EXPECT_NEAR(PeakAbs(l, 64), 0.0f, 1e-6f);
@@ -1569,7 +1678,7 @@ TEST(VoiceManagerModulationTest, VelocityAndNoteAreSampledOnceAtTriggerNotFromTh
     // substitutes each voice's own sampled velocity in its place.
     WaveX::AudioEngine::ModSources global;
     global.velocity = 0.0f;
-    vm.TickModulation(slots, 1, global);
+    vm.TickModulation(slots, 1, global, 48);
     std::vector<float> l(8), r(8);
     vm.Render(l.data(), r.data(), l.size());
 
@@ -1597,7 +1706,7 @@ TEST(VoiceManagerModulationTest,
     slots[0].depth = 32767;
     WaveX::AudioEngine::ModSources global;
     global.macro[0] = 1.0f;
-    vm.TickModulation(slots, 1, global);  // every voice now has mod_pitch_mul != 1.0
+    vm.TickModulation(slots, 1, global, 48);  // every voice now has mod_pitch_mul != 1.0
     std::vector<float> warm(8), warm_r(8);
     vm.Render(warm.data(), warm_r.data(), warm.size());  // recomputes .increment from it
 
@@ -1651,7 +1760,7 @@ TEST(VoiceManagerModulationTest, ModulationStaysAudibleThroughTheReleaseTail) {
     slots[0].depth = -32767;
     WaveX::AudioEngine::ModSources global;
     global.macro[0] = 1.0f;
-    vm.TickModulation(slots, 1, global);
+    vm.TickModulation(slots, 1, global, 48);
 
     std::vector<float> l(256), r(256);
     vm.Render(l.data(), r.data(), l.size());
@@ -1667,8 +1776,117 @@ TEST(VoiceManagerModulationTest, IdleVoicesAreUntouched) {
     slots[0].dest = WaveX::AudioEngine::DEST_CUTOFF;
     slots[0].depth = 32767;
     WaveX::AudioEngine::ModSources global;
-    vm.TickModulation(slots, 1, global);  // must not fault or wake anything
+    vm.TickModulation(slots, 1, global, 48);  // must not fault or wake anything
     EXPECT_EQ(vm.ActiveVoiceCount(), 0);
+}
+
+// --- Second envelope / SRC_ENV_FILTER (param-locks-and-modulation.md §4) ---
+
+TEST(VoiceManagerModulationTest, SecondEnvelopeAdvancesByTheWholeBlockNotOneSample) {
+    VoiceManager vm;
+    vm.Init(48000);
+    auto sample = MakeRampSample(48000, 0, 0);
+    auto p = FlatParams(sample.data(), sample.size(), 60, 127, 0.5f);
+    p.filter_env_attack_s = 0.01f;  // 480 samples
+    p.filter_env_decay_s = 0.0f;
+    p.filter_env_sustain_level = 1.0f;
+    p.filter_env_release_s = 0.1f;
+    vm.Trigger(p);
+    int idx = FindVoiceForNote(vm, 60);
+    ASSERT_GE(idx, 0);
+    ASSERT_NEAR(VoiceAt(vm, idx).env2.Level(), 0.0f, 1e-6f);
+
+    WaveX::AudioEngine::ModSlot slots[1];  // no slot needed - just advancing env2
+    WaveX::AudioEngine::ModSources global;
+    vm.TickModulation(slots, 0, global, 48);  // one block
+
+    // Reference: an identical envelope, advanced 48 samples via Process().
+    WaveX::AudioEngine::Envelope reference;
+    reference.Init(48000);
+    reference.SetParams(0.01f, 0.0f, 1.0f, 0.1f);
+    reference.Retrigger();
+    float expected = 0.0f;
+    for (int i = 0; i < 48; ++i)
+        expected = reference.Process();
+
+    EXPECT_GT(VoiceAt(vm, idx).env2.Level(), 0.0f) << "should have advanced past 0";
+    EXPECT_NEAR(VoiceAt(vm, idx).env2.Level(), expected, 1e-5f);
+}
+
+TEST(VoiceManagerModulationTest, EnvFilterSourceReachesADestinationThroughAModSlot) {
+    const auto data = DcSample(512, 16000);
+    VoiceManager vm;
+    vm.Init(48000);
+    auto p = DcTrigger(data, 0);
+    p.filter_env_attack_s = 0.0f;  // instant, so one tick reaches sustain
+    p.filter_env_decay_s = 0.0f;
+    p.filter_env_sustain_level = 1.0f;
+    vm.Trigger(p);
+
+    float l[64], r[64];
+    vm.Render(l, r, 64);
+    EXPECT_NEAR(PeakAbs(l, 64), PeakAbs(r, 64), 1e-5f) << "centred voice was not balanced";
+
+    WaveX::AudioEngine::ModSlot slots[1];
+    slots[0].source = WaveX::AudioEngine::SRC_ENV_FILTER;
+    slots[0].dest = WaveX::AudioEngine::DEST_PAN;
+    slots[0].depth = 32767;  // full positive -> pan_offset +1 once env2 is at 1.0
+    WaveX::AudioEngine::ModSources global;
+    vm.TickModulation(slots, 1, global, 48);
+
+    vm.Render(l, r, 64);
+    EXPECT_NEAR(PeakAbs(l, 64), 0.0f, 1e-6f);
+    EXPECT_GT(PeakAbs(r, 64), 0.0f);
+}
+
+TEST(VoiceManagerModulationTest, EnvFilterReleasesWithTheVoiceButOutlivesNeitherNorBlocksIt) {
+    VoiceManager vm;
+    vm.Init(48000);
+    auto sample = MakeRampSample(48000, 0, 0);
+    auto p = FlatParams(sample.data(), sample.size(), 60, 127, 0.5f);
+    p.filter_env_attack_s = 0.0f;
+    p.filter_env_decay_s = 0.0f;
+    p.filter_env_sustain_level = 1.0f;
+    p.filter_env_release_s = 0.01f;  // 480 samples - short
+    p.release_s = 2.0f;              // amp envelope's release is much longer
+    vm.Trigger(p);
+    int idx = FindVoiceForNote(vm, 60);
+    ASSERT_GE(idx, 0);
+
+    WaveX::AudioEngine::ModSlot slots[1];
+    WaveX::AudioEngine::ModSources global;
+    vm.TickModulation(slots, 0, global, 8);  // instant attack/decay -> sustain
+    ASSERT_NEAR(VoiceAt(vm, idx).env2.Level(), 1.0f, 1e-6f);
+
+    vm.Release(60);
+    EXPECT_TRUE(VoiceAt(vm, idx).env2.IsReleasing())
+        << "env2 must release alongside env1, not just the audio envelope";
+
+    vm.TickModulation(slots, 0, global, 480);  // past env2's own release
+    EXPECT_TRUE(VoiceAt(vm, idx).env2.IsIdle());
+    EXPECT_EQ(vm.ActiveVoiceCount(), 1)
+        << "the voice itself must still be sounding - its own release is much longer";
+}
+
+TEST(VoiceManagerModulationTest, ChokeForcesEnvFilterIntoAFastReleaseToo) {
+    VoiceManager vm;
+    vm.Init(48000);
+    auto sample = MakeRampSample(48000, 1000, 0);
+
+    auto open_hat = FlatParams(sample.data(), sample.size(), 46, 100, 0.5f);
+    open_hat.choke_group = 1;
+    open_hat.release_s = 2.0f;
+    open_hat.filter_env_release_s = 2.0f;  // would otherwise ring long after the choke
+    vm.Trigger(open_hat);
+    int open_idx = FindVoiceForNote(vm, 46);
+    ASSERT_GE(open_idx, 0);
+
+    auto closed_hat = FlatParams(sample.data(), sample.size(), 42, 100, 0.5f);
+    closed_hat.choke_group = 1;
+    vm.Trigger(closed_hat);  // chokes the open hat
+
+    EXPECT_TRUE(VoiceAt(vm, open_idx).env2.IsReleasing())
+        << "choke must force env2's release the same way it already forces env1's";
 }
 
 // Same DTCM hazard InitEstablishesDefaultsFromZeroedMemory pins for

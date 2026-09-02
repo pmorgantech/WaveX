@@ -1758,7 +1758,8 @@ void Callback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t
         WaveX::AudioEngine::ModSources mod_global_sources;
         mod_global_sources.lfo1 = s_mod_lfo1.Tick();
         mod_global_sources.lfo2 = s_mod_lfo2.Tick();
-        s_voice_manager.TickModulation(s_mod_slots, s_mod_slot_count, mod_global_sources);
+        s_voice_manager.TickModulation(
+            s_mod_slots, s_mod_slot_count, mod_global_sources, static_cast<uint32_t>(size));
     }
 
     if (s_voice_manager.ActiveVoiceCount() > 0 &&

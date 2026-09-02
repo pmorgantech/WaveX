@@ -78,6 +78,72 @@ class Envelope {
         return level_;
     }
 
+    // Advances by `n` samples at once and returns the resulting level - the
+    // same result Process() called n times in a row would give, but in a
+    // handful of stage-transition steps rather than a per-sample loop.
+    //
+    // For a MODULATION SOURCE (a second envelope feeding a control-rate
+    // destination, param-locks-and-modulation.md §4/§3) that only needs to
+    // change once per block: nothing reads its value between samples, so a
+    // per-sample loop would cost exactly as much as the audio-rate amp
+    // envelope for no observable benefit. Process() itself is unchanged and
+    // still the right choice for anything that's actually heard.
+    float AdvanceBlock(uint32_t n) {
+        float remaining = static_cast<float>(n);
+        while (remaining > 0.0f) {
+            switch (stage_) {
+                case Stage::Idle:
+                    return 0.0f;
+                case Stage::Sustain:
+                    level_ = sustain_level_;
+                    return level_;
+                case Stage::Attack: {
+                    const float rate = attack_rate_ > 0.0f ? attack_rate_ : 1.0f;
+                    const float to_go = (1.0f - level_) / rate;
+                    if (remaining < to_go) {
+                        level_ += rate * remaining;
+                        return level_;
+                    }
+                    level_ = 1.0f;
+                    stage_ = Stage::Decay;
+                    remaining -= to_go;
+                    break;
+                }
+                case Stage::Decay: {
+                    if (decay_rate_ <= 0.0f) {
+                        // Zero span (sustain_level_ == 1.0): Process() would
+                        // fall through to Sustain on its very next call
+                        // without spending a sample.
+                        level_ = sustain_level_;
+                        stage_ = Stage::Sustain;
+                        break;
+                    }
+                    const float to_go = (level_ - sustain_level_) / decay_rate_;
+                    if (remaining < to_go) {
+                        level_ -= decay_rate_ * remaining;
+                        return level_;
+                    }
+                    level_ = sustain_level_;
+                    stage_ = Stage::Sustain;
+                    remaining -= to_go;
+                    break;
+                }
+                case Stage::Release: {
+                    const float rate = release_rate_ > 0.0f ? release_rate_ : 1.0f;
+                    const float to_go = level_ / rate;
+                    if (remaining < to_go) {
+                        level_ -= rate * remaining;
+                        return level_;
+                    }
+                    level_ = 0.0f;
+                    stage_ = Stage::Idle;
+                    return 0.0f;
+                }
+            }
+        }
+        return level_;
+    }
+
     bool IsIdle() const { return stage_ == Stage::Idle; }
     bool IsReleasing() const { return stage_ == Stage::Release; }
     float Level() const { return level_; }

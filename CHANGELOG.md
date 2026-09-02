@@ -13,6 +13,22 @@ versioning and release process.
 
 ### Added
 
+- Added the second envelope, `Voice::env2` (roadmap Phase 2.5 item 4, `SRC_ENV_FILTER`):
+  the same `Envelope` class as the amp envelope, triggered and released
+  alongside it from `Trigger()`/`Release()`/`ReleaseSlot()`/`Choke()`. Unlike
+  the amp envelope, it's a modulation source rather than audio, so it
+  advances via the new `Envelope::AdvanceBlock(n)` once per control tick
+  instead of `Process()` once per sample — the same result (pinned by
+  matching `n` calls to `Process()` across every attack/decay/sustain/release
+  boundary a block can land on) without doubling the amp envelope's
+  per-sample cost for a value nothing reads between ticks. ADSR comes from
+  new `VoiceTriggerParams::filter_env_*` fields, defaulted the same as the
+  amp envelope rather than zone-derived — giving `Zone` its own filter-
+  envelope ADSR is a wire-format chunk bump, still open. 10 host tests (6 for
+  `AdvanceBlock` itself against a `Process()` reference, 4 extending
+  `VoiceManagerTest`/`VoiceManagerModulationTest`, plus the choke/release
+  pairing).
+
 - Wired the modulation matrix and the two global LFOs into the audio callback
   (roadmap Phase 2.5 item 4): `Voice::SetBlockModulation()` and
   `VoiceManager::TickModulation()`, called once per callback from
