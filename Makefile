@@ -231,7 +231,7 @@ daisy-stageb:
 	@echo "========================================================================"
 	@echo "            🎵 BUILDING DAISY SEED BACKEND (Stage B flag set)"
 	@echo "========================================================================"
-	cd firmware/daisy && make BUILD_DIR=build-stageb CMAKE_EXTRA_ARGS="-DWAVEX_VOICE_OUTPUT_BACKEND=1 -DWAVEX_CV_BACKEND=1 -DWAVEX_ANALOG_CV_GROUPS=8"
+	cd firmware/daisy && make BUILD_DIR=build-stageb CMAKE_EXTRA_ARGS="-DWAVEX_VOICE_OUTPUT_BACKEND=1 -DWAVEX_CV_BACKEND=1 -DWAVEX_ANALOG_CV_GROUPS=8 -DWAVEX_ANALOG_CV_ENABLED=1"
 	@echo "✅ Daisy Seed Backend (Stage B flag set) build completed successfully!"
 	@echo "========================================================================"
 

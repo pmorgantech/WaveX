@@ -662,8 +662,9 @@ the 2026-08-29 regression fix.
 The 2026-08-31 review found a second reason this needs measurement rather than
 a paper decision. A live digital control update currently performs one
 `pow()` plus up to two SVF coefficient recomputations (`tan()`) for each of
-eight playing voices inside the callback. The 1 kHz analog control tick also
-evaluates `CvShapeCutoff()`, which contains two `expf()` calls. These paths are
+eight playing voices inside the callback. The 1 kHz analog control tick - now compiled out by default, see
+`roadmap.md` § Analog CV is deferred, so this no longer applies to a stock
+build - also evaluates `CvShapeCutoff()`, which contains two `expf()` calls. These paths are
 bounded and run only on control updates/ticks, but their worst-case callback
 cost at `-O0` has not been measured. If it is material, the likely code fix is
 to calculate immutable filter coefficients once per shared update and publish

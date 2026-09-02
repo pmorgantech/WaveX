@@ -1734,6 +1734,13 @@ void Callback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t
     s_last_block_meters.peakL = pkL;
     s_last_block_meters.peakR = pkR;
 
+#if WAVEX_ANALOG_CV_ENABLED
+    // Compiled out by default - see WAVEX_ANALOG_CV_ENABLED in
+    // hardware_config.h. The filter and VCA you actually hear are the
+    // per-voice digital SVF and gain in VoiceManager; this block drives an
+    // external paraphonic analog stage that is not fitted, and it is not free:
+    // a paraphonic envelope plus CvShapeCutoff()'s two expf() calls, every
+    // millisecond, inside the audio callback.
     Timebase::Tick1kHz([&] {
         // Stage A paraphonic control law (item 5): the shared envelope
         // gates the analog VCA and modulates the shared VCF cutoff above
@@ -1755,6 +1762,9 @@ void Callback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t
         }
         __atomic_store_n(&s_cv_dirty, true, __ATOMIC_RELEASE);
     });
+#else
+    (void)any_note_on;
+#endif
 
     s_cpu_load_meter.OnBlockEnd();
     s_dwt_callback_cycles = WaveX::Profiling::GetCycles() - callback_cycles_start;
@@ -2941,6 +2951,13 @@ void CheckAndLogUnderruns() {
 // means a transient wedge on real hardware recovers on its own instead of
 // requiring a reboot to get the analog path back.
 void FlushCv() {
+#if !WAVEX_ANALOG_CV_ENABLED
+    // Analog CV is compiled out (hardware_config.h). Returning here rather
+    // than removing the main-loop call site keeps the caller unconditional and
+    // stops the I2C retry/backoff machinery below from talking to a DAC that
+    // is not fitted - which it would otherwise do forever, failing.
+    return;
+#else
     static uint32_t consecutive_failures = 0;
     static bool disabled_logged = false;
     static uint32_t disabled_since_ms = 0;
@@ -2976,6 +2993,7 @@ void FlushCv() {
             disabled_since_ms = System::GetNow();
         }
     }
+#endif
 }
 
 uint32_t GetCallbackBlocks() {

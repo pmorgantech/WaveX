@@ -155,7 +155,9 @@ Order of implementation:
 2. **Recording, rebuilt**: the old `Sampler` was deleted — nothing fed its input, nothing rendered its playback, and its wire commands were dispatcher stubs. Rebuild it voice/streaming-integrated when scheduled. The preallocation lesson stands: no `reserve()` in the audio path; take a fixed extent from the SDRAM allocator at setup.
 3. **Raise SPI link clock**: replace the bring-up `PS_16` prescaler; verify on scope, measure error rate at each step. Target: browse a 500-entry directory in < 500 ms; waveform preview of a 3-min WAV in < 1 s. **Blocked** on the SPI link being compiled out (0.2 item 2).
 
-**Gate**: 8-voice drum kit playable from MIDI with zero underruns for 1 hour; paraphonic analog path (Stage A) calibrated and audible; both output/CV flag configurations compile in CI; host tests cover voice allocation and the sample-load → status → UI flow.
+**Gate**: 8-voice drum kit playable from MIDI with zero underruns for 1 hour; the per-voice **digital** filter and gain audible and controllable from the panel; both output/CV flag configurations compile in CI; host tests cover voice allocation and the sample-load → status → UI flow.
+
+> **The analog half of this gate was dropped 2026-09-02.** It used to read "paraphonic analog path (Stage A) calibrated and audible", which no build can satisfy: WaveX's filter and VCA are the per-voice digital SVF and gain in `VoiceManager`, and no analog board is fitted. See [§ Analog CV is deferred](#analog-cv-is-deferred).
 
 ---
 
@@ -367,11 +369,19 @@ Built already, and more than this section long implied: the `VoiceManager` exten
 5. **Sampling/recording v1** (`features/sampling-and-recording.md`): threshold-armed capture with pre-roll, resample/bounce source, audition-before-save, non-destructive auto-trim markers, assign-to-zone. Depends on Phase 1 item 2.
 6. **Arpeggiator** (`features/arpeggiator.md`): per-slot, clock-synced, latch; feeds live record.
 
-**Gate**: build a multisampled keyboard instrument (≥ 3 key zones × 2 velocity layers) from freshly recorded samples entirely on-device; play it from MIDI through the Stage A analog path; live-record a chord progression + arp line over a drum pattern with p-locked filter moves; 1-hour zero-underrun soak with all of the above active; `make test` green.
+**Gate**: build a multisampled keyboard instrument (≥ 3 key zones × 2 velocity layers) from freshly recorded samples entirely on-device; play it from MIDI through the digital voice path; live-record a chord progression + arp line over a drum pattern with p-locked filter moves; 1-hour zero-underrun soak with all of the above active; `make test` green.
 
 ---
 
 ## Phase 3 — Analog Voice Board (see `features/analog-voice-board.md`)
+
+> **Deferred (2026-09-02).** No analog hardware is planned for now, and the
+> filter and VCA WaveX actually has are digital — see
+> [§ Analog CV is deferred](#analog-cv-is-deferred). This phase is kept in full
+> rather than deleted: the design work is sound and the code still compiles
+> under its flag set, so picking it up later is a decision rather than a
+> rebuild. Nothing in Phases 1–2.5 should now be gated on it.
+
 
 The **Stage A → Stage B transition** (`features/analog-voice-board.md` §0). The paraphonic prototype from Phase 1 already validated CV calibration, envelope→CV timing and analog levels, so this is hardware bring-up plus a flag flip, not new engine architecture. Blocked on the Stage B CV DAC part decision (`architecture.md` §3.3).
 
@@ -424,7 +434,7 @@ Code-complete but unproven. Each is real work, not history — a build that link
 | 48 kHz engine + resample path | 44.1 kHz content now always goes through the resampler — it is the normal path, not the exception. | Audition a 44.1 kHz and a 48 kHz WAV; confirm correct pitch on both. |
 | UART full-duplex DMA + IRQ priorities | Async TX and the priority inversion fix are compile-verified only. | Sustained traffic during SD streaming; DWT jitter measurement. |
 | SD soak on libDaisy v8.1.0 | The SDMMC/fatfs glue changed. | Mount, 1000× sequential reads, hot-unmount. |
-| Stage A paraphonic analog path | Item is code-complete; all bench work outstanding. | CV-update-within-tick scope check, SSI2164 inversion, "silent is truly silent", exponential cutoff feel k≈3, analog levels. The CV Calibration page is the tool for this. |
+| ~~Stage A paraphonic analog path~~ **Deferred 2026-09-02, not outstanding** | The code is retained and still compiles, but `WAVEX_ANALOG_CV_ENABLED` is now 0, so nothing emits CV and there is no board to verify against. Kept out of the outstanding list because an item nobody can action inflates a list whose value is that every row is doable. See [§ Analog CV is deferred](#analog-cv-is-deferred). | Nothing, until the analog stage is picked up. The bench procedure it used to name — CV-update-within-tick scope check, SSI2164 inversion, "silent is truly silent", exponential cutoff feel k≈3, analog levels, via the CV Calibration page — is preserved here for whoever re-enables the flag. |
 | MIDI in-to-sound latency | Budget is ~2–3 ms on paper. | Measure DIN and USB in-to-sound on the bench; target < 5 ms. |
 | Diagnostics telemetry round trip | `MSG_DIAG_PUSH` is implemented on both ends but never observed on hardware. | Open the diagnostics page; a non-zero `DIAG_PUSH` row in the Link message table proves it. |
 | Per-voice SVF cost | The one-pole became a 2-pole state-variable filter in the callback's inner loop, ×8 voices. Host tests prove it is *correct*; nothing proves it is *affordable*. The guide requires a DWT number before a DSP change in the callback is accepted. | DWT cycle counter around `Render()` with 8 voices sounding, before/after. If it is tight, the fix is block processing through a CMSIS-DSP biquad, not reverting resonance — see `svf_filter.hpp`. |
@@ -446,6 +456,44 @@ Code-complete but unproven. Each is real work, not history — a build that link
 | Encoder direction contract (`InputEvent::steps()`) | The rotary encoder's `delta` changed sign convention at the producer (`ui_task.cpp`), so *every* page's encoder handling is downstream of it, not just the two that were edited. Host tests pin the helper, but nothing has confirmed on hardware which way the physical knob turns — and the whole class of defect here is a direction that is wrong only on real hardware. The voice page's inversion in particular was live and unnoticed, which is evidence nobody has recently checked a value while turning the knob. | On the voice page, enter edit mode on a parameter and turn clockwise: the value must rise, and counter-clockwise must lower it. Repeat on the sample edit page. Then turn fast in both directions and confirm the value tracks the distance turned rather than moving one step per event. Also confirm the pot (EncoderUp/Down) still agrees with the rotary encoder about which way is up. |
 | Keypad and encoder after the E-KEY/E-ENC fixes | Three fixes to the physical controls were made from source and the TI datasheet with no hardware in the loop, and they change how input is decoded. The keypad in particular was previously either dead or busy-spinning, so **nobody has seen it work** — there is no "it behaved before" baseline to compare against. | Press each mapped key: one press event on press and one release on release, in that order, and Shift held with another key must register as both. Then confirm the UI task is not starved (diagnostics CPU tiles) — that was the busy-spin symptom. Spin the encoder fast in both directions and check no detents are lost or replayed. If keys still never arrive, the remaining suspect is the CFG register the vendored driver never writes, which needs a raw I2C write the component does not expose. |
 | LVGL port-lock hold time after the E-LVGL fixes | Input dispatch now takes the port lock per event, and comm callbacks defer to the UI task. Both are argued to be cheap — the mutex is recursive and uncontended, and `lv_refr_now()` in `adaptiveRefreshControl()` already holds the lock far longer than any handler — but **nothing has been measured**, which is exactly what guide §13 forbids relying on. The suspicion worth testing is that the real cost was never the lock: the UI task's `lv_refr_now()` duplicates the lvgl_port task's own refresh loop, so two schedulers contend for one frame budget (review E-METER1/E-MISC1). | FPS and UI-task CPU per `docs/performance_monitoring.md`, while spinning the encoder fast on a list page (the burst case the per-event lock exists for) and while a sample loads (the deferred-update path). Compare against removing the `lv_refr_now()` call to see which term dominates. |
+
+---
+
+## Analog CV is deferred
+
+**Decided 2026-09-02.** WaveX's filter and VCA are **digital**: every voice owns
+a state-variable filter (`audio/svf_filter.hpp`) and its own gain, and that is
+what `MSG_CONTROL_CHANGE` drives and what you hear.
+
+The earlier plan was a **paraphonic analog stage** — one MCP4728 I2C quad-DAC
+emitting a single shared CV frame (cutoff, resonance, VCA envelope) for an
+external SSI2164 filter across the whole stereo mix. That is what "Stage A
+analog path" meant wherever this document used the phrase; it was never
+per-voice analog. Stage B (Phase 3) was the full version, one CV group and one
+TDM slot per voice.
+
+**The digital filter replaced it, but nothing switched the analog path off.**
+Until now it was compiled in unconditionally with no enable flag at all, so:
+
+- every 1 kHz control tick inside the audio callback computed a paraphonic
+  envelope and a `CvShapeCutoff()` — two `expf()` calls — for hardware that is
+  not fitted;
+- the main loop kept flushing I2C to a DAC that never answers, through a
+  failure-backoff path built for a real board;
+- one knob drove both, publishing `s_para_pending` *and*
+  `s_voice_live_pending`.
+
+`WAVEX_ANALOG_CV_ENABLED` (`hardware_config.h`) now defaults to **0** and
+guards both the control tick and `FlushCv()`. Nothing is deleted: the CV
+router, both backends, the calibration store and the CV Calibration page all
+remain, `make daisy-stageb` sets the flag so the enabled path keeps building in
+CI, and re-enabling is a flag rather than an archaeology exercise.
+
+**What this changes elsewhere:** the Phase 1 and Phase 2.5 gates no longer
+require analog bench work neither could ever have passed; the Stage A row in
+§ Outstanding hardware verification is marked deferred rather than outstanding;
+and the `-O0` → `-O2` question in `backlog.md` loses one of its stated reasons,
+since the `expf()` calls it cites are now compiled out by default.
 
 ---
 

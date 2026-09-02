@@ -50,6 +50,27 @@
 #define WAVEX_VOICE_OUTPUT_BACKEND WAVEX_VOICE_OUTPUT_STEREO_MIX
 #endif
 
+// Master switch for the analog CV path (Daisy only).
+//
+// OFF by default as of 2026-09-02. WaveX's filter and VCA are DIGITAL: each
+// voice owns a state-variable filter (audio/svf_filter.hpp) and its own gain,
+// which is what MSG_CONTROL_CHANGE actually drives and what you hear. The
+// analog path below is the earlier plan - a single MCP4728 quad-DAC emitting
+// one shared CV frame for an external paraphonic SSI2164 VCF/VCA - and no such
+// board is fitted.
+//
+// It stayed switched on long after the digital filter replaced it, so every
+// 1 kHz control tick was computing a paraphonic envelope and a CvShapeCutoff()
+// (two expf() calls) for hardware that is not there, and the main loop was
+// flushing I2C to a DAC that never answers. One knob drove both paths.
+//
+// Everything is retained rather than deleted, and both flag sets still build,
+// so re-enabling this is a flag rather than an archaeology exercise. Turn it
+// on together with a real CV backend and the calibration page.
+#ifndef WAVEX_ANALOG_CV_ENABLED
+#define WAVEX_ANALOG_CV_ENABLED 0
+#endif
+
 // CV backend (Daisy only) - architecture.md §5.3.
 // Stage A: single MCP4728 I2C quad-DAC serving WAVEX_ANALOG_CV_GROUPS=1
 // (paraphonic, shared VCF/VCA). Stage B: MCP48CMB28 SPI chain serving
