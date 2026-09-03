@@ -973,6 +973,15 @@ bench log:
 Until then, the Sample Manager should *say* an import is resident and that
 its samples are not listable, rather than show an empty list.
 
+**Status-line fix landed 2026-09-02** (`track-and-patch-model.md` §8 stage 0;
+the registry unification above is still open). `UISampleManagerPage::rebuildList()`
+now sets its status label every call — including the "nothing changed" fast
+path, which a permanently-zero row count would otherwise never leave — and,
+when zero bare-WAV samples are listed, checks `SampleMemStatusMessage::in_use_bytes`
+(the allocator both registries share) before saying "No samples in RAM":
+non-zero usage with nothing listed says an import is resident instead. ESP32
+build and full host suite (174 tests) verified green.
+
 ---
 
 ## SFZ import does not search subfolders for samples

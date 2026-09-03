@@ -82,6 +82,19 @@ versioning and release process.
   does not walk the tree once per sample. Daisy device build verified green;
   bench verification with a real rearranged sample pack still open.
 
+- Sample Manager showed an empty "No samples in RAM" list while an SFZ
+  import was actually resident (third of the 2026-09-02 bench findings):
+  an import's samples live in the Daisy's own private registry
+  (`sfz_loader.cpp`), never pushed as `MSG_SAMPLE_META`, so the page's row
+  count stayed at 0 with no indication anything was loaded. `rebuildList()`
+  now updates its status label on every call rather than only on a row-count
+  change (which a permanently-zero count would never trigger), and
+  distinguishes the two zero-row cases using `SampleMemStatusMessage::in_use_bytes`
+  - the allocator both registries share - so RAM in use with nothing listed
+  now says an import is resident instead of implying nothing is loaded.
+  ESP32 build and full host suite (174 tests) verified green. Not a fix for
+  the underlying split registry (`track-and-patch-model.md` §4, stage 3).
+
 ### Added
 
 - Retired the bare-WAV note-on fallback's any-channel behaviour (roadmap

@@ -137,8 +137,33 @@ void UISampleManagerPage::rebuildList() {
         }
     }
 
-    // Nothing changed: leave the widgets alone. Rebuilding a list every 500 ms
-    // would restyle rows under the user's finger and throw away focus.
+    // Runs every call, including the unchanged fast path below: an SFZ
+    // import's samples live in the Daisy's own private registry
+    // (sfz_loader.cpp), never pushed as MSG_SAMPLE_META, so `count` can sit
+    // at 0 indefinitely while an import is actually resident - the "nothing
+    // changed" path would otherwise never reach a status update at all. Both
+    // registries share one allocator, so RAM in use with zero listed samples
+    // is exactly that case, not "nothing loaded" (docs/backlog.md "Sample
+    // Manager cannot see an SFZ import's samples" - fixed properly by the
+    // shared registry in track-and-patch-model.md §4; this is a status line
+    // until then).
+    if (status_label_) {
+        if (count > 0) {
+            char s[64];
+            snprintf(s, sizeof(s), "%d sample%s resident", count, count == 1 ? "" : "s");
+            lv_label_set_text(status_label_, s);
+        } else {
+            WaveX::Protocol::SampleMemStatusMessage mem{};
+            inter_mcu_get_sample_mem_status(&mem);
+            lv_label_set_text(status_label_,
+                              mem.in_use_bytes > 0
+                                  ? "An SFZ import is resident - its samples aren't listable yet"
+                                  : "No samples in RAM - load one from Browse");
+        }
+    }
+
+    // Nothing else changed: leave the widgets alone. Rebuilding a list every
+    // 500 ms would restyle rows under the user's finger and throw away focus.
     bool same = (count == row_count_);
     if (same) {
         for (int i = 0; i < count; ++i) {
@@ -207,13 +232,6 @@ void UISampleManagerPage::rebuildList() {
 
     if (focus_ >= row_count_) {
         focus_ = row_count_ > 0 ? row_count_ - 1 : 0;
-    }
-
-    if (status_label_) {
-        char s[64];
-        snprintf(s, sizeof(s), "%d sample%s resident", row_count_, row_count_ == 1 ? "" : "s");
-        lv_label_set_text(status_label_,
-                          row_count_ ? s : "No samples in RAM - load one from Browse");
     }
 }
 
