@@ -75,7 +75,7 @@ static volatile bool s_dfu_requested = false;
 // the reply happen on the main loop.
 //
 // Guarded by WAVEX_DEBUG_HARNESS_ENABLED so a release image carries neither
-// the buffer nor the ISR match state (docs/features/build-profiles.md SS2).
+// the buffer nor the ISR match state (README.md#build-profiles).
 // The DFU token above is deliberately NOT guarded - it is the only reflash
 // path that needs no BOOT+RESET.
 // ---------------------------------------------------------------------------

@@ -118,7 +118,7 @@ enum MessageType : uint8_t {
     MSG_SAMPLE_UNLOAD = 0x46,  // ESP32 -> Daisy: free a loaded sample
     // Sequencer / transport / MIDI clock (Phase 2; docs/features/sequencer.md,
     // midi-sync-tempo-follower.md, melodic-sequencing.md). ID block reserved in
-    // docs/features/feature-expansion-ideas.md - do not assign outside it.
+    // docs/features/inter-mcu-protocol.md - do not assign outside this block.
     MSG_SEQ_TRANSPORT = 0x50,   // E->D: play/stop/continue, tempo, clock source, input mode
     MSG_SEQ_PATTERN_OP = 0x51,  // E->D: small idempotent pattern edits (step/track/pattern)
     MSG_SEQ_PATTERN_SYNC =
@@ -132,7 +132,7 @@ enum MessageType : uint8_t {
     MSG_INST_STATUS = 0x61,     // D->E: inspection result and load progress
     MSG_INST_ZONE_SYNC = 0x62,  // reserved: future editable-zone synchronization
     // Mixer (output-routing-and-mixer.md §4). 0x70-0x7F is the recording /
-    // mix / scenes block reserved in features/feature-expansion-ideas.md.
+    // mix / scenes block reserved in features/inter-mcu-protocol.md.
     MSG_MIX_OP = 0x78,      // E->D: one mixer control change
     MSG_MIX_METERS = 0x79,  // D->E: per-track peak, while the mixer page is open
     MSG_ERROR = 0xFF

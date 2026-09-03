@@ -49,7 +49,7 @@ file(STRINGS "${CMAKE_CURRENT_LIST_DIR}/../../VERSION" PROJECT_VER)
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 
-# Debug/release build profile (docs/features/build-profiles.md §5). Master
+# Debug/release build profile (README.md#build-profiles). Master
 # switch for the debug feature surface: logging_config.h defaults
 # WAVEX_DEBUG_LOGGING_ENABLED, WAVEX_DEBUG_HARNESS_ENABLED and thus
 # WAVEX_ESP_SCREENSHOT_DEBUG from it, so

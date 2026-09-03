@@ -12,7 +12,7 @@ WaveX is a modern **sampler / groovebox / drum machine** with a 5" touchscreen, 
 
 - [`docs/architecture.md`](docs/architecture.md) — canonical system design, including the real-time / DMA / cache rules all code must follow.
 - [`docs/roadmap.md`](docs/roadmap.md) — implementation order, per-phase test gates, and the hardware verification still outstanding.
-- [`docs/backlog.md`](docs/backlog.md) — unscheduled work, each entry recording why it is not urgent.
+- [`docs/backlog.md`](docs/backlog.md) — concise unscheduled work and open decisions.
 
 The docs describe what is and what will be; finished work lives in [`CHANGELOG.md`](CHANGELOG.md) and git history.
 
@@ -88,16 +88,28 @@ make release       # Both MCUs, release profile, then verify the token gate
 make check-profiles # Assert tokens present in debug AND absent in release
 ```
 
-Builds default to the **debug profile**, which includes the serial console
-command surface — runtime log-level control on both boards
-([`docs/logging.md`](docs/logging.md)) and screenshots on the ESP32. `make
-release` sets `WAVEX_BUILD_DEBUG=0` to compile that surface out, into separate
-`build-release/` directories, and then checks that no console token string
-survived into either image. Details and the flag hierarchy:
-[`docs/features/build-profiles.md`](docs/features/build-profiles.md).
+### Build profiles
 
-`WAVEX-ENTER-DFU` deliberately survives into release builds — it is the only
-reflash path that needs no BOOT+RESET.
+Builds use the **debug profile** by default. It includes runtime log-level
+control on both boards and ESP32 serial screenshots. Build the production
+profile with:
+
+```bash
+make release        # Both boards, then check that debug tokens are absent
+make daisy-release  # Daisy only
+make esp32-release  # ESP32 only
+```
+
+Release builds set `WAVEX_BUILD_DEBUG=0`, which compiles out the debug console
+surface and ESP32 screenshots. Each profile uses its own `build-release/`
+directory. Do not reuse a build directory for a different profile: the Daisy
+wrapper does not reconfigure an existing CMake cache, so it can silently retain
+the previous profile's flags.
+
+`WAVEX-ENTER-DFU` deliberately remains in release images; it is the only
+reflash path that does not require BOOT+RESET. `make check-profiles` requires
+both debug and release images and confirms the console tokens exist only in the
+debug images.
 
 The ESP32 side builds with ESP-IDF's `idf.py` (component-based); the Daisy side is CMake with the libDaisy toolchain file, app placed in QSPI flash via the Daisy bootloader (`BOOT_QSPI`). Testing details: [`docs/testing_guide.md`](docs/testing_guide.md).
 

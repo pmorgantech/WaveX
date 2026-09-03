@@ -112,7 +112,7 @@ std::shared_ptr<UIPage> createSampleGroup() {
 
 // Settings: one tab group in the same chrome as Sample and Diagnostics, with
 // CV Calibration folded in as the Calibrate tab
-// (docs/ui-information-architecture.md §6 stage 6).
+// (docs/ui-information-architecture.md §6).
 std::shared_ptr<UIPage> createSettingsGroup() {
     auto group = std::make_shared<UITabHostPage>("Settings");
     group->addTab("Display", createDisplaySettingsPage());

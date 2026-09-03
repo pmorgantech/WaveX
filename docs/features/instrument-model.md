@@ -207,7 +207,8 @@ UI never blocks on loads: `INST_STATUS` drives progress toasts (deferred-update 
 
 Requested directly (bench session, not yet a roadmap phase): "manage a bank of voices/presets" and "map different samples to different pads/keys". Both are already this document's job — **`Instrument` *is* the Voice/Preset entity** (E-mu called it "preset"; this doc's own §1 table already names the mapping), and **a multi-sample pad/key map is already the `Zone` model** (§1: one zone = one sample × one key range; §8: "a kit is a drum-mode instrument", pad *p* ↔ a zone with `key_lo = key_hi = pad_note(p)`). Neither needs a new entity or a new data model. What's missing is entirely the on-device *workflow* to build and manage one without hand-authoring an `.sfz` file off-device — see the corrected Status line and §6's note above.
 
-This also answers the backlog's [Voice / Preset does not exist as an entity](../backlog.md#voice--preset-does-not-exist-as-an-entity): **resolved as this instrument model**, per that entry's own "fix if picked up" note — an `Instrument` with per-key (possibly single-key) zones, not a distinct lighter entity.
+An `Instrument` is the preset: use per-key (possibly single-key) zones rather
+than introducing a distinct lighter Voice/Preset entity.
 
 **Deliberately out of scope here, per explicit instruction**: making more than one instrument slot resident at once ([backlog](../backlog.md#only-one-instrument-slot-can-be-resident-at-a-time)). "Managing a bank" below means browsing/saving/loading named files on SD — loading one still swaps whatever is currently resident, exactly like `INST_OP_SFZ_LOAD` already does. That is a real, useful capability on its own (an E-mu/Emax workflow is "load a preset, play it" more often than "layer many at once"), and nothing below is wasted if slot residency is later made concurrent.
 

@@ -375,7 +375,7 @@ versioning and release process.
 ### Added
 
 - Added debug and release build profiles on both MCUs, with
-  `WAVEX_BUILD_DEBUG` as the master switch (`docs/features/build-profiles.md`).
+  `WAVEX_BUILD_DEBUG` as the master switch ([Build profiles](README.md#build-profiles)).
   `make daisy-release` / `make esp32-release` build with it off, dropping the
   console command surface — runtime log-level control on both boards, plus
   screenshots on the ESP32 — from the image. `make release` builds both and runs
@@ -2609,7 +2609,7 @@ class the code's own comments already described.
 ### Added — Phase 2 sequencer / transport / MIDI-clock protocol messages
 
 - `firmware/shared/spi_protocol/protocol.h`: seven new wire messages in the
-  reserved 0x50–0x57 block (`docs/features/feature-expansion-ideas.md`):
+  reserved 0x50–0x57 block:
   `MSG_SEQ_TRANSPORT` (0x50), `MSG_SEQ_PATTERN_OP` (0x51), `MSG_SEQ_PLAYHEAD`
   (0x53), `MSG_MIDI_CLOCK_EVENT` (0x55), `MSG_MIDI_CC` (0x56),
   `MSG_SEQ_CLOCK_OUT` (0x57), plus `MSG_SEQ_PATTERN_SYNC` (0x52) reserved as
@@ -2709,8 +2709,8 @@ class the code's own comments already described.
   WXCF chunk container), MIDI clock sync (PLL tempo follower), melodic
   sequencing/live record, param locks + mod matrix/LFOs, sampling & recording,
   arpeggiator, scenes/macros/param slew, tuning & scales, output routing &
-  mixer. `feature-expansion-ideas.md` is the suite index and reserves
-  inter-MCU message-ID blocks (0x50–0x5F, 0x60–0x6F, 0x70–0x7F, 0xA0–0xAF).
+  mixer. The inter-MCU protocol reserves message-ID blocks (0x50–0x5F,
+  0x60–0x6F, 0x70–0x7F, 0xA0–0xAF).
 - `docs/roadmap.md`: new **Phase 2.5 — Sampler Instrument Layer** with its own
   gate; Phase 2/4/5 items now reference the new designs. Kit representation
   decision recorded: a kit is a drum-mode instrument (`KIT_OP` 0x54

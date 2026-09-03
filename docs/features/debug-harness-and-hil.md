@@ -23,8 +23,8 @@ they are the whole of the remote-control surface:
 
 | Token | Board | Where | Compiled out in release? |
 |---|---|---|---|
-| `WAVEX-ENTER-DFU` | Daisy | `daisy/src/main.cpp:64,96-104` | No, and deliberately so ([`build-profiles.md`](build-profiles.md) §2) |
-| `WAVEX-LOG <...>` | Daisy | `daisy/src/main.cpp:77-128, 512-526` | **No — an unintended gap; closed by [`build-profiles.md`](build-profiles.md) §2** |
+| `WAVEX-ENTER-DFU` | Daisy | `daisy/src/main.cpp:64,96-104` | No, deliberately so ([Build profiles](../../README.md#build-profiles)) |
+| `WAVEX-LOG <...>` | Daisy | `daisy/src/main.cpp:77-128, 512-526` | Yes, through `WAVEX_DEBUG_HARNESS_ENABLED` |
 | `WAVEX-LOG <...>` | ESP32 | `esp32/components/ui/src/ui_screenshot.cpp:145-202` | Yes, `WAVEX_ESP_SCREENSHOT_DEBUG` |
 | `WAVEX-SCREENSHOT` | ESP32 | `esp32/components/ui/src/ui_screenshot.cpp:204-278` | Yes, same flag |
 
@@ -228,17 +228,17 @@ visual-regression checks.
 
 ## 5. Compile-out
 
-The build profiles this needs are specified separately, in
-[`build-profiles.md`](build-profiles.md) — they close a release-hygiene gap that
-exists today and are worth doing whether or not this harness is ever built. What
-matters here is only the contract between the two:
+The [build profiles](../../README.md#build-profiles) already provide the
+release-hygiene boundary this harness needs. What matters here is only the
+contract between the two:
 
 - **`WAVEX_DEBUG_HARNESS_ENABLED`** gates everything in §2–§4 on both boards:
   the line reader, the injection entry points, the synthetic indev, and the
   `STATE` formatter. It defaults from the `WAVEX_BUILD_DEBUG` master, and stays
   individually overridable so a release image can carry the harness for a
   bring-up session without turning logging back on.
-- **`WAVEX-ENTER-DFU` is outside the guard**, per §3 and `build-profiles.md` §2.
+- **`WAVEX-ENTER-DFU` is outside the guard**, per §3 and the build-profile
+  guide.
 - **The CI proof is a `strings` check for `WAVEX-DBG` in the release image**,
   not a successful compile — the command token is a string literal that cannot
   survive without the code referencing it, so its absence is real evidence that
@@ -250,7 +250,7 @@ a genuine removal (a task, its buffers, an indev), but **the runtime log-level
 table is not** — 12 bytes and a byte-load per call site survive into release,
 because no compiler can prove the command channel that writes them is gone. The
 logging saving comes from lowering the compile-time ceilings, not from this
-flag. `build-profiles.md` §3 has the argument and the measurement it still owes.
+flag. The release-ceiling decision is tracked in [`backlog.md`](../backlog.md).
 
 ## 6. The HIL suite
 
@@ -360,19 +360,14 @@ ear or a capture path.
 
 Each stage is independently useful and independently committable.
 
-0. **[`build-profiles.md`](build-profiles.md) in full** — the flag hierarchy,
-   the Daisy `WAVEX-LOG` guard, both profiles, the CI `strings` gate. It is
-   stage zero because it is a prerequisite for everything below *and* because it
-   is worth doing even if nothing below it is ever built. It contains no part of
-   this design.
-2. **Shared line reader + `WAVEX-DBG` grammar with acks**, host-tested, both
+1. **Shared line reader + `WAVEX-DBG` grammar with acks**, host-tested, both
    boards, existing commands moved onto it.
-3. **ESP32 key/encoder injection** — smallest real capability, needs only
+2. **ESP32 key/encoder injection** — smallest real capability, needs only
    `InputDispatcher::post()`.
-4. **`STATE` on both boards.** With 3 and 4 the first meaningful HIL tests exist.
-5. **Synthetic indev**: tap, then drag.
-6. **Daisy `MSG` injection.**
-7. **`tests/hil/` and `make test-hil`**, starting with the §7 rows.
+3. **`STATE` on both boards.** With 2 and 3 the first meaningful HIL tests exist.
+4. **Synthetic indev**: tap, then drag.
+5. **Daisy `MSG` injection.**
+6. **`tests/hil/` and `make test-hil`**, starting with the §7 rows.
 
 ## 9. Decisions still open
 

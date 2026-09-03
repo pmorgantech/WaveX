@@ -91,7 +91,10 @@ sequence(u16 LE) | payload[0..2048] | crc16(u16 LE) | end(0x5A)
 
 ## 5. Planned extensions (design first, then implement — see roadmap)
 
-Message-ID blocks are **reserved** for the 2026-07-05 feature-design suite — see the reservation table in `feature-expansion-ideas.md` (0x50–0x5F sequencer/clock/arp, 0x60–0x6F instrument/tuning, 0x70–0x7F recording/mix/scenes, 0xA0–0xAF render jobs). Do not assign new IDs outside that table without updating it.
+Message-ID blocks are reserved: 0x50–0x5F for sequencer/clock/arp, 0x60–0x6F
+for instruments/tuning, 0x70–0x7F for recording/mix/scenes, and 0xA0–0xAF for
+render jobs. Do not assign a new ID outside these blocks without updating this
+document and `protocol.h`.
 
 - **Phase 2 (sequencer)**: pattern-edit ops, transport control, playhead/step feedback (coalesced), MIDI clock in/out (`midi-sync-tempo-follower.md`). Kit management is subsumed by instrument ops (`instrument-model.md` §8; 0x54 stays reserved-unused).
 - **Phase 2.5**: editable zone sync (0x62), recording (0x70/0x71), and arp (0x58). The mixer ops at 0x78/0x79 are now defined and round-trip tested, though nothing drives them yet — the engine application and the mixer page are the next two stages of `output-routing-and-mixer.md` §6. SFZ probe/load uses the now-live instrument ops at 0x60/0x61; MIDI CC forwarding at 0x56 is also live. `INST_OP_SET_MOD_SLOT` (also on 0x60) is now live end to end (ESP32 `inter_mcu_send_mod_slot()` → Daisy `SfzLoader::SetModSlot()`, instrument-scoped storage on `Instrument::mod_slots`) — no UI sends it yet (`param-locks-and-modulation.md` §7/§9 stage 5). `SRC_MODWHEEL`/`SRC_AFTERTOUCH` still read 0: `MSG_MIDI_CC` reaches the Daisy but nothing feeds it into the mod matrix's `ModSources`, and the ESP32 MIDI task still drops incoming CC/aftertouch rather than forwarding it (§9 stage 4, second half).

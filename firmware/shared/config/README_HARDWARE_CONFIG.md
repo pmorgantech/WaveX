@@ -199,22 +199,8 @@ WAVEX_IF_LOGGING(LCD_DISPLAY, {
 
 ## Compiler Definitions
 
-### Debug vs release: use the build profiles
-
-The debug feature surface is controlled by one flag, `WAVEX_BUILD_DEBUG`, and
-there are targets for it — do not hand-roll the definition:
-
-```bash
-make release          # both MCUs with WAVEX_BUILD_DEBUG=0, then verify
-make daisy-release    # one board at a time
-make esp32-release
-```
-
-Each profile builds into its own `build-release/` directory, which is required
-rather than tidy: the Daisy wrapper Makefile only re-runs CMake configure when
-`CMakeCache.txt` is absent, so reusing a build directory silently keeps
-whichever profile configured it first. See
-[`docs/features/build-profiles.md`](../../../docs/features/build-profiles.md).
+For debug and release builds, use the documented [build profiles](../../../README.md#build-profiles);
+do not hand-roll `WAVEX_BUILD_DEBUG`.
 
 ### Overriding an individual macro
 

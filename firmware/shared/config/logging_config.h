@@ -376,7 +376,7 @@ void wavex_daisy_log_raw(const char* format, ...);
 // ============================================================================
 
 // Master debug/release switch, set by the build profile
-// (docs/features/build-profiles.md). Everything below defaults from it, so one
+// (README.md#build-profiles). Everything below defaults from it, so one
 // -DWAVEX_BUILD_DEBUG=0 turns the whole debug surface off, while each flag
 // stays individually overridable for a bring-up image that wants one back.
 //

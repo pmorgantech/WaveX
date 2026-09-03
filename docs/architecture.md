@@ -333,7 +333,6 @@ These rules are mandatory for all new code. Most past instability (SPI corruptio
 | Inter-MCU protocol wire spec | `features/inter-mcu-protocol.md` |
 | Offline sample editing & DSP | `features/offline-sample-editing.md` |
 | Sequencer / groovebox engine | `features/sequencer.md` |
-| Feature-expansion suite index (2026-07-05) + message-ID reservations | `features/feature-expansion-ideas.md` |
 | Instrument model (presets/zones/velocity layers, WXCF container) | `features/instrument-model.md` |
 | MIDI clock sync (tempo follower) | `features/midi-sync-tempo-follower.md` |
 | Melodic sequencing / live record | `features/melodic-sequencing.md` |

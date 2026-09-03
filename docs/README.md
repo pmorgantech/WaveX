@@ -19,7 +19,7 @@ live in `firmware/shared/config/pin_config.h` and `hardware_config.h` only.
 | [project-principles.md](project-principles.md) | **Architectural constitution**: the 15 engineering principles and decision filter that every significant design, implementation, and review must satisfy |
 | [architecture.md](architecture.md) | **Single source of truth** for system design: product vision, hardware, firmware structure, real-time/DMA/timing rules (§7), memory layout, open decisions |
 | [roadmap.md](roadmap.md) | Implementation order (Phases 0–5), per-phase test gates, library upgrade recommendations with risk callouts, and § Outstanding hardware verification — code-complete work that nothing has yet proven on the bench |
-| [backlog.md](backlog.md) | Work worth doing but not scheduled into a phase. Every entry records **why it is not urgent**, so a future reader can tell whether the reasoning still holds |
+| [backlog.md](backlog.md) | Concise unscheduled work and open decisions; completed work belongs in the changelog and git history |
 | [rt1170-migration.md](rt1170-migration.md) | Forward-looking plan for moving the backend off the STM32H750 |
 
 ## Required reading before writing code
@@ -43,7 +43,6 @@ implementation.
 | [instrument-model.md](features/instrument-model.md) | Core built, rest open | Presets, zones, multisampling, velocity layers — the Emax/Emulator lineage (Phase 2.5) |
 | [sfz-import.md](features/sfz-import.md) | Proposed | Loading third-party `.sfz` multisamples into the instrument model |
 | [debug-harness-and-hil.md](features/debug-harness-and-hil.md) | Proposed | Runtime input injection and machine-readable state query over the debug console, and the hardware-in-the-loop test suite they enable |
-| [build-profiles.md](features/build-profiles.md) | Proposed | Debug and release build profiles on both boards, and what a release image actually stops paying for. Prerequisite for the debug harness, but stands alone |
 | [melodic-sequencing.md](features/melodic-sequencing.md) | Target design | Melodic track type, chords/ties, step-record, live record/overdub/erase (Phase 2.5) |
 | [param-locks-and-modulation.md](features/param-locks-and-modulation.md) | Target design | Parameter locks, modulation matrix, LFOs, filter envelope (Phase 2/2.5) |
 | [sampling-and-recording.md](features/sampling-and-recording.md) | Target design | Threshold-armed capture, pre-roll, resample/bounce, assign-to-zone (Phase 2.5) |
@@ -54,18 +53,17 @@ implementation.
 | [offline-sample-editing.md](features/offline-sample-editing.md) | Target design | Offline render-job model for destructive editing and mangling DSP (Phase 4) |
 | [scenes-and-performance.md](features/scenes-and-performance.md) | Target design | Song mode/pattern chaining, performance macros, scenes with morph (Phase 5) |
 | [tuning-and-scales.md](features/tuning-and-scales.md) | Target design | Master tune, 12-degree tables, scale-constrained input surfaces (Phase 5) |
-| [feature-expansion-ideas.md](features/feature-expansion-ideas.md) | Index | Map over the feature-design suite, plus the **protocol message-ID reservation table** — check it before claiming an ID |
 
 ## Working guides
 
 | Document | Contents |
 |---|---|
 | [ui-architecture.md](ui-architecture.md) | ESP32 UI framework: navigator, pages, softkeys, LVGL threading rules, and how to build and register a new page |
-| [ui-information-architecture.md](ui-information-architecture.md) | Target menu structure: page/tab inventory, menu vs. tab group, screen-by-screen layout |
+| [ui-information-architecture.md](ui-information-architecture.md) | As-built menu structure and tab-group rules |
 | [ui-design-constraints.md](ui-design-constraints.md) | One-page brief for UI/UX design passes — display, fonts, palette, rendering budget, widget inventory, each claim cited to code |
 | [logging.md](logging.md) | Per-module log levels with compile-time ceilings and runtime control, on both consoles |
 | [testing_guide.md](testing_guide.md) | Running and writing host tests (GoogleTest), and how to write a regression test that actually fails against the pre-fix code |
-| [testing-remediation.md](testing-remediation.md) | Live plan for closing the gap between what the August 2026 audits found and what the suite can catch. Tier 0–1 largely done; Tiers 2–4 open |
+| [testing-remediation.md](testing-remediation.md) | Open test gaps organized by defect class |
 | [flashing.md](flashing.md) | Build and flash the ESP32-P4 and Daisy Seed from the devcontainer, plus SWD/GDB debug-probe workflows |
 | [performance_monitoring.md](performance_monitoring.md) | DWT cycle-counter and CPU-load measurement on the Daisy; LVGL render/flush/FPS instrumentation on the ESP32 |
 | [spi-notes.md](spi-notes.md) | libDaisy 8.1 SPI slave/DMA limits, a minimal bring-up recipe, and the source-level diagnosis of the dormant inter-MCU SPI link |

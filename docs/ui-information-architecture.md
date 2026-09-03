@@ -1,280 +1,59 @@
-# UI Information Architecture — Target Menu Structure
+# UI Navigation Reference
 
-**Status**: Target design (2026-08-30). Supersedes the ad-hoc main menu that grew one entry per page.
-**Scope**: ESP32-P4 frontend navigation only. No engine behaviour changes.
-**Platform guidance**: `docs/esp32p4_coding_guide.md` and the `esp32p4` skill apply to every change here; the two Daisy-side items (§6) additionally fall under `docs/daisy_rt_audio_coding_guide.md`.
+**Status:** As-built navigation reference. Implementation history is in git.
 
----
+## 1. Navigation structure
 
-## 1. Why
+- **Sample:** Browse, Edit, Manage, Record.
+- **Play:** Pads and Keys.
+- **Voice:** Sample, Env, Amp, Filter, Mod.
+- **Settings:** Display, Storage, MIDI, System, Calibrate.
+- **Diagnostics:** ESP32, Daisy, Audio, Link, Storage, MIDI.
 
-The main menu grew by appending an entry per page, so it now mixes levels of
-abstraction: `Sample Browser`, `Edit Sample`, `Sample Manager`, `Voice`,
-`Keyboard`, `Modulation`, `Settings`, `Diagnostics`. Three of those are views of
-*the same sample*, and `Modulation` is a property of a voice rather than a
-peer of the voice page — its three entries (LFO 1, LFO 2, Envelopes) are
-unimplemented stubs that log and return.
+The Sample group uses a host page because its tabs are independent pages. Play
+and Voice each own their tab view because their shared state must survive tab
+changes. Diagnostics builds tab bodies on first show to bound page-entry work.
 
-Target:
+## 2. Choosing tabs
 
-```
-Play         (Pads, Keys)
-Sample       (Manage, Browse, Edit, Record)
-Voice        (Sample, Env, Amp, Filter, Mod)
-Settings     (Display, Storage, MIDI, System, Calibrate)
-Diagnostics  (ESP32, Daisy, Audio, Link, Storage, MIDI)
-```
+Use tabs for children that share a subject or are too small to justify a
+separate navigation step. Reuse the shared tab-group chrome; do not copy its
+styles into pages. A tab switch must not start work that outlives the tab.
 
-**"Play" rather than "Keyboard"**, because the group now holds two different
-instruments and one of them is not a keyboard. It is also the only verb among
-five nouns, which is fitting: the other four are places where the instrument is
-configured, and this is the one where it is played.
+## 3. Play surfaces
 
-## 2. The grouping rule — tabs vs list
+Pads and Keys share note lifecycle behavior: press/release note events,
+`PRESS_LOST` release, release-all on exit or transpose, latch, panic, and the
+live-parameter strip. Only their layout and note map differ.
 
-One rule, so the structure is predictable rather than per-page taste:
+## 4. Page ownership
 
-- **Tabs when the children share a subject.** Sample's four views are all views
-  of *the current sample*; Voice's five are all parameter groups of *one voice*;
-  Diagnostics' six are all facets of *the running system*. Tabs make switching
-  cheap and, more importantly, carry the subject across the switch.
-- **A menu list when the children are unrelated**, *and* deep enough that
-  arriving at one is worth a navigation step.
+Each page owns one concern. The Track/Patch proposal may change terminology,
+but it must preserve this boundary. Sample selection and current-sample state
+are explicit shared UI state; pages must not infer either from a previous page.
 
-**Settings is tabbed, against the second rule as originally written.** This
-document first put Settings in a menu list because its children share no
-subject, and that reasoning still holds — Display and MIDI have nothing to do
-with each other. What the rule missed is that sharing a subject is not the only
-thing that makes tabs the right shape. Settings' five children are *short*: two
-of them are four rows, one is read-only, and CV Calibration is the only one deep
-enough to feel like a place. A menu list makes the user pay a push and a pop to
-cross between five screens that each fit on one, and it buried CV Calibration
-two levels down from the main menu. So the rule is really two conditions, either
-of which is enough: **tab children that share a subject, or that are individually
-too small to be worth a navigation step.** Settings qualifies on the second.
+## 5. Diagnostics
 
-This is not only cosmetic. The Sample group's shared subject fixes a real gap:
-roadmap 1.5.1 item 7 records that the edit page "edits whatever the browser last
-loaded, with no way to change it". Under a shared-subject tab group, selecting in
-Browse or Manage *is* the way to change it, and the Shift-row `Select` key that
-item reserved becomes unnecessary.
+Keep one authoritative source for each figure. Backend uptime comes from the
+heartbeat; diagnostics telemetry supplies backend heap and sample-RAM figures.
+Storage counters remain on the Storage tab rather than being duplicated on the
+Daisy tab.
 
-**Look and feel is already established** by the diagnostics page and must be
-matched exactly rather than reinvented: `lv_tabview` with a 56 px tab bar,
-`montserrat_22` bar text, dimmed inactive labels, and the selected tab drawn
-filled with white text over a 4 px blue bottom border. Reuse those styles from
-one place rather than copying the literals into each new page.
+## 6. Lifecycle
 
-## 3. Play — two surfaces, one behaviour
+Pages create and destroy their own timers, listeners, and LVGL objects. A page
+that is not active must not receive updates or retain a listener into destroyed
+state.
 
-Play stays top level because it is currently the **only** way to trigger a
-digital voice without external MIDI hardware, and therefore the only way to hear
-the filter, envelope or any live parameter edit at all
-(`features/digital-voice-audition.md`). It is a *performance* surface, not a
-configuration screen, so it does not belong under Voice: Voice is where a sound
-is designed, Play is where it is used.
+## 7. Runtime rules
 
-Two children, because they are genuinely different instruments:
+- Nothing outside the UI task touches LVGL.
+- The tab bar, header, and softkey row reduce usable page height; verify full
+  pages and scrolling on the physical panel.
+- Keep navigation and refresh work bounded; the UI task must never block.
 
-- **Pads** — the existing 4×4 grid. Cell *n* plays `root + n`, so it is 16
-  chromatic semitones today and becomes a kit (pad → sample) when the instrument
-  model lands. Good for drums and for one-handed triggering.
-- **Keys** — a piano layout: full-height white keys with narrower black keys
-  overlaid at the right positions, spanning two to three octaves. Good for
-  judging pitch and for playing a sampled instrument melodically, which a
-  chromatic grid makes needlessly hard — a grid gives no visual cue which cell
-  is a C.
+## Related
 
-**They must share behaviour, not just style.** Everything except the layout and
-the note map is common: note-on/off with press/release (never `CLICKED`, which
-fires on release and yields zero-length notes), `PRESS_LOST` treated as a
-release so a slid-off finger cannot hang a note, per-key memory of the note
-number actually sent so a transpose between press and release cannot end the
-wrong note, release-all on exit and on transpose, Latch, the panic key, and the
-voice-parameter strip with its encoder and `Value ±` fallbacks.
-
-That is too much to duplicate, and duplicating it is how the two surfaces would
-drift into behaving differently. Factor it into a shared play-surface base that
-owns note state and parameters; each child supplies only its layout and its
-`index → note` mapping. The single-touch constraint (§7) applies to both, so
-Latch and the encoder path must exist on both.
-
-## 4. Page disposition
-
-| Today | Becomes | Note |
-|---|---|---|
-| `Sample Browser` | Sample ▸ Browse | Unchanged content |
-| `Edit Sample` | Sample ▸ Edit | Gains a real sample selection from the shared subject |
-| `Sample Manager` | Sample ▸ Manage | Becomes the group's default tab |
-| `ui_sample_record_page` | Sample ▸ Record | Not currently reachable from the menu at all |
-| `Voice` | Voice ▸ tabs | Split its current single view into Sample/Env/Amp/Filter/Mod |
-| `Modulation` menu | Voice ▸ Mod | **Deleted.** Its three entries are logging stubs; nothing is lost |
-| `ui_sample_memory_page` | Diagnostics ▸ Daisy | It is a memory breakdown, which is what that tab is for |
-| `CV Calibration` | Settings ▸ Calibrate | Was already a Settings *list* entry, two levels from the main menu; becomes a tab |
-| `Keyboard` | Play ▸ Pads | Stays top level, regrouped (§3) |
-| — | Play ▸ Keys | New: piano layout sharing the pads' behaviour |
-
-## 5. Diagnostics — splitting System into ESP32 and Daisy
-
-The current `System` tab mixes both MCUs across eight cards (`ESP32 CPU`,
-`DAISY CPU`, heap, PSRAM, LVGL pool, tasks, uptime, min-free-heap), with a
-comment admitting the two-core ESP32 figures were folded into one tile because
-"it cost a slot the Daisy needed". Splitting removes that pressure.
-
-- **ESP32 tab**: CPU0 and CPU1 as separate tiles, each with its own sparkline
-  and bar — the current single tile shows one sparkline of the busier core,
-  which hides an imbalance between them. Plus internal heap, PSRAM, LVGL pool,
-  task count, min-free-heap, uptime. All ESP32-local and live today.
-- **Daisy tab**: engine CPU (average and max), sample RAM breakdown (small pool,
-  large pool, largest free block, failed allocs, resident count), heap, uptime,
-  and the resident-sample table absorbed from the standalone Sample Memory page.
-
-  **Correction (stage 7, as built).** This list originally also said "SD
-  counters". It should not: the Storage tab already carries the SD card, its
-  throughput, latency, errors and last FRESULT/HAL result across five cards, and
-  duplicating them onto Daisy would give two places to read one number and two
-  places for them to disagree. The split is by *which machine owns the figure*
-  only where that resolves an ambiguity; SD is unambiguous already because only
-  the Daisy has the card. The Daisy tab's six card slots go to engine CPU, the
-  two pools, largest-free-block, and the two placeholders.
-
-**What is available and what is not.** `DiagPushMessage` already carries
-`engine_cpu_x10`, `engine_cpu_max_x10`, `sample_ram_free`, `sample_ram_largest`,
-`sample_failed_allocs` and `sample_count`, and `SampleMemStatusMessage` carries
-the full small/large pool breakdown. **Daisy heap and uptime are carried by
-neither** — they are the one genuine protocol gap in this redesign. Adding them
-is two fields on `DiagPushMessage`, and per the cross-cutting rules that means
-`protocol.h` + a round-trip test + an `inter-mcu-protocol.md` row in the same
-commit. Until then those two cards must render as explicitly unavailable rather
-than as zero: a zero uptime looks like a crash loop.
-
-**Correction (stage 8, as built).** Half of that paragraph was wrong, and this
-is the third time this document's premises have been. Uptime *was* already on
-the wire: `HeartbeatMessage::uptime_ms` has carried it since the link existed,
-the ESP32 has always stored it in `wavex_backend_heartbeat_t`, and the Daisy tab
-was already reading that same struct one card over for engine CPU. So the gap
-was one field, not two, and the fix was one protocol change plus one render that
-needed no protocol change at all.
-
-Uptime is therefore rendered from the heartbeat rather than copied into
-`MSG_DIAG_PUSH`. That is the same argument this document makes above for keeping
-SD counters off the Daisy tab — two places to read one number is two places for
-them to disagree — and it has a second payoff: the heartbeat is unconditional,
-so uptime survives the diagnostics subscription being closed, where a
-`MSG_DIAG_PUSH` copy would not. Only `heap_total` / `heap_free` were added, and
-they were appended **after** `interval_ms` rather than filed next to the other
-memory fields, so every pre-existing field keeps its offset and a backend still
-running the 94-byte layout parses with the two new fields reading zero. That is
-why `PROTOCOL_VERSION` did not move.
-
-## 6. Staging
-
-One verified commit each. Status is recorded against the code, not against the
-plan — this list has already been overtaken once (stage 5 was written as
-"absorb Modulation and delete that menu", but stage 4's commit had deleted the
-menu, leaving only the tabbing to do).
-
-1. **This document.** — **Done.**
-2. **Shared tab-group scaffolding** — factor the diagnostics tabview styling into
-   a reusable helper so the new groups cannot drift from it, with diagnostics
-   itself converted to use it (proving it is really shared, not a copy).
-   **Done**: `ui_tab_group.{h,cpp}` (`tabGroupCreate`/`tabGroupAddTab`) plus
-   `ui_palette.h`.
-3. **Play group** — extract the shared play-surface base from the existing
-   keyboard page, re-land it as Pads, add Keys, tab them together.
-   **Done**: `pages/ui_play_page.cpp`, one page owning its own tabview.
-4. **Sample group** — tabs over the existing browse/edit/manage/record pages;
-   main menu entry replaces three. **Done**: `UITabHostPage` +
-   `createSampleGroup()`. The same commit deleted the Modulation menu.
-5. **Voice group** — tabs over the five stages. **Done**:
-   `pages/ui_voice_page.cpp` builds its own tabview with the shared chrome,
-   tabs `Sample / Env / Amp / Filter / Mod` per §4. *Not verified on the panel.*
-6. **Settings group** — fold CV Calibration in; fill the remaining stubs or mark
-   them plainly as unimplemented rather than logging and returning. **Done**:
-   `createSettingsGroup()` with Display / Storage / MIDI / System / Calibrate.
-   Brightness, MIDI receive channel and the System tab are real; every other
-   control states on the panel what it does not do rather than logging and
-   returning. `Display ▸ Contrast` was deleted rather than marked — MIPI-DSI /
-   HX8394 has no contrast control, so the row could never have done anything.
-   Nothing persists: the frontend has no NVS code at all, and the pages say so.
-   The page was also laid out for a 480x320 screen with a fixed 460x250 list,
-   so it clipped past six rows — which had made CV Calibration's eleven
-   unusable.
-7. **Diagnostics split** — ESP32 (CPU0/CPU1 separate) and Daisy tabs; move the
-   sample-memory page's content into the Daisy tab. **Done.** Six tabs: ESP32,
-   Daisy, Audio, Link, Storage, MIDI. `ui_sample_memory_page.{h,cpp}` is deleted
-   and the Diagnostics softkey that pushed it is gone; its pool figures are
-   cards and its loaded-sample text block is a table on the Daisy tab. Three
-   things were found in passing and fixed in the same commit, since each was a
-   figure the page was reporting wrongly:
-   - Sample-memory was never a **main menu** entry, contrary to how this stage
-     was scoped. It was only ever reachable from Diagnostics softkey 5, so
-     `ui_main_menu.cpp` needed no change at all.
-   - The Link tab's `FRAMES/s` card rendered the Daisy's CPU *percentage* — the
-     title had been updated when Daisy CPU moved to the System tab but the
-     refresh had not. It now shows the packet rate over a 1 s window, which is
-     what the card has claimed to show since that move.
-   - The sparkline was drawn at y=118 over the sub-text line at y=112, so the
-     context line on every sparkline card was invisible. Moved to y=140.
-
-   Tab bodies are now built on first show rather than at page entry (§7's
-   vertical-space and timer notes still hold; this is the page-entry cost noted
-   in `docs/backlog.md`). Six tabs of eight cards would otherwise have made the
-   worst page-entry cost in the UI about 20% worse.
-8. **Daisy heap + uptime** — the protocol addition, with its round-trip test and
-   doc row, so the two placeholder cards become live. **Done**, with the scope
-   corrected in §5: only heap needed the wire. `DiagPushMessage` gains
-   `heap_total`/`heap_free` (appended after `interval_ms`, so no
-   `PROTOCOL_VERSION` bump — see §5); uptime comes from the heartbeat the tab
-   was already reading. Both cards now carry the `wire` tag instead of `new`,
-   and each falls back to `-` with a stated reason when its source is stale,
-   which is what the placeholders were protecting.
-
-   The Daisy's free-heap figure is **headroom**, not the allocator's true free
-   total: it is the gap between `_sbrk(0)` and the top of the SRAM heap region,
-   because `--specs=nano.specs` means `mallinfo()` cannot be linked (it drags
-   full newlib's `mallocr.o` in beside `nano-mallocr.o` and the link fails on a
-   duplicate `_malloc_r`). A block taken and later freed therefore still reads
-   as used. That errs toward under-reporting free, which is the right direction
-   for a headroom gauge, and this firmware allocates during init and forbids it
-   in the audio path, so the discrepancy is small and static.
-
-   Two things were found in passing, both in `protocol.h`:
-   - `PARAM_LFO_RATE`/`PARAM_LFO_DEPTH` were `0x08`/`0x09` — the same values as
-     `PARAM_PAN`/`PARAM_PITCH`, in the same enum. Dead (nothing sends or handles
-     the LFO ids), so never a live mis-route, but one wiring-up away from being
-     one. Moved to `0x16`/`0x17`, clear of the `0x0B`–`0x15` block
-     `param-locks-and-modulation.md` §1 reserves. `PAN`/`PITCH` keep their wire
-     values, so nothing on the wire changed.
-   - That same design doc still lists `PARAM_PAN = 0x0C` as a *future* id, but
-     `PAN` has been live at `0x08` since the Voice page shipped. Recorded in
-     `docs/backlog.md` rather than resolved here — reconciling a target id space
-     is not a diagnostics-card change.
-
-   *Not verified on hardware:* both figures are compile- and host-test-verified
-   only. Neither has been read off a running Daisy.
-
-**Two shapes of tab group, not one.** Stage 2 shares the *chrome*, not the
-hosting. Where the children are substantial independent pages (Sample), a
-`UITabHostPage` hosts them as `UIPage`s and forwards the page contract to
-whichever tab is selected. Where the children are views of one page's own state
-(Play, Voice), the page builds its own tabview, because the readouts that state
-needs — Play's parameter strip, Voice's name and status line — must survive a
-tab switch and so cannot live in a tab body. Both call `tabGroupCreate()`, which
-is what stage 2 was for.
-
-## 7. Risks worth stating
-
-- **Vertical space.** A tab bar costs 56 px on top of the header and the 100 px
-  softkey row. Pages that were already full (the edit page's waveform, the
-  browser's list) get less. Check each converted page against the real panel,
-  not the simulator, before calling a stage done.
-- **Softkey collision.** Grouped pages still need their own softkeys, and the
-  row is six wide. The keyboard page already had to move root-note controls to
-  the Shift row for this reason; expect the same pressure on Sample ▸ Edit.
-- **Nothing in the UI task may block, and nothing outside it may touch LVGL.**
-  Both rules have been broken before and both froze the display. Tab switching
-  runs on the UI task, but the per-tab refresh timers must not start work that
-  outlives the tab.
-- **Muscle memory.** This moves every entry the user knows. Worth doing in one
-  release rather than drifting over several.
+- [UI architecture](ui-architecture.md)
+- [UI design constraints](ui-design-constraints.md)
+- [Outstanding hardware verification](roadmap.md#outstanding-hardware-verification)

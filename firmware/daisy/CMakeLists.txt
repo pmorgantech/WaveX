@@ -148,7 +148,7 @@ else()
     add_compile_definitions(WAVEX_PROFILING_ENABLED=0)
 endif()
 
-# Debug/release build profile (docs/features/build-profiles.md §4). Master
+# Debug/release build profile (README.md#build-profiles). Master
 # switch for the debug feature surface: logging_config.h defaults
 # WAVEX_DEBUG_LOGGING_ENABLED and WAVEX_DEBUG_HARNESS_ENABLED from it, so
 # `make BUILD_DIR=build-release CMAKE_EXTRA_ARGS="-DWAVEX_BUILD_DEBUG=OFF"`

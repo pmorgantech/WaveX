@@ -235,7 +235,7 @@ daisy-stageb:
 	@echo "✅ Daisy Seed Backend (Stage B flag set) build completed successfully!"
 	@echo "========================================================================"
 
-# Release-profile builds (docs/features/build-profiles.md). WAVEX_BUILD_DEBUG=0
+# Release-profile builds (README.md#build-profiles). WAVEX_BUILD_DEBUG=0
 # drops the console command surface - runtime log-level control on both boards,
 # plus screenshots on the ESP32 - from the image. Each profile builds into its
 # own directory: the Daisy wrapper only re-runs CMake configure when
