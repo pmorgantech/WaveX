@@ -70,6 +70,18 @@ versioning and release process.
   Browser's listing, so any resident sample is editable regardless of how
   it got there. ESP32 build and full host suite (174 tests) verified green.
 
+- SFZ import did not search subfolders for a sample (second of the
+  2026-09-02 bench findings): `Sfz::detail::ResolvePath` is SFZ-spec-correct
+  (`sample=` relative to the `.sfz`, `default_path=` prepended), but
+  real-world packs are routinely rearranged - the `.sfz` moved next to, or
+  above, its own `Samples/` folder - and nothing looked further than the
+  one resolved path. `sfz_loader.cpp`'s `ProbeCurrent()` now falls back to a
+  depth-limited (2 levels), case-insensitive basename search of the `.sfz`'s
+  own directory when the resolved path does not open, main-loop FatFs only;
+  the hit directory is cached and tried first so a multi-sample instrument
+  does not walk the tree once per sample. Daisy device build verified green;
+  bench verification with a real rearranged sample pack still open.
+
 ### Added
 
 - Retired the bare-WAV note-on fallback's any-channel behaviour (roadmap

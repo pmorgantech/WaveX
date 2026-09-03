@@ -1,5 +1,7 @@
 #include "sfz_loader.hpp"
 
+#include <strings.h>  // for strcasecmp
+
 #include "comm/daisy_uart_link.h"
 #include "comm/log_ring.h"
 #include "config/hardware_config.h"
@@ -73,6 +75,25 @@ static uint32_t s_loaded_bytes = 0;
 static uint32_t s_current_written = 0;
 static uint8_t s_last_percent = 0xFF;
 
+// Depth-limited fallback search (docs/backlog.md "SFZ import does not search
+// subfolders for samples"). Sfz::detail::ResolvePath is SFZ-spec-correct -
+// sample= relative to the .sfz, default_path= prepended - but real-world
+// packs are routinely rearranged, moving the .sfz next to, or above, its own
+// Samples/ folder. Only used when the resolved path does not open.
+static constexpr uint8_t kFallbackSearchDepth = 2;  // levels of subfolders below the .sfz's own
+static constexpr uint8_t kMaxFallbackSubdirs = 12;  // per directory level
+
+// The directory the last fallback hit came from, tried first on the next
+// probe: a multi-sample instrument's files are almost always all in one
+// place, so this is what keeps a 32-sample instrument from walking the tree
+// 32 times. Cleared per Begin(); empty means "nothing cached yet".
+static char s_fallback_dir[Sfz::kMaxPath] = {};
+
+// Recursion needs one subdirectory-name buffer per depth level, sized like
+// fs_browse.cpp's directory listing (kept out of the main-loop stack for the
+// same reason - see its own comment on all_entries).
+static char s_fallback_subdirs[kFallbackSearchDepth + 1][kMaxFallbackSubdirs][Sfz::kMaxPath];
+
 const char* Basename(const char* path) {
     if (!path)
         return "";
@@ -129,13 +150,132 @@ uint32_t AvailableBytes(SampleMemMgr& memory) {
 
 enum class ProbeResult : uint8_t { Ok, Missing, Invalid };
 
+// The .sfz's own directory, the search root: same slash logic as
+// Sfz::detail::ResolvePath, kept local rather than shared since that one is
+// embedded inline there and this module already owns all FatFs access.
+bool SfzDirectory(const char* sfz_path, char* out, size_t capacity) {
+    const char* slash = std::strrchr(sfz_path, '/');
+    const char* backslash = std::strrchr(sfz_path, '\\');
+    if (!slash || (backslash && backslash > slash)) {
+        slash = backslash;
+    }
+    if (!slash) {
+        return false;
+    }
+    const size_t length = static_cast<size_t>(slash - sfz_path);
+    return length > 0 && Sfz::detail::Copy(out, capacity, sfz_path, length);
+}
+
+// Looks for a file named `basename` (case-insensitive - FAT is) directly in
+// `dir`, then recurses into each of `dir`'s subfolders while
+// `subfolder_depth_remaining` allows. Subfolder names are collected in a
+// second pass per level (indexed by depth in s_fallback_subdirs) so this
+// directory's handle closes before any recursion opens another. Main-loop
+// FatFs only - never call this from the audio callback.
+bool SearchForSample(const char* dir,
+                     const char* basename,
+                     uint8_t subfolder_depth_remaining,
+                     char* out,
+                     size_t capacity) {
+    DIR d;
+    if (f_opendir(&d, dir) != FR_OK) {
+        return false;
+    }
+
+    auto& subdirs = s_fallback_subdirs[subfolder_depth_remaining];
+    uint8_t subdir_count = 0;
+    bool found = false;
+
+    FILINFO fno;
+#if FF_USE_LFN
+    char lfn_buf[Sfz::kMaxPath];
+    fno.lfname = lfn_buf;
+    fno.lfsize = sizeof(lfn_buf);
+#endif
+
+    for (;;) {
+        if (f_readdir(&d, &fno) != FR_OK || fno.fname[0] == '\0') {
+            break;
+        }
+#if FF_USE_LFN
+        const char* name = (fno.lfname && fno.lfname[0]) ? fno.lfname : fno.fname;
+#else
+        const char* name = fno.fname;
+#endif
+        if (fno.fattrib & AM_DIR) {
+            if (subfolder_depth_remaining > 0 && subdir_count < kMaxFallbackSubdirs &&
+                Sfz::detail::Copy(subdirs[subdir_count], Sfz::kMaxPath, dir) &&
+                Sfz::detail::AppendPath(subdirs[subdir_count], Sfz::kMaxPath, name, true)) {
+                ++subdir_count;
+            }
+            continue;
+        }
+        if (strcasecmp(name, basename) == 0 && Sfz::detail::Copy(out, capacity, dir) &&
+            Sfz::detail::AppendPath(out, capacity, name, true)) {
+            found = true;
+            break;
+        }
+    }
+    f_closedir(&d);
+
+    if (found) {
+        return true;
+    }
+    for (uint8_t i = 0; i < subdir_count; ++i) {
+        if (SearchForSample(subdirs[i],
+                            basename,
+                            static_cast<uint8_t>(subfolder_depth_remaining - 1),
+                            out,
+                            capacity)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Tries the cached hit directory first (a single, non-recursive directory
+// scan), then a fresh depth-limited search from the .sfz's own directory,
+// caching where that one landed for the next sample.
+bool FindSampleFallback(const char* missing_path, char* out, size_t capacity) {
+    const char* base = Basename(missing_path);
+    if (!base || *base == '\0') {
+        return false;
+    }
+    if (s_fallback_dir[0] != '\0' && SearchForSample(s_fallback_dir, base, 0, out, capacity)) {
+        return true;
+    }
+
+    char sfz_dir[Sfz::kMaxPath];
+    if (!SfzDirectory(s_request.path, sfz_dir, sizeof(sfz_dir))) {
+        return false;
+    }
+    if (!SearchForSample(sfz_dir, base, kFallbackSearchDepth, out, capacity)) {
+        return false;
+    }
+    const char* found_base = Basename(out);
+    const size_t dir_len = found_base ? static_cast<size_t>(found_base - out) : 0;
+    if (dir_len > 0 && dir_len <= sizeof(s_fallback_dir)) {
+        std::memcpy(s_fallback_dir, out, dir_len - 1);  // drop AppendPath's trailing '/'
+        s_fallback_dir[dir_len - 1] = '\0';
+    }
+    return true;
+}
+
 ProbeResult ProbeCurrent() {
-    const char* path = s_mapped.sample_paths[s_plan.entries[s_index].path_zone];
+    char* path = s_mapped.sample_paths[s_plan.entries[s_index].path_zone];
     FRESULT fr = f_open(&s_file, path, FA_READ);
     if (fr != FR_OK) {
-        WaveX::Log::PrintLine(
-            "SFZ_PROBE: sample %u missing (%d): '%s'", (unsigned)s_index, (int)fr, path);
-        return ProbeResult::Missing;
+        char candidate[Sfz::kMaxPath];
+        if (FindSampleFallback(path, candidate, sizeof(candidate)) &&
+            f_open(&s_file, candidate, FA_READ) == FR_OK) {
+            WaveX::Log::PrintLine(
+                "SFZ_PROBE: sample %u fallback resolved to '%s'", (unsigned)s_index, candidate);
+            Sfz::detail::Copy(path, Sfz::kMaxPath, candidate);
+        } else {
+            WaveX::Log::PrintLine(
+                "SFZ_PROBE: sample %u missing (%d): '%s'", (unsigned)s_index, (int)fr, path);
+            return ProbeResult::Missing;
+        }
     }
     s_file_open = true;
     WaveX::Wav::WavInfo wav_info;

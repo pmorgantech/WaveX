@@ -993,6 +993,22 @@ main-loop FatFs only. Log which path a fallback resolved to. Cache the
 directory the first hit was found in so a 32-sample instrument does not walk
 the tree 32 times.
 
+**Resolved 2026-09-02**, without the bench log's exact `SFZ_PROBE` line - the
+root cause above already fully explained the symptom, so the fix proceeded on
+that analysis alone. `sfz_loader.cpp` gains `SearchForSample()`
+(case-insensitive basename match via `strcasecmp`, since FAT is; two-pass per
+directory so a level's handle closes before any recursion opens another) and
+`FindSampleFallback()`, called from `ProbeCurrent()` only when the spec-correct
+`Sfz::detail::ResolvePath` result fails to open. The resolved fallback path
+overwrites `s_mapped.sample_paths[...]` in place, so `OpenSample()`'s later
+read picks it up automatically. The hit directory is cached in
+`s_fallback_dir` and tried first (a single non-recursive scan) before any
+further sample falls back to the full depth-2 search from the `.sfz`'s own
+directory. Runs from `PumpInstrumentLoad()` on the main loop
+(`main.cpp`), never the audio callback - confirmed via its call chain, not
+inference. Daisy device build verified green; still needs a bench pass with a
+real rearranged sample pack, same as the rest of this stage.
+
 ---
 
 ## Sample Edit has no way to choose its sample
