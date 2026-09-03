@@ -11,6 +11,8 @@ versioning and release process.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-02
+
 ### Documentation
 
 - `features/track-and-patch-model.md` (new, **proposed - decisions pending**):
