@@ -51,6 +51,11 @@ versioning and release process.
 
 ### Changed
 
+- The "Voice" page is now the **Instrument** page (main menu, page title,
+  Init default name and status). It edits the selected Track's Instrument;
+  the Save/Load softkeys say they wait on the `.wxi` Instrument file rather
+  than "a preset format". Track/Instrument model stage 1, strings-and-docs
+  half; the identifier rename follows separately.
 - Daisy region fades no longer divide per sample. `RegionFade` is prepared
   once per voice per audio block and the per-sample gain is a multiply and a
   table lerp; the previous per-sample 64-bit integer divide was a 100+-cycle

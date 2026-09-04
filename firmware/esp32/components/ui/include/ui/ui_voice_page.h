@@ -1,4 +1,5 @@
-// WaveX Voice / Preset editor
+// WaveX Instrument editor (the "Instrument" page; class name follows in the
+// mechanical rename)
 #pragma once
 
 #include "input_event.h"
@@ -12,10 +13,10 @@
 namespace wavex_ui {
 
 /**
- * @brief Edits one voice as five tabbed parameter groups.
+ * @brief Edits the selected Track's Instrument as five tabbed parameter groups.
  *
  * Tabs rather than a list because every group is a property of *the same
- * voice* - the rule `docs/ui-information-architecture.md` §2 pins, and the
+ * Instrument* - the rule `docs/ui-information-architecture.md` §2 pins, and the
  * same reason the Sample group is tabbed. The tab set and its order come from
  * §4: Sample, Env, Amp, Filter, Mod.
  *
@@ -29,7 +30,7 @@ namespace wavex_ui {
  * Like the Play group, this is a single `UIPage` that builds its own tabview
  * rather than a `UITabHostPage` over child pages. The state being edited -
  * which sample, every parameter value, whether the encoder is in edit mode -
- * is voice-scoped, not tab-scoped, and the header and status line that report
+ * is Instrument-scoped, not tab-scoped, and the header and status line that report
  * it therefore sit ABOVE the tabview. Built into a tab body they would vanish
  * on every tab switch, taking the only readout of what is being edited with
  * them.
@@ -39,24 +40,25 @@ namespace wavex_ui {
  * - **SAMPLE, ENV, AMP, FILTER are live.** SAMPLE cycles through resident
  *   samples (probing inter_mcu_get_sample_meta() the same way the Sample
  *   Manager page's list does - there is no dedicated "list of loaded ids"
- *   query) and SLOT chooses which instrument slot (0..15, MSG_NOTE_ON's
+ *   query) and TRACK is the shared selected Track (0..15, MSG_NOTE_ON's
  *   channel) that sample is bound to; both ride MSG_SAMPLE_SELECT. ENV/AMP/
  *   FILTER map onto the PARAM_* control changes the engine already applies to
  *   sounding voices, so edits are audible immediately. Picking a DIFFERENT
- *   already-resident sample for a slot can also be done from the Sample
+ *   already-resident sample for a Track can also be done from the Sample
  *   Manager page, which has the fuller list UI.
  * - **MOD is a placeholder.** Nothing in the protocol carries a modulation
  *   source, destination or depth, and inventing a matrix in the UI before the
  *   engine has one would be drawing controls that do nothing - the mistake this
  *   codebase has made before (see the sample edit page's "drawn but inert"
  *   note). The tab is shown, marked, and left unwired.
- * - **Presets do not persist.** Naming and save/load need an on-disk format and
- *   protocol messages that do not exist yet; the name is held in RAM so the
- *   entity is real even while its storage is not.
+ * - **Instruments do not persist.** Naming and save/load need the `.wxi` file
+ *   and protocol messages that do not exist yet (track-and-patch-model.md
+ *   stage 4); the name is held in RAM so the entity is real even while its
+ *   storage is not.
  */
 class UIVoicePage : public UIPage {
    public:
-    const char* name() const override { return "Voice"; }
+    const char* name() const override { return "Instrument"; }
 
     void onEnter(lv_obj_t* parent) override;
     void onExit() override;
@@ -69,7 +71,7 @@ class UIVoicePage : public UIPage {
 
    private:
     static constexpr int kStageCount = static_cast<int>(Stage::kCount);
-    /// Widest stage is now Sample, at five (SAMPLE/SLOT/PITCH/PAN/GAIN).
+    /// Widest stage is now Sample, at five (SAMPLE/TRACK/PITCH/PAN/GAIN).
     static constexpr int kMaxParams = 5;
 
     /// One editable parameter. `wire_param` is kParamNone for anything the
@@ -101,13 +103,13 @@ class UIVoicePage : public UIPage {
     /// are slow to enter, not slow to run).
     bool stage_built_[kStageCount] = {};
 
-    // Current value of every parameter, by stage and slot. paramsForStage()
+    // Current value of every parameter, by stage and param index. paramsForStage()
     // describes the chain and its defaults; this holds what the user has since
     // moved, so the description stays in one place and the state in another.
     uint16_t stage_values_[kStageCount][kMaxParams] = {};
     bool values_seeded_ = false;
 
-    char voice_name_[24] = "Init Voice";
+    char voice_name_[24] = "Init Instrument";
     uint16_t sample_id_ = 0;
     int stage_ = 0;  ///< index into Stage, and the active tab index
     int param_ = 0;  ///< index into the focused stage's parameters

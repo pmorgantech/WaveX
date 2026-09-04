@@ -1,4 +1,5 @@
-// WaveX Voice / Preset editor
+// WaveX Instrument editor (the "Instrument" page; class name follows in the
+// mechanical rename)
 #include "ui/ui_voice_page.h"
 
 #include <esp_log.h>
@@ -36,7 +37,7 @@ const char* const kStageNames[] = {"Sample", "Env", "Amp", "Filter", "Mod"};
 
 // Content geometry. The panel is 720x1280 rotated to 1280x720; the navigator
 // takes UI_HEADER_HEIGHT (75) off the top and UI_HOTKEY_HEIGHT (100) off the
-// bottom, the voice strip takes 84 more and the tab bar 56. Positions are
+// bottom, the Instrument strip takes 84 more and the tab bar 56. Positions are
 // absolute against that, matching the Play and diagnostics pages rather than
 // introducing a second convention.
 constexpr int kDesignW = 1280;
@@ -63,10 +64,10 @@ int UIVoicePage::paramsForStage(Stage s, Param* out, int max) const {
 
     switch (s) {
         case Stage::Sample:
-            // SAMPLE and SLOT are not MSG_CONTROL_CHANGE destinations -
+            // SAMPLE and TRACK are not MSG_CONTROL_CHANGE destinations -
             // stepParam() special-cases both. SAMPLE cycles which resident
-            // sample this voice addresses; SLOT chooses which instrument slot
-            // (MIDI channel) that sample is bound to for note-on playback.
+            // sample this Instrument addresses; TRACK is the shared selected
+            // Track (MIDI channel) that sample is bound to for note-on playback.
             // Both ride MSG_SAMPLE_SELECT (roadmap Phase 2.5 item 1, "retire
             // the fallback"). PITCH/PAN/GAIN are live: the engine applies all
             // three to sounding voices.
@@ -133,7 +134,7 @@ void UIVoicePage::seedValues() {
 
 // Which Track (0..15) the Sample tab's TRACK control currently targets.
 // Shared with Play, Sample Manager and the Browser's SFZ load target
-// (current_track.h) rather than kept in stage_values_ like the voice params:
+// (current_track.h) rather than kept in stage_values_ like the Instrument params:
 // a Track selection that only this page knew about was one of the reasons
 // "which Track?" had a different answer on every page.
 uint8_t UIVoicePage::currentSlot() const {
@@ -141,8 +142,8 @@ uint8_t UIVoicePage::currentSlot() const {
 }
 
 // Steps sample_id_ to the next/previous resident sample (wrapping) and
-// re-binds it to the currently-selected slot - the Sample tab's "which
-// sample this voice plays" control (roadmap Phase 2.5 item 1, "retire the
+// re-binds it to the selected Track - the Sample tab's "which sample this
+// Instrument plays" control (roadmap Phase 2.5 item 1, "retire the
 // fallback"). There is no "list of loaded ids" query, so this probes
 // inter_mcu_get_sample_meta() over the same id range the Sample Manager
 // page's list does, rather than inventing a second source of truth for it.
@@ -203,7 +204,7 @@ void UIVoicePage::onEnter(lv_obj_t* parent) {
     }
     lv_obj_add_event_cb(tabview_, &UIVoicePage::tabChangedCb, LV_EVENT_VALUE_CHANGED, this);
 
-    // The voice edits whatever sample is selected. Asking for metadata means
+    // The Instrument edits whatever sample is selected. Asking for metadata means
     // the header can name it rather than showing a bare id.
     seedValues();
 
@@ -241,7 +242,7 @@ void UIVoicePage::onExit() {
     }
 }
 
-// The voice-scoped strip: which voice and sample on the first line, the last
+// The Instrument-scoped strip: which Instrument, Track and sample on the first line, the last
 // thing the page had to say on the second. Above the tabview rather than in a
 // tab body, so switching stage does not hide it (see the class note).
 void UIVoicePage::buildStrip(lv_obj_t* parent) {
@@ -376,7 +377,7 @@ void UIVoicePage::selectStage(int stage) {
     refreshHeader();
     refreshParams();
     UINavigator::instance().refreshSoftkeys();
-    ESP_LOGI(TAG, "Voice -> %s", kStageNames[stage_]);
+    ESP_LOGI(TAG, "Instrument -> %s", kStageNames[stage_]);
 }
 
 void UIVoicePage::refreshHeader() {
@@ -640,11 +641,11 @@ std::array<Softkey, NUM_SOFTKEYS> UIVoicePage::getShiftedSoftkeys() {
     // equivalent at all.
     keys[1] = {"< Stage", [this]() { moveStage(-1); }};
     keys[2] = {"Stage >", [this]() { moveStage(+1); }};
-    // Save/Load are shown but unwired, and say why: a preset needs an on-disk
-    // format and protocol messages that do not exist. Better a labelled gap
-    // than a button that appears to work.
-    keys[3] = {"Save", nullptr, false, "needs a preset format on disk"};
-    keys[4] = {"Load", nullptr, false, "needs a preset format on disk"};
+    // Save/Load are shown but unwired, and say why: an Instrument needs the
+    // .wxi file and protocol messages that do not exist (track-and-patch-model
+    // stage 4). Better a labelled gap than a button that appears to work.
+    keys[3] = {"Save", nullptr, false, "needs the Instrument file (.wxi)"};
+    keys[4] = {"Load", nullptr, false, "needs the Instrument file (.wxi)"};
     keys[5] = {"Init", [this]() {
                    // Re-send every wired parameter at its default so the engine
                    // and the page agree again.
@@ -658,10 +659,10 @@ std::array<Softkey, NUM_SOFTKEYS> UIVoicePage::getShiftedSoftkeys() {
                            }
                        }
                    }
-                   snprintf(voice_name_, sizeof(voice_name_), "Init Voice");
+                   snprintf(voice_name_, sizeof(voice_name_), "Init Instrument");
                    refreshHeader();
                    refreshParams();
-                   refreshStatus("Voice reset to defaults");
+                   refreshStatus("Instrument reset to defaults");
                }};
     return keys;
 }

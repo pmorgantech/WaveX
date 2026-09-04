@@ -1,7 +1,7 @@
 # WaveX Implementation Roadmap
 
 **Status:** Canonical implementation order. **Current phase:** Phase 2.
-**Last updated:** 2026-09-02.
+**Last updated:** 2026-09-04.
 
 This document lists only open work. Completed work belongs in `CHANGELOG.md`
 and git history. Code-complete but unverified hardware behavior remains open in
@@ -85,8 +85,9 @@ parts of the mixer/modulation path are built. The end state is
 the two-oscillator Instrument is designed there, §3). Open work, in that
 document's stage numbering:
 
-1. Rename (stage 1): Voice page → Instrument, remaining "slot"/"Patch"
-   strings, then the mechanical identifier rename.
+1. Rename (stage 1): the UI-string and doc half landed 2026-09-04 (Voice page
+   → Instrument, "slot"/"Patch"/"preset" strings); the mechanical identifier
+   rename remains.
 2. Load-to-Track workflow (stage 2): Browse "Load" binds to the selected
    Track behind a replace prompt; Sample Manager "Assign"; load-failure
    reasons on the wire.

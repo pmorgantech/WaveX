@@ -70,11 +70,12 @@ std::shared_ptr<UIPage> createMainMenu() {
         ESP_LOGI(TAG, "Opening Sample");
         UINavigator::instance().push(createSampleGroup()); });
 
-    // Voice is a tab group too, but one page builds its own tabview rather than
-    // a UITabHostPage: its five stages share the voice being edited, so the
-    // header and status line have to outlive a tab switch. See UIVoicePage.
-    menu->addItem("Voice", []() {
-        ESP_LOGI(TAG, "Opening Voice");
+    // Instrument is a tab group too, but one page builds its own tabview rather
+    // than a UITabHostPage: its five stages share the Instrument being edited,
+    // so the header and status line have to outlive a tab switch. See
+    // UIVoicePage (identifier rename follows in the mechanical commit).
+    menu->addItem("Instrument", []() {
+        ESP_LOGI(TAG, "Opening Instrument");
         UINavigator::instance().push(createVoicePage()); });
 
     menu->addItem("Play", []() {
