@@ -602,6 +602,17 @@ class VoiceManager {
             const uint32_t last_valid_frame = v.end_frame - 1;
             const uint32_t loop_len = v.loop_end - v.loop_start;
 
+            // Region fades, prepared once per voice per block: Prepare() holds
+            // the only divides, so the per-sample Gain() below is a multiply
+            // and a table lerp (fade.hpp). Inactive - and skipped - for the
+            // common voice with no fades set.
+            const RegionFade region_fade =
+                (v.fade_in_frames != 0 || v.fade_out_frames != 0)
+                    ? RegionFade::Prepare(
+                          v.start_frame, v.end_frame, v.fade_in_frames, v.fade_out_frames)
+                    : RegionFade{};
+            const bool apply_region_fade = region_fade.Active();
+
             for (size_t i = 0; i < block_size; ++i) {
                 if (i < start_offset)
                     continue;
@@ -678,9 +689,8 @@ class VoiceManager {
                 s = v.filter.Process(s);
                 float env = v.envelope.Process();
                 s *= env;
-                if (v.fade_in_frames != 0 || v.fade_out_frames != 0) {
-                    s *= RegionFadeGain(
-                        idx0, v.start_frame, v.end_frame, v.fade_in_frames, v.fade_out_frames);
+                if (apply_region_fade) {
+                    s *= region_fade.Gain(idx0);
                 }
 
                 out_l[i] += s * left_gain;

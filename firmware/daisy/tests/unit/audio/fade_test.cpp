@@ -134,6 +134,28 @@ TEST(FadeTest, FramesOutsideTheRegionAreUntouched) {
     EXPECT_FLOAT_EQ(RegionFadeGain(500, 2000, 1000, 100, 100), 1.0f);  // inverted region
 }
 
+// VoiceManager prepares one RegionFade per voice per block and calls Gain()
+// per sample; that must be the same curve the one-shot query gives, and a
+// default-constructed (unprepared) RegionFade must be inert unity, since the
+// caller constructs it conditionally and calls Gain() unconditionally.
+TEST(FadeTest, PreparedRegionFadeMatchesTheOneShotQuery) {
+    using WaveX::AudioEngine::RegionFade;
+    const uint32_t start = 1000, end = 3000, fade_in = 150, fade_out = 90;
+    const RegionFade prepared = RegionFade::Prepare(start, end, fade_in, fade_out);
+    EXPECT_TRUE(prepared.Active());
+    for (uint32_t f = start - 5; f < end + 5; ++f) {
+        EXPECT_FLOAT_EQ(prepared.Gain(f), RegionFadeGain(f, start, end, fade_in, fade_out))
+            << "frame=" << f;
+    }
+
+    const RegionFade none;
+    EXPECT_FALSE(none.Active());
+    EXPECT_FLOAT_EQ(none.Gain(0), 1.0f);
+    EXPECT_FLOAT_EQ(none.Gain(start), 1.0f);
+    EXPECT_FALSE(RegionFade::Prepare(start, end, 0, 0).Active());
+    EXPECT_FALSE(RegionFade::Prepare(end, start, fade_in, fade_out).Active());  // inverted
+}
+
 TEST(FadeTest, MillisecondsConvertAgainstTheGivenRate) {
     EXPECT_EQ(FadeFrames(1, 48000), 48u);
     EXPECT_EQ(FadeFrames(1, 44100), 44u);

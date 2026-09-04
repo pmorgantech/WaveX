@@ -33,6 +33,12 @@ versioning and release process.
 
 ### Changed
 
+- Daisy region fades no longer divide per sample. `RegionFade` is prepared
+  once per voice per audio block and the per-sample gain is a multiply and a
+  table lerp; the previous per-sample 64-bit integer divide was a 100+-cycle
+  library call, up to twice per sample for a region with both fades. The fade
+  table is also built in single precision, which drops ~4 KB of
+  double-precision libm from the image.
 - **One shared current Track across the UI.** Play, Sample Manager, Voice and
   the Sample Browser each kept a private "current slot", so "which Track?" had
   four different answers at once. They now read one shared value

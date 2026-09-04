@@ -1328,9 +1328,10 @@ static void ApplyWavFade(q15_t* buf, uint32_t frames, uint32_t first_frame) {
         return;
     }
 
+    const WaveX::AudioEngine::RegionFade region_fade =
+        WaveX::AudioEngine::RegionFade::Prepare(start, end, fade_in, fade_out);
     for (uint32_t i = 0; i < frames; ++i) {
-        const float g =
-            WaveX::AudioEngine::RegionFadeGain(block_start + i, start, end, fade_in, fade_out);
+        const float g = region_fade.Gain(block_start + i);
         if (g >= 0.999999f) {
             continue;
         }
