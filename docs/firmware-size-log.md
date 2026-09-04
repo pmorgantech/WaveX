@@ -62,3 +62,7 @@ that they match the sizes recorded in the commit messages byte for byte.
 | 2026-09-04 | b571443 | esp32 app |  |  |  | 1007392 |  |  | ESP32 baseline before disabling the LVGL sysmon |
 | 2026-09-04 | 84453a0 | esp32 app |  |  |  | 1004944 |  |  | LVGL sysmon/perf/mem monitors off |
 | 2026-09-04 | 88fa2e7 | daisy | 275480 | 2660 | 454316 | 278180 (3.4%) | 456976 (87.2%) | ITCM 528B / DTCM 2.9K (2%) / SRAM 422.6K (83%) / D2DMA 20.0K (63%) / BKP 12B | same image as the row above, re-measured to fill in Regions; baseline for the -O2 series |
+| 2026-09-04 | 75145f3 | daisy | 273072 | 2660 | 460748 | 275772 (3.4%) | 463408 (88.4%) | ITCM 528B / DTCM 2.9K (2%) / SRAM 428.9K (84%) / D2DMA 20.0K (63%) / BKP 12B | last obj = T{} temporaries reconstructed in place; usage reply bounded |
+| 2026-09-04 | 75145f3 | daisy -O3 (measured, not adopted) | 216212 | 2564 | 460792 | 218816 (2.7%) | 463356 (88.4%) | DTCM 2.9K (2%) / SRAM 428.9K (84%) / D2DMA 20.0K (63%) / BKP 12B | same sources as 75145f3 built -O3, for comparison with the -O2 row below |
+| 2026-09-04 | 6ac460e | daisy | 187032 | 2564 | 460788 | 189636 (2.3%) | 463352 (88.4%) | ITCM 184B / DTCM 2.9K (2%) / SRAM 428.9K (84%) / D2DMA 20.0K (63%) / BKP 12B | WAVEX_DAISY_OPT -O0 -> -O2 (real-time path); text -86 KB, RAM unchanged |
+| 2026-09-04 | 6ac460e | daisy stage B | 186376 | 2884 | 459612 | 189260 (2.3%) | 462496 (88.2%) | ITCM 184B / DTCM 2.9K (2%) / SRAM 428.0K (84%) / D2DMA 20.0K (63%) / BKP 12B | Stage B flag set at -O2 |
