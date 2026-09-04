@@ -1,5 +1,5 @@
 # WaveX Dual-MCU Sampler/Synth Build System
-.PHONY: help all esp32 daisy daisy-stageb size size-record flash-fast esp32-reset daisy-debug daisy-debug-build daisy-debug-load daisy-debug-server release esp32-release daisy-release check-release-clean check-profiles require-strings clean esp32-clean daisy-clean esp32-flash esp32-monitor esp32-flash-monitor esp32-menuconfig test test-all test-asan test-daisy test-esp32 test-shared test-clean ai-graph daisy-flash daisy-flash-auto flash-all start-logs stop-logs logs-start logs-stop
+.PHONY: help all esp32 daisy daisy-stageb size size-record flash-fast esp32-reset esp32-app-flash daisy-debug daisy-debug-build daisy-debug-load daisy-debug-server release esp32-release daisy-release check-release-clean check-profiles require-strings clean esp32-clean daisy-clean esp32-flash esp32-monitor esp32-flash-monitor esp32-menuconfig test test-all test-asan test-daisy test-esp32 test-shared test-clean ai-graph daisy-flash daisy-flash-auto flash-all start-logs stop-logs logs-start logs-stop
 
 # Test targets
 test: test-all
@@ -127,7 +127,8 @@ help:
 	@echo "  daisy-debug-build - Build the separate Daisy SRAM/debug ELF"
 	@echo "  daisy-debug-load - Load SRAM ELF through an existing OpenOCD server"
 	@echo "  daisy-debug-server - Start OpenOCD for GDB/Cortex-Debug"
-	@echo "  flash-fast       - ESP32 over USB-JTAG + Daisy into SRAM, concurrently (edit/test loop)"
+	@echo "  flash-fast       - ESP32 app over USB-JTAG + Daisy into SRAM, concurrently (edit/test loop)"
+	@echo "  esp32-app-flash  - Flash only the ESP32 app partition (what flash-fast uses)"
 	@echo "  esp32-reset      - Reset the ESP32 via the UART bridge (recovers a board stuck in download mode)"
 	@echo "  release          - Build both MCUs in the release profile, then verify"
 	@echo "  check-release-clean - Assert no debug console tokens in release images"
@@ -196,6 +197,29 @@ ESP32_PORT ?=
 ESP32_BAUD ?= 2000000
 esp32_port = $(if $(ESP32_PORT),echo '$(ESP32_PORT)',python3 scripts/serial_ports.py esp32)
 esp32_flash_port = $(if $(ESP32_PORT),echo '$(ESP32_PORT)',python3 scripts/serial_ports.py esp32-jtag 2>/dev/null || python3 scripts/serial_ports.py esp32)
+
+# Edit/test-loop variant: the app partition only. The bootloader, partition
+# table and OTA data do not change between iterations and cost ~1 s to
+# rewrite. The port's baud setting is irrelevant on the USB-Serial/JTAG path
+# (a virtual CDC) and only limits the bridge fallback; on JTAG the ceiling is
+# the P4's own flash erase/program rate, ~160 KB/s (measured 2026-09-04: a
+# 1 MB app writes in 6.1 s compressed and 6.4 s UNcompressed, so the link has
+# headroom to spare - see docs/flashing.md).
+#
+# Calls esptool directly with the argument file the IDF build writes
+# (build/flash_app_args: flash mode/freq/size and the app offset), skipping
+# idf.py's ~1 s of Python/CMake start-up. The build itself is NOT run here -
+# build first (make esp32); flash-all and esp32-flash keep the idf.py path.
+esp32-app-flash:
+	@echo "⚡ Flashing ESP32 app partition..."
+	@if [ ! -f firmware/esp32/build/flash_app_args ]; then \
+		echo "No ESP32 build (firmware/esp32/build/flash_app_args missing) - run make esp32 first"; exit 1; fi
+	@port=$$($(esp32_flash_port)) && \
+		echo "Port: $$port" && \
+		cd firmware/esp32/build && . /opt/esp/idf/export.sh >/dev/null && \
+		esptool.py --chip esp32p4 -p "$$port" -b $(ESP32_BAUD) --before default_reset --after hard_reset \
+			write_flash @flash_app_args
+	@echo "✅ ESP32 app flashed"
 
 esp32-flash:
 	@echo "⚡ Flashing ESP32 Frontend firmware..."
@@ -408,8 +432,10 @@ flash-all: stop-logs
 			exit 1; \
 		fi
 
-# Fast update of BOTH boards for an edit/test loop: the ESP32 persistently
-# over the P4's USB-Serial/JTAG port, the Daisy VOLATILELY into SRAM over SWD
+# Fast update of BOTH boards for an edit/test loop: the ESP32's app partition
+# persistently over the P4's USB-Serial/JTAG port (bootloader/partition table
+# untouched - use esp32-flash or flash-all after changing those), the Daisy
+# VOLATILELY into SRAM over SWD
 # (a reset or power cycle returns it to the persistent QSPI image - that one
 # still takes flash-all's ~20 s DFU cycle). Neither path touches a console
 # port, so the loggers stay attached and just see each board reboot; the two
@@ -419,7 +445,7 @@ flash-all: stop-logs
 flash-fast:
 	@set -eu; \
 		daisy_status=0; esp32_status=0; \
-		$(MAKE) esp32-flash & esp32_pid=$$!; \
+		$(MAKE) esp32-app-flash & esp32_pid=$$!; \
 		$(MAKE) daisy-debug & daisy_pid=$$!; \
 		wait $$esp32_pid || esp32_status=$$?; \
 		wait $$daisy_pid || daisy_status=$$?; \

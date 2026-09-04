@@ -55,11 +55,36 @@ make flash-fast     # ESP32 persistent over USB-JTAG + Daisy into SRAM over SWD,
 make flash-all      # ESP32 + Daisy persistent (software-triggered DFU, ~20 s); stops/restarts the loggers
 ```
 
+### Why USB-JTAG, and why it is not faster than it is
+
+Measured 2026-09-04, the 1 MB app partition, esptool called directly:
+
+| Path | Write | Wall |
+|---|---:|---:|
+| CH343 bridge, 460 800 baud | 14.3 s | 19.3 s |
+| CH343 bridge, 2 000 000 baud | 9.8 s | 14.8 s |
+| USB-Serial/JTAG (baud setting ignored) | **6.1 s** | 8.7 s |
+| USB-Serial/JTAG, `--no-compress` (1.8x the bytes) | 6.4 s | 9.4 s |
+
+The JTAG port is 1.6x faster than the bridge at its best rate, but it is
+already at the ceiling: sending 1.8x as many bytes uncompressed costs 5 %
+more time, so the 12 Mbit/s link has headroom to spare and the P4's own flash
+erase/program rate (~160 KB/s) is what sets the 6 s. No transport - the
+high-speed OTG port's ROM DFU included - beats that for this image; only a
+smaller image does (each 100 KB is ~0.6 s). The `-b 2000000` on the JTAG
+path is inert and only limits the bridge fallback. Above the write, the
+overhead is ~1.7 s for esptool to reset, sync and upload its stub, ~1 s of
+`idf.py` start-up when it is used, ~1 s to rewrite the bootloader/partition
+table/OTA data with `flash` rather than `app-flash`, and ~3 s for the app to
+boot after the final reset. `flash-fast` therefore calls esptool directly
+with the build's `flash_app_args` for the app partition only.
+
 `flash-fast` is the edit/test loop: neither path touches a console port, so
 `make logs-start` loggers stay attached and simply see each board reboot, and
 the two paths share no USB device so they run in parallel. Measured from the
-devcontainer on 2026-09-04 with both images already built: 10.8 s wall for
-both boards (ESP32 10.6 s, Daisy 3.4 s). The Daisy side is the volatile SRAM
+devcontainer on 2026-09-04 with both images already built: 9.5 s wall for
+both boards; from the `make`, the Daisy is back with its boot banner at
++4.9 s and the ESP32 app is up at +13.0 s. The Daisy side is the volatile SRAM
 image, so a reset or power cycle returns it to whatever QSPI holds - use
 `flash-all` (or `make daisy-flash-auto`) when the Daisy change has to persist.
 The target fails, per board, if either flash did.
