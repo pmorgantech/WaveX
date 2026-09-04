@@ -205,6 +205,26 @@ needs, not the roughly 4 KB text saving at WARN alone.
 hot-path cost before deciding whether cheap counts should remain enabled in
 release and whether the flag follows the build profile.
 
+### Filter: promote slope, drive and topology to real parameters
+
+`audio/voice_filter.hpp` (2026-09-04) makes the per-voice lowpass selectable
+- WaveX TPT SVF at 12 or 24 dB/oct with a soft-clip drive, or `daisysp::Svf`
+- but only through the debug console (`WAVEX-FILTER`), for A/B listening.
+Whatever the listening decides:
+
+- **Slope and drive** belong on the Instrument (they are voice character,
+  like resonance): a `PARAM_FILTER_SLOPE` / `PARAM_FILTER_DRIVE` pair in
+  `protocol.h` with round-trip tests, a Zone/Instrument field with SFZ
+  defaults, and Voice-page controls. Until then both default off, so the
+  filter is the linear 12 dB one it always was.
+- **Topology** is a build-time decision once the comparison is done: keep
+  one, delete the other and `VoiceFilter`, or keep both behind a per-Instrument
+  field if they turn out to be complementary voices rather than a better and a
+  worse one. The DaisySP side costs ~1.8 KB of flash and ~3x the per-sample
+  CPU of the 12 dB WaveX stage.
+- Whichever wins, DWT-measure `Render()` at eight voices with drive on and
+  24 dB before calling it done (roadmap "Callback budget").
+
 ### Daisy image size: what is left after the 2026-09-04 slimming
 
 The Daisy image went from 438 KB to 273 KB. Remaining, in order of size, each

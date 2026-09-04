@@ -50,3 +50,6 @@ that they match the sizes recorded in the commit messages byte for byte.
 | 2026-09-04 | a248706 | daisy | 284696 | 124444 | 331488 | 409180 (5.0%) | 455932 (87.0%) | SD volume linked directly; USB host MSC stack gone |
 | 2026-09-04 | be2d86d | daisy | 289040 | 2628 | 453344 | 291708 (3.6%) | 455972 (87.0%) | large defaults constructed into .bss instead of shipped as .data |
 | 2026-09-04 | 479db13 | daisy | 270392 | 2628 | 453308 | 273060 (3.4%) | 455936 (87.0%) | cold TUs at -Os; SRAM debug layout refitted |
+| 2026-09-04 | 9f8f453 | daisy | 270392 | 2628 | 453308 | 273060 (3.4%) | 455936 (87.0%) | size log added (no firmware change) |
+| 2026-09-04 | 343054e | daisy | 270664 | 2628 | 453500 | 273332 (3.4%) | 456128 (87.0%) | SVF 12/24 dB slope + soft-clip drive (+272 B; both default off) |
+| 2026-09-04 | 88fa2e7 | daisy | 275480 | 2660 | 454316 | 278180 (3.4%) | 456976 (87.2%) | VoiceFilter A/B switch, daisysp::Svf linked (svf.cpp only, +1808 B) + WAVEX-FILTER console verb |
