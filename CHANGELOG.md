@@ -13,6 +13,11 @@ versioning and release process.
 
 ### Added
 
+- `docs/firmware-size-log.md` and `scripts/firmware_size.py` (`make size`,
+  `make size-record NOTE="..."`): one row per measured build with text/data/
+  bss, flashed image size and RAM, so growth is attributable per feature and a
+  regression shows as a step. Backfilled from v0.4.0 through the 2026-09-04
+  image-slimming series by rebuilding each commit.
 - The ESP32 blanks the panel backlight after five minutes without touch,
   button, or encoder activity, then restores the selected brightness on the
   next interaction to reduce panel burn-in risk.

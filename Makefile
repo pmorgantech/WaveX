@@ -1,5 +1,5 @@
 # WaveX Dual-MCU Sampler/Synth Build System
-.PHONY: help all esp32 daisy daisy-stageb daisy-debug daisy-debug-build daisy-debug-load daisy-debug-server release esp32-release daisy-release check-release-clean check-profiles require-strings clean esp32-clean daisy-clean esp32-flash esp32-monitor esp32-flash-monitor esp32-menuconfig test test-all test-asan test-daisy test-esp32 test-shared test-clean ai-graph daisy-flash daisy-flash-auto flash-all start-logs stop-logs logs-start logs-stop
+.PHONY: help all esp32 daisy daisy-stageb size size-record daisy-debug daisy-debug-build daisy-debug-load daisy-debug-server release esp32-release daisy-release check-release-clean check-profiles require-strings clean esp32-clean daisy-clean esp32-flash esp32-monitor esp32-flash-monitor esp32-menuconfig test test-all test-asan test-daisy test-esp32 test-shared test-clean ai-graph daisy-flash daisy-flash-auto flash-all start-logs stop-logs logs-start logs-stop
 
 # Test targets
 test: test-all
@@ -130,6 +130,8 @@ help:
 	@echo "  release          - Build both MCUs in the release profile, then verify"
 	@echo "  check-release-clean - Assert no debug console tokens in release images"
 	@echo "  check-profiles   - Assert tokens present in debug AND absent in release"
+	@echo "  size             - Print firmware image sizes (Daisy, ESP32 if built)"
+	@echo "  size-record      - Append them to docs/firmware-size-log.md: NOTE=\"what changed\""
 	@echo "  esp32-clean      - Clean ESP32 build"
 	@echo "  daisy-clean      - Clean Daisy build"
 	@echo "  clean            - Clean all builds"
@@ -231,6 +233,15 @@ daisy:
 # hardware yet (TdmVoiceSink/Mcp48Backend are stubs - see
 # firmware/daisy/src/audio/output_sink.hpp / src/cv/mcp48_backend.hpp), so
 # this only verifies compilation, not behavior.
+# Firmware size log (docs/firmware-size-log.md). Run after the build being
+# measured, from a clean tree, so the row's commit column means something.
+size:
+	@python3 scripts/firmware_size.py
+
+size-record:
+	@if [ -z "$(NOTE)" ]; then echo 'usage: make size-record NOTE="what changed"'; exit 1; fi
+	@python3 scripts/firmware_size.py --record "$(NOTE)"
+
 daisy-stageb:
 	@echo "========================================================================"
 	@echo "            🎵 BUILDING DAISY SEED BACKEND (Stage B flag set)"
