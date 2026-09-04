@@ -16,8 +16,9 @@
 // index went negative and it silently returned the FIRST sample for every
 // remaining position (a DC level, no error). Today's callers bound chunks
 // well under that by ring-buffer capacity, so this is a latent limit being
-// retired, not a live bug being fixed. Index and fraction are computed in
-// int64_t here, so source length is limited only by the buffers.
+// retired, not a live bug being fixed. Index and fraction are split into
+// separate 32-bit values here (detail::SplitPosition), so source length is
+// limited only by the buffers.
 //
 // Channel handling: ResampleChannel() is the single-channel core and reads
 // through an arbitrary stride, so it maps onto one channel of an interleaved
@@ -34,6 +35,33 @@
 
 namespace WaveX {
 namespace AudioEngine {
+
+namespace detail {
+
+// Splits a position in frames into an integer frame index and a 20-bit
+// fraction - the 12.20 layout of the CMSIS routine this file replaced, minus
+// its 12-bit index limit. Every step is a 32-bit hardware operation: scaling
+// by 2^20 is exact (power of two), and subtracting a float's own integer part
+// is exact. The previous version converted position * 2^20 to int64, and a
+// float-to-int64 conversion has no Cortex-M7 instruction - it is a libgcc
+// call, paid once per output sample of every streamed WAV.
+inline void SplitPosition(float position, int32_t& index, int32_t& fract) {
+    if (position < 0.0f) {
+        // Only the streaming path comes here, and only in (-1, 0): the gap
+        // between the carried history frame and the chunk's frame 0.
+        // Truncate toward zero and let the arithmetic shift floor, exactly
+        // as the 64-bit version did, so the boundary is bit-identical.
+        const int32_t fixed = static_cast<int32_t>(position * 1048576.0f);
+        index = fixed >> 20;
+        fract = fixed & 0xFFFFF;
+        return;
+    }
+    index = static_cast<int32_t>(position);  // truncation is floor for >= 0
+    const float remainder = position - static_cast<float>(index);
+    fract = static_cast<int32_t>(remainder * 1048576.0f);
+}
+
+}  // namespace detail
 
 // Number of output frames a ratio yields for a given input length. Callers
 // size their destination with this before committing to a pass; it matches
@@ -86,11 +114,10 @@ inline uint32_t ResampleChannel(const int16_t* src,
             break;
         }
 
-        // 12.20-equivalent split, in 64 bits so long sources cannot overflow
-        // the index the way the packed CMSIS word did.
-        const int64_t fixed = static_cast<int64_t>(position * 1048576.0);
-        const int64_t index = fixed >> 20;
-        const int64_t fract = fixed & 0xFFFFF;
+        // 12.20-equivalent split with a full 32-bit index, so long sources
+        // cannot overflow it the way the packed CMSIS word did.
+        int32_t index, fract;
+        detail::SplitPosition(position, index, fract);
 
         const int16_t y0 = src[static_cast<size_t>(index) * src_stride];
         const int16_t y1 = src[(static_cast<size_t>(index) + 1u) * src_stride];
@@ -177,9 +204,8 @@ inline uint32_t ResampleStreamInterleaved(StreamResamplerState& st,
     uint32_t out = 0;
     while (out < dst_capacity_frames && position < limit) {
         // Strictly less than limit, so index+1 is always within the chunk.
-        const int64_t fixed = static_cast<int64_t>(position * 1048576.0);
-        const int64_t index = fixed >> 20;  // arithmetic shift floors negatives
-        const int64_t fract = fixed & 0xFFFFF;
+        int32_t index, fract;
+        detail::SplitPosition(position, index, fract);
 
         for (uint32_t ch = 0; ch < channels; ++ch) {
             // index < 0 only ever means -1: the sample carried over from the
