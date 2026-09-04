@@ -31,6 +31,24 @@ set(WAVEX_DAISY_OPT "-O0" CACHE STRING "Optimization flag for the Daisy firmware
 add_compile_options(${WAVEX_DAISY_OPT})
 message(STATUS "WaveX Daisy optimization: ${WAVEX_DAISY_OPT}")
 
+# Cold translation units: main-loop-only code that never runs in the audio
+# callback or an interrupt - SFZ import, file browsing, inter-MCU message
+# dispatch, SD bring-up, and main() itself. The WAVEX_DAISY_OPT question
+# above is about real-time behaviour, and these have none to change, so they
+# are built for size regardless of it: at -O0 they were ~55 KB of text, at
+# -Os about half. Applied per source file below (a later -O on the command
+# line overrides -O0). Override (e.g. -O0 to step through the SFZ importer)
+# with -DWAVEX_DAISY_COLD_OPT=... in CMAKE_EXTRA_ARGS.
+set(WAVEX_DAISY_COLD_OPT "-Os" CACHE STRING "Optimization flag for main-loop-only Daisy sources")
+set(WAVEX_COLD_SOURCES
+    src/main.cpp
+    src/audio/sfz_loader.cpp
+    src/comm/daisy_filesystem.cpp
+    src/comm/daisy_inter_mcu_message_handlers.cpp
+    src/storage/fs_browse.cpp
+    src/storage/sd_sdio.cpp
+)
+
 # Set the project name and sources
 set(FIRMWARE_NAME wavex-daisy)
 set(FIRMWARE_SOURCES
@@ -244,6 +262,8 @@ endif()
 
 # Include DaisyProject.cmake which handles all the STM32 configuration
 include(DaisyProject)
+
+set_source_files_properties(${WAVEX_COLD_SOURCES} PROPERTIES COMPILE_OPTIONS "${WAVEX_DAISY_COLD_OPT}")
 
 # Shared logging state uses C++17 inline variables. Select the language level
 # explicitly instead of relying on the ARM toolchain's current gnu++14 default.

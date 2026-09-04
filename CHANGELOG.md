@@ -73,6 +73,17 @@ versioning and release process.
   into SRAM at boot. They are now constructed into zero-cost `.bss` storage at
   startup (`bss_static.hpp`), and `SfzLoader::Reset()` / `Sfz::Parser::Reset()`
   rebuild in place instead of through 34 KB and 20 KB stack temporaries.
+- Daisy main-loop-only sources (SFZ import, file browsing, inter-MCU message
+  dispatch, SD bring-up, `main.cpp`) are now compiled `-Os` regardless of
+  `WAVEX_DAISY_OPT`, which still governs the real-time path and stays `-O0`
+  by default. Override with `-DWAVEX_DAISY_COLD_OPT=-O0` to step through
+  them. Image 292 KB to 273 KB.
+- `make daisy-debug` links again. The SRAM debug layout had been over its
+  SRAM/DTCM budget since the sequencer transport grew; with the large state
+  now constructed rather than shipped as `.data`, the transport and the SFZ
+  bank spill into DTCM (`.sram_debug_dtcm_bss`, cleared before constructors)
+  and the rest of `.bss` fits in D2. The SD/AXI placement rule follows the
+  `FATFS` object that replaced `FatFSInterface`.
 - **One shared current Track across the UI.** Play, Sample Manager, Voice and
   the Sample Browser each kept a private "current slot", so "which Track?" had
   four different answers at once. They now read one shared value

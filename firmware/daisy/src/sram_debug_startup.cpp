@@ -13,6 +13,8 @@ extern "C" std::uint32_t __wavex_sram_debug_d2_bss_start__;
 extern "C" std::uint32_t __wavex_sram_debug_d2_bss_end__;
 extern "C" std::uint32_t __wavex_sram_debug_bss_start__;
 extern "C" std::uint32_t __wavex_sram_debug_bss_end__;
+extern "C" std::uint32_t __wavex_sram_debug_dtcm_bss_start__;
+extern "C" std::uint32_t __wavex_sram_debug_dtcm_bss_end__;
 extern "C" std::uint32_t __sram1_bss_start__;
 extern "C" std::uint32_t __sram1_bss_end__;
 
@@ -33,11 +35,14 @@ void PrepareDirectSwdRuntime() {
     daisy::boot_info.data = 0;
     daisy::boot_info.version = daisy::System::BootInfo::Version::NONE;
 
-    ClearRange(&__wavex_sram_debug_sd_axi_bss_start__,
-               &__wavex_sram_debug_sd_axi_bss_end__);
+    ClearRange(&__wavex_sram_debug_sd_axi_bss_start__, &__wavex_sram_debug_sd_axi_bss_end__);
     ClearRange(&__sram1_bss_start__, &__sram1_bss_end__);
     ClearRange(&__wavex_sram_debug_d2_bss_start__, &__wavex_sram_debug_d2_bss_end__);
     ClearRange(&__wavex_sram_debug_bss_start__, &__wavex_sram_debug_bss_end__);
+    // Constructed state spilled to DTCM: must be zero before the constructors
+    // in __libc_init_array run into it (see the linker script's note on why
+    // this is not .dtcmram_bss).
+    ClearRange(&__wavex_sram_debug_dtcm_bss_start__, &__wavex_sram_debug_dtcm_bss_end__);
 }
 
 using PreinitFunction = void (*)();

@@ -106,7 +106,7 @@ SECTIONS
     {
         . = ALIGN(32);
         PROVIDE(__wavex_sram_debug_sd_axi_bss_start__ = .);
-        *(.bss._ZN5WaveX7Storage6SdSdioL5s_fsiE)
+        *(.bss._ZN5WaveX7Storage6SdSdioL7s_sd_fsE)
         *(.bss._ZL15s_metadata_file)
         *(.bss._ZL14s_metadata_buf)
         *(.bss._ZN5WaveX11AudioEngineL12s_cvcal_fileE)
@@ -176,6 +176,25 @@ SECTIONS
         . = ALIGN(32);
         PROVIDE(__wavex_sram_debug_bss_end__ = .);
     } > RAM_D3
+
+    /*
+     * The two largest pieces of constructed state (bss_static.hpp): the
+     * sequencer transport and the SFZ instrument bank, ~84 KiB together. In
+     * the QSPI layout they are ordinary .bss; here D2 cannot hold them, and
+     * DTCM has exactly the room their old .data images used to occupy.
+     * Cleared from preinit, BEFORE global constructors run - unlike
+     * .dtcmram_bss below, which main() zeroes after them and which would
+     * therefore wipe the defaults the constructors wrote.
+     */
+    .sram_debug_dtcm_bss (NOLOAD) :
+    {
+        . = ALIGN(8);
+        PROVIDE(__wavex_sram_debug_dtcm_bss_start__ = .);
+        *(.bss._ZN5WaveX11AudioEngineL23s_seq_transport_storageE)
+        *(.bss._ZN5WaveX11AudioEngine9SfzLoader12_GLOBAL__N_1L14s_bank_storageE)
+        . = ALIGN(4);
+        PROVIDE(__wavex_sram_debug_dtcm_bss_end__ = .);
+    } > DTCMRAM
 
     .sram_debug_d2_bss (NOLOAD) :
     {
@@ -271,5 +290,5 @@ ASSERT(SIZEOF(.sram_debug_sd_axi_bss) <= 80K,
        "WaveX SRAM debug SD/AXI budget exceeded 80 KiB")
 ASSERT(SIZEOF(.sram_debug_bss) <= LENGTH(RAM_D3),
        "WaveX SRAM debug D3 spill exceeded 64 KiB")
-ASSERT(SIZEOF(.data) + SIZEOF(.dtcmram_bss) <= 96K,
+ASSERT(SIZEOF(.data) + SIZEOF(.sram_debug_dtcm_bss) + SIZEOF(.dtcmram_bss) <= 96K,
        "WaveX SRAM debug DTCM budget exceeded: preserve at least 32 KiB for stacks")
