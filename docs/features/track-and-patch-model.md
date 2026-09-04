@@ -1,6 +1,6 @@
 # Track and Instrument Model — the user-facing paradigm and its end state
 
-**Status**: **Proposed 2026-09-02; decisions taken 2026-09-03/04** (see §9 — two items are still open and marked). Written in response to direct requests for an end-state design so that the Phase 2/2.5 UI and voice work converges on one paradigm rather than accreting. Track/Instrument/Pattern/Song/Bank vocabulary is confirmed; the ownership hierarchy is accepted architecture; the two-oscillator Instrument (§3) is *designed now, implementation order to be decided* (§8). Nothing here is built as one unit; the pieces that already are, are marked. The file keeps its historical name so links from code comments, commits and other docs stay valid.
+**Status**: **Proposed 2026-09-02; all decisions taken 2026-09-03/04** (see §9). Written in response to direct requests for an end-state design so that the Phase 2/2.5 UI and voice work converges on one paradigm rather than accreting. Track/Instrument/Pattern/Song/Bank vocabulary is confirmed; the ownership hierarchy is accepted architecture; the two-oscillator Instrument (§3) is *designed now, implementation order to be decided* (§8). Nothing here is built as one unit; the pieces that already are, are marked. The file keeps its historical name so links from code comments, commits and other docs stay valid.
 **Supersedes, in vocabulary only**: "slot" (`instrument-model.md` §1), "Voice" as a page/entity name, and **"Patch"** (used 2026-09-02 to 2026-09-03 for what is now called an Instrument — the user chose Instrument on 2026-09-03 because it is the natural noun for a sampler and matches the `.wxi` extension). The engine-side data model in `instrument-model.md` stands; this document says what it is *called*, what it grows into, and how Tracks, MIDI and memory are arranged around it.
 **Dependencies**: `instrument-model.md` (the sampler `Instrument`/`Zone` model, built), `oscillator-sources.md` (typed sampler/wavetable boundary), `param-locks-and-modulation.md` (mod matrix, envelopes, LFOs — partly built), `output-routing-and-mixer.md` (`TrackMix`, built), `sequencer.md` (tracks, built core), `wxcf.hpp` (built).
 
@@ -145,7 +145,7 @@ Filter/envelope/tuning are Instrument properties (§3). Today's `VoiceLiveParams
 Every page acts on **one** selected Track (`ui/current_track.h`): Play sends notes on it, the Sample Manager assigns to it, the Instrument page edits it, the browser loads into it. Before this existed, four pages kept four private copies, which was the whole of the "which Track?" bench finding. Rules:
 
 - The Track selector shows **eight Tracks per page** (1–8, 9–16); paging, not a 16-wide strip, so the numbers stay legible on the 1280×720 panel.
-- Where the selection is *displayed and changed* — a header chip visible on every page plus a Track page, or the Track page alone — is decision §9 item 4, still open. The state itself is the same either way.
+- The selection is **displayed on every page** as a header chip — `T3 · Piano` — alongside the SHIFT chip, and **changed from anywhere** with one gesture (Shift + encoder, or Track −/+ softkeys on the pages that act on a Track: Play, Instrument, Sample). The Track page (§6) holds what does not fit in a chip: MIDI in, poly limit, program change, mixer strip, Load/Save. Decided 2026-09-04 (§9 item 4); the bench finding was precisely that no page said which Track it was acting on.
 
 ---
 
@@ -217,7 +217,7 @@ struct Instrument {
 
 ### 3.2 One Instrument type, two editors (drum pads vs. keyboard ranges)
 
-Akai has two program types — *Drum* (a pad is one fixed-pitch sound with its own filter/envelopes) and *Keygroup* (a key range pitch-tracks one multisample, parameters per range). The differences are only (a) whether pitch tracks the note and (b) how finely the voice parameters are set. WaveX does not need two types: `InstrumentMode::Drum` (built) is "zone per key, note forced to root, no pitch tracking" and `Keyboard` is "ranges that pitch-track", over the **same** `Zone` model; and the "per-pad parameter set" is the per-zone override below. So there is one Instrument type and **two editors** — a **Pad Map** (16 pads, per-pad Sample, choke, and optional per-pad filter/env) and a **Key Map** (key/velocity ranges over a keyboard) — chosen by `mode`. Decision §9 item 8 (open) confirms this.
+Akai has two program types — *Drum* (a pad is one fixed-pitch sound with its own filter/envelopes) and *Keygroup* (a key range pitch-tracks one multisample, parameters per range). The differences are only (a) whether pitch tracks the note and (b) how finely the voice parameters are set. WaveX does not need two types: `InstrumentMode::Drum` (built) is "zone per key, note forced to root, no pitch tracking" and `Keyboard` is "ranges that pitch-track", over the **same** `Zone` model; and the "per-pad parameter set" is the per-zone override below. So there is one Instrument type and **two editors** — a **Pad Map** (16 pads, per-pad Sample, choke, and optional per-pad filter/env) and a **Key Map** (key/velocity ranges over a keyboard) — chosen by `mode`. Decided 2026-09-04 (§9 item 8).
 
 **Instrument-level defaults vs. zone overrides.** Today every zone carries its own cutoff/ADSR (from SFZ, where that is normal). A user building an Instrument on-device should not have to set ADSR on 16 pads. So: Instrument-level `filter`/`env` values, and a per-zone "override" flag (`ZONE_FLAG_OWN_FILTER_ENV`, the inverse of today's live flag). The Instrument page's Filter and Env tabs edit the Instrument; the Pad Map can override per pad (the MPC drum case). SFZ import sets the override flag on every zone (it always has per-zone values), so imported Instruments sound exactly as they do now.
 
@@ -375,7 +375,7 @@ Pages reorganised around the nouns. Each page owns exactly one thing.
 | **Play** | the grid, addressed to the selected Track | exists; follows the selected Track (2026-09-04) |
 | **Mixer** | 16 strips | `output-routing-and-mixer.md` stage 3, not built |
 
-"Selected Track" and "current sample" are the two pieces of shared UI state; both are ESP32-side, both survive page navigation like `SampleBrowserState` does.
+"Selected Track" and "current sample" are the two pieces of shared UI state; both are ESP32-side, both survive page navigation like `SampleBrowserState` does. The selected Track is always visible as the header chip (§2.4), so no page needs its own Track readout — the strip on Play that today says "Track 3: …" collapses into the chip.
 
 ### 6.1 Workflows — what "frictionless" means in taps
 
@@ -440,11 +440,11 @@ Recorded with the date each was taken. "Open" items need a yes/no before the sta
 | 1 | Names: Track / **Instrument** / Voice (engine-only) / Pattern / Song / Bank / Sample Pool (§1). "Patch" (2026-09-02) withdrawn. | **2026-09-03** |
 | 2 | Routing on the Daisy (§2.2) rather than the ESP32. | accepted by default |
 | 3 | Trim on the Instrument, fader on the Track (§3.1) — loading an Instrument never moves the mixer. | accepted by default |
-| 4 | **Where the selected Track is shown and changed** (§2.4). *Option A*: a header chip ("T3 · Piano") on every page — like the SHIFT chip — plus a global change gesture (Shift + encoder, or Track −/+ softkeys on the pages that care), *and* a Track page for MIDI-in/poly/mixer. *Option B*: the Track page only; other pages follow it silently and show nothing. A recommends itself: the bench finding was precisely that the user could not tell which Track a page was acting on. | **open** |
+| 4 | Selected Track shown as a header chip on every page and changed from anywhere, plus a Track page for MIDI-in/poly/mixer (§2.4). The alternative — a Track page only, other pages following it silently — was rejected: the bench finding was precisely that the user could not tell which Track a page was acting on. | **2026-09-04** |
 | 5 | Sample Pool capacity **1024**, indexed not scanned, records in SDRAM, **fail with reason instead of evicting** (§4). | **2026-09-04** |
 | 6 | Measure before choosing the voice count (§5); `WAVEX_NUM_VOICES` is the single constant, separate from the analog 8. | **2026-09-04** |
 | 7 | Tempo on the Song, project-level default for pattern mode (§3.5). | accepted by default |
-| 8 | **One Instrument type, two editors** (§3.2) — no separate Drum/Keygroup program types; `mode` picks Pad Map or Key Map; per-pad parameters are zone overrides. *The alternative*: two Instrument types with different files and pages, as Akai does. One type means a kit and a multisample are the same file, load the same way and can even be both (drum pads on Osc 1, a chromatic layer on Osc 2). | **open — recommended** |
+| 8 | One Instrument type, two editors (§3.2) — no separate Drum/Keygroup program types; `mode` picks Pad Map or Key Map; per-pad parameters are zone overrides. The alternative, two Instrument types with different files and pages as Akai does, was rejected: one type means a kit and a multisample are the same file, load the same way and can even be both (drum pads on Osc 1, a chromatic layer on Osc 2). | **2026-09-04** |
 | 9 | Swing: Song default, Pattern override (§3.5). | accepted by default |
 | 10 | Default pattern length 32 (§3.5). | accepted by default |
 | 11 | Bank = 128 embedded Instruments in one `.wxb`, index-resident, Program-Change addressable (§3.6). | **2026-09-04** |

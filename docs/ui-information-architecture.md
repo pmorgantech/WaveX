@@ -11,9 +11,11 @@
   Env (1/2/3), LFO (1/2), Mod, with Key Map / Pad Map reached from Osc.
 - **Settings:** Display, Storage, MIDI, System, Calibrate.
 - **Diagnostics:** ESP32, Daisy, Audio, Link, Storage, MIDI.
-- Target additions (`features/track-and-patch-model.md` §6): **Track** (selector
-  showing eight Tracks per page, MIDI in, poly, mixer strip, Load/Save
-  Instrument), **Instrument Browser**, **Bank** (128 slots), **Mixer**.
+- Target additions (`features/track-and-patch-model.md` §6): a **selected-Track
+  chip** in the header on every page (`T3 · Piano`, beside the SHIFT chip)
+  with a global change gesture; **Track** page (selector showing eight Tracks
+  per page, MIDI in, poly, mixer strip, Load/Save Instrument); **Instrument
+  Browser**; **Bank** (128 slots); **Mixer**.
 
 The Sample group uses a host page because its tabs are independent pages. Play
 and Voice each own their tab view because their shared state must survive tab
