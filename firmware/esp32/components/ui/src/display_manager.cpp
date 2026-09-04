@@ -139,6 +139,67 @@ DisplayManager& DisplayManager::instance() {
     return inst;
 }
 
+uint32_t DisplayManager::nowMs() {
+    return static_cast<uint32_t>(esp_timer_get_time() / 1000);
+}
+
+esp_err_t DisplayManager::setBrightness(uint8_t percent) {
+    if (percent > 100) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    const esp_err_t err = bsp_display_brightness_set(percent);
+    if (err == ESP_OK && percent > 0) {
+        brightness_percent_ = percent;
+    }
+    return err;
+}
+
+void DisplayManager::noteUserActivity() {
+    activity_ms_.store(nowMs(), std::memory_order_release);
+}
+
+void DisplayManager::serviceScreenBlanker() {
+    const uint32_t now_ms = nowMs();
+    const uint32_t activity_ms = activity_ms_.load(std::memory_order_acquire);
+
+    // Only the UI task writes the backlight. Touch arrives on the LVGL task,
+    // so its callback records a timestamp and this service pass performs the
+    // bounded I2C transaction without adding work to the render task.
+    if (screen_blanker_.blanked()) {
+        if (activity_ms != 0 && activity_ms != last_observed_activity_ms_ &&
+            screen_blanker_.ShouldWake(activity_ms)) {
+            last_observed_activity_ms_ = activity_ms;
+            if (esp_err_t err = setBrightness(brightness_percent_); err != ESP_OK) {
+                ESP_LOGW(TAG, "screen wake backlight restore failed (%d)", err);
+            }
+        }
+        return;
+    }
+
+    // Record activity after testing the blank state. Repeated timestamps are
+    // harmless; the ScreenBlanker owns the timeout arithmetic.
+    if (activity_ms != 0 && activity_ms != last_observed_activity_ms_) {
+        screen_blanker_.RecordActivity(activity_ms);
+        last_observed_activity_ms_ = activity_ms;
+    }
+    if (screen_blanker_.ShouldBlank(now_ms)) {
+        if (esp_err_t err = bsp_display_brightness_set(0); err != ESP_OK) {
+            ESP_LOGW(TAG, "screen blank backlight disable failed (%d)", err);
+            // A failed write must not leave the policy thinking the panel is
+            // safely blanked; the next pass should retry.
+            screen_blanker_.ShouldWake(now_ms);
+        }
+    }
+}
+
+void DisplayManager::touchActivityEventCb(lv_event_t* event) {
+    auto* manager = static_cast<DisplayManager*>(lv_event_get_user_data(event));
+    if (manager) {
+        manager->noteUserActivity();
+    }
+}
+
 esp_err_t DisplayManager::init() {
     if (display_) {
         return ESP_OK;
@@ -250,8 +311,20 @@ esp_err_t DisplayManager::initLvglDisplay() {
     // Settings > Display would open showing a number that is not the truth.
     // The BSP offers no getter, so a known write is the only way to make the
     // UI's model and the hardware agree.
-    if (esp_err_t err = bsp_display_brightness_set(100); err != ESP_OK) {
+    if (esp_err_t err = setBrightness(100); err != ESP_OK) {
         ESP_LOGW(TAG, "Backlight set to 100%% failed (%d); brightness readout may be wrong", err);
+    }
+
+    screen_blanker_.Init(nowMs());
+    const uint32_t activity_ms = nowMs();
+    activity_ms_.store(activity_ms, std::memory_order_release);
+    last_observed_activity_ms_ = activity_ms;
+    if (lv_indev_t* touch = bsp_display_get_input_dev()) {
+        // Input-device events see every touch before it reaches page widgets;
+        // page-local click callbacks would miss drags and empty screen areas.
+        lv_indev_add_event_cb(touch, touchActivityEventCb, LV_EVENT_PRESSED, this);
+    } else {
+        ESP_LOGW(TAG, "No LVGL touch input device; touch cannot wake screen blanking");
     }
 
     return ESP_OK;

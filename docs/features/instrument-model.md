@@ -5,11 +5,16 @@
 **Dependencies**: RAM-resident voice manager and unified note path (both built). Supersedes the former stopgap mapping policy in `audio_engine.cpp::OnNoteOn` ("most-recently-loaded sample, root note 60").
 **Consumers**: `melodic-sequencing.md`, `param-locks-and-modulation.md`, `sampling-and-recording.md`, `arpeggiator.md`, `output-routing-and-mixer.md`, and the sequencer kit model (`sequencer.md` §3 — see §8 below).
 
-**Scope:** This document defines WaveX's sampler-source Patch. `Instrument` is
-the current engine name for that Patch representation; it is not a universal
-base type for every oscillator. A future wavetable source shares the
-Track/Patch/Voice hierarchy but has a separate source contract described in
-`oscillator-sources.md`.
+**Scope:** This document defines the *Sample oscillator* half of a WaveX
+Instrument — the Zone model, note resolution, sample table and SFZ-shaped
+persistence — as built. **Instrument is the user-facing name** (chosen
+2026-09-03 over "Patch"); its end state is a two-oscillator synth voice whose
+oscillators are typed (Sample now, Wavetable reserved), with a submix, one
+filter, three envelopes, two per-voice LFOs and the mod matrix, defined in
+`track-and-patch-model.md` §3. The `Zone` array below becomes the body of one
+`Oscillator` slot; it is not a universal base type for every oscillator, and
+the `.wxi` chunk list in §5 is superseded by the per-oscillator chunk set in
+that document's §3.3.
 
 ---
 
@@ -18,8 +23,8 @@ Track/Patch/Voice hierarchy but has a separate source contract described in
 | Term | Meaning |
 |---|---|
 | **Zone** | One sample mapped to a key range × velocity range, with root note, tune, gain/pan, region/loop, and filter/envelope overrides. (E-mu called this a "voice"; we avoid that word — `VoiceManager` voices are playback channels.) |
-| **Instrument** | The current sampler Patch implementation: an ordered set of ≤ 32 Zones plus Patch-scoped settings (mode, choke map, mod matrix slots, macro maps, output routing). E-mu "preset". |
-| **Oscillator source** | The typed Patch-owned recipe that produces audio. This document covers the sampler source; `oscillator-sources.md` defines its boundary from future wavetable sources. |
+| **Instrument** | The playable, named, saveable sound a Track holds. As built: an ordered set of ≤ 32 Zones plus Instrument-scoped settings (mode, choke map, mod matrix slots, macro maps, output routing). Target: two typed oscillators (each Sample oscillator owning its own Zone array) → submix → filter → amp, `track-and-patch-model.md` §3. E-mu "preset". |
+| **Oscillator** | One of an Instrument's two typed slots. This document covers the Sample oscillator; `oscillator-sources.md` defines its boundary from the reserved Wavetable type. |
 | **Slot** | One of 16 runtime bindings on the Daisy: sequencer track *t* and MIDI channel *t* play the instrument bound to slot *t*. |
 | **Drum mode** | Instrument flag: zones are one-per-key pads, no pitch tracking (`increment` ignores note), choke groups active. A **kit** (`sequencer.md`) is exactly a drum-mode instrument. |
 | **Keyboard mode** | Zones span key ranges, notes pitch-track relative to `root_note` (existing 12-TET path in `VoiceManager::Trigger`). |
@@ -124,7 +129,7 @@ Chunk  := u16 chunk_id, u16 chunk_version, u32 payload_len, payload bytes
 - Writes are atomic: write `<name>.tmp`, `f_close`, `f_rename` (per `offline-sample-editing.md` §2).
 - Implementation: `firmware/shared/wxcf/wxcf.hpp` — HAL-free reader/writer over a `read(off,len)/write` callback pair, so it round-trip-tests on host and runs over FatFs on target.
 
-Instrument file (`0:/wavex/instruments/<name>.wxi`, file_type=1): chunk 1 = instrument header (name, mode), chunk 2 = zone array (count × wire-Zone), chunk 3 = mod-matrix slots, chunk 4 = macro maps, chunk 5 = sample path table (paths referenced by zone `sample_id`). Zone wire form mirrors §2 but with fixed-width fields and no floats-with-NaN risk (validate on read).
+Instrument file (`0:/wavex/instruments/<name>.wxi`, file_type=1). The chunk layout is now specified in `track-and-patch-model.md` §3.3 — `HEAD`, one typed `OSC1`/`OSC2` chunk per oscillator (a Sample oscillator's body is its Zone array with each Zone's sample **path**), `FILT`, `AMP`, `ENV1..3`, `LFO1..2`, `MODM`, reserved `FXCH` — replacing the five-chunk sketch this section carried before. Zone wire form mirrors §2 but with fixed-width fields and no floats-with-NaN risk (validate on read). A Bank (`.wxb`) nests 128 of these chunk streams under per-slot `INST` chunks so one reader serves both.
 
 ---
 
@@ -210,7 +215,15 @@ UI never blocks on loads: `INST_STATUS` drives progress toasts (deferred-update 
 
 ---
 
-## 12. Quick design: Voice/Preset bank management and pad→sample mapping (2026-09-02)
+## 12. Quick design: Instrument bank management and pad→sample mapping (2026-09-02)
+
+> **Superseded in scope, 2026-09-04.** The workflow, the Bank (128 Instruments
+> in a `.wxb`), the Sample Pool and the stage order now live in
+> `track-and-patch-model.md` §3.6, §4, §6.1 and §8. The pad→sample op in §12.1
+> (`INST_OP_SET_PAD_SAMPLE`) is unchanged and is that document's stage-4 Pad
+> Map piece; §12.2's "single resident import" constraint is what stage 3
+> removes. Kept for the engine-level detail; do not plan from the stage list in
+> §12.3.
 
 Requested directly (bench session, not yet a roadmap phase): "manage a bank of voices/presets" and "map different samples to different pads/keys". Both are already this document's job — **`Instrument` *is* the Voice/Preset entity** (E-mu called it "preset"; this doc's own §1 table already names the mapping), and **a multi-sample pad/key map is already the `Zone` model** (§1: one zone = one sample × one key range; §8: "a kit is a drum-mode instrument", pad *p* ↔ a zone with `key_lo = key_hi = pad_note(p)`). Neither needs a new entity or a new data model. What's missing is entirely the on-device *workflow* to build and manage one without hand-authoring an `.sfz` file off-device — see the corrected Status line and §6's note above.
 

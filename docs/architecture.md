@@ -1,7 +1,7 @@
 # WaveX System Architecture
 
 **Status**: Canonical architecture document — this file is the single source of truth for system design.
-**Last updated**: 2026-09-03 (typed oscillator-source and musical-ownership model)
+**Last updated**: 2026-09-04 (Track / Instrument / Bank / Sample Pool model; two-oscillator Instrument)
 **Supersedes**: the former `system-architecture.md`, `communication-protocol.md` and `daisy_devel.md`, which carried mutually contradictory hardware claims (ESP32-S3 vs P4, UART vs SPI link, conflicting pin tables). Deleted; see git history.
 
 When this document and the code disagree, the code wins for *as-built* sections and this document wins for *target design* sections; each section is labeled. Pin assignments live in exactly one place: `firmware/shared/config/pin_config.h`. Hardware feature flags live in `firmware/shared/config/hardware_config.h`. Do not duplicate pin tables into documentation.
@@ -215,13 +215,16 @@ The 1-block = 1-ms identity is a deliberate design invariant: the control tick i
 
 ### 5.2 Voice architecture (target — partially implemented)
 
-The target has 8 runtime voices. A **Voice** is an allocated renderer, not a
-saved sound or UI entity. A note or sequencer event is addressed to a Track,
-resolved through that Track's Patch and oscillator-source definition, and only
-then allocated a Voice:
+The target has `WAVEX_NUM_VOICES` runtime voices (8 today, measured; one
+constant in `hardware_config.h`, independent of the analog board's fixed 8). A
+**Voice** is an allocated renderer, not a saved sound or UI entity. A note or
+sequencer event is addressed to a Track, resolved through that Track's
+Instrument — two typed oscillators feeding a submix, one filter, and an amp,
+with three envelopes, two per-voice LFOs and a mod matrix
+(`features/track-and-patch-model.md` §3) — and only then allocated a Voice:
 
 ```text
-note / step -> Track -> Patch -> oscillator source -> Voice -> filter/VCA -> output sink
+note / step -> Track -> Instrument -> osc 1 + osc 2 -> submix -> filter -> amp/pan -> Voice buffer -> output sink
 ```
 
 An asset's PCM encoding does not determine its oscillator behavior. Sampler and
@@ -240,10 +243,11 @@ sample Zone with a very short loop, and arbitrary sample loop markers do not
 become wavetable frame metadata. The complete boundary and its real-time rules
 are in `features/oscillator-sources.md`.
 
-The sampler implementation targets a sample oscillator (streamed or
-RAM-resident) plus the common filter/envelope/modulation path. Optional VA,
-noise, and wavetable sources remain deferred; none is part of the current
-roadmap phase.
+The sampler implementation targets a Sample oscillator (streamed or
+RAM-resident) in each of an Instrument's two oscillator slots, plus the common
+filter/envelope/modulation path. Optional VA, noise, and wavetable sources
+remain deferred; the wavetable's slot, type value and mod destination are
+reserved, and none is part of the current roadmap phase.
 
 **Implementation status (as-built sampler path)**: `firmware/daisy/src/audio/voice_manager.hpp` implements the RAM-resident half — 8-voice allocation/stealing (preferring a releasing voice when stealing), per-voice gain/pan, a note-relative pitch ratio, start/end/loop points, a resonant state-variable lowpass (`audio/svf_filter.hpp` — TPT topology, cutoff + resonance, stable under modulation; it replaced the one-pole stand-in so `PARAM_FILTER_RESONANCE` has a digital consumer), and a linear ADSR (`audio/envelope.hpp`). It **is** wired into `Callback()` via an SPSC note-event queue, and the UART message dispatcher feeds that path — `HandleNoteMessage` calls `AudioEngine::OnNoteOn()` (`daisy_inter_mcu_message_handlers.cpp`), fixed 2026-07-05 (`code_review_20260705.md` C1) — so it is reachable from hardware MIDI input, pending the hardware verification tracked in `roadmap.md` § Outstanding hardware verification. Not yet implemented: concurrent streamed voices (the streaming WAV-ring-buffer path remains singleton and is not voice-manager-owned), VA oscillator/noise/LFO/mod matrix, or wavetable sources.
 
@@ -260,25 +264,29 @@ WaveX separates stored content, playable sound, performance state, and musical
 time. These are references and ownership boundaries, not merely product names:
 
 ```text
-SD asset pool <- Patch source definitions
+SD assets -> Sample Pool (resident, refcounted) <- Instrument oscillator Zones
+Bank (.wxb): 128 saved Instruments -> copied into a Track on recall / Program Change
 
 Project
-├── Performance    -> current live Track/Patch and mixer setup
-│   └── Tracks[16] -> active Patch + MIDI routing + mixer strip
+├── Performance    -> current live Track/Instrument and mixer setup
+│   └── Tracks[16] -> active Instrument + MIDI routing + mixer strip
 ├── Patterns       -> note/trigger/lock rows addressed to Tracks
 ├── Scenes         -> performance-state snapshots; no samples or pattern content
 └── Songs          -> ordered Pattern references, repeats, tempo, and overrides
 ```
 
-A sampler **Kit** is a drum-mode Patch with a pad-to-Zone map, not a separate
-engine object. A **Bank** is only a storage/browser grouping for assets or saved
-Patches; it owns no runtime sound or sequencer events. The **Performance** is
-the current live set of Track/Patch bindings, routing, mixer state, and shared
+A sampler **Kit** is a drum-mode Instrument with a pad-to-Zone map, not a
+separate engine object. A **Bank** is a file of 128 numbered Instruments; it is
+storage, addressable by MIDI Program Change, and owns no runtime sound or
+sequencer events — recall copies into a Track. The **Sample Pool** is the one
+registry of resident samples, whoever loaded them. The **Performance** is the
+current live set of Track/Instrument bindings, routing, mixer state, and shared
 effects; v1 stores one such set directly in the Project rather than introducing
 another file type. Patterns own time and parameter locks. Changing Pattern
 therefore does not silently replace the Performance's sound set. Scenes may
 recall sparse performance state, and Songs arrange Patterns, but both reference
-content rather than embedding duplicate samples or Patches.
+content rather than embedding duplicate samples or Instruments. Nothing claims
+a Track without asking (model doc §1.3).
 
 The authoritative vocabulary, persistence boundaries, and UI consequences are
 in `features/track-and-patch-model.md`.
@@ -391,7 +399,7 @@ These rules are mandatory for all new code. Most past instability (SPI corruptio
 | Offline sample editing & DSP | `features/offline-sample-editing.md` |
 | Sequencer / groovebox engine | `features/sequencer.md` |
 | Oscillator source types (sampler vs wavetable) | `features/oscillator-sources.md` |
-| Track/Patch hierarchy and ownership | `features/track-and-patch-model.md` |
+| Track/Instrument hierarchy and ownership | `features/track-and-patch-model.md` |
 | Instrument model (presets/zones/velocity layers, WXCF container) | `features/instrument-model.md` |
 | MIDI clock sync (tempo follower) | `features/midi-sync-tempo-follower.md` |
 | Melodic sequencing / live record | `features/melodic-sequencing.md` |
@@ -417,8 +425,9 @@ These rules are mandatory for all new code. Most past instability (SPI corruptio
    remain open Phase 2 work.
 2. **Streamed polyphony**: the 8-voice RAM manager is wired and host-tested,
    while streamed playback remains a singleton path outside `VoiceManager`.
-3. **Sampler Patch workflow**: the Zone model and SFZ import exist, but the
-   shared registry, multi-Track residency, pad mapping, Patch save/load, and
+3. **Sampler Instrument workflow**: the Zone model, SFZ import and the shared
+   selected Track exist, but the Sample Pool, multi-Track residency, pad
+   mapping, Instrument save/load, the Bank, the two-oscillator voice, and the
    editor UI remain open Phase 2.5 work.
 4. **Offline editing pipeline**: non-destructive marker foundations exist; the
    bounded render-job scheduler and destructive editing/mangling pipeline are
@@ -433,8 +442,9 @@ These rules are mandatory for all new code. Most past instability (SPI corruptio
 8. **MIDI**: DIN/USB input forwarding reaches the Daisy note path, pending
    hardware verification; MIDI clock in/out and tempo-following integration
    remain open for the Phase 2 gate.
-9. **Persistence**: the WXCF container exists, but Patch and Project serializers
-   plus atomic kit/Pattern/Song save and reload are not implemented.
-10. **Wavetable source**: the typed boundary is defined, but the renderer is
-    intentionally unscheduled until promoted from `backlog.md` after the
-    sampler/Patch/sequencer gates.
+9. **Persistence**: the WXCF container exists, but Instrument (`.wxi`), Bank
+   (`.wxb`) and Project serializers plus atomic kit/Pattern/Song save and
+   reload are not implemented.
+10. **Wavetable source**: the typed boundary and its oscillator slot are
+    defined, but the renderer is intentionally unscheduled until promoted from
+    `backlog.md` after the sampler/Instrument/sequencer gates.

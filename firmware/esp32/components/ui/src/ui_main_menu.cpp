@@ -6,6 +6,7 @@
 #include "bsp/esp32_p4_nano.h"
 #include "config/hardware_config.h"
 #include "midi_task.h"
+#include "ui/display_manager.h"
 #include "ui/ui_api.h"
 #include "ui/ui_cv_cal_page.h"
 #include "ui/ui_diagnostics_page.h"
@@ -39,7 +40,7 @@ namespace wavex_ui {
 namespace {
 
 void applyBrightness(int percent) {
-    esp_err_t err = bsp_display_brightness_set(percent);
+    esp_err_t err = DisplayManager::instance().setBrightness(static_cast<uint8_t>(percent));
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "brightness set to %d%% failed: %d", percent, (int)err);
     }
@@ -142,7 +143,7 @@ std::shared_ptr<UIPage> createDisplaySettingsPage() {
     // Contrast is gone rather than stubbed: this is a MIPI-DSI panel driven by
     // an HX8394 with no contrast control to offer, so the row could never do
     // anything. A control that cannot exist is not a TODO.
-    page->addUnimplemented("Screen blanking", "not implemented - the panel stays on while powered");
+    page->addInfo("Screen blanking", "after 5 min; touch/button/encoder wakes");
     page->addUnimplemented("Rotation", "not implemented - fixed landscape");
     page->addUnimplemented("Save on power-off", "not implemented - settings reset at boot");
 

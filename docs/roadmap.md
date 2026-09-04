@@ -76,21 +76,44 @@ remain MIDI-clock-synced to a DAW for ten minutes without audible drift.
 
 ## Phase 2.5 — Sampler instrument layer
 
-The model core, SFZ import, WXCF container, and parts of the mixer/modulation
-path are built. Open work:
+The model core, SFZ import, WXCF container, the shared selected Track, and
+parts of the mixer/modulation path are built. The end state is
+`features/track-and-patch-model.md` (Track / Instrument / Bank / Sample Pool;
+the two-oscillator Instrument is designed there, §3). Open work, in that
+document's stage numbering:
 
-1. Complete instrument editing and management: pad-to-sample mapping, named
-   patch save/load, editable zones, and the selected Track/Patch UI model.
-2. Finish Mixer v1: UI/solo behavior, meter subscription, and hardware click
+1. Rename (stage 1): Voice page → Instrument, remaining "slot"/"Patch"
+   strings, then the mechanical identifier rename.
+2. Load-to-Track workflow (stage 2): Browse "Load" binds to the selected
+   Track behind a replace prompt; Sample Manager "Assign"; load-failure
+   reasons on the wire.
+3. Sample Pool (stage 3): one indexed 1024-entry registry in SDRAM, refcount
+   by path, per-Track voice stop, paged metadata, "used by"; no silent
+   eviction.
+4. Instrument file and editors (stage 4): `.wxi` with the full chunk set,
+   Init/Save/Name ops, Pad Map and Key Map, Instrument Browser, Track page.
+5. Voice architecture (stage 5): typed oscillators, Osc 2 + submix, filter
+   type, Env 3, two per-voice LFOs, new mod destinations —
+   DWT-measured at `WAVEX_NUM_VOICES` before the count is changed.
+6. Bank (stage 6): `.wxb`, Bank page, Program Change recall.
+7. Track model and MIDI routing (stage 7), then polyphony policy (stage 8).
+8. Finish Mixer v1: UI/solo behavior, meter subscription, and hardware click
    and soak tests.
-3. Add melodic sequencing, chord/tie handling, step/live record, and erase.
-4. Complete modulation: p-lock application, per-voice LFO, zone filter ADSR,
-   MIDI CC/channel-pressure forwarding, and modulation UI.
-5. Build sampling/recording v1 and the arpeggiator.
+9. Add melodic sequencing, chord/tie handling, step/live record, and erase.
+10. Complete modulation: p-lock application, MIDI CC/channel-pressure
+    forwarding, and modulation UI (the per-voice LFOs and zone filter ADSR
+    move into item 5).
+11. Build sampling/recording v1 and the arpeggiator.
 
-**Gate:** build and play a multisampled keyboard instrument on-device, record
-a chord progression and arp over a p-locked drum pattern, and complete a
-one-hour zero-underrun soak.
+The order in which items 4–7 are taken up is **not yet decided** (model doc
+§9 item 19); items 1–3 come first because the 2026-09-03 bench session is
+blocked on them.
+
+**Gate:** from power-on, hear a card sample on the Keys in four taps; build a
+16-pad kit and a multisampled keyboard Instrument on-device and save both;
+load a Bank and recall a slot from a MIDI Program Change; record a chord
+progression and arp over a p-locked drum pattern; complete a one-hour
+zero-underrun soak with both oscillators active at `WAVEX_NUM_VOICES`.
 
 ## Phase 3 — Analog voice board (deferred)
 
@@ -113,9 +136,9 @@ playback remains uninterrupted.
 
 ## Phase 5 — Performance and polish
 
-Add song mode, scenes/macros, send effects, tuning/scales, preset-browser
-quality, settings persistence, USB sample import, and a measured CPU/memory
-headroom pass. Consider polyphase sample-rate conversion only after profiling
+Add song mode, scenes/macros, send effects, tuning/scales, Instrument/Bank
+browser quality (Bank Select, "save with samples"), settings persistence, USB
+sample import, and a measured CPU/memory headroom pass. Consider polyphase sample-rate conversion only after profiling
 shows linear interpolation is a meaningful cost or quality limit.
 
 ## Outstanding hardware verification

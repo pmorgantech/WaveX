@@ -5,12 +5,10 @@
 // Pattern pointer and plain arithmetic, so it is host-testable without any
 // Daisy hardware or cross compiler - same pattern as voice_manager.hpp.
 //
-// Placement (per sequencer.md §1): this class is meant to be driven once
-// per 1 kHz control tick (one audio block) from the Daisy audio callback,
-// same call site as the paraphonic envelope / CV staging. Not yet wired
-// there - that is a later "engine wiring" stage once the pattern-edit
-// protocol and double-buffer discipline (sequencer.md §4) exist. This
-// stage is the engine core plus its host test suite only.
+// Placement (per sequencer.md §1): this class is driven once per 1 kHz
+// control tick (one audio block) from the Daisy audio callback, at the same
+// site as the paraphonic envelope / CV staging. The callback-owned transport
+// supplies the required pending/active Pattern hand-off between steps.
 //
 // Timing model / anti-drift design (sequencer.md §2 wants "fixed point...
 // to avoid drift" - the design below achieves that goal, but not via a
@@ -137,12 +135,19 @@ class SequencerScheduler {
 
     uint64_t CurrentFrame() const { return frame_counter_; }
 
+    // True only after the most recent Process() crossed the shared pattern
+    // grid. The transport uses this as its edit hand-off point: a replacement
+    // Pattern becomes active AFTER the just-fired step, never while its data
+    // is being scheduled.
+    bool ProcessedStepBoundary() const { return processed_step_boundary_; }
+
     // Advances by exactly one control tick (one audio block). Appends any
     // triggers that fall within this tick to `out_events` (capacity
     // `max_events`), sorted by frame (ties broken by track index for
     // determinism), and returns the count written. No-op (returns 0)
     // if stopped or no pattern is set.
     size_t Process(TriggerEvent* out_events, size_t max_events) {
+        processed_step_boundary_ = false;
         if (!playing_ || !pattern_ || pattern_->length == 0)
             return 0;
 
@@ -198,6 +203,7 @@ class SequencerScheduler {
                 if (t == 0) {
                     playhead_step_ = ts.step_index;
                     playhead_loop_ = ts.loop_count;
+                    processed_step_boundary_ = true;
                 }
                 const uint8_t len = PatternLength();
                 uint8_t next_step = static_cast<uint8_t>(ts.step_index + 1);
@@ -419,6 +425,7 @@ class SequencerScheduler {
     float bpm_ = 120.0f;
     double frames_per_tick_ = 250.0;
     uint64_t frame_counter_ = 0;
+    bool processed_step_boundary_ = false;
     bool playing_ = false;
     uint64_t seed_ = 0x9E3779B97F4A7C15ULL;
     uint64_t rng_state_ = 0x9E3779B97F4A7C15ULL;

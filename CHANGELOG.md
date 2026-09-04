@@ -13,6 +13,9 @@ versioning and release process.
 
 ### Added
 
+- The ESP32 blanks the panel backlight after five minutes without touch,
+  button, or encoder activity, then restores the selected brightness on the
+  next interaction to reduce panel burn-in risk.
 - A fast Daisy SRAM iteration path (`make daisy-debug`) now builds in a
   dedicated cache and loads over ST-Link/GDB without touching the persistent
   QSPI image. The existing DFU targets remain the guarded QSPI persistence path.

@@ -6,9 +6,14 @@
 
 - **Sample:** Browse, Edit, Manage, Record.
 - **Play:** Pads and Keys.
-- **Voice:** Sample, Env, Amp, Filter, Mod.
+- **Voice:** Sample, Env, Amp, Filter, Mod. Renamed **Instrument** in the
+  Track/Instrument model's stage 1; target tabs Osc (1/2), Filter, Amp,
+  Env (1/2/3), LFO (1/2), Mod, with Key Map / Pad Map reached from Osc.
 - **Settings:** Display, Storage, MIDI, System, Calibrate.
 - **Diagnostics:** ESP32, Daisy, Audio, Link, Storage, MIDI.
+- Target additions (`features/track-and-patch-model.md` §6): **Track** (selector
+  showing eight Tracks per page, MIDI in, poly, mixer strip, Load/Save
+  Instrument), **Instrument Browser**, **Bank** (128 slots), **Mixer**.
 
 The Sample group uses a host page because its tabs are independent pages. Play
 and Voice each own their tab view because their shared state must survive tab
@@ -28,9 +33,12 @@ live-parameter strip. Only their layout and note map differ.
 
 ## 4. Page ownership
 
-Each page owns one concern. The Track/Patch proposal may change terminology,
-but it must preserve this boundary. Sample selection and current-sample state
-are explicit shared UI state; pages must not infer either from a previous page.
+Each page owns one concern. The Track/Instrument model may change terminology,
+but it must preserve this boundary. The selected Track (`ui/current_track.h`,
+1-based on screen via `trackDisplayNumber()`) and the current sample are
+explicit shared UI state; pages must not infer either from a previous page.
+Anything that would replace what an occupied Track holds asks first (model doc
+§1.3).
 
 ## 5. Diagnostics
 

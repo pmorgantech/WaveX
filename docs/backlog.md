@@ -136,9 +136,10 @@ with round-trip tests, after its effects on instrument references are defined.
 
 SFZ imports still have a private sample registry and only one imported
 instrument can be resident independently. Resolve per-slot sample ownership,
-unique identities, release behavior, and Sample Manager visibility as part of
-the [Track/Instrument model](features/track-and-patch-model.md), rather than with a
-local loader patch.
+unique identities, release behavior, and Sample Manager visibility as the
+Sample Pool in the [Track/Instrument model](features/track-and-patch-model.md)
+§4 (1024 entries, indexed, fail-with-reason admission — promoted to roadmap
+Phase 2.5 item 3), rather than with a local loader patch.
 
 Until that lands, a Track holding an imported Instrument refuses a bare-sample
 `Select` (`SfzLoader::BindSample`): the import owns its samples and can only
@@ -162,10 +163,13 @@ restore the old behaviour.
 ### Wavetable oscillator source
 
 The architecture now reserves a typed oscillator-source boundary so sampler and
-wavetable engines can share Patch/Track/Voice ownership without pretending that
-a wavetable is a short looping sample. The wavetable renderer is an
-unscheduled, post-Phase-2.5 candidate; sampler reliability, Patch persistence,
-sequencing, and the zero-underrun gates come first.
+wavetable engines can share Instrument/Track/Voice ownership without pretending
+that a wavetable is a short looping sample. Its place is fixed: one of an
+Instrument's two `Oscillator` slots, `OscType::Wavetable`, with `WT_POS` as its
+mod destination ([track-and-patch-model.md](features/track-and-patch-model.md)
+§3.1). The wavetable renderer is an unscheduled, post-Phase-2.5 candidate;
+sampler reliability, Instrument persistence, sequencing, and the zero-underrun
+gates come first.
 
 Before promotion to the roadmap, resolve the implementation decisions listed in
 [oscillator-sources.md](features/oscillator-sources.md): import metadata,

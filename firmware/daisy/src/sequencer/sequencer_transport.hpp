@@ -10,13 +10,12 @@
 // daisy_seed.h or the audio callback (that wiring lives in audio_engine.cpp
 // and consumes this class's Tick() output).
 //
-// Threading/placement (target): Tick() is driven once per 1 kHz control tick
-// from the audio callback context; Apply*/OnMidi* are driven from the
-// main-loop message dispatch. The Pattern this owns is single-buffered here;
-// the double-buffer / edit-between-steps discipline (sequencer.md §4) is a
-// later refinement - for now edits are plain field writes and a test/caller
-// must not interleave an edit with a Tick() from another context. This class
-// adds no locking (it has no HAL to lock with).
+// Threading/placement: this object is callback-owned. The engine feeds it
+// complete wire commands through an SPSC queue; Apply*/OnMidi* therefore run
+// in the callback too. Pattern edits land in `pending_pattern_`, then swap to
+// `active_pattern_` immediately after a shared step boundary. The scheduler
+// can never read a Pattern that is being edited, and a current step never
+// changes underneath its own trigger calculation.
 //
 // Clock modes (midi-sync-tempo-follower.md §4):
 //   INTERNAL: transport PLAY starts the scheduler immediately at the set
@@ -42,18 +41,22 @@ namespace Sequencer {
 class SequencerTransport {
    public:
     void Init(uint32_t sample_rate, uint16_t block_size) {
+        pending_pattern_ = Pattern{};
+        active_pattern_ = pending_pattern_;
+        pending_pattern_dirty_ = false;
         sample_rate_ = sample_rate > 0 ? sample_rate : 48000;
         block_size_ = block_size > 0 ? block_size : 48;
         scheduler_.Init(sample_rate_, block_size_);
-        scheduler_.SetPattern(&pattern_);
+        scheduler_.SetPattern(&active_pattern_);
         scheduler_.SetTempo(static_cast<float>(tempo_bpm_));
         follower_.Init(sample_rate_, block_size_);
         follower_.SetNominalBpm(static_cast<float>(tempo_bpm_));
     }
 
-    // Direct pattern access for test setup and (later) UI-side mirroring.
-    Pattern& pattern() { return pattern_; }
-    const Pattern& pattern() const { return pattern_; }
+    // Direct pattern access is for pre-play test setup only. Runtime edits use
+    // ApplyPatternOp(), which marks the pending copy for the next safe swap.
+    Pattern& pattern() { return pending_pattern_; }
+    const Pattern& pattern() const { return pending_pattern_; }
 
     // ---- Transport + mode (MSG_SEQ_TRANSPORT) ----
     void ApplyTransport(const Protocol::SeqTransportMessage& m) {
@@ -77,6 +80,7 @@ class SequencerTransport {
                 armed_ = false;
                 break;
             case Protocol::SEQ_TRANSPORT_PLAY:
+                CommitPendingPattern();
                 if (using_midi_) {
                     // Arm: wait for MIDI START to align step 0 to the downbeat.
                     armed_ = true;
@@ -88,6 +92,7 @@ class SequencerTransport {
                 }
                 break;
             case Protocol::SEQ_TRANSPORT_CONTINUE:
+                CommitPendingPattern();
                 if (using_midi_) {
                     armed_ = true;
                     scheduler_.Stop();
@@ -114,26 +119,26 @@ class SequencerTransport {
         switch (m.op) {
             case SEQ_OP_SET_STEP:
                 if (StepValid(m.track, m.step)) {
-                    Step& s = pattern_.tracks[m.track].steps[m.step];
+                    Step& s = pending_pattern_.tracks[m.track].steps[m.step];
                     s.on = (m.arg_u8 != 0);
                     s.velocity = ClampVelocity(m.arg_u16);
                 }
                 break;
             case SEQ_OP_TOGGLE_STEP:
                 if (StepValid(m.track, m.step)) {
-                    Step& s = pattern_.tracks[m.track].steps[m.step];
+                    Step& s = pending_pattern_.tracks[m.track].steps[m.step];
                     s.on = !s.on;
                 }
                 break;
             case SEQ_OP_SET_STEP_PROB:
                 if (StepValid(m.track, m.step)) {
-                    pattern_.tracks[m.track].steps[m.step].probability =
+                    pending_pattern_.tracks[m.track].steps[m.step].probability =
                         m.arg_u8 > 100 ? 100 : m.arg_u8;
                 }
                 break;
             case SEQ_OP_SET_STEP_MICRO:
                 if (StepValid(m.track, m.step)) {
-                    Step& s = pattern_.tracks[m.track].steps[m.step];
+                    Step& s = pending_pattern_.tracks[m.track].steps[m.step];
                     s.retrig_count = m.arg_u8 > kMaxRetrigCount ? kMaxRetrigCount : m.arg_u8;
                     s.retrig_rate_ticks = static_cast<uint8_t>(m.arg_u16 & 0xFF);
                     s.micro_offset = m.arg_s16;
@@ -141,7 +146,7 @@ class SequencerTransport {
                 break;
             case SEQ_OP_TRACK_MUTE:
                 if (m.track < kMaxTracks)
-                    pattern_.tracks[m.track].enabled = (m.arg_u8 != 0);
+                    pending_pattern_.tracks[m.track].enabled = (m.arg_u8 != 0);
                 break;
             case SEQ_OP_PATTERN_LENGTH: {
                 uint16_t len = m.arg_u16;
@@ -149,12 +154,12 @@ class SequencerTransport {
                     len = 1;
                 if (len > kMaxSteps)
                     len = kMaxSteps;
-                pattern_.length = static_cast<uint8_t>(len);
+                pending_pattern_.length = static_cast<uint8_t>(len);
                 break;
             }
             case SEQ_OP_PATTERN_SCALE:
                 if (m.arg_u8 <= static_cast<uint8_t>(StepScale::EighthTriplet))
-                    pattern_.scale = static_cast<StepScale>(m.arg_u8);
+                    pending_pattern_.scale = static_cast<StepScale>(m.arg_u8);
                 break;
             case SEQ_OP_PATTERN_SWING: {
                 uint8_t sw = m.arg_u8;
@@ -162,16 +167,17 @@ class SequencerTransport {
                     sw = 50;
                 if (sw > 75)
                     sw = 75;
-                pattern_.swing = sw;
+                pending_pattern_.swing = sw;
                 break;
             }
             case SEQ_OP_SET_PARAM_LOCK:
                 if (StepValid(m.track, m.step) && m.arg_u8 != 0)
-                    SetParamLock(pattern_.tracks[m.track].steps[m.step], m.arg_u8, m.arg_u16);
+                    SetParamLock(
+                        pending_pattern_.tracks[m.track].steps[m.step], m.arg_u8, m.arg_u16);
                 break;
             case SEQ_OP_CLEAR_PARAM_LOCKS:
                 if (StepValid(m.track, m.step)) {
-                    Step& s = pattern_.tracks[m.track].steps[m.step];
+                    Step& s = pending_pattern_.tracks[m.track].steps[m.step];
                     for (auto& lock: s.param_locks)
                         lock = ParamLock{};
                 }
@@ -179,6 +185,7 @@ class SequencerTransport {
             default:
                 break;
         }
+        pending_pattern_dirty_ = true;
     }
 
     // ---- MIDI clock (MSG_MIDI_CLOCK_EVENT) ----
@@ -229,12 +236,19 @@ class SequencerTransport {
     // follower and syncs the scheduler tempo to its servo-corrected rate.
     // Returns trigger events for this block (see SequencerScheduler::Process).
     size_t Tick(TriggerEvent* out_events, size_t max_events) {
+        if (!scheduler_.IsPlaying() && pending_pattern_dirty_) {
+            CommitPendingPattern();
+        }
         if (using_midi_) {
             follower_.Tick();
             if (scheduler_.IsPlaying())
                 scheduler_.SetTempo(static_cast<float>(follower_.InstantaneousBpm()));
         }
-        return scheduler_.Process(out_events, max_events);
+        const size_t count = scheduler_.Process(out_events, max_events);
+        if (pending_pattern_dirty_ && scheduler_.ProcessedStepBoundary()) {
+            CommitPendingPattern();
+        }
+        return count;
     }
 
     // Coalesced playhead snapshot for MSG_SEQ_PLAYHEAD. sync_state maps the
@@ -315,7 +329,15 @@ class SequencerTransport {
         s.param_locks[kMaxParamLocks - 1] = ParamLock{param_id, value};
     }
 
-    Pattern pattern_;
+    void CommitPendingPattern() {
+        active_pattern_ = pending_pattern_;
+        pending_pattern_dirty_ = false;
+        scheduler_.SetPattern(&active_pattern_);
+    }
+
+    Pattern pending_pattern_;
+    Pattern active_pattern_;
+    bool pending_pattern_dirty_ = false;
     SequencerScheduler scheduler_;
     TempoFollower follower_;
 

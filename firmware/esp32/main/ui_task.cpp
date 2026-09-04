@@ -269,6 +269,11 @@ void UITask::run() {
         // for why per event and not around the drain), so no lock here.
         wavex_ui::InputDispatcher::instance().processAll();
 
+        // The screen blanker records touch activity from the LVGL task and
+        // button/encoder activity from InputDispatcher. Keep its actual
+        // backlight I2C writes on this UI task, outside LVGL's lock.
+        wavex_ui::DisplayManager::instance().serviceScreenBlanker();
+
         // Debug-build serial screenshots (no-op stub in release; manages
         // its own LVGL locking, so called outside LV_LOCK).
         wavex_screenshot_poll();

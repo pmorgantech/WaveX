@@ -199,6 +199,29 @@ TEST(SequencerTransportTest, InternalPlayStartsSchedulerImmediately) {
     EXPECT_EQ(events[1].frame, 24000u);  // one beat = 24000 frames @120bpm/48k
 }
 
+TEST(SequencerTransportTest, RuntimePatternEditTakesEffectAfterTheCurrentStepBoundary) {
+    SequencerTransport t = MakeTransport();
+    t.pattern().length = 2;
+    t.pattern().tracks[0].steps[0].on = true;
+
+    t.ApplyTransport(
+        SeqTransportMessage(SEQ_TRANSPORT_PLAY, SEQ_CLOCK_INTERNAL, SEQ_INPUT_PLAY, 0, 12000, 0));
+    ASSERT_EQ(RunTicks(t, 1).size(), 1u);  // step 0 at frame 0
+
+    // This edit arrives during step 0. Its step-1 hit must not appear at the
+    // boundary that completes the step currently being scheduled.
+    t.ApplyPatternOp(SeqPatternOpMessage(SEQ_OP_SET_STEP, 0, 1, 1, 100, 0));
+    EXPECT_TRUE(RunTicks(t, 124).empty());
+    EXPECT_TRUE(RunTicks(t, 1).empty()) << "the just-crossed step uses active Pattern";
+
+    // The pending copy committed immediately after that crossing, so the
+    // following loop observes it without a partial Pattern read.
+    const auto later = RunTicks(t, 250);
+    ASSERT_EQ(later.size(), 2u);
+    EXPECT_EQ(later[0].step, 0);
+    EXPECT_EQ(later[1].step, 1);
+}
+
 TEST(SequencerTransportTest, StopHaltsPlayback) {
     SequencerTransport t = MakeTransport();
     t.pattern().length = 1;

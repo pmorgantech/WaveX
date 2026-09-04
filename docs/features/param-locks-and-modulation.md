@@ -1,7 +1,7 @@
 # Parameter Locks & Modulation Matrix — Design
 
 **Status**: Partially built (2026-09-02) — see §9 for exact stage status. The mod matrix, its two primitives (LFO, param slew), the control-tick wiring into the audio callback, the second envelope, and instrument-scoped `SET_MOD_SLOT` protocol wiring all exist and are tested (host + protocol round-trip/dispatch); the Daisy device build and ESP32 build are both green. It is a no-op on hardware today only because no UI yet sends `SET_MOD_SLOT` (stage 5). `SRC_MODWHEEL`/`SRC_AFTERTOUCH` still read 0 — MIDI CC/aftertouch forwarding from the ESP32 MIDI task is unbuilt. P-locks (§2) have not been started. P-locks are Phase 2 (already named in `sequencer.md` §3); the modulation matrix and LFOs are Phase 2.5.
-**Dependencies**: sequencer step scheduler (Phase 2), `instrument-model.md` (matrix slots are instrument-scoped), voice manager (done).
+**Dependencies**: sequencer step scheduler (Phase 2), `instrument-model.md` (matrix slots are instrument-scoped), voice manager (done). **Revised 2026-09-04**: the two-oscillator Instrument (`track-and-patch-model.md` §3.1) fixes the source/destination set this matrix serves — three envelopes, two per-voice LFOs, one global LFO, oscillator and wavetable-position destinations — appended to the enums below, never renumbered.
 **Lineage**: two ancestries deliberately fused — Elektron parameter locks (per-step sound design) and the E-mu EIII **realtime controls matrix** (velocity/wheel/pedal → pitch, filter, level, LFO amount, attack — routed, not hardwired).
 
 ---
@@ -57,14 +57,22 @@ struct ModSlot {
 };
 enum ModSource : uint8_t {
     SRC_NONE, SRC_VELOCITY, SRC_NOTE,          // per-trigger, sampled once
-    SRC_ENV_FILTER,                            // per-voice 2nd envelope (§4)
-    SRC_LFO1, SRC_LFO2,                        // global LFOs (§5)
-    SRC_LFO_VOICE,                             // per-voice LFO (§5)
+    SRC_ENV_FILTER,                            // per-voice Env 2 (§4) — "Env 2" in the UI
+    SRC_LFO1,                                  // THE global LFO (§5)
+    SRC_LFO2,                                  // retired-but-reserved 2026-09-04: always 0 (one global LFO only)
+    SRC_LFO_VOICE,                             // per-voice LFO 1 (§5)
     SRC_RANDOM,                                // per-trigger S&H, seeded RNG
     SRC_MACRO_1, SRC_MACRO_2, SRC_MACRO_3, SRC_MACRO_4,
     SRC_MODWHEEL, SRC_AFTERTOUCH,              // from MIDI CC1 / channel pressure
     SRC_PARA_ENV,                              // Stage A paraphonic envelope (analog dests)
+    // Appended by the two-oscillator Instrument (track-and-patch-model.md §3.1); wire-stable, append-only:
+    SRC_LFO_VOICE2,                            // per-voice LFO 2
+    SRC_ENV1,                                  // amp envelope as a source
+    SRC_ENV3,                                  // per-voice Env 3 (pitch by default)
 };
+// ModDest grows the same way: today's CUTOFF/GAIN/PITCH/PAN, then RESONANCE,
+// OSC1_PITCH, OSC2_PITCH, OSC_MIX, OSC2_LEVEL, WT_POS1, WT_POS2, LFO1_RATE,
+// LFO2_RATE — appended, never renumbered.
 ```
 
 **Evaluation model — control-rate, never per-sample**: once per 1 ms control tick, for each active voice, `mod[dest] += depth · curve(source_value)` over its instrument's slots. Cost ceiling: 8 slots × 8 voices × ~10 ops = trivial. Per-trigger sources (velocity, note, random) are sampled into the voice at trigger and treated as constants. Destinations applied at block rate: cutoff → `filter.SetCutoff` once per block (one-pole recomputes its coefficient — cheap), gain/pan → block-constant multipliers, pitch → `increment` multiplier update once per block (this quantizes vibrato to 1 kHz steps, which is inaudible; do **not** move pitch mod per-sample without a DWT budget check).
@@ -77,9 +85,14 @@ E-mu voices had filter + amp envelopes; WaveX `Voice` has one (amp). Add `Envelo
 
 ## 5. LFOs
 
-- **2 global LFOs** (control-tick, in `AudioEngine`): sine/tri/saw/square/S&H, rate either Hz (0.02–20) or tempo-synced divisions (1/16 … 4 bars — needs the sequencer clock; free-runs in Hz until Phase 2 lands). Phase-restart options: free, on-transport-start, on-any-note.
-- **1 per-voice LFO**: phase accumulator per voice, waveform/rate from the instrument, evaluated per block. Retriggers at note-on with optional `delay_s` and `fade_s` (the classic E-mu delayed-vibrato envelope on the LFO — one ramp, two params).
-- State: global LFO params live per-instrument? **No** — global LFOs are engine-global (like a modular's LFO bank); per-voice LFO params are instrument-scoped. This keeps multi-timbral behavior sane: slot 3's wobble doesn't change because slot 5 loaded a new instrument.
+Decided 2026-09-04 (`track-and-patch-model.md` §3.1, §9 item 16): **two
+per-voice LFOs owned by the Instrument plus one engine-global LFO.** The
+earlier "2 global + 1 per-voice" split is withdrawn; `SRC_LFO2` stays in the
+enum as retired-but-reserved and reads 0.
+
+- **1 global LFO** (control-tick, in `AudioEngine`, built as `SRC_LFO1`): sine/tri/saw/square/S&H, rate either Hz (0.02–20) or tempo-synced divisions (1/16 … 4 bars — needs the sequencer clock; free-runs in Hz until Phase 2 lands). Phase-restart options: free, on-transport-start, on-any-note. Engine-global like a modular's LFO bank: performance-wide movement, not part of any Instrument.
+- **2 per-voice LFOs** (`SRC_LFO_VOICE`, `SRC_LFO_VOICE2`; not yet built): phase accumulator per voice per LFO, waveform/rate/delay/fade/retrigger from the Instrument (`Instrument::lfo[2]`, saved in the `LFO1`/`LFO2` chunks), evaluated per block. Retrigger at note-on with optional `delay_s` and `fade_s` (the classic E-mu delayed-vibrato envelope on the LFO — one ramp, two params). Their rates are mod destinations (`LFO1_RATE`, `LFO2_RATE`).
+- Why the Instrument owns them: an `.wxi` must sound the same on any Track and in any Project. Slot 3's wobble must not change because slot 5 loaded a new Instrument, and it must not depend on an engine setting the file does not carry.
 
 ## 6. Protocol
 

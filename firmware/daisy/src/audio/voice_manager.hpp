@@ -115,13 +115,14 @@ struct Voice {
     // Kept so ApplyLiveParams can re-apply a pitch offset without losing key
     // tracking - recomputing from `increment` would compound each edit.
     float base_increment = 1.0f;
-    float gain = 0.0f;        // 0..1, derived from velocity (× gain_mul)
-    float pan = 0.5f;         // 0=left, 1=right, linear (not equal-power)
-    uint8_t note = 0;         // MIDI note that triggered this voice
-    uint8_t slot = 0;         // instrument slot (kit/multitimbral) that owns this voice
-    uint8_t choke_group = 0;  // 0 = none; 1..N = mutual-exclusion group (open/closed hat)
-    bool one_shot = false;    // ignore note-off; stop at the sample/region end
-    uint32_t age = 0;         // trigger order, for stealing/release-newest-first
+    float gain = 0.0f;                 // 0..1, derived from velocity (× gain_mul)
+    float pan = 0.5f;                  // 0=left, 1=right, linear (not equal-power)
+    uint8_t note = 0;                  // MIDI note that triggered this voice
+    uint16_t start_offset_frames = 0;  // consumed by the next Render() call
+    uint8_t slot = 0;                  // instrument slot (kit/multitimbral) that owns this voice
+    uint8_t choke_group = 0;           // 0 = none; 1..N = mutual-exclusion group (open/closed hat)
+    bool one_shot = false;             // ignore note-off; stop at the sample/region end
+    uint32_t age = 0;                  // trigger order, for stealing/release-newest-first
 
     // Playback region + loop (item 4). end_frame/loop_end are exclusive.
     uint32_t start_frame = 0;
@@ -211,6 +212,9 @@ struct VoiceTriggerParams {
     // pitch tracking but note-off must still match the pad key that fired.
     uint8_t trigger_note = 0xFF;
     uint8_t velocity = 127;
+    // Intra-block start position for a scheduled trigger. The callback sets
+    // this from TriggerEvent::frame; ordinary MIDI note-ons retain 0.
+    uint16_t start_offset_frames = 0;
     float pan = 0.5f;
     uint8_t root_note = 60;  // note at which `sample` plays at its recorded pitch
 
@@ -405,6 +409,7 @@ class VoiceManager {
         v.gain = (static_cast<float>(params.velocity) / 127.0f) * params.gain_mul;
         v.pan = params.pan < 0.0f ? 0.0f : (params.pan > 1.0f ? 1.0f : params.pan);
         v.note = params.trigger_note == 0xFF ? params.note : params.trigger_note;
+        v.start_offset_frames = params.start_offset_frames;
         v.slot = params.slot;
         v.choke_group = params.choke_group;
         v.one_shot = params.one_shot;
@@ -554,6 +559,15 @@ class VoiceManager {
             if (v.state != VoiceState::Playing)
                 continue;
 
+            // A sequencer event may land anywhere in this audio block. Keep
+            // the voice silent until that exact output frame, then clear the
+            // one-shot delay so later blocks render normally. The scheduler
+            // guarantees offsets below the block size; clamping here still
+            // makes a future caller's larger value safe and deterministic.
+            const size_t start_offset =
+                v.start_offset_frames < block_size ? v.start_offset_frames : block_size;
+            v.start_offset_frames = 0;
+
             // Modulation-matrix destinations, applied once per voice per
             // block (param-locks-and-modulation.md §3) - never per sample.
             // Guarded on != 1.0 so a voice nothing modulates pays neither the
@@ -589,6 +603,8 @@ class VoiceManager {
             const uint32_t loop_len = v.loop_end - v.loop_start;
 
             for (size_t i = 0; i < block_size; ++i) {
+                if (i < start_offset)
+                    continue;
                 bool holding_release_tail = false;
                 if (v.loop && v.phase.Frame() >= v.loop_end) {
                     // Wrap by the loop length so the fractional phase (and

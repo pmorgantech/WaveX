@@ -206,6 +206,35 @@ TEST(VoiceManagerTest, TriggerAllocatesAndRenders) {
     }
 }
 
+TEST(VoiceManagerTest, TriggerStartOffsetDelaysOnsetWithinTheCurrentBlock) {
+    VoiceManager vm;
+    vm.Init(48000);
+    auto sample = MakeRampSample(100, 1000, 0);  // constant nonzero source
+    auto params = FlatParams(sample.data(), sample.size(), 60, 127, 0.5f);
+    params.start_offset_frames = 3;
+    vm.Trigger(params);
+
+    float out_l[8] = {};
+    float out_r[8] = {};
+    vm.Render(out_l, out_r, 8);
+
+    for (size_t i = 0; i < 3; ++i) {
+        EXPECT_FLOAT_EQ(out_l[i], 0.0f) << "sample " << i;
+        EXPECT_FLOAT_EQ(out_r[i], 0.0f) << "sample " << i;
+    }
+    for (size_t i = 3; i < 8; ++i) {
+        EXPECT_GT(out_l[i], 0.0f) << "sample " << i;
+        EXPECT_GT(out_r[i], 0.0f) << "sample " << i;
+    }
+
+    // The offset is a one-block scheduling delay, not a repeated gap.
+    float next_l[2] = {};
+    float next_r[2] = {};
+    vm.Render(next_l, next_r, 2);
+    EXPECT_GT(next_l[0], 0.0f);
+    EXPECT_GT(next_r[0], 0.0f);
+}
+
 TEST(VoiceManagerTest, VelocityScalesGain) {
     VoiceManager vm;
     vm.Init(48000);

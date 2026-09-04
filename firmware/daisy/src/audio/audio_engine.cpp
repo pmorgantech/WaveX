@@ -36,6 +36,7 @@ extern "C" SD_HandleTypeDef hsd1;  // libDaisy per/sdmmc.cpp
 #include "output_sink.hpp"
 #include "paraphonic_envelope.hpp"
 #include "sample_load_info.hpp"
+#include "sequencer/sequencer_command_queue.hpp"
 #include "sfz_loader.hpp"
 #include "snapshot_mailbox.hpp"
 #include "voice_manager.hpp"
@@ -191,21 +192,28 @@ static const WaveX::AudioEngine::ModSlot* ResolveModSlots(const void*, uint8_t s
 static WaveX::AudioEngine::Lfo s_mod_lfo1 WAVEX_DTCM_DATA;
 static WaveX::AudioEngine::Lfo s_mod_lfo2 WAVEX_DTCM_DATA;
 
-// Sequencer transport (roadmap Phase 2). Owns the step scheduler + MIDI
-// tempo follower. Edits/transport/clock arrive from main-loop message
-// handlers (OnSeqTransport / OnSeqPatternOp / OnMidiClockEvent / OnMidiCc)
-// and mutate this object in main-loop context only, so no locking is needed
-// yet. NOTE (deliberate next stage): Tick() is NOT yet driven from
-// Callback(). Advancing the scheduler from the 1 kHz control tick and
-// converting its TriggerEvents into voice triggers requires (a) the
-// double-buffered "edits applied between steps" discipline from
-// sequencer.md §4 so a main-loop edit can't tear a step the callback is
-// reading, and (b) a track->sample (kit) mapping that the instrument model
-// (Phase 2.5) provides. Until that lands the transport accumulates fully
-// unit-tested state (sequencer_transport_test) but does not yet drive audio
-// - the same honest intermediate the voice manager passed through before
-// its note mapping existed.
+// Sequencer transport is callback-owned: its command queue gives the main
+// loop an immutable, bounded hand-off and SequencerTransport itself keeps a
+// pending/active Pattern pair swapped only between steps.
 static WaveX::Sequencer::SequencerTransport s_seq_transport;
+static constexpr uint32_t kSequencerCommandQueueSize = 32;
+static WaveX::Sequencer::SequencerCommandQueue<kSequencerCommandQueueSize> s_seq_command_queue;
+
+// Stage 5's deliberate interim voice map: one sample/Patch bound to Track 1
+// plays chromatically across the 16 scheduler rows. It is built on the main
+// loop with SfzLoader (which owns mutable instrument state) and published as
+// a complete snapshot. The callback therefore never races an SFZ rebind or
+// sample-registry mutation. A later Track->Patch implementation replaces this
+// map with one immutable binding per Track; it must not make the callback read
+// SfzLoader directly.
+static constexpr uint8_t kSequencerPreviewSlot = 0;
+static constexpr uint8_t kSequencerRootNote = 60;
+struct SequencerVoiceMap {
+    uint8_t layer_count[WaveX::Sequencer::kMaxTracks] = {};
+    VoiceTriggerParams layers[WaveX::Sequencer::kMaxTracks][kMaxLayerTriggers] = {};
+};
+static SequencerVoiceMap s_seq_voice_map_active;
+static SnapshotMailbox<SequencerVoiceMap> s_seq_voice_map_mailbox;
 
 // --- Stage A paraphonic analog path (roadmap item 5; analog-voice-board.md
 // §0). One shared envelope drives the shared VCF/VCA CVs; values are
@@ -338,6 +346,64 @@ static bool drain_note_queue() {
     if (__atomic_exchange_n(&s_voice_stop_all, false, __ATOMIC_ACQUIRE)) {
         s_voice_manager.StopAll();
         __atomic_store_n(&s_voice_stop_ack, true, __ATOMIC_RELEASE);
+    }
+    return any_trigger;
+}
+
+static void ApplySequencerLiveParams(VoiceTriggerParams& params) {
+    params.filter_cutoff_hz = s_voice_live_active.filter_cutoff_hz;
+    params.filter_resonance = s_voice_live_active.filter_resonance;
+    params.attack_s = s_voice_live_active.attack_s;
+    params.decay_s = s_voice_live_active.decay_s;
+    params.sustain_level = s_voice_live_active.sustain_level;
+    params.release_s = s_voice_live_active.release_s;
+}
+
+// Callback-only. The main loop publishes complete command records and an
+// independently complete voice map before enqueuing PLAY, so consuming commands
+// before the map makes step 0's immediate trigger see the matching binding.
+static bool drain_sequencer(uint16_t block_size) {
+    WaveX::Sequencer::SequencerCommand command;
+    while (s_seq_command_queue.Pop(command)) {
+        switch (command.type) {
+            case WaveX::Sequencer::SequencerCommandType::Transport:
+                s_seq_transport.ApplyTransport(command.transport);
+                break;
+            case WaveX::Sequencer::SequencerCommandType::PatternOp:
+                s_seq_transport.ApplyPatternOp(command.pattern_op);
+                break;
+            case WaveX::Sequencer::SequencerCommandType::MidiClock:
+                s_seq_transport.OnMidiClock(command.midi_clock);
+                break;
+            case WaveX::Sequencer::SequencerCommandType::MidiCc:
+                s_seq_transport.OnMidiCc(command.midi_cc);
+                break;
+        }
+    }
+    s_seq_voice_map_mailbox.ConsumeLatest(s_seq_voice_map_active);
+
+    const uint64_t block_start_frame = s_seq_transport.scheduler().CurrentFrame();
+    WaveX::Sequencer::TriggerEvent events[WaveX::Sequencer::kMaxEventsPerTick];
+    const size_t event_count = s_seq_transport.Tick(events, WaveX::Sequencer::kMaxEventsPerTick);
+    bool any_trigger = false;
+    for (size_t event_index = 0; event_index < event_count; ++event_index) {
+        const WaveX::Sequencer::TriggerEvent& event = events[event_index];
+        if (event.track >= WaveX::Sequencer::kMaxTracks || event.frame < block_start_frame) {
+            continue;
+        }
+        const uint64_t offset = event.frame - block_start_frame;
+        if (offset >= block_size) {
+            continue;
+        }
+        const uint8_t layer_count = s_seq_voice_map_active.layer_count[event.track];
+        for (uint8_t layer = 0; layer < layer_count; ++layer) {
+            VoiceTriggerParams params = s_seq_voice_map_active.layers[event.track][layer];
+            params.velocity = event.velocity;
+            params.start_offset_frames = static_cast<uint16_t>(offset);
+            ApplySequencerLiveParams(params);
+            s_voice_manager.Trigger(params);
+            any_trigger = true;
+        }
     }
     return any_trigger;
 }
@@ -775,6 +841,22 @@ static SampleRef ResolveLoadedSample(const void*, uint16_t sample_id) {
     return ref;
 }
 
+static void PublishSequencerVoiceMap() {
+    SequencerVoiceMap map{};
+    if (!SfzLoader::SlotLoading(kSequencerPreviewSlot)) {
+        for (uint8_t track = 0; track < WaveX::Sequencer::kMaxTracks; ++track) {
+            const uint8_t note = static_cast<uint8_t>(kSequencerRootNote + track);
+            map.layer_count[track] = SfzLoader::ResolveNote(
+                kSequencerPreviewSlot, note, 127, nullptr, map.layers[track], kMaxLayerTriggers);
+        }
+    }
+    s_seq_voice_map_mailbox.Publish(map);
+}
+
+static void ClearSequencerVoiceMap() {
+    s_seq_voice_map_mailbox.Publish(SequencerVoiceMap{});
+}
+
 // Drops `sample_id` from the registry and returns its memory to the arena.
 // Entries stay in load order (oldest first), so removal closes the gap by
 // shifting rather than swapping with the tail: OnPreviewReq() reads the last
@@ -875,6 +957,9 @@ void SelectSample(uint16_t sample_id, uint8_t slot) {
             (unsigned)slot);
         return;
     }
+    if (slot == kSequencerPreviewSlot) {
+        PublishSequencerVoiceMap();
+    }
     WaveX::Log::PrintLine("SAMPLE_SELECT: slot=%u id=%u", (unsigned)slot, (unsigned)sample_id);
 }
 
@@ -953,6 +1038,9 @@ bool UnloadSample(uint16_t sample_id) {
     // no voice can still be reading. Same barrier OnSampleLoad takes before it
     // evicts; the 10 ms is its margin over the 1 ms block, kept identical
     // rather than tuned, since nothing here is latency-sensitive.
+    // Drop the sequencer's immutable pointer snapshot before the callback
+    // acknowledgement that permits this sample's storage to be freed.
+    ClearSequencerVoiceMap();
     __atomic_store_n(&s_voice_stop_all, true, __ATOMIC_RELEASE);
     System::Delay(10);
 
@@ -961,6 +1049,7 @@ bool UnloadSample(uint16_t sample_id) {
     // leave one that OnNoteOn would silently fail to resolve.
     SfzLoader::ForgetLoadedSample(sample_id);
     remove_loaded_sample(sample_id);
+    PublishSequencerVoiceMap();
 
     WaveX::Log::PrintLine("SAMPLE_UNLOAD: id=%u freed (%u still loaded)",
                           (unsigned)sample_id,
@@ -1836,6 +1925,9 @@ void Init(DaisySeed& hw, float sample_rate, bool sdram_available) {
     s_cv_test_active = s_cv_test_pending;
     s_cv_test_mailbox.Init(s_cv_test_pending);
     s_note_queue.Init();
+    s_seq_command_queue.Init();
+    s_seq_voice_map_active = SequencerVoiceMap{};
+    s_seq_voice_map_mailbox.Init(s_seq_voice_map_active);
     std::memset(s_scoped_release_overflow, 0, sizeof(s_scoped_release_overflow));
     __atomic_store_n(&s_scoped_release_pending_slots, 0u, __ATOMIC_RELAXED);
     s_rb_low_water = 0xFFFFFFFFu;
@@ -1975,7 +2067,7 @@ void Callback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t
     // content above. Render() only runs when a voice is active, so the
     // startup silence requirement is preserved. All callback-safe: fixed
     // buffers, no allocation, no I/O, no logging.
-    const bool any_note_on = drain_note_queue();
+    bool any_note_on = drain_note_queue();
 
     // Publish control-plane changes only at a block boundary. A callback that
     // preempts the producer mid-copy keeps the previous complete snapshot and
@@ -1983,6 +2075,12 @@ void Callback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t
     if (s_voice_live_mailbox.ConsumeLatest(s_voice_live_active)) {
         s_voice_manager.ApplyLiveParams(s_voice_live_active);
     }
+
+    // Sequencer transport and pattern edits are callback-owned through the
+    // bounded command queue. Its TriggerEvents start voices at their exact
+    // sample offset inside this block, after the latest live voice snapshot is
+    // active for both existing and newly scheduled voices.
+    any_note_on = drain_sequencer(static_cast<uint16_t>(size)) || any_note_on;
     if (s_para_mailbox.ConsumeLatest(s_para_active)) {
         s_para_env.SetParams(s_para_active.attack_s,
                              s_para_active.decay_s,
@@ -2291,14 +2389,24 @@ void LoadCvCalFromSd() {
 }
 
 // ---- Sequencer / transport / MIDI-clock (roadmap Phase 2) ----
-// All four run in main-loop message-handler context and forward to the
-// engine-owned SequencerTransport, which is only mutated from this context
-// (see the s_seq_transport declaration for why Tick() is not yet driven
-// from the callback). Real forwarding, not stubs - the transport's state
-// changes are covered by sequencer_transport_test; message_dispatch_test
-// pins that the wire message reaches here.
+// Main-loop handlers only enqueue complete records. The callback owns the
+// transport and drains them at the start of each audio block, so foreground
+// edits and MIDI timing never race audio scheduling.
+static void EnqueueSequencerCommand(const WaveX::Sequencer::SequencerCommand& command) {
+    if (!s_seq_command_queue.Push(command)) {
+        WaveX::Log::PrintLine("SEQ: command queue full; command dropped");
+    }
+}
+
 void OnSeqTransport(const SeqTransportMessage& m) {
-    s_seq_transport.ApplyTransport(m);
+    // Publish before enqueuing PLAY: its first downbeat is due in the same
+    // callback that consumes this command, so its immutable sample pointers
+    // must be available before Tick() starts the scheduler.
+    PublishSequencerVoiceMap();
+    WaveX::Sequencer::SequencerCommand command;
+    command.type = WaveX::Sequencer::SequencerCommandType::Transport;
+    command.transport = m;
+    EnqueueSequencerCommand(command);
 #if WAVEX_MCU_LINK_PACKET_DEBUG
     if (s_hw)
         WaveX::Log::PrintLine("RX SEQ_TRANSPORT: cmd=%u src=%u bpm=%u",
@@ -2309,15 +2417,24 @@ void OnSeqTransport(const SeqTransportMessage& m) {
 }
 
 void OnSeqPatternOp(const SeqPatternOpMessage& m) {
-    s_seq_transport.ApplyPatternOp(m);
+    WaveX::Sequencer::SequencerCommand command;
+    command.type = WaveX::Sequencer::SequencerCommandType::PatternOp;
+    command.pattern_op = m;
+    EnqueueSequencerCommand(command);
 }
 
 void OnMidiClockEvent(const MidiClockEventMessage& m) {
-    s_seq_transport.OnMidiClock(m);
+    WaveX::Sequencer::SequencerCommand command;
+    command.type = WaveX::Sequencer::SequencerCommandType::MidiClock;
+    command.midi_clock = m;
+    EnqueueSequencerCommand(command);
 }
 
 void OnMidiCc(const MidiCcMessage& m) {
-    s_seq_transport.OnMidiCc(m);
+    WaveX::Sequencer::SequencerCommand command;
+    command.type = WaveX::Sequencer::SequencerCommandType::MidiCc;
+    command.midi_cc = m;
+    EnqueueSequencerCommand(command);
 }
 
 void OnNoteOn(const NoteMessage& note_msg) {
@@ -2833,6 +2950,9 @@ void OnInstrumentOp(const InstOpMessage& request) {
         return;
     }
     if (SfzLoader::Begin(request) && request.op == INST_OP_SFZ_LOAD) {
+        if (request.slot == kSequencerPreviewSlot) {
+            ClearSequencerVoiceMap();
+        }
         // Streaming audition and instrument import share FatFs/SD bandwidth.
         // A load owns storage until its cooperative state machine completes.
         CloseWav();
@@ -2855,7 +2975,14 @@ void PumpInstrumentLoad() {
         return;
     }
     stop_requested = false;
+    const bool preview_was_loading = SfzLoader::SlotLoading(kSequencerPreviewSlot);
     SfzLoader::Pump(s_sample_mem_mgr, s_sample_io, sizeof(s_sample_io));
+    // The loader publishes its new slot binding only when its state machine
+    // reaches Idle. Rebuild the callback-owned snapshot at that transition;
+    // rebuilding during the load would expose incomplete sample pointers.
+    if (preview_was_loading && !SfzLoader::SlotLoading(kSequencerPreviewSlot)) {
+        PublishSequencerVoiceMap();
+    }
 }
 
 void OnSampleLoad(const SampleLoadMessage& sl) {
@@ -2867,6 +2994,10 @@ void OnSampleLoad(const SampleLoadMessage& sl) {
     if (s_hw) {
         WaveX::Log::PrintLine("SAMPLE_LOAD: path='%s' id=%u", sl.path, (unsigned)sl.sample_id);
     }
+    // A load can retire or replace the sample the sequencer snapshot points
+    // at. Clear that snapshot before the callback acknowledges voice stop.
+    ClearSequencerVoiceMap();
+
     // CRITICAL: Stop ALL SD activity (playback) and ensure PumpWavIO is not running.
     // FatFS + SDMMC are NOT thread-safe or re-entrant. The main loop calls PumpWavIO() which
     // will conflict with f_open/f_read calls here if s_wav.open is true.

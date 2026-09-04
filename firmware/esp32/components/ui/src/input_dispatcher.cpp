@@ -2,6 +2,7 @@
 
 #include "esp_lvgl_port.h"
 #include "esp_timer.h"
+#include "ui/display_manager.h"
 #include "ui/ui_navigator.h"
 #include "ui/ui_softkey.h"
 
@@ -46,6 +47,11 @@ void InputDispatcher::processAll() {
         return;
     InputEvent evt;
     while (xQueueReceive(queue_, &evt, 0) == pdTRUE) {
+        // Button and encoder producers converge here. Unlike a page-local
+        // handler this catches every physical button and encoder movement,
+        // even when no page consumes the event.
+        DisplayManager::instance().noteUserActivity();
+
         // Handlers build and restyle widgets, so dispatch runs under the LVGL
         // port lock; the LVGL task renders on the other core and an unlocked
         // handler corrupts the object tree.
