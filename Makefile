@@ -1,5 +1,5 @@
 # WaveX Dual-MCU Sampler/Synth Build System
-.PHONY: help all esp32 daisy daisy-stageb size size-record daisy-debug daisy-debug-build daisy-debug-load daisy-debug-server release esp32-release daisy-release check-release-clean check-profiles require-strings clean esp32-clean daisy-clean esp32-flash esp32-monitor esp32-flash-monitor esp32-menuconfig test test-all test-asan test-daisy test-esp32 test-shared test-clean ai-graph daisy-flash daisy-flash-auto flash-all start-logs stop-logs logs-start logs-stop
+.PHONY: help all esp32 daisy daisy-stageb size size-record flash-fast daisy-debug daisy-debug-build daisy-debug-load daisy-debug-server release esp32-release daisy-release check-release-clean check-profiles require-strings clean esp32-clean daisy-clean esp32-flash esp32-monitor esp32-flash-monitor esp32-menuconfig test test-all test-asan test-daisy test-esp32 test-shared test-clean ai-graph daisy-flash daisy-flash-auto flash-all start-logs stop-logs logs-start logs-stop
 
 # Test targets
 test: test-all
@@ -127,6 +127,7 @@ help:
 	@echo "  daisy-debug-build - Build the separate Daisy SRAM/debug ELF"
 	@echo "  daisy-debug-load - Load SRAM ELF through an existing OpenOCD server"
 	@echo "  daisy-debug-server - Start OpenOCD for GDB/Cortex-Debug"
+	@echo "  flash-fast       - ESP32 over USB-JTAG + Daisy into SRAM, concurrently (edit/test loop)"
 	@echo "  release          - Build both MCUs in the release profile, then verify"
 	@echo "  check-release-clean - Assert no debug console tokens in release images"
 	@echo "  check-profiles   - Assert tokens present in debug AND absent in release"
@@ -383,6 +384,27 @@ flash-all: stop-logs
 			echo "❌ One or more firmware flashes failed (Daisy=$$daisy_status ESP32=$$esp32_status)"; \
 			exit 1; \
 		fi
+
+# Fast update of BOTH boards for an edit/test loop: the ESP32 persistently
+# over the P4's USB-Serial/JTAG port, the Daisy VOLATILELY into SRAM over SWD
+# (a reset or power cycle returns it to the persistent QSPI image - that one
+# still takes flash-all's ~20 s DFU cycle). Neither path touches a console
+# port, so the loggers stay attached and just see each board reboot; the two
+# paths share no USB device, so they run concurrently. Measured 2026-09-04
+# from the devcontainer, after the builds: ESP32 10.6 s, Daisy 3.4 s.
+# Failures are reported per board and the target fails if either did.
+flash-fast:
+	@set -eu; \
+		daisy_status=0; esp32_status=0; \
+		$(MAKE) esp32-flash & esp32_pid=$$!; \
+		$(MAKE) daisy-debug & daisy_pid=$$!; \
+		wait $$esp32_pid || esp32_status=$$?; \
+		wait $$daisy_pid || daisy_status=$$?; \
+		if [ $$daisy_status -ne 0 ] || [ $$esp32_status -ne 0 ]; then \
+			echo "❌ Fast flash failed (ESP32=$$esp32_status Daisy-SRAM=$$daisy_status)"; \
+			exit 1; \
+		fi; \
+		echo "✅ ESP32 flashed (persistent) and Daisy loaded into SRAM (volatile)"
 
 # ---------------------------------------------------------------------------
 # Serial logging - replaces minicom so the ports stay scriptable.

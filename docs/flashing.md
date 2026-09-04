@@ -48,6 +48,22 @@ make esp32-flash-monitor
 
 This flashes over the preferred port and then monitors the CH343 bridge, because the console is on UART0. Monitoring the USB-Serial/JTAG port shows nothing. Exit the ESP-IDF monitor with `Ctrl-]`.
 
+## Both boards in one go
+
+```bash
+make flash-fast     # ESP32 persistent over USB-JTAG + Daisy into SRAM over SWD, concurrently
+make flash-all      # ESP32 + Daisy persistent (software-triggered DFU, ~20 s); stops/restarts the loggers
+```
+
+`flash-fast` is the edit/test loop: neither path touches a console port, so
+`make logs-start` loggers stay attached and simply see each board reboot, and
+the two paths share no USB device so they run in parallel. Measured from the
+devcontainer on 2026-09-04 with both images already built: 10.8 s wall for
+both boards (ESP32 10.6 s, Daisy 3.4 s). The Daisy side is the volatile SRAM
+image, so a reset or power cycle returns it to whatever QSPI holds - use
+`flash-all` (or `make daisy-flash-auto`) when the Daisy change has to persist.
+The target fails, per board, if either flash did.
+
 ## Daisy Seed backend
 
 The Daisy firmware is a QSPI image loaded through the Daisy bootloader's USB DFU mode. Build it first so that entering DFU mode is the only time-sensitive step:
@@ -91,7 +107,7 @@ QSPI erase, DFU enumeration, boot-mode switch, or post-load reset:
 | Build + SRAM load + run | `make daisy-debug` |
 | Build SRAM ELF only | `make daisy-debug-build` |
 | GDB server | `make daisy-debug-server` — listens on `localhost:3333` |
-| Load through existing server | In a second shell, `make daisy-debug-load` — fails fast if nothing is listening on the GDB port |
+| Load through existing server | In a second shell, `make daisy-debug-load` — fails fast if nothing is listening on the GDB port, and fails (non-zero, transcript in `build-debug/gdb-load.log`) if GDB reports the load did not complete |
 | VS Code | Cortex-Debug launch config: `"servertype": "openocd"`, `"gdbTarget": "localhost:3333"` |
 
 `make daisy-debug` uses `firmware/daisy/build-debug/`, starts a temporary

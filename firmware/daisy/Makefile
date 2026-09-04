@@ -130,7 +130,13 @@ debug-gdb-load:
 		echo "Error: $(GDB) not found. Rebuild the WaveX devcontainer image."; \
 		exit 1; \
 	fi
-	@$(GDB) --batch "$(DEBUG_ELF)" \
+	@# GDB in batch mode keeps going after a failed command and exits 0 as
+	@# long as the LAST one (disconnect) succeeds, so a failed load printed
+	@# the success line below. Seen 2026-09-04 with a probe recovering from a
+	@# killed OpenOCD: "jtag status contains invalid mode value", "Load
+	@# failed", "Cannot access memory". Scan the transcript instead.
+	@log="$(DEBUG_BUILD_DIR)/gdb-load.log"; \
+		$(GDB) --batch "$(DEBUG_ELF)" \
 		-ex "target extended-remote $(DEBUG_GDB_HOST):$(DEBUG_GDB_PORT)" \
 		-ex "monitor reset halt" \
 		-ex "load" \
@@ -138,7 +144,12 @@ debug-gdb-load:
 		-ex 'set $$pc = Reset_Handler' \
 		-ex 'set *(unsigned int*)0xe000ed08 = 0x24000000' \
 		-ex "monitor resume" \
-		-ex "disconnect"
+		-ex "disconnect" 2>&1 | tee "$$log"; \
+		if grep -qE "Load failed|Cannot access memory|communication failure|Not halted|Protocol error|Connection timed out|Remote connection closed" "$$log" \
+			|| ! grep -q "Transfer rate" "$$log"; then \
+			echo "Error: SRAM load did not complete (see $$log). Re-plug the ST-Link if the probe is wedged."; \
+			exit 1; \
+		fi
 	@echo "SRAM image loaded and running; persistent QSPI firmware was not changed."
 
 # Load into SRAM through an already-running OpenOCD GDB server, then run and

@@ -13,6 +13,13 @@ versioning and release process.
 
 ### Added
 
+- `make flash-fast` updates both boards for an edit/test loop: ESP32
+  persistently over the P4's USB-Serial/JTAG port and the Daisy volatilely
+  into SRAM over SWD, concurrently, with the serial loggers left attached.
+  10.8 s wall for both from the devcontainer. ESP32 flashing prefers that
+  JTAG port (fallback: the CH343 bridge) and the Daisy SWD targets check for
+  the ST-Link and the GDB server first; a Daisy SRAM load that does not
+  complete now fails the target instead of printing success.
 - The Daisy's per-voice lowpass can be switched at runtime between the
   first-party TPT SVF and `daisysp::Svf` for A/B listening
   (`audio/voice_filter.hpp`): `WAVEX-FILTER <wavex|daisysp> [12|24]
