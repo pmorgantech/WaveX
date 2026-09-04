@@ -21,8 +21,11 @@ changing system behavior.
    modules only as relevant code changes.
 4. Pin ESP-IDF to a 5.5 tag, then run the SD soak and panel checks. Treat an
    ESP-IDF 6 migration as a separate spike.
-5. Keep CMSIS-DSP aligned with libDaisy. Revisit only when upstream moves or a
-   Phase 4/5 kernel requires a newer version. Update libDaisy only for a
+5. Keep CMSIS-DSP aligned with libDaisy. Neither it nor DaisySP is compiled
+   into the image today (nothing used them); the CMakeLists notes how to add
+   either back when a Phase 4/5 kernel (FFT, polyphase FIR, a band-limited
+   oscillator) needs it. Revisit only when upstream moves or such a kernel
+   requires a newer version. Update libDaisy only for a
    Phase 3 need or a released upstream tag.
 6. The live transport is UART. SPI revival remains blocked by the six defects
    in [backlog.md](backlog.md#spi-link-revival-is-gated-on-six-recorded-defects).
@@ -158,6 +161,7 @@ The following code paths are open until observed on the target:
 | Sample Edit | Verify waveform fetch, handles, loop seam, browser detail waveform, and stereo readability. |
 | Settings and input | Verify brightness, scrolling, MIDI channel filtering, keypad, encoder direction, and UI responsiveness. |
 | UI concurrency | Measure LVGL lock/refresh behavior during encoder bursts and sample loading. |
+| Image slimming (2026-09-04) | Boot, mount SD, stream a WAV, trigger RAM voices and run the sequencer on the 273 KB image: large callback/loader state is now constructed at startup (`bss_static.hpp`) instead of copied from `.data`, the SD volume links `SD_Driver` directly, and `UART_LOGx` lines should now appear in the log. DWT-measure `Render()` with region fades set (the per-sample 64-bit divide is gone; expect a drop, no number yet). |
 
 ## Rules for every phase
 
