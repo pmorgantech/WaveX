@@ -98,8 +98,13 @@ one-off timestamp rather than either wrapper.
 ### What is instrumented
 
 `CONFIG_LV_USE_SYSMON=y` with `CONFIG_LV_USE_PERF_MONITOR=y` and
-`CONFIG_LV_USE_MEM_MONITOR=y` (both in `firmware/esp32/sdkconfig` and
-`sdkconfig.defaults`) draw two small overlays that LVGL maintains itself:
+`CONFIG_LV_USE_MEM_MONITOR=y` draw two small overlays that LVGL maintains
+itself. **They are off in the tracked configuration** (since 2026-09-04; the
+log-mode line was on every boot): enable them for a measurement build via
+`idf.py menuconfig` -> Component config -> LVGL -> Others -> System monitor,
+or uncomment the block in `firmware/esp32/sdkconfig.defaults` *and* mirror it
+in `sdkconfig` (an existing `sdkconfig` wins over the defaults file), and turn
+them off again before committing.
 
 - **Top left - performance.** Frames per second and LVGL's CPU figure.
 - **Top right - memory.** Used bytes and fragmentation of the LVGL pool

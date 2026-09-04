@@ -75,6 +75,12 @@ versioning and release process.
   of flash, 2 KB of RAM) into a firmware with no USB host in use. Mount
   behaviour is unchanged; SD streaming on hardware has not been re-verified
   since the change.
+- The ESP32 no longer prints LVGL's `sysmon: NN FPS ... CPU N%` line every
+  300 ms, and no longer draws the FPS/memory overlays: `CONFIG_LV_USE_SYSMON`
+  and its perf/memory monitors are off in the tracked `sdkconfig` and
+  `sdkconfig.defaults`. They are measurement instrumentation; the defaults
+  file keeps the block commented with the re-enable recipe, and
+  `docs/performance_monitoring.md` says when to use it.
 - The per-voice SVF gained a 12/24 dB slope switch and a drive control that
   soft-clips the bandpass term inside the integrator loop, so a hot resonance
   folds into a level-limited tone instead of a clean sine that grows without
