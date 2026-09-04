@@ -859,8 +859,15 @@ static SampleRef ResolveLoadedSample(const void*, uint16_t sample_id) {
     return ref;
 }
 
+// Scratch for building the next voice map on the main loop before it is
+// copied into the mailbox. A static rather than a local because a
+// SequencerVoiceMap is ~6 KB: as `SequencerVoiceMap map{}` this was a 6 KB
+// stack frame against the DTCM stack budget (bss_static.hpp).
+static WaveX::BssStatic<SequencerVoiceMap> s_seq_voice_map_scratch_storage;
+
 static void PublishSequencerVoiceMap() {
-    SequencerVoiceMap map{};
+    s_seq_voice_map_scratch_storage.Reconstruct();
+    SequencerVoiceMap& map = s_seq_voice_map_scratch_storage.Get();
     if (!SfzLoader::SlotLoading(kSequencerPreviewSlot)) {
         for (uint8_t track = 0; track < WaveX::Sequencer::kMaxTracks; ++track) {
             const uint8_t note = static_cast<uint8_t>(kSequencerRootNote + track);
@@ -872,7 +879,8 @@ static void PublishSequencerVoiceMap() {
 }
 
 static void ClearSequencerVoiceMap() {
-    s_seq_voice_map_mailbox.Publish(SequencerVoiceMap{});
+    s_seq_voice_map_scratch_storage.Reconstruct();
+    s_seq_voice_map_mailbox.Publish(s_seq_voice_map_scratch_storage.Get());
 }
 
 // Drops `sample_id` from the registry and returns its memory to the arena.
@@ -1946,7 +1954,7 @@ void Init(DaisySeed& hw, float sample_rate, bool sdram_available) {
     s_cv_test_mailbox.Init(s_cv_test_pending);
     s_note_queue.Init();
     s_seq_command_queue.Init();
-    s_seq_voice_map_active = SequencerVoiceMap{};
+    s_seq_voice_map_active_storage.Reconstruct();
     s_seq_voice_map_mailbox.Init(s_seq_voice_map_active);
     std::memset(s_scoped_release_overflow, 0, sizeof(s_scoped_release_overflow));
     __atomic_store_n(&s_scoped_release_pending_slots, 0u, __ATOMIC_RELAXED);

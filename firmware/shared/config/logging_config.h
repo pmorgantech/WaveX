@@ -265,9 +265,12 @@ inline bool ApplyLevelCommand(const char* args, char* reply, size_t reply_cap) {
         if (ok) {
             snprintf(reply, reply_cap, "WAVEX-LOG: %s=%s", all ? "*" : mod_tok, kLevelNames[level]);
         } else {
+            // The echoed command is bounded so the whole reply has a known
+            // maximum (117 bytes); callers size `reply` for that, and the
+            // compiler can see it fits rather than warning about truncation.
             snprintf(reply,
                      reply_cap,
-                     "WAVEX-LOG: bad command '%s' - usage: WAVEX-LOG "
+                     "WAVEX-LOG: bad command '%.24s' - usage: WAVEX-LOG "
                      "<MODULE|*> <OFF|ERROR|WARN|INFO|DEBUG|TRACE|0-5>",
                      args ? args : "");
         }

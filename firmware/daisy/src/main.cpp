@@ -629,7 +629,7 @@ int main(void) {
                                                   static_cast<WaveX::Log::Module>(m))]);
                     }
                 } else {
-                    char reply[96];
+                    char reply[128];  // ApplyLevelCommand's longest reply is 117 bytes
                     WaveX::Log::ApplyLevelCommand(args, reply, sizeof(reply));
                     WaveX::Log::PrintLine("%s", reply);
                 }

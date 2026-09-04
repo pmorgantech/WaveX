@@ -791,7 +791,7 @@ inline bool MapDocument(const Document& document,
                         const char* sfz_path,
                         MappedInstrument& out,
                         Status& status) {
-    out = MappedInstrument{};
+    WaveX::ReconstructInPlace(out);  // not `out = MappedInstrument{}`: 8 KB stack temporary
     out.instrument.origin = InstrumentOrigin::SfzImport;
     status = Status{};
     status.region_count = document.total_regions;

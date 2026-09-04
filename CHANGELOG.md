@@ -129,6 +129,15 @@ versioning and release process.
 
 ### Fixed
 
+- The last large `obj = T{}` resets on the Daisy (the sequencer voice map,
+  its publish scratch, and the SFZ mapper's output) rebuild in place; they
+  were 6-8 KB stack frames against the 64 KB DTCM stack. The console's
+  bad-command reply bounds the echoed text so it cannot truncate.
+- The Daisy SWD targets (`make daisy-debug`, `daisy-debug-load`,
+  `daisy-debug-server`) now check for an ST-Link on USB by VID:PID before
+  doing anything, and `daisy-debug-load` refuses immediately when no GDB
+  server is listening instead of letting GDB time out and print a page of
+  errors against a missing target.
 - The Daisy QSPI link no longer mixes full newlib into a newlib-nano image.
   libDaisy's linker script names `libc.a`, `libm.a` and `libgcc.a` in an
   output section called `DISCARD` (not `/DISCARD/`), which makes ld open the
