@@ -118,9 +118,10 @@ The two Daisy profiles intentionally have different memory timing:
 | SAI/UART DMA buffers | Dedicated D2 DMA region | Same dedicated D2 DMA region |
 | SDMMC1/FatFS I/O buffers | D1 AXI SRAM | D1 AXI SRAM (SDMMC1 cannot reach D2/D3) |
 
-`DEBUG_OPT` defaults to `-O0`, matching the current default persistent build,
-so the profile does not add an optimization-level difference on top of these
-memory-placement differences.
+`DEBUG_OPT` defaults to `-O0` for stepping; the persistent build is `-O2`
+(`WAVEX_DAISY_OPT`, since 2026-09-04), so the debug profile differs from it in
+optimization level as well as in memory placement. Pass `DEBUG_OPT=-O2` to
+remove that difference when chasing something timing-sensitive.
 
 That makes the SRAM profile suitable for functional work, debugger use, and
 controlled comparisons made with matching compiler flags and workloads. It is

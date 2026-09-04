@@ -96,6 +96,13 @@ versioning and release process.
   into SRAM at boot. They are now constructed into zero-cost `.bss` storage at
   startup (`bss_static.hpp`), and `SfzLoader::Reset()` / `Sfz::Parser::Reset()`
   rebuild in place instead of through 34 KB and 20 KB stack temporaries.
+- **The Daisy real-time path is now built at `-O2`** (`WAVEX_DAISY_OPT`,
+  previously `-O0`). Image 275 772 to 189 636 bytes; RAM unchanged. At `-O0`
+  the voice render loop made ~19 calls per sample per voice, all of which
+  now inline. `-O3` was measured at 218 816 bytes and not adopted. Existing
+  build directories keep their configured level: `make daisy-clean` first.
+  The DWT callback measurement and a zero-underrun soak on the `-O2` image
+  are still owed (roadmap "Callback budget").
 - Daisy main-loop-only sources (SFZ import, file browsing, inter-MCU message
   dispatch, SD bring-up, `main.cpp`) are now compiled `-Os` regardless of
   `WAVEX_DAISY_OPT`, which still governs the real-time path and stays `-O0`

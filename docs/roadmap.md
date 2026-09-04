@@ -157,7 +157,7 @@ The following code paths are open until observed on the target:
 | MIDI latency | Measure DIN and USB input-to-sound latency; target under 5 ms. |
 | Diagnostics | Open the page and verify live telemetry arrives. |
 | Digital voices | Trigger RAM-resident notes, sweep live parameters, and judge SVF response/resonance. |
-| Callback budget | DWT-measure SVF, DTCM placement, mixer, and 480 MHz behavior with eight voices. |
+| Callback budget | DWT-measure SVF (both topologies, 24 dB, drive), DTCM placement, mixer, and 480 MHz behavior with eight voices - on the `-O2` image (default since 2026-09-04), plus a zero-underrun soak on it. |
 | Sample Edit | Verify waveform fetch, handles, loop seam, browser detail waveform, and stereo readability. |
 | Settings and input | Verify brightness, scrolling, MIDI channel filtering, keypad, encoder direction, and UI responsiveness. |
 | UI concurrency | Measure LVGL lock/refresh behavior during encoder bursts and sample loading. |

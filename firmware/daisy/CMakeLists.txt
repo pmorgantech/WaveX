@@ -16,18 +16,30 @@ project(wavex-daisy VERSION ${WAVEX_VERSION})
 # -DCMAKE_CXX_FLAGS_RELEASE=... on the command line is overwritten on every
 # configure. Nothing outside this file can set it.
 #
-# The default is -O0 because that is what this firmware has always been built
-# with (unintentionally: no -O was ever specified, and -finline-functions is
-# inert without one). Raising it changes real-time behaviour everywhere and can
-# expose undefined behaviour that -O0 was masking, so it is opt-in rather than
-# a silent default change - see docs/field-findings-20260829.md §1.
+# -O2 since 2026-09-04. Until then this was -O0 - unintentionally at first
+# (no -O was ever specified, and -finline-functions is inert without one),
+# then deliberately opt-in because raising it changes real-time behaviour
+# everywhere and can expose undefined behaviour -O0 was masking (see
+# docs/field-findings-20260829.md §1). The move was made with the host suite
+# green at -O2, no new first-party warnings, and these numbers
+# (docs/firmware-size-log.md): image 275772 -> 189636 bytes; -O3 measured at
+# 218816, +29 KB of unrolling with nothing to show for it, so not taken.
+# What -O2 does to VoiceManager::Render(): at -O0 it made ~19 calls per
+# sample per voice (Frame(), Fraction(), filter/envelope Process(), ...) with
+# every temporary spilled; at -O2 all of them inline and the sample loop has
+# no calls at all. The DWT number for that is still owed - roadmap
+# "Callback budget" - as is a zero-underrun soak on the -O2 image.
 #
-# To A/B it without disturbing the current build:
-#   cd firmware/daisy && make BUILD_DIR=build-O2 CMAKE_EXTRA_ARGS="-DWAVEX_DAISY_OPT=-O2"
+# docs/daisy_rt_audio_coding_guide.md §8 asks for -O3; measure before moving.
 #
-# docs/daisy_rt_audio_coding_guide.md §8 asks for -O3; treat -O2 as the first
-# step and measure each move with DWT rather than assuming.
-set(WAVEX_DAISY_OPT "-O0" CACHE STRING "Optimization flag for the Daisy firmware (e.g. -O0, -O2, -O3)")
+# To A/B a level without disturbing the current build:
+#   cd firmware/daisy && make BUILD_DIR=build-O3 CMAKE_EXTRA_ARGS="-DWAVEX_DAISY_OPT=-O3"
+#
+# CACHE means an existing build directory keeps whatever value it was
+# configured with: after a default change here, `make daisy-clean` (or rm the
+# build dirs) before the new default applies. The debug SRAM profile passes
+# its own DEBUG_OPT explicitly (firmware/daisy/Makefile) and is unaffected.
+set(WAVEX_DAISY_OPT "-O2" CACHE STRING "Optimization flag for the Daisy firmware (e.g. -O0, -O2, -O3)")
 add_compile_options(${WAVEX_DAISY_OPT})
 message(STATUS "WaveX Daisy optimization: ${WAVEX_DAISY_OPT}")
 

@@ -230,22 +230,17 @@ Whatever the listening decides:
 The Daisy image went from 438 KB to 273 KB. Remaining, in order of size, each
 a decision rather than a mechanical fix:
 
-- **`WAVEX_DAISY_OPT` is still `-O0` for the real-time path** (~120 KB of
-  text, and the dominant CPU cost: at `-O0` `VoiceManager::Render()` makes
-  ~19 calls per sample per voice that `-O2` inlines entirely). Gated on the
-  DWT measurement `firmware/daisy/CMakeLists.txt` asks for.
+- ~~`WAVEX_DAISY_OPT` is still `-O0`~~ Done 2026-09-04: `-O2` by default
+  (image 275 772 to 189 636 bytes). Still owed: the DWT number for
+  `Render()` at eight voices and a zero-underrun soak on the `-O2` image;
+  `-O3` measured +29 KB over `-O2` and waits for a reason.
 - **USB CDC logging (`hw.StartLog`) is in every profile**, ~19 KB flash and
   13 KB SRAM including `stm32h7xx_ll_usb.c`. Gate it on `WAVEX_BUILD_DEBUG`
   once field logging is confirmed to go via the UART bridge; libDaisy's
   `usbd_core.c` also carries the only remaining `printf` callers (now routed
   to the log ring).
-- **Stack temporaries of the `obj = T{}` form** remain in
-  `PublishSequencerVoiceMap()`/`ClearSequencerVoiceMap()` (6.4 KB each) and
-  `Sfz::MapDocument()` (8.6 KB local). `bss_static.hpp`'s
-  `ReconstructInPlace()` is the idiom if the DTCM stack budget ever bites.
-- **`-Wformat-truncation` at `-Os`** on the bounded usage-message `snprintf`
-  in `shared/config/logging_config.h:270` - intentional truncation, warning
-  only.
+- ~~Stack temporaries of the `obj = T{}` form~~ and ~~`-Wformat-truncation`
+  at `-Os`~~ both done 2026-09-04 (75145f3).
 - **`HAL_HCD_IRQHandler` + `hhcd_USB_OTG_HS` (~2 KB)** stay linked through
   libDaisy's own `system.cpp` IRQ table; removable only by a submodule change.
 
