@@ -88,6 +88,7 @@ include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/utils
     ${CMAKE_CURRENT_SOURCE_DIR}/../libs/libDaisy/src
     ${CMAKE_CURRENT_SOURCE_DIR}/../libs/DaisySP/Source
+    ${CMAKE_CURRENT_SOURCE_DIR}/../libs/DaisySP/Source/Utility
 )
 
 # Test library with WaveX source files (excluding hardware-dependent code)
@@ -101,6 +102,9 @@ add_library(wavex_test_lib STATIC
     # Note: audio_engine.cpp and other hardware-dependent files excluded for now
     # They require STM32 HAL headers which aren't available in host tests
     ${CMAKE_CURRENT_SOURCE_DIR}/../../shared/uart_protocol/uart_protocol.cpp
+    # DaisySP's Svf, the second per-voice lowpass behind audio/voice_filter.hpp.
+    # Plain C++ over <cmath>; compiles on the host as-is.
+    ${CMAKE_CURRENT_SOURCE_DIR}/../libs/DaisySP/Source/Filters/svf.cpp
 )
 
 target_include_directories(wavex_test_lib PUBLIC
@@ -161,6 +165,12 @@ function(add_wavex_test test_source)
     if(test_name STREQUAL "fade_test")
         target_sources(${test_name} PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/audio/fade.hpp
+        )
+    endif()
+
+    if(test_name STREQUAL "voice_filter_test")
+        target_sources(${test_name} PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/../src/audio/voice_filter.hpp
         )
     endif()
 

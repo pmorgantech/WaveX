@@ -13,6 +13,12 @@ versioning and release process.
 
 ### Added
 
+- The Daisy's per-voice lowpass can be switched at runtime between the
+  first-party TPT SVF and `daisysp::Svf` for A/B listening
+  (`audio/voice_filter.hpp`): `WAVEX-FILTER <wavex|daisysp> [12|24]
+  [drive 0-100]` on the debug console, or `scripts/wavex_filter.py`. Only
+  `svf.cpp` from DaisySP is compiled and linked (~1.8 KB); it is a listening
+  aid, not a parameter, and does not survive a reboot.
 - `docs/firmware-size-log.md` and `scripts/firmware_size.py` (`make size`,
   `make size-record NOTE="..."`): one row per measured build with text/data/
   bss, flashed image size and RAM, so growth is attributable per feature and a

@@ -64,26 +64,98 @@ static constexpr size_t kDfuTriggerLen = sizeof(kDfuTriggerToken) - 1;
 static volatile bool s_dfu_requested = false;
 
 // ---------------------------------------------------------------------------
-// Host-driven log-level control (scripts/wavex_log.py)
+// Host-driven console commands on the CDC port
 //
-// "WAVEX-LOG <MODULE|*> <LEVEL>\n" on the same CDC port adjusts the runtime
-// level table (logging_config.h), and "WAVEX-LOG ?\n" lists every module's
-// current level - a deep dive into one subsystem without reflashing. Same
-// discipline as the DFU token: the USB ISR only captures bytes; parsing and
-// the reply happen on the main loop.
+// A line "WAVEX-<VERB> ...\n" is captured by the USB ISR and parsed on the
+// main loop, which replies through the log ring on the same port. Verbs:
+//
+//   LOG <MODULE|*> <LEVEL> / LOG ?   runtime log levels (scripts/wavex_log.py)
+//   FILTER <wavex|daisysp> [12|24] [drive%] / FILTER ?
+//                                    per-voice lowpass selection for A/B
+//                                    listening (scripts/wavex_filter.py,
+//                                    audio/voice_filter.hpp)
+//
+// Same discipline as the DFU token: the USB ISR only captures bytes; parsing
+// and the reply happen on the main loop.
 //
 // Guarded by WAVEX_DEBUG_HARNESS_ENABLED so a release image carries neither
 // the buffer nor the ISR match state (README.md#build-profiles).
 // The DFU token above is deliberately NOT guarded - it is the only reflash
-// path that needs no BOOT+RESET.
+// path that needs no BOOT+RESET. (Its bytes also match this prefix and get
+// captured as the verb "ENTER-DFU", which the dispatcher ignores; the DFU
+// matcher has already done its job by then.)
 // ---------------------------------------------------------------------------
 #if WAVEX_DEBUG_HARNESS_ENABLED
-static constexpr char kLogCmdToken[] = "WAVEX-LOG ";
+static constexpr char kLogCmdToken[] = "WAVEX-";
 static constexpr size_t kLogCmdTokenLen = sizeof(kLogCmdToken) - 1;
-static char s_log_cmd_buf[48];
+static char s_log_cmd_buf[64];
 // release/acquire pair: the ISR fills s_log_cmd_buf and only then publishes
 // via this flag; the main loop must not observe true before those writes.
 static std::atomic<bool> s_log_cmd_pending{false};
+#endif
+
+#if WAVEX_DEBUG_HARNESS_ENABLED
+static const char* FilterTopologyName(uint8_t topology) {
+    return topology == 1 ? "daisysp" : "wavex";
+}
+
+// "FILTER ?" reports; "FILTER <wavex|daisysp> [12|24] [drive 0-100]" applies.
+// Drive is a percentage so the parser needs no float support. Main-loop
+// context; the engine publishes the selection to the callback.
+static void HandleFilterCommand(const char* args) {
+    while (*args == ' ')
+        ++args;
+#if WAVEX_AUDIO_ENGINE_ENABLED
+    WaveX::AudioEngine::FilterSelection sel = WaveX::AudioEngine::GetFilterSelection();
+    if (*args != '?' && *args != '\0') {
+        char word[16];
+        size_t n = 0;
+        while (*args != ' ' && *args != '\0' && n + 1 < sizeof(word))
+            word[n++] = *args++;
+        word[n] = '\0';
+        if (std::strcmp(word, "wavex") == 0 || std::strcmp(word, "mine") == 0) {
+            sel.topology = 0;
+        } else if (std::strcmp(word, "daisysp") == 0 || std::strcmp(word, "dsp") == 0) {
+            sel.topology = 1;
+        } else {
+            WaveX::Log::PrintLine(
+                "WAVEX-FILTER: bad topology '%s' - usage: WAVEX-FILTER <wavex|daisysp> "
+                "[12|24] [drive 0-100]",
+                word);
+            return;
+        }
+        // Optional numeric fields, in order: slope, drive%.
+        int fields[2] = {-1, -1};
+        for (int f = 0; f < 2; ++f) {
+            while (*args == ' ')
+                ++args;
+            if (*args < '0' || *args > '9')
+                break;
+            int value = 0;
+            while (*args >= '0' && *args <= '9' && value < 1000)
+                value = value * 10 + (*args++ - '0');
+            fields[f] = value;
+        }
+        if (fields[0] == 12 || fields[0] == 24) {
+            sel.slope_db = static_cast<uint8_t>(fields[0]);
+        } else if (fields[0] != -1) {
+            WaveX::Log::PrintLine("WAVEX-FILTER: slope must be 12 or 24 (got %d)", fields[0]);
+            return;
+        }
+        if (fields[1] != -1) {
+            sel.drive = static_cast<float>(fields[1] > 100 ? 100 : fields[1]) / 100.0f;
+        }
+        WaveX::AudioEngine::SetFilterSelection(sel);
+    }
+    WaveX::Log::PrintLine("WAVEX-FILTER: topology=%s slope=%u drive=%d%%",
+                          FilterTopologyName(sel.topology),
+                          static_cast<unsigned>(sel.slope_db),
+                          static_cast<int>(sel.drive * 100.0f + 0.5f));
+#else
+    (void)args;
+    WaveX::Log::PrintLine("WAVEX-FILTER: audio engine disabled in this build");
+#endif
+}
 #endif
 
 // Runs in USB interrupt context: match bytes and set a flag, nothing else.
@@ -546,17 +618,25 @@ int main(void) {
         // script gets confirmation on the same port it sent the command.
 #if WAVEX_DEBUG_HARNESS_ENABLED
         if (s_log_cmd_pending.load(std::memory_order_acquire)) {
-            if (s_log_cmd_buf[0] == '?' && s_log_cmd_buf[1] == '\0') {
-                for (size_t m = 0; m < WaveX::Log::kModuleCount; ++m) {
-                    WaveX::Log::PrintLine("WAVEX-LOG: %s=%s",
-                                          WaveX::Log::kModuleNames[m],
-                                          WaveX::Log::kLevelNames[WaveX::Log::GetLevel(
-                                              static_cast<WaveX::Log::Module>(m))]);
+            const char* cmd = s_log_cmd_buf;
+            if (std::strncmp(cmd, "LOG ", 4) == 0) {
+                const char* args = cmd + 4;
+                if (args[0] == '?' && args[1] == '\0') {
+                    for (size_t m = 0; m < WaveX::Log::kModuleCount; ++m) {
+                        WaveX::Log::PrintLine("WAVEX-LOG: %s=%s",
+                                              WaveX::Log::kModuleNames[m],
+                                              WaveX::Log::kLevelNames[WaveX::Log::GetLevel(
+                                                  static_cast<WaveX::Log::Module>(m))]);
+                    }
+                } else {
+                    char reply[96];
+                    WaveX::Log::ApplyLevelCommand(args, reply, sizeof(reply));
+                    WaveX::Log::PrintLine("%s", reply);
                 }
-            } else {
-                char reply[96];
-                WaveX::Log::ApplyLevelCommand(s_log_cmd_buf, reply, sizeof(reply));
-                WaveX::Log::PrintLine("%s", reply);
+            } else if (std::strncmp(cmd, "FILTER", 6) == 0) {
+                HandleFilterCommand(cmd + 6);
+            } else if (std::strncmp(cmd, "ENTER-DFU", 9) != 0) {
+                WaveX::Log::PrintLine("WAVEX: unknown command '%s'", cmd);
             }
             s_log_cmd_pending.store(false, std::memory_order_release);
         }

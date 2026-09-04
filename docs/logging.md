@@ -57,6 +57,19 @@ scripts/wavex_log.py esp32 UI_NAVIGATOR DEBUG    # per-IDF-tag
 scripts/wavex_log.py esp32 '?'                   # current module levels
 ```
 
+The same console carries the per-voice filter A/B switch on the Daisy
+(debug builds; `audio/voice_filter.hpp`):
+
+```
+WAVEX-FILTER ?                          # current selection
+WAVEX-FILTER <wavex|daisysp> [12|24] [drive 0-100]
+scripts/wavex_filter.py daisysp         # the DaisySP Svf
+scripts/wavex_filter.py wavex 24 60     # first-party SVF, 24 dB, 60% drive
+```
+
+It is a listening aid, not a parameter: nothing on the wire or in the UI
+sets it, and it does not survive a reboot.
+
 It writes to the port without claiming it (coexists with `serial_log.py`)
 and tails `logs/<board>.log` for the confirmation line.
 

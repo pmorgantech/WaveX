@@ -303,7 +303,7 @@ release: esp32-release daisy-release
 # 1, and every check "passes"). require-strings closes the second;
 # check-profiles below closes the first by asserting the tokens ARE present in
 # a debug image.
-DEBUG_TOKENS := WAVEX-LOG WAVEX-DBG WAVEX-SCREENSHOT
+DEBUG_TOKENS := WAVEX-LOG WAVEX-FILTER WAVEX-DBG WAVEX-SCREENSHOT
 RELEASE_ELFS := firmware/daisy/build-release/wavex-daisy.elf \
                 firmware/esp32/build-release/wavex-esp32.elf
 DEBUG_ELFS := firmware/daisy/build/wavex-daisy.elf \

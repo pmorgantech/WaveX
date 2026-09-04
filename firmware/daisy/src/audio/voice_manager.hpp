@@ -37,7 +37,7 @@
 #include "audio/track_mix.hpp"
 #include "envelope.hpp"
 #include "fade.hpp"
-#include "svf_filter.hpp"
+#include "voice_filter.hpp"
 #include <array>
 #include <cmath>
 #include <cstddef>
@@ -138,7 +138,7 @@ struct Voice {
     uint32_t fade_in_frames = 0;
     uint32_t fade_out_frames = 0;
 
-    SvfFilter filter;
+    VoiceFilter filter;
     Envelope envelope;
     // Second envelope (param-locks-and-modulation.md §4), exposed only as
     // SRC_ENV_FILTER. Unlike `envelope` above, this is a MODULATION SOURCE,
@@ -315,6 +315,9 @@ struct VoiceLiveParams {
     float decay_s = 0.05f;
     float sustain_level = 0.8f;
     float release_s = 0.1f;
+    // Which lowpass and how it is shaped (voice_filter.hpp). Default is the
+    // linear 12 dB WaveX SVF, i.e. the filter as it always was.
+    FilterConfig filter;
 };
 
 class VoiceManager {
@@ -337,6 +340,7 @@ class VoiceManager {
     void Init(uint32_t sample_rate) {
         sample_rate_ = sample_rate > 0 ? sample_rate : 48000;
         live_pitch_scale_ = 1.0f;
+        filter_config_ = FilterConfig{};
         // A zeroed seed is a fixed point of xorshift (0 stays 0 forever), which
         // would make SRC_RANDOM sample the same -1.0f on every voice for the
         // life of the engine - exactly the live_pitch_scale_ bug this
@@ -367,9 +371,17 @@ class VoiceManager {
         // the audio callback whenever a control moved, and eight of them would
         // be eight transcendentals inside the deadline for no benefit.
         live_pitch_scale_ = std::pow(2.0f, p.pitch_semitones / 12.0f);
+        // Remembered so voices triggered after this edit start with it too;
+        // SetConfig is a no-op unless something in it changed, so a live edit
+        // of any other parameter does not retune or reset the filters.
+        const bool filter_changed = p.filter != filter_config_;
+        filter_config_ = p.filter;
         for (auto& v: voices_) {
             if (v.state != VoiceState::Playing)
                 continue;
+            if (filter_changed) {
+                v.filter.SetConfig(filter_config_);
+            }
             v.filter.SetResonance(p.filter_resonance);
             v.base_cutoff_hz = p.filter_cutoff_hz;
             v.filter.SetCutoff(v.base_cutoff_hz * v.mod_cutoff_mul);
@@ -479,6 +491,7 @@ class VoiceManager {
         v.SetIncrement(v.base_increment * live_pitch_scale_);
 
         v.filter.Init(sample_rate_);
+        v.filter.SetConfig(filter_config_);
         v.filter.SetResonance(params.filter_resonance);
         v.base_cutoff_hz = params.filter_cutoff_hz;
         v.filter.SetCutoff(v.base_cutoff_hz);
@@ -854,6 +867,10 @@ class VoiceManager {
     // Live transpose as a rate multiplier. 1.0 until something moves PARAM_PITCH,
     // so a voice triggered before any edit sounds exactly as it did before.
     float live_pitch_scale_ = 1.0f;
+    // The filter selection every voice gets at Trigger() (voice_filter.hpp).
+    // Written only by ApplyLiveParams(), i.e. from the callback at block
+    // boundaries.
+    FilterConfig filter_config_;
     // SRC_RANDOM sample-and-hold seed (lfo.hpp's xorshift idiom), advanced
     // once per Trigger(). Non-zero default MUST also be set in Init() -
     // see that function's comment.

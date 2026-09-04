@@ -2324,6 +2324,26 @@ void OnControlChange(const ControlChangeMessage& ctrl_msg) {
     }
 }
 
+void SetFilterSelection(const FilterSelection& sel) {
+    WaveX::AudioEngine::FilterConfig cfg;
+    cfg.topology = sel.topology == 1 ? WaveX::AudioEngine::FilterTopology::DaisySpSvf
+                                     : WaveX::AudioEngine::FilterTopology::WaveXSvf;
+    cfg.slope = sel.slope_db == 24 ? WaveX::AudioEngine::SvfFilter::Slope::Db24
+                                   : WaveX::AudioEngine::SvfFilter::Slope::Db12;
+    cfg.drive = sel.drive < 0.0f ? 0.0f : (sel.drive > 1.0f ? 1.0f : sel.drive);
+    s_voice_live_pending.filter = cfg;
+    s_voice_live_mailbox.Publish(s_voice_live_pending);
+}
+
+FilterSelection GetFilterSelection() {
+    const WaveX::AudioEngine::FilterConfig& cfg = s_voice_live_pending.filter;
+    FilterSelection sel;
+    sel.topology = cfg.topology == WaveX::AudioEngine::FilterTopology::DaisySpSvf ? 1 : 0;
+    sel.slope_db = cfg.slope == WaveX::AudioEngine::SvfFilter::Slope::Db24 ? 24 : 12;
+    sel.drive = cfg.drive;
+    return sel;
+}
+
 // --- CV calibration workflow (item 5 stage 4; analog-voice-board.md §3).
 // All main-loop message-handler context: SetGroupCal publishes the backend's
 // complete calibration table for the next control tick; SD I/O is blocking

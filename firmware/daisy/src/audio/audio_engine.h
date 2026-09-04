@@ -30,6 +30,19 @@ void Callback(daisy::AudioHandle::InputBuffer in,
 // Control/message hook APIs
 void OnControlChange(const WaveX::Protocol::ControlChangeMessage& m);
 
+// Per-voice lowpass selection (voice_filter.hpp): which implementation, its
+// slope and drive. Not a wire parameter - reached only through the debug
+// console's WAVEX-FILTER command, for A/B listening. Main-loop context;
+// published to the callback through the voice-live mailbox like any other
+// live edit, so it takes effect at the next block boundary.
+struct FilterSelection {
+    uint8_t topology = 0;   // FilterTopology: 0 = WaveX SVF, 1 = DaisySP Svf
+    uint8_t slope_db = 12;  // 12 or 24 (WaveX SVF only)
+    float drive = 0.0f;     // 0..1
+};
+void SetFilterSelection(const FilterSelection& sel);
+FilterSelection GetFilterSelection();
+
 /// Applies one mixer control change (MSG_MIX_OP). Main loop only: it writes
 /// the track table the audio callback reads, and every field is a single
 /// aligned word, so a change lands whole on the next block.

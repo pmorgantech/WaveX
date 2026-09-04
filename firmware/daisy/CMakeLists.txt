@@ -135,12 +135,15 @@ else()
     set(CUSTOM_LINKER_SCRIPT "${CMAKE_BINARY_DIR}/wavex_qspi.lds")
 endif()
 
-# Add libDaisy. DaisySP stays a submodule but is not built or linked: nothing
-# in the image uses it (the per-voice envelope, SVF, LFO and fades are the
-# small first-party header-only kernels in src/audio, chosen so the host tests
-# compile them directly). To use a DaisySP module, add
-# `add_subdirectory(libs/DaisySP)`, `set(DAISYSP_LIB DaisySP)` and its Source
-# include path back; the MIT/LGPL split of its modules is in docs/LICENSES.md.
+# Add libDaisy. DaisySP stays a submodule but is not built as a library: the
+# per-voice envelope, LFO and fades are small first-party header-only kernels
+# in src/audio, chosen so the host tests compile them directly. DaisySP
+# modules are pulled in one source file at a time (daisysp_modules below) -
+# with -ffunction-sections/--gc-sections a module costs only the functions
+# actually called, and listing files keeps the build from compiling the ~80
+# modules nothing uses. For many modules, `add_subdirectory(libs/DaisySP)` +
+# `set(DAISYSP_LIB DaisySP)` is the upstream way; the MIT/LGPL split of its
+# modules is in docs/LICENSES.md.
 add_subdirectory(libs/libDaisy)
 
 if(NOT WAVEX_SRAM_DEBUG)
@@ -195,8 +198,19 @@ if(TARGET STM32H7xx_HAL_Driver AND HAL_CMSIS_INCLUDES)
 endif()
 # =========================================
 
-# DaisyProject.cmake links ${DAISYSP_LIB}; empty because DaisySP is not built
-# (see the add_subdirectory note above).
+# The DaisySP modules in use, as an OBJECT library so the vendor code is
+# compiled without our first-party warning flags (SYSTEM below). Currently
+# just Svf, the second per-voice lowpass in audio/voice_filter.hpp.
+add_library(daisysp_modules OBJECT
+    libs/DaisySP/Source/Filters/svf.cpp
+)
+target_include_directories(daisysp_modules SYSTEM PUBLIC ${CMAKE_CURRENT_LIST_DIR}/libs/DaisySP/Source)
+# DaisySP's own build has every module directory on the include path
+# (svf.cpp says `#include "dsp.h"`, meaning Source/Utility/dsp.h).
+target_include_directories(daisysp_modules SYSTEM PRIVATE ${CMAKE_CURRENT_LIST_DIR}/libs/DaisySP/Source/Utility)
+target_compile_options(daisysp_modules PRIVATE -w)
+# DaisyProject.cmake links ${DAISYSP_LIB}; the module objects go on the
+# firmware target directly instead.
 set(DAISYSP_LIB "")
 
 # Shared protocol (headers under firmware/shared)
@@ -264,6 +278,7 @@ endif()
 include(DaisyProject)
 
 set_source_files_properties(${WAVEX_COLD_SOURCES} PROPERTIES COMPILE_OPTIONS "${WAVEX_DAISY_COLD_OPT}")
+target_link_libraries(${FIRMWARE_NAME} PRIVATE daisysp_modules)
 
 # Shared logging state uses C++17 inline variables. Select the language level
 # explicitly instead of relying on the ARM toolchain's current gnu++14 default.
@@ -291,7 +306,7 @@ set_target_properties(${FIRMWARE_NAME} PROPERTIES
 # and builds clean under it - unlike the ESP32, where `#if CONFIG_FOO` on an
 # unset Kconfig bool is the idiomatic spelling and -Wundef is unusable.
 target_compile_options(${FIRMWARE_NAME} PRIVATE -Wall -Wextra -Wconversion -Wundef)
-foreach(vendor_target daisy STM32H7xx_HAL_Driver)
+foreach(vendor_target daisy STM32H7xx_HAL_Driver daisysp_modules)
     if(TARGET ${vendor_target})
         set_target_properties(${vendor_target} PROPERTIES SYSTEM TRUE)
     endif()

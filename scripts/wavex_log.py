@@ -75,8 +75,8 @@ def send(board, command):
     return port
 
 
-def tail_confirmation(logfile, timeout_s, want_lines):
-    """Print WAVEX-LOG reply lines appended to the logger's file."""
+def tail_confirmation(logfile, timeout_s, want_lines, marker=b"WAVEX-LOG"):
+    """Print reply lines containing `marker` appended to the logger's file."""
     try:
         fh = open(logfile, "rb")
     except OSError:
@@ -90,7 +90,7 @@ def tail_confirmation(logfile, timeout_s, want_lines):
         if not line:
             time.sleep(0.05)
             continue
-        if b"WAVEX-LOG" in line:
+        if marker in line:
             print(line.decode(errors="replace").rstrip())
             seen += 1
     fh.close()
