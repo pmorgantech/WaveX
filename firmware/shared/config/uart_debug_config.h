@@ -55,12 +55,17 @@
 #ifdef __cplusplus
 namespace WaveX {
 namespace Debug {
+// Defined by the Daisy firmware (comm/log_ring.cpp) and stubbed by its host
+// test mock: formats one "[UART][level] tag: message" line into the
+// non-blocking log ring. Deliberately not std::printf - on the Daisy stdout is
+// libnosys's _write stub, so printf would discard the text yet still link
+// newlib's whole buffered-stdio machinery.
+void VPrintf(const char* level, const char* tag, const char* fmt, va_list args);
+
 inline void Printf(const char* level, const char* tag, const char* fmt, ...) {
     va_list args;
     va_start(args, fmt);
-    std::printf("[UART][%s]%s%s: ", level, tag ? " " : "", tag ? tag : "daisy");
-    std::vprintf(fmt, args);
-    std::printf("\n");
+    VPrintf(level, tag, fmt, args);
     va_end(args);
 }
 }  // namespace Debug

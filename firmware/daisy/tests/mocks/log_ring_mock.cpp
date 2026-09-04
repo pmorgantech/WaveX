@@ -7,6 +7,7 @@
 // test output stays readable.
 
 #include "comm/log_ring.h"
+#include "config/uart_debug_config.h"
 
 namespace daisy {
 class DaisySeed;
@@ -19,10 +20,15 @@ void Init(daisy::DaisySeed*) {}
 void Write(const char*, size_t) {}
 void Printf(const char*, ...) {}
 void PrintLine(const char*, ...) {}
+void VPrintLine(const char*, va_list) {}
 void Drain() {}
 uint32_t DroppedBytes() {
     return 0;
 }
 
 }  // namespace Log
+
+namespace Debug {
+void VPrintf(const char*, const char*, const char*, va_list) {}
+}  // namespace Debug
 }  // namespace WaveX

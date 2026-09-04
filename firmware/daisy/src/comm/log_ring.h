@@ -23,6 +23,7 @@
 // waiting). If the host stops reading, output is dropped and counted - the
 // audio never pays for it.
 
+#include <cstdarg>
 #include <cstddef>
 #include <cstdint>
 
@@ -52,6 +53,9 @@ void Write(const char* data, size_t len);
 // result touches the ring.
 void Printf(const char* fmt, ...) __attribute__((format(printf, 1, 2)));
 void PrintLine(const char* fmt, ...) __attribute__((format(printf, 1, 2)));
+// va_list form of PrintLine, for callers that are themselves variadic (the
+// shared UART_LOGx macros route here through WaveX::Debug::VPrintf).
+void VPrintLine(const char* fmt, va_list args);
 
 // Transmits at most one USB FS packet per call and returns immediately if
 // the endpoint is busy. Call once per main-loop pass.

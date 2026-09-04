@@ -1,5 +1,6 @@
 #include "log_ring.h"
 
+#include "config/uart_debug_config.h"
 #include "daisy_seed.h"
 
 #include <cstdarg>
@@ -115,11 +116,15 @@ void Printf(const char* fmt, ...) {
 }
 
 void PrintLine(const char* fmt, ...) {
-    char buf[256];
     va_list args;
     va_start(args, fmt);
-    const int n = vsnprintf(buf, sizeof(buf), fmt, args);
+    VPrintLine(fmt, args);
     va_end(args);
+}
+
+void VPrintLine(const char* fmt, va_list args) {
+    char buf[256];
+    const int n = vsnprintf(buf, sizeof(buf), fmt, args);
     if (n <= 0) {
         return;
     }
@@ -171,4 +176,44 @@ uint32_t IsrWrites() {
 }
 
 }  // namespace Log
+
+namespace Debug {
+
+// Sink for the shared UART_LOGx macros (firmware/shared/config/
+// uart_debug_config.h). Same ring, same main-loop-only rule as Log::Write.
+void VPrintf(const char* level, const char* tag, const char* fmt, va_list args) {
+    Log::Printf("[UART][%s]%s%s: ", level, tag ? " " : "", tag ? tag : "daisy");
+    Log::VPrintLine(fmt, args);
+}
+
+}  // namespace Debug
 }  // namespace WaveX
+
+// stdout does not exist on this firmware: --specs=nosys.specs makes _write()
+// a stub that fails, so anything printf()ed is discarded - yet the call still
+// links newlib's whole buffered-stdio machinery (_vfprintf_r, __sfvwrite_r,
+// __sinit, the FILE table, fflush/fclose...), about 5 KB. The only remaining
+// caller is libDaisy's USB device stack: its usbd_conf.h pins
+// USBD_DEBUG_LEVEL 3, so usbd_core.c's four invalid-handle USBD_ErrLog()s
+// expand to printf()/putchar(). Defining both here keeps stdio out of the
+// image and puts those four messages where every other line goes. Nothing
+// first-party may call printf(): use WaveX::Log or the UART_LOGx macros.
+extern "C" int printf(const char* fmt, ...) {
+    char buf[128];
+    va_list args;
+    va_start(args, fmt);
+    const int n = vsnprintf(buf, sizeof(buf), fmt, args);
+    va_end(args);
+    if (n > 0) {
+        WaveX::Log::Write(
+            buf,
+            (static_cast<size_t>(n) >= sizeof(buf)) ? sizeof(buf) - 1 : static_cast<size_t>(n));
+    }
+    return n;
+}
+
+extern "C" int putchar(int c) {
+    const char ch = static_cast<char>(c);
+    WaveX::Log::Write(&ch, 1);
+    return c;
+}

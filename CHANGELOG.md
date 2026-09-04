@@ -44,6 +44,13 @@ versioning and release process.
   hex-float and inf/nan handling; it cost ~8 KB of flash and put `malloc` on
   the import path through its big-integer scratch allocator. Hex floats and
   `inf`/`nan` - which no opcode carries - are now rejected as invalid values.
+- Daisy `UART_LOGx` output now reaches the log ring. On the Daisy the shared
+  macros expanded to `printf`, whose stdout is libnosys's failing `_write`
+  stub - the text was discarded, yet the call kept newlib's buffered stdio
+  (~5 KB) linked. `WaveX::Debug::Printf` now formats into the non-blocking
+  log ring like every other line; a first-party `printf`/`putchar` sink
+  catches the four `USBD_ErrLog` calls libDaisy's USB stack still makes. The
+  never-called `wavex_sd_log` bridge is removed.
 - **One shared current Track across the UI.** Play, Sample Manager, Voice and
   the Sample Browser each kept a private "current slot", so "which Track?" had
   four different answers at once. They now read one shared value

@@ -53,7 +53,6 @@ set(FIRMWARE_SOURCES
     src/audio/snapshot_mailbox.hpp
     src/storage/fs_browse.cpp
     src/storage/sd_sdio.cpp
-    src/storage/sd_log_bridge.cpp
     src/memory_sections.cpp
     src/audio/output_sink.hpp
     src/audio/voice_manager.hpp
