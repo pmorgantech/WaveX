@@ -69,6 +69,12 @@ versioning and release process.
   of flash, 2 KB of RAM) into a firmware with no USB host in use. Mount
   behaviour is unchanged; SD streaming on hardware has not been re-verified
   since the change.
+- The per-voice SVF gained a 12/24 dB slope switch and a drive control that
+  soft-clips the bandpass term inside the integrator loop, so a hot resonance
+  folds into a level-limited tone instead of a clean sine that grows without
+  bound. Both default off: an unconfigured filter is bit-identical to the
+  linear 12 dB filter it was. Neither is on the wire or in the UI yet; see
+  the `WAVEX-FILTER` console command (next entry) for A/B listening.
 - The Daisy image shrinks by ~117 KB (409 KB to 292 KB) because its large
   callback/loader state no longer ships as a flash image of its defaults.
   `SequencerTransport`, the sequencer voice map and its mailbox, the SFZ

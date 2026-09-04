@@ -60,6 +60,31 @@
 // point, AGENTS.md requires a DWT number before claiming a placement win, and
 // there isn't one yet. Tracked as a follow-up, not done on a hunch.
 //
+// SLOPE AND DRIVE (2026-09-04). Two things a linear 12 dB/oct TPT lowpass
+// cannot do that a "synth filter" is expected to: fall off at 24 dB/oct, and
+// misbehave gracefully at high resonance. Both are options here, both default
+// OFF so that a filter nobody configured is bit-identical to the linear
+// 12 dB version the tests and the voice path were written against.
+//
+//   - Slope::Db24 runs a second, identically tuned TPT stage in series.
+//     Twice the cost (~10 more flops per sample), the classic 4-pole
+//     lowpass shape. Both stages share one coefficient set, so modulation
+//     still costs one tan() per change.
+//
+//   - Drive > 0 soft-clips the bandpass term v1 inside the integrator loop
+//     before it is written back to the state. v1 is what the resonance
+//     feedback path runs through, so this is where an analogue filter
+//     saturates: the clipper only ever reduces |v1|, so the loop gain
+//     cannot exceed the linear case and stability is preserved, while a
+//     self-oscillating peak flattens into a rounded, level-limited tone
+//     instead of a clean sine that grows without bound. The curve is the
+//     cubic x - x^3/3 on [-1, 1] clamped to +-2/3 beyond it: unit slope at
+//     zero (a quiet signal is untouched), continuous first derivative at the
+//     clamp, and no divide, transcendental or table - four multiplies and
+//     two compares per stage. Drive scales the signal into the clipper
+//     (1x .. kMaxDriveGain x) and back out, so it sets how hot the
+//     resonance has to be before it starts to fold.
+//
 // HAL-free: plain float arithmetic, host-testable.
 
 #include <cmath>
@@ -70,6 +95,13 @@ namespace AudioEngine {
 
 class SvfFilter {
    public:
+    enum class Slope : uint8_t { Db12, Db24 };
+
+    // Pre-gain into the soft clipper at drive = 1.0. 8x means a bandpass
+    // term of 1/8 full scale already starts to round; at drive just above 0
+    // only a genuinely runaway resonance (|v1| toward 1) is touched.
+    static constexpr float kMaxDriveGain = 8.0f;
+
     // Resonance 0..1 maps onto this Q range. 0.5 is well-damped (no peak at
     // all - a gentler knee than Butterworth, so resonance=0 sounds like a
     // plain lowpass rather than like a filter with a bump). kMaxQ is chosen
@@ -104,15 +136,40 @@ class SvfFilter {
         UpdateCoeffs();
     }
 
+    // 12 or 24 dB/oct. Takes effect on the next sample; the second stage's
+    // state is cleared when switching so a stage that was not running does
+    // not start from stale content.
+    void SetSlope(Slope slope) {
+        if (slope != slope_) {
+            ic3eq_ = 0.0f;
+            ic4eq_ = 0.0f;
+        }
+        slope_ = slope;
+    }
+    Slope GetSlope() const { return slope_; }
+
+    // 0 = linear, exactly the filter as it was; up to 1 = the bandpass term
+    // is driven kMaxDriveGain x into the soft clipper. Clamped.
+    void SetDrive(float drive) {
+        drive_ = drive < 0.0f ? 0.0f : (drive > 1.0f ? 1.0f : drive);
+        if (drive_ > 0.0f) {
+            drive_gain_ = 1.0f + drive_ * (kMaxDriveGain - 1.0f);
+            drive_gain_inv_ = 1.0f / drive_gain_;
+        } else {
+            drive_gain_ = 0.0f;  // sentinel: clipper off
+            drive_gain_inv_ = 0.0f;
+        }
+    }
+    float GetDrive() const { return drive_; }
+
     float Process(float in) {
         if (bypass_)
             return in;
-        const float v3 = in - ic2eq_;
-        const float v1 = a1_ * ic1eq_ + a2_ * v3;
-        const float v2 = ic2eq_ + a2_ * ic1eq_ + a3_ * v3;
-        ic1eq_ = 2.0f * v1 - ic1eq_;
-        ic2eq_ = 2.0f * v2 - ic2eq_;
-        return v2;  // lowpass output
+        float out = Stage(in, ic1eq_, ic2eq_);
+        if (slope_ == Slope::Db24) {
+            out = Stage(out, ic3eq_, ic4eq_);
+        }
+        return out;  // lowpass output
     }
 
     // Clears the integrator state without touching the tuning. Called at
@@ -121,9 +178,34 @@ class SvfFilter {
     void Reset() {
         ic1eq_ = 0.0f;
         ic2eq_ = 0.0f;
+        ic3eq_ = 0.0f;
+        ic4eq_ = 0.0f;
     }
 
    private:
+    // One TPT lowpass stage over the given integrator pair. With the clipper
+    // off this is exactly the original single-stage Process().
+    float Stage(float in, float& ic1, float& ic2) const {
+        const float v3 = in - ic2;
+        float v1 = a1_ * ic1 + a2_ * v3;
+        const float v2 = ic2 + a2_ * ic1 + a3_ * v3;
+        if (drive_gain_ > 0.0f) {
+            v1 = SoftClip(v1 * drive_gain_) * drive_gain_inv_;
+        }
+        ic1 = 2.0f * v1 - ic1;
+        ic2 = 2.0f * v2 - ic2;
+        return v2;
+    }
+
+    // x - x^3/3 on [-1, 1], +-2/3 outside: unit slope at 0, C1 at the clamp.
+    static float SoftClip(float x) {
+        if (x > 1.0f)
+            return 2.0f / 3.0f;
+        if (x < -1.0f)
+            return -2.0f / 3.0f;
+        return x - (x * x * x) * (1.0f / 3.0f);
+    }
+
     void UpdateCoeffs() {
         const float nyquist = static_cast<float>(sample_rate_) * 0.5f;
         if (cutoff_hz_ >= nyquist) {
@@ -152,13 +234,20 @@ class SvfFilter {
     float a2_ = 0.0f;
     float a3_ = 0.0f;
 
-    // Trapezoidal integrator state. NOTE for hardware bring-up: these decay
-    // toward zero on silence and can reach denormal magnitudes, which are
-    // slow on some FPUs. The Cortex-M7 FPU has a flush-to-zero mode (FPSCR.FZ)
-    // that makes this free; confirm it is enabled rather than paying for a
-    // per-sample guard here on a guess.
+    // Trapezoidal integrator state. These decay toward zero on silence and
+    // can reach subnormal magnitudes; the Cortex-M7's FPv5 handles subnormals
+    // in hardware at full speed, so no flush-to-zero mode or per-sample guard
+    // is needed on this target (the concern is real on x86 hosts only).
     float ic1eq_ = 0.0f;
     float ic2eq_ = 0.0f;
+    // Second stage, used only at Slope::Db24.
+    float ic3eq_ = 0.0f;
+    float ic4eq_ = 0.0f;
+
+    Slope slope_ = Slope::Db12;
+    float drive_ = 0.0f;
+    float drive_gain_ = 0.0f;  // 0 = clipper off (see SetDrive)
+    float drive_gain_inv_ = 0.0f;
 };
 
 }  // namespace AudioEngine

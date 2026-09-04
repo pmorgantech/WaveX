@@ -234,3 +234,104 @@ TEST(SvfFilterTest, SilenceInDecaysToSilenceOut) {
         last = f.Process(0.0f);
     EXPECT_LT(std::fabs(last), 1.0e-6f) << "resonant filter should ring down to silence";
 }
+
+// --- Slope -------------------------------------------------------------------
+//
+// 24 dB/oct is the same stage twice, so an octave above cutoff it must roll
+// off about twice as many dB as 12 dB/oct, while the passband stays put.
+
+TEST(SvfFilterTest, TwentyFourDbRollsOffTwiceAsSteeply) {
+    SvfFilter f12 = MakeFilter(1000.0f);
+    SvfFilter f24 = MakeFilter(1000.0f);
+    f24.SetSlope(SvfFilter::Slope::Db24);
+
+    const float pass12 = SteadyStatePeak(f12, 50.0f);
+    const float pass24 = SteadyStatePeak(f24, 50.0f);
+    EXPECT_NEAR(pass12, 1.0f, 0.02f);
+    EXPECT_NEAR(pass24, 1.0f, 0.02f);
+
+    const float db12 = 20.0f * std::log10(SteadyStatePeak(f12, 4000.0f));
+    const float db24 = 20.0f * std::log10(SteadyStatePeak(f24, 4000.0f));
+    EXPECT_LT(db12, -20.0f);        // two octaves up, one stage
+    EXPECT_LT(db24, db12 - 15.0f);  // the second stage adds its own roll-off
+    EXPECT_NEAR(db24, 2.0f * db12, 6.0f);
+}
+
+TEST(SvfFilterTest, SlopeDefaultsToTwelveAndBypassStillHolds) {
+    SvfFilter f = MakeFilter(1.0e6f);
+    EXPECT_EQ(f.GetSlope(), SvfFilter::Slope::Db12);
+    f.SetSlope(SvfFilter::Slope::Db24);
+    f.SetDrive(1.0f);
+    EXPECT_FLOAT_EQ(f.Process(0.7f), 0.7f) << "bypass must ignore slope and drive";
+}
+
+// --- Drive -------------------------------------------------------------------
+//
+// Drive 0 is the linear filter exactly; drive > 0 soft-clips the bandpass term
+// inside the integrator loop, so a hot resonant peak is level-limited while a
+// quiet signal passes as before.
+
+TEST(SvfFilterTest, ZeroDriveIsBitIdenticalToLinear) {
+    SvfFilter linear = MakeFilter(1000.0f, 0.8f);
+    SvfFilter zero = MakeFilter(1000.0f, 0.8f);
+    zero.SetDrive(0.0f);
+    for (int i = 0; i < 4000; ++i) {
+        const float in = std::sin(2.0f * kPi * 990.0f * static_cast<float>(i) / 48000.0f);
+        ASSERT_FLOAT_EQ(linear.Process(in), zero.Process(in)) << "sample " << i;
+    }
+}
+
+TEST(SvfFilterTest, DriveLimitsTheResonantPeakButLeavesQuietSignalsAlone) {
+    // Full resonance, a full-scale sine sitting on the cutoff: the linear
+    // filter's peak is Q-sized; with drive the clipper folds it down.
+    SvfFilter linear = MakeFilter(1000.0f, 1.0f);
+    SvfFilter driven = MakeFilter(1000.0f, 1.0f);
+    driven.SetDrive(1.0f);
+    const float hot_linear = SteadyStatePeak(linear, 1000.0f);
+    const float hot_driven = SteadyStatePeak(driven, 1000.0f);
+    EXPECT_GT(hot_linear, 4.0f) << "sanity: the linear peak at Q=20 is large";
+    EXPECT_LT(hot_driven, 0.5f * hot_linear);
+    EXPECT_TRUE(std::isfinite(hot_driven));
+
+    // At -60 dB the clipper's cubic is indistinguishable from unit gain, so
+    // the driven filter must match the linear one to well under 1%.
+    SvfFilter quiet_linear = MakeFilter(1000.0f, 0.3f);
+    SvfFilter quiet_driven = MakeFilter(1000.0f, 0.3f);
+    quiet_driven.SetDrive(1.0f);
+    float peak_l = 0.0f, peak_d = 0.0f;
+    for (int i = 0; i < 48000; ++i) {
+        const float in = 0.001f * std::sin(2.0f * kPi * 500.0f * static_cast<float>(i) / 48000.0f);
+        const float l = quiet_linear.Process(in);
+        const float d = quiet_driven.Process(in);
+        if (i > 24000) {
+            peak_l = std::max(peak_l, std::fabs(l));
+            peak_d = std::max(peak_d, std::fabs(d));
+        }
+    }
+    EXPECT_NEAR(peak_d / peak_l, 1.0f, 0.01f);
+}
+
+TEST(SvfFilterTest, DriveIsClampedAndReadsBack) {
+    SvfFilter f = MakeFilter(1000.0f);
+    f.SetDrive(3.0f);
+    EXPECT_FLOAT_EQ(f.GetDrive(), 1.0f);
+    f.SetDrive(-1.0f);
+    EXPECT_FLOAT_EQ(f.GetDrive(), 0.0f);
+}
+
+TEST(SvfFilterTest, DrivenTwentyFourDbSweepStaysFiniteAndBounded) {
+    SvfFilter f = MakeFilter(1000.0f, 1.0f);
+    f.SetSlope(SvfFilter::Slope::Db24);
+    f.SetDrive(1.0f);
+    float peak = 0.0f;
+    for (int i = 0; i < 96000; ++i) {
+        const float t = static_cast<float>(i) / 48000.0f;
+        f.SetCutoff(200.0f + 8000.0f * (0.5f - 0.5f * std::cos(2.0f * kPi * 0.5f * t)));
+        const float out = f.Process(std::sin(2.0f * kPi * 440.0f * t));
+        ASSERT_TRUE(std::isfinite(out)) << "sample " << i;
+        peak = std::max(peak, std::fabs(out));
+    }
+    // A self-oscillating linear 4-pole at Q=20 would run far past this; the
+    // clipper holds the resonance to a few times full scale at most.
+    EXPECT_LT(peak, 8.0f);
+}
