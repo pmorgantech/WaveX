@@ -30,8 +30,24 @@ DAISY_SRAM_BYTES = 512 * 1024
 DAISY_QSPI_BYTES = 7936 * 1024
 
 HEADER = (
-    "| Date | Commit | Image | text | data | bss | Flash | RAM | Note |\n"
-    "|---|---|---|---:|---:|---:|---:|---:|---|\n"
+    "| Date | Commit | Image | text | data | bss | Flash | RAM | "
+    "Regions | Note |\n"
+    "|---|---|---|---:|---:|---:|---:|---:|---|---|\n"
+)
+
+# STM32H750 memory map as libDaisy's linker scripts name it (VMA ranges).
+# Used to attribute the ELF's allocated sections to regions, which is the
+# same accounting the linker's --print-memory-usage line does.
+DAISY_REGIONS = (
+    ("ITCM", 0x00000000, 64 * 1024),
+    ("DTCM", 0x20000000, 128 * 1024),
+    ("SRAM", 0x24000000, 512 * 1024),
+    ("D2DMA", 0x30000000, 32 * 1024),
+    ("D2", 0x30008000, 256 * 1024),
+    ("D3", 0x38000000, 64 * 1024),
+    ("BKP", 0x38800000, 4 * 1024),
+    ("QSPI", 0x90040000, 7936 * 1024),
+    ("SDRAM", 0xC0000000, 64 * 1024 * 1024),
 )
 
 
@@ -62,6 +78,44 @@ def arm_size(elf):
     return text, data, bss
 
 
+def daisy_regions(elf):
+    """Bytes of allocated sections per memory region, by VMA."""
+    out = subprocess.run(
+        ["arm-none-eabi-readelf", "-S", "-W", str(elf)],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    used = {name: 0 for name, _, _ in DAISY_REGIONS}
+    for line in out.splitlines():
+        m = re.match(
+            r"\s*\[\s*\d+\]\s+(\S+)\s+(\S+)\s+([0-9a-f]+)\s+[0-9a-f]+\s+"
+            r"([0-9a-f]+)\s+\S+\s+([A-Za-z]*)\s",
+            line,
+        )
+        if not m:
+            continue
+        name, kind, addr, size, flags = m.groups()
+        if "A" not in flags or kind == "NULL":
+            continue
+        addr, size = int(addr, 16), int(size, 16)
+        for region, base, length in DAISY_REGIONS:
+            if base <= addr < base + length:
+                used[region] += size
+                break
+    parts = []
+    for region, _, length in DAISY_REGIONS:
+        # Flash is the Flash column; RAM regions are the interesting split.
+        if not used[region] or region in ("QSPI", "SDRAM"):
+            continue
+        pct = 100.0 * used[region] / length
+        if used[region] < 1024:
+            parts.append(f"{region} {used[region]}B")
+        else:
+            parts.append(f"{region} {used[region] / 1024:.1f}K ({pct:.0f}%)")
+    return " / ".join(parts)
+
+
 def daisy_row(build_dir, label):
     elf = ROOT / "firmware" / "daisy" / build_dir / "wavex-daisy.elf"
     if not elf.exists():
@@ -80,6 +134,7 @@ def daisy_row(build_dir, label):
         "bss": bss,
         "flash": f"{image} ({100.0 * image / DAISY_QSPI_BYTES:.1f}%)",
         "ram": f"{ram} ({100.0 * ram / DAISY_SRAM_BYTES:.1f}%)",
+        "regions": daisy_regions(elf),
     }
 
 
@@ -98,6 +153,7 @@ def esp32_row():
         "bss": "",
         "flash": str(app_bin.stat().st_size),
         "ram": "",
+        "regions": "",
     }
 
 
@@ -105,7 +161,7 @@ def fmt_row(date, commit, row, note):
     return (
         f"| {date} | {commit} | {row['image']} | {row['text']} | "
         f"{row['data']} | {row['bss']} | {row['flash']} | {row['ram']} | "
-        f"{note} |\n"
+        f"{row['regions']} | {note} |\n"
     )
 
 
@@ -133,9 +189,18 @@ def main():
         action="store_true",
         help="skip the ESP32 row",
     )
+    ap.add_argument(
+        "--no-daisy",
+        action="store_true",
+        help="skip the Daisy row",
+    )
     args = ap.parse_args()
 
-    rows = [r for r in (daisy_row(args.daisy_build, args.label),) if r]
+    rows = []
+    if not args.no_daisy:
+        daisy = daisy_row(args.daisy_build, args.label)
+        if daisy:
+            rows.append(daisy)
     if not args.no_esp32:
         esp = esp32_row()
         if esp:

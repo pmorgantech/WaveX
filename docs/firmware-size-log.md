@@ -16,6 +16,12 @@ Columns (Daisy):
   the D2 DMA buffers (`.sram1_bss`, ~22 KiB) that the linker places outside
   AXI SRAM, so it reads ~4 points higher than the linker's own `SRAM:` line;
   the trend is what matters, and it is consistent.
+- **Regions** - the RAM split by STM32H750 memory region, from the ELF's
+  allocated sections (VMA): DTCM (128 KiB, stacks and callback state),
+  SRAM (512 KiB AXI), D2DMA (32 KiB, DMA buffers), D2/D3, ITCM (code),
+  BKP. This is the linker's `--print-memory-usage` accounting, so it is the
+  column to read when a change moves state between regions rather than
+  growing it. Empty on rows backfilled before the column existed.
 - **Commit** - the tree the build came from; a trailing `+` means the
   working tree was dirty when recorded.
 
@@ -37,19 +43,22 @@ that they match the sizes recorded in the commit messages byte for byte.
 
 ## Log
 
-| Date | Commit | Image | text | data | bss | Flash | RAM | Note |
-|---|---|---|---:|---:|---:|---:|---:|---|
-| 2026-09-03 | c307ee2 | daisy | 301824 | 75320 | 332532 | 377184 (4.6%) | 407852 (77.8%) | v0.4.0 release |
-| 2026-09-04 | 9e37f65 | daisy | 312280 | 126084 | 333620 | 438404 (5.4%) | 459704 (87.7%) | baseline before the image-slimming series (sequencer transport added ~50 KB of .data) |
-| 2026-09-04 | 95b2387 | daisy | 308600 | 126084 | 333620 | 434724 (5.3%) | 459704 (87.7%) | region fades prepared per block; float cos table (-4 KB double libm) |
-| 2026-09-04 | 4e5ba4b | daisy | 298128 | 125724 | 333620 | 423892 (5.2%) | 459344 (87.6%) | SFZ ParseFloat without strtof (-8 KB strtod/mprec, drops malloc from import) |
-| 2026-09-04 | 8e8c1f8 | daisy | 294200 | 125716 | 333620 | 419956 (5.2%) | 459336 (87.6%) | UART_LOGx and stray printf into the log ring (-5 KB buffered stdio) |
-| 2026-09-04 | 7fa9eae | daisy | 294152 | 125716 | 333620 | 419908 (5.2%) | 459336 (87.6%) | DaisySP and CMSIS-DSP shim no longer compiled (arm_copy_q15 -> memcpy) |
-| 2026-09-04 | 0671bc2 | daisy | 294160 | 125716 | 333620 | 419916 (5.2%) | 459336 (87.6%) | resampler phase split in 32-bit ops (drops float->int64 libgcc call) |
-| 2026-09-04 | ca6e6d3 | daisy | 292624 | 124448 | 333588 | 417112 (5.1%) | 458036 (87.4%) | linker script no longer pulls full libc.a ahead of libc_nano |
-| 2026-09-04 | a248706 | daisy | 284696 | 124444 | 331488 | 409180 (5.0%) | 455932 (87.0%) | SD volume linked directly; USB host MSC stack gone |
-| 2026-09-04 | be2d86d | daisy | 289040 | 2628 | 453344 | 291708 (3.6%) | 455972 (87.0%) | large defaults constructed into .bss instead of shipped as .data |
-| 2026-09-04 | 479db13 | daisy | 270392 | 2628 | 453308 | 273060 (3.4%) | 455936 (87.0%) | cold TUs at -Os; SRAM debug layout refitted |
-| 2026-09-04 | 9f8f453 | daisy | 270392 | 2628 | 453308 | 273060 (3.4%) | 455936 (87.0%) | size log added (no firmware change) |
-| 2026-09-04 | 343054e | daisy | 270664 | 2628 | 453500 | 273332 (3.4%) | 456128 (87.0%) | SVF 12/24 dB slope + soft-clip drive (+272 B; both default off) |
-| 2026-09-04 | 88fa2e7 | daisy | 275480 | 2660 | 454316 | 278180 (3.4%) | 456976 (87.2%) | VoiceFilter A/B switch, daisysp::Svf linked (svf.cpp only, +1808 B) + WAVEX-FILTER console verb |
+| Date | Commit | Image | text | data | bss | Flash | RAM | Regions | Note |
+|---|---|---|---:|---:|---:|---:|---:|---|---|
+| 2026-09-03 | c307ee2 | daisy | 301824 | 75320 | 332532 | 377184 (4.6%) | 407852 (77.8%) |  | v0.4.0 release |
+| 2026-09-04 | 9e37f65 | daisy | 312280 | 126084 | 333620 | 438404 (5.4%) | 459704 (87.7%) |  | baseline before the image-slimming series (sequencer transport added ~50 KB of .data) |
+| 2026-09-04 | 95b2387 | daisy | 308600 | 126084 | 333620 | 434724 (5.3%) | 459704 (87.7%) |  | region fades prepared per block; float cos table (-4 KB double libm) |
+| 2026-09-04 | 4e5ba4b | daisy | 298128 | 125724 | 333620 | 423892 (5.2%) | 459344 (87.6%) |  | SFZ ParseFloat without strtof (-8 KB strtod/mprec, drops malloc from import) |
+| 2026-09-04 | 8e8c1f8 | daisy | 294200 | 125716 | 333620 | 419956 (5.2%) | 459336 (87.6%) |  | UART_LOGx and stray printf into the log ring (-5 KB buffered stdio) |
+| 2026-09-04 | 7fa9eae | daisy | 294152 | 125716 | 333620 | 419908 (5.2%) | 459336 (87.6%) |  | DaisySP and CMSIS-DSP shim no longer compiled (arm_copy_q15 -> memcpy) |
+| 2026-09-04 | 0671bc2 | daisy | 294160 | 125716 | 333620 | 419916 (5.2%) | 459336 (87.6%) |  | resampler phase split in 32-bit ops (drops float->int64 libgcc call) |
+| 2026-09-04 | ca6e6d3 | daisy | 292624 | 124448 | 333588 | 417112 (5.1%) | 458036 (87.4%) |  | linker script no longer pulls full libc.a ahead of libc_nano |
+| 2026-09-04 | a248706 | daisy | 284696 | 124444 | 331488 | 409180 (5.0%) | 455932 (87.0%) |  | SD volume linked directly; USB host MSC stack gone |
+| 2026-09-04 | be2d86d | daisy | 289040 | 2628 | 453344 | 291708 (3.6%) | 455972 (87.0%) |  | large defaults constructed into .bss instead of shipped as .data |
+| 2026-09-04 | 479db13 | daisy | 270392 | 2628 | 453308 | 273060 (3.4%) | 455936 (87.0%) |  | cold TUs at -Os; SRAM debug layout refitted |
+| 2026-09-04 | 9f8f453 | daisy | 270392 | 2628 | 453308 | 273060 (3.4%) | 455936 (87.0%) |  | size log added (no firmware change) |
+| 2026-09-04 | 343054e | daisy | 270664 | 2628 | 453500 | 273332 (3.4%) | 456128 (87.0%) |  | SVF 12/24 dB slope + soft-clip drive (+272 B; both default off) |
+| 2026-09-04 | 88fa2e7 | daisy | 275480 | 2660 | 454316 | 278180 (3.4%) | 456976 (87.2%) |  | VoiceFilter A/B switch, daisysp::Svf linked (svf.cpp only, +1808 B) + WAVEX-FILTER console verb |
+| 2026-09-04 | b571443 | esp32 app |  |  |  | 1007392 |  |  | ESP32 baseline before disabling the LVGL sysmon |
+| 2026-09-04 | 84453a0 | esp32 app |  |  |  | 1004944 |  |  | LVGL sysmon/perf/mem monitors off |
+| 2026-09-04 | 88fa2e7 | daisy | 275480 | 2660 | 454316 | 278180 (3.4%) | 456976 (87.2%) | ITCM 528B / DTCM 2.9K (2%) / SRAM 422.6K (83%) / D2DMA 20.0K (63%) / BKP 12B | same image as the row above, re-measured to fill in Regions; baseline for the -O2 series |
