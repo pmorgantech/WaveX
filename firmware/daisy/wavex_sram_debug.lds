@@ -259,12 +259,10 @@ SECTIONS
         PROVIDE(__reserved_for_stack_end__ = .);
     } > DTCMRAM
 
-    DISCARD :
-    {
-        libc.a ( * )
-        libm.a ( * )
-        libgcc.a ( * )
-    }
+    /* libDaisy's scripts end with an output section named DISCARD listing
+     * libc.a, libm.a and libgcc.a. Naming an archive as an input section
+     * makes ld open it, which pulls the full newlib libc.a in ahead of the
+     * -lc_nano the specs select. Deliberately omitted - see CMakeLists.txt. */
 }
 
 ASSERT(SIZEOF(.sram1_bss) <= 30K,

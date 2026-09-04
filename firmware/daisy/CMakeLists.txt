@@ -93,6 +93,28 @@ if(WAVEX_SRAM_DEBUG)
     list(APPEND FIRMWARE_SOURCES src/sram_debug_startup.cpp)
 elseif(NOT DAISY_STORAGE STREQUAL "qspi")
     message(FATAL_ERROR "Persistent WaveX builds require DAISY_STORAGE=qspi")
+else()
+    # libDaisy's STM32H750IB_qspi.lds ends with an output section named
+    # DISCARD (not /DISCARD/) whose input-section list names libc.a, libm.a
+    # and libgcc.a. Naming an archive there makes ld OPEN it as an input, so
+    # the full newlib libc.a is searched before the -lc_nano the specs ask
+    # for and wins every symbol crt0 needs first: full-newlib malloc (1.4 KB
+    # plus a 1 KB __malloc_av_ table in .data), findfp, exit/atexit and the
+    # reentrancy setup, ~3 KB in all, replacing their nano versions. Generate
+    # a copy without that block rather than fork the vendor file; the SRAM
+    # debug script is WaveX-owned and simply omits it.
+    set(WAVEX_VENDOR_QSPI_LDS "${CMAKE_CURRENT_LIST_DIR}/libs/libDaisy/core/STM32H750IB_qspi.lds")
+    file(READ "${WAVEX_VENDOR_QSPI_LDS}" WAVEX_QSPI_LDS)
+    string(REGEX REPLACE
+        "\n[ \t]*DISCARD[ \t]*:[ \t]*\n[ \t]*{[^}]*}[ \t]*\n"
+        "\n" WAVEX_QSPI_LDS "${WAVEX_QSPI_LDS}")
+    if(WAVEX_QSPI_LDS MATCHES "libc\.a")
+        message(FATAL_ERROR "libc.a still referenced in the generated QSPI linker script")
+    endif()
+    file(WRITE "${CMAKE_BINARY_DIR}/wavex_qspi.lds" "${WAVEX_QSPI_LDS}")
+    # Re-run configure if the vendor script changes underneath us.
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${WAVEX_VENDOR_QSPI_LDS}")
+    set(CUSTOM_LINKER_SCRIPT "${CMAKE_BINARY_DIR}/wavex_qspi.lds")
 endif()
 
 # Add libDaisy. DaisySP stays a submodule but is not built or linked: nothing
@@ -102,6 +124,13 @@ endif()
 # `add_subdirectory(libs/DaisySP)`, `set(DAISYSP_LIB DaisySP)` and its Source
 # include path back; the MIT/LGPL split of its modules is in docs/LICENSES.md.
 add_subdirectory(libs/libDaisy)
+
+if(NOT WAVEX_SRAM_DEBUG)
+    # DaisyProject.cmake defines BOOT_APP (the bootloader has already run
+    # SystemInit) only on its own linker-script path; the generated QSPI
+    # script above takes the CUSTOM_LINKER_SCRIPT path, so define it here.
+    target_compile_definitions(daisy PRIVATE BOOT_APP)
+endif()
 
 if(WAVEX_SRAM_DEBUG)
     # The SWD loader establishes SP before entering Reset_Handler. Do not use

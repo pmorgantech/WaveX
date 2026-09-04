@@ -80,6 +80,13 @@ versioning and release process.
 
 ### Fixed
 
+- The Daisy QSPI link no longer mixes full newlib into a newlib-nano image.
+  libDaisy's linker script names `libc.a`, `libm.a` and `libgcc.a` in an
+  output section called `DISCARD` (not `/DISCARD/`), which makes ld open the
+  full `libc.a` ahead of `-lc_nano`; full-newlib `malloc`, `findfp` and
+  `exit`/`atexit` won over their nano versions (~3 KB flash, 1.3 KB SRAM).
+  The build now links a generated copy of the vendor script without that
+  block; the WaveX SRAM debug script omits it directly.
 - **Select on a Track holding an Instrument now says so.** `SfzLoader::BindSample`
   refuses a bare-sample bind on a Track owned by an SFZ import; that refusal
   previously reached only the Daisy's log, so Select appeared to do nothing.
