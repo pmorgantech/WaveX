@@ -148,17 +148,100 @@ inline bool ParseInt(const char* text, int32_t& out) {
     return true;
 }
 
+// Plain decimal: [ws][sign]digits[.digits][(e|E)[sign]digits][ws]. That is
+// every number an SFZ opcode carries. Deliberately NOT strtof(): newlib's
+// strtof is the full correctly-rounded strtod with hex-float and inf/nan
+// parsing, which linked ~8 KB (_strtod_l, __gethex, the __mprec big-integer
+// suite) and, through _Balloc, put malloc on the import path. Accuracy here
+// is ~1e-7 relative - the mantissa is exact to 9 digits and the scaling is a
+// double multiply - against opcode values quantised to cents, dB/10, and
+// milliseconds.
 inline bool ParseFloat(const char* text, float& out) {
-    if (!text || *text == '\0') {
+    const char* p = SkipSpace(text);
+    if (!p || *p == '\0') {
         return false;
     }
-    char* end = nullptr;
-    const float value = std::strtof(text, &end);
-    end = const_cast<char*>(SkipSpace(end));
-    if (!end || *end != '\0' || !std::isfinite(value)) {
+    bool negative = false;
+    if (*p == '+' || *p == '-') {
+        negative = (*p == '-');
+        ++p;
+    }
+
+    // Mantissa as an integer, exact while it fits 9 digits; digits past that
+    // only shift the exponent so a long fraction cannot overflow it.
+    uint32_t mantissa = 0;
+    int exponent = 0;
+    int digits = 0;
+    int significant = 0;
+    for (; *p >= '0' && *p <= '9'; ++p, ++digits) {
+        if (significant < 9) {
+            mantissa = mantissa * 10u + static_cast<uint32_t>(*p - '0');
+            if (mantissa != 0) {
+                ++significant;
+            }
+        } else {
+            ++exponent;
+        }
+    }
+    if (*p == '.') {
+        ++p;
+        for (; *p >= '0' && *p <= '9'; ++p, ++digits) {
+            if (significant < 9) {
+                mantissa = mantissa * 10u + static_cast<uint32_t>(*p - '0');
+                if (mantissa != 0) {
+                    ++significant;
+                }
+                --exponent;
+            }
+        }
+    }
+    if (digits == 0) {
         return false;
     }
-    out = value;
+    if (*p == 'e' || *p == 'E') {
+        ++p;
+        bool exp_negative = false;
+        if (*p == '+' || *p == '-') {
+            exp_negative = (*p == '-');
+            ++p;
+        }
+        if (*p < '0' || *p > '9') {
+            return false;
+        }
+        int exp_value = 0;
+        for (; *p >= '0' && *p <= '9'; ++p) {
+            if (exp_value < 1000) {  // saturate; anything this large is out of float range
+                exp_value = exp_value * 10 + (*p - '0');
+            }
+        }
+        exponent += exp_negative ? -exp_value : exp_value;
+    }
+    p = SkipSpace(p);
+    if (*p != '\0') {
+        return false;
+    }
+
+    if (mantissa == 0) {
+        out = negative ? -0.0f : 0.0f;
+        return true;
+    }
+    // float range is ~1e-45..3.4e38; a 9-digit mantissa moves that window by
+    // at most 9. Anything past +-60 cannot be finite, so bail before the
+    // scaling loop below does 1000 multiplies for nothing.
+    if (exponent > 60 || exponent < -60) {
+        return false;
+    }
+    double value = static_cast<double>(mantissa);
+    double scale = 1.0;
+    for (int i = 0; i < (exponent < 0 ? -exponent : exponent); ++i) {
+        scale *= 10.0;
+    }
+    value = exponent < 0 ? value / scale : value * scale;
+    const float result = static_cast<float>(negative ? -value : value);
+    if (!std::isfinite(result)) {
+        return false;
+    }
+    out = result;
     return true;
 }
 

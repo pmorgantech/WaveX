@@ -33,6 +33,56 @@ MappedInstrument ParseAndMap(std::initializer_list<const char*> lines,
 
 }  // namespace
 
+// ParseFloat is a hand-rolled decimal parser rather than strtof (which links
+// ~8 KB and malloc on the target). Every shape an opcode value takes must
+// parse, and everything strtof would have tolerated that an opcode never
+// carries (hex floats, inf/nan, trailing junk) must be rejected.
+TEST(SfzParserTest, ParseFloatHandlesOpcodeShapesAndRejectsTheRest) {
+    float v = 0.0f;
+    struct Case {
+        const char* text;
+        float expected;
+    };
+    const Case ok[] = {
+        {"0", 0.0f},
+        {"12", 12.0f},
+        {"-25", -25.0f},
+        {"+7", 7.0f},
+        {"0.25", 0.25f},
+        {"-6.0206", -6.0206f},
+        {".5", 0.5f},
+        {"5.", 5.0f},
+        {"1e3", 1000.0f},
+        {"2.5E-2", 0.025f},
+        {"-1.5e+1", -15.0f},
+        {"100000", 100000.0f},
+        {" 3.5 ", 3.5f},
+        {"0.000123456", 0.000123456f},
+        {"123456789012", 123456789012.0f},  // more than 9 significant digits
+        {"0.1234567890123", 0.1234567890123f},
+    };
+    for (const Case& c: ok) {
+        ASSERT_TRUE(Sfz::detail::ParseFloat(c.text, v)) << c.text;
+        EXPECT_NEAR(v, c.expected, std::fabs(c.expected) * 2e-7f + 1e-9f) << c.text;
+    }
+    for (const char* bad: {"",
+                           " ",
+                           "-",
+                           ".",
+                           "e5",
+                           "1e",
+                           "1e+",
+                           "1.2.3",
+                           "abc",
+                           "12x",
+                           "0x10",
+                           "inf",
+                           "nan",
+                           "1e99"}) {
+        EXPECT_FALSE(Sfz::detail::ParseFloat(bad, v)) << "'" << bad << "'";
+    }
+}
+
 TEST(SfzParserTest, ParsesBasicRegionAndSkipsUnknownOpcodes) {
     Parser parser;
     parser.Reset();

@@ -39,6 +39,11 @@ versioning and release process.
   library call, up to twice per sample for a region with both fades. The fade
   table is also built in single precision, which drops ~4 KB of
   double-precision libm from the image.
+- SFZ import parses opcode numbers with a small decimal parser instead of
+  `strtof`. newlib's `strtof` is the full correctly-rounded `strtod` with
+  hex-float and inf/nan handling; it cost ~8 KB of flash and put `malloc` on
+  the import path through its big-integer scratch allocator. Hex floats and
+  `inf`/`nan` - which no opcode carries - are now rejected as invalid values.
 - **One shared current Track across the UI.** Play, Sample Manager, Voice and
   the Sample Browser each kept a private "current slot", so "which Track?" had
   four different answers at once. They now read one shared value
