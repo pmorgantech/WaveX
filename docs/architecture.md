@@ -54,7 +54,7 @@ Dual-MCU split, each processor doing what it is best at:
 | UI, navigation, waveform display | ESP32-P4 | PSRAM + PPA + MIPI-DSI bandwidth |
 | MIDI I/O | ESP32-P4 | USB device + DIN UART; forwards notes over the inter-MCU link |
 | Sample storage (SD card) | Daisy | Audio engine streams directly; no sample data crosses the SPI link during playback |
-| Real-time audio, voices, mixing | Daisy | Deterministic bare-metal loop, CMSIS-DSP, SDRAM |
+| Real-time audio, voices, mixing | Daisy | Deterministic bare-metal loop, FPU, SDRAM |
 | CV/Gate + analog voice control | Daisy | Generated at the 1 kHz control tick, phase-aligned with audio |
 | Offline sample rendering | Daisy (SD→SD) | Data locality; see `features/offline-sample-editing.md` |
 | Sequencer clock & event engine | Daisy (target) | Timing must be sample-accurate; UI only edits patterns |
@@ -137,7 +137,7 @@ Bare-metal cooperative model — **two execution contexts only**:
 
 Key subsystems:
 
-- **Sample streaming**: triple-buffered SD read slots with ready/consumed flags; `PumpWavIO()` refills while the callback drains; conversion (mono/stereo → output mode, resampling via CMSIS `arm_linear_interp_q15`) happens in the pump path, not the callback's per-sample loop; `rb_push_frames()` batches ring-buffer writes with minimal barriers.
+- **Sample streaming**: triple-buffered SD read slots with ready/consumed flags; `PumpWavIO()` refills while the callback drains; conversion (mono/stereo → output mode, resampling via the fixed-point linear interpolator in `linear_resampler.hpp`) happens in the pump path, not the callback's per-sample loop; `rb_push_frames()` batches ring-buffer writes with minimal barriers.
 - **Sample RAM**: `memory.h` slab (32 B–1 KB classes) + extent (64 KB pages) allocator over a 60 MB arena; the final 4 MB is reserved for offline-render scratch. `sdram_layout.h` is the single ownership map. Stats report the complete reserved pool to the UI via `MSG_STATUS_RESPONSE`/`SampleMemStatusMessage`.
 - **Profiling**: DWT cycle counters (`profiling/`), `PROFILE_SCOPE` macros behind `WAVEX_PROFILING_ENABLED`, CPU load min/avg/max reported in heartbeats.
 

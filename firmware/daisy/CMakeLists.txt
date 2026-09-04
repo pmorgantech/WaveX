@@ -95,9 +95,13 @@ elseif(NOT DAISY_STORAGE STREQUAL "qspi")
     message(FATAL_ERROR "Persistent WaveX builds require DAISY_STORAGE=qspi")
 endif()
 
-# Add libDaisy and DaisySP
+# Add libDaisy. DaisySP stays a submodule but is not built or linked: nothing
+# in the image uses it (the per-voice envelope, SVF, LFO and fades are the
+# small first-party header-only kernels in src/audio, chosen so the host tests
+# compile them directly). To use a DaisySP module, add
+# `add_subdirectory(libs/DaisySP)`, `set(DAISYSP_LIB DaisySP)` and its Source
+# include path back; the MIT/LGPL split of its modules is in docs/LICENSES.md.
 add_subdirectory(libs/libDaisy)
-add_subdirectory(libs/DaisySP)
 
 if(WAVEX_SRAM_DEBUG)
     # The SWD loader establishes SP before entering Reset_Handler. Do not use
@@ -144,17 +148,15 @@ if(TARGET STM32H7xx_HAL_Driver AND HAL_CMSIS_INCLUDES)
 endif()
 # =========================================
 
-# Define DAISYSP_LIB for DaisyProject.cmake
-set(DAISYSP_LIB DaisySP)
+# DaisyProject.cmake links ${DAISYSP_LIB}; empty because DaisySP is not built
+# (see the add_subdirectory note above).
+set(DAISYSP_LIB "")
 
 # Shared protocol (headers under firmware/shared)
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../shared)
 # Include src directory for relative includes
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/src)
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/src/storage)
-
-# Add DaisySP headers to include path
-include_directories(${CMAKE_CURRENT_LIST_DIR}/libs/DaisySP/Source)
 
 # Add definitions for the project
 add_compile_definitions(
@@ -240,7 +242,7 @@ set_target_properties(${FIRMWARE_NAME} PROPERTIES
 # and builds clean under it - unlike the ESP32, where `#if CONFIG_FOO` on an
 # unset Kconfig bool is the idiomatic spelling and -Wundef is unusable.
 target_compile_options(${FIRMWARE_NAME} PRIVATE -Wall -Wextra -Wconversion -Wundef)
-foreach(vendor_target daisy DaisySP STM32H7xx_HAL_Driver cmsis_dsp_support)
+foreach(vendor_target daisy STM32H7xx_HAL_Driver)
     if(TARGET ${vendor_target})
         set_target_properties(${vendor_target} PROPERTIES SYSTEM TRUE)
     endif()
@@ -263,29 +265,12 @@ if(NOT WAVEX_SRAM_DEBUG)
     )
 endif()
 
-set(CMSIS_DSP_DIR ${CMAKE_CURRENT_LIST_DIR}/libs/libDaisy/Drivers/CMSIS-DSP)
-
-# Explicitly list the CMSIS-DSP sources we require (present in libDaisy’s CMSIS tree).
-set(CMSIS_DSP_SOURCES
-    ${CMSIS_DSP_DIR}/Source/SupportFunctions/arm_float_to_f16.c
-    ${CMSIS_DSP_DIR}/Source/SupportFunctions/arm_f16_to_float.c
-    ${CMSIS_DSP_DIR}/Source/SupportFunctions/arm_float_to_q15.c
-    ${CMSIS_DSP_DIR}/Source/SupportFunctions/arm_float_to_q31.c
-    ${CMSIS_DSP_DIR}/Source/SupportFunctions/arm_float_to_q7.c
-    ${CMSIS_DSP_DIR}/Source/SupportFunctions/arm_q15_to_float.c
-    ${CMSIS_DSP_DIR}/Source/SupportFunctions/arm_q31_to_float.c
-    ${CMSIS_DSP_DIR}/Source/SupportFunctions/arm_q7_to_float.c
-    ${CMSIS_DSP_DIR}/Source/SupportFunctions/arm_copy_q15.c
-    ${CMSIS_DSP_DIR}/Source/InterpolationFunctions/arm_linear_interp_q15.c
-)
-
-add_library(cmsis_dsp_support OBJECT ${CMSIS_DSP_SOURCES})
-target_include_directories(cmsis_dsp_support PUBLIC ${CMSIS_DSP_DIR}/Include)
-target_include_directories(cmsis_dsp_support PUBLIC
-    ${CMAKE_CURRENT_LIST_DIR}/libs/libDaisy/Drivers/CMSIS_5/CMSIS/Core/Include
-    ${CMAKE_CURRENT_LIST_DIR}/libs/libDaisy/Drivers/CMSIS_5/CMSIS/Include
-)
-target_link_libraries(${FIRMWARE_NAME} PRIVATE cmsis_dsp_support)
+# CMSIS-DSP is not linked. The sources live in libs/libDaisy/Drivers/CMSIS-DSP;
+# when a kernel is worth it (FFT, polyphase FIR resampling, saturating q15
+# block math - docs/daisy_rt_audio_coding_guide.md §8), add an OBJECT library
+# of exactly the arm_*.c files used, with Include/ and the CMSIS_5 Core
+# include on its interface, and link it PRIVATE. An earlier shim compiled ten
+# conversion/interpolation files of which the link kept one plain copy loop.
 
 # Set linker specs to use nano library with nosys stubs
 set(CMAKE_EXE_LINKER_FLAGS "--specs=nano.specs --specs=nosys.specs")

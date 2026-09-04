@@ -10,7 +10,12 @@ extern "C" SD_HandleTypeDef hsd1;  // libDaisy per/sdmmc.cpp
 #include "../memory.h"
 #include "../memory_sections.h"  // For WAVEX_DTCM_DATA
 #include "../sdram_layout.h"
-#include "arm_math.h"  // For CMSIS-DSP helpers
+// q15_t was CMSIS-DSP's name for a 16-bit sample; the engine keeps the name
+// (it says "audio sample, not a count") but no longer links the library - its
+// one used routine, arm_copy_q15, was a plain copy loop, and memcpy is at
+// least as fast. docs/daisy_rt_audio_coding_guide.md §8 says when the
+// library IS worth linking.
+using q15_t = int16_t;
 #include "audio_engine.h"
 #include "comm/daisy_uart_link.h"
 #include "config/hardware_config.h"
@@ -1272,8 +1277,8 @@ static inline q15_t ReadSample24(const uint8_t* src) {
 }
 
 // Playback gain, applied once on the converted block. Written out rather than
-// calling arm_scale_q15: CMSIS-DSP's BasicMathFunctions are not in the linked
-// set for this target, and this is a two-line multiply.
+// calling arm_scale_q15: CMSIS-DSP is not linked, and this is a two-line
+// multiply.
 //
 // Saturating on purpose. A wrapping multiply turns a hot sample into
 // full-scale noise at the exact moment the user pushes gain up, which is the
@@ -1578,7 +1583,7 @@ static bool prebuffer_audio() {
 
     // Push into the pre-buffer
     q15_t* dst = &s_prebuffer[s_prebuffer_filled * s_output_channels];
-    arm_copy_q15(to_push, dst, output_frames * s_output_channels);
+    memcpy(dst, to_push, output_frames * s_output_channels * sizeof(q15_t));
     s_prebuffer_filled += output_frames;
 
     if (s_prebuffer_filled >= PREBUFFER_FRAMES) {
@@ -1826,10 +1831,11 @@ static inline void rb_push_frames(const q15_t* samples, uint32_t frames) {
     uint32_t dst_idx = (head & mask) * samples_per_channel;
 
     PROFILE_SCOPE(ring_buffer_push);
-    arm_copy_q15(samples, &s_rb[dst_idx], chunk * samples_per_channel);
+    memcpy(&s_rb[dst_idx], samples, chunk * samples_per_channel * sizeof(q15_t));
     if (frames > chunk) {
-        arm_copy_q15(
-            samples + chunk * samples_per_channel, s_rb, (frames - chunk) * samples_per_channel);
+        memcpy(s_rb,
+               samples + chunk * samples_per_channel,
+               (frames - chunk) * samples_per_channel * sizeof(q15_t));
     }
 
     // Release: publish the sample writes above before the consumer can see

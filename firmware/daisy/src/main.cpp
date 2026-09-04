@@ -7,7 +7,6 @@
 #include "config/link_config.h"
 #include "config/logging_config.h"
 #include "daisy_seed.h"
-#include "daisysp.h"
 #include "memory_sections.h"
 #include "per/gpio.h"
 #include "stm32h7xx_hal.h"
@@ -27,7 +26,6 @@
 #include "timebase.hpp"
 
 using namespace daisy;
-using namespace daisysp;
 using namespace WaveX::Protocol;
 
 // Hardware

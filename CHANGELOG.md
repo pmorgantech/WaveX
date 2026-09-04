@@ -51,6 +51,13 @@ versioning and release process.
   log ring like every other line; a first-party `printf`/`putchar` sink
   catches the four `USBD_ErrLog` calls libDaisy's USB stack still makes. The
   never-called `wavex_sd_log` bridge is removed.
+- The Daisy build no longer compiles or links DaisySP or the CMSIS-DSP shim.
+  Neither contributed anything to the image: no DaisySP symbol was linked,
+  and CMSIS-DSP's only surviving routine was `arm_copy_q15`, a plain copy
+  loop now written as `memcpy`. Both remain available as submodules for the
+  roadmap items that would justify them (band-limited oscillators, send
+  effects, FFT/polyphase resampling); `docs/architecture.md` no longer
+  describes streaming resampling as CMSIS-based.
 - **One shared current Track across the UI.** Play, Sample Manager, Voice and
   the Sample Browser each kept a private "current slot", so "which Track?" had
   four different answers at once. They now read one shared value
