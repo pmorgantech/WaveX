@@ -182,16 +182,22 @@ esp32-clean:
 # re-enumerates on every reset and DFU cycle, so it can claim ACM0 and push the
 # ESP32 to ACM1. esptool then talks to the Daisy's CDC port and fails with the
 # unhelpful "No serial data received". Resolve by USB VID:PID instead, the same
-# way the Daisy DFU trigger already does. Override with
-# `make ESP32_PORT=/dev/ttyACMn` when you need to force a port.
+# way the Daisy DFU trigger already does.
+#
+# Two ports reach the P4. The CH343 UART bridge carries the console, so it is
+# the monitor/log port. The P4's own USB connector is the chip's built-in
+# USB-Serial/JTAG unit, served by the ROM, so flashing prefers it when it is
+# plugged in and leaves the console port alone; with only the bridge present it
+# falls back to that. `make ESP32_PORT=/dev/ttyACMn` forces one port for both.
 # ---------------------------------------------------------------------------
 ESP32_PORT ?=
 ESP32_BAUD ?= 2000000
 esp32_port = $(if $(ESP32_PORT),echo '$(ESP32_PORT)',python3 scripts/serial_ports.py esp32)
+esp32_flash_port = $(if $(ESP32_PORT),echo '$(ESP32_PORT)',python3 scripts/serial_ports.py esp32-jtag 2>/dev/null || python3 scripts/serial_ports.py esp32)
 
 esp32-flash:
 	@echo "⚡ Flashing ESP32 Frontend firmware..."
-	@port=$$($(esp32_port)) && \
+	@port=$$($(esp32_flash_port)) && \
 		echo "Port: $$port, Baudrate: $(ESP32_BAUD)" && \
 		cd firmware/esp32 && . /opt/esp/idf/export.sh && \
 		idf.py -p "$$port" -b $(ESP32_BAUD) flash
@@ -209,10 +215,11 @@ esp32-menuconfig:
 
 esp32-flash-monitor:
 	@echo "⚡ Flashing and monitoring ESP32 Frontend..."
-	@port=$$($(esp32_port)) && \
-		echo "Port: $$port, Baudrate: $(ESP32_BAUD)" && \
+	@flash_port=$$($(esp32_flash_port)) && port=$$($(esp32_port)) && \
+		echo "Flash port: $$flash_port, Baudrate: $(ESP32_BAUD), Monitor port: $$port" && \
 		cd firmware/esp32 && . /opt/esp/idf/export.sh && \
-		idf.py -p "$$port" -b $(ESP32_BAUD) flash monitor
+		idf.py -p "$$flash_port" -b $(ESP32_BAUD) flash && \
+		idf.py -p "$$port" monitor
 
 # Daisy targets (using native ARM GCC toolchain)
 daisy:

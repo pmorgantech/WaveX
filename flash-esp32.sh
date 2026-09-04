@@ -7,8 +7,12 @@ set -e
 # Configuration. Resolve the ESP32 by USB VID:PID rather than a fixed ttyACM
 # number: the Daisy re-enumerates on every reset and DFU cycle, so it can claim
 # ACM0 and push the ESP32 to ACM1, and esptool then fails against the Daisy's
-# CDC port with "No serial data received". Override with ESP32_PORT=/dev/ttyACMn.
-ESP32_PORT="${ESP32_PORT:-$(python3 "$(dirname "$0")/scripts/serial_ports.py" esp32)}"
+# CDC port with "No serial data received". Prefer the P4's built-in
+# USB-Serial/JTAG port when it is plugged in, so the console on the CH343 UART
+# bridge is left alone; fall back to the bridge otherwise. Override with
+# ESP32_PORT=/dev/ttyACMn.
+PORTS="$(dirname "$0")/scripts/serial_ports.py"
+ESP32_PORT="${ESP32_PORT:-$(python3 "$PORTS" esp32-jtag 2>/dev/null || python3 "$PORTS" esp32)}"
 ESP32_BAUDRATE="2000000"
 ESP32_DIR="firmware/esp32"
 

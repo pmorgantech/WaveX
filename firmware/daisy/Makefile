@@ -38,6 +38,7 @@ DFU_WAIT ?= 20
 .PHONY: all build clean help configure stale-cache-check qspi-build-check
 .PHONY: flash dfu sd usb bin run auto-flash flash-auto
 .PHONY: debug debug-build debug-cache-check debug-clean debug-gdb-load debug-load debug-server
+.PHONY: debug-probe-check debug-server-check
 
 # Default target: build the firmware
 all: build
@@ -98,6 +99,29 @@ debug-build: debug-cache-check
 	@$(MAKE) BUILD_DIR="$(DEBUG_BUILD_DIR)" \
 		CMAKE_EXTRA_ARGS="$(CMAKE_EXTRA_ARGS) $(DEBUG_CMAKE_ARGS)" build
 
+# The SRAM path talks to the Daisy over SWD through an ST-Link, so the probe
+# on USB is what proves the load can work - the Daisy's own CDC port may be
+# absent (blank board, crashed image) and is not required. Resolved by VID:PID
+# like the DFU targets, never by a /dev name.
+debug-probe-check:
+	@if ! python3 $(SERIAL_PORTS) --present stlink; then \
+		echo "No ST-Link probe on USB. Connect it to the Daisy's SWD header and"; \
+		echo "check it is passed through to the container (lsusb should list 0483:37xx)."; \
+		exit 1; \
+	fi
+
+# debug-load relies on a GDB server somebody else started. Without this check
+# GDB retries the connection for ~15 s, reports a timeout, then runs the rest
+# of its batch script against no target and prints a page of noise.
+debug-server-check:
+	@if ! python3 -c "import socket,sys; socket.create_connection((sys.argv[1], int(sys.argv[2])), timeout=2).close()" \
+			"$(DEBUG_GDB_HOST)" "$(DEBUG_GDB_PORT)" >/dev/null 2>&1; then \
+		echo "No GDB server on $(DEBUG_GDB_HOST):$(DEBUG_GDB_PORT)."; \
+		echo "Start one with \`make debug-server\` in another shell, or use \`make debug\`"; \
+		echo "which starts and stops its own OpenOCD."; \
+		exit 1; \
+	fi
+
 # Internal loader shared by debug-load and the one-command debug target.
 # Reset happens before the ELF load, never afterward: a post-load reset would
 # return to the persistent QSPI image.
@@ -119,14 +143,14 @@ debug-gdb-load:
 
 # Load into SRAM through an already-running OpenOCD GDB server, then run and
 # disconnect.
-debug-load: debug-build
+debug-load: debug-probe-check debug-server-check debug-build
 	@$(MAKE) DEBUG_BUILD_DIR="$(DEBUG_BUILD_DIR)" GDB="$(GDB)" \
 		DEBUG_GDB_HOST="$(DEBUG_GDB_HOST)" DEBUG_GDB_PORT="$(DEBUG_GDB_PORT)" \
 		debug-gdb-load
 
 # One-command edit/test loop: start a temporary OpenOCD server, load the SRAM
 # ELF via GDB, resume it, then stop the server while leaving the target running.
-debug: debug-build
+debug: debug-probe-check debug-build
 	@if ! command -v "$(OPENOCD)" >/dev/null 2>&1; then \
 		echo "Error: $(OPENOCD) not found. Rebuild the WaveX devcontainer image."; \
 		exit 1; \
@@ -149,12 +173,19 @@ debug: debug-build
 			sleep 0.1; \
 		done; \
 		if [ $$ready -ne 1 ]; then echo "OpenOCD did not become ready:"; cat "$$log"; exit 1; fi; \
+		if grep -q "examination failed" "$$log"; then \
+			cat "$$log"; \
+			echo "The ST-Link is up but the Daisy did not answer on SWD (see 'examination failed')."; \
+			echo "Check the SWD wiring and board power, then re-run; this is intermittent on a"; \
+			echo "probe that was interrupted mid-session."; \
+			exit 1; \
+		fi; \
 		$(MAKE) DEBUG_BUILD_DIR="$(DEBUG_BUILD_DIR)" \
 			DEBUG_GDB_HOST="$(DEBUG_GDB_HOST)" DEBUG_GDB_PORT="$(DEBUG_GDB_PORT)" \
 			GDB="$(GDB)" debug-gdb-load
 
 # Standalone server for an interactive GDB or Cortex-Debug session.
-debug-server:
+debug-server: debug-probe-check
 	@if ! command -v "$(OPENOCD)" >/dev/null 2>&1; then \
 		echo "Error: $(OPENOCD) not found. Rebuild the WaveX devcontainer image."; \
 		exit 1; \

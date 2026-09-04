@@ -13,7 +13,7 @@ Use this guide to build and install the current WaveX firmware on the ESP32-P4 f
 ## Prerequisites
 
 - Build and run from the WaveX devcontainer. For a one-off container command, see the devcontainer instructions in the project `AGENTS.md`.
-- Connect the target board by USB and confirm it is passed through to the container. `/dev/ttyACM` numbering is **not stable** — the Daisy re-enumerates on every reset/DFU cycle and can claim `ACM0`, pushing the ESP32 to `ACM1` or beyond — so the Makefile resolves the ESP32 port by USB VID:PID (CH343 bridge, `1a86:55d3`) via `scripts/serial_ports.py esp32` rather than assuming a fixed device name. Only pass `ESP32_PORT=/dev/ttyACMn` if you need to override that resolution. To see what's connected:
+- Connect the target board by USB and confirm it is passed through to the container. `/dev/ttyACM` numbering is **not stable** — the Daisy re-enumerates on every reset/DFU cycle and can claim `ACM0`, pushing the ESP32 to `ACM1` or beyond — so the Makefile resolves ESP32 ports by USB VID:PID via `scripts/serial_ports.py` rather than assuming a fixed device name. Two ports reach the P4: the board's CH343 UART bridge (`1a86:55d3`, board name `esp32`) carries the firmware console, and the P4's own USB connector enumerates as the chip's built-in USB-Serial/JTAG unit (`303a:1001`, board name `esp32-jtag`). Only pass `ESP32_PORT=/dev/ttyACMn` if you need to override that resolution. To see what's connected:
 
   ```bash
   ls /dev/ttyACM* /dev/ttyUSB* 2>/dev/null
@@ -33,11 +33,11 @@ Build and flash the frontend with the top-level target:
 make esp32-flash
 ```
 
-This resolves the port automatically by USB VID:PID at 2,000,000 baud (see Prerequisites). To force a specific port instead, pass `make esp32-flash ESP32_PORT=/dev/ttyACMn`, or run the equivalent ESP-IDF command from `firmware/esp32` directly:
+This resolves the port automatically by USB VID:PID at 2,000,000 baud (see Prerequisites). When the P4's own USB connector is plugged in, the target flashes through the built-in USB-Serial/JTAG unit: the ROM bootloader serves it with no firmware involvement, esptool enters download mode and resets back over it, and the console on the CH343 bridge is never touched. The 2,000,000 baud setting is harmless there (USB ignores it) and applies when only the bridge is connected, which is the fallback. The USB MIDI device runs on the P4's separate high-speed OTG controller, so it does not displace the USB-Serial/JTAG unit while the app runs; a working `esptool.py --port <jtag port> chip_id` round trip with the app running was confirmed on 2026-09-04. To force a specific port instead, pass `make esp32-flash ESP32_PORT=/dev/ttyACMn`, or run the equivalent ESP-IDF command from `firmware/esp32` directly:
 
 ```bash
 source /opt/esp/idf/export.sh
-idf.py -p /dev/ttyACM1 -b 2000000 flash
+idf.py -p "$(python3 ../../scripts/serial_ports.py esp32-jtag)" -b 2000000 flash
 ```
 
 To flash and open the serial monitor in one command, use:
@@ -46,7 +46,7 @@ To flash and open the serial monitor in one command, use:
 make esp32-flash-monitor
 ```
 
-Exit the ESP-IDF monitor with `Ctrl-]`.
+This flashes over the preferred port and then monitors the CH343 bridge, because the console is on UART0. Monitoring the USB-Serial/JTAG port shows nothing. Exit the ESP-IDF monitor with `Ctrl-]`.
 
 ## Daisy Seed backend
 
@@ -91,7 +91,7 @@ QSPI erase, DFU enumeration, boot-mode switch, or post-load reset:
 | Build + SRAM load + run | `make daisy-debug` |
 | Build SRAM ELF only | `make daisy-debug-build` |
 | GDB server | `make daisy-debug-server` — listens on `localhost:3333` |
-| Load through existing server | In a second shell, `make daisy-debug-load` |
+| Load through existing server | In a second shell, `make daisy-debug-load` — fails fast if nothing is listening on the GDB port |
 | VS Code | Cortex-Debug launch config: `"servertype": "openocd"`, `"gdbTarget": "localhost:3333"` |
 
 `make daisy-debug` uses `firmware/daisy/build-debug/`, starts a temporary
@@ -100,6 +100,22 @@ resuming `Reset_Handler`. It resets before loading and deliberately does not
 reset afterward. The persistent QSPI application at `0x90040000` is untouched;
 resetting or power-cycling the board boots that image again. Rebuild the
 devcontainer image after pulling this workflow so `gdb-multiarch` is present.
+
+All three SWD targets first confirm an ST-Link is enumerated on USB, resolved
+by VID:PID through `scripts/serial_ports.py --present stlink` the same way the
+DFU targets look for the Daisy. The Daisy's own CDC port is not required: a
+blank or crashed board is still loadable over SWD. If the probe is missing the
+target stops before building anything and says so, rather than letting OpenOCD
+fail on an absent adapter. `make daisy-debug-load` additionally refuses to run
+when nothing is listening on the GDB port, so a forgotten `daisy-debug-server`
+produces one line instead of a GDB timeout followed by a page of errors.
+
+OpenOCD occasionally starts with `target stm32h7x.cpu0 examination failed`
+(seen once in five back-to-back runs on 2026-09-04, right after the previous
+server was killed mid-session). The probe is fine but the Daisy did not answer
+on SWD, and every GDB connection then fails with `Target not examined yet`.
+`make daisy-debug` detects this and aborts; with `daisy-debug-server`, watch
+for the warning and restart the server.
 
 A 2026-09-04 hardware run with both outputs already built measured the complete
 load-and-launch commands at 19.991 s for software-triggered DFU/QSPI and 2.870 s
@@ -128,12 +144,13 @@ controlled comparisons made with matching compiler flags and workloads. It is
 not a substitute for profiling the release memory layout: make production DWT
 headroom and zero-underrun claims on the persistent QSPI profile.
 
-The ESP32-P4 can also flash over its native USB DFU (`idf.py dfu-flash`) if
-the UART pins are otherwise occupied; `make esp32-flash` does not need this.
+The ESP32-P4's own USB connector is the normal flash path (see the frontend
+section above). Its ROM also offers USB DFU (`idf.py dfu-flash`) on the same
+connector; `make esp32-flash` does not need this.
 
 ## Troubleshooting
 
-If the ESP32 command cannot find the board, reconnect it and confirm it shows up with `ls /dev/ttyACM* /dev/ttyUSB*`; force the port with `make esp32-flash ESP32_PORT=/dev/ttyACMn` if VID:PID auto-detection picks the wrong device. If the port is visible on the host but not inside the container, reopen the devcontainer so its USB device mapping is refreshed.
+If the ESP32 command cannot find the board, reconnect it and confirm it shows up with `ls /dev/ttyACM* /dev/ttyUSB*`, or ask the resolver directly with `python3 scripts/serial_ports.py esp32-jtag` and `... esp32`; force the port with `make esp32-flash ESP32_PORT=/dev/ttyACMn` if VID:PID auto-detection picks the wrong device. If the port is visible on the host but not inside the container, reopen the devcontainer so its USB device mapping is refreshed. The USB-Serial/JTAG node is owned by group `plugdev` rather than `dialout` on the host; the devcontainer user is in both.
 
 If `dfu-util` cannot find the Daisy, repeat the BOOT-plus-power/reset sequence and run the manual DFU transfer as soon as the device enters DFU mode. The devcontainer includes `dfu-util`; an absent command means the build is not running in the supported container.
 
