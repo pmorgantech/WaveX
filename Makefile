@@ -1,5 +1,5 @@
 # WaveX Dual-MCU Sampler/Synth Build System
-.PHONY: help all esp32 daisy daisy-stageb size size-record flash-fast daisy-debug daisy-debug-build daisy-debug-load daisy-debug-server release esp32-release daisy-release check-release-clean check-profiles require-strings clean esp32-clean daisy-clean esp32-flash esp32-monitor esp32-flash-monitor esp32-menuconfig test test-all test-asan test-daisy test-esp32 test-shared test-clean ai-graph daisy-flash daisy-flash-auto flash-all start-logs stop-logs logs-start logs-stop
+.PHONY: help all esp32 daisy daisy-stageb size size-record flash-fast esp32-reset daisy-debug daisy-debug-build daisy-debug-load daisy-debug-server release esp32-release daisy-release check-release-clean check-profiles require-strings clean esp32-clean daisy-clean esp32-flash esp32-monitor esp32-flash-monitor esp32-menuconfig test test-all test-asan test-daisy test-esp32 test-shared test-clean ai-graph daisy-flash daisy-flash-auto flash-all start-logs stop-logs logs-start logs-stop
 
 # Test targets
 test: test-all
@@ -128,6 +128,7 @@ help:
 	@echo "  daisy-debug-load - Load SRAM ELF through an existing OpenOCD server"
 	@echo "  daisy-debug-server - Start OpenOCD for GDB/Cortex-Debug"
 	@echo "  flash-fast       - ESP32 over USB-JTAG + Daisy into SRAM, concurrently (edit/test loop)"
+	@echo "  esp32-reset      - Reset the ESP32 via the UART bridge (recovers a board stuck in download mode)"
 	@echo "  release          - Build both MCUs in the release profile, then verify"
 	@echo "  check-release-clean - Assert no debug console tokens in release images"
 	@echo "  check-profiles   - Assert tokens present in debug AND absent in release"
@@ -203,6 +204,28 @@ esp32-flash:
 		cd firmware/esp32 && . /opt/esp/idf/export.sh && \
 		idf.py -p "$$port" -b $(ESP32_BAUD) flash
 	@echo "✅ ESP32 Frontend flashed"
+
+# Reset the ESP32 through the CH343 bridge's auto-reset circuit and boot the
+# app. This is the recovery for an ESP32 stuck in download mode ("waiting for
+# download" on the console, rst:0x17 boot:0x307 on every reset): an esptool
+# session over the bridge that ABORTS mid-way (seen 2026-09-04, an IndexError
+# in its connect routine) can leave the bridge's DTR/RTS holding the BOOT
+# strap, after which every reset - including the USB-JTAG flash's own final
+# reset - lands back in the ROM. A completed esptool session over the bridge
+# releases the lines; chip_id is the shortest one. The bridge port must be
+# esptool's alone - a logger reading it steals the ROM's replies ("device
+# reports readiness to read but returned no data") and THAT aborted session
+# is what sticks the strap - so the loggers are stopped first and restarted
+# after, as flash-all does.
+esp32-reset: stop-logs
+	@set -eu; status=0; \
+		port=$$($(esp32_port)) && \
+		echo "Resetting ESP32 via $$port (bridge auto-reset circuit)..." && \
+		( cd firmware/esp32 && . /opt/esp/idf/export.sh >/dev/null && \
+		  esptool.py --chip esp32p4 --port "$$port" --before default_reset --after hard_reset chip_id \
+			| grep -E "Chip is|Hard resetting" ) || status=$$?; \
+		$(MAKE) start-logs; \
+		exit $$status
 
 esp32-monitor:
 	@echo "📺 Monitoring ESP32 Frontend..."

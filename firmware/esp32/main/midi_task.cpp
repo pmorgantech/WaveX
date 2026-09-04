@@ -17,6 +17,7 @@
 
 #include "config/hardware_config.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "inter_mcu.h"
 
 #include <atomic>
@@ -108,7 +109,35 @@ static void midi_task(void* arg) {
              (int)WAVEX_ESP_MIDI_UART_NUM,
              (int)WAVEX_ESP_MIDI_BAUD);
 
+    // Storm detector. Real MIDI cannot exceed 3125 bytes/s, i.e. ~1000
+    // running-status note events per second at the theoretical limit, and a
+    // player produces a few tens. A sustained rate above kStormEventsPerSec
+    // is not music: it is a floating or shared input being parsed (seen
+    // 2026-09-04 at ~700 events/s - USB D- traffic on GPIO24 read as MIDI,
+    // note numbers 0/4/8/32/64), and it loads the inter-MCU link. Warn once
+    // per storm rather than per event.
+    constexpr uint32_t kStormEventsPerSec = 500;
+    uint32_t events_this_window = 0;
+    int64_t window_start_us = esp_timer_get_time();
+    bool storm_reported = false;
+
     while (s_midi_running) {
+        const int64_t now_us = esp_timer_get_time();
+        if (now_us - window_start_us >= 1000000) {
+            if (events_this_window > kStormEventsPerSec && !storm_reported) {
+                ESP_LOGW(TAG,
+                         "DIN MIDI input storm: %u events/s - check the MIDI-in wiring "
+                         "(floating RX reads as notes)",
+                         (unsigned)events_this_window);
+                storm_reported = true;
+            } else if (events_this_window <= kStormEventsPerSec && storm_reported) {
+                ESP_LOGI(
+                    TAG, "DIN MIDI input storm over (%u events/s)", (unsigned)events_this_window);
+                storm_reported = false;
+            }
+            events_this_window = 0;
+            window_start_us = now_us;
+        }
         // Block for one byte, then drain the backlog without blocking so
         // bursts (chords, running-status streams) are processed in one pass.
         // The wait is bounded rather than portMAX_DELAY purely so the loop
@@ -118,6 +147,7 @@ static void midi_task(void* arg) {
         while (n > 0) {
             for (int i = 0; i < n; ++i) {
                 if (parser.Feed(buf[i], ev)) {
+                    ++events_this_window;
                     midi_forward_event(ev);
                 }
             }
@@ -162,6 +192,13 @@ extern "C" esp_err_t midi_task_start(void) {
                            UART_PIN_NO_CHANGE,
                            UART_PIN_NO_CHANGE);
     }
+    // No pull on the RX pin. The obvious move for a floating UART input is
+    // an internal pull-up, and it was tried on 2026-09-04: WAVEX_ESP_MIDI_RX
+    // is GPIO24, which on the ESP32-P4 is also USB D- of the built-in
+    // USB-Serial/JTAG PHY, and the pull-up took that port off the bus while
+    // the app ran. That shared pin is the reason for the storm detector
+    // below and for WAVEX_ESP_DIN_MIDI_ENABLED defaulting to 0 in
+    // hardware_config.h until the input is re-pinned.
     // Per-byte delivery for latency: ISR fires on every RX byte (threshold
     // 1) and the idle timeout is 1 symbol, so nothing sits in the FIFO.
     if (err == ESP_OK) {

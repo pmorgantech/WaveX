@@ -304,8 +304,16 @@
 #endif
 
 // DIN MIDI Input (ESP32 UART2 - pins/baud in pin_config.h)
+//
+// OFF since 2026-09-04: WAVEX_ESP_MIDI_RX is GPIO24, which on the ESP32-P4 is
+// also USB D- of the chip's built-in USB-Serial/JTAG port - the fast flash
+// path. With that cable plugged in UART2 samples USB traffic and the parser
+// forwards it to the Daisy as ~700 note-on/off per second (note numbers
+// 0/4/8/32/64). Re-enable once DIN MIDI RX is moved to a pin that is not
+// GPIO24/25 (pin_config.h; the previous GPIO33 collided with the encoder).
+// USB MIDI (WAVEX_ESP_USB_MIDI_ENABLED) is unaffected.
 #ifndef WAVEX_ESP_DIN_MIDI_ENABLED
-#define WAVEX_ESP_DIN_MIDI_ENABLED 1
+#define WAVEX_ESP_DIN_MIDI_ENABLED 0
 #endif
 
 // PSRAM (ESP32 only)

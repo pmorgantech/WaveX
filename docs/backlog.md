@@ -205,6 +205,18 @@ needs, not the roughly 4 KB text saving at WARN alone.
 hot-path cost before deciding whether cheap counts should remain enabled in
 release and whether the flag follows the build profile.
 
+### DIN MIDI RX must move off GPIO24 (USB-Serial/JTAG D-)
+
+`WAVEX_ESP_MIDI_RX` is GPIO24, which on the ESP32-P4 is USB D- of the chip's
+built-in USB-Serial/JTAG port - the fast flash path. With that cable plugged
+in UART2 parsed USB traffic as MIDI and forwarded ~700 note-on/off per second
+to the Daisy (2026-09-04; note numbers 0/4/8/32/64). Pulling the pin up broke
+the JTAG port instead. `WAVEX_ESP_DIN_MIDI_ENABLED` therefore defaults to 0
+until DIN MIDI RX (and ideally TX, GPIO32) is assigned a pin that is not
+GPIO24/25 in `pin_config.h`; the previous GPIO33 collided with the encoder.
+A storm detector in `midi_task.cpp` now logs a one-shot warning if this ever
+recurs. USB MIDI is unaffected.
+
 ### Filter: promote slope, drive and topology to real parameters
 
 `audio/voice_filter.hpp` (2026-09-04) makes the per-voice lowpass selectable

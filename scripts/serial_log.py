@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stream a serial port into a logfile you can `tail -f` - a minicom replacement.
+"""Stream a serial port into a logfile you can `tail -f` (minicom replacement).
 
 minicom holds the port for a human, which is what makes flashing and automated
 testing fight over it. This writes to a file instead, and reconnects on its own
@@ -14,6 +14,7 @@ Usage:
 import argparse
 import errno
 import os
+import select
 import signal
 import sys
 import termios
@@ -58,12 +59,18 @@ def open_port(port, baud):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--port", help="tty device; omit to search by --vid/--pid")
+    parser.add_argument(
+        "--port",
+        help="tty device; omit to search by --vid/--pid",
+    )
     parser.add_argument("--vid", help="USB vendor id, e.g. 0483")
     parser.add_argument("--pid", help="USB product id, e.g. 5740")
     parser.add_argument("--baud", type=int, default=115200)
     parser.add_argument("--out", required=True, help="logfile to append to")
-    parser.add_argument("--pidfile", help="write our pid here so it can be stopped")
+    parser.add_argument(
+        "--pidfile",
+        help="write our pid here so it can be stopped",
+    )
     args = parser.parse_args()
 
     if not args.port and not (args.vid and args.pid):
@@ -79,7 +86,10 @@ def main():
 
     log = open(args.out, "ab", buffering=0)
     fd = None
+    port = None
+    port_ino = None
     announced_wait = False
+    last_check = 0.0
 
     try:
         while _running:
@@ -98,12 +108,43 @@ def main():
                     continue
                 log.write(b"\n--- connected: %s ---\n" % port.encode())
                 announced_wait = False
+                try:
+                    port_ino = os.stat(port).st_ino
+                except OSError:
+                    port_ino = None
+                last_check = time.time()
 
+            # A board that resets or drops into DFU re-enumerates, usually
+            # under a different ttyACM number, and the dead descriptor does
+            # not always raise: a hung-up CDC device just returns 0 bytes on
+            # every read. So does an IDLE port with this termios setup
+            # (VMIN=0), so the byte count alone cannot tell the two apart -
+            # the old code treated 0 as "nothing yet" and sat on a dead
+            # Daisy descriptor for hours (2026-09-04, ACM1 -> ACM2). select()
+            # can tell them apart: an idle port is not readable, a hung-up
+            # one is readable and then reads 0. Once a second the node is
+            # also re-checked, which catches a silent re-enumeration under
+            # the same number (udev recreates the node, new inode).
+            now = time.time()
+            if now - last_check > 1.0:
+                last_check = now
+                try:
+                    node_ino = os.stat(port).st_ino
+                except OSError:
+                    node_ino = None
+                if node_ino != port_ino:
+                    os.close(fd)
+                    fd = None
+                    log.write(b"\n--- device disconnected (node gone) ---\n")
+                    continue
+
+            readable, _, _ = select.select([fd], [], [], 0.2)
+            if not readable:
+                continue
             try:
                 chunk = os.read(fd, 4096)
             except OSError as exc:
                 if exc.errno in (errno.EAGAIN, errno.EWOULDBLOCK):
-                    time.sleep(0.01)
                     continue
                 # Device went away (reset, DFU, unplug) - drop back to waiting.
                 os.close(fd)
@@ -114,7 +155,11 @@ def main():
             if chunk:
                 log.write(chunk)
             else:
-                time.sleep(0.01)
+                # Readable but empty: hang-up. Wait for the next enumeration.
+                os.close(fd)
+                fd = None
+                log.write(b"\n--- device disconnected (hang-up) ---\n")
+                time.sleep(0.2)
     finally:
         if fd is not None:
             os.close(fd)

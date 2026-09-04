@@ -143,6 +143,16 @@ versioning and release process.
 
 ### Fixed
 
+- The Daisy no longer receives a flood of ~700 phantom note-on/off per
+  second when the ESP32-P4's USB cable is plugged in: DIN MIDI RX shares
+  GPIO24 with the chip's USB-Serial/JTAG D- line, so UART2 was parsing USB
+  traffic as MIDI. DIN MIDI input is disabled by default
+  (`WAVEX_ESP_DIN_MIDI_ENABLED`) until it is re-pinned; USB MIDI is
+  unaffected, and a storm detector logs a warning if it recurs.
+- `scripts/serial_log.py` follows a board across a USB re-enumeration again
+  (it sat on a dead descriptor after the Daisy moved from ACM1 to ACM2), and
+  `make esp32-reset` recovers an ESP32 left in download mode by an aborted
+  bridge session.
 - The last large `obj = T{}` resets on the Daisy (the sequencer voice map,
   its publish scratch, and the SFZ mapper's output) rebuild in place; they
   were 6-8 KB stack frames against the 64 KB DTCM stack. The console's

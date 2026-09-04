@@ -166,6 +166,18 @@ connector; `make esp32-flash` does not need this.
 
 ## Troubleshooting
 
+**ESP32 stuck in download mode** (`rst:0x17 ... boot:0x307 (DOWNLOAD...)` and
+`waiting for download` on the console after every reset, app never starts,
+Daisy reports `rx 0 B`): an esptool session over the CH343 bridge that aborted
+mid-way - typically because a logger was reading the same port (`device
+reports readiness to read but returned no data`) - left the bridge's DTR/RTS
+holding the BOOT strap. `make esp32-reset` runs one complete esptool session
+over the bridge (stopping and restarting the loggers around it), which
+releases the lines and boots the app; measured 3 s. Note that the ROM serves
+the USB-JTAG port in download mode too, so `serial_ports.py esp32-jtag` being
+present does not prove the app is running - the console or the boot mode line
+does.
+
 If the ESP32 command cannot find the board, reconnect it and confirm it shows up with `ls /dev/ttyACM* /dev/ttyUSB*`, or ask the resolver directly with `python3 scripts/serial_ports.py esp32-jtag` and `... esp32`; force the port with `make esp32-flash ESP32_PORT=/dev/ttyACMn` if VID:PID auto-detection picks the wrong device. If the port is visible on the host but not inside the container, reopen the devcontainer so its USB device mapping is refreshed. The USB-Serial/JTAG node is owned by group `plugdev` rather than `dialout` on the host; the devcontainer user is in both.
 
 If `dfu-util` cannot find the Daisy, repeat the BOOT-plus-power/reset sequence and run the manual DFU transfer as soon as the device enters DFU mode. The devcontainer includes `dfu-util`; an absent command means the build is not running in the supported container.
