@@ -74,15 +74,42 @@ set(FIRMWARE_SOURCES
     ../shared/uart_protocol/uart_protocol.cpp
 )
 
-# Set Daisy storage to QSPI for more flash memory (7.75MB vs 128KB)
-set(DAISY_STORAGE qspi CACHE STRING "Select the storage destination of the executable.")
-# Use Daisy's QSPI placement (sets sections/ld script appropriately)
-set(DAISY_USE_QSPI_FLASH ON)
-# Build for bootloader QSPI (not internal flash)
-set(APP_TYPE BOOT_QSPI)
+# QSPI remains the persistent/default image. The fast SWD iteration target
+# configures a separate build tree with DAISY_STORAGE=sram and this option ON;
+# never share a CMake cache between the two linker layouts.
+set(DAISY_STORAGE "qspi" CACHE STRING "libDaisy executable storage (qspi or sram)")
+set_property(CACHE DAISY_STORAGE PROPERTY STRINGS qspi sram)
+option(WAVEX_SRAM_DEBUG "Build a self-starting SRAM image for direct SWD loading" OFF)
+
+if(WAVEX_SRAM_DEBUG)
+    if(NOT DAISY_STORAGE STREQUAL "sram")
+        message(FATAL_ERROR "WAVEX_SRAM_DEBUG requires -DDAISY_STORAGE=sram")
+    endif()
+
+    # DaisyProject normally treats every non-flash image as a bootloader app
+    # and defines BOOT_APP, which skips SystemInit(). A direct SWD load bypasses
+    # the Daisy bootloader, so use the SRAM layout as a custom script and make
+    # the image perform its own reset-time clock/vector setup instead.
+    set(CUSTOM_LINKER_SCRIPT "${CMAKE_CURRENT_LIST_DIR}/wavex_sram_debug.lds")
+    list(APPEND FIRMWARE_SOURCES src/sram_debug_startup.cpp)
+elseif(NOT DAISY_STORAGE STREQUAL "qspi")
+    message(FATAL_ERROR "Persistent WaveX builds require DAISY_STORAGE=qspi")
+endif()
+
 # Add libDaisy and DaisySP
 add_subdirectory(libs/libDaisy)
 add_subdirectory(libs/DaisySP)
+
+if(WAVEX_SRAM_DEBUG)
+    # The SWD loader establishes SP before entering Reset_Handler. Do not use
+    # libDaisy's sram_layout SP reload here: at -O0 it runs after the C function
+    # prologue and moves compiler locals past the top of DTCM.
+    # SystemInit() still needs to point VTOR at the vector table loaded at
+    # 0x24000000 and enable D2 before the preinit hook clears WaveX state.
+    target_compile_definitions(
+        CMSIS_DEVICE_H7 PRIVATE DATA_IN_D2_SRAM USER_VECT_TAB_ADDRESS VECT_TAB_SRAM
+    )
+endif()
 
 # libDaisy v8.1.0's uart.cpp owns global UART/DMA IRQ callbacks and uses one
 # global DMA scheduler, which cannot transmit while circular RX listen mode is
@@ -229,9 +256,13 @@ target_include_directories(${FIRMWARE_NAME} SYSTEM PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/libs/libDaisy/Drivers/STM32H7xx_HAL_Driver/Inc/Legacy
 )
 
-target_link_options(${FIRMWARE_NAME} PRIVATE
-    "-Wl,-T,${CMAKE_CURRENT_LIST_DIR}/wavex_memory_sections.ld"
-)
+if(NOT WAVEX_SRAM_DEBUG)
+    # The SRAM debug linker script already contains these WaveX-specific
+    # sections and assertions, with SRAM rather than QSPI load addresses.
+    target_link_options(${FIRMWARE_NAME} PRIVATE
+        "-Wl,-T,${CMAKE_CURRENT_LIST_DIR}/wavex_memory_sections.ld"
+    )
+endif()
 
 set(CMSIS_DSP_DIR ${CMAKE_CURRENT_LIST_DIR}/libs/libDaisy/Drivers/CMSIS-DSP)
 

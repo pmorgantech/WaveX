@@ -1,6 +1,8 @@
 # WaveX Daisy Firmware
 
-This is the Daisy firmware for the WaveX project, configured to run from QSPI flash for maximum memory capacity.
+This is the Daisy firmware for the WaveX project. The default image runs from
+QSPI for persistent booting; a separate SRAM-linked image supports fast,
+volatile iteration over ST-Link.
 
 ## Quick Start
 
@@ -19,6 +21,15 @@ make flash
 make run
 ```
 
+### Fast SRAM iteration (ST-Link)
+```bash
+make debug
+```
+
+This builds in `build-debug/`, loads the ELF directly into internal SRAM, and
+runs it without changing QSPI. Reset or power-cycle to return to the persistent
+image.
+
 ## Build Commands
 
 | Command | Description |
@@ -27,6 +38,11 @@ make run
 | `make build` | Build the firmware |
 | `make bin` | Build and generate binary file |
 | `make clean` | Clean build artifacts |
+| `make debug-build` | Build the separate SRAM/debug ELF |
+| `make debug` | Build, load the SRAM ELF over ST-Link, and run |
+| `make debug-server` | Start OpenOCD for GDB/Cortex-Debug |
+| `make debug-load` | Load and run through an existing OpenOCD server |
+| `make debug-clean` | Remove the SRAM/debug build tree |
 | `make dfu` | Build and flash via DFU (USB) |
 | `make sd` | Build and prepare for SD card flashing |
 | `make usb` | Build and prepare for USB drive flashing |
@@ -36,7 +52,7 @@ make run
 
 ## Memory Configuration
 
-The firmware is configured to use **QSPI flash** instead of internal flash:
+The persistent firmware uses **QSPI flash** instead of internal flash:
 
 - **Internal Flash**: 128KB (0x08000000) - Used for bootloader
 - **QSPI Flash**: 7.75MB (0x90040000) - Used for application code
@@ -44,12 +60,21 @@ The firmware is configured to use **QSPI flash** instead of internal flash:
 
 This configuration allows the firmware to be much larger than the 128KB internal flash limit.
 
+The fast-debug profile uses libDaisy's SRAM storage mode plus a WaveX linker
+layout. Code is loaded into D1 AXI SRAM, initialized data into DTCM, and
+ordinary state into D2/D3 SRAM while the explicit DMA and hot-state sections
+retain their required regions. This changes memory performance, so use the
+profile for functional iteration, not production callback/DWT measurements.
+
 ## Flashing Process
 
 ### Prerequisites
 - **Daisy bootloader** must be installed in internal flash
 - **dfu-util** tool installed (`sudo apt install dfu-util`)
 - Daisy connected via USB and in bootloader mode
+
+The SRAM workflow additionally requires an ST-Link and the devcontainer's
+OpenOCD plus `gdb-multiarch` tools.
 
 ### Method 1: DFU (USB) - Recommended
 ```bash
@@ -144,7 +169,9 @@ The Daisy communicates with the ESP32 via UART protocol at 230.4kbps:
 - Rebuild with `make`
 
 ### Debugging
-- Use ST-Link debugger for real-time debugging
+- Run `make debug` for the one-command SRAM load/run loop
+- Run `make debug-server`, then `make debug-load` from another shell, when an
+  interactive GDB or Cortex-Debug session should own the server
 - Serial output available via USB CDC
 - LED indicators for status information
 
@@ -153,6 +180,7 @@ The Daisy communicates with the ESP32 via UART protocol at 230.4kbps:
 - **libDaisy**: Core Daisy framework and STM32 HAL drivers
 - **DaisySP**: Audio processing library
 - **ARM GCC**: Cross-compilation toolchain
+- **GDB Multiarch + OpenOCD**: Direct SRAM loading and SWD debugging
 - **CMake**: Build system
 - **dfu-util**: DFU flashing tool
 - **Daisy Bootloader**: Required for QSPI operation

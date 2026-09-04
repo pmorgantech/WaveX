@@ -58,7 +58,9 @@ WaveX/
    Either entry point points `core.hooksPath` at the tracked `.githooks/`
    directory automatically — do **not** run `pre-commit install`.
 3. Build everything: `make all`
-4. Flash: `make esp32-flash` (or `./flash-esp32.sh`); Daisy via DFU (`make -C firmware/daisy flash`, hold BOOT on power-up).
+4. Flash persistently: `make esp32-flash` (or `./flash-esp32.sh`); Daisy via
+   QSPI/DFU (`make daisy-flash`, hold BOOT while resetting). For the faster,
+   volatile Daisy edit/test loop with an ST-Link, use `make daisy-debug`.
 
 **All work happens inside the devcontainer — including `git commit`.** The
 pre-commit suite (formatting, firmware builds, host tests) only exists in the
@@ -75,6 +77,8 @@ See [`docs/flashing.md`](docs/flashing.md) for detailed flash and debug-probe wo
 make all           # Build ESP32 + Daisy (debug profile)
 make esp32         # ESP32 frontend only
 make daisy         # Daisy backend only
+make daisy-debug   # Build + load the Daisy SRAM image over ST-Link + run
+make daisy-debug-build  # Build the separate SRAM/debug ELF without loading it
 make clean         # Clean both
 make setup         # Init git submodules
 
@@ -106,12 +110,23 @@ directory. Do not reuse a build directory for a different profile: the Daisy
 wrapper does not reconfigure an existing CMake cache, so it can silently retain
 the previous profile's flags.
 
+The Daisy also has a separate SRAM-linked debug profile in `build-debug/` for
+fast SWD iteration. `make daisy-debug` loads that ELF directly through ST-Link
+without changing QSPI; a reset or power cycle returns to the persistent QSPI
+image. It defaults to the same `-O0` optimization as the persistent image, but
+SRAM execution still has different memory timing; use it for functional testing
+and use the normal QSPI build for DWT/callback performance results.
+
 `WAVEX-ENTER-DFU` deliberately remains in release images; it is the only
 reflash path that does not require BOOT+RESET. `make check-profiles` requires
 both debug and release images and confirms the console tokens exist only in the
 debug images.
 
-The ESP32 side builds with ESP-IDF's `idf.py` (component-based); the Daisy side is CMake with the libDaisy toolchain file, app placed in QSPI flash via the Daisy bootloader (`BOOT_QSPI`). Testing details: [`docs/testing_guide.md`](docs/testing_guide.md).
+The ESP32 side builds with ESP-IDF's `idf.py` (component-based); the Daisy side
+uses CMake with the libDaisy toolchain file. Its default/persistent app is placed
+in QSPI through the Daisy bootloader; its separate fast-debug app runs from
+internal SRAM after a direct SWD load. Testing details:
+[`docs/testing_guide.md`](docs/testing_guide.md).
 
 ## CI and Code Quality
 

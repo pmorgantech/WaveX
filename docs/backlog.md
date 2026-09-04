@@ -21,11 +21,33 @@ compare an `-O2` image under eight-voice audio and SD soak tests before choosing
 a default. Consider LTO only after that decision; it can affect linker section
 placement and weak HAL symbols.
 
-### ITCM placement for the per-voice render loop
+### Profile-guided QSPI-to-SRAM execution
 
-`VoiceManager::Render()` is a possible ITCM candidate. Move it only if DWT
-measurements show the callback needs the headroom; retaining its host-testable
-header implementation is preferable to an unmeasured placement change.
+The persistent QSPI image already supports selective relocation:
+`WAVEX_ITCM_CODE` gives code a QSPI load address and an ITCM run address, and
+`MemorySections::InitItcm()` copies it before interrupts start. Currently only
+the UART RX-position handler uses it. Profile the audio callback first, then
+move a measured hot region such as `VoiceManager::Render()` only when the DWT
+results justify the extra linker/startup complexity. Retaining its
+host-testable header implementation is preferable to an unmeasured placement
+change.
+
+A matched `-O0`, profiling-enabled bench on 2026-09-04 streamed the same
+44.1-kHz stereo WAV from SD in both profiles. The active audio callback
+averaged 52.39 us from QSPI and 17.84 us from SRAM; the foreground WAV pump
+averaged 1.416 ms and 1.189 ms respectively, with no observed underruns. This
+supports evaluating selective relocation, but it is not a release-optimized
+profile or the required eight-voice soak.
+
+If selective ITCM placement is insufficient, evaluate a separate persistent
+bootloader-SRAM profile. libDaisy's `BOOT_SRAM` model stores the application in
+QSPI and copies it into SRAM at boot, so runtime should resemble the direct-SWD
+SRAM profile while surviving power cycles. Do not replace the existing QSPI
+execution profile unless the image remains below the bootloader's 480 KiB
+limit, D1 heap and the currently tight D2/D3 regions retain measured headroom,
+and an identical eight-voice plus SD-streaming soak shows a worthwhile DWT
+improvement with zero underruns. Record flash time, boot-to-audio latency, map
+usage, and callback min/average/max for both profiles.
 
 ### SPI-link revival is gated on six recorded defects
 

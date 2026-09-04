@@ -72,7 +72,9 @@ make bin
 dfu-util -d 0483:df11 -s 0x90040000:leave -D build/wavex-daisy.bin
 ```
 
-> **Note:** The Daisy target is configured for QSPI boot (`BOOT_QSPI`). Do not substitute a generic internal-flash command or an old `dfu-util -a 0` example.
+> **Note:** The persistent Daisy target is configured with
+> `DAISY_STORAGE=qspi` for QSPI boot. Do not substitute a generic
+> internal-flash command or an old `dfu-util -a 0` example.
 
 ### Touchless flashing (no BOOT/RESET presses)
 
@@ -80,21 +82,50 @@ If the currently running Daisy firmware is still responsive over USB CDC, `make 
 
 ## Debug-probe workflows (SWD, not DFU)
 
-DFU is the normal path and needs no extra hardware. An ST-Link or CMSIS-DAP
-probe buys halt-mode stepping, which DFU cannot give you — worth wiring up
-when chasing a hard fault rather than a logic bug.
+DFU/QSPI is the persistent path and needs no extra hardware. For the ordinary
+Daisy edit/test loop, an ST-Link can load a separate SRAM-linked ELF without a
+QSPI erase, DFU enumeration, boot-mode switch, or post-load reset:
 
 | Task | Command |
 |---|---|
-| Flash + verify over SWD | `openocd -f interface/stlink.cfg -f target/stm32h7x.cfg -c "program build/wavex-daisy.elf verify reset exit"` |
-| GDB server | `openocd -f interface/stlink.cfg -f target/stm32h7x.cfg` — then attach on `localhost:3333` |
+| Build + SRAM load + run | `make daisy-debug` |
+| Build SRAM ELF only | `make daisy-debug-build` |
+| GDB server | `make daisy-debug-server` — listens on `localhost:3333` |
+| Load through existing server | In a second shell, `make daisy-debug-load` |
 | VS Code | Cortex-Debug launch config: `"servertype": "openocd"`, `"gdbTarget": "localhost:3333"` |
 
-Note that SWD programming writes internal flash, while the shipped image is a
-QSPI application loaded by the Daisy bootloader (`BOOT_QSPI`) — so an OpenOCD
-`program` of the `.elf` is a *different* boot path from `make daisy-flash`,
-not a faster version of it. Use it for debugging, and re-flash over DFU before
-judging anything about the real image.
+`make daisy-debug` uses `firmware/daisy/build-debug/`, starts a temporary
+OpenOCD server, and lets GDB load the ELF's addressed sections into SRAM before
+resuming `Reset_Handler`. It resets before loading and deliberately does not
+reset afterward. The persistent QSPI application at `0x90040000` is untouched;
+resetting or power-cycling the board boots that image again. Rebuild the
+devcontainer image after pulling this workflow so `gdb-multiarch` is present.
+
+A 2026-09-04 hardware run with both outputs already built measured the complete
+load-and-launch commands at 19.991 s for software-triggered DFU/QSPI and 2.870 s
+for SWD/SRAM. That single-board result makes the volatile path about 7x faster;
+repeat it when host USB or probe hardware changes rather than treating it as a
+fixed specification.
+
+The two Daisy profiles intentionally have different memory timing:
+
+| Content | Persistent QSPI profile | Fast SRAM profile |
+|---|---|---|
+| Executable code | Memory-mapped QSPI | D1 AXI SRAM |
+| Initialized globals | D1 AXI SRAM | DTCM |
+| Ordinary non-DMA state | D1 AXI SRAM | D2 SRAM, with parser-only spill in D3 |
+| Explicit hot callback state | DTCM | DTCM |
+| SAI/UART DMA buffers | Dedicated D2 DMA region | Same dedicated D2 DMA region |
+| SDMMC1/FatFS I/O buffers | D1 AXI SRAM | D1 AXI SRAM (SDMMC1 cannot reach D2/D3) |
+
+`DEBUG_OPT` defaults to `-O0`, matching the current default persistent build,
+so the profile does not add an optimization-level difference on top of these
+memory-placement differences.
+
+That makes the SRAM profile suitable for functional work, debugger use, and
+controlled comparisons made with matching compiler flags and workloads. It is
+not a substitute for profiling the release memory layout: make production DWT
+headroom and zero-underrun claims on the persistent QSPI profile.
 
 The ESP32-P4 can also flash over its native USB DFU (`idf.py dfu-flash`) if
 the UART pins are otherwise occupied; `make esp32-flash` does not need this.

@@ -2,7 +2,7 @@ FROM espressif/idf:release-v5.5
 
 # STM32 / Daisy tool-chain
 RUN apt-get update && apt-get install -y \
-    gcc-arm-none-eabi udev \
+    gcc-arm-none-eabi gdb-multiarch udev \
     cmake ninja-build build-essential git python3-pip \
     openocd dfu-util stlink-tools sudo usbutils locales \
     curl ca-certificates \

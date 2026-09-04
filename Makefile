@@ -1,5 +1,5 @@
 # WaveX Dual-MCU Sampler/Synth Build System
-.PHONY: help all esp32 daisy daisy-stageb release esp32-release daisy-release check-release-clean check-profiles require-strings clean esp32-clean daisy-clean esp32-flash esp32-monitor esp32-flash-monitor esp32-menuconfig test test-all test-asan test-daisy test-esp32 test-shared test-clean ai-graph daisy-flash daisy-flash-auto flash-all start-logs stop-logs logs-start logs-stop
+.PHONY: help all esp32 daisy daisy-stageb daisy-debug daisy-debug-build daisy-debug-load daisy-debug-server release esp32-release daisy-release check-release-clean check-profiles require-strings clean esp32-clean daisy-clean esp32-flash esp32-monitor esp32-flash-monitor esp32-menuconfig test test-all test-asan test-daisy test-esp32 test-shared test-clean ai-graph daisy-flash daisy-flash-auto flash-all start-logs stop-logs logs-start logs-stop
 
 # Test targets
 test: test-all
@@ -123,6 +123,10 @@ help:
 	@echo "  all              - Build both ESP32 and Daisy firmware"
 	@echo "  esp32            - Build ESP32 firmware"
 	@echo "  daisy            - Build Daisy firmware"
+	@echo "  daisy-debug      - Build, load Daisy into SRAM over ST-Link, and run"
+	@echo "  daisy-debug-build - Build the separate Daisy SRAM/debug ELF"
+	@echo "  daisy-debug-load - Load SRAM ELF through an existing OpenOCD server"
+	@echo "  daisy-debug-server - Start OpenOCD for GDB/Cortex-Debug"
 	@echo "  release          - Build both MCUs in the release profile, then verify"
 	@echo "  check-release-clean - Assert no debug console tokens in release images"
 	@echo "  check-profiles   - Assert tokens present in debug AND absent in release"
@@ -130,7 +134,7 @@ help:
 	@echo "  daisy-clean      - Clean Daisy build"
 	@echo "  clean            - Clean all builds"
 	@echo "  daisy-flash      - Flash Daisy via DFU (needs BOOT+RESET by hand)"
-	@echo "  daisy-flash-auto - Flash Daisy with no button presses"
+	@echo "  daisy-flash-auto - Persist Daisy to QSPI with no button presses"
 	@echo "  flash-all        - Stop logs, flash both MCUs in parallel, restart logs"
 	@echo "  start-logs       - Rotate and start serial loggers"
 	@echo "  stop-logs        - Stop serial loggers before flashing"
@@ -235,6 +239,23 @@ daisy-stageb:
 	@echo "✅ Daisy Seed Backend (Stage B flag set) build completed successfully!"
 	@echo "========================================================================"
 
+# Fast Daisy edit/test loop. This is a separate SRAM-linked image loaded over
+# SWD; it does not erase or replace the persistent QSPI firmware.
+daisy-debug-build:
+	@echo "🎵 Building Daisy Seed Backend (SRAM debug profile)..."
+	$(MAKE) -C firmware/daisy debug-build
+
+daisy-debug:
+	@echo "⚡ Loading Daisy Seed Backend into SRAM (persistent QSPI unchanged)..."
+	$(MAKE) -C firmware/daisy debug
+
+daisy-debug-load:
+	@echo "⚡ Loading Daisy SRAM image through the existing OpenOCD server..."
+	$(MAKE) -C firmware/daisy debug-load
+
+daisy-debug-server:
+	$(MAKE) -C firmware/daisy debug-server
+
 # Release-profile builds (README.md#build-profiles). WAVEX_BUILD_DEBUG=0
 # drops the console command surface - runtime log-level control on both boards,
 # plus screenshots on the ESP32 - from the image. Each profile builds into its
@@ -316,6 +337,7 @@ daisy-clean:
 	@echo "🧹 Cleaning Daisy Seed Backend build..."
 	cd firmware/daisy && make clean
 	cd firmware/daisy && make BUILD_DIR=build-stageb clean
+	$(MAKE) -C firmware/daisy debug-clean
 	@echo "✅ Daisy Seed Backend cleaned"
 
 daisy-flash:
