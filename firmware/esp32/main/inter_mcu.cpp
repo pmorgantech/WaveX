@@ -230,11 +230,16 @@ namespace {
 // fixed ring here cannot fall behind it, and a fixed array avoids allocating
 // from the UART RX task.
 constexpr size_t kMetaCacheSize = 8;
+constexpr uint8_t kTrackBindingCount = WAVEX_MIX_TRACKS;
 portMUX_TYPE s_meta_lock = portMUX_INITIALIZER_UNLOCKED;
 WaveX::Protocol::SampleMetadata s_meta[kMetaCacheSize];
 bool s_meta_valid[kMetaCacheSize] = {};
 size_t s_meta_next = 0;
 uint16_t s_meta_newest_id = 0;
+
+portMUX_TYPE s_track_binding_lock = portMUX_INITIALIZER_UNLOCKED;
+WaveX::Protocol::TrackBindingMessage s_track_bindings[kTrackBindingCount];
+bool s_track_binding_valid[kTrackBindingCount] = {};
 }  // namespace
 
 void inter_mcu_store_sample_meta(const WaveX::Protocol::SampleMetadata& msg) {
@@ -281,6 +286,45 @@ esp_err_t inter_mcu_request_sample_meta(uint16_t sample_id) {
     WaveX::Protocol::SampleMetaReqMessage msg(sample_id);
     int result = send_uart_message(WaveX::Protocol::MSG_SAMPLE_META_REQ, &msg, sizeof(msg));
     return result >= 0 ? ESP_OK : ESP_FAIL;
+}
+
+esp_err_t inter_mcu_request_track_binding(uint8_t track) {
+    if (!s_initialized || s_suspended) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (track != 0xFF && track >= kTrackBindingCount) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    WaveX::Protocol::TrackBindingReqMessage msg(track);
+    const int result = send_uart_message(WaveX::Protocol::MSG_TRACK_BINDING_REQ, &msg, sizeof(msg));
+    return result >= 0 ? ESP_OK : ESP_FAIL;
+}
+
+void inter_mcu_store_track_binding(const WaveX::Protocol::TrackBindingMessage& msg) {
+    if (msg.track >= kTrackBindingCount) {
+        return;
+    }
+    taskENTER_CRITICAL(&s_track_binding_lock);
+    s_track_bindings[msg.track] = msg;
+    // The name is a fixed-width wire field, not a guaranteed C string: a name
+    // that exactly fills it carries no terminator. Terminate once here so
+    // every UI reader can treat the cached copy as an ordinary string.
+    s_track_bindings[msg.track].name[sizeof(s_track_bindings[msg.track].name) - 1] = '\0';
+    s_track_binding_valid[msg.track] = true;
+    taskEXIT_CRITICAL(&s_track_binding_lock);
+}
+
+bool inter_mcu_get_track_binding(uint8_t track, WaveX::Protocol::TrackBindingMessage* out) {
+    if (!out || track >= kTrackBindingCount) {
+        return false;
+    }
+    taskENTER_CRITICAL(&s_track_binding_lock);
+    const bool found = s_track_binding_valid[track];
+    if (found) {
+        *out = s_track_bindings[track];
+    }
+    taskEXIT_CRITICAL(&s_track_binding_lock);
+    return found;
 }
 
 esp_err_t inter_mcu_send_sample_select(uint16_t sample_id, uint8_t slot) {

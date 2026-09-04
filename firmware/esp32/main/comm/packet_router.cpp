@@ -195,6 +195,12 @@ void PacketRouter::route_by_message_type(uint8_t msg_type,
                 handle_sample_meta(msg);
         } break;
 
+        case WaveX::Protocol::MSG_TRACK_BINDING: {
+            WaveX::Protocol::TrackBindingMessage msg;
+            if (CopyMessage(payload, payload_len, msg, "TRACK_BINDING"))
+                handle_track_binding(msg);
+        } break;
+
         case WaveX::Protocol::MSG_DIAG_PUSH: {
             WaveX::Protocol::DiagPushMessage msg;
             if (CopyMessage(payload, payload_len, msg, "DIAG_PUSH"))
@@ -353,6 +359,16 @@ WEAK_HANDLER void PacketRouter::handle_sample_meta(const WaveX::Protocol::Sample
              (unsigned long)msg.loop_end,
              msg.loop_enabled ? "on" : "off");
     inter_mcu_store_sample_meta(msg);
+}
+
+WEAK_HANDLER void PacketRouter::handle_track_binding(
+    const WaveX::Protocol::TrackBindingMessage& msg) {
+    ESP_LOGD("packet_router",
+             "Track binding: track=%u state=%u sample=%u",
+             (unsigned)msg.track,
+             (unsigned)msg.state,
+             (unsigned)msg.sample_id);
+    inter_mcu_store_track_binding(msg);
 }
 
 WEAK_HANDLER void PacketRouter::handle_diag_push(const WaveX::Protocol::DiagPushMessage& msg) {

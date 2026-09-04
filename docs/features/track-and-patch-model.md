@@ -1,8 +1,8 @@
 # Track and Patch Model — the user-facing paradigm and its end state
 
-**Status**: **Proposed 2026-09-02, decisions pending** (see §9). Written in response to a direct request for an end-state design so that the Phase 2/2.5 UI and voice work converges on one paradigm rather than accreting. Nothing here is built; several pieces it names already are, and are marked.
+**Status**: **Proposed 2026-09-02, extended 2026-09-03; decisions pending** (see §9). Written in response to direct requests for an end-state design so that the Phase 2/2.5 UI and voice work converges on one paradigm rather than accreting. Track/Patch/Pattern/Song vocabulary is confirmed; the broader ownership hierarchy is accepted architecture. Nothing here is built as one unit; several pieces it names already are, and are marked.
 **Supersedes, in vocabulary only**: "slot" (`instrument-model.md` §1) and "Voice" as a page/entity name. The engine-side data model in `instrument-model.md` stands; this document says what it is *called* and how tracks, MIDI and memory are arranged around it.
-**Dependencies**: `instrument-model.md` (the `Instrument`/`Zone` model, built), `output-routing-and-mixer.md` (`TrackMix`, built), `sequencer.md` (tracks, built core), `wxcf.hpp` (built).
+**Dependencies**: `instrument-model.md` (the sampler `Instrument`/`Zone` model, built), `oscillator-sources.md` (typed sampler/wavetable boundary), `output-routing-and-mixer.md` (`TrackMix`, built), `sequencer.md` (tracks, built core), `wxcf.hpp` (built).
 
 ---
 
@@ -12,17 +12,77 @@ The words the UI, the docs and new code use. Engine identifiers keep their curre
 
 | Term | Meaning | Was called | Engine identifier today |
 |---|---|---|---|
+| **Asset** | A stored audio file or generated PCM resource in the SD library. Assets are referenced by Patches and become resident through a registry; they do not own playback behavior. | sample file, WAV | SD path + sample metadata; wavetable assets are deferred |
+| **Oscillator source** | A typed Patch-owned recipe that interprets an Asset as a sampler recording, wavetable, or future source type. Source type determines playback semantics. | sample oscillator | sampler `Zone` mapping today; no common engine type yet |
 | **Track** | **Confirmed 2026-09-02:** one sequencer track (formerly "slot") *and* one space in which an active Patch can be loaded, responding to MIDI messages on its designated channel. Sixteen of them. Also owns a mixer strip and a polyphony limit. What a note is *addressed to*. | slot, instrument slot, channel | `kNumInstrumentSlots`, `InstrumentBank::Slot()`, `Voice::slot`, `NoteMessage::channel`; **and** `pattern.hpp`'s inner `Track` struct (a pattern's per-track step row — rename to `TrackSteps` in stage 1 so the word means one thing) |
-| **Patch** | **Confirmed 2026-09-02:** one loaded "voice" — a set of instrument parameters: a soundfont (or any zone set) and its associated settings — filters, envelopes, modulation, tuning, effects. Gets loaded *into* a Track. Named, tagged, saveable. | Voice, Preset, Instrument | `Instrument` (keep in code — the E-mu lineage is documented there) |
+| **Patch** | **Confirmed 2026-09-02:** one playable, named, tagged, saveable sound: typed oscillator-source definitions plus mappings, filters, envelopes, modulation, tuning, and effects. Gets loaded *into* a Track. The current implementation is sampler-only. | Voice, Preset, Instrument | `Instrument` (the current sampler Patch; keep in code — the E-mu lineage is documented there) |
+| **Performance** | The current live configuration of all Tracks: Patch bindings, MIDI routing, mixer, mutes, and shared effects. V1 stores one Performance directly in the Project; it is an ownership concept, not a separate file yet. | multi, part, performance | Project's target `Tracks[16]` plus mixer state |
 | **Pattern** | A group of notes/velocities over a fixed span — default **2 bars of 16ths = 32 steps** — with one step row per Track. The sequencer's unit of composition. | pattern | `Pattern` (`pattern.hpp`, built: 1–64 steps, default 16 → 32) |
 | **Song** | An ordered arrangement of Patterns over time, at a tempo and swing setting. | song, chain | `sequencer.md` §3's `Songs[≤16]: (pattern, repeats)` — not yet in code |
-| **Zone** | One sample mapped to a key × velocity range inside a Patch. Unchanged. | zone | `Zone` |
+| **Scene** | A performance snapshot of mixer, macros, mutes, and optional Pattern selection. It references content and never embeds samples, Patches, or Pattern data. | performance | target only; `scenes-and-performance.md` |
+| **Project** | The portable root that stores one Performance, Patterns, Songs, Scenes, settings, and references to saved Patches/assets. | project | `.wxp` target; not yet in code |
+| **Bank** | A numbered or browsable storage grouping for Assets or Patches. It is useful for discovery/program change but is not a musical ownership layer. | bank | no target runtime entity; current `InstrumentBank` becomes `TrackBank` |
+| **Zone** | One sample mapped to a key × velocity range inside a sampler Patch. Unchanged. | zone | `Zone` |
 | **Sample** | A resident PCM buffer with its own record (markers, gain, name). Referenced by zones; owned by nobody but the registry. | sample | `LoadedSampleInfo` / `s_loaded_samples` |
-| **Voice** | One of the 8 polyphony channels rendering one zone's sample. An *engine* term; it never names a page or a user entity again. | voice | `Voice`, `kNumVoices` |
+| **Voice** | One of the 8 polyphony channels rendering one resolved oscillator-source trigger (currently one Zone's sample). An *engine* term; it never names a page or a user entity again. | voice | `Voice`, `kNumVoices` |
 | **MIDI channel** | 1–16 on the DIN/USB input. A *routing input* to tracks, never the same word as Track. | channel | `MidiEvent::channel` |
 | **Mod slot** | One row of a Patch's modulation matrix. Keeps "slot" — it is the conventional word there and it is never confused with a Track once Track exists. | mod slot | `ModSlot`, `Instrument::mod_slots[8]` |
 
 Why **Track** and not Channel: with MIDI routing configurable (§2.2), track≠channel is the whole point, and the sequencer and mixer already say "track". Why **Patch** and not Preset: "Preset" in this codebase will be wanted for saved *device state* (scenes, `scenes-and-performance.md`), and MIDI's own word for "select the sound on a channel" is Program Change → a Patch. "Patch" also carries no implication that the thing came from the factory.
+
+### 1.1 Ownership hierarchy
+
+The hierarchy is a set of ownership and reference rules, not a requirement that
+every object be serialized inside the object above it:
+
+```text
+SD library / asset pool
+└── Assets <--------------------------┐
+                                      |
+Project                               |
+├── Performance                       |
+│   └── Tracks[16]                    |
+│       ├── active Patch -------------┘ (Patch source definitions reference Assets)
+│       └── MIDI routing, polyphony, mixer strip
+├── Patterns -> TrackSteps[16] -> Tracks
+├── Scenes   -> performance state + optional Pattern reference
+└── Songs    -> ordered Pattern references, repeats, tempo, overrides
+```
+
+The resulting save policy is explicit:
+
+- Assets belong to the library/pool and are referenced by stable path.
+- A Patch owns sound design and source mappings; a drum Kit is a drum-mode
+  Patch, not another layer.
+- A Track owns the active Patch binding, MIDI routing, polyphony policy, and
+  mixer strip.
+- The Performance is the live set of all Track/Patch bindings, routing, mixer
+  state, mutes, and shared effects. V1 stores one directly in the Project.
+- A Pattern owns musical time: notes, triggers, probability, micro-timing, and
+  parameter locks. It does not own or silently replace Track Patches.
+- A Scene owns recallable performance state, not content.
+- A Song owns form by arranging Pattern references and overrides.
+- A Project owns the portable working set and its references. Export/snapshot
+  may copy referenced assets; normal save does not duplicate them.
+- A Bank is a browser/storage view only and never becomes a second owner of a
+  Patch, Track, or Voice.
+
+This gives the Performance an explicit stable boundary: Pattern changes
+preserve the Track/Patch setup unless an explicit Scene or Project action
+changes it. Multiple independently named Performances or Parts can be added
+later without changing what a Pattern owns.
+
+### 1.2 Source type is below Patch, Voice is below note resolution
+
+Sampler and wavetable data may both be PCM, but they are different oscillator
+contracts. A sampler Patch maps arbitrary recordings through Zones; a future
+wavetable Patch scans fixed-length single-cycle frames. They share the Patch,
+Track, Pattern, and Song hierarchy, not source-specific assumptions. See
+`oscillator-sources.md`.
+
+A Patch is the saved blueprint. A Voice is the temporary runtime allocation
+created after a Track's Patch resolves a note or trigger. UI and persistence
+must never use “Voice” as a synonym for Patch.
 
 ---
 
@@ -68,7 +128,10 @@ Filter/envelope/tuning are Patch properties (§3). Today's `VoiceLiveParams` is 
 
 ### 3.1 What it is
 
-`Instrument` (instrument.hpp) plus the fields a *named, saveable* thing needs. All additive:
+For the implemented sampler source, `Instrument` (`instrument.hpp`) plus the
+fields a *named, saveable* thing needs. All additive. This is the sampler Patch
+representation, not a requirement that future wavetable metadata be forced into
+`Zone`:
 
 ```cpp
 struct Instrument {                      // == Patch
@@ -140,10 +203,49 @@ Today there are **two** sample registries: `audio_engine.cpp`'s `s_loaded_sample
 
 End state: **one registry, refcounted by path**, exactly as `instrument-model.md` §4 specified and never built:
 
-- `SampleRegistry` (shared, host-testable, HAL-free over a `SampleMemMgr`): `{sample_id, path hash, refcount, handle, LoadedSampleInfo record}`; capacity **128** (was 32 — two 32-zone Patches plus a working set). Ids are registry-allocated, unique for the life of the boot.
+- `SampleRegistry` (shared, host-testable, HAL-free over a `SampleMemMgr`): `{sample_id, path hash, refcount, handle, LoadedSampleInfo record}`; capacity **1024** (was 32). Ids are registry-allocated, unique for the life of the boot; `sample_id` is `uint16_t` on the wire, so 1024 is well inside the id space.
+
+  1024 is a deliberate stretch past what the Track/zone model alone needs — 16 Tracks x 32 zones tops out at 512 zone references — so that a sample library can stay resident across Instrument changes instead of being reloaded per swap. Five constraints come with it, and none of them are satisfied by simply raising the constant:
+
+  - **The registry must be indexed, not scanned — measured, and it does not survive 1024.** This is the constraint that actually breaks, and it is not a bandwidth problem. `find_loaded_sample` (`audio_engine.cpp`) is a linear scan, and `ResolveNoteOn` calls the resolver once per zone that passes key/velocity filtering, stopping only after `kMaxLayerTriggers` (4) zones resolve successfully — so a note where many zones match but fail to resolve walks up to `kMaxZones` (32) scans.
+
+    Measured on the Daisy at 480 MHz (DWT, `BenchmarkRegistryScan`, worst-case miss scan, nothing else resident):
+
+    | entries | ns/scan | ns/entry | x32 zones |
+    |--:|--:|--:|--:|
+    | 32 (SRAM, today) | 1 412 | 44 | 45 us |
+    | 32 (SDRAM) | 1 633 | 51 | 52 us |
+    | 128 | 7 762 | 60 | 248 us |
+    | 512 | 29 120 | 56 | 931 us |
+    | **1024** | **205 645** | **200** | **6 580 us** |
+
+    Three things that estimation would have got wrong:
+
+    - **Per-entry cost is not flat.** It holds near 51-60 ns to 512 entries, then jumps ~3.5x to 200 ns at 1024. The working set crosses ~123 KB there and cache/SDRAM row behaviour changes, so the curve cannot be linearly extrapolated — which is precisely why this needed measuring rather than reasoning.
+    - **SDRAM is barely the issue.** SRAM vs SDRAM at 32 entries is 44 vs 51 ns/entry, ~16%. Entry count and the 120-byte stride dominate, not which memory the table sits in.
+    - **The 32-zone worst case is 6.6 ms**, past the `< 5 ms` in-to-sound budget the note path documents — from lookup alone, on a main loop that also refills SD. Typical cost is far lower (a hit averages half a scan, and most instruments match 1-4 zones, so ~0.1-0.4 ms at 1024), but the worst case is a real instrument shape, not a pathological one.
+
+    The fix was measured too, at 1024 entries, both variants still reading the record from SDRAM afterwards because a real resolve has to:
+
+    | lookup | ns/lookup | x32 zones | vs linear |
+    |---|--:|--:|--:|
+    | linear scan (today's shape) | 188 391 | 6 028 us | 1x |
+    | binary search over a 4 KB SRAM index | 990 | 32 us | **190x** |
+    | id encodes its own slot — no search | 330 | 11 us | **575x** |
+
+    Both clear the budget by two orders of magnitude, so the choice is not about speed. What the numbers show is that **the floor is the record read, not the search**: direct indexing costs ~330 ns, which is essentially one random 120-byte SDRAM record access — the thing you must do regardless. Binary search costs 3x that, and the extra is the search itself (10 unpredictable branches plus index probes), not memory.
+
+    That is also why **a hash buys nothing here.** A hash and a direct index both end at "compute a position, read the record", so both land on the same ~330 ns floor; the hash only adds a collision path and a table to size. Prefer making `sample_id` carry its own registry slot — e.g. slot index in the low bits, a generation counter in the spare high bits, with the record's own id re-checked on read so a stale id fails instead of silently resolving to whatever recycled that slot. That is O(1), needs no auxiliary structure and no extra memory at all, and it is the cheapest thing measured. Ids become registry-allocated under this design anyway, so this is the moment to pick the encoding.
+
+    Do not ship the linear scan at this capacity.
+
+  - **The registry table cannot live in Daisy SRAM.** `sizeof(LoadedSampleInfo)` is **120 B** (measured — it embeds an 88 B `SampleMetadata`), so 1024 entries is **120 KB** against roughly 140 KB of SRAM left at 73% used. Taking ~86% of the remaining internal RAM for one table is not viable, so the records belong in SDRAM (64 MB, currently unused) — which means the registry is only available on boots where SDRAM came up, the same way `sdram_available` already gates the SFZ loader. Note this is the *records*; the 4 KB lookup index above still belongs in SRAM.
+  - **Audio data, not table size, is the real cap.** The sample arena is ~60 MB; 1024 resident samples means averaging <60 KB each (~0.6 s of 16-bit mono at 48 kHz). 1024 is the ceiling the table permits, not a working set to expect. Admission still runs through `WAVEX_INST_LOAD_RESERVE_BYTES`, and eviction must stay explicit rather than the silent oldest-first drop `audio_engine.cpp` does today.
+  - **The frontend cannot mirror the whole registry.** `SampleMetadata` is 88 B, so 1024 records is 88 KB — PSRAM on the ESP32-P4, not internal SRAM. At UART4's 2 Mbaud (~200 KB/s at 8N1) a full mirror is ~510 ms, so it cannot be pushed eagerly on every change. The Sample Manager needs a windowed/paged query (`MSG_SAMPLE_META_REQ` by range) rather than the current "push everything, cache 8" model. A ~20-row visible window is ~2 KB, about 10 ms — comfortable against a 500 ms refresh.
+  - **A page must be ONE batched message, not one per record.** `UART_MAX_PAYLOAD` is 2048, so ~23 `SampleMetadata` records fit in a single message, and the Daisy TX queue is only 4 deep (`daisy_uart_link.cpp` `MSG_QUEUE_SIZE`). Replying to a page with 20 separate messages drops most of them as queue overflow — exactly the defect the `MSG_TRACK_BINDING` broadcast had before it was changed to drain a bounded number per main-loop pass.
 - `Load(path)` returns the existing entry (refcount++) if the path is already resident. Binding a Patch to a track refs its samples; unbinding/replacing derefs; refcount 0 frees — after the voice-stop handshake, which becomes **per-track** (`VoiceManager::StopSlot()` is already built; `s_voice_stop_all` stops being the only tool).
 - The Sample Manager lists the registry — every resident sample, whoever loaded it, with a "used by: Track 3 (Piano), Track 7" column. Sample Edit can edit any of them; an import's samples get markers like any other.
-- `MSG_SAMPLE_META` capacity on the ESP32 (8 today, the "can only describe 8 of 32" backlog item) grows to match, or the Sample Manager pages.
+- `MSG_SAMPLE_META` capacity on the ESP32 (8 today, the "can only describe 8 of 32" backlog item) grows, but at a 1024 registry it **pages** rather than mirrors — see the frontend constraint above. The Sample Manager's current "probe ids 1..64 every 500 ms" rebuild does not survive this and becomes a range query over the visible window.
 - `Instrument::origin` then means only "imported vs. built on-device" for the UI, not "which registry". `SfzLoader::ForgetLoadedSample` and the bridging resolver go away; there is one `SampleResolver`.
 
 This is what makes **two soundfonts at once** ordinary: a Patch on track 1 and a Patch on track 2 hold refs into the same registry; loading a third evicts nothing unless memory is short. Budget: `WAVEX_INST_LOAD_RESERVE_BYTES` (8 MB) stays as the guard; the RAM-resident cap per sample (`WAVEX_INST_MAX_RAM_SAMPLE_BYTES`, 4 MB) stays until streamed zones exist.
@@ -231,4 +333,4 @@ Items 1 (Track, Patch), and the Pattern/Song definitions, were **confirmed 2026-
 
 ## 10. Deliberately out of scope
 
-Streamed (disk) zones; FX design; per-zone editors beyond the Pad Map; multi-output routing (Stage B); song/project files (they reference Patches by path and are `sequencer.md`'s).
+Streamed (disk) zones; FX design; per-zone editors beyond the Pad Map; multi-output routing (Stage B); song/project files (they reference Patches by path and are `sequencer.md`'s). The wavetable renderer is also deliberately deferred and unscheduled; only the typed source boundary and ownership rules are established here.

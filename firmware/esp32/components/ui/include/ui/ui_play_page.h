@@ -24,12 +24,10 @@ namespace wavex_ui {
  *
  * This is currently the only way to trigger a digital voice without external
  * MIDI hardware, so it is also the only way to hear the per-voice filter,
- * envelope and live parameter edits at all. Note the sample browser's Audition
- * does NOT exercise this path - it streams through the ring buffer and bypasses
- * VoiceManager entirely - and a 16-bit sample must already be RAM-resident,
- * AND bound to the SLOT this page is currently sending notes on (Sample
- * Manager page's slot selector, or an SFZ instrument loaded to that slot), or
- * the Daisy drops the note (roadmap Phase 2.5 item 1).
+ * envelope and live parameter edits at all. Audition is deliberately a
+ * separate streaming-preview path: Play sends notes only to the selected
+ * Track's backend-authoritative Patch/sample binding. Its status strip reports
+ * that binding, rather than trying to infer it from local Load/Select history.
  */
 class UIPlayPage : public UIPage {
    public:
@@ -84,6 +82,7 @@ class UIPlayPage : public UIPage {
 
     static void keyEventCb(lv_event_t* e);
     static void tabChangedCb(lv_event_t* e);
+    static void bindingTimerCb(lv_timer_t* timer);
 
     void buildStrip(lv_obj_t* parent);
     void buildPads(lv_obj_t* tab);
@@ -96,6 +95,7 @@ class UIPlayPage : public UIPage {
     void toggleLatch(int index);
     void setRoot(int root);
     void refreshKeys();
+    void refreshBindingStatus();
 
     void stepParam(int direction);
     void selectParam(int direction);
@@ -111,6 +111,7 @@ class UIPlayPage : public UIPage {
     lv_obj_t* tabview_ = nullptr;
     lv_obj_t* status_label_ = nullptr;
     lv_obj_t* param_label_ = nullptr;
+    lv_timer_t* binding_timer_ = nullptr;
 
     uint16_t param_value_[static_cast<size_t>(Param::kCount)] = {0};
     Param current_param_ = Param::Cutoff;

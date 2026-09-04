@@ -114,6 +114,7 @@ void StatisticsManager::increment_packet_stat(uint8_t packet_type) {
         case 0x34:  // MSG_SAMPLE_STATUS
         case 0x39:  // MSG_STORAGE_STATUS
         case 0x3D:  // MSG_SAMPLE_META
+        case 0x48:  // MSG_TRACK_BINDING
         case 0x42:  // MSG_CV_CAL_RESP
         case 0x61:  // MSG_INST_STATUS
             m_packet_stats.other_known_packets++;

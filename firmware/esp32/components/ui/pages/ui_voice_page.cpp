@@ -5,6 +5,7 @@
 
 #include "../styles/ui_theme.h"
 #include "inter_mcu.h"
+#include "ui/current_track.h"
 #include "ui/ui_navigator.h"
 #include "ui/ui_palette.h"
 #include "ui/ui_sample_browser.h"
@@ -70,7 +71,7 @@ int UIVoicePage::paramsForStage(Stage s, Param* out, int max) const {
             // the fallback"). PITCH/PAN/GAIN are live: the engine applies all
             // three to sounding voices.
             add("SAMPLE", kParamSample, 0, "");
-            add("SLOT", kParamSlot, 0, "");
+            add("TRACK", kParamSlot, 0, "");
             add("PITCH", WaveX::Protocol::PARAM_PITCH, 32768, "semi");
             add("PAN", WaveX::Protocol::PARAM_PAN, 32768, "");
             add("GAIN", WaveX::Protocol::PARAM_VOLUME, 52428, "");
@@ -130,19 +131,13 @@ void UIVoicePage::seedValues() {
     values_seeded_ = true;
 }
 
-// Which instrument slot (0..15) the Sample tab's SLOT control currently
-// targets. Reads back through paramsForStage() rather than a dedicated
-// member so the SLOT param's stored value (in stage_values_, seeded and
-// edited exactly like every other param) stays the single source of truth.
+// Which Track (0..15) the Sample tab's TRACK control currently targets.
+// Shared with Play, Sample Manager and the Browser's SFZ load target
+// (current_track.h) rather than kept in stage_values_ like the voice params:
+// a Track selection that only this page knew about was one of the reasons
+// "which Track?" had a different answer on every page.
 uint8_t UIVoicePage::currentSlot() const {
-    Param params[kMaxParams];
-    const int n = paramsForStage(Stage::Sample, params, kMaxParams);
-    for (int i = 0; i < n; ++i) {
-        if (params[i].wire_param == kParamSlot) {
-            return static_cast<uint8_t>(params[i].value);
-        }
-    }
-    return 0;
+    return getCurrentTrack();
 }
 
 // Steps sample_id_ to the next/previous resident sample (wrapping) and
@@ -390,11 +385,11 @@ void UIVoicePage::refreshHeader() {
     }
     char header[128];
     WaveX::Protocol::SampleMetadata m;
-    const unsigned slot = currentSlot();
+    const unsigned slot = trackDisplayNumber(currentSlot());
     if (sample_id_ != 0 && inter_mcu_get_sample_meta(sample_id_, &m)) {
         snprintf(header,
                  sizeof(header),
-                 "%s   -   slot %u   sample %u  %.32s",
+                 "%s   -   Track %u   sample %u  %.32s",
                  voice_name_,
                  slot,
                  (unsigned)sample_id_,
@@ -402,14 +397,14 @@ void UIVoicePage::refreshHeader() {
     } else if (sample_id_ != 0) {
         snprintf(header,
                  sizeof(header),
-                 "%s   -   slot %u   sample %u",
+                 "%s   -   Track %u   sample %u",
                  voice_name_,
                  slot,
                  (unsigned)sample_id_);
     } else {
         snprintf(header,
                  sizeof(header),
-                 "%s   -   slot %u   no sample (load one from Sample > Browse)",
+                 "%s   -   Track %u   no sample (load one from Sample > Browse)",
                  voice_name_,
                  slot);
     }
@@ -465,7 +460,7 @@ void UIVoicePage::refreshParams() {
                      "%s%-10s  %u",
                      focused ? "> " : "  ",
                      p.label,
-                     (unsigned)p.value);
+                     trackDisplayNumber(getCurrentTrack()));
         } else {
             snprintf(line,
                      sizeof(line),
@@ -530,15 +525,14 @@ void UIVoicePage::stepParam(int steps) {
         return;
     }
     if (p.wire_param == kParamSlot) {
-        int32_t next = static_cast<int32_t>(p.value) + steps;
+        int32_t next = static_cast<int32_t>(getCurrentTrack()) + steps;
         next = next < 0 ? 0 : (next > 15 ? 15 : next);
-        p.value = static_cast<uint16_t>(next);
-        stage_values_[stage_][param_] = p.value;
-        // Re-bind whatever sample this page is tracking to the new slot, so
-        // moving SLOT genuinely changes which channel's note-on plays it
+        setCurrentTrack(static_cast<uint8_t>(next));
+        // Re-bind whatever sample this page is tracking to the new Track, so
+        // moving TRACK genuinely changes which channel's note-on plays it
         // rather than just relabelling a number nothing reads.
         if (sample_id_ != 0 &&
-            inter_mcu_send_sample_select(sample_id_, static_cast<uint8_t>(p.value)) != ESP_OK) {
+            inter_mcu_send_sample_select(sample_id_, getCurrentTrack()) != ESP_OK) {
             refreshStatus("Send failed - link busy?");
         }
         refreshHeader();

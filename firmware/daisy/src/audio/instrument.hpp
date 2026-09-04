@@ -100,9 +100,18 @@ enum class InstrumentOrigin : uint8_t {
     Built = 2,      // zones synthesised on-device; ids index the WAV registry
 };
 
+// How many bytes of an instrument's display name travel to the frontend.
+// Matches TrackBindingMessage::name, so the two cannot drift apart.
+static constexpr uint8_t kInstrumentNameBytes = 24;
+
 struct Instrument {
     InstrumentMode mode = InstrumentMode::Keyboard;
     InstrumentOrigin origin = InstrumentOrigin::None;
+    // What to call this instrument on screen: an import's .sfz basename, set
+    // at load. Empty for a Built instrument, whose name is the bound sample's
+    // own metadata and already known to the frontend. Without this the UI can
+    // only say "Instrument bound" and never which Instrument.
+    char name[kInstrumentNameBytes] = {};
     Zone zones[kMaxZones];
     // Modulation matrix (param-locks-and-modulation.md §3/§9 stage 4).
     // Always kMaxModSlots (8) entries - there is no separate "how many are

@@ -25,7 +25,7 @@ namespace wavex_ui {
  * path takes 16-bit mono/stereo only, while the browser will happily load 8 and
  * 24-bit files.
  *
- * "Select" binds the focused sample to an instrument SLOT (0..15, matches
+ * "Select" binds the focused sample to a Track (0..15, matches
  * MSG_NOTE_ON's channel and the Play page's own Slot parameter) rather than
  * to "notes on any channel" - that any-channel behavior was retired (roadmap
  * Phase 2.5 item 1) because it made a slot's note-on resolve to whatever was
@@ -64,16 +64,6 @@ class UISampleManagerPage : public UIPage {
     Row rows_[kMaxRows] = {};
     int row_count_ = 0;
     int focus_ = 0;
-
-    // Which instrument slot Select targets (0..15).
-    uint8_t slot_ = 0;
-
-    // Which sample plays on each slot. Mirrors what we last told the backend
-    // for that slot; the backend is the authority, but it has no "what is
-    // bound" query, so this is the frontend's record of its own instructions -
-    // one per slot, since binding is now per-slot rather than a single global
-    // (roadmap Phase 2.5 item 1).
-    uint16_t bound_id_[16] = {};
 
     static void refreshTimerCb(lv_timer_t* timer);
     void rebuildList();    ///< UI task / LVGL context only.

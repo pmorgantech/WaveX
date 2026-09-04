@@ -120,12 +120,18 @@
 #define WAVEX_DAISY_SD_CARD_ENABLED 1
 #endif
 
-// SFZ v1 boot import (docs/features/sfz-import.md). The narrow first slice
-// intentionally has no browser/protocol surface: when the conventional file
-// exists it is loaded into instrument slot 0 before audio starts. A missing
-// file is non-fatal and leaves the Phase-1 single-sample route available.
+// SFZ boot import (docs/features/sfz-import.md). Now OFF by default: it
+// loads into instrument slot 0 before audio starts, so on any card holding
+// the conventional file Track 1 came up owned by a Patch - and a Track
+// holding a Patch refuses a bare-sample Select for the rest of the session.
+// That is what made "Select does nothing on Track 1" look like a broken
+// button rather than an occupied Track (2026-09-03 bench session).
+//
+// Loading a Patch is now a browser action that asks which Track to use, so
+// nothing claims a Track without being asked. Set this to 1 to restore the
+// old boot-time behaviour; a missing file remains non-fatal either way.
 #ifndef WAVEX_DAISY_SFZ_BOOT_ENABLED
-#define WAVEX_DAISY_SFZ_BOOT_ENABLED 1
+#define WAVEX_DAISY_SFZ_BOOT_ENABLED 0
 #endif
 #ifndef WAVEX_DAISY_SFZ_BOOT_PATH
 #define WAVEX_DAISY_SFZ_BOOT_PATH "0:/wavex/sfz/default/default.sfz"

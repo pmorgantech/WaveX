@@ -12,6 +12,7 @@
 #include "esp_lvgl_port.h"
 #include "inter_mcu.h"
 #include "ui/current_sample.h"
+#include "ui/current_track.h"
 #include "ui/ui_busy_overlay.h"
 #include "ui_task.h"
 
@@ -391,6 +392,39 @@ std::array<Softkey, NUM_SOFTKEYS> UISampleBrowser::getSoftkeys() {
         file_browser_ ? wavex_file_browser_get_selected(file_browser_) : nullptr;
     const bool selected_sfz = selected && !selected->is_directory && isSfzFile(selected->name);
 
+    // Track picker: replaces the whole bar so there is no way to navigate away
+    // mid-question and leave a half-answered load behind.
+    if (sfz_awaiting_track_) {
+        keys[0] = {"Cancel", [this]() {
+                       sfz_awaiting_track_ = false;
+                       updateStatus("Instrument load cancelled");
+                       refreshSoftkeys();
+                   }};
+        keys[1] = {"Track -", [this]() {
+                       sfz_target_track_ = static_cast<uint8_t>(
+                           (sfz_target_track_ + WAVEX_MIX_TRACKS - 1) % WAVEX_MIX_TRACKS);
+                       refreshTrackPrompt();
+                   }};
+        keys[2] = {"Track +", [this]() {
+                       sfz_target_track_ =
+                           static_cast<uint8_t>((sfz_target_track_ + 1) % WAVEX_MIX_TRACKS);
+                       refreshTrackPrompt();
+                   }};
+        keys[3] = {"Load", [this]() {
+                       sfz_awaiting_track_ = false;
+                       // The chosen Track becomes the shared one, so Play and
+                       // Sample Manager follow the Instrument that just loaded.
+                       setCurrentTrack(sfz_target_track_);
+                       const wavex_file_entry_t* entry =
+                           file_browser_ ? wavex_file_browser_get_selected(file_browser_) : nullptr;
+                       if (!entry || !loadInstrument(entry)) {
+                           ESP_LOGE(TAG, "Failed to request instrument load");
+                       }
+                       refreshSoftkeys();
+                   }};
+        return keys;
+    }
+
     keys[0] = {"Back", [this]() { UINavigator::instance().pop(); }};
 
     if (is_playing_) {
@@ -464,10 +498,14 @@ std::array<Softkey, NUM_SOFTKEYS> UISampleBrowser::getSoftkeys() {
             refreshSoftkeys();
         } else {
             if (isSfzFile(selected->name)) {
+                // Ask which Track before committing: the load takes that
+                // Track away from Play, Voice and Sample Manager, and a Track
+                // holding an Instrument refuses a bare-sample Select afterwards.
                 ESP_LOGI(TAG, "Load instrument requested for: %s", selected->name);
-                if (!loadInstrument(selected)) {
-                    ESP_LOGE(TAG, "Failed to request instrument load: %s", selected->name);
-                }
+                sfz_awaiting_track_ = true;
+                sfz_target_track_ = getCurrentTrack();
+                refreshTrackPrompt();
+                refreshSoftkeys();
             } else {
                 // Regular WAV - load sample into sample RAM.
                 ESP_LOGI(TAG, "Load sample requested for: %s", selected->name);
@@ -1355,12 +1393,45 @@ void UISampleBrowser::requestInstrumentProbe(const wavex_file_entry_t* entry) {
         request_id = next_instrument_request_id_++;
     probe_request_id_.store(request_id, std::memory_order_release);
     updateStatus("Inspecting instrument references...");
-    if (inter_mcu_send_inst_op(request_id, 0, WaveX::Protocol::INST_OP_SFZ_PROBE, entry->path) !=
+    if (inter_mcu_send_inst_op(
+            request_id, getCurrentTrack(), WaveX::Protocol::INST_OP_SFZ_PROBE, entry->path) !=
         ESP_OK) {
         sfz_probe_ready_ = true;
         sfz_probe_loadable_ = false;
         updateStatus("Instrument inspection request failed");
     }
+}
+
+// Shows the Track the picker is currently on, and says when that Track is
+// already spoken for - overwriting an Instrument is the kind of thing that should
+// not be discovered afterwards.
+void UISampleBrowser::refreshTrackPrompt() {
+    WaveX::Protocol::TrackBindingMessage binding;
+    const bool known = inter_mcu_get_track_binding(sfz_target_track_, &binding);
+    char occupied[72] = {};
+    if (known) {
+        switch (binding.state) {
+            case WaveX::Protocol::TRACK_BINDING_PATCH:
+            case WaveX::Protocol::TRACK_BINDING_LOADING:
+                snprintf(occupied,
+                         sizeof(occupied),
+                         " - replaces Instrument %.23s",
+                         binding.name[0] ? binding.name : "(unnamed)");
+                break;
+            case WaveX::Protocol::TRACK_BINDING_SAMPLE:
+                snprintf(occupied, sizeof(occupied), " - replaces the bound sample");
+                break;
+            default:
+                break;
+        }
+    }
+    char prompt[128];
+    snprintf(prompt,
+             sizeof(prompt),
+             "Load into Track %u?%s",
+             trackDisplayNumber(sfz_target_track_),
+             occupied);
+    updateStatus(prompt);
 }
 
 bool UISampleBrowser::loadInstrument(const wavex_file_entry_t* entry) {
@@ -1376,13 +1447,19 @@ bool UISampleBrowser::loadInstrument(const wavex_file_entry_t* entry) {
     char detail[160];
     snprintf(detail,
              sizeof(detail),
-             "%s  -  %u referenced WAVs",
+             "%s  -  %u referenced WAVs  -  Track %u",
              entry->name,
-             (unsigned)sfz_sample_count_);
+             (unsigned)sfz_sample_count_,
+             trackDisplayNumber(getCurrentTrack()));
     BusyOverlay::showDual("Loading instrument", detail, 120000);
-    updateStatus("Loading instrument on Daisy...");
-    const esp_err_t result =
-        inter_mcu_send_inst_op(request_id, 0, WaveX::Protocol::INST_OP_SFZ_LOAD, entry->path);
+    char loading[96];
+    snprintf(loading,
+             sizeof(loading),
+             "Loading instrument onto Track %u...",
+             trackDisplayNumber(getCurrentTrack()));
+    updateStatus(loading);
+    const esp_err_t result = inter_mcu_send_inst_op(
+        request_id, getCurrentTrack(), WaveX::Protocol::INST_OP_SFZ_LOAD, entry->path);
     if (result != ESP_OK) {
         load_request_id_.store(0, std::memory_order_release);
         BusyOverlay::hide();

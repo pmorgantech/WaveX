@@ -1,7 +1,7 @@
 # Output Routing & Mixer — Design
 
 **Status**: Target design (unimplemented). Mixer v1 is Phase 2.5 (per-track control is core groovebox workflow); routing matrix is Phase 3/5 (needs Stage B hardware / send FX).
-**Dependencies**: `instrument-model.md` (slots are the mixer's tracks), output sink seam (`architecture.md` §5.3, done), Stage B TDM path (Phase 3) for physical multi-out.
+**Dependencies**: `instrument-model.md` (slots are the mixer's tracks), output sink seam (`architecture.md` §5.4, done), Stage B TDM path (Phase 3) for physical multi-out.
 **Lineage**: E-mu presets routed to main/sub outputs per preset — the studio workflow was stems-per-instrument. Stage B's per-voice analog outs recreate that physically; the mixer here is the digital control layer over both stages.
 
 ---
@@ -32,7 +32,7 @@ Accumulation cost: per-voice |peak| max-tracking into its track's cell during re
 
 ## 3. Routing (Stage B and beyond)
 
-- **Stage B**: zone `output_bus` (`instrument-model.md` §2) selects analog voice group (1+g) vs digital stereo (0). Voice-index = TDM-slot = CV-group invariants hold (`architecture.md` §5.3); a bus-1+g zone renders into the TDM slot of the voice playing it and its VCF/VCA CVs route to that group. Digital-stereo zones keep flowing to SAI1 — both paths concurrently is the intended mixed mode (e.g. drums analog, pads digital).
+- **Stage B**: zone `output_bus` (`instrument-model.md` §2) selects analog voice group (1+g) vs digital stereo (0). Voice-index = TDM-slot = CV-group invariants hold (`architecture.md` §5.4); a bus-1+g zone renders into the TDM slot of the voice playing it and its VCF/VCA CVs route to that group. Digital-stereo zones keep flowing to SAI1 — both paths concurrently is the intended mixed mode (e.g. drums analog, pads digital).
 - **Send FX** (Phase 5 delay/reverb): `TrackMix` grows `send[2]`; sends tap post-track-gain into the stereo FX returns on the master bus. Reserved fields now (WXCF chunk + message reserve bytes) so the wire format doesn't bump.
 - Aux *digital* output pairs beyond SAI1: no hardware exists — explicitly out of scope; noted so nobody designs against phantom jacks.
 

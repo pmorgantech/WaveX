@@ -1,7 +1,7 @@
 # MIDI Clock Sync & Tempo Follower — Design
 
 **Status**: Target design (unimplemented). Required for the Phase 2 gate ("MIDI-clock-synced to a DAW without audible drift over 10 minutes"). Expands `sequencer.md` §1–2.
-**Dependencies**: sequencer engine clocking core (Phase 2 items 1–3); ESP32 MIDI input path (Phase 1 item 8, done).
+**Dependencies**: sequencer engine clocking core and the built ESP32 MIDI input path.
 **Placement**: MIDI real-time bytes arrive on the ESP32 (DIN UART2 / USB), are timestamped at ingest, and forwarded over the UART link. The Daisy runs the tempo follower and is always the sequencer's timing authority.
 
 ---

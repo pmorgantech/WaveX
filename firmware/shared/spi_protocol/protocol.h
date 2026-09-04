@@ -116,6 +116,10 @@ enum MessageType : uint8_t {
     // and the first became unreachable - and left no way to reclaim its RAM.
     MSG_SAMPLE_SELECT = 0x45,  // ESP32 -> Daisy: sample that notes trigger
     MSG_SAMPLE_UNLOAD = 0x46,  // ESP32 -> Daisy: free a loaded sample
+    // Backend-authoritative Track/Instrument binding state. A request addresses one
+    // Track (or all Tracks); replies are one compact state record per Track.
+    MSG_TRACK_BINDING_REQ = 0x47,  // ESP32 -> Daisy: request Track binding state
+    MSG_TRACK_BINDING = 0x48,      // Daisy -> ESP32: Track binding state
     // Sequencer / transport / MIDI clock (Phase 2; docs/features/sequencer.md,
     // midi-sync-tempo-follower.md, melodic-sequencing.md). ID block reserved in
     // docs/features/inter-mcu-protocol.md - do not assign outside this block.
@@ -412,6 +416,47 @@ struct SampleSelectMessage {
     SampleSelectMessage() : sample_id(0), slot(0), reserved(0) {}
     SampleSelectMessage(uint16_t sample_id_, uint8_t slot_)
         : sample_id(sample_id_), slot(slot_), reserved(0) {}
+} __attribute__((packed));
+
+// The frontend must never infer whether a Track is playable from the samples
+// it happened to load or select locally: an SFZ Instrument has its own resident
+// sample table, and a select can be refused while that Instrument owns the Track.
+// These values describe the Daisy's actual InstrumentBank binding.
+enum TrackBindingState : uint8_t {
+    TRACK_BINDING_EMPTY = 0,
+    TRACK_BINDING_SAMPLE = 1,
+    TRACK_BINDING_PATCH = 2,
+    TRACK_BINDING_LOADING = 3,
+};
+
+struct TrackBindingReqMessage {
+    // 0..15 selects one Track; 0xFF requests one reply for every Track.
+    uint8_t track;
+    uint8_t reserved[3];
+
+    TrackBindingReqMessage() : track(0xFF), reserved{0, 0, 0} {}
+    explicit TrackBindingReqMessage(uint8_t track_) : track(track_), reserved{0, 0, 0} {}
+} __attribute__((packed));
+
+// How many bytes of a Track's bound-instrument name ride the wire. Matches
+// AudioEngine::kInstrumentNameBytes on the backend.
+#define WAVEX_TRACK_BINDING_NAME_BYTES 24
+
+struct TrackBindingMessage {
+    uint8_t track;       // 0..15, the Track a NoteMessage addresses today
+    uint8_t state;       // TrackBindingState
+    uint16_t sample_id;  // valid only for TRACK_BINDING_SAMPLE
+    // What to call what is bound, NUL-terminated. For an Instrument this is the
+    // .sfz basename, which the frontend cannot derive any other way: an
+    // import's samples are private to the loader and never pushed as
+    // MSG_SAMPLE_META. Empty for a bare sample, whose name the frontend
+    // already holds in its metadata cache, and empty while loading if the
+    // backend has not stamped one yet.
+    char name[WAVEX_TRACK_BINDING_NAME_BYTES];
+
+    TrackBindingMessage() : track(0), state(TRACK_BINDING_EMPTY), sample_id(0), name{} {}
+    TrackBindingMessage(uint8_t track_, uint8_t state_, uint16_t sample_id_ = 0)
+        : track(track_), state(state_), sample_id(sample_id_), name{} {}
 } __attribute__((packed));
 
 // Frees a loaded sample's RAM. Voices sounding from it are stopped first;
@@ -1615,6 +1660,14 @@ class ProtocolHandler {
     static size_t CreateSampleMetaReqPacket(uint8_t* buffer,
                                             size_t buffer_size,
                                             const SampleMetaReqMessage& msg);
+    /** Request backend-authoritative state for one Track or every Track. */
+    static size_t CreateTrackBindingReqPacket(uint8_t* buffer,
+                                              size_t buffer_size,
+                                              const TrackBindingReqMessage& msg);
+    /** One backend-authoritative Track/Instrument binding record. */
+    static size_t CreateTrackBindingPacket(uint8_t* buffer,
+                                           size_t buffer_size,
+                                           const TrackBindingMessage& msg);
 
     /** Non-destructive playback edit (frontend -> backend). */
     static size_t CreateSampleEditPacket(uint8_t* buffer,
@@ -1792,6 +1845,10 @@ inline const char* MessageTypeName(uint8_t type) {
             return "SAMPLE_SELECT";
         case MSG_SAMPLE_UNLOAD:
             return "SAMPLE_UNLOAD";
+        case MSG_TRACK_BINDING_REQ:
+            return "TRACK_BINDING_REQ";
+        case MSG_TRACK_BINDING:
+            return "TRACK_BINDING";
         case MSG_SEQ_TRANSPORT:
             return "SEQ_TRANSPORT";
         case MSG_SEQ_PATTERN_OP:

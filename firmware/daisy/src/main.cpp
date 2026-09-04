@@ -52,7 +52,7 @@ static daisy::SpiHandle spi_handle;
 // ---------------------------------------------------------------------------
 // Host-triggered DFU entry (scripts/daisy_dfu_trigger.py)
 //
-// The app runs from QSPI (CMakeLists.txt APP_TYPE BOOT_QSPI), so the Daisy
+// The persistent app runs from QSPI (CMake DAISY_STORAGE=qspi), so the Daisy
 // bootloader is present in internal flash and System::ResetToBootloader() is
 // valid - it refuses only when the program itself runs from internal flash.
 // Writing the token below to the USB CDC port reboots into the bootloader's
@@ -173,15 +173,18 @@ static void PrintProfilingStats(DaisySeed& hw) {
         const auto* zone = WaveX::Profiling::Profiler::GetZone(i);
         if (!zone || zone->entry_count == 0)
             continue;
-        float avg_us, min_us, max_us;
-        zone->GetStats(avg_us, min_us, max_us);
-        WaveX::Log::PrintLine("%s: calls=%u avg=%.2f max=%.2f min=%.2f last=%.2f",
+        // Nanoseconds, not %f microseconds: newlib-nano's vfprintf has no
+        // float support in this image, so the old "%.2f" printed nothing and
+        // this dump reported empty avg/max/min for its whole life.
+        uint32_t avg_ns, min_ns, max_ns;
+        zone->GetStatsNs(avg_ns, min_ns, max_ns);
+        WaveX::Log::PrintLine("%s: calls=%u avg=%u ns max=%u ns min=%u ns last=%u ns",
                               zone->name,
-                              zone->entry_count,
-                              avg_us,
-                              max_us,
-                              min_us,
-                              WaveX::Profiling::CyclesToMicroseconds(zone->last_cycles));
+                              (unsigned)zone->entry_count,
+                              (unsigned)avg_ns,
+                              (unsigned)max_ns,
+                              (unsigned)min_ns,
+                              (unsigned)WaveX::Profiling::CyclesToNanoseconds(zone->last_cycles));
     }
     WaveX::Log::PrintLine("=======================\n");
 }
@@ -659,6 +662,7 @@ int main(void) {
         WaveX::AudioEngine::PumpInstrumentLoad();
         WaveX::AudioEngine::PumpEnvelopeJob();
         WaveX::AudioEngine::PumpPreviewSend();
+        WaveX::AudioEngine::PumpTrackBinding();
 #endif
 
 // Log SPI processing to verify it continues during auditioning
@@ -987,6 +991,15 @@ int main(void) {
 #endif
 
 #if WAVEX_PROFILING_ENABLED
+        // Repeated rather than one-shot: after a DFU reset the serial logger
+        // takes a few seconds to reattach, and a single boot-time run scrolls
+        // past uncaptured. Every 20 s is cheap and guarantees a capture. Bench
+        // build only.
+        static uint32_t last_registry_bench = 0;
+        if (current_time - last_registry_bench >= 20000) {
+            last_registry_bench = current_time;
+            WaveX::AudioEngine::BenchmarkRegistryScan();
+        }
         if (current_time - last_profile_print >= 5000) {
             PrintProfilingStats(hw);
             WaveX::Profiling::Profiler::ResetAll();

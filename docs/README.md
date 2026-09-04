@@ -40,6 +40,8 @@ implementation.
 | [inter-mcu-protocol.md](features/inter-mcu-protocol.md) | **As-built** | The live wire specification, mirroring `firmware/shared/spi_protocol/protocol.h`. If the two diverge, fix one in the same commit that changed the other |
 | [digital-voice-audition.md](features/digital-voice-audition.md) | **Active work order** | Consolidated ordered path to a playable, sequenceable all-digital voice (Phase 2, borrowing narrowly from Phase 2.5) |
 | [sequencer.md](features/sequencer.md) | Core built, integration open | Groovebox sequencer engine (Phase 2) |
+| [track-and-patch-model.md](features/track-and-patch-model.md) | Confirmed vocabulary, target ownership | Asset → source → Patch → Track → Pattern/Scene/Song hierarchy and save boundaries |
+| [oscillator-sources.md](features/oscillator-sources.md) | Sampler boundary accepted; wavetable deferred | Typed sampler and wavetable source contracts behind the shared Patch/Voice path |
 | [instrument-model.md](features/instrument-model.md) | Core built, rest open | Presets, zones, multisampling, velocity layers — the Emax/Emulator lineage (Phase 2.5) |
 | [sfz-import.md](features/sfz-import.md) | Proposed | Loading third-party `.sfz` multisamples into the instrument model |
 | [debug-harness-and-hil.md](features/debug-harness-and-hil.md) | Proposed | Runtime input injection and machine-readable state query over the debug console, and the hardware-in-the-loop test suite they enable |

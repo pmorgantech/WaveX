@@ -41,6 +41,7 @@ static void HandleSampleMetaReqMessage(const uint8_t* payload, size_t payload_si
 static void HandleMixOpMessage(const uint8_t* payload, size_t payload_size);
 static void HandleSampleSelectMessage(const uint8_t* payload, size_t payload_size);
 static void HandleSampleUnloadMessage(const uint8_t* payload, size_t payload_size);
+static void HandleTrackBindingReqMessage(const uint8_t* payload, size_t payload_size);
 static void HandleEnvelopeReqMessage(const uint8_t* payload, size_t payload_size);
 static void HandleStatusRequestMessage(const uint8_t* payload, size_t payload_size);
 static void HandleBrowseRequestMessage(const uint8_t* payload, size_t payload_size);
@@ -156,6 +157,9 @@ void ProcessInterMcuMessage(uint8_t msg_type,
             break;
         case MSG_SAMPLE_UNLOAD:
             HandleSampleUnloadMessage(payload, payload_size);
+            break;
+        case MSG_TRACK_BINDING_REQ:
+            HandleTrackBindingReqMessage(payload, payload_size);
             break;
         case MSG_SAMPLE_META_REQ:
             HandleSampleMetaReqMessage(payload, payload_size);
@@ -426,6 +430,17 @@ static void HandleSampleUnloadMessage(const uint8_t* payload, size_t payload_siz
     }
 #else
     (void)msg;
+#endif
+}
+
+static void HandleTrackBindingReqMessage(const uint8_t* payload, size_t payload_size) {
+    if (!payload || payload_size < sizeof(TrackBindingReqMessage)) {
+        UART_LOGE("daisy_msg", "TRACK_BINDING_REQ payload too small (%d)", (int)payload_size);
+        return;
+    }
+#if WAVEX_AUDIO_ENGINE_ENABLED
+    const auto* msg = reinterpret_cast<const TrackBindingReqMessage*>(payload);
+    WaveX::AudioEngine::PushTrackBinding(msg->track);
 #endif
 }
 

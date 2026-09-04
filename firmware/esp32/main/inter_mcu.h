@@ -83,6 +83,13 @@ bool inter_mcu_get_sample_meta(uint16_t sample_id, WaveX::Protocol::SampleMetada
 /** Ask the backend to resend. sample_id 0 = every loaded sample. */
 esp_err_t inter_mcu_request_sample_meta(uint16_t sample_id);
 
+/// Backend-authoritative binding for one Track (0..15), or all Tracks when
+/// `track` is 0xFF. Unlike page-local Select history, this also reports SFZ
+/// Patches and selection requests the backend refused.
+esp_err_t inter_mcu_request_track_binding(uint8_t track);
+void inter_mcu_store_track_binding(const WaveX::Protocol::TrackBindingMessage& msg);
+bool inter_mcu_get_track_binding(uint8_t track, WaveX::Protocol::TrackBindingMessage* out);
+
 /// Binds `sample_id` for note-on playback on `slot` (0..15, matches
 /// inter_mcu_send_note_on's channel). sample_id 0 clears that slot's
 /// binding - its note-on then drops rather than falling back to any other

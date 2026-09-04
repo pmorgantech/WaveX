@@ -11,6 +11,56 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Added
+
+- A fast Daisy SRAM iteration path (`make daisy-debug`) now builds in a
+  dedicated cache and loads over ST-Link/GDB without touching the persistent
+  QSPI image. The existing DFU targets remain the guarded QSPI persistence path.
+- Play now asks the Daisy for backend-authoritative state for its selected
+  Track and reports whether a bare sample or imported Instrument is actually
+  bound and playable. Empty Tracks explicitly distinguish **Audition** (streaming
+  preview only) from **Load + Select** (creates a Play binding). The Sample
+  Manager now reads the same shared binding cache instead of highlighting the
+  last Select command it sent. Hardware verification of chromatic playback
+  remains outstanding.
+- `MSG_TRACK_BINDING` carries the bound instrument's name, so the UI can say
+  *which* Instrument is on a Track. An import's samples are private to the
+  loader and never pushed as `MSG_SAMPLE_META`, so the frontend had no other way to
+  name one.
+
+### Changed
+
+- **One shared current Track across the UI.** Play, Sample Manager, Voice and
+  the Sample Browser each kept a private "current slot", so "which Track?" had
+  four different answers at once. They now read one shared value
+  (`ui/current_track.h`).
+- **Loading an SFZ Instrument asks which Track to load into** instead of always
+  using slot 0. The browser's Load on a `.sfz` opens a Track picker that
+  reports when the chosen Track already holds an Instrument or a bound sample, so
+  nothing is overwritten unseen. Combined with the shared Track, this is what
+  makes an Instrument on Track 2 possible at all from the UI.
+- **`WAVEX_DAISY_SFZ_BOOT_ENABLED` now defaults to 0.** It loaded an Instrument into
+  slot 0 before audio started, so on any card holding the conventional file
+  Track 1 came up owned by an Instrument and refused `Select` for the whole session.
+  Set it to 1 to restore the old boot-time import.
+- Every Track is displayed 1-based. Play's status strip, Play's `TRACK`
+  parameter, the Voice header and the Sample Manager previously disagreed,
+  showing a mix of 0- and 1-based numbering for the same Track.
+- The Sample Manager's slot selector is labelled `Track -/+`, and Voice's
+  `SLOT` parameter is `TRACK`, matching the vocabulary in
+  `docs/features/track-and-patch-model.md`.
+
+### Fixed
+
+- **Select on a Track holding an Instrument now says so.** `SfzLoader::BindSample`
+  refuses a bare-sample bind on a Track owned by an SFZ import; that refusal
+  previously reached only the Daisy's log, so Select appeared to do nothing.
+  The Sample Manager now states it in the detail pane before the press and in
+  the status line on it.
+- A broadcast Track-binding request (`track == 0xFF`) enqueued 16 replies into
+  a 4-deep UART TX queue, dropping most of them as overflow. Replies are now
+  drained a bounded number per main-loop iteration.
+
 ## [0.4.0] - 2026-09-02
 
 ### Documentation

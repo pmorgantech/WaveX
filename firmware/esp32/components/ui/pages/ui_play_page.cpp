@@ -6,6 +6,7 @@
 #include "../styles/ui_theme.h"
 #include "inter_mcu.h"
 #include "spi_protocol/protocol.h"
+#include "ui/current_track.h"
 #include "ui/ui_navigator.h"
 #include "ui/ui_palette.h"
 #include "ui/ui_tab_group.h"
@@ -87,7 +88,7 @@ const ParamSpec kParams[static_cast<size_t>(UIPlayPage::Param::kCount)] = {
     // wire_param is unused for Slot - stepParam()/sendParam() special-case it
     // rather than sending MSG_CONTROL_CHANGE, since it addresses which
     // instrument slot a note-on goes out on, not a voice parameter value.
-    {"SLOT", 0, 0},
+    {"TRACK", 0, 0},
 };
 
 // Mirrors the Daisy's own mapping so the number on screen is the number the
@@ -104,8 +105,9 @@ void FormatParamValue(UIPlayPage::Param p, uint16_t raw, char* out, size_t len) 
             snprintf(out, len, "%d%%", (int)(norm * 100.0f + 0.5f));
             break;
         case UIPlayPage::Param::Slot:
-            // Not a CC value - raw IS the slot number (0..15).
-            snprintf(out, len, "%d", (int)raw);
+            // Not a CC value - raw IS the 0-based Track index, shown 1-based
+            // like every other Track on screen.
+            snprintf(out, len, "%u", trackDisplayNumber(static_cast<uint8_t>(raw)));
             break;
         default:  // envelope times: 1 ms .. 2 s
             snprintf(out, len, "%d ms", (int)((0.001f + norm * 2.0f) * 1000.0f));
@@ -159,12 +161,22 @@ void UIPlayPage::onEnter(lv_obj_t* parent) {
 
     refreshKeys();
     refreshParamLabel();
+    // The binding lives on the Daisy (and may be an SFZ Instrument whose samples
+    // are intentionally absent from the frontend's bare-sample metadata).
+    // Request it here and refresh it lightly while the page is open so a Load
+    // or Select performed elsewhere cannot leave a stale claim on Play.
+    inter_mcu_request_track_binding(currentSlot());
+    binding_timer_ = lv_timer_create(bindingTimerCb, 500, this);
 }
 
 void UIPlayPage::onExit() {
     // Leaving with a key down would strand a Note On with no matching Note Off,
     // and the voice would sustain until something stole it.
     releaseAll();
+    if (binding_timer_) {
+        lv_timer_delete(binding_timer_);
+        binding_timer_ = nullptr;
+    }
     if (root_) {
         lv_obj_del(root_);
         root_ = nullptr;
@@ -184,6 +196,17 @@ void UIPlayPage::tabChangedCb(lv_event_t* e) {
         self->releaseAll();
         self->refreshKeys();
     }
+}
+
+void UIPlayPage::bindingTimerCb(lv_timer_t* timer) {
+    auto* self = static_cast<UIPlayPage*>(lv_timer_get_user_data(timer));
+    if (!self) {
+        return;
+    }
+    // The request is small and idempotent. The timer is in LVGL context, so
+    // the label update is safe; the UART task only fills the shared cache.
+    inter_mcu_request_track_binding(self->currentSlot());
+    self->refreshBindingStatus();
 }
 
 // --- layout ----------------------------------------------------------------
@@ -283,6 +306,8 @@ void UIPlayPage::buildStrip(lv_obj_t* parent) {
     lv_obj_remove_flag(strip, LV_OBJ_FLAG_SCROLLABLE);
 
     status_label_ = lv_label_create(strip);
+    lv_label_set_long_mode(status_label_, LV_LABEL_LONG_CLIP);
+    lv_obj_set_width(status_label_, 900);
     lv_obj_set_style_text_font(status_label_, &lv_font_montserrat_18, LV_PART_MAIN);
     lv_obj_set_style_text_color(status_label_, lv_color_hex(kColDim), LV_PART_MAIN);
     lv_obj_align(status_label_, LV_ALIGN_LEFT_MID, 12, 0);
@@ -355,7 +380,9 @@ int UIPlayPage::noteFor(const Key& k) const {
 }
 
 uint8_t UIPlayPage::currentSlot() const {
-    return static_cast<uint8_t>(param_value_[static_cast<size_t>(Param::Slot)]);
+    // Shared with Sample Manager, Voice and the Browser's SFZ load target, so
+    // "which Track?" has one answer across the UI (current_track.h).
+    return getCurrentTrack();
 }
 
 void UIPlayPage::keyEventCb(lv_event_t* e) {
@@ -462,17 +489,72 @@ void UIPlayPage::refreshKeys() {
             k.obj, lv_color_hex(k.down ? kColGreen : k.bg_normal), LV_PART_MAIN);
     }
 
-    if (status_label_) {
-        char low[8], high[8];
-        NoteName(root_note_, low, sizeof(low));
-        NoteName(root_note_ + kPadCount - 1, high, sizeof(high));
-        lv_label_set_text_fmt(status_label_,
-                              "%s-%s  vel %d  %s  (needs a 16-bit sample loaded)",
-                              low,
-                              high,
-                              (int)velocity_,
-                              latch_ ? "LATCH" : "");
+    refreshBindingStatus();
+}
+
+void UIPlayPage::refreshBindingStatus() {
+    if (!status_label_) {
+        return;
     }
+
+    char low[8], high[8];
+    NoteName(root_note_, low, sizeof(low));
+    NoteName(root_note_ + kPadCount - 1, high, sizeof(high));
+
+    const uint8_t track = currentSlot();
+    WaveX::Protocol::TrackBindingMessage binding;
+    char state[128];
+    if (!inter_mcu_get_track_binding(track, &binding)) {
+        snprintf(state, sizeof(state), "Track %u: checking binding", trackDisplayNumber(track));
+    } else {
+        switch (binding.state) {
+            case WaveX::Protocol::TRACK_BINDING_SAMPLE: {
+                WaveX::Protocol::SampleMetadata sample;
+                if (inter_mcu_get_sample_meta(binding.sample_id, &sample)) {
+                    snprintf(state,
+                             sizeof(state),
+                             "Track %u: sample %.28s bound (playable)",
+                             trackDisplayNumber(track),
+                             sample.name);
+                } else {
+                    snprintf(state,
+                             sizeof(state),
+                             "Track %u: sample %u bound (playable)",
+                             trackDisplayNumber(track),
+                             (unsigned)binding.sample_id);
+                }
+                break;
+            }
+            case WaveX::Protocol::TRACK_BINDING_PATCH:
+                snprintf(state,
+                         sizeof(state),
+                         "Track %u: Instrument %.23s bound (playable)",
+                         trackDisplayNumber(track),
+                         binding.name[0] ? binding.name : "(unnamed)");
+                break;
+            case WaveX::Protocol::TRACK_BINDING_LOADING:
+                snprintf(state,
+                         sizeof(state),
+                         "Track %u: Instrument %.23s loading",
+                         trackDisplayNumber(track),
+                         binding.name[0] ? binding.name : "");
+                break;
+            case WaveX::Protocol::TRACK_BINDING_EMPTY:
+            default:
+                snprintf(state,
+                         sizeof(state),
+                         "Track %u: empty - Audition previews; Load + Select enables play",
+                         trackDisplayNumber(track));
+                break;
+        }
+    }
+    lv_label_set_text_fmt(status_label_,
+                          "%s-%s  vel %d  %s  %s",
+                          low,
+                          high,
+                          (int)velocity_,
+                          latch_ ? "LATCH" : "",
+                          state);
 }
 
 // --- parameters ------------------------------------------------------------
@@ -515,16 +597,19 @@ void UIPlayPage::stepParam(int direction) {
     // detent per step, and nothing rides the wire (it only takes effect on
     // the next note-on/off, sent locally from press()/release()).
     if (current_param_ == Param::Slot) {
-        int v = static_cast<int>(param_value_[i]) + direction;
+        const uint8_t track = getCurrentTrack();
+        int v = static_cast<int>(track) + direction;
         if (v < 0) {
             v = 0;
         } else if (v > 15) {
             v = 15;
         }
-        if (static_cast<uint16_t>(v) == param_value_[i]) {
+        if (static_cast<uint8_t>(v) == track) {
             return;
         }
-        param_value_[i] = static_cast<uint16_t>(v);
+        setCurrentTrack(static_cast<uint8_t>(v));
+        inter_mcu_request_track_binding(currentSlot());
+        refreshBindingStatus();
         refreshParamLabel();
         return;
     }
@@ -552,8 +637,11 @@ void UIPlayPage::refreshParamLabel() {
         return;
     }
     const size_t i = static_cast<size_t>(current_param_);
+    // Slot is the one Param whose value is not page-local - it lives in the
+    // shared current-Track store, so param_value_[Slot] is never read.
+    const uint16_t raw = current_param_ == Param::Slot ? getCurrentTrack() : param_value_[i];
     char value[24];
-    FormatParamValue(current_param_, param_value_[i], value, sizeof(value));
+    FormatParamValue(current_param_, raw, value, sizeof(value));
     lv_label_set_text_fmt(param_label_, "%s  %s", kParams[i].label, value);
 }
 

@@ -115,8 +115,42 @@ with round-trip tests, after its effects on instrument references are defined.
 SFZ imports still have a private sample registry and only one imported
 instrument can be resident independently. Resolve per-slot sample ownership,
 unique identities, release behavior, and Sample Manager visibility as part of
-the [Track/Patch model](features/track-and-patch-model.md), rather than with a
+the [Track/Instrument model](features/track-and-patch-model.md), rather than with a
 local loader patch.
+
+Until that lands, a Track holding an imported Instrument refuses a bare-sample
+`Select` (`SfzLoader::BindSample`): the import owns its samples and can only
+release them through the load handshake. The UI now states this rather than
+appearing to ignore the press, but "replace an Instrument with a sample without
+rebooting" needs the refcounted registry and the per-track voice-stop in
+[track-and-patch-model.md](features/track-and-patch-model.md) §4.
+
+### Boot-time SFZ autoload (resolved 2026-09-03)
+
+`WAVEX_DAISY_SFZ_BOOT_ENABLED` loaded `WAVEX_DAISY_SFZ_BOOT_PATH` into slot 0
+before audio started, so on any card holding that file Track 1 came up owned by
+an Instrument on every boot - and therefore refused `Select` for the rest of the
+session. That was the mechanism behind the 2026-09-03 bench finding that
+"Select does nothing on Track 1".
+
+Now defaulted to 0. Loading an Instrument is a browser action that asks which Track
+to use, so nothing claims a Track without being asked. Set the flag to 1 to
+restore the old behaviour.
+
+### Wavetable oscillator source
+
+The architecture now reserves a typed oscillator-source boundary so sampler and
+wavetable engines can share Patch/Track/Voice ownership without pretending that
+a wavetable is a short looping sample. The wavetable renderer is an
+unscheduled, post-Phase-2.5 candidate; sampler reliability, Patch persistence,
+sequencing, and the zero-underrun gates come first.
+
+Before promotion to the roadmap, resolve the implementation decisions listed in
+[oscillator-sources.md](features/oscillator-sources.md): import metadata,
+cycle/frame limits, interpolation and anti-aliasing, modulation behavior, WXCF
+chunks, RAM admission, and a measured DWT budget. Any earlier refactor may only
+extract the typed source seam as a small, behavior-preserving change needed by
+scheduled sampler work.
 
 ### Parameter-id design drift
 

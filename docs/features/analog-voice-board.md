@@ -2,7 +2,7 @@
 
 **Status**: Target design with prototype fragments in code (`cv_bus.hpp`, `AudioOutputMode::VoiceSAI2`, PCM1690 config in `hardware_config.h`). Phase 3 in `roadmap.md`.
 **Consolidates**: the Phase-II material from the former `daisy_devel.md` (deleted; see git history), minus its contradictions.
-**Staging**: the analog section ships in two stages selected by build flags (`architecture.md` §5.2/§5.3). This doc's Stage A is buildable today; Stage B is the voice board proper.
+**Staging**: the analog section ships in two stages selected by build flags (`architecture.md` §5.2/§5.4). This doc's Stage A is buildable today; Stage B is the voice board proper.
 
 ## 0. Stage A — Paraphonic Prototype (stereo codec + MCP4728)
 
@@ -21,7 +21,7 @@ MCP4728 (I2C, 400 kHz):  CH A = cutoff · CH B = resonance · CH C = VCA · CH D
 
 ### Stage A → Stage B transition checklist
 
-1. Flip flags: `VOICE_OUTPUT_BACKEND = TDM8`, `CV_BACKEND = MCP48`, `ANALOG_CV_GROUPS = 8` — nothing above the CV group router changes (`architecture.md` §5.3).
+1. Flip flags: `VOICE_OUTPUT_BACKEND = TDM8`, `CV_BACKEND = MCP48`, `ANALOG_CV_GROUPS = 8` — nothing above the CV group router changes (`architecture.md` §5.4).
 2. PCM1690 bring-up (§2) and slot-order verification.
 3. Re-run the §3 calibration per voice; the Stage-A calibration procedure and UI page are reused, table already sized for 8 groups.
 4. Keep the Stage A configuration buildable in CI (a cheap compile matrix over both flag sets) — it remains the fallback/bring-up config for new boards.

@@ -14,6 +14,7 @@
 #include "wav/wav_header_parser.hpp"
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 
 namespace WaveX {
@@ -611,6 +612,13 @@ void Pump(SampleMemMgr& memory, uint8_t* io_buffer, uint32_t io_buffer_bytes) {
                 }
             }
             s_bank.Slot(s_request.slot) = s_mapped.instrument;
+            // The mapper knows zones, not where the document came from, so the
+            // display name is stamped here - the one place still holding the
+            // .sfz path. Truncation is fine; it is a label, not an identifier.
+            std::snprintf(s_bank.Slot(s_request.slot).name,
+                          sizeof(s_bank.Slot(s_request.slot).name),
+                          "%s",
+                          Basename(s_request.path));
             s_bound_slot = static_cast<int8_t>(s_request.slot);
             s_active_count = s_plan.count;
             s_active_bytes = s_total_bytes;
@@ -680,6 +688,17 @@ bool BindSample(uint8_t slot, uint16_t sample_id, uint8_t root_note) {
     ins.mode = InstrumentMode::Keyboard;
     ins.origin = InstrumentOrigin::Built;
     return true;
+}
+
+const char* SlotName(uint8_t slot) {
+    if (slot >= kNumInstrumentSlots)
+        return "";
+    // A load in flight has not reached Commit, so the bank still holds the
+    // PREVIOUS instrument for this slot - naming that would be actively
+    // misleading. The request's own path is the truth until Commit runs.
+    if (SlotLoading(slot))
+        return Basename(s_request.path);
+    return s_bank.Slot(slot).name;
 }
 
 uint16_t BoundSample(uint8_t slot) {

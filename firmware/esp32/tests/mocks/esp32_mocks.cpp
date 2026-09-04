@@ -350,6 +350,23 @@ void inter_mcu_store_sample_meta(const WaveX::Protocol::SampleMetadata& msg) {
     cap.last_sample_meta = msg;
 }
 
+void inter_mcu_store_track_binding(const WaveX::Protocol::TrackBindingMessage& msg) {
+    auto& cap = GetInterMcuCapture();
+    cap.track_binding_calls++;
+    cap.last_track_binding = msg;
+}
+
+bool inter_mcu_get_track_binding(uint8_t track, WaveX::Protocol::TrackBindingMessage* out) {
+    (void)track;
+    (void)out;
+    return false;
+}
+
+esp_err_t inter_mcu_request_track_binding(uint8_t track) {
+    (void)track;
+    return ESP_OK;
+}
+
 bool inter_mcu_get_sample_meta(uint16_t sample_id, WaveX::Protocol::SampleMetadata* out) {
     (void)sample_id;
     (void)out;

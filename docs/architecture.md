@@ -1,7 +1,7 @@
 # WaveX System Architecture
 
 **Status**: Canonical architecture document — this file is the single source of truth for system design.
-**Last updated**: 2026-07-05 (transport-reality corrections from `code_review_20260705.md`)
+**Last updated**: 2026-09-03 (typed oscillator-source and musical-ownership model)
 **Supersedes**: the former `system-architecture.md`, `communication-protocol.md` and `daisy_devel.md`, which carried mutually contradictory hardware claims (ESP32-S3 vs P4, UART vs SPI link, conflicting pin tables). Deleted; see git history.
 
 When this document and the code disagree, the code wins for *as-built* sections and this document wins for *target design* sections; each section is labeled. Pin assignments live in exactly one place: `firmware/shared/config/pin_config.h`. Hardware feature flags live in `firmware/shared/config/hardware_config.h`. Do not duplicate pin tables into documentation.
@@ -13,7 +13,7 @@ When this document and the code disagree, the code wins for *as-built* sections 
 WaveX is a modern **sampler / groovebox / drum machine** built around:
 
 - A **5" 1280×720 MIPI-DSI touchscreen** with encoders, a button/pad matrix, and LED feedback — fast, tactile performance workflow (Elektron/MPC-style).
-- A **digital sample engine** (multi-voice playback, streaming from SD, per-voice modulation) on a Daisy Seed (STM32H750, 480 MHz Cortex-M7, 64 MB SDRAM).
+- A **digital sampler engine** on a Daisy Seed (STM32H750, 480 MHz Cortex-M7, 64 MB SDRAM), organized around a target typed oscillator-source boundary: sampler sources are the implemented product core; wavetable sources are a deferred extension that may share PCM storage infrastructure without sharing sampler playback semantics.
 - A **per-voice analog signal path** — VCF (SSI2144) and VCA (SSI2164) per voice, driven by CV DACs — for genuinely analog filtering and level control.
 - **CV/Gate outputs** for modular integration.
 - **Modern editing and DSP**: waveform display, trim/slice, normalize, time-stretch, pitch-shift, and "mangling" effects. **All destructive sample editing/mangling is an offline (non-real-time) render**; the real-time audio path only ever plays back prepared data. See `features/offline-sample-editing.md`.
@@ -195,7 +195,7 @@ Known architectural debt (from the 2026-06-26 assessment, still valid): event/ca
 See `features/inter-mcu-protocol.md` for the message catalog. Every message struct lives in `firmware/shared/spi_protocol/protocol.h` regardless of transport. Transport status (**as-built; decision recorded 2026-07-05**):
 
 - **UART is the transport of record.** All inter-MCU traffic — heartbeat, meters, status, browse requests/responses, wave-preview chunks, note on/off, sample load/control — runs over UART1 (ESP32) ↔ UART4 (Daisy) at 2 Mbaud, using the framing in `firmware/shared/uart_protocol/uart_protocol.h` (0xA5/0x5A markers, 16-bit length, CRC16-CCITT, 16-bit sequence numbers) with `protocol.h` structs as payloads. Daisy UART4 uses independent continuous RX DMA1 Stream 5 and asynchronous TX DMA2 Stream 4 through the WaveX-owned `uart4_dma_transport`; this bypasses libDaisy v8.1.0's single-operation UART DMA scheduler (upstream issue #653). The ESP32 legacy UART driver is interrupt/ring-buffer driven. New messages target this link.
-- **The SPI link is wired but compiled out**: `WAVEX_SPI_LINK_ENABLED` is `0` in `firmware/shared/config/link_config.h`, so `daisy_spi_link.cpp` / `esp_spi_link.cpp` (Daisy master / ESP32 slave, ATTN line, fixed power-of-two transaction sizes 32–2048 B) are in no shipped image. Re-enabling SPI — whether for bulk browse/wave data or full consolidation — is future work requiring bench re-validation, and roadmap Phase 1 item 3 ("raise SPI link clock") is blocked on it. Until then, do not extend the SPI path.
+- **The SPI link is wired but compiled out**: `WAVEX_SPI_LINK_ENABLED` is `0` in `firmware/shared/config/link_config.h`, so `daisy_spi_link.cpp` / `esp_spi_link.cpp` (Daisy master / ESP32 slave, ATTN line, fixed power-of-two transaction sizes 32–2048 B) are in no shipped image. Re-enabling SPI — whether for bulk browse/wave data or full consolidation — is future work requiring the six fixes and bench gate recorded in `backlog.md`. Until then, do not extend the SPI path.
 - The pre-2026-07-05 revision of this section stated the opposite ("SPI active, UART legacy"); see `docs/code_review_20260705.md` finding C4 for the correction trail.
 
 ---
@@ -215,20 +215,77 @@ The 1-block = 1-ms identity is a deliberate design invariant: the control tick i
 
 ### 5.2 Voice architecture (target — partially implemented)
 
-8 voices, each: sample oscillator (streamed or RAM-resident) + optional VA oscillator + noise, 4 ADSR, 3 LFO, per-voice mod matrix.
+The target has 8 runtime voices. A **Voice** is an allocated renderer, not a
+saved sound or UI entity. A note or sequencer event is addressed to a Track,
+resolved through that Track's Patch and oscillator-source definition, and only
+then allocated a Voice:
 
-**Implementation status (roadmap Phase 1 items 2 + 4 + 8)**: `firmware/daisy/src/audio/voice_manager.hpp` implements the RAM-resident half — 8-voice allocation/stealing (preferring a releasing voice when stealing), per-voice gain/pan, a note-relative pitch ratio, start/end/loop points, a resonant state-variable lowpass (`audio/svf_filter.hpp` — TPT topology, cutoff + resonance, stable under modulation; it replaced the one-pole stand-in so `PARAM_FILTER_RESONANCE` has a digital consumer), and a linear ADSR (`audio/envelope.hpp`). It **is** wired into `Callback()` via an SPSC note-event queue (item 8 stage 2), and the UART message dispatcher feeds that path — `HandleNoteMessage` calls `AudioEngine::OnNoteOn()` (`daisy_inter_mcu_message_handlers.cpp`), fixed 2026-07-05 (`code_review_20260705.md` C1) — so it is reachable from hardware MIDI input, pending the hardware verification tracked in `roadmap.md` § Outstanding hardware verification. Not yet implemented: streamed voices (still the old singleton WAV-ring-buffer path, not voice-manager-owned), VA oscillator/noise/LFO/mod matrix.
+```text
+note / step -> Track -> Patch -> oscillator source -> Voice -> filter/VCA -> output sink
+```
 
-The analog output section is deliberately **two-stage**, selected by build flags (see §5.3):
+An asset's PCM encoding does not determine its oscillator behavior. Sampler and
+wavetable sources therefore remain distinct types behind a common source
+boundary:
+
+| Source | PCM contract | Runtime behavior | Residency |
+|---|---|---|---|
+| **Sampler** | Arbitrary-length recording | Region start/end, one-shot or user loop, playback-rate pitch; multisample zones and velocity/round-robin selection | Short assets resident; long assets may stream |
+| **Wavetable** | Validated fixed-length single-cycle frames | Phase accumulator wraps one cycle; table position scans and interpolates between frames | Whole table resident before note-on |
+
+Both source types feed the same downstream voice processing (gain, filter,
+envelopes, modulation, routing), but source-specific state and modulation do not
+leak into one another. In particular, a wavetable is not represented as a
+sample Zone with a very short loop, and arbitrary sample loop markers do not
+become wavetable frame metadata. The complete boundary and its real-time rules
+are in `features/oscillator-sources.md`.
+
+The sampler implementation targets a sample oscillator (streamed or
+RAM-resident) plus the common filter/envelope/modulation path. Optional VA,
+noise, and wavetable sources remain deferred; none is part of the current
+roadmap phase.
+
+**Implementation status (as-built sampler path)**: `firmware/daisy/src/audio/voice_manager.hpp` implements the RAM-resident half — 8-voice allocation/stealing (preferring a releasing voice when stealing), per-voice gain/pan, a note-relative pitch ratio, start/end/loop points, a resonant state-variable lowpass (`audio/svf_filter.hpp` — TPT topology, cutoff + resonance, stable under modulation; it replaced the one-pole stand-in so `PARAM_FILTER_RESONANCE` has a digital consumer), and a linear ADSR (`audio/envelope.hpp`). It **is** wired into `Callback()` via an SPSC note-event queue, and the UART message dispatcher feeds that path — `HandleNoteMessage` calls `AudioEngine::OnNoteOn()` (`daisy_inter_mcu_message_handlers.cpp`), fixed 2026-07-05 (`code_review_20260705.md` C1) — so it is reachable from hardware MIDI input, pending the hardware verification tracked in `roadmap.md` § Outstanding hardware verification. Not yet implemented: concurrent streamed voices (the streaming WAV-ring-buffer path remains singleton and is not voice-manager-owned), VA oscillator/noise/LFO/mod matrix, or wavetable sources.
+
+The analog output section is deliberately **two-stage**, selected by build flags (see §5.4):
 
 - **Stage A — paraphonic prototype (now)**: all voices render digitally and sum to the **stereo codec on SAI1** (`AudioOutputMode::StereoSAI1`). The stereo mix passes through **one shared analog VCF/VCA pair**, driven by a single **MCP4728** (I2C, 4 ch: cutoff, resonance, VCA, +1 spare). Paraphonic semantics: the shared filter/amp envelope retriggers on each note-on and releases when the last voice releases (classic paraphonic behavior).
 - **Stage B — 8 discrete analog voices (later)**: each voice routes to a dedicated PCM1690 TDM slot on SAI2 (`AudioOutputMode::VoiceSAI2`, 8×32-bit slots, 24-bit data, 12.288 MHz BCLK) → per-voice **analog VCF/VCA** → analog summing, with per-voice CV from SPI DACs. See `features/analog-voice-board.md`.
 
 Digital send effects (delay/reverb) return into the stereo mix; per-voice character DSP (bit-crush, drive) runs digitally pre-DAC in both stages.
 
-### 5.3 Output/CV backend abstraction (design rule, seam implemented)
+### 5.3 Musical ownership hierarchy (target design)
 
-**Implementation status (roadmap Phase 1 item 1, done)**: the flags, sink split, and CV group router below exist as specified — `firmware/shared/config/hardware_config.h` (flags), `firmware/daisy/src/audio/output_sink.hpp` (`StereoMixSink` real, `TdmVoiceSink` a compiling stub), `firmware/daisy/src/cv/` (`CvGroupRouter`, `Mcp4728Backend` real I2C, `Mcp48Backend` a compiling stub). **Update 2026-07-05**: the CV group router IS now driven from the control tick (Stage A paraphonic law, item 5 stages 1-3) with the MCP4728 flushed from the main loop (`AudioEngine::FlushCv()`); the output *sink* abstraction remains unwired - the voice manager mixes directly to stereo, which is StereoMixSink-equivalent, and routing through TdmVoiceSink lands with Stage B. The paraphonic fold's envelope law (Stage A, M=1) is deliberately not implemented here either; that's item 5. Both flag-set combinations are proven to compile in CI (`make daisy` / `make daisy-stageb`).
+WaveX separates stored content, playable sound, performance state, and musical
+time. These are references and ownership boundaries, not merely product names:
+
+```text
+SD asset pool <- Patch source definitions
+
+Project
+├── Performance    -> current live Track/Patch and mixer setup
+│   └── Tracks[16] -> active Patch + MIDI routing + mixer strip
+├── Patterns       -> note/trigger/lock rows addressed to Tracks
+├── Scenes         -> performance-state snapshots; no samples or pattern content
+└── Songs          -> ordered Pattern references, repeats, tempo, and overrides
+```
+
+A sampler **Kit** is a drum-mode Patch with a pad-to-Zone map, not a separate
+engine object. A **Bank** is only a storage/browser grouping for assets or saved
+Patches; it owns no runtime sound or sequencer events. The **Performance** is
+the current live set of Track/Patch bindings, routing, mixer state, and shared
+effects; v1 stores one such set directly in the Project rather than introducing
+another file type. Patterns own time and parameter locks. Changing Pattern
+therefore does not silently replace the Performance's sound set. Scenes may
+recall sparse performance state, and Songs arrange Patterns, but both reference
+content rather than embedding duplicate samples or Patches.
+
+The authoritative vocabulary, persistence boundaries, and UI consequences are
+in `features/track-and-patch-model.md`.
+
+### 5.4 Output/CV backend abstraction (design rule, seam implemented)
+
+**Implementation status (as-built)**: the flags, sink split, and CV group router below exist as specified — `firmware/shared/config/hardware_config.h` (flags), `firmware/daisy/src/audio/output_sink.hpp` (`StereoMixSink` real, `TdmVoiceSink` a compiling stub), `firmware/daisy/src/cv/` (`CvGroupRouter`, `Mcp4728Backend` real I2C, `Mcp48Backend` a compiling stub). **Update 2026-07-05**: the CV group router is driven from the control tick with the MCP4728 flushed from the main loop (`AudioEngine::FlushCv()`); the output *sink* abstraction remains unwired — the voice manager mixes directly to stereo, which is `StereoMixSink`-equivalent, and routing through `TdmVoiceSink` lands with Stage B. The Stage A paraphonic envelope fold is also incomplete. Both flag-set combinations are proven to compile in CI (`make daisy` / `make daisy-stageb`).
 
 So that Stage A → Stage B is a configuration change rather than a rewrite, the engine is structured around two seams:
 
@@ -258,7 +315,7 @@ Configuration flags (defined in `firmware/shared/config/hardware_config.h`):
 
 Invariants that keep the transition safe: voice index == TDM slot index == CV group index in Stage B; calibration tables are always sized for 8 groups regardless of backend; nothing above the router may branch on the backend flags.
 
-### 5.3 Streaming vs RAM playback
+### 5.5 Streaming vs RAM playback
 
 - Short samples (drum hits) load fully into SDRAM sample RAM (slab/extent allocator) — zero I/O at trigger time.
 - Long samples stream: triple-buffered SD slots, prebuffer before start (`IsPrebufferReady()`), pump in main loop. Worst-case SD latency must stay under (slots × slot duration); underruns are counted and logged from the main loop, never inside the callback.
@@ -299,7 +356,7 @@ These rules are mandatory for all new code. Most past instability (SPI corruptio
 
 - Parameter changes (UI → audio): target < 5 ms end-to-end (touch → SPI → applied at next control tick).
 - Meters/heartbeat: 20–50 ms cadence, coalesced, lowest priority.
-- The link must degrade gracefully: either MCU rebooting must never wedge the other (recovery + resync; regression-tested — roadmap Phase 1 item 7). Daisy UART TX is asynchronous DMA with a bounded one-second retry/drop policy; it never waits for peer wire time in the main loop. `SequenceTracker` (`firmware/shared/spi_protocol/sequence_tracker.hpp`) is wired into **both live UART RX paths** (duplicate/out-of-order drop + peer-reboot resync, counted in link stats) as well as the compiled-out SPI path; `AttnWatchdog` (`attn_watchdog.hpp`) is SPI-path-only by nature (there is no ATTN line on UART). Both are HAL-free and host-tested.
+- The link must degrade gracefully: either MCU rebooting must never wedge the other; recovery and resync are regression-tested. Daisy UART TX is asynchronous DMA with a bounded one-second retry/drop policy; it never waits for peer wire time in the main loop. `SequenceTracker` (`firmware/shared/spi_protocol/sequence_tracker.hpp`) is wired into **both live UART RX paths** (duplicate/out-of-order drop + peer-reboot resync, counted in link stats) as well as the compiled-out SPI path; `AttnWatchdog` (`attn_watchdog.hpp`) is SPI-path-only by nature (there is no ATTN line on UART). Both are HAL-free and host-tested.
 
 ---
 
@@ -333,6 +390,8 @@ These rules are mandatory for all new code. Most past instability (SPI corruptio
 | Inter-MCU protocol wire spec | `features/inter-mcu-protocol.md` |
 | Offline sample editing & DSP | `features/offline-sample-editing.md` |
 | Sequencer / groovebox engine | `features/sequencer.md` |
+| Oscillator source types (sampler vs wavetable) | `features/oscillator-sources.md` |
+| Track/Patch hierarchy and ownership | `features/track-and-patch-model.md` |
 | Instrument model (presets/zones/velocity layers, WXCF container) | `features/instrument-model.md` |
 | MIDI clock sync (tempo follower) | `features/midi-sync-tempo-follower.md` |
 | Melodic sequencing / live record | `features/melodic-sequencing.md` |
@@ -352,11 +411,30 @@ These rules are mandatory for all new code. Most past instability (SPI corruptio
 
 ## 10. Known Design Gaps (summary — details and sequencing in `roadmap.md`)
 
-1. **No sequencer exists** — the defining groovebox feature is unstarted (design doc now exists).
-2. **Offline editing pipeline is unstarted** (design doc now exists). The legacy `Sampler` (and the never-rendered mono-synth DSP surface around it) was removed 2026-07-05 as inert end-to-end (code review C2); recording will be rebuilt against the voice/streaming architecture when it is actually scheduled. `MSG_SAMPLE_CTRL`/`MSG_CONTROL_CHANGE` remain routed wire hooks that are documented no-ops until then.
-3. **CV DAC hardware decision** (§3.3) blocks the analog voice board.
-4. **Polyphony**: the 8-voice manager (allocation, stealing, per-voice pitch/filter/ADSR) is implemented, host-tested, and wired into the callback — but unreachable from the wire until the dispatcher fix lands (code review C1). Streamed playback is still the singleton WAV path.
-5. **Event dispatch ownership on ESP32** is consolidated onto `PacketRouter` for routing, but listener registration still lives in `StatisticsManager`/`inter_mcu` (code review M9).
-6. **The disabled SPI link lingers in-tree** (compiled out via `WAVEX_SPI_LINK_ENABLED=0`) pending a revival-or-delete decision; SPI-SD was removed (roadmap 0.2.1). UART is the transport of record (§4.4).
-7. **MIDI**: DIN/USB input and forwarding exist on the ESP32; the Daisy-side dispatch is broken (C1); clock sync (MIDI clock in/out) is required for a groovebox and unstarted.
-8. **Project/preset persistence format** is undefined (kits, patterns, songs, sample references).
+1. **Sequencer integration**: the scheduler and protocol core are host-tested,
+   but `SequencerTransport::Tick()` does not yet drive sample-offset voice
+   triggers from the callback; playhead/step UI, MIDI clock out, and persistence
+   remain open Phase 2 work.
+2. **Streamed polyphony**: the 8-voice RAM manager is wired and host-tested,
+   while streamed playback remains a singleton path outside `VoiceManager`.
+3. **Sampler Patch workflow**: the Zone model and SFZ import exist, but the
+   shared registry, multi-Track residency, pad mapping, Patch save/load, and
+   editor UI remain open Phase 2.5 work.
+4. **Offline editing pipeline**: non-destructive marker foundations exist; the
+   bounded render-job scheduler and destructive editing/mangling pipeline are
+   unimplemented.
+5. **Analog Stage B**: no analog hardware is currently planned. The TDM/CV
+   backend stubs remain buildable, but part choice and bench verification are
+   deferred unless the voice board is revived.
+6. **ESP32 event ownership**: `PacketRouter` owns routing, but listener
+   registration still overlaps `StatisticsManager` and `inter_mcu`.
+7. **SPI link**: the disabled implementation remains in-tree and has six known
+   defects. UART is the transport of record (§4.4).
+8. **MIDI**: DIN/USB input forwarding reaches the Daisy note path, pending
+   hardware verification; MIDI clock in/out and tempo-following integration
+   remain open for the Phase 2 gate.
+9. **Persistence**: the WXCF container exists, but Patch and Project serializers
+   plus atomic kit/Pattern/Song save and reload are not implemented.
+10. **Wavetable source**: the typed boundary is defined, but the renderer is
+    intentionally unscheduled until promoted from `backlog.md` after the
+    sampler/Patch/sequencer gates.

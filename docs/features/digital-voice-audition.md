@@ -1,6 +1,6 @@
 # Digital Voice Audition — Playable Grid, Live Params, Sequenced Playback
 
-**Status**: Stages 1, 3 and 4 done (grid page, live params, playable from the front panel; unverified on hardware). Stage 2 (root-note correctness) and Stage 2b (self-reporting, added 2026-08-31 from the bench session) are still open, so Goal A is not yet complete. Goal B (Stages 5–8, the sequencer path) not started. Consolidates the near-term path through Phase 2, borrowing narrowly from Phase 2.5.
+**Status**: Stages 1–4 are code-complete (grid page, root-note-correct resolution, live params, and backend-authoritative self-reporting); chromatic playback remains unverified on hardware, so Goal A is not yet complete. Goal B (Stages 5–8, the sequencer path) not started. Consolidates the near-term path through Phase 2, borrowing narrowly from Phase 2.5.
 **Dependencies**: `VoiceManager` + `Envelope` (built, host-tested), `Instrument::ResolveNoteOn` (built, host-tested), sequencer cores `pattern.hpp` / `sequencer_scheduler.hpp` / `sequencer_transport.hpp` (built, host-tested), `MSG_NOTE_ON` transport (built, in service via MIDI).
 **Scope decision (2026-08-29)**: **all-digital sound engine**. The Stage A analog VCF/VCA path (`cv_group_router.hpp`, `ParaphonicParams`, `paraphonic_envelope.hpp`) is out of scope here and is neither removed nor extended — it keeps working, it is simply not the path this document builds on.
 
@@ -59,7 +59,12 @@ Constraints on that replacement:
 
 ### Stage 2 — Root-note correctness
 
-`OnNoteOn` assigns a fixed `root_note = kDefaultRootNote` when building its trigger params — a named constant, but still a hardcoded assumption, not a resolved value. `Instrument::ResolveNoteOn` — which resolves note + velocity into `VoiceTriggerParams` through the zone model, including the zone's own root note, tuning and gain — is built and host-tested but is not wired into the live note path. Wire it. Without this, every sample is assumed to be recorded at C4 and anything else plays at the wrong pitch, which makes the whole grid misleading.
+**Done.** `AudioEngine::OnNoteOn` now resolves every note through
+`SfzLoader::ResolveNote()`, which reaches `Instrument::ResolveNoteOn()` for
+both imported Patches and a bare selected sample. Zone root notes, tuning,
+gain, key/velocity ranges, and layered triggers are therefore applied by the
+live path rather than replaced with a C4 assumption. This still needs the
+chromatic hardware check described in Goal A.
 
 ### Stage 2b — The instrument must be able to report why it is silent
 
@@ -93,15 +98,16 @@ with `WAVEX_AUDIO_ENGINE_ENABLED` at 1).
    `MSG_SAMPLE_LOAD`. A sample that was auditioned and not loaded is genuinely
    absent from `s_loaded_samples`, so the grid correctly plays nothing.
 
-Compounding all three, the Play page's info line
-(`ui_play_page.cpp:458`) unconditionally appends `(needs a 16-bit sample
-loaded)` whether or not one is loaded. It reads as a status report and is not
-one — replace it with real state derived from the `SampleMetadata` the
-frontend already receives.
+**Done (code; hardware verification pending).** The Play status strip requests
+`MSG_TRACK_BINDING_REQ` and displays the Daisy's `MSG_TRACK_BINDING` reply for
+its selected Track: empty, bare sample bound, imported Patch bound, or Patch
+loading. This is intentionally separate from `MSG_SAMPLE_META`: imported
+Patches use the SFZ loader's private sample table and cannot be inferred from
+the frontend's bare-sample cache. The empty state explicitly says that
+**Audition previews only**; **Load + Select** is what creates a Play binding.
 
-**Do this before Stage 2.** Root-note correctness is unobservable on an
-instrument that cannot tell you whether a note was dropped, and every bench
-attempt at Stage 2 will otherwise re-run this diagnosis from scratch.
+This makes a pending chromatic bench check observable rather than relying on
+the presence or absence of logs.
 
 ### Stage 3 — The grid page — **DONE**
 
@@ -111,7 +117,10 @@ attempt at Stage 2 will otherwise re-run this diagnosis from scratch.
 
 `kParams[]` in `ui_play_page.cpp` pages through Cutoff, Resonance, Attack, Decay, Sustain, Release on the softkey row, each sending `MSG_CONTROL_CHANGE` via `inter_mcu_send_control_change` (also wired on `ui_voice_page.cpp`, the Voice group's live-edit surface). Stage 1 is what makes these audible.
 
-**Goal A is not yet complete**, even though Stages 3–4 shipped ahead of Stage 2: root-note correctness is still open, so pitch is wrong for any sample not recorded at the default root — and Stage 2b means the instrument cannot yet report that, or any other, reason for silence.
+**Goal A is not yet complete**: the code path and self-reporting are complete,
+but chromatic playback (including an SFZ Zone root note) still needs hardware
+verification. After that verification, start Stage 5: connect the scheduler to
+sample-offset voice triggers.
 
 ### Stage 5 — The sequencer's audible half
 

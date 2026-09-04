@@ -574,6 +574,148 @@ struct LoadedSampleInfo {
 };
 static constexpr size_t kLoadedSampleCapacity = kMaxZones;
 static LoadedSampleInfo s_loaded_samples[kLoadedSampleCapacity];
+
+#if WAVEX_PROFILING_ENABLED
+// Scaling measurement for the note-on resolve path
+// (docs/features/track-and-patch-model.md §4). ResolveNote calls the resolver
+// once per matching zone, and every resolver here ends in a LINEAR scan of the
+// sample registry - so the cost is (zones x registry entries), and raising the
+// registry to 1024 multiplies it. §4 projected that from an estimate; this
+// measures it on the actual part, at the sizes in question, in both memories
+// (today's registry is a .bss array in internal SRAM; a 1024-entry one has to
+// live in SDRAM, which is slower per random access as well as longer to walk).
+//
+// Runs once at boot before any sample is resident, and touches only the
+// render-scratch SDRAM partition, so it cannot disturb the real registry.
+// Compiles to nothing unless WAVEX_PROFILING_ENABLED - this is a bench
+// instrument, not a shipping feature.
+void BenchmarkRegistryScan() {
+    // Worst case per scan: the id that is not there, so the loop runs to the
+    // end. That is the bound the design has to survive, not the average.
+    const auto scan = [](const LoadedSampleInfo* table, size_t count, uint16_t want) -> uint32_t {
+        uint32_t hits = 0;
+        for (size_t i = 0; i < count; ++i) {
+            if (table[i].sample_id == want) {
+                ++hits;
+            }
+        }
+        return hits;
+    };
+
+    constexpr size_t kMaxBenchEntries = 1024;
+    constexpr uint32_t kReps = 64;
+    // Render scratch is 4 MB and nothing renders at boot; 1024 entries is
+    // ~123 KB of it. Not allocated, so this cannot fail or leak.
+    auto* sdram_table = reinterpret_cast<LoadedSampleInfo*>(WaveX::SdramLayout::kRenderScratchBase);
+    for (size_t i = 0; i < kMaxBenchEntries; ++i) {
+        sdram_table[i] = LoadedSampleInfo{};
+        sdram_table[i].sample_id = static_cast<uint16_t>(i + 1);
+    }
+
+    // Integer output only: this log path's printf has no float support, so a
+    // %f here would silently produce nothing (see CyclesToNanoseconds).
+    const uint32_t mhz = SystemCoreClock / 1000000u;
+    const auto cycles_to_ns = &WaveX::Profiling::CyclesToNanoseconds;
+
+    WaveX::Log::PrintLine(
+        "REGISTRY_BENCH: clock=%u MHz  sizeof(LoadedSampleInfo)=%u B  1024 entries=%u KB",
+        (unsigned)mhz,
+        (unsigned)sizeof(LoadedSampleInfo),
+        (unsigned)((sizeof(LoadedSampleInfo) * kMaxBenchEntries) / 1024u));
+
+    const size_t sizes[] = {32, 128, 512, 1024};
+    for (size_t n: sizes) {
+        const uint32_t start = WaveX::Profiling::GetCycles();
+        uint32_t sink = 0;
+        for (uint32_t r = 0; r < kReps; ++r) {
+            sink += scan(sdram_table, n, 0xFFFF);
+        }
+        const uint32_t per_scan_cycles = (WaveX::Profiling::GetCycles() - start) / kReps;
+        const uint32_t per_scan_ns = cycles_to_ns(per_scan_cycles);
+        WaveX::Log::PrintLine(
+            "REGISTRY_BENCH: SDRAM n=%4u  %8u ns/scan  %5u ns/entry  x32 zones = %6u us  sink=%u",
+            (unsigned)n,
+            (unsigned)per_scan_ns,
+            (unsigned)(per_scan_ns / n),
+            (unsigned)((per_scan_ns * 32u) / 1000u),
+            (unsigned)sink);
+    }
+
+    // Same walk over the internal-SRAM array the registry uses today, so the
+    // SDRAM figures above have a same-code baseline to be compared against
+    // rather than being read as an absolute.
+    const uint32_t sram_start = WaveX::Profiling::GetCycles();
+    uint32_t sram_sink = 0;
+    for (uint32_t r = 0; r < kReps; ++r) {
+        sram_sink += scan(s_loaded_samples, kLoadedSampleCapacity, 0xFFFF);
+    }
+    const uint32_t sram_per_scan = (WaveX::Profiling::GetCycles() - sram_start) / kReps;
+    const uint32_t sram_ns = cycles_to_ns(sram_per_scan);
+    WaveX::Log::PrintLine(
+        "REGISTRY_BENCH: SRAM  n=%4u  %8u ns/scan  %5u ns/entry  (today's registry)  sink=%u",
+        (unsigned)kLoadedSampleCapacity,
+        (unsigned)sram_ns,
+        (unsigned)(sram_ns / kLoadedSampleCapacity),
+        (unsigned)sram_sink);
+
+    // --- The two indexed alternatives, at the same 1024 entries ------------
+    // Both still touch the record in SDRAM afterwards, because that is what a
+    // real resolve does - an index that avoided the record read would be
+    // measuring the wrong thing.
+    static uint16_t index_ids[kMaxBenchEntries];   // sorted ids   } 4 KB total,
+    static uint16_t index_slot[kMaxBenchEntries];  // -> record    } internal SRAM
+    for (size_t i = 0; i < kMaxBenchEntries; ++i) {
+        index_ids[i] = static_cast<uint16_t>(i + 1);
+        index_slot[i] = static_cast<uint16_t>(i);
+    }
+
+    // (a) Binary search over the SRAM index. 1024 entries = 10 probes, and the
+    // 4 KB index fits the 16 KB D-cache whole, unlike the 120 KB record table.
+    const uint32_t bin_start = WaveX::Profiling::GetCycles();
+    uint32_t bin_sink = 0;
+    for (uint32_t r = 0; r < kReps; ++r) {
+        const uint16_t want = static_cast<uint16_t>((r * 977u) % kMaxBenchEntries + 1u);
+        size_t lo = 0, hi = kMaxBenchEntries;
+        while (lo < hi) {
+            const size_t mid = (lo + hi) / 2;
+            if (index_ids[mid] < want) {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        if (lo < kMaxBenchEntries && index_ids[lo] == want) {
+            bin_sink += sdram_table[index_slot[lo]].sample_rate;
+        }
+    }
+    const uint32_t bin_ns = cycles_to_ns((WaveX::Profiling::GetCycles() - bin_start) / kReps);
+
+    // (b) Id encodes its own record slot, so there is no search at all: mask
+    // out the slot, then confirm the record still carries that id (a
+    // generation field in the spare high bits is what makes a stale id fail
+    // this check rather than silently resolve to whatever recycled the slot).
+    const uint32_t dir_start = WaveX::Profiling::GetCycles();
+    uint32_t dir_sink = 0;
+    for (uint32_t r = 0; r < kReps; ++r) {
+        const uint16_t want = static_cast<uint16_t>((r * 977u) % kMaxBenchEntries + 1u);
+        const size_t slot = (want - 1u) & (kMaxBenchEntries - 1u);
+        if (sdram_table[slot].sample_id == want) {
+            dir_sink += sdram_table[slot].sample_rate;
+        }
+    }
+    const uint32_t dir_ns = cycles_to_ns((WaveX::Profiling::GetCycles() - dir_start) / kReps);
+
+    WaveX::Log::PrintLine(
+        "REGISTRY_BENCH: n=1024 INDEXED  binsearch=%u ns/lookup (x32 = %u ns)  "
+        "direct=%u ns/lookup (x32 = %u ns)  sink=%u/%u",
+        (unsigned)bin_ns,
+        (unsigned)(bin_ns * 32u),
+        (unsigned)dir_ns,
+        (unsigned)(dir_ns * 32u),
+        (unsigned)bin_sink,
+        (unsigned)dir_sink);
+}
+#endif  // WAVEX_PROFILING_ENABLED
 static size_t s_loaded_sample_count = 0;
 
 static LoadedSampleInfo* find_loaded_sample(uint16_t sample_id) {
@@ -709,6 +851,21 @@ void SelectSample(uint16_t sample_id, uint8_t slot) {
         WaveX::Log::PrintLine("SAMPLE_SELECT: slot=%u out of range, ignored", (unsigned)slot);
         return;
     }
+    if (sample_id != 0) {
+        bool resident = false;
+        for (size_t i = 0; i < s_loaded_sample_count; ++i) {
+            if (s_loaded_samples[i].sample_id == sample_id) {
+                resident = true;
+                break;
+            }
+        }
+        if (!resident) {
+            WaveX::Log::PrintLine("SAMPLE_SELECT: slot=%u id=%u is not resident, ignored",
+                                  (unsigned)slot,
+                                  (unsigned)sample_id);
+            return;
+        }
+    }
     if (!SfzLoader::BindSample(slot, sample_id)) {
         // The one refusal BindSample has for an in-range slot. Say so: a
         // silently ignored Select is the kind of thing a bench session
@@ -723,6 +880,47 @@ void SelectSample(uint16_t sample_id, uint8_t slot) {
 
 uint16_t SelectedSample(uint8_t slot) {
     return SfzLoader::BoundSample(slot);
+}
+
+// Tracks whose binding has been requested but not yet sent, one bit each.
+// Main-loop only (the message handler sets it, PumpTrackBinding drains it),
+// so it needs no synchronisation - see UartLinkSend's single-context
+// invariant. A broadcast marks all 16 rather than sending them: the UART TX
+// queue is 4 deep (daisy_uart_link.cpp MSG_QUEUE_SIZE), so a 16-message
+// burst would drop most of the replies as queue overflow.
+static uint16_t s_track_binding_pending = 0;
+
+void PushTrackBinding(uint8_t track) {
+    if (track == 0xFF) {
+        s_track_binding_pending = 0xFFFF;
+    } else if (track < kNumInstrumentSlots) {
+        s_track_binding_pending |= static_cast<uint16_t>(1u << track);
+    }
+}
+
+void PumpTrackBinding() {
+    // Two per iteration leaves room in the 4-deep queue for the status and
+    // meter traffic this same loop sends. A full queue keeps the bit set, so
+    // the reply is delayed rather than lost.
+    for (uint8_t sent = 0; sent < 2 && s_track_binding_pending != 0; ++sent) {
+        const uint8_t track =
+            static_cast<uint8_t>(__builtin_ctz(static_cast<unsigned>(s_track_binding_pending)));
+
+        uint8_t state = TRACK_BINDING_EMPTY;
+        uint16_t sample_id = 0;
+        if (SfzLoader::SlotLoading(track)) {
+            state = TRACK_BINDING_LOADING;
+        } else if (SfzLoader::SlotLoaded(track)) {
+            sample_id = SfzLoader::BoundSample(track);
+            state = sample_id != 0 ? TRACK_BINDING_SAMPLE : TRACK_BINDING_PATCH;
+        }
+        TrackBindingMessage msg(track, state, sample_id);
+        snprintf(msg.name, sizeof(msg.name), "%s", SfzLoader::SlotName(track));
+        if (WaveX::Comm::UartLinkSend(MSG_TRACK_BINDING, &msg, sizeof(msg)) < 0) {
+            return;
+        }
+        s_track_binding_pending &= static_cast<uint16_t>(~(1u << track));
+    }
 }
 
 bool UnloadSample(uint16_t sample_id) {

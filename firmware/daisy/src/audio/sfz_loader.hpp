@@ -54,6 +54,13 @@ bool SlotLoaded(uint8_t slot);
 bool BindSample(uint8_t slot, uint16_t sample_id, uint8_t root_note = 60);
 // The registry id a Built slot's first zone plays, else 0.
 uint16_t BoundSample(uint8_t slot);
+
+// Display name for what `slot` holds: an import's .sfz basename, or - while
+// that import is still loading - the basename of the request in flight, so
+// the UI can name an Instrument before Commit stamps it. Never null; empty when
+// the slot holds nothing, or holds a Built instrument whose name is the
+// bound sample's own metadata and already known to the frontend.
+const char* SlotName(uint8_t slot);
 // A WAV-registry sample is going away: drop every Built zone that names
 // it (and the slot's binding if that empties it), so no note resolves to a
 // freed block. The engine calls this before it releases the memory.

@@ -32,6 +32,7 @@ struct DispatchRecord {
     std::vector<WaveX::Protocol::CvTestMessage> cv_tests;
     std::vector<WaveX::Protocol::SampleLoadMessage> sample_loads;
     std::vector<WaveX::Protocol::SampleSelectMessage> selected_samples;
+    std::vector<uint8_t> track_binding_requests;
     std::vector<uint16_t> unloaded_samples;
     int get_sample_mem_status_calls = 0;
 
@@ -81,7 +82,7 @@ struct DispatchRecord {
         return note_ons.size() + note_offs.size() + control_changes.size() + sample_ctrls.size() +
                preview_reqs.size() + envelope_reqs.size() + cv_cal_sets.size() +
                cv_cal_gets.size() + cv_tests.size() + sample_loads.size() +
-               selected_samples.size() + unloaded_samples.size() +
+               selected_samples.size() + track_binding_requests.size() + unloaded_samples.size() +
                static_cast<size_t>(get_sample_mem_status_calls) + seq_transports.size() +
                seq_pattern_ops.size() + midi_clock_events.size() + midi_ccs.size() +
                instrument_ops.size() + browse_requests.size() + play_requests.size() +

@@ -80,6 +80,10 @@ uint16_t SelectedSample(uint8_t slot) {
     return 0;
 }
 
+void PushTrackBinding(uint8_t track) {
+    WaveX::Test::GetDispatchRecord().track_binding_requests.push_back(track);
+}
+
 bool UnloadSample(uint16_t sample_id) {
     WaveX::Test::GetDispatchRecord().unloaded_samples.push_back(sample_id);
     return sample_id != 0;  // mirrors the engine: 0 is rejected, not a wildcard

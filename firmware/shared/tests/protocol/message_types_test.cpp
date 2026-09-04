@@ -1524,6 +1524,58 @@ TEST_F(MessageTypeTest, SampleSelectMessage) {
     }
 }
 
+TEST_F(MessageTypeTest, TrackBindingMessagesRoundTrip) {
+    for (uint8_t track: {uint8_t{0}, uint8_t{7}, uint8_t{15}, uint8_t{0xFF}}) {
+        TrackBindingReqMessage original(track);
+        const size_t created =
+            ProtocolHandler::CreateTrackBindingReqPacket(buffer_.data(), buffer_.size(), original);
+        ASSERT_GT(created, 0u);
+        EXPECT_TRUE(ProtocolHandler::ValidatePacket(buffer_.data(), created));
+        EXPECT_EQ(ProtocolHandler::GetMessageType(buffer_.data()), MSG_TRACK_BINDING_REQ);
+
+        TrackBindingReqMessage parsed(0);
+        ASSERT_TRUE(ProtocolHandler::ParseMessage(
+            buffer_.data(), MSG_TRACK_BINDING_REQ, &parsed, sizeof(parsed)));
+        EXPECT_EQ(parsed.track, track);
+    }
+
+    for (uint8_t state:
+         {TRACK_BINDING_EMPTY, TRACK_BINDING_SAMPLE, TRACK_BINDING_PATCH, TRACK_BINDING_LOADING}) {
+        TrackBindingMessage original(5, state, state == TRACK_BINDING_SAMPLE ? 42 : 0);
+        // The Patch name is the only way the frontend can name an import - an
+        // import's samples never arrive as MSG_SAMPLE_META - so it has to
+        // survive the round trip, NUL included.
+        snprintf(original.name, sizeof(original.name), "GrandPiano.sfz");
+        const size_t created =
+            ProtocolHandler::CreateTrackBindingPacket(buffer_.data(), buffer_.size(), original);
+        ASSERT_GT(created, 0u);
+        EXPECT_TRUE(ProtocolHandler::ValidatePacket(buffer_.data(), created));
+        EXPECT_EQ(ProtocolHandler::GetMessageType(buffer_.data()), MSG_TRACK_BINDING);
+
+        TrackBindingMessage parsed;
+        ASSERT_TRUE(ProtocolHandler::ParseMessage(
+            buffer_.data(), MSG_TRACK_BINDING, &parsed, sizeof(parsed)));
+        EXPECT_EQ(parsed.track, 5);
+        EXPECT_EQ(parsed.state, state);
+        EXPECT_EQ(parsed.sample_id, state == TRACK_BINDING_SAMPLE ? 42 : 0);
+        EXPECT_STREQ(parsed.name, "GrandPiano.sfz");
+    }
+
+    // A name filling the field leaves no room for a terminator on the wire, so
+    // it must survive as bytes rather than as a C string. Pin that here; the
+    // frontend re-terminates its cached copy on receipt
+    // (inter_mcu_store_track_binding) so the UI can treat it as a string.
+    TrackBindingMessage full(1, TRACK_BINDING_PATCH, 0);
+    memset(full.name, 'A', sizeof(full.name));
+    const size_t created =
+        ProtocolHandler::CreateTrackBindingPacket(buffer_.data(), buffer_.size(), full);
+    ASSERT_GT(created, 0u);
+    TrackBindingMessage parsed_full;
+    ASSERT_TRUE(ProtocolHandler::ParseMessage(
+        buffer_.data(), MSG_TRACK_BINDING, &parsed_full, sizeof(parsed_full)));
+    EXPECT_EQ(memcmp(parsed_full.name, full.name, sizeof(full.name)), 0);
+}
+
 // MSG_SAMPLE_UNLOAD (previously untested). Unlike SampleSelect, id 0 is
 // REJECTED by the receiver rather than treated as a wildcard, so the id
 // arriving intact is what stands between "free this sample" and "free

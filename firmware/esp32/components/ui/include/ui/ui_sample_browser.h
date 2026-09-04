@@ -226,6 +226,12 @@ class UISampleBrowser : public UIPage {
     bool sfz_probe_ready_ = false;
     bool sfz_probe_loadable_ = false;
     uint8_t sfz_sample_count_ = 0;
+    // Loading an Instrument takes a Track away from every other page, so it asks
+    // first rather than silently claiming the current one. While this is set
+    // the softkeys become a Track picker; confirming loads and cancelling
+    // leaves the Track untouched.
+    bool sfz_awaiting_track_ = false;
+    uint8_t sfz_target_track_ = 0;
     char sfz_probe_path_[96] = {};
     WaveX::Protocol::InstStatusMessage pending_inst_status_{};
     portMUX_TYPE inst_status_lock_ = portMUX_INITIALIZER_UNLOCKED;
@@ -254,6 +260,7 @@ class UISampleBrowser : public UIPage {
     bool auditionSampleByIndex(uint32_t file_index);
     bool stopAudition();
     void refreshSoftkeys();
+    void refreshTrackPrompt();
     bool loadSample(const wavex_file_entry_t* entry);
     bool loadInstrument(const wavex_file_entry_t* entry);
     void requestInstrumentProbe(const wavex_file_entry_t* entry);

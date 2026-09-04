@@ -107,6 +107,24 @@ void SetLoopGapMs(uint16_t gap_ms);
 void SelectSample(uint16_t sample_id, uint8_t slot);
 uint16_t SelectedSample(uint8_t slot);
 
+// Queues backend-authoritative state for one Track (0..15), or every Track
+// when `track` is 0xFF. The result covers both a bare selected sample and an
+// imported SFZ Instrument, which the ESP32 cannot derive from sample metadata.
+// Queues rather than sends: PumpTrackBinding does the sending.
+void PushTrackBinding(uint8_t track);
+
+// Drains a bounded number of queued Track-binding replies onto the link.
+// Main loop only; see the TX queue depth note on s_track_binding_pending.
+void PumpTrackBinding();
+
+#if WAVEX_PROFILING_ENABLED
+// Bench instrument: measures the linear registry scan at 32/128/512/1024
+// entries in SDRAM, plus the internal-SRAM array today's registry uses, so
+// track-and-patch-model.md §4's 1024-entry projection rests on a measured
+// curve. Boot-time, profiling-only, touches only render-scratch SDRAM.
+void BenchmarkRegistryScan();
+#endif
+
 // Frees a loaded sample's RAM, stopping any voice sounding from it first.
 // Returns false if the id is 0 or is not loaded.
 bool UnloadSample(uint16_t sample_id);

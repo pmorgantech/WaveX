@@ -2,8 +2,14 @@
 
 **Status**: Core data model built and host-tested — `audio/instrument.hpp` (zones, velocity layers, crossfade, choke, tuning fold, sample-record inheritance, live-params flag), and since 2026-09-02 the **only** note path: `OnNoteOn` resolves every slot through `SfzLoader::ResolveNote()`, a bare sample bound with `MSG_SAMPLE_SELECT` being a one-zone `Instrument` built by `SfzLoader::BindSample()` (origin `Built`, ids from the WAV registry) rather than a second code path. **Corrected 2026-09-02** — §6's protocol table describes ops that were never built; what actually shipped is narrower: `MSG_INST_OP`/`MSG_INST_STATUS` (0x60/0x61) exist and are live, but only for `INST_OP_SFZ_PROBE`/`INST_OP_SFZ_LOAD` (load a complete, externally-authored `.sfz` file into a slot) and `INST_OP_SET_MOD_SLOT` (param-locks-and-modulation.md §9). None of §6's `INST_OP_BIND/SAVE/NEW/SET_ZONE/CLEAR_ZONE/SET_ZONE_SAMPLE/SET_META/SET_CHOKE` exist, there is no `.wxi` reader/writer despite the WXCF *container format* itself being built and shared, and `MSG_INST_ZONE_SYNC` (0x62) is still reserved-unused. In short: **an instrument can only be built by hand-authoring an `.sfz` file off-device today** — there is no on-device zone editor, no save, no "assign this pad to that sample" workflow. See §12 for the reconciled near-term plan (Voice/Preset bank management, on-device pad→sample mapping) that a 2026-09-02 user request asked for directly.
 **Lineage**: E-mu Emulator III / Emax "preset" architecture — a keyboard-wide performance object mapping samples across key and velocity ranges, feeding per-voice filter/VCA. WaveX's Stage B signal path (sample → SSI2144 VCF → SSI2164 VCA per voice) *is* the Emax voice architecture; this doc supplies the missing front half.
-**Dependencies**: Phase 1 voice manager (done), Phase 1 item 8 note path (done). Supersedes the item-8 stopgap mapping policy in `audio_engine.cpp::OnNoteOn` ("most-recently-loaded sample, root note 60").
+**Dependencies**: RAM-resident voice manager and unified note path (both built). Supersedes the former stopgap mapping policy in `audio_engine.cpp::OnNoteOn` ("most-recently-loaded sample, root note 60").
 **Consumers**: `melodic-sequencing.md`, `param-locks-and-modulation.md`, `sampling-and-recording.md`, `arpeggiator.md`, `output-routing-and-mixer.md`, and the sequencer kit model (`sequencer.md` §3 — see §8 below).
+
+**Scope:** This document defines WaveX's sampler-source Patch. `Instrument` is
+the current engine name for that Patch representation; it is not a universal
+base type for every oscillator. A future wavetable source shares the
+Track/Patch/Voice hierarchy but has a separate source contract described in
+`oscillator-sources.md`.
 
 ---
 
@@ -12,7 +18,8 @@
 | Term | Meaning |
 |---|---|
 | **Zone** | One sample mapped to a key range × velocity range, with root note, tune, gain/pan, region/loop, and filter/envelope overrides. (E-mu called this a "voice"; we avoid that word — `VoiceManager` voices are playback channels.) |
-| **Instrument** | An ordered set of ≤ 32 zones plus instrument-scoped settings (mode, choke map, mod matrix slots, macro maps, output routing). E-mu "preset". |
+| **Instrument** | The current sampler Patch implementation: an ordered set of ≤ 32 Zones plus Patch-scoped settings (mode, choke map, mod matrix slots, macro maps, output routing). E-mu "preset". |
+| **Oscillator source** | The typed Patch-owned recipe that produces audio. This document covers the sampler source; `oscillator-sources.md` defines its boundary from future wavetable sources. |
 | **Slot** | One of 16 runtime bindings on the Daisy: sequencer track *t* and MIDI channel *t* play the instrument bound to slot *t*. |
 | **Drum mode** | Instrument flag: zones are one-per-key pads, no pitch tracking (`increment` ignores note), choke groups active. A **kit** (`sequencer.md`) is exactly a drum-mode instrument. |
 | **Keyboard mode** | Zones span key ranges, notes pitch-track relative to `root_note` (existing 12-TET path in `VoiceManager::Trigger`). |
@@ -23,7 +30,7 @@ Design rule carried over from the sequencer doc: **the engine owns the playable 
 
 ## 2. Data model (Daisy-resident, host-testable)
 
-New module: `firmware/daisy/src/audio/instrument.hpp` (+ `instrument_bank.hpp`). HAL-free like `voice_manager.hpp` — operates on ids and plain structs, so zone lookup, layering, velocity crossfade, and choke logic are all host-testable.
+New module: `firmware/daisy/src/audio/instrument.hpp` (+ `instrument_bank.hpp`). HAL-free like `voice_manager.hpp` — operates on ids and plain structs, so zone lookup, layering, velocity crossfade, and choke logic are all host-testable. Its `Zone` array is intentionally sampler-specific; do not add wavetable frame/index fields to `Zone` to simulate a common source type.
 
 ```cpp
 // instrument.hpp — engine-side (NOT wire) structs
@@ -68,7 +75,7 @@ Memory: `sizeof(Zone)` ≈ 64 B packed-ish; 32 zones × 16 slots ≈ 33 KB plus 
 
 ---
 
-## 3. Note-on resolution (replaces the item-8 stopgap)
+## 3. Note-on resolution (replaces the former stopgap)
 
 `audio_engine.cpp::OnNoteOn(note, velocity, channel)` becomes:
 
@@ -99,7 +106,7 @@ Per-slot sample table: `{uint16_t sample_id → wxsamp_t handle, frames, channel
 - Instrument files reference samples **by path** (like `SampleLoadMessage`). On instrument load (§6), the Daisy walks the zone list, deduplicates paths, and loads each through the existing `OnSampleLoad` machinery (`SampleMemMgr::alloc` + chunked SD read from the main loop — load is *not* real-time). Progress/failures surface via `MSG_INST_STATUS`.
 - **Eviction rule**: binding a new instrument to a slot releases the old slot's table entries not shared with other slots (refcount by path hash). `VoiceManager::StopAll()` semantics apply, but scoped: add `VoiceManager::StopSlot(slot)` (hard-stop only voices whose `slot` matches) so rebinding slot 3 doesn't cut off slots 0–2. This is why `Voice` grows a `slot` field in §3.
 - RAM budget guard: refuse to load (with `INST_STATUS` error) rather than partially load, if total bytes exceed the free sample RAM minus a configurable reserve (`WAVEX_INST_LOAD_RESERVE_BYTES`, default 8 MB, in `hardware_config.h`).
-- Streamed zones (long samples) are **out of scope for v1** — they wait on the streamed-voice-concurrency refactor (roadmap Phase 1 item 2's open half). A zone whose sample exceeds `WAVEX_INST_MAX_RAM_SAMPLE_BYTES` (default 4 MB) is rejected with a distinct error code so the UI can say *why*.
+- Streamed zones (long samples) are **out of scope for v1** — they wait on the concurrent-streamed-voices work in roadmap Phase 1. A zone whose sample exceeds `WAVEX_INST_MAX_RAM_SAMPLE_BYTES` (default 4 MB) is rejected with a distinct error code so the UI can say *why*.
 
 ---
 

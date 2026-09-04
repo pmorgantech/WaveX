@@ -43,6 +43,16 @@ float CyclesToMicroseconds(uint32_t cycles) {
     return (float)cycles / ((float)SystemCoreClock / 1000000.0f);
 }
 
+uint32_t CyclesToNanoseconds(uint32_t cycles) {
+    const uint32_t mhz = SystemCoreClock / 1000000u;
+    if (mhz == 0) {
+        return 0;
+    }
+    // 64-bit intermediate: at 480 MHz a uint32 cycle count reaches ~8.9 s, and
+    // cycles * 1000 would overflow 32 bits past ~4.3 M cycles (~9 ms).
+    return static_cast<uint32_t>((static_cast<uint64_t>(cycles) * 1000ull) / mhz);
+}
+
 void ProfileZone::Reset() {
     total_cycles = 0;
     min_cycles = UINT32_MAX;
@@ -59,6 +69,12 @@ void ProfileZone::GetStats(float& avg_us, float& min_us, float& max_us) const {
     avg_us = CyclesToMicroseconds(GetAvgCycles());
     min_us = min_cycles == UINT32_MAX ? 0.0f : CyclesToMicroseconds(min_cycles);
     max_us = CyclesToMicroseconds(max_cycles);
+}
+
+void ProfileZone::GetStatsNs(uint32_t& avg_ns, uint32_t& min_ns, uint32_t& max_ns) const {
+    avg_ns = CyclesToNanoseconds(GetAvgCycles());
+    min_ns = min_cycles == UINT32_MAX ? 0u : CyclesToNanoseconds(min_cycles);
+    max_ns = CyclesToNanoseconds(max_cycles);
 }
 
 #if WAVEX_PROFILING_ENABLED

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "stm32h7xx.h"
+
 #include <cstddef>
 #include <cstdint>
 
@@ -25,6 +26,14 @@ void InitHardware();
 uint32_t GetCycles();
 float CyclesToMicroseconds(uint32_t cycles);
 
+// Integer nanoseconds. The image links --specs=nano.specs WITHOUT
+// -u _printf_float, so newlib-nano's vfprintf silently drops %f - a "%.2f"
+// of the microsecond figures above prints nothing at all, which is exactly
+// how the profiling dump came to report empty avg/max/min for as long as it
+// has existed. Report timings through these instead of forcing float printf
+// into every image for the sake of a bench-only dump.
+uint32_t CyclesToNanoseconds(uint32_t cycles);
+
 struct ProfileZone {
     const char* name = nullptr;
     uint64_t total_cycles = 0;
@@ -36,10 +45,12 @@ struct ProfileZone {
     void Reset();
     uint32_t GetAvgCycles() const;
     void GetStats(float& avg_us, float& min_us, float& max_us) const;
+    /// Same figures in integer nanoseconds - printable under newlib-nano.
+    void GetStatsNs(uint32_t& avg_ns, uint32_t& min_ns, uint32_t& max_ns) const;
 };
 
 class Profiler {
-public:
+   public:
     static uint32_t RegisterZone(const char* name);
     static uint32_t Begin();
     static void End(uint32_t zone_id, uint32_t start_cycles);
@@ -47,7 +58,7 @@ public:
     static void ResetAll();
     static uint32_t GetZoneCount();
 
-private:
+   private:
 #if WAVEX_PROFILING_ENABLED
     static ProfileZone zones_[PROFILE_MAX_ZONES];
     static uint32_t zone_count_;
@@ -55,13 +66,13 @@ private:
 };
 
 class ProfileScope {
-public:
+   public:
     explicit ProfileScope(uint32_t zone_id);
     ~ProfileScope();
     ProfileScope(const ProfileScope&) = delete;
     ProfileScope& operator=(const ProfileScope&) = delete;
 
-private:
+   private:
 #if WAVEX_PROFILING_ENABLED
     uint32_t zone_id_;
     uint32_t start_cycles_;
@@ -80,8 +91,7 @@ private:
 #define PROFILE_CONCAT_IMPL(a, b) a##b
 #define PROFILE_CONCAT(a, b) PROFILE_CONCAT_IMPL(a, b)
 
-#define PROFILE_DEFINE_ZONE(name) \
-    static uint32_t g_profile_zone_##name = UINT32_MAX
+#define PROFILE_DEFINE_ZONE(name) static uint32_t g_profile_zone_##name = UINT32_MAX
 
 #define PROFILE_REGISTER_ZONE(name) \
     g_profile_zone_##name = WaveX::Profiling::Profiler::RegisterZone(#name)
@@ -104,5 +114,3 @@ private:
 #define PROFILE_END(name)
 
 #endif
-
-

@@ -547,6 +547,16 @@ TEST_F(MessageDispatchTest, SampleSelectZeroIsForwarded) {
     EXPECT_EQ(GetDispatchRecord().selected_samples[0].slot, 5);
 }
 
+TEST_F(MessageDispatchTest, TrackBindingRequestReachesEngine) {
+    WaveX::Protocol::TrackBindingReqMessage msg(9);
+    ProcessInterMcuMessage(
+        MSG_TRACK_BINDING_REQ, 1, reinterpret_cast<const uint8_t*>(&msg), sizeof(msg));
+
+    const DispatchRecord& r = GetDispatchRecord();
+    ASSERT_EQ(r.track_binding_requests.size(), 1u);
+    EXPECT_EQ(r.track_binding_requests[0], 9);
+}
+
 TEST_F(MessageDispatchTest, SampleUnloadReachesEngine) {
     WaveX::Protocol::SampleUnloadMessage msg(3);
     ProcessInterMcuMessage(
@@ -561,9 +571,11 @@ TEST_F(MessageDispatchTest, UndersizedSampleSelectIsRejected) {
     uint8_t truncated[1] = {0};
     ProcessInterMcuMessage(MSG_SAMPLE_SELECT, 1, truncated, sizeof(truncated));
     ProcessInterMcuMessage(MSG_SAMPLE_UNLOAD, 1, truncated, sizeof(truncated));
+    ProcessInterMcuMessage(MSG_TRACK_BINDING_REQ, 1, truncated, sizeof(truncated));
 
     EXPECT_TRUE(GetDispatchRecord().selected_samples.empty());
     EXPECT_TRUE(GetDispatchRecord().unloaded_samples.empty());
+    EXPECT_TRUE(GetDispatchRecord().track_binding_requests.empty());
 }
 
 // --- Malformed-payload sweep ----------------------------------------------

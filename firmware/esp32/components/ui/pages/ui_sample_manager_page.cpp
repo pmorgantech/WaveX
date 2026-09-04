@@ -6,6 +6,7 @@
 #include "../styles/ui_theme.h"
 #include "inter_mcu.h"
 #include "ui/current_sample.h"
+#include "ui/current_track.h"
 #include "ui/ui_navigator.h"
 
 #include <cstdio>
@@ -77,6 +78,7 @@ void UISampleManagerPage::onEnter(lv_obj_t* parent) {
     // has missed those, so ask for the current set on entry.
     inter_mcu_request_sample_meta(0);
     inter_mcu_request_sample_mem_status();
+    inter_mcu_request_track_binding(getCurrentTrack());
 
     // An lv_timer runs in LVGL context with the lock held, so it may touch
     // widgets directly. Rebuilding from the cache is how new metadata reaches
@@ -110,6 +112,7 @@ void UISampleManagerPage::onExit() {
 void UISampleManagerPage::refreshTimerCb(lv_timer_t* timer) {
     auto* self = static_cast<UISampleManagerPage*>(lv_timer_get_user_data(timer));
     if (self) {
+        inter_mcu_request_track_binding(getCurrentTrack());
         self->rebuildList();
         self->refreshDetail();
     }
@@ -136,6 +139,12 @@ void UISampleManagerPage::rebuildList() {
             metas[count++] = m;
         }
     }
+
+    WaveX::Protocol::TrackBindingMessage binding;
+    const uint16_t bound_id = inter_mcu_get_track_binding(getCurrentTrack(), &binding) &&
+                                      binding.state == WaveX::Protocol::TRACK_BINDING_SAMPLE
+                                  ? binding.sample_id
+                                  : 0;
 
     // Runs every call, including the unchanged fast path below: an SFZ
     // import's samples live in the Daisy's own private registry
@@ -177,7 +186,7 @@ void UISampleManagerPage::rebuildList() {
         // Selection highlight can still have moved.
         for (int i = 0; i < row_count_; ++i) {
             if (rows_[i].btn && lv_obj_is_valid(rows_[i].btn)) {
-                const bool sel = rows_[i].sample_id == bound_id_[slot_];
+                const bool sel = rows_[i].sample_id == bound_id;
                 const bool foc = (i == focus_);
                 lv_obj_set_style_border_color(
                     rows_[i].btn, lv_color_hex(foc ? kColGreen : kColBorder), LV_PART_MAIN);
@@ -222,6 +231,8 @@ void UISampleManagerPage::rebuildList() {
         lv_label_set_text(label, line);
         lv_obj_set_style_text_color(
             label, lv_color_hex(meta_is_playable(m) ? 0xFFFFFF : kColWarn), LV_PART_MAIN);
+        lv_obj_set_style_bg_color(
+            btn, lv_color_hex(m.sample_id == bound_id ? 0x14261A : kColPanel), LV_PART_MAIN);
 
         rows_[i].btn = btn;
         rows_[i].label = label;
@@ -250,6 +261,25 @@ void UISampleManagerPage::refreshDetail() {
         return;
     }
 
+    WaveX::Protocol::TrackBindingMessage binding;
+    const bool have_binding = inter_mcu_get_track_binding(getCurrentTrack(), &binding);
+    const bool is_bound = have_binding && binding.state == WaveX::Protocol::TRACK_BINDING_SAMPLE &&
+                          binding.sample_id == row->sample_id;
+    const bool track_holds_patch =
+        have_binding && (binding.state == WaveX::Protocol::TRACK_BINDING_PATCH ||
+                         binding.state == WaveX::Protocol::TRACK_BINDING_LOADING);
+    char action[128];
+    if (is_bound) {
+        snprintf(action, sizeof(action), "Notes play THIS sample on this Track.");
+    } else if (track_holds_patch) {
+        snprintf(action,
+                 sizeof(action),
+                 "Track %u holds Instrument %.24s - Select is refused here.",
+                 trackDisplayNumber(getCurrentTrack()),
+                 binding.name[0] ? binding.name : "(unnamed)");
+    } else {
+        snprintf(action, sizeof(action), "Press Select to bind this to the Track.");
+    }
     char text[420];
     snprintf(text,
              sizeof(text),
@@ -272,8 +302,7 @@ void UISampleManagerPage::refreshDetail() {
              (unsigned long)m.loop_start,
              (unsigned long)m.loop_end,
              (double)m.gain_db_x10 / 10.0,
-             row->sample_id == bound_id_[slot_] ? "Notes play THIS sample on this slot."
-                                                : "Press Select to bind this to the slot.");
+             action);
     lv_label_set_text(detail_label_, text);
 }
 
@@ -281,7 +310,7 @@ void UISampleManagerPage::refreshSlotLabel() {
     if (!slot_label_) {
         return;
     }
-    lv_label_set_text_fmt(slot_label_, "SLOT %u", (unsigned)slot_);
+    lv_label_set_text_fmt(slot_label_, "TRACK %u", trackDisplayNumber(getCurrentTrack()));
 }
 
 void UISampleManagerPage::moveFocus(int delta) {
@@ -296,7 +325,8 @@ void UISampleManagerPage::moveFocus(int delta) {
 void UISampleManagerPage::changeSlot(int delta) {
     // 16 instrument slots - matches instrument.hpp's kNumInstrumentSlots and
     // MSG_NOTE_ON's channel & 0x0F on the backend.
-    slot_ = static_cast<uint8_t>((slot_ + delta + 16) % 16);
+    setCurrentTrack(static_cast<uint8_t>((getCurrentTrack() + delta + 16) % 16));
+    inter_mcu_request_track_binding(getCurrentTrack());
     refreshSlotLabel();
     rebuildList();
     refreshDetail();
@@ -316,9 +346,32 @@ void UISampleManagerPage::selectFocused() {
         }
         return;
     }
-    if (inter_mcu_send_sample_select(row->sample_id, slot_) == ESP_OK) {
-        bound_id_[slot_] = row->sample_id;
-        ESP_LOGI(TAG, "Bound sample %u to slot %u", (unsigned)row->sample_id, (unsigned)slot_);
+    // A Track holding an SFZ Instrument refuses a bare-sample bind on the backend
+    // (SfzLoader::BindSample): the import owns its samples and can only
+    // release them through the load handshake. That refusal used to reach
+    // nothing but the Daisy log, so Select looked broken rather than
+    // declined - say which Track and why, here, before sending.
+    WaveX::Protocol::TrackBindingMessage current;
+    if (inter_mcu_get_track_binding(getCurrentTrack(), &current) &&
+        (current.state == WaveX::Protocol::TRACK_BINDING_PATCH ||
+         current.state == WaveX::Protocol::TRACK_BINDING_LOADING)) {
+        if (status_label_) {
+            char msg[128];
+            snprintf(msg,
+                     sizeof(msg),
+                     "Track %u holds Instrument %.24s - Select refused; pick another Track",
+                     trackDisplayNumber(getCurrentTrack()),
+                     current.name[0] ? current.name : "(unnamed)");
+            lv_label_set_text(status_label_, msg);
+        }
+        return;
+    }
+    if (inter_mcu_send_sample_select(row->sample_id, getCurrentTrack()) == ESP_OK) {
+        inter_mcu_request_track_binding(getCurrentTrack());
+        ESP_LOGI(TAG,
+                 "Requested sample %u for Track %u",
+                 (unsigned)row->sample_id,
+                 trackDisplayNumber(getCurrentTrack()));
     } else if (status_label_) {
         lv_label_set_text(status_label_, "Select failed - link busy?");
     }
@@ -337,13 +390,6 @@ void UISampleManagerPage::unloadFocused() {
             lv_label_set_text(status_label_, "Unload failed - link busy?");
         }
         return;
-    }
-    // Mirrors the backend clearing every slot bound to a freed sample_id
-    // (audio_engine.cpp's UnloadSample).
-    for (auto& bound: bound_id_) {
-        if (bound == id) {
-            bound = 0;
-        }
     }
     // The row disappears when the backend's metadata push lands, not here: the
     // backend is the authority on what is resident, and guessing would let the
@@ -400,6 +446,7 @@ std::array<Softkey, NUM_SOFTKEYS> UISampleManagerPage::getSoftkeys() {
     keys[5] = {"Refresh", [this]() {
                    inter_mcu_request_sample_meta(0);
                    inter_mcu_request_sample_mem_status();
+                   inter_mcu_request_track_binding(getCurrentTrack());
                }};
     return keys;
 }
@@ -407,8 +454,8 @@ std::array<Softkey, NUM_SOFTKEYS> UISampleManagerPage::getSoftkeys() {
 std::array<Softkey, NUM_SOFTKEYS> UISampleManagerPage::getShiftedSoftkeys() {
     std::array<Softkey, NUM_SOFTKEYS> keys{};
     keys[0] = {"Back", []() { UINavigator::instance().pop(); }};
-    keys[1] = {"Slot -", [this]() { changeSlot(-1); }};
-    keys[2] = {"Slot +", [this]() { changeSlot(+1); }};
+    keys[1] = {"Track -", [this]() { changeSlot(-1); }};
+    keys[2] = {"Track +", [this]() { changeSlot(+1); }};
     keys[3] = {"Edit", [this]() { editFocused(); }};
     return keys;
 }

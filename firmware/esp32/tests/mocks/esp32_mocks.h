@@ -139,6 +139,8 @@ struct InterMcuCapture {
 
     int sample_meta_calls = 0;
     WaveX::Protocol::SampleMetadata last_sample_meta;
+    int track_binding_calls = 0;
+    WaveX::Protocol::TrackBindingMessage last_track_binding;
 
     int sample_mem_status_calls = 0;
     int cv_cal_calls = 0;

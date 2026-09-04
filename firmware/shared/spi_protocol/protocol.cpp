@@ -279,6 +279,20 @@ size_t ProtocolHandler::CreateSampleMetaReqPacket(uint8_t* buffer,
         buffer, buffer_size, MSG_SAMPLE_META_REQ, &msg, sizeof(SampleMetaReqMessage));
 }
 
+size_t ProtocolHandler::CreateTrackBindingReqPacket(uint8_t* buffer,
+                                                    size_t buffer_size,
+                                                    const TrackBindingReqMessage& msg) {
+    return CreateUnifiedPacket(
+        buffer, buffer_size, MSG_TRACK_BINDING_REQ, &msg, sizeof(TrackBindingReqMessage));
+}
+
+size_t ProtocolHandler::CreateTrackBindingPacket(uint8_t* buffer,
+                                                 size_t buffer_size,
+                                                 const TrackBindingMessage& msg) {
+    return CreateUnifiedPacket(
+        buffer, buffer_size, MSG_TRACK_BINDING, &msg, sizeof(TrackBindingMessage));
+}
+
 size_t ProtocolHandler::CreateMixOpPacket(uint8_t* buffer,
                                           size_t buffer_size,
                                           const MixOpMessage& msg) {
