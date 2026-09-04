@@ -10,6 +10,8 @@ extern "C" SD_HandleTypeDef hsd1;  // libDaisy per/sdmmc.cpp
 #include "../memory.h"
 #include "../memory_sections.h"  // For WAVEX_DTCM_DATA
 #include "../sdram_layout.h"
+
+#include "../bss_static.hpp"
 // q15_t was CMSIS-DSP's name for a 16-bit sample; the engine keeps the name
 // (it says "audio sample, not a count") but no longer links the library - its
 // one used routine, arm_copy_q15, was a plain copy loop, and memcpy is at
@@ -200,7 +202,13 @@ static WaveX::AudioEngine::Lfo s_mod_lfo2 WAVEX_DTCM_DATA;
 // Sequencer transport is callback-owned: its command queue gives the main
 // loop an immutable, bounded hand-off and SequencerTransport itself keeps a
 // pending/active Pattern pair swapped only between steps.
-static WaveX::Sequencer::SequencerTransport s_seq_transport;
+//
+// BssStatic (bss_static.hpp): the transport is ~50 KB of patterns whose only
+// non-zero defaults are velocity/probability/tempo, and as a plain static it
+// was a 50 KB image in flash copied into SRAM at boot. Same for the voice
+// map, its mailbox and the note queue below.
+static WaveX::BssStatic<WaveX::Sequencer::SequencerTransport> s_seq_transport_storage;
+static WaveX::Sequencer::SequencerTransport& s_seq_transport = s_seq_transport_storage.Get();
 static constexpr uint32_t kSequencerCommandQueueSize = 32;
 static WaveX::Sequencer::SequencerCommandQueue<kSequencerCommandQueueSize> s_seq_command_queue;
 
@@ -217,8 +225,11 @@ struct SequencerVoiceMap {
     uint8_t layer_count[WaveX::Sequencer::kMaxTracks] = {};
     VoiceTriggerParams layers[WaveX::Sequencer::kMaxTracks][kMaxLayerTriggers] = {};
 };
-static SequencerVoiceMap s_seq_voice_map_active;
-static SnapshotMailbox<SequencerVoiceMap> s_seq_voice_map_mailbox;
+static WaveX::BssStatic<SequencerVoiceMap> s_seq_voice_map_active_storage;
+static SequencerVoiceMap& s_seq_voice_map_active = s_seq_voice_map_active_storage.Get();
+static WaveX::BssStatic<SnapshotMailbox<SequencerVoiceMap>> s_seq_voice_map_mailbox_storage;
+static SnapshotMailbox<SequencerVoiceMap>& s_seq_voice_map_mailbox =
+    s_seq_voice_map_mailbox_storage.Get();
 
 // --- Stage A paraphonic analog path (roadmap item 5; analog-voice-board.md
 // §0). One shared envelope drives the shared VCF/VCA CVs; values are
@@ -284,7 +295,9 @@ struct NoteEvent {
     WaveX::AudioEngine::VoiceTriggerParams params;
 };
 static constexpr uint32_t kNoteQueueSize = 16;  // power of two (index math wraps)
-static NoteEventQueue<NoteEvent, kNoteQueueSize> s_note_queue;
+using NoteQueue = NoteEventQueue<NoteEvent, kNoteQueueSize>;
+static WaveX::BssStatic<NoteQueue> s_note_queue_storage;
+static NoteQueue& s_note_queue = s_note_queue_storage.Get();
 
 // NoteEventQueue's legacy overflow bitmap is keyed only by note. Instrument
 // note-offs also need the slot, or a full queue could release a same-pitch
@@ -325,7 +338,7 @@ static bool drain_note_queue() {
     // A full queue may drop note-ons, but never note-offs: releases that could
     // not enter the ring are coalesced by MIDI note and applied after all
     // older queued events, preserving their arrival order relative to them.
-    for (uint32_t word = 0; word < decltype(s_note_queue)::kReleaseWordCount; ++word) {
+    for (uint32_t word = 0; word < NoteQueue::kReleaseWordCount; ++word) {
         uint32_t releases = s_note_queue.TakeOverflowReleaseWord(word);
         while (releases != 0) {
             const uint32_t bit = static_cast<uint32_t>(__builtin_ctz(releases));
@@ -337,7 +350,7 @@ static bool drain_note_queue() {
         __atomic_exchange_n(&s_scoped_release_pending_slots, 0u, __ATOMIC_ACQUIRE);
     while (pending_slots != 0) {
         const uint8_t slot = static_cast<uint8_t>(__builtin_ctz(pending_slots));
-        for (uint32_t word = 0; word < decltype(s_note_queue)::kReleaseWordCount; ++word) {
+        for (uint32_t word = 0; word < NoteQueue::kReleaseWordCount; ++word) {
             uint32_t releases =
                 __atomic_exchange_n(&s_scoped_release_overflow[slot][word], 0u, __ATOMIC_ACQUIRE);
             while (releases != 0) {

@@ -64,6 +64,15 @@ versioning and release process.
   of flash, 2 KB of RAM) into a firmware with no USB host in use. Mount
   behaviour is unchanged; SD streaming on hardware has not been re-verified
   since the change.
+- The Daisy image shrinks by ~117 KB (409 KB to 292 KB) because its large
+  callback/loader state no longer ships as a flash image of its defaults.
+  `SequencerTransport`, the sequencer voice map and its mailbox, the SFZ
+  `InstrumentBank`, mapped instrument and sample table were constant-
+  initialised - a few non-zero defaults (`key_hi = 127`, `velocity = 100`,
+  `tempo = 120`) made the linker emit all 121 KB into `.data`, to be copied
+  into SRAM at boot. They are now constructed into zero-cost `.bss` storage at
+  startup (`bss_static.hpp`), and `SfzLoader::Reset()` / `Sfz::Parser::Reset()`
+  rebuild in place instead of through 34 KB and 20 KB stack temporaries.
 - **One shared current Track across the UI.** Play, Sample Manager, Voice and
   the Sample Browser each kept a private "current slot", so "which Track?" had
   four different answers at once. They now read one shared value

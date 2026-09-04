@@ -14,6 +14,7 @@
 // on that same line becomes part of the path. This is the documented v1
 // compatibility limitation, not a general-purpose SFZ grammar.
 
+#include "bss_static.hpp"
 #include "instrument.hpp"
 #include <cerrno>
 #include <cmath>
@@ -405,7 +406,9 @@ inline bool ResolvePath(const char* sfz_path,
 class Parser {
    public:
     void Reset() {
-        document_ = Document{};
+        // In place: `document_ = Document{}` built a 20 KB temporary on the
+        // stack first (bss_static.hpp).
+        WaveX::ReconstructInPlace(document_);
         global_ = RegionOpcodes{};
         group_ = RegionOpcodes{};
         current_ = RegionOpcodes{};

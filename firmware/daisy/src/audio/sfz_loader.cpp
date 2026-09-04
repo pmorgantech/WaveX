@@ -8,6 +8,7 @@
 #include "ff.h"
 #include "memory.h"
 
+#include "bss_static.hpp"
 #include "sample_load_info.hpp"
 #include "sfz_import.hpp"
 #include "storage/fatfs_wav_reader.hpp"
@@ -43,8 +44,14 @@ enum class Phase : uint8_t {
     Commit,
 };
 
-static InstrumentBank s_bank;
-static Sfz::SampleTable s_sample_table;
+// BssStatic (bss_static.hpp): as plain statics the bank and the mapped
+// instrument were 34 KB and 8.5 KB images of Zone defaults in flash, copied
+// into SRAM at boot; Reset() rebuilt them through equally large stack
+// temporaries.
+static WaveX::BssStatic<InstrumentBank> s_bank_storage;
+static InstrumentBank& s_bank = s_bank_storage.Get();
+static WaveX::BssStatic<Sfz::SampleTable> s_sample_table_storage;
+static Sfz::SampleTable& s_sample_table = s_sample_table_storage.Get();
 // Resolver for Built instruments (BindSample). Registered by the engine
 // because the registry it reads lives there; a default-constructed one
 // resolves nothing, so an unregistered engine drops rather than crashes.
@@ -62,7 +69,8 @@ static InstOpMessage s_request;
 static InstStatusMessage s_status;
 static Phase s_phase = Phase::Idle;
 static Sfz::Parser s_parser;
-static Sfz::MappedInstrument s_mapped;
+static WaveX::BssStatic<Sfz::MappedInstrument> s_mapped_storage;
+static Sfz::MappedInstrument& s_mapped = s_mapped_storage.Get();
 static Sfz::SamplePlan s_plan;
 static Sfz::SampleProbe s_probes[kMaxZones];
 static char s_line[Sfz::kMaxLine];
@@ -328,7 +336,7 @@ void FillCurrentStatus() {
 
 void Reset() {
     CloseFile();
-    s_bank = InstrumentBank{};
+    s_bank_storage.Reconstruct();
     s_sample_table.Clear();
     s_bound_slot = -1;
     s_active_bytes = 0;
@@ -375,8 +383,8 @@ bool Begin(const InstOpMessage& request) {
     s_status.slot = request.slot;
     s_status.op = request.op;
     s_parser.Reset();
-    s_mapped = Sfz::MappedInstrument{};
-    s_plan = Sfz::SamplePlan{};
+    s_mapped_storage.Reconstruct();
+    WaveX::ReconstructInPlace(s_plan);
     for (auto& probe: s_probes) {
         probe = Sfz::SampleProbe{};
     }
