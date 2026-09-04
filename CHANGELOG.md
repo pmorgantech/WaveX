@@ -58,6 +58,12 @@ versioning and release process.
   roadmap items that would justify them (band-limited oscillators, send
   effects, FFT/polyphase resampling); `docs/architecture.md` no longer
   describes streaming resampling as CMSIS-based.
+- The Daisy SD mount links FatFs to libDaisy's SD driver directly instead of
+  through `daisy::FatFSInterface`. That wrapper references the USB host disk
+  driver unconditionally, so it pulled the entire USB host MSC stack (~8 KB
+  of flash, 2 KB of RAM) into a firmware with no USB host in use. Mount
+  behaviour is unchanged; SD streaming on hardware has not been re-verified
+  since the change.
 - **One shared current Track across the UI.** Play, Sample Manager, Voice and
   the Sample Browser each kept a private "current slot", so "which Track?" had
   four different answers at once. They now read one shared value

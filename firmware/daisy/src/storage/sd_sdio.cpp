@@ -4,13 +4,22 @@
 
 #if WAVEX_DAISY_SD_CARD_ENABLED && (WAVEX_DAISY_SD_CARD_BACKEND == 1)
 
-#include "fatfs.h"
 #include "ff.h"
+#include "ff_gen_drv.h"
 #include "per/gpio.h"
 #include "per/sdmmc.h"
 #include "sys/system.h"
+#include "util/sd_diskio.h"
 
 extern "C" SD_HandleTypeDef hsd1;  // libDaisy per/sdmmc.cpp
+
+// FatFs asks for a timestamp when it creates or updates a file. libDaisy's
+// FatFSInterface used to supply this (sys/fatfs.cpp); it is here now because
+// that class is deliberately not used - see s_sd_path below. No RTC, so the
+// same fixed answer libDaisy gave.
+extern "C" DWORD get_fattime(void) {
+    return 0;
+}
 
 using namespace daisy;
 
@@ -19,7 +28,15 @@ namespace Storage {
 namespace SdSdio {
 
 static SdmmcHandler s_sdmmc;
-static FatFSInterface s_fsi;
+// The SD volume, linked to libDaisy's SD_Driver directly with
+// FATFS_LinkDriver() rather than through daisy::FatFSInterface. That wrapper
+// references both SD_Driver and USBH_Driver unconditionally, so merely
+// instantiating it links the whole USB host MSC stack (usb_host.cpp,
+// usbh_core/ctlreq/ioreq/pipes/msc/msc_bot/msc_scsi, HAL_HCD - ~13 KB of
+// flash and 2 KB of RAM) into a firmware that has no USB host port in use.
+// For MEDIA_SD its Init() is exactly the one FATFS_LinkDriver() call below.
+static FATFS s_sd_fs;
+static char s_sd_path[4] = "";  // filled by FATFS_LinkDriver ("0:/")
 static GPIO s_cd_pin;
 
 namespace {
@@ -92,7 +109,7 @@ int s_negotiate_index = 0;
 // speed, which is what "no card opens any more" was.
 bool s_sd_brought_up = false;
 // FATFS_LinkDriver() claims a slot in a fixed-size global volume table and is
-// NOT idempotent, so calling FatFSInterface::Init() per attempt leaked a slot
+// NOT idempotent, so linking the driver per attempt leaked a slot
 // each time and quickly returned ERR_TOO_MANY_VOLUMES - the "FatFS link
 // failed" on the second and third speeds. The link is independent of the
 // mount (unmounting does not release it), so it is done exactly once.
@@ -155,16 +172,14 @@ bool TrySpeed(int index, bool auto_format) {
     }
 
     if (!s_fs_linked) {
-        FatFSInterface::Config fcfg{};
-        fcfg.media = FatFSInterface::Config::MEDIA_SD;
-        if (s_fsi.Init(fcfg) != FatFSInterface::Result::OK) {
+        if (FATFS_LinkDriver(&SD_Driver, s_sd_path) != 0) {
             WaveX::Log::PrintLine("SD: FatFS link failed at %s", kSpeeds[index].name);
             return false;
         }
         s_fs_linked = true;
     }
 
-    FATFS& fs = s_fsi.GetSDFileSystem();
+    FATFS& fs = s_sd_fs;
     if (f_mount(&fs, "/", 0) != FR_OK) {
         return false;
     }
@@ -405,7 +420,7 @@ bool InitAndMount(DaisySeed& hw, bool auto_format) {
         return false;
     }
 
-    FATFS& fs = s_fsi.GetSDFileSystem();
+    FATFS& fs = s_sd_fs;
     // Use delayed mount (0) as per libDaisy standard - mount happens on first filesystem access
     WaveX::Log::PrintLine("SD: Mounting filesystem (delayed mount)...");
 
