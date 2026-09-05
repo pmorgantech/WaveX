@@ -297,12 +297,9 @@
 #define WAVEX_ESP_PCNT1_ENABLED 1
 #endif
 
-// CD74HC4067 16-channel Analog Multiplexer
-#ifndef WAVEX_ESP_MUX_ENABLED
-#define WAVEX_ESP_MUX_ENABLED 0  // Currently disabled, using encoder instead
-#endif
-
-// TCA8418 8x8 Capacitive Button Matrix
+// TCA8418 I2C keypad controller (up to 8 rows x 10 columns, hardware
+// debounce, event FIFO, INT). Panel keys, encoder push switches and - with
+// the Phase 2 pad grid - the 16 pads all go through it (panel-controls.md).
 #ifndef WAVEX_ESP_BUTTON_MATRIX_ENABLED
 #define WAVEX_ESP_BUTTON_MATRIX_ENABLED 1
 #endif
@@ -324,13 +321,15 @@
 
 // DIN MIDI Input (ESP32 UART2 - pins/baud in pin_config.h)
 //
-// OFF since 2026-09-04: WAVEX_ESP_MIDI_RX is GPIO24, which on the ESP32-P4 is
-// also USB D- of the chip's built-in USB-Serial/JTAG port - the fast flash
-// path. With that cable plugged in UART2 samples USB traffic and the parser
-// forwards it to the Daisy as ~700 note-on/off per second (note numbers
-// 0/4/8/32/64). Re-enable once DIN MIDI RX is moved to a pin that is not
-// GPIO24/25 (pin_config.h; the previous GPIO33 collided with the encoder).
-// USB MIDI (WAVEX_ESP_USB_MIDI_ENABLED) is unaffected.
+// OFF since 2026-09-04: WAVEX_ESP_MIDI_RX was GPIO24, which on the ESP32-P4
+// is also USB D- of the chip's built-in USB-Serial/JTAG port - the fast flash
+// path. With that cable plugged in UART2 sampled USB traffic and the parser
+// forwarded it to the Daisy as ~700 note-on/off per second (note numbers
+// 0/4/8/32/64). The pins moved on 2026-09-05 (pin_config.h); this stays 0
+// until the DIN receiver is physically on the new RX pin - an open UART RX
+// input reads noise, and the storm detector in midi_task.cpp would be all
+// that stood between that and the Daisy. USB MIDI
+// (WAVEX_ESP_USB_MIDI_ENABLED) is a different controller and unaffected.
 #ifndef WAVEX_ESP_DIN_MIDI_ENABLED
 #define WAVEX_ESP_DIN_MIDI_ENABLED 0
 #endif
@@ -602,7 +601,10 @@
 #define WAVEX_PCNT1_THRESH_NEG -4
 #endif
 #endif
-// Optional LED driver configuration (e.g., TLC5947)
+// Panel LEDs (TLC5947 chain), endless pots (MCP3008) and the button matrix
+// sizing. PLANNED, not as-built: no driver reads these yet. The design that
+// consumes them is docs/features/panel-controls.md; 48 channels = two chained
+// TLC5947s, four endless pots = the eight channels of one MCP3008.
 #ifndef WAVEX_LED_CHANNELS
 #define WAVEX_LED_CHANNELS 48
 #endif
@@ -701,27 +703,6 @@
 #endif
 #endif
 
-// 4067 Mux Configuration
-#if WAVEX_ESP_MUX_ENABLED
-// ADC configuration for mux
-#ifndef WAVEX_4067_ADC_UNIT
-#define WAVEX_4067_ADC_UNIT ADC_UNIT_1
-#endif
-
-#ifndef WAVEX_4067_ADC_CHANNEL
-#define WAVEX_4067_ADC_CHANNEL ADC_CHANNEL_0
-#endif
-
-// Mux address pins configuration
-#ifndef WAVEX_4067_ADDR_PINS
-#define WAVEX_4067_ADDR_PINS {33, 34, 35, 36}
-#endif
-
-#ifndef WAVEX_4067_ENABLE_PIN
-#define WAVEX_4067_ENABLE_PIN 37
-#endif
-#endif
-
 // TCA8418 Button Matrix Configuration
 #if WAVEX_ESP_BUTTON_MATRIX_ENABLED
 // I2C configuration
@@ -773,9 +754,11 @@
 // WAVEX_PCNT1_ENABLED, WAVEX_4067_MUX_ENABLED, WAVEX_TCA8418_BUTTON_MATRIX_ENABLED
 // and WAVEX_USB_MIDI_ENABLED - and an undefined identifier in #if expands to 0,
 // so the guard silently covered only the audio engine and the LCD. The real
-// names all carry the WAVEX_ESP_ prefix.
+// names all carry the WAVEX_ESP_ prefix. (The CD74HC4067 mux flag was removed
+// 2026-09-05 along with the part: its plan predated the MCP3008 and its
+// address pins were not on this board's header.)
 #if (WAVEX_AUDIO_ENGINE_ENABLED || WAVEX_ESP_ENCODER_PCNT_ENABLED || WAVEX_ESP_PCNT1_ENABLED || \
-     WAVEX_ESP_MUX_ENABLED || WAVEX_ESP_BUTTON_MATRIX_ENABLED || WAVEX_LCD_DISPLAY_ENABLED ||   \
+     WAVEX_ESP_BUTTON_MATRIX_ENABLED || WAVEX_LCD_DISPLAY_ENABLED ||                            \
      WAVEX_ESP_USB_MIDI_ENABLED) &&                                                             \
     !WAVEX_INTER_MCU_LINK_ENABLED
 #error "Inter-MCU link must be enabled when using components that depend on it"

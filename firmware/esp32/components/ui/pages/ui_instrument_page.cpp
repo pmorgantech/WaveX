@@ -593,11 +593,12 @@ void UIInstrumentPage::onInput(const InputEvent& evt) {
                 moveParam(evt.steps() > 0 ? +1 : -1);
             }
             break;
-        case InputType::EncoderDown:
-            moveStage(+1);
-            break;
         case InputType::EncoderUp:
-            moveStage(-1);
+        case InputType::EncoderDown:
+            // Clockwise (positive steps()) is the next stage. EncoderDown used
+            // to be "next" - compensating for the encoder's swapped phases,
+            // now fixed at the source in pin_config.h (2026-09-05).
+            moveStage(evt.steps() > 0 ? +1 : -1);
             break;
         case InputType::EncoderClick:
             // Click toggles between walking the list and changing the value, so

@@ -183,9 +183,13 @@ protocol migration.
 
 ### ESP32 pin verification
 
-The dormant SPI2 assignment collides with PCNT1, and the keypad matrix wiring
-is unverified. Resolve both from the schematic and panel/continuity testing
-before enabling SPI or treating the keypad as verified.
+`pin_config.h` was reconciled against the ESP32-P4-WIFI6 header on 2026-09-05
+(the SPI2/PCNT collision is gone; see `features/panel-controls.md`). What is
+left is bench work, tracked in `roadmap.md` § Outstanding hardware
+verification: which encoder is physically wired and to what, and the keypad
+matrix geometry. The dormant SPI-slave link's five pins stay reserved until
+the SPI revival decision above is made; releasing them for the panel is the
+alternative if that decision is "never".
 
 ### Logging policy
 
@@ -198,18 +202,6 @@ needs, not the roughly 4 KB text saving at WARN alone.
 `WAVEX_DAISY_UART_PERF_DEBUG` gates backend link counters. Measure its
 hot-path cost before deciding whether cheap counts should remain enabled in
 release and whether the flag follows the build profile.
-
-### DIN MIDI RX must move off GPIO24 (USB-Serial/JTAG D-)
-
-`WAVEX_ESP_MIDI_RX` is GPIO24, which on the ESP32-P4 is USB D- of the chip's
-built-in USB-Serial/JTAG port - the fast flash path. With that cable plugged
-in UART2 parsed USB traffic as MIDI and forwarded ~700 note-on/off per second
-to the Daisy (2026-09-04; note numbers 0/4/8/32/64). Pulling the pin up broke
-the JTAG port instead. `WAVEX_ESP_DIN_MIDI_ENABLED` therefore defaults to 0
-until DIN MIDI RX (and ideally TX, GPIO32) is assigned a pin that is not
-GPIO24/25 in `pin_config.h`; the previous GPIO33 collided with the encoder.
-A storm detector in `midi_task.cpp` now logs a one-shot warning if this ever
-recurs. USB MIDI is unaffected.
 
 ### Filter: promote slope, drive and topology to real parameters
 

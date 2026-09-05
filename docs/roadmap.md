@@ -1,7 +1,7 @@
 # WaveX Implementation Roadmap
 
 **Status:** Canonical implementation order. **Current phase:** Phase 2.
-**Last updated:** 2026-09-04.
+**Last updated:** 2026-09-05.
 
 This document lists only open work. Completed work belongs in `CHANGELOG.md`
 and git history. Code-complete but unverified hardware behavior remains open in
@@ -69,10 +69,39 @@ The scheduler and protocol core are host-tested. Open work:
 1. Drive `SequencerTransport::Tick()` from the audio callback and turn events
    into sample-offset voice triggers with double-buffered edit-between-steps
    handling.
-2. Serialize MIDI clock out on the ESP32's DIN and USB paths.
-3. Build the pad grid, step editor, kit editor, and TLC5947 LED feedback.
+2. Serialize MIDI clock out on the ESP32's DIN and USB paths (needs 2.P.5).
+3. Build the pad grid, step editor, kit editor, and TLC5947 LED feedback
+   (needs 2.P.1–3).
 4. Persist kits, patterns, and songs atomically through WXCF.
 5. Apply per-step parameter locks to trigger parameters.
+
+### 2.P — Panel controls and MIDI I/O (prerequisite for items 2 and 3)
+
+Design: `features/panel-controls.md` (decided 2026-09-05). Today the panel
+is touch plus two PCNT encoders and four mapped keys; no LED or pot driver
+exists, and DIN MIDI is compiled out because its RX pin was the flash port.
+Stages, one commit each:
+
+1. `PanelKey`/`PanelLed` model and key map: logical keys for the six
+   softkeys, Shift, the root-menu jump keys, Track ±, transport and pads;
+   `SoftkeyBar::press(n)`, `UINavigator::jumpToRoot()`, `KEY <name>` on
+   the console, a Diagnostics Panel tab.
+2. TCA8418 interrupt-driven keypad task (fallback poll retained).
+3. `panel_task` owning SPI2: TLC5947 chain, LED policy, `LEDS` in `STATE`;
+   absorbs `pcnt_task`.
+4. MCP3008 + endless-pot decoder (host-tested), calibration store, the
+   four-`EncoderBinding` page contract and strip widget; first consumers
+   are the Instrument and Play pages.
+5. MIDI: DIN back on at its new pins, UART2 TX ring shared with USB MIDI
+   out, DIN/USB latency measured.
+
+Stage 0 (pin reconciliation against the ESP32-P4-WIFI6 header, MIDI pins
+moved, CD74HC4067 dropped) landed 2026-09-05.
+
+**Gate (2.P):** from the panel alone — jump to Instrument, change cutoff on a
+pot and hear it, latch Shift and fire a shifted softkey, BACK out — with
+every LED correct throughout; DIN and USB MIDI notes sound; `make test` and
+`make test-hil` green.
 
 **Gate:** program and perform a four-track pattern with swing from the panel;
 remain MIDI-clock-synced to a DAW for ten minutes without audible drift.
@@ -145,7 +174,8 @@ The following code paths are open until observed on the target:
 | Partition migration | Flash, boot, and confirm settings persist. |
 | Audio formats | Audition 44.1 and 48 kHz WAVs; confirm pitch. |
 | UART and SD | Sustain traffic during streaming; run read and hot-unmount soak tests. |
-| MIDI latency | Measure DIN and USB input-to-sound latency; target under 5 ms. |
+| MIDI latency | Measure DIN and USB input-to-sound latency; target under 5 ms. USB MIDI enumerates on the USB 2.0 HS controller — the board's 4-pin USB connector, not the Type-C — and that has never been confirmed on the bench. DIN waits on 2.P.5 (receiver on the new RX pin). |
+| Panel pins (2026-09-05) | `pin_config.h` was rewritten against the ESP32-P4-WIFI6 header. The bench encoder is PCNT unit 1 (confirmed 2026-09-05); its phases were swapped so clockwise counted negative, and three pages had compensated for it — fixed at the source and in those pages. Verify: clockwise now increases values / moves forward on **every** page (Play cutoff, Sample Edit, Instrument stages, Sample Manager focus, Sample Browser list). Verify the TCA8418 matrix geometry (`WAVEX_TCA8418_ROWS/COLUMNS`, never confirmed against the wiring) from the 2.P.1 Diagnostics Panel tab. Scope an endless pot's two wipers before calibrating (the decoder assumes triangle waves). |
 | Diagnostics | Open the page and verify live telemetry arrives. |
 | Digital voices | Trigger RAM-resident notes, sweep live parameters, and judge SVF response/resonance. |
 | Callback budget | Establish the first recurring callback-headroom report: DWT-measure SVF (both topologies, 24 dB, drive), DTCM placement, mixer, and 480 MHz behavior with eight voices on the persistent QSPI `-O2` image, plus a zero-underrun soak. Record it in `callback-performance-log.md` using the gate in `performance_monitoring.md`. |

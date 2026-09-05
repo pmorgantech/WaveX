@@ -69,11 +69,6 @@ These components are used by both Daisy and ESP32:
   - Configurable via `WAVEX_ENCODER_INPUT_ENABLED` and `WAVEX_ENCODER_IRQ_ENABLED`
   - Includes PCNT unit, channel, and filter configuration
 
-- **CD74HC4067 Mux** (`WAVEX_4067_MUX_ENABLED`)
-  - Controls the 16-channel analog multiplexer
-  - Currently disabled (using encoder instead)
-  - Includes ADC and address pin configuration
-
 - **TCA8418 Button Matrix** (`WAVEX_TCA8418_BUTTON_MATRIX_ENABLED`)
   - Controls the 8x8 capacitive button matrix
   - Currently disabled (using encoder instead)

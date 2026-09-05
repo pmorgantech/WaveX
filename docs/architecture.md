@@ -1,7 +1,7 @@
 # WaveX System Architecture
 
 **Status**: Canonical architecture document — this file is the single source of truth for system design.
-**Last updated**: 2026-09-04 (Track / Instrument / Bank / Sample Pool model; two-oscillator Instrument)
+**Last updated**: 2026-09-05 (panel controls / USB port facts in §3.1; Track / Instrument / Bank / Sample Pool model 2026-09-04)
 **Supersedes**: the former `system-architecture.md`, `communication-protocol.md` and `daisy_devel.md`, which carried mutually contradictory hardware claims (ESP32-S3 vs P4, UART vs SPI link, conflicting pin tables). Deleted; see git history.
 
 When this document and the code disagree, the code wins for *as-built* sections and this document wins for *target design* sections; each section is labeled. Pin assignments live in exactly one place: `firmware/shared/config/pin_config.h`. Hardware feature flags live in `firmware/shared/config/hardware_config.h`. Do not duplicate pin tables into documentation.
@@ -72,10 +72,10 @@ The **file browsing model** follows from the storage split: the SD card is on th
 | Frontend MCU | ESP32-P4 (Waveshare ESP32-P4-WIFI6, 16 MB flash, PSRAM hex-mode @200 MHz) | — | working |
 | Display | 5" 1280×720, HX8394 controller | MIPI-DSI 2-lane | working |
 | Touch | GT911 capacitive | I2C0 (shared) | working |
-| Button matrix | TCA8418, 8×8 | I2C0 (shared) + INT | driver present |
-| Encoders | PCNT quadrature (+ MCP3008 ADC plan for endless encoders/pots) | PCNT / SPI2 | PCNT working |
-| LEDs | TLC5947 48-ch PWM | SPI2 | planned |
-| MIDI | DIN via UART2 @31250; USB MIDI | UART/USB | partial |
+| Button matrix | TCA8418 | BSP I2C bus (shared with touch) + INT (INT not yet used) | driver present; four keys mapped — full panel key model is Phase 2.P (`features/panel-controls.md`) |
+| Encoders | 2× PCNT quadrature (PEC11R, nav); 4× endless pots via MCP3008 planned | PCNT / SPI2 | PCNT unit 1 working (the bench encoder); MCP3008 no driver yet (2.P.4) |
+| LEDs | 2× TLC5947 chained | SPI2 (one owner task) | planned (2.P.3); no driver yet |
+| MIDI | DIN via UART2 @31250 (compiled out until the receiver is rewired to the new pins, 2.P.5); USB MIDI device on the USB 2.0 **HS** OTG controller — the board's 4-pin USB connector, independent of the USB-Serial/JTAG flash port | UART / USB HS | USB in works; no MIDI out on either path yet |
 | Backend MCU | Daisy Seed rev (STM32H750, 480 MHz, 64 MB SDRAM, 8 MB QSPI) | — | working |
 | Audio codec | Built-in (stereo in/out, 24-bit) | SAI1 | working |
 | Multi-out DAC | PCM1690 8-ch | SAI2 TDM-8 + I2C control | planned (Phase: analog voice board) |
@@ -170,7 +170,7 @@ only inline magic numbers:
 | `ui_task` | 2 | 16384 | 1 | 32 ms delay | Takes the LVGL port lock per input event |
 | LVGL port task | 4 | 7168 | any | esp_lvgl_port | Owns the tick and the display; created by the BSP |
 | `pcnt_task` | 5 | 4096 | any | 2 ms delay | Polls quadrature counters; consumer runs at ~31 Hz |
-| `tca8418_task` | 5 | 4096 | 1 | 10 ms delay | Polls the keypad event FIFO; does not use the INT line |
+| `tca8418_task` | 5 | 4096 | 1 | 10 ms delay | Polls the keypad event FIFO; does not use the INT line (2.P.2 makes it INT-driven) |
 | `din_midi` | 5 | 4096 | any | UART read, 100 ms timeout | Bounded so it can observe a stop request |
 | `usb_midi` | 5 | 4096 | any | task notification | Woken by TinyUSB's device task |
 | `log_drain` | 1 | 3072 | any | 20 ms delay | Drains the log ring to the console |
@@ -402,6 +402,7 @@ These rules are mandatory for all new code. Most past instability (SPI corruptio
 | Track/Instrument hierarchy and ownership | `features/track-and-patch-model.md` |
 | Instrument model (presets/zones/velocity layers, WXCF container) | `features/instrument-model.md` |
 | MIDI clock sync (tempo follower) | `features/midi-sync-tempo-follower.md` |
+| Panel controls (keys, LEDs, endless pots, MIDI I/O ports) | `features/panel-controls.md` |
 | Melodic sequencing / live record | `features/melodic-sequencing.md` |
 | Param locks, mod matrix, LFOs | `features/param-locks-and-modulation.md` |
 | Sampling & recording | `features/sampling-and-recording.md` |

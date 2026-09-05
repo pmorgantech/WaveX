@@ -41,6 +41,26 @@ versioning and release process.
   notes, moving a Track to another channel takes effect both ways, and a bad
   `midi_in` is refused. Backend-only, so it needs no MIDI cable and does not
   depend on the frontend's browser.
+- `docs/features/panel-controls.md`: the design for the physical panel —
+  logical key/LED model, keypad interrupt, a single task owning SPI2 for the
+  TLC5947 LED chain and the MCP3008 behind four endless pots, a per-page
+  four-knob binding contract, and DIN + USB MIDI I/O — with its port budget,
+  parts reassessment and staged plan. Entered in the roadmap as Phase 2.P,
+  a prerequisite for the pad grid and MIDI clock out.
+
+### Changed
+
+- **ESP32 pin allocation** (`pin_config.h`) reconciled against the Waveshare
+  ESP32-P4-WIFI6 header. Stale ESP32-S3-era entries that named pins the
+  board does not expose (MIPI lanes, touch reset/interrupt, a WaveX I2C bus
+  that never existed, the encoder push) are gone; the first encoder's
+  channel B moves off a non-existent pin; SPI2 no longer collides with the
+  second PCNT encoder; DIN MIDI RX/TX leave the USB-Serial/JTAG pin for an
+  adjacent free pair (DIN stays compiled out until the receiver is rewired);
+  the second full-speed USB pair is reserved for a future host port. The
+  CD74HC4067 mux plan and its flag are removed from `hardware_config.h`.
+  Nothing wired today moves except the first encoder's B channel, which
+  could not have been connected as defined.
 
 ### Removed
 
@@ -55,6 +75,16 @@ versioning and release process.
 
 ### Fixed
 
+- Clockwise on the panel encoder decremented values on the Play and Sample
+  Edit pages while feeling right in the Sample Browser, Sample Manager and
+  Instrument stages. Root cause was one level down: the encoder (PCNT unit 1)
+  had its A/B phases swapped in `pin_config.h`, so clockwise counted negative
+  and arrived at pages as `EncoderDown`. The pages that felt right were the
+  ones that had (unknowingly) compensated by treating `EncoderDown` as
+  "forward"; the pages honouring the documented clockwise-is-positive
+  contract were the ones that looked broken. The phases are corrected at the
+  source and the three compensating pages now read `InputEvent::steps()`
+  like the rest, so clockwise is forward/increase everywhere.
 - The debug console's `NOTE ... MIDI` form rejected MIDI channel 16: Track
   indices (0..15) and MIDI channels (1..16) were bounds-checked with one
   shared comparison. Found on the bench by the new routing tests.

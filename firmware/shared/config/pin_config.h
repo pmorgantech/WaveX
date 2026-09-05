@@ -9,9 +9,6 @@
  * It serves as the single source of truth for all hardware pin configurations.
  *
  * ⚠️  IMPORTANT: Edit pin assignments ONLY in this file
- * ⚠️  UNVERIFIED: the ESP32 assignments below were written for an
- *     ESP32-S3-DevKitC-1 and have not been re-checked against the
- *     ESP32-P4 board this firmware actually targets.
  */
 
 #ifdef __cplusplus
@@ -24,85 +21,104 @@ extern "C" {
 
 #ifdef ESP_PLATFORM
 
-// Pins for ESP32-P4-WIFI6
-// The GPIO available on this board are:
-// GPIO2-GPIO5, GPIO7, GPIO8, GPIO20-GPIO33, GPIO46-GPIO52
+// Board: Waveshare ESP32-P4-WIFI6. Its two 2x20 headers expose exactly 27
+// GPIOs (Waveshare pin-definition diagram, re-checked 2026-09-05):
+//   GPIO2-5, GPIO7, GPIO8, GPIO20-33, GPIO46-52
+// Nothing else on the chip is reachable: MIPI-DSI/CSI, the USB 2.0 HS pair,
+// the TF-card SDMMC pads (GPIO39-45) and the ESP32-C6 SDIO are on-board nets.
+// A pin that is not in that list cannot be wired, whatever a define says -
+// the previous revision of this section carried GPIO14/15/34/40, none of
+// which exist on the header (it was written for an ESP32-S3 DevKit).
+//
+// Not GPIO, and not in this file:
+//   - GPIO7/GPIO8 are the BSP's I2C bus (SDA/SCL, waveshare__esp32_p4_nano):
+//     GT911 touch via the display FPC and the TCA8418 keypad via the header.
+//     The code takes bsp_i2c_get_handle(); there is no WaveX-owned I2C bus.
+//   - GPIO24/GPIO25 are USB D-/D+ of the USB-Serial/JTAG controller: the
+//     flash and debug port. Never claim them as GPIO (see the DIN MIDI note
+//     in hardware_config.h for what happened when UART2 RX sat on GPIO24).
+//   - USB MIDI runs on the USB 2.0 High-Speed OTG controller, whose PHY has
+//     dedicated pins - the board's 4-pin "V D- D+ G" USB connector. It shares
+//     nothing with GPIO24/25.
+//   - GPIO26/GPIO27 are the second full-speed USB transceiver (USB 1.1 OTG
+//     default pair). Left unassigned on purpose: a USB *host* port (USB stick
+//     sample import, a USB MIDI controller) would need them. Do not spend
+//     them on GPIO.
+// The panel allocation below is the plan in docs/features/panel-controls.md;
+// what is wired on the bench today is only the inter-MCU UART, the I2C
+// keypad, and the PCNT encoders.
 
-// MIPI DSI Display Interface (5-DSI-TOUCH-A)
-// MIPI DSI Data Lanes
-#define WAVEX_ESP_DSI_D0P 2   // MIPI DSI Data Lane 0 Positive
-#define WAVEX_ESP_DSI_D0N 3   // MIPI DSI Data Lane 0 Negative
-#define WAVEX_ESP_DSI_D1P 4   // MIPI DSI Data Lane 1 Positive
-#define WAVEX_ESP_DSI_D1N 5   // MIPI DSI Data Lane 1 Negative
-#define WAVEX_ESP_DSI_CLKP 6  // MIPI DSI Clock Positive
-#define WAVEX_ESP_DSI_CLKN 7  // MIPI DSI Clock Negative
-
-// MIPI DSI Control Pins
-#define WAVEX_ESP_DSI_RST 8  // Display Reset
-#define WAVEX_ESP_DSI_BL 9   // Backlight Control
-
-// Touch Interface (GT911 I2C)
-#define WAVEX_ESP_TOUCH_SDA 20  // J3-19: Touch I2C Data
-#define WAVEX_ESP_TOUCH_SCL 21  // J3-4: Touch I2C Clock
-#define WAVEX_ESP_TOUCH_RST 14  // J1-20: Touch Reset
-#define WAVEX_ESP_TOUCH_INT 15  // J1-21: Touch Interrupt
-
-// Inter-MCU Communication (SPI slave to Daisy master) - using user-verified available pins
-#define WAVEX_ESP_SPI_SCLK 48
-#define WAVEX_ESP_SPI_MOSI 49
-#define WAVEX_ESP_SPI_MISO 50
-#define WAVEX_ESP_SPI_CS 51
-// IRQ/ATTN lines for Daisy <-> ESP signaling
-#define WAVEX_ESP_ATTN_OUT 31  // J3-14: ESP Attention output to Daisy (active high)
-
-// Quadrature Encoder (PCNT)
-#define WAVEX_ESP_ENCODER_A 33    // J3-7: PCNT Channel A
-#define WAVEX_ESP_ENCODER_B 34    // J3-8: PCNT Channel B
-#define WAVEX_ESP_ENCODER_BTN 40  // J3-12: Encoder Push Button (optional)
-
-// Additional PCNT Unit (WaveX logical unit 1)
-#define WAVEX_ESP_PCNT1_A 46  // GPIO46: PCNT Unit 1 Channel A
-#define WAVEX_ESP_PCNT1_B 47  // GPIO47: PCNT Unit 1 Channel B
-
-// MIDI UART (UART2)
-// -----------------------------------------------------------------------------
-#define WAVEX_ESP_MIDI_UART_NUM UART_NUM_2
-#define WAVEX_ESP_MIDI_TX 32  // UART2 TX
-#define WAVEX_ESP_MIDI_RX 24  // UART2 RX (moved from GPIO33 to resolve encoder conflict)
-#define WAVEX_ESP_MIDI_BAUD 31250
-
-// Inter-MCU UART (UART1) - control link to Daisy
+// Inter-MCU UART (UART1) - control link to Daisy, the live transport
 #define WAVEX_ESP_UART_INTER_NUM UART_NUM_1
 #define WAVEX_ESP_UART_INTER_TX 22
 #define WAVEX_ESP_UART_INTER_RX 23
 #define WAVEX_ESP_UART_INTER_BAUD 2000000
 #define WAVEX_ESP_UART_INTER_BUF_SIZE 2048
 
-// -----------------------------------------------------------------------------
-// Shared I2C Bus (Touch + TCA8418)
-// -----------------------------------------------------------------------------
-#define WAVEX_ESP_I2C_PORT_NUM I2C_NUM_0
-#define WAVEX_ESP_I2C_SDA 20  // Shared SDA for GT911 + TCA8418
-#define WAVEX_ESP_I2C_SCL 21  // Shared SCL for GT911 + TCA8418
-#define WAVEX_ESP_I2C_SPEED_HZ 400000
-#define WAVEX_ESP_I2C_PULLUPS 1  // Enable internal pull-ups
-#define WAVEX_ESP_BTN_INT 30     // J3-15: Button Interrupt
+// Inter-MCU SPI (SPI3 slave to Daisy master) + ATTN. Compiled out
+// (WAVEX_SPI_LINK_ENABLED=0, link_config.h); the pins stay reserved until
+// the SPI revival decision in backlog.md is made one way or the other.
+#define WAVEX_ESP_SPI_SCLK 48
+#define WAVEX_ESP_SPI_MOSI 49
+#define WAVEX_ESP_SPI_MISO 50
+#define WAVEX_ESP_SPI_CS 51
+#define WAVEX_ESP_ATTN_OUT 31  // ESP attention output to Daisy (active high)
 
-// -----------------------------------------------------------------------------
-// SPI Master #2 (TLC5947 + MCP3008)
-// -----------------------------------------------------------------------------
+// Quadrature encoders (PCNT, 4x decode, PEC11R with detents). Two units;
+// the push switches go into the TCA8418 matrix, not GPIO.
+//
+// Unit 1 is the encoder on the bench (confirmed 2026-09-05): GPIO46/47.
+// Its A phase is on GPIO47 - with A on 46 the count ran negative on a
+// clockwise turn, so clockwise arrived at pages as EncoderDown and every
+// page honouring the "clockwise is positive" contract (InputEvent::steps())
+// ran backwards. Swapping the two here is the wiring fact; pages must not
+// compensate.
+//
+// Unit 0 has nothing wired. Its channel B was GPIO34, which is not on the
+// header (and is a boot strapping pin) - moved to GPIO32 so the pair sits on
+// adjacent header pins (32/33), like unit 1.
+#define WAVEX_ESP_ENCODER_A 33  // PCNT unit 0 channel A
+#define WAVEX_ESP_ENCODER_B 32  // PCNT unit 0 channel B
+#define WAVEX_ESP_PCNT1_A 47    // PCNT unit 1 channel A
+#define WAVEX_ESP_PCNT1_B 46    // PCNT unit 1 channel B
+
+// TCA8418 keypad interrupt (active low, open-drain on the part). Configured
+// as an input today but not yet used to wake the keypad task.
+#define WAVEX_ESP_BTN_INT 30
+
+// DIN MIDI (UART2, 31250 baud). RX was GPIO24 (USB-Serial/JTAG D-) and TX
+// GPIO32; both moved 2026-09-05 to an adjacent header pair. RX needs the
+// optocoupler receiver on the new pin before WAVEX_ESP_DIN_MIDI_ENABLED is
+// turned back on.
+#define WAVEX_ESP_MIDI_UART_NUM UART_NUM_2
+#define WAVEX_ESP_MIDI_RX 20
+#define WAVEX_ESP_MIDI_TX 21
+#define WAVEX_ESP_MIDI_BAUD 31250
+
+// SPI2 master: TLC5947 LED chain + MCP3008 ADC (endless pots). Was 46/47/52,
+// colliding with PCNT unit 1 on 46/47; moved to the adjacent header run
+// GPIO2-5. The MCP3008 has a chip select; the TLC5947 does not - it is a
+// shift register that latches whatever was clocked in when XLAT pulses, so
+// every MCP3008 transaction also shifts garbage through it and the LED frame
+// must always be re-sent in full before XLAT. Per-device clocks: the
+// TLC5947 takes up to 30 MHz, the MCP3008 about 2 MHz at 3.3 V.
 #define WAVEX_ESP_SPI2_HOST SPI2_HOST
-#define WAVEX_ESP_SPI2_MOSI 47
-#define WAVEX_ESP_SPI2_MISO 52
-#define WAVEX_ESP_SPI2_SCLK 46
-#define WAVEX_ESP_SPI2_FREQ_HZ 10000000  // 10 MHz typical for LEDs/ADC
+#define WAVEX_ESP_SPI2_SCLK 2
+#define WAVEX_ESP_SPI2_MOSI 3  // TLC5947 SIN + MCP3008 DIN
+#define WAVEX_ESP_SPI2_MISO 4  // MCP3008 DOUT
+#define WAVEX_ESP_SPI2_FREQ_HZ 10000000
 
-// MCP3008 (ADC for pots)
-#define WAVEX_ESP_MCP3008_CS 29
+#define WAVEX_ESP_MCP3008_CS 5  // ADC #0 (8 channels = 4 endless pots)
 
-// TLC5947 LED Driver
-#define WAVEX_ESP_TLC5947_LAT 28    // Latch pin (XLAT)
-#define WAVEX_ESP_TLC5947_BLANK 27  // Output enable / BLANK
+// TLC5947: XLAT latches the frame; BLANK high forces all outputs off. Wire a
+// pull-up on BLANK so the LEDs stay dark from power-on until the first frame
+// is latched, instead of showing the shift register's random contents.
+#define WAVEX_ESP_TLC5947_LAT 28
+#define WAVEX_ESP_TLC5947_BLANK 29
+
+// Unassigned header GPIO: 52 (earmarked: chip select for a second MCP3008
+// if more than four endless pots or any plain pots are added). GPIO26/27 are
+// reserved for USB, see above.
 
 #endif  // ESP_PLATFORM
 

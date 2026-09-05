@@ -365,15 +365,22 @@ void UISampleBrowser::onInput(const InputEvent& evt) {
                 break;
             }
 
-            // Handle each step of delta separately for responsive scrolling
-            int steps = (evt.delta > 0) ? evt.delta : -evt.delta;
+            // Handle each step of delta separately for responsive scrolling.
+            // Clockwise (positive steps()) walks DOWN the list to the next
+            // entry, like every other list on the device. This used to be
+            // keyed on the event type with EncoderUp meaning "previous", which
+            // only felt right because the encoder's phases were swapped and
+            // clockwise arrived as EncoderDown (fixed in pin_config.h,
+            // 2026-09-05).
+            const int signed_steps = evt.steps();
+            const int steps = (signed_steps > 0) ? signed_steps : -signed_steps;
             bool result = false;
 
             for (int step = 0; step < steps && step < 10; step++) {
-                if (evt.type == InputType::EncoderUp) {
-                    result = wavex_file_browser_navigate_up_entry(file_browser_);
-                } else {
+                if (signed_steps > 0) {
                     result = wavex_file_browser_navigate_down_entry(file_browser_);
+                } else {
+                    result = wavex_file_browser_navigate_up_entry(file_browser_);
                 }
                 if (!result) {
                     ESP_LOGD(TAG, "Navigation reached boundary at step %d/%d", step, steps);
