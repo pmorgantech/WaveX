@@ -596,8 +596,9 @@ void UIInstrumentPage::onInput(const InputEvent& evt) {
         case InputType::EncoderUp:
         case InputType::EncoderDown:
             // Clockwise (positive steps()) is the next stage. EncoderDown used
-            // to be "next" - compensating for the encoder's swapped phases,
-            // now fixed at the source in pin_config.h (2026-09-05).
+            // to be "next" - compensating for a backwards-counting encoder.
+            // Direction is set once per encoder in hardware_config.h
+            // (WAVEX_*_DIRECTION), never in a page.
             moveStage(evt.steps() > 0 ? +1 : -1);
             break;
         case InputType::EncoderClick:

@@ -27,13 +27,20 @@ static wavex_pcnt_config_t s_pcnt_configs[] = {
      .gpio_a = WAVEX_ESP_ENCODER_A,
      .gpio_b = WAVEX_ESP_ENCODER_B,
      .max_glitch_ns = WAVEX_ENCODER_FILTER_NS,
+     .direction = WAVEX_ENCODER_DIRECTION,
      .enabled = WAVEX_ESP_ENCODER_PCNT_ENABLED},
     // Additional PCNT unit
     {.unit = WAVEX_PCNT1_UNIT,
      .gpio_a = WAVEX_ESP_PCNT1_A,
      .gpio_b = WAVEX_ESP_PCNT1_B,
      .max_glitch_ns = WAVEX_PCNT1_FILTER_NS,
+     .direction = WAVEX_PCNT1_DIRECTION,
      .enabled = WAVEX_ESP_PCNT1_ENABLED}};
+
+static_assert(WAVEX_ENCODER_DIRECTION == 1 || WAVEX_ENCODER_DIRECTION == -1,
+              "WAVEX_ENCODER_DIRECTION must be +1 or -1");
+static_assert(WAVEX_PCNT1_DIRECTION == 1 || WAVEX_PCNT1_DIRECTION == -1,
+              "WAVEX_PCNT1_DIRECTION must be +1 or -1");
 
 #define PCNT_CONFIG_COUNT (sizeof(s_pcnt_configs) / sizeof(wavex_pcnt_config_t))
 
@@ -208,7 +215,12 @@ static void pcnt_task(void *pvParameters) {
                 continue;
             }
 
-            int32_t delta = (int32_t)hw_count - reading->last_hw;
+            // The one place direction is decided. Everything downstream -
+            // the UI task's events, InputEvent::steps(), every page - takes
+            // positive as clockwise; a knob whose phases are wired the other
+            // way is corrected here by its hardware_config.h direction, never
+            // by a page.
+            int32_t delta = ((int32_t)hw_count - reading->last_hw) * config->direction;
             reading->last_hw = (int32_t)hw_count;
             if (delta != 0) {
                 const char *unit_name = (config->unit == WAVEX_ENCODER_PCNT_UNIT)

@@ -78,13 +78,15 @@ versioning and release process.
 - Clockwise on the panel encoder decremented values on the Play and Sample
   Edit pages while feeling right in the Sample Browser, Sample Manager and
   Instrument stages. Root cause was one level down: the encoder (PCNT unit 1)
-  had its A/B phases swapped in `pin_config.h`, so clockwise counted negative
-  and arrived at pages as `EncoderDown`. The pages that felt right were the
-  ones that had (unknowingly) compensated by treating `EncoderDown` as
-  "forward"; the pages honouring the documented clockwise-is-positive
-  contract were the ones that looked broken. The phases are corrected at the
-  source and the three compensating pages now read `InputEvent::steps()`
-  like the rest, so clockwise is forward/increase everywhere.
+  counts negative on a clockwise turn as wired, so clockwise arrived at pages
+  as `EncoderDown`. The pages that felt right were the ones that had
+  (unknowingly) compensated by treating `EncoderDown` as "forward"; the pages
+  honouring the documented clockwise-is-positive contract were the ones that
+  looked broken. Direction is now a single per-encoder setting
+  (`WAVEX_ENCODER_DIRECTION`, `WAVEX_PCNT1_DIRECTION` in `hardware_config.h`)
+  applied once in the PCNT task; the three compensating pages read
+  `InputEvent::steps()` like the rest, so clockwise is forward/increase
+  everywhere and no page decides direction.
 - The debug console's `NOTE ... MIDI` form rejected MIDI channel 16: Track
   indices (0..15) and MIDI channels (1..16) were bounds-checked with one
   shared comparison. Found on the bench by the new routing tests.

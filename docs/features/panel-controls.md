@@ -22,7 +22,7 @@ references are the audit trail; re-verify before trusting):
 | Piece | State |
 |---|---|
 | Touch (GT911) | The only `lv_indev` fed by hardware. Bus is the BSP's I2C (`bsp_i2c_get_handle()`), shared with the keypad. |
-| Encoders | Two PCNT units, 4x quadrature decode, glitch filter, polled at 2 ms (`main/pcnt_task.cpp`). Unit 0 posts raw counts; unit 1 divides by the detent constant. Both reach pages as `InputEvent`s. The bench encoder is unit 1 (confirmed 2026-09-05); unit 0 has nothing wired, and its channel B had pointed at a GPIO that is not on the board's header. Unit 1's phases were swapped in config so clockwise counted negative — fixed 2026-09-05 (`pin_config.h`), together with the three pages that had compensated for it. No encoder push handler exists; "encoder click" is TCA8418 keycode 3. |
+| Encoders | Two PCNT units, 4x quadrature decode, glitch filter, polled at 2 ms (`main/pcnt_task.cpp`). Unit 0 posts raw counts; unit 1 divides by the detent constant. Both reach pages as `InputEvent`s. The bench encoder is unit 1 (confirmed 2026-09-05); unit 0 has nothing wired, and its channel B had pointed at a GPIO that is not on the board's header. Unit 1 counts negative on clockwise as wired; direction is now one per-encoder setting in `hardware_config.h` (`WAVEX_*_DIRECTION`) applied in the PCNT task, and the three pages that had compensated were reverted to the shared `steps()` contract (2026-09-05). No encoder push handler exists; "encoder click" is TCA8418 keycode 3. |
 | Keypad (TCA8418) | Driver present and started (`components/ui/src/tca8418_keypad.cpp`), polled at 10 ms, INT pin configured but not used. **Only four keycodes are mapped** (Select, Back, EncoderClick, Shift); every other key is dropped. Matrix geometry (`WAVEX_TCA8418_ROWS/COLUMNS`) has never been verified against the wiring. |
 | Softkeys | Six on-screen buttons, touch only. `SoftkeyBar::focusNext()` / `pressFocused()` exist with no callers — the documented "encoder scrolls softkeys" interaction is not in the binary. |
 | Shift | Latched-and-sticky global modifier in `InputDispatcher::processAll()` with a header chip. Works, driven by keycode 4 today. |
@@ -286,7 +286,7 @@ Driven entirely from navigator/page state — no page sets an LED directly:
 
 | # | Stage | Host-verifiable | Bench |
 |---|---|---|---|
-| 0 | **Pin reconciliation** — `pin_config.h` rewritten against the WIFI6 header; CD74HC4067 removed; MIDI pins moved; encoder phase order corrected. *Done 2026-09-05.* | compiles | clockwise is forward on every page |
+| 0 | **Pin reconciliation** — `pin_config.h` rewritten against the WIFI6 header; CD74HC4067 removed; MIDI pins moved; per-encoder direction flags. *Done 2026-09-05.* | compiles | clockwise is forward on every page |
 | 1 | **`PanelKey` / `PanelLed` model + key map** — enum, table in `hardware_config.h`, `InputEvent` extensions, `KEY <name>` console verb, dispatcher handling for `SOFTn`, jumps, `TRACK±`; `SoftkeyBar::press(n)`; `UINavigator::jumpToRoot()`. Delete the dead `focusNext/pressFocused` or wire them — not both. | HIL: jumps, softkeys via key, Shift row | keycode → key on the Diagnostics tab |
 | 2 | **Keypad INT** — `CFG.KE_IEN`, ISR → notification, fallback poll. | — | latency, no missed keys under a 10-key roll |
 | 3 | **`panel_task` + SPI2 + TLC5947** — absorb `pcnt_task`; LED frame, BLANK, `PanelLeds`, LED policy §4.5, `LEDS` in `STATE`. | HIL: LED state follows navigation | walk test, dark at power-on, no flicker with pot reads |

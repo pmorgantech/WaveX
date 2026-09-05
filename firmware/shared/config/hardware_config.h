@@ -549,6 +549,16 @@
 #define WAVEX_ENCODER_PCNT_UNIT 0
 #endif
 
+// Rotation direction, +1 or -1, applied to the raw count in pcnt_task so that
+// a clockwise turn is a positive count for every consumer. This is the ONLY
+// place an encoder's direction may be set: InputEvent::steps() and every page
+// assume clockwise-is-positive, and a page that compensates for a backwards
+// knob is a bug (three did, until 2026-09-05). Flip the sign here if a knob
+// is wired with its phases the other way round.
+#ifndef WAVEX_ENCODER_DIRECTION
+#define WAVEX_ENCODER_DIRECTION 1
+#endif
+
 // Encoder filter configuration
 #ifndef WAVEX_ENCODER_FILTER_ENABLED
 #define WAVEX_ENCODER_FILTER_ENABLED 1
@@ -571,6 +581,14 @@
 // WaveX logical PCNT unit index for PCNT1 (see WAVEX_ENCODER_PCNT_UNIT).
 #ifndef WAVEX_PCNT1_UNIT
 #define WAVEX_PCNT1_UNIT 1
+#endif
+
+// Rotation direction for the bench encoder (see WAVEX_ENCODER_DIRECTION).
+// -1: as wired, its phases lead the other way, so a clockwise turn counted
+// negative and reached pages as EncoderDown (found 2026-09-05: Play's cutoff
+// fell when the knob went clockwise).
+#ifndef WAVEX_PCNT1_DIRECTION
+#define WAVEX_PCNT1_DIRECTION -1
 #endif
 
 // PCNT1 filter configuration

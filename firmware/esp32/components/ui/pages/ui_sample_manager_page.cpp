@@ -500,8 +500,9 @@ void UISampleManagerPage::editFocused() {
 void UISampleManagerPage::onInput(const InputEvent& evt) {
     switch (evt.type) {
         // Clockwise (positive steps()) moves focus forward. EncoderDown used
-        // to mean forward here - a compensation for the encoder's swapped
-        // phases, fixed at the source in pin_config.h (2026-09-05).
+        // to mean forward here - a compensation for a backwards-counting
+        // encoder. Direction is set once per encoder in hardware_config.h
+        // (WAVEX_*_DIRECTION), never in a page.
         case InputType::EncoderRight:
         case InputType::EncoderLeft:
         case InputType::EncoderUp:

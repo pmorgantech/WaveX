@@ -68,19 +68,16 @@ extern "C" {
 // the push switches go into the TCA8418 matrix, not GPIO.
 //
 // Unit 1 is the encoder on the bench (confirmed 2026-09-05): GPIO46/47.
-// Its A phase is on GPIO47 - with A on 46 the count ran negative on a
-// clockwise turn, so clockwise arrived at pages as EncoderDown and every
-// page honouring the "clockwise is positive" contract (InputEvent::steps())
-// ran backwards. Swapping the two here is the wiring fact; pages must not
-// compensate.
+// Rotation direction is NOT a pin question: each unit has a
+// WAVEX_*_DIRECTION flag in hardware_config.h, applied once in pcnt_task.
 //
 // Unit 0 has nothing wired. Its channel B was GPIO34, which is not on the
 // header (and is a boot strapping pin) - moved to GPIO32 so the pair sits on
 // adjacent header pins (32/33), like unit 1.
 #define WAVEX_ESP_ENCODER_A 33  // PCNT unit 0 channel A
 #define WAVEX_ESP_ENCODER_B 32  // PCNT unit 0 channel B
-#define WAVEX_ESP_PCNT1_A 47    // PCNT unit 1 channel A
-#define WAVEX_ESP_PCNT1_B 46    // PCNT unit 1 channel B
+#define WAVEX_ESP_PCNT1_A 46    // PCNT unit 1 channel A
+#define WAVEX_ESP_PCNT1_B 47    // PCNT unit 1 channel B
 
 // TCA8418 keypad interrupt (active low, open-drain on the part). Configured
 // as an input today but not yet used to wake the keypad task.

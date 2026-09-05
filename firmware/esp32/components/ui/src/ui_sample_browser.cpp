@@ -369,9 +369,9 @@ void UISampleBrowser::onInput(const InputEvent& evt) {
             // Clockwise (positive steps()) walks DOWN the list to the next
             // entry, like every other list on the device. This used to be
             // keyed on the event type with EncoderUp meaning "previous", which
-            // only felt right because the encoder's phases were swapped and
-            // clockwise arrived as EncoderDown (fixed in pin_config.h,
-            // 2026-09-05).
+            // only felt right because the encoder counted backwards and
+            // clockwise arrived as EncoderDown. Direction is set once per
+            // encoder in hardware_config.h (WAVEX_*_DIRECTION), never here.
             const int signed_steps = evt.steps();
             const int steps = (signed_steps > 0) ? signed_steps : -signed_steps;
             bool result = false;

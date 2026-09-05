@@ -44,6 +44,8 @@ typedef struct {
     int gpio_a;              // GPIO pin for signal A
     int gpio_b;              // GPIO pin for signal B
     uint32_t max_glitch_ns;  // Glitch filter width in nanoseconds
+    int8_t direction;        // +1 or -1: applied to every count so clockwise is
+                             // positive for all consumers (hardware_config.h)
     bool enabled;            // Whether this unit is enabled
 } wavex_pcnt_config_t;
 
