@@ -337,6 +337,9 @@ TEST(InstrumentTest, ChokeGroupAndRegionFlowThrough) {
     z.loop_start = 2;
     z.loop_end = 4;
     z.cutoff_hz = 800.0f;
+    // Cutoff is the Instrument's unless the zone claims it (§3.2); this test
+    // is about a zone's OWN fields reaching the trigger, so it claims it.
+    z.flags = ZONE_FLAG_OWN_FILTER_ENV;
     z.pan = 0.25f;
     ins.zones[0] = z;
     FakeSampleBank tracks;
@@ -409,16 +412,15 @@ TEST(InstrumentTest, ModSlotsAreIndependentPerInstrumentAndPerSlotIndex) {
     EXPECT_EQ(tracks.At(2).instrument.mod_slots[3].depth, 12345);
 }
 
-// --- Sample-record inheritance and the live-params flag ------------------
+// --- Sample-record inheritance and Instrument defaults vs zone overrides ---
 //
-// These pin the two things a bare sample bound to a slot (SfzLoader::
-// BindSample, roadmap Phase 2.5 item 1's unification) needs from the
-// resolution path that an SFZ import never did: a zone that leaves its
-// region/loop/gain at 0 inherits the SampleRef's own record (the sidecar
-// markers the editor auditioned), and a zone flagged LIVE_FILTER_ENV takes
-// filter/ADSR from VoiceLiveParams at trigger time rather than its own
-// fields. Both are what let OnNoteOn's old bare-WAV branch be deleted
-// without changing what a pad plays.
+// Two things a bare sample bound to a Track (SfzLoader::BindSample) needs
+// from the resolution path that an SFZ import never did: a zone that leaves
+// its region/loop/gain at 0 inherits the SampleRef's own record (the sidecar
+// markers the editor auditioned), and a zone that does not set
+// ZONE_FLAG_OWN_FILTER_ENV takes filter/ADSR from the **Instrument**
+// (track-and-patch-model.md §3.2) rather than from its own fields - which is
+// what lets a 16-pad kit be given one envelope instead of sixteen.
 
 namespace {
 
@@ -514,42 +516,93 @@ TEST(InstrumentTest, ResolverWithoutRecordLeavesWholeSampleNoLoopUnity) {
     EXPECT_FLOAT_EQ(out[0].gain_mul, 1.0f);
 }
 
-TEST(InstrumentTest, LiveFilterEnvFlagReadsLiveParamsAtTrigger) {
+// A zone with no override follows the Instrument. This is the default and
+// the case the Pad Map depends on: set the envelope once, every pad has it.
+TEST(InstrumentTest, ZoneWithoutOverrideFollowsTheInstrument) {
     Instrument ins;
+    ins.filter.cutoff_hz = 1234.0f;
+    ins.filter.resonance = 0.3f;
+    ins.env.attack_s = 0.2f;
+    ins.env.decay_s = 0.3f;
+    ins.env.sustain = 0.4f;
+    ins.env.release_s = 0.5f;
+
     Zone z = MakeZone(1, 0, 127, 1, 127);
-    z.cutoff_hz = 3000.0f;
+    z.cutoff_hz = 3000.0f;  // present, but not the zone's to use
     z.attack_s = 0.9f;
-    z.flags = ZONE_FLAG_LIVE_FILTER_ENV;
+    z.flags = 0;
     ins.zones[0] = z;
+
     FakeSampleBank samples;
     VoiceTriggerParams out[kMaxLayerTriggers];
-
-    VoiceLiveParams live;
-    live.filter_cutoff_hz = 1234.0f;
-    live.filter_resonance = 0.3f;
-    live.attack_s = 0.2f;
-    live.decay_s = 0.3f;
-    live.sustain_level = 0.4f;
-    live.release_s = 0.5f;
-
-    ASSERT_EQ(ResolveNoteOn(ins, 0, 60, 100, samples.Resolver(), out, kMaxLayerTriggers, &live), 1);
+    ASSERT_EQ(ResolveNoteOn(ins, 0, 60, 100, samples.Resolver(), out, kMaxLayerTriggers), 1);
     EXPECT_FLOAT_EQ(out[0].filter_cutoff_hz, 1234.0f);
     EXPECT_FLOAT_EQ(out[0].filter_resonance, 0.3f);
     EXPECT_FLOAT_EQ(out[0].attack_s, 0.2f);
     EXPECT_FLOAT_EQ(out[0].decay_s, 0.3f);
     EXPECT_FLOAT_EQ(out[0].sustain_level, 0.4f);
     EXPECT_FLOAT_EQ(out[0].release_s, 0.5f);
+}
 
-    // No live state offered: the zone's own fields, not garbage.
+// The override is what an SFZ import sets on every region, so an imported
+// Instrument keeps sounding exactly as its file says.
+TEST(InstrumentTest, ZoneWithOverrideKeepsItsOwnFilterAndEnvelope) {
+    Instrument ins;
+    ins.filter.cutoff_hz = 1234.0f;
+    ins.env.attack_s = 0.2f;
+
+    Zone z = MakeZone(1, 0, 127, 1, 127);
+    z.cutoff_hz = 3000.0f;
+    z.attack_s = 0.9f;
+    z.decay_s = 0.8f;
+    z.sustain = 0.7f;
+    z.release_s = 0.6f;
+    z.flags = ZONE_FLAG_OWN_FILTER_ENV;
+    ins.zones[0] = z;
+
+    FakeSampleBank samples;
+    VoiceTriggerParams out[kMaxLayerTriggers];
     ASSERT_EQ(ResolveNoteOn(ins, 0, 60, 100, samples.Resolver(), out, kMaxLayerTriggers), 1);
     EXPECT_FLOAT_EQ(out[0].filter_cutoff_hz, 3000.0f);
     EXPECT_FLOAT_EQ(out[0].attack_s, 0.9f);
+    EXPECT_FLOAT_EQ(out[0].decay_s, 0.8f);
+    EXPECT_FLOAT_EQ(out[0].sustain_level, 0.7f);
+    EXPECT_FLOAT_EQ(out[0].release_s, 0.6f);
+}
 
-    // Flag clear: live state offered but ignored - the zone owns its values.
-    ins.zones[0].flags = 0;
-    ASSERT_EQ(ResolveNoteOn(ins, 0, 60, 100, samples.Resolver(), out, kMaxLayerTriggers, &live), 1);
-    EXPECT_FLOAT_EQ(out[0].filter_cutoff_hz, 3000.0f);
-    EXPECT_FLOAT_EQ(out[0].attack_s, 0.9f);
+// Resonance has no per-zone field, so it comes from the Instrument whether
+// the zone overrides the rest or not - stated here so a later zone
+// resonance field cannot change this silently.
+TEST(InstrumentTest, ResonanceAlwaysComesFromTheInstrument) {
+    Instrument ins;
+    ins.filter.resonance = 0.42f;
+    FakeSampleBank samples;
+    VoiceTriggerParams out[kMaxLayerTriggers];
+
+    for (uint8_t flags: {uint8_t(0), uint8_t(ZONE_FLAG_OWN_FILTER_ENV)}) {
+        Zone z = MakeZone(1, 0, 127, 1, 127);
+        z.flags = flags;
+        ins.zones[0] = z;
+        ASSERT_EQ(ResolveNoteOn(ins, 0, 60, 100, samples.Resolver(), out, kMaxLayerTriggers), 1);
+        EXPECT_FLOAT_EQ(out[0].filter_resonance, 0.42f) << "flags " << int(flags);
+    }
+}
+
+// A default Instrument must resolve to exactly the values the engine used
+// before it owned any: an untouched Track sounds the same as it always did.
+TEST(InstrumentTest, DefaultInstrumentMatchesTheOldEngineDefaults) {
+    Instrument ins;
+    ins.zones[0] = MakeZone(1, 0, 127, 1, 127);
+    FakeSampleBank samples;
+    VoiceTriggerParams out[kMaxLayerTriggers];
+
+    ASSERT_EQ(ResolveNoteOn(ins, 0, 60, 100, samples.Resolver(), out, kMaxLayerTriggers), 1);
+    EXPECT_FLOAT_EQ(out[0].filter_cutoff_hz, 20000.0f);
+    EXPECT_FLOAT_EQ(out[0].filter_resonance, 0.0f);
+    EXPECT_FLOAT_EQ(out[0].attack_s, 0.001f);
+    EXPECT_FLOAT_EQ(out[0].decay_s, 0.05f);
+    EXPECT_FLOAT_EQ(out[0].sustain_level, 0.8f);
+    EXPECT_FLOAT_EQ(out[0].release_s, 0.1f);
 }
 
 TEST(InstrumentTest, FreshInstrumentHasNoOrigin) {

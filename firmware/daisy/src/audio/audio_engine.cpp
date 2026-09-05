@@ -172,6 +172,49 @@ static WaveX::AudioEngine::VoiceLiveParams s_voice_live_active WAVEX_DTCM_DATA;
 static WaveX::AudioEngine::VoiceLiveParams s_voice_live_pending;
 static SnapshotMailbox<WaveX::AudioEngine::VoiceLiveParams> s_voice_live_mailbox;
 
+// Per-Track staging for the live values the Instrument does NOT own yet.
+// Filter and envelope moved onto Instrument in stage 4; pan and pitch become
+// its trim_pan/transpose in stage 5, and the filter topology becomes
+// FilterType, so those three stay here until then. Deliberately not a second
+// copy of anything Instrument owns - one field, one owner.
+struct TrackLiveExtras {
+    float pan = 0.5f;
+    float pitch_semitones = 0.0f;
+    WaveX::AudioEngine::FilterConfig filter;
+};
+static TrackLiveExtras s_track_live[WaveX::AudioEngine::kNumTracks];
+
+// The runtime filter A/B (WAVEX-FILTER) is a bench listening aid and is
+// deliberately engine-wide, so it gets its own mailbox rather than riding on
+// the per-Track live snapshot - pushing it through that would have made a
+// global switch carry one Track's cutoff and envelope to every voice.
+static WaveX::AudioEngine::FilterConfig s_filter_config_active WAVEX_DTCM_DATA;
+static WaveX::AudioEngine::FilterConfig s_filter_config_pending;
+static SnapshotMailbox<WaveX::AudioEngine::FilterConfig> s_filter_config_mailbox;
+
+// The message the callback applies, composed from the Instrument (the store)
+// plus the extras above. Nothing else may build a VoiceLiveParams for a
+// Track: composing in one place is what keeps the Instrument authoritative.
+static WaveX::AudioEngine::VoiceLiveParams ComposeTrackLive(
+    uint8_t track,
+    const WaveX::AudioEngine::InstrumentFilter& filter,
+    const WaveX::AudioEngine::InstrumentEnv& env) {
+    WaveX::AudioEngine::VoiceLiveParams live;
+    const TrackLiveExtras& extras =
+        s_track_live[track < WaveX::AudioEngine::kNumTracks ? track : 0];
+    live.track = track;
+    live.filter_cutoff_hz = filter.cutoff_hz;
+    live.filter_resonance = filter.resonance;
+    live.attack_s = env.attack_s;
+    live.decay_s = env.decay_s;
+    live.sustain_level = env.sustain;
+    live.release_s = env.release_s;
+    live.pan = extras.pan;
+    live.pitch_semitones = extras.pitch_semitones;
+    live.filter = extras.filter;
+    return live;
+}
+
 // Modulation matrix (roadmap Phase 2.5 item 4; param-locks-and-modulation.md
 // §3/§9 stage 4). Slots are instrument-scoped, stored on Instrument itself
 // (SfzLoader's Tracks) rather than engine-global - unlike
@@ -751,7 +794,7 @@ static void PublishSequencerVoiceMap() {
         for (uint8_t track = 0; track < WaveX::Sequencer::kMaxTracks; ++track) {
             const uint8_t note = static_cast<uint8_t>(kSequencerRootNote + track);
             map.layer_count[track] = SfzLoader::ResolveNote(
-                kSequencerPreviewTrack, note, 127, nullptr, map.layers[track], kMaxLayerTriggers);
+                kSequencerPreviewTrack, note, 127, map.layers[track], kMaxLayerTriggers);
         }
     }
     s_seq_voice_map_mailbox.Publish(map);
@@ -1860,6 +1903,12 @@ void Init(DaisySeed& hw, float sample_rate, bool sdram_available) {
     s_voice_live_pending = WaveX::AudioEngine::VoiceLiveParams{};
     s_voice_live_active = s_voice_live_pending;
     s_voice_live_mailbox.Init(s_voice_live_pending);
+    s_filter_config_pending = WaveX::AudioEngine::FilterConfig{};
+    s_filter_config_active = s_filter_config_pending;
+    s_filter_config_mailbox.Init(s_filter_config_pending);
+    for (auto& extras: s_track_live) {
+        extras = TrackLiveExtras{};
+    }
     s_para_pending = ParaphonicParams{};
     s_para_active = s_para_pending;
     s_para_mailbox.Init(s_para_pending);
@@ -2025,6 +2074,9 @@ void Callback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t
     // picks up the new generation one block later.
     if (s_voice_live_mailbox.ConsumeLatest(s_voice_live_active)) {
         s_voice_manager.ApplyLiveParams(s_voice_live_active);
+    }
+    if (s_filter_config_mailbox.ConsumeLatest(s_filter_config_active)) {
+        s_voice_manager.ApplyFilterConfig(s_filter_config_active);
     }
 
     // Sequencer transport and pattern edits are callback-owned through the
@@ -2219,10 +2271,35 @@ void OnTrackOp(const TrackOpMessage& m) {
     }
 }
 
+/**
+ * One parameter change, addressed to a Track (track-and-patch-model.md §3.2).
+ *
+ * `channel` is the Track index. Filter and envelope belong to that Track's
+ * **Instrument**, which is the authority: a note triggered later reads them
+ * from there, and they travel with the Instrument between Tracks and Banks.
+ * The VoiceLiveParams published below are *derived* from the Instrument for
+ * the sounding-voice push - they are a message, not a second store, which is
+ * why they are composed fresh each time rather than accumulated.
+ *
+ * Pan, pitch and the filter topology are not Instrument fields yet (they
+ * become trim_pan/transpose and FilterType in stage 5), so they are still
+ * held per Track here, in s_track_live.
+ */
 void OnControlChange(const ControlChangeMessage& ctrl_msg) {
     const float norm = static_cast<float>(ctrl_msg.value) / 65535.0f;
+    const uint8_t track = ctrl_msg.channel & 0x0Fu;
     bool para_changed = false;
     bool voice_changed = false;
+
+    // Start from what this Track's Instrument already says, so a knob moves
+    // one field and leaves the rest of the Instrument's sound alone.
+    InstrumentFilter filter;
+    InstrumentEnv env;
+    if (const InstrumentFilter* f = SfzLoader::GetInstrumentFilter(track))
+        filter = *f;
+    if (const InstrumentEnv* e = SfzLoader::GetInstrumentEnv(track))
+        env = *e;
+
     switch (ctrl_msg.parameter) {
         case PARAM_FILTER_CUTOFF:
             s_para_pending.cutoff_base = norm;
@@ -2233,13 +2310,13 @@ void OnControlChange(const ControlChangeMessage& ctrl_msg) {
             // logarithmic - a linear map spends most of its travel above
             // 10 kHz, where almost nothing audible happens, and crosses the
             // entire musically useful range in the first few percent.
-            s_voice_live_pending.filter_cutoff_hz = 20.0f * std::pow(1000.0f, norm);
+            filter.cutoff_hz = 20.0f * std::pow(1000.0f, norm);
             voice_changed = true;
             break;
         case PARAM_PAN:
             // Linear 0..1 across the wire's full range. Voice::pan is applied
             // as a gain pair per block, so this is click-free without smoothing.
-            s_voice_live_pending.pan = norm;
+            s_track_live[track].pan = norm;
             voice_changed = true;
             break;
 
@@ -2248,14 +2325,14 @@ void OnControlChange(const ControlChangeMessage& ctrl_msg) {
             // play a sample as an instrument without the resampler running so
             // far from unity that the interpolation artefacts dominate.
             constexpr float kPitchRangeSemis = 24.0f;
-            s_voice_live_pending.pitch_semitones = (norm * 2.0f - 1.0f) * kPitchRangeSemis;
+            s_track_live[track].pitch_semitones = (norm * 2.0f - 1.0f) * kPitchRangeSemis;
             voice_changed = true;
             break;
         }
 
         case PARAM_FILTER_RESONANCE:
             s_para_pending.resonance = norm;
-            s_voice_live_pending.filter_resonance = norm;  // svf_filter.hpp maps 0..1 onto Q
+            filter.resonance = norm;  // svf_filter.hpp maps 0..1 onto Q
             para_changed = true;
             voice_changed = true;
             break;
@@ -2267,16 +2344,16 @@ void OnControlChange(const ControlChangeMessage& ctrl_msg) {
             const float seconds = 0.001f + norm * 2.0f;
             if (ctrl_msg.parameter == PARAM_ENVELOPE_ATTACK) {
                 s_para_pending.attack_s = seconds;
-                s_voice_live_pending.attack_s = seconds;
+                env.attack_s = seconds;
             } else if (ctrl_msg.parameter == PARAM_ENVELOPE_DECAY) {
                 s_para_pending.decay_s = seconds;
-                s_voice_live_pending.decay_s = seconds;
+                env.decay_s = seconds;
             } else if (ctrl_msg.parameter == PARAM_ENVELOPE_SUSTAIN) {
                 s_para_pending.sustain = norm;
-                s_voice_live_pending.sustain_level = norm;
+                env.sustain = norm;
             } else {
                 s_para_pending.release_s = seconds;
-                s_voice_live_pending.release_s = seconds;
+                env.release_s = seconds;
             }
             para_changed = true;
             voice_changed = true;
@@ -2297,7 +2374,11 @@ void OnControlChange(const ControlChangeMessage& ctrl_msg) {
         s_para_mailbox.Publish(s_para_pending);
     }
     if (voice_changed) {
-        s_voice_live_mailbox.Publish(s_voice_live_pending);
+        // The Instrument is the store; publish what it now says, for this
+        // Track only, so a knob on Track 3 cannot move Track 5's held notes.
+        SfzLoader::SetInstrumentFilter(track, filter);
+        SfzLoader::SetInstrumentEnv(track, env);
+        s_voice_live_mailbox.Publish(ComposeTrackLive(track, filter, env));
     }
 }
 
@@ -2308,12 +2389,17 @@ void SetFilterSelection(const FilterSelection& sel) {
     cfg.slope = sel.slope_db == 24 ? WaveX::AudioEngine::SvfFilter::Slope::Db24
                                    : WaveX::AudioEngine::SvfFilter::Slope::Db12;
     cfg.drive = sel.drive < 0.0f ? 0.0f : (sel.drive > 1.0f ? 1.0f : sel.drive);
-    s_voice_live_pending.filter = cfg;
-    s_voice_live_mailbox.Publish(s_voice_live_pending);
+    s_filter_config_pending = cfg;
+    // Every Track's staged extras too, so a later per-Track publish does not
+    // quietly put the previous topology back.
+    for (auto& extras: s_track_live) {
+        extras.filter = cfg;
+    }
+    s_filter_config_mailbox.Publish(s_filter_config_pending);
 }
 
 FilterSelection GetFilterSelection() {
-    const WaveX::AudioEngine::FilterConfig& cfg = s_voice_live_pending.filter;
+    const WaveX::AudioEngine::FilterConfig& cfg = s_filter_config_pending;
     FilterSelection sel;
     sel.topology = cfg.topology == WaveX::AudioEngine::FilterTopology::DaisySpSvf ? 1 : 0;
     sel.slope_db = cfg.slope == WaveX::AudioEngine::SvfFilter::Slope::Db24 ? 24 : 12;
@@ -2473,8 +2559,8 @@ static void TriggerTrackNoteOn(uint8_t slot, const NoteMessage& note_msg) {
     // a note after a knob move still sounds like the sweep the user just
     // heard, and the editor's auditioned region is what a pad plays.
     VoiceTriggerParams params[kMaxLayerTriggers];
-    const uint8_t count = SfzLoader::ResolveNote(
-        slot, note_msg.note, note_msg.velocity, &s_voice_live_pending, params, kMaxLayerTriggers);
+    const uint8_t count =
+        SfzLoader::ResolveNote(slot, note_msg.note, note_msg.velocity, params, kMaxLayerTriggers);
     if (count == 0) {
         // No s_hw guard: this is the one line that explains why the
         // instrument is silent, and gating it behind a pointer that may be

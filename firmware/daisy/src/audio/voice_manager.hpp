@@ -308,6 +308,11 @@ struct ModSlotResolver {
 // Defaults deliberately match VoiceTriggerParams field for field, so an
 // engine that never applies a live edit behaves exactly as before.
 struct VoiceLiveParams {
+    // Which Track these values describe. A knob edits ONE Track's Instrument
+    // (track-and-patch-model.md §3.2), so pushing the result onto every
+    // sounding voice would let Track 3's cutoff move Track 5's held notes.
+    // 0xFF means "every Track", which is what Init() publishes.
+    uint8_t track = 0xFF;
     float filter_cutoff_hz = 20000.0f;
     float filter_resonance = 0.0f;
     // Sample-stage controls. 0.5 is centre; a semitone offset of 0 leaves the
@@ -369,6 +374,19 @@ class VoiceManager {
     // hand that voice its full-length release back mid-choke - the hat would
     // not cut off. Filter changes still apply to releasing voices, because a
     // sweep should stay audible through the release tail.
+    // The engine-wide filter topology (the WAVEX-FILTER A/B aid). Separate
+    // from ApplyLiveParams because it is the one genuinely global thing left
+    // in this path: it must not carry one Track's cutoff or envelope with it.
+    void ApplyFilterConfig(const FilterConfig& cfg) {
+        if (cfg == filter_config_)
+            return;
+        filter_config_ = cfg;
+        for (auto& v: voices_) {
+            if (v.state == VoiceState::Playing)
+                v.filter.SetConfig(filter_config_);
+        }
+    }
+
     void ApplyLiveParams(const VoiceLiveParams& p) {
         // One pow() per call, not one per voice: this runs at block rate from
         // the audio callback whenever a control moved, and eight of them would
@@ -381,6 +399,8 @@ class VoiceManager {
         filter_config_ = p.filter;
         for (auto& v: voices_) {
             if (v.state != VoiceState::Playing)
+                continue;
+            if (p.track != 0xFF && v.track != p.track)
                 continue;
             if (filter_changed) {
                 v.filter.SetConfig(filter_config_);

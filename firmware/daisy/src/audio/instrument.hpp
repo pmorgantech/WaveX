@@ -48,15 +48,17 @@ enum ZoneFlags : uint8_t {
     ZONE_FLAG_VEL_XFADE = 1 << 0,       // gain rises across the velocity span
     ZONE_FLAG_VEL_XFADE_DOWN = 1 << 1,  // gain falls across the velocity span
     ZONE_FLAG_ONE_SHOT = 1 << 2,        // ignore note-off (play to end)
-    // Filter cutoff/resonance and the amp ADSR come from the engine's live
-    // base params (VoiceLiveParams - what the Play page's knobs edit) at
-    // trigger time, not from this zone's own fields. This is how an
-    // instrument built on-device from a bare sample keeps sounding like the
-    // sweep the user just heard: it has no zone editor yet, so the live
-    // params ARE its settings. An imported SFZ zone carries its own values
-    // and leaves this clear. A zone editor that writes cutoff_hz/ADSR into
-    // the zone should clear it too, at which point the zone owns them.
-    ZONE_FLAG_LIVE_FILTER_ENV = 1 << 3,
+    // This zone's OWN cutoff/resonance/ADSR win over the Instrument's
+    // defaults (track-and-patch-model.md §3.2). Clear - the default - means
+    // the zone follows the Instrument, which is what makes a 16-pad kit
+    // editable without setting an envelope on every pad.
+    //
+    // An SFZ import sets it on every zone, because an .sfz always carries
+    // per-region values; a zone built on-device leaves it clear until a
+    // per-pad override is set. It replaces ZONE_FLAG_LIVE_FILTER_ENV, which
+    // pointed at an engine-global "what the knobs say" because until now
+    // nothing could write a zone or an Instrument default.
+    ZONE_FLAG_OWN_FILTER_ENV = 1 << 3,
 };
 
 // Zone::loop_mode. `Inherit` is instrument-model.md §2's "0 = use the sample's
@@ -107,9 +109,35 @@ enum class InstrumentOrigin : uint8_t {
 // Matches TrackBindingMessage::name, so the two cannot drift apart.
 static constexpr uint8_t kInstrumentNameBytes = 24;
 
+// The Instrument's own filter settings - the defaults every zone follows
+// unless it sets ZONE_FLAG_OWN_FILTER_ENV. `type` is a placeholder for the
+// FilterType of stage 5: the field is here now so the FILT chunk of a file
+// written today loads unchanged once modes are selectable.
+struct InstrumentFilter {
+    uint8_t type = 0;  // 0 = the 12 dB SVF lowpass, the only mode today
+    float cutoff_hz = 20000.0f;
+    float resonance = 0.0f;
+};
+
+// The Instrument's amp envelope - Env 1 of the three in §3.1. Envs 2 and 3
+// arrive with stage 5; their chunks are written at these defaults until then.
+struct InstrumentEnv {
+    float attack_s = 0.001f;
+    float decay_s = 0.05f;
+    float sustain = 0.8f;
+    float release_s = 0.1f;
+};
+
 struct Instrument {
     InstrumentMode mode = InstrumentMode::Keyboard;
     InstrumentOrigin origin = InstrumentOrigin::None;
+    // Instrument-level defaults (§3.2). These are the authority for any zone
+    // that does not override them, and they are what the Filter/Env pages
+    // edit - so "this piano's envelope" belongs to the piano and travels
+    // with it between Tracks and Banks, rather than being whatever the
+    // engine's knobs last happened to say.
+    InstrumentFilter filter;
+    InstrumentEnv env;
     // What to call this instrument on screen: an import's .sfz basename, set
     // at load. Empty for a Built instrument, whose name is the bound sample's
     // own metadata and already known to the frontend. Without this the UI can
@@ -191,17 +219,16 @@ inline float VelocityXfadeGain(const Zone& zone, uint8_t velocity) {
 // are skipped (they don't consume a layer slot). Pure function - no state, no
 // allocation, no I/O; safe to call from the audio-callback note path.
 //
-// `live` is the engine's current base params, read only by zones flagged
-// ZONE_FLAG_LIVE_FILTER_ENV; nullptr makes such zones fall back to their own
-// fields, so a caller with no live state loses nothing but that behaviour.
+// Filter and envelope come from the Instrument unless the zone overrides
+// them (ZONE_FLAG_OWN_FILTER_ENV) - so this needs no engine state at all,
+// which is why the live-params argument it used to take is gone.
 inline uint8_t ResolveNoteOn(const Instrument& ins,
                              uint8_t track,
                              uint8_t note,
                              uint8_t velocity,
                              const SampleResolver& resolver,
                              VoiceTriggerParams* out,
-                             uint8_t max,
-                             const VoiceLiveParams* live = nullptr) {
+                             uint8_t max) {
     if (!out || max == 0)
         return 0;
     if (max > kMaxLayerTriggers)
@@ -250,19 +277,23 @@ inline uint8_t ResolveNoteOn(const Instrument& ins,
         p.fade_in_ms = ref.fade_in_ms;
         p.fade_out_ms = ref.fade_out_ms;
 
-        if ((zone.flags & ZONE_FLAG_LIVE_FILTER_ENV) && live) {
-            p.filter_cutoff_hz = live->filter_cutoff_hz;
-            p.filter_resonance = live->filter_resonance;
-            p.attack_s = live->attack_s;
-            p.decay_s = live->decay_s;
-            p.sustain_level = live->sustain_level;
-            p.release_s = live->release_s;
-        } else {
+        if (zone.flags & ZONE_FLAG_OWN_FILTER_ENV) {
+            // The zone carries its own - an imported SFZ region, or a pad
+            // the user has overridden. Note it has no resonance field of its
+            // own, so the Instrument's is used either way.
             p.filter_cutoff_hz = zone.cutoff_hz;
+            p.filter_resonance = ins.filter.resonance;
             p.attack_s = zone.attack_s;
             p.decay_s = zone.decay_s;
             p.sustain_level = zone.sustain;
             p.release_s = zone.release_s;
+        } else {
+            p.filter_cutoff_hz = ins.filter.cutoff_hz;
+            p.filter_resonance = ins.filter.resonance;
+            p.attack_s = ins.env.attack_s;
+            p.decay_s = ins.env.decay_s;
+            p.sustain_level = ins.env.sustain;
+            p.release_s = ins.env.release_s;
         }
 
         out[count++] = p;
@@ -339,12 +370,10 @@ class Tracks {
                         uint8_t velocity,
                         const SampleResolver& resolver,
                         VoiceTriggerParams* out,
-                        uint8_t max,
-                        const VoiceLiveParams* live = nullptr) const {
+                        uint8_t max) const {
         if (track >= kNumTracks)
             return 0;
-        return ResolveNoteOn(
-            tracks_[track].instrument, track, note, velocity, resolver, out, max, live);
+        return ResolveNoteOn(tracks_[track].instrument, track, note, velocity, resolver, out, max);
     }
 
    private:

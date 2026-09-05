@@ -826,7 +826,9 @@ bool BindSample(
     Zone& zone = ins.zones[0];
     zone.sample_id = sample_id;
     zone.root_note = root_note;
-    zone.flags = ZONE_FLAG_LIVE_FILTER_ENV;
+    // No override: a Quick Instrument follows its Instrument's defaults, so
+    // the Filter/Env pages edit it as a whole rather than one hidden zone.
+    zone.flags = 0;
     zone.in_use = true;
     ins.mode = InstrumentMode::Keyboard;
     ins.origin = InstrumentOrigin::Built;
@@ -890,19 +892,35 @@ void ForgetLoadedSample(uint16_t sample_id) {
     }
 }
 
-uint8_t ResolveNote(uint8_t slot,
-                    uint8_t note,
-                    uint8_t velocity,
-                    const VoiceLiveParams* live,
-                    VoiceTriggerParams* out,
-                    uint8_t max) {
+uint8_t ResolveNote(
+    uint8_t slot, uint8_t note, uint8_t velocity, VoiceTriggerParams* out, uint8_t max) {
     if (slot >= kNumTracks)
         return 0;
-    // One resolver for every origin: an import's zones name Pool ids now,
-    // exactly as a Built instrument's do.
     if (s_bank.At(slot).instrument.origin == InstrumentOrigin::None)
         return 0;
-    return s_bank.ResolveNote(slot, note, velocity, s_loaded_resolver, out, max, live);
+    return s_bank.ResolveNote(slot, note, velocity, s_loaded_resolver, out, max);
+}
+
+bool SetInstrumentFilter(uint8_t track, const InstrumentFilter& filter) {
+    if (track >= kNumTracks)
+        return false;
+    s_bank.At(track).instrument.filter = filter;
+    return true;
+}
+
+bool SetInstrumentEnv(uint8_t track, const InstrumentEnv& env) {
+    if (track >= kNumTracks)
+        return false;
+    s_bank.At(track).instrument.env = env;
+    return true;
+}
+
+const InstrumentFilter* GetInstrumentFilter(uint8_t track) {
+    return track < kNumTracks ? &s_bank.At(track).instrument.filter : nullptr;
+}
+
+const InstrumentEnv* GetInstrumentEnv(uint8_t track) {
+    return track < kNumTracks ? &s_bank.At(track).instrument.env : nullptr;
 }
 
 bool SetModSlot(uint8_t slot, uint8_t mod_slot_index, const ModSlot& value) {

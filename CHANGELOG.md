@@ -11,6 +11,30 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Changed
+
+- An Instrument now owns its filter and amp envelope, and a parameter change
+  is addressed to a Track (Track/Instrument model stage 4, in progress). A
+  zone follows its Instrument's values unless it sets the new
+  `ZONE_FLAG_OWN_FILTER_ENV` — so a 16-pad kit can be given one envelope
+  instead of sixteen — and an SFZ import sets that override on every region,
+  leaving imported Instruments sounding exactly as before. `MSG_CONTROL_CHANGE`
+  carries the Track in its previously-unused `channel` field; the backend
+  writes the value into that Track's Instrument, which is what a later note
+  reads, and pushes the change only onto that Track's sounding voices, so a
+  knob on one Track no longer moves another's held notes.
+- The runtime filter A/B (`WAVEX-FILTER`) has its own mailbox rather than
+  riding on the voice-parameter snapshot: it is an engine-wide bench aid, and
+  sharing that path would have carried one Track's cutoff and envelope onto
+  every voice.
+
+### Removed
+
+- `ZONE_FLAG_LIVE_FILTER_ENV`, and the engine-global "what the knobs say"
+  parameter block behind it. It existed only because nothing could write a
+  zone or an Instrument default; both are now writable, so note resolution
+  takes no engine state at all.
+
 ### Added
 
 - Sampler stage 4, first step: the `.wxi` Instrument file codec over WXCF
