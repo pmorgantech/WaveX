@@ -133,25 +133,32 @@ current target rather than hard-coding the evaluator to it.
      CMAKE_EXTRA_ARGS="-DWAVEX_PROFILING_ENABLED=ON -DWAVEX_BUILD_DEBUG=ON" flash-auto
    ```
 
-2. Start a fresh serial capture (`make logs-start`), then exercise each
-   applicable worst-case scenario for at least ten minutes on target hardware.
-   Use `WAVEX_NUM_VOICES` simultaneously sounding voices and enable the most
-   expensive intended oscillator/filter/drive/modulation combination. Run
-   alternatives such as both filter topologies separately, and combine
+2. Start a fresh serial capture (`make logs-start`) **per scenario**, then
+   exercise that worst-case scenario for at least ten minutes on target
+   hardware. Use `WAVEX_NUM_VOICES` simultaneously sounding voices and enable
+   the most expensive intended oscillator/filter/drive/modulation combination.
+   Run alternatives such as both filter topologies separately, and combine
    streaming, sequencing, parameter locks, mixer work, and control-rate
    modulation where the product can combine them. A convenient idle patch is
-   not a gate workload.
-3. Reject the run if the target sample rate, block size, core clock,
-   optimization level, voice count, applicable feature flags, or workload is
-   missing from the report. Also record underruns; zero underruns is required
-   but does not override a yellow or red cycle result.
+   not a gate workload. The capture has no per-window scenario tag, so a file
+   holding two scenarios yields two rows that each describe both; the helper
+   refuses a capture that spans a second serial session or boot.
+3. The firmware states what it was measured under: every profiling dump
+   starts with a `profile_config:` line carrying the core clock, sample rate,
+   block size, storage layout and hot-path `-O` level, and the helper takes
+   the budget and the **Image** column from it - refusing a capture without
+   the line, from an SRAM image, or whose configuration changes mid-file.
+   Voice count, feature flags and workload are not in the capture and are
+   asserted on the command line. Stream underruns are counted from the
+   firmware's underrun reports; zero is required but does not override a
+   yellow or red cycle result.
 4. Record every scenario. The checkpoint takes the worst decision across its
    rows:
 
    ```sh
    make perf-record LOG=logs/daisy.log \
      SCENARIO="8 voices; 24 dB SVF; drive; sequencer + stream" \
-     VOICES=8 UNDERRUNS=0 FEATURES_REMAINING=yes \
+     VOICES=8 FEATURES_REMAINING=yes \
      NOTE="Phase 2 monthly checkpoint"
    ```
 

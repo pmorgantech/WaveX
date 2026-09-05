@@ -19,7 +19,13 @@ versioning and release process.
   stays on the STM32H750, 70–80% blocks for investigation, and 80% or above
   with callback features remaining activates the documented backend
   chip-upgrade path. The gate runs at phase boundaries, after callback-budget
-  changes, and every four weeks during active callback work.
+  changes, and every four weeks during active callback work. The row records
+  what was measured, not what was typed: the profiling image prints a
+  `profile_config:` line (core clock, sample rate, block size, storage layout,
+  hot-path `-O` level) with every window, and the evaluator takes the cycle
+  budget, the Image column and the stream-underrun count from the capture,
+  refusing one without the line, from an SRAM image, or spanning more than one
+  serial session (one capture per scenario).
 - A debug harness and a hardware-in-the-loop suite
   (`docs/features/debug-harness-and-hil.md`, now built). Both boards accept
   `WAVEX-DBG <seq> <VERB> ...` on their consoles and answer

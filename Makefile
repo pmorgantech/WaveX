@@ -151,7 +151,7 @@ help:
 	@echo "  check-profiles   - Assert tokens present in debug AND absent in release"
 	@echo "  size             - Print firmware image sizes (Daisy, ESP32 if built)"
 	@echo "  size-record      - Append them to docs/firmware-size-log.md: NOTE=\"what changed\""
-	@echo "  perf-eval        - Evaluate Daisy DWT capture: LOG=... SCENARIO=... VOICES=... UNDERRUNS=... FEATURES_REMAINING=yes|no"
+	@echo "  perf-eval        - Evaluate Daisy DWT capture: LOG=... SCENARIO=... VOICES=... FEATURES_REMAINING=yes|no"
 	@echo "  perf-record      - Evaluate and append to docs/callback-performance-log.md; also requires NOTE=..."
 	@echo "  esp32-clean      - Clean ESP32 build"
 	@echo "  daisy-clean      - Clean Daisy build"
@@ -316,21 +316,21 @@ size-record:
 	@python3 scripts/firmware_size.py --record "$(NOTE)"
 
 # Recurring target-hardware callback-headroom gate
-# (docs/performance_monitoring.md#callback-headroom-gate). The script returns
+# (docs/performance_monitoring.md#callback-headroom-gate). Target parameters
+# and stream underruns are read from the capture itself. The script returns
 # non-zero for REVIEW/HOLD/UPGRADE, including after recording the evidence.
 perf-eval:
-	@if [ -z "$(LOG)" ] || [ -z "$(SCENARIO)" ] || [ -z "$(VOICES)" ] || [ -z "$(UNDERRUNS)" ] || [ -z "$(FEATURES_REMAINING)" ]; then \
-		echo 'usage: make perf-eval LOG=logs/daisy.log SCENARIO="worst-case workload" VOICES=8 UNDERRUNS=0 FEATURES_REMAINING=yes|no'; exit 1; fi
+	@if [ -z "$(LOG)" ] || [ -z "$(SCENARIO)" ] || [ -z "$(VOICES)" ] || [ -z "$(FEATURES_REMAINING)" ]; then \
+		echo 'usage: make perf-eval LOG=logs/daisy.log SCENARIO="worst-case workload" VOICES=8 FEATURES_REMAINING=yes|no'; exit 1; fi
 	@python3 scripts/callback_performance.py "$(LOG)" --scenario "$(SCENARIO)" \
-		--voices "$(VOICES)" --underruns "$(UNDERRUNS)" \
-		--features-remaining "$(FEATURES_REMAINING)"
+		--voices "$(VOICES)" --features-remaining "$(FEATURES_REMAINING)"
 
 perf-record:
-	@if [ -z "$(LOG)" ] || [ -z "$(SCENARIO)" ] || [ -z "$(VOICES)" ] || [ -z "$(UNDERRUNS)" ] || [ -z "$(FEATURES_REMAINING)" ] || [ -z "$(NOTE)" ]; then \
-		echo 'usage: make perf-record LOG=logs/daisy.log SCENARIO="worst-case workload" VOICES=8 UNDERRUNS=0 FEATURES_REMAINING=yes|no NOTE="checkpoint/context"'; exit 1; fi
+	@if [ -z "$(LOG)" ] || [ -z "$(SCENARIO)" ] || [ -z "$(VOICES)" ] || [ -z "$(FEATURES_REMAINING)" ] || [ -z "$(NOTE)" ]; then \
+		echo 'usage: make perf-record LOG=logs/daisy.log SCENARIO="worst-case workload" VOICES=8 FEATURES_REMAINING=yes|no NOTE="checkpoint/context"'; exit 1; fi
 	@python3 scripts/callback_performance.py "$(LOG)" --scenario "$(SCENARIO)" \
-		--voices "$(VOICES)" --underruns "$(UNDERRUNS)" \
-		--features-remaining "$(FEATURES_REMAINING)" --record "$(NOTE)"
+		--voices "$(VOICES)" --features-remaining "$(FEATURES_REMAINING)" \
+		--record "$(NOTE)"
 
 daisy-stageb:
 	@echo "========================================================================"

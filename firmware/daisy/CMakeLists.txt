@@ -245,6 +245,15 @@ add_compile_definitions(
 option(WAVEX_PROFILING_ENABLED "Enable the STM32H7 DWT/ITM profiling helpers" OFF)
 if(WAVEX_PROFILING_ENABLED)
     add_compile_definitions(WAVEX_PROFILING_ENABLED=1)
+    # The profiling dump names the image it came from (storage layout and
+    # the hot-path -O level) so scripts/callback_performance.py records what
+    # was measured rather than what the operator typed. Only the build knows
+    # these: main.cpp is a cold -Os TU, so __OPTIMIZE__ there says nothing
+    # about the callback's optimization level.
+    add_compile_definitions(
+        WAVEX_PROFILE_STORAGE="${DAISY_STORAGE}"
+        WAVEX_PROFILE_OPT="${WAVEX_DAISY_OPT}"
+    )
 else()
     add_compile_definitions(WAVEX_PROFILING_ENABLED=0)
 endif()

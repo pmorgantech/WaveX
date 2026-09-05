@@ -388,6 +388,18 @@ void InitDSP(bool sdram_available) {
 #if WAVEX_PROFILING_ENABLED
 static void PrintProfilingStats(DaisySeed& hw) {
     WaveX::Log::PrintLine("\n=== Profiling Stats ===");
+    // The target parameters every window was measured under, from the
+    // running hardware and the build - the callback-headroom gate
+    // (docs/performance_monitoring.md) takes its budget and Image column
+    // from this line and rejects a capture without it. Repeated per window
+    // so a capture started mid-run still carries it.
+    WaveX::Log::PrintLine(
+        "profile_config: core_hz=%u sample_rate=%u block_size=%u storage=%s opt=%s",
+        (unsigned)SystemCoreClock,
+        (unsigned)hw.AudioSampleRate(),
+        (unsigned)hw.AudioBlockSize(),
+        WAVEX_PROFILE_STORAGE,
+        WAVEX_PROFILE_OPT);
     uint32_t zone_count = WaveX::Profiling::Profiler::GetZoneCount();
     for (uint32_t i = 0; i < zone_count; ++i) {
         const auto* zone = WaveX::Profiling::Profiler::GetZone(i);
