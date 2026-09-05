@@ -256,6 +256,27 @@ TEST_F(MessageTypeTest, SampleStatusMessage) {
     EXPECT_EQ(parsed.frames_played, original.frames_played);
 }
 
+// A failed load rides the same message: state = LOAD_FAILED, frames_played =
+// the reason. The states are pinned to their wire values because an older
+// frontend keys on 0x10/0x11 numerically.
+TEST_F(MessageTypeTest, SampleStatusLoadFailedCarriesReason) {
+    static_assert(SAMPLE_STATUS_LOAD_COMPLETE == 0x10, "wire value");
+    static_assert(SAMPLE_STATUS_LOAD_PROGRESS == 0x11, "wire value");
+    static_assert(SAMPLE_STATUS_LOAD_FAILED == 0x12, "wire value");
+
+    SampleStatusMessage original(7, SAMPLE_STATUS_LOAD_FAILED, 0, 0, SAMPLE_LOAD_FAIL_RAM);
+    size_t created =
+        ProtocolHandler::CreateSampleStatusPacket(buffer_.data(), buffer_.size(), original);
+    ASSERT_GT(created, 0);
+
+    SampleStatusMessage parsed;
+    ASSERT_TRUE(
+        ProtocolHandler::ParseMessage(buffer_.data(), MSG_SAMPLE_STATUS, &parsed, sizeof(parsed)));
+    EXPECT_EQ(parsed.sample_id, 7);
+    EXPECT_EQ(parsed.state, SAMPLE_STATUS_LOAD_FAILED);
+    EXPECT_EQ(parsed.frames_played, static_cast<uint32_t>(SAMPLE_LOAD_FAIL_RAM));
+}
+
 TEST_F(MessageTypeTest, InstrumentMessagesRoundTrip) {
     InstOpMessage request(0x12345678u, 2, INST_OP_SFZ_PROBE, "/Instruments/Grand Piano.sfz");
     const size_t request_size = ProtocolHandler::CreatePacket(

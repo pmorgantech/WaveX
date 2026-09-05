@@ -51,6 +51,20 @@ versioning and release process.
 
 ### Changed
 
+- Browse **Load** now lands a sample on the selected Track: once the Daisy
+  reports it resident the browser binds it (`MSG_SAMPLE_SELECT`), so the
+  Keys play it with no further step (Track/Instrument model §6.1 A). An
+  empty Track needs no prompt; an occupied one opens the Track picker with
+  "Track *n* holds *X* - replace?", the same picker `.sfz` loads already
+  use. A Track holding an imported Instrument is not offered as a sample
+  target - the picker says why - until the Sample Pool lands.
+- Sample Manager **Select** is now **Assign**, and asks once ("press Assign
+  again to replace") before rebinding a Track that holds a different sample.
+- A sample load that fails on the Daisy now says why on the browser's status
+  line instead of leaving the spinner to time out: `MSG_SAMPLE_STATUS` gained
+  `SAMPLE_STATUS_LOAD_FAILED` (0x12) carrying a `SampleLoadFailReason` (no
+  SDRAM / open / format / RAM / read / registry full). Additive; the load
+  states are now named (`SampleStatusState`) rather than bare numbers.
 - The "Voice" page is now the **Instrument** page (main menu, page title,
   Init default name and status). It edits the selected Track's Instrument;
   the Save/Load softkeys say they wait on the `.wxi` Instrument file rather

@@ -526,13 +526,36 @@ struct BrowseRespHeader {
     BrowseRespHeader(uint32_t total_count_, uint8_t n_) : total_count(total_count_), n(n_) {}
 } __attribute__((packed));
 
-// Sample status (playback or load notifications)
+// Sample status (playback or load notifications). `state` values:
+enum SampleStatusState : uint8_t {
+    SAMPLE_STATUS_STOPPED = 0,
+    SAMPLE_STATUS_PLAYING = 1,
+    SAMPLE_STATUS_ENDED = 2,
+    SAMPLE_STATUS_LOAD_COMPLETE = 0x10,  // frames_played = total frames loaded
+    SAMPLE_STATUS_LOAD_PROGRESS = 0x11,  // frames_played = percent
+    SAMPLE_STATUS_LOAD_FAILED = 0x12,    // frames_played = SampleLoadFailReason
+};
+
+// Why a MSG_SAMPLE_LOAD did not complete (track-and-patch-model.md §7). Rides
+// SAMPLE_STATUS_LOAD_FAILED's frames_played so the frontend can say what went
+// wrong instead of timing out on a spinner. Additive: an old frontend ignores
+// the unknown state.
+enum SampleLoadFailReason : uint8_t {
+    SAMPLE_LOAD_FAIL_NONE = 0,
+    SAMPLE_LOAD_FAIL_NO_SDRAM = 1,       // sample memory never came up
+    SAMPLE_LOAD_FAIL_OPEN = 2,           // file not found / unreadable
+    SAMPLE_LOAD_FAIL_FORMAT = 3,         // not a WAV the voice path can play resident
+    SAMPLE_LOAD_FAIL_RAM = 4,            // does not fit the sample pool
+    SAMPLE_LOAD_FAIL_READ = 5,           // SD read error mid-load
+    SAMPLE_LOAD_FAIL_REGISTRY_FULL = 6,  // too many resident samples
+};
+
 struct SampleStatusMessage {
     uint16_t sample_id;  // logical sample identifier
-    uint8_t state;       // 0=stopped,1=playing,2=ended,0x10=load complete
+    uint8_t state;       // SampleStatusState
     uint8_t channels;
     uint32_t sample_rate;
-    uint32_t frames_played;  // for load-complete: total frames loaded
+    uint32_t frames_played;  // meaning depends on state, see SampleStatusState
 
     SampleStatusMessage() : sample_id(0), state(0), channels(0), sample_rate(0), frames_played(0) {}
     SampleStatusMessage(uint16_t sample_id_,

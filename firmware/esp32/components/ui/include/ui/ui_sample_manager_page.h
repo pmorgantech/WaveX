@@ -25,12 +25,15 @@ namespace wavex_ui {
  * path takes 16-bit mono/stereo only, while the browser will happily load 8 and
  * 24-bit files.
  *
- * "Select" binds the focused sample to a Track (0..15, matches
+ * "Assign" binds the focused sample to a Track (0..15, matches
  * MSG_NOTE_ON's channel and the Play page's own Track parameter) rather than
  * to "notes on any channel" - that any-channel behavior was retired (roadmap
  * Phase 2.5 item 1) because it made a Track's note-on resolve to whatever was
  * most recently loaded ANYWHERE, not something this page's own binding
- * controlled. Shift+Track -/+ changes which Track Select targets.
+ * controlled. Shift+Track -/+ changes which Track Assign targets. A Track
+ * that already holds a sample asks before it is replaced (§1.3 / §6.2 of
+ * track-and-patch-model.md): the first Assign names what it would replace,
+ * the second, on the same row, does it.
  */
 class UISampleManagerPage : public UIPage {
    public:
@@ -69,7 +72,10 @@ class UISampleManagerPage : public UIPage {
     void rebuildList();    ///< UI task / LVGL context only.
     void refreshDetail();  ///< UI task / LVGL context only.
     void refreshTrackLabel();
-    void selectFocused();
+    void assignFocused();
+    /// Sample id the last Assign press asked to confirm for, 0 = none. A
+    /// second press on the same row within the same Track replaces.
+    uint16_t confirm_assign_id_ = 0;
     void unloadFocused();
     void editFocused();
     void moveFocus(int delta);

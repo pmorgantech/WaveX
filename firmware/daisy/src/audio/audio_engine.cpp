@@ -3033,10 +3033,22 @@ void PumpInstrumentLoad() {
     }
 }
 
+// Tells the frontend a MSG_SAMPLE_LOAD is not going to complete, and why. Every
+// early return in OnSampleLoad() goes through here: a load that fails silently
+// leaves the frontend's spinner to time out with nothing to say.
+static void ReportSampleLoadFailed(uint16_t sample_id, SampleLoadFailReason reason) {
+    SampleStatusMessage status{};
+    status.sample_id = sample_id;
+    status.state = SAMPLE_STATUS_LOAD_FAILED;
+    status.frames_played = reason;
+    WaveX::Comm::UartLinkSend(WaveX::Protocol::MSG_SAMPLE_STATUS, &status, sizeof(status));
+}
+
 void OnSampleLoad(const SampleLoadMessage& sl) {
     if (!s_sample_memory_available) {
         if (s_hw)
             WaveX::Log::PrintLine("SAMPLE_LOAD: rejected because SDRAM is unavailable");
+        ReportSampleLoadFailed(sl.sample_id, SAMPLE_LOAD_FAIL_NO_SDRAM);
         return;
     }
     if (s_hw) {
@@ -3081,6 +3093,7 @@ void OnSampleLoad(const SampleLoadMessage& sl) {
         WaveX::Log::PrintLine("SAMPLE_LOAD: f_open failed (%d) for '%s'", (int)fr, sl.path);
     }
     if (fr != FR_OK) {
+        ReportSampleLoadFailed(sl.sample_id, SAMPLE_LOAD_FAIL_OPEN);
         return;
     }
 
@@ -3096,6 +3109,7 @@ void OnSampleLoad(const SampleLoadMessage& sl) {
                                   (int)parse_result);
         }
         f_close(&file);
+        ReportSampleLoadFailed(sl.sample_id, SAMPLE_LOAD_FAIL_FORMAT);
         return;
     }
     ResidentSampleInfo resident;
@@ -3117,6 +3131,7 @@ void OnSampleLoad(const SampleLoadMessage& sl) {
                 (unsigned long)WaveX::SdramLayout::kLargeSamplePoolBytes);
         }
         f_close(&file);
+        ReportSampleLoadFailed(sl.sample_id, SAMPLE_LOAD_FAIL_FORMAT);
         return;
     }
 
@@ -3144,6 +3159,7 @@ void OnSampleLoad(const SampleLoadMessage& sl) {
                     (unsigned long)st.large_free_bytes + (unsigned long)st.small_free_bytes);
             }
             f_close(&file);
+            ReportSampleLoadFailed(sl.sample_id, SAMPLE_LOAD_FAIL_RAM);
             return;
         }
         if (s_hw) {
@@ -3156,6 +3172,7 @@ void OnSampleLoad(const SampleLoadMessage& sl) {
     if (!s_sample_mem_mgr.ptr(handle, &sample_ptr)) {
         s_sample_mem_mgr.release(&handle);
         f_close(&file);
+        ReportSampleLoadFailed(sl.sample_id, SAMPLE_LOAD_FAIL_RAM);
         return;
     }
 
@@ -3190,6 +3207,7 @@ void OnSampleLoad(const SampleLoadMessage& sl) {
             }
             s_sample_mem_mgr.release(&handle);
             f_close(&file);
+            ReportSampleLoadFailed(sl.sample_id, SAMPLE_LOAD_FAIL_READ);
             return;
         }
         memcpy(static_cast<uint8_t*>(sample_ptr) + written, temp, br);
@@ -3208,7 +3226,7 @@ void OnSampleLoad(const SampleLoadMessage& sl) {
                 s_last_pct = pct;
                 SampleStatusMessage progress{};
                 progress.sample_id = sl.sample_id;
-                progress.state = 0x11;  // loading, frames_played carries percent
+                progress.state = SAMPLE_STATUS_LOAD_PROGRESS;  // frames_played = percent
                 progress.channels = static_cast<uint8_t>(num_ch);
                 progress.sample_rate = sample_rate;
                 progress.frames_played = pct;
@@ -3228,6 +3246,7 @@ void OnSampleLoad(const SampleLoadMessage& sl) {
             WaveX::Log::PrintLine("SAMPLE_LOAD: registry full (%u entries)",
                                   (unsigned)kLoadedSampleCapacity);
         s_sample_mem_mgr.release(&handle);
+        ReportSampleLoadFailed(sl.sample_id, SAMPLE_LOAD_FAIL_REGISTRY_FULL);
         return;
     }
     update_loaded_sample_progress(sl.sample_id, data_size);
@@ -3255,7 +3274,7 @@ void OnSampleLoad(const SampleLoadMessage& sl) {
     // Notify host (ESP32) that sample load completed.
     SampleStatusMessage status{};
     status.sample_id = sl.sample_id;
-    status.state = 0x10;  // load complete
+    status.state = SAMPLE_STATUS_LOAD_COMPLETE;
     status.channels = static_cast<uint8_t>(num_ch);
     status.sample_rate = sample_rate;
     status.frames_played = data_size / ((bits / 8) * num_ch);  // total frames loaded

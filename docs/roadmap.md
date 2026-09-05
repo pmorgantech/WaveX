@@ -82,33 +82,32 @@ remain MIDI-clock-synced to a DAW for ten minutes without audible drift.
 The model core, SFZ import, WXCF container, the shared selected Track, and
 parts of the mixer/modulation path are built. The end state is
 `features/track-and-patch-model.md` (Track / Instrument / Bank / Sample Pool;
-the two-oscillator Instrument is designed there, §3). Stage 1 (the rename)
-is done. Open work, in that document's stage numbering:
+the two-oscillator Instrument is designed there, §3). Stages 1 (rename) and
+2 (Load-to-Track) are done. Open work, in that document's stage numbering:
 
-1. Load-to-Track workflow (stage 2): Browse "Load" binds to the selected
-   Track behind a replace prompt; Sample Manager "Assign"; load-failure
-   reasons on the wire.
-2. Sample Pool (stage 3): one indexed 1024-entry registry in SDRAM, refcount
+1. Sample Pool (stage 3): one indexed 1024-entry registry in SDRAM, refcount
    by path, per-Track voice stop, paged metadata, "used by"; no silent
-   eviction.
-3. Instrument file and editors (stage 4): `.wxi` with the full chunk set,
-   Init/Save/Name ops, Pad Map and Key Map, Instrument Browser, Track page.
-4. Voice architecture (stage 5): typed oscillators, Osc 2 + submix, filter
+   eviction. Also what lets a sample replace an imported Instrument on a
+   Track, which Load and Assign currently refuse.
+2. Instrument file and editors (stage 4): `.wxi` with the full chunk set,
+   Init/Save/Name ops, Pad Map and Key Map (with Sample Manager "to pad"),
+   Instrument Browser, Track page.
+3. Voice architecture (stage 5): typed oscillators, Osc 2 + submix, filter
    type, Env 3, two per-voice LFOs, new mod destinations —
    DWT-measured at `WAVEX_NUM_VOICES` before the count is changed.
-5. Bank (stage 6): `.wxb`, Bank page, Program Change recall.
-6. Track model and MIDI routing (stage 7), then polyphony policy (stage 8).
-7. Finish Mixer v1: UI/solo behavior, meter subscription, and hardware click
+4. Bank (stage 6): `.wxb`, Bank page, Program Change recall.
+5. Track model and MIDI routing (stage 7), then polyphony policy (stage 8).
+6. Finish Mixer v1: UI/solo behavior, meter subscription, and hardware click
    and soak tests.
-8. Add melodic sequencing, chord/tie handling, step/live record, and erase.
-9. Complete modulation: p-lock application, MIDI CC/channel-pressure
+7. Add melodic sequencing, chord/tie handling, step/live record, and erase.
+8. Complete modulation: p-lock application, MIDI CC/channel-pressure
    forwarding, and modulation UI (the per-voice LFOs and zone filter ADSR
    move into stage 5).
-10. Build sampling/recording v1 and the arpeggiator.
+9. Build sampling/recording v1 and the arpeggiator.
 
 The order in which stages 4–7 are taken up is **not yet decided** (model doc
-§9 item 19); stages 2–3 come first because the 2026-09-03 bench session is
-blocked on them.
+§9 item 19); stage 3 comes first because the 2026-09-03 bench session is
+blocked on it.
 
 **Gate:** from power-on, hear a card sample on the Keys in four taps; build a
 16-pad kit and a multisampled keyboard Instrument on-device and save both;
@@ -159,6 +158,7 @@ The following code paths are open until observed on the target:
 | Sample Edit | Verify waveform fetch, handles, loop seam, browser detail waveform, and stereo readability. |
 | Settings and input | Verify brightness, scrolling, MIDI channel filtering, keypad, encoder direction, and UI responsiveness. |
 | UI concurrency | Measure LVGL lock/refresh behavior during encoder bursts and sample loading. |
+| Load-to-Track (2026-09-04) | Browse > Load a WAV with an empty Track selected: the Keys play it with no further step and the Track chip/binding shows it. Load with an occupied Track: the picker names what it would replace; confirm and cancel both behave. Load onto a Track holding an `.sfz` Instrument is refused in the picker. Sample Manager Assign asks once before replacing. Pull the card mid-load / load a 24-bit WAV by path: the status line reports the Daisy's reason rather than the spinner timing out. |
 | Image slimming (2026-09-04) | Boot, mount SD, stream a WAV, trigger RAM voices and run the sequencer on the 273 KB image: large callback/loader state is now constructed at startup (`bss_static.hpp`) instead of copied from `.data`, the SD volume links `SD_Driver` directly, and `UART_LOGx` lines should now appear in the log. DWT-measure `Render()` with region fades set (the per-sample 64-bit divide is gone; expect a drop, no number yet). |
 
 ## Rules for every phase

@@ -369,8 +369,8 @@ Pages reorganised around the nouns. Each page owns exactly one thing.
 | **Pad Map** | Drum-mode oscillator: 16 pads × Sample, choke, optional per-pad filter/env (instrument-model.md §12.1) | nothing |
 | **Instrument Browser** | `0:/wavex/instruments/*.wxi` and `sfz/**/*.sfz`; preflight; load into the selected Track (asks, §1.3); tag filter | Sample Browser's `.sfz` handling, split out |
 | **Bank** | the current `.wxb`: 128 slots, Load/Save Bank, recall slot → Track, store Track → slot, preload | nothing |
-| **Sample Browser** | what is on the card; audition; **Load onto the selected Track** (§6.1) | exists; loses its `.sfz` duties |
-| **Sample Manager** | the Pool: what is resident, who uses it, unload, assign to Track / to pad, **set current sample for editing** | exists; today cannot see an import's samples (§4); "Select" becomes "Assign" |
+| **Sample Browser** | what is on the card; audition; **Load onto the selected Track** (§6.1) | exists; Load binds to the selected Track (stage 2, 2026-09-04); loses its `.sfz` duties |
+| **Sample Manager** | the Pool: what is resident, who uses it, unload, assign to Track / to pad, **set current sample for editing** | exists; today cannot see an import's samples (§4); "Assign" with a replace confirm (stage 2, 2026-09-04); "to pad" waits for the Pad Map |
 | **Sample Edit** | the **current sample**'s markers/gain/fades | exists |
 | **Play** | the grid, addressed to the selected Track | exists; follows the selected Track (2026-09-04) |
 | **Mixer** | 16 strips | `output-routing-and-mixer.md` stage 3, not built |
@@ -405,7 +405,7 @@ Per §1.3: Load (sample, `.wxi`, `.sfz`), Assign, and Bank recall from the UI sh
 | `MSG_BANK_OP` / `MSG_BANK_STATUS` (§3.6) | new messages |
 | `MSG_SAMPLE_META_REQ` by range; one batched `MSG_SAMPLE_META_PAGE` reply | new/changed (§4) |
 | `MSG_SAMPLE_META` gains `ref_count` / `used_by` bitmask (16 bits) | additive field |
-| `MSG_SAMPLE_LOAD` failure carries a reason code (pool full / RAM / format) | additive |
+| `MSG_SAMPLE_LOAD` failure carries a reason code (`SAMPLE_STATUS_LOAD_FAILED` + `SampleLoadFailReason`) | **built 2026-09-04** |
 | Doc rename: slot → track in `inter-mcu-protocol.md` | docs |
 
 `PROTOCOL_VERSION` does not need to move for any additive change here; `NOTE_ADDR_TRACK` is the one to think about, and it is backward-compatible (an old Daisy masks `& 0x0F` and behaves as today).
@@ -414,11 +414,11 @@ Per §1.3: Load (sample, `.wxi`, `.sfz`), Assign, and Bank recall from the UI sh
 
 ## 8. Stages (one verified commit each)
 
-Listed by dependency. The order in which the later stages are taken up is **not yet decided** (decision §9 item 13); stages 2–3 are the ones the 2026-09-03 bench session is waiting on.
+Listed by dependency. The order in which the later stages are taken up is **not yet decided** (decision §9 item 13); stage 3 is the one the 2026-09-03 bench session is still waiting on.
 
 0. ~~**Bench findings, 2026-09-02/03**~~ — **done** (`2728662`, `33a1312`, `504406a`, `6f87ce6`): current sample for Sample Edit; SFZ subfolder fallback; shared selected Track with 1-based display; Instrument name on the wire; Sample Manager explains a refused Select; loading an Instrument asks which Track; boot autoload off.
 1. ~~**Rename**~~ — **done 2026-09-04** in two commits: UI strings and docs (Slot → Track, Voice page → Instrument, "Patch"/"preset" → Instrument), then the identifiers (`kNumTracks`, `Tracks::Track()`, `Voice::track`, `TrackSteps`, `WAVEX_NUM_VOICES`, `UIInstrumentPage`, `SfzLoader::TrackLoaded/TrackName`, `VoiceManager::StopTrack/ReleaseTrack`; `NoteMessage::channel` documented as the Track address). Still saying "slot": the wire-struct field names in `protocol.h` and the local variables in `audio_engine.cpp`/`sfz_loader.cpp` that carry them — these go with the §7 protocol-doc rename, not before it.
-2. **Load-to-Track workflow** (§6.1 A/B, §6.2) — Browse "Load" binds to the selected Track with the replace prompt; Sample Manager "Select" → "Assign to Track / To pad"; `MSG_SAMPLE_LOAD` failure reasons; the replace prompt wherever §1.3 applies. Small, ESP32-side except the reason code.
+2. ~~**Load-to-Track workflow**~~ (§6.1 A, §6.2) — **done 2026-09-04**: Browse "Load" of a sample goes straight onto an empty selected Track and binds it when the Daisy reports it resident; an occupied (or not-yet-reported) Track opens the Track picker with "Track *n* holds *X* — replace?"; a Track holding an imported Instrument is not a valid sample target until the Pool (stage 3) and the picker says so. Sample Manager "Select" is "Assign" and asks once before replacing a different sample. `MSG_SAMPLE_STATUS` gained `SAMPLE_STATUS_LOAD_FAILED` with a `SampleLoadFailReason`, so a failed load says why instead of timing out. "To pad" waits for the Pad Map (stage 4).
 3. **Sample Pool** (§4) — the big one; dissolves single residency, makes an import's samples visible/editable, enables two soundfonts and replacing an import with a sample. Indexed registry (measured design above), 1024 entries in SDRAM, refcount, per-track stop, paged metadata in one batched message, "used by". `SfzLoader` → `InstrumentLoader` over the Pool.
 4. **Instrument file and editors** — `.wxi` reader/writer with the full §3.3 chunk set (osc2/env3/LFO chunks may be written empty until stage 5), `INST_OP_NEW/SAVE/SET_NAME/SET_PAD_SAMPLE/SET_ZONE`, Instrument-level defaults + zone overrides (§3.2, retiring `ZONE_FLAG_LIVE_FILTER_ENV`), Instrument Browser, Pad Map and Key Map pages, Track page. The Pad Map piece does not depend on stage 3 and may go first.
 5. **Voice architecture** (§3.1) — typed `Oscillator` wrapper, Osc 2 + submix, `FilterType`, Env 3, two per-voice LFOs (global LFO 2 retired), new mod destinations, `output`/`poly_mode` on the Instrument, `INST_OP_SET_OSC/FILTER/ENV/LFO`, Instrument page tabs. **DWT-measured** with both oscillators at `WAVEX_NUM_VOICES` before the count is changed. Can be split per sub-item; each is host-testable in `VoiceManagerTest`.
@@ -427,7 +427,7 @@ Listed by dependency. The order in which the later stages are taken up is **not 
 8. **Polyphony policy** (§5) — measure first; `poly_limit`, `priority`, track-aware steal.
 9. **FX** — reserved chunk only; no design here.
 
-Stages 2, 4's pad-map piece and 7 are independent of 3 and can be done in any order. Stage 6 needs 4. Stage 5 needs nothing but changes the `.wxi` chunks it writes, so it should not trail stage 4 by long. Nothing in Goal B (`digital-voice-audition.md` stages 5–8) waits on any of this except that the sequencer addresses tracks with `NOTE_ADDR_TRACK` from stage 7 on.
+Stage 4's pad-map piece and stage 7 are independent of 3 and can be done in any order. Stage 6 needs 4. Stage 5 needs nothing but changes the `.wxi` chunks it writes, so it should not trail stage 4 by long. Nothing in Goal B (`digital-voice-audition.md` stages 5–8) waits on any of this except that the sequencer addresses tracks with `NOTE_ADDR_TRACK` from stage 7 on.
 
 ---
 

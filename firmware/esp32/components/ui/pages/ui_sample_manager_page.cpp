@@ -274,11 +274,11 @@ void UISampleManagerPage::refreshDetail() {
     } else if (track_holds_patch) {
         snprintf(action,
                  sizeof(action),
-                 "Track %u holds Instrument %.24s - Select is refused here.",
+                 "Track %u holds Instrument %.24s - Assign is refused here.",
                  trackDisplayNumber(getCurrentTrack()),
                  binding.name[0] ? binding.name : "(unnamed)");
     } else {
-        snprintf(action, sizeof(action), "Press Select to bind this to the Track.");
+        snprintf(action, sizeof(action), "Press Assign to bind this to the Track.");
     }
     char text[420];
     snprintf(text,
@@ -318,6 +318,7 @@ void UISampleManagerPage::moveFocus(int delta) {
         return;
     }
     focus_ = (focus_ + delta + row_count_) % row_count_;
+    confirm_assign_id_ = 0;  // the question was about the row that had focus
     rebuildList();
     refreshDetail();
 }
@@ -326,13 +327,14 @@ void UISampleManagerPage::changeTrack(int delta) {
     // 16 Tracks - matches instrument.hpp's kNumTracks and
     // MSG_NOTE_ON's channel & 0x0F on the backend.
     setCurrentTrack(static_cast<uint8_t>((getCurrentTrack() + delta + 16) % 16));
+    confirm_assign_id_ = 0;  // and about the Track that was selected
     inter_mcu_request_track_binding(getCurrentTrack());
     refreshTrackLabel();
     rebuildList();
     refreshDetail();
 }
 
-void UISampleManagerPage::selectFocused() {
+void UISampleManagerPage::assignFocused() {
     const Row* row = focusedRow();
     if (!row) {
         return;
@@ -349,23 +351,44 @@ void UISampleManagerPage::selectFocused() {
     // A Track holding an SFZ Instrument refuses a bare-sample bind on the backend
     // (SfzLoader::BindSample): the import owns its samples and can only
     // release them through the load handshake. That refusal used to reach
-    // nothing but the Daisy log, so Select looked broken rather than
+    // nothing but the Daisy log, so Assign looked broken rather than
     // declined - say which Track and why, here, before sending.
     WaveX::Protocol::TrackBindingMessage current;
-    if (inter_mcu_get_track_binding(getCurrentTrack(), &current) &&
-        (current.state == WaveX::Protocol::TRACK_BINDING_PATCH ||
-         current.state == WaveX::Protocol::TRACK_BINDING_LOADING)) {
+    const bool known = inter_mcu_get_track_binding(getCurrentTrack(), &current);
+    if (known && (current.state == WaveX::Protocol::TRACK_BINDING_PATCH ||
+                  current.state == WaveX::Protocol::TRACK_BINDING_LOADING)) {
         if (status_label_) {
             char msg[128];
             snprintf(msg,
                      sizeof(msg),
-                     "Track %u holds Instrument %.24s - Select refused; pick another Track",
+                     "Track %u holds Instrument %.24s - Assign refused; pick another Track",
                      trackDisplayNumber(getCurrentTrack()),
                      current.name[0] ? current.name : "(unnamed)");
             lv_label_set_text(status_label_, msg);
         }
         return;
     }
+    // Replacing is always confirmed (§6.2): a Track that holds a different
+    // sample asks once. Re-binding the same sample is a no-op and needs no
+    // question; an empty Track needs none either.
+    const bool occupied = known && current.state == WaveX::Protocol::TRACK_BINDING_SAMPLE &&
+                          current.sample_id != row->sample_id;
+    if (occupied && confirm_assign_id_ != row->sample_id) {
+        confirm_assign_id_ = row->sample_id;
+        if (status_label_) {
+            WaveX::Protocol::SampleMetadata m;
+            const bool named = inter_mcu_get_sample_meta(current.sample_id, &m) && m.name[0];
+            char msg[160];
+            snprintf(msg,
+                     sizeof(msg),
+                     "Track %u holds %.32s - press Assign again to replace it",
+                     trackDisplayNumber(getCurrentTrack()),
+                     named ? m.name : "a sample");
+            lv_label_set_text(status_label_, msg);
+        }
+        return;
+    }
+    confirm_assign_id_ = 0;
     if (inter_mcu_send_sample_select(row->sample_id, getCurrentTrack()) == ESP_OK) {
         inter_mcu_request_track_binding(getCurrentTrack());
         ESP_LOGI(TAG,
@@ -373,7 +396,7 @@ void UISampleManagerPage::selectFocused() {
                  (unsigned)row->sample_id,
                  trackDisplayNumber(getCurrentTrack()));
     } else if (status_label_) {
-        lv_label_set_text(status_label_, "Select failed - link busy?");
+        lv_label_set_text(status_label_, "Assign failed - link busy?");
     }
     rebuildList();
     refreshDetail();
@@ -429,7 +452,7 @@ void UISampleManagerPage::onInput(const InputEvent& evt) {
             moveFocus(-1);
             break;
         case InputType::EncoderClick:
-            selectFocused();
+            assignFocused();
             break;
         default:
             break;
@@ -439,7 +462,7 @@ void UISampleManagerPage::onInput(const InputEvent& evt) {
 std::array<Softkey, NUM_SOFTKEYS> UISampleManagerPage::getSoftkeys() {
     std::array<Softkey, NUM_SOFTKEYS> keys{};
     keys[0] = {"Back", []() { UINavigator::instance().pop(); }};
-    keys[1] = {"Select", [this]() { selectFocused(); }};
+    keys[1] = {"Assign", [this]() { assignFocused(); }};
     keys[2] = {"Unload", [this]() { unloadFocused(); }};
     keys[3] = {"Up", [this]() { moveFocus(-1); }};
     keys[4] = {"Down", [this]() { moveFocus(+1); }};

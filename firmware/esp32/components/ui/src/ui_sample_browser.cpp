@@ -237,6 +237,9 @@ void UISampleBrowser::onEnter(lv_obj_t* parent) {
     inter_mcu_set_sample_status_listener(sample_status_callback, this);
     inter_mcu_set_inst_status_listener(instrument_status_callback, this);
     s_active_instance_ = this;
+    // Load decides whether to ask before binding from the Track's state
+    // (beginSampleLoad); fetch it now so the answer is ready by then.
+    inter_mcu_request_track_binding(getCurrentTrack());
 
     is_playing_ = persistent_state_.is_playing;
     selected_file_index_ = persistent_state_.selected_file_index;
@@ -282,6 +285,11 @@ void UISampleBrowser::onExit() {
              "=== SAMPLE BROWSER ON_EXIT: Unregistering callback and clearing active instance");
     inter_mcu_set_sample_status_listener(nullptr, nullptr);
     inter_mcu_set_inst_status_listener(nullptr, nullptr);
+    // A half-answered picker does not survive leaving the page, and a load
+    // whose completion we will no longer hear must not bind later either.
+    awaiting_track_ = false;
+    pending_load_ = PendingLoad::None;
+    bind_on_load_track_.store(-1, std::memory_order_release);
     // Unregister before the widgets go, or the RX task would be writing
     // through a freed page. abort() then releases the cache arming: skipping
     // it would leave noteRequest() blocking every later waveform in the
@@ -394,34 +402,55 @@ std::array<Softkey, NUM_SOFTKEYS> UISampleBrowser::getSoftkeys() {
 
     // Track picker: replaces the whole bar so there is no way to navigate away
     // mid-question and leave a half-answered load behind.
-    if (sfz_awaiting_track_) {
+    if (awaiting_track_) {
         keys[0] = {"Cancel", [this]() {
-                       sfz_awaiting_track_ = false;
-                       updateStatus("Instrument load cancelled");
+                       awaiting_track_ = false;
+                       pending_load_ = PendingLoad::None;
+                       updateStatus("Load cancelled");
                        refreshSoftkeys();
                    }};
         keys[1] = {"Track -", [this]() {
-                       sfz_target_track_ = static_cast<uint8_t>(
-                           (sfz_target_track_ + WAVEX_MIX_TRACKS - 1) % WAVEX_MIX_TRACKS);
+                       target_track_ = static_cast<uint8_t>((target_track_ + WAVEX_MIX_TRACKS - 1) %
+                                                            WAVEX_MIX_TRACKS);
                        refreshTrackPrompt();
+                       refreshSoftkeys();
                    }};
         keys[2] = {"Track +", [this]() {
-                       sfz_target_track_ =
-                           static_cast<uint8_t>((sfz_target_track_ + 1) % WAVEX_MIX_TRACKS);
+                       target_track_ = static_cast<uint8_t>((target_track_ + 1) % WAVEX_MIX_TRACKS);
                        refreshTrackPrompt();
+                       refreshSoftkeys();
                    }};
         keys[3] = {"Load", [this]() {
-                       sfz_awaiting_track_ = false;
+                       awaiting_track_ = false;
+                       const PendingLoad kind = pending_load_;
+                       pending_load_ = PendingLoad::None;
                        // The chosen Track becomes the shared one, so Play and
-                       // Sample Manager follow the Instrument that just loaded.
-                       setCurrentTrack(sfz_target_track_);
+                       // Sample Manager follow what just loaded.
+                       setCurrentTrack(target_track_);
                        const wavex_file_entry_t* entry =
                            file_browser_ ? wavex_file_browser_get_selected(file_browser_) : nullptr;
-                       if (!entry || !loadInstrument(entry)) {
-                           ESP_LOGE(TAG, "Failed to request instrument load");
+                       const bool ok =
+                           entry && (kind == PendingLoad::Instrument ? loadInstrument(entry)
+                                                                     : loadSample(entry));
+                       if (!ok) {
+                           ESP_LOGE(TAG, "Failed to request load");
                        }
                        refreshSoftkeys();
                    }};
+        // A sample cannot take over a Track that holds an imported Instrument:
+        // the import owns its samples and only the load handshake releases
+        // them (SfzLoader::BindSample refuses). Until the Sample Pool (model
+        // doc §4) that Track is simply not a valid target, and the picker
+        // says so rather than sending a bind the Daisy will ignore.
+        WaveX::Protocol::TrackBindingMessage binding;
+        if (pending_load_ == PendingLoad::Sample &&
+            inter_mcu_get_track_binding(target_track_, &binding) &&
+            (binding.state == WaveX::Protocol::TRACK_BINDING_PATCH ||
+             binding.state == WaveX::Protocol::TRACK_BINDING_LOADING)) {
+            keys[3].enabled = false;
+            keys[3].why =
+                "Holds an Instrument - a sample cannot replace it yet; pick another Track";
+        }
         return keys;
     }
 
@@ -498,20 +527,14 @@ std::array<Softkey, NUM_SOFTKEYS> UISampleBrowser::getSoftkeys() {
             refreshSoftkeys();
         } else {
             if (isSfzFile(selected->name)) {
-                // Ask which Track before committing: the load takes that
-                // Track away from Play, Voice and Sample Manager, and a Track
-                // holding an Instrument refuses a bare-sample Select afterwards.
+                // Always ask which Track: the load takes that Track away from
+                // Play, Instrument and Sample Manager, and a Track holding an
+                // Instrument refuses a bare-sample bind afterwards.
                 ESP_LOGI(TAG, "Load instrument requested for: %s", selected->name);
-                sfz_awaiting_track_ = true;
-                sfz_target_track_ = getCurrentTrack();
-                refreshTrackPrompt();
-                refreshSoftkeys();
+                askForTrack(PendingLoad::Instrument);
             } else {
-                // Regular WAV - load sample into sample RAM.
                 ESP_LOGI(TAG, "Load sample requested for: %s", selected->name);
-                if (!loadSample(selected)) {
-                    ESP_LOGE(TAG, "Failed to load sample: %s", selected->name);
-                }
+                beginSampleLoad(selected);
             }
         } } };
 
@@ -1237,8 +1260,8 @@ void UISampleBrowser::sample_status_callback(uint16_t sample_id,
 
     ESP_LOGI(TAG, "=== CALLBACK VALIDATION PASSED: Processing state=%d", state);
 
-    // State: 0 = stopped, 1 = playing, 2 = paused, 0x10 = load complete.
-    if (state == 0) {
+    // State: SampleStatusState (protocol.h).
+    if (state == WaveX::Protocol::SAMPLE_STATUS_STOPPED) {
         ESP_LOGI(TAG, "=== SAMPLE STOP RESPONSE: Processing stop callback ===");
         browser->is_playing_ = false;
         browser->persistent_state_.stopPlayback();
@@ -1253,7 +1276,7 @@ void UISampleBrowser::sample_status_callback(uint16_t sample_id,
             ESP_LOGW(TAG,
                      "=== SAMPLE STOP RESPONSE: Skipping UI update - not fully initialized ===");
         }
-    } else if (state == 1) {
+    } else if (state == WaveX::Protocol::SAMPLE_STATUS_PLAYING) {
         // Playback position. sample_rate carries the REGION LENGTH in frames
         // here, not a rate - the backend reuses the field so the UI can scale
         // without a second message. frames_played is the read position, which
@@ -1284,37 +1307,87 @@ void UISampleBrowser::sample_status_callback(uint16_t sample_id,
                 browser->updateStatus(status_text);
             }
         }
-    } else if (state == 0x11) {
-        // Loading progress: frames_played carries the percentage, not frames.
+    } else if (state == WaveX::Protocol::SAMPLE_STATUS_LOAD_PROGRESS) {
+        // frames_played carries the percentage, not frames.
         BusyOverlay::requestProgress(static_cast<int>(frames_played));
         wavex_ui_mark_content_changed();
-    } else if (state == 0x10) {
+    } else if (state == WaveX::Protocol::SAMPLE_STATUS_LOAD_COMPLETE) {
         ESP_LOGI(TAG, "=== SAMPLE LOAD COMPLETE: id=%u ===", (unsigned)sample_id);
         BusyOverlay::requestHide();
         wavex_ui_mark_content_changed();
         // Refresh the allocator view so the next load's fit check is against
         // what is actually free now, not what was free before this one.
         inter_mcu_request_sample_mem_status();
+        // The second half of Load (§6.1 A): now that the id is resident, bind
+        // it to the Track the user loaded onto. The Daisy answers with the
+        // Track's new binding, which every page reads from the shared cache.
+        const int16_t bind_track = browser->bind_on_load_track_.load(std::memory_order_acquire);
+        const bool bound = bind_track >= 0 && browser->bind_on_load_sample_id_.load(
+                                                  std::memory_order_relaxed) == sample_id;
+        if (bound) {
+            browser->bind_on_load_track_.store(-1, std::memory_order_release);
+            inter_mcu_send_sample_select(sample_id, static_cast<uint8_t>(bind_track));
+            inter_mcu_request_track_binding(static_cast<uint8_t>(bind_track));
+        }
         if (browser->is_initialized_ && browser->status_label_ && browser->root_) {
             char status_text[256];
             const char* path = browser->persistent_state_.last_load_sample_path.c_str();
-            snprintf(status_text,
-                     sizeof(status_text),
-                     "Sample loaded: id=%u%s%s",
-                     (unsigned)sample_id,
-                     path && path[0] ? " (" : "",
-                     path && path[0] ? path : "");
-            if (path && path[0]) {
-                size_t len = strlen(status_text);
-                if (len < sizeof(status_text) - 1) {
-                    status_text[len] = ')';
-                    status_text[len + 1] = '\0';
-                }
+            const char* name = path ? strrchr(path, '/') : nullptr;
+            name = name ? name + 1 : (path ? path : "");
+            if (bound) {
+                snprintf(status_text,
+                         sizeof(status_text),
+                         "%.64s loaded onto Track %u - the Keys play it",
+                         name,
+                         trackDisplayNumber(static_cast<uint8_t>(bind_track)));
+            } else {
+                snprintf(status_text,
+                         sizeof(status_text),
+                         "Sample loaded: id=%u (%.96s)",
+                         (unsigned)sample_id,
+                         name);
             }
             browser->updateStatus(status_text);
         } else {
             ESP_LOGW(TAG, "=== SAMPLE LOAD COMPLETE: Skipping UI update - not initialized ===");
         }
+    } else if (state == WaveX::Protocol::SAMPLE_STATUS_LOAD_FAILED) {
+        // frames_played carries a SampleLoadFailReason. Before this state
+        // existed a failed load left the spinner to time out; now it says why.
+        browser->bind_on_load_track_.store(-1, std::memory_order_release);
+        BusyOverlay::requestHide();
+        wavex_ui_mark_content_changed();
+        const char* why;
+        switch (frames_played) {
+            case WaveX::Protocol::SAMPLE_LOAD_FAIL_NO_SDRAM:
+                why = "sample memory is unavailable on the Daisy";
+                break;
+            case WaveX::Protocol::SAMPLE_LOAD_FAIL_OPEN:
+                why = "the Daisy could not open the file";
+                break;
+            case WaveX::Protocol::SAMPLE_LOAD_FAIL_FORMAT:
+                why = "not a resident-playable WAV (PCM16 mono/stereo)";
+                break;
+            case WaveX::Protocol::SAMPLE_LOAD_FAIL_RAM:
+                why = "does not fit in free sample RAM";
+                break;
+            case WaveX::Protocol::SAMPLE_LOAD_FAIL_READ:
+                why = "SD read error during the load";
+                break;
+            case WaveX::Protocol::SAMPLE_LOAD_FAIL_REGISTRY_FULL:
+                why = "too many samples resident - unload one";
+                break;
+            default:
+                why = "unknown reason";
+                break;
+        }
+        ESP_LOGW(TAG,
+                 "=== SAMPLE LOAD FAILED: id=%u reason=%lu ===",
+                 (unsigned)sample_id,
+                 (unsigned long)frames_played);
+        char status_text[160];
+        snprintf(status_text, sizeof(status_text), "Load failed: %s", why);
+        browser->updateStatus(status_text);
     } else {
         ESP_LOGW(TAG, "=== UNKNOWN SAMPLE STATE: %d ===", state);
     }
@@ -1402,36 +1475,72 @@ void UISampleBrowser::requestInstrumentProbe(const wavex_file_entry_t* entry) {
     }
 }
 
-// Shows the Track the picker is currently on, and says when that Track is
-// already spoken for - overwriting an Instrument is the kind of thing that should
-// not be discovered afterwards.
+// Shows the Track the picker is currently on and, when that Track already
+// holds something, names it and asks (§6.2 "Track n holds X - replace?") -
+// overwriting an Instrument is the kind of thing that should not be
+// discovered afterwards. An empty Track just asks where to load.
 void UISampleBrowser::refreshTrackPrompt() {
     WaveX::Protocol::TrackBindingMessage binding;
-    const bool known = inter_mcu_get_track_binding(sfz_target_track_, &binding);
-    char occupied[72] = {};
-    if (known) {
+    const bool known = inter_mcu_get_track_binding(target_track_, &binding);
+    const char* what = pending_load_ == PendingLoad::Instrument ? "Instrument" : "sample";
+    char prompt[160];
+    const unsigned shown = trackDisplayNumber(target_track_);
+    if (!known) {
+        snprintf(prompt, sizeof(prompt), "Load %s onto Track %u?", what, shown);
+    } else {
         switch (binding.state) {
             case WaveX::Protocol::TRACK_BINDING_PATCH:
             case WaveX::Protocol::TRACK_BINDING_LOADING:
-                snprintf(occupied,
-                         sizeof(occupied),
-                         " - replaces Instrument %.23s",
-                         binding.name[0] ? binding.name : "(unnamed)");
+                snprintf(prompt,
+                         sizeof(prompt),
+                         "Track %u holds Instrument %.23s - replace with this %s?",
+                         shown,
+                         binding.name[0] ? binding.name : "(unnamed)",
+                         what);
                 break;
-            case WaveX::Protocol::TRACK_BINDING_SAMPLE:
-                snprintf(occupied, sizeof(occupied), " - replaces the bound sample");
+            case WaveX::Protocol::TRACK_BINDING_SAMPLE: {
+                WaveX::Protocol::SampleMetadata m;
+                const bool named = inter_mcu_get_sample_meta(binding.sample_id, &m) && m.name[0];
+                snprintf(prompt,
+                         sizeof(prompt),
+                         "Track %u holds sample %.32s - replace with this %s?",
+                         shown,
+                         named ? m.name : "(unnamed)",
+                         what);
                 break;
+            }
             default:
+                snprintf(prompt, sizeof(prompt), "Load %s onto Track %u?", what, shown);
                 break;
         }
     }
-    char prompt[128];
-    snprintf(prompt,
-             sizeof(prompt),
-             "Load into Track %u?%s",
-             trackDisplayNumber(sfz_target_track_),
-             occupied);
     updateStatus(prompt);
+}
+
+void UISampleBrowser::askForTrack(PendingLoad kind) {
+    pending_load_ = kind;
+    awaiting_track_ = true;
+    target_track_ = getCurrentTrack();
+    refreshTrackPrompt();
+    refreshSoftkeys();
+}
+
+// Workflow A (model doc §6.1): Load with a Track selected binds the sample to
+// it, so the Keys play it with no further step. Rule §1.3 decides whether to
+// ask first: an empty Track needs no prompt; anything else - or a Track whose
+// state the Daisy has not reported yet - gets the picker, because "ask" is the
+// safe reading of "unknown".
+void UISampleBrowser::beginSampleLoad(const wavex_file_entry_t* entry) {
+    WaveX::Protocol::TrackBindingMessage binding;
+    const bool empty = inter_mcu_get_track_binding(getCurrentTrack(), &binding) &&
+                       binding.state == WaveX::Protocol::TRACK_BINDING_EMPTY;
+    if (!empty) {
+        askForTrack(PendingLoad::Sample);
+        return;
+    }
+    if (!loadSample(entry)) {
+        ESP_LOGE(TAG, "Failed to load sample: %s", entry->name);
+    }
 }
 
 bool UISampleBrowser::loadInstrument(const wavex_file_entry_t* entry) {
@@ -1530,6 +1639,11 @@ bool UISampleBrowser::loadSample(const wavex_file_entry_t* entry) {
     // Daisy will load from its SD card; assign a unique sample ID per request
     uint16_t sample_id = persistent_state_.allocateSampleId();
     persistent_state_.last_load_sample_id = sample_id;
+    // Bind it to the selected Track when the Daisy says it is resident: the
+    // bind is a separate message (MSG_SAMPLE_SELECT) and would be refused
+    // for an id that is not loaded yet.
+    bind_on_load_sample_id_.store(sample_id, std::memory_order_relaxed);
+    bind_on_load_track_.store(static_cast<int16_t>(getCurrentTrack()), std::memory_order_release);
     persistent_state_.last_load_sample_path = entry->path;
     setCurrentSampleId(sample_id);
     // Capture the geometry too - the edit page has no other source for it.
@@ -1565,6 +1679,7 @@ bool UISampleBrowser::loadSample(const wavex_file_entry_t* entry) {
 
     if (result != ESP_OK) {
         ESP_LOGE(TAG, "Failed to send sample load request: %d", result);
+        bind_on_load_track_.store(-1, std::memory_order_release);
         BusyOverlay::hide();
         updateStatus("Error: Load request failed");
         return false;

@@ -226,12 +226,20 @@ class UISampleBrowser : public UIPage {
     bool sfz_probe_ready_ = false;
     bool sfz_probe_loadable_ = false;
     uint8_t sfz_sample_count_ = 0;
-    // Loading an Instrument takes a Track away from every other page, so it asks
-    // first rather than silently claiming the current one. While this is set
-    // the softkeys become a Track picker; confirming loads and cancelling
-    // leaves the Track untouched.
-    bool sfz_awaiting_track_ = false;
-    uint8_t sfz_target_track_ = 0;
+    // Load binds to a Track (track-and-patch-model.md §1.3, §6.2): an
+    // Instrument always asks which Track first; a sample goes straight onto
+    // the selected Track when it is empty and asks when it is not. While
+    // awaiting_track_ is set the softkeys become a Track picker; confirming
+    // loads onto target_track_ and cancelling leaves every Track untouched.
+    enum class PendingLoad : uint8_t { None, Instrument, Sample };
+    PendingLoad pending_load_ = PendingLoad::None;
+    bool awaiting_track_ = false;
+    uint8_t target_track_ = 0;
+    // The Track a sample load will be bound to once the Daisy reports it
+    // resident (SAMPLE_STATUS_LOAD_COMPLETE), and the id it must arrive with.
+    // -1 = nothing pending. Written on the UI task, read on the RX path.
+    std::atomic<int16_t> bind_on_load_track_{-1};
+    std::atomic<uint16_t> bind_on_load_sample_id_{0};
     char sfz_probe_path_[96] = {};
     WaveX::Protocol::InstStatusMessage pending_inst_status_{};
     portMUX_TYPE inst_status_lock_ = portMUX_INITIALIZER_UNLOCKED;
@@ -261,6 +269,10 @@ class UISampleBrowser : public UIPage {
     bool stopAudition();
     void refreshSoftkeys();
     void refreshTrackPrompt();
+    /// Opens the Track picker for `kind` starting at the selected Track.
+    void askForTrack(PendingLoad kind);
+    /// The sample half of Load: straight onto an empty selected Track, else ask.
+    void beginSampleLoad(const wavex_file_entry_t* entry);
     bool loadSample(const wavex_file_entry_t* entry);
     bool loadInstrument(const wavex_file_entry_t* entry);
     void requestInstrumentProbe(const wavex_file_entry_t* entry);

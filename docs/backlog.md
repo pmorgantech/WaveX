@@ -142,7 +142,7 @@ Sample Pool in the [Track/Instrument model](features/track-and-patch-model.md)
 Phase 2.5 item 3), rather than with a local loader patch.
 
 Until that lands, a Track holding an imported Instrument refuses a bare-sample
-`Select` (`SfzLoader::BindSample`): the import owns its samples and can only
+`Assign` (`SfzLoader::BindSample`): the import owns its samples and can only
 release them through the load handshake. The UI now states this rather than
 appearing to ignore the press, but "replace an Instrument with a sample without
 rebooting" needs the refcounted registry and the per-track voice-stop in
