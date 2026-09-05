@@ -6,6 +6,10 @@ set(CMAKE_TOOLCHAIN_FILE ${CMAKE_CURRENT_LIST_DIR}/libs/libDaisy/cmake/toolchain
 # Project version is the repo-root VERSION file, shared with the ESP32 build
 # so frontend and backend firmware stay in sync. Bump that one file, not this one.
 file(STRINGS "${CMAKE_CURRENT_LIST_DIR}/../../VERSION" WAVEX_VERSION)
+# file(STRINGS) is not a dependency: without this an existing build dir keeps
+# the version it was configured with and a bump ships in the old image.
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_LIST_DIR}/../../VERSION")
 project(wavex-daisy VERSION ${WAVEX_VERSION})
 
 # Optimization level for the Daisy image.

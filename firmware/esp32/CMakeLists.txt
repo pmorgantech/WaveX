@@ -46,6 +46,10 @@ set(EXCLUDE_COMPONENTS
 # Firmware version comes from the repo-root VERSION file, shared with the
 # Daisy build so frontend and backend stay in sync. Bump that one file, not this one.
 file(STRINGS "${CMAKE_CURRENT_LIST_DIR}/../../VERSION" PROJECT_VER)
+# file(STRINGS) is not a dependency: without this an existing build dir keeps
+# the version it was configured with and a bump ships in the old image.
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_LIST_DIR}/../../VERSION")
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 
