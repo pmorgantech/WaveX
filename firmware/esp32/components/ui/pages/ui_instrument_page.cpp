@@ -668,6 +668,14 @@ std::array<Softkey, NUM_SOFTKEYS> UIInstrumentPage::getShiftedSoftkeys() {
     return keys;
 }
 
+void UIInstrumentPage::onTrackChanged() {
+    // The panel's Track -/+ stepped the shared Track. Unlike the TRACK param
+    // this does not re-bind the sample: the global key selects a Track, it
+    // does not edit one.
+    refreshHeader();
+    refreshParams();
+}
+
 std::shared_ptr<UIPage> createInstrumentPage() {
     return std::make_shared<UIInstrumentPage>();
 }

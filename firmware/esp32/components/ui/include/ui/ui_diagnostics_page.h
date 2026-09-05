@@ -52,6 +52,7 @@ class UIDiagnosticsPage : public UIPage {
         TAB_LINK,
         TAB_STORAGE,
         TAB_MIDI,
+        TAB_PANEL,  // the physical panel: last keycode, key map, encoders
         TAB_COUNT
     };
 
@@ -89,6 +90,7 @@ class UIDiagnosticsPage : public UIPage {
     void buildAudioTab(lv_obj_t* tab);
     void buildStorageTab(lv_obj_t* tab);
     void buildMidiTab(lv_obj_t* tab);
+    void buildPanelTab(lv_obj_t* tab);
     Card makeCard(lv_obj_t* parent,
                   int x,
                   int y,
@@ -108,6 +110,7 @@ class UIDiagnosticsPage : public UIPage {
     void refreshAudioTab();
     void refreshStorageTab();
     void refreshMidiTab();
+    void refreshPanelTab();
     // Shared "backend has gone quiet" rendering, so a stale figure is never
     // presented as a current one.
     void showTabOffline(Card* cards, int n, const char* why);
@@ -164,6 +167,7 @@ class UIDiagnosticsPage : public UIPage {
     Card audio_cards[8];
     Card storage_cards[8];
     Card midi_cards[4];
+    Card panel_cards[7];
     lv_obj_t* midi_note;     // "no sequencer yet" explainer on the MIDI tab
     lv_obj_t* msg_table;     // per-message-type counts, from wavex_packet_stats_t
     lv_obj_t* sample_table;  // resident samples, from SampleMemStatusMessage

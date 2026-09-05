@@ -23,6 +23,16 @@ class UIPage {
     virtual void onExit() {}
     virtual void onInput(const InputEvent& /*evt*/) {}
 
+    /**
+     * @brief The shared current Track (current_track.h) changed under the page.
+     *
+     * The panel's Track -/+ keys are global (panel-controls.md §4.3): the
+     * InputDispatcher steps the Track and asks the Daisy for its binding, then
+     * calls this so a page showing the Track can redraw. Default does
+     * nothing; a page that shows the Track label or its binding overrides.
+     */
+    virtual void onTrackChanged() {}
+
     virtual std::array<Softkey, NUM_SOFTKEYS> getSoftkeys() {
         return {};  // Default: no softkeys
     }

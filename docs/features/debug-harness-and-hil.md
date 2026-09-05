@@ -156,7 +156,7 @@ carrying its own sequence number. It makes the existing silent-drop behaviour
 
 | Verb | Effect |
 |---|---|
-| `KEY <name> <PRESS\|RELEASE\|TAP>` | `ButtonPress`/`ButtonRelease` into `InputDispatcher` |
+| `KEY <name> <PRESS\|RELEASE\|TAP>` | `KeyPress`/`KeyRelease` for any `PanelKey` by name into `InputDispatcher` |
 | `ENC <delta>` | `EncoderLeft`/`EncoderRight`, magnitude in `delta` |
 | `POT <delta>` | `EncoderUp`/`EncoderDown` |
 | `TAP <x> <y>` | Press-hold-release through the synthetic indev |
@@ -414,12 +414,12 @@ task replaced the listener that lived in `ui_screenshot.cpp`):
 |---|---|---|
 | `PING` | ack | console task |
 | `LOG <...>` / `SCREENSHOT` | as before | console task |
-| `KEY <SELECT\|BACK\|ENC\|SHIFT> [PRESS\|RELEASE\|TAP]` | `InputDispatcher::post()` | console task |
+| `KEY <PanelKey name> [PRESS\|RELEASE\|TAP]` | `InputDispatcher::post()`, posted as the keypad task posts a matrix key; `SOFT1`..`SOFT6`, `SAMPLE`/`PLAY`/`INSTRUMENT`/`TRACK`/`MIXER`/`SETTINGS`, `TRACK_PREV`/`TRACK_NEXT`, `PLAY_STOP`, `REC`, `PAD1`..`PAD16`, plus `SELECT`, `BACK`, `ENC`, `SHIFT` | console task |
 | `ENC <±n>` / `POT <±n>` | one event carrying the magnitude, as the UI task's poll does | console task |
 | `TAP <x> <y>` / `TOUCH <DOWN\|MOVE\|UP> <x> <y>` | the synthetic pointer indev; `TAP` holds PRESSED for three read cycles | console task |
-| `STATE` | `page depth shift track tstate tid tname sk0..5 sk<i>en sk<i>xy dropped` + the page's own pairs (`tab`, `tab<i>xy`, `status`, `sel`, `dir`, `entries`, `picker`, `target`, `lastid`, `rows`, `focusid`, `selidx`, …) | UI task, under the LVGL lock |
+| `STATE` | `page depth shift root lastkey track tstate tid tname sk0..5 sk<i>en sk<i>xy dropped` + the page's own pairs (`tab`, `tab<i>xy`, `status`, `sel`, `dir`, `entries`, `picker`, `target`, `lastid`, `rows`, `focusid`, `selidx`, …) | UI task, under the LVGL lock |
 | `TRACK <n>` | selects a Track and asks the Daisy for its binding | UI task |
-| `HOME` | pops to the main menu | UI task |
+| `HOME` | unwinds to the main menu in one step (`UINavigator::popToRoot`) | UI task |
 | `PAGE <args>` | the live page's `consoleCommand`: `TAB <title>` on a tab host; `DIR <path>` and `SEL <name>` on the Sample Browser | UI task |
 
 Coordinates in `TAP`/`TOUCH` and in `sk<i>xy`/`tab<i>xy` are screen

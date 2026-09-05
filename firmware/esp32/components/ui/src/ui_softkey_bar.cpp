@@ -90,23 +90,23 @@ void SoftkeyBar::setSoftkeys(const std::array<Softkey, NUM_SOFTKEYS>& keys, bool
     }
 }
 
-void SoftkeyBar::focusNext(int delta) {
-    focused_ = (focused_ + delta + NUM_SOFTKEYS) % NUM_SOFTKEYS;
-
-    for (int i = 0; i < NUM_SOFTKEYS; ++i) {
-        if (i == focused_ && keys_[i].enabled) {
-            lv_obj_add_state(btns_[i], LV_STATE_FOCUSED);
-        } else {
-            lv_obj_clear_state(btns_[i], LV_STATE_FOCUSED);
-        }
+bool SoftkeyBar::press(int index) {
+    if (index < 0 || index >= NUM_SOFTKEYS || !keys_[index].enabled || keys_[index].label.empty()) {
+        return false;
     }
-}
-
-void SoftkeyBar::pressFocused() {
-    if (keys_[focused_].enabled && keys_[focused_].onPress) {
-        UINavigator::instance().notifySoftkeyUsed();
-        // Defer to avoid modifying UI during LVGL event processing/draw
-        auto cb = keys_[focused_].onPress;
+    ESP_LOGI(TAG, "Softkey %d pressed: %s", index, keys_[index].label.c_str());
+    // Take the callback BEFORE unsticking Shift: notifySoftkeyUsed() swaps
+    // the row back to the unshifted one, and reading keys_[index] after that
+    // fires the unshifted key in the same slot - "Track +" became "Unload"
+    // (found by the HIL suite, 2026-09-05; the touch path had it all along).
+    auto cb = keys_[index].onPress;
+    // Before the callback, not after: the callback may push a page, and
+    // clearing Shift on the page we just left is the intent.
+    UINavigator::instance().notifySoftkeyUsed();
+    if (cb) {
+        // Defer to avoid modifying UI during LVGL event processing/draw. The
+        // panel key path takes this too, so a key and a touch on the same
+        // softkey are ordered identically against everything else queued.
         lv_async_call(
             [](void* ud) {
                 auto fn = static_cast<std::function<void()>*>(ud);
@@ -115,6 +115,7 @@ void SoftkeyBar::pressFocused() {
             },
             new std::function<void()>(cb));
     }
+    return true;
 }
 
 bool SoftkeyBar::buttonCenter(int index, int32_t* x, int32_t* y) const {
@@ -134,22 +135,8 @@ void SoftkeyBar::event_cb(lv_event_t* e) {
     lv_obj_t* target = static_cast<lv_obj_t*>(lv_event_get_target(e));
 
     for (int i = 0; i < NUM_SOFTKEYS; ++i) {
-        if (target == bar->btns_[i] && bar->keys_[i].enabled) {
-            ESP_LOGI(TAG, "Softkey %d pressed: %s", i, bar->keys_[i].label.c_str());
-            // Before the callback, not after: the callback may push a page,
-            // and clearing Shift on the page we just left is the intent.
-            UINavigator::instance().notifySoftkeyUsed();
-            if (bar->keys_[i].onPress) {
-                // Defer to avoid modifying UI during LVGL event processing/draw
-                auto cb = bar->keys_[i].onPress;
-                lv_async_call(
-                    [](void* ud) {
-                        auto fn = static_cast<std::function<void()>*>(ud);
-                        (*fn)();
-                        delete fn;
-                    },
-                    new std::function<void()>(cb));
-            }
+        if (target == bar->btns_[i]) {
+            bar->press(i);
             break;
         }
     }

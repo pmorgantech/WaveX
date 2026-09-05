@@ -380,8 +380,12 @@ void UISampleManagerPage::changeTrack(int delta) {
     // 16 Tracks - matches instrument.hpp's kNumTracks and
     // MSG_NOTE_ON's channel & 0x0F on the backend.
     setCurrentTrack(static_cast<uint8_t>((getCurrentTrack() + delta + 16) % 16));
-    confirm_assign_id_ = 0;  // and about the Track that was selected
     inter_mcu_request_track_binding(getCurrentTrack());
+    onTrackChanged();
+}
+
+void UISampleManagerPage::onTrackChanged() {
+    confirm_assign_id_ = 0;  // the confirm was about the Track that was selected
     refreshTrackLabel();
     rebuildList();
     refreshDetail();

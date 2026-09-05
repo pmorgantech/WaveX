@@ -15,6 +15,7 @@ set(COMPONENT_SRCS
     "src/ui_api.cpp"
     "src/ui_busy_overlay.cpp"
     "src/ui_main_menu.cpp"
+    "src/panel_key.cpp"
     "src/ui_menu_page.cpp"
     "src/ui_navigation_integration.cpp"
     "src/ui_navigator.cpp"

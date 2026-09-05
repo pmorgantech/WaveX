@@ -89,6 +89,7 @@ class UISampleManagerPage : public UIPage {
     void editFocused();
     void moveFocus(int delta);
     void changeTrack(int delta);
+    void onTrackChanged() override;
     const Row* focusedRow() const;
 };
 

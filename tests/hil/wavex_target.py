@@ -194,7 +194,13 @@ class Esp32(Target):
         super().__init__("esp32", run_log)
 
     def key(self, name, action="TAP"):
+        """Presses a panel key by PanelKey name (SOFT3, SAMPLE, PAD16...)."""
         return self.cmd("KEY", name, action)
+
+    def jump(self, group):
+        """Panel jump key to a root group; waits for the stack to follow."""
+        self.key(group.upper())
+        return self.wait_state(root=group.capitalize(), depth="2")
 
     def enc(self, delta, steps=True):
         """Turns the encoder by `delta` detents.

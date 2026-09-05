@@ -13,6 +13,23 @@ versioning and release process.
 
 ### Added
 
+- Panel controls stage 1 (`docs/features/panel-controls.md` §5): the panel's
+  37 keys and 31 LEDs have a model. `PanelKey`/`PanelLed` name every control
+  by meaning; the TCA8418 keycode and TLC5947 channel behind each are the
+  `WAVEX_KEYCODE_*` / `WAVEX_LED_CH_*` maps in `hardware_config.h`, checked
+  unique and in range at compile time. The key semantics live in one place,
+  `InputDispatcher`: Shift and Back as before, the six softkey buttons press
+  whatever the on-screen row shows (the shifted row while Shift is latched),
+  the six jump keys go straight to their root group from anywhere
+  (`UINavigator::jumpToRoot`, which the main menu's items now share), and
+  Track −/+ step the shared current Track with every page redrawing through
+  a new `UIPage::onTrackChanged()` hook. Transport and pad keys are seen but
+  inert until Phase 2. Jumps to Track and Mixer are refused until those pages
+  exist. The console's `KEY` verb takes any key by name, `STATE` reports
+  `root=` and `lastkey=`, and a Diagnostics ▸ Panel tab shows the last raw
+  keycode with its row, column and mapped key (or "unmapped") so the matrix
+  geometry can be verified on the bench. HIL: `tests/hil/test_panel_keys.py`.
+
 - Per-Track MIDI routing (Track/Instrument model stage 7). A Track now carries
   its own settings alongside its Instrument — `midi_in` (Omni, one of the 16
   channels, or Off), plus `poly_limit`, `priority` and `program_change` stored
@@ -64,6 +81,8 @@ versioning and release process.
 
 ### Removed
 
+- `SoftkeyBar::focusNext()/pressFocused()` and the focus index behind them:
+  nothing called them, and `SoftkeyBar::press(n)` is what the panel needed.
 - The global MIDI receive-channel filter on the ESP32
   (`midi_set_input_channel`, Settings › MIDI). It sat in front of sixteen
   per-Track `midi_in` settings as a second, conflicting filter — a Track set
@@ -75,6 +94,10 @@ versioning and release process.
 
 ### Fixed
 
+- A shifted softkey fired the *unshifted* action in the same slot: Shift was
+  unstuck (swapping the row back) before the callback was read, so "Track +"
+  on the Sample Manager ran "Unload". Present since Shift landed, on the touch
+  path too; found by the new panel-key HIL test.
 - Clockwise on the panel encoder decremented values on the Play and Sample
   Edit pages while feeling right in the Sample Browser, Sample Manager and
   Instrument stages. Root cause was one level down: the encoder (PCNT unit 1)

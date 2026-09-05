@@ -9,17 +9,23 @@
 
 namespace wavex_ui {
 
-/// The 6 buttons fixed at the bottom of the screen, with dynamic labels and
-/// touch/encoder support.
+/// The 6 buttons fixed at the bottom of the screen, with dynamic labels,
+/// pressed by touch or by the panel's SOFT1..6 keys.
 class SoftkeyBar {
    public:
     void create(lv_obj_t* parent);
     void setSoftkeys(const std::array<Softkey, NUM_SOFTKEYS>& keys, bool shifted = false);
     lv_obj_t* container() const { return container_; }
 
-    /// delta: +1 for next, -1 for previous.
-    void focusNext(int delta);
-    void pressFocused();
+    /**
+     * @brief Fire softkey `index` (0..5) exactly as a touch on its button would.
+     *
+     * Same path as the touch event: the row currently shown (shifted or not),
+     * notifySoftkeyUsed() before the callback, the callback deferred through
+     * lv_async_call. A disabled or empty key does nothing and returns false.
+     * The panel's SOFT keys land here from InputDispatcher.
+     */
+    bool press(int index);
 
     /// Read-only view for the debug console's STATE reply: the key as last
     /// set, and its button's centre in screen coordinates (false when the
@@ -34,7 +40,6 @@ class SoftkeyBar {
     std::array<lv_obj_t*, NUM_SOFTKEYS> btns_{};
     std::array<lv_obj_t*, NUM_SOFTKEYS> labels_{};
     std::array<Softkey, NUM_SOFTKEYS> keys_{};
-    int focused_ = 0;
 };
 
 }  // namespace wavex_ui

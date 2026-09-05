@@ -75,7 +75,11 @@ void UINavigator::push(std::shared_ptr<UIPage> page) {
         LV_UNLOCK();
     }
 
-    if (!stack_.empty()) {
+    enter(std::move(page), true);
+}
+
+void UINavigator::enter(std::shared_ptr<UIPage> page, bool exit_current) {
+    if (exit_current && !stack_.empty()) {
         auto current = stack_.top();
         ESP_LOGI(TAG, "Exiting page: %s", current->name());
         LV_LOCK();
@@ -103,14 +107,17 @@ void UINavigator::push(std::shared_ptr<UIPage> page) {
     softkeyBar_.create(screen_);
     softkeyBar_.setSoftkeys(page->getSoftkeys());
     refreshShiftChip();
+    layoutContent();
+    LV_UNLOCK();
 
+    ESP_LOGI(TAG, "Navigation stack depth: %zu", stack_.size());
+}
+
+void UINavigator::layoutContent() {
     const int32_t total_h = lv_obj_get_height(lv_screen_active());
     const int32_t content_h = total_h - UI_HEADER_HEIGHT - UI_HOTKEY_HEIGHT;
     lv_obj_set_size(content_, lv_pct(100), content_h > 0 ? content_h : 0);
     lv_obj_align(content_, LV_ALIGN_TOP_LEFT, 0, UI_HEADER_HEIGHT);
-    LV_UNLOCK();
-
-    ESP_LOGI(TAG, "Navigation stack depth: %zu", stack_.size());
 }
 
 void UINavigator::pop() {
@@ -131,6 +138,9 @@ void UINavigator::pop() {
     if (!stack_.empty()) {
         auto prev = stack_.top();
         active_ = prev;
+        if (stack_.size() == 1) {
+            root_group_ = RootGroup::None;
+        }
 
         LV_LOCK();
         lv_obj_clean(content_);
@@ -147,15 +157,78 @@ void UINavigator::pop() {
         shifted_ = false;  // see push(): Shift does not survive navigation
         softkeyBar_.setSoftkeys(prev->getSoftkeys());
         refreshShiftChip();
-
-        const int32_t total_h = lv_obj_get_height(lv_screen_active());
-        const int32_t content_h = total_h - UI_HEADER_HEIGHT - UI_HOTKEY_HEIGHT;
-        lv_obj_set_size(content_, lv_pct(100), content_h > 0 ? content_h : 0);
-        lv_obj_align(content_, LV_ALIGN_TOP_LEFT, 0, UI_HEADER_HEIGHT);
+        layoutContent();
         LV_UNLOCK();
     }
 
     ESP_LOGI(TAG, "Navigation stack depth: %zu", stack_.size());
+}
+
+void UINavigator::unwindToRoot() {
+    if (stack_.size() <= 1) {
+        return;
+    }
+    auto current = stack_.top();
+    ESP_LOGI(TAG, "Exiting page: %s", current->name());
+    LV_LOCK();
+    current->onExit();
+    LV_UNLOCK();
+    // Every page below the top was exited when its child was pushed; there
+    // is nothing to tear down, only references to drop.
+    while (stack_.size() > 1) {
+        stack_.pop();
+    }
+    root_group_ = RootGroup::None;
+}
+
+void UINavigator::popToRoot() {
+    if (stack_.size() <= 1) {
+        return;
+    }
+    unwindToRoot();
+    // Re-enter the root as pop() would.
+    auto root = stack_.top();
+    stack_.pop();
+    enter(root, false);
+}
+
+void UINavigator::setRootGroupFactory(RootGroup group, PageFactory factory) {
+    const auto i = static_cast<size_t>(group);
+    if (i < static_cast<size_t>(RootGroup::Count)) {
+        factories_[i] = std::move(factory);
+    }
+}
+
+bool UINavigator::hasRootGroup(RootGroup group) const {
+    const auto i = static_cast<size_t>(group);
+    return i < static_cast<size_t>(RootGroup::Count) && static_cast<bool>(factories_[i]);
+}
+
+bool UINavigator::jumpToRoot(RootGroup group) {
+    if (!hasRootGroup(group)) {
+        // Track and Mixer have keys before they have pages. Refusing here,
+        // loudly, beats leaving the user on a page that is not the one the
+        // key is labelled with.
+        ESP_LOGW(TAG, "No page for root group %s yet", rootGroupName(group));
+        return false;
+    }
+    if (stack_.empty()) {
+        ESP_LOGE(TAG, "jumpToRoot before the main menu exists");
+        return false;
+    }
+    auto page = factories_[static_cast<size_t>(group)]();
+    if (!page) {
+        ESP_LOGE(TAG, "Root group %s produced no page", rootGroupName(group));
+        return false;
+    }
+    ESP_LOGI(TAG, "Jump to %s", rootGroupName(group));
+    // At the main menu the root is live and enter() exits it; deeper, the
+    // unwind has already exited the top and the root stays exited.
+    const bool at_root = stack_.size() == 1;
+    unwindToRoot();
+    enter(std::move(page), at_root);
+    root_group_ = group;
+    return true;
 }
 
 void UINavigator::refreshSoftkeys() {

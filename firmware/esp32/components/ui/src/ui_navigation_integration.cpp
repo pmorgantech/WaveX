@@ -3,7 +3,10 @@
 
 #include <esp_log.h>
 
+#include "ui/ui_diagnostics_page.h"
+#include "ui/ui_instrument_page.h"
 #include "ui/ui_main_menu.h"
+#include "ui/ui_play_page.h"
 
 static const char* TAG = "UI_NAV_INTEGRATION";
 
@@ -12,8 +15,19 @@ namespace wavex_ui {
 void initNavigationSystem() {
     ESP_LOGI(TAG, "Initializing navigation system");
 
+    // What a jump to each root group pushes - from the main menu or from the
+    // panel's jump keys. Track and Mixer are deliberately absent: they have
+    // keys before they have pages (Phase 2.5), and jumpToRoot() refuses them
+    // until a page is registered here.
+    auto& nav = UINavigator::instance();
+    nav.setRootGroupFactory(RootGroup::Sample, createSampleGroup);
+    nav.setRootGroupFactory(RootGroup::Instrument, createInstrumentPage);
+    nav.setRootGroupFactory(RootGroup::Play, createPlayPage);
+    nav.setRootGroupFactory(RootGroup::Settings, createSettingsGroup);
+    nav.setRootGroupFactory(RootGroup::Diagnostics, createDiagnosticsPage);
+
     auto mainMenu = createMainMenu();
-    UINavigator::instance().push(mainMenu);
+    nav.push(mainMenu);
 
     ESP_LOGI(TAG, "Navigation system initialized with main menu");
 }

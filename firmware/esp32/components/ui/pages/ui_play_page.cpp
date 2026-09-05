@@ -684,6 +684,13 @@ std::array<Softkey, NUM_SOFTKEYS> UIPlayPage::getShiftedSoftkeys() {
     return keys;
 }
 
+void UIPlayPage::onTrackChanged() {
+    // The panel's Track -/+ stepped the shared Track; the binding request is
+    // already on the wire, so only the labels need redrawing.
+    refreshBindingStatus();
+    refreshParamLabel();
+}
+
 std::shared_ptr<UIPage> createPlayPage() {
     return std::make_shared<UIPlayPage>();
 }

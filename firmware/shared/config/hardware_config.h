@@ -635,6 +635,45 @@
 #define WAVEX_LED_BRIGHTNESS_BITS 12
 #endif
 
+// Panel LED map: which TLC5947 channel each logical LED (PanelLed, in
+// components/ui/include/ui/panel_led.h) sits on. Wiring truth, so it lives
+// here with the pins (panel-controls.md §6 decision 4); panel_led.h turns
+// these into the table and static_asserts that no channel is used twice and
+// every one is < WAVEX_LED_CHANNELS. Nothing drives the chain until 2.P.3;
+// the numbers follow the panel PCB when it exists. Chip 1 is channels 0-23,
+// chip 2 is 24-47: the pad grid is kept whole on chip 2.
+#define WAVEX_LED_CH_SOFT1 0
+#define WAVEX_LED_CH_SOFT2 1
+#define WAVEX_LED_CH_SOFT3 2
+#define WAVEX_LED_CH_SOFT4 3
+#define WAVEX_LED_CH_SOFT5 4
+#define WAVEX_LED_CH_SOFT6 5
+#define WAVEX_LED_CH_SHIFT 6
+#define WAVEX_LED_CH_JUMP_SAMPLE 7
+#define WAVEX_LED_CH_JUMP_PLAY 8
+#define WAVEX_LED_CH_JUMP_INSTRUMENT 9
+#define WAVEX_LED_CH_JUMP_TRACK 10
+#define WAVEX_LED_CH_JUMP_MIXER 11
+#define WAVEX_LED_CH_JUMP_SETTINGS 12
+#define WAVEX_LED_CH_PLAY_STOP 13
+#define WAVEX_LED_CH_REC 14
+#define WAVEX_LED_CH_PAD1 24
+#define WAVEX_LED_CH_PAD2 25
+#define WAVEX_LED_CH_PAD3 26
+#define WAVEX_LED_CH_PAD4 27
+#define WAVEX_LED_CH_PAD5 28
+#define WAVEX_LED_CH_PAD6 29
+#define WAVEX_LED_CH_PAD7 30
+#define WAVEX_LED_CH_PAD8 31
+#define WAVEX_LED_CH_PAD9 32
+#define WAVEX_LED_CH_PAD10 33
+#define WAVEX_LED_CH_PAD11 34
+#define WAVEX_LED_CH_PAD12 35
+#define WAVEX_LED_CH_PAD13 36
+#define WAVEX_LED_CH_PAD14 37
+#define WAVEX_LED_CH_PAD15 38
+#define WAVEX_LED_CH_PAD16 39
+
 // Optional potentiometer configuration (e.g., MCP3008 via SPI)
 #ifndef WAVEX_POT_COUNT
 #define WAVEX_POT_COUNT 4
@@ -761,6 +800,55 @@
 #define WAVEX_TCA8418_TASK_STACK_SIZE 4096
 #endif
 #endif
+
+// Panel key map: the TCA8418 keycode (row * 10 + column + 1, as the part
+// reports it) of each logical key (PanelKey, in
+// components/ui/include/ui/panel_key.h). Wiring truth, so it lives here with
+// the pins (panel-controls.md §6 decision 4); panel_key.cpp turns these into
+// the lookup table and static_asserts that no keycode is claimed twice.
+//
+// As-built: only row 0 columns 0-3 (Select, Back, encoder push, Shift) have
+// ever been pressed on the bench. Everything else is the planned panel
+// layout - one row per key group, the pad grid as four rows of four - and
+// follows the panel PCB when it exists. The Diagnostics ▸ Panel tab shows the
+// raw keycode of whatever was last pressed, which is how these get verified
+// rather than assumed.
+#define WAVEX_KEYCODE_NAV_A_PUSH 1
+#define WAVEX_KEYCODE_BACK 2
+#define WAVEX_KEYCODE_NAV_B_PUSH 3
+#define WAVEX_KEYCODE_SHIFT 4
+#define WAVEX_KEYCODE_TRACK_PREV 5
+#define WAVEX_KEYCODE_TRACK_NEXT 6
+#define WAVEX_KEYCODE_PLAY_STOP 7
+#define WAVEX_KEYCODE_REC 8
+#define WAVEX_KEYCODE_SOFT1 11
+#define WAVEX_KEYCODE_SOFT2 12
+#define WAVEX_KEYCODE_SOFT3 13
+#define WAVEX_KEYCODE_SOFT4 14
+#define WAVEX_KEYCODE_SOFT5 15
+#define WAVEX_KEYCODE_SOFT6 16
+#define WAVEX_KEYCODE_JUMP_SAMPLE 21
+#define WAVEX_KEYCODE_JUMP_PLAY 22
+#define WAVEX_KEYCODE_JUMP_INSTRUMENT 23
+#define WAVEX_KEYCODE_JUMP_TRACK 24
+#define WAVEX_KEYCODE_JUMP_MIXER 25
+#define WAVEX_KEYCODE_JUMP_SETTINGS 26
+#define WAVEX_KEYCODE_PAD1 31
+#define WAVEX_KEYCODE_PAD2 32
+#define WAVEX_KEYCODE_PAD3 33
+#define WAVEX_KEYCODE_PAD4 34
+#define WAVEX_KEYCODE_PAD5 41
+#define WAVEX_KEYCODE_PAD6 42
+#define WAVEX_KEYCODE_PAD7 43
+#define WAVEX_KEYCODE_PAD8 44
+#define WAVEX_KEYCODE_PAD9 51
+#define WAVEX_KEYCODE_PAD10 52
+#define WAVEX_KEYCODE_PAD11 53
+#define WAVEX_KEYCODE_PAD12 54
+#define WAVEX_KEYCODE_PAD13 61
+#define WAVEX_KEYCODE_PAD14 62
+#define WAVEX_KEYCODE_PAD15 63
+#define WAVEX_KEYCODE_PAD16 64
 
 // ============================================================================
 // DEPENDENCY CHECKS

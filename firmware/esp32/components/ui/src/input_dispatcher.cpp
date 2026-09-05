@@ -1,10 +1,16 @@
 #include "ui/input_dispatcher.h"
 
+#include "config/hardware_config.h"
+#include "esp_log.h"
 #include "esp_lvgl_port.h"
 #include "esp_timer.h"
+#include "inter_mcu.h"
+#include "ui/current_track.h"
 #include "ui/display_manager.h"
 #include "ui/ui_navigator.h"
 #include "ui/ui_softkey.h"
+
+static const char* TAG = "INPUT";
 
 namespace wavex_ui {
 
@@ -70,29 +76,132 @@ void InputDispatcher::processAll() {
         // the UART RX task's callbacks must stay flag-only, never touching
         // LVGL, or this becomes a deadlock.
         lvgl_port_lock(portMAX_DELAY);
-
-        // Shift is a global modifier, handled here rather than per page: every
-        // screen gets it for free, and no page can accidentally swallow it by
-        // consuming ButtonPress for something else. Never forwarded; pages see
-        // modifier state, not the key.
-        if (evt.source_id == BUTTON_SHIFT) {
-            if (evt.type == InputType::ButtonPress) {
-                UINavigator::instance().toggleShift();
-            }
-        } else if (evt.source_id == BUTTON_BACK) {
-            // Back is global for the same reason: no page distinguishes
-            // button ids, so forwarded it would read as "activate" - which
-            // is what the physical key did before this (found by the HIL
-            // suite, 2026-09-04). The root page stays put.
-            if (evt.type == InputType::ButtonPress) {
-                UINavigator::instance().pop();
-            }
-        } else if (current_) {
-            current_->handleEvent(evt);
-        }
-
+        dispatch(evt);
         lvgl_port_unlock();
     }
+}
+
+void InputDispatcher::dispatch(InputEvent evt) {
+    const bool is_key = evt.type == InputType::KeyPress || evt.type == InputType::KeyRelease ||
+                        evt.type == InputType::ButtonPress || evt.type == InputType::ButtonRelease;
+    if (!is_key) {
+        if (current_) {
+            current_->handleEvent(evt);
+        }
+        return;
+    }
+
+    // The key semantics of panel-controls.md §4.3 live here and nowhere else.
+    // The global keys are never forwarded: no page distinguishes key ids, so
+    // forwarded they would read as "activate" - which is what the physical
+    // Back key did before it was intercepted (found by the HIL suite,
+    // 2026-09-04). Pages see modifier state, not the Shift key; they see the
+    // Track change through onTrackChanged(), not the key.
+    const PanelKey key = evt.key();
+    const bool press = evt.isKeyPress();
+    if (press) {
+        last_key_.store(key, std::memory_order_relaxed);
+        key_presses_.fetch_add(1, std::memory_order_relaxed);
+    }
+    auto& nav = UINavigator::instance();
+
+    switch (key) {
+        case PanelKey::Shift:
+            if (press) {
+                nav.toggleShift();
+            }
+            return;
+        case PanelKey::Back:
+            // The root page stays put (pop() refuses).
+            if (press) {
+                nav.pop();
+            }
+            return;
+        case PanelKey::Soft1:
+        case PanelKey::Soft2:
+        case PanelKey::Soft3:
+        case PanelKey::Soft4:
+        case PanelKey::Soft5:
+        case PanelKey::Soft6:
+            // Whatever the bar shows now - the shifted row while Shift is
+            // latched - exactly as a touch on that button would.
+            if (press) {
+                nav.softkeyBar()->press(softkeyIndex(key));
+            }
+            return;
+        case PanelKey::JumpSample:
+            if (press) {
+                nav.jumpToRoot(RootGroup::Sample);
+            }
+            return;
+        case PanelKey::JumpPlay:
+            if (press) {
+                nav.jumpToRoot(RootGroup::Play);
+            }
+            return;
+        case PanelKey::JumpInstrument:
+            if (press) {
+                nav.jumpToRoot(RootGroup::Instrument);
+            }
+            return;
+        case PanelKey::JumpTrack:
+            if (press) {
+                nav.jumpToRoot(RootGroup::Track);
+            }
+            return;
+        case PanelKey::JumpMixer:
+            if (press) {
+                nav.jumpToRoot(RootGroup::Mixer);
+            }
+            return;
+        case PanelKey::JumpSettings:
+            if (press) {
+                nav.jumpToRoot(RootGroup::Settings);
+            }
+            return;
+        case PanelKey::TrackPrev:
+            if (press) {
+                stepTrack(-1);
+            }
+            return;
+        case PanelKey::TrackNext:
+            if (press) {
+                stepTrack(+1);
+            }
+            return;
+        case PanelKey::NavAPush:
+        case PanelKey::NavBPush:
+            // Select and the encoder push are page-handled, and every page
+            // reads them as the ButtonPress it has always received.
+            evt.type = press ? InputType::ButtonPress : InputType::ButtonRelease;
+            evt.source_id = key == PanelKey::NavAPush ? BUTTON_SELECT : BUTTON_ENCODER_CLICK;
+            break;
+        default:
+            // Transport, pads and anything unmapped go to the page as posted
+            // until Phase 2 gives them sequencer semantics. The default
+            // onInput ignores them.
+            break;
+    }
+    if (current_) {
+        current_->handleEvent(evt);
+    }
+}
+
+void InputDispatcher::stepTrack(int delta) {
+    // Wraps: 16 Tracks matches instrument.hpp's kNumTracks and MSG_NOTE_ON's
+    // channel & 0x0F on the backend.
+    constexpr int kTracks = WAVEX_MIX_TRACKS;
+    const auto next = static_cast<uint8_t>((getCurrentTrack() + delta + kTracks) % kTracks);
+    setCurrentTrack(next);
+    // Ask the Daisy what the Track holds; the reply lands on whichever page
+    // shows a binding status, through its own deferred-update path.
+    inter_mcu_request_track_binding(next);
+    auto& nav = UINavigator::instance();
+    if (auto page = nav.active()) {
+        page->onTrackChanged();
+    }
+    nav.refreshSoftkeys();
+    ESP_LOGI(TAG, "Track %u", trackDisplayNumber(next));
 }
 
 void InputDispatcher::setActiveContext(std::shared_ptr<UIContext> ctx) {

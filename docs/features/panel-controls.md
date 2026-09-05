@@ -287,7 +287,7 @@ Driven entirely from navigator/page state — no page sets an LED directly:
 | # | Stage | Host-verifiable | Bench |
 |---|---|---|---|
 | 0 | **Pin reconciliation** — `pin_config.h` rewritten against the WIFI6 header; CD74HC4067 removed; MIDI pins moved; per-encoder direction flags. *Done 2026-09-05.* | compiles | clockwise is forward on every page |
-| 1 | **`PanelKey` / `PanelLed` model + key map** — enum, table in `hardware_config.h`, `InputEvent` extensions, `KEY <name>` console verb, dispatcher handling for `SOFTn`, jumps, `TRACK±`; `SoftkeyBar::press(n)`; `UINavigator::jumpToRoot()`. Delete the dead `focusNext/pressFocused` or wire them — not both. | HIL: jumps, softkeys via key, Shift row | keycode → key on the Diagnostics tab |
+| 1 | **`PanelKey` / `PanelLed` model + key map** — enum, table in `hardware_config.h`, `InputEvent` extensions, `KEY <name>` console verb, dispatcher handling for `SOFTn`, jumps, `TRACK±`; `SoftkeyBar::press(n)`; `UINavigator::jumpToRoot()`. The dead `focusNext/pressFocused` deleted. *Done 2026-09-05.* | HIL: jumps, softkeys via key, Shift row (`test_panel_keys.py`) | keycode → key on the Diagnostics ▸ Panel tab |
 | 2 | **Keypad INT** — `CFG.KE_IEN`, ISR → notification, fallback poll. | — | latency, no missed keys under a 10-key roll |
 | 3 | **`panel_task` + SPI2 + TLC5947** — absorb `pcnt_task`; LED frame, BLANK, `PanelLeds`, LED policy §4.5, `LEDS` in `STATE`. | HIL: LED state follows navigation | walk test, dark at power-on, no flicker with pot reads |
 | 4 | **MCP3008 + endless pots** — decoder (host tests), calibration store, Settings → Calibrate flow, `EncoderBinding` page contract, strip widget, Shift = fine. First consumers: Instrument page (Filter/Amp), Play page live strip. | decoder tests; HIL `POT n` | feel, drift, noise floor; measure the strip's cost on the 30 FPS budget |
@@ -324,10 +324,11 @@ the link proves too high (`sequencer.md` §1 already reserves that option).
 Recorded in `roadmap.md` § Outstanding hardware verification:
 
 - ~~Which encoder is physically wired, and to what?~~ Unit 1, confirmed 2026-09-05;
-  direction fixed at the source. Remaining: confirm clockwise is forward on
-  every page after the flash.
-- TCA8418 matrix geometry (`WAVEX_TCA8418_ROWS/COLUMNS`, unconfirmed) — the Diagnostics
-  Panel tab (stage 1) answers it.
+  direction fixed at the source; clockwise verified forward on every page
+  the same day.
+- TCA8418 matrix geometry (`WAVEX_TCA8418_ROWS/COLUMNS`, unconfirmed) and the
+  `WAVEX_KEYCODE_*` map beyond the four bench keys — the Diagnostics ▸ Panel
+  tab (stage 1, landed) shows each press's keycode, row/column and `PanelKey`.
 - USB MIDI enumerates on the 4-pin HS connector — never confirmed on the
   bench (roadmap "MIDI latency" row).
 - Endless-pot part and its wiper waveform (triangle vs sinusoid) — the

@@ -129,6 +129,16 @@ manager, and unreachable UI surfaces after re-checking callers.
 
 ## Samples, instruments, and browsing
 
+### Sample loop playback
+
+Reported on the bench 2026-09-05: a sample with loop points set plays through
+to its end in both the Sample Edit audition and the Play page — the loop is
+never taken. Not yet traced. Three places it could be lost: the edit page
+sending the loop points, the Track/binding storing them, or the voice's
+playback honouring them; check each with the loop flag and points in the
+Daisy's `TRACKS`/`SAMPLES` console output before touching code. Belongs to
+the roadmap's "Sample Edit" verification row.
+
 ### Non-frame-aligned WAV data
 
 Some legal WAV files whose `data` payload begins off a frame boundary produce

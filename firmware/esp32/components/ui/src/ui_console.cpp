@@ -17,6 +17,7 @@
 #include "lvgl.h"
 #include "ui/current_track.h"
 #include "ui/input_dispatcher.h"
+#include "ui/panel_key.h"
 #include "ui/ui_navigator.h"
 #include "ui/ui_screenshot.h"
 #include "ui/ui_softkey.h"
@@ -180,18 +181,6 @@ bool handle_log_command(const char* cmd) {
     return true;
 }
 
-uint8_t button_id(const char* name) {
-    if (!strcmp(name, "SELECT"))
-        return wavex_ui::BUTTON_SELECT;
-    if (!strcmp(name, "BACK"))
-        return wavex_ui::BUTTON_BACK;
-    if (!strcmp(name, "ENC") || !strcmp(name, "CLICK"))
-        return wavex_ui::BUTTON_ENCODER_CLICK;
-    if (!strcmp(name, "SHIFT"))
-        return wavex_ui::BUTTON_SHIFT;
-    return 0;
-}
-
 bool post_input(wavex_ui::InputType type, uint8_t source, int16_t delta) {
     wavex_ui::InputEvent evt{};
     evt.type = type;
@@ -277,23 +266,27 @@ void dispatch(const Command& c) {
             reply_err(seq, "busy");
         }
     } else if (!strcmp(c.verb, "KEY")) {
-        // KEY <SELECT|BACK|ENC|SHIFT> [PRESS|RELEASE|TAP]
+        // KEY <name> [PRESS|RELEASE|TAP]: any panel key by its panelKeyName()
+        // (SOFT3, SAMPLE, TRACK_NEXT, PAD16 ...), plus the old SELECT/ENC
+        // spellings. Posted exactly as the keypad task posts a matrix key, so
+        // the dispatcher's key semantics are what gets exercised.
         char name[16], action[16];
         NextWord(&p, name, sizeof(name));
         if (!NextWord(&p, action, sizeof(action))) {
             snprintf(action, sizeof(action), "TAP");
         }
-        const uint8_t id = button_id(name);
-        if (id == 0) {
+        const wavex_ui::PanelKey key = wavex_ui::panelKeyFromName(name);
+        if (key == wavex_ui::PanelKey::None) {
             reply_err(seq, "badkey");
             return;
         }
+        const auto id = static_cast<uint8_t>(key);
         bool ok = true;
         if (!strcmp(action, "PRESS") || !strcmp(action, "TAP")) {
-            ok = post_input(wavex_ui::InputType::ButtonPress, id, 0) && ok;
+            ok = post_input(wavex_ui::InputType::KeyPress, id, 0) && ok;
         }
         if (!strcmp(action, "RELEASE") || !strcmp(action, "TAP")) {
-            ok = post_input(wavex_ui::InputType::ButtonRelease, id, 0) && ok;
+            ok = post_input(wavex_ui::InputType::KeyRelease, id, 0) && ok;
         }
         if (strcmp(action, "PRESS") && strcmp(action, "RELEASE") && strcmp(action, "TAP")) {
             reply_err(seq, "badaction");
@@ -413,6 +406,13 @@ void serve_state(int32_t seq) {
     len = AppendKvText(s_reply, sizeof(s_reply), len, "page", page ? page->name() : "-");
     len = AppendKvInt(s_reply, sizeof(s_reply), len, "depth", static_cast<long>(nav.depth()));
     len = AppendKvInt(s_reply, sizeof(s_reply), len, "shift", nav.isShifted() ? 1 : 0);
+    len = AppendKv(
+        s_reply, sizeof(s_reply), len, "root", wavex_ui::rootGroupName(nav.activeRootGroup()));
+    len = AppendKv(s_reply,
+                   sizeof(s_reply),
+                   len,
+                   "lastkey",
+                   wavex_ui::panelKeyName(wavex_ui::InputDispatcher::instance().lastKey()));
     len = append_track_state(s_reply, sizeof(s_reply), len, wavex_ui::getCurrentTrack());
     // The softkey row as the bar shows it now (shifted or not), with each
     // button's centre so a host can TAP it through the real touch path.
@@ -468,10 +468,7 @@ void serve_request() {
             append_track_state(s_reply, sizeof(s_reply), len, static_cast<uint8_t>(n));
         }
     } else if (!strcmp(s_req.verb, "HOME")) {
-        auto& nav = wavex_ui::UINavigator::instance();
-        while (nav.canPop()) {
-            nav.pop();
-        }
+        wavex_ui::UINavigator::instance().popToRoot();
         FormatOk(seq, s_reply, sizeof(s_reply));
     } else if (!strcmp(s_req.verb, "PAGE")) {
         auto page = wavex_ui::UINavigator::instance().active();

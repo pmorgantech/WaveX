@@ -9,6 +9,7 @@
 #include "pin_config.h"
 #include "ui/input_dispatcher.h"
 #include "ui/input_event.h"
+#include "ui/panel_key.h"
 
 #include <atomic>
 #if defined(ESP_PLATFORM) && WAVEX_ESP_BUTTON_MATRIX_ENABLED
@@ -28,29 +29,37 @@ static gpio_num_t s_int_gpio = GPIO_NUM_NC;
 static TCA8418* s_dev = nullptr;
 #endif
 
-// Keycode per TCA8418: 1..80 => R/C encoded.
-static uint8_t map_keycode_to_button(uint8_t keycode) {
-    switch (keycode) {
-        case 1:
-            return 1;  // Select
-        case 2:
-            return 2;  // Back
-        case 3:
-            return 3;  // EncoderClick
-        case 4:
-            return 4;  // Shift (BUTTON_SHIFT) - reveals the alternate
-                       // softkey row; handled globally in InputDispatcher
-        default:
-            return 0;  // Unknown
-    }
-}
+// What the Diagnostics ▸ Panel tab shows: the last raw keycode the matrix
+// reported, before the WAVEX_KEYCODE_* map, so an unmapped key still says
+// which row and column it is on - which is how the map gets verified.
+static std::atomic<uint8_t> s_last_keycode{0};
+static std::atomic<bool> s_last_pressed{false};
+static std::atomic<uint32_t> s_events{0};
+static std::atomic<uint32_t> s_unmapped{0};
 
-static void post_button(bool pressed, uint8_t button_id) {
-    if (button_id == 0)
+static void post_key(bool pressed, uint8_t keycode) {
+    if (pressed) {
+        s_last_keycode.store(keycode, std::memory_order_relaxed);
+        s_events.fetch_add(1, std::memory_order_relaxed);
+    }
+    s_last_pressed.store(pressed, std::memory_order_relaxed);
+    const PanelKey key = panelKeyFromKeycode(keycode);
+    if (key == PanelKey::None) {
+        // Not dropped silently: the Panel tab counts these, and the keycode
+        // above says where the key is.
+        if (pressed) {
+            s_unmapped.fetch_add(1, std::memory_order_relaxed);
+            ESP_LOGW(TAG,
+                     "Unmapped keycode %u (row %u col %u)",
+                     keycode,
+                     (keycode - 1) / 10,
+                     (keycode - 1) % 10);
+        }
         return;
+    }
     InputEvent evt{};
-    evt.type = pressed ? InputType::ButtonPress : InputType::ButtonRelease;
-    evt.source_id = button_id;
+    evt.type = pressed ? InputType::KeyPress : InputType::KeyRelease;
+    evt.source_id = static_cast<uint8_t>(key);
     evt.timestamp_ms = (uint32_t)(esp_timer_get_time() / 1000);
     InputDispatcher::instance().post(evt);
 }
@@ -105,7 +114,7 @@ static void keypad_task(void* arg) {
             // therefore fired on release, and chords were unrepresentable.
             const bool pressed = (event & 0x80) != 0;
             const uint8_t keycode = static_cast<uint8_t>(event & 0x7F);
-            post_button(pressed, map_keycode_to_button(keycode));
+            post_key(pressed, keycode);
         }
 #endif
         vTaskDelay(pdMS_TO_TICKS(kPollIntervalMs));
@@ -113,6 +122,16 @@ static void keypad_task(void* arg) {
 
     s_task = nullptr;
     vTaskDelete(nullptr);
+}
+
+void tca8418_keypad_last(tca8418_keypad_stats_t* out) {
+    if (!out) {
+        return;
+    }
+    out->keycode = s_last_keycode.load(std::memory_order_relaxed);
+    out->pressed = s_last_pressed.load(std::memory_order_relaxed);
+    out->events = s_events.load(std::memory_order_relaxed);
+    out->unmapped = s_unmapped.load(std::memory_order_relaxed);
 }
 
 esp_err_t tca8418_keypad_start(int int_gpio, uint8_t i2c_addr) {

@@ -96,7 +96,9 @@ Stages, one commit each:
    out, DIN/USB latency measured.
 
 Stage 0 (pin reconciliation against the ESP32-P4-WIFI6 header, MIDI pins
-moved, CD74HC4067 dropped) landed 2026-09-05.
+moved, CD74HC4067 dropped) and stage 1 (`PanelKey`/`PanelLed`, the key
+map, jumps, softkeys and Track ± from the panel, the Diagnostics Panel
+tab) landed 2026-09-05.
 
 **Gate (2.P):** from the panel alone — jump to Instrument, change cutoff on a
 pot and hear it, latch Shift and fire a shifted softkey, BACK out — with
@@ -175,11 +177,11 @@ The following code paths are open until observed on the target:
 | Audio formats | Audition 44.1 and 48 kHz WAVs; confirm pitch. |
 | UART and SD | Sustain traffic during streaming; run read and hot-unmount soak tests. |
 | MIDI latency | Measure DIN and USB input-to-sound latency; target under 5 ms. USB MIDI enumerates on the USB 2.0 HS controller — the board's 4-pin USB connector, not the Type-C — and that has never been confirmed on the bench. DIN waits on 2.P.5 (receiver on the new RX pin). |
-| Panel pins (2026-09-05) | `pin_config.h` was rewritten against the ESP32-P4-WIFI6 header. The bench encoder is PCNT unit 1 (confirmed 2026-09-05); it counts negative on clockwise as wired, and three pages had compensated for it — direction is now one per-encoder flag in `hardware_config.h`, and those pages follow the shared contract. Verify: clockwise now increases values / moves forward on **every** page (Play cutoff, Sample Edit, Instrument stages, Sample Manager focus, Sample Browser list). Verify the TCA8418 matrix geometry (`WAVEX_TCA8418_ROWS/COLUMNS`, never confirmed against the wiring) from the 2.P.1 Diagnostics Panel tab. Scope an endless pot's two wipers before calibrating (the decoder assumes triangle waves). |
+| Panel pins (2026-09-05) | `pin_config.h` was rewritten against the ESP32-P4-WIFI6 header. The bench encoder is PCNT unit 1 (confirmed 2026-09-05); it counts negative on clockwise as wired, and three pages had compensated for it — direction is now one per-encoder flag in `hardware_config.h`, and those pages follow the shared contract. Clockwise increases values / moves forward on every page — verified 2026-09-05. Verify the TCA8418 matrix geometry (`WAVEX_TCA8418_ROWS/COLUMNS`, never confirmed against the wiring) and the `WAVEX_KEYCODE_*` map from the Diagnostics ▸ Panel tab (2.P.1): press each key, read its keycode, row/column and `PanelKey`; "unmapped" means the map or the geometry is wrong. Blocker first: the bench log shows `TCA8418 hardware initialization failed` on every boot recorded (2026-09-05), so the keypad has not been answering on I2C at all — check its wiring and address before reading anything off the Panel tab. Scope an endless pot's two wipers before calibrating (the decoder assumes triangle waves). |
 | Diagnostics | Open the page and verify live telemetry arrives. |
 | Digital voices | Trigger RAM-resident notes, sweep live parameters, and judge SVF response/resonance. |
 | Callback budget | Establish the first recurring callback-headroom report: DWT-measure SVF (both topologies, 24 dB, drive), DTCM placement, mixer, and 480 MHz behavior with eight voices on the persistent QSPI `-O2` image, plus a zero-underrun soak. Record it in `callback-performance-log.md` using the gate in `performance_monitoring.md`. |
-| Sample Edit | Verify waveform fetch, handles, loop seam, browser detail waveform, and stereo readability. |
+| Sample Edit | Verify waveform fetch, handles, loop seam, browser detail waveform, and stereo readability. **Loop playback does not work** (bench, 2026-09-05): a sample with loop points set plays through in both Sample Edit audition and Play; not yet traced (is the loop sent, stored on the Track, or honoured by the voice?). See `backlog.md` § Sample loop playback. |
 | Settings and input | Verify brightness, scrolling, MIDI channel filtering, keypad, encoder direction, and UI responsiveness. |
 | UI concurrency | Measure LVGL lock/refresh behavior during encoder bursts and sample loading. |
 | Load-to-Track and the Sample Pool (2026-09-04/05) | Automated: `make test-hil` (`tests/hil/test_load_to_track.py`, `test_sample_pool.py`) covers Load onto an empty Track and a note sounding on it, the replace picker (cancel, confirm, Track -/+), Assign's confirm, a failed load's reason crossing the link, one file loaded twice being one Pool entry, an import's samples in the Pool and playing, two imports of one file set sharing it, a sample replacing an import and freeing what only it held, and the Sample Manager paging a Pool larger than one page. Still manual: *hearing* the Keys, and a Pool-full / arena-full refusal (no card holds 1024 samples or 60 MB of small ones). |

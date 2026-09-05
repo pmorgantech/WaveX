@@ -62,6 +62,7 @@ class UIInstrumentPage : public UIPage {
     void onEnter(lv_obj_t* parent) override;
     void onExit() override;
     void onInput(const InputEvent& evt) override;
+    void onTrackChanged() override;
     std::array<Softkey, NUM_SOFTKEYS> getSoftkeys() override;
     std::array<Softkey, NUM_SOFTKEYS> getShiftedSoftkeys() override;
 

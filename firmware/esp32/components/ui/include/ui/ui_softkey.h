@@ -1,6 +1,8 @@
 // WaveX UI Softkey Definition
 #pragma once
 
+#include "ui/panel_key.h"
+
 #include <array>
 #include <cstdint>
 #include <functional>
@@ -23,15 +25,17 @@ struct Softkey {
 constexpr int NUM_SOFTKEYS = 6;
 
 /**
- * @brief Logical button ids carried in InputEvent::source_id.
+ * @brief The four bench buttons' ids, as carried in InputEvent::source_id.
  *
- * Shift is intercepted globally by the InputDispatcher rather than handled
+ * Aliases for the PanelKey values (panel_key.h) that replaced them; kept so
+ * nothing that compares an id has to change in the same commit. Shift and
+ * Back are intercepted globally by the InputDispatcher rather than handled
  * per page, so every screen gets the same modifier for free and no page can
  * accidentally swallow it.
  */
-constexpr uint8_t BUTTON_SELECT = 1;
-constexpr uint8_t BUTTON_BACK = 2;
-constexpr uint8_t BUTTON_ENCODER_CLICK = 3;
-constexpr uint8_t BUTTON_SHIFT = 4;
+constexpr uint8_t BUTTON_SELECT = static_cast<uint8_t>(PanelKey::NavAPush);
+constexpr uint8_t BUTTON_BACK = static_cast<uint8_t>(PanelKey::Back);
+constexpr uint8_t BUTTON_ENCODER_CLICK = static_cast<uint8_t>(PanelKey::NavBPush);
+constexpr uint8_t BUTTON_SHIFT = static_cast<uint8_t>(PanelKey::Shift);
 
 }  // namespace wavex_ui

@@ -26,10 +26,22 @@ class InputDispatcher {
     /// is where it went before.
     uint32_t droppedEvents() const { return dropped_events_.load(std::memory_order_relaxed); }
 
+    /// The last panel key pressed (any source: matrix, touch bar, console),
+    /// for the Diagnostics ▸ Panel tab and the STATE reply. PanelKey::None
+    /// until the first press. Written on the UI task; read from anywhere.
+    PanelKey lastKey() const { return last_key_.load(std::memory_order_relaxed); }
+    uint32_t keyPresses() const { return key_presses_.load(std::memory_order_relaxed); }
+
    private:
     InputDispatcher();
+    // The key semantics of panel-controls.md §4.3, applied under the LVGL lock.
+    void dispatch(InputEvent evt);
+    void stepTrack(int delta);
+
     QueueHandle_t queue_;
     std::shared_ptr<UIContext> current_;
+    std::atomic<PanelKey> last_key_{PanelKey::None};
+    std::atomic<uint32_t> key_presses_{0};
     // Producers are the encoder poll, the keypad task and (potentially) an
     // ISR, so this is incremented from more than one context.
     std::atomic<uint32_t> dropped_events_{0};

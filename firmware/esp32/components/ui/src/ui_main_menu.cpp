@@ -57,29 +57,31 @@ std::string formatPercent(int v) {
 std::shared_ptr<UIPage> createMainMenu() {
     auto menu = std::make_shared<UIMenuPage>("Main Menu");
 
-    menu->addItem("Sample", []() {
-        ESP_LOGI(TAG, "Opening Sample");
-        UINavigator::instance().push(createSampleGroup()); });
-
-    // Instrument is a tab group too, but one page builds its own tabview rather
-    // than a UITabHostPage: its five stages share the Instrument being edited,
-    // so the header and status line have to outlive a tab switch. See
+    // Each item is a jump to its root group - the same call the panel's jump
+    // keys make (panel-controls.md §4.3), so a menu selection and a key press
+    // are one code path. The pages come from the factories
+    // initNavigationSystem() registers, not from here.
+    //
+    // Instrument is a tab group too, but one page builds its own tabview
+    // rather than a UITabHostPage: its five stages share the Instrument being
+    // edited, so the header and status line have to outlive a tab switch. See
     // UIInstrumentPage.
-    menu->addItem("Instrument", []() {
-        ESP_LOGI(TAG, "Opening Instrument");
-        UINavigator::instance().push(createInstrumentPage()); });
-
-    menu->addItem("Play", []() {
-        ESP_LOGI(TAG, "Opening Play");
-        UINavigator::instance().push(createPlayPage()); });
-
-    menu->addItem("Settings", []() {
-        ESP_LOGI(TAG, "Opening Settings");
-        UINavigator::instance().push(createSettingsGroup()); });
-
-    menu->addItem("Diagnostics", []() {
-        ESP_LOGI(TAG, "Diagnostics selected");
-        UINavigator::instance().push(createDiagnosticsPage()); });
+    static const struct {
+        const char* label;
+        RootGroup group;
+    } kItems[] = {
+        {"Sample", RootGroup::Sample},
+        {"Instrument", RootGroup::Instrument},
+        {"Play", RootGroup::Play},
+        {"Settings", RootGroup::Settings},
+        {"Diagnostics", RootGroup::Diagnostics},
+    };
+    for (const auto& item: kItems) {
+        const RootGroup group = item.group;
+        menu->addItem(item.label, [group]() {
+            ESP_LOGI(TAG, "Opening %s", rootGroupName(group));
+            UINavigator::instance().jumpToRoot(group); });
+    }
 
     return menu;
 }

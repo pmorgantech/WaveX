@@ -17,7 +17,10 @@
 #include "freertos/task.h"
 #include "inter_mcu.h"
 #include "links/esp_spi_link.h"
+#include "pcnt_task.h"
 #include "ui/input_dispatcher.h"
+#include "ui/panel_key.h"
+#include "ui/tca8418_keypad.h"
 #include "ui/ui_navigator.h"
 #include "ui/ui_palette.h"
 #include "ui/ui_tab_group.h"
@@ -67,6 +70,7 @@ void UIDiagnosticsPage::resetUiState() {
     memset(audio_cards, 0, sizeof(audio_cards));
     memset(storage_cards, 0, sizeof(storage_cards));
     memset(midi_cards, 0, sizeof(midi_cards));
+    memset(panel_cards, 0, sizeof(panel_cards));
     tabview = nullptr;
     midi_note = nullptr;
     msg_table = nullptr;
@@ -211,7 +215,8 @@ void UIDiagnosticsPage::buildTabs(lv_obj_t* parent) {
 
     // Order is the one docs/ui-information-architecture.md §1 pins: the two
     // machines first, then the four subsystem views.
-    static const char* kTitles[TAB_COUNT] = {"ESP32", "Daisy", "Audio", "Link", "Storage", "MIDI"};
+    static const char* kTitles[TAB_COUNT] = {
+        "ESP32", "Daisy", "Audio", "Link", "Storage", "MIDI", "Panel"};
     for (uint8_t i = 0; i < TAB_COUNT; i++) {
         tab_body[i] = tabGroupAddTab(tabview, kTitles[i]);
     }
@@ -268,6 +273,9 @@ void UIDiagnosticsPage::ensureTabBuilt(uint8_t tab) {
             break;
         case TAB_MIDI:
             buildMidiTab(tab_body[tab]);
+            break;
+        case TAB_PANEL:
+            buildPanelTab(tab_body[tab]);
             break;
         default:
             break;
@@ -645,6 +653,36 @@ void UIDiagnosticsPage::buildMidiTab(lv_obj_t* tab) {
                         kColDimmer);
 }
 
+void UIDiagnosticsPage::buildPanelTab(lv_obj_t* tab) {
+    // What the panel's matrix and encoders are reporting, raw and decoded:
+    // press a key and read off its keycode, row and column, and which
+    // PanelKey (if any) the WAVEX_KEYCODE_* map gives it. This is how the map
+    // and the matrix geometry get verified on the bench (panel-controls.md
+    // §4.6), so it works for an unmapped key too.
+    static const char* titles[7] = {"LAST KEYCODE",
+                                    "LAST KEY",
+                                    "KEY PRESSES",
+                                    "UNMAPPED",
+                                    "NAV ENCODER A",
+                                    "NAV ENCODER B",
+                                    "DROPPED EVENTS"};
+    for (int i = 0; i < 7; i++) {
+        panel_cards[i] =
+            makeCard(tab, kColX[i % 4], kRowY[i / 4], kCardW, titles[i], "esp32", false, 0);
+    }
+    lv_obj_t* note = mkLabel(tab,
+                             kColX[3],
+                             kRowY[1] + 20,
+                             "Keycode = row * 10 + column + 1, as the TCA8418 "
+                             "reports it. A key that reads \"unmapped\" is not in "
+                             "the WAVEX_KEYCODE_* map (hardware_config.h) - or the "
+                             "matrix geometry there is wrong.",
+                             &lv_font_montserrat_14,
+                             kColDimmer);
+    lv_obj_set_width(note, kCardW);
+    lv_label_set_long_mode(note, LV_LABEL_LONG_WRAP);
+}
+
 void UIDiagnosticsPage::showTabOffline(Card* cards, int n, const char* why) {
     for (int i = 0; i < n; i++) {
         setCard(cards[i], "-", "", why, -1);
@@ -875,6 +913,9 @@ void UIDiagnosticsPage::applyUiUpdates() {
         case TAB_MIDI:
             refreshMidiTab();
             break;
+        case TAB_PANEL:
+            refreshPanelTab();
+            break;
         default:
             break;
     }
@@ -1083,6 +1124,60 @@ void UIDiagnosticsPage::refreshMidiTab() {
 
     snprintf(v, sizeof(v), "%u", d.midi_ccs);
     setCard(midi_cards[3], v, "", "this interval", -1);
+}
+
+void UIDiagnosticsPage::refreshPanelTab() {
+    if (!panel_cards[0].value || !lv_obj_is_valid(panel_cards[0].value)) {
+        return;
+    }
+    char v[48], sub[64];
+
+    tca8418_keypad_stats_t k = {};
+    tca8418_keypad_last(&k);
+    if (k.keycode == 0) {
+        setCard(panel_cards[0], "-", "", "no key pressed yet", -1);
+    } else {
+        const PanelKey mapped = panelKeyFromKeycode(k.keycode);
+        snprintf(v, sizeof(v), "%u", k.keycode);
+        snprintf(sub,
+                 sizeof(sub),
+                 "row %u col %u  %s  %s",
+                 (k.keycode - 1) / 10,
+                 (k.keycode - 1) % 10,
+                 mapped == PanelKey::None ? "unmapped" : panelKeyName(mapped),
+                 k.pressed ? "PRESS" : "RELEASE");
+        setCard(panel_cards[0], v, "", sub, -1);
+    }
+
+    // Logical: what the dispatcher last acted on, from any source (matrix,
+    // touch bar, console KEY). Differs from the card above when the last key
+    // came from the console or was unmapped.
+    auto& disp = InputDispatcher::instance();
+    const PanelKey last = disp.lastKey();
+    setCard(
+        panel_cards[1], last == PanelKey::None ? "-" : panelKeyName(last), "", "as dispatched", -1);
+
+    snprintf(v, sizeof(v), "%u", static_cast<unsigned>(disp.keyPresses()));
+    snprintf(sub, sizeof(sub), "%u from the matrix", static_cast<unsigned>(k.events));
+    setCard(panel_cards[2], v, "", sub, -1);
+
+    snprintf(v, sizeof(v), "%u", static_cast<unsigned>(k.unmapped));
+    setCard(panel_cards[3], v, "", "matrix keycodes with no PanelKey", -1);
+
+    static const uint8_t kUnits[2] = {WAVEX_ENCODER_PCNT_UNIT, WAVEX_PCNT1_UNIT};
+    for (int i = 0; i < 2; i++) {
+        int count = 0;
+        if (pcnt_get_raw_count(kUnits[i], &count) == ESP_OK) {
+            snprintf(v, sizeof(v), "%d", count);
+            snprintf(sub, sizeof(sub), "raw count, PCNT unit %u", kUnits[i]);
+            setCard(panel_cards[4 + i], v, "", sub, -1);
+        } else {
+            setCard(panel_cards[4 + i], "-", "", "PCNT unit not running", -1);
+        }
+    }
+
+    snprintf(v, sizeof(v), "%u", static_cast<unsigned>(disp.droppedEvents()));
+    setCard(panel_cards[6], v, "", "input queue full", -1);
 }
 
 void UIDiagnosticsPage::refreshEsp32Tab() {
