@@ -39,6 +39,23 @@ commit it.
 Use local source and tests first. Consult current upstream documentation before changing behavior
 that depends on an external crate or protocol.
 
+## Data before code
+
+Model the data and its relationships before you write algorithms or implementation.
+
+Do not start coding, refactoring, or inventing helpers until you can state:
+
+- the entities and the fields that actually matter
+- how they relate (ownership, identity, cardinality, lifetime)
+- which constraints must hold (uniqueness, invariants, valid transitions)
+- where the source of truth lives, and what is derived from it
+
+Prefer a clear shape (types, schema, records, graph, tables) that makes the operation obvious. If
+the algorithm is doing a lot of work, the model is probably wrong — fix the structure first.
+
+When the existing model is incomplete or inconsistent, stop and correct it (or propose the
+correction) before adding logic on top. Do not paper over a bad shape with more code.
+
 ## Non-negotiable engineering constraints
 
 1. **The audio callback never blocks.** No SD I/O, no heap allocation, no I2C/SPI transactions, no logging inside the callback.
