@@ -9,13 +9,19 @@ namespace SdramLayout {
 // sample storage and offline rendering can never silently overlap.
 constexpr uintptr_t kBase = 0xC0000000u;
 constexpr uint32_t kTotalBytes = 64u * 1024u * 1024u;
-constexpr uint32_t kRenderScratchBytes = 4u * 1024u * 1024u;
-constexpr uint32_t kSampleArenaBytes = kTotalBytes - kRenderScratchBytes;
+// The Sample Pool's records (track-and-patch-model.md §4): 1024 entries of
+// ~130 B do not fit internal SRAM, so the registry's record table lives
+// here, between the arena and the render scratch. Only its 2 KB id index
+// stays in SRAM. Main-loop access only.
+constexpr uint32_t kSampleRegistryBytes = 192u * 1024u;
+constexpr uint32_t kRenderScratchBytes = 4u * 1024u * 1024u - kSampleRegistryBytes;
+constexpr uint32_t kSampleArenaBytes = kTotalBytes - kSampleRegistryBytes - kRenderScratchBytes;
 constexpr uint32_t kSmallSamplePoolBytes = 256u * 1024u;
 constexpr uint32_t kLargeSamplePoolBytes = kSampleArenaBytes - kSmallSamplePoolBytes;
-constexpr uintptr_t kRenderScratchBase = kBase + kSampleArenaBytes;
+constexpr uintptr_t kSampleRegistryBase = kBase + kSampleArenaBytes;
+constexpr uintptr_t kRenderScratchBase = kSampleRegistryBase + kSampleRegistryBytes;
 
-static_assert(kSampleArenaBytes + kRenderScratchBytes == kTotalBytes,
+static_assert(kSampleArenaBytes + kSampleRegistryBytes + kRenderScratchBytes == kTotalBytes,
               "SDRAM partitions must cover the complete device");
 static_assert((kSampleArenaBytes % (64u * 1024u)) == 0,
               "sample arena must align to the extent allocator page size");

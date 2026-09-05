@@ -226,10 +226,11 @@ esp_err_t inter_mcu_send_envelope_req(uint16_t sample_id,
 }
 
 namespace {
-// Small fixed cache. The Daisy holds a bounded number of loaded samples, so a
-// fixed ring here cannot fall behind it, and a fixed array avoids allocating
-// from the UART RX task.
-constexpr size_t kMetaCacheSize = 8;
+// Fixed cache of the records the Daisy has pushed. A record whose resident
+// flag is clear (an unload) leaves the cache. Sized for what the pages
+// actually display; the Sample Pool is far larger and is paged, not
+// mirrored (track-and-patch-model.md §4).
+constexpr size_t kMetaCacheSize = 32;
 constexpr uint8_t kTrackBindingCount = WAVEX_MIX_TRACKS;
 portMUX_TYPE s_meta_lock = portMUX_INITIALIZER_UNLOCKED;
 WaveX::Protocol::SampleMetadata s_meta[kMetaCacheSize];
@@ -250,6 +251,17 @@ void inter_mcu_store_sample_meta(const WaveX::Protocol::SampleMetadata& msg) {
             slot = i;  // update in place, so an edit does not consume a slot
             break;
         }
+    }
+    if ((msg.flags & 1u) == 0) {
+        // Not resident any more: forget it rather than store a ghost.
+        if (slot != kMetaCacheSize) {
+            s_meta_valid[slot] = false;
+        }
+        if (s_meta_newest_id == msg.sample_id) {
+            s_meta_newest_id = 0;
+        }
+        taskEXIT_CRITICAL(&s_meta_lock);
+        return;
     }
     if (slot == kMetaCacheSize) {
         slot = s_meta_next;
@@ -277,6 +289,18 @@ bool inter_mcu_get_sample_meta(uint16_t sample_id, WaveX::Protocol::SampleMetada
     }
     taskEXIT_CRITICAL(&s_meta_lock);
     return found;
+}
+
+size_t inter_mcu_sample_meta_snapshot(WaveX::Protocol::SampleMetadata* out, size_t max) {
+    size_t n = 0;
+    taskENTER_CRITICAL(&s_meta_lock);
+    for (size_t i = 0; i < kMetaCacheSize && n < max; ++i) {
+        if (s_meta_valid[i]) {
+            out[n++] = s_meta[i];
+        }
+    }
+    taskEXIT_CRITICAL(&s_meta_lock);
+    return n;
 }
 
 esp_err_t inter_mcu_request_sample_meta(uint16_t sample_id) {

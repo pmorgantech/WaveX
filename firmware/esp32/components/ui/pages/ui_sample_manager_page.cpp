@@ -132,14 +132,10 @@ void UISampleManagerPage::rebuildList() {
     }
 
     // Snapshot the cache first so the row set cannot change under the rebuild.
+    // Pool ids name their registry slot (bits 10..15 are a generation), so
+    // they are not small integers to probe; the cache is listed as it is.
     WaveX::Protocol::SampleMetadata metas[kMaxRows];
-    int count = 0;
-    for (uint16_t id = 1; id <= 64 && count < kMaxRows; ++id) {
-        WaveX::Protocol::SampleMetadata m;
-        if (inter_mcu_get_sample_meta(id, &m)) {
-            metas[count++] = m;
-        }
-    }
+    int count = static_cast<int>(inter_mcu_sample_meta_snapshot(metas, kMaxRows));
 
     WaveX::Protocol::TrackBindingMessage binding;
     const uint16_t bound_id = inter_mcu_get_track_binding(getCurrentTrack(), &binding) &&

@@ -222,6 +222,35 @@ def test_sample_manager_assign_asks_before_replacing(
 
 
 @pytest.mark.both
+@pytest.mark.sdcard
+def test_loading_the_same_file_twice_is_one_pool_entry(
+    esp32,
+    daisy,
+    sample_path,
+):
+    """The Pool is refcounted by path (model doc §4): a second Load of a
+    resident file is a hit that answers with the id it already had, reads
+    nothing from the card, and leaves one entry resident."""
+    track = _free_track(daisy)
+    other = _free_track(daisy, avoid=(track,))
+    esp32.home()
+    esp32.track(track)
+    _open_browser(esp32, sample_path)
+    st = _load_and_wait(esp32)
+    first_id = int(st["lastid"])
+    assert first_id >= 1024, "Pool ids carry a generation above slot bits"
+    assert daisy.samples() == [first_id]
+
+    esp32.track(other)
+    st = _load_and_wait(esp32, timeout=5.0)
+    assert int(st["lastid"]) == first_id
+    assert daisy.samples() == [first_id]
+    tracks = daisy.tracks()
+    assert tracks[track] == f"sample:{first_id}"
+    assert tracks[other] == f"sample:{first_id}"
+
+
+@pytest.mark.both
 def test_failed_load_reports_the_daisys_reason(esp32, daisy):
     # Drive the Daisy directly with a load for a file that is not there and
     # watch the reason cross the link to the browser's status line.

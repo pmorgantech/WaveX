@@ -1322,12 +1322,22 @@ void UISampleBrowser::sample_status_callback(uint16_t sample_id,
         // Refresh the allocator view so the next load's fit check is against
         // what is actually free now, not what was free before this one.
         inter_mcu_request_sample_mem_status();
+        // The id in the request was only a tag: the Sample Pool assigns the
+        // resident id (a file already resident answers with the id it had),
+        // and this is where the frontend adopts it. One load is in flight at
+        // a time - the busy overlay sees to that - so a completion while a
+        // bind is pending is ours.
+        const int16_t bind_track = browser->bind_on_load_track_.load(std::memory_order_acquire);
+        const bool ours = bind_track >= 0;
+        if (ours) {
+            browser->persistent_state_.last_load_sample_id = sample_id;
+            browser->bind_on_load_sample_id_.store(sample_id, std::memory_order_relaxed);
+            setCurrentSampleId(sample_id);
+        }
         // The second half of Load (§6.1 A): now that the id is resident, bind
         // it to the Track the user loaded onto. The Daisy answers with the
         // Track's new binding, which every page reads from the shared cache.
-        const int16_t bind_track = browser->bind_on_load_track_.load(std::memory_order_acquire);
-        const bool bound = bind_track >= 0 && browser->bind_on_load_sample_id_.load(
-                                                  std::memory_order_relaxed) == sample_id;
+        const bool bound = ours;
         if (bound) {
             browser->bind_on_load_track_.store(-1, std::memory_order_release);
             inter_mcu_send_sample_select(sample_id, static_cast<uint8_t>(bind_track));
@@ -1640,7 +1650,8 @@ bool UISampleBrowser::loadSample(const wavex_file_entry_t* entry) {
         return false;
     }
 
-    // Daisy will load from its SD card; assign a unique sample ID per request
+    // A request tag, not the resident id: the Daisy's Sample Pool assigns
+    // that and reports it with LOAD_COMPLETE, where the browser adopts it.
     uint16_t sample_id = persistent_state_.allocateSampleId();
     persistent_state_.last_load_sample_id = sample_id;
     // Bind it to the selected Track when the Daisy says it is resident: the

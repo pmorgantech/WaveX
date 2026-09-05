@@ -367,6 +367,12 @@ esp_err_t inter_mcu_request_track_binding(uint8_t track) {
     return ESP_OK;
 }
 
+size_t inter_mcu_sample_meta_snapshot(WaveX::Protocol::SampleMetadata* out, size_t max) {
+    (void)out;
+    (void)max;
+    return 0;
+}
+
 bool inter_mcu_get_sample_meta(uint16_t sample_id, WaveX::Protocol::SampleMetadata* out) {
     (void)sample_id;
     (void)out;

@@ -79,6 +79,8 @@ void inter_mcu_store_sample_meta(const WaveX::Protocol::SampleMetadata& msg);
 
 /** Newest record for an id, or the most recent record when sample_id is 0. */
 bool inter_mcu_get_sample_meta(uint16_t sample_id, WaveX::Protocol::SampleMetadata* out);
+// Every cached record, in cache order. Returns how many were written.
+size_t inter_mcu_sample_meta_snapshot(WaveX::Protocol::SampleMetadata* out, size_t max);
 
 /** Ask the backend to resend. sample_id 0 = every loaded sample. */
 esp_err_t inter_mcu_request_sample_meta(uint16_t sample_id);

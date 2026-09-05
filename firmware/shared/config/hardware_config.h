@@ -40,6 +40,16 @@
 #define WAVEX_NUM_VOICES 8
 #endif
 
+// Sample Pool capacity (Daisy only): how many samples can be resident at
+// once, whoever loaded them (track-and-patch-model.md §4, decided
+// 2026-09-04). The registry indexes by id - never scans - so this is a
+// table-size decision (records live in SDRAM), not a per-note cost. Audio
+// memory is the real cap: 1024 samples average under 60 KB each. Admission
+// beyond it fails with a reason; nothing is evicted.
+#ifndef WAVEX_SAMPLE_POOL_CAPACITY
+#define WAVEX_SAMPLE_POOL_CAPACITY 1024
+#endif
+
 // DAC CV Outputs (Daisy only)
 #ifndef WAVEX_DAISY_CV_OUTPUTS_ENABLED
 #define WAVEX_DAISY_CV_OUTPUTS_ENABLED 0

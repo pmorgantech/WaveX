@@ -34,6 +34,7 @@ using q15_t = int16_t;
 #include "../sequencer/sequencer_transport.hpp"
 #include "../storage/fatfs_wav_reader.hpp"
 #include "../timebase.hpp"
+#include "audio/sample_registry.hpp"
 #include "fade.hpp"
 #include "instrument.hpp"
 #include "lfo.hpp"
@@ -53,6 +54,7 @@ using q15_t = int16_t;
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <new>
 
 // CV backend selection (architecture.md §5.3, roadmap Phase 1 item 1).
 #if WAVEX_CV_BACKEND == WAVEX_CV_BACKEND_MCP4728
@@ -644,8 +646,15 @@ static UINT pick_sample_load_chunk(const FIL& file) {
 }
 
 // ============================
-// Loaded sample registry (for diagnostics)
+// The Sample Pool (track-and-patch-model.md §4)
 // ============================
+// One registry for every resident sample, whoever loaded it. The record
+// payload below is what the engine keeps per sample; the registry adds the
+// id, the Track ownership mask, the pin and the path hash. Records live in
+// their own SDRAM partition; the registry object (with its 2 KB id index)
+// is SRAM. Main-loop only - the callback never touches it; voices hold
+// non-owning pointers into the arena, which is why every release goes
+// through the voice-stop barrier first.
 struct LoadedSampleInfo {
     wxsamp_t handle = {};
     uint16_t sample_id = 0;
@@ -659,160 +668,33 @@ struct LoadedSampleInfo {
     // voices and the preview generator cannot disagree about the same sample.
     WaveX::Protocol::SampleMetadata meta = {};
 };
-static constexpr size_t kLoadedSampleCapacity = kMaxZones;
-static LoadedSampleInfo s_loaded_samples[kLoadedSampleCapacity];
+using SamplePool = WaveX::Audio::SampleRegistry<LoadedSampleInfo, WAVEX_SAMPLE_POOL_CAPACITY>;
+static_assert(sizeof(SamplePool::Record) * WAVEX_SAMPLE_POOL_CAPACITY <=
+                  WaveX::SdramLayout::kSampleRegistryBytes,
+              "the Sample Pool's records must fit their SDRAM partition");
+// Raw .bss storage, constructed in Init() once SDRAM is known good (the
+// registry needs its record table's address, so BssStatic's default
+// construction does not fit).
+alignas(SamplePool) static uint8_t s_pool_bytes[sizeof(SamplePool)];
+static SamplePool* s_pool = nullptr;
 
-#if WAVEX_PROFILING_ENABLED
-// Scaling measurement for the note-on resolve path
-// (docs/features/track-and-patch-model.md §4). ResolveNote calls the resolver
-// once per matching zone, and every resolver here ends in a LINEAR scan of the
-// sample registry - so the cost is (zones x registry entries), and raising the
-// registry to 1024 multiplies it. §4 projected that from an estimate; this
-// measures it on the actual part, at the sizes in question, in both memories
-// (today's registry is a .bss array in internal SRAM; a 1024-entry one has to
-// live in SDRAM, which is slower per random access as well as longer to walk).
-//
-// Runs once at boot before any sample is resident, and touches only the
-// render-scratch SDRAM partition, so it cannot disturb the real registry.
-// Compiles to nothing unless WAVEX_PROFILING_ENABLED - this is a bench
-// instrument, not a shipping feature.
-void BenchmarkRegistryScan() {
-    // Worst case per scan: the id that is not there, so the loop runs to the
-    // end. That is the bound the design has to survive, not the average.
-    const auto scan = [](const LoadedSampleInfo* table, size_t count, uint16_t want) -> uint32_t {
-        uint32_t hits = 0;
-        for (size_t i = 0; i < count; ++i) {
-            if (table[i].sample_id == want) {
-                ++hits;
-            }
-        }
-        return hits;
-    };
-
-    constexpr size_t kMaxBenchEntries = 1024;
-    constexpr uint32_t kReps = 64;
-    // Render scratch is 4 MB and nothing renders at boot; 1024 entries is
-    // ~123 KB of it. Not allocated, so this cannot fail or leak.
-    auto* sdram_table = reinterpret_cast<LoadedSampleInfo*>(WaveX::SdramLayout::kRenderScratchBase);
-    for (size_t i = 0; i < kMaxBenchEntries; ++i) {
-        sdram_table[i] = LoadedSampleInfo{};
-        sdram_table[i].sample_id = static_cast<uint16_t>(i + 1);
-    }
-
-    // Integer output only: this log path's printf has no float support, so a
-    // %f here would silently produce nothing (see CyclesToNanoseconds).
-    const uint32_t mhz = SystemCoreClock / 1000000u;
-    const auto cycles_to_ns = &WaveX::Profiling::CyclesToNanoseconds;
-
-    WaveX::Log::PrintLine(
-        "REGISTRY_BENCH: clock=%u MHz  sizeof(LoadedSampleInfo)=%u B  1024 entries=%u KB",
-        (unsigned)mhz,
-        (unsigned)sizeof(LoadedSampleInfo),
-        (unsigned)((sizeof(LoadedSampleInfo) * kMaxBenchEntries) / 1024u));
-
-    const size_t sizes[] = {32, 128, 512, 1024};
-    for (size_t n: sizes) {
-        const uint32_t start = WaveX::Profiling::GetCycles();
-        uint32_t sink = 0;
-        for (uint32_t r = 0; r < kReps; ++r) {
-            sink += scan(sdram_table, n, 0xFFFF);
-        }
-        const uint32_t per_scan_cycles = (WaveX::Profiling::GetCycles() - start) / kReps;
-        const uint32_t per_scan_ns = cycles_to_ns(per_scan_cycles);
-        WaveX::Log::PrintLine(
-            "REGISTRY_BENCH: SDRAM n=%4u  %8u ns/scan  %5u ns/entry  x32 zones = %6u us  sink=%u",
-            (unsigned)n,
-            (unsigned)per_scan_ns,
-            (unsigned)(per_scan_ns / n),
-            (unsigned)((per_scan_ns * 32u) / 1000u),
-            (unsigned)sink);
-    }
-
-    // Same walk over the internal-SRAM array the registry uses today, so the
-    // SDRAM figures above have a same-code baseline to be compared against
-    // rather than being read as an absolute.
-    const uint32_t sram_start = WaveX::Profiling::GetCycles();
-    uint32_t sram_sink = 0;
-    for (uint32_t r = 0; r < kReps; ++r) {
-        sram_sink += scan(s_loaded_samples, kLoadedSampleCapacity, 0xFFFF);
-    }
-    const uint32_t sram_per_scan = (WaveX::Profiling::GetCycles() - sram_start) / kReps;
-    const uint32_t sram_ns = cycles_to_ns(sram_per_scan);
-    WaveX::Log::PrintLine(
-        "REGISTRY_BENCH: SRAM  n=%4u  %8u ns/scan  %5u ns/entry  (today's registry)  sink=%u",
-        (unsigned)kLoadedSampleCapacity,
-        (unsigned)sram_ns,
-        (unsigned)(sram_ns / kLoadedSampleCapacity),
-        (unsigned)sram_sink);
-
-    // --- The two indexed alternatives, at the same 1024 entries ------------
-    // Both still touch the record in SDRAM afterwards, because that is what a
-    // real resolve does - an index that avoided the record read would be
-    // measuring the wrong thing.
-    static uint16_t index_ids[kMaxBenchEntries];   // sorted ids   } 4 KB total,
-    static uint16_t index_slot[kMaxBenchEntries];  // -> record    } internal SRAM
-    for (size_t i = 0; i < kMaxBenchEntries; ++i) {
-        index_ids[i] = static_cast<uint16_t>(i + 1);
-        index_slot[i] = static_cast<uint16_t>(i);
-    }
-
-    // (a) Binary search over the SRAM index. 1024 entries = 10 probes, and the
-    // 4 KB index fits the 16 KB D-cache whole, unlike the 120 KB record table.
-    const uint32_t bin_start = WaveX::Profiling::GetCycles();
-    uint32_t bin_sink = 0;
-    for (uint32_t r = 0; r < kReps; ++r) {
-        const uint16_t want = static_cast<uint16_t>((r * 977u) % kMaxBenchEntries + 1u);
-        size_t lo = 0, hi = kMaxBenchEntries;
-        while (lo < hi) {
-            const size_t mid = (lo + hi) / 2;
-            if (index_ids[mid] < want) {
-                lo = mid + 1;
-            } else {
-                hi = mid;
-            }
-        }
-        if (lo < kMaxBenchEntries && index_ids[lo] == want) {
-            bin_sink += sdram_table[index_slot[lo]].sample_rate;
-        }
-    }
-    const uint32_t bin_ns = cycles_to_ns((WaveX::Profiling::GetCycles() - bin_start) / kReps);
-
-    // (b) Id encodes its own record slot, so there is no search at all: mask
-    // out the slot, then confirm the record still carries that id (a
-    // generation field in the spare high bits is what makes a stale id fail
-    // this check rather than silently resolve to whatever recycled the slot).
-    const uint32_t dir_start = WaveX::Profiling::GetCycles();
-    uint32_t dir_sink = 0;
-    for (uint32_t r = 0; r < kReps; ++r) {
-        const uint16_t want = static_cast<uint16_t>((r * 977u) % kMaxBenchEntries + 1u);
-        const size_t slot = (want - 1u) & (kMaxBenchEntries - 1u);
-        if (sdram_table[slot].sample_id == want) {
-            dir_sink += sdram_table[slot].sample_rate;
-        }
-    }
-    const uint32_t dir_ns = cycles_to_ns((WaveX::Profiling::GetCycles() - dir_start) / kReps);
-
-    WaveX::Log::PrintLine(
-        "REGISTRY_BENCH: n=1024 INDEXED  binsearch=%u ns/lookup (x32 = %u ns)  "
-        "direct=%u ns/lookup (x32 = %u ns)  sink=%u/%u",
-        (unsigned)bin_ns,
-        (unsigned)(bin_ns * 32u),
-        (unsigned)dir_ns,
-        (unsigned)(dir_ns * 32u),
-        (unsigned)bin_sink,
-        (unsigned)dir_sink);
-}
-#endif  // WAVEX_PROFILING_ENABLED
-static size_t s_loaded_sample_count = 0;
-
+// O(1): the id names its registry slot (SampleRegistry::Find).
 static LoadedSampleInfo* find_loaded_sample(uint16_t sample_id) {
-    for (size_t i = 0; i < s_loaded_sample_count; ++i) {
-        auto& entry = s_loaded_samples[i];
-        if (entry.sample_id == sample_id) {
-            return &entry;
-        }
+    if (!s_pool) {
+        return nullptr;
     }
-    return nullptr;
+    SamplePool::Record* r = s_pool->Find(sample_id);
+    return r ? &r->payload : nullptr;
+}
+
+// "The sample that just loaded": what the preview, the envelope job and
+// SetEditParams mean by id 0.
+static LoadedSampleInfo* newest_loaded_sample() {
+    return s_pool ? find_loaded_sample(s_pool->Newest()) : nullptr;
+}
+
+static size_t loaded_sample_count() {
+    return s_pool ? s_pool->Count() : 0;
 }
 
 // "Playable" means resident PCM16, mono or stereo - the voice manager reads
@@ -936,25 +818,31 @@ void SetLoopGapMs(uint16_t gap_ms) {
 }
 
 void PushAllSampleMeta(uint16_t sample_id) {
-    for (size_t i = 0; i < s_loaded_sample_count; ++i) {
-        if (sample_id == 0 || s_loaded_samples[i].sample_id == sample_id) {
-            PushSampleMeta(s_loaded_samples[i]);
-        }
-    }
-}
-
-static void remove_loaded_sample(uint16_t sample_id) {
-    for (size_t i = 0; i < s_loaded_sample_count; ++i) {
-        if (s_loaded_samples[i].sample_id != sample_id) {
-            continue;
-        }
-        s_sample_mem_mgr.release(&s_loaded_samples[i].handle);
-        for (size_t j = i + 1; j < s_loaded_sample_count; ++j) {
-            s_loaded_samples[j - 1] = s_loaded_samples[j];
-        }
-        --s_loaded_sample_count;
+    if (!s_pool) {
         return;
     }
+    if (sample_id != 0) {
+        if (const LoadedSampleInfo* info = find_loaded_sample(sample_id)) {
+            PushSampleMeta(*info);
+        }
+        return;
+    }
+    // Everything, one message per record: at Pool scale this is what the
+    // paged query replaces (stage 3d); until then bounded by the TX queue
+    // draining between main-loop passes.
+    s_pool->ForEach([](SamplePool::Record& r) { PushSampleMeta(r.payload); });
+}
+
+// Frees the audio memory and forgets the record. Callers MUST have passed
+// the voice-stop barrier first: this releases SDRAM that a playing voice
+// would otherwise still be reading through its non-owning Voice::sample.
+static void remove_loaded_sample(uint16_t sample_id) {
+    LoadedSampleInfo* info = find_loaded_sample(sample_id);
+    if (!info) {
+        return;
+    }
+    s_sample_mem_mgr.release(&info->handle);
+    s_pool->Remove(sample_id);
 }
 
 void SelectSample(uint16_t sample_id, uint8_t slot) {
@@ -963,14 +851,7 @@ void SelectSample(uint16_t sample_id, uint8_t slot) {
         return;
     }
     if (sample_id != 0) {
-        bool resident = false;
-        for (size_t i = 0; i < s_loaded_sample_count; ++i) {
-            if (s_loaded_samples[i].sample_id == sample_id) {
-                resident = true;
-                break;
-            }
-        }
-        if (!resident) {
+        if (!find_loaded_sample(sample_id)) {
             WaveX::Log::PrintLine("SAMPLE_SELECT: track=%u id=%u is not resident, ignored",
                                   (unsigned)slot,
                                   (unsigned)sample_id);
@@ -1036,11 +917,16 @@ uint8_t DebugActiveVoices() {
 }
 
 size_t DebugLoadedSamples(uint16_t* ids, size_t cap) {
-    size_t n = 0;
-    for (size_t i = 0; i < s_loaded_sample_count && n < cap; ++i) {
-        ids[n++] = s_loaded_samples[i].sample_id;
+    if (!s_pool) {
+        return 0;
     }
-    return n;
+    size_t n = 0;
+    s_pool->ForEach([&](SamplePool::Record& r) {
+        if (n < cap) {
+            ids[n++] = r.sample_id;
+        }
+    });
+    return cap == 0 ? s_pool->Count() : n;
 }
 #endif
 
@@ -1074,14 +960,7 @@ bool UnloadSample(uint16_t sample_id) {
         WaveX::Log::PrintLine("SAMPLE_UNLOAD: id=0 rejected (not a wildcard)");
         return false;
     }
-    bool found = false;
-    for (size_t i = 0; i < s_loaded_sample_count; ++i) {
-        if (s_loaded_samples[i].sample_id == sample_id) {
-            found = true;
-            break;
-        }
-    }
-    if (!found) {
+    if (!find_loaded_sample(sample_id)) {
         WaveX::Log::PrintLine("SAMPLE_UNLOAD: id=%u not loaded", (unsigned)sample_id);
         return false;
     }
@@ -1109,6 +988,14 @@ bool UnloadSample(uint16_t sample_id) {
     // a sample_id that no longer exists - drop the binding first rather than
     // leave one that OnNoteOn would silently fail to resolve.
     SfzLoader::ForgetLoadedSample(sample_id);
+    // Tell the frontend the record is gone: the same message with the
+    // resident flag clear, so its cache drops the entry instead of listing a
+    // sample that no longer exists.
+    if (LoadedSampleInfo* gone = find_loaded_sample(sample_id)) {
+        WaveX::Protocol::SampleMetadata bye = gone->meta;
+        bye.flags = 0;
+        WaveX::Comm::UartLinkSend(WaveX::Protocol::MSG_SAMPLE_META, &bye, sizeof(bye));
+    }
     remove_loaded_sample(sample_id);
     PublishSequencerVoiceMap();
     // Any Track that was bound to it is empty now; the frontend cannot know
@@ -1117,26 +1004,7 @@ bool UnloadSample(uint16_t sample_id) {
 
     WaveX::Log::PrintLine("SAMPLE_UNLOAD: id=%u freed (%u still loaded)",
                           (unsigned)sample_id,
-                          (unsigned)s_loaded_sample_count);
-    return true;
-}
-
-// Retires the least recently loaded sample. Callers MUST have passed
-// OnSampleLoad's stop-all barrier first: this frees SDRAM that a playing
-// voice would otherwise still be reading through its non-owning
-// Voice::sample pointer.
-static bool evict_oldest_loaded_sample() {
-    if (s_loaded_sample_count == 0) {
-        return false;
-    }
-    // Same discipline as UnloadSample: a Track bound to the evicted id must
-    // not keep a zone resolving to freed memory, and the frontend's binding
-    // cache must hear that the Track went empty. (Eviction itself goes away
-    // with the Sample Pool, model doc §4.)
-    const uint16_t victim = s_loaded_samples[0].sample_id;
-    SfzLoader::ForgetLoadedSample(victim);
-    remove_loaded_sample(victim);
-    PushTrackBinding(0xFF);
+                          (unsigned)loaded_sample_count());
     return true;
 }
 
@@ -1144,36 +1012,30 @@ static bool evict_oldest_loaded_sample() {
 // one event that can pull the audio out from under a scan in flight.
 static void CancelEnvelopeJob();
 
-static bool upsert_loaded_sample(const SampleLoadMessage& sl,
-                                 const ResidentSampleInfo& resident,
-                                 const wxsamp_t& handle) {
+// Fills an admitted Pool record once its audio is resident. Markers default
+// to the whole sample and gain to unity, so an unedited sample behaves as it
+// always has; every later change goes through SetEditParams, which
+// re-pushes. generation (the frontend's envelope-cache key) starts at 0: a
+// Pool id names one file for its whole life, so content never changes under
+// an id - a different file is a different id.
+static void fill_loaded_sample(LoadedSampleInfo& info,
+                               uint16_t sample_id,
+                               const char* path,
+                               const ResidentSampleInfo& resident,
+                               const wxsamp_t& handle) {
     CancelEnvelopeJob();
 
-    LoadedSampleInfo info;
-    info.sample_id = sl.sample_id;
+    info = LoadedSampleInfo{};
+    info.sample_id = sample_id;
     info.handle = handle;
-    info.allocated_bytes = handle.len ? handle.len : sl.sample_size;
+    info.allocated_bytes = handle.len ? handle.len : resident.data_size;
     info.loaded_bytes = 0;
     info.sample_rate = resident.sample_rate;
     info.channels = resident.channels;
     info.bit_depth = resident.bit_depth;
 
-    // Seed the record. Markers default to the whole sample and gain to unity,
-    // so an unedited sample behaves as it always has; every later change goes
-    // through SetEditParams, which re-pushes.
-    // generation is the cache-invalidation hook (roadmap 1.5.5 item 4).
-    // Loading a different file into an id that is already in use IS a content
-    // change, even though nothing renders destructively yet: a frontend
-    // holding an envelope for the old audio must not keep drawing it. Marker
-    // and gain edits deliberately do not bump it - they change what plays,
-    // not what the sample contains, so the cached envelope stays valid.
-    const LoadedSampleInfo* previous = find_loaded_sample(sl.sample_id);
-    const uint16_t next_generation =
-        previous ? static_cast<uint16_t>(previous->meta.generation + 1) : 0;
-
     info.meta = WaveX::Protocol::SampleMetadata();
-    info.meta.generation = next_generation;
-    info.meta.sample_id = sl.sample_id;
+    info.meta.sample_id = sample_id;
     info.meta.sample_rate = resident.sample_rate;
     info.meta.total_frames = resident.total_frames;
     info.meta.end_frame = info.meta.total_frames;
@@ -1181,27 +1043,8 @@ static bool upsert_loaded_sample(const SampleLoadMessage& sl,
     info.meta.channels = resident.channels;
     info.meta.bits_per_sample = resident.bit_depth;
     info.meta.channel_mode = WaveX::Protocol::SAMPLE_CH_AS_RECORDED;
-    WaveX::Protocol::detail::CopyWireString(info.meta.name, sizeof(info.meta.name), sl.path);
-
-    // Re-loading an id retires the previous entry and appends a fresh one, so
-    // the reloaded sample becomes the newest rather than staying at its old
-    // index. Updating in place made "most recently loaded" wrong for any id
-    // that was ever loaded twice.
-    remove_loaded_sample(sl.sample_id);
-    while (s_loaded_sample_count >= kLoadedSampleCapacity) {
-        if (!evict_oldest_loaded_sample()) {
-            return false;
-        }
-    }
-    s_loaded_samples[s_loaded_sample_count++] = info;
-    PushSampleMeta(s_loaded_samples[s_loaded_sample_count - 1]);
-    return true;
-}
-
-static void update_loaded_sample_progress(uint16_t sample_id, uint32_t loaded_bytes) {
-    if (auto* entry = find_loaded_sample(sample_id)) {
-        entry->loaded_bytes = loaded_bytes;
-    }
+    info.meta.flags = 1;  // resident
+    WaveX::Protocol::detail::CopyWireString(info.meta.name, sizeof(info.meta.name), path);
 }
 
 // Thread-safe single-producer (main loop) / single-consumer (audio IRQ) ring buffer of interleaved
@@ -2029,11 +1872,20 @@ void Init(DaisySeed& hw, float sample_rate, bool sdram_available) {
         sdram_available && s_sample_mem_mgr.init(reinterpret_cast<void*>(WaveX::SdramLayout::kBase),
                                                  WaveX::SdramLayout::kSampleArenaBytes,
                                                  WaveX::SdramLayout::kSmallSamplePoolBytes);
+    // The Pool's records live in SDRAM too, so the registry exists only on
+    // boots where SDRAM came up - the same gate the loader has always had.
+    if (s_sample_memory_available) {
+        s_pool = new (s_pool_bytes) SamplePool(
+            reinterpret_cast<SamplePool::Record*>(WaveX::SdramLayout::kSampleRegistryBase));
+    }
     if (s_hw) {
-        WaveX::Log::PrintLine("AUDIO_ENGINE: Sample RAM %s (arena=%lu, render scratch=%lu)",
-                              s_sample_memory_available ? "ready" : "disabled",
-                              (unsigned long)WaveX::SdramLayout::kSampleArenaBytes,
-                              (unsigned long)WaveX::SdramLayout::kRenderScratchBytes);
+        WaveX::Log::PrintLine(
+            "AUDIO_ENGINE: Sample RAM %s (arena=%lu, pool=%u records in %lu, render scratch=%lu)",
+            s_sample_memory_available ? "ready" : "disabled",
+            (unsigned long)WaveX::SdramLayout::kSampleArenaBytes,
+            (unsigned)WAVEX_SAMPLE_POOL_CAPACITY,
+            (unsigned long)WaveX::SdramLayout::kSampleRegistryBytes,
+            (unsigned long)WaveX::SdramLayout::kRenderScratchBytes);
     }
 
     s_voice_manager.Init(static_cast<uint32_t>(sample_rate));
@@ -2566,7 +2418,7 @@ void OnNoteOn(const NoteMessage& note_msg) {
                 "  -> dropped: Track %u has no instrument loaded and no sample bound "
                 "(MSG_SAMPLE_SELECT; %u loaded)",
                 (unsigned)slot,
-                (unsigned)s_loaded_sample_count);
+                (unsigned)loaded_sample_count());
         } else {
             WaveX::Log::PrintLine(
                 "  -> dropped: Track %u has no zone for note=%u vel=%u with a resident sample",
@@ -2690,14 +2542,15 @@ void OnPreviewReq(const PreviewReqMessage& pr) {
     s_preview_len = 0;
 
     // Pick the most recently loaded sample; fall back to empty if none.
-    if (s_loaded_sample_count == 0) {
+    const LoadedSampleInfo* newest = newest_loaded_sample();
+    if (!newest) {
         if (s_hw) {
             WaveX::Log::PrintLine("PREVIEW: No loaded samples; skipping preview");
         }
         return;
     }
 
-    const LoadedSampleInfo& src = s_loaded_samples[s_loaded_sample_count - 1];
+    const LoadedSampleInfo& src = *newest;
     void* sample_ptr = nullptr;
     if (!s_sample_mem_mgr.ptr(src.handle, &sample_ptr) || !sample_ptr) {
         if (s_hw) {
@@ -2867,8 +2720,8 @@ void OnEnvelopeReq(const WaveX::Protocol::EnvelopeReqMessage& req) {
     // sample_id 0 means "the most recently loaded", matching how
     // MSG_SAMPLE_EDIT_SET addresses a sample the edit page did not load.
     LoadedSampleInfo* info = req.sample_id ? find_loaded_sample(req.sample_id) : nullptr;
-    if (!info && req.sample_id == 0 && s_loaded_sample_count > 0) {
-        info = &s_loaded_samples[s_loaded_sample_count - 1];
+    if (!info && req.sample_id == 0) {
+        info = newest_loaded_sample();
     }
     if (!info) {
         if (s_hw) {
@@ -3108,22 +2961,38 @@ void OnSampleLoad(const SampleLoadMessage& sl) {
         return;
     }
     if (s_hw) {
-        WaveX::Log::PrintLine("SAMPLE_LOAD: path='%s' id=%u", sl.path, (unsigned)sl.sample_id);
+        WaveX::Log::PrintLine("SAMPLE_LOAD: path='%s' request=%u", sl.path, (unsigned)sl.sample_id);
     }
-    // A load can retire or replace the sample the sequencer snapshot points
-    // at. Clear that snapshot before the callback acknowledges voice stop.
-    ClearSequencerVoiceMap();
+    // The Pool is refcounted by path: a file that is already resident is a
+    // hit, not a second copy. The user's explicit load pins it, and the
+    // frontend hears the id it already had.
+    const uint32_t path_hash = WaveX::Audio::HashSamplePath(sl.path);
+    if (SamplePool::Record* hit = s_pool->FindByPath(path_hash)) {
+        s_pool->SetPinned(hit->sample_id, true);
+        s_pool->NoteNewest(hit->sample_id);
+        PushSampleMeta(hit->payload);
+        SampleStatusMessage status{};
+        status.sample_id = hit->sample_id;
+        status.state = SAMPLE_STATUS_LOAD_COMPLETE;
+        status.channels = hit->payload.channels;
+        status.sample_rate = hit->payload.sample_rate;
+        status.frames_played = hit->payload.meta.total_frames;
+        WaveX::Comm::UartLinkSend(WaveX::Protocol::MSG_SAMPLE_STATUS, &status, sizeof(status));
+        if (s_hw) {
+            WaveX::Log::PrintLine(
+                "SAMPLE_LOAD: '%s' already resident as id=%u", sl.path, (unsigned)hit->sample_id);
+        }
+        return;
+    }
 
     // CRITICAL: Stop ALL SD activity (playback) and ensure PumpWavIO is not running.
     // FatFS + SDMMC are NOT thread-safe or re-entrant. The main loop calls PumpWavIO() which
     // will conflict with f_open/f_read calls here if s_wav.open is true.
     CloseWav();
 
-    // Voices may still be reading the sample memory this load is about to
-    // release/rewrite (upsert_loaded_sample below). Ask the audio callback
-    // to hard-stop all voices; the delay below (blocks are 1 ms) guarantees
-    // it has acted before any memory is touched.
-    __atomic_store_n(&s_voice_stop_all, true, __ATOMIC_RELEASE);
+    // No voice-stop barrier here any more: a load into the Pool frees and
+    // rewrites nothing (admission fails rather than evicting), so nothing a
+    // sounding voice reads is touched. Loading no longer cuts notes off.
     // Add a small delay to ensure any in-flight SD DMA completes
     System::Delay(10);
 
@@ -3197,36 +3066,40 @@ void OnSampleLoad(const SampleLoadMessage& sl) {
     const uint32_t data_off = wav_info.data_offset;
     const uint32_t data_size = resident.data_size;
 
-    // The browser hands out a fresh sample_id for every audition, so no load
-    // ever replaces an earlier one and nothing reclaims the arena on its own.
-    // Retire the least recently loaded samples until this one fits. The
-    // stop-all barrier above already drained the note queue and idled every
-    // voice, so the memory this releases has no remaining readers.
-    wxsamp_t handle = {};
-    while (!s_sample_mem_mgr.alloc(data_size, &handle)) {
-        if (!evict_oldest_loaded_sample()) {
-            if (s_hw) {
-                wxsamp_stats_t st{};
-                s_sample_mem_mgr.stats(&st);
-                WaveX::Log::PrintLine(
-                    "SAMPLE_LOAD: alloc failed for %lu bytes (largest_free=%lu, free_total=%lu)",
-                    (unsigned long)data_size,
-                    (unsigned long)st.largest_free_bytes,
-                    (unsigned long)st.large_free_bytes + (unsigned long)st.small_free_bytes);
-            }
-            f_close(&file);
-            ReportSampleLoadFailed(sl.sample_id, SAMPLE_LOAD_FAIL_RAM);
-            return;
-        }
+    // Admission: an entry and the bytes, or a reason. Nothing is evicted to
+    // make room - the user unloads; the engine never guesses (§4).
+    SamplePool::Record* record = nullptr;
+    if (s_pool->AdmitPath(path_hash, &record) != SamplePool::Admit::Ok) {
         if (s_hw) {
-            WaveX::Log::PrintLine("SAMPLE_LOAD: evicted oldest sample to fit %lu bytes",
-                                  (unsigned long)data_size);
+            WaveX::Log::PrintLine("SAMPLE_LOAD: pool full (%u entries)",
+                                  (unsigned)WAVEX_SAMPLE_POOL_CAPACITY);
         }
+        f_close(&file);
+        ReportSampleLoadFailed(sl.sample_id, SAMPLE_LOAD_FAIL_REGISTRY_FULL);
+        return;
+    }
+    const uint16_t sample_id = record->sample_id;
+    wxsamp_t handle = {};
+    if (!s_sample_mem_mgr.alloc(data_size, &handle)) {
+        if (s_hw) {
+            wxsamp_stats_t st{};
+            s_sample_mem_mgr.stats(&st);
+            WaveX::Log::PrintLine(
+                "SAMPLE_LOAD: alloc failed for %lu bytes (largest_free=%lu, free_total=%lu)",
+                (unsigned long)data_size,
+                (unsigned long)st.largest_free_bytes,
+                (unsigned long)st.large_free_bytes + (unsigned long)st.small_free_bytes);
+        }
+        s_pool->Remove(sample_id);
+        f_close(&file);
+        ReportSampleLoadFailed(sl.sample_id, SAMPLE_LOAD_FAIL_RAM);
+        return;
     }
 
     void* sample_ptr = nullptr;
     if (!s_sample_mem_mgr.ptr(handle, &sample_ptr)) {
         s_sample_mem_mgr.release(&handle);
+        s_pool->Remove(sample_id);
         f_close(&file);
         ReportSampleLoadFailed(sl.sample_id, SAMPLE_LOAD_FAIL_RAM);
         return;
@@ -3262,6 +3135,7 @@ void OnSampleLoad(const SampleLoadMessage& sl) {
                     "SAMPLE_LOAD: read error %d after %lu bytes", (int)fr, (unsigned long)written);
             }
             s_sample_mem_mgr.release(&handle);
+            s_pool->Remove(sample_id);
             f_close(&file);
             ReportSampleLoadFailed(sl.sample_id, SAMPLE_LOAD_FAIL_READ);
             return;
@@ -3281,7 +3155,7 @@ void OnSampleLoad(const SampleLoadMessage& sl) {
             if (pct != s_last_pct) {
                 s_last_pct = pct;
                 SampleStatusMessage progress{};
-                progress.sample_id = sl.sample_id;
+                progress.sample_id = sample_id;
                 progress.state = SAMPLE_STATUS_LOAD_PROGRESS;  // frames_played = percent
                 progress.channels = static_cast<uint8_t>(num_ch);
                 progress.sample_rate = sample_rate;
@@ -3297,15 +3171,12 @@ void OnSampleLoad(const SampleLoadMessage& sl) {
 
     f_close(&file);
 
-    if (!upsert_loaded_sample(sl, resident, handle)) {
-        if (s_hw)
-            WaveX::Log::PrintLine("SAMPLE_LOAD: registry full (%u entries)",
-                                  (unsigned)kLoadedSampleCapacity);
-        s_sample_mem_mgr.release(&handle);
-        ReportSampleLoadFailed(sl.sample_id, SAMPLE_LOAD_FAIL_REGISTRY_FULL);
-        return;
-    }
-    update_loaded_sample_progress(sl.sample_id, data_size);
+    fill_loaded_sample(record->payload, sample_id, sl.path, resident, handle);
+    record->payload.loaded_bytes = data_size;
+    // The user asked for it by name: only an explicit unload releases it.
+    s_pool->SetPinned(sample_id, true);
+    s_pool->NoteNewest(sample_id);
+    PushSampleMeta(record->payload);
 
     if (s_hw) {
         // Report throughput and the geometry it was achieved with, not just the
@@ -3317,19 +3188,20 @@ void OnSampleLoad(const SampleLoadMessage& sl) {
         const unsigned long kbps =
             elapsed_ms > 0 ? (unsigned long)((uint64_t)data_size / elapsed_ms) : 0;
         WaveX::Log::PrintLine(
-            "SAMPLE_LOAD: Loaded %lu bytes for sample %u in %lu ms "
+            "SAMPLE_LOAD: Loaded %lu bytes as sample %u in %lu ms "
             "(%lu KB/s, %u B reads, %u B clusters)",
             (unsigned long)data_size,
-            (unsigned)sl.sample_id,
+            (unsigned)sample_id,
             (unsigned long)elapsed_ms,
             kbps,
             (unsigned)kIoChunk,
             cluster_bytes);
     }
 
-    // Notify host (ESP32) that sample load completed.
+    // Notify host (ESP32) that sample load completed - with the Pool's id,
+    // which is the one every later message must use.
     SampleStatusMessage status{};
-    status.sample_id = sl.sample_id;
+    status.sample_id = sample_id;
     status.state = SAMPLE_STATUS_LOAD_COMPLETE;
     status.channels = static_cast<uint8_t>(num_ch);
     status.sample_rate = sample_rate;
@@ -3355,10 +3227,13 @@ void GetSampleMemStatus(SampleMemStatusMessage& out) {
     out.in_use_bytes = stats.in_use_bytes;
     out.failed_allocs = stats.failed_allocs;
 
-    const size_t count = std::min<size_t>(s_loaded_sample_count, WAVEX_SAMPLE_STATUS_MAX_ENTRIES);
+    SamplePool::Record* page[WAVEX_SAMPLE_STATUS_MAX_ENTRIES];
+    size_t total = 0;
+    const size_t count =
+        s_pool ? s_pool->Page(0, WAVEX_SAMPLE_STATUS_MAX_ENTRIES, page, &total) : 0;
     out.sample_count = static_cast<uint8_t>(count);
     for (size_t i = 0; i < count; ++i) {
-        const auto& src = s_loaded_samples[i];
+        const auto& src = page[i]->payload;
         auto& dst = out.entries[i];
         dst.sample_id = src.sample_id;
         dst.allocated_bytes = src.allocated_bytes;
@@ -4098,8 +3973,8 @@ void SetEditParams(uint8_t slot,
     // slot is the sample id. 0 means "whatever the audition is playing",
     // which is how the edit page addresses a sample it did not load itself.
     LoadedSampleInfo* info = slot ? find_loaded_sample(slot) : nullptr;
-    if (!info && s_loaded_sample_count > 0) {
-        info = &s_loaded_samples[s_loaded_sample_count - 1];  // most recent
+    if (!info) {
+        info = newest_loaded_sample();
     }
 
     if (info) {

@@ -1204,15 +1204,6 @@ int main(void) {
 #endif
 
 #if WAVEX_PROFILING_ENABLED
-        // Repeated rather than one-shot: after a DFU reset the serial logger
-        // takes a few seconds to reattach, and a single boot-time run scrolls
-        // past uncaptured. Every 20 s is cheap and guarantees a capture. Bench
-        // build only.
-        static uint32_t last_registry_bench = 0;
-        if (current_time - last_registry_bench >= 20000) {
-            last_registry_bench = current_time;
-            WaveX::AudioEngine::BenchmarkRegistryScan();
-        }
         if (current_time - last_profile_print >= 5000) {
             PrintProfilingStats(hw);
             WaveX::Profiling::Profiler::ResetAll();

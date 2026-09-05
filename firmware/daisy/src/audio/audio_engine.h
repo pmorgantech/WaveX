@@ -132,14 +132,6 @@ void PushTrackBinding(uint8_t track);
 // Main loop only; see the TX queue depth note on s_track_binding_pending.
 void PumpTrackBinding();
 
-#if WAVEX_PROFILING_ENABLED
-// Bench instrument: measures the linear registry scan at 32/128/512/1024
-// entries in SDRAM, plus the internal-SRAM array today's registry uses, so
-// track-and-patch-model.md §4's 1024-entry projection rests on a measured
-// curve. Boot-time, profiling-only, touches only render-scratch SDRAM.
-void BenchmarkRegistryScan();
-#endif
-
 // Frees a loaded sample's RAM, stopping any voice sounding from it first.
 // Returns false if the id is 0 or is not loaded.
 bool UnloadSample(uint16_t sample_id);
