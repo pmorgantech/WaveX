@@ -39,6 +39,7 @@ static void HandleDiagSubscribeMessage(const uint8_t* payload, size_t payload_si
 static void HandleSampleEditMessage(const uint8_t* payload, size_t payload_size);
 static void HandleSampleMetaReqMessage(const uint8_t* payload, size_t payload_size);
 static void HandleMixOpMessage(const uint8_t* payload, size_t payload_size);
+static void HandleTrackOpMessage(const uint8_t* payload, size_t payload_size);
 static void HandleSampleSelectMessage(const uint8_t* payload, size_t payload_size);
 static void HandleSampleUnloadMessage(const uint8_t* payload, size_t payload_size);
 static void HandleTrackBindingReqMessage(const uint8_t* payload, size_t payload_size);
@@ -101,6 +102,9 @@ void ProcessInterMcuMessage(uint8_t msg_type,
             break;
         case MSG_MIX_OP:
             HandleMixOpMessage(payload, payload_size);
+            break;
+        case MSG_TRACK_OP:
+            HandleTrackOpMessage(payload, payload_size);
             break;
         case MSG_NOTE_ON:
             HandleNoteMessage(payload, payload_size);
@@ -484,6 +488,15 @@ static void HandleMixOpMessage(const uint8_t* payload, size_t payload_size) {
     MixOpMessage msg;
     memcpy(&msg, payload, sizeof(msg));
     WaveX::AudioEngine::OnMixOp(msg);
+}
+
+static void HandleTrackOpMessage(const uint8_t* payload, size_t payload_size) {
+    if (!payload || payload_size < sizeof(TrackOpMessage)) {
+        return;
+    }
+    TrackOpMessage msg;
+    memcpy(&msg, payload, sizeof(msg));
+    WaveX::AudioEngine::OnTrackOp(msg);
 }
 
 static void HandleSampleMetaReqMessage(const uint8_t* payload, size_t payload_size) {

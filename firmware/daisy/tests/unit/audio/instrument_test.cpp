@@ -355,7 +355,7 @@ TEST(InstrumentTest, ChokeGroupAndRegionFlowThrough) {
 // Tracks routes a slot to its instrument and resolves through it.
 TEST(InstrumentTest, BankResolvesThroughSlot) {
     Tracks tracks;
-    tracks.Track(4).zones[0] = MakeZone(1, 0, 127, 1, 127);
+    tracks.At(4).instrument.zones[0] = MakeZone(1, 0, 127, 1, 127);
     FakeSampleBank samples;
     VoiceTriggerParams out[kMaxLayerTriggers];
 
@@ -397,16 +397,16 @@ TEST(InstrumentTest, ModSlotsAreIndependentPerInstrumentAndPerSlotIndex) {
     a.source = SRC_LFO1;
     a.dest = DEST_CUTOFF;
     a.depth = 12345;
-    tracks.Track(2).mod_slots[3] = a;
+    tracks.At(2).instrument.mod_slots[3] = a;
 
     // A different slot index on the same instrument is untouched.
-    EXPECT_EQ(tracks.Track(2).mod_slots[4].source, SRC_NONE);
+    EXPECT_EQ(tracks.At(2).instrument.mod_slots[4].source, SRC_NONE);
     // A different instrument slot entirely is untouched.
-    EXPECT_EQ(tracks.Track(5).mod_slots[3].source, SRC_NONE);
+    EXPECT_EQ(tracks.At(5).instrument.mod_slots[3].source, SRC_NONE);
     // The written entry reads back exactly.
-    EXPECT_EQ(tracks.Track(2).mod_slots[3].source, SRC_LFO1);
-    EXPECT_EQ(tracks.Track(2).mod_slots[3].dest, DEST_CUTOFF);
-    EXPECT_EQ(tracks.Track(2).mod_slots[3].depth, 12345);
+    EXPECT_EQ(tracks.At(2).instrument.mod_slots[3].source, SRC_LFO1);
+    EXPECT_EQ(tracks.At(2).instrument.mod_slots[3].dest, DEST_CUTOFF);
+    EXPECT_EQ(tracks.At(2).instrument.mod_slots[3].depth, 12345);
 }
 
 // --- Sample-record inheritance and the live-params flag ------------------
@@ -559,6 +559,157 @@ TEST(InstrumentTest, FreshInstrumentHasNoOrigin) {
     EXPECT_EQ(ins.origin, InstrumentOrigin::None);
     Tracks tracks;
     for (uint8_t s = 0; s < kNumTracks; ++s) {
-        EXPECT_EQ(tracks.Track(s).origin, InstrumentOrigin::None);
+        EXPECT_EQ(tracks.At(s).instrument.origin, InstrumentOrigin::None);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Track settings and MIDI routing (track-and-patch-model.md §2.2)
+// ---------------------------------------------------------------------------
+
+// Tests speak in MIDI channel numbers as a user reads them (1..16); the
+// routing API takes the wire's 0-based nibble. Converting here by name keeps
+// "MIDI channel 5" out of the tests as a bare 4.
+static uint8_t OnMidiChannel(uint8_t display_channel) {
+    return WaveX::Protocol::MidiDisplayToWireChannel(display_channel);
+}
+
+// The default is multi/poly mode: Track t listens on MIDI channel t+1, which
+// is precisely the 1:1 mapping the engine had before Tracks had a midi_in.
+// A user who never opens the Track page must hear no change.
+TEST(TrackRoutingTest, DefaultIsOneChannelPerTrack) {
+    Tracks tracks;
+    // Track index t is displayed as "Track t+1" and listens on MIDI t+1:
+    // Track 1 -> MIDI 1, straight down the line.
+    for (uint8_t t = 0; t < kNumTracks; ++t) {
+        EXPECT_EQ(tracks.At(t).midi_in, t + 1) << "track " << int(t);
+    }
+    for (uint8_t midi_ch = 1; midi_ch <= 16; ++midi_ch) {
+        uint8_t out[kNumTracks];
+        const uint8_t n = tracks.TracksForMidiChannel(OnMidiChannel(midi_ch), out, kNumTracks);
+        ASSERT_EQ(n, 1) << "MIDI channel " << int(midi_ch);
+        EXPECT_EQ(out[0], midi_ch - 1);
+    }
+}
+
+// Several Tracks on one channel is a layer - the point of routing on the
+// backend rather than filtering on the frontend.
+TEST(TrackRoutingTest, OmniTracksAllHearEveryChannel) {
+    Tracks tracks;
+    tracks.At(2).midi_in = WaveX::Protocol::TRACK_MIDI_IN_OMNI;
+    tracks.At(7).midi_in = WaveX::Protocol::TRACK_MIDI_IN_OMNI;
+    for (uint8_t t = 0; t < kNumTracks; ++t) {
+        if (t != 2 && t != 7)
+            tracks.At(t).midi_in = WaveX::Protocol::TRACK_MIDI_IN_OFF;
+    }
+
+    for (uint8_t ch = 0; ch < 16; ++ch) {
+        uint8_t out[kNumTracks];
+        const uint8_t n = tracks.TracksForMidiChannel(ch, out, kNumTracks);
+        ASSERT_EQ(n, 2) << "channel " << int(ch);
+        EXPECT_EQ(out[0], 2);
+        EXPECT_EQ(out[1], 7);
+    }
+}
+
+TEST(TrackRoutingTest, TwoTracksOnOneChannelBothFire) {
+    Tracks tracks;
+    tracks.At(0).midi_in = 5;
+    tracks.At(9).midi_in = 5;
+    // Track 4 defaults to MIDI 5 (t+1), so it is a third listener on this
+    // channel unless it is moved out of the way. Setting it Off keeps this
+    // test about the pair it names; DefaultsAlsoLayerOnTheSameChannel below
+    // covers the case where the default is left in place.
+    tracks.At(4).midi_in = WaveX::Protocol::TRACK_MIDI_IN_OFF;
+
+    uint8_t out[kNumTracks];
+    const uint8_t n = tracks.TracksForMidiChannel(OnMidiChannel(5), out, kNumTracks);
+    ASSERT_EQ(n, 2);
+    EXPECT_EQ(out[0], 0);
+    EXPECT_EQ(out[1], 9);
+}
+
+// Pointing a second Track at a channel that already has its default listener
+// layers onto it rather than stealing it - the behaviour that makes "two
+// Tracks omni" a layer, seen here with an ordinary channel.
+TEST(TrackRoutingTest, DefaultsAlsoLayerOnTheSameChannel) {
+    Tracks tracks;
+    tracks.At(0).midi_in = 5;  // Track 4 already listens on MIDI 5 by default
+
+    uint8_t out[kNumTracks];
+    const uint8_t n = tracks.TracksForMidiChannel(OnMidiChannel(5), out, kNumTracks);
+    ASSERT_EQ(n, 2);
+    EXPECT_EQ(out[0], 0);
+    EXPECT_EQ(out[1], 4);
+}
+
+TEST(TrackRoutingTest, OffTracksHearNothing) {
+    Tracks tracks;
+    for (uint8_t t = 0; t < kNumTracks; ++t) {
+        tracks.At(t).midi_in = WaveX::Protocol::TRACK_MIDI_IN_OFF;
+    }
+    for (uint8_t ch = 0; ch < 16; ++ch) {
+        uint8_t out[kNumTracks];
+        EXPECT_EQ(tracks.TracksForMidiChannel(ch, out, kNumTracks), 0) << "channel " << int(ch);
+    }
+}
+
+// A sequencer-only Track: Off to MIDI, still reachable by a Track-addressed
+// note. The engine's RouteNote() handles that case; here we pin down that
+// Off really does exclude it from channel fan-out.
+TEST(TrackRoutingTest, OffTrackIsSkippedButOthersStillFire) {
+    Tracks tracks;
+    tracks.At(3).midi_in = WaveX::Protocol::TRACK_MIDI_IN_OFF;
+
+    uint8_t out[kNumTracks];
+    const uint8_t n = tracks.TracksForMidiChannel(OnMidiChannel(4), out, kNumTracks);
+    EXPECT_EQ(n, 0);  // Track index 3 ("Track 4") would have taken MIDI 4
+
+    const uint8_t m = tracks.TracksForMidiChannel(OnMidiChannel(5), out, kNumTracks);
+    ASSERT_EQ(m, 1);
+    EXPECT_EQ(out[0], 4);
+}
+
+// The fan-out writes at most `max` entries. A caller sizing its buffer at
+// fewer than 16 must not be overrun.
+TEST(TrackRoutingTest, FanOutRespectsTheCallersCapacity) {
+    Tracks tracks;
+    for (uint8_t t = 0; t < kNumTracks; ++t) {
+        tracks.At(t).midi_in = WaveX::Protocol::TRACK_MIDI_IN_OMNI;
+    }
+    uint8_t out[4] = {0xFF, 0xFF, 0xFF, 0xFF};
+    const uint8_t n = tracks.TracksForMidiChannel(0, out, 3);
+    EXPECT_EQ(n, 3);
+    EXPECT_EQ(out[0], 0);
+    EXPECT_EQ(out[1], 1);
+    EXPECT_EQ(out[2], 2);
+    EXPECT_EQ(out[3], 0xFF);  // untouched
+}
+
+// Settings survive an Instrument being replaced: they describe the Track's
+// place in the machine, not the sound bound to it (§2.1).
+TEST(TrackRoutingTest, SettingsAreIndependentOfTheInstrument) {
+    Tracks tracks;
+    tracks.At(6).midi_in = WaveX::Protocol::TRACK_MIDI_IN_OMNI;
+    tracks.At(6).poly_limit = 4;
+    tracks.At(6).priority = 2;
+    tracks.At(6).program_change = 1;
+
+    tracks.At(6).instrument = Instrument{};  // a new sound lands on the Track
+
+    EXPECT_EQ(tracks.At(6).midi_in, WaveX::Protocol::TRACK_MIDI_IN_OMNI);
+    EXPECT_EQ(tracks.At(6).poly_limit, 4);
+    EXPECT_EQ(tracks.At(6).priority, 2);
+    EXPECT_EQ(tracks.At(6).program_change, 1);
+}
+
+TEST(TrackRoutingTest, ResetRoutingRestoresMultiMode) {
+    Tracks tracks;
+    for (uint8_t t = 0; t < kNumTracks; ++t) {
+        tracks.At(t).midi_in = WaveX::Protocol::TRACK_MIDI_IN_OFF;
+    }
+    tracks.ResetRouting();
+    for (uint8_t t = 0; t < kNumTracks; ++t) {
+        EXPECT_EQ(tracks.At(t).midi_in, t + 1) << "track " << int(t);
     }
 }

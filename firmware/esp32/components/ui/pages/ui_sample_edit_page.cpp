@@ -453,7 +453,7 @@ void UISampleEditPage::toggleAudition() {
     }
 
     if (auditioning_) {
-        if (inter_mcu_send_note_off(kAuditionNote, 0) == ESP_OK) {
+        if (inter_mcu_send_note_off_track(kAuditionNote, 0) == ESP_OK) {
             auditioning_ = false;
             refreshStatus("Stopped");
         } else {
@@ -470,7 +470,7 @@ void UISampleEditPage::toggleAudition() {
         // Push the current UI values so the voice is built from what is on
         // screen, not from whatever was last committed.
         sendEdit();
-        if (inter_mcu_send_note_on(kAuditionNote, kAuditionVelocity, 0) == ESP_OK) {
+        if (inter_mcu_send_note_on_track(kAuditionNote, kAuditionVelocity, 0) == ESP_OK) {
             auditioning_ = true;
             refreshStatus("Previewing edited sample (region, loop, gain and fades applied)");
         } else {

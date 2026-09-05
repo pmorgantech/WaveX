@@ -1502,6 +1502,120 @@ TEST_F(MessageTypeTest, MixOpPanExtremesSurvive) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Track ops and note addressing (track-and-patch-model.md §2)
+// ---------------------------------------------------------------------------
+
+TEST_F(MessageTypeTest, TrackOpMessage) {
+    TrackOpMessage original(TRACK_OP_SET_MIDI_IN, 5, TRACK_MIDI_IN_OMNI);
+    size_t created = ProtocolHandler::CreateTrackOpPacket(buffer_.data(), buffer_.size(), original);
+    ASSERT_GT(created, 0u);
+    EXPECT_TRUE(ProtocolHandler::ValidatePacket(buffer_.data(), created));
+
+    TrackOpMessage parsed;
+    ASSERT_TRUE(
+        ProtocolHandler::ParseMessage(buffer_.data(), MSG_TRACK_OP, &parsed, sizeof(parsed)));
+    EXPECT_EQ(parsed.op, TRACK_OP_SET_MIDI_IN);
+    EXPECT_EQ(parsed.track, 5);
+    EXPECT_EQ(parsed.value, TRACK_MIDI_IN_OMNI);
+}
+
+// Off is 0xFF, which is exactly the value a byte-narrowed or accidentally
+// signed `value` field mangles.
+TEST_F(MessageTypeTest, TrackOpCarriesMidiInOff) {
+    TrackOpMessage original(TRACK_OP_SET_MIDI_IN, 15, TRACK_MIDI_IN_OFF);
+    size_t created = ProtocolHandler::CreateTrackOpPacket(buffer_.data(), buffer_.size(), original);
+    ASSERT_GT(created, 0u);
+
+    TrackOpMessage parsed;
+    ASSERT_TRUE(
+        ProtocolHandler::ParseMessage(buffer_.data(), MSG_TRACK_OP, &parsed, sizeof(parsed)));
+    EXPECT_EQ(parsed.track, 15);
+    EXPECT_EQ(parsed.value, TRACK_MIDI_IN_OFF);
+}
+
+TEST_F(MessageTypeTest, TrackOpRoundTripsEveryOp) {
+    const uint8_t ops[] = {TRACK_OP_SET_MIDI_IN,
+                           TRACK_OP_SET_POLY_LIMIT,
+                           TRACK_OP_SET_PRIORITY,
+                           TRACK_OP_SET_PROGRAM_CHANGE};
+    for (uint8_t op: ops) {
+        for (uint8_t track = 0; track < WAVEX_MIX_TRACKS; ++track) {
+            TrackOpMessage original(op, track, static_cast<uint16_t>(track * 3 + 1));
+            size_t created =
+                ProtocolHandler::CreateTrackOpPacket(buffer_.data(), buffer_.size(), original);
+            ASSERT_GT(created, 0u) << "op " << int(op) << " track " << int(track);
+
+            TrackOpMessage parsed;
+            ASSERT_TRUE(ProtocolHandler::ParseMessage(
+                buffer_.data(), MSG_TRACK_OP, &parsed, sizeof(parsed)));
+            EXPECT_EQ(parsed.op, op);
+            EXPECT_EQ(parsed.track, track);
+            EXPECT_EQ(parsed.value, static_cast<uint16_t>(track * 3 + 1));
+        }
+    }
+}
+
+TEST_F(MessageTypeTest, TrackMidiInValidAcceptsOmniChannelsAndOff) {
+    EXPECT_TRUE(TrackMidiInValid(TRACK_MIDI_IN_OMNI));
+    for (uint8_t ch = 1; ch <= 16; ++ch) {
+        EXPECT_TRUE(TrackMidiInValid(ch)) << "channel " << int(ch);
+    }
+    EXPECT_TRUE(TrackMidiInValid(TRACK_MIDI_IN_OFF));
+    EXPECT_FALSE(TrackMidiInValid(17));
+    EXPECT_FALSE(TrackMidiInValid(0xFE));
+}
+
+// The routing predicate both ends share. Channels are 0-based on the wire
+// and 1-based in midi_in, which is the off-by-one worth pinning down.
+TEST_F(MessageTypeTest, TrackAcceptsMidiChannelRouting) {
+    // Omni takes every channel.
+    for (uint8_t ch = 0; ch < 16; ++ch) {
+        EXPECT_TRUE(TrackAcceptsMidiChannel(TRACK_MIDI_IN_OMNI, ch));
+    }
+    // Off takes none.
+    for (uint8_t ch = 0; ch < 16; ++ch) {
+        EXPECT_FALSE(TrackAcceptsMidiChannel(TRACK_MIDI_IN_OFF, ch));
+    }
+    // midi_in = n (1-based) takes wire channel n-1 and nothing else.
+    for (uint8_t midi_in = 1; midi_in <= 16; ++midi_in) {
+        for (uint8_t ch = 0; ch < 16; ++ch) {
+            EXPECT_EQ(TrackAcceptsMidiChannel(midi_in, ch), ch + 1 == midi_in)
+                << "midi_in " << int(midi_in) << " channel " << int(ch);
+        }
+    }
+}
+
+TEST_F(MessageTypeTest, NoteAddressingFlagSeparatesTrackFromChannel) {
+    for (uint8_t track = 0; track < 16; ++track) {
+        const uint8_t channel = NoteChannelForTrack(track);
+        EXPECT_TRUE(NoteAddressesTrack(channel)) << "track " << int(track);
+        EXPECT_EQ(NoteAddressIndex(channel), track);
+    }
+    // A raw MIDI channel (what the MIDI task forwards) is never a Track
+    // address, and reads back unchanged.
+    for (uint8_t ch = 0; ch < 16; ++ch) {
+        EXPECT_FALSE(NoteAddressesTrack(ch)) << "channel " << int(ch);
+        EXPECT_EQ(NoteAddressIndex(ch), ch);
+    }
+}
+
+// The compatibility claim in protocol.h: a build that predates the flag masks
+// & 0x0F and sees the same index it always did.
+TEST_F(MessageTypeTest, NoteAddressFlagSurvivesTheWire) {
+    NoteMessage original(60, 100, NoteChannelForTrack(9));
+    size_t created = ProtocolHandler::CreateNoteOnPacket(
+        buffer_.data(), buffer_.size(), original.note, original.velocity, original.channel);
+    ASSERT_GT(created, 0u);
+
+    NoteMessage parsed;
+    ASSERT_TRUE(ProtocolHandler::ParseNoteMessage(buffer_.data(), parsed));
+    EXPECT_EQ(parsed.channel, NoteChannelForTrack(9));
+    EXPECT_TRUE(NoteAddressesTrack(parsed.channel));
+    EXPECT_EQ(NoteAddressIndex(parsed.channel), 9);
+    EXPECT_EQ(parsed.channel & 0x0F, 9);  // what an older build reads
+}
+
 TEST_F(MessageTypeTest, MixMetersMessage) {
     MixMetersMessage original;
     for (uint8_t i = 0; i < WAVEX_MIX_TRACKS; ++i) {

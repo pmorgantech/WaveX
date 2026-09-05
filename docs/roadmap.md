@@ -83,28 +83,25 @@ The model core, SFZ import, WXCF container, the shared selected Track, and
 parts of the mixer/modulation path are built. The end state is
 `features/track-and-patch-model.md` (Track / Instrument / Bank / Sample Pool;
 the two-oscillator Instrument is designed there, §3). Stages 1 (rename),
-2 (Load-to-Track) and 3 (Sample Pool) are done. Open work, in the order
-decided 2026-09-05 (model doc §8: 7 → 4 → 5 → 6 → 8):
+2 (Load-to-Track), 3 (Sample Pool) and 7 (Track model and MIDI routing) are
+done. Open work, in the order decided 2026-09-05 (model doc §8: 7 → 4 → 5 →
+6 → 8), with 7 now closed:
 
-1. Track model and MIDI routing (stage 7): `Track` fields, `NOTE_ADDR_TRACK`,
-   Daisy-side fan-out, `MSG_TRACK_OP`; remove the ESP32 global channel
-   filter. Unblocks the Phase 2 sequencer's Track addressing and the Track
-   page.
-2. Instrument file and editors (stage 4): `.wxi` with the full chunk set,
+1. Instrument file and editors (stage 4): `.wxi` with the full chunk set,
    Init/Save/Name ops, Pad Map (first) and Key Map (with Sample Manager
    "to pad"), Instrument Browser, Track page.
-3. Voice architecture (stage 5): typed oscillators, Osc 2 + submix, filter
+2. Voice architecture (stage 5): typed oscillators, Osc 2 + submix, filter
    type, Env 3, two per-voice LFOs, new mod destinations —
    DWT-measured at `WAVEX_NUM_VOICES` before the count is changed.
-4. Bank (stage 6): `.wxb`, Bank page, Program Change recall.
-5. Polyphony policy (stage 8), from stage 5's measurement.
-6. Finish Mixer v1: UI/solo behavior, meter subscription, and hardware click
+3. Bank (stage 6): `.wxb`, Bank page, Program Change recall.
+4. Polyphony policy (stage 8), from stage 5's measurement.
+5. Finish Mixer v1: UI/solo behavior, meter subscription, and hardware click
    and soak tests.
-7. Add melodic sequencing, chord/tie handling, step/live record, and erase.
-8. Complete modulation: p-lock application, MIDI CC/channel-pressure
+6. Add melodic sequencing, chord/tie handling, step/live record, and erase.
+7. Complete modulation: p-lock application, MIDI CC/channel-pressure
    forwarding, and modulation UI (the per-voice LFOs and zone filter ADSR
    move into stage 5).
-9. Build sampling/recording v1 and the arpeggiator.
+8. Build sampling/recording v1 and the arpeggiator.
 
 **Gate:** from power-on, hear a card sample on the Keys in four taps; build a
 16-pad kit and a multisampled keyboard Instrument on-device and save both;

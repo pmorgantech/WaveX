@@ -153,7 +153,14 @@ esp_err_t inter_mcu_send_control_change(uint8_t parameter, uint8_t channel, uint
     return result >= 0 ? ESP_OK : ESP_FAIL;
 }
 
-esp_err_t inter_mcu_send_note_on(uint8_t note, uint8_t velocity, uint8_t channel) {
+// The one place a NoteMessage is built. `addressed_channel` is already
+// encoded - either a raw MIDI channel or NoteChannelForTrack(track) - so the
+// addressing decision is made by the caller-facing wrappers below and never
+// re-derived here.
+static esp_err_t send_note(uint8_t msg_type,
+                           uint8_t note,
+                           uint8_t velocity,
+                           uint8_t addressed_channel) {
     if (!s_initialized || s_suspended) {
         return ESP_ERR_INVALID_STATE;
     }
@@ -161,25 +168,45 @@ esp_err_t inter_mcu_send_note_on(uint8_t note, uint8_t velocity, uint8_t channel
     WaveX::Protocol::NoteMessage msg;
     msg.note = note;
     msg.velocity = velocity;
-    msg.channel = channel;
+    msg.channel = addressed_channel;
     msg.reserved = 0;
 
-    int result = send_uart_message(WaveX::Protocol::MSG_NOTE_ON, &msg, sizeof(msg));
+    int result = send_uart_message(msg_type, &msg, sizeof(msg));
     return result >= 0 ? ESP_OK : ESP_FAIL;
 }
 
-esp_err_t inter_mcu_send_note_off(uint8_t note, uint8_t channel) {
+esp_err_t inter_mcu_send_note_on_midi(uint8_t note, uint8_t velocity, uint8_t channel) {
+    // Raw MIDI channel, NOTE_ADDR_TRACK clear: the backend decides which
+    // Tracks hear it. Masked rather than trusted so a caller that hands us a
+    // channel with stray high bits cannot forge a Track address.
+    return send_note(WaveX::Protocol::MSG_NOTE_ON,
+                     note,
+                     velocity,
+                     channel & WaveX::Protocol::NOTE_ADDR_INDEX_MASK);
+}
+
+esp_err_t inter_mcu_send_note_off_midi(uint8_t note, uint8_t channel) {
+    return send_note(
+        WaveX::Protocol::MSG_NOTE_OFF, note, 0, channel & WaveX::Protocol::NOTE_ADDR_INDEX_MASK);
+}
+
+esp_err_t inter_mcu_send_note_on_track(uint8_t note, uint8_t velocity, uint8_t track) {
+    return send_note(
+        WaveX::Protocol::MSG_NOTE_ON, note, velocity, WaveX::Protocol::NoteChannelForTrack(track));
+}
+
+esp_err_t inter_mcu_send_note_off_track(uint8_t note, uint8_t track) {
+    return send_note(
+        WaveX::Protocol::MSG_NOTE_OFF, note, 0, WaveX::Protocol::NoteChannelForTrack(track));
+}
+
+esp_err_t inter_mcu_send_track_op(uint8_t op, uint8_t track, uint16_t value) {
     if (!s_initialized || s_suspended) {
         return ESP_ERR_INVALID_STATE;
     }
 
-    WaveX::Protocol::NoteMessage msg;
-    msg.note = note;
-    msg.velocity = 0;  // Note off
-    msg.channel = channel;
-    msg.reserved = 0;
-
-    int result = send_uart_message(WaveX::Protocol::MSG_NOTE_OFF, &msg, sizeof(msg));
+    WaveX::Protocol::TrackOpMessage msg(op, track, value);
+    int result = send_uart_message(WaveX::Protocol::MSG_TRACK_OP, &msg, sizeof(msg));
     return result >= 0 ? ESP_OK : ESP_FAIL;
 }
 

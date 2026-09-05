@@ -23,6 +23,11 @@
 
 #include "mod_matrix.hpp"
 #include "voice_manager.hpp"
+// TrackMidiIn / TrackAcceptsMidiChannel: the midi_in encoding and the routing
+// predicate are shared with the frontend, so they live with the wire contract
+// rather than being restated here (AGENTS.md: one source of truth).
+#include "spi_protocol/protocol.h"
+
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -265,12 +270,69 @@ inline uint8_t ResolveNoteOn(const Instrument& ins,
     return count;
 }
 
-// The sixteen Tracks. A sequencer track / MIDI channel addresses one; the
-// Instrument bound to it resolves the note. Fixed storage, no allocation.
+/**
+ * One Track: the Instrument bound to it plus the Track's own settings
+ * (track-and-patch-model.md §2.1).
+ *
+ * The settings are deliberately NOT Instrument properties. An Instrument is a
+ * sound and travels between Tracks and Banks; `midi_in` and the polyphony
+ * policy describe the Track's place in the machine and stay put when the
+ * sound is replaced. Filter/envelope/tuning belong to the Instrument (§2.3).
+ *
+ * Only `midi_in` has behaviour today. `poly_limit`/`priority` are stored for
+ * stage 8 (polyphony policy, which measures first) and `program_change` for
+ * stage 6 (Bank recall); they are on the wire and in the file now so those
+ * stages do not have to migrate a Track record that users already saved.
+ */
+struct Track {
+    Instrument instrument;
+
+    /// TrackMidiIn (protocol.h): 0 = Omni, 1..16 = that channel, 0xFF = Off.
+    /// Default is Omni-per-index: see Tracks::Reset().
+    uint8_t midi_in = WaveX::Protocol::TRACK_MIDI_IN_OMNI;
+    uint8_t poly_limit = 0;      // 0 = no limit; stage 8
+    uint8_t priority = 0;        // steal priority, 0 = lowest; stage 8
+    uint8_t program_change = 0;  // 1 = Program Change recalls Bank slots; stage 6
+};
+
+// The sixteen Tracks. A sequencer track addresses one directly; a MIDI note
+// reaches every Track listening on its channel. Fixed storage, no allocation.
 class Tracks {
    public:
-    Instrument& Track(uint8_t track) { return tracks_[track < kNumTracks ? track : 0]; }
-    const Instrument& Track(uint8_t track) const { return tracks_[track < kNumTracks ? track : 0]; }
+    Tracks() { ResetRouting(); }
+
+    /// The whole Track record. Named At() rather than Track() because a
+    /// member function of that name would hide the type in this scope.
+    struct Track& At(uint8_t track) { return tracks_[track < kNumTracks ? track : 0]; }
+    const struct Track& At(uint8_t track) const { return tracks_[track < kNumTracks ? track : 0]; }
+
+    /// Default routing: Track t listens on MIDI channel t+1 (multi/poly
+    /// mode), which is exactly the 1:1 channel-to-Track mapping the engine
+    /// had before Tracks had a midi_in at all. Nothing audible changes for a
+    /// user who never opens the Track page.
+    void ResetRouting() {
+        for (uint8_t t = 0; t < kNumTracks; ++t) {
+            tracks_[t].midi_in = static_cast<uint8_t>(t + 1);
+        }
+    }
+
+    /**
+     * Tracks that should hear a note-on arriving on MIDI `channel` (0-based).
+     *
+     * Fan-out, not a lookup: several Tracks may listen on one channel, which
+     * is what makes a layer. Writes up to `max` track indices into `out` and
+     * returns how many. Main loop only - the note handler runs there, not in
+     * the audio callback (§2.2).
+     */
+    uint8_t TracksForMidiChannel(uint8_t channel, uint8_t* out, uint8_t max) const {
+        uint8_t count = 0;
+        for (uint8_t t = 0; t < kNumTracks && count < max; ++t) {
+            if (WaveX::Protocol::TrackAcceptsMidiChannel(tracks_[t].midi_in, channel)) {
+                out[count++] = t;
+            }
+        }
+        return count;
+    }
 
     uint8_t ResolveNote(uint8_t track,
                         uint8_t note,
@@ -281,11 +343,12 @@ class Tracks {
                         const VoiceLiveParams* live = nullptr) const {
         if (track >= kNumTracks)
             return 0;
-        return ResolveNoteOn(tracks_[track], track, note, velocity, resolver, out, max, live);
+        return ResolveNoteOn(
+            tracks_[track].instrument, track, note, velocity, resolver, out, max, live);
     }
 
    private:
-    Instrument tracks_[kNumTracks];
+    struct Track tracks_[kNumTracks];
 };
 
 }  // namespace AudioEngine

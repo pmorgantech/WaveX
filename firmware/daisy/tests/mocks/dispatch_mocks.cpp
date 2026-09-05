@@ -126,6 +126,10 @@ void OnMixOp(const WaveX::Protocol::MixOpMessage& m) {
     WaveX::Test::GetDispatchRecord().mix_ops.push_back(m);
 }
 
+void OnTrackOp(const WaveX::Protocol::TrackOpMessage& m) {
+    WaveX::Test::GetDispatchRecord().track_ops.push_back(m);
+}
+
 void OnNoteOn(const WaveX::Protocol::NoteMessage& m) {
     WaveX::Test::GetDispatchRecord().note_ons.push_back(m);
 }

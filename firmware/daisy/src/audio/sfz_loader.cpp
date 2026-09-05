@@ -146,7 +146,7 @@ void ReleaseTrack(SamplePool& pool, SampleMemMgr& memory, uint8_t track) {
     pool.ClearTrack(track, [&](uint16_t id) { FreeFromPool(pool, memory, id); });
     // Zones only: the mod slots are the user's, set through their own op,
     // and rebinding what plays is not a reason to lose them.
-    Instrument& ins = s_bank.Track(track);
+    Instrument& ins = s_bank.At(track).instrument;
     for (auto& zone: ins.zones) {
         zone = Zone{};
     }
@@ -698,7 +698,7 @@ void Pump(SamplePool& pool, SampleMemMgr& memory, uint8_t* io_buffer, uint32_t i
             }
             // The mapper numbered samples 1..N within this document; the
             // zones now name their Pool ids, and the Track takes its refs.
-            Instrument& ins = s_bank.Track(s_request.slot);
+            Instrument& ins = s_bank.At(s_request.slot).instrument;
             ins = s_mapped.instrument;
             for (auto& zone: ins.zones) {
                 if (!zone.in_use || zone.sample_id == 0 || zone.sample_id > s_plan.count) {
@@ -748,7 +748,61 @@ bool Load(const char* path,
 }
 
 bool TrackLoaded(uint8_t slot) {
-    return slot < kNumTracks && s_bank.Track(slot).origin != InstrumentOrigin::None;
+    return slot < kNumTracks && s_bank.At(slot).instrument.origin != InstrumentOrigin::None;
+}
+
+// --- Track settings and MIDI routing (track-and-patch-model.md §2) ---------
+//
+// Main-loop only, like every other Tracks mutation in this file. The audio
+// callback never reads midi_in: routing happens in the note handler before a
+// NoteEvent is queued, so the callback still sees a resolved track index.
+
+bool SetTrackMidiIn(uint8_t track, uint8_t midi_in) {
+    if (track >= kNumTracks || !TrackMidiInValid(midi_in))
+        return false;
+    s_bank.At(track).midi_in = midi_in;
+    return true;
+}
+
+uint8_t TrackMidiIn(uint8_t track) {
+    return track < kNumTracks ? s_bank.At(track).midi_in : TRACK_MIDI_IN_OFF;
+}
+
+bool SetTrackPolyLimit(uint8_t track, uint8_t limit) {
+    if (track >= kNumTracks || limit > WAVEX_NUM_VOICES)
+        return false;
+    s_bank.At(track).poly_limit = limit;
+    return true;
+}
+
+uint8_t TrackPolyLimit(uint8_t track) {
+    return track < kNumTracks ? s_bank.At(track).poly_limit : 0;
+}
+
+bool SetTrackPriority(uint8_t track, uint8_t priority) {
+    if (track >= kNumTracks)
+        return false;
+    s_bank.At(track).priority = priority;
+    return true;
+}
+
+uint8_t TrackPriority(uint8_t track) {
+    return track < kNumTracks ? s_bank.At(track).priority : 0;
+}
+
+bool SetTrackProgramChange(uint8_t track, bool enabled) {
+    if (track >= kNumTracks)
+        return false;
+    s_bank.At(track).program_change = enabled ? 1 : 0;
+    return true;
+}
+
+bool TrackProgramChange(uint8_t track) {
+    return track < kNumTracks && s_bank.At(track).program_change != 0;
+}
+
+uint8_t TracksForMidiChannel(uint8_t channel, uint8_t* out, uint8_t max) {
+    return s_bank.TracksForMidiChannel(channel, out, max);
 }
 
 void SetLoadedSampleResolver(const SampleResolver& resolver) {
@@ -764,7 +818,7 @@ bool BindSample(
     // Whatever the Track held goes: an import's samples that nobody else
     // holds are freed here (the caller stopped this Track's voices).
     ReleaseTrack(pool, memory, slot);
-    Instrument& ins = s_bank.Track(slot);
+    Instrument& ins = s_bank.At(slot).instrument;
     if (sample_id == 0) {
         return true;
     }
@@ -787,13 +841,13 @@ const char* TrackName(uint8_t slot) {
     // misleading. The request's own path is the truth until Commit runs.
     if (TrackLoading(slot))
         return Basename(s_request.path);
-    return s_bank.Track(slot).name;
+    return s_bank.At(slot).instrument.name;
 }
 
 uint16_t BoundSample(uint8_t slot) {
     if (slot >= kNumTracks)
         return 0;
-    const Instrument& ins = s_bank.Track(slot);
+    const Instrument& ins = s_bank.At(slot).instrument;
     if (ins.origin != InstrumentOrigin::Built)
         return 0;
     for (const auto& zone: ins.zones) {
@@ -820,7 +874,7 @@ void ForgetLoadedSample(uint16_t sample_id) {
     if (sample_id == 0)
         return;
     for (uint8_t slot = 0; slot < kNumTracks; ++slot) {
-        Instrument& ins = s_bank.Track(slot);
+        Instrument& ins = s_bank.At(slot).instrument;
         if (ins.origin == InstrumentOrigin::None)
             continue;
         bool any_left = false;
@@ -846,7 +900,7 @@ uint8_t ResolveNote(uint8_t slot,
         return 0;
     // One resolver for every origin: an import's zones name Pool ids now,
     // exactly as a Built instrument's do.
-    if (s_bank.Track(slot).origin == InstrumentOrigin::None)
+    if (s_bank.At(slot).instrument.origin == InstrumentOrigin::None)
         return 0;
     return s_bank.ResolveNote(slot, note, velocity, s_loaded_resolver, out, max, live);
 }
@@ -854,14 +908,14 @@ uint8_t ResolveNote(uint8_t slot,
 bool SetModSlot(uint8_t slot, uint8_t mod_slot_index, const ModSlot& value) {
     if (slot >= kNumTracks || mod_slot_index >= kMaxModSlots)
         return false;
-    s_bank.Track(slot).mod_slots[mod_slot_index] = value;
+    s_bank.At(slot).instrument.mod_slots[mod_slot_index] = value;
     return true;
 }
 
 const ModSlot* GetModSlots(uint8_t slot) {
     if (slot >= kNumTracks)
         return nullptr;
-    return s_bank.Track(slot).mod_slots;
+    return s_bank.At(slot).instrument.mod_slots;
 }
 
 }  // namespace SfzLoader

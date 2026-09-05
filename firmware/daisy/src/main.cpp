@@ -25,6 +25,7 @@
 #include "comm/daisy_inter_mcu_message_handlers.h"
 #include "profiling/profiler.h"
 
+#include "audio/sfz_loader.hpp"
 #include "timebase.hpp"
 
 using namespace daisy;
@@ -268,6 +269,18 @@ static void DispatchConsoleCommand(const WaveX::Debug::Command& c) {
             }
             len = AppendKvText(reply, sizeof(reply), len, key, val);
         }
+        // Routing alongside the binding: m<i>=<midi_in> (0 Omni, 1..16, 255
+        // Off). Without this a routing change is only observable by whether
+        // a note sounds, which is exactly the thing under test.
+        for (uint8_t t = 0; t < WAVEX_MIX_TRACKS; ++t) {
+            char key[6];
+            snprintf(key, sizeof(key), "m%u", static_cast<unsigned>(t));
+            len = AppendKvInt(reply,
+                              sizeof(reply),
+                              len,
+                              key,
+                              static_cast<long>(WaveX::AudioEngine::SfzLoader::TrackMidiIn(t)));
+        }
     } else if (std::strcmp(c.verb, "SAMPLES") == 0) {
         // n=<count> ids=<comma list> - the WAV registry (MSG_SAMPLE_LOAD ids).
         uint16_t ids[64];
@@ -305,17 +318,33 @@ static void DispatchConsoleCommand(const WaveX::Debug::Command& c) {
             }
         }
     } else if (std::strcmp(c.verb, "NOTE") == 0) {
-        // NOTE <track> <note> <vel> [ON|OFF]: the wire's own NoteMessage.
+        // NOTE <index> <note> <vel> [ON|OFF] [TRACK|MIDI]: the wire's own
+        // NoteMessage. TRACK (the default, and what every existing caller
+        // means) addresses Track <index> directly, as the Play grid and the
+        // sequencer do. MIDI treats <index> as a 1-based MIDI channel and
+        // sends it the way the MIDI task forwards a real cable event, so
+        // per-Track routing (Track.midi_in) is testable from the bench
+        // without one.
         long track, note, vel;
         char onoff[8] = "ON";
+        char addr[8] = "TRACK";
         if (!NextInt(&p, &track) || !NextInt(&p, &note) || !NextInt(&p, &vel) || track < 0 ||
-            track >= WAVEX_MIX_TRACKS || note < 0 || note > 127 || vel < 0 || vel > 127) {
+            note < 0 || note > 127 || vel < 0 || vel > 127) {
             FormatErr(seq, "badnote", reply, sizeof(reply));
         } else {
             NextWord(&p, onoff, sizeof(onoff));
+            NextWord(&p, addr, sizeof(addr));
             const bool on = std::strcmp(onoff, "OFF") != 0;
-            NoteMessage m(
-                static_cast<uint8_t>(note), static_cast<uint8_t>(vel), static_cast<uint8_t>(track));
+            const bool by_midi = std::strcmp(addr, "MIDI") == 0;
+            const long limit = by_midi ? 16 : WAVEX_MIX_TRACKS;
+            if (track >= limit || (by_midi && track < 1)) {
+                FormatErr(seq, "badnote", reply, sizeof(reply));
+                WaveX::Log::PrintLine("%s", reply);
+                return;
+            }
+            const uint8_t channel = by_midi ? MidiDisplayToWireChannel(static_cast<uint8_t>(track))
+                                            : NoteChannelForTrack(static_cast<uint8_t>(track));
+            NoteMessage m(static_cast<uint8_t>(note), static_cast<uint8_t>(vel), channel);
             WaveX::Comm::ProcessInterMcuMessage(on ? MSG_NOTE_ON : MSG_NOTE_OFF,
                                                 0,
                                                 reinterpret_cast<const uint8_t*>(&m),

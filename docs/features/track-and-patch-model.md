@@ -105,6 +105,9 @@ cannot wait for a dialog.
 
 ## 2. Track
 
+**Built 2026-09-05** (stage 7). What follows describes the shipped model; the
+differences from the original sketch are named where they occur.
+
 ### 2.1 Fields (engine-resident, host-testable)
 
 ```cpp
@@ -118,7 +121,11 @@ struct Track {
 };
 ```
 
-`Tracks` (renamed from `InstrumentBank` in stage 1) holds 16 of these behind `Track()`. Nothing about `Instrument` changes for this step.
+`Tracks` (renamed from `InstrumentBank` in stage 1) holds 16 of these behind `Tracks::At()` — not `Track()` as sketched above, because a member function of that name hides the `Track` type inside the class. Nothing about `Instrument` changed for this step.
+
+**Numbering.** `midi_in` is **1-based (1..16) because it is displayed**, so Track 1 listens on MIDI channel 1 and no screen has to re-derive an offset; 0 is then free for Omni without colliding with a real channel. The wire channel MIDI itself delivers is 0-based, and that conversion happens in exactly one place — `MidiWireToDisplayChannel()` in `protocol.h`, which `TrackAcceptsMidiChannel()` uses. Track indices stay 0-based in code and 1-based on screen, as since stage 1.
+
+Only `midi_in` has behaviour today. `poly_limit`/`priority` are stored and on the wire for stage 8 (which measures before it implements a steal policy) and `program_change` for stage 6, so neither stage has to migrate a Track record users have already saved.
 
 ### 2.2 MIDI routing: poly, omni, and everything between
 
@@ -130,11 +137,16 @@ A note from the **MIDI input** carries a channel. A note from an **internal sour
   - **Omni**: any set of tracks with `midi_in = Omni` all play from any channel. "All tracks omni" is the classic single-timbral mode; "two tracks omni" is a split-less layer.
   - **Off**: sequencer-only tracks that ignore the keyboard.
 - Note-off routes identically. Voices already carry their track, so a note-off reaching three tracks releases the right three voices.
-- The existing global ESP32-side channel filter (`midi_set_input_channel`) becomes redundant and is removed rather than kept as a second, conflicting filter.
+- The existing global ESP32-side channel filter (`midi_set_input_channel`) was redundant and is **removed** rather than kept as a second, conflicting filter — a Track set to listen on MIDI 5 could otherwise be silenced by a settings page with nothing on screen to explain why. Settings › MIDI now shows "Receive channel — per Track"; the Track page (stage 4) is where it is edited. Until then the defaults reproduce the previous behaviour exactly, and the debug console sets it for bench work.
 
 Routing lives on the **Daisy**, not the ESP32, because tracks live there, it is a 16-entry compare in the note handler (main loop, not the callback), and it keeps one note = one link message regardless of how many tracks it lands on. The mixer's "ESP32 expands solo before sending" precedent does not apply: solo is UI state, routing is engine state.
 
-Protocol: `MSG_TRACK_OP` (new; 0x63 from the instrument block, or a fresh id — decide at implementation) with `{track, op, value}`: `SET_MIDI_IN`, `SET_POLY_LIMIT`, `SET_PRIORITY`, `SET_PROGRAM_CHANGE`. Idempotent, tiny, one round-trip test.
+Protocol: `MSG_TRACK_OP` **0x63** (decided at implementation, keeping the instrument/track block contiguous) with `{op, track, value}`: `SET_MIDI_IN`, `SET_POLY_LIMIT`, `SET_PRIORITY`, `SET_PROGRAM_CHANGE`. Idempotent, tiny, round-trip tested.
+
+Two consequences worth stating, found while building this:
+
+- **A routing change does not disturb a sounding note.** `midi_in` decides where the *next* note goes; a Track switched to Off while holding notes releases them normally rather than cutting. The one window is a note whose routing changed between its on and off, which resolves on the next note-off from that source. A mid-note routing change is a user action, not a real-time path, so it does not justify per-voice routing state.
+- **Addressing is chosen at the call site, not by a flag.** The frontend has `inter_mcu_send_note_{on,off}_track()` and `..._midi()` rather than one function taking a bool: the caller always knows which it means, and a boolean argument at the call site is exactly the kind of thing that gets passed the wrong way round.
 
 ### 2.3 What a track does *not* own
 
@@ -398,8 +410,8 @@ Per §1.3: Load (sample, `.wxi`, `.sfz`), Assign, and Bank recall from the UI sh
 | Change | Kind |
 |---|---|
 | `MSG_TRACK_BINDING_REQ` / `MSG_TRACK_BINDING` (0x47/0x48) carrying state, sample id and the Instrument name | **built 2026-09-04** |
-| `NoteMessage::channel` bit 7 = `NOTE_ADDR_TRACK` | additive; MIDI task never sets it, internal sources always do |
-| `MSG_TRACK_OP {track, op, value}` — `SET_MIDI_IN`, `SET_POLY_LIMIT`, `SET_PRIORITY`, `SET_PROGRAM_CHANGE` | new message |
+| `NoteMessage::channel` bit 7 = `NOTE_ADDR_TRACK` | **built 2026-09-05**; MIDI task never sets it, internal sources always do |
+| `MSG_TRACK_OP {track, op, value}` (0x63) — `SET_MIDI_IN`, `SET_POLY_LIMIT`, `SET_PRIORITY`, `SET_PROGRAM_CHANGE` | **built 2026-09-05** |
 | `INST_OP_NEW`, `INST_OP_SAVE`, `INST_OP_SET_NAME`, `INST_OP_SET_PAD_SAMPLE`, `INST_OP_SET_ZONE`, `INST_OP_SET_OSC`, `INST_OP_SET_FILTER`, `INST_OP_SET_ENV`, `INST_OP_SET_LFO` | new ops on the existing `MSG_INST_OP`; `MSG_INST_ZONE_SYNC` (0x62, reserved) for editor readback |
 | `MSG_INST_OP` load path accepts `.wxi` as well as `.sfz` | behaviour |
 | `MSG_BANK_OP` / `MSG_BANK_STATUS` (§3.6) | new messages |
@@ -414,9 +426,9 @@ Per §1.3: Load (sample, `.wxi`, `.sfz`), Assign, and Bank recall from the UI sh
 
 ## 8. Stages (one verified commit each)
 
-Listed by dependency. Stages 1–3 are done. **Order for the rest, decided 2026-09-05 (§9 item 19): 7 → 4 → 5 → 6 → 8.**
+Listed by dependency. Stages 1–3 and 7 are done. **Order for the rest, decided 2026-09-05 (§9 item 19): 7 → 4 → 5 → 6 → 8** — 7 is closed, so 4 is next.
 
-- **7 first** (Track model + MIDI routing). Smallest and independent of everything; it unblocks the *current* phase (the Phase 2 sequencer addresses Tracks with `NOTE_ADDR_TRACK`) and stage 4's Track page cannot exist without the `Track` fields it adds (`midi_in`, `poly_limit`, `program_change`). Removing the ESP32's global channel filter at the same time takes away a second, conflicting filter before the Track page would have to explain it.
+- ~~**7 first**~~ **(done)** (Track model + MIDI routing). Smallest and independent of everything; it unblocks the *current* phase (the Phase 2 sequencer addresses Tracks with `NOTE_ADDR_TRACK`) and stage 4's Track page cannot exist without the `Track` fields it adds (`midi_in`, `poly_limit`, `program_change`). Removing the ESP32's global channel filter at the same time takes away a second, conflicting filter before the Track page would have to explain it.
 - **4 second** (`.wxi` + editors), Pad Map piece first: persistence is what makes every editor's work survive a reboot, the Pad Map is the workflow the 2026-09-02 bench session asked for by name, and the Bank (6) nests 4's chunks. `OSC2`/`ENV3`/`LFO*` chunks are written empty until 5.
 - **5 third** (voice architecture): immediately after 4 so files never carry empty chunks for long (readers skip unknown chunks, so `.wxi` files written between 4 and 5 still load after it). Its DWT measurement at `WAVEX_NUM_VOICES` is the input stage 8 needs.
 - **6 fourth** (Bank): last of the file formats, so `.wxb` nests 4's *and* 5's chunks from its first version and never migrates. Program Change recall needs 7's `program_change` field, which is why it is not earlier.
@@ -431,7 +443,7 @@ Rejected: 4 before 7 (the Track page would have needed a second visit); 6 straig
 4. **Instrument file and editors** — `.wxi` reader/writer with the full §3.3 chunk set (osc2/env3/LFO chunks may be written empty until stage 5), `INST_OP_NEW/SAVE/SET_NAME/SET_PAD_SAMPLE/SET_ZONE`, Instrument-level defaults + zone overrides (§3.2, retiring `ZONE_FLAG_LIVE_FILTER_ENV`), Instrument Browser, Pad Map and Key Map pages, Track page. The Pad Map piece does not depend on stage 3 and may go first.
 5. **Voice architecture** (§3.1) — typed `Oscillator` wrapper, Osc 2 + submix, `FilterType`, Env 3, two per-voice LFOs (global LFO 2 retired), new mod destinations, `output`/`poly_mode` on the Instrument, `INST_OP_SET_OSC/FILTER/ENV/LFO`, Instrument page tabs. **DWT-measured** with both oscillators at `WAVEX_NUM_VOICES` before the count is changed. Can be split per sub-item; each is host-testable in `VoiceManagerTest`.
 6. **Bank** (§3.6) — `.wxb` reader/writer (nests the stage-4 Instrument chunks), `MSG_BANK_OP/STATUS`, Bank page, Program Change recall, "save with samples".
-7. **Track model + MIDI routing** (§2) — `Track` struct, `midi_in`, `NOTE_ADDR_TRACK`, Daisy-side fan-out, `MSG_TRACK_OP`, remove the ESP32 global channel filter. Needed by the sequencer (Goal B) for `NOTE_ADDR_TRACK`; otherwise independent.
+7. ~~**Track model + MIDI routing**~~ (§2) — **done 2026-09-05**: `Track` struct (Instrument + `midi_in`/`poly_limit`/`priority`/`program_change`) behind `Tracks::At()`, `NOTE_ADDR_TRACK` addressing with split `_track`/`_midi` senders on the frontend, Daisy-side fan-out in the note handler (main loop), `MSG_TRACK_OP` 0x63, and the ESP32 global channel filter removed. `midi_in` is the only field with behaviour; the other three are stored and on the wire for stages 8 and 6. The sequencer (Goal B) can now address Tracks with `NOTE_ADDR_TRACK`.
 8. **Polyphony policy** (§5) — measure first; `poly_limit`, `priority`, track-aware steal.
 9. **FX** — reserved chunk only; no design here.
 

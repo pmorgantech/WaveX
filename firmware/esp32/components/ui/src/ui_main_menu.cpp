@@ -52,15 +52,6 @@ std::string formatPercent(int v) {
     return std::string(buf);
 }
 
-std::string formatMidiChannel(int v) {
-    if (v == 0) {
-        return std::string("Omni");
-    }
-    char buf[8];
-    snprintf(buf, sizeof(buf), "%d", v);
-    return std::string(buf);
-}
-
 }  // namespace
 
 std::shared_ptr<UIPage> createMainMenu() {
@@ -169,15 +160,11 @@ std::shared_ptr<UIPage> createStorageSettingsPage() {
 std::shared_ptr<UIPage> createMidiSettingsPage() {
     auto page = std::make_shared<UISettingsPage>("MIDI");
 
-    // Receive channel is real: midi_forward_event() applies it to both the DIN
-    // and USB readers. 0 is Omni.
-    page->addSetting(
-        "Receive channel",
-        midi_get_input_channel(),
-        0,
-        16,
-        [](int value) { midi_set_input_channel(value); },
-        formatMidiChannel);
+    // Receive channel is per Track now (Track.midi_in, MSG_TRACK_OP;
+    // track-and-patch-model.md §2.2), not a global filter here - a Track set
+    // to a channel could otherwise be silenced by this page with nothing on
+    // screen to say why. The Track page (stage 4) is where it is edited.
+    page->addInfo("Receive channel", "per Track - see the Track page");
 
     page->addInfo("DIN MIDI in", WAVEX_ESP_DIN_MIDI_ENABLED ? "enabled" : "disabled in build");
     page->addInfo("USB MIDI in", WAVEX_UI_USB_MIDI_IN ? "enabled" : "disabled in build");
@@ -189,7 +176,8 @@ std::shared_ptr<UIPage> createMidiSettingsPage() {
     page->addUnimplemented("Clock source", "not implemented - MIDI clock is not received yet");
     page->addUnimplemented("MIDI out", "not implemented - no output port is driven");
     page->addUnimplemented("CC mapping", "not implemented - incoming CCs are discarded");
-    page->addUnimplemented("Save on power-off", "not implemented - channel resets to Omni at boot");
+    page->addUnimplemented("Save on power-off",
+                           "not implemented - Track routing resets to one channel per Track");
 
     return page;
 }

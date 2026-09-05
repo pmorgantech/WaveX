@@ -26,6 +26,7 @@ struct DispatchRecord {
     std::vector<WaveX::Protocol::NoteMessage> note_offs;
     std::vector<WaveX::Protocol::ControlChangeMessage> control_changes;
     std::vector<WaveX::Protocol::MixOpMessage> mix_ops;
+    std::vector<WaveX::Protocol::TrackOpMessage> track_ops;
     std::vector<WaveX::Protocol::SampleCtrlMessage> sample_ctrls;
     std::vector<WaveX::Protocol::PreviewReqMessage> preview_reqs;
     std::vector<WaveX::Protocol::EnvelopeReqMessage> envelope_reqs;
@@ -89,7 +90,8 @@ struct DispatchRecord {
                seq_pattern_ops.size() + midi_clock_events.size() + midi_ccs.size() +
                instrument_ops.size() + browse_requests.size() + play_requests.size() +
                stop_requests.size() + play_index_requests.size() + sample_edits.size() +
-               meta_requests.size() + loop_gaps_ms.size() + diag_subscribes.size();
+               meta_requests.size() + loop_gaps_ms.size() + diag_subscribes.size() +
+               mix_ops.size() + track_ops.size();
     }
 };
 

@@ -299,6 +299,12 @@ size_t ProtocolHandler::CreateMixOpPacket(uint8_t* buffer,
     return CreateUnifiedPacket(buffer, buffer_size, MSG_MIX_OP, &msg, sizeof(MixOpMessage));
 }
 
+size_t ProtocolHandler::CreateTrackOpPacket(uint8_t* buffer,
+                                            size_t buffer_size,
+                                            const TrackOpMessage& msg) {
+    return CreateUnifiedPacket(buffer, buffer_size, MSG_TRACK_OP, &msg, sizeof(TrackOpMessage));
+}
+
 size_t ProtocolHandler::CreateMixMetersPacket(uint8_t* buffer,
                                               size_t buffer_size,
                                               const MixMetersMessage& msg) {

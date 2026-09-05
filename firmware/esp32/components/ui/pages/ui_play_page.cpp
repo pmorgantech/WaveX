@@ -425,7 +425,7 @@ void UIPlayPage::press(int index) {
     }
     k.sent_note = static_cast<uint8_t>(note);
     k.down = true;
-    inter_mcu_send_note_on(k.sent_note, velocity_, currentTrack());
+    inter_mcu_send_note_on_track(k.sent_note, velocity_, currentTrack());
 }
 
 void UIPlayPage::release(int index) {
@@ -434,7 +434,7 @@ void UIPlayPage::release(int index) {
         return;  // no matching press (e.g. RELEASED after PRESS_LOST)
     }
     k.down = false;
-    inter_mcu_send_note_off(k.sent_note, currentTrack());
+    inter_mcu_send_note_off_track(k.sent_note, currentTrack());
 }
 
 void UIPlayPage::releaseAll() {

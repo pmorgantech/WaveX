@@ -11,6 +11,49 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Added
+
+- Per-Track MIDI routing (Track/Instrument model stage 7). A Track now carries
+  its own settings alongside its Instrument — `midi_in` (Omni, one of the 16
+  channels, or Off), plus `poly_limit`, `priority` and `program_change` stored
+  for later stages. A note arriving on a MIDI channel reaches **every** Track
+  listening on it, so layering is free and Omni means what it says; the
+  default is one channel per Track, which is exactly the behaviour that came
+  before, so nothing changes for a user who does not go looking. `midi_in` is
+  1-based because it is displayed: Track 1 listens on MIDI channel 1, and
+  MIDI's own 0-based wire channel is converted in one named place.
+- `NoteMessage::channel` is now an addressing byte: bit 7 (`NOTE_ADDR_TRACK`)
+  set means the low nibble is a Track index — what the Play grid, the
+  sequencer and auditions send — and clear means it is the MIDI channel the
+  event arrived on. The frontend has separate `_track`/`_midi` senders rather
+  than one function with a flag. Backward compatible, so `PROTOCOL_VERSION`
+  stays at 2.
+- `MSG_TRACK_OP` (0x63) carries one Track setting, idempotent like the mixer
+  ops. Out-of-range track or value is rejected and logged rather than clamped
+  onto Track 0.
+- Debug console: `NOTE <index> <note> <vel> [ON|OFF] [TRACK|MIDI]` can now
+  address a MIDI channel as well as a Track, so per-Track routing is testable
+  from the bench without a MIDI cable, and `TRACKS` reports each Track's
+  `midi_in` alongside its binding.
+
+### Removed
+
+- The global MIDI receive-channel filter on the ESP32
+  (`midi_set_input_channel`, Settings › MIDI). It sat in front of sixteen
+  per-Track `midi_in` settings as a second, conflicting filter — a Track set
+  to listen on channel 5 could be silenced by it with nothing on screen to
+  explain why. Everything it could express is expressible per Track. The
+  settings row now points at the Track page; until that page lands (stage 4)
+  the defaults reproduce the old behaviour and the debug console sets routing
+  for bench work.
+
+### Fixed
+
+- The Daisy dispatch tests' malformed-payload sweep silently stopped covering
+  `MSG_MIX_OP`: `TotalCalls()` did not count `mix_ops`, so an undersized mixer
+  payload reaching a handler would not have failed the test its own comment
+  says it should.
+
 ## [0.5.0] - 2026-09-05
 
 ### Added

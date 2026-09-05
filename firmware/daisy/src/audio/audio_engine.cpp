@@ -2178,6 +2178,47 @@ void OnMixOp(const MixOpMessage& m) {
     }
 }
 
+/**
+ * One Track setting (MSG_TRACK_OP; track-and-patch-model.md §2.1).
+ *
+ * Main-loop context, like every other Tracks mutation. Nothing here touches
+ * a sounding voice: midi_in changes where the *next* note goes, so a Track
+ * switched to Off while holding notes releases them normally rather than
+ * cutting - and the note-off routes by the same rule the note-on used only
+ * if midi_in did not change in between. That window is one held note and
+ * resolves on the next note-off from the same source; a mid-note routing
+ * change is a user action, not a real-time path, so it does not justify
+ * per-voice routing state.
+ */
+void OnTrackOp(const TrackOpMessage& m) {
+    bool ok = false;
+    switch (m.op) {
+        case TRACK_OP_SET_MIDI_IN:
+            ok = SfzLoader::SetTrackMidiIn(m.track, static_cast<uint8_t>(m.value));
+            break;
+        case TRACK_OP_SET_POLY_LIMIT:
+            ok = SfzLoader::SetTrackPolyLimit(m.track, static_cast<uint8_t>(m.value));
+            break;
+        case TRACK_OP_SET_PRIORITY:
+            ok = SfzLoader::SetTrackPriority(m.track, static_cast<uint8_t>(m.value));
+            break;
+        case TRACK_OP_SET_PROGRAM_CHANGE:
+            ok = SfzLoader::SetTrackProgramChange(m.track, m.value != 0);
+            break;
+        default:
+            break;
+    }
+    if (!ok && s_hw) {
+        // Rejected rather than clamped: a bad op/track/value means the two
+        // ends disagree about the model, and silently landing it on Track 0
+        // is how that stays hidden until a bench session.
+        WaveX::Log::PrintLine("TRACK_OP rejected: op=%u track=%u value=%u",
+                              (unsigned)m.op,
+                              (unsigned)m.track,
+                              (unsigned)m.value);
+    }
+}
+
 void OnControlChange(const ControlChangeMessage& ctrl_msg) {
     const float norm = static_cast<float>(ctrl_msg.value) / 65535.0f;
     bool para_changed = false;
@@ -2413,8 +2454,10 @@ void OnMidiCc(const MidiCcMessage& m) {
     EnqueueSequencerCommand(command);
 }
 
-void OnNoteOn(const NoteMessage& note_msg) {
-    const uint8_t slot = note_msg.channel & 0x0Fu;
+// One Track's share of a note-on. Split out of OnNoteOn() because a MIDI
+// note reaches every Track listening on its channel (track-and-patch-model.md
+// §2.2) - the per-Track work is the same however the note was addressed.
+static void TriggerTrackNoteOn(uint8_t slot, const NoteMessage& note_msg) {
     // A replacement has stopped the old voices and is about to release their
     // sample pointers. Do not queue a trigger resolved against that old table.
     if (SfzLoader::TrackLoading(slot)) {
@@ -2479,8 +2522,45 @@ void OnNoteOn(const NoteMessage& note_msg) {
 #endif
 }
 
-void OnNoteOff(const NoteMessage& note_msg) {
-    const uint8_t slot = note_msg.channel & 0x0Fu;
+/**
+ * Route an incoming note to the Tracks that should hear it (§2.2).
+ *
+ * Track-addressed (NOTE_ADDR_TRACK set: Play grid, sequencer, arpeggiator)
+ * reaches exactly that Track. Channel-addressed (the ESP32 MIDI task, which
+ * forwards raw events) reaches every Track whose midi_in matches, which is
+ * what makes layering free and Omni mean what it says.
+ *
+ * Main loop, not the callback: a 16-entry compare in the note handler, and
+ * the NoteEvents it queues already name a resolved Track.
+ */
+static uint8_t RouteNote(const NoteMessage& note_msg, uint8_t* tracks, uint8_t max) {
+    if (NoteAddressesTrack(note_msg.channel)) {
+        if (max == 0)
+            return 0;
+        tracks[0] = NoteAddressIndex(note_msg.channel);
+        return 1;
+    }
+    return SfzLoader::TracksForMidiChannel(NoteAddressIndex(note_msg.channel), tracks, max);
+}
+
+void OnNoteOn(const NoteMessage& note_msg) {
+    uint8_t tracks[kNumTracks];
+    const uint8_t n = RouteNote(note_msg, tracks, kNumTracks);
+    for (uint8_t i = 0; i < n; ++i) {
+        TriggerTrackNoteOn(tracks[i], note_msg);
+    }
+#if WAVEX_MCU_LINK_PACKET_DEBUG
+    if (n == 0 && s_hw) {
+        WaveX::Log::PrintLine(
+            "RX NOTE_ON: ch=%u reached no Track (all midi_in Off or set elsewhere)",
+            (unsigned)NoteAddressIndex(note_msg.channel));
+    }
+#endif
+}
+
+// One Track's share of a note-off. Routed identically to note-on, so the
+// three Tracks a layered note-on reached are the three it releases.
+static void ReleaseTrackNoteOff(uint8_t slot, const NoteMessage& note_msg) {
     NoteEvent ev;
     ev.is_trigger = false;
     ev.note = note_msg.note;
@@ -2505,6 +2585,14 @@ void OnNoteOff(const NoteMessage& note_msg) {
         WaveX::Log::PrintLine(
             "RX NOTE_OFF: note=%u ch=%u", (unsigned)note_msg.note, (unsigned)note_msg.channel);
 #endif
+}
+
+void OnNoteOff(const NoteMessage& note_msg) {
+    uint8_t tracks[kNumTracks];
+    const uint8_t n = RouteNote(note_msg, tracks, kNumTracks);
+    for (uint8_t i = 0; i < n; ++i) {
+        ReleaseTrackNoteOff(tracks[i], note_msg);
+    }
 }
 
 // Wire hook for MSG_SAMPLE_CTRL (record/play transport from the UI's

@@ -36,8 +36,34 @@ void inter_mcu_invoke_cv_cal_callback(const WaveX::Protocol::CvCalMessage& cal);
 
 // Basic MIDI message sending
 esp_err_t inter_mcu_send_control_change(uint8_t parameter, uint8_t channel, uint16_t value);
-esp_err_t inter_mcu_send_note_on(uint8_t note, uint8_t velocity, uint8_t channel);
-esp_err_t inter_mcu_send_note_off(uint8_t note, uint8_t channel);
+
+/**
+ * Note senders, split by how the note is addressed
+ * (track-and-patch-model.md §2.2; NOTE_ADDR_TRACK in protocol.h).
+ *
+ * `_midi_` forwards an event that arrived on a MIDI port with its channel
+ * unchanged; the backend routes it to every Track listening on that channel,
+ * so one channel can reach several Tracks (a layer). Only the MIDI readers
+ * call these.
+ *
+ * `_track_` addresses one Track directly - the Play grid, the sequencer, an
+ * audition. There is no channel involved and no routing to do.
+ *
+ * Two functions rather than one with a flag argument because the caller
+ * always knows which it means, and a bool at the call site is exactly the
+ * kind of thing that gets passed the wrong way round.
+ */
+esp_err_t inter_mcu_send_note_on_midi(uint8_t note, uint8_t velocity, uint8_t channel);
+esp_err_t inter_mcu_send_note_off_midi(uint8_t note, uint8_t channel);
+esp_err_t inter_mcu_send_note_on_track(uint8_t note, uint8_t velocity, uint8_t track);
+esp_err_t inter_mcu_send_note_off_track(uint8_t note, uint8_t track);
+
+/**
+ * One Track setting (MSG_TRACK_OP). `op` is a WaveX::Protocol::TrackOp and
+ * `value` is op-dependent - see protocol.h, where each op states its
+ * encoding.
+ */
+esp_err_t inter_mcu_send_track_op(uint8_t op, uint8_t track, uint16_t value);
 
 // Phase I helpers
 typedef enum {

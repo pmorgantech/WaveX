@@ -93,6 +93,26 @@ TEST_F(MessageDispatchTest, MixOpMuteMaskArrivesIntact) {
     EXPECT_EQ(GetDispatchRecord().mix_ops[0].value, 0xBEEF);
 }
 
+TEST_F(MessageDispatchTest, TrackOpReachesAudioEngine) {
+    TrackOpMessage op(TRACK_OP_SET_MIDI_IN, 12, TRACK_MIDI_IN_OMNI);
+    Dispatch(MSG_TRACK_OP, op);
+
+    ASSERT_EQ(GetDispatchRecord().track_ops.size(), 1u);
+    EXPECT_EQ(GetDispatchRecord().track_ops[0].op, TRACK_OP_SET_MIDI_IN);
+    EXPECT_EQ(GetDispatchRecord().track_ops[0].track, 12);
+    EXPECT_EQ(GetDispatchRecord().track_ops[0].value, TRACK_MIDI_IN_OMNI);
+}
+
+// Off (0xFF) is the value a dispatch path that narrowed `value` to a signed
+// byte somewhere would mangle into -1.
+TEST_F(MessageDispatchTest, TrackOpMidiInOffArrivesIntact) {
+    TrackOpMessage op(TRACK_OP_SET_MIDI_IN, 0, TRACK_MIDI_IN_OFF);
+    Dispatch(MSG_TRACK_OP, op);
+
+    ASSERT_EQ(GetDispatchRecord().track_ops.size(), 1u);
+    EXPECT_EQ(GetDispatchRecord().track_ops[0].value, TRACK_MIDI_IN_OFF);
+}
+
 TEST_F(MessageDispatchTest, SampleCtrlReachesAudioEngine) {
     SampleCtrlMessage ctrl(0, SAMPLE_REC_START, 1.0f);
     Dispatch(MSG_SAMPLE_CTRL, ctrl);

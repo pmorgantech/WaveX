@@ -145,6 +145,7 @@ enum MessageType : uint8_t {
     MSG_INST_OP = 0x60,         // E->D: inspect or load one instrument file
     MSG_INST_STATUS = 0x61,     // D->E: inspection result and load progress
     MSG_INST_ZONE_SYNC = 0x62,  // reserved: future editable-zone synchronization
+    MSG_TRACK_OP = 0x63,        // E->D: one Track setting (track-and-patch-model.md §2)
     // Mixer (output-routing-and-mixer.md §4). 0x70-0x7F is the recording /
     // mix / scenes block reserved in features/inter-mcu-protocol.md.
     MSG_MIX_OP = 0x78,      // E->D: one mixer control change
@@ -300,14 +301,50 @@ struct ControlChangeMessage {
         : parameter(parameter_), channel(channel_), value(value_) {}
 } __attribute__((packed));
 
+/**
+ * How a note is addressed (track-and-patch-model.md §2.2).
+ *
+ * A note from the MIDI input carries a **channel**; a note from an internal
+ * source (Play grid, sequencer, arpeggiator) is addressed to a **Track**.
+ * These are different things and the wire has to say which, or the backend
+ * cannot route: with `midi_in` per Track, one MIDI channel may reach several
+ * Tracks (a layer) while an internal note must reach exactly one.
+ *
+ * Bit 7 of `NoteMessage::channel` carries that distinction:
+ *   set   -> bits 0-3 are a Track index (internal sources always set it)
+ *   clear -> bits 0-3 are a MIDI channel (the ESP32 MIDI task never sets it)
+ *
+ * Backward-compatible by construction: a build that predates this masks
+ * `& 0x0F` and sees exactly today's behaviour, so PROTOCOL_VERSION does not
+ * move. Bits 4-6 stay reserved (0).
+ */
+static const uint8_t NOTE_ADDR_TRACK = 0x80;
+static const uint8_t NOTE_ADDR_INDEX_MASK = 0x0F;
+
+/// True when `channel` addresses a Track rather than a MIDI channel.
+inline bool NoteAddressesTrack(uint8_t channel) {
+    return (channel & NOTE_ADDR_TRACK) != 0;
+}
+
+/// The Track index or MIDI channel carried in `channel`, without the flag.
+inline uint8_t NoteAddressIndex(uint8_t channel) {
+    return channel & NOTE_ADDR_INDEX_MASK;
+}
+
+/// Encode a Track-addressed note channel (internal sources).
+inline uint8_t NoteChannelForTrack(uint8_t track) {
+    return static_cast<uint8_t>(NOTE_ADDR_TRACK | (track & NOTE_ADDR_INDEX_MASK));
+}
+
 // Note message
 struct NoteMessage {
     uint8_t note;      // MIDI note number
     uint8_t velocity;  // 0-127
-    uint8_t channel;   // 0-15: the Track the note is addressed to. Today a
-                       // MIDI channel maps 1:1 onto a Track of the same
-                       // index; NOTE_ADDR_TRACK (track-and-patch-model.md
-                       // §2) will make the distinction explicit.
+    uint8_t channel;   // Addressing byte: see NOTE_ADDR_TRACK above. Bit 7
+                       // set -> bits 0-3 are a Track index; clear -> bits
+                       // 0-3 are the MIDI channel the note arrived on, and
+                       // the backend routes it to every Track listening on
+                       // that channel.
     uint8_t reserved;  // Reserved for future use
 
     NoteMessage() : note(0), velocity(0), channel(0), reserved(0) {}
@@ -1646,6 +1683,88 @@ struct InstStatusMessage {
 static_assert(sizeof(InstOpMessage) <= 122, "instrument request must fit a 128-byte packet");
 static_assert(sizeof(InstStatusMessage) <= 122, "instrument status must fit a 128-byte packet");
 
+/**
+ * Track settings (MSG_TRACK_OP; track-and-patch-model.md §2.1).
+ *
+ * One small idempotent verb per setting, like MixOp: a project load replays
+ * them, and a dropped one is corrected by the next touch of that control
+ * rather than desynchronising a table. The Instrument bound to a Track is
+ * NOT set here - that is MSG_INST_OP / MSG_SAMPLE_LOAD.
+ */
+enum TrackOp : uint8_t {
+    TRACK_OP_SET_MIDI_IN = 0x01,         // value: see TrackMidiIn below
+    TRACK_OP_SET_POLY_LIMIT = 0x02,      // value: 0 = no limit, else 1..WAVEX_NUM_VOICES
+    TRACK_OP_SET_PRIORITY = 0x03,        // value: steal priority, 0 = lowest
+    TRACK_OP_SET_PROGRAM_CHANGE = 0x04,  // value: 0 or 1
+};
+
+/**
+ * `midi_in` encoding, shared by the wire and the engine's Track field.
+ *
+ * 0 is Omni rather than "channel 1" so the default-constructed value is not
+ * silently a channel, and Off is 0xFF so it cannot collide with a future
+ * channel count. 1..16 are MIDI channels as the user names them (1-based),
+ * not 0-based, because this value is displayed.
+ */
+enum TrackMidiIn : uint8_t {
+    TRACK_MIDI_IN_OMNI = 0,  // any channel
+    TRACK_MIDI_IN_CH1 = 1,   // ..16 = that channel, 1-based as displayed
+    TRACK_MIDI_IN_CH16 = 16,
+    TRACK_MIDI_IN_OFF = 0xFF,  // MIDI cannot reach this Track; internal only
+};
+
+/// True for a value this build accepts as `midi_in`.
+inline bool TrackMidiInValid(uint8_t midi_in) {
+    return midi_in <= TRACK_MIDI_IN_CH16 || midi_in == TRACK_MIDI_IN_OFF;
+}
+
+/**
+ * MIDI channel numbering, converted in exactly one place.
+ *
+ * Three numbering schemes meet at this boundary and only one of them is our
+ * choice:
+ *   - The **wire** channel is 0..15. The MIDI spec puts channel 1 in the
+ *     status byte's low nibble as 0; that is what arrives from the DIN and
+ *     USB readers, and NoteMessage::channel carries it unchanged.
+ *   - `midi_in` is 1..16 because it is **displayed**. A user reads "Track 1,
+ *     MIDI 1", and storing 0-based here would mean every screen and every
+ *     log line re-derived the +1 for itself. It also leaves 0 free to mean
+ *     Omni without colliding with a real channel.
+ *   - Track indices are 0..15 in code and displayed 1-based (stage 1).
+ *
+ * So Track 1 does listen on MIDI channel 1 - the only off-by-one is MIDI's
+ * own, and it is converted here rather than open-coded at each comparison.
+ */
+inline uint8_t MidiWireToDisplayChannel(uint8_t wire_channel) {
+    return static_cast<uint8_t>((wire_channel & 0x0F) + 1);
+}
+
+inline uint8_t MidiDisplayToWireChannel(uint8_t display_channel) {
+    return static_cast<uint8_t>(display_channel - 1);
+}
+
+/// Does a Track listening on `midi_in` receive a note that arrived on
+/// `wire_channel` (0-based, as MIDI puts it on the wire)?
+inline bool TrackAcceptsMidiChannel(uint8_t midi_in, uint8_t wire_channel) {
+    if (midi_in == TRACK_MIDI_IN_OFF)
+        return false;
+    if (midi_in == TRACK_MIDI_IN_OMNI)
+        return true;
+    return midi_in == MidiWireToDisplayChannel(wire_channel);
+}
+
+/// One Track setting (frontend -> backend). `value` is op-dependent and
+/// always unsigned; every encoding is stated where the op is declared.
+struct TrackOpMessage {
+    uint8_t op;      // TrackOp
+    uint8_t track;   // 0..15
+    uint16_t value;  // op-dependent; see above
+
+    TrackOpMessage() : op(0), track(0), value(0) {}
+    TrackOpMessage(uint8_t op_, uint8_t track_, uint16_t value_)
+        : op(op_), track(track_), value(value_) {}
+} __attribute__((packed));
+
 // Largest PKT_SIZE_* class; sizes staging buffers for packet assembly.
 static const size_t MAX_PKT_SIZE = 2048;
 
@@ -1747,6 +1866,9 @@ class ProtocolHandler {
 
     /** One mixer control change (frontend -> backend). */
     static size_t CreateMixOpPacket(uint8_t* buffer, size_t buffer_size, const MixOpMessage& msg);
+    static size_t CreateTrackOpPacket(uint8_t* buffer,
+                                      size_t buffer_size,
+                                      const TrackOpMessage& msg);
     /** Per-track peak levels (backend -> frontend). */
     static size_t CreateMixMetersPacket(uint8_t* buffer,
                                         size_t buffer_size,

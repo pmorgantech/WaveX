@@ -20,46 +20,22 @@
 #include "esp_timer.h"
 #include "inter_mcu.h"
 
-#include <atomic>
-
 static const char* TAG = "midi_task";
 
-// Receive-channel filter. 0 = Omni, 1..16 = that MIDI channel (the wire
-// channel is 0-based, so the comparison subtracts one). Written by the UI
-// task from Settings > MIDI, read on the DIN and USB reader tasks - hence
-// an atomic. Relaxed is enough: it guards nothing but itself, and a note
-// either side of the change is equally correct.
-//
-// Not persisted. The frontend has no NVS code at all today, and inventing a
-// store for one integer is a bigger decision than this page should make; the
-// setting reads Omni again after a reboot, and the page says so.
-static std::atomic<int> s_input_channel{0};
-
-void midi_set_input_channel(int channel) {
-    if (channel < 0 || channel > 16) {
-        return;
-    }
-    s_input_channel.store(channel, std::memory_order_relaxed);
-    ESP_LOGI(TAG, "MIDI input channel filter: %s", channel == 0 ? "Omni" : "single");
-}
-
-int midi_get_input_channel(void) {
-    return s_input_channel.load(std::memory_order_relaxed);
-}
-
+// No receive-channel filter here any more. Routing is per Track on the
+// backend (Track.midi_in; track-and-patch-model.md §2.2): this task forwards
+// every event with its channel unchanged and NOTE_ADDR_TRACK clear, and the
+// Daisy decides which Tracks hear it. A global filter in front of sixteen
+// per-Track settings was a second, conflicting filter - a Track set to
+// listen on MIDI 5 could still be silenced here with nothing on screen to
+// explain why.
 // Shared with the USB MIDI reader (usb_midi_task.cpp) - declared in
 // midi_task.h. Not gated on WAVEX_ESP_DIN_MIDI_ENABLED so either
 // transport can be compiled out independently.
 void midi_forward_event(const WaveX::Midi::Event& ev) {
     switch (ev.type) {
         case WaveX::Midi::EventType::NoteOn: {
-            // Note On is the only filtered message; see midi_task.h for why
-            // Note Off is not.
-            const int filter = s_input_channel.load(std::memory_order_relaxed);
-            if (filter != 0 && ev.channel != static_cast<uint8_t>(filter - 1)) {
-                break;
-            }
-            esp_err_t err = inter_mcu_send_note_on(ev.data1, ev.data2, ev.channel);
+            esp_err_t err = inter_mcu_send_note_on_midi(ev.data1, ev.data2, ev.channel);
             if (err != ESP_OK) {
                 ESP_LOGW(
                     TAG, "note-on %u dropped (link send failed: %d)", (unsigned)ev.data1, (int)err);
@@ -67,7 +43,7 @@ void midi_forward_event(const WaveX::Midi::Event& ev) {
             break;
         }
         case WaveX::Midi::EventType::NoteOff: {
-            esp_err_t err = inter_mcu_send_note_off(ev.data1, ev.channel);
+            esp_err_t err = inter_mcu_send_note_off_midi(ev.data1, ev.channel);
             if (err != ESP_OK) {
                 ESP_LOGW(TAG,
                          "note-off %u dropped (link send failed: %d)",

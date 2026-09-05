@@ -115,6 +115,28 @@ uint8_t ResolveNote(uint8_t track,
 bool SetModSlot(uint8_t track, uint8_t mod_slot_index, const ModSlot& value);
 const ModSlot* GetModSlots(uint8_t track);
 
+// Track settings (track-and-patch-model.md §2.1). Main-loop only, same as
+// every other Tracks mutation here. Each setter rejects an out-of-range
+// track or value and returns false rather than clamping, so a malformed
+// MSG_TRACK_OP is visible instead of silently landing on Track 0.
+//
+// Only midi_in has behaviour today: poly_limit/priority are stored for stage
+// 8 (which measures before it implements a steal policy) and program_change
+// for stage 6 (Bank recall).
+bool SetTrackMidiIn(uint8_t track, uint8_t midi_in);  // TrackMidiIn encoding
+uint8_t TrackMidiIn(uint8_t track);
+bool SetTrackPolyLimit(uint8_t track, uint8_t limit);  // 0 = none, else <= WAVEX_NUM_VOICES
+uint8_t TrackPolyLimit(uint8_t track);
+bool SetTrackPriority(uint8_t track, uint8_t priority);
+uint8_t TrackPriority(uint8_t track);
+bool SetTrackProgramChange(uint8_t track, bool enabled);
+bool TrackProgramChange(uint8_t track);
+
+// Which Tracks hear a note-on that arrived on MIDI `channel` (0-based)?
+// Fan-out: several Tracks listening on one channel is a layer (§2.2).
+// Writes up to `max` indices, returns the count.
+uint8_t TracksForMidiChannel(uint8_t channel, uint8_t* out, uint8_t max);
+
 }  // namespace SfzLoader
 }  // namespace AudioEngine
 }  // namespace WaveX
