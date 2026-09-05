@@ -13,6 +13,13 @@ versioning and release process.
 
 ### Added
 
+- A recurring Daisy callback-headroom gate and durable performance log. Raw
+  `DWT->CYCCNT` counts from persistent QSPI `-O2` profiling builds are
+  evaluated by `make perf-eval` / `make perf-record`: under 70% worst-case
+  stays on the STM32H750, 70–80% blocks for investigation, and 80% or above
+  with callback features remaining activates the documented backend
+  chip-upgrade path. The gate runs at phase boundaries, after callback-budget
+  changes, and every four weeks during active callback work.
 - A debug harness and a hardware-in-the-loop suite
   (`docs/features/debug-harness-and-hil.md`, now built). Both boards accept
   `WAVEX-DBG <seq> <VERB> ...` on their consoles and answer
@@ -223,6 +230,12 @@ versioning and release process.
 
 ### Fixed
 
+- SFZ import: a `sample=` path containing spaces and followed by more
+  opcodes on the same line (`sample=saw mini.wav oscillator=on`,
+  `sample=Ahh 2 - 006c.wav key=f4`) took the whole rest of the line as the
+  path and probed as "missing". The value now ends before the next
+  `<space>identifier=` token or a `<header>`. Every wavetable and vocal pack
+  on the bench card is this shape; `2saws.sfz` now imports (HIL test).
 - The physical Back key acted as Select: no page distinguishes button ids,
   so its press was "activate" wherever presses are handled. `InputDispatcher`
   now consumes Back globally and pops the page, as it already did for Shift.

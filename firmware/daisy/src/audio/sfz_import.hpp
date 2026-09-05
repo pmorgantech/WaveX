@@ -9,10 +9,12 @@
 // File convention used by the boot loader:
 //   0:/wavex/sfz/<instrument>/<instrument>.sfz
 // with sample= paths relative to the .sfz directory (and optional
-// control/global default_path). The parser intentionally treats sample= as the
-// final opcode on its physical line so paths may contain spaces; a later opcode
-// on that same line becomes part of the path. This is the documented v1
-// compatibility limitation, not a general-purpose SFZ grammar.
+// control/global default_path). A sample= value may contain spaces (the SFZ
+// convention); it runs to the next token that is itself an opcode -
+// whitespace, an identifier, '=' - or to a '<' header, whichever comes
+// first. So "sample=saw mini.wav oscillator=on" is the path "saw mini.wav"
+// followed by the opcode oscillator=on. A path containing "<" or a
+// space-delimited "word=" cannot be expressed; nothing on real packs does.
 
 #include "bss_static.hpp"
 #include "instrument.hpp"
@@ -484,7 +486,7 @@ class Parser {
             const char* value_start = p;
             const char* value_end = p;
             if (detail::Equal(key, "sample")) {
-                value_end = p + std::strlen(p);
+                value_end = SamplePathEnd(p);
                 p = value_end;
             } else {
                 while (*value_end != '\0' && !detail::IsSpace(*value_end) && *value_end != '<') {
@@ -562,6 +564,34 @@ class Parser {
         while (length > 0 && detail::IsSpace(text[length - 1])) {
             text[--length] = '\0';
         }
+    }
+
+    // Where a sample= value ends: at a '<' (a header on the same line) or
+    // just before the first "<space>identifier=" token, which is the next
+    // opcode. Spaces inside the path survive; "word=" inside a path does
+    // not, which real packs never do.
+    static const char* SamplePathEnd(const char* p) {
+        const char* q = p;
+        while (*q != '\0' && *q != '<') {
+            if (detail::IsSpace(*q)) {
+                const char* t = q;
+                while (detail::IsSpace(*t)) {
+                    ++t;
+                }
+                const char* id = t;
+                while ((*id >= 'a' && *id <= 'z') || (*id >= 'A' && *id <= 'Z') ||
+                       (*id >= '0' && *id <= '9') || *id == '_') {
+                    ++id;
+                }
+                if (id > t && *id == '=') {
+                    return q;
+                }
+                q = t > q ? t : q + 1;
+                continue;
+            }
+            ++q;
+        }
+        return q;
     }
 
     static void StripMatchingQuotes(char* text) {

@@ -178,3 +178,15 @@ def test_sample_manager_pages_through_a_pool_larger_than_one_page(
     st = esp32.wait_state(first="8", rows="1", timeout=5.0)
     esp32.softkey("Down")
     esp32.wait_state(first="0", rows="8", timeout=5.0)
+
+
+@pytest.mark.both
+@pytest.mark.sdcard
+def test_sfz_with_spaces_in_sample_paths_imports(esp32, daisy):
+    """sample= values with spaces followed by opcodes ("sample=saw mini.wav
+    oscillator=on") probed as missing until 2026-09-05; the card's
+    wavetable and vocal packs are all this shape."""
+    track = _free_track(daisy)
+    state = _load_instrument(esp32, daisy, "/00 - Wavetables/2saws.sfz", track)
+    assert "2saws" in state, state
+    assert daisy.samples(), "the pack's WAVs resolved and loaded"

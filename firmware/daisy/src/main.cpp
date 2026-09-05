@@ -398,13 +398,22 @@ static void PrintProfilingStats(DaisySeed& hw) {
         // this dump reported empty avg/max/min for its whole life.
         uint32_t avg_ns, min_ns, max_ns;
         zone->GetStatsNs(avg_ns, min_ns, max_ns);
-        WaveX::Log::PrintLine("%s: calls=%u avg=%u ns max=%u ns min=%u ns last=%u ns",
-                              zone->name,
-                              (unsigned)zone->entry_count,
-                              (unsigned)avg_ns,
-                              (unsigned)max_ns,
-                              (unsigned)min_ns,
-                              (unsigned)WaveX::Profiling::CyclesToNanoseconds(zone->last_cycles));
+        // Keep raw DWT counts in the line as well as converted time. The
+        // periodic callback-headroom gate consumes the cycle fields directly;
+        // converting back from integer nanoseconds would add rounding error.
+        WaveX::Log::PrintLine(
+            "%s: calls=%u avg_cycles=%u max_cycles=%u min_cycles=%u last_cycles=%u "
+            "avg=%u ns max=%u ns min=%u ns last=%u ns",
+            zone->name,
+            (unsigned)zone->entry_count,
+            (unsigned)zone->GetAvgCycles(),
+            (unsigned)zone->max_cycles,
+            (unsigned)(zone->min_cycles == UINT32_MAX ? 0u : zone->min_cycles),
+            (unsigned)zone->last_cycles,
+            (unsigned)avg_ns,
+            (unsigned)max_ns,
+            (unsigned)min_ns,
+            (unsigned)WaveX::Profiling::CyclesToNanoseconds(zone->last_cycles));
     }
     WaveX::Log::PrintLine("=======================\n");
 }

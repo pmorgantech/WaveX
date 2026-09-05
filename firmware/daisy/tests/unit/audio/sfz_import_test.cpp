@@ -99,6 +99,35 @@ TEST(SfzParserTest, ParsesBasicRegionAndSkipsUnknownOpcodes) {
     EXPECT_STREQ(document.regions[0].sample, "Middle C.wav");
 }
 
+// A sample= path may contain spaces and still be followed by opcodes on the
+// same line - the shape the bench card's wavetable and vocal packs use
+// ("sample=saw mini.wav oscillator=on", "sample=Ahh 2 - 006c.wav key=f4").
+// The value ends before the next "<space>identifier=" token, or at a
+// header. Until 2026-09-05 it ran to the end of the line and every such
+// pack probed as "missing".
+TEST(SfzParserTest, SampleValueEndsAtTheNextOpcodeNotTheLine) {
+    Parser parser;
+    parser.Reset();
+    ASSERT_TRUE(Feed(parser,
+                     {"<region> sample=saw mini.wav oscillator=on oscillator_phase=-1",
+                      "<region> sample=Ahh 2 - 006c.wav key=f4 offset=2684",
+                      "<region> lokey=36 sample=one two three.wav",
+                      "<region> sample=x.wav<region> sample=y=z.wav"}));
+
+    const Document& document = parser.GetDocument();
+    ASSERT_EQ(document.stored_regions, 5);
+    EXPECT_STREQ(document.regions[0].sample, "saw mini.wav");
+    EXPECT_STREQ(document.regions[1].sample, "Ahh 2 - 006c.wav");
+    EXPECT_EQ(document.regions[1].key.value, 65) << "key=f4 applied after the path";
+    EXPECT_EQ(document.regions[1].offset.value, 2684u);
+    EXPECT_STREQ(document.regions[2].sample, "one two three.wav");
+    EXPECT_EQ(document.regions[2].lokey.value, 36);
+    EXPECT_STREQ(document.regions[3].sample, "x.wav") << "a header ends the path";
+    EXPECT_STREQ(document.regions[4].sample, "y=z.wav")
+        << "an '=' with no space before it is part of the path";
+    EXPECT_EQ(document.unknown_opcodes, 2) << "oscillator=on, oscillator_phase=-1";
+}
+
 TEST(SfzParserTest, CascadesGlobalAndGroupDefaultsIntoRegions) {
     Parser parser;
     parser.Reset();
