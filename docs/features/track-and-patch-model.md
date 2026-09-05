@@ -414,7 +414,15 @@ Per §1.3: Load (sample, `.wxi`, `.sfz`), Assign, and Bank recall from the UI sh
 
 ## 8. Stages (one verified commit each)
 
-Listed by dependency. Stages 1–3 are done; the order in which the later stages are taken up is **not yet decided** (decision §9 item 13).
+Listed by dependency. Stages 1–3 are done. **Order for the rest, decided 2026-09-05 (§9 item 19): 7 → 4 → 5 → 6 → 8.**
+
+- **7 first** (Track model + MIDI routing). Smallest and independent of everything; it unblocks the *current* phase (the Phase 2 sequencer addresses Tracks with `NOTE_ADDR_TRACK`) and stage 4's Track page cannot exist without the `Track` fields it adds (`midi_in`, `poly_limit`, `program_change`). Removing the ESP32's global channel filter at the same time takes away a second, conflicting filter before the Track page would have to explain it.
+- **4 second** (`.wxi` + editors), Pad Map piece first: persistence is what makes every editor's work survive a reboot, the Pad Map is the workflow the 2026-09-02 bench session asked for by name, and the Bank (6) nests 4's chunks. `OSC2`/`ENV3`/`LFO*` chunks are written empty until 5.
+- **5 third** (voice architecture): immediately after 4 so files never carry empty chunks for long (readers skip unknown chunks, so `.wxi` files written between 4 and 5 still load after it). Its DWT measurement at `WAVEX_NUM_VOICES` is the input stage 8 needs.
+- **6 fourth** (Bank): last of the file formats, so `.wxb` nests 4's *and* 5's chunks from its first version and never migrates. Program Change recall needs 7's `program_change` field, which is why it is not earlier.
+- **8 last** (polyphony policy): "measure first" - 5 measures; `poly_limit`/`priority` live on 7's `Track`.
+
+Rejected: 4 before 7 (the Track page would have needed a second visit); 6 straight after 4 (a `.wxb` format that predates 5's chunks is a migration for every Bank a user saves in between).
 
 0. ~~**Bench findings, 2026-09-02/03**~~ — **done** (`2728662`, `33a1312`, `504406a`, `6f87ce6`): current sample for Sample Edit; SFZ subfolder fallback; shared selected Track with 1-based display; Instrument name on the wire; Sample Manager explains a refused Select; loading an Instrument asks which Track; boot autoload off.
 1. ~~**Rename**~~ — **done 2026-09-04** in two commits: UI strings and docs (Slot → Track, Voice page → Instrument, "Patch"/"preset" → Instrument), then the identifiers (`kNumTracks`, `Tracks::Track()`, `Voice::track`, `TrackSteps`, `WAVEX_NUM_VOICES`, `UIInstrumentPage`, `SfzLoader::TrackLoaded/TrackName`, `VoiceManager::StopTrack/ReleaseTrack`; `NoteMessage::channel` documented as the Track address). Still saying "slot": the wire-struct field names in `protocol.h` and the local variables in `audio_engine.cpp`/`sfz_loader.cpp` that carry them — these go with the §7 protocol-doc rename, not before it.
@@ -455,7 +463,7 @@ Recorded with the date each was taken. "Open" items need a yes/no before the sta
 | 16 | Two per-voice LFOs owned by the Instrument plus one engine-global LFO; global LFO 2 retired (§3.1). | **2026-09-04** |
 | 17 | Env 1 hard-wired to amp; Env 2/3 routed through the matrix with shortcut knobs (§3.1). | **2026-09-04** |
 | 18 | SVF as the v1 filter; `FilterType` reserves 8 values (§3.1). | **2026-09-04** |
-| 19 | The voice architecture is designed now (§3.1, §3.3 chunks); **implementation ordering of stages 4–8 to be decided** (§8). | **2026-09-04** |
+| 19 | The voice architecture is designed now (§3.1, §3.3 chunks); implementation ordering of stages 4–8: **7 → 4 → 5 → 6 → 8**, reasons in §8. | **2026-09-04**; order **2026-09-05** |
 
 ---
 
