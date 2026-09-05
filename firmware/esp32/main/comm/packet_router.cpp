@@ -201,6 +201,10 @@ void PacketRouter::route_by_message_type(uint8_t msg_type,
                 handle_track_binding(msg);
         } break;
 
+        case WaveX::Protocol::MSG_SAMPLE_META_PAGE:
+            handle_sample_meta_page(payload, payload_len);
+            break;
+
         case WaveX::Protocol::MSG_DIAG_PUSH: {
             WaveX::Protocol::DiagPushMessage msg;
             if (CopyMessage(payload, payload_len, msg, "DIAG_PUSH"))
@@ -369,6 +373,24 @@ WEAK_HANDLER void PacketRouter::handle_track_binding(
              (unsigned)msg.state,
              (unsigned)msg.sample_id);
     inter_mcu_store_track_binding(msg);
+}
+
+// One Pool page: header + n records. Validated by size before anything is
+// read, since a truncated frame would otherwise hand the cache garbage.
+WEAK_HANDLER void PacketRouter::handle_sample_meta_page(const uint8_t* payload, size_t length) {
+    WaveX::Protocol::SampleMetaPageHeader header;
+    if (!CopyMessage(payload, length, header, "SAMPLE_META_PAGE")) {
+        return;
+    }
+    const size_t need = sizeof(header) + header.n * sizeof(WaveX::Protocol::SampleMetadata);
+    if (header.n > WaveX::Protocol::MAX_SAMPLE_META_PAGE || length < need) {
+        ESP_LOGW("packet_router",
+                 "SAMPLE_META_PAGE n=%u but %u bytes - dropped",
+                 (unsigned)header.n,
+                 (unsigned)length);
+        return;
+    }
+    inter_mcu_store_sample_meta_page(header, payload + sizeof(header));
 }
 
 WEAK_HANDLER void PacketRouter::handle_diag_push(const WaveX::Protocol::DiagPushMessage& msg) {

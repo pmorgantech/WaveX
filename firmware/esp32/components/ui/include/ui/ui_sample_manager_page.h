@@ -47,15 +47,18 @@ class UISampleManagerPage : public UIPage {
     std::array<Softkey, NUM_SOFTKEYS> getShiftedSoftkeys() override;
 
    private:
-    // The backend's metadata cache holds this many; showing more rows than can
-    // exist would just be empty furniture.
+    // One page of the Sample Pool: the window this page asks the Daisy for
+    // (MSG_SAMPLE_META_PAGE_REQ) and shows. The Pool holds up to 1024; the
+    // list pages through it rather than mirroring it.
     static constexpr int kMaxRows = 8;
 
     struct Row {
         lv_obj_t* btn = nullptr;
         lv_obj_t* label = nullptr;
         uint16_t sample_id = 0;
+        uint16_t used_by = 0;
         bool playable = false;
+        bool pinned = false;
     };
 
     lv_obj_t* root_ = nullptr;
@@ -68,6 +71,11 @@ class UISampleManagerPage : public UIPage {
     Row rows_[kMaxRows] = {};
     int row_count_ = 0;
     int focus_ = 0;
+    /// Index (among resident records) of the first row shown; moving the
+    /// focus past either end turns the page.
+    uint16_t page_first_ = 0;
+    uint16_t pool_total_ = 0;
+    void requestPage();
 
     static void refreshTimerCb(lv_timer_t* timer);
     void rebuildList();    ///< UI task / LVGL context only.

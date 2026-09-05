@@ -498,8 +498,8 @@ TEST(InstrumentTest, ZoneOverridesSampleRecordWhereItSetsAValue) {
 }
 
 TEST(InstrumentTest, ResolverWithoutRecordLeavesWholeSampleNoLoopUnity) {
-    // An SFZ import's SampleTable carries no record: the previous behaviour
-    // (0 => whole sample, no loop, unity) must be exactly preserved.
+    // A resolver that carries no record (0 => whole sample, no loop, unity):
+    // the previous behaviour must be exactly preserved.
     Instrument ins;
     ins.zones[0] = MakeZone(1, 0, 127, 1, 127);
     FakeSampleBank samples;

@@ -82,6 +82,20 @@ bool inter_mcu_get_sample_meta(uint16_t sample_id, WaveX::Protocol::SampleMetada
 // Every cached record, in cache order. Returns how many were written.
 size_t inter_mcu_sample_meta_snapshot(WaveX::Protocol::SampleMetadata* out, size_t max);
 
+// The Sample Pool is paged, not mirrored: ask for a window of resident
+// records in registry order and read the last page that arrived. The page
+// is one frame from the Daisy (MSG_SAMPLE_META_PAGE); its records also land
+// in the per-id cache above.
+esp_err_t inter_mcu_request_sample_meta_page(uint16_t first, uint8_t count);
+void inter_mcu_store_sample_meta_page(const WaveX::Protocol::SampleMetaPageHeader& header,
+                                      const uint8_t* records);
+// Copies the last page: returns records written; `total` and `first` are
+// the Pool's count and the page's start as the Daisy reported them.
+size_t inter_mcu_get_sample_meta_page(WaveX::Protocol::SampleMetadata* out,
+                                      size_t max,
+                                      uint16_t* total,
+                                      uint16_t* first);
+
 /** Ask the backend to resend. sample_id 0 = every loaded sample. */
 esp_err_t inter_mcu_request_sample_meta(uint16_t sample_id);
 

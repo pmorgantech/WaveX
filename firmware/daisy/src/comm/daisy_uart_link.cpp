@@ -467,7 +467,19 @@ int UartLinkSend(uint16_t msg_type, const void* payload, uint16_t len) {
 
     if (s_tx_count >= static_cast<int>(MSG_QUEUE_SIZE)) {
         s_stats.queue_overflows++;
-        UART_LOGE("daisy_uart", "TX queue full");
+        // Once per burst, not once per attempt: callers retry every
+        // main-loop pass (a directory listing, a binding refresh), and a
+        // line per attempt flooded the log ring badly enough to drop the
+        // console's own replies (the HIL suite lost acks to it, 2026-09-05).
+        // The overflow count is in the stats line either way.
+        static uint32_t s_last_full_ms = 0;
+        const uint32_t now = daisy::System::GetNow();
+        if (s_last_full_ms == 0 || (now - s_last_full_ms) >= 1000u) {
+            UART_LOGE("daisy_uart",
+                      "TX queue full (%lu overflows so far)",
+                      static_cast<unsigned long>(s_stats.queue_overflows));
+        }
+        s_last_full_ms = now ? now : 1u;
         return -1;
     }
 

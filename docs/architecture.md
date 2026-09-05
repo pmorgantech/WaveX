@@ -425,8 +425,9 @@ These rules are mandatory for all new code. Most past instability (SPI corruptio
    remain open Phase 2 work.
 2. **Streamed polyphony**: the 8-voice RAM manager is wired and host-tested,
    while streamed playback remains a singleton path outside `VoiceManager`.
-3. **Sampler Instrument workflow**: the Zone model, SFZ import and the shared
-   selected Track exist, but the Sample Pool, multi-Track residency, pad
+3. **Sampler Instrument workflow**: the Zone model, SFZ import, the shared
+   selected Track and the Sample Pool (one indexed, refcounted registry;
+   imports on any number of Tracks share samples by path) exist, but pad
    mapping, Instrument save/load, the Bank, the two-oscillator voice, and the
    editor UI remain open Phase 2.5 work.
 4. **Offline editing pipeline**: non-destructive marker foundations exist; the

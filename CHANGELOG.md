@@ -66,6 +66,39 @@ versioning and release process.
 
 ### Changed
 
+- **The Sample Pool** (Track/Instrument model stage 3, §4). One indexed,
+  refcounted registry (`firmware/shared/audio/sample_registry.hpp`,
+  host-tested) replaces the engine's 32-entry WAV list and the SFZ loader's
+  private sample table. `WAVEX_SAMPLE_POOL_CAPACITY` = 1024; ids name their
+  registry slot with a generation in the high bits, so a lookup is one index
+  and one compare and a stale id fails rather than resolving to whatever
+  recycled its slot; records live in a 192 KB SDRAM partition, the 2 KB id
+  index in SRAM. Refcounted by path: loading a file that is already resident
+  is a hit that answers with the id it had and reads nothing from the card;
+  an import's WAVs are ordinary Pool entries - listable in the Sample
+  Manager, shared between imports and with user loads, released per Track
+  behind a per-track voice stop (the other fifteen Tracks keep sounding).
+  Consequences the user sees: any number of Tracks can hold imports at once;
+  a sample can replace an imported Instrument (behind the usual prompt) and
+  frees what only that Track held; loading a sample no longer cuts off
+  sounding notes (a load frees nothing); nothing is ever silently evicted -
+  a full Pool or arena fails with a reason. The Daisy assigns ids now:
+  `MSG_SAMPLE_LOAD`'s id is a request tag and the browser adopts the id
+  LOAD_COMPLETE reports. An unload pushes the record with its resident flag
+  clear, so the frontend's cache stops listing unloaded samples (it used
+  to).
+- The Sample Pool is paged, not mirrored: `MSG_SAMPLE_META_PAGE_REQ` /
+  `MSG_SAMPLE_META_PAGE` (0x49/0x4A) return one window of resident records
+  in a single frame, retried when the Daisy's TX queue is full, and the
+  Sample Manager pages through the Pool (Down past the last row turns the
+  page, wrapping around) with a "used by: T1,T3" column and a `[loaded]`
+  mark for user-pinned samples. `SampleMetadata` gained `used_by` and a
+  pinned flag (88 -> 90 B); PROTOCOL_VERSION is 2.
+- `BenchmarkRegistryScan()` (profiling builds) is retired: it measured the
+  linear scan the Pool replaces; its numbers stand in the model doc §4.
+- The Daisy's "TX queue full" log line is rate-limited to one per second
+  with the running overflow count: a directory listing produced hundreds
+  per second and overran the log ring badly enough to drop console replies.
 - Browse **Load** now lands a sample on the selected Track: once the Daisy
   reports it resident the browser binds it (`MSG_SAMPLE_SELECT`), so the
   Keys play it with no further step (Track/Instrument model §6.1 A). An

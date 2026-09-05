@@ -367,6 +367,31 @@ esp_err_t inter_mcu_request_track_binding(uint8_t track) {
     return ESP_OK;
 }
 
+esp_err_t inter_mcu_request_sample_meta_page(uint16_t first, uint8_t count) {
+    (void)first;
+    (void)count;
+    return ESP_OK;
+}
+
+void inter_mcu_store_sample_meta_page(const WaveX::Protocol::SampleMetaPageHeader& header,
+                                      const uint8_t* records) {
+    (void)header;
+    (void)records;
+}
+
+size_t inter_mcu_get_sample_meta_page(WaveX::Protocol::SampleMetadata* out,
+                                      size_t max,
+                                      uint16_t* total,
+                                      uint16_t* first) {
+    (void)out;
+    (void)max;
+    if (total)
+        *total = 0;
+    if (first)
+        *first = 0;
+    return 0;
+}
+
 size_t inter_mcu_sample_meta_snapshot(WaveX::Protocol::SampleMetadata* out, size_t max) {
     (void)out;
     (void)max;

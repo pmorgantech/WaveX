@@ -127,6 +127,10 @@ uint16_t SelectedSample(uint8_t slot);
 // imported SFZ Instrument, which the ESP32 cannot derive from sample metadata.
 // Queues rather than sends: PumpTrackBinding does the sending.
 void PushTrackBinding(uint8_t track);
+// One window of the Sample Pool (MSG_SAMPLE_META_PAGE_REQ -> _PAGE): built
+// and sent as one frame; kept pending and retried from PumpTrackBinding()
+// when the TX queue is full, so the page is delayed rather than lost.
+void RequestSampleMetaPage(uint16_t first, uint8_t count);
 
 // Drains a bounded number of queued Track-binding replies onto the link.
 // Main loop only; see the TX queue depth note on s_track_binding_pending.

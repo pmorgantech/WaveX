@@ -13,11 +13,10 @@
 // host-testable without SDRAM or the audio HAL.
 //
 // In scope here: the Zone/Instrument/Tracks data model and
-// ResolveNoteOn(). Deliberately NOT here: the SampleResolver implementations
-// (Sfz::SampleTable in sfz_import.hpp for imported instruments; the bridging
-// resolver over the plain-WAV registry in audio_engine.cpp for instruments
-// built on-device - which one a given Instrument uses is decided by its
-// `origin`, see below), WXCF persistence, and the protocol ops. A "kit" is
+// ResolveNoteOn(). Deliberately NOT here: the SampleResolver implementation
+// (the engine's resolver over the Sample Pool, audio_engine.cpp - one
+// resolver for every origin now that an import's zones name Pool ids like a
+// Built instrument's do), WXCF persistence, and the protocol ops. A "kit" is
 // just a drum-mode Instrument (instrument-model.md §8), so the Phase 2
 // sequencer's per-track sample lookup will resolve through exactly this path
 // once wired.
@@ -88,16 +87,15 @@ struct Zone {
     bool in_use = false;
 };
 
-// Where an Instrument's zones came from, which is also WHICH sample-id
-// registry their `sample_id`s index. An SFZ import's ids are private to that
-// import (Sfz::BuildSamplePlan numbers them 1..N per load); an instrument
-// built on-device references the plain-WAV registry's ids
-// (MSG_SAMPLE_LOAD's sample_id). The two id spaces overlap, so the origin is
-// what lets a caller pick the right SampleResolver rather than guess.
+// Where an Instrument's zones came from - for the UI ("imported" vs "built
+// on-device") and for what replacing it means. Since the Sample Pool
+// (track-and-patch-model.md §4) every zone's `sample_id` is a Pool id
+// whichever the origin, resolved through the one engine resolver; the
+// mapper's per-document numbering (1..N) exists only until Commit.
 enum class InstrumentOrigin : uint8_t {
     None = 0,       // nothing bound: every note on this Track drops
-    SfzImport = 1,  // zones from an .sfz; ids index the loader's SampleTable
-    Built = 2,      // zones synthesised on-device; ids index the WAV registry
+    SfzImport = 1,  // zones from an .sfz (ids are Pool ids, like Built's)
+    Built = 2,      // zones synthesised on-device from Pool samples
 };
 
 // How many bytes of an instrument's display name travel to the frontend.

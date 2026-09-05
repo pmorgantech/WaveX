@@ -567,15 +567,28 @@ TEST_F(MessageDispatchTest, SampleUnloadReachesEngine) {
     EXPECT_EQ(r.unloaded_samples[0], 3);
 }
 
+TEST_F(MessageDispatchTest, SampleMetaPageRequestReachesEngine) {
+    WaveX::Protocol::SampleMetaPageReqMessage msg(40, 8);
+    ProcessInterMcuMessage(
+        MSG_SAMPLE_META_PAGE_REQ, 1, reinterpret_cast<const uint8_t*>(&msg), sizeof(msg));
+
+    const DispatchRecord& r = GetDispatchRecord();
+    ASSERT_EQ(r.meta_page_requests.size(), 1u);
+    EXPECT_EQ(r.meta_page_requests[0].first, 40);
+    EXPECT_EQ(r.meta_page_requests[0].second, 8);
+}
+
 TEST_F(MessageDispatchTest, UndersizedSampleSelectIsRejected) {
     uint8_t truncated[1] = {0};
     ProcessInterMcuMessage(MSG_SAMPLE_SELECT, 1, truncated, sizeof(truncated));
     ProcessInterMcuMessage(MSG_SAMPLE_UNLOAD, 1, truncated, sizeof(truncated));
     ProcessInterMcuMessage(MSG_TRACK_BINDING_REQ, 1, truncated, sizeof(truncated));
+    ProcessInterMcuMessage(MSG_SAMPLE_META_PAGE_REQ, 1, truncated, sizeof(truncated));
 
     EXPECT_TRUE(GetDispatchRecord().selected_samples.empty());
     EXPECT_TRUE(GetDispatchRecord().unloaded_samples.empty());
     EXPECT_TRUE(GetDispatchRecord().track_binding_requests.empty());
+    EXPECT_TRUE(GetDispatchRecord().meta_page_requests.empty());
 }
 
 // --- Malformed-payload sweep ----------------------------------------------

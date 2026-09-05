@@ -25,10 +25,19 @@ namespace {
 
 using namespace WaveX::Protocol;
 
+// One per plan entry (one per distinct sample file the import references).
+// A file already in the Pool is a `hit`: nothing is allocated or read for
+// it, the Track just takes a ref. Otherwise the entry is admitted to the
+// Pool (`pool_id`), allocated (`handle`) and read, and only committed - made
+// visible, pinned to the Track - when the whole import succeeds.
 struct LoadedSample {
     wxsamp_t handle = {};
     ResidentSampleInfo resident = {};
     uint32_t data_offset = 0;
+    uint32_t path_hash = 0;
+    uint16_t pool_id = 0;
+    bool hit = false;       // already resident before this load
+    bool admitted = false;  // a fresh Pool record this load must clean up on failure
 };
 
 enum class Phase : uint8_t {
@@ -50,19 +59,11 @@ enum class Phase : uint8_t {
 // temporaries.
 static WaveX::BssStatic<Tracks> s_bank_storage;
 static Tracks& s_bank = s_bank_storage.Get();
-static WaveX::BssStatic<Sfz::SampleTable> s_sample_table_storage;
-static Sfz::SampleTable& s_sample_table = s_sample_table_storage.Get();
-// Resolver for Built instruments (BindSample). Registered by the engine
-// because the registry it reads lives there; a default-constructed one
-// resolves nothing, so an unregistered engine drops rather than crashes.
+// The one resolver, over the Pool. Registered by the engine because the
+// allocator that turns a handle into a pointer lives there; a
+// default-constructed one resolves nothing, so an unregistered engine drops
+// rather than crashes.
 static SampleResolver s_loaded_resolver;
-// The one slot holding an SFZ-imported instrument, whose samples
-// s_loaded_samples/s_sample_table hold. Built instruments on other slots do
-// not use this; see docs/backlog.md "Only one instrument slot can be
-// resident at a time" for why an import is still single-residency.
-static int8_t s_bound_slot = -1;
-static uint32_t s_active_bytes = 0;
-static uint8_t s_active_count = 0;
 static LoadedSample s_loaded_samples[kMaxZones];
 
 static InstOpMessage s_request;
@@ -127,30 +128,61 @@ void CloseFile() {
     }
 }
 
-void ReleaseRange(SampleMemMgr& memory, LoadedSample* samples, uint8_t count) {
-    for (uint8_t i = 0; i < count; ++i) {
-        memory.release(&samples[i].handle);
-        samples[i] = LoadedSample{};
-    }
+// Frees `sample_id` from the Pool: audio memory back to the arena, record
+// gone. Callers guarantee no voice is reading it (a stopped Track, or a
+// record this load admitted and never committed).
+void FreeFromPool(SamplePool& pool, SampleMemMgr& memory, uint16_t sample_id) {
+    SamplePool::Record* r = pool.Find(sample_id);
+    if (!r)
+        return;
+    memory.release(&r->payload.handle);
+    pool.Remove(sample_id);
 }
 
-void Fail(SampleMemMgr* memory, uint8_t error) {
-    CloseFile();
-    if (memory && s_allocated > 0) {
-        ReleaseRange(*memory, s_loaded_samples, s_allocated);
+// Drops Track `track`'s refs on every Pool sample and frees whatever nobody
+// else holds; then clears the Instrument. The caller stopped the Track's
+// voices first.
+void ReleaseTrack(SamplePool& pool, SampleMemMgr& memory, uint8_t track) {
+    pool.ClearTrack(track, [&](uint16_t id) { FreeFromPool(pool, memory, id); });
+    // Zones only: the mod slots are the user's, set through their own op,
+    // and rebinding what plays is not a reason to lose them.
+    Instrument& ins = s_bank.Track(track);
+    for (auto& zone: ins.zones) {
+        zone = Zone{};
+    }
+    ins.origin = InstrumentOrigin::None;
+    ins.name[0] = '\0';
+}
+
+// Undo everything this load admitted or allocated but did not commit.
+void AbandonLoad(SamplePool* pool, SampleMemMgr* memory) {
+    for (uint8_t i = 0; i < s_plan.count && i < kMaxZones; ++i) {
+        LoadedSample& ls = s_loaded_samples[i];
+        if (ls.admitted && pool && memory) {
+            if (ls.handle.len) {
+                memory->release(&ls.handle);
+            }
+            pool->Remove(ls.pool_id);
+        }
+        ls = LoadedSample{};
     }
     s_allocated = 0;
+}
+
+void Fail(SamplePool* pool, SampleMemMgr* memory, uint8_t error) {
+    CloseFile();
+    AbandonLoad(pool, memory);
     SendStatus(INST_STATUS_FAILED, error);
     s_phase = Phase::Idle;
 }
 
-uint32_t AvailableBytes(SampleMemMgr& memory) {
+uint32_t AvailableBytes(SamplePool& pool, SampleMemMgr& memory, uint8_t track) {
     wxsamp_stats_t stats{};
     memory.stats(&stats);
     uint64_t free_bytes = static_cast<uint64_t>(stats.large_free_bytes) + stats.small_free_bytes;
-    // A runtime load replaces the one v1 resident bank, so its allocations
-    // become available after the callback stop acknowledgement.
-    free_bytes += s_active_bytes;
+    // Replacing what this Track holds frees the samples only it references;
+    // they become available after the callback's stop acknowledgement.
+    free_bytes += ReclaimableBytes(pool, track);
     if (free_bytes <= WAVEX_INST_LOAD_RESERVE_BYTES)
         return 0;
     free_bytes -= WAVEX_INST_LOAD_RESERVE_BYTES;
@@ -270,7 +302,7 @@ bool FindSampleFallback(const char* missing_path, char* out, size_t capacity) {
     return true;
 }
 
-ProbeResult ProbeCurrent() {
+ProbeResult ProbeCurrent(SamplePool& pool) {
     char* path = s_mapped.sample_paths[s_plan.entries[s_index].path_zone];
     FRESULT fr = f_open(&s_file, path, FA_READ);
     if (fr != FR_OK) {
@@ -304,8 +336,19 @@ ProbeResult ProbeCurrent() {
         WaveX::Log::PrintLine("SFZ_PROBE: sample %u unsupported: '%s'", (unsigned)s_index, path);
         return ProbeResult::Invalid;
     }
-    s_loaded_samples[s_index].resident = resident;
-    s_loaded_samples[s_index].data_offset = wav_info.data_offset;
+    LoadedSample& ls = s_loaded_samples[s_index];
+    ls.resident = resident;
+    ls.data_offset = wav_info.data_offset;
+    ls.path_hash = WaveX::Audio::HashSamplePath(path);
+    // Already in the Pool (the user loaded it, or another import did): a
+    // hit costs no memory and no SD read, and its bytes are not counted
+    // against what this load needs.
+    if (const SamplePool::Record* r = pool.FindByPath(ls.path_hash)) {
+        ls.hit = true;
+        ls.pool_id = r->sample_id;
+        s_probes[s_index].bytes = 0;
+        return ProbeResult::Ok;
+    }
     s_probes[s_index].bytes = resident.data_size;
     s_total_bytes += resident.data_size;
     return ProbeResult::Ok;
@@ -337,10 +380,9 @@ void FillCurrentStatus() {
 void Reset() {
     CloseFile();
     s_bank_storage.Reconstruct();
-    s_sample_table.Clear();
-    s_bound_slot = -1;
-    s_active_bytes = 0;
-    s_active_count = 0;
+    for (auto& ls: s_loaded_samples) {
+        ls = LoadedSample{};
+    }
     s_phase = Phase::Idle;
 }
 
@@ -388,6 +430,9 @@ bool Begin(const InstOpMessage& request) {
     for (auto& probe: s_probes) {
         probe = Sfz::SampleProbe{};
     }
+    for (auto& ls: s_loaded_samples) {
+        ls = LoadedSample{};
+    }
     s_line_number = 0;
     s_index = 0;
     s_allocated = 0;
@@ -408,38 +453,28 @@ bool TrackLoading(uint8_t slot) {
     return Busy() && s_request.op == INST_OP_SFZ_LOAD && s_request.slot == slot;
 }
 
-bool NeedsVoiceStop() {
-    return s_phase == Phase::AwaitVoiceStop;
+uint8_t VoiceStopTrack() {
+    return s_phase == Phase::AwaitVoiceStop ? s_request.slot : 0xFF;
 }
 
-void ConfirmVoicesStopped(SampleMemMgr& memory) {
+void ConfirmVoicesStopped(SamplePool& pool, SampleMemMgr& memory) {
     if (s_phase != Phase::AwaitVoiceStop)
         return;
-    if (s_active_count > 0) {
-        ReleaseRange(memory, s_loaded_samples, s_active_count);
-    }
-    // Scoped to the slot whose samples were just released: a Built
-    // instrument on another slot references the WAV registry, not this
-    // memory, and must survive an import elsewhere. (Its mod slots too -
-    // the old whole-bank reset wiped those as a side effect.)
-    if (s_bound_slot >= 0) {
-        s_bank.Track(static_cast<uint8_t>(s_bound_slot)) = Instrument{};
-    }
-    s_sample_table.Clear();
-    s_bound_slot = -1;
-    s_active_count = 0;
-    s_active_bytes = 0;
+    // Only this Track's holdings are released; every other Track's refs, and
+    // the user's pinned samples, are untouched (they may be this import's
+    // hits). Mod slots survive: a load is not an edit of them.
+    ReleaseTrack(pool, memory, s_request.slot);
     s_allocated = 0;
     s_index = 0;
     s_phase = Phase::AllocateSample;
     SendStatus(INST_STATUS_LOAD_BEGIN);
 }
 
-void Pump(SampleMemMgr& memory, uint8_t* io_buffer, uint32_t io_buffer_bytes) {
+void Pump(SamplePool& pool, SampleMemMgr& memory, uint8_t* io_buffer, uint32_t io_buffer_bytes) {
     if (s_phase == Phase::Idle || s_phase == Phase::AwaitVoiceStop)
         return;
     if (!memory.initialized() || !io_buffer || io_buffer_bytes < 512) {
-        Fail(&memory, INST_ERROR_NO_MEMORY);
+        Fail(&pool, &memory, INST_ERROR_NO_MEMORY);
         return;
     }
 
@@ -447,7 +482,7 @@ void Pump(SampleMemMgr& memory, uint8_t* io_buffer, uint32_t io_buffer_bytes) {
         case Phase::OpenSfz: {
             const FRESULT fr = f_open(&s_file, s_request.path, FA_READ);
             if (fr != FR_OK) {
-                Fail(&memory, INST_ERROR_BAD_FILE);
+                Fail(&pool, &memory, INST_ERROR_BAD_FILE);
                 return;
             }
             s_file_open = true;
@@ -461,14 +496,15 @@ void Pump(SampleMemMgr& memory, uint8_t* io_buffer, uint32_t io_buffer_bytes) {
                 if ((length + 1 == sizeof(s_line) && s_line[length - 1] != '\n' &&
                      !f_eof(&s_file)) ||
                     !s_parser.FeedLine(s_line, s_line_number)) {
-                    Fail(&memory,
+                    Fail(&pool,
+                         &memory,
                          s_parser.GetStatus().error == Sfz::Error::TooManyRegions
                              ? INST_ERROR_TOO_MANY_REGIONS
                              : INST_ERROR_BAD_FILE);
                 }
             } else {
                 if (f_error(&s_file) != 0) {
-                    Fail(&memory, INST_ERROR_IO);
+                    Fail(&pool, &memory, INST_ERROR_IO);
                     return;
                 }
                 CloseFile();
@@ -484,7 +520,8 @@ void Pump(SampleMemMgr& memory, uint8_t* io_buffer, uint32_t io_buffer_bytes) {
                 const Sfz::Error error = s_parser.GetStatus().error != Sfz::Error::None
                                              ? s_parser.GetStatus().error
                                              : status.error;
-                Fail(&memory,
+                Fail(&pool,
+                     &memory,
                      error == Sfz::Error::TooManyRegions ? INST_ERROR_TOO_MANY_REGIONS
                                                          : INST_ERROR_BAD_FILE);
                 return;
@@ -497,7 +534,7 @@ void Pump(SampleMemMgr& memory, uint8_t* io_buffer, uint32_t io_buffer_bytes) {
 
         case Phase::ProbeSample: {
             if (s_index < s_plan.count) {
-                const ProbeResult result = ProbeCurrent();
+                const ProbeResult result = ProbeCurrent(pool);
                 if (result == ProbeResult::Missing) {
                     ++s_status.missing_count;
                     s_status.flags |= INST_STATUS_MISSING_FILES;
@@ -509,7 +546,7 @@ void Pump(SampleMemMgr& memory, uint8_t* io_buffer, uint32_t io_buffer_bytes) {
                 return;
             }
             s_status.total_bytes = s_total_bytes;
-            s_status.available_bytes = AvailableBytes(memory);
+            s_status.available_bytes = AvailableBytes(pool, memory, s_request.slot);
             if (s_total_bytes > s_status.available_bytes) {
                 s_status.flags |= INST_STATUS_EXCEEDS_MEMORY;
             }
@@ -519,11 +556,11 @@ void Pump(SampleMemMgr& memory, uint8_t* io_buffer, uint32_t io_buffer_bytes) {
                 return;
             }
             if (s_status.flags & INST_STATUS_MISSING_FILES) {
-                Fail(&memory, INST_ERROR_MISSING_SAMPLES);
+                Fail(&pool, &memory, INST_ERROR_MISSING_SAMPLES);
             } else if (s_status.flags & INST_STATUS_INVALID_FILES) {
-                Fail(&memory, INST_ERROR_UNSUPPORTED_SAMPLE);
+                Fail(&pool, &memory, INST_ERROR_UNSUPPORTED_SAMPLE);
             } else if (s_status.flags & INST_STATUS_EXCEEDS_MEMORY) {
-                Fail(&memory, INST_ERROR_TOO_LARGE);
+                Fail(&pool, &memory, INST_ERROR_TOO_LARGE);
             } else {
                 s_phase = Phase::AwaitVoiceStop;
             }
@@ -535,9 +572,37 @@ void Pump(SampleMemMgr& memory, uint8_t* io_buffer, uint32_t io_buffer_bytes) {
                 s_phase = Phase::OpenSample;
                 return;
             }
-            if (!memory.alloc(s_loaded_samples[s_index].resident.data_size,
-                              &s_loaded_samples[s_index].handle)) {
-                Fail(&memory, INST_ERROR_NO_MEMORY);
+            LoadedSample& ls = s_loaded_samples[s_index];
+            if (ls.hit) {
+                // Releasing this Track above may have freed the sample this
+                // hit pointed at (it was only this Track's). Re-check; a
+                // vanished hit is loaded like any other file.
+                if (pool.Find(ls.pool_id)) {
+                    ++s_index;
+                    return;
+                }
+                ls.hit = false;
+                ls.pool_id = 0;
+                s_total_bytes += ls.resident.data_size;
+            }
+            // Admission first: an entry, then the bytes. Neither evicts.
+            SamplePool::Record* record = nullptr;
+            const auto admit = pool.AdmitPath(ls.path_hash, &record);
+            if (admit == SamplePool::Admit::AlreadyResident) {
+                // Two plan entries can name one file; the second is a hit.
+                ls.hit = true;
+                ls.pool_id = record->sample_id;
+                ++s_index;
+                return;
+            }
+            if (admit != SamplePool::Admit::Ok) {
+                Fail(&pool, &memory, INST_ERROR_NO_MEMORY);
+                return;
+            }
+            ls.pool_id = record->sample_id;
+            ls.admitted = true;
+            if (!memory.alloc(ls.resident.data_size, &ls.handle)) {
+                Fail(&pool, &memory, INST_ERROR_NO_MEMORY);
                 return;
             }
             ++s_allocated;
@@ -545,6 +610,10 @@ void Pump(SampleMemMgr& memory, uint8_t* io_buffer, uint32_t io_buffer_bytes) {
         } break;
 
         case Phase::OpenSample: {
+            // Hits have nothing to read.
+            while (s_index < s_plan.count && s_loaded_samples[s_index].hit) {
+                ++s_index;
+            }
             if (s_index >= s_plan.count) {
                 s_phase = Phase::Commit;
                 return;
@@ -556,7 +625,7 @@ void Pump(SampleMemMgr& memory, uint8_t* io_buffer, uint32_t io_buffer_bytes) {
                 fr = f_lseek(&s_file, s_loaded_samples[s_index].data_offset);
             }
             if (fr != FR_OK) {
-                Fail(&memory, INST_ERROR_IO);
+                Fail(&pool, &memory, INST_ERROR_IO);
                 return;
             }
             s_current_written = 0;
@@ -569,7 +638,7 @@ void Pump(SampleMemMgr& memory, uint8_t* io_buffer, uint32_t io_buffer_bytes) {
             LoadedSample& loaded = s_loaded_samples[s_index];
             void* destination = nullptr;
             if (!memory.ptr(loaded.handle, &destination) || !destination) {
-                Fail(&memory, INST_ERROR_NO_MEMORY);
+                Fail(&pool, &memory, INST_ERROR_NO_MEMORY);
                 return;
             }
             const uint32_t remaining = loaded.resident.data_size - s_current_written;
@@ -578,7 +647,7 @@ void Pump(SampleMemMgr& memory, uint8_t* io_buffer, uint32_t io_buffer_bytes) {
             UINT bytes_read = 0;
             const FRESULT fr = f_read(&s_file, io_buffer, requested, &bytes_read);
             if (fr != FR_OK || bytes_read == 0) {
-                Fail(&memory, INST_ERROR_IO);
+                Fail(&pool, &memory, INST_ERROR_IO);
                 return;
             }
             std::memcpy(
@@ -604,32 +673,44 @@ void Pump(SampleMemMgr& memory, uint8_t* io_buffer, uint32_t io_buffer_bytes) {
         } break;
 
         case Phase::Commit: {
-            s_sample_table.Clear();
+            // Every freshly read sample becomes a Pool record now, in one
+            // pass, so a half-committed import never exists: before this
+            // point nothing references them; after it the Track does.
             for (uint8_t i = 0; i < s_plan.count; ++i) {
-                void* sample_ptr = nullptr;
-                const LoadedSample& loaded = s_loaded_samples[i];
-                if (!memory.ptr(loaded.handle, &sample_ptr) || !sample_ptr ||
-                    !s_sample_table.Bind(s_plan.entries[i].sample_id,
-                                         SampleRef{static_cast<const int16_t*>(sample_ptr),
-                                                   loaded.resident.total_frames,
-                                                   loaded.resident.channels,
-                                                   loaded.resident.sample_rate})) {
-                    s_sample_table.Clear();
-                    Fail(&memory, INST_ERROR_NO_MEMORY);
+                LoadedSample& loaded = s_loaded_samples[i];
+                if (loaded.hit) {
+                    continue;
+                }
+                SamplePool::Record* record = pool.Find(loaded.pool_id);
+                if (!record) {
+                    Fail(&pool, &memory, INST_ERROR_NO_MEMORY);
                     return;
                 }
+                FillLoadedSample(record->payload,
+                                 loaded.pool_id,
+                                 s_mapped.sample_paths[s_plan.entries[i].path_zone],
+                                 loaded.resident,
+                                 loaded.handle);
+                loaded.admitted = false;  // committed: no longer this load's to abandon
+                // Not pushed one by one: a burst of N records overruns the
+                // 4-deep TX queue. The frontend pages the Pool
+                // (MSG_SAMPLE_META_PAGE_REQ) and sees them there.
             }
-            s_bank.Track(s_request.slot) = s_mapped.instrument;
+            // The mapper numbered samples 1..N within this document; the
+            // zones now name their Pool ids, and the Track takes its refs.
+            Instrument& ins = s_bank.Track(s_request.slot);
+            ins = s_mapped.instrument;
+            for (auto& zone: ins.zones) {
+                if (!zone.in_use || zone.sample_id == 0 || zone.sample_id > s_plan.count) {
+                    continue;
+                }
+                zone.sample_id = s_loaded_samples[zone.sample_id - 1].pool_id;
+                pool.SetUsedBy(zone.sample_id, s_request.slot, true);
+            }
             // The mapper knows zones, not where the document came from, so the
             // display name is stamped here - the one place still holding the
             // .sfz path. Truncation is fine; it is a label, not an identifier.
-            std::snprintf(s_bank.Track(s_request.slot).name,
-                          sizeof(s_bank.Track(s_request.slot).name),
-                          "%s",
-                          Basename(s_request.path));
-            s_bound_slot = static_cast<int8_t>(s_request.slot);
-            s_active_count = s_plan.count;
-            s_active_bytes = s_total_bytes;
+            std::snprintf(ins.name, sizeof(ins.name), "%s", Basename(s_request.path));
             s_status.loaded_bytes = s_total_bytes;
             s_status.current_loaded_bytes = s_status.current_bytes;
             SendStatus(INST_STATUS_LOAD_COMPLETE);
@@ -650,6 +731,7 @@ void Pump(SampleMemMgr& memory, uint8_t* io_buffer, uint32_t io_buffer_bytes) {
 
 bool Load(const char* path,
           uint8_t slot,
+          SamplePool& pool,
           SampleMemMgr& memory,
           uint8_t* io_buffer,
           uint32_t io_buffer_bytes) {
@@ -657,9 +739,9 @@ bool Load(const char* path,
     if (!Begin(request))
         return false;
     while (Busy()) {
-        Pump(memory, io_buffer, io_buffer_bytes);
-        if (NeedsVoiceStop()) {
-            ConfirmVoicesStopped(memory);  // audio has not started at boot
+        Pump(pool, memory, io_buffer, io_buffer_bytes);
+        if (VoiceStopTrack() != 0xFF) {
+            ConfirmVoicesStopped(pool, memory);  // audio has not started at boot
         }
     }
     return TrackLoaded(slot);
@@ -673,21 +755,20 @@ void SetLoadedSampleResolver(const SampleResolver& resolver) {
     s_loaded_resolver = resolver;
 }
 
-bool BindSample(uint8_t slot, uint16_t sample_id, uint8_t root_note) {
+bool BindSample(
+    SamplePool& pool, SampleMemMgr& memory, uint8_t slot, uint16_t sample_id, uint8_t root_note) {
     if (slot >= kNumTracks)
         return false;
-    Instrument& ins = s_bank.Track(slot);
-    if (ins.origin == InstrumentOrigin::SfzImport)
+    if (sample_id != 0 && !pool.Find(sample_id))
         return false;
-    // Zones only: the mod slots are the user's, set through their own op,
-    // and rebinding what sample plays is not a reason to lose them.
-    for (auto& zone: ins.zones) {
-        zone = Zone{};
-    }
+    // Whatever the Track held goes: an import's samples that nobody else
+    // holds are freed here (the caller stopped this Track's voices).
+    ReleaseTrack(pool, memory, slot);
+    Instrument& ins = s_bank.Track(slot);
     if (sample_id == 0) {
-        ins.origin = InstrumentOrigin::None;
         return true;
     }
+    pool.SetUsedBy(sample_id, slot, true);
     Zone& zone = ins.zones[0];
     zone.sample_id = sample_id;
     zone.root_note = root_note;
@@ -722,12 +803,25 @@ uint16_t BoundSample(uint8_t slot) {
     return 0;
 }
 
+uint32_t ReclaimableBytes(SamplePool& pool, uint8_t track) {
+    if (track >= kNumTracks)
+        return 0;
+    const uint16_t bit = static_cast<uint16_t>(1u << track);
+    uint64_t bytes = 0;
+    pool.ForEach([&](SamplePool::Record& r) {
+        if (!r.pinned && r.used_by == bit) {
+            bytes += r.payload.allocated_bytes;
+        }
+    });
+    return bytes > UINT32_MAX ? UINT32_MAX : static_cast<uint32_t>(bytes);
+}
+
 void ForgetLoadedSample(uint16_t sample_id) {
     if (sample_id == 0)
         return;
     for (uint8_t slot = 0; slot < kNumTracks; ++slot) {
         Instrument& ins = s_bank.Track(slot);
-        if (ins.origin != InstrumentOrigin::Built)
+        if (ins.origin == InstrumentOrigin::None)
             continue;
         bool any_left = false;
         for (auto& zone: ins.zones) {
@@ -750,17 +844,11 @@ uint8_t ResolveNote(uint8_t slot,
                     uint8_t max) {
     if (slot >= kNumTracks)
         return 0;
-    const Instrument& ins = s_bank.Track(slot);
-    switch (ins.origin) {
-        case InstrumentOrigin::SfzImport:
-            return s_bank.ResolveNote(
-                slot, note, velocity, s_sample_table.Resolver(), out, max, live);
-        case InstrumentOrigin::Built:
-            return s_bank.ResolveNote(slot, note, velocity, s_loaded_resolver, out, max, live);
-        case InstrumentOrigin::None:
-        default:
-            return 0;
-    }
+    // One resolver for every origin: an import's zones name Pool ids now,
+    // exactly as a Built instrument's do.
+    if (s_bank.Track(slot).origin == InstrumentOrigin::None)
+        return 0;
+    return s_bank.ResolveNote(slot, note, velocity, s_loaded_resolver, out, max, live);
 }
 
 bool SetModSlot(uint8_t slot, uint8_t mod_slot_index, const ModSlot& value) {

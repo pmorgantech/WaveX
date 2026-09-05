@@ -230,7 +230,7 @@ Requested directly (bench session, not yet a roadmap phase): "manage a bank of v
 An `Instrument` is the preset: use per-key (possibly single-key) zones rather
 than introducing a distinct lighter Voice/Preset entity.
 
-**Deliberately out of scope here, per explicit instruction**: making more than one instrument slot resident at once ([backlog](../backlog.md#only-one-instrument-slot-can-be-resident-at-a-time)). "Managing a bank" below means browsing/saving/loading named files on SD — loading one still swaps whatever is currently resident, exactly like `INST_OP_SFZ_LOAD` already does. That is a real, useful capability on its own (an E-mu/Emax workflow is "load a preset, play it" more often than "layer many at once"), and nothing below is wasted if slot residency is later made concurrent.
+**Residency is no longer a constraint here**: since the Sample Pool (track-and-patch-model.md §4, built 2026-09-05) any number of Tracks can hold imports at once and share samples by path. "Managing a bank" below means browsing/saving/loading named files on SD.
 
 ### 12.1 Pad→sample mapping (multi-sample keys/pads), v0
 

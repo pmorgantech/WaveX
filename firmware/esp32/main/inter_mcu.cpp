@@ -238,6 +238,14 @@ bool s_meta_valid[kMetaCacheSize] = {};
 size_t s_meta_next = 0;
 uint16_t s_meta_newest_id = 0;
 
+// The last Pool page. Written by the UART RX task, read by the UI task.
+portMUX_TYPE s_meta_page_lock = portMUX_INITIALIZER_UNLOCKED;
+WaveX::Protocol::SampleMetadata s_meta_page[WaveX::Protocol::MAX_SAMPLE_META_PAGE];
+uint8_t s_meta_page_n = 0;
+uint16_t s_meta_page_first = 0;
+uint16_t s_meta_page_total = 0;
+bool s_meta_page_valid = false;
+
 portMUX_TYPE s_track_binding_lock = portMUX_INITIALIZER_UNLOCKED;
 WaveX::Protocol::TrackBindingMessage s_track_bindings[kTrackBindingCount];
 bool s_track_binding_valid[kTrackBindingCount] = {};
@@ -300,6 +308,66 @@ size_t inter_mcu_sample_meta_snapshot(WaveX::Protocol::SampleMetadata* out, size
         }
     }
     taskEXIT_CRITICAL(&s_meta_lock);
+    return n;
+}
+
+esp_err_t inter_mcu_request_sample_meta_page(uint16_t first, uint8_t count) {
+    if (!s_initialized || s_suspended) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    WaveX::Protocol::SampleMetaPageReqMessage msg(first, count);
+    const int result =
+        send_uart_message(WaveX::Protocol::MSG_SAMPLE_META_PAGE_REQ, &msg, sizeof(msg));
+    return result >= 0 ? ESP_OK : ESP_FAIL;
+}
+
+void inter_mcu_store_sample_meta_page(const WaveX::Protocol::SampleMetaPageHeader& header,
+                                      const uint8_t* records) {
+    const uint8_t n = header.n > WaveX::Protocol::MAX_SAMPLE_META_PAGE
+                          ? WaveX::Protocol::MAX_SAMPLE_META_PAGE
+                          : header.n;
+    taskENTER_CRITICAL(&s_meta_page_lock);
+    memcpy(s_meta_page, records, n * sizeof(WaveX::Protocol::SampleMetadata));
+    s_meta_page_n = n;
+    s_meta_page_first = header.first;
+    s_meta_page_total = header.total;
+    s_meta_page_valid = true;
+    taskEXIT_CRITICAL(&s_meta_page_lock);
+    // The per-id cache sees them too, so a page a list showed can be looked
+    // up by id afterwards (detail views, the picker prompt).
+    for (uint8_t i = 0; i < n; ++i) {
+        WaveX::Protocol::SampleMetadata m;
+        memcpy(&m, records + i * sizeof(m), sizeof(m));
+        inter_mcu_store_sample_meta(m);
+    }
+}
+
+size_t inter_mcu_get_sample_meta_page(WaveX::Protocol::SampleMetadata* out,
+                                      size_t max,
+                                      uint16_t* total,
+                                      uint16_t* first) {
+    size_t n = 0;
+    taskENTER_CRITICAL(&s_meta_page_lock);
+    if (s_meta_page_valid) {
+        n = s_meta_page_n < max ? s_meta_page_n : max;
+        for (size_t i = 0; i < n; ++i) {
+            out[i] = s_meta_page[i];
+        }
+        if (total) {
+            *total = s_meta_page_total;
+        }
+        if (first) {
+            *first = s_meta_page_first;
+        }
+    } else {
+        if (total) {
+            *total = 0;
+        }
+        if (first) {
+            *first = 0;
+        }
+    }
+    taskEXIT_CRITICAL(&s_meta_page_lock);
     return n;
 }
 

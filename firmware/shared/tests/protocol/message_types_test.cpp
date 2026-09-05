@@ -277,6 +277,27 @@ TEST_F(MessageTypeTest, SampleStatusLoadFailedCarriesReason) {
     EXPECT_EQ(parsed.frames_played, static_cast<uint32_t>(SAMPLE_LOAD_FAIL_RAM));
 }
 
+// A Pool page is one frame: header + up to MAX_SAMPLE_META_PAGE records must
+// fit UART_MAX_PAYLOAD, or the reply the design relies on cannot be sent.
+TEST_F(MessageTypeTest, SampleMetaPageFitsOneFrame) {
+    EXPECT_EQ(sizeof(SampleMetaPageHeader), 8u);
+    EXPECT_EQ(sizeof(SampleMetaPageReqMessage), 4u);
+    const size_t page_bytes =
+        sizeof(SampleMetaPageHeader) + MAX_SAMPLE_META_PAGE * sizeof(SampleMetadata);
+    EXPECT_LE(page_bytes, 2048u) << "UART_MAX_PAYLOAD";
+
+    SampleMetaPageReqMessage req(40, 20);
+    EXPECT_EQ(req.first, 40);
+    EXPECT_EQ(req.count, 20);
+
+    SampleMetadata m;
+    EXPECT_EQ(m.used_by, 0);
+    EXPECT_EQ(m.flags, 0);
+    m.flags = SAMPLE_META_RESIDENT | SAMPLE_META_PINNED;
+    m.used_by = (1u << 3) | (1u << 7);
+    EXPECT_EQ(m.used_by, 0x88);
+}
+
 TEST_F(MessageTypeTest, InstrumentMessagesRoundTrip) {
     InstOpMessage request(0x12345678u, 2, INST_OP_SFZ_PROBE, "/Instruments/Grand Piano.sfz");
     const size_t request_size = ProtocolHandler::CreatePacket(
@@ -1263,7 +1284,7 @@ TEST_F(MessageTypeTest, SampleEditMessageCarriesNegativeGain) {
 // The record is the single source of truth for every playback and display
 // path, so its round trip and its clamping are both load-bearing.
 TEST_F(MessageTypeTest, SampleMetadataRoundTrip) {
-    EXPECT_EQ(sizeof(SampleMetadata), 88u);  // + 4 header + 2 CRC fits PKT_SIZE_128
+    EXPECT_EQ(sizeof(SampleMetadata), 90u);  // + 4 header + 2 CRC fits PKT_SIZE_128
 
     SampleMetadata original;
     original.sample_id = 7;

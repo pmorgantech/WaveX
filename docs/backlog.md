@@ -132,22 +132,6 @@ There is no protocol operation to unload, rename, delete, or reorder a loaded
 sample. Define one versioned `MSG_SAMPLE_OP` verb in a reserved protocol block,
 with round-trip tests, after its effects on instrument references are defined.
 
-### Shared sample registry and multi-Track residency
-
-SFZ imports still have a private sample registry and only one imported
-instrument can be resident independently. Resolve per-Track sample ownership,
-unique identities, release behavior, and Sample Manager visibility as the
-Sample Pool in the [Track/Instrument model](features/track-and-patch-model.md)
-§4 (1024 entries, indexed, fail-with-reason admission — promoted to roadmap
-Phase 2.5 item 3), rather than with a local loader patch.
-
-Until that lands, a Track holding an imported Instrument refuses a bare-sample
-`Assign` (`SfzLoader::BindSample`): the import owns its samples and can only
-release them through the load handshake. The UI now states this rather than
-appearing to ignore the press, but "replace an Instrument with a sample without
-rebooting" needs the refcounted registry and the per-track voice-stop in
-[track-and-patch-model.md](features/track-and-patch-model.md) §4.
-
 ### Wavetable oscillator source
 
 The architecture now reserves a typed oscillator-source boundary so sampler and

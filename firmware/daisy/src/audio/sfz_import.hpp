@@ -988,49 +988,6 @@ inline bool ValidateSampleBudget(const SampleProbe* probes,
     return true;
 }
 
-class SampleTable {
-   public:
-    bool Bind(uint16_t sample_id, const SampleRef& ref) {
-        if (sample_id == 0 || !ref.valid()) {
-            return false;
-        }
-        for (uint8_t i = 0; i < count_; ++i) {
-            if (entries_[i].sample_id == sample_id) {
-                entries_[i].ref = ref;
-                return true;
-            }
-        }
-        if (count_ >= kMaxZones) {
-            return false;
-        }
-        entries_[count_++] = Entry{sample_id, ref};
-        return true;
-    }
-
-    void Clear() { count_ = 0; }
-
-    SampleResolver Resolver() const { return SampleResolver{this, &Resolve}; }
-
-   private:
-    struct Entry {
-        uint16_t sample_id = 0;
-        SampleRef ref;
-    };
-
-    static SampleRef Resolve(const void* context, uint16_t sample_id) {
-        const auto* table = static_cast<const SampleTable*>(context);
-        for (uint8_t i = 0; i < table->count_; ++i) {
-            if (table->entries_[i].sample_id == sample_id) {
-                return table->entries_[i].ref;
-            }
-        }
-        return SampleRef{};
-    }
-
-    Entry entries_[kMaxZones]{};
-    uint8_t count_ = 0;
-};
-
 }  // namespace Sfz
 }  // namespace AudioEngine
 }  // namespace WaveX

@@ -57,6 +57,7 @@ class PacketRouter {
     void handle_diag_push(const WaveX::Protocol::DiagPushMessage& msg);
     void handle_sample_meta(const WaveX::Protocol::SampleMetadata& msg);
     void handle_track_binding(const WaveX::Protocol::TrackBindingMessage& msg);
+    void handle_sample_meta_page(const uint8_t* payload, size_t length);
     void handle_sample_stop_resp(const WaveX::Protocol::SampleStopRespMessage& msg);
     void handle_error(const WaveX::Protocol::ErrorMessage& msg);
     void handle_cv_cal_resp(const WaveX::Protocol::CvCalMessage& msg);

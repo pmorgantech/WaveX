@@ -14,6 +14,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace WaveX {
@@ -21,6 +22,7 @@ namespace Test {
 
 struct DispatchRecord {
     std::vector<WaveX::Protocol::NoteMessage> note_ons;
+    std::vector<std::pair<uint16_t, uint8_t>> meta_page_requests;  // MSG_SAMPLE_META_PAGE_REQ
     std::vector<WaveX::Protocol::NoteMessage> note_offs;
     std::vector<WaveX::Protocol::ControlChangeMessage> control_changes;
     std::vector<WaveX::Protocol::MixOpMessage> mix_ops;

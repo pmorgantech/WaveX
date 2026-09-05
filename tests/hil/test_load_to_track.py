@@ -32,9 +32,14 @@ def _open_browser(esp, path):
     esp.wait_state(tab="Browse")
     d, f = _split(path)
     esp.page("DIR", d)
-    esp.wait_state(timeout=8.0, dir=d, entries=lambda n: int(n) > 1)
+    # STATE reports text with spaces as underscores (one flat line).
+    esp.wait_state(
+        timeout=8.0,
+        dir=d.replace(" ", "_"),
+        entries=lambda n: int(n) > 1,
+    )
     esp.page("SEL", f)
-    return esp.wait_state(sel=f)
+    return esp.wait_state(sel=f.replace(" ", "_"))
 
 
 def _free_track(daisy, avoid=()):

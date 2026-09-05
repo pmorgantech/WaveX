@@ -34,7 +34,7 @@ using q15_t = int16_t;
 #include "../sequencer/sequencer_transport.hpp"
 #include "../storage/fatfs_wav_reader.hpp"
 #include "../timebase.hpp"
-#include "audio/sample_registry.hpp"
+#include "audio/sample_pool.hpp"
 #include "fade.hpp"
 #include "instrument.hpp"
 #include "lfo.hpp"
@@ -311,12 +311,17 @@ static uint32_t
                              [NoteEventQueue<NoteEvent, kNoteQueueSize>::kReleaseWordCount];
 static uint32_t s_scoped_release_pending_slots = 0;
 
-// Set by the main loop before releasing/rewriting loaded-sample memory
-// (OnSampleLoad); consumed by Callback(), which drains the queue and then
-// hard-stops every voice so nothing keeps reading freed SDRAM.
+// Set by the main loop before releasing loaded-sample memory (an unload);
+// consumed by Callback(), which drains the queue and then hard-stops every
+// voice so nothing keeps reading freed SDRAM.
 static bool s_voice_stop_all = false;
+// The per-Track form of the same barrier (track-and-patch-model.md §4): a
+// bit per Track whose voices must stop before that Track's Pool refs are
+// released - replacing an import, binding a sample over one. Other Tracks
+// keep sounding.
+static uint16_t s_voice_stop_tracks = 0;
 // Runtime SFZ replacement waits for this callback acknowledgement before it
-// releases the old bank's non-owning sample pointers.
+// releases the old Track's non-owning sample pointers.
 static bool s_voice_stop_ack = false;
 
 // Audio-callback side: apply every pending note event, then honor a
@@ -365,6 +370,15 @@ static bool drain_note_queue() {
     }
     if (__atomic_exchange_n(&s_voice_stop_all, false, __ATOMIC_ACQUIRE)) {
         s_voice_manager.StopAll();
+        __atomic_store_n(&s_voice_stop_ack, true, __ATOMIC_RELEASE);
+    }
+    uint16_t stop_tracks = __atomic_exchange_n(&s_voice_stop_tracks, 0u, __ATOMIC_ACQUIRE);
+    if (stop_tracks != 0) {
+        while (stop_tracks != 0) {
+            const uint8_t track = static_cast<uint8_t>(__builtin_ctz(stop_tracks));
+            s_voice_manager.StopTrack(track);
+            stop_tracks &= static_cast<uint16_t>(stop_tracks - 1u);
+        }
         __atomic_store_n(&s_voice_stop_ack, true, __ATOMIC_RELEASE);
     }
     return any_trigger;
@@ -655,20 +669,7 @@ static UINT pick_sample_load_chunk(const FIL& file) {
 // is SRAM. Main-loop only - the callback never touches it; voices hold
 // non-owning pointers into the arena, which is why every release goes
 // through the voice-stop barrier first.
-struct LoadedSampleInfo {
-    wxsamp_t handle = {};
-    uint16_t sample_id = 0;
-    uint32_t allocated_bytes = 0;
-    uint32_t loaded_bytes = 0;
-    uint32_t sample_rate = 0;
-    uint8_t channels = 0;
-    uint8_t bit_depth = 0;
-    // The authoritative record. Every playback and display path reads its
-    // markers, gain and channel mode from here, so streaming audition, RAM
-    // voices and the preview generator cannot disagree about the same sample.
-    WaveX::Protocol::SampleMetadata meta = {};
-};
-using SamplePool = WaveX::Audio::SampleRegistry<LoadedSampleInfo, WAVEX_SAMPLE_POOL_CAPACITY>;
+// LoadedSampleInfo and SamplePool: audio/sample_pool.hpp.
 static_assert(sizeof(SamplePool::Record) * WAVEX_SAMPLE_POOL_CAPACITY <=
                   WaveX::SdramLayout::kSampleRegistryBytes,
               "the Sample Pool's records must fit their SDRAM partition");
@@ -697,13 +698,6 @@ static size_t loaded_sample_count() {
     return s_pool ? s_pool->Count() : 0;
 }
 
-// "Playable" means resident PCM16, mono or stereo - the voice manager reads
-// int16 interleaved data directly; the load boundary rejects formats that do
-// not satisfy that contract.
-static bool sample_is_playable(const LoadedSampleInfo& e) {
-    return e.bit_depth == 16 && (e.channels == 1 || e.channels == 2);
-}
-
 // The SampleResolver for instruments built on-device (SfzLoader::BindSample)
 // - the bridge instrument-model.md §12.1 asks for, over this registry's ids.
 // Beyond the audio itself it hands over the sample's own resolved markers
@@ -715,7 +709,7 @@ static SampleRef ResolveLoadedSample(const void*, uint16_t sample_id) {
     SampleRef ref;
     const LoadedSampleInfo* src = find_loaded_sample(sample_id);
     void* sample_ptr = nullptr;
-    if (!src || !sample_is_playable(*src) || !s_sample_mem_mgr.ptr(src->handle, &sample_ptr) ||
+    if (!src || !SampleIsPlayable(*src) || !s_sample_mem_mgr.ptr(src->handle, &sample_ptr) ||
         !sample_ptr) {
         return ref;
     }
@@ -774,9 +768,20 @@ static void ClearSequencerVoiceMap() {
 // entry as "most recently loaded", and a swap would quietly hand it an older
 // sample.
 // Sends one sample's record. Called on load, on edit, and on request - the
-// frontend never derives these values, it is told them.
+// frontend never derives these values, it is told them. Ownership (used_by,
+// pinned) rides along from the Pool record when there is one.
 static void PushSampleMeta(const LoadedSampleInfo& info) {
-    WaveX::Comm::UartLinkSend(WaveX::Protocol::MSG_SAMPLE_META, &info.meta, sizeof(info.meta));
+    SampleMetadata wire = info.meta;
+    wire.flags = SAMPLE_META_RESIDENT;
+    if (s_pool) {
+        if (const SamplePool::Record* r = s_pool->Find(info.sample_id)) {
+            wire.used_by = r->used_by;
+            if (r->pinned) {
+                wire.flags |= SAMPLE_META_PINNED;
+            }
+        }
+    }
+    WaveX::Comm::UartLinkSend(WaveX::Protocol::MSG_SAMPLE_META, &wire, sizeof(wire));
 }
 
 // Position of the streaming audition within its region, in frames.
@@ -858,13 +863,22 @@ void SelectSample(uint16_t sample_id, uint8_t slot) {
             return;
         }
     }
-    if (!SfzLoader::BindSample(slot, sample_id)) {
-        // The one refusal BindSample has for an in-range slot. Say so: a
-        // silently ignored Select is the kind of thing a bench session
-        // spends an hour on.
+    // Whatever the Track holds is released by the bind, and an import's
+    // samples that nobody else holds are freed with it - so this Track's
+    // voices stop first. Per-track: the other fifteen keep sounding. The
+    // callback consumes the mask at the top of its next block; 10 ms is
+    // the same margin over the 1 ms block that the unload barrier uses.
+    if (SfzLoader::TrackLoaded(slot)) {
+        if (slot == kSequencerPreviewTrack) {
+            ClearSequencerVoiceMap();
+        }
+        __atomic_fetch_or(
+            &s_voice_stop_tracks, static_cast<uint16_t>(1u << slot), __ATOMIC_RELEASE);
+        System::Delay(10);
+    }
+    if (!SfzLoader::BindSample(*s_pool, s_sample_mem_mgr, slot, sample_id)) {
         WaveX::Log::PrintLine(
-            "SAMPLE_SELECT: track=%u holds an SFZ instrument - load it elsewhere first, ignored",
-            (unsigned)slot);
+            "SAMPLE_SELECT: track=%u id=%u refused", (unsigned)slot, (unsigned)sample_id);
         return;
     }
     if (slot == kSequencerPreviewTrack) {
@@ -930,6 +944,52 @@ size_t DebugLoadedSamples(uint16_t* ids, size_t cap) {
 }
 #endif
 
+// The pending page request (0xFFFF = none). One at a time: a newer request
+// replaces an older unsent one, which is what a scrolling list wants.
+static uint16_t s_meta_page_first = 0xFFFF;
+static uint8_t s_meta_page_count = 0;
+// Reply buffer: header + MAX_SAMPLE_META_PAGE records, one UART frame.
+static uint8_t
+    s_meta_page_buf[sizeof(SampleMetaPageHeader) + MAX_SAMPLE_META_PAGE * sizeof(SampleMetadata)];
+
+void RequestSampleMetaPage(uint16_t first, uint8_t count) {
+    s_meta_page_first = first;
+    s_meta_page_count =
+        count == 0 ? 1 : (count > MAX_SAMPLE_META_PAGE ? MAX_SAMPLE_META_PAGE : count);
+}
+
+// The record as the frontend should see it: the payload's meta plus the
+// Pool's ownership, which lives on the Record, not in the meta.
+static void MetaForWire(const SamplePool::Record& r, SampleMetadata& out) {
+    out = r.payload.meta;
+    out.used_by = r.used_by;
+    out.flags = SAMPLE_META_RESIDENT | (r.pinned ? SAMPLE_META_PINNED : 0);
+}
+
+static void PumpSampleMetaPage() {
+    if (s_meta_page_first == 0xFFFF) {
+        return;
+    }
+    SamplePool::Record* page[MAX_SAMPLE_META_PAGE];
+    size_t total = 0;
+    const size_t n = s_pool ? s_pool->Page(s_meta_page_first, s_meta_page_count, page, &total) : 0;
+    auto* header = reinterpret_cast<SampleMetaPageHeader*>(s_meta_page_buf);
+    *header = SampleMetaPageHeader();
+    header->total = static_cast<uint16_t>(total);
+    header->first = s_meta_page_first;
+    header->n = static_cast<uint8_t>(n);
+    auto* records =
+        reinterpret_cast<SampleMetadata*>(s_meta_page_buf + sizeof(SampleMetaPageHeader));
+    for (size_t i = 0; i < n; ++i) {
+        MetaForWire(*page[i], records[i]);
+    }
+    const size_t bytes = sizeof(SampleMetaPageHeader) + n * sizeof(SampleMetadata);
+    if (WaveX::Comm::UartLinkSend(MSG_SAMPLE_META_PAGE, s_meta_page_buf, bytes) < 0) {
+        return;  // queue full: try again next pass
+    }
+    s_meta_page_first = 0xFFFF;
+}
+
 void PushTrackBinding(uint8_t track) {
     if (track == 0xFF) {
         s_track_binding_pending = 0xFFFF;
@@ -939,6 +999,7 @@ void PushTrackBinding(uint8_t track) {
 }
 
 void PumpTrackBinding() {
+    PumpSampleMetaPage();
     // Two per iteration leaves room in the 4-deep queue for the status and
     // meter traffic this same loop sends. A full queue keeps the bit set, so
     // the reply is delayed rather than lost.
@@ -1011,41 +1072,6 @@ bool UnloadSample(uint16_t sample_id) {
 // Defined with the envelope job below; declared here because loading is the
 // one event that can pull the audio out from under a scan in flight.
 static void CancelEnvelopeJob();
-
-// Fills an admitted Pool record once its audio is resident. Markers default
-// to the whole sample and gain to unity, so an unedited sample behaves as it
-// always has; every later change goes through SetEditParams, which
-// re-pushes. generation (the frontend's envelope-cache key) starts at 0: a
-// Pool id names one file for its whole life, so content never changes under
-// an id - a different file is a different id.
-static void fill_loaded_sample(LoadedSampleInfo& info,
-                               uint16_t sample_id,
-                               const char* path,
-                               const ResidentSampleInfo& resident,
-                               const wxsamp_t& handle) {
-    CancelEnvelopeJob();
-
-    info = LoadedSampleInfo{};
-    info.sample_id = sample_id;
-    info.handle = handle;
-    info.allocated_bytes = handle.len ? handle.len : resident.data_size;
-    info.loaded_bytes = 0;
-    info.sample_rate = resident.sample_rate;
-    info.channels = resident.channels;
-    info.bit_depth = resident.bit_depth;
-
-    info.meta = WaveX::Protocol::SampleMetadata();
-    info.meta.sample_id = sample_id;
-    info.meta.sample_rate = resident.sample_rate;
-    info.meta.total_frames = resident.total_frames;
-    info.meta.end_frame = info.meta.total_frames;
-    info.meta.loop_end = info.meta.total_frames;
-    info.meta.channels = resident.channels;
-    info.meta.bits_per_sample = resident.bit_depth;
-    info.meta.channel_mode = WaveX::Protocol::SAMPLE_CH_AS_RECORDED;
-    info.meta.flags = 1;  // resident
-    WaveX::Protocol::detail::CopyWireString(info.meta.name, sizeof(info.meta.name), path);
-}
 
 // Thread-safe single-producer (main loop) / single-consumer (audio IRQ) ring buffer of interleaved
 // q15_t frames Uses ARM Cortex-M7 atomic operations and memory barriers for race-condition-free
@@ -2882,7 +2908,10 @@ void PumpEnvelopeJob() {
 }
 
 bool LoadSfzInstrument(const char* path, uint8_t slot) {
-    return SfzLoader::Load(path, slot, s_sample_mem_mgr, s_sample_io, sizeof(s_sample_io));
+    if (!s_pool) {
+        return false;
+    }
+    return SfzLoader::Load(path, slot, *s_pool, s_sample_mem_mgr, s_sample_io, sizeof(s_sample_io));
 }
 
 void OnInstrumentOp(const InstOpMessage& request) {
@@ -2911,16 +2940,23 @@ void OnInstrumentOp(const InstOpMessage& request) {
 }
 
 void PumpInstrumentLoad() {
+    if (!s_pool) {
+        return;
+    }
     static bool stop_requested = false;
-    if (SfzLoader::NeedsVoiceStop()) {
+    const uint8_t stop_track = SfzLoader::VoiceStopTrack();
+    if (stop_track != 0xFF) {
+        // Per-track barrier: only the Track being (re)loaded stops; what it
+        // held is released on the callback's acknowledgement.
         if (!stop_requested) {
             __atomic_store_n(&s_voice_stop_ack, false, __ATOMIC_RELAXED);
-            __atomic_store_n(&s_voice_stop_all, true, __ATOMIC_RELEASE);
+            __atomic_fetch_or(
+                &s_voice_stop_tracks, static_cast<uint16_t>(1u << stop_track), __ATOMIC_RELEASE);
             stop_requested = true;
             return;
         }
         if (__atomic_exchange_n(&s_voice_stop_ack, false, __ATOMIC_ACQUIRE)) {
-            SfzLoader::ConfirmVoicesStopped(s_sample_mem_mgr);
+            SfzLoader::ConfirmVoicesStopped(*s_pool, s_sample_mem_mgr);
             stop_requested = false;
         }
         return;
@@ -2928,7 +2964,7 @@ void PumpInstrumentLoad() {
     stop_requested = false;
     const bool preview_was_loading = SfzLoader::TrackLoading(kSequencerPreviewTrack);
     const bool was_busy = SfzLoader::Busy();
-    SfzLoader::Pump(s_sample_mem_mgr, s_sample_io, sizeof(s_sample_io));
+    SfzLoader::Pump(*s_pool, s_sample_mem_mgr, s_sample_io, sizeof(s_sample_io));
     // The loader publishes its new slot binding only when its state machine
     // reaches Idle. Rebuild the callback-owned snapshot at that transition;
     // rebuilding during the load would expose incomplete sample pointers.
@@ -3171,8 +3207,8 @@ void OnSampleLoad(const SampleLoadMessage& sl) {
 
     f_close(&file);
 
-    fill_loaded_sample(record->payload, sample_id, sl.path, resident, handle);
-    record->payload.loaded_bytes = data_size;
+    CancelEnvelopeJob();
+    FillLoadedSample(record->payload, sample_id, sl.path, resident, handle);
     // The user asked for it by name: only an explicit unload releases it.
     s_pool->SetPinned(sample_id, true);
     s_pool->NoteNewest(sample_id);

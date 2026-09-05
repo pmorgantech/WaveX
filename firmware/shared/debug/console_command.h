@@ -224,16 +224,29 @@ inline size_t FormatErr(int32_t seq, const char* reason, char* out, size_t cap) 
 
 /// Appends " key=value" to a reply under construction. Values are written
 /// verbatim, so callers must not pass values containing spaces (the host
-/// splits on them); use AppendKvQuoted for free text.
+/// splits on them); use AppendKvText for free text.
 inline size_t AppendKv(char* out, size_t cap, size_t len, const char* key, const char* value) {
-    if (len >= cap) {
+    if (cap == 0 || len + 1 >= cap) {
         return len;
     }
-    const int n = std::snprintf(out + len, cap - len, " %s=%s", key, value ? value : "");
-    if (n < 0) {
+    // Formatted into a bounded scratch first, then copied by length: keeps
+    // the truncation arithmetic in one place and the compiler's
+    // format-truncation analysis quiet at every inlined call site.
+    char pair[160];
+    const int n = std::snprintf(pair, sizeof(pair), " %s=%s", key, value ? value : "");
+    if (n <= 0) {
         return len;
     }
-    return (len + static_cast<size_t>(n) >= cap) ? cap - 1 : len + static_cast<size_t>(n);
+    size_t take = static_cast<size_t>(n);
+    if (take >= sizeof(pair)) {
+        take = sizeof(pair) - 1;
+    }
+    if (take > cap - 1 - len) {
+        take = cap - 1 - len;
+    }
+    std::memcpy(out + len, pair, take);
+    out[len + take] = '\0';
+    return len + take;
 }
 
 inline size_t AppendKvInt(char* out, size_t cap, size_t len, const char* key, long value) {

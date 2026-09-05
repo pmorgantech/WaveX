@@ -84,6 +84,10 @@ void PushTrackBinding(uint8_t track) {
     WaveX::Test::GetDispatchRecord().track_binding_requests.push_back(track);
 }
 
+void RequestSampleMetaPage(uint16_t first, uint8_t count) {
+    WaveX::Test::GetDispatchRecord().meta_page_requests.push_back({first, count});
+}
+
 bool UnloadSample(uint16_t sample_id) {
     WaveX::Test::GetDispatchRecord().unloaded_samples.push_back(sample_id);
     return sample_id != 0;  // mirrors the engine: 0 is rejected, not a wildcard

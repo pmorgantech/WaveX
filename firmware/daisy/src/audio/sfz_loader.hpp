@@ -8,6 +8,7 @@
 
 #include "instrument.hpp"
 #include "mod_matrix.hpp"
+#include "sample_pool.hpp"
 #include "voice_manager.hpp"
 #include <cstdint>
 
@@ -17,18 +18,30 @@ namespace WaveX {
 namespace AudioEngine {
 namespace SfzLoader {
 
+// Every sample an import loads is a Sample Pool entry
+// (track-and-patch-model.md §4, audio/sample_pool.hpp): shared by path with
+// other imports and with samples the user loaded, listable, editable, and
+// released per Track - a Track that holds an import can take a bare sample
+// (a deref), and two imports on two Tracks share what they have in common.
+// The engine owns the Pool and the allocator and hands both in; this file
+// owns the Tracks and the load state machine. Main-loop only.
+
 void Reset();
 bool Begin(const WaveX::Protocol::InstOpMessage& request);
-void Pump(SampleMemMgr& memory, uint8_t* io_buffer, uint32_t io_buffer_bytes);
+void Pump(SamplePool& pool, SampleMemMgr& memory, uint8_t* io_buffer, uint32_t io_buffer_bytes);
 bool Busy();
 bool TrackLoading(uint8_t track);
-bool NeedsVoiceStop();
-void ConfirmVoicesStopped(SampleMemMgr& memory);
+// The Track whose voices must be hard-stopped before the load can release
+// what that Track held, or 0xFF when no stop is pending. The engine asks the
+// callback to StopTrack() it and calls ConfirmVoicesStopped() on the ack.
+uint8_t VoiceStopTrack();
+void ConfirmVoicesStopped(SamplePool& pool, SampleMemMgr& memory);
 
 // Boot compatibility: runs the same cooperative state machine to completion
 // before audio starts. request_id 0 suppresses frontend status messages.
 bool Load(const char* path,
           uint8_t track,
+          SamplePool& pool,
           SampleMemMgr& memory,
           uint8_t* io_buffer,
           uint32_t io_buffer_bytes);
@@ -44,14 +57,19 @@ bool TrackLoaded(uint8_t track);
 // (ZONE_FLAG_LIVE_FILTER_ENV) - exactly what the retired bare-WAV note path
 // did, now as editable zone state rather than constants in the note path.
 //
-// sample_id is a WAV-registry id (MSG_SAMPLE_LOAD's), resolved through the
-// resolver the engine registers with SetLoadedSampleResolver(). sample_id 0
-// unbinds. Refused (false) when the Track holds an SFZ import: its samples
-// are owned by this loader and can only be released through the load
-// handshake (NeedsVoiceStop/ConfirmVoicesStopped), which a plain bind must
-// not trigger - load another .sfz elsewhere or reboot to free it. Keeps the
-// Track's mod slots either way; a bind is not an edit of them.
-bool BindSample(uint8_t track, uint16_t sample_id, uint8_t root_note = 60);
+// sample_id is a Pool id. sample_id 0 unbinds. Whatever the Track held -
+// a bare sample or an import - is released: its Pool refs are dropped and
+// any sample nobody else holds is freed, which is why the CALLER must have
+// stopped the Track's voices first (the engine's per-track barrier). Keeps
+// the Track's mod slots either way; a bind is not an edit of them.
+bool BindSample(SamplePool& pool,
+                SampleMemMgr& memory,
+                uint8_t track,
+                uint16_t sample_id,
+                uint8_t root_note = 60);
+// Bytes the Pool would free if `track` released what it holds: samples only
+// this Track references and the user did not pin.
+uint32_t ReclaimableBytes(SamplePool& pool, uint8_t track);
 // The registry id a Built Track's first zone plays, else 0.
 uint16_t BoundSample(uint8_t track);
 
@@ -61,10 +79,13 @@ uint16_t BoundSample(uint8_t track);
 // the Track holds nothing, or holds a Built instrument whose name is the
 // bound sample's own metadata and already known to the frontend.
 const char* TrackName(uint8_t track);
-// A WAV-registry sample is going away: drop every Built zone that names
-// it (and the Track's binding if that empties it), so no note resolves to a
-// freed block. The engine calls this before it releases the memory.
+// A Pool sample is going away (the user unloaded it): drop every zone on
+// every Track that names it (and the Track's binding if that empties it), so
+// no note resolves to a freed block. The engine calls this before it
+// releases the memory.
 void ForgetLoadedSample(uint16_t sample_id);
+// The one resolver, over the Pool, registered by the engine because the
+// allocator that turns a handle into a pointer lives there.
 void SetLoadedSampleResolver(const SampleResolver& resolver);
 
 // `live` feeds ZONE_FLAG_LIVE_FILTER_ENV zones; nullptr is allowed.

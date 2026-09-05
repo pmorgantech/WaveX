@@ -44,6 +44,14 @@ def pytest_addoption(parser):
         help="card path of a short PCM16 WAV the Load tests use",
     )
     parser.addoption(
+        "--hil-sfz",
+        default=os.environ.get(
+            "WAVEX_HIL_SFZ",
+            "/99 - Vintage Sound Library/Minimoog/Saw_Synth_Bass.sfz",
+        ),
+        help="card path of a small .sfz the Instrument tests import",
+    )
+    parser.addoption(
         "--hil-sample2",
         default=os.environ.get(
             "WAVEX_HIL_SAMPLE2",
@@ -106,6 +114,11 @@ def sample_path(request):
 @pytest.fixture
 def sample_path2(request):
     return request.config.getoption("--hil-sample2")
+
+
+@pytest.fixture
+def sfz_path(request):
+    return request.config.getoption("--hil-sfz")
 
 
 @pytest.fixture

@@ -11,7 +11,9 @@ namespace Protocol {
 #define WAVEX_SAMPLE_STATUS_MAX_ENTRIES 8
 
 // Protocol constants
-static const uint32_t PROTOCOL_VERSION = 1;
+// 2 (2026-09-05): SampleMetadata grew `used_by` (88 -> 90 B) for the Sample
+// Pool; MSG_SAMPLE_META_PAGE_REQ/PAGE added.
+static const uint32_t PROTOCOL_VERSION = 2;
 
 // Wire layout (review M10: a packed `WaveXPacket` struct used to "document"
 // this but placed `crc` at offset 4 while the wire puts it at the packet
@@ -120,6 +122,14 @@ enum MessageType : uint8_t {
     // Track (or all Tracks); replies are one compact state record per Track.
     MSG_TRACK_BINDING_REQ = 0x47,  // ESP32 -> Daisy: request Track binding state
     MSG_TRACK_BINDING = 0x48,      // Daisy -> ESP32: Track binding state
+    // The Sample Pool is paged, not mirrored (track-and-patch-model.md §4):
+    // 1024 records is more than the link should push eagerly and more than
+    // the frontend wants to hold. One request names a window of resident
+    // records in registry order; ONE reply carries the whole window, so a
+    // 20-row page cannot be lost to the backend's 4-deep TX queue the way
+    // 20 separate MSG_SAMPLE_META would be.
+    MSG_SAMPLE_META_PAGE_REQ = 0x49,  // ESP32 -> Daisy: {first, count}
+    MSG_SAMPLE_META_PAGE = 0x4A,      // Daisy -> ESP32: header + count records
     // Sequencer / transport / MIDI clock (Phase 2; docs/features/sequencer.md,
     // midi-sync-tempo-follower.md, melodic-sequencing.md). ID block reserved in
     // docs/features/inter-mcu-protocol.md - do not assign outside this block.
@@ -656,8 +666,12 @@ struct SampleMetadata {
     uint8_t bits_per_sample;  // 8 / 16 / 24
     uint8_t loop_enabled;
     uint8_t channel_mode;  // SampleChannelMode
-    uint8_t flags;         // bit 0 = resident in sample RAM
+    uint8_t flags;         // SampleMetaFlags
     uint8_t reserved;
+    // Which Tracks' Instruments reference this sample (bit t = Track t) -
+    // the Sample Manager's "used by" column, and what decides whether an
+    // unbind frees it. Filled by the Pool at send time; ignored on receive.
+    uint16_t used_by;
 
     char name[FILE_NAME_MAX];
 
@@ -678,7 +692,8 @@ struct SampleMetadata {
           loop_enabled(0),
           channel_mode(SAMPLE_CH_AS_RECORDED),
           flags(0),
-          reserved(0) {
+          reserved(0),
+          used_by(0) {
         name[0] = '\0';
     }
 
@@ -697,6 +712,36 @@ struct SampleMetadata {
             loop_start = start_frame;
         }
     }
+} __attribute__((packed));
+
+enum SampleMetaFlags : uint8_t {
+    SAMPLE_META_RESIDENT = 0x01,  // clear = the record is gone (an unload)
+    SAMPLE_META_PINNED = 0x02,    // the user loaded it; only an unload frees it
+};
+
+// One window of the Sample Pool, in registry order. `first` counts resident
+// records (not registry slots); `count` is capped at MAX_SAMPLE_META_PAGE so
+// the reply fits one UART frame.
+static const size_t MAX_SAMPLE_META_PAGE = 20;
+
+struct SampleMetaPageReqMessage {
+    uint16_t first;
+    uint8_t count;
+    uint8_t reserved;
+
+    SampleMetaPageReqMessage() : first(0), count(0), reserved(0) {}
+    SampleMetaPageReqMessage(uint16_t first_, uint8_t count_)
+        : first(first_), count(count_), reserved(0) {}
+} __attribute__((packed));
+
+// Followed in the same payload by `n` packed SampleMetadata records.
+struct SampleMetaPageHeader {
+    uint16_t total;  // resident records in the Pool right now
+    uint16_t first;  // index of the first record that follows
+    uint8_t n;       // records that follow (0 when `first` is past the end)
+    uint8_t reserved[3];
+
+    SampleMetaPageHeader() : total(0), first(0), n(0), reserved{0, 0, 0} {}
 } __attribute__((packed));
 
 // Request a metadata resend. sample_id 0 means "every loaded sample", which
@@ -1875,6 +1920,10 @@ inline const char* MessageTypeName(uint8_t type) {
             return "TRACK_BINDING_REQ";
         case MSG_TRACK_BINDING:
             return "TRACK_BINDING";
+        case MSG_SAMPLE_META_PAGE_REQ:
+            return "SAMPLE_META_PAGE_REQ";
+        case MSG_SAMPLE_META_PAGE:
+            return "SAMPLE_META_PAGE";
         case MSG_SEQ_TRANSPORT:
             return "SEQ_TRANSPORT";
         case MSG_SEQ_PATTERN_OP:

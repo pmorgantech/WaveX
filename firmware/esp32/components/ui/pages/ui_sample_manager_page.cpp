@@ -75,9 +75,11 @@ void UISampleManagerPage::onEnter(lv_obj_t* parent) {
     lv_obj_set_pos(detail_label_, 794, 34);
     lv_label_set_text(detail_label_, "");
 
-    // The backend pushes metadata on load/edit/unload, but a page opened later
-    // has missed those, so ask for the current set on entry.
-    inter_mcu_request_sample_meta(0);
+    // The list is a window on the Pool, asked for on entry and every refresh
+    // tick; single-record pushes (load/edit/unload) keep the detail view
+    // current between pages.
+    page_first_ = 0;
+    requestPage();
     inter_mcu_request_sample_mem_status();
     inter_mcu_request_track_binding(getCurrentTrack());
 
@@ -114,9 +116,14 @@ void UISampleManagerPage::refreshTimerCb(lv_timer_t* timer) {
     auto* self = static_cast<UISampleManagerPage*>(lv_timer_get_user_data(timer));
     if (self) {
         inter_mcu_request_track_binding(getCurrentTrack());
+        self->requestPage();
         self->rebuildList();
         self->refreshDetail();
     }
+}
+
+void UISampleManagerPage::requestPage() {
+    inter_mcu_request_sample_meta_page(page_first_, static_cast<uint8_t>(kMaxRows));
 }
 
 const UISampleManagerPage::Row* UISampleManagerPage::focusedRow() const {
@@ -131,11 +138,18 @@ void UISampleManagerPage::rebuildList() {
         return;
     }
 
-    // Snapshot the cache first so the row set cannot change under the rebuild.
-    // Pool ids name their registry slot (bits 10..15 are a generation), so
-    // they are not small integers to probe; the cache is listed as it is.
+    // The last page the Daisy sent for this window. Snapshot it first so the
+    // row set cannot change under the rebuild.
     WaveX::Protocol::SampleMetadata metas[kMaxRows];
-    int count = static_cast<int>(inter_mcu_sample_meta_snapshot(metas, kMaxRows));
+    uint16_t total = 0;
+    uint16_t first = 0;
+    int count = static_cast<int>(inter_mcu_get_sample_meta_page(metas, kMaxRows, &total, &first));
+    if (first != page_first_) {
+        // A page for a window we have since scrolled away from: keep the rows
+        // until ours arrives rather than flash an empty list.
+        count = -1;
+    }
+    pool_total_ = total;
 
     WaveX::Protocol::TrackBindingMessage binding;
     const uint16_t bound_id = inter_mcu_get_track_binding(getCurrentTrack(), &binding) &&
@@ -153,18 +167,26 @@ void UISampleManagerPage::rebuildList() {
     // Manager cannot see an SFZ import's samples" - fixed properly by the
     // shared registry in track-and-patch-model.md §4; this is a status line
     // until then).
+    if (count < 0) {
+        return;
+    }
     if (status_label_) {
-        if (count > 0) {
-            char s[64];
-            snprintf(s, sizeof(s), "%d sample%s resident", count, count == 1 ? "" : "s");
+        if (total > 0) {
+            char s[80];
+            if (total > kMaxRows) {
+                snprintf(s,
+                         sizeof(s),
+                         "%u samples resident - showing %u-%u",
+                         (unsigned)total,
+                         (unsigned)(page_first_ + 1),
+                         (unsigned)(page_first_ + count));
+            } else {
+                snprintf(
+                    s, sizeof(s), "%u sample%s resident", (unsigned)total, total == 1 ? "" : "s");
+            }
             lv_label_set_text(status_label_, s);
         } else {
-            WaveX::Protocol::SampleMemStatusMessage mem{};
-            inter_mcu_get_sample_mem_status(&mem);
-            lv_label_set_text(status_label_,
-                              mem.in_use_bytes > 0
-                                  ? "An SFZ import is resident - its samples aren't listable yet"
-                                  : "No samples in RAM - load one from Browse");
+            lv_label_set_text(status_label_, "No samples in RAM - load one from Browse");
         }
     }
 
@@ -215,15 +237,27 @@ void UISampleManagerPage::rebuildList() {
 
         char dur[16];
         format_frames(m.total_frames, m.sample_rate, dur, sizeof(dur));
-        char line[160];
+        // "used by": the Tracks whose Instrument references it (§4), 1-based
+        // like every Track on screen; a pinned sample the user loaded shows
+        // that too, since that is what keeps it resident with no user.
+        char used[40] = {};
+        size_t ul = 0;
+        for (uint8_t t = 0; t < 16 && ul + 4 < sizeof(used); ++t) {
+            if (m.used_by & (1u << t)) {
+                ul += static_cast<size_t>(snprintf(
+                    used + ul, sizeof(used) - ul, "%sT%u", ul ? "," : "  ", trackDisplayNumber(t)));
+            }
+        }
+        char line[200];
         snprintf(line,
                  sizeof(line),
-                 "%u  %.40s   %u-bit %s  %s%s",
-                 (unsigned)m.sample_id,
+                 "%.40s   %u-bit %s  %s%s%s%s",
                  m.name,
                  (unsigned)m.bits_per_sample,
                  m.channels == 2 ? "stereo" : "mono",
                  dur,
+                 used,
+                 (m.flags & WaveX::Protocol::SAMPLE_META_PINNED) ? "  [loaded]" : "",
                  meta_is_playable(m) ? "" : "   [not playable]");
         lv_label_set_text(label, line);
         lv_obj_set_style_text_color(
@@ -234,6 +268,8 @@ void UISampleManagerPage::rebuildList() {
         rows_[i].btn = btn;
         rows_[i].label = label;
         rows_[i].sample_id = m.sample_id;
+        rows_[i].used_by = m.used_by;
+        rows_[i].pinned = (m.flags & WaveX::Protocol::SAMPLE_META_PINNED) != 0;
         rows_[i].playable = meta_is_playable(m);
         ++row_count_;
     }
@@ -271,7 +307,7 @@ void UISampleManagerPage::refreshDetail() {
     } else if (track_holds_patch) {
         snprintf(action,
                  sizeof(action),
-                 "Track %u holds Instrument %.24s - Assign is refused here.",
+                 "Track %u holds Instrument %.24s - Assign replaces it (asks first).",
                  trackDisplayNumber(getCurrentTrack()),
                  binding.name[0] ? binding.name : "(unnamed)");
     } else {
@@ -314,8 +350,28 @@ void UISampleManagerPage::moveFocus(int delta) {
     if (row_count_ == 0) {
         return;
     }
-    focus_ = (focus_ + delta + row_count_) % row_count_;
     confirm_assign_id_ = 0;  // the question was about the row that had focus
+    // Past either end of the page: turn it, wrapping around the whole Pool
+    // the way a single page always wrapped. The rows change when the next
+    // page lands; until then the focus sits at the edge.
+    const int next = focus_ + delta;
+    if (next >= row_count_) {
+        const bool more = page_first_ + row_count_ < pool_total_;
+        page_first_ = more ? static_cast<uint16_t>(page_first_ + kMaxRows) : 0;
+        focus_ = 0;
+        requestPage();
+    } else if (next < 0) {
+        if (page_first_ > 0) {
+            page_first_ =
+                static_cast<uint16_t>(page_first_ >= kMaxRows ? page_first_ - kMaxRows : 0);
+        } else if (pool_total_ > kMaxRows) {
+            page_first_ = static_cast<uint16_t>(((pool_total_ - 1) / kMaxRows) * kMaxRows);
+        }
+        focus_ = kMaxRows - 1;  // clamped to the page's row count once it lands
+        requestPage();
+    } else {
+        focus_ = next;
+    }
     rebuildList();
     refreshDetail();
 }
@@ -345,42 +401,45 @@ void UISampleManagerPage::assignFocused() {
         }
         return;
     }
-    // A Track holding an SFZ Instrument refuses a bare-sample bind on the backend
-    // (SfzLoader::BindSample): the import owns its samples and can only
-    // release them through the load handshake. That refusal used to reach
-    // nothing but the Daisy log, so Assign looked broken rather than
-    // declined - say which Track and why, here, before sending.
     WaveX::Protocol::TrackBindingMessage current;
     const bool known = inter_mcu_get_track_binding(getCurrentTrack(), &current);
-    if (known && (current.state == WaveX::Protocol::TRACK_BINDING_PATCH ||
-                  current.state == WaveX::Protocol::TRACK_BINDING_LOADING)) {
+    if (known && current.state == WaveX::Protocol::TRACK_BINDING_LOADING) {
         if (status_label_) {
-            char msg[128];
-            snprintf(msg,
-                     sizeof(msg),
-                     "Track %u holds Instrument %.24s - Assign refused; pick another Track",
-                     trackDisplayNumber(getCurrentTrack()),
-                     current.name[0] ? current.name : "(unnamed)");
-            lv_label_set_text(status_label_, msg);
+            lv_label_set_text(status_label_,
+                              "Track is still loading an Instrument - wait, or pick another");
         }
         return;
     }
     // Replacing is always confirmed (§6.2): a Track that holds a different
-    // sample asks once. Re-binding the same sample is a no-op and needs no
-    // question; an empty Track needs none either.
-    const bool occupied = known && current.state == WaveX::Protocol::TRACK_BINDING_SAMPLE &&
-                          current.sample_id != row->sample_id;
+    // sample, or an Instrument, asks once. With the Sample Pool an import's
+    // samples are released per Track, so replacing an Instrument with a
+    // sample is an ordinary bind - one the user cannot undo, hence the
+    // question. Re-binding the same sample is a no-op and needs none; an
+    // empty Track needs none either.
+    const bool holds_instrument = known && current.state == WaveX::Protocol::TRACK_BINDING_PATCH;
+    const bool occupied =
+        holds_instrument || (known && current.state == WaveX::Protocol::TRACK_BINDING_SAMPLE &&
+                             current.sample_id != row->sample_id);
     if (occupied && confirm_assign_id_ != row->sample_id) {
         confirm_assign_id_ = row->sample_id;
         if (status_label_) {
-            WaveX::Protocol::SampleMetadata m;
-            const bool named = inter_mcu_get_sample_meta(current.sample_id, &m) && m.name[0];
+            char what[48];
+            if (holds_instrument) {
+                snprintf(what,
+                         sizeof(what),
+                         "Instrument %.24s",
+                         current.name[0] ? current.name : "(unnamed)");
+            } else {
+                WaveX::Protocol::SampleMetadata m;
+                const bool named = inter_mcu_get_sample_meta(current.sample_id, &m) && m.name[0];
+                snprintf(what, sizeof(what), "%.40s", named ? m.name : "a sample");
+            }
             char msg[160];
             snprintf(msg,
                      sizeof(msg),
-                     "Track %u holds %.32s - press Assign again to replace it",
+                     "Track %u holds %s - press Assign again to replace it",
                      trackDisplayNumber(getCurrentTrack()),
-                     named ? m.name : "a sample");
+                     what);
             lv_label_set_text(status_label_, msg);
         }
         return;
@@ -464,7 +523,7 @@ std::array<Softkey, NUM_SOFTKEYS> UISampleManagerPage::getSoftkeys() {
     keys[3] = {"Up", [this]() { moveFocus(-1); }};
     keys[4] = {"Down", [this]() { moveFocus(+1); }};
     keys[5] = {"Refresh", [this]() {
-                   inter_mcu_request_sample_meta(0);
+                   requestPage();
                    inter_mcu_request_sample_mem_status();
                    inter_mcu_request_track_binding(getCurrentTrack());
                }};
@@ -486,7 +545,11 @@ size_t UISampleManagerPage::consoleState(char* out, size_t cap, size_t len) {
     using namespace WaveX::Debug;
     const Row* row = focusedRow();
     len = AppendKvInt(out, cap, len, "rows", row_count_);
+    len = AppendKvInt(out, cap, len, "total", pool_total_);
+    len = AppendKvInt(out, cap, len, "first", page_first_);
     len = AppendKvInt(out, cap, len, "focusid", row ? row->sample_id : 0);
+    len = AppendKvInt(out, cap, len, "focusused", row ? row->used_by : 0);
+    len = AppendKvInt(out, cap, len, "focuspinned", row && row->pinned ? 1 : 0);
     len = AppendKvText(
         out, cap, len, "status", status_label_ ? lv_label_get_text(status_label_) : "");
     return len;

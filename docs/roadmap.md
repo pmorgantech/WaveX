@@ -82,32 +82,28 @@ remain MIDI-clock-synced to a DAW for ten minutes without audible drift.
 The model core, SFZ import, WXCF container, the shared selected Track, and
 parts of the mixer/modulation path are built. The end state is
 `features/track-and-patch-model.md` (Track / Instrument / Bank / Sample Pool;
-the two-oscillator Instrument is designed there, §3). Stages 1 (rename) and
-2 (Load-to-Track) are done. Open work, in that document's stage numbering:
+the two-oscillator Instrument is designed there, §3). Stages 1 (rename),
+2 (Load-to-Track) and 3 (Sample Pool) are done. Open work, in that document's
+stage numbering:
 
-1. Sample Pool (stage 3): one indexed 1024-entry registry in SDRAM, refcount
-   by path, per-Track voice stop, paged metadata, "used by"; no silent
-   eviction. Also what lets a sample replace an imported Instrument on a
-   Track, which Load and Assign currently refuse.
-2. Instrument file and editors (stage 4): `.wxi` with the full chunk set,
+1. Instrument file and editors (stage 4): `.wxi` with the full chunk set,
    Init/Save/Name ops, Pad Map and Key Map (with Sample Manager "to pad"),
    Instrument Browser, Track page.
-3. Voice architecture (stage 5): typed oscillators, Osc 2 + submix, filter
+2. Voice architecture (stage 5): typed oscillators, Osc 2 + submix, filter
    type, Env 3, two per-voice LFOs, new mod destinations —
    DWT-measured at `WAVEX_NUM_VOICES` before the count is changed.
-4. Bank (stage 6): `.wxb`, Bank page, Program Change recall.
-5. Track model and MIDI routing (stage 7), then polyphony policy (stage 8).
-6. Finish Mixer v1: UI/solo behavior, meter subscription, and hardware click
+3. Bank (stage 6): `.wxb`, Bank page, Program Change recall.
+4. Track model and MIDI routing (stage 7), then polyphony policy (stage 8).
+5. Finish Mixer v1: UI/solo behavior, meter subscription, and hardware click
    and soak tests.
-7. Add melodic sequencing, chord/tie handling, step/live record, and erase.
-8. Complete modulation: p-lock application, MIDI CC/channel-pressure
+6. Add melodic sequencing, chord/tie handling, step/live record, and erase.
+7. Complete modulation: p-lock application, MIDI CC/channel-pressure
    forwarding, and modulation UI (the per-voice LFOs and zone filter ADSR
    move into stage 5).
-9. Build sampling/recording v1 and the arpeggiator.
+8. Build sampling/recording v1 and the arpeggiator.
 
 The order in which stages 4–7 are taken up is **not yet decided** (model doc
-§9 item 19); stage 3 comes first because the 2026-09-03 bench session is
-blocked on it.
+§9 item 19); nothing on the bench is blocked on any of them.
 
 **Gate:** from power-on, hear a card sample on the Keys in four taps; build a
 16-pad kit and a multisampled keyboard Instrument on-device and save both;
@@ -158,7 +154,7 @@ The following code paths are open until observed on the target:
 | Sample Edit | Verify waveform fetch, handles, loop seam, browser detail waveform, and stereo readability. |
 | Settings and input | Verify brightness, scrolling, MIDI channel filtering, keypad, encoder direction, and UI responsiveness. |
 | UI concurrency | Measure LVGL lock/refresh behavior during encoder bursts and sample loading. |
-| Load-to-Track (2026-09-04) | Automated: `make test-hil` (`tests/hil/test_load_to_track.py`) covers Load onto an empty Track and a note sounding on it, the replace picker (cancel, confirm, Track -/+), Sample Manager Assign's confirm, and a failed load's reason crossing the link. Still manual: Load onto a Track holding an `.sfz` Instrument (needs an `.sfz` on the bench card), and *hearing* the Keys. |
+| Load-to-Track and the Sample Pool (2026-09-04/05) | Automated: `make test-hil` (`tests/hil/test_load_to_track.py`, `test_sample_pool.py`) covers Load onto an empty Track and a note sounding on it, the replace picker (cancel, confirm, Track -/+), Assign's confirm, a failed load's reason crossing the link, one file loaded twice being one Pool entry, an import's samples in the Pool and playing, two imports of one file set sharing it, a sample replacing an import and freeing what only it held, and the Sample Manager paging a Pool larger than one page. Still manual: *hearing* the Keys, and a Pool-full / arena-full refusal (no card holds 1024 samples or 60 MB of small ones). |
 | Image slimming (2026-09-04) | Boot, mount SD, stream a WAV, trigger RAM voices and run the sequencer on the 273 KB image: large callback/loader state is now constructed at startup (`bss_static.hpp`) instead of copied from `.data`, the SD volume links `SD_Driver` directly, and `UART_LOGx` lines should now appear in the log. DWT-measure `Render()` with region fades set (the per-sample 64-bit divide is gone; expect a drop, no number yet). |
 
 ## Rules for every phase

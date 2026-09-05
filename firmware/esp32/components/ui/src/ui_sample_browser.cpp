@@ -441,19 +441,15 @@ std::array<Softkey, NUM_SOFTKEYS> UISampleBrowser::getSoftkeys() {
                        }
                        refreshSoftkeys();
                    }};
-        // A sample cannot take over a Track that holds an imported Instrument:
-        // the import owns its samples and only the load handshake releases
-        // them (SfzLoader::BindSample refuses). Until the Sample Pool (model
-        // doc §4) that Track is simply not a valid target, and the picker
-        // says so rather than sending a bind the Daisy will ignore.
+        // A Track that is still loading an import is not a target until it
+        // has finished: the load owns the Track's refs until Commit. (A Track
+        // that HOLDS an import is fine - with the Sample Pool, replacing it
+        // with a sample is a per-track release behind the prompt above.)
         WaveX::Protocol::TrackBindingMessage binding;
-        if (pending_load_ == PendingLoad::Sample &&
-            inter_mcu_get_track_binding(target_track_, &binding) &&
-            (binding.state == WaveX::Protocol::TRACK_BINDING_PATCH ||
-             binding.state == WaveX::Protocol::TRACK_BINDING_LOADING)) {
+        if (inter_mcu_get_track_binding(target_track_, &binding) &&
+            binding.state == WaveX::Protocol::TRACK_BINDING_LOADING) {
             keys[3].enabled = false;
-            keys[3].why =
-                "Holds an Instrument - a sample cannot replace it yet; pick another Track";
+            keys[3].why = "Still loading an Instrument - wait, or pick another Track";
         }
         return keys;
     }

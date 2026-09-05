@@ -202,8 +202,8 @@ TEST(SfzMapperTest, MapsSupportedOpcodesAndUnitConversions) {
                      "ampeg_decay=0.2 ampeg_sustain=75 ampeg_release=0.4 sample=tone.wav"});
 
     ASSERT_EQ(mapped.zone_count, 1);
-    // An import's ids index the loader's SampleTable, not the WAV registry;
-    // the origin is what tells SfzLoader::ResolveNote() which one to use.
+    // The mapper numbers samples within the document (1..N); the loader
+    // rewrites them to Pool ids at Commit. origin tells the UI it is an import.
     EXPECT_EQ(mapped.instrument.origin, InstrumentOrigin::SfzImport);
     const Zone& zone = mapped.instrument.zones[0];
     EXPECT_EQ(zone.key_lo, 60);
@@ -314,19 +314,6 @@ TEST(SfzSamplePlanTest, DeduplicatesPathsAndAssignsStableIds) {
     EXPECT_EQ(mapped.instrument.zones[0].sample_id, 1);
     EXPECT_EQ(mapped.instrument.zones[1].sample_id, 1);
     EXPECT_EQ(mapped.instrument.zones[2].sample_id, 2);
-}
-
-TEST(SfzSamplePlanTest, SampleTableBacksInstrumentResolver) {
-    std::array<int16_t, 4> first{{1, 2, 3, 4}};
-    std::array<int16_t, 6> second{{1, 2, 3, 4, 5, 6}};
-    SampleTable table;
-    ASSERT_TRUE(table.Bind(1, SampleRef{first.data(), 4, 1, 44100}));
-    ASSERT_TRUE(table.Bind(2, SampleRef{second.data(), 3, 2, 48000}));
-
-    const SampleResolver resolver = table.Resolver();
-    EXPECT_EQ(resolver.Get(1).data, first.data());
-    EXPECT_EQ(resolver.Get(2).channels, 2);
-    EXPECT_FALSE(resolver.Get(99).valid());
 }
 
 TEST(SfzSamplePlanTest, BudgetGuardReservesRamAndCapsEachSample) {
