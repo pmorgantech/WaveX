@@ -33,8 +33,14 @@ versioning and release process.
   onto Track 0.
 - Debug console: `NOTE <index> <note> <vel> [ON|OFF] [TRACK|MIDI]` can now
   address a MIDI channel as well as a Track, so per-Track routing is testable
-  from the bench without a MIDI cable, and `TRACKS` reports each Track's
-  `midi_in` alongside its binding.
+  from the bench without a MIDI cable, and a new `ROUTING` verb reports every
+  Track's `midi_in`.
+- `tests/hil/test_track_routing.py`: per-Track routing verified on hardware —
+  a Track hears its own channel and no other, an Omni Track hears every
+  channel, an Off Track ignores MIDI but still takes sequencer-addressed
+  notes, moving a Track to another channel takes effect both ways, and a bad
+  `midi_in` is refused. Backend-only, so it needs no MIDI cable and does not
+  depend on the frontend's browser.
 
 ### Removed
 
@@ -49,6 +55,12 @@ versioning and release process.
 
 ### Fixed
 
+- The debug console's `NOTE ... MIDI` form rejected MIDI channel 16: Track
+  indices (0..15) and MIDI channels (1..16) were bounds-checked with one
+  shared comparison. Found on the bench by the new routing tests.
+- The console's `TRACKS` reply overran `PrintLine`'s 256-byte line when Track
+  routing was first appended to it, truncating the last entries — routing
+  moved to its own `ROUTING` verb. Also found on the bench.
 - The Daisy dispatch tests' malformed-payload sweep silently stopped covering
   `MSG_MIX_OP`: `TotalCalls()` did not count `mix_ops`, so an undersized mixer
   payload reaching a handler would not have failed the test its own comment

@@ -269,9 +269,13 @@ static void DispatchConsoleCommand(const WaveX::Debug::Command& c) {
             }
             len = AppendKvText(reply, sizeof(reply), len, key, val);
         }
-        // Routing alongside the binding: m<i>=<midi_in> (0 Omni, 1..16, 255
-        // Off). Without this a routing change is only observable by whether
-        // a note sounds, which is exactly the thing under test.
+    } else if (std::strcmp(c.verb, "ROUTING") == 0) {
+        // m<i>=<midi_in> for every Track (0 Omni, 1..16 as displayed, 255
+        // Off). Its own verb rather than more keys on TRACKS: `reply` is
+        // capped by PrintLine's 256-byte line buffer, and 16 bindings plus
+        // 16 routings overran it - the bench saw a truncated m14 and no m15
+        // at all before this was split out.
+        size_t len = FormatOk(seq, reply, sizeof(reply));
         for (uint8_t t = 0; t < WAVEX_MIX_TRACKS; ++t) {
             char key[6];
             snprintf(key, sizeof(key), "m%u", static_cast<unsigned>(t));
@@ -336,8 +340,12 @@ static void DispatchConsoleCommand(const WaveX::Debug::Command& c) {
             NextWord(&p, addr, sizeof(addr));
             const bool on = std::strcmp(onoff, "OFF") != 0;
             const bool by_midi = std::strcmp(addr, "MIDI") == 0;
-            const long limit = by_midi ? 16 : WAVEX_MIX_TRACKS;
-            if (track >= limit || (by_midi && track < 1)) {
+            // MIDI channels are 1..16 inclusive as displayed; Track
+            // indices are 0..15. Different bases, so different bounds -
+            // sharing one comparison here rejected MIDI channel 16.
+            const bool in_range =
+                by_midi ? (track >= 1 && track <= 16) : (track < WAVEX_MIX_TRACKS);
+            if (!in_range) {
                 FormatErr(seq, "badnote", reply, sizeof(reply));
                 WaveX::Log::PrintLine("%s", reply);
                 return;

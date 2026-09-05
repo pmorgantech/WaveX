@@ -71,6 +71,28 @@ Choose and implement bounded recovery behavior: pause and recover, abort the
 stream, or increase the prebuffer. Validate the choice with injected or
 reproducible CRC faults and capture ring low-water and service latency.
 
+## Testing
+
+### Browser-driven HIL tests are order- and state-dependent
+
+`tests/hil/test_load_to_track.py`, `test_sample_pool.py` and `test_ui_nav.py`
+pass individually but fail in varying combinations when the suite runs end to
+end — typically `no softkey 'Load'; have ['Audition', 'Back']` (a picker left
+open by an earlier test) or `KeyError: 'tab'` (a page's deferred widget state
+read before it has been laid out — the deferred-UI wait the harness notes
+elsewhere).
+
+Measured 2026-09-05 by flashing the pre-stage-7 frontend (`4a79ef7`) and
+re-running: the same tests failed, so this predates the Track-routing work and
+is not caused by it. It was 25/25 at the Sample Pool commit, so it has
+regressed since — bisecting which commit is the first task here.
+
+Two fixes, both needed: give each browser-driven test a fixture that returns
+the UI to a known page (dismissing any open picker) rather than relying on the
+previous test's exit state, and make the assertions that read deferred UI
+state wait for it instead of sampling once. `test_track_routing.py` is
+backend-only and unaffected.
+
 ## UI and frontend maintenance
 
 ### Touch coordinate verification

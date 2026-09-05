@@ -285,13 +285,29 @@ class Daisy(Target):
         st = self.cmd("TRACKS")
         return {int(k[1:]): v for k, v in st.items() if k.startswith("t")}
 
+    def routing(self):
+        """Each Track's midi_in: {track: 0 Omni | 1..16 that MIDI channel |
+        255 Off}. Its own verb because TRACKS plus routing overran the
+        console's 256-byte reply line."""
+        st = self.cmd("ROUTING")
+        return {int(k[1:]): int(v) for k, v in st.items() if k.startswith("m")}
+
     def samples(self):
         st = self.cmd("SAMPLES")
         ids = st.get("ids", "-")
         return [] if ids == "-" else [int(v) for v in ids.split(",")]
 
     def note(self, track, note, vel=100, on=True):
-        return self.cmd("NOTE", track, note, vel, "ON" if on else "OFF")
+        """A Track-addressed note: what the Play grid and sequencer send."""
+        state = "ON" if on else "OFF"
+        return self.cmd("NOTE", track, note, vel, state, "TRACK")
+
+    def midi_note(self, channel, note, vel=100, on=True):
+        """A note on MIDI `channel` (1..16, as displayed) sent the way the
+        MIDI task forwards a cable event - the backend routes it to every
+        Track whose midi_in matches."""
+        state = "ON" if on else "OFF"
+        return self.cmd("NOTE", channel, note, vel, state, "MIDI")
 
     def msg(self, msg_type, payload=b""):
         hex_payload = payload.hex() if payload else ""
@@ -301,6 +317,37 @@ class Daisy(Target):
     MSG_SAMPLE_LOAD = 0x04
     MSG_SAMPLE_SELECT = 0x45
     MSG_SAMPLE_UNLOAD = 0x46
+    MSG_TRACK_OP = 0x63
+
+    # TrackOp / TrackMidiIn (protocol.h)
+    TRACK_OP_SET_MIDI_IN = 0x01
+    MIDI_IN_OMNI = 0
+    MIDI_IN_OFF = 0xFF
+
+    def set_midi_in(self, track, midi_in):
+        """MSG_TRACK_OP SET_MIDI_IN. `midi_in` is MIDI_IN_OMNI, 1..16 as
+        displayed, or MIDI_IN_OFF."""
+        op = self.TRACK_OP_SET_MIDI_IN
+        payload = struct.pack("<BBH", op, track, midi_in)
+        return self.msg(self.MSG_TRACK_OP, payload)
+
+    def reset_routing(self):
+        """Back to the default of one channel per Track (Track 1 -> MIDI 1)."""
+        for t in range(16):
+            self.set_midi_in(t, t + 1)
+
+    def load_sample(self, sample_id, path):
+        """MSG_SAMPLE_LOAD: make `path` resident under `sample_id`, without
+        going through the frontend's browser. The size/rate/channel/depth
+        fields are hints the Daisy re-reads from the file, so 0 is fine."""
+        name = path.encode()[:95]
+        payload = struct.pack("<HIHBB96s", sample_id, 0, 0, 0, 0, name)
+        return self.msg(self.MSG_SAMPLE_LOAD, payload)
+
+    def bind_track(self, track, sample_id, root_note=60):
+        """MSG_SAMPLE_SELECT: bind a resident sample to a Track."""
+        payload = struct.pack("<HBB", sample_id, track, root_note)
+        return self.msg(self.MSG_SAMPLE_SELECT, payload)
 
     def unbind_track(self, track):
         """MSG_SAMPLE_SELECT with sample_id 0 empties a sample-bound Track."""
