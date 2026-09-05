@@ -68,6 +68,7 @@ implementation.
 | [testing-remediation.md](testing-remediation.md) | Open test gaps organized by defect class |
 | [flashing.md](flashing.md) | Build and flash the ESP32-P4 and Daisy Seed from the devcontainer, plus SWD/GDB debug-probe workflows |
 | [performance_monitoring.md](performance_monitoring.md) | DWT cycle-counter and CPU-load measurement on the Daisy; LVGL render/flush/FPS instrumentation on the ESP32 |
+| [callback-performance-log.md](callback-performance-log.md) | Durable target-hardware results from the recurring Daisy callback-headroom gate |
 | [spi-notes.md](spi-notes.md) | libDaisy 8.1 SPI slave/DMA limits, a minimal bring-up recipe, and the source-level diagnosis of the dormant inter-MCU SPI link |
 | [LICENSES.md](LICENSES.md) | Third-party license inventory |
 

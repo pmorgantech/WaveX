@@ -91,6 +91,80 @@ doc was corrected).
 DWT-cycle-counter primitives underneath both facilities, if you need a
 one-off timestamp rather than either wrapper.
 
+### Callback headroom gate
+
+This is a recurring hardware gate, not a Phase 5 cleanup exercise. Run it:
+
+- once now to establish a baseline, at every roadmap phase gate, and at least
+  every four weeks while callback-resident audio work is active;
+- after a change to the callback, voice renderer, control tick, DSP topology,
+  polyphony, block size, clock, compiler optimization, or hot-state memory
+  placement; and
+- before choosing or purchasing a replacement backend MCU.
+
+The gate uses the **maximum raw DWT cycle count for the whole callback**.
+Smoothed average load is useful supporting telemetry, but it cannot pass this
+gate: one slow block can glitch even when the average looks comfortable.
+
+At the current target of 480 MHz, 48 kHz, and 48-sample blocks, the callback
+deadline is 480,000 cycles. The decision bands are:
+
+| Worst callback | Current cycle boundary | Decision |
+|---|---:|---|
+| `< 60%` | `< 288,000` | **COMFORTABLE** — stay on the STM32H750. |
+| `60%` to `< 70%` | `288,000` to `< 336,000` | **STAY** — enough measured margin; watch the trend. |
+| `70%` to `< 80%` | `336,000` to `< 384,000` | **REVIEW** — the phase/release gate is blocked; attribute zones, reduce scope or optimize, then re-measure. |
+| `>= 80%`, callback features remain | `>= 384,000` | **UPGRADE** — activate the backend chip-upgrade path in `rt1170-migration.md`; do not keep shopping by specification or adding callback load to the H750. |
+| `>= 80%`, callback feature list complete | `>= 384,000` | **HOLD** — no release or new callback scope until load is reduced or the remaining margin is explicitly accepted. A chip migration is not automatic when the required feature set is already complete. |
+
+The boundary is always recomputed from
+`core_hz * block_size / sample_rate`; the numeric values above document the
+current target rather than hard-coding the evaluator to it.
+
+#### Measurement and report procedure
+
+1. Build a dedicated **persistent QSPI `-O2`** image with profiling enabled.
+   Do not use the `-O0` SRAM debug image for a capacity decision:
+
+   ```sh
+   make -C firmware/daisy BUILD_DIR=build-profile \
+     CMAKE_EXTRA_ARGS="-DWAVEX_PROFILING_ENABLED=ON -DWAVEX_BUILD_DEBUG=ON"
+   make -C firmware/daisy BUILD_DIR=build-profile \
+     CMAKE_EXTRA_ARGS="-DWAVEX_PROFILING_ENABLED=ON -DWAVEX_BUILD_DEBUG=ON" flash-auto
+   ```
+
+2. Start a fresh serial capture (`make logs-start`), then exercise each
+   applicable worst-case scenario for at least ten minutes on target hardware.
+   Use `WAVEX_NUM_VOICES` simultaneously sounding voices and enable the most
+   expensive intended oscillator/filter/drive/modulation combination. Run
+   alternatives such as both filter topologies separately, and combine
+   streaming, sequencing, parameter locks, mixer work, and control-rate
+   modulation where the product can combine them. A convenient idle patch is
+   not a gate workload.
+3. Reject the run if the target sample rate, block size, core clock,
+   optimization level, voice count, applicable feature flags, or workload is
+   missing from the report. Also record underruns; zero underruns is required
+   but does not override a yellow or red cycle result.
+4. Record every scenario. The checkpoint takes the worst decision across its
+   rows:
+
+   ```sh
+   make perf-record LOG=logs/daisy.log \
+     SCENARIO="8 voices; 24 dB SVF; drive; sequencer + stream" \
+     VOICES=8 UNDERRUNS=0 FEATURES_REMAINING=yes \
+     NOTE="Phase 2 monthly checkpoint"
+   ```
+
+   `scripts/callback_performance.py` aggregates the five-second profiler
+   windows, computes utilization from `DWT->CYCCNT`, appends the result to
+   [`callback-performance-log.md`](callback-performance-log.md), and returns
+   non-zero for `REVIEW`, `HOLD`, or `UPGRADE`. A non-green row remains useful
+   evidence and is appended before the command fails.
+
+Reports are committed with the code or roadmap checkpoint they evaluate. A
+dirty-tree result is marked with `+` and is diagnostic only; repeat it on the
+exact clean commit before using it for a phase, release, or chip decision.
+
 ---
 
 ## Part 2 - ESP32 UI rendering

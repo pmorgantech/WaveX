@@ -209,7 +209,7 @@ See `features/inter-mcu-protocol.md` for the message catalog. Every message stru
 | Sample rate | 48 kHz |
 | Block size | 48 samples → **1.0 ms callback period == 1 kHz control tick** |
 | Control tick work | envelopes, LFOs, mod matrix, CV staging, meter accumulation |
-| CPU load target | ≤ 70% average in callback, measured continuously via DWT |
+| CPU load target | < 70% worst observed callback for normal continuation; ≥ 80% with callback features remaining activates the backend chip-upgrade path. Measured from raw DWT cycles at the target block size; see `performance_monitoring.md` |
 
 The 1-block = 1-ms identity is a deliberate design invariant: the control tick is derived from the audio callback, so CV, modulation, and (future) sequencer events are inherently phase-locked to the audio stream. Any change to block size must preserve an integer-ms tick or introduce a proper tick divider — `timebase.hpp` now enforces this with a `static_assert`. Because the tick is derived from the audio DMA clock rather than a software scheduler, no RTOS is used or needed on the Daisy — see §4.2 "Why bare-metal, not an RTOS" for the full rationale. (The engine briefly ran at 44.1 kHz, silently making the "1 kHz" tick 918.75 Hz; found and reverted 2026-07-03 — `dma-timing-review-2026-07-03.md` Finding 1.) Non-48 kHz WAV content is rate-converted at playback: the streaming/audition path resamples in `PumpWavIO`, and RAM-resident samples use playback-rate compensation (`VoiceTriggerParams::sample_rate_hz` scales `Voice::increment` by native/engine rate).
 

@@ -1,5 +1,5 @@
 # WaveX Dual-MCU Sampler/Synth Build System
-.PHONY: help all esp32 daisy daisy-stageb size size-record flash-fast esp32-reset esp32-app-flash daisy-debug daisy-debug-build daisy-debug-load daisy-debug-server release esp32-release daisy-release check-release-clean check-profiles require-strings clean esp32-clean daisy-clean esp32-flash esp32-monitor esp32-flash-monitor esp32-menuconfig test test-all test-asan test-daisy test-esp32 test-shared test-hil test-clean ai-graph daisy-flash daisy-flash-auto flash-all start-logs stop-logs logs-start logs-stop
+.PHONY: help all esp32 daisy daisy-stageb size size-record perf-eval perf-record flash-fast esp32-reset esp32-app-flash daisy-debug daisy-debug-build daisy-debug-load daisy-debug-server release esp32-release daisy-release check-release-clean check-profiles require-strings clean esp32-clean daisy-clean esp32-flash esp32-monitor esp32-flash-monitor esp32-menuconfig test test-all test-asan test-daisy test-esp32 test-shared test-hil test-clean ai-graph daisy-flash daisy-flash-auto flash-all start-logs stop-logs logs-start logs-stop
 
 # Test targets
 test: test-all
@@ -151,6 +151,8 @@ help:
 	@echo "  check-profiles   - Assert tokens present in debug AND absent in release"
 	@echo "  size             - Print firmware image sizes (Daisy, ESP32 if built)"
 	@echo "  size-record      - Append them to docs/firmware-size-log.md: NOTE=\"what changed\""
+	@echo "  perf-eval        - Evaluate Daisy DWT capture: LOG=... SCENARIO=... VOICES=... UNDERRUNS=... FEATURES_REMAINING=yes|no"
+	@echo "  perf-record      - Evaluate and append to docs/callback-performance-log.md; also requires NOTE=..."
 	@echo "  esp32-clean      - Clean ESP32 build"
 	@echo "  daisy-clean      - Clean Daisy build"
 	@echo "  clean            - Clean all builds"
@@ -312,6 +314,23 @@ size:
 size-record:
 	@if [ -z "$(NOTE)" ]; then echo 'usage: make size-record NOTE="what changed"'; exit 1; fi
 	@python3 scripts/firmware_size.py --record "$(NOTE)"
+
+# Recurring target-hardware callback-headroom gate
+# (docs/performance_monitoring.md#callback-headroom-gate). The script returns
+# non-zero for REVIEW/HOLD/UPGRADE, including after recording the evidence.
+perf-eval:
+	@if [ -z "$(LOG)" ] || [ -z "$(SCENARIO)" ] || [ -z "$(VOICES)" ] || [ -z "$(UNDERRUNS)" ] || [ -z "$(FEATURES_REMAINING)" ]; then \
+		echo 'usage: make perf-eval LOG=logs/daisy.log SCENARIO="worst-case workload" VOICES=8 UNDERRUNS=0 FEATURES_REMAINING=yes|no'; exit 1; fi
+	@python3 scripts/callback_performance.py "$(LOG)" --scenario "$(SCENARIO)" \
+		--voices "$(VOICES)" --underruns "$(UNDERRUNS)" \
+		--features-remaining "$(FEATURES_REMAINING)"
+
+perf-record:
+	@if [ -z "$(LOG)" ] || [ -z "$(SCENARIO)" ] || [ -z "$(VOICES)" ] || [ -z "$(UNDERRUNS)" ] || [ -z "$(FEATURES_REMAINING)" ] || [ -z "$(NOTE)" ]; then \
+		echo 'usage: make perf-record LOG=logs/daisy.log SCENARIO="worst-case workload" VOICES=8 UNDERRUNS=0 FEATURES_REMAINING=yes|no NOTE="checkpoint/context"'; exit 1; fi
+	@python3 scripts/callback_performance.py "$(LOG)" --scenario "$(SCENARIO)" \
+		--voices "$(VOICES)" --underruns "$(UNDERRUNS)" \
+		--features-remaining "$(FEATURES_REMAINING)" --record "$(NOTE)"
 
 daisy-stageb:
 	@echo "========================================================================"
