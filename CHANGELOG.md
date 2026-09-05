@@ -11,6 +11,8 @@ versioning and release process.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-05
+
 ### Added
 
 - A recurring Daisy callback-headroom gate and durable performance log. Raw
