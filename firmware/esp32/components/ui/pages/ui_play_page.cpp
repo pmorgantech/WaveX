@@ -85,9 +85,9 @@ const ParamSpec kParams[static_cast<size_t>(UIPlayPage::Param::kCount)] = {
     {"DECAY", WaveX::Protocol::PARAM_ENVELOPE_DECAY, 1638},
     {"SUSTAIN", WaveX::Protocol::PARAM_ENVELOPE_SUSTAIN, 52428},
     {"RELEASE", WaveX::Protocol::PARAM_ENVELOPE_RELEASE, 3277},
-    // wire_param is unused for Slot - stepParam()/sendParam() special-case it
+    // wire_param is unused for Track - stepParam()/sendParam() special-case it
     // rather than sending MSG_CONTROL_CHANGE, since it addresses which
-    // instrument slot a note-on goes out on, not a voice parameter value.
+    // Track a note-on goes out on, not a voice parameter value.
     {"TRACK", 0, 0},
 };
 
@@ -104,7 +104,7 @@ void FormatParamValue(UIPlayPage::Param p, uint16_t raw, char* out, size_t len) 
         case UIPlayPage::Param::Sustain:
             snprintf(out, len, "%d%%", (int)(norm * 100.0f + 0.5f));
             break;
-        case UIPlayPage::Param::Slot:
+        case UIPlayPage::Param::Track:
             // Not a CC value - raw IS the 0-based Track index, shown 1-based
             // like every other Track on screen.
             snprintf(out, len, "%u", trackDisplayNumber(static_cast<uint8_t>(raw)));
@@ -165,7 +165,7 @@ void UIPlayPage::onEnter(lv_obj_t* parent) {
     // are intentionally absent from the frontend's bare-sample metadata).
     // Request it here and refresh it lightly while the page is open so a Load
     // or Select performed elsewhere cannot leave a stale claim on Play.
-    inter_mcu_request_track_binding(currentSlot());
+    inter_mcu_request_track_binding(currentTrack());
     binding_timer_ = lv_timer_create(bindingTimerCb, 500, this);
 }
 
@@ -205,7 +205,7 @@ void UIPlayPage::bindingTimerCb(lv_timer_t* timer) {
     }
     // The request is small and idempotent. The timer is in LVGL context, so
     // the label update is safe; the UART task only fills the shared cache.
-    inter_mcu_request_track_binding(self->currentSlot());
+    inter_mcu_request_track_binding(self->currentTrack());
     self->refreshBindingStatus();
 }
 
@@ -379,7 +379,7 @@ int UIPlayPage::noteFor(const Key& k) const {
     return root_note_ + k.offset;
 }
 
-uint8_t UIPlayPage::currentSlot() const {
+uint8_t UIPlayPage::currentTrack() const {
     // Shared with Sample Manager, Voice and the Browser's SFZ load target, so
     // "which Track?" has one answer across the UI (current_track.h).
     return getCurrentTrack();
@@ -425,7 +425,7 @@ void UIPlayPage::press(int index) {
     }
     k.sent_note = static_cast<uint8_t>(note);
     k.down = true;
-    inter_mcu_send_note_on(k.sent_note, velocity_, currentSlot());
+    inter_mcu_send_note_on(k.sent_note, velocity_, currentTrack());
 }
 
 void UIPlayPage::release(int index) {
@@ -434,7 +434,7 @@ void UIPlayPage::release(int index) {
         return;  // no matching press (e.g. RELEASED after PRESS_LOST)
     }
     k.down = false;
-    inter_mcu_send_note_off(k.sent_note, currentSlot());
+    inter_mcu_send_note_off(k.sent_note, currentTrack());
 }
 
 void UIPlayPage::releaseAll() {
@@ -501,7 +501,7 @@ void UIPlayPage::refreshBindingStatus() {
     NoteName(root_note_, low, sizeof(low));
     NoteName(root_note_ + kPadCount - 1, high, sizeof(high));
 
-    const uint8_t track = currentSlot();
+    const uint8_t track = currentTrack();
     WaveX::Protocol::TrackBindingMessage binding;
     char state[128];
     if (!inter_mcu_get_track_binding(track, &binding)) {
@@ -593,10 +593,10 @@ void UIPlayPage::selectParam(int direction) {
 
 void UIPlayPage::stepParam(int direction) {
     const size_t i = static_cast<size_t>(current_param_);
-    // Slot is a 0..15 instrument-slot index, not a continuous CC value - one
+    // Track is a 0..15 Track index, not a continuous CC value - one
     // detent per step, and nothing rides the wire (it only takes effect on
     // the next note-on/off, sent locally from press()/release()).
-    if (current_param_ == Param::Slot) {
+    if (current_param_ == Param::Track) {
         const uint8_t track = getCurrentTrack();
         int v = static_cast<int>(track) + direction;
         if (v < 0) {
@@ -608,7 +608,7 @@ void UIPlayPage::stepParam(int direction) {
             return;
         }
         setCurrentTrack(static_cast<uint8_t>(v));
-        inter_mcu_request_track_binding(currentSlot());
+        inter_mcu_request_track_binding(currentTrack());
         refreshBindingStatus();
         refreshParamLabel();
         return;
@@ -637,9 +637,9 @@ void UIPlayPage::refreshParamLabel() {
         return;
     }
     const size_t i = static_cast<size_t>(current_param_);
-    // Slot is the one Param whose value is not page-local - it lives in the
-    // shared current-Track store, so param_value_[Slot] is never read.
-    const uint16_t raw = current_param_ == Param::Slot ? getCurrentTrack() : param_value_[i];
+    // Track is the one Param whose value is not page-local - it lives in the
+    // shared current-Track store, so param_value_[Track] is never read.
+    const uint16_t raw = current_param_ == Param::Track ? getCurrentTrack() : param_value_[i];
     char value[24];
     FormatParamValue(current_param_, raw, value, sizeof(value));
     lv_label_set_text_fmt(param_label_, "%s  %s", kParams[i].label, value);

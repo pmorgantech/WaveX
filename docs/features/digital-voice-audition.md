@@ -19,7 +19,7 @@ Two goals, in order:
 
 **At the start of this work, the only live-editable parameter path was the analog one this scope excludes.** `MSG_CONTROL_CHANGE` for cutoff / resonance / ADSR was consumed in `audio_engine.cpp` (`OnControlChange`) into the paraphonic state and `s_para_env`, staged to the MCP4728 at the 1 kHz control tick. That was genuinely real-time audible — and it was the analog path.
 
-The digital per-voice chain is real DSP (`voice_manager.hpp`: each of `kNumVoices = 8` voices owns its own filter and `Envelope`, processed inline in `Render()`), but its cutoff and ADSR are written **once, at `Trigger()` time**, from `VoiceTriggerParams`. There is no message, no API, and no state that lets a control change reach either a sounding voice or the next note to be triggered.
+The digital per-voice chain is real DSP (`voice_manager.hpp`: each of `WAVEX_NUM_VOICES = 8` voices owns its own filter and `Envelope`, processed inline in `Render()`), but its cutoff and ADSR are written **once, at `Trigger()` time**, from `VoiceTriggerParams`. There is no message, no API, and no state that lets a control change reach either a sounding voice or the next note to be triggered.
 
 Consequence: on an all-digital engine, turning a filter knob currently does nothing. "Audition while editing" is therefore not a UI feature layered on top — it is missing engine plumbing, and it is Stage 1 regardless of which UI surface gets built first.
 
@@ -115,7 +115,7 @@ the presence or absence of logs.
 
 ### Stage 4 — Live parameter editing on that page — **DONE**
 
-`kParams[]` in `ui_play_page.cpp` pages through Cutoff, Resonance, Attack, Decay, Sustain, Release on the softkey row, each sending `MSG_CONTROL_CHANGE` via `inter_mcu_send_control_change` (also wired on `ui_voice_page.cpp`, the Voice group's live-edit surface). Stage 1 is what makes these audible.
+`kParams[]` in `ui_play_page.cpp` pages through Cutoff, Resonance, Attack, Decay, Sustain, Release on the softkey row, each sending `MSG_CONTROL_CHANGE` via `inter_mcu_send_control_change` (also wired on `ui_instrument_page.cpp`, the Instrument page's live-edit surface). Stage 1 is what makes these audible.
 
 **Goal A is not yet complete**: the code path and self-reporting are complete,
 but chromatic playback (including an SFZ Zone root note) still needs hardware

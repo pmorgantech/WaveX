@@ -27,7 +27,7 @@
 namespace WaveX {
 namespace Mix {
 
-/// One per instrument slot (AudioEngine::kNumInstrumentSlots). Kept as its own
+/// One per Track (AudioEngine::kNumTracks). Kept as its own
 /// constant so this header does not pull in the instrument model; a static
 /// assert where they meet is cheaper than the coupling.
 static constexpr uint8_t kNumTracks = 16;

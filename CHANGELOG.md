@@ -55,7 +55,20 @@ versioning and release process.
   Init default name and status). It edits the selected Track's Instrument;
   the Save/Load softkeys say they wait on the `.wxi` Instrument file rather
   than "a preset format". Track/Instrument model stage 1, strings-and-docs
-  half; the identifier rename follows separately.
+  half.
+- Code identifiers follow the Track/Instrument vocabulary (stage 1, second
+  half; no behaviour change): `Tracks::Track()` replaces
+  `InstrumentBank::Slot()`, `kNumTracks` replaces `kNumInstrumentSlots`,
+  `Voice::track`/`VoiceTriggerParams::track` replace `slot`,
+  `VoiceManager::StopTrack/ReleaseTrack`, `SfzLoader::TrackLoading/
+  TrackLoaded/TrackName`, the pattern's per-track step row is `TrackSteps`,
+  and the ESP32 page is `UIInstrumentPage` (`ui_instrument_page.*`) with
+  `Param::Track`/`currentTrack()` on Play, Instrument and Sample Manager.
+  The digital voice count is now `WAVEX_NUM_VOICES` in `hardware_config.h`
+  (was `kNumVoices` in `voice_manager.hpp`), `static_assert`ed by
+  `VoiceManager`. Daisy log lines say `track=` where they meant a Track.
+  Wire-struct field names in `protocol.h` still say `slot`; they change
+  with the protocol-doc rename.
 - Daisy region fades no longer divide per sample. `RegionFade` is prepared
   once per voice per audio block and the per-sample gain is a multiply and a
   table lerp; the previous per-sample 64-bit integer divide was a 100+-cycle

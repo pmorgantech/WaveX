@@ -10,6 +10,7 @@
 #include "ui/ui_api.h"
 #include "ui/ui_cv_cal_page.h"
 #include "ui/ui_diagnostics_page.h"
+#include "ui/ui_instrument_page.h"
 #include "ui/ui_play_page.h"
 #include "ui/ui_sample_browser.h"
 #include "ui/ui_sample_edit_page.h"
@@ -18,7 +19,6 @@
 #include "ui/ui_settings_page.h"
 #include "ui/ui_system_info_page.h"
 #include "ui/ui_tab_host_page.h"
-#include "ui/ui_voice_page.h"
 
 #include <cstdio>
 #include <string>
@@ -73,10 +73,10 @@ std::shared_ptr<UIPage> createMainMenu() {
     // Instrument is a tab group too, but one page builds its own tabview rather
     // than a UITabHostPage: its five stages share the Instrument being edited,
     // so the header and status line have to outlive a tab switch. See
-    // UIVoicePage (identifier rename follows in the mechanical commit).
+    // UIInstrumentPage.
     menu->addItem("Instrument", []() {
         ESP_LOGI(TAG, "Opening Instrument");
-        UINavigator::instance().push(createVoicePage()); });
+        UINavigator::instance().push(createInstrumentPage()); });
 
     menu->addItem("Play", []() {
         ESP_LOGI(TAG, "Opening Play");

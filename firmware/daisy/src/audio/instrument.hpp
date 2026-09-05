@@ -12,7 +12,7 @@
 // switch/layer/crossfade, tuning fold, and drum-vs-keyboard behavior are all
 // host-testable without SDRAM or the audio HAL.
 //
-// In scope here: the Zone/Instrument/InstrumentBank data model and
+// In scope here: the Zone/Instrument/Tracks data model and
 // ResolveNoteOn(). Deliberately NOT here: the SampleResolver implementations
 // (Sfz::SampleTable in sfz_import.hpp for imported instruments; the bridging
 // resolver over the plain-WAV registry in audio_engine.cpp for instruments
@@ -33,7 +33,7 @@ namespace AudioEngine {
 
 static constexpr uint8_t kMaxZones = 32;
 static constexpr uint8_t kMaxLayerTriggers = 4;  // zones fired per note-on, cap
-static constexpr uint8_t kNumInstrumentSlots = 16;
+static constexpr uint8_t kNumTracks = 16;
 
 enum class InstrumentMode : uint8_t {
     Keyboard = 0,  // zones pitch-track relative to root_note
@@ -95,7 +95,7 @@ struct Zone {
 // (MSG_SAMPLE_LOAD's sample_id). The two id spaces overlap, so the origin is
 // what lets a caller pick the right SampleResolver rather than guess.
 enum class InstrumentOrigin : uint8_t {
-    None = 0,       // nothing bound: every note on this slot drops
+    None = 0,       // nothing bound: every note on this Track drops
     SfzImport = 1,  // zones from an .sfz; ids index the loader's SampleTable
     Built = 2,      // zones synthesised on-device; ids index the WAV registry
 };
@@ -192,7 +192,7 @@ inline float VelocityXfadeGain(const Zone& zone, uint8_t velocity) {
 // ZONE_FLAG_LIVE_FILTER_ENV; nullptr makes such zones fall back to their own
 // fields, so a caller with no live state loses nothing but that behaviour.
 inline uint8_t ResolveNoteOn(const Instrument& ins,
-                             uint8_t slot,
+                             uint8_t track,
                              uint8_t note,
                              uint8_t velocity,
                              const SampleResolver& resolver,
@@ -228,7 +228,7 @@ inline uint8_t ResolveNoteOn(const Instrument& ins,
         p.velocity = velocity;
         p.root_note = zone.root_note;
         p.pan = zone.pan;
-        p.slot = slot;
+        p.track = track;
         p.choke_group = zone.choke_group;
         p.one_shot = (zone.flags & ZONE_FLAG_ONE_SHOT) != 0;
 
@@ -267,29 +267,27 @@ inline uint8_t ResolveNoteOn(const Instrument& ins,
     return count;
 }
 
-// Runtime bank of instrument slots. Sequencer tracks / MIDI channels address a
-// slot; the bound instrument resolves the note. Fixed storage, no allocation.
-class InstrumentBank {
+// The sixteen Tracks. A sequencer track / MIDI channel addresses one; the
+// Instrument bound to it resolves the note. Fixed storage, no allocation.
+class Tracks {
    public:
-    Instrument& Slot(uint8_t slot) { return slots_[slot < kNumInstrumentSlots ? slot : 0]; }
-    const Instrument& Slot(uint8_t slot) const {
-        return slots_[slot < kNumInstrumentSlots ? slot : 0];
-    }
+    Instrument& Track(uint8_t track) { return tracks_[track < kNumTracks ? track : 0]; }
+    const Instrument& Track(uint8_t track) const { return tracks_[track < kNumTracks ? track : 0]; }
 
-    uint8_t ResolveNote(uint8_t slot,
+    uint8_t ResolveNote(uint8_t track,
                         uint8_t note,
                         uint8_t velocity,
                         const SampleResolver& resolver,
                         VoiceTriggerParams* out,
                         uint8_t max,
                         const VoiceLiveParams* live = nullptr) const {
-        if (slot >= kNumInstrumentSlots)
+        if (track >= kNumTracks)
             return 0;
-        return ResolveNoteOn(slots_[slot], slot, note, velocity, resolver, out, max, live);
+        return ResolveNoteOn(tracks_[track], track, note, velocity, resolver, out, max, live);
     }
 
    private:
-    Instrument slots_[kNumInstrumentSlots];
+    Instrument tracks_[kNumTracks];
 };
 
 }  // namespace AudioEngine

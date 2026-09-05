@@ -9,7 +9,7 @@
 
 ## 1. Goal and scope
 
-**Goal**: given a selected `.sfz` file and its referenced `.wav` samples on SD, preflight the complete resident footprint, then produce a populated `Instrument` bound into an `InstrumentBank` slot and playable via the existing note-on/off path.
+**Goal**: given a selected `.sfz` file and its referenced `.wav` samples on SD, preflight the complete resident footprint, then produce a populated `Instrument` bound into a Track (`Tracks`) and playable via the existing note-on/off path.
 
 **Explicit non-goals for v1** (do not implement, do not gold-plate):
 - Full SFZ opcode coverage. Real-world `.sfz` files use hundreds of opcodes (round-robin `seq_*`, `sw_*` keyswitches, per-region LFOs/EQ, `curve_*` tables, effects buses). **Unsupported opcodes must be silently skipped**, not rejected — a file that partially maps is more useful than one that fails to load.
@@ -108,7 +108,7 @@ This remains narrower than `instrument-model.md` §4's full design: v1 owns one 
 
 ## 7. Wiring into note-on/off
 
-Bind the resulting `Instrument` into an `InstrumentBank` slot (`instrument.hpp`'s `InstrumentBank::Slot(n)`), then on note-on call `bank.ResolveNote(slot, note, velocity, resolver, out, kMaxLayerTriggers)` and feed each returned `VoiceTriggerParams` to `VoiceManager::Trigger()` — this path is already built and host-tested (`ResolveNoteOn`, `instrument_test.cpp`). On note-off, release voices for `(note, slot)` per `instrument-model.md` §3 step 5 (note: `Voice::slot` — confirm this field exists before assuming; the earlier architecture pass found `VoiceManager::Trigger` already accepts `params.slot`, but double check the note-off release path uses it too).
+Bind the resulting `Instrument` into a Track (`instrument.hpp`'s `Tracks::Track(n)`), then on note-on call `tracks.ResolveNote(track, note, velocity, resolver, out, kMaxLayerTriggers)` and feed each returned `VoiceTriggerParams` to `VoiceManager::Trigger()` — this path is already built and host-tested (`ResolveNoteOn`, `instrument_test.cpp`). On note-off, release voices for `(note, track)` per `instrument-model.md` §3 step 5 (`Voice::track`; `VoiceManager::ReleaseTrack()` is the note-off path).
 
 This can be **additive** alongside the existing Phase-1 stopgap note routing in `audio_engine.cpp::OnNoteOn` — gate it behind whether the target slot has an SFZ-loaded instrument bound, rather than ripping out the stopgap as part of this feature. Deleting the stopgap entirely is `instrument-model.md` stage 3's job and has its own dependencies (protocol, UI) that shouldn't block this feature landing.
 

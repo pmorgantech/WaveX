@@ -172,7 +172,7 @@ static SnapshotMailbox<WaveX::AudioEngine::VoiceLiveParams> s_voice_live_mailbox
 
 // Modulation matrix (roadmap Phase 2.5 item 4; param-locks-and-modulation.md
 // §3/§9 stage 4). Slots are instrument-scoped, stored on Instrument itself
-// (SfzLoader's InstrumentBank) rather than engine-global - unlike
+// (SfzLoader's Tracks) rather than engine-global - unlike
 // s_voice_live_pending above, an instrument slot IS now addressable
 // (MSG_INST_OP's own `slot` field), so there is no more "N copies of the
 // same array" problem to work around. ResolveModSlots below is the
@@ -219,7 +219,7 @@ static WaveX::Sequencer::SequencerCommandQueue<kSequencerCommandQueueSize> s_seq
 // sample-registry mutation. A later Track->Patch implementation replaces this
 // map with one immutable binding per Track; it must not make the callback read
 // SfzLoader directly.
-static constexpr uint8_t kSequencerPreviewSlot = 0;
+static constexpr uint8_t kSequencerPreviewTrack = 0;
 static constexpr uint8_t kSequencerRootNote = 60;
 struct SequencerVoiceMap {
     uint8_t layer_count[WaveX::Sequencer::kMaxTracks] = {};
@@ -291,7 +291,7 @@ struct NoteEvent {
     bool is_trigger = false;  // true = Trigger(params), false = Release(note)
     bool scoped_release = false;
     uint8_t note = 0;
-    uint8_t slot = 0;
+    uint8_t track = 0;
     WaveX::AudioEngine::VoiceTriggerParams params;
 };
 static constexpr uint32_t kNoteQueueSize = 16;  // power of two (index math wraps)
@@ -305,7 +305,7 @@ static NoteQueue& s_note_queue = s_note_queue_storage.Get();
 // that information without allocation or locks. Producer: main loop; consumer:
 // callback, same release/acquire discipline as NoteEventQueue.
 static uint32_t
-    s_scoped_release_overflow[kNumInstrumentSlots]
+    s_scoped_release_overflow[kNumTracks]
                              [NoteEventQueue<NoteEvent, kNoteQueueSize>::kReleaseWordCount];
 static uint32_t s_scoped_release_pending_slots = 0;
 
@@ -330,7 +330,7 @@ static bool drain_note_queue() {
             s_voice_manager.Trigger(ev.params);
             any_trigger = true;
         } else if (ev.scoped_release) {
-            s_voice_manager.ReleaseSlot(ev.note, ev.slot);
+            s_voice_manager.ReleaseTrack(ev.note, ev.track);
         } else {
             s_voice_manager.Release(ev.note);
         }
@@ -355,7 +355,7 @@ static bool drain_note_queue() {
                 __atomic_exchange_n(&s_scoped_release_overflow[slot][word], 0u, __ATOMIC_ACQUIRE);
             while (releases != 0) {
                 const uint32_t bit = static_cast<uint32_t>(__builtin_ctz(releases));
-                s_voice_manager.ReleaseSlot(static_cast<uint8_t>(word * 32u + bit), slot);
+                s_voice_manager.ReleaseTrack(static_cast<uint8_t>(word * 32u + bit), slot);
                 releases &= releases - 1u;
             }
         }
@@ -868,11 +868,11 @@ static WaveX::BssStatic<SequencerVoiceMap> s_seq_voice_map_scratch_storage;
 static void PublishSequencerVoiceMap() {
     s_seq_voice_map_scratch_storage.Reconstruct();
     SequencerVoiceMap& map = s_seq_voice_map_scratch_storage.Get();
-    if (!SfzLoader::SlotLoading(kSequencerPreviewSlot)) {
+    if (!SfzLoader::TrackLoading(kSequencerPreviewTrack)) {
         for (uint8_t track = 0; track < WaveX::Sequencer::kMaxTracks; ++track) {
             const uint8_t note = static_cast<uint8_t>(kSequencerRootNote + track);
             map.layer_count[track] = SfzLoader::ResolveNote(
-                kSequencerPreviewSlot, note, 127, nullptr, map.layers[track], kMaxLayerTriggers);
+                kSequencerPreviewTrack, note, 127, nullptr, map.layers[track], kMaxLayerTriggers);
         }
     }
     s_seq_voice_map_mailbox.Publish(map);
@@ -955,8 +955,8 @@ static void remove_loaded_sample(uint16_t sample_id) {
 }
 
 void SelectSample(uint16_t sample_id, uint8_t slot) {
-    if (slot >= kNumInstrumentSlots) {
-        WaveX::Log::PrintLine("SAMPLE_SELECT: slot=%u out of range, ignored", (unsigned)slot);
+    if (slot >= kNumTracks) {
+        WaveX::Log::PrintLine("SAMPLE_SELECT: track=%u out of range, ignored", (unsigned)slot);
         return;
     }
     if (sample_id != 0) {
@@ -968,7 +968,7 @@ void SelectSample(uint16_t sample_id, uint8_t slot) {
             }
         }
         if (!resident) {
-            WaveX::Log::PrintLine("SAMPLE_SELECT: slot=%u id=%u is not resident, ignored",
+            WaveX::Log::PrintLine("SAMPLE_SELECT: track=%u id=%u is not resident, ignored",
                                   (unsigned)slot,
                                   (unsigned)sample_id);
             return;
@@ -979,14 +979,14 @@ void SelectSample(uint16_t sample_id, uint8_t slot) {
         // silently ignored Select is the kind of thing a bench session
         // spends an hour on.
         WaveX::Log::PrintLine(
-            "SAMPLE_SELECT: slot=%u holds an SFZ instrument - load it elsewhere first, ignored",
+            "SAMPLE_SELECT: track=%u holds an SFZ instrument - load it elsewhere first, ignored",
             (unsigned)slot);
         return;
     }
-    if (slot == kSequencerPreviewSlot) {
+    if (slot == kSequencerPreviewTrack) {
         PublishSequencerVoiceMap();
     }
-    WaveX::Log::PrintLine("SAMPLE_SELECT: slot=%u id=%u", (unsigned)slot, (unsigned)sample_id);
+    WaveX::Log::PrintLine("SAMPLE_SELECT: track=%u id=%u", (unsigned)slot, (unsigned)sample_id);
 }
 
 uint16_t SelectedSample(uint8_t slot) {
@@ -1004,7 +1004,7 @@ static uint16_t s_track_binding_pending = 0;
 void PushTrackBinding(uint8_t track) {
     if (track == 0xFF) {
         s_track_binding_pending = 0xFFFF;
-    } else if (track < kNumInstrumentSlots) {
+    } else if (track < kNumTracks) {
         s_track_binding_pending |= static_cast<uint16_t>(1u << track);
     }
 }
@@ -1019,14 +1019,14 @@ void PumpTrackBinding() {
 
         uint8_t state = TRACK_BINDING_EMPTY;
         uint16_t sample_id = 0;
-        if (SfzLoader::SlotLoading(track)) {
+        if (SfzLoader::TrackLoading(track)) {
             state = TRACK_BINDING_LOADING;
-        } else if (SfzLoader::SlotLoaded(track)) {
+        } else if (SfzLoader::TrackLoaded(track)) {
             sample_id = SfzLoader::BoundSample(track);
             state = sample_id != 0 ? TRACK_BINDING_SAMPLE : TRACK_BINDING_PATCH;
         }
         TrackBindingMessage msg(track, state, sample_id);
-        snprintf(msg.name, sizeof(msg.name), "%s", SfzLoader::SlotName(track));
+        snprintf(msg.name, sizeof(msg.name), "%s", SfzLoader::TrackName(track));
         if (WaveX::Comm::UartLinkSend(MSG_TRACK_BINDING, &msg, sizeof(msg)) < 0) {
             return;
         }
@@ -2489,7 +2489,7 @@ void OnNoteOn(const NoteMessage& note_msg) {
     const uint8_t slot = note_msg.channel & 0x0Fu;
     // A replacement has stopped the old voices and is about to release their
     // sample pointers. Do not queue a trigger resolved against that old table.
-    if (SfzLoader::SlotLoading(slot)) {
+    if (SfzLoader::TrackLoading(slot)) {
         return;
     }
 
@@ -2511,15 +2511,15 @@ void OnNoteOn(const NoteMessage& note_msg) {
         // notes were even arriving. It runs on the main loop, well after
         // init. Two distinct reasons, named apart because they need
         // different fixes.
-        if (!SfzLoader::SlotLoaded(slot)) {
+        if (!SfzLoader::TrackLoaded(slot)) {
             WaveX::Log::PrintLine(
-                "  -> dropped: slot %u has no instrument loaded and no sample bound "
+                "  -> dropped: Track %u has no instrument loaded and no sample bound "
                 "(MSG_SAMPLE_SELECT; %u loaded)",
                 (unsigned)slot,
                 (unsigned)s_loaded_sample_count);
         } else {
             WaveX::Log::PrintLine(
-                "  -> dropped: slot %u has no zone for note=%u vel=%u with a resident sample",
+                "  -> dropped: Track %u has no zone for note=%u vel=%u with a resident sample",
                 (unsigned)slot,
                 (unsigned)note_msg.note,
                 (unsigned)note_msg.velocity);
@@ -2531,10 +2531,10 @@ void OnNoteOn(const NoteMessage& note_msg) {
         NoteEvent event;
         event.is_trigger = true;
         event.note = note_msg.note;
-        event.slot = slot;
+        event.track = slot;
         event.params = params[i];
         if (!s_note_queue.Push(event)) {
-            WaveX::Log::PrintLine("RX NOTE_ON: slot=%u note=%u layer=%u DROPPED - note queue full",
+            WaveX::Log::PrintLine("RX NOTE_ON: track=%u note=%u layer=%u DROPPED - note queue full",
                                   (unsigned)slot,
                                   (unsigned)note_msg.note,
                                   (unsigned)i);
@@ -2542,7 +2542,7 @@ void OnNoteOn(const NoteMessage& note_msg) {
         }
     }
 #if WAVEX_MCU_LINK_PACKET_DEBUG
-    WaveX::Log::PrintLine("RX NOTE_ON: slot=%u note=%u vel=%u -> %u layers (%lu frames)",
+    WaveX::Log::PrintLine("RX NOTE_ON: track=%u note=%u vel=%u -> %u layers (%lu frames)",
                           (unsigned)slot,
                           (unsigned)note_msg.note,
                           (unsigned)note_msg.velocity,
@@ -2556,8 +2556,8 @@ void OnNoteOff(const NoteMessage& note_msg) {
     NoteEvent ev;
     ev.is_trigger = false;
     ev.note = note_msg.note;
-    ev.slot = slot;
-    ev.scoped_release = SfzLoader::SlotLoaded(slot);
+    ev.track = slot;
+    ev.scoped_release = SfzLoader::TrackLoaded(slot);
     const bool queued =
         ev.scoped_release ? s_note_queue.Push(ev) : s_note_queue.PushReleaseOrRemember(ev);
     if (!queued && ev.scoped_release) {
@@ -2998,7 +2998,7 @@ void OnInstrumentOp(const InstOpMessage& request) {
         return;
     }
     if (SfzLoader::Begin(request) && request.op == INST_OP_SFZ_LOAD) {
-        if (request.slot == kSequencerPreviewSlot) {
+        if (request.slot == kSequencerPreviewTrack) {
             ClearSequencerVoiceMap();
         }
         // Streaming audition and instrument import share FatFs/SD bandwidth.
@@ -3023,12 +3023,12 @@ void PumpInstrumentLoad() {
         return;
     }
     stop_requested = false;
-    const bool preview_was_loading = SfzLoader::SlotLoading(kSequencerPreviewSlot);
+    const bool preview_was_loading = SfzLoader::TrackLoading(kSequencerPreviewTrack);
     SfzLoader::Pump(s_sample_mem_mgr, s_sample_io, sizeof(s_sample_io));
     // The loader publishes its new slot binding only when its state machine
     // reaches Idle. Rebuild the callback-owned snapshot at that transition;
     // rebuilding during the load would expose incomplete sample pointers.
-    if (preview_was_loading && !SfzLoader::SlotLoading(kSequencerPreviewSlot)) {
+    if (preview_was_loading && !SfzLoader::TrackLoading(kSequencerPreviewTrack)) {
         PublishSequencerVoiceMap();
     }
 }

@@ -5,7 +5,7 @@
 namespace wavex_ui {
 
 namespace {
-// Matches instrument.hpp's kNumInstrumentSlots and MSG_NOTE_ON's channel
+// Matches instrument.hpp's kNumTracks and MSG_NOTE_ON's channel
 // masking on the backend; a value outside it would address a Track the Daisy
 // would silently drop notes for.
 constexpr uint8_t kTrackCount = WAVEX_MIX_TRACKS;

@@ -53,9 +53,9 @@ void UISampleManagerPage::onEnter(lv_obj_t* parent) {
     lv_label_set_text(status_label_, "Samples resident in RAM");
     lv_obj_set_pos(status_label_, 0, 0);
 
-    slot_label_ = lv_label_create(root_);
-    ui_theme_apply_label_style(slot_label_, false);
-    lv_obj_set_pos(slot_label_, 794, 0);
+    track_label_ = lv_label_create(root_);
+    ui_theme_apply_label_style(track_label_, false);
+    lv_obj_set_pos(track_label_, 794, 0);
 
     list_ = lv_obj_create(root_);
     lv_obj_set_size(list_, 770, 430);
@@ -87,7 +87,7 @@ void UISampleManagerPage::onEnter(lv_obj_t* parent) {
 
     rebuildList();
     refreshDetail();
-    refreshSlotLabel();
+    refreshTrackLabel();
 }
 
 void UISampleManagerPage::onExit() {
@@ -101,7 +101,7 @@ void UISampleManagerPage::onExit() {
         list_ = nullptr;
         status_label_ = nullptr;
         detail_label_ = nullptr;
-        slot_label_ = nullptr;
+        track_label_ = nullptr;
     }
     for (auto& r: rows_) {
         r = Row{};
@@ -306,11 +306,11 @@ void UISampleManagerPage::refreshDetail() {
     lv_label_set_text(detail_label_, text);
 }
 
-void UISampleManagerPage::refreshSlotLabel() {
-    if (!slot_label_) {
+void UISampleManagerPage::refreshTrackLabel() {
+    if (!track_label_) {
         return;
     }
-    lv_label_set_text_fmt(slot_label_, "TRACK %u", trackDisplayNumber(getCurrentTrack()));
+    lv_label_set_text_fmt(track_label_, "TRACK %u", trackDisplayNumber(getCurrentTrack()));
 }
 
 void UISampleManagerPage::moveFocus(int delta) {
@@ -322,12 +322,12 @@ void UISampleManagerPage::moveFocus(int delta) {
     refreshDetail();
 }
 
-void UISampleManagerPage::changeSlot(int delta) {
-    // 16 instrument slots - matches instrument.hpp's kNumInstrumentSlots and
+void UISampleManagerPage::changeTrack(int delta) {
+    // 16 Tracks - matches instrument.hpp's kNumTracks and
     // MSG_NOTE_ON's channel & 0x0F on the backend.
     setCurrentTrack(static_cast<uint8_t>((getCurrentTrack() + delta + 16) % 16));
     inter_mcu_request_track_binding(getCurrentTrack());
-    refreshSlotLabel();
+    refreshTrackLabel();
     rebuildList();
     refreshDetail();
 }
@@ -454,8 +454,8 @@ std::array<Softkey, NUM_SOFTKEYS> UISampleManagerPage::getSoftkeys() {
 std::array<Softkey, NUM_SOFTKEYS> UISampleManagerPage::getShiftedSoftkeys() {
     std::array<Softkey, NUM_SOFTKEYS> keys{};
     keys[0] = {"Back", []() { UINavigator::instance().pop(); }};
-    keys[1] = {"Track -", [this]() { changeSlot(-1); }};
-    keys[2] = {"Track +", [this]() { changeSlot(+1); }};
+    keys[1] = {"Track -", [this]() { changeTrack(-1); }};
+    keys[2] = {"Track +", [this]() { changeTrack(+1); }};
     keys[3] = {"Edit", [this]() { editFocused(); }};
     return keys;
 }

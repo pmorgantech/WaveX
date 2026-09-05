@@ -48,8 +48,8 @@ enum class Phase : uint8_t {
 // instrument were 34 KB and 8.5 KB images of Zone defaults in flash, copied
 // into SRAM at boot; Reset() rebuilt them through equally large stack
 // temporaries.
-static WaveX::BssStatic<InstrumentBank> s_bank_storage;
-static InstrumentBank& s_bank = s_bank_storage.Get();
+static WaveX::BssStatic<Tracks> s_bank_storage;
+static Tracks& s_bank = s_bank_storage.Get();
 static WaveX::BssStatic<Sfz::SampleTable> s_sample_table_storage;
 static Sfz::SampleTable& s_sample_table = s_sample_table_storage.Get();
 // Resolver for Built instruments (BindSample). Registered by the engine
@@ -365,7 +365,7 @@ bool Begin(const InstOpMessage& request) {
             return false;
         }
     }
-    if (request.slot >= kNumInstrumentSlots || request.path[0] == '\0' ||
+    if (request.slot >= kNumTracks || request.path[0] == '\0' ||
         (request.op != INST_OP_SFZ_PROBE && request.op != INST_OP_SFZ_LOAD)) {
         s_request = request;
         s_status = InstStatusMessage{};
@@ -404,7 +404,7 @@ bool Busy() {
     return s_phase != Phase::Idle;
 }
 
-bool SlotLoading(uint8_t slot) {
+bool TrackLoading(uint8_t slot) {
     return Busy() && s_request.op == INST_OP_SFZ_LOAD && s_request.slot == slot;
 }
 
@@ -423,7 +423,7 @@ void ConfirmVoicesStopped(SampleMemMgr& memory) {
     // memory, and must survive an import elsewhere. (Its mod slots too -
     // the old whole-bank reset wiped those as a side effect.)
     if (s_bound_slot >= 0) {
-        s_bank.Slot(static_cast<uint8_t>(s_bound_slot)) = Instrument{};
+        s_bank.Track(static_cast<uint8_t>(s_bound_slot)) = Instrument{};
     }
     s_sample_table.Clear();
     s_bound_slot = -1;
@@ -619,12 +619,12 @@ void Pump(SampleMemMgr& memory, uint8_t* io_buffer, uint32_t io_buffer_bytes) {
                     return;
                 }
             }
-            s_bank.Slot(s_request.slot) = s_mapped.instrument;
+            s_bank.Track(s_request.slot) = s_mapped.instrument;
             // The mapper knows zones, not where the document came from, so the
             // display name is stamped here - the one place still holding the
             // .sfz path. Truncation is fine; it is a label, not an identifier.
-            std::snprintf(s_bank.Slot(s_request.slot).name,
-                          sizeof(s_bank.Slot(s_request.slot).name),
+            std::snprintf(s_bank.Track(s_request.slot).name,
+                          sizeof(s_bank.Track(s_request.slot).name),
                           "%s",
                           Basename(s_request.path));
             s_bound_slot = static_cast<int8_t>(s_request.slot);
@@ -633,7 +633,7 @@ void Pump(SampleMemMgr& memory, uint8_t* io_buffer, uint32_t io_buffer_bytes) {
             s_status.loaded_bytes = s_total_bytes;
             s_status.current_loaded_bytes = s_status.current_bytes;
             SendStatus(INST_STATUS_LOAD_COMPLETE);
-            WaveX::Log::PrintLine("SFZ_LOAD: bound '%s' to slot %u (%u zones, %u samples, %lu B)",
+            WaveX::Log::PrintLine("SFZ_LOAD: bound '%s' to Track %u (%u zones, %u samples, %lu B)",
                                   s_request.path,
                                   (unsigned)s_request.slot,
                                   (unsigned)s_mapped.zone_count,
@@ -662,11 +662,11 @@ bool Load(const char* path,
             ConfirmVoicesStopped(memory);  // audio has not started at boot
         }
     }
-    return SlotLoaded(slot);
+    return TrackLoaded(slot);
 }
 
-bool SlotLoaded(uint8_t slot) {
-    return slot < kNumInstrumentSlots && s_bank.Slot(slot).origin != InstrumentOrigin::None;
+bool TrackLoaded(uint8_t slot) {
+    return slot < kNumTracks && s_bank.Track(slot).origin != InstrumentOrigin::None;
 }
 
 void SetLoadedSampleResolver(const SampleResolver& resolver) {
@@ -674,9 +674,9 @@ void SetLoadedSampleResolver(const SampleResolver& resolver) {
 }
 
 bool BindSample(uint8_t slot, uint16_t sample_id, uint8_t root_note) {
-    if (slot >= kNumInstrumentSlots)
+    if (slot >= kNumTracks)
         return false;
-    Instrument& ins = s_bank.Slot(slot);
+    Instrument& ins = s_bank.Track(slot);
     if (ins.origin == InstrumentOrigin::SfzImport)
         return false;
     // Zones only: the mod slots are the user's, set through their own op,
@@ -698,21 +698,21 @@ bool BindSample(uint8_t slot, uint16_t sample_id, uint8_t root_note) {
     return true;
 }
 
-const char* SlotName(uint8_t slot) {
-    if (slot >= kNumInstrumentSlots)
+const char* TrackName(uint8_t slot) {
+    if (slot >= kNumTracks)
         return "";
     // A load in flight has not reached Commit, so the bank still holds the
     // PREVIOUS instrument for this slot - naming that would be actively
     // misleading. The request's own path is the truth until Commit runs.
-    if (SlotLoading(slot))
+    if (TrackLoading(slot))
         return Basename(s_request.path);
-    return s_bank.Slot(slot).name;
+    return s_bank.Track(slot).name;
 }
 
 uint16_t BoundSample(uint8_t slot) {
-    if (slot >= kNumInstrumentSlots)
+    if (slot >= kNumTracks)
         return 0;
-    const Instrument& ins = s_bank.Slot(slot);
+    const Instrument& ins = s_bank.Track(slot);
     if (ins.origin != InstrumentOrigin::Built)
         return 0;
     for (const auto& zone: ins.zones) {
@@ -725,8 +725,8 @@ uint16_t BoundSample(uint8_t slot) {
 void ForgetLoadedSample(uint16_t sample_id) {
     if (sample_id == 0)
         return;
-    for (uint8_t slot = 0; slot < kNumInstrumentSlots; ++slot) {
-        Instrument& ins = s_bank.Slot(slot);
+    for (uint8_t slot = 0; slot < kNumTracks; ++slot) {
+        Instrument& ins = s_bank.Track(slot);
         if (ins.origin != InstrumentOrigin::Built)
             continue;
         bool any_left = false;
@@ -748,9 +748,9 @@ uint8_t ResolveNote(uint8_t slot,
                     const VoiceLiveParams* live,
                     VoiceTriggerParams* out,
                     uint8_t max) {
-    if (slot >= kNumInstrumentSlots)
+    if (slot >= kNumTracks)
         return 0;
-    const Instrument& ins = s_bank.Slot(slot);
+    const Instrument& ins = s_bank.Track(slot);
     switch (ins.origin) {
         case InstrumentOrigin::SfzImport:
             return s_bank.ResolveNote(
@@ -764,16 +764,16 @@ uint8_t ResolveNote(uint8_t slot,
 }
 
 bool SetModSlot(uint8_t slot, uint8_t mod_slot_index, const ModSlot& value) {
-    if (slot >= kNumInstrumentSlots || mod_slot_index >= kMaxModSlots)
+    if (slot >= kNumTracks || mod_slot_index >= kMaxModSlots)
         return false;
-    s_bank.Slot(slot).mod_slots[mod_slot_index] = value;
+    s_bank.Track(slot).mod_slots[mod_slot_index] = value;
     return true;
 }
 
 const ModSlot* GetModSlots(uint8_t slot) {
-    if (slot >= kNumInstrumentSlots)
+    if (slot >= kNumTracks)
         return nullptr;
-    return s_bank.Slot(slot).mod_slots;
+    return s_bank.Track(slot).mod_slots;
 }
 
 }  // namespace SfzLoader

@@ -159,7 +159,7 @@ class SequencerScheduler {
 
         for (uint8_t t = 0; t < kMaxTracks; ++t) {
             TrackState& ts = track_state_[t];
-            const Track& track = pattern_->tracks[t];
+            const TrackSteps& track = pattern_->tracks[t];
 
             // Bounded iteration guard: structurally a track could need
             // multiple boundary crossings in one tick (see class comment);

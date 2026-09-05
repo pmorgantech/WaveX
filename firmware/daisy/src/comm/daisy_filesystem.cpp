@@ -497,7 +497,7 @@ void ProcessSampleStopRequest(uint8_t slot) {
     using namespace WaveX::AudioEngine;
 
     if (WaveX::Comm::s_hw) {
-        WaveX::Log::PrintLine("DAISY: ProcessSampleStopRequest called (slot=%u)", (unsigned)slot);
+        WaveX::Log::PrintLine("DAISY: ProcessSampleStopRequest called (track=%u)", (unsigned)slot);
     }
 
     // Stop current playback.

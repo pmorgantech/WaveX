@@ -1,5 +1,4 @@
-// WaveX Instrument editor (the "Instrument" page; class name follows in the
-// mechanical rename)
+// WaveX Instrument editor
 #pragma once
 
 #include "input_event.h"
@@ -56,7 +55,7 @@ namespace wavex_ui {
  *   stage 4); the name is held in RAM so the entity is real even while its
  *   storage is not.
  */
-class UIVoicePage : public UIPage {
+class UIInstrumentPage : public UIPage {
    public:
     const char* name() const override { return "Instrument"; }
 
@@ -76,7 +75,7 @@ class UIVoicePage : public UIPage {
 
     /// One editable parameter. `wire_param` is kParamNone for anything the
     /// protocol cannot carry yet, which is how a control declares itself inert
-    /// rather than pretending. kParamSample/kParamSlot are real and live, but
+    /// rather than pretending. kParamSample/kParamTrack are real and live, but
     /// ride MSG_SAMPLE_SELECT rather than MSG_CONTROL_CHANGE, so stepParam()/
     /// sendParam() special-case them instead of treating `value` as a raw CC.
     struct Param {
@@ -89,7 +88,7 @@ class UIVoicePage : public UIPage {
 
     static constexpr uint8_t kParamNone = 0xFF;
     static constexpr uint8_t kParamSample = 0xFE;
-    static constexpr uint8_t kParamSlot = 0xFD;
+    static constexpr uint8_t kParamTrack = 0xFD;
 
     lv_obj_t* root_ = nullptr;
     lv_obj_t* name_label_ = nullptr;
@@ -109,7 +108,7 @@ class UIVoicePage : public UIPage {
     uint16_t stage_values_[kStageCount][kMaxParams] = {};
     bool values_seeded_ = false;
 
-    char voice_name_[24] = "Init Instrument";
+    char instrument_name_[24] = "Init Instrument";
     uint16_t sample_id_ = 0;
     int stage_ = 0;  ///< index into Stage, and the active tab index
     int param_ = 0;  ///< index into the focused stage's parameters
@@ -129,12 +128,12 @@ class UIVoicePage : public UIPage {
     void sendParam(const Param& p);
     void seedValues();
     void cycleSample(int direction);
-    uint8_t currentSlot() const;
+    uint8_t currentTrack() const;
 
     /// Parameters belonging to a stage, written into `out`.
     int paramsForStage(Stage s, Param* out, int max) const;
 };
 
-std::shared_ptr<UIPage> createVoicePage();
+std::shared_ptr<UIPage> createInstrumentPage();
 
 }  // namespace wavex_ui

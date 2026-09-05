@@ -33,14 +33,23 @@ class UIPlayPage : public UIPage {
    public:
     /// Voice parameters editable here, in display order. Cutoff..Release are
     /// the digital-path destinations; values ride MSG_CONTROL_CHANGE and reach
-    /// both sounding voices and the next trigger. Slot is different - it is
-    /// not a voice parameter at all, but which instrument slot (MIDI channel,
+    /// both sounding voices and the next trigger. Track is different - it is
+    /// not a voice parameter at all, but which Track (MIDI channel,
     /// 0..15) subsequent note-on/off go out on (roadmap Phase 2.5 item 1,
-    /// "retire the fallback": a slot with no sample bound via the Sample
+    /// "retire the fallback": a Track with no sample bound via the Sample
     /// Manager page just drops the note). It rides the SAME encoder/softkey
     /// cycle as the others purely so this page does not need a second input
     /// surface, not because it is a live-voice parameter.
-    enum class Param : uint8_t { Cutoff, Resonance, Attack, Decay, Sustain, Release, Slot, kCount };
+    enum class Param : uint8_t {
+        Cutoff,
+        Resonance,
+        Attack,
+        Decay,
+        Sustain,
+        Release,
+        Track,
+        kCount
+    };
 
     // 16 pads + 25 piano keys, rounded up. Both surfaces are built at page
     // entry and coexist, so the table spans them rather than being per-tab -
@@ -103,7 +112,7 @@ class UIPlayPage : public UIPage {
     void refreshParamLabel();
 
     int noteFor(const Key& k) const;
-    uint8_t currentSlot() const;
+    uint8_t currentTrack() const;
 
     Key keys_[kMaxKeys];
     int key_count_ = 0;

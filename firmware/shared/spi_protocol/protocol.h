@@ -294,7 +294,10 @@ struct ControlChangeMessage {
 struct NoteMessage {
     uint8_t note;      // MIDI note number
     uint8_t velocity;  // 0-127
-    uint8_t channel;   // 0-15
+    uint8_t channel;   // 0-15: the Track the note is addressed to. Today a
+                       // MIDI channel maps 1:1 onto a Track of the same
+                       // index; NOTE_ADDR_TRACK (track-and-patch-model.md
+                       // §2) will make the distinction explicit.
     uint8_t reserved;  // Reserved for future use
 
     NoteMessage() : note(0), velocity(0), channel(0), reserved(0) {}
@@ -421,7 +424,7 @@ struct SampleSelectMessage {
 // The frontend must never infer whether a Track is playable from the samples
 // it happened to load or select locally: an SFZ Instrument has its own resident
 // sample table, and a select can be refused while that Instrument owns the Track.
-// These values describe the Daisy's actual InstrumentBank binding.
+// These values describe the Daisy's actual Track binding.
 enum TrackBindingState : uint8_t {
     TRACK_BINDING_EMPTY = 0,
     TRACK_BINDING_SAMPLE = 1,

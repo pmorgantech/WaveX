@@ -12,7 +12,7 @@ namespace wavex_ui {
 /// and an Instrument always landed on Track 1 regardless of what was selected.
 ///
 /// Stored 0-based, because that is what MSG_NOTE_ON's channel and
-/// kNumInstrumentSlots use on the wire. Every user-facing string is 1-based:
+/// kNumTracks use on the wire. Every user-facing string is 1-based:
 /// format it through trackDisplayNumber() rather than adding 1 by hand, so
 /// the convention lives in one place.
 uint8_t getCurrentTrack();

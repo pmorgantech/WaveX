@@ -82,35 +82,32 @@ remain MIDI-clock-synced to a DAW for ten minutes without audible drift.
 The model core, SFZ import, WXCF container, the shared selected Track, and
 parts of the mixer/modulation path are built. The end state is
 `features/track-and-patch-model.md` (Track / Instrument / Bank / Sample Pool;
-the two-oscillator Instrument is designed there, §3). Open work, in that
-document's stage numbering:
+the two-oscillator Instrument is designed there, §3). Stage 1 (the rename)
+is done. Open work, in that document's stage numbering:
 
-1. Rename (stage 1): the UI-string and doc half landed 2026-09-04 (Voice page
-   → Instrument, "slot"/"Patch"/"preset" strings); the mechanical identifier
-   rename remains.
-2. Load-to-Track workflow (stage 2): Browse "Load" binds to the selected
+1. Load-to-Track workflow (stage 2): Browse "Load" binds to the selected
    Track behind a replace prompt; Sample Manager "Assign"; load-failure
    reasons on the wire.
-3. Sample Pool (stage 3): one indexed 1024-entry registry in SDRAM, refcount
+2. Sample Pool (stage 3): one indexed 1024-entry registry in SDRAM, refcount
    by path, per-Track voice stop, paged metadata, "used by"; no silent
    eviction.
-4. Instrument file and editors (stage 4): `.wxi` with the full chunk set,
+3. Instrument file and editors (stage 4): `.wxi` with the full chunk set,
    Init/Save/Name ops, Pad Map and Key Map, Instrument Browser, Track page.
-5. Voice architecture (stage 5): typed oscillators, Osc 2 + submix, filter
+4. Voice architecture (stage 5): typed oscillators, Osc 2 + submix, filter
    type, Env 3, two per-voice LFOs, new mod destinations —
    DWT-measured at `WAVEX_NUM_VOICES` before the count is changed.
-6. Bank (stage 6): `.wxb`, Bank page, Program Change recall.
-7. Track model and MIDI routing (stage 7), then polyphony policy (stage 8).
-8. Finish Mixer v1: UI/solo behavior, meter subscription, and hardware click
+5. Bank (stage 6): `.wxb`, Bank page, Program Change recall.
+6. Track model and MIDI routing (stage 7), then polyphony policy (stage 8).
+7. Finish Mixer v1: UI/solo behavior, meter subscription, and hardware click
    and soak tests.
-9. Add melodic sequencing, chord/tie handling, step/live record, and erase.
-10. Complete modulation: p-lock application, MIDI CC/channel-pressure
-    forwarding, and modulation UI (the per-voice LFOs and zone filter ADSR
-    move into item 5).
-11. Build sampling/recording v1 and the arpeggiator.
+8. Add melodic sequencing, chord/tie handling, step/live record, and erase.
+9. Complete modulation: p-lock application, MIDI CC/channel-pressure
+   forwarding, and modulation UI (the per-voice LFOs and zone filter ADSR
+   move into stage 5).
+10. Build sampling/recording v1 and the arpeggiator.
 
-The order in which items 4–7 are taken up is **not yet decided** (model doc
-§9 item 19); items 1–3 come first because the 2026-09-03 bench session is
+The order in which stages 4–7 are taken up is **not yet decided** (model doc
+§9 item 19); stages 2–3 come first because the 2026-09-03 bench session is
 blocked on them.
 
 **Gate:** from power-on, hear a card sample on the Keys in four taps; build a

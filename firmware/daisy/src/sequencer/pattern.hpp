@@ -87,7 +87,7 @@ struct Step {
     ParamLock param_locks[kMaxParamLocks];
 };
 
-struct Track {
+struct TrackSteps {
     bool enabled = true;  // mute
     Step steps[kMaxSteps];
 };
@@ -101,7 +101,7 @@ struct Pattern {
     // Applied to odd-indexed steps only (the classic "delay every other
     // 16th" swing model).
     uint8_t swing = 50;
-    Track tracks[kMaxTracks];
+    TrackSteps tracks[kMaxTracks];
 };
 
 // One scheduled trigger, sample-accurate (docs/features/sequencer.md §2:

@@ -29,7 +29,7 @@ set(COMPONENT_SRCS
     "pages/ui_play_page.cpp"
     "pages/ui_sample_manager_page.cpp"
     "pages/ui_system_info_page.cpp"
-    "pages/ui_voice_page.cpp"
+    "pages/ui_instrument_page.cpp"
     "pages/ui_sample_record_page.cpp"
     "pages/ui_cv_cal_page.cpp"
     "pages/ui_sample_edit_page.cpp"

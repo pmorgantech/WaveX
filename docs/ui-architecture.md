@@ -149,7 +149,7 @@ Two distinct shapes exist for grouping related pages, per
   away from, so a hidden tab holds no LVGL objects and runs no timers.
 - **A page building its own `lv_tabview`** (`tabGroupCreate()` /
   `tabGroupAddTab()` in `ui_tab_group.h`) is for stages that share state
-  across the tab switch — e.g. `UIVoicePage`'s five stages (Sample, Env,
+  across the tab switch — e.g. `UIInstrumentPage`'s five stages (Sample, Env,
   Amp, Filter, Mod) share the voice being edited, so the header and status
   line must survive switching tabs. The Diagnostics page uses the same
   helper for its six tabs.
@@ -262,7 +262,7 @@ group->addTab("My Tab", createMyCustomPage());
 For a **new** tab group, use `UITabHostPage` when the pages are independent and
 substantial (see "Tab Groups" above). Build your own `lv_tabview` via
 `tabGroupCreate()` / `tabGroupAddTab()` (`ui_tab_group.h`) only when the tabs
-must share state across a switch, the way `UIVoicePage` does.
+must share state across a switch, the way `UIInstrumentPage` does.
 
 ```cpp
 std::shared_ptr<UIPage> createToolsGroup() {

@@ -8,7 +8,7 @@
 
 ## 1. Placement
 
-Per instrument slot, on the **Daisy**, in the control tick. The arp intercepts the slot's note stream *after* wire dispatch, *before* `InstrumentBank::ResolveNoteOn`:
+Per Track, on the **Daisy**, in the control tick. The arp intercepts the Track's note stream *after* wire dispatch, *before* `Tracks::ResolveNote`:
 
 ```
 MSG_NOTE_ON/OFF → [slot arp enabled?] ──no──► instrument resolution (unchanged)

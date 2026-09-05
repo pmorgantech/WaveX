@@ -26,11 +26,11 @@ namespace wavex_ui {
  * 24-bit files.
  *
  * "Select" binds the focused sample to a Track (0..15, matches
- * MSG_NOTE_ON's channel and the Play page's own Slot parameter) rather than
+ * MSG_NOTE_ON's channel and the Play page's own Track parameter) rather than
  * to "notes on any channel" - that any-channel behavior was retired (roadmap
- * Phase 2.5 item 1) because it made a slot's note-on resolve to whatever was
+ * Phase 2.5 item 1) because it made a Track's note-on resolve to whatever was
  * most recently loaded ANYWHERE, not something this page's own binding
- * controlled. Shift+Slot -/+ changes which slot Select targets.
+ * controlled. Shift+Track -/+ changes which Track Select targets.
  */
 class UISampleManagerPage : public UIPage {
    public:
@@ -58,7 +58,7 @@ class UISampleManagerPage : public UIPage {
     lv_obj_t* list_ = nullptr;
     lv_obj_t* status_label_ = nullptr;
     lv_obj_t* detail_label_ = nullptr;
-    lv_obj_t* slot_label_ = nullptr;
+    lv_obj_t* track_label_ = nullptr;
     lv_timer_t* refresh_timer_ = nullptr;
 
     Row rows_[kMaxRows] = {};
@@ -68,12 +68,12 @@ class UISampleManagerPage : public UIPage {
     static void refreshTimerCb(lv_timer_t* timer);
     void rebuildList();    ///< UI task / LVGL context only.
     void refreshDetail();  ///< UI task / LVGL context only.
-    void refreshSlotLabel();
+    void refreshTrackLabel();
     void selectFocused();
     void unloadFocused();
     void editFocused();
     void moveFocus(int delta);
-    void changeSlot(int delta);
+    void changeTrack(int delta);
     const Row* focusedRow() const;
 };
 

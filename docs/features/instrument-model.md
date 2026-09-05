@@ -41,7 +41,7 @@ New module: `firmware/daisy/src/audio/instrument.hpp` (+ `instrument_bank.hpp`).
 // instrument.hpp — engine-side (NOT wire) structs
 static constexpr uint8_t  kMaxZones           = 32;
 static constexpr uint8_t  kMaxLayerTriggers   = 4;   // zones fired per note-on, cap
-static constexpr uint8_t  kNumInstrumentSlots = 16;
+static constexpr uint8_t  kNumTracks = 16;
 
 struct Zone {
     uint16_t sample_id      = 0;      // key into the slot's sample table (§4)
@@ -109,7 +109,7 @@ E-mu's positional/velocity crossfade, cheap version: when set, the zone's gain i
 Per-slot sample table: `{uint16_t sample_id → wxsamp_t handle, frames, channels, rate, resolved sidecar markers}`, ≤ 32 entries (one per zone max).
 
 - Instrument files reference samples **by path** (like `SampleLoadMessage`). On instrument load (§6), the Daisy walks the zone list, deduplicates paths, and loads each through the existing `OnSampleLoad` machinery (`SampleMemMgr::alloc` + chunked SD read from the main loop — load is *not* real-time). Progress/failures surface via `MSG_INST_STATUS`.
-- **Eviction rule**: binding a new instrument to a slot releases the old slot's table entries not shared with other slots (refcount by path hash). `VoiceManager::StopAll()` semantics apply, but scoped: add `VoiceManager::StopSlot(slot)` (hard-stop only voices whose `slot` matches) so rebinding slot 3 doesn't cut off slots 0–2. This is why `Voice` grows a `slot` field in §3.
+- **Eviction rule**: binding a new instrument to a slot releases the old slot's table entries not shared with other slots (refcount by path hash). `VoiceManager::StopAll()` semantics apply, but scoped: add `VoiceManager::StopTrack(track)` (hard-stop only voices whose `track` matches) so rebinding Track 3 doesn't cut off Tracks 0–2. This is why `Voice` grows a `track` field in §3.
 - RAM budget guard: refuse to load (with `INST_STATUS` error) rather than partially load, if total bytes exceed the free sample RAM minus a configurable reserve (`WAVEX_INST_LOAD_RESERVE_BYTES`, default 8 MB, in `hardware_config.h`).
 - Streamed zones (long samples) are **out of scope for v1** — they wait on the concurrent-streamed-voices work in roadmap Phase 1. A zone whose sample exceeds `WAVEX_INST_MAX_RAM_SAMPLE_BYTES` (default 4 MB) is rejected with a distinct error code so the UI can say *why*.
 
@@ -199,8 +199,8 @@ UI never blocks on loads: `INST_STATUS` drives progress toasts (deferred-update 
 
 ## 10. Implementation stages (one verified commit each)
 
-1. **`instrument.hpp` + zone resolution, host-tested**: `Instrument`, `InstrumentBank`, `ResolveNoteOn()` returning trigger-param sets; velocity switch/layer/crossfade tests; no wiring.
-2. **Voice manager extensions**: `Voice::slot`, `Voice::choke_group`, `VoiceManager::Choke()`, `StopSlot()`, `VoiceTriggerParams::{gain_mul, pitch_ratio_mul}`; host tests.
+1. **`instrument.hpp` + zone resolution, host-tested**: `Instrument`, `Tracks` (built as `InstrumentBank`, renamed 2026-09-04), `ResolveNoteOn()` returning trigger-param sets; velocity switch/layer/crossfade tests; no wiring.
+2. **Voice manager extensions**: `Voice::track`, `Voice::choke_group`, `VoiceManager::Choke()`, `StopTrack()`, `VoiceTriggerParams::{gain_mul, pitch_ratio_mul}`; host tests.
 3. **Engine wiring**: `OnNoteOn/OnNoteOff` route through the bank (slot = channel); delete the stopgap policy; dispatch-level tests extended (pattern: `message_dispatch_test.cpp`).
 4. **Sample table + async load path**, INST_STATUS reporting; host tests with a mock loader.
 5. **WXCF container** (`firmware/shared/wxcf/`) + `.wxi` save/load, round-trip host tests.
@@ -239,7 +239,7 @@ The full zone editor (§7 item 2 — drag key/vel ranges on a mini-keyboard, per
 - **Engine**: one new function alongside `SfzLoader::SetModSlot()` (same file, same pattern) — `SfzLoader::SetPadSample(uint8_t slot, uint8_t pad_index, uint16_t sample_id)`. Builds/overwrites a single one-key `Zone` (`key_lo = key_hi = pad_index`, `vel_lo = 1, vel_hi = 127`, `root_note = pad_index`, `in_use = true`) directly in `s_bank.Slot(slot).zones[pad_index]`, and sets `mode = InstrumentMode::Drum`. `sample_id` is one of the **plain-WAV loader's ids** (`s_loaded_samples[]`, `MSG_SAMPLE_LOAD`/`MSG_SAMPLE_SELECT`), not an SFZ-scoped id — this is the part that needs deciding (see below), and is why this is v0-sized rather than a full `SampleResolver` rework.
 - **The `SampleResolver` question** — **decided and built 2026-09-02** (with roadmap Phase 2.5 item 1's branch unification, which needed the same answer). `Instrument::origin` (`None` / `SfzImport` / `Built`) says which registry a zone's ids index; `SfzLoader::ResolveNote()` switches on it between `s_sample_table.Resolver()` and a bridging resolver the engine registers once via `SfzLoader::SetLoadedSampleResolver()` (`audio_engine.cpp::ResolveLoadedSample`, function pointer + context per `ModSlotResolver`'s precedent). That resolver also fills `SampleRef`'s sample-record fields (region, loop, fades, gain from the sidecar `SampleMetadata`), which a zone inherits wherever it leaves its own at 0 — §2's rule. `SetPadSample()` therefore has nothing to decide: it writes a one-key zone into a `Built` instrument exactly as `BindSample()` writes a whole-keyboard one, with `ZONE_FLAG_LIVE_FILTER_ENV` set until a zone editor gives the zone its own filter/ADSR. `SfzLoader::ForgetLoadedSample()` already drops any `Built` zone whose sample is unloaded.
 - **Protocol**: one narrow op, `INST_OP_SET_PAD_SAMPLE {slot, pad_index, sample_id}` (three small fields — far narrower than §6's full `INST_OP_SET_ZONE`), riding the same `MSG_INST_OP`/`InstOpMessage` extension pattern `INST_OP_SET_MOD_SLOT` just established (named fields, `path` unused for this op, same commit gets a round-trip + dispatch test).
-- **UI**: reuse the Instrument page's sample-cycling technique (`UIVoicePage::cycleSample()`, `ui_voice_page.cpp`, added 2026-09-02) on a per-pad basis: a "Pad Map" tab or page listing 16 pads, each showing its currently-assigned sample (or "none"), with Value −/+ cycling the FOCUSED pad's assignment through resident samples via the same `inter_mcu_get_sample_meta()` probe. No new sample-list infrastructure needed - it is the third page to reuse that probe (Sample Manager, Instrument, now this).
+- **UI**: reuse the Instrument page's sample-cycling technique (`UIInstrumentPage::cycleSample()`, `ui_instrument_page.cpp`, added 2026-09-02) on a per-pad basis: a "Pad Map" tab or page listing 16 pads, each showing its currently-assigned sample (or "none"), with Value −/+ cycling the FOCUSED pad's assignment through resident samples via the same `inter_mcu_get_sample_meta()` probe. No new sample-list infrastructure needed - it is the third page to reuse that probe (Sample Manager, Instrument, now this).
 
 This delivers "different pads play different samples" as a real on-device workflow without the WXCF save path or the full zone editor - it is one engine function, one protocol op, and one UI page/tab, each independently host-testable and small enough to be its own commit.
 

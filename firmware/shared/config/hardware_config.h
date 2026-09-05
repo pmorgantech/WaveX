@@ -31,6 +31,15 @@
 #define WAVEX_AUDIO_ENGINE_ENABLED 1
 #endif
 
+// Digital voice count (Daisy only). A measured DTCM/CPU budget, not a design
+// choice (features/track-and-patch-model.md §5): raise it only after a DWT
+// callback-cycle measurement at the new count and a look at the linker
+// report. Independent of the analog Stage B voice count (8 PCM1690 TDM
+// slots, 8 CV calibration groups) and of the mixer's kMaxMixChannels.
+#ifndef WAVEX_NUM_VOICES
+#define WAVEX_NUM_VOICES 8
+#endif
+
 // DAC CV Outputs (Daisy only)
 #ifndef WAVEX_DAISY_CV_OUTPUTS_ENABLED
 #define WAVEX_DAISY_CV_OUTPUTS_ENABLED 0

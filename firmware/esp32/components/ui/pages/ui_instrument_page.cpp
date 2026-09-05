@@ -1,6 +1,5 @@
-// WaveX Instrument editor (the "Instrument" page; class name follows in the
-// mechanical rename)
-#include "ui/ui_voice_page.h"
+// WaveX Instrument editor
+#include "ui/ui_instrument_page.h"
 
 #include <esp_log.h>
 
@@ -20,7 +19,7 @@ namespace wavex_ui {
 using namespace wavex_ui::palette;
 
 namespace {
-static const char* TAG = "UI_VOICE";
+static const char* TAG = "UI_INSTRUMENT";
 
 // Not in the shared palette: "this control cannot be driven yet" is a state
 // only this page and the softkey bar have, and it is not part of the card /
@@ -31,7 +30,7 @@ constexpr uint32_t kColInert = 0x5A5A5A;
 // cross the range without grinding. Matches the Play page's feel.
 constexpr int kParamStep = 65535 / 64;
 
-// Tab bar labels, in the same order as UIVoicePage::Stage. Kept short because
+// Tab bar labels, in the same order as UIInstrumentPage::Stage. Kept short because
 // the bar divides evenly - one long label shrinks every other tab's target.
 const char* const kStageNames[] = {"Sample", "Env", "Amp", "Filter", "Mod"};
 
@@ -54,7 +53,7 @@ constexpr int kBarX = 480;
 constexpr int kBarW = 700;
 }  // namespace
 
-int UIVoicePage::paramsForStage(Stage s, Param* out, int max) const {
+int UIInstrumentPage::paramsForStage(Stage s, Param* out, int max) const {
     int n = 0;
     auto add = [&](const char* label, uint8_t wire, uint16_t value, const char* unit) {
         if (n < max) {
@@ -72,7 +71,7 @@ int UIVoicePage::paramsForStage(Stage s, Param* out, int max) const {
             // the fallback"). PITCH/PAN/GAIN are live: the engine applies all
             // three to sounding voices.
             add("SAMPLE", kParamSample, 0, "");
-            add("TRACK", kParamSlot, 0, "");
+            add("TRACK", kParamTrack, 0, "");
             add("PITCH", WaveX::Protocol::PARAM_PITCH, 32768, "semi");
             add("PAN", WaveX::Protocol::PARAM_PAN, 32768, "");
             add("GAIN", WaveX::Protocol::PARAM_VOLUME, 52428, "");
@@ -121,7 +120,7 @@ int UIVoicePage::paramsForStage(Stage s, Param* out, int max) const {
 
 // Captures the defaults from the chain description exactly once, so the page
 // and the engine start from the same numbers.
-void UIVoicePage::seedValues() {
+void UIInstrumentPage::seedValues() {
     for (int s = 0; s < kStageCount; ++s) {
         Param params[kMaxParams];
         const int n = paramsForStage(static_cast<Stage>(s), params, kMaxParams);
@@ -137,7 +136,7 @@ void UIVoicePage::seedValues() {
 // (current_track.h) rather than kept in stage_values_ like the Instrument params:
 // a Track selection that only this page knew about was one of the reasons
 // "which Track?" had a different answer on every page.
-uint8_t UIVoicePage::currentSlot() const {
+uint8_t UIInstrumentPage::currentTrack() const {
     return getCurrentTrack();
 }
 
@@ -147,7 +146,7 @@ uint8_t UIVoicePage::currentSlot() const {
 // fallback"). There is no "list of loaded ids" query, so this probes
 // inter_mcu_get_sample_meta() over the same id range the Sample Manager
 // page's list does, rather than inventing a second source of truth for it.
-void UIVoicePage::cycleSample(int direction) {
+void UIInstrumentPage::cycleSample(int direction) {
     constexpr int32_t kMaxProbeId = 64;
     for (int32_t step = 1; step <= kMaxProbeId; ++step) {
         int32_t candidate = static_cast<int32_t>(sample_id_) + direction * step;
@@ -156,7 +155,7 @@ void UIVoicePage::cycleSample(int direction) {
         WaveX::Protocol::SampleMetadata m;
         if (inter_mcu_get_sample_meta(static_cast<uint16_t>(candidate), &m)) {
             sample_id_ = static_cast<uint16_t>(candidate);
-            inter_mcu_send_sample_select(sample_id_, currentSlot());
+            inter_mcu_send_sample_select(sample_id_, currentTrack());
             refreshHeader();
             refreshParams();
             return;
@@ -165,7 +164,7 @@ void UIVoicePage::cycleSample(int direction) {
     refreshStatus("No other samples resident - load one from Browse");
 }
 
-void UIVoicePage::onEnter(lv_obj_t* parent) {
+void UIInstrumentPage::onEnter(lv_obj_t* parent) {
     lv_obj_clean(parent);
     stage_ = 0;
     param_ = 0;
@@ -202,7 +201,7 @@ void UIVoicePage::onEnter(lv_obj_t* parent) {
     for (int s = 0; s < kStageCount; ++s) {
         tab_body_[s] = tabGroupAddTab(tabview_, kStageNames[s]);
     }
-    lv_obj_add_event_cb(tabview_, &UIVoicePage::tabChangedCb, LV_EVENT_VALUE_CHANGED, this);
+    lv_obj_add_event_cb(tabview_, &UIInstrumentPage::tabChangedCb, LV_EVENT_VALUE_CHANGED, this);
 
     // The Instrument edits whatever sample is selected. Asking for metadata means
     // the header can name it rather than showing a bare id.
@@ -214,7 +213,7 @@ void UIVoicePage::onEnter(lv_obj_t* parent) {
     }
     if (sample_id_ != 0) {
         inter_mcu_request_sample_meta(sample_id_);
-        inter_mcu_send_sample_select(sample_id_, currentSlot());
+        inter_mcu_send_sample_select(sample_id_, currentTrack());
     }
 
     // Only the first tab's widgets exist after this; the rest are built when
@@ -224,7 +223,7 @@ void UIVoicePage::onEnter(lv_obj_t* parent) {
     refreshParams();
 }
 
-void UIVoicePage::onExit() {
+void UIInstrumentPage::onExit() {
     if (root_) {
         lv_obj_del(root_);
         root_ = nullptr;
@@ -245,7 +244,7 @@ void UIVoicePage::onExit() {
 // The Instrument-scoped strip: which Instrument, Track and sample on the first line, the last
 // thing the page had to say on the second. Above the tabview rather than in a
 // tab body, so switching stage does not hide it (see the class note).
-void UIVoicePage::buildStrip(lv_obj_t* parent) {
+void UIInstrumentPage::buildStrip(lv_obj_t* parent) {
     lv_obj_t* strip = lv_obj_create(parent);
     lv_obj_set_size(strip, lv_pct(100), kStripH);
     lv_obj_set_pos(strip, 0, 0);
@@ -273,7 +272,7 @@ void UIVoicePage::buildStrip(lv_obj_t* parent) {
 // Builds one tab's parameter rows. Called on first display of that tab, not up
 // front: entering the page then costs three rows rather than seventeen, and
 // page entry is what this UI pays for (docs/backlog.md).
-void UIVoicePage::buildStageRows(int stage) {
+void UIInstrumentPage::buildStageRows(int stage) {
     if (stage < 0 || stage >= kStageCount || stage_built_[stage] || !tab_body_[stage]) {
         return;
     }
@@ -353,8 +352,8 @@ void UIVoicePage::buildStageRows(int stage) {
     stage_built_[stage] = true;
 }
 
-void UIVoicePage::tabChangedCb(lv_event_t* e) {
-    auto* self = static_cast<UIVoicePage*>(lv_event_get_user_data(e));
+void UIInstrumentPage::tabChangedCb(lv_event_t* e) {
+    auto* self = static_cast<UIInstrumentPage*>(lv_event_get_user_data(e));
     if (!self || !self->tabview_) {
         return;
     }
@@ -365,7 +364,7 @@ void UIVoicePage::tabChangedCb(lv_event_t* e) {
 // tapped the bar or the softkeys/encoder drove it. moveStage() sets the active
 // tab, which re-enters here through the event callback, so this has to be a
 // no-op when the stage has not actually changed.
-void UIVoicePage::selectStage(int stage) {
+void UIInstrumentPage::selectStage(int stage) {
     if (stage < 0 || stage >= kStageCount || stage == stage_) {
         return;
     }
@@ -380,39 +379,39 @@ void UIVoicePage::selectStage(int stage) {
     ESP_LOGI(TAG, "Instrument -> %s", kStageNames[stage_]);
 }
 
-void UIVoicePage::refreshHeader() {
+void UIInstrumentPage::refreshHeader() {
     if (!name_label_ || !lv_obj_is_valid(name_label_)) {
         return;
     }
     char header[128];
     WaveX::Protocol::SampleMetadata m;
-    const unsigned slot = trackDisplayNumber(currentSlot());
+    const unsigned track = trackDisplayNumber(currentTrack());
     if (sample_id_ != 0 && inter_mcu_get_sample_meta(sample_id_, &m)) {
         snprintf(header,
                  sizeof(header),
                  "%s   -   Track %u   sample %u  %.32s",
-                 voice_name_,
-                 slot,
+                 instrument_name_,
+                 track,
                  (unsigned)sample_id_,
                  m.name);
     } else if (sample_id_ != 0) {
         snprintf(header,
                  sizeof(header),
                  "%s   -   Track %u   sample %u",
-                 voice_name_,
-                 slot,
+                 instrument_name_,
+                 track,
                  (unsigned)sample_id_);
     } else {
         snprintf(header,
                  sizeof(header),
                  "%s   -   Track %u   no sample (load one from Sample > Browse)",
-                 voice_name_,
-                 slot);
+                 instrument_name_,
+                 track);
     }
     lv_label_set_text(name_label_, header);
 }
 
-void UIVoicePage::refreshParams() {
+void UIInstrumentPage::refreshParams() {
     Param params[kMaxParams];
     const int n = paramsForStage(static_cast<Stage>(stage_), params, kMaxParams);
     if (param_ >= n) {
@@ -428,7 +427,7 @@ void UIVoicePage::refreshParams() {
         const Param& p = params[i];
         const bool inert = (p.wire_param == kParamNone);
         // Discrete choices, not continuous CC values - shown as text, no bar.
-        const bool discrete = (p.wire_param == kParamSample || p.wire_param == kParamSlot);
+        const bool discrete = (p.wire_param == kParamSample || p.wire_param == kParamTrack);
         const bool focused = (i == param_);
 
         char line[96];
@@ -455,7 +454,7 @@ void UIVoicePage::refreshParams() {
                          p.label,
                          (unsigned)sample_id_);
             }
-        } else if (p.wire_param == kParamSlot) {
+        } else if (p.wire_param == kParamTrack) {
             snprintf(line,
                      sizeof(line),
                      "%s%-10s  %u",
@@ -487,18 +486,18 @@ void UIVoicePage::refreshParams() {
     }
 }
 
-void UIVoicePage::refreshStatus(const char* text) {
+void UIInstrumentPage::refreshStatus(const char* text) {
     if (status_label_ && lv_obj_is_valid(status_label_)) {
         lv_label_set_text(status_label_, text ? text : "");
     }
 }
 
-void UIVoicePage::sendParam(const Param& p) {
+void UIInstrumentPage::sendParam(const Param& p) {
     if (p.wire_param == kParamNone) {
         refreshStatus("Not wired: the protocol carries no modulation routing yet");
         return;
     }
-    if (p.wire_param == kParamSample || p.wire_param == kParamSlot) {
+    if (p.wire_param == kParamSample || p.wire_param == kParamTrack) {
         // Not a CC destination - stepParam() is what actually sends
         // MSG_SAMPLE_SELECT for these two. sendParam() is also called from
         // Init's "resend every wired parameter" loop, which must not forward
@@ -510,7 +509,7 @@ void UIVoicePage::sendParam(const Param& p) {
     }
 }
 
-void UIVoicePage::stepParam(int steps) {
+void UIInstrumentPage::stepParam(int steps) {
     Param params[kMaxParams];
     const int n = paramsForStage(static_cast<Stage>(stage_), params, kMaxParams);
     if (param_ < 0 || param_ >= n) {
@@ -525,7 +524,7 @@ void UIVoicePage::stepParam(int steps) {
         cycleSample(steps > 0 ? 1 : -1);
         return;
     }
-    if (p.wire_param == kParamSlot) {
+    if (p.wire_param == kParamTrack) {
         int32_t next = static_cast<int32_t>(getCurrentTrack()) + steps;
         next = next < 0 ? 0 : (next > 15 ? 15 : next);
         setCurrentTrack(static_cast<uint8_t>(next));
@@ -557,7 +556,7 @@ void UIVoicePage::stepParam(int steps) {
 
 // Softkey/encoder stage movement drives the tab bar rather than a second piece
 // of state, so the bar always shows where the focus actually is.
-void UIVoicePage::moveStage(int delta) {
+void UIInstrumentPage::moveStage(int delta) {
     const int next = (stage_ + delta + kStageCount) % kStageCount;
     if (tabview_ && lv_obj_is_valid(tabview_)) {
         lv_tabview_set_active(tabview_, static_cast<uint32_t>(next), LV_ANIM_OFF);
@@ -568,7 +567,7 @@ void UIVoicePage::moveStage(int delta) {
     selectStage(next);
 }
 
-void UIVoicePage::moveParam(int delta) {
+void UIInstrumentPage::moveParam(int delta) {
     Param params[kMaxParams];
     const int n = paramsForStage(static_cast<Stage>(stage_), params, kMaxParams);
     if (n == 0) {
@@ -578,7 +577,7 @@ void UIVoicePage::moveParam(int delta) {
     refreshParams();
 }
 
-void UIVoicePage::onInput(const InputEvent& evt) {
+void UIInstrumentPage::onInput(const InputEvent& evt) {
     switch (evt.type) {
         // steps() carries the direction, so neither case negates anything.
         // Negating `delta` here used to invert the value: the rotary encoder
@@ -612,7 +611,7 @@ void UIVoicePage::onInput(const InputEvent& evt) {
     }
 }
 
-std::array<Softkey, NUM_SOFTKEYS> UIVoicePage::getSoftkeys() {
+std::array<Softkey, NUM_SOFTKEYS> UIInstrumentPage::getSoftkeys() {
     std::array<Softkey, NUM_SOFTKEYS> keys{};
     keys[0] = {"Back", []() { UINavigator::instance().pop(); }};
     // Moving BETWEEN PARAMS has no touch equivalent - unlike stage, which the
@@ -632,7 +631,7 @@ std::array<Softkey, NUM_SOFTKEYS> UIVoicePage::getSoftkeys() {
     return keys;
 }
 
-std::array<Softkey, NUM_SOFTKEYS> UIVoicePage::getShiftedSoftkeys() {
+std::array<Softkey, NUM_SOFTKEYS> UIInstrumentPage::getShiftedSoftkeys() {
     std::array<Softkey, NUM_SOFTKEYS> keys{};
     keys[0] = {"Back", []() { UINavigator::instance().pop(); }};
     // The tab bar is also a touch route between stages; these are the same
@@ -659,7 +658,7 @@ std::array<Softkey, NUM_SOFTKEYS> UIVoicePage::getShiftedSoftkeys() {
                            }
                        }
                    }
-                   snprintf(voice_name_, sizeof(voice_name_), "Init Instrument");
+                   snprintf(instrument_name_, sizeof(instrument_name_), "Init Instrument");
                    refreshHeader();
                    refreshParams();
                    refreshStatus("Instrument reset to defaults");
@@ -667,8 +666,8 @@ std::array<Softkey, NUM_SOFTKEYS> UIVoicePage::getShiftedSoftkeys() {
     return keys;
 }
 
-std::shared_ptr<UIPage> createVoicePage() {
-    return std::make_shared<UIVoicePage>();
+std::shared_ptr<UIPage> createInstrumentPage() {
+    return std::make_shared<UIInstrumentPage>();
 }
 
 }  // namespace wavex_ui

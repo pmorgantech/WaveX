@@ -132,10 +132,10 @@ There is no protocol operation to unload, rename, delete, or reorder a loaded
 sample. Define one versioned `MSG_SAMPLE_OP` verb in a reserved protocol block,
 with round-trip tests, after its effects on instrument references are defined.
 
-### Shared sample registry and multi-slot residency
+### Shared sample registry and multi-Track residency
 
 SFZ imports still have a private sample registry and only one imported
-instrument can be resident independently. Resolve per-slot sample ownership,
+instrument can be resident independently. Resolve per-Track sample ownership,
 unique identities, release behavior, and Sample Manager visibility as the
 Sample Pool in the [Track/Instrument model](features/track-and-patch-model.md)
 §4 (1024 entries, indexed, fail-with-reason admission — promoted to roadmap
@@ -147,18 +147,6 @@ release them through the load handshake. The UI now states this rather than
 appearing to ignore the press, but "replace an Instrument with a sample without
 rebooting" needs the refcounted registry and the per-track voice-stop in
 [track-and-patch-model.md](features/track-and-patch-model.md) §4.
-
-### Boot-time SFZ autoload (resolved 2026-09-03)
-
-`WAVEX_DAISY_SFZ_BOOT_ENABLED` loaded `WAVEX_DAISY_SFZ_BOOT_PATH` into slot 0
-before audio started, so on any card holding that file Track 1 came up owned by
-an Instrument on every boot - and therefore refused `Select` for the rest of the
-session. That was the mechanism behind the 2026-09-03 bench finding that
-"Select does nothing on Track 1".
-
-Now defaulted to 0. Loading an Instrument is a browser action that asks which Track
-to use, so nothing claims a Track without being asked. Set the flag to 1 to
-restore the old behaviour.
 
 ### Wavetable oscillator source
 

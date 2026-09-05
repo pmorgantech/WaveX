@@ -33,6 +33,8 @@
 // fixed-size array, no heap allocation, no blocking I/O, no logging
 // (AGENTS.md constraint #1 / architecture.md §7.1).
 
+#include "config/hardware_config.h"
+
 #include "audio/mod_matrix.hpp"
 #include "audio/track_mix.hpp"
 #include "envelope.hpp"
@@ -46,7 +48,8 @@
 namespace WaveX {
 namespace AudioEngine {
 
-static constexpr uint8_t kNumVoices = 8;
+static_assert(WAVEX_NUM_VOICES >= 1 && WAVEX_NUM_VOICES <= 64,
+              "WAVEX_NUM_VOICES (hardware_config.h) sizes every per-voice array here");
 
 enum class VoiceState : uint8_t { Idle, Playing };
 
@@ -119,7 +122,7 @@ struct Voice {
     float pan = 0.5f;                  // 0=left, 1=right, linear (not equal-power)
     uint8_t note = 0;                  // MIDI note that triggered this voice
     uint16_t start_offset_frames = 0;  // consumed by the next Render() call
-    uint8_t slot = 0;                  // instrument slot (kit/multitimbral) that owns this voice
+    uint8_t track = 0;                 // Track that owns this voice
     uint8_t choke_group = 0;           // 0 = none; 1..N = mutual-exclusion group (open/closed hat)
     bool one_shot = false;             // ignore note-off; stop at the sample/region end
     uint32_t age = 0;                  // trigger order, for stealing/release-newest-first
@@ -218,10 +221,10 @@ struct VoiceTriggerParams {
     float pan = 0.5f;
     uint8_t root_note = 60;  // note at which `sample` plays at its recorded pitch
 
-    // Instrument-model routing (instrument-model.md §3). slot identifies the
-    // owning instrument (for StopSlot on rebind); choke_group != 0 mutes
+    // Instrument-model routing (instrument-model.md §3). track identifies the
+    // owning Track (for StopTrack on rebind); choke_group != 0 mutes
     // other voices in the same group at trigger time (open/closed hat).
-    uint8_t slot = 0;
+    uint8_t track = 0;
     uint8_t choke_group = 0;
     bool one_shot = false;
 
@@ -278,19 +281,19 @@ struct VoiceTriggerParams {
     float filter_env_release_s = 0.1f;
 };
 
-// Resolves a voice's owning instrument slot (Voice::slot) to that
+// Resolves a voice's owning Track (Voice::track) to that
 // instrument's fixed 8-entry ModSlot array (param-locks-and-modulation.md
 // §3/§9 stage 4). Function pointer + context, not std::function - the same
 // reasoning as instrument.hpp's SampleResolver: this keeps VoiceManager
 // HAL-free and independent of the instrument model, which sits a layer
 // above it (instrument.hpp includes voice_manager.hpp, not the reverse).
-// A null result (no resolver bound, or an out-of-range slot) means "no
+// A null result (no resolver bound, or an out-of-range track) means "no
 // slots" - EvaluateModMatrix() already treats that as an identity no-op.
 struct ModSlotResolver {
     const void* ctx = nullptr;
-    const ModSlot* (*resolve)(const void* ctx, uint8_t slot) = nullptr;
+    const ModSlot* (*resolve)(const void* ctx, uint8_t track) = nullptr;
 
-    const ModSlot* Get(uint8_t slot) const { return resolve ? resolve(ctx, slot) : nullptr; }
+    const ModSlot* Get(uint8_t track) const { return resolve ? resolve(ctx, track) : nullptr; }
 };
 
 // Live (base) voice parameters - the values a knob edits, as opposed to the
@@ -422,7 +425,7 @@ class VoiceManager {
         v.pan = params.pan < 0.0f ? 0.0f : (params.pan > 1.0f ? 1.0f : params.pan);
         v.note = params.trigger_note == 0xFF ? params.note : params.trigger_note;
         v.start_offset_frames = params.start_offset_frames;
-        v.slot = params.slot;
+        v.track = params.track;
         v.choke_group = params.choke_group;
         v.one_shot = params.one_shot;
         v.age = next_age_++;
@@ -517,7 +520,7 @@ class VoiceManager {
     void Release(uint8_t note) {
         int found = -1;
         uint32_t newest_age = 0;
-        for (uint8_t i = 0; i < kNumVoices; ++i) {
+        for (uint8_t i = 0; i < WAVEX_NUM_VOICES; ++i) {
             if (voices_[i].state == VoiceState::Playing && voices_[i].note == note &&
                 !voices_[i].one_shot && !voices_[i].envelope.IsReleasing()) {
                 if (found < 0 || voices_[i].age >= newest_age) {
@@ -532,14 +535,14 @@ class VoiceManager {
         }
     }
 
-    // Releases every held voice fired by `note` in one instrument slot,
+    // Releases every held voice fired by `note` on one Track,
     // except one-shot zones. Layered SFZ regions deliberately release
     // together; the legacy unscoped Release(note) above keeps its
     // newest-voice behavior for the Phase-1 single-sample fallback.
-    void ReleaseSlot(uint8_t note, uint8_t slot) {
+    void ReleaseTrack(uint8_t note, uint8_t track) {
         for (auto& v: voices_) {
-            if (v.state == VoiceState::Playing && v.note == note && v.slot == slot && !v.one_shot &&
-                !v.envelope.IsReleasing()) {
+            if (v.state == VoiceState::Playing && v.note == note && v.track == track &&
+                !v.one_shot && !v.envelope.IsReleasing()) {
                 v.envelope.Release();
                 v.env2.Release();
             }
@@ -567,7 +570,7 @@ class VoiceManager {
             out_l[i] = 0.0f;
             out_r[i] = 0.0f;
         }
-        for (uint8_t vi = 0; vi < kNumVoices; ++vi) {
+        for (uint8_t vi = 0; vi < WAVEX_NUM_VOICES; ++vi) {
             Voice& v = voices_[vi];
             if (v.state != VoiceState::Playing)
                 continue;
@@ -603,11 +606,11 @@ class VoiceManager {
             float pan = v.pan + v.mod_pan_offset;
             float gain = v.gain * v.mod_gain_mul;
             if (track_mixer_) {
-                gain *= track_mixer_->GainFor(v.slot);
+                gain *= track_mixer_->GainFor(v.track);
                 // pan_offset is -1..+1 added onto a 0..1 voice pan, per the
                 // design. Clamped, so a hard offset pins rather than wrapping
                 // through the opposite channel.
-                pan += track_mixer_->PanOffsetFor(v.slot);
+                pan += track_mixer_->PanOffsetFor(v.track);
             }
             pan = pan < 0.0f ? 0.0f : (pan > 1.0f ? 1.0f : pan);
             const float left_gain = gain * (1.0f - pan);
@@ -750,13 +753,13 @@ class VoiceManager {
         }
     }
 
-    // Hard-stops (no release tail) only voices owned by `slot`. Used when an
-    // instrument slot is rebound to a new instrument whose sample memory is
-    // about to be released - scoped so rebinding slot 3 doesn't cut off
+    // Hard-stops (no release tail) only voices owned by `track`. Used when a
+    // Track is rebound to a new Instrument whose sample memory is about to
+    // be released - scoped so rebinding Track 3 doesn't cut off
     // slots 0-2 (instrument-model.md §4). Callback-safe.
-    void StopSlot(uint8_t slot) {
+    void StopTrack(uint8_t track) {
         for (auto& v: voices_) {
-            if (v.slot == slot)
+            if (v.track == track)
                 v.state = VoiceState::Idle;
         }
     }
@@ -792,8 +795,8 @@ class VoiceManager {
      * Intended to run once per control tick from the audio callback - on
      * this engine one callback IS one 1kHz tick (timebase.hpp), so this is
      * called once per block, not once per sample. `resolver` looks up each
-     * voice's OWN instrument slot's matrix (Voice::slot, set at Trigger()
-     * from VoiceTriggerParams::slot) - the mod matrix is instrument-scoped
+     * voice's OWN Track's Instrument matrix (Voice::track, set at Trigger()
+     * from VoiceTriggerParams::track) - the mod matrix is instrument-scoped
      * (§3), so two voices from different slots can be modulated completely
      * differently in the same tick.
      *
@@ -821,7 +824,7 @@ class VoiceManager {
         for (auto& v: voices_) {
             if (v.state != VoiceState::Playing)
                 continue;
-            const ModSlot* slots = resolver.Get(v.slot);
+            const ModSlot* slots = resolver.Get(v.track);
             ModSources sources = global;
             sources.velocity = v.mod_velocity;
             sources.note = v.mod_note;
@@ -836,7 +839,7 @@ class VoiceManager {
     /// Not owned - see SetTrackMixer().
     const WaveX::Mix::TrackMixer* track_mixer_ = nullptr;
     int FindFreeVoice() const {
-        for (uint8_t i = 0; i < kNumVoices; ++i) {
+        for (uint8_t i = 0; i < WAVEX_NUM_VOICES; ++i) {
             if (voices_[i].IsFree())
                 return i;
         }
@@ -849,7 +852,7 @@ class VoiceManager {
     int FindVoiceToSteal() const {
         int releasing_oldest = -1;
         uint8_t overall_oldest = 0;
-        for (uint8_t i = 0; i < kNumVoices; ++i) {
+        for (uint8_t i = 0; i < WAVEX_NUM_VOICES; ++i) {
             if (voices_[i].age < voices_[overall_oldest].age)
                 overall_oldest = i;
             if (voices_[i].envelope.IsReleasing() &&
@@ -861,7 +864,7 @@ class VoiceManager {
         return releasing_oldest >= 0 ? releasing_oldest : overall_oldest;
     }
 
-    std::array<Voice, kNumVoices> voices_{};
+    std::array<Voice, WAVEX_NUM_VOICES> voices_{};
     uint32_t next_age_ = 0;
     uint32_t sample_rate_ = 48000;
     // Live transpose as a rate multiplier. 1.0 until something moves PARAM_PITCH,

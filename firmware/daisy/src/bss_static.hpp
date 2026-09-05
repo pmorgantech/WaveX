@@ -7,7 +7,7 @@
 // entire object image and the linker places it in .data, so it costs its full
 // size in flash AND is copied into SRAM by the startup code, before main().
 // That is the right trade for a small struct. It is the wrong one by two
-// orders of magnitude for a 34 KB InstrumentBank or a 50 KB SequencerTransport
+// orders of magnitude for the 34 KB Tracks or a 50 KB SequencerTransport
 // whose only non-zero content is a handful of defaults (key_hi = 127,
 // velocity = 100, tempo = 120.0): at one point 121 KB of a 438 KB image was
 // such default images, and the optimisation level does not change that.

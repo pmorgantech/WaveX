@@ -8,7 +8,7 @@
 
 ## 1. Vocabulary
 
-The words the UI, the docs and new code use. Engine identifiers keep their current names until the rename stage (§8 stage 1); the mapping is exact.
+The words the UI, the docs and the code use. Engine identifiers were renamed to match in stage 1 (2026-09-04); the "engine identifier" column records what they were called before, for reading older history.
 
 | Term | Meaning | Was called | Engine identifier today |
 |---|---|---|---|
@@ -18,9 +18,9 @@ The words the UI, the docs and new code use. Engine identifiers keep their curre
 | **Oscillator** | One of an Instrument's **two** typed sound sources (§3.1): a *Sample* oscillator (a Zone map over Samples — a multisample or a pad map) or, later, a *Wavetable* oscillator. Type determines playback semantics (`oscillator-sources.md`). | oscillator source, layer | sampler `Zone[]` today; no typed `Oscillator` yet |
 | **Zone** | One Sample mapped to a key × velocity range inside a Sample oscillator. Unchanged. | zone | `Zone` |
 | **Instrument** | **Confirmed 2026-09-03 (replacing "Patch"):** one playable, named, tagged, saveable sound: two Oscillators → submix → Filter → Amp/Pan, with three envelopes, two LFOs and a mod matrix (§3). Saved as `.wxi`. Gets loaded *into* a Track. A drum **Kit** is a drum-mode Instrument, not another kind of thing. | Voice, Patch, Preset, Program, Sound | `Instrument` (`instrument.hpp` — the name was already right) |
-| **Track** | **Confirmed 2026-09-02:** one sequencer track (formerly "slot") *and* one space in which an active Instrument can be loaded, responding to MIDI messages on its designated channel. Sixteen of them. Also owns a mixer strip and a polyphony limit. What a note is *addressed to*. | slot, instrument slot, channel | `kNumInstrumentSlots`, `InstrumentBank::Slot()`, `Voice::slot`, `NoteMessage::channel`; **and** `pattern.hpp`'s inner `Track` struct (a pattern's per-track step row — rename to `TrackSteps` in stage 1 so the word means one thing) |
-| **Bank** | **Confirmed 2026-09-04:** a numbered table of **128 Instrument slots** (0–127) saved as one self-contained file, `.wxb`, addressable by MIDI Program Change (§3.6). A Bank is *storage* — loading slot *n* copies that Instrument into a Track; a Bank never owns runtime sound. | bank, sound pool, program bank | none; today's `InstrumentBank` (the 16 runtime Tracks) is renamed `Tracks` so "Bank" means only this |
-| **Voice** | One of `WAVEX_NUM_VOICES` polyphony channels rendering one resolved note through an Instrument's signal path. An *engine* term; it never names a page or a user entity again. Track → Instrument → Voice is a dynamic allocation from one shared pool, never a static Track↔Voice mapping (§5). | voice | `Voice`, `kNumVoices` |
+| **Track** | **Confirmed 2026-09-02:** one sequencer track (formerly "slot") *and* one space in which an active Instrument can be loaded, responding to MIDI messages on its designated channel. Sixteen of them. Also owns a mixer strip and a polyphony limit. What a note is *addressed to*. | slot, instrument slot, channel | `kNumTracks`, `Tracks::Track()`, `Voice::track`, `NoteMessage::channel` (was `kNumInstrumentSlots`, `InstrumentBank::Slot()`, `Voice::slot`); `pattern.hpp`'s per-track step row is `TrackSteps` (was `Track`) so the word means one thing |
+| **Bank** | **Confirmed 2026-09-04:** a numbered table of **128 Instrument slots** (0–127) saved as one self-contained file, `.wxb`, addressable by MIDI Program Change (§3.6). A Bank is *storage* — loading slot *n* copies that Instrument into a Track; a Bank never owns runtime sound. | bank, sound pool, program bank | none; the 16 runtime Tracks are `Tracks` (was `InstrumentBank`) so "Bank" means only this |
+| **Voice** | One of `WAVEX_NUM_VOICES` polyphony channels rendering one resolved note through an Instrument's signal path. An *engine* term; it never names a page or a user entity again. Track → Instrument → Voice is a dynamic allocation from one shared pool, never a static Track↔Voice mapping (§5). | voice | `Voice`, `WAVEX_NUM_VOICES` (`hardware_config.h`; was `kNumVoices`) |
 | **Performance** | The current live configuration of all Tracks: Instrument bindings, MIDI routing, mixer, mutes, and shared effects. V1 stores one Performance directly in the Project; it is an ownership concept, not a separate file yet. | multi, part, performance | Project's target `Tracks[16]` plus mixer state |
 | **Pattern** | A group of notes/velocities over a fixed span — default **2 bars of 16ths = 32 steps** — with one step row per Track. The sequencer's unit of composition. | pattern | `Pattern` (`pattern.hpp`, built: 1–64 steps, default 16 → 32) |
 | **Song** | An ordered arrangement of Patterns over time, at a tempo and swing setting. | song, chain | `sequencer.md` §3's `Songs[≤16]: (pattern, repeats)` — not yet in code |
@@ -118,7 +118,7 @@ struct Track {
 };
 ```
 
-`InstrumentBank` becomes `Tracks` holding 16 of these; `Slot()` becomes `Track()`. Nothing about `Instrument` changes for this step.
+`Tracks` (renamed from `InstrumentBank` in stage 1) holds 16 of these behind `Track()`. Nothing about `Instrument` changes for this step.
 
 ### 2.2 MIDI routing: poly, omni, and everything between
 
@@ -330,7 +330,7 @@ End state: **one registry, refcounted by path** — the Sample Pool the UI names
   - **Audio data, not table size, is the real cap.** The sample arena is ~60 MB; 1024 resident samples means averaging <60 KB each (~0.6 s of 16-bit mono at 48 kHz). 1024 is the ceiling the table permits, not a working set to expect. Admission still runs through `WAVEX_INST_LOAD_RESERVE_BYTES`, and **eviction is never silent: a load that does not fit — in bytes or in entries — fails with a reason the UI shows** ("Pool full: 1024 samples", "RAM: 3.2 MB needed, 1.1 MB free"), replacing the oldest-first drop `audio_engine.cpp` does today. The user unloads; the engine never guesses.
   - **The frontend cannot mirror the whole registry.** `SampleMetadata` is 88 B, so 1024 records is 88 KB — PSRAM on the ESP32-P4, not internal SRAM. At UART4's 2 Mbaud (~200 KB/s at 8N1) a full mirror is ~510 ms, so it cannot be pushed eagerly on every change. The Sample Manager needs a windowed/paged query (`MSG_SAMPLE_META_REQ` by range) rather than the current "push everything, cache 8" model. A ~20-row visible window is ~2 KB, about 10 ms — comfortable against a 500 ms refresh.
   - **A page must be ONE batched message, not one per record.** `UART_MAX_PAYLOAD` is 2048, so ~23 `SampleMetadata` records fit in a single message, and the Daisy TX queue is only 4 deep (`daisy_uart_link.cpp` `MSG_QUEUE_SIZE`). Replying to a page with 20 separate messages drops most of them as queue overflow — exactly the defect the `MSG_TRACK_BINDING` broadcast had before it was changed to drain a bounded number per main-loop pass.
-- `Load(path)` returns the existing entry (refcount++) if the path is already resident. Binding an Instrument to a track refs its Samples; unbinding/replacing derefs; refcount 0 frees — after the voice-stop handshake, which becomes **per-track** (`VoiceManager::StopSlot()` is already built; `s_voice_stop_all` stops being the only tool).
+- `Load(path)` returns the existing entry (refcount++) if the path is already resident. Binding an Instrument to a track refs its Samples; unbinding/replacing derefs; refcount 0 frees — after the voice-stop handshake, which becomes **per-track** (`VoiceManager::StopTrack()` is already built; `s_voice_stop_all` stops being the only tool).
 - The Sample Manager lists the Pool — every resident Sample, whoever loaded it, with a "used by: Track 3 (Piano), Track 7" column. Sample Edit can edit any of them; an import's samples get markers like any other.
 - `MSG_SAMPLE_META` capacity on the ESP32 (8 today, the "can only describe 8 of 32" backlog item) grows, but at a 1024 registry it **pages** rather than mirrors — see the frontend constraint above. The Sample Manager's current "probe ids 1..64 every 500 ms" rebuild does not survive this and becomes a range query over the visible window.
 - `Instrument::origin` then means only "imported vs. built on-device" for the UI, not "which registry". `SfzLoader::ForgetLoadedSample` and the bridging resolver go away; there is one `SampleResolver`.
@@ -341,9 +341,9 @@ This is what makes **two soundfonts at once** ordinary: an Instrument on track 1
 
 ## 5. Polyphony
 
-`kNumVoices = 8` (`voice_manager.hpp`) is a **measured DTCM/CPU budget**, not a design choice, and the SVF's per-voice cost was never measured on hardware (`digital-voice-audition.md` Stage 1 said it must be). It is already the only place the digital voice count is written; `voices_` sizes off it and nothing else in the engine hard-codes 8 for polyphony. Decided 2026-09-04:
+`WAVEX_NUM_VOICES = 8` (`hardware_config.h`, since stage 1; was `kNumVoices` in `voice_manager.hpp`) is a **measured DTCM/CPU budget**, not a design choice, and the SVF's per-voice cost was never measured on hardware (`digital-voice-audition.md` Stage 1 said it must be). It is the only place the digital voice count is written; `voices_` sizes off it and nothing else in the engine hard-codes 8 for polyphony. Decided 2026-09-04:
 
-- It becomes **`WAVEX_NUM_VOICES` in `hardware_config.h`**, next to the other tunables, so 8 → 16 is that one edit plus a DWT measurement and the linker report. `VoiceManager` `static_assert`s its arrays against it.
+- It lives in **`hardware_config.h`** next to the other tunables, so 8 → 16 is that one edit plus a DWT measurement and the linker report. `VoiceManager` `static_assert`s against it.
 - It is **independent of the analog voice count** (`TdmVoiceSink::kNumSlots` = 8 PCM1690 slots, the 8-group CV calibration tables — hardware facts). The Stage B invariant "voice index == TDM slot == CV group" holds for the first 8 voices; digital voices beyond that render to the stereo codec only. `kMaxMixChannels` (mixer) is a third, unrelated 8.
 - The two-oscillator voice (§3.1) roughly doubles oscillator cost per voice while leaving filter, amp envelope and block-rate modulation flat. Before any number is promised: read the DWT callback-cycle counters with `WAVEX_NUM_VOICES` voices sounding, both oscillators active, through the filter. If there is headroom, 12 or 16 is the one-constant change.
 
@@ -414,10 +414,10 @@ Per §1.3: Load (sample, `.wxi`, `.sfz`), Assign, and Bank recall from the UI sh
 
 ## 8. Stages (one verified commit each)
 
-Listed by dependency. The order in which the later stages are taken up is **not yet decided** (decision §9 item 13); stages 1–3 are the ones the 2026-09-03 bench session is waiting on.
+Listed by dependency. The order in which the later stages are taken up is **not yet decided** (decision §9 item 13); stages 2–3 are the ones the 2026-09-03 bench session is waiting on.
 
 0. ~~**Bench findings, 2026-09-02/03**~~ — **done** (`2728662`, `33a1312`, `504406a`, `6f87ce6`): current sample for Sample Edit; SFZ subfolder fallback; shared selected Track with 1-based display; Instrument name on the wire; Sample Manager explains a refused Select; loading an Instrument asks which Track; boot autoload off.
-1. **Rename** — UI strings and docs (**done 2026-09-04**): Slot → Track, Voice page → Instrument, "Patch" → Instrument wherever a string still says it. Code identifiers in a second, purely mechanical commit (**open**) (`kNumInstrumentSlots → kNumTracks`, `InstrumentBank → Tracks`, `Slot() → Track()`, `Voice::slot → Voice::track`, `NoteMessage::channel` documented as track-or-channel, `kNumVoices → WAVEX_NUM_VOICES`). No behaviour change; builds and tests only.
+1. ~~**Rename**~~ — **done 2026-09-04** in two commits: UI strings and docs (Slot → Track, Voice page → Instrument, "Patch"/"preset" → Instrument), then the identifiers (`kNumTracks`, `Tracks::Track()`, `Voice::track`, `TrackSteps`, `WAVEX_NUM_VOICES`, `UIInstrumentPage`, `SfzLoader::TrackLoaded/TrackName`, `VoiceManager::StopTrack/ReleaseTrack`; `NoteMessage::channel` documented as the Track address). Still saying "slot": the wire-struct field names in `protocol.h` and the local variables in `audio_engine.cpp`/`sfz_loader.cpp` that carry them — these go with the §7 protocol-doc rename, not before it.
 2. **Load-to-Track workflow** (§6.1 A/B, §6.2) — Browse "Load" binds to the selected Track with the replace prompt; Sample Manager "Select" → "Assign to Track / To pad"; `MSG_SAMPLE_LOAD` failure reasons; the replace prompt wherever §1.3 applies. Small, ESP32-side except the reason code.
 3. **Sample Pool** (§4) — the big one; dissolves single residency, makes an import's samples visible/editable, enables two soundfonts and replacing an import with a sample. Indexed registry (measured design above), 1024 entries in SDRAM, refcount, per-track stop, paged metadata in one batched message, "used by". `SfzLoader` → `InstrumentLoader` over the Pool.
 4. **Instrument file and editors** — `.wxi` reader/writer with the full §3.3 chunk set (osc2/env3/LFO chunks may be written empty until stage 5), `INST_OP_NEW/SAVE/SET_NAME/SET_PAD_SAMPLE/SET_ZONE`, Instrument-level defaults + zone overrides (§3.2, retiring `ZONE_FLAG_LIVE_FILTER_ENV`), Instrument Browser, Pad Map and Key Map pages, Track page. The Pad Map piece does not depend on stage 3 and may go first.
@@ -427,7 +427,7 @@ Listed by dependency. The order in which the later stages are taken up is **not 
 8. **Polyphony policy** (§5) — measure first; `poly_limit`, `priority`, track-aware steal.
 9. **FX** — reserved chunk only; no design here.
 
-Stages 1, 2, 4's pad-map piece and 7 are independent of 3 and can be done in any order. Stage 6 needs 4. Stage 5 needs nothing but changes the `.wxi` chunks it writes, so it should not trail stage 4 by long. Nothing in Goal B (`digital-voice-audition.md` stages 5–8) waits on any of this except that the sequencer addresses tracks with `NOTE_ADDR_TRACK` from stage 7 on.
+Stages 2, 4's pad-map piece and 7 are independent of 3 and can be done in any order. Stage 6 needs 4. Stage 5 needs nothing but changes the `.wxi` chunks it writes, so it should not trail stage 4 by long. Nothing in Goal B (`digital-voice-audition.md` stages 5–8) waits on any of this except that the sequencer addresses tracks with `NOTE_ADDR_TRACK` from stage 7 on.
 
 ---
 
@@ -450,7 +450,7 @@ Recorded with the date each was taken. "Open" items need a yes/no before the sta
 | 11 | Bank = 128 embedded Instruments in one `.wxb`, index-resident, Program-Change addressable (§3.6). | **2026-09-04** |
 | 12 | Replacing an occupied Track is always confirmed from the UI (§1.3, §6.2); Program Change replaces without a dialog. | **2026-09-04** (PC exception to confirm) |
 | 13 | Tracks 1–16 on screen, eight per page (§2.4). | **2026-09-04** |
-| 14 | Voice page → Instrument page rename lands in stage 1. | **2026-09-04** |
+| 14 | Voice page → Instrument page rename lands in stage 1. | **2026-09-04**, done |
 | 15 | Two oscillators per Instrument; Osc 2 Sample-only for v1; Wavetable is a reserved `OscType` (§3.1). | **2026-09-04** |
 | 16 | Two per-voice LFOs owned by the Instrument plus one engine-global LFO; global LFO 2 retired (§3.1). | **2026-09-04** |
 | 17 | Env 1 hard-wired to amp; Env 2/3 routed through the matrix with shortcut knobs (§3.1). | **2026-09-04** |

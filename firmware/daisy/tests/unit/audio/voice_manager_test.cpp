@@ -7,7 +7,6 @@
 #include <cstring>
 #include <vector>
 
-using WaveX::AudioEngine::kNumVoices;
 using WaveX::AudioEngine::Voice;
 using WaveX::AudioEngine::VoiceManager;
 using WaveX::AudioEngine::VoiceState;
@@ -291,17 +290,17 @@ TEST(VoiceManagerTest, EightVoicesGetDistinctSlots) {
     vm.Init(48000);
     auto sample = MakeRampSample(1000, 0, 1);
 
-    for (uint8_t note = 0; note < kNumVoices; ++note) {
+    for (uint8_t note = 0; note < WAVEX_NUM_VOICES; ++note) {
         vm.Trigger(FlatParams(sample.data(), sample.size(), note, 100, 0.5f));
     }
 
-    EXPECT_EQ(vm.ActiveVoiceCount(), kNumVoices);
+    EXPECT_EQ(vm.ActiveVoiceCount(), WAVEX_NUM_VOICES);
     std::vector<uint8_t> notes;
-    for (uint8_t i = 0; i < kNumVoices; ++i) {
+    for (uint8_t i = 0; i < WAVEX_NUM_VOICES; ++i) {
         notes.push_back(vm.GetVoice(i).note);
     }
     std::sort(notes.begin(), notes.end());
-    for (uint8_t i = 0; i < kNumVoices; ++i) {
+    for (uint8_t i = 0; i < WAVEX_NUM_VOICES; ++i) {
         EXPECT_EQ(notes[i], i);
     }
 }
@@ -311,19 +310,19 @@ TEST(VoiceManagerTest, NinthTriggerStealsOldestVoice) {
     vm.Init(48000);
     auto sample = MakeRampSample(1000, 0, 1);
 
-    for (uint8_t note = 0; note < kNumVoices; ++note) {
+    for (uint8_t note = 0; note < WAVEX_NUM_VOICES; ++note) {
         vm.Trigger(FlatParams(sample.data(), sample.size(), note, 100, 0.5f));
     }
-    ASSERT_EQ(vm.ActiveVoiceCount(), kNumVoices);
+    ASSERT_EQ(vm.ActiveVoiceCount(), WAVEX_NUM_VOICES);
 
     // None of the 8 are releasing, so stealing must fall back to the
     // oldest-triggered voice (note=0).
     vm.Trigger(FlatParams(sample.data(), sample.size(), /*note=*/99, 100, 0.5f));
 
-    EXPECT_EQ(vm.ActiveVoiceCount(), kNumVoices);
+    EXPECT_EQ(vm.ActiveVoiceCount(), WAVEX_NUM_VOICES);
     bool found_note_0 = false;
     bool found_note_99 = false;
-    for (uint8_t i = 0; i < kNumVoices; ++i) {
+    for (uint8_t i = 0; i < WAVEX_NUM_VOICES; ++i) {
         if (vm.GetVoice(i).note == 0)
             found_note_0 = true;
         if (vm.GetVoice(i).note == 99)
@@ -338,7 +337,7 @@ TEST(VoiceManagerTest, StealingPrefersReleasingVoiceOverOlderSustainingOne) {
     vm.Init(48000);
     auto sample = MakeRampSample(1000, 0, 1);
 
-    for (uint8_t note = 0; note < kNumVoices; ++note) {
+    for (uint8_t note = 0; note < WAVEX_NUM_VOICES; ++note) {
         vm.Trigger(FlatParams(sample.data(), sample.size(), note, 100, 0.5f));
     }
     // Release note 5 (not the oldest) - its envelope enters Release stage
@@ -349,7 +348,7 @@ TEST(VoiceManagerTest, StealingPrefersReleasingVoiceOverOlderSustainingOne) {
 
     bool found_note_5 = false;
     bool found_note_0 = false;
-    for (uint8_t i = 0; i < kNumVoices; ++i) {
+    for (uint8_t i = 0; i < WAVEX_NUM_VOICES; ++i) {
         if (vm.GetVoice(i).note == 5)
             found_note_5 = true;
         if (vm.GetVoice(i).note == 0)
@@ -512,7 +511,7 @@ TEST(VoiceManagerTest, StealingTakesOldestReleasingVoice) {
     VoiceManager vm;
     vm.Init(48000);
     auto sample = MakeRampSample(48000, 1000, 0);
-    for (uint8_t note = 0; note < kNumVoices; ++note) {
+    for (uint8_t note = 0; note < WAVEX_NUM_VOICES; ++note) {
         auto p = FlatParams(sample.data(), sample.size(), note, 100, 0.5f);
         p.release_s = 5.0f;
         vm.Trigger(p);
@@ -524,7 +523,7 @@ TEST(VoiceManagerTest, StealingTakesOldestReleasingVoice) {
     vm.Trigger(FlatParams(sample.data(), sample.size(), /*note=*/99, 100, 0.5f));
 
     bool found_3 = false, found_5 = false;
-    for (uint8_t i = 0; i < kNumVoices; ++i) {
+    for (uint8_t i = 0; i < WAVEX_NUM_VOICES; ++i) {
         if (vm.GetVoice(i).note == 3)
             found_3 = true;
         if (vm.GetVoice(i).note == 5)
@@ -918,11 +917,11 @@ TEST(VoiceManagerTest, StopAllSilencesEveryVoiceImmediately) {
     VoiceManager vm;
     vm.Init(48000);
     auto sample = MakeRampSample(48000, 32767, 0);
-    for (uint8_t n = 0; n < kNumVoices; ++n) {
+    for (uint8_t n = 0; n < WAVEX_NUM_VOICES; ++n) {
         vm.Trigger(
             FlatParams(sample.data(), sample.size(), static_cast<uint8_t>(60 + n), 127, 0.5f));
     }
-    ASSERT_EQ(vm.ActiveVoiceCount(), kNumVoices);
+    ASSERT_EQ(vm.ActiveVoiceCount(), WAVEX_NUM_VOICES);
 
     vm.StopAll();
 
@@ -976,7 +975,7 @@ static const WaveX::AudioEngine::Voice& VoiceAt(const VoiceManager& vm, int idx)
 }
 
 static int FindVoiceForNote(const VoiceManager& vm, uint8_t note) {
-    for (uint8_t i = 0; i < kNumVoices; ++i) {
+    for (uint8_t i = 0; i < WAVEX_NUM_VOICES; ++i) {
         const auto& v = vm.GetVoice(i);
         if (v.state != VoiceState::Idle && v.note == note)
             return i;
@@ -1017,13 +1016,13 @@ TEST(VoiceManagerTest, SlotAndChokeGroupAreStored) {
     vm.Init(48000);
     auto sample = MakeRampSample(100, 1000, 0);
     auto p = FlatParams(sample.data(), sample.size(), 42, 100, 0.5f);
-    p.slot = 3;
+    p.track = 3;
     p.choke_group = 2;
     vm.Trigger(p);
 
     int idx = FindVoiceForNote(vm, 42);
     ASSERT_GE(idx, 0);
-    EXPECT_EQ(VoiceAt(vm, idx).slot, 3);
+    EXPECT_EQ(VoiceAt(vm, idx).track, 3);
     EXPECT_EQ(VoiceAt(vm, idx).choke_group, 2);
 }
 
@@ -1075,23 +1074,23 @@ TEST(VoiceManagerTest, ChokeDoesNotAffectOtherGroups) {
     EXPECT_FALSE(VoiceAt(vm, g2_idx).envelope.IsReleasing());  // group 2 untouched
 }
 
-TEST(VoiceManagerTest, StopSlotStopsOnlyMatchingSlot) {
+TEST(VoiceManagerTest, StopTrackStopsOnlyMatchingTrack) {
     VoiceManager vm;
     vm.Init(48000);
     auto sample = MakeRampSample(100, 1000, 0);
 
     auto a = FlatParams(sample.data(), sample.size(), 60, 100, 0.5f);
-    a.slot = 1;
+    a.track = 1;
     vm.Trigger(a);
     auto b = FlatParams(sample.data(), sample.size(), 62, 100, 0.5f);
-    b.slot = 2;
+    b.track = 2;
     vm.Trigger(b);
     auto c = FlatParams(sample.data(), sample.size(), 64, 100, 0.5f);
-    c.slot = 1;
+    c.track = 1;
     vm.Trigger(c);
     EXPECT_EQ(vm.ActiveVoiceCount(), 3);
 
-    vm.StopSlot(1);  // stops the two slot-1 voices, leaves slot 2
+    vm.StopTrack(1);  // stops the two slot-1 voices, leaves slot 2
     EXPECT_EQ(vm.ActiveVoiceCount(), 1);
     int b_idx = FindVoiceForNote(vm, 62);
     EXPECT_GE(b_idx, 0);  // slot-2 voice survives
@@ -1308,13 +1307,13 @@ TEST(VoiceManagerLiveParamsTest, FilterStillTracksThroughTheReleaseTail) {
         << "a filter sweep must stay audible through the release tail";
 }
 
-TEST(VoiceManagerInstrumentTest, ReleaseSlotReleasesLayersButNotOtherSlotsOrOneShots) {
+TEST(VoiceManagerInstrumentTest, ReleaseTrackReleasesLayersButNotOtherTracksOrOneShots) {
     std::vector<int16_t> sample(48000, 12000);
     WaveX::AudioEngine::VoiceManager vm;
     vm.Init(48000);
 
     auto layer_a = FlatParams(sample.data(), static_cast<uint32_t>(sample.size()), 60, 127, 0.5f);
-    layer_a.slot = 2;
+    layer_a.track = 2;
     layer_a.trigger_note = 36;
     layer_a.release_s = 1.0f;
     vm.Trigger(layer_a);
@@ -1323,7 +1322,7 @@ TEST(VoiceManagerInstrumentTest, ReleaseSlotReleasesLayersButNotOtherSlotsOrOneS
     vm.Trigger(layer_b);
 
     auto other_slot = layer_a;
-    other_slot.slot = 3;
+    other_slot.track = 3;
     vm.Trigger(other_slot);
 
     auto one_shot = layer_a;
@@ -1331,7 +1330,7 @@ TEST(VoiceManagerInstrumentTest, ReleaseSlotReleasesLayersButNotOtherSlotsOrOneS
     vm.Trigger(one_shot);
 
     ASSERT_EQ(vm.ActiveVoiceCount(), 4);
-    vm.ReleaseSlot(36, 2);
+    vm.ReleaseTrack(36, 2);
 
     EXPECT_TRUE(vm.GetVoice(0).envelope.IsReleasing());
     EXPECT_TRUE(vm.GetVoice(1).envelope.IsReleasing());
@@ -1416,7 +1415,7 @@ WaveX::AudioEngine::VoiceTriggerParams DcTrigger(const std::vector<int16_t>& dat
     p.note = 60;
     p.root_note = 60;
     p.velocity = 127;
-    p.slot = slot;
+    p.track = slot;
     p.pan = 0.5f;
     p.attack_s = 0.0f;
     p.decay_s = 0.0f;
@@ -1743,7 +1742,7 @@ TEST(VoiceManagerModulationTest,
     vm.Init(48000);
     auto sample = MakeRampSample(48000, 0, 0);  // long, won't auto-release
 
-    for (uint8_t i = 0; i < kNumVoices; ++i) {
+    for (uint8_t i = 0; i < WAVEX_NUM_VOICES; ++i) {
         auto p = FlatParams(sample.data(), sample.size(), static_cast<uint8_t>(60 + i), 100, 0.5f);
         p.release_s = 5.0f;
         vm.Trigger(p);
@@ -1858,11 +1857,11 @@ TEST(VoiceManagerModulationTest, DifferentInstrumentSlotsGetIndependentModulatio
     auto sample = MakeRampSample(100, 0, 1);
     auto note_a = FlatParams(sample.data(), sample.size(), 60, 127, 0.5f);
     note_a.root_note = 60;
-    note_a.slot = 0;
+    note_a.track = 0;
     vm.Trigger(note_a);
     auto note_b = FlatParams(sample.data(), sample.size(), 64, 127, 0.5f);
     note_b.root_note = 64;
-    note_b.slot = 1;
+    note_b.track = 1;
     vm.Trigger(note_b);
 
     WaveX::AudioEngine::ModSources global;

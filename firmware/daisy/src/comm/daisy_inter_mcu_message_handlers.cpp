@@ -342,7 +342,7 @@ static void HandlePreviewRequestMessage(const uint8_t* payload, size_t payload_s
     memcpy(&req, payload, sizeof(req));
 
     if (s_hw) {
-        WaveX::Log::PrintLine("DAISY: PreviewReq slot=%u start=%lu end=%lu decim=%u",
+        WaveX::Log::PrintLine("DAISY: PreviewReq track=%u start=%lu end=%lu decim=%u",
                               (unsigned)req.slot,
                               (unsigned long)req.start,
                               (unsigned long)req.end,
