@@ -25,6 +25,7 @@
 #include "pcnt_task.h"
 #include "ui/ui_api.h"
 #include "ui/ui_busy_overlay.h"
+#include "ui/ui_console.h"
 #include "ui/ui_sample_browser.h"
 #include "ui/ui_screenshot.h"
 
@@ -210,6 +211,7 @@ void UITask::run() {
     ESP_LOGI(TAG, "Handing layout control to navigator stack");
 
     ESP_LOGI(TAG, "UI loop started with adaptive refresh rate control");
+    wavex_console_start();
     while (s_ui_running) {
         int32_t enc_delta = pcnt_consume_delta(WAVEX_ENCODER_PCNT_UNIT);
         if (enc_delta != 0) {
@@ -274,9 +276,11 @@ void UITask::run() {
         // backlight I2C writes on this UI task, outside LVGL's lock.
         wavex_ui::DisplayManager::instance().serviceScreenBlanker();
 
-        // Debug-build serial screenshots (no-op stub in release; manages
-        // its own LVGL locking, so called outside LV_LOCK).
+        // Debug-build console: screenshots and the HIL harness's UI-task
+        // verbs (no-op stubs in release; both manage their own LVGL
+        // locking, so called outside LV_LOCK).
         wavex_screenshot_poll();
+        wavex_console_poll();
 
         // Apply what the comm callbacks staged. Those run on the UART task and
         // may only raise flags; this is where the widgets actually change.

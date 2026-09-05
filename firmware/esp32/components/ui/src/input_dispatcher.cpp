@@ -79,6 +79,14 @@ void InputDispatcher::processAll() {
             if (evt.type == InputType::ButtonPress) {
                 UINavigator::instance().toggleShift();
             }
+        } else if (evt.source_id == BUTTON_BACK) {
+            // Back is global for the same reason: no page distinguishes
+            // button ids, so forwarded it would read as "activate" - which
+            // is what the physical key did before this (found by the HIL
+            // suite, 2026-09-04). The root page stays put.
+            if (evt.type == InputType::ButtonPress) {
+                UINavigator::instance().pop();
+            }
         } else if (current_) {
             current_->handleEvent(evt);
         }

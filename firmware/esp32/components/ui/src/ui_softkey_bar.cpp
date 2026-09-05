@@ -117,6 +117,18 @@ void SoftkeyBar::pressFocused() {
     }
 }
 
+bool SoftkeyBar::buttonCenter(int index, int32_t* x, int32_t* y) const {
+    if (index < 0 || index >= NUM_SOFTKEYS || !btns_[index]) {
+        return false;
+    }
+    lv_obj_update_layout(btns_[index]);
+    lv_area_t a;
+    lv_obj_get_coords(btns_[index], &a);
+    *x = (a.x1 + a.x2) / 2;
+    *y = (a.y1 + a.y2) / 2;
+    return true;
+}
+
 void SoftkeyBar::event_cb(lv_event_t* e) {
     auto* bar = static_cast<SoftkeyBar*>(lv_event_get_user_data(e));
     lv_obj_t* target = static_cast<lv_obj_t*>(lv_event_get_target(e));

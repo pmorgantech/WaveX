@@ -2,9 +2,13 @@
 #include "ui/ui_tab_host_page.h"
 
 #include <esp_log.h>
+#include <strings.h>
 
+#include "debug/console_command.h"
 #include "ui/ui_navigator.h"
 #include "ui/ui_tab_group.h"
+
+#include <cstring>
 
 namespace wavex_ui {
 
@@ -108,6 +112,71 @@ std::array<Softkey, NUM_SOFTKEYS> UITabHostPage::getSoftkeys() {
         return p->getSoftkeys();
     }
     return {};
+}
+
+// Debug harness: which tab is live plus each tab button's centre (so a host
+// can TAP it through the real tab bar), then the live child's own state.
+// "PAGE TAB <title>" switches tabs; anything else is the child's to answer.
+size_t UITabHostPage::consoleState(char* out, size_t cap, size_t len) {
+    using namespace WaveX::Debug;
+    UIPage* p = activePage();
+    len = AppendKvText(
+        out, cap, len, "tab", p ? tabs_[static_cast<size_t>(active_)].title.c_str() : "-");
+    lv_obj_t* bar = tabview_ ? lv_tabview_get_tab_bar(tabview_) : nullptr;
+    for (size_t i = 0; i < tabs_.size(); ++i) {
+        char key[16];
+        snprintf(key, sizeof(key), "tab%u", static_cast<unsigned>(i & 0xFF));
+        len = AppendKvText(out, cap, len, key, tabs_[i].title.c_str());
+        lv_obj_t* btn = bar && i < lv_obj_get_child_count(bar)
+                            ? lv_obj_get_child(bar, static_cast<int32_t>(i))
+                            : nullptr;
+        if (btn) {
+            lv_obj_update_layout(btn);
+            lv_area_t a;
+            lv_obj_get_coords(btn, &a);
+            char xy[16], v[24];
+            snprintf(xy, sizeof(xy), "tab%uxy", static_cast<unsigned>(i & 0xFF));
+            snprintf(v,
+                     sizeof(v),
+                     "%ld,%ld",
+                     static_cast<long>((a.x1 + a.x2) / 2),
+                     static_cast<long>((a.y1 + a.y2) / 2));
+            len = AppendKv(out, cap, len, xy, v);
+        }
+    }
+    return p ? p->consoleState(out, cap, len) : len;
+}
+
+bool UITabHostPage::consoleCommand(const char* args, char* reply, size_t cap) {
+    using namespace WaveX::Debug;
+    char verb[16];
+    const char* p = args;
+    NextWord(&p, verb, sizeof(verb));
+    if (strcmp(verb, "TAB") == 0) {
+        p = detail::SkipSpaces(p);
+        for (size_t i = 0; i < tabs_.size(); ++i) {
+            if (strcasecmp(tabs_[i].title.c_str(), p) == 0) {
+                // lv_tabview_set_active() moves the view but only a tab-bar
+                // click raises VALUE_CHANGED, so activate the child here the
+                // way tabChangedCb would. (A host wanting the full touch path
+                // taps tab<i>xy instead.)
+                if (tabview_) {
+                    lv_tabview_set_active(tabview_, static_cast<uint32_t>(i), LV_ANIM_OFF);
+                }
+                activate(static_cast<int>(i));
+                reply[0] = '\0';
+                return true;
+            }
+        }
+        snprintf(reply, cap, "notab");
+        return false;
+    }
+    UIPage* child = activePage();
+    if (child) {
+        return child->consoleCommand(args, reply, cap);
+    }
+    snprintf(reply, cap, "unknown");
+    return false;
 }
 
 std::array<Softkey, NUM_SOFTKEYS> UITabHostPage::getShiftedSoftkeys() {

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "config/logging_config.h"
+
 #include "../config.hpp"
 #include <cstdint>
 #if WAVEX_AUDIO_ENGINE_ENABLED
@@ -228,6 +230,17 @@ void OnSeqTransport(const WaveX::Protocol::SeqTransportMessage& m);
 void OnSeqPatternOp(const WaveX::Protocol::SeqPatternOpMessage& m);
 void OnMidiClockEvent(const WaveX::Protocol::MidiClockEventMessage& m);
 void OnMidiCc(const WaveX::Protocol::MidiCcMessage& m);
+
+#if WAVEX_DEBUG_HARNESS_ENABLED
+// Debug harness (docs/features/debug-harness-and-hil.md §4): read-only
+// snapshots for the console's STATE / TRACKS / SAMPLES verbs. Main loop
+// only; none of these touch the callback's state except through values it
+// publishes itself.
+void DebugTrackBinding(uint8_t track, WaveX::Protocol::TrackBindingMessage& out);
+uint8_t DebugActiveVoices();
+size_t DebugLoadedSamples(uint16_t* ids, size_t cap);
+uint32_t DebugUnderruns();
+#endif
 
 }  // namespace AudioEngine
 }  // namespace WaveX

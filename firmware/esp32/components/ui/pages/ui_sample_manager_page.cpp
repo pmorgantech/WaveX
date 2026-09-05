@@ -4,6 +4,7 @@
 #include <esp_log.h>
 
 #include "../styles/ui_theme.h"
+#include "debug/console_command.h"
 #include "inter_mcu.h"
 #include "ui/current_sample.h"
 #include "ui/current_track.h"
@@ -481,6 +482,18 @@ std::array<Softkey, NUM_SOFTKEYS> UISampleManagerPage::getShiftedSoftkeys() {
     keys[2] = {"Track +", [this]() { changeTrack(+1); }};
     keys[3] = {"Edit", [this]() { editFocused(); }};
     return keys;
+}
+
+// Debug harness: the focused row and the status line, which is where Assign
+// explains itself (refused / confirm / done).
+size_t UISampleManagerPage::consoleState(char* out, size_t cap, size_t len) {
+    using namespace WaveX::Debug;
+    const Row* row = focusedRow();
+    len = AppendKvInt(out, cap, len, "rows", row_count_);
+    len = AppendKvInt(out, cap, len, "focusid", row ? row->sample_id : 0);
+    len = AppendKvText(
+        out, cap, len, "status", status_label_ ? lv_label_get_text(status_label_) : "");
+    return len;
 }
 
 std::shared_ptr<UIPage> createSampleManagerPage() {

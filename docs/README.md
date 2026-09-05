@@ -44,7 +44,7 @@ implementation.
 | [oscillator-sources.md](features/oscillator-sources.md) | Sampler boundary accepted; wavetable deferred | Typed Sample and Wavetable oscillator contracts behind the shared Instrument/Voice path |
 | [instrument-model.md](features/instrument-model.md) | Core built, rest open | Presets, zones, multisampling, velocity layers — the Emax/Emulator lineage (Phase 2.5) |
 | [sfz-import.md](features/sfz-import.md) | Proposed | Loading third-party `.sfz` multisamples into the instrument model |
-| [debug-harness-and-hil.md](features/debug-harness-and-hil.md) | Proposed | Runtime input injection and machine-readable state query over the debug console, and the hardware-in-the-loop test suite they enable |
+| [debug-harness-and-hil.md](features/debug-harness-and-hil.md) | Built (2026-09-04) | The acknowledged `WAVEX-DBG` console on both boards - input injection, synthetic touch, `STATE` queries, Daisy message injection - and the `make test-hil` suite in `tests/hil/` |
 | [melodic-sequencing.md](features/melodic-sequencing.md) | Target design | Melodic track type, chords/ties, step-record, live record/overdub/erase (Phase 2.5) |
 | [param-locks-and-modulation.md](features/param-locks-and-modulation.md) | Target design | Parameter locks, modulation matrix, LFOs, filter envelope (Phase 2/2.5) |
 | [sampling-and-recording.md](features/sampling-and-recording.md) | Target design | Threshold-armed capture, pre-roll, resample/bounce, assign-to-zone (Phase 2.5) |

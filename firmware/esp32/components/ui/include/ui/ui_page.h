@@ -36,6 +36,21 @@ class UIPage {
      */
     virtual std::array<Softkey, NUM_SOFTKEYS> getShiftedSoftkeys() { return {}; }
 
+    /**
+     * @brief Debug-harness hooks (docs/features/debug-harness-and-hil.md §4).
+     *
+     * consoleState() appends the page's own " key=value" pairs to a STATE
+     * reply (WaveX::Debug::AppendKv*); consoleCommand() handles a "PAGE"
+     * verb's arguments and writes a reply body, returning false when the
+     * page does not know the command. Both run on the UI task under the
+     * LVGL lock. Defaults do nothing; pages that carry test-relevant state
+     * (a status line, a picker, a selected file) opt in.
+     */
+    virtual size_t consoleState(char* /*out*/, size_t /*cap*/, size_t len) { return len; }
+    virtual bool consoleCommand(const char* /*args*/, char* /*reply*/, size_t /*cap*/) {
+        return false;
+    }
+
     lv_obj_t* root() const { return root_; }
 
    protected:

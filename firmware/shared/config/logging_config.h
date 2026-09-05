@@ -398,10 +398,11 @@ void wavex_daisy_log_raw(const char* format, ...);
  * @def WAVEX_DEBUG_HARNESS_ENABLED
  * @brief Host-driven console command channel (both MCUs, debug builds only).
  *
- * Gates the console *command* surface - today the "WAVEX-LOG" runtime level
- * control on both boards, and the input-injection/state-query harness of
- * docs/features/debug-harness-and-hil.md once that exists. Costs a listener
- * task (ESP32) or an ISR byte-matcher (Daisy) plus its line buffer.
+ * Gates the console *command* surface on both boards: the "WAVEX-LOG"
+ * runtime level control and the acknowledged "WAVEX-DBG" input-injection /
+ * state-query harness of docs/features/debug-harness-and-hil.md (grammar in
+ * shared/debug/console_command.h). Costs a console task and a synthetic
+ * touch indev (ESP32) or an ISR byte-matcher (Daisy) plus a line buffer.
  *
  * Deliberately does NOT gate "WAVEX-ENTER-DFU". That token is the only reflash
  * path needing no BOOT+RESET, and a release image is the one most likely to
@@ -419,13 +420,13 @@ void wavex_daisy_log_raw(const char* format, ...);
  * @def WAVEX_ESP_SCREENSHOT_DEBUG
  * @brief Serial screenshot capture (ESP32, debug builds only).
  *
- * Listens on the console UART for the token "WAVEX-SCREENSHOT" and dumps the
- * active LVGL screen as RLE+base64 RGB565 between BEGIN/END markers, decoded
- * by scripts/esp32_screenshot.py. Costs a small UART-listener task and, per
- * capture, a transient ~4.5 MB of PSRAM.
+ * The debug console (WAVEX_DEBUG_HARNESS_ENABLED, which carries the listener)
+ * accepts "WAVEX-SCREENSHOT" and dumps the active LVGL screen as RLE+base64
+ * RGB565 between BEGIN/END markers, decoded by scripts/esp32_screenshot.py.
+ * Costs, per capture, a transient ~4.5 MB of PSRAM.
  */
 #ifndef WAVEX_ESP_SCREENSHOT_DEBUG
-#define WAVEX_ESP_SCREENSHOT_DEBUG WAVEX_DEBUG_LOGGING_ENABLED
+#define WAVEX_ESP_SCREENSHOT_DEBUG WAVEX_DEBUG_HARNESS_ENABLED
 #endif
 
 /**

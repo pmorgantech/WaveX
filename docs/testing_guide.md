@@ -371,7 +371,13 @@ Tests should run automatically in CI/CD:
 
 ### Hardware-Dependent Tests
 - Use mocks for unit tests
-- Create hardware-in-the-loop tests separately
+- Hardware-in-the-loop tests live in `tests/hil/` and run with `make test-hil`
+  from the devcontainer with both boards attached and the serial loggers up
+  (`make logs-start`). They drive the boards' debug consoles
+  (`WAVEX-DBG`, [features/debug-harness-and-hil.md](features/debug-harness-and-hil.md))
+  and skip when no board is enumerated, so they are a bench command and a
+  phase-gate input, not part of `make test` or CI. Every board line of a run
+  is in `logs/<board>.log`; the command/reply transcript is `logs/hil-<run>.log`.
 - Mark hardware tests with `DISABLED_` prefix until mocks available
 
 ## Resources
@@ -390,6 +396,9 @@ Tests should run automatically in CI/CD:
 - ⏳ Integration Tests: only `firmware/esp32/tests/integration/inter_mcu_protocol_test.cpp`
   has content; `firmware/shared/tests/integration/` and
   `firmware/daisy/tests/integration/` are still empty
+- ✅ Hardware-in-the-loop: `tests/hil/` (19 tests, 2026-09-04) - the console
+  harness itself, page routing by injected input and touch, and the
+  Track/Instrument model's Load-to-Track workflow across both boards
 
 A former `testing_strategy.md` predated this test suite and reported results
 for tests that were never run against hardware we do not have. It has been

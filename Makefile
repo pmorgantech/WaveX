@@ -1,5 +1,5 @@
 # WaveX Dual-MCU Sampler/Synth Build System
-.PHONY: help all esp32 daisy daisy-stageb size size-record flash-fast esp32-reset esp32-app-flash daisy-debug daisy-debug-build daisy-debug-load daisy-debug-server release esp32-release daisy-release check-release-clean check-profiles require-strings clean esp32-clean daisy-clean esp32-flash esp32-monitor esp32-flash-monitor esp32-menuconfig test test-all test-asan test-daisy test-esp32 test-shared test-clean ai-graph daisy-flash daisy-flash-auto flash-all start-logs stop-logs logs-start logs-stop
+.PHONY: help all esp32 daisy daisy-stageb size size-record flash-fast esp32-reset esp32-app-flash daisy-debug daisy-debug-build daisy-debug-load daisy-debug-server release esp32-release daisy-release check-release-clean check-profiles require-strings clean esp32-clean daisy-clean esp32-flash esp32-monitor esp32-flash-monitor esp32-menuconfig test test-all test-asan test-daisy test-esp32 test-shared test-hil test-clean ai-graph daisy-flash daisy-flash-auto flash-all start-logs stop-logs logs-start logs-stop
 
 # Test targets
 test: test-all
@@ -56,6 +56,22 @@ test-daisy:
 	else \
 		echo "Daisy tests directory not found - skipping"; \
 	fi
+
+# Hardware-in-the-loop: drives both boards over their debug consoles
+# (docs/features/debug-harness-and-hil.md). A bench command, not CI: needs
+# the devcontainer with both boards attached and the serial loggers up
+# (make logs-start) - the runner reads the boards' replies from logs/*.log.
+# With no board enumerated every test skips. HIL_ARGS passes pytest options
+# (e.g. HIL_ARGS="-k load --hil-slow").
+test-hil:
+	@if ! python3 scripts/serial_ports.py --present daisy >/dev/null 2>&1 && \
+	    ! python3 scripts/serial_ports.py --present esp32 >/dev/null 2>&1; then \
+		echo "test-hil: no board on USB - skipping"; exit 0; fi
+	@for b in daisy esp32; do \
+		if [ ! -f "$(LOG_DIR)/$$b.pid" ] || ! kill -0 "$$(cat $(LOG_DIR)/$$b.pid)" 2>/dev/null; then \
+			echo "test-hil: $$b logger not running - starting the loggers"; \
+			$(MAKE) --no-print-directory logs-start; break; fi; done
+	/usr/bin/python3 -m pytest tests/hil -v $(HIL_ARGS)
 
 test-esp32:
 	@echo "Running ESP32 unit tests..."

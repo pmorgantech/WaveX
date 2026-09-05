@@ -40,6 +40,7 @@ class UISampleManagerPage : public UIPage {
     const char* name() const override { return "Sample Manager"; }
 
     void onEnter(lv_obj_t* parent) override;
+    size_t consoleState(char* out, size_t cap, size_t len) override;
     void onExit() override;
     void onInput(const InputEvent& evt) override;
     std::array<Softkey, NUM_SOFTKEYS> getSoftkeys() override;

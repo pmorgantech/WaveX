@@ -453,6 +453,9 @@ static int s_block_size = 48;
 // Underrun detection state - set in callback, logged in main loop
 static volatile bool s_underrun_detected = false;
 static bool s_underrun_logged = false;
+#if WAVEX_DEBUG_HARNESS_ENABLED
+static uint8_t s_dbg_active_voices = 0;  // callback-published, see Callback()
+#endif
 
 // Preview state (review M7): fixed-capacity, not a heap vector. The old
 // std::vector reserved (end-start)/decim+1 elements straight from wire-
@@ -986,6 +989,10 @@ void SelectSample(uint16_t sample_id, uint8_t slot) {
     if (slot == kSequencerPreviewTrack) {
         PublishSequencerVoiceMap();
     }
+    // The frontend caches bindings; tell it this one changed rather than
+    // wait to be asked (the HIL suite found the cache going stale when a
+    // Track changed behind the UI's back, 2026-09-04).
+    PushTrackBinding(slot);
     WaveX::Log::PrintLine("SAMPLE_SELECT: track=%u id=%u", (unsigned)slot, (unsigned)sample_id);
 }
 
@@ -1000,6 +1007,42 @@ uint16_t SelectedSample(uint8_t slot) {
 // queue is 4 deep (daisy_uart_link.cpp MSG_QUEUE_SIZE), so a 16-message
 // burst would drop most of the replies as queue overflow.
 static uint16_t s_track_binding_pending = 0;
+
+// What a Track holds, as MSG_TRACK_BINDING reports it. Main loop only.
+static void BuildTrackBinding(uint8_t track, TrackBindingMessage& out) {
+    uint8_t state = TRACK_BINDING_EMPTY;
+    uint16_t sample_id = 0;
+    if (SfzLoader::TrackLoading(track)) {
+        state = TRACK_BINDING_LOADING;
+    } else if (SfzLoader::TrackLoaded(track)) {
+        sample_id = SfzLoader::BoundSample(track);
+        state = sample_id != 0 ? TRACK_BINDING_SAMPLE : TRACK_BINDING_PATCH;
+    }
+    out = TrackBindingMessage(track, state, sample_id);
+    snprintf(out.name, sizeof(out.name), "%s", SfzLoader::TrackName(track));
+}
+
+#if WAVEX_DEBUG_HARNESS_ENABLED
+void DebugTrackBinding(uint8_t track, TrackBindingMessage& out) {
+    if (track >= kNumTracks) {
+        out = TrackBindingMessage();
+        return;
+    }
+    BuildTrackBinding(track, out);
+}
+
+uint8_t DebugActiveVoices() {
+    return __atomic_load_n(&s_dbg_active_voices, __ATOMIC_RELAXED);
+}
+
+size_t DebugLoadedSamples(uint16_t* ids, size_t cap) {
+    size_t n = 0;
+    for (size_t i = 0; i < s_loaded_sample_count && n < cap; ++i) {
+        ids[n++] = s_loaded_samples[i].sample_id;
+    }
+    return n;
+}
+#endif
 
 void PushTrackBinding(uint8_t track) {
     if (track == 0xFF) {
@@ -1017,16 +1060,8 @@ void PumpTrackBinding() {
         const uint8_t track =
             static_cast<uint8_t>(__builtin_ctz(static_cast<unsigned>(s_track_binding_pending)));
 
-        uint8_t state = TRACK_BINDING_EMPTY;
-        uint16_t sample_id = 0;
-        if (SfzLoader::TrackLoading(track)) {
-            state = TRACK_BINDING_LOADING;
-        } else if (SfzLoader::TrackLoaded(track)) {
-            sample_id = SfzLoader::BoundSample(track);
-            state = sample_id != 0 ? TRACK_BINDING_SAMPLE : TRACK_BINDING_PATCH;
-        }
-        TrackBindingMessage msg(track, state, sample_id);
-        snprintf(msg.name, sizeof(msg.name), "%s", SfzLoader::TrackName(track));
+        TrackBindingMessage msg;
+        BuildTrackBinding(track, msg);
         if (WaveX::Comm::UartLinkSend(MSG_TRACK_BINDING, &msg, sizeof(msg)) < 0) {
             return;
         }
@@ -1076,6 +1111,9 @@ bool UnloadSample(uint16_t sample_id) {
     SfzLoader::ForgetLoadedSample(sample_id);
     remove_loaded_sample(sample_id);
     PublishSequencerVoiceMap();
+    // Any Track that was bound to it is empty now; the frontend cannot know
+    // which, so refresh them all.
+    PushTrackBinding(0xFF);
 
     WaveX::Log::PrintLine("SAMPLE_UNLOAD: id=%u freed (%u still loaded)",
                           (unsigned)sample_id,
@@ -1091,7 +1129,14 @@ static bool evict_oldest_loaded_sample() {
     if (s_loaded_sample_count == 0) {
         return false;
     }
-    remove_loaded_sample(s_loaded_samples[0].sample_id);
+    // Same discipline as UnloadSample: a Track bound to the evicted id must
+    // not keep a zone resolving to freed memory, and the frontend's binding
+    // cache must hear that the Track went empty. (Eviction itself goes away
+    // with the Sample Pool, model doc §4.)
+    const uint16_t victim = s_loaded_samples[0].sample_id;
+    SfzLoader::ForgetLoadedSample(victim);
+    remove_loaded_sample(victim);
+    PushTrackBinding(0xFF);
     return true;
 }
 
@@ -2135,8 +2180,13 @@ void Callback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t
             mod_slot_resolver, mod_global_sources, static_cast<uint32_t>(size));
     }
 
-    if (s_voice_manager.ActiveVoiceCount() > 0 &&
-        size <= static_cast<size_t>(Timebase::kBlockSize)) {
+    const uint8_t active_voices = s_voice_manager.ActiveVoiceCount();
+#if WAVEX_DEBUG_HARNESS_ENABLED
+    // One relaxed store per block for the console's STATE verb; the main
+    // loop reads it, nothing synchronises on it.
+    __atomic_store_n(&s_dbg_active_voices, active_voices, __ATOMIC_RELAXED);
+#endif
+    if (active_voices > 0 && size <= static_cast<size_t>(Timebase::kBlockSize)) {
         static float vm_l[Timebase::kBlockSize];
         static float vm_r[Timebase::kBlockSize];
         // Advance the mute ramps once per block, before the voices read them.
@@ -3024,12 +3074,18 @@ void PumpInstrumentLoad() {
     }
     stop_requested = false;
     const bool preview_was_loading = SfzLoader::TrackLoading(kSequencerPreviewTrack);
+    const bool was_busy = SfzLoader::Busy();
     SfzLoader::Pump(s_sample_mem_mgr, s_sample_io, sizeof(s_sample_io));
     // The loader publishes its new slot binding only when its state machine
     // reaches Idle. Rebuild the callback-owned snapshot at that transition;
     // rebuilding during the load would expose incomplete sample pointers.
     if (preview_was_loading && !SfzLoader::TrackLoading(kSequencerPreviewTrack)) {
         PublishSequencerVoiceMap();
+    }
+    // An import finishing (or failing) changes what its Track holds; push
+    // every binding so the frontend's cache follows without asking.
+    if (was_busy && !SfzLoader::Busy()) {
+        PushTrackBinding(0xFF);
     }
 }
 
@@ -3368,6 +3424,12 @@ void CheckAndLogUnderruns() {
     }
     episodes = 0;
 }
+
+#if WAVEX_DEBUG_HARNESS_ENABLED
+uint32_t DebugUnderruns() {
+    return s_diag_underruns;
+}
+#endif
 
 // Main-loop only: performs the blocking CV DAC transaction (~225 us
 // MCP4728 fast-write) for values staged at the control tick - never in the

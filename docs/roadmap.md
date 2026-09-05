@@ -158,7 +158,7 @@ The following code paths are open until observed on the target:
 | Sample Edit | Verify waveform fetch, handles, loop seam, browser detail waveform, and stereo readability. |
 | Settings and input | Verify brightness, scrolling, MIDI channel filtering, keypad, encoder direction, and UI responsiveness. |
 | UI concurrency | Measure LVGL lock/refresh behavior during encoder bursts and sample loading. |
-| Load-to-Track (2026-09-04) | Browse > Load a WAV with an empty Track selected: the Keys play it with no further step and the Track chip/binding shows it. Load with an occupied Track: the picker names what it would replace; confirm and cancel both behave. Load onto a Track holding an `.sfz` Instrument is refused in the picker. Sample Manager Assign asks once before replacing. Pull the card mid-load / load a 24-bit WAV by path: the status line reports the Daisy's reason rather than the spinner timing out. |
+| Load-to-Track (2026-09-04) | Automated: `make test-hil` (`tests/hil/test_load_to_track.py`) covers Load onto an empty Track and a note sounding on it, the replace picker (cancel, confirm, Track -/+), Sample Manager Assign's confirm, and a failed load's reason crossing the link. Still manual: Load onto a Track holding an `.sfz` Instrument (needs an `.sfz` on the bench card), and *hearing* the Keys. |
 | Image slimming (2026-09-04) | Boot, mount SD, stream a WAV, trigger RAM voices and run the sequencer on the 273 KB image: large callback/loader state is now constructed at startup (`bss_static.hpp`) instead of copied from `.data`, the SD volume links `SD_Driver` directly, and `UART_LOGx` lines should now appear in the log. DWT-measure `Render()` with region fades set (the per-sample 64-bit divide is gone; expect a drop, no number yet). |
 
 ## Rules for every phase
@@ -167,8 +167,8 @@ The following code paths are open until observed on the target:
 - For each protocol change, update `protocol.h`, add round-trip tests, and
   update `features/inter-mcu-protocol.md` in the same commit.
 - Follow `architecture.md` DMA/cache rules and keep audio callbacks nonblocking.
-- Every phase gate includes `make test`, reboot recovery, and an appropriate
-  zero-underrun soak.
+- Every phase gate includes `make test`, `make test-hil` on the bench, reboot
+  recovery, and an appropriate zero-underrun soak.
 - New subsystems need a focused feature design before implementation.
 - Delete superseded docs after moving any remaining open work here or to the
   backlog; git history is the archive.

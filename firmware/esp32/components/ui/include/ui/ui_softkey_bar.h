@@ -21,6 +21,12 @@ class SoftkeyBar {
     void focusNext(int delta);
     void pressFocused();
 
+    /// Read-only view for the debug console's STATE reply: the key as last
+    /// set, and its button's centre in screen coordinates (false when the
+    /// bar is not built), so a host can TAP it through the real touch path.
+    const Softkey& key(int index) const { return keys_[index]; }
+    bool buttonCenter(int index, int32_t* x, int32_t* y) const;
+
    private:
     static void event_cb(lv_event_t* e);
 

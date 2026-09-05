@@ -33,17 +33,28 @@ TEST(SequenceTrackerTest, ToleratesMinorReordering) {
     EXPECT_EQ(t.Evaluate(15), SequenceTracker::Result::Accept);
 }
 
-TEST(SequenceTrackerTest, RejectsSevereOutOfOrderEarlyInSession) {
+TEST(SequenceTrackerTest, PeerRebootEarlyInSessionResyncsToo) {
     SequenceTracker t;
     for (uint16_t seq = 1; seq <= 15; ++seq) {
         ASSERT_EQ(t.Evaluate(seq), SequenceTracker::Result::Accept);
     }
-    // seq=3 is far enough behind expected (16) to fail the reorder-tolerance
-    // check, but expected_seq_ (16) hasn't advanced past
-    // kResyncMinPriorProgress (100) yet, so this must NOT be misclassified
-    // as a peer reboot - it's ordinary corruption/severe reordering this
-    // early in a session.
-    EXPECT_EQ(t.Evaluate(3), SequenceTracker::Result::OutOfOrder);
+    // seq=3 is outside the reorder tolerance of expected=16. The links are
+    // point-to-point serial with CRC'd frames, so this is a rebooted peer,
+    // not reordering; the bench found the old "not before 100 frames" rule
+    // dropping every request from a freshly reflashed ESP32 (2026-09-04).
+    EXPECT_EQ(t.Evaluate(3), SequenceTracker::Result::ResyncAccept);
+    EXPECT_EQ(t.ResyncCount(), 1u);
+    EXPECT_EQ(t.ExpectedSeq(), 4);
+    EXPECT_EQ(t.Evaluate(4), SequenceTracker::Result::Accept);
+}
+
+TEST(SequenceTrackerTest, SevereOutOfOrderThatIsNotFreshStaysDropped) {
+    SequenceTracker t;
+    for (uint16_t seq = 1; seq <= 60; ++seq) {
+        ASSERT_EQ(t.Evaluate(seq), SequenceTracker::Result::Accept);
+    }
+    // 20 is far behind 61 and does not look like a fresh counter: dropped.
+    EXPECT_EQ(t.Evaluate(20), SequenceTracker::Result::OutOfOrder);
     EXPECT_EQ(t.OutOfOrderCount(), 1u);
     EXPECT_EQ(t.ResyncCount(), 0u);
 }
@@ -56,7 +67,7 @@ TEST(SequenceTrackerTest, RejectsSevereOutOfOrderEarlyInSession) {
 // again as "out-of-order" and dropped it - a wedge with no recovery path.
 TEST(SequenceTrackerTest, PeerRebootMidSessionResyncsInsteadOfWedging) {
     SequenceTracker t;
-    // Establish a long-running session, well past kResyncMinPriorProgress.
+    // Establish a long-running session.
     for (uint16_t seq = 1; seq <= 500; ++seq) {
         ASSERT_EQ(t.Evaluate(seq), SequenceTracker::Result::Accept) << "seq=" << seq;
     }

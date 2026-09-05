@@ -13,6 +13,21 @@ versioning and release process.
 
 ### Added
 
+- A debug harness and a hardware-in-the-loop suite
+  (`docs/features/debug-harness-and-hil.md`, now built). Both boards accept
+  `WAVEX-DBG <seq> <VERB> ...` on their consoles and answer
+  `WAVEX-DBG: <seq> OK|ERR ...`, so a script waits for its own ack instead of
+  sleeping. ESP32: key/encoder/pot injection into `InputDispatcher`, a
+  synthetic touch indev (`TAP`/`TOUCH`), `STATE` (navigator, selected Track
+  and its binding, softkey labels/enabled/centres, plus per-page state via
+  `UIPage::consoleState`), `TRACK`, `HOME` and `PAGE` (tab switch, browser
+  `DIR`/`SEL`). Daisy: `STATE`, `TRACKS`, `SAMPLES`, `MSG` (any message
+  straight into the dispatcher) and `NOTE`. One shared, host-tested line
+  reader and parser (`firmware/shared/debug/console_command.h`) replaces the
+  per-token matchers; the legacy `WAVEX-LOG`/`WAVEX-FILTER`/`WAVEX-SCREENSHOT`
+  lines still work. `make test-hil` runs `tests/hil/` (19 tests: the harness,
+  page routing, and the stage-2 Load-to-Track workflow end to end) from the
+  devcontainer with both boards attached; it skips with no board.
 - `make flash-fast` updates both boards for an edit/test loop: ESP32
   persistently over the P4's USB-Serial/JTAG port and the Daisy volatilely
   into SRAM over SWD, concurrently, with the serial loggers left attached.
@@ -174,6 +189,24 @@ versioning and release process.
   `docs/features/track-and-patch-model.md`.
 
 ### Fixed
+
+- The physical Back key acted as Select: no page distinguishes button ids,
+  so its press was "activate" wherever presses are handled. `InputDispatcher`
+  now consumes Back globally and pops the page, as it already did for Shift.
+  Found by the HIL suite.
+- A peer that rebooted early in a session wedged the inter-MCU link:
+  `SequenceTracker` only treated a fresh, out-of-tolerance sequence number as
+  a reboot after 100 frames of progress, so an ESP32 reflashed after ~20
+  frames had every request dropped until its counter climbed back. The links
+  are CRC'd point-to-point serial; a fresh number below tolerance is now
+  always a resync.
+- The frontend's Track-binding cache could go stale: the Daisy only reported
+  a binding when asked. It now pushes `MSG_TRACK_BINDING` whenever a binding
+  changes (select, unload, eviction, an import finishing) and the Browse tab
+  warms the whole cache on entry.
+- Evicting the oldest resident sample to make room for a load left any Track
+  bound to it with a zone pointing at freed memory; eviction now drops those
+  bindings the way `MSG_SAMPLE_UNLOAD` already did.
 
 - The Daisy no longer receives a flood of ~700 phantom note-on/off per
   second when the ESP32-P4's USB cable is plugged in: DIN MIDI RX shares

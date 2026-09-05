@@ -2,7 +2,6 @@
 
 #if WAVEX_ESP_SCREENSHOT_DEBUG
 
-#include "driver/uart.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_lvgl_port.h"
@@ -18,19 +17,6 @@
 namespace {
 
 const char* TAG = "UI_SCREENSHOT";
-constexpr char kToken[] = "WAVEX-SCREENSHOT";
-constexpr size_t kTokenLen = sizeof(kToken) - 1;
-
-// Runtime log-level control rides the same console listener (this file is
-// the debug console, not just screenshots): "WAVEX-LOG <MODULE|tag|*> <LEVEL>"
-// or "WAVEX-LOG ?" to list module levels. scripts/wavex_log.py drives it.
-constexpr char kLogCmdToken[] = "WAVEX-LOG ";
-constexpr size_t kLogCmdTokenLen = sizeof(kLogCmdToken) - 1;
-
-// Console UART. The trigger arrives on the same port the logs leave on, so
-// the host script can drive everything through one tty.
-constexpr uart_port_t kUart = UART_NUM_0;
-
 enum class State : uint8_t {
     Idle,
     Requested,  // token seen; UI task should capture on next poll
@@ -44,14 +30,13 @@ enum class State : uint8_t {
 // volatile guarantees neither the ordering nor the cross-core visibility this
 // handoff needs (docs/esp32p4_coding_guide.md SS9).
 std::atomic<State> s_state{State::Idle};
-bool s_started = false;
 
 lv_draw_buf_t s_buf;
 uint8_t* s_pixels = nullptr;  // PSRAM, aligned; valid in Captured state
 uint32_t s_w = 0, s_h = 0, s_stride = 0;
 
 // ---------------------------------------------------------------------------
-// Dump path (listener task context; UI task is NOT blocked by this)
+// Dump path (console task context; UI task is NOT blocked by this)
 // ---------------------------------------------------------------------------
 
 // RLE: (count u8 >= 1, pixel u16 LE) pairs, row-major over w*h logical pixels
@@ -135,152 +120,34 @@ void dump_and_release() {
     heap_caps_free(rle);
 }
 
-// Applies a completed "WAVEX-LOG" command. Two level stores exist on the
-// ESP32 and BOTH gate WAVEX_LOGx output: the shared module table and IDF's
-// per-tag level (default INFO). A module hit therefore also mirrors into
-// esp_log_level_set("WAVEX-<MODULE>", ...); an unmatched name is applied as
-// a verbatim IDF tag (UI_NAVIGATOR, packet_router, ...), which is how the
-// 400+ plain ESP_LOGx call sites are tuned. Replies go to the console so
-// wavex_log.py can tail them from the logger's file.
-void handle_log_command(const char* cmd) {
-    using namespace WaveX::Log;
-
-    if (cmd[0] == '?' && cmd[1] == '\0') {
-        for (size_t m = 0; m < kModuleCount; ++m) {
-            printf("WAVEX-LOG: %s=%s\n",
-                   kModuleNames[m],
-                   kLevelNames[GetLevel(static_cast<Module>(m))]);
-        }
-        return;
-    }
-
-    char name[32];
-    char lvl_tok[8];
-    size_t n = 0;
-    const char* p = cmd;
-    while (*p == ' ')
-        p++;
-    while (*p && *p != ' ' && n + 1 < sizeof(name))
-        name[n++] = *p++;
-    name[n] = '\0';
-    while (*p == ' ')
-        p++;
-    n = 0;
-    while (*p && *p != ' ' && n + 1 < sizeof(lvl_tok))
-        lvl_tok[n++] = *p++;
-    lvl_tok[n] = '\0';
-
-    const int level = ParseLevelToken(lvl_tok);
-    if (name[0] == '\0' || level < 0) {
-        printf(
-            "WAVEX-LOG: bad command '%s' - usage: WAVEX-LOG "
-            "<MODULE|tag|*> <OFF|ERROR|WARN|INFO|DEBUG|TRACE|0-5>\n",
-            cmd);
-        return;
-    }
-    const auto esp_level = static_cast<esp_log_level_t>(level);
-
-    if (name[0] == '*' && name[1] == '\0') {
-        SetAllLevels(static_cast<uint8_t>(level));
-        esp_log_level_set("*", esp_level);
-        printf("WAVEX-LOG: *=%s\n", kLevelNames[level]);
-        return;
-    }
-    if (SetLevelByName(name, static_cast<uint8_t>(level))) {
-        char tag[40] = "WAVEX-";
-        size_t j = 6;
-        for (const char* q = name; *q && j + 1 < sizeof(tag); ++q) {
-            tag[j++] = (*q >= 'a' && *q <= 'z') ? static_cast<char>(*q - 32) : *q;
-        }
-        tag[j] = '\0';
-        esp_log_level_set(tag, esp_level);
-        printf("WAVEX-LOG: %s=%s\n", tag + 6, kLevelNames[level]);
-        return;
-    }
-    esp_log_level_set(name, esp_level);
-    printf("WAVEX-LOG: tag %s=%s\n", name, kLevelNames[level]);
-}
-
-void listener_task(void*) {
-    uint8_t buf[64];
-    size_t matched = 0;
-    size_t log_matched = 0;
-    size_t log_capture = 0;
-    bool log_capturing = false;
-    char log_cmd[48];
-    for (;;) {
-        int n = uart_read_bytes(kUart, buf, sizeof(buf), pdMS_TO_TICKS(200));
-        for (int i = 0; i < n; i++) {
-            const char c = static_cast<char>(buf[i]);
-            if (c == kToken[matched]) {
-                if (++matched == kTokenLen) {
-                    matched = 0;
-                    if (s_state == State::Idle) {
-                        ESP_LOGI(TAG, "Screenshot requested");
-                        s_state = State::Requested;
-                    }
-                }
-            } else {
-                matched = (c == kToken[0]) ? 1u : 0u;
-            }
-
-            if (log_capturing) {
-                if (c == '\n' || c == '\r' || log_capture + 1 >= sizeof(log_cmd)) {
-                    log_cmd[log_capture] = '\0';
-                    log_capturing = false;
-                    log_capture = 0;
-                    handle_log_command(log_cmd);
-                } else {
-                    log_cmd[log_capture++] = c;
-                }
-            } else if (c == kLogCmdToken[log_matched]) {
-                if (++log_matched == kLogCmdTokenLen) {
-                    log_matched = 0;
-                    log_capturing = true;
-                    log_capture = 0;
-                }
-            } else {
-                log_matched = (c == kLogCmdToken[0]) ? 1u : 0u;
-            }
-        }
-
-        if (s_state == State::Captured) {
-            dump_and_release();
-            heap_caps_free(s_pixels);
-            s_pixels = nullptr;
-            s_state = State::Idle;
-        } else if (s_state == State::Failed) {
-            printf("=== WAVEX SCREENSHOT ERROR capture ===\n");
-            s_state = State::Idle;
-        }
-    }
-}
-
-void ensure_started() {
-    if (s_started) {
-        return;
-    }
-    s_started = true;
-
-    // RX-only driver on the console UART for the trigger token. Console TX
-    // (logging) does not go through this driver, so output is unaffected.
-    if (!uart_is_driver_installed(kUart)) {
-        esp_err_t err = uart_driver_install(kUart, 512, 0, 0, nullptr, 0);
-        if (err != ESP_OK) {
-            ESP_LOGW(TAG,
-                     "uart_driver_install failed (%s) - screenshots disabled",
-                     esp_err_to_name(err));
-            return;
-        }
-    }
-    xTaskCreate(listener_task, "scrshot", 4096, nullptr, 3, nullptr);
-    ESP_LOGI(TAG, "Serial screenshot armed (token: %s)", kToken);
-}
-
 }  // namespace
 
+bool wavex_screenshot_request() {
+    State expected = State::Idle;
+    if (!s_state.compare_exchange_strong(expected, State::Requested)) {
+        return false;
+    }
+    ESP_LOGI(TAG, "Screenshot requested");
+    return true;
+}
+
+bool wavex_screenshot_service() {
+    if (s_state == State::Captured) {
+        dump_and_release();
+        heap_caps_free(s_pixels);
+        s_pixels = nullptr;
+        s_state = State::Idle;
+        return true;
+    }
+    if (s_state == State::Failed) {
+        printf("=== WAVEX SCREENSHOT ERROR capture ===\n");
+        s_state = State::Idle;
+        return true;
+    }
+    return false;
+}
+
 void wavex_screenshot_poll() {
-    ensure_started();
     if (s_state != State::Requested) {
         return;
     }

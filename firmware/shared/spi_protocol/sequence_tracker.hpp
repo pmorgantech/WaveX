@@ -40,10 +40,15 @@ class SequenceTracker {
     static constexpr uint16_t kReorderTolerance = 10;
     // A low sequence number (<= this) looks like a freshly-reset sender.
     static constexpr uint16_t kFreshStartMax = 5;
-    // Only treat a low/fresh sequence number as a reboot if the tracker had
-    // already advanced well past ordinary startup - avoids misclassifying
-    // early-session reordering (e.g. expected_seq_=15, seq=3) as a reboot.
-    static constexpr uint16_t kResyncMinPriorProgress = 100;
+    // A fresh-looking seq that is already outside the reorder tolerance is
+    // treated as a peer reboot however little the session had advanced.
+    // This used to require expected_seq_ > 100 first, to avoid mistaking
+    // early-session reordering for a reboot - but the links are
+    // point-to-point serial with CRC'd frames, where a seq 3 arriving when
+    // 16 is expected is not reordering, and the HIL bench (2026-09-04) hit
+    // the other side of that trade within minutes: an ESP32 reflashed after
+    // ~20 frames had every request dropped until its counter climbed back
+    // into tolerance, with the Daisy reporting seqdrop on each one.
 
     // seq == 0 is always rejected (reserved/invalid per the wire protocol).
     Result Evaluate(uint16_t seq) {
@@ -58,8 +63,7 @@ class SequenceTracker {
         const uint16_t expected_min =
             (expected_seq_ > kReorderTolerance) ? (expected_seq_ - kReorderTolerance) : 1;
         if (seq < expected_min) {
-            const bool looks_like_reboot =
-                (seq <= kFreshStartMax) && (expected_seq_ > kResyncMinPriorProgress);
+            const bool looks_like_reboot = seq <= kFreshStartMax;
             if (looks_like_reboot) {
                 ++resync_count_;
                 last_received_seq_ = seq;

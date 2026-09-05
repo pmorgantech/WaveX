@@ -1,8 +1,11 @@
 # Debug Harness & Hardware-in-the-Loop Testing
 
-**Status**: Proposed. Nothing in this document is built. The console channel it
-extends *is* built and is the model for everything here — see
-[`logging.md`](../logging.md).
+**Status**: **Built 2026-09-04** — §8 stages 1–6 landed in one pass and
+`make test-hil` runs 19 tests against both boards (the harness itself, page
+routing by injected input, and the Track/Instrument model's stage-2 Load-to-Track
+workflow end to end). §10 records what was built as against what was proposed,
+and what the first bench run found. The console channel it extends is the
+model for everything here — see [`logging.md`](../logging.md).
 
 **Where it fits**: this is test infrastructure, not a Phase 2 feature. It
 belongs beside [`testing-remediation.md`](../testing-remediation.md) rather than
@@ -369,12 +372,15 @@ Each stage is independently useful and independently committable.
 5. **Daisy `MSG` injection.**
 6. **`tests/hil/` and `make test-hil`**, starting with the §7 rows.
 
-## 9. Decisions still open
+## 9. Decisions
 
-1. **Should `STATE` be extensible per page?** A virtual `UIPage::debugState()`
-   would let the Sample Edit page report marker positions. Powerful, but it puts
-   a debug method on every page's interface — and it is only worth it if tests
-   actually need per-page internals that softkeys and page name do not give.
+1. **`STATE` is extensible per page** — taken 2026-09-04, on the first real
+   test: the Load-to-Track workflow's evidence (the picker prompt, the selected
+   file, the last load's id) lives in the browser, and the Sample Manager's in
+   its status line. `UIPage::consoleState()` appends a page's own `key=value`
+   pairs; `UIPage::consoleCommand()` gives it a `PAGE <args>` verb. Both
+   default to nothing. The tab host forwards to its live child and adds the
+   tab titles and their button centres.
 
 Settled while writing this:
 
@@ -384,3 +390,102 @@ Settled while writing this:
   C++14 floor for `firmware/shared/`; that was stale — the Daisy device build
   and all three test trees are C++17, and `logging_config.h:36` `static_assert`s
   on it. AGENTS.md has been corrected.
+
+## 10. As built
+
+### The grammar and both boards
+
+`firmware/shared/debug/console_command.h` — the `LineReader`, `ParseCommand`,
+the reply builders and the hex/token helpers — is the one parser both boards
+use, pinned by `firmware/shared/tests/debug/console_command_test.cpp`. The
+marker is found anywhere in the line, not only at its start: the first line
+after a port (re)opens can carry bytes already in flight, and the very first
+Daisy PING of the bench run was lost to exactly that before the change.
+
+The legacy seq-less lines (`WAVEX-LOG`, `WAVEX-FILTER`, `WAVEX-SCREENSHOT`)
+still work and still answer in their legacy form, so `scripts/wavex_log.py`,
+`wavex_filter.py` and `esp32_screenshot.py` are unchanged. `WAVEX-ENTER-DFU`
+keeps its own substring matcher, as §3 required.
+
+**ESP32** (`components/ui/src/ui_console.cpp`, `ui_console.h`; the console
+task replaced the listener that lived in `ui_screenshot.cpp`):
+
+| Verb | Effect | Answered from |
+|---|---|---|
+| `PING` | ack | console task |
+| `LOG <...>` / `SCREENSHOT` | as before | console task |
+| `KEY <SELECT\|BACK\|ENC\|SHIFT> [PRESS\|RELEASE\|TAP]` | `InputDispatcher::post()` | console task |
+| `ENC <±n>` / `POT <±n>` | one event carrying the magnitude, as the UI task's poll does | console task |
+| `TAP <x> <y>` / `TOUCH <DOWN\|MOVE\|UP> <x> <y>` | the synthetic pointer indev; `TAP` holds PRESSED for three read cycles | console task |
+| `STATE` | `page depth shift track tstate tid tname sk0..5 sk<i>en sk<i>xy dropped` + the page's own pairs (`tab`, `tab<i>xy`, `status`, `sel`, `dir`, `entries`, `picker`, `target`, `lastid`, `rows`, `focusid`, `selidx`, …) | UI task, under the LVGL lock |
+| `TRACK <n>` | selects a Track and asks the Daisy for its binding | UI task |
+| `HOME` | pops to the main menu | UI task |
+| `PAGE <args>` | the live page's `consoleCommand`: `TAB <title>` on a tab host; `DIR <path>` and `SEL <name>` on the Sample Browser | UI task |
+
+Coordinates in `TAP`/`TOUCH` and in `sk<i>xy`/`tab<i>xy` are screen
+(rotated) coordinates; the indev's `read_cb` inverts
+`lv_display_rotate_point()` so LVGL lands the tap where `STATE` said the
+button is. `TRACK`, `HOME`, `DIR` and `SEL` are set-up verbs, one layer above
+the injection point on purpose: a test of Load should not also be a test of
+scrolling an unknown card by pot detent.
+
+**Daisy** (`daisy/src/main.cpp`; snapshots in `audio_engine.h` under
+`WAVEX_DEBUG_HARNESS_ENABLED`):
+
+| Verb | Effect |
+|---|---|
+| `PING`, `LOG`, `FILTER` | ack / as before |
+| `STATE` | `voices underruns samples streaming blocks dropped` |
+| `TRACKS` | `t0..t15` = `empty` / `sample:<id>` / `instrument:<name>` / `loading:<name>` — what `MSG_TRACK_BINDING` would say |
+| `SAMPLES` | `n ids` — the WAV registry |
+| `MSG <type_hex> <payload_hex>` | straight into `ProcessInterMcuMessage` |
+| `NOTE <track> <note> <vel> [ON\|OFF]` | the wire's own `NoteMessage` |
+
+### The suite
+
+`tests/hil/`: `wavex_target.py` (driver), `conftest.py`, `test_console.py`,
+`test_ui_nav.py`, `test_load_to_track.py`. `make test-hil` checks a board is
+enumerated (else exits 0), starts the loggers if they are not running, and
+runs pytest with the system interpreter (the IDF venv has no pytest).
+
+**Transport deviates from §6.** The driver does not take the port exclusively:
+it writes the command without claiming the port and reads the reply from the
+serial logger's file, exactly as `wavex_log.py` does. That keeps the loggers
+running through a HIL run — every board line, harness traffic included, lands
+in `logs/<board>.log` — and the runner writes its own command/reply transcript
+to `logs/hil-<run>.log`. The cost §6 feared is handled by `Target.probe()`:
+a target is only used if a PING is answered *and* the log file moved, which is
+the stale-logger symptom the bench notes describe. `LogTail` follows the file
+across the loggers' rotation.
+
+Encoder injection sends one event per detent by default (`enc(+3)` is three
+`ENC 1`s): the main menu steps once per event whatever magnitude it carries,
+and a slow turn is what a test means. `enc(n, steps=False)` posts one event
+with the whole magnitude, as a fast spin would.
+
+### What the first run found
+
+Three defects, all fixed in the same change, none of which the host suites
+could have seen:
+
+- **The physical Back key acted as Select.** No page distinguishes button ids,
+  so `ButtonPress` from `BUTTON_BACK` was "activate" on every page that handles
+  presses. `InputDispatcher` now consumes Back globally and pops, the way it
+  already handled Shift.
+- **A rebooted peer wedged the link early in a session.** `SequenceTracker`
+  only classified a fresh, out-of-tolerance sequence number as a reboot after
+  100 frames of prior progress; an ESP32 reflashed after ~20 frames had every
+  request dropped (`seqdrop` climbing on the Daisy) until its counter climbed
+  back into tolerance. The prior-progress requirement is gone: the links are
+  CRC'd point-to-point serial, where a seq 3 arriving against an expected 16
+  is a reboot, not reordering.
+- **The frontend's Track-binding cache went stale.** The Daisy only reported a
+  binding when asked, so a Track that changed behind the UI's back (an
+  unload, an eviction, an import completing) was still shown as it had been.
+  The Daisy now pushes `MSG_TRACK_BINDING` on every change, the Browse tab
+  warms the whole cache on entry, and `evict_oldest_loaded_sample()` drops the
+  evicted id's bindings the way `UnloadSample()` already did — it had been
+  leaving a Track's zone pointing at freed memory.
+
+Not built: nothing from §2–§6 is missing. `test_soak.py` and the §7 rows
+beyond the reboot-recovery and link ones are the open work.

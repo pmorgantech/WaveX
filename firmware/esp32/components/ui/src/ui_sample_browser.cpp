@@ -9,6 +9,7 @@
 #include "../components/waveform_view.h"
 #include "../styles/ui_theme.h"
 #include "comm/i_comm_interface.h"
+#include "debug/console_command.h"
 #include "esp_lvgl_port.h"
 #include "inter_mcu.h"
 #include "ui/current_sample.h"
@@ -238,8 +239,11 @@ void UISampleBrowser::onEnter(lv_obj_t* parent) {
     inter_mcu_set_inst_status_listener(instrument_status_callback, this);
     s_active_instance_ = this;
     // Load decides whether to ask before binding from the Track's state
-    // (beginSampleLoad); fetch it now so the answer is ready by then.
-    inter_mcu_request_track_binding(getCurrentTrack());
+    // (beginSampleLoad), and the picker names what each Track it is moved
+    // to holds; fetch every binding now so those answers are ready. The
+    // Daisy also pushes a binding whenever one changes, so the cache stays
+    // right between visits.
+    inter_mcu_request_track_binding(0xFF);
 
     is_playing_ = persistent_state_.is_playing;
     selected_file_index_ = persistent_state_.selected_file_index;
@@ -1692,6 +1696,76 @@ bool UISampleBrowser::loadSample(const wavex_file_entry_t* entry) {
     updateStatus("Sample load requested on Daisy");
 
     return true;
+}
+
+// Debug harness (docs/features/debug-harness-and-hil.md §4): what a test
+// needs to assert the Load-to-Track workflow, and the two set-up commands
+// that make a test independent of what is on the card and where the
+// highlight was left. Neither bypasses the thing under test - Load itself
+// still goes through the softkey.
+size_t UISampleBrowser::consoleState(char* out, size_t cap, size_t len) {
+    using namespace WaveX::Debug;
+    len = AppendKvText(
+        out, cap, len, "status", status_label_ ? lv_label_get_text(status_label_) : "");
+    const wavex_file_entry_t* sel =
+        file_browser_ ? wavex_file_browser_get_selected(file_browser_) : nullptr;
+    len = AppendKvText(out, cap, len, "sel", sel ? sel->name : "-");
+    len = AppendKvText(out,
+                       cap,
+                       len,
+                       "dir",
+                       file_browser_ ? wavex_file_browser_get_current_path(file_browser_) : "-");
+    len = AppendKvInt(
+        out,
+        cap,
+        len,
+        "entries",
+        file_browser_ ? static_cast<long>(wavex_file_browser_get_entry_count(file_browser_)) : 0);
+    len = AppendKvInt(out, cap, len, "picker", awaiting_track_ ? 1 : 0);
+    len = AppendKvInt(out, cap, len, "target", target_track_);
+    len = AppendKvInt(out, cap, len, "playing", is_playing_ ? 1 : 0);
+    len = AppendKvInt(out, cap, len, "lastid", persistent_state_.last_load_sample_id);
+    return len;
+}
+
+bool UISampleBrowser::consoleCommand(const char* args, char* reply, size_t cap) {
+    using namespace WaveX::Debug;
+    char verb[16];
+    const char* p = args;
+    if (!NextWord(&p, verb, sizeof(verb)) || !file_browser_) {
+        snprintf(reply, cap, "nobrowser");
+        return false;
+    }
+    p = detail::SkipSpaces(p);
+    if (!strcmp(verb, "DIR")) {
+        // DIR <path>: list a directory, as navigating into it would.
+        if (!*p || !wavex_file_browser_navigate_to(file_browser_, p)) {
+            snprintf(reply, cap, "nodir");
+            return false;
+        }
+        refreshSoftkeys();
+        reply[0] = '\0';
+        return true;
+    }
+    if (!strcmp(verb, "SEL")) {
+        // SEL <name>: move the highlight to a listed entry by name, firing
+        // the same selection callback the encoder does.
+        const uint32_t n = wavex_file_browser_get_entry_count(file_browser_);
+        for (uint32_t i = 0; i < n; ++i) {
+            const wavex_file_entry_t* e = wavex_file_browser_get_entry(file_browser_, i);
+            if (e && strcmp(e->name, p) == 0) {
+                wavex_file_browser_set_selection(file_browser_, i);
+                file_selected_index_callback(i, e, this);
+                refreshSoftkeys();
+                snprintf(reply, cap, "index=%lu", static_cast<unsigned long>(i));
+                return true;
+            }
+        }
+        snprintf(reply, cap, "noentry");
+        return false;
+    }
+    snprintf(reply, cap, "unknown");
+    return false;
 }
 
 namespace {

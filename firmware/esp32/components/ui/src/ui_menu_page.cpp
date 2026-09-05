@@ -4,6 +4,7 @@
 #include <esp_log.h>
 
 #include "../styles/ui_theme.h"
+#include "debug/console_command.h"
 #include "esp_lvgl_port.h"
 
 // LVGL locking macros
@@ -110,6 +111,17 @@ void UIMenuPage::rebuildList() {
             lv_obj_add_state(item, LV_STATE_FOCUSED);
         }
     }
+}
+
+// Debug harness: the highlighted item, so a host can steer with the encoder
+// from wherever the highlight was left rather than guessing.
+size_t UIMenuPage::consoleState(char* out, size_t cap, size_t len) {
+    using namespace WaveX::Debug;
+    len = AppendKvInt(out, cap, len, "items", static_cast<long>(items_.size()));
+    const bool valid = selected_ >= 0 && selected_ < static_cast<int>(items_.size());
+    len = AppendKvInt(out, cap, len, "selidx", valid ? selected_ : -1);
+    return AppendKvText(
+        out, cap, len, "sel", valid ? items_[static_cast<size_t>(selected_)].label.c_str() : "-");
 }
 
 void UIMenuPage::moveSelection(int delta) {

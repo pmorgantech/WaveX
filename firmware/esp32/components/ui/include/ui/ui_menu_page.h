@@ -29,6 +29,7 @@ class UIMenuPage : public UIPage {
     void onExit() override;
     void onInput(const InputEvent& evt) override;
     std::array<Softkey, NUM_SOFTKEYS> getSoftkeys() override;
+    size_t consoleState(char* out, size_t cap, size_t len) override;
 
    protected:
     std::string title_;

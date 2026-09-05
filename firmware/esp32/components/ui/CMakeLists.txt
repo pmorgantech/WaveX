@@ -9,6 +9,7 @@ set(COMPONENT_SRCS
     "components/waveform_view.cpp"
     "src/ui_diagnostics_page.cpp"
     "src/ui_screenshot.cpp"
+    "src/ui_console.cpp"
     "src/input_dispatcher.cpp"
     "src/tca8418_keypad.cpp"
     "src/ui_api.cpp"
@@ -44,6 +45,7 @@ set(COMPONENT_INCLUDE_DIRS
     "."
     "../../../shared/config"
     "../../../shared/spi_protocol"
+    "../../../shared"
 )
 
 # Create UI library

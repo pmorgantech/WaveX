@@ -73,6 +73,12 @@ sets it, and it does not survive a reboot.
 It writes to the port without claiming it (coexists with `serial_log.py`)
 and tails `logs/<board>.log` for the confirmation line.
 
+The same line reader carries the acknowledged test grammar, `WAVEX-DBG <seq>
+<VERB> ...` → `WAVEX-DBG: <seq> OK|ERR ...`, which `tests/hil/` drives
+(input injection, synthetic touch, `STATE` queries, Daisy message
+injection): see [`features/debug-harness-and-hil.md`](features/debug-harness-and-hil.md)
+§10 for the verbs. `WAVEX-LOG` is also accepted as a `WAVEX-DBG` verb.
+
 Runtime changes do not persist across reboot; boot-time defaults are the
 module table (and `sdkconfig`'s `CONFIG_LOG_DEFAULT_LEVEL` for plain ESP32
 tags). Change the table when a different default has earned its place.

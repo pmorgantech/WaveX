@@ -28,6 +28,9 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
 # TyTools optional high-level ESP32 monitor
 RUN pip install --no-cache-dir --break-system-packages esptool pyserial
 
+# tests/hil (make test-hil) drives both boards over their consoles from here.
+RUN pip install --no-cache-dir --break-system-packages pytest
+
 # pre-commit lives in the image, not on the host: the hook suite (clang-format,
 # firmware builds, host tests) assumes this container's toolchain, and the
 # tracked .githooks/pre-commit wrapper refuses to run outside it. This env

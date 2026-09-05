@@ -7,6 +7,7 @@
 #include "config/link_config.h"
 #include "config/logging_config.h"
 #include "daisy_seed.h"
+#include "debug/console_command.h"
 #include "memory_sections.h"
 #include "per/gpio.h"
 #include "stm32h7xx_hal.h"
@@ -21,6 +22,7 @@
 
 // Feature macros moved to config.hpp
 #include "audio/audio_engine.h"
+#include "comm/daisy_inter_mcu_message_handlers.h"
 #include "profiling/profiler.h"
 
 #include "timebase.hpp"
@@ -66,32 +68,35 @@ static volatile bool s_dfu_requested = false;
 // ---------------------------------------------------------------------------
 // Host-driven console commands on the CDC port
 //
-// A line "WAVEX-<VERB> ...\n" is captured by the USB ISR and parsed on the
-// main loop, which replies through the log ring on the same port. Verbs:
+// Every line is captured by the USB ISR (bytes only, into the shared
+// LineReader) and parsed on the main loop, which replies through the log
+// ring on the same port. Two grammars, one parser
+// (firmware/shared/debug/console_command.h, host-tested):
 //
-//   LOG <MODULE|*> <LEVEL> / LOG ?   runtime log levels (scripts/wavex_log.py)
-//   FILTER <wavex|daisysp> [12|24] [drive%] / FILTER ?
-//                                    per-voice lowpass selection for A/B
-//                                    listening (scripts/wavex_filter.py,
-//                                    audio/voice_filter.hpp)
+//   WAVEX-LOG <MODULE|*> <LEVEL> / WAVEX-LOG ?     legacy, seq-less, no ack
+//   WAVEX-FILTER <wavex|daisysp> [12|24] [drive%]  (scripts/wavex_log.py,
+//                                                   scripts/wavex_filter.py)
+//   WAVEX-DBG <seq> <VERB> [args]                  acknowledged, for tests/hil:
+//     PING | LOG ... | FILTER ... | STATE | TRACKS | SAMPLES
+//     MSG <type_hex> <payload_hex>   straight into ProcessInterMcuMessage
+//     NOTE <track> <note> <vel> [ON|OFF]  convenience over MSG for note on/off
+//   -> WAVEX-DBG: <seq> OK [key=value ...] / WAVEX-DBG: <seq> ERR <reason>
 //
-// Same discipline as the DFU token: the USB ISR only captures bytes; parsing
-// and the reply happen on the main loop.
+// Same discipline as the DFU token: the USB ISR only stores bytes; parsing,
+// dispatch and the reply happen on the main loop.
 //
 // Guarded by WAVEX_DEBUG_HARNESS_ENABLED so a release image carries neither
-// the buffer nor the ISR match state (README.md#build-profiles).
-// The DFU token above is deliberately NOT guarded - it is the only reflash
-// path that needs no BOOT+RESET. (Its bytes also match this prefix and get
-// captured as the verb "ENTER-DFU", which the dispatcher ignores; the DFU
-// matcher has already done its job by then.)
+// the buffer nor the reader (README.md#build-profiles). The DFU token above
+// is deliberately NOT guarded - it is the only reflash path that needs no
+// BOOT+RESET, and its script sends no newline, so it keeps its own
+// substring matcher. (Its bytes also reach the reader as the legacy verb
+// "ENTER-DFU", which the dispatcher ignores.)
 // ---------------------------------------------------------------------------
 #if WAVEX_DEBUG_HARNESS_ENABLED
-static constexpr char kLogCmdToken[] = "WAVEX-";
-static constexpr size_t kLogCmdTokenLen = sizeof(kLogCmdToken) - 1;
-static char s_log_cmd_buf[64];
-// release/acquire pair: the ISR fills s_log_cmd_buf and only then publishes
+static WaveX::Debug::LineReader s_console_reader;
+// release/acquire pair: the ISR fills the reader and only then publishes
 // via this flag; the main loop must not observe true before those writes.
-static std::atomic<bool> s_log_cmd_pending{false};
+static std::atomic<bool> s_console_line_pending{false};
 #endif
 
 #if WAVEX_DEBUG_HARNESS_ENABLED
@@ -156,6 +161,173 @@ static void HandleFilterCommand(const char* args) {
     WaveX::Log::PrintLine("WAVEX-FILTER: audio engine disabled in this build");
 #endif
 }
+
+// "LOG ?" lists; "LOG <MODULE|*> <LEVEL>" applies. Returns true if applied.
+static bool HandleLogCommand(const char* args) {
+    if (args[0] == '?' && args[1] == '\0') {
+        for (size_t m = 0; m < WaveX::Log::kModuleCount; ++m) {
+            WaveX::Log::PrintLine(
+                "WAVEX-LOG: %s=%s",
+                WaveX::Log::kModuleNames[m],
+                WaveX::Log::kLevelNames[WaveX::Log::GetLevel(static_cast<WaveX::Log::Module>(m))]);
+        }
+        return true;
+    }
+    char reply[128];  // ApplyLevelCommand's longest reply is 117 bytes
+    const bool ok = WaveX::Log::ApplyLevelCommand(args, reply, sizeof(reply));
+    WaveX::Log::PrintLine("%s", reply);
+    return ok;
+}
+
+static const char* BindingStateName(uint8_t state) {
+    switch (state) {
+        case TRACK_BINDING_EMPTY:
+            return "empty";
+        case TRACK_BINDING_SAMPLE:
+            return "sample";
+        case TRACK_BINDING_PATCH:
+            return "instrument";
+        case TRACK_BINDING_LOADING:
+            return "loading";
+        default:
+            return "?";
+    }
+}
+
+// Main-loop context. Replies are one line each through the log ring.
+static void DispatchConsoleCommand(const WaveX::Debug::Command& c) {
+    using namespace WaveX::Debug;
+    char reply[256];  // PrintLine's own line buffer; longer replies would be cut
+    const int32_t seq = c.seq;
+    const char* p = c.args;
+
+    if (c.legacy) {
+        if (std::strcmp(c.verb, "LOG") == 0) {
+            HandleLogCommand(c.args);
+        } else if (std::strcmp(c.verb, "FILTER") == 0) {
+            HandleFilterCommand(c.args);
+        } else if (std::strcmp(c.verb, "ENTER-DFU") != 0) {
+            WaveX::Log::PrintLine("WAVEX: unknown command '%s'", c.verb);
+        }
+        return;
+    }
+    if (c.verb[0] == '\0') {
+        FormatErr(seq, "syntax", reply, sizeof(reply));
+        WaveX::Log::PrintLine("%s", reply);
+        return;
+    }
+
+    if (std::strcmp(c.verb, "PING") == 0) {
+        FormatOk(seq, reply, sizeof(reply));
+    } else if (std::strcmp(c.verb, "LOG") == 0) {
+        HandleLogCommand(c.args) ? FormatOk(seq, reply, sizeof(reply))
+                                 : FormatErr(seq, "badlog", reply, sizeof(reply));
+    } else if (std::strcmp(c.verb, "FILTER") == 0) {
+        HandleFilterCommand(c.args);
+        FormatOk(seq, reply, sizeof(reply));
+#if WAVEX_AUDIO_ENGINE_ENABLED
+    } else if (std::strcmp(c.verb, "STATE") == 0) {
+        size_t len = FormatOk(seq, reply, sizeof(reply));
+        len = AppendKvInt(
+            reply, sizeof(reply), len, "voices", WaveX::AudioEngine::DebugActiveVoices());
+        len = AppendKvInt(
+            reply, sizeof(reply), len, "underruns", WaveX::AudioEngine::DebugUnderruns());
+        uint16_t ids[8];
+        len = AppendKvInt(reply,
+                          sizeof(reply),
+                          len,
+                          "samples",
+                          static_cast<long>(WaveX::AudioEngine::DebugLoadedSamples(ids, 0)));
+        len = AppendKvInt(
+            reply, sizeof(reply), len, "streaming", WaveX::AudioEngine::IsWavPlaying() ? 1 : 0);
+        len = AppendKvInt(reply,
+                          sizeof(reply),
+                          len,
+                          "blocks",
+                          static_cast<long>(WaveX::AudioEngine::GetCallbackBlocks()));
+        len = AppendKvInt(reply,
+                          sizeof(reply),
+                          len,
+                          "dropped",
+                          static_cast<long>(s_console_reader.DroppedBytes()));
+        (void)len;
+    } else if (std::strcmp(c.verb, "TRACKS") == 0) {
+        // t<i>=<state>[:<sample_id>][:<name>] for every Track.
+        size_t len = FormatOk(seq, reply, sizeof(reply));
+        for (uint8_t t = 0; t < WAVEX_MIX_TRACKS; ++t) {
+            TrackBindingMessage b;
+            WaveX::AudioEngine::DebugTrackBinding(t, b);
+            char key[6], val[48];
+            snprintf(key, sizeof(key), "t%u", static_cast<unsigned>(t));
+            if (b.state == TRACK_BINDING_SAMPLE) {
+                snprintf(val, sizeof(val), "sample:%u", static_cast<unsigned>(b.sample_id));
+            } else if (b.state == TRACK_BINDING_EMPTY) {
+                snprintf(val, sizeof(val), "empty");
+            } else {
+                snprintf(val, sizeof(val), "%s:%.12s", BindingStateName(b.state), b.name);
+            }
+            len = AppendKvText(reply, sizeof(reply), len, key, val);
+        }
+    } else if (std::strcmp(c.verb, "SAMPLES") == 0) {
+        // n=<count> ids=<comma list> - the WAV registry (MSG_SAMPLE_LOAD ids).
+        uint16_t ids[64];
+        const size_t n = WaveX::AudioEngine::DebugLoadedSamples(ids, sizeof(ids) / sizeof(ids[0]));
+        size_t len = FormatOk(seq, reply, sizeof(reply));
+        len = AppendKvInt(reply, sizeof(reply), len, "n", static_cast<long>(n));
+        char list[200];
+        size_t ll = 0;
+        for (size_t i = 0; i < n && ll + 8 < sizeof(list); ++i) {
+            ll += static_cast<size_t>(snprintf(
+                list + ll, sizeof(list) - ll, i ? ",%u" : "%u", static_cast<unsigned>(ids[i])));
+        }
+        list[ll] = '\0';
+        len = AppendKv(reply, sizeof(reply), len, "ids", n ? list : "-");
+        (void)len;
+    } else if (std::strcmp(c.verb, "MSG") == 0) {
+        // MSG <type_hex> <payload_hex>: straight into the transport-agnostic
+        // dispatcher, so a test can drive the backend without the ESP32 and
+        // a malformed payload reaches the same code a hostile link would.
+        uint8_t type_byte[1];
+        char hexword[8];
+        if (!NextWord(&p, hexword, sizeof(hexword)) || ParseHexBytes(hexword, type_byte, 1) != 1) {
+            FormatErr(seq, "badtype", reply, sizeof(reply));
+        } else {
+            static uint8_t payload[128];
+            char payload_hex[260] = {};
+            NextWord(&p, payload_hex, sizeof(payload_hex));
+            const size_t n = ParseHexBytes(payload_hex, payload, sizeof(payload));
+            if (payload_hex[0] != '\0' && n == 0) {
+                FormatErr(seq, "badhex", reply, sizeof(reply));
+            } else {
+                WaveX::Comm::ProcessInterMcuMessage(type_byte[0], 0, payload, n);
+                size_t len = FormatOk(seq, reply, sizeof(reply));
+                AppendKvInt(reply, sizeof(reply), len, "bytes", static_cast<long>(n));
+            }
+        }
+    } else if (std::strcmp(c.verb, "NOTE") == 0) {
+        // NOTE <track> <note> <vel> [ON|OFF]: the wire's own NoteMessage.
+        long track, note, vel;
+        char onoff[8] = "ON";
+        if (!NextInt(&p, &track) || !NextInt(&p, &note) || !NextInt(&p, &vel) || track < 0 ||
+            track >= WAVEX_MIX_TRACKS || note < 0 || note > 127 || vel < 0 || vel > 127) {
+            FormatErr(seq, "badnote", reply, sizeof(reply));
+        } else {
+            NextWord(&p, onoff, sizeof(onoff));
+            const bool on = std::strcmp(onoff, "OFF") != 0;
+            NoteMessage m(
+                static_cast<uint8_t>(note), static_cast<uint8_t>(vel), static_cast<uint8_t>(track));
+            WaveX::Comm::ProcessInterMcuMessage(on ? MSG_NOTE_ON : MSG_NOTE_OFF,
+                                                0,
+                                                reinterpret_cast<const uint8_t*>(&m),
+                                                sizeof(m));
+            FormatOk(seq, reply, sizeof(reply));
+        }
+#endif
+    } else {
+        FormatErr(seq, "unknown", reply, sizeof(reply));
+    }
+    WaveX::Log::PrintLine("%s", reply);
+}
 #endif
 
 // Runs in USB interrupt context: match bytes and set a flag, nothing else.
@@ -165,11 +337,6 @@ static void UsbRxCallback(uint8_t* buff, uint32_t* len) {
         return;
     }
     static size_t matched = 0;
-#if WAVEX_DEBUG_HARNESS_ENABLED
-    static size_t log_matched = 0;
-    static size_t log_capture = 0;  // bytes of command captured; 0 = not capturing
-    static bool log_capturing = false;
-#endif
     for (uint32_t i = 0; i < *len; ++i) {
         const char c = static_cast<char>(buff[i]);
         if (c == kDfuTriggerToken[matched]) {
@@ -183,27 +350,10 @@ static void UsbRxCallback(uint8_t* buff, uint32_t* len) {
         }
 
 #if WAVEX_DEBUG_HARNESS_ENABLED
-        if (log_capturing) {
-            if (c == '\n' || c == '\r' || log_capture + 1 >= sizeof(s_log_cmd_buf)) {
-                s_log_cmd_buf[log_capture] = '\0';
-                log_capturing = false;
-                log_capture = 0;
-                s_log_cmd_pending.store(true, std::memory_order_release);
-            } else {
-                s_log_cmd_buf[log_capture++] = c;
-            }
-        } else if (c == kLogCmdToken[log_matched]) {
-            if (++log_matched == kLogCmdTokenLen) {
-                log_matched = 0;
-                // While a previous command awaits the main loop, drop this
-                // one rather than scribble over the buffer being parsed.
-                if (!s_log_cmd_pending.load(std::memory_order_acquire)) {
-                    log_capturing = true;
-                    log_capture = 0;
-                }
-            }
-        } else {
-            log_matched = (c == kLogCmdToken[0]) ? 1u : 0u;
+        // The reader drops (and counts) bytes while a line awaits the main
+        // loop, so a burst can never scribble over the line being parsed.
+        if (s_console_reader.Feed(c)) {
+            s_console_line_pending.store(true, std::memory_order_release);
         }
 #endif
     }
@@ -617,28 +767,13 @@ int main(void) {
         // loop (log_ring context rules), reply through the ring so the host
         // script gets confirmation on the same port it sent the command.
 #if WAVEX_DEBUG_HARNESS_ENABLED
-        if (s_log_cmd_pending.load(std::memory_order_acquire)) {
-            const char* cmd = s_log_cmd_buf;
-            if (std::strncmp(cmd, "LOG ", 4) == 0) {
-                const char* args = cmd + 4;
-                if (args[0] == '?' && args[1] == '\0') {
-                    for (size_t m = 0; m < WaveX::Log::kModuleCount; ++m) {
-                        WaveX::Log::PrintLine("WAVEX-LOG: %s=%s",
-                                              WaveX::Log::kModuleNames[m],
-                                              WaveX::Log::kLevelNames[WaveX::Log::GetLevel(
-                                                  static_cast<WaveX::Log::Module>(m))]);
-                    }
-                } else {
-                    char reply[128];  // ApplyLevelCommand's longest reply is 117 bytes
-                    WaveX::Log::ApplyLevelCommand(args, reply, sizeof(reply));
-                    WaveX::Log::PrintLine("%s", reply);
-                }
-            } else if (std::strncmp(cmd, "FILTER", 6) == 0) {
-                HandleFilterCommand(cmd + 6);
-            } else if (std::strncmp(cmd, "ENTER-DFU", 9) != 0) {
-                WaveX::Log::PrintLine("WAVEX: unknown command '%s'", cmd);
+        if (s_console_line_pending.load(std::memory_order_acquire)) {
+            WaveX::Debug::Command cmd;
+            if (WaveX::Debug::ParseCommand(s_console_reader.Line(), cmd)) {
+                DispatchConsoleCommand(cmd);
             }
-            s_log_cmd_pending.store(false, std::memory_order_release);
+            s_console_line_pending.store(false, std::memory_order_release);
+            s_console_reader.Release();
         }
 #endif
 
