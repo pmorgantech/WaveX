@@ -71,6 +71,35 @@ Choose and implement bounded recovery behavior: pause and recover, abort the
 stream, or increase the prebuffer. Validate the choice with injected or
 reproducible CRC faults and capture ring low-water and service latency.
 
+### Daisy build warnings worth acting on (2026-09-06)
+
+The release build is not warning-clean, and two of the warnings are real:
+
+- `audio_engine.cpp` `OnSampleLoad`: `alt_path[128]` receives `"0:%s"` of a
+  `BROWSE_PATH_MAX` (256) path, so the "retry with a drive prefix" open
+  silently tries a truncated path for anything longer than 125 characters —
+  exactly the deep library paths the 2026-09-06 widening was for. Size it
+  `BROWSE_PATH_MAX + 2` or drop the retry (`-Wformat-truncation`).
+- `PumpSampleMetaPage`: the page's byte count is a `size_t` narrowed to
+  `UartLinkSend`'s `uint16_t` (`-Wconversion`). In range today (one header
+  plus at most a page of records); make the narrowing explicit with a bound
+  so a wider record cannot wrap it.
+- `sfz_loader.cpp`: `FF_USE_LFN` tested with `#if` where it is not defined
+  (`-Wundef`, twice) and an enum/int mix in a conditional (`-Wextra`).
+
+### The SRAM debug profile has ~7 KB of RAM_D2 headroom
+
+`make daisy-debug` / `make flash-fast` link the backend to run from SRAM with
+its data in `RAM_D2` (256 KB). At `eb15470` (the path widening) that link
+failed — `RAM_D2` overflowed by 9532 bytes — so the fast bench loop could not
+load the Daisy at all and only the DFU path (`make daisy-flash-auto`) worked.
+Retiring the decimated preview (`6f53720`) freed ~16 KB and it links again at
+97.4% (255 276 B), which leaves about 6.9 KB. The next resident buffer of
+that size breaks the debug profile before it troubles the release one; the
+`.wxi` document buffer move in [the SRAM item](#the-daisys-sram-is-at-89-and-the-wxi-document-buffer-is-the-lever)
+is the lever for both. `make flash-fast` should report the Daisy link
+failure by name — today it prints the ESP32's success and exits 1.
+
 ## Memory
 
 ### The Daisy's SRAM is at 89%, and the .wxi document buffer is the lever
@@ -174,6 +203,32 @@ one-byte slots were checked and left alone: `SampleSelectMessage::slot` is a
 Track index, and the Daisy ignores the slot in `SampleCtrlMessage` and
 `SampleStopReqMessage` altogether. The remaining two places (the binding
 storing the loop, the voice honouring it) still need the bench check above.
+
+### Sample Edit's Audition silently claims Track 1
+
+`UISampleEditPage::onAudition` binds the sample being edited onto Track
+index 0 (`inter_mcu_send_sample_select(id, 0)`) and plays a note on it, so
+auditioning replaces whatever Track 1 held — an SFZ import included — with
+no picker and no notice, and leaves it there. That breaks the rule the Load
+and Assign paths follow (nothing takes a Track without asking). The audition
+needs a voice that is not a Track: either a backend audition binding outside
+the sixteen (a scratch zone the note path can resolve, released on stop) or
+the streaming audition, which already honours the record's region, loop,
+gain and fades (`ApplyMetaToStreaming`) but plays the file, not the resident
+copy. Decide, then delete the `sample_select(…, 0)` — do not add a picker to
+a preview button.
+
+### An edit lands on whatever stream is open
+
+`SetEditParams` applies the edited record to the streaming audition through
+`ApplyMetaToStreaming(info)`, which reads `s_wav` and never checks that the
+open file *is* that sample. Browse's audition of file B followed by a marker
+drag on Edit's sample A moves B's region and loop points to A's. Now that the
+Pool keeps each record's card path, compare it against the open stream's
+path (or carry the Pool id on `s_wav` when `OpenWav` resolves one) and skip
+the apply on a mismatch. A regression test can drive this through the
+dispatch mocks: open one path, edit another id, assert the region is
+unchanged.
 
 ### Non-frame-aligned WAV data
 
