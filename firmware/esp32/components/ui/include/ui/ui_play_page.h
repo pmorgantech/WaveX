@@ -3,6 +3,7 @@
 
 #include <lvgl.h>
 
+#include "components/ui_value_tile.h"
 #include "ui_page.h"
 
 #include <array>
@@ -62,6 +63,7 @@ class UIPlayPage : public UIPage {
 
     const char* name() const override { return "Play"; }
     void onEnter(lv_obj_t* parent) override;
+    const char* contextLine() const override { return context_line_; }
     void onExit() override;
     void onInput(const InputEvent& evt) override;
     void onTrackChanged() override;
@@ -94,7 +96,7 @@ class UIPlayPage : public UIPage {
     static void tabChangedCb(lv_event_t* e);
     static void bindingTimerCb(lv_timer_t* timer);
 
-    void buildStrip(lv_obj_t* parent);
+    void buildParamColumn(lv_obj_t* parent);
     void buildPads(lv_obj_t* tab);
     void buildKeys(lv_obj_t* tab);
     lv_obj_t* makeKey(lv_obj_t* parent, int8_t offset, bool is_black, uint32_t bg, uint32_t text);
@@ -119,8 +121,18 @@ class UIPlayPage : public UIPage {
     int key_count_ = 0;
 
     lv_obj_t* tabview_ = nullptr;
-    lv_obj_t* status_label_ = nullptr;
-    lv_obj_t* param_label_ = nullptr;
+    /// The Pads tab's right-hand column (design turn 3b): the focused
+    /// parameter as a full tile, then four small ones for the performance
+    /// state you change without leaving the surface. Keys keeps the whole
+    /// width - the design does not cover it, and a piano needs the room.
+    ValueTile param_tile_{};
+    ValueTile octave_tile_{};
+    ValueTile semi_tile_{};
+    ValueTile velocity_tile_{};
+    ValueTile latch_tile_{};
+    /// Binding state for the header's context line, rebuilt on every refresh.
+    char context_line_[192] = "";
+    void refreshPadTiles();
     lv_timer_t* binding_timer_ = nullptr;
 
     uint16_t param_value_[static_cast<size_t>(Param::kCount)] = {0};

@@ -27,14 +27,24 @@ constexpr int kMidiNoteMax = 127;
 // bottom, and the tab bar takes 56 more. Positions are absolute against that,
 // matching how the diagnostics cards are laid out rather than introducing a
 // second convention.
-constexpr int kDesignW = 1280;
-constexpr int kContentH = 720 - UI_HEADER_HEIGHT - UI_HOTKEY_HEIGHT;  // 545
+constexpr int kDesignW = UI_SCREEN_WIDTH;
+constexpr int kContentH = UI_CONTENT_HEIGHT;
 // The status/parameter strip sits ABOVE the tabview, not inside a tab. It has
 // to: the parameters are page-scoped, and a strip built into one tab body would
 // vanish when the other tab was selected - taking the only readout of what the
 // encoder is editing with it.
-constexpr int kStripH = 56;
-constexpr int kTabBodyH = kContentH - kStripH - 56;  // 433, after the tab bar
+// The in-page status strip is gone: it said which Track was bound and what
+// the focused parameter was, both of which the header now carries. The tab
+// body therefore starts directly under the tab bar.
+constexpr int kTabBodyH = kContentH - UI_TAB_BAR_HEIGHT;  // 501
+
+// Design turn 3b: pads on the left, parameter column on the right.
+constexpr int kPadGridW = 900;
+constexpr int kColX = UI_MARGIN_X + kPadGridW + 16;
+constexpr int kColW = UI_SCREEN_WIDTH - UI_MARGIN_X - kColX;
+constexpr int kColGap = 10;
+constexpr int kBigTileH = 150;
+constexpr int kSmallTileH = 100;
 constexpr int kKeysY = 0;
 constexpr int kKeysH = kTabBodyH;
 
@@ -139,12 +149,9 @@ void UIPlayPage::onEnter(lv_obj_t* parent) {
     lv_obj_set_style_pad_all(root_, 0, LV_PART_MAIN);
     lv_obj_remove_flag(root_, LV_OBJ_FLAG_SCROLLABLE);
 
-    buildStrip(root_);
-
-    // Tabview sits below the strip and takes the rest.
     lv_obj_t* tab_host = lv_obj_create(root_);
-    lv_obj_set_size(tab_host, lv_pct(100), kContentH - kStripH);
-    lv_obj_set_pos(tab_host, 0, kStripH);
+    lv_obj_set_size(tab_host, lv_pct(100), lv_pct(100));
+    lv_obj_set_pos(tab_host, 0, 0);
     lv_obj_set_style_bg_color(tab_host, lv_color_hex(kColBg), LV_PART_MAIN);
     lv_obj_set_style_border_width(tab_host, 0, LV_PART_MAIN);
     lv_obj_set_style_pad_all(tab_host, 0, LV_PART_MAIN);
@@ -155,6 +162,7 @@ void UIPlayPage::onEnter(lv_obj_t* parent) {
     lv_obj_t* t_keys = tabGroupAddTab(tabview_, "Keys");
 
     buildPads(t_pads);
+    buildParamColumn(t_pads);
     buildKeys(t_keys);
 
     // Switching tabs releases everything. A latched note whose key is on the
@@ -184,8 +192,12 @@ void UIPlayPage::onExit() {
         lv_obj_del(root_);
         root_ = nullptr;
         tabview_ = nullptr;
-        status_label_ = nullptr;
-        param_label_ = nullptr;
+
+        param_tile_ = ValueTile{};
+        octave_tile_ = ValueTile{};
+        semi_tile_ = ValueTile{};
+        velocity_tile_ = ValueTile{};
+        latch_tile_ = ValueTile{};
     }
     key_count_ = 0;
     for (auto& k: keys_) {
@@ -299,32 +311,39 @@ lv_obj_t* UIPlayPage::makeKey(
 // The shared strip: what will sound on the left, what the encoder edits on the
 // right. Page-scoped rather than per-tab, so switching surfaces does not hide
 // the only readout of the parameter being swept.
-void UIPlayPage::buildStrip(lv_obj_t* parent) {
-    lv_obj_t* strip = lv_obj_create(parent);
-    lv_obj_set_size(strip, lv_pct(100), kStripH);
-    lv_obj_set_pos(strip, 0, 0);
-    lv_obj_set_style_bg_color(strip, lv_color_hex(kColBg), LV_PART_MAIN);
-    lv_obj_set_style_border_width(strip, 0, LV_PART_MAIN);
-    lv_obj_set_style_pad_all(strip, 0, LV_PART_MAIN);
-    lv_obj_remove_flag(strip, LV_OBJ_FLAG_SCROLLABLE);
+void UIPlayPage::buildParamColumn(lv_obj_t* parent) {
+    // One full tile for the parameter the encoder is on, then four small ones
+    // for the performance state you change between phrases. Octave and semi
+    // are derived from the root note rather than stored twice; latch and Track
+    // are read from where they already live.
+    param_tile_ = valueTileCreate(parent, kColX, 0, kColW, kBigTileH, "PARAM", nullptr);
 
-    status_label_ = lv_label_create(strip);
-    lv_label_set_long_mode(status_label_, LV_LABEL_LONG_CLIP);
-    lv_obj_set_width(status_label_, 900);
-    lv_obj_set_style_text_font(status_label_, &lv_font_montserrat_18, LV_PART_MAIN);
-    lv_obj_set_style_text_color(status_label_, lv_color_hex(kColDim), LV_PART_MAIN);
-    lv_obj_align(status_label_, LV_ALIGN_LEFT_MID, 12, 0);
+    const int half = (kColW - kColGap) / 2;
+    const int row1 = kBigTileH + kColGap;
+    const int row2 = row1 + kSmallTileH + kColGap;
+    octave_tile_ = valueTileCreate(parent, kColX, row1, half, kSmallTileH, "OCTAVE", nullptr);
+    semi_tile_ =
+        valueTileCreate(parent, kColX + half + kColGap, row1, half, kSmallTileH, "SEMI", nullptr);
+    velocity_tile_ = valueTileCreate(parent, kColX, row2, half, kSmallTileH, "VELOCITY", nullptr);
+    latch_tile_ =
+        valueTileCreate(parent, kColX + half + kColGap, row2, half, kSmallTileH, "LATCH", nullptr);
 
-    param_label_ = lv_label_create(strip);
-    lv_obj_set_style_text_font(param_label_, &lv_font_montserrat_22, LV_PART_MAIN);
-    lv_obj_set_style_text_color(param_label_, lv_color_hex(kColGreen), LV_PART_MAIN);
-    lv_obj_align(param_label_, LV_ALIGN_RIGHT_MID, -12, 0);
+    // None of the four small tiles is a quantity in a range, so none of them
+    // gets a fill bar - an empty track would read as "zero".
+    valueTileHideFill(octave_tile_);
+    valueTileHideFill(semi_tile_);
+    valueTileHideFill(velocity_tile_);
+    valueTileHideFill(latch_tile_);
 }
 
 void UIPlayPage::buildPads(lv_obj_t* tab) {
     const int gap = 8;
-    const int cell_w = (kDesignW - gap * (kPadCols + 1)) / kPadCols;
-    const int cell_h = (kKeysH - gap * (kPadRows + 1)) / kPadRows;
+    // A margin top and bottom so the last row does not sit flush against the
+    // softkey cards - two rows of touch targets with no gap between them is
+    // how you hit the wrong one.
+    const int pad_y = 8;
+    const int cell_w = (kPadGridW - gap * (kPadCols - 1)) / kPadCols;
+    const int cell_h = (kKeysH - 2 * pad_y - gap * (kPadRows - 1)) / kPadRows;
 
     for (int r = 0; r < kPadRows; ++r) {
         for (int c = 0; c < kPadCols; ++c) {
@@ -334,7 +353,8 @@ void UIPlayPage::buildPads(lv_obj_t* tab) {
                 continue;
             }
             lv_obj_set_size(btn, cell_w, cell_h);
-            lv_obj_set_pos(btn, gap + c * (cell_w + gap), kKeysY + gap + r * (cell_h + gap));
+            lv_obj_set_pos(
+                btn, UI_MARGIN_X + c * (cell_w + gap), kKeysY + pad_y + r * (cell_h + gap));
             lv_obj_align(keys_[key_count_ - 1].label, LV_ALIGN_CENTER, 0, 0);
             lv_obj_set_style_text_font(keys_[key_count_ - 1].label, UI_FONT_TITLE, LV_PART_MAIN);
         }
@@ -495,10 +515,6 @@ void UIPlayPage::refreshKeys() {
 }
 
 void UIPlayPage::refreshBindingStatus() {
-    if (!status_label_) {
-        return;
-    }
-
     char low[8], high[8];
     NoteName(root_note_, low, sizeof(low));
     NoteName(root_note_ + kPadCount - 1, high, sizeof(high));
@@ -550,13 +566,12 @@ void UIPlayPage::refreshBindingStatus() {
                 break;
         }
     }
-    lv_label_set_text_fmt(status_label_,
-                          "%s-%s  vel %d  %s  %s",
-                          low,
-                          high,
-                          (int)velocity_,
-                          latch_ ? "LATCH" : "",
-                          state);
+    // The header carries the binding - what a note-on will actually do. The
+    // note range, velocity and latch are performance state and live in the
+    // tiles beside the pads, where they can be read without moving your eyes
+    // off the surface you are playing.
+    snprintf(context_line_, sizeof(context_line_), "%s-%s / %s", low, high, state);
+    UINavigator::instance().refreshContext();
 }
 
 // --- parameters ------------------------------------------------------------
@@ -635,7 +650,13 @@ void UIPlayPage::sendParam() {
 }
 
 void UIPlayPage::refreshParamLabel() {
-    if (!param_label_) {
+    refreshPadTiles();
+}
+
+// Everything in the right-hand column, from state that already exists
+// elsewhere - nothing here is a second copy the page has to keep in step.
+void UIPlayPage::refreshPadTiles() {
+    if (!param_tile_.card || !lv_obj_is_valid(param_tile_.card)) {
         return;
     }
     const size_t i = static_cast<size_t>(current_param_);
@@ -644,7 +665,31 @@ void UIPlayPage::refreshParamLabel() {
     const uint16_t raw = current_param_ == Param::Track ? getCurrentTrack() : param_value_[i];
     char value[24];
     FormatParamValue(current_param_, raw, value, sizeof(value));
-    lv_label_set_text_fmt(param_label_, "%s  %s", kParams[i].label, value);
+
+    lv_label_set_text(param_tile_.label, kParams[i].label);
+    valueTileSetValue(param_tile_, value);
+    valueTileSetFocus(param_tile_, true);
+    if (current_param_ == Param::Track) {
+        valueTileHideFill(param_tile_);
+    } else {
+        valueTileSetFill(param_tile_, static_cast<float>(raw) / 65535.0f);
+    }
+
+    char buf[16];
+    // Octave and semitone are two readings of the one root note, not two
+    // stored values - MIDI note 60 is octave 5, semitone 0.
+    snprintf(buf, sizeof(buf), "%d", root_note_ / 12);
+    valueTileSetValue(octave_tile_, buf);
+    snprintf(buf, sizeof(buf), "%d", root_note_ % 12);
+    valueTileSetValue(semi_tile_, buf);
+
+    snprintf(buf, sizeof(buf), "%d", (int)velocity_);
+    valueTileSetValue(velocity_tile_, buf);
+
+    // Latch is a mode, so the tile is lit while it is on rather than just
+    // spelling the word - it changes what the next pad press means.
+    valueTileSetValue(latch_tile_, latch_ ? "on" : "off");
+    valueTileSetFocus(latch_tile_, latch_);
 }
 
 // --- softkeys --------------------------------------------------------------
