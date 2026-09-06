@@ -157,6 +157,16 @@
 #define UI_PADDING_MEDIUM 10
 #define UI_PADDING_LARGE 15
 
+// Header internals. Title and context read left; the meter, engine-CPU
+// readout and SHIFT chip are anchored right, in that order. Both the status
+// strip and the navigator lay out against these, so the two cannot disagree
+// about where the chip starts.
+#define UI_HEADER_GAP 18
+#define UI_SHIFT_CHIP_W 100
+#define UI_SHIFT_CHIP_H 40
+#define UI_SHIFT_CHIP_Y ((UI_HEADER_HEIGHT - UI_SHIFT_CHIP_H) / 2)
+#define UI_SHIFT_CHIP_X (UI_SCREEN_WIDTH - UI_MARGIN_X - UI_SHIFT_CHIP_W)
+
 void ui_theme_apply_button_style(lv_obj_t* button, bool is_pressed_style);
 void ui_theme_apply_container_style(lv_obj_t* container, bool has_border);
 void ui_theme_apply_label_style(lv_obj_t* label, bool is_title);

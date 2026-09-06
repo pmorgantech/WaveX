@@ -7,8 +7,9 @@ facts moved to [`ui-design-constraints.md`](ui-design-constraints.md))
 
 **Hardware/toolkit summary** (full detail + sources in the constraints doc):
 LVGL 9.5.0 on ESP32-P4, 5-inch 720×1280 MIPI-DSI panel software-rotated to
-1280×720 landscape, RGB565, 30 FPS UI task, 75 px header + 100 px six-button
-softkey bar → 1280×545 content area, Montserrat fonts only.
+1280×720 landscape, RGB565, 30 FPS UI task, 64 px header + 3 px shift rule +
+96 px six-card softkey bar → 1280×557 content area, Montserrat for prose and
+JetBrains Mono for values, four compile-time palettes.
 
 ## Overview
 
@@ -84,11 +85,18 @@ public:
     virtual void onInput(const InputEvent& evt) {}
     virtual std::array<Softkey, NUM_SOFTKEYS> getSoftkeys() { return {}; }
     virtual std::array<Softkey, NUM_SOFTKEYS> getShiftedSoftkeys() { return {}; }
+    virtual const char* contextLine() const { return nullptr; }
 };
 ```
 
 **Responsibilities**:
-- Define page name (shown in header)
+- Define page name (shown in header, left)
+- Optionally define `contextLine()` — a second header line beside the title
+  saying what the page is currently acting on (the Track, Instrument or sample
+  the softkeys will change). It is read on entry and on
+  `UINavigator::refreshContext()`; the string is copied immediately, so it may
+  point at a member buffer the page rewrites. Returning `nullptr` (the
+  default) leaves the header showing only the title.
 - Define softkey labels/actions, and optionally a Shift-revealed alternate row (`getShiftedSoftkeys()` — see "Shift Modifier" below)
 - Handle input directly via `onInput()` when a page needs more than softkeys (encoder deltas, touch)
 - Create/destroy page UI in `onEnter`/`onExit`
@@ -126,7 +134,10 @@ for free and none can accidentally swallow it (`ui_softkey.h`,
 `input_dispatcher.cpp`).
 
 `UINavigator::toggleShift()` / `setShift(bool)` flip a **latched, not held**
-state (`isShifted()`), shown as a SHIFT chip in the header. It is *sticky*:
+state (`isShifted()`), shown as a SHIFT chip at the right of the header and,
+at full width, by the 3 px rule under the header turning shift-coloured. The
+rule is always present so the content area never moves; only its colour
+changes. It is *sticky*:
 it clears itself after one shifted key fires, and on navigation — a plain
 toggle left on would make the next press do the wrong thing. A page that
 defines no alternate row (`getShiftedSoftkeys()` returns the empty default)
@@ -289,7 +300,7 @@ Sizes   UI_HEADER_HEIGHT (75px), UI_HOTKEY_HEIGHT (100px),
         UI_PADDING_SMALL/MEDIUM/LARGE (5/10/15px)
 ```
 
-The rendering budget these sit inside — 30 FPS, 1280x545 content area, RGB565,
+The rendering budget these sit inside — 30 FPS, 1280x557 content area, RGB565,
 Montserrat only — is in [`ui-design-constraints.md`](ui-design-constraints.md).
 
 ### Where the code lives
@@ -387,7 +398,7 @@ LV_UNLOCK();
 
 ### If Adding a New Page
 1. Create class extending `UIPage`
-2. Implement `name()`, `onEnter()`, and whichever of `onExit()`/`onInput()`/`getSoftkeys()`/`getShiftedSoftkeys()` the page needs (all have empty defaults)
+2. Implement `name()`, `onEnter()`, and whichever of `onExit()`/`onInput()`/`getSoftkeys()`/`getShiftedSoftkeys()`/`contextLine()` the page needs (all have empty defaults)
 3. Add a factory function and register it as a menu item or tab in `ui_main_menu.cpp` (`ui_navigation_integration.cpp` only bootstraps the root menu via `initNavigationSystem()` — it is not where individual pages are registered)
 4. Do NOT add global static pointers to the page
 

@@ -1,7 +1,7 @@
 # WaveX UI Design Constraints
 
 A one-page brief for design work (human or AI). Everything here is verified
-against the code as of 2026-08-28 — file references inline so it can be
+against the code as of 2026-09-05 — file references inline so it can be
 re-verified when things change. If a design conflicts with this page, the
 design loses.
 
@@ -14,11 +14,15 @@ structured, and how to build a page.
 > landscape touchscreen** (720×1280 panel, software-rotated 90°), rendered
 > with **LVGL 9.5** at **RGB565** (16-bit color, no alpha-heavy effects).
 >
-> **Fixed chrome, not negotiable:** a 75 px header strip (screen title) at the
-> top and a 100 px softkey bar at the bottom with **exactly 6 equal-width
-> buttons**. Softkey labels are the page's primary actions and can change with
-> state (e.g. "Audition" ↔ "Stop"). The usable content area is therefore
-> **1280×545 px**.
+> **Fixed chrome, not negotiable:** a 64 px header (page title left, then the
+> page's context line; output meters, engine-CPU readout and the SHIFT chip
+> anchored right), a 3 px rule beneath it that turns shift-coloured while
+> Shift is latched, and a 96 px softkey bar at the bottom holding **exactly 6
+> equal-width cards**. Softkey labels are the page's primary actions and can
+> change with state (e.g. "Audition" ↔ "Stop"). An action that is unavailable
+> leaves its cell empty; one that exists but is disabled stays visible and
+> dimmed. Either way the row never reflows. The usable content area is
+> therefore **1280×557 px**.
 >
 > **Input model:** capacitive touch, plus a **rotary encoder** that moves
 > focus between softkeys/list items and clicks to activate, plus a hardware
@@ -26,15 +30,22 @@ structured, and how to build a page.
 > accelerator, not a requirement. No hover states, no gestures beyond tap and
 > scroll, no multi-touch.
 >
-> **Typography:** Montserrat only, at these compiled-in sizes: 14, 18, 22, 24,
-> 26, 28, 32, 36. Body text is 18, titles 26, header/softkeys 36. No other
-> fonts or sizes exist on the device.
+> **Typography:** two faces, nine sizes, and nothing else exists on the
+> device — naming another size is a link error. Montserrat for prose at 14
+> (micro), 18 (small), 22 (body), 26 (title) and 30 (heading: page title, row
+> titles, softkey labels). JetBrains Mono for anything read as a number at 14,
+> 18, 26 and 38 (the one hero value a page is about). Use the mono face for
+> values that update live: it is tabular, so a changing digit does not shift
+> the widgets beside it. Roles are named `UI_FONT_*` in `ui_theme.h`; snap a
+> design to the nearest existing step rather than adding a font table.
 >
-> **Color:** dark theme on black. Existing palette: background #000000, header
-> #2E3440, borders #333333, text #FFFFFF, accent blue #2196F3 (buttons),
-> green #4CAF50 (selection, meters), orange #FF5722 (peaks/warnings). Designs
-> may extend this palette but gradients should be used sparingly (RGB565 bands
-> visibly on smooth gradients).
+> **Color:** a dark theme built from named roles, not literals — background,
+> card, card-alt, line, foreground, dim, dimmer, accent, accent-foreground,
+> ok, warn, shift, error. Four palettes (`neutral`, `amber`, `teal`,
+> `contrast`) are selected at compile time with
+> `-DWAVEX_UI_THEME=<name>`; they re-map colours only, so a design that fits
+> one fits all four. Design against the roles, never a hex value. Gradients
+> should be used sparingly (RGB565 bands visibly on smooth gradients).
 >
 > **Rendering budget:** the display flushes in 20-line strips from a small
 > DMA buffer and rotation is done in software, so **large animated regions
@@ -45,10 +56,12 @@ structured, and how to build a page.
 >
 > **Build from these LVGL widgets** (all enabled in this firmware): label,
 > button, button-matrix, bar, slider, arc, chart, table, list, roller,
-> dropdown, checkbox, switch, spinner, canvas (for custom drawing like
-> waveforms — one already exists for waveform preview). Custom-drawn widgets
-> are possible but each one is C code someone must write and maintain —
-> prefer composing standard widgets.
+> dropdown, checkbox, switch, spinner, line, image, canvas (for custom drawing
+> like waveforms — one already exists for waveform preview), tabview. Custom-
+> drawn widgets are possible but each one is C code someone must write and
+> maintain — prefer composing standard widgets. `lv_line` in particular is
+> enabled and is the cheap way to draw an envelope or response curve; it does
+> not need a canvas.
 >
 > **Screens are stack-navigated**: pages push/pop with the header title
 > updating; "Back" is conventionally softkey 1. Widgets are recreated on
@@ -68,9 +81,11 @@ structured, and how to build a page.
 | Software rotation to landscape | `lv_display_set_rotation(display_, LV_DISPLAY_ROTATION_90)` + `.sw_rotate = true`, `display_manager.cpp` |
 | LVGL 9.5.0, RGB565 | `main/idf_component.yml` pins `lvgl/lvgl: >=9.4,<10`; `firmware/esp32/dependencies.lock` resolves **9.5.0**. `CONFIG_LV_COLOR_DEPTH=16` |
 | 20-line strip buffer, DMA, internal RAM | `.buffer_size = 720 * 20, .double_buffer = true, .buff_dma = true, .buff_spiram = false`, `display_manager.cpp` |
-| Header 75 px / softkeys 100 px / 6 buttons | `UI_HEADER_HEIGHT`, `UI_HOTKEY_HEIGHT` in `components/ui/styles/ui_theme.h`; `NUM_SOFTKEYS = 6` in `ui_softkey.h` |
-| Fonts | `CONFIG_LV_FONT_MONTSERRAT_*` in `sdkconfig`; role mapping in `ui_theme.h` |
-| Palette | `UI_COLOR_*` in `ui_theme.h` |
+| Header 64 px / rule 3 px / softkeys 96 px / 6 cards / content 1280×557 | `UI_HEADER_HEIGHT`, `UI_SHIFT_RULE_HEIGHT`, `UI_HOTKEY_HEIGHT`, `UI_CONTENT_HEIGHT` in `components/ui/styles/ui_theme.h`; `NUM_SOFTKEYS = 6` in `ui_softkey.h` |
+| Empty vs disabled softkey | `SoftkeyBar::setSoftkeys()` in `ui_softkey_bar.cpp` |
+| Fonts | `CONFIG_LV_FONT_MONTSERRAT_*` in `sdkconfig.defaults`; mono tables in `components/ui/fonts/` (regenerate with `scripts/gen_ui_fonts.sh`); role mapping in `ui_theme.h` |
+| Palette, four compile-time themes | `WX_RGB_*` in `components/ui/styles/themes/`, roles in `ui_theme.h`, selection in `components/ui/CMakeLists.txt` |
+| Widget set | `CONFIG_LV_USE_*` in `firmware/esp32/sdkconfig` |
 | 30 FPS cap | `vTaskDelay(pdMS_TO_TICKS(32))` in `main/ui_task.cpp` |
 | Encoder + touch + keypad | `InputDispatcher`, `SoftkeyBar::focusNext/Prev`, GT911 touch, TCA8418 keypad component |
 | Pages recreated on entry | `ui-architecture.md` "Known Limitations" #2 |
@@ -97,3 +112,5 @@ four corners. Tracked in `docs/backlog.md`.
    LVGL directly; a Figma-style rendering does not.
 3. Reject anything that needs per-frame animation of large areas, fonts
    outside the list, alpha compositing, or more than 6 bottom actions.
+4. Ask for colours as role names (accent, card, dim, ok, warn), not hex. A
+   design pinned to specific hex values silently only works in one theme.
