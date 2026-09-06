@@ -22,7 +22,15 @@ class UIMenuPage : public UIPage {
     const char* name() const override { return title_.c_str(); }
 
     void addItem(const std::string& label, std::function<void()> onSelect) {
-        items_.push_back({label, std::move(onSelect)});
+        items_.push_back({label, {}, {}, {}, std::move(onSelect)});
+    }
+
+    void addItem(const std::string& label,
+                 const std::string& purpose,
+                 std::function<std::string()> context,
+                 std::function<bool()> ok,
+                 std::function<void()> onSelect) {
+        items_.push_back({label, purpose, std::move(context), std::move(ok), std::move(onSelect)});
     }
 
     void onEnter(lv_obj_t* parent) override;
@@ -36,8 +44,24 @@ class UIMenuPage : public UIPage {
     std::vector<MenuItem> items_;
     int selected_ = 0;
     lv_obj_t* list_ = nullptr;
+    lv_timer_t* context_timer_ = nullptr;
+
+    /// The widgets of one row that outlive its construction. Keeping them
+    /// means selection and live context are one style write and one label
+    /// write, rather than tearing the whole list down and rebuilding it.
+    struct Row {
+        lv_obj_t* card = nullptr;
+        lv_obj_t* rail = nullptr;
+        lv_obj_t* context = nullptr;
+        lv_obj_t* dot = nullptr;
+        std::string last_context;
+        int last_ok = -1;  // tri-state: unknown / false / true
+    };
+    std::vector<Row> rows_;
 
     void rebuildList();
+    void applyRowState(size_t index);
+    void refreshContext();
     void moveSelection(int delta);
     void activateSelection();
     static void list_event_cb(lv_event_t* e);

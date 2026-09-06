@@ -90,6 +90,10 @@ void UINavigator::push(std::shared_ptr<UIPage> page) {
             content_, lv_pct(100), lv_pct(100));  // temporary; corrected after softkey create
         lv_obj_set_style_bg_color(content_, UI_COLOR_BG, LV_PART_MAIN);
         lv_obj_set_style_border_width(content_, 0, LV_PART_MAIN);
+        // Zeroed explicitly: lv_obj's default theme padding is DPI-derived and
+        // non-zero, so every page was being inset by it and any page that laid
+        // out against UI_SCREEN_WIDTH overflowed the right edge by that much.
+        lv_obj_set_style_pad_all(content_, 0, LV_PART_MAIN);
         lv_obj_align(content_, LV_ALIGN_TOP_LEFT, 0, UI_CONTENT_TOP);
         LV_UNLOCK();
     }

@@ -258,6 +258,33 @@ Add active-voice and round-trip-latency telemetry when it has an owning
 protocol change. Add MIDI detail and dropped-event counters with the Phase 2
 sequencer and tempo-follower work, when those events actually exist.
 
+### Root-menu context lines have no data source
+
+The refreshed root menu (design turn 2e) gives every row a live context
+readout saying what it currently points at. Only two could be wired
+truthfully: Play shows the selected Track, Diagnostics shows link health from
+the backend heartbeat. Two more are specified by the design and are blank:
+
+- **Sample — resident count.** No API exposes how many samples are in the
+  backend's sample RAM. The number exists in `SampleMemStatusMessage`, which
+  `ui_diagnostics_page.cpp` decodes into its own widgets and does not publish.
+- **Instrument — instrument name.** `instrument_name_` is a private member of
+  `UIInstrumentPage`, so nothing outside that page can read it.
+
+Both want a small shared accessor of the same shape as `current_track.h` /
+`current_sample.h` rather than a second copy of the state. Until then the rows
+show no context, which is the honest rendering - a placeholder in the root
+menu would have to be opened to find out whether to believe it.
+
+### mocks/ui_theme.h is dead
+
+Nine UI sources include the theme as `"../styles/ui_theme.h"`, which bypasses
+`firmware/esp32/tests/mocks/ui_theme.h` entirely - the host test build
+compiles the real header and always has. The mock is stale and unused;
+either delete it or change those includes to `"ui_theme.h"` so the mock is
+actually what the host build sees. Left alone for now because changing it
+mid-redesign would swap the palette the host build compiles against.
+
 ## Related
 
 - [Roadmap](roadmap.md) — phased work and hardware verification gates.
