@@ -250,7 +250,19 @@ enum ControlParameter : uint8_t {
 
 // Common string limits (used by multiple messages)
 static const size_t FILE_NAME_MAX = 48;
-static const size_t BROWSE_PATH_MAX = 96;
+// One path bound for the whole system: the wire, the SFZ importer's resolved
+// paths, the Pool's stored path and the .wxi's stored path all use it.
+//
+// It was 96 while three different numbers coexisted - 96 here, 200 in the SFZ
+// importer, 255 for a FatFs long name - so the importer could build a path the
+// wire could not carry and the Pool could not store. A sample library nested a
+// few folders deep exceeds 96 easily, and a truncated path is not a shorter
+// path, it is one that opens nothing.
+//
+// 256 is chosen against FatFs's 255-character long-name limit rather than any
+// message's convenience: a request carrying one simply lands in a larger
+// packet class, which the size-driven selector already handles.
+static const size_t BROWSE_PATH_MAX = 256;
 
 namespace detail {
 // Bounded, always-null-terminated string copy for fixed-size wire char arrays.
@@ -1680,7 +1692,12 @@ struct InstStatusMessage {
     }
 } __attribute__((packed));
 
-static_assert(sizeof(InstOpMessage) <= 122, "instrument request must fit a 128-byte packet");
+// A path-carrying request no longer fits a 128-byte packet and does not need
+// to: CreatePacket picks a class by payload size, and the Pool's metadata
+// paging already drives far larger frames over this link. The bound is the
+// 512-byte class's payload (512 - 4 header - 2 CRC).
+static_assert(sizeof(InstOpMessage) <= 506, "instrument request must fit a 512-byte packet");
+static_assert(sizeof(SampleLoadMessage) <= 506, "sample load must fit a 512-byte packet");
 static_assert(sizeof(InstStatusMessage) <= 122, "instrument status must fit a 128-byte packet");
 
 /**

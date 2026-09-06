@@ -11,6 +11,22 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Changed
+
+- **One path bound across the system.** Three different limits coexisted — 96
+  on the wire, 200 in the SFZ importer, 255 for a FatFs long name — so the
+  importer could resolve a path the wire could not carry and the Pool could not
+  store. All three are now `BROWSE_PATH_MAX`, raised to 256 against FatFs's own
+  limit rather than any message's convenience; a request carrying a long path
+  simply lands in a larger packet class, which the size-driven selector already
+  handles and the Pool's metadata paging already exercises. A sample library
+  nested a few folders deep no longer silently fails to load or save.
+- The `.wxi` zone codec and its tests walk a running offset instead of
+  hard-coded byte indices (`b[97]`, `b[98]`, …), and the zone's wire size and
+  the codec's scratch buffer are derived from the fields rather than typed as
+  literals. The old literals were correct only at the old path width — the
+  192-byte scratch would have overflowed on the first save of a 312-byte zone.
+
 ### Fixed
 
 - The Sample Pool now remembers each sample's **card path**, which saving an

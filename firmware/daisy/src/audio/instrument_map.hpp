@@ -35,6 +35,16 @@
 
 namespace WaveX {
 namespace AudioEngine {
+
+// The file format and the wire each state the path bound for their own
+// layering reasons (wxi.hpp explains why it does not include protocol.h).
+// This is the one place that sees both, so it is where they are held
+// together: a sample the wire can load must be one the file can name.
+static_assert(Wxi::kPathBytes == Protocol::BROWSE_PATH_MAX,
+              "the .wxi path bound and the wire path bound must agree");
+static_assert(Sfz::kMaxPath == Protocol::BROWSE_PATH_MAX,
+              "the SFZ importer's resolved-path bound must agree too");
+
 namespace InstrumentMap {
 
 // Which oscillator a Sample Instrument's zones live on. Osc 2 arrives with

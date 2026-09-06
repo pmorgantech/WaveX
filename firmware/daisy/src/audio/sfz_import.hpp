@@ -29,7 +29,9 @@ namespace WaveX {
 namespace AudioEngine {
 namespace Sfz {
 
-static constexpr size_t kMaxPath = 200;
+// The system-wide path bound (protocol.h). Was 200 while the wire carried 96,
+// so the importer could resolve a path nothing downstream could hold.
+static constexpr size_t kMaxPath = WaveX::Protocol::BROWSE_PATH_MAX;
 static constexpr size_t kMaxLine = 512;
 static constexpr size_t kMaxMacros = 16;
 static constexpr size_t kMaxMacroName = 32;

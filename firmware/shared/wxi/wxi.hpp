@@ -56,7 +56,13 @@ static constexpr size_t kNameBytes = 24;
 // Matches Protocol::BROWSE_PATH_MAX: a Zone's Sample path is exactly what the
 // browser hands the loader, so the two cannot disagree about how long a path
 // may be.
-static constexpr size_t kPathBytes = 96;
+// The system-wide path bound, so a sample the wire can load is a sample this
+// format can name. Stated as a literal rather than taken from protocol.h:
+// this header depends only on the container so the ESP32 can read files
+// without the wire protocol, and a file format has no business depending on
+// a message format. instrument_map.hpp static_asserts the two agree, so the
+// duplication cannot drift silently.
+static constexpr size_t kPathBytes = 256;
 
 static constexpr uint8_t kMaxZonesPerOsc = 32;  // == AudioEngine::kMaxZones
 static constexpr uint8_t kNumOscillators = 2;
@@ -212,7 +218,17 @@ struct InstrumentFile {
 
 static constexpr uint32_t kHeadWireSize = 42;
 static constexpr uint32_t kOscHeaderWireSize = 17;
-static constexpr uint32_t kZoneWireSize = 152;
+// Derived from the fields, not typed as a literal: the path is the only
+// variable-length part of it, and a literal here silently disagreed with the
+// encoder the moment kPathBytes moved.
+static constexpr uint32_t kZoneWireSize = 1 +           // index
+                                          kPathBytes +  // path
+                                          5 +           // key/vel/root
+                                          2 +           // coarse, fine
+                                          8 +           // gain, pan
+                                          16 +          // start/end/loop x2
+                                          4 +           // loop_mode..flags
+                                          20;           // cutoff + ADSR
 static constexpr uint32_t kFiltWireSize = 17;
 static constexpr uint32_t kAmpWireSize = 1;
 static constexpr uint32_t kEnvWireSize = 16;
@@ -222,8 +238,20 @@ static constexpr uint32_t kModSlotWireSize = 6;
 
 // The largest single read or write the codec performs, so its scratch buffer
 // is one fixed, stack-safe size rather than a whole chunk (an oscillator
-// chunk is ~5 KB and must not land on the Daisy's stack).
-static constexpr size_t kScratchBytes = 192;
+// chunk is several KB and must not land on the Daisy's stack).
+//
+// Derived from the structures rather than typed as a literal. It was 192
+// while a zone was 152 bytes; widening the path to the system-wide bound made
+// a zone 312 and would have overflowed this buffer on the first save. A
+// derived bound cannot drift from the thing it bounds.
+static constexpr size_t kScratchBytes =
+    kZoneWireSize > kHeadWireSize ? kZoneWireSize : kHeadWireSize;
+static_assert(kScratchBytes >= kZoneWireSize, "scratch must hold a whole zone record");
+static_assert(kScratchBytes >= kHeadWireSize, "scratch must hold a whole HEAD record");
+static_assert(kScratchBytes >= kOscHeaderWireSize && kScratchBytes >= kFiltWireSize &&
+                  kScratchBytes >= kEnvWireSize && kScratchBytes >= kLfoWireSize &&
+                  kScratchBytes >= kModSlotWireSize,
+              "scratch must hold every fixed record this codec reads or writes");
 
 // ---------------------------------------------------------------------------
 // Scalar codecs
@@ -336,58 +364,92 @@ inline void DecodeHead(const uint8_t* b, InstrumentFile& doc) {
     doc.osc_mix = ReadF32LE(b + 38, 0.0f, 1.0f, 0.0f);
 }
 
+// Encode/decode walk a running offset rather than hard-coded indices. The
+// offsets used to be written out (b[97], b[98], ...), which meant every one
+// of them had to move by hand when kPathBytes changed - exactly the edit
+// that silently corrupts a format if one is missed.
 inline void EncodeZone(const Zone& z, uint8_t* b) {
-    b[0] = z.index;
-    WriteFixedString(b + 1, kPathBytes, z.path);
-    b[97] = z.key_lo;
-    b[98] = z.key_hi;
-    b[99] = z.vel_lo;
-    b[100] = z.vel_hi;
-    b[101] = z.root_note;
-    WriteI8(b + 102, z.coarse_tune);
-    WriteI8(b + 103, z.fine_tune);
-    WriteF32LE(b + 104, z.gain);
-    WriteF32LE(b + 108, z.pan);
-    WriteU32LE(b + 112, z.start_frame);
-    WriteU32LE(b + 116, z.end_frame);
-    WriteU32LE(b + 120, z.loop_start);
-    WriteU32LE(b + 124, z.loop_end);
-    b[128] = z.loop_mode;
-    b[129] = z.choke_group;
-    b[130] = z.output_bus;
-    b[131] = z.flags;
-    WriteF32LE(b + 132, z.cutoff_hz);
-    WriteF32LE(b + 136, z.attack_s);
-    WriteF32LE(b + 140, z.decay_s);
-    WriteF32LE(b + 144, z.sustain);
-    WriteF32LE(b + 148, z.release_s);
+    size_t i = 0;
+    b[i++] = z.index;
+    WriteFixedString(b + i, kPathBytes, z.path);
+    i += kPathBytes;
+    b[i++] = z.key_lo;
+    b[i++] = z.key_hi;
+    b[i++] = z.vel_lo;
+    b[i++] = z.vel_hi;
+    b[i++] = z.root_note;
+    WriteI8(b + i, z.coarse_tune);
+    i += 1;
+    WriteI8(b + i, z.fine_tune);
+    i += 1;
+    WriteF32LE(b + i, z.gain);
+    i += 4;
+    WriteF32LE(b + i, z.pan);
+    i += 4;
+    WriteU32LE(b + i, z.start_frame);
+    i += 4;
+    WriteU32LE(b + i, z.end_frame);
+    i += 4;
+    WriteU32LE(b + i, z.loop_start);
+    i += 4;
+    WriteU32LE(b + i, z.loop_end);
+    i += 4;
+    b[i++] = z.loop_mode;
+    b[i++] = z.choke_group;
+    b[i++] = z.output_bus;
+    b[i++] = z.flags;
+    WriteF32LE(b + i, z.cutoff_hz);
+    i += 4;
+    WriteF32LE(b + i, z.attack_s);
+    i += 4;
+    WriteF32LE(b + i, z.decay_s);
+    i += 4;
+    WriteF32LE(b + i, z.sustain);
+    i += 4;
+    WriteF32LE(b + i, z.release_s);
+    i += 4;
 }
 
 inline void DecodeZone(const uint8_t* b, Zone& z) {
-    z.index = b[0];
-    ReadFixedString(z.path, kPathBytes, b + 1);
-    z.key_lo = b[97];
-    z.key_hi = b[98];
-    z.vel_lo = b[99];
-    z.vel_hi = b[100];
-    z.root_note = b[101];
-    z.coarse_tune = ReadI8(b + 102);
-    z.fine_tune = ReadI8(b + 103);
-    z.gain = ReadF32LE(b + 104, 0.0f, kGainMax, 1.0f);
-    z.pan = ReadF32LE(b + 108, 0.0f, 1.0f, 0.5f);
-    z.start_frame = ReadU32LE(b + 112);
-    z.end_frame = ReadU32LE(b + 116);
-    z.loop_start = ReadU32LE(b + 120);
-    z.loop_end = ReadU32LE(b + 124);
-    z.loop_mode = b[128];
-    z.choke_group = b[129];
-    z.output_bus = b[130];
-    z.flags = b[131];
-    z.cutoff_hz = ReadF32LE(b + 132, 0.0f, kCutoffMax, 20000.0f);
-    z.attack_s = ReadF32LE(b + 136, 0.0f, kTimeMax, 0.001f);
-    z.decay_s = ReadF32LE(b + 140, 0.0f, kTimeMax, 0.05f);
-    z.sustain = ReadF32LE(b + 144, 0.0f, 1.0f, 0.8f);
-    z.release_s = ReadF32LE(b + 148, 0.0f, kTimeMax, 0.1f);
+    size_t i = 0;
+    z.index = b[i++];
+    ReadFixedString(z.path, kPathBytes, b + i);
+    i += kPathBytes;
+    z.key_lo = b[i++];
+    z.key_hi = b[i++];
+    z.vel_lo = b[i++];
+    z.vel_hi = b[i++];
+    z.root_note = b[i++];
+    z.coarse_tune = ReadI8(b + i);
+    i += 1;
+    z.fine_tune = ReadI8(b + i);
+    i += 1;
+    z.gain = ReadF32LE(b + i, 0.0f, kGainMax, 1.0f);
+    i += 4;
+    z.pan = ReadF32LE(b + i, 0.0f, 1.0f, 0.5f);
+    i += 4;
+    z.start_frame = ReadU32LE(b + i);
+    i += 4;
+    z.end_frame = ReadU32LE(b + i);
+    i += 4;
+    z.loop_start = ReadU32LE(b + i);
+    i += 4;
+    z.loop_end = ReadU32LE(b + i);
+    i += 4;
+    z.loop_mode = b[i++];
+    z.choke_group = b[i++];
+    z.output_bus = b[i++];
+    z.flags = b[i++];
+    z.cutoff_hz = ReadF32LE(b + i, 0.0f, kCutoffMax, 20000.0f);
+    i += 4;
+    z.attack_s = ReadF32LE(b + i, 0.0f, kTimeMax, 0.001f);
+    i += 4;
+    z.decay_s = ReadF32LE(b + i, 0.0f, kTimeMax, 0.05f);
+    i += 4;
+    z.sustain = ReadF32LE(b + i, 0.0f, 1.0f, 0.8f);
+    i += 4;
+    z.release_s = ReadF32LE(b + i, 0.0f, kTimeMax, 0.1f);
+    i += 4;
 }
 
 inline void EncodeOscHeader(const Oscillator& osc, uint8_t* b) {

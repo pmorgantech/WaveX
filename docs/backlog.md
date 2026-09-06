@@ -71,6 +71,31 @@ Choose and implement bounded recovery behavior: pause and recover, abort the
 stream, or increase the prebuffer. Validate the choice with injected or
 reproducible CRC faults and capture ring low-water and service latency.
 
+## Memory
+
+### The Daisy's SRAM is at 89%, and the .wxi document buffer is the lever
+
+The 2026-09-06 path widening took internal SRAM from ~84% to 89.1%
+(467 KB of 512 KB, ~57 KB free). The single largest new consumer is the
+loader's `.wxi` document buffer (`s_doc_storage`, `sfz_loader.cpp`): a
+`Wxi::InstrumentFile` is ~17 KB once each of its 64 zone slots carries a
+256-byte path.
+
+It does not belong in SRAM. It is a main-loop working buffer, written once per
+load and never touched by the audio callback — the same profile as the Sample
+Pool's records, which already live in SDRAM. Moving it recovers ~17 KB.
+
+**Do not reach for `__attribute__((section(".sdram_bss")))` to do it.** That
+section exists in both linker scripts and starts at the SDRAM origin, which is
+exactly where `sdram_layout.h` puts the *sample arena* (`kBase = 0xC0000000`).
+The layout reserves nothing for linker-placed SDRAM data, so anything landing
+there silently overlaps user sample memory. Carve the buffer from a partition
+the layout owns — the render scratch is unused and adjacent — or extend the
+layout to reserve a linker-placed region first.
+
+When to revisit: before the next feature that adds a large resident buffer, or
+if a build reports SRAM above ~92%.
+
 ## Testing
 
 ### Browser-driven HIL tests are order- and state-dependent
