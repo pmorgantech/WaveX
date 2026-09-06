@@ -74,22 +74,21 @@ typedef enum {
 } wavex_sample_ctrl_cmd_t;
 
 esp_err_t inter_mcu_send_sample_ctrl(uint8_t slot, wavex_sample_ctrl_cmd_t cmd, float rate);
-esp_err_t inter_mcu_send_preview_req(uint8_t slot, uint32_t start, uint32_t end, uint16_t decim);
 
 // Min/max waveform envelope for a frame window (roadmap 1.5.5 item 2). Unlike
-// the decimated preview above, the reply's size follows the requested column
-// count rather than the file length, and it does not alias.
+// the decimated preview it replaced, the reply's size follows the requested
+// column count rather than the file length, and it does not alias.
 // sample_id 0 = the most recently loaded sample; end_frame 0 = to the end.
 esp_err_t inter_mcu_send_envelope_req(uint16_t sample_id,
                                       uint16_t columns,
                                       uint32_t start_frame,
                                       uint32_t end_frame);
 
-// Non-destructive playback edit (MSG_SAMPLE_EDIT_SET). Frames are absolute at
-// the file's own rate; 0 means "to the end" for end_frame and loop_end. The
-// backend clamps and is the authority - do not assume the values were taken
-// verbatim.
-esp_err_t inter_mcu_send_sample_edit(uint8_t slot,
+// Non-destructive playback edit (MSG_SAMPLE_EDIT_SET) of Pool sample
+// @p sample_id. Frames are absolute at the file's own rate; 0 means "to the
+// end" for end_frame and loop_end. The backend clamps and is the authority -
+// do not assume the values were taken verbatim.
+esp_err_t inter_mcu_send_sample_edit(uint16_t sample_id,
                                      bool loop_enabled,
                                      int16_t gain_db_x10,
                                      uint32_t start_frame,
@@ -105,8 +104,30 @@ void inter_mcu_store_sample_meta(const WaveX::Protocol::SampleMetadata& msg);
 
 /** Newest record for an id, or the most recent record when sample_id is 0. */
 bool inter_mcu_get_sample_meta(uint16_t sample_id, WaveX::Protocol::SampleMetadata* out);
+/**
+ * Resident record whose name - the load path, as the Pool recorded it - is
+ * `path`. How a page finds the id behind a file it did not load itself: one
+ * resident since before this boot, or loaded from another page. A name the
+ * Pool had to truncate (FILE_NAME_MAX) matches on the part it kept.
+ */
+bool inter_mcu_find_sample_meta_by_name(const char* path, WaveX::Protocol::SampleMetadata* out);
 // Every cached record, in cache order. Returns how many were written.
 size_t inter_mcu_sample_meta_snapshot(WaveX::Protocol::SampleMetadata* out, size_t max);
+
+/**
+ * Counts changes to what the Pool holds, as the backend reports them: a
+ * record pushed (load, edit, unload) or one a memory status proved gone. A
+ * page that is a window on the Pool re-asks for its window when this moves,
+ * and only then - it used to ask every tick, whether or not anything could
+ * have changed.
+ */
+uint32_t inter_mcu_sample_pool_revision();
+/**
+ * Counts arrivals of anything the sample pages draw from: a record, a page,
+ * a Track binding, a memory status. A page redraws from the caches when this
+ * moves, and only then.
+ */
+uint32_t inter_mcu_sample_cache_revision();
 
 // The Sample Pool is paged, not mirrored: ask for a window of resident
 // records in registry order and read the last page that arrived. The page
@@ -157,10 +178,6 @@ bool inter_mcu_get_diag_push(WaveX::Protocol::DiagPushMessage* out, uint32_t max
 // Listener registration for backend->frontend messages
 typedef void (*wavex_meter_cb_t)(
     float rms_left, float rms_right, float peak_left, float peak_right, void* user_data);
-typedef void (*wavex_wave_chunk_cb_t)(uint32_t offset,
-                                      const int16_t* samples,
-                                      uint16_t count,
-                                      void* user_data);
 // One run of envelope columns (MSG_ENVELOPE_CHUNK). The header carries the
 // window, the generation and the channel count, so a listener can decide
 // whether a chunk still matters without keeping request state. `columns` is
@@ -178,13 +195,11 @@ typedef void (*wavex_sample_status_cb_t)(uint16_t sample_id,
 typedef void (*wavex_inst_status_cb_t)(const WaveX::Protocol::InstStatusMessage& status,
                                        void* user_data);
 
-void inter_mcu_set_wave_chunk_listener(wavex_wave_chunk_cb_t cb, void* user_data);
 void inter_mcu_set_envelope_chunk_listener(wavex_envelope_chunk_cb_t cb, void* user_data);
 void inter_mcu_invoke_envelope_chunk_callback(const WaveX::Protocol::EnvelopeChunkMessage& header,
                                               const WaveX::Protocol::EnvelopeColumn* columns);
 void inter_mcu_invoke_browse_resp_callback(const uint8_t* data, size_t length);
 void inter_mcu_invoke_storage_status_callback(bool mounted);
-void inter_mcu_invoke_wave_chunk_callback(uint32_t offset, const int16_t* samples, uint16_t count);
 void inter_mcu_set_sample_status_listener(wavex_sample_status_cb_t cb, void* user_data);
 void inter_mcu_invoke_sample_status_callback(uint16_t sample_id,
                                              uint8_t state,
@@ -248,6 +263,21 @@ typedef struct {
 
 using wavex_sample_mem_entry_t = WaveX::Protocol::SampleMemEntryMessage;
 using wavex_sample_mem_status_t = WaveX::Protocol::SampleMemStatusMessage;
+
+// The backend beacons once a second (firmware/daisy/src/main.cpp). Three
+// missed beacons is a link that has stopped, not one that was merely late.
+#define WAVEX_LINK_STALE_MS 3000u
+
+/**
+ * @brief True while the backend is still beaconing.
+ *
+ * `wavex_backend_heartbeat_t::valid` latches true on the first heartbeat and
+ * is never cleared, so it answers "have we ever heard from the Daisy", not
+ * "is the link up". Anything drawing a link indicator wants this instead -
+ * the same reason inter_mcu_get_diag_push() takes a max age. A stale figure
+ * presented as current is how a dead link reads as a healthy one.
+ */
+bool inter_mcu_backend_link_alive(void);
 
 // Thread-safe snapshot of latest heartbeat
 void inter_mcu_get_backend_heartbeat(wavex_backend_heartbeat_t* out);

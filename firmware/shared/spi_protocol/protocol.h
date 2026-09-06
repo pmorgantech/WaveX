@@ -13,7 +13,10 @@ namespace Protocol {
 // Protocol constants
 // 2 (2026-09-05): SampleMetadata grew `used_by` (88 -> 90 B) for the Sample
 // Pool; MSG_SAMPLE_META_PAGE_REQ/PAGE added.
-static const uint32_t PROTOCOL_VERSION = 2;
+// 3 (2026-09-06): SampleEditMessage addresses the sample by its 16-bit Pool
+// id (`sample_id`, was the one-byte `slot`); id 0 no longer means "newest".
+// MSG_PREVIEW_REQ (0x0A) / MSG_WAVE_CHUNK (0x11) retired.
+static const uint32_t PROTOCOL_VERSION = 3;
 
 // Wire layout (review M10: a packed `WaveXPacket` struct used to "document"
 // this but placed `crc` at offset 4 while the wire puts it at the packet
@@ -72,10 +75,12 @@ enum MessageType : uint8_t {
     MSG_STATUS_RESPONSE = 0x08,
     // Phase I new message types
     MSG_SAMPLE_CTRL = 0x09,
-    MSG_PREVIEW_REQ = 0x0A,
+    // 0x0A was MSG_PREVIEW_REQ and 0x11 MSG_WAVE_CHUNK: the decimated
+    // waveform preview, retired in protocol 3 for the min/max envelope
+    // (MSG_ENVELOPE_REQ / MSG_ENVELOPE_CHUNK below). Not reused, so a stale
+    // build sending either is dropped as unknown rather than misread.
     MSG_DATA_REQUEST = 0x0B,  // ESP32 requests queued data from Daisy
     MSG_METER_PUSH = 0x10,    // backend -> frontend
-    MSG_WAVE_CHUNK = 0x11,    // backend -> frontend
     MSG_HEARTBEAT = 0x12,     // periodic health beacon
     MSG_ACK = 0x13,           // Acknowledgment message
     // File browse and sample playback control (MVP)
@@ -408,18 +413,6 @@ struct SampleCtrlMessage {
         : slot(slot_), cmd(cmd_), rate(rate_) {}
 } __attribute__((packed));
 
-// Preview request message
-struct PreviewReqMessage {
-    uint8_t slot;    // 0 for now
-    uint32_t start;  // sample index start
-    uint32_t end;    // sample index end (exclusive)
-    uint16_t decim;  // decimation factor
-
-    PreviewReqMessage() : slot(0), start(0), end(0), decim(1) {}
-    PreviewReqMessage(uint8_t slot_, uint32_t start_, uint32_t end_, uint16_t decim_)
-        : slot(slot_), start(start_), end(end_), decim(decim_) {}
-} __attribute__((packed));
-
 // Data request message (ESP32 → Daisy: request queued data)
 struct DataRequestMessage {
     uint8_t request_type;  // 0 = any data, 1 = meter data, 2 = wave data
@@ -529,16 +522,6 @@ struct SampleUnloadMessage {
 
     SampleUnloadMessage() : sample_id(0) {}
     explicit SampleUnloadMessage(uint16_t id) : sample_id(id) {}
-} __attribute__((packed));
-
-// Wave chunk (backend->frontend)
-struct WaveChunkMessage {
-    uint32_t offset;  // index in preview stream
-    uint16_t count;   // number of int16 samples following
-    // payload follows (count * int16)
-
-    WaveChunkMessage() : offset(0), count(0) {}
-    WaveChunkMessage(uint32_t offset_, uint16_t count_) : offset(offset_), count(count_) {}
 } __attribute__((packed));
 
 struct FileEntryWire {
@@ -815,9 +798,16 @@ struct SampleMetaReqMessage {
 // Sentinels rather than a separate "valid" flag: end_frame 0 means "to the
 // end of the file" and loop_end 0 means "to end_frame". A frontend that does
 // not know the file length can still send a meaningful region.
+//
+// sample_id is the Pool id from SampleMetadata, 16 bits wide. It was a
+// one-byte `slot` until protocol 3, which truncated every Pool id (they
+// start at 1024) to 0 - and 0 meant "the newest sample", so every edit from
+// the Edit page landed on whichever sample had loaded last. There is no
+// "newest" sentinel any more: an id the backend cannot find is dropped.
 struct SampleEditMessage {
-    uint8_t slot;
+    uint16_t sample_id;
     uint8_t loop_enabled;
+    uint8_t reserved;
     int16_t gain_db_x10;  // -240..+120 (-24.0 .. +12.0 dB)
     uint32_t start_frame;
     uint32_t end_frame;  // 0 = end of file
@@ -830,8 +820,9 @@ struct SampleEditMessage {
     uint16_t fade_out_ms;
 
     SampleEditMessage()
-        : slot(0),
+        : sample_id(0),
           loop_enabled(0),
+          reserved(0),
           gain_db_x10(0),
           start_frame(0),
           end_frame(0),
@@ -839,7 +830,7 @@ struct SampleEditMessage {
           loop_end(0),
           fade_in_ms(kDefaultDeclickMs),
           fade_out_ms(kDefaultDeclickMs) {}
-    SampleEditMessage(uint8_t slot_,
+    SampleEditMessage(uint16_t sample_id_,
                       uint8_t loop_enabled_,
                       int16_t gain_db_x10_,
                       uint32_t start_frame_,
@@ -848,8 +839,9 @@ struct SampleEditMessage {
                       uint32_t loop_end_,
                       uint16_t fade_in_ms_ = kDefaultDeclickMs,
                       uint16_t fade_out_ms_ = kDefaultDeclickMs)
-        : slot(slot_),
+        : sample_id(sample_id_),
           loop_enabled(loop_enabled_),
+          reserved(0),
           gain_db_x10(gain_db_x10_),
           start_frame(start_frame_),
           end_frame(end_frame_),
@@ -862,10 +854,11 @@ struct SampleEditMessage {
 // ---------------------------------------------------------------------------
 // Waveform envelope (roadmap 1.5.5 item 2)
 //
-// The old preview (MSG_PREVIEW_REQ / MSG_WAVE_CHUNK) sends every n-th sample.
-// That aliases: on bright material a one-sample-per-column decimation draws a
-// trace that does not resemble the audio, and transients vanish entirely
-// because the single sample kept is almost never the peak.
+// The preview this replaced (MSG_PREVIEW_REQ / MSG_WAVE_CHUNK, retired in
+// protocol 3) sent every n-th sample. That aliases: on bright material a
+// one-sample-per-column decimation draws a trace that does not resemble the
+// audio, and transients vanish entirely because the single sample kept is
+// almost never the peak.
 //
 // An envelope sends the MIN and MAX of every sample falling in a display
 // column instead. The payload is a function of the display width, not of the
@@ -1805,10 +1798,6 @@ class ProtocolHandler {
                                          size_t buffer_size,
                                          const SampleCtrlMessage& msg);
 
-    static size_t CreatePreviewReqPacket(uint8_t* buffer,
-                                         size_t buffer_size,
-                                         const PreviewReqMessage& msg);
-
     static size_t CreateDataRequestPacket(uint8_t* buffer,
                                           size_t buffer_size,
                                           const DataRequestMessage& msg);
@@ -1816,12 +1805,6 @@ class ProtocolHandler {
     static size_t CreateMeterPushPacket(uint8_t* buffer,
                                         size_t buffer_size,
                                         const MeterPushMessage& msg);
-
-    static size_t CreateWaveChunkPacket(uint8_t* buffer,
-                                        size_t buffer_size,
-                                        const WaveChunkMessage& msg,
-                                        const void* sample_data,
-                                        size_t sample_data_size);
 
     static size_t CreateSamplePathResponsePacket(uint8_t* buffer,
                                                  size_t buffer_size,
@@ -1917,7 +1900,6 @@ class ProtocolHandler {
     static bool ParseControlChange(const uint8_t* buffer, ControlChangeMessage& msg);
     static bool ParseNoteMessage(const uint8_t* buffer, NoteMessage& msg);
     static bool ParseSampleCtrl(const uint8_t* buffer, SampleCtrlMessage& msg);
-    static bool ParsePreviewReq(const uint8_t* buffer, PreviewReqMessage& msg);
     static bool ParseDataRequest(const uint8_t* buffer, DataRequestMessage& msg);
     static bool ParseMessage(const uint8_t* buffer, HeartbeatMessage& msg);
     // Generic payload parser for fixed-size messages
@@ -1997,14 +1979,10 @@ inline const char* MessageTypeName(uint8_t type) {
             return "STATUS_RESPONSE";
         case MSG_SAMPLE_CTRL:
             return "SAMPLE_CTRL";
-        case MSG_PREVIEW_REQ:
-            return "PREVIEW_REQ";
         case MSG_DATA_REQUEST:
             return "DATA_REQUEST";
         case MSG_METER_PUSH:
             return "METER_PUSH";
-        case MSG_WAVE_CHUNK:
-            return "WAVE_CHUNK";
         case MSG_HEARTBEAT:
             return "HEARTBEAT";
         case MSG_ACK:

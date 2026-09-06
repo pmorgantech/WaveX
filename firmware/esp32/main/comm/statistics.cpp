@@ -80,9 +80,6 @@ void StatisticsManager::increment_packet_stat(uint8_t packet_type) {
         case 0x09:
             m_packet_stats.sample_ctrl_packets++;
             break;  // MSG_SAMPLE_CTRL
-        case 0x0A:
-            m_packet_stats.preview_req_packets++;
-            break;  // MSG_PREVIEW_REQ
         case 0x0B:  // MSG_DATA_REQUEST
             m_packet_stats.data_request_packets++;
             break;
@@ -90,10 +87,10 @@ void StatisticsManager::increment_packet_stat(uint8_t packet_type) {
         case 0x10:
             m_packet_stats.meter_push_packets++;
             break;  // Current MSG_METER_PUSH (0x10)
-        case 0x0E:  // Legacy MSG_WAVE_CHUNK
-        case 0x11:
-            m_packet_stats.wave_chunk_packets++;
-            break;  // Current MSG_WAVE_CHUNK (0x11)
+        // 0x0A MSG_PREVIEW_REQ and 0x11 MSG_WAVE_CHUNK (0x0E before that) were
+        // the decimated preview, retired in protocol 3. They fall through to
+        // unknown_packets on purpose: a backend still sending them is the
+        // version mismatch that counter exists to show.
         case 0x0F:  // Legacy MSG_HEARTBEAT
         case 0x12:
             m_packet_stats.heartbeat_packets++;
@@ -112,9 +109,11 @@ void StatisticsManager::increment_packet_stat(uint8_t packet_type) {
         // what happened before - drowned the signal that counter exists for.
         case 0x31:  // MSG_BROWSE_RESP
         case 0x34:  // MSG_SAMPLE_STATUS
+        case 0x35:  // MSG_SAMPLE_STOP_RESP
         case 0x39:  // MSG_STORAGE_STATUS
         case 0x3D:  // MSG_SAMPLE_META
         case 0x48:  // MSG_TRACK_BINDING
+        case 0x4A:  // MSG_SAMPLE_META_PAGE
         case 0x42:  // MSG_CV_CAL_RESP
         case 0x61:  // MSG_INST_STATUS
             m_packet_stats.other_known_packets++;
@@ -187,14 +186,14 @@ int StatisticsManager::format_packet_stats(char* buffer, size_t buffer_size) con
     return snprintf(buffer,
                     buffer_size,
                     "Packets: Total=%lu, Valid=%lu, Invalid=%lu | "
-                    "METER=%lu, HEARTBEAT=%lu, SYNC=%lu, WAVE=%lu, CTRL=%lu",
+                    "METER=%lu, HEARTBEAT=%lu, SYNC=%lu, ENVELOPE=%lu, CTRL=%lu",
                     (unsigned long)stats.total_packets,
                     (unsigned long)(stats.total_packets - stats.invalid_packets),
                     (unsigned long)stats.invalid_packets,
                     (unsigned long)stats.meter_push_packets,
                     (unsigned long)stats.heartbeat_packets,
                     (unsigned long)stats.sync_packets,
-                    (unsigned long)stats.wave_chunk_packets,
+                    (unsigned long)stats.envelope_chunk_packets,
                     (unsigned long)(stats.control_change_packets + stats.note_on_packets +
                                     stats.note_off_packets + stats.sample_ctrl_packets));
 }

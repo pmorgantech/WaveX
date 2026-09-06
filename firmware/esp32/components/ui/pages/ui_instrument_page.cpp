@@ -24,7 +24,11 @@ static const char* TAG = "UI_INSTRUMENT";
 // Not in the shared palette: "this control cannot be driven yet" is a state
 // only this page and the softkey bar have, and it is not part of the card /
 // tab design vocabulary the palette describes.
-constexpr uint32_t kColInert = 0x5A5A5A;
+// Local names for the shared palette (ui/ui_palette.h). These were
+// hand-copied literals that had already drifted from it and from each
+// other - three different "border" greys existed across five files - so a
+// theme switch reached only the surfaces that happened to be in sync.
+constexpr uint32_t kColInert = palette::kColDimmer;
 
 // 64 detents end to end: fine enough to sound continuous, coarse enough to
 // cross the range without grinding. Matches the Play page's feel.
@@ -34,23 +38,43 @@ constexpr int kParamStep = 65535 / 64;
 // the bar divides evenly - one long label shrinks every other tab's target.
 const char* const kStageNames[] = {"Sample", "Env", "Amp", "Filter", "Mod"};
 
-// Content geometry. The panel is 720x1280 rotated to 1280x720; the navigator
-// takes UI_HEADER_HEIGHT (75) off the top and UI_HOTKEY_HEIGHT (100) off the
-// bottom, the Instrument strip takes 84 more and the tab bar 56. Positions are
-// absolute against that, matching the Play and diagnostics pages rather than
-// introducing a second convention.
-constexpr int kDesignW = 1280;
-constexpr int kContentH = 720 - UI_HEADER_HEIGHT - UI_HOTKEY_HEIGHT;  // 545
-constexpr int kStripH = 84;
-constexpr int kTabBodyH = kContentH - kStripH - 56;  // 405, after the tab bar
+// Content geometry, from design turns 2c (Env) and 2d (Filter). Positions are
+// relative to the tab body, which the navigator has already inset by the
+// header, the shift rule and the softkey bar.
+//
+// The 84px name/status strip this page used to carry is gone: the navigator's
+// header now holds that context (contextLine()), which is where it belongs -
+// it was the same information on every stage, redrawn inside the page.
+constexpr int kTabBarH = 56;
+constexpr int kBodyH = UI_CONTENT_HEIGHT - kTabBarH;  // 501
+constexpr int kBodyPadTop = 12;
+constexpr int kPaneH = 466;
 
-constexpr int kPanelX = 12;
-constexpr int kPanelY = 8;
-constexpr int kPanelW = kDesignW - 2 * kPanelX;   // 1256
-constexpr int kPanelH = kTabBodyH - 2 * kPanelY;  // 389
-constexpr int kRowPitch = 72;
-constexpr int kBarX = 480;
-constexpr int kBarW = 700;
+// Env: a 2x2 dial grid on the left, the envelope drawn on the right.
+constexpr int kDialGridW = 700;
+constexpr int kDialGap = 10;
+constexpr int kDialW = (kDialGridW - kDialGap) / 2;                     // 345
+constexpr int kDialH = (kPaneH - kDialGap) / 2;                         // 228
+constexpr int kEnvCurveX = UI_MARGIN_X + kDialGridW + 16;               // 736
+constexpr int kEnvCurveW = UI_SCREEN_WIDTH - UI_MARGIN_X - kEnvCurveX;  // 524
+
+// Filter: response curve across the top, three tiles under it.
+constexpr int kFilterCurveH = 270;
+constexpr int kFilterTileY = kBodyPadTop + kFilterCurveH + 12;
+constexpr int kFilterTileH = kPaneH - kFilterCurveH - 12;  // 184
+
+// Stages that are neither: one row of tiles, centred in the body. Sample has
+// five controls and Amp two, so the row cannot fill 501px without stretching
+// tiles into panels; centring reads as deliberate where top-alignment leaves
+// the page looking truncated.
+constexpr int kRowTileH = 260;
+constexpr int kContentW = UI_SCREEN_WIDTH - 2 * UI_MARGIN_X;  // 1240
+
+// Curve pane internals - the plot area inside the titled card.
+constexpr int kPanePadX = 20;
+constexpr int kPanePadTop = 52;
+constexpr int kPanePadBottom = 20;
+
 }  // namespace
 
 int UIInstrumentPage::paramsForStage(Stage s, Param* out, int max) const {
@@ -72,9 +96,14 @@ int UIInstrumentPage::paramsForStage(Stage s, Param* out, int max) const {
             // three to sounding voices.
             add("SAMPLE", kParamSample, 0, "");
             add("TRACK", kParamTrack, 0, "");
-            add("PITCH", WaveX::Protocol::PARAM_PITCH, 32768, "semi");
-            add("PAN", WaveX::Protocol::PARAM_PAN, 32768, "");
-            add("GAIN", WaveX::Protocol::PARAM_VOLUME, 52428, "");
+            // Units are "%" of the wire range, not semitones or dB. The
+            // engine publishes no mapping from a 0..65535 control value to a
+            // physical unit, so printing "semi" beside a percentage - which
+            // this line used to do - claimed a calibration that does not
+            // exist. When the engine exposes ranges, these become real units.
+            add("PITCH", WaveX::Protocol::PARAM_PITCH, 32768, "%");
+            add("PAN", WaveX::Protocol::PARAM_PAN, 32768, "%");
+            add("GAIN", WaveX::Protocol::PARAM_VOLUME, 52428, "%");
             break;
         case Stage::Envelopes:
             add("ATTACK", WaveX::Protocol::PARAM_ENVELOPE_ATTACK, 0, "");
@@ -87,12 +116,12 @@ int UIInstrumentPage::paramsForStage(Stage s, Param* out, int max) const {
             // wire parameter as the sample stage's gain by design - there is
             // one output gain, and showing it twice under two names would
             // imply two controls that fight.
-            add("LEVEL", WaveX::Protocol::PARAM_VOLUME, 52428, "");
+            add("LEVEL", WaveX::Protocol::PARAM_VOLUME, 52428, "%");
             add("ENV->AMP", kParamNone, 65535, "");
             break;
         case Stage::Filter:
-            add("CUTOFF", WaveX::Protocol::PARAM_FILTER_CUTOFF, 65535, "");
-            add("RES", WaveX::Protocol::PARAM_FILTER_RESONANCE, 0, "");
+            add("CUTOFF", WaveX::Protocol::PARAM_FILTER_CUTOFF, 65535, "%");
+            add("RES", WaveX::Protocol::PARAM_FILTER_RESONANCE, 0, "%");
             add("ENV->FLT", kParamNone, 0, "");
             break;
         case Stage::Mod:
@@ -174,10 +203,14 @@ void UIInstrumentPage::onEnter(lv_obj_t* parent) {
     }
     for (int s = 0; s < kStageCount; ++s) {
         for (int i = 0; i < kMaxParams; ++i) {
-            param_rows_[s][i] = nullptr;
-            param_bars_[s][i] = nullptr;
+            tiles_[s][i] = ValueTile{};
         }
     }
+    for (auto& d: dials_) {
+        d = Dial{};
+    }
+    env_curve_ = nullptr;
+    filter_curve_ = nullptr;
 
     root_ = lv_obj_create(parent);
     lv_obj_set_size(root_, lv_pct(100), lv_pct(100));
@@ -186,12 +219,12 @@ void UIInstrumentPage::onEnter(lv_obj_t* parent) {
     lv_obj_set_style_pad_all(root_, 0, LV_PART_MAIN);
     lv_obj_remove_flag(root_, LV_OBJ_FLAG_SCROLLABLE);
 
-    buildStrip(root_);
-
-    // Tabview sits below the strip and takes the rest.
+    // No in-page strip: the instrument name, Track and sample now ride the
+    // navigator's header via contextLine(), so the tabview gets the full
+    // content area rather than 84px less.
     lv_obj_t* tab_host = lv_obj_create(root_);
-    lv_obj_set_size(tab_host, lv_pct(100), kContentH - kStripH);
-    lv_obj_set_pos(tab_host, 0, kStripH);
+    lv_obj_set_size(tab_host, lv_pct(100), lv_pct(100));
+    lv_obj_set_pos(tab_host, 0, 0);
     lv_obj_set_style_bg_color(tab_host, lv_color_hex(kColBg), LV_PART_MAIN);
     lv_obj_set_style_border_width(tab_host, 0, LV_PART_MAIN);
     lv_obj_set_style_pad_all(tab_host, 0, LV_PART_MAIN);
@@ -227,129 +260,272 @@ void UIInstrumentPage::onExit() {
     if (root_) {
         lv_obj_del(root_);
         root_ = nullptr;
-        name_label_ = nullptr;
-        status_label_ = nullptr;
         tabview_ = nullptr;
+        env_curve_ = nullptr;
+        filter_curve_ = nullptr;
+        // The widget handles point into the tree just deleted; clearing them
+        // is what stops refreshParams() writing styles into freed objects if
+        // it runs before the page is entered again.
+        for (auto& d: dials_) {
+            d = Dial{};
+        }
         for (int s = 0; s < kStageCount; ++s) {
             tab_body_[s] = nullptr;
             stage_built_[s] = false;
             for (int i = 0; i < kMaxParams; ++i) {
-                param_rows_[s][i] = nullptr;
-                param_bars_[s][i] = nullptr;
+                tiles_[s][i] = ValueTile{};
             }
         }
     }
 }
 
-// The Instrument-scoped strip: which Instrument, Track and sample on the first line, the last
-// thing the page had to say on the second. Above the tabview rather than in a
-// tab body, so switching stage does not hide it (see the class note).
-void UIInstrumentPage::buildStrip(lv_obj_t* parent) {
-    lv_obj_t* strip = lv_obj_create(parent);
-    lv_obj_set_size(strip, lv_pct(100), kStripH);
-    lv_obj_set_pos(strip, 0, 0);
-    lv_obj_set_style_bg_color(strip, lv_color_hex(kColBg), LV_PART_MAIN);
-    lv_obj_set_style_border_width(strip, 0, LV_PART_MAIN);
-    lv_obj_set_style_pad_all(strip, 0, LV_PART_MAIN);
-    lv_obj_remove_flag(strip, LV_OBJ_FLAG_SCROLLABLE);
-
-    name_label_ = lv_label_create(strip);
-    lv_obj_set_style_text_font(name_label_, &lv_font_montserrat_22, LV_PART_MAIN);
-    lv_obj_set_width(name_label_, kPanelW);
-    lv_label_set_long_mode(name_label_, LV_LABEL_LONG_DOT);
-    lv_obj_set_pos(name_label_, kPanelX, 8);
-    lv_label_set_text(name_label_, "");
-
-    status_label_ = lv_label_create(strip);
-    lv_obj_set_style_text_font(status_label_, &lv_font_montserrat_18, LV_PART_MAIN);
-    lv_obj_set_style_text_color(status_label_, lv_color_hex(kColDim), LV_PART_MAIN);
-    lv_obj_set_width(status_label_, kPanelW);
-    lv_label_set_long_mode(status_label_, LV_LABEL_LONG_DOT);
-    lv_obj_set_pos(status_label_, kPanelX, 46);
-    lv_label_set_text(status_label_, "");
-}
-
 // Builds one tab's parameter rows. Called on first display of that tab, not up
 // front: entering the page then costs three rows rather than seventeen, and
 // page entry is what this UI pays for (docs/backlog.md).
+// A titled card with a plot area inside it, shared by the envelope and filter
+// curves. Returns the lv_line; the caller owns updating its points.
+lv_obj_t* UIInstrumentPage::buildCurvePane(lv_obj_t* parent,
+                                           int x,
+                                           int y,
+                                           int w,
+                                           int h,
+                                           const char* title,
+                                           const char* right,
+                                           lv_point_precise_t* pts,
+                                           int count) {
+    lv_obj_t* card = lv_obj_create(parent);
+    lv_obj_remove_style_all(card);
+    lv_obj_set_pos(card, x, y);
+    lv_obj_set_size(card, w, h);
+    lv_obj_set_style_bg_color(card, UI_COLOR_CARD, 0);
+    lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(card, UI_RADIUS_CARD, 0);
+    lv_obj_set_style_border_width(card, UI_BORDER_WIDTH, 0);
+    lv_obj_set_style_border_color(card, UI_COLOR_LINE, 0);
+    lv_obj_remove_flag(card, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t* t = lv_label_create(card);
+    lv_label_set_text(t, title);
+    lv_obj_set_style_text_font(t, UI_FONT_SMALL, 0);
+    lv_obj_set_style_text_color(t, UI_COLOR_DIM, 0);
+    lv_obj_set_style_text_letter_space(t, 1, 0);
+    lv_obj_set_pos(t, kPanePadX, 18);
+
+    if (right && right[0]) {
+        lv_obj_t* r = lv_label_create(card);
+        lv_label_set_text(r, right);
+        lv_obj_set_style_text_font(r, UI_FONT_MONO_MICRO, 0);
+        lv_obj_set_style_text_color(r, UI_COLOR_DIM, 0);
+        lv_obj_align(r, LV_ALIGN_TOP_RIGHT, -kPanePadX, 20);
+    }
+
+    // The plot well. A flat inset rather than the grid the design draws over
+    // it: a 4x4 grid is 8 more objects per pane for decoration, and this panel
+    // flushes in 20-line strips.
+    lv_obj_t* well = lv_obj_create(card);
+    lv_obj_remove_style_all(well);
+    lv_obj_set_pos(well, kPanePadX, kPanePadTop);
+    lv_obj_set_size(well, w - 2 * kPanePadX, h - kPanePadTop - kPanePadBottom);
+    lv_obj_set_style_bg_color(well, UI_COLOR_CARD_ALT, 0);
+    lv_obj_set_style_bg_opa(well, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(well, UI_RADIUS_BADGE, 0);
+    lv_obj_remove_flag(well, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t* line = lv_line_create(well);
+    lv_obj_set_pos(line, 0, 0);
+    lv_obj_set_style_line_color(line, UI_COLOR_ACCENT, 0);
+    lv_obj_set_style_line_width(line, 4, 0);
+    lv_obj_set_style_line_rounded(line, true, 0);
+    lv_line_set_points(line, pts, static_cast<uint32_t>(count));
+    return line;
+}
+
 void UIInstrumentPage::buildStageRows(int stage) {
     if (stage < 0 || stage >= kStageCount || stage_built_[stage] || !tab_body_[stage]) {
         return;
     }
-
-    // Shared styles, not per-object local ones.
-    //
-    // Every lv_obj_set_style_*() call stores a property in the object's OWN
-    // style list, which allocates. What genuinely varies per row is the label
-    // text and its colour; the panel chrome, row font and bar fills are
-    // identical everywhere, so they belong in one style each row references.
-    //
-    // Function-local statics: initialised once, never destroyed, which is what
-    // an lv_style_t referenced by live objects requires. UI task only, so the
-    // one-time init needs no locking beyond what C++ already guarantees.
-    static lv_style_t s_panel;
-    static lv_style_t s_row;
-    static lv_style_t s_bar_main;
-    static lv_style_t s_bar_ind;
-    static bool s_styles_ready = false;
-    if (!s_styles_ready) {
-        lv_style_init(&s_panel);
-        // remove_style_all() takes the theme's opaque background with it, so
-        // the base style has to restore the parts a panel actually needs.
-        lv_style_set_bg_opa(&s_panel, LV_OPA_COVER);
-        lv_style_set_bg_color(&s_panel, lv_color_hex(kColCard));
-        lv_style_set_border_width(&s_panel, 1);
-        lv_style_set_border_color(&s_panel, lv_color_hex(kColBorder));
-        lv_style_set_radius(&s_panel, 4);
-
-        lv_style_init(&s_row);
-        lv_style_set_text_font(&s_row, &lv_font_montserrat_22);
-
-        lv_style_init(&s_bar_main);
-        lv_style_set_bg_opa(&s_bar_main, LV_OPA_COVER);
-        lv_style_set_bg_color(&s_bar_main, lv_color_hex(kColTrack));
-        lv_style_set_radius(&s_bar_main, 5);
-
-        lv_style_init(&s_bar_ind);
-        lv_style_set_bg_opa(&s_bar_ind, LV_OPA_COVER);
-        lv_style_set_bg_color(&s_bar_ind, lv_color_hex(kColGreen));
-        lv_style_set_radius(&s_bar_ind, 5);
-
-        s_styles_ready = true;
-    }
-
-    lv_obj_t* panel = lv_obj_create(tab_body_[stage]);
-    // Drop the theme's default styling before adding ours; none of it survives
-    // visually, so applying it and then overriding it is pure page-entry cost.
-    lv_obj_remove_style_all(panel);
-    lv_obj_add_style(panel, &s_panel, LV_PART_MAIN);
-    lv_obj_set_size(panel, kPanelW, kPanelH);
-    lv_obj_set_pos(panel, kPanelX, kPanelY);
-    lv_obj_remove_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_t* body = tab_body_[stage];
+    lv_obj_set_style_pad_all(body, 0, 0);
+    lv_obj_remove_flag(body, LV_OBJ_FLAG_SCROLLABLE);
 
     Param params[kMaxParams];
     const int n = paramsForStage(static_cast<Stage>(stage), params, kMaxParams);
-    for (int i = 0; i < n; ++i) {
-        lv_obj_t* row = lv_label_create(panel);
-        lv_obj_remove_style_all(row);
-        lv_obj_add_style(row, &s_row, LV_PART_MAIN);
-        lv_obj_set_pos(row, 16, 18 + i * kRowPitch);
-        lv_label_set_text(row, "");
-        param_rows_[stage][i] = row;
 
-        lv_obj_t* bar = lv_bar_create(panel);
-        lv_obj_remove_style_all(bar);
-        lv_obj_add_style(bar, &s_bar_main, LV_PART_MAIN);
-        lv_obj_add_style(bar, &s_bar_ind, LV_PART_INDICATOR);
-        lv_obj_set_size(bar, kBarW, 10);
-        lv_obj_set_pos(bar, kBarX, 32 + i * kRowPitch);
-        lv_bar_set_range(bar, 0, 65535);
-        lv_bar_set_value(bar, 0, LV_ANIM_OFF);
-        lv_obj_add_flag(bar, LV_OBJ_FLAG_HIDDEN);
-        param_bars_[stage][i] = bar;
+    if (stage == static_cast<int>(Stage::Envelopes)) {
+        // Four dials, 2x2, with the envelope they describe drawn beside them.
+        for (int i = 0; i < n && i < 4; ++i) {
+            const int col = i % 2;
+            const int row = i / 2;
+            dials_[i] = dialCreate(body,
+                                   UI_MARGIN_X + col * (kDialW + kDialGap),
+                                   kBodyPadTop + row * (kDialH + kDialGap),
+                                   kDialW,
+                                   kDialH,
+                                   params[i].label);
+            // Dragging a dial focuses it and then takes exactly the encoder's
+            // path, so touch and encoder cannot produce different results from
+            // the same movement.
+            dialSetOnAdjust(dials_[i], [this, i](int steps) {
+                param_ = i;
+                stepParam(steps);
+                refreshParams();
+            });
+        }
+        env_curve_ = buildCurvePane(body,
+                                    kEnvCurveX,
+                                    kBodyPadTop,
+                                    kEnvCurveW,
+                                    kPaneH,
+                                    "AMP ENVELOPE",
+                                    "-> Amp",
+                                    env_pts_,
+                                    kEnvCurvePoints);
+    } else if (stage == static_cast<int>(Stage::Filter)) {
+        filter_curve_ = buildCurvePane(body,
+                                       UI_MARGIN_X,
+                                       kBodyPadTop,
+                                       kContentW,
+                                       kFilterCurveH,
+                                       "LOW-PASS RESPONSE",
+                                       "20 Hz - 20 kHz",
+                                       filter_pts_,
+                                       kFilterCurvePoints);
+        const int tw = (kContentW - 2 * kDialGap) / 3;
+        for (int i = 0; i < n && i < 3; ++i) {
+            tiles_[stage][i] = valueTileCreate(body,
+                                               UI_MARGIN_X + i * (tw + kDialGap),
+                                               kFilterTileY,
+                                               tw,
+                                               kFilterTileH,
+                                               params[i].label,
+                                               params[i].unit);
+            if (params[i].wire_param != kParamNone) {
+                const int idx = i;
+                valueTileSetOnAdjust(tiles_[stage][i], [this, idx](int steps) {
+                    param_ = idx;
+                    stepParam(steps);
+                    refreshParams();
+                });
+            }
+        }
+    } else {
+        // One row of tiles, divided evenly. Sample has five, Amp two, Mod
+        // three; an even division keeps every stage on the same baseline
+        // rather than giving each its own bespoke grid.
+        const int cols = n > 0 ? n : 1;
+        const int tw = (kContentW - (cols - 1) * kDialGap) / cols;
+        const int ty = (kBodyH - kRowTileH) / 2;
+        for (int i = 0; i < n; ++i) {
+            tiles_[stage][i] = valueTileCreate(body,
+                                               UI_MARGIN_X + i * (tw + kDialGap),
+                                               ty,
+                                               tw,
+                                               kRowTileH,
+                                               params[i].label,
+                                               params[i].unit);
+            if (params[i].wire_param != kParamNone) {
+                const int idx = i;
+                valueTileSetOnAdjust(tiles_[stage][i], [this, idx](int steps) {
+                    param_ = idx;
+                    stepParam(steps);
+                    refreshParams();
+                });
+            }
+        }
     }
 
     stage_built_[stage] = true;
+}
+
+// The envelope as five points: silence, attack peak, decay to sustain, the
+// sustain plateau, and release back to silence. The plateau is given a fixed
+// share of the width rather than a duration - sustain is a level, not a time,
+// so there is nothing truthful to scale its width by.
+void UIInstrumentPage::refreshEnvCurve() {
+    if (!env_curve_ || !lv_obj_is_valid(env_curve_)) {
+        return;
+    }
+    Param params[kMaxParams];
+    const int n = paramsForStage(Stage::Envelopes, params, kMaxParams);
+    if (n < 4) {
+        return;
+    }
+    const int32_t w = lv_obj_get_width(lv_obj_get_parent(env_curve_));
+    const int32_t h = lv_obj_get_height(lv_obj_get_parent(env_curve_));
+    if (w <= 0 || h <= 0) {
+        return;
+    }
+    const int32_t pad = 6;
+    const int32_t top = pad;
+    const int32_t bottom = h - pad;
+
+    const float a = static_cast<float>(params[0].value) / 65535.0f;
+    const float d = static_cast<float>(params[1].value) / 65535.0f;
+    const float sus = static_cast<float>(params[2].value) / 65535.0f;
+    const float r = static_cast<float>(params[3].value) / 65535.0f;
+
+    // A, D and R share 70% of the width in proportion; the sustain plateau
+    // takes the remaining 30%. Scaling them against each other is what makes
+    // "attack longer than decay" visible at a glance.
+    const float span = a + d + r;
+    const float unit = (span > 0.001f) ? (0.70f * static_cast<float>(w)) / span : 0.0f;
+    const int32_t xa = static_cast<int32_t>(a * unit);
+    const int32_t xd = xa + static_cast<int32_t>(d * unit);
+    const int32_t xs = xd + static_cast<int32_t>(0.30f * static_cast<float>(w));
+    const int32_t ys = bottom - static_cast<int32_t>(sus * static_cast<float>(bottom - top));
+
+    env_pts_[0] = {0, bottom};
+    env_pts_[1] = {xa, top};
+    env_pts_[2] = {xd, ys};
+    env_pts_[3] = {xs, ys};
+    env_pts_[4] = {w > xs ? w : xs, bottom};
+    lv_line_set_points(env_curve_, env_pts_, kEnvCurvePoints);
+}
+
+// A one-pole low-pass magnitude response with a resonant peak at the corner.
+// Not the engine's actual filter transfer function - the engine does not
+// publish one - so this is a shape that moves correctly with the two controls,
+// which is what the pane is for. It must not be read as a measurement.
+void UIInstrumentPage::refreshFilterCurve() {
+    if (!filter_curve_ || !lv_obj_is_valid(filter_curve_)) {
+        return;
+    }
+    Param params[kMaxParams];
+    const int n = paramsForStage(Stage::Filter, params, kMaxParams);
+    if (n < 2) {
+        return;
+    }
+    const int32_t w = lv_obj_get_width(lv_obj_get_parent(filter_curve_));
+    const int32_t h = lv_obj_get_height(lv_obj_get_parent(filter_curve_));
+    if (w <= 0 || h <= 0) {
+        return;
+    }
+    const float cutoff = static_cast<float>(params[0].value) / 65535.0f;
+    const float res = static_cast<float>(params[1].value) / 65535.0f;
+    const float flat = static_cast<float>(h) * 0.42f;
+
+    for (int i = 0; i < kFilterCurvePoints; ++i) {
+        const float t = static_cast<float>(i) / static_cast<float>(kFilterCurvePoints - 1);
+        const float x = t - cutoff;  // octaves-ish either side of the corner
+        float y;
+        if (x <= 0.0f) {
+            // Below the corner: flat, lifted by the resonant peak as it nears.
+            const float bump = res * 0.9f * (1.0f - (x * x) * 90.0f);
+            y = flat - flat * (bump > 0.0f ? bump : 0.0f);
+        } else {
+            // Above it: roll off, steeply enough to read as a filter.
+            const float fall = x * 3.2f;
+            y = flat + (static_cast<float>(h) - flat) * (fall < 1.0f ? fall : 1.0f);
+        }
+        if (y < 2.0f) {
+            y = 2.0f;
+        }
+        if (y > static_cast<float>(h) - 2.0f) {
+            y = static_cast<float>(h) - 2.0f;
+        }
+        filter_pts_[i] = {static_cast<int32_t>(t * static_cast<float>(w)), static_cast<int32_t>(y)};
+    }
+    lv_line_set_points(filter_curve_, filter_pts_, kFilterCurvePoints);
 }
 
 void UIInstrumentPage::tabChangedCb(lv_event_t* e) {
@@ -379,36 +555,43 @@ void UIInstrumentPage::selectStage(int stage) {
     ESP_LOGI(TAG, "Instrument -> %s", kStageNames[stage_]);
 }
 
+// Builds the string the navigator draws beside the page title. Held in a
+// member because UIPage::contextLine() hands back a pointer the navigator
+// copies immediately.
 void UIInstrumentPage::refreshHeader() {
-    if (!name_label_ || !lv_obj_is_valid(name_label_)) {
-        return;
-    }
-    char header[128];
     WaveX::Protocol::SampleMetadata m;
     const unsigned track = trackDisplayNumber(currentTrack());
     if (sample_id_ != 0 && inter_mcu_get_sample_meta(sample_id_, &m)) {
-        snprintf(header,
-                 sizeof(header),
-                 "%s   -   Track %u   sample %u  %.32s",
+        snprintf(context_line_,
+                 sizeof(context_line_),
+                 "%s / Track %u / %.24s",
                  instrument_name_,
                  track,
-                 (unsigned)sample_id_,
                  m.name);
     } else if (sample_id_ != 0) {
-        snprintf(header,
-                 sizeof(header),
-                 "%s   -   Track %u   sample %u",
+        snprintf(context_line_,
+                 sizeof(context_line_),
+                 "%s / Track %u / sample %u",
                  instrument_name_,
                  track,
                  (unsigned)sample_id_);
     } else {
-        snprintf(header,
-                 sizeof(header),
-                 "%s   -   Track %u   no sample (load one from Sample > Browse)",
+        snprintf(context_line_,
+                 sizeof(context_line_),
+                 "%s / Track %u / no sample",
                  instrument_name_,
                  track);
     }
-    lv_label_set_text(name_label_, header);
+    // A status message displaces the sample for as long as it is set: it is
+    // the more recent thing the user did, and the header is the only place
+    // left to say it now the in-page strip is gone.
+    if (status_[0]) {
+        snprintf(context_line_ + strlen(context_line_),
+                 sizeof(context_line_) - strlen(context_line_),
+                 " / %s",
+                 status_);
+    }
+    UINavigator::instance().refreshContext();
 }
 
 void UIInstrumentPage::refreshParams() {
@@ -417,79 +600,74 @@ void UIInstrumentPage::refreshParams() {
     if (param_ >= n) {
         param_ = n > 0 ? n - 1 : 0;
     }
+    const bool env = (stage_ == static_cast<int>(Stage::Envelopes));
 
     for (int i = 0; i < n; ++i) {
-        lv_obj_t* row = param_rows_[stage_][i];
-        if (!row || !lv_obj_is_valid(row)) {
+        const Param& p = params[i];
+        const bool inert = (p.wire_param == kParamNone);
+        const bool focused = (i == param_);
+        const float frac = static_cast<float>(p.value) / 65535.0f;
+
+        if (env) {
+            if (!dials_[i].card) {
+                continue;
+            }
+            // Envelope times are shown as a percentage of range, not in ms:
+            // the engine does not tell us what its range maps to in seconds,
+            // and printing an invented "12 ms" would be a measurement claim.
+            char value[16];
+            snprintf(value, sizeof(value), "%d%%", static_cast<int>(frac * 100.0f + 0.5f));
+            dialSetValue(dials_[i], frac, value, i == 2 ? "level" : "time");
+            dialSetFocus(dials_[i], focused);
             continue;
         }
 
-        const Param& p = params[i];
-        const bool inert = (p.wire_param == kParamNone);
-        // Discrete choices, not continuous CC values - shown as text, no bar.
-        const bool discrete = (p.wire_param == kParamSample || p.wire_param == kParamTrack);
-        const bool focused = (i == param_);
-
-        char line[96];
+        ValueTile& tile = tiles_[stage_][i];
+        if (!tile.card) {
+            continue;
+        }
         if (inert) {
-            snprintf(line, sizeof(line), "%s%-10s  --  not wired", focused ? "> " : "  ", p.label);
-        } else if (p.wire_param == kParamSample) {
+            // Set once: valueTileSetUnwired() adds a reason label each call.
+            if (!tile.note) {
+                valueTileSetUnwired(tile, "protocol carries no mod routing yet");
+            }
+            continue;
+        }
+
+        char value[40];
+        if (p.wire_param == kParamSample) {
             WaveX::Protocol::SampleMetadata m;
             if (sample_id_ == 0) {
-                snprintf(
-                    line, sizeof(line), "%s%-10s  none loaded", focused ? "> " : "  ", p.label);
+                snprintf(value, sizeof(value), "none");
             } else if (inter_mcu_get_sample_meta(sample_id_, &m)) {
-                snprintf(line,
-                         sizeof(line),
-                         "%s%-10s  %u %.24s",
-                         focused ? "> " : "  ",
-                         p.label,
-                         (unsigned)sample_id_,
-                         m.name);
+                snprintf(value, sizeof(value), "%.18s", m.name);
             } else {
-                snprintf(line,
-                         sizeof(line),
-                         "%s%-10s  %u",
-                         focused ? "> " : "  ",
-                         p.label,
-                         (unsigned)sample_id_);
+                snprintf(value, sizeof(value), "%u", (unsigned)sample_id_);
             }
+            valueTileSetValue(tile, value, true);
+            valueTileSetFill(tile, 0.0f);
         } else if (p.wire_param == kParamTrack) {
-            snprintf(line,
-                     sizeof(line),
-                     "%s%-10s  %u",
-                     focused ? "> " : "  ",
-                     p.label,
-                     trackDisplayNumber(getCurrentTrack()));
+            snprintf(value, sizeof(value), "%u", trackDisplayNumber(getCurrentTrack()));
+            valueTileSetValue(tile, value);
+            valueTileSetFill(tile, 0.0f);
         } else {
-            snprintf(line,
-                     sizeof(line),
-                     "%s%-10s  %5u %s",
-                     focused ? "> " : "  ",
-                     p.label,
-                     (unsigned)p.value,
-                     p.unit);
+            snprintf(value, sizeof(value), "%d", static_cast<int>(frac * 100.0f + 0.5f));
+            valueTileSetValue(tile, value);
+            valueTileSetFill(tile, frac);
         }
-        lv_label_set_text(row, line);
-        lv_obj_set_style_text_color(
-            row, lv_color_hex(inert ? kColInert : (focused ? kColGreen : 0xFFFFFF)), LV_PART_MAIN);
+        valueTileSetFocus(tile, focused);
+    }
 
-        lv_obj_t* bar = param_bars_[stage_][i];
-        if (bar && lv_obj_is_valid(bar)) {
-            if (inert || discrete) {
-                lv_obj_add_flag(bar, LV_OBJ_FLAG_HIDDEN);
-            } else {
-                lv_obj_remove_flag(bar, LV_OBJ_FLAG_HIDDEN);
-                lv_bar_set_value(bar, p.value, LV_ANIM_OFF);
-            }
-        }
+    if (env) {
+        refreshEnvCurve();
+    } else if (stage_ == static_cast<int>(Stage::Filter)) {
+        refreshFilterCurve();
     }
 }
 
 void UIInstrumentPage::refreshStatus(const char* text) {
-    if (status_label_ && lv_obj_is_valid(status_label_)) {
-        lv_label_set_text(status_label_, text ? text : "");
-    }
+    snprintf(status_, sizeof(status_), "%s", text ? text : "");
+    refreshHeader();
 }
 
 void UIInstrumentPage::sendParam(const Param& p) {

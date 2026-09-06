@@ -27,10 +27,19 @@ namespace {
 // the 75 px header and the 100 px softkey row; a tab group takes 56 more off
 // the top of that. Rows are sized so a full page of them scrolls rather than
 // clipping, which the old fixed 460x250 list did on anything past six rows.
-constexpr int kRowH = 46;
-constexpr int kRowGap = 4;
-constexpr int kListPad = 10;
-constexpr int kValueLabelW = 320;
+// Design turn 3d: 72px rows on the card pitch, the value right-aligned in the
+// mono face so a column of them lines up on the decimal point.
+constexpr int kRowH = 72;
+constexpr int kRowGap = UI_GUTTER;
+constexpr int kListPad = UI_MARGIN_X;
+constexpr int kValueLabelW = 420;
+
+// Turn 4a: a tab whose settings are controls rather than information reads as
+// a 2x2 tile grid, the same shape the Instrument's Filter stage uses. Applied
+// only to small, editable tabs - Storage, MIDI and System are long lists of
+// read-only facts, which a grid of four big tiles cannot carry.
+constexpr size_t kTileLayoutMaxSettings = 4;
+constexpr int kTileGap = 10;
 
 // Shared styles: one set for the whole component, referenced by every row.
 //
@@ -62,7 +71,7 @@ const RowStyles& rowStyles() {
 
     lv_style_init(&s.list);
     lv_style_set_bg_opa(&s.list, LV_OPA_COVER);
-    lv_style_set_bg_color(&s.list, lv_color_hex(kColBg));
+    lv_style_set_bg_color(&s.list, UI_COLOR_BG);
     lv_style_set_border_width(&s.list, 0);
     lv_style_set_radius(&s.list, 0);
     lv_style_set_pad_all(&s.list, kListPad);
@@ -72,42 +81,42 @@ const RowStyles& rowStyles() {
 
     lv_style_init(&s.row);
     lv_style_set_bg_opa(&s.row, LV_OPA_COVER);
-    lv_style_set_bg_color(&s.row, lv_color_hex(kColCard));
+    lv_style_set_bg_color(&s.row, UI_COLOR_CARD);
     lv_style_set_border_width(&s.row, 1);
-    lv_style_set_border_color(&s.row, lv_color_hex(kColBorder));
-    lv_style_set_radius(&s.row, 4);
-    lv_style_set_pad_left(&s.row, 16);
-    lv_style_set_pad_right(&s.row, 16);
+    lv_style_set_border_color(&s.row, UI_COLOR_LINE);
+    lv_style_set_radius(&s.row, UI_RADIUS_CARD);
+    lv_style_set_pad_left(&s.row, 24);
+    lv_style_set_pad_right(&s.row, 24);
 
     // Selected / editing are additive overlays on top of `row`, so a selection
     // change is two add_style/remove_style calls rather than a rebuild.
     lv_style_init(&s.row_selected);
-    lv_style_set_bg_color(&s.row_selected, lv_color_hex(kColTabOn));
-    lv_style_set_border_color(&s.row_selected, lv_color_hex(kColBlue));
-    lv_style_set_border_width(&s.row_selected, 2);
+    lv_style_set_bg_color(&s.row_selected, UI_COLOR_CARD_ALT);
+    lv_style_set_border_color(&s.row_selected, UI_COLOR_ACCENT);
+    lv_style_set_border_width(&s.row_selected, UI_BORDER_WIDTH_FOCUS);
 
     lv_style_init(&s.row_editing);
-    lv_style_set_bg_color(&s.row_editing, lv_color_hex(kColTabOn));
-    lv_style_set_border_color(&s.row_editing, lv_color_hex(kColOrange));
-    lv_style_set_border_width(&s.row_editing, 2);
+    lv_style_set_bg_color(&s.row_editing, UI_COLOR_CARD_ALT);
+    lv_style_set_border_color(&s.row_editing, UI_COLOR_WARN);
+    lv_style_set_border_width(&s.row_editing, UI_BORDER_WIDTH_FOCUS);
 
     lv_style_init(&s.name);
-    lv_style_set_text_font(&s.name, &lv_font_montserrat_18);
-    lv_style_set_text_color(&s.name, lv_color_white());
+    lv_style_set_text_font(&s.name, UI_FONT_BODY);
+    lv_style_set_text_color(&s.name, UI_COLOR_FG);
 
     lv_style_init(&s.name_dim);
-    lv_style_set_text_font(&s.name_dim, &lv_font_montserrat_18);
-    lv_style_set_text_color(&s.name_dim, lv_color_hex(kColDim));
+    lv_style_set_text_font(&s.name_dim, UI_FONT_BODY);
+    lv_style_set_text_color(&s.name_dim, UI_COLOR_DIM);
 
     lv_style_init(&s.value);
-    lv_style_set_text_font(&s.value, &lv_font_montserrat_18);
-    lv_style_set_text_color(&s.value, lv_color_hex(kColGreen));
+    lv_style_set_text_font(&s.value, UI_FONT_MONO_SMALL);
+    lv_style_set_text_color(&s.value, UI_COLOR_FG);
     lv_style_set_text_align(&s.value, LV_TEXT_ALIGN_RIGHT);
     lv_style_set_width(&s.value, kValueLabelW);
 
     lv_style_init(&s.value_dim);
-    lv_style_set_text_font(&s.value_dim, &lv_font_montserrat_18);
-    lv_style_set_text_color(&s.value_dim, lv_color_hex(kColDimmer));
+    lv_style_set_text_font(&s.value_dim, UI_FONT_MONO_SMALL);
+    lv_style_set_text_color(&s.value_dim, UI_COLOR_DIMMER);
     lv_style_set_text_align(&s.value_dim, LV_TEXT_ALIGN_RIGHT);
     lv_style_set_width(&s.value_dim, kValueLabelW);
 
@@ -181,6 +190,7 @@ void UISettingsPage::onExit() {
         root_ = nullptr;
         list_ = nullptr;
         rows_.clear();
+        tiles_.clear();
         valueLabels_.clear();
         styledRow_ = -1;
     }
@@ -228,6 +238,14 @@ std::array<Softkey, NUM_SOFTKEYS> UISettingsPage::getSoftkeys() {
     return keys;
 }
 
+// Four or fewer settings read as a 2x2 tile grid; more than that has to be a
+// list. This is a capacity rule, not a taste one - four is what the content
+// area holds at a size worth reading from a metre away, and System's eleven
+// rows would lose most of themselves in it.
+bool UISettingsPage::useTiles() const {
+    return !settings_.empty() && settings_.size() <= kTileLayoutMaxSettings;
+}
+
 void UISettingsPage::rebuildList() {
     if (!list_)
         return;
@@ -236,7 +254,77 @@ void UISettingsPage::rebuildList() {
     lv_obj_clean(list_);
     rows_.clear();
     valueLabels_.clear();
+    tiles_.clear();
     styledRow_ = -1;
+
+    if (useTiles()) {
+        // Absolute placement inside the list, so the flex column the row
+        // layout relies on has to come off first.
+        lv_obj_set_style_layout(list_, LV_LAYOUT_NONE, LV_PART_MAIN);
+        lv_obj_set_style_pad_all(list_, 0, LV_PART_MAIN);
+        lv_obj_remove_flag(list_, LV_OBJ_FLAG_SCROLLABLE);
+
+        // Force layout before measuring: the list was sized moments ago and
+        // its coordinates are not computed until LVGL next lays out, so
+        // reading them here returns 0 and every tile comes out zero-sized -
+        // which is a blank tab, not a visibly broken one.
+        lv_obj_update_layout(list_);
+        int32_t w = lv_obj_get_width(list_);
+        int32_t h = lv_obj_get_height(list_);
+        if (w <= 0 || h <= 0) {
+            w = UI_CONTENT_WIDTH;
+            h = UI_CONTENT_HEIGHT - UI_TAB_BAR_HEIGHT;
+        }
+        const int tw = (w - 2 * UI_MARGIN_X - kTileGap) / 2;
+        const int th = (h - 2 * kTileGap - kTileGap) / 2;
+        tiles_.resize(settings_.size());
+        for (size_t i = 0; i < settings_.size(); ++i) {
+            const Setting& st = settings_[i];
+            const int col = static_cast<int>(i) % 2;
+            const int row = static_cast<int>(i) / 2;
+            tiles_[i] = valueTileCreate(list_,
+                                        UI_MARGIN_X + col * (tw + kTileGap),
+                                        kTileGap + row * (th + kTileGap),
+                                        tw,
+                                        th,
+                                        st.label.c_str(),
+                                        nullptr);
+            char valueText[64];
+            formatValue(st, valueText, sizeof(valueText));
+            if (st.kind == SettingKind::Unimplemented) {
+                // "NOT IMPLEMENTED" here, not the Instrument's "NOT WIRED":
+                // these settings have no code behind them at all, where the
+                // Instrument's inert controls are waiting on a protocol
+                // message. The distinction is worth one word.
+                valueTileSetUnwired(tiles_[i], st.text.c_str(), "NOT IMPLEMENTED");
+            } else {
+                if (st.editable()) {
+                    const int idx = static_cast<int>(i);
+                    valueTileSetOnAdjust(tiles_[i], [this, idx](int steps) {
+                        selectedSetting_ = idx;
+                        adjustValue(steps);
+                        refreshSelection();
+                    });
+                }
+                valueTileSetValue(tiles_[i], valueText, !st.editable());
+                if (!st.desc.empty()) {
+                    valueTileSetDesc(tiles_[i], st.desc.c_str());
+                }
+                const int span = st.maxValue - st.minValue;
+                if (st.editable() && span > 0) {
+                    valueTileSetFill(
+                        tiles_[i],
+                        static_cast<float>(st.value - st.minValue) / static_cast<float>(span));
+                } else {
+                    valueTileHideFill(tiles_[i]);
+                }
+            }
+        }
+        refreshSelection();
+        LV_UNLOCK();
+        return;
+    }
+
     rows_.reserve(settings_.size());
     valueLabels_.reserve(settings_.size());
 
@@ -276,6 +364,14 @@ void UISettingsPage::rebuildList() {
 }
 
 void UISettingsPage::refreshSelection() {
+    if (!tiles_.empty()) {
+        LV_LOCK();
+        for (size_t i = 0; i < tiles_.size(); ++i) {
+            valueTileSetFocus(tiles_[i], static_cast<int>(i) == selectedSetting_);
+        }
+        LV_UNLOCK();
+        return;
+    }
     if (rows_.empty())
         return;
     LV_LOCK();
@@ -369,7 +465,18 @@ void UISettingsPage::updateSetting(int settingIndex, int newValue) {
     auto& setting = settings_[settingIndex];
     setting.value = newValue;
 
-    if (settingIndex < (int)valueLabels_.size() && valueLabels_[settingIndex]) {
+    if (settingIndex < (int)tiles_.size() && tiles_[settingIndex].card) {
+        LV_LOCK();
+        char valueText[64];
+        formatValue(setting, valueText, sizeof(valueText));
+        valueTileSetValue(tiles_[settingIndex], valueText, !setting.editable());
+        const int span = setting.maxValue - setting.minValue;
+        valueTileSetFill(tiles_[settingIndex],
+                         span > 0 ? static_cast<float>(setting.value - setting.minValue) /
+                                        static_cast<float>(span)
+                                  : 0.0f);
+        LV_UNLOCK();
+    } else if (settingIndex < (int)valueLabels_.size() && valueLabels_[settingIndex]) {
         LV_LOCK();
         char valueText[64];
         formatValue(setting, valueText, sizeof(valueText));

@@ -84,6 +84,14 @@ include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/ui/components  # For file_browser.h, envelope_cache.h
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/ui/include
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/ui/styles  # For ui_theme.h (will use mock)
+    # ui_theme.h now names the vendored mono tables. Nine UI sources include
+    # it as "../styles/ui_theme.h", which bypasses mocks/ui_theme.h entirely,
+    # so the host build compiles the real header and needs the real
+    # wavex_fonts.h beside it. Only the declarations are needed - no host
+    # test references a mono table, so the generated .c files stay out of
+    # the link. That the mock is dead for those TUs is tracked in
+    # docs/backlog.md.
+    ${CMAKE_CURRENT_SOURCE_DIR}/../components/ui/fonts  # For wavex_fonts.h
     ${CMAKE_CURRENT_SOURCE_DIR}/../../shared
     ${CMAKE_CURRENT_SOURCE_DIR}/../../shared/config  # For link_config.h
     ${CMAKE_CURRENT_SOURCE_DIR}/../../shared/spi_protocol
@@ -118,6 +126,7 @@ add_library(wavex_esp32_test_lib STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/../main/comm/comm_interface_impl.cpp  # Include for testing
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/ui/components/envelope_cache.cpp  # Waveform envelope cache
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/ui/components/envelope_fetcher.cpp  # Envelope request/receive state machine
+    ${CMAKE_CURRENT_SOURCE_DIR}/../components/ui/components/envelope_panel.cpp  # Waveform panel: views, requests, render
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/ui/components/file_browser.cpp  # File browser navigation logic
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/ui/src/panel_key.cpp  # Panel key names and keycode map
     ${CMAKE_CURRENT_SOURCE_DIR}/../../shared/uart_protocol/uart_protocol.cpp

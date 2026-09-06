@@ -56,7 +56,7 @@ while (job.active) {                       // one call per main-loop iteration
 
 ## 5. Waveform editor UI (ESP32 side)
 
-- **Preview tiers**: Daisy generates decimated min/max peak pyramids per file (existing `MSG_PREVIEW_REQ`/`MSG_WAVE_CHUNK` path, extended with a tier parameter). ESP32 caches tiers in PSRAM keyed by path+mtime; zoom switches tiers, scroll pans within one.
+- **Preview tiers**: Daisy measures min/max envelopes per window (the `MSG_ENVELOPE_REQ`/`MSG_ENVELOPE_CHUNK` path; the `EnvelopeCache` already keeps runs per tier). ESP32 caches tiers in PSRAM keyed by (sample_id, generation); zoom switches tiers, scroll pans within one.
 - **Interaction**: touch to place/drag markers, encoder A for fine position (sample-accurate), encoder B for zoom. Softkeys: Trim, Normalize, FX…, Slice, Render.
 - **During render**: editor stays interactive on the cached preview; progress bar overlays; audition of untouched regions keeps working.
 

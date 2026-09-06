@@ -1,6 +1,7 @@
 #pragma once
 
-#include "envelope_fetcher.h"
+#include "components/ui_value_tile.h"
+#include "envelope_panel.h"
 #include "input_event.h"
 #include "spi_protocol/protocol.h"
 #include "ui_page.h"
@@ -8,7 +9,6 @@
 #include <array>
 #include <atomic>
 #include <memory>
-#include <vector>
 
 namespace wavex_ui {
 
@@ -52,19 +52,12 @@ class UISampleEditPage : public UIPage {
     // reached by paging, so the row stays at the design's 305px pitch.
     static constexpr int kVisibleCards = 4;
 
-    struct ParamCard {
-        lv_obj_t* card;
-        lv_obj_t* value;
-        lv_obj_t* bar;   // fill; nullptr for the inert cards
-        lv_obj_t* knob;  // slider handle
-    };
-
     lv_obj_t* root_ = nullptr;
     lv_obj_t* status_label_ = nullptr;
     lv_obj_t* info_label_ = nullptr;
     lv_obj_t* marker_s_ = nullptr;
     lv_obj_t* marker_e_ = nullptr;
-    ParamCard cards_[PARAM_COUNT] = {};
+    ValueTile cards_[PARAM_COUNT] = {};
     lv_obj_t* marker_ls_ = nullptr;
     lv_obj_t* marker_le_ = nullptr;
 
@@ -87,27 +80,24 @@ class UISampleEditPage : public UIPage {
 
     bool has_sample_ = false;
 
-    // The envelope run in flight, including the staging buffer, the
-    // cross-task chunk assembly and the timeout/retry budget. Shared with the
-    // sample browser's detail panel; see envelope_fetcher.h for why the
-    // release/acquire handling lives there rather than being written twice.
-    EnvelopeFetcher fetcher_;
+    // The waveform cycle - requests, chunk assembly, the cache, rendering -
+    // for all three views. Shared with the sample browser and the record
+    // page; see envelope_panel.h. What this page keeps is what it last told
+    // the panel, so syncWindows() can tell a new sample from a tick.
+    EnvelopePanel panel_;
+    uint16_t panel_sample_id_ = 0;
+    uint16_t panel_generation_ = 0;
+    uint32_t panel_total_frames_ = 0;
+    /// The status line is showing a waveform problem, to be replaced by the
+    /// sample name once the trace is drawn.
+    bool wave_status_shown_ = false;
 
-    // Where render() merges cached tier columns for this view. Stays here
-    // rather than in the fetcher: it is sized by what this page displays, not
-    // by what one run can carry.
-    std::vector<WaveX::Protocol::EnvelopeColumn> display_columns_;
-
-    // Redraw requests, applied by ui_timer_ on the UI task.
+    // Redraw request, applied by ui_timer_ on the UI task.
     //
-    // Unlike the fetcher's own state, these are raised only from UI-task code
-    // - the envelope callback signals completion inside the fetcher, not
-    // through these. They are atomic defensively rather than by necessity, so that a
-    // future comm-side caller is correct by default; do not read this as
-    // evidence that the RX task touches them today, and do not add one without
-    // reading the ordering note above first.
+    // Raised only from UI-task code. Atomic defensively rather than by
+    // necessity, so that a future comm-side caller is correct by default; do
+    // not read this as evidence that the RX task touches it today.
     lv_timer_t* ui_timer_ = nullptr;
-    std::atomic<bool> waveform_dirty_{false};
     std::atomic<bool> params_dirty_{false};
 
     // Touch-drag coalescing for the marker handles. LVGL fires PRESSING at the
@@ -116,14 +106,14 @@ class UISampleEditPage : public UIPage {
     // is owed; serviceUi() sends it and clears this.
     uint32_t edit_due_ms_ = 0;
 
-    // Encoder movement coalescing. One detent used to fire an envelope request
-    // of its own, so a single turn queued a burst of them.
-    uint32_t request_due_ms_ = 0;
-
     // Sample geometry, from the backend's cached SampleMetadata for the
     // current sample (see ui/current_sample.h).
     uint32_t total_frames_ = 0;
     uint32_t sample_rate_ = 48000;
+    // The envelope cache's key alongside the id. 0 for the life of a Pool
+    // id today; adopted from the record anyway, so a backend that starts
+    // bumping it files the new audio under a new key rather than the old.
+    uint16_t generation_ = 0;
 
     // Markers, in frames, absolute within the sample.
     uint32_t start_frame_ = 0;
@@ -146,12 +136,6 @@ class UISampleEditPage : public UIPage {
     uint8_t focus_ = PARAM_START;
     bool auditioning_ = false;
 
-    static void envelopeChunkStatic(const WaveX::Protocol::EnvelopeChunkMessage& header,
-                                    const WaveX::Protocol::EnvelopeColumn* columns,
-                                    void* user);
-    void handleEnvelopeChunk(const WaveX::Protocol::EnvelopeChunkMessage& header,
-                             const WaveX::Protocol::EnvelopeColumn* columns);
-
     void buildWaveformPanel(lv_obj_t* parent);
     void buildParamStrip(lv_obj_t* parent);
     void layoutParamStrip();
@@ -169,7 +153,8 @@ class UISampleEditPage : public UIPage {
     void applyMeta(const WaveX::Protocol::SampleMetadata& m);
     void refreshParams();
     void refreshFocusRing();
-    void requestWaveform();
+    /// Tells the panel the current sample and every view's window.
+    void syncWindows();
 
     /// True while the panel should show the loop seam rather than the region.
     bool spliceActive() const;
@@ -178,7 +163,6 @@ class UISampleEditPage : public UIPage {
     uint32_t spliceHalfSpan() const;
     /// Swaps the panel between the continuous view and the splice pair.
     void updateWaveformMode();
-    void drawSplice();
 
     /// Touch handling for the four region/loop handles.
     static void handleEventCb(lv_event_t* e);
@@ -186,9 +170,7 @@ class UISampleEditPage : public UIPage {
     /// Frame under the pointer, mapped through the current zoom window.
     /// False when there is no pointer or the geometry is not ready.
     bool pointerFrame(lv_event_t* e, uint32_t& out_frame) const;
-    void drawWaveform();  ///< UI task only: cache -> WaveformView.
     uint16_t currentSampleId() const;
-    uint16_t currentGeneration() const;
     void refreshStatus(const char* text);
 };
 

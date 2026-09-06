@@ -59,7 +59,7 @@ Post-save handoff: SAVE's completion `REC_STATUS{state=Idle, error=0}` carries t
 1. **Meter block**: input VU (RMS + peak-hold + clip counter) live from REC_STATUS while armed — set gain *before* committing, the whole point of the Emax VU screen.
 2. **Config row**: source, threshold (with "manual" at zero), pre-roll, max length, monitor toggle.
 3. **Transport row**: Arm → (threshold trip or Start) → Stop → [Audition | Save | Discard]. Audition fires `REC_CTRL{AUDITION, note=60}` — Daisy triggers the transient take through a scratch voice.
-4. **After save**: waveform preview (existing `MSG_PREVIEW_REQ` path works on the saved file), auto-trim markers shown/adjustable (sidecar edit), "Assign to zone…" picker.
+4. **After save**: waveform envelope (the existing `MSG_ENVELOPE_REQ` path works on the saved file once it is in the Pool), auto-trim markers shown/adjustable (sidecar edit), "Assign to zone…" picker.
 
 ## 5. Failure modes (design them in, don't discover them)
 

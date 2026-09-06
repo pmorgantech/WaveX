@@ -25,6 +25,7 @@
 #include "ui/ui_palette.h"
 #include "ui/ui_tab_group.h"
 #include "ui_task.h"
+#include "ui_theme.h"
 
 #include <memory>
 
@@ -156,19 +157,19 @@ void initCardStyles() {
     lv_style_set_radius(&s_bar_ind, 2);
 
     lv_style_init(&s_title);
-    lv_style_set_text_font(&s_title, &lv_font_montserrat_18);
+    lv_style_set_text_font(&s_title, UI_FONT_SMALL);
     lv_style_set_text_color(&s_title, lv_color_hex(kColDim));
 
     lv_style_init(&s_value);
-    lv_style_set_text_font(&s_value, &lv_font_montserrat_36);
+    lv_style_set_text_font(&s_value, UI_FONT_MONO_LARGE);
     lv_style_set_text_color(&s_value, lv_color_white());
 
     lv_style_init(&s_unit);
-    lv_style_set_text_font(&s_unit, &lv_font_montserrat_22);
+    lv_style_set_text_font(&s_unit, UI_FONT_BODY);
     lv_style_set_text_color(&s_unit, lv_color_hex(kColDim));
 
     lv_style_init(&s_sub);
-    lv_style_set_text_font(&s_sub, &lv_font_montserrat_18);
+    lv_style_set_text_font(&s_sub, UI_FONT_SMALL);
     lv_style_set_text_color(&s_sub, lv_color_hex(kColDim));
 
     s_styles_ready = true;
@@ -339,7 +340,7 @@ UIDiagnosticsPage::Card UIDiagnosticsPage::makeCard(lv_obj_t* parent,
             tc = kColBlue;
         else if (strcmp(tag, "new") == 0)
             tc = kColOrange;
-        lv_obj_t* l = mkLabel(card, 0, 0, tag, &lv_font_montserrat_14, tc);
+        lv_obj_t* l = mkLabel(card, 0, 0, tag, UI_FONT_MICRO, tc);
         lv_obj_align(l, LV_ALIGN_TOP_RIGHT, -16, 14);
     }
 
@@ -525,7 +526,7 @@ void UIDiagnosticsPage::buildDaisyTab(lv_obj_t* tab) {
     lv_table_set_column_width(sample_table, 4, 240);  // format / placement
     lv_obj_set_style_bg_color(sample_table, lv_color_hex(kColCard), LV_PART_ITEMS);
     lv_obj_set_style_text_color(sample_table, lv_color_white(), LV_PART_ITEMS);
-    lv_obj_set_style_text_font(sample_table, &lv_font_montserrat_14, LV_PART_ITEMS);
+    lv_obj_set_style_text_font(sample_table, UI_FONT_MICRO, LV_PART_ITEMS);
     lv_obj_set_style_border_color(sample_table, lv_color_hex(0x222222), LV_PART_ITEMS);
     lv_obj_set_style_border_width(sample_table, 1, LV_PART_ITEMS);
     lv_obj_set_style_bg_color(sample_table, lv_color_hex(kColCard), LV_PART_MAIN);
@@ -542,7 +543,7 @@ void UIDiagnosticsPage::buildLinkTab(lv_obj_t* tab) {
     // MSG_DIAG_PUSH nor WAVEX_DAISY_UART_PERF_DEBUG.
     //
     // No sparkline here: pushSpark clamps to 0..100 and the packet rate runs
-    // well past that during a preview stream, so the trace would flatline at
+    // well past that during an envelope fetch, so the trace would flatline at
     // the top and claim the link had stopped varying.
     static const bool gauge[4] = {false, false, false, false};
     for (int i = 0; i < 4; i++) {
@@ -567,7 +568,7 @@ void UIDiagnosticsPage::buildLinkTab(lv_obj_t* tab) {
     lv_table_set_column_width(msg_table, 1, 180);
     lv_obj_set_style_bg_color(msg_table, lv_color_hex(kColCard), LV_PART_ITEMS);
     lv_obj_set_style_text_color(msg_table, lv_color_white(), LV_PART_ITEMS);
-    lv_obj_set_style_text_font(msg_table, &lv_font_montserrat_18, LV_PART_ITEMS);
+    lv_obj_set_style_text_font(msg_table, UI_FONT_SMALL, LV_PART_ITEMS);
     lv_obj_set_style_border_color(msg_table, lv_color_hex(0x222222), LV_PART_ITEMS);
     lv_obj_set_style_border_width(msg_table, 1, LV_PART_ITEMS);
     lv_obj_set_style_bg_color(msg_table, lv_color_hex(kColCard), LV_PART_MAIN);
@@ -649,7 +650,7 @@ void UIDiagnosticsPage::buildMidiTab(lv_obj_t* tab) {
                         "MSG_DIAG_PUSH carries these fields, but the Daisy has no sequencer or\n"
                         "tempo follower to fill them yet (Phase 2). They will read zero until\n"
                         "those land - see docs/roadmap.md.",
-                        &lv_font_montserrat_18,
+                        UI_FONT_SMALL,
                         kColDimmer);
 }
 
@@ -677,7 +678,7 @@ void UIDiagnosticsPage::buildPanelTab(lv_obj_t* tab) {
                              "reports it. A key that reads \"unmapped\" is not in "
                              "the WAVEX_KEYCODE_* map (hardware_config.h) - or the "
                              "matrix geometry there is wrong.",
-                             &lv_font_montserrat_14,
+                             UI_FONT_MICRO,
                              kColDimmer);
     lv_obj_set_width(note, kCardW);
     lv_label_set_long_mode(note, LV_LABEL_LONG_WRAP);
@@ -1467,9 +1468,9 @@ void UIDiagnosticsPage::refreshLinkTab() {
     snprintf(v, sizeof(v), "%lu", (unsigned long)st.total_packets);
     snprintf(sub,
              sizeof(sub),
-             "%lu meter - %lu wave",
+             "%lu meter - %lu envelope",
              (unsigned long)st.meter_push_packets,
-             (unsigned long)st.wave_chunk_packets);
+             (unsigned long)st.envelope_chunk_packets);
     setCard(link_cards[2], v, "total", sub, -1);
 
     snprintf(v, sizeof(v), "%lu", (unsigned long)(st.invalid_packets + st.error_packets));
@@ -1491,14 +1492,12 @@ void UIDiagnosticsPage::refreshLinkTab() {
     const Row rows[] = {
         {"HEARTBEAT", st.heartbeat_packets},
         {"METER_PUSH", st.meter_push_packets},
-        {"WAVE_CHUNK", st.wave_chunk_packets},
         {"ENVELOPE_CHUNK", st.envelope_chunk_packets},
         {"STATUS_RESPONSE", st.status_response_packets},
         {"STATUS_REQUEST", st.status_request_packets},
         {"SAMPLE_CTRL", st.sample_ctrl_packets},
         {"SAMPLE_LOAD", st.sample_load_packets},
         {"SAMPLE_DATA", st.sample_data_packets},
-        {"PREVIEW_REQ", st.preview_req_packets},
         {"DATA_REQUEST", st.data_request_packets},
         {"CONTROL_CHANGE", st.control_change_packets},
         {"NOTE_ON", st.note_on_packets},

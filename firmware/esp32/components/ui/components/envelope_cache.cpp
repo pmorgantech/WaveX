@@ -1,6 +1,7 @@
 #include "envelope_cache.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <cstring>
 
 namespace wavex_ui {
@@ -126,17 +127,34 @@ bool EnvelopeCache::makeRoom(size_t bytes_needed) {
     }
 }
 
-EnvelopeCache::Entry* EnvelopeCache::findRun(uint16_t sample_id,
-                                             uint16_t generation,
-                                             uint32_t fpc,
-                                             uint8_t channels) {
+size_t EnvelopeCache::gatherTouching(uint16_t sample_id,
+                                     uint16_t generation,
+                                     uint32_t fpc,
+                                     uint8_t channels,
+                                     uint32_t first,
+                                     uint32_t count,
+                                     Entry** out,
+                                     uint32_t& merged_first,
+                                     uint32_t& merged_end) {
+    merged_first = first;
+    merged_end = first + count;
+    size_t n = 0;
     for (Entry& e: entries_) {
-        if (e.used && e.sample_id == sample_id && e.generation == generation && e.fpc == fpc &&
-            e.channels == channels) {
-            return &e;
+        if (!e.used || e.sample_id != sample_id || e.generation != generation || e.fpc != fpc ||
+            e.channels != channels) {
+            continue;
+        }
+        const uint32_t e0 = e.first_column;
+        const uint32_t e1 = e0 + e.columns;
+        if (first <= e1 && e0 <= first + count) {
+            out[n++] = &e;
+            merged_first = std::min(merged_first, e0);
+            merged_end = std::max(merged_end, e1);
         }
     }
-    return nullptr;
+    // One pass is enough: two held runs that touch each other would already
+    // have been merged when the second of them landed.
+    return n;
 }
 
 const EnvelopeCache::Entry* EnvelopeCache::findCovering(uint16_t sample_id,
@@ -194,9 +212,11 @@ bool EnvelopeCache::nextRequest(uint16_t sample_id,
         return false;
     }
 
-    // Skip what this tier already holds. An entry is one contiguous run, so
-    // the uncovered part is a prefix, a suffix, or the whole thing - never a
-    // hole in the middle, which is what keeps this to a single range.
+    // Skip what this tier already holds. Each entry is one contiguous run and
+    // runs that touch are merged on commit, so what is left is one range: the
+    // whole view, a prefix, a suffix, or - with two separate runs either side
+    // of it - the hole between them. A run that lands in that hole touches
+    // both and the three become one.
     for (const Entry& e: entries_) {
         if (!e.used || e.sample_id != sample_id || e.generation != generation || e.fpc != fpc) {
             continue;
@@ -220,8 +240,15 @@ bool EnvelopeCache::nextRequest(uint16_t sample_id,
         c1 = c0 + max_columns_per_request;
     }
 
+    // The end is NOT clamped to the file. The backend clamps at end-of-file
+    // itself, and noteRequest() reads the tier back out of (end - start) /
+    // columns, so a clamped end would name the tier below the one asked for
+    // whenever the file is not a whole number of tier columns long:
+    // 12,312,576 frames over 752 columns at 16384 is 16373 per column, which
+    // floors to 8192, and the run then claims half the file it covers.
+    const uint64_t end64 = static_cast<uint64_t>(c1) * fpc;
     req_start = c0 * fpc;
-    req_end = std::min(c1 * fpc, total_frames);
+    req_end = static_cast<uint32_t>(std::min<uint64_t>(end64, UINT32_MAX));
     req_columns = static_cast<uint16_t>(c1 - c0);
     return req_columns > 0 && req_end > req_start;
 }
@@ -242,9 +269,10 @@ void EnvelopeCache::noteRequest(uint16_t sample_id,
     pending_.columns = req_columns;
     pending_.received = 0;
     pending_.channels = 0;
-    // The tier is the requester's, not the reply's: the backend clamps the
-    // last column at end-of-file, so (end - start) / columns can come back
-    // short and would name the wrong tier.
+    // The tier is the requester's, not the reply's: nextRequest() hands out
+    // a span that is exactly columns * tier (it does not clamp at end-of-file;
+    // the backend does), so this division is exact. The reply's own end_frame
+    // is never consulted - the backend's clamp would make it come back short.
     pending_.fpc = std::max<uint32_t>(1u, (req_end - req_start) / req_columns);
     pending_.fpc = FloorPow2(pending_.fpc);
     pending_.first_column = req_start / pending_.fpc;
@@ -322,44 +350,52 @@ bool EnvelopeCache::commitPending() {
 
     pending_.active = false;
 
-    Entry* existing = findRun(pending_.sample_id, pending_.generation, fpc, channels);
-
-    uint32_t merged_first = first;
-    uint32_t merged_count = count;
-    if (existing) {
-        const uint32_t e0 = existing->first_column;
-        const uint32_t e1 = e0 + existing->columns;
-        const bool adjacent = (first <= e1) && (e0 <= first + count);
-        if (adjacent) {
-            merged_first = std::min(e0, first);
-            const uint32_t merged_end = std::max(e1, first + count);
-            merged_count = merged_end - merged_first;
+    // A tier may hold several runs of one sample at once, and a run that
+    // touches none of them takes its own slot. This is what lets the edit
+    // page's two splice halves - the same tier, far apart in the file - both
+    // stay resident: when the second one landing evicted the first, the
+    // first was re-requested, evicted the second, and so on, one run per
+    // round trip, for as long as the loop markers were in view.
+    Entry* touching[kMaxEntries];
+    uint32_t merged_first = 0;
+    uint32_t merged_end = 0;
+    size_t n_touching = gatherTouching(pending_.sample_id,
+                                       pending_.generation,
+                                       fpc,
+                                       channels,
+                                       first,
+                                       count,
+                                       touching,
+                                       merged_first,
+                                       merged_end);
+    if (merged_end - merged_first > kMaxEntryColumns) {
+        // A merge that would exceed the per-entry cap: keep the new run and
+        // drop what it touched, since the new one is what the user is looking
+        // at.
+        for (size_t i = 0; i < n_touching; ++i) {
+            releaseEntry(*touching[i]);
         }
-        if (!adjacent || merged_count > kMaxEntryColumns) {
-            // Disjoint runs, or a merge that would exceed the per-entry cap:
-            // keep the new one and drop the old, since the new one is what the
-            // user is looking at.
-            releaseEntry(*existing);
-            existing = nullptr;
-            merged_first = first;
-            merged_count = count;
-        }
-    }
-    if (merged_count > kMaxEntryColumns) {
+        n_touching = 0;
         merged_first = first;
-        merged_count = std::min(count, kMaxEntryColumns);
+        merged_end = first + count;
     }
+    uint32_t merged_count = std::min<uint32_t>(merged_end - merged_first, kMaxEntryColumns);
 
     const size_t bytes = static_cast<size_t>(merged_count) * channels * sizeof(EnvelopeColumn);
     if (!makeRoom(bytes)) {
         return false;
     }
-    // makeRoom may have evicted the very entry being merged into.
-    existing = findRun(pending_.sample_id, pending_.generation, fpc, channels);
-    if (!existing) {
-        merged_first = first;
-        merged_count = count;
-    }
+    // makeRoom may have evicted some of what was being merged into.
+    n_touching = gatherTouching(pending_.sample_id,
+                                pending_.generation,
+                                fpc,
+                                channels,
+                                first,
+                                count,
+                                touching,
+                                merged_first,
+                                merged_end);
+    merged_count = std::min<uint32_t>(merged_end - merged_first, kMaxEntryColumns);
 
     auto* data = static_cast<EnvelopeColumn*>(
         alloc_.alloc(static_cast<size_t>(merged_count) * channels * sizeof(EnvelopeColumn)));
@@ -368,21 +404,24 @@ bool EnvelopeCache::commitPending() {
     }
     std::fill(data, data + static_cast<size_t>(merged_count) * channels, EnvelopeColumn());
 
-    if (existing) {
-        const size_t off = static_cast<size_t>(existing->first_column - merged_first) * channels;
-        std::memcpy(data + off,
-                    existing->data,
-                    static_cast<size_t>(existing->columns) * channels * sizeof(EnvelopeColumn));
+    for (size_t i = 0; i < n_touching; ++i) {
+        const Entry& e = *touching[i];
+        const size_t off = static_cast<size_t>(e.first_column - merged_first) * channels;
+        std::memcpy(
+            data + off, e.data, static_cast<size_t>(e.columns) * channels * sizeof(EnvelopeColumn));
     }
     // New data last: where the runs overlap, the fresher measurement wins.
     std::memcpy(data + static_cast<size_t>(first - merged_first) * channels,
                 pending_.staging,
                 static_cast<size_t>(count) * channels * sizeof(EnvelopeColumn));
 
-    Entry* slot = existing;
-    if (slot) {
-        releaseEntry(*slot);
-    } else {
+    // The merged run takes the first slot it absorbed; a run that touched
+    // nothing takes a free one, which makeRoom() guaranteed.
+    Entry* slot = n_touching ? touching[0] : nullptr;
+    for (size_t i = 0; i < n_touching; ++i) {
+        releaseEntry(*touching[i]);
+    }
+    if (!slot) {
         for (Entry& e: entries_) {
             if (!e.used) {
                 slot = &e;
@@ -415,8 +454,12 @@ uint16_t EnvelopeCache::render(uint16_t sample_id,
                                uint16_t display_columns,
                                EnvelopeColumn* out,
                                size_t out_capacity,
-                               uint8_t& out_channels) const {
+                               uint8_t& out_channels,
+                               uint32_t* out_fpc) const {
     out_channels = 1;
+    if (out_fpc) {
+        *out_fpc = 0;
+    }
     if (!out || display_columns == 0 || view_end <= view_start) {
         return 0;
     }
@@ -430,6 +473,9 @@ uint16_t EnvelopeCache::render(uint16_t sample_id,
         return 0;
     }
     e->last_used = ++tick_;
+    if (out_fpc) {
+        *out_fpc = e->fpc;
+    }
 
     const uint64_t span = view_end - view_start;
     uint16_t covered = 0;

@@ -2,6 +2,7 @@
 #include "ui/ui_status_strip.h"
 
 #include "../styles/ui_theme.h"
+#include "ui/ui_palette.h"
 
 #include <cstdio>
 
@@ -15,26 +16,46 @@
 namespace wavex_ui {
 namespace {
 
-// Geometry, right-anchored inside the 1280x75 header. The eight columns are
-// 8x44 on an 11px pitch (design 1a); the CPU readout sits to their right.
-constexpr int kScreenW = 1280;
+// Geometry, right-anchored inside the header. Reading right to left the
+// header ends with the SHIFT chip, then the engine-CPU block, then the eight
+// meter columns - each separated by UI_HEADER_GAP. Everything is derived from
+// UI_SHIFT_CHIP_X rather than from the screen edge, so moving the chip moves
+// the strip with it instead of letting the two overlap.
 constexpr int kMeters = 8;
-constexpr int kMeterW = 8;
-constexpr int kMeterPitch = 11;
-constexpr int kMeterH = 44;
-constexpr int kMeterY = 16;
-constexpr int kCpuBarW = 70;
-constexpr int kCpuBarH = 8;
-constexpr int kCpuBarX = kScreenW - 16 - kCpuBarW;
-constexpr int kMeterX0 = kCpuBarX - 10 - 70 - 16 - (kMeters * kMeterW + (kMeters - 1) * 3);
+constexpr int kMeterW = 9;
+constexpr int kMeterGap = 3;
+constexpr int kMeterPitch = kMeterW + kMeterGap;
+constexpr int kMeterH = 40;
+constexpr int kMeterY = (UI_HEADER_HEIGHT - kMeterH) / 2;
+constexpr int kMetersW = kMeters * kMeterW + (kMeters - 1) * kMeterGap;
+
+// The CPU block is a right-aligned label over a slim bar, not a bar with a
+// label beside it: the number is what gets read, the bar is peripheral.
+constexpr int kCpuBlockW = 90;
+constexpr int kCpuBlockX = UI_SHIFT_CHIP_X - UI_HEADER_GAP - kCpuBlockW;
+constexpr int kCpuBarW = kCpuBlockW;
+constexpr int kCpuBarH = 6;
+constexpr int kCpuLabelY = 16;
+constexpr int kCpuBarY = 42;
+
+constexpr int kMeterX0 = kCpuBlockX - UI_HEADER_GAP - kMetersW;
+
+// An idle column is a 3px base rather than a full-height empty track: the
+// track shape implies a level is being measured, and for six of these eight
+// nothing is on the wire yet.
+constexpr int kStubH = 3;
 
 // Colours. The strip is chrome, so it uses its own flat palette rather than
 // the page theme - it must read the same on every screen behind it.
-constexpr uint32_t kColMeterBg = 0x1A1A1A;
-constexpr uint32_t kColGreen = 0x4CAF50;
-constexpr uint32_t kColOrange = 0xFF9800;
-constexpr uint32_t kColStub = 0x2A2A2A;
-constexpr uint32_t kColDim = 0x8FA0AA;
+// Local names for the shared palette (ui/ui_palette.h). These were
+// hand-copied literals that had already drifted from it and from each
+// other - three different "border" greys existed across five files - so a
+// theme switch reached only the surfaces that happened to be in sync.
+constexpr uint32_t kColMeterBg = palette::kColCardAlt;
+constexpr uint32_t kColGreen = palette::kColGreen;
+constexpr uint32_t kColOrange = palette::kColOrange;
+constexpr uint32_t kColStub = palette::kColBorder;
+constexpr uint32_t kColDim = palette::kColDim;
 
 // A meter push older than this is treated as silence. Without it the last
 // levels before a link drop stay lit forever, which reads as "still playing".
@@ -136,7 +157,11 @@ void tick(lv_timer_t*) {
     inter_mcu_get_backend_heartbeat_detailed(&hb);
     char buf[16];
     int pct = 0;
-    if (hb.valid) {
+    // Liveness, not "have we ever heard from it" - hb.valid latches on the
+    // first heartbeat, so this readout used to hold the last CPU figure it saw
+    // forever after a link drop. The meters beside it already decay on
+    // staleness; this now matches them.
+    if (hb.valid && inter_mcu_backend_link_alive()) {
         pct = static_cast<int>(hb.cpu_avg_percent + 0.5f);
         if (pct < 0)
             pct = 0;
@@ -181,26 +206,33 @@ void statusStripCreate(lv_obj_t* header) {
         if (i < 2) {
             s_col[i].track = box(header, x, kMeterY, kMeterW, kMeterH, kColMeterBg);
             s_col[i].fill = box(header, x, kMeterY + kMeterH, kMeterW, 0, kColGreen);
-            s_col[i].peak = box(header, x, kMeterY + kMeterH, kMeterW, 2, 0xFFFFFF);
+            s_col[i].peak = box(header, x, kMeterY + kMeterH, kMeterW, 2, palette::kColFg);
             lv_obj_add_flag(s_col[i].fill, LV_OBJ_FLAG_HIDDEN);
             lv_obj_add_flag(s_col[i].peak, LV_OBJ_FLAG_HIDDEN);
         } else {
             // No per-voice meters on the wire yet: a 2px base stub says the
             // channel exists and is idle, which is true, where a full-height
             // empty track would imply we are measuring it.
-            box(header, x, kMeterY + kMeterH - 2, kMeterW, 2, kColStub);
+            box(header, x, kMeterY + kMeterH - kStubH, kMeterW, kStubH, kColStub);
         }
     }
 
     s_cpu_label = lv_label_create(header);
-    lv_obj_set_style_text_font(s_cpu_label, &lv_font_montserrat_14, 0);
+    // Mono: the percentage is re-rendered ten times a second, and a
+    // proportional face makes the label's width jitter as the digits change.
+    lv_obj_set_style_text_font(s_cpu_label, UI_FONT_MONO_MICRO, 0);
     lv_obj_set_style_text_color(s_cpu_label, lv_color_hex(kColDim), 0);
     lv_label_set_text(s_cpu_label, "CPU --");
-    // Right-aligned so the label grows leftward and never runs into the bar.
-    lv_obj_align(s_cpu_label, LV_ALIGN_TOP_RIGHT, -(kScreenW - kCpuBarX + 10), 22);
+    // Right-aligned within its block so the label grows leftward, towards the
+    // meters, and never pushes into the SHIFT chip.
+    lv_obj_set_pos(s_cpu_label, kCpuBlockX, kCpuLabelY);
+    lv_obj_set_width(s_cpu_label, kCpuBlockW);
+    lv_obj_set_style_text_align(s_cpu_label, LV_TEXT_ALIGN_RIGHT, 0);
 
-    box(header, kCpuBarX, 34, kCpuBarW, kCpuBarH, kColMeterBg);
-    s_cpu_bar = box(header, kCpuBarX, 34, 0, kCpuBarH, kColGreen);
+    lv_obj_t* cpu_track = box(header, kCpuBlockX, kCpuBarY, kCpuBarW, kCpuBarH, kColMeterBg);
+    lv_obj_set_style_radius(cpu_track, kCpuBarH / 2, 0);
+    s_cpu_bar = box(header, kCpuBlockX, kCpuBarY, 0, kCpuBarH, kColGreen);
+    lv_obj_set_style_radius(s_cpu_bar, kCpuBarH / 2, 0);
 
     s_timer = lv_timer_create(tick, 100, nullptr);
 }

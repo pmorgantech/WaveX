@@ -23,6 +23,7 @@
 
 #include "lvgl.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <vector>
 
@@ -271,6 +272,90 @@ TEST_F(WaveformViewRenderTest, ExtraChannelsAreClampedNotInterleaved) {
 
     EXPECT_GT(inkPixels(a, a.y1, mid - 1), inkPixels(a, mid + 1, a.y2) * 4)
         << "third channel leaked into a lane, or the stride was clamped with the count";
+}
+
+// The device renders in WAVEX_LVGL_DRAW_BUF_HEIGHT-line strips, and the draw
+// path clips its column runs to the strip it is handed (fewer draw tasks per
+// frame - see drawLane). The tests above render DIRECT, whole screen in one
+// pass, so they never see a clip narrower than the widget. This renders the
+// same busy stereo trace both ways and demands identical pixels: a run merged
+// wrongly across a strip edge, or a column dropped at one, shows up here and
+// nowhere else on the host.
+namespace {
+constexpr int32_t kStripH = 8;  // many strips, and edges that cut through runs
+uint16_t g_strip_fb[kDisplayW * kDisplayH];
+uint16_t g_strip_buf[kDisplayW * kStripH];
+
+void StripFlushCb(lv_display_t* disp, const lv_area_t* area, uint8_t* px_map) {
+    const auto* src = reinterpret_cast<const uint16_t*>(px_map);
+    const int32_t w = lv_area_get_width(area);
+    for (int32_t y = area->y1; y <= area->y2; ++y) {
+        std::copy(src, src + w, &g_strip_fb[y * kDisplayW + area->x1]);
+        src += w;
+    }
+    lv_display_flush_ready(disp);
+}
+
+std::vector<EnvelopeColumn> BusyStereoEnvelope(uint16_t columns) {
+    std::vector<EnvelopeColumn> v;
+    v.reserve(static_cast<size_t>(columns) * 2);
+    uint32_t seed = 0x9E3779B9u;
+    for (uint16_t i = 0; i < columns; ++i) {
+        seed = seed * 1664525u + 1013904223u;
+        // Loud, quiet and silent stretches, each with jitter, so runs of
+        // equal spans exist but are short and end at arbitrary columns.
+        const int phase = (i / 20) % 4;
+        const int16_t base = phase == 0 ? 30000 : phase == 1 ? 6000 : phase == 2 ? 0 : 15000;
+        const int16_t jitter = static_cast<int16_t>((seed >> 16) % 4000);
+        const int16_t left = static_cast<int16_t>(base > jitter ? base - jitter : base);
+        const int16_t right = static_cast<int16_t>(left / 2 + (seed & 0x3FF));
+        v.emplace_back(static_cast<int16_t>(-left), left);
+        v.emplace_back(static_cast<int16_t>(-(right / 3)), right);
+    }
+    return v;
+}
+}  // namespace
+
+TEST_F(WaveformViewRenderTest, StripRenderMatchesWholeScreenRender) {
+    const auto env = BusyStereoEnvelope(kDisplayW);
+    Render(env, kDisplayW, 2);
+    std::vector<uint16_t> direct(g_framebuffer, g_framebuffer + kDisplayW * kDisplayH);
+    const lv_area_t a = content();
+    view_.reset();
+
+    lv_display_t* strip = lv_display_create(kDisplayW, kDisplayH);
+    lv_display_set_buffers(
+        strip, g_strip_buf, nullptr, sizeof(g_strip_buf), LV_DISPLAY_RENDER_MODE_PARTIAL);
+    lv_display_set_flush_cb(strip, &StripFlushCb);
+    lv_display_set_default(strip);
+    lv_obj_t* screen = lv_obj_create(nullptr);
+    lv_obj_set_style_bg_color(screen, lv_color_hex(0x000000), LV_PART_MAIN);
+    lv_obj_set_style_pad_all(screen, 0, LV_PART_MAIN);
+    lv_obj_set_style_border_width(screen, 0, LV_PART_MAIN);
+    lv_screen_load(screen);
+    {
+        WaveformView view(screen, kDisplayW, kDisplayH);
+        lv_obj_set_pos(view.root(), 0, 0);
+        view.setEnvelope(env.data(), kDisplayW, 2);
+        g_tick_ms += 50;
+        lv_timer_handler();
+        lv_refr_now(strip);
+    }
+    lv_display_set_default(display_);
+
+    size_t differing = 0;
+    for (int32_t y = a.y1; y <= a.y2; ++y) {
+        for (int32_t x = a.x1; x <= a.x2; ++x) {
+            if (direct[y * kDisplayW + x] != g_strip_fb[y * kDisplayW + x]) {
+                ++differing;
+            }
+        }
+    }
+    EXPECT_EQ(differing, 0u) << "strip-clipped draw differs from the whole-screen draw";
+    EXPECT_GT(inkPixels(a, a.y1, a.y2), 0) << "nothing drawn at all - the comparison is vacuous";
+
+    lv_obj_delete(screen);
+    lv_display_delete(strip);
 }
 
 }  // namespace

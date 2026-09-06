@@ -932,7 +932,6 @@ int main(void) {
         // audition first, while a lightweight PROBE yields between files.
         WaveX::AudioEngine::PumpInstrumentLoad();
         WaveX::AudioEngine::PumpEnvelopeJob();
-        WaveX::AudioEngine::PumpPreviewSend();
         WaveX::AudioEngine::PumpTrackBinding();
 #endif
 

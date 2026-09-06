@@ -45,7 +45,6 @@ static portMUX_TYPE s_sample_mem_lock = portMUX_INITIALIZER_UNLOCKED;
 // Pages register these with `this` and clear them in onExit; the UART task
 // invokes them. ListenerSlot makes the pair swap atomic and makes a clear
 // block until any in-flight callback has returned - see listener_slot.h.
-static WaveX::Comm::ListenerSlot<wavex_wave_chunk_cb_t> s_wave_chunk_listener;
 static WaveX::Comm::ListenerSlot<wavex_envelope_chunk_cb_t> s_envelope_chunk_listener;
 static WaveX::Comm::ListenerSlot<wavex_inst_status_cb_t> s_inst_status_listener;
 
@@ -224,21 +223,6 @@ esp_err_t inter_mcu_send_sample_ctrl(uint8_t slot, wavex_sample_ctrl_cmd_t cmd, 
     return result >= 0 ? ESP_OK : ESP_FAIL;
 }
 
-esp_err_t inter_mcu_send_preview_req(uint8_t slot, uint32_t start, uint32_t end, uint16_t decim) {
-    if (!s_initialized || s_suspended) {
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    WaveX::Protocol::PreviewReqMessage msg;
-    msg.slot = slot;
-    msg.start = start;
-    msg.end = end;
-    msg.decim = decim;
-
-    int result = send_uart_message(WaveX::Protocol::MSG_PREVIEW_REQ, &msg, sizeof(msg));
-    return result >= 0 ? ESP_OK : ESP_FAIL;
-}
-
 esp_err_t inter_mcu_send_envelope_req(uint16_t sample_id,
                                       uint16_t columns,
                                       uint32_t start_frame,
@@ -276,9 +260,18 @@ bool s_meta_page_valid = false;
 portMUX_TYPE s_track_binding_lock = portMUX_INITIALIZER_UNLOCKED;
 WaveX::Protocol::TrackBindingMessage s_track_bindings[kTrackBindingCount];
 bool s_track_binding_valid[kTrackBindingCount] = {};
-}  // namespace
 
-void inter_mcu_store_sample_meta(const WaveX::Protocol::SampleMetadata& msg) {
+// Bumped on the RX task, compared on the UI task; a page that keeps the
+// value it last acted on can tell "nothing new" from "something arrived"
+// without touching the caches or the link. Relaxed is enough: a reader that
+// sees the bump then reads the caches under their own locks.
+std::atomic<uint32_t> s_pool_revision{0};
+std::atomic<uint32_t> s_cache_revision{0};
+
+// One record into the per-id cache, no revision. The single-push entry point
+// counts it as a Pool change; the page store, which files a whole page of
+// records the Pool already had, must not.
+void store_meta_record(const WaveX::Protocol::SampleMetadata& msg) {
     taskENTER_CRITICAL(&s_meta_lock);
     size_t slot = kMetaCacheSize;
     for (size_t i = 0; i < kMetaCacheSize; ++i) {
@@ -307,6 +300,21 @@ void inter_mcu_store_sample_meta(const WaveX::Protocol::SampleMetadata& msg) {
     s_meta_newest_id = msg.sample_id;
     taskEXIT_CRITICAL(&s_meta_lock);
 }
+}  // namespace
+
+void inter_mcu_store_sample_meta(const WaveX::Protocol::SampleMetadata& msg) {
+    store_meta_record(msg);
+    s_pool_revision.fetch_add(1, std::memory_order_relaxed);
+    s_cache_revision.fetch_add(1, std::memory_order_relaxed);
+}
+
+uint32_t inter_mcu_sample_pool_revision() {
+    return s_pool_revision.load(std::memory_order_relaxed);
+}
+
+uint32_t inter_mcu_sample_cache_revision() {
+    return s_cache_revision.load(std::memory_order_relaxed);
+}
 
 bool inter_mcu_get_sample_meta(uint16_t sample_id, WaveX::Protocol::SampleMetadata* out) {
     if (!out) {
@@ -317,6 +325,35 @@ bool inter_mcu_get_sample_meta(uint16_t sample_id, WaveX::Protocol::SampleMetada
     const uint16_t want = sample_id ? sample_id : s_meta_newest_id;
     for (size_t i = 0; i < kMetaCacheSize; ++i) {
         if (s_meta_valid[i] && s_meta[i].sample_id == want) {
+            *out = s_meta[i];
+            found = true;
+            break;
+        }
+    }
+    taskEXIT_CRITICAL(&s_meta_lock);
+    return found;
+}
+
+bool inter_mcu_find_sample_meta_by_name(const char* path, WaveX::Protocol::SampleMetadata* out) {
+    if (!path || !path[0] || !out) {
+        return false;
+    }
+    constexpr size_t kKept = WaveX::Protocol::FILE_NAME_MAX - 1;
+    const size_t path_len = strnlen(path, kKept + 1);
+    bool found = false;
+    taskENTER_CRITICAL(&s_meta_lock);
+    for (size_t i = 0; i < kMetaCacheSize; ++i) {
+        if (!s_meta_valid[i]) {
+            continue;
+        }
+        const char* name = s_meta[i].name;
+        const size_t name_len = strnlen(name, kKept);
+        // A name that fills the field was cut at kKept; a path that long can
+        // only be compared on what survived.
+        const bool match = (name_len == kKept && path_len >= kKept)
+                               ? (strncmp(name, path, kKept) == 0)
+                               : (name_len == path_len && strncmp(name, path, kKept) == 0);
+        if (match) {
             *out = s_meta[i];
             found = true;
             break;
@@ -365,8 +402,9 @@ void inter_mcu_store_sample_meta_page(const WaveX::Protocol::SampleMetaPageHeade
     for (uint8_t i = 0; i < n; ++i) {
         WaveX::Protocol::SampleMetadata m;
         memcpy(&m, records + i * sizeof(m), sizeof(m));
-        inter_mcu_store_sample_meta(m);
+        store_meta_record(m);
     }
+    s_cache_revision.fetch_add(1, std::memory_order_relaxed);
 }
 
 size_t inter_mcu_get_sample_meta_page(WaveX::Protocol::SampleMetadata* out,
@@ -423,7 +461,17 @@ void inter_mcu_store_track_binding(const WaveX::Protocol::TrackBindingMessage& m
     if (msg.track >= kTrackBindingCount) {
         return;
     }
+    // A binding that differs from the cached one is a Pool change as well:
+    // the record's used_by moved, and the backend does not push the record
+    // for a bind. A reply that only confirms the cache (the all-Tracks
+    // request a page makes on entry) is not.
+    bool changed = true;
     taskENTER_CRITICAL(&s_track_binding_lock);
+    if (s_track_binding_valid[msg.track]) {
+        const WaveX::Protocol::TrackBindingMessage& was = s_track_bindings[msg.track];
+        changed = was.state != msg.state || was.sample_id != msg.sample_id ||
+                  strncmp(was.name, msg.name, sizeof(was.name)) != 0;
+    }
     s_track_bindings[msg.track] = msg;
     // The name is a fixed-width wire field, not a guaranteed C string: a name
     // that exactly fills it carries no terminator. Terminate once here so
@@ -431,6 +479,10 @@ void inter_mcu_store_track_binding(const WaveX::Protocol::TrackBindingMessage& m
     s_track_bindings[msg.track].name[sizeof(s_track_bindings[msg.track].name) - 1] = '\0';
     s_track_binding_valid[msg.track] = true;
     taskEXIT_CRITICAL(&s_track_binding_lock);
+    if (changed) {
+        s_pool_revision.fetch_add(1, std::memory_order_relaxed);
+    }
+    s_cache_revision.fetch_add(1, std::memory_order_relaxed);
 }
 
 bool inter_mcu_get_track_binding(uint8_t track, WaveX::Protocol::TrackBindingMessage* out) {
@@ -467,7 +519,7 @@ esp_err_t inter_mcu_send_sample_unload(uint16_t sample_id) {
     return result >= 0 ? ESP_OK : ESP_FAIL;
 }
 
-esp_err_t inter_mcu_send_sample_edit(uint8_t slot,
+esp_err_t inter_mcu_send_sample_edit(uint16_t sample_id,
                                      bool loop_enabled,
                                      int16_t gain_db_x10,
                                      uint32_t start_frame,
@@ -479,7 +531,7 @@ esp_err_t inter_mcu_send_sample_edit(uint8_t slot,
     if (!s_initialized || s_suspended) {
         return ESP_ERR_INVALID_STATE;
     }
-    WaveX::Protocol::SampleEditMessage msg(slot,
+    WaveX::Protocol::SampleEditMessage msg(sample_id,
                                            loop_enabled ? 1 : 0,
                                            gain_db_x10,
                                            start_frame,
@@ -601,9 +653,11 @@ namespace {
 // Reading s_meta[] unlocked is safe here: this task is the only writer, and a
 // concurrent UI-task reader is also only reading. The worst a race can do is
 // mark a slot that changed in between, which the next status corrects.
-void prune_sample_meta_to(const wavex_sample_mem_status_t& status) {
+// Returns whether a record left the cache: the one Pool change nothing else
+// announces (an eviction notifies nobody), so the caller counts it as one.
+bool prune_sample_meta_to(const wavex_sample_mem_status_t& status) {
     if (status.sample_count >= WAVEX_SAMPLE_STATUS_MAX_ENTRIES) {
-        return;  // possibly truncated: cannot prove absence
+        return false;  // possibly truncated: cannot prove absence
     }
 
     bool drop[kMetaCacheSize] = {};
@@ -637,16 +691,19 @@ void prune_sample_meta_to(const wavex_sample_mem_status_t& status) {
         status.sample_count > 0 ? status.entries[status.sample_count - 1].sample_id : 0;
 
     // Only the writes are guarded, so the section is a handful of stores.
+    bool dropped = false;
     taskENTER_CRITICAL(&s_meta_lock);
     for (size_t i = 0; i < kMetaCacheSize; ++i) {
         if (drop[i]) {
             s_meta_valid[i] = false;
+            dropped = true;
         }
     }
     if (!newest_live) {
         s_meta_newest_id = new_newest;
     }
     taskEXIT_CRITICAL(&s_meta_lock);
+    return dropped;
 }
 
 }  // namespace
@@ -657,7 +714,10 @@ void inter_mcu_update_sample_mem_status(const wavex_sample_mem_status_t& status)
     taskEXIT_CRITICAL(&s_sample_mem_lock);
     // Outside the lock above: this takes s_meta_lock, and nesting the two
     // spinlocks would create the only lock ordering in this file.
-    prune_sample_meta_to(status);
+    if (prune_sample_meta_to(status)) {
+        s_pool_revision.fetch_add(1, std::memory_order_relaxed);
+    }
+    s_cache_revision.fetch_add(1, std::memory_order_relaxed);
 }
 
 void inter_mcu_get_sample_mem_status(wavex_sample_mem_status_t* out) {
@@ -669,11 +729,6 @@ void inter_mcu_get_sample_mem_status(wavex_sample_mem_status_t* out) {
     taskENTER_CRITICAL(&s_sample_mem_lock);
     memcpy(out, &s_sample_mem_status, sizeof(s_sample_mem_status));
     taskEXIT_CRITICAL(&s_sample_mem_lock);
-}
-
-void inter_mcu_set_wave_chunk_listener(wavex_wave_chunk_cb_t cb, void* user_data) {
-    s_wave_chunk_listener.set(cb, user_data);
-    ESP_LOGI(TAG, "Wave chunk listener registered: %p", cb);
 }
 
 void inter_mcu_set_envelope_chunk_listener(wavex_envelope_chunk_cb_t cb, void* user_data) {
@@ -702,14 +757,6 @@ void inter_mcu_invoke_storage_status_callback(bool mounted) {
     s_statistics->invoke_storage_status_callback(mounted);
 }
 
-void inter_mcu_invoke_wave_chunk_callback(uint32_t offset, const int16_t* samples, uint16_t count) {
-    if (!s_wave_chunk_listener.registered()) {
-        ESP_LOGW(TAG, "Wave chunk received but no listener registered");
-        return;
-    }
-    s_wave_chunk_listener.invoke(offset, samples, count);
-}
-
 void inter_mcu_set_sample_status_listener(wavex_sample_status_cb_t cb, void* user_data) {
     if (!s_statistics) {
         ESP_LOGE(TAG, "StatisticsManager not initialized");
@@ -736,6 +783,19 @@ void inter_mcu_set_inst_status_listener(wavex_inst_status_cb_t cb, void* user_da
 
 void inter_mcu_invoke_inst_status_callback(const WaveX::Protocol::InstStatusMessage& status) {
     s_inst_status_listener.invoke(status);
+}
+
+bool inter_mcu_backend_link_alive(void) {
+    wavex_backend_heartbeat_t hb;
+    memset(&hb, 0, sizeof(hb));
+    inter_mcu_get_backend_heartbeat(&hb);
+    if (!hb.valid || hb.last_rx_ms == 0) {
+        return false;
+    }
+    const uint32_t now_ms = static_cast<uint32_t>(esp_timer_get_time() / 1000);
+    // Unsigned subtraction, so a wrapped timer reads as "just heard from it"
+    // for one tick rather than as a dead link for 49 days.
+    return (now_ms - hb.last_rx_ms) < WAVEX_LINK_STALE_MS;
 }
 
 void inter_mcu_get_backend_heartbeat(wavex_backend_heartbeat_t* out) {

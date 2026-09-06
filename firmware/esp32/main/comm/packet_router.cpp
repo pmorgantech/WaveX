@@ -147,12 +147,6 @@ void PacketRouter::route_by_message_type(uint8_t msg_type,
                 handle_status_response(msg);
         } break;
 
-        case WaveX::Protocol::MSG_WAVE_CHUNK: {
-            WaveX::Protocol::WaveChunkMessage msg;
-            if (CopyMessage(payload, payload_len, msg, "WAVE_CHUNK"))
-                handle_wave_chunk(msg, payload, payload_len);
-        } break;
-
         case WaveX::Protocol::MSG_ENVELOPE_CHUNK: {
             WaveX::Protocol::EnvelopeChunkMessage msg;
             if (CopyMessage(payload, payload_len, msg, "ENVELOPE_CHUNK"))
@@ -442,32 +436,6 @@ WEAK_HANDLER void PacketRouter::handle_envelope_chunk(
     const auto* columns = reinterpret_cast<const WaveX::Protocol::EnvelopeColumn*>(
         payload + sizeof(WaveX::Protocol::EnvelopeChunkMessage));
     inter_mcu_invoke_envelope_chunk_callback(msg, columns);
-}
-
-WEAK_HANDLER void PacketRouter::handle_wave_chunk(const WaveX::Protocol::WaveChunkMessage& msg, const uint8_t* payload, size_t length) {
-    ESP_LOGD("packet_router", "Wave chunk: offset=%u, count=%u", msg.offset, msg.count);
-
-    size_t expected_size = sizeof(WaveX::Protocol::WaveChunkMessage) + msg.count * sizeof(int16_t);
-    if (length >= expected_size) {
-        const int16_t* samples =
-            reinterpret_cast<const int16_t*>(payload + sizeof(WaveX::Protocol::WaveChunkMessage));
-
-        if (msg.count >= 4) {
-            ESP_LOGD("packet_router",
-                     "Wave chunk samples (first 4): %d, %d, %d, %d",
-                     samples[0],
-                     samples[1],
-                     samples[2],
-                     samples[3]);
-        }
-
-        inter_mcu_invoke_wave_chunk_callback(msg.offset, samples, msg.count);
-    } else {
-        ESP_LOGW("packet_router",
-                 "Wave chunk payload size mismatch: expected %zu, got %zu",
-                 expected_size,
-                 length);
-    }
 }
 
 WEAK_HANDLER void PacketRouter::handle_unknown_message(uint8_t type, const uint8_t* payload, size_t length) {

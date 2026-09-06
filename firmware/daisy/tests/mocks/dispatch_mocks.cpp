@@ -97,7 +97,7 @@ void PushAllSampleMeta(uint16_t sample_id) {
     WaveX::Test::GetDispatchRecord().meta_requests.push_back(sample_id);
 }
 
-void SetEditParams(uint8_t slot,
+void SetEditParams(uint16_t sample_id,
                    bool loop_enabled,
                    int16_t gain_db_x10,
                    uint32_t start_frame,
@@ -107,7 +107,7 @@ void SetEditParams(uint8_t slot,
                    uint16_t fade_in_ms,
                    uint16_t fade_out_ms) {
     WaveX::Test::GetDispatchRecord().sample_edits.push_back(
-        WaveX::Protocol::SampleEditMessage(slot,
+        WaveX::Protocol::SampleEditMessage(sample_id,
                                            loop_enabled ? 1 : 0,
                                            gain_db_x10,
                                            start_frame,
@@ -140,10 +140,6 @@ void OnNoteOff(const WaveX::Protocol::NoteMessage& m) {
 
 void OnSampleCtrl(const WaveX::Protocol::SampleCtrlMessage& m) {
     WaveX::Test::GetDispatchRecord().sample_ctrls.push_back(m);
-}
-
-void OnPreviewReq(const WaveX::Protocol::PreviewReqMessage& m) {
-    WaveX::Test::GetDispatchRecord().preview_reqs.push_back(m);
 }
 
 void OnEnvelopeReq(const WaveX::Protocol::EnvelopeReqMessage& m) {

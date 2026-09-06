@@ -68,7 +68,6 @@ class EnvelopeFetcherTest : public ::testing::Test {
         cache_.init(256 * 1024, alloc);
 
         EnvelopeFetcher::Config cfg;
-        cfg.display_columns = kDisplayColumns;
         cfg.max_run_columns = kMaxRunColumns;
         cfg.timeout_ms = kTimeoutMs;
         cfg.max_retries = 3;
@@ -100,7 +99,8 @@ class EnvelopeFetcherTest : public ::testing::Test {
 };
 
 TEST_F(EnvelopeFetcherTest, RequestSendsAndCompletesIntoTheCache) {
-    ASSERT_EQ(fetcher_.request(1, 0, 0, 48000, 48000, 0), EnvelopeFetcher::Request::Sent);
+    ASSERT_EQ(fetcher_.request(1, 0, 0, 48000, 48000, kDisplayColumns, 0),
+              EnvelopeFetcher::Request::Sent);
     ASSERT_EQ(g_sent.size(), 1u);
     EXPECT_TRUE(fetcher_.busy());
     EXPECT_TRUE(cache_.requestPending());
@@ -118,18 +118,22 @@ TEST_F(EnvelopeFetcherTest, RequestSendsAndCompletesIntoTheCache) {
 }
 
 TEST_F(EnvelopeFetcherTest, SecondRequestIsRefusedWhileOneIsInFlight) {
-    ASSERT_EQ(fetcher_.request(1, 0, 0, 48000, 48000, 0), EnvelopeFetcher::Request::Sent);
-    EXPECT_EQ(fetcher_.request(1, 0, 0, 48000, 48000, 1), EnvelopeFetcher::Request::Busy);
+    ASSERT_EQ(fetcher_.request(1, 0, 0, 48000, 48000, kDisplayColumns, 0),
+              EnvelopeFetcher::Request::Sent);
+    EXPECT_EQ(fetcher_.request(1, 0, 0, 48000, 48000, kDisplayColumns, 1),
+              EnvelopeFetcher::Request::Busy);
     EXPECT_EQ(g_sent.size(), 1u) << "a second run was put on the wire";
 }
 
 TEST_F(EnvelopeFetcherTest, CachedViewAsksForNothing) {
-    ASSERT_EQ(fetcher_.request(1, 0, 0, 48000, 48000, 0), EnvelopeFetcher::Request::Sent);
+    ASSERT_EQ(fetcher_.request(1, 0, 0, 48000, 48000, kDisplayColumns, 0),
+              EnvelopeFetcher::Request::Sent);
     deliverRun(g_sent[0], 1, 15000);
     ASSERT_EQ(fetcher_.service(10), EnvelopeFetcher::Service::Committed);
 
     // The same view again is free - which is the entire point of the cache.
-    EXPECT_EQ(fetcher_.request(1, 0, 0, 48000, 48000, 20), EnvelopeFetcher::Request::AlreadyCached);
+    EXPECT_EQ(fetcher_.request(1, 0, 0, 48000, 48000, kDisplayColumns, 20),
+              EnvelopeFetcher::Request::AlreadyCached);
     EXPECT_EQ(g_sent.size(), 1u);
 }
 
@@ -138,19 +142,22 @@ TEST_F(EnvelopeFetcherTest, CachedViewAsksForNothing) {
 // asked for, and because in_flight_ stayed false the timeout never ran either.
 TEST_F(EnvelopeFetcherTest, FailedSendArmsNeitherHalf) {
     g_send_ok = false;
-    EXPECT_EQ(fetcher_.request(1, 0, 0, 48000, 48000, 0), EnvelopeFetcher::Request::SendFailed);
+    EXPECT_EQ(fetcher_.request(1, 0, 0, 48000, 48000, kDisplayColumns, 0),
+              EnvelopeFetcher::Request::SendFailed);
     EXPECT_FALSE(fetcher_.busy());
     EXPECT_FALSE(cache_.requestPending()) << "cache armed for a request never sent";
 
     // And the fetcher is still usable afterwards.
     g_send_ok = true;
-    EXPECT_EQ(fetcher_.request(1, 0, 0, 48000, 48000, 1), EnvelopeFetcher::Request::Sent);
+    EXPECT_EQ(fetcher_.request(1, 0, 0, 48000, 48000, kDisplayColumns, 1),
+              EnvelopeFetcher::Request::Sent);
 }
 
 // The defect this class inherited its shape from. A run that never answers has
 // to release the cache, or every later waveform - for any sample - is refused.
 TEST_F(EnvelopeFetcherTest, TimeoutReleasesTheCacheNotJustTheFetcher) {
-    ASSERT_EQ(fetcher_.request(1, 0, 0, 48000, 48000, 0), EnvelopeFetcher::Request::Sent);
+    ASSERT_EQ(fetcher_.request(1, 0, 0, 48000, 48000, kDisplayColumns, 0),
+              EnvelopeFetcher::Request::Sent);
     ASSERT_TRUE(cache_.requestPending());
 
     EXPECT_EQ(fetcher_.service(kTimeoutMs - 1), EnvelopeFetcher::Service::Idle);
@@ -160,36 +167,42 @@ TEST_F(EnvelopeFetcherTest, TimeoutReleasesTheCacheNotJustTheFetcher) {
 
     // A different sample can still be requested - the guard is not per-sample,
     // so this is the observable consequence of the release above.
-    EXPECT_EQ(fetcher_.request(7, 0, 0, 48000, 48000, kTimeoutMs), EnvelopeFetcher::Request::Sent);
+    EXPECT_EQ(fetcher_.request(7, 0, 0, 48000, 48000, kDisplayColumns, kTimeoutMs),
+              EnvelopeFetcher::Request::Sent);
 }
 
 TEST_F(EnvelopeFetcherTest, RetriesAreBoundedThenGiveUp) {
     uint32_t now = 0;
     for (int attempt = 0; attempt < 3; ++attempt) {
-        ASSERT_EQ(fetcher_.request(1, 0, 0, 48000, 48000, now), EnvelopeFetcher::Request::Sent);
+        ASSERT_EQ(fetcher_.request(1, 0, 0, 48000, 48000, kDisplayColumns, now),
+                  EnvelopeFetcher::Request::Sent);
         now += kTimeoutMs;
         EXPECT_EQ(fetcher_.service(now), EnvelopeFetcher::Service::Retrying)
             << "attempt " << attempt;
     }
-    ASSERT_EQ(fetcher_.request(1, 0, 0, 48000, 48000, now), EnvelopeFetcher::Request::Sent);
+    ASSERT_EQ(fetcher_.request(1, 0, 0, 48000, 48000, kDisplayColumns, now),
+              EnvelopeFetcher::Request::Sent);
     now += kTimeoutMs;
     EXPECT_EQ(fetcher_.service(now), EnvelopeFetcher::Service::GaveUp);
     EXPECT_FALSE(cache_.requestPending()) << "giving up must still release the cache";
 }
 
 TEST_F(EnvelopeFetcherTest, CommittingResetsTheRetryBudget) {
-    ASSERT_EQ(fetcher_.request(1, 0, 0, 48000, 48000, 0), EnvelopeFetcher::Request::Sent);
+    ASSERT_EQ(fetcher_.request(1, 0, 0, 48000, 48000, kDisplayColumns, 0),
+              EnvelopeFetcher::Request::Sent);
     ASSERT_EQ(fetcher_.service(kTimeoutMs), EnvelopeFetcher::Service::Retrying);
     EXPECT_EQ(fetcher_.retries(), 1);
 
-    ASSERT_EQ(fetcher_.request(1, 0, 0, 48000, 48000, kTimeoutMs), EnvelopeFetcher::Request::Sent);
+    ASSERT_EQ(fetcher_.request(1, 0, 0, 48000, 48000, kDisplayColumns, kTimeoutMs),
+              EnvelopeFetcher::Request::Sent);
     deliverRun(g_sent.back(), 1, 12000);
     ASSERT_EQ(fetcher_.service(kTimeoutMs + 1), EnvelopeFetcher::Service::Committed);
     EXPECT_EQ(fetcher_.retries(), 0) << "a slow sample would spend the budget a broken one needs";
 }
 
 TEST_F(EnvelopeFetcherTest, AbortReleasesAnArmedRun) {
-    ASSERT_EQ(fetcher_.request(1, 0, 0, 48000, 48000, 0), EnvelopeFetcher::Request::Sent);
+    ASSERT_EQ(fetcher_.request(1, 0, 0, 48000, 48000, kDisplayColumns, 0),
+              EnvelopeFetcher::Request::Sent);
     ASSERT_TRUE(cache_.requestPending());
 
     fetcher_.abort();
@@ -206,7 +219,8 @@ TEST_F(EnvelopeFetcherTest, AbortIsSafeWithNothingArmed) {
 
 // A chunk answering a view the caller has moved on from must not be filed.
 TEST_F(EnvelopeFetcherTest, ChunkForAnotherRunIsIgnored) {
-    ASSERT_EQ(fetcher_.request(1, 0, 0, 48000, 48000, 0), EnvelopeFetcher::Request::Sent);
+    ASSERT_EQ(fetcher_.request(1, 0, 0, 48000, 48000, kDisplayColumns, 0),
+              EnvelopeFetcher::Request::Sent);
 
     SentRequest wrong = g_sent[0];
     wrong.sample_id = 99;  // a different sample entirely
@@ -219,7 +233,8 @@ TEST_F(EnvelopeFetcherTest, ChunkForAnotherRunIsIgnored) {
 
 // A run split across packets, delivered in order, must assemble.
 TEST_F(EnvelopeFetcherTest, MultiChunkRunAssembles) {
-    ASSERT_EQ(fetcher_.request(1, 0, 0, 480000, 480000, 0), EnvelopeFetcher::Request::Sent);
+    ASSERT_EQ(fetcher_.request(1, 0, 0, 480000, 480000, kDisplayColumns, 0),
+              EnvelopeFetcher::Request::Sent);
     const SentRequest req = g_sent[0];
     ASSERT_GT(req.columns, 1);
 
@@ -253,7 +268,8 @@ TEST_F(EnvelopeFetcherTest, MultiChunkRunAssembles) {
 // A gap means a chunk was lost. Filing the later one would leave the hole
 // filled with whatever the staging buffer held from a previous run.
 TEST_F(EnvelopeFetcherTest, ChunkLeavingAGapIsRefused) {
-    ASSERT_EQ(fetcher_.request(1, 0, 0, 480000, 480000, 0), EnvelopeFetcher::Request::Sent);
+    ASSERT_EQ(fetcher_.request(1, 0, 0, 480000, 480000, kDisplayColumns, 0),
+              EnvelopeFetcher::Request::Sent);
     const SentRequest req = g_sent[0];
     ASSERT_GT(req.columns, 4);
 
@@ -275,7 +291,8 @@ TEST_F(EnvelopeFetcherTest, ChunkLeavingAGapIsRefused) {
 
 TEST_F(EnvelopeFetcherTest, UninitialisedFetcherRefusesRequests) {
     EnvelopeFetcher fresh;
-    EXPECT_EQ(fresh.request(1, 0, 0, 48000, 48000, 0), EnvelopeFetcher::Request::NotReady);
+    EXPECT_EQ(fresh.request(1, 0, 0, 48000, 48000, kDisplayColumns, 0),
+              EnvelopeFetcher::Request::NotReady);
     EXPECT_EQ(fresh.service(0), EnvelopeFetcher::Service::Idle);
 }
 

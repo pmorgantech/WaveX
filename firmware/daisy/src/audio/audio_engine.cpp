@@ -516,66 +516,6 @@ static bool s_underrun_logged = false;
 static uint8_t s_dbg_active_voices = 0;  // callback-published, see Callback()
 #endif
 
-// Preview state (review M7): fixed-capacity, not a heap vector. The old
-// std::vector reserved (end-start)/decim+1 elements straight from wire-
-// controlled values - a PreviewReq with decim=1 over a long sample asked
-// for megabytes of newlib heap, and with exceptions disabled a failed
-// allocation terminates the firmware. 4096 points comfortably covers the
-// 1280-px waveform view; OnPreviewReq widens decim to fit.
-static constexpr uint32_t kMaxPreviewPoints = 4096;
-static int16_t s_preview[kMaxPreviewPoints];
-static uint32_t s_preview_len = 0;
-static uint32_t s_prev_sent = 0;
-// Staging for one outbound preview frame (header + samples); static so
-// chunk sends don't heap-allocate per frame.
-static uint8_t s_preview_frame[sizeof(WaveX::Protocol::WaveChunkMessage) +
-                               kMaxPreviewPoints * sizeof(int16_t)];
-
-// Sends one preview frame per call and is driven from the main loop every
-// pass (like PumpEnvelopeJob/PumpWavIO), NOT looped-and-retried inline.
-//
-// UartLinkPumpTx() (== process_tx_queue()) only ever STARTS or RETIRES a DMA
-// transfer; it never waits for one to complete. A frame takes ~2.6 ms of wire
-// time at 2 Mbaud, so spin-calling it dozens of times back-to-back (the old
-// approach) burns microseconds, not milliseconds, and the queue-full retry
-// budget exhausts before the in-flight frame has actually drained - previews
-// past ~1150 points (4 queued chunks) were truncated on nearly every
-// request. UartLinkProcess() already calls process_tx_queue() once per
-// main-loop pass regardless, so simply trying one send per pass and leaving
-// the rest of the preview queued for the next pass(es) needs no pumping of
-// its own and cannot truncate: it only ever waits, never gives up.
-void PumpPreviewSend() {
-    if (s_prev_sent >= s_preview_len) {
-        return;  // nothing pending (also covers preview_len == 0)
-    }
-
-    // Prefer to send the entire preview in one frame if it fits - only
-    // meaningful for the first chunk, since a partially-sent preview by
-    // definition no longer fits in one frame the way this check means it.
-    constexpr uint16_t kMaxSingleFrameSamples = 900;  // header + 900*2 < 2048 payload limit
-    constexpr uint16_t kChunkSamples = 256;
-    const bool whole_fits = (s_prev_sent == 0) && (s_preview_len <= kMaxSingleFrameSamples);
-    const uint16_t count =
-        whole_fits
-            ? static_cast<uint16_t>(s_preview_len)
-            : static_cast<uint16_t>(std::min<uint32_t>(kChunkSamples, s_preview_len - s_prev_sent));
-
-    WaveX::Protocol::WaveChunkMessage header{};
-    header.offset = s_prev_sent;
-    header.count = count;
-
-    const size_t payload_bytes = sizeof(header) + static_cast<size_t>(count) * sizeof(int16_t);
-    memcpy(s_preview_frame, &header, sizeof(header));
-    memcpy(s_preview_frame + sizeof(header), s_preview + s_prev_sent, count * sizeof(int16_t));
-
-    const int res = WaveX::Comm::UartLinkSend(
-        WaveX::Protocol::MSG_WAVE_CHUNK, s_preview_frame, static_cast<uint16_t>(payload_bytes));
-    if (res < 0) {
-        return;  // TX queue full; retry the same chunk next pass, state unchanged
-    }
-    s_prev_sent += count;
-}
-
 // ============================
 // WAV playback state
 // ============================
@@ -731,8 +671,7 @@ static LoadedSampleInfo* find_loaded_sample(uint16_t sample_id) {
     return r ? &r->payload : nullptr;
 }
 
-// "The sample that just loaded": what the preview, the envelope job and
-// SetEditParams mean by id 0.
+// "The sample that just loaded": what the envelope job means by id 0.
 static LoadedSampleInfo* newest_loaded_sample() {
     return s_pool ? find_loaded_sample(s_pool->Newest()) : nullptr;
 }
@@ -824,9 +763,9 @@ static void ClearSequencerVoiceMap() {
 
 // Drops `sample_id` from the registry and returns its memory to the arena.
 // Entries stay in load order (oldest first), so removal closes the gap by
-// shifting rather than swapping with the tail: OnPreviewReq() reads the last
-// entry as "most recently loaded", and a swap would quietly hand it an older
-// sample.
+// shifting rather than swapping with the tail: newest_loaded_sample() reads
+// the last entry as "most recently loaded", and a swap would quietly hand it
+// an older sample.
 // Sends one sample's record. Called on load, on edit, and on request - the
 // frontend never derives these values, it is told them. Ownership (used_by,
 // pinned) rides along from the Pool record when there is one.
@@ -2710,8 +2649,8 @@ void OnSampleCtrl(const SampleCtrlMessage& sc) {
                               (unsigned)sc.cmd);
 }
 
-// How a sample's channels map onto what the display asks for. Shared by the
-// legacy decimated preview and the envelope job so the two cannot disagree
+// How a sample's channels map onto what the display asks for. Resolved in
+// one place so the envelope job cannot disagree with the playback paths
 // about which channel the user is looking at.
 struct DisplayChannelPlan {
     uint8_t src_channels;  // interleave stride in the stored data: 1 or 2
@@ -2752,116 +2691,6 @@ static DisplayChannelPlan ResolveDisplayChannels(const LoadedSampleInfo& src, bo
             break;
     }
     return plan;
-}
-
-void OnPreviewReq(const PreviewReqMessage& pr) {
-    s_prev_sent = 0;
-    s_preview_len = 0;
-
-    // Pick the most recently loaded sample; fall back to empty if none.
-    const LoadedSampleInfo* newest = newest_loaded_sample();
-    if (!newest) {
-        if (s_hw) {
-            WaveX::Log::PrintLine("PREVIEW: No loaded samples; skipping preview");
-        }
-        return;
-    }
-
-    const LoadedSampleInfo& src = *newest;
-    void* sample_ptr = nullptr;
-    if (!s_sample_mem_mgr.ptr(src.handle, &sample_ptr) || !sample_ptr) {
-        if (s_hw) {
-            WaveX::Log::PrintLine("PREVIEW: Failed to get pointer for sample_id=%u",
-                                  (unsigned)src.sample_id);
-        }
-        return;
-    }
-
-    const uint32_t bytes_total = src.loaded_bytes ? src.loaded_bytes : src.handle.len;
-    const uint32_t bytes_per_frame = (src.bit_depth / 8) * src.channels;
-    if (bytes_per_frame == 0) {
-        if (s_hw) {
-            WaveX::Log::PrintLine("PREVIEW: Invalid bytes_per_frame=0 for sample_id=%u",
-                                  (unsigned)src.sample_id);
-        }
-        return;
-    }
-
-    const uint32_t total_frames = bytes_total / bytes_per_frame;
-    uint32_t start = pr.start;
-    uint32_t end = pr.end > 0 ? std::min<uint32_t>(pr.end, total_frames) : total_frames;
-    if (start > end)
-        start = end;
-    uint32_t decim = pr.decim ? pr.decim : 1;
-
-    // Clamp the point count to the fixed preview buffer by widening the
-    // decimation instead of truncating the range (review M7): the full
-    // selection stays visible, just coarser. Wire-controlled start/end/
-    // decim can no longer request an unbounded heap allocation.
-    const uint32_t span = end - start;
-    if (span / decim + 1 > kMaxPreviewPoints) {
-        decim = span / (kMaxPreviewPoints - 1) + 1;
-    }
-
-    const int16_t* samples16 = reinterpret_cast<const int16_t*>(sample_ptr);
-    const uint8_t* samples24 = reinterpret_cast<const uint8_t*>(sample_ptr);
-
-    // Channel selection comes from the record, not a hard-coded "left".
-    // Silently previewing only the left channel drew a misleading trace for
-    // anything panned, and a near-flat line for a hard-panned sample that is
-    // plainly audible - with nothing on screen saying so.
-    const DisplayChannelPlan plan = ResolveDisplayChannels(src, /*allow_stereo=*/false);
-    const uint8_t ch_count = plan.src_channels;
-    const uint8_t pick = plan.pick[0];
-    const bool sum = plan.sum;
-
-    for (uint32_t i = start; i < end; i += decim) {
-        int16_t v = 0;
-        if (src.bit_depth == 16) {
-            if (ch_count == 1) {
-                v = samples16[i];
-            } else if (sum) {
-                const int32_t l = samples16[i * ch_count];
-                const int32_t r = samples16[i * ch_count + 1];
-                v = static_cast<int16_t>((l + r) / 2);
-            } else {
-                v = samples16[i * ch_count + pick];
-            }
-        } else if (src.bit_depth == 24) {
-            auto read24 = [&](uint32_t frame, uint8_t ch) -> int32_t {
-                const uint32_t bi = frame * bytes_per_frame + ch * 3u;
-                int32_t x =
-                    (int32_t)(samples24[bi] | (samples24[bi + 1] << 8) | (samples24[bi + 2] << 16));
-                if (x & 0x00800000) {
-                    x |= 0xFF000000;  // sign-extend 24 -> 32
-                }
-                return x >> 8;  // scale to 16-bit for display
-            };
-            if (ch_count == 1) {
-                v = (int16_t)read24(i, 0);
-            } else if (sum) {
-                v = (int16_t)((read24(i, 0) + read24(i, 1)) / 2);
-            } else {
-                v = (int16_t)read24(i, pick);
-            }
-        }
-        s_preview[s_preview_len++] = v;
-        if (s_preview_len >= kMaxPreviewPoints) {
-            break;  // defensive; the decim widening above should prevent this
-        }
-    }
-
-    if (s_hw) {
-        WaveX::Log::PrintLine(
-            "PREVIEW: Built preview for sample_id=%u frames=%lu decim=%u preview_len=%u",
-            (unsigned)src.sample_id,
-            (unsigned long)total_frames,
-            (unsigned)decim,
-            (unsigned)s_preview_len);
-    }
-
-    // s_prev_sent is already 0 (reset at the top of this function); the main
-    // loop's PumpPreviewSend() picks the job up starting next pass.
 }
 
 // ============================
@@ -3084,11 +2913,9 @@ void PumpEnvelopeJob() {
     const int res = WaveX::Comm::UartLinkSend(
         WaveX::Protocol::MSG_ENVELOPE_CHUNK, s_env_frame, static_cast<uint16_t>(payload_bytes));
     if (res < 0) {
-        // Queue full. Unlike the preview sender - which runs inside a message
-        // handler and has to pump the TX queue itself - this is already on the
-        // main loop, so the honest move is to rewind and let the next pass
-        // retry. No blocking, and the columns are re-measured rather than
-        // punching a hole in the envelope.
+        // Queue full. This runs on the main loop, so the honest move is to
+        // rewind and let the next pass retry. No blocking, and the columns are
+        // re-measured rather than punching a hole in the envelope.
         s_env_job.next_column = first_column;
         return;
     }
@@ -4188,7 +4015,7 @@ static q15_t GainDbToQ15(int16_t db_x10) {
 // Applies an edit to the sample's record, then pushes the result back. The
 // backend clamps and is the authority; the frontend is told what was applied
 // rather than assuming its request was taken verbatim.
-void SetEditParams(uint8_t slot,
+void SetEditParams(uint16_t sample_id,
                    bool loop_enabled,
                    int16_t gain_db_x10,
                    uint32_t start_frame,
@@ -4197,43 +4024,47 @@ void SetEditParams(uint8_t slot,
                    uint32_t loop_end_frame,
                    uint16_t fade_in_ms,
                    uint16_t fade_out_ms) {
-    // slot is the sample id. 0 means "whatever the audition is playing",
-    // which is how the edit page addresses a sample it did not load itself.
-    LoadedSampleInfo* info = slot ? find_loaded_sample(slot) : nullptr;
+    // The Pool id, and only that. This used to fall back to the newest
+    // sample for id 0, which hid the frontend truncating every id to one
+    // byte: each edit "worked", on the wrong sample. An unknown id is a
+    // frontend bug or a sample unloaded under it; either way, touching some
+    // other record would be worse than doing nothing.
+    LoadedSampleInfo* info = sample_id ? find_loaded_sample(sample_id) : nullptr;
     if (!info) {
-        info = newest_loaded_sample();
+        if (s_hw) {
+            WaveX::Log::PrintLine("SAMPLE_EDIT: no sample for id=%u", (unsigned)sample_id);
+        }
+        return;
     }
 
-    if (info) {
-        auto& m = info->meta;
-        if (gain_db_x10 < -240) {
-            gain_db_x10 = -240;
-        } else if (gain_db_x10 > 120) {
-            gain_db_x10 = 120;
-        }
-        m.gain_db_x10 = gain_db_x10;
-        m.start_frame = start_frame;
-        m.end_frame = end_frame;
-        m.loop_start = loop_start_frame;
-        m.loop_end = loop_end_frame;
-        m.Resolve();
-        // A loop shorter than one SD slot would re-seek on every refill pass
-        // and starve the ring. The frontend cannot know this limit, so it is
-        // enforced here and reported back rather than silently obeyed.
-        m.loop_enabled = (loop_enabled && (m.loop_end - m.loop_start) >= kMinLoopFrames) ? 1 : 0;
-        // Clamp fades to the region. A fade longer than the audio it shapes
-        // never reaches unity, which reads as "the sample got quieter" rather
-        // than as a fade - and the frontend cannot clamp it, because the
-        // backend is the one that just decided what the region is.
-        const uint32_t rate = m.sample_rate ? m.sample_rate : static_cast<uint32_t>(s_sample_rate);
-        const uint32_t span_ms =
-            rate ? static_cast<uint32_t>(
-                       (static_cast<uint64_t>(m.end_frame - m.start_frame) * 1000u) / rate)
-                 : 0u;
-        m.fade_in_ms = static_cast<uint16_t>(std::min<uint32_t>(fade_in_ms, span_ms));
-        m.fade_out_ms = static_cast<uint16_t>(std::min<uint32_t>(fade_out_ms, span_ms));
-        PushSampleMeta(*info);
+    auto& m = info->meta;
+    if (gain_db_x10 < -240) {
+        gain_db_x10 = -240;
+    } else if (gain_db_x10 > 120) {
+        gain_db_x10 = 120;
     }
+    m.gain_db_x10 = gain_db_x10;
+    m.start_frame = start_frame;
+    m.end_frame = end_frame;
+    m.loop_start = loop_start_frame;
+    m.loop_end = loop_end_frame;
+    m.Resolve();
+    // A loop shorter than one SD slot would re-seek on every refill pass
+    // and starve the ring. The frontend cannot know this limit, so it is
+    // enforced here and reported back rather than silently obeyed.
+    m.loop_enabled = (loop_enabled && (m.loop_end - m.loop_start) >= kMinLoopFrames) ? 1 : 0;
+    // Clamp fades to the region. A fade longer than the audio it shapes
+    // never reaches unity, which reads as "the sample got quieter" rather
+    // than as a fade - and the frontend cannot clamp it, because the
+    // backend is the one that just decided what the region is.
+    const uint32_t rate = m.sample_rate ? m.sample_rate : static_cast<uint32_t>(s_sample_rate);
+    const uint32_t span_ms =
+        rate ? static_cast<uint32_t>((static_cast<uint64_t>(m.end_frame - m.start_frame) * 1000u) /
+                                     rate)
+             : 0u;
+    m.fade_in_ms = static_cast<uint16_t>(std::min<uint32_t>(fade_in_ms, span_ms));
+    m.fade_out_ms = static_cast<uint16_t>(std::min<uint32_t>(fade_out_ms, span_ms));
+    PushSampleMeta(*info);
 
     ApplyMetaToStreaming(info);
 }

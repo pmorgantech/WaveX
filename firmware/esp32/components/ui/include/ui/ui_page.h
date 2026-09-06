@@ -33,6 +33,20 @@ class UIPage {
      */
     virtual void onTrackChanged() {}
 
+    /**
+     * @brief Optional second line in the header, beside the page title.
+     *
+     * What the page is currently acting on - the Track, Instrument or sample
+     * whose state the softkeys will change. Returning nullptr (the default)
+     * leaves the header showing only the title, which is right for pages that
+     * act on nothing in particular.
+     *
+     * Read on entry and whenever the page calls
+     * UINavigator::refreshContext(); the returned pointer is copied
+     * immediately, so it may point at a member buffer the page rewrites.
+     */
+    virtual const char* contextLine() const { return nullptr; }
+
     virtual std::array<Softkey, NUM_SOFTKEYS> getSoftkeys() {
         return {};  // Default: no softkeys
     }

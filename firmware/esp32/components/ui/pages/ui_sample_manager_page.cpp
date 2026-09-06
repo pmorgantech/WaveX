@@ -9,6 +9,7 @@
 #include "ui/current_sample.h"
 #include "ui/current_track.h"
 #include "ui/ui_navigator.h"
+#include "ui/ui_palette.h"
 
 #include <cstdio>
 #include <cstring>
@@ -18,11 +19,15 @@ namespace wavex_ui {
 namespace {
 static const char* TAG = "UI_SAMPLE_MGR";
 
-constexpr uint32_t kColPanel = 0x0E0E0E;
-constexpr uint32_t kColBorder = 0x222222;
-constexpr uint32_t kColDim = 0x8FA0AA;
-constexpr uint32_t kColGreen = 0x4CAF50;
-constexpr uint32_t kColWarn = 0xFF9800;
+// Local names for the shared palette (ui/ui_palette.h). These were
+// hand-copied literals that had already drifted from it and from each
+// other - three different "border" greys existed across five files - so a
+// theme switch reached only the surfaces that happened to be in sync.
+constexpr uint32_t kColPanel = palette::kColCard;
+constexpr uint32_t kColBorder = palette::kColBorder;
+constexpr uint32_t kColDim = palette::kColDim;
+constexpr uint32_t kColGreen = palette::kColGreen;
+constexpr uint32_t kColWarn = palette::kColOrange;
 
 // The voice path takes 16-bit mono/stereo only (find_playable_sample on the
 // backend). The browser will load 8 and 24-bit files quite happily, so a
@@ -31,6 +36,20 @@ constexpr uint32_t kColWarn = 0xFF9800;
 bool meta_is_playable(const WaveX::Protocol::SampleMetadata& m) {
     return m.bits_per_sample == 16 && (m.channels == 1 || m.channels == 2);
 }
+
+// Design turn 3a. The Track strip runs the full width; below it the sample
+// cards take the left two thirds and the detail pane the right.
+constexpr int kStripY = 8;
+constexpr int kStripH = 56;
+constexpr int kStripGap = 6;
+constexpr int kGridY = kStripY + kStripH + 14;
+constexpr int kGridW = 820;
+constexpr int kGridH = 396;
+constexpr int kCardH = 92;
+constexpr int kCardGap = 8;
+constexpr int kCardW = (kGridW - kCardGap) / 2;
+constexpr int kDetailX = UI_MARGIN_X + kGridW + 16;
+constexpr int kDetailW = UI_SCREEN_WIDTH - UI_MARGIN_X - kDetailX;
 
 void format_frames(uint32_t frames, uint32_t rate, char* out, size_t n) {
     const uint32_t hz = rate ? rate : 48000;
@@ -43,54 +62,145 @@ void UISampleManagerPage::onEnter(lv_obj_t* parent) {
     lv_obj_clean(parent);
 
     root_ = lv_obj_create(parent);
+    lv_obj_remove_style_all(root_);
     lv_obj_set_size(root_, lv_pct(100), lv_pct(100));
-    ui_theme_apply_container_style(root_, true);
-    lv_obj_set_style_pad_all(root_, UI_PADDING_MEDIUM, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(root_, UI_COLOR_BG, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(root_, LV_OPA_COVER, LV_PART_MAIN);
     lv_obj_remove_flag(root_, LV_OBJ_FLAG_SCROLLABLE);
 
-    status_label_ = lv_label_create(root_);
-    ui_theme_apply_label_style(status_label_, false);
-    lv_obj_set_style_text_color(status_label_, lv_color_hex(kColDim), LV_PART_MAIN);
-    lv_label_set_text(status_label_, "Samples resident in RAM");
-    lv_obj_set_pos(status_label_, 0, 0);
+    buildTrackStrip(root_);
 
-    track_label_ = lv_label_create(root_);
-    ui_theme_apply_label_style(track_label_, false);
-    lv_obj_set_pos(track_label_, 794, 0);
-
+    // The grid holds cards, not rows, so it is a plain container placed
+    // absolutely and the cards are placed inside it - a flex column would
+    // fight the two-column wrap the design asks for.
     list_ = lv_obj_create(root_);
-    lv_obj_set_size(list_, 770, 430);
-    lv_obj_set_pos(list_, 0, 34);
-    lv_obj_set_style_bg_color(list_, lv_color_hex(kColPanel), LV_PART_MAIN);
-    lv_obj_set_style_border_width(list_, 1, LV_PART_MAIN);
-    lv_obj_set_style_border_color(list_, lv_color_hex(kColBorder), LV_PART_MAIN);
-    lv_obj_set_style_pad_all(list_, 6, LV_PART_MAIN);
-    lv_obj_set_flex_flow(list_, LV_FLEX_FLOW_COLUMN);
+    lv_obj_remove_style_all(list_);
+    lv_obj_set_size(list_, kGridW, kGridH);
+    lv_obj_set_pos(list_, UI_MARGIN_X, kGridY);
+    lv_obj_set_style_bg_opa(list_, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_remove_flag(list_, LV_OBJ_FLAG_SCROLLABLE);
 
-    detail_label_ = lv_label_create(root_);
-    ui_theme_apply_label_style(detail_label_, false);
-    lv_obj_set_style_text_color(detail_label_, lv_color_hex(kColDim), LV_PART_MAIN);
+    lv_obj_t* detail = lv_obj_create(root_);
+    lv_obj_remove_style_all(detail);
+    lv_obj_set_size(detail, kDetailW, kGridH);
+    lv_obj_set_pos(detail, kDetailX, kGridY);
+    lv_obj_set_style_bg_color(detail, UI_COLOR_CARD, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(detail, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_radius(detail, UI_RADIUS_CARD, LV_PART_MAIN);
+    lv_obj_set_style_border_width(detail, UI_BORDER_WIDTH, LV_PART_MAIN);
+    lv_obj_set_style_border_color(detail, UI_COLOR_LINE, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(detail, 20, LV_PART_MAIN);
+    lv_obj_remove_flag(detail, LV_OBJ_FLAG_SCROLLABLE);
+
+    status_label_ = lv_label_create(detail);
+    lv_obj_set_style_text_font(status_label_, UI_FONT_SMALL, LV_PART_MAIN);
+    lv_obj_set_style_text_color(status_label_, UI_COLOR_DIM, LV_PART_MAIN);
+    lv_obj_set_width(status_label_, kDetailW - 40);
+    lv_label_set_long_mode(status_label_, LV_LABEL_LONG_WRAP);
+    lv_label_set_text(status_label_, "Samples resident in RAM");
+    lv_obj_align(status_label_, LV_ALIGN_TOP_LEFT, 0, 0);
+
+    track_label_ = lv_label_create(detail);
+    lv_obj_set_style_text_font(track_label_, UI_FONT_MONO_SMALL, LV_PART_MAIN);
+    lv_obj_set_style_text_color(track_label_, UI_COLOR_FG, LV_PART_MAIN);
+    lv_obj_align(track_label_, LV_ALIGN_TOP_LEFT, 0, 44);
+
+    detail_label_ = lv_label_create(detail);
+    lv_obj_set_style_text_font(detail_label_, UI_FONT_SMALL, LV_PART_MAIN);
+    lv_obj_set_style_text_color(detail_label_, UI_COLOR_DIM, LV_PART_MAIN);
     lv_label_set_long_mode(detail_label_, LV_LABEL_LONG_WRAP);
-    lv_obj_set_width(detail_label_, 470);
-    lv_obj_set_pos(detail_label_, 794, 34);
+    lv_obj_set_width(detail_label_, kDetailW - 40);
+    lv_obj_align(detail_label_, LV_ALIGN_TOP_LEFT, 0, 88);
     lv_label_set_text(detail_label_, "");
 
-    // The list is a window on the Pool, asked for on entry and every refresh
-    // tick; single-record pushes (load/edit/unload) keep the detail view
-    // current between pages.
+    // The list is a window on the Pool, asked for on entry and again when
+    // the Pool changes; the backend pushes every change it makes (load, edit,
+    // unload, a Track bound or an import landing), so between those there is
+    // nothing new to ask for. One 0xFF binding request covers all sixteen
+    // Tracks: the backend paces the replies two per pass of its main loop,
+    // which is what the old four-per-tick round-robin here was working
+    // around from the wrong side of the link.
     page_first_ = 0;
+    pool_revision_seen_ = inter_mcu_sample_pool_revision();
+    cache_revision_seen_ = inter_mcu_sample_cache_revision();
     requestPage();
     inter_mcu_request_sample_mem_status();
-    inter_mcu_request_track_binding(getCurrentTrack());
+    inter_mcu_request_track_binding(0xFF);
 
     // An lv_timer runs in LVGL context with the lock held, so it may touch
     // widgets directly. Rebuilding from the cache is how new metadata reaches
-    // the screen: the comm callback that fills that cache must not draw.
-    refresh_timer_ = lv_timer_create(refreshTimerCb, 500, this);
+    // the screen: the comm callback that fills that cache must not draw. The
+    // tick itself is two counter reads when nothing has arrived.
+    refresh_timer_ = lv_timer_create(refreshTimerCb, kRefreshMs, this);
 
     rebuildList();
     refreshDetail();
     refreshTrackLabel();
+    refreshTrackStrip();
+}
+
+void UISampleManagerPage::buildTrackStrip(lv_obj_t* parent) {
+    strip_ = lv_obj_create(parent);
+    lv_obj_remove_style_all(strip_);
+    lv_obj_set_size(strip_, UI_SCREEN_WIDTH - 2 * UI_MARGIN_X, kStripH);
+    lv_obj_set_pos(strip_, UI_MARGIN_X, kStripY);
+    lv_obj_set_style_bg_opa(strip_, LV_OPA_TRANSP, 0);
+    lv_obj_remove_flag(strip_, LV_OBJ_FLAG_SCROLLABLE);
+
+    const int total = UI_SCREEN_WIDTH - 2 * UI_MARGIN_X;
+    const int cw = (total - (kTrackCount - 1) * kStripGap) / kTrackCount;
+    for (int i = 0; i < kTrackCount; ++i) {
+        TrackCell& c = track_cells_[i];
+        c.cell = lv_obj_create(strip_);
+        lv_obj_remove_style_all(c.cell);
+        lv_obj_set_size(c.cell, cw, kStripH);
+        lv_obj_set_pos(c.cell, i * (cw + kStripGap), 0);
+        lv_obj_set_style_bg_color(c.cell, UI_COLOR_CARD, 0);
+        lv_obj_set_style_bg_opa(c.cell, LV_OPA_COVER, 0);
+        lv_obj_set_style_radius(c.cell, UI_RADIUS_CHIP, 0);
+        lv_obj_set_style_border_width(c.cell, UI_BORDER_WIDTH, 0);
+        lv_obj_set_style_border_color(c.cell, UI_COLOR_LINE, 0);
+        lv_obj_remove_flag(c.cell, LV_OBJ_FLAG_SCROLLABLE);
+
+        c.num = lv_label_create(c.cell);
+        lv_obj_set_style_text_font(c.num, UI_FONT_MONO_SMALL, 0);
+        lv_obj_set_style_text_color(c.num, UI_COLOR_DIM, 0);
+        char n[4];
+        snprintf(n, sizeof(n), "%d", i + 1);
+        lv_label_set_text(c.num, n);
+        lv_obj_align(c.num, LV_ALIGN_CENTER, 0, -7);
+
+        c.bar = lv_obj_create(c.cell);
+        lv_obj_remove_style_all(c.bar);
+        lv_obj_set_size(c.bar, 24, 4);
+        lv_obj_align(c.bar, LV_ALIGN_CENTER, 0, 15);
+        lv_obj_set_style_radius(c.bar, 2, 0);
+        lv_obj_set_style_bg_opa(c.bar, LV_OPA_COVER, 0);
+        lv_obj_set_style_bg_color(c.bar, UI_COLOR_LINE, 0);
+    }
+}
+
+// Colour from whatever bindings have arrived so far. A Track we have not
+// heard about yet keeps the inert bar rather than being drawn as empty -
+// "not known" and "nothing bound" are different, and only one of them is a
+// reason to press Assign.
+void UISampleManagerPage::refreshTrackStrip() {
+    const uint8_t current = getCurrentTrack();
+    for (int i = 0; i < kTrackCount; ++i) {
+        TrackCell& c = track_cells_[i];
+        if (!c.cell || !lv_obj_is_valid(c.cell)) {
+            continue;
+        }
+        WaveX::Protocol::TrackBindingMessage b;
+        const bool known = inter_mcu_get_track_binding(static_cast<uint8_t>(i), &b);
+        const bool bound = known && b.state == WaveX::Protocol::TRACK_BINDING_SAMPLE;
+        const bool sel = (i == current);
+
+        lv_obj_set_style_border_color(c.cell, sel ? UI_COLOR_ACCENT : UI_COLOR_LINE, 0);
+        lv_obj_set_style_border_width(c.cell, sel ? UI_BORDER_WIDTH_FOCUS : UI_BORDER_WIDTH, 0);
+        lv_obj_set_style_text_color(c.num, sel ? UI_COLOR_FG : UI_COLOR_DIM, 0);
+        lv_obj_set_style_bg_color(c.bar, bound ? UI_COLOR_OK : UI_COLOR_LINE, 0);
+    }
 }
 
 void UISampleManagerPage::onExit() {
@@ -102,6 +212,10 @@ void UISampleManagerPage::onExit() {
         lv_obj_del(root_);
         root_ = nullptr;
         list_ = nullptr;
+        strip_ = nullptr;
+        for (auto& c: track_cells_) {
+            c = TrackCell{};
+        }
         status_label_ = nullptr;
         detail_label_ = nullptr;
         track_label_ = nullptr;
@@ -114,16 +228,34 @@ void UISampleManagerPage::onExit() {
 
 void UISampleManagerPage::refreshTimerCb(lv_timer_t* timer) {
     auto* self = static_cast<UISampleManagerPage*>(lv_timer_get_user_data(timer));
-    if (self) {
-        inter_mcu_request_track_binding(getCurrentTrack());
+    if (!self) {
+        return;
+    }
+    // The Pool changed under the window (a push landed, or a status proved a
+    // record gone): ask for the window again, and for the memory it now uses.
+    // A request the link could not take is asked again next tick, so a full
+    // TX queue delays the page rather than losing it.
+    const uint32_t pool = inter_mcu_sample_pool_revision();
+    if (pool != self->pool_revision_seen_ || self->page_request_pending_) {
+        self->pool_revision_seen_ = pool;
         self->requestPage();
+        inter_mcu_request_sample_mem_status();
+    }
+    // Something the page draws from arrived - a page, a record, a binding, a
+    // status. Otherwise the widgets are left alone: a rebuild every tick
+    // restyled rows under the user's finger for nothing.
+    const uint32_t cache = inter_mcu_sample_cache_revision();
+    if (cache != self->cache_revision_seen_) {
+        self->cache_revision_seen_ = cache;
         self->rebuildList();
         self->refreshDetail();
+        self->refreshTrackStrip();
     }
 }
 
 void UISampleManagerPage::requestPage() {
-    inter_mcu_request_sample_meta_page(page_first_, static_cast<uint8_t>(kMaxRows));
+    page_request_pending_ =
+        inter_mcu_request_sample_meta_page(page_first_, static_cast<uint8_t>(kMaxRows)) != ESP_OK;
 }
 
 const UISampleManagerPage::Row* UISampleManagerPage::focusedRow() const {
@@ -190,12 +322,20 @@ void UISampleManagerPage::rebuildList() {
         }
     }
 
-    // Nothing else changed: leave the widgets alone. Rebuilding a list every
-    // 500 ms would restyle rows under the user's finger and throw away focus.
+    // Same cards: leave the widgets alone. A page arrives for every Pool
+    // change, most of which are edits to records already on it, and
+    // rebuilding for those would restyle rows under the user's finger and
+    // throw away focus. A card is the same when everything it prints is:
+    // the badge names the Track a sample is bound to, and a bind elsewhere
+    // (Browse, the sequencer) changes that without changing the row set.
     bool same = (count == row_count_);
     if (same) {
         for (int i = 0; i < count; ++i) {
-            if (metas[i].sample_id != rows_[i].sample_id) {
+            const auto& m = metas[i];
+            const Row& r = rows_[i];
+            if (m.sample_id != r.sample_id || m.used_by != r.used_by ||
+                ((m.flags & WaveX::Protocol::SAMPLE_META_PINNED) != 0) != r.pinned ||
+                meta_is_playable(m) != r.playable) {
                 same = false;
                 break;
             }
@@ -203,17 +343,7 @@ void UISampleManagerPage::rebuildList() {
     }
     if (same) {
         // Selection highlight can still have moved.
-        for (int i = 0; i < row_count_; ++i) {
-            if (rows_[i].btn && lv_obj_is_valid(rows_[i].btn)) {
-                const bool sel = rows_[i].sample_id == bound_id;
-                const bool foc = (i == focus_);
-                lv_obj_set_style_border_color(
-                    rows_[i].btn, lv_color_hex(foc ? kColGreen : kColBorder), LV_PART_MAIN);
-                lv_obj_set_style_border_width(rows_[i].btn, foc ? 2 : 1, LV_PART_MAIN);
-                lv_obj_set_style_bg_color(
-                    rows_[i].btn, lv_color_hex(sel ? 0x14261A : kColPanel), LV_PART_MAIN);
-            }
-        }
+        styleRows(bound_id);
         return;
     }
 
@@ -225,48 +355,116 @@ void UISampleManagerPage::rebuildList() {
 
     for (int i = 0; i < count; ++i) {
         const auto& m = metas[i];
+        const int col = i % 2;
+        const int row = i / 2;
+
         lv_obj_t* btn = lv_obj_create(list_);
-        lv_obj_set_size(btn, lv_pct(100), 48);
-        lv_obj_set_style_radius(btn, 4, LV_PART_MAIN);
-        lv_obj_set_style_pad_left(btn, 12, LV_PART_MAIN);
+        lv_obj_remove_style_all(btn);
+        lv_obj_set_size(btn, kCardW, kCardH);
+        lv_obj_set_pos(btn, col * (kCardW + kCardGap), row * (kCardH + kCardGap));
+        lv_obj_set_style_bg_color(btn, UI_COLOR_CARD, LV_PART_MAIN);
+        lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, LV_PART_MAIN);
+        lv_obj_set_style_radius(btn, UI_RADIUS_CARD, LV_PART_MAIN);
+        lv_obj_set_style_border_width(btn, UI_BORDER_WIDTH, LV_PART_MAIN);
+        lv_obj_set_style_border_color(btn, UI_COLOR_LINE, LV_PART_MAIN);
+        lv_obj_set_style_pad_hor(btn, 16, LV_PART_MAIN);
         lv_obj_remove_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
 
+        // The basename, not the path. m.name carries the whole card path, and
+        // on a card that fits about twenty characters the leading directories
+        // are the part that is identical between every sample - what tells two
+        // apart is at the end. The detail pane still shows the full path.
+        const char* base = m.name;
+        for (const char* p = m.name; *p; ++p) {
+            if (*p == '/') {
+                base = p + 1;
+            }
+        }
+
         lv_obj_t* label = lv_label_create(btn);
-        ui_theme_apply_label_style(label, false);
-        lv_obj_align(label, LV_ALIGN_LEFT_MID, 0, 0);
+        lv_obj_set_style_text_font(label, UI_FONT_TITLE, LV_PART_MAIN);
+        lv_obj_set_style_text_color(
+            label, meta_is_playable(m) ? UI_COLOR_FG : UI_COLOR_WARN, LV_PART_MAIN);
+        // Height pinned to one line as well as width: LONG_DOT only truncates
+        // once the text exceeds BOTH, so a height-less label wraps to three
+        // lines and spills out of a 92px card before any ellipsis appears.
+        lv_obj_set_size(label, kCardW - 32 - 76, 34);
+        lv_label_set_long_mode(label, LV_LABEL_LONG_DOT);
+        lv_label_set_text(label, base);
+        lv_obj_align(label, LV_ALIGN_TOP_LEFT, 0, 12);
+
+        // The badge answers "is this one live" - the Track it is bound to, or
+        // that it is pinned resident with no user. Those are the two reasons a
+        // sample is taking up RAM.
+        char badge_text[12] = {};
+        bool bound_badge = false;
+        for (uint8_t t = 0; t < 16; ++t) {
+            if (m.used_by & (1u << t)) {
+                snprintf(badge_text, sizeof(badge_text), "T%u", trackDisplayNumber(t));
+                bound_badge = true;
+                break;
+            }
+        }
+        if (!bound_badge && (m.flags & WaveX::Protocol::SAMPLE_META_PINNED)) {
+            snprintf(badge_text, sizeof(badge_text), "loaded");
+        }
+        lv_obj_t* badge = nullptr;
+        if (badge_text[0]) {
+            badge = lv_label_create(btn);
+            lv_label_set_text(badge, badge_text);
+            lv_obj_set_style_text_font(badge, UI_FONT_MICRO, LV_PART_MAIN);
+            lv_obj_set_style_radius(badge, UI_RADIUS_BADGE, LV_PART_MAIN);
+            lv_obj_set_style_pad_all(badge, 4, LV_PART_MAIN);
+            if (bound_badge) {
+                lv_obj_set_style_bg_color(badge, UI_COLOR_OK, LV_PART_MAIN);
+                lv_obj_set_style_bg_opa(badge, LV_OPA_COVER, LV_PART_MAIN);
+                lv_obj_set_style_text_color(badge, UI_COLOR_ACCENT_FG, LV_PART_MAIN);
+            } else {
+                lv_obj_set_style_border_width(badge, UI_BORDER_WIDTH, LV_PART_MAIN);
+                lv_obj_set_style_border_color(badge, UI_COLOR_LINE, LV_PART_MAIN);
+                lv_obj_set_style_text_color(badge, UI_COLOR_DIM, LV_PART_MAIN);
+            }
+            lv_obj_align(badge, LV_ALIGN_TOP_RIGHT, 0, 12);
+        }
+
+        // Format chips, mono so the three of them line up card to card.
+        const char* chips[3];
+        // Wide enough for an unsigned that the compiler cannot bound: these
+        // come off the wire, so "24" is expected but not guaranteed.
+        char bits[16], rate[16];
+        snprintf(bits, sizeof(bits), "%ub", (unsigned)m.bits_per_sample);
+        snprintf(rate, sizeof(rate), "%uk", (unsigned)((m.sample_rate + 500) / 1000));
+        chips[0] = bits;
+        chips[1] = (m.channels == 2) ? "ST" : "MO";
+        chips[2] = rate;
+        int chip_x = 0;
+        for (int c = 0; c < 3; ++c) {
+            lv_obj_t* chip = lv_label_create(btn);
+            lv_label_set_text(chip, chips[c]);
+            lv_obj_set_style_text_font(chip, UI_FONT_MONO_MICRO, LV_PART_MAIN);
+            lv_obj_set_style_text_color(chip, UI_COLOR_DIM, LV_PART_MAIN);
+            lv_obj_set_style_bg_color(chip, UI_COLOR_CARD_ALT, LV_PART_MAIN);
+            lv_obj_set_style_bg_opa(chip, LV_OPA_COVER, LV_PART_MAIN);
+            lv_obj_set_style_radius(chip, 4, LV_PART_MAIN);
+            lv_obj_set_style_pad_hor(chip, 7, LV_PART_MAIN);
+            lv_obj_set_style_pad_ver(chip, 2, LV_PART_MAIN);
+            lv_obj_align(chip, LV_ALIGN_BOTTOM_LEFT, chip_x, -12);
+            lv_obj_update_layout(chip);
+            chip_x += lv_obj_get_width(chip) + 8;
+        }
 
         char dur[16];
         format_frames(m.total_frames, m.sample_rate, dur, sizeof(dur));
-        // "used by": the Tracks whose Instrument references it (§4), 1-based
-        // like every Track on screen; a pinned sample the user loaded shows
-        // that too, since that is what keeps it resident with no user.
-        char used[40] = {};
-        size_t ul = 0;
-        for (uint8_t t = 0; t < 16 && ul + 4 < sizeof(used); ++t) {
-            if (m.used_by & (1u << t)) {
-                ul += static_cast<size_t>(snprintf(
-                    used + ul, sizeof(used) - ul, "%sT%u", ul ? "," : "  ", trackDisplayNumber(t)));
-            }
-        }
-        char line[200];
-        snprintf(line,
-                 sizeof(line),
-                 "%.40s   %u-bit %s  %s%s%s%s",
-                 m.name,
-                 (unsigned)m.bits_per_sample,
-                 m.channels == 2 ? "stereo" : "mono",
-                 dur,
-                 used,
-                 (m.flags & WaveX::Protocol::SAMPLE_META_PINNED) ? "  [loaded]" : "",
-                 meta_is_playable(m) ? "" : "   [not playable]");
-        lv_label_set_text(label, line);
-        lv_obj_set_style_text_color(
-            label, lv_color_hex(meta_is_playable(m) ? 0xFFFFFF : kColWarn), LV_PART_MAIN);
-        lv_obj_set_style_bg_color(
-            btn, lv_color_hex(m.sample_id == bound_id ? 0x14261A : kColPanel), LV_PART_MAIN);
+        lv_obj_t* dur_label = lv_label_create(btn);
+        lv_label_set_text(dur_label, dur);
+        lv_obj_set_style_text_font(dur_label, UI_FONT_MONO_SMALL, LV_PART_MAIN);
+        lv_obj_set_style_text_color(dur_label, UI_COLOR_FG, LV_PART_MAIN);
+        lv_obj_align(dur_label, LV_ALIGN_BOTTOM_RIGHT, 0, -12);
 
         rows_[i].btn = btn;
         rows_[i].label = label;
+        rows_[i].badge = badge;
+        rows_[i].dur = dur_label;
         rows_[i].sample_id = m.sample_id;
         rows_[i].used_by = m.used_by;
         rows_[i].pinned = (m.flags & WaveX::Protocol::SAMPLE_META_PINNED) != 0;
@@ -276,6 +474,29 @@ void UISampleManagerPage::rebuildList() {
 
     if (focus_ >= row_count_) {
         focus_ = row_count_ > 0 ? row_count_ - 1 : 0;
+    }
+    // New cards carry no ring or fill yet. This used to be left to the next
+    // tick's "same rows" pass, which ran every 500 ms whether or not
+    // anything had arrived; now nothing runs until something does.
+    styleRows(bound_id);
+}
+
+// Focus is the accent border; "bound to the current Track" is the card
+// fill. They are different questions and the card has to be able to answer
+// both at once.
+void UISampleManagerPage::styleRows(uint16_t bound_id) {
+    for (int i = 0; i < row_count_; ++i) {
+        if (!rows_[i].btn || !lv_obj_is_valid(rows_[i].btn)) {
+            continue;
+        }
+        const bool sel = rows_[i].sample_id == bound_id;
+        const bool foc = (i == focus_);
+        lv_obj_set_style_border_color(
+            rows_[i].btn, foc ? UI_COLOR_ACCENT : UI_COLOR_LINE, LV_PART_MAIN);
+        lv_obj_set_style_border_width(
+            rows_[i].btn, foc ? UI_BORDER_WIDTH_FOCUS : UI_BORDER_WIDTH, LV_PART_MAIN);
+        lv_obj_set_style_bg_color(
+            rows_[i].btn, sel ? UI_COLOR_CARD_ALT : UI_COLOR_CARD, LV_PART_MAIN);
     }
 }
 
@@ -531,7 +752,7 @@ std::array<Softkey, NUM_SOFTKEYS> UISampleManagerPage::getSoftkeys() {
     keys[5] = {"Refresh", [this]() {
                    requestPage();
                    inter_mcu_request_sample_mem_status();
-                   inter_mcu_request_track_binding(getCurrentTrack());
+                   inter_mcu_request_track_binding(0xFF);
                }};
     return keys;
 }

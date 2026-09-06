@@ -57,7 +57,9 @@ complete. Remaining work:
    protocol/policy for stereo, and playback-time loop crossfade.
 4. Reconcile stereo behavior between streaming and RAM voices; add the UI for
    `channel_mode`, including a label for one-channel views.
-5. Retire the legacy decimated preview when the Record page is rebuilt.
+5. ~~Retire the legacy decimated preview when the Record page is rebuilt.~~
+   Done 2026-09-06: `MSG_PREVIEW_REQ`/`MSG_WAVE_CHUNK` removed in protocol 3;
+   every Sample tab draws from the envelope protocol.
 
 **Gate:** edit and audition a multi-minute WAV, save, reboot, reload, and hear
 the same region without a UI freeze.
@@ -124,6 +126,15 @@ done. Open work, in the order decided 2026-09-05 (model doc §8: 7 → 4 → 5 �
 2. Voice architecture (stage 5): typed oscillators, Osc 2 + submix, filter
    type, Env 3, two per-voice LFOs, new mod destinations —
    DWT-measured at `WAVEX_NUM_VOICES` before the count is changed.
+   The **UI for this is already designed and not built**: Claude Design turn
+   5 gives Instrument an Env 1/2/3 selector with destination chips and a new
+   LFO tab (waveform, frequency, pitch-follow, gate/free-run), taking the
+   stage tab bar from five to six. It was deliberately left out of the
+   2026-09-06 UI redesign because nothing on the wire carries a second or
+   third envelope, an LFO, or a modulation destination — building the screens
+   first would have produced controls that do nothing, which is the failure
+   the Mod tab already documents. Build them with this stage, after the DWT
+   measurement, not before.
 3. Bank (stage 6): `.wxb`, Bank page, Program Change recall.
 4. Polyphony policy (stage 8), from stage 5's measurement.
 5. Finish Mixer v1: UI/solo behavior, meter subscription, and hardware click
@@ -181,7 +192,7 @@ The following code paths are open until observed on the target:
 | Diagnostics | Open the page and verify live telemetry arrives. |
 | Digital voices | Trigger RAM-resident notes, sweep live parameters, and judge SVF response/resonance. |
 | Callback budget | Establish the first recurring callback-headroom report: DWT-measure SVF (both topologies, 24 dB, drive), DTCM placement, mixer, and 480 MHz behavior with eight voices on the persistent QSPI `-O2` image, plus a zero-underrun soak. Record it in `callback-performance-log.md` using the gate in `performance_monitoring.md`. |
-| Sample Edit | Verify waveform fetch, handles, loop seam, browser detail waveform, and stereo readability. **Loop playback does not work** (bench, 2026-09-05): a sample with loop points set plays through in both Sample Edit audition and Play; not yet traced (is the loop sent, stored on the Track, or honoured by the voice?). See `backlog.md` § Sample loop playback. |
+| Sample Edit | Verify waveform fetch, handles, loop seam, browser detail waveform, and stereo readability. **Loop playback does not work** (bench, 2026-09-05): a sample with loop points set plays through in both Sample Edit audition and Play; the first of three suspects (the edit message's one-byte id) was fixed 2026-09-06, the binding and the voice are still to check. Two more Edit-page defects recorded 2026-09-06: Audition claims Track 1 without asking, and an edit is applied to whatever file is streaming. See `backlog.md` § Sample loop playback and the two items after it. |
 | Settings and input | Verify brightness, scrolling, MIDI channel filtering, keypad, encoder direction, and UI responsiveness. |
 | UI concurrency | Measure LVGL lock/refresh behavior during encoder bursts and sample loading. |
 | Load-to-Track and the Sample Pool (2026-09-04/05) | Automated: `make test-hil` (`tests/hil/test_load_to_track.py`, `test_sample_pool.py`) covers Load onto an empty Track and a note sounding on it, the replace picker (cancel, confirm, Track -/+), Assign's confirm, a failed load's reason crossing the link, one file loaded twice being one Pool entry, an import's samples in the Pool and playing, two imports of one file set sharing it, a sample replacing an import and freeing what only it held, and the Sample Manager paging a Pool larger than one page. Still manual: *hearing* the Keys, and a Pool-full / arena-full refusal (no card holds 1024 samples or 60 MB of small ones). |

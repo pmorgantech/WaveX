@@ -5,7 +5,9 @@
 
 #include "bsp/esp32_p4_nano.h"
 #include "config/hardware_config.h"
+#include "inter_mcu.h"
 #include "midi_task.h"
+#include "ui/current_track.h"
 #include "ui/display_manager.h"
 #include "ui/ui_api.h"
 #include "ui/ui_cv_cal_page.h"
@@ -21,6 +23,7 @@
 #include "ui/ui_tab_host_page.h"
 
 #include <cstdio>
+#include <functional>
 #include <string>
 
 static const char* TAG = "UI_MAIN_MENU";
@@ -66,21 +69,56 @@ std::shared_ptr<UIPage> createMainMenu() {
     // rather than a UITabHostPage: its five stages share the Instrument being
     // edited, so the header and status line have to outlive a tab switch. See
     // UIInstrumentPage.
+    //
+    // Each row also carries what is inside it and, where the state is actually
+    // available, what it is currently pointing at. Sample's resident count and
+    // Instrument's name are deliberately absent: neither is exposed outside
+    // the page that owns it today, and a plausible-looking placeholder in the
+    // root menu is worse than a blank - you would have to open the page to
+    // find out whether to believe it. Tracked in docs/backlog.md.
+    // Separator is ASCII "/" and not a middle dot: LVGL's built-in Montserrat
+    // tables cover printable ASCII, so U+00B7 renders as a box on the panel.
     static const struct {
         const char* label;
+        const char* purpose;
         RootGroup group;
     } kItems[] = {
-        {"Sample", RootGroup::Sample},
-        {"Instrument", RootGroup::Instrument},
-        {"Play", RootGroup::Play},
-        {"Settings", RootGroup::Settings},
-        {"Diagnostics", RootGroup::Diagnostics},
+        {"Sample", "Manage / Browse / Edit / Record", RootGroup::Sample},
+        {"Instrument", "Sample / Env / Amp / Filter / Mod", RootGroup::Instrument},
+        {"Play", "Pads / Keys", RootGroup::Play},
+        {"Settings", "Display / Storage / MIDI / System / Calibrate", RootGroup::Settings},
+        {"Diagnostics",
+         "ESP32 / Daisy / Audio / Link / Storage / MIDI / Panel",
+         RootGroup::Diagnostics},
     };
     for (const auto& item: kItems) {
         const RootGroup group = item.group;
-        menu->addItem(item.label, [group]() {
+        auto open = [group]() {
             ESP_LOGI(TAG, "Opening %s", rootGroupName(group));
-            UINavigator::instance().jumpToRoot(group); });
+            UINavigator::instance().jumpToRoot(group); };
+
+        std::function<std::string()> context;
+        std::function<bool()> ok;
+        if (group == RootGroup::Play) {
+            context = []() {
+                char buf[16];
+                snprintf(buf, sizeof(buf), "Track %u", trackDisplayNumber(getCurrentTrack()));
+                return std::string(buf);
+            };
+        } else if (group == RootGroup::Diagnostics) {
+            // The one piece of root-level state worth seeing without opening
+            // anything: a dead link makes every other page lie quietly.
+            context = []() {
+                return std::string(inter_mcu_backend_link_alive() ? "link OK" : "link down");
+            };
+            // Not hb.valid: that latches true on the first heartbeat and never
+            // clears, so the dot sat on green from boot regardless of whether
+            // the Daisy was still talking. It has to go red when the beacons
+            // stop or it is not an indicator, just decoration.
+            ok = []() { return inter_mcu_backend_link_alive(); };
+        }
+
+        menu->addItem(item.label, item.purpose, std::move(context), std::move(ok), open);
     }
 
     return menu;
@@ -133,6 +171,7 @@ std::shared_ptr<UIPage> createDisplaySettingsPage() {
     // encoder, and the sweep is on the bench list in roadmap
     // § Outstanding hardware verification.
     page->addSetting("Brightness", 100, 10, 100, applyBrightness, formatPercent);
+    page->setDesc("Brightness", "Backlight PWM / 10-100");
 
     // Contrast is gone rather than stubbed: this is a MIPI-DSI panel driven by
     // an HX8394 with no contrast control to offer, so the row could never do

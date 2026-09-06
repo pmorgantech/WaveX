@@ -3,6 +3,7 @@
 
 #include <lvgl.h>
 
+#include "components/ui_value_tile.h"
 #include "input_event.h"
 #include "ui_navigator.h"
 #include "ui_page.h"
@@ -41,6 +42,11 @@ struct Setting {
     /// Info/Unimplemented: the text drawn in the value column. For
     /// Unimplemented it is the reason, not a value.
     std::string text;
+
+    /// Optional line under the value in tile layout: what the setting means
+    /// and the range it accepts. Ignored by the row layout, which has no room
+    /// for it.
+    std::string desc;
 
     /// Value rows only: renders the number as something a person reads
     /// ("Omni", "C#3") instead of the raw integer. Null means "%d".
@@ -86,6 +92,18 @@ class UISettingsPage : public UIPage {
     }
 
     /// A read-only row stating a fact about the system, not a control.
+    /// Attach the tile-layout description line to an already-added setting.
+    /// Separate from addSetting() so the existing four-argument call sites do
+    /// not all have to grow an empty string.
+    void setDesc(const std::string& label, const std::string& desc) {
+        for (Setting& s: settings_) {
+            if (s.label == label) {
+                s.desc = desc;
+                return;
+            }
+        }
+    }
+
     void addInfo(const std::string& label, const std::string& text) {
         Setting s;
         s.label = label;
@@ -125,6 +143,11 @@ class UISettingsPage : public UIPage {
     lv_obj_t* list_ = nullptr;
     std::vector<lv_obj_t*> rows_;
     std::vector<lv_obj_t*> valueLabels_;
+    /// Non-empty when the tab drew itself as tiles rather than rows. The two
+    /// layouts are exclusive; whichever is populated is the one to restyle on
+    /// a selection change.
+    std::vector<ValueTile> tiles_;
+    bool useTiles() const;
 
     /// Row currently carrying the selected/editing overlay style. Tracked so a
     /// selection change restyles two rows instead of invalidating every one.

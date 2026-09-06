@@ -71,15 +71,45 @@ Choose and implement bounded recovery behavior: pause and recover, abort the
 stream, or increase the prebuffer. Validate the choice with injected or
 reproducible CRC faults and capture ring low-water and service latency.
 
+### Daisy build warnings worth acting on (2026-09-06)
+
+The release build is not warning-clean, and two of the warnings are real:
+
+- `audio_engine.cpp` `OnSampleLoad`: `alt_path[128]` receives `"0:%s"` of a
+  `BROWSE_PATH_MAX` (256) path, so the "retry with a drive prefix" open
+  silently tries a truncated path for anything longer than 125 characters —
+  exactly the deep library paths the 2026-09-06 widening was for. Size it
+  `BROWSE_PATH_MAX + 2` or drop the retry (`-Wformat-truncation`).
+- `PumpSampleMetaPage`: the page's byte count is a `size_t` narrowed to
+  `UartLinkSend`'s `uint16_t` (`-Wconversion`). In range today (one header
+  plus at most a page of records); make the narrowing explicit with a bound
+  so a wider record cannot wrap it.
+- `sfz_loader.cpp`: `FF_USE_LFN` tested with `#if` where it is not defined
+  (`-Wundef`, twice) and an enum/int mix in a conditional (`-Wextra`).
+
+### The SRAM debug profile has ~7 KB of RAM_D2 headroom
+
+`make daisy-debug` / `make flash-fast` link the backend to run from SRAM with
+its data in `RAM_D2` (256 KB). At `eb15470` (the path widening) that link
+failed — `RAM_D2` overflowed by 9532 bytes — so the fast bench loop could not
+load the Daisy at all and only the DFU path (`make daisy-flash-auto`) worked.
+Retiring the decimated preview (`6f53720`) freed ~16 KB and it links again at
+97.4% (255 276 B), which leaves about 6.9 KB. The next resident buffer of
+that size breaks the debug profile before it troubles the release one; the
+`.wxi` document buffer move in [the SRAM item](#the-daisys-sram-is-at-89-and-the-wxi-document-buffer-is-the-lever)
+is the lever for both. `make flash-fast` should report the Daisy link
+failure by name — today it prints the ESP32's success and exits 1.
+
 ## Memory
 
 ### The Daisy's SRAM is at 89%, and the .wxi document buffer is the lever
 
 The 2026-09-06 path widening took internal SRAM from ~84% to 89.1%
-(467 KB of 512 KB, ~57 KB free). The single largest new consumer is the
-loader's `.wxi` document buffer (`s_doc_storage`, `sfz_loader.cpp`): a
-`Wxi::InstrumentFile` is ~17 KB once each of its 64 zone slots carries a
-256-byte path.
+(467 KB of 512 KB, ~57 KB free); retiring the decimated preview the same day
+(protocol 3) gave ~16 KB of that back (its 4096-point buffer and frame
+staging), for 86.0%. The single largest new consumer is the loader's `.wxi`
+document buffer (`s_doc_storage`, `sfz_loader.cpp`): a `Wxi::InstrumentFile`
+is ~17 KB once each of its 64 zone slots carries a 256-byte path.
 
 It does not belong in SRAM. It is a main-loop working buffer, written once per
 load and never touched by the audio callback — the same profile as the Sample
@@ -158,11 +188,47 @@ manager, and unreachable UI surfaces after re-checking callers.
 
 Reported on the bench 2026-09-05: a sample with loop points set plays through
 to its end in both the Sample Edit audition and the Play page — the loop is
-never taken. Not yet traced. Three places it could be lost: the edit page
-sending the loop points, the Track/binding storing them, or the voice's
-playback honouring them; check each with the loop flag and points in the
-Daisy's `TRACKS`/`SAMPLES` console output before touching code. Belongs to
-the roadmap's "Sample Edit" verification row.
+never taken. Three places it could be lost: the edit page sending the loop
+points, the Track/binding storing them, or the voice's playback honouring
+them; check each with the loop flag and points in the Daisy's
+`TRACKS`/`SAMPLES` console output before touching code. Belongs to the
+roadmap's "Sample Edit" verification row.
+
+Found and fixed 2026-09-06, on the first of those: `SampleEditMessage::slot`
+was one byte, but Sample Pool ids start at 1024, so the edit page sent the
+id's low byte — 0 for the first Pool id, which the Daisy's `SetEditParams`
+read as "the newest loaded sample". The message now carries a 16-bit
+`sample_id` (protocol 3) and the "0 = newest" fallback is gone. The other
+one-byte slots were checked and left alone: `SampleSelectMessage::slot` is a
+Track index, and the Daisy ignores the slot in `SampleCtrlMessage` and
+`SampleStopReqMessage` altogether. The remaining two places (the binding
+storing the loop, the voice honouring it) still need the bench check above.
+
+### Sample Edit's Audition silently claims Track 1
+
+`UISampleEditPage::onAudition` binds the sample being edited onto Track
+index 0 (`inter_mcu_send_sample_select(id, 0)`) and plays a note on it, so
+auditioning replaces whatever Track 1 held — an SFZ import included — with
+no picker and no notice, and leaves it there. That breaks the rule the Load
+and Assign paths follow (nothing takes a Track without asking). The audition
+needs a voice that is not a Track: either a backend audition binding outside
+the sixteen (a scratch zone the note path can resolve, released on stop) or
+the streaming audition, which already honours the record's region, loop,
+gain and fades (`ApplyMetaToStreaming`) but plays the file, not the resident
+copy. Decide, then delete the `sample_select(…, 0)` — do not add a picker to
+a preview button.
+
+### An edit lands on whatever stream is open
+
+`SetEditParams` applies the edited record to the streaming audition through
+`ApplyMetaToStreaming(info)`, which reads `s_wav` and never checks that the
+open file *is* that sample. Browse's audition of file B followed by a marker
+drag on Edit's sample A moves B's region and loop points to A's. Now that the
+Pool keeps each record's card path, compare it against the open stream's
+path (or carry the Pool id on `s_wav` when `OpenWav` resolves one) and skip
+the apply on a mismatch. A regression test can drive this through the
+dispatch mocks: open one path, edit another id, assert the region is
+unchanged.
 
 ### Non-frame-aligned WAV data
 
@@ -282,6 +348,41 @@ a decision rather than a mechanical fix:
 Add active-voice and round-trip-latency telemetry when it has an owning
 protocol change. Add MIDI detail and dropped-event counters with the Phase 2
 sequencer and tempo-follower work, when those events actually exist.
+
+The Link tab's `unknown` count is meant to read 0 in a healthy session, so a
+non-zero value means corruption or a protocol mismatch. It does not yet: the
+backend answers every audition-by-path with a `MSG_ACK` (`serial_id` 0,
+`ProcessSamplePlayRequest`) that the frontend neither routes nor counts as
+known, so each audition adds one. Either drop that ACK - nothing waits for
+it - or route it; do not just add it to the known list, which would hide a
+message the frontend does nothing with.
+
+### Root-menu context lines have no data source
+
+The refreshed root menu (design turn 2e) gives every row a live context
+readout saying what it currently points at. Only two could be wired
+truthfully: Play shows the selected Track, Diagnostics shows link health from
+the backend heartbeat. Two more are specified by the design and are blank:
+
+- **Sample — resident count.** No API exposes how many samples are in the
+  backend's sample RAM. The number exists in `SampleMemStatusMessage`, which
+  `ui_diagnostics_page.cpp` decodes into its own widgets and does not publish.
+- **Instrument — instrument name.** `instrument_name_` is a private member of
+  `UIInstrumentPage`, so nothing outside that page can read it.
+
+Both want a small shared accessor of the same shape as `current_track.h` /
+`current_sample.h` rather than a second copy of the state. Until then the rows
+show no context, which is the honest rendering - a placeholder in the root
+menu would have to be opened to find out whether to believe it.
+
+### mocks/ui_theme.h is dead
+
+Nine UI sources include the theme as `"../styles/ui_theme.h"`, which bypasses
+`firmware/esp32/tests/mocks/ui_theme.h` entirely - the host test build
+compiles the real header and always has. The mock is stale and unused;
+either delete it or change those includes to `"ui_theme.h"` so the mock is
+actually what the host build sees. Left alone for now because changing it
+mid-redesign would swap the palette the host build compiles against.
 
 ## Related
 

@@ -153,9 +153,9 @@ After successful flash and boot:
 
 ## Communication with ESP32
 
-The Daisy communicates with the ESP32 via UART protocol at 230.4kbps:
+The Daisy communicates with the ESP32 over UART at `WAVEX_DAISY_UART_INTER_BAUD` (`firmware/shared/config/pin_config.h`):
 - **MSG_METER_PUSH (0x10)**: Audio level data every ~20ms (throttled logging every 100th packet)
-- **MSG_WAVE_CHUNK (0x11)**: Waveform preview data when requested
+- **MSG_ENVELOPE_CHUNK (0x44)**: Waveform envelope columns, in slices, when requested
 - **MSG_HEARTBEAT (0x12)**: Health status and system metrics
 - **Other messages**: As defined in the shared protocol
 - **Packet Statistics**: Comprehensive tracking and debugging support

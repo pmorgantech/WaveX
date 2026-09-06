@@ -171,29 +171,6 @@ TEST_F(InterMcuProtocolIntegrationTest, BrowseResponseFrameReachesListenerVerbat
     EXPECT_EQ(entry.bits_per_sample, 16);
 }
 
-// Wave chunk: header + samples in one frame; samples arrive intact.
-TEST_F(InterMcuProtocolIntegrationTest, WaveChunkFrameDeliversSamples) {
-    constexpr uint16_t kCount = 8;
-    struct {
-        WaveChunkMessage header;
-        int16_t samples[kCount];
-    } __attribute__((packed)) msg;
-    msg.header = WaveChunkMessage(4096, kCount);
-    for (int i = 0; i < kCount; ++i) {
-        msg.samples[i] = static_cast<int16_t>(i * 1000 - 3500);
-    }
-
-    ASSERT_TRUE(ReceiveFrame(EncodeUartFrame(MSG_WAVE_CHUNK, &msg, sizeof(msg))));
-
-    const auto& cap = GetInterMcuCapture();
-    ASSERT_EQ(cap.wave_chunk_calls, 1);
-    EXPECT_EQ(cap.wave_chunk_offset, 4096u);
-    ASSERT_EQ(cap.wave_chunk_samples.size(), static_cast<size_t>(kCount));
-    for (int i = 0; i < kCount; ++i) {
-        EXPECT_EQ(cap.wave_chunk_samples[i], i * 1000 - 3500) << "sample " << i;
-    }
-}
-
 // Envelope chunk: the router validates channels/length before handing the
 // column run to the cache callback.
 TEST_F(InterMcuProtocolIntegrationTest, EnvelopeChunkFrameDeliversColumns) {

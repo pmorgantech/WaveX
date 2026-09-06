@@ -122,16 +122,6 @@ TEST_F(MessageDispatchTest, SampleCtrlReachesAudioEngine) {
     EXPECT_FLOAT_EQ(GetDispatchRecord().sample_ctrls[0].rate, 1.0f);
 }
 
-TEST_F(MessageDispatchTest, PreviewReqReachesAudioEngine) {
-    PreviewReqMessage req(0, 100, 200, 4);
-    Dispatch(MSG_PREVIEW_REQ, req);
-
-    ASSERT_EQ(GetDispatchRecord().preview_reqs.size(), 1u);
-    EXPECT_EQ(GetDispatchRecord().preview_reqs[0].start, 100u);
-    EXPECT_EQ(GetDispatchRecord().preview_reqs[0].end, 200u);
-    EXPECT_EQ(GetDispatchRecord().preview_reqs[0].decim, 4);
-}
-
 TEST_F(MessageDispatchTest, EnvelopeReqReachesAudioEngine) {
     EnvelopeReqMessage req(7, 1256, 44100, 7000000);
     Dispatch(MSG_ENVELOPE_REQ, req);
@@ -147,11 +137,16 @@ TEST_F(MessageDispatchTest, EnvelopeReqReachesAudioEngine) {
 // markers audible, so a silent dispatcher stub here would look exactly like
 // "loop doesn't work" - which is how it presented before this path existed.
 TEST_F(MessageDispatchTest, SampleEditReachesAudioEngine) {
-    SampleEditMessage edit(0, 1, -35, 44100, 396900, 88200, 352800, 3, 250);
+    // A real Pool id, not 0: ids start at 1024, and the one-byte slot this
+    // field replaced truncated every one of them to 0 - which then meant
+    // "newest sample", so the edit landed on the wrong record while the
+    // dispatch itself looked fine.
+    SampleEditMessage edit(1025, 1, -35, 44100, 396900, 88200, 352800, 3, 250);
     Dispatch(MSG_SAMPLE_EDIT_SET, edit);
 
     ASSERT_EQ(GetDispatchRecord().sample_edits.size(), 1u);
     const auto& got = GetDispatchRecord().sample_edits[0];
+    EXPECT_EQ(got.sample_id, 1025);
     EXPECT_EQ(got.loop_enabled, 1);
     EXPECT_EQ(got.gain_db_x10, -35);
     EXPECT_EQ(got.start_frame, 44100u);
@@ -516,7 +511,7 @@ TEST_F(MessageDispatchTest, NullPayloadIsSafeForAllRoutedTypes) {
                              MSG_SAMPLE_CTRL,
                              MSG_SAMPLE_LOAD,
                              MSG_SAMPLE_DATA,
-                             MSG_PREVIEW_REQ,
+                             MSG_ENVELOPE_REQ,
                              MSG_STATUS_REQUEST,
                              MSG_BROWSE_REQ,
                              MSG_SAMPLE_PLAY_REQ,
@@ -532,7 +527,7 @@ TEST_F(MessageDispatchTest, NullPayloadIsSafeForAllRoutedTypes) {
     EXPECT_TRUE(r.control_changes.empty());
     EXPECT_TRUE(r.sample_ctrls.empty());
     EXPECT_TRUE(r.sample_loads.empty());
-    EXPECT_TRUE(r.preview_reqs.empty());
+    EXPECT_TRUE(r.envelope_reqs.empty());
     EXPECT_TRUE(r.browse_requests.empty());
     EXPECT_TRUE(r.play_requests.empty());
     EXPECT_TRUE(r.stop_requests.empty());

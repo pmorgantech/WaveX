@@ -43,9 +43,6 @@ class PacketRouter {
     void handle_sync(const WaveX::Protocol::SyncMessage& msg);
     void handle_heartbeat(const WaveX::Protocol::HeartbeatMessage& msg);
     void handle_meter_push(const WaveX::Protocol::MeterPushMessage& msg);
-    void handle_wave_chunk(const WaveX::Protocol::WaveChunkMessage& msg,
-                           const uint8_t* payload,
-                           size_t length);
     void handle_envelope_chunk(const WaveX::Protocol::EnvelopeChunkMessage& msg,
                                const uint8_t* payload,
                                size_t length);

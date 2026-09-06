@@ -13,6 +13,41 @@ versioning and release process.
 
 ### Changed
 
+- **One waveform preview, shared by the Sample tabs.** Browse, Edit and
+  Record each ran their own request/receive/render cycle for the trace they
+  show; Browse's never fired for a selection made by scrolling, and Record
+  drove a separate decimated-preview protocol. All three now hand a sample and
+  a window to one `EnvelopePanel` component, which owns the chunk listener,
+  the cache and the retry policy. Traces are drawn at one column per pixel
+  from the envelope cache's exact min/max downsample, in theme colours.
+  The cache keeps several runs at a tier, so the Edit tab's loop-seam halves
+  no longer evict each other and re-request forever, and a view is shown from
+  a coarser run the moment one lands while its own is still on the way.
+- The waveform draw only issues LVGL tasks for the strip being rendered, and
+  merges columns on their clipped spans. A 44 s stereo trace cost the UI task
+  ~200 ms per frame (18 strips × ~12 ms, every one of them drawing all 2460
+  column fills); it is now ~37 ms, no strip over ~3.5 ms. A marker moving over
+  the trace costs the sliver it invalidates rather than a whole redraw.
+- Sample ▸ Browse previews **any resident sample** under the cursor, not only
+  the one this page loaded since boot: the highlighted path is resolved
+  against the backend's own records, so a sample loaded before the last
+  reboot, or from another page, shows its trace without being loaded again.
+  The preview well and its "Load to preview" hint take their colours from the
+  theme (the well was a fixed near-black).
+- Sample ▸ Record says what it is: recording is not implemented (the backend
+  ignores the command; roadmap Phase 1), so the Record key is dimmed with the
+  reason and the page shows the current sample's trace instead of reporting
+  "Recording..." for a command nothing acts on.
+- Sample ▸ Manage asks the backend only when something can have changed.
+  Its refresh tick sent twelve messages a second the whole time the page was
+  up - five Track-binding probes and a Pool page every 500 ms, each answered
+  - for a backend that already pushes every load, edit, unload and bind it
+  makes. The page now asks for all sixteen bindings once on entry (the
+  backend paces those replies itself), re-asks for its window of the Pool
+  when a push says the Pool changed, and only redraws when something has
+  arrived. Sitting on the page is now 0 messages a second in either
+  direction, from 600 per 50 s each way. A bind made from another tab shows
+  up on the card badge as well as the strip.
 - **One path bound across the system.** Three different limits coexisted — 96
   on the wire, 200 in the SFZ importer, 255 for a FatFs long name — so the
   importer could resolve a path the wire could not carry and the Pool could not
@@ -29,6 +64,25 @@ versioning and release process.
 
 ### Fixed
 
+- Sample ▸ Edit: the parameter strip follows `Param >` / `< Param` onto a
+  card past the visible four. It was laid out only with the values, so the
+  focus ring landed on a hidden card and the strip stayed put until a value
+  changed.
+- Sample ▸ Manage: a freshly built card list carried no focus ring or bound
+  fill; they were applied by the next tick's unchanged-rows pass, which no
+  longer runs unprompted.
+- Sample ▸ Edit edits landed on the wrong sample. `SampleEditMessage`
+  addressed the sample with a one-byte `slot`, but Sample Pool ids start at
+  1024, so every id was truncated — to 0 for the first Pool entry, which the
+  backend read as "the newest loaded sample". Loop On for one sample silently
+  set the loop on whichever sample had loaded last. The message now carries
+  the 16-bit Pool id (`PROTOCOL_VERSION` 3), and the backend drops an edit
+  for an id it does not hold instead of guessing. Both boards need
+  reflashing together.
+- Sample ▸ Edit: the waveform's "L" lane label was hidden under the S handle
+  whenever the start marker sat at the file's head. The L/R labels now sit
+  either side of the channel divider, the one band the S/E and LS/LE handles
+  never cover.
 - The Sample Pool now remembers each sample's **card path**, which saving an
   Instrument depends on. A Pool id names a slot in this boot's registry and
   means nothing in a file, and the only path the Pool kept was in the wire's
@@ -44,6 +98,42 @@ versioning and release process.
   from the render scratch, which shares a fixed budget with it and has no
   consumer yet. The sample arena — the one number that would have cost
   user-visible sample memory — is unchanged.
+- Sample ▸ Browse **"Load to preview" never showed a waveform.** The browser
+  compared the loaded sample's path against the selected entry's *name*, so
+  the "is the selection the loaded sample" test could not pass, and the
+  envelope request went out under the request tag rather than the Pool id the
+  Daisy had assigned, so the Daisy dropped it and the panel sat through a
+  full timeout. Both are fixed; the request now waits for the sample's
+  metadata to arrive (it lands with LOAD_COMPLETE) and uses its id.
+- **Waveform drawn into the left half of the panel**, zero line on the right,
+  for any file whose length is not a whole number of envelope tier columns —
+  which is nearly every file. The cache clamped a request's end frame to the
+  file and then derived the tier from that clamped span, filing the run one
+  tier finer than it was and so claiming half the frames it covered. The
+  request end is no longer clamped (the Daisy clamps at end-of-file itself);
+  a regression test uses the 4m39s file that exposed it.
+- "Sample will not fit" was raised through the busy spinner, so it spun over
+  a refusal and, six seconds later, rewrote itself as "No response from
+  backend". It is now a plain notice: no spinner, tap to dismiss.
+- The Browse detail panel's headline truncates with dots instead of wrapping
+  a long file name over the waveform, and its status line has room for two
+  lines, so the Track-replace prompt no longer runs under the play bar.
+- Per-load `LOAD_PROGRESS` callbacks (about a hundred per file) no longer log
+  at INFO; they flooded the log ring on every load.
+
+### Removed
+
+- **The decimated waveform preview** (`MSG_PREVIEW_REQ` 0x0A /
+  `MSG_WAVE_CHUNK` 0x11, roadmap Phase 1.5 item 5). Every Sample tab now draws
+  from the envelope protocol, so the request, the chunk, the Daisy's
+  most-recently-loaded preview job and the ESP32's chunk listener are gone
+  rather than left as a second path nothing calls; the two type values are
+  not reused. A board still sending them is counted under the Diagnostics
+  link card's unknown-packet figure, which is the version-mismatch signal
+  that card already reports; for that figure to mean it, the Pool page and
+  stop-audition replies - routed, but never listed as known - no longer count
+  there either, so an ordinary session reads 0 unknown. The link cards read
+  `envelope` where they read `wave`.
 
 ### Added
 

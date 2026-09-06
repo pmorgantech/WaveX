@@ -61,6 +61,10 @@ class UINavigator {
     SoftkeyBar* softkeyBar() { return &softkeyBar_; }
     bool canPop() const { return stack_.size() > 1; }
     void refreshSoftkeys();
+
+    /// Re-read the active page's contextLine() into the header. Call from a
+    /// page whose context changed without a push or pop (a Track switch, say).
+    void refreshContext();
     size_t depth() const { return stack_.size(); }
 
     /**
@@ -100,6 +104,8 @@ class UINavigator {
     lv_obj_t* screen_ = nullptr;
     lv_obj_t* header_ = nullptr;
     lv_obj_t* title_label_ = nullptr;
+    lv_obj_t* context_label_ = nullptr;
+    lv_obj_t* shift_rule_ = nullptr;
     lv_obj_t* content_ = nullptr;
     lv_obj_t* shift_chip_ = nullptr;
     lv_obj_t* shift_label_ = nullptr;
@@ -107,6 +113,7 @@ class UINavigator {
 
     void buildShiftChip();
     void refreshShiftChip();
+    void setHeaderFor(UIPage* page);
     static void shiftChipEventCb(lv_event_t* e);
     std::stack<std::shared_ptr<UIPage>> stack_;
     std::shared_ptr<UIPage> active_;
