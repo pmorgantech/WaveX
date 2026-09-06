@@ -365,7 +365,10 @@ void UIPlayPage::buildPads(lv_obj_t* tab) {
             lv_obj_set_pos(
                 btn, UI_MARGIN_X + c * (cell_w + gap), kKeysY + pad_y + r * (cell_h + gap));
             lv_obj_align(keys_[key_count_ - 1].label, LV_ALIGN_CENTER, 0, 0);
-            lv_obj_set_style_text_font(keys_[key_count_ - 1].label, UI_FONT_TITLE, LV_PART_MAIN);
+            // A pad is 220x119 and its note name is the whole content, read
+            // at arm's length while playing. The heading step is sized for a
+            // row title competing with other text; nothing competes here.
+            lv_obj_set_style_text_font(keys_[key_count_ - 1].label, UI_FONT_DISPLAY, LV_PART_MAIN);
         }
     }
 }

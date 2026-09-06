@@ -114,6 +114,7 @@
 #define UI_FONT_BODY &lv_font_montserrat_22     // body text, tab labels
 #define UI_FONT_TITLE &lv_font_montserrat_26    // section and card titles
 #define UI_FONT_HEADING &lv_font_montserrat_30  // page title, row titles, softkeys
+#define UI_FONT_DISPLAY &lv_font_montserrat_36  // a label on a large touch target
 
 #define UI_FONT_MONO_MICRO &wavex_mono_14  // CPU %, tiny counters
 #define UI_FONT_MONO_SMALL &wavex_mono_18  // inline values, context strings
