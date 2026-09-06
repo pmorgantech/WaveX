@@ -69,3 +69,5 @@ that they match the sizes recorded in the commit messages byte for byte.
 | 2026-09-04 | 4a42374 | esp32 app |  |  |  | 1003248 |  |  | DIN MIDI compiled out (GPIO24 is USB-JTAG D-); storm detector |
 | 2026-09-06 | 2cf04ef | daisy | 192576 | 2568 | 460004 | 195184 (2.4%) | 462572 (88.2%) | ITCM 184B / DTCM 2.9K (2%) / SRAM 428.1K (84%) / D2DMA 20.0K (63%) / BKP 12B | re-measured alongside the ESP32 row; the UI redesign did not touch the Daisy, so the +5.5 KB since 6ac460e belongs to the commits between them |
 | 2026-09-06 | 2cf04ef | esp32 app |  |  |  | 1021184 |  |  | UI redesign: token layer, JetBrains Mono ladder, 64px shell, and the restyled Menu/Instrument/Settings/Sample/Play pages |
+| 2026-09-06 | 8c16adb | daisy | 192576 | 2568 | 460004 | 195184 (2.4%) | 462572 (88.2%) | ITCM 184B / DTCM 2.9K (2%) / SRAM 428.1K (84%) / D2DMA 20.0K (63%) / BKP 12B | UI interaction pass: drag-to-adjust on tiles and dials, 48px mono + 36px Montserrat steps, taller sliders |
+| 2026-09-06 | 8c16adb | esp32 app |  |  |  | 1115984 |  |  | UI interaction pass: drag-to-adjust on tiles and dials, 48px mono + 36px Montserrat steps, taller sliders |
