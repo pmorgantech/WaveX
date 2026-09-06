@@ -11,6 +11,19 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Added
+
+- The mapper between the `.wxi` document and the engine's Instrument
+  (`instrument_map.hpp`), the seam a Load and a Save meet at. The two models
+  differ on purpose: a stored zone names its sample by **card path** while an
+  engine zone names it by Pool id (a slot in this boot's registry, meaningless
+  across a power cycle), and a stored zone carries an explicit **index** so
+  "pad 5" is still pad 5 after a save that wrote only three zones. Loading
+  leaves `sample_id` at 0 for the loader to assign on admission rather than
+  guessing an id that would resolve to whatever occupies that slot, and a
+  stored index this build cannot hold is dropped rather than wrapped onto a
+  good zone.
+
 ### Changed
 
 - An Instrument now owns its filter and amp envelope, and a parameter change
