@@ -124,6 +124,15 @@ done. Open work, in the order decided 2026-09-05 (model doc §8: 7 → 4 → 5 �
 2. Voice architecture (stage 5): typed oscillators, Osc 2 + submix, filter
    type, Env 3, two per-voice LFOs, new mod destinations —
    DWT-measured at `WAVEX_NUM_VOICES` before the count is changed.
+   The **UI for this is already designed and not built**: Claude Design turn
+   5 gives Instrument an Env 1/2/3 selector with destination chips and a new
+   LFO tab (waveform, frequency, pitch-follow, gate/free-run), taking the
+   stage tab bar from five to six. It was deliberately left out of the
+   2026-09-06 UI redesign because nothing on the wire carries a second or
+   third envelope, an LFO, or a modulation destination — building the screens
+   first would have produced controls that do nothing, which is the failure
+   the Mod tab already documents. Build them with this stage, after the DWT
+   measurement, not before.
 3. Bank (stage 6): `.wxb`, Bank page, Program Change recall.
 4. Polyphony policy (stage 8), from stage 5's measurement.
 5. Finish Mixer v1: UI/solo behavior, meter subscription, and hardware click
