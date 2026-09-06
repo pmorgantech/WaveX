@@ -35,6 +35,15 @@ namespace BusyOverlay {
  */
 void show(const char* caption, const char* detail, uint32_t timeout_ms);
 
+/**
+ * @brief Show a message that is not an operation: a refusal, a warning.
+ *
+ * No spinner and no timeout - there is nothing to wait for - and a tap
+ * dismisses it. show() is wrong for this: its spinner promises work that is
+ * not happening, and its timeout rewrites the caption as a backend failure.
+ */
+void notice(const char* caption, const char* detail);
+
 /** Show total + current-item bars for a multi-file operation. */
 void showDual(const char* caption, const char* detail, uint32_t timeout_ms);
 

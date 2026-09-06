@@ -44,6 +44,28 @@ versioning and release process.
   from the render scratch, which shares a fixed budget with it and has no
   consumer yet. The sample arena — the one number that would have cost
   user-visible sample memory — is unchanged.
+- Sample ▸ Browse **"Load to preview" never showed a waveform.** The browser
+  compared the loaded sample's path against the selected entry's *name*, so
+  the "is the selection the loaded sample" test could not pass, and the
+  envelope request went out under the request tag rather than the Pool id the
+  Daisy had assigned, so the Daisy dropped it and the panel sat through a
+  full timeout. Both are fixed; the request now waits for the sample's
+  metadata to arrive (it lands with LOAD_COMPLETE) and uses its id.
+- **Waveform drawn into the left half of the panel**, zero line on the right,
+  for any file whose length is not a whole number of envelope tier columns —
+  which is nearly every file. The cache clamped a request's end frame to the
+  file and then derived the tier from that clamped span, filing the run one
+  tier finer than it was and so claiming half the frames it covered. The
+  request end is no longer clamped (the Daisy clamps at end-of-file itself);
+  a regression test uses the 4m39s file that exposed it.
+- "Sample will not fit" was raised through the busy spinner, so it spun over
+  a refusal and, six seconds later, rewrote itself as "No response from
+  backend". It is now a plain notice: no spinner, tap to dismiss.
+- The Browse detail panel's headline truncates with dots instead of wrapping
+  a long file name over the waveform, and its status line has room for two
+  lines, so the Track-replace prompt no longer runs under the play bar.
+- Per-load `LOAD_PROGRESS` callbacks (about a hundred per file) no longer log
+  at INFO; they flooded the log ring on every load.
 
 ### Added
 

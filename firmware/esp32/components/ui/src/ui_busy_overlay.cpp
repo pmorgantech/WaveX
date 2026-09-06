@@ -194,6 +194,24 @@ void show(const char* caption, const char* detail, uint32_t timeout_ms) {
     lv_timer_set_repeat_count(s_timeout, 1);
 }
 
+void notice(const char* caption, const char* detail) {
+    show(caption, detail, 1);
+    if (!s_scrim) {
+        return;
+    }
+    // Nothing is in flight, so no spinner and no timeout: without a timer the
+    // scrim's click handler dismisses on the first tap, and the message says
+    // so the way the timed-out state does.
+    if (s_timeout) {
+        lv_timer_delete(s_timeout);
+        s_timeout = nullptr;
+    }
+    lv_obj_add_flag(s_spinner, LV_OBJ_FLAG_HIDDEN);
+    char text[224];
+    snprintf(text, sizeof(text), "%s\nTap to dismiss", detail ? detail : "");
+    lv_label_set_text(s_detail, text);
+}
+
 void showDual(const char* caption, const char* detail, uint32_t timeout_ms) {
     show(caption, detail, timeout_ms);
     if (!s_bar || !lv_obj_is_valid(s_bar))

@@ -43,15 +43,6 @@ struct SampleBrowserState {
     uint16_t last_load_bits = 0;
     uint32_t last_load_size_bytes = 0;
 
-    /** Total frames, or 0 if the geometry is unknown. */
-    uint32_t lastLoadFrames() const {
-        if (last_load_sample_rate == 0 || last_load_duration_ms == 0) {
-            return 0;
-        }
-        return static_cast<uint32_t>(
-            (static_cast<uint64_t>(last_load_duration_ms) * last_load_sample_rate) / 1000ull);
-    }
-
     SampleBrowserState() = default;
     SampleBrowserState(const SampleBrowserState&) = default;
     SampleBrowserState& operator=(const SampleBrowserState&) = default;

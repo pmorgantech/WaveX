@@ -201,6 +201,50 @@ TEST_F(EnvelopeCacheTest, WideViewIsFilledOverSeveralRequests) {
     EXPECT_GT(s, 0u) << "the second request must continue, not restart";
 }
 
+// A file that is not a whole number of tier columns long: 12,312,576 frames
+// (the 4m39s stereo WAV that exposed this) over 442 display columns is tier
+// 16384 and 752 columns, of which the last one is half empty. The request
+// must be filed at 16384 and cover the whole file - it used to be filed one
+// tier finer, so the run claimed only half the file and render() drew the
+// whole waveform into the left half of the panel with a zero line after it.
+TEST_F(EnvelopeCacheTest, RaggedLastColumnDoesNotMisfileTheTier) {
+    const uint32_t total = 12312576;
+    ASSERT_EQ(EnvelopeCache::tierFramesPerColumn(total, 442), 16384u);
+    ASSERT_TRUE(FillRun(1, 0, 0, total, total, 442, 2));
+
+    uint32_t s = 0, e = 0;
+    uint16_t c = 0;
+    EXPECT_FALSE(cache_.nextRequest(1, 0, 0, total, total, 442, 1280, s, e, c))
+        << "one run covered the file; asking again would loop forever";
+
+    uint8_t channels = 0;
+    std::vector<EnvelopeColumn> out(442 * 2);
+    const uint16_t drawn = cache_.render(1, 0, 0, total, 442, out.data(), out.size(), channels);
+    EXPECT_EQ(drawn, 442);
+    EXPECT_EQ(channels, 2);
+    // The tail of the file is real data (tier columns ramp), not the zero
+    // fill render() writes for columns the entry does not reach.
+    EXPECT_NE(out[441 * 2].max_sample, 0);
+}
+
+// The same ragged tail when it lands in a run that is not the first: the
+// edit page's 1256 columns need 1504 tier columns at 8192, more than one
+// request carries, so the second run is the short one that ends at the file.
+TEST_F(EnvelopeCacheTest, RaggedTailInASecondRunStillCompletesTheView) {
+    const uint32_t total = 12312576 - 4096;  // 1503.5 columns of 8192
+    ASSERT_EQ(EnvelopeCache::tierFramesPerColumn(total, 1256), 8192u);
+    ASSERT_TRUE(FillRun(1, 0, 0, total, total, 1256, 1, 1280));
+    ASSERT_TRUE(FillRun(1, 0, 0, total, total, 1256, 1, 1280));
+
+    uint32_t s = 0, e = 0;
+    uint16_t c = 0;
+    EXPECT_FALSE(cache_.nextRequest(1, 0, 0, total, total, 1256, 1280, s, e, c));
+
+    uint8_t channels = 0;
+    std::vector<EnvelopeColumn> out(1256);
+    EXPECT_EQ(cache_.render(1, 0, 0, total, 1256, out.data(), out.size(), channels), 1256);
+}
+
 TEST_F(EnvelopeCacheTest, RenderMergesTierColumnsAndKeepsExtremes) {
     const uint32_t total = 4096;
     ASSERT_TRUE(FillRun(1, 0, 0, total, total, 1024));  // tier fpc 4, 1024 columns

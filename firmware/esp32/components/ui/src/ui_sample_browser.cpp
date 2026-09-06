@@ -46,6 +46,13 @@ constexpr uint32_t kColBorder = palette::kColBorder;
 constexpr uint32_t kColDim = palette::kColDim;
 constexpr uint32_t kColGreen = palette::kColGreen;
 
+// One line of UI_FONT_TITLE. The headline is clipped to this so it cannot
+// wrap into the waveform panel.
+constexpr int kHeadlineH = 32;
+// Status line above the play bar: two lines of UI_FONT_SMALL.
+constexpr int kDetailStatusY = 444;
+constexpr int kDetailStatusH = 44;
+
 // Waveform preview, in the gap the design leaves between the filename headline
 // and the metadata rows.
 constexpr int kWaveX = 16;
@@ -149,7 +156,10 @@ void UISampleBrowser::onEnter(lv_obj_t* parent) {
     lv_obj_set_style_text_font(detail_name_, UI_FONT_TITLE, LV_PART_MAIN);
     lv_obj_set_style_text_color(detail_name_, UI_COLOR_TEXT, LV_PART_MAIN);
     lv_obj_set_pos(detail_name_, 16, 14);
-    lv_obj_set_width(detail_name_, kDetailW - 32);
+    // Fixed height as well as width: LV_LABEL_LONG_DOT only truncates when
+    // the label cannot grow, and with the height left to content a long name
+    // wrapped to a second line straight across the waveform panel below.
+    lv_obj_set_size(detail_name_, kDetailW - 32, kHeadlineH);
     lv_label_set_long_mode(detail_name_, LV_LABEL_LONG_DOT);
     lv_label_set_text(detail_name_, "Select a file");
 
@@ -205,14 +215,17 @@ void UISampleBrowser::onEnter(lv_obj_t* parent) {
     status_label_ = lv_label_create(info_panel_);
     lv_obj_set_style_text_font(status_label_, UI_FONT_SMALL, LV_PART_MAIN);
     lv_obj_set_style_text_color(status_label_, lv_color_hex(kColGreen), LV_PART_MAIN);
-    lv_obj_set_pos(status_label_, 16, 458);
-    lv_obj_set_width(status_label_, kDetailW - 32);
+    lv_obj_set_pos(status_label_, 16, kDetailStatusY);
+    // Two lines, then dots. The Track-replace prompt names the resident file
+    // and does not fit on one; unbounded, its second line ran under the play
+    // bar and off the bottom of the panel.
+    lv_obj_set_size(status_label_, kDetailW - 32, kDetailStatusH);
     lv_label_set_long_mode(status_label_, LV_LABEL_LONG_DOT);
     lv_label_set_text(status_label_, "Ready");
 
     play_bar_ = lv_bar_create(info_panel_);
     lv_obj_set_size(play_bar_, kDetailW - 32, 10);
-    lv_obj_set_pos(play_bar_, 16, 490);
+    lv_obj_set_pos(play_bar_, 16, kDetailStatusY + kDetailStatusH + 4);
     lv_bar_set_range(play_bar_, 0, 100);
     lv_bar_set_value(play_bar_, 0, LV_ANIM_OFF);
     lv_obj_set_style_bg_color(play_bar_, lv_color_hex(0x1F1F1F), LV_PART_MAIN);
@@ -592,7 +605,11 @@ void UISampleBrowser::file_selected_index_callback(uint32_t file_index,
     browser->updateMetadata(entry);
     browser->selected_file_index_ = file_index;
     browser->persistent_state_.selectFile(file_index, entry->name);
-    strncpy(browser->selected_file_path_, entry->name, sizeof(browser->selected_file_path_) - 1);
+    // The full path, as the load path records it. This stored the bare NAME,
+    // so selectionIsLoadedSample() compared "/dir/file.wav" with "file.wav",
+    // never matched, and the detail panel's waveform never appeared for a
+    // selection made by scrolling - which is every selection.
+    strncpy(browser->selected_file_path_, entry->path, sizeof(browser->selected_file_path_) - 1);
     browser->selected_file_path_[sizeof(browser->selected_file_path_) - 1] = '\0';
 }
 
@@ -769,23 +786,19 @@ void UISampleBrowser::serviceWaveform() {
         return;
     }
 
+    // Only once the backend's own record of the sample has arrived. Until
+    // LOAD_COMPLETE the id here is the browser's request tag, which the
+    // backend does not know: a request sent against it with the listing's
+    // geometry was dropped unanswered, and the real id then had to wait out
+    // the whole timeout before it could be asked for. MSG_SAMPLE_META always
+    // precedes LOAD_COMPLETE, so waiting for it costs nothing.
     const uint16_t sample_id = persistent_state_.last_load_sample_id;
-    uint16_t generation = 0;
-    uint32_t total_frames = 0;
     WaveX::Protocol::SampleMetadata meta;
-    if (inter_mcu_get_sample_meta(sample_id, &meta) && meta.total_frames > 0) {
-        generation = meta.generation;
-        total_frames = meta.total_frames;
-    } else {
-        // The record has not arrived yet. Fall back to the geometry the browse
-        // listing carried, so the first request is not delayed a whole round
-        // trip; if it turns out to overshoot, the backend clamps and the
-        // generation check below re-draws once the real record lands.
-        total_frames = persistent_state_.lastLoadFrames();
+    if (!inter_mcu_get_sample_meta(sample_id, &meta) || meta.total_frames == 0) {
+        return;
     }
-    if (total_frames == 0) {
-        return;  // nothing to ask about yet
-    }
+    const uint16_t generation = meta.generation;
+    const uint32_t total_frames = meta.total_frames;
 
     if (sample_id != shown_sample_id_ || generation != shown_generation_) {
         shown_sample_id_ = sample_id;
@@ -842,16 +855,11 @@ void UISampleBrowser::drawWaveform() {
     if (!waveform_ || envelope_columns_.empty() || shown_sample_id_ == 0) {
         return;
     }
-    uint32_t total_frames = 0;
     WaveX::Protocol::SampleMetadata meta;
-    if (inter_mcu_get_sample_meta(shown_sample_id_, &meta) && meta.total_frames > 0) {
-        total_frames = meta.total_frames;
-    } else {
-        total_frames = persistent_state_.lastLoadFrames();
-    }
-    if (total_frames == 0) {
+    if (!inter_mcu_get_sample_meta(shown_sample_id_, &meta) || meta.total_frames == 0) {
         return;
     }
+    const uint32_t total_frames = meta.total_frames;
 
     uint8_t channels = 1;
     const uint16_t drawn = GetEnvelopeCache().render(shown_sample_id_,
@@ -1163,7 +1171,11 @@ bool UISampleBrowser::auditionSampleByIndex(uint32_t file_index) {
     std::string filename = entry ? entry->name : "Unknown";
 
     persistent_state_.startPlayback(file_index, filename);
-    snprintf(selected_file_path_, sizeof(selected_file_path_), "%s", filename.c_str());
+    // Auditioning does not change which file is selected, and the selection's
+    // path is what the waveform panel matches the loaded sample against.
+    if (entry) {
+        snprintf(selected_file_path_, sizeof(selected_file_path_), "%s", entry->path);
+    }
 
     ESP_LOGI(TAG,
              "=== STARTED PLAYBACK: index=%d, filename='%s', persistent_path='%s'",
@@ -1230,7 +1242,10 @@ void UISampleBrowser::sample_status_callback(uint16_t sample_id,
                                              uint8_t channels,
                                              uint32_t frames_played,
                                              void* user_data) {
-    ESP_LOGI(TAG,
+    // DEBUG, not INFO: LOAD_PROGRESS arrives about a hundred times per load,
+    // and two lines each was enough to push everything else out of the log
+    // ring before it could be read.
+    ESP_LOGD(TAG,
              "=== SAMPLE STATUS CALLBACK: id=%u state=%d, rate=%lu, channels=%u, frames=%lu, "
              "user_data=%p",
              (unsigned)sample_id,
@@ -1270,7 +1285,7 @@ void UISampleBrowser::sample_status_callback(uint16_t sample_id,
         return;
     }
 
-    ESP_LOGI(TAG, "=== CALLBACK VALIDATION PASSED: Processing state=%d", state);
+    ESP_LOGD(TAG, "=== CALLBACK VALIDATION PASSED: Processing state=%d", state);
 
     // State: SampleStatusState (protocol.h).
     if (state == WaveX::Protocol::SAMPLE_STATUS_STOPPED) {
@@ -1650,7 +1665,9 @@ bool UISampleBrowser::loadSample(const wavex_file_entry_t* entry) {
         char warn[192];
         snprintf(warn, sizeof(warn), "%.1f MB sample, largest free block is %.1f MB", static_cast<float>(entry->size_bytes) / (1024.0f * 1024.0f), static_cast<float>(mem.largest_free_bytes) / (1024.0f * 1024.0f));
         ESP_LOGW(TAG, "Sample will not fit: %s", warn);
-        BusyOverlay::show("Sample will not fit", warn, 6000);
+        // A refusal, not an operation: show() would spin over it and then,
+        // when its timeout fired, rewrite it as "No response from backend".
+        BusyOverlay::notice("Sample will not fit", warn);
         // Partial load would need a length field on MSG_SAMPLE_LOAD and a
         // truncating reader on the Daisy - roadmap Phase 1.5.5. Refusing with
         // the numbers on screen beats a failed load with no explanation.

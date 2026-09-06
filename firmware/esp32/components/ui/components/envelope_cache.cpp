@@ -1,6 +1,7 @@
 #include "envelope_cache.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <cstring>
 
 namespace wavex_ui {
@@ -220,8 +221,15 @@ bool EnvelopeCache::nextRequest(uint16_t sample_id,
         c1 = c0 + max_columns_per_request;
     }
 
+    // The end is NOT clamped to the file. The backend clamps at end-of-file
+    // itself, and noteRequest() reads the tier back out of (end - start) /
+    // columns, so a clamped end would name the tier below the one asked for
+    // whenever the file is not a whole number of tier columns long:
+    // 12,312,576 frames over 752 columns at 16384 is 16373 per column, which
+    // floors to 8192, and the run then claims half the file it covers.
+    const uint64_t end64 = static_cast<uint64_t>(c1) * fpc;
     req_start = c0 * fpc;
-    req_end = std::min(c1 * fpc, total_frames);
+    req_end = static_cast<uint32_t>(std::min<uint64_t>(end64, UINT32_MAX));
     req_columns = static_cast<uint16_t>(c1 - c0);
     return req_columns > 0 && req_end > req_start;
 }
@@ -242,9 +250,10 @@ void EnvelopeCache::noteRequest(uint16_t sample_id,
     pending_.columns = req_columns;
     pending_.received = 0;
     pending_.channels = 0;
-    // The tier is the requester's, not the reply's: the backend clamps the
-    // last column at end-of-file, so (end - start) / columns can come back
-    // short and would name the wrong tier.
+    // The tier is the requester's, not the reply's: nextRequest() hands out
+    // a span that is exactly columns * tier (it does not clamp at end-of-file;
+    // the backend does), so this division is exact. The reply's own end_frame
+    // is never consulted - the backend's clamp would make it come back short.
     pending_.fpc = std::max<uint32_t>(1u, (req_end - req_start) / req_columns);
     pending_.fpc = FloorPow2(pending_.fpc);
     pending_.first_column = req_start / pending_.fpc;
