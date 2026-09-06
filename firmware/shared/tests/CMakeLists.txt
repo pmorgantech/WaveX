@@ -141,10 +141,11 @@ file(GLOB_RECURSE integration_tests "${CMAKE_CURRENT_SOURCE_DIR}/integration/*_t
 file(GLOB_RECURSE midi_tests "${CMAKE_CURRENT_SOURCE_DIR}/midi/*_test.cpp")
 file(GLOB_RECURSE wav_tests "${CMAKE_CURRENT_SOURCE_DIR}/wav/*_test.cpp")
 file(GLOB_RECURSE wxcf_tests "${CMAKE_CURRENT_SOURCE_DIR}/wxcf/*_test.cpp")
+file(GLOB_RECURSE wxi_tests "${CMAKE_CURRENT_SOURCE_DIR}/wxi/*_test.cpp")
 file(GLOB_RECURSE config_tests "${CMAKE_CURRENT_SOURCE_DIR}/config/*_test.cpp")
 file(GLOB_RECURSE audio_tests "${CMAKE_CURRENT_SOURCE_DIR}/audio/*_test.cpp")
 file(GLOB_RECURSE debug_tests "${CMAKE_CURRENT_SOURCE_DIR}/debug/*_test.cpp")
 
-foreach(test_file IN LISTS protocol_tests integration_tests midi_tests wav_tests wxcf_tests config_tests audio_tests debug_tests)
+foreach(test_file IN LISTS protocol_tests integration_tests midi_tests wav_tests wxcf_tests wxi_tests config_tests audio_tests debug_tests)
     add_wavex_shared_test(${test_file})
 endforeach()

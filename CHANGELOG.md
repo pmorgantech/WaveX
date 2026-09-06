@@ -13,6 +13,23 @@ versioning and release process.
 
 ### Added
 
+- Sampler stage 4, first step: the `.wxi` Instrument file codec over WXCF
+  (`firmware/shared/wxi/wxi.hpp`, `docs/features/track-and-patch-model.md`
+  §3.3). An Instrument can now be written to and read from a byte stream with
+  the full chunk set — `HEAD`, a typed `OSC1`/`OSC2` whose Sample body is the
+  Zone array with each Zone's **card path** rather than a runtime Pool id,
+  `FILT`, `AMP`, `ENV1..3`, `LFO1..2`, `MODM`, and a reserved `FXCH` that
+  readers skip. The file model is ahead of the engine on purpose: the fields
+  stage 5 will add (two oscillators, instrument-level filter/envelopes/LFOs)
+  already have their place, so files saved now survive that work without a
+  format bump. Readers skip unknown chunks, skip trailing fields in known
+  ones, walk repeated records by an explicit stride so a future wider Zone
+  stays aligned, reject a *short* known chunk as corruption, and replace a
+  non-finite or out-of-range float with that field's default rather than
+  letting a NaN reach the audio path. Host-tested end to end
+  (`firmware/shared/tests/wxi/`). Nothing calls it yet — the protocol ops and
+  editors are the rest of stage 4.
+
 - Panel controls stage 1 (`docs/features/panel-controls.md` §5): the panel's
   37 keys and 31 LEDs have a model. `PanelKey`/`PanelLed` name every control
   by meaning; the TCA8418 keycode and TLC5947 channel behind each are the
@@ -66,6 +83,12 @@ versioning and release process.
   a prerequisite for the pad grid and MIDI clock out.
 
 ### Changed
+
+- `wxcf.hpp`'s `Writer` gained `BeginChunk()`/`WriteData()`, a streaming
+  variant of `WriteChunk()` for a payload too large to hold in one buffer —
+  an Instrument's oscillator chunk is 32 Zone records and must not land on
+  the Daisy's stack. `WriteChunk()` is now those two calls; the wire format
+  is unchanged.
 
 - **ESP32 pin allocation** (`pin_config.h`) reconciled against the Waveshare
   ESP32-P4-WIFI6 header. Stale ESP32-S3-era entries that named pins the

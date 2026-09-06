@@ -235,18 +235,35 @@ Akai has two program types — *Drum* (a pad is one fixed-pitch sound with its o
 
 ### 3.3 Persistence: `.wxi` over WXCF
 
-`instrument-model.md` §5 specified the container; nothing implements the Instrument reader/writer yet. Chunks are laid out so that a file written before a feature exists still loads after it (readers skip unknown chunks), and so that an oscillator's chunk is typed by the oscillator, never by the Instrument:
+`instrument-model.md` §5 specified the container; the Instrument codec over it is `firmware/shared/wxi/wxi.hpp` (host-tested, `firmware/shared/tests/wxi/`). Chunks are laid out so that a file written before a feature exists still loads after it (readers skip unknown chunks), and so that an oscillator's chunk is typed by the oscillator, never by the Instrument:
 
 | chunk | payload | status |
 |---|---|---|
-| `HEAD` | name, tags, mode, transpose/fine, trim gain/pan, output, poly mode | — |
-| `OSC1`, `OSC2` | `{type, level, pan, tune, keytrack}` then a type-specific body: **Sample** = Zone array, each Zone **plus its Sample's card path** (never a runtime id) and per-zone overrides; **Wavetable** = its own versioned body (`oscillator-sources.md`) | — |
-| `FILT` | type, cutoff, resonance, keytrack, env2 amount | — |
-| `AMP` | velocity curve | — |
-| `ENV1`, `ENV2`, `ENV3` | ADSR each | — |
-| `LFO1`, `LFO2` | per-voice LFO params | — |
-| `MODM` | the 8 mod rows | — |
-| `FXCH` | *reserved*, empty — readers skip it today | — |
+| `HEAD` | name, tags, mode, transpose/fine, trim gain/pan, output, poly mode, osc mix | built |
+| `OSC1`, `OSC2` | `{type, level, pan, tune, keytrack}` then a type-specific body: **Sample** = Zone array, each Zone **plus its Sample's card path** (never a runtime id) and per-zone overrides; **Wavetable** = its own versioned body (`oscillator-sources.md`) | Sample body built; Wavetable body reserved |
+| `FILT` | type, cutoff, resonance, keytrack, env2 amount | built |
+| `AMP` | velocity curve | built |
+| `ENV1`, `ENV2`, `ENV3` | ADSR each | built |
+| `LFO1`, `LFO2` | per-voice LFO params | built |
+| `MODM` | the mod rows | built |
+| `FXCH` | *reserved*, empty — readers skip it today | reserved |
+
+The codec is deliberately **ahead of the engine**: `Instrument` still has one
+oscillator and no instrument-level filter/envelopes/LFOs (stage 5), so those
+chunks are written and read at their defaults today. Settling the layout
+before the fields exist is the point — a file saved now gains those values
+when stage 5 lands instead of needing a format bump.
+
+Three things the format does that the container alone does not. A known chunk
+whose payload is *longer* than the reader understands has its tail skipped, so
+a later writer's extra fields are harmless. Repeated records (Zones, mod rows)
+carry an explicit **stride**, so a future wider Zone is walked rather than
+misaligned. And a known chunk *shorter* than its fixed part is rejected as
+corruption rather than defaulted — widths only grow, so a short one can only
+be a bad read, and a bad read must not load as a silent half-Instrument.
+Floats are validated on read (`instrument-model.md` §5's "no floats-with-NaN
+risk"): a non-finite or out-of-range value falls back to that field's default,
+because one bad gain should not cost the user the Instrument.
 
 Load: parse, dedupe paths, load Samples through the Pool (§4), bind. Exactly the SFZ loader's pipeline with a different front half — `SfzLoader`'s phases (`Probe → AwaitVoiceStop → Allocate → Read → Commit`) become a generic **InstrumentLoader** with two parsers feeding the same `MappedInstrument`. **An `.sfz` is an import format for an Instrument, not a different kind of thing**; "Save" always writes `.wxi`. The Instrument Browser lists both.
 

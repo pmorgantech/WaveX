@@ -131,13 +131,38 @@ class Writer {
                       uint16_t chunk_version,
                       const void* payload,
                       uint32_t payload_len) {
+        Result r = BeginChunk(chunk_id, chunk_version, payload_len);
+        if (r != Result::Ok)
+            return r;
+        return WriteData(payload, payload_len);
+    }
+
+    // Streaming variant, for a payload too large to hold in one buffer: an
+    // Instrument's oscillator chunk is 32 Zone records of ~150 B each, which
+    // must not land on the Daisy's stack (wxi.hpp assembles it a record at a
+    // time). BeginChunk() writes the framing for a payload the caller then
+    // supplies across any number of WriteData() calls.
+    //
+    // The caller is responsible for the balance: this class deliberately does
+    // not count the bytes written, because a forward-only writer cannot seek
+    // back to correct a payload_len it later discovers was wrong, so a count
+    // could only report a corruption it had already committed to the card. A
+    // caller that writes a number of bytes other than `payload_len` produces
+    // a file whose next chunk header is read from the wrong offset.
+    Result BeginChunk(uint16_t chunk_id, uint16_t chunk_version, uint32_t payload_len) {
         uint8_t buf[kChunkHeaderSize];
         detail::WriteU16LE(buf + 0, chunk_id);
         detail::WriteU16LE(buf + 2, chunk_version);
         detail::WriteU32LE(buf + 4, payload_len);
         if (!io_.write(io_.user_data, buf, sizeof(buf)))
             return Result::IoError;
-        if (payload_len > 0 && !io_.write(io_.user_data, payload, payload_len))
+        return Result::Ok;
+    }
+
+    Result WriteData(const void* src, uint32_t len) {
+        if (len == 0)
+            return Result::Ok;
+        if (!io_.write(io_.user_data, src, len))
             return Result::IoError;
         return Result::Ok;
     }
