@@ -2,7 +2,15 @@
   "permissions": {
     "allow": [
       "Bash(grep -E '\\\\.\\(o|a|elf|bin\\)$')",
-      "Bash(git check-ignore *)"
+      "Bash(git check-ignore *)",
+      "Bash(python3 -m pytest tests/hil/test_ui_screenshots.py -v -m esp32 -s)",
+      "Bash(tee /tmp/screenshot_test.log)",
+      "Bash(python3 -m pytest tests/hil/test_ui_screenshots.py::test_capture_all_ui_pages -v -s)",
+      "Bash(tee /tmp/screenshot_test2.log)",
+      "Bash(python3 *2)",
+      "Bash(python3 scripts/esp32_screenshot.py --out docs/ui_screenshots/Play.png --timeout 30.0)",
+      "Bash(python3 *)",
+      "Bash(xargs -I {} basename {})"
     ]
   }
 }

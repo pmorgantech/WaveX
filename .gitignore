@@ -113,3 +113,5 @@ node_modules/
 # ui_preview host build + renders
 tools/ui_preview/build/
 tools/ui_preview/out/
+
+docs/ui_screenshots/
