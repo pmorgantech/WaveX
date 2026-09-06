@@ -11,6 +11,24 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Fixed
+
+- The Sample Pool now remembers each sample's **card path**, which saving an
+  Instrument depends on. A Pool id names a slot in this boot's registry and
+  means nothing in a file, and the only path the Pool kept was in the wire's
+  display field (`SampleMetadata::name`, `FILE_NAME_MAX`) — too short for a
+  real card path, so `/99 - Vintage Sound Library/Minimoog/Samples/…` arrived
+  truncated and unopenable. The path is now stored per record, deliberately
+  off the wire so the paged metadata frame does not grow. A path too long even
+  for that bound (an SFZ region can resolve one) stores nothing rather than a
+  truncation: a truncated path is not a shorter path, it is a wrong one, so a
+  save that needs it fails loudly instead of writing a zone that silently
+  never loads.
+- The Pool's SDRAM partition grows 192 KB → 256 KB to hold the paths, taken
+  from the render scratch, which shares a fixed budget with it and has no
+  consumer yet. The sample arena — the one number that would have cost
+  user-visible sample memory — is unchanged.
+
 ### Added
 
 - The Instrument loader accepts `.wxi` as well as `.sfz`. The parse is the

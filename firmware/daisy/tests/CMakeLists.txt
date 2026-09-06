@@ -207,6 +207,14 @@ function(add_wavex_test test_source)
         )
     endif()
 
+    # sample_pool.hpp is header-only and HAL-free (the registry, the record
+    # and its fill helper; the SDRAM arena wiring stays in the engine).
+    if(test_name STREQUAL "sample_pool_test")
+        target_sources(${test_name} PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/../src/audio/sample_pool.hpp
+        )
+    endif()
+
     # instrument_map.hpp is header-only and HAL-free: it maps the shared .wxi
     # document onto the engine's Instrument and back, no FatFs in sight.
     if(test_name STREQUAL "instrument_map_test")

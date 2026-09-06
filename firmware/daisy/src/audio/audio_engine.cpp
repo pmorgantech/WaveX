@@ -741,6 +741,23 @@ static size_t loaded_sample_count() {
     return s_pool ? s_pool->Count() : 0;
 }
 
+// Names a resident sample by its card path, for saving an Instrument.
+// A Pool id means nothing in a file (sample_pool.hpp), so this is the one
+// way a .wxi can refer to a sample at all - and false here fails the save
+// rather than writing a zone nothing can load.
+bool SamplePathForId(uint16_t sample_id, char* out, size_t out_len) {
+    if (!out || out_len == 0)
+        return false;
+    out[0] = '\0';
+    const LoadedSampleInfo* info = find_loaded_sample(sample_id);
+    if (!info || info->path[0] == '\0')
+        return false;
+    if (std::strlen(info->path) >= out_len)
+        return false;  // truncating a path silently is how it becomes unopenable
+    WaveX::Protocol::detail::CopyWireString(out, out_len, info->path);
+    return true;
+}
+
 // The SampleResolver for instruments built on-device (SfzLoader::BindSample)
 // - the bridge instrument-model.md §12.1 asks for, over this registry's ids.
 // Beyond the audio itself it hands over the sample's own resolved markers
