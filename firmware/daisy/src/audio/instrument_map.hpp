@@ -42,6 +42,30 @@ namespace InstrumentMap {
 // index here keeps that assumption in one place instead of a bare 0.
 static constexpr uint8_t kSampleOsc = 0;
 
+/**
+ * Which parser a path gets.
+ *
+ * An `.sfz` is an IMPORT FORMAT for an Instrument, not a different kind of
+ * thing (track-and-patch-model.md §3.3): both parsers produce the same
+ * MappedInstrument and hand it to the same loader back half. Anything that is
+ * not `.sfz` is treated as `.wxi`, so a file the browser offered is attempted
+ * rather than refused over a spelling - the reader rejects it by content
+ * (magic, file type, version) if it really is something else, which is a
+ * better answer than "unknown extension".
+ *
+ * Case-insensitive: cards written on other machines carry `.SFZ`.
+ */
+inline bool PathIsSfz(const char* path) {
+    if (!path)
+        return false;
+    const size_t n = std::strlen(path);
+    if (n < 4)
+        return false;
+    const char* ext = path + n - 4;
+    return ext[0] == '.' && (ext[1] == 's' || ext[1] == 'S') && (ext[2] == 'f' || ext[2] == 'F') &&
+           (ext[3] == 'z' || ext[3] == 'Z');
+}
+
 /// Names a zone's Sample by card path for a Save. Returning false fails the
 /// save: a zone whose Sample cannot be named would be silently unloadable,
 /// which is worse than not saving at all.

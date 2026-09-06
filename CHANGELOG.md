@@ -13,6 +13,15 @@ versioning and release process.
 
 ### Added
 
+- The Instrument loader accepts `.wxi` as well as `.sfz`. The parse is the
+  only difference: both front halves produce the same `MappedInstrument` and
+  hand it to the same probe/allocate/read/commit back half, so an `.sfz` is an
+  import format for an Instrument rather than a different kind of thing. The
+  format is chosen by extension, and anything that is not `.sfz` is offered to
+  the `.wxi` reader, which rejects it by content — magic, file type, version —
+  rather than refusing over a spelling. A document is read in one pass rather
+  than a phase per line, which is main-loop work comparable to the existing
+  streaming pump and leaves the audio callback untouched.
 - The mapper between the `.wxi` document and the engine's Instrument
   (`instrument_map.hpp`), the seam a Load and a Save meet at. The two models
   differ on purpose: a stored zone names its sample by **card path** while an

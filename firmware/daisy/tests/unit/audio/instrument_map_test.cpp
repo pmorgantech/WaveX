@@ -285,3 +285,24 @@ TEST(InstrumentMapTest, LoadFullyResetsItsOutput) {
     EXPECT_FALSE(out.instrument.zones[7].in_use);
     EXPECT_STREQ(out.sample_paths[7], "");
 }
+
+// --- which parser a path gets --------------------------------------------
+
+TEST(InstrumentMapTest, SfzIsRecognisedCaseInsensitively) {
+    EXPECT_TRUE(IM::PathIsSfz("/sfz/piano.sfz"));
+    EXPECT_TRUE(IM::PathIsSfz("/sfz/PIANO.SFZ"));
+    EXPECT_TRUE(IM::PathIsSfz("/sfz/Piano.Sfz"));
+    EXPECT_TRUE(IM::PathIsSfz(".sfz"));
+}
+
+// Everything else is offered to the .wxi reader, which rejects it by content
+// if it really is something else - a better answer than refusing on spelling.
+TEST(InstrumentMapTest, EverythingElseGoesToTheWxiReader) {
+    EXPECT_FALSE(IM::PathIsSfz("/instruments/rhodes.wxi"));
+    EXPECT_FALSE(IM::PathIsSfz("/instruments/RHODES.WXI"));
+    EXPECT_FALSE(IM::PathIsSfz("/samples/kick.wav"));
+    EXPECT_FALSE(IM::PathIsSfz("/no-extension"));
+    EXPECT_FALSE(IM::PathIsSfz("sfz"));  // no dot: a name, not an extension
+    EXPECT_FALSE(IM::PathIsSfz(""));
+    EXPECT_FALSE(IM::PathIsSfz(nullptr));
+}

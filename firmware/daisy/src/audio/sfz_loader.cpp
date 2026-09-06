@@ -9,6 +9,7 @@
 #include "memory.h"
 
 #include "bss_static.hpp"
+#include "instrument_map.hpp"
 #include "sample_load_info.hpp"
 #include "sfz_import.hpp"
 #include "storage/fatfs_wav_reader.hpp"
@@ -45,6 +46,11 @@ enum class Phase : uint8_t {
     OpenSfz,
     ParseLine,
     FinishParse,
+    // The .wxi front half. One phase, not three: an Instrument document is a
+    // few KB read sequentially, so it is one pass rather than the SFZ path's
+    // line-at-a-time walk. Main-loop context, comparable to PumpWavIO's
+    // existing blocking read - the audio callback is untouched either way.
+    ReadWxi,
     ProbeSample,
     AwaitVoiceStop,
     AllocateSample,
@@ -65,6 +71,21 @@ static Tracks& s_bank = s_bank_storage.Get();
 // rather than crashes.
 static SampleResolver s_loaded_resolver;
 static LoadedSample s_loaded_samples[kMaxZones];
+
+// ~10 KB, dominated by two oscillators' zone paths, so it is resident like
+// the bank and the mapped instrument rather than a stack local (wxi.hpp says
+// as much where the struct is declared).
+static WaveX::BssStatic<Wxi::InstrumentFile> s_doc_storage;
+
+// FatFs behind the WXCF container's read callback. Write is null: the loader
+// only reads, and a null write is a clearer failure than a stub that lies.
+static bool WxiReadCb(void* user, void* dest, size_t len) {
+    auto* file = static_cast<FIL*>(user);
+    UINT read = 0;
+    if (f_read(file, dest, static_cast<UINT>(len), &read) != FR_OK)
+        return false;
+    return read == len;  // a short read is EOF, which the container expects
+}
 
 static InstOpMessage s_request;
 static InstStatusMessage s_status;
@@ -426,6 +447,7 @@ bool Begin(const InstOpMessage& request) {
     s_status.op = request.op;
     s_parser.Reset();
     s_mapped_storage.Reconstruct();
+    s_doc_storage.Reconstruct();
     WaveX::ReconstructInPlace(s_plan);
     for (auto& probe: s_probes) {
         probe = Sfz::SampleProbe{};
@@ -440,6 +462,8 @@ bool Begin(const InstOpMessage& request) {
     s_loaded_bytes = 0;
     s_current_written = 0;
     s_last_percent = 0xFF;
+    // Both front halves end at ProbeSample with the same MappedInstrument;
+    // only the parse differs.
     s_phase = Phase::OpenSfz;
     SendStatus(INST_STATUS_PROBING);
     return true;
@@ -486,7 +510,34 @@ void Pump(SamplePool& pool, SampleMemMgr& memory, uint8_t* io_buffer, uint32_t i
                 return;
             }
             s_file_open = true;
-            s_phase = Phase::ParseLine;
+            s_phase = InstrumentMap::PathIsSfz(s_request.path) ? Phase::ParseLine : Phase::ReadWxi;
+        } break;
+
+        case Phase::ReadWxi: {
+            Wxi::InstrumentFile& doc = s_doc_storage.Get();
+            const WaveX::Wxcf::IoContext io{&s_file, &WxiReadCb, nullptr};
+            const Wxi::Result result = Wxi::Read(io, doc);
+            CloseFile();
+            if (result != Wxi::Result::Ok) {
+                // A file that is not an Instrument at all, or is from a
+                // future major, is a bad file to this build; too many zones
+                // gets its own code so the UI can say which limit was hit.
+                Fail(&pool,
+                     &memory,
+                     result == Wxi::Result::TooManyZones ? INST_ERROR_TOO_MANY_REGIONS
+                                                         : INST_ERROR_BAD_FILE);
+                return;
+            }
+            InstrumentMap::FromFile(doc, s_mapped);
+            Sfz::Status status;
+            if (s_mapped.zone_count == 0 || !Sfz::BuildSamplePlan(s_mapped, s_plan, status)) {
+                Fail(&pool, &memory, INST_ERROR_BAD_FILE);
+                return;
+            }
+            s_status.zone_count = s_mapped.zone_count;
+            s_status.sample_count = s_plan.count;
+            s_index = 0;
+            s_phase = Phase::ProbeSample;
         } break;
 
         case Phase::ParseLine: {
