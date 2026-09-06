@@ -26,6 +26,7 @@ struct ValueTile {
     lv_obj_t* note = nullptr;  // right-hand hint, or the NOT WIRED chip
     lv_obj_t* value = nullptr;
     lv_obj_t* unit = nullptr;
+    lv_obj_t* desc = nullptr;  // optional line under the value
     lv_obj_t* bar_track = nullptr;
     lv_obj_t* bar_fill = nullptr;
     int bar_width = 0;  // cached so setFill does not have to measure
@@ -46,8 +47,16 @@ void valueTileSetFocus(ValueTile& tile, bool focused);
 /// and truncating it loses the only part that identifies it.
 void valueTileSetValue(ValueTile& tile, const char* text, bool compact = false);
 
+/// Set the line under the value: what the setting means and its range. Cheap
+/// to omit - a tile whose label already says everything does not need one.
+void valueTileSetDesc(ValueTile& tile, const char* text);
+
 /// Set the fill bar, 0..1. Clamped.
 void valueTileSetFill(ValueTile& tile, float fraction);
+
+/// Hide the fill bar, for a tile whose value has no range to sit in. An empty
+/// track reads as "zero", which is a different claim from "not a quantity".
+void valueTileHideFill(ValueTile& tile);
 
 /**
  * @brief Mark a tile as specified but not yet wired to anything.
@@ -57,6 +66,6 @@ void valueTileSetFill(ValueTile& tile, float fraction);
  * carry yet is visibly inert rather than looking broken or, worse, looking
  * like it works - the mistake this codebase has made before.
  */
-void valueTileSetUnwired(ValueTile& tile, const char* why);
+void valueTileSetUnwired(ValueTile& tile, const char* why, const char* chip = "NOT WIRED");
 
 }  // namespace wavex_ui

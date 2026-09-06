@@ -173,6 +173,7 @@ std::shared_ptr<UIPage> createDisplaySettingsPage() {
     // encoder, and the sweep is on the bench list in roadmap
     // § Outstanding hardware verification.
     page->addSetting("Brightness", 100, 10, 100, applyBrightness, formatPercent);
+    page->setDesc("Brightness", "Backlight PWM / 10-100");
 
     // Contrast is gone rather than stubbed: this is a MIPI-DSI panel driven by
     // an HX8394 with no contrast control to offer, so the row could never do

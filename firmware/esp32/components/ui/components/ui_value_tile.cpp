@@ -81,6 +81,24 @@ ValueTile valueTileCreate(
     return t;
 }
 
+void valueTileSetDesc(ValueTile& tile, const char* text) {
+    if (!tile.card) {
+        return;
+    }
+    if (!tile.desc) {
+        tile.desc = lv_label_create(tile.card);
+        lv_obj_set_style_text_font(tile.desc, UI_FONT_SMALL, 0);
+        lv_obj_set_style_text_color(tile.desc, UI_COLOR_DIM, 0);
+        lv_obj_set_pos(tile.desc, kPadX, kValueY + 54);
+        // Wrapped rather than clipped: a range like "off - 30 min" is the
+        // half that gets cut, and it is the half that answers "what can I set
+        // this to".
+        lv_obj_set_width(tile.desc, tile.bar_width);  // see valueTileSetValue
+        lv_label_set_long_mode(tile.desc, LV_LABEL_LONG_WRAP);
+    }
+    lv_label_set_text(tile.desc, text);
+}
+
 void valueTileSetFocus(ValueTile& tile, bool focused) {
     if (!tile.card) {
         return;
@@ -98,6 +116,16 @@ void valueTileSetValue(ValueTile& tile, const char* text, bool compact) {
         return;
     }
     lv_obj_set_style_text_font(tile.value, compact ? UI_FONT_MONO_VALUE : UI_FONT_MONO_HERO, 0);
+    if (compact) {
+        // A compact value can be a sentence rather than a number, so it has to
+        // wrap inside the card instead of running off its right edge.
+        // tile.bar_width, not a live measurement of the card: at this point
+        // the card may not have been laid out, so lv_obj_get_width() returns
+        // 0 and the label ends up a negative width - which renders as nothing
+        // at all rather than as something visibly wrong.
+        lv_obj_set_width(tile.value, tile.bar_width);
+        lv_label_set_long_mode(tile.value, LV_LABEL_LONG_WRAP);
+    }
     lv_label_set_text(tile.value, text);
     if (tile.unit) {
         lv_obj_update_layout(tile.value);
@@ -113,7 +141,13 @@ void valueTileSetFill(ValueTile& tile, float fraction) {
                      static_cast<int32_t>(clamp01(fraction) * static_cast<float>(tile.bar_width)));
 }
 
-void valueTileSetUnwired(ValueTile& tile, const char* why) {
+void valueTileHideFill(ValueTile& tile) {
+    if (tile.bar_track) {
+        lv_obj_add_flag(tile.bar_track, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+void valueTileSetUnwired(ValueTile& tile, const char* why, const char* chip) {
     if (!tile.card) {
         return;
     }
@@ -139,7 +173,7 @@ void valueTileSetUnwired(ValueTile& tile, const char* why) {
         lv_obj_set_style_border_color(tile.note, UI_COLOR_LINE, 0);
         lv_obj_set_style_radius(tile.note, UI_RADIUS_BADGE, 0);
         lv_obj_set_style_pad_all(tile.note, 4, 0);
-        lv_label_set_text(tile.note, "NOT WIRED");
+        lv_label_set_text(tile.note, chip);
         lv_obj_align(tile.note, LV_ALIGN_TOP_RIGHT, -kPadX, kPadY - 4);
     }
 
