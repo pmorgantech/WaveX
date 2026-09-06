@@ -27,11 +27,21 @@ CONFIG_LWIP_MAX_SOCKETS=4
 CONFIG_LWIP_TCPIP_RECVMBOX_SIZE=16
 CONFIG_MBEDTLS_TLS_DISABLED=y
 CONFIG_VFS_MAX_COUNT=4
+# Montserrat type ladder. These five sizes are the whole of it - the roles
+# are named UI_FONT_MICRO/SMALL/BODY/TITLE/HEADING in
+# components/ui/styles/ui_theme.h, and naming any other size is a link
+# error on purpose. 24, 28, 32 and 36 were dropped when the ladder was set
+# from the refreshed design; numeric values that used them now use the
+# vendored JetBrains Mono tables (components/ui/fonts/) instead, which are
+# tabular and so do not reflow as digits change.
+#
+# 26 and 28 previously existed only in the generated sdkconfig and never
+# here, so a build from a clean tree failed to link UI_FONT_TITLE.
+CONFIG_LV_FONT_MONTSERRAT_14=y
 CONFIG_LV_FONT_MONTSERRAT_18=y
 CONFIG_LV_FONT_MONTSERRAT_22=y
-CONFIG_LV_FONT_MONTSERRAT_24=y
-CONFIG_LV_FONT_MONTSERRAT_32=y
-CONFIG_LV_FONT_MONTSERRAT_36=y
+CONFIG_LV_FONT_MONTSERRAT_26=y
+CONFIG_LV_FONT_MONTSERRAT_30=y
 CONFIG_BSP_LCD_DPI_BUFFER_NUMS=3
 CONFIG_BSP_LCD_TYPE_720_1280_5_INCH_A=y
 CONFIG_IDF_EXPERIMENTAL_FEATURES=y

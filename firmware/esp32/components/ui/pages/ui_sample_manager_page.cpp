@@ -9,6 +9,7 @@
 #include "ui/current_sample.h"
 #include "ui/current_track.h"
 #include "ui/ui_navigator.h"
+#include "ui/ui_palette.h"
 
 #include <cstdio>
 #include <cstring>
@@ -18,11 +19,15 @@ namespace wavex_ui {
 namespace {
 static const char* TAG = "UI_SAMPLE_MGR";
 
-constexpr uint32_t kColPanel = 0x0E0E0E;
-constexpr uint32_t kColBorder = 0x222222;
-constexpr uint32_t kColDim = 0x8FA0AA;
-constexpr uint32_t kColGreen = 0x4CAF50;
-constexpr uint32_t kColWarn = 0xFF9800;
+// Local names for the shared palette (ui/ui_palette.h). These were
+// hand-copied literals that had already drifted from it and from each
+// other - three different "border" greys existed across five files - so a
+// theme switch reached only the surfaces that happened to be in sync.
+constexpr uint32_t kColPanel = palette::kColCard;
+constexpr uint32_t kColBorder = palette::kColBorder;
+constexpr uint32_t kColDim = palette::kColDim;
+constexpr uint32_t kColGreen = palette::kColGreen;
+constexpr uint32_t kColWarn = palette::kColOrange;
 
 // The voice path takes 16-bit mono/stereo only (find_playable_sample on the
 // backend). The browser will load 8 and 24-bit files quite happily, so a

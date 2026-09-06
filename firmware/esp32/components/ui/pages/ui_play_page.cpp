@@ -50,6 +50,9 @@ constexpr int kBlackH = (kKeysH * 3) / 5;
 
 // Piano key fills. Not in the shared palette: they are specific to this
 // instrument, and a piano that is not black-and-white stops reading as one.
+// Not themed on purpose: a piano keyboard reads as a piano keyboard because
+// its keys are white and black. Tinting these per theme would cost the
+// instant recognition the surface depends on.
 constexpr uint32_t kColWhiteKey = 0xE8E8E8;
 constexpr uint32_t kColBlackKey = 0x101010;
 
@@ -333,8 +336,7 @@ void UIPlayPage::buildPads(lv_obj_t* tab) {
             lv_obj_set_size(btn, cell_w, cell_h);
             lv_obj_set_pos(btn, gap + c * (cell_w + gap), kKeysY + gap + r * (cell_h + gap));
             lv_obj_align(keys_[key_count_ - 1].label, LV_ALIGN_CENTER, 0, 0);
-            lv_obj_set_style_text_font(
-                keys_[key_count_ - 1].label, &lv_font_montserrat_26, LV_PART_MAIN);
+            lv_obj_set_style_text_font(keys_[key_count_ - 1].label, UI_FONT_TITLE, LV_PART_MAIN);
         }
     }
 }

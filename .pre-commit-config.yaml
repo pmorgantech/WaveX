@@ -12,7 +12,7 @@ repos:
     hooks:
       - id: clang-format
         files: \.(c|cpp|h|hpp)$
-        exclude: ^(firmware/.*/libs/|firmware/.*/managed_components/|firmware/.*/_deps/)
+        exclude: ^(firmware/.*/libs/|firmware/.*/managed_components/|firmware/.*/_deps/|firmware/esp32/components/ui/fonts/)
 
   # Python formatting and linting
   - repo: https://github.com/psf/black
@@ -50,10 +50,10 @@ repos:
     hooks:
       - id: trailing-whitespace
         files: \.(c|cpp|h|hpp|py|md|txt|yaml|yml|cmake|sh|make)$
-        exclude: ^(firmware/.*/libs/|firmware/.*/managed_components/|firmware/.*/_deps/)
+        exclude: ^(firmware/.*/libs/|firmware/.*/managed_components/|firmware/.*/_deps/|firmware/esp32/components/ui/fonts/)
       - id: end-of-file-fixer
         files: \.(c|cpp|h|hpp|py|md|txt|yaml|yml|cmake|sh|make)$
-        exclude: ^(firmware/.*/libs/|firmware/.*/managed_components/|firmware/.*/_deps/)
+        exclude: ^(firmware/.*/libs/|firmware/.*/managed_components/|firmware/.*/_deps/|firmware/esp32/components/ui/fonts/)
       - id: check-yaml
         files: \.(yaml|yml)$
       - id: check-merge-conflict

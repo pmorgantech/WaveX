@@ -2,6 +2,7 @@
 #include "ui/ui_status_strip.h"
 
 #include "../styles/ui_theme.h"
+#include "ui/ui_palette.h"
 
 #include <cstdio>
 
@@ -30,11 +31,15 @@ constexpr int kMeterX0 = kCpuBarX - 10 - 70 - 16 - (kMeters * kMeterW + (kMeters
 
 // Colours. The strip is chrome, so it uses its own flat palette rather than
 // the page theme - it must read the same on every screen behind it.
-constexpr uint32_t kColMeterBg = 0x1A1A1A;
-constexpr uint32_t kColGreen = 0x4CAF50;
-constexpr uint32_t kColOrange = 0xFF9800;
-constexpr uint32_t kColStub = 0x2A2A2A;
-constexpr uint32_t kColDim = 0x8FA0AA;
+// Local names for the shared palette (ui/ui_palette.h). These were
+// hand-copied literals that had already drifted from it and from each
+// other - three different "border" greys existed across five files - so a
+// theme switch reached only the surfaces that happened to be in sync.
+constexpr uint32_t kColMeterBg = palette::kColCardAlt;
+constexpr uint32_t kColGreen = palette::kColGreen;
+constexpr uint32_t kColOrange = palette::kColOrange;
+constexpr uint32_t kColStub = palette::kColBorder;
+constexpr uint32_t kColDim = palette::kColDim;
 
 // A meter push older than this is treated as silence. Without it the last
 // levels before a link drop stay lit forever, which reads as "still playing".

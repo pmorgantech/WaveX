@@ -6,6 +6,9 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/portmacro.h>
 
+#include "ui/ui_palette.h"
+#include "ui_theme.h"
+
 #include <atomic>
 #include <cstdio>
 #include <cstring>
@@ -14,12 +17,16 @@ namespace wavex_ui {
 namespace BusyOverlay {
 namespace {
 
-constexpr uint32_t kColScrim = 0x000000;
-constexpr uint32_t kColPanel = 0x141414;
-constexpr uint32_t kColBorder = 0x2A2A2A;
-constexpr uint32_t kColGreen = 0x4CAF50;
-constexpr uint32_t kColRed = 0xF44336;
-constexpr uint32_t kColDim = 0x8FA0AA;
+// Local names for the shared palette (ui/ui_palette.h). These were
+// hand-copied literals that had already drifted from it and from each
+// other - three different "border" greys existed across five files - so a
+// theme switch reached only the surfaces that happened to be in sync.
+constexpr uint32_t kColScrim = palette::kColBg;
+constexpr uint32_t kColPanel = palette::kColCard;
+constexpr uint32_t kColBorder = palette::kColBorder;
+constexpr uint32_t kColGreen = palette::kColGreen;
+constexpr uint32_t kColRed = palette::kColErr;
+constexpr uint32_t kColDim = palette::kColDim;
 
 lv_obj_t* s_scrim = nullptr;
 lv_obj_t* s_panel = nullptr;
@@ -107,7 +114,7 @@ void build() {
     lv_obj_set_style_arc_width(s_spinner, 5, LV_PART_INDICATOR);
 
     s_caption = lv_label_create(s_panel);
-    lv_obj_set_style_text_font(s_caption, &lv_font_montserrat_32, 0);
+    lv_obj_set_style_text_font(s_caption, UI_FONT_HEADING, 0);
     lv_obj_set_style_text_color(s_caption, lv_color_white(), 0);
     lv_obj_set_pos(s_caption, 112, 40);
 

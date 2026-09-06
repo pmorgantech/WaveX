@@ -24,7 +24,11 @@ static const char* TAG = "UI_INSTRUMENT";
 // Not in the shared palette: "this control cannot be driven yet" is a state
 // only this page and the softkey bar have, and it is not part of the card /
 // tab design vocabulary the palette describes.
-constexpr uint32_t kColInert = 0x5A5A5A;
+// Local names for the shared palette (ui/ui_palette.h). These were
+// hand-copied literals that had already drifted from it and from each
+// other - three different "border" greys existed across five files - so a
+// theme switch reached only the surfaces that happened to be in sync.
+constexpr uint32_t kColInert = palette::kColDimmer;
 
 // 64 detents end to end: fine enough to sound continuous, coarse enough to
 // cross the range without grinding. Matches the Play page's feel.

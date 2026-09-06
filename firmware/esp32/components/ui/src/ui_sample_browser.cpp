@@ -15,6 +15,7 @@
 #include "ui/current_sample.h"
 #include "ui/current_track.h"
 #include "ui/ui_busy_overlay.h"
+#include "ui/ui_palette.h"
 #include "ui_task.h"
 
 #include "wav/resident_sample_policy.hpp"
@@ -36,10 +37,14 @@ constexpr int kDetailY = 12;
 constexpr int kDetailW = 474;
 constexpr int kDetailH = 521;
 
-constexpr uint32_t kColPanel = 0x0E0E0E;
-constexpr uint32_t kColBorder = 0x222222;
-constexpr uint32_t kColDim = 0x8FA0AA;
-constexpr uint32_t kColGreen = 0x4CAF50;
+// Local names for the shared palette (ui/ui_palette.h). These were
+// hand-copied literals that had already drifted from it and from each
+// other - three different "border" greys existed across five files - so a
+// theme switch reached only the surfaces that happened to be in sync.
+constexpr uint32_t kColPanel = palette::kColCard;
+constexpr uint32_t kColBorder = palette::kColBorder;
+constexpr uint32_t kColDim = palette::kColDim;
+constexpr uint32_t kColGreen = palette::kColGreen;
 
 // Waveform preview, in the gap the design leaves between the filename headline
 // and the metadata rows.
@@ -141,7 +146,7 @@ void UISampleBrowser::onEnter(lv_obj_t* parent) {
     lv_obj_remove_flag(info_panel_, LV_OBJ_FLAG_SCROLLABLE);
 
     detail_name_ = lv_label_create(info_panel_);
-    lv_obj_set_style_text_font(detail_name_, &lv_font_montserrat_26, LV_PART_MAIN);
+    lv_obj_set_style_text_font(detail_name_, UI_FONT_TITLE, LV_PART_MAIN);
     lv_obj_set_style_text_color(detail_name_, UI_COLOR_TEXT, LV_PART_MAIN);
     lv_obj_set_pos(detail_name_, 16, 14);
     lv_obj_set_width(detail_name_, kDetailW - 32);

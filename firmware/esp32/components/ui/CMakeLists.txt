@@ -36,11 +36,16 @@ set(COMPONENT_SRCS
     "pages/ui_cv_cal_page.cpp"
     "pages/ui_sample_edit_page.cpp"
     "styles/ui_theme.cpp"
+    "fonts/wavex_mono_14.c"
+    "fonts/wavex_mono_18.c"
+    "fonts/wavex_mono_26.c"
+    "fonts/wavex_mono_38.c"
 )
 
 # Add UI include directories
 set(COMPONENT_INCLUDE_DIRS
     "styles"
+    "fonts"
     "components"
     "pages"
     "."
@@ -68,6 +73,24 @@ idf_component_register(
         shared
         main
 )
+
+# Compile-time theme selection. The palette lives in styles/themes/; this
+# picks which one styles/ui_theme.h includes. Themes only re-map colours -
+# layout, type and geometry are identical across all four - so switching one
+# cannot change whether a page fits.
+set(WAVEX_UI_THEME "neutral" CACHE STRING "WaveX UI palette")
+set_property(CACHE WAVEX_UI_THEME PROPERTY STRINGS neutral amber teal contrast)
+string(TOUPPER "${WAVEX_UI_THEME}" WAVEX_UI_THEME_UPPER)
+if(NOT WAVEX_UI_THEME MATCHES "^(neutral|amber|teal|contrast)$")
+    message(FATAL_ERROR
+            "WAVEX_UI_THEME must be neutral, amber, teal or contrast "
+            "(got '${WAVEX_UI_THEME}')")
+endif()
+# Public, not private: ui_theme.h is included by main/ and by other components,
+# and a translation unit that picked a different palette would lay out against
+# a different set of colours than the one the UI component drew with.
+target_compile_definitions(${COMPONENT_LIB}
+                           PUBLIC WAVEX_UI_THEME_${WAVEX_UI_THEME_UPPER})
 
 # Pin the C++ standard rather than inheriting whatever ESP-IDF defaults to.
 # IDF 5.5 compiles this as gnu++2b; the guide (docs/esp32p4_coding_guide.md §8)

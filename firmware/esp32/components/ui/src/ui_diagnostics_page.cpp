@@ -160,7 +160,7 @@ void initCardStyles() {
     lv_style_set_text_color(&s_title, lv_color_hex(kColDim));
 
     lv_style_init(&s_value);
-    lv_style_set_text_font(&s_value, &lv_font_montserrat_36);
+    lv_style_set_text_font(&s_value, UI_FONT_MONO_HERO);
     lv_style_set_text_color(&s_value, lv_color_white());
 
     lv_style_init(&s_unit);

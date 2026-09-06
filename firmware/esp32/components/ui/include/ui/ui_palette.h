@@ -1,33 +1,39 @@
-// WaveX design palette (Wireframes v2)
+// WaveX design palette, raw-integer spelling.
 #pragma once
+
+#include "ui_theme.h"
 
 #include <cstdint>
 
-// Raw 0xRRGGBB values for use with lv_color_hex().
+// The same palette as `styles/ui_theme.h`, in the form the card/tab widgets
+// want: raw 0xRRGGBB for `lv_color_hex()` rather than `lv_color_t`.
 //
-// ui_theme.h carries the older UI_COLOR_* macros (lv_color_t via
-// lv_color_make) used by the menu, softkey bar and settings pages. This header
-// is the same design's palette in the form the card/tab widgets want, and
-// exists because those values were previously private to
-// ui_diagnostics_page.cpp - so anything else that wanted to match the look had
-// to copy them, which is how two "identical" surfaces drift apart.
-//
-// Prefer these for new page chrome. The two sets are not in conflict; they are
-// the same design expressed for two different LVGL call styles, and unifying
-// them is a bigger, riskier edit than any page currently needs.
+// These used to be an independently maintained copy of the design's colours,
+// which is how two "identical" surfaces drift apart. They are now derived from
+// the `WX_RGB_*` theme tokens, so there is one source of truth and a theme
+// switch moves both spellings together. Nothing new should be added here -
+// add the role to `ui_theme.h` and, if the raw form is genuinely needed,
+// mirror it below.
 namespace wavex_ui {
 namespace palette {
 
-constexpr uint32_t kColBg = 0x000000;      // page background
-constexpr uint32_t kColCard = 0x141414;    // card fill
-constexpr uint32_t kColBorder = 0x333333;  // card / row border
-constexpr uint32_t kColDim = 0x8FA0AA;     // secondary text
-constexpr uint32_t kColDimmer = 0x6E7A82;  // inactive tab label, tertiary text
-constexpr uint32_t kColTrack = 0x262B2E;   // gauge track
-constexpr uint32_t kColTabOn = 0x10293B;   // selected tab fill
-constexpr uint32_t kColGreen = 0x4CAF50;   // ok / selected
-constexpr uint32_t kColOrange = 0xFF5722;  // warning / peak
-constexpr uint32_t kColBlue = 0x2196F3;    // accent, selected-tab underline
+constexpr uint32_t kColBg = WX_RGB_BG;          // page background
+constexpr uint32_t kColCard = WX_RGB_CARD;      // card fill
+constexpr uint32_t kColBorder = WX_RGB_LINE;    // card / row border
+constexpr uint32_t kColDim = WX_RGB_DIM;        // secondary text
+constexpr uint32_t kColDimmer = WX_RGB_DIMMER;  // inactive tab label, tertiary text
+constexpr uint32_t kColTrack = WX_RGB_CARD2;    // gauge track
+constexpr uint32_t kColTabOn = WX_RGB_CARD2;    // selected tab fill
+constexpr uint32_t kColGreen = WX_RGB_OK;       // ok / selected
+constexpr uint32_t kColOrange = WX_RGB_WARN;    // warning / peak
+constexpr uint32_t kColBlue = WX_RGB_ACC;       // accent, selected-tab underline
+
+// Roles the raw spelling needs that the old hand-copied list did not have.
+constexpr uint32_t kColFg = WX_RGB_FG;            // primary text
+constexpr uint32_t kColCardAlt = WX_RGB_CARD2;    // inset well
+constexpr uint32_t kColAccentFg = WX_RGB_ACC_FG;  // text drawn on the accent
+constexpr uint32_t kColShift = WX_RGB_SHIFT;      // shifted-softkey row
+constexpr uint32_t kColErr = WX_RGB_ERR;          // failure, not merely attention
 
 }  // namespace palette
 }  // namespace wavex_ui

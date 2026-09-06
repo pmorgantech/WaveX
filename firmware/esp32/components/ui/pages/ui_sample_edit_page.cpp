@@ -8,6 +8,8 @@
 #include "inter_mcu.h"
 #include "ui/current_sample.h"
 #include "ui/ui_navigator.h"
+#include "ui/ui_palette.h"
+#include "ui_theme.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -85,13 +87,17 @@ constexpr uint16_t kSpliceColumns = static_cast<uint16_t>(kSpliceHalfW);
 constexpr int kInfoY = 434;
 constexpr int kInfoH = 88;
 
-constexpr uint32_t kColCard = 0x141414;
-constexpr uint32_t kColBorder = 0x2A2A2A;
-constexpr uint32_t kColDim = 0x8FA0AA;
-constexpr uint32_t kColDimmer = 0x5A6670;
-constexpr uint32_t kColBlue = 0x2196F3;
-constexpr uint32_t kColGreen = 0x4CAF50;
-constexpr uint32_t kColOrange = 0xFF9800;
+// Local names for the shared palette (ui/ui_palette.h). These were
+// hand-copied literals that had already drifted from it and from each
+// other - three different "border" greys existed across five files - so a
+// theme switch reached only the surfaces that happened to be in sync.
+constexpr uint32_t kColCard = palette::kColCard;
+constexpr uint32_t kColBorder = palette::kColBorder;
+constexpr uint32_t kColDim = palette::kColDim;
+constexpr uint32_t kColDimmer = palette::kColDimmer;
+constexpr uint32_t kColBlue = palette::kColBlue;
+constexpr uint32_t kColGreen = palette::kColGreen;
+constexpr uint32_t kColOrange = palette::kColOrange;
 
 const char* TAG = "UI_SAMPLE_EDIT";
 
@@ -278,7 +284,7 @@ void UISampleEditPage::buildParamStrip(lv_obj_t* parent) {
         label(c, 16, 12, titles[i], &lv_font_montserrat_18, kColDim);
 
         cards_[i].card = c;
-        cards_[i].value = label(c, 16, 40, "0:00.000", &lv_font_montserrat_32, 0xFFFFFF);
+        cards_[i].value = label(c, 16, 40, "0:00.000", UI_FONT_MONO_HERO, palette::kColFg);
         box(c, 16, 96, kGaugeW, 14, 0x1F1F1F);
         cards_[i].bar = box(c, 16, 96, 0, 14, kColBlue);
         cards_[i].knob = box(c, 12, 92, 8, 22, 0xFFFFFF);
