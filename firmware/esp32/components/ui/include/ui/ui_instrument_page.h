@@ -1,6 +1,8 @@
 // WaveX Instrument editor
 #pragma once
 
+#include "components/ui_dial.h"
+#include "components/ui_value_tile.h"
 #include "input_event.h"
 #include "spi_protocol/protocol.h"
 #include "ui_page.h"
@@ -65,6 +67,7 @@ class UIInstrumentPage : public UIPage {
     void onTrackChanged() override;
     std::array<Softkey, NUM_SOFTKEYS> getSoftkeys() override;
     std::array<Softkey, NUM_SOFTKEYS> getShiftedSoftkeys() override;
+    const char* contextLine() const override { return context_line_; }
 
     /// Tabs, in bar order (see the class note on why Mod is last).
     enum class Stage : uint8_t { Sample = 0, Envelopes, Amp, Filter, Mod, kCount };
@@ -92,12 +95,30 @@ class UIInstrumentPage : public UIPage {
     static constexpr uint8_t kParamTrack = 0xFD;
 
     lv_obj_t* root_ = nullptr;
-    lv_obj_t* name_label_ = nullptr;
-    lv_obj_t* status_label_ = nullptr;
     lv_obj_t* tabview_ = nullptr;
     lv_obj_t* tab_body_[kStageCount] = {};
-    lv_obj_t* param_rows_[kStageCount][kMaxParams] = {};
-    lv_obj_t* param_bars_[kStageCount][kMaxParams] = {};
+
+    /// Envelopes uses dials, every other stage uses value tiles. Four
+    /// parameters of the same kind compared against each other is what a dial
+    /// row is for; a stage whose parameters are unrelated reads better as
+    /// tiles, where each carries its own units.
+    Dial dials_[kMaxParams] = {};
+    ValueTile tiles_[kStageCount][kMaxParams] = {};
+
+    /// Curve panes. Points live in fixed members rather than being allocated
+    /// per redraw: lv_line does not copy the array, so it has to outlive every
+    /// frame that draws it, and the ESP32 guide (§8) wants no allocation on a
+    /// path that runs at frame rate.
+    static constexpr int kEnvCurvePoints = 5;
+    static constexpr int kFilterCurvePoints = 33;
+    lv_obj_t* env_curve_ = nullptr;
+    lv_obj_t* filter_curve_ = nullptr;
+    lv_point_precise_t env_pts_[kEnvCurvePoints] = {};
+    lv_point_precise_t filter_pts_[kFilterCurvePoints] = {};
+
+    /// Built by refreshHeader() and handed to the navigator's header.
+    char context_line_[160] = "";
+    char status_[64] = "";  // longest caller string is ~57 bytes
     /// A tab's rows are built the first time it is shown, so entering the page
     /// costs one stage's widgets rather than five (docs/backlog.md: these pages
     /// are slow to enter, not slow to run).
@@ -117,8 +138,18 @@ class UIInstrumentPage : public UIPage {
 
     static void tabChangedCb(lv_event_t* e);
 
-    void buildStrip(lv_obj_t* parent);
     void buildStageRows(int stage);
+    lv_obj_t* buildCurvePane(lv_obj_t* parent,
+                             int x,
+                             int y,
+                             int w,
+                             int h,
+                             const char* title,
+                             const char* right,
+                             lv_point_precise_t* pts,
+                             int count);
+    void refreshEnvCurve();
+    void refreshFilterCurve();
     void selectStage(int stage);
     void refreshHeader();
     void refreshParams();

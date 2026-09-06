@@ -7,6 +7,8 @@ set(COMPONENT_SRCS
     "components/envelope_fetcher.cpp"
     "components/file_browser.cpp"
     "components/waveform_view.cpp"
+    "components/ui_value_tile.cpp"
+    "components/ui_dial.cpp"
     "src/ui_diagnostics_page.cpp"
     "src/ui_screenshot.cpp"
     "src/ui_console.cpp"

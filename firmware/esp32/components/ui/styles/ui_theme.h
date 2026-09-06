@@ -157,6 +157,10 @@
 #define UI_PADDING_MEDIUM 10
 #define UI_PADDING_LARGE 15
 
+// Tab bar, for the pages that group stages behind one (ui_tab_group.h).
+#define UI_TAB_BAR_HEIGHT 56
+#define UI_TAB_BAR_PAD_TOP 8
+
 // Header internals. Title and context read left; the meter, engine-CPU
 // readout and SHIFT chip are anchored right, in that order. Both the status
 // strip and the navigator lay out against these, so the two cannot disagree

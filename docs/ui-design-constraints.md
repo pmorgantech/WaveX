@@ -87,7 +87,7 @@ structured, and how to build a page.
 | Palette, four compile-time themes | `WX_RGB_*` in `components/ui/styles/themes/`, roles in `ui_theme.h`, selection in `components/ui/CMakeLists.txt` |
 | Widget set | `CONFIG_LV_USE_*` in `firmware/esp32/sdkconfig` |
 | 30 FPS cap | `vTaskDelay(pdMS_TO_TICKS(32))` in `main/ui_task.cpp` |
-| Encoder + touch + keypad | `InputDispatcher`, `SoftkeyBar::focusNext/Prev`, GT911 touch, TCA8418 keypad component |
+| Encoder + touch + keypad | `InputDispatcher`, GT911 touch, TCA8418 keypad component. Note the encoder moves focus *within a page* (`UIPage::onInput`); there is no focus concept on the softkey bar, so a softkey is reached by touch or by a panel SOFT key, never by scrolling to it |
 | Pages recreated on entry | `ui-architecture.md` "Known Limitations" #2 |
 | Browse pagination, 20/page | `file_browser.cpp` (`entries_per_page = 20`) |
 
