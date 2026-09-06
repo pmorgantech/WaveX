@@ -126,6 +126,7 @@ add_library(wavex_esp32_test_lib STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/../main/comm/comm_interface_impl.cpp  # Include for testing
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/ui/components/envelope_cache.cpp  # Waveform envelope cache
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/ui/components/envelope_fetcher.cpp  # Envelope request/receive state machine
+    ${CMAKE_CURRENT_SOURCE_DIR}/../components/ui/components/envelope_panel.cpp  # Waveform panel: views, requests, render
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/ui/components/file_browser.cpp  # File browser navigation logic
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/ui/src/panel_key.cpp  # Panel key names and keycode map
     ${CMAKE_CURRENT_SOURCE_DIR}/../../shared/uart_protocol/uart_protocol.cpp

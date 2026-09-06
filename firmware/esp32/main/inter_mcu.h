@@ -105,6 +105,13 @@ void inter_mcu_store_sample_meta(const WaveX::Protocol::SampleMetadata& msg);
 
 /** Newest record for an id, or the most recent record when sample_id is 0. */
 bool inter_mcu_get_sample_meta(uint16_t sample_id, WaveX::Protocol::SampleMetadata* out);
+/**
+ * Resident record whose name - the load path, as the Pool recorded it - is
+ * `path`. How a page finds the id behind a file it did not load itself: one
+ * resident since before this boot, or loaded from another page. A name the
+ * Pool had to truncate (FILE_NAME_MAX) matches on the part it kept.
+ */
+bool inter_mcu_find_sample_meta_by_name(const char* path, WaveX::Protocol::SampleMetadata* out);
 // Every cached record, in cache order. Returns how many were written.
 size_t inter_mcu_sample_meta_snapshot(WaveX::Protocol::SampleMetadata* out, size_t max);
 

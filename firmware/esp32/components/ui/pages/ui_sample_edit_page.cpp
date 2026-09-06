@@ -4,6 +4,7 @@
 #include <esp_timer.h>
 
 #include "components/envelope_cache.h"
+#include "components/envelope_panel.h"
 #include "components/waveform_view.h"
 #include "inter_mcu.h"
 #include "ui/current_sample.h"
@@ -25,12 +26,6 @@ namespace {
 // would not open out.
 constexpr uint32_t kFallbackFrames = 48000;
 
-// Display columns asked of the envelope. The waveform panel is 1256 px, and
-// asking for more columns than pixels buys nothing.
-constexpr uint16_t kDisplayColumns = 1256;
-// Ceiling on one envelope run, matching the wire limit. The staging buffer is
-// allocated once at this size and never resized.
-constexpr uint16_t kMaxRunColumns = WaveX::Protocol::MAX_ENVELOPE_COLUMNS;
 constexpr uint32_t kMinWindow = 256;
 
 // Shortest loop the backend will keep enabled (audio_engine.cpp
@@ -82,14 +77,21 @@ constexpr int kCardH = 132;
 constexpr int kCardGap = 10;
 constexpr int kCardW = (kWaveW - 3 * kCardGap) / 4;  // 302
 constexpr int kCardPitch = kCardW + kCardGap;
-// Splice-view geometry, inside the waveform panel's 4 px padding.
-constexpr int kWaveInnerW = kWaveW - 8;
-constexpr int kWaveInnerH = kWaveH - 8;
+// The waveform panel's content area: inside its 1 px border and 4 px
+// padding, which LVGL takes off both sides. The views are built at exactly
+// this size, in pixels, because a WaveformView draws one envelope column per
+// pixel of its width and a percentage width could not tell it how many.
+constexpr int kWavePad = 4;
+constexpr int kWaveBorder = 1;
+constexpr int kWaveInnerW = kWaveW - 2 * (kWavePad + kWaveBorder);  // 1230
+constexpr int kWaveInnerH = kWaveH - 2 * (kWavePad + kWaveBorder);  // 210
 constexpr int kSeamW = 2;
-constexpr int kSpliceHalfW = (kWaveInnerW - kSeamW) / 2;
-// One envelope column per pixel of a half. More would be discarded by
-// rasterisation, and this view is about alignment rather than detail.
-constexpr uint16_t kSpliceColumns = static_cast<uint16_t>(kSpliceHalfW);
+constexpr int kSpliceHalfW = (kWaveInnerW - kSeamW) / 2;  // 614
+
+// The panel's views, in the order the sinks are attached.
+constexpr uint8_t kViewContinuous = 0;
+constexpr uint8_t kViewSpliceLeft = 1;
+constexpr uint8_t kViewSpliceRight = 2;
 
 constexpr int kInfoY = kStripY + kCardH + 16;  // 438
 constexpr int kInfoH = kPageH - kInfoY - 12;   // 93
@@ -106,12 +108,6 @@ constexpr uint32_t kColGreen = palette::kColGreen;
 constexpr uint32_t kColOrange = palette::kColOrange;
 
 const char* TAG = "UI_SAMPLE_EDIT";
-
-// Adapter for EnvelopeFetcher, which takes a plain bool so the fetcher stays
-// free of ESP-IDF and can be host-tested.
-bool SendEnvelopeReq(uint16_t sample_id, uint16_t columns, uint32_t start, uint32_t end) {
-    return inter_mcu_send_envelope_req(sample_id, columns, start, end) == ESP_OK;
-}
 
 lv_obj_t* box(lv_obj_t* parent, int x, int y, int w, int h, uint32_t colour) {
     lv_obj_t* o = lv_obj_create(parent);
@@ -157,32 +153,24 @@ void UISampleEditPage::onEnter(lv_obj_t* parent) {
     lv_obj_set_style_bg_opa(root_, LV_OPA_COVER, 0);
     lv_obj_remove_flag(root_, LV_OBJ_FLAG_SCROLLABLE);
 
-    // Allocated once and never resized: render() writes into it every redraw.
-    // Sized for this page's column count, in stereo.
-    display_columns_.assign(static_cast<size_t>(kDisplayColumns) * 2,
-                            WaveX::Protocol::EnvelopeColumn());
     EnsureEnvelopeCacheInitialised();
-
-    EnvelopeFetcher::Config fetch_cfg;
-    fetch_cfg.display_columns = kDisplayColumns;
-    fetch_cfg.max_run_columns = kMaxRunColumns;
-    fetch_cfg.timeout_ms = kRequestTimeoutMs;
-    fetch_cfg.max_retries = kMaxRequestRetries;
-    fetcher_.init(fetch_cfg, &SendEnvelopeReq, &GetEnvelopeCache());
-    // The cache outlives this page - it is a process-wide singleton shared with
-    // the browser's detail panel - so a run abandoned by a previous instance
-    // would still be blocking nextRequest() here. Nothing can be in flight at
-    // the moment a page is built, so say so.
-    GetEnvelopeCache().abortPending();
 
     buildWaveformPanel(root_);
     buildParamStrip(root_);
     buildInfoStrip(root_);
 
     ui_timer_ = lv_timer_create(&UISampleEditPage::uiTimerCb, 50, this);
-    // Only after the timer exists: a chunk arriving before it would set a flag
-    // nothing is watching, and the first waveform would never be drawn.
-    inter_mcu_set_envelope_chunk_listener(&UISampleEditPage::envelopeChunkStatic, this);
+
+    // The panel owns the whole waveform cycle from here: it takes the chunk
+    // listener, asks the cache for what each view is missing, and re-renders
+    // the views as runs land. serviceUi() drives it and reads back events.
+    EnvelopePanel::Config panel_cfg;
+    panel_cfg.timeout_ms = kRequestTimeoutMs;
+    panel_cfg.max_retries = kMaxRequestRetries;
+    panel_cfg.settle_ms = kRequestSettleMs;
+    EnvelopeSink* sinks[] = {waveform_.get(), splice_left_.get(), splice_right_.get()};
+    panel_.attach(panel_cfg, EspEnvelopeLink(), &GetEnvelopeCache(), sinks, 3);
+    panel_sample_id_ = 0;
 
     // The current sample: the Browser's Load, or the Sample Manager's Edit
     // softkey (track-and-patch-model.md §6 stage 0), whichever set it last.
@@ -210,17 +198,17 @@ void UISampleEditPage::onEnter(lv_obj_t* parent) {
 
     refreshStatus(m.name);
     refreshParams();
-    requestWaveform();
+    syncWindows();
 }
 
 void UISampleEditPage::buildWaveformPanel(lv_obj_t* parent) {
     lv_obj_t* panel = box(parent, kMargin, kWaveY, kWaveW, kWaveH, palette::kColCard);
-    lv_obj_set_style_border_width(panel, 1, 0);
+    lv_obj_set_style_border_width(panel, kWaveBorder, 0);
     lv_obj_set_style_border_color(panel, lv_color_hex(kColBorder), 0);
-    lv_obj_set_style_pad_all(panel, 4, 0);
+    lv_obj_set_style_pad_all(panel, kWavePad, 0);
 
     wave_panel_ = panel;
-    waveform_ = std::make_unique<WaveformView>(panel, lv_pct(100), lv_pct(100));
+    waveform_ = std::make_unique<WaveformView>(panel, kWaveInnerW, kWaveInnerH);
 
     // Splice pair, built alongside the continuous view and hidden until a loop
     // marker is focused. Building both up front keeps the swap to a visibility
@@ -332,14 +320,11 @@ void UISampleEditPage::buildInfoStrip(lv_obj_t* parent) {
 }
 
 void UISampleEditPage::onExit() {
-    // Unregister first. Deleting the timer or the widgets while a chunk can
-    // still arrive would leave the RX task writing through a freed page.
-    inter_mcu_set_envelope_chunk_listener(nullptr, nullptr);
-    // With the listener gone every remaining chunk of a run in flight is
-    // dropped, so that run can never commit. Release the cache's arming with
-    // it, or leaving this tab mid-run would wedge the shared cache for whatever
-    // draws a waveform next.
-    fetcher_.abort();
+    // Detach first. It releases the chunk listener before anything else, so
+    // deleting the timer and the views below cannot race a chunk arriving on
+    // the RX task, and it releases the cache's run in flight, which would
+    // otherwise wedge the shared cache for whatever draws a waveform next.
+    panel_.detach();
     if (auditioning_) {
         inter_mcu_send_sample_stop_req();
         auditioning_ = false;
@@ -349,6 +334,8 @@ void UISampleEditPage::onExit() {
         ui_timer_ = nullptr;
     }
     waveform_.reset();
+    splice_left_.reset();
+    splice_right_.reset();
     if (root_) {
         lv_obj_del(root_);
         root_ = nullptr;
@@ -432,7 +419,6 @@ std::array<Softkey, NUM_SOFTKEYS> UISampleEditPage::getShiftedSoftkeys() {
                    zoomToFit();
                    params_dirty_ = true;
                    sendEdit();
-                   request_due_ms_ = (uint32_t)(esp_timer_get_time() / 1000) + kRequestSettleMs;
                }};
     return keys;
 }
@@ -596,7 +582,6 @@ void UISampleEditPage::adjustFocused(int steps) {
         if (view_start_ + view_frames_ > total_frames_) {
             view_start_ = (total_frames_ > view_frames_) ? total_frames_ - view_frames_ : 0;
         }
-        request_due_ms_ = (uint32_t)(esp_timer_get_time() / 1000) + kRequestSettleMs;
     }
 
     params_dirty_ = true;
@@ -648,7 +633,6 @@ void UISampleEditPage::setZoom(int direction) {
     }
 
     params_dirty_ = true;
-    request_due_ms_ = (uint32_t)(esp_timer_get_time() / 1000) + kRequestSettleMs;
 }
 
 // Adopts the backend's view. Called on entry and whenever a fresh record
@@ -657,6 +641,7 @@ void UISampleEditPage::setZoom(int direction) {
 void UISampleEditPage::applyMeta(const WaveX::Protocol::SampleMetadata& m) {
     sample_rate_ = m.sample_rate ? m.sample_rate : 48000;
     total_frames_ = m.total_frames;
+    generation_ = m.generation;
     start_frame_ = m.start_frame;
     end_frame_ = m.end_frame;
     loop_start_ = m.loop_start;
@@ -957,6 +942,10 @@ void UISampleEditPage::refreshFocusRing() {
     // comes through here - the encoder, the < Param / Param > keys and a
     // handle drag all call it.
     updateWaveformMode();
+    // The strip has to follow too. It was laid out only with the values, so
+    // Param > onto a card past the visible four put the ring on a hidden
+    // card and left the strip where it was until some value changed.
+    layoutParamStrip();
     for (uint8_t i = 0; i < PARAM_COUNT; i++) {
         if (!cards_[i].card) {
             continue;
@@ -965,37 +954,8 @@ void UISampleEditPage::refreshFocusRing() {
     }
 }
 
-void UISampleEditPage::envelopeChunkStatic(const WaveX::Protocol::EnvelopeChunkMessage& header,
-                                           const WaveX::Protocol::EnvelopeColumn* columns,
-                                           void* user) {
-    if (!user)
-        return;
-    static_cast<UISampleEditPage*>(user)->handleEnvelopeChunk(header, columns);
-}
-
-// UART RX task context. Touching LVGL from here is what froze the display once
-// already, and the envelope cache is off limits too - it allocates, and the
-// whole cache is written to be single-threaded on the UI task. The fetcher
-// honours both: it only assembles the run into a fixed buffer and publishes a
-// flag the UI task picks up in serviceUi().
-void UISampleEditPage::handleEnvelopeChunk(const WaveX::Protocol::EnvelopeChunkMessage& header,
-                                           const WaveX::Protocol::EnvelopeColumn* columns) {
-    fetcher_.onChunk(header, columns);
-}
-
 uint16_t UISampleEditPage::currentSampleId() const {
     return getCurrentSampleId();
-}
-
-// The cache is keyed on generation, so a stale one would file the new audio
-// under the old key. 0 is the right default: it is what a freshly loaded
-// sample carries until the backend says otherwise.
-uint16_t UISampleEditPage::currentGeneration() const {
-    WaveX::Protocol::SampleMetadata m;
-    if (inter_mcu_get_sample_meta(currentSampleId(), &m)) {
-        return m.generation;
-    }
-    return 0;
 }
 
 void UISampleEditPage::uiTimerCb(lv_timer_t* t) {
@@ -1009,12 +969,6 @@ void UISampleEditPage::uiTimerCb(lv_timer_t* t) {
 void UISampleEditPage::serviceUi() {
     const uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
 
-    if (request_due_ms_ != 0) {
-        if ((int32_t)(now - request_due_ms_) >= 0) {
-            request_due_ms_ = 0;
-            requestWaveform();
-        }
-    }
     // Adopt any newer record. The backend clamps, so this is how a refused
     // short loop or a narrowed region becomes visible instead of the UI
     // continuing to display a request the engine did not honour.
@@ -1037,32 +991,78 @@ void UISampleEditPage::serviceUi() {
         edit_due_ms_ = 0;
         sendEdit();
     }
-    // Drive the run in flight: commit it, or handle one that never answered.
-    switch (fetcher_.service(now)) {
-        case EnvelopeFetcher::Service::Committed:
-            waveform_dirty_.store(true, std::memory_order_relaxed);
-            // A wide view can need more columns than one run holds; ask for
-            // the rest now that this one is filed.
-            requestWaveform();
+    // Tell the panel where every view now is - a no-op when nothing moved -
+    // then let it file, ask and draw. It coalesces a moving window itself;
+    // this page only words the outcomes.
+    syncWindows();
+    switch (panel_.service(now)) {
+        case EnvelopePanel::Event::Drawn:
+            if (wave_status_shown_) {
+                // The trace is back; the line about it not being is not.
+                wave_status_shown_ = false;
+                WaveX::Protocol::SampleMetadata m;
+                if (inter_mcu_get_sample_meta(currentSampleId(), &m)) {
+                    refreshStatus(m.name);
+                }
+            }
             break;
-        case EnvelopeFetcher::Service::Retrying:
-            // Draw whatever did arrive rather than holding the panel blank.
-            waveform_dirty_.store(true, std::memory_order_relaxed);
+        case EnvelopePanel::Event::Retrying:
+            wave_status_shown_ = true;
             refreshStatus("Waveform request timed out - retrying");
-            request_due_ms_ = now + kRequestSettleMs;
             break;
-        case EnvelopeFetcher::Service::GaveUp:
-            waveform_dirty_.store(true, std::memory_order_relaxed);
+        case EnvelopePanel::Event::SendFailed:
+            wave_status_shown_ = true;
+            refreshStatus("Waveform request refused by the link - retrying");
+            break;
+        case EnvelopePanel::Event::GaveUp:
+            wave_status_shown_ = true;
             refreshStatus("Waveform unavailable - reopen the page to retry");
             break;
-        case EnvelopeFetcher::Service::Idle:
+        case EnvelopePanel::Event::None:
             break;
     }
+}
 
-    if (waveform_dirty_) {
-        waveform_dirty_ = false;
-        drawWaveform();
+// UI task only. Hands the panel the current sample and the frames each view
+// shows. Called every tick and from onEnter: every input is cheap on the
+// panel's side (an unchanged window costs a compare), so this does not need
+// to know which of zoom, marker, focus or loop state moved - which is exactly
+// the bookkeeping the previous request_due_ms_ scattered across five methods.
+void UISampleEditPage::syncWindows() {
+    if (!panel_.attached()) {
+        return;
     }
+    const uint16_t sample_id = currentSampleId();
+    if (!has_sample_ || sample_id == 0 || total_frames_ == 0) {
+        if (panel_.hasSample()) {
+            panel_.clearSample();
+        }
+        panel_sample_id_ = 0;
+        return;
+    }
+    if (sample_id != panel_sample_id_ || generation_ != panel_generation_ ||
+        total_frames_ != panel_total_frames_) {
+        panel_sample_id_ = sample_id;
+        panel_generation_ = generation_;
+        panel_total_frames_ = total_frames_;
+        panel_.setSample(sample_id, generation_, total_frames_);
+    }
+
+    const uint32_t span = view_frames_ ? view_frames_ : total_frames_;
+    panel_.setWindow(kViewContinuous, view_start_, view_start_ + span);
+
+    // Left: the audio that plays last before the wrap. Right: what it wraps
+    // to. Each half is its own view at its own width, so each gets the cache
+    // tier its 614 px deserve rather than a slice of the continuous view's.
+    const bool splice = spliceActive();
+    const uint32_t half = splice ? spliceHalfSpan() : 0;
+    if (half) {
+        panel_.setWindow(kViewSpliceLeft, loop_end_ - half, loop_end_);
+        panel_.setWindow(kViewSpliceRight, loop_start_, loop_start_ + half);
+    }
+    panel_.enableView(kViewContinuous, !splice);
+    panel_.enableView(kViewSpliceLeft, half != 0);
+    panel_.enableView(kViewSpliceRight, half != 0);
 }
 
 bool UISampleEditPage::spliceActive() const {
@@ -1122,140 +1122,10 @@ void UISampleEditPage::updateWaveformMode() {
     for (lv_obj_t* handle: {marker_s_, marker_e_, marker_ls_, marker_le_}) {
         set_hidden(handle, splice);
     }
-
-    // The view that just appeared holds whatever it was last given, which for
-    // the seam pair is a different pair of windows entirely. Redraw from the
-    // cache now, and ask for anything it does not hold - through the existing
-    // settle delay, so flicking across the loop params does not queue a
-    // request per step.
-    waveform_dirty_.store(true, std::memory_order_relaxed);
-    request_due_ms_ = (uint32_t)(esp_timer_get_time() / 1000) + kRequestSettleMs;
-}
-
-void UISampleEditPage::drawSplice() {
-    if (!splice_left_ || !splice_right_ || display_columns_.empty()) {
-        return;
-    }
-    const uint32_t half = spliceHalfSpan();
-    if (half == 0) {
-        return;
-    }
-    const uint16_t sample_id = currentSampleId();
-    const uint16_t generation = currentGeneration();
-
-    // Left: the audio that plays last before the wrap. Right: what it wraps to.
-    const uint32_t left_start = loop_end_ - half;
-    const uint32_t right_start = loop_start_;
-
-    uint8_t channels = 1;
-    if (GetEnvelopeCache().render(sample_id,
-                                  generation,
-                                  left_start,
-                                  loop_end_,
-                                  kSpliceColumns,
-                                  display_columns_.data(),
-                                  display_columns_.size(),
-                                  channels) > 0) {
-        splice_left_->setEnvelope(display_columns_.data(), kSpliceColumns, channels);
-    }
-
-    channels = 1;
-    if (GetEnvelopeCache().render(sample_id,
-                                  generation,
-                                  right_start,
-                                  right_start + half,
-                                  kSpliceColumns,
-                                  display_columns_.data(),
-                                  display_columns_.size(),
-                                  channels) > 0) {
-        splice_right_->setEnvelope(display_columns_.data(), kSpliceColumns, channels);
-    }
-}
-
-void UISampleEditPage::drawWaveform() {
-    if (!waveform_ || display_columns_.empty()) {
-        return;
-    }
-    if (spliceActive()) {
-        drawSplice();
-        return;
-    }
-    const uint32_t span = view_frames_ ? view_frames_ : total_frames_;
-    uint8_t channels = 1;
-    const uint16_t drawn = GetEnvelopeCache().render(currentSampleId(),
-                                                     currentGeneration(),
-                                                     view_start_,
-                                                     view_start_ + span,
-                                                     kDisplayColumns,
-                                                     display_columns_.data(),
-                                                     display_columns_.size(),
-                                                     channels);
-    if (drawn == 0) {
-        return;  // nothing cached for this view yet; the request is in flight
-    }
-    waveform_->setEnvelope(display_columns_.data(), kDisplayColumns, channels);
-}
-
-// UI task only. Asks the cache what it still needs for the visible window and
-// requests exactly that - which is usually nothing, because a zoom or scroll
-// that lands inside a tier already held is served without a round trip. That
-// is the whole point of roadmap 1.5.5.
-void UISampleEditPage::requestWaveform() {
-    if (!has_sample_) {
-        refreshStatus("No sample loaded. Load via Sample Browser first.");
-        return;
-    }
-
-    const uint32_t span = view_frames_ ? view_frames_ : total_frames_;
-    const uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
-
-    uint32_t win_start = view_start_;
-    uint32_t win_end = view_start_ + span;
-    EnvelopeFetcher::Request result = EnvelopeFetcher::Request::AlreadyCached;
-
-    if (spliceActive()) {
-        // Two windows, one fetcher. Ask for the left; if it is already cached,
-        // fall through to the right in the same pass. A run in flight answers
-        // Busy and serviceUi() re-enters here when it lands, so the pair fills
-        // in over two commits rather than needing a second fetcher.
-        const uint32_t half = spliceHalfSpan();
-        if (half == 0) {
-            return;
-        }
-        result = fetcher_.request(currentSampleId(),
-                                  currentGeneration(),
-                                  loop_end_ - half,
-                                  loop_end_,
-                                  total_frames_,
-                                  now);
-        if (result == EnvelopeFetcher::Request::AlreadyCached) {
-            result = fetcher_.request(currentSampleId(),
-                                      currentGeneration(),
-                                      loop_start_,
-                                      loop_start_ + half,
-                                      total_frames_,
-                                      now);
-        }
-    } else {
-        result = fetcher_.request(
-            currentSampleId(), currentGeneration(), win_start, win_end, total_frames_, now);
-    }
-
-    switch (result) {
-        case EnvelopeFetcher::Request::AlreadyCached:
-            waveform_dirty_.store(true, std::memory_order_relaxed);
-            break;
-        case EnvelopeFetcher::Request::SendFailed:
-            refreshStatus("Waveform request failed");
-            break;
-        case EnvelopeFetcher::Request::Sent:
-        case EnvelopeFetcher::Request::Busy:
-        case EnvelopeFetcher::Request::NotReady:
-            // Busy is normal rather than an error: serviceUi() re-enters here
-            // once the run lands, which is how a view wider than a single run
-            // fills in progressively.
-            break;
-    }
+    // What the views show follows on the next tick: syncWindows() enables
+    // the pair that just appeared, which the panel redraws from the cache at
+    // once and requests through its settle - so flicking across the loop
+    // params does not queue a request per step.
 }
 
 void UISampleEditPage::refreshStatus(const char* text) {

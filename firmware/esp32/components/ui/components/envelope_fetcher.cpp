@@ -27,6 +27,7 @@ EnvelopeFetcher::Request EnvelopeFetcher::request(uint16_t sample_id,
                                                   uint32_t view_start,
                                                   uint32_t view_end,
                                                   uint32_t total_frames,
+                                                  uint16_t display_columns,
                                                   uint32_t now_ms) {
     if (!initialized() || staging_.empty()) {
         return Request::NotReady;
@@ -43,7 +44,7 @@ EnvelopeFetcher::Request EnvelopeFetcher::request(uint16_t sample_id,
                              view_start,
                              view_end,
                              total_frames,
-                             config_.display_columns,
+                             display_columns,
                              config_.max_run_columns,
                              req_start,
                              req_end,
@@ -190,6 +191,11 @@ void EnvelopeFetcher::abort() {
             cache_->abortPending();
         }
     }
+    // A fresh start, not a continuation: the timeouts counted so far belonged
+    // to the view being abandoned, and carrying them over would give the next
+    // sample fewer chances than the first - none at all, once one had given
+    // up.
+    retries_ = 0;
 }
 
 }  // namespace wavex_ui

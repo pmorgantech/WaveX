@@ -326,6 +326,35 @@ bool inter_mcu_get_sample_meta(uint16_t sample_id, WaveX::Protocol::SampleMetada
     return found;
 }
 
+bool inter_mcu_find_sample_meta_by_name(const char* path, WaveX::Protocol::SampleMetadata* out) {
+    if (!path || !path[0] || !out) {
+        return false;
+    }
+    constexpr size_t kKept = WaveX::Protocol::FILE_NAME_MAX - 1;
+    const size_t path_len = strnlen(path, kKept + 1);
+    bool found = false;
+    taskENTER_CRITICAL(&s_meta_lock);
+    for (size_t i = 0; i < kMetaCacheSize; ++i) {
+        if (!s_meta_valid[i]) {
+            continue;
+        }
+        const char* name = s_meta[i].name;
+        const size_t name_len = strnlen(name, kKept);
+        // A name that fills the field was cut at kKept; a path that long can
+        // only be compared on what survived.
+        const bool match = (name_len == kKept && path_len >= kKept)
+                               ? (strncmp(name, path, kKept) == 0)
+                               : (name_len == path_len && strncmp(name, path, kKept) == 0);
+        if (match) {
+            *out = s_meta[i];
+            found = true;
+            break;
+        }
+    }
+    taskEXIT_CRITICAL(&s_meta_lock);
+    return found;
+}
+
 size_t inter_mcu_sample_meta_snapshot(WaveX::Protocol::SampleMetadata* out, size_t max) {
     size_t n = 0;
     taskENTER_CRITICAL(&s_meta_lock);

@@ -56,8 +56,6 @@ class EnvelopeFetcher {
                             uint32_t end_frame);
 
     struct Config {
-        /// Columns the view wants across its whole width.
-        uint16_t display_columns = 0;
         /// Most columns one run may carry; sizes the staging buffer.
         uint16_t max_run_columns = 0;
         /// How long a run may go unanswered before it is abandoned.
@@ -83,11 +81,16 @@ class EnvelopeFetcher {
     };
 
     /// UI task. Asks the cache what is missing for this view and requests it.
+    /// `display_columns` is the width the view will be drawn at, per call:
+    /// one fetcher serves views of different widths (the edit page's
+    /// continuous trace and its two splice halves), and the width is what
+    /// picks the cache tier.
     Request request(uint16_t sample_id,
                     uint16_t generation,
                     uint32_t view_start,
                     uint32_t view_end,
                     uint32_t total_frames,
+                    uint16_t display_columns,
                     uint32_t now_ms);
 
     /// UART RX task. Assembles one chunk into the staging buffer.

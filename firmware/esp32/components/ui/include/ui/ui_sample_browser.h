@@ -3,7 +3,7 @@
 
 #include <lvgl.h>
 
-#include "../components/envelope_fetcher.h"
+#include "../components/envelope_panel.h"
 #include "../components/file_browser.h"
 #include "comm/i_comm_interface.h"
 #include "input_event.h"
@@ -16,7 +16,6 @@
 #include <cstring>
 #include <memory>
 #include <string>
-#include <vector>
 
 namespace wavex_ui {
 
@@ -153,27 +152,26 @@ class UISampleBrowser : public UIPage {
     // scrolling unusable, and this asks for nothing while the cursor moves.
     std::unique_ptr<class WaveformView> waveform_;
     lv_obj_t* waveform_hint_ = nullptr;
-    EnvelopeFetcher envelope_fetcher_;
-    std::vector<WaveX::Protocol::EnvelopeColumn> envelope_columns_;
+    // The whole request/receive/render cycle, shared with the edit and
+    // record pages (envelope_panel.h). This page only names the sample.
+    EnvelopePanel envelope_panel_;
 
-    /// The sample the panel is currently drawing. serviceWaveform() runs on
-    /// every deferred-update pass (~30 Hz), so it needs to recognise its own
-    /// steady state: without these it would re-render 442 columns and
-    /// invalidate the widget on every pass for a waveform that has not moved.
+    /// What the panel was last told to show, so serviceWaveform() - which
+    /// runs on every deferred-update pass, ~30 Hz - hands it a sample once
+    /// rather than once per pass.
     uint16_t shown_sample_id_ = 0;
     uint16_t shown_generation_ = 0;
-    bool waveform_drawn_ = false;
-    /// Stops re-asking forever once the fetcher has exhausted its retries.
-    /// Cleared when the sample changes, so a different selection tries again.
-    bool waveform_gave_up_ = false;
 
-    static void envelopeChunkStatic(const WaveX::Protocol::EnvelopeChunkMessage& header,
-                                    const WaveX::Protocol::EnvelopeColumn* columns,
-                                    void* user);
     void serviceWaveform();
-    void drawWaveform();
-    /// True when the highlighted row is the sample that is actually loaded.
-    bool selectionIsLoadedSample() const;
+    /// The resident sample behind the highlighted row, with its record, or 0.
+    uint16_t resolveSelectedSample(WaveX::Protocol::SampleMetadata& meta);
+    /// resolveSelectedSample() is asked ~30 Hz; the answer only changes with
+    /// the selection, a load, or a record arriving, so it is kept by what it
+    /// was resolved from and re-derived when that moves.
+    char resolved_path_[96] = {0};
+    uint16_t resolved_from_load_id_ = 0;
+    uint16_t resolved_sample_id_ = 0;
+    uint32_t resolve_retry_at_ms_ = 0;
 
     void refreshStatusStrip();
 

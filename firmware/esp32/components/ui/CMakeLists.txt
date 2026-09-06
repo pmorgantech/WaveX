@@ -5,6 +5,8 @@ set(COMPONENT_SRCS
     "components/envelope_cache.cpp"
     "components/envelope_cache_init.cpp"
     "components/envelope_fetcher.cpp"
+    "components/envelope_panel.cpp"
+    "components/envelope_panel_link.cpp"
     "components/file_browser.cpp"
     "components/waveform_view.cpp"
     "components/ui_value_tile.cpp"

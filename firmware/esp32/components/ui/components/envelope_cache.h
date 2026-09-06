@@ -134,6 +134,12 @@ class EnvelopeCache {
      * column. Display columns with no cached data are written as silence, so a
      * partially filled view draws progressively rather than not at all.
      *
+     * Draws from whichever run covers most of the view, whatever its tier: a
+     * whole-file scan stands in for a zoomed view until that view's own, finer
+     * run lands. `out_fpc`, if given, reports the tier actually used, so a
+     * caller can tell a stand-in from the real thing - it is what says whether
+     * the view is finished or merely showing something.
+     *
      * @return how many display columns were backed by real data (0 = nothing).
      */
     uint16_t render(uint16_t sample_id,
@@ -143,7 +149,8 @@ class EnvelopeCache {
                     uint16_t display_columns,
                     WaveX::Protocol::EnvelopeColumn* out,
                     size_t out_capacity,
-                    uint8_t& out_channels) const;
+                    uint8_t& out_channels,
+                    uint32_t* out_fpc = nullptr) const;
 
     /// Drops every entry for a sample. For unload, not for edits: markers and
     /// gain do not change the audio the envelope describes.
@@ -185,7 +192,18 @@ class EnvelopeCache {
                               uint16_t generation,
                               uint32_t view_start,
                               uint32_t view_end) const;
-    Entry* findRun(uint16_t sample_id, uint16_t generation, uint32_t fpc, uint8_t channels);
+    /// Runs at this tier that touch or overlap [first, first + count), and
+    /// the range they and the new run make together. Fills `out` (at most
+    /// kMaxEntries) and returns how many.
+    size_t gatherTouching(uint16_t sample_id,
+                          uint16_t generation,
+                          uint32_t fpc,
+                          uint8_t channels,
+                          uint32_t first,
+                          uint32_t count,
+                          Entry** out,
+                          uint32_t& merged_first,
+                          uint32_t& merged_end);
     void releaseEntry(Entry& e);
     bool makeRoom(size_t bytes_needed);
     bool commitPending();

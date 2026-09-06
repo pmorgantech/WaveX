@@ -515,6 +515,63 @@ TEST_F(EnvelopeCacheTest, AdjacentRunsMergeWithContentAtCorrectOffsets) {
     EXPECT_EQ(out[511].min_sample, -256);
 }
 
+// Two runs of one sample at one tier that do not touch must both stay: the
+// edit page's splice halves are exactly that (the end of the loop and its
+// start, at the same zoom), and when the second landing evicted the first the
+// two re-requested each other for as long as the page was open.
+TEST_F(EnvelopeCacheTest, DisjointRunsAtOneTierBothStayResident) {
+    const uint32_t total = 1u << 20;
+    // Both windows use tier fpc 1024; the second sits well clear of the first.
+    ASSERT_TRUE(FillRun(1, 0, 0, 262144, total, 256));
+    ASSERT_TRUE(FillRun(1, 0, 786432, 1048576, total, 256));
+    EXPECT_EQ(cache_.entryCount(), 2u) << "the second run evicted the first";
+
+    // Neither window has anything left to ask for.
+    uint32_t req_start = 0, req_end = 0;
+    uint16_t req_columns = 0;
+    EXPECT_FALSE(
+        cache_.nextRequest(1, 0, 0, 262144, total, 256, 1280, req_start, req_end, req_columns));
+    EXPECT_FALSE(cache_.nextRequest(
+        1, 0, 786432, 1048576, total, 256, 1280, req_start, req_end, req_columns));
+
+    // A view spanning both, at the same tier, is short exactly the hole
+    // between them - and the run that fills it merges all three into one.
+    ASSERT_TRUE(
+        cache_.nextRequest(1, 0, 0, 1048576, total, 1024, 1280, req_start, req_end, req_columns));
+    EXPECT_EQ(req_start, 262144u);
+    EXPECT_EQ(req_end, 786432u);
+    EXPECT_EQ(req_columns, 512);
+    ASSERT_TRUE(FillRun(1, 0, 0, 1048576, total, 1024));
+    EXPECT_EQ(cache_.entryCount(), 1u) << "the run between two others did not merge them";
+
+    uint8_t channels = 0;
+    std::vector<EnvelopeColumn> out(1024);
+    EXPECT_EQ(cache_.render(1, 0, 0, 1048576, 1024, out.data(), out.size(), channels), 1024);
+    EXPECT_EQ(out[0].max_sample, 1);    // first run kept, at its offset
+    EXPECT_EQ(out[256].max_sample, 1);  // the filler, at its offset
+    EXPECT_EQ(out[768].max_sample, 1);  // second run kept, at its offset
+    EXPECT_EQ(out[1023].max_sample, 256);
+}
+
+// render() names the tier it drew from, so a caller can tell a whole-file
+// stand-in from the view's own run.
+TEST_F(EnvelopeCacheTest, RenderReportsTheTierItDrewFrom) {
+    const uint32_t total = 1u << 20;
+    ASSERT_TRUE(FillRun(1, 0, 0, total, total, 256));  // fpc 4096, whole file
+    uint8_t channels = 0;
+    uint32_t fpc = 0;
+    std::vector<EnvelopeColumn> out(256);
+    // A zoomed view is served from the coarse run for now...
+    EXPECT_EQ(cache_.render(1, 0, 0, 65536, 256, out.data(), out.size(), channels, &fpc), 256);
+    EXPECT_EQ(fpc, 4096u);
+    EXPECT_GT(fpc, EnvelopeCache::tierFramesPerColumn(65536, 256));
+    // ...and from its own once that lands.
+    ASSERT_TRUE(FillRun(1, 0, 0, 65536, total, 256));  // fpc 256
+    EXPECT_EQ(cache_.render(1, 0, 0, 65536, 256, out.data(), out.size(), channels, &fpc), 256);
+    EXPECT_EQ(fpc, 256u);
+    EXPECT_EQ(fpc, EnvelopeCache::tierFramesPerColumn(65536, 256));
+}
+
 // invalidateSample must also kill a pending run for that sample - otherwise a
 // reload while a scan is in flight would file the OLD sample's columns under
 // the new listing, or block requests forever.

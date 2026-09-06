@@ -7,19 +7,20 @@
 namespace wavex_ui {
 namespace {
 
-// The trace colour the chart used, kept so the look does not change with the
-// drawing method.
-constexpr uint32_t kTraceColor = 0x29B6F6;  // LV_PALETTE_LIGHT_BLUE main
-constexpr uint32_t kGridColor = 0x2A2A2A;
-
-// Brighter than the grid so the split between L and R does not read as just
-// another div line - it is a boundary between two signals, not a scale mark.
-constexpr uint32_t kDividerColor = 0x4A4A4A;
-constexpr uint32_t kChannelLabelColor = 0x8A8A8A;
+// Full-scale int16. Fixed: see setEnvelope() on why this never autoscales.
+constexpr int32_t kYMin = -32768;
+constexpr int32_t kYMax = 32767;
 
 }  // namespace
 
-WaveformView::WaveformView(lv_obj_t* parent, lv_coord_t width, lv_coord_t height) {
+WaveformView::WaveformView(lv_obj_t* parent, int32_t width, int32_t height) {
+    if (!LV_COORD_IS_PCT(width) && width != LV_SIZE_CONTENT && width > 0) {
+        columns_ =
+            static_cast<uint16_t>(std::min<int32_t>(width, WaveX::Protocol::MAX_ENVELOPE_COLUMNS));
+    }
+    col_min_.assign(static_cast<size_t>(columns_) * kMaxChannels, 0);
+    col_max_.assign(static_cast<size_t>(columns_) * kMaxChannels, 0);
+
     obj_ = lv_obj_create(parent);
     lv_obj_set_size(obj_, width, height);
 
@@ -37,14 +38,8 @@ WaveformView::WaveformView(lv_obj_t* parent, lv_coord_t width, lv_coord_t height
 }
 
 void WaveformView::clear() {
-    for (auto& lane: col_min_) {
-        lane.fill(0);
-    }
-    for (auto& lane: col_max_) {
-        lane.fill(0);
-    }
-    y_min_ = -32768;
-    y_max_ = 32767;
+    std::fill(col_min_.begin(), col_min_.end(), 0);
+    std::fill(col_max_.begin(), col_max_.end(), 0);
     channels_ = 1;
     has_data_ = false;
     if (obj_) {
@@ -60,11 +55,6 @@ void WaveformView::setEnvelope(const WaveX::Protocol::EnvelopeColumn* columns,
         return;
     }
 
-    // Fixed full-scale range. See the header: an envelope that rescales itself
-    // cannot be read as a level, which is most of what it is for.
-    y_min_ = -32768;
-    y_max_ = 32767;
-
     // The wire's stride is whatever the backend sent; only the lanes we can
     // draw are stored. Clamping the STORED count while indexing with the
     // original stride is what keeps a 3-channel payload reading channels 0 and
@@ -72,16 +62,50 @@ void WaveformView::setEnvelope(const WaveX::Protocol::EnvelopeColumn* columns,
     const uint8_t stride = channels;
     channels_ = (channels > kMaxChannels) ? kMaxChannels : channels;
 
-    for (uint16_t i = 0; i < kColumnCount; ++i) {
-        uint32_t idx = static_cast<uint32_t>((static_cast<uint64_t>(i) * count) / kColumnCount);
-        if (idx >= count) {
-            idx = count - 1;
+    if (count == columns_) {
+        // The panel's case: nothing to resample.
+        for (uint16_t i = 0; i < columns_; ++i) {
+            for (uint8_t ch = 0; ch < channels_; ++ch) {
+                const WaveX::Protocol::EnvelopeColumn& c = columns[i * stride + ch];
+                colMin(ch, i) = c.min_sample;
+                colMax(ch, i) = c.max_sample;
+            }
         }
-
-        for (uint8_t ch = 0; ch < channels_; ++ch) {
-            const WaveX::Protocol::EnvelopeColumn& c = columns[idx * stride + ch];
-            col_min_[ch][i] = c.min_sample;
-            col_max_[ch][i] = c.max_sample;
+    } else if (count > columns_) {
+        // Reduce by merging: every source column contributes its extremes to
+        // the display column it lands in, so nothing narrower than a column
+        // can disappear. Same split as the cache's render, so a view fed a
+        // finer tier looks like one fed its own.
+        for (uint16_t i = 0; i < columns_; ++i) {
+            const uint32_t s0 = (static_cast<uint32_t>(i) * count) / columns_;
+            uint32_t s1 = (static_cast<uint32_t>(i + 1) * count) / columns_;
+            if (s1 <= s0) {
+                s1 = s0 + 1;
+            }
+            for (uint8_t ch = 0; ch < channels_; ++ch) {
+                int16_t lo = columns[s0 * stride + ch].min_sample;
+                int16_t hi = columns[s0 * stride + ch].max_sample;
+                for (uint32_t s = s0 + 1; s < s1; ++s) {
+                    const WaveX::Protocol::EnvelopeColumn& c = columns[s * stride + ch];
+                    lo = std::min(lo, c.min_sample);
+                    hi = std::max(hi, c.max_sample);
+                }
+                colMin(ch, i) = lo;
+                colMax(ch, i) = hi;
+            }
+        }
+    } else {
+        // Stretch: fewer columns than pixels, each source column repeats.
+        for (uint16_t i = 0; i < columns_; ++i) {
+            uint32_t idx = (static_cast<uint32_t>(i) * count) / columns_;
+            if (idx >= count) {
+                idx = count - 1;
+            }
+            for (uint8_t ch = 0; ch < channels_; ++ch) {
+                const WaveX::Protocol::EnvelopeColumn& c = columns[idx * stride + ch];
+                colMin(ch, i) = c.min_sample;
+                colMax(ch, i) = c.max_sample;
+            }
         }
     }
 
@@ -89,59 +113,15 @@ void WaveformView::setEnvelope(const WaveX::Protocol::EnvelopeColumn* columns,
     lv_obj_invalidate(obj_);
 }
 
-void WaveformView::setSamples(const int16_t* samples, uint16_t count) {
-    if (!samples || count == 0 || !obj_) {
-        clear();
-        return;
-    }
-
-    int16_t min_v = samples[0];
-    int16_t max_v = samples[0];
-    for (uint16_t i = 1; i < count; ++i) {
-        if (samples[i] < min_v)
-            min_v = samples[i];
-        if (samples[i] > max_v)
-            max_v = samples[i];
-    }
-    // Expand range slightly to avoid flat lines when min==max
-    int32_t pad = std::max<int32_t>(500, (max_v - min_v) / 8);
-    y_min_ = std::max<int32_t>(-32768, static_cast<int32_t>(min_v) - pad);
-    y_max_ = std::min<int32_t>(32767, static_cast<int32_t>(max_v) + pad);
-    if (y_min_ == y_max_) {
-        y_min_ = std::max<int32_t>(-32768, y_min_ - 1);
-        y_max_ = std::min<int32_t>(32767, y_max_ + 1);
-    }
-
-    // Raw samples are mono by definition here (the record page's preview), so
-    // there is one lane and it uses the full height.
-    channels_ = 1;
-
-    // Down-sample to column count. A single trace, so the span for each column
-    // runs from the sample to the zero line rather than to a stale envelope
-    // floor - the old chart had to flatten its lower series for the same
-    // reason.
-    for (uint16_t i = 0; i < kColumnCount; ++i) {
-        uint32_t idx = static_cast<uint32_t>((static_cast<uint64_t>(i) * count) / kColumnCount);
-        if (idx >= count)
-            idx = count - 1;
-        const int16_t v = samples[idx];
-        col_min_[0][i] = std::min<int16_t>(v, 0);
-        col_max_[0][i] = std::max<int16_t>(v, 0);
-    }
-
-    has_data_ = true;
-    lv_obj_invalidate(obj_);
-}
-
-int32_t WaveformView::valueToY(int32_t value, const lv_area_t& area) const {
+int32_t WaveformView::valueToY(int32_t value, const lv_area_t& area) {
     const int32_t h = lv_area_get_height(&area);
-    const int32_t span = y_max_ - y_min_;
-    if (h <= 0 || span <= 0) {
+    constexpr int32_t span = kYMax - kYMin;
+    if (h <= 0) {
         return area.y1;
     }
-    int32_t clamped = std::clamp<int32_t>(value, y_min_, y_max_);
+    const int32_t clamped = std::clamp<int32_t>(value, kYMin, kYMax);
     // y grows downward, so the maximum value sits at the top edge.
-    return area.y2 - ((clamped - y_min_) * (h - 1)) / span;
+    return area.y2 - ((clamped - kYMin) * (h - 1)) / span;
 }
 
 void WaveformView::drawEventCb(lv_event_t* e) {
@@ -164,45 +144,92 @@ lv_area_t WaveformView::laneArea(const lv_area_t& content, uint8_t channel) cons
     return {content.x1, mid + 1, content.x2, content.y2};
 }
 
+// Only fills that reach the clip become draw tasks. LVGL renders the screen
+// in WAVEX_LVGL_DRAW_BUF_HEIGHT-line strips and raises LV_EVENT_DRAW_MAIN
+// once per strip an object touches, with the clip set to that strip; a task
+// outside it is malloc'd, appended to the layer's list by walking to its tail,
+// and only then discarded at dispatch. Handing over every column on every
+// strip made one 1230-column stereo frame ~18 strips x ~12 ms of UI-task
+// time - and a marker moving over the trace invalidates a sliver that costs
+// the same. With the clip honoured and runs merged on their clipped spans
+// (drawLane) the same frame is ~37 ms, no strip over ~3.5 ms. Bench,
+// 2026-09-06, 44 s stereo file.
+static inline bool touches(const lv_area_t& a, const lv_area_t& clip) {
+    return a.x2 >= clip.x1 && a.x1 <= clip.x2 && a.y2 >= clip.y1 && a.y1 <= clip.y2;
+}
+
+static inline void fillClipped(lv_layer_t* layer,
+                               const lv_draw_fill_dsc_t& dsc,
+                               const lv_area_t& a,
+                               const lv_area_t& clip) {
+    if (touches(a, clip)) {
+        lv_draw_fill(layer, &dsc, &a);
+    }
+}
+
 void WaveformView::drawLane(lv_layer_t* layer,
-                            lv_draw_rect_dsc_t& dsc,
+                            lv_draw_fill_dsc_t& dsc,
                             const lv_area_t& lane,
+                            const lv_area_t& clip,
                             uint8_t channel) const {
     const int32_t w = lv_area_get_width(&lane);
-    if (w <= 0 || lv_area_get_height(&lane) <= 0) {
+    if (w <= 0 || lv_area_get_height(&lane) <= 0 || !touches(lane, clip)) {
         return;
     }
 
-    const std::array<int16_t, kColumnCount>& mins = col_min_[channel];
-    const std::array<int16_t, kColumnCount>& maxs = col_max_[channel];
+    const int16_t* mins = &col_min_[static_cast<size_t>(channel) * columns_];
+    const int16_t* maxs = &col_max_[static_cast<size_t>(channel) * columns_];
 
-    // One rectangle per column would be kColumnCount draw tasks. Runs of
-    // columns that map to the same span - silence, sustained tones, anything
-    // flat - collapse into one, which is most of a typical waveform's width.
-    uint16_t run_start = 0;
-    for (uint16_t i = 1; i <= kColumnCount; ++i) {
-        const bool same =
-            i < kColumnCount && mins[i] == mins[run_start] && maxs[i] == maxs[run_start];
-        if (same) {
-            continue;
+    // One fill per column would be columns_ draw tasks. Runs of columns whose
+    // span is the same AFTER clipping collapse into one: silence and anything
+    // flat, as before, and - because the clip is a 40-line strip - every
+    // column a loud passage drives through the whole strip, which is most of
+    // them where the trace is dense. A column with nothing in the strip adds
+    // no task at all. lv_area_t bounds are inclusive, so a column whose min
+    // and max collapse (silence, DC) still draws as a 1 px line with no
+    // special casing - the grid lines rely on the same property.
+    const int32_t clip_top = std::max(clip.y1, lane.y1);
+    const int32_t clip_bot = std::min(clip.y2, lane.y2);
+    if (clip_bot < clip_top) {
+        return;
+    }
+    const int32_t col0 = std::max<int32_t>(0, ((clip.x1 - lane.x1) * columns_) / w);
+    const int32_t col1 = std::min<int32_t>(columns_ - 1, ((clip.x2 - lane.x1) * columns_) / w + 1);
+
+    int32_t run_start = -1;
+    int32_t run_top = 0;
+    int32_t run_bot = 0;
+    auto flush = [&](int32_t end) {
+        if (run_start < 0) {
+            return;
         }
-
-        const int32_t x1 = lane.x1 + (w * run_start) / kColumnCount;
-        const int32_t x2 = lane.x1 + (w * i) / kColumnCount - 1;
-
-        int32_t y_top = valueToY(maxs[run_start], lane);
-        int32_t y_bot = valueToY(mins[run_start], lane);
+        const int32_t x1 = lane.x1 + (w * run_start) / columns_;
+        const int32_t x2 = lane.x1 + (w * end) / columns_ - 1;
+        lv_area_t span = {x1, run_top, std::max(x1, x2), run_bot};
+        lv_draw_fill(layer, &dsc, &span);
+        run_start = -1;
+    };
+    for (int32_t i = col0; i <= col1; ++i) {
+        int32_t y_top = valueToY(maxs[i], lane);
+        int32_t y_bot = valueToY(mins[i], lane);
         if (y_bot < y_top) {
             std::swap(y_top, y_bot);
         }
-        // lv_area_t bounds are inclusive, so a column whose min and max
-        // collapse (silence, DC) still draws as a 1 px line with no special
-        // casing - the grid lines rely on the same property.
-        lv_area_t span = {x1, y_top, std::max(x1, x2), y_bot};
-        lv_draw_rect(layer, &dsc, &span);
-
+        y_top = std::max(y_top, clip_top);
+        y_bot = std::min(y_bot, clip_bot);
+        if (y_bot < y_top) {
+            flush(i);
+            continue;
+        }
+        if (run_start >= 0 && y_top == run_top && y_bot == run_bot) {
+            continue;
+        }
+        flush(i);
         run_start = i;
+        run_top = y_top;
+        run_bot = y_bot;
     }
+    flush(col1 + 1);
 }
 
 void WaveformView::drawSpans(lv_event_t* e) const {
@@ -219,27 +246,32 @@ void WaveformView::drawSpans(lv_event_t* e) const {
     if (w <= 0 || h <= 0) {
         return;
     }
+    // What this event is actually for: the strip being rendered, or the
+    // invalidated sliver. This is the clip every task added now inherits.
+    const lv_area_t clip = layer->_clip_area;
+    if (!touches(area, clip)) {
+        return;
+    }
 
     const bool stereo = channels_ > 1;
     const uint8_t grid_rows = stereo ? kGridRowsStereo : kGridRowsMono;
 
-    lv_draw_rect_dsc_t dsc;
-    lv_draw_rect_dsc_init(&dsc);
-    dsc.bg_opa = LV_OPA_COVER;
+    // A plain fill, not lv_draw_rect: the rect path re-decides border, shadow,
+    // outline and background image for every one of up to columns_ calls.
+    lv_draw_fill_dsc_t dsc;
+    lv_draw_fill_dsc_init(&dsc);
+    dsc.opa = LV_OPA_COVER;
     dsc.radius = 0;
-    dsc.border_opa = LV_OPA_TRANSP;
-    dsc.outline_opa = LV_OPA_TRANSP;
-    dsc.shadow_opa = LV_OPA_TRANSP;
 
     // Grid first, so the traces sit on top of it as they did with the chart.
     // Columns span the full height - they mark time, which both channels
     // share - while rows are drawn per lane so each trace keeps a line on its
     // own zero.
-    dsc.bg_color = lv_color_hex(kGridColor);
+    dsc.color = UI_COLOR_LINE;
     for (uint8_t c = 1; c < kGridCols; ++c) {
         lv_area_t line = {
             area.x1 + (w * c) / kGridCols, area.y1, area.x1 + (w * c) / kGridCols, area.y2};
-        lv_draw_rect(layer, &dsc, &line);
+        fillClipped(layer, dsc, line, clip);
     }
     for (uint8_t ch = 0; ch < channels_; ++ch) {
         const lv_area_t lane = laneArea(area, ch);
@@ -247,15 +279,18 @@ void WaveformView::drawSpans(lv_event_t* e) const {
         for (uint8_t r = 1; r < grid_rows; ++r) {
             const int32_t y = lane.y1 + (lane_h * r) / grid_rows;
             lv_area_t line = {lane.x1, y, lane.x2, y};
-            lv_draw_rect(layer, &dsc, &line);
+            fillClipped(layer, dsc, line, clip);
         }
     }
 
     if (stereo) {
+        // Brighter than the grid so the split between L and R does not read
+        // as just another div line - it is a boundary between two signals,
+        // not a scale mark.
         const int32_t mid = area.y1 + h / 2;
-        dsc.bg_color = lv_color_hex(kDividerColor);
+        dsc.color = UI_COLOR_DIMMER;
         lv_area_t divider = {area.x1, mid, area.x2, mid};
-        lv_draw_rect(layer, &dsc, &divider);
+        fillClipped(layer, dsc, divider, clip);
     }
 
     if (!has_data_) {
@@ -263,16 +298,16 @@ void WaveformView::drawSpans(lv_event_t* e) const {
         // at 0 when empty, so an unpopulated view still drew a centre line, and
         // dropping that made "no envelope has arrived" indistinguishable from
         // "the panel is broken" - which is exactly how it was reported.
-        dsc.bg_color = lv_color_hex(kTraceColor);
+        dsc.color = UI_COLOR_ACCENT;
         const int32_t y0 = valueToY(0, area);
         lv_area_t zero_line = {area.x1, y0, area.x2, y0};
-        lv_draw_rect(layer, &dsc, &zero_line);
+        fillClipped(layer, dsc, zero_line, clip);
         return;
     }
 
-    dsc.bg_color = lv_color_hex(kTraceColor);
+    dsc.color = UI_COLOR_ACCENT;
     for (uint8_t ch = 0; ch < channels_; ++ch) {
-        drawLane(layer, dsc, laneArea(area, ch), ch);
+        drawLane(layer, dsc, laneArea(area, ch), clip, ch);
     }
 
     // Name the lanes. Without this the panel cannot be told apart from the
@@ -281,7 +316,7 @@ void WaveformView::drawSpans(lv_event_t* e) const {
     if (stereo) {
         lv_draw_label_dsc_t label_dsc;
         lv_draw_label_dsc_init(&label_dsc);
-        label_dsc.color = lv_color_hex(kChannelLabelColor);
+        label_dsc.color = UI_COLOR_DIM;
         label_dsc.font = UI_FONT_MICRO;
         label_dsc.opa = LV_OPA_COVER;
 
@@ -290,7 +325,9 @@ void WaveformView::drawSpans(lv_event_t* e) const {
             const lv_area_t lane = laneArea(area, ch);
             label_dsc.text = kNames[ch];
             lv_area_t at = {lane.x1 + 4, lane.y1 + 2, lane.x1 + 24, lane.y1 + 20};
-            lv_draw_label(layer, &label_dsc, &at);
+            if (touches(at, clip)) {
+                lv_draw_label(layer, &label_dsc, &at);
+            }
         }
     }
 }

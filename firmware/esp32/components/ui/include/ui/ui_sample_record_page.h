@@ -1,16 +1,26 @@
 #pragma once
 
+#include "../components/envelope_panel.h"
 #include "input_event.h"
 #include "ui_page.h"
 
 #include <array>
-#include <atomic>
 #include <cstdint>
 #include <memory>
-#include <vector>
 
 namespace wavex_ui {
 
+/**
+ * @brief The Record tab of the Sample group.
+ *
+ * Recording is not implemented: the backend acknowledges SAMPLE_CTRL and does
+ * nothing with it (audio_engine OnSampleCtrl, "review C2"), and roadmap Phase
+ * 1 rebuilds the capture path. Until then this page shows the current sample's
+ * whole-file envelope through the same EnvelopePanel the Browse and Edit tabs
+ * use, and says plainly that the Record key is inert. It used to drive its own
+ * decimated-preview protocol (MSG_PREVIEW_REQ / MSG_WAVE_CHUNK) and report
+ * "Recording..." on a command the backend ignores; both are gone.
+ */
 class UISampleRecordPage : public UIPage {
    public:
     UISampleRecordPage() = default;
@@ -19,45 +29,29 @@ class UISampleRecordPage : public UIPage {
 
     void onEnter(lv_obj_t* parent) override;
     void onExit() override;
-    void onInput(const InputEvent& evt) override;
     std::array<Softkey, NUM_SOFTKEYS> getSoftkeys() override;
 
    private:
-    // A wave chunk is bounded by the UART payload limit (2048 bytes, minus the
-    // WaveChunkMessage header, as int16 samples). Staging the whole chunk means
-    // the render sees exactly what arrived rather than a truncated prefix.
-    static constexpr uint16_t kWaveStageCapacity = 1021;
-
     lv_obj_t* root_ = nullptr;
+    lv_obj_t* name_label_ = nullptr;
     lv_obj_t* status_label_ = nullptr;
     lv_timer_t* ui_timer_ = nullptr;
     std::unique_ptr<class WaveformView> waveform_;
-    bool is_recording_ = false;
 
-    // Cross-task staging. handleWaveChunk() and the status updates it makes run
-    // on the UART RX task; nothing there may touch a widget, because the LVGL
-    // task renders on the other core. serviceUi() drains these on the UI task.
-    // The pending flags are release-stored after their payload and
-    // acquire-loaded before it, so a raised flag always implies visible data.
-    int16_t staged_samples_[kWaveStageCapacity] = {};
-    uint16_t staged_count_ = 0;
-    std::atomic<bool> wave_pending_{false};
-    std::atomic<bool> wave_clear_pending_{false};
-    char staged_status_[64] = {0};
-    std::atomic<bool> status_pending_{false};
-
-    static void waveChunkStatic(uint32_t offset,
-                                const int16_t* samples,
-                                uint16_t count,
-                                void* user);
-    void handleWaveChunk(uint32_t offset, const int16_t* samples, uint16_t count);
+    // The panel owns the chunk listener and the request cycle; this page only
+    // tells it which sample to show and words the outcome.
+    EnvelopePanel panel_;
+    // What the panel was last told, so a reload (new generation) or a Load on
+    // another tab is noticed without re-sending an unchanged sample.
+    uint16_t shown_sample_id_ = 0;
+    uint16_t shown_generation_ = 0;
+    bool no_sample_shown_ = false;    // the "No sample selected" text is up
+    bool wave_status_shown_ = false;  // the status line is about the request
 
     static void uiTimerCb(lv_timer_t* timer);
     void serviceUi();
-
-    void requestWaveform();
-    void toggleRecording();
-    void updateStatus(const char* text);
+    void syncSample();
+    void setStatus(const char* text);
 };
 
 std::shared_ptr<UIPage> createSampleRecordPage();

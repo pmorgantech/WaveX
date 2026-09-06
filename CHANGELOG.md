@@ -13,6 +13,31 @@ versioning and release process.
 
 ### Changed
 
+- **One waveform preview, shared by the Sample tabs.** Browse, Edit and
+  Record each ran their own request/receive/render cycle for the trace they
+  show; Browse's never fired for a selection made by scrolling, and Record
+  drove a separate decimated-preview protocol. All three now hand a sample and
+  a window to one `EnvelopePanel` component, which owns the chunk listener,
+  the cache and the retry policy. Traces are drawn at one column per pixel
+  from the envelope cache's exact min/max downsample, in theme colours.
+  The cache keeps several runs at a tier, so the Edit tab's loop-seam halves
+  no longer evict each other and re-request forever, and a view is shown from
+  a coarser run the moment one lands while its own is still on the way.
+- The waveform draw only issues LVGL tasks for the strip being rendered, and
+  merges columns on their clipped spans. A 44 s stereo trace cost the UI task
+  ~200 ms per frame (18 strips × ~12 ms, every one of them drawing all 2460
+  column fills); it is now ~37 ms, no strip over ~3.5 ms. A marker moving over
+  the trace costs the sliver it invalidates rather than a whole redraw.
+- Sample ▸ Browse previews **any resident sample** under the cursor, not only
+  the one this page loaded since boot: the highlighted path is resolved
+  against the backend's own records, so a sample loaded before the last
+  reboot, or from another page, shows its trace without being loaded again.
+  The preview well and its "Load to preview" hint take their colours from the
+  theme (the well was a fixed near-black).
+- Sample ▸ Record says what it is: recording is not implemented (the backend
+  ignores the command; roadmap Phase 1), so the Record key is dimmed with the
+  reason and the page shows the current sample's trace instead of reporting
+  "Recording..." for a command nothing acts on.
 - **One path bound across the system.** Three different limits coexisted — 96
   on the wire, 200 in the SFZ importer, 255 for a FatFs long name — so the
   importer could resolve a path the wire could not carry and the Pool could not
@@ -29,6 +54,10 @@ versioning and release process.
 
 ### Fixed
 
+- Sample ▸ Edit: the parameter strip follows `Param >` / `< Param` onto a
+  card past the visible four. It was laid out only with the values, so the
+  focus ring landed on a hidden card and the strip stayed put until a value
+  changed.
 - The Sample Pool now remembers each sample's **card path**, which saving an
   Instrument depends on. A Pool id names a slot in this boot's registry and
   means nothing in a file, and the only path the Pool kept was in the wire's

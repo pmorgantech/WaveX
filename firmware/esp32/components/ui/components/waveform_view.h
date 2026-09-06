@@ -1,48 +1,66 @@
 #pragma once
 
+#include "envelope_sink.h"
 #include "lvgl.h"
 #include "spi_protocol/protocol.h"
 
-#include <array>
 #include <cstdint>
+#include <vector>
 
 namespace wavex_ui {
 
 /**
  * @brief LVGL waveform renderer drawn as filled vertical spans.
  *
- * Accepts int16 samples and down-samples to a fixed number of columns for
- * display. Intended for lightweight preview rendering.
+ * Draws a min/max envelope at ONE COLUMN PER PIXEL of its width. The
+ * EnvelopeSink face is what an EnvelopePanel drives; the pages never call
+ * setEnvelope() themselves any more.
  *
  * **Not an lv_chart.** It was one, and that cost 37-44 ms on the first frame
  * after entering Sample Edit or Sample Record - measured, see
  * docs/backlog.md. An `lv_chart` of `LV_CHART_TYPE_LINE` with two series draws
  * ~1022 anti-aliased line segments, and anti-aliasing a waveform silhouette
  * buys nothing: the shape is a solid block of colour, not a curve anyone reads
- * the slope of. This draws one opaque rectangle per column from an
+ * the slope of. This draws one opaque fill per column from an
  * `LV_EVENT_DRAW_MAIN` handler instead - no anti-aliasing, no per-point widget
- * state, and adjacent identical columns merge into a single rectangle.
+ * state, and adjacent identical columns merge into a single fill.
  *
- * Column data lives in fixed `std::array` members, so nothing here allocates
- * after construction (`docs/esp32p4_coding_guide.md` §8).
+ * **Why a column per pixel.** The previous version kept 512 columns whatever
+ * its width and resampled whatever it was given onto them by nearest index.
+ * That threw detail away twice: the cache served 1256 columns to the edit
+ * page and the view kept 512 of them, and every column it did keep was one
+ * picked column rather than the extremes of the 2.45 it stood for, so a
+ * single-sample click could vanish from the display. Now the sink's column
+ * count IS its pixel width, the panel asks the cache for exactly that many,
+ * and nothing is resampled on the way to the screen. The resample paths
+ * below stay only for a caller that hands over some other count; they are
+ * exact (min/max merge) when reducing.
+ *
+ * Column storage is allocated once in the constructor and never resized
+ * (`docs/esp32p4_coding_guide.md` §8).
  *
  * All methods are UI-task only, like every other LVGL call in this codebase.
  */
-class WaveformView {
+class WaveformView : public EnvelopeSink {
    public:
-    WaveformView(lv_obj_t* parent, lv_coord_t width, lv_coord_t height);
+    /// @p width and @p height are PIXELS. A percentage or LV_SIZE_CONTENT
+    /// width cannot name a column count, so it falls back to kFallbackColumns
+    /// and draws resampled; give a pixel width and it will not.
+    WaveformView(lv_obj_t* parent, int32_t width, int32_t height);
+    ~WaveformView() override = default;
 
     lv_obj_t* root() const { return obj_; }
 
-    void setSamples(const int16_t* samples, uint16_t count);
+    // EnvelopeSink
+    uint16_t columns() const override { return columns_; }
 
     /**
      * @brief Draws a min/max envelope (roadmap 1.5.5 item 2).
      *
      * `columns` holds `count * channels` values, channel-interleaved per
-     * column. Unlike setSamples() this does NOT auto-scale: an envelope's
-     * whole job is to show level honestly, and rescaling a quiet passage to
-     * full height would say the opposite of what it means.
+     * column. This does NOT auto-scale: an envelope's whole job is to show
+     * level honestly, and rescaling a quiet passage to full height would say
+     * the opposite of what it means.
      *
      * A stereo envelope draws as TWO STACKED TRACES - L above R, each in its
      * own half of the panel and each labelled - while a mono file uses the
@@ -57,21 +75,16 @@ class WaveformView {
      * - **The channel layout is stated on screen.** The failure mode this
      *   whole item exists to avoid is the legacy preview path, which drew the
      *   LEFT CHANNEL ONLY and said nothing about it.
-     *
-     * This previously drew one trace spanning the extremes of both channels.
-     * That was honest - it could only fail to separate L from R, never hide
-     * anything - but it could not do the first or third of the above.
      */
     void setEnvelope(const WaveX::Protocol::EnvelopeColumn* columns,
                      uint16_t count,
-                     uint8_t channels);
-    void clear();
+                     uint8_t channels) override;
+    void clear() override;
 
    private:
-    // One column per ~2.45 px of the design's 1256 px panel. Kept at the
-    // chart-era value: with spans rather than a polyline the cost is no longer
-    // dominated by column count, so there is no reason to show less detail.
-    static constexpr uint16_t kColumnCount = 512;
+    /// Used only when the constructor is given a width that is not a pixel
+    /// count. One column per ~2.45 px of the design's 1256 px panel.
+    static constexpr uint16_t kFallbackColumns = 512;
 
     /// L and R. The wire carries 1 or 2; anything beyond is clamped away
     /// rather than silently selecting which two channels you get.
@@ -95,25 +108,29 @@ class WaveformView {
 
     /// Draws one trace's filled spans into @p lane.
     void drawLane(lv_layer_t* layer,
-                  lv_draw_rect_dsc_t& dsc,
+                  lv_draw_fill_dsc_t& dsc,
                   const lv_area_t& lane,
+                  const lv_area_t& clip,
                   uint8_t channel) const;
 
     /// Maps a sample value onto a y pixel inside @p area.
-    int32_t valueToY(int32_t value, const lv_area_t& area) const;
+    static int32_t valueToY(int32_t value, const lv_area_t& area);
+
+    int16_t& colMin(uint8_t ch, uint16_t i) { return col_min_[ch * columns_ + i]; }
+    int16_t& colMax(uint8_t ch, uint16_t i) { return col_max_[ch * columns_ + i]; }
+    int16_t colMin(uint8_t ch, uint16_t i) const { return col_min_[ch * columns_ + i]; }
+    int16_t colMax(uint8_t ch, uint16_t i) const { return col_max_[ch * columns_ + i]; }
 
     lv_obj_t* obj_ = nullptr;
+    uint16_t columns_ = kFallbackColumns;
 
-    std::array<std::array<int16_t, kColumnCount>, kMaxChannels> col_min_{};
-    std::array<std::array<int16_t, kColumnCount>, kMaxChannels> col_max_{};
+    /// kMaxChannels lanes of columns_ each, lane-major.
+    std::vector<int16_t> col_min_;
+    std::vector<int16_t> col_max_;
 
     /// 1 or 2. Drives the layout, so it is what decides whether the panel is
     /// showing you one trace or two.
     uint8_t channels_ = 1;
-
-    // Display range. Fixed full-scale for envelopes, autoscaled for samples.
-    int32_t y_min_ = -32768;
-    int32_t y_max_ = 32767;
 
     bool has_data_ = false;
 };
