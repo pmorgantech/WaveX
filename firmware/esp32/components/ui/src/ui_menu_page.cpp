@@ -124,9 +124,16 @@ void UIMenuPage::rebuildList() {
         row.card = lv_obj_create(list_);
         lv_obj_remove_style_all(row.card);
         lv_obj_set_size(row.card, lv_pct(100), kRowH);
-        lv_obj_set_style_bg_color(row.card, UI_COLOR_CARD, 0);
+        // A menu row is a button, so it is drawn as one: a lifted fill and an
+        // edge you can see against the page rather than the hairline a
+        // read-only card gets. On this panel the card/line pair is only a few
+        // RGB565 steps off the background, which reads as a list, not as five
+        // things you can press.
+        lv_obj_set_style_bg_color(row.card, UI_COLOR_CARD_ALT, 0);
         lv_obj_set_style_bg_opa(row.card, LV_OPA_COVER, 0);
-        lv_obj_set_style_radius(row.card, UI_RADIUS_CARD, 0);
+        lv_obj_set_style_bg_color(
+            row.card, UI_COLOR_CARD, static_cast<lv_style_selector_t>(LV_STATE_PRESSED));
+        lv_obj_set_style_radius(row.card, UI_RADIUS_BUTTON, 0);
         lv_obj_set_style_pad_hor(row.card, kRowPadX, 0);
         lv_obj_remove_flag(row.card, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_add_flag(row.card, LV_OBJ_FLAG_CLICKABLE);
@@ -213,7 +220,7 @@ void UIMenuPage::applyRowState(size_t index) {
     Row& row = rows_[index];
     lv_obj_set_style_border_width(
         row.card, on ? UI_BORDER_WIDTH_FOCUS : UI_BORDER_WIDTH, LV_PART_MAIN);
-    lv_obj_set_style_border_color(row.card, on ? UI_COLOR_ACCENT : UI_COLOR_LINE, LV_PART_MAIN);
+    lv_obj_set_style_border_color(row.card, on ? UI_COLOR_ACCENT : UI_COLOR_EDGE, LV_PART_MAIN);
     lv_obj_set_style_bg_color(row.rail, on ? UI_COLOR_ACCENT : UI_COLOR_LINE, 0);
 }
 
