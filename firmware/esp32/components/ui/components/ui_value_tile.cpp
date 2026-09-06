@@ -11,12 +11,30 @@ namespace {
 // their fills up with each other.
 constexpr int kPadX = 20;
 constexpr int kPadY = 16;
-constexpr int kBarH = 12;
+// The fill is the only part of a tile readable from across a bench, so it is
+// worth more height than a hairline progress bar would take.
+constexpr int kBarH = 24;
 constexpr int kLabelY = kPadY;
-constexpr int kValueY = kPadY + 30;
+constexpr int kValueY = kPadY + 34;
 
-constexpr int kKnobW = 8;
-constexpr int kKnobH = 22;
+// The value steps down when the card is too short to hold the one above it.
+// Without this a 100px tile drew a 48px number straight through its own fill
+// bar - the widget knows its own height, so it is the widget's job to pick.
+constexpr int kHeroMinHeight = 150;
+constexpr int kLargeMinHeight = 120;
+
+const lv_font_t* valueFontFor(int h) {
+    if (h >= kHeroMinHeight) {
+        return UI_FONT_MONO_HERO;
+    }
+    if (h >= kLargeMinHeight) {
+        return UI_FONT_MONO_LARGE;
+    }
+    return UI_FONT_MONO_VALUE;
+}
+
+constexpr int kKnobW = 12;
+constexpr int kKnobH = 32;
 
 // Pixels of vertical travel per detent. Matched to the encoder's feel: a full
 // sweep of a tile is roughly a full turn, and a fingertip's worth of movement
@@ -32,6 +50,7 @@ float clamp01(float v) {
 // value type the page copies around, so it cannot own this itself.
 struct TileDrag {
     std::function<void(int)> on_adjust;
+    int32_t last_x = 0;
     int32_t last_y = 0;
     int32_t carry = 0;  ///< sub-detent travel, kept so slow drags still move
 };
@@ -55,6 +74,7 @@ void tileDragCb(lv_event_t* e) {
     lv_indev_get_point(indev, &p);
 
     if (code == LV_EVENT_PRESSED) {
+        d->last_x = p.x;
         d->last_y = p.y;
         d->carry = 0;
         return;
@@ -63,9 +83,12 @@ void tileDragCb(lv_event_t* e) {
         return;
     }
 
-    // Up is positive: screen y grows downward, and a knob you drag up should
-    // read as turning it up.
-    d->carry += d->last_y - p.y;
+    // Right and up both increase, left and down both decrease. Screen y grows
+    // downward, so the y term is inverted. Summing the two axes rather than
+    // locking to one means a diagonal drag does the obvious thing instead of
+    // being ignored on the axis the user did not commit to.
+    d->carry += (p.x - d->last_x) + (d->last_y - p.y);
+    d->last_x = p.x;
     d->last_y = p.y;
     const int steps = d->carry / kDragPixelsPerStep;
     if (steps != 0) {
@@ -113,18 +136,19 @@ ValueTile valueTileCreate(
 
     t.label = lv_label_create(t.card);
     lv_label_set_text(t.label, label);
-    lv_obj_set_style_text_font(t.label, UI_FONT_SMALL, 0);
+    lv_obj_set_style_text_font(t.label, UI_FONT_BODY, 0);
     lv_obj_set_style_text_color(t.label, UI_COLOR_DIM, 0);
     // Letter-spaced small caps is what makes an 18px label read as a field
     // name rather than as more body text.
     lv_obj_set_style_text_letter_space(t.label, 1, 0);
     lv_obj_set_pos(t.label, kPadX, kLabelY);
 
+    t.value_font = valueFontFor(h);
     t.value = lv_label_create(t.card);
     lv_label_set_text(t.value, "-");
-    lv_obj_set_style_text_font(t.value, UI_FONT_MONO_HERO, 0);
+    lv_obj_set_style_text_font(t.value, t.value_font, 0);
     lv_obj_set_style_text_color(t.value, UI_COLOR_FG, 0);
-    lv_obj_set_pos(t.value, kPadX, kValueY);
+    lv_obj_align(t.value, LV_ALIGN_TOP_MID, 0, kValueY);
 
     if (unit && unit[0]) {
         t.unit = lv_label_create(t.card);
@@ -197,11 +221,14 @@ void valueTileSetFocus(ValueTile& tile, bool focused) {
     }
 }
 
+// Centres the value, and the value+unit pair when there is a unit - offsetting
+// the number by half the unit's width so the group reads as centred rather
+// than the number being centred with the unit hanging off it.
 void valueTileSetValue(ValueTile& tile, const char* text, bool compact) {
     if (!tile.value) {
         return;
     }
-    lv_obj_set_style_text_font(tile.value, compact ? UI_FONT_MONO_VALUE : UI_FONT_MONO_HERO, 0);
+    lv_obj_set_style_text_font(tile.value, compact ? UI_FONT_MONO_VALUE : tile.value_font, 0);
     if (compact) {
         // A compact value can be a sentence rather than a number, so it has to
         // wrap inside the card instead of running off its right edge.
@@ -213,9 +240,22 @@ void valueTileSetValue(ValueTile& tile, const char* text, bool compact) {
         lv_label_set_long_mode(tile.value, LV_LABEL_LONG_WRAP);
     }
     lv_label_set_text(tile.value, text);
+
+    if (compact) {
+        // A wrapped sentence is read left to right, not centred on itself.
+        lv_obj_align(tile.value, LV_ALIGN_TOP_LEFT, kPadX, kValueY);
+        return;
+    }
+
+    int32_t shift = 0;
+    if (tile.unit) {
+        lv_obj_update_layout(tile.unit);
+        shift = (lv_obj_get_width(tile.unit) + UI_PADDING_SMALL) / 2;
+    }
+    lv_obj_align(tile.value, LV_ALIGN_TOP_MID, -shift, kValueY);
     if (tile.unit) {
         lv_obj_update_layout(tile.value);
-        lv_obj_align_to(tile.unit, tile.value, LV_ALIGN_OUT_RIGHT_BOTTOM, UI_PADDING_SMALL, -4);
+        lv_obj_align_to(tile.unit, tile.value, LV_ALIGN_OUT_RIGHT_BOTTOM, UI_PADDING_SMALL, -6);
     }
 }
 

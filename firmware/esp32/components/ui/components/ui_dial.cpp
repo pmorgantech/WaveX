@@ -11,7 +11,9 @@ namespace {
 constexpr int kRing = 132;
 constexpr int kRingArcWidth = 14;
 constexpr int kPadX = 26;
-constexpr int kTextGap = 22;
+// Tightened from 22: the readout stepped up a size, so it needs the width back
+// from the gap rather than from the card.
+constexpr int kTextGap = 16;
 
 // Open at the bottom so zero and full scale are visually distinct: a full
 // 360-degree ring reads the same at both ends.
@@ -28,6 +30,7 @@ float clamp01(float v) {
 
 struct DialDrag {
     std::function<void(int)> on_adjust;
+    int32_t last_x = 0;
     int32_t last_y = 0;
     int32_t carry = 0;
 };
@@ -49,6 +52,7 @@ void dialDragCb(lv_event_t* e) {
     lv_point_t p;
     lv_indev_get_point(indev, &p);
     if (code == LV_EVENT_PRESSED) {
+        d->last_x = p.x;
         d->last_y = p.y;
         d->carry = 0;
         return;
@@ -56,7 +60,9 @@ void dialDragCb(lv_event_t* e) {
     if (code != LV_EVENT_PRESSING || !d->on_adjust) {
         return;
     }
-    d->carry += d->last_y - p.y;
+    // Right and up increase, left and down decrease - see ui_value_tile.cpp.
+    d->carry += (p.x - d->last_x) + (d->last_y - p.y);
+    d->last_x = p.x;
     d->last_y = p.y;
     const int steps = d->carry / kDragPixelsPerStep;
     if (steps != 0) {
@@ -121,22 +127,22 @@ Dial dialCreate(lv_obj_t* parent, int x, int y, int w, int h, const char* label)
 
     d.label = lv_label_create(d.card);
     lv_label_set_text(d.label, label);
-    lv_obj_set_style_text_font(d.label, UI_FONT_SMALL, 0);
+    lv_obj_set_style_text_font(d.label, UI_FONT_BODY, 0);
     lv_obj_set_style_text_color(d.label, UI_COLOR_DIM, 0);
     lv_obj_set_style_text_letter_space(d.label, 1, 0);
-    lv_obj_align(d.label, LV_ALIGN_LEFT_MID, text_x, -38);
+    lv_obj_align(d.label, LV_ALIGN_LEFT_MID, text_x, -46);
 
     d.value = lv_label_create(d.card);
     lv_label_set_text(d.value, "-");
-    lv_obj_set_style_text_font(d.value, UI_FONT_MONO_VALUE, 0);
+    lv_obj_set_style_text_font(d.value, UI_FONT_MONO_HERO, 0);
     lv_obj_set_style_text_color(d.value, UI_COLOR_FG, 0);
     lv_obj_align(d.value, LV_ALIGN_LEFT_MID, text_x, 0);
 
     d.hint = lv_label_create(d.card);
     lv_label_set_text(d.hint, "");
-    lv_obj_set_style_text_font(d.hint, UI_FONT_SMALL, 0);
+    lv_obj_set_style_text_font(d.hint, UI_FONT_BODY, 0);
     lv_obj_set_style_text_color(d.hint, UI_COLOR_DIM, 0);
-    lv_obj_align(d.hint, LV_ALIGN_LEFT_MID, text_x, 34);
+    lv_obj_align(d.hint, LV_ALIGN_LEFT_MID, text_x, 46);
 
     return d;
 }

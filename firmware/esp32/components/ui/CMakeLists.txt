@@ -42,6 +42,7 @@ set(COMPONENT_SRCS
     "fonts/wavex_mono_18.c"
     "fonts/wavex_mono_26.c"
     "fonts/wavex_mono_38.c"
+    "fonts/wavex_mono_48.c"
 )
 
 # Add UI include directories

@@ -46,6 +46,10 @@ struct ValueTile {
     lv_obj_t* bar_fill = nullptr;
     lv_obj_t* knob = nullptr;  ///< rides the fill, so the handle tracks the value
     int bar_width = 0;         // cached so setFill does not have to measure
+    /// Chosen at construction from the card's height: a short tile cannot
+    /// carry the hero step without its value colliding with the fill bar.
+    /// Remembered so setValue() can restore it after a compact string.
+    const lv_font_t* value_font = nullptr;
     TileTone tone = TileTone::Neutral;
 };
 
@@ -64,11 +68,16 @@ void valueTileSetTone(ValueTile& tile, TileTone tone);
  * A widget that shows a value should let you change it - reading a number you
  * cannot touch, next to a knob that does not turn, teaches the wrong thing
  * about the whole surface. `on_adjust` is called with a signed number of
- * detents as the finger moves: up is positive, matching the encoder.
+ * detents as the finger moves.
  *
- * Vertical only, and the tile does not scroll or move under the finger - the
- * value changes, the layout does not. The callback should do exactly what the
- * encoder path does, so touch and encoder cannot drift apart.
+ * Right and up increase, left and down decrease, and the two axes sum - so a
+ * horizontal drag along the fill bar and a vertical drag on the card both
+ * work, and a diagonal does the obvious thing rather than being ignored on
+ * whichever axis was not committed to.
+ *
+ * The tile does not scroll or move under the finger: the value changes, the
+ * layout does not. The callback should do exactly what the encoder path does,
+ * so touch and encoder cannot drift apart.
  */
 void valueTileSetOnAdjust(ValueTile& tile, std::function<void(int)> on_adjust);
 

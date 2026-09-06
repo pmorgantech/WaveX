@@ -30,6 +30,7 @@ extern const lv_font_t wavex_mono_14; /* JetBrains Mono Medium   */
 extern const lv_font_t wavex_mono_18; /* JetBrains Mono Medium   */
 extern const lv_font_t wavex_mono_26; /* JetBrains Mono SemiBold */
 extern const lv_font_t wavex_mono_38; /* JetBrains Mono SemiBold */
+extern const lv_font_t wavex_mono_48; /* JetBrains Mono SemiBold */
 
 #ifdef __cplusplus
 }

@@ -118,7 +118,8 @@
 #define UI_FONT_MONO_MICRO &wavex_mono_14  // CPU %, tiny counters
 #define UI_FONT_MONO_SMALL &wavex_mono_18  // inline values, context strings
 #define UI_FONT_MONO_VALUE &wavex_mono_26  // tile values
-#define UI_FONT_MONO_HERO &wavex_mono_38   // the one value a page is about
+#define UI_FONT_MONO_LARGE &wavex_mono_38  // large readouts in a dense layout
+#define UI_FONT_MONO_HERO &wavex_mono_48   // the one value a card is about
 
 // Legacy spellings; aliases only. UI_FONT_TITLE kept its old size (26).
 #define UI_FONT_NORMAL UI_FONT_SMALL

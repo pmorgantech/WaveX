@@ -42,4 +42,5 @@ gen 14 Medium
 gen 18 Medium
 gen 26 SemiBold
 gen 38 SemiBold
+gen 48 SemiBold
 echo "Done. Rebuild the ESP32 target to pick them up."

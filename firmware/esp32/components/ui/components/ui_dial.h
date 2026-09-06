@@ -20,8 +20,8 @@ namespace wavex_ui {
  * would have to justify itself against that with a measurement.
  *
  * The ring itself takes no touch input - a stray press on a thin arc is too
- * easy - but the card does: dragging it up or down turns the dial, the same
- * way the encoder does. See dialSetOnAdjust().
+ * easy - but the card does: dragging it turns the dial, the same way the
+ * encoder does. See dialSetOnAdjust().
  */
 struct Dial {
     lv_obj_t* card = nullptr;
@@ -41,10 +41,11 @@ void dialSetFocus(Dial& dial, bool focused);
 /// value in its own units and `hint` the line under it (may be nullptr).
 void dialSetValue(Dial& dial, float fraction, const char* text, const char* hint);
 
-/// Make the dial adjustable by dragging its card up and down. `on_adjust`
-/// receives a signed number of detents, up positive, and should do exactly
-/// what the encoder path does so the two cannot drift apart. The card does not
-/// move or scroll under the finger; only the value changes.
+/// Make the dial adjustable by dragging its card. Right and up increase, left
+/// and down decrease, and the axes sum. `on_adjust` receives a signed number
+/// of detents and should do exactly what the encoder path does so the two
+/// cannot drift apart. The card does not move or scroll under the finger;
+/// only the value changes.
 void dialSetOnAdjust(Dial& dial, std::function<void(int)> on_adjust);
 
 }  // namespace wavex_ui
