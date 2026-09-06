@@ -535,7 +535,7 @@ esp_err_t inter_mcu_send_sample_unload(uint16_t sample_id) {
     return result >= 0 ? ESP_OK : ESP_FAIL;
 }
 
-esp_err_t inter_mcu_send_sample_edit(uint8_t slot,
+esp_err_t inter_mcu_send_sample_edit(uint16_t sample_id,
                                      bool loop_enabled,
                                      int16_t gain_db_x10,
                                      uint32_t start_frame,
@@ -547,7 +547,7 @@ esp_err_t inter_mcu_send_sample_edit(uint8_t slot,
     if (!s_initialized || s_suspended) {
         return ESP_ERR_INVALID_STATE;
     }
-    WaveX::Protocol::SampleEditMessage msg(slot,
+    WaveX::Protocol::SampleEditMessage msg(sample_id,
                                            loop_enabled ? 1 : 0,
                                            gain_db_x10,
                                            start_frame,

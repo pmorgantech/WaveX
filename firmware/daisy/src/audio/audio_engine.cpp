@@ -731,8 +731,8 @@ static LoadedSampleInfo* find_loaded_sample(uint16_t sample_id) {
     return r ? &r->payload : nullptr;
 }
 
-// "The sample that just loaded": what the preview, the envelope job and
-// SetEditParams mean by id 0.
+// "The sample that just loaded": what the preview and the envelope job mean
+// by id 0.
 static LoadedSampleInfo* newest_loaded_sample() {
     return s_pool ? find_loaded_sample(s_pool->Newest()) : nullptr;
 }
@@ -4188,7 +4188,7 @@ static q15_t GainDbToQ15(int16_t db_x10) {
 // Applies an edit to the sample's record, then pushes the result back. The
 // backend clamps and is the authority; the frontend is told what was applied
 // rather than assuming its request was taken verbatim.
-void SetEditParams(uint8_t slot,
+void SetEditParams(uint16_t sample_id,
                    bool loop_enabled,
                    int16_t gain_db_x10,
                    uint32_t start_frame,
@@ -4197,43 +4197,47 @@ void SetEditParams(uint8_t slot,
                    uint32_t loop_end_frame,
                    uint16_t fade_in_ms,
                    uint16_t fade_out_ms) {
-    // slot is the sample id. 0 means "whatever the audition is playing",
-    // which is how the edit page addresses a sample it did not load itself.
-    LoadedSampleInfo* info = slot ? find_loaded_sample(slot) : nullptr;
+    // The Pool id, and only that. This used to fall back to the newest
+    // sample for id 0, which hid the frontend truncating every id to one
+    // byte: each edit "worked", on the wrong sample. An unknown id is a
+    // frontend bug or a sample unloaded under it; either way, touching some
+    // other record would be worse than doing nothing.
+    LoadedSampleInfo* info = sample_id ? find_loaded_sample(sample_id) : nullptr;
     if (!info) {
-        info = newest_loaded_sample();
+        if (s_hw) {
+            WaveX::Log::PrintLine("SAMPLE_EDIT: no sample for id=%u", (unsigned)sample_id);
+        }
+        return;
     }
 
-    if (info) {
-        auto& m = info->meta;
-        if (gain_db_x10 < -240) {
-            gain_db_x10 = -240;
-        } else if (gain_db_x10 > 120) {
-            gain_db_x10 = 120;
-        }
-        m.gain_db_x10 = gain_db_x10;
-        m.start_frame = start_frame;
-        m.end_frame = end_frame;
-        m.loop_start = loop_start_frame;
-        m.loop_end = loop_end_frame;
-        m.Resolve();
-        // A loop shorter than one SD slot would re-seek on every refill pass
-        // and starve the ring. The frontend cannot know this limit, so it is
-        // enforced here and reported back rather than silently obeyed.
-        m.loop_enabled = (loop_enabled && (m.loop_end - m.loop_start) >= kMinLoopFrames) ? 1 : 0;
-        // Clamp fades to the region. A fade longer than the audio it shapes
-        // never reaches unity, which reads as "the sample got quieter" rather
-        // than as a fade - and the frontend cannot clamp it, because the
-        // backend is the one that just decided what the region is.
-        const uint32_t rate = m.sample_rate ? m.sample_rate : static_cast<uint32_t>(s_sample_rate);
-        const uint32_t span_ms =
-            rate ? static_cast<uint32_t>(
-                       (static_cast<uint64_t>(m.end_frame - m.start_frame) * 1000u) / rate)
-                 : 0u;
-        m.fade_in_ms = static_cast<uint16_t>(std::min<uint32_t>(fade_in_ms, span_ms));
-        m.fade_out_ms = static_cast<uint16_t>(std::min<uint32_t>(fade_out_ms, span_ms));
-        PushSampleMeta(*info);
+    auto& m = info->meta;
+    if (gain_db_x10 < -240) {
+        gain_db_x10 = -240;
+    } else if (gain_db_x10 > 120) {
+        gain_db_x10 = 120;
     }
+    m.gain_db_x10 = gain_db_x10;
+    m.start_frame = start_frame;
+    m.end_frame = end_frame;
+    m.loop_start = loop_start_frame;
+    m.loop_end = loop_end_frame;
+    m.Resolve();
+    // A loop shorter than one SD slot would re-seek on every refill pass
+    // and starve the ring. The frontend cannot know this limit, so it is
+    // enforced here and reported back rather than silently obeyed.
+    m.loop_enabled = (loop_enabled && (m.loop_end - m.loop_start) >= kMinLoopFrames) ? 1 : 0;
+    // Clamp fades to the region. A fade longer than the audio it shapes
+    // never reaches unity, which reads as "the sample got quieter" rather
+    // than as a fade - and the frontend cannot clamp it, because the
+    // backend is the one that just decided what the region is.
+    const uint32_t rate = m.sample_rate ? m.sample_rate : static_cast<uint32_t>(s_sample_rate);
+    const uint32_t span_ms =
+        rate ? static_cast<uint32_t>((static_cast<uint64_t>(m.end_frame - m.start_frame) * 1000u) /
+                                     rate)
+             : 0u;
+    m.fade_in_ms = static_cast<uint16_t>(std::min<uint32_t>(fade_in_ms, span_ms));
+    m.fade_out_ms = static_cast<uint16_t>(std::min<uint32_t>(fade_out_ms, span_ms));
+    PushSampleMeta(*info);
 
     ApplyMetaToStreaming(info);
 }

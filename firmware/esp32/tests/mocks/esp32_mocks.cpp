@@ -409,7 +409,7 @@ esp_err_t inter_mcu_request_sample_meta(uint16_t sample_id) {
     return ESP_OK;
 }
 
-esp_err_t inter_mcu_send_sample_edit(uint8_t slot,
+esp_err_t inter_mcu_send_sample_edit(uint16_t sample_id,
                                      bool loop_enabled,
                                      int16_t gain_db_x10,
                                      uint32_t start_frame,
@@ -418,7 +418,7 @@ esp_err_t inter_mcu_send_sample_edit(uint8_t slot,
                                      uint32_t loop_end,
                                      uint16_t fade_in_ms,
                                      uint16_t fade_out_ms) {
-    (void)slot;
+    (void)sample_id;
     (void)loop_enabled;
     (void)gain_db_x10;
     (void)start_frame;

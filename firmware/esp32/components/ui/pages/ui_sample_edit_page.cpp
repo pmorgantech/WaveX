@@ -663,8 +663,7 @@ void UISampleEditPage::sendEdit() {
     // end_frame/loop_end are sent verbatim rather than as the 0 sentinel: we
     // know the real length here, so let the backend clamp against the file
     // rather than guessing what "to the end" meant.
-    const uint8_t slot = static_cast<uint8_t>(currentSampleId());
-    inter_mcu_send_sample_edit(slot,
+    inter_mcu_send_sample_edit(currentSampleId(),
                                loop_enabled_,
                                gain_db_x10_,
                                start_frame_,

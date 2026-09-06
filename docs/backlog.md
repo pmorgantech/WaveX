@@ -164,17 +164,15 @@ them; check each with the loop flag and points in the Daisy's
 `TRACKS`/`SAMPLES` console output before touching code. Belongs to the
 roadmap's "Sample Edit" verification row.
 
-Found 2026-09-06, on the first of those: `SampleEditMessage::slot` is one
-byte, but Sample Pool ids start at 1024, so the edit page's
-`static_cast<uint8_t>(currentSampleId())` sends the id's low byte — 0 for
-the first Pool id, which the Daisy's `SetEditParams` reads as "the newest
-loaded sample". On the bench, Loop On for id 1024 left that sample's record
-at loop off and the edit page showing "loop off" a moment later. Fix is a
-16-bit `sample_id` in the message (a protocol version bump, with the
-`inter_mcu_send_sample_edit` signature and the round-trip test) and dropping
-the "0 = newest" fallback, which hides exactly this. `SampleCtrlMessage`,
-`PreviewReqMessage`, `SampleSelectMessage::slot` and `SampleStopReqMessage`
-carry one-byte slots too; check what each one means before widening it.
+Found and fixed 2026-09-06, on the first of those: `SampleEditMessage::slot`
+was one byte, but Sample Pool ids start at 1024, so the edit page sent the
+id's low byte — 0 for the first Pool id, which the Daisy's `SetEditParams`
+read as "the newest loaded sample". The message now carries a 16-bit
+`sample_id` (protocol 3) and the "0 = newest" fallback is gone. The other
+one-byte slots were checked and left alone: `SampleSelectMessage::slot` is a
+Track index, and the Daisy ignores the slot in `SampleCtrlMessage` and
+`SampleStopReqMessage` altogether. The remaining two places (the binding
+storing the loop, the voice honouring it) still need the bench check above.
 
 ### Non-frame-aligned WAV data
 

@@ -71,6 +71,14 @@ versioning and release process.
 - Sample ▸ Manage: a freshly built card list carried no focus ring or bound
   fill; they were applied by the next tick's unchanged-rows pass, which no
   longer runs unprompted.
+- Sample ▸ Edit edits landed on the wrong sample. `SampleEditMessage`
+  addressed the sample with a one-byte `slot`, but Sample Pool ids start at
+  1024, so every id was truncated — to 0 for the first Pool entry, which the
+  backend read as "the newest loaded sample". Loop On for one sample silently
+  set the loop on whichever sample had loaded last. The message now carries
+  the 16-bit Pool id (`PROTOCOL_VERSION` 3), and the backend drops an edit
+  for an id it does not hold instead of guessing. Both boards need
+  reflashing together.
 - Sample ▸ Edit: the waveform's "L" lane label was hidden under the S handle
   whenever the start marker sat at the file's head. The L/R labels now sit
   either side of the channel divider, the one band the S/E and LS/LE handles

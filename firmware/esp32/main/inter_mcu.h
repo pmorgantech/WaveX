@@ -85,11 +85,11 @@ esp_err_t inter_mcu_send_envelope_req(uint16_t sample_id,
                                       uint32_t start_frame,
                                       uint32_t end_frame);
 
-// Non-destructive playback edit (MSG_SAMPLE_EDIT_SET). Frames are absolute at
-// the file's own rate; 0 means "to the end" for end_frame and loop_end. The
-// backend clamps and is the authority - do not assume the values were taken
-// verbatim.
-esp_err_t inter_mcu_send_sample_edit(uint8_t slot,
+// Non-destructive playback edit (MSG_SAMPLE_EDIT_SET) of Pool sample
+// @p sample_id. Frames are absolute at the file's own rate; 0 means "to the
+// end" for end_frame and loop_end. The backend clamps and is the authority -
+// do not assume the values were taken verbatim.
+esp_err_t inter_mcu_send_sample_edit(uint16_t sample_id,
                                      bool loop_enabled,
                                      int16_t gain_db_x10,
                                      uint32_t start_frame,

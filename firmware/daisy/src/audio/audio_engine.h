@@ -91,7 +91,7 @@ void GetMeters(BlockMeters& out);
 // item 3): a region that starts mid-waveform starts on a step, and a step is a
 // click. Clamped to the region length here, since only the backend knows what
 // the region ended up being after its own clamping.
-void SetEditParams(uint8_t slot,
+void SetEditParams(uint16_t sample_id,
                    bool loop_enabled,
                    int16_t gain_db_x10,
                    uint32_t start_frame,

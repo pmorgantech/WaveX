@@ -470,7 +470,7 @@ static void HandleSampleEditMessage(const uint8_t* payload, size_t payload_size)
     }
     SampleEditMessage msg;
     memcpy(&msg, payload, sizeof(msg));
-    WaveX::AudioEngine::SetEditParams(msg.slot,
+    WaveX::AudioEngine::SetEditParams(msg.sample_id,
                                       msg.loop_enabled != 0,
                                       msg.gain_db_x10,
                                       msg.start_frame,

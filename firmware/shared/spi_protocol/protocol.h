@@ -13,7 +13,9 @@ namespace Protocol {
 // Protocol constants
 // 2 (2026-09-05): SampleMetadata grew `used_by` (88 -> 90 B) for the Sample
 // Pool; MSG_SAMPLE_META_PAGE_REQ/PAGE added.
-static const uint32_t PROTOCOL_VERSION = 2;
+// 3 (2026-09-06): SampleEditMessage addresses the sample by its 16-bit Pool
+// id (`sample_id`, was the one-byte `slot`); id 0 no longer means "newest".
+static const uint32_t PROTOCOL_VERSION = 3;
 
 // Wire layout (review M10: a packed `WaveXPacket` struct used to "document"
 // this but placed `crc` at offset 4 while the wire puts it at the packet
@@ -815,9 +817,16 @@ struct SampleMetaReqMessage {
 // Sentinels rather than a separate "valid" flag: end_frame 0 means "to the
 // end of the file" and loop_end 0 means "to end_frame". A frontend that does
 // not know the file length can still send a meaningful region.
+//
+// sample_id is the Pool id from SampleMetadata, 16 bits wide. It was a
+// one-byte `slot` until protocol 3, which truncated every Pool id (they
+// start at 1024) to 0 - and 0 meant "the newest sample", so every edit from
+// the Edit page landed on whichever sample had loaded last. There is no
+// "newest" sentinel any more: an id the backend cannot find is dropped.
 struct SampleEditMessage {
-    uint8_t slot;
+    uint16_t sample_id;
     uint8_t loop_enabled;
+    uint8_t reserved;
     int16_t gain_db_x10;  // -240..+120 (-24.0 .. +12.0 dB)
     uint32_t start_frame;
     uint32_t end_frame;  // 0 = end of file
@@ -830,8 +839,9 @@ struct SampleEditMessage {
     uint16_t fade_out_ms;
 
     SampleEditMessage()
-        : slot(0),
+        : sample_id(0),
           loop_enabled(0),
+          reserved(0),
           gain_db_x10(0),
           start_frame(0),
           end_frame(0),
@@ -839,7 +849,7 @@ struct SampleEditMessage {
           loop_end(0),
           fade_in_ms(kDefaultDeclickMs),
           fade_out_ms(kDefaultDeclickMs) {}
-    SampleEditMessage(uint8_t slot_,
+    SampleEditMessage(uint16_t sample_id_,
                       uint8_t loop_enabled_,
                       int16_t gain_db_x10_,
                       uint32_t start_frame_,
@@ -848,8 +858,9 @@ struct SampleEditMessage {
                       uint32_t loop_end_,
                       uint16_t fade_in_ms_ = kDefaultDeclickMs,
                       uint16_t fade_out_ms_ = kDefaultDeclickMs)
-        : slot(slot_),
+        : sample_id(sample_id_),
           loop_enabled(loop_enabled_),
+          reserved(0),
           gain_db_x10(gain_db_x10_),
           start_frame(start_frame_),
           end_frame(end_frame_),

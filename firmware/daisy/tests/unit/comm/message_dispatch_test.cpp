@@ -147,11 +147,16 @@ TEST_F(MessageDispatchTest, EnvelopeReqReachesAudioEngine) {
 // markers audible, so a silent dispatcher stub here would look exactly like
 // "loop doesn't work" - which is how it presented before this path existed.
 TEST_F(MessageDispatchTest, SampleEditReachesAudioEngine) {
-    SampleEditMessage edit(0, 1, -35, 44100, 396900, 88200, 352800, 3, 250);
+    // A real Pool id, not 0: ids start at 1024, and the one-byte slot this
+    // field replaced truncated every one of them to 0 - which then meant
+    // "newest sample", so the edit landed on the wrong record while the
+    // dispatch itself looked fine.
+    SampleEditMessage edit(1025, 1, -35, 44100, 396900, 88200, 352800, 3, 250);
     Dispatch(MSG_SAMPLE_EDIT_SET, edit);
 
     ASSERT_EQ(GetDispatchRecord().sample_edits.size(), 1u);
     const auto& got = GetDispatchRecord().sample_edits[0];
+    EXPECT_EQ(got.sample_id, 1025);
     EXPECT_EQ(got.loop_enabled, 1);
     EXPECT_EQ(got.gain_db_x10, -35);
     EXPECT_EQ(got.start_frame, 44100u);

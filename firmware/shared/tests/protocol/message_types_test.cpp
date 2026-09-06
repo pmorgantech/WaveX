@@ -1224,7 +1224,9 @@ TEST_F(MessageTypeTest, SeqClockOutMessage) {
 // frontend that does not know the file length sends end_frame 0 and expects
 // the backend to read it as "to the end", not as "an empty region".
 TEST_F(MessageTypeTest, SampleEditMessage) {
-    SampleEditMessage original(2, 1, -35, 44100, 396900, 88200, 352800, 5, 120);
+    // The id is a Pool id (>= 1024), and the field it replaced was one byte:
+    // anything below 256 here would pass with the old layout too.
+    SampleEditMessage original(1026, 1, -35, 44100, 396900, 88200, 352800, 5, 120);
 
     size_t created =
         ProtocolHandler::CreateSampleEditPacket(buffer_.data(), buffer_.size(), original);
@@ -1236,7 +1238,7 @@ TEST_F(MessageTypeTest, SampleEditMessage) {
     SampleEditMessage parsed;
     ASSERT_TRUE(ProtocolHandler::ParseMessage(
         buffer_.data(), MSG_SAMPLE_EDIT_SET, &parsed, sizeof(parsed)));
-    EXPECT_EQ(parsed.slot, original.slot);
+    EXPECT_EQ(parsed.sample_id, 1026);
     EXPECT_EQ(parsed.loop_enabled, original.loop_enabled);
     EXPECT_EQ(parsed.gain_db_x10, original.gain_db_x10);
     EXPECT_EQ(parsed.start_frame, original.start_frame);
