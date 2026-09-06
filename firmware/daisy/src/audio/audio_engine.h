@@ -236,6 +236,11 @@ void OnMidiCc(const WaveX::Protocol::MidiCcMessage& m);
 void DebugTrackBinding(uint8_t track, WaveX::Protocol::TrackBindingMessage& out);
 uint8_t DebugActiveVoices();
 size_t DebugLoadedSamples(uint16_t* ids, size_t cap);
+
+/// A resident sample's card path, for naming it in a saved Instrument.
+/// False when the id is unknown or the path would not fit, which fails the
+/// save rather than writing an unloadable zone.
+bool SamplePathForId(uint16_t sample_id, char* out, size_t out_len);
 uint32_t DebugUnderruns();
 #endif
 

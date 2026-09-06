@@ -11,6 +11,86 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Changed
+
+- **One path bound across the system.** Three different limits coexisted — 96
+  on the wire, 200 in the SFZ importer, 255 for a FatFs long name — so the
+  importer could resolve a path the wire could not carry and the Pool could not
+  store. All three are now `BROWSE_PATH_MAX`, raised to 256 against FatFs's own
+  limit rather than any message's convenience; a request carrying a long path
+  simply lands in a larger packet class, which the size-driven selector already
+  handles and the Pool's metadata paging already exercises. A sample library
+  nested a few folders deep no longer silently fails to load or save.
+- The `.wxi` zone codec and its tests walk a running offset instead of
+  hard-coded byte indices (`b[97]`, `b[98]`, …), and the zone's wire size and
+  the codec's scratch buffer are derived from the fields rather than typed as
+  literals. The old literals were correct only at the old path width — the
+  192-byte scratch would have overflowed on the first save of a 312-byte zone.
+
+### Fixed
+
+- The Sample Pool now remembers each sample's **card path**, which saving an
+  Instrument depends on. A Pool id names a slot in this boot's registry and
+  means nothing in a file, and the only path the Pool kept was in the wire's
+  display field (`SampleMetadata::name`, `FILE_NAME_MAX`) — too short for a
+  real card path, so `/99 - Vintage Sound Library/Minimoog/Samples/…` arrived
+  truncated and unopenable. The path is now stored per record, deliberately
+  off the wire so the paged metadata frame does not grow. A path too long even
+  for that bound (an SFZ region can resolve one) stores nothing rather than a
+  truncation: a truncated path is not a shorter path, it is a wrong one, so a
+  save that needs it fails loudly instead of writing a zone that silently
+  never loads.
+- The Pool's SDRAM partition grows 192 KB → 256 KB to hold the paths, taken
+  from the render scratch, which shares a fixed budget with it and has no
+  consumer yet. The sample arena — the one number that would have cost
+  user-visible sample memory — is unchanged.
+
+### Added
+
+- The Instrument loader accepts `.wxi` as well as `.sfz`. The parse is the
+  only difference: both front halves produce the same `MappedInstrument` and
+  hand it to the same probe/allocate/read/commit back half, so an `.sfz` is an
+  import format for an Instrument rather than a different kind of thing. The
+  format is chosen by extension, and anything that is not `.sfz` is offered to
+  the `.wxi` reader, which rejects it by content — magic, file type, version —
+  rather than refusing over a spelling. A document is read in one pass rather
+  than a phase per line, which is main-loop work comparable to the existing
+  streaming pump and leaves the audio callback untouched.
+- The mapper between the `.wxi` document and the engine's Instrument
+  (`instrument_map.hpp`), the seam a Load and a Save meet at. The two models
+  differ on purpose: a stored zone names its sample by **card path** while an
+  engine zone names it by Pool id (a slot in this boot's registry, meaningless
+  across a power cycle), and a stored zone carries an explicit **index** so
+  "pad 5" is still pad 5 after a save that wrote only three zones. Loading
+  leaves `sample_id` at 0 for the loader to assign on admission rather than
+  guessing an id that would resolve to whatever occupies that slot, and a
+  stored index this build cannot hold is dropped rather than wrapped onto a
+  good zone.
+
+### Changed
+
+- An Instrument now owns its filter and amp envelope, and a parameter change
+  is addressed to a Track (Track/Instrument model stage 4, in progress). A
+  zone follows its Instrument's values unless it sets the new
+  `ZONE_FLAG_OWN_FILTER_ENV` — so a 16-pad kit can be given one envelope
+  instead of sixteen — and an SFZ import sets that override on every region,
+  leaving imported Instruments sounding exactly as before. `MSG_CONTROL_CHANGE`
+  carries the Track in its previously-unused `channel` field; the backend
+  writes the value into that Track's Instrument, which is what a later note
+  reads, and pushes the change only onto that Track's sounding voices, so a
+  knob on one Track no longer moves another's held notes.
+- The runtime filter A/B (`WAVEX-FILTER`) has its own mailbox rather than
+  riding on the voice-parameter snapshot: it is an engine-wide bench aid, and
+  sharing that path would have carried one Track's cutoff and envelope onto
+  every voice.
+
+### Removed
+
+- `ZONE_FLAG_LIVE_FILTER_ENV`, and the engine-global "what the knobs say"
+  parameter block behind it. It existed only because nothing could write a
+  zone or an Instrument default; both are now writable, so note resolution
+  takes no engine state at all.
+
 ### Added
 
 - Sampler stage 4, first step: the `.wxi` Instrument file codec over WXCF

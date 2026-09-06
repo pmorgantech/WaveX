@@ -10,10 +10,17 @@ namespace SdramLayout {
 constexpr uintptr_t kBase = 0xC0000000u;
 constexpr uint32_t kTotalBytes = 64u * 1024u * 1024u;
 // The Sample Pool's records (track-and-patch-model.md §4): 1024 entries of
-// ~130 B do not fit internal SRAM, so the registry's record table lives
+// ~230 B do not fit internal SRAM, so the registry's record table lives
 // here, between the arena and the render scratch. Only its 2 KB id index
 // stays in SRAM. Main-loop access only.
-constexpr uint32_t kSampleRegistryBytes = 192u * 1024u;
+//
+// 512 KB since each record carries the sample's card path (sample_pool.hpp)
+// at the system-wide bound: records are ~390 B, so 1024 of them need ~400 KB.
+// The space comes out of the render scratch, which shares a fixed 4 MB with
+// this partition, so the sample ARENA is unchanged - the one number that
+// would have cost user-visible sample memory. Nothing consumes the render
+// scratch yet; when an offline render job does, size it against 3.5 MB.
+constexpr uint32_t kSampleRegistryBytes = 512u * 1024u;
 constexpr uint32_t kRenderScratchBytes = 4u * 1024u * 1024u - kSampleRegistryBytes;
 constexpr uint32_t kSampleArenaBytes = kTotalBytes - kSampleRegistryBytes - kRenderScratchBytes;
 constexpr uint32_t kSmallSamplePoolBytes = 256u * 1024u;

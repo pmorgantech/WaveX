@@ -29,7 +29,9 @@ namespace WaveX {
 namespace AudioEngine {
 namespace Sfz {
 
-static constexpr size_t kMaxPath = 200;
+// The system-wide path bound (protocol.h). Was 200 while the wire carried 96,
+// so the importer could resolve a path nothing downstream could hold.
+static constexpr size_t kMaxPath = WaveX::Protocol::BROWSE_PATH_MAX;
 static constexpr size_t kMaxLine = 512;
 static constexpr size_t kMaxMacros = 16;
 static constexpr size_t kMaxMacroName = 32;
@@ -931,6 +933,12 @@ inline bool MapDocument(const Document& document,
         if (source.release.present) {
             zone.release_s = detail::ClampFloat(source.release.value, 0.0f, 60.0f);
         }
+        // An .sfz region always carries its own filter/envelope - the values
+        // just parsed, or this Zone's defaults where the file said nothing -
+        // and both are the region's, not an Instrument default someone might
+        // later edit. Marking the override keeps an imported Instrument
+        // sounding exactly as it does today (track-and-patch-model.md §3.2).
+        zone.flags |= ZONE_FLAG_OWN_FILTER_ENV;
         zone.in_use = true;
 
         const uint8_t destination = out.zone_count;

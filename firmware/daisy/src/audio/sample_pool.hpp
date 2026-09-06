@@ -14,6 +14,7 @@
 #include "audio/sample_registry.hpp"
 #include "sample_load_info.hpp"
 #include <cstdint>
+#include <cstring>
 
 namespace WaveX {
 namespace AudioEngine {
@@ -30,6 +31,20 @@ struct LoadedSampleInfo {
     // markers, gain and channel mode from here, so streaming audition, RAM
     // voices and the preview generator cannot disagree about the same sample.
     WaveX::Protocol::SampleMetadata meta = {};
+    // Where this sample came from on the card - its identity off the device.
+    //
+    // A Pool id names a slot in THIS boot's registry and means nothing in a
+    // file, so saving an Instrument (.wxi, track-and-patch-model.md §3.3)
+    // needs the path back. `meta.name` cannot serve: it is the wire's
+    // display field at FILE_NAME_MAX, and a real card path
+    // ("/99 - Vintage Sound Library/Minimoog/Samples/...") is longer, so it
+    // arrives there truncated and unopenable. This field is the
+    // authoritative one; meta.name stays what the frontend shows.
+    //
+    // Deliberately NOT on the wire: SampleMetadata is paged to the frontend
+    // a window at a time, and widening it would grow every page frame and
+    // move PROTOCOL_VERSION for a value the frontend never reads.
+    char path[WaveX::Protocol::BROWSE_PATH_MAX] = {};
 };
 
 using SamplePool = WaveX::Audio::SampleRegistry<LoadedSampleInfo, WAVEX_SAMPLE_POOL_CAPACITY>;
@@ -71,6 +86,15 @@ inline void FillLoadedSample(LoadedSampleInfo& info,
     info.meta.channel_mode = WaveX::Protocol::SAMPLE_CH_AS_RECORDED;
     info.meta.flags = WaveX::Protocol::SAMPLE_META_RESIDENT;
     WaveX::Protocol::detail::CopyWireString(info.meta.name, sizeof(info.meta.name), path);
+    // The full path, untruncated where meta.name could not hold it - or
+    // EMPTY if it does not fit even here. An SFZ region can resolve a path
+    // longer than this bound (its own limit is larger), and a truncated
+    // path is not a shorter path, it is a wrong one that opens nothing.
+    // Storing none says "this sample cannot be named", which fails a save
+    // loudly instead of writing a zone that silently never loads.
+    if (path && std::strlen(path) < sizeof(info.path)) {
+        WaveX::Protocol::detail::CopyWireString(info.path, sizeof(info.path), path);
+    }
 }
 
 }  // namespace AudioEngine

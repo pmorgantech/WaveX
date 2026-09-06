@@ -88,13 +88,20 @@ void ForgetLoadedSample(uint16_t sample_id);
 // allocator that turns a handle into a pointer lives there.
 void SetLoadedSampleResolver(const SampleResolver& resolver);
 
-// `live` feeds ZONE_FLAG_LIVE_FILTER_ENV zones; nullptr is allowed.
-uint8_t ResolveNote(uint8_t track,
-                    uint8_t note,
-                    uint8_t velocity,
-                    const VoiceLiveParams* live,
-                    VoiceTriggerParams* out,
-                    uint8_t max);
+// Filter/envelope come from the Track's Instrument (or a zone that
+// overrides it), so this takes no engine state.
+uint8_t ResolveNote(
+    uint8_t track, uint8_t note, uint8_t velocity, VoiceTriggerParams* out, uint8_t max);
+
+// Instrument-level filter and envelope (track-and-patch-model.md §3.2) -
+// the defaults every zone follows unless it sets ZONE_FLAG_OWN_FILTER_ENV.
+// Main-loop only, like every other Tracks mutation here. These are what the
+// Instrument page's Filter and Env tabs edit, per Track, which is why they
+// take a track rather than writing one engine-wide value.
+bool SetInstrumentFilter(uint8_t track, const InstrumentFilter& filter);
+bool SetInstrumentEnv(uint8_t track, const InstrumentEnv& env);
+const InstrumentFilter* GetInstrumentFilter(uint8_t track);
+const InstrumentEnv* GetInstrumentEnv(uint8_t track);
 
 // Modulation matrix (param-locks-and-modulation.md §9 stage 4). Main-loop
 // context only (message dispatch) - mirrors every other Tracks

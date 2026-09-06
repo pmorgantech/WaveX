@@ -682,7 +682,9 @@ void UIInstrumentPage::sendParam(const Param& p) {
         // a sentinel as a bogus PARAM_* id.
         return;
     }
-    if (inter_mcu_send_control_change(p.wire_param, 0, p.value) != ESP_OK) {
+    // The Instrument page edits the selected Track's Instrument, so its
+    // parameter changes are addressed to that Track.
+    if (inter_mcu_send_control_change(p.wire_param, currentTrack(), p.value) != ESP_OK) {
         refreshStatus("Send failed - link busy?");
     }
 }

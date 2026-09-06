@@ -463,7 +463,10 @@ TEST(WxiCodec, WalksAWiderZoneStride) {
         zone[0] = static_cast<uint8_t>(z);  // index
         const char* p = "0:/wavex/samples/a.wav";
         std::memcpy(zone.data() + 1, p, std::strlen(p));
-        zone[101] = static_cast<uint8_t>(48 + z);  // root_note
+        // Derived, not a literal: root_note sits after index, the path and
+        // the four key/velocity bounds, so it moves whenever kPathBytes does.
+        constexpr size_t kRootNoteOffset = 1 + Wxi::kPathBytes + 4;
+        zone[kRootNoteOffset] = static_cast<uint8_t>(48 + z);
         zone.insert(zone.end(), future_stride - Wxi::kZoneWireSize, 0xCD);
         osc.insert(osc.end(), zone.begin(), zone.end());
     }

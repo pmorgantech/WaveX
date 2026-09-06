@@ -658,7 +658,10 @@ void UIPlayPage::stepParam(int direction) {
 
 void UIPlayPage::sendParam() {
     const size_t i = static_cast<size_t>(current_param_);
-    inter_mcu_send_control_change(kParams[i].wire_param, 0, param_value_[i]);
+    // Addressed to the selected Track: filter and envelope belong to that
+    // Track's Instrument now (track-and-patch-model.md §3.2), not to one
+    // engine-wide set of knob positions.
+    inter_mcu_send_control_change(kParams[i].wire_param, currentTrack(), param_value_[i]);
 }
 
 void UIPlayPage::refreshParamLabel() {
