@@ -52,13 +52,30 @@ class UISampleManagerPage : public UIPage {
     // list pages through it rather than mirroring it.
     static constexpr int kMaxRows = 8;
 
+    /// One sample card (design turn 3a). The widgets are kept because a
+    /// focus or binding change is then a style write on two cards rather than
+    /// a rebuild of the grid - the same reason the root menu keeps its rows.
     struct Row {
         lv_obj_t* btn = nullptr;
-        lv_obj_t* label = nullptr;
+        lv_obj_t* label = nullptr;  ///< sample name
+        lv_obj_t* badge = nullptr;  ///< "T3" when bound, "loaded" when pinned
+        lv_obj_t* dur = nullptr;
         uint16_t sample_id = 0;
         uint16_t used_by = 0;
         bool playable = false;
         bool pinned = false;
+    };
+
+    /// One cell of the 16-Track strip across the top: the Track number and a
+    /// bar saying whether anything is bound to it. This is the only place the
+    /// whole Track set is visible at once, which is what makes "which Track am
+    /// I about to overwrite" answerable before pressing Assign rather than
+    /// after.
+    static constexpr int kTrackCount = 16;
+    struct TrackCell {
+        lv_obj_t* cell = nullptr;
+        lv_obj_t* num = nullptr;
+        lv_obj_t* bar = nullptr;
     };
 
     lv_obj_t* root_ = nullptr;
@@ -66,6 +83,13 @@ class UISampleManagerPage : public UIPage {
     lv_obj_t* status_label_ = nullptr;
     lv_obj_t* detail_label_ = nullptr;
     lv_obj_t* track_label_ = nullptr;
+    lv_obj_t* strip_ = nullptr;
+    TrackCell track_cells_[kTrackCount] = {};
+    /// Round-robin cursor for the per-Track binding requests. Asking for all
+    /// sixteen at once on entry would put sixteen messages into a bounded TX
+    /// queue in one go; four per 500ms tick fills the strip in two seconds
+    /// without a burst.
+    uint8_t binding_probe_ = 0;
     lv_timer_t* refresh_timer_ = nullptr;
 
     Row rows_[kMaxRows] = {};
@@ -81,6 +105,8 @@ class UISampleManagerPage : public UIPage {
     void rebuildList();    ///< UI task / LVGL context only.
     void refreshDetail();  ///< UI task / LVGL context only.
     void refreshTrackLabel();
+    void buildTrackStrip(lv_obj_t* parent);
+    void refreshTrackStrip();
     void assignFocused();
     /// Sample id the last Assign press asked to confirm for, 0 = none. A
     /// second press on the same row within the same Track replaces.
