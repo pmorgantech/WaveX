@@ -71,6 +71,10 @@ versioning and release process.
 - Sample ▸ Manage: a freshly built card list carried no focus ring or bound
   fill; they were applied by the next tick's unchanged-rows pass, which no
   longer runs unprompted.
+- Sample ▸ Edit: the waveform's "L" lane label was hidden under the S handle
+  whenever the start marker sat at the file's head. The L/R labels now sit
+  either side of the channel divider, the one band the S/E and LS/LE handles
+  never cover.
 - The Sample Pool now remembers each sample's **card path**, which saving an
   Instrument depends on. A Pool id names a slot in this boot's registry and
   means nothing in a file, and the only path the Pool kept was in the wire's

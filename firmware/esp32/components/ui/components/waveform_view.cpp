@@ -313,6 +313,12 @@ void WaveformView::drawSpans(lv_event_t* e) const {
     // Name the lanes. Without this the panel cannot be told apart from the
     // single-trace version it replaced, and "which channel am I looking at"
     // going unanswered is the exact defect roadmap 1.5.7 opens with.
+    //
+    // The labels sit either side of the divider - L just above it, R just
+    // below - not in each lane's top-left corner. The Sample Edit page parks
+    // its S/E and LS/LE handles along the panel's top and bottom edges, and
+    // with start at 0 the S handle sat exactly over an "L" drawn in the
+    // corner. The middle band is the one place an overlay never covers.
     if (stereo) {
         lv_draw_label_dsc_t label_dsc;
         lv_draw_label_dsc_init(&label_dsc);
@@ -324,7 +330,8 @@ void WaveformView::drawSpans(lv_event_t* e) const {
         for (uint8_t ch = 0; ch < channels_; ++ch) {
             const lv_area_t lane = laneArea(area, ch);
             label_dsc.text = kNames[ch];
-            lv_area_t at = {lane.x1 + 4, lane.y1 + 2, lane.x1 + 24, lane.y1 + 20};
+            const int32_t y1 = (ch == 0) ? lane.y2 - 20 : lane.y1 + 2;
+            lv_area_t at = {lane.x1 + 4, y1, lane.x1 + 24, y1 + 18};
             if (touches(at, clip)) {
                 lv_draw_label(layer, &label_dsc, &at);
             }
