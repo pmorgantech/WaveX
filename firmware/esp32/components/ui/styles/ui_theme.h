@@ -122,11 +122,6 @@
 #define UI_FONT_MONO_LARGE &wavex_mono_38  // large readouts in a dense layout
 #define UI_FONT_MONO_HERO &wavex_mono_48   // the one value a card is about
 
-// Legacy spellings; aliases only. UI_FONT_TITLE kept its old size (26).
-#define UI_FONT_NORMAL UI_FONT_SMALL
-#define UI_FONT_HEADER UI_FONT_HEADING
-#define UI_FONT_HOTKEY UI_FONT_HEADING
-
 // ---------------------------------------------------------------------------
 // Chrome geometry
 //

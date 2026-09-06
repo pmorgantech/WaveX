@@ -119,14 +119,14 @@ void build() {
     lv_obj_set_pos(s_caption, 112, 40);
 
     s_detail = lv_label_create(s_panel);
-    lv_obj_set_style_text_font(s_detail, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_font(s_detail, UI_FONT_SMALL, 0);
     lv_obj_set_style_text_color(s_detail, lv_color_hex(kColDim), 0);
     lv_obj_set_pos(s_detail, 112, 86);
     lv_obj_set_width(s_detail, 640 - 112 - 32);
     lv_label_set_long_mode(s_detail, LV_LABEL_LONG_DOT);
 
     s_bar_label = lv_label_create(s_panel);
-    lv_obj_set_style_text_font(s_bar_label, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_font(s_bar_label, UI_FONT_SMALL, 0);
     lv_obj_set_style_text_color(s_bar_label, lv_color_hex(kColDim), 0);
     lv_obj_set_pos(s_bar_label, 32, 140);
     lv_label_set_text(s_bar_label, "Total");
@@ -144,7 +144,7 @@ void build() {
     lv_obj_add_flag(s_bar_label, LV_OBJ_FLAG_HIDDEN);
 
     s_item_label = lv_label_create(s_panel);
-    lv_obj_set_style_text_font(s_item_label, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_font(s_item_label, UI_FONT_SMALL, 0);
     lv_obj_set_style_text_color(s_item_label, lv_color_hex(kColDim), 0);
     lv_obj_set_pos(s_item_label, 32, 205);
     lv_obj_set_width(s_item_label, 640 - 64);

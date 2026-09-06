@@ -1,5 +1,7 @@
 #include "waveform_view.h"
 
+#include "ui_theme.h"
+
 #include <algorithm>
 
 namespace wavex_ui {
@@ -280,7 +282,7 @@ void WaveformView::drawSpans(lv_event_t* e) const {
         lv_draw_label_dsc_t label_dsc;
         lv_draw_label_dsc_init(&label_dsc);
         label_dsc.color = lv_color_hex(kChannelLabelColor);
-        label_dsc.font = &lv_font_montserrat_14;
+        label_dsc.font = UI_FONT_MICRO;
         label_dsc.opa = LV_OPA_COVER;
 
         static const char* const kNames[kMaxChannels] = {"L", "R"};

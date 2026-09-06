@@ -53,6 +53,6 @@ void ui_theme_apply_label_style(lv_obj_t* label, bool is_title) {
     if (is_title) {
         lv_obj_set_style_text_font(label, UI_FONT_TITLE, LV_PART_MAIN);
     } else {
-        lv_obj_set_style_text_font(label, UI_FONT_NORMAL, LV_PART_MAIN);
+        lv_obj_set_style_text_font(label, UI_FONT_SMALL, LV_PART_MAIN);
     }
 }

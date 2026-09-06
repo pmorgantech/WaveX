@@ -5,6 +5,7 @@
 #include "components/waveform_view.h"
 #include "inter_mcu.h"
 #include "ui/ui_navigator.h"
+#include "ui_theme.h"
 
 #include <cstring>
 
@@ -28,7 +29,7 @@ void UISampleRecordPage::onEnter(lv_obj_t* parent) {
 
     auto title = lv_label_create(root_);
     lv_label_set_text(title, "Sample Record");
-    lv_obj_set_style_text_font(title, &lv_font_montserrat_22, LV_PART_MAIN);
+    lv_obj_set_style_text_font(title, UI_FONT_BODY, LV_PART_MAIN);
     lv_obj_set_style_text_color(title, lv_color_white(), LV_PART_MAIN);
 
     status_label_ = lv_label_create(root_);

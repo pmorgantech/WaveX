@@ -92,7 +92,7 @@ static void fb_show_loading_row(wavex_file_browser_t* browser, bool show) {
     // "Loading...", not "Loading more...": the same row now also covers the
     // gap before the FIRST page of a fresh navigation arrives.
     lv_label_set_text(txt, "Loading...");
-    lv_obj_set_style_text_font(txt, &lv_font_montserrat_18, LV_PART_MAIN);
+    lv_obj_set_style_text_font(txt, UI_FONT_SMALL, LV_PART_MAIN);
     lv_obj_set_style_text_color(txt, FB_COL_DIM, LV_PART_MAIN);
     lv_obj_align(txt, LV_ALIGN_LEFT_MID, 36, 0);
 
@@ -124,7 +124,7 @@ static void fb_style_row(lv_obj_t* btn, const wavex_file_entry_t* entry, bool se
 
     lv_obj_t* name_label = lv_obj_get_child(btn, 0);
     if (name_label) {
-        lv_obj_set_style_text_font(name_label, &lv_font_montserrat_22, LV_PART_MAIN);
+        lv_obj_set_style_text_font(name_label, UI_FONT_BODY, LV_PART_MAIN);
         // Directories read dim: they are navigation, not material.
         const bool dir = entry && entry->is_directory;
         lv_obj_set_style_text_color(name_label, dir ? FB_COL_DIM : UI_COLOR_TEXT, LV_PART_MAIN);
@@ -143,7 +143,7 @@ static void fb_style_row(lv_obj_t* btn, const wavex_file_entry_t* entry, bool se
     lv_obj_t* meta = (lv_obj_get_child_cnt(btn) > 1) ? lv_obj_get_child(btn, 1) : nullptr;
     if (!meta) {
         meta = lv_label_create(btn);
-        lv_obj_set_style_text_font(meta, &lv_font_montserrat_18, LV_PART_MAIN);
+        lv_obj_set_style_text_font(meta, UI_FONT_SMALL, LV_PART_MAIN);
         lv_obj_set_style_text_color(meta, FB_COL_META, LV_PART_MAIN);
     }
     lv_label_set_text(meta, dur);
@@ -1163,7 +1163,7 @@ static void update_file_browser_ui(wavex_file_browser_t* browser) {
         lv_obj_set_user_data(btn, (void*)(uintptr_t)FB_ROW_NOT_AN_ENTRY);
         ui_theme_apply_button_style(btn, false);
         lv_obj_set_style_text_color(btn, UI_COLOR_TEXT, LV_PART_MAIN);
-        lv_obj_set_style_text_font(btn, &lv_font_montserrat_18, LV_PART_MAIN);
+        lv_obj_set_style_text_font(btn, UI_FONT_SMALL, LV_PART_MAIN);
         ESP_LOGI(TAG, "No files found in directory");
     } else {
         // entry_count is 0 and pagination is still in flight (entries is

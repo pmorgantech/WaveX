@@ -262,7 +262,7 @@ lv_obj_t* UIPlayPage::makeKey(
         lv_style_set_bg_color(&s_key_pressed, lv_color_hex(kColGreen));
 
         lv_style_init(&s_label_base);
-        lv_style_set_text_font(&s_label_base, &lv_font_montserrat_18);
+        lv_style_set_text_font(&s_label_base, UI_FONT_SMALL);
         lv_style_set_text_align(&s_label_base, LV_TEXT_ALIGN_CENTER);
 
         s_styles_ready = true;

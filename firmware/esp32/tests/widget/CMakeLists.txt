@@ -65,6 +65,12 @@ foreach(test_source IN LISTS widget_tests)
 
     target_include_directories(${test_name} PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/../../components/ui/components
+        # waveform_view.cpp takes its font from the type ladder like every
+        # other UI source, so the theme header has to be reachable. It
+        # contributes macros only - the mono tables it declares are not
+        # referenced here, so nothing extra has to be linked.
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../components/ui/styles
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../components/ui/fonts
         ${CMAKE_CURRENT_SOURCE_DIR}/../../../shared
     )
 

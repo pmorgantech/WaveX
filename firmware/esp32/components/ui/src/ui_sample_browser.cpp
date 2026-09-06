@@ -115,13 +115,13 @@ void UISampleBrowser::onEnter(lv_obj_t* parent) {
     // Status strip above the list: position in the listing on the left, card
     // state on the right. Both were previously buried in the info panel.
     listing_label_ = lv_label_create(root_);
-    lv_obj_set_style_text_font(listing_label_, &lv_font_montserrat_18, LV_PART_MAIN);
+    lv_obj_set_style_text_font(listing_label_, UI_FONT_SMALL, LV_PART_MAIN);
     lv_obj_set_style_text_color(listing_label_, lv_color_hex(kColDim), LV_PART_MAIN);
     lv_label_set_text(listing_label_, "");
     lv_obj_set_pos(listing_label_, kMargin, kStatusY);
 
     card_label_ = lv_label_create(root_);
-    lv_obj_set_style_text_font(card_label_, &lv_font_montserrat_18, LV_PART_MAIN);
+    lv_obj_set_style_text_font(card_label_, UI_FONT_SMALL, LV_PART_MAIN);
     lv_obj_set_style_text_color(card_label_, lv_color_hex(kColDim), LV_PART_MAIN);
     lv_label_set_text(card_label_, "");
     lv_obj_set_pos(card_label_, 600, kStatusY);
@@ -185,7 +185,7 @@ void UISampleBrowser::onEnter(lv_obj_t* parent) {
     // identical to a preview that failed, which is the ambiguity the busy
     // overlay was criticised for elsewhere.
     waveform_hint_ = lv_label_create(info_panel_);
-    lv_obj_set_style_text_font(waveform_hint_, &lv_font_montserrat_18, LV_PART_MAIN);
+    lv_obj_set_style_text_font(waveform_hint_, UI_FONT_SMALL, LV_PART_MAIN);
     lv_obj_set_style_text_color(waveform_hint_, lv_color_hex(kColDim), LV_PART_MAIN);
     lv_obj_set_pos(waveform_hint_, kWaveX + 10, kWaveY + (kWaveH / 2) - 12);
     lv_label_set_text(waveform_hint_, "Load to preview");
@@ -195,7 +195,7 @@ void UISampleBrowser::onEnter(lv_obj_t* parent) {
     // Metadata rows. Kept as one wrapped label rather than a table: the
     // fields are fixed and a table's chrome costs more than it adds here.
     metadata_label_ = lv_label_create(info_panel_);
-    lv_obj_set_style_text_font(metadata_label_, &lv_font_montserrat_18, LV_PART_MAIN);
+    lv_obj_set_style_text_font(metadata_label_, UI_FONT_SMALL, LV_PART_MAIN);
     lv_obj_set_style_text_color(metadata_label_, lv_color_hex(kColDim), LV_PART_MAIN);
     lv_obj_set_pos(metadata_label_, 16, 222);
     lv_obj_set_width(metadata_label_, kDetailW - 32);
@@ -203,7 +203,7 @@ void UISampleBrowser::onEnter(lv_obj_t* parent) {
     lv_label_set_text(metadata_label_, "");
 
     status_label_ = lv_label_create(info_panel_);
-    lv_obj_set_style_text_font(status_label_, &lv_font_montserrat_18, LV_PART_MAIN);
+    lv_obj_set_style_text_font(status_label_, UI_FONT_SMALL, LV_PART_MAIN);
     lv_obj_set_style_text_color(status_label_, lv_color_hex(kColGreen), LV_PART_MAIN);
     lv_obj_set_pos(status_label_, 16, 458);
     lv_obj_set_width(status_label_, kDetailW - 32);
