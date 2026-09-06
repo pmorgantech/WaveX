@@ -82,7 +82,6 @@ constexpr int kCardH = 132;
 constexpr int kCardGap = 10;
 constexpr int kCardW = (kWaveW - 3 * kCardGap) / 4;  // 302
 constexpr int kCardPitch = kCardW + kCardGap;
-constexpr int kGaugeW = kCardW - 32;
 // Splice-view geometry, inside the waveform panel's 4 px padding.
 constexpr int kWaveInnerW = kWaveW - 8;
 constexpr int kWaveInnerH = kWaveH - 8;
@@ -102,7 +101,6 @@ constexpr int kInfoH = kPageH - kInfoY - 12;   // 93
 constexpr uint32_t kColCard = palette::kColCard;
 constexpr uint32_t kColBorder = palette::kColBorder;
 constexpr uint32_t kColDim = palette::kColDim;
-constexpr uint32_t kColDimmer = palette::kColDimmer;
 constexpr uint32_t kColBlue = palette::kColBlue;
 constexpr uint32_t kColGreen = palette::kColGreen;
 constexpr uint32_t kColOrange = palette::kColOrange;
@@ -284,18 +282,16 @@ void UISampleEditPage::buildParamStrip(lv_obj_t* parent) {
     // Param > scroll it. Cramming them into the same width would shrink every
     // card below the readable-from-a-metre size the layout is built around.
     for (int i = 0; i < PARAM_COUNT; i++) {
-        lv_obj_t* c = box(parent, kMargin, kStripY, kCardW, kCardH, kColCard);
-        lv_obj_set_style_border_width(c, 1, 0);
-        lv_obj_set_style_border_color(c, lv_color_hex(kColBorder), 0);
-        lv_obj_set_style_radius(c, UI_RADIUS_CARD, 0);
-
-        label(c, 16, 12, titles[i], UI_FONT_SMALL, kColDim);
-
-        cards_[i].card = c;
-        cards_[i].value = label(c, 16, 40, "0:00.000", UI_FONT_MONO_HERO, palette::kColFg);
-        box(c, 16, 96, kGaugeW, 14, palette::kColCardAlt);
-        cards_[i].bar = box(c, 16, 96, 0, 14, kColBlue);
-        cards_[i].knob = box(c, 12, 92, 8, 22, palette::kColFg);
+        // The same widget as every other parameter card in the UI. This was a
+        // private near-copy - label, mono value, track, fill and handle built
+        // by hand - which is exactly how two "identical" cards drift apart.
+        cards_[i] = valueTileCreate(parent, kMargin, kStripY, kCardW, kCardH, titles[i], nullptr);
+        const int idx = i;
+        valueTileSetOnAdjust(cards_[i], [this, idx](int steps) {
+            focus_ = static_cast<uint8_t>(idx);
+            refreshFocusRing();
+            adjustFocused(steps);
+        });
     }
     refreshFocusRing();
 }
@@ -362,7 +358,7 @@ void UISampleEditPage::onExit() {
     marker_s_ = nullptr;
     marker_e_ = nullptr;
     for (auto& c: cards_) {
-        c = ParamCard{};
+        c = ValueTile{};
     }
 }
 
@@ -711,15 +707,14 @@ void UISampleEditPage::refreshParams() {
             continue;
         }
         formatFrames(buf, sizeof(buf), m.v, sample_rate_);
-        lv_label_set_text(cards_[m.p].value, buf);
+        valueTileSetValue(cards_[m.p], buf);
         // Position within the WHOLE sample, not the zoom window: zooming
         // should not make a marker's bar appear to jump.
         const int pct = total_frames_
                             ? static_cast<int>(std::min<uint64_t>(
                                   100, (static_cast<uint64_t>(m.v) * 100ull) / total_frames_))
                             : 0;
-        lv_obj_set_width(cards_[m.p].bar, (kGaugeW * pct) / 100);
-        lv_obj_set_x(cards_[m.p].knob, 16 + (kGaugeW * pct) / 100 - 4);
+        valueTileSetFill(cards_[m.p], static_cast<float>(pct) / 100.0f);
     }
 
     if (cards_[PARAM_GAIN].value) {
@@ -729,12 +724,16 @@ void UISampleEditPage::refreshParams() {
                  gain_db_x10_ > 0 ? "+" : "",
                  gain_db_x10_ / 10,
                  (gain_db_x10_ < 0 ? -gain_db_x10_ : gain_db_x10_) % 10);
-        lv_label_set_text(cards_[PARAM_GAIN].value, buf);
+        valueTileSetValue(cards_[PARAM_GAIN], buf);
         const int pct = ((gain_db_x10_ + 240) * 100) / 360;  // -24..+12 dB
-        lv_obj_set_width(cards_[PARAM_GAIN].bar, (kGaugeW * pct) / 100);
-        lv_obj_set_x(cards_[PARAM_GAIN].knob, 16 + (kGaugeW * pct) / 100 - 4);
-        lv_obj_set_style_bg_color(
-            cards_[PARAM_GAIN].bar, lv_color_hex(gain_db_x10_ > 0 ? kColOrange : kColBlue), 0);
+        valueTileSetFill(cards_[PARAM_GAIN], static_cast<float>(pct) / 100.0f);
+        // Boost and cut are opposite sides of unity gain and only one of them
+        // can clip. As a tone this survives focus changes; as a raw fill colour
+        // it was overwritten the next time the selection moved.
+        valueTileSetTone(cards_[PARAM_GAIN],
+                         gain_db_x10_ > 0   ? TileTone::Positive
+                         : gain_db_x10_ < 0 ? TileTone::Negative
+                                            : TileTone::Neutral);
     }
 
     for (uint8_t p: {static_cast<uint8_t>(PARAM_FADE_IN), static_cast<uint8_t>(PARAM_FADE_OUT)}) {
@@ -747,14 +746,12 @@ void UISampleEditPage::refreshParams() {
         } else {
             snprintf(buf, sizeof(buf), "%u ms", (unsigned)ms);
         }
-        lv_label_set_text(cards_[p].value, buf);
+        valueTileSetValue(cards_[p], buf);
         const int pct = (ms * 100) / kMaxFadeMs;
-        lv_obj_set_width(cards_[p].bar, (kGaugeW * pct) / 100);
-        lv_obj_set_x(cards_[p].knob, 16 + (kGaugeW * pct) / 100 - 4);
-        // Green while it is doing the de-click job, blue once it is long
-        // enough to be heard as a fade - the two are different intentions and
-        // the number alone does not say which one you are setting.
-        lv_obj_set_style_bg_color(cards_[p].bar, lv_color_hex(ms <= 5 ? kColGreen : kColBlue), 0);
+        valueTileSetFill(cards_[p], static_cast<float>(pct) / 100.0f);
+        // Doing the de-click job, or long enough to be heard as a fade - two
+        // different intentions, and the number alone does not say which.
+        valueTileSetTone(cards_[p], ms <= 5 ? TileTone::Positive : TileTone::Neutral);
     }
 
     layoutParamStrip();
@@ -964,10 +961,7 @@ void UISampleEditPage::refreshFocusRing() {
         if (!cards_[i].card) {
             continue;
         }
-        const bool on = (i == focus_);
-        lv_obj_set_style_border_width(
-            cards_[i].card, on ? UI_BORDER_WIDTH_FOCUS : UI_BORDER_WIDTH, 0);
-        lv_obj_set_style_border_color(cards_[i].card, on ? UI_COLOR_ACCENT : UI_COLOR_LINE, 0);
+        valueTileSetFocus(cards_[i], i == focus_);
     }
 }
 

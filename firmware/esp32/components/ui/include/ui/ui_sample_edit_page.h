@@ -1,5 +1,6 @@
 #pragma once
 
+#include "components/ui_value_tile.h"
 #include "envelope_fetcher.h"
 #include "input_event.h"
 #include "spi_protocol/protocol.h"
@@ -52,19 +53,12 @@ class UISampleEditPage : public UIPage {
     // reached by paging, so the row stays at the design's 305px pitch.
     static constexpr int kVisibleCards = 4;
 
-    struct ParamCard {
-        lv_obj_t* card;
-        lv_obj_t* value;
-        lv_obj_t* bar;   // fill; nullptr for the inert cards
-        lv_obj_t* knob;  // slider handle
-    };
-
     lv_obj_t* root_ = nullptr;
     lv_obj_t* status_label_ = nullptr;
     lv_obj_t* info_label_ = nullptr;
     lv_obj_t* marker_s_ = nullptr;
     lv_obj_t* marker_e_ = nullptr;
-    ParamCard cards_[PARAM_COUNT] = {};
+    ValueTile cards_[PARAM_COUNT] = {};
     lv_obj_t* marker_ls_ = nullptr;
     lv_obj_t* marker_le_ = nullptr;
 
