@@ -89,10 +89,9 @@ class PacketRouterTest : public ::testing::Test {
         const auto& cap = GetInterMcuCapture();
         return g_handlers.sync_calls + g_handlers.error_calls + g_handlers.unknown_calls +
                cap.heartbeat_calls + cap.meter_calls + cap.browse_resp_calls +
-               cap.wave_chunk_calls + cap.envelope_chunk_calls + cap.sample_status_calls +
-               cap.inst_status_calls + cap.storage_status_calls + cap.stop_resp_calls +
-               cap.diag_push_calls + cap.sample_meta_calls + cap.sample_mem_status_calls +
-               cap.cv_cal_calls;
+               cap.envelope_chunk_calls + cap.sample_status_calls + cap.inst_status_calls +
+               cap.storage_status_calls + cap.stop_resp_calls + cap.diag_push_calls +
+               cap.sample_meta_calls + cap.sample_mem_status_calls + cap.cv_cal_calls;
     }
 
     std::unique_ptr<PacketRouter> router_;
@@ -263,51 +262,6 @@ TEST_F(PacketRouterTest, RouteSampleStopRespConvertsSuccessByte) {
     router_->route_packet(packet.data(), packet.size());
     ASSERT_EQ(cap.stop_resp_calls, 2);
     EXPECT_FALSE(cap.stop_resp_success);
-}
-
-// Wave chunks carry samples after the header; the handler validates the
-// payload length before exposing the sample pointer.
-TEST_F(PacketRouterTest, RouteWaveChunkDeliversSamples) {
-    struct {
-        WaveChunkMessage header;
-        int16_t samples[4];
-    } __attribute__((packed)) msg;
-    msg.header = WaveChunkMessage(100, 4);
-    msg.samples[0] = -32768;
-    msg.samples[1] = -1;
-    msg.samples[2] = 1;
-    msg.samples[3] = 32767;
-
-    std::vector<uint8_t> packet =
-        ProtocolTestHelper::CreateWaveXPacket(MSG_WAVE_CHUNK, &msg, sizeof(msg));
-    ASSERT_FALSE(packet.empty());
-
-    router_->route_packet(packet.data(), packet.size());
-
-    const auto& cap = GetInterMcuCapture();
-    ASSERT_EQ(cap.wave_chunk_calls, 1);
-    EXPECT_EQ(cap.wave_chunk_offset, 100u);
-    ASSERT_EQ(cap.wave_chunk_samples.size(), 4u);
-    EXPECT_EQ(cap.wave_chunk_samples[0], -32768);
-    EXPECT_EQ(cap.wave_chunk_samples[3], 32767);
-}
-
-// A wave chunk whose header claims more samples than the payload holds must
-// be dropped, not read past the buffer.
-TEST_F(PacketRouterTest, RouteWaveChunkWithShortPayloadIsDropped) {
-    struct {
-        WaveChunkMessage header;
-        int16_t samples[2];
-    } __attribute__((packed)) msg;
-    msg.header = WaveChunkMessage(0, 100);  // claims 100 samples, carries 2
-    msg.samples[0] = 1;
-    msg.samples[1] = 2;
-
-    std::vector<uint8_t> packet =
-        ProtocolTestHelper::CreateWaveXPacket(MSG_WAVE_CHUNK, &msg, sizeof(msg));
-    router_->route_packet(packet.data(), packet.size());
-
-    EXPECT_EQ(GetInterMcuCapture().wave_chunk_calls, 0);
 }
 
 // Valid envelope chunk: header + columns reach the cache callback intact.
@@ -493,7 +447,6 @@ TEST_F(PacketRouterTest, NullPayloadIsDroppedForEveryFixedSizeType) {
                              MSG_HEARTBEAT,
                              MSG_METER_PUSH,
                              MSG_STATUS_RESPONSE,
-                             MSG_WAVE_CHUNK,
                              MSG_ENVELOPE_CHUNK,
                              MSG_SAMPLE_STATUS,
                              MSG_STORAGE_STATUS,
@@ -520,7 +473,6 @@ TEST_F(PacketRouterTest, TruncatedPayloadIsDroppedForEveryFixedSizeType) {
                              MSG_HEARTBEAT,
                              MSG_METER_PUSH,
                              MSG_STATUS_RESPONSE,
-                             MSG_WAVE_CHUNK,
                              MSG_ENVELOPE_CHUNK,
                              MSG_SAMPLE_STATUS,
                              MSG_STORAGE_STATUS,

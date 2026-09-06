@@ -28,7 +28,6 @@ struct DispatchRecord {
     std::vector<WaveX::Protocol::MixOpMessage> mix_ops;
     std::vector<WaveX::Protocol::TrackOpMessage> track_ops;
     std::vector<WaveX::Protocol::SampleCtrlMessage> sample_ctrls;
-    std::vector<WaveX::Protocol::PreviewReqMessage> preview_reqs;
     std::vector<WaveX::Protocol::EnvelopeReqMessage> envelope_reqs;
     std::vector<WaveX::Protocol::CvCalMessage> cv_cal_sets;
     std::vector<uint8_t> cv_cal_gets;
@@ -83,15 +82,14 @@ struct DispatchRecord {
     // answer a malformed request with an error frame.
     size_t TotalCalls() const {
         return note_ons.size() + note_offs.size() + control_changes.size() + sample_ctrls.size() +
-               preview_reqs.size() + envelope_reqs.size() + cv_cal_sets.size() +
-               cv_cal_gets.size() + cv_tests.size() + sample_loads.size() +
-               selected_samples.size() + track_binding_requests.size() + unloaded_samples.size() +
-               static_cast<size_t>(get_sample_mem_status_calls) + seq_transports.size() +
-               seq_pattern_ops.size() + midi_clock_events.size() + midi_ccs.size() +
-               instrument_ops.size() + browse_requests.size() + play_requests.size() +
-               stop_requests.size() + play_index_requests.size() + sample_edits.size() +
-               meta_requests.size() + loop_gaps_ms.size() + diag_subscribes.size() +
-               mix_ops.size() + track_ops.size();
+               envelope_reqs.size() + cv_cal_sets.size() + cv_cal_gets.size() + cv_tests.size() +
+               sample_loads.size() + selected_samples.size() + track_binding_requests.size() +
+               unloaded_samples.size() + static_cast<size_t>(get_sample_mem_status_calls) +
+               seq_transports.size() + seq_pattern_ops.size() + midi_clock_events.size() +
+               midi_ccs.size() + instrument_ops.size() + browse_requests.size() +
+               play_requests.size() + stop_requests.size() + play_index_requests.size() +
+               sample_edits.size() + meta_requests.size() + loop_gaps_ms.size() +
+               diag_subscribes.size() + mix_ops.size() + track_ops.size();
     }
 };
 

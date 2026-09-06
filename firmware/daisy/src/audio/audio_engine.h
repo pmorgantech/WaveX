@@ -53,13 +53,6 @@ void OnTrackOp(const WaveX::Protocol::TrackOpMessage& m);
 void OnNoteOn(const WaveX::Protocol::NoteMessage& m);
 void OnNoteOff(const WaveX::Protocol::NoteMessage& m);
 void OnSampleCtrl(const WaveX::Protocol::SampleCtrlMessage& m);
-// OnPreviewReq only builds the preview buffer; PumpPreviewSend() (called
-// every main-loop pass, like PumpWavIO/PumpEnvelopeJob) sends it one frame
-// at a time so a full TX queue means "retry next pass", never "give up and
-// truncate".
-void OnPreviewReq(const WaveX::Protocol::PreviewReqMessage& m);
-void PumpPreviewSend();
-
 // Waveform envelope (roadmap 1.5.5 item 2). OnEnvelopeReq only accepts the
 // request - measuring a min/max envelope touches every sample in the window,
 // which is ~16 M reads for a three-minute stereo file and would stall the main

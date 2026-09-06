@@ -110,10 +110,6 @@ struct InterMcuCapture {
     int browse_resp_calls = 0;
     std::vector<uint8_t> browse_resp_data;
 
-    int wave_chunk_calls = 0;
-    uint32_t wave_chunk_offset = 0;
-    std::vector<int16_t> wave_chunk_samples;
-
     int envelope_chunk_calls = 0;
     WaveX::Protocol::EnvelopeChunkMessage envelope_header;
     std::vector<WaveX::Protocol::EnvelopeColumn> envelope_columns;

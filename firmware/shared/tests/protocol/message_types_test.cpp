@@ -85,26 +85,6 @@ TEST_F(MessageTypeTest, SampleCtrlMessage) {
     EXPECT_FLOAT_EQ(parsed.rate, original.rate);
 }
 
-// Test PreviewReqMessage creation and parsing
-TEST_F(MessageTypeTest, PreviewReqMessage) {
-    PreviewReqMessage original(0, 0, 1000, 4);
-
-    size_t created =
-        ProtocolHandler::CreatePreviewReqPacket(buffer_.data(), buffer_.size(), original);
-
-    ASSERT_GT(created, 0);
-    EXPECT_TRUE(ProtocolHandler::ValidatePacket(buffer_.data(), created));
-
-    PreviewReqMessage parsed;
-    bool result = ProtocolHandler::ParsePreviewReq(buffer_.data(), parsed);
-
-    EXPECT_TRUE(result);
-    EXPECT_EQ(parsed.slot, original.slot);
-    EXPECT_EQ(parsed.start, original.start);
-    EXPECT_EQ(parsed.end, original.end);
-    EXPECT_EQ(parsed.decim, original.decim);
-}
-
 // Test MeterPushMessage creation and parsing
 TEST_F(MessageTypeTest, MeterPushMessage) {
     MeterPushMessage original(0x7FFF, 0x4000, 0x7FFF, 0x4000);
@@ -125,46 +105,6 @@ TEST_F(MessageTypeTest, MeterPushMessage) {
     EXPECT_EQ(parsed.rms_right, original.rms_right);
     EXPECT_EQ(parsed.peak_left, original.peak_left);
     EXPECT_EQ(parsed.peak_right, original.peak_right);
-}
-
-// Test WaveChunkMessage creation and parsing (header + trailing sample payload)
-TEST_F(MessageTypeTest, WaveChunkMessage) {
-    WaveChunkMessage header(4096, 128);
-    std::vector<int16_t> samples(128);
-    for (size_t i = 0; i < samples.size(); ++i) {
-        samples[i] = static_cast<int16_t>(i * 7 - 300);
-    }
-
-    size_t created = ProtocolHandler::CreateWaveChunkPacket(
-        buffer_.data(), buffer_.size(), header, samples.data(), samples.size() * sizeof(int16_t));
-
-    ASSERT_GT(created, 0);
-    EXPECT_TRUE(ProtocolHandler::ValidatePacket(buffer_.data(), created));
-    EXPECT_EQ(ProtocolHandler::GetMessageType(buffer_.data()), MSG_WAVE_CHUNK);
-
-    uint8_t msg_type;
-    uint16_t seq;
-    uint8_t flags;
-    std::vector<uint8_t> parsed_payload(sizeof(WaveChunkMessage) +
-                                        samples.size() * sizeof(int16_t));
-    size_t parsed_payload_size = parsed_payload.size();
-
-    bool result = ProtocolHandler::ParseWaveXPacket(
-        buffer_.data(), created, msg_type, parsed_payload.data(), parsed_payload_size, seq, flags);
-
-    ASSERT_TRUE(result);
-    EXPECT_EQ(msg_type, MSG_WAVE_CHUNK);
-
-    const WaveChunkMessage* parsed_header =
-        reinterpret_cast<const WaveChunkMessage*>(parsed_payload.data());
-    EXPECT_EQ(parsed_header->offset, header.offset);
-    EXPECT_EQ(parsed_header->count, header.count);
-
-    const int16_t* parsed_samples =
-        reinterpret_cast<const int16_t*>(parsed_payload.data() + sizeof(WaveChunkMessage));
-    for (size_t i = 0; i < samples.size(); ++i) {
-        EXPECT_EQ(parsed_samples[i], samples[i]) << "sample index " << i;
-    }
 }
 
 // Test HeartbeatMessage creation and parsing
@@ -1043,13 +983,13 @@ TEST_F(MessageTypeTest, CreateWaveXPacketRejectsPayloadBeyondLargestClass) {
 
     // Exactly at capacity: fits the 2048-byte class.
     size_t created = ProtocolHandler::CreateWaveXPacket(
-        buffer_.data(), buffer_.size(), MSG_WAVE_CHUNK, payload.data(), 2042, 7, 0);
+        buffer_.data(), buffer_.size(), MSG_ENVELOPE_CHUNK, payload.data(), 2042, 7, 0);
     EXPECT_EQ(created, 2048u);
 
     // One past capacity through six past: must fail cleanly, not overflow.
     for (size_t oversize = 2043; oversize <= 2048; ++oversize) {
         created = ProtocolHandler::CreateWaveXPacket(
-            buffer_.data(), buffer_.size(), MSG_WAVE_CHUNK, payload.data(), oversize, 7, 0);
+            buffer_.data(), buffer_.size(), MSG_ENVELOPE_CHUNK, payload.data(), oversize, 7, 0);
         EXPECT_EQ(created, 0u) << "payload_size=" << oversize;
     }
 }

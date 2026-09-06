@@ -122,16 +122,6 @@ TEST_F(MessageDispatchTest, SampleCtrlReachesAudioEngine) {
     EXPECT_FLOAT_EQ(GetDispatchRecord().sample_ctrls[0].rate, 1.0f);
 }
 
-TEST_F(MessageDispatchTest, PreviewReqReachesAudioEngine) {
-    PreviewReqMessage req(0, 100, 200, 4);
-    Dispatch(MSG_PREVIEW_REQ, req);
-
-    ASSERT_EQ(GetDispatchRecord().preview_reqs.size(), 1u);
-    EXPECT_EQ(GetDispatchRecord().preview_reqs[0].start, 100u);
-    EXPECT_EQ(GetDispatchRecord().preview_reqs[0].end, 200u);
-    EXPECT_EQ(GetDispatchRecord().preview_reqs[0].decim, 4);
-}
-
 TEST_F(MessageDispatchTest, EnvelopeReqReachesAudioEngine) {
     EnvelopeReqMessage req(7, 1256, 44100, 7000000);
     Dispatch(MSG_ENVELOPE_REQ, req);
@@ -521,7 +511,7 @@ TEST_F(MessageDispatchTest, NullPayloadIsSafeForAllRoutedTypes) {
                              MSG_SAMPLE_CTRL,
                              MSG_SAMPLE_LOAD,
                              MSG_SAMPLE_DATA,
-                             MSG_PREVIEW_REQ,
+                             MSG_ENVELOPE_REQ,
                              MSG_STATUS_REQUEST,
                              MSG_BROWSE_REQ,
                              MSG_SAMPLE_PLAY_REQ,
@@ -537,7 +527,7 @@ TEST_F(MessageDispatchTest, NullPayloadIsSafeForAllRoutedTypes) {
     EXPECT_TRUE(r.control_changes.empty());
     EXPECT_TRUE(r.sample_ctrls.empty());
     EXPECT_TRUE(r.sample_loads.empty());
-    EXPECT_TRUE(r.preview_reqs.empty());
+    EXPECT_TRUE(r.envelope_reqs.empty());
     EXPECT_TRUE(r.browse_requests.empty());
     EXPECT_TRUE(r.play_requests.empty());
     EXPECT_TRUE(r.stop_requests.empty());

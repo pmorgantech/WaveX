@@ -63,13 +63,6 @@ void inter_mcu_invoke_cv_cal_callback(const WaveX::Protocol::CvCalMessage& cal) 
     GetInterMcuCapture().cv_cal_calls++;
 }
 
-void inter_mcu_invoke_wave_chunk_callback(uint32_t offset, const int16_t* samples, uint16_t count) {
-    auto& cap = GetInterMcuCapture();
-    cap.wave_chunk_calls++;
-    cap.wave_chunk_offset = offset;
-    cap.wave_chunk_samples.assign(samples, samples + count);
-}
-
 void inter_mcu_invoke_envelope_chunk_callback(const WaveX::Protocol::EnvelopeChunkMessage& header,
                                               const WaveX::Protocol::EnvelopeColumn* columns) {
     auto& cap = GetInterMcuCapture();

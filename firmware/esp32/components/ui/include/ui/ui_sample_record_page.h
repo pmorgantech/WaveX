@@ -18,8 +18,9 @@ namespace wavex_ui {
  * 1 rebuilds the capture path. Until then this page shows the current sample's
  * whole-file envelope through the same EnvelopePanel the Browse and Edit tabs
  * use, and says plainly that the Record key is inert. It used to drive its own
- * decimated-preview protocol (MSG_PREVIEW_REQ / MSG_WAVE_CHUNK) and report
- * "Recording..." on a command the backend ignores; both are gone.
+ * decimated-preview protocol and report "Recording..." on a command the
+ * backend ignores; both are gone, and the preview protocol was retired with
+ * PROTOCOL_VERSION 3.
  */
 class UISampleRecordPage : public UIPage {
    public:

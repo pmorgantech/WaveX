@@ -339,30 +339,42 @@ TEST_F(StatisticsManagerTest, GetTotalPacketCount) {
     EXPECT_EQ(stats->get_total_packet_count(), 2);
 }
 
-// The Daisy used to send meter/wave/heartbeat under 0x0D/0x0E/0x0F; the
-// legacy ids must still land in the same buckets as the current ones.
+// The Daisy used to send meter/heartbeat under 0x0D/0x0F; the legacy ids
+// must still land in the same buckets as the current ones.
 TEST_F(StatisticsManagerTest, LegacyMessageTypeAliasesShareBuckets) {
     stats->increment_packet_stat(0x0D);  // legacy METER_PUSH
     stats->increment_packet_stat(0x10);  // current METER_PUSH
-    stats->increment_packet_stat(0x0E);  // legacy WAVE_CHUNK
-    stats->increment_packet_stat(0x11);  // current WAVE_CHUNK
     stats->increment_packet_stat(0x0F);  // legacy HEARTBEAT
     stats->increment_packet_stat(0x12);  // current HEARTBEAT
 
     wavex_packet_stats_t s;
     stats->get_packet_stats(&s);
     EXPECT_EQ(s.meter_push_packets, 2u);
-    EXPECT_EQ(s.wave_chunk_packets, 2u);
     EXPECT_EQ(s.heartbeat_packets, 2u);
     EXPECT_EQ(s.unknown_packets, 0u);
-    EXPECT_EQ(s.total_packets, 6u);
+    EXPECT_EQ(s.total_packets, 4u);
+}
+
+// The decimated preview (PREVIEW_REQ 0x0A, WAVE_CHUNK 0x11 and its legacy
+// 0x0E) was retired in protocol 3. A backend still sending it is running an
+// older protocol, and that is exactly what the UNKNOWN counter is for.
+TEST_F(StatisticsManagerTest, RetiredPreviewTypesCountAsUnknown) {
+    stats->increment_packet_stat(0x0A);
+    stats->increment_packet_stat(0x0E);
+    stats->increment_packet_stat(0x11);
+
+    wavex_packet_stats_t s;
+    stats->get_packet_stats(&s);
+    EXPECT_EQ(s.unknown_packets, 3u);
+    EXPECT_EQ(s.other_known_packets, 0u);
+    EXPECT_EQ(s.total_packets, 3u);
 }
 
 // The 0x30/0x40 response blocks are recognised but have no counter of their
 // own. They must land in other_known so a non-zero UNKNOWN keeps meaning
 // corruption or a version mismatch, not "browse replies have no bucket".
 TEST_F(StatisticsManagerTest, KnownResponsesCountAsOtherKnownNotUnknown) {
-    const uint8_t known_without_bucket[] = {0x31, 0x34, 0x39, 0x3D, 0x42};
+    const uint8_t known_without_bucket[] = {0x31, 0x34, 0x35, 0x39, 0x3D, 0x42, 0x48, 0x4A, 0x61};
     for (uint8_t type: known_without_bucket) {
         stats->increment_packet_stat(type);
     }
@@ -371,10 +383,10 @@ TEST_F(StatisticsManagerTest, KnownResponsesCountAsOtherKnownNotUnknown) {
 
     wavex_packet_stats_t s;
     stats->get_packet_stats(&s);
-    EXPECT_EQ(s.other_known_packets, 5u);
+    EXPECT_EQ(s.other_known_packets, 9u);
     EXPECT_EQ(s.unknown_packets, 1u);
     EXPECT_EQ(s.error_packets, 1u);
-    EXPECT_EQ(s.total_packets, 7u);
+    EXPECT_EQ(s.total_packets, 11u);
 }
 
 TEST_F(StatisticsManagerTest, DiagAndEnvelopeTypesHaveTheirOwnBuckets) {

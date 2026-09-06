@@ -30,10 +30,8 @@ static void HandleNoteOffMessage(const uint8_t* payload, size_t payload_size);
 static void HandleSampleLoadMessage(const uint8_t* payload, size_t payload_size);
 static void HandleSampleDataMessage(const uint8_t* payload, size_t payload_size);
 static void HandleSampleControlMessage(const uint8_t* payload, size_t payload_size);
-static void HandlePreviewRequestMessage(const uint8_t* payload, size_t payload_size);
 static void HandleDataRequestMessage(const uint8_t* payload, size_t payload_size);
 static void HandleMeterPushMessage(const uint8_t* payload, size_t payload_size);
-static void HandleWaveChunkMessage(const uint8_t* payload, size_t payload_size);
 static void HandleHeartbeatMessage(const uint8_t* payload, size_t payload_size);
 static void HandleDiagSubscribeMessage(const uint8_t* payload, size_t payload_size);
 static void HandleSampleEditMessage(const uint8_t* payload, size_t payload_size);
@@ -121,9 +119,6 @@ void ProcessInterMcuMessage(uint8_t msg_type,
         case MSG_SAMPLE_CTRL:
             HandleSampleControlMessage(payload, payload_size);
             break;
-        case MSG_PREVIEW_REQ:
-            HandlePreviewRequestMessage(payload, payload_size);
-            break;
         case MSG_DATA_REQUEST:
             HandleDataRequestMessage(payload, payload_size);
             break;
@@ -132,9 +127,6 @@ void ProcessInterMcuMessage(uint8_t msg_type,
             break;
         case MSG_STATUS_REQUEST:
             HandleStatusRequestMessage(payload, payload_size);
-            break;
-        case MSG_WAVE_CHUNK:
-            HandleWaveChunkMessage(payload, payload_size);
             break;
         case MSG_HEARTBEAT:
             HandleHeartbeatMessage(payload, payload_size);
@@ -232,7 +224,7 @@ static void HandleSyncMessage(const uint8_t*, size_t) {}
 // NOTE_ON/NOTE_OFF/CONTROL_CHANGE/SAMPLE_CTRL were log-only stubs until
 // 2026-07-05 - the engine side (SPSC note queue -> VoiceManager) existed
 // and was host-tested, but no wire message ever reached it (code review
-// C1). These four now dispatch like the SAMPLE_LOAD/PREVIEW handlers
+// C1). These four now dispatch like the SAMPLE_LOAD handler
 // below always did; tests/unit/comm/message_dispatch_test.cpp pins every
 // routed type to its observable engine call so a stub can't silently
 // reappear.
@@ -336,36 +328,6 @@ static void HandleSampleControlMessage(const uint8_t* payload, size_t payload_si
 #endif
 }
 
-static void HandlePreviewRequestMessage(const uint8_t* payload, size_t payload_size) {
-    if (!payload || payload_size < sizeof(PreviewReqMessage)) {
-        if (s_hw) {
-            WaveX::Log::PrintLine("DAISY: PreviewReq invalid size %d (expected %d)",
-                                  (int)payload_size,
-                                  (int)sizeof(PreviewReqMessage));
-        }
-        return;
-    }
-
-    PreviewReqMessage req{};
-    memcpy(&req, payload, sizeof(req));
-
-    if (s_hw) {
-        WaveX::Log::PrintLine("DAISY: PreviewReq track=%u start=%lu end=%lu decim=%u",
-                              (unsigned)req.slot,
-                              (unsigned long)req.start,
-                              (unsigned long)req.end,
-                              (unsigned)req.decim);
-    }
-
-#if WAVEX_AUDIO_ENGINE_ENABLED
-    WaveX::AudioEngine::OnPreviewReq(req);
-#else
-    if (s_hw) {
-        WaveX::Log::PrintLine("DAISY: Audio engine disabled; cannot process preview req");
-    }
-#endif
-}
-
 static void HandleEnvelopeReqMessage(const uint8_t* payload, size_t payload_size) {
     if (!payload || payload_size < sizeof(EnvelopeReqMessage)) {
         if (s_hw) {
@@ -391,8 +353,6 @@ static void HandleEnvelopeReqMessage(const uint8_t* payload, size_t payload_size
 static void HandleDataRequestMessage(const uint8_t*, size_t) {}
 
 static void HandleMeterPushMessage(const uint8_t*, size_t) {}
-
-static void HandleWaveChunkMessage(const uint8_t*, size_t) {}
 
 static void HandleHeartbeatMessage(const uint8_t*, size_t) {}
 

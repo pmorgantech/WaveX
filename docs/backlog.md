@@ -76,10 +76,11 @@ reproducible CRC faults and capture ring low-water and service latency.
 ### The Daisy's SRAM is at 89%, and the .wxi document buffer is the lever
 
 The 2026-09-06 path widening took internal SRAM from ~84% to 89.1%
-(467 KB of 512 KB, ~57 KB free). The single largest new consumer is the
-loader's `.wxi` document buffer (`s_doc_storage`, `sfz_loader.cpp`): a
-`Wxi::InstrumentFile` is ~17 KB once each of its 64 zone slots carries a
-256-byte path.
+(467 KB of 512 KB, ~57 KB free); retiring the decimated preview the same day
+(protocol 3) gave ~16 KB of that back (its 4096-point buffer and frame
+staging), for 86.0%. The single largest new consumer is the loader's `.wxi`
+document buffer (`s_doc_storage`, `sfz_loader.cpp`): a `Wxi::InstrumentFile`
+is ~17 KB once each of its 64 zone slots carries a 256-byte path.
 
 It does not belong in SRAM. It is a main-loop working buffer, written once per
 load and never touched by the audio callback — the same profile as the Sample
@@ -292,6 +293,14 @@ a decision rather than a mechanical fix:
 Add active-voice and round-trip-latency telemetry when it has an owning
 protocol change. Add MIDI detail and dropped-event counters with the Phase 2
 sequencer and tempo-follower work, when those events actually exist.
+
+The Link tab's `unknown` count is meant to read 0 in a healthy session, so a
+non-zero value means corruption or a protocol mismatch. It does not yet: the
+backend answers every audition-by-path with a `MSG_ACK` (`serial_id` 0,
+`ProcessSamplePlayRequest`) that the frontend neither routes nor counts as
+known, so each audition adds one. Either drop that ACK - nothing waits for
+it - or route it; do not just add it to the known list, which would hide a
+message the frontend does nothing with.
 
 ### Root-menu context lines have no data source
 

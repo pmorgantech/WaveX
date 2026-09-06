@@ -26,10 +26,8 @@ typedef struct {
     uint32_t status_request_packets;
     uint32_t status_response_packets;
     uint32_t sample_ctrl_packets;
-    uint32_t preview_req_packets;
     uint32_t data_request_packets;
     uint32_t meter_push_packets;
-    uint32_t wave_chunk_packets;
     uint32_t envelope_chunk_packets;
     uint32_t heartbeat_packets;
     uint32_t diag_push_packets;

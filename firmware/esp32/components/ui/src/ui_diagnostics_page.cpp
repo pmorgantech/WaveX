@@ -543,7 +543,7 @@ void UIDiagnosticsPage::buildLinkTab(lv_obj_t* tab) {
     // MSG_DIAG_PUSH nor WAVEX_DAISY_UART_PERF_DEBUG.
     //
     // No sparkline here: pushSpark clamps to 0..100 and the packet rate runs
-    // well past that during a preview stream, so the trace would flatline at
+    // well past that during an envelope fetch, so the trace would flatline at
     // the top and claim the link had stopped varying.
     static const bool gauge[4] = {false, false, false, false};
     for (int i = 0; i < 4; i++) {
@@ -1468,9 +1468,9 @@ void UIDiagnosticsPage::refreshLinkTab() {
     snprintf(v, sizeof(v), "%lu", (unsigned long)st.total_packets);
     snprintf(sub,
              sizeof(sub),
-             "%lu meter - %lu wave",
+             "%lu meter - %lu envelope",
              (unsigned long)st.meter_push_packets,
-             (unsigned long)st.wave_chunk_packets);
+             (unsigned long)st.envelope_chunk_packets);
     setCard(link_cards[2], v, "total", sub, -1);
 
     snprintf(v, sizeof(v), "%lu", (unsigned long)(st.invalid_packets + st.error_packets));
@@ -1492,14 +1492,12 @@ void UIDiagnosticsPage::refreshLinkTab() {
     const Row rows[] = {
         {"HEARTBEAT", st.heartbeat_packets},
         {"METER_PUSH", st.meter_push_packets},
-        {"WAVE_CHUNK", st.wave_chunk_packets},
         {"ENVELOPE_CHUNK", st.envelope_chunk_packets},
         {"STATUS_RESPONSE", st.status_response_packets},
         {"STATUS_REQUEST", st.status_request_packets},
         {"SAMPLE_CTRL", st.sample_ctrl_packets},
         {"SAMPLE_LOAD", st.sample_load_packets},
         {"SAMPLE_DATA", st.sample_data_packets},
-        {"PREVIEW_REQ", st.preview_req_packets},
         {"DATA_REQUEST", st.data_request_packets},
         {"CONTROL_CHANGE", st.control_change_packets},
         {"NOTE_ON", st.note_on_packets},

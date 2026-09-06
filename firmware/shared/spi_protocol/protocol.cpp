@@ -404,13 +404,6 @@ size_t ProtocolHandler::CreateSampleCtrlPacket(uint8_t* buffer,
         buffer, buffer_size, MSG_SAMPLE_CTRL, &msg, sizeof(SampleCtrlMessage));
 }
 
-size_t ProtocolHandler::CreatePreviewReqPacket(uint8_t* buffer,
-                                               size_t buffer_size,
-                                               const PreviewReqMessage& msg) {
-    return CreateUnifiedPacket(
-        buffer, buffer_size, MSG_PREVIEW_REQ, &msg, sizeof(PreviewReqMessage));
-}
-
 size_t ProtocolHandler::CreateDataRequestPacket(uint8_t* buffer,
                                                 size_t buffer_size,
                                                 const DataRequestMessage& msg) {
@@ -490,29 +483,6 @@ size_t ProtocolHandler::CreateEnvelopeChunkPacket(uint8_t* buffer,
         buffer, buffer_size, MSG_ENVELOPE_CHUNK, temp_payload, total_payload_size);
 }
 
-size_t ProtocolHandler::CreateWaveChunkPacket(uint8_t* buffer,
-                                              size_t buffer_size,
-                                              const WaveChunkMessage& msg,
-                                              const void* sample_data,
-                                              size_t sample_data_size) {
-    // Payload layout: WaveChunkMessage header, then msg.count int16 samples.
-    size_t header_size = sizeof(WaveChunkMessage);
-    size_t total_payload_size = header_size + sample_data_size;
-
-    uint8_t temp_payload[2048];  // staging; MAX_PKT_SIZE-sized
-    if (total_payload_size > sizeof(temp_payload)) {
-        return 0;
-    }
-
-    memcpy(temp_payload, &msg, header_size);
-    if (sample_data && sample_data_size > 0) {
-        memcpy(temp_payload + header_size, sample_data, sample_data_size);
-    }
-
-    return CreateUnifiedPacket(
-        buffer, buffer_size, MSG_WAVE_CHUNK, temp_payload, total_payload_size);
-}
-
 // (Review H6/M10: ParseBrowseReq/ParseSamplePlayReq were deleted here.
 // They parsed a browse-request wire format - path-first, u32 start_index,
 // u8 max_entries - that nothing ever sent: the live format is
@@ -577,21 +547,6 @@ bool ProtocolHandler::ParseSampleCtrl(const uint8_t* buffer, SampleCtrlMessage& 
         return false;
     }
     return msg_type == MSG_SAMPLE_CTRL;
-}
-
-bool ProtocolHandler::ParsePreviewReq(const uint8_t* buffer, PreviewReqMessage& msg) {
-    uint8_t msg_type;
-    uint16_t seq;
-    uint8_t flags;
-    size_t payload_size = sizeof(PreviewReqMessage);
-    size_t packet_size = GetPacketSize(buffer);
-
-    if (packet_size == 0)
-        return false;
-    if (!ParseWaveXPacket(buffer, packet_size, msg_type, &msg, payload_size, seq, flags)) {
-        return false;
-    }
-    return msg_type == MSG_PREVIEW_REQ;
 }
 
 bool ProtocolHandler::ParseDataRequest(const uint8_t* buffer, DataRequestMessage& msg) {

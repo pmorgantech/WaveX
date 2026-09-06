@@ -121,6 +121,20 @@ versioning and release process.
 - Per-load `LOAD_PROGRESS` callbacks (about a hundred per file) no longer log
   at INFO; they flooded the log ring on every load.
 
+### Removed
+
+- **The decimated waveform preview** (`MSG_PREVIEW_REQ` 0x0A /
+  `MSG_WAVE_CHUNK` 0x11, roadmap Phase 1.5 item 5). Every Sample tab now draws
+  from the envelope protocol, so the request, the chunk, the Daisy's
+  most-recently-loaded preview job and the ESP32's chunk listener are gone
+  rather than left as a second path nothing calls; the two type values are
+  not reused. A board still sending them is counted under the Diagnostics
+  link card's unknown-packet figure, which is the version-mismatch signal
+  that card already reports; for that figure to mean it, the Pool page and
+  stop-audition replies - routed, but never listed as known - no longer count
+  there either, so an ordinary session reads 0 unknown. The link cards read
+  `envelope` where they read `wave`.
+
 ### Added
 
 - The Instrument loader accepts `.wxi` as well as `.sfz`. The parse is the

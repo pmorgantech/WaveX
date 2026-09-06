@@ -57,7 +57,9 @@ complete. Remaining work:
    protocol/policy for stereo, and playback-time loop crossfade.
 4. Reconcile stereo behavior between streaming and RAM voices; add the UI for
    `channel_mode`, including a label for one-channel views.
-5. Retire the legacy decimated preview when the Record page is rebuilt.
+5. ~~Retire the legacy decimated preview when the Record page is rebuilt.~~
+   Done 2026-09-06: `MSG_PREVIEW_REQ`/`MSG_WAVE_CHUNK` removed in protocol 3;
+   every Sample tab draws from the envelope protocol.
 
 **Gate:** edit and audition a multi-minute WAV, save, reboot, reload, and hear
 the same region without a UI freeze.

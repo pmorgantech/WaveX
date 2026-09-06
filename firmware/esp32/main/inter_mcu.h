@@ -74,11 +74,10 @@ typedef enum {
 } wavex_sample_ctrl_cmd_t;
 
 esp_err_t inter_mcu_send_sample_ctrl(uint8_t slot, wavex_sample_ctrl_cmd_t cmd, float rate);
-esp_err_t inter_mcu_send_preview_req(uint8_t slot, uint32_t start, uint32_t end, uint16_t decim);
 
 // Min/max waveform envelope for a frame window (roadmap 1.5.5 item 2). Unlike
-// the decimated preview above, the reply's size follows the requested column
-// count rather than the file length, and it does not alias.
+// the decimated preview it replaced, the reply's size follows the requested
+// column count rather than the file length, and it does not alias.
 // sample_id 0 = the most recently loaded sample; end_frame 0 = to the end.
 esp_err_t inter_mcu_send_envelope_req(uint16_t sample_id,
                                       uint16_t columns,
@@ -179,10 +178,6 @@ bool inter_mcu_get_diag_push(WaveX::Protocol::DiagPushMessage* out, uint32_t max
 // Listener registration for backend->frontend messages
 typedef void (*wavex_meter_cb_t)(
     float rms_left, float rms_right, float peak_left, float peak_right, void* user_data);
-typedef void (*wavex_wave_chunk_cb_t)(uint32_t offset,
-                                      const int16_t* samples,
-                                      uint16_t count,
-                                      void* user_data);
 // One run of envelope columns (MSG_ENVELOPE_CHUNK). The header carries the
 // window, the generation and the channel count, so a listener can decide
 // whether a chunk still matters without keeping request state. `columns` is
@@ -200,13 +195,11 @@ typedef void (*wavex_sample_status_cb_t)(uint16_t sample_id,
 typedef void (*wavex_inst_status_cb_t)(const WaveX::Protocol::InstStatusMessage& status,
                                        void* user_data);
 
-void inter_mcu_set_wave_chunk_listener(wavex_wave_chunk_cb_t cb, void* user_data);
 void inter_mcu_set_envelope_chunk_listener(wavex_envelope_chunk_cb_t cb, void* user_data);
 void inter_mcu_invoke_envelope_chunk_callback(const WaveX::Protocol::EnvelopeChunkMessage& header,
                                               const WaveX::Protocol::EnvelopeColumn* columns);
 void inter_mcu_invoke_browse_resp_callback(const uint8_t* data, size_t length);
 void inter_mcu_invoke_storage_status_callback(bool mounted);
-void inter_mcu_invoke_wave_chunk_callback(uint32_t offset, const int16_t* samples, uint16_t count);
 void inter_mcu_set_sample_status_listener(wavex_sample_status_cb_t cb, void* user_data);
 void inter_mcu_invoke_sample_status_callback(uint16_t sample_id,
                                              uint8_t state,

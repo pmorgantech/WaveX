@@ -45,7 +45,6 @@ static portMUX_TYPE s_sample_mem_lock = portMUX_INITIALIZER_UNLOCKED;
 // Pages register these with `this` and clear them in onExit; the UART task
 // invokes them. ListenerSlot makes the pair swap atomic and makes a clear
 // block until any in-flight callback has returned - see listener_slot.h.
-static WaveX::Comm::ListenerSlot<wavex_wave_chunk_cb_t> s_wave_chunk_listener;
 static WaveX::Comm::ListenerSlot<wavex_envelope_chunk_cb_t> s_envelope_chunk_listener;
 static WaveX::Comm::ListenerSlot<wavex_inst_status_cb_t> s_inst_status_listener;
 
@@ -221,21 +220,6 @@ esp_err_t inter_mcu_send_sample_ctrl(uint8_t slot, wavex_sample_ctrl_cmd_t cmd, 
     msg.rate = rate;
 
     int result = send_uart_message(WaveX::Protocol::MSG_SAMPLE_CTRL, &msg, sizeof(msg));
-    return result >= 0 ? ESP_OK : ESP_FAIL;
-}
-
-esp_err_t inter_mcu_send_preview_req(uint8_t slot, uint32_t start, uint32_t end, uint16_t decim) {
-    if (!s_initialized || s_suspended) {
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    WaveX::Protocol::PreviewReqMessage msg;
-    msg.slot = slot;
-    msg.start = start;
-    msg.end = end;
-    msg.decim = decim;
-
-    int result = send_uart_message(WaveX::Protocol::MSG_PREVIEW_REQ, &msg, sizeof(msg));
     return result >= 0 ? ESP_OK : ESP_FAIL;
 }
 
@@ -747,11 +731,6 @@ void inter_mcu_get_sample_mem_status(wavex_sample_mem_status_t* out) {
     taskEXIT_CRITICAL(&s_sample_mem_lock);
 }
 
-void inter_mcu_set_wave_chunk_listener(wavex_wave_chunk_cb_t cb, void* user_data) {
-    s_wave_chunk_listener.set(cb, user_data);
-    ESP_LOGI(TAG, "Wave chunk listener registered: %p", cb);
-}
-
 void inter_mcu_set_envelope_chunk_listener(wavex_envelope_chunk_cb_t cb, void* user_data) {
     s_envelope_chunk_listener.set(cb, user_data);
 }
@@ -776,14 +755,6 @@ void inter_mcu_invoke_storage_status_callback(bool mounted) {
         return;
     }
     s_statistics->invoke_storage_status_callback(mounted);
-}
-
-void inter_mcu_invoke_wave_chunk_callback(uint32_t offset, const int16_t* samples, uint16_t count) {
-    if (!s_wave_chunk_listener.registered()) {
-        ESP_LOGW(TAG, "Wave chunk received but no listener registered");
-        return;
-    }
-    s_wave_chunk_listener.invoke(offset, samples, count);
 }
 
 void inter_mcu_set_sample_status_listener(wavex_sample_status_cb_t cb, void* user_data) {

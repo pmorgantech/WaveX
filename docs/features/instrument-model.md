@@ -172,7 +172,7 @@ Edits apply **between control ticks** (double-buffer the zone being written, or 
 ## 7. UI (ESP32 pages, per `ui-architecture.md` patterns)
 
 1. **Instrument page** (per slot): zone list (key range, vel range, sample name), softkeys New/Load/Save/Mode.
-2. **Zone editor**: key/vel range drag on a mini-keyboard widget, root note (play-to-set: next MIDI note received sets root — Emax workflow), tune, gain/pan, region/loop (reuses waveform preview via existing `MSG_PREVIEW_REQ` path), filter/ADSR.
+2. **Zone editor**: key/vel range drag on a mini-keyboard widget, root note (play-to-set: next MIDI note received sets root — Emax workflow), tune, gain/pan, region/loop (reuses the waveform envelope via the existing `MSG_ENVELOPE_REQ` path), filter/ADSR.
 3. **Keyboard-split quick action**: "spread selected N samples chromatically / across N equal splits" — the Emax auto-placement niceties; pure ESP-side loop emitting `INST_OP_SET_ZONE`s.
 
 UI never blocks on loads: `INST_STATUS` drives progress toasts (deferred-update pattern, never LVGL off the UI task).

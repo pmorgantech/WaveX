@@ -142,10 +142,6 @@ void OnSampleCtrl(const WaveX::Protocol::SampleCtrlMessage& m) {
     WaveX::Test::GetDispatchRecord().sample_ctrls.push_back(m);
 }
 
-void OnPreviewReq(const WaveX::Protocol::PreviewReqMessage& m) {
-    WaveX::Test::GetDispatchRecord().preview_reqs.push_back(m);
-}
-
 void OnEnvelopeReq(const WaveX::Protocol::EnvelopeReqMessage& m) {
     WaveX::Test::GetDispatchRecord().envelope_reqs.push_back(m);
 }
