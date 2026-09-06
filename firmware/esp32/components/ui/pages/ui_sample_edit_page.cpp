@@ -64,17 +64,25 @@ constexpr uint32_t kRequestTimeoutMs = 3000;
 // status line that says so is more use than silent traffic.
 constexpr uint8_t kMaxRequestRetries = 3;
 
-// Layout, page-relative (the navigator's content area already starts below the
-// 75px header). Design 2e: waveform 1256x250 @ y12, param strip y278, info y434.
-constexpr int kMargin = 12;
-constexpr int kWaveW = 1256;
+// Layout, page-relative. This page is a tab body inside the Sample group, so
+// what it actually gets is the content area MINUS the tab bar - 501px, not
+// 557. The previous constants were budgeted against 545 with no allowance for
+// the bar at all, which put the info strip's second line under the softkey
+// cards; it was cut off before this change and is sized to fit here.
+//
+// Design turn 3c: waveform across the top, four parameter cards on a fixed
+// pitch under it, the info strip last.
+constexpr int kPageH = UI_CONTENT_HEIGHT - UI_TAB_BAR_HEIGHT;  // 501
+constexpr int kMargin = UI_MARGIN_X;
+constexpr int kWaveW = UI_SCREEN_WIDTH - 2 * kMargin;  // 1240
 constexpr int kWaveY = 12;
-constexpr int kWaveH = 250;
-constexpr int kStripY = 278;
-constexpr int kCardW = 305;
+constexpr int kWaveH = 220;
+constexpr int kStripY = kWaveY + kWaveH + 16;  // 290
 constexpr int kCardH = 132;
-constexpr int kCardPitch = 317;
-constexpr int kGaugeW = 273;
+constexpr int kCardGap = 10;
+constexpr int kCardW = (kWaveW - 3 * kCardGap) / 4;  // 302
+constexpr int kCardPitch = kCardW + kCardGap;
+constexpr int kGaugeW = kCardW - 32;
 // Splice-view geometry, inside the waveform panel's 4 px padding.
 constexpr int kWaveInnerW = kWaveW - 8;
 constexpr int kWaveInnerH = kWaveH - 8;
@@ -84,8 +92,8 @@ constexpr int kSpliceHalfW = (kWaveInnerW - kSeamW) / 2;
 // rasterisation, and this view is about alignment rather than detail.
 constexpr uint16_t kSpliceColumns = static_cast<uint16_t>(kSpliceHalfW);
 
-constexpr int kInfoY = 434;
-constexpr int kInfoH = 88;
+constexpr int kInfoY = kStripY + kCardH + 16;  // 438
+constexpr int kInfoH = kPageH - kInfoY - 12;   // 93
 
 // Local names for the shared palette (ui/ui_palette.h). These were
 // hand-copied literals that had already drifted from it and from each
@@ -147,7 +155,7 @@ void UISampleEditPage::onEnter(lv_obj_t* parent) {
     root_ = lv_obj_create(parent);
     lv_obj_remove_style_all(root_);
     lv_obj_set_size(root_, lv_pct(100), lv_pct(100));
-    lv_obj_set_style_bg_color(root_, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_color(root_, UI_COLOR_BG, 0);
     lv_obj_set_style_bg_opa(root_, LV_OPA_COVER, 0);
     lv_obj_remove_flag(root_, LV_OBJ_FLAG_SCROLLABLE);
 
@@ -208,7 +216,7 @@ void UISampleEditPage::onEnter(lv_obj_t* parent) {
 }
 
 void UISampleEditPage::buildWaveformPanel(lv_obj_t* parent) {
-    lv_obj_t* panel = box(parent, kMargin, kWaveY, kWaveW, kWaveH, 0x101010);
+    lv_obj_t* panel = box(parent, kMargin, kWaveY, kWaveW, kWaveH, palette::kColCard);
     lv_obj_set_style_border_width(panel, 1, 0);
     lv_obj_set_style_border_color(panel, lv_color_hex(kColBorder), 0);
     lv_obj_set_style_pad_all(panel, 4, 0);
@@ -232,7 +240,7 @@ void UISampleEditPage::buildWaveformPanel(lv_obj_t* parent) {
     // Name the view. A splice looks like an ordinary waveform with an
     // unexplained line down it unless it says otherwise, and the whole point
     // of this page's channel labelling was not to leave that ambiguous.
-    splice_label_ = label(panel, 8, 4, "LOOP SEAM   end |  start", &lv_font_montserrat_14, kColDim);
+    splice_label_ = label(panel, 8, 4, "LOOP SEAM   end |  start", UI_FONT_MICRO, kColDim);
 
     for (lv_obj_t* o: {splice_left_->root(), splice_right_->root(), splice_seam_, splice_label_}) {
         lv_obj_add_flag(o, LV_OBJ_FLAG_HIDDEN);
@@ -241,19 +249,19 @@ void UISampleEditPage::buildWaveformPanel(lv_obj_t* parent) {
     // Region handles: 30x26 tabs on the top edge, S green / E orange, matching
     // the marker colours the browser's preview already uses.
     marker_s_ = box(parent, kMargin, kWaveY, 30, 26, kColGreen);
-    lv_obj_t* ls = label(marker_s_, 0, 0, "S", &lv_font_montserrat_18, 0x0A0A0A);
+    lv_obj_t* ls = label(marker_s_, 0, 0, "S", UI_FONT_SMALL, palette::kColAccentFg);
     lv_obj_center(ls);
     marker_e_ = box(parent, kMargin + kWaveW - 30, kWaveY, 30, 26, kColOrange);
-    lv_obj_t* le = label(marker_e_, 0, 0, "E", &lv_font_montserrat_18, 0x0A0A0A);
+    lv_obj_t* le = label(marker_e_, 0, 0, "E", UI_FONT_SMALL, palette::kColAccentFg);
     lv_obj_center(le);
 
     // Loop handles on the bottom edge, so they never overlap S/E even when a
     // loop sits exactly on the region bounds - which is the default.
     marker_ls_ = box(parent, kMargin, kWaveY + kWaveH - 26, 34, 26, kColBlue);
-    lv_obj_t* lls = label(marker_ls_, 0, 0, "LS", &lv_font_montserrat_14, 0x0A0A0A);
+    lv_obj_t* lls = label(marker_ls_, 0, 0, "LS", UI_FONT_MICRO, palette::kColAccentFg);
     lv_obj_center(lls);
     marker_le_ = box(parent, kMargin + kWaveW - 34, kWaveY + kWaveH - 26, 34, 26, kColBlue);
-    lv_obj_t* lle = label(marker_le_, 0, 0, "LE", &lv_font_montserrat_14, 0x0A0A0A);
+    lv_obj_t* lle = label(marker_le_, 0, 0, "LE", UI_FONT_MICRO, palette::kColAccentFg);
     lv_obj_center(lle);
 
     // Touch-draggable (roadmap 1.5.2 item 2). The handles are 30-34 px wide,
@@ -279,15 +287,15 @@ void UISampleEditPage::buildParamStrip(lv_obj_t* parent) {
         lv_obj_t* c = box(parent, kMargin, kStripY, kCardW, kCardH, kColCard);
         lv_obj_set_style_border_width(c, 1, 0);
         lv_obj_set_style_border_color(c, lv_color_hex(kColBorder), 0);
-        lv_obj_set_style_radius(c, 4, 0);
+        lv_obj_set_style_radius(c, UI_RADIUS_CARD, 0);
 
-        label(c, 16, 12, titles[i], &lv_font_montserrat_18, kColDim);
+        label(c, 16, 12, titles[i], UI_FONT_SMALL, kColDim);
 
         cards_[i].card = c;
         cards_[i].value = label(c, 16, 40, "0:00.000", UI_FONT_MONO_HERO, palette::kColFg);
-        box(c, 16, 96, kGaugeW, 14, 0x1F1F1F);
+        box(c, 16, 96, kGaugeW, 14, palette::kColCardAlt);
         cards_[i].bar = box(c, 16, 96, 0, 14, kColBlue);
-        cards_[i].knob = box(c, 12, 92, 8, 22, 0xFFFFFF);
+        cards_[i].knob = box(c, 12, 92, 8, 22, palette::kColFg);
     }
     refreshFocusRing();
 }
@@ -319,10 +327,10 @@ void UISampleEditPage::buildInfoStrip(lv_obj_t* parent) {
     lv_obj_t* info = box(parent, kMargin, kInfoY, kWaveW, kInfoH, kColCard);
     lv_obj_set_style_border_width(info, 1, 0);
     lv_obj_set_style_border_color(info, lv_color_hex(kColBorder), 0);
-    lv_obj_set_style_radius(info, 4, 0);
+    lv_obj_set_style_radius(info, UI_RADIUS_CARD, 0);
 
-    info_label_ = label(info, 16, 14, "", &lv_font_montserrat_18, kColDim);
-    status_label_ = label(info, 16, 48, "", &lv_font_montserrat_18, kColGreen);
+    info_label_ = label(info, 16, 14, "", UI_FONT_SMALL, kColDim);
+    status_label_ = label(info, 16, 48, "", UI_FONT_SMALL, kColGreen);
     lv_obj_set_width(status_label_, kWaveW - 32);
     lv_label_set_long_mode(status_label_, LV_LABEL_LONG_DOT);
 }
@@ -957,8 +965,9 @@ void UISampleEditPage::refreshFocusRing() {
             continue;
         }
         const bool on = (i == focus_);
-        lv_obj_set_style_border_width(cards_[i].card, on ? 2 : 1, 0);
-        lv_obj_set_style_border_color(cards_[i].card, lv_color_hex(on ? kColBlue : kColBorder), 0);
+        lv_obj_set_style_border_width(
+            cards_[i].card, on ? UI_BORDER_WIDTH_FOCUS : UI_BORDER_WIDTH, 0);
+        lv_obj_set_style_border_color(cards_[i].card, on ? UI_COLOR_ACCENT : UI_COLOR_LINE, 0);
     }
 }
 
