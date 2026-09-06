@@ -276,9 +276,18 @@ bool s_meta_page_valid = false;
 portMUX_TYPE s_track_binding_lock = portMUX_INITIALIZER_UNLOCKED;
 WaveX::Protocol::TrackBindingMessage s_track_bindings[kTrackBindingCount];
 bool s_track_binding_valid[kTrackBindingCount] = {};
-}  // namespace
 
-void inter_mcu_store_sample_meta(const WaveX::Protocol::SampleMetadata& msg) {
+// Bumped on the RX task, compared on the UI task; a page that keeps the
+// value it last acted on can tell "nothing new" from "something arrived"
+// without touching the caches or the link. Relaxed is enough: a reader that
+// sees the bump then reads the caches under their own locks.
+std::atomic<uint32_t> s_pool_revision{0};
+std::atomic<uint32_t> s_cache_revision{0};
+
+// One record into the per-id cache, no revision. The single-push entry point
+// counts it as a Pool change; the page store, which files a whole page of
+// records the Pool already had, must not.
+void store_meta_record(const WaveX::Protocol::SampleMetadata& msg) {
     taskENTER_CRITICAL(&s_meta_lock);
     size_t slot = kMetaCacheSize;
     for (size_t i = 0; i < kMetaCacheSize; ++i) {
@@ -306,6 +315,21 @@ void inter_mcu_store_sample_meta(const WaveX::Protocol::SampleMetadata& msg) {
     s_meta_valid[slot] = true;
     s_meta_newest_id = msg.sample_id;
     taskEXIT_CRITICAL(&s_meta_lock);
+}
+}  // namespace
+
+void inter_mcu_store_sample_meta(const WaveX::Protocol::SampleMetadata& msg) {
+    store_meta_record(msg);
+    s_pool_revision.fetch_add(1, std::memory_order_relaxed);
+    s_cache_revision.fetch_add(1, std::memory_order_relaxed);
+}
+
+uint32_t inter_mcu_sample_pool_revision() {
+    return s_pool_revision.load(std::memory_order_relaxed);
+}
+
+uint32_t inter_mcu_sample_cache_revision() {
+    return s_cache_revision.load(std::memory_order_relaxed);
 }
 
 bool inter_mcu_get_sample_meta(uint16_t sample_id, WaveX::Protocol::SampleMetadata* out) {
@@ -394,8 +418,9 @@ void inter_mcu_store_sample_meta_page(const WaveX::Protocol::SampleMetaPageHeade
     for (uint8_t i = 0; i < n; ++i) {
         WaveX::Protocol::SampleMetadata m;
         memcpy(&m, records + i * sizeof(m), sizeof(m));
-        inter_mcu_store_sample_meta(m);
+        store_meta_record(m);
     }
+    s_cache_revision.fetch_add(1, std::memory_order_relaxed);
 }
 
 size_t inter_mcu_get_sample_meta_page(WaveX::Protocol::SampleMetadata* out,
@@ -452,7 +477,17 @@ void inter_mcu_store_track_binding(const WaveX::Protocol::TrackBindingMessage& m
     if (msg.track >= kTrackBindingCount) {
         return;
     }
+    // A binding that differs from the cached one is a Pool change as well:
+    // the record's used_by moved, and the backend does not push the record
+    // for a bind. A reply that only confirms the cache (the all-Tracks
+    // request a page makes on entry) is not.
+    bool changed = true;
     taskENTER_CRITICAL(&s_track_binding_lock);
+    if (s_track_binding_valid[msg.track]) {
+        const WaveX::Protocol::TrackBindingMessage& was = s_track_bindings[msg.track];
+        changed = was.state != msg.state || was.sample_id != msg.sample_id ||
+                  strncmp(was.name, msg.name, sizeof(was.name)) != 0;
+    }
     s_track_bindings[msg.track] = msg;
     // The name is a fixed-width wire field, not a guaranteed C string: a name
     // that exactly fills it carries no terminator. Terminate once here so
@@ -460,6 +495,10 @@ void inter_mcu_store_track_binding(const WaveX::Protocol::TrackBindingMessage& m
     s_track_bindings[msg.track].name[sizeof(s_track_bindings[msg.track].name) - 1] = '\0';
     s_track_binding_valid[msg.track] = true;
     taskEXIT_CRITICAL(&s_track_binding_lock);
+    if (changed) {
+        s_pool_revision.fetch_add(1, std::memory_order_relaxed);
+    }
+    s_cache_revision.fetch_add(1, std::memory_order_relaxed);
 }
 
 bool inter_mcu_get_track_binding(uint8_t track, WaveX::Protocol::TrackBindingMessage* out) {
@@ -630,9 +669,11 @@ namespace {
 // Reading s_meta[] unlocked is safe here: this task is the only writer, and a
 // concurrent UI-task reader is also only reading. The worst a race can do is
 // mark a slot that changed in between, which the next status corrects.
-void prune_sample_meta_to(const wavex_sample_mem_status_t& status) {
+// Returns whether a record left the cache: the one Pool change nothing else
+// announces (an eviction notifies nobody), so the caller counts it as one.
+bool prune_sample_meta_to(const wavex_sample_mem_status_t& status) {
     if (status.sample_count >= WAVEX_SAMPLE_STATUS_MAX_ENTRIES) {
-        return;  // possibly truncated: cannot prove absence
+        return false;  // possibly truncated: cannot prove absence
     }
 
     bool drop[kMetaCacheSize] = {};
@@ -666,16 +707,19 @@ void prune_sample_meta_to(const wavex_sample_mem_status_t& status) {
         status.sample_count > 0 ? status.entries[status.sample_count - 1].sample_id : 0;
 
     // Only the writes are guarded, so the section is a handful of stores.
+    bool dropped = false;
     taskENTER_CRITICAL(&s_meta_lock);
     for (size_t i = 0; i < kMetaCacheSize; ++i) {
         if (drop[i]) {
             s_meta_valid[i] = false;
+            dropped = true;
         }
     }
     if (!newest_live) {
         s_meta_newest_id = new_newest;
     }
     taskEXIT_CRITICAL(&s_meta_lock);
+    return dropped;
 }
 
 }  // namespace
@@ -686,7 +730,10 @@ void inter_mcu_update_sample_mem_status(const wavex_sample_mem_status_t& status)
     taskEXIT_CRITICAL(&s_sample_mem_lock);
     // Outside the lock above: this takes s_meta_lock, and nesting the two
     // spinlocks would create the only lock ordering in this file.
-    prune_sample_meta_to(status);
+    if (prune_sample_meta_to(status)) {
+        s_pool_revision.fetch_add(1, std::memory_order_relaxed);
+    }
+    s_cache_revision.fetch_add(1, std::memory_order_relaxed);
 }
 
 void inter_mcu_get_sample_mem_status(wavex_sample_mem_status_t* out) {

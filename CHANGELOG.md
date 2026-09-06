@@ -38,6 +38,16 @@ versioning and release process.
   ignores the command; roadmap Phase 1), so the Record key is dimmed with the
   reason and the page shows the current sample's trace instead of reporting
   "Recording..." for a command nothing acts on.
+- Sample ▸ Manage asks the backend only when something can have changed.
+  Its refresh tick sent twelve messages a second the whole time the page was
+  up - five Track-binding probes and a Pool page every 500 ms, each answered
+  - for a backend that already pushes every load, edit, unload and bind it
+  makes. The page now asks for all sixteen bindings once on entry (the
+  backend paces those replies itself), re-asks for its window of the Pool
+  when a push says the Pool changed, and only redraws when something has
+  arrived. Sitting on the page is now 0 messages a second in either
+  direction, from 600 per 50 s each way. A bind made from another tab shows
+  up on the card badge as well as the strip.
 - **One path bound across the system.** Three different limits coexisted — 96
   on the wire, 200 in the SFZ importer, 255 for a FatFs long name — so the
   importer could resolve a path the wire could not carry and the Pool could not
@@ -58,6 +68,9 @@ versioning and release process.
   card past the visible four. It was laid out only with the values, so the
   focus ring landed on a hidden card and the strip stayed put until a value
   changed.
+- Sample ▸ Manage: a freshly built card list carried no focus ring or bound
+  fill; they were applied by the next tick's unchanged-rows pass, which no
+  longer runs unprompted.
 - The Sample Pool now remembers each sample's **card path**, which saving an
   Instrument depends on. A Pool id names a slot in this boot's registry and
   means nothing in a file, and the only path the Pool kept was in the wire's

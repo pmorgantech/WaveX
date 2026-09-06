@@ -85,11 +85,13 @@ class UISampleManagerPage : public UIPage {
     lv_obj_t* track_label_ = nullptr;
     lv_obj_t* strip_ = nullptr;
     TrackCell track_cells_[kTrackCount] = {};
-    /// Round-robin cursor for the per-Track binding requests. Asking for all
-    /// sixteen at once on entry would put sixteen messages into a bounded TX
-    /// queue in one go; four per 500ms tick fills the strip in two seconds
-    /// without a burst.
-    uint8_t binding_probe_ = 0;
+    /// The tick only asks and only redraws when these have moved: a Pool
+    /// change re-requests the window, an arrival rebuilds from the caches.
+    uint32_t pool_revision_seen_ = 0;
+    uint32_t cache_revision_seen_ = 0;
+    /// The last page request did not get onto the link; the tick retries it.
+    bool page_request_pending_ = false;
+    static constexpr uint32_t kRefreshMs = 250;
     lv_timer_t* refresh_timer_ = nullptr;
 
     Row rows_[kMaxRows] = {};
@@ -102,8 +104,9 @@ class UISampleManagerPage : public UIPage {
     void requestPage();
 
     static void refreshTimerCb(lv_timer_t* timer);
-    void rebuildList();    ///< UI task / LVGL context only.
-    void refreshDetail();  ///< UI task / LVGL context only.
+    void rebuildList();                 ///< UI task / LVGL context only.
+    void styleRows(uint16_t bound_id);  ///< focus ring and bound fill on every card
+    void refreshDetail();               ///< UI task / LVGL context only.
     void refreshTrackLabel();
     void buildTrackStrip(lv_obj_t* parent);
     void refreshTrackStrip();

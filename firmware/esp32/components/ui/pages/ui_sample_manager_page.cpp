@@ -113,19 +113,25 @@ void UISampleManagerPage::onEnter(lv_obj_t* parent) {
     lv_obj_align(detail_label_, LV_ALIGN_TOP_LEFT, 0, 88);
     lv_label_set_text(detail_label_, "");
 
-    // The list is a window on the Pool, asked for on entry and every refresh
-    // tick; single-record pushes (load/edit/unload) keep the detail view
-    // current between pages.
+    // The list is a window on the Pool, asked for on entry and again when
+    // the Pool changes; the backend pushes every change it makes (load, edit,
+    // unload, a Track bound or an import landing), so between those there is
+    // nothing new to ask for. One 0xFF binding request covers all sixteen
+    // Tracks: the backend paces the replies two per pass of its main loop,
+    // which is what the old four-per-tick round-robin here was working
+    // around from the wrong side of the link.
     page_first_ = 0;
-    binding_probe_ = 0;
+    pool_revision_seen_ = inter_mcu_sample_pool_revision();
+    cache_revision_seen_ = inter_mcu_sample_cache_revision();
     requestPage();
     inter_mcu_request_sample_mem_status();
-    inter_mcu_request_track_binding(getCurrentTrack());
+    inter_mcu_request_track_binding(0xFF);
 
     // An lv_timer runs in LVGL context with the lock held, so it may touch
     // widgets directly. Rebuilding from the cache is how new metadata reaches
-    // the screen: the comm callback that fills that cache must not draw.
-    refresh_timer_ = lv_timer_create(refreshTimerCb, 500, this);
+    // the screen: the comm callback that fills that cache must not draw. The
+    // tick itself is two counter reads when nothing has arrived.
+    refresh_timer_ = lv_timer_create(refreshTimerCb, kRefreshMs, this);
 
     rebuildList();
     refreshDetail();
@@ -222,17 +228,25 @@ void UISampleManagerPage::onExit() {
 
 void UISampleManagerPage::refreshTimerCb(lv_timer_t* timer) {
     auto* self = static_cast<UISampleManagerPage*>(lv_timer_get_user_data(timer));
-    if (self) {
-        inter_mcu_request_track_binding(getCurrentTrack());
-        // Four Tracks per tick, round-robin, so the strip fills in about two
-        // seconds without putting sixteen requests into a bounded TX queue at
-        // once. Re-asking forever also means a binding changed by another page
-        // reaches this strip without a page re-entry.
-        for (int n = 0; n < 4; ++n) {
-            inter_mcu_request_track_binding(self->binding_probe_);
-            self->binding_probe_ = static_cast<uint8_t>((self->binding_probe_ + 1) % kTrackCount);
-        }
+    if (!self) {
+        return;
+    }
+    // The Pool changed under the window (a push landed, or a status proved a
+    // record gone): ask for the window again, and for the memory it now uses.
+    // A request the link could not take is asked again next tick, so a full
+    // TX queue delays the page rather than losing it.
+    const uint32_t pool = inter_mcu_sample_pool_revision();
+    if (pool != self->pool_revision_seen_ || self->page_request_pending_) {
+        self->pool_revision_seen_ = pool;
         self->requestPage();
+        inter_mcu_request_sample_mem_status();
+    }
+    // Something the page draws from arrived - a page, a record, a binding, a
+    // status. Otherwise the widgets are left alone: a rebuild every tick
+    // restyled rows under the user's finger for nothing.
+    const uint32_t cache = inter_mcu_sample_cache_revision();
+    if (cache != self->cache_revision_seen_) {
+        self->cache_revision_seen_ = cache;
         self->rebuildList();
         self->refreshDetail();
         self->refreshTrackStrip();
@@ -240,7 +254,8 @@ void UISampleManagerPage::refreshTimerCb(lv_timer_t* timer) {
 }
 
 void UISampleManagerPage::requestPage() {
-    inter_mcu_request_sample_meta_page(page_first_, static_cast<uint8_t>(kMaxRows));
+    page_request_pending_ =
+        inter_mcu_request_sample_meta_page(page_first_, static_cast<uint8_t>(kMaxRows)) != ESP_OK;
 }
 
 const UISampleManagerPage::Row* UISampleManagerPage::focusedRow() const {
@@ -307,12 +322,20 @@ void UISampleManagerPage::rebuildList() {
         }
     }
 
-    // Nothing else changed: leave the widgets alone. Rebuilding a list every
-    // 500 ms would restyle rows under the user's finger and throw away focus.
+    // Same cards: leave the widgets alone. A page arrives for every Pool
+    // change, most of which are edits to records already on it, and
+    // rebuilding for those would restyle rows under the user's finger and
+    // throw away focus. A card is the same when everything it prints is:
+    // the badge names the Track a sample is bound to, and a bind elsewhere
+    // (Browse, the sequencer) changes that without changing the row set.
     bool same = (count == row_count_);
     if (same) {
         for (int i = 0; i < count; ++i) {
-            if (metas[i].sample_id != rows_[i].sample_id) {
+            const auto& m = metas[i];
+            const Row& r = rows_[i];
+            if (m.sample_id != r.sample_id || m.used_by != r.used_by ||
+                ((m.flags & WaveX::Protocol::SAMPLE_META_PINNED) != 0) != r.pinned ||
+                meta_is_playable(m) != r.playable) {
                 same = false;
                 break;
             }
@@ -320,21 +343,7 @@ void UISampleManagerPage::rebuildList() {
     }
     if (same) {
         // Selection highlight can still have moved.
-        for (int i = 0; i < row_count_; ++i) {
-            if (rows_[i].btn && lv_obj_is_valid(rows_[i].btn)) {
-                const bool sel = rows_[i].sample_id == bound_id;
-                const bool foc = (i == focus_);
-                // Focus is the accent border; "bound to the current Track" is
-                // the card fill. They are different questions and the card has
-                // to be able to answer both at once.
-                lv_obj_set_style_border_color(
-                    rows_[i].btn, foc ? UI_COLOR_ACCENT : UI_COLOR_LINE, LV_PART_MAIN);
-                lv_obj_set_style_border_width(
-                    rows_[i].btn, foc ? UI_BORDER_WIDTH_FOCUS : UI_BORDER_WIDTH, LV_PART_MAIN);
-                lv_obj_set_style_bg_color(
-                    rows_[i].btn, sel ? UI_COLOR_CARD_ALT : UI_COLOR_CARD, LV_PART_MAIN);
-            }
-        }
+        styleRows(bound_id);
         return;
     }
 
@@ -452,9 +461,6 @@ void UISampleManagerPage::rebuildList() {
         lv_obj_set_style_text_color(dur_label, UI_COLOR_FG, LV_PART_MAIN);
         lv_obj_align(dur_label, LV_ALIGN_BOTTOM_RIGHT, 0, -12);
 
-        lv_obj_set_style_bg_color(
-            btn, m.sample_id == bound_id ? UI_COLOR_CARD_ALT : UI_COLOR_CARD, LV_PART_MAIN);
-
         rows_[i].btn = btn;
         rows_[i].label = label;
         rows_[i].badge = badge;
@@ -468,6 +474,29 @@ void UISampleManagerPage::rebuildList() {
 
     if (focus_ >= row_count_) {
         focus_ = row_count_ > 0 ? row_count_ - 1 : 0;
+    }
+    // New cards carry no ring or fill yet. This used to be left to the next
+    // tick's "same rows" pass, which ran every 500 ms whether or not
+    // anything had arrived; now nothing runs until something does.
+    styleRows(bound_id);
+}
+
+// Focus is the accent border; "bound to the current Track" is the card
+// fill. They are different questions and the card has to be able to answer
+// both at once.
+void UISampleManagerPage::styleRows(uint16_t bound_id) {
+    for (int i = 0; i < row_count_; ++i) {
+        if (!rows_[i].btn || !lv_obj_is_valid(rows_[i].btn)) {
+            continue;
+        }
+        const bool sel = rows_[i].sample_id == bound_id;
+        const bool foc = (i == focus_);
+        lv_obj_set_style_border_color(
+            rows_[i].btn, foc ? UI_COLOR_ACCENT : UI_COLOR_LINE, LV_PART_MAIN);
+        lv_obj_set_style_border_width(
+            rows_[i].btn, foc ? UI_BORDER_WIDTH_FOCUS : UI_BORDER_WIDTH, LV_PART_MAIN);
+        lv_obj_set_style_bg_color(
+            rows_[i].btn, sel ? UI_COLOR_CARD_ALT : UI_COLOR_CARD, LV_PART_MAIN);
     }
 }
 
@@ -723,7 +752,7 @@ std::array<Softkey, NUM_SOFTKEYS> UISampleManagerPage::getSoftkeys() {
     keys[5] = {"Refresh", [this]() {
                    requestPage();
                    inter_mcu_request_sample_mem_status();
-                   inter_mcu_request_track_binding(getCurrentTrack());
+                   inter_mcu_request_track_binding(0xFF);
                }};
     return keys;
 }

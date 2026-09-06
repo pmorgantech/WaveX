@@ -115,6 +115,21 @@ bool inter_mcu_find_sample_meta_by_name(const char* path, WaveX::Protocol::Sampl
 // Every cached record, in cache order. Returns how many were written.
 size_t inter_mcu_sample_meta_snapshot(WaveX::Protocol::SampleMetadata* out, size_t max);
 
+/**
+ * Counts changes to what the Pool holds, as the backend reports them: a
+ * record pushed (load, edit, unload) or one a memory status proved gone. A
+ * page that is a window on the Pool re-asks for its window when this moves,
+ * and only then - it used to ask every tick, whether or not anything could
+ * have changed.
+ */
+uint32_t inter_mcu_sample_pool_revision();
+/**
+ * Counts arrivals of anything the sample pages draw from: a record, a page,
+ * a Track binding, a memory status. A page redraws from the caches when this
+ * moves, and only then.
+ */
+uint32_t inter_mcu_sample_cache_revision();
+
 // The Sample Pool is paged, not mirrored: ask for a window of resident
 // records in registry order and read the last page that arrived. The page
 // is one frame from the Daisy (MSG_SAMPLE_META_PAGE); its records also land
