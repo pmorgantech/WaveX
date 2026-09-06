@@ -249,6 +249,21 @@ typedef struct {
 using wavex_sample_mem_entry_t = WaveX::Protocol::SampleMemEntryMessage;
 using wavex_sample_mem_status_t = WaveX::Protocol::SampleMemStatusMessage;
 
+// The backend beacons once a second (firmware/daisy/src/main.cpp). Three
+// missed beacons is a link that has stopped, not one that was merely late.
+#define WAVEX_LINK_STALE_MS 3000u
+
+/**
+ * @brief True while the backend is still beaconing.
+ *
+ * `wavex_backend_heartbeat_t::valid` latches true on the first heartbeat and
+ * is never cleared, so it answers "have we ever heard from the Daisy", not
+ * "is the link up". Anything drawing a link indicator wants this instead -
+ * the same reason inter_mcu_get_diag_push() takes a max age. A stale figure
+ * presented as current is how a dead link reads as a healthy one.
+ */
+bool inter_mcu_backend_link_alive(void);
+
 // Thread-safe snapshot of latest heartbeat
 void inter_mcu_get_backend_heartbeat(wavex_backend_heartbeat_t* out);
 

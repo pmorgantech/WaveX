@@ -157,7 +157,11 @@ void tick(lv_timer_t*) {
     inter_mcu_get_backend_heartbeat_detailed(&hb);
     char buf[16];
     int pct = 0;
-    if (hb.valid) {
+    // Liveness, not "have we ever heard from it" - hb.valid latches on the
+    // first heartbeat, so this readout used to hold the last CPU figure it saw
+    // forever after a link drop. The meters beside it already decay on
+    // staleness; this now matches them.
+    if (hb.valid && inter_mcu_backend_link_alive()) {
         pct = static_cast<int>(hb.cpu_avg_percent + 0.5f);
         if (pct < 0)
             pct = 0;

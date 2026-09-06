@@ -109,15 +109,13 @@ std::shared_ptr<UIPage> createMainMenu() {
             // The one piece of root-level state worth seeing without opening
             // anything: a dead link makes every other page lie quietly.
             context = []() {
-                wavex_backend_heartbeat_t hb;
-                inter_mcu_get_backend_heartbeat(&hb);
-                return std::string(hb.valid ? "link OK" : "link down");
+                return std::string(inter_mcu_backend_link_alive() ? "link OK" : "link down");
             };
-            ok = []() {
-                wavex_backend_heartbeat_t hb;
-                inter_mcu_get_backend_heartbeat(&hb);
-                return hb.valid;
-            };
+            // Not hb.valid: that latches true on the first heartbeat and never
+            // clears, so the dot sat on green from boot regardless of whether
+            // the Daisy was still talking. It has to go red when the beacons
+            // stop or it is not an indicator, just decoration.
+            ok = []() { return inter_mcu_backend_link_alive(); };
         }
 
         menu->addItem(item.label, item.purpose, std::move(context), std::move(ok), open);

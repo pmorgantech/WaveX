@@ -738,6 +738,19 @@ void inter_mcu_invoke_inst_status_callback(const WaveX::Protocol::InstStatusMess
     s_inst_status_listener.invoke(status);
 }
 
+bool inter_mcu_backend_link_alive(void) {
+    wavex_backend_heartbeat_t hb;
+    memset(&hb, 0, sizeof(hb));
+    inter_mcu_get_backend_heartbeat(&hb);
+    if (!hb.valid || hb.last_rx_ms == 0) {
+        return false;
+    }
+    const uint32_t now_ms = static_cast<uint32_t>(esp_timer_get_time() / 1000);
+    // Unsigned subtraction, so a wrapped timer reads as "just heard from it"
+    // for one tick rather than as a dead link for 49 days.
+    return (now_ms - hb.last_rx_ms) < WAVEX_LINK_STALE_MS;
+}
+
 void inter_mcu_get_backend_heartbeat(wavex_backend_heartbeat_t* out) {
     if (!s_statistics) {
         ESP_LOGE(TAG, "StatisticsManager not initialized");
