@@ -298,6 +298,14 @@ void UISettingsPage::rebuildList() {
                 // message. The distinction is worth one word.
                 valueTileSetUnwired(tiles_[i], st.text.c_str(), "NOT IMPLEMENTED");
             } else {
+                if (st.editable()) {
+                    const int idx = static_cast<int>(i);
+                    valueTileSetOnAdjust(tiles_[i], [this, idx](int steps) {
+                        selectedSetting_ = idx;
+                        adjustValue(steps);
+                        refreshSelection();
+                    });
+                }
                 valueTileSetValue(tiles_[i], valueText, !st.editable());
                 if (!st.desc.empty()) {
                     valueTileSetDesc(tiles_[i], st.desc.c_str());

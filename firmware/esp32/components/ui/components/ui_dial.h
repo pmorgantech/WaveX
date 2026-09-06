@@ -3,6 +3,8 @@
 
 #include <lvgl.h>
 
+#include <functional>
+
 namespace wavex_ui {
 
 /**
@@ -17,9 +19,9 @@ namespace wavex_ui {
  * redraws only the swept sector when the value changes. A hand-drawn ring
  * would have to justify itself against that with a measurement.
  *
- * Turning is the encoder's job via the owning page, so the arc is display-only
- * - it does not take touch input. Tapping the card to focus it is the page's
- * business, and the card handle is exposed for that.
+ * The ring itself takes no touch input - a stray press on a thin arc is too
+ * easy - but the card does: dragging it up or down turns the dial, the same
+ * way the encoder does. See dialSetOnAdjust().
  */
 struct Dial {
     lv_obj_t* card = nullptr;
@@ -38,5 +40,11 @@ void dialSetFocus(Dial& dial, bool focused);
 /// `fraction` drives the ring and the percentage in its middle; `text` is the
 /// value in its own units and `hint` the line under it (may be nullptr).
 void dialSetValue(Dial& dial, float fraction, const char* text, const char* hint);
+
+/// Make the dial adjustable by dragging its card up and down. `on_adjust`
+/// receives a signed number of detents, up positive, and should do exactly
+/// what the encoder path does so the two cannot drift apart. The card does not
+/// move or scroll under the finger; only the value changes.
+void dialSetOnAdjust(Dial& dial, std::function<void(int)> on_adjust);
 
 }  // namespace wavex_ui

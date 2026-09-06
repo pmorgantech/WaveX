@@ -18,8 +18,51 @@ constexpr int kTextGap = 22;
 constexpr int32_t kArcStart = 135;
 constexpr int32_t kArcEnd = 45;
 
+// Same feel as the value tile's drag, deliberately - one gesture across the
+// whole UI, not one per widget.
+constexpr int kDragPixelsPerStep = 9;
+
 float clamp01(float v) {
     return v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
+}
+
+struct DialDrag {
+    std::function<void(int)> on_adjust;
+    int32_t last_y = 0;
+    int32_t carry = 0;
+};
+
+void dialDragCb(lv_event_t* e) {
+    auto* d = static_cast<DialDrag*>(lv_event_get_user_data(e));
+    if (!d) {
+        return;
+    }
+    const lv_event_code_t code = lv_event_get_code(e);
+    if (code == LV_EVENT_DELETE) {
+        delete d;
+        return;
+    }
+    lv_indev_t* indev = lv_indev_active();
+    if (!indev) {
+        return;
+    }
+    lv_point_t p;
+    lv_indev_get_point(indev, &p);
+    if (code == LV_EVENT_PRESSED) {
+        d->last_y = p.y;
+        d->carry = 0;
+        return;
+    }
+    if (code != LV_EVENT_PRESSING || !d->on_adjust) {
+        return;
+    }
+    d->carry += d->last_y - p.y;
+    d->last_y = p.y;
+    const int steps = d->carry / kDragPixelsPerStep;
+    if (steps != 0) {
+        d->carry -= steps * kDragPixelsPerStep;
+        d->on_adjust(steps);
+    }
 }
 
 }  // namespace
@@ -96,6 +139,19 @@ Dial dialCreate(lv_obj_t* parent, int x, int y, int w, int h, const char* label)
     lv_obj_align(d.hint, LV_ALIGN_LEFT_MID, text_x, 34);
 
     return d;
+}
+
+void dialSetOnAdjust(Dial& dial, std::function<void(int)> on_adjust) {
+    if (!dial.card) {
+        return;
+    }
+    auto* d = new DialDrag{std::move(on_adjust), 0, 0};
+    lv_obj_add_flag(dial.card, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_remove_flag(dial.card, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(dial.card, LV_OBJ_FLAG_GESTURE_BUBBLE);
+    lv_obj_add_event_cb(dial.card, dialDragCb, LV_EVENT_PRESSED, d);
+    lv_obj_add_event_cb(dial.card, dialDragCb, LV_EVENT_PRESSING, d);
+    lv_obj_add_event_cb(dial.card, dialDragCb, LV_EVENT_DELETE, d);
 }
 
 void dialSetFocus(Dial& dial, bool focused) {

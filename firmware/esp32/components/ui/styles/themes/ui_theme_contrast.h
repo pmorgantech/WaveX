@@ -16,4 +16,6 @@
 #define WX_RGB_WARN 0xFFD54F
 #define WX_RGB_SHIFT 0xFFD54F
 #define WX_RGB_ERR 0xFF6E6E
+#define WX_RGB_POS 0xFFD54F
+#define WX_RGB_NEG 0x7EC8FF
 #endif

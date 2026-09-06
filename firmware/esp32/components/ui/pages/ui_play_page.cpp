@@ -317,6 +317,15 @@ void UIPlayPage::buildParamColumn(lv_obj_t* parent) {
     // are derived from the root note rather than stored twice; latch and Track
     // are read from where they already live.
     param_tile_ = valueTileCreate(parent, kColX, 0, kColW, kBigTileH, "PARAM", nullptr);
+    // The tile edits whichever parameter it is currently showing, through the
+    // same stepParam() the Value -/+ keys and the encoder use.
+    valueTileSetOnAdjust(param_tile_, [this](int steps) {
+        const int dir = steps > 0 ? 1 : -1;
+        for (int n = 0; n < (steps > 0 ? steps : -steps); ++n) {
+            stepParam(dir);
+        }
+        refreshPadTiles();
+    });
 
     const int half = (kColW - kColGap) / 2;
     const int row1 = kBigTileH + kColGap;

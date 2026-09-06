@@ -23,6 +23,21 @@ lv_obj_t* tabGroupCreate(lv_obj_t* parent) {
     lv_obj_set_style_pad_top(bar, UI_TAB_BAR_PAD_TOP, 0);
     lv_obj_set_style_pad_column(bar, UI_GUTTER, 0);
 
+    // No swipe between tabs. LVGL's tabview makes its content a horizontally
+    // scrolling, snapping container, so a drag anywhere on a page slid the
+    // whole screen sideways - which fights every widget that wants a drag of
+    // its own, and moves the layout under a finger that was aiming at a value.
+    // Tabs change by tapping a tab or by the page's own keys; the screen
+    // itself never moves.
+    lv_obj_t* content = lv_tabview_get_content(tabview);
+    if (content) {
+        lv_obj_remove_flag(content, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_set_scroll_dir(content, LV_DIR_NONE);
+        lv_obj_remove_flag(content, LV_OBJ_FLAG_SCROLL_CHAIN_HOR);
+        lv_obj_remove_flag(content, LV_OBJ_FLAG_SCROLL_MOMENTUM);
+        lv_obj_remove_flag(content, LV_OBJ_FLAG_SCROLL_ELASTIC);
+    }
+
     return tabview;
 }
 

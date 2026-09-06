@@ -3,6 +3,8 @@
 
 #include <lvgl.h>
 
+#include <functional>
+
 namespace wavex_ui {
 
 /**
@@ -20,6 +22,19 @@ namespace wavex_ui {
  * handle, and call the update functions from wherever the page already
  * refreshes. All of them are LVGL calls, so they must run on the LVGL thread.
  */
+/// What a value's own state says about it, independent of focus.
+///
+/// Focus and meaning were competing for the same fill colour: a tile could say
+/// "the encoder is on me" or "this value is boosted", never both. Tone owns the
+/// fill whenever it is not Neutral, and focus falls back to the border and
+/// label - which is where focus was already legible anyway.
+enum class TileTone : uint8_t {
+    Neutral,   ///< nothing to say; fill follows focus
+    Positive,  ///< above nominal - a boost, or a value doing its job
+    Negative,  ///< below nominal - a cut
+    Caution,   ///< in a range worth noticing before committing
+};
+
 struct ValueTile {
     lv_obj_t* card = nullptr;
     lv_obj_t* label = nullptr;
@@ -29,13 +44,33 @@ struct ValueTile {
     lv_obj_t* desc = nullptr;  // optional line under the value
     lv_obj_t* bar_track = nullptr;
     lv_obj_t* bar_fill = nullptr;
-    int bar_width = 0;  // cached so setFill does not have to measure
+    lv_obj_t* knob = nullptr;  ///< rides the fill, so the handle tracks the value
+    int bar_width = 0;         // cached so setFill does not have to measure
+    TileTone tone = TileTone::Neutral;
 };
 
 /// Build a tile at (x, y) sized w x h inside `parent`.
 /// `unit` may be nullptr for a bare number.
 ValueTile valueTileCreate(
     lv_obj_t* parent, int x, int y, int w, int h, const char* label, const char* unit);
+
+/// Colour the fill by what the value means. Survives focus changes, so a
+/// boosted gain stays warm whether or not the encoder is on it.
+void valueTileSetTone(ValueTile& tile, TileTone tone);
+
+/**
+ * @brief Make the tile adjustable by dragging it up and down.
+ *
+ * A widget that shows a value should let you change it - reading a number you
+ * cannot touch, next to a knob that does not turn, teaches the wrong thing
+ * about the whole surface. `on_adjust` is called with a signed number of
+ * detents as the finger moves: up is positive, matching the encoder.
+ *
+ * Vertical only, and the tile does not scroll or move under the finger - the
+ * value changes, the layout does not. The callback should do exactly what the
+ * encoder path does, so touch and encoder cannot drift apart.
+ */
+void valueTileSetOnAdjust(ValueTile& tile, std::function<void(int)> on_adjust);
 
 /// Mark a tile as focused - accent label and a thicker accent border. Exactly
 /// one tile in a group should be focused at a time; the caller owns that.

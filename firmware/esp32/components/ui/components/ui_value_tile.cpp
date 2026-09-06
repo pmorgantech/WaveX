@@ -15,8 +15,83 @@ constexpr int kBarH = 12;
 constexpr int kLabelY = kPadY;
 constexpr int kValueY = kPadY + 30;
 
+constexpr int kKnobW = 8;
+constexpr int kKnobH = 22;
+
+// Pixels of vertical travel per detent. Matched to the encoder's feel: a full
+// sweep of a tile is roughly a full turn, and a fingertip's worth of movement
+// is one step rather than a jump.
+constexpr int kDragPixelsPerStep = 9;
+
 float clamp01(float v) {
     return v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
+}
+
+// Drag state, one per interactive tile. Heap-allocated and owned by the card
+// through its user data, freed on LV_EVENT_DELETE - the ValueTile handle is a
+// value type the page copies around, so it cannot own this itself.
+struct TileDrag {
+    std::function<void(int)> on_adjust;
+    int32_t last_y = 0;
+    int32_t carry = 0;  ///< sub-detent travel, kept so slow drags still move
+};
+
+void tileDragCb(lv_event_t* e) {
+    auto* d = static_cast<TileDrag*>(lv_event_get_user_data(e));
+    if (!d) {
+        return;
+    }
+    const lv_event_code_t code = lv_event_get_code(e);
+    if (code == LV_EVENT_DELETE) {
+        delete d;
+        return;
+    }
+
+    lv_indev_t* indev = lv_indev_active();
+    if (!indev) {
+        return;
+    }
+    lv_point_t p;
+    lv_indev_get_point(indev, &p);
+
+    if (code == LV_EVENT_PRESSED) {
+        d->last_y = p.y;
+        d->carry = 0;
+        return;
+    }
+    if (code != LV_EVENT_PRESSING || !d->on_adjust) {
+        return;
+    }
+
+    // Up is positive: screen y grows downward, and a knob you drag up should
+    // read as turning it up.
+    d->carry += d->last_y - p.y;
+    d->last_y = p.y;
+    const int steps = d->carry / kDragPixelsPerStep;
+    if (steps != 0) {
+        d->carry -= steps * kDragPixelsPerStep;
+        d->on_adjust(steps);
+    }
+}
+
+// Fill colour: tone when the value has something to say, focus otherwise.
+lv_color_t fillColour(const ValueTile& tile, bool focused) {
+    switch (tile.tone) {
+        case TileTone::Positive:
+            return UI_COLOR_POSITIVE;
+        case TileTone::Negative:
+            return UI_COLOR_NEGATIVE;
+        case TileTone::Caution:
+            return UI_COLOR_WARN;
+        case TileTone::Neutral:
+        default:
+            return focused ? UI_COLOR_ACCENT : UI_COLOR_FG;
+    }
+}
+
+bool tileFocused(const ValueTile& tile) {
+    return tile.card &&
+           lv_obj_get_style_border_width(tile.card, LV_PART_MAIN) >= UI_BORDER_WIDTH_FOCUS;
 }
 
 }  // namespace
@@ -78,6 +153,17 @@ ValueTile valueTileCreate(
     lv_obj_set_style_bg_opa(t.bar_fill, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(t.bar_fill, kBarH / 2, 0);
 
+    // The handle rides the fill's end, so the value is readable as a position
+    // and not only as a number. Parented to the card rather than the track so
+    // it can overhang the ends without being clipped.
+    t.knob = lv_obj_create(t.card);
+    lv_obj_remove_style_all(t.knob);
+    lv_obj_set_size(t.knob, kKnobW, kKnobH);
+    lv_obj_set_pos(t.knob, kPadX - kKnobW / 2, h - kPadY - kBarH - (kKnobH - kBarH) / 2);
+    lv_obj_set_style_bg_color(t.knob, UI_COLOR_FG, 0);
+    lv_obj_set_style_bg_opa(t.knob, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(t.knob, kKnobW / 2, 0);
+
     return t;
 }
 
@@ -107,7 +193,7 @@ void valueTileSetFocus(ValueTile& tile, bool focused) {
     lv_obj_set_style_border_color(tile.card, focused ? UI_COLOR_ACCENT : UI_COLOR_LINE, 0);
     lv_obj_set_style_text_color(tile.label, focused ? UI_COLOR_ACCENT : UI_COLOR_DIM, 0);
     if (tile.bar_fill) {
-        lv_obj_set_style_bg_color(tile.bar_fill, focused ? UI_COLOR_ACCENT : UI_COLOR_FG, 0);
+        lv_obj_set_style_bg_color(tile.bar_fill, fillColour(tile, focused), 0);
     }
 }
 
@@ -137,13 +223,41 @@ void valueTileSetFill(ValueTile& tile, float fraction) {
     if (!tile.bar_fill) {
         return;
     }
-    lv_obj_set_width(tile.bar_fill,
-                     static_cast<int32_t>(clamp01(fraction) * static_cast<float>(tile.bar_width)));
+    const int32_t w = static_cast<int32_t>(clamp01(fraction) * static_cast<float>(tile.bar_width));
+    lv_obj_set_width(tile.bar_fill, w);
+    if (tile.knob) {
+        lv_obj_set_x(tile.knob, kPadX + w - kKnobW / 2);
+    }
+}
+
+void valueTileSetTone(ValueTile& tile, TileTone tone) {
+    tile.tone = tone;
+    if (tile.bar_fill) {
+        lv_obj_set_style_bg_color(tile.bar_fill, fillColour(tile, tileFocused(tile)), 0);
+    }
+}
+
+void valueTileSetOnAdjust(ValueTile& tile, std::function<void(int)> on_adjust) {
+    if (!tile.card) {
+        return;
+    }
+    auto* d = new TileDrag{std::move(on_adjust), 0, 0};
+    lv_obj_add_flag(tile.card, LV_OBJ_FLAG_CLICKABLE);
+    // Not scrollable and no gesture bubbling: the value moves under the
+    // finger, the screen does not.
+    lv_obj_remove_flag(tile.card, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(tile.card, LV_OBJ_FLAG_GESTURE_BUBBLE);
+    lv_obj_add_event_cb(tile.card, tileDragCb, LV_EVENT_PRESSED, d);
+    lv_obj_add_event_cb(tile.card, tileDragCb, LV_EVENT_PRESSING, d);
+    lv_obj_add_event_cb(tile.card, tileDragCb, LV_EVENT_DELETE, d);
 }
 
 void valueTileHideFill(ValueTile& tile) {
     if (tile.bar_track) {
         lv_obj_add_flag(tile.bar_track, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (tile.knob) {
+        lv_obj_add_flag(tile.knob, LV_OBJ_FLAG_HIDDEN);
     }
 }
 
@@ -163,6 +277,9 @@ void valueTileSetUnwired(ValueTile& tile, const char* why, const char* chip) {
     }
     if (tile.bar_track) {
         lv_obj_add_flag(tile.bar_track, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (tile.knob) {
+        lv_obj_add_flag(tile.knob, LV_OBJ_FLAG_HIDDEN);
     }
 
     if (!tile.note) {

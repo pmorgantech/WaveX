@@ -34,6 +34,8 @@ constexpr uint32_t kColCardAlt = WX_RGB_CARD2;    // inset well
 constexpr uint32_t kColAccentFg = WX_RGB_ACC_FG;  // text drawn on the accent
 constexpr uint32_t kColShift = WX_RGB_SHIFT;      // shifted-softkey row
 constexpr uint32_t kColErr = WX_RGB_ERR;          // failure, not merely attention
+constexpr uint32_t kColPositive = WX_RGB_POS;     // above nominal (boost)
+constexpr uint32_t kColNegative = WX_RGB_NEG;     // below nominal (cut)
 
 }  // namespace palette
 }  // namespace wavex_ui

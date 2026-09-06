@@ -66,6 +66,16 @@
 #define UI_COLOR_WARN lv_color_hex(WX_RGB_WARN)    // attention, peak
 #define UI_COLOR_SHIFT lv_color_hex(WX_RGB_SHIFT)  // shifted-softkey row
 #define UI_COLOR_ERR lv_color_hex(WX_RGB_ERR)      // failure, not merely attention
+// Value polarity. A control sitting above its nominal point reads warm and one
+// below it reads cool, so "boosted" and "cut" are distinguishable at a glance
+// without reading the sign. Part of the palette rather than fixed at the call
+// site, so a theme can retune them along with everything else.
+#define UI_COLOR_POSITIVE lv_color_hex(WX_RGB_POS)
+#define UI_COLOR_NEGATIVE lv_color_hex(WX_RGB_NEG)
+// The edge of something you can press. Brighter than UI_COLOR_LINE, which is
+// for dividing read-only surfaces - a control needs an outline that survives
+// being a few RGB565 steps from the page behind it.
+#define UI_COLOR_EDGE UI_COLOR_DIMMER
 
 // Legacy spellings, retained so pages not yet restyled keep building. They are
 // aliases, not a second palette - do not add to this list, and prefer the role
@@ -148,6 +158,7 @@
 #define UI_MARGIN_X 20  // content inset from the screen edge
 #define UI_GUTTER 8     // between sibling cards
 #define UI_RADIUS_CARD 10
+#define UI_RADIUS_BUTTON 12
 #define UI_RADIUS_CHIP 8
 #define UI_RADIUS_BADGE 5
 #define UI_BORDER_WIDTH 1  // cards carry a hairline, not a 2px slab

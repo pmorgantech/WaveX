@@ -362,6 +362,14 @@ void UIInstrumentPage::buildStageRows(int stage) {
                                    kDialW,
                                    kDialH,
                                    params[i].label);
+            // Dragging a dial focuses it and then takes exactly the encoder's
+            // path, so touch and encoder cannot produce different results from
+            // the same movement.
+            dialSetOnAdjust(dials_[i], [this, i](int steps) {
+                param_ = i;
+                stepParam(steps);
+                refreshParams();
+            });
         }
         env_curve_ = buildCurvePane(body,
                                     kEnvCurveX,
@@ -391,6 +399,14 @@ void UIInstrumentPage::buildStageRows(int stage) {
                                                kFilterTileH,
                                                params[i].label,
                                                params[i].unit);
+            if (params[i].wire_param != kParamNone) {
+                const int idx = i;
+                valueTileSetOnAdjust(tiles_[stage][i], [this, idx](int steps) {
+                    param_ = idx;
+                    stepParam(steps);
+                    refreshParams();
+                });
+            }
         }
     } else {
         // One row of tiles, divided evenly. Sample has five, Amp two, Mod
@@ -407,6 +423,14 @@ void UIInstrumentPage::buildStageRows(int stage) {
                                                kRowTileH,
                                                params[i].label,
                                                params[i].unit);
+            if (params[i].wire_param != kParamNone) {
+                const int idx = i;
+                valueTileSetOnAdjust(tiles_[stage][i], [this, idx](int steps) {
+                    param_ = idx;
+                    stepParam(steps);
+                    refreshParams();
+                });
+            }
         }
     }
 
