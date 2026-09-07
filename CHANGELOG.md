@@ -89,6 +89,8 @@ versioning and release process.
 
 ### Fixed
 
+- Daisy stream startup now publishes the audio ring only after prebuffered frames arrive, preventing a false underrun and premature empty playback on each audition. Hardware regression coverage repeats start, loop, and stop five times.
+
 - Sample Edit audition now previews by Pool id through the Daisy stream
   without changing Track bindings. Edits apply only to the matching open
   sample, and opening a new sample resets unrelated stream metadata. HIL

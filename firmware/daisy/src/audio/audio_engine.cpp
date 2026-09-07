@@ -3465,11 +3465,10 @@ bool OpenWav(const char* path) {
     // Reset buffers. CloseWav() above already cleared s_rb_live and no
     // producer call (rb_push_frames) runs between here and there, so the
     // consumer is guaranteed to still be treating the ring as empty - these
-    // stores can't race rb_pop_stereo_batch(). Publish head/tail before flipping
-    // s_rb_live back on so the ISR never observes "live" with stale indices.
+    // stores can't race rb_pop_stereo_batch(). Keep the ring unpublished until
+    // PumpWavIO transfers the prebuffer: an empty ring is not ready to play.
     __atomic_store_n(&s_rb_head, 0u, __ATOMIC_RELAXED);
     __atomic_store_n(&s_rb_tail, 0u, __ATOMIC_RELEASE);
-    __atomic_store_n(&s_rb_live, true, __ATOMIC_RELEASE);
 
     // Logged unconditionally: once per file open, so it cannot spam, and it
     // is the only place the per-file variables are visible. When some files
@@ -3691,6 +3690,9 @@ void PumpWavIO() {
             return;
 
         rb_push_frames(s_prebuffer, frames_to_transfer);
+        // Publish only after the initial audio is visible to the consumer.
+        // OpenWav leaves the callback silent throughout SD prebuffering.
+        __atomic_store_n(&s_rb_live, true, __ATOMIC_RELEASE);
 
         s_prebuffer_filled -= frames_to_transfer;
         if (s_prebuffer_filled > 0) {

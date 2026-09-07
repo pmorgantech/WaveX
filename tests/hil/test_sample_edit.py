@@ -138,3 +138,20 @@ def test_pages_can_exit_repeatedly_during_waveform_traffic(
         esp.wait_state(tab="Browse", sk2="Load")
     assert esp.cmd("PING") == {}
     assert daisy.cmd("PING") == {}
+
+
+@pytest.mark.both
+@pytest.mark.sdcard
+def test_audition_startup_does_not_report_underruns(edited_samples, daisy):
+    _, (_, sample_id) = edited_samples
+    daisy.msg(
+        0x3C,
+        struct.pack("<HBBhIIIIHH", sample_id, 1, 0, 0, 0, 0, 0, 0, 3, 3),
+    )
+    baseline = daisy.state()["underruns"]
+    for _ in range(5):
+        daisy.msg(0x4B, struct.pack("<H", sample_id))
+        _wait_stream(daisy, open=1, rewinds=lambda n: int(n) >= 2)
+        assert daisy.state()["underruns"] == baseline
+        daisy.msg(0x33, bytes(4))
+        _wait_stream(daisy, open=0)
