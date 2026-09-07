@@ -15,6 +15,7 @@
 #include "inter_mcu.h"
 #include "ui/current_sample.h"
 #include "ui/current_track.h"
+#include "ui/sample_load_failure.h"
 #include "ui/ui_busy_overlay.h"
 #include "ui/ui_palette.h"
 #include "ui_task.h"
@@ -1348,30 +1349,7 @@ void UISampleBrowser::sample_status_callback(uint16_t sample_id,
         browser->bind_on_load_track_.store(-1, std::memory_order_release);
         BusyOverlay::requestHide();
         wavex_ui_mark_content_changed();
-        const char* why;
-        switch (frames_played) {
-            case WaveX::Protocol::SAMPLE_LOAD_FAIL_NO_SDRAM:
-                why = "sample memory is unavailable on the Daisy";
-                break;
-            case WaveX::Protocol::SAMPLE_LOAD_FAIL_OPEN:
-                why = "the Daisy could not open the file";
-                break;
-            case WaveX::Protocol::SAMPLE_LOAD_FAIL_FORMAT:
-                why = "not a resident-playable WAV (PCM16 mono/stereo)";
-                break;
-            case WaveX::Protocol::SAMPLE_LOAD_FAIL_RAM:
-                why = "does not fit in free sample RAM";
-                break;
-            case WaveX::Protocol::SAMPLE_LOAD_FAIL_READ:
-                why = "SD read error during the load";
-                break;
-            case WaveX::Protocol::SAMPLE_LOAD_FAIL_REGISTRY_FULL:
-                why = "too many samples resident - unload one";
-                break;
-            default:
-                why = "unknown reason";
-                break;
-        }
+        const char* why = sampleLoadFailureText(frames_played);
         ESP_LOGW(TAG,
                  "=== SAMPLE LOAD FAILED: id=%u reason=%lu ===",
                  (unsigned)sample_id,

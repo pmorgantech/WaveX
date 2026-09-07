@@ -67,6 +67,8 @@ versioning and release process.
 
 ### Fixed
 
+- Sample load failures display the instrument-import busy reason consistently.
+
 - Calibration responses publish complete snapshots before the UI consumes them.
 
 - A timed-out UI task stop preserves the object still referenced by the running task.
