@@ -12,17 +12,14 @@ checked at the API/DMA boundaries used by WaveX. Priorities describe concrete
 failure modes; hardware-only gates stay in the roadmap. Remove each task when
 its fix and regression checks are committed.
 
-- [ ] **High — frontend task lifetime.** Preserve `UITask` after a timed-out
-  stop; its task may still dereference the object. Check listener allocation
-  failure and calibration handoffs at the same ownership boundaries
+- [ ] **High — frontend listener lifetime.** Exercise listener allocation
+  failure and registration/removal during traffic with real synchronization.
+  Complete page teardown and queued actions still need lifetime coverage
   (principles 2, 5, 6).
-
-- [ ] **Medium — documentation and test truthfulness.** Reconcile as-built
-  sequencer, panel, storage, transport and version claims; consolidate
-  overlapping navigation, audition-work-order and test-remediation docs.
-  Remove completed tasks. Record which production translation units run in
-  host tests and which timing/DMA properties still require hardware
-  (principles 13, 15).
+- [ ] **Medium — remaining reference consistency.** Finish checking the
+  platform and feature guides against live transport and parameter behavior;
+  the navigation, sequencer and testing references have been consolidated.
+  Keep hardware-only results separate from host coverage (principles 13, 15).
 
 ## Performance, build, and transport
 
@@ -36,10 +33,9 @@ interaction target.
 
 ### Daisy optimization and LTO
 
-The Daisy image defaults to `-O0`. Establish a DWT baseline at 480 MHz, then
-compare an `-O2` image under eight-voice audio and SD soak tests before choosing
-a default. Consider LTO only after that decision; it can affect linker section
-placement and weak HAL symbols.
+The Daisy image defaults to `-O2`. Establish its DWT baseline at 480 MHz
+under eight-voice audio and SD soak tests. Consider LTO only after those
+measurements; it can affect linker section placement and weak HAL symbols.
 
 ### Profile-guided QSPI-to-SRAM execution
 

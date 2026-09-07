@@ -1,7 +1,7 @@
 # WaveX Implementation Roadmap
 
 **Status:** Canonical implementation order. **Current phase:** Phase 2.
-**Last updated:** 2026-09-05.
+**Last updated:** 2026-09-07.
 
 This document lists only open work. Completed work belongs in `CHANGELOG.md`
 and git history. Code-complete but unverified hardware behavior remains open in
@@ -12,22 +12,15 @@ changing system behavior.
 
 ## Phase 0 — Foundation hardening
 
-1. Replace the fixed-delay sample-retirement path with a callback
-   acknowledgement; prove unload/reload cannot free memory referenced by a
-   voice.
-2. Publish callback telemetry as complete immutable snapshots before the main
-   loop reads it.
-3. Reduce overlapping ownership in the ESP32 application and extract focused
+1. Reduce overlapping ownership in the ESP32 application and extract focused
    modules only as relevant code changes.
-4. Pin ESP-IDF to a 5.5 tag, then run the SD soak and panel checks. Treat an
+2. Pin ESP-IDF to a 5.5 tag, then run the SD soak and panel checks. Treat an
    ESP-IDF 6 migration as a separate spike.
-5. Keep CMSIS-DSP aligned with libDaisy. Neither it nor DaisySP is compiled
-   into the image today (nothing used them); the CMakeLists notes how to add
-   either back when a Phase 4/5 kernel (FFT, polyphase FIR, a band-limited
-   oscillator) needs it. Revisit only when upstream moves or such a kernel
+3. Keep CMSIS-DSP aligned with libDaisy. The DaisySP SVF implementation is
+   compiled for the filter comparison; add other kernels only when used. Revisit only when upstream moves or such a kernel
    requires a newer version. Update libDaisy only for a
    Phase 3 need or a released upstream tag.
-6. The live transport is UART. SPI revival remains blocked by the six defects
+4. The live transport is UART. SPI revival remains blocked by the six defects
    in [backlog.md](backlog.md#spi-link-revival-is-gated-on-six-recorded-defects).
 
 **Gate:** clean `make all` and `make test`; SD soak passes.
@@ -57,20 +50,19 @@ complete. Remaining work:
    protocol/policy for stereo, and playback-time loop crossfade.
 4. Reconcile stereo behavior between streaming and RAM voices; add the UI for
    `channel_mode`, including a label for one-channel views.
-5. ~~Retire the legacy decimated preview when the Record page is rebuilt.~~
-   Done 2026-09-06: `MSG_PREVIEW_REQ`/`MSG_WAVE_CHUNK` removed in protocol 3;
-   every Sample tab draws from the envelope protocol.
 
 **Gate:** edit and audition a multi-minute WAV, save, reboot, reload, and hear
 the same region without a UI freeze.
 
 ## Phase 2 — Groovebox core: sequencer and pads
 
-The scheduler and protocol core are host-tested. Open work:
+The scheduler, protocol and callback trigger path exist, with eight preview
+rows mapped to pitches on fixed Track index 0. Hardware timing remains
+unverified. Open work:
 
-1. Drive `SequencerTransport::Tick()` from the audio callback and turn events
-   into sample-offset voice triggers with double-buffered edit-between-steps
-   handling.
+1. Replace the fixed-Track preview with Track-addressed pattern triggering
+   for the four-track gate; verify sample-offset timing and edit boundaries
+   on hardware.
 2. Serialize MIDI clock out on the ESP32's DIN and USB paths (needs 2.P.5).
 3. Build the pad grid, step editor, kit editor, and TLC5947 LED feedback
    (needs 2.P.1–3).
@@ -80,14 +72,10 @@ The scheduler and protocol core are host-tested. Open work:
 ### 2.P — Panel controls and MIDI I/O (prerequisite for items 2 and 3)
 
 Design: `features/panel-controls.md` (decided 2026-09-05). Today the panel
-is touch plus two PCNT encoders and four mapped keys; no LED or pot driver
+is touch plus two PCNT encoders and the logical panel key map; no LED or pot driver
 exists, and DIN MIDI is compiled out because its RX pin was the flash port.
 Stages, one commit each:
 
-1. `PanelKey`/`PanelLed` model and key map: logical keys for the six
-   softkeys, Shift, the root-menu jump keys, Track ±, transport and pads;
-   `SoftkeyBar::press(n)`, `UINavigator::jumpToRoot()`, `KEY <name>` on
-   the console, a Diagnostics Panel tab.
 2. TCA8418 interrupt-driven keypad task (fallback poll retained).
 3. `panel_task` owning SPI2: TLC5947 chain, LED policy, `LEDS` in `STATE`;
    absorbs `pcnt_task`.
@@ -191,6 +179,7 @@ The following code paths are open until observed on the target:
 | Panel pins (2026-09-05) | `pin_config.h` was rewritten against the ESP32-P4-WIFI6 header. The bench encoder is PCNT unit 1 (confirmed 2026-09-05); it counts negative on clockwise as wired, and three pages had compensated for it — direction is now one per-encoder flag in `hardware_config.h`, and those pages follow the shared contract. Clockwise increases values / moves forward on every page — verified 2026-09-05. Verify the TCA8418 matrix geometry (`WAVEX_TCA8418_ROWS/COLUMNS`, never confirmed against the wiring) and the `WAVEX_KEYCODE_*` map from the Diagnostics ▸ Panel tab (2.P.1): press each key, read its keycode, row/column and `PanelKey`; "unmapped" means the map or the geometry is wrong. Blocker first: the bench log shows `TCA8418 hardware initialization failed` on every boot recorded (2026-09-05), so the keypad has not been answering on I2C at all — check its wiring and address before reading anything off the Panel tab. Scope an endless pot's two wipers before calibrating (the decoder assumes triangle waves). |
 | Diagnostics | Open the page and verify live telemetry arrives. |
 | Digital voices | Trigger RAM-resident notes, sweep live parameters, and judge SVF response/resonance. |
+| Sample retirement | Replace/unload samples during held and sequenced playback; exercise delayed/stopped callbacks and concurrent import requests. Confirm timeout preserves storage, then measure DWT headroom and run the zero-underrun soak. Host helper tests do not verify this interrupt integration. |
 | Callback budget | Establish the first recurring callback-headroom report: DWT-measure SVF (both topologies, 24 dB, drive), DTCM placement, mixer, and 480 MHz behavior with eight voices on the persistent QSPI `-O2` image, plus a zero-underrun soak. Record it in `callback-performance-log.md` using the gate in `performance_monitoring.md`. |
 | Sample Edit | Verify waveform fetch, handles, loop seam, browser detail waveform, and stereo readability. **Loop playback does not work** (bench, 2026-09-05): a sample with loop points set plays through in both Sample Edit audition and Play; the first of three suspects (the edit message's one-byte id) was fixed 2026-09-06, the binding and the voice are still to check. Two more Edit-page defects recorded 2026-09-06: Audition claims Track 1 without asking, and an edit is applied to whatever file is streaming. See `backlog.md` § Sample loop playback and the two items after it. |
 | Settings and input | Verify brightness, scrolling, MIDI channel filtering, keypad, encoder direction, and UI responsiveness. |

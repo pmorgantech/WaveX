@@ -39,7 +39,7 @@ LED namespace, and (c) the page contract for pots — not a UI rewrite.
 
 | Part | Verdict | Why |
 |---|---|---|
-| **TCA8418** keypad controller (I2C) | **Keep.** | Up to 80 keys on two wires plus INT, hardware debounce, 10-event FIFO; already on the touch I2C bus and already driven. Every panel key, both encoder push switches and the 16 Phase-2 pads fit in one part with rows to spare. Two caveats: the vendored driver hard-codes 100 kHz for its device (fine — events are tiny), and it cannot do velocity. Pads are on/off switches in this design; velocity comes from touch position or a fixed level, as `sequencer.md` §5 already says. |
+| **TCA8418** keypad controller (I2C) | **Keep.** | Up to 80 keys on two wires plus INT, hardware debounce, 10-event FIFO; already on the touch I2C bus and already driven. Every panel key, both encoder push switches and the 16 Phase-2 pads fit in one part with rows to spare. Two caveats: the vendored driver hard-codes 100 kHz for its device (fine — events are tiny), and it cannot do velocity. Pads are on/off switches in this design; velocity comes from touch position or a fixed level, as required by the panel's switch-only hardware. |
 | **TLC5947** 24-ch 12-bit constant-current LED driver | **Keep, two chained (48 ch).** | Sinks up to 30 mA per channel with one IREF resistor, 12-bit PWM so dim states read as dim, chainable, three signals beyond the shared SPI clock/data. It has no chip select — it is a shift register — which is the one rule the SPI2 driver has to respect (§3.3). If per-pad **RGB** is ever wanted, 16 pads alone need 48 channels; switch to an I2C matrix driver (IS31FL37xx class) then rather than chaining four TLC5947s. Not a v1 concern. |
 | **MCP3008** 8-ch 10-bit SPI ADC | **Keep.** | Eight channels is exactly four endless pots. 10 bits over a wiper's ~180° linear span is ~0.2°/count before noise, more than the UI can use. If finer control is ever wanted the **MCP3208** is the same footprint and protocol with 12 bits — a one-constant change (`WAVEX_POT_ADC_RESOLUTION`). The chip's own on-board ADC was considered and rejected: the P4's ADC-capable header pins are all spoken for (I2C, inter-MCU UART, the SPI-slave reserve), and it would cost eight GPIO where the MCP3008 costs four. |
 | **PEC11R** detented quadrature encoders (x2, PCNT) | **Keep both** as navigation encoders. | Already working through the hardware pulse counter, glitch-filtered, no CPU cost. Detents suit list navigation and value stepping; the push switch gives Select. The endless pots are a different tool (§2.1). |
@@ -134,7 +134,7 @@ maximum — `WAVEX_TCA8418_ROWS/COLUMNS` follow the panel PCB, not this table):
 |---|---|---|
 | Softkeys | `SOFT1`…`SOFT6`, directly under the screen's six softkey buttons | one each (dim = defined, bright = latched/active state) |
 | Modifier | `SHIFT` | one (mirrors the header chip) |
-| Menu jumps | `SAMPLE`, `PLAY`, `INSTRUMENT`, `TRACK`, `MIXER`, `SETTINGS` — the root groups of `ui-information-architecture.md` §1 | one each (lit = the active root group) |
+| Menu jumps | `SAMPLE`, `PLAY`, `INSTRUMENT`, `TRACK`, `MIXER`, `SETTINGS` — the root groups of `ui-architecture.md` "Navigation structure" | one each (lit = the active root group) |
 | Navigation | `BACK`, `NAV_A_PUSH` (Select), `NAV_B_PUSH` | — |
 | Track | `TRACK_PREV`, `TRACK_NEXT` | — |
 | Transport | `PLAY_STOP`, `REC` | one each (Phase 2 semantics) |
@@ -253,7 +253,7 @@ Driven entirely from navigator/page state — no page sets an LED directly:
 - Softkey LEDs: defined softkey dim, undefined off; a page may mark one
   softkey `active` (e.g. "Stop" while auditioning) → bright. This needs one
   `bool active` on `Softkey`.
-- Transport/pad LEDs: Phase 2 (`sequencer.md` §5: step/playhead mirror).
+- Transport/pad LEDs: Phase 2 (step/playhead mirror; see `sequencer.md` §5).
 - Screen blanker: `DisplayManager` blank → BLANK high (all LEDs off); any
   panel input wakes both.
 
@@ -317,7 +317,7 @@ notes sound; `make test` and `make test-hil` green.
 RGB pads; velocity-sensing pads; USB host (needs the reserved FS pair, a
 `usb_host` stack and a power switch — Phase 5); MIDI THRU (hardware only, if
 the panel PCB has room); moving MIDI DIN out to the Daisy if clock jitter over
-the link proves too high (`sequencer.md` §1 already reserves that option).
+the link proves too high (subject to the transport decision in `../architecture.md`).
 
 ## 8. Open hardware questions for the bench
 

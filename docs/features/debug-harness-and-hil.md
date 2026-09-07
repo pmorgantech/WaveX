@@ -8,7 +8,7 @@ and what the first bench run found. The console channel it extends is the
 model for everything here — see [`logging.md`](../logging.md).
 
 **Where it fits**: this is test infrastructure, not a Phase 2 feature. It
-belongs beside [`testing-remediation.md`](../testing-remediation.md) rather than
+belongs beside [`testing_guide.md`](../testing_guide.md) rather than
 in a roadmap phase, and it earns its place now because the roadmap's
 § Outstanding hardware verification table has grown to ~20 rows of *manual bench
 procedures*, several of which say in as many words that the fix was made by

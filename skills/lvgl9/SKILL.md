@@ -27,11 +27,11 @@ override them.
   (`lv_display_set_rotation(display_, LV_DISPLAY_ROTATION_90)` +
   `.flags.sw_rotate = true`, `display_manager.cpp`). Flush happens in 20-line
   strips from a small internal-RAM DMA buffer (`buffer_size = 720 * 20`).
-- Fixed chrome: 75 px header + 100 px, 6-button softkey bar → **1280×545 px**
+- Fixed chrome: 64 px header + 3 px rule + 96 px, 6-button softkey bar → **1280×557 px**
   usable content area. UI task targets 30 FPS (`vTaskDelay(32ms)` in
   `main/ui_task.cpp`).
-- Montserrat only, at compiled-in sizes 14/18/22/24/26/28/32/36
-  (`CONFIG_LV_FONT_MONTSERRAT_*`). Dark theme, fixed palette — both in
+- Montserrat prose and JetBrains Mono numeric roles; use the compiled sizes
+  listed in `ui-design-constraints.md`. Dark theme, named palette — both in
   `components/ui/styles/ui_theme.h`.
 - Enabled widgets (`sdkconfig`): label, button, button-matrix, bar, slider,
   arc, chart, table, list, roller, dropdown, checkbox, switch, spinner,
@@ -61,13 +61,13 @@ all have empty/no-op defaults, so a page opts in to exactly what it uses.
   `activePageHasShiftedKeys()` before treating Shift as meaningful). Shift
   itself is intercepted globally by `InputDispatcher`, never per-page.
 - Two distinct grouping shapes exist — pick per
-  [`ui-information-architecture.md`](../../docs/ui-information-architecture.md)
-  §2 ("tabs when children share a subject, a menu list when they do not"):
+  [`ui-architecture.md`](../../docs/ui-architecture.md)
+  under "Navigation structure":
   - `UITabHostPage` hosts independent existing `UIPage`s unchanged (Sample,
     Settings) — lazy entry, exits a hidden tab so it holds no LVGL objects.
   - `tabGroupCreate()`/`tabGroupAddTab()` (`ui_tab_group.h`) build one shared
     `lv_tabview` for stages that must share state across a tab switch
-    (`UIInstrumentPage`'s five stages, Diagnostics's six tabs). Reuse this
+    (`UIInstrumentPage`'s five stages, Diagnostics's seven tabs). Reuse this
     helper's styling rather than copying it inline — that's precisely what it
     was extracted to stop.
 - New pages: add a factory function and register it in `ui_main_menu.cpp`
@@ -89,19 +89,20 @@ that same copy-paste convention rather than inventing a shared header or
 calling generic `lv_lock()`/`lv_unlock()` directly.
 
 - `onEnter()`/`onExit()` and anything called from the UI task's normal loop
-  already run with the lock held. Never nest another `LV_LOCK()` inside them.
+  already run with the lock held. The port lock is recursive; avoid redundant
+  nesting and keep existing lock pairs balanced.
 - **Never call an LVGL function from a background task** (UART RX task, meter
-  timer, console task). The pattern instead: background task writes a
-  `volatile`/atomic value and sets a pending flag and returns; the UI task's
-  main loop checks the flag, takes `LV_LOCK()`, applies the update, releases.
+  timer, console task). The pattern instead: background task publishes a complete value
+  through a synchronized mailbox or queue; a UI service point consumes it,
+  releases the snapshot lock, then applies it under the LVGL port lock.
+  A volatile struct or pending flag alone does not protect its fields.
   `BusyOverlay::requestProgress()`/`requestHide()` + `service()` and the
-  meter's `s_meter_update_pending` are the canonical examples — read
-  `ui_busy_overlay.h` and the "Deferred Update Pattern" section of
+  meter handoff illustrate the service points — read
+  `ui_busy_overlay.h` and the "Cross-task updates" section of
   `ui-architecture.md` before adding a new cross-task update path.
-- `lv_async_call()` is the other legal way to get code onto the LVGL thread;
-  prefer the explicit flag-and-poll pattern above when the call site already
-  has a natural per-frame service point (it does, almost always, in this
-  codebase) since it's easier to reason about than a queued callback.
+- `lv_async_call()` itself requires LVGL synchronization; it is not safe
+  to invoke from UART reception without that lock. Queue values to a UI
+  service point instead, preserving the LVGL → UART lock order.
 - The LVGL/UI task stack was raised to 16 KB deliberately
   (`display_manager.cpp`, `initLvglDisplay()`) after a real stack-overflow
   panic from heavy `onEnter()` object counts plus `lv_label_set_text_fmt`'s
@@ -193,7 +194,7 @@ For every significant LVGL/UI review:
   under an explicit `LV_LOCK()`/`LV_UNLOCK()` pair, or reached from a
   background task? The last one is a bug regardless of how unlikely the race
   looks.
-- Check the 1280×545 content budget, the fixed 6-softkey contract (dimmed not
+- Check the 1280×557 content budget, the fixed 6-softkey contract (dimmed not
   hidden, `why` set when disabled), and that styling uses `ui_theme.h`
   constants rather than literals.
 - Check that a new custom-drawn widget is justified by a measurement against

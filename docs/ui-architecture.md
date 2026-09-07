@@ -1,431 +1,190 @@
-# WaveX UI Architecture (Navigator-First Design)
+# WaveX UI Architecture and Navigation
 
-**Last Updated**: 2026-08-30 (re-verified against code — the `UIPage` sample,
-tab-group and Shift-modifier sections were stale since 2026-08-28; hardware
-facts moved to [`ui-design-constraints.md`](ui-design-constraints.md))
-**Version**: 2.2
+**Status:** As-built framework reference, reviewed 2026-09-06. This document
+owns navigation, page lifecycle and UI threading. Display dimensions, fonts,
+palette and rendering limits live in
+[ui-design-constraints.md](ui-design-constraints.md).
 
-**Hardware/toolkit summary** (full detail + sources in the constraints doc):
-LVGL 9.5.0 on ESP32-P4, 5-inch 720×1280 MIPI-DSI panel software-rotated to
-1280×720 landscape, RGB565, 30 FPS UI task, 64 px header + 3 px shift rule +
-96 px six-card softkey bar → 1280×557 content area, Montserrat for prose and
-JetBrains Mono for values, four compile-time palettes.
+## Contents
 
-## Overview
+- [Runtime owners](#runtime-owners)
+- [Navigation structure](#navigation-structure)
+- [Page contract and lifetime](#page-contract-and-lifetime)
+- [Input and softkeys](#input-and-softkeys)
+- [Cross-task updates](#cross-task-updates)
+- [Adding a page](#adding-a-page)
+- [Verification and remaining work](#verification-and-remaining-work)
 
-The WaveX UI has been restructured to use a **stack-based navigation system** with the following improvements:
+## Runtime owners
 
-1. **Navigator-Centric Architecture**: All UI pages are managed through `UINavigator` with a unified push/pop lifecycle
-2. **Global State Reduction**: Eliminated global singletons and static references to UI objects
-3. **LVGL Thread Safety**: Centralized LVGL context management through `DisplayManager`
-4. **Unified Softkey System**: Pages define softkeys via `UIPage::getSoftkeys()`, eliminating procedural hotkey management
-5. **Dependency Injection**: Shared resources passed to pages via `UISharedContext` instead of globals
-
-## Architecture Components
-
-### 1. DisplayManager (New)
-**File**: `components/ui/src/display_manager.cpp`
-
-Encapsulates all LVGL and display hardware initialization:
-- LVGL display initialization and MIPI DSI display setup
-- Touch controller initialization (GT911)
-- LVGL tick timer management
-- ESP timer for 30 FPS meter updates
-
-**Key Methods**:
-- `DisplayManager::init()` - Initialize display, touch, and LVGL context
-- `DisplayManager::deinit()` - Clean shutdown of display resources
-- `DisplayManager::startLvglTick()` - Create and start LVGL tick timer
-- `DisplayManager::display()` - Get current LVGL display handle
-
-**Usage Pattern**:
-```cpp
-// In ui_task.cpp
-esp_err_t lvgl_ret = wavex_ui::DisplayManager::instance().init();
-// ... later during shutdown
-wavex_ui::DisplayManager::instance().deinit();
-```
-
-### 2. UINavigator (Enhanced)
-**File**: `components/ui/src/ui_navigator.cpp`
-
-Stack-based navigation manager that coordinates:
-- Page lifecycle (`onEnter`/`onExit` callbacks)
-- Screen layout (header, content area, softkey bar)
-- Softkey synchronization with active page
-
-**Key Methods**:
-- `push(page)` - Push page onto stack, trigger `onExit` of previous page
-- `pop()` - Pop current page, trigger `onEnter` of previous page
-- `active()` - Get currently active page
-- `refreshSoftkeys()` - Update softkey bar based on active page's `getSoftkeys()`
-
-**Stack Structure**:
-```
-Screen (LVGL object)
-├─ Header (UI_HEADER_HEIGHT pixels)
-│  └─ Title label (page name)
-├─ Content area (page-specific widgets)
-│  └─ UIPage::onEnter() creates content here
-└─ Softkey bar (UI_HOTKEY_HEIGHT pixels)
-   └─ SoftkeyBar manages 6 softkey buttons
-```
-
-### 3. UIPage (Base Class)
-**File**: `components/ui/include/ui/ui_page.h`
-
-Virtual base class for all navigable pages:
-```cpp
-class UIPage {
-public:
-    virtual ~UIPage() = default;
-    virtual const char* name() const = 0;
-    virtual void onEnter(lv_obj_t* parent) = 0;
-    virtual void onExit() {}
-    virtual void onInput(const InputEvent& evt) {}
-    virtual std::array<Softkey, NUM_SOFTKEYS> getSoftkeys() { return {}; }
-    virtual std::array<Softkey, NUM_SOFTKEYS> getShiftedSoftkeys() { return {}; }
-    virtual const char* contextLine() const { return nullptr; }
-};
-```
-
-**Responsibilities**:
-- Define page name (shown in header, left)
-- Optionally define `contextLine()` — a second header line beside the title
-  saying what the page is currently acting on (the Track, Instrument or sample
-  the softkeys will change). It is read on entry and on
-  `UINavigator::refreshContext()`; the string is copied immediately, so it may
-  point at a member buffer the page rewrites. Returning `nullptr` (the
-  default) leaves the header showing only the title.
-- Define softkey labels/actions, and optionally a Shift-revealed alternate row (`getShiftedSoftkeys()` — see "Shift Modifier" below)
-- Handle input directly via `onInput()` when a page needs more than softkeys (encoder deltas, touch)
-- Create/destroy page UI in `onEnter`/`onExit`
-- Never manipulate LVGL outside `onEnter`/`onExit` (these run with `LV_LOCK()` held)
-
-### 4. SoftkeyBar
-**File**: `components/ui/src/ui_softkey_bar.cpp`
-
-Manages the bottom row of 6 softkey buttons:
-- Handles touch events and button focus states
-- Coordinates with encoder input via `InputDispatcher`
-- Invokes softkey callbacks when activated
-
-**Key Methods**:
-- `setSoftkeys(defs)` - Set the 6 softkey definitions
-- `create(parent)` - Create/recreate button widgets
-- `focusNext()` / `focusPrev()` - Encoder navigation
-- `pressFocused()` - Activate currently focused softkey
-
-### 5. InputDispatcher
-**File**: `components/ui/src/input_dispatcher.cpp`
-
-Central event router for:
-- Encoder movement (left/right deltas)
-- Touch/button input
-- Hardware keypad events
-
-Routes events to the currently active navigation context (typically the `SoftkeyBar`).
-
-### Shift Modifier
-
-`BUTTON_SHIFT` is intercepted globally by `InputDispatcher::processAll()`
-before dispatch to the active context, so every page gets the same modifier
-for free and none can accidentally swallow it (`ui_softkey.h`,
-`input_dispatcher.cpp`).
-
-`UINavigator::toggleShift()` / `setShift(bool)` flip a **latched, not held**
-state (`isShifted()`), shown as a SHIFT chip at the right of the header and,
-at full width, by the 3 px rule under the header turning shift-coloured. The
-rule is always present so the content area never moves; only its colour
-changes. It is *sticky*:
-it clears itself after one shifted key fires, and on navigation — a plain
-toggle left on would make the next press do the wrong thing. A page that
-defines no alternate row (`getShiftedSoftkeys()` returns the empty default)
-is simply inert while shifted rather than blanking the softkey row —
-`UINavigator::activePageHasShiftedKeys()` is what the header chip and input
-routing check before treating Shift as meaningful on the current page.
-
-### Tab Groups
-
-Two distinct shapes exist for grouping related pages, per
-[`ui-information-architecture.md`](ui-information-architecture.md) §2's rule
-("tabs when the children share a subject, a menu list when they do not"):
-
-- **`UITabHostPage`** (`ui_tab_host_page.h`) hosts existing, independent
-  `UIPage`s unchanged — each keeps its own `onEnter`/`onExit`/softkeys/input
-  handling, and the host forwards the page contract to whichever tab is
-  selected. Used for groups like Sample (Browse/Manage/Edit/Record) and
-  Settings, where converting the children into tab-body builders would be a
-  large, risky rewrite. Children are entered lazily and exited when switched
-  away from, so a hidden tab holds no LVGL objects and runs no timers.
-- **A page building its own `lv_tabview`** (`tabGroupCreate()` /
-  `tabGroupAddTab()` in `ui_tab_group.h`) is for stages that share state
-  across the tab switch — e.g. `UIInstrumentPage`'s five stages (Sample, Env,
-  Amp, Filter, Mod) share the voice being edited, so the header and status
-  line must survive switching tabs. The Diagnostics page uses the same
-  helper for its six tabs.
-
-## Data Flow & Threading
-
-### UI Update Flow (Normal)
-```
-UI Task (FreeRTOS)
-├─ Poll InputDispatcher for queued events
-├─ Dispatch to SoftkeyBar (encoder focus, button presses)
-├─ Process deferred updates from background tasks
-├─ Call DisplayManager's adaptive_refresh_control()
-└─ Sleep 32ms (30 FPS target)
-```
-
-### Deferred Update Pattern (From Background Tasks)
-```
-Background Task (e.g., Meter Timer)
-├─ Update volatile deferred state
-├─ Signal UI task (e.g., s_meter_update_pending = true)
-└─ Return (no LVGL calls)
-
-UI Task (in main loop)
-├─ Detect pending update flag
-├─ Call LV_LOCK()
-├─ Apply updates to LVGL widgets
-└─ Call LV_UNLOCK()
-```
-
-**Critical Rule**: Never call LVGL functions from background tasks. Use deferred updates or `lv_async_call()`.
-
-## Global State Reduction
-
-The original migration (this section historically described) replaced global
-page pointers and procedural menu-creation functions (`ui_globals.cpp/h`,
-`create_main_menu`/`create_sample_menu`, and a `sample_load_save.cpp` page
-that predates the current `UIPage` hierarchy) with the `UINavigator`
-push/pop model above. All of those files are gone from the tree today —
-pages are `UIPage` subclasses constructed by factory functions in
-`ui_main_menu.cpp` (see "Page Implementation Guide" below) and owned by the
-navigator stack, not by global pointers.
-
-What remains, and is justified: meter display objects (`s_meter_bar_l`,
-`s_meter_bar_r`, etc.) persist across page switches for real-time updates,
-and deferred state (`s_meter_update_pending`, `s_deferred_rms_left`, etc.)
-synchronizes the meter timer with the UI task without LVGL lock contention —
-see "Deferred Update Pattern" above.
-
-**Known gap, not yet fixed**: `components/ui` still depends on `main`
-(`inter_mcu_*` free functions called directly from pages) rather than
-through injected context — tracked in `docs/backlog.md` ("Break the
-`components/ui` ⇄ `main` dependency cycle") as `E-ARCH1`, deliberately
-deferred until after the current hardware bring-up pass.
-
-## Page Implementation Guide
-
-### Example: Simple Page
-```cpp
-class MyCustomPage : public UIPage {
-public:
-    const char* name() const override { return "My Page"; }
-
-    std::array<Softkey, NUM_SOFTKEYS> getSoftkeys() override {
-        std::array<Softkey, NUM_SOFTKEYS> keys{};
-        keys[0] = {"Back", []() { UINavigator::instance().pop(); }};
-        keys[5] = {"Select", []() { /* handle select */ }};
-        return keys;
-    }
-
-    void onEnter(lv_obj_t* parent) override {
-        // Create UI widgets here
-        auto label = lv_label_create(parent);
-        lv_label_set_text(label, "Hello!");
-    }
-
-    void onExit() override {
-        // Cleanup happens automatically when onEnter's widgets are deleted
-    }
-};
-```
-
-### Accessing Inter-MCU Data
-Pages should request data **during** `onEnter()` or **on-demand** from softkey callbacks:
-```cpp
-void onEnter(lv_obj_t* parent) override {
-    wavex_meter_data_t meter_data;
-    inter_mcu_get_meter_data(&meter_data);  // Get current snapshot
-
-    // Create UI based on snapshot
-}
-```
-
-### Registering a page
-
-`ui_navigation_integration.cpp` only bootstraps the root — `initNavigationSystem()`
-pushes the main menu and `createNavigationContext()` wires input dispatch to the
-active page. Pages are registered in `ui_main_menu.cpp`, not there.
-
-```cpp
-// Top-level menu item — in createMainMenu():
-menu->addItem("My Custom", []() {
-    UINavigator::instance().push(std::make_shared<MyCustomPage>());
-});
-
-// A tab inside an existing group — in the relevant createXGroup():
-group->addTab("My Tab", createMyCustomPage());
-```
-
-For a **new** tab group, use `UITabHostPage` when the pages are independent and
-substantial (see "Tab Groups" above). Build your own `lv_tabview` via
-`tabGroupCreate()` / `tabGroupAddTab()` (`ui_tab_group.h`) only when the tabs
-must share state across a switch, the way `UIInstrumentPage` does.
-
-```cpp
-std::shared_ptr<UIPage> createToolsGroup() {
-    auto group = std::make_shared<UITabHostPage>("Tools");
-    group->addTab("Analyzer", std::make_shared<AnalyzerPage>());
-    group->addTab("Generator", std::make_shared<GeneratorPage>());
-    return group;
-}
-// then, in createMainMenu():
-menu->addItem("Tools", []() { UINavigator::instance().push(createToolsGroup()); });
-```
-
-### Styling
-
-Use the theme constants (`styles/ui_theme.h`) rather than literals, so a
-palette or font change lands in one place:
-
-```
-Colors  UI_COLOR_BACKGROUND, UI_COLOR_HEADER, UI_COLOR_CONTENT,
-        UI_COLOR_TEXT, UI_COLOR_BUTTON, UI_COLOR_SELECTED
-Fonts   UI_FONT_NORMAL (14pt), UI_FONT_TITLE (22pt),
-        UI_FONT_HEADER (32pt), UI_FONT_HOTKEY (36pt)
-Sizes   UI_HEADER_HEIGHT (75px), UI_HOTKEY_HEIGHT (100px),
-        UI_PADDING_SMALL/MEDIUM/LARGE (5/10/15px)
-```
-
-The rendering budget these sit inside — 30 FPS, 1280x557 content area, RGB565,
-Montserrat only — is in [`ui-design-constraints.md`](ui-design-constraints.md).
-
-### Where the code lives
-
-| | Path under `firmware/esp32/components/ui/` |
+| Owner | Responsibility |
 |---|---|
-| Headers | `include/ui/` |
-| Framework implementations | `src/` |
-| Page implementations | `pages/` |
+| `DisplayManager` | Starts the BSP display, configures software rotation, exposes panel/display handles and services brightness/blanking |
+| BSP + `esp_lvgl_port` | Own the GT911 input registration, LVGL tick and rendering task; do not initialize a second touch driver or tick |
+| `UINavigator` | Owns the page stack and shared header/content/softkey chrome |
+| `UITask` | Drains queued panel/encoder input and services deferred application updates |
+| LVGL port task | Runs LVGL timers, touch events and rendering |
+| UART receive task | Parses messages and publishes data; never calls page/widget APIs |
 
-Worked examples, in rough order of complexity: `ui_main_menu.cpp` (registration
-and every `createXGroup()` factory), `ui_play_page.cpp` (paged softkey params,
-live `MSG_CONTROL_CHANGE` sends), `ui_sample_browser.cpp` (state preservation
-across navigation, paginated backend data), `ui_diagnostics_page.cpp` (tab group
-driven by pushed telemetry).
+Both the application UI task and LVGL port task can execute UI code.
+The shared `lvgl_port_lock()` / `lvgl_port_unlock()` serializes their
+access to LVGL and UI state. Input dispatch takes this lock per event;
+LVGL events and timers execute within the port's handler context. Do not
+describe this as one FreeRTOS task owning every callback.
 
-## Softkey Refresh Pattern
+The two UI task stacks are configured independently; see the task inventory
+in [architecture.md](architecture.md#43-esp32-frontend-runtime-model).
+Page construction can execute through either input path, so inspect both
+high-water marks on hardware.
 
-For pages where softkey labels change based on state (e.g., "Audition" → "Stop"):
+`DisplayManager` is a singleton, as are the navigator and input dispatcher.
+Pages still call `inter_mcu_*` functions in `main`; a fully injected
+`UISharedContext` and removal of that dependency cycle are future work in
+[backlog.md](backlog.md). Do not present them as an implemented abstraction.
 
-```cpp
-// In softkey callback or after state change
-void onAuditionStateChange(bool is_playing) {
-    // Update internal page state
-    is_playing_ = is_playing;
+## Navigation structure
 
-    // Request softkey refresh through navigator
-    UINavigator::instance().refreshSoftkeys();
-    // Navigator will call your page's getSoftkeys() again
-}
-```
+- **Sample:** Browse, Edit, Manage, Record.
+- **Play:** Pads and Keys, sharing note lifecycle and live parameters.
+- **Instrument:** Sample, Env, Amp, Filter, Mod.
+- **Settings:** Display, Storage, MIDI, System, Calibrate.
+- **Diagnostics:** ESP32, Daisy, Audio, Link, Storage, MIDI, Panel.
 
-**See**: `ui_play_page.cpp` — `getSoftkeys()` builds the paged-param label from state, and the state-changing callbacks call `UINavigator::instance().refreshSoftkeys()` after updating it.
+`ui_main_menu.cpp` registers root groups and their factories.
+`ui_navigation_integration.cpp` bootstraps the root and active input context.
 
-## LVGL Threading Compliance
+Use `UITabHostPage` for independent existing pages, such as Sample and
+Settings. It lazily enters the selected child and exits it when switching
+away. A hidden child must release its timers, listeners and widget pointers.
 
-### Safe Patterns
-✅ **Within onEnter()/onExit()**:
-```cpp
-void onEnter(lv_obj_t* parent) override {
-    // Already inside LV_LOCK()
-    auto obj = lv_obj_create(parent);
-}
-```
+Use `tabGroupCreate()` / `tabGroupAddTab()` for a page whose stages share
+state across tab changes, such as Instrument and Diagnostics. Reuse the
+shared chrome rather than duplicating styles. Diagnostics builds tab bodies
+lazily to bound entry work.
 
-✅ **From UI task with explicit lock**:
-```cpp
-LV_LOCK();
-lv_obj_set_size(widget, 100, 100);
-LV_UNLOCK();
-```
+Track, Bank, Instrument Browser, Mixer and expanded oscillator/envelope/LFO
+editors belong to the target
+[Track/Instrument model](features/track-and-patch-model.md). A logical panel
+jump key or a protocol operation does not prove the corresponding page exists.
 
-✅ **From background task via deferred update**:
-```cpp
-// In background task
-s_pending_value = new_value;
-s_update_pending = true;
+## Page contract and lifetime
 
-// In UI task
-LV_LOCK();
-apply_deferred_updates();
-LV_UNLOCK();
-```
+`UIPage` lives in `components/ui/include/ui/ui_page.h`.
+`UINavigator` keeps `shared_ptr<UIPage>` entries on its stack:
 
-### Unsafe Patterns
-❌ **Direct LVGL calls from background task** (can deadlock)
-❌ **Nested LV_LOCK() calls** (already held in onEnter)
-❌ **Calling LVGL from interrupt handler**
+- `name()` and `onEnter(parent)` are required.
+- `onExit()`, `onInput()`, `onTrackChanged()`, softkey definitions,
+  context and debug-console methods are optional overrides.
+- `push()` exits the current page before entering the new one.
+  `pop()` exits the top and re-enters its predecessor.
+- Persistent model state may remain in the page object; LVGL widgets are
+  recreated on entry. Never use widget pointers retained from a prior entry.
+- Tear down timers and listeners before destroying their target state.
+  Clear listener registrations through their owning API so an in-flight
+  callback cannot outlive the page.
+- `contextLine()` identifies the Track, Instrument or sample being edited.
+  The navigator copies its text; call `refreshContext()` when it changes.
 
-## Build Configuration
+The selected Track (`ui/current_track.h`) and selected sample
+(`ui/current_sample.h`) are explicit shared UI state. Pages must not infer
+them from the previous page. Replacing an occupied Track follows the
+confirmation policy in the Track/Instrument model.
 
-### CMakeLists.txt Changes
-- Added `display_manager.cpp` to `COMPONENT_SRCS`
-- Added `esp_lcd_touch_gt911` to `REQUIRES` list
-- Removed `ui_globals.cpp`
+The header status strip owns its LVGL timer and reads meter snapshots from
+`inter_mcu_get_meter_data()`. There is no second `UITask` meter timer.
+Backend uptime comes from the heartbeat; storage diagnostics have one
+authoritative source on the Storage tab.
 
-### Dependencies
-- `lvgl` - LVGL graphics library
-- `esp_lvgl_port` - ESP-IDF LVGL integration
-- `esp_lcd_touch_gt911` - Capacitive touch controller
-- `esp_driver_gpio` - GPIO interface
-- `esp32_p4_nano` - BSP (board support package)
+## Input and softkeys
 
-## Testing Checklist
+`InputDispatcher` has a bounded queue shared by keypad, encoder and debug
+input producers. Producers post value events; the UI task drains them under
+the LVGL port lock.
 
-- [ ] **Navigation Flow**: Main menu → Sample browser → Back → Diagnostics → Back
-- [ ] **Softkey Refresh**: Start audition, verify "Audition" → "Stop", then "Stop" → "Audition"
-- [ ] **Display Manager**: No warnings during LVGL init/display
-- [ ] **Meter Updates**: Audio meters update smoothly at 30 FPS
-- [ ] **Touch Input**: Buttons respond, softkeys react to touch
-- [ ] **Encoder Input**: Left/right rotation changes focus and selection
-- [ ] **Memory Stability**: No crashes after multiple page transitions
+The global `PanelKey` mapping handles Back, Shift, six softkeys, root jumps
+and Track changes before forwarding page input. Hardware driver status and
+future LED/pot work live in [panel-controls.md](features/panel-controls.md).
 
-## Migration Notes for Future Work
+`SoftkeyBar` always has six positions. Touch and mapped panel SOFT keys
+invoke the displayed action. Encoder events are handled by the active page;
+there is no implemented encoder-focus traversal of the softkey bar.
+Use theme roles for text/colour and preserve empty versus disabled actions.
 
-### If Adding a New Page
-1. Create class extending `UIPage`
-2. Implement `name()`, `onEnter()`, and whichever of `onExit()`/`onInput()`/`getSoftkeys()`/`getShiftedSoftkeys()`/`contextLine()` the page needs (all have empty defaults)
-3. Add a factory function and register it as a menu item or tab in `ui_main_menu.cpp` (`ui_navigation_integration.cpp` only bootstraps the root menu via `initNavigationSystem()` — it is not where individual pages are registered)
-4. Do NOT add global static pointers to the page
+Shift is latched: the header chip and rule indicate it, a shifted action
+consumes it, and navigation clears it. Pages may supply
+`getShiftedSoftkeys()`; use the navigator's shifted-key query rather than
+implementing a second modifier policy.
 
-### If Sharing State Between Pages
-1. Use `UISharedContext` struct (to be formalized in future)
-2. Pass context to page constructors
-3. Avoid static page pointers or callbacks with hard-coded state
+When action labels or enabled states change, update the page model and call
+`UINavigator::refreshSoftkeys()`.
 
-### If Adding Background Task Updates
-1. Use volatile deferred state variables
-2. Set a pending flag in task callback
-3. Check flag in UI task main loop
-4. Apply updates under `LV_LOCK()`
+Pads and Keys must release notes on release, `PRESS_LOST`, exit and changes
+that invalidate their held-note map. Latch and panic share that lifecycle.
+Browser audition streams a file; loading and binding a resident sample makes
+it playable through an Instrument.
 
-## Known Limitations
+## Cross-task updates
 
-1. **Meter updates from deferred state**: Currently using separate `meter_update_cb` timer. Future: Integrate with navigator page lifecycle.
-2. **Page recreation on push/pop**: Every page transition recreates UI widgets. For large pages, consider caching strategies (future work).
-3. **No explicit context injection yet**: Pages still access `inter_mcu` directly. Future: `UISharedContext` struct to pass dependencies.
+A background callback copies a complete value into a synchronized mailbox or
+bounded queue. A UI service point consumes it, releases the mailbox lock,
+then changes widgets in the LVGL context.
 
-## References
+A `volatile` struct plus a pending flag is not synchronization. Even a
+release/acquire flag does not protect a slot if the producer can overwrite
+its fields while the consumer is copying them. Use explicit slot ownership,
+a queue, or a short mutex-protected snapshot. Scalars that do not form a
+joint invariant can use atomics.
 
-- **Design constraints (for UI/UX work)**: `docs/ui-design-constraints.md`
-- **LVGL Threading Rules**: the "LVGL Threading Compliance" section above is
-  the canonical statement. (`.cursor/rules/lvgl-threading.mdc` exists only as
-  an untracked local file - `.cursor/` is gitignored - so do not cite it as
-  shared truth.)
-- **System Architecture**: `docs/architecture.md`
-- **Design brief (display, palette, fonts, budget)**: `docs/ui-design-constraints.md`
-- Historical: the former `navigation-integration-guide.md` and `sample-browser-redesign.md`, both superseded by this document. Deleted; see git history.
+Lock order is **LVGL → UART**. UART receive callbacks must not acquire the
+LVGL lock. Snapshot locks must not be held while sending a packet or invoking
+arbitrary callbacks, to avoid a reverse lock dependency.
+
+`lv_async_call()` itself uses LVGL's mutable timer/allocation state; it is
+not a thread-safe escape hatch for a UART callback. Queue data to an existing
+UI service point instead. See the upstream
+[LVGL threading contract](https://lvgl.io/docs/open/9.5/integration/overview)
+and use WaveX's port lock, not a separate unrelated mutex.
+
+The port lock is recursive in the vendored integration. Existing navigator
+entry points may acquire it while a caller already holds it; keep those
+pairs balanced. Avoid adding redundant nesting inside page callbacks.
+Never call LVGL from an ISR or hold a UI lock across long file/link waits.
+
+## Adding a page
+
+1. Implement a `UIPage` in `components/ui/pages/`; place public
+   declarations in `include/ui/`.
+2. Create widgets in `onEnter()`; release listeners, timers and owned
+   resources in `onExit()`.
+3. Register a factory in `ui_main_menu.cpp`, as a root item or tab child.
+   The navigator owns the resulting page; do not add a global page pointer.
+4. Bind labels, dimensions and fonts through `styles/ui_theme.h`.
+   The constraints guide owns their concrete values.
+5. Route remote data through a complete synchronized handoff and refresh
+   softkeys/context from the same UI model used to render the page.
+
+Use current pages as examples: `ui_play_page.cpp` for notes and live
+parameters, `ui_sample_browser.cpp` for request-driven browsing,
+`ui_diagnostics_page.cpp` for subscription lifetime.
+The Sample tabs share `EnvelopePanel`, which owns waveform requests,
+caching and retry policy; do not start a second preview pipeline.
+
+## Verification and remaining work
+
+Use the real-LVGL leaf-widget tests described in
+[testing_guide.md](testing_guide.md#lvgl-widget-tests). Page navigation,
+listener teardown under traffic, real touch coordinates and panel memory
+headroom still need the relevant host boundary tests or HIL/bench checks.
+
+Open UI ownership work stays in [backlog.md](backlog.md); panel acceptance
+and rendering/audio measurements stay in
+[roadmap.md](roadmap.md#outstanding-hardware-verification) and
+[performance_monitoring.md](performance_monitoring.md).
+Do not copy those task lists into this reference.
+
+## Related
+
+- [UI design constraints](ui-design-constraints.md)
+- [ESP32-P4 coding guide](esp32p4_coding_guide.md)
+- [System architecture](architecture.md)
+- [Track/Instrument model](features/track-and-patch-model.md)

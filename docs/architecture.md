@@ -37,7 +37,7 @@ Dual-MCU split, each processor doing what it is best at:
 │  ESP32-P4 "Frontend"         │          │  Daisy Seed (STM32H750) "Backend"│
 │  ESP-IDF 5.5.1 / FreeRTOS    │   UART   │  libDaisy v8.1.0 (bare-metal)    │
 │                              │ 2 Mbaud  │                                  │
-│  • LVGL 9.3 touchscreen UI   │ UART1 ↔  │  • Audio engine @48 kHz          │
+│  • LVGL 9.5 touchscreen UI   │ UART1 ↔  │  • Audio engine @48 kHz          │
 │    (1280×720 MIPI-DSI+GT911) │◄────────►│  • Sample streaming from SD      │
 │  • Encoders (PCNT), TCA8418  │  UART4   │    (SDMMC 4-bit + FatFs)         │
 │    button matrix, TLC5947 LEDs│         │  • 64 MB SDRAM sample RAM        │
@@ -113,7 +113,7 @@ firmware/
 │   │   ├── comm/           # packet_router, statistics, ICommInterface
 │   │   └── inter_mcu.cpp   # facade over link + router (large; slated for split)
 │   ├── components/ui/      # navigator/page/softkey UI framework + pages
-│   └── managed_components/ # lvgl 9.3, esp_lvgl_port, hx8394, gt911, p4 BSP
+│   └── managed_components/ # lvgl 9.5, esp_lvgl_port, hx8394, gt911, p4 BSP
 ├── daisy/                  # CMake + arm-gcc project (libDaisy v8.1.0, DaisySP)
 │   └── src/
 │       ├── audio/          # audio_engine (callback, streaming, q15 pipeline), voice_manager
@@ -133,19 +133,19 @@ firmware/
 Bare-metal cooperative model — **two execution contexts only**:
 
 1. **Audio callback** (highest priority, DMA-driven, 48 kHz / block 48 = 1 ms): pulls decoded q15 frames from the ring buffer, mixes voices, updates meters, advances the 1 kHz control tick (envelopes, LFOs, CV staging). Never blocks (§1).
-2. **Main loop** (`main.cpp`): SPI link servicing, message dispatch, `PumpWavIO()` (SD streaming producer), underrun logging, metrics, and (future) offline render jobs — all cooperative, chunked, and preemptible by audio DMA interrupts.
+2. **Main loop** (`main.cpp`): UART link servicing, message dispatch, `PumpWavIO()` (SD streaming producer), underrun logging, metrics, and (future) offline render jobs — all cooperative, chunked, and preemptible by audio DMA interrupts.
 
 Key subsystems:
 
 - **Sample streaming**: triple-buffered SD read slots with ready/consumed flags; `PumpWavIO()` refills while the callback drains; conversion (mono/stereo → output mode, resampling via the fixed-point linear interpolator in `linear_resampler.hpp`) happens in the pump path, not the callback's per-sample loop; `rb_push_frames()` batches ring-buffer writes with minimal barriers.
-- **Sample RAM**: `memory.h` slab (32 B–1 KB classes) + extent (64 KB pages) allocator over a 60 MB arena; the final 4 MB is reserved for offline-render scratch. `sdram_layout.h` is the single ownership map. Stats report the complete reserved pool to the UI via `MSG_STATUS_RESPONSE`/`SampleMemStatusMessage`.
+- **Sample RAM**: `memory.h` slab (32 B–1 KB classes) + extent (64 KB pages) allocator over a 60 MB arena; the final 4 MiB contains a 512 KiB Sample Registry and 3.5 MiB offline-render scratch. `sdram_layout.h` is the single ownership map. Stats report the complete reserved pool to the UI via `MSG_STATUS_RESPONSE`/`SampleMemStatusMessage`.
 - **Profiling**: DWT cycle counters (`profiling/`), `PROFILE_SCOPE` macros behind `WAVEX_PROFILING_ENABLED`, CPU load min/avg/max reported in heartbeats.
 
 **Why bare-metal, not an RTOS (decision, 2026-07-07).** The Daisy backend runs no RTOS by design, and musical timing *depends on* that choice rather than being limited by it:
 
 - **The timebase is the audio DMA clock, not a software scheduler.** The SAI/DMA block-complete interrupt fires the callback every 48 samples at a hardware-derived rate; the 1 kHz control tick and all sequencer events are counted in audio *frames* (`frame = tick × frames_per_tick`, placed at a sample offset within the block), so they are sample-accurate and phase-locked to the audio they trigger (§5.1). A FreeRTOS SysTick is a *separate* clock domain and would beat against the SAI clock, reintroducing exactly the drift the frame-counting design eliminates — the same failure class as the 44.1 kHz regression (`dma-timing-review-2026-07-03.md` Finding 1).
 - **Two priority levels don't need a scheduler.** The workload is audio (DMA IRQ) vs. everything-else (main loop) — the foreground/background split above. An RTOS earns its keep with many concurrent, I/O-bound tasks across several preemption levels; the Daisy has exactly one hard-real-time thread.
-- **Hand-off is lock-free, and must stay that way.** Audio↔main state passes single-writer-per-field with release/acquire atomics (`__atomic_store_n(..., __ATOMIC_RELEASE)`); a control tick racing a main-loop write is benign and self-correcting. The audio callback must **never** block on a mutex (priority inversion → xrun), so sequencer pattern edits between steps use an atomic buffer/pointer swap, not a lock. That is both safer and cheaper than an RTOS mutex here.
+- **Hand-off is lock-free, and must stay that way.** Audio↔main state passes single-writer-per-field with release/acquire atomics (`__atomic_store_n(..., __ATOMIC_RELEASE)`); multi-field updates use complete snapshots with explicit slot ownership, not concurrent mutation of callback-visible records. Sample retirement waits for a generation-specific callback acknowledgement; timeout preserves the sample storage. The audio callback must **never** block on a mutex (priority inversion → xrun), so sequencer pattern edits between steps use an atomic buffer/pointer swap, not a lock. That is both safer and cheaper than an RTOS mutex here.
 - **The real risk is CPU budget, which an RTOS only worsens.** The timing failure mode is a callback exceeding its 1 ms budget (xrun), not scheduler jitter; it is measured continuously via DWT (§4.2 Profiling, §5.1). Context-switch and tick-ISR overhead would eat into that budget, not protect it.
 
 The ESP32 frontend *does* run FreeRTOS (§4.3) — correct there, because it juggles many I/O-bound tasks (UI, link, input). The asymmetry is intentional: RTOS where there is genuine task concurrency, bare-metal foreground/background where there is one real-time thread. **Do not add an RTOS to the Daisy image.**
@@ -168,7 +168,7 @@ only inline magic numbers:
 | `main` (app_main) | 1 | 32768 | 0 | 1 s delay loop | Logs heap every 60 s; otherwise idle |
 | `uart_link` | 6 | 16384 | any | driver event queue, 10 ms timeout | Woken on TX by a marker posted to the same queue |
 | `ui_task` | 2 | 16384 | 1 | 32 ms delay | Takes the LVGL port lock per input event |
-| LVGL port task | 4 | 7168 | any | esp_lvgl_port | Owns the tick and the display; created by the BSP |
+| LVGL port task | 4 | 16384 | any | esp_lvgl_port | Owns the tick and the display; created by the BSP |
 | `pcnt_task` | 5 | 4096 | any | 2 ms delay | Polls quadrature counters; consumer runs at ~31 Hz |
 | `tca8418_task` | 5 | 4096 | 1 | 10 ms delay | Polls the keypad event FIFO; does not use the INT line (2.P.2 makes it INT-driven) |
 | `din_midi` | 5 | 4096 | any | UART read, 100 ms timeout | Bounded so it can observe a stop request |
@@ -211,7 +211,7 @@ See `features/inter-mcu-protocol.md` for the message catalog. Every message stru
 | Control tick work | envelopes, LFOs, mod matrix, CV staging, meter accumulation |
 | CPU load target | < 70% worst observed callback for normal continuation; ≥ 80% with callback features remaining activates the backend chip-upgrade path. Measured from raw DWT cycles at the target block size; see `performance_monitoring.md` |
 
-The 1-block = 1-ms identity is a deliberate design invariant: the control tick is derived from the audio callback, so CV, modulation, and (future) sequencer events are inherently phase-locked to the audio stream. Any change to block size must preserve an integer-ms tick or introduce a proper tick divider — `timebase.hpp` now enforces this with a `static_assert`. Because the tick is derived from the audio DMA clock rather than a software scheduler, no RTOS is used or needed on the Daisy — see §4.2 "Why bare-metal, not an RTOS" for the full rationale. (The engine briefly ran at 44.1 kHz, silently making the "1 kHz" tick 918.75 Hz; found and reverted 2026-07-03 — `dma-timing-review-2026-07-03.md` Finding 1.) Non-48 kHz WAV content is rate-converted at playback: the streaming/audition path resamples in `PumpWavIO`, and RAM-resident samples use playback-rate compensation (`VoiceTriggerParams::sample_rate_hz` scales `Voice::increment` by native/engine rate).
+The 1-block = 1-ms identity is a deliberate design invariant: the control tick is derived from the audio callback, so CV, modulation, and sequencer events are inherently phase-locked to the audio stream. Any change to block size must preserve an integer-ms tick or introduce a proper tick divider — `timebase.hpp` now enforces this with a `static_assert`. Because the tick is derived from the audio DMA clock rather than a software scheduler, no RTOS is used or needed on the Daisy — see §4.2 "Why bare-metal, not an RTOS" for the full rationale. (The engine briefly ran at 44.1 kHz, silently making the "1 kHz" tick 918.75 Hz; found and reverted 2026-07-03 — `dma-timing-review-2026-07-03.md` Finding 1.) Non-48 kHz WAV content is rate-converted at playback: the streaming/audition path resamples in `PumpWavIO`, and RAM-resident samples use playback-rate compensation (`VoiceTriggerParams::sample_rate_hz` scales `Voice::increment` by native/engine rate).
 
 ### 5.2 Voice architecture (target — partially implemented)
 
@@ -376,7 +376,7 @@ These rules are mandatory for all new code. Most past instability (SPI corruptio
 |---|---|---|
 | ITCM/DTCM | 64/128 KB | explicitly annotated hot code / stack, **not DMA-reachable**; static DTCM is link-capped at 64 KB to preserve at least 64 KB for descending stacks |
 | AXI + D2/D3 SRAM | ~512 KB total | audio ring buffer, DMA slots, link buffers, bss |
-| SDRAM (external) | 64 MB | 60 MB sample arena + 4 MB dedicated offline-render scratch (`sdram_layout.h`) |
+| SDRAM (external) | 64 MB | 60 MiB sample arena + 512 KiB Sample Registry + 3.5 MiB offline-render scratch (`sdram_layout.h`) |
 | QSPI flash | 8 MB | application (BOOT_QSPI via Daisy bootloader) |
 | SD card | up to SDXC | samples, projects/presets, rendered files |
 

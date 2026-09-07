@@ -2,7 +2,7 @@
 
 Everything here describes **what is** or **what will be**. Finished work lives
 in [`CHANGELOG.md`](../CHANGELOG.md) and git history, not in this directory —
-see `roadmap.md` § Cross-Cutting Rules for the rule and what happens to a doc
+see `roadmap.md` § Rules for every phase for the rule and what happens to a doc
 when it is superseded.
 
 Start with `project-principles.md` (why the architecture exists),
@@ -38,12 +38,12 @@ implementation.
 | Document | Status | Contents |
 |---|---|---|
 | [inter-mcu-protocol.md](features/inter-mcu-protocol.md) | **As-built** | The live wire specification, mirroring `firmware/shared/spi_protocol/protocol.h`. If the two diverge, fix one in the same commit that changed the other |
-| [digital-voice-audition.md](features/digital-voice-audition.md) | **Active work order** | Consolidated ordered path to a playable, sequenceable all-digital voice (Phase 2, borrowing narrowly from Phase 2.5) |
-| [sequencer.md](features/sequencer.md) | Core built, integration open | Groovebox sequencer engine (Phase 2) |
+| [panel-controls.md](features/panel-controls.md) | Logical keys built; drivers partial | Panel key/LED model, input stages and MIDI hardware gates |
+| [sequencer.md](features/sequencer.md) | Callback preview built; panel and Track integration open | Sequencer timing, digital audition, ownership and Phase 2 gaps |
 | [track-and-patch-model.md](features/track-and-patch-model.md) | Confirmed vocabulary; decisions taken 2026-09-04 | Sample Pool → Oscillator → Instrument → Track → Pattern/Scene/Song hierarchy, the Bank, the two-oscillator Instrument, workflows, and save boundaries |
 | [oscillator-sources.md](features/oscillator-sources.md) | Sampler boundary accepted; wavetable deferred | Typed Sample and Wavetable oscillator contracts behind the shared Instrument/Voice path |
-| [instrument-model.md](features/instrument-model.md) | Core built, rest open | Presets, zones, multisampling, velocity layers — the Emax/Emulator lineage (Phase 2.5) |
-| [sfz-import.md](features/sfz-import.md) | Proposed | Loading third-party `.sfz` multisamples into the instrument model |
+| [instrument-model.md](features/instrument-model.md) | Sampler core and WXI read path built | Zones, note resolution, common Sample Pool ownership and persistence boundaries |
+| [sfz-import.md](features/sfz-import.md) | Import path built; bench gate open | Loading third-party `.sfz` multisamples into the instrument model |
 | [debug-harness-and-hil.md](features/debug-harness-and-hil.md) | Built (2026-09-04) | The acknowledged `WAVEX-DBG` console on both boards - input injection, synthetic touch, `STATE` queries, Daisy message injection - and the `make test-hil` suite in `tests/hil/` |
 | [melodic-sequencing.md](features/melodic-sequencing.md) | Target design | Melodic track type, chords/ties, step-record, live record/overdub/erase (Phase 2.5) |
 | [param-locks-and-modulation.md](features/param-locks-and-modulation.md) | Target design | Parameter locks, modulation matrix, LFOs, filter envelope (Phase 2/2.5) |
@@ -60,14 +60,13 @@ implementation.
 
 | Document | Contents |
 |---|---|
-| [ui-architecture.md](ui-architecture.md) | ESP32 UI framework: navigator, pages, softkeys, LVGL threading rules, and how to build and register a new page |
-| [ui-information-architecture.md](ui-information-architecture.md) | As-built menu structure and tab-group rules |
+| [ui-architecture.md](ui-architecture.md) | ESP32 UI framework and navigation map: page lifecycle, softkeys, synchronized updates and page registration |
 | [ui-design-constraints.md](ui-design-constraints.md) | One-page brief for UI/UX design passes — display, fonts, palette, rendering budget, widget inventory, each claim cited to code |
 | [logging.md](logging.md) | Per-module log levels with compile-time ceilings and runtime control, on both consoles |
-| [testing_guide.md](testing_guide.md) | Running and writing host tests (GoogleTest), and how to write a regression test that actually fails against the pre-fix code |
-| [testing-remediation.md](testing-remediation.md) | Open test gaps organized by defect class |
+| [testing_guide.md](testing_guide.md) | Host tests, meaningful regressions, production coverage boundaries and open test work |
 | [flashing.md](flashing.md) | Build and flash the ESP32-P4 and Daisy Seed from the devcontainer, plus SWD/GDB debug-probe workflows |
 | [performance_monitoring.md](performance_monitoring.md) | DWT cycle-counter and CPU-load measurement on the Daisy; LVGL render/flush/FPS instrumentation on the ESP32 |
+| [firmware-size-log.md](firmware-size-log.md) | Measured firmware size by build and memory region |
 | [callback-performance-log.md](callback-performance-log.md) | Durable target-hardware results from the recurring Daisy callback-headroom gate |
 | [spi-notes.md](spi-notes.md) | libDaisy 8.1 SPI slave/DMA limits, a minimal bring-up recipe, and the source-level diagnosis of the dormant inter-MCU SPI link |
 | [LICENSES.md](LICENSES.md) | Third-party license inventory |

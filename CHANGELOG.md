@@ -13,6 +13,10 @@ versioning and release process.
 
 ### Changed
 
+- Consolidated navigation, sequencer/audition and testing references; removed
+  their superseded documents, corrected runtime and memory descriptions, and
+  separated completed audit fixes from remaining coverage and hardware gates.
+
 - Started a first-party firmware audit and recorded its remediation task list in
   `docs/backlog.md`.
 

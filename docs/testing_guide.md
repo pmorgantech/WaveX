@@ -1,417 +1,183 @@
 # WaveX Testing Guide
 
-This document provides guidance on writing, running, and maintaining tests for the WaveX firmware project.
+Run and extend the firmware tests from the devcontainer. This guide owns test
+commands, regression-test rules, coverage limits and open test work. Phase
+gates and hardware acceptance remain in [roadmap.md](roadmap.md).
 
-## Overview
+## Contents
 
-WaveX uses GoogleTest for unit testing across all platforms:
-- **Daisy Seed**: Host-based tests using GoogleTest (via libDaisy)
-- **ESP32-P4**: Host-based tests using GoogleTest with ESP-IDF mocks
-- **Shared Protocol**: Cross-platform protocol validation tests
+- [Prerequisites and commands](#prerequisites-and-commands)
+- [What the suites exercise](#what-the-suites-exercise)
+- [Writing meaningful regressions](#writing-meaningful-regressions)
+- [LVGL widget tests](#lvgl-widget-tests)
+- [Coverage and open work](#coverage-and-open-work)
+- [Hardware verification](#hardware-verification)
 
-## Test Structure
+## Prerequisites and commands
 
-```
-firmware/
-├── daisy/tests/
-│   ├── unit/          # Unit tests for Daisy components
-│   ├── integration/   # Integration tests
-│   ├── mocks/         # Hardware mocks
-│   ├── utils/         # Test utilities
-│   └── CMakeLists.txt
-├── esp32/tests/
-│   ├── unit/          # Unit tests for ESP32 components
-│   ├── integration/   # Integration tests
-│   ├── mocks/         # ESP-IDF API mocks (incl. a STUB lvgl.h)
-│   ├── widget/        # LVGL widgets rendered for real, asserted by pixel
-│   ├── utils/         # Test utilities
-│   └── CMakeLists.txt
-└── shared/tests/
-    ├── protocol/      # Protocol validation tests
-    ├── midi/          # MIDI parsing/forwarding tests
-    ├── wav/           # WAV file parsing tests
-    ├── wxcf/          # WXCF chunk-container tests
-    ├── integration/   # Inter-MCU integration tests
-    ├── utils/         # Shared test utilities
-    └── CMakeLists.txt
-```
+Use `./devcontainer.sh` from the repository root. Initialize the tracked
+submodules first; GoogleTest is vendored under
+`firmware/shared/tests/_deps/googletest-src` and reused by all suites.
+See the [project README](../README.md) for container setup.
 
-## Running Tests
-
-### Run All Tests
-```bash
-make test
-```
-
-### Run All Tests Under Sanitizers
-```bash
-make test-asan
-```
-
-Same test bodies, built with AddressSanitizer + UndefinedBehaviorSanitizer
-into separate `build-asan/` directories. **This finds a class of defect the
-ordinary run cannot**: an out-of-bounds read returns a plausible value, so
-value assertions still pass and the suite runs over the bug without noticing.
-Two of the August 2026 audit findings were exactly that shape. Run it before
-sending anything that touches buffer indexing, payload parsing, or DSP read
-positions. It also runs in CI.
-
-Individual suites can be built the same way with
-`cmake -DWAVEX_TEST_SANITIZE=address ..` (or `=thread`).
-
-### Run Tests for Specific Platform
-```bash
-make test-daisy      # Daisy Seed tests
-make test-esp32      # ESP32 tests
-make test-shared     # Shared protocol tests
-```
-
-### Run Tests from Individual Directories
-```bash
-# Daisy tests (firmware/daisy/Makefile has no `test` target - build the
-# CMake test tree directly, same pattern as ESP32/shared below)
-cd firmware/daisy/tests/build
-cmake ..
-make -j$(nproc)
-ctest --output-on-failure
-
-# ESP32 tests
-cd firmware/esp32/tests/build
-cmake ..
-make -j$(nproc)
-ctest --output-on-failure
-
-# Shared tests
-cd firmware/shared/tests/build
-cmake ..
-make -j$(nproc)
-ctest --output-on-failure
-```
-
-### Clean Test Builds
-```bash
-make test-clean
-```
-
-## Writing Tests
-
-### Test File Naming
-
-Test files should follow the pattern: `<component>_test.cpp`
-
-Examples:
-- `uart_protocol_test.cpp`
-- `packet_router_test.cpp`
-- `audio_engine_test.cpp`
-
-### Basic Test Structure
-
-```cpp
-#include <gtest/gtest.h>
-#include "component_under_test.h"
-
-class ComponentTest : public ::testing::Test {
-protected:
-    void SetUp() override {
-        // Initialize test fixtures
-    }
-
-    void TearDown() override {
-        // Cleanup test fixtures
-    }
-
-    // Test helper methods and member variables
-};
-
-TEST_F(ComponentTest, TestName) {
-    // Arrange
-    // Act
-    // Assert
-    EXPECT_EQ(expected, actual);
-}
-```
-
-### Test Categories
-
-#### Unit Tests
-- Test individual components in isolation
-- Use mocks for hardware dependencies
-- Fast execution (< 1 second per test)
-- Located in `tests/unit/`
-
-#### Integration Tests
-- Test component interactions
-- May use simulated hardware
-- Longer execution time acceptable
-- Located in `tests/integration/`
-
-### Using Test Helpers
-
-Test helpers are available in `tests/utils/test_helpers.h`:
-
-```cpp
-#include "../utils/test_helpers.h"
-
-using namespace WaveX::Test;
-
-// Create test packets
-auto packet = PacketGenerator::CreateControlChangePacket(0x01, 0, 0x7FFF);
-
-// Generate audio buffers
-auto sine_wave = AudioBufferGenerator::GenerateSineWave(1024, 440.0f, 48000.0f);
-
-// Create filesystem fixtures
-FilesystemFixture::CreateTestDirectoryStructure("/tmp/test");
-```
-
-### Mocking Hardware
-
-#### ESP32 Mocks
-
-ESP-IDF APIs are mocked in `firmware/esp32/tests/mocks/esp32_mocks.h`:
-
-```cpp
-#include "../mocks/esp32_mocks.h"
-
-// FreeRTOS queues, tasks, semaphores are automatically mocked
-QueueHandle_t queue = xQueueCreate(10, sizeof(int));
-xQueueSend(queue, &data, 0);
-```
-
-#### Daisy Mocks
-
-Daisy hardware mocks live in `firmware/daisy/tests/mocks/`: `daisy_mocks.h`,
-`daisy_seed.h`, `dispatch_mocks.cpp/.h`, `fatfs_mock.cpp/.h`, `ff.h`,
-`log_ring_mock.cpp`. `DISABLED_` is only still used for the handful of tests
-that genuinely need real hardware timing (e.g. `daisy_uart_link_test.cpp`,
-`audio_engine_test.cpp`), not as the general pattern for hardware-dependent code —
-most of it is mocked and runs on the host.
-
-## Writing a regression test for a fix
-
-A fix's test must **fail against the pre-fix code**. That is the only thing
-separating a regression test from a test that happens to pass, and it is cheap
-to check:
+From the container's `/workspaces/WaveX`:
 
 ```bash
-git show <fix-sha>^:path/to/file.hpp > path/to/file.hpp   # restore pre-fix
-# build + run the new test -> confirm it FAILS
-git checkout path/to/file.hpp                             # restore
+make test -j$(nproc)           # shared, Daisy and ESP32 host tests
+make test-shared -j$(nproc)
+make test-daisy -j$(nproc)
+make test-esp32 -j$(nproc)
+make test-asan -j$(nproc)      # AddressSanitizer + UndefinedBehaviorSanitizer
+make test-clean -j$(nproc)
 ```
 
-If the defect cannot be caught this way (HAL-bound code, an excluded
-translation unit, or a property like "no `lv_*` call happens off the LVGL
-task"), say so in the commit message rather than writing a test that passes
-either way. `docs/testing-remediation.md` records which of the August 2026
-defects fall into that category and why.
+Sanitizer builds use separate `build-asan/` directories. Run them for
+changes to indexing, parsing, pointer lifetime or source playback regions.
+A passing value assertion can hide an out-of-bounds read.
 
-**Before claiming a UI change cannot be tested, read the next section.** That
-claim was made once and was wrong.
-
-## Testing LVGL widgets by pixel
-
-`firmware/esp32/tests/widget/` renders widgets with the **real vendored LVGL**
-and asserts on the resulting pixels. LVGL's software renderer draws into a
-plain memory buffer — no display driver, no SDL, no hardware — so what a widget
-actually draws is checkable on the host. `tools/ui_preview` has rendered design
-previews this way since it was written.
-
-Three things to know before adding one:
-
-1. **It is a separate CMake directory for a reason.** The main ESP32 suite's
-   `include_directories()` puts `mocks/` first *specifically to shadow
-   `lvgl.h`* with a ~100-line stub. Directory-level include paths are inherited
-   by subdirectories, so `widget/CMakeLists.txt` clears them
-   (`set_property(DIRECTORY PROPERTY INCLUDE_DIRECTORIES "")`) before naming
-   its own. Without that, LVGL compiles against the stub and fails deep inside
-   the vendored font tables, pointing nowhere near the cause.
-2. **Measure pixels, not rows.** The grid draws a vertical line through every
-   row of a panel, so "rows containing any ink" saturates at 100% for a silent
-   channel and a loud one alike. The first version of `waveform_view_test.cpp`
-   did exactly this and failed against correct code. Counting pixels and
-   comparing regions keeps the constant grid contribution out of the answer.
-3. **Assert on structure, not appearance.** Colours, fonts and exact geometry
-   change whenever the design does, and a test that fails on a palette tweak
-   trains people to ignore it. Assert relationships — *this* region has far
-   more ink than *that* one — and leave legibility to the bench.
-
-The same "must fail against the broken version" rule applies, and for a widget
-it is easy to check by mutation:
+For a focused executable, configure the owning suite explicitly after adding
+a test file; its CMake glob is evaluated at configure time:
 
 ```bash
-# e.g. swap the channel lanes in the widget, rebuild, run
-#   -> the stereo tests must fail and the mono/empty ones must still pass
-git checkout firmware/esp32/components/ui/components/waveform_view.cpp
+cmake -S firmware/shared/tests -B firmware/shared/tests/build
+cmake --build firmware/shared/tests/build --target wav_header_parser_test --parallel $(nproc)
+ctest --test-dir firmware/shared/tests/build -R WavHeaderParser --output-on-failure
 ```
 
-`WaveformView` was the cheap place to start because it has no dependency on
-`main`; the *pages* still cannot be tested this way until the `components/ui`
-⇄ `main` cycle in `docs/backlog.md` is broken.
+Use `ctest --test-dir <build-dir> -N` to inspect the discovered test names,
+or run `<build-dir>/bin/<test-name> --gtest_filter=Suite.Case`. All three
+host trees compile first-party code as C++17. They do not cross-compile the
+device images.
 
-## Test Coverage Goals
+For a separate sanitizer experiment, configure another build directory with
+`-DWAVEX_TEST_SANITIZE=address` or `=thread`. TSan and ASan are separate
+runs. A sanitizer that fails to start has not validated the tests.
 
-- **Core Components**: >80% code coverage
-  - Protocol handlers
-  - Message routing
-  - Audio processing logic
-  - Storage operations
+## What the suites exercise
 
-- **Hardware Abstraction**: >60% code coverage
-  - UART/SPI link implementations
-  - Hardware initialization
-  - DMA handling
+| Suite | Production behavior covered | Boundaries replaced or omitted |
+|---|---|---|
+| Shared | UART/fixed-packet framing and CRC, sequence tracking, protocol round trips, WAV/WXCF/WXI parsing, sample registry, MIDI and shared control math | In-memory file readers; no serial peripheral or real SD |
+| Daisy | Voice rendering/envelopes/filter, instrument resolution, sequencer and tempo cores, allocators, CV laws, browsing and message dispatch | FatFs/board boundaries mocked; full audio callback and UART/DMA drivers remain HAL-bound |
+| ESP32 | Packet routing and listener delivery, application init flow, file browsing, waveform cache/fetch/panel state, panel-key model | FreeRTOS/IDF and most LVGL calls mocked; complete UI task and page lifecycle are not executed |
+| ESP32 widget | Waveform pixels rendered with the real vendored LVGL software renderer | Memory-backed display; no MIPI, PPA, touch driver or real panel |
 
-- **Integration**: Critical paths covered
-  - Inter-MCU communication
-  - End-to-end message flow
-  - Error recovery
+Inspect the owning `tests/CMakeLists.txt` and each test's linked sources
+before claiming coverage. A dispatch mock proves the command reached its
+boundary; it does not prove that the real loader, callback or driver handled
+it correctly. The shared and Daisy `tests/integration/` directories do
+not themselves provide end-to-end coverage merely by existing.
 
-## Best Practices
+The audit baseline on 2026-09-06 passed 287 shared, 463 Daisy and 207 ESP32
+cases (957 total). This is a reproducible baseline, not a coverage percentage
+or a hardware result. Fix-specific validation belongs in the change's commit
+and changelog.
 
-### 1. Test Independence
-- Each test should be independent
-- Don't rely on test execution order
-- Clean up resources in `TearDown()`
+## Writing meaningful regressions
 
-### 2. Descriptive Test Names
-```cpp
-// Good
-TEST_F(PacketRouterTest, RouteHeartbeatMessage)
-TEST_F(UartProtocolTest, ValidateFrameInvalidCRC)
+A regression must fail against the pre-fix production implementation. Keep
+new tests present, substitute only the old implementation in an isolated
+scratch checkout, rebuild the focused target and observe the intended
+failure. Restore and rerun the fixed implementation. Do not overwrite an
+active shared checkout while another worker is using it.
 
-// Bad
-TEST_F(PacketRouterTest, Test1)
-TEST_F(UartProtocolTest, Test)
-```
+For HAL-bound defects, document the untested boundary and the exact bench
+check needed. A test of a copied algorithm or a mock replacing the broken
+method is not evidence for that fix.
 
-### 3. Arrange-Act-Assert Pattern
-```cpp
-TEST_F(ComponentTest, Example) {
-    // Arrange: Set up test data
-    auto packet = CreateTestPacket();
+Use these rules:
 
-    // Act: Execute the code under test
-    bool result = ProcessPacket(packet);
+- Test observable contracts: a rejected packet reaches no handler, a failed
+  load preserves the current binding, a freed allocation cannot still be
+  referenced, a stale response cannot replace a newer request.
+- Cover normal operation and failure transitions: empty, exact boundary,
+  truncated, overflow, full queue, timeout, retry, replacement and teardown.
+- Use exact-sized malformed buffers with ASan. Padding every short input to
+  maximum size masks the overread being tested.
+- Assert all material fields with distinct values in round-trip tests;
+  default-zero fields do not catch swaps or omitted serialization.
+- Mock hardware I/O, not the production behavior under investigation.
+  A mock must model the failure or concurrency property its test claims.
+- Keep test names explicit and fixtures independent. Reconfigure CMake for
+  new `*_test.cpp` files; check discovery before treating a new file as run.
+- Keep tests for compiled-out SPI and forward-built formats. Delete tests
+  only when their production code is removed.
 
-    // Assert: Verify the results
-    EXPECT_TRUE(result);
-}
-```
+The default ESP32 mocks are useful for deterministic dispatch/value tests,
+but do not emulate the complete FreeRTOS scheduler or SMP interleavings.
+Concurrency tests need real host synchronization at the tested boundary.
 
-### 4. Test Edge Cases
-- Empty/null inputs
-- Maximum size inputs
-- Boundary conditions
-- Error conditions
+## LVGL widget tests
 
-### 5. Avoid Testing Implementation Details
-- Test public interfaces
-- Test behavior, not implementation
-- Focus on what, not how
+`firmware/esp32/tests/widget/` renders real LVGL into a memory buffer.
+Use it for leaf widgets before declaring rendering untestable on the host.
 
-## Debugging Tests
+The widget CMake directory clears inherited include paths so the ordinary
+suite's stub `mocks/lvgl.h` cannot shadow the real library. Keep this
+separation when adding widget targets.
 
-### Run Single Test
-```bash
-cd firmware/shared/tests/build
-./bin/uart_protocol_test --gtest_filter=UartProtocolTest.CreatePacketEmptyPayload
-```
+Measure structural relationships, not palette choices: a loud channel
+should occupy more pixels than a silent channel; lane clipping should
+preserve separation; strip rendering should match a whole-screen render.
+Counting rows containing ink is insufficient when the grid crosses every row.
+Mutation-check the relevant property, for example by swapping channel lanes
+and confirming the stereo tests fail.
 
-### Verbose Output
-```bash
-ctest --output-on-failure --verbose
-```
+Complete page tests still need their `main` dependencies and lifecycle
+modeled. Leaf-widget success does not validate navigation, listener teardown,
+touch coordinates or rendering time on the panel.
 
-### Debug with GDB
-```bash
-cd firmware/shared/tests/build
-gdb ./bin/uart_protocol_test
-(gdb) run --gtest_filter=UartProtocolTest.*
-```
+## Coverage and open work
 
-## Continuous Integration
+Prioritize defect classes over line counts. The previous >80% core / >60%
+hardware numbers were goals, not measured results. No repository-wide
+coverage percentage is established by `make test`.
 
-Tests should run automatically in CI/CD:
+Outstanding work:
 
-```yaml
-# Example GitHub Actions workflow
-- name: Run Tests
-  run: |
-    make test-all
-```
+- Expand exact-sized payload sweeps through the **real** ESP32 packet
+  handlers and shared parsers. Assert both bounds safety and no dispatch on
+  invalid input. Error-handler tests must not override the handler they
+  claim to exercise.
+- Stress listener registration/removal and complete snapshot handoffs with
+  real synchronization under TSan. Check allocation-failure behavior
+  independently of the normal mutex mock.
+- Extract the HAL-free streaming ring from `audio_engine.cpp` when working
+  in that path, then stress producer/consumer wrap, reset and shutdown.
+  Host memory-model checks do not prove M7 interrupt/cache correctness.
+- Add randomized voice-region properties with guarded storage: reads stay
+  inside the selected source, interpolation does not cross trim bounds,
+  phase remains valid, and initialization restores every voice.
+- Exercise navigation/input with realistic page lifecycle boundaries.
+  Use on-target assertions or focused architectural checks for LVGL call
+  provenance; value-only tests cannot prove task ownership.
+- Keep full `audio_engine.cpp` and `daisy_uart_link.cpp` listed as gaps.
+  Their excluded `audio_engine_test.cpp` and `daisy_uart_link_test.cpp`
+  placeholders are not executed coverage.
 
-## Test Maintenance
+Concrete discovered firmware bugs are tracked once in
+[backlog.md](backlog.md#firmware-audit-remediation--2026-09-06);
+do not duplicate their task status here.
 
-### Adding New Tests
+## Hardware verification
 
-1. Create test file: `tests/unit/<component>_test.cpp`
-2. Add test cases following existing patterns
-3. Update CMakeLists.txt if needed (auto-discovery should handle it)
-4. Run tests: `make test`
-5. Verify coverage meets goals
+`make test-hil` drives the boards' acknowledged debug consoles, with
+`make logs-start` providing serial logs. See
+[debug-harness-and-hil.md](features/debug-harness-and-hil.md) for setup,
+commands and transcripts. Missing boards cause skips: an all-skipped run is
+not a passing hardware gate.
 
-### Updating Tests
+Host tests cannot establish real-panel legibility, MIDI/audio latency,
+cache/DMA ownership on silicon, CV settling, SD fault recovery, reboot
+persistence or zero-underrun behavior. Device compilation also cannot prove
+boot or audible output. Record DWT and soak results using
+[performance_monitoring.md](performance_monitoring.md) and
+[callback-performance-log.md](callback-performance-log.md).
 
-- Update tests when interfaces change
-- Keep tests in sync with implementation
-- Remove obsolete tests
-- Refactor tests for clarity
+## Related
 
-## Common Issues
-
-### Tests Fail After Code Changes
-- Update test expectations
-- Check if interface changed
-- Verify mocks are still valid
-
-### Tests Pass But Code Doesn't Work
-- Check test coverage
-- Verify tests actually test the code
-- Add integration tests
-
-### Hardware-Dependent Tests
-- Use mocks for unit tests
-- Hardware-in-the-loop tests live in `tests/hil/` and run with `make test-hil`
-  from the devcontainer with both boards attached and the serial loggers up
-  (`make logs-start`). They drive the boards' debug consoles
-  (`WAVEX-DBG`, [features/debug-harness-and-hil.md](features/debug-harness-and-hil.md))
-  and skip when no board is enumerated, so they are a bench command and a
-  phase-gate input, not part of `make test` or CI. Every board line of a run
-  is in `logs/<board>.log`; the command/reply transcript is `logs/hil-<run>.log`.
-- Mark hardware tests with `DISABLED_` prefix until mocks available
-
-## Resources
-
-- [GoogleTest Documentation](https://google.github.io/googletest/)
-- [libDaisy Testing Guide](../firmware/daisy/libs/libDaisy/doc/md/_b1_Development-Unit-Testing.md)
-- [ESP-IDF Testing](https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-guides/tools/idf-python-scripts.html#unit-testing)
-
-## Test Status
-
-- ✅ UART Protocol, Message Type, Packet Router tests: Complete
-- ✅ Daisy Component Tests: substantial coverage under
-  `firmware/daisy/tests/unit/{audio,comm,cv,sequencer,storage}/`
-- ✅ ESP32 Component Tests: substantial coverage under
-  `firmware/esp32/tests/unit/{comm,ui}/`
-- ⏳ Integration Tests: only `firmware/esp32/tests/integration/inter_mcu_protocol_test.cpp`
-  has content; `firmware/shared/tests/integration/` and
-  `firmware/daisy/tests/integration/` are still empty
-- ✅ Hardware-in-the-loop: `tests/hil/` (19 tests, 2026-09-04) - the console
-  harness itself, page routing by injected input and touch, and the
-  Track/Instrument model's Load-to-Track workflow across both boards
-
-A former `testing_strategy.md` predated this test suite and reported results
-for tests that were never run against hardware we do not have. It has been
-deleted; if you find a copy, do not use it as a current reference.
-
-### Known gaps
-
-Two Daisy test files are **excluded from the build** by
-`firmware/daisy/tests/CMakeLists.txt`, and their contents are `DISABLED_`
-besides: `audio_engine_test.cpp` (3 tests) and `daisy_uart_link_test.cpp`
-(5). Both need STM32 HAL headers. Treat them as placeholders, not coverage —
-`audio_engine.cpp` is 3476 lines with no host tests at all, which is why
-several of the August 2026 audit defects in it have no regression test.
-
-The remediation plan for this and the other gaps, with the defect classes it
-is organised around, is [`testing-remediation.md`](testing-remediation.md).
+- [Project principles](project-principles.md)
+- [Roadmap and hardware gates](roadmap.md)
+- [UI architecture](ui-architecture.md)
+- [Daisy real-time guide](daisy_rt_audio_coding_guide.md)
+- [ESP32-P4 guide](esp32p4_coding_guide.md)

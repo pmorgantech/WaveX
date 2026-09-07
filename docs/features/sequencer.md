@@ -1,65 +1,128 @@
-# Sequencer / Groovebox Engine — Design
+# Sequencer and Digital Voice Playback
 
-**Status**: Core scheduler/protocol built and host-tested — `pattern.hpp`, `sequencer_scheduler.hpp`, `tempo_follower.hpp`, `sequencer_transport.hpp` (all HAL-free, ~60 host tests), plus the 0x50–0x57 protocol messages with round-trip and dispatch tests. Callback integration (turning scheduled events into audible voice triggers), MIDI clock out, the pad/step-editor UI, and persistence are open — see `roadmap.md` Phase 2 and `features/digital-voice-audition.md` stages 5–8. This is still the defining groovebox feature and the largest gap between the product vision and what's audible.
+**Status:** The scheduler, transport, command queue, callback trigger path and
+playhead publication are implemented. The current preview maps eight pattern
+rows to pitches on Track 1; it is not the target multi-Track sequencer.
+The panel step editor, MIDI clock output, parameter-lock application and
+project persistence remain open Phase 2 work in [roadmap.md](../roadmap.md).
+Host tests and device compilation do not establish audible timing or the
+hardware phase gate.
 
-## 1. Placement: the sequencer engine lives on the Daisy
+## Contents
 
-Timing is the whole game. The engine that decides *when* a voice triggers must be phase-locked to the audio stream, and the only clock with that property is the audio callback. The ESP32 UI is an *editor and remote control* for the sequencer; it never generates trigger timing.
+- [1. Ownership and execution](#1-ownership-and-execution)
+- [2. Clocking](#2-clocking)
+- [3. Pattern and voice models](#3-pattern-and-voice-models)
+- [4. Edits and protocol](#4-edits-and-protocol)
+- [5. UI surfaces](#5-ui-surfaces)
+- [6. Validation](#6-validation)
 
-Consequences:
+## 1. Ownership and execution
 
-- Pattern data (the playable representation) is resident in Daisy RAM; the UI edits it via protocol ops and receives playhead feedback.
-- MIDI clock **out** is generated on… the ESP32 (owns MIDI I/O) from tick events sent by the Daisy — acceptable because MIDI clock granularity (24 PPQN ≈ 10–20 ms) is coarse relative to link latency, but jitter must be measured; if it exceeds ~1 ms, move MIDI DIN out to the Daisy directly (spare UART pins exist).
-- MIDI clock **in** (slave sync) arrives on the ESP32, is timestamped, and forwarded; the Daisy runs a PLL-style tempo follower so link jitter doesn't modulate the groove.
+The Daisy audio callback owns `SequencerTransport` and advances it through
+`drain_sequencer()` in `audio_engine.cpp`. The main loop decodes transport,
+pattern and clock commands into a fixed SPSC queue. The callback drains the
+queue before ticking, so foreground edits do not mutate a pattern being read
+by the scheduler.
 
-## 2. Clocking model
+The main loop resolves the current preview Instrument into a complete voice-map
+snapshot and publishes it through a triple-buffer mailbox. The callback uses
+those prepared trigger parameters, including intra-block offsets, without SD
+I/O, allocation or note-resolution work against the foreground sample table.
+Sample retirement must revoke these snapshots before freeing their storage.
 
-- Master timebase: the 1 kHz control tick (= audio block boundary), with **intra-block sample offsets** for trigger accuracy. A step scheduled at sample 17 of block N starts rendering at exactly that frame — voices accept a start-offset within block. This gives sample-accurate sequencing with a 1 ms scheduling quantum.
-- Tempo math in fixed point: ticks-per-step derived from BPM × PPQN (use 96 PPQN internally for micro-timing/swing resolution), accumulated in 32.32 to avoid drift.
-- Swing = per-step timing offset table; micro-timing = signed per-step offset in PPQN ticks; both fold into the same scheduler.
+The ESP32 edits and displays sequencer state; it never generates audio trigger
+timing. Callback playhead state crosses a mailbox to the main loop, which
+coalesces UART publication. The existing Play grid and live-parameter controls
+are independent of the missing step-editor workflow.
 
-## 3. Data model (v1)
+## 2. Clocking
 
-```
-Project
-├── Kits[≤16]            # pad → sample ref (path + sidecar markers) + voice params
-├── Patterns[≤128]
-│   ├── length (1–64 steps), scale (1/16, 1/32, triplet…), swing
-│   └── Tracks[≤16]      # one per pad/voice
-│       └── Steps[64]: {on, velocity, probability, micro_offset,
-│                        retrig(count,rate), param_locks[≤4]{param_id, value}}
-├── Songs[≤16]: ordered (pattern, repeats) list
-└── Tempo, master params
-```
+The timebase is the audio frame count, with the current control tick at an
+audio-block boundary. `sequencer_scheduler.hpp` implements fixed-point
+musical timing with intra-block frame offsets, swing, microtiming, retriggers
+and seeded probability.
 
-- **Vocabulary and ownership, confirmed 2026-09-02, "Patch" → "Instrument" 2026-09-03** (`track-and-patch-model.md` §1/§3.5): a pattern's row *t* plays through **Track** *t*'s **Instrument** — "Kits" above are drum-mode Instruments loaded into Tracks, referenced by path (or recalled from the Project's Bank), not a separate list. **Tempo moves to the Song** (project keeps a default for pattern mode); swing stays pattern-level with a Song default a pattern can follow; the default pattern length becomes **32** (2 bars of 16ths — `pattern.hpp` defaults to 16 today). `pattern.hpp`'s inner `Track` struct is to be renamed `TrackSteps` so "Track" means one thing.
-- **Param locks** (per-step parameter overrides, Elektron-style) reuse the existing `ControlParameter` ids — application semantics (trigger-param overrides, one-step lifetime for track-scoped ids) are pinned in `param-locks-and-modulation.md` §2.
-- **Kits are drum-mode instruments** (decision 2026-07-05): the kit structure above is the drum-mode subset of `instrument-model.md`'s zone model (pad *p* = zone with `key_lo == key_hi`), and `KIT_OP` is subsumed by `MSG_INST_OP` (0x54 stays reserved-unused). Melodic track types extend this pattern model in `melodic-sequencing.md`.
-- **Choke groups** live in the kit (e.g. open/closed hat), enforced by the voice manager (`VoiceManager::Choke`, `instrument-model.md` §3).
-- Serialization: versioned binary chunks on SD (`project.wxp`), written atomically (temp + rename). Design the format doc before code; include format version + per-chunk lengths so old firmware can skip unknown chunks.
+`tempo_follower.hpp` and its transport integration are host-testable.
+[MIDI sync](midi-sync-tempo-follower.md) distinguishes the implemented core
+from the remaining ESP32 ingest/output and bench work. Wire deltas are in the
+ESP32 clock domain; they must not be treated as absolute Daisy timestamps.
 
-## 4. Protocol extensions (design + round-trip tests before UI work)
+Internal-mode Continue currently restarts the scheduler at the top. Stored
+song-position/input-mode fields do not imply implemented song resume or live
+recording.
 
-| Message | Direction | Purpose |
-|---|---|---|
-| SEQ_TRANSPORT | E→D | play/stop/continue, tempo set, song position |
-| SEQ_PATTERN_OP | E→D | step toggle/edit, track mute, pattern select, length/scale/swing — small idempotent ops, not bulk uploads |
-| SEQ_PATTERN_SYNC | both | bulk pattern read/write for project load/save (chunked, size-class 1024/2048) |
-| SEQ_PLAYHEAD | D→E | current pattern/step/beat, coalesced to ≤ 30 Hz for UI/LED feedback |
-| KIT_OP | E→D | pad→sample assignment, choke groups, kit params |
+## 3. Pattern and voice models
 
-Edits are applied between steps (double-buffered pattern rows) so editing while playing never tears a step.
+The current bounded `pattern.hpp` model contains eight rows, up to 64 steps
+per row and four parameter locks per step. The default length is 16 steps.
+The preview resolves row `r` to `root + r` on fixed Track index 0.
+This temporary mapping must be replaced with Track-addressed Instrument
+resolution for the four-track panel gate.
 
-## 5. UI surfaces (ESP32)
+The target hierarchy is defined once in
+[track-and-patch-model.md](track-and-patch-model.md): Patterns address Tracks;
+Tracks hold Instruments; a Kit is a drum-mode Instrument; Songs own their
+arrangement and tempo. The target default is 32 steps. Bank/Project/Song
+storage and melodic step-note lanes are not implemented merely because the
+scheduler can play a pattern.
 
-1. **Pad page**: 4×4 grid (TCA8418 matrix + touch), velocity via touch position or fixed levels, kit select, mute mode. TLC5947 LEDs mirror step/playhead state.
-2. **Step editor**: track lanes, step toggles, hold-step-turn-encoder for param locks, page switching for >16-step patterns.
-3. **Pattern/song page**: chain patterns, arrangement.
-4. **Groove page**: swing, scale, humanize.
+Digital voice playback is already implemented in `voice_manager.hpp`:
+resident PCM16 mono/stereo, root-note-aware tuning, layering, choke/one-shot
+semantics, region/fade/loop parameters, per-voice filter and envelopes.
+Live filter edits reach release tails; envelope edits preserve an already
+releasing/choked voice's release. The filter A/B console and its measurement
+requirements live in [logging.md](../logging.md) and
+[performance_monitoring.md](../performance_monitoring.md).
 
-## 6. Test plan
+Browser audition streams a file without making it resident. Loading and
+binding create the Instrument used by Play. Binding state is reported by the
+Daisy, not inferred from the frontend metadata cache.
 
-- Host-testable scheduler core: pattern + tempo in → sorted (frame, event) stream out; golden tests for swing/micro-timing/probability (seeded RNG).
-- Drift test: 10-minute render at 120 BPM must place beat 1200 exactly at frame 28,800,000 (±0).
-- Sync test: slaved to MIDI clock with ±2 ms jitter injected, tempo follower stays within ±0.5 BPM and re-locks within 1 bar after a tempo jump.
-- Link-loss test: UI disconnect mid-playback → pattern keeps playing; reconnect resyncs playhead display.
+## 4. Edits and protocol
+
+`SequencerTransport` keeps pending and active pattern copies. Commands change
+the pending copy; it is committed while stopped or after a processed step
+boundary. The callback is the sole runtime writer of both copies.
+
+Use the existing transport, pattern-op, playhead and MIDI messages in
+[inter-mcu-protocol.md](inter-mcu-protocol.md).
+`MSG_SEQ_PATTERN_SYNC` remains reserved without a payload implementation;
+`KIT_OP` is not a live competing instrument format.
+
+Locks are stored by the pattern model and carried in `TriggerEvent`, but
+`drain_sequencer()` does not yet apply them to voice parameters. The
+trigger-override and one-step lifetime rules are in
+[param-locks-and-modulation.md](param-locks-and-modulation.md#2-parameter-locks).
+Add pure mapping/clamping tests when implementing that path.
+
+## 5. UI surfaces
+
+The existing Play page provides Pads and Keys with shared note lifecycle,
+Track selection, binding status and live sound controls. Navigation and
+threading are described in [ui-architecture.md](../ui-architecture.md).
+
+Remaining surfaces are the step editor, parameter-lock editing, pattern/song
+selection and groove controls. Panel keys already have a logical model;
+LEDs and endless-pot drivers are separate remaining prerequisites in
+[panel-controls.md](panel-controls.md). Do not describe a debug-console
+transport command as a completed panel workflow.
+
+## 6. Validation
+
+Host coverage includes scheduler event ordering and timing, transport edits
+between steps, probability/retrigger boundaries, tempo-follower state,
+command-queue handoff and voice rendering. Extend these with the actual
+Track mapping and lock application when those replace the preview.
+
+Hardware acceptance remains in the roadmap: audible pitch across the Keys,
+SFZ root-note behavior, sample-loop behavior, live parameter sweeps,
+sample-offset triggering, MIDI sync/jitter, peer restart during playback,
+DWT callback headroom and an eight-voice zero-underrun soak.
+No performance improvement is claimed without the corresponding DWT result.
+
+## Related
+
+- [Instrument and sample ownership](instrument-model.md)
+- [Melodic sequencing target](melodic-sequencing.md)
+- [Testing guide](../testing_guide.md)

@@ -23,7 +23,7 @@ The words the UI, the docs and the code use. Engine identifiers were renamed to 
 | **Voice** | One of `WAVEX_NUM_VOICES` polyphony channels rendering one resolved note through an Instrument's signal path. An *engine* term; it never names a page or a user entity again. Track → Instrument → Voice is a dynamic allocation from one shared pool, never a static Track↔Voice mapping (§5). | voice | `Voice`, `WAVEX_NUM_VOICES` (`hardware_config.h`; was `kNumVoices`) |
 | **Performance** | The current live configuration of all Tracks: Instrument bindings, MIDI routing, mixer, mutes, and shared effects. V1 stores one Performance directly in the Project; it is an ownership concept, not a separate file yet. | multi, part, performance | Project's target `Tracks[16]` plus mixer state |
 | **Pattern** | A group of notes/velocities over a fixed span — default **2 bars of 16ths = 32 steps** — with one step row per Track. The sequencer's unit of composition. | pattern | `Pattern` (`pattern.hpp`, built: 1–64 steps, default 16 → 32) |
-| **Song** | An ordered arrangement of Patterns over time, at a tempo and swing setting. | song, chain | `sequencer.md` §3's `Songs[≤16]: (pattern, repeats)` — not yet in code |
+| **Song** | An ordered arrangement of Patterns over time, at a tempo and swing setting. | song, chain | target Song arrangement — not yet in code |
 | **Scene** | A performance snapshot of mixer, macros, mutes, and optional Pattern selection. It references content and never embeds Samples, Instruments, or Pattern data. | performance | target only; `scenes-and-performance.md` |
 | **Project** | The portable root that stores one Performance, Patterns, Songs, Scenes, settings, the current Bank, and references to saved Instruments/assets. | project | `.wxp` target; not yet in code |
 | **MIDI channel** | 1–16 on the DIN/USB input. A *routing input* to Tracks, never the same word as Track. | channel | `MidiEvent::channel` |
@@ -297,7 +297,7 @@ Project (.wxp)
 ```
 
 - **A Pattern's step row *t* plays through Track *t*'s Instrument.** There is no separate "kit" object: a drum kit is a drum-mode Instrument on a Track (`instrument-model.md` §8, already decided). Loading a different Instrument into a Track changes what every Pattern's row *t* sounds like — which is the point, and how a Song can be re-voiced.
-- **Tempo belongs to the Song.** Today it is a single project-level value (`sequencer.md` §3 "Tempo, master params"); a Song that carries its own tempo is what "arranged over time at a tempo" means. The project keeps a default for pattern-mode playback with no Song selected.
+- **Tempo belongs to the Song.** Today it is a single project-level value (see `sequencer.md` "Pattern and voice models"); a Song that carries its own tempo is what "arranged over time at a tempo" means. The project keeps a default for pattern-mode playback with no Song selected.
 - **Swing (*)**: built as *pattern*-level (`Pattern::swing`, 50–75), and that is musically right — different patterns can have different feel. The Song's swing is a **default** that a Pattern follows unless it sets its own (`swing = 0` meaning "follow song"). Confirm or simplify (§9 item 8 of the 2026-09-02 list).
 - **Default length 32.** `pattern.hpp` supports 1–64 steps and defaults to 16; the default becomes 32 (2 bars × 16 sixteenths). No model change, one constant plus the step-editor UI showing two bars.
 - Steps carry `{on, velocity, probability, micro_offset, retrig, param_locks[≤4]}` (built) — "notes/volumes" is `on`/`velocity`; the rest is already there for later.
@@ -372,7 +372,7 @@ This is what makes **two soundfonts at once** ordinary: an Instrument on track 1
 
 ## 5. Polyphony
 
-`WAVEX_NUM_VOICES = 8` (`hardware_config.h`, since stage 1; was `kNumVoices` in `voice_manager.hpp`) is a **measured DTCM/CPU budget**, not a design choice, and the SVF's per-voice cost was never measured on hardware (`digital-voice-audition.md` Stage 1 said it must be). It is the only place the digital voice count is written; `voices_` sizes off it and nothing else in the engine hard-codes 8 for polyphony. Decided 2026-09-04:
+`WAVEX_NUM_VOICES = 8` (`hardware_config.h`, since stage 1; was `kNumVoices` in `voice_manager.hpp`) is a **measured DTCM/CPU budget**, not a design choice, and the SVF's per-voice cost was never measured on hardware (see `sequencer.md` "Validation"). It is the only place the digital voice count is written; `voices_` sizes off it and nothing else in the engine hard-codes 8 for polyphony. Decided 2026-09-04:
 
 - It lives in **`hardware_config.h`** next to the other tunables, so 8 → 16 is that one edit plus a DWT measurement and the linker report. `VoiceManager` `static_assert`s against it.
 - It is **independent of the analog voice count** (`TdmVoiceSink::kNumSlots` = 8 PCM1690 slots, the 8-group CV calibration tables — hardware facts). The Stage B invariant "voice index == TDM slot == CV group" holds for the first 8 voices; digital voices beyond that render to the stereo codec only. `kMaxMixChannels` (mixer) is a third, unrelated 8.
@@ -468,7 +468,7 @@ Rejected: 4 before 7 (the Track page would have needed a second visit); 6 straig
 8. **Polyphony policy** (§5) — measure first; `poly_limit`, `priority`, track-aware steal.
 9. **FX** — reserved chunk only; no design here.
 
-Stage 4's pad-map piece and stage 7 are independent of 3 and can be done in any order. Stage 6 needs 4. Stage 5 needs nothing but changes the `.wxi` chunks it writes, so it should not trail stage 4 by long. Nothing in Goal B (`digital-voice-audition.md` stages 5–8) waits on any of this except that the sequencer addresses tracks with `NOTE_ADDR_TRACK` from stage 7 on.
+Stage 4's pad-map piece and stage 7 are independent of 3 and can be done in any order. Stage 6 needs 4. Stage 5 needs nothing but changes the `.wxi` chunks it writes, so it should not trail stage 4 by long. Nothing in the remaining sequencer work (`sequencer.md`) waits on any of this except that the sequencer addresses tracks with `NOTE_ADDR_TRACK` from stage 7 on.
 
 ---
 

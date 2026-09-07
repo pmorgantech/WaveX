@@ -25,16 +25,16 @@ structured, and how to build a page.
 > therefore **1280×557 px**.
 >
 > **Input model:** capacitive touch, plus a **rotary encoder** that moves
-> focus between softkeys/list items and clicks to activate, plus a hardware
-> keypad. Every interaction must be reachable by encoder alone — touch is an
-> accelerator, not a requirement. No hover states, no gestures beyond tap and
+> page-defined selection/values and clicks to activate, plus a hardware
+> keypad whose SOFT keys invoke the displayed actions. There is no encoder
+> focus traversal of the softkey bar. Preserve panel access to interactions. No hover states, no gestures beyond tap and
 > scroll, no multi-touch.
 >
-> **Typography:** two faces, nine sizes, and nothing else exists on the
+> **Typography:** two faces, eleven sizes, and nothing else exists on the
 > device — naming another size is a link error. Montserrat for prose at 14
-> (micro), 18 (small), 22 (body), 26 (title) and 30 (heading: page title, row
-> titles, softkey labels). JetBrains Mono for anything read as a number at 14,
-> 18, 26 and 38 (the one hero value a page is about). Use the mono face for
+> (micro), 18 (small), 22 (body), 26 (title), 30 (heading: page title, row
+> titles, softkey labels) and 36. JetBrains Mono for anything read as a number at 14,
+> 18, 26, 38 and 48 (hero values). Use the mono face for
 > values that update live: it is tabular, so a changing digit does not shift
 > the widgets beside it. Roles are named `UI_FONT_*` in `ui_theme.h`; snap a
 > design to the nearest existing step rather than adding a font table.
