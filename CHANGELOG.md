@@ -67,6 +67,9 @@ versioning and release process.
 
 ### Fixed
 
+- Shared WAV header parsing now rejects chunk extents that overflow the
+  representable reader offset instead of wrapping into a later header.
+
 - Sample ▸ Edit: the parameter strip follows `Param >` / `< Param` onto a
   card past the visible four. It was laid out only with the values, so the
   focus ring landed on a hidden card and the strip stayed put until a value

@@ -55,7 +55,7 @@ inline uint32_t DurationMs(const WavInfo& info) {
 enum class ParseResult : uint8_t {
     Ok,
     NotRiffWave,  // missing RIFF/WAVE magic
-    IoError,      // short read or seek failure mid-walk
+    IoError,      // short read, seek failure, or unrepresentable chunk extent
     NoFmtChunk,   // stream ended without a fmt chunk
     NoDataChunk,  // stream ended without a data chunk
     BadFmtChunk,  // fmt chunk smaller than the 16 mandatory bytes
@@ -103,6 +103,16 @@ ParseResult ParseWavHeader(Reader& r, WavInfo& out) {
         }
         const uint32_t csz = detail::le32(chunk_hdr + 4);
         const uint32_t pad = csz & 1u;  // RIFF word alignment (M12)
+        // Reader offsets and WavInfo extents are 32-bit. Widen before
+        // addition: a corrupt UINT32_MAX chunk plus its pad otherwise wraps
+        // back into the header and can make payload bytes look like chunks.
+        // Validate data as well, even when fmt was already found and no
+        // seek is needed. Header-only probes still need no resident payload.
+        const uint64_t chunk_end = static_cast<uint64_t>(r.Tell()) + csz + pad;
+        if (chunk_end > UINT32_MAX) {
+            return ParseResult::IoError;
+        }
+        const uint32_t next_chunk = static_cast<uint32_t>(chunk_end);
 
         if (std::memcmp(chunk_hdr, "fmt ", 4) == 0) {
             if (csz < 16) {
@@ -117,8 +127,7 @@ ParseResult ParseWavHeader(Reader& r, WavInfo& out) {
             out.sample_rate = detail::le32(fmt + 4);
             out.bits_per_sample = detail::le16(fmt + 14);
             fmt_found = true;
-            const uint32_t skip = (csz - 16) + pad;
-            if (skip != 0 && !r.Seek(r.Tell() + skip)) {
+            if (r.Tell() != next_chunk && !r.Seek(next_chunk)) {
                 return ParseResult::IoError;
             }
         } else if (std::memcmp(chunk_hdr, "data", 4) == 0) {
@@ -130,11 +139,11 @@ ParseResult ParseWavHeader(Reader& r, WavInfo& out) {
             }
             // fmt after data is non-canonical but tolerated: skip the
             // payload and keep walking.
-            if (!r.Seek(r.Tell() + csz + pad)) {
+            if (!r.Seek(next_chunk)) {
                 return ParseResult::IoError;
             }
         } else {
-            if (!r.Seek(r.Tell() + csz + pad)) {
+            if (!r.Seek(next_chunk)) {
                 return ParseResult::IoError;
             }
         }

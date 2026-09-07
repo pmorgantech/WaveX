@@ -238,6 +238,77 @@ TEST(WavHeaderParserTest, ZeroLengthDataChunkParses) {
 
 // A corrupt chunk size pointing far past the end of the file must surface
 // as an I/O error (the seek fails), not as a chunk that "parsed".
+// A size of UINT32_MAX plus its RIFF pad wraps to zero in 32-bit
+// arithmetic. The following bytes are inside that claimed payload, never
+// another chunk, even when they happen to contain valid fmt/data headers.
+TEST(WavHeaderParserTest, UnknownChunkExtentCannotWrapToFollowingHeader) {
+    auto wav = RiffHeader();
+    PushTag(wav, "JUNK");
+    PushLe32(wav, UINT32_MAX);
+    PushFmt(wav);
+    PushData(wav, 4);
+
+    MemReader r(wav.data(), wav.size());
+    WavInfo info;
+    EXPECT_EQ(ParseWavHeader(r, info), ParseResult::IoError);
+}
+
+TEST(WavHeaderParserTest, FmtChunkExtentCannotWrap) {
+    auto wav = RiffHeader();
+    PushFmt(wav);
+    // Replace fmt size (offset 16) without allocating its claimed payload.
+    for (size_t i = 16; i < 20; ++i)
+        wav[i] = 0xFF;
+    // The wrapped seek returns to the fmt payload. A data-looking prefix
+    // there must never be accepted as a separate chunk.
+    std::memcpy(wav.data() + 20, "data", 4);
+    wav[24] = 4;
+    wav[25] = wav[26] = wav[27] = 0;
+    PushData(wav, 4);
+
+    MemReader r(wav.data(), wav.size());
+    WavInfo info;
+    EXPECT_EQ(ParseWavHeader(r, info), ParseResult::IoError);
+}
+
+TEST(WavHeaderParserTest, DataBeforeFmtExtentCannotWrap) {
+    auto wav = RiffHeader();
+    PushTag(wav, "data");
+    PushLe32(wav, UINT32_MAX);
+    PushFmt(wav);
+
+    MemReader r(wav.data(), wav.size());
+    WavInfo info;
+    EXPECT_EQ(ParseWavHeader(r, info), ParseResult::IoError);
+}
+
+TEST(WavHeaderParserTest, DataExtentMustFitReaderOffsetsEvenWithoutSeek) {
+    auto wav = RiffHeader();
+    PushFmt(wav);
+    PushTag(wav, "data");
+    PushLe32(wav, UINT32_MAX);
+
+    MemReader r(wav.data(), wav.size());
+    WavInfo info;
+    EXPECT_EQ(ParseWavHeader(r, info), ParseResult::IoError);
+}
+
+// Browse probes contain only the header of large, otherwise valid files.
+// Reject arithmetic overflow without making full payload residency a
+// requirement for parsing their metadata.
+TEST(WavHeaderParserTest, HeaderOnlyProbeAcceptsRepresentableDataExtent) {
+    auto wav = RiffHeader();
+    PushFmt(wav);
+    PushTag(wav, "data");
+    PushLe32(wav, 1000000000u);
+
+    MemReader r(wav.data(), wav.size());
+    WavInfo info;
+    ASSERT_EQ(ParseWavHeader(r, info), ParseResult::Ok);
+    EXPECT_EQ(info.data_offset, 44u);
+    EXPECT_EQ(info.data_size, 1000000000u);
+}
+
 TEST(WavHeaderParserTest, ChunkSizeBeyondFileIsIoError) {
     auto wav = RiffHeader();
     PushTag(wav, "LIST");
