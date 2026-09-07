@@ -4,6 +4,44 @@ Unscheduled work and open decisions. Promote an item to
 [`roadmap.md`](roadmap.md) when it is required by a phase gate. Completed work
 belongs in [`CHANGELOG.md`](../CHANGELOG.md) and git history, not here.
 
+## Firmware audit remediation — 2026-09-06
+
+This is the active task list for the audit of first-party
+`firmware/esp32`, `firmware/daisy`, and `firmware/shared`. Vendor code is
+checked at the API/DMA boundaries used by WaveX. Priorities describe concrete
+failure modes; hardware-only gates stay in the roadmap. Remove each task when
+its fix and regression checks are committed.
+
+- [ ] **High — resident sample ownership.** Retain the selected Pool sample
+  before releasing its previous imported Instrument in `SfzLoader::BindSample`;
+  assigning an unpinned sample from that same Track can currently free it.
+  Prove sample data and references survive replacement (principles 1, 5).
+- [ ] **High — callback handoffs.** Replace delay-based retirement with a
+  callback acknowledgement and publish telemetry/modulation as complete
+  snapshots; see roadmap Phase 0. Exercise stopped/delayed callback and
+  concurrent publication, preserving a bounded nonblocking callback
+  (principles 1, 2, 5, 6).
+- [ ] **High — waveform response ownership.** Synchronize
+  `EnvelopeFetcher` request identity and chunk publication. A ready flag does
+  not protect a struct still being read while a request is replaced. Cover
+  replacement, abort, timeout, late packets, and concurrent reception
+  (principles 2, 5, 6).
+- [ ] **High — frontend task lifetime.** Preserve `UITask` after a timed-out
+  stop; its task may still dereference the object. Check listener allocation
+  failure and calibration handoffs at the same ownership boundaries
+  (principles 2, 5, 6).
+- [ ] **High — malformed file boundaries.** Reject wrapping WAV chunk
+  offsets and truncated WXI documents instead of seeking backwards or
+  loading a partial Instrument successfully. Validate zone identity and
+  distinguish unique sample paths from hash collisions. Use exact-sized
+  malformed fixtures and sanitizers (principles 2, 5).
+- [ ] **Medium — documentation and test truthfulness.** Reconcile as-built
+  sequencer, panel, storage, transport and version claims; consolidate
+  overlapping navigation, audition-work-order and test-remediation docs.
+  Remove completed tasks. Record which production translation units run in
+  host tests and which timing/DMA properties still require hardware
+  (principles 13, 15).
+
 ## Performance, build, and transport
 
 ### Page-entry render cost

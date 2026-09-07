@@ -13,6 +13,9 @@ versioning and release process.
 
 ### Changed
 
+- Started a first-party firmware audit and recorded its remediation task list in
+  `docs/backlog.md`.
+
 - **One waveform preview, shared by the Sample tabs.** Browse, Edit and
   Record each ran their own request/receive/render cycle for the trace they
   show; Browse's never fired for a selection made by scrolling, and Record
