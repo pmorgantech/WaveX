@@ -56,7 +56,7 @@ void Spi_CheckTimeout(void);
 void Spi_GetStats(spi_link_stats_t* stats);
 void Spi_DebugState(void);
 
-// Poll the ATTN level and trigger a receive if asserted (fallback when EXTI edge is missed)
+// Observe ATTN/READY without starting DMA; the foreground service owns all transfers.
 bool Spi_PollAttnLevel(void);
 
 }  // namespace Comm

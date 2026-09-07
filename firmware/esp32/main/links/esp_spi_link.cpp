@@ -1,832 +1,340 @@
 #include "esp_spi_link.h"
 
-#include <assert.h>
-#include <string.h>
+#if WAVEX_SPI_LINK_ENABLED
 
-#include "../../shared/config/logging_config.h"
-#include "../../shared/config/pin_config.h"
-#include "../../shared/spi_protocol/protocol.h"
-#include "../comm/packet_router.h"
-#include "../inter_mcu.h"
+#include "comm/packet_router.h"
 #include "driver/gpio.h"
 #include "driver/spi_slave.h"
-#include "esp_cache.h"  // For cache coherency operations
-#include "esp_err.h"
+#include "esp_attr.h"
 #include "esp_heap_caps.h"
-#include "esp_intr_alloc.h"
 #include "esp_log.h"
-#include "esp_rom_crc.h"  // For hardware CRC support
-#include "esp_rom_sys.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
-#include "link_config.h"
-#include "soc/spi_periph.h"
+#include "inter_mcu.h"
 
-#include "../../shared/spi_protocol/attn_watchdog.hpp"
-#include "../../shared/spi_protocol/sequence_tracker.hpp"
+#include "spi_protocol/spi_transport.hpp"
+#include <atomic>
+#include <cstdlib>
+#include <cstring>
+
+namespace {
 
 using namespace WaveX::Protocol;
+using namespace WaveX::Protocol::Spi;
 
-#if WAVEX_SPI_LINK_ENABLED
+constexpr char kTag[] = "spi_link";
+// P4 L2 cache line size is selected by sdkconfig. DMA buffers must own whole
+// lines, even though the IDF driver performs the actual cache maintenance.
+constexpr size_t kDmaAlignment = CONFIG_CACHE_L2_CACHE_LINE_SIZE;
+static_assert(kFrameBytes % kDmaAlignment == 0, "DMA frames must occupy whole cache lines");
+SemaphoreHandle_t mutex = nullptr;  // Kept across stop/start; senders may still reference it.
+TxQueue outgoing;
+uint16_t next_sequence = 1;
+SequenceTracker rx_sequence;
+spi_link_stats_t stats{};
+uint8_t* tx_dma = nullptr;
+uint8_t* rx_dma = nullptr;
+spi_slave_transaction_t transaction{};
+std::atomic<bool> running{false};
+std::atomic<bool> stop_requested{false};
+bool initialized = false;
+bool driver_initialized = false;
+WaveX::Comm::PacketRouter* router = nullptr;
+void (*packet_callback)(const uint8_t*, size_t) = nullptr;
 
-#ifdef __cplusplus
+void IRAM_ATTR SlaveReady(spi_slave_transaction_t*) {
+    // queue_trans only enqueues work. This callback means hardware is loaded.
+    gpio_set_level(static_cast<gpio_num_t>(WAVEX_ESP_ATTN_OUT), 1);
+}
+
+void IRAM_ATTR SlaveComplete(spi_slave_transaction_t*) {
+    // Every frame, including an empty or short one, consumes one READY assertion.
+    gpio_set_level(static_cast<gpio_num_t>(WAVEX_ESP_ATTN_OUT), 0);
+}
+
+RxResult ProcessRx(size_t actual_bytes) {
+    size_t packet_bytes = 0;
+    const auto result = InspectFrame(rx_dma, actual_bytes, rx_sequence, packet_bytes);
+    if (result != RxResult::Packet)
+        return result;
+    xSemaphoreTake(mutex, portMAX_DELAY);
+    auto* target = router;
+    auto callback = packet_callback;
+    xSemaphoreGive(mutex);
+    // Dispatch outside the queue mutex: handlers may enqueue responses.
+    if (target)
+        target->route_packet(rx_dma, packet_bytes);
+    else if (callback)
+        callback(rx_dma, packet_bytes);
+    return result;
+}
+
+void SlaveTask(void*) {
+    while (!stop_requested.load(std::memory_order_acquire)) {
+        xSemaphoreTake(mutex, portMAX_DELAY);
+        const bool prepared = outgoing.Begin(tx_dma);
+        xSemaphoreGive(mutex);
+        if (!prepared)
+            break;  // Internal invariant failure: retain memory rather than alias DMA.
+
+        std::memset(rx_dma, 0, kFrameBytes);
+        transaction = {};
+        transaction.length = kFrameBytes * 8;
+        transaction.tx_buffer = tx_dma;
+        transaction.rx_buffer = rx_dma;
+        const auto queued = spi_slave_queue_trans(WAVEX_ESP_SPI_HOST, &transaction, 0);
+        if (queued != ESP_OK) {
+            // Queue failure never transferred ownership to IDF.
+            xSemaphoreTake(mutex, portMAX_DELAY);
+            outgoing.Finish(false);
+            xSemaphoreGive(mutex);
+            vTaskDelay(pdMS_TO_TICKS(10));
+            continue;
+        }
+
+        // Timeout is only a wait result, NOT cancellation. Keep this exact
+        // descriptor, both buffers and its queue-head reservation until IDF
+        // returns it. New messages stay behind even an in-flight empty frame.
+        spi_slave_transaction_t* completed = nullptr;
+        for (;;) {
+            const auto result =
+                spi_slave_get_trans_result(WAVEX_ESP_SPI_HOST, &completed, pdMS_TO_TICKS(50));
+            if (result == ESP_OK && completed == &transaction)
+                break;
+            if (result != ESP_ERR_TIMEOUT) {
+                ESP_LOGE(kTag, "Unexpected SPI completion; retaining DMA ownership");
+                vTaskDelay(pdMS_TO_TICKS(10));
+            }
+        }
+
+        // trans_len is the number of bits actually clocked. length is capacity.
+        const bool full_frame = completed->trans_len == kFrameBytes * 8;
+        const auto rx_result = ProcessRx(full_frame ? kFrameBytes : 0);
+        xSemaphoreTake(mutex, portMAX_DELAY);
+        if (outgoing.Finish(full_frame))
+            ++stats.packets_sent;
+        if (rx_result == RxResult::Packet)
+            ++stats.packets_received;
+        if (rx_result == RxResult::Invalid)
+            ++stats.crc_errors;
+        ++stats.irq_count;
+        stats.last_activity_ms = static_cast<uint32_t>(esp_timer_get_time() / 1000);
+        xSemaphoreGive(mutex);
+    }
+    running.store(false, std::memory_order_release);
+    vTaskDelete(nullptr);
+}
+
+void FreeBuffers() {
+    std::free(tx_dma);
+    std::free(rx_dma);
+    tx_dma = nullptr;
+    rx_dma = nullptr;
+}
+
+}  // namespace
+
 extern "C" {
-#endif
 
-// -----------------------------
-// Packet & CRC
-// -----------------------------
-// Local SPI-transaction payload cap (was protocol.h's misleadingly-global
-// MAX_PAYLOAD_SIZE=220, review M10). NOTE for SPI revival: 220 bytes cannot
-// carry the ~1.3 KB browse pages this link was supposed to bulk-transfer -
-// raise it (protocol packets go up to 2042 B of payload) when re-enabling.
-static constexpr size_t MAX_PAYLOAD_SIZE = 220;
-
-static const char* TAG = "esp_spi_link";
-
-#define ESP32_INTER_SPI 1
-
-#define SPI_OPERATIONS_TIMEOUT_MS 1200
-
-// Use new unified packet system
-#define calculate_wave_crc ProtocolHandler::CalculateWaveXCrc
-#define validate_wave_packet ProtocolHandler::ValidateWaveXPacket
-#define create_wave_packet ProtocolHandler::CreateWaveXPacket
-#define parse_wave_packet ProtocolHandler::ParseWaveXPacket
-
-// Packet router reference (injected via spi_link_set_packet_router)
-static WaveX::Comm::PacketRouter* s_packet_router = nullptr;
-
-// SPI slave transaction buffers - DMA-capable and aligned
-// Use triple buffering for efficient packet processing
-#define BUFFER_POOL_SIZE 3
-static uint8_t* s_rx_buffers[BUFFER_POOL_SIZE];
-static uint8_t* s_tx_buffers[BUFFER_POOL_SIZE];
-static spi_slave_transaction_t s_transactions[BUFFER_POOL_SIZE];
-static int s_current_tx_index = 0;
-static int s_current_rx_index = 0;
-static int s_processing_index = -1;  // Index of buffer being processed (-1 = none)
-static uint32_t s_packet_counter = 0;
-static uint32_t s_last_packet_hash = 0;
-// Track which queued TX buffers contain a real message (vs zeros)
-static bool s_tx_has_message[BUFFER_POOL_SIZE] = {false, false, false};
-// Ensure we only queue a single real message at any time to avoid duplicates
-static bool s_real_msg_queued = false;
-
-// Sequence number tracking for duplicate/out-of-order/reboot-resync
-// detection - shared implementation, see sequence_tracker.hpp.
-static SequenceTracker s_seq_tracker;
-
-// ATTN-stuck-high recovery (roadmap Phase 1 item 7) - see attn_watchdog.hpp.
-static AttnWatchdog s_attn_watchdog;
-
-// Track whether the last received packet was a one-way packet
-static bool s_last_packet_was_one_way = false;
-
-// ============================================================================
-// ESP32 to Daisy Message Queue
-// ============================================================================
-
-#define MSG_QUEUE_SIZE 8
-typedef struct {
-    uint8_t packet_data[MAX_PKT_SIZE];
-    size_t packet_size;
-    uint8_t seq_num;
-    bool pending;
-} msg_queue_entry_t;
-
-// TX queue for messages to send TO Daisy. Guarded by s_spi_mutex on every
-// access; plain ints rather than volatile, which would be a second,
-// misleading claim of synchronization on top of the mutex that actually
-// provides it (docs/esp32p4_coding_guide.md SS9).
-static msg_queue_entry_t msg_queue[MSG_QUEUE_SIZE];
-static int msg_queue_head = 0;
-static int msg_queue_tail = 0;
-static int msg_queue_count = 0;
-static uint8_t next_seq_num =
-    1;  // Sequence number for message tracking (0 reserved for no message)
-
-static SemaphoreHandle_t s_spi_mutex = NULL;
-
-static void spi_slave_task(void* pvParameters);
-static esp_err_t allocate_dma_buffers(void);
-static void free_dma_buffers(void);
-static void spi_post_trans_cb(spi_slave_transaction_t* trans);
-
-// Check for duplicate/out-of-order packets using sequence numbers. Returns
-// true if the packet should be dropped.
-static bool is_duplicate_packet(uint16_t seq_num) {
-    SequenceTracker::Result result = s_seq_tracker.Evaluate(seq_num);
-    switch (result) {
-        case SequenceTracker::Result::Accept:
-            return false;
-        case SequenceTracker::Result::ResyncAccept:
-            ESP_LOGW(TAG,
-                     "Peer resync detected: seq=%u (expected>=%u) - treating as reboot, not "
-                     "corruption (resync count: %u)",
-                     seq_num,
-                     s_seq_tracker.ExpectedSeq(),
-                     s_seq_tracker.ResyncCount());
-            return false;
-        case SequenceTracker::Result::Duplicate:
-            ESP_LOGW(TAG,
-                     "Duplicate packet detected: seq=%u (duplicate count: %u)",
-                     seq_num,
-                     s_seq_tracker.DuplicateCount());
-            return true;
-        case SequenceTracker::Result::OutOfOrder:
-        default:
-            ESP_LOGW(TAG,
-                     "Out-of-order packet: seq=%u (out-of-order count: %u)",
-                     seq_num,
-                     s_seq_tracker.OutOfOrderCount());
-            return true;
-    }
-}
-
-static void init_packet_router() {
-    // Packet router is now set via spi_link_set_packet_router()
-    // This function is kept for backward compatibility but does nothing
-}
-
-static esp_err_t allocate_dma_buffers(void) {
-    ESP_LOGI(TAG, "Allocating DMA-capable buffers");
-
-    for (int i = 0; i < BUFFER_POOL_SIZE; i++) {
-        s_rx_buffers[i] = (uint8_t*)heap_caps_aligned_alloc(
-            64, MAX_PKT_SIZE, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
-        if (!s_rx_buffers[i]) {
-            ESP_LOGE(TAG, "Failed to allocate RX buffer %d", i);
-            free_dma_buffers();
-            return ESP_ERR_NO_MEM;
-        }
-        memset(s_rx_buffers[i], 0, MAX_PKT_SIZE);
-        ESP_LOGD(TAG, "Allocated RX buffer %d at %p", i, s_rx_buffers[i]);
-    }
-
-    for (int i = 0; i < BUFFER_POOL_SIZE; i++) {
-        s_tx_buffers[i] = (uint8_t*)heap_caps_aligned_alloc(
-            64, MAX_PKT_SIZE, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
-        if (!s_tx_buffers[i]) {
-            ESP_LOGE(TAG, "Failed to allocate TX buffer %d", i);
-            free_dma_buffers();
-            return ESP_ERR_NO_MEM;
-        }
-        memset(s_tx_buffers[i], 0, MAX_PKT_SIZE);
-        ESP_LOGD(TAG, "Allocated TX buffer %d at %p", i, s_tx_buffers[i]);
-    }
-
-    ESP_LOGI(TAG,
-             "DMA buffers allocated successfully (%d buffers, %d bytes each)",
-             BUFFER_POOL_SIZE,
-             MAX_PKT_SIZE);
-    return ESP_OK;
-}
-
-static void free_dma_buffers(void) {
-    ESP_LOGI(TAG, "Freeing DMA-capable buffers");
-
-    for (int i = 0; i < BUFFER_POOL_SIZE; i++) {
-        if (s_rx_buffers[i]) {
-            free(s_rx_buffers[i]);
-            s_rx_buffers[i] = nullptr;
-        }
-        if (s_tx_buffers[i]) {
-            free(s_tx_buffers[i]);
-            s_tx_buffers[i] = nullptr;
-        }
-    }
-}
-
-// SPI post-transaction callback - called when CS goes inactive (transaction done)
-// This is the right time to clear ATTN if we just transmitted a real message
-static void spi_post_trans_cb(spi_slave_transaction_t* trans) {
-    // Check if this transaction had a real message (stored in user field)
-    if (trans && trans->user == (void*)1) {
-        // Clear ATTN immediately - the message has been clocked out
-        gpio_set_level((gpio_num_t)WAVEX_ESP_ATTN_OUT, 0);
-        s_attn_watchdog.MarkCleared();
-    }
-}
-
-// Signal Daisy for urgent control data via WAVEX_ESP_ATTN_OUT (active high; see pin_config.h).
-static void signal_daisy_urgent(bool urgent) {
-#ifdef ESP_PLATFORM
-    esp_err_t ret = gpio_set_level((gpio_num_t)WAVEX_ESP_ATTN_OUT, urgent ? 1 : 0);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to set GPIO%d level: %s", WAVEX_ESP_ATTN_OUT, esp_err_to_name(ret));
-        return;
-    }
-    ESP_LOGI(TAG, "************GPIO%d level set to %d", WAVEX_ESP_ATTN_OUT, urgent ? 1 : 0);
-
-    esp_rom_delay_us(100);  // Allow time for signal to stabilize before any operations
-
-    if (urgent) {
-        // Roadmap Phase 1 item 7 (ATTN-stuck-high recovery): start the
-        // watchdog clock. If spi_post_trans_cb never fires to clear it (the
-        // Daisy never clocks the transaction), spi_slave_task's loop force-
-        // deasserts ATTN once the watchdog trips, instead of staying
-        // wedged high forever.
-        s_attn_watchdog.MarkAsserted(static_cast<uint32_t>(esp_timer_get_time() / 1000));
-        WAVEX_LOGD(SPI_LINK,
-                   "Signaling Daisy for urgent control (GPIO%d HIGH) - queue_count=%d",
-                   WAVEX_ESP_ATTN_OUT,
-                   msg_queue_count);
-    } else {
-        s_attn_watchdog.MarkCleared();
-        WAVEX_LOGD(SPI_LINK,
-                   "Cleared Daisy urgent signal (GPIO%d LOW) - queue_count=%d",
-                   WAVEX_ESP_ATTN_OUT,
-                   msg_queue_count);
-    }
-#endif
-}
-
-static void handle_large_packet(const uint8_t* packet_data, size_t packet_len) {
-#ifdef ESP_PLATFORM
-    if (packet_len < 6) { // Minimum size for unified packet (4 header + 2 CRC)
-        ESP_LOGE(TAG, "Large packet too short: %d bytes", (int)packet_len);
-        return;
-    }
-
-    if (!validate_wave_packet(packet_data, packet_len)) {
-        ESP_LOGE(TAG, "Large packet CRC validation failed");
-        return;
-    }
-
-    uint8_t msg_type, flags;
-    uint16_t sequence_number;
-    uint8_t payload[MAX_PAYLOAD_SIZE];  // Max payload size
-    size_t payload_size;
-
-    if (!parse_wave_packet(packet_data, packet_len, msg_type, payload, payload_size, sequence_number, flags)) {
-        ESP_LOGE(TAG, "Failed to parse unified packet");
-        return;
-    }
-
-    ESP_LOGI(TAG,
-             "Large packet: msg_type=0x%02X, flags=0x%02X, seq=%u, payload_size=%d, total_size=%d",
-             msg_type,
-             flags,
-             sequence_number,
-             (int)payload_size,
-             (int)packet_len);
-
-    if (is_duplicate_packet(sequence_number)) {
-        ESP_LOGW(TAG, "Dropping duplicate/out-of-order packet: seq=%u", sequence_number);
-        return;
-    }
-
-    if (s_packet_router) {
-        s_packet_router->route_packet(packet_data, packet_len);
-    } else {
-        ESP_LOGE(TAG, "PacketRouter not set - cannot route packet");
-    }
+esp_err_t spi_link_init() {
+#if !WAVEX_SPI_DMA_ENABLED
+    return ESP_ERR_NOT_SUPPORTED;
 #else
-    (void)packet_data;
-    (void)packet_len;
-#endif
-}
-
-// ============================================================================
-// SPI Link Functions
-// ============================================================================
-
-// Returns true if a message was found and prepared, false if sending zeros.
-static bool prepare_tx_buffer_without_consuming(uint8_t* tx_buf, size_t len) {
-    // Always clear the response buffer first
-    if (tx_buf && len > 0) {
-        memset(tx_buf, 0, len);
+    // Lifecycle functions are called serially by the application owner.
+    if (!mutex)
+        mutex = xSemaphoreCreateMutex();
+    if (!mutex)
+        return ESP_ERR_NO_MEM;
+    xSemaphoreTake(mutex, portMAX_DELAY);
+    if (initialized) {
+        xSemaphoreGive(mutex);
+        return ESP_ERR_INVALID_STATE;
     }
-
-    bool message_found = false;
-    uint8_t seq_num = 0;
-    size_t packet_size = 0;
-
-    if (xSemaphoreTake(s_spi_mutex, portMAX_DELAY) == pdTRUE) {
-        if (msg_queue_count > 0) {
-            // Get the next message from queue (with bounds checking) - DON'T consume it yet
-            int idx = msg_queue_head;
-            if (idx >= MSG_QUEUE_SIZE) {
-                ESP_LOGE(TAG, "Invalid queue head index: %d", idx);
-            } else {
-                msg_queue_entry_t* entry = &msg_queue[idx];
-                if (!entry->pending) {
-                    ESP_LOGD(TAG, "Message at head not pending, preparing zeros");
-                } else {
-                    // Copy the pre-created packet data before exiting critical section
-                    packet_size = entry->packet_size;
-                    seq_num = entry->seq_num;
-                    message_found = true;
-
-                    if (packet_size <= len) {
-                        memcpy(tx_buf, entry->packet_data, packet_size);
-
-                        uint8_t msg_type = entry->packet_data[1];  // Message type is at offset 1
-                        ESP_LOGI(TAG,
-                                 "DEBUG - Sending pre-created packet: msg_type=0x%02X (%s), "
-                                 "size=%d, seq=%d (queue_count=%d)",
-                                 msg_type,
-                                 (msg_type == WaveX::Protocol::MSG_BROWSE_REQ) ? "MSG_BROWSE_REQ"
-                                 : (msg_type == WaveX::Protocol::MSG_ACK)      ? "MSG_ACK"
-                                                                               : "OTHER",
-                                 (int)packet_size,
-                                 seq_num,
-                                 msg_queue_count);
-                        if (msg_type == WaveX::Protocol::MSG_BROWSE_REQ) {
-                            ESP_LOGI(TAG,
-                                     "BROWSE_REQ instrumentation: seq=%d pending queue slots=%d "
-                                     "head=%d tail=%d",
-                                     seq_num,
-                                     msg_queue_count,
-                                     msg_queue_head,
-                                     msg_queue_tail);
-                        }
-                    } else {
-                        ESP_LOGE(TAG,
-                                 "Packet size %d exceeds buffer size %d",
-                                 (int)packet_size,
-                                 (int)len);
-                        packet_size = 0;
-                        message_found = false;
-                    }
-                }
-            }
-        }
-
-        xSemaphoreGive(s_spi_mutex);
+    tx_dma = static_cast<uint8_t*>(heap_caps_aligned_alloc(
+        kDmaAlignment, kFrameBytes, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+    rx_dma = static_cast<uint8_t*>(heap_caps_aligned_alloc(
+        kDmaAlignment, kFrameBytes, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+    if (!tx_dma || !rx_dma) {
+        FreeBuffers();
+        xSemaphoreGive(mutex);
+        return ESP_ERR_NO_MEM;
     }
-
-    if (!message_found) {
-        // If the last packet was one-way, don't send a response
-        if (s_last_packet_was_one_way) {
-            s_last_packet_was_one_way = false;
-            return false;
-        }
-
-        // Send all zeros instead of an ACK packet: this prevents ACK ping-pong
-        // between ESP32 and Daisy. The buffer is already zeroed above.
-        ESP_LOGD(TAG, "No messages in queue (count=%d), sending all zeros", msg_queue_count);
+    gpio_config_t gpio{};
+    gpio.pin_bit_mask = uint64_t{1} << WAVEX_ESP_ATTN_OUT;
+    gpio.mode = GPIO_MODE_OUTPUT;
+    gpio.intr_type = GPIO_INTR_DISABLE;
+    auto result = gpio_config(&gpio);
+    if (result == ESP_OK)
+        result = gpio_set_level(static_cast<gpio_num_t>(WAVEX_ESP_ATTN_OUT), 0);
+    if (result != ESP_OK) {
+        FreeBuffers();
+        xSemaphoreGive(mutex);
+        return result;
     }
-
-    return message_found;
-}
-
-static void clear_transmitted_message_from_queue() {
-    if (xSemaphoreTake(s_spi_mutex, portMAX_DELAY) == pdTRUE) {
-        if (msg_queue_count == 0) {
-            xSemaphoreGive(s_spi_mutex);
-            return;
-        }
-
-        int idx = msg_queue_head;
-        if (idx >= MSG_QUEUE_SIZE) {
-            xSemaphoreGive(s_spi_mutex);
-            ESP_LOGE(TAG, "Invalid queue head index: %d", idx);
-            return;
-        }
-
-        msg_queue_entry_t* entry = &msg_queue[idx];
-        if (!entry->pending) {
-            xSemaphoreGive(s_spi_mutex);
-            ESP_LOGW(TAG, "Message at head not pending");
-            return;
-        }
-
-        entry->pending = false;
-        msg_queue_head = (msg_queue_head + 1) % MSG_QUEUE_SIZE;
-        msg_queue_count = msg_queue_count - 1;
-
-        // Note: ATTN is now cleared in post_trans_cb, not here
-        // This eliminates the race condition where Daisy sees ATTN high during transfer
-
-        xSemaphoreGive(s_spi_mutex);
-
-        ESP_LOGD(TAG, "Cleared transmitted message from TX queue, remaining: %d", msg_queue_count);
-    }
-}
-
-// ============================================================================
-// Public API Functions
-// ============================================================================
-
-esp_err_t spi_link_init(void) {
-    ESP_LOGI(TAG, "Initializing SPI link");
-
-    s_spi_mutex = xSemaphoreCreateMutex();
-    if (s_spi_mutex == NULL) {
-        ESP_LOGE(TAG, "Failed to create SPI mutex");
-        return ESP_FAIL;
-    }
-
-    init_packet_router();
-
-    esp_err_t ret = allocate_dma_buffers();
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to allocate DMA buffers: %s", esp_err_to_name(ret));
-        return ret;
-    }
-
-    // Configure attention GPIO (output to Daisy)
-    gpio_config_t attn_config = {};
-    attn_config.pin_bit_mask = (1ULL << WAVEX_ESP_ATTN_OUT);
-    attn_config.mode = GPIO_MODE_OUTPUT;
-    attn_config.pull_up_en = GPIO_PULLUP_DISABLE;
-    attn_config.pull_down_en = GPIO_PULLDOWN_DISABLE;
-    attn_config.intr_type = GPIO_INTR_DISABLE;
-
-    ret = gpio_config(&attn_config);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to configure attention GPIO: %s", esp_err_to_name(ret));
-        free_dma_buffers();
-        return ret;
-    }
-
-    ESP_LOGI(TAG, "GPIO%d configured as output for attention signal", WAVEX_ESP_ATTN_OUT);
-
-    // Initialize attention signal to low (no urgent data)
-    gpio_set_level((gpio_num_t)WAVEX_ESP_ATTN_OUT, 0);
-
-    int initial_level = gpio_get_level((gpio_num_t)WAVEX_ESP_ATTN_OUT);
-    ESP_LOGI(TAG, "GPIO%d initial level: %s", WAVEX_ESP_ATTN_OUT, initial_level ? "HIGH" : "LOW");
-
-    ESP_LOGI(TAG, "SPI link initialized successfully");
+    outgoing.Reset();
+    rx_sequence = SequenceTracker{};
+    next_sequence = 1;
+    stats = {};
+    initialized = true;
+    stop_requested.store(false, std::memory_order_release);
+    xSemaphoreGive(mutex);
     return ESP_OK;
+#endif
 }
 
-esp_err_t spi_link_start(void) {
-    ESP_LOGI(TAG, "Starting SPI link");
-    ESP_LOGI(TAG, "DEBUG: About to configure SPI slave");
-
-    spi_bus_config_t buscfg = {};
-    buscfg.mosi_io_num = WAVEX_ESP_SPI_MOSI;
-    buscfg.miso_io_num = WAVEX_ESP_SPI_MISO;
-    buscfg.sclk_io_num = WAVEX_ESP_SPI_SCLK;
-    buscfg.quadwp_io_num = -1;
-    buscfg.quadhd_io_num = -1;
-    buscfg.max_transfer_sz = MAX_PKT_SIZE;
-
-    spi_slave_interface_config_t slavecfg = {};
-    slavecfg.mode = 0;  // SPI mode 0 (CPOL=0, CPHA=0)
-    slavecfg.spics_io_num = WAVEX_ESP_SPI_CS;
-    slavecfg.queue_size = 3;
-    slavecfg.flags = 0;
-    slavecfg.post_setup_cb = NULL;
-    slavecfg.post_trans_cb = spi_post_trans_cb;  // Clear ATTN when transaction starts
-
-    ESP_LOGI(TAG, "DEBUG: About to call spi_slave_initialize");
-    esp_err_t ret = spi_slave_initialize(WAVEX_ESP_SPI_HOST, &buscfg, &slavecfg, SPI_DMA_CH_AUTO);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to initialize SPI slave: %s", esp_err_to_name(ret));
-        return ret;
+esp_err_t spi_link_start() {
+    if (!mutex)
+        return ESP_ERR_INVALID_STATE;
+    xSemaphoreTake(mutex, portMAX_DELAY);
+    if (!initialized || driver_initialized || running.load(std::memory_order_acquire)) {
+        xSemaphoreGive(mutex);
+        return ESP_ERR_INVALID_STATE;
     }
-    ESP_LOGI(TAG, "DEBUG: spi_slave_initialize completed successfully");
-
-    ESP_LOGI(TAG, "SPI slave initialized successfully");
-    ESP_LOGI(TAG,
-             "SPI pins: SCLK=%d, MOSI=%d, MISO=%d, CS=%d",
-             WAVEX_ESP_SPI_SCLK,
-             WAVEX_ESP_SPI_MOSI,
-             WAVEX_ESP_SPI_MISO,
-             WAVEX_ESP_SPI_CS);
-
-    BaseType_t task_ret =
-        xTaskCreate(spi_slave_task,
-                    "spi_slave",
-                    16384,  // Stack size - increased for callback chain (file browser + LVGL)
-                    NULL,   // Parameters
-                    5,      // Priority
-                    NULL    // Task handle
-        );
-
-    if (task_ret != pdPASS) {
-        ESP_LOGE(TAG, "Failed to create SPI slave task");
-        return ESP_FAIL;
+    spi_bus_config_t bus{};
+    bus.mosi_io_num = WAVEX_ESP_SPI_MOSI;
+    bus.miso_io_num = WAVEX_ESP_SPI_MISO;
+    bus.sclk_io_num = WAVEX_ESP_SPI_SCLK;
+    bus.quadwp_io_num = -1;
+    bus.quadhd_io_num = -1;
+    bus.data4_io_num = -1;
+    bus.data5_io_num = -1;
+    bus.data6_io_num = -1;
+    bus.data7_io_num = -1;
+    bus.max_transfer_sz = kFrameBytes;
+    // IDF owns cache sync. No IRAM-only interrupt allocation is requested.
+    bus.intr_flags = 0;
+    spi_slave_interface_config_t slave{};
+    slave.spics_io_num = WAVEX_ESP_SPI_CS;
+    slave.mode = 0;
+    slave.queue_size = 1;
+    slave.post_setup_cb = SlaveReady;
+    slave.post_trans_cb = SlaveComplete;
+    const auto result = spi_slave_initialize(WAVEX_ESP_SPI_HOST, &bus, &slave, SPI_DMA_CH_AUTO);
+    if (result != ESP_OK) {
+        xSemaphoreGive(mutex);
+        return result;
     }
-
-    ESP_LOGI(TAG, "SPI slave task created successfully");
+    driver_initialized = true;
+    stop_requested.store(false, std::memory_order_release);
+    running.store(true, std::memory_order_release);
+    if (xTaskCreate(SlaveTask, "spi_slave", 16384, nullptr, 5, nullptr) != pdPASS) {
+        running.store(false, std::memory_order_release);
+        if (spi_slave_free(WAVEX_ESP_SPI_HOST) == ESP_OK)
+            driver_initialized = false;
+        xSemaphoreGive(mutex);
+        return ESP_ERR_NO_MEM;
+    }
+    xSemaphoreGive(mutex);
     return ESP_OK;
-}
-
-// SPI slave task - handles continuous communication with Daisy
-static void spi_slave_task(void* pvParameters) {
-    ESP_LOGI(TAG, "SPI slave task started");
-    ESP_LOGI(TAG, "DEBUG: SPI slave task is running and ready to receive transactions");
-
-    ESP_LOGI(TAG, "=== INITIALIZING FIRST TRANSACTION ===");
-
-    while (1) {
-        // Roadmap Phase 1 item 7 (ATTN-stuck-high recovery): if ATTN has
-        // been asserted longer than AttnWatchdog::kForceDeassertMs without
-        // spi_post_trans_cb ever clearing it (the Daisy never clocked the
-        // transaction), force it low and log rather than leaving the link
-        // wedged until a manual ESP32 restart.
-        uint32_t now_ms = static_cast<uint32_t>(esp_timer_get_time() / 1000);
-        if (s_attn_watchdog.ShouldForceDeassert(now_ms)) {
-            ESP_LOGE(TAG,
-                     "ATTN stuck high for >%ums with no transaction completing - forcing low "
-                     "(link may have wedged; Daisy possibly rebooted mid-transaction)",
-                     (unsigned)AttnWatchdog::kForceDeassertMs);
-            gpio_set_level((gpio_num_t)WAVEX_ESP_ATTN_OUT, 0);
-            s_attn_watchdog.MarkCleared();
-        }
-
-        // Rotate to next buffer set FIRST (triple buffering)
-        // This ensures we never reuse a buffer that's still queued
-        s_current_tx_index = (s_current_tx_index + 1) % BUFFER_POOL_SIZE;
-        s_current_rx_index = (s_current_rx_index + 1) % BUFFER_POOL_SIZE;
-
-        int tx_idx = s_current_tx_index;
-        int rx_idx = s_current_rx_index;
-
-        bool has_message = prepare_tx_buffer_without_consuming(s_tx_buffers[tx_idx], MAX_PKT_SIZE);
-
-        memset(&s_transactions[rx_idx], 0, sizeof(s_transactions[rx_idx]));
-        s_transactions[rx_idx].length = MAX_PKT_SIZE * 8;
-        s_transactions[rx_idx].tx_buffer = s_tx_buffers[tx_idx];
-        s_transactions[rx_idx].rx_buffer = s_rx_buffers[rx_idx];
-        s_transactions[rx_idx].user = (void*)(uintptr_t)(has_message ? 1 : 0);
-
-        // Clear RX buffer before transaction to prevent stale data
-        memset(s_rx_buffers[rx_idx], 0, MAX_PKT_SIZE);
-
-        esp_err_t ret = spi_slave_queue_trans(
-            WAVEX_ESP_SPI_HOST, &s_transactions[rx_idx], pdMS_TO_TICKS(SPI_OPERATIONS_TIMEOUT_MS));
-        if (ret != ESP_OK) {
-            ESP_LOGE(TAG, "Failed to queue SPI transaction: %s", esp_err_to_name(ret));
-            continue;
-        }
-
-        // Signal Daisy ONLY if we have actual data to send (not zeros)
-        if (has_message) {
-            // Small delay to ensure SPI slave hardware is ready after queueing
-            esp_rom_delay_us(50);  // 50us delay for slave setup
-            signal_daisy_urgent(true);
-            ESP_LOGI(TAG, "Signaled Daisy AFTER transaction queued - has real message");
-        }
-
-        ESP_LOGI(TAG, "SPI transaction queued, waiting for result...");
-        spi_slave_transaction_t* trans_result;
-        // Use SHORT timeout (50ms) so we can re-check for new messages quickly
-        // If browse request arrives while waiting, we'll timeout and re-queue with new data
-        ret = spi_slave_get_trans_result(WAVEX_ESP_SPI_HOST, &trans_result, pdMS_TO_TICKS(50));
-        if (ret != ESP_OK) {
-            if (ret == ESP_ERR_TIMEOUT) {
-                // Timeout is NORMAL - check if we now have a message to send.
-                // Unlike every other access to msg_queue_count, this one has to
-                // take the mutex explicitly rather than inheriting it from an
-                // enclosing prepare/consume call.
-                bool now_has_message = false;
-                if (xSemaphoreTake(s_spi_mutex, (TickType_t)10) == pdTRUE) {
-                    now_has_message = (msg_queue_count > 0);
-                    xSemaphoreGive(s_spi_mutex);
-                }
-                if (now_has_message && !has_message) {
-                    ESP_LOGI(TAG, "New message arrived while waiting! Re-queuing with data...");
-                    // Don't continue - loop will re-prepare and re-queue
-                } else {
-                    ESP_LOGD(TAG,
-                             "SPI slave transaction timeout - waiting for Daisy (has_msg=%d)",
-                             has_message);
-                }
-            } else {
-                ESP_LOGE(TAG, "SPI slave transaction failed: %s", esp_err_to_name(ret));
-            }
-            continue;
-        }
-#if WAVEX_MCU_LINK_PACKET_DEBUG
-        ESP_LOGI(TAG, "SPI transaction completed successfully - processing RX data...");
-#endif
-        // Now that Daisy has received our message, consume it from the queue
-        if (has_message) {
-            clear_transmitted_message_from_queue();
-            ESP_LOGI(TAG, "Consumed message from queue after successful transmission");
-        }
-
-        size_t rx_len = trans_result->length / 8;  // Convert bits to bytes
-        if (rx_len > 0) {
-            s_packet_counter++;
-#if WAVEX_MCU_LINK_PACKET_DEBUG
-            ESP_LOGI(TAG, "SPI transaction completed successfully - processing RX data...");
-#endif
-            uint8_t* rx_data = (uint8_t*)trans_result->rx_buffer;
-
-#if WAVEX_MCU_LINK_PACKET_DEBUG
-            ESP_LOGI(
-                TAG,
-                "RX: Received %d bytes, first 8 bytes: %02X %02X %02X %02X %02X %02X %02X %02X",
-                (int)rx_len,
-                rx_data[0],
-                rx_data[1],
-                rx_data[2],
-                rx_data[3],
-                rx_data[4],
-                rx_data[5],
-                rx_data[6],
-                rx_data[7]);
-#endif
-            uint8_t size_code = rx_data[0] & PKT_SIZE_MASK;
-            size_t expected_packet_size = ProtocolHandler::GetPacketSizeFromCode(size_code);
-
-            if (expected_packet_size == 0 || expected_packet_size > rx_len) {
-                ESP_LOGW(
-                    TAG,
-                    "Invalid/unsupported packet size: size_code=0x%02X, expected=%d, rx_len=%d",
-                    size_code,
-                    (int)expected_packet_size,
-                    (int)rx_len);
-            } else {
-#if WAVEX_MCU_LINK_PACKET_DEBUG
-                ESP_LOGI(TAG,
-                         "Using protocol-indicated size: %d bytes (size_code=0x%02X)",
-                         (int)expected_packet_size,
-                         size_code);
-#endif
-                if (validate_wave_packet(rx_data, expected_packet_size)) {
-#if WAVEX_MCU_LINK_PACKET_DEBUG
-                    ESP_LOGI(TAG, "CRC validation PASSED, routing packet type=0x%02X", rx_data[1]);
-#endif
-                    if (s_packet_router) {
-                        s_packet_router->route_packet(rx_data, expected_packet_size);
-                    } else {
-                        ESP_LOGE(TAG, "PacketRouter not set - cannot route packet");
-                    }
-                } else {
-                    ESP_LOGW(TAG,
-                             "CRC validation FAILED for packet type=0x%02X size=%d",
-                             rx_data[1],
-                             (int)expected_packet_size);
-                }
-            }
-        } else {
-#if WAVEX_MCU_LINK_PACKET_DEBUG
-            ESP_LOGI(TAG, "RX: No data received (rx_len=0)");
-#endif
-        }
-#if WAVEX_MCU_LINK_PACKET_DEBUG
-        ESP_LOGI(TAG, "Transaction complete, looping to queue next transaction...");
-#endif
-    }
-
-    // Should never reach here
-    ESP_LOGE(TAG, "=== SPI SLAVE TASK EXITED UNEXPECTEDLY ===");
 }
 
 int spi_link_send(uint16_t type, const void* payload, uint16_t len) {
-    if (len == 0 || len > MAX_PAYLOAD_SIZE) {
-        ESP_LOGE(
-            TAG, "spi_link_send: Invalid payload length %d (max=%d)", len, (int)MAX_PAYLOAD_SIZE);
+    if (!mutex || type > UINT8_MAX || len > kFrameBytes - 6 || (len && !payload))
+        return -1;
+    if (xSemaphoreTake(mutex, pdMS_TO_TICKS(10)) != pdTRUE)
+        return -1;
+    if (!initialized || stop_requested.load(std::memory_order_acquire)) {
+        xSemaphoreGive(mutex);
         return -1;
     }
+    uint8_t packet[kFrameBytes];
+    const size_t bytes = ProtocolHandler::CreateWaveXPacket(
+        packet, sizeof(packet), static_cast<MessageType>(type), payload, len, next_sequence, 0);
+    const bool queued = bytes != 0 && outgoing.Push(packet, bytes);
+    if (queued)
+        next_sequence = NextSequence(next_sequence);
+    xSemaphoreGive(mutex);
+    return queued ? len : -1;
+}
 
-    if (!payload) {
-        ESP_LOGE(TAG, "spi_link_send: Invalid payload");
-        return -1;
+esp_err_t spi_link_stop() {
+    if (!mutex)
+        return ESP_OK;
+    stop_requested.store(true, std::memory_order_release);
+    // IDF provides no cancellation for a queued full-duplex slave transaction.
+    // Ask the task to drain it. A disconnected master can make this time out;
+    // in that case retain driver/buffers and call stop again after completion.
+    const auto started = esp_timer_get_time();
+    while (running.load(std::memory_order_acquire)) {
+        if (esp_timer_get_time() - started >= 100000)
+            return ESP_ERR_TIMEOUT;
+        vTaskDelay(pdMS_TO_TICKS(1));
     }
-
-    if (xSemaphoreTake(s_spi_mutex, (TickType_t)10) == pdTRUE) {
-        if (msg_queue_count >= MSG_QUEUE_SIZE) {
-            ESP_LOGW(TAG, "Message queue full, dropping packet");
-            xSemaphoreGive(s_spi_mutex);
-            return -1;
-        }
-
-        if (msg_queue_tail >= MSG_QUEUE_SIZE) {
-            ESP_LOGE(TAG, "spi_link_send: Invalid queue tail index: %d", msg_queue_tail);
-            xSemaphoreGive(s_spi_mutex);
-            return -1;
-        }
-
-        // Create packet immediately when queuing
-        msg_queue_entry_t* entry = &msg_queue[msg_queue_tail];
-
-        ESP_LOGI(TAG,
-                 "Creating packet: type=0x%02X, payload_len=%d, seq=%d, flags=0",
-                 type,
-                 len,
-                 next_seq_num);
-        size_t packet_size =
-            ProtocolHandler::CreateWaveXPacket(entry->packet_data,
-                                               MAX_PKT_SIZE,
-                                               static_cast<WaveX::Protocol::MessageType>(type),
-                                               payload,
-                                               len,
-                                               next_seq_num,
-                                               0  // flags = 0 for regular messages
-            );
-
-        if (packet_size == 0) {
-            ESP_LOGE(TAG, "Failed to create packet for message type 0x%02X", type);
-            xSemaphoreGive(s_spi_mutex);
-            return -1;
-        }
-
-        entry->packet_size = packet_size;
-        entry->seq_num = next_seq_num++;
-        entry->pending = true;
-
-#if WAVEX_MCU_LINK_PACKET_DEBUG
-        ESP_LOGI(
-            TAG,
-            "Created packet: type=0x%02X, size=%d, seq=%d",
-            type,
-            (int)packet_size,
-            entry->seq_num);
-        ESP_LOGI(TAG,
-                 "Packet bytes: %02X %02X %02X %02X %02X %02X %02X %02X",
-                 entry->packet_data[0],
-                 entry->packet_data[1],
-                 entry->packet_data[2],
-                 entry->packet_data[3],
-                 entry->packet_data[4],
-                 entry->packet_data[5],
-                 entry->packet_data[6],
-                 entry->packet_data[7]);
-#endif
-        msg_queue_tail = (msg_queue_tail + 1) % MSG_QUEUE_SIZE;
-        msg_queue_count++;
-
-        xSemaphoreGive(s_spi_mutex);
-
-        return len;  // Return original payload length
-    } else {
-        ESP_LOGE(TAG, "Failed to take SPI mutex");
-        return -1;
+    xSemaphoreTake(mutex, portMAX_DELAY);
+    if (outgoing.Owned()) {
+        xSemaphoreGive(mutex);
+        return ESP_ERR_INVALID_STATE;
     }
-}
-
-int spi_link_recv(void** out) {
-    // This function is not implemented in the unified packet system
-    // as we now use the packet router for incoming messages
-    (void)out;
-    return 0;
-}
-
-void spi_link_recycle(void* p, int is_rx) {
-    // This function is not implemented in the unified packet system
-    (void)p;
-    (void)is_rx;
-}
-
-void spi_link_get_stats(spi_link_stats_t* stats) {
-    if (!stats)
-        return;
-
-    memset(stats, 0, sizeof(spi_link_stats_t));
-
-    stats->packets_sent = 0;      // TODO: implement packet counting
-    stats->packets_received = 0;  // TODO: implement packet counting
-    stats->crc_errors = 0;        // TODO: implement error counting
-    stats->irq_count = 0;         // TODO: implement IRQ counting
-    stats->rx_pool_empty = 0;     // TODO: implement pool empty counting
-    stats->last_activity_ms = 0;  // TODO: implement activity tracking
-}
-
-void spi_link_log_stats(void) {
-    spi_link_stats_t stats;
-    spi_link_get_stats(&stats);
-
-    ESP_LOGI(TAG, "SPI Link Stats:");
-    ESP_LOGI(TAG, "  Packets sent: %lu", (unsigned long)stats.packets_sent);
-    ESP_LOGI(TAG, "  Packets received: %lu", (unsigned long)stats.packets_received);
-    ESP_LOGI(TAG, "  CRC errors: %lu", (unsigned long)stats.crc_errors);
-    ESP_LOGI(TAG, "  IRQ count: %lu", (unsigned long)stats.irq_count);
-    ESP_LOGI(TAG, "  RX pool empty: %lu", (unsigned long)stats.rx_pool_empty);
-    ESP_LOGI(TAG, "  Last activity: %lu ms", (unsigned long)stats.last_activity_ms);
-}
-
-bool spi_link_is_active(void) {
-    return true;  // TODO: implement proper active state tracking
-}
-
-void spi_link_set_packet_callback(void (*callback)(const uint8_t* data, size_t length)) {
-    // This function is not implemented in the unified packet system
-    // as we now use the packet router for incoming messages
-    (void)callback;
-}
-
-void spi_link_set_packet_router(WaveX::Comm::PacketRouter* packet_router) {
-    s_packet_router = packet_router;
-    if (s_packet_router) {
-        s_packet_router->set_stats_callback(
-            [](uint8_t packet_type) { inter_mcu_increment_packet_stat(packet_type); });
+    if (driver_initialized) {
+        const auto result = spi_slave_free(WAVEX_ESP_SPI_HOST);
+        if (result != ESP_OK) {
+            xSemaphoreGive(mutex);
+            return result;
+        }
+        driver_initialized = false;
     }
-}
-
-esp_err_t spi_link_stop(void) {
-    ESP_LOGI(TAG, "Stopping SPI link");
-
-    // Free DMA buffers
-    free_dma_buffers();
-
-    ESP_LOGI(TAG, "SPI link stopped");
+    gpio_set_level(static_cast<gpio_num_t>(WAVEX_ESP_ATTN_OUT), 0);
+    FreeBuffers();
+    initialized = false;
+    xSemaphoreGive(mutex);
     return ESP_OK;
 }
 
-#ifdef __cplusplus
+int spi_link_recv(void** out) {
+    if (out)
+        *out = nullptr;
+    return 0;  // Packets are dispatched directly by the task.
 }
-#endif
+
+void spi_link_recycle(void*, int) {}
+
+void spi_link_get_stats(spi_link_stats_t* out) {
+    if (!out)
+        return;
+    *out = {};
+    if (!mutex)
+        return;
+    xSemaphoreTake(mutex, portMAX_DELAY);
+    *out = stats;
+    xSemaphoreGive(mutex);
+}
+
+void spi_link_log_stats() {
+    spi_link_stats_t snapshot{};
+    spi_link_get_stats(&snapshot);
+    ESP_LOGI(kTag,
+             "SPI TX=%lu RX=%lu invalid=%lu",
+             static_cast<unsigned long>(snapshot.packets_sent),
+             static_cast<unsigned long>(snapshot.packets_received),
+             static_cast<unsigned long>(snapshot.crc_errors));
+}
+
+bool spi_link_is_active() {
+    return running.load(std::memory_order_acquire) &&
+           !stop_requested.load(std::memory_order_acquire);
+}
+
+void spi_link_set_packet_callback(void (*callback)(const uint8_t*, size_t)) {
+    if (mutex)
+        xSemaphoreTake(mutex, portMAX_DELAY);
+    packet_callback = callback;
+    if (mutex)
+        xSemaphoreGive(mutex);
+}
+
+void spi_link_set_packet_router(WaveX::Comm::PacketRouter* packet_router) {
+    if (mutex)
+        xSemaphoreTake(mutex, portMAX_DELAY);
+    router = packet_router;
+    if (router)
+        router->set_stats_callback(
+            [](uint8_t packet_type) { inter_mcu_increment_packet_stat(packet_type); });
+    if (mutex)
+        xSemaphoreGive(mutex);
+}
+
+}  // extern "C"
 
 #endif  // WAVEX_SPI_LINK_ENABLED

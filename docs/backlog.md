@@ -65,20 +65,22 @@ and an identical eight-voice plus SD-streaming soak shows a worthwhile DWT
 improvement with zero underruns. Record flash time, boot-to-audio latency, map
 usage, and callback min/average/max for both profiles.
 
-### SPI-link revival is gated on six recorded defects
+### SPI-link revival requires hardware verification
 
-UART remains the live transport. Before enabling `WAVEX_SPI_LINK_ENABLED`, fix
-and hardware-verify these defects in `esp_spi_link.cpp`:
+UART remains the live transport. The September 2026 SPI audit fixes descriptor
+ownership, duplex RX publication, parser capacity, sequence/length handling,
+READY signaling and bounded recovery in the compiled-out adapters. It does not
+enable SPI or change the Phase 2 transport decision.
 
-- driver-owned transaction descriptors and RX buffers are reused after timeout;
-- the RX path has no sequence gate;
-- an uninitialized capacity can overflow a 220-byte stack buffer;
-- the TX sequence wraps through reserved value zero;
-- configured and actual transfer lengths are confused; and
-- the slave ISR callback has not been audited for IRAM safety.
+The remaining gate is startup/routing integration, a measured READY/CS timing
+proof, bidirectional DMA under audio/SD load, fault injection and peer-reboot
+recovery. Define application retry behavior for CRC rejection and a peer that
+never reasserts READY. The Daisy recovery path requires exclusive ownership of
+libDaisy's SPI DMA streams; resolve Stage B CV sharing before combining them.
 
-Use [`spi-notes.md`](spi-notes.md) for the DMA/slave bring-up gate. Keep UART
-as the fallback until the link is bench-proven.
+Use [spi-notes.md](spi-notes.md#verification-and-remaining-gates) for evidence,
+limits and the bench gate. The GPIO continuity test passed; high-speed signal
+integrity and the corrected DMA path have not been verified on hardware.
 
 ### Streaming CRC recovery
 

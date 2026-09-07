@@ -1,6 +1,7 @@
 #ifndef WAVEX_SPI_LINK_H
 #define WAVEX_SPI_LINK_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 #include "link_config.h"
@@ -32,6 +33,9 @@ extern "C" {
 
 esp_err_t spi_link_init(void);
 esp_err_t spi_link_start(void);
+// Lifecycle calls are serialized by the application owner. A stop timeout
+// retains DMA ownership; retry after the master completes the pending frame.
+esp_err_t spi_link_stop(void);
 int spi_link_send(uint16_t type, const void* payload, uint16_t len);
 int spi_link_recv(void** out);
 void spi_link_recycle(void* p, int is_rx);

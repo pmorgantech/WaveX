@@ -9,8 +9,8 @@ live UART transport.
 > **Status:** The WaveX transport of record remains full-duplex UART at 2 Mbaud.
 > There is a single shared flag, `WAVEX_SPI_LINK_ENABLED`, currently `0` and
 > governing both sides — the ESP32 header defers to the shared config rather
-> than carrying its own. The dormant implementation is not safe to revive by
-> changing that flag alone.
+> than carrying its own. The source fixes below remain compiled out; they
+> do not establish hardware bring-up or enable SPI startup on ESP32.
 
 Pin assignments remain exclusively in
 [`pin_config.h`](../firmware/shared/config/pin_config.h), and transport flags
@@ -24,6 +24,8 @@ document does not duplicate either table.
 - [Small libDaisy fork changes](#small-libdaisy-fork-changes)
 - [What WaveX attempted](#what-wavex-attempted)
 - [Why the old link was unstable](#why-the-old-link-was-unstable)
+- [Retained transport contract](#retained-transport-contract)
+- [Verification and remaining gates](#verification-and-remaining-gates)
 - [Other Daisy SPI consumers](#other-daisy-spi-consumers)
 - [Recommendation for WaveX](#recommendation-for-wavex)
 - [Related](#related)
@@ -110,93 +112,125 @@ libDaisy DMA scheduler.
 
 ## What WaveX attempted
 
-The dormant WaveX link is **not** the slave arrangement above. Its present
-topology is:
+The retained implementation uses Daisy SPI1 as master and ESP32-P4 SPI3 as
+slave, mode 0, full duplex, with GPIO chip select on Daisy and ATTN from ESP32.
+The optional reverse-role experiment above is a separate future design.
 
-- Daisy SPI1 master
-- ESP32-P4 SPI3 host in slave mode
-- mode 0, full duplex, software-controlled chip select on the Daisy
-- an ESP-to-Daisy ATTN GPIO for slave-originated traffic
-- logical packets of 32 to 2048 bytes carried in fixed 2048-byte DMA
-  transactions on the active DMA path
+Both sides use the existing packet codec in
+[protocol.h](../firmware/shared/spi_protocol/protocol.h). Physical framing
+and ownership rules are centralized in
+[spi_transport.hpp](../firmware/shared/spi_protocol/spi_transport.hpp).
+The device adapters are
+[daisy_spi_link.cpp](../firmware/daisy/src/comm/daisy_spi_link.cpp) and
+[esp_spi_link.cpp](../firmware/esp32/main/links/esp_spi_link.cpp).
 
-The Daisy code is in
-[`daisy_spi_link.cpp`](../firmware/daisy/src/comm/daisy_spi_link.cpp); the P4
-code is in
-[`esp_spi_link.cpp`](../firmware/esp32/main/links/esp_spi_link.cpp).
-
-This means the libDaisy slave NSS-pulse concern was not active in the failed
-WaveX configuration. The project used SPI1, not SPI6, and its DMA buffers were
-eventually moved into DMA-safe memory. Those are useful exclusions: the
-remaining failure evidence points primarily to transaction ownership,
-handshake races, recovery, and interrupt policy in the WaveX link layer.
+The libDaisy slave NSS-pulse concern was therefore not active in the failed
+WaveX configuration. The project used SPI1, not SPI6. The reviewed DMA request
+mapping and TX/RX argument forwarding were correct. The source evidence
+instead identified ownership, handshake, receive publication and recovery
+defects.
 
 ## Why the old link was unstable
 
-The repository history moves from “working bidirectional SPI, with some
-bugginess,” through “DMA hangs sometimes,” to “SPI link still buggy” before the
-UART migration. The current dormant source retains several mechanisms that can
-produce exactly those symptoms.
+The September 2026 audit reproduced these mechanisms with mocked DMA drivers.
+The fixes remain behind the disabled SPI configuration.
 
-### ESP32 transaction ownership is broken
+ESP buffer ownership, completion length and setup callback semantics follow
+the [ESP-IDF SPI slave API](https://docs.espressif.com/projects/esp-idf/en/v5.5/esp32p4/api-reference/peripherals/spi_slave.html).
 
-`spi_slave_task()` queues a transaction, waits only 50 ms for its result, and
-continues around the loop on timeout. A timeout does not cancel or return the
-queued transaction. The next iteration rotates to another pool entry and
-queues again; after enough timeouts it also reuses descriptors and buffers that
-the SPI driver may still own.
+| Previous failure | Source correction |
+|---|---|
+| ESP recycled descriptors and buffers after a result timeout, although IDF still owned them. | One descriptor and one TX/RX pair stay reserved until that exact descriptor returns. A timeout repeats only the wait. |
+| Completion of an older empty frame consumed a newly queued message. | A frame reserves its own queue head, including the fact that it was empty; only its completion can consume that head. |
+| Daisy send DMA discarded simultaneous RX, and another launch could overwrite pending RX. | Every transfer follows one duplex lifecycle. Foreground parsing and dispatch complete before either buffer is released. |
+| Daisy EXTI prepared buffers and launched DMA concurrently with foreground send. | EXTI records a falling-edge generation only. One foreground owner reserves, prepares and launches DMA. |
+| ATTN meant “message queued,” which did not establish slave readiness; requests could lose their only rising edge. | The IDF setup callback asserts READY after hardware setup. The completion callback clears it for every frame. Daisy polls the level and consumes each readiness cycle once. |
+| Daisy timeout cleared a software flag without stopping DMA; some transfers had no deadline. | Every transfer has a deadline. Recovery masks only SPI/DMA IRQs, stops requests and streams, resets SPI, then waits without blocking until both streams are disabled before restoring HAL/library state. |
+| TX was consumed at launch, or retained after successful piggyback delivery. | Both directions retain their outgoing head until full physical completion. Short/failed transfers retain it for retry. |
+| Daisy passed an uninitialized parser capacity; ESP retained a dead unsafe small-buffer parser. | Daisy supplies explicit capacity. The unused ESP parser is removed; both RX paths validate the frame and apply sequence gating before dispatch. |
+| ESP's eight-bit sequence counter emitted reserved zero every 256 packets. | The counter spans the wire's sixteen bits and skips zero on wrap. |
+| ESP used descriptor capacity as received length. | Only the actual completed bit count can establish a full physical frame. Partial frames are discarded and cannot consume TX. |
+| libDaisy restored SPI1 IRQ priority 0 above audio. | Initialization and recovery apply the audio-first priority policy to SPI1 and both DMA IRQs. |
 
-Consequences include a full driver queue, stale zero-filled transactions ahead
-of a newly arrived message, DMA buffer corruption, and apparent random hangs.
-This is the main source-level explanation for the observed instability. The
-six revival blockers recorded in [`backlog.md`](backlog.md) add missing
-sequence gating, unsafe capacity handling, sequence wrap, actual-versus-configured
-length confusion, and an unaudited ISR callback path. All must be resolved as
-one ownership design before bench revival.
+This corrects concrete ways the link could stall, lose traffic or deliver
+duplicates. It does not prove which particular mechanism caused each
+historical freeze. That requires hardware traces.
 
-### The ATTN handshake can lose a request
+## Retained transport contract
 
-The Daisy ATTN interrupt calls `Spi_ReceivePacket()` immediately. If a Daisy TX
-DMA operation is already active, receive is rejected. ATTN remains level-high,
-so there is no second rising edge, and the main loop does not call the existing
-level-poll retry function. The P4 eventually deasserts ATTN through its watchdog
-without delivering the message.
+The packet layout and version are unchanged. Each fixed physical frame carries
+one logical packet in each direction, or zeros when that sender has no packet.
+The frame size, poll interval and transfer deadline live in spi_transport.hpp.
 
-Starting a large `memset`, packet preparation, DMA initialization, and logging
-from the EXTI handler also makes the interrupt path much larger than it needs to
-be. The ISR should publish a flag; the foreground transport state machine
-should own the transfer.
+ESP queues an empty frame when idle and leaves it immutable. Daisy periodically
+clocks READY frames, including empty ones; a message arriving behind an already
+armed empty frame is sent on the next frame. READY is a hardware ownership
+signal, so there is no delay-based readiness assumption or ATTN watchdog that
+withdraws a driver-owned descriptor.
 
-### Daisy timeout recovery does not recover the peripheral
+Daisy consumes each READY assertion once. Its falling-edge counter retains a
+short deassertion that the foreground might miss; level polling also handles
+an observed low level and a slave already ready at startup. An unstable
+level/edge sample defers launch. No SPI launch, packet preparation, parsing or
+logging runs in EXTI or the audio callback.
 
-The Daisy timeout helper is not called by the main loop. Even if it were, it
-only deasserts chip select and clears one software in-flight flag. It does not
-abort/reset the HAL DMA transaction, clear libDaisy's global DMA owner, cover
-the duplex in-flight state, or reclaim a queued job. A single real DMA/HAL
-wedge can therefore make all later transfers wait forever.
+Recovery has two deliberate limits:
 
-### SPI can preempt audio at the highest priority
+- Daisy must exclusively own libDaisy's shared SPI DMA stream pair. Stage A
+  meets this condition; the dormant adapter rejects a combined Stage B SPI CV
+  configuration at compile time. Recovery clears the library scheduler only
+  after both streams stop. It never resets the DMA controller used by UART.
+- If hardware never stops, Daisy retains the buffers and stays offline while
+  returning from foreground service. After an abort it requires fresh READY;
+  a peer stuck high cannot be assumed ready. ESP stop likewise returns a
+  timeout without freeing driver-owned memory when the master does not finish
+  its pending frame. Retry stop after the descriptor returns.
 
-`HAL_SPI_MspInit()` assigns the SPI peripheral IRQ priority 0. WaveX lowers the
-DMA stream priorities before SPI initialization, but it never lowers the SPI1
-peripheral IRQ after libDaisy raises it. A busy or faulty link can therefore
-preempt the audio callback, contrary to the project's audio-first interrupt
-hierarchy. This is a plausible contributor to the historical playback freezes,
-although only a hardware trace can prove which freezes it caused.
+Daisy buffers occupy aligned, noncacheable DMA SRAM. ESP allocates complete
+internal DMA/cache lines using the configured P4 cache-line size; ESP-IDF owns
+cache maintenance. The callbacks only set READY and request no IRAM-only
+interrupt allocation. UART, audio, application routing and feature defaults
+are untouched.
 
-### Framing and delivery semantics are inconsistent
+Completion establishes that a full frame was clocked, not application-level
+acknowledgment. CRC rejection is detected, but this transport does not promise
+automatic delivery after every corruption or reset. Any future production
+revival must define and test that retry policy along with startup integration.
 
-The DMA path clocks 2048 bytes even for a small logical packet. Outgoing
-messages are removed when DMA launch succeeds rather than when wire completion
-succeeds, while a message piggybacked on an ATTN-driven duplex transfer is not
-consumed from the same queue. These rules allow loss or duplicate delivery
-around errors. The P4 path also caps locally created payloads below the size of
-the browse pages SPI was meant to accelerate.
+## Verification and remaining gates
 
-The conclusion is not that SPI or libDaisy DMA is inherently unreliable. The
-dormant link combines a complicated bidirectional ATTN protocol, unclear DMA
-buffer ownership, incomplete cancellation, and inconsistent completion
-semantics. A small fixed-frame transport proof avoids all of those at once.
+The host suite compiles the actual Daisy and ESP adapters against hardware
+mocks, in addition to testing their shared ownership state. Regression cases
+cover repeated ESP timeouts, empty-frame completion, short transfers, retained
+TX, RX dispatch during full duplex, reentrant queueing, EXTI races, stuck DMA
+enable bits, recovery ordering, priority restoration, duplicate rejection,
+all packet sizes and sequence wrap. These tests can run under ASan/UBSan via
+the shared test CMake sanitizer option.
+
+Separate scratch builds compile the dormant paths using the real ARM and
+ESP-IDF toolchains. The repository configuration and normal build outputs
+keep SPI disabled. Compilation and mocked registers are not timing or soak
+verification.
+
+A debugger GPIO test on 2026-09-07 observed SCLK, MOSI, MISO, CS and ATTN at the
+opposite MCU in their natural directions. Each line passed eight low/high
+states with opposite receiver pulls; all five peer inputs were checked at each
+state (40 driven states, 200 observations), with no observed cross-coupling.
+GPIO configuration was restored and both CPUs resumed. No SPI peripheral was
+enabled or firmware flashed for this test. It establishes static connectivity,
+not signal integrity at SPI clock rates.
+
+Before any revival:
+
+1. Make an explicit transport/startup decision; ESP application startup still
+   starts UART only.
+2. Verify READY versus CS/clock timing and physical full-duplex patterns on the
+   bench, then exercise simultaneous application traffic.
+3. Inject short transfers, CRC errors, DMA errors, disconnects and either
+   MCU rebooting. Verify recovery and application retry semantics.
+4. Run audio/SD load with DWT timing and underrun/error counters over a long
+   soak. Confirm the exclusive SPI DMA ownership assumption for the intended
+   hardware configuration.
 
 ## Other Daisy SPI consumers
 
@@ -245,8 +279,8 @@ If a measurement justifies revisiting SPI:
 4. Require a zero-error soak, audio-underrun counters, DWT/logic-analyzer timing,
    peer-reboot recovery, and simultaneous CV-update testing before choosing a
    production topology.
-5. If the one-day fixed-frame proof is not clean, stop. Do not debug the dormant
-   2,000-line link layer or rewrite the SPI driver first.
+5. Keep the experiment separate from the live UART configuration until the
+   measured gate passes. Source fixes alone do not authorize enabling SPI.
 
 The planned CV DAC bus is therefore a valid additional reason to avoid SPI for
 the MCU link, but not because the H750 lacks multiple SPI peripherals. The real

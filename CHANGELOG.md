@@ -89,6 +89,14 @@ versioning and release process.
 
 ### Fixed
 
+- Harden the dormant inter-MCU SPI DMA paths: retain driver-owned descriptors
+  through timeouts, process both directions before releasing buffers, use
+  hardware READY signaling, recover Daisy DMA without blocking audio, and fix
+  parser capacity, actual-length checks, sequence wrap and duplicate delivery.
+  Regression tests cover shared state and both device adapters. Both SPI flags
+  remain disabled; live UART behavior is unchanged. Hardware DMA verification
+  remains a separate gate.
+
 - Sample load failures display the instrument-import busy reason consistently.
 
 - Calibration responses publish complete snapshots before the UI consumes them.

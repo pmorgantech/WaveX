@@ -132,6 +132,30 @@ function(add_wavex_shared_test test_source)
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
     )
 
+    # Compile the actual dormant device source against hardware-only mocks.
+    # Generated forwarding headers keep the mock surface in one file per MCU.
+    if(test_name STREQUAL "spi_daisy_device_test" OR test_name STREQUAL "spi_esp_device_test")
+        if(test_name STREQUAL "spi_daisy_device_test")
+            set(spi_platform daisy)
+            target_compile_definitions(${test_name} PRIVATE DAISY_PLATFORM=1)
+            set(spi_headers config/link_config.h daisy_seed.h comm/log_ring.h
+                daisy_core.h per/gpio.h per/spi.h stm32h7xx_hal.h sys/system.h)
+        else()
+            set(spi_platform esp)
+            target_compile_definitions(${test_name} PRIVATE ESP_PLATFORM=1)
+            set(spi_headers link_config.h comm/packet_router.h inter_mcu.h
+                driver/gpio.h driver/spi_slave.h esp_err.h esp_attr.h esp_heap_caps.h
+                esp_log.h esp_timer.h freertos/FreeRTOS.h freertos/semphr.h freertos/task.h)
+        endif()
+        set(spi_mock_dir "${CMAKE_CURRENT_BINARY_DIR}/spi_${spi_platform}_mocks")
+        foreach(header IN LISTS spi_headers)
+            file(GENERATE OUTPUT "${spi_mock_dir}/${header}"
+                 CONTENT "#include \"spi_${spi_platform}_mock.hpp\"\n")
+        endforeach()
+        target_include_directories(${test_name} BEFORE PRIVATE
+            "${spi_mock_dir}" "${CMAKE_CURRENT_SOURCE_DIR}/mocks")
+    endif()
+
     gtest_discover_tests(${test_name})
 endfunction()
 

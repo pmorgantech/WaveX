@@ -20,8 +20,8 @@ changing system behavior.
    compiled for the filter comparison; add other kernels only when used. Revisit only when upstream moves or such a kernel
    requires a newer version. Update libDaisy only for a
    Phase 3 need or a released upstream tag.
-4. The live transport is UART. SPI revival remains blocked by the six defects
-   in [backlog.md](backlog.md#spi-link-revival-is-gated-on-six-recorded-defects).
+4. The live transport is UART. Dormant SPI source fixes do not satisfy the
+   [hardware revival gate](backlog.md#spi-link-revival-requires-hardware-verification).
 
 **Gate:** clean `make all` and `make test`; SD soak passes.
 

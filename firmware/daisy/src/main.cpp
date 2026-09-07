@@ -632,148 +632,7 @@ int main(void) {
     WAVEX_LOG_DAISY(INTER_MCU_LINK, "=== COMMUNICATION INIT START ===");
 
 #if WAVEX_SPI_LINK_ENABLED
-// Add debug to confirm SPI init is reached
-#if WAVEX_MCU_LINK_DEBUG
-    WAVEX_LOG_DAISY(INTER_MCU_LINK, "Entering SPI init in main.");
-#endif
-
-// Ensure SPI peripheral system is initialized
-#if WAVEX_MCU_LINK_DEBUG
-    WAVEX_LOG_DAISY(INTER_MCU_LINK, "About to call dsy_spi_global_init");
-#endif
-    dsy_spi_global_init();
-#if WAVEX_MCU_LINK_DEBUG
-    WAVEX_LOG_DAISY(INTER_MCU_LINK, "dsy_spi_global_init completed");
-#endif
-
-    // Use libDaisy SPI1 master path (Daisy is MASTER, ESP32 is SLAVE)
-    daisy::SpiHandle::Config spi_conf;
-#if WAVEX_MCU_LINK_DEBUG
-    WAVEX_LOG_DAISY(INTER_MCU_LINK, "Created SPI config object");
-#endif
-
-    // Use configuration macros from pin_config.h and link_config.h
-    spi_conf.periph = (daisy::SpiHandle::Config::Peripheral::SPI_1);  // WAVEX_DAISY_SPI_PERIPH
-#if WAVEX_MCU_LINK_DEBUG
-    WAVEX_LOG_DAISY(INTER_MCU_LINK, "Set SPI peripheral to SPI_1");
-#endif
-
-    spi_conf.mode = daisy::SpiHandle::Config::Mode::MASTER;
-#if WAVEX_MCU_LINK_DEBUG
-    WAVEX_LOG_DAISY(INTER_MCU_LINK, "Set SPI mode to MASTER");
-#endif
-
-    spi_conf.direction = daisy::SpiHandle::Config::Direction::TWO_LINES;
-#if WAVEX_MCU_LINK_DEBUG
-    WAVEX_LOG_DAISY(INTER_MCU_LINK, "Set SPI direction to TWO_LINES");
-#endif
-
-    spi_conf.datasize = 8;
-#if WAVEX_MCU_LINK_DEBUG
-    WAVEX_LOG_DAISY(INTER_MCU_LINK, "Set SPI datasize to 8");
-#endif
-
-    spi_conf.clock_polarity = daisy::SpiHandle::Config::ClockPolarity::LOW;
-#if WAVEX_MCU_LINK_DEBUG
-    WAVEX_LOG_DAISY(INTER_MCU_LINK, "Set SPI clock polarity to LOW");
-#endif
-
-    spi_conf.clock_phase = daisy::SpiHandle::Config::ClockPhase::ONE_EDGE;
-#if WAVEX_MCU_LINK_DEBUG
-    WAVEX_LOG_DAISY(INTER_MCU_LINK, "Set SPI clock phase to ONE_EDGE");
-#endif
-
-    spi_conf.nss = daisy::SpiHandle::Config::NSS::SOFT;
-#if WAVEX_MCU_LINK_DEBUG
-    WAVEX_LOG_DAISY(INTER_MCU_LINK, "Set SPI NSS to SOFT");
-#endif
-
-    spi_conf.baud_prescaler =
-        daisy::SpiHandle::Config::BaudPrescaler::PS_8;  // Unused in slave mode
-#if WAVEX_MCU_LINK_DEBUG
-    WAVEX_LOG_DAISY(INTER_MCU_LINK, "Set SPI baud prescaler to PS_8");
-#endif
-
-    spi_conf.pin_config.sclk = hw.GetPin(WAVEX_DAISY_SPI_SCK);
-#if WAVEX_MCU_LINK_DEBUG
-    WAVEX_LOG_DAISY(
-        INTER_MCU_LINK, "Set SPI SCLK pin to %d (from pin_config.h)", WAVEX_DAISY_SPI_SCK);
-#endif
-
-    spi_conf.pin_config.mosi = hw.GetPin(WAVEX_DAISY_SPI_MOSI);
-#if WAVEX_MCU_LINK_DEBUG
-    WAVEX_LOG_DAISY(
-        INTER_MCU_LINK, "Set SPI MOSI pin to %d (from pin_config.h)", WAVEX_DAISY_SPI_MOSI);
-#endif
-
-    spi_conf.pin_config.miso = hw.GetPin(WAVEX_DAISY_SPI_MISO);
-#if WAVEX_MCU_LINK_DEBUG
-    WAVEX_LOG_DAISY(
-        INTER_MCU_LINK, "Set SPI MISO pin to %d (from pin_config.h)", WAVEX_DAISY_SPI_MISO);
-#endif
-
-    spi_conf.pin_config.nss = hw.GetPin(WAVEX_DAISY_SPI_CS);
-#if WAVEX_MCU_LINK_DEBUG
-    WAVEX_LOG_DAISY(
-        INTER_MCU_LINK, "Set SPI NSS pin to %d (from pin_config.h)", WAVEX_DAISY_SPI_CS);
-#endif
-
-#if WAVEX_MCU_LINK_DEBUG
-    WAVEX_LOG_DAISY(INTER_MCU_LINK, "About to call spi_handle.Init");
-#endif
-
-// Debug: Print SPI configuration values
-#if WAVEX_MCU_LINK_DEBUG
-    WAVEX_LOG_DAISY(INTER_MCU_LINK, "SPI Config Debug:");
-    WAVEX_LOG_DAISY(INTER_MCU_LINK, "  periph: %d", (int)spi_conf.periph);
-    WAVEX_LOG_DAISY(INTER_MCU_LINK, "  mode: %d", (int)spi_conf.mode);
-    WAVEX_LOG_DAISY(INTER_MCU_LINK, "  direction: %d", (int)spi_conf.direction);
-    WAVEX_LOG_DAISY(INTER_MCU_LINK, "  datasize: %lu", (unsigned long)spi_conf.datasize);
-    WAVEX_LOG_DAISY(INTER_MCU_LINK, "  clock_polarity: %d", (int)spi_conf.clock_polarity);
-    WAVEX_LOG_DAISY(INTER_MCU_LINK, "  clock_phase: %d", (int)spi_conf.clock_phase);
-    WAVEX_LOG_DAISY(INTER_MCU_LINK, "  nss: %d", (int)spi_conf.nss);
-    WAVEX_LOG_DAISY(INTER_MCU_LINK, "  baud_prescaler: %d", (int)spi_conf.baud_prescaler);
-    WAVEX_LOG_DAISY(INTER_MCU_LINK, "  pin_config.sclk: configured");
-    WAVEX_LOG_DAISY(INTER_MCU_LINK, "  pin_config.mosi: configured");
-    WAVEX_LOG_DAISY(INTER_MCU_LINK, "  pin_config.miso: configured");
-    WAVEX_LOG_DAISY(INTER_MCU_LINK, "  pin_config.nss: configured");
-#endif
-
-    // Add error handling and timeout for SPI init
-    WAVEX_LOG_DAISY(INTER_MCU_LINK, "DEBUG: About to call spi_handle.Init...");
-    daisy::SpiHandle::Result init_result = spi_handle.Init(spi_conf);
-    WAVEX_LOG_DAISY(INTER_MCU_LINK, "DEBUG: spi_handle.Init returned: %d", (int)init_result);
-    if (init_result != daisy::SpiHandle::Result::OK) {
-        WAVEX_LOG_DAISY(INTER_MCU_LINK, "DEBUG: SPI init FAILED with result: %d", (int)init_result);
-        // Continue without SPI for now
-    } else {
-        WAVEX_LOG_DAISY(INTER_MCU_LINK, "DEBUG: SPI init SUCCESS");
-    }
-
-#if WAVEX_MCU_LINK_DEBUG
-    WAVEX_LOG_DAISY(INTER_MCU_LINK, "Exited spi_handle.Init (before Spi_Init)");
-#endif
-
-    // Initialize SPI link only if SPI init succeeded
-    if (init_result == daisy::SpiHandle::Result::OK) {
-        WAVEX_LOG_DAISY(INTER_MCU_LINK,
-                        "DAISY: SPI Init SUCCESS - About to call WaveX::Comm::Spi_Init");
-        WaveX::Comm::Spi_Init(hw, &spi_handle);
-        WAVEX_LOG_DAISY(INTER_MCU_LINK, "DAISY: WaveX::Comm::Spi_Init completed");
-        System::Delay(100);
-
-        // SPI is reserved for BROWSE_RESP and WAVE_DATA_CHUNK only
-        // All other messages (SYNC, HEARTBEAT, METER, etc.) use UART
-        WAVEX_LOG_DAISY(INTER_MCU_LINK,
-                        "SPI link initialized - reserved for file browser and wave data only");
-        WaveX::Comm::Spi_DebugState();
-    } else {
-        WAVEX_LOG_DAISY(INTER_MCU_LINK,
-                        "ERROR: Skipping SPI link init due to SPI init failure - NO SPI CLOCK WILL "
-                        "BE GENERATED");
-        WAVEX_LOG_DAISY(INTER_MCU_LINK,
-                        "ERROR: This explains why you see no SPI1 CLK on the scope!");
-    }
+    WaveX::Comm::Spi_Init(hw, &spi_handle);
 #endif
 
     WaveX::Comm::UartLinkInit(&hw);
@@ -850,13 +709,8 @@ int main(void) {
 
         uint32_t current_time = System::GetNow();
 
-        // Process any incoming SPI messages from ESP32. The level-poll fallback
-        // (for a missed ATTN edge) is not needed here: the GPIO interrupt
-        // (EXTI15_10) catches the edge, and the ESP32 clears ATTN in
-        // post_trans_cb, eliminating the race the fallback existed for.
 #if WAVEX_SPI_LINK_ENABLED
-        // The new, correct approach is to call a function that handles polling,
-        // dequeuing, and processing in one step, avoiding the legacy conversion.
+        // One foreground owner services completion, timeout recovery and READY.
         WaveX::Comm::ProcessQueuedSpiMessage();
 #endif
 

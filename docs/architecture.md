@@ -202,7 +202,7 @@ Known architectural debt (from the 2026-06-26 assessment, still valid): event/ca
 See `features/inter-mcu-protocol.md` for the message catalog. Every message struct lives in `firmware/shared/spi_protocol/protocol.h` regardless of transport. Transport status (**as-built; decision recorded 2026-07-05**):
 
 - **UART is the transport of record.** All inter-MCU traffic — heartbeat, meters, status, browse requests/responses, wave-preview chunks, note on/off, sample load/control — runs over UART1 (ESP32) ↔ UART4 (Daisy) at 2 Mbaud, using the framing in `firmware/shared/uart_protocol/uart_protocol.h` (0xA5/0x5A markers, 16-bit length, CRC16-CCITT, 16-bit sequence numbers) with `protocol.h` structs as payloads. Daisy UART4 uses independent continuous RX DMA1 Stream 5 and asynchronous TX DMA2 Stream 4 through the WaveX-owned `uart4_dma_transport`; this bypasses libDaisy v8.1.0's single-operation UART DMA scheduler (upstream issue #653). The ESP32 legacy UART driver is interrupt/ring-buffer driven. New messages target this link.
-- **The SPI link is wired but compiled out**: `WAVEX_SPI_LINK_ENABLED` is `0` in `firmware/shared/config/link_config.h`, so `daisy_spi_link.cpp` / `esp_spi_link.cpp` (Daisy master / ESP32 slave, ATTN line, fixed power-of-two transaction sizes 32–2048 B) are in no shipped image. Re-enabling SPI — whether for bulk browse/wave data or full consolidation — is future work requiring the six fixes and bench gate recorded in `backlog.md`. Until then, do not extend the SPI path.
+- **The SPI link is wired but compiled out**: `WAVEX_SPI_LINK_ENABLED` is `0` in `firmware/shared/config/link_config.h`, so `daisy_spi_link.cpp` / `esp_spi_link.cpp` (Daisy master / ESP32 slave, ATTN/READY line) are in no shipped image. The dormant ownership and recovery fixes retain the existing packet codec; [SPI notes](spi-notes.md#retained-transport-contract) define their physical transfer lifecycle. Re-enabling SPI requires startup integration and the bench gate in `backlog.md`; the source fixes do not change the live transport decision.
 - The pre-2026-07-05 revision of this section stated the opposite ("SPI active, UART legacy"); see `docs/code_review_20260705.md` finding C4 for the correction trail.
 
 ---
@@ -362,16 +362,16 @@ These rules are mandatory for all new code. Most past instability (SPI corruptio
 
 ### 7.2 ESP32-P4
 
-1. **SPI slave DMA buffers** must be in internal, DMA-capable memory (`MALLOC_CAP_DMA`), cache-line aligned (64 B on P4). Transactions use the fixed power-of-two sizes from the protocol.
+1. **SPI slave DMA buffers** must be in internal, DMA-capable memory (`MALLOC_CAP_DMA`), aligned to complete cache lines using the configured P4 cache-line size. The dormant adapter uses the fixed physical frame in `spi_transport.hpp` with ESP-IDF performing cache maintenance.
 2. **LVGL framebuffers**: MIPI-DSI scans from three full framebuffers in DMA-capable PSRAM; two LVGL partial buffers plus PPA rotation scratch use internal DMA-capable RAM. Log capability-specific free/minimum heap before and after display creation. Avoid CPU-touching the active scanout buffer.
 3. **PSRAM (hex-mode @200 MHz)** is fast but shared with display refresh — bulk copies during UI animation cause bandwidth contention; schedule waveform-preview decode between frames.
 4. **Never call LVGL from a non-UI task** (deadlocks under lock contention); use the deferred-update pattern (`ui-architecture.md`).
 
 ### 7.3 Cross-MCU timing contract
 
-- Parameter changes (UI → audio): target < 5 ms end-to-end (touch → SPI → applied at next control tick).
+- Parameter changes (UI → audio): target < 5 ms end-to-end (touch → UART → applied at next control tick).
 - Meters/heartbeat: 20–50 ms cadence, coalesced, lowest priority.
-- The link must degrade gracefully: either MCU rebooting must never wedge the other; recovery and resync are regression-tested. Daisy UART TX is asynchronous DMA with a bounded one-second retry/drop policy; it never waits for peer wire time in the main loop. `SequenceTracker` (`firmware/shared/spi_protocol/sequence_tracker.hpp`) is wired into **both live UART RX paths** (duplicate/out-of-order drop + peer-reboot resync, counted in link stats) as well as the compiled-out SPI path; `AttnWatchdog` (`attn_watchdog.hpp`) is SPI-path-only by nature (there is no ATTN line on UART). Both are HAL-free and host-tested.
+- The link must degrade gracefully: either MCU rebooting must never wedge the other; recovery and resync are regression-tested. Daisy UART TX is asynchronous DMA with a bounded one-second retry/drop policy; it never waits for peer wire time in the main loop. `SequenceTracker` (`firmware/shared/spi_protocol/sequence_tracker.hpp`) is wired into **both live UART RX paths** (duplicate/out-of-order drop + peer-reboot resync, counted in link stats) as well as both compiled-out SPI RX paths. Dormant SPI uses a shared ownership/READY state machine (`spi_transport.hpp`), covered by host and mocked-device tests; it no longer uses `AttnWatchdog`. Its recovery requires exclusive ownership of libDaisy SPI DMA, and its timing/reboot behavior still needs the bench gate in [SPI notes](spi-notes.md#verification-and-remaining-gates).
 
 ---
 
@@ -446,8 +446,9 @@ These rules are mandatory for all new code. Most past instability (SPI corruptio
    deferred unless the voice board is revived.
 6. **ESP32 event ownership**: `PacketRouter` owns routing, but listener
    registration still overlaps `StatisticsManager` and `inter_mcu`.
-7. **SPI link**: the disabled implementation remains in-tree and has six known
-   defects. UART is the transport of record (§4.4).
+7. **SPI link**: the disabled implementation has source-level ownership and
+   recovery fixes, but hardware verification and startup integration remain
+   open. UART is the transport of record (§4.4).
 8. **MIDI**: DIN/USB input forwarding reaches the Daisy note path, pending
    hardware verification; MIDI clock in/out and tempo-following integration
    remain open for the Phase 2 gate.

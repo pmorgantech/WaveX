@@ -17,6 +17,16 @@
 
 The Daisy streams RX and TX simultaneously through independent DMA streams; TX never waits for frame wire time in the main loop. The compiled-out SPI transport remains wired but `WAVEX_SPI_LINK_ENABLED=0`; its fixed-size `WaveXPacket` framing is dormant and is not the shipped wire format.
 
+### Dormant SPI implementation
+
+The compiled-out SPI adapters retain the packet codec in `protocol.h` and share
+the ownership/READY rules in
+[spi_transport.hpp](../../firmware/shared/spi_protocol/spi_transport.hpp).
+The [SPI transport notes](../spi-notes.md#retained-transport-contract) specify
+physical completion, short-frame rejection, queue retention and recovery limits.
+These source fixes do not change the live UART framing or protocol version.
+SPI still requires separate startup integration and hardware verification.
+
 ## 2. Packet framing
 
 ```
