@@ -541,10 +541,11 @@ inline void DecodeModSlot(const uint8_t* b, ModSlot& m) {
 }
 
 inline uint32_t OscChunkSize(const Oscillator& osc) {
-    return kOscHeaderWireSize + static_cast<uint32_t>(osc.zone_count) * kZoneWireSize;
+    const uint8_t count = osc.zone_count < kMaxZonesPerOsc ? osc.zone_count : kMaxZonesPerOsc;
+    return kOscHeaderWireSize + static_cast<uint32_t>(count) * kZoneWireSize;
 }
 
-// The WXCF header's advisory total_len. Cheap to compute exactly here - every
+// The WXCF header's total_len. WXI validates this when nonzero - every
 // chunk's size is known before a byte is written - and an accurate value lets
 // a later tool sanity-check a file's length without parsing it.
 inline uint32_t TotalFileSize(const InstrumentFile& doc) {
@@ -693,6 +694,7 @@ inline Result ReadOscChunk(Wxcf::Reader& r, uint32_t payload_len, Oscillator& ou
 
     DecodeOscHeader(buf, out);
     out.zone_count = static_cast<uint8_t>(zone_count);
+    uint32_t seen_indices = 0;
     for (uint32_t i = 0; i < zone_count; ++i) {
         if (r.ReadPayload(buf, kZoneWireSize) != Wxcf::Result::Ok)
             return Result::IoError;
@@ -704,6 +706,10 @@ inline Result ReadOscChunk(Wxcf::Reader& r, uint32_t payload_len, Oscillator& ou
         // consumes it would otherwise index out of bounds.
         if (buf[0] >= kMaxZonesPerOsc)
             return Result::BadChunk;
+        const uint32_t bit = uint32_t{1} << buf[0];
+        if ((seen_indices & bit) != 0)
+            return Result::BadChunk;  // two records cannot own one engine slot
+        seen_indices |= bit;
         DecodeZone(buf, out.zones[i]);
     }
     return Result::Ok;
@@ -742,6 +748,8 @@ inline Result ReadModmChunk(Wxcf::Reader& r, uint32_t payload_len, InstrumentFil
 // Chunks may appear in any order and any may be absent - except HEAD, whose
 // absence means the stream is not an Instrument this build can use (and is
 // the one cheap check that catches a file truncated to its container header).
+// A nonzero total_len must match the entire decoded stream; zero remains the
+// unknown-length representation. Both require io.eof to identify clean EOF.
 inline Result Read(Wxcf::IoContext io, InstrumentFile& out) {
     out = InstrumentFile{};
     Wxcf::Reader r(io);
@@ -761,9 +769,21 @@ inline Result Read(Wxcf::IoContext io, InstrumentFile& out) {
     uint8_t buf[kScratchBytes];
     bool saw_head = false;
     Wxcf::ChunkHeader ch;
-    // NextChunkHeader() failing at a chunk boundary is EOF, which is how a
-    // well-formed file ends - the container has no end marker (wxcf.hpp).
-    while (r.NextChunkHeader(ch) == Wxcf::Result::Ok) {
+    uint64_t consumed = Wxcf::kHeaderSize;
+    if (total_len != 0 && total_len < consumed)
+        return Result::BadChunk;
+    while (true) {
+        const Wxcf::Result next = r.NextChunkHeader(ch);
+        if (next == Wxcf::Result::EndOfFile) {
+            if (total_len != 0 && consumed != total_len)
+                return Result::IoError;
+            break;
+        }
+        if (next != Wxcf::Result::Ok)
+            return Result::IoError;
+        consumed += Wxcf::kChunkHeaderSize + static_cast<uint64_t>(ch.payload_len);
+        if (total_len != 0 && consumed > total_len)
+            return Result::BadChunk;
         Result res = Result::Ok;
         switch (ch.chunk_id) {
             case kChunkHead:

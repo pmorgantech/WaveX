@@ -17,9 +17,8 @@ namespace Wxi = WaveX::Wxi;
 
 namespace {
 
-// Same in-memory IoContext the container's own tests use (wxcf_test.cpp): a
-// short read is an I/O error, which is what makes "read past the last chunk"
-// double as the EOF signal the reader stops on.
+// Same in-memory IoContext the container's own tests use (wxcf_test.cpp):
+// short reads are errors; a separate query identifies physical EOF.
 struct MemoryIo {
     std::vector<uint8_t> buf;
     size_t read_pos = 0;
@@ -29,6 +28,11 @@ struct MemoryIo {
         const uint8_t* p = static_cast<const uint8_t*>(src);
         m->buf.insert(m->buf.end(), p, p + len);
         return true;
+    }
+
+    static bool Eof(void* self) {
+        auto* m = static_cast<MemoryIo*>(self);
+        return m->read_pos == m->buf.size();
     }
 
     static bool Read(void* self, void* dest, size_t len) {
@@ -50,6 +54,7 @@ struct MemoryIo {
         Wxcf::IoContext io;
         io.user_data = this;
         io.read = &Read;
+        io.eof = &Eof;
         return io;
     }
 };
@@ -353,6 +358,8 @@ TEST(WxiCodec, WriteClampsAnOverlargeZoneCount) {
     InstrumentFile src;
     src.osc[0].type = OscType::Sample;
     src.osc[0].zone_count = 200;  // past kMaxZonesPerOsc; would read past the array
+    for (uint8_t i = 0; i < Wxi::kMaxZonesPerOsc; ++i)
+        src.osc[0].zones[i].index = i;
     MemoryIo io;
     ASSERT_EQ(Wxi::Write(io.AsWriter(), src), Result::Ok);
 
@@ -651,4 +658,73 @@ TEST(WxiCodec, ReportsATruncatedStreamMidChunk) {
 
     InstrumentFile dst;
     EXPECT_EQ(Wxi::Read(io.AsReader(), dst), Result::IoError);
+}
+
+TEST(WxiCodec, RejectsEveryTruncatedPrefixOfASavedInstrument) {
+    MemoryIo io;
+    ASSERT_EQ(Wxi::Write(io.AsWriter(), MakeFullDoc()), Result::Ok);
+    InstrumentFile parsed;
+    std::vector<size_t> accepted_prefixes;
+    for (size_t len = 0; len < io.buf.size(); ++len) {
+        std::vector<uint8_t> prefix(io.buf.begin(), io.buf.begin() + len);
+        if (ReadBytes(prefix, parsed) == Result::Ok)
+            accepted_prefixes.push_back(len);
+    }
+    EXPECT_TRUE(accepted_prefixes.empty()) << ::testing::PrintToString(accepted_prefixes);
+}
+
+TEST(WxiCodec, ReadFailureAtChunkBoundaryIsNotEof) {
+    MemoryIo io;
+    ASSERT_EQ(Wxi::Write(io.AsWriter(), MakeFullDoc()), Result::Ok);
+    auto reader = io.AsReader();
+    reader.read = [](void* self, void* dest, size_t len) {
+        auto* m = static_cast<MemoryIo*>(self);
+        if (m->read_pos == Wxcf::kHeaderSize + Wxcf::kChunkHeaderSize + Wxi::kHeadWireSize)
+            return false;
+        return MemoryIo::Read(self, dest, len);
+    };
+    InstrumentFile parsed;
+    EXPECT_EQ(Wxi::Read(reader, parsed), Result::IoError);
+}
+
+TEST(WxiCodec, UnknownLengthStreamRejectsAPartialFinalChunkHeader) {
+    std::vector<uint8_t> bytes;
+    PutFileHeader(bytes, Wxi::kFileType, Wxi::kFileVersion);
+    PutChunk(bytes, Wxi::kChunkHead, MinimalHead());
+    bytes.push_back(0x10);  // first byte of another chunk header
+    InstrumentFile parsed;
+    EXPECT_EQ(ReadBytes(bytes, parsed), Result::IoError);
+}
+
+TEST(WxiCodec, RejectsDuplicateZoneIdentitiesWithinAnOscillator) {
+    InstrumentFile doc;
+    doc.osc[0].type = OscType::Sample;
+    doc.osc[0].zone_count = 2;
+    doc.osc[0].zones[0].index = 7;
+    doc.osc[0].zones[1].index = 7;
+    std::strcpy(doc.osc[0].zones[0].path, "/kick.wav");
+    std::strcpy(doc.osc[0].zones[1].path, "/snare.wav");
+    MemoryIo io;
+    ASSERT_EQ(Wxi::Write(io.AsWriter(), doc), Result::Ok);
+    InstrumentFile parsed;
+    EXPECT_EQ(Wxi::Read(io.AsReader(), parsed), Result::BadChunk);
+}
+
+TEST(WxiCodec, DeclaredFileLengthCannotEndInsideAChunkOrBeforeTheHeader) {
+    MemoryIo io;
+    ASSERT_EQ(Wxi::Write(io.AsWriter(), MakeFullDoc()), Result::Ok);
+    for (uint32_t length: {1u, 63u}) {
+        auto bytes = io.buf;
+        Wxcf::detail::WriteU32LE(bytes.data() + 8, length);
+        InstrumentFile parsed;
+        EXPECT_EQ(ReadBytes(bytes, parsed), Result::BadChunk) << length;
+    }
+}
+
+TEST(WxiCodec, ClampedZoneCountStillWritesAnExactFileLength) {
+    InstrumentFile doc;
+    doc.osc[0].zone_count = 200;
+    MemoryIo io;
+    ASSERT_EQ(Wxi::Write(io.AsWriter(), doc), Result::Ok);
+    EXPECT_EQ(Wxcf::detail::ReadU32LE(io.buf.data() + 8), io.buf.size());
 }

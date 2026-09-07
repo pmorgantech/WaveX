@@ -19,8 +19,7 @@ namespace {
 // In-memory backing store for round-trip tests. A short read (asking for
 // more bytes than remain) is treated as an I/O error, matching the
 // contract wxcf.hpp documents for its IoContext callbacks - this lets
-// "read past the last chunk" double as the EOF/no-more-chunks signal
-// tests rely on.
+// an EOF query distinguish a clean boundary from a read failure.
 struct MemoryIo {
     std::vector<uint8_t> buf;
     size_t read_pos = 0;
@@ -30,6 +29,11 @@ struct MemoryIo {
         const uint8_t* p = static_cast<const uint8_t*>(src);
         m->buf.insert(m->buf.end(), p, p + len);
         return true;
+    }
+
+    static bool Eof(void* self) {
+        auto* m = static_cast<MemoryIo*>(self);
+        return m->read_pos == m->buf.size();
     }
 
     static bool Read(void* self, void* dest, size_t len) {
@@ -52,6 +56,7 @@ struct MemoryIo {
         IoContext io;
         io.user_data = this;
         io.read = &Read;
+        io.eof = &Eof;
         return io;
     }
 };
@@ -109,8 +114,8 @@ TEST(WxcfTest, RoundTripsHeaderAndMultipleChunks) {
     EXPECT_EQ(ch.payload_len, 0u);
     ASSERT_EQ(r.ReadPayload(nullptr, 0), Result::Ok);  // zero-length payload, no buffer needed
 
-    // No more chunks - reading past the end is the documented EOF signal.
-    EXPECT_EQ(r.NextChunkHeader(ch), Result::IoError);
+    // No more chunks: a physical EOF query identifies the clean boundary.
+    EXPECT_EQ(r.NextChunkHeader(ch), Result::EndOfFile);
 }
 
 TEST(WxcfTest, UnknownChunkIsSkippedAndLaterChunksStillReadCorrectly) {
@@ -359,7 +364,7 @@ TEST(WxcfTest, SkipZeroBytesAtEofIsOk) {
     ASSERT_EQ(r.NextChunkHeader(ch), Result::Ok);
     EXPECT_EQ(ch.payload_len, 0u);
     EXPECT_EQ(r.SkipPayload(0), Result::Ok);
-    EXPECT_EQ(r.NextChunkHeader(ch), Result::IoError);  // clean EOF
+    EXPECT_EQ(r.NextChunkHeader(ch), Result::EndOfFile);  // clean EOF
 }
 
 TEST(WxcfTest, WriteFailurePropagatesAsIoError) {

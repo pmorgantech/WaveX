@@ -26,7 +26,7 @@ its fix and regression checks are committed.
   stop; its task may still dereference the object. Check listener allocation
   failure and calibration handoffs at the same ownership boundaries
   (principles 2, 5, 6).
-- [ ] **High — malformed file boundaries.** Reject truncated WXI documents
+- [x] **High — malformed file boundaries.** Reject truncated WXI documents
   instead of loading a partial Instrument successfully. Validate zone identity and
   distinguish unique sample paths from hash collisions. Use exact-sized
   malformed fixtures and sanitizers (principles 2, 5).

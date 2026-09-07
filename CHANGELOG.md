@@ -69,6 +69,8 @@ versioning and release process.
 
 - Hardened protocol message defaults and added an explicit busy reason for
   sample loads while an instrument import owns the sample pool.
+- WXCF/WXI readers now distinguish clean EOF from I/O failure and reject
+  truncated, overlong, duplicate, or otherwise malformed records.
 
 - Daisy sample rebinding now retains a sample selected from the track's
   previous instrument until the replacement binding owns it.

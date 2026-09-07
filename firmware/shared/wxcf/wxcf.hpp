@@ -12,9 +12,9 @@
 // at EOF (there is no explicit end-of-chunks marker).
 //
 // HAL-free: all I/O goes through a caller-supplied IoContext (a
-// context-pointer + two C function pointers, deliberately not
+// context-pointer + C function pointers, deliberately not
 // std::function - this keeps the header includable from both the C++17
-// shared-test build and the Daisy's C++14 firmware build without pulling
+// shared-test build and the Daisy's C++17 firmware build without pulling
 // in <functional>'s heap-allocation-capable machinery anywhere near a
 // class that HAL wrappers will eventually construct from real SD I/O).
 // Round-trips against an in-memory buffer on host (wxcf_test.cpp); a
@@ -52,12 +52,17 @@ struct IoContext {
     // no resumable-partial-operation concept.
     bool (*read)(void* user_data, void* dest, size_t len) = nullptr;
     bool (*write)(void* user_data, const void* src, size_t len) = nullptr;
+    // Read-to-end clients must distinguish a clean boundary from a failed
+    // read. True only when the current position is exactly at physical EOF;
+    // a read error while bytes remain is not EOF.
+    bool (*eof)(void* user_data) = nullptr;
 };
 
 enum class Result : uint8_t {
     Ok,
-    IoError,   // read/write callback returned false (includes EOF)
-    BadMagic,  // header's first 4 bytes weren't "WXCF"
+    IoError,    // read/write callback returned false (includes EOF)
+    BadMagic,   // header's first 4 bytes weren't "WXCF"
+    EndOfFile,  // clean EOF before the next chunk header
 };
 
 inline uint8_t VersionMajor(uint16_t version) {
@@ -173,9 +178,8 @@ class Writer {
 
 // Sequential, forward-only reader: ReadHeader() once, then repeatedly
 // NextChunkHeader() + (ReadPayload() or SkipPayload()) until
-// NextChunkHeader() returns IoError, which at a well-formed EOF boundary
-// means "no more chunks" rather than corruption. (This format has no
-// explicit chunk count or end marker - see the class comment.)
+// NextChunkHeader() returns EndOfFile. IoError always means failure, including
+// a partially read chunk header. Supply IoContext::eof to read to the end.
 class Reader {
    public:
     explicit Reader(IoContext io) : io_(io) {}
@@ -199,6 +203,8 @@ class Reader {
     // or SkipPayload()) before calling this again - the stream position
     // is byte-exact, there is no buffering or lookahead.
     Result NextChunkHeader(ChunkHeader& out) {
+        if (io_.eof && io_.eof(io_.user_data))
+            return Result::EndOfFile;
         uint8_t buf[kChunkHeaderSize];
         if (!io_.read(io_.user_data, buf, sizeof(buf)))
             return Result::IoError;

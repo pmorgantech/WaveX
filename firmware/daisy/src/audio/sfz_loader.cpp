@@ -87,6 +87,10 @@ static bool WxiReadCb(void* user, void* dest, size_t len) {
     return read == len;  // a short read is EOF, which the container expects
 }
 
+static bool WxiEofCb(void* user) {
+    return f_eof(static_cast<FIL*>(user));
+}
+
 static InstOpMessage s_request;
 static InstStatusMessage s_status;
 static Phase s_phase = Phase::Idle;
@@ -522,7 +526,7 @@ void Pump(SamplePool& pool, SampleMemMgr& memory, uint8_t* io_buffer, uint32_t i
 
         case Phase::ReadWxi: {
             Wxi::InstrumentFile& doc = s_doc_storage.Get();
-            const WaveX::Wxcf::IoContext io{&s_file, &WxiReadCb, nullptr};
+            const WaveX::Wxcf::IoContext io{&s_file, &WxiReadCb, nullptr, &WxiEofCb};
             const Wxi::Result result = Wxi::Read(io, doc);
             CloseFile();
             if (result != Wxi::Result::Ok) {
