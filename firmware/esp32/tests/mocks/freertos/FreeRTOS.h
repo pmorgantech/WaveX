@@ -53,6 +53,9 @@ SemaphoreHandle_t xSemaphoreCreateMutex(void);
 BaseType_t xSemaphoreTake(SemaphoreHandle_t xSemaphore, TickType_t xBlockTime);
 BaseType_t xSemaphoreGive(SemaphoreHandle_t xSemaphore);
 SemaphoreHandle_t xSemaphoreCreateRecursiveMutex(void);
+void vSemaphoreDelete(SemaphoreHandle_t xSemaphore);
+// Failure injection for listener startup tests; applies to the next creation.
+void mockFailNextRecursiveMutexCreation(void);
 BaseType_t xSemaphoreTakeRecursive(SemaphoreHandle_t xSemaphore, TickType_t xBlockTime);
 BaseType_t xSemaphoreGiveRecursive(SemaphoreHandle_t xSemaphore);
 BaseType_t xSemaphoreGiveFromISR(SemaphoreHandle_t xSemaphore,

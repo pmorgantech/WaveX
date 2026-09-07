@@ -12,8 +12,8 @@ checked at the API/DMA boundaries used by WaveX. Priorities describe concrete
 failure modes; hardware-only gates stay in the roadmap. Remove each task when
 its fix and regression checks are committed.
 
-- [ ] **High — frontend listener lifetime.** Exercise listener allocation
-  failure and registration/removal during traffic with real synchronization.
+- [ ] **High — frontend listener lifetime.** Allocation failure and
+  registration/removal during traffic now have real synchronization coverage.
   Complete page teardown and queued actions still need lifetime coverage
   (principles 2, 5, 6).
 - [ ] **Medium — remaining reference consistency.** Finish checking the

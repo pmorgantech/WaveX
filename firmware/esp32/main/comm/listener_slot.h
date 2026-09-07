@@ -48,6 +48,13 @@ class ListenerSlot {
     // with the scheduler up and the heap available.
     ListenerSlot() : mutex_(xSemaphoreCreateRecursiveMutex()) {}
 
+    // The owner must stop users of the slot before destroying the slot itself.
+    ~ListenerSlot() {
+        if (mutex_) {
+            vSemaphoreDelete(mutex_);
+        }
+    }
+
     // Not copyable: the mutex and the registration are identity, not value.
     ListenerSlot(const ListenerSlot&) = delete;
     ListenerSlot& operator=(const ListenerSlot&) = delete;
@@ -55,45 +62,48 @@ class ListenerSlot {
     /** Register, or clear with `set(nullptr, nullptr)`. Blocks until any
      *  in-flight invocation of the previous callback has returned. */
     void set(Fn fn, void* user_data) {
-        const bool locked = take();
+        if (!take()) {
+            return;
+        }
         fn_ = fn;
         user_data_ = user_data;
-        if (locked) {
-            give();
-        }
+        give();
     }
 
     /** Call the registered callback, if any, with `user_data` appended as the
      *  final argument - the shape every WaveX comm callback already has. */
     template <typename... Args>
     void invoke(Args... args) {
-        const bool locked = take();
+        if (!take()) {
+            return;
+        }
         Fn fn = fn_;
         void* user_data = user_data_;
         if (fn) {
             fn(args..., user_data);
         }
-        if (locked) {
-            give();
-        }
+        give();
     }
 
     /** True if a callback is registered. Advisory only: it can go stale the
      *  moment it returns, so it is for logging, not for guarding a call. */
-    bool registered() const { return fn_ != nullptr; }
-
-   private:
-    bool take() {
-        if (!mutex_) {
-            // Creation only fails out of heap at startup. Degrading to an
-            // unlocked call keeps the link working rather than silently
-            // dropping every message; it is strictly no worse than the
-            // hand-rolled slots this replaced.
+    bool registered() const {
+        if (!take()) {
             return false;
         }
-        return xSemaphoreTakeRecursive(mutex_, portMAX_DELAY) == pdTRUE;
+        const bool result = fn_ != nullptr;
+        give();
+        return result;
     }
-    void give() { xSemaphoreGiveRecursive(mutex_); }
+
+   private:
+    bool take() const {
+        // Never publish or invoke an unprotected registration after startup
+        // allocation failure. A missing listener is recoverable; a dangling
+        // page callback is not.
+        return mutex_ && xSemaphoreTakeRecursive(mutex_, portMAX_DELAY) == pdTRUE;
+    }
+    void give() const { xSemaphoreGiveRecursive(mutex_); }
 
     SemaphoreHandle_t mutex_ = nullptr;
     Fn fn_ = nullptr;

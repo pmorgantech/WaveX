@@ -89,6 +89,11 @@ versioning and release process.
 
 ### Fixed
 
+- Listener registrations now fail closed when mutex allocation fails, serialize
+  registration and observation with recursive synchronization, and release
+  listener mutexes during teardown. Host coverage exercises allocation failure,
+  concurrent registration, and receiver-safe deregistration.
+
 - Harden the dormant inter-MCU SPI DMA paths: retain driver-owned descriptors
   through timeouts, process both directions before releasing buffers, use
   hardware READY signaling, recover Daisy DMA without blocking audio, and fix

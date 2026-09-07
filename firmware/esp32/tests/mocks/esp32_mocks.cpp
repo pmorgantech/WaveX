@@ -6,11 +6,13 @@
 #include "esp_log.h"
 #include "freertos/task.h"
 
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <map>
 #include <mutex>
+#include <new>
 #include <queue>
 #include <thread>
 
@@ -152,19 +154,38 @@ BaseType_t xSemaphoreGiveFromISR(SemaphoreHandle_t xSemaphore,
     return pdTRUE;
 }
 
-// The host suite is single-threaded, so these only need to satisfy the caller:
-// take always succeeds and there is no state to keep. What the tests exercise
-// is the surrounding ordering (pair swapped as a unit, callback observed under
-// the lock), not FreeRTOS itself.
-SemaphoreHandle_t xSemaphoreCreateRecursiveMutex(void) {
-    return reinterpret_cast<SemaphoreHandle_t>(1);
+// Recursive listener locks use real synchronization so teardown can be
+// exercised while a receiver thread is inside a callback.
+static std::atomic<bool> g_fail_recursive_mutex{false};
+
+void mockFailNextRecursiveMutexCreation(void) {
+    g_fail_recursive_mutex.store(true);
 }
 
-BaseType_t xSemaphoreTakeRecursive(SemaphoreHandle_t xSemaphore, TickType_t xBlockTime) {
+SemaphoreHandle_t xSemaphoreCreateRecursiveMutex(void) {
+    if (g_fail_recursive_mutex.exchange(false)) {
+        return nullptr;
+    }
+    return new (std::nothrow) std::recursive_mutex;
+}
+
+void vSemaphoreDelete(SemaphoreHandle_t semaphore) {
+    delete static_cast<std::recursive_mutex*>(semaphore);
+}
+
+BaseType_t xSemaphoreTakeRecursive(SemaphoreHandle_t semaphore, TickType_t) {
+    if (!semaphore) {
+        return pdFALSE;
+    }
+    static_cast<std::recursive_mutex*>(semaphore)->lock();
     return pdTRUE;
 }
 
-BaseType_t xSemaphoreGiveRecursive(SemaphoreHandle_t xSemaphore) {
+BaseType_t xSemaphoreGiveRecursive(SemaphoreHandle_t semaphore) {
+    if (!semaphore) {
+        return pdFALSE;
+    }
+    static_cast<std::recursive_mutex*>(semaphore)->unlock();
     return pdTRUE;
 }
 

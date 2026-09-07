@@ -1,16 +1,12 @@
-// Tests for the comm listener slot.
-//
-// The bugs this class exists to prevent - a torn {callback, user_data} pair,
-// and a page destroyed while its callback is in flight - are concurrency bugs,
-// and the host mocks are single-threaded no-op semaphores. So these tests do
-// not prove the mutual exclusion; they pin the observable contract that the
-// mutual exclusion is wrapped around, which is where the real defects actually
-// showed up: a slot that read user_data separately from the callback, and one
-// that kept invoking after it had been cleared.
-
 #include "comm/listener_slot.h"
 
 #include <gtest/gtest.h>
+
+#include <atomic>
+#include <chrono>
+#include <future>
+#include <memory>
+#include <thread>
 
 namespace {
 
@@ -131,6 +127,104 @@ TEST_F(ListenerSlotTest, ReRegisteringFromInsideACallbackDoesNotDeadlock) {
 
     EXPECT_EQ(g_obs.calls, 1);
     EXPECT_FALSE(slot.registered());
+}
+
+TEST_F(ListenerSlotTest, AllocationFailureNeverInvokesAnUnprotectedCallback) {
+    mockFailNextRecursiveMutexCreation();
+    ListenerSlot<TestCb> slot;
+    slot.set(recordingCb, &g_obs);
+    EXPECT_FALSE(slot.registered());
+    slot.invoke(42);
+    slot.set(nullptr, nullptr);
+    EXPECT_EQ(g_obs.calls, 0);
+}
+
+TEST_F(ListenerSlotTest, PageTeardownWaitsForReceiverBeforeDestroyingOwner) {
+    struct Page {
+        std::promise<void> entered;
+        std::shared_future<void> release;
+        int calls = 0;
+    };
+    ListenerSlot<TestCb> slot;
+    std::promise<void> release;
+    auto page = std::make_unique<Page>();
+    page->release = release.get_future().share();
+    auto entered = page->entered.get_future();
+    slot.set(
+        [](int, void* data) {
+            auto& owner = *static_cast<Page*>(data);
+            owner.entered.set_value();
+            owner.release.wait();
+            ++owner.calls;
+        },
+        page.get());
+    std::thread receiver([&] { slot.invoke(1); });
+    entered.wait();
+    std::promise<void> exiting;
+    auto teardown = std::async(std::launch::async, [&] {
+        exiting.set_value();
+        slot.set(nullptr, nullptr);
+        const int calls = page->calls;
+        page.reset();
+        return calls;
+    });
+    exiting.get_future().wait();
+    EXPECT_EQ(teardown.wait_for(std::chrono::milliseconds(30)), std::future_status::timeout);
+    release.set_value();
+    receiver.join();
+    EXPECT_EQ(teardown.get(), 1);
+    slot.invoke(2);
+    EXPECT_FALSE(slot.registered());
+}
+
+TEST_F(ListenerSlotTest, RegistrationAndObservationStayConsistentDuringTraffic) {
+    struct Owner {
+        int tag;
+        std::atomic<int> calls{0};
+    };
+    Owner first{1}, second{2};
+    std::atomic<int> mismatches{0};
+    struct Registration {
+        Owner* owner;
+        std::atomic<int>* mismatches;
+    } a{&first, &mismatches}, b{&second, &mismatches};
+    ListenerSlot<TestCb> slot;
+    auto first_cb = +[](int, void* data) {
+        auto& r = *static_cast<Registration*>(data);
+        if (r.owner->tag != 1) {
+            ++*r.mismatches;
+        }
+        ++r.owner->calls;
+    };
+    auto second_cb = +[](int, void* data) {
+        auto& r = *static_cast<Registration*>(data);
+        if (r.owner->tag != 2) {
+            ++*r.mismatches;
+        }
+        ++r.owner->calls;
+    };
+    std::promise<void> started;
+    std::atomic<bool> stop{false};
+    slot.set(first_cb, &a);
+    std::thread receiver([&] {
+        slot.invoke(0);
+        started.set_value();
+        while (!stop.load()) {
+            slot.invoke(0);
+            (void)slot.registered();
+        }
+    });
+    started.get_future().wait();
+    for (int i = 0; i < 2000; ++i) {
+        slot.set(second_cb, &b);
+        slot.set(nullptr, nullptr);
+        slot.set(first_cb, &a);
+    }
+    slot.set(nullptr, nullptr);
+    stop.store(true);
+    receiver.join();
+    EXPECT_EQ(mismatches.load(), 0);
+    EXPECT_GT(first.calls.load() + second.calls.load(), 0);
 }
 
 }  // namespace
