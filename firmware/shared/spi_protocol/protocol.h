@@ -136,6 +136,7 @@ enum MessageType : uint8_t {
     // 20 separate MSG_SAMPLE_META would be.
     MSG_SAMPLE_META_PAGE_REQ = 0x49,  // ESP32 -> Daisy: {first, count}
     MSG_SAMPLE_META_PAGE = 0x4A,      // Daisy -> ESP32: header + count records
+    MSG_SAMPLE_AUDITION = 0x4B,       // ESP32 -> Daisy: stream one Pool id without binding a Track
     // Sequencer / transport / MIDI clock (Phase 2; docs/features/sequencer.md,
     // midi-sync-tempo-follower.md, melodic-sequencing.md). ID block reserved in
     // docs/features/inter-mcu-protocol.md - do not assign outside this block.
@@ -456,6 +457,16 @@ struct MeterPushMessage {
           peak_left(peak_left_),
           peak_right(peak_right_) {}
 } __attribute__((packed));
+
+// Stream the Pool sample's card file with its authoritative edits. No Track
+// is read or changed. id 0/unknown/missing-path fails without replacing the
+// current audition; MSG_SAMPLE_STOP_REQ stops the singleton audition stream.
+struct SampleAuditionMessage {
+    uint16_t sample_id;
+    SampleAuditionMessage() : sample_id(0) {}
+    explicit SampleAuditionMessage(uint16_t id) : sample_id(id) {}
+} __attribute__((packed));
+static_assert(sizeof(SampleAuditionMessage) == 2, "audition carries the full Pool id");
 
 // Binds `sample_id` for playback on `slot` (0..15, the same instrument slot
 // MSG_NOTE_ON's channel & 0x0F addresses - instrument-model.md's numbering).

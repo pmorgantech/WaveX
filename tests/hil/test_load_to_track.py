@@ -6,7 +6,6 @@ Needs a card with the WAVs `--hil-sample` / `--hil-sample2` point at
 """
 
 import os
-import struct
 
 import pytest
 
@@ -14,7 +13,7 @@ MSG_SAMPLE_LOAD = 0x04
 
 
 @pytest.fixture(autouse=True)
-def leave_the_daisy_clean(daisy):
+def leave_the_daisy_clean(daisy, at_home):
     """Each test claims Tracks and loads samples; give them back after."""
     yield
     daisy.reset_samples()
@@ -39,7 +38,7 @@ def _open_browser(esp, path):
         entries=lambda n: int(n) > 1,
     )
     esp.page("SEL", f)
-    return esp.wait_state(sel=f.replace(" ", "_"))
+    return esp.wait_state(sel=f.replace(" ", "_"), picker="0", sk2="Load")
 
 
 def _free_track(daisy, avoid=()):
@@ -263,9 +262,7 @@ def test_failed_load_reports_the_daisys_reason(esp32, daisy):
     esp32.open_menu("Sample")
     esp32.page("TAB", "Browse")
     esp32.wait_state(tab="Browse")
-    path = b"/no/such/file.wav"
-    payload = struct.pack("<HIHBB", 4242, 0, 0, 0, 0) + path.ljust(96, b"\0")
-    daisy.msg(MSG_SAMPLE_LOAD, payload)
+    daisy.load_sample(4242, "/no/such/file.wav")
     st = esp32.wait_state(timeout=10.0, status=lambda s: "Load_failed" in s)
     assert "could_not_open" in st["status"], st["status"]
 

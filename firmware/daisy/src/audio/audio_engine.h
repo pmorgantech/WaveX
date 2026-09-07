@@ -139,6 +139,8 @@ void PushAllSampleMeta(uint16_t sample_id);
 
 // WAV playback control
 bool OpenWav(const char* path);
+// SD-backed audition; leaves all Track bindings intact.
+bool AuditionSample(uint16_t sample_id);
 void CloseWav();
 void PumpWavIO();
 bool IsWavPlaying();
@@ -228,6 +230,13 @@ void OnMidiCc(const WaveX::Protocol::MidiCcMessage& m);
 // publishes itself.
 void DebugTrackBinding(uint8_t track, WaveX::Protocol::TrackBindingMessage& out);
 uint8_t DebugActiveVoices();
+struct StreamDebugState {
+    uint16_t sample_id = 0;
+    uint32_t start = 0, end = 0, loop_start = 0, loop_end = 0, rewinds = 0;
+    int16_t gain_q15 = 0;
+    bool open = false, loop = false;
+};
+StreamDebugState DebugStreamState();
 size_t DebugLoadedSamples(uint16_t* ids, size_t cap);
 
 /// A resident sample's card path, for naming it in a saved Instrument.

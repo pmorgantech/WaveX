@@ -3,6 +3,12 @@
 **Status**: Target design (nothing implemented yet). Phase 4 in `roadmap.md`.
 **Core rule** (from `architecture.md` §1/§6): destructive sample editing and DSP mangling are **offline render jobs**. They never run in the audio callback, and playback must continue glitch-free while a render is in progress.
 
+Sample Edit's non-destructive audition uses `MSG_SAMPLE_AUDITION` (see the
+[wire contract](inter-mcu-protocol.md)): the backend resolves a Pool id to its
+card file and current metadata, then previews it through the singleton stream.
+Audition never changes Track bindings. Samples without a usable card path
+cannot use this preview path; a future RAM-only audition needs its own owner.
+
 ## 1. Why offline
 
 Time-stretch, pitch-shift, granular processing, and even simple normalize-over-a-3-minute-file cannot be bounded to the 1 ms audio block budget on a 480 MHz M7 that is also mixing 8 voices. Instead of complicating the real-time path with best-effort DSP, we split the world:

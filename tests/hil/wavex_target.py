@@ -280,7 +280,12 @@ class Esp32(Target):
             self.enc(delta)
             self.wait_state(sel=item)
         self.key("SELECT")
-        return self.wait_state(page=lambda p: p != "Main_Menu")
+        st = self.wait_state(page=item.replace(" ", "_"), depth="2")
+        if item in ("Sample", "Settings"):
+            st = self.wait_state(
+                page=item, tab=lambda tab: tab != "-", sk0="Back", sk0en="1"
+            )
+        return st
 
 
 class Daisy(Target):
@@ -346,13 +351,15 @@ class Daisy(Target):
         """MSG_SAMPLE_LOAD: make `path` resident under `sample_id`, without
         going through the frontend's browser. The size/rate/channel/depth
         fields are hints the Daisy re-reads from the file, so 0 is fine."""
-        name = path.encode()[:95]
-        payload = struct.pack("<HIHBB96s", sample_id, 0, 0, 0, 0, name)
+        name = path.encode()
+        if len(name) >= 256:
+            raise ValueError("sample path exceeds protocol BROWSE_PATH_MAX")
+        payload = struct.pack("<HIHBB256s", sample_id, 0, 0, 0, 0, name)
         return self.msg(self.MSG_SAMPLE_LOAD, payload)
 
     def bind_track(self, track, sample_id, root_note=60):
         """MSG_SAMPLE_SELECT: bind a resident sample to a Track."""
-        payload = struct.pack("<HBB", sample_id, track, root_note)
+        payload = struct.pack("<HBB", sample_id, track, 0)
         return self.msg(self.MSG_SAMPLE_SELECT, payload)
 
     def unbind_track(self, track):

@@ -521,7 +521,7 @@ struct WavState {
     // a disk error into the FIL, after which every f_read fails immediately
     // and only a fresh f_open clears it - which is exactly why stopping and
     // re-triggering the audition by hand was the only way back.
-    char path[128];
+    char path[WaveX::Protocol::BROWSE_PATH_MAX];
 
     // Non-destructive edit (MSG_SAMPLE_EDIT_SET). Byte offsets, not frames:
     // every consumer below works in bytes, and converting once here keeps the
@@ -532,6 +532,9 @@ struct WavState {
     uint32_t loop_start;
     uint32_t loop_end;
     bool loop_enabled;
+#if WAVEX_DEBUG_HARNESS_ENABLED
+    uint32_t rewinds;
+#endif
     q15_t gain_q15;  // 32767 = unity
 
     // Region fades (roadmap 1.5.6 item 3), in FRAMES at the file's own rate.
@@ -929,6 +932,25 @@ void DebugTrackBinding(uint8_t track, TrackBindingMessage& out) {
 
 uint8_t DebugActiveVoices() {
     return __atomic_load_n(&s_dbg_active_voices, __ATOMIC_RELAXED);
+}
+
+StreamDebugState DebugStreamState() {
+    StreamDebugState state;
+    state.open = s_wav.open;
+    if (!state.open) {
+        return state;
+    }
+    auto* record = s_pool ? s_pool->FindByPath(s_wav.path) : nullptr;
+    state.sample_id = record ? record->sample_id : 0;
+    const uint32_t bpf = s_wav.num_channels * (s_wav.bits_per_sample / 8u);
+    state.start = (s_wav.region_start - s_wav.data_start) / bpf;
+    state.end = (s_wav.region_end - s_wav.data_start) / bpf;
+    state.loop_start = (s_wav.loop_start - s_wav.data_start) / bpf;
+    state.loop_end = (s_wav.loop_end - s_wav.data_start) / bpf;
+    state.loop = s_wav.loop_enabled;
+    state.rewinds = s_wav.rewinds;
+    state.gain_q15 = s_wav.gain_q15;
+    return state;
 }
 
 size_t DebugLoadedSamples(uint16_t* ids, size_t cap) {
@@ -1587,7 +1609,11 @@ static bool refill_sd_buffer() {
             s_loop_gap_remaining = s_loop_gap_frames;
             const uint32_t rewind_to = s_wav.loop_enabled ? s_wav.loop_start : s_wav.region_start;
             const uint32_t seek_start = System::GetTick();
-            f_lseek(&s_wav.file, rewind_to);
+            if (f_lseek(&s_wav.file, rewind_to) == FR_OK) {
+#if WAVEX_DEBUG_HARNESS_ENABLED
+                ++s_wav.rewinds;
+#endif
+            }
             const uint32_t seek_ticks = System::GetTick() - seek_start;
             const uint32_t ticks_per_us = System::GetTickFreq() / 1000000u;
             const uint32_t now_ms = System::GetNow();
@@ -3351,13 +3377,22 @@ float GetBlockPeriodMs() {
 // WAV playback implementation
 // ============================
 
+static void ApplyMetaToStreaming(const LoadedSampleInfo* info);
+
+bool AuditionSample(uint16_t sample_id) {
+    const LoadedSampleInfo* info = find_loaded_sample(sample_id);
+    if (!info || info->path[0] == '\0') {
+        return false;
+    }
+    SetLoopGapMs(0);
+    return OpenWav(info->path);
+}
+
 bool OpenWav(const char* path) {
-    // CloseWav() zeroes the whole s_wav struct (s_wav = {}), including
-    // gain_q15 - which defeats the "gain survives the open" contract below:
-    // every open, first or not, saw gain_q15 == 0 and reset to unity. Capture
-    // it before the close so a real prior value (set via SetEditParams) makes
-    // it across.
-    const q15_t prev_gain_q15 = s_wav.gain_q15;
+    // Reject an unrepresentable identity before replacing a working stream.
+    if (!path || path[0] == '\0' || std::strlen(path) >= sizeof(s_wav.path)) {
+        return false;
+    }
     CloseWav();
 
     FRESULT fr = f_open(&s_wav.file, path, FA_READ);
@@ -3416,18 +3451,16 @@ bool OpenWav(const char* path) {
     s_wav.num_channels = wav_info.num_channels;
     s_wav.bits_per_sample = wav_info.bits_per_sample;
     s_wav.sample_rate = wav_info.sample_rate;
-    // Whole file, no loop, by default - an un-edited sample behaves exactly
-    // as it did before edits existed. Gain deliberately survives the open:
-    // it is a property of the sample being auditioned, and re-opening the
-    // same file to hear a marker change should not silently reset it.
-    s_wav.region_start = wav_info.data_offset;
-    s_wav.region_end = wav_info.data_offset + wav_info.data_size;
-    s_wav.loop_start = s_wav.region_start;
-    s_wav.loop_end = s_wav.region_end;
-    s_wav.loop_enabled = false;
-    s_wav.gain_q15 = (prev_gain_q15 != 0)
-                         ? prev_gain_q15
-                         : static_cast<q15_t>(32767);  // 32767 = unity, first open of the session
+    // Every open starts with this file's own metadata. Gain, fades and
+    // markers from the previous file must never bleed into another audition.
+    SamplePool::Record* record = s_pool ? s_pool->FindByPath(path) : nullptr;
+    ApplyMetaToStreaming(record ? &record->payload : nullptr);
+    if (f_lseek(&s_wav.file, s_wav.region_start) != FR_OK) {
+        CloseWav();
+        return false;
+    }
+    const uint32_t stop = s_wav.loop_enabled ? s_wav.loop_end : s_wav.region_end;
+    s_wav.bytes_remaining = stop - s_wav.region_start;
 
     // Reset buffers. CloseWav() above already cleared s_rb_live and no
     // producer call (rb_push_frames) runs between here and there, so the
@@ -3882,7 +3915,6 @@ void PumpWavIO() {
 static constexpr uint32_t kMinLoopFrames = 256;
 
 struct LoadedSampleInfo;
-static void ApplyMetaToStreaming(const LoadedSampleInfo* info);
 
 // dB -> q15 linear, clamped. Table-free: this runs once per edit message, not
 // per sample, so powf is affordable and exact beats fast here.
@@ -3961,7 +3993,8 @@ void SetEditParams(uint16_t sample_id,
 // Mirrors a record onto the streaming reader's byte offsets. Called whenever
 // either the record or the open file changes, so the two cannot drift.
 static void ApplyMetaToStreaming(const LoadedSampleInfo* info) {
-    if (!s_wav.open) {
+    if (!s_wav.open ||
+        (info && (info->path[0] == '\0' || std::strcmp(info->path, s_wav.path) != 0))) {
         return;
     }
     const uint32_t bytes_per_sample = (s_wav.bits_per_sample == 24) ? 3u : 2u;

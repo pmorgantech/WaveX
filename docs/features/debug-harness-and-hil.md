@@ -489,3 +489,13 @@ could have seen:
 
 Not built: nothing from §2–§6 is missing. `test_soak.py` and the §7 rows
 beyond the reboot-recovery and link ones are the open work.
+
+### Sample-edit regression telemetry
+
+The Daisy `STREAM` debug verb reports the open audition's Pool id (0 for an
+unregistered file), region and loop frames, gain, and foreground rewind count.
+It reads main-loop state; it does not inspect or log from the audio callback.
+`tests/hil/test_sample_edit.py` uses it to check that edits cannot affect a
+different file and that Sample Edit audition preserves Track bindings.
+The `MSG` payload and line bounds live in `debug/console_command.h`; they
+cover the current `SampleLoadMessage`, checked at compile time.

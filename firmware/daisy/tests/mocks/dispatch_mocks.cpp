@@ -67,6 +67,11 @@ void SetLoopGapMs(uint16_t gap_ms) {
     WaveX::Test::GetDispatchRecord().loop_gaps_ms.push_back(gap_ms);
 }
 
+bool AuditionSample(uint16_t sample_id) {
+    WaveX::Test::GetDispatchRecord().auditioned_samples.push_back(sample_id);
+    return sample_id != 0;
+}
+
 void SelectSample(uint16_t sample_id, uint8_t slot) {
     WaveX::Test::GetDispatchRecord().selected_samples.push_back({sample_id, slot});
 }

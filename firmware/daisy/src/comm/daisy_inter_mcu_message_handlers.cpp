@@ -152,6 +152,20 @@ void ProcessInterMcuMessage(uint8_t msg_type,
         case MSG_SAMPLE_SELECT:
             HandleSampleSelectMessage(payload, payload_size);
             break;
+        case MSG_SAMPLE_AUDITION: {
+            if (!payload || payload_size != sizeof(SampleAuditionMessage)) {
+                break;
+            }
+            SampleAuditionMessage msg;
+            std::memcpy(&msg, payload, sizeof(msg));
+            if (!WaveX::AudioEngine::AuditionSample(msg.sample_id)) {
+                ErrorMessage error;
+                error.code = 1;
+                detail::CopyWireString(error.msg, sizeof(error.msg), "Sample audition failed");
+                WaveX::Comm::UartLinkSend(MSG_ERROR, &error, sizeof(error));
+            }
+            break;
+        }
         case MSG_SAMPLE_UNLOAD:
             HandleSampleUnloadMessage(payload, payload_size);
             break;

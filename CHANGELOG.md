@@ -89,6 +89,15 @@ versioning and release process.
 
 ### Fixed
 
+- Sample Edit audition now previews by Pool id through the Daisy stream
+  without changing Track bindings. Edits apply only to the matching open
+  sample, and opening a new sample resets unrelated stream metadata. HIL
+  coverage verifies track and loop preservation, stream ownership, loop
+  wrapping, and page teardown during waveform traffic.
+- Browser HIL tests now isolate each test's home page, wait for deferred UI
+  state, and use the full SampleLoad path payload. The complete 45-test suite
+  passes, including the Sample Edit, loop, and navigation cases.
+
 - Deferred softkey actions now use a bounded queue and are cancelled before
   page or tab exit, so stale callbacks cannot reach destroyed UI owners.
   Queue-full and LVGL scheduling failures reject the press without running it

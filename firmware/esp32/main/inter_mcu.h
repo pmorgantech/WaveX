@@ -220,6 +220,8 @@ esp_err_t inter_mcu_send_browse_req(const char* path, uint8_t start_index);
 // seam is heard exactly as it will play.
 esp_err_t inter_mcu_send_sample_play_index_req(uint32_t file_index, uint16_t loop_gap_ms = 0);
 esp_err_t inter_mcu_send_sample_stop_req();
+// Preview an SD-backed Pool sample without changing a Track binding.
+esp_err_t inter_mcu_send_sample_audition(uint16_t sample_id);
 esp_err_t inter_mcu_send_sample_load_req(uint16_t sample_id,
                                          uint32_t sample_size,
                                          uint16_t sample_rate,

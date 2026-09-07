@@ -36,6 +36,7 @@ struct DispatchRecord {
     std::vector<WaveX::Protocol::SampleSelectMessage> selected_samples;
     std::vector<uint8_t> track_binding_requests;
     std::vector<uint16_t> unloaded_samples;
+    std::vector<uint16_t> auditioned_samples;
     int get_sample_mem_status_calls = 0;
 
     std::vector<WaveX::Protocol::SeqTransportMessage> seq_transports;
@@ -84,12 +85,13 @@ struct DispatchRecord {
         return note_ons.size() + note_offs.size() + control_changes.size() + sample_ctrls.size() +
                envelope_reqs.size() + cv_cal_sets.size() + cv_cal_gets.size() + cv_tests.size() +
                sample_loads.size() + selected_samples.size() + track_binding_requests.size() +
-               unloaded_samples.size() + static_cast<size_t>(get_sample_mem_status_calls) +
-               seq_transports.size() + seq_pattern_ops.size() + midi_clock_events.size() +
-               midi_ccs.size() + instrument_ops.size() + browse_requests.size() +
-               play_requests.size() + stop_requests.size() + play_index_requests.size() +
-               sample_edits.size() + meta_requests.size() + loop_gaps_ms.size() +
-               diag_subscribes.size() + mix_ops.size() + track_ops.size();
+               unloaded_samples.size() + auditioned_samples.size() +
+               static_cast<size_t>(get_sample_mem_status_calls) + seq_transports.size() +
+               seq_pattern_ops.size() + midi_clock_events.size() + midi_ccs.size() +
+               instrument_ops.size() + browse_requests.size() + play_requests.size() +
+               stop_requests.size() + play_index_requests.size() + sample_edits.size() +
+               meta_requests.size() + loop_gaps_ms.size() + diag_subscribes.size() +
+               mix_ops.size() + track_ops.size();
     }
 };
 

@@ -1049,6 +1049,19 @@ esp_err_t inter_mcu_send_sample_play_index_req(uint32_t file_index, uint16_t loo
     return result >= 0 ? ESP_OK : ESP_FAIL;
 }
 
+esp_err_t inter_mcu_send_sample_audition(uint16_t sample_id) {
+    if (!s_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (sample_id == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    WaveX::Protocol::SampleAuditionMessage msg(sample_id);
+    return send_uart_message(WaveX::Protocol::MSG_SAMPLE_AUDITION, &msg, sizeof(msg)) >= 0
+               ? ESP_OK
+               : ESP_FAIL;
+}
+
 esp_err_t inter_mcu_send_sample_stop_req() {
     if (!s_initialized) {
         return ESP_ERR_INVALID_STATE;

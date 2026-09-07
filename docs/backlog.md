@@ -12,10 +12,11 @@ checked at the API/DMA boundaries used by WaveX. Priorities describe concrete
 failure modes; hardware-only gates stay in the roadmap. Remove each task when
 its fix and regression checks are committed.
 
-- [ ] **High — frontend listener lifetime.** Allocation failure and
-  registration/removal during traffic now have real synchronization coverage.
-  Complete page teardown and queued actions still need lifetime coverage
-  (principles 2, 5, 6).
+- [x] **High — frontend listener lifetime.** Allocation failure and
+  registration/removal during traffic have real synchronization coverage;
+  queued actions and page/tab teardown are covered by focused tests and HIL
+  waveform traffic (principles 2, 5, 6). Real-panel teardown remains a bench
+  verification item.
 - [ ] **Medium — remaining reference consistency.** Finish checking the
   platform and feature guides against live transport and parameter behavior;
   the navigation, sequencer and testing references have been consolidated.
@@ -141,26 +142,6 @@ if a build reports SRAM above ~92%.
 
 ## Testing
 
-### Browser-driven HIL tests are order- and state-dependent
-
-`tests/hil/test_load_to_track.py`, `test_sample_pool.py` and `test_ui_nav.py`
-pass individually but fail in varying combinations when the suite runs end to
-end — typically `no softkey 'Load'; have ['Audition', 'Back']` (a picker left
-open by an earlier test) or `KeyError: 'tab'` (a page's deferred widget state
-read before it has been laid out — the deferred-UI wait the harness notes
-elsewhere).
-
-Measured 2026-09-05 by flashing the pre-stage-7 frontend (`4a79ef7`) and
-re-running: the same tests failed, so this predates the Track-routing work and
-is not caused by it. It was 25/25 at the Sample Pool commit, so it has
-regressed since — bisecting which commit is the first task here.
-
-Two fixes, both needed: give each browser-driven test a fixture that returns
-the UI to a known page (dismissing any open picker) rather than relying on the
-previous test's exit state, and make the assertions that read deferred UI
-state wait for it instead of sampling once. `test_track_routing.py` is
-backend-only and unaffected.
-
 ## UI and frontend maintenance
 
 ### Touch coordinate verification
@@ -194,52 +175,6 @@ In a separate deletion pass, remove the caller-less ESP32 APIs, unused window
 manager, and unreachable UI surfaces after re-checking callers.
 
 ## Samples, instruments, and browsing
-
-### Sample loop playback
-
-Reported on the bench 2026-09-05: a sample with loop points set plays through
-to its end in both the Sample Edit audition and the Play page — the loop is
-never taken. Three places it could be lost: the edit page sending the loop
-points, the Track/binding storing them, or the voice's playback honouring
-them; check each with the loop flag and points in the Daisy's
-`TRACKS`/`SAMPLES` console output before touching code. Belongs to the
-roadmap's "Sample Edit" verification row.
-
-Found and fixed 2026-09-06, on the first of those: `SampleEditMessage::slot`
-was one byte, but Sample Pool ids start at 1024, so the edit page sent the
-id's low byte — 0 for the first Pool id, which the Daisy's `SetEditParams`
-read as "the newest loaded sample". The message now carries a 16-bit
-`sample_id` (protocol 3) and the "0 = newest" fallback is gone. The other
-one-byte slots were checked and left alone: `SampleSelectMessage::slot` is a
-Track index, and the Daisy ignores the slot in `SampleCtrlMessage` and
-`SampleStopReqMessage` altogether. The remaining two places (the binding
-storing the loop, the voice honouring it) still need the bench check above.
-
-### Sample Edit's Audition silently claims Track 1
-
-`UISampleEditPage::onAudition` binds the sample being edited onto Track
-index 0 (`inter_mcu_send_sample_select(id, 0)`) and plays a note on it, so
-auditioning replaces whatever Track 1 held — an SFZ import included — with
-no picker and no notice, and leaves it there. That breaks the rule the Load
-and Assign paths follow (nothing takes a Track without asking). The audition
-needs a voice that is not a Track: either a backend audition binding outside
-the sixteen (a scratch zone the note path can resolve, released on stop) or
-the streaming audition, which already honours the record's region, loop,
-gain and fades (`ApplyMetaToStreaming`) but plays the file, not the resident
-copy. Decide, then delete the `sample_select(…, 0)` — do not add a picker to
-a preview button.
-
-### An edit lands on whatever stream is open
-
-`SetEditParams` applies the edited record to the streaming audition through
-`ApplyMetaToStreaming(info)`, which reads `s_wav` and never checks that the
-open file *is* that sample. Browse's audition of file B followed by a marker
-drag on Edit's sample A moves B's region and loop points to A's. Now that the
-Pool keeps each record's card path, compare it against the open stream's
-path (or carry the Pool id on `s_wav` when `OpenWav` resolves one) and skip
-the apply on a mismatch. A regression test can drive this through the
-dispatch mocks: open one path, edit another id, assert the region is
-unchanged.
 
 ### Non-frame-aligned WAV data
 

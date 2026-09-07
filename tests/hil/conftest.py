@@ -128,3 +128,4 @@ def at_home(esp32):
     esp32.wait_state(page="Main_Menu")
     yield esp32
     esp32.home()
+    esp32.wait_state(page="Main_Menu", depth="1", shift="0")

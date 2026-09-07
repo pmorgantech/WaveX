@@ -1969,3 +1969,17 @@ TEST_F(MessageTypeTest, EnvelopeChunkRejectsWrongEncodingAndInconsistentCounts) 
     column = {7, -4};
     EXPECT_EQ(create(1), 0u);
 }
+
+TEST_F(MessageTypeTest, SampleAuditionRoundTripPreservesPoolId) {
+    for (uint16_t id: {uint16_t{0}, uint16_t{1024}, uint16_t{0xFFFF}}) {
+        SampleAuditionMessage original(id);
+        const size_t created = ProtocolHandler::CreatePacket(
+            buffer_.data(), buffer_.size(), MSG_SAMPLE_AUDITION, &original, sizeof(original));
+        ASSERT_GT(created, 0u);
+        EXPECT_TRUE(ProtocolHandler::ValidatePacket(buffer_.data(), created));
+        SampleAuditionMessage parsed(1);
+        ASSERT_TRUE(ProtocolHandler::ParseMessage(
+            buffer_.data(), MSG_SAMPLE_AUDITION, &parsed, sizeof(parsed)));
+        EXPECT_EQ(parsed.sample_id, id);
+    }
+}

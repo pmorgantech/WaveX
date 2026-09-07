@@ -252,6 +252,18 @@ static void DispatchConsoleCommand(const WaveX::Debug::Command& c) {
                           "dropped",
                           static_cast<long>(s_console_reader.DroppedBytes()));
         (void)len;
+    } else if (std::strcmp(c.verb, "STREAM") == 0) {
+        const auto state = WaveX::AudioEngine::DebugStreamState();
+        size_t len = FormatOk(seq, reply, sizeof(reply));
+        len = AppendKvInt(reply, sizeof(reply), len, "open", state.open);
+        len = AppendKvInt(reply, sizeof(reply), len, "id", state.sample_id);
+        len = AppendKvInt(reply, sizeof(reply), len, "start", state.start);
+        len = AppendKvInt(reply, sizeof(reply), len, "end", state.end);
+        len = AppendKvInt(reply, sizeof(reply), len, "loop", state.loop);
+        len = AppendKvInt(reply, sizeof(reply), len, "ls", state.loop_start);
+        len = AppendKvInt(reply, sizeof(reply), len, "le", state.loop_end);
+        len = AppendKvInt(reply, sizeof(reply), len, "gain", state.gain_q15);
+        AppendKvInt(reply, sizeof(reply), len, "rewinds", state.rewinds);
     } else if (std::strcmp(c.verb, "TRACKS") == 0) {
         // t<i>=<state>[:<sample_id>][:<name>] for every Track.
         size_t len = FormatOk(seq, reply, sizeof(reply));
@@ -309,11 +321,12 @@ static void DispatchConsoleCommand(const WaveX::Debug::Command& c) {
         if (!NextWord(&p, hexword, sizeof(hexword)) || ParseHexBytes(hexword, type_byte, 1) != 1) {
             FormatErr(seq, "badtype", reply, sizeof(reply));
         } else {
-            static uint8_t payload[128];
-            char payload_hex[260] = {};
-            NextWord(&p, payload_hex, sizeof(payload_hex));
-            const size_t n = ParseHexBytes(payload_hex, payload, sizeof(payload));
-            if (payload_hex[0] != '\0' && n == 0) {
+            static_assert(sizeof(WaveX::Protocol::SampleLoadMessage) <= kMaxMessageBytes,
+                          "debug MSG must hold the live sample-load payload");
+            static uint8_t payload[kMaxMessageBytes];
+            p = WaveX::Debug::detail::SkipSpaces(p);
+            const size_t n = ParseHexBytes(p, payload, sizeof(payload));
+            if (*p != '\0' && n == 0) {
                 FormatErr(seq, "badhex", reply, sizeof(reply));
             } else {
                 WaveX::Comm::ProcessInterMcuMessage(type_byte[0], 0, payload, n);

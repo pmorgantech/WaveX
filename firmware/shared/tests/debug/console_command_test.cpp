@@ -4,6 +4,8 @@
 
 #include <gtest/gtest.h>
 
+#include "spi_protocol/protocol.h"
+
 #include <string>
 
 using namespace WaveX::Debug;
@@ -178,4 +180,22 @@ TEST(ConsoleTokens, NextIntAndNextWordWalkTheArgs) {
     ASSERT_TRUE(NextWord(&p, w, sizeof(w)));
     EXPECT_STREQ(w, "X");
     EXPECT_FALSE(NextWord(&p, w, sizeof(w)));
+}
+
+TEST(ConsoleLineReader, FullSampleLoadHexPayloadFitsWithoutTruncation) {
+    const size_t payload_size = sizeof(WaveX::Protocol::SampleLoadMessage);
+    ASSERT_LE(payload_size, kMaxMessageBytes);
+    LineReader reader;
+    const std::string hex(payload_size * 2, '0');
+    FeedAll(reader, "WAVEX-DBG 2147483647 MSG 04 " + hex + "\n");
+    ASSERT_TRUE(reader.Ready());
+    Command command;
+    ASSERT_TRUE(ParseCommand(reader.Line(), command));
+    const char* args = command.args;
+    char type[3];
+    ASSERT_TRUE(NextWord(&args, type, sizeof(type)));
+    uint8_t payload[kMaxMessageBytes];
+    EXPECT_EQ(ParseHexBytes(WaveX::Debug::detail::SkipSpaces(args), payload, sizeof(payload)),
+              payload_size);
+    EXPECT_EQ(reader.OverflowedLines(), 0u);
 }

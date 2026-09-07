@@ -137,6 +137,25 @@ TEST_F(MessageDispatchTest, TrackOpMidiInOffArrivesIntact) {
     EXPECT_EQ(GetDispatchRecord().track_ops[0].value, TRACK_MIDI_IN_OFF);
 }
 
+TEST_F(MessageDispatchTest, PoolAuditionNeverSelectsOrTriggersATrack) {
+    Dispatch(MSG_SAMPLE_AUDITION, SampleAuditionMessage(1027));
+    EXPECT_EQ(GetDispatchRecord().auditioned_samples, std::vector<uint16_t>{1027});
+    EXPECT_TRUE(GetDispatchRecord().selected_samples.empty());
+    EXPECT_TRUE(GetDispatchRecord().note_ons.empty());
+}
+
+TEST_F(MessageDispatchTest, PoolAuditionRejectsMalformedPayloadAndReportsFailure) {
+    const uint8_t bytes[3] = {};
+    for (size_t n: {size_t{0}, size_t{1}, size_t{3}}) {
+        ProcessInterMcuMessage(MSG_SAMPLE_AUDITION, 1, bytes, n);
+    }
+    EXPECT_TRUE(GetDispatchRecord().auditioned_samples.empty());
+    Dispatch(MSG_SAMPLE_AUDITION, SampleAuditionMessage(0));
+    ASSERT_EQ(GetDispatchRecord().uart_sends.size(), 1u);
+    EXPECT_EQ(GetDispatchRecord().uart_sends[0].msg_type, MSG_ERROR);
+    EXPECT_TRUE(GetDispatchRecord().selected_samples.empty());
+}
+
 TEST_F(MessageDispatchTest, SampleCtrlReachesAudioEngine) {
     SampleCtrlMessage ctrl(0, SAMPLE_REC_START, 1.0f);
     Dispatch(MSG_SAMPLE_CTRL, ctrl);

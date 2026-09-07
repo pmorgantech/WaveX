@@ -31,10 +31,11 @@ namespace Debug {
 constexpr int32_t kNoSeq = -1;
 
 /// Longest accepted line, including the "WAVEX-DBG " prefix. Sized for the
-/// Daisy MSG verb's hex payload (128-byte payload = 256 hex chars) with room
+/// Daisy MSG verb's bounded hex payload with room
 /// for the header; a longer line is rejected whole, never truncated into a
 /// shorter, valid-looking command.
-constexpr size_t kMaxLineBytes = 320;
+constexpr size_t kMaxMessageBytes = 272;
+constexpr size_t kMaxLineBytes = 2 * kMaxMessageBytes + 64;
 
 /// Verb token and argument bounds. Verbs are short upper-case words.
 constexpr size_t kMaxVerbBytes = 16;

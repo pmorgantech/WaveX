@@ -13,7 +13,7 @@ from test_load_to_track import _free_track, _open_browser, _wait_picker
 
 
 @pytest.fixture(autouse=True)
-def leave_the_daisy_clean(daisy):
+def leave_the_daisy_clean(daisy, at_home):
     yield
     daisy.reset_samples()
 
@@ -151,9 +151,7 @@ def test_sample_manager_pages_through_a_pool_larger_than_one_page(
     kicks = [f"/Drums/Kicks/bassdr0{i}.wav" for i in range(1, 8)]
     kicks += ["/Drums/Kicks/bdfx10.wav", "/Drums/Kicks/bdfx18.wav"]
     for i, path in enumerate(kicks):
-        payload = struct.pack("<HIHBB", 5000 + i, 0, 0, 0, 0)
-        payload += path.encode().ljust(96, b"\0")
-        daisy.msg(daisy.MSG_SAMPLE_LOAD, payload)
+        daisy.load_sample(5000 + i, path)
     deadline = time.monotonic() + 30
     while len(daisy.samples()) < len(kicks):
         assert time.monotonic() < deadline, daisy.samples()
