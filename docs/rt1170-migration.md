@@ -131,4 +131,8 @@ Matches this project's usual one-commit-per-verified-stage workflow. Each stage 
 
 ---
 
-This document is a planning artifact, not an approved roadmap phase. Next step is iterating on Stage 1 (or earlier stages of §10) with the user, and — once scope stabilizes — deciding whether this becomes a new `roadmap.md` phase or stays a parallel track.
+This document is a planning artifact linked from the Phase 2 callback-capacity
+checkpoint, not an approved implementation phase. The next step is to resolve
+the measured DaisySP blocker and confirm scope with the user before iterating
+on Stage 1 (or earlier stages of §10); board port and purchase decisions remain
+out of scope.

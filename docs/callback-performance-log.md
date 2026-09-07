@@ -34,8 +34,9 @@ blocked from release or further callback scope until its margin is resolved.
 ## Workload and evidence notes — 2026-09-07
 
 Both captures used firmware commit 176ce1f, persistent QSPI -O2, 480 MHz,
-48 kHz, and 48-sample blocks. Capture metadata and image SHA256 values are in
-perf-wavex-20260907-212459.json and perf-daisysp-20260907-222524.json. The
+48 kHz, and 48-sample blocks; only the filter topology/slope differed. Capture
+metadata and image SHA256 values are in the local, gitignored logs/
+perf-wavex-20260907-212459.json and logs/perf-daisysp-20260907-222524.json. The
 WaveX run covered Track 0 pitches 60–67 at velocity 100,
 /Drums/Kicks/bassdr01.wav (44.1 kHz mono, full-file loop), the singleton SD
 stream, 120 BPM / 16 steps / 60% swing, eight simultaneous preview rows every
@@ -49,7 +50,7 @@ they add no measured DSP workload and remain roadmap Phase 2 item 5. Both
 captures recorded zero measured boot/runtime underruns. The measurements cover
 the whole callback only; they do not separately time Render(), placement A/B,
 physical DIN/USB latency, listening or loop-seam quality, hot-unmount recovery,
-or the four-track sequencer gate. The TSAN runtime was unavailable because its
-mapped runtime library could not be loaded. Normal persistent firmware was
+or the four-track sequencer gate. TSAN discovery was unavailable with
+FATAL: ThreadSanitizer: unexpected memory mapping. Normal persistent firmware was
 restored after profiling, and the final two-board console smoke run passed 7/7
 selected tests (39 deselected).

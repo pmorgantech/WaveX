@@ -60,6 +60,15 @@ The scheduler, protocol and callback trigger path exist, with eight preview
 rows mapped to pitches on fixed Track index 0. Hardware timing remains
 unverified. Open work:
 
+1. Replace the fixed-Track preview with Track-addressed pattern triggering
+   for the four-track gate; verify sample-offset timing and edit boundaries
+   on hardware.
+2. Serialize MIDI clock out on the ESP32's DIN and USB paths (needs 2.P.5).
+3. Build the pad grid, step editor, kit editor, and TLC5947 LED feedback
+   (needs 2.P.1–3).
+4. Persist kits, patterns, and songs atomically through WXCF.
+5. Apply per-step parameter locks to trigger parameters.
+
 ### 2.C — Callback capacity checkpoint (2026-09-07)
 
 The recurring callback evidence is recorded in
@@ -74,15 +83,6 @@ purchase, and the WaveX path remains the fallback.
 Before accepting DaisySP or additional callback scope, attribute or restrict
 the higher-cost path, or port the backend. Parameter locks remain item 5 and
 were programmed but not applied by the measured callback.
-
-1. Replace the fixed-Track preview with Track-addressed pattern triggering
-   for the four-track gate; verify sample-offset timing and edit boundaries
-   on hardware.
-2. Serialize MIDI clock out on the ESP32's DIN and USB paths (needs 2.P.5).
-3. Build the pad grid, step editor, kit editor, and TLC5947 LED feedback
-   (needs 2.P.1–3).
-4. Persist kits, patterns, and songs atomically through WXCF.
-5. Apply per-step parameter locks to trigger parameters.
 
 ### 2.P — Panel controls and MIDI I/O (prerequisite for items 2 and 3)
 
@@ -195,7 +195,7 @@ The following code paths are open until observed on the target:
 | Diagnostics | Open the page and verify live telemetry arrives. |
 | Digital voices | Trigger RAM-resident notes, sweep live parameters, and judge SVF response/resonance. |
 | Sample retirement | Replace/unload samples during held and sequenced playback; exercise delayed/stopped callbacks and concurrent import requests. Confirm timeout preserves storage, then measure DWT headroom and run the zero-underrun soak. Host helper tests do not verify this interrupt integration. |
-| Callback budget | Establish the first recurring callback-headroom report: DWT-measure SVF (both topologies, 24 dB, drive), DTCM placement, mixer, and 480 MHz behavior with eight voices on the persistent QSPI `-O2` image, plus a zero-underrun soak. Record it in `callback-performance-log.md` using the gate in `performance_monitoring.md`. |
+| Callback budget | Recurring whole-callback evidence is recorded in `callback-performance-log.md`: WaveX is 65.8029% / STAY and DaisySP is 89.6635% / UPGRADE, both with zero underruns. Remaining work is the DaisySP blocker, separate Render() timing, and selective placement A/B; no overall phase gate is claimed. |
 | Sample Edit | Verify waveform fetch, handles, loop seam audibility, browser detail waveform, and stereo readability. HIL covers Track-preserving audition, edits isolated to the matching stream, streaming loop wraps and RAM-loop note lifetime. |
 | Settings and input | Verify brightness, scrolling, MIDI channel filtering, keypad, encoder direction, and UI responsiveness. |
 | UI concurrency | Measure LVGL lock/refresh behavior during encoder bursts and sample loading. |

@@ -64,8 +64,10 @@ host-testable header implementation is preferable to an unmeasured placement
 change.
 
 A matched `-O0`, profiling-enabled bench on 2026-09-04 streamed the same
-44.1-kHz stereo WAV from SD in both profiles. The current release-optimized
-eight-voice evidence is recorded in
+44.1-kHz stereo WAV from SD in both profiles. The active audio callback
+averaged 52.39 us from QSPI and 17.84 us from SRAM; the foreground WAV pump
+averaged 1.416 ms and 1.189 ms respectively, with no observed underruns. The
+current release-optimized eight-voice evidence is recorded in
 [callback-performance-log.md](callback-performance-log.md); selective
 relocation still needs a measured placement A/B before it is accepted.
 
