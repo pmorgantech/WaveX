@@ -89,6 +89,8 @@ versioning and release process.
 
 ### Fixed
 
+- Callback-headroom reports retain the distinct STAY decision for 60–<70% utilization; duplicate Python enum values previously printed that band as COMFORTABLE. Boundary tests cover every gate decision.
+
 - Daisy stream startup now publishes the audio ring only after prebuffered frames arrive, preventing a false underrun and premature empty playback on each audition. Hardware regression coverage repeats start, loop, and stop five times.
 
 - Sample Edit audition now previews by Pool id through the Daisy stream

@@ -105,25 +105,31 @@ class Capture(NamedTuple):
     underruns: int
 
 
+@enum.unique
 class Decision(enum.Enum):
     """Band of the worst observed callback (performance_monitoring.md)."""
 
-    COMFORTABLE = (True, None)
-    STAY = (True, None)
-    REVIEW = (False, "profile/optimize or reduce scope, then re-measure")
-    UPGRADE = (False, "activate the backend chip-upgrade path")
+    COMFORTABLE = ("comfortable", True, None)
+    STAY = ("stay", True, None)
+    REVIEW = (
+        "review",
+        False,
+        "profile/optimize or reduce scope, then re-measure",
+    )
+    UPGRADE = ("upgrade", False, "activate the backend chip-upgrade path")
     HOLD = (
+        "hold",
         False,
         "reduce load or explicitly close further callback scope",
     )
 
     @property
     def passes(self) -> bool:
-        return self.value[0]
+        return self.value[1]
 
     @property
     def blocked_reason(self) -> Optional[str]:
-        return self.value[1]
+        return self.value[2]
 
     @classmethod
     def classify(cls, max_pct, features_remaining) -> "Decision":
