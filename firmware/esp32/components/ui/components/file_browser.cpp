@@ -749,6 +749,16 @@ static bool parse_browse_response_with_pagination(const uint8_t* data,
         return false;
     }
 
+    // The caller allocates one page. Keep its parsed count and the wire
+    // count identical: the pagination copy/sort loops use the latter.
+    if (*current_page_entries > *count) {
+        ESP_LOGE(TAG, "Browse page exceeds destination capacity");
+        *count = 0;
+        *total_files = 0;
+        *current_page_entries = 0;
+        return false;
+    }
+
     uint32_t parsed_count = 0;
     const FileEntryWire* wire_entries = (const FileEntryWire*)(data + sizeof(BrowseRespHeader));
 
@@ -778,8 +788,9 @@ static bool parse_browse_response_with_pagination(const uint8_t* data,
         }
 
         ESP_LOGD(TAG,
-                 "Entry %d: Raw name from Daisy: '%s', after slash strip: '%s'",
+                 "Entry %d: Raw name from Daisy: '%.*s', after slash strip: '%s'",
                  i,
+                 static_cast<int>(sizeof(wire_entry->name)),
                  wire_entry->name,
                  entry->name);
 

@@ -67,6 +67,8 @@ versioning and release process.
 
 ### Fixed
 
+- Browse responses reject entry counts beyond their copied buffer and bound logging of wire filenames.
+
 - Waveform reception synchronizes request identity and publication, accepts backend EOF clamping, and bounds retries when cache admission fails; late or aborted responses cannot overwrite a newer request.
 
 - Sample retirement waits for generation-specific callback acknowledgement; live parameters, mixer controls, modulation and telemetry cross complete snapshots. Per-track updates preserve other tracks, malformed note addresses are rejected, and imports exclude conflicting pool mutations. Sample identity compares full paths to avoid hash collisions.

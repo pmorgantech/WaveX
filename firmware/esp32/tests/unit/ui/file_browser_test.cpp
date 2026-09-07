@@ -633,3 +633,33 @@ TEST_F(FileBrowserResponseTest, DestroyDeregistersListeners) {
     // turns a regression into a hard failure.
     SUCCEED();
 }
+
+// The callback allocates one 20-entry page. A fully-sized payload with a
+// larger count must be rejected, not parsed partially and then copied using
+// the original wire count (which reads beyond the temporary allocation).
+TEST_F(FileBrowserResponseTest, OversizedPageIsRejectedBeforeCopyingTemporaryEntries) {
+    std::vector<FileEntryWire> page(21, FileEntryWire(0, 100, "kick.wav"));
+    Respond(21, page);
+    EXPECT_EQ(wavex_file_browser_get_entry_count(browser_), 0u);
+    EXPECT_EQ(browser_->loaded_entries, 0u);
+    EXPECT_EQ(GetInterMcuCapture().browse_req_calls, 1);
+}
+
+TEST_F(FileBrowserResponseTest, FullSizePageRetainsEveryEntry) {
+    std::vector<FileEntryWire> page(20, FileEntryWire(0, 100, "kick.wav"));
+    Respond(20, page);
+    EXPECT_EQ(wavex_file_browser_get_entry_count(browser_), 20u);
+    EXPECT_EQ(browser_->loaded_entries, 20u);
+    EXPECT_EQ(GetInterMcuCapture().browse_req_calls, 1);
+}
+
+TEST_F(FileBrowserResponseTest, UnterminatedWireNameIsBoundedEvenInDebugLogging) {
+    auto payload = BuildBrowsePayload(1, {FileEntryWire()});
+    std::fill(payload.begin() + sizeof(BrowseRespHeader), payload.end(), 'n');
+    stats_->invoke_browse_resp_callback(payload.data(), payload.size());
+    ASSERT_EQ(wavex_file_browser_get_entry_count(browser_), 1u);
+    const auto* entry = wavex_file_browser_get_entry(browser_, 0);
+    ASSERT_NE(entry, nullptr);
+    EXPECT_EQ(strlen(entry->name), sizeof(entry->name) - 1);
+    EXPECT_EQ(std::string(entry->name), std::string(47, 'n'));
+}
