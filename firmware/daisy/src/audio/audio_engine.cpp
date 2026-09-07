@@ -36,6 +36,7 @@ using q15_t = int16_t;
 #include "../timebase.hpp"
 #include "audio/sample_pool.hpp"
 #include "callback_stop_fence.hpp"
+#include "envelope_scan.hpp"
 #include "fade.hpp"
 #include "instrument.hpp"
 #include "lfo.hpp"
@@ -2685,50 +2686,13 @@ static DisplayChannelPlan ResolveDisplayChannels(const LoadedSampleInfo& src, bo
 // Waveform envelope job (roadmap 1.5.5 item 2)
 // ============================
 //
-// A true min/max envelope has to touch EVERY sample in the window - that is
-// the whole difference from decimation, which is why it does not alias. For a
-// three-minute stereo file that is ~16 M reads, and doing them in one go from
-// a message handler would stall the main loop for ~100 ms: four times the
-// ring's ~42 ms of headroom, i.e. an audible dropout every time the user
-// zooms out. So the scan is a job, budgeted per main-loop pass, and each
-// chunk goes out as soon as it is measured rather than at the end.
-//
-// The chunk is also the staging buffer: at 1920 payload bytes a chunk holds
-// 480 mono or 240 stereo columns, and nothing larger than one packet is ever
-// held. That is 10 KB of internal RAM this does NOT take (review H1 reclaimed
-// ~254 KB; spending 4% of it on a display buffer would be a poor trade).
-static constexpr uint32_t kEnvChunkPayloadBytes = 1920;
-static constexpr uint32_t kEnvMaxChunkColumns =
-    kEnvChunkPayloadBytes / sizeof(WaveX::Protocol::EnvelopeColumn);  // 480, mono
+// The scan owns one packet and a partial-column cursor. Each pump reads a
+// bounded number of PCM values, even for a one-column whole-file request.
+// Only the main loop touches it; sample retirement cancels before freeing PCM.
+static EnvelopeScan s_env_scan;
 
-// Frames scanned per pass. 24576 frames is ~0.25 ms of SDRAM reads on this
-// part - well inside a main-loop pass, and small enough that a full-file
-// envelope of a long sample interleaves with SD refill instead of displacing
-// it. A whole 8 M-frame file therefore takes ~340 passes, which is well under
-// a second of wall clock at the loop rate.
-static constexpr uint32_t kEnvFramesPerPass = 24576;
-
-struct EnvelopeJob {
-    bool active = false;
-    uint16_t sample_id = 0;
-    uint16_t generation = 0;
-    uint32_t start_frame = 0;
-    uint32_t end_frame = 0;
-    uint16_t total_columns = 0;
-    uint16_t next_column = 0;  // first column not yet measured
-    uint8_t channels = 1;      // traces per column on the wire
-};
-static EnvelopeJob s_env_job;
-
-alignas(4) static uint8_t
-    s_env_frame[sizeof(WaveX::Protocol::EnvelopeChunkMessage) + kEnvChunkPayloadBytes];
-
-// Cancels any envelope in flight. Called when the sample it is measuring is
-// about to be replaced or released: the job holds a sample_id, not a pointer,
-// but finishing a scan against rewritten memory would send a waveform of the
-// wrong audio under the old generation, which the frontend would then cache.
 static void CancelEnvelopeJob() {
-    s_env_job.active = false;
+    s_env_scan.Cancel();
 }
 
 // Reads one display sample of one source channel, scaled to int16.
@@ -2789,128 +2753,58 @@ void OnEnvelopeReq(const WaveX::Protocol::EnvelopeReqMessage& req) {
 
     const DisplayChannelPlan plan = ResolveDisplayChannels(*info, /*allow_stereo=*/true);
 
-    s_env_job.active = true;
-    s_env_job.sample_id = info->sample_id;
-    s_env_job.generation = info->meta.generation;
-    s_env_job.start_frame = start;
-    s_env_job.end_frame = end;
-    s_env_job.total_columns = static_cast<uint16_t>(columns);
-    s_env_job.next_column = 0;
-    s_env_job.channels = plan.out_channels;
+    WaveX::Protocol::EnvelopeChunkMessage identity;
+    identity.sample_id = info->sample_id;
+    identity.generation = info->meta.generation;
+    identity.start_frame = start;
+    identity.end_frame = end;
+    identity.total_columns = static_cast<uint16_t>(columns);
+    identity.channels = plan.out_channels;
+    s_env_scan.Begin(identity, req.end_frame);
 }
 
 void PumpEnvelopeJob() {
-    if (!s_env_job.active) {
+    if (!s_env_scan.Active()) {
         return;
     }
 
-    // Re-resolve every pass. The sample can be unloaded or reloaded while a
-    // scan is in flight, and a generation bump means the audio under us
-    // changed - both make the rest of this envelope a description of
-    // something that no longer exists.
-    LoadedSampleInfo* info = find_loaded_sample(s_env_job.sample_id);
+    // Re-resolve before either scanning OR sending a retained packet.
+    const auto& identity = s_env_scan.Identity();
+    LoadedSampleInfo* info = find_loaded_sample(identity.sample_id);
     void* base = nullptr;
-    if (!info || info->meta.generation != s_env_job.generation ||
+    if (!info || info->meta.generation != identity.generation ||
         !s_sample_mem_mgr.ptr(info->handle, &base) || base == nullptr) {
         CancelEnvelopeJob();
         return;
     }
-
     const DisplayChannelPlan plan = ResolveDisplayChannels(*info, /*allow_stereo=*/true);
-    if (plan.out_channels != s_env_job.channels) {
-        CancelEnvelopeJob();  // channel_mode changed mid-scan; the frontend will re-ask
-        return;
-    }
-
-    const uint32_t columns_per_chunk = std::max<uint32_t>(
-        1u, kEnvChunkPayloadBytes / (s_env_job.channels * sizeof(WaveX::Protocol::EnvelopeColumn)));
-
-    auto* header = reinterpret_cast<WaveX::Protocol::EnvelopeChunkMessage*>(s_env_frame);
-    auto* out = reinterpret_cast<WaveX::Protocol::EnvelopeColumn*>(
-        s_env_frame + sizeof(WaveX::Protocol::EnvelopeChunkMessage));
-
-    const uint16_t first_column = s_env_job.next_column;
-    const uint64_t span = s_env_job.end_frame - s_env_job.start_frame;
-    const uint32_t total_columns = s_env_job.total_columns;
-
-    uint32_t columns_done = 0;
-    uint32_t frames_scanned = 0;
-    while (s_env_job.next_column < total_columns && columns_done < columns_per_chunk &&
-           frames_scanned < kEnvFramesPerPass) {
-        const uint32_t c = s_env_job.next_column;
-        // 64-bit throughout: span * column index overflows 32 bits for any
-        // file past ~3.3 M frames at 1280 columns, which is under 80 seconds.
-        uint32_t f0 = s_env_job.start_frame + static_cast<uint32_t>((span * c) / total_columns);
-        uint32_t f1 =
-            s_env_job.start_frame + static_cast<uint32_t>((span * (c + 1)) / total_columns);
-        if (f1 <= f0) {
-            f1 = f0 + 1;  // sub-frame column: report the one frame it lands on
-        }
-        if (f1 > s_env_job.end_frame) {
-            f1 = s_env_job.end_frame;
-        }
-
-        for (uint8_t ch = 0; ch < s_env_job.channels; ++ch) {
-            const uint8_t src_ch = plan.pick[ch];
-            int32_t lo = 32767;
-            int32_t hi = -32768;
-            for (uint32_t f = f0; f < f1; ++f) {
-                int32_t v;
-                if (plan.sum) {
-                    v = (EnvReadSample(*info, base, f, 0) + EnvReadSample(*info, base, f, 1)) / 2;
-                } else {
-                    v = EnvReadSample(*info, base, f, src_ch);
-                }
-                if (v < lo) {
-                    lo = v;
-                }
-                if (v > hi) {
-                    hi = v;
-                }
-            }
-            if (hi < lo) {  // empty column, cannot happen after the f1 fixups
-                lo = hi = 0;
-            }
-            out[columns_done * s_env_job.channels + ch] =
-                WaveX::Protocol::EnvelopeColumn(static_cast<int16_t>(lo), static_cast<int16_t>(hi));
-        }
-
-        frames_scanned += (f1 - f0) * s_env_job.channels;
-        ++columns_done;
-        ++s_env_job.next_column;
-    }
-
-    if (columns_done == 0) {
+    if (plan.out_channels != identity.channels) {
         CancelEnvelopeJob();
         return;
     }
 
-    header->sample_id = s_env_job.sample_id;
-    header->generation = s_env_job.generation;
-    header->start_frame = s_env_job.start_frame;
-    header->end_frame = s_env_job.end_frame;
-    header->total_columns = static_cast<uint16_t>(total_columns);
-    header->first_column = first_column;
-    header->columns = static_cast<uint16_t>(columns_done);
-    header->channels = s_env_job.channels;
-    header->reserved = 0;
-
-    const size_t payload_bytes =
-        sizeof(WaveX::Protocol::EnvelopeChunkMessage) +
-        columns_done * s_env_job.channels * sizeof(WaveX::Protocol::EnvelopeColumn);
-    const int res = WaveX::Comm::UartLinkSend(
-        WaveX::Protocol::MSG_ENVELOPE_CHUNK, s_env_frame, static_cast<uint16_t>(payload_bytes));
-    if (res < 0) {
-        // Queue full. This runs on the main loop, so the honest move is to
-        // rewind and let the next pass retry. No blocking, and the columns are
-        // re-measured rather than punching a hole in the envelope.
-        s_env_job.next_column = first_column;
-        return;
-    }
-
-    if (s_env_job.next_column >= total_columns) {
-        s_env_job.active = false;
-    }
+    s_env_scan.Pump(
+        plan.sum ? 2 : plan.out_channels,
+        [&](uint32_t frame, uint8_t channel) {
+            const int32_t value = plan.sum ? (EnvReadSample(*info, base, frame, 0) +
+                                              EnvReadSample(*info, base, frame, 1)) /
+                                                 2
+                                           : EnvReadSample(*info, base, frame, plan.pick[channel]);
+            return static_cast<int16_t>(value);
+        },
+        [](const EnvelopeScan::Packet& packet, uint16_t bytes) {
+            // Never stack waveform frames behind normal traffic or another
+            // waveform frame. A queued packet includes the active DMA frame.
+            if (!WaveX::Comm::UartLinkTxIdle()) {
+                return false;
+            }
+            const bool sent =
+                WaveX::Comm::UartLinkSend(WaveX::Protocol::MSG_ENVELOPE_CHUNK, &packet, bytes) >= 0;
+            if (sent) {
+                WaveX::Comm::UartLinkPumpTx();
+            }
+            return sent;
+        });
 }
 
 bool LoadSfzInstrument(const char* path, uint8_t slot) {

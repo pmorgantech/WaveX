@@ -924,7 +924,7 @@ int main(void) {
 // Advance any waveform envelope scan (roadmap 1.5.5), after the WAV pump:
 // the refill is the thing with a deadline, so the envelope gets what is left
 // over rather than competing for it. PumpEnvelopeJob is itself budgeted
-// (~0.25 ms of SDRAM reads per pass) and returns immediately when no scan is
+// (including partial columns and retained TX packets) and returns when no scan is
 // in flight, which is the normal state.
 #if WAVEX_AUDIO_ENGINE_ENABLED
         // SFZ inspection/loading is one bounded cooperative step per pass.

@@ -1318,7 +1318,7 @@ TEST_F(MessageTypeTest, EnvelopeReqRoundTrip) {
 
 TEST_F(MessageTypeTest, EnvelopeChunkCarriesBothChannels) {
     EXPECT_EQ(sizeof(EnvelopeChunkMessage), 20u);
-    EXPECT_EQ(sizeof(EnvelopeColumn), 4u);
+    EXPECT_EQ(sizeof(EnvelopeColumn8), 2u);
 
     constexpr uint16_t kColumns = 3;
     EnvelopeChunkMessage header;
@@ -1333,8 +1333,8 @@ TEST_F(MessageTypeTest, EnvelopeChunkCarriesBothChannels) {
 
     // Deliberately asymmetric L/R: a summed-to-mono format would lose this,
     // and a loop seam has to be judged on both channels (roadmap 1.5.7).
-    const EnvelopeColumn columns[kColumns * 2] = {
-        {-32768, 32767}, {0, 0}, {-100, 200}, {-3000, 4000}, {-1, 1}, {-20000, 100}};
+    const EnvelopeColumn8 columns[kColumns * 2] = {
+        {-128, 127}, {0, 0}, {-1, 2}, {-30, 40}, {-1, 1}, {-100, 100}};
 
     size_t created = ProtocolHandler::CreateEnvelopeChunkPacket(
         buffer_.data(), buffer_.size(), header, columns, kColumns * 2);
@@ -1355,23 +1355,24 @@ TEST_F(MessageTypeTest, EnvelopeChunkCarriesBothChannels) {
     EXPECT_EQ(parsed_header.first_column, 12);
     EXPECT_EQ(parsed_header.columns, kColumns);
     EXPECT_EQ(parsed_header.channels, 2);
+    EXPECT_EQ(parsed_header.encoding, ENVELOPE_ENCODING_S8);
 
     const auto* parsed_columns =
-        reinterpret_cast<const EnvelopeColumn*>(payload + sizeof(EnvelopeChunkMessage));
+        reinterpret_cast<const EnvelopeColumn8*>(payload + sizeof(EnvelopeChunkMessage));
     for (size_t i = 0; i < kColumns * 2; ++i) {
         EXPECT_EQ(parsed_columns[i].min_sample, columns[i].min_sample) << "column " << i;
         EXPECT_EQ(parsed_columns[i].max_sample, columns[i].max_sample) << "column " << i;
     }
 }
 
-// A full-width stereo run is 1280 x 2 x 4 = 10240 bytes, well past one packet,
+// A full-width stereo run is 1280 x 2 x 2 = 5120 bytes, well past one packet,
 // so an over-large run must be refused rather than truncated into a waveform
 // that silently omits its tail.
 TEST_F(MessageTypeTest, EnvelopeChunkRefusesAnOversizedRun) {
     EnvelopeChunkMessage header;
     header.channels = 2;
     header.columns = MAX_ENVELOPE_COLUMNS;
-    std::vector<EnvelopeColumn> columns(MAX_ENVELOPE_COLUMNS * 2);
+    std::vector<EnvelopeColumn8> columns(MAX_ENVELOPE_COLUMNS * 2);
     EXPECT_EQ(ProtocolHandler::CreateEnvelopeChunkPacket(
                   buffer_.data(), buffer_.size(), header, columns.data(), columns.size()),
               0u);
@@ -1917,4 +1918,54 @@ TEST_F(MessageTypeTest, FixedWireStringsAreZeroedInReusedStorage) {
                            uint8_t{0});
     ExpectZeroedStringTail(&InstStatusMessage::current_name);
     ExpectZeroedStringTail(&TrackBindingMessage::name);
+}
+
+TEST_F(MessageTypeTest, EnvelopeByteQuantizationEnclosesEverySourceValue) {
+    for (int32_t value = INT16_MIN; value <= INT16_MAX; ++value) {
+        const auto encoded =
+            EnvelopeColumn8::FromExtrema(static_cast<int16_t>(value), static_cast<int16_t>(value));
+        const auto decoded = encoded.Expand();
+        ASSERT_LE(decoded.min_sample, value) << value;
+        ASSERT_GE(decoded.max_sample, value) << value;
+        ASSERT_LE(value - decoded.min_sample, 258) << value;
+        ASSERT_LE(decoded.max_sample - value, 258) << value;
+    }
+    for (const int16_t value: {int16_t{INT16_MIN}, int16_t{0}, int16_t{INT16_MAX}}) {
+        const auto decoded = EnvelopeColumn8::FromExtrema(value, value).Expand();
+        EXPECT_EQ(decoded.min_sample, value);
+        EXPECT_EQ(decoded.max_sample, value);
+    }
+    EXPECT_EQ(1140u * 2 * sizeof(EnvelopeColumn8), 4560u);
+}
+
+TEST_F(MessageTypeTest, EnvelopeByteCodesRoundTripWithoutDrift) {
+    for (int code = -128; code <= 127; ++code) {
+        const int16_t value = EnvelopeColumn8::DecodeSample(static_cast<int8_t>(code));
+        const auto again = EnvelopeColumn8::FromExtrema(value, value);
+        EXPECT_EQ(again.min_sample, code);
+        EXPECT_EQ(again.max_sample, code);
+    }
+}
+
+TEST_F(MessageTypeTest, EnvelopeChunkRejectsWrongEncodingAndInconsistentCounts) {
+    EnvelopeChunkMessage h;
+    h.total_columns = h.columns = 1;
+    EnvelopeColumn8 column{-4, 7};
+    auto create = [&](size_t count) {
+        return ProtocolHandler::CreateEnvelopeChunkPacket(
+            buffer_.data(), buffer_.size(), h, &column, count);
+    };
+    EXPECT_GT(create(1), 0u);
+    h.encoding = 0;  // old 16-bit payload must not be mistaken for compact data
+    EXPECT_EQ(create(1), 0u);
+    h.encoding = 255;
+    EXPECT_EQ(create(1), 0u);
+    h.encoding = ENVELOPE_ENCODING_S8;
+    EXPECT_EQ(create(0), 0u);
+    EXPECT_EQ(create(SIZE_MAX), 0u);
+    h.first_column = 1;
+    EXPECT_EQ(create(1), 0u);
+    h.first_column = 0;
+    column = {7, -4};
+    EXPECT_EQ(create(1), 0u);
 }

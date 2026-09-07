@@ -144,6 +144,12 @@ function(add_wavex_test test_source)
 
     add_executable(${test_name} ${test_source})
 
+    if(test_name STREQUAL "envelope_scan_test")
+        target_sources(${test_name} PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/../../shared/spi_protocol/protocol.cpp
+        )
+    endif()
+
     # cv_group_router.hpp is header-only and HAL-free (templated over the
     # backend, no daisy_seed.h include) - safe to compile directly on host.
     if(test_name STREQUAL "cv_group_router_test")

@@ -178,7 +178,8 @@ bool inter_mcu_get_diag_push(WaveX::Protocol::DiagPushMessage* out, uint32_t max
 // Listener registration for backend->frontend messages
 typedef void (*wavex_meter_cb_t)(
     float rms_left, float rms_right, float peak_left, float peak_right, void* user_data);
-// One run of envelope columns (MSG_ENVELOPE_CHUNK). The header carries the
+// One run of envelope columns (MSG_ENVELOPE_CHUNK), expanded from wire bytes
+// to the renderer's signed 16-bit scale before dispatch. The header carries the
 // window, the generation and the channel count, so a listener can decide
 // whether a chunk still matters without keeping request state. `columns` is
 // valid only for the duration of the call - it points into the RX buffer.

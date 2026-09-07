@@ -18,6 +18,8 @@ void UartLinkProcess();
 // already run inside UartLinkProcess()'s RX dispatch). For senders that
 // queue multiple frames back-to-back against the 4-deep TX queue.
 void UartLinkPumpTx();
+// Main-loop-only admission for background traffic. Includes active DMA.
+bool UartLinkTxIdle();
 void UartLinkLogStats();
 
 #if WAVEX_DAISY_UART_PERF_DEBUG

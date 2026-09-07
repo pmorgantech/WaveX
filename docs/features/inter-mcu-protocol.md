@@ -1,6 +1,6 @@
 # Inter-MCU Protocol — As-Built Wire Specification
 
-**Status**: As-built reference for the live UART framing in `firmware/shared/uart_protocol/uart_protocol.h` and the shared payload catalog in `firmware/shared/spi_protocol/protocol.h` (PROTOCOL_VERSION 3).
+**Status**: As-built reference for the live UART framing in `firmware/shared/uart_protocol/uart_protocol.h` and the shared payload catalog in `firmware/shared/spi_protocol/protocol.h` (PROTOCOL_VERSION 4).
 **Rule**: `protocol.h` is the contract. This document explains it; if they diverge, fix one of them in the same commit that changed the other. Every message type must have a round-trip test in `firmware/shared/tests/`.
 **Supersedes**: the former `communication-protocol.md`, which described an ESP32-S3 / ESP-master / 0xAA-sync design that was never what shipped. Deleted; see git history.
 
@@ -62,7 +62,7 @@ sequence(u16 LE) | payload[0..2048] | crc16(u16 LE) | end(0x5A)
 | MSG_CV_CAL_GET | 0x41 | E→D | `CvCalGetMessage{group}` | request one group's calibration |
 | MSG_CV_CAL_RESP | 0x42 | D→E | `CvCalMessage` (persist unused) | reply to SET and GET |
 | MSG_CV_TEST | 0x43 | E→D | `CvTestMessage{group, enable, cutoff, resonance, vca}` | calibration procedure: while enabled, the control tick stages these fixed CVs instead of the paraphonic law |
-| MSG_ENVELOPE_CHUNK | 0x44 | D→E | `EnvelopeChunkMessage{sample_id, generation, start_frame, end_frame, total_columns, first_column, columns, channels, reserved}` + `EnvelopeColumn{min_sample, max_sample}[columns × channels]`, channel-interleaved per column | reply to `MSG_ENVELOPE_REQ`; self-describing (repeats the whole window + generation) so a frontend that missed a chunk or has since moved the view can tell without keeping request state |
+| MSG_ENVELOPE_CHUNK | 0x44 | D→E | `EnvelopeChunkMessage{sample_id, generation, start_frame, end_frame, total_columns, first_column, columns, channels, encoding}` + `EnvelopeColumn8{min_sample, max_sample}[columns × channels]`, channel-interleaved per column | reply to `MSG_ENVELOPE_REQ`; self-describing (repeats the whole window + generation) so a frontend that missed a chunk or has since moved the view can tell without keeping request state |
 | MSG_SAMPLE_SELECT | 0x45 | E→D | `SampleSelectMessage{sample_id, slot, reserved}` | binds `sample_id` for playback on `slot` (0..15, matches `MSG_NOTE_ON`'s channel & 0x0F); `sample_id` 0 clears that slot's binding, so its note-on drops rather than falling back to any other slot's or the most-recently-loaded sample (roadmap Phase 2.5 item 1, "retire the fallback" - the any-channel single-selection behaviour this replaced) |
 | MSG_SAMPLE_UNLOAD | 0x46 | E→D | `SampleUnloadMessage{sample_id}` | frees a loaded sample's RAM; voices sounding from it are stopped first. `sample_id` 0 is rejected, not treated as "unload everything" |
 | MSG_TRACK_BINDING_REQ | 0x47 | E→D | `TrackBindingReqMessage{track}` | requests backend-authoritative binding state for one Track (0..15), or every Track (`track=0xFF`) |
@@ -104,3 +104,62 @@ document and `protocol.h`.
 - **Phase 4 (offline editing)**: render-job submit/progress/cancel (0xA0–0xA3), sidecar marker sync.
 - **Phase 5**: scene apply (0x7A), tuning (0x68).
 - Consider a generational "capabilities" handshake at boot (versions on both sides) before the first extension ships.
+
+## Waveform transfer scheduling (as-built)
+
+The wire envelope uses signed 8-bit min/max per channel; it is a visual summary,
+not PCM or a bitmap. Keeping both extremes preserves transients and separate
+channel levels without cancellation. The source audio remains unchanged.
+Request identity remains the sample, content generation and frame window; marker/gain edits do not invalidate the underlying PCM cache.
+
+Protocol 4 uses the former reserved header byte as an explicit encoding tag.
+Both firmware images must be updated together: encoding 0 (the previous 16-bit
+layout) and unknown encodings are rejected. The canonical codec is
+EnvelopeColumn8 in protocol.h. Its 256 levels include exact silence and both
+signed full-scale endpoints. Minima round down and maxima round up; exhaustive
+host tests bound each endpoint's error to 258 units on the 16-bit display
+scale. Quantization runs once per completed column, outside the audio callback.
+
+The ESP32 router validates the encoding, counts and payload before expanding
+a chunk into at most 512 bytes of stack scratch. Its synchronous listener copies
+those values into the existing receive staging; the UI cache and renderer keep
+their signed 16-bit coordinate scale, without gaining additional precision.
+No allocation or LVGL work is added to the receive path. At 1,140 stereo columns,
+the amplitude payload is 4,560 bytes, and headers/framing bring the transfer to
+5,100 bytes in 18 packets. Cache-tier rounding can still request extra columns;
+8-bit encoding does not change the horizontal cache/request policy.
+
+EnvelopeScan (firmware/daisy/src/audio/envelope_scan.hpp) owns a partial-column
+cursor and one retained packet on the Daisy main loop. Each pump reads at most
+24,576 source PCM values, including both reads for summed stereo. Column scans
+can yield mid-column, and completed columns accumulate across pump calls until
+a packet is full or the run ends. TX backpressure retains the packet without
+rescanning. Sample unload/replacement cancels the job; the engine revalidates
+the sample and generation before each scan or send.
+
+Envelope packets carry at most 256 data bytes. They are admitted only to an
+idle UART TX queue, including the DMA-active frame. This leaves queue slots for
+normal replies and prevents a backlog of waveform packets. One already-admitted
+frame cannot be preempted: its maximum serialization time is 1.43 ms at the
+current link rate, excluding main-loop scheduling and unrelated traffic.
+The scan runs after streaming refill and does no SD I/O, allocation, interrupt
+masking or blocking TX. Incoming controls use the independent RX direction.
+
+The frontend rounds requests to a cache-tier grid. When only the last bin
+extends beyond EOF, the backend preserves those requested bin boundaries and
+clips the last bin, while the response header reports the actual EOF. Spreading
+the EOF-clamped span evenly over every bin would shift transients into the wrong
+cache columns. Arbitrary requests extending by more than a final bin retain
+the bounded, evenly divided clamped-window behavior.
+
+The ESP32 still assembles a complete run under the existing receive-state
+handoff before the UI commits it. It immediately renders cached data on window
+changes; only missing-data requests wait for the settle. A complete finer-tier
+run satisfies a coarser view without another scan or transfer.
+
+Host regression: an 8,000,000-frame stereo run at 1,280 columns takes 20 packets
+and 5,720 framed bytes, versus 640 packets and 29,440 bytes under the previous
+per-pump packet flush. This is a byte-count comparison, not measured hardware
+latency. Small scans can use more framing bytes with the smaller packets.
+Bench acceptance remains concurrent streamed playback, control bursts, repeated
+sample/window changes, UART queue statistics and a zero-underrun soak.

@@ -269,7 +269,7 @@ TEST_F(PacketRouterTest, RouteEnvelopeChunkDeliversColumns) {
     constexpr uint16_t kColumns = 3;
     struct {
         EnvelopeChunkMessage header;
-        EnvelopeColumn columns[kColumns];
+        EnvelopeColumn8 columns[kColumns];
     } __attribute__((packed)) msg;
     msg.header.sample_id = 5;
     msg.header.generation = 2;
@@ -279,9 +279,9 @@ TEST_F(PacketRouterTest, RouteEnvelopeChunkDeliversColumns) {
     msg.header.first_column = 0;
     msg.header.columns = kColumns;
     msg.header.channels = 1;
-    msg.columns[0] = EnvelopeColumn(-10, 10);
-    msg.columns[1] = EnvelopeColumn(-20, 20);
-    msg.columns[2] = EnvelopeColumn(-30, 30);
+    msg.columns[0] = EnvelopeColumn8{-10, 10};
+    msg.columns[1] = EnvelopeColumn8{-20, 20};
+    msg.columns[2] = EnvelopeColumn8{-30, 30};
 
     std::vector<uint8_t> packet =
         ProtocolTestHelper::CreateWaveXPacket(MSG_ENVELOPE_CHUNK, &msg, sizeof(msg));
@@ -294,8 +294,8 @@ TEST_F(PacketRouterTest, RouteEnvelopeChunkDeliversColumns) {
     EXPECT_EQ(cap.envelope_header.sample_id, 5);
     EXPECT_EQ(cap.envelope_header.generation, 2);
     ASSERT_EQ(cap.envelope_columns.size(), 3u);
-    EXPECT_EQ(cap.envelope_columns[1].min_sample, -20);
-    EXPECT_EQ(cap.envelope_columns[2].max_sample, 30);
+    EXPECT_EQ(cap.envelope_columns[1].min_sample, -5120);
+    EXPECT_EQ(cap.envelope_columns[2].max_sample, 7740);
 }
 
 // Malformed envelope chunks (bad channel count, or a payload shorter than
@@ -303,14 +303,14 @@ TEST_F(PacketRouterTest, RouteEnvelopeChunkDeliversColumns) {
 TEST_F(PacketRouterTest, RouteEnvelopeChunkMalformedIsDropped) {
     struct {
         EnvelopeChunkMessage header;
-        EnvelopeColumn columns[2];
+        EnvelopeColumn8 columns[2];
     } __attribute__((packed)) msg;
     msg.header.sample_id = 5;
     msg.header.total_columns = 2;
     msg.header.first_column = 0;
     msg.header.columns = 2;
-    msg.columns[0] = EnvelopeColumn(-1, 1);
-    msg.columns[1] = EnvelopeColumn(-2, 2);
+    msg.columns[0] = EnvelopeColumn8{-1, 1};
+    msg.columns[1] = EnvelopeColumn8{-2, 2};
 
     // channels == 0
     msg.header.channels = 0;
@@ -501,4 +501,90 @@ TEST_F(PacketRouterTest, ErrorMessageWithUnterminatedTextIsBounded) {
     ASSERT_EQ(g_handlers.error_calls, 1);
     EXPECT_EQ(g_handlers.error_code, 0x0007);
     EXPECT_EQ(strlen(g_handlers.error_msg), sizeof(msg.msg));
+}
+
+TEST_F(PacketRouterTest, CompactStereoEnvelopeDecodesAnExactSizedUartPayload) {
+    EnvelopeChunkMessage h;
+    h.sample_id = 513;
+    h.generation = 91;
+    h.start_frame = 103;
+    h.end_frame = 70000;
+    h.total_columns = 1140;
+    h.first_column = 64;
+    h.columns = 2;
+    h.channels = 2;
+    const EnvelopeColumn8 data[] = {{-128, 127}, {0, 0}, {-1, 1}, {-64, 63}};
+    std::vector<uint8_t> payload(sizeof(h) + sizeof(data));
+    memcpy(payload.data(), &h, sizeof(h));
+    memcpy(payload.data() + sizeof(h), data, sizeof(data));
+    router_->route_uart_message(MSG_ENVELOPE_CHUNK, payload.data(), payload.size(), 0, 1);
+    const auto& cap = GetInterMcuCapture();
+    ASSERT_EQ(cap.envelope_chunk_calls, 1);
+    EXPECT_EQ(cap.envelope_header.sample_id, 513);
+    EXPECT_EQ(cap.envelope_header.generation, 91);
+    EXPECT_EQ(cap.envelope_header.start_frame, 103u);
+    EXPECT_EQ(cap.envelope_header.end_frame, 70000u);
+    EXPECT_EQ(cap.envelope_header.total_columns, 1140);
+    EXPECT_EQ(cap.envelope_header.first_column, 64);
+    EXPECT_EQ(cap.envelope_header.columns, 2);
+    EXPECT_EQ(cap.envelope_header.channels, 2);
+    EXPECT_EQ(cap.envelope_header.encoding, ENVELOPE_ENCODING_S8);
+    ASSERT_EQ(cap.envelope_columns.size(), 4u);
+    EXPECT_EQ(cap.envelope_columns[0].min_sample, INT16_MIN);
+    EXPECT_EQ(cap.envelope_columns[0].max_sample, INT16_MAX);
+    EXPECT_EQ(cap.envelope_columns[1].min_sample, 0);
+    EXPECT_EQ(cap.envelope_columns[1].max_sample, 0);
+    EXPECT_EQ(cap.envelope_columns[2].min_sample, -256);
+    EXPECT_EQ(cap.envelope_columns[2].max_sample, 258);
+    EXPECT_EQ(cap.envelope_columns[3].min_sample, -16384);
+    EXPECT_EQ(cap.envelope_columns[3].max_sample, 16254);
+}
+
+TEST_F(PacketRouterTest, CompactEnvelopeRejectsEveryTruncationAndOldEncoding) {
+    EnvelopeChunkMessage h;
+    h.total_columns = h.columns = 2;
+    h.channels = 2;
+    const EnvelopeColumn8 data[] = {{-128, 127}, {0, 0}, {-1, 1}, {-64, 63}};
+    std::vector<uint8_t> complete(sizeof(h) + sizeof(data));
+    memcpy(complete.data(), &h, sizeof(h));
+    memcpy(complete.data() + sizeof(h), data, sizeof(data));
+    for (size_t length = 0; length < complete.size(); ++length) {
+        const std::vector<uint8_t> truncated(complete.begin(), complete.begin() + length);
+        router_->route_uart_message(MSG_ENVELOPE_CHUNK, truncated.data(), length, 0, 1);
+    }
+    EXPECT_EQ(GetInterMcuCapture().envelope_chunk_calls, 0);
+    for (uint8_t encoding: {uint8_t{0}, uint8_t{255}}) {
+        h.encoding = encoding;
+        memcpy(complete.data(), &h, sizeof(h));
+        router_->route_uart_message(MSG_ENVELOPE_CHUNK, complete.data(), complete.size(), 0, 1);
+    }
+    EXPECT_EQ(GetInterMcuCapture().envelope_chunk_calls, 0);
+    h.encoding = ENVELOPE_ENCODING_S8;
+    h.first_column = 1;  // past the end of the run
+    memcpy(complete.data(), &h, sizeof(h));
+    router_->route_uart_message(MSG_ENVELOPE_CHUNK, complete.data(), complete.size(), 0, 1);
+    EXPECT_EQ(GetInterMcuCapture().envelope_chunk_calls, 0);
+    h.first_column = 0;
+    memcpy(complete.data(), &h, sizeof(h));
+    complete[sizeof(h)] = 127;
+    complete[sizeof(h) + 1] = 0;  // minimum greater than maximum
+    router_->route_uart_message(MSG_ENVELOPE_CHUNK, complete.data(), complete.size(), 0, 1);
+    EXPECT_EQ(GetInterMcuCapture().envelope_chunk_calls, 0);
+}
+
+TEST_F(PacketRouterTest, CompactEnvelopeAdmitsMaximumChunkButRejectsAnExtraValue) {
+    EnvelopeChunkMessage h;
+    h.channels = 2;
+    h.total_columns = 1280;
+    h.columns = MAX_ENVELOPE_CHUNK_VALUES / 2;
+    std::vector<uint8_t> payload(sizeof(h) + MAX_ENVELOPE_CHUNK_VALUES * sizeof(EnvelopeColumn8));
+    memcpy(payload.data(), &h, sizeof(h));
+    router_->route_uart_message(MSG_ENVELOPE_CHUNK, payload.data(), payload.size(), 0, 1);
+    ASSERT_EQ(GetInterMcuCapture().envelope_chunk_calls, 1);
+    EXPECT_EQ(GetInterMcuCapture().envelope_columns.size(), MAX_ENVELOPE_CHUNK_VALUES);
+    ++h.columns;
+    payload.resize(sizeof(h) + static_cast<size_t>(h.columns) * 2 * sizeof(EnvelopeColumn8));
+    memcpy(payload.data(), &h, sizeof(h));
+    router_->route_uart_message(MSG_ENVELOPE_CHUNK, payload.data(), payload.size(), 0, 2);
+    EXPECT_EQ(GetInterMcuCapture().envelope_chunk_calls, 1);
 }

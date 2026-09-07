@@ -457,30 +457,29 @@ size_t ProtocolHandler::CreateEnvelopeReqPacket(uint8_t* buffer,
         buffer, buffer_size, MSG_ENVELOPE_REQ, &msg, sizeof(EnvelopeReqMessage));
 }
 
-// One run of envelope columns (backend -> frontend). Header then
-// column_count EnvelopeColumn values; the caller is responsible for having
-// sized the run to fit a packet (header + count * 4 <= the largest payload).
+// One compact run: canonical header followed by channel-interleaved byte pairs.
 size_t ProtocolHandler::CreateEnvelopeChunkPacket(uint8_t* buffer,
                                                   size_t buffer_size,
                                                   const EnvelopeChunkMessage& msg,
-                                                  const EnvelopeColumn* columns,
+                                                  const EnvelopeColumn8* columns,
                                                   size_t column_count) {
-    const size_t header_size = sizeof(EnvelopeChunkMessage);
-    const size_t data_size = column_count * sizeof(EnvelopeColumn);
-    const size_t total_payload_size = header_size + data_size;
-
-    uint8_t temp_payload[MAX_PKT_SIZE];
-    if (total_payload_size > sizeof(temp_payload)) {
+    if (!IsValidEnvelopeChunk(msg) || !columns ||
+        column_count != static_cast<size_t>(msg.columns) * msg.channels) {
         return 0;
     }
-
-    memcpy(temp_payload, &msg, header_size);
-    if (columns && data_size > 0) {
-        memcpy(temp_payload + header_size, columns, data_size);
+    for (size_t i = 0; i < column_count; ++i) {
+        if (columns[i].min_sample > columns[i].max_sample) {
+            return 0;
+        }
     }
-
+    const size_t header_size = sizeof(EnvelopeChunkMessage);
+    const size_t data_size = column_count * sizeof(EnvelopeColumn8);
+    uint8_t temp_payload[sizeof(EnvelopeChunkMessage) +
+                         MAX_ENVELOPE_CHUNK_VALUES * sizeof(EnvelopeColumn8)];
+    memcpy(temp_payload, &msg, header_size);
+    memcpy(temp_payload + header_size, columns, data_size);
     return CreateUnifiedPacket(
-        buffer, buffer_size, MSG_ENVELOPE_CHUNK, temp_payload, total_payload_size);
+        buffer, buffer_size, MSG_ENVELOPE_CHUNK, temp_payload, header_size + data_size);
 }
 
 // (Review H6/M10: ParseBrowseReq/ParseSamplePlayReq were deleted here.

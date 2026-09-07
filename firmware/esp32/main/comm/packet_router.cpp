@@ -417,25 +417,34 @@ WEAK_HANDLER void PacketRouter::handle_error(const WaveX::Protocol::ErrorMessage
 
 WEAK_HANDLER void PacketRouter::handle_envelope_chunk(
     const WaveX::Protocol::EnvelopeChunkMessage& msg, const uint8_t* payload, size_t length) {
-    // channels is on the wire, so the payload length is not implied by the
-    // header alone - validate it rather than trusting a count that a truncated
-    // frame would make us read past the buffer for.
+    using namespace WaveX::Protocol;
     const size_t values = static_cast<size_t>(msg.columns) * msg.channels;
-    const size_t expected = sizeof(WaveX::Protocol::EnvelopeChunkMessage) +
-                            values * sizeof(WaveX::Protocol::EnvelopeColumn);
-    if (msg.channels == 0 || msg.channels > 2 || length < expected) {
+    const size_t expected = sizeof(EnvelopeChunkMessage) + values * sizeof(EnvelopeColumn8);
+    if (!IsValidEnvelopeChunk(msg) || length < expected) {
         ESP_LOGW("packet_router",
-                 "Envelope chunk malformed: channels=%u columns=%u len=%zu (expected >= %zu)",
+                 "Envelope chunk malformed: encoding=%u channels=%u columns=%u len=%zu",
+                 (unsigned)msg.encoding,
                  (unsigned)msg.channels,
                  (unsigned)msg.columns,
-                 length,
-                 expected);
+                 length);
         return;
     }
 
-    const auto* columns = reinterpret_cast<const WaveX::Protocol::EnvelopeColumn*>(
-        payload + sizeof(WaveX::Protocol::EnvelopeChunkMessage));
-    inter_mcu_invoke_envelope_chunk_callback(msg, columns);
+    // 512-byte bounded scratch, not a whole-run buffer on the UART task stack.
+    // The listener synchronously copies to its own staging before we return.
+    // Cache ownership and every LVGL call remain on the UI task.
+    EnvelopeColumn expanded[MAX_ENVELOPE_CHUNK_VALUES];
+    for (size_t i = 0; i < values; ++i) {
+        EnvelopeColumn8 encoded;
+        memcpy(&encoded,
+               payload + sizeof(EnvelopeChunkMessage) + i * sizeof(encoded),
+               sizeof(encoded));
+        if (encoded.min_sample > encoded.max_sample) {
+            return;
+        }
+        expanded[i] = encoded.Expand();
+    }
+    inter_mcu_invoke_envelope_chunk_callback(msg, expanded);
 }
 
 WEAK_HANDLER void PacketRouter::handle_unknown_message(uint8_t type, const uint8_t* payload, size_t length) {

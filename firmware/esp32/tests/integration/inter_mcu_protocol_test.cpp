@@ -177,7 +177,7 @@ TEST_F(InterMcuProtocolIntegrationTest, EnvelopeChunkFrameDeliversColumns) {
     constexpr uint16_t kColumns = 4;
     struct {
         EnvelopeChunkMessage header;
-        EnvelopeColumn columns[kColumns * 2];
+        EnvelopeColumn8 columns[kColumns * 2];
     } __attribute__((packed)) msg;
     msg.header.sample_id = 3;
     msg.header.generation = 9;
@@ -189,9 +189,9 @@ TEST_F(InterMcuProtocolIntegrationTest, EnvelopeChunkFrameDeliversColumns) {
     msg.header.channels = 2;
     for (uint16_t c = 0; c < kColumns; ++c) {
         msg.columns[c * 2 + 0] =
-            EnvelopeColumn(static_cast<int16_t>(-(c + 1)), static_cast<int16_t>(c + 1));
-        msg.columns[c * 2 + 1] = EnvelopeColumn(static_cast<int16_t>(-100 * (c + 1)),
-                                                static_cast<int16_t>(100 * (c + 1)));
+            EnvelopeColumn8{static_cast<int8_t>(-(c + 1)), static_cast<int8_t>(c + 1)};
+        msg.columns[c * 2 + 1] =
+            EnvelopeColumn8{static_cast<int8_t>(-10 * (c + 1)), static_cast<int8_t>(10 * (c + 1))};
     }
 
     ASSERT_TRUE(ReceiveFrame(EncodeUartFrame(MSG_ENVELOPE_CHUNK, &msg, sizeof(msg))));
@@ -201,10 +201,11 @@ TEST_F(InterMcuProtocolIntegrationTest, EnvelopeChunkFrameDeliversColumns) {
     EXPECT_EQ(cap.envelope_header.sample_id, 3);
     EXPECT_EQ(cap.envelope_header.generation, 9);
     EXPECT_EQ(cap.envelope_header.channels, 2);
+    EXPECT_EQ(cap.envelope_header.encoding, ENVELOPE_ENCODING_S8);
     ASSERT_EQ(cap.envelope_columns.size(), static_cast<size_t>(kColumns) * 2);
-    EXPECT_EQ(cap.envelope_columns[0].min_sample, -1);
-    EXPECT_EQ(cap.envelope_columns[1].max_sample, 100);   // col 0, right channel
-    EXPECT_EQ(cap.envelope_columns[7].min_sample, -400);  // col 3, right channel
+    EXPECT_EQ(cap.envelope_columns[0].min_sample, -256);
+    EXPECT_EQ(cap.envelope_columns[1].max_sample, 2580);    // col 0, right channel
+    EXPECT_EQ(cap.envelope_columns[7].min_sample, -10240);  // col 3, right channel
 }
 
 // Sample status and storage status: both consumers see converted values.

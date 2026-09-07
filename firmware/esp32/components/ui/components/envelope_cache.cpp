@@ -205,6 +205,16 @@ bool EnvelopeCache::nextRequest(uint16_t sample_id,
     }
 
     const uint32_t fpc = tierFramesPerColumn(view_end - view_start, display_columns);
+    // A finer complete run already contains every extreme this view needs.
+    // Do not scan and transmit the same PCM just to populate a coarser tier.
+    for (const Entry& e: entries_) {
+        if (e.used && e.sample_id == sample_id && e.generation == generation && e.fpc <= fpc &&
+            static_cast<uint64_t>(e.first_column) * e.fpc <= view_start &&
+            (static_cast<uint64_t>(e.first_column) + e.columns) * e.fpc >=
+                std::min(view_end, total_frames)) {
+            return false;
+        }
+    }
     const uint32_t last_column = (total_frames + fpc - 1) / fpc;  // exclusive
     uint32_t c0 = view_start / fpc;
     uint32_t c1 = std::min((view_end + fpc - 1) / fpc, last_column);

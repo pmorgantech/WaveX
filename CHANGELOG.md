@@ -13,6 +13,24 @@ versioning and release process.
 
 ### Changed
 
+- Waveform previews use **8-bit min/max extrema on the wire**, halving amplitude
+  payloads (4,560 bytes for 1,140 stereo columns). Quantization rounds outward
+  to preserve peaks and represents silence and both full-scale endpoints
+  exactly. The frontend expands bounded chunks onto the existing display
+  scale; audio samples remain unchanged. **Protocol version 4 requires both
+  MCU images to be updated together.** Unknown/old encodings and malformed
+  chunks are rejected before delivery to the UI.
+- Waveform scans retain partial columns and unsent packets instead of
+  rescanning on TX backpressure. Work yields within 24,576 PCM reads, and
+  256-byte envelope data chunks enter UART only when its TX queue is idle.
+  An 8-million-frame, 1,280-column stereo scan uses 20 packets / 5,720
+  framed bytes (previous batching: 640 / 29,440); shorter scans trade some
+  framing overhead for a 1.43 ms maximum waveform-frame wire time at 2 Mbaud.
+  Cached waveforms redraw before the 150 ms request settle, and finer cached
+  runs satisfy coarser views without another transfer. EOF clipping preserves
+  the requested last-bin grid. Host-tested and firmware-built; panel latency,
+  control timing and zero-underrun playback still require bench verification.
+
 - Consolidated navigation, sequencer/audition and testing references; removed
   their superseded documents, corrected runtime and memory descriptions, and
   separated completed audit fixes from remaining coverage and hardware gates.

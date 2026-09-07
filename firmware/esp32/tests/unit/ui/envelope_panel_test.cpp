@@ -489,4 +489,22 @@ TEST_F(EnvelopePanelTest, RedrawRendersACompleteViewAgain) {
     EXPECT_EQ(g_sent.size(), 1u);
 }
 
+TEST_F(EnvelopePanelTest, CachedWindowDrawsBeforeSettleWithoutSending) {
+    attachOne(256);
+    panel_.setWindow(0, 0, kTotal);
+    panel_.setSample(1, 0, kTotal);
+    panel_.service(0);
+    deliver(g_sent[0], 2, 1234);
+    panel_.service(10);
+    const int before = sinks_[0].sets;
+    const size_t requests = g_sent.size();
+    panel_.setWindow(0, 1000, 49000);
+    panel_.service(20);
+    EXPECT_EQ(sinks_[0].sets, before + 1);
+    EXPECT_EQ(g_sent.size(), requests);
+    EXPECT_EQ(sinks_[0].last_channels, 2);
+    panel_.service(20 + kSettleMs);
+    EXPECT_EQ(g_sent.size(), requests + 1);  // finer detail still requested
+}
+
 }  // namespace

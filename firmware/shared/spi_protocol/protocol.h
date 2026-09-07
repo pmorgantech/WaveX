@@ -16,7 +16,8 @@ namespace Protocol {
 // 3 (2026-09-06): SampleEditMessage addresses the sample by its 16-bit Pool
 // id (`sample_id`, was the one-byte `slot`); id 0 no longer means "newest".
 // MSG_PREVIEW_REQ (0x0A) / MSG_WAVE_CHUNK (0x11) retired.
-static const uint32_t PROTOCOL_VERSION = 3;
+// 4: envelope payloads use signed 8-bit extrema and an explicit encoding tag.
+static const uint32_t PROTOCOL_VERSION = 4;
 
 // Wire layout (review M10: a packed `WaveXPacket` struct used to "document"
 // this but placed `crc` at offset 4 while the wire puts it at the packet
@@ -863,7 +864,7 @@ struct SampleEditMessage {
 //
 // An envelope sends the MIN and MAX of every sample falling in a display
 // column instead. The payload is a function of the display width, not of the
-// file length: 1256 columns x 2 channels x 2 int16 is ~10 KB for a whole file
+// file length: 1256 columns x 2 channels x 2 int8 is ~5 KB for a whole file
 // at full panel width, whatever its duration.
 //
 // Per channel, not summed (roadmap 1.5.7 item 2): an out-of-phase stereo
@@ -872,14 +873,13 @@ struct SampleEditMessage {
 // frontend decides what to draw; the wire carries what was measured.
 // ---------------------------------------------------------------------------
 
-// Widest envelope a single request may ask for. The waveform panel is 1256 px,
-// so this is that rounded up - asking for more columns than pixels buys
-// nothing and only costs link time.
+// Widest run a single request may ask for; bounds frontend run staging.
+// Cache-tier resolution can require more columns than display pixels and
+// therefore multiple requests for one view.
 static const uint16_t MAX_ENVELOPE_COLUMNS = 1280;
 
-// One display column of one channel. Signed 16-bit regardless of the file's
-// bit depth: 24-bit sources are scaled down for display, where the bottom
-// 8 bits are far below one pixel.
+// Internal display column, on the signed 16-bit amplitude scale. The UI
+// cache and renderer use this; the wire uses EnvelopeColumn8 below.
 struct EnvelopeColumn {
     int16_t min_sample;
     int16_t max_sample;
@@ -888,11 +888,45 @@ struct EnvelopeColumn {
     EnvelopeColumn(int16_t min_, int16_t max_) : min_sample(min_), max_sample(max_) {}
 } __attribute__((packed));
 
+// Compact wire column. Zero and both full-scale endpoints are exact.
+// Negative codes map to code * 256; nonnegative codes to code * 32767 / 127.
+// This gives 256 levels with a maximum step of 259 source units. Quantization
+// rounds the minimum down and maximum up, so peaks are never rounded inward.
+// Convert only after scanning a column, never per PCM value in the audio path.
+struct EnvelopeColumn8 {
+    int8_t min_sample = 0;
+    int8_t max_sample = 0;
+
+    static constexpr int16_t DecodeSample(int8_t code) {
+        return static_cast<int16_t>(code < 0 ? static_cast<int32_t>(code) * 256
+                                             : static_cast<int32_t>(code) * 32767 / 127);
+    }
+    static constexpr EnvelopeColumn8 FromExtrema(int16_t lo, int16_t hi) {
+        // +126 inverts the floored positive decode grid without widening a
+        // value that is already representable (ceil(127 * (lo + 1) / 32767) - 1).
+        const int32_t minimum = lo < 0 ? (static_cast<int32_t>(lo) - 255) / 256
+                                       : (static_cast<int32_t>(lo) * 127 + 126) / 32767;
+        const int32_t maximum = hi < 0 ? static_cast<int32_t>(hi) / 256
+                                       : (static_cast<int32_t>(hi) * 127 + 32766) / 32767;
+        return {static_cast<int8_t>(minimum), static_cast<int8_t>(maximum)};
+    }
+    EnvelopeColumn Expand() const { return {DecodeSample(min_sample), DecodeSample(max_sample)}; }
+} __attribute__((packed));
+static_assert(sizeof(EnvelopeColumn8) == 2, "Preview extrema must occupy two wire bytes");
+
+static constexpr uint8_t ENVELOPE_ENCODING_S8 = 1;
+// Per-packet values, not columns: 128 mono columns or 64 stereo columns.
+// The 256 data bytes keep one non-preemptible UART frame to 1.43 ms at 2 Mbaud.
+static constexpr size_t MAX_ENVELOPE_CHUNK_VALUES = 128;
+
 // Envelope request (frontend -> backend).
 //
 // sample_id 0 means "the most recently loaded sample", matching how
 // MSG_SAMPLE_EDIT_SET addresses a sample the edit page did not load itself.
 // end_frame 0 means "to the end", the same sentinel SampleMetadata uses.
+// Cache-tier requests may round end_frame up past EOF by less than one bin:
+// preserve that grid and clip only the final bin, reporting actual EOF in
+// the response. Other out-of-range windows are clamped before subdivision.
 struct EnvelopeReqMessage {
     uint16_t sample_id;
     uint16_t columns;      // 1..MAX_ENVELOPE_COLUMNS; the backend clamps
@@ -911,7 +945,7 @@ struct EnvelopeReqMessage {
 } __attribute__((packed));
 
 // Envelope chunk (backend -> frontend). Header, then
-// `columns * channels` EnvelopeColumn values, channel-interleaved per column
+// `columns * channels` EnvelopeColumn8 values, channel-interleaved per column
 // (col0 ch0, col0 ch1, col1 ch0, ...).
 //
 // Every chunk repeats the whole window and the generation, so a chunk is
@@ -927,8 +961,8 @@ struct EnvelopeChunkMessage {
     uint16_t total_columns;  // columns in the whole run
     uint16_t first_column;   // index of this chunk's first column within the run
     uint16_t columns;        // columns in THIS chunk
-    uint8_t channels;        // EnvelopeColumn values per column: 1 or 2
-    uint8_t reserved;
+    uint8_t channels;        // EnvelopeColumn8 values per column: 1 or 2
+    uint8_t encoding;        // ENVELOPE_ENCODING_S8; protocol 3 used reserved=0
 
     EnvelopeChunkMessage()
         : sample_id(0),
@@ -939,8 +973,15 @@ struct EnvelopeChunkMessage {
           first_column(0),
           columns(0),
           channels(1),
-          reserved(0) {}
+          encoding(ENVELOPE_ENCODING_S8) {}
 } __attribute__((packed));
+
+inline bool IsValidEnvelopeChunk(const EnvelopeChunkMessage& msg) {
+    return msg.encoding == ENVELOPE_ENCODING_S8 && msg.channels >= 1 && msg.channels <= 2 &&
+           msg.columns > 0 && msg.total_columns > 0 && msg.total_columns <= MAX_ENVELOPE_COLUMNS &&
+           static_cast<uint32_t>(msg.first_column) + msg.columns <= msg.total_columns &&
+           static_cast<size_t>(msg.columns) * msg.channels <= MAX_ENVELOPE_CHUNK_VALUES;
+}
 
 // Diagnostics subscription (frontend -> backend).
 struct DiagSubscribeMessage {
@@ -1883,7 +1924,7 @@ class ProtocolHandler {
     static size_t CreateEnvelopeChunkPacket(uint8_t* buffer,
                                             size_t buffer_size,
                                             const EnvelopeChunkMessage& msg,
-                                            const EnvelopeColumn* columns,
+                                            const EnvelopeColumn8* columns,
                                             size_t column_count);
 
     /** Diagnostics subscription (frontend -> backend). */

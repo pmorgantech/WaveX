@@ -150,6 +150,13 @@ Key subsystems:
 
 The ESP32 frontend *does* run FreeRTOS (§4.3) — correct there, because it juggles many I/O-bound tasks (UI, link, input). The asymmetry is intentional: RTOS where there is genuine task concurrency, bare-metal foreground/background where there is one real-time thread. **Do not add an RTOS to the Daisy image.**
 
+Waveform envelope scans are background main-loop work after streaming refill.
+They retain partial columns and a single unsent packet, yield within a fixed
+PCM-read budget, and admit small packets only when UART TX is idle. This bounds
+waveform queue occupancy without changing the audio callback or DMA ownership.
+See [waveform transfer scheduling](features/inter-mcu-protocol.md#waveform-transfer-scheduling-as-built)
+for the representation, cache handoff and verification limits.
+
 ### 4.3 ESP32 frontend runtime model
 
 FreeRTOS tasks:

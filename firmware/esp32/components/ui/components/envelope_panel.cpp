@@ -124,6 +124,7 @@ void EnvelopePanel::setWindow(uint8_t index, uint32_t start, uint32_t end) {
     }
     v.start = start;
     v.end = end;
+    dirty_ = dirty_ || has_sample_;  // Cached data draws now; only wire requests settle.
     invalidate(v);
     changed_ = true;
 }

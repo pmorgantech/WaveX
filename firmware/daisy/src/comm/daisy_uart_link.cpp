@@ -509,6 +509,10 @@ int UartLinkSend(uint16_t msg_type, const void* payload, uint16_t len) {
     return len;
 }
 
+bool UartLinkTxIdle() {
+    return s_initialized && s_tx_count == 0;
+}
+
 void UartLinkPumpTx() {
     process_tx_queue();
 }

@@ -167,7 +167,14 @@ Use current pages as examples: `ui_play_page.cpp` for notes and live
 parameters, `ui_sample_browser.cpp` for request-driven browsing,
 `ui_diagnostics_page.cpp` for subscription lifetime.
 The Sample tabs share `EnvelopePanel`, which owns waveform requests,
-caching and retry policy; do not start a second preview pipeline.
+caching and retry policy; do not start a second preview pipeline. Window
+changes draw cached data on the next UI service, while only missing-data
+requests wait for the 150 ms settle. Complete finer-tier runs also satisfy
+coarser views without a transfer. The router expands the 8-bit wire extrema
+onto the renderer's signed 16-bit scale. The renderer emits clipped, merged fills; a full waveform bitmap is not
+retained.
+Transfer scheduling is documented in
+[inter-mcu-protocol.md](features/inter-mcu-protocol.md#waveform-transfer-scheduling-as-built).
 
 ## Verification and remaining work
 

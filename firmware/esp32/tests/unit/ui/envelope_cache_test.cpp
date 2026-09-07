@@ -668,3 +668,13 @@ TEST_F(EnvelopeCacheTest, AbortOnIdleCacheKeepsEntries) {
     uint16_t c = 0;
     EXPECT_FALSE(cache_.nextRequest(1, 0, 0, 262144, 262144, 256, 1280, s, e, c));
 }
+
+TEST_F(EnvelopeCacheTest, FinerCachedRunAvoidsCoarserRequestButNotNewGeneration) {
+    ASSERT_TRUE(FillRun(1, 7, 0, 4096, 4096, 512, 2));
+    uint32_t start = 0, end = 0;
+    uint16_t columns = 0;
+    EXPECT_FALSE(cache_.nextRequest(1, 7, 0, 4096, 4096, 256, 1280, start, end, columns));
+    EXPECT_TRUE(cache_.nextRequest(1, 8, 0, 4096, 4096, 256, 1280, start, end, columns));
+    EXPECT_TRUE(cache_.nextRequest(2, 7, 0, 4096, 4096, 256, 1280, start, end, columns));
+    EXPECT_TRUE(cache_.nextRequest(1, 7, 0, 8192, 8192, 256, 1280, start, end, columns));
+}
