@@ -12,11 +12,6 @@ checked at the API/DMA boundaries used by WaveX. Priorities describe concrete
 failure modes; hardware-only gates stay in the roadmap. Remove each task when
 its fix and regression checks are committed.
 
-- [ ] **High — callback handoffs.** Replace delay-based retirement with a
-  callback acknowledgement and publish telemetry/modulation as complete
-  snapshots; see roadmap Phase 0. Exercise stopped/delayed callback and
-  concurrent publication, preserving a bounded nonblocking callback
-  (principles 1, 2, 5, 6).
 - [ ] **High — waveform response ownership.** Synchronize
   `EnvelopeFetcher` request identity and chunk publication. A ready flag does
   not protect a struct still being read while a request is replaced. Cover
@@ -26,10 +21,7 @@ its fix and regression checks are committed.
   stop; its task may still dereference the object. Check listener allocation
   failure and calibration handoffs at the same ownership boundaries
   (principles 2, 5, 6).
-- [x] **High — malformed file boundaries.** Reject truncated WXI documents
-  instead of loading a partial Instrument successfully. Validate zone identity and
-  distinguish unique sample paths from hash collisions. Use exact-sized
-  malformed fixtures and sanitizers (principles 2, 5).
+
 - [ ] **Medium — documentation and test truthfulness.** Reconcile as-built
   sequencer, panel, storage, transport and version claims; consolidate
   overlapping navigation, audition-work-order and test-remediation docs.
@@ -108,11 +100,6 @@ reproducible CRC faults and capture ring low-water and service latency.
 
 The release build is not warning-clean, and two of the warnings are real:
 
-- `audio_engine.cpp` `OnSampleLoad`: `alt_path[128]` receives `"0:%s"` of a
-  `BROWSE_PATH_MAX` (256) path, so the "retry with a drive prefix" open
-  silently tries a truncated path for anything longer than 125 characters —
-  exactly the deep library paths the 2026-09-06 widening was for. Size it
-  `BROWSE_PATH_MAX + 2` or drop the retry (`-Wformat-truncation`).
 - `PumpSampleMetaPage`: the page's byte count is a `size_t` narrowed to
   `UartLinkSend`'s `uint16_t` (`-Wconversion`). In range today (one header
   plus at most a page of records); make the narrowing explicit with a bound

@@ -64,6 +64,30 @@ TEST_F(MessageDispatchTest, NoteOffReachesAudioEngine) {
     EXPECT_TRUE(GetDispatchRecord().note_ons.empty());
 }
 
+TEST_F(MessageDispatchTest, RejectsMalformedNoteFieldsBeforeTheyReachTheEngine) {
+    for (uint8_t type: {uint8_t(MSG_NOTE_ON), uint8_t(MSG_NOTE_OFF)}) {
+        for (const NoteMessage& note: {NoteMessage(128, 100, 0),
+                                       NoteMessage(255, 100, NOTE_ADDR_TRACK | 15),
+                                       NoteMessage(60, 128, 0),
+                                       NoteMessage(60, 100, 0x10),
+                                       NoteMessage(60, 100, 0xFF)}) {
+            Dispatch(type, note);
+        }
+    }
+    EXPECT_TRUE(GetDispatchRecord().note_ons.empty());
+    EXPECT_TRUE(GetDispatchRecord().note_offs.empty());
+}
+
+TEST_F(MessageDispatchTest, BoundaryNotesAndExplicitTrackAddressesRemainValid) {
+    for (uint8_t type: {uint8_t(MSG_NOTE_ON), uint8_t(MSG_NOTE_OFF)}) {
+        Dispatch(type, NoteMessage(0, 0, 0));
+        Dispatch(type, NoteMessage(127, 127, 15));
+        Dispatch(type, NoteMessage(127, 0, NOTE_ADDR_TRACK | 15));
+    }
+    EXPECT_EQ(GetDispatchRecord().note_ons.size(), 3u);
+    EXPECT_EQ(GetDispatchRecord().note_offs.size(), 3u);
+}
+
 TEST_F(MessageDispatchTest, ControlChangeReachesAudioEngine) {
     ControlChangeMessage cc(PARAM_FILTER_CUTOFF, 1, 0x1234);
     Dispatch(MSG_CONTROL_CHANGE, cc);

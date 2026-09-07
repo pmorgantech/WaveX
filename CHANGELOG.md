@@ -67,6 +67,8 @@ versioning and release process.
 
 ### Fixed
 
+- Sample retirement waits for generation-specific callback acknowledgement; live parameters, mixer controls, modulation and telemetry cross complete snapshots. Per-track updates preserve other tracks, malformed note addresses are rejected, and imports exclude conflicting pool mutations. Sample identity compares full paths to avoid hash collisions.
+
 - SD reinitialization restores the SDMMC interrupt priority so recovery cannot leave it above the audio interrupt.
 
 - Sample memory validates allocation identity and bounds before mapping or freeing handles, and resets allocator state on initialization.

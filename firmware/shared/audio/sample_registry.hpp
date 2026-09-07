@@ -73,7 +73,7 @@ class SampleRegistry {
         Payload payload{};
     };
 
-    enum class Admit : uint8_t { Ok, Full, AlreadyResident };
+    enum class Admit : uint8_t { Ok, Full, AlreadyResident, InvalidPath };
 
     /// `records` must hold Capacity Records and outlive the registry. They
     /// are zeroed here, so SDRAM that came up with garbage is fine.
@@ -101,25 +101,32 @@ class SampleRegistry {
         return const_cast<SampleRegistry*>(this)->Find(sample_id);
     }
 
-    /// Path dedupe: an index walk (not the note path), one compare per slot.
-    Record* FindByPath(uint32_t path_hash) {
-        if (path_hash == 0) {
+    /// Payload owns a fixed char path[] for the lifetime of its record. Hashes
+    /// only filter candidates: equal hashes never establish sample identity.
+    Record* FindByPath(const char* path) {
+        if (PathLength(path) == 0) {
             return nullptr;
         }
+        const uint32_t path_hash = HashSamplePath(path);
         for (size_t i = 0; i < Capacity; ++i) {
-            if (ids_[i] != 0 && records_[i].path_hash == path_hash) {
+            if (ids_[i] != 0 && records_[i].path_hash == path_hash &&
+                std::strcmp(records_[i].payload.path, path) == 0) {
                 return &records_[i];
             }
         }
         return nullptr;
     }
 
-    /// Claims a slot for `path_hash`. On Ok, `*out` is the new record with
-    /// its id assigned, used_by 0, not pinned; the caller fills the payload.
-    /// AlreadyResident hands back the existing record instead - the caller
-    /// decides whether that is a hit (it usually is) or a mistake.
-    Admit AdmitPath(uint32_t path_hash, Record** out) {
-        if (Record* existing = FindByPath(path_hash)) {
+    /// Claims a slot and copies the complete path before publishing its id.
+    /// The caller fills the remaining payload fields; it must preserve the
+    /// admitted path. Invalid or overlong paths are refused, never truncated.
+    Admit AdmitPath(const char* path, Record** out) {
+        *out = nullptr;
+        const size_t path_len = PathLength(path);
+        if (path_len == 0) {
+            return Admit::InvalidPath;
+        }
+        if (Record* existing = FindByPath(path)) {
             *out = existing;
             return Admit::AlreadyResident;
         }
@@ -139,7 +146,8 @@ class SampleRegistry {
             r = Record{};
             r.generation = gen;
             r.sample_id = static_cast<uint16_t>((gen << kSlotBits) | slot);
-            r.path_hash = path_hash;
+            r.path_hash = HashSamplePath(path);
+            std::memcpy(r.payload.path, path, path_len + 1);
             ids_[slot] = r.sample_id;
             next_slot_ = (slot + 1) % Capacity;
             ++count_;
@@ -255,6 +263,19 @@ class SampleRegistry {
     void NoteNewest(uint16_t sample_id) { newest_ = sample_id; }
 
    private:
+    // Zero is invalid (empty/null or no terminator within owned storage).
+    static size_t PathLength(const char* path) {
+        if (!path) {
+            return 0;
+        }
+        for (size_t n = 0; n < sizeof(Payload{}.path); ++n) {
+            if (path[n] == 0) {
+                return n;
+            }
+        }
+        return 0;
+    }
+
     uint16_t ids_[Capacity];  ///< the SRAM index: 0 = free
     Record* records_;
     size_t next_slot_ = 0;

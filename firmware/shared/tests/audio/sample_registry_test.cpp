@@ -14,6 +14,7 @@ namespace {
 
 struct Payload {
     uint32_t bytes = 0;
+    char path[256] = {};
 };
 
 constexpr size_t kCap = 1024;
@@ -25,7 +26,7 @@ struct Fixture : ::testing::Test {
 
     uint16_t admit(const char* path) {
         Registry::Record* r = nullptr;
-        EXPECT_EQ(reg.AdmitPath(HashSamplePath(path), &r), Registry::Admit::Ok) << path;
+        EXPECT_EQ(reg.AdmitPath(path, &r), Registry::Admit::Ok) << path;
         return r ? r->sample_id : 0;
     }
 };
@@ -58,12 +59,12 @@ TEST_F(Fixture, IdsEncodeTheirSlotAndAreNeverZero) {
 TEST_F(Fixture, SameFileIsAlreadyResident) {
     const uint16_t a = admit("/kick.wav");
     Registry::Record* r = nullptr;
-    EXPECT_EQ(reg.AdmitPath(HashSamplePath("/kick.wav"), &r), Registry::Admit::AlreadyResident);
+    EXPECT_EQ(reg.AdmitPath("/kick.wav", &r), Registry::Admit::AlreadyResident);
     ASSERT_NE(r, nullptr);
     EXPECT_EQ(r->sample_id, a);
     EXPECT_EQ(reg.Count(), 1u);
-    EXPECT_EQ(reg.FindByPath(HashSamplePath("/kick.wav")), r);
-    EXPECT_EQ(reg.FindByPath(HashSamplePath("/snare.wav")), nullptr);
+    EXPECT_EQ(reg.FindByPath("/kick.wav"), r);
+    EXPECT_EQ(reg.FindByPath("/snare.wav"), nullptr);
 }
 
 TEST_F(Fixture, StaleIdFailsAfterTheSlotIsReused) {
@@ -101,13 +102,12 @@ TEST_F(Fixture, FullIsReportedNotEvicted) {
         admit(("/s" + std::to_string(i) + ".wav").c_str());
     }
     Registry::Record* r = nullptr;
-    EXPECT_EQ(reg.AdmitPath(HashSamplePath("/one-more.wav"), &r), Registry::Admit::Full);
+    EXPECT_EQ(reg.AdmitPath("/one-more.wav", &r), Registry::Admit::Full);
     EXPECT_EQ(r, nullptr);
     EXPECT_EQ(reg.Count(), kCap);
     // Every earlier entry is untouched.
     for (size_t i = 0; i < kCap; ++i) {
-        EXPECT_NE(reg.FindByPath(HashSamplePath(("/s" + std::to_string(i) + ".wav").c_str())),
-                  nullptr);
+        EXPECT_NE(reg.FindByPath(("/s" + std::to_string(i) + ".wav").c_str()), nullptr);
     }
 }
 
@@ -117,7 +117,7 @@ TEST_F(Fixture, GenerationWrapsWithoutProducingZeroOrColliding) {
     uint16_t prev = 0;
     for (int i = 0; i < 70; ++i) {
         Registry::Record* r = nullptr;
-        ASSERT_EQ(reg.AdmitPath(HashSamplePath("/x.wav"), &r), Registry::Admit::Ok);
+        ASSERT_EQ(reg.AdmitPath("/x.wav", &r), Registry::Admit::Ok);
         const uint16_t id = r->sample_id;
         EXPECT_NE(id, 0);
         EXPECT_EQ(Registry::SlotOf(id), 0) << "only slot 0 is ever free here";
@@ -232,4 +232,45 @@ TEST_F(Fixture, PayloadIsCallerOwnedAndClearedOnAdmit) {
     const uint16_t b = admit("/b.wav");
     ASSERT_EQ(Registry::SlotOf(b), 0);
     EXPECT_EQ(reg.Find(b)->payload.bytes, 0u) << "no leftovers from the previous occupant";
+}
+
+TEST_F(Fixture, DistinctPathsWithTheSameHashRemainDistinctSamples) {
+    const char* first = "0:/samples/d458dfeb4949ec65.wav";
+    const char* second = "0:/samples/06da2fcf0c771773.wav";
+    ASSERT_EQ(HashSamplePath(first), HashSamplePath(second));
+    const uint16_t a = admit(first);
+    const uint16_t b = admit(second);
+    EXPECT_NE(a, b);
+    EXPECT_EQ(reg.Count(), 2u);
+    reg.SetUsedBy(a, 1, true);
+    reg.SetUsedBy(b, 2, true);
+    EXPECT_EQ(reg.Find(a)->used_by, 1u << 1);
+    EXPECT_EQ(reg.Find(b)->used_by, 1u << 2);
+}
+
+TEST_F(Fixture, AdmissionOwnsACompleteCopyOfThePath) {
+    char path[] = "/one.wav";
+    const uint16_t id = admit(path);
+    path[1] = 'X';
+    ASSERT_NE(reg.FindByPath("/one.wav"), nullptr);
+    EXPECT_EQ(reg.FindByPath("/one.wav")->sample_id, id);
+    EXPECT_STREQ(reg.Find(id)->payload.path, "/one.wav");
+    EXPECT_EQ(reg.FindByPath(path), nullptr);
+}
+
+TEST_F(Fixture, InvalidOrOverlongPathsCannotAliasResidentEntries) {
+    const std::string longest(255, 'a');
+    const uint16_t id = admit(longest.c_str());
+    Registry::Record* out = reg.Find(id);
+    for (const char* invalid: {static_cast<const char*>(nullptr), ""}) {
+        EXPECT_EQ(reg.AdmitPath(invalid, &out), Registry::Admit::InvalidPath);
+        EXPECT_EQ(out, nullptr);
+    }
+    const std::string too_long = longest + "b";
+    EXPECT_EQ(reg.AdmitPath(too_long.c_str(), &out), Registry::Admit::InvalidPath);
+    EXPECT_EQ(out, nullptr);
+    EXPECT_EQ(reg.FindByPath(too_long.c_str()), nullptr);
+    EXPECT_EQ(reg.Count(), 1u);
+    ASSERT_NE(reg.FindByPath(longest.c_str()), nullptr);
+    EXPECT_EQ(reg.FindByPath(longest.c_str())->sample_id, id);
 }

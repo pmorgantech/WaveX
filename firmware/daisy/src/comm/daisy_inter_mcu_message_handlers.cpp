@@ -246,6 +246,11 @@ static void HandleNoteMessage(const uint8_t* payload, size_t payload_size) {
         return;
     }
     const auto* msg = reinterpret_cast<const WaveX::Protocol::NoteMessage*>(payload);
+    // A valid frame CRC does not validate MIDI values. In particular, the
+    // engine's release-overflow bitmap has exactly 128 note bits per Track.
+    if (msg->note > 127 || msg->velocity > 127 || (msg->channel & 0x70u) != 0) {
+        return;
+    }
 
     // Logged on arrival, unconditionally.
     //
@@ -271,12 +276,12 @@ static void HandleNoteOffMessage(const uint8_t* payload, size_t payload_size) {
         UART_LOGE("daisy_msg", "NOTE_OFF payload too small (%d)", (int)payload_size);
         return;
     }
-    {
-        const auto* m = reinterpret_cast<const WaveX::Protocol::NoteMessage*>(payload);
-        WaveX::Log::PrintLine("RX NOTE_OFF note=%u ch=%u", (unsigned)m->note, (unsigned)m->channel);
-    }
-#if WAVEX_AUDIO_ENGINE_ENABLED
     const auto* msg = reinterpret_cast<const WaveX::Protocol::NoteMessage*>(payload);
+    if (msg->note > 127 || msg->velocity > 127 || (msg->channel & 0x70u) != 0) {
+        return;
+    }
+    WaveX::Log::PrintLine("RX NOTE_OFF note=%u ch=%u", (unsigned)msg->note, (unsigned)msg->channel);
+#if WAVEX_AUDIO_ENGINE_ENABLED
     WaveX::AudioEngine::OnNoteOff(*msg);
 #endif
 }

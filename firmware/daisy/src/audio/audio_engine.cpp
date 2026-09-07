@@ -35,10 +35,12 @@ using q15_t = int16_t;
 #include "../storage/fatfs_wav_reader.hpp"
 #include "../timebase.hpp"
 #include "audio/sample_pool.hpp"
+#include "callback_stop_fence.hpp"
 #include "fade.hpp"
 #include "instrument.hpp"
 #include "lfo.hpp"
 #include "linear_resampler.hpp"
+#include "mixer_control_handoff.hpp"
 #include "mod_matrix.hpp"
 #include "note_event_queue.hpp"
 #include "output_sink.hpp"
@@ -47,6 +49,7 @@ using q15_t = int16_t;
 #include "sequencer/sequencer_command_queue.hpp"
 #include "sfz_loader.hpp"
 #include "snapshot_mailbox.hpp"
+#include "track_live_updates.hpp"
 #include "voice_manager.hpp"
 #include "wav/wav_header_parser.hpp"
 #include <algorithm>
@@ -146,31 +149,17 @@ static WaveX::AudioEngine::VoiceManager s_voice_manager WAVEX_DTCM_DATA;
 // VoiceLiveParams. Init() also calls Reset() on it, so the correct state does
 // not depend on where the linker put it.
 static WaveX::Mix::TrackMixer s_track_mixer;
+static MixerControlHandoff s_mixer_controls;
 
 // Meter subscription (MSG_MIX_OP SUB/UNSUB_METERS). Honoured as a flag now;
 // the MSG_MIX_METERS sender is stage 4 of output-routing-and-mixer.md §6, so
 // subscribing currently records intent and sends nothing.
 static bool s_mix_meters_subscribed = false;
 
-// Digital voice base parameters - what MSG_CONTROL_CHANGE edits for the
-// all-digital path (features/digital-voice-audition.md stage 1). The main loop
-// owns pending; the callback owns active. A double-buffered generation mailbox
-// publishes the complete struct at a block boundary, so the callback never
-// observes a mixed old/new parameter set.
-//
-// ENGINE-GLOBAL, not per-slot, and deliberately so. param-locks-and-
-// modulation.md scopes base values to an instrument slot, but nothing can
-// address a slot differently yet - OnNoteOn does not even set one - so a
-// 16-entry table would be 16 copies of the same values with no way to reach
-// 15 of them. This mirrors s_para_pending, which is engine-global for the
-// analog path for the same reason. It becomes per-slot with the instrument
-// model (Phase 2.5), which is also when a slot becomes addressable.
-//
-// DTCM for the same reason as s_voice_manager: read from Callback(), CPU-only,
-// tiny.
-static WaveX::AudioEngine::VoiceLiveParams s_voice_live_active WAVEX_DTCM_DATA;
-static WaveX::AudioEngine::VoiceLiveParams s_voice_live_pending;
-static SnapshotMailbox<WaveX::AudioEngine::VoiceLiveParams> s_voice_live_mailbox;
+// Main-loop instrument/extras edits publish complete per-Track values. The
+// callback alone applies them to sounding voices; different Tracks retain
+// independent pending updates.
+static TrackLiveUpdates s_track_live_updates;
 
 // Per-Track staging for the live values the Instrument does NOT own yet.
 // Filter and envelope moved onto Instrument in stage 4; pan and pitch become
@@ -215,16 +204,9 @@ static WaveX::AudioEngine::VoiceLiveParams ComposeTrackLive(
     return live;
 }
 
-// Modulation matrix (roadmap Phase 2.5 item 4; param-locks-and-modulation.md
-// §3/§9 stage 4). Slots are instrument-scoped, stored on Instrument itself
-// (SfzLoader's Tracks) rather than engine-global - unlike
-// s_voice_live_pending above, an instrument slot IS now addressable
-// (MSG_INST_OP's own `slot` field), so there is no more "N copies of the
-// same array" problem to work around. ResolveModSlots below is the
-// ModSlotResolver VoiceManager::TickModulation() uses to look up each
-// voice's OWN instrument's slots (Voice::slot) - see SfzLoader::GetModSlots's
-// own comment for why this reads SfzLoader's bank directly rather than
-// through a mailbox.
+// The callback resolves each voice's own Track through a callback-private
+// modulation snapshot. SfzLoader publishes complete tables from its main-loop
+// Instrument bank, so slot edits and instrument commits cannot tear a route.
 static const WaveX::AudioEngine::ModSlot* ResolveModSlots(const void*, uint8_t slot) {
     return SfzLoader::GetModSlots(slot);
 }
@@ -354,18 +336,22 @@ static uint32_t
                              [NoteEventQueue<NoteEvent, kNoteQueueSize>::kReleaseWordCount];
 static uint32_t s_scoped_release_pending_slots = 0;
 
-// Set by the main loop before releasing loaded-sample memory (an unload);
-// consumed by Callback(), which drains the queue and then hard-stops every
-// voice so nothing keeps reading freed SDRAM.
-static bool s_voice_stop_all = false;
-// The per-Track form of the same barrier (track-and-patch-model.md §4): a
-// bit per Track whose voices must stop before that Track's Pool refs are
-// released - replacing an import, binding a sample over one. Other Tracks
-// keep sounding.
-static uint16_t s_voice_stop_tracks = 0;
-// Runtime SFZ replacement waits for this callback acknowledgement before it
-// releases the old Track's non-owning sample pointers.
-static bool s_voice_stop_ack = false;
+// One main-loop producer and one callback consumer. Select/unload and the
+// cooperative Instrument loader await their own generation before releasing
+// sample storage; elapsed time alone never grants ownership of that memory.
+static CallbackStopFence s_voice_stop_fence;
+
+static bool StopTracksAndWait(uint16_t tracks) {
+    const uint32_t generation = s_voice_stop_fence.RequestStop(tracks);
+    const uint32_t started = System::GetNow();
+    while (!s_voice_stop_fence.Complete(generation)) {
+        if (System::GetNow() - started >= 10u) {
+            return false;
+        }
+        System::Delay(1);
+    }
+    return true;
+}
 
 // Audio-callback side: apply every pending note event, then honor a
 // pending hard-stop. Order matters - a stop request must also kill
@@ -411,34 +397,23 @@ static bool drain_note_queue() {
         }
         pending_slots &= pending_slots - 1u;
     }
-    if (__atomic_exchange_n(&s_voice_stop_all, false, __ATOMIC_ACQUIRE)) {
-        s_voice_manager.StopAll();
-        __atomic_store_n(&s_voice_stop_ack, true, __ATOMIC_RELEASE);
-    }
-    uint16_t stop_tracks = __atomic_exchange_n(&s_voice_stop_tracks, 0u, __ATOMIC_ACQUIRE);
-    if (stop_tracks != 0) {
-        while (stop_tracks != 0) {
-            const uint8_t track = static_cast<uint8_t>(__builtin_ctz(stop_tracks));
+    // A stop can retire samples referenced by the old sequencer map too.
+    // Acquire the replacement map before acknowledging that no callback-owned
+    // references can trigger them again on a later block.
+    s_seq_voice_map_mailbox.ConsumeLatest(s_seq_voice_map_active);
+    s_voice_stop_fence.ConsumeAndStop([](uint16_t tracks) {
+        while (tracks != 0) {
+            const uint8_t track = static_cast<uint8_t>(__builtin_ctz(tracks));
             s_voice_manager.StopTrack(track);
-            stop_tracks &= static_cast<uint16_t>(stop_tracks - 1u);
+            tracks &= static_cast<uint16_t>(tracks - 1u);
         }
-        __atomic_store_n(&s_voice_stop_ack, true, __ATOMIC_RELEASE);
-    }
+    });
     return any_trigger;
 }
 
-static void ApplySequencerLiveParams(VoiceTriggerParams& params) {
-    params.filter_cutoff_hz = s_voice_live_active.filter_cutoff_hz;
-    params.filter_resonance = s_voice_live_active.filter_resonance;
-    params.attack_s = s_voice_live_active.attack_s;
-    params.decay_s = s_voice_live_active.decay_s;
-    params.sustain_level = s_voice_live_active.sustain_level;
-    params.release_s = s_voice_live_active.release_s;
-}
-
-// Callback-only. The main loop publishes complete command records and an
-// independently complete voice map before enqueuing PLAY, so consuming commands
-// before the map makes step 0's immediate trigger see the matching binding.
+// Callback-only. drain_note_queue has already acquired the latest voice map.
+// The main loop publishes that map before enqueuing PLAY, so step 0 sees the
+// complete matching binding.
 static bool drain_sequencer(uint16_t block_size) {
     WaveX::Sequencer::SequencerCommand command;
     while (s_seq_command_queue.Pop(command)) {
@@ -457,8 +432,6 @@ static bool drain_sequencer(uint16_t block_size) {
                 break;
         }
     }
-    s_seq_voice_map_mailbox.ConsumeLatest(s_seq_voice_map_active);
-
     const uint64_t block_start_frame = s_seq_transport.scheduler().CurrentFrame();
     WaveX::Sequencer::TriggerEvent events[WaveX::Sequencer::kMaxEventsPerTick];
     const size_t event_count = s_seq_transport.Tick(events, WaveX::Sequencer::kMaxEventsPerTick);
@@ -477,7 +450,6 @@ static bool drain_sequencer(uint16_t block_size) {
             VoiceTriggerParams params = s_seq_voice_map_active.layers[event.track][layer];
             params.velocity = event.velocity;
             params.start_offset_frames = static_cast<uint16_t>(offset);
-            ApplySequencerLiveParams(params);
             s_voice_manager.Trigger(params);
             any_trigger = true;
         }
@@ -493,6 +465,22 @@ static SampleMemMgr s_sample_mem_mgr;
 // same reasoning as s_voice_manager/s_para_env above, extended to the
 // per-block performance-stat counters rather than just DSP state.
 static BlockMeters s_last_block_meters WAVEX_DTCM_DATA = {0, 0, 0, 0};
+struct CallbackTelemetry {
+    BlockMeters meters{};
+    float cpu_avg = 0;
+    float cpu_min = 0;
+    float cpu_max = 0;
+    uint32_t blocks = 0;
+    uint32_t cycles = 0;
+};
+static SnapshotMailbox<CallbackTelemetry> s_telemetry_mailbox;
+static CallbackTelemetry s_telemetry_main;
+
+// Main-loop only: callback publication never modifies this consumer's copy.
+static const CallbackTelemetry& ReadCallbackTelemetry() {
+    s_telemetry_mailbox.ConsumeLatest(s_telemetry_main);
+    return s_telemetry_main;
+}
 
 // CPU Load Meter for audio processing performance monitoring
 static CpuLoadMeter s_cpu_load_meter WAVEX_DTCM_DATA;
@@ -500,7 +488,7 @@ static CpuLoadMeter s_cpu_load_meter WAVEX_DTCM_DATA;
 // the main loop, so comparing its rate against the expected 1 kHz separates
 // "the ring starved" from "the callback stopped running" - the latter reports
 // no underrun at all, because underruns are only detected inside it.
-static volatile uint32_t s_callback_blocks WAVEX_DTCM_DATA = 0;
+static uint32_t s_callback_blocks WAVEX_DTCM_DATA = 0;
 // Lowest ring occupancy seen since the last report, sampled once per audio
 // callback. Zero underruns only proves the ring never hit empty; it says
 // nothing about how close it came. A dip toward empty is what a brief gap
@@ -850,8 +838,17 @@ static void remove_loaded_sample(uint16_t sample_id) {
 }
 
 void SelectSample(uint16_t sample_id, uint8_t slot) {
+    if (!s_pool) {
+        WaveX::Log::PrintLine("SAMPLE_SELECT: Sample Pool unavailable");
+        return;
+    }
     if (slot >= kNumTracks) {
         WaveX::Log::PrintLine("SAMPLE_SELECT: track=%u out of range, ignored", (unsigned)slot);
+        return;
+    }
+    if (SfzLoader::Busy()) {
+        PushTrackBinding(slot);
+        WaveX::Log::PrintLine("SAMPLE_SELECT: Instrument loader busy");
         return;
     }
     if (sample_id != 0) {
@@ -862,18 +859,22 @@ void SelectSample(uint16_t sample_id, uint8_t slot) {
             return;
         }
     }
-    // Whatever the Track holds is released by the bind, and an import's
-    // samples that nobody else holds are freed with it - so this Track's
-    // voices stop first. Per-track: the other fifteen keep sounding. The
-    // callback consumes the mask at the top of its next block; 10 ms is
-    // the same margin over the 1 ms block that the unload barrier uses.
+    // A rebind may free samples held only by this Track's old Instrument.
+    // Preserve both the binding and the samples if the callback cannot confirm
+    // its stop within the bounded main-loop wait.
     if (SfzLoader::TrackLoaded(slot)) {
         if (slot == kSequencerPreviewTrack) {
             ClearSequencerVoiceMap();
         }
-        __atomic_fetch_or(
-            &s_voice_stop_tracks, static_cast<uint16_t>(1u << slot), __ATOMIC_RELEASE);
-        System::Delay(10);
+        if (!StopTracksAndWait(static_cast<uint16_t>(1u << slot))) {
+            if (slot == kSequencerPreviewTrack) {
+                PublishSequencerVoiceMap();
+            }
+            PushTrackBinding(slot);
+            WaveX::Log::PrintLine("SAMPLE_SELECT: track=%u callback stop timed out",
+                                  (unsigned)slot);
+            return;
+        }
     }
     if (!SfzLoader::BindSample(*s_pool, s_sample_mem_mgr, slot, sample_id)) {
         WaveX::Log::PrintLine(
@@ -1016,6 +1017,10 @@ void PumpTrackBinding() {
 }
 
 bool UnloadSample(uint16_t sample_id) {
+    if (SfzLoader::Busy()) {
+        WaveX::Log::PrintLine("SAMPLE_UNLOAD: Instrument loader busy");
+        return false;
+    }
     if (sample_id == 0) {
         WaveX::Log::PrintLine("SAMPLE_UNLOAD: id=0 rejected (not a wildcard)");
         return false;
@@ -1025,24 +1030,14 @@ bool UnloadSample(uint16_t sample_id) {
         return false;
     }
 
-    // Stop every voice before releasing the memory. Voices hold a non-owning
-    // pointer into the sample's block, so freeing it under a sounding voice is
-    // a use-after-free in the audio path.
-    //
-    // Ask the CALLBACK to do the stopping rather than calling StopAll() from
-    // here. This function runs on the main loop, and a direct call would leave
-    // a window where the callback is already inside Render() holding a voice's
-    // sample pointer - stopping a voice it has finished reading for this block
-    // does nothing about the block it is in the middle of. drain_note_queue()
-    // consumes this flag at the top of the callback, so after one block period
-    // no voice can still be reading. Same barrier OnSampleLoad takes before it
-    // evicts; the 10 ms is its margin over the 1 ms block, kept identical
-    // rather than tuned, since nothing here is latency-sensitive.
-    // Drop the sequencer's immutable pointer snapshot before the callback
-    // acknowledgement that permits this sample's storage to be freed.
+    // Clear callback-owned trigger pointers, then wait for a stop of every
+    // Track. A stopped/missing callback never authorizes freeing its samples.
     ClearSequencerVoiceMap();
-    __atomic_store_n(&s_voice_stop_all, true, __ATOMIC_RELEASE);
-    System::Delay(10);
+    if (!StopTracksAndWait(0xFFFFu)) {
+        PublishSequencerVoiceMap();
+        WaveX::Log::PrintLine("SAMPLE_UNLOAD: id=%u callback stop timed out", (unsigned)sample_id);
+        return false;
+    }
 
     // A zone bound to what we are about to free must not keep resolving to
     // a sample_id that no longer exists - drop the binding first rather than
@@ -1833,6 +1828,7 @@ void Init(DaisySeed& hw, float sample_rate, bool sdram_available) {
     // s_track_mixer's placement. Reset() opens every track and settles the
     // ramps, so nothing fades in at boot.
     s_track_mixer.Reset();
+    s_mixer_controls.Init();
     s_track_mixer.SetSampleRate(sample_rate);
     s_voice_manager.SetTrackMixer(&s_track_mixer);
 
@@ -1856,9 +1852,7 @@ void Init(DaisySeed& hw, float sample_rate, bool sdram_available) {
     // the stack and copies them in, which is the cheapest way to get the values
     // the type declares. Anything added to DTCM that has non-zero defaults
     // belongs in this block too.
-    s_voice_live_pending = WaveX::AudioEngine::VoiceLiveParams{};
-    s_voice_live_active = s_voice_live_pending;
-    s_voice_live_mailbox.Init(s_voice_live_pending);
+    s_track_live_updates.Init();
     s_filter_config_pending = WaveX::AudioEngine::FilterConfig{};
     s_filter_config_active = s_filter_config_pending;
     s_filter_config_mailbox.Init(s_filter_config_pending);
@@ -1872,6 +1866,7 @@ void Init(DaisySeed& hw, float sample_rate, bool sdram_available) {
     s_cv_test_active = s_cv_test_pending;
     s_cv_test_mailbox.Init(s_cv_test_pending);
     s_note_queue.Init();
+    s_voice_stop_fence.Init();
     s_seq_command_queue.Init();
     s_seq_voice_map_active_storage.Reconstruct();
     s_seq_voice_map_mailbox.Init(s_seq_voice_map_active);
@@ -1890,10 +1885,12 @@ void Init(DaisySeed& hw, float sample_rate, bool sdram_available) {
     PROFILE_REGISTER_ZONE(prebuffer_audio);
     PROFILE_REGISTER_ZONE(sd_refill);
 
+#if WAVEX_ANALOG_CV_ENABLED
 #if WAVEX_CV_BACKEND == WAVEX_CV_BACKEND_MCP4728
     s_cv_backend.Init(0x60);
 #else
     s_cv_backend.Init();
+#endif
 #endif
 
     // Initialize only when hardware SDRAM bring-up succeeded. The centralized
@@ -1975,6 +1972,9 @@ void Init(DaisySeed& hw, float sample_rate, bool sdram_available) {
     // gave a smoothing constant of ~0.56, i.e. GetAvgCpuLoad() was reporting
     // essentially per-block instantaneous load, not an average.
     s_cpu_load_meter.Init(sample_rate, 48);
+    s_telemetry_main = CallbackTelemetry{};
+    s_telemetry_mailbox.Init(s_telemetry_main);
+    s_callback_blocks = 0;
 }
 
 void Callback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t size) {
@@ -2028,9 +2028,8 @@ void Callback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t
     // Publish control-plane changes only at a block boundary. A callback that
     // preempts the producer mid-copy keeps the previous complete snapshot and
     // picks up the new generation one block later.
-    if (s_voice_live_mailbox.ConsumeLatest(s_voice_live_active)) {
-        s_voice_manager.ApplyLiveParams(s_voice_live_active);
-    }
+    s_track_live_updates.ApplyTo(s_voice_manager);
+    s_mixer_controls.ApplyTo(s_track_mixer);
     if (s_filter_config_mailbox.ConsumeLatest(s_filter_config_active)) {
         s_voice_manager.ApplyFilterConfig(s_filter_config_active);
     }
@@ -2139,6 +2138,14 @@ void Callback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t
     s_cpu_load_meter.OnBlockEnd();
     s_dwt_callback_cycles = WaveX::Profiling::GetCycles() - callback_cycles_start;
     s_dwt_callback_max = std::max(s_dwt_callback_max, s_dwt_callback_cycles);
+    CallbackTelemetry telemetry;
+    telemetry.meters = s_last_block_meters;
+    telemetry.cpu_avg = s_cpu_load_meter.GetAvgCpuLoad();
+    telemetry.cpu_min = s_cpu_load_meter.GetMinCpuLoad();
+    telemetry.cpu_max = s_cpu_load_meter.GetMaxCpuLoad();
+    telemetry.blocks = s_callback_blocks;
+    telemetry.cycles = s_dwt_callback_cycles;
+    s_telemetry_mailbox.Publish(telemetry);
 }
 
 // MSG_CONTROL_CHANGE -> Stage A paraphonic path (item 5 stage 3). Main-loop
@@ -2146,44 +2153,16 @@ void Callback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t
 // applies them at the next block boundary, including shared-envelope rates.
 // Each parameter now has TWO destinations, deliberately: the Stage A analog
 // path (s_para_pending, one shared VCF/VCA) and the digital per-voice path
-// (s_voice_live_pending). They are not alternatives - the analog board is
+// (s_track_live_updates). The analog board is
 // optional hardware and the digital voices always render - so a knob has to
 // reach both or it would do nothing on whichever configuration is in use.
-// Per-slot (kit) scoping of these values remains Phase 2.5 instrument-model
-// work; see s_voice_live_pending for why engine-global is the honest interim.
 void OnMixOp(const MixOpMessage& m) {
-    switch (m.op) {
-        case MIX_OP_SET_GAIN:
-            s_track_mixer.SetGain(m.track,
-                                  WaveX::Mix::DbToLinear(WaveX::Mix::WireToGainDb(m.value)));
-            break;
-        case MIX_OP_SET_PAN:
-            s_track_mixer.SetPanOffset(m.track, WaveX::Mix::WireToPan(m.value));
-            break;
-        case MIX_OP_SET_MUTE:
-            s_track_mixer.SetMute(m.track, m.value != 0);
-            break;
-        case MIX_OP_SET_MUTE_MASK:
-            // One message for a whole solo change: sending 16 individual mutes
-            // would walk the ramps through states where the wrong tracks are
-            // down, and at 5 ms per ramp that is audible.
-            s_track_mixer.SetMuteMask(m.value);
-            break;
-        case MIX_OP_SET_MASTER:
-            // Stored, not yet applied. PARAM_VOLUME still owns the master gain;
-            // having both drive it would mean two controls fighting over one
-            // value with no defined winner. output-routing-and-mixer.md §1 says
-            // PARAM_VOLUME becomes explicitly master-scoped - that
-            // reconciliation belongs with the mixer page, not here.
-            s_track_mixer.SetMasterGain(WaveX::Mix::DbToLinear(WaveX::Mix::WireToGainDb(m.value)));
-            break;
-        case MIX_OP_SUB_METERS:
-        case MIX_OP_UNSUB_METERS:
-            s_mix_meters_subscribed = (m.op == MIX_OP_SUB_METERS);
-            break;
-        default:
-            break;
+    if (m.op == MIX_OP_SUB_METERS || m.op == MIX_OP_UNSUB_METERS) {
+        s_mix_meters_subscribed = (m.op == MIX_OP_SUB_METERS);
+        return;
     }
+    // Master remains stored only: PARAM_VOLUME still owns the audible master.
+    s_mixer_controls.Update(m);
 }
 
 /**
@@ -2334,7 +2313,10 @@ void OnControlChange(const ControlChangeMessage& ctrl_msg) {
         // Track only, so a knob on Track 3 cannot move Track 5's held notes.
         SfzLoader::SetInstrumentFilter(track, filter);
         SfzLoader::SetInstrumentEnv(track, env);
-        s_voice_live_mailbox.Publish(ComposeTrackLive(track, filter, env));
+        s_track_live_updates.Publish(ComposeTrackLive(track, filter, env));
+        if (track == kSequencerPreviewTrack) {
+            PublishSequencerVoiceMap();
+        }
     }
 }
 
@@ -2586,6 +2568,9 @@ static uint8_t RouteNote(const NoteMessage& note_msg, uint8_t* tracks, uint8_t m
 }
 
 void OnNoteOn(const NoteMessage& note_msg) {
+    if (note_msg.note > 127 || note_msg.velocity > 127 || (note_msg.channel & 0x70u) != 0) {
+        return;
+    }
     uint8_t tracks[kNumTracks];
     const uint8_t n = RouteNote(note_msg, tracks, kNumTracks);
     for (uint8_t i = 0; i < n; ++i) {
@@ -2630,6 +2615,9 @@ static void ReleaseTrackNoteOff(uint8_t slot, const NoteMessage& note_msg) {
 }
 
 void OnNoteOff(const NoteMessage& note_msg) {
+    if (note_msg.note > 127 || note_msg.velocity > 127 || (note_msg.channel & 0x70u) != 0) {
+        return;
+    }
     uint8_t tracks[kNumTracks];
     const uint8_t n = RouteNote(note_msg, tracks, kNumTracks);
     for (uint8_t i = 0; i < n; ++i) {
@@ -2961,25 +2949,26 @@ void PumpInstrumentLoad() {
     if (!s_pool) {
         return;
     }
-    static bool stop_requested = false;
+    static uint32_t stop_generation = 0;
     const uint8_t stop_track = SfzLoader::VoiceStopTrack();
     if (stop_track != 0xFF) {
         // Per-track barrier: only the Track being (re)loaded stops; what it
         // held is released on the callback's acknowledgement.
-        if (!stop_requested) {
-            __atomic_store_n(&s_voice_stop_ack, false, __ATOMIC_RELAXED);
-            __atomic_fetch_or(
-                &s_voice_stop_tracks, static_cast<uint16_t>(1u << stop_track), __ATOMIC_RELEASE);
-            stop_requested = true;
+        if (stop_generation == 0) {
+            if (stop_track == kSequencerPreviewTrack) {
+                ClearSequencerVoiceMap();
+            }
+            stop_generation =
+                s_voice_stop_fence.RequestStop(static_cast<uint16_t>(1u << stop_track));
             return;
         }
-        if (__atomic_exchange_n(&s_voice_stop_ack, false, __ATOMIC_ACQUIRE)) {
+        if (s_voice_stop_fence.Complete(stop_generation)) {
             SfzLoader::ConfirmVoicesStopped(*s_pool, s_sample_mem_mgr);
-            stop_requested = false;
+            stop_generation = 0;
         }
         return;
     }
-    stop_requested = false;
+    stop_generation = 0;
     const bool preview_was_loading = SfzLoader::TrackLoading(kSequencerPreviewTrack);
     const bool was_busy = SfzLoader::Busy();
     SfzLoader::Pump(*s_pool, s_sample_mem_mgr, s_sample_io, sizeof(s_sample_io));
@@ -3014,14 +3003,20 @@ void OnSampleLoad(const SampleLoadMessage& sl) {
         ReportSampleLoadFailed(sl.sample_id, SAMPLE_LOAD_FAIL_NO_SDRAM);
         return;
     }
+    // An import's admitted records and hit ids belong to its transaction
+    // until Commit/Fail. They must not look like completed loads or be removed
+    // by another Pool mutation during a cooperative yield.
+    if (SfzLoader::Busy()) {
+        ReportSampleLoadFailed(sl.sample_id, SAMPLE_LOAD_FAIL_BUSY);
+        return;
+    }
     if (s_hw) {
         WaveX::Log::PrintLine("SAMPLE_LOAD: path='%s' request=%u", sl.path, (unsigned)sl.sample_id);
     }
     // The Pool is refcounted by path: a file that is already resident is a
     // hit, not a second copy. The user's explicit load pins it, and the
     // frontend hears the id it already had.
-    const uint32_t path_hash = WaveX::Audio::HashSamplePath(sl.path);
-    if (SamplePool::Record* hit = s_pool->FindByPath(path_hash)) {
+    if (SamplePool::Record* hit = s_pool->FindByPath(sl.path)) {
         s_pool->SetPinned(hit->sample_id, true);
         s_pool->NoteNewest(hit->sample_id);
         PushSampleMeta(hit->payload);
@@ -3059,7 +3054,7 @@ void OnSampleLoad(const SampleLoadMessage& sl) {
     // drive prefix, retry with "0:" prefix to be tolerant of mount styles.
     FRESULT fr = f_open(&file, sl.path, FA_READ);
     if (fr != FR_OK && strncmp(sl.path, "0:", 2) != 0) {
-        char alt_path[128];
+        char alt_path[sizeof(sl.path) + 2];
         snprintf(alt_path, sizeof(alt_path), "0:%s", sl.path);
         fr = f_open(&file, alt_path, FA_READ);
         if (fr != FR_OK && s_hw) {
@@ -3123,7 +3118,7 @@ void OnSampleLoad(const SampleLoadMessage& sl) {
     // Admission: an entry and the bytes, or a reason. Nothing is evicted to
     // make room - the user unloads; the engine never guesses (§4).
     SamplePool::Record* record = nullptr;
-    if (s_pool->AdmitPath(path_hash, &record) != SamplePool::Admit::Ok) {
+    if (s_pool->AdmitPath(sl.path, &record) != SamplePool::Admit::Ok) {
         if (s_hw) {
             WaveX::Log::PrintLine("SAMPLE_LOAD: pool full (%u entries)",
                                   (unsigned)WAVEX_SAMPLE_POOL_CAPACITY);
@@ -3306,7 +3301,7 @@ void GetSampleMemStatus(SampleMemStatusMessage& out) {
 }
 
 void GetMeters(BlockMeters& out) {
-    out = s_last_block_meters;
+    out = ReadCallbackTelemetry().meters;
 }
 
 // ============================
@@ -3415,7 +3410,7 @@ void FlushCv() {
 }
 
 uint32_t GetCallbackBlocks() {
-    return s_callback_blocks;
+    return ReadCallbackTelemetry().blocks;
 }
 
 bool TakePlaybackAborted() {
@@ -3443,15 +3438,15 @@ uint32_t TakeRingLowWater() {
 }
 
 float GetAvgCpuLoad() {
-    return s_cpu_load_meter.GetAvgCpuLoad();
+    return ReadCallbackTelemetry().cpu_avg;
 }
 
 float GetMinCpuLoad() {
-    return s_cpu_load_meter.GetMinCpuLoad();
+    return ReadCallbackTelemetry().cpu_min;
 }
 
 float GetMaxCpuLoad() {
-    return s_cpu_load_meter.GetMaxCpuLoad();
+    return ReadCallbackTelemetry().cpu_max;
 }
 
 float GetBlockPeriodMs() {
@@ -3699,7 +3694,7 @@ uint32_t GetOutputChannelCount() {
 }
 
 void GetDwtStats(uint32_t& callback_cycles, uint32_t& io_cycles) {
-    callback_cycles = s_dwt_callback_cycles;
+    callback_cycles = ReadCallbackTelemetry().cycles;
     io_cycles = s_dwt_io_cycles;
 }
 

@@ -163,6 +163,7 @@ struct Voice {
     // zone and live params already set. Identity by default, so a voice
     // nothing modulates renders exactly as it did before the matrix existed.
     float mod_cutoff_mul = 1.0f;
+    bool modulation_cutoff_dirty = false;
     float mod_gain_mul = 1.0f;
     float mod_pitch_mul = 1.0f;
     float mod_pan_offset = 0.0f;
@@ -187,6 +188,7 @@ struct Voice {
     // from the control tick (VoiceManager::TickModulation), consumed at the
     // top of Render()'s per-voice slice. Callback-safe.
     void SetBlockModulation(const ModDestinations& mods) {
+        modulation_cutoff_dirty = modulation_cutoff_dirty || mod_cutoff_mul != mods.cutoff_mul;
         mod_cutoff_mul = mods.cutoff_mul;
         mod_gain_mul = mods.gain_mul;
         mod_pitch_mul = mods.pitch_mul;
@@ -347,7 +349,7 @@ class VoiceManager {
     // InitEstablishesDefaultsFromZeroedMemory pins that.
     void Init(uint32_t sample_rate) {
         sample_rate_ = sample_rate > 0 ? sample_rate : 48000;
-        live_pitch_scale_ = 1.0f;
+        live_pitch_scales_.fill(1.0f);
         filter_config_ = FilterConfig{};
         // A zeroed seed is a fixed point of xorshift (0 stays 0 forever), which
         // would make SRC_RANDOM sample the same -1.0f on every voice for the
@@ -391,7 +393,12 @@ class VoiceManager {
         // One pow() per call, not one per voice: this runs at block rate from
         // the audio callback whenever a control moved, and eight of them would
         // be eight transcendentals inside the deadline for no benefit.
-        live_pitch_scale_ = std::pow(2.0f, p.pitch_semitones / 12.0f);
+        const float live_pitch_scale = std::pow(2.0f, p.pitch_semitones / 12.0f);
+        if (p.track == 0xFF) {
+            live_pitch_scales_.fill(live_pitch_scale);
+        } else if (p.track < live_pitch_scales_.size()) {
+            live_pitch_scales_[p.track] = live_pitch_scale;
+        }
         // Remembered so voices triggered after this edit start with it too;
         // SetConfig is a no-op unless something in it changed, so a live edit
         // of any other parameter does not retune or reset the filters.
@@ -417,7 +424,7 @@ class VoiceManager {
             // Multiply the note's own increment rather than overwrite it, so a
             // live transpose stacks on key tracking instead of flattening every
             // voice to the same rate.
-            v.SetIncrement(v.base_increment * live_pitch_scale_);
+            v.SetIncrement(v.base_increment * LivePitchScale(v.track));
         }
     }
 
@@ -456,6 +463,7 @@ class VoiceManager {
         // it. TickModulation() is expected to run before Render() each
         // callback, but Trigger() must not depend on that ordering.
         v.mod_cutoff_mul = 1.0f;
+        v.modulation_cutoff_dirty = false;
         v.mod_gain_mul = 1.0f;
         v.mod_pitch_mul = 1.0f;
         v.mod_pan_offset = 0.0f;
@@ -511,7 +519,7 @@ class VoiceManager {
                                     static_cast<float>(static_cast<int>(params.note) -
                                                        static_cast<int>(params.root_note)) /
                                         12.0f);
-        v.SetIncrement(v.base_increment * live_pitch_scale_);
+        v.SetIncrement(v.base_increment * LivePitchScale(v.track));
 
         v.filter.Init(sample_rate_);
         v.filter.SetConfig(filter_config_);
@@ -610,11 +618,15 @@ class VoiceManager {
             // filter's tan() recompute nor an increment rewrite; an active
             // LFO/matrix slot drives its mod_*_mul away from identity every
             // tick, so this still runs whenever modulation is actually live.
-            if (v.mod_pitch_mul != 1.0f) {
-                v.SetIncrement(v.base_increment * live_pitch_scale_ * v.mod_pitch_mul);
+            const float increment = v.base_increment * LivePitchScale(v.track) * v.mod_pitch_mul;
+            if (v.increment != increment) {
+                v.SetIncrement(increment);
             }
-            if (v.mod_cutoff_mul != 1.0f) {
+            // Returning modulation to identity is itself an update. Skipping
+            // that transition would leave the last modulated cutoff latched.
+            if (v.mod_cutoff_mul != 1.0f || v.modulation_cutoff_dirty) {
                 v.filter.SetCutoff(v.base_cutoff_hz * v.mod_cutoff_mul);
+                v.modulation_cutoff_dirty = false;
             }
 
             // Track gain and pan fold in HERE - once per voice per block,
@@ -889,7 +901,10 @@ class VoiceManager {
     uint32_t sample_rate_ = 48000;
     // Live transpose as a rate multiplier. 1.0 until something moves PARAM_PITCH,
     // so a voice triggered before any edit sounds exactly as it did before.
-    float live_pitch_scale_ = 1.0f;
+    float LivePitchScale(uint8_t track) const {
+        return track < live_pitch_scales_.size() ? live_pitch_scales_[track] : 1.0f;
+    }
+    std::array<float, WaveX::Mix::kNumTracks> live_pitch_scales_{};
     // The filter selection every voice gets at Trigger() (voice_filter.hpp).
     // Written only by ApplyLiveParams(), i.e. from the callback at block
     // boundaries.

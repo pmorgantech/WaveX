@@ -12,8 +12,11 @@
 #include "instrument_map.hpp"
 #include "sample_load_info.hpp"
 #include "sfz_import.hpp"
+#include "snapshot_mailbox.hpp"
 #include "storage/fatfs_wav_reader.hpp"
 #include "wav/wav_header_parser.hpp"
+#include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -35,7 +38,6 @@ struct LoadedSample {
     wxsamp_t handle = {};
     ResidentSampleInfo resident = {};
     uint32_t data_offset = 0;
-    uint32_t path_hash = 0;
     uint16_t pool_id = 0;
     bool hit = false;       // already resident before this load
     bool admitted = false;  // a fresh Pool record this load must clean up on failure
@@ -65,6 +67,16 @@ enum class Phase : uint8_t {
 // temporaries.
 static WaveX::BssStatic<Tracks> s_bank_storage;
 static Tracks& s_bank = s_bank_storage.Get();
+using ModTable = std::array<ModSlot, kMaxModSlots>;
+static SnapshotMailbox<ModTable> s_mod_mailboxes[kNumTracks];
+static ModTable s_mod_active[kNumTracks];  // callback-owned after Reset()
+
+static void PublishModSlots(uint8_t track) {
+    ModTable slots;
+    const ModSlot* stored = s_bank.At(track).instrument.mod_slots;
+    std::copy(stored, stored + kMaxModSlots, slots.begin());
+    s_mod_mailboxes[track].Publish(slots);
+}
 // The one resolver, over the Pool. Registered by the engine because the
 // allocator that turns a handle into a pointer lives there; a
 // default-constructed one resolves nothing, so an unregistered engine drops
@@ -371,11 +383,10 @@ ProbeResult ProbeCurrent(SamplePool& pool) {
     LoadedSample& ls = s_loaded_samples[s_index];
     ls.resident = resident;
     ls.data_offset = wav_info.data_offset;
-    ls.path_hash = WaveX::Audio::HashSamplePath(path);
     // Already in the Pool (the user loaded it, or another import did): a
     // hit costs no memory and no SD read, and its bytes are not counted
     // against what this load needs.
-    if (const SamplePool::Record* r = pool.FindByPath(ls.path_hash)) {
+    if (const SamplePool::Record* r = pool.FindByPath(path)) {
         ls.hit = true;
         ls.pool_id = r->sample_id;
         s_probes[s_index].bytes = 0;
@@ -412,6 +423,10 @@ void FillCurrentStatus() {
 void Reset() {
     CloseFile();
     s_bank_storage.Reconstruct();
+    for (uint8_t track = 0; track < kNumTracks; ++track) {
+        s_mod_active[track] = ModTable{};
+        s_mod_mailboxes[track].Init(s_mod_active[track]);
+    }
     for (auto& ls: s_loaded_samples) {
         ls = LoadedSample{};
     }
@@ -649,7 +664,8 @@ void Pump(SamplePool& pool, SampleMemMgr& memory, uint8_t* io_buffer, uint32_t i
             }
             // Admission first: an entry, then the bytes. Neither evicts.
             SamplePool::Record* record = nullptr;
-            const auto admit = pool.AdmitPath(ls.path_hash, &record);
+            const auto admit =
+                pool.AdmitPath(s_mapped.sample_paths[s_plan.entries[s_index].path_zone], &record);
             if (admit == SamplePool::Admit::AlreadyResident) {
                 // Two plan entries can name one file; the second is a hit.
                 ls.hit = true;
@@ -773,6 +789,7 @@ void Pump(SamplePool& pool, SampleMemMgr& memory, uint8_t* io_buffer, uint32_t i
             // display name is stamped here - the one place still holding the
             // .sfz path. Truncation is fine; it is a label, not an identifier.
             std::snprintf(ins.name, sizeof(ins.name), "%s", Basename(s_request.path));
+            PublishModSlots(s_request.slot);
             s_status.loaded_bytes = s_total_bytes;
             s_status.current_loaded_bytes = s_status.current_bytes;
             SendStatus(INST_STATUS_LOAD_COMPLETE);
@@ -875,7 +892,7 @@ void SetLoadedSampleResolver(const SampleResolver& resolver) {
 
 bool BindSample(
     SamplePool& pool, SampleMemMgr& memory, uint8_t slot, uint16_t sample_id, uint8_t root_note) {
-    if (slot >= kNumTracks)
+    if (slot >= kNumTracks || Busy())
         return false;
     if (sample_id != 0 && !pool.Find(sample_id))
         return false;
@@ -994,13 +1011,15 @@ bool SetModSlot(uint8_t slot, uint8_t mod_slot_index, const ModSlot& value) {
     if (slot >= kNumTracks || mod_slot_index >= kMaxModSlots)
         return false;
     s_bank.At(slot).instrument.mod_slots[mod_slot_index] = value;
+    PublishModSlots(slot);
     return true;
 }
 
 const ModSlot* GetModSlots(uint8_t slot) {
     if (slot >= kNumTracks)
         return nullptr;
-    return s_bank.At(slot).instrument.mod_slots;
+    s_mod_mailboxes[slot].ConsumeLatest(s_mod_active[slot]);
+    return s_mod_active[slot].data();
 }
 
 }  // namespace SfzLoader

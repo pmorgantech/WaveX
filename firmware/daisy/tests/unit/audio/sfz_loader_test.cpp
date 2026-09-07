@@ -53,7 +53,7 @@ class SfzLoaderTest : public ::testing::Test {
             "/kits/kit.sfz", track, pool_, memory_, io_.data(), static_cast<uint32_t>(io_.size()));
     }
     uint16_t SampleId(const char* path) {
-        auto* record = pool_.FindByPath(WaveX::Audio::HashSamplePath(path));
+        auto* record = pool_.FindByPath(path);
         return record ? record->sample_id : 0;
     }
     SamplePool pool_;
@@ -127,6 +127,74 @@ TEST_F(SfzLoaderTest, RuntimeReplacementWaitsForExplicitStopAcknowledgement) {
     }
     EXPECT_FALSE(SfzLoader::Busy());
     EXPECT_TRUE(SfzLoader::TrackLoaded(0));
+}
+
+TEST_F(SfzLoaderTest, DistinctCollidingPathsLoadIndependentPcmAllocations) {
+    const char first[] = "0:/samples/d458dfeb4949ec65.wav";
+    const char second[] = "0:/samples/06da2fcf0c771773.wav";
+    ASSERT_EQ(WaveX::Audio::HashSamplePath(first), WaveX::Audio::HashSamplePath(second));
+    const char sfz[] =
+        "<region> sample=d458dfeb4949ec65.wav key=60\n"
+        "<region> sample=06da2fcf0c771773.wav key=61\n";
+    MockFatFS::Instance().AddFile("0:/samples/collision.sfz", {sfz, sfz + std::strlen(sfz)});
+    auto first_pcm = PcmWave();
+    auto second_pcm = PcmWave();
+    second_pcm[44] = 99;
+    MockFatFS::Instance().AddFile(first, first_pcm);
+    MockFatFS::Instance().AddFile(second, second_pcm);
+    ASSERT_TRUE(SfzLoader::Load("0:/samples/collision.sfz",
+                                0,
+                                pool_,
+                                memory_,
+                                io_.data(),
+                                static_cast<uint32_t>(io_.size())));
+    ASSERT_EQ(pool_.Count(), 2u);
+    const auto* a = pool_.FindByPath(first);
+    const auto* b = pool_.FindByPath(second);
+    ASSERT_NE(a, nullptr);
+    ASSERT_NE(b, nullptr);
+    EXPECT_NE(a->sample_id, b->sample_id);
+    void* a_pcm = nullptr;
+    void* b_pcm = nullptr;
+    ASSERT_TRUE(memory_.ptr(a->payload.handle, &a_pcm));
+    ASSERT_TRUE(memory_.ptr(b->payload.handle, &b_pcm));
+    EXPECT_NE(a_pcm, b_pcm);
+    EXPECT_EQ(static_cast<int16_t*>(a_pcm)[0], 1);
+    EXPECT_EQ(static_cast<int16_t*>(b_pcm)[0], 99);
+}
+
+TEST_F(SfzLoaderTest, PublishedModulationCannotMutateTheCallbacksCurrentTable) {
+    const ModSlot* callback_table = SfzLoader::GetModSlots(0);
+    ASSERT_NE(callback_table, nullptr);
+    ModSlot edited;
+    edited.source = SRC_LFO1;
+    edited.dest = DEST_CUTOFF;
+    edited.depth = 16384;
+    ASSERT_TRUE(SfzLoader::SetModSlot(0, 0, edited));
+    EXPECT_EQ(callback_table[0].depth, 0);
+    EXPECT_EQ(SfzLoader::GetModSlots(0)[0].depth, edited.depth);
+}
+
+TEST_F(SfzLoaderTest, ModulationEditsToDifferentTracksDoNotCoalesceAway) {
+    ModSlot first;
+    first.depth = 1234;
+    ModSlot second;
+    second.depth = -5678;
+    ASSERT_TRUE(SfzLoader::SetModSlot(1, 0, first));
+    ASSERT_TRUE(SfzLoader::SetModSlot(2, 0, second));
+    EXPECT_EQ(SfzLoader::GetModSlots(1)[0].depth, first.depth);
+    EXPECT_EQ(SfzLoader::GetModSlots(2)[0].depth, second.depth);
+}
+
+TEST_F(SfzLoaderTest, RebindingIsRefusedWhileImportOwnsThePoolTransaction) {
+    ASSERT_TRUE(Load(0));
+    const uint16_t sample = SampleId("/kits/a.wav");
+    ASSERT_TRUE(SfzLoader::Begin(InstOpMessage(1, 0, INST_OP_SFZ_LOAD, "/kits/kit.sfz")));
+    EXPECT_FALSE(SfzLoader::BindSample(pool_, memory_, 0, sample));
+    EXPECT_FALSE(SfzLoader::BindSample(pool_, memory_, 1, sample));
+    ASSERT_NE(pool_.Find(sample), nullptr);
+    EXPECT_EQ(pool_.Find(sample)->used_by, 1);
+    EXPECT_EQ(pool_.Count(), 2u);
 }
 
 TEST_F(SfzLoaderTest, MissingSampleProbeLeavesOriginalTrackAndMemoryIntact) {

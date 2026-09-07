@@ -108,17 +108,10 @@ const InstrumentEnv* GetInstrumentEnv(uint8_t track);
 // mutation in this file. Out-of-range track/mod_slot_index is a no-op
 // returning false.
 //
-// Read directly from the audio callback's control tick with no mailbox: a
-// ModSlot is 6 bytes, smaller than this architecture's atomic word, so a
-// write landing mid-read could in principle be torn - but every field a
-// torn read could produce is still bounds-checked downstream
-// (ModSources::Get()'s default case, EvaluateModMatrix()'s default case), so
-// the worst case is one control tick (1ms) of a harmless or odd-but-bounded
-// modulation amount, self-correcting the next tick. That is a different risk
-// class from VoiceLiveParams/ParaphonicParams, where a torn multi-field read
-// could produce a sustained audibly-wrong combination or reach hardware CV -
-// promote this to a mailbox like s_voice_live_pending if a bench session
-// ever finds it audible.
+// GetModSlots is callback-only: it acquires a complete table into private
+// callback storage, independent of the main-loop Instrument record. A
+// published edit never mutates a table currently being evaluated. Reset()
+// initializes these mailboxes before audio starts.
 bool SetModSlot(uint8_t track, uint8_t mod_slot_index, const ModSlot& value);
 const ModSlot* GetModSlots(uint8_t track);
 
