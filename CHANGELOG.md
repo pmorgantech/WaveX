@@ -13,6 +13,13 @@ versioning and release process.
 
 ### Changed
 
+- Recorded the recurring callback-headroom evidence: WaveX remains in the
+  60–<70% STAY band at 65.8029% with zero underruns, while the DaisySP
+  comparison reaches 89.6635% and correctly activates backend-upgrade
+  planning. The measured workload and unverified limits are documented in
+  docs/callback-performance-log.md; this does not approve a board port or
+  purchase.
+
 - Waveform previews use **8-bit min/max extrema on the wire**, halving amplitude
   payloads (4,560 bytes for 1,140 stereo columns). Quantization rounds outward
   to preserve peaks and represents silence and both full-scale endpoints

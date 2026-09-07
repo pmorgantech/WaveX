@@ -12,17 +12,29 @@ checked at the API/DMA boundaries used by WaveX. Priorities describe concrete
 failure modes; hardware-only gates stay in the roadmap. Remove each task when
 its fix and regression checks are committed.
 
-- [x] **High — frontend listener lifetime.** Allocation failure and
-  registration/removal during traffic have real synchronization coverage;
-  queued actions and page/tab teardown are covered by focused tests and HIL
-  waveform traffic (principles 2, 5, 6). Real-panel teardown remains a bench
-  verification item.
 - [ ] **Medium — remaining reference consistency.** Finish checking the
   platform and feature guides against live transport and parameter behavior;
   the navigation, sequencer and testing references have been consolidated.
   Keep hardware-only results separate from host coverage (principles 13, 15).
 
 ## Performance, build, and transport
+
+### Callback capacity checkpoint — 2026-09-07
+
+The recurring callback gate is now measured in
+[callback-performance-log.md](callback-performance-log.md). The WaveX 24 dB
+path reached 65.8029% for 3606.0 seconds with zero underruns and remains in
+the STAY band. The DaisySP comparison reached 89.6635% for 605.2 seconds with
+zero underruns and is UPGRADE because callback-resident work remains. This
+activates backend-upgrade planning in the Phase 2 capacity checkpoint and the
+[RT1170 migration plan](rt1170-migration.md); it does not authorize a board
+port or purchase.
+
+Remaining optimization questions are to measure Render() separately, test
+selective placement A/B, decide whether slope/drive/topology become real
+parameters, and establish the effect of any future parameter-lock DSP. The
+WaveX path remains the fallback until those questions and the migration work
+are resolved.
 
 ### Page-entry render cost
 
@@ -34,8 +46,10 @@ interaction target.
 
 ### Daisy optimization and LTO
 
-The Daisy image defaults to `-O2`. Establish its DWT baseline at 480 MHz
-under eight-voice audio and SD soak tests. Consider LTO only after those
+The Daisy image defaults to `-O2`. The recurring QSPI `-O2` evidence is in
+[callback-performance-log.md](callback-performance-log.md): WaveX stays below
+70%, while the DaisySP comparison activates the backend-upgrade planning
+checkpoint. Consider LTO only after the remaining Render() and placement
 measurements; it can affect linker section placement and weak HAL symbols.
 
 ### Profile-guided QSPI-to-SRAM execution
@@ -50,11 +64,10 @@ host-testable header implementation is preferable to an unmeasured placement
 change.
 
 A matched `-O0`, profiling-enabled bench on 2026-09-04 streamed the same
-44.1-kHz stereo WAV from SD in both profiles. The active audio callback
-averaged 52.39 us from QSPI and 17.84 us from SRAM; the foreground WAV pump
-averaged 1.416 ms and 1.189 ms respectively, with no observed underruns. This
-supports evaluating selective relocation, but it is not a release-optimized
-profile or the required eight-voice soak.
+44.1-kHz stereo WAV from SD in both profiles. The current release-optimized
+eight-voice evidence is recorded in
+[callback-performance-log.md](callback-performance-log.md); selective
+relocation still needs a measured placement A/B before it is accepted.
 
 If selective ITCM placement is insufficient, evaluate a separate persistent
 bootloader-SRAM profile. libDaisy's `BOOT_SRAM` model stores the application in
@@ -276,9 +289,9 @@ The Daisy image went from 438 KB to 273 KB. Remaining, in order of size, each
 a decision rather than a mechanical fix:
 
 - ~~`WAVEX_DAISY_OPT` is still `-O0`~~ Done 2026-09-04: `-O2` by default
-  (image 275 772 to 189 636 bytes). Still owed: the DWT number for
-  `Render()` at eight voices and a zero-underrun soak on the `-O2` image;
-  `-O3` measured +29 KB over `-O2` and waits for a reason.
+  (image 275 772 to 189 636 bytes). The whole-callback `-O2` soak is in
+  [callback-performance-log.md](callback-performance-log.md); `Render()`
+  timing and `-O3` still need a reasoned comparison.
 - **USB CDC logging (`hw.StartLog`) is in every profile**, ~19 KB flash and
   13 KB SRAM including `stm32h7xx_ll_usb.c`. Gate it on `WAVEX_BUILD_DEBUG`
   once field logging is confirmed to go via the UART bridge; libDaisy's

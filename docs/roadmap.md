@@ -60,6 +60,21 @@ The scheduler, protocol and callback trigger path exist, with eight preview
 rows mapped to pitches on fixed Track index 0. Hardware timing remains
 unverified. Open work:
 
+### 2.C — Callback capacity checkpoint (2026-09-07)
+
+The recurring callback evidence is recorded in
+[callback-performance-log.md](callback-performance-log.md). The WaveX 24 dB
+path measured 65.8029% for 3606.0 seconds with zero underruns and remains in
+the STAY band. The DaisySP comparison measured 89.6635% for 605.2 seconds
+with zero underruns and entered UPGRADE because callback-resident work remains.
+This activates planning in the [RT1170 migration plan](rt1170-migration.md)
+under the Phase 2 capacity checkpoint. It does not authorize a board port or
+purchase, and the WaveX path remains the fallback.
+
+Before accepting DaisySP or additional callback scope, attribute or restrict
+the higher-cost path, or port the backend. Parameter locks remain item 5 and
+were programmed but not applied by the measured callback.
+
 1. Replace the fixed-Track preview with Track-addressed pattern triggering
    for the four-track gate; verify sample-offset timing and edit boundaries
    on hardware.
