@@ -67,6 +67,8 @@ versioning and release process.
 
 ### Fixed
 
+- SD reinitialization restores the SDMMC interrupt priority so recovery cannot leave it above the audio interrupt.
+
 - Sample memory validates allocation identity and bounds before mapping or freeing handles, and resets allocator state on initialization.
 
 - Hardened protocol message defaults and added an explicit busy reason for

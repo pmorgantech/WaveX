@@ -154,6 +154,10 @@ bool TrySpeed(int index, bool auto_format) {
     // exactly what re-inserting a card produced. Doing it explicitly means a
     // failure aborts this attempt and names itself.
     HAL_StatusTypeDef hal = HAL_SD_Init(&hsd1);
+    // MSP initialization resets this IRQ to libDaisy's priority 0 on every
+    // reinsert/downgrade. Restore audio-first ordering even on a failed init;
+    // the startup-only assignment in main cannot cover runtime recovery.
+    HAL_NVIC_SetPriority(SDMMC1_IRQn, 8, 0);
     if (hal != HAL_OK) {
         WaveX::Log::PrintLine("SD: HAL_SD_Init failed at %s (hal=%d err=0x%08lX state=%u)",
                               kSpeeds[index].name,
