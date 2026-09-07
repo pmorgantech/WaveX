@@ -67,6 +67,8 @@ versioning and release process.
 
 ### Fixed
 
+- A timed-out UI task stop preserves the object still referenced by the running task.
+
 - UART teardown leaves the event queue to its owning driver and releases the driver when subsequent mutex allocation fails.
 
 - Browse responses reject entry counts beyond their copied buffer and bound logging of wire filenames.

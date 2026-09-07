@@ -331,6 +331,11 @@ esp_err_t wavex_ui_task_stop(void) {
     }
 
     esp_err_t ret = g_ui_task_instance->stop();
+    if (ret != ESP_OK) {
+        // The task still owns this object when its exit handshake times out.
+        // Keep it alive so a later stop can finish safely.
+        return ret;
+    }
     delete g_ui_task_instance;
     g_ui_task_instance = nullptr;
     return ret;
