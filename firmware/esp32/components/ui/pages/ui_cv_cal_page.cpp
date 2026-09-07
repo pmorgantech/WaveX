@@ -18,8 +18,8 @@
 #include "inter_mcu.h"
 #include "ui/ui_settings_page.h"
 
-#include <atomic>
 #include <cstring>
+#include <mutex>
 
 static const char* TAG = "UI_CV_CAL";
 
@@ -49,7 +49,8 @@ bool s_test_active = false;
 // CAL_RESP handoff: written by the UART task, applied by the page's
 // lv_timer in UI context.
 WaveX::Protocol::CvCalMessage s_pending_cal;
-std::atomic<bool> s_pending_flag{false};
+std::mutex s_pending_mutex;
+bool s_pending_flag = false;
 
 WaveX::Protocol::CvCalMessage ModelToMessage(uint8_t persist) {
     return WaveX::Protocol::CvCalMessage(static_cast<uint8_t>(s_model.group),
@@ -82,8 +83,9 @@ void SendTest() {
 
 void OnCalResp(const WaveX::Protocol::CvCalMessage& cal, void* /*user_data*/) {
     // UART-task context: stage only, no LVGL (ui-architecture.md).
+    std::lock_guard<std::mutex> lock(s_pending_mutex);
     s_pending_cal = cal;
-    s_pending_flag.store(true, std::memory_order_release);
+    s_pending_flag = true;
 }
 
 class UICvCalPage : public UISettingsPage {
@@ -143,6 +145,11 @@ class UICvCalPage : public UISettingsPage {
 
     void onEnter(lv_obj_t* parent) override {
         UISettingsPage::onEnter(parent);
+        {
+            // Initialize the task mutex before RX can enter the listener.
+            std::lock_guard<std::mutex> lock(s_pending_mutex);
+            s_pending_flag = false;
+        }
         inter_mcu_set_cv_cal_listener(OnCalResp, nullptr);
         inter_mcu_send_cv_cal_get(static_cast<uint8_t>(s_model.group));
         // Applies a pending CAL_RESP in UI/LVGL context (onEnter runs under
@@ -198,10 +205,15 @@ class UICvCalPage : public UISettingsPage {
     }
 
     void applyPendingCal() {
-        if (!s_pending_flag.exchange(false, std::memory_order_acquire)) {
-            return;
+        WaveX::Protocol::CvCalMessage c;
+        {
+            std::lock_guard<std::mutex> lock(s_pending_mutex);
+            if (!s_pending_flag) {
+                return;
+            }
+            c = s_pending_cal;
+            s_pending_flag = false;
         }
-        const auto& c = s_pending_cal;
         if (c.group != s_model.group) {
             return;  // stale response for a previously-selected group
         }

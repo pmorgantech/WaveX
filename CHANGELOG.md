@@ -67,6 +67,8 @@ versioning and release process.
 
 ### Fixed
 
+- Calibration responses publish complete snapshots before the UI consumes them.
+
 - A timed-out UI task stop preserves the object still referenced by the running task.
 
 - UART teardown leaves the event queue to its owning driver and releases the driver when subsequent mutex allocation fails.
