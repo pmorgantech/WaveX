@@ -258,6 +258,15 @@ function(add_wavex_test test_source)
         )
     endif()
 
+    # Exercise the real cooperative loader and Pool ownership against a
+    # byte-backed FatFs mock, including read/seek/EOF failure boundaries.
+    if(test_name STREQUAL "sfz_loader_test")
+        target_sources(${test_name} PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/../src/audio/sfz_loader.cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/mocks/log_ring_mock.cpp
+        )
+    endif()
+
     # Dispatch-level test (code review C1): compiles the REAL message
     # dispatcher against recording mocks of its subsystems, so a handler
     # regressing to a log-only stub fails a test instead of shipping.

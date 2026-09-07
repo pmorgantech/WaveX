@@ -12,10 +12,6 @@ checked at the API/DMA boundaries used by WaveX. Priorities describe concrete
 failure modes; hardware-only gates stay in the roadmap. Remove each task when
 its fix and regression checks are committed.
 
-- [ ] **High — resident sample ownership.** Retain the selected Pool sample
-  before releasing its previous imported Instrument in `SfzLoader::BindSample`;
-  assigning an unpinned sample from that same Track can currently free it.
-  Prove sample data and references survive replacement (principles 1, 5).
 - [ ] **High — callback handoffs.** Replace delay-based retirement with a
   callback acknowledgement and publish telemetry/modulation as complete
   snapshots; see roadmap Phase 0. Exercise stopped/delayed callback and

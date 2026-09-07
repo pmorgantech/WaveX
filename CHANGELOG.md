@@ -67,6 +67,9 @@ versioning and release process.
 
 ### Fixed
 
+- Daisy sample rebinding now retains a sample selected from the track's
+  previous instrument until the replacement binding owns it.
+
 - Shared WAV header parsing now rejects chunk extents that overflow the
   representable reader offset instead of wrapping into a later header.
 

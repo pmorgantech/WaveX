@@ -61,6 +61,27 @@ typedef struct {
 #endif
 } FILINFO;
 
+using UINT = unsigned int;
+using FSIZE_t = uint32_t;
+#define FA_READ 0x01
+
+struct FATFS {
+    uint32_t csize = 1;
+};
+struct FIL {
+    struct {
+        FATFS* fs = nullptr;
+    } obj;
+    const std::vector<uint8_t>* bytes = nullptr;
+    FSIZE_t position = 0;
+    FRESULT error = FR_OK;
+};
+
+#define f_size(fp) ((fp)->bytes ? static_cast<FSIZE_t>((fp)->bytes->size()) : 0u)
+#define f_tell(fp) ((fp)->position)
+#define f_eof(fp) (f_tell(fp) >= f_size(fp))
+#define f_error(fp) ((fp)->error)
+
 // Mock filesystem entry for testing
 struct MockFileEntry {
     std::string name;
@@ -85,6 +106,7 @@ class MockFatFS {
     // Reset mock filesystem
     void Reset() {
         directories_.clear();
+        files_.clear();
         current_dir_handles_.clear();
         dir_positions_.clear();
         next_handle_ = 1;
@@ -115,6 +137,12 @@ class MockFatFS {
         return false;
     }
     FRESULT ReaddirFailResult() const { return readdir_fail_result_; }
+
+    void AddFile(const std::string& path, const std::vector<uint8_t>& data) { files_[path] = data; }
+    const std::vector<uint8_t>* GetFile(const char* path) const {
+        auto it = files_.find(path);
+        return it == files_.end() ? nullptr : &it->second;
+    }
 
     // Add a directory with entries
     void AddDirectory(const std::string& path, const std::vector<MockFileEntry>& entries) {
@@ -180,6 +208,7 @@ class MockFatFS {
     }
 
    private:
+    std::map<std::string, std::vector<uint8_t>> files_;
     std::map<std::string, std::vector<MockFileEntry>> directories_;
     std::map<void*, std::string> current_dir_handles_;
     std::map<void*, size_t> dir_positions_;
@@ -193,6 +222,11 @@ class MockFatFS {
 
 // Mock FatFS functions
 extern "C" {
+FRESULT f_open(FIL* file, const char* path, uint8_t mode);
+FRESULT f_close(FIL* file);
+FRESULT f_read(FIL* file, void* out, UINT requested, UINT* read);
+FRESULT f_lseek(FIL* file, FSIZE_t position);
+char* f_gets(char* out, int capacity, FIL* file);
 FRESULT f_opendir(DIR* dp, const char* path);
 FRESULT f_readdir(DIR* dp, FILINFO* fno);
 FRESULT f_closedir(DIR* dp);

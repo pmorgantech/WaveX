@@ -1,8 +1,68 @@
 #include "fatfs_mock.h"
 
+#include <algorithm>
 #include <cstring>
 
 extern "C" {
+
+FRESULT f_open(FIL* file, const char* path, uint8_t mode) {
+    if (!file || !path || mode != FA_READ)
+        return FR_INT_ERR;
+    *file = FIL{};
+    file->bytes = MockFatFS::Instance().GetFile(path);
+    if (!file->bytes)
+        return FR_NO_FILE;
+    static FATFS volume;
+    file->obj.fs = &volume;
+    return FR_OK;
+}
+
+FRESULT f_close(FIL* file) {
+    if (!file)
+        return FR_INT_ERR;
+    *file = FIL{};
+    return FR_OK;
+}
+
+FRESULT f_read(FIL* file, void* out, UINT requested, UINT* read) {
+    if (!file || !file->bytes || !read || (!out && requested))
+        return FR_INVALID_OBJECT;
+    *read = 0;
+    if (file->error != FR_OK)
+        return file->error;
+    const size_t remaining = file->bytes->size() - file->position;
+    *read = static_cast<UINT>(std::min<size_t>(requested, remaining));
+    if (*read)
+        std::memcpy(out, file->bytes->data() + file->position, *read);
+    file->position += *read;
+    return FR_OK;
+}
+
+FRESULT f_lseek(FIL* file, FSIZE_t position) {
+    if (!file || !file->bytes)
+        return FR_INVALID_OBJECT;
+    file->position = std::min(position, f_size(file));
+    return FR_OK;
+}
+
+char* f_gets(char* out, int capacity, FIL* file) {
+    if (!out || capacity < 2 || !file || !file->bytes)
+        return nullptr;
+    int count = 0;
+    while (count < capacity - 1) {
+        UINT read = 0;
+        char ch = 0;
+        if (f_read(file, &ch, 1, &read) != FR_OK || read == 0)
+            break;
+        if (ch == '\r')
+            continue;  // FatFs string mode strips CR.
+        out[count++] = ch;
+        if (ch == '\n')
+            break;
+    }
+    out[count] = '\0';
+    return count == 0 ? nullptr : out;
+}
 
 FRESULT f_opendir(DIR* dp, const char* path) {
     if (!dp || !path)

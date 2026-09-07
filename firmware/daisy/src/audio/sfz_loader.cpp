@@ -163,8 +163,15 @@ void FreeFromPool(SamplePool& pool, SampleMemMgr& memory, uint16_t sample_id) {
 // Drops Track `track`'s refs on every Pool sample and frees whatever nobody
 // else holds; then clears the Instrument. The caller stopped the Track's
 // voices first.
-void ReleaseTrack(SamplePool& pool, SampleMemMgr& memory, uint8_t track) {
-    pool.ClearTrack(track, [&](uint16_t id) { FreeFromPool(pool, memory, id); });
+void ReleaseTrack(SamplePool& pool,
+                  SampleMemMgr& memory,
+                  uint8_t track,
+                  uint16_t keep_sample_id = 0) {
+    pool.ClearTrack(track, [&](uint16_t id) {
+        if (id != keep_sample_id) {
+            FreeFromPool(pool, memory, id);
+        }
+    });
     // Zones only: the mod slots are the user's, set through their own op,
     // and rebinding what plays is not a reason to lose them.
     Instrument& ins = s_bank.At(track).instrument;
@@ -795,7 +802,9 @@ bool Load(const char* path,
             ConfirmVoicesStopped(pool, memory);  // audio has not started at boot
         }
     }
-    return TrackLoaded(slot);
+    // A failed preflight preserves the old Instrument. Its continued
+    // presence must not turn this failed replacement into a successful load.
+    return s_status.state == INST_STATUS_LOAD_COMPLETE && TrackLoaded(slot);
 }
 
 bool TrackLoaded(uint8_t slot) {
@@ -868,7 +877,10 @@ bool BindSample(
         return false;
     // Whatever the Track held goes: an import's samples that nobody else
     // holds are freed here (the caller stopped this Track's voices).
-    ReleaseTrack(pool, memory, slot);
+    // Assign may choose an unpinned sample from this Track's own import.
+    // Transfer that sample into the new binding instead of freeing it with
+    // the old zones; the main loop restores its Track reference below.
+    ReleaseTrack(pool, memory, slot, sample_id);
     Instrument& ins = s_bank.At(slot).instrument;
     if (sample_id == 0) {
         return true;
