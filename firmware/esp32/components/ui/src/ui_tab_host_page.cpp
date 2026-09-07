@@ -45,6 +45,7 @@ void UITabHostPage::onEnter(lv_obj_t* parent) {
 }
 
 void UITabHostPage::onExit() {
+    UINavigator::instance().softkeyBar()->cancelPending();
     // Exit the live child first: it must tear down its own timers and widgets
     // before the tab bodies holding them are deleted, or an lv_timer left
     // running would fire against freed objects.
@@ -79,6 +80,7 @@ void UITabHostPage::activate(int index) {
     // once would briefly double this page's LVGL memory, and a page that polls
     // would keep polling from behind a tab nobody is looking at.
     if (UIPage* prev = activePage()) {
+        UINavigator::instance().softkeyBar()->cancelPending();
         prev->onExit();
     }
 

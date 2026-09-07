@@ -3,6 +3,7 @@
 
 #include <lvgl.h>
 
+#include "pending_actions.h"
 #include "ui_softkey.h"
 
 #include <array>
@@ -26,6 +27,8 @@ class SoftkeyBar {
      * The panel's SOFT keys land here from InputDispatcher.
      */
     bool press(int index);
+    // Called before every page/tab exit, while the UI lock is held.
+    void cancelPending();
 
     /// Read-only view for the debug console's STATE reply: the key as last
     /// set, and its button's centre in screen coordinates (false when the
@@ -35,6 +38,9 @@ class SoftkeyBar {
 
    private:
     static void event_cb(lv_event_t* e);
+    static void runPending(void* data);
+    PendingActions pending_;
+    bool pending_scheduled_ = false;
 
     lv_obj_t* container_ = nullptr;
     std::array<lv_obj_t*, NUM_SOFTKEYS> btns_{};

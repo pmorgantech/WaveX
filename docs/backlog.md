@@ -188,11 +188,9 @@ The PCNT read-then-clear sequence can lose counts. The current re-centering
 makes it rare; close the race only with an IRAM-safe watch-point design or by
 moving consumption into the UI task.
 
-### Softkey allocation and unused frontend code
+### Unused frontend code
 
-Softkey deferral allocates a `std::function` per press; replace it with a
-fixed-capacity pending-action queue only when working in that component. In a
-separate deletion pass, remove the caller-less ESP32 APIs, unused window
+In a separate deletion pass, remove the caller-less ESP32 APIs, unused window
 manager, and unreachable UI surfaces after re-checking callers.
 
 ## Samples, instruments, and browsing

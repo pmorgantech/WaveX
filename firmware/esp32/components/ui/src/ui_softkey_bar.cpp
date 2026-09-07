@@ -133,18 +133,39 @@ bool SoftkeyBar::press(int index) {
     // clearing Shift on the page we just left is the intent.
     UINavigator::instance().notifySoftkeyUsed();
     if (cb) {
-        // Defer to avoid modifying UI during LVGL event processing/draw. The
-        // panel key path takes this too, so a key and a touch on the same
-        // softkey are ordered identically against everything else queued.
-        lv_async_call(
-            [](void* ud) {
-                auto fn = static_cast<std::function<void()>*>(ud);
-                (*fn)();
-                delete fn;
-            },
-            new std::function<void()>(cb));
+        if (!pending_.push(std::move(cb))) {
+            return false;
+        }
+        if (!pending_scheduled_) {
+            if (lv_async_call(runPending, this) != LV_RESULT_OK) {
+                pending_.clear();
+                return false;
+            }
+            pending_scheduled_ = true;
+        }
     }
     return true;
+}
+
+void SoftkeyBar::cancelPending() {
+    pending_.clear();
+    if (pending_scheduled_) {
+        lv_async_call_cancel(runPending, this);
+        pending_scheduled_ = false;
+    }
+}
+
+void SoftkeyBar::runPending(void* data) {
+    auto& bar = *static_cast<SoftkeyBar*>(data);
+    bar.pending_scheduled_ = false;
+    // Bounded even if an action queues another action.
+    for (size_t i = 0; i < PendingActions::kCapacity; ++i) {
+        auto action = bar.pending_.pop();
+        if (!action) {
+            break;
+        }
+        action();
+    }
 }
 
 bool SoftkeyBar::buttonCenter(int index, int32_t* x, int32_t* y) const {

@@ -89,6 +89,11 @@ versioning and release process.
 
 ### Fixed
 
+- Deferred softkey actions now use a bounded queue and are cancelled before
+  page or tab exit, so stale callbacks cannot reach destroyed UI owners.
+  Queue-full and LVGL scheduling failures reject the press without running it
+  inline; focused host tests cover cancellation, capture release, and ordering.
+
 - Listener registrations now fail closed when mutex allocation fails, serialize
   registration and observation with recursive synchronization, and release
   listener mutexes during teardown. Host coverage exercises allocation failure,

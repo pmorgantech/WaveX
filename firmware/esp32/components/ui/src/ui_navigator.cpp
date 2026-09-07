@@ -106,6 +106,7 @@ void UINavigator::enter(std::shared_ptr<UIPage> page, bool exit_current) {
         auto current = stack_.top();
         ESP_LOGI(TAG, "Exiting page: %s", current->name());
         LV_LOCK();
+        softkeyBar_.cancelPending();
         current->onExit();
         LV_UNLOCK();
     }
@@ -178,6 +179,7 @@ void UINavigator::pop() {
         auto current = stack_.top();
         ESP_LOGI(TAG, "Exiting page: %s", current->name());
         LV_LOCK();
+        softkeyBar_.cancelPending();
         current->onExit();
         LV_UNLOCK();
         stack_.pop();
@@ -219,6 +221,7 @@ void UINavigator::unwindToRoot() {
     auto current = stack_.top();
     ESP_LOGI(TAG, "Exiting page: %s", current->name());
     LV_LOCK();
+    softkeyBar_.cancelPending();
     current->onExit();
     LV_UNLOCK();
     // Every page below the top was exited when its child was pushed; there

@@ -115,6 +115,11 @@ consumes it, and navigation clears it. Pages may supply
 `getShiftedSoftkeys()`; use the navigator's shifted-key query rather than
 implementing a second modifier policy.
 
+Softkey callbacks wait in an eight-entry queue owned by the bar. Navigation
+and tab changes cancel queued callbacks before exiting their page; an action
+already running is removed from the queue before it can navigate. Queue-full
+or LVGL scheduling failure rejects the press without running it inline.
+
 When action labels or enabled states change, update the page model and call
 `UINavigator::refreshSoftkeys()`.
 
