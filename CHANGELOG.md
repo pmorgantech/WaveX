@@ -67,6 +67,9 @@ versioning and release process.
 
 ### Fixed
 
+- Hardened protocol message defaults and added an explicit busy reason for
+  sample loads while an instrument import owns the sample pool.
+
 - Daisy sample rebinding now retains a sample selected from the track's
   previous instrument until the replacement binding owns it.
 

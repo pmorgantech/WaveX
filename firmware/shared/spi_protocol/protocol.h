@@ -371,12 +371,12 @@ struct NoteMessage {
 
 // Sample load message
 struct SampleLoadMessage {
-    uint16_t sample_id;          // Unique sample identifier
-    uint32_t sample_size;        // Size in bytes (optional hint; Daisy re-reads)
-    uint16_t sample_rate;        // Sample rate in Hz (optional hint; Daisy re-reads)
-    uint8_t channels;            // Number of channels (1 or 2) (optional hint)
-    uint8_t bit_depth;           // Bit depth (16 or 24) (optional hint)
-    char path[BROWSE_PATH_MAX];  // Absolute/normalized path on Daisy SD
+    uint16_t sample_id;               // Unique sample identifier
+    uint32_t sample_size;             // Size in bytes (optional hint; Daisy re-reads)
+    uint16_t sample_rate;             // Sample rate in Hz (optional hint; Daisy re-reads)
+    uint8_t channels;                 // Number of channels (1 or 2) (optional hint)
+    uint8_t bit_depth;                // Bit depth (16 or 24) (optional hint)
+    char path[BROWSE_PATH_MAX] = {};  // Absolute/normalized path on Daisy SD
 
     SampleLoadMessage() : sample_id(0), sample_size(0), sample_rate(0), channels(0), bit_depth(0) {
         path[0] = '\0';
@@ -507,7 +507,7 @@ struct TrackBindingMessage {
     // MSG_SAMPLE_META. Empty for a bare sample, whose name the frontend
     // already holds in its metadata cache, and empty while loading if the
     // backend has not stamped one yet.
-    char name[WAVEX_TRACK_BINDING_NAME_BYTES];
+    char name[WAVEX_TRACK_BINDING_NAME_BYTES] = {};
 
     TrackBindingMessage() : track(0), state(TRACK_BINDING_EMPTY), sample_id(0), name{} {}
     TrackBindingMessage(uint8_t track_, uint8_t state_, uint16_t sample_id_ = 0)
@@ -527,7 +527,7 @@ struct SampleUnloadMessage {
 struct FileEntryWire {
     uint8_t is_dir;
     uint32_t size_bytes;
-    char name[FILE_NAME_MAX];
+    char name[FILE_NAME_MAX] = {};
     // WAV metadata (only valid for audio files)
     uint32_t sample_rate;      // 0 if not a WAV file or unknown
     uint16_t channels;         // 0 if not a WAV file or unknown
@@ -590,6 +590,7 @@ enum SampleLoadFailReason : uint8_t {
     SAMPLE_LOAD_FAIL_RAM = 4,            // does not fit the sample pool
     SAMPLE_LOAD_FAIL_READ = 5,           // SD read error mid-load
     SAMPLE_LOAD_FAIL_REGISTRY_FULL = 6,  // too many resident samples
+    SAMPLE_LOAD_FAIL_BUSY = 7,           // an instrument import owns the sample pool
 };
 
 struct SampleStatusMessage {
@@ -705,7 +706,7 @@ struct SampleMetadata {
     // unbind frees it. Filled by the Pool at send time; ignored on receive.
     uint16_t used_by;
 
-    char name[FILE_NAME_MAX];
+    char name[FILE_NAME_MAX] = {};
 
     SampleMetadata()
         : sample_id(0),
@@ -1069,7 +1070,7 @@ struct DiagPushMessage {
 // Error message (short)
 struct ErrorMessage {
     uint16_t code;
-    char msg[48];
+    char msg[48] = {};
 
     ErrorMessage() : code(0) { msg[0] = '\0'; }
     ErrorMessage(uint16_t code_, const char* msg_) : code(code_) {
@@ -1151,8 +1152,8 @@ struct SampleGetPathMessage {
 } __attribute__((packed));
 
 struct SamplePathResponseMessage {
-    uint32_t index;  // File index that was requested
-    char path[200];  // Full file path (null-terminated)
+    uint32_t index;       // File index that was requested
+    char path[200] = {};  // Full file path (null-terminated)
 
     SamplePathResponseMessage() : index(0) { path[0] = '\0'; }
     SamplePathResponseMessage(uint32_t index_, const char* path_) : index(index_) {
@@ -1583,7 +1584,7 @@ struct InstOpMessage {
     uint8_t slot;
     uint8_t op;  // InstOpCode
     uint16_t reserved;
-    char path[BROWSE_PATH_MAX];
+    char path[BROWSE_PATH_MAX] = {};
     uint8_t mod_slot_index;  // 0..kMaxModSlots-1 (mod_matrix.hpp)
     uint8_t mod_source;      // ModSource
     uint8_t mod_dest;        // ModDest
@@ -1661,7 +1662,7 @@ struct InstStatusMessage {
     uint32_t loaded_bytes;
     uint32_t current_bytes;
     uint32_t current_loaded_bytes;
-    char current_name[FILE_NAME_MAX];
+    char current_name[FILE_NAME_MAX] = {};
 
     InstStatusMessage()
         : request_id(0),

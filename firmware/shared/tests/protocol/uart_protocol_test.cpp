@@ -532,3 +532,49 @@ TEST_F(UartProtocolTest, ParseRejectsPayloadLargerThanDestination) {
     EXPECT_EQ(capacity, payload.size());
     EXPECT_EQ(memcmp(big_dest, payload.data(), payload.size()), 0);
 }
+
+TEST_F(UartProtocolTest, EveryPayloadLengthRoundTripsWithoutCrossingBufferBounds) {
+    for (size_t size = 0; size <= UART_MAX_PAYLOAD; ++size) {
+        SCOPED_TRACE(size);
+        std::vector<uint8_t> payload(size);
+        for (size_t i = 0; i < size; ++i)
+            payload[i] = static_cast<uint8_t>((i * 73u + size) & 0xFFu);
+        // Offset both buffers by one: framing cannot rely on native alignment.
+        std::vector<uint8_t> frame(size + UART_FRAME_OVERHEAD + 2u, 0xCC);
+        const size_t written = CreateUartPacket(frame.data() + 1,
+                                                frame.size() - 2,
+                                                0x57,
+                                                payload.empty() ? nullptr : payload.data(),
+                                                size,
+                                                0x3210,
+                                                UART_FLAG_PRIORITY);
+        ASSERT_EQ(written, size + UART_FRAME_OVERHEAD);
+        EXPECT_EQ(frame.front(), 0xCC);
+        EXPECT_EQ(frame.back(), 0xCC);
+        ASSERT_TRUE(ValidateUartFrame(frame.data() + 1, written));
+        EXPECT_EQ(GetFrameLength(frame.data() + 1, written), written);
+
+        std::vector<uint8_t> destination(size + 2u, 0xCC);
+        uint8_t type = 0, flags = 0;
+        uint16_t sequence = 0;
+        size_t capacity = size;
+        ASSERT_TRUE(ParseUartPacket(
+            frame.data() + 1, written, type, destination.data() + 1, capacity, sequence, flags));
+        EXPECT_EQ(capacity, size);
+        EXPECT_EQ(type, 0x57);
+        EXPECT_EQ(sequence, 0x3210);
+        EXPECT_EQ(flags, UART_FLAG_PRIORITY);
+        EXPECT_EQ(destination.front(), 0xCC);
+        EXPECT_EQ(destination.back(), 0xCC);
+        EXPECT_EQ(std::vector<uint8_t>(destination.begin() + 1, destination.end() - 1), payload);
+
+        if (size > 0) {
+            std::vector<uint8_t> too_small(size + 2u, 0xCC);
+            const auto before = too_small;
+            capacity = size - 1;
+            EXPECT_FALSE(ParseUartPacket(
+                frame.data() + 1, written, type, too_small.data() + 1, capacity, sequence, flags));
+            EXPECT_EQ(too_small, before) << "a refused payload must not copy a prefix";
+        }
+    }
+}

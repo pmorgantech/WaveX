@@ -3,6 +3,10 @@
 #include "../utils/test_helpers.h"
 #include "protocol.h"
 
+#include <cstring>
+#include <new>
+#include <utility>
+
 using namespace WaveX::Protocol;
 using namespace WaveX::Test;
 
@@ -215,6 +219,20 @@ TEST_F(MessageTypeTest, SampleStatusLoadFailedCarriesReason) {
     EXPECT_EQ(parsed.sample_id, 7);
     EXPECT_EQ(parsed.state, SAMPLE_STATUS_LOAD_FAILED);
     EXPECT_EQ(parsed.frames_played, static_cast<uint32_t>(SAMPLE_LOAD_FAIL_RAM));
+}
+
+TEST_F(MessageTypeTest, SampleStatusLoadBusyCarriesRequestIdentity) {
+    static_assert(SAMPLE_LOAD_FAIL_BUSY == 7, "additive wire reason");
+    SampleStatusMessage original(0x4321, SAMPLE_STATUS_LOAD_FAILED, 0, 0, SAMPLE_LOAD_FAIL_BUSY);
+    ASSERT_GT(ProtocolHandler::CreateSampleStatusPacket(buffer_.data(), buffer_.size(), original),
+              0u);
+
+    SampleStatusMessage parsed;
+    ASSERT_TRUE(
+        ProtocolHandler::ParseMessage(buffer_.data(), MSG_SAMPLE_STATUS, &parsed, sizeof(parsed)));
+    EXPECT_EQ(parsed.sample_id, 0x4321);
+    EXPECT_EQ(parsed.state, SAMPLE_STATUS_LOAD_FAILED);
+    EXPECT_EQ(parsed.frames_played, static_cast<uint32_t>(SAMPLE_LOAD_FAIL_BUSY));
 }
 
 // A Pool page is one frame: header + up to MAX_SAMPLE_META_PAGE records must
@@ -1847,4 +1865,56 @@ TEST_F(MessageTypeTest, RawBufferEntryPointsRejectNullWithPlausibleSize) {
         EXPECT_FALSE(ProtocolHandler::ValidatePacketCrc(nullptr, size)) << "size " << size;
         EXPECT_EQ(ProtocolHandler::CalculatePacketCrc(nullptr, size), 0) << "size " << size;
     }
+}
+
+namespace {
+
+template <typename T, size_t N, typename... Args>
+void ExpectZeroedStringTail(char (T::*member)[N], Args&&... args) {
+    alignas(T) unsigned char storage[sizeof(T)];
+    std::memset(storage, 0xA7, sizeof(storage));
+    T* message = new (storage) T(std::forward<Args>(args)...);
+    const auto& field = message->*member;
+    size_t end = 0;
+    while (end < N && field[end] != 0)
+        ++end;
+    ASSERT_LT(end, N);
+    for (size_t i = end; i < N; ++i)
+        ASSERT_EQ(static_cast<unsigned char>(field[i]), 0u) << "tail byte " << i;
+    message->~T();
+}
+
+}  // namespace
+
+TEST_F(MessageTypeTest, FixedWireStringsAreZeroedInReusedStorage) {
+    // Entire packed payloads are transmitted, including bytes after NUL.
+    // A fresh message must not retain the previous task/packet's stack data.
+    ExpectZeroedStringTail(&SampleLoadMessage::path);
+    ExpectZeroedStringTail(&SampleLoadMessage::path,
+                           uint16_t{1},
+                           uint32_t{0},
+                           uint16_t{0},
+                           uint8_t{0},
+                           uint8_t{0},
+                           "/a.wav");
+    ExpectZeroedStringTail(&FileEntryWire::name);
+    ExpectZeroedStringTail(&FileEntryWire::name, uint8_t{0}, uint32_t{0}, "a.wav");
+    ExpectZeroedStringTail(&SampleMetadata::name);
+    ExpectZeroedStringTail(&ErrorMessage::msg);
+    ExpectZeroedStringTail(&ErrorMessage::msg, uint16_t{7}, "busy");
+    ExpectZeroedStringTail(&SamplePathResponseMessage::path);
+    ExpectZeroedStringTail(&SamplePathResponseMessage::path, uint32_t{3}, "/a.wav");
+    ExpectZeroedStringTail(&InstOpMessage::path);
+    ExpectZeroedStringTail(&InstOpMessage::path, uint32_t{1}, uint8_t{0}, uint8_t{0}, "/a.sfz");
+    ExpectZeroedStringTail(&InstOpMessage::path,
+                           uint32_t{1},
+                           uint8_t{0},
+                           uint8_t{0},
+                           uint8_t{0},
+                           uint8_t{0},
+                           int16_t{0},
+                           uint8_t{0},
+                           uint8_t{0});
+    ExpectZeroedStringTail(&InstStatusMessage::current_name);
+    ExpectZeroedStringTail(&TrackBindingMessage::name);
 }
