@@ -15,7 +15,10 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <atomic>
 #include <cstdlib>
+#include <thread>
 #include <vector>
 
 using WaveX::Protocol::EnvelopeChunkMessage;
@@ -76,7 +79,10 @@ class EnvelopeFetcherTest : public ::testing::Test {
 
     /// Delivers a whole run in one chunk, as the backend does for a run that
     /// fits a single packet.
-    void deliverRun(const SentRequest& req, uint8_t channels, int16_t amplitude) {
+    void deliverRun(const SentRequest& req,
+                    uint8_t channels,
+                    int16_t amplitude,
+                    uint32_t total_frames = 48000) {
         std::vector<EnvelopeColumn> cols(static_cast<size_t>(req.columns) * channels);
         for (auto& c: cols) {
             c = EnvelopeColumn(static_cast<int16_t>(-amplitude), amplitude);
@@ -86,7 +92,7 @@ class EnvelopeFetcherTest : public ::testing::Test {
         h.sample_id = req.sample_id;
         h.generation = 0;
         h.start_frame = req.start_frame;
-        h.end_frame = req.end_frame;
+        h.end_frame = std::min(req.end_frame, total_frames);
         h.total_columns = req.columns;
         h.first_column = 0;
         h.columns = req.columns;
@@ -250,7 +256,7 @@ TEST_F(EnvelopeFetcherTest, MultiChunkRunAssembles) {
     h.sample_id = req.sample_id;
     h.generation = 0;
     h.start_frame = req.start_frame;
-    h.end_frame = req.end_frame;
+    h.end_frame = std::min(req.end_frame, 480000u);
     h.total_columns = req.columns;
     h.channels = 1;
 
@@ -278,7 +284,7 @@ TEST_F(EnvelopeFetcherTest, ChunkLeavingAGapIsRefused) {
     h.sample_id = req.sample_id;
     h.generation = 0;
     h.start_frame = req.start_frame;
-    h.end_frame = req.end_frame;
+    h.end_frame = std::min(req.end_frame, 480000u);
     h.total_columns = req.columns;
     h.channels = 1;
     h.first_column = 2;  // columns 0 and 1 never arrived
@@ -287,6 +293,137 @@ TEST_F(EnvelopeFetcherTest, ChunkLeavingAGapIsRefused) {
 
     EXPECT_EQ(fetcher_.service(1), EnvelopeFetcher::Service::Idle);
     EXPECT_TRUE(fetcher_.busy());
+}
+
+// Retiring a run must retire its receive identity as well. Otherwise a late
+// reply sets ready_ again and reports a commit after the cache was released.
+TEST_F(EnvelopeFetcherTest, LateReplyAfterAbortCannotCommit) {
+    ASSERT_EQ(fetcher_.request(1, 0, 0, 48000, 48000, kDisplayColumns, 0),
+              EnvelopeFetcher::Request::Sent);
+    const SentRequest req = g_sent.back();
+    fetcher_.abort();
+    deliverRun(req, 1, 1000);
+    EXPECT_EQ(fetcher_.service(1), EnvelopeFetcher::Service::Idle);
+    EXPECT_FALSE(cache_.requestPending());
+}
+
+TEST_F(EnvelopeFetcherTest, LateReplyAfterTimeoutCannotCommitOrResetRetries) {
+    ASSERT_EQ(fetcher_.request(1, 0, 0, 48000, 48000, kDisplayColumns, 0),
+              EnvelopeFetcher::Request::Sent);
+    const SentRequest req = g_sent.back();
+    ASSERT_EQ(fetcher_.service(kTimeoutMs), EnvelopeFetcher::Service::Retrying);
+    deliverRun(req, 1, 1000);
+    EXPECT_EQ(fetcher_.service(kTimeoutMs + 1), EnvelopeFetcher::Service::Idle);
+    EXPECT_EQ(fetcher_.retries(), 1);
+}
+
+TEST_F(EnvelopeFetcherTest, DuplicateReplyAfterCommitCannotCommitAgain) {
+    ASSERT_EQ(fetcher_.request(1, 0, 0, 48000, 48000, kDisplayColumns, 0),
+              EnvelopeFetcher::Request::Sent);
+    const SentRequest req = g_sent.back();
+    deliverRun(req, 1, 1000);
+    ASSERT_EQ(fetcher_.service(1), EnvelopeFetcher::Service::Committed);
+    deliverRun(req, 1, 2000);
+    EXPECT_EQ(fetcher_.service(2), EnvelopeFetcher::Service::Idle);
+}
+
+TEST_F(EnvelopeFetcherTest, FailedSendDisarmsTheReceiveIdentity) {
+    ASSERT_EQ(fetcher_.request(1, 0, 0, 48000, 48000, kDisplayColumns, 0),
+              EnvelopeFetcher::Request::Sent);
+    const SentRequest req = g_sent.back();
+    fetcher_.abort();
+    g_send_ok = false;
+    ASSERT_EQ(fetcher_.request(1, 0, 0, 48000, 48000, kDisplayColumns, 1),
+              EnvelopeFetcher::Request::SendFailed);
+    deliverRun(req, 1, 1000);
+    EXPECT_EQ(fetcher_.service(2), EnvelopeFetcher::Service::Idle);
+}
+
+TEST_F(EnvelopeFetcherTest, ReplyForDifferentEndFrameDoesNotCompleteTheRun) {
+    ASSERT_EQ(fetcher_.request(1, 0, 0, 48000, 48000, kDisplayColumns, 0),
+              EnvelopeFetcher::Request::Sent);
+    SentRequest req = g_sent.back();
+    --req.end_frame;
+    deliverRun(req, 1, 1000);
+    EXPECT_EQ(fetcher_.service(1), EnvelopeFetcher::Service::Idle);
+    EXPECT_TRUE(fetcher_.busy());
+    deliverRun(g_sent.back(), 1, 2000);
+    EXPECT_EQ(fetcher_.service(2), EnvelopeFetcher::Service::Committed);
+}
+
+// The producer clamps its reply at EOF; the cache intentionally rounds its
+// request up to a complete tier column. Pin the actual producer contract.
+TEST_F(EnvelopeFetcherTest, EofClampedReplyKeepsTheRequestedCacheTier) {
+    constexpr uint32_t total = 48001;
+    ASSERT_EQ(fetcher_.request(1, 0, 0, total, total, kDisplayColumns, 0),
+              EnvelopeFetcher::Request::Sent);
+    ASSERT_GT(g_sent.back().end_frame, total);
+    deliverRun(g_sent.back(), 2, 2000, total);
+    ASSERT_EQ(fetcher_.service(1), EnvelopeFetcher::Service::Committed);
+    EXPECT_EQ(fetcher_.request(1, 0, 0, total, total, kDisplayColumns, 2),
+              EnvelopeFetcher::Request::AlreadyCached);
+}
+
+TEST_F(EnvelopeFetcherTest, CacheAllocationFailureUsesTheBoundedRetryBudget) {
+    cache_.init(256 * 1024, {[](size_t) -> void* { return nullptr; }, &TestRelease});
+    for (uint8_t attempt = 0; attempt < 4; ++attempt) {
+        ASSERT_EQ(fetcher_.request(1, 0, 0, 48000, 48000, kDisplayColumns, attempt),
+                  EnvelopeFetcher::Request::Sent);
+        deliverRun(g_sent.back(), 1, 2000);
+        EXPECT_EQ(
+            fetcher_.service(attempt),
+            attempt < 3 ? EnvelopeFetcher::Service::Retrying : EnvelopeFetcher::Service::GaveUp);
+        EXPECT_FALSE(fetcher_.busy());
+        EXPECT_FALSE(cache_.requestPending());
+        EXPECT_EQ(cache_.entryCount(), 0u);
+    }
+}
+
+// Exercises production mutexes on two real host threads. The RX task keeps
+// delivering an old identity while the UI repeatedly retires and replaces it;
+// a reply must never complete a different sample, even during a chunk copy.
+TEST_F(EnvelopeFetcherTest, ConcurrentRepliesCannotCrossAbortAndRearm) {
+    ASSERT_EQ(fetcher_.request(1, 0, 0, 48000, 48000, kDisplayColumns, 0),
+              EnvelopeFetcher::Request::Sent);
+    const SentRequest old = g_sent.back();
+    EnvelopeChunkMessage header;
+    header.sample_id = old.sample_id;
+    header.generation = 0;
+    header.start_frame = old.start_frame;
+    header.end_frame = old.end_frame;
+    header.total_columns = old.columns;
+    header.columns = old.columns;
+    header.first_column = 0;
+    header.channels = 2;
+    std::vector<EnvelopeColumn> columns(static_cast<size_t>(old.columns) * 2,
+                                        EnvelopeColumn(-1000, 1000));
+    std::atomic<bool> stop{false};
+    std::atomic<bool> started{false};
+    std::thread receiver([&] {
+        fetcher_.onChunk(header, columns.data());
+        started.store(true, std::memory_order_release);
+        while (!stop.load(std::memory_order_acquire)) {
+            fetcher_.onChunk(header, columns.data());
+            std::this_thread::yield();
+        }
+    });
+    while (!started.load(std::memory_order_acquire)) {
+        std::this_thread::yield();
+    }
+    for (int i = 0; i < 1000; ++i) {
+        fetcher_.abort();
+        EXPECT_EQ(fetcher_.request(2, 0, 0, 48000, 48000, kDisplayColumns, 0),
+                  EnvelopeFetcher::Request::Sent);
+        EXPECT_EQ(fetcher_.service(1), EnvelopeFetcher::Service::Idle);
+        fetcher_.abort();
+        EXPECT_EQ(fetcher_.request(1, 0, 0, 48000, 48000, kDisplayColumns, 0),
+                  EnvelopeFetcher::Request::Sent);
+    }
+    stop.store(true, std::memory_order_release);
+    receiver.join();
+    fetcher_.abort();
+    EXPECT_EQ(fetcher_.service(2), EnvelopeFetcher::Service::Idle);
+    EXPECT_FALSE(cache_.requestPending());
 }
 
 TEST_F(EnvelopeFetcherTest, UninitialisedFetcherRefusesRequests) {

@@ -146,7 +146,10 @@ class EnvelopePanelTest : public ::testing::Test {
 
     /// Answers a request through the listener the panel registered, the way
     /// the RX task does: one chunk carrying the whole run.
-    void deliver(const SentRequest& req, uint8_t channels, int16_t amplitude) {
+    void deliver(const SentRequest& req,
+                 uint8_t channels,
+                 int16_t amplitude,
+                 uint32_t total_frames = kTotal) {
         ASSERT_NE(g_listener, nullptr);
         std::vector<EnvelopeColumn> cols(static_cast<size_t>(req.columns) * channels);
         for (auto& c: cols) {
@@ -156,7 +159,8 @@ class EnvelopePanelTest : public ::testing::Test {
         h.sample_id = req.sample_id;
         h.generation = 0;
         h.start_frame = req.start_frame;
-        h.end_frame = req.end_frame;
+        // PumpEnvelopeJob echoes its EOF-clamped end, not the rounded request.
+        h.end_frame = std::min(req.end_frame, total_frames);
         h.total_columns = req.columns;
         h.first_column = 0;
         h.columns = req.columns;
@@ -226,7 +230,8 @@ TEST_F(EnvelopePanelTest, ALandedRunIsRenderedAtTheSinksWidth) {
     EXPECT_EQ(sinks_[0].sets, 1);
     EXPECT_EQ(sinks_[0].last_count, 256);
     EXPECT_EQ(sinks_[0].last_channels, 2);
-    EXPECT_EQ(sinks_[0].last.size(), 512u);
+    ASSERT_EQ(sinks_[0].last.size(), 512u);
+    ASSERT_FALSE(sinks_[0].last.empty());
     EXPECT_EQ(sinks_[0].last[0].max_sample, 12000);
     EXPECT_TRUE(panel_.drawn(0));
 
@@ -447,6 +452,7 @@ TEST_F(EnvelopePanelTest, AChunkForTheOldSampleIsNotFiledAgainstTheNew) {
 
     deliver(g_sent[1], 1, 5000);
     EXPECT_EQ(panel_.service(30), EnvelopePanel::Event::Drawn);
+    ASSERT_FALSE(sinks_[0].last.empty());
     EXPECT_EQ(sinks_[0].last[0].max_sample, 5000);
 }
 

@@ -14,10 +14,11 @@ void EnvelopeFetcher::init(const Config& config, SendFn send, EnvelopeCache* cac
     staging_.assign(static_cast<size_t>(config.max_run_columns) * 2,
                     WaveX::Protocol::EnvelopeColumn());
 
-    epoch_.fetch_add(1, std::memory_order_acq_rel);
-    ready_.store(false, std::memory_order_relaxed);
-    received_.store(0, std::memory_order_relaxed);
-    channels_.store(0, std::memory_order_relaxed);
+    // Initialize the target mutex before registering the RX listener.
+    std::lock_guard<std::mutex> lock(receive_mutex_);
+    receive_state_ = ReceiveState::Idle;
+    received_ = 0;
+    channels_ = 0;
     in_flight_ = false;
     retries_ = 0;
 }
@@ -52,19 +53,20 @@ EnvelopeFetcher::Request EnvelopeFetcher::request(uint16_t sample_id,
         return Request::AlreadyCached;
     }
 
-    // Arm the receiver before sending, and bump the epoch first so a chunk
-    // from the previous run cannot be filed against this one. acq_rel so a
-    // chunk copying concurrently sees the new epoch on its re-check and
-    // discards itself rather than filing against this run.
-    epoch_.fetch_add(1, std::memory_order_acq_rel);
-    ready_.store(false, std::memory_order_relaxed);
-    received_.store(0, std::memory_order_relaxed);
-    channels_.store(0, std::memory_order_relaxed);
-    pending_sample_id_ = sample_id;
-    pending_generation_ = generation;
-    pending_start_ = req_start;
-    pending_end_ = req_end;
-    pending_columns_ = req_columns;
+    // Publish the entire identity before send(), which can immediately result
+    // in a reply. No RX copy can overlap retiring/rearming this identity.
+    {
+        std::lock_guard<std::mutex> lock(receive_mutex_);
+        received_ = 0;
+        channels_ = 0;
+        pending_sample_id_ = sample_id;
+        pending_generation_ = generation;
+        pending_start_ = req_start;
+        pending_end_ = req_end;
+        pending_response_end_ = std::min(req_end, total_frames);
+        pending_columns_ = req_columns;
+        receive_state_ = ReceiveState::Receiving;
+    }
 
     // Send BEFORE arming the cache. noteRequest() blocks every later
     // nextRequest() until the run commits, so arming first and then failing to
@@ -74,6 +76,8 @@ EnvelopeFetcher::Request EnvelopeFetcher::request(uint16_t sample_id,
     // order this way: ingest() is only reached from service() on this task, so
     // no chunk can be filed between the send and the noteRequest().
     if (!send_(sample_id, req_columns, req_start, req_end)) {
+        std::lock_guard<std::mutex> lock(receive_mutex_);
+        receive_state_ = ReceiveState::Idle;
         return Request::SendFailed;
     }
     cache_->noteRequest(sample_id, generation, req_start, req_end, req_columns);
@@ -84,18 +88,19 @@ EnvelopeFetcher::Request EnvelopeFetcher::request(uint16_t sample_id,
 
 void EnvelopeFetcher::onChunk(const WaveX::Protocol::EnvelopeChunkMessage& header,
                               const WaveX::Protocol::EnvelopeColumn* columns) {
-    if (!columns || ready_.load(std::memory_order_acquire) || staging_.empty()) {
+    std::lock_guard<std::mutex> lock(receive_mutex_);
+    if (!columns || receive_state_ != ReceiveState::Receiving || staging_.empty()) {
         return;  // nothing armed, or the last run is still waiting to be filed
     }
-    const uint32_t epoch = epoch_.load(std::memory_order_acquire);
     if (header.sample_id != pending_sample_id_ || header.generation != pending_generation_ ||
-        header.start_frame != pending_start_ || header.total_columns != pending_columns_) {
+        header.start_frame != pending_start_ || header.end_frame != pending_response_end_ ||
+        header.total_columns != pending_columns_) {
         return;  // a reply to a view the user has already left
     }
     if (header.channels == 0 || header.channels > 2 || header.columns == 0) {
         return;
     }
-    const uint8_t seen_channels = channels_.load(std::memory_order_relaxed);
+    const uint8_t seen_channels = channels_;
     if (seen_channels != 0 && header.channels != seen_channels) {
         return;
     }
@@ -106,7 +111,7 @@ void EnvelopeFetcher::onChunk(const WaveX::Protocol::EnvelopeChunkMessage& heade
     }
     // A resend after a full TX queue repeats columns rather than reordering
     // them, so overlap is expected and a real gap is not.
-    if (header.first_column > received_.load(std::memory_order_relaxed)) {
+    if (header.first_column > received_) {
         return;
     }
 
@@ -114,19 +119,12 @@ void EnvelopeFetcher::onChunk(const WaveX::Protocol::EnvelopeChunkMessage& heade
               columns + static_cast<size_t>(header.columns) * header.channels,
               staging_.begin() + static_cast<size_t>(header.first_column) * header.channels);
 
-    // Re-check: request() may have re-armed while this was copying, in which
-    // case what was just written belongs to neither run.
-    if (epoch_.load(std::memory_order_acquire) != epoch) {
-        return;
+    channels_ = header.channels;
+    if (end_column > received_) {
+        received_ = static_cast<uint16_t>(end_column);
     }
-    channels_.store(header.channels, std::memory_order_relaxed);
-    if (end_column > received_.load(std::memory_order_relaxed)) {
-        received_.store(static_cast<uint16_t>(end_column), std::memory_order_relaxed);
-    }
-    if (received_.load(std::memory_order_relaxed) >= pending_columns_) {
-        // Release: everything above, including the column data, must be
-        // visible to the UI task before it can observe this flag.
-        ready_.store(true, std::memory_order_release);
+    if (received_ >= pending_columns_) {
+        receive_state_ = ReceiveState::Ready;
     }
 }
 
@@ -135,9 +133,19 @@ EnvelopeFetcher::Service EnvelopeFetcher::service(uint32_t now_ms) {
         return Service::Idle;
     }
 
-    // Hand a completed run to the cache. This is the only place the cache is
-    // touched from, which is what lets it stay lock-free.
-    if (ready_.load(std::memory_order_acquire)) {
+    bool complete = false;
+    {
+        std::lock_guard<std::mutex> lock(receive_mutex_);
+        complete = receive_state_ == ReceiveState::Ready;
+        if (!complete && (!in_flight_ || (now_ms - sent_ms_) < config_.timeout_ms)) {
+            return Service::Idle;
+        }
+        // Retire before ingest/timeout. RX cannot mutate staging until this
+        // UI task explicitly requests another run after service() returns.
+        receive_state_ = ReceiveState::Idle;
+    }
+
+    if (complete) {
         WaveX::Protocol::EnvelopeChunkMessage header;
         header.sample_id = pending_sample_id_;
         header.generation = pending_generation_;
@@ -146,18 +154,15 @@ EnvelopeFetcher::Service EnvelopeFetcher::service(uint32_t now_ms) {
         header.total_columns = pending_columns_;
         header.first_column = 0;
         header.columns = pending_columns_;
-        const uint8_t channels = channels_.load(std::memory_order_relaxed);
-        header.channels = channels ? channels : 1;
+        header.channels = channels_;
 
-        cache_->ingest(header, staging_.data());
-        ready_.store(false, std::memory_order_relaxed);
-        in_flight_ = false;
-        retries_ = 0;
-        return Service::Committed;
-    }
-
-    if (!in_flight_ || (now_ms - sent_ms_) < config_.timeout_ms) {
-        return Service::Idle;
+        if (cache_->ingest(header, staging_.data())) {
+            in_flight_ = false;
+            retries_ = 0;
+            return Service::Committed;
+        }
+        // Allocation/budget failure is a failed run too. Reporting Committed
+        // would reset retries and make the panel request the same data forever.
     }
 
     // The backend drops a scan when the sample under it is reloaded, and does
@@ -179,12 +184,12 @@ EnvelopeFetcher::Service EnvelopeFetcher::service(uint32_t now_ms) {
 }
 
 void EnvelopeFetcher::abort() {
-    // Bump the epoch so a chunk still in flight on the RX task cannot file
-    // itself against the run being abandoned.
-    epoch_.fetch_add(1, std::memory_order_acq_rel);
-    ready_.store(false, std::memory_order_relaxed);
-    received_.store(0, std::memory_order_relaxed);
-    channels_.store(0, std::memory_order_relaxed);
+    {
+        std::lock_guard<std::mutex> lock(receive_mutex_);
+        receive_state_ = ReceiveState::Idle;
+        received_ = 0;
+        channels_ = 0;
+    }
     if (in_flight_) {
         in_flight_ = false;
         if (cache_) {

@@ -12,11 +12,6 @@ checked at the API/DMA boundaries used by WaveX. Priorities describe concrete
 failure modes; hardware-only gates stay in the roadmap. Remove each task when
 its fix and regression checks are committed.
 
-- [ ] **High — waveform response ownership.** Synchronize
-  `EnvelopeFetcher` request identity and chunk publication. A ready flag does
-  not protect a struct still being read while a request is replaced. Cover
-  replacement, abort, timeout, late packets, and concurrent reception
-  (principles 2, 5, 6).
 - [ ] **High — frontend task lifetime.** Preserve `UITask` after a timed-out
   stop; its task may still dereference the object. Check listener allocation
   failure and calibration handoffs at the same ownership boundaries

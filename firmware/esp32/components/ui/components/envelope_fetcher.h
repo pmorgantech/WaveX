@@ -3,8 +3,8 @@
 #include "envelope_cache.h"
 #include "spi_protocol/protocol.h"
 
-#include <atomic>
 #include <cstdint>
+#include <mutex>
 #include <vector>
 
 namespace wavex_ui {
@@ -24,18 +24,14 @@ namespace wavex_ui {
  * builders drift apart from one another, which is the same mistake one layer
  * up.
  *
- * **Threading.** `onChunk()` runs on the UART RX task. Everything else runs on
- * the UI task. The two meet only through the atomics here, and only in one
- * direction: the RX task fills the staging buffer and publishes `ready_` with
- * a release store; the UI task acquires it and is then the sole toucher of the
- * cache. That is what lets EnvelopeCache stay lock-free.
- *
- * **Why an epoch rather than a mutex.** A view can change while a chunk is
- * being copied. The identity check at the top of `onChunk()` catches a reply
- * to a view already left, but not a re-arm that happens *during* the copy - so
- * the epoch is re-read afterwards and the copy discarded if it moved. A lock
- * would have to be taken by the RX task, which is the thing this codebase has
- * repeatedly got wrong.
+ * **Threading.** `onChunk()` runs on the UART RX task; all other calls run
+ * on the UI task. A mutex protects the complete receive identity, progress,
+ * and staging writes. The receive state is Idle, Receiving, or Ready. Only
+ * Receiving accepts chunks; committing or abandoning a run returns to Idle.
+ * The UI task retires a Ready run under the mutex before ingesting its buffer
+ * into the cache outside the lock. No sender, cache, or LVGL code runs under
+ * this mutex, so RX only waits for bounded state changes or a chunk copy.
+ * EnvelopeCache remains owned exclusively by the UI task.
  *
  * **Every abandoned run must be released.** `EnvelopeCache::noteRequest()`
  * blocks all further `nextRequest()` calls until the run commits, and that
@@ -64,10 +60,8 @@ class EnvelopeFetcher {
         uint8_t max_retries = 3;
     };
 
-    /// UI task. Allocates the staging buffer once, at its ceiling, and never
-    /// resizes it: the RX task writes into it while the UI task reads, so a
-    /// reallocation mid-copy would be a use-after-free where a torn value is
-    /// merely one stale column.
+    /// UI task, before registering the RX listener. Allocates staging at its
+    /// ceiling; unregister the listener before reinitializing or destroying.
     void init(const Config& config, SendFn send, EnvelopeCache* cache);
 
     bool initialized() const { return send_ != nullptr && cache_ != nullptr; }
@@ -125,21 +119,22 @@ class EnvelopeFetcher {
     EnvelopeCache* cache_ = nullptr;
 
     /// Staging for the run in flight. Written by the RX task, read by the UI
-    /// task once `ready_` is observed.
+    /// task after a Ready run is retired. Protected by receive_mutex_.
     std::vector<WaveX::Protocol::EnvelopeColumn> staging_;
 
-    /// Identity of the run in flight. Written by the UI task before arming and
-    /// read by the RX task; the epoch below is what makes that safe.
+    /// Complete receive identity, guarded with the buffer/progress below.
     uint16_t pending_sample_id_ = 0;
     uint16_t pending_generation_ = 0;
     uint32_t pending_start_ = 0;
     uint32_t pending_end_ = 0;
+    uint32_t pending_response_end_ = 0;  ///< Backend clamps the window at EOF.
     uint16_t pending_columns_ = 0;
 
-    std::atomic<uint32_t> epoch_{0};
-    std::atomic<uint16_t> received_{0};
-    std::atomic<uint8_t> channels_{0};
-    std::atomic<bool> ready_{false};
+    enum class ReceiveState : uint8_t { Idle, Receiving, Ready };
+    std::mutex receive_mutex_;
+    ReceiveState receive_state_ = ReceiveState::Idle;
+    uint16_t received_ = 0;
+    uint8_t channels_ = 0;
 
     bool in_flight_ = false;
     uint32_t sent_ms_ = 0;
