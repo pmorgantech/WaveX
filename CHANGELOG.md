@@ -67,6 +67,8 @@ versioning and release process.
 
 ### Fixed
 
+- Sample memory validates allocation identity and bounds before mapping or freeing handles, and resets allocator state on initialization.
+
 - Hardened protocol message defaults and added an explicit busy reason for
   sample loads while an instrument import owns the sample pool.
 - WXCF/WXI readers now distinguish clean EOF from I/O failure and reject

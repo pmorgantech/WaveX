@@ -85,6 +85,7 @@ class SmallSlabPool {
     void init(uint8_t* base, uint32_t bytes) {
         base_ = base;
         size_ = bytes;
+        used_bytes_ = 0;
         memset(class_pages_, 0, sizeof(class_pages_));
         memset(class_page_count_, 0, sizeof(class_page_count_));
         memset(&stats_, 0, sizeof(stats_));
@@ -138,16 +139,20 @@ class SmallSlabPool {
     }
 
     bool ptr(const wxsamp_t& h, void** out_ptr) const {
-        if (h.cls >= WXM_SMALL_CLASS_COUNT)
+        if (!out_ptr || h.cls >= WXM_SMALL_CLASS_COUNT || h.page >= class_page_count_[h.cls])
             return false;
-        auto& pg = class_pages_[h.cls][h.page];
+        const auto& pg = class_pages_[h.cls][h.page];
         uint32_t bsize = class_block_[h.cls];
+        if (h.slot >= pg.slots || h.len == 0 || h.len > bsize ||
+            (pg.bm[h.slot / 32u] & (1u << (h.slot % 32u))) != 0)
+            return false;
         *out_ptr = base_ + pg.base_off + (uint32_t)h.slot * bsize;
         return true;
     }
 
     bool release(wxsamp_t* h) {
-        if (h->cls >= WXM_SMALL_CLASS_COUNT)
+        if (!h || h->cls >= WXM_SMALL_CLASS_COUNT || h->page >= class_page_count_[h->cls] ||
+            h->len == 0 || h->len > class_block_[h->cls])
             return false;
         auto& pg = class_pages_[h->cls][h->page];
         uint32_t bsize = class_block_[h->cls];
@@ -298,6 +303,9 @@ class LargeExtentPool {
         size_ = (bytes / WXM_LARGE_PAGE_BYTES) * WXM_LARGE_PAGE_BYTES;  // page-align down
         run_count_ = 1;
         free_runs_[0] = {0u, pages_total()};
+        in_use_bytes_ = 0;
+        objects_alive_ = 0;
+        failed_allocs_ = 0;
     }
 
     bool alloc(uint32_t nbytes, wxsamp_t* out) {
@@ -329,14 +337,14 @@ class LargeExtentPool {
     }
 
     bool ptr(const wxsamp_t& h, void** out_ptr) const {
-        if (h.cls != 0xFF)
+        if (!out_ptr || !valid_handle(h))
             return false;
         *out_ptr = base_ + (uint32_t)h.page * WXM_LARGE_PAGE_BYTES;
         return true;
     }
 
     bool release(wxsamp_t* h) {
-        if (h->cls != 0xFF)
+        if (!h || !valid_handle(*h) || run_count_ >= WXM_LARGE_MAX_RUNS)
             return false;
         insert_run({h->page, h->slot});
         coalesce();
@@ -372,6 +380,23 @@ class LargeExtentPool {
     uint32_t failed_allocs_ = 0;
 
     inline uint32_t pages_total() const { return size_ / WXM_LARGE_PAGE_BYTES; }
+
+    // Handles are internal, non-owning values; the registry owns their lifetime.
+    // Reject malformed ranges and copied handles whose pages are already free
+    // before pointer arithmetic or changing the free-list/accounting.
+    bool valid_handle(const wxsamp_t& h) const {
+        if (h.cls != 0xFF || h.slot == 0 || h.len == 0 || h.page >= pages_total() ||
+            h.slot > pages_total() - h.page ||
+            h.len > static_cast<uint32_t>(h.slot) * WXM_LARGE_PAGE_BYTES)
+            return false;
+        const uint32_t end = static_cast<uint32_t>(h.page) + h.slot;
+        for (uint16_t i = 0; i < run_count_; ++i) {
+            const Run& free = free_runs_[i];
+            if (h.page < free.first + free.count && free.first < end)
+                return false;
+        }
+        return true;
+    }
 
     int find_best_fit(uint32_t need) {
         int best = -1;
