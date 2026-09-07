@@ -67,6 +67,8 @@ versioning and release process.
 
 ### Fixed
 
+- UART teardown leaves the event queue to its owning driver and releases the driver when subsequent mutex allocation fails.
+
 - Browse responses reject entry counts beyond their copied buffer and bound logging of wire filenames.
 
 - Waveform reception synchronizes request identity and publication, accepts backend EOF clamping, and bounds retries when cache admission fails; late or aborted responses cannot overwrite a newer request.

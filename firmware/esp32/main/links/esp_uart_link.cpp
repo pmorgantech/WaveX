@@ -61,6 +61,7 @@ struct uart_stats_t {
 std::atomic<TaskHandle_t> s_uart_task_handle{nullptr};
 QueueHandle_t s_uart_event_queue = nullptr;
 SemaphoreHandle_t s_uart_mutex = nullptr;
+bool s_uart_driver_installed = false;
 
 // Guarded by s_uart_mutex on every access below; plain ints rather than
 // volatile/atomic because the mutex already provides the ordering guarantee -
@@ -275,6 +276,7 @@ void uart_task(void* /*param*/) {
                             TAG, "UART overflow (%d), flushing", static_cast<int>(event.type));
                         uart_flush_input(WAVEX_ESP_UART_INTER_NUM);
                         xQueueReset(s_uart_event_queue);
+                        s_tx_wake_pending.store(false);
                         s_scanner.Clear();
                         s_stats.queue_overflows++;
                         break;
@@ -398,15 +400,20 @@ esp_err_t uart_link_init(void) {
         return err;
     }
 
+    s_uart_driver_installed = true;
     s_uart_mutex = xSemaphoreCreateMutex();
     if (!s_uart_mutex) {
         UART_LOGE(TAG, "Failed to create UART mutex");
-        return ESP_FAIL;
+        uart_driver_delete(WAVEX_ESP_UART_INTER_NUM);
+        s_uart_driver_installed = false;
+        s_uart_event_queue = nullptr;
+        return ESP_ERR_NO_MEM;
     }
 
     s_uart_running = true;
     s_stats = uart_stats_t{};
     s_next_sequence = 1;
+    s_tx_wake_pending.store(false);
     s_scanner.Clear();
     s_msg_head = 0;
     s_msg_tail = 0;
@@ -541,17 +548,22 @@ esp_err_t uart_link_stop(void) {
         return ESP_ERR_TIMEOUT;
     }
 
-    if (s_uart_event_queue) {
-        vQueueDelete(s_uart_event_queue);
+    // The driver owns the event queue returned by uart_driver_install().
+    // Deleting this borrowed handle first double-frees it in driver teardown.
+    if (s_uart_driver_installed) {
+        const esp_err_t err = uart_driver_delete(WAVEX_ESP_UART_INTER_NUM);
+        if (err != ESP_OK) {
+            return err;
+        }
+        s_uart_driver_installed = false;
         s_uart_event_queue = nullptr;
     }
+    s_tx_wake_pending.store(false);
 
     if (s_uart_mutex) {
         vSemaphoreDelete(s_uart_mutex);
         s_uart_mutex = nullptr;
     }
-
-    uart_driver_delete(WAVEX_ESP_UART_INTER_NUM);
 
     return ESP_OK;
 }
