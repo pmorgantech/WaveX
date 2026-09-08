@@ -76,27 +76,27 @@ Phase 2.5 work. Open work:
    new-copy saves. Power-loss recovery remains a bench gate.
 5. Apply per-step parameter locks to trigger parameters.
 
-### 2.C — Callback capacity checkpoint (2026-09-07)
+### 2.C — Callback capacity checkpoint (2026-09-08)
 
-The recurring callback evidence is recorded in
-[callback-performance-log.md](callback-performance-log.md). The touch kit/grid
-baseline on 271c8e3 measured 67.0844% across 610.2 seconds of DWT windows,
-with zero underruns or dropped commands, and remains in STAY. It used eight
-drum Instruments with Track-local choke, 64 modulation slots, the WaveX
-24 dB filter at full drive, sequencing, SD streaming and live grid readback.
-The note/velocity extension on 664c6d3 reached 70.3529% (REVIEW).
-Sparse live-zone publication on 00fdd08 reduced the observed maximum to
-69.1162% across 605.2 seconds, with zero underruns/dropped events (STAY).
-Pattern persistence's sustained test is blocked by SD writes that produced
-controller CRC/time-out errors and a later missing temporary-file entry.
-The default SD clock is now conservative; a fresh diagnostic directory
-passed six short save/load cycles, but the original test directory still
-needs recovery/recreation approval. See the recorded failure evidence.
-A retained visible-file restart check passed, but the full persistence soak
-and new-save recovery remain outstanding.
-The preceding Track-addressed run on 66d0330 measured 66.3492%, and the
-earlier one-hour fixed-Track preview measured 65.8029%; these are different
-workloads.
+The latest audio/grid run on 70deebd measured **68.3521% peak callback
+utilization (STAY)** over 605.2 seconds, with zero underruns or sequencer
+queue-drop messages. It used eight drum Instruments with sixteen populated
+pads each, Track-local choke, 64 modulation slots, the WaveX 24 dB filter
+at full drive, SD streaming, live cutoff edits and grid readback.
+The measured peak was 68.3521%, compared with 70.3435% on 38b83b0; average
+utilization was 25.8%. This comparison does not establish a standalone
+performance win for the filter change.
+Full captures and preceding comparisons are recorded in
+[callback-performance-log.md](callback-performance-log.md).
+
+This run excluded pattern file operations. The persistence soak is blocked
+by SD writes that produced controller CRC/time-out errors and a later
+missing temporary-file entry. The default SD clock is now conservative;
+a fresh diagnostic directory passed six short save/load cycles, but the
+original test directory still needs recovery/recreation approval.
+A retained visible-file restart check passed. New-save recovery and a full
+persistence soak remain outstanding.
+
 The DaisySP comparison measured 89.6635% for 605.2 seconds with zero
 underruns and entered UPGRADE because callback-resident work remains.
 This activates planning in the [RT1170 migration plan](rt1170-migration.md)
@@ -222,7 +222,7 @@ The following code paths are open until observed on the target:
 | Diagnostics | Open the page and verify live telemetry arrives. |
 | Digital voices | Trigger RAM-resident notes, sweep live parameters, and judge SVF response/resonance. |
 | Sample retirement | Four-Track routing, rebinds and SFZ replacement during sequencing, and sample-edit refresh now have passing HIL coverage. Still exercise delayed/stopped callbacks and concurrent import requests. Confirm timeout preserves storage, then measure DWT headroom and run the zero-underrun soak. Host helper tests do not verify this interrupt integration. |
-| Callback budget | Recurring whole-callback evidence is recorded in `callback-performance-log.md`: Touch kit/grid WaveX is 67.0844% / STAY and the experimental DaisySP comparison is 89.6635% / UPGRADE, both with zero underruns. DaisySP is default-disabled. Remaining work is its capacity blocker, separate Render() timing, and selective placement A/B; no overall phase gate is claimed. |
+| Callback budget | Recurring whole-callback evidence is recorded in `callback-performance-log.md`: The eight-Track, fully populated kit/grid WaveX run is 68.3521% / STAY (file operations excluded) and the experimental DaisySP comparison is 89.6635% / UPGRADE, both with zero underruns. DaisySP is default-disabled. Remaining work is its capacity blocker, separate Render() timing, and selective placement A/B; no overall phase gate is claimed. |
 | Sample Edit | Verify waveform fetch, handles, loop seam audibility, browser detail waveform, and stereo readability. HIL covers Track-preserving audition, edits isolated to the matching stream, streaming loop wraps and RAM-loop note lifetime. |
 | Settings and input | Verify brightness, scrolling, MIDI channel filtering, keypad, encoder direction, and UI responsiveness. |
 | UI concurrency | Measure LVGL lock/refresh behavior during encoder bursts and sample loading. |

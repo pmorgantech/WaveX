@@ -196,6 +196,14 @@ touchscreen captures are `logs/sequencer-notes.png` and
 `logs/pattern-files.png`. The whole Phase 2 gate and arbitrary-power-loss
 recovery are not established by this focused test.
 
+The later sustained write test found SD controller CRC/time-out errors and
+missing directory entries. The default bus clock was reduced, and six
+save/load cycles passed in a fresh diagnostic directory. Existing visible
+files reload after restart, but new saves in the original test directory
+still require recovery/recreation approval. The final ten-minute audio/grid
+capacity run passed with file operations excluded; see
+[the complete bench evidence](../callback-performance-log.md).
+
 
 Host coverage includes scheduler event ordering and timing, transport edits
 between steps, probability/retrigger boundaries, tempo-follower state,

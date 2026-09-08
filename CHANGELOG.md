@@ -63,7 +63,9 @@ versioning and release process.
 
 - Removed duplicate WaveX filter coefficient calculation during voice retuning
   by applying cutoff and resonance together, preserving the existing filter
-  response and integrator state.
+  response and integrator state. A clean audio/grid-only follow-up measured
+  68.3521% peak utilization and 31.6479% headroom over 605.2 seconds (STAY),
+  with file operations excluded; the full persistence gate remains blocked.
 
 ### Changed
 

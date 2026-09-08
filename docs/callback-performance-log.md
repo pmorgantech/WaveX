@@ -164,6 +164,40 @@ persistence soak and new-save recovery remain blocked by the original
 directory failure; the short fresh-directory run does not satisfy the
 ten-minute gate.
 
+## Full-kit audio/grid follow-up — 2026-09-08
+
+The clean `70deebd` run completed 605.2 seconds (121 profiling windows) at
+68.3521% maximum utilization, 31.6479% headroom and zero underruns: STAY.
+Its 328090-cycle maximum compares with 337649 cycles (70.3435%) on
+`38b83b0` using the same eight-Track, fully populated sixteen-pad kit
+workload and SD clock. The change combines cutoff and resonance into one
+WaveX coefficient calculation per retune; host tests verify equal output
+through live tuning, bypass, slope and sample-rate transitions. Average
+utilization was 25.8%, up from 24.8% in the preceding run.
+
+Both runs used the WaveX 24 dB filter at full drive, eight modulation slots
+per Track, simultaneous hits every second step, changing step notes, live
+cutoff edits, a looping SD preview and the touch grid's readback/playhead.
+The latter run recorded 50 UI samples and retained eight voices throughout,
+with zero sequencer queue-drop messages and dropped console bytes.
+`logs/perf-wavex-20260908-060531.json` records the clean commit, binary
+SHA256, confirmed SD mount clock and device states.
+
+Normal firmware was restored with profiling and DaisySP disabled. The final
+console smoke passed all eight selected tests in 2.01 seconds. A subsequent
+retained-file restart check on that restored image loaded `Perf 043405 75`
+with note 75, step bits 21845, swing 60, tempo 149, empty Track bindings,
+zero samples, zero voices and zero underruns; the check ended back at the
+Sequencer home state with playback stopped and tempo 120.
+
+File operations were excluded because the original pattern directory
+remains unresolved; this audio/grid capacity pass does not satisfy the
+persistence soak or the overall Phase 2 gate. The earlier retained-file
+restart check (`logs/pattern-reboot-check.json`) successfully loaded
+`Perf 043405 75` with its notes, step bits and swing intact while preserving
+session tempo and empty Track bindings. No original directory was renamed
+or deleted.
+
 ## Recorded runs
 
 | Date | Commit | Scenario | Voices | Hz/block | Core | Image | Duration | Budget cycles | Average cycles | Maximum cycles | Worst headroom | Stream underruns | Callback features left | Decision | Note |
@@ -176,3 +210,4 @@ ten-minute gate.
 | 2026-09-08 | 00fdd08 | 8 kit voices, sparse prepared-zone publication, 24 dB WaveX drive, 8 mod slots, SD stream, touch grid | 8 | 48000/48 | 480 MHz | qspi `-O2` | 605.2s (121 windows) | 480000 | 120465 (25.1%) | 331758 (69.1162%) | 30.8838% | 0 | yes | STAY | 605 s clean-commit sparse publication comparison; eight voices, one stream, zero dropped events; metadata logs/perf-wavex-20260908-040257.json |
 | 2026-09-08 | 95ac09b | 8 Tracks, 16 populated pads per kit, WaveX 24 dB full drive, 64 mod slots, SD 25MHz stream, touch grid, no file operations | 8 | 48000/48 | 480 MHz | qspi `-O2` | 605.2s (121 windows) | 480000 | 115946 (24.2%) | 337098 (70.2288%) | 29.7712% | 0 | yes | REVIEW | 605 s audio/grid-only run; zero underruns and sequencer queue-drop messages; persistence directory recovery pending; metadata logs/perf-wavex-20260908-053146.json |
 | 2026-09-08 | 38b83b0 | 8 Tracks, indexed 16-pad kits, WaveX 24 dB full drive, 64 mod slots, SD 25MHz stream, touch grid, no file operations | 8 | 48000/48 | 480 MHz | qspi `-O2` | 605.2s (121 windows) | 480000 | 118946 (24.8%) | 337649 (70.3435%) | 29.6565% | 0 | yes | REVIEW | 605 s indexed-pad comparison; zero underruns and sequencer queue-drop messages; full persistence gate blocked; metadata logs/perf-wavex-20260908-054919.json |
+| 2026-09-08 | 70deebd | 8 Tracks, 16-pad kits, combined WaveX filter retune, 24 dB full drive, 64 mod slots, SD 25MHz stream, touch grid, no file operations | 8 | 48000/48 | 480 MHz | qspi `-O2` | 605.2s (121 windows) | 480000 | 124071 (25.8%) | 328090 (68.3521%) | 31.6479% | 0 | yes | STAY | 605 s combined-retune comparison; zero underruns and sequencer queue-drop messages; full persistence soak remains blocked by original directory; metadata logs/perf-wavex-20260908-060531.json |
