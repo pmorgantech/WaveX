@@ -52,6 +52,11 @@ versioning and release process.
   preview before foreground file work while resident Track voices continue;
   the original FatFs `FR_INVALID_OBJECT` cause remains unproven.
 
+- Set the default Daisy SD clock to the conservative 25 MHz setting after
+  sustained 50 MHz pattern writes produced controller CRC and timeout errors,
+  and added first-error FatFs/HAL diagnostics for foreground pattern I/O.
+  The original pattern directory and full persistence gate remain unresolved.
+
 ### Changed
 
 - Recorded the touch kit/grid capacity follow-up at 67.0844% worst-case

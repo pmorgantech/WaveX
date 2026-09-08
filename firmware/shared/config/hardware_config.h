@@ -260,14 +260,16 @@
  * failure under load steps it down again at runtime
  * (SdSdio::DowngradeSpeed()).
  *
- * Set to 3 (FAST): reach for 50 MHz and let negotiation settle lower if this
- * board cannot hold it. Watch for "SD: negotiated DOWN" (fell back at boot)
+ * Default to 2 (STANDARD): sustained pattern writes at 50 MHz produced
+ * data-CRC failures and command timeouts on the bench even after successful
+ * mount/read probes. Faster settings require read AND write soak validation.
+ * Watch for "SD: negotiated DOWN" (fell back at boot)
  * or "SD: downgrading" (fell back later, under load) - either means the card
  * or wiring is not holding the configured rate, and the line names the rate
  * it settled on.
  */
 #ifndef WAVEX_DAISY_SD_CARD_SPEED
-#define WAVEX_DAISY_SD_CARD_SPEED 3
+#define WAVEX_DAISY_SD_CARD_SPEED 2
 #endif
 
 // External Flash (Daisy only)

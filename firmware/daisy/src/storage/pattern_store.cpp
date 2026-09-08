@@ -9,6 +9,10 @@
 #include <cstdio>
 #include <cstring>
 #include <optional>
+#ifndef UNIT_TEST
+#include "stm32h7xx_hal.h"
+extern "C" SD_HandleTypeDef hsd1;
+#endif
 
 namespace WaveX {
 namespace PatternStore {
@@ -31,8 +35,17 @@ Job& job() {
     return storage.Get();
 }
 FRESULT IoResult(FRESULT result) {
-    if (result != FR_OK && job().first_io_error == FR_OK)
+    if (result != FR_OK && job().first_io_error == FR_OK) {
         job().first_io_error = result;
+#ifndef UNIT_TEST
+        if (result == FR_DISK_ERR || result == FR_INVALID_OBJECT)
+            Log::PrintLine("PATTERN_SD: fr=%u hal_err=0x%08lX state=%u offset=%lu",
+                           static_cast<unsigned>(result),
+                           static_cast<unsigned long>(HAL_SD_GetError(&hsd1)),
+                           static_cast<unsigned>(HAL_SD_GetCardState(&hsd1)),
+                           static_cast<unsigned long>(f_tell(&job().file)));
+#endif
+    }
     return result;
 }
 bool Read(void* context, void* dest, size_t bytes) {

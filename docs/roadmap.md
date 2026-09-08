@@ -87,7 +87,13 @@ drum Instruments with Track-local choke, 64 modulation slots, the WaveX
 The note/velocity extension on 664c6d3 reached 70.3529% (REVIEW).
 Sparse live-zone publication on 00fdd08 reduced the observed maximum to
 69.1162% across 605.2 seconds, with zero underruns/dropped events (STAY).
-Pattern persistence requires its own post-integration timing run.
+Pattern persistence's sustained test is blocked by SD writes that produced
+controller CRC/time-out errors and a later missing temporary-file entry.
+The default SD clock is now conservative; a fresh diagnostic directory
+passed six short save/load cycles, but the original test directory still
+needs recovery/recreation approval. See the recorded failure evidence.
+A retained visible-file restart check passed, but the full persistence soak
+and new-save recovery remain outstanding.
 The preceding Track-addressed run on 66d0330 measured 66.3492%, and the
 earlier one-hour fixed-Track preview measured 65.8029%; these are different
 workloads.

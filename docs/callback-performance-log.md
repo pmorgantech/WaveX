@@ -135,6 +135,35 @@ streaming preview before accepted pattern Save/Load operations, matching
 kit-save admission. Foreground failures now retain the first FatFs error
 for diagnosis; the original invalid-handle cause is not established.
 
+The first retest on `e5ed856` (`logs/perf-wavex-20260908-050136.log`)
+failed its first save with `FR_DISK_ERR`; the short capture peaked at
+321736 cycles (67.0283%) with no underruns. A diagnostic build then
+reproduced the write/close failure at file offset 20672 with controller
+error `0x00000006` (data CRC plus command-response timeout), captured in
+`logs/perf-wavex-20260908-050641.log`. Both ran at 50 MHz. Pattern failures
+now log that controller error before cleanup. The default clock was lowered
+to 25 MHz for the next read/write validation; faster overrides require a
+write soak as well as mount/read probes.
+
+At 25 MHz, the original test directory still failed rename with
+`FR_NO_FILE` (`logs/perf-wavex-20260908-051136.log` and
+`logs/perf-wavex-20260908-051621.log`). A read-only trace showed only four
+entries, including an interrupted temporary, while two previously completed
+test saves were no longer visible. This is consistent with damage during
+the earlier failed writes; it is not a filesystem-repair diagnosis.
+A fresh, separate diagnostic directory passed six save/load cycles over
+146 seconds with eight voices, zero underruns and zero dropped console
+bytes (`logs/perf-wavex-20260908-051957.log`). That diagnostic image used
+the same codec and file operations with only its directory redirected.
+The production path remains `wavex/patterns`. No original directory was
+renamed or deleted; preserving/recreating it awaits user authorization.
+The temporary listing and rename instrumentation was removed. A retained
+visible-file restart check passed after backend restart (`logs/pattern-reboot-
+check.json`), preserving note, groove, tempo and Track bindings. The full
+persistence soak and new-save recovery remain blocked by the original
+directory failure; the short fresh-directory run does not satisfy the
+ten-minute gate.
+
 ## Recorded runs
 
 | Date | Commit | Scenario | Voices | Hz/block | Core | Image | Duration | Budget cycles | Average cycles | Maximum cycles | Worst headroom | Stream underruns | Callback features left | Decision | Note |
