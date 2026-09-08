@@ -123,6 +123,16 @@ void PacketRouter::route_by_message_type(uint8_t msg_type,
     }
 
     switch (msg_type) {
+        case WaveX::Protocol::MSG_SEQ_PATTERN_SYNC: {
+            WaveX::Protocol::SeqPatternSyncMessage message;
+            if (CopyMessage(payload, payload_len, message, "SEQ_PATTERN_SYNC"))
+                inter_mcu_store_seq_page(message);
+        } break;
+        case WaveX::Protocol::MSG_SEQ_PLAYHEAD: {
+            WaveX::Protocol::SeqPlayheadMessage message;
+            if (CopyMessage(payload, payload_len, message, "SEQ_PLAYHEAD"))
+                inter_mcu_store_seq_playhead(message);
+        } break;
         case WaveX::Protocol::MSG_SYNC: {
             WaveX::Protocol::SyncMessage msg;
             if (CopyMessage(payload, payload_len, msg, "SYNC"))

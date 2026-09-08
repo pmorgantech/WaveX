@@ -140,11 +140,10 @@ enum MessageType : uint8_t {
     // Sequencer / transport / MIDI clock (Phase 2; docs/features/sequencer.md,
     // midi-sync-tempo-follower.md, melodic-sequencing.md). ID block reserved in
     // docs/features/inter-mcu-protocol.md - do not assign outside this block.
-    MSG_SEQ_TRANSPORT = 0x50,   // E->D: play/stop/continue, tempo, clock source, input mode
-    MSG_SEQ_PATTERN_OP = 0x51,  // E->D: small idempotent pattern edits (step/track/pattern)
-    MSG_SEQ_PATTERN_SYNC =
-        0x52,                 // both: bulk pattern read/write (reserved; struct not yet defined)
-    MSG_SEQ_PLAYHEAD = 0x53,  // D->E: playhead/step/sync feedback (coalesced)
+    MSG_SEQ_TRANSPORT = 0x50,     // E->D: play/stop/continue, tempo, clock source, input mode
+    MSG_SEQ_PATTERN_OP = 0x51,    // E->D: small idempotent pattern edits (step/track/pattern)
+    MSG_SEQ_PATTERN_SYNC = 0x52,  // E->D page request / D->E page snapshot
+    MSG_SEQ_PLAYHEAD = 0x53,      // D->E: playhead/step/sync feedback (coalesced)
     MSG_MIDI_CLOCK_EVENT = 0x55,  // E->D: forwarded MIDI real-time clock/transport byte
     MSG_MIDI_CC = 0x56,           // E->D: forwarded MIDI control change
     MSG_SEQ_CLOCK_OUT = 0x57,     // D->E: MIDI clock/transport for the ESP32 to serialize outbound
@@ -1395,6 +1394,7 @@ struct CvTestMessage {
 // these are the small idempotent edit/feedback ops that drive it.
 
 enum SeqTransportCmd : uint8_t {
+    SEQ_TRANSPORT_CONFIGURE = 3,  // update settings without changing play position
     SEQ_TRANSPORT_STOP = 0,
     SEQ_TRANSPORT_PLAY = 1,      // start from the top (resets playhead)
     SEQ_TRANSPORT_CONTINUE = 2,  // resume from song_position (SPP-style)
@@ -1466,6 +1466,7 @@ enum SeqPatternOpCode : uint8_t {
     SEQ_OP_PATTERN_SWING = 7,
     SEQ_OP_SET_PARAM_LOCK = 8,
     SEQ_OP_CLEAR_PARAM_LOCKS = 9,
+    SEQ_OP_CLEAR_TRACK = 10,  // clear all steps and their locks; retain track mute
 };
 struct SeqPatternOpMessage {
     uint8_t op;      // SeqPatternOpCode
@@ -1489,6 +1490,64 @@ struct SeqPatternOpMessage {
           arg_u16(arg_u16_),
           arg_s16(arg_s16_) {}
 } __attribute__((packed));
+
+// MSG_SEQ_PATTERN_SYNC is directional: a small read request E->D and a
+// complete 16-step page D->E. The callback's pending pattern is authoritative;
+// readback includes accepted edits even before the next active-pattern swap.
+// Clients allow one outstanding page and discard replies with another id.
+static constexpr uint8_t SEQ_PAGE_STEPS = 16;
+static constexpr uint8_t SEQ_MAX_STEPS = 64;
+static constexpr uint8_t SEQ_TRACK_COUNT = 16;
+static constexpr uint8_t SEQ_STEP_LOCKS = 4;
+
+struct SeqPatternRequestMessage {
+    uint32_t request_id = 0;
+    uint8_t track = 0;
+    uint8_t first_step = 0;  // aligned to SEQ_PAGE_STEPS
+    uint16_t reserved = 0;
+} __attribute__((packed));
+
+inline bool IsValidSeqPatternRequest(const SeqPatternRequestMessage& m) {
+    return m.request_id != 0 && m.track < SEQ_TRACK_COUNT && m.first_step < SEQ_MAX_STEPS &&
+           m.first_step % SEQ_PAGE_STEPS == 0;
+}
+
+struct SeqLockState {
+    uint8_t parameter = 0;
+    uint16_t value = 0;
+} __attribute__((packed));
+
+struct SeqStepState {
+    uint8_t on = 0;
+    uint8_t velocity = 100;
+    uint8_t probability = 100;
+    uint8_t retrig_count = 0;
+    uint8_t retrig_rate_ticks = 0;
+    uint8_t reserved = 0;
+    int16_t micro_offset = 0;
+    SeqLockState locks[SEQ_STEP_LOCKS]{};
+} __attribute__((packed));
+
+struct SeqPatternSyncMessage {
+    uint32_t request_id = 0;
+    uint8_t track = 0;
+    uint8_t first_step = 0;
+    uint8_t length = 0;
+    uint8_t scale = 0;
+    uint8_t swing = 50;
+    uint8_t enabled = 0;
+    uint8_t clock_source = SEQ_CLOCK_INTERNAL;
+    uint8_t input_mode = SEQ_INPUT_PLAY;
+    uint8_t quantize = 0;
+    uint8_t valid = 0;  // 0: invalid request; no step data may be used
+    uint16_t tempo_bpm_x100 = 12000;
+    SeqStepState steps[SEQ_PAGE_STEPS]{};
+} __attribute__((packed));
+
+static_assert(sizeof(SeqPatternRequestMessage) == 8, "sequencer request wire size");
+static_assert(sizeof(SeqStepState) == 20, "sequencer step wire size");
+static_assert(sizeof(SeqPatternSyncMessage) == 336, "sequencer page wire size");
+static_assert(sizeof(SeqPatternSyncMessage) <= 506, "page fits a 512-byte packet");
 
 // MSG_SEQ_PLAYHEAD (D->E): coalesced playhead + sync feedback for the UI.
 // measured_bpm_x100 mirrors SeqTransportMessage's tempo encoding.

@@ -16,6 +16,7 @@ namespace Sequencer {
 enum class SequencerCommandType : uint8_t {
     Transport,
     PatternOp,
+    PatternRequest,
     MidiClock,
     MidiCc,
 };
@@ -24,6 +25,7 @@ struct SequencerCommand {
     SequencerCommandType type = SequencerCommandType::Transport;
     Protocol::SeqTransportMessage transport{};
     Protocol::SeqPatternOpMessage pattern_op{};
+    Protocol::SeqPatternRequestMessage pattern_request{};
     Protocol::MidiClockEventMessage midi_clock{};
     Protocol::MidiCcMessage midi_cc{};
 };

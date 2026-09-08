@@ -175,6 +175,12 @@ class SequencerTransport {
                     SetParamLock(
                         pending_pattern_.tracks[m.track].steps[m.step], m.arg_u8, m.arg_u16);
                 break;
+            case SEQ_OP_CLEAR_TRACK:
+                if (m.track < kMaxTracks) {
+                    for (auto& step: pending_pattern_.tracks[m.track].steps)
+                        step = Step{};
+                }
+                break;
             case SEQ_OP_CLEAR_PARAM_LOCKS:
                 if (StepValid(m.track, m.step)) {
                     Step& s = pending_pattern_.tracks[m.track].steps[m.step];
@@ -281,6 +287,44 @@ class SequencerTransport {
             sync_state,
             bpm_x100,
             scheduler_.PlayheadLoop());
+    }
+
+    // Callback-owned readback. No foreground reader touches either Pattern.
+    void BuildPatternPage(const Protocol::SeqPatternRequestMessage& request,
+                          Protocol::SeqPatternSyncMessage& out) const {
+        static_assert(kMaxTracks == Protocol::SEQ_TRACK_COUNT &&
+                          kMaxSteps == Protocol::SEQ_MAX_STEPS &&
+                          kMaxParamLocks == Protocol::SEQ_STEP_LOCKS,
+                      "wire/model bounds agree");
+        out = Protocol::SeqPatternSyncMessage{};
+        out.request_id = request.request_id;
+        out.track = request.track;
+        out.first_step = request.first_step;
+        if (!Protocol::IsValidSeqPatternRequest(request))
+            return;
+        out.valid = 1;
+        out.length = pending_pattern_.length;
+        out.scale = static_cast<uint8_t>(pending_pattern_.scale);
+        out.swing = pending_pattern_.swing;
+        out.enabled = pending_pattern_.tracks[request.track].enabled;
+        out.clock_source = using_midi_ ? Protocol::SEQ_CLOCK_MIDI : Protocol::SEQ_CLOCK_INTERNAL;
+        out.input_mode = input_mode_;
+        out.quantize = quantize_;
+        out.tempo_bpm_x100 = static_cast<uint16_t>(tempo_bpm_ * 100.0 + 0.5);
+        for (uint8_t i = 0; i < Protocol::SEQ_PAGE_STEPS; ++i) {
+            const auto& step = pending_pattern_.tracks[request.track].steps[request.first_step + i];
+            auto& wire = out.steps[i];
+            wire.on = step.on;
+            wire.velocity = step.velocity;
+            wire.probability = step.probability;
+            wire.micro_offset = step.micro_offset;
+            wire.retrig_count = step.retrig_count;
+            wire.retrig_rate_ticks = step.retrig_rate_ticks;
+            for (uint8_t k = 0; k < kMaxParamLocks; ++k) {
+                wire.locks[k].parameter = step.param_locks[k].param_id;
+                wire.locks[k].value = step.param_locks[k].value;
+            }
+        }
     }
 
     bool IsPlaying() const { return scheduler_.IsPlaying(); }

@@ -7,6 +7,7 @@
 #include "ui/ui_instrument_page.h"
 #include "ui/ui_main_menu.h"
 #include "ui/ui_play_page.h"
+#include "ui/ui_sequencer_page.h"
 
 static const char* TAG = "UI_NAV_INTEGRATION";
 
@@ -23,6 +24,7 @@ void initNavigationSystem() {
     nav.setRootGroupFactory(RootGroup::Sample, createSampleGroup);
     nav.setRootGroupFactory(RootGroup::Instrument, createInstrumentPage);
     nav.setRootGroupFactory(RootGroup::Play, createPlayPage);
+    nav.setRootGroupFactory(RootGroup::Sequencer, createSequencerPage);
     nav.setRootGroupFactory(RootGroup::Settings, createSettingsGroup);
     nav.setRootGroupFactory(RootGroup::Diagnostics, createDiagnosticsPage);
 

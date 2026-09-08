@@ -184,3 +184,11 @@ void ui_theme_apply_container_style(lv_obj_t* container, bool has_border);
 void ui_theme_apply_label_style(lv_obj_t* label, bool is_title);
 
 #endif  // WAVEX_UI_THEME_H
+
+// Sequencer: four Track rows by sixteen steps, with touch parameter tiles.
+#define UI_SEQ_TOOLBAR_HEIGHT 100
+#define UI_SEQ_GRID_TOP 126
+#define UI_SEQ_ROW_HEIGHT 76
+#define UI_SEQ_TRACK_WIDTH 192
+#define UI_SEQ_DETAIL_TOP 440
+#define UI_SEQ_DETAIL_HEIGHT 100

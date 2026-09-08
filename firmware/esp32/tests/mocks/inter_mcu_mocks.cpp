@@ -71,3 +71,14 @@ void inter_mcu_invoke_envelope_chunk_callback(const WaveX::Protocol::EnvelopeChu
     cap.envelope_columns.assign(columns,
                                 columns + static_cast<size_t>(header.columns) * header.channels);
 }
+
+void inter_mcu_store_seq_page(const WaveX::Protocol::SeqPatternSyncMessage& page) {
+    auto& cap = GetInterMcuCapture();
+    cap.seq_page_calls++;
+    cap.last_seq_page = page;
+}
+void inter_mcu_store_seq_playhead(const WaveX::Protocol::SeqPlayheadMessage& playhead) {
+    auto& cap = GetInterMcuCapture();
+    cap.seq_playhead_calls++;
+    cap.last_seq_playhead = playhead;
+}

@@ -332,3 +332,12 @@ void inter_mcu_get_meter_data(wavex_meter_data_t* out);
 
 // Called by both link backends as each packet is classified.
 void inter_mcu_increment_packet_stat(uint8_t packet_type);
+
+// Sequencer values cross UART -> UI through synchronized complete snapshots.
+esp_err_t inter_mcu_send_seq_transport(const WaveX::Protocol::SeqTransportMessage& message);
+esp_err_t inter_mcu_send_seq_pattern_op(const WaveX::Protocol::SeqPatternOpMessage& message);
+esp_err_t inter_mcu_request_seq_page(const WaveX::Protocol::SeqPatternRequestMessage& request);
+void inter_mcu_store_seq_page(const WaveX::Protocol::SeqPatternSyncMessage& page);
+void inter_mcu_store_seq_playhead(const WaveX::Protocol::SeqPlayheadMessage& playhead);
+bool inter_mcu_get_seq_page(WaveX::Protocol::SeqPatternSyncMessage* out);
+bool inter_mcu_get_seq_playhead(WaveX::Protocol::SeqPlayheadMessage* out);

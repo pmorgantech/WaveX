@@ -241,6 +241,18 @@ static WaveX::Sequencer::SequencerTransport& s_seq_transport = s_seq_transport_s
 static constexpr uint32_t kSequencerCommandQueueSize = 32;
 static WaveX::Sequencer::SequencerCommandQueue<kSequencerCommandQueueSize> s_seq_command_queue;
 
+// Callback produces complete readbacks; foreground alone serializes them.
+static WaveX::BssStatic<SnapshotMailbox<SeqPatternSyncMessage>> s_seq_page_mailbox_storage;
+static auto& s_seq_page_mailbox = s_seq_page_mailbox_storage.Get();
+static WaveX::BssStatic<SnapshotMailbox<SeqPlayheadMessage>> s_seq_head_mailbox_storage;
+static auto& s_seq_head_mailbox = s_seq_head_mailbox_storage.Get();
+static WaveX::BssStatic<SeqPatternSyncMessage> s_seq_page_pending_storage;
+static WaveX::BssStatic<SeqPlayheadMessage> s_seq_head_pending_storage;
+static bool s_seq_page_pending = false;
+static bool s_seq_head_pending = false;
+static uint32_t s_seq_telemetry_frames = 0;
+static uint32_t s_seq_telemetry_interval = 1;
+
 // Pattern row N addresses Track N's Instrument. Resolution stays on the
 // main loop; the callback only reads complete prepared bindings.
 static WaveX::BssStatic<SequencerVoiceMap> s_seq_voice_map_active_storage;
@@ -406,6 +418,8 @@ static bool drain_note_queue() {
 // The main loop publishes that map before enqueuing PLAY, so step 0 sees the
 // complete matching binding.
 static bool drain_sequencer(uint16_t block_size) {
+    SeqPatternRequestMessage read_request;
+    bool read_requested = false;
     WaveX::Sequencer::SequencerCommand command;
     while (s_seq_command_queue.Pop(command)) {
         switch (command.type) {
@@ -415,6 +429,10 @@ static bool drain_sequencer(uint16_t block_size) {
             case WaveX::Sequencer::SequencerCommandType::PatternOp:
                 s_seq_transport.ApplyPatternOp(command.pattern_op);
                 break;
+            case WaveX::Sequencer::SequencerCommandType::PatternRequest:
+                read_request = command.pattern_request;
+                read_requested = true;
+                break;
             case WaveX::Sequencer::SequencerCommandType::MidiClock:
                 s_seq_transport.OnMidiClock(command.midi_clock);
                 break;
@@ -423,9 +441,20 @@ static bool drain_sequencer(uint16_t block_size) {
                 break;
         }
     }
+    // At most one bounded page copy per callback, regardless of request bursts.
+    if (read_requested) {
+        SeqPatternSyncMessage page;
+        s_seq_transport.BuildPatternPage(read_request, page);
+        s_seq_page_mailbox.Publish(page);
+    }
     const uint64_t block_start_frame = s_seq_transport.scheduler().CurrentFrame();
     WaveX::Sequencer::TriggerEvent events[WaveX::Sequencer::kMaxEventsPerTick];
     const size_t event_count = s_seq_transport.Tick(events, WaveX::Sequencer::kMaxEventsPerTick);
+    s_seq_telemetry_frames += block_size;
+    if (s_seq_telemetry_frames >= s_seq_telemetry_interval) {
+        s_seq_telemetry_frames = 0;
+        s_seq_head_mailbox.Publish(s_seq_transport.BuildPlayhead());
+    }
     bool any_trigger = false;
     for (size_t event_index = 0; event_index < event_count; ++event_index) {
         const WaveX::Sequencer::TriggerEvent& event = events[event_index];
@@ -1880,6 +1909,17 @@ void Init(DaisySeed& hw, float sample_rate, bool sdram_available) {
     s_note_queue.Init();
     s_voice_stop_fence.Init();
     s_seq_command_queue.Init();
+    s_seq_page_pending_storage.Reconstruct();
+    s_seq_head_pending_storage.Reconstruct();
+    s_seq_page_mailbox.Init(s_seq_page_pending_storage.Get());
+    s_seq_head_mailbox.Init(s_seq_head_pending_storage.Get());
+    s_seq_page_pending = false;
+    s_seq_head_pending = false;
+    s_seq_telemetry_frames = 0;
+    s_seq_telemetry_interval = static_cast<uint32_t>(sample_rate / 25.0f);
+    if (s_seq_telemetry_interval == 0)
+        s_seq_telemetry_interval = 1;
+
     s_seq_voice_map_active_storage.Reconstruct();
     s_seq_voice_map_scratch_storage.Reconstruct();
     s_seq_voice_map_mailbox.Init(s_seq_voice_map_active);
@@ -2472,6 +2512,27 @@ void OnSeqTransport(const SeqTransportMessage& m) {
                               (unsigned)m.clock_source,
                               (unsigned)m.tempo_bpm_x100);
 #endif
+}
+
+void OnSeqPatternRequest(const SeqPatternRequestMessage& request) {
+    WaveX::Sequencer::SequencerCommand command;
+    command.type = WaveX::Sequencer::SequencerCommandType::PatternRequest;
+    command.pattern_request = request;
+    EnqueueSequencerCommand(command);
+}
+
+void PumpSequencerState() {
+    auto& page = s_seq_page_pending_storage.Get();
+    auto& head = s_seq_head_pending_storage.Get();
+    s_seq_page_pending |= s_seq_page_mailbox.ConsumeLatest(page);
+    s_seq_head_pending |= s_seq_head_mailbox.ConsumeLatest(head);
+    if (s_seq_page_pending) {
+        if (WaveX::Comm::UartLinkSend(MSG_SEQ_PATTERN_SYNC, &page, sizeof(page)) < 0)
+            return;
+        s_seq_page_pending = false;
+    }
+    if (s_seq_head_pending && WaveX::Comm::UartLinkSend(MSG_SEQ_PLAYHEAD, &head, sizeof(head)) >= 0)
+        s_seq_head_pending = false;
 }
 
 void OnSeqPatternOp(const SeqPatternOpMessage& m) {

@@ -63,8 +63,10 @@ velocity-aware zone selection remain open. Open work:
 1. Verify sample-offset timing and edit boundaries on hardware for the
    four-track gate; complete note/velocity-aware prepared resolution.
 2. Serialize MIDI clock out on the ESP32's DIN and USB paths (needs 2.P.5).
-3. Build the pad grid, step editor, kit editor, and TLC5947 LED feedback
-   (needs 2.P.1–3).
+3. Complete the kit editor and TLC5947 LED feedback. The touch Play pads
+   and sequencer grid are built; the grid pages across all 16 Tracks and 64
+   steps and edits tempo, swing, length, scale, velocity, probability and mute.
+   Physical controls/LED feedback require 2.P.1–3; touch workflows do not.
 4. Persist kits, patterns, and songs atomically through WXCF.
 5. Apply per-step parameter locks to trigger parameters.
 
@@ -87,11 +89,13 @@ scope reduction or a backend port. Re-run the checkpoint before adding
 callback scope. Parameter locks remain item 5 and were programmed but not
 applied by either measured callback.
 
-### 2.P — Panel controls and MIDI I/O (prerequisite for items 2 and 3)
+### 2.P — Panel controls and MIDI I/O (physical integration)
 
-Design: `features/panel-controls.md` (decided 2026-09-05). Today the panel
-is touch plus two PCNT encoders and the logical panel key map; no LED or pot driver
-exists, and DIN MIDI is compiled out because its RX pin was the flash port.
+Design: `features/panel-controls.md` (decided 2026-09-05). The physical
+panel is not wired yet (confirmed 2026-09-07). Touchscreen work can continue,
+including the Phase 2 kit editor using the Phase 2.5 Instrument model.
+PCNT encoder support and the logical key map exist in firmware; their
+physical integration, LED/pot drivers and DIN MIDI remain deferred.
 Stages, one commit each:
 
 2. TCA8418 interrupt-driven keypad task (fallback poll retained).

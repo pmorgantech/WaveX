@@ -725,3 +725,22 @@ TEST_F(MessageDispatchTest, EmptyPayloadReachesNoHandlerForAnyMessageType) {
 }
 
 }  // namespace
+
+TEST_F(MessageDispatchTest, SequencerPageRequestReachesCallbackBoundary) {
+    SeqPatternRequestMessage request;
+    request.request_id = 0x12345678;
+    request.track = 15;
+    request.first_step = 48;
+    Dispatch(MSG_SEQ_PATTERN_SYNC, request);
+    ASSERT_EQ(GetDispatchRecord().seq_pattern_requests.size(), 1u);
+    EXPECT_EQ(GetDispatchRecord().seq_pattern_requests[0].request_id, request.request_id);
+    EXPECT_EQ(GetDispatchRecord().seq_pattern_requests[0].track, 15);
+    EXPECT_EQ(GetDispatchRecord().seq_pattern_requests[0].first_step, 48);
+}
+
+TEST_F(MessageDispatchTest, TruncatedSequencerPageRequestsAreDropped) {
+    uint8_t payload[sizeof(SeqPatternRequestMessage)] = {};
+    for (size_t length = 0; length < sizeof(payload); ++length)
+        ProcessInterMcuMessage(MSG_SEQ_PATTERN_SYNC, 1, payload, length);
+    EXPECT_TRUE(GetDispatchRecord().seq_pattern_requests.empty());
+}

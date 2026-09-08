@@ -269,7 +269,14 @@ class Esp32(Target):
         """From the main menu, selects `item` by name via the encoder."""
         self.home()
         st = self.wait_state(page="Main_Menu")
-        items = ["Sample", "Instrument", "Play", "Settings", "Diagnostics"]
+        items = [
+            "Sample",
+            "Instrument",
+            "Play",
+            "Sequencer",
+            "Settings",
+            "Diagnostics",
+        ]
         if item not in items:
             raise TargetError(f"unknown menu item {item!r}")
         # Steer from wherever the highlight was left (the menu wraps, so

@@ -24,6 +24,7 @@ enum class RootGroup : uint8_t {
     Mixer,
     Settings,
     Diagnostics,  ///< menu only; no panel key
+    Sequencer,    ///< touchscreen composition surface
     Count
 };
 
@@ -43,6 +44,8 @@ inline const char* rootGroupName(RootGroup group) {
             return "Mixer";
         case RootGroup::Settings:
             return "Settings";
+        case RootGroup::Sequencer:
+            return "Sequencer";
         case RootGroup::Diagnostics:
             return "Diagnostics";
         default:

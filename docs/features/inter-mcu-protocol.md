@@ -174,3 +174,24 @@ per-pump packet flush. This is a byte-count comparison, not measured hardware
 latency. Small scans can use more framing bytes with the smaller packets.
 Bench acceptance remains concurrent streamed playback, control bursts, repeated
 sample/window changes, UART queue statistics and a zero-underrun soak.
+
+
+## Sequencer page readback
+
+MSG_SEQ_PATTERN_SYNC now has directional payloads defined in protocol.h:
+the frontend requests one Track and one aligned 16-step window with a nonzero
+request id; the backend echoes that id with the complete pending-pattern page,
+global groove/transport settings and all four locks per step. Invalid windows
+return valid = 0. Runtime sample ids and Instrument bindings are absent:
+Patterns own steps, and Tracks retain their Instruments.
+
+Clients keep one page request outstanding, reject stale request ids and retry
+a timed-out read rather than replaying non-idempotent edits. Callback-owned
+readback is published as one immutable value to the main loop; serialization
+and UART transmission remain foreground work. Multiple reads in one callback
+may coalesce to the newest request.
+
+SEQ_TRANSPORT_CONFIGURE updates tempo/mode without restarting playback.
+SEQ_OP_CLEAR_TRACK clears every step and lock in one row while preserving its
+mute setting. The wire shapes, sizes and bounds are centralized in
+firmware/shared/spi_protocol/protocol.h.

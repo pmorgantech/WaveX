@@ -88,10 +88,11 @@ class PacketRouterTest : public ::testing::Test {
     int TotalDispatches() const {
         const auto& cap = GetInterMcuCapture();
         return g_handlers.sync_calls + g_handlers.error_calls + g_handlers.unknown_calls +
-               cap.heartbeat_calls + cap.meter_calls + cap.browse_resp_calls +
-               cap.envelope_chunk_calls + cap.sample_status_calls + cap.inst_status_calls +
-               cap.storage_status_calls + cap.stop_resp_calls + cap.diag_push_calls +
-               cap.sample_meta_calls + cap.sample_mem_status_calls + cap.cv_cal_calls;
+               cap.seq_page_calls + cap.seq_playhead_calls + cap.heartbeat_calls + cap.meter_calls +
+               cap.browse_resp_calls + cap.envelope_chunk_calls + cap.sample_status_calls +
+               cap.inst_status_calls + cap.storage_status_calls + cap.stop_resp_calls +
+               cap.diag_push_calls + cap.sample_meta_calls + cap.sample_mem_status_calls +
+               cap.cv_cal_calls;
     }
 
     std::unique_ptr<PacketRouter> router_;
@@ -587,4 +588,44 @@ TEST_F(PacketRouterTest, CompactEnvelopeAdmitsMaximumChunkButRejectsAnExtraValue
     memcpy(payload.data(), &h, sizeof(h));
     router_->route_uart_message(MSG_ENVELOPE_CHUNK, payload.data(), payload.size(), 0, 2);
     EXPECT_EQ(GetInterMcuCapture().envelope_chunk_calls, 1);
+}
+
+TEST_F(PacketRouterTest, SequencerReadbackRoutesCompleteValuesAndRejectsEveryTruncation) {
+    SeqPatternSyncMessage page;
+    page.request_id = 0xABCDEF12;
+    page.track = 15;
+    page.first_step = 48;
+    page.valid = 1;
+    page.length = 64;
+    page.steps[15].on = 1;
+    page.steps[15].velocity = 119;
+    page.steps[15].micro_offset = -17;
+    for (size_t len = 0; len < sizeof(page); ++len) {
+        std::vector<uint8_t> exact(len, 0);
+        router_->route_uart_message(MSG_SEQ_PATTERN_SYNC, exact.data(), exact.size(), 0, 1);
+    }
+    EXPECT_EQ(GetInterMcuCapture().seq_page_calls, 0);
+    router_->route_uart_message(
+        MSG_SEQ_PATTERN_SYNC, reinterpret_cast<const uint8_t*>(&page), sizeof(page), 0, 2);
+    ASSERT_EQ(GetInterMcuCapture().seq_page_calls, 1);
+    const auto& got = GetInterMcuCapture().last_seq_page;
+    EXPECT_EQ(got.request_id, page.request_id);
+    EXPECT_EQ(got.track, 15);
+    EXPECT_EQ(got.first_step, 48);
+    EXPECT_EQ(got.steps[15].velocity, 119);
+    EXPECT_EQ(got.steps[15].micro_offset, -17);
+}
+
+TEST_F(PacketRouterTest, SequencerPlayheadRoutesToSnapshotBoundary) {
+    SeqPlayheadMessage head(0, 63, 1, 2, 13925, 0x12345678);
+    for (size_t len = 0; len < sizeof(head); ++len) {
+        std::vector<uint8_t> exact(len, 0);
+        router_->route_uart_message(MSG_SEQ_PLAYHEAD, exact.data(), exact.size(), 0, 1);
+    }
+    EXPECT_EQ(GetInterMcuCapture().seq_playhead_calls, 0);
+    router_->route_uart_message(
+        MSG_SEQ_PLAYHEAD, reinterpret_cast<const uint8_t*>(&head), sizeof(head), 0, 2);
+    ASSERT_EQ(GetInterMcuCapture().seq_playhead_calls, 1);
+    EXPECT_EQ(GetInterMcuCapture().last_seq_playhead.step, 63);
+    EXPECT_EQ(GetInterMcuCapture().last_seq_playhead.loop_count, 0x12345678u);
 }

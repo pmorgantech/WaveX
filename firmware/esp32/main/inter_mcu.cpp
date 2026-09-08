@@ -1164,3 +1164,67 @@ void inter_mcu_handle_sample_stop_response(bool success) {
         ESP_LOGE("InterMCU", "s_statistics is NULL in handle_sample_stop_response");
     }
 }
+
+namespace {
+portMUX_TYPE s_seq_snapshot_lock = portMUX_INITIALIZER_UNLOCKED;
+WaveX::Protocol::SeqPatternSyncMessage s_seq_page;
+WaveX::Protocol::SeqPlayheadMessage s_seq_playhead;
+bool s_seq_page_valid = false;
+bool s_seq_playhead_valid = false;
+}  // namespace
+
+esp_err_t inter_mcu_send_seq_transport(const WaveX::Protocol::SeqTransportMessage& message) {
+    return send_uart_message(WaveX::Protocol::MSG_SEQ_TRANSPORT, &message, sizeof(message)) >= 0
+               ? ESP_OK
+               : ESP_FAIL;
+}
+
+esp_err_t inter_mcu_send_seq_pattern_op(const WaveX::Protocol::SeqPatternOpMessage& message) {
+    return send_uart_message(WaveX::Protocol::MSG_SEQ_PATTERN_OP, &message, sizeof(message)) >= 0
+               ? ESP_OK
+               : ESP_FAIL;
+}
+
+esp_err_t inter_mcu_request_seq_page(const WaveX::Protocol::SeqPatternRequestMessage& request) {
+    if (!WaveX::Protocol::IsValidSeqPatternRequest(request))
+        return ESP_ERR_INVALID_ARG;
+    return send_uart_message(WaveX::Protocol::MSG_SEQ_PATTERN_SYNC, &request, sizeof(request)) >= 0
+               ? ESP_OK
+               : ESP_FAIL;
+}
+
+void inter_mcu_store_seq_page(const WaveX::Protocol::SeqPatternSyncMessage& page) {
+    taskENTER_CRITICAL(&s_seq_snapshot_lock);
+    s_seq_page = page;
+    s_seq_page_valid = true;
+    taskEXIT_CRITICAL(&s_seq_snapshot_lock);
+}
+
+void inter_mcu_store_seq_playhead(const WaveX::Protocol::SeqPlayheadMessage& playhead) {
+    taskENTER_CRITICAL(&s_seq_snapshot_lock);
+    s_seq_playhead = playhead;
+    s_seq_playhead_valid = true;
+    taskEXIT_CRITICAL(&s_seq_snapshot_lock);
+}
+
+bool inter_mcu_get_seq_page(WaveX::Protocol::SeqPatternSyncMessage* out) {
+    if (!out)
+        return false;
+    taskENTER_CRITICAL(&s_seq_snapshot_lock);
+    const bool valid = s_seq_page_valid;
+    if (valid)
+        *out = s_seq_page;
+    taskEXIT_CRITICAL(&s_seq_snapshot_lock);
+    return valid;
+}
+
+bool inter_mcu_get_seq_playhead(WaveX::Protocol::SeqPlayheadMessage* out) {
+    if (!out)
+        return false;
+    taskENTER_CRITICAL(&s_seq_snapshot_lock);
+    const bool valid = s_seq_playhead_valid;
+    if (valid)
+        *out = s_seq_playhead;
+    taskEXIT_CRITICAL(&s_seq_snapshot_lock);
+    return valid;
+}

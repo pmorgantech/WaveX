@@ -86,6 +86,7 @@ std::shared_ptr<UIPage> createMainMenu() {
         {"Sample", "Manage / Browse / Edit / Record", RootGroup::Sample},
         {"Instrument", "Sample / Env / Amp / Filter / Mod", RootGroup::Instrument},
         {"Play", "Pads / Keys", RootGroup::Play},
+        {"Sequencer", "Steps / Tempo / Swing", RootGroup::Sequencer},
         {"Settings", "Display / Storage / MIDI / System / Calibrate", RootGroup::Settings},
         {"Diagnostics",
          "ESP32 / Daisy / Audio / Link / Storage / MIDI / Panel",

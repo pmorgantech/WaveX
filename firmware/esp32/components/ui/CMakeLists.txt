@@ -33,6 +33,7 @@ set(COMPONENT_SRCS
     "src/current_sample.cpp"
     "src/current_track.cpp"
     "pages/ui_play_page.cpp"
+    "pages/ui_sequencer_page.cpp"
     "pages/ui_sample_manager_page.cpp"
     "pages/ui_system_info_page.cpp"
     "pages/ui_instrument_page.cpp"

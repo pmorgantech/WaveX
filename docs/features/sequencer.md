@@ -139,3 +139,27 @@ No performance improvement is claimed without the corresponding DWT result.
 - [Instrument and sample ownership](instrument-model.md)
 - [Melodic sequencing target](melodic-sequencing.md)
 - [Testing guide](../testing_guide.md)
+
+
+## Touch grid implementation
+
+The main menu's Sequencer page shows four Tracks by sixteen steps, with
+Track and step paging across sixteen Tracks and sixty-four steps. Touch a
+cell to select its Track/step and toggle it; drag the tempo, swing, length,
+scale, velocity and probability tiles to edit. Play/Stop leaves the pattern
+running across navigation. Shift exposes Track mute, Step off and confirmed
+Clear row (all sixty-four steps, including locks and hidden pages).
+
+Daisy owns the pending pattern and publishes requested sixteen-step windows
+from the callback through a snapshot mailbox. Request IDs reject stale
+responses after a page/Track change. The UI disables unread cells and retries
+lost readback; link loss invalidates its editable cache. Main-loop UART
+publication retains unsent state, including a coalesced 25 Hz playhead.
+Tempo configuration preserves transport position. Rows currently trigger
+their matching Track at MIDI note 60; arbitrary note lanes and parameter-lock
+application remain separate work.
+
+The connected-board regression test covers edits at Track 16/step 64, tempo
+and swing changes, navigation while playing, and confirmed row clearing
+through on-screen softkeys. It does not verify physical panel wiring, audible
+timing, external MIDI synchronization or the Phase 2 gate.

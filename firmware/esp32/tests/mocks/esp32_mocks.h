@@ -121,6 +121,10 @@ struct InterMcuCapture {
     uint8_t sample_status_channels = 0;
     uint32_t sample_status_frames = 0;
 
+    int seq_page_calls = 0;
+    int seq_playhead_calls = 0;
+    WaveX::Protocol::SeqPatternSyncMessage last_seq_page;
+    WaveX::Protocol::SeqPlayheadMessage last_seq_playhead;
     int inst_status_calls = 0;
     WaveX::Protocol::InstStatusMessage last_inst_status;
 

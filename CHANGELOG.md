@@ -11,6 +11,12 @@ versioning and release process.
 
 ## [Unreleased]
 
+### Added
+
+- Added a touchscreen step grid with backend-authoritative page readback,
+  live playhead feedback, and position-preserving tempo configuration; grid
+  navigation remains usable during playback and row clears retain track mute.
+
 ### Changed
 
 - Sequencer rows now address their matching Tracks at MIDI note 60 across all

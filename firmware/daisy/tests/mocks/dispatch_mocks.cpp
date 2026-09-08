@@ -176,6 +176,10 @@ void OnSeqTransport(const WaveX::Protocol::SeqTransportMessage& m) {
     WaveX::Test::GetDispatchRecord().seq_transports.push_back(m);
 }
 
+void OnSeqPatternRequest(const WaveX::Protocol::SeqPatternRequestMessage& m) {
+    WaveX::Test::GetDispatchRecord().seq_pattern_requests.push_back(m);
+}
+
 void OnSeqPatternOp(const WaveX::Protocol::SeqPatternOpMessage& m) {
     WaveX::Test::GetDispatchRecord().seq_pattern_ops.push_back(m);
 }
