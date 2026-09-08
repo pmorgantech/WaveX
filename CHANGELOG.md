@@ -19,7 +19,7 @@ versioning and release process.
 
 - Added a sixteen-pad drum Instrument editor with backend-authoritative pad
   readback, resident sample assignment and clearing, audition, Track-local
-  choke groups, confirmed kit creation, naming, and atomic new-copy WXI saves.
+  choke groups, confirmed kit creation, naming, and new-copy WXI saves.
   Protocol version 5 retains completed mutation results across read retries.
 
 ### Fixed
@@ -33,7 +33,7 @@ versioning and release process.
   callback usage with 32.9156% headroom across 122 DWT windows (610.2 s),
   zero underruns or dropped commands, and a STAY decision. Updated Phase 2
   status to reflect the completed touchscreen kit/grid workflows while keeping
-  arbitrary pad lanes, parameter locks, persistence, physical panel work and
+  arbitrary pad lanes, parameter locks, pattern/song persistence, physical panel work and
   the full phase gate open.
 
 - Sequencer rows now address their matching Tracks at MIDI note 60 across all
