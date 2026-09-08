@@ -76,6 +76,12 @@ loading Tracks are silent and never borrow another Track's Instrument.
 Retriggers retain the primary hit's note, velocity and step identity even when
 the pending pattern is edited.
 
+The foreground prepares immutable zone data and derives a compact lookup
+when drum zones each own a distinct note within a sixteen-note window.
+The callback then inspects only that pad's zone, retaining its velocity
+bounds and fades. Wider ranges and overlapping layers keep the bounded,
+ordered zone scan; empty and retired pads remain silent.
+
 These are one-note drum-shaped triggers. Changing note does not implement
 melodic gate lengths, automatic note-offs, chords or live recording.
 

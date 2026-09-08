@@ -57,6 +57,10 @@ versioning and release process.
   and added first-error FatFs/HAL diagnostics for foreground pattern I/O.
   The original pattern directory and full persistence gate remain unresolved.
 
+- Avoided full zone scans for unique single-note drum pads within the compact
+  indexed window while retaining the generic ordered layering fallback for
+  wider ranges, overlapping layers, and velocity splits.
+
 ### Changed
 
 - Recorded the touch kit/grid capacity follow-up at 67.0844% worst-case

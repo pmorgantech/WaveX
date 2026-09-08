@@ -1,7 +1,8 @@
 #pragma once
 
 // Immutable prepared zones: foreground alone resolves Pool references and
-// tuning. The callback scans at most 32 compact zone keys and copies at most
+// tuning. Single-zone drum pads use a compact index; other Instruments scan
+// at most 32 compact zone keys. The callback copies at most
 // four prepared triggers. It never reads foreground Instruments or the Pool.
 #include "audio/instrument.hpp"
 #include "sequencer/pattern.hpp"
@@ -15,10 +16,16 @@ struct SequencerVoiceMap {
         uint8_t key_lo = 0, key_hi = 0, vel_lo = 1, vel_hi = 127, flags = 0;
         bool drum = false;
     };
+    // A small lookup window, not a limit on supported note ranges or zones.
+    static constexpr uint8_t kDirectDrumKeys = 16;
+    static constexpr uint8_t kNoZone = 0xFF;
     struct PreparedTrack {
         // Foreground-only cache identity. The callback never inspects it.
         uint64_t revision = 0;
         uint8_t count = 0;
+        bool direct_drum = false;
+        uint8_t drum_base = 0;
+        uint8_t drum_zones[kDirectDrumKeys]{};
         Key keys[kMaxZones]{};
         VoiceTriggerParams zones[kMaxZones]{};
     };
@@ -30,6 +37,7 @@ struct SequencerVoiceMap {
         auto& dest = tracks[track];
         ++dest.revision;
         dest.count = 0;
+        dest.direct_drum = false;
         if (instrument.origin == InstrumentOrigin::None)
             return;
         for (const auto& zone: instrument.zones) {
@@ -48,6 +56,30 @@ struct SequencerVoiceMap {
             dest.zones[index] =
                 PrepareZoneTrigger(instrument, zone, sample, track, zone.root_note, 127);
         }
+        // Derive only when every prepared zone owns one distinct note in a
+        // compact window. Velocity bounds/fades still use the zone key.
+        if (instrument.mode != InstrumentMode::Drum || dest.count == 0)
+            return;
+        uint8_t low = 127, high = 0;
+        for (uint8_t i = 0; i < dest.count; ++i) {
+            const auto& key = dest.keys[i];
+            if (key.key_lo != key.key_hi)
+                return;
+            low = key.key_lo < low ? key.key_lo : low;
+            high = key.key_hi > high ? key.key_hi : high;
+        }
+        if (high - low >= kDirectDrumKeys)
+            return;
+        for (auto& index: dest.drum_zones)
+            index = kNoZone;
+        for (uint8_t i = 0; i < dest.count; ++i) {
+            auto& index = dest.drum_zones[dest.keys[i].key_lo - low];
+            if (index != kNoZone)
+                return;  // layers and velocity splits retain ordered scanning
+            index = i;
+        }
+        dest.drum_base = low;
+        dest.direct_drum = true;
     }
 
     uint8_t Resolve(uint8_t track,
@@ -60,8 +92,18 @@ struct SequencerVoiceMap {
         if (max > kMaxLayerTriggers)
             max = kMaxLayerTriggers;
         const auto& source = tracks[track];
+        uint8_t begin = 0;
+        uint8_t end = source.count < kMaxZones ? source.count : kMaxZones;
+        if (source.direct_drum) {
+            if (note < source.drum_base || note - source.drum_base >= kDirectDrumKeys)
+                return 0;
+            begin = source.drum_zones[note - source.drum_base];
+            if (begin >= end)
+                return 0;
+            end = begin + 1;
+        }
         uint8_t count = 0;
-        for (uint8_t i = 0; i < source.count && i < kMaxZones && count < max; ++i) {
+        for (uint8_t i = begin; i < end && count < max; ++i) {
             const auto& key = source.keys[i];
             if (note < key.key_lo || note > key.key_hi || velocity < key.vel_lo ||
                 velocity > key.vel_hi)
@@ -93,6 +135,11 @@ struct SequencerVoiceMap {
                 continue;
             dest.revision = src.revision;
             dest.count = src.count < kMaxZones ? src.count : kMaxZones;
+            dest.direct_drum = src.direct_drum;
+            dest.drum_base = src.drum_base;
+            if (src.direct_drum)
+                for (uint8_t i = 0; i < kDirectDrumKeys; ++i)
+                    dest.drum_zones[i] = src.drum_zones[i];
             for (uint8_t i = 0; i < dest.count; ++i) {
                 dest.keys[i] = src.keys[i];
                 dest.zones[i] = src.zones[i];
