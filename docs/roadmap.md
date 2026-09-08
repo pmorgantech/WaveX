@@ -56,13 +56,12 @@ the same region without a UI freeze.
 
 ## Phase 2 — Groovebox core: sequencer and pads
 
-The scheduler, protocol and callback trigger path exist, with eight preview
-rows mapped to pitches on fixed Track index 0. Hardware timing remains
-unverified. Open work:
+The scheduler, protocol and callback trigger path exist. The 16 pattern rows
+address their matching Tracks at MIDI note 60; editable note lanes and
+velocity-aware zone selection remain open. Open work:
 
-1. Replace the fixed-Track preview with Track-addressed pattern triggering
-   for the four-track gate; verify sample-offset timing and edit boundaries
-   on hardware.
+1. Verify sample-offset timing and edit boundaries on hardware for the
+   four-track gate; complete note/velocity-aware prepared resolution.
 2. Serialize MIDI clock out on the ESP32's DIN and USB paths (needs 2.P.5).
 3. Build the pad grid, step editor, kit editor, and TLC5947 LED feedback
    (needs 2.P.1–3).

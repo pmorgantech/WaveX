@@ -289,7 +289,10 @@ sequencer events — recall copies into a Track. The **Sample Pool** is the one
 registry of resident samples, whoever loaded them. The **Performance** is the
 current live set of Track/Instrument bindings, routing, mixer state, and shared
 effects; v1 stores one such set directly in the Project rather than introducing
-another file type. Patterns own time and parameter locks. Changing Pattern
+another file type. Patterns own time and parameter locks. The as-built sequencer addresses each
+row to the matching Track at MIDI note 60 through a foreground-prepared
+immutable voice map; see [sequencer.md](features/sequencer.md) for the current
+note and velocity-resolution limits. Changing Pattern
 therefore does not silently replace the Performance's sound set. Scenes may
 recall sparse performance state, and Songs arrange Patterns, but both reference
 content rather than embedding duplicate samples or Instruments. Nothing claims

@@ -48,6 +48,7 @@ using q15_t = int16_t;
 #include "paraphonic_envelope.hpp"
 #include "sample_load_info.hpp"
 #include "sequencer/sequencer_command_queue.hpp"
+#include "sequencer_voice_map.hpp"
 #include "sfz_loader.hpp"
 #include "snapshot_mailbox.hpp"
 #include "track_live_updates.hpp"
@@ -240,19 +241,8 @@ static WaveX::Sequencer::SequencerTransport& s_seq_transport = s_seq_transport_s
 static constexpr uint32_t kSequencerCommandQueueSize = 32;
 static WaveX::Sequencer::SequencerCommandQueue<kSequencerCommandQueueSize> s_seq_command_queue;
 
-// Stage 5's deliberate interim voice map: one sample/Patch bound to Track 1
-// plays chromatically across the 16 scheduler rows. It is built on the main
-// loop with SfzLoader (which owns mutable instrument state) and published as
-// a complete snapshot. The callback therefore never races an SFZ rebind or
-// sample-registry mutation. A later Track->Patch implementation replaces this
-// map with one immutable binding per Track; it must not make the callback read
-// SfzLoader directly.
-static constexpr uint8_t kSequencerPreviewTrack = 0;
-static constexpr uint8_t kSequencerRootNote = 60;
-struct SequencerVoiceMap {
-    uint8_t layer_count[WaveX::Sequencer::kMaxTracks] = {};
-    VoiceTriggerParams layers[WaveX::Sequencer::kMaxTracks][kMaxLayerTriggers] = {};
-};
+// Pattern row N addresses Track N's Instrument. Resolution stays on the
+// main loop; the callback only reads complete prepared bindings.
 static WaveX::BssStatic<SequencerVoiceMap> s_seq_voice_map_active_storage;
 static SequencerVoiceMap& s_seq_voice_map_active = s_seq_voice_map_active_storage.Get();
 static WaveX::BssStatic<SnapshotMailbox<SequencerVoiceMap>> s_seq_voice_map_mailbox_storage;
@@ -736,21 +726,21 @@ static SampleRef ResolveLoadedSample(const void*, uint16_t sample_id) {
 static WaveX::BssStatic<SequencerVoiceMap> s_seq_voice_map_scratch_storage;
 
 static void PublishSequencerVoiceMap() {
-    s_seq_voice_map_scratch_storage.Reconstruct();
-    SequencerVoiceMap& map = s_seq_voice_map_scratch_storage.Get();
-    if (!SfzLoader::TrackLoading(kSequencerPreviewTrack)) {
-        for (uint8_t track = 0; track < WaveX::Sequencer::kMaxTracks; ++track) {
-            const uint8_t note = static_cast<uint8_t>(kSequencerRootNote + track);
-            map.layer_count[track] = SfzLoader::ResolveNote(
-                kSequencerPreviewTrack, note, 127, map.layers[track], kMaxLayerTriggers);
+    uint16_t loading_tracks = 0;
+    for (uint8_t track = 0; track < kNumTracks; ++track) {
+        if (SfzLoader::TrackLoading(track)) {
+            loading_tracks |= static_cast<uint16_t>(1u << track);
         }
     }
+    SequencerVoiceMap& map = s_seq_voice_map_scratch_storage.Get();
+    map.Rebuild(SfzLoader::ResolveNote, loading_tracks);
     s_seq_voice_map_mailbox.Publish(map);
 }
 
-static void ClearSequencerVoiceMap() {
-    s_seq_voice_map_scratch_storage.Reconstruct();
-    s_seq_voice_map_mailbox.Publish(s_seq_voice_map_scratch_storage.Get());
+static void ClearSequencerVoiceMap(uint16_t tracks = 0xFFFFu) {
+    SequencerVoiceMap& map = s_seq_voice_map_scratch_storage.Get();
+    map.Revoke(tracks);
+    s_seq_voice_map_mailbox.Publish(map);
 }
 
 // Drops `sample_id` from the registry and returns its memory to the arena.
@@ -867,13 +857,9 @@ void SelectSample(uint16_t sample_id, uint8_t slot) {
     // Preserve both the binding and the samples if the callback cannot confirm
     // its stop within the bounded main-loop wait.
     if (SfzLoader::TrackLoaded(slot)) {
-        if (slot == kSequencerPreviewTrack) {
-            ClearSequencerVoiceMap();
-        }
+        ClearSequencerVoiceMap(static_cast<uint16_t>(1u << slot));
         if (!StopTracksAndWait(static_cast<uint16_t>(1u << slot))) {
-            if (slot == kSequencerPreviewTrack) {
-                PublishSequencerVoiceMap();
-            }
+            PublishSequencerVoiceMap();
             PushTrackBinding(slot);
             WaveX::Log::PrintLine("SAMPLE_SELECT: track=%u callback stop timed out",
                                   (unsigned)slot);
@@ -881,13 +867,12 @@ void SelectSample(uint16_t sample_id, uint8_t slot) {
         }
     }
     if (!SfzLoader::BindSample(*s_pool, s_sample_mem_mgr, slot, sample_id)) {
+        PublishSequencerVoiceMap();
         WaveX::Log::PrintLine(
             "SAMPLE_SELECT: track=%u id=%u refused", (unsigned)slot, (unsigned)sample_id);
         return;
     }
-    if (slot == kSequencerPreviewTrack) {
-        PublishSequencerVoiceMap();
-    }
+    PublishSequencerVoiceMap();
     // The frontend caches bindings; tell it this one changed rather than
     // wait to be asked (the HIL suite found the cache going stale when a
     // Track changed behind the UI's back, 2026-09-04).
@@ -1896,6 +1881,7 @@ void Init(DaisySeed& hw, float sample_rate, bool sdram_available) {
     s_voice_stop_fence.Init();
     s_seq_command_queue.Init();
     s_seq_voice_map_active_storage.Reconstruct();
+    s_seq_voice_map_scratch_storage.Reconstruct();
     s_seq_voice_map_mailbox.Init(s_seq_voice_map_active);
     std::memset(s_scoped_release_overflow, 0, sizeof(s_scoped_release_overflow));
     __atomic_store_n(&s_scoped_release_pending_slots, 0u, __ATOMIC_RELAXED);
@@ -2341,9 +2327,7 @@ void OnControlChange(const ControlChangeMessage& ctrl_msg) {
         SfzLoader::SetInstrumentFilter(track, filter);
         SfzLoader::SetInstrumentEnv(track, env);
         s_track_live_updates.Publish(ComposeTrackLive(track, filter, env));
-        if (track == kSequencerPreviewTrack) {
-            PublishSequencerVoiceMap();
-        }
+        PublishSequencerVoiceMap();
     }
 }
 
@@ -2862,9 +2846,7 @@ void OnInstrumentOp(const InstOpMessage& request) {
         return;
     }
     if (SfzLoader::Begin(request) && request.op == INST_OP_SFZ_LOAD) {
-        if (request.slot == kSequencerPreviewTrack) {
-            ClearSequencerVoiceMap();
-        }
+        ClearSequencerVoiceMap(static_cast<uint16_t>(1u << request.slot));
         // Streaming audition and instrument import share FatFs/SD bandwidth.
         // A load owns storage until its cooperative state machine completes.
         CloseWav();
@@ -2881,9 +2863,7 @@ void PumpInstrumentLoad() {
         // Per-track barrier: only the Track being (re)loaded stops; what it
         // held is released on the callback's acknowledgement.
         if (stop_generation == 0) {
-            if (stop_track == kSequencerPreviewTrack) {
-                ClearSequencerVoiceMap();
-            }
+            ClearSequencerVoiceMap(static_cast<uint16_t>(1u << stop_track));
             stop_generation =
                 s_voice_stop_fence.RequestStop(static_cast<uint16_t>(1u << stop_track));
             return;
@@ -2895,18 +2875,15 @@ void PumpInstrumentLoad() {
         return;
     }
     stop_generation = 0;
-    const bool preview_was_loading = SfzLoader::TrackLoading(kSequencerPreviewTrack);
     const bool was_busy = SfzLoader::Busy();
     SfzLoader::Pump(*s_pool, s_sample_mem_mgr, s_sample_io, sizeof(s_sample_io));
     // The loader publishes its new slot binding only when its state machine
     // reaches Idle. Rebuild the callback-owned snapshot at that transition;
     // rebuilding during the load would expose incomplete sample pointers.
-    if (preview_was_loading && !SfzLoader::TrackLoading(kSequencerPreviewTrack)) {
-        PublishSequencerVoiceMap();
-    }
     // An import finishing (or failing) changes what its Track holds; push
     // every binding so the frontend's cache follows without asking.
     if (was_busy && !SfzLoader::Busy()) {
+        PublishSequencerVoiceMap();
         PushTrackBinding(0xFF);
     }
 }
@@ -3996,6 +3973,7 @@ void SetEditParams(uint16_t sample_id,
     PushSampleMeta(*info);
 
     ApplyMetaToStreaming(info);
+    PublishSequencerVoiceMap();
 }
 
 // Mirrors a record onto the streaming reader's byte offsets. Called whenever

@@ -13,6 +13,12 @@ versioning and release process.
 
 ### Changed
 
+- Sequencer rows now address their matching Tracks at MIDI note 60 across all
+  16 rows. Scoped voice-map revocation preserves unaffected Tracks during
+  rebinds and SFZ loads, and sample metadata edits refresh future hits without
+  altering active voice snapshots. Zone resolution remains fixed at velocity
+  127 until editable note and velocity lanes are implemented.
+
 - Recorded the recurring callback-headroom evidence: WaveX remains in the
   60–<70% STAY band at 65.8029% with zero underruns, while the DaisySP
   comparison reaches 89.6635% and correctly activates backend-upgrade

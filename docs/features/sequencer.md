@@ -1,8 +1,9 @@
 # Sequencer and Digital Voice Playback
 
 **Status:** The scheduler, transport, command queue, callback trigger path and
-playhead publication are implemented. The current preview maps eight pattern
-rows to pitches on Track 1; it is not the target multi-Track sequencer.
+playhead publication are implemented. Each of the 16 pattern rows addresses
+the matching Track's Instrument at MIDI note 60. Editable note lanes remain
+future work.
 The panel step editor, MIDI clock output, parameter-lock application and
 project persistence remain open Phase 2 work in [roadmap.md](../roadmap.md).
 Host tests and device compilation do not establish audible timing or the
@@ -25,8 +26,12 @@ pattern and clock commands into a fixed SPSC queue. The callback drains the
 queue before ticking, so foreground edits do not mutate a pattern being read
 by the scheduler.
 
-The main loop resolves the current preview Instrument into a complete voice-map
-snapshot and publishes it through a triple-buffer mailbox. The callback uses
+The main loop resolves each Track's Instrument into a complete voice-map
+snapshot and publishes it through a triple-buffer mailbox. Loading Tracks are
+excluded. Rebinding revokes only the affected row before requesting the
+callback's voice-stop acknowledgement; other rows keep their bindings.
+A completed or failed load republishes the current bindings, and sample edits
+refresh future triggers without modifying voices already holding a snapshot. The callback uses
 those prepared trigger parameters, including intra-block offsets, without SD
 I/O, allocation or note-resolution work against the foreground sample table.
 Sample retirement must revoke these snapshots before freeing their storage.
@@ -54,11 +59,16 @@ recording.
 
 ## 3. Pattern and voice models
 
-The current bounded `pattern.hpp` model contains eight rows, up to 64 steps
+The current bounded `pattern.hpp` model contains 16 rows, up to 64 steps
 per row and four parameter locks per step. The default length is 16 steps.
-The preview resolves row `r` to `root + r` on fixed Track index 0.
-This temporary mapping must be replaced with Track-addressed Instrument
-resolution for the four-track panel gate.
+Row `r` resolves MIDI note 60 on Track index `r`; an empty or loading Track
+is silent and never borrows another Track's Instrument. The prepared map and
+voice limit retain their existing sizes.
+
+Resolution still uses velocity 127 to choose zones; a step's velocity changes
+the resulting voice amplitude. Velocity-layer selection and crossfade weights
+are therefore not yet step-accurate. Editable per-step notes and velocity-aware
+prepared resolution must arrive together with the melodic note lanes.
 
 The target hierarchy is defined once in
 [track-and-patch-model.md](track-and-patch-model.md): Patterns address Tracks;
@@ -112,8 +122,11 @@ transport command as a completed panel workflow.
 
 Host coverage includes scheduler event ordering and timing, transport edits
 between steps, probability/retrigger boundaries, tempo-follower state,
-command-queue handoff and voice rendering. Extend these with the actual
-Track mapping and lock application when those replace the preview.
+command-queue handoff, Track mapping, scoped snapshot revocation and voice
+rendering. Lock application remains separate work. The hardware regressions in
+`tests/hil/test_sequencer_tracks.py` exercise four independently released
+Tracks (including Track 16), rebinding and SFZ import during sequencing, and sample-edit
+refresh for subsequent hits.
 
 Hardware acceptance remains in the roadmap: audible pitch across the Keys,
 SFZ root-note behavior, sample-loop behavior, live parameter sweeps,
