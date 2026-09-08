@@ -33,6 +33,9 @@ TEST(SequencerGridModelTest, StalePagesCannotOverwriteAnotherWindow) {
 TEST(SequencerGridModelTest, InvalidDataCannotMakeCellsEditable) {
     SequencerGridModel model;
     auto page = Reply(model.BeginRead(42, 2));
+    page.steps[15].note = 128;
+    EXPECT_FALSE(model.Accept(page));
+    page.steps[15].note = 75;
     page.steps[15].velocity = 128;
     EXPECT_FALSE(model.Accept(page));
     EXPECT_FALSE(model.Ready(2));

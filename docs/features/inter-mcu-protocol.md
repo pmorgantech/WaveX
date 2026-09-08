@@ -200,7 +200,7 @@ firmware/shared/spi_protocol/protocol.h.
 ## Instrument editor (protocol 5)
 
 InstOpMessage appends explicit pad_index, pad_choke and pad_sample_id fields.
-Both images must use protocol 5. Existing probe/load/modulation fields retain
+Both images must use the current protocol version (6). Existing probe/load/modulation fields retain
 their meanings. The central enums and packed structs in protocol.h define
 the wire layout.
 
@@ -220,3 +220,16 @@ are retained on a full UART queue. The UI never changes LVGL objects on RX.
 
 The bounded debug MSG payload now accommodates the 512-byte packet class's
 payload, including these extended requests.
+
+## Per-step notes (protocol 6)
+
+SEQ_OP_SET_STEP_NOTE sets arg_u8 to a MIDI note 0-127, independently of
+step on/off and velocity. Out-of-range notes are rejected. SeqStepState uses
+its former reserved byte for note (default 60), preserving the page's byte
+size. Both MCUs must use protocol 6: a protocol-5 page's reserved zero is
+not a valid substitute for a protocol-6 step's default note.
+
+Daisy resolves prepared zone keys against the scheduled note and velocity,
+including layer selection and crossfade weights. Retriggers preserve the
+primary hit's note and velocity. This is one note per drum-shaped step,
+not the future melodic chord/gate payload.

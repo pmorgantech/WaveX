@@ -179,8 +179,9 @@ class SequencerScheduler {
                     if (track.enabled && local_count < kMaxEventsPerTick) {
                         local[local_count] =
                             MakeEvent(t,
-                                      ts.step_index,
+                                      ts.pending_retrig_step,
                                       ts.pending_retrig_velocity,
+                                      ts.pending_retrig_note,
                                       true,
                                       nullptr,
                                       0,
@@ -222,6 +223,7 @@ class SequencerScheduler {
                                 MakeEvent(t,
                                           ts.step_index,
                                           step.velocity,
+                                          step.note,
                                           false,
                                           step.param_locks,
                                           CountLocks(step),
@@ -241,6 +243,8 @@ class SequencerScheduler {
                                 ts.next_retrig_tick = first_retrig;
                                 ts.retrig_clip_tick = upcoming_tick;
                                 ts.pending_retrig_velocity = step.velocity;
+                                ts.pending_retrig_note = step.note;
+                                ts.pending_retrig_step = ts.step_index;
                                 scheduled_retrig = true;
                             }
                         }
@@ -282,6 +286,8 @@ class SequencerScheduler {
         double retrig_rate_ticks = 0.0;
         double retrig_clip_tick = 0.0;
         uint8_t pending_retrig_velocity = 0;
+        uint8_t pending_retrig_note = 60;
+        uint8_t pending_retrig_step = 0;
     };
 
     uint8_t PatternLength() const {
@@ -393,6 +399,7 @@ class SequencerScheduler {
     static TriggerEvent MakeEvent(uint8_t track,
                                   uint8_t step,
                                   uint8_t velocity,
+                                  uint8_t note,
                                   bool is_retrig,
                                   const ParamLock* locks,
                                   uint8_t lock_count,
@@ -401,6 +408,7 @@ class SequencerScheduler {
         ev.track = track;
         ev.step = step;
         ev.velocity = velocity;
+        ev.note = note;
         ev.is_retrig = is_retrig;
         ev.frame = frame;
         ev.param_lock_count = lock_count;

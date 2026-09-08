@@ -255,11 +255,15 @@ static uint32_t s_seq_telemetry_interval = 1;
 
 // Pattern row N addresses Track N's Instrument. Resolution stays on the
 // main loop; the callback only reads complete prepared bindings.
-static WaveX::BssStatic<SequencerVoiceMap> s_seq_voice_map_active_storage;
-static SequencerVoiceMap& s_seq_voice_map_active = s_seq_voice_map_active_storage.Get();
-static WaveX::BssStatic<SnapshotMailbox<SequencerVoiceMap>> s_seq_voice_map_mailbox_storage;
-static SnapshotMailbox<SequencerVoiceMap>& s_seq_voice_map_mailbox =
-    s_seq_voice_map_mailbox_storage.Get();
+// One fixed allocation from the existing SDRAM allocator at startup. Its
+// lifetime is the engine's; sample reset releases Pool records only.
+// Larger snapshots exchange ownership without a callback-sized bulk copy.
+struct SequencerVoiceState {
+    SequencerVoiceMap pending;
+    SnapshotMailbox<SequencerVoiceMap> mailbox;
+};
+static SequencerVoiceState* s_seq_voices = nullptr;
+static wxsamp_t s_seq_voice_storage{};
 
 // --- Stage A paraphonic analog path (roadmap item 5; analog-voice-board.md
 // §0). One shared envelope drives the shared VCF/VCA CVs; values are
@@ -403,7 +407,8 @@ static bool drain_note_queue() {
     // A stop can retire samples referenced by the old sequencer map too.
     // Acquire the replacement map before acknowledging that no callback-owned
     // references can trigger them again on a later block.
-    s_seq_voice_map_mailbox.ConsumeLatest(s_seq_voice_map_active);
+    if (s_seq_voices)
+        s_seq_voices->mailbox.AcquireLatest();
     s_voice_stop_fence.ConsumeAndStop([](uint16_t tracks) {
         while (tracks != 0) {
             const uint8_t track = static_cast<uint8_t>(__builtin_ctz(tracks));
@@ -465,12 +470,14 @@ static bool drain_sequencer(uint16_t block_size) {
         if (offset >= block_size) {
             continue;
         }
-        const uint8_t layer_count = s_seq_voice_map_active.layer_count[event.track];
+        if (!s_seq_voices)
+            continue;
+        VoiceTriggerParams layers[kMaxLayerTriggers];
+        const uint8_t layer_count = s_seq_voices->mailbox.ConsumerValue().Resolve(
+            event.track, event.note, event.velocity, layers);
         for (uint8_t layer = 0; layer < layer_count; ++layer) {
-            VoiceTriggerParams params = s_seq_voice_map_active.layers[event.track][layer];
-            params.velocity = event.velocity;
-            params.start_offset_frames = static_cast<uint16_t>(offset);
-            s_voice_manager.Trigger(params);
+            layers[layer].start_offset_frames = static_cast<uint16_t>(offset);
+            s_voice_manager.Trigger(layers[layer]);
             any_trigger = true;
         }
     }
@@ -748,28 +755,19 @@ static SampleRef ResolveLoadedSample(const void*, uint16_t sample_id) {
     return ref;
 }
 
-// Scratch for building the next voice map on the main loop before it is
-// copied into the mailbox. A static rather than a local because a
-// SequencerVoiceMap is ~6 KB: as `SequencerVoiceMap map{}` this was a 6 KB
-// stack frame against the DTCM stack budget (bss_static.hpp).
-static WaveX::BssStatic<SequencerVoiceMap> s_seq_voice_map_scratch_storage;
-
+// Foreground-owned pending map and mailbox storage have engine lifetime.
 static void PublishSequencerVoiceMap() {
-    uint16_t loading_tracks = 0;
-    for (uint8_t track = 0; track < kNumTracks; ++track) {
-        if (SfzLoader::TrackLoading(track)) {
-            loading_tracks |= static_cast<uint16_t>(1u << track);
-        }
-    }
-    SequencerVoiceMap& map = s_seq_voice_map_scratch_storage.Get();
-    map.Rebuild(SfzLoader::ResolveNote, loading_tracks);
-    s_seq_voice_map_mailbox.Publish(map);
+    if (!s_seq_voices)
+        return;
+    SfzLoader::PrepareSequencerVoices(s_seq_voices->pending);
+    s_seq_voices->mailbox.Publish(s_seq_voices->pending);
 }
 
 static void ClearSequencerVoiceMap(uint16_t tracks = 0xFFFFu) {
-    SequencerVoiceMap& map = s_seq_voice_map_scratch_storage.Get();
-    map.Revoke(tracks);
-    s_seq_voice_map_mailbox.Publish(map);
+    if (!s_seq_voices)
+        return;
+    s_seq_voices->pending.Revoke(tracks);
+    s_seq_voices->mailbox.Publish(s_seq_voices->pending);
 }
 
 // Drops `sample_id` from the registry and returns its memory to the arena.
@@ -1920,9 +1918,8 @@ void Init(DaisySeed& hw, float sample_rate, bool sdram_available) {
     if (s_seq_telemetry_interval == 0)
         s_seq_telemetry_interval = 1;
 
-    s_seq_voice_map_active_storage.Reconstruct();
-    s_seq_voice_map_scratch_storage.Reconstruct();
-    s_seq_voice_map_mailbox.Init(s_seq_voice_map_active);
+    s_seq_voices = nullptr;
+    s_seq_voice_storage = {};
     std::memset(s_scoped_release_overflow, 0, sizeof(s_scoped_release_overflow));
     __atomic_store_n(&s_scoped_release_pending_slots, 0u, __ATOMIC_RELAXED);
     s_rb_low_water = 0xFFFFFFFFu;
@@ -1958,6 +1955,15 @@ void Init(DaisySeed& hw, float sample_rate, bool sdram_available) {
     if (s_sample_memory_available) {
         s_pool = new (s_pool_bytes) SamplePool(
             reinterpret_cast<SamplePool::Record*>(WaveX::SdramLayout::kSampleRegistryBase));
+        void* memory = nullptr;
+        if (s_sample_mem_mgr.alloc(sizeof(SequencerVoiceState), &s_seq_voice_storage) &&
+            s_sample_mem_mgr.ptr(s_seq_voice_storage, &memory)) {
+            s_seq_voices = new (memory) SequencerVoiceState{};
+            s_seq_voices->mailbox.Init(s_seq_voices->pending);
+        } else {
+            s_sample_mem_mgr.release(&s_seq_voice_storage);
+            WaveX::Log::PrintLine("SEQ: prepared voice storage unavailable");
+        }
     }
     if (s_hw) {
         WaveX::Log::PrintLine(

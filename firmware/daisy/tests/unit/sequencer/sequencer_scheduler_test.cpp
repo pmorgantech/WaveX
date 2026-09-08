@@ -628,3 +628,32 @@ TEST(SequencerSchedulerTest, PatternLoopsCorrectly) {
         EXPECT_EQ(events[i + 1].step, 2);
     }
 }
+
+TEST(SequencerSchedulerTest, RetriggersKeepOriginalNoteAfterPatternEdits) {
+    Pattern p;
+    p.length = 2;
+    auto& step = p.tracks[0].steps[0];
+    step.on = true;
+    step.note = 75;
+    step.velocity = 73;
+    step.retrig_count = 2;
+    step.retrig_rate_ticks = 6;
+    SequencerScheduler scheduler;
+    scheduler.Init(48000, 48);
+    scheduler.SetPattern(&p);
+    scheduler.SetTempo(120);
+    scheduler.Start();
+    auto first = RunAll(scheduler, 1);
+    ASSERT_EQ(first.size(), 1u);
+    EXPECT_EQ(first[0].note, 75);
+    step.note = 60;
+    step.velocity = 1;
+    auto repeats = RunAll(scheduler, 100);
+    ASSERT_EQ(repeats.size(), 2u);
+    for (const auto& event: repeats) {
+        EXPECT_TRUE(event.is_retrig);
+        EXPECT_EQ(event.step, 0);
+        EXPECT_EQ(event.note, 75);
+        EXPECT_EQ(event.velocity, 73);
+    }
+}

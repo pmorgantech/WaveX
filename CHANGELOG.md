@@ -22,10 +22,18 @@ versioning and release process.
   choke groups, confirmed kit creation, naming, and new-copy WXI saves.
   Protocol version 5 retains completed mutation results across read retries.
 
+- Added per-step MIDI note values across the full 0-127 range, with Pad 1-16
+  labels for drum notes 60-75, immutable prepared Track voice maps, and
+  bounded key/velocity layer matching without callback-time Pool lookups.
+
 ### Fixed
 
 - Rapid velocity and probability drags now retain pending edits while waiting
   for backend readback; stale replies cannot replace the latest local preview.
+
+- Fixed scheduled note playback to honor each step's note and velocity,
+  preserve note/step identity through retriggers, and select overlapping
+  velocity layers with the configured crossfade.
 
 ### Changed
 

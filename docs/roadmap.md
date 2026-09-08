@@ -57,17 +57,18 @@ the same region without a UI freeze.
 ## Phase 2 — Groovebox core: sequencer and pads
 
 The scheduler, protocol and callback trigger path exist. The 16 pattern rows
-address their matching Tracks at MIDI note 60; editable note lanes and
-velocity-aware zone selection remain open. Open work:
+address their matching Tracks at each step's selected MIDI note, with
+velocity-aware prepared zone selection. Melodic chords and gate lanes remain
+Phase 2.5 work. Open work:
 
 1. Verify sample-offset timing and edit boundaries on hardware for the
-   four-track gate; complete note/velocity-aware prepared resolution.
+   four-track gate, including the prepared note/velocity resolution.
 2. Serialize MIDI clock out on the ESP32's DIN and USB paths (needs 2.P.5).
 3. Complete per-pad filter/envelope editing and TLC5947 LED feedback. The
    touch kit editor provides creation, naming, assignment, choke and new-copy
    WXI saves. The touch Play pads
    and sequencer grid are built; the grid pages across all 16 Tracks and 64
-   steps and edits tempo, swing, length, scale, velocity, probability and mute.
+   steps and edits tempo, swing, length, scale, velocity, probability, note and mute.
    Physical controls/LED feedback require 2.P.1–3; touch workflows do not.
 4. Persist kits, patterns, and songs atomically through WXCF.
 5. Apply per-step parameter locks to trigger parameters.

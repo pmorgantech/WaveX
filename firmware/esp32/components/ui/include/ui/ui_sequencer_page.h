@@ -49,7 +49,7 @@ class UISequencerPage : public UIPage {
     lv_obj_t* row_labels_[4]{};
     lv_obj_t* status_ = nullptr;
     lv_timer_t* timer_ = nullptr;
-    ValueTile tiles_[6]{};
+    ValueTile tiles_[7]{};
     WaveX::Protocol::SeqPatternSyncMessage settings_{};
     WaveX::Protocol::SeqPlayheadMessage playhead_{};
     uint8_t selected_step_ = 0;

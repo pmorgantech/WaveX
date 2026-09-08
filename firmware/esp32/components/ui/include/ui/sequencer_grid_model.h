@@ -49,7 +49,7 @@ class SequencerGridModel {
             page.clock_source > SEQ_CLOCK_MIDI || page.tempo_bpm_x100 < 100)
             return false;
         for (const auto& step: page.steps)
-            if (step.on > 1 || step.velocity > 127 || step.probability > 100 ||
+            if (step.on > 1 || step.note > 127 || step.velocity > 127 || step.probability > 100 ||
                 step.retrig_count > 8)
                 return false;
         const auto row = static_cast<uint8_t>(page.track - first_track_);

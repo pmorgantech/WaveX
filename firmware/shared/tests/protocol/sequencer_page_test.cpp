@@ -88,3 +88,27 @@ TEST(SequencerPageProtocol, ConfigureCommandRoundTrip) {
     EXPECT_EQ(parsed.command, SEQ_TRANSPORT_CONFIGURE);
     EXPECT_EQ(parsed.tempo_bpm_x100, 15050);
 }
+
+TEST(SequencerPageProtocol, StepNoteOperationAndReadbackRoundTripAtMidiBounds) {
+    using namespace WaveX::Protocol;
+    for (uint8_t note: {uint8_t{0}, uint8_t{60}, uint8_t{75}, uint8_t{127}}) {
+        std::array<uint8_t, 512> buffer{};
+        SeqPatternOpMessage op{SEQ_OP_SET_STEP_NOTE, 15, 63, note, 0, 0}, parsed_op;
+        ASSERT_GT(ProtocolHandler::CreatePacket(
+                      buffer.data(), buffer.size(), MSG_SEQ_PATTERN_OP, &op, sizeof(op)),
+                  0u);
+        ASSERT_TRUE(ProtocolHandler::ParseMessage(
+            buffer.data(), MSG_SEQ_PATTERN_OP, &parsed_op, sizeof(parsed_op)));
+        EXPECT_EQ(parsed_op.arg_u8, note);
+        SeqPatternSyncMessage original, parsed;
+        original.steps[15].note = note;
+        ASSERT_GT(
+            ProtocolHandler::CreatePacket(
+                buffer.data(), buffer.size(), MSG_SEQ_PATTERN_SYNC, &original, sizeof(original)),
+            0u);
+        ASSERT_TRUE(ProtocolHandler::ParseMessage(
+            buffer.data(), MSG_SEQ_PATTERN_SYNC, &parsed, sizeof(parsed)));
+        EXPECT_EQ(parsed.steps[15].note, note);
+        EXPECT_EQ(sizeof(SeqPatternSyncMessage), 336u);
+    }
+}

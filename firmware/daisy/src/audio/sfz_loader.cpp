@@ -1186,6 +1186,15 @@ uint8_t ResolveNote(
     return s_bank.ResolveNote(slot, note, velocity, s_loaded_resolver, out, max);
 }
 
+void PrepareSequencerVoices(SequencerVoiceMap& map) {
+    for (uint8_t track = 0; track < kNumTracks; ++track) {
+        if (TrackLoading(track))
+            map.Revoke(static_cast<uint16_t>(1u << track));
+        else
+            map.PrepareTrack(track, s_bank.At(track).instrument, s_loaded_resolver);
+    }
+}
+
 bool SetInstrumentFilter(uint8_t track, const InstrumentFilter& filter) {
     if (track >= kNumTracks)
         return false;

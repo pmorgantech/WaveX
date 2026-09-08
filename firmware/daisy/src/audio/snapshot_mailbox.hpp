@@ -39,13 +39,23 @@ class SnapshotMailbox {
     // Single consumer. The exchange clears dirty and makes the old front the
     // new middle before copying from the newly acquired private front slot.
     bool ConsumeLatest(T& value) {
+        if (!AcquireLatest())
+            return false;
+        value = ConsumerValue();
+        return true;
+    }
+
+    // Single consumer, zero-copy view. The front slot remains consumer-owned
+    // until this consumer acquires again. Never retain references across that
+    // next acquisition; the producer can then reuse the former front.
+    const T& ConsumerValue() const { return slots_[consumer_front_]; }
+    bool AcquireLatest() {
         if ((__atomic_load_n(&middle_state_, __ATOMIC_ACQUIRE) & kDirtyBit) == 0u) {
             return false;
         }
         const uint32_t previous_middle =
             __atomic_exchange_n(&middle_state_, consumer_front_, __ATOMIC_ACQ_REL);
         consumer_front_ = previous_middle & kIndexMask;
-        value = slots_[consumer_front_];
         return true;
     }
 

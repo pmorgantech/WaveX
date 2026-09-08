@@ -1,4 +1,5 @@
 #pragma once
+#include "audio/sequencer_voice_map.hpp"
 
 // Target-side SFZ resident loader. Runtime work is cooperative: Begin() only
 // accepts a request and Pump() performs at most one parse/probe/allocation/read
@@ -93,6 +94,9 @@ void SetLoadedSampleResolver(const SampleResolver& resolver);
 // overrides it), so this takes no engine state.
 uint8_t ResolveNote(
     uint8_t track, uint8_t note, uint8_t velocity, VoiceTriggerParams* out, uint8_t max);
+
+// Main-loop only: publish complete prepared zones, excluding loading Tracks.
+void PrepareSequencerVoices(SequencerVoiceMap& map);
 
 // Instrument-level filter and envelope (track-and-patch-model.md §3.2) -
 // the defaults every zone follows unless it sets ZONE_FLAG_OWN_FILTER_ENV.

@@ -211,13 +211,71 @@ inline float VelocityXfadeGain(const Zone& zone, uint8_t velocity) {
     return 1.0f;
 }
 
+// Foreground preparation: fold sample references, tuning and inherited defaults
+// once. Note/velocity matching and crossfade gain are applied by the caller.
+inline VoiceTriggerParams PrepareZoneTrigger(const Instrument& ins,
+                                             const Zone& zone,
+                                             const SampleRef& ref,
+                                             uint8_t track,
+                                             uint8_t note,
+                                             uint8_t velocity) {
+    VoiceTriggerParams p;
+    p.sample = ref.data;
+    p.sample_frames = ref.frames;
+    p.channels = ref.channels;
+    p.sample_rate_hz = ref.sample_rate_hz;
+    p.note = (ins.mode == InstrumentMode::Drum) ? zone.root_note : note;
+    p.trigger_note = note;
+    p.velocity = velocity;
+    p.root_note = zone.root_note;
+    p.pan = zone.pan;
+    p.track = track;
+    p.choke_group = zone.choke_group;
+    p.one_shot = (zone.flags & ZONE_FLAG_ONE_SHOT) != 0;
+
+    p.gain_mul = zone.gain * ref.gain_mul;
+    p.pitch_ratio_mul = TuneRatio(zone.coarse_tune, zone.fine_tune);
+
+    // Region/loop: the zone's value where it sets one, otherwise the
+    // sample's own record. Fades have no zone field yet, so they are
+    // always the sample's.
+    p.start_frame = zone.start_frame ? zone.start_frame : ref.start_frame;
+    p.end_frame = zone.end_frame ? zone.end_frame : ref.end_frame;
+    p.loop = (zone.loop_mode == ZONE_LOOP_FORWARD) ||
+             (zone.loop_mode == ZONE_LOOP_INHERIT && ref.loop_enabled);
+    p.loop_start = zone.loop_start ? zone.loop_start : ref.loop_start;
+    p.loop_end = zone.loop_end ? zone.loop_end : ref.loop_end;
+    p.fade_in_ms = ref.fade_in_ms;
+    p.fade_out_ms = ref.fade_out_ms;
+
+    if (zone.flags & ZONE_FLAG_OWN_FILTER_ENV) {
+        // The zone carries its own - an imported SFZ region, or a pad
+        // the user has overridden. Note it has no resonance field of its
+        // own, so the Instrument's is used either way.
+        p.filter_cutoff_hz = zone.cutoff_hz;
+        p.filter_resonance = ins.filter.resonance;
+        p.attack_s = zone.attack_s;
+        p.decay_s = zone.decay_s;
+        p.sustain_level = zone.sustain;
+        p.release_s = zone.release_s;
+    } else {
+        p.filter_cutoff_hz = ins.filter.cutoff_hz;
+        p.filter_resonance = ins.filter.resonance;
+        p.attack_s = ins.env.attack_s;
+        p.decay_s = ins.env.decay_s;
+        p.sustain_level = ins.env.sustain;
+        p.release_s = ins.env.release_s;
+    }
+    return p;
+}
+
 // Resolves an incoming note-on against `ins` into up to `max` (capped at
 // kMaxLayerTriggers) VoiceTriggerParams, ready to hand to VoiceManager::
 // Trigger(). Returns the count filled. A zone matches when it is in_use and
 // the note+velocity fall in its ranges; overlapping ranges layer (both fire),
 // non-overlapping velocity ranges switch. Zones whose sample doesn't resolve
 // are skipped (they don't consume a layer slot). Pure function - no state, no
-// allocation, no I/O; safe to call from the audio-callback note path.
+// allocation or I/O. Use from the foreground: tuning preparation includes pow().
 //
 // Filter and envelope come from the Instrument unless the zone overrides
 // them (ZONE_FLAG_OWN_FILTER_ENV) - so this needs no engine state at all,
@@ -248,54 +306,8 @@ inline uint8_t ResolveNoteOn(const Instrument& ins,
         if (!ref.valid())
             continue;
 
-        VoiceTriggerParams p;
-        p.sample = ref.data;
-        p.sample_frames = ref.frames;
-        p.channels = ref.channels;
-        p.sample_rate_hz = ref.sample_rate_hz;
-        p.note = (ins.mode == InstrumentMode::Drum) ? zone.root_note : note;
-        p.trigger_note = note;
-        p.velocity = velocity;
-        p.root_note = zone.root_note;
-        p.pan = zone.pan;
-        p.track = track;
-        p.choke_group = zone.choke_group;
-        p.one_shot = (zone.flags & ZONE_FLAG_ONE_SHOT) != 0;
-
-        p.gain_mul = zone.gain * VelocityXfadeGain(zone, velocity) * ref.gain_mul;
-        p.pitch_ratio_mul = TuneRatio(zone.coarse_tune, zone.fine_tune);
-
-        // Region/loop: the zone's value where it sets one, otherwise the
-        // sample's own record. Fades have no zone field yet, so they are
-        // always the sample's.
-        p.start_frame = zone.start_frame ? zone.start_frame : ref.start_frame;
-        p.end_frame = zone.end_frame ? zone.end_frame : ref.end_frame;
-        p.loop = (zone.loop_mode == ZONE_LOOP_FORWARD) ||
-                 (zone.loop_mode == ZONE_LOOP_INHERIT && ref.loop_enabled);
-        p.loop_start = zone.loop_start ? zone.loop_start : ref.loop_start;
-        p.loop_end = zone.loop_end ? zone.loop_end : ref.loop_end;
-        p.fade_in_ms = ref.fade_in_ms;
-        p.fade_out_ms = ref.fade_out_ms;
-
-        if (zone.flags & ZONE_FLAG_OWN_FILTER_ENV) {
-            // The zone carries its own - an imported SFZ region, or a pad
-            // the user has overridden. Note it has no resonance field of its
-            // own, so the Instrument's is used either way.
-            p.filter_cutoff_hz = zone.cutoff_hz;
-            p.filter_resonance = ins.filter.resonance;
-            p.attack_s = zone.attack_s;
-            p.decay_s = zone.decay_s;
-            p.sustain_level = zone.sustain;
-            p.release_s = zone.release_s;
-        } else {
-            p.filter_cutoff_hz = ins.filter.cutoff_hz;
-            p.filter_resonance = ins.filter.resonance;
-            p.attack_s = ins.env.attack_s;
-            p.decay_s = ins.env.decay_s;
-            p.sustain_level = ins.env.sustain;
-            p.release_s = ins.env.release_s;
-        }
-
+        VoiceTriggerParams p = PrepareZoneTrigger(ins, zone, ref, track, note, velocity);
+        p.gain_mul *= VelocityXfadeGain(zone, velocity);
         out[count++] = p;
     }
     return count;

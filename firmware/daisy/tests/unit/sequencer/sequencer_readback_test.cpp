@@ -100,3 +100,25 @@ TEST(SequencerReadback, ClearTrackResetsHiddenStepsAndLocksButPreservesMuteAndOt
     EXPECT_EQ(pattern.tracks[15].steps[63].param_locks[0].param_id, 0);
     EXPECT_TRUE(pattern.tracks[1].steps[63].on);
 }
+
+TEST(SequencerReadback, StepNotesSupportEveryMidiKeyAndRejectInvalidValues) {
+    SequencerTransport transport;
+    transport.Init(48000, 48);
+    SeqPatternRequestMessage request;
+    request.request_id = 1;
+    request.track = 15;
+    request.first_step = 48;
+    SeqPatternSyncMessage page;
+    for (uint8_t note: {uint8_t{0}, uint8_t{60}, uint8_t{75}, uint8_t{127}}) {
+        transport.ApplyPatternOp({SEQ_OP_SET_STEP_NOTE, 15, 63, note, 0, 0});
+        transport.BuildPatternPage(request, page);
+        EXPECT_EQ(page.steps[15].note, note);
+    }
+    transport.ApplyPatternOp({SEQ_OP_SET_STEP_NOTE, 15, 63, 128, 0, 0});
+    transport.ApplyPatternOp({SEQ_OP_SET_STEP_NOTE, 16, 64, 0, 0, 0});
+    transport.BuildPatternPage(request, page);
+    EXPECT_EQ(page.steps[15].note, 127);
+    transport.ApplyPatternOp({SEQ_OP_CLEAR_TRACK, 15, 0, 0, 0, 0});
+    transport.BuildPatternPage(request, page);
+    EXPECT_EQ(page.steps[15].note, 60);
+}

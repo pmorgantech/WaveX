@@ -139,6 +139,9 @@ Key subsystems:
 
 - **Sample streaming**: triple-buffered SD read slots with ready/consumed flags; `PumpWavIO()` refills while the callback drains; conversion (mono/stereo → output mode, resampling via the fixed-point linear interpolator in `linear_resampler.hpp`) happens in the pump path, not the callback's per-sample loop; `rb_push_frames()` batches ring-buffer writes with minimal barriers.
 - **Sample RAM**: `memory.h` slab (32 B–1 KB classes) + extent (64 KB pages) allocator over a 60 MB arena; the final 4 MiB contains a 512 KiB Sample Registry and 3.5 MiB offline-render scratch. `sdram_layout.h` is the single ownership map. Stats report the complete reserved pool to the UI via `MSG_STATUS_RESPONSE`/`SampleMemStatusMessage`.
+  Sequencing reserves one fixed allocation from that arena for its immutable
+  prepared-zone handoff; it remains allocated across Sample Pool resets and
+  is included in allocator usage. See features/sequencer.md for ownership.
 - **Profiling**: DWT cycle counters (`profiling/`), `PROFILE_SCOPE` macros behind `WAVEX_PROFILING_ENABLED`, CPU load min/avg/max reported in heartbeats.
 
 **Why bare-metal, not an RTOS (decision, 2026-07-07).** The Daisy backend runs no RTOS by design, and musical timing *depends on* that choice rather than being limited by it:
@@ -430,10 +433,10 @@ These rules are mandatory for all new code. Most past instability (SPI corruptio
 
 ## 10. Known Design Gaps (summary — details and sequencing in `roadmap.md`)
 
-1. **Sequencer integration**: the scheduler and protocol core are host-tested,
-   but `SequencerTransport::Tick()` does not yet drive sample-offset voice
-   triggers from the callback; playhead/step UI, MIDI clock out, and persistence
-   remain open Phase 2 work.
+1. **Sequencer integration**: the scheduler drives sample-offset triggers
+   through prepared immutable zones. The touch grid edits each step's note
+   and velocity; MIDI clock out, parameter-lock application, persistence and
+   the full hardware Phase 2 gate remain open.
 2. **Streamed polyphony**: the 8-voice RAM manager is wired and host-tested,
    while streamed playback remains a singleton path outside `VoiceManager`.
 3. **Sampler Instrument workflow**: the Zone model, SFZ import, the shared

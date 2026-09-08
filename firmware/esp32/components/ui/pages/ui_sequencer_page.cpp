@@ -37,9 +37,9 @@ void UISequencerPage::onEnter(lv_obj_t* parent) {
     lv_obj_set_style_pad_all(root_, 0, 0);
     lv_obj_remove_flag(root_, LV_OBJ_FLAG_SCROLLABLE);
     const int width = (UI_CONTENT_WIDTH - 2 * UI_MARGIN_X - 3 * UI_GUTTER) / 4;
-    const char* names[] = {"TEMPO", "SWING", "LENGTH", "SCALE", "VELOCITY", "PROBABILITY"};
-    const char* units[] = {"BPM", "%", "steps", "", "", "%"};
-    for (uint8_t i = 0; i < 6; ++i) {
+    const char* names[] = {"TEMPO", "SWING", "LENGTH", "SCALE", "VELOCITY", "PROBABILITY", "NOTE"};
+    const char* units[] = {"BPM", "%", "steps", "", "", "%", "MIDI"};
+    for (uint8_t i = 0; i < 7; ++i) {
         const int x = UI_MARGIN_X + (i < 4 ? i : i - 4) * (width + UI_GUTTER);
         const int y = i < 4 ? UI_PADDING_SMALL : UI_SEQ_DETAIL_TOP;
         tiles_[i] = valueTileCreate(root_,
@@ -55,8 +55,8 @@ void UISequencerPage::onEnter(lv_obj_t* parent) {
     }
     status_ = lv_label_create(root_);
     ui_theme_apply_label_style(status_, false);
-    lv_obj_set_pos(status_, UI_MARGIN_X + 2 * (width + UI_GUTTER), UI_SEQ_DETAIL_TOP);
-    lv_obj_set_width(status_, width * 2 + UI_GUTTER);
+    lv_obj_set_pos(status_, UI_MARGIN_X + 3 * (width + UI_GUTTER), UI_SEQ_DETAIL_TOP);
+    lv_obj_set_width(status_, width);
     lv_obj_set_style_text_font(status_, UI_FONT_SMALL, 0);
     lv_label_set_long_mode(status_, LV_LABEL_LONG_WRAP);
     for (uint8_t row = 0; row < 4; ++row) {
@@ -276,20 +276,28 @@ void UISequencerPage::render() {
         tileText(tiles_[4], value);
         std::snprintf(value, sizeof(value), "%u", step.probability);
         tileText(tiles_[5], value);
+        std::snprintf(value, sizeof(value), "%u", step.note);
+        tileText(tiles_[6], value);
+        if (step.note >= 60 && step.note < 76)
+            std::snprintf(value, sizeof(value), "Pad %u", step.note - 59);
+        else
+            std::snprintf(value, sizeof(value), "MIDI");
+        text(tiles_[6].unit, value);
     } else {
         tileText(tiles_[4], "--");
         tileText(tiles_[5], "--");
+        tileText(tiles_[6], "--");
+        text(tiles_[6].unit, "MIDI");
     }
     std::snprintf(value,
                   sizeof(value),
                   "Track %u / Step %02u\n%s",
                   trackDisplayNumber(getCurrentTrack()),
                   selected_step_ + 1,
-                  !link_alive_   ? "Audio engine disconnected"
-                  : clear_armed_ ? "Clear this Track's steps? Choose Confirm or Cancel."
-                  : !model_.AllReady()
-                      ? "Reading pattern..."
-                      : "Tap a step to toggle. Drag values to adjust. Shift opens row actions.");
+                  !link_alive_         ? "Audio engine disconnected"
+                  : clear_armed_       ? "Clear this Track's steps? Choose Confirm or Cancel."
+                  : !model_.AllReady() ? "Reading pattern..."
+                                       : "Tap steps; drag values. Notes 60-75 play Pads 1-16.");
     text(status_, value);
     char context[sizeof(context_)];
     std::snprintf(context,
@@ -396,6 +404,11 @@ void UISequencerPage::adjust(uint8_t parameter, int delta) {
             saved.probability = static_cast<uint8_t>(std::clamp(saved.probability + delta, 0, 100));
             sent = edit(
                 {SEQ_OP_SET_STEP_PROB, getCurrentTrack(), selected_step_, saved.probability, 0, 0});
+        }
+        if (parameter == 6) {
+            saved.note = static_cast<uint8_t>(std::clamp(saved.note + delta, 0, 127));
+            sent =
+                edit({SEQ_OP_SET_STEP_NOTE, getCurrentTrack(), selected_step_, saved.note, 0, 0});
         }
         if (sent) {
             model_.PreviewStep(selectedRow(), selected_step_ % 16, saved);
@@ -526,6 +539,7 @@ size_t UISequencerPage::consoleState(char* out, size_t cap, size_t len) {
         for (uint8_t i = 0; i < 16; ++i)
             if (page.steps[i].on)
                 bits |= static_cast<uint16_t>(1u << i);
+        len = AppendKvInt(out, cap, len, "seqnote", page.steps[selected_step_ % 16].note);
         len = AppendKvInt(out, cap, len, "seqvel", page.steps[selected_step_ % 16].velocity);
         len = AppendKvInt(out, cap, len, "seqprob", page.steps[selected_step_ % 16].probability);
         len = AppendKvInt(out, cap, len, "seqmuted", !page.enabled);
@@ -549,6 +563,8 @@ bool UISequencerPage::consoleCommand(const char* args, char* reply, size_t cap) 
             adjust(1, a - settings_.swing);
         else if (std::strcmp(verb, "LENGTH") == 0 && a >= 1 && a <= 64)
             adjust(2, a - settings_.length);
+        else if (std::strcmp(verb, "NOTE") == 0 && a >= 0 && a <= 127 && valueStep(step))
+            adjust(6, a - step.note);
         else if (std::strcmp(verb, "VELOCITY") == 0 && a >= 1 && a <= 127 && valueStep(step))
             adjust(4, a - step.velocity);
         else if (std::strcmp(verb, "PROBABILITY") == 0 && a >= 0 && a <= 100 && valueStep(step))

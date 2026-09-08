@@ -20,6 +20,8 @@ def test_sequencer_grid_edits_survive_navigation_and_page_boundaries(
     mask = int(before["seqbits"]) ^ 0x8000
     esp.page("TOGGLE")
     esp.wait_state(seqready=1, seqbits=mask)
+    esp.page("NOTE", 75)
+    esp.wait_state(seqready=1, seqnote=75)
     esp.page("VELOCITY", 77)
     esp.wait_state(seqready=1, seqvel=77)
     esp.page("PROBABILITY", 63)
@@ -35,7 +37,7 @@ def test_sequencer_grid_edits_survive_navigation_and_page_boundaries(
     esp.open_menu("Sequencer")
     esp.wait_state(seqready=1, seqplaying=1, seqtempo=13700)
     esp.page("FOCUS", 16, 64)
-    esp.wait_state(seqready=1, seqvel=77, seqprob=63, seqbits=mask)
+    esp.wait_state(seqready=1, seqvel=77, seqprob=63, seqbits=mask, seqnote=75)
     esp.softkey("Stop")
     esp.wait_state(seqplaying=0)
     esp.key("SHIFT")
@@ -44,7 +46,7 @@ def test_sequencer_grid_edits_survive_navigation_and_page_boundaries(
     st = esp.wait_state(shift=0)
     assert "Confirm" in esp.softkeys(st), st
     esp.softkey("Confirm")
-    esp.wait_state(seqready=1, seqbits=0, seqvel=100, seqprob=100)
+    esp.wait_state(seqready=1, seqbits=0, seqvel=100, seqprob=100, seqnote=60)
     esp.page("FOCUS", 1, 1)
     esp.wait_state(seqready=1)
     esp.page("LENGTH", 16)

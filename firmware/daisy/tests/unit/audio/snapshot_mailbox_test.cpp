@@ -70,12 +70,24 @@ TEST(SnapshotMailboxTest, ConcurrentLatestValueCopiesNeverMixSnapshotFields) {
     };
     Snapshot out;
     while (!producer_done.load(std::memory_order_acquire)) {
-        if (mailbox.ConsumeLatest(out)) {
-            expect_coherent(out);
+        if (mailbox.AcquireLatest()) {
+            expect_coherent(mailbox.ConsumerValue());
         }
     }
     producer.join();
     while (mailbox.ConsumeLatest(out)) {
         expect_coherent(out);
     }
+}
+
+TEST(SnapshotMailboxTest, ProducerCannotOverwriteBorrowedFrontBeforeNextAcquisition) {
+    WaveX::AudioEngine::SnapshotMailbox<Snapshot> mailbox;
+    mailbox.Init({1, 2, 3});
+    const auto& held = mailbox.ConsumerValue();
+    for (uint32_t i = 2; i < 100; ++i)
+        mailbox.Publish({i, 4, 5});
+    EXPECT_EQ(held.generation, 1u);
+    ASSERT_TRUE(mailbox.AcquireLatest());
+    EXPECT_EQ(mailbox.ConsumerValue().generation, 99u);
+    EXPECT_FALSE(mailbox.AcquireLatest());
 }

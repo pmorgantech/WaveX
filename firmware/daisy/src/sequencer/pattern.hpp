@@ -6,12 +6,10 @@
 // not sent over the inter-MCU link verbatim (protocol messages that edit
 // them are a separate, later stage - see docs/features/sequencer.md §4).
 //
-// A "kit" (docs/features/instrument-model.md §8) is exactly a drum-mode
-// Instrument; nothing sequencer-specific hardcodes drum semantics here -
-// Track/Step apply equally to melodic tracks once
-// docs/features/melodic-sequencing.md's StepNotes lands (deliberately not
-// included in this pass: that doc's parallel per-track note-lane array is
-// a separate, additive extension, not a change to this struct).
+// A kit is a drum-mode Instrument. Each step selects one MIDI note (the
+// default 60..75 pad map is an Instrument convention, not a scheduler rule).
+// Chords, explicit gate lengths, note-off scheduling and live record remain
+// the separate Phase 2.5 melodic StepNotes extension.
 
 #include <cstdint>
 
@@ -74,6 +72,7 @@ struct ParamLock {
 struct Step {
     bool on = false;
     uint8_t velocity = 100;     // 0-127
+    uint8_t note = 60;          // MIDI note; 60..75 select the sixteen kit pads
     uint8_t probability = 100;  // 0-100: percent chance this step fires when reached
     // Signed offset from the pattern-level swing-adjusted step boundary, in
     // internal PPQN ticks. Applied on top of (not instead of) swing.
@@ -114,6 +113,7 @@ struct TriggerEvent {
     uint8_t track = 0;
     uint8_t step = 0;
     uint8_t velocity = 0;
+    uint8_t note = 60;
     bool is_retrig = false;  // false = the step's primary hit, true = a retrig repeat
     uint8_t param_lock_count = 0;
     ParamLock param_locks[kMaxParamLocks];

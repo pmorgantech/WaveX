@@ -18,7 +18,7 @@ namespace Protocol {
 // MSG_PREVIEW_REQ (0x0A) / MSG_WAVE_CHUNK (0x11) retired.
 // 4: envelope payloads use signed 8-bit extrema and an explicit encoding tag.
 // 5: InstOpMessage appends explicit pad index, choke and Sample Pool id fields.
-static const uint32_t PROTOCOL_VERSION = 5;
+static const uint32_t PROTOCOL_VERSION = 6;
 
 // Wire layout (review M10: a packed `WaveXPacket` struct used to "document"
 // this but placed `crc` at offset 4 while the wire puts it at the packet
@@ -1467,7 +1467,8 @@ enum SeqPatternOpCode : uint8_t {
     SEQ_OP_PATTERN_SWING = 7,
     SEQ_OP_SET_PARAM_LOCK = 8,
     SEQ_OP_CLEAR_PARAM_LOCKS = 9,
-    SEQ_OP_CLEAR_TRACK = 10,  // clear all steps and their locks; retain track mute
+    SEQ_OP_CLEAR_TRACK = 10,    // clear all steps and their locks; retain track mute
+    SEQ_OP_SET_STEP_NOTE = 11,  // arg_u8: MIDI note 0..127
 };
 struct SeqPatternOpMessage {
     uint8_t op;      // SeqPatternOpCode
@@ -1524,7 +1525,7 @@ struct SeqStepState {
     uint8_t probability = 100;
     uint8_t retrig_count = 0;
     uint8_t retrig_rate_ticks = 0;
-    uint8_t reserved = 0;
+    uint8_t note = 60;
     int16_t micro_offset = 0;
     SeqLockState locks[SEQ_STEP_LOCKS]{};
 } __attribute__((packed));

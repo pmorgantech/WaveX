@@ -78,3 +78,32 @@ def test_touch_kit_save_reload_preserves_samples_and_other_tracks(
     # The selected pad audition reaches its sample end.
     daisy.wait_state(voices=1)
     esp.home()
+
+    # A kit with only Pad 16 populated must be silent on note 60, then
+    # sequence Pad 16 when the touch grid changes its note to 75.
+    for track in range(16):
+        daisy.msg(
+            0x51,
+            struct.pack("<BBBBHh", 4, track, 0, int(track == 2), 0, 0),
+        )
+    daisy.msg(0x51, struct.pack("<BBBBHh", 10, 2, 0, 0, 0, 0))
+    esp.open_menu("Sequencer")
+    esp.page("FOCUS", 3, 1)
+    esp.wait_state(seqready=1, seqbits=0, seqnote=60)
+    esp.page("LENGTH", 4)
+    esp.wait_state(seqready=1, seqlen=4)
+    esp.page("TOGGLE")
+    esp.wait_state(seqready=1, seqbits=1)
+    esp.softkey("Play")
+    esp.wait_state(seqplaying=1)
+    time.sleep(0.7)
+    assert daisy.state()["voices"] == "1"
+    esp.page("NOTE", 75)
+    esp.wait_state(seqready=1, seqnote=75)
+    daisy.wait_state(voices=lambda n: int(n) >= 2)
+    esp.page("NOTE", 60)
+    esp.wait_state(seqready=1, seqnote=60)
+    daisy.wait_state(voices=1)
+    esp.softkey("Stop")
+    esp.wait_state(seqplaying=0)
+    esp.home()

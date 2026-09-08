@@ -124,6 +124,10 @@ class SequencerTransport {
                     s.velocity = ClampVelocity(m.arg_u16);
                 }
                 break;
+            case SEQ_OP_SET_STEP_NOTE:
+                if (StepValid(m.track, m.step) && m.arg_u8 <= 127)
+                    pending_pattern_.tracks[m.track].steps[m.step].note = m.arg_u8;
+                break;
             case SEQ_OP_TOGGLE_STEP:
                 if (StepValid(m.track, m.step)) {
                     Step& s = pending_pattern_.tracks[m.track].steps[m.step];
@@ -316,6 +320,7 @@ class SequencerTransport {
             auto& wire = out.steps[i];
             wire.on = step.on;
             wire.velocity = step.velocity;
+            wire.note = step.note;
             wire.probability = step.probability;
             wire.micro_offset = step.micro_offset;
             wire.retrig_count = step.retrig_count;
