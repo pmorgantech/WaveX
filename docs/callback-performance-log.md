@@ -26,11 +26,6 @@ The log deliberately records whether callback-resident features remain. At
 activates the backend chip-upgrade path; a feature-complete build is still
 blocked from release or further callback scope until its margin is resolved.
 
-| Date | Commit | Scenario | Voices | Hz/block | Core | Image | Duration | Budget cycles | Average cycles | Maximum cycles | Worst headroom | Stream underruns | Callback features left | Decision | Note |
-|---|---|---|---:|---:|---:|---|---:|---:|---:|---:|---:|---:|---|---|---|
-| 2026-09-07 | 176ce1f | 8 voices; WaveX 24 dB; drive 100%; 8 mod slots; sequencer; SD stream; cutoff updates | 8 | 48000/48 | 480 MHz | qspi `-O2` | 3606.0s (721 windows) | 480000 | 125013 (26.0%) | 315854 (65.8029%) | 34.1971% | 0 | yes | STAY | One-hour soak; zero startup/runtime underruns; console-triggered notes; locks stored but not applied. Capture: perf-wavex-20260907-212459.log |
-| 2026-09-07 | 176ce1f | 8 voices; DaisySP SVF; drive 100%; 8 mod slots; sequencer; SD stream; cutoff updates | 8 | 48000/48 | 480 MHz | qspi `-O2` | 605.2s (121 windows) | 480000 | 125695 (26.2%) | 430385 (89.6635%) | 10.3365% | 0 | yes | UPGRADE | Capacity gate blocked; zero startup/runtime underruns; slope argument ignored by DaisySP. Capture: perf-daisysp-20260907-222524.log |
-
 ## Workload and evidence notes — 2026-09-07
 
 Both captures used firmware commit 176ce1f, persistent QSPI -O2, 480 MHz,
@@ -54,3 +49,43 @@ or the four-track sequencer gate. TSAN discovery was unavailable with
 FATAL: ThreadSanitizer: unexpected memory mapping. Normal persistent firmware was
 restored after profiling, and the final two-board console smoke run passed 7/7
 selected tests (39 deselected).
+
+
+## Track-addressed follow-up — 2026-09-07
+
+Commit 66d0330 used the same persistent QSPI -O2, 480 MHz, 48 kHz and
+48-sample-block configuration. The local capture is
+logs/perf-wavex-20260908-003427.log (UTC filename); its companion JSON records
+the clean commit, image SHA256, baseline and periodic device state.
+
+This workload bound Tracks 0–7 to the same full-file-looped
+/Drums/Kicks/bassdr01.wav and triggered MIDI note 60 on each. All eight
+Instruments had eight modulation slots with the source, destination, depth
+and curve settings described above. Each Track used resonance 45000 and
+sustain 65535; cutoff alternated between 32768 and 60000 on all eight Tracks
+roughly every 1.2 seconds. The WaveX 24 dB filter ran at 100% drive.
+Sequencing used 120 BPM, 16 steps, 60% swing and simultaneous hits every
+four steps. The other eight rows were muted, and the singleton SD stream
+ran concurrently.
+
+All sampled states retained eight voices and an active stream with zero
+underruns or dropped commands. The DWT run remains in STAY. This is a
+different workload from the earlier fixed-Track chromatic preview, so the
+rows are capacity evidence rather than a direct performance comparison.
+Parameter locks are still stored but not applied. Physical panel timing,
+DIN/USB clock sync, audible loop quality and the full Phase 2 gate remain
+unverified.
+
+Normal persistent firmware was restored after capture. The final console and
+Track-routing HIL selection passed 12/12 tests (39 deselected), including
+scoped releases on four Tracks, rebinding, asynchronous SFZ replacement and
+sample edits reaching future sequenced hits. Five new host voice-map tests
+also passed, along with the required commit hooks.
+
+## Recorded runs
+
+| Date | Commit | Scenario | Voices | Hz/block | Core | Image | Duration | Budget cycles | Average cycles | Maximum cycles | Worst headroom | Stream underruns | Callback features left | Decision | Note |
+|---|---|---|---:|---:|---:|---|---:|---:|---:|---:|---:|---:|---|---|---|
+| 2026-09-07 | 176ce1f | 8 voices; WaveX 24 dB; drive 100%; 8 mod slots; sequencer; SD stream; cutoff updates | 8 | 48000/48 | 480 MHz | qspi `-O2` | 3606.0s (721 windows) | 480000 | 125013 (26.0%) | 315854 (65.8029%) | 34.1971% | 0 | yes | STAY | One-hour soak; zero startup/runtime underruns; console-triggered notes; locks stored but not applied. Capture: perf-wavex-20260907-212459.log |
+| 2026-09-07 | 176ce1f | 8 voices; DaisySP SVF; drive 100%; 8 mod slots; sequencer; SD stream; cutoff updates | 8 | 48000/48 | 480 MHz | qspi `-O2` | 605.2s (121 windows) | 480000 | 125695 (26.2%) | 430385 (89.6635%) | 10.3365% | 0 | yes | UPGRADE | Capacity gate blocked; zero startup/runtime underruns; slope argument ignored by DaisySP. Capture: perf-daisysp-20260907-222524.log |
+| 2026-09-07 | 66d0330 | 8 Tracks; WaveX 24 dB; drive 100%; 8 mod slots per Track; sequencer; SD stream; cutoff updates | 8 | 48000/48 | 480 MHz | qspi `-O2` | 605.2s (121 windows) | 480000 | 119331 (24.9%) | 318476 (66.3492%) | 33.6508% | 0 | yes | STAY | Track-addressed follow-up; zero startup/runtime underruns and dropped commands; locks stored but not applied. Capture: perf-wavex-20260908-003427.log |

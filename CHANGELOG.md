@@ -26,6 +26,10 @@ versioning and release process.
   docs/callback-performance-log.md; this does not approve a board port or
   purchase.
 
+- The Track-addressed sequencer follow-up measured 66.3492% callback
+  utilization for 605.2 seconds with zero underruns and dropped commands;
+  this workload remains in STAY and does not close the Phase 2 gate.
+
 - Default Daisy builds now reject the experimental DaisySP filter selection
   with an explicit FILTER error; comparison builds must opt in, while the
   WaveX filter remains the production fallback.

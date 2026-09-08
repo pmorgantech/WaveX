@@ -71,19 +71,21 @@ velocity-aware zone selection remain open. Open work:
 ### 2.C — Callback capacity checkpoint (2026-09-07)
 
 The recurring callback evidence is recorded in
-[callback-performance-log.md](callback-performance-log.md). The WaveX 24 dB
-path measured 65.8029% for 3606.0 seconds with zero underruns and remains in
-the STAY band. The DaisySP comparison measured 89.6635% for 605.2 seconds
-with zero underruns and entered UPGRADE because callback-resident work remains.
+[callback-performance-log.md](callback-performance-log.md). The Track-addressed
+WaveX 24 dB workload on 66d0330 measured 66.3492% for 605.2 seconds with
+zero underruns or dropped commands and remains in STAY. The earlier one-hour
+fixed-Track preview measured 65.8029%; these are different workloads.
+The DaisySP comparison measured 89.6635% for 605.2 seconds with zero
+underruns and entered UPGRADE because callback-resident work remains.
 This activates planning in the [RT1170 migration plan](rt1170-migration.md)
 under the Phase 2 capacity checkpoint. It does not authorize a board port or
 purchase, and the WaveX path remains the fallback.
 
-Before accepting DaisySP or additional callback scope, attribute or restrict
-the higher-cost path, or port the backend. Parameter locks remain item 5 and
-were programmed but not applied by the measured callback. DaisySP is therefore
-default-disabled; comparison builds require an explicit opt-in and do not pass
-the capacity gate.
+DaisySP is default-disabled; comparison builds require an explicit opt-in
+and do not pass the capacity gate. Re-enabling it requires attribution,
+scope reduction or a backend port. Re-run the checkpoint before adding
+callback scope. Parameter locks remain item 5 and were programmed but not
+applied by either measured callback.
 
 ### 2.P — Panel controls and MIDI I/O (prerequisite for items 2 and 3)
 
@@ -195,8 +197,8 @@ The following code paths are open until observed on the target:
 | Panel pins (2026-09-05) | `pin_config.h` was rewritten against the ESP32-P4-WIFI6 header. The bench encoder is PCNT unit 1 (confirmed 2026-09-05); it counts negative on clockwise as wired, and three pages had compensated for it — direction is now one per-encoder flag in `hardware_config.h`, and those pages follow the shared contract. Clockwise increases values / moves forward on every page — verified 2026-09-05. Verify the TCA8418 matrix geometry (`WAVEX_TCA8418_ROWS/COLUMNS`, never confirmed against the wiring) and the `WAVEX_KEYCODE_*` map from the Diagnostics ▸ Panel tab (2.P.1): press each key, read its keycode, row/column and `PanelKey`; "unmapped" means the map or the geometry is wrong. Blocker first: the bench log shows `TCA8418 hardware initialization failed` on every boot recorded (2026-09-05), so the keypad has not been answering on I2C at all — check its wiring and address before reading anything off the Panel tab. Scope an endless pot's two wipers before calibrating (the decoder assumes triangle waves). |
 | Diagnostics | Open the page and verify live telemetry arrives. |
 | Digital voices | Trigger RAM-resident notes, sweep live parameters, and judge SVF response/resonance. |
-| Sample retirement | Replace/unload samples during held and sequenced playback; exercise delayed/stopped callbacks and concurrent import requests. Confirm timeout preserves storage, then measure DWT headroom and run the zero-underrun soak. Host helper tests do not verify this interrupt integration. |
-| Callback budget | Recurring whole-callback evidence is recorded in `callback-performance-log.md`: WaveX is 65.8029% / STAY and DaisySP is 89.6635% / UPGRADE, both with zero underruns. Remaining work is the DaisySP blocker, separate Render() timing, and selective placement A/B; no overall phase gate is claimed. |
+| Sample retirement | Four-Track routing, rebinds and SFZ replacement during sequencing, and sample-edit refresh now have passing HIL coverage. Still exercise delayed/stopped callbacks and concurrent import requests. Confirm timeout preserves storage, then measure DWT headroom and run the zero-underrun soak. Host helper tests do not verify this interrupt integration. |
+| Callback budget | Recurring whole-callback evidence is recorded in `callback-performance-log.md`: Track-addressed WaveX is 66.3492% / STAY and the experimental DaisySP comparison is 89.6635% / UPGRADE, both with zero underruns. DaisySP is default-disabled. Remaining work is its capacity blocker, separate Render() timing, and selective placement A/B; no overall phase gate is claimed. |
 | Sample Edit | Verify waveform fetch, handles, loop seam audibility, browser detail waveform, and stereo readability. HIL covers Track-preserving audition, edits isolated to the matching stream, streaming loop wraps and RAM-loop note lifetime. |
 | Settings and input | Verify brightness, scrolling, MIDI channel filtering, keypad, encoder direction, and UI responsiveness. |
 | UI concurrency | Measure LVGL lock/refresh behavior during encoder bursts and sample loading. |
