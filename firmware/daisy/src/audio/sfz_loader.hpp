@@ -96,7 +96,7 @@ uint8_t ResolveNote(
     uint8_t track, uint8_t note, uint8_t velocity, VoiceTriggerParams* out, uint8_t max);
 
 // Main-loop only: publish complete prepared zones, excluding loading Tracks.
-void PrepareSequencerVoices(SequencerVoiceMap& map);
+void PrepareSequencerVoices(SequencerVoiceMap& map, uint16_t tracks = 0xFFFFu);
 
 // Instrument-level filter and envelope (track-and-patch-model.md §3.2) -
 // the defaults every zone follows unless it sets ZONE_FLAG_OWN_FILTER_ENV.

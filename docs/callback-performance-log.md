@@ -123,6 +123,18 @@ Normal firmware was restored with profiling disabled and DaisySP disabled; the
 final two-board HIL selection passed all 20 selected tests, including console,
 kit save/reload, sequencer grid and Track-routing workflows.
 
+The first full sixteen-pad persistence stress run at `e38df1d` did not
+complete the ten-minute gate. `logs/perf-wavex-20260908-043405.log` and its
+JSON metadata record three completed save/load cycles, then an I/O failure
+during the fourth save at about 384 seconds. The stream reported FatFs
+`FR_INVALID_OBJECT`, recovered by reopening, and accumulated 37 underruns.
+The peak was 351404 cycles (73.2092%), also outside the headroom gate.
+This short diagnostic run is not a passing capacity result. Follow-up work
+limits cutoff preparation/publication to changed Tracks and stops the
+streaming preview before accepted pattern Save/Load operations, matching
+kit-save admission. Foreground failures now retain the first FatFs error
+for diagnosis; the original invalid-handle cause is not established.
+
 ## Recorded runs
 
 | Date | Commit | Scenario | Voices | Hz/block | Core | Image | Duration | Budget cycles | Average cycles | Maximum cycles | Worst headroom | Stream underruns | Callback features left | Decision | Note |

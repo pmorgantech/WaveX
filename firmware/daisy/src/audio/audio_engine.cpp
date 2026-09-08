@@ -763,10 +763,10 @@ static SampleRef ResolveLoadedSample(const void*, uint16_t sample_id) {
 }
 
 // Foreground-owned pending map and mailbox storage have engine lifetime.
-static void PublishSequencerVoiceMap() {
+static void PublishSequencerVoiceMap(uint16_t tracks = 0xFFFFu) {
     if (!s_seq_voices)
         return;
-    SfzLoader::PrepareSequencerVoices(s_seq_voices->pending);
+    SfzLoader::PrepareSequencerVoices(s_seq_voices->pending, tracks);
     s_seq_voices->mailbox.ProducerValue().CopyLiveFrom(s_seq_voices->pending);
     s_seq_voices->mailbox.PublishPrepared();
 }
@@ -2382,7 +2382,7 @@ void OnControlChange(const ControlChangeMessage& ctrl_msg) {
         SfzLoader::SetInstrumentFilter(track, filter);
         SfzLoader::SetInstrumentEnv(track, env);
         s_track_live_updates.Publish(ComposeTrackLive(track, filter, env));
-        PublishSequencerVoiceMap();
+        PublishSequencerVoiceMap(static_cast<uint16_t>(1u << track));
     }
 }
 
@@ -2518,7 +2518,8 @@ void OnSeqTransport(const SeqTransportMessage& m) {
     // Publish before enqueuing PLAY: its first downbeat is due in the same
     // callback that consumes this command, so its immutable sample pointers
     // must be available before Tick() starts the scheduler.
-    PublishSequencerVoiceMap();
+    if (m.command == SEQ_TRANSPORT_PLAY || m.command == SEQ_TRANSPORT_CONTINUE)
+        PublishSequencerVoiceMap();
     WaveX::Sequencer::SequencerCommand command;
     command.type = WaveX::Sequencer::SequencerCommandType::Transport;
     command.transport = m;
@@ -2540,7 +2541,9 @@ void OnSeqPatternRequest(const SeqPatternRequestMessage& request) {
 }
 
 void OnSeqFileOp(const SeqFileOpMessage& request) {
-    WaveX::PatternStore::Request(request, s_pattern_exchange_storage.Get());
+    const bool accepted = WaveX::PatternStore::Request(request, s_pattern_exchange_storage.Get());
+    if (accepted && (request.op == SEQ_FILE_SAVE_COPY || request.op == SEQ_FILE_LOAD))
+        CloseWav();  // file jobs own SD bandwidth; resident Track voices continue
 }
 
 void PumpSequencerState() {

@@ -269,6 +269,7 @@ function(add_wavex_test test_source)
     if(test_name STREQUAL "pattern_store_test")
         target_sources(${test_name} PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/storage/pattern_store.cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/mocks/log_ring_mock.cpp
         )
     endif()
 

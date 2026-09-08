@@ -144,3 +144,38 @@ TEST(SequencerVoiceMapCopy, CopiesOnlyLiveCapacityAndRevocationsCannotResurrectZ
     dest.CopyLiveFrom(source);
     EXPECT_EQ(dest.Resolve(0, 60, 100, out), 0);
 }
+
+TEST_F(SequencerVoiceMapTest, SparseTrackEditsAndRevocationsSurviveMailboxReuse) {
+    SnapshotMailbox<SequencerVoiceMap> mailbox;
+    float expected[16]{};
+    for (uint8_t track = 0; track < 16; ++track) {
+        instrument.filter.cutoff_hz = expected[track] = 1000.0f + track;
+        map.PrepareTrack(track, instrument, resolver);
+    }
+    mailbox.Init(map);
+    VoiceTriggerParams out[4];
+    for (uint8_t edit = 0; edit < 64; ++edit) {
+        const uint8_t track = edit % 16;
+        instrument.filter.cutoff_hz = expected[track] = 2000.0f + edit;
+        map.PrepareTrack(track, instrument, resolver);
+        mailbox.ProducerValue().CopyLiveFrom(map);
+        mailbox.PublishPrepared();
+        // Exercise coalescing and all three slot ownership rotations.
+        if (edit % 3)
+            continue;
+        ASSERT_TRUE(mailbox.AcquireLatest());
+        for (uint8_t check = 0; check < 16; ++check) {
+            ASSERT_GT(mailbox.ConsumerValue().Resolve(check, 0, 75, out), 0);
+            EXPECT_FLOAT_EQ(out[0].filter_cutoff_hz, expected[check]);
+        }
+    }
+    map.Revoke(1u << 15);
+    mailbox.ProducerValue().CopyLiveFrom(map);
+    mailbox.PublishPrepared();
+    ASSERT_TRUE(mailbox.AcquireLatest());
+    EXPECT_EQ(mailbox.ConsumerValue().Resolve(15, 0, 75, out), 0);
+    for (uint8_t check = 0; check < 15; ++check) {
+        ASSERT_GT(mailbox.ConsumerValue().Resolve(check, 0, 75, out), 0);
+        EXPECT_FLOAT_EQ(out[0].filter_cutoff_hz, expected[check]);
+    }
+}

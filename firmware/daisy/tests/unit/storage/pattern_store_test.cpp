@@ -153,3 +153,17 @@ TEST_F(PatternStoreTest, RejectsUnsafeNamesAndIgnoresUnusedNewName) {
     EXPECT_EQ(Complete().error, SEQ_FILE_OK);
 }
 }  // namespace
+
+TEST_F(PatternStoreTest, ReadAndDuplicateRequestsCannotRepeatPreviewStopSideEffects) {
+    SeqFileOpMessage request;
+    request.request_id = ++counter;
+    request.op = SEQ_FILE_SAVE_COPY;
+    std::strcpy(request.name, "Preview");
+    ASSERT_TRUE(PatternStore::Request(request, exchange));
+    EXPECT_FALSE(PatternStore::Request(request, exchange));
+    ASSERT_EQ(Complete().error, SEQ_FILE_OK);
+    EXPECT_FALSE(PatternStore::Request(request, exchange));
+    request.request_id = ++counter;
+    request.op = SEQ_FILE_GET;
+    EXPECT_FALSE(PatternStore::Request(request, exchange));
+}

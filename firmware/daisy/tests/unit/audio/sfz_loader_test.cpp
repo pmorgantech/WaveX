@@ -48,6 +48,7 @@ class SfzLoaderTest : public ::testing::Test {
         MockFatFS::Instance().AddFile("/kits/b.wav", PcmWave());
     }
     void TearDown() override {
+        SfzLoader::SetLoadedSampleResolver({});
         SfzLoader::Reset();
         MockFatFS::Instance().Reset();
     }
@@ -326,3 +327,33 @@ TEST_F(SfzLoaderTest, KitReplacementGatesNewTriggersUntilStopAcknowledgement) {
     EXPECT_EQ(pool_.Find(old)->used_by, 2);
 }
 }  // namespace
+
+TEST_F(SfzLoaderTest, PreparingOneTrackLeavesOtherPreparedTracksUntouched) {
+    ASSERT_TRUE(Load(0));
+    ASSERT_TRUE(Load(1));
+    SfzLoader::SetLoadedSampleResolver({nullptr, [](const void*, uint16_t) {
+                                            static const int16_t pcm[4]{};
+                                            SampleRef ref;
+                                            ref.data = pcm;
+                                            ref.frames = 4;
+                                            ref.sample_rate_hz = 48000;
+                                            return ref;
+                                        }});
+    SequencerVoiceMap map;
+    SfzLoader::PrepareSequencerVoices(map);
+    ASSERT_EQ(map.tracks[0].count, 2);
+    ASSERT_EQ(map.tracks[1].count, 2);
+    const auto revision = map.tracks[1].revision;
+    const auto resonance = map.tracks[1].zones[0].filter_resonance;
+    InstrumentFilter filter;
+    filter.resonance = 0.25f;
+    ASSERT_TRUE(SfzLoader::SetInstrumentFilter(0, filter));
+    filter.resonance = 0.5f;
+    ASSERT_TRUE(SfzLoader::SetInstrumentFilter(1, filter));
+    SfzLoader::PrepareSequencerVoices(map, 1);
+    EXPECT_FLOAT_EQ(map.tracks[0].zones[0].filter_resonance, 0.25f);
+    EXPECT_EQ(map.tracks[1].revision, revision);
+    EXPECT_FLOAT_EQ(map.tracks[1].zones[0].filter_resonance, resonance);
+    SfzLoader::PrepareSequencerVoices(map, 2);
+    EXPECT_FLOAT_EQ(map.tracks[1].zones[0].filter_resonance, 0.5f);
+}

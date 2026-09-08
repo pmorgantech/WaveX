@@ -1,5 +1,6 @@
 """Touch pattern save/load and session ownership on real hardware."""
 
+import struct
 import time
 
 import pytest
@@ -65,14 +66,17 @@ def test_pattern_files_preserve_hidden_steps_tempo_and_track_instruments(
     _files(esp)
     name = "HIL pat " + str(int(time.time()))
     esp.page("NAME", name)
+    daisy.msg(0x4B, struct.pack("<H", sequence_samples[0]))
+    daisy.wait_state(streaming=1)
     esp.softkey("Save copy")
     esp.wait_state(
         fileready=1, fileerror=0, filename=name.replace(" ", "_"), timeout=10
     )
+    daisy.wait_state(streaming=0, voices=1)
     esp.softkey("Save copy")
     esp.wait_state(fileready=1, fileerror=4, timeout=10)
+    daisy.wait_state(streaming=0, voices=1)
     assert daisy.tracks() == bindings
-    assert daisy.state()["voices"] == "1"
     esp.softkey("Back")
     esp.wait_state(seqready=1, seqplaying=1)
     esp.page("TEMPO", 15100)
@@ -84,14 +88,16 @@ def test_pattern_files_preserve_hidden_steps_tempo_and_track_instruments(
     esp.wait_state(fileconfirm=2)
     esp.softkey("Cancel")
     esp.wait_state(fileconfirm=0, fileready=1)
+    daisy.msg(0x4B, struct.pack("<H", sequence_samples[0]))
+    daisy.wait_state(streaming=1)
     esp.softkey("Load")
     esp.wait_state(fileconfirm=2)
     esp.softkey("Confirm")
     esp.wait_state(
         fileready=1, fileerror=0, filename=name.replace(" ", "_"), timeout=10
     )
+    daisy.wait_state(streaming=0, voices=1)
     assert daisy.tracks() == bindings
-    assert daisy.state()["voices"] == "1"
     esp.page("NAME", "Missing " + str(int(time.time())))
     esp.softkey("Load")
     esp.wait_state(fileconfirm=2)

@@ -16,6 +16,8 @@ struct SequencerVoiceMap {
         bool drum = false;
     };
     struct PreparedTrack {
+        // Foreground-only cache identity. The callback never inspects it.
+        uint64_t revision = 0;
         uint8_t count = 0;
         Key keys[kMaxZones]{};
         VoiceTriggerParams zones[kMaxZones]{};
@@ -26,6 +28,7 @@ struct SequencerVoiceMap {
         if (track >= kNumTracks)
             return;
         auto& dest = tracks[track];
+        ++dest.revision;
         dest.count = 0;
         if (instrument.origin == InstrumentOrigin::None)
             return;
@@ -79,11 +82,16 @@ struct SequencerVoiceMap {
 
     // Foreground sparse copy: unused capacity is not live state. Copying all
     // 512 zone slots on every cutoff edit needlessly churns the SDRAM/cache
-    // shared with audio. Counts hide old capacity in reused mailbox slots.
+    // shared with audio. Per-Track revisions skip unchanged rows when a
+    // mailbox slot is reused; PrepareTrack/Revoke are the foreground writers.
+    // Counts hide old capacity in reused mailbox slots.
     void CopyLiveFrom(const SequencerVoiceMap& source) {
         for (uint8_t track = 0; track < kNumTracks; ++track) {
             auto& dest = tracks[track];
             const auto& src = source.tracks[track];
+            if (src.revision != 0 && dest.revision == src.revision)
+                continue;
+            dest.revision = src.revision;
             dest.count = src.count < kMaxZones ? src.count : kMaxZones;
             for (uint8_t i = 0; i < dest.count; ++i) {
                 dest.keys[i] = src.keys[i];
@@ -94,8 +102,10 @@ struct SequencerVoiceMap {
 
     void Revoke(uint16_t mask) {
         for (uint8_t track = 0; track < kNumTracks; ++track)
-            if (mask & (1u << track))
+            if ((mask & (1u << track)) && tracks[track].count != 0) {
+                ++tracks[track].revision;
                 tracks[track].count = 0;
+            }
     }
 };
 

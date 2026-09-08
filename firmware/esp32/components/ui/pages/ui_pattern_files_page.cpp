@@ -92,8 +92,10 @@ void UIPatternFilesPage::onEnter(lv_obj_t* parent) {
     lv_obj_add_event_cb(keyboard_, keyboardEvent, LV_EVENT_READY, this);
     lv_obj_add_event_cb(keyboard_, keyboardEvent, LV_EVENT_CANCEL, this);
     lv_obj_add_event_cb(input_, inputEvent, LV_EVENT_CLICKED, this);
-    std::snprintf(
-        message_, sizeof(message_), "Enter a name to save a new copy or load from wavex/patterns.");
+    std::snprintf(message_,
+                  sizeof(message_),
+                  "Save/load in wavex/patterns. File operations stop the streaming preview; Track "
+                  "voices continue.");
     alive_ = inter_mcu_backend_link_alive();
     read();
     timer_ = lv_timer_create(tick, 100, this);

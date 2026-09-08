@@ -45,6 +45,13 @@ versioning and release process.
   capacity during Instrument and control updates, preserving mailbox ownership
   for the borrowed consumer snapshot.
 
+- Fixed sequencer preparation and publication to refresh only changed Tracks,
+  preserving unaffected Track voice maps during control and pattern updates.
+
+- Fixed accepted pattern Save and Load operations stopping the streaming
+  preview before foreground file work while resident Track voices continue;
+  the original FatFs `FR_INVALID_OBJECT` cause remains unproven.
+
 ### Changed
 
 - Recorded the touch kit/grid capacity follow-up at 67.0844% worst-case

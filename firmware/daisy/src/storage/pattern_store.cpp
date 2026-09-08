@@ -1,6 +1,7 @@
 #include "pattern_store.hpp"
 
 #include "comm/daisy_uart_link.h"
+#include "comm/log_ring.h"
 #include "ff.h"
 
 #include "bss_static.hpp"
@@ -19,6 +20,7 @@ struct Job {
     SeqFileOpMessage request;
     SeqFileStatusMessage status;
     bool send = false, open = false, temp_owned = false;
+    FRESULT first_io_error = FR_OK;
     FIL file{};  // AXI SRAM sector window; sub-sector adapters never DMA stack records.
     char destination[96]{}, temporary[112]{}, decoded_name[SEQ_FILE_NAME_BYTES]{};
     std::optional<PatternFile::Encoder> encoder;
@@ -28,19 +30,25 @@ BssStatic<Job> storage;
 Job& job() {
     return storage.Get();
 }
+FRESULT IoResult(FRESULT result) {
+    if (result != FR_OK && job().first_io_error == FR_OK)
+        job().first_io_error = result;
+    return result;
+}
 bool Read(void* context, void* dest, size_t bytes) {
     if (bytes >= 512)
         return false;
     UINT read = 0;
-    return f_read(static_cast<FIL*>(context), dest, static_cast<UINT>(bytes), &read) == FR_OK &&
+    return IoResult(f_read(static_cast<FIL*>(context), dest, static_cast<UINT>(bytes), &read)) ==
+               FR_OK &&
            read == bytes;
 }
 bool Write(void* context, const void* source, size_t bytes) {
     if (bytes >= 512)
         return false;
     UINT written = 0;
-    return f_write(static_cast<FIL*>(context), source, static_cast<UINT>(bytes), &written) ==
-               FR_OK &&
+    return IoResult(f_write(
+               static_cast<FIL*>(context), source, static_cast<UINT>(bytes), &written)) == FR_OK &&
            written == bytes;
 }
 bool Eof(void* context) {
@@ -51,7 +59,7 @@ void Finish(uint8_t error, Sequencer::PatternExchange& exchange) {
     j.encoder.reset();
     j.decoder.reset();
     if (j.open) {
-        if (f_close(&j.file) != FR_OK)
+        if (IoResult(f_close(&j.file)) != FR_OK)
             error = SEQ_FILE_IO;
         j.open = false;
     }
@@ -60,6 +68,13 @@ void Finish(uint8_t error, Sequencer::PatternExchange& exchange) {
         j.temp_owned = false;
     }
     exchange.Retire();
+    if (error == SEQ_FILE_IO || error == SEQ_FILE_BAD_FILE)
+        Log::PrintLine("PATTERN_FILE: op=%u phase=%u error=%u fatfs=%u name=%s",
+                       static_cast<unsigned>(j.request.op),
+                       static_cast<unsigned>(j.phase),
+                       static_cast<unsigned>(error),
+                       static_cast<unsigned>(j.first_io_error),
+                       j.request.name);
     if (error == SEQ_FILE_OK)
         detail::CopyWireString(j.status.name,
                                sizeof(j.status.name),
@@ -74,6 +89,8 @@ void Finish(uint8_t error, Sequencer::PatternExchange& exchange) {
 }
 bool MakeDirectory(const char* name) {
     const auto result = f_mkdir(name);
+    if (result != FR_OK && result != FR_EXIST)
+        IoResult(result);
     return result == FR_OK || result == FR_EXIST;
 }
 }  // namespace
@@ -81,28 +98,29 @@ bool BlocksEdits() {
     const auto& j = job();
     return j.phase != Phase::Idle && j.request.op != SEQ_FILE_SAVE_COPY;
 }
-void Request(const SeqFileOpMessage& request, Sequencer::PatternExchange& exchange) {
+bool Request(const SeqFileOpMessage& request, Sequencer::PatternExchange& exchange) {
     if (!IsValidSeqFileOp(request))
-        return;
+        return false;
     auto& j = job();
     j.status.request_id = request.request_id;
     j.send = true;
     if (request.op == SEQ_FILE_GET || request.request_id == j.status.active_request_id ||
         request.request_id == j.status.completed_request_id)
-        return;
+        return false;
     if (j.phase != Phase::Idle) {
         j.status.completed_request_id = request.request_id;
         j.status.completed_op = request.op;
         j.status.error = SEQ_FILE_BUSY;
-        return;
+        return false;
     }
     j.request = request;
+    j.first_io_error = FR_OK;
     if (request.op == SEQ_FILE_NEW)
         j.request.name[0] = 0;
     if ((request.op == SEQ_FILE_SAVE_COPY || request.op == SEQ_FILE_LOAD) &&
         !PatternFile::ValidName(request.name)) {
         Finish(SEQ_FILE_BAD_NAME, exchange);
-        return;
+        return false;
     }
     j.status.busy = 1;
     j.status.active_request_id = request.request_id;
@@ -116,7 +134,7 @@ void Request(const SeqFileOpMessage& request, Sequencer::PatternExchange& exchan
     if (request.op == SEQ_FILE_SAVE_COPY) {
         if (!exchange.Capture()) {
             Finish(SEQ_FILE_CAPTURE_BUSY, exchange);
-            return;
+            return false;
         }
         j.phase = Phase::Capture;
     } else if (request.op == SEQ_FILE_LOAD)
@@ -126,6 +144,7 @@ void Request(const SeqFileOpMessage& request, Sequencer::PatternExchange& exchan
         exchange.Install();
         j.phase = Phase::Install;
     }
+    return true;
 }
 void Pump(Sequencer::PatternExchange& exchange) {
     auto& j = job();
@@ -146,10 +165,12 @@ void Pump(Sequencer::PatternExchange& exchange) {
             FILINFO info{};
             const auto found = f_stat(j.destination, &info);
             if (found != FR_NO_FILE) {
+                if (found != FR_OK)
+                    IoResult(found);
                 Finish(found == FR_OK ? SEQ_FILE_EXISTS : SEQ_FILE_IO, exchange);
                 break;
             }
-            if (f_open(&j.file, j.temporary, FA_WRITE | FA_CREATE_NEW) != FR_OK) {
+            if (IoResult(f_open(&j.file, j.temporary, FA_WRITE | FA_CREATE_NEW)) != FR_OK) {
                 Finish(SEQ_FILE_IO, exchange);
                 break;
             }
@@ -171,13 +192,13 @@ void Pump(Sequencer::PatternExchange& exchange) {
                 Finish(SEQ_FILE_IO, exchange);
                 break;
             }
-            const auto closed = f_close(&j.file);
+            const auto closed = IoResult(f_close(&j.file));
             j.open = false;
             if (closed != FR_OK) {
                 Finish(SEQ_FILE_IO, exchange);
                 break;
             }
-            const auto renamed = f_rename(j.temporary, j.destination);
+            const auto renamed = IoResult(f_rename(j.temporary, j.destination));
             if (renamed == FR_OK)
                 j.temp_owned = false;
             Finish(renamed == FR_OK      ? SEQ_FILE_OK
@@ -187,7 +208,7 @@ void Pump(Sequencer::PatternExchange& exchange) {
             break;
         }
         case Phase::OpenLoad: {
-            const auto opened = f_open(&j.file, j.destination, FA_READ);
+            const auto opened = IoResult(f_open(&j.file, j.destination, FA_READ));
             if (opened != FR_OK) {
                 Finish(
                     opened == FR_NO_FILE || opened == FR_NO_PATH ? SEQ_FILE_NOT_FOUND : SEQ_FILE_IO,
@@ -213,10 +234,10 @@ void Pump(Sequencer::PatternExchange& exchange) {
                 break;
             j.decoder.reset();
             if (result != PatternFile::Result::Done) {
-                Finish(SEQ_FILE_BAD_FILE, exchange);
+                Finish(j.first_io_error == FR_OK ? SEQ_FILE_BAD_FILE : SEQ_FILE_IO, exchange);
                 break;
             }
-            const auto closed = f_close(&j.file);
+            const auto closed = IoResult(f_close(&j.file));
             j.open = false;
             if (closed != FR_OK) {
                 Finish(SEQ_FILE_IO, exchange);

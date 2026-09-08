@@ -170,8 +170,11 @@ edits and Play/Continue until completion; Stop, tempo configuration and
 readback remain available. No filesystem work runs in the callback.
 
 The storage pump advances at most eight codec records per main-loop service.
-Streaming and resident audio continue; file status retains the active and
-last completed request IDs. Read retries recover a lost completion without
+Accepted Save/Load operations stop the singleton streaming preview before
+filesystem work, matching kit-save admission. Resident Track voices continue;
+preview playback can be started again afterward. Read retries and rejected
+requests do not repeat that stop. File status retains the active and last
+completed request IDs. Read retries recover a lost completion without
 replaying Save, Load or New.
 
 ## 6. Validation

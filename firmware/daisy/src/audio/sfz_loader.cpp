@@ -1186,8 +1186,10 @@ uint8_t ResolveNote(
     return s_bank.ResolveNote(slot, note, velocity, s_loaded_resolver, out, max);
 }
 
-void PrepareSequencerVoices(SequencerVoiceMap& map) {
+void PrepareSequencerVoices(SequencerVoiceMap& map, uint16_t tracks) {
     for (uint8_t track = 0; track < kNumTracks; ++track) {
+        if (!(tracks & (1u << track)))
+            continue;
         if (TrackLoading(track))
             map.Revoke(static_cast<uint16_t>(1u << track));
         else
