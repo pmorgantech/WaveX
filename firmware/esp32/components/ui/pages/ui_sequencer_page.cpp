@@ -130,6 +130,10 @@ uint8_t UISequencerPage::selectedRow() const {
 bool UISequencerPage::editable() const {
     return link_alive_ && model_.Ready(selectedRow()) && selected_step_ < settings_.length;
 }
+bool UISequencerPage::valueStep(SequencerGridModel::Step& step) const {
+    return link_alive_ && settings_.valid && selected_step_ < settings_.length &&
+           model_.CopyStepForEdit(selectedRow(), selected_step_ % 16, step);
+}
 void UISequencerPage::requestRow(uint8_t row) {
     if (!link_alive_ || row >= 4)
         return;
@@ -153,6 +157,8 @@ void UISequencerPage::window(uint8_t track, uint8_t step) {
 void UISequencerPage::focus(uint8_t track, uint8_t step) {
     if (track >= SEQ_TRACK_COUNT || step >= SEQ_MAX_STEPS)
         return;
+    if (getCurrentTrack() != track || selected_step_ != step)
+        model_.DiscardPreview();
     setCurrentTrack(track);
     selected_step_ = step;
     const uint8_t first_track = static_cast<uint8_t>((track / 4) * 4);
@@ -264,8 +270,8 @@ void UISequencerPage::render() {
             text(cell.label, value);
         }
     }
-    if (editable()) {
-        const auto& step = model_.Row(selectedRow()).steps[selected_step_ % 16];
+    SequencerGridModel::Step step;
+    if (valueStep(step)) {
         std::snprintf(value, sizeof(value), "%u", step.velocity);
         tileText(tiles_[4], value);
         std::snprintf(value, sizeof(value), "%u", step.probability);
@@ -377,15 +383,23 @@ void UISequencerPage::adjust(uint8_t parameter, int delta) {
             else
                 settings_.scale = static_cast<uint8_t>(next);
         }
-    } else if (editable()) {
-        const auto saved = model_.Row(selectedRow()).steps[selected_step_ % 16];
+    } else {
+        SequencerGridModel::Step saved;
+        if (!valueStep(saved))
+            return;
+        bool sent = false;
         if (parameter == 4) {
-            const auto velocity = static_cast<uint16_t>(std::clamp(saved.velocity + delta, 1, 127));
-            edit({SEQ_OP_SET_STEP, getCurrentTrack(), selected_step_, saved.on, velocity, 0});
+            saved.velocity = static_cast<uint8_t>(std::clamp(saved.velocity + delta, 1, 127));
+            sent = edit(
+                {SEQ_OP_SET_STEP, getCurrentTrack(), selected_step_, saved.on, saved.velocity, 0});
         } else if (parameter == 5) {
-            const auto probability =
-                static_cast<uint8_t>(std::clamp(saved.probability + delta, 0, 100));
-            edit({SEQ_OP_SET_STEP_PROB, getCurrentTrack(), selected_step_, probability, 0, 0});
+            saved.probability = static_cast<uint8_t>(std::clamp(saved.probability + delta, 0, 100));
+            sent = edit(
+                {SEQ_OP_SET_STEP_PROB, getCurrentTrack(), selected_step_, saved.probability, 0, 0});
+        }
+        if (sent) {
+            model_.PreviewStep(selectedRow(), selected_step_ % 16, saved);
+            render();
         }
     }
 }
@@ -521,23 +535,24 @@ size_t UISequencerPage::consoleState(char* out, size_t cap, size_t len) {
 bool UISequencerPage::consoleCommand(const char* args, char* reply, size_t cap) {
     char verb[24]{};
     int a = 0, b = 0;
+    SequencerGridModel::Step step;
     const int count = std::sscanf(args ? args : "", "%23s %d %d", verb, &a, &b);
     if (count == 3 && std::strcmp(verb, "FOCUS") == 0 && a >= 1 && a <= 16 && b >= 1 && b <= 64)
         focus(static_cast<uint8_t>(a - 1), static_cast<uint8_t>(b - 1));
     else if (count == 1 && std::strcmp(verb, "TOGGLE") == 0 && editable())
         lv_obj_send_event(
             cells_[selectedRow()][selected_step_ % 16].button, LV_EVENT_CLICKED, nullptr);
-    else if (count == 2 && model_.AllReady()) {
+    else if (count == 2 && link_alive_ && settings_.valid) {
         if (std::strcmp(verb, "TEMPO") == 0 && a >= 2000 && a <= 30000 && a % 100 == 0)
             adjust(0, (a - settings_.tempo_bpm_x100) / 100);
         else if (std::strcmp(verb, "SWING") == 0 && a >= 50 && a <= 75)
             adjust(1, a - settings_.swing);
         else if (std::strcmp(verb, "LENGTH") == 0 && a >= 1 && a <= 64)
             adjust(2, a - settings_.length);
-        else if (std::strcmp(verb, "VELOCITY") == 0 && a >= 1 && a <= 127 && editable())
-            adjust(4, a - model_.Row(selectedRow()).steps[selected_step_ % 16].velocity);
-        else if (std::strcmp(verb, "PROBABILITY") == 0 && a >= 0 && a <= 100 && editable())
-            adjust(5, a - model_.Row(selectedRow()).steps[selected_step_ % 16].probability);
+        else if (std::strcmp(verb, "VELOCITY") == 0 && a >= 1 && a <= 127 && valueStep(step))
+            adjust(4, a - step.velocity);
+        else if (std::strcmp(verb, "PROBABILITY") == 0 && a >= 0 && a <= 100 && valueStep(step))
+            adjust(5, a - step.probability);
         else
             return false;
     } else

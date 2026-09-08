@@ -76,3 +76,53 @@ TEST(SequencerGridModelTest, WindowAndRequestBoundsAreRejectedWithoutChangingSel
     EXPECT_EQ(model.BeginRead(10, 4).request_id, 0u);
     EXPECT_EQ(model.BeginRead(0, 0).request_id, 0u);
 }
+
+TEST(SequencerGridModelTest, RapidEditsAccumulateUntilFreshBackendReadback) {
+    SequencerGridModel model;
+    auto page = Reply(model.BeginRead(1, 0));
+    page.steps[3].on = 1;
+    page.steps[3].velocity = 80;
+    page.steps[3].probability = 75;
+    ASSERT_TRUE(model.Accept(page));
+    SequencerGridModel::Step step;
+    ASSERT_TRUE(model.CopyStepForEdit(0, 3, step));
+    step.velocity += 5;
+    model.InvalidateRow(0);
+    model.PreviewStep(0, 3, step);
+    auto stale = Reply(model.BeginRead(2, 0));
+    ASSERT_TRUE(model.CopyStepForEdit(0, 3, step));
+    step.velocity += 5;
+    step.probability -= 10;
+    model.InvalidateRow(0);
+    model.PreviewStep(0, 3, step);
+    auto fresh = Reply(model.BeginRead(3, 0));
+    EXPECT_FALSE(model.Accept(stale));
+    ASSERT_TRUE(model.CopyStepForEdit(0, 3, step));
+    EXPECT_EQ(step.on, 1);
+    EXPECT_EQ(step.velocity, 90);
+    EXPECT_EQ(step.probability, 65);
+    EXPECT_EQ(model.Row(0).steps[3].velocity, 80);    // confirmed state stays separate
+    EXPECT_FALSE(model.CopyStepForEdit(0, 4, step));  // no guesses for another cell
+    fresh.steps[3].velocity = 88;                     // backend wins even if it differs
+    ASSERT_TRUE(model.Accept(fresh));
+    ASSERT_TRUE(model.CopyStepForEdit(0, 3, step));
+    EXPECT_EQ(step.velocity, 88);
+}
+TEST(SequencerGridModelTest, PreviewLifetimeIsBoundedBySelectionWindowAndLink) {
+    SequencerGridModel model;
+    SequencerGridModel::Step step;
+    EXPECT_FALSE(model.CopyStepForEdit(0, 0, step));
+    model.PreviewStep(0, 0, step);
+    ASSERT_TRUE(model.Accept(Reply(model.BeginRead(1, 1))));
+    EXPECT_TRUE(model.CopyStepForEdit(0, 0, step));  // another row cannot acknowledge it
+    model.DiscardPreview();
+    EXPECT_FALSE(model.CopyStepForEdit(0, 0, step));
+    model.PreviewStep(0, 0, step);
+    model.SetWindow(4, 16);
+    EXPECT_FALSE(model.CopyStepForEdit(0, 0, step));
+    model.PreviewStep(0, 0, step);
+    model.Invalidate();
+    EXPECT_FALSE(model.CopyStepForEdit(0, 0, step));
+    EXPECT_FALSE(model.CopyStepForEdit(4, 0, step));
+    EXPECT_FALSE(model.CopyStepForEdit(0, 16, step));
+}

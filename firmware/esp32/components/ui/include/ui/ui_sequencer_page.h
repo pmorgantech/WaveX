@@ -40,6 +40,7 @@ class UISequencerPage : public UIPage {
     void clearRow();
     uint8_t selectedRow() const;
     bool editable() const;
+    bool valueStep(SequencerGridModel::Step& step) const;
 
     SequencerGridModel model_;
     Cell cells_[4][16]{};

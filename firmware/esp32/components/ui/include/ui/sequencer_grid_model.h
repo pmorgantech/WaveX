@@ -14,6 +14,7 @@ class SequencerGridModel {
     static constexpr uint8_t kRows = 4;
     using Page = WaveX::Protocol::SeqPatternSyncMessage;
     using Request = WaveX::Protocol::SeqPatternRequestMessage;
+    using Step = WaveX::Protocol::SeqStepState;
 
     bool SetWindow(uint8_t first_track, uint8_t first_step) {
         if (first_track > WaveX::Protocol::SEQ_TRACK_COUNT - kRows || first_track % kRows != 0 ||
@@ -27,6 +28,7 @@ class SequencerGridModel {
     }
     void Invalidate() {
         ready_.fill(false);
+        DiscardPreview();
         request_ = Request{};
     }
     Request BeginRead(uint32_t id, uint8_t row) {
@@ -52,6 +54,8 @@ class SequencerGridModel {
                 return false;
         const auto row = static_cast<uint8_t>(page.track - first_track_);
         pages_[row] = page;
+        if (preview_valid_ && preview_row_ == row)
+            DiscardPreview();
         ready_[row] = true;
         request_ = Request{};
         return true;
@@ -61,6 +65,29 @@ class SequencerGridModel {
             ready_[row] = false;
         request_ = Request{};
     }
+    // A successful outgoing edit can be the basis of another drag increment
+    // while its row awaits readback. Confirmed pages remain untouched.
+    bool CopyStepForEdit(uint8_t row, uint8_t column, Step& out) const {
+        if (row >= kRows || column >= WaveX::Protocol::SEQ_PAGE_STEPS)
+            return false;
+        if (preview_valid_ && preview_row_ == row && preview_column_ == column) {
+            out = preview_;
+            return true;
+        }
+        if (!Ready(row))
+            return false;
+        out = pages_[row].steps[column];
+        return true;
+    }
+    void PreviewStep(uint8_t row, uint8_t column, const Step& step) {
+        if (row >= kRows || column >= WaveX::Protocol::SEQ_PAGE_STEPS)
+            return;
+        preview_ = step;
+        preview_row_ = row;
+        preview_column_ = column;
+        preview_valid_ = true;
+    }
+    void DiscardPreview() { preview_valid_ = false; }
     bool Ready(uint8_t row) const { return row < kRows && ready_[row]; }
     bool AllReady() const {
         for (bool ready: ready_)
@@ -77,6 +104,9 @@ class SequencerGridModel {
     std::array<Page, kRows> pages_{};
     std::array<bool, kRows> ready_{};
     Request request_{};
+    Step preview_{};
+    uint8_t preview_row_ = 0, preview_column_ = 0;
+    bool preview_valid_ = false;
     uint8_t first_track_ = 0;
     uint8_t first_step_ = 0;
 };

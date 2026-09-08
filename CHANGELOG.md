@@ -22,6 +22,11 @@ versioning and release process.
   choke groups, confirmed kit creation, naming, and atomic new-copy WXI saves.
   Protocol version 5 retains completed mutation results across read retries.
 
+### Fixed
+
+- Rapid velocity and probability drags now retain pending edits while waiting
+  for backend readback; stale replies cannot replace the latest local preview.
+
 ### Changed
 
 - Sequencer rows now address their matching Tracks at MIDI note 60 across all
