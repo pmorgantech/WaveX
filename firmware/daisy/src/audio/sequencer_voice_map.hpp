@@ -77,6 +77,21 @@ struct SequencerVoiceMap {
         return count;
     }
 
+    // Foreground sparse copy: unused capacity is not live state. Copying all
+    // 512 zone slots on every cutoff edit needlessly churns the SDRAM/cache
+    // shared with audio. Counts hide old capacity in reused mailbox slots.
+    void CopyLiveFrom(const SequencerVoiceMap& source) {
+        for (uint8_t track = 0; track < kNumTracks; ++track) {
+            auto& dest = tracks[track];
+            const auto& src = source.tracks[track];
+            dest.count = src.count < kMaxZones ? src.count : kMaxZones;
+            for (uint8_t i = 0; i < dest.count; ++i) {
+                dest.keys[i] = src.keys[i];
+                dest.zones[i] = src.zones[i];
+            }
+        }
+    }
+
     void Revoke(uint16_t mask) {
         for (uint8_t track = 0; track < kNumTracks; ++track)
             if (mask & (1u << track))

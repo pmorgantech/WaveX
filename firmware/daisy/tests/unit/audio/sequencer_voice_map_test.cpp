@@ -128,3 +128,19 @@ TEST_F(SequencerVoiceMapTest, UnboundTrackAndForegroundEditsCannotLeakIntoPublis
     EXPECT_EQ(map.Resolve(2, 60, 100, after), 0);
 }
 }  // namespace
+
+TEST(SequencerVoiceMapCopy, CopiesOnlyLiveCapacityAndRevocationsCannotResurrectZones) {
+    WaveX::AudioEngine::SequencerVoiceMap source, dest;
+    source.tracks[0].count = 1;
+    source.tracks[0].keys[0] = {60, 60, 1, 127, 0, true};
+    source.tracks[0].zones[0].root_note = 64;
+    dest.tracks[0].zones[31].root_note = 99;
+    dest.CopyLiveFrom(source);
+    EXPECT_EQ(dest.tracks[0].zones[31].root_note, 99);  // unused slots were not copied
+    WaveX::AudioEngine::VoiceTriggerParams out[4];
+    ASSERT_EQ(dest.Resolve(0, 60, 100, out), 1);
+    EXPECT_EQ(out[0].note, 64);
+    source.Revoke(1);
+    dest.CopyLiveFrom(source);
+    EXPECT_EQ(dest.Resolve(0, 60, 100, out), 0);
+}

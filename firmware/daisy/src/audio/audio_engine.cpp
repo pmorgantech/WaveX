@@ -760,14 +760,16 @@ static void PublishSequencerVoiceMap() {
     if (!s_seq_voices)
         return;
     SfzLoader::PrepareSequencerVoices(s_seq_voices->pending);
-    s_seq_voices->mailbox.Publish(s_seq_voices->pending);
+    s_seq_voices->mailbox.ProducerValue().CopyLiveFrom(s_seq_voices->pending);
+    s_seq_voices->mailbox.PublishPrepared();
 }
 
 static void ClearSequencerVoiceMap(uint16_t tracks = 0xFFFFu) {
     if (!s_seq_voices)
         return;
     s_seq_voices->pending.Revoke(tracks);
-    s_seq_voices->mailbox.Publish(s_seq_voices->pending);
+    s_seq_voices->mailbox.ProducerValue().CopyLiveFrom(s_seq_voices->pending);
+    s_seq_voices->mailbox.PublishPrepared();
 }
 
 // Drops `sample_id` from the registry and returns its memory to the arena.

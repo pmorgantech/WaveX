@@ -31,6 +31,13 @@ class SnapshotMailbox {
     // while preserving the producer's private ownership of its next back slot.
     void Publish(const T& value) {
         slots_[producer_back_] = value;
+        PublishPrepared();
+    }
+
+    // Producer-owned scratch for sparse/fixed-capacity values. Populate all
+    // logically live fields before publishing; the consumer cannot see them yet.
+    T& ProducerValue() { return slots_[producer_back_]; }
+    void PublishPrepared() {
         const uint32_t previous_middle =
             __atomic_exchange_n(&middle_state_, producer_back_ | kDirtyBit, __ATOMIC_ACQ_REL);
         producer_back_ = previous_middle & kIndexMask;

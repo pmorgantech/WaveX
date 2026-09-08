@@ -91,3 +91,17 @@ TEST(SnapshotMailboxTest, ProducerCannotOverwriteBorrowedFrontBeforeNextAcquisit
     EXPECT_EQ(mailbox.ConsumerValue().generation, 99u);
     EXPECT_FALSE(mailbox.AcquireLatest());
 }
+
+TEST(SnapshotMailboxTest, PreparedPublicationRetainsBorrowedConsumerOwnership) {
+    WaveX::AudioEngine::SnapshotMailbox<uint32_t> mailbox;
+    mailbox.Init(10);
+    const auto& borrowed = mailbox.ConsumerValue();
+    for (uint32_t i = 11; i < 100; ++i) {
+        mailbox.ProducerValue() = i;
+        EXPECT_EQ(borrowed, 10u);
+        mailbox.PublishPrepared();
+        EXPECT_EQ(borrowed, 10u);
+    }
+    ASSERT_TRUE(mailbox.AcquireLatest());
+    EXPECT_EQ(mailbox.ConsumerValue(), 99u);
+}

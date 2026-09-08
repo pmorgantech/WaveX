@@ -35,6 +35,10 @@ versioning and release process.
   preserve note/step identity through retriggers, and select overlapping
   velocity layers with the configured crossfade.
 
+- Fixed prepared sequencer voice-map publication to copy only live zone
+  capacity during Instrument and control updates, preserving mailbox ownership
+  for the borrowed consumer snapshot.
+
 ### Changed
 
 - Recorded the touch kit/grid capacity follow-up at 67.0844% worst-case
