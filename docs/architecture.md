@@ -223,6 +223,12 @@ See `features/inter-mcu-protocol.md` for the message catalog. Every message stru
 
 The 1-block = 1-ms identity is a deliberate design invariant: the control tick is derived from the audio callback, so CV, modulation, and sequencer events are inherently phase-locked to the audio stream. Any change to block size must preserve an integer-ms tick or introduce a proper tick divider — `timebase.hpp` now enforces this with a `static_assert`. Because the tick is derived from the audio DMA clock rather than a software scheduler, no RTOS is used or needed on the Daisy — see §4.2 "Why bare-metal, not an RTOS" for the full rationale. (The engine briefly ran at 44.1 kHz, silently making the "1 kHz" tick 918.75 Hz; found and reverted 2026-07-03 — `dma-timing-review-2026-07-03.md` Finding 1.) Non-48 kHz WAV content is rate-converted at playback: the streaming/audition path resamples in `PumpWavIO`, and RAM-resident samples use playback-rate compensation (`VoiceTriggerParams::sample_rate_hz` scales `Voice::increment` by native/engine rate).
 
+Pattern persistence uses a separate foreground FatFs job and one fixed
+callback-exchange buffer in AXI SRAM. The shared pattern model owns steps
+and groove settings; tempo and Track instruments remain session-owned.
+Capture/load ownership and the WXCF format are specified in
+[sequencer.md](features/sequencer.md#pattern-files-as-built).
+
 ### 5.2 Voice architecture (target — partially implemented)
 
 The target has `WAVEX_NUM_VOICES` runtime voices (8 today, measured; one

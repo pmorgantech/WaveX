@@ -3,7 +3,7 @@
 // WXCF chunk container (design: docs/features/instrument-model.md §5). One
 // versioned TLV file format shared by every WaveX SD artifact: instruments
 // (.wxi), tunings (.wxt), scenes/mixer project chunks, and eventually
-// patterns/projects (.wxp, docs/features/sequencer.md §3).
+// patterns (.wxpat) and projects (.wxp); see docs/features/sequencer.md.
 //
 // Wire format (little-endian throughout):
 //   Header := magic "WXCF" (4 B), u16 file_type, u16 file_version, u32 total_len

@@ -345,3 +345,7 @@ bool inter_mcu_get_seq_playhead(WaveX::Protocol::SeqPlayheadMessage* out);
 esp_err_t inter_mcu_send_instrument_edit(const WaveX::Protocol::InstOpMessage& request);
 void inter_mcu_store_instrument_map(const WaveX::Protocol::InstZoneSyncMessage& map);
 bool inter_mcu_get_instrument_map(WaveX::Protocol::InstZoneSyncMessage* out);
+
+esp_err_t inter_mcu_send_seq_file_op(const WaveX::Protocol::SeqFileOpMessage& request);
+void inter_mcu_store_seq_file_status(const WaveX::Protocol::SeqFileStatusMessage& status);
+bool inter_mcu_get_seq_file_status(WaveX::Protocol::SeqFileStatusMessage* out);

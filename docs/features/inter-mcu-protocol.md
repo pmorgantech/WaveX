@@ -84,6 +84,8 @@ sequence(u16 LE) | payload[0..2048] | crc16(u16 LE) | end(0x5A)
 | MSG_SEQ_PATTERN_OP | 0x51 | E→D | `SeqPatternOpMessage{op, track, step, arg_u8, arg_u16, arg_s16}` | one small idempotent pattern edit; `op` (`SeqPatternOpCode`) selects which fields apply — see the table in `protocol.h` above the struct |
 | MSG_SEQ_PATTERN_SYNC | 0x52 | both | SeqPatternRequestMessage / SeqPatternSyncMessage | sixteen-step readback window from the callback-owned pending pattern; see Sequencer page readback below |
 | MSG_SEQ_PLAYHEAD | 0x53 | D→E | `SeqPlayheadMessage{pattern, step, playing, sync_state, measured_bpm_x100, loop_count}` | coalesced playhead + sync-lock feedback for the UI (≤ 30 Hz) |
+| MSG_SEQ_FILE_OP | 0x5A | E→D | SeqFileOpMessage | read retained status or save-copy/load/new a named pattern |
+| MSG_SEQ_FILE_STATUS | 0x5B | D→E | SeqFileStatusMessage | active job, retained completion/error and last successful file name |
 | MSG_MIDI_CLOCK_EVENT | 0x55 | E→D | `MidiClockEventMessage{event, source, tick_seq, esp_delta_us, spp_beats16}` | forwarded MIDI real-time/transport byte; `esp_delta_us` is the ESP-domain **delta** (never an absolute timestamp) so the tempo follower can't mix clock domains — `midi-sync-tempo-follower.md` §2/§3 |
 | MSG_MIDI_CC | 0x56 | E→D | `MidiCcMessage{cc, value, channel}` | forwarded MIDI control change; Daisy owns the CC→mod-source map (`param-locks-and-modulation.md` §6) |
 | MSG_SEQ_CLOCK_OUT | 0x57 | D→E | `SeqClockOutMessage{event, tick_seq, spp_beats16}` | Daisy-generated MIDI clock/transport for the ESP32 to serialize onto DIN + USB immediately |
@@ -233,3 +235,21 @@ Daisy resolves prepared zone keys against the scheduled note and velocity,
 including layer selection and crossfade weights. Retriggers preserve the
 primary hit's note and velocity. This is one note per drum-shaped step,
 not the future melodic chord/gate payload.
+
+
+### Pattern file operations
+
+`SeqFileOpMessage` and `SeqFileStatusMessage` in `protocol.h` define the
+32-byte request and 40-byte response. GET is read-only; SAVE_COPY, LOAD and
+NEW are mutations. Nonzero request IDs correlate replies. GET returns the
+last mutation's completion independently of its own read ID; a duplicate
+active or most recently completed mutation is not replayed. The UI never
+automatically replays a timed-out mutation.
+
+File names are bounded, terminated path components, not arbitrary paths.
+LOAD/NEW replace the working pattern after confirmation; tempo and Track
+instruments are not file-owned. Busy, invalid name, missing/duplicate file,
+I/O, invalid format and capture-busy errors are explicit. See
+[sequencer.md](sequencer.md#pattern-files-as-built) for storage and handoff
+behavior. These additive messages keep protocol version 6; both updated
+MCUs are needed for the new page. The arpeggiator's 0x58 reservation remains.

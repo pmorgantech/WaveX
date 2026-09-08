@@ -26,6 +26,12 @@ versioning and release process.
   labels for drum notes 60-75, immutable prepared Track voice maps, and
   bounded key/velocity layer matching without callback-time Pool lookups.
 
+- Added named pattern files in the touchscreen Shift → Files flow, including
+  new-copy WXCF save/load, complete hidden-step and groove-setting persistence,
+  tempo and Track preservation, foreground I/O validation, and confirmed
+  replacement. The additive file operations use protocol messages 0x5A/0x5B;
+  protocol version 6 remains unchanged.
+
 ### Fixed
 
 - Rapid velocity and probability drags now retain pending edits while waiting

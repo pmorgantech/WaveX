@@ -57,6 +57,7 @@ static void HandleCvCalSetMessage(const uint8_t* payload, size_t payload_size);
 static void HandleCvCalGetMessage(const uint8_t* payload, size_t payload_size);
 static void HandleCvTestMessage(const uint8_t* payload, size_t payload_size);
 static void HandleSeqTransportMessage(const uint8_t* payload, size_t payload_size);
+static void HandleSeqFileOpMessage(const uint8_t* payload, size_t payload_size);
 static void HandleSeqPatternRequestMessage(const uint8_t* payload, size_t payload_size);
 static void HandleSeqPatternOpMessage(const uint8_t* payload, size_t payload_size);
 static void HandleMidiClockEventMessage(const uint8_t* payload, size_t payload_size);
@@ -208,6 +209,9 @@ void ProcessInterMcuMessage(uint8_t msg_type,
             break;
         case MSG_SEQ_TRANSPORT:
             HandleSeqTransportMessage(payload, payload_size);
+            break;
+        case MSG_SEQ_FILE_OP:
+            HandleSeqFileOpMessage(payload, payload_size);
             break;
         case MSG_SEQ_PATTERN_SYNC:
             HandleSeqPatternRequestMessage(payload, payload_size);
@@ -686,6 +690,16 @@ static void HandleSeqTransportMessage(const uint8_t* payload, size_t payload_siz
     WaveX::Protocol::SeqTransportMessage msg;
     memcpy(&msg, payload, sizeof(msg));
     WaveX::AudioEngine::OnSeqTransport(msg);
+#endif
+}
+
+static void HandleSeqFileOpMessage(const uint8_t* payload, size_t payload_size) {
+    if (!payload || payload_size != sizeof(WaveX::Protocol::SeqFileOpMessage))
+        return;
+#if WAVEX_AUDIO_ENGINE_ENABLED
+    WaveX::Protocol::SeqFileOpMessage request;
+    memcpy(&request, payload, sizeof(request));
+    WaveX::AudioEngine::OnSeqFileOp(request);
 #endif
 }
 

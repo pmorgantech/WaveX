@@ -744,3 +744,17 @@ TEST_F(MessageDispatchTest, TruncatedSequencerPageRequestsAreDropped) {
         ProcessInterMcuMessage(MSG_SEQ_PATTERN_SYNC, 1, payload, length);
     EXPECT_TRUE(GetDispatchRecord().seq_pattern_requests.empty());
 }
+
+TEST_F(MessageDispatchTest, PatternFileRequestIsDispatchedOnlyAtItsExactWireSize) {
+    SeqFileOpMessage request;
+    request.request_id = 123;
+    request.op = SEQ_FILE_LOAD;
+    std::strcpy(request.name, "Night");
+    Dispatch(MSG_SEQ_FILE_OP, request);
+    ASSERT_EQ(GetDispatchRecord().seq_file_ops.size(), 1u);
+    EXPECT_EQ(GetDispatchRecord().seq_file_ops[0].request_id, 123u);
+    uint8_t short_payload[sizeof(request)]{};
+    for (size_t n = 0; n < sizeof(request); ++n)
+        ProcessInterMcuMessage(MSG_SEQ_FILE_OP, 1, short_payload, n);
+    EXPECT_EQ(GetDispatchRecord().seq_file_ops.size(), 1u);
+}

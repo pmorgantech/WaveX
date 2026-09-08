@@ -1257,3 +1257,32 @@ bool inter_mcu_get_instrument_map(WaveX::Protocol::InstZoneSyncMessage* out) {
     taskEXIT_CRITICAL(&s_instrument_map_lock);
     return valid;
 }
+
+namespace {
+portMUX_TYPE s_seq_file_lock = portMUX_INITIALIZER_UNLOCKED;
+WaveX::Protocol::SeqFileStatusMessage s_seq_file_status;
+bool s_seq_file_valid = false;
+}  // namespace
+esp_err_t inter_mcu_send_seq_file_op(const WaveX::Protocol::SeqFileOpMessage& request) {
+    if (!WaveX::Protocol::IsValidSeqFileOp(request))
+        return ESP_ERR_INVALID_ARG;
+    return send_uart_message(WaveX::Protocol::MSG_SEQ_FILE_OP, &request, sizeof(request)) >= 0
+               ? ESP_OK
+               : ESP_FAIL;
+}
+void inter_mcu_store_seq_file_status(const WaveX::Protocol::SeqFileStatusMessage& status) {
+    taskENTER_CRITICAL(&s_seq_file_lock);
+    s_seq_file_status = status;
+    s_seq_file_valid = true;
+    taskEXIT_CRITICAL(&s_seq_file_lock);
+}
+bool inter_mcu_get_seq_file_status(WaveX::Protocol::SeqFileStatusMessage* out) {
+    if (!out)
+        return false;
+    taskENTER_CRITICAL(&s_seq_file_lock);
+    const bool valid = s_seq_file_valid;
+    if (valid)
+        *out = s_seq_file_status;
+    taskEXIT_CRITICAL(&s_seq_file_lock);
+    return valid;
+}

@@ -58,6 +58,18 @@ class SequencerTransport {
     Pattern& pattern() { return pending_pattern_; }
     const Pattern& pattern() const { return pending_pattern_; }
 
+    uint32_t PatternRevision() const { return pattern_revision_; }
+    // Callback only. Persistence validates before handing this private buffer
+    // over. Stop without changing tempo, sync configuration or Track bindings.
+    void ReplacePattern(const Pattern& pattern) {
+        scheduler_.Stop();
+        follower_.OnStop();
+        armed_ = false;
+        pending_pattern_ = pattern;
+        pending_pattern_dirty_ = true;
+        ++pattern_revision_;
+    }
+
     // ---- Transport + mode (MSG_SEQ_TRANSPORT) ----
     void ApplyTransport(const Protocol::SeqTransportMessage& m) {
         tempo_bpm_ = static_cast<double>(m.tempo_bpm_x100) / 100.0;
@@ -196,6 +208,7 @@ class SequencerTransport {
                 break;
         }
         pending_pattern_dirty_ = true;
+        ++pattern_revision_;
     }
 
     // ---- MIDI clock (MSG_MIDI_CLOCK_EVENT) ----
@@ -387,6 +400,7 @@ class SequencerTransport {
     Pattern pending_pattern_;
     Pattern active_pattern_;
     bool pending_pattern_dirty_ = false;
+    uint32_t pattern_revision_ = 0;
     SequencerScheduler scheduler_;
     TempoFollower follower_;
 

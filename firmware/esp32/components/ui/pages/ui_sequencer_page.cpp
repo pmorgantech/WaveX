@@ -5,6 +5,7 @@
 #include "inter_mcu.h"
 #include "ui/current_track.h"
 #include "ui/ui_navigator.h"
+#include "ui/ui_pattern_files_page.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -302,7 +303,7 @@ void UISequencerPage::render() {
     char context[sizeof(context_)];
     std::snprintf(context,
                   sizeof(context),
-                  "Pattern 1 / Steps %u-%u / %s",
+                  "Working pattern / Steps %u-%u / %s",
                   model_.FirstStep() + 1,
                   model_.FirstStep() + 16,
                   !link_alive_        ? "Disconnected"
@@ -521,6 +522,10 @@ std::array<Softkey, NUM_SOFTKEYS> UISequencerPage::getShiftedSoftkeys() {
                },
                editable(),
                "Select an active step window"};
+    keys[4] = {"Files",
+               [] { UINavigator::instance().push(createPatternFilesPage()); },
+               link_alive_,
+               "Audio engine disconnected"};
     return keys;
 }
 size_t UISequencerPage::consoleState(char* out, size_t cap, size_t len) {

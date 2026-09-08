@@ -47,10 +47,12 @@ using q15_t = int16_t;
 #include "output_sink.hpp"
 #include "paraphonic_envelope.hpp"
 #include "sample_load_info.hpp"
+#include "sequencer/pattern_exchange.hpp"
 #include "sequencer/sequencer_command_queue.hpp"
 #include "sequencer_voice_map.hpp"
 #include "sfz_loader.hpp"
 #include "snapshot_mailbox.hpp"
+#include "storage/pattern_store.hpp"
 #include "track_live_updates.hpp"
 #include "voice_manager.hpp"
 #include "wav/wav_header_parser.hpp"
@@ -263,6 +265,9 @@ struct SequencerVoiceState {
     SnapshotMailbox<SequencerVoiceMap> mailbox;
 };
 static SequencerVoiceState* s_seq_voices = nullptr;
+// One AXI SRAM buffer whose ownership crosses only on release/acquire handoff.
+static WaveX::BssStatic<WaveX::Sequencer::PatternExchange> s_pattern_exchange_storage;
+
 static wxsamp_t s_seq_voice_storage{};
 
 // --- Stage A paraphonic analog path (roadmap item 5; analog-voice-board.md
@@ -454,7 +459,9 @@ static bool drain_sequencer(uint16_t block_size) {
     }
     const uint64_t block_start_frame = s_seq_transport.scheduler().CurrentFrame();
     WaveX::Sequencer::TriggerEvent events[WaveX::Sequencer::kMaxEventsPerTick];
-    const size_t event_count = s_seq_transport.Tick(events, WaveX::Sequencer::kMaxEventsPerTick);
+    size_t event_count = s_seq_transport.Tick(events, WaveX::Sequencer::kMaxEventsPerTick);
+    if (s_pattern_exchange_storage.Get().Process(s_seq_transport, event_count == 0))
+        event_count = 0;  // a validated replacement discards this block's old-pattern triggers
     s_seq_telemetry_frames += block_size;
     if (s_seq_telemetry_frames >= s_seq_telemetry_interval) {
         s_seq_telemetry_frames = 0;
@@ -2505,6 +2512,9 @@ static void EnqueueSequencerCommand(const WaveX::Sequencer::SequencerCommand& co
 }
 
 void OnSeqTransport(const SeqTransportMessage& m) {
+    if (WaveX::PatternStore::BlocksEdits() && m.command != SEQ_TRANSPORT_STOP &&
+        m.command != SEQ_TRANSPORT_CONFIGURE)
+        return;
     // Publish before enqueuing PLAY: its first downbeat is due in the same
     // callback that consumes this command, so its immutable sample pointers
     // must be available before Tick() starts the scheduler.
@@ -2529,7 +2539,12 @@ void OnSeqPatternRequest(const SeqPatternRequestMessage& request) {
     EnqueueSequencerCommand(command);
 }
 
+void OnSeqFileOp(const SeqFileOpMessage& request) {
+    WaveX::PatternStore::Request(request, s_pattern_exchange_storage.Get());
+}
+
 void PumpSequencerState() {
+    WaveX::PatternStore::Pump(s_pattern_exchange_storage.Get());
     auto& page = s_seq_page_pending_storage.Get();
     auto& head = s_seq_head_pending_storage.Get();
     s_seq_page_pending |= s_seq_page_mailbox.ConsumeLatest(page);
@@ -2544,6 +2559,8 @@ void PumpSequencerState() {
 }
 
 void OnSeqPatternOp(const SeqPatternOpMessage& m) {
+    if (WaveX::PatternStore::BlocksEdits())
+        return;
     WaveX::Sequencer::SequencerCommand command;
     command.type = WaveX::Sequencer::SequencerCommandType::PatternOp;
     command.pattern_op = m;
@@ -2551,6 +2568,9 @@ void OnSeqPatternOp(const SeqPatternOpMessage& m) {
 }
 
 void OnMidiClockEvent(const MidiClockEventMessage& m) {
+    if (WaveX::PatternStore::BlocksEdits() &&
+        (m.event == MIDI_CLK_START || m.event == MIDI_CLK_CONTINUE))
+        return;
     WaveX::Sequencer::SequencerCommand command;
     command.type = WaveX::Sequencer::SequencerCommandType::MidiClock;
     command.midi_clock = m;

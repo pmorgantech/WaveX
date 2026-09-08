@@ -6,7 +6,7 @@ the matching Track's Instrument at the step's selected MIDI note. Velocity
 layers and crossfades use the step's velocity. Chords and melodic gate lanes
 remain future Phase 2.5 work.
 Physical panel integration, MIDI clock output, parameter-lock application and
-project persistence remain open Phase 2 work in [roadmap.md](../roadmap.md).
+song/project persistence remain open Phase 2 work in [roadmap.md](../roadmap.md).
 Host tests and device compilation do not establish audible timing or the
 hardware phase gate.
 
@@ -68,7 +68,7 @@ recording.
 
 ## 3. Pattern and voice models
 
-The current bounded `pattern.hpp` model contains 16 rows, up to 64 steps
+The shared `sequencer/pattern_data.hpp` model contains 16 rows, up to 64 steps
 per row and four parameter locks per step. The default length is 16 steps.
 Row r addresses Track r; each step owns a MIDI note (default 60), velocity
 and trigger data. Notes 60-75 select the sixteen default kit pads. Empty or
@@ -127,7 +127,66 @@ LEDs and endless-pot drivers are separate remaining prerequisites in
 [panel-controls.md](panel-controls.md). Do not describe a debug-console
 transport command as a completed panel workflow.
 
+### Pattern files (as-built)
+
+From the sequencer, choose **Shift → Files**. Enter a name and choose
+**Save copy**, or enter an existing name and choose **Load → Confirm**.
+**New → Confirm** clears the working pattern and restores its default groove
+settings. The keyboard's checkmark dismisses the keyboard; file operations
+use the named softkeys.
+
+Patterns are new-copy saves in `0:/wavex/patterns/<name>.wxpat`. Names use
+1–23 ASCII letters/numbers, spaces, hyphens or underscores, without outer
+spaces. Existing names are refused. The page reports the last successful
+save/load name; it is not a dirty-state indicator or a file browser.
+
+A pattern contains all sixteen rows and all 64 steps, including hidden steps,
+mute, length, scale, swing, notes, velocity, probability, microtiming,
+retriggers and stored locks. It contains no tempo, Track instruments or
+runtime sample IDs. Loading stops sequencing after validation; current
+voices retain their own lifecycle. Tempo, clock settings and Track bindings
+stay in the session. Chords, gate lanes and song arrangement remain separate
+roadmap work.
+
+The codec is [pattern_file.hpp](../../firmware/shared/wxcf/pattern_file.hpp):
+WXCF file type 5, schema 1.0, one metadata chunk and sixteen row chunks.
+Fields are explicitly little-endian; native C++ struct layout is never a
+file format. Duplicate/missing required chunks, invalid field values, newer
+major versions and truncation fail the load. Unknown chunks are skipped
+incrementally within a 64 KiB file limit.
+
+The foreground owns the FatFs job. It creates a unique temporary file,
+checks every write and close, then renames to a previously unused destination.
+Failed jobs remove only their own temporary. Interrupted temporary files are
+ignored; this is not a claim of FAT recovery after arbitrary power loss.
+
+One fixed pattern buffer crosses the callback boundary by exclusive
+release/acquire ownership. Saving captures one row on each block without
+scheduled triggers, restarts on intervening edits, and fails after 500
+callback opportunities if no consistent capture is possible. Loading decodes
+privately, then the callback installs the complete validated pattern and
+discards that block's old-pattern events. Load/New block incoming pattern
+edits and Play/Continue until completion; Stop, tempo configuration and
+readback remain available. No filesystem work runs in the callback.
+
+The storage pump advances at most eight codec records per main-loop service.
+Streaming and resident audio continue; file status retains the active and
+last completed request IDs. Read retries recover a lost completion without
+replaying Save, Load or New.
+
 ## 6. Validation
+
+The named-file path has host/sanitizer coverage for every truncated file
+prefix, field/chunk validation, short writes, failed close/rename, retained
+completion, capture retries and install ownership. The two-board test in
+`tests/hil/test_pattern_files.py` passed on 2026-09-08: it saved/reloaded hidden
+Track 16 / Step 64 data, rejected duplicate/missing names, exercised New and
+Load confirmation/cancel, preserved tempo and bindings, and kept another
+Track's held voice alive. Both device images compiled and flashed; real
+touchscreen captures are `logs/sequencer-notes.png` and
+`logs/pattern-files.png`. The whole Phase 2 gate and arbitrary-power-loss
+recovery are not established by this focused test.
+
 
 Host coverage includes scheduler event ordering and timing, transport edits
 between steps, probability/retrigger boundaries, tempo-follower state,

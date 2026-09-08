@@ -70,17 +70,24 @@ Phase 2.5 work. Open work:
    and sequencer grid are built; the grid pages across all 16 Tracks and 64
    steps and edits tempo, swing, length, scale, velocity, probability, note and mute.
    Physical controls/LED feedback require 2.P.1–3; touch workflows do not.
-4. Persist kits, patterns, and songs atomically through WXCF.
+4. Complete song/project persistence through WXCF. Kit WXI saves and named
+   pattern WXCF save/load are implemented; pattern files preserve tempo and
+   Track instruments, include hidden steps, and use checked temp/rename
+   new-copy saves. Power-loss recovery remains a bench gate.
 5. Apply per-step parameter locks to trigger parameters.
 
 ### 2.C — Callback capacity checkpoint (2026-09-07)
 
 The recurring callback evidence is recorded in
 [callback-performance-log.md](callback-performance-log.md). The touch kit/grid
-workload on 271c8e3 measured 67.0844% across 610.2 seconds of DWT windows,
+baseline on 271c8e3 measured 67.0844% across 610.2 seconds of DWT windows,
 with zero underruns or dropped commands, and remains in STAY. It used eight
 drum Instruments with Track-local choke, 64 modulation slots, the WaveX
 24 dB filter at full drive, sequencing, SD streaming and live grid readback.
+The note/velocity extension on 664c6d3 reached 70.3529% (REVIEW).
+Sparse live-zone publication on 00fdd08 reduced the observed maximum to
+69.1162% across 605.2 seconds, with zero underruns/dropped events (STAY).
+Pattern persistence requires its own post-integration timing run.
 The preceding Track-addressed run on 66d0330 measured 66.3492%, and the
 earlier one-hour fixed-Track preview measured 65.8029%; these are different
 workloads.

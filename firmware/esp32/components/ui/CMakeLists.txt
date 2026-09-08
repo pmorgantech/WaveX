@@ -34,6 +34,7 @@ set(COMPONENT_SRCS
     "src/current_track.cpp"
     "pages/ui_play_page.cpp"
     "pages/ui_sequencer_page.cpp"
+    "pages/ui_pattern_files_page.cpp"
     "pages/ui_pad_map_page.cpp"
     "pages/ui_sample_manager_page.cpp"
     "pages/ui_system_info_page.cpp"

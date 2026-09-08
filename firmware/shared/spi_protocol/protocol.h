@@ -148,6 +148,8 @@ enum MessageType : uint8_t {
     MSG_MIDI_CLOCK_EVENT = 0x55,  // E->D: forwarded MIDI real-time clock/transport byte
     MSG_MIDI_CC = 0x56,           // E->D: forwarded MIDI control change
     MSG_SEQ_CLOCK_OUT = 0x57,     // D->E: MIDI clock/transport for the ESP32 to serialize outbound
+    MSG_SEQ_FILE_OP = 0x5A,       // E->D: named pattern save/load/new or retained status request
+    MSG_SEQ_FILE_STATUS = 0x5B,   // D->E: foreground job and retained completion
     // Instrument browser/load lifecycle (instrument-model.md §6).
     MSG_INST_OP = 0x60,         // E->D: inspect or load one instrument file
     MSG_INST_STATUS = 0x61,     // D->E: inspection result and load progress
@@ -1456,6 +1458,49 @@ struct SeqTransportMessage {
 //   SEQ_OP_PATTERN_SWING   |   -   |  -   | swing(50..75)     | -                | -
 //   SEQ_OP_SET_PARAM_LOCK  |  yes  | yes  | param_id(slot key)| value            | -
 //   SEQ_OP_CLEAR_PARAM_LOCKS| yes  | yes  | -                 | -                | -
+
+// Pattern persistence is a foreground job. GET polls retained completion;
+// reads never replay a mutation whose outcome was lost on the link.
+enum SeqFileOp : uint8_t {
+    SEQ_FILE_GET = 0,
+    SEQ_FILE_SAVE_COPY = 1,
+    SEQ_FILE_LOAD = 2,
+    SEQ_FILE_NEW = 3
+};
+enum SeqFileError : uint8_t {
+    SEQ_FILE_OK = 0,
+    SEQ_FILE_BUSY = 1,
+    SEQ_FILE_BAD_NAME = 2,
+    SEQ_FILE_NOT_FOUND = 3,
+    SEQ_FILE_EXISTS = 4,
+    SEQ_FILE_IO = 5,
+    SEQ_FILE_BAD_FILE = 6,
+    SEQ_FILE_CAPTURE_BUSY = 7
+};
+constexpr size_t SEQ_FILE_NAME_BYTES = 24;
+struct SeqFileOpMessage {
+    uint32_t request_id = 0;
+    uint8_t op = SEQ_FILE_GET;
+    uint8_t reserved[3]{};
+    char name[SEQ_FILE_NAME_BYTES]{};
+} __attribute__((packed));
+struct SeqFileStatusMessage {
+    uint32_t request_id = 0;
+    uint32_t active_request_id = 0;
+    uint32_t completed_request_id = 0;
+    uint8_t busy = 0;
+    uint8_t error = SEQ_FILE_OK;
+    uint8_t completed_op = SEQ_FILE_GET;
+    uint8_t reserved = 0;
+    char name[SEQ_FILE_NAME_BYTES]{};  // last successful save/load; empty after New
+} __attribute__((packed));
+static_assert(sizeof(SeqFileOpMessage) == 32, "pattern file request wire size");
+static_assert(sizeof(SeqFileStatusMessage) == 40, "pattern file status wire size");
+inline bool IsValidSeqFileOp(const SeqFileOpMessage& m) {
+    return m.request_id && m.op <= SEQ_FILE_NEW && !m.reserved[0] && !m.reserved[1] &&
+           !m.reserved[2];
+}
+
 enum SeqPatternOpCode : uint8_t {
     SEQ_OP_SET_STEP = 0,
     SEQ_OP_TOGGLE_STEP = 1,
@@ -2217,6 +2262,10 @@ inline const char* MessageTypeName(uint8_t type) {
             return "MIDI_CLOCK_EVENT";
         case MSG_MIDI_CC:
             return "MIDI_CC";
+        case MSG_SEQ_FILE_OP:
+            return "SEQ_FILE_OP";
+        case MSG_SEQ_FILE_STATUS:
+            return "SEQ_FILE_STATUS";
         case MSG_SEQ_CLOCK_OUT:
             return "SEQ_CLOCK_OUT";
         case MSG_INST_OP:

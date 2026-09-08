@@ -221,6 +221,7 @@ void LoadCvCalFromSd();
 // drives the step scheduler from the control tick. Main-loop dispatch.
 void OnSeqTransport(const WaveX::Protocol::SeqTransportMessage& m);
 void PumpSequencerState();
+void OnSeqFileOp(const WaveX::Protocol::SeqFileOpMessage& request);
 void OnSeqPatternRequest(const WaveX::Protocol::SeqPatternRequestMessage& request);
 void OnSeqPatternOp(const WaveX::Protocol::SeqPatternOpMessage& m);
 void OnMidiClockEvent(const WaveX::Protocol::MidiClockEventMessage& m);
