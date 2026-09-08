@@ -127,8 +127,7 @@ class VoiceFilter {
 
     void Retune() {
         if (config_.topology == FilterTopology::WaveXSvf) {
-            mine_.SetCutoff(cutoff_hz_);
-            mine_.SetResonance(resonance_);
+            mine_.SetParameters(cutoff_hz_, resonance_);
         } else {
             TuneDsp();
         }

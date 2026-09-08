@@ -123,15 +123,18 @@ class SvfFilter {
     // tests set filter_cutoff_hz = 1e6 to mean "no filtering at all". An
     // asymptotic approach to open would leave measurable attenuation on every
     // voice that just wants a dry sample.
-    void SetCutoff(float hz) {
-        cutoff_hz_ = hz > 0.0f ? hz : 0.0f;
-        UpdateCoeffs();
-    }
+    void SetCutoff(float hz) { SetParameters(hz, resonance_); }
 
     // 0 = no resonance, 1 = strongly resonant. Clamped rather than rejected:
     // this is fed from a wire parameter and a control tick, neither of which
     // should be able to destabilize a voice.
-    void SetResonance(float res) {
+    void SetResonance(float res) { SetParameters(cutoff_hz_, res); }
+
+    // Cutoff and resonance define one coefficient set. Callers holding
+    // both values need one tan()/coefficient calculation, not two.
+    // Integrator state is untouched, exactly as with the separate setters.
+    void SetParameters(float hz, float res) {
+        cutoff_hz_ = hz > 0.0f ? hz : 0.0f;
         resonance_ = res < 0.0f ? 0.0f : (res > 1.0f ? 1.0f : res);
         UpdateCoeffs();
     }

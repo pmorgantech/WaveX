@@ -61,6 +61,10 @@ versioning and release process.
   indexed window while retaining the generic ordered layering fallback for
   wider ranges, overlapping layers, and velocity splits.
 
+- Removed duplicate WaveX filter coefficient calculation during voice retuning
+  by applying cutoff and resonance together, preserving the existing filter
+  response and integrator state.
+
 ### Changed
 
 - Recorded the touch kit/grid capacity follow-up at 67.0844% worst-case

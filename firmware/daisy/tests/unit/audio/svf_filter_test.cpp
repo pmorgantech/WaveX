@@ -335,3 +335,28 @@ TEST(SvfFilterTest, DrivenTwentyFourDbSweepStaysFiniteAndBounded) {
     // clipper holds the resonance to a few times full scale at most.
     EXPECT_LT(peak, 8.0f);
 }
+
+TEST(SvfFilterTest, CombinedTuningMatchesSequentialSettersWithoutResettingState) {
+    for (uint32_t rate: {44100u, 48000u, 96000u}) {
+        for (auto slope: {SvfFilter::Slope::Db12, SvfFilter::Slope::Db24}) {
+            SvfFilter sequential, combined;
+            sequential.Init(rate);
+            combined.Init(rate);
+            sequential.SetSlope(slope);
+            combined.SetSlope(slope);
+            sequential.SetDrive(0.75f);
+            combined.SetDrive(0.75f);
+            // Keep integrators live through every tuning/bypass transition.
+            for (float cutoff: {1000.0f, 0.0f, -100.0f, 20000.0f, 1000000.0f, 440.0f})
+                for (float resonance: {0.0f, 0.5f, 1.0f, 2.0f, -1.0f}) {
+                    sequential.SetCutoff(cutoff);
+                    sequential.SetResonance(resonance);
+                    combined.SetParameters(cutoff, resonance);
+                    for (int sample = 0; sample < 96; ++sample) {
+                        const float input = sample % 17 == 0 ? 0.2f : -0.05f;
+                        EXPECT_FLOAT_EQ(combined.Process(input), sequential.Process(input));
+                    }
+                }
+        }
+    }
+}
