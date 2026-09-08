@@ -82,7 +82,9 @@ purchase, and the WaveX path remains the fallback.
 
 Before accepting DaisySP or additional callback scope, attribute or restrict
 the higher-cost path, or port the backend. Parameter locks remain item 5 and
-were programmed but not applied by the measured callback.
+were programmed but not applied by the measured callback. DaisySP is therefore
+default-disabled; comparison builds require an explicit opt-in and do not pass
+the capacity gate.
 
 ### 2.P — Panel controls and MIDI I/O (prerequisite for items 2 and 3)
 

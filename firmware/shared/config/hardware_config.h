@@ -40,6 +40,12 @@
 #define WAVEX_NUM_VOICES 8
 #endif
 
+// Experimental comparison only: the measured DaisySP path exceeds the
+// callback capacity gate. Production/default builds keep WaveX selected.
+#ifndef WAVEX_DAISYSP_FILTER_ENABLED
+#define WAVEX_DAISYSP_FILTER_ENABLED 0
+#endif
+
 // Sample Pool capacity (Daisy only): how many samples can be resident at
 // once, whoever loaded them (track-and-patch-model.md §4, decided
 // 2026-09-04). The registry indexes by id - never scans - so this is a

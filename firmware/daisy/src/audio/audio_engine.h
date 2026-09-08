@@ -42,7 +42,8 @@ struct FilterSelection {
     uint8_t slope_db = 12;  // 12 or 24 (WaveX SVF only)
     float drive = 0.0f;     // 0..1
 };
-void SetFilterSelection(const FilterSelection& sel);
+// False leaves the selection unchanged when the topology is build-disabled.
+bool SetFilterSelection(const FilterSelection& sel);
 FilterSelection GetFilterSelection();
 
 /// Applies one mixer control change (MSG_MIX_OP). Main loop only: it writes

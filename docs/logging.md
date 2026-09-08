@@ -67,6 +67,12 @@ scripts/wavex_filter.py daisysp         # the DaisySP Svf
 scripts/wavex_filter.py wavex 24 60     # first-party SVF, 24 dB, 60% drive
 ```
 
+Default firmware rejects the DaisySP selection because its measured callback
+cost exceeds the capacity gate. Dedicated comparison builds can opt in through
+the Daisy CMake option backed by
+[hardware_config.h](../firmware/shared/config/hardware_config.h); that override
+does not pass the capacity gate.
+
 It is a listening aid, not a parameter: nothing on the wire or in the UI
 sets it, and it does not survive a reboot.
 

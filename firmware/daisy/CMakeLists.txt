@@ -245,6 +245,12 @@ add_compile_definitions(
     __FPU_PRESENT=1U
 )
 
+# Explicit opt-in for repeating the blocked experimental filter benchmark.
+option(WAVEX_DAISYSP_FILTER_ENABLED "Allow experimental DaisySP filter selection" OFF)
+if(WAVEX_DAISYSP_FILTER_ENABLED)
+    add_compile_definitions(WAVEX_DAISYSP_FILTER_ENABLED=1)
+endif()
+
 # Profiling option
 option(WAVEX_PROFILING_ENABLED "Enable the STM32H7 DWT/ITM profiling helpers" OFF)
 if(WAVEX_PROFILING_ENABLED)

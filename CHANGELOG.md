@@ -20,6 +20,10 @@ versioning and release process.
   docs/callback-performance-log.md; this does not approve a board port or
   purchase.
 
+- Default Daisy builds now reject the experimental DaisySP filter selection
+  with an explicit FILTER error; comparison builds must opt in, while the
+  WaveX filter remains the production fallback.
+
 - Waveform previews use **8-bit min/max extrema on the wire**, halving amplitude
   payloads (4,560 bytes for 1,140 stereo columns). Quantization rounds outward
   to preserve peaks and represents silence and both full-scale endpoints

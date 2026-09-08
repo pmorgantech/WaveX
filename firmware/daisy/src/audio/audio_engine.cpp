@@ -2347,7 +2347,12 @@ void OnControlChange(const ControlChangeMessage& ctrl_msg) {
     }
 }
 
-void SetFilterSelection(const FilterSelection& sel) {
+bool SetFilterSelection(const FilterSelection& sel) {
+#if !WAVEX_DAISYSP_FILTER_ENABLED
+    if (sel.topology == 1) {
+        return false;
+    }
+#endif
     WaveX::AudioEngine::FilterConfig cfg;
     cfg.topology = sel.topology == 1 ? WaveX::AudioEngine::FilterTopology::DaisySpSvf
                                      : WaveX::AudioEngine::FilterTopology::WaveXSvf;
@@ -2361,6 +2366,7 @@ void SetFilterSelection(const FilterSelection& sel) {
         extras.filter = cfg;
     }
     s_filter_config_mailbox.Publish(s_filter_config_pending);
+    return true;
 }
 
 FilterSelection GetFilterSelection() {

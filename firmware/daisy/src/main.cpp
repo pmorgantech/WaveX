@@ -108,7 +108,7 @@ static const char* FilterTopologyName(uint8_t topology) {
 // "FILTER ?" reports; "FILTER <wavex|daisysp> [12|24] [drive 0-100]" applies.
 // Drive is a percentage so the parser needs no float support. Main-loop
 // context; the engine publishes the selection to the callback.
-static void HandleFilterCommand(const char* args) {
+static bool HandleFilterCommand(const char* args) {
     while (*args == ' ')
         ++args;
 #if WAVEX_AUDIO_ENGINE_ENABLED
@@ -128,7 +128,7 @@ static void HandleFilterCommand(const char* args) {
                 "WAVEX-FILTER: bad topology '%s' - usage: WAVEX-FILTER <wavex|daisysp> "
                 "[12|24] [drive 0-100]",
                 word);
-            return;
+            return false;
         }
         // Optional numeric fields, in order: slope, drive%.
         int fields[2] = {-1, -1};
@@ -146,20 +146,25 @@ static void HandleFilterCommand(const char* args) {
             sel.slope_db = static_cast<uint8_t>(fields[0]);
         } else if (fields[0] != -1) {
             WaveX::Log::PrintLine("WAVEX-FILTER: slope must be 12 or 24 (got %d)", fields[0]);
-            return;
+            return false;
         }
         if (fields[1] != -1) {
             sel.drive = static_cast<float>(fields[1] > 100 ? 100 : fields[1]) / 100.0f;
         }
-        WaveX::AudioEngine::SetFilterSelection(sel);
+        if (!WaveX::AudioEngine::SetFilterSelection(sel)) {
+            WaveX::Log::PrintLine("WAVEX-FILTER: DaisySP disabled by callback capacity gate");
+            return false;
+        }
     }
     WaveX::Log::PrintLine("WAVEX-FILTER: topology=%s slope=%u drive=%d%%",
                           FilterTopologyName(sel.topology),
                           static_cast<unsigned>(sel.slope_db),
                           static_cast<int>(sel.drive * 100.0f + 0.5f));
+    return true;
 #else
     (void)args;
     WaveX::Log::PrintLine("WAVEX-FILTER: audio engine disabled in this build");
+    return false;
 #endif
 }
 
@@ -224,8 +229,8 @@ static void DispatchConsoleCommand(const WaveX::Debug::Command& c) {
         HandleLogCommand(c.args) ? FormatOk(seq, reply, sizeof(reply))
                                  : FormatErr(seq, "badlog", reply, sizeof(reply));
     } else if (std::strcmp(c.verb, "FILTER") == 0) {
-        HandleFilterCommand(c.args);
-        FormatOk(seq, reply, sizeof(reply));
+        HandleFilterCommand(c.args) ? FormatOk(seq, reply, sizeof(reply))
+                                    : FormatErr(seq, "filter", reply, sizeof(reply));
 #if WAVEX_AUDIO_ENGINE_ENABLED
     } else if (std::strcmp(c.verb, "STATE") == 0) {
         size_t len = FormatOk(seq, reply, sizeof(reply));
