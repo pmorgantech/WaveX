@@ -6,10 +6,17 @@
 extern "C" {
 
 FRESULT f_open(FIL* file, const char* path, uint8_t mode) {
-    if (!file || !path || mode != FA_READ)
+    if (!file || !path || (mode != FA_READ && mode != (FA_WRITE | FA_CREATE_NEW)))
         return FR_INT_ERR;
     *file = FIL{};
-    file->bytes = MockFatFS::Instance().GetFile(path);
+    auto& fs = MockFatFS::Instance();
+    if (mode & FA_WRITE) {
+        if (fs.GetFile(path))
+            return FR_EXIST;
+        fs.AddFile(path, {});
+        file->writable = fs.MutableFile(path);
+    }
+    file->bytes = fs.GetFile(path);
     if (!file->bytes)
         return FR_NO_FILE;
     static FATFS volume;
@@ -20,8 +27,9 @@ FRESULT f_open(FIL* file, const char* path, uint8_t mode) {
 FRESULT f_close(FIL* file) {
     if (!file)
         return FR_INT_ERR;
+    const auto result = file->writable ? MockFatFS::Instance().close_result : FR_OK;
     *file = FIL{};
-    return FR_OK;
+    return result;
 }
 
 FRESULT f_read(FIL* file, void* out, UINT requested, UINT* read) {
@@ -157,4 +165,51 @@ FRESULT f_closedir(DIR* dp) {
     return FR_OK;
 }
 
+FRESULT f_write(FIL* file, const void* source, UINT bytes, UINT* written) {
+    if (!file || !file->writable || !written)
+        return FR_INVALID_OBJECT;
+    auto& fs = MockFatFS::Instance();
+    *written = fs.write_limit < 0 ? bytes : std::min(bytes, static_cast<UINT>(fs.write_limit));
+    if (fs.write_limit >= 0)
+        fs.write_limit -= static_cast<int>(*written);
+    auto& data = *file->writable;
+    data.resize(file->position + *written);
+    if (*written)
+        std::memcpy(data.data() + file->position, source, *written);
+    file->position += *written;
+    return FR_OK;
+}
+FRESULT f_mkdir(const char* path) {
+    auto& fs = MockFatFS::Instance();
+    if (fs.GetDirectory(path))
+        return FR_EXIST;
+    fs.AddDirectory(path, {});
+    return FR_OK;
+}
+FRESULT f_stat(const char* path, FILINFO* info) {
+    auto* bytes = MockFatFS::Instance().GetFile(path);
+    if (!bytes)
+        return FR_NO_FILE;
+    if (info) {
+        *info = FILINFO{};
+        info->fsize = static_cast<uint32_t>(bytes->size());
+    }
+    return FR_OK;
+}
+FRESULT f_rename(const char* from, const char* to) {
+    auto& fs = MockFatFS::Instance();
+    if (fs.rename_result != FR_OK)
+        return fs.rename_result;
+    if (fs.GetFile(to))
+        return FR_EXIST;
+    auto* data = fs.GetFile(from);
+    if (!data)
+        return FR_NO_FILE;
+    fs.AddFile(to, *data);
+    fs.RemoveFile(from);
+    return FR_OK;
+}
+FRESULT f_unlink(const char* path) {
+    return MockFatFS::Instance().RemoveFile(path) ? FR_OK : FR_NO_FILE;
+}
 }  // extern "C"

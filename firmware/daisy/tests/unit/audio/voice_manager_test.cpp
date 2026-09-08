@@ -2014,3 +2014,26 @@ TEST(VoiceManagerModulationTest, RandomSourceSeedSurvivesZeroedMemory) {
     EXPECT_NE(VoiceAt(vm, idx0).mod_random, VoiceAt(vm, idx1).mod_random)
         << "a zeroed rng_ seed produces the same -1.0f for every voice";
 }
+
+TEST(VoiceManagerTest, KitChokeGroupCannotReleaseAnotherTracksVoice) {
+    VoiceManager vm;
+    vm.Init(48000);
+    auto sample = MakeRampSample(48000, 1000, 0);
+    auto first = FlatParams(sample.data(), sample.size(), 60, 100, 0.5f);
+    first.track = 1;
+    first.choke_group = 1;
+    first.release_s = 2.0f;
+    vm.Trigger(first);
+    const int index = FindVoiceForNote(vm, 60);
+    ASSERT_GE(index, 0);
+    auto other = first;
+    other.track = 2;
+    other.note = 61;
+    vm.Trigger(other);
+    EXPECT_FALSE(VoiceAt(vm, index).envelope.IsReleasing());
+    auto same = first;
+    same.note = 62;
+    vm.Trigger(same);
+    EXPECT_TRUE(VoiceAt(vm, index).envelope.IsReleasing());
+    EXPECT_FALSE(VoiceAt(vm, FindVoiceForNote(vm, 61)).envelope.IsReleasing());
+}

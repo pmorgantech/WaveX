@@ -64,6 +64,8 @@ typedef struct {
 using UINT = unsigned int;
 using FSIZE_t = uint32_t;
 #define FA_READ 0x01
+#define FA_WRITE 0x02
+#define FA_CREATE_NEW 0x04
 
 struct FATFS {
     uint32_t csize = 1;
@@ -73,6 +75,7 @@ struct FIL {
         FATFS* fs = nullptr;
     } obj;
     const std::vector<uint8_t>* bytes = nullptr;
+    std::vector<uint8_t>* writable = nullptr;
     FSIZE_t position = 0;
     FRESULT error = FR_OK;
 };
@@ -110,11 +113,22 @@ class MockFatFS {
         current_dir_handles_.clear();
         dir_positions_.clear();
         next_handle_ = 1;
+        write_limit = -1;
+        close_result = FR_OK;
+        rename_result = FR_OK;
         opendir_result_ = FR_OK;
         readdir_successes_before_failure_ = -1;
         readdir_fail_result_ = FR_DISK_ERR;
     }
 
+    int write_limit = -1;  // total bytes before a short write
+    FRESULT close_result = FR_OK;
+    FRESULT rename_result = FR_OK;
+    std::vector<uint8_t>* MutableFile(const char* path) {
+        auto it = files_.find(path);
+        return it == files_.end() ? nullptr : &it->second;
+    }
+    bool RemoveFile(const char* path) { return files_.erase(path) != 0; }
     // --- Failure injection -------------------------------------------------
     // f_opendir(): force the next (and every subsequent) open to fail with
     // `r` until Reset(). Models a dead/removed card rather than a missing
@@ -224,6 +238,11 @@ class MockFatFS {
 extern "C" {
 FRESULT f_open(FIL* file, const char* path, uint8_t mode);
 FRESULT f_close(FIL* file);
+FRESULT f_write(FIL* file, const void* source, UINT bytes, UINT* written);
+FRESULT f_mkdir(const char* path);
+FRESULT f_stat(const char* path, FILINFO* info);
+FRESULT f_rename(const char* from, const char* to);
+FRESULT f_unlink(const char* path);
 FRESULT f_read(FIL* file, void* out, UINT requested, UINT* read);
 FRESULT f_lseek(FIL* file, FSIZE_t position);
 char* f_gets(char* out, int capacity, FIL* file);

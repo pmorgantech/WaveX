@@ -30,6 +30,7 @@ void Reset();
 bool Begin(const WaveX::Protocol::InstOpMessage& request);
 void Pump(SamplePool& pool, SampleMemMgr& memory, uint8_t* io_buffer, uint32_t io_buffer_bytes);
 bool Busy();
+void PumpEditorReply();  // retained pad-map reply; main loop only
 bool TrackLoading(uint8_t track);
 // The Track whose voices must be hard-stopped before the load can release
 // what that Track held, or 0xFF when no stop is pending. The engine asks the

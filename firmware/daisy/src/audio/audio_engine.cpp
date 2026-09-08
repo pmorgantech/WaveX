@@ -2892,6 +2892,8 @@ bool LoadSfzInstrument(const char* path, uint8_t slot) {
 }
 
 void OnInstrumentOp(const InstOpMessage& request) {
+    if (request.op == INST_OP_SAVE && !SfzLoader::Busy())
+        CloseWav();
     if (request.op == INST_OP_SET_MOD_SLOT) {
         // Not a probe/load request - Begin()'s state machine (below) would
         // reject it as a malformed one (empty path, unrecognised op) and send
@@ -2906,15 +2908,19 @@ void OnInstrumentOp(const InstOpMessage& request) {
         SfzLoader::SetModSlot(request.slot, request.mod_slot_index, slot);
         return;
     }
-    if (SfzLoader::Begin(request) && request.op == INST_OP_SFZ_LOAD) {
+    if (SfzLoader::Begin(request) && (request.op == INST_OP_SFZ_LOAD || request.op == INST_OP_NEW ||
+                                      request.op == INST_OP_SET_PAD_SAMPLE)) {
         ClearSequencerVoiceMap(static_cast<uint16_t>(1u << request.slot));
         // Streaming audition and instrument import share FatFs/SD bandwidth.
         // A load owns storage until its cooperative state machine completes.
         CloseWav();
     }
+    if (request.op == INST_OP_SET_NAME)
+        PushTrackBinding(request.slot);
 }
 
 void PumpInstrumentLoad() {
+    SfzLoader::PumpEditorReply();
     if (!s_pool) {
         return;
     }
@@ -2931,6 +2937,10 @@ void PumpInstrumentLoad() {
         }
         if (s_voice_stop_fence.Complete(stop_generation)) {
             SfzLoader::ConfirmVoicesStopped(*s_pool, s_sample_mem_mgr);
+            if (!SfzLoader::Busy()) {
+                PublishSequencerVoiceMap();
+                PushTrackBinding(stop_track);
+            }
             stop_generation = 0;
         }
         return;

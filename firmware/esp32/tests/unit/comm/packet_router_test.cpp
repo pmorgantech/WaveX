@@ -88,11 +88,11 @@ class PacketRouterTest : public ::testing::Test {
     int TotalDispatches() const {
         const auto& cap = GetInterMcuCapture();
         return g_handlers.sync_calls + g_handlers.error_calls + g_handlers.unknown_calls +
-               cap.seq_page_calls + cap.seq_playhead_calls + cap.heartbeat_calls + cap.meter_calls +
-               cap.browse_resp_calls + cap.envelope_chunk_calls + cap.sample_status_calls +
-               cap.inst_status_calls + cap.storage_status_calls + cap.stop_resp_calls +
-               cap.diag_push_calls + cap.sample_meta_calls + cap.sample_mem_status_calls +
-               cap.cv_cal_calls;
+               cap.instrument_map_calls + cap.seq_page_calls + cap.seq_playhead_calls +
+               cap.heartbeat_calls + cap.meter_calls + cap.browse_resp_calls +
+               cap.envelope_chunk_calls + cap.sample_status_calls + cap.inst_status_calls +
+               cap.storage_status_calls + cap.stop_resp_calls + cap.diag_push_calls +
+               cap.sample_meta_calls + cap.sample_mem_status_calls + cap.cv_cal_calls;
     }
 
     std::unique_ptr<PacketRouter> router_;
@@ -628,4 +628,20 @@ TEST_F(PacketRouterTest, SequencerPlayheadRoutesToSnapshotBoundary) {
     ASSERT_EQ(GetInterMcuCapture().seq_playhead_calls, 1);
     EXPECT_EQ(GetInterMcuCapture().last_seq_playhead.step, 63);
     EXPECT_EQ(GetInterMcuCapture().last_seq_playhead.loop_count, 0x12345678u);
+}
+
+TEST_F(PacketRouterTest, InstrumentMapReadbackRejectsEveryTruncation) {
+    InstZoneSyncMessage message;
+    message.request_id = 123;
+    message.track = 15;
+    message.pads[15] = {65530, 7, 75};
+    for (size_t size = 0; size < sizeof(message); ++size)
+        router_->route_uart_message(
+            MSG_INST_ZONE_SYNC, reinterpret_cast<const uint8_t*>(&message), size, 0, 1);
+    EXPECT_EQ(GetInterMcuCapture().instrument_map_calls, 0);
+    router_->route_uart_message(
+        MSG_INST_ZONE_SYNC, reinterpret_cast<const uint8_t*>(&message), sizeof(message), 0, 2);
+    ASSERT_EQ(GetInterMcuCapture().instrument_map_calls, 1);
+    EXPECT_EQ(GetInterMcuCapture().instrument_map.pads[15].sample_id, 65530);
+    EXPECT_EQ(GetInterMcuCapture().instrument_map.pads[15].choke_group, 7);
 }

@@ -82,14 +82,14 @@ sequence(u16 LE) | payload[0..2048] | crc16(u16 LE) | end(0x5A)
 | MSG_TRACK_BINDING | 0x48 | D→E | `TrackBindingMessage{track, state, sample_id}` | one Track's actual binding: empty, bare resident sample, imported Patch, or Patch loading. The ESP32 uses this instead of inferring playability from its own Load/Select history; `sample_id` is set only for a bare-sample binding. |
 | MSG_SEQ_TRANSPORT | 0x50 | E→D | `SeqTransportMessage{command, clock_source, input_mode, quantize, tempo_bpm_x100, song_position}` | play/stop/continue, tempo, clock source (internal/MIDI), input mode (play/step-rec/live-rec/erase) — `sequencer.md` §4, `midi-sync-tempo-follower.md` §3 |
 | MSG_SEQ_PATTERN_OP | 0x51 | E→D | `SeqPatternOpMessage{op, track, step, arg_u8, arg_u16, arg_s16}` | one small idempotent pattern edit; `op` (`SeqPatternOpCode`) selects which fields apply — see the table in `protocol.h` above the struct |
-| MSG_SEQ_PATTERN_SYNC | 0x52 | both | *(reserved — struct not yet defined)* | bulk pattern read/write for project load/save (`sequencer.md` §4); deferred, project persistence uses the WXCF container on SD |
+| MSG_SEQ_PATTERN_SYNC | 0x52 | both | SeqPatternRequestMessage / SeqPatternSyncMessage | sixteen-step readback window from the callback-owned pending pattern; see Sequencer page readback below |
 | MSG_SEQ_PLAYHEAD | 0x53 | D→E | `SeqPlayheadMessage{pattern, step, playing, sync_state, measured_bpm_x100, loop_count}` | coalesced playhead + sync-lock feedback for the UI (≤ 30 Hz) |
 | MSG_MIDI_CLOCK_EVENT | 0x55 | E→D | `MidiClockEventMessage{event, source, tick_seq, esp_delta_us, spp_beats16}` | forwarded MIDI real-time/transport byte; `esp_delta_us` is the ESP-domain **delta** (never an absolute timestamp) so the tempo follower can't mix clock domains — `midi-sync-tempo-follower.md` §2/§3 |
 | MSG_MIDI_CC | 0x56 | E→D | `MidiCcMessage{cc, value, channel}` | forwarded MIDI control change; Daisy owns the CC→mod-source map (`param-locks-and-modulation.md` §6) |
 | MSG_SEQ_CLOCK_OUT | 0x57 | D→E | `SeqClockOutMessage{event, tick_seq, spp_beats16}` | Daisy-generated MIDI clock/transport for the ESP32 to serialize onto DIN + USB immediately |
-| MSG_INST_OP | 0x60 | E→D | `InstOpMessage{request_id, slot, op, path[BROWSE_PATH_MAX], mod_slot_index, mod_source, mod_dest, mod_depth, mod_curve, mod_flags}` | `op` (`InstOpCode`) selects the shape: `INST_OP_SFZ_PROBE`/`INST_OP_SFZ_LOAD` inspect or load an SFZ instrument (`path` set, `mod_*` unused, `request_id` rejects stale selection replies); `INST_OP_SET_MOD_SLOT` writes one of `slot`'s 8 modulation-matrix slots (`path` unused, `mod_*` fields mirror `mod_matrix.hpp`'s `ModSlot` field-for-field — `param-locks-and-modulation.md` §3/§9 stage 4) |
+| MSG_INST_OP | 0x60 | E→D | InstOpMessage | SFZ/WXI probe/load, modulation slot update, new drum Instrument, name, new-copy save, pad assignment/choke, and pad-map readback request; see Instrument editor below |
 | MSG_INST_STATUS | 0x61 | D→E | `InstStatusMessage{request_id, slot, op, state, flags, error, zone/sample counts, byte totals/progress, current_name[48]}` | preflight result plus total/current-WAV load progress; flags report missing/invalid WAVs and insufficient resident memory |
-| MSG_INST_ZONE_SYNC | 0x62 | both | *(reserved — struct not yet defined)* | future editable-zone synchronization |
+| MSG_INST_ZONE_SYNC | 0x62 | D→E | InstZoneSyncMessage | sixteen-pad map, Instrument identity, busy state and retained mutation result |
 | MSG_TRACK_OP | 0x63 | E→D | `TrackOpMessage{op, track, value}` | one Track setting (`track-and-patch-model.md` §2.1), idempotent like `MSG_MIX_OP`. `TRACK_OP_SET_MIDI_IN` (`value` = `TrackMidiIn`: 0 Omni, 1..16 that channel **as displayed**, 0xFF Off), `TRACK_OP_SET_POLY_LIMIT` (0 = none, else ≤ `WAVEX_NUM_VOICES`), `TRACK_OP_SET_PRIORITY`, `TRACK_OP_SET_PROGRAM_CHANGE` (0/1). Only `midi_in` has behaviour today; the rest are stored for stages 8 and 6. An out-of-range track or value is rejected and logged, not clamped |
 | MSG_MIX_OP | 0x78 | E→D | `MixOpMessage{op, track, value}` | one mixer control change. `value` is op-dependent: gain/master are **centi-dB above the −60 dB floor** (0 = silence, 6000 = 0 dB, 6600 = +6 dB); pan reuses PARAM_PAN's convention (0 left, 32768 centre, 65535 right); `SET_MUTE_MASK` carries a bit per track. Conversions live in `WaveX::Mix` (`shared/audio/track_mix.hpp`) so both ends use one implementation |
 | MSG_MIX_METERS | 0x79 | D→E | `MixMetersMessage{peak[16]}` | per-track peak, log-mapped by `Mix::PeakToMeterByte` with 0 reserved for true silence. Sent only between `SUB_METERS` and `UNSUB_METERS`, at the existing meter cadence; master stereo meters stay on MSG_METER_PUSH |
@@ -195,3 +195,28 @@ SEQ_TRANSPORT_CONFIGURE updates tempo/mode without restarting playback.
 SEQ_OP_CLEAR_TRACK clears every step and lock in one row while preserving its
 mute setting. The wire shapes, sizes and bounds are centralized in
 firmware/shared/spi_protocol/protocol.h.
+
+
+## Instrument editor (protocol 5)
+
+InstOpMessage appends explicit pad_index, pad_choke and pad_sample_id fields.
+Both images must use protocol 5. Existing probe/load/modulation fields retain
+their meanings. The central enums and packed structs in protocol.h define
+the wire layout.
+
+NEW creates an empty drum Instrument after its Track's stop acknowledgement;
+SET_PAD_SAMPLE assigns a resident Pool id to a fixed pad, sets its choke group
+(0 off, 1-15), or clears it when the id is zero. Pad indices 0-15 map to notes
+60-75. Imported key/velocity maps outside that shape are read-only here.
+SET_NAME changes the in-memory name. SAVE writes a new WXI copy using path as
+the filename stem. NEW, SET_NAME and SAVE accept 1-23 ASCII letters, digits,
+spaces, hyphens and underscores, without leading/trailing spaces.
+
+GET_PAD_MAP returns MSG_INST_ZONE_SYNC. Each response echoes the read id and
+retains the Track's completed mutation id/error, so retrying a read cannot
+mistake a lost or failed mutation for success. Repeated completed mutation
+ids return their outcome without repeating the mutation. Main-loop replies
+are retained on a full UART queue. The UI never changes LVGL objects on RX.
+
+The bounded debug MSG payload now accommodates the 512-byte packet class's
+payload, including these extended requests.

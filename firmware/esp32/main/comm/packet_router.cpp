@@ -128,6 +128,11 @@ void PacketRouter::route_by_message_type(uint8_t msg_type,
             if (CopyMessage(payload, payload_len, message, "SEQ_PATTERN_SYNC"))
                 inter_mcu_store_seq_page(message);
         } break;
+        case WaveX::Protocol::MSG_INST_ZONE_SYNC: {
+            WaveX::Protocol::InstZoneSyncMessage message;
+            if (CopyMessage(payload, payload_len, message, "INST_ZONE_SYNC"))
+                inter_mcu_store_instrument_map(message);
+        } break;
         case WaveX::Protocol::MSG_SEQ_PLAYHEAD: {
             WaveX::Protocol::SeqPlayheadMessage message;
             if (CopyMessage(payload, payload_len, message, "SEQ_PLAYHEAD"))

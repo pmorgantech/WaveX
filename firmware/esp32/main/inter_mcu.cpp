@@ -1228,3 +1228,32 @@ bool inter_mcu_get_seq_playhead(WaveX::Protocol::SeqPlayheadMessage* out) {
     taskEXIT_CRITICAL(&s_seq_snapshot_lock);
     return valid;
 }
+
+namespace {
+portMUX_TYPE s_instrument_map_lock = portMUX_INITIALIZER_UNLOCKED;
+WaveX::Protocol::InstZoneSyncMessage s_instrument_map;
+bool s_instrument_map_valid = false;
+}  // namespace
+esp_err_t inter_mcu_send_instrument_edit(const WaveX::Protocol::InstOpMessage& request) {
+    if (request.slot >= 16 || !request.request_id)
+        return ESP_ERR_INVALID_ARG;
+    return send_uart_message(WaveX::Protocol::MSG_INST_OP, &request, sizeof(request)) >= 0
+               ? ESP_OK
+               : ESP_FAIL;
+}
+void inter_mcu_store_instrument_map(const WaveX::Protocol::InstZoneSyncMessage& map) {
+    taskENTER_CRITICAL(&s_instrument_map_lock);
+    s_instrument_map = map;
+    s_instrument_map_valid = true;
+    taskEXIT_CRITICAL(&s_instrument_map_lock);
+}
+bool inter_mcu_get_instrument_map(WaveX::Protocol::InstZoneSyncMessage* out) {
+    if (!out)
+        return false;
+    taskENTER_CRITICAL(&s_instrument_map_lock);
+    const bool valid = s_instrument_map_valid;
+    if (valid)
+        *out = s_instrument_map;
+    taskEXIT_CRITICAL(&s_instrument_map_lock);
+    return valid;
+}

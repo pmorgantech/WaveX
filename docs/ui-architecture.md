@@ -200,3 +200,12 @@ Do not copy those task lists into this reference.
 - [ESP32-P4 coding guide](esp32p4_coding_guide.md)
 - [System architecture](architecture.md)
 - [Track/Instrument model](features/track-and-patch-model.md)
+
+
+## Touch sequencing and kits
+
+Sequencer is a main-menu root page with a paged four-Track/sixteen-step grid.
+Instrument > Sample > Pad Map opens the selected Track's kit editor, with
+resident-sample assignment, audition, choke, a name keyboard and new-copy
+saves. Both pages consume synchronized backend snapshots on UI timers.
+Their touch workflows do not require physical panel wiring.

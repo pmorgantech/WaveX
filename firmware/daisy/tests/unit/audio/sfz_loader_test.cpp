@@ -10,7 +10,10 @@
 #include <vector>
 
 namespace WaveX::Comm {
-int UartLinkSend(uint16_t, const void*, uint16_t length) {
+static WaveX::Protocol::InstZoneSyncMessage last_pad_map;
+int UartLinkSend(uint16_t type, const void* payload, uint16_t length) {
+    if (type == WaveX::Protocol::MSG_INST_ZONE_SYNC && length == sizeof(last_pad_map))
+        std::memcpy(&last_pad_map, payload, length);
     return length;
 }
 }  // namespace WaveX::Comm
@@ -55,6 +58,27 @@ class SfzLoaderTest : public ::testing::Test {
     uint16_t SampleId(const char* path) {
         auto* record = pool_.FindByPath(path);
         return record ? record->sample_id : 0;
+    }
+    uint32_t next_request_ = 100;
+    InstZoneSyncMessage Edit(uint8_t op,
+                             uint8_t track,
+                             const char* name = "",
+                             uint8_t pad = 0,
+                             uint16_t sample = 0,
+                             uint8_t choke = 0) {
+        InstOpMessage request(++next_request_, track, op, name);
+        request.pad_index = pad;
+        request.pad_sample_id = sample;
+        request.pad_choke = choke;
+        SfzLoader::Begin(request);
+        for (int i = 0; i < 1000 && SfzLoader::Busy(); ++i) {
+            if (SfzLoader::VoiceStopTrack() != 0xFF)
+                SfzLoader::ConfirmVoicesStopped(pool_, memory_);
+            else
+                SfzLoader::Pump(pool_, memory_, io_.data(), io_.size());
+        }
+        SfzLoader::PumpEditorReply();
+        return WaveX::Comm::last_pad_map;
     }
     SamplePool pool_;
     SampleMemMgr memory_;
@@ -207,5 +231,98 @@ TEST_F(SfzLoaderTest, MissingSampleProbeLeavesOriginalTrackAndMemoryIntact) {
     EXPECT_TRUE(SfzLoader::TrackLoaded(0));
     EXPECT_NE(pool_.Find(original), nullptr);
     EXPECT_EQ(pool_.Count(), 2u);
+}
+
+TEST_F(SfzLoaderTest, KitPadReferencesAreSharedAcrossPadsAndTracks) {
+    ASSERT_TRUE(Load(0));
+    ASSERT_TRUE(Load(1));
+    const auto a = SampleId("/kits/a.wav"), b = SampleId("/kits/b.wav");
+    EXPECT_EQ(Edit(INST_OP_NEW, 0, "Kit").error, INST_ERROR_NONE);
+    EXPECT_EQ(pool_.Find(a)->used_by, 2);
+    EXPECT_TRUE(SfzLoader::TrackLoaded(0));
+    EXPECT_EQ(Edit(INST_OP_SET_PAD_SAMPLE, 0, "", 0, a, 3).error, INST_ERROR_NONE);
+    Edit(INST_OP_SET_PAD_SAMPLE, 0, "", 15, a, 7);
+    Edit(INST_OP_SET_PAD_SAMPLE, 0, "", 0, b, 2);
+    EXPECT_EQ(pool_.Find(a)->used_by, 3);  // pad 16 still holds it
+    auto map = Edit(INST_OP_SET_PAD_SAMPLE, 0, "", 15, 0);
+    EXPECT_EQ(pool_.Find(a)->used_by, 2);  // other Track remains
+    EXPECT_EQ(map.pads[0].sample_id, b);
+    EXPECT_EQ(map.pads[0].choke_group, 2);
+    EXPECT_EQ(map.pads[15].sample_id, 0);
+    EXPECT_EQ(SfzLoader::BoundSample(0), 0);  // a kit is an Instrument binding
+    EXPECT_EQ(Edit(INST_OP_SET_PAD_SAMPLE, 0, "", 16, a).error, INST_ERROR_BAD_FILE);
+    EXPECT_EQ(Edit(INST_OP_SET_PAD_SAMPLE, 1, "", 0, a).error, INST_ERROR_BAD_FILE);
+}
+TEST_F(SfzLoaderTest, SparseKitSaveReloadPreservesPadAndCardIdentity) {
+    ASSERT_TRUE(Load(1));
+    const auto a = SampleId("/kits/a.wav");
+    Edit(INST_OP_NEW, 0, "Sparse");
+    Edit(INST_OP_SET_PAD_SAMPLE, 0, "", 15, a, 7);
+    auto saved = Edit(INST_OP_SAVE, 0, "Sparse saved");
+    ASSERT_EQ(saved.error, INST_ERROR_NONE);
+    ASSERT_NE(MockFatFS::Instance().GetFile("0:/wavex/instruments/Sparse saved.wxi"), nullptr);
+    ASSERT_TRUE(SfzLoader::BindSample(pool_, memory_, 0, 0));
+    ASSERT_TRUE(SfzLoader::BindSample(pool_, memory_, 1, 0));
+    ASSERT_EQ(pool_.Count(), 0u);
+    ASSERT_TRUE(SfzLoader::Load(
+        "0:/wavex/instruments/Sparse saved.wxi", 2, pool_, memory_, io_.data(), io_.size()));
+    auto loaded = Edit(INST_OP_GET_PAD_MAP, 2);
+    EXPECT_EQ(loaded.editable, 1);
+    EXPECT_STREQ(loaded.name, "Sparse saved");
+    EXPECT_EQ(loaded.pads[0].sample_id, 0);
+    const auto reloaded = SampleId("/kits/a.wav");
+    EXPECT_NE(reloaded, a);
+    EXPECT_EQ(loaded.pads[15].sample_id, reloaded);
+    EXPECT_EQ(loaded.pads[15].choke_group, 7);
+    EXPECT_EQ(loaded.pads[15].note, 75);
+    EXPECT_EQ(pool_.Find(reloaded)->used_by, 4);
+}
+TEST_F(SfzLoaderTest, FailedSaveNeverReplacesAnExistingCopy) {
+    Edit(INST_OP_NEW, 0, "Empty");
+    ASSERT_EQ(Edit(INST_OP_SAVE, 0, "Saved").error, INST_ERROR_NONE);
+    auto& fs = MockFatFS::Instance();
+    const auto original = *fs.GetFile("0:/wavex/instruments/Saved.wxi");
+    EXPECT_EQ(Edit(INST_OP_SAVE, 0, "Saved").error, INST_ERROR_EXISTS);
+    EXPECT_EQ(*fs.GetFile("0:/wavex/instruments/Saved.wxi"), original);
+    fs.write_limit = 31;
+    EXPECT_EQ(Edit(INST_OP_SAVE, 0, "Short").error, INST_ERROR_IO);
+    EXPECT_EQ(fs.GetFile("0:/wavex/instruments/Short.wxi"), nullptr);
+    fs.write_limit = -1;
+    fs.close_result = FR_DISK_ERR;
+    EXPECT_EQ(Edit(INST_OP_SAVE, 0, "Close").error, INST_ERROR_IO);
+    EXPECT_EQ(fs.GetFile("0:/wavex/instruments/Close.wxi"), nullptr);
+    fs.close_result = FR_OK;
+    fs.rename_result = FR_DISK_ERR;
+    EXPECT_EQ(Edit(INST_OP_SAVE, 0, "Rename").error, INST_ERROR_IO);
+    EXPECT_EQ(fs.GetFile("0:/wavex/instruments/Rename.wxi"), nullptr);
+    EXPECT_EQ(*fs.GetFile("0:/wavex/instruments/Saved.wxi"), original);
+}
+TEST_F(SfzLoaderTest, EmptyKitReloadAndLostReplyRecovery) {
+    Edit(INST_OP_NEW, 0, "Empty");
+    auto saved = Edit(INST_OP_SAVE, 0, "Empty");
+    ASSERT_EQ(saved.error, INST_ERROR_NONE);
+    auto read = Edit(INST_OP_GET_PAD_MAP, 0);
+    EXPECT_EQ(read.completed_request_id, saved.completed_request_id);
+    EXPECT_EQ(read.error, saved.error);
+    ASSERT_TRUE(SfzLoader::Load(
+        "0:/wavex/instruments/Empty.wxi", 1, pool_, memory_, io_.data(), io_.size()));
+    read = Edit(INST_OP_GET_PAD_MAP, 1);
+    EXPECT_EQ(read.loaded, 1);
+    EXPECT_EQ(read.editable, 1);
+    EXPECT_EQ(read.pads[15].sample_id, 0);
+}
+
+TEST_F(SfzLoaderTest, KitReplacementGatesNewTriggersUntilStopAcknowledgement) {
+    ASSERT_TRUE(Load(0));
+    ASSERT_TRUE(Load(1));
+    const auto old = SampleId("/kits/a.wav");
+    ASSERT_TRUE(SfzLoader::Begin({900, 0, INST_OP_NEW, "New kit"}));
+    EXPECT_TRUE(SfzLoader::TrackLoading(0));
+    EXPECT_FALSE(SfzLoader::TrackLoading(1));
+    EXPECT_EQ(SfzLoader::VoiceStopTrack(), 0);
+    EXPECT_EQ(pool_.Find(old)->used_by, 3);
+    SfzLoader::ConfirmVoicesStopped(pool_, memory_);
+    EXPECT_FALSE(SfzLoader::TrackLoading(0));
+    EXPECT_EQ(pool_.Find(old)->used_by, 2);
 }
 }  // namespace

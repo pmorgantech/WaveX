@@ -2,7 +2,8 @@
 
 **Status:** As-built sampler model and load path, reviewed 2026-09-06.
 The Track/Instrument/Sample Pool core, SFZ import and WXI read path exist.
-Instrument saving, on-device zone/pad editors and Bank recall remain open.
+New-copy Instrument saves and the on-device Pad Map are built. Key Map editing
+and Bank recall remain open.
 The full two-oscillator target and persistence vocabulary are defined in
 [track-and-patch-model.md](track-and-patch-model.md).
 
@@ -116,14 +117,22 @@ little-endian header/chunk I/O. The
 layout; [track-and-patch-model.md §3.3](track-and-patch-model.md#33-persistence-wxi-over-wxcf)
 explains its typed oscillator structure.
 
-WXI encoding/decoding and loader ingestion exist. Atomic on-device Save/New/Name
-operations, Bank serialization and Project serializers do not.
-A host codec round trip is not evidence of SD save, power-loss recovery or
-reboot persistence.
+WXI encoding/decoding, loader ingestion, new drum Instruments, naming and
+new-copy saves exist. The Pad Map saves to 0:/wavex/instruments/<name>.wxi
+through a request-specific temporary file. It checks every write and close,
+then renames the closed file. Existing destinations are refused; there is no
+unlink-and-replace window. Failed writes/close/rename never replace a saved copy.
+Power-loss recovery remains a hardware gate; FAT directory updates alone
+are not a proof of crash consistency.
 
-Future saves must write a temporary file, finish and close it successfully,
-then atomically replace the destination using the storage owner's supported
-workflow. No writer may run in the callback.
+Save snapshots the Instrument into the existing document mapper in the main
+loop. Stored zones use card paths, preserve sparse pad indices, and include
+the current Instrument filter, amp envelope, modulation slots and zone
+overrides. Unsupported future oscillator/envelope fields normalize to current
+defaults in the new copy; the original file stays untouched. Sample PCM and
+Sample Pool marker edits are separate from this Instrument save.
+Streaming audition stops before a save takes the shared SD path; resident
+voices continue. Bank and Project serializers remain open.
 
 ## 6. Protocol
 
@@ -140,21 +149,28 @@ to copy from an old design sketch.
 
 ## 7. UI and remaining work
 
-Sample Browse preflights and loads files; Sample Manage pages the Pool and
-assigns resident samples; Play queries backend Track binding state.
-Instrument provides its current sample/filter/envelope/live controls.
-A disabled save or modulation control must remain visibly unavailable until
-its consumer exists.
+Instrument's Sample tab opens Pad Map. Its sixteen pads select and audition
+notes 60-75 on the selected Track. Assign opens a paged resident-sample picker;
+load additional samples or saved WXI files through Sample > Browse.
+Choke controls edit the selected pad. Shift exposes Rename, Clear pad,
+Samples and Track navigation. New kit confirms replacement before showing
+the name keyboard. Save copy requires a new filename.
 
-Pad Map, Key Map, Instrument Browser, full Instrument save/load workflow,
-Bank management and two-oscillator rendering are ordered in roadmap
-Phase 2.5. Do not keep a second implementation checklist here.
+Key Map, dedicated Instrument Browser, Bank/Track pages, per-pad filter/env
+controls, and expanded oscillator/envelope/LFO editors remain target work.
 
 ## 8. Kits
 
-A Kit is a drum-mode Instrument whose Zones map individual pad keys to
-samples, with the same Pool ownership, choke groups and persistence model.
-It is not a separate sample registry or wire format.
+A kit is a drum-mode Instrument. It has the same Track ownership, shared
+Sample Pool references, note resolver and WXI persistence as a keyboard
+Instrument. Pad assignment and replacement retire only the edited Track's
+voices and prepared sequencer triggers before dropping references. A sample
+used by another pad or Track remains resident. Choke groups are Track-local:
+two kits can both use group 1 without choking each other.
+
+The current sequencer grid triggers note 60 per Track; it does not yet
+sequence arbitrary pads within one kit. Pad Map and Play can audition all
+sixteen pads independently.
 
 ## 9. Validation
 

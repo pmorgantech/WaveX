@@ -52,10 +52,9 @@ namespace wavex_ui {
  *   engine has one would be drawing controls that do nothing - the mistake this
  *   codebase has made before (see the sample edit page's "drawn but inert"
  *   note). The tab is shown, marked, and left unwired.
- * - **Instruments do not persist.** Naming and save/load need the `.wxi` file
- *   and protocol messages that do not exist yet (track-and-patch-model.md
- *   stage 4); the name is held in RAM so the entity is real even while its
- *   storage is not.
+ * - **Pad Map persists Instruments.** The Sample tab opens its sixteen-pad
+ *   editor, with confirmed new-kit creation, naming and new-copy WXI saves.
+ *   Sample > Browse loads WXI and SFZ files through the same Track loader.
  */
 class UIInstrumentPage : public UIPage {
    public:

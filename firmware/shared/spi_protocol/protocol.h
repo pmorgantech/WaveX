@@ -17,7 +17,8 @@ namespace Protocol {
 // id (`sample_id`, was the one-byte `slot`); id 0 no longer means "newest".
 // MSG_PREVIEW_REQ (0x0A) / MSG_WAVE_CHUNK (0x11) retired.
 // 4: envelope payloads use signed 8-bit extrema and an explicit encoding tag.
-static const uint32_t PROTOCOL_VERSION = 4;
+// 5: InstOpMessage appends explicit pad index, choke and Sample Pool id fields.
+static const uint32_t PROTOCOL_VERSION = 5;
 
 // Wire layout (review M10: a packed `WaveXPacket` struct used to "document"
 // this but placed `crc` at offset 4 while the wire puts it at the packet
@@ -150,7 +151,7 @@ enum MessageType : uint8_t {
     // Instrument browser/load lifecycle (instrument-model.md §6).
     MSG_INST_OP = 0x60,         // E->D: inspect or load one instrument file
     MSG_INST_STATUS = 0x61,     // D->E: inspection result and load progress
-    MSG_INST_ZONE_SYNC = 0x62,  // reserved: future editable-zone synchronization
+    MSG_INST_ZONE_SYNC = 0x62,  // D->E: Instrument pad map and retained edit result
     MSG_TRACK_OP = 0x63,        // E->D: one Track setting (track-and-patch-model.md §2)
     // Mixer (output-routing-and-mixer.md §4). 0x70-0x7F is the recording /
     // mix / scenes block reserved in features/inter-mcu-protocol.md.
@@ -1650,6 +1651,12 @@ enum InstOpCode : uint8_t {
     // matrix slots this particular write targets. `path` is unused for
     // this op.
     INST_OP_SET_MOD_SLOT = 3,
+    INST_OP_NEW = 4,             // new empty drum Instrument; path carries its name
+    INST_OP_SAVE = 5,            // save a new .wxi copy; path carries the filename stem
+    INST_OP_SET_NAME = 6,        // rename in RAM; path carries the display name
+    INST_OP_SET_PAD_SAMPLE = 7,  // pad_index/sample_id/choke; zero sample clears the pad
+    INST_OP_GET_PAD_MAP = 8,     // reply is MSG_INST_ZONE_SYNC
+
 };
 
 enum InstStatusState : uint8_t {
@@ -1677,6 +1684,7 @@ enum InstError : uint8_t {
     INST_ERROR_NO_MEMORY = 6,
     INST_ERROR_BUSY = 7,
     INST_ERROR_IO = 8,
+    INST_ERROR_EXISTS = 9,
 };
 
 // MSG_INST_OP (E->D). request_id lets the browser discard a probe response
@@ -1702,6 +1710,9 @@ struct InstOpMessage {
     int16_t mod_depth;       // +-32767 -> +-100%
     uint8_t mod_curve;       // ModCurve
     uint8_t mod_flags;       // ModSlotFlags
+    uint8_t pad_index = 0;
+    uint8_t pad_choke = 0;
+    uint16_t pad_sample_id = 0;
 
     InstOpMessage()
         : request_id(0),
@@ -1751,6 +1762,46 @@ struct InstOpMessage {
         path[0] = '\0';
     }
 } __attribute__((packed));
+
+static constexpr uint8_t INST_PAD_COUNT = 16;
+static constexpr uint8_t INST_PAD_FIRST_NOTE = 60;
+static constexpr size_t INST_NAME_BYTES = 24;
+
+struct InstPadState {
+    uint16_t sample_id = 0;
+    uint8_t choke_group = 0;
+    uint8_t note = 0;
+} __attribute__((packed));
+
+// Main-loop snapshot; completed_request_id/error retain the last mutation's
+// outcome across read retries. A read does not acknowledge a lost mutation.
+struct InstZoneSyncMessage {
+    uint32_t request_id = 0;
+    uint32_t completed_request_id = 0;
+    uint8_t track = 0;
+    uint8_t loaded = 0;
+    uint8_t mode = 0;
+    uint8_t editable = 0;
+    uint8_t busy = 0;
+    uint8_t error = 0;
+    char name[INST_NAME_BYTES] = {};
+    InstPadState pads[INST_PAD_COUNT] = {};
+} __attribute__((packed));
+static_assert(sizeof(InstZoneSyncMessage) <= 122, "pad map fits a 128-byte packet");
+
+inline bool IsValidInstrumentName(const char* name) {
+    if (!name || !name[0] || name[0] == ' ')
+        return false;
+    for (size_t i = 0; i < INST_NAME_BYTES; ++i) {
+        const char c = name[i];
+        if (!c)
+            return i > 0 && name[i - 1] != ' ';
+        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+              c == ' ' || c == '-' || c == '_'))
+            return false;
+    }
+    return false;
+}
 
 // MSG_INST_STATUS (D->E). Byte counts describe resident WAV audio data, not
 // the small SFZ text file. During loading current_* identifies the individual

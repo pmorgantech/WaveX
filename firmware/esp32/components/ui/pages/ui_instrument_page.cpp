@@ -7,6 +7,7 @@
 #include "inter_mcu.h"
 #include "ui/current_track.h"
 #include "ui/ui_navigator.h"
+#include "ui/ui_pad_map_page.h"
 #include "ui/ui_palette.h"
 #include "ui/ui_sample_browser.h"
 #include "ui/ui_tab_group.h"
@@ -810,6 +811,8 @@ std::array<Softkey, NUM_SOFTKEYS> UIInstrumentPage::getSoftkeys() {
                    refreshParams();
                    UINavigator::instance().refreshSoftkeys();
                }};
+    if (stage_ == static_cast<int>(Stage::Sample))
+        keys[5] = {"Pad Map", [] { UINavigator::instance().push(createPadMapPage()); }};
     return keys;
 }
 
@@ -822,11 +825,8 @@ std::array<Softkey, NUM_SOFTKEYS> UIInstrumentPage::getShiftedSoftkeys() {
     // equivalent at all.
     keys[1] = {"< Stage", [this]() { moveStage(-1); }};
     keys[2] = {"Stage >", [this]() { moveStage(+1); }};
-    // Save/Load are shown but unwired, and say why: an Instrument needs the
-    // .wxi file and protocol messages that do not exist (track-and-patch-model
-    // stage 4). Better a labelled gap than a button that appears to work.
-    keys[3] = {"Save", nullptr, false, "needs the Instrument file (.wxi)"};
-    keys[4] = {"Load", nullptr, false, "needs the Instrument file (.wxi)"};
+    keys[3] = {"Pad Map", [] { UINavigator::instance().push(createPadMapPage()); }};
+    keys[4] = {"Samples", [] { UINavigator::instance().jumpToRoot(RootGroup::Sample); }};
     keys[5] = {"Init", [this]() {
                    // Re-send every wired parameter at its default so the engine
                    // and the page agree again.

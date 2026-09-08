@@ -971,7 +971,13 @@ struct SamplePlan {
 
 inline bool BuildSamplePlan(MappedInstrument& mapped, SamplePlan& plan, Status& status) {
     plan = SamplePlan{};
+    if (mapped.zone_count > kMaxZones) {
+        status.error = Error::TooManyRegions;
+        return false;
+    }
     for (uint8_t zone_index = 0; zone_index < mapped.zone_count; ++zone_index) {
+        if (!mapped.instrument.zones[zone_index].in_use)
+            continue;
         uint8_t entry_index = 0;
         for (; entry_index < plan.count; ++entry_index) {
             if (detail::Equal(mapped.sample_paths[plan.entries[entry_index].path_zone],

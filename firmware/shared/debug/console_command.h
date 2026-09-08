@@ -34,7 +34,7 @@ constexpr int32_t kNoSeq = -1;
 /// Daisy MSG verb's bounded hex payload with room
 /// for the header; a longer line is rejected whole, never truncated into a
 /// shorter, valid-looking command.
-constexpr size_t kMaxMessageBytes = 272;
+constexpr size_t kMaxMessageBytes = 506;
 constexpr size_t kMaxLineBytes = 2 * kMaxMessageBytes + 64;
 
 /// Verb token and argument bounds. Verbs are short upper-case words.

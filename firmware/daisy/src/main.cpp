@@ -328,6 +328,8 @@ static void DispatchConsoleCommand(const WaveX::Debug::Command& c) {
         } else {
             static_assert(sizeof(WaveX::Protocol::SampleLoadMessage) <= kMaxMessageBytes,
                           "debug MSG must hold the live sample-load payload");
+            static_assert(sizeof(WaveX::Protocol::InstOpMessage) <= kMaxMessageBytes,
+                          "debug MSG must hold Instrument editor requests");
             static uint8_t payload[kMaxMessageBytes];
             p = WaveX::Debug::detail::SkipSpaces(p);
             const size_t n = ParseHexBytes(p, payload, sizeof(payload));

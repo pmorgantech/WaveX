@@ -10,6 +10,7 @@
 
 #include "bss_static.hpp"
 #include "instrument_map.hpp"
+#include "kit_edit.hpp"
 #include "sample_load_info.hpp"
 #include "sfz_import.hpp"
 #include "snapshot_mailbox.hpp"
@@ -59,6 +60,7 @@ enum class Phase : uint8_t {
     OpenSample,
     ReadSample,
     Commit,
+    SaveCopy,
 };
 
 // BssStatic (bss_static.hpp): as plain statics the bank and the mapped
@@ -418,12 +420,123 @@ void FillCurrentStatus() {
         Basename(s_mapped.sample_paths[s_plan.entries[s_index].path_zone]));
 }
 
+// Main-loop editor state. A read is disposable, a mutation result is retained
+// per Track so a dropped UART reply cannot turn a failed save into success.
+static uint32_t s_edit_completed[kNumTracks] = {};
+static uint8_t s_edit_error[kNumTracks] = {};
+static InstZoneSyncMessage s_zone_reply;
+static bool s_zone_pending = false;
+
+void QueueZoneReply(uint32_t id, uint8_t track, uint8_t immediate_error = 0) {
+    s_zone_reply = InstZoneSyncMessage{};
+    s_zone_reply.request_id = id;
+    s_zone_reply.track = track;
+    if (track >= kNumTracks) {
+        s_zone_reply.error = INST_ERROR_BAD_FILE;
+    } else {
+        const auto& ins = s_bank.At(track).instrument;
+        s_zone_reply.completed_request_id = s_edit_completed[track];
+        s_zone_reply.error = s_edit_error[track];
+        s_zone_reply.loaded = ins.origin != InstrumentOrigin::None;
+        s_zone_reply.mode = static_cast<uint8_t>(ins.mode);
+        s_zone_reply.editable = KitEdit::Editable(ins);
+        s_zone_reply.busy = s_phase != Phase::Idle;
+        std::memcpy(s_zone_reply.name, ins.name, sizeof(ins.name));
+        for (uint8_t i = 0; i < INST_PAD_COUNT; ++i) {
+            const auto& z = ins.zones[i];
+            s_zone_reply.pads[i].sample_id = z.in_use ? z.sample_id : 0;
+            s_zone_reply.pads[i].choke_group = z.choke_group;
+            s_zone_reply.pads[i].note = static_cast<uint8_t>(INST_PAD_FIRST_NOTE + i);
+        }
+    }
+    if (immediate_error) {
+        s_zone_reply.completed_request_id = id;
+        s_zone_reply.error = immediate_error;
+    }
+    s_zone_pending = true;
+}
+void FinishEdit(uint8_t error = INST_ERROR_NONE) {
+    s_edit_completed[s_request.slot] = s_request.request_id;
+    s_edit_error[s_request.slot] = error;
+    s_phase = Phase::Idle;
+    QueueZoneReply(s_request.request_id, s_request.slot);
+}
+bool SaveSamplePath(const void* context, uint16_t id, char* out, size_t size) {
+    const auto* pool = static_cast<const SamplePool*>(context);
+    const auto* record = pool->Find(id);
+    if (!record || !record->payload.path[0])
+        return false;
+    Protocol::detail::CopyWireString(out, size, record->payload.path);
+    return std::strlen(record->payload.path) < size;
+}
+bool WxiWriteCb(void* user, const void* source, size_t bytes) {
+    // The codec writes sub-sector chunks. FatFs stages these through the
+    // resident FIL sector buffer, never DMA from the codec's stack scratch.
+    if (bytes >= 512)
+        return false;
+    UINT written = 0;
+    return f_write(static_cast<FIL*>(user), source, static_cast<UINT>(bytes), &written) == FR_OK &&
+           written == bytes;
+}
+uint8_t SaveCopy(SamplePool& pool) {
+    auto& ins = s_bank.At(s_request.slot).instrument;
+    if (ins.origin == InstrumentOrigin::None || !IsValidInstrumentName(s_request.path))
+        return INST_ERROR_BAD_FILE;
+    s_doc_storage.Reconstruct();
+    auto& doc = s_doc_storage.Get();
+    if (!InstrumentMap::ToFile(ins, {&pool, SaveSamplePath}, doc))
+        return INST_ERROR_MISSING_SAMPLES;
+    Protocol::detail::CopyWireString(doc.name, sizeof(doc.name), s_request.path);
+    const FRESULT root = f_mkdir("0:/wavex");
+    if (root != FR_OK && root != FR_EXIST)
+        return INST_ERROR_IO;
+    const FRESULT dir = f_mkdir("0:/wavex/instruments");
+    if (dir != FR_OK && dir != FR_EXIST)
+        return INST_ERROR_IO;
+    char destination[96], temporary[112];
+    std::snprintf(destination, sizeof(destination), "0:/wavex/instruments/%s.wxi", doc.name);
+    // A per-request temp avoids truncating an earlier incomplete save.
+    std::snprintf(temporary,
+                  sizeof(temporary),
+                  "0:/wavex/instruments/.%s-%08lx.tmp",
+                  doc.name,
+                  static_cast<unsigned long>(s_request.request_id));
+    FILINFO info{};
+    const FRESULT found = f_stat(destination, &info);
+    if (found == FR_OK)
+        return INST_ERROR_EXISTS;
+    if (found != FR_NO_FILE)
+        return INST_ERROR_IO;
+    if (f_open(&s_file, temporary, FA_WRITE | FA_CREATE_NEW) != FR_OK)
+        return INST_ERROR_IO;
+    s_file_open = true;
+    const bool written =
+        Wxi::Write({&s_file, nullptr, WxiWriteCb, nullptr}, doc) == Wxi::Result::Ok;
+    // f_close flushes data and directory metadata; never rename an open FIL.
+    const FRESULT closed = f_close(&s_file);
+    s_file_open = false;
+    if (!written || closed != FR_OK) {
+        f_unlink(temporary);
+        return INST_ERROR_IO;
+    }
+    const FRESULT renamed = f_rename(temporary, destination);
+    if (renamed != FR_OK) {
+        f_unlink(temporary);
+        return renamed == FR_EXIST ? INST_ERROR_EXISTS : INST_ERROR_IO;
+    }
+    Protocol::detail::CopyWireString(ins.name, sizeof(ins.name), doc.name);
+    return INST_ERROR_NONE;
+}
+
 }  // namespace
 
 void Reset() {
     CloseFile();
+    s_zone_pending = false;
     s_bank_storage.Reconstruct();
     for (uint8_t track = 0; track < kNumTracks; ++track) {
+        s_edit_completed[track] = 0;
+        s_edit_error[track] = 0;
         s_mod_active[track] = ModTable{};
         s_mod_mailboxes[track].Init(s_mod_active[track]);
     }
@@ -434,6 +547,48 @@ void Reset() {
 }
 
 bool Begin(const InstOpMessage& request) {
+    if (request.op >= INST_OP_NEW && request.op <= INST_OP_GET_PAD_MAP) {
+        if (request.slot >= kNumTracks || request.request_id == 0) {
+            QueueZoneReply(request.request_id, request.slot, INST_ERROR_BAD_FILE);
+            return false;
+        }
+        if (request.op == INST_OP_GET_PAD_MAP) {
+            QueueZoneReply(request.request_id, request.slot);
+            return true;
+        }
+        if (s_edit_completed[request.slot] == request.request_id) {
+            QueueZoneReply(request.request_id, request.slot);
+            return false;  // duplicate mutation: replay its outcome, never its side effects
+        }
+        if (Busy()) {
+            QueueZoneReply(request.request_id, request.slot, INST_ERROR_BUSY);
+            return false;
+        }
+        s_request = request;
+        // Never silently truncate an unterminated wire name.
+        const bool named = request.op == INST_OP_NEW || request.op == INST_OP_SAVE ||
+                           request.op == INST_OP_SET_NAME;
+        if ((named && !IsValidInstrumentName(request.path)) ||
+            (request.op == INST_OP_SET_PAD_SAMPLE &&
+             (request.pad_index >= INST_PAD_COUNT || request.pad_choke > 15 ||
+              !KitEdit::Editable(s_bank.At(request.slot).instrument)))) {
+            FinishEdit(INST_ERROR_BAD_FILE);
+            return false;
+        }
+        if (request.op == INST_OP_SET_NAME) {
+            auto& ins = s_bank.At(request.slot).instrument;
+            if (ins.origin == InstrumentOrigin::None) {
+                FinishEdit(INST_ERROR_BAD_FILE);
+                return false;
+            }
+            Protocol::detail::CopyWireString(ins.name, sizeof(ins.name), request.path);
+            FinishEdit();
+            return true;
+        }
+        s_phase = request.op == INST_OP_SAVE ? Phase::SaveCopy : Phase::AwaitVoiceStop;
+        return true;
+    }
+
     if (s_phase != Phase::Idle) {
         // Selection probes are disposable. Replace an in-flight probe with
         // the newest cursor selection so fast browsing cannot leave the final
@@ -500,7 +655,9 @@ bool Busy() {
 }
 
 bool TrackLoading(uint8_t slot) {
-    return Busy() && s_request.op == INST_OP_SFZ_LOAD && s_request.slot == slot;
+    return Busy() && s_request.slot == slot &&
+           (s_request.op == INST_OP_SFZ_LOAD || s_request.op == INST_OP_NEW ||
+            s_request.op == INST_OP_SET_PAD_SAMPLE);
 }
 
 uint8_t VoiceStopTrack() {
@@ -510,6 +667,40 @@ uint8_t VoiceStopTrack() {
 void ConfirmVoicesStopped(SamplePool& pool, SampleMemMgr& memory) {
     if (s_phase != Phase::AwaitVoiceStop)
         return;
+
+    if (s_request.op == INST_OP_NEW) {
+        ReleaseTrack(pool, memory, s_request.slot);
+        auto& ins = s_bank.At(s_request.slot).instrument;
+        WaveX::ReconstructInPlace(ins);
+        ins.origin = InstrumentOrigin::Built;
+        ins.mode = InstrumentMode::Drum;
+        Protocol::detail::CopyWireString(ins.name, sizeof(ins.name), s_request.path);
+        PublishModSlots(s_request.slot);
+        FinishEdit();
+        return;
+    }
+    if (s_request.op == INST_OP_SET_PAD_SAMPLE) {
+        auto& ins = s_bank.At(s_request.slot).instrument;
+        const auto sample = s_request.pad_sample_id;
+        const auto* record = pool.Find(sample);
+        if (sample && (!record || !SampleIsPlayable(record->payload))) {
+            FinishEdit(INST_ERROR_MISSING_SAMPLES);
+            return;
+        }
+        const auto old = ins.zones[s_request.pad_index].sample_id;
+        KitEdit::Assign(ins, s_request.pad_index, sample, s_request.pad_choke);
+        if (sample)
+            pool.SetUsedBy(sample, s_request.slot, true);
+        if (old && old != sample && !KitEdit::Uses(ins, old)) {
+            pool.SetUsedBy(old, s_request.slot, false);
+            const auto* unused = pool.Find(old);
+            if (unused && !unused->pinned && !unused->used_by)
+                FreeFromPool(pool, memory, old);
+        }
+        FinishEdit();
+        return;
+    }
+
     // Only this Track's holdings are released; every other Track's refs, and
     // the user's pinned samples, are untouched (they may be this import's
     // hits). Mod slots survive: a load is not an edit of them.
@@ -518,6 +709,12 @@ void ConfirmVoicesStopped(SamplePool& pool, SampleMemMgr& memory) {
     s_index = 0;
     s_phase = Phase::AllocateSample;
     SendStatus(INST_STATUS_LOAD_BEGIN);
+}
+
+void PumpEditorReply() {
+    if (s_zone_pending &&
+        WaveX::Comm::UartLinkSend(MSG_INST_ZONE_SYNC, &s_zone_reply, sizeof(s_zone_reply)) >= 0)
+        s_zone_pending = false;
 }
 
 void Pump(SamplePool& pool, SampleMemMgr& memory, uint8_t* io_buffer, uint32_t io_buffer_bytes) {
@@ -556,7 +753,7 @@ void Pump(SamplePool& pool, SampleMemMgr& memory, uint8_t* io_buffer, uint32_t i
             }
             InstrumentMap::FromFile(doc, s_mapped);
             Sfz::Status status;
-            if (s_mapped.zone_count == 0 || !Sfz::BuildSamplePlan(s_mapped, s_plan, status)) {
+            if (!Sfz::BuildSamplePlan(s_mapped, s_plan, status)) {
                 Fail(&pool, &memory, INST_ERROR_BAD_FILE);
                 return;
             }
@@ -788,7 +985,8 @@ void Pump(SamplePool& pool, SampleMemMgr& memory, uint8_t* io_buffer, uint32_t i
             // The mapper knows zones, not where the document came from, so the
             // display name is stamped here - the one place still holding the
             // .sfz path. Truncation is fine; it is a label, not an identifier.
-            std::snprintf(ins.name, sizeof(ins.name), "%s", Basename(s_request.path));
+            if (InstrumentMap::PathIsSfz(s_request.path) || !ins.name[0])
+                std::snprintf(ins.name, sizeof(ins.name), "%s", Basename(s_request.path));
             PublishModSlots(s_request.slot);
             s_status.loaded_bytes = s_total_bytes;
             s_status.current_loaded_bytes = s_status.current_bytes;
@@ -802,6 +1000,9 @@ void Pump(SamplePool& pool, SampleMemMgr& memory, uint8_t* io_buffer, uint32_t i
             s_phase = Phase::Idle;
         } break;
 
+        case Phase::SaveCopy:
+            FinishEdit(SaveCopy(pool));
+            break;
         case Phase::Idle:
         case Phase::AwaitVoiceStop:
             break;
@@ -925,7 +1126,7 @@ const char* TrackName(uint8_t slot) {
     // A load in flight has not reached Commit, so the bank still holds the
     // PREVIOUS instrument for this slot - naming that would be actively
     // misleading. The request's own path is the truth until Commit runs.
-    if (TrackLoading(slot))
+    if (TrackLoading(slot) && s_request.op != INST_OP_SET_PAD_SAMPLE)
         return Basename(s_request.path);
     return s_bank.At(slot).instrument.name;
 }
@@ -934,7 +1135,7 @@ uint16_t BoundSample(uint8_t slot) {
     if (slot >= kNumTracks)
         return 0;
     const Instrument& ins = s_bank.At(slot).instrument;
-    if (ins.origin != InstrumentOrigin::Built)
+    if (ins.origin != InstrumentOrigin::Built || ins.mode == InstrumentMode::Drum)
         return 0;
     for (const auto& zone: ins.zones) {
         if (zone.in_use)
@@ -970,7 +1171,7 @@ void ForgetLoadedSample(uint16_t sample_id) {
             }
             any_left = any_left || zone.in_use;
         }
-        if (!any_left) {
+        if (!any_left && ins.mode != InstrumentMode::Drum) {
             ins.origin = InstrumentOrigin::None;
         }
     }

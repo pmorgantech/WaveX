@@ -63,7 +63,9 @@ velocity-aware zone selection remain open. Open work:
 1. Verify sample-offset timing and edit boundaries on hardware for the
    four-track gate; complete note/velocity-aware prepared resolution.
 2. Serialize MIDI clock out on the ESP32's DIN and USB paths (needs 2.P.5).
-3. Complete the kit editor and TLC5947 LED feedback. The touch Play pads
+3. Complete per-pad filter/envelope editing and TLC5947 LED feedback. The
+   touch kit editor provides creation, naming, assignment, choke and new-copy
+   WXI saves. The touch Play pads
    and sequencer grid are built; the grid pages across all 16 Tracks and 64
    steps and edits tempo, swing, length, scale, velocity, probability and mute.
    Physical controls/LED feedback require 2.P.1–3; touch workflows do not.
@@ -130,9 +132,9 @@ the two-oscillator Instrument is designed there, §3). Stages 1 (rename),
 done. Open work, in the order decided 2026-09-05 (model doc §8: 7 → 4 → 5 →
 6 → 8), with 7 now closed:
 
-1. Instrument file and editors (stage 4): `.wxi` with the full chunk set,
-   Init/Save/Name ops, Pad Map (first) and Key Map (with Sample Manager
-   "to pad"), Instrument Browser, Track page.
+1. Complete Instrument editors (stage 4): general Key Map and zone editing,
+   per-pad filter/env controls, Instrument Browser and Track page. Pad Map
+   creation, naming, resident assignment, choke and new-copy WXI saves are built.
 2. Voice architecture (stage 5): typed oscillators, Osc 2 + submix, filter
    type, Env 3, two per-voice LFOs, new mod destinations —
    DWT-measured at `WAVEX_NUM_VOICES` before the count is changed.

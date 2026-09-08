@@ -17,6 +17,11 @@ versioning and release process.
   live playhead feedback, and position-preserving tempo configuration; grid
   navigation remains usable during playback and row clears retain track mute.
 
+- Added a sixteen-pad drum Instrument editor with backend-authoritative pad
+  readback, resident sample assignment and clearing, audition, Track-local
+  choke groups, confirmed kit creation, naming, and atomic new-copy WXI saves.
+  Protocol version 5 retains completed mutation results across read retries.
+
 ### Changed
 
 - Sequencer rows now address their matching Tracks at MIDI note 60 across all

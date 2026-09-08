@@ -82,3 +82,9 @@ void inter_mcu_store_seq_playhead(const WaveX::Protocol::SeqPlayheadMessage& pla
     cap.seq_playhead_calls++;
     cap.last_seq_playhead = playhead;
 }
+
+void inter_mcu_store_instrument_map(const WaveX::Protocol::InstZoneSyncMessage& map) {
+    auto& cap = GetInterMcuCapture();
+    ++cap.instrument_map_calls;
+    cap.instrument_map = map;
+}

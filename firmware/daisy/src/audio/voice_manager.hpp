@@ -438,7 +438,7 @@ class VoiceManager {
         // Choke: mute other voices in the same group before allocating this
         // one (the new voice must not choke itself). No-op for group 0.
         if (params.choke_group != 0)
-            Choke(params.choke_group);
+            Choke(params.choke_group, 0.005f, params.track);
         int idx = FindFreeVoice();
         if (idx < 0)
             idx = FindVoiceToSteal();
@@ -770,13 +770,14 @@ class VoiceManager {
     // classic open-hat/closed-hat mutual exclusion cuts the open hat off
     // near-instantly but click-free. `group` 0 is "no group" and never
     // chokes anything. Called from Trigger() before allocating the new
-    // voice; callback-safe (no alloc/IO). fast_release_s default 5 ms.
-    void Choke(uint8_t group, float fast_release_s = 0.005f) {
+    // voice, scoped to its Track. An explicit unscoped Choke keeps the global
+    // utility behavior; callback-safe (no alloc/IO). fast_release_s default 5 ms.
+    void Choke(uint8_t group, float fast_release_s = 0.005f, uint8_t track = 0xFF) {
         if (group == 0)
             return;
         for (auto& v: voices_) {
             if (v.state == VoiceState::Playing && v.choke_group == group &&
-                !v.envelope.IsReleasing()) {
+                (track == 0xFF || v.track == track) && !v.envelope.IsReleasing()) {
                 v.envelope.SetReleaseTime(fast_release_s);
                 v.envelope.Release();
                 v.env2.SetReleaseTime(fast_release_s);
