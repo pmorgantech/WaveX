@@ -1,7 +1,7 @@
 # WaveX Implementation Roadmap
 
 **Status:** Canonical implementation order. **Current phase:** Phase 2.
-**Last updated:** 2026-09-07.
+**Last updated:** 2026-09-08.
 
 This document lists only open work. Completed work belongs in `CHANGELOG.md`
 and git history. Code-complete but unverified hardware behavior remains open in
@@ -78,24 +78,21 @@ Phase 2.5 work. Open work:
 
 ### 2.C — Callback capacity checkpoint (2026-09-08)
 
-The latest audio/grid run on 70deebd measured **68.3521% peak callback
-utilization (STAY)** over 605.2 seconds, with zero underruns or sequencer
-queue-drop messages. It used eight drum Instruments with sixteen populated
-pads each, Track-local choke, 64 modulation slots, the WaveX 24 dB filter
-at full drive, SD streaming, live cutoff edits and grid readback.
-The measured peak was 68.3521%, compared with 70.3435% on 38b83b0; average
-utilization was 25.8%. This comparison does not establish a standalone
-performance win for the filter change.
+The latest persistence workload on 27b7fd6 measured **68.9444% peak callback
+utilization (STAY)** over 605.2 seconds, with six successful pattern save/load
+cycles, zero underruns, no file errors and no sequencer queue-drop messages.
+It used eight drum Instruments with sixteen populated pads each, Track-local
+choke, 64 modulation slots, the WaveX 24 dB filter at full drive, SD streaming,
+live cutoff edits and grid readback. The streaming preview stopped for each
+file operation and restarted afterward; resident Track voices continued.
 Full captures and preceding comparisons are recorded in
 [callback-performance-log.md](callback-performance-log.md).
 
-This run excluded pattern file operations. The persistence soak is blocked
-by SD writes that produced controller CRC/time-out errors and a later
-missing temporary-file entry. The default SD clock is now conservative;
-a fresh diagnostic directory passed six short save/load cycles, but the
-original test directory still needs recovery/recreation approval.
-A retained visible-file restart check passed. New-save recovery and a full
-persistence soak remain outstanding.
+The earlier SD-write failure no longer blocks this workload after the default
+clock reduction and authorized preservation/recreation of the test directory.
+A newly saved pattern loaded after backend restart on normal firmware.
+Arbitrary power-loss recovery, longer write soaks and the full Phase 2 gate
+remain outstanding.
 
 The DaisySP comparison measured 89.6635% for 605.2 seconds with zero
 underruns and entered UPGRADE because callback-resident work remains.

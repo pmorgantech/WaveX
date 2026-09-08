@@ -55,7 +55,8 @@ versioning and release process.
 - Set the default Daisy SD clock to the conservative 25 MHz setting after
   sustained 50 MHz pattern writes produced controller CRC and timeout errors,
   and added first-error FatFs/HAL diagnostics for foreground pattern I/O.
-  The original pattern directory and full persistence gate remain unresolved.
+  The original pattern directory was preserved as `wavex/patterns-failed-0908`
+  and replaced with a fresh `wavex/patterns` after explicit authorization.
 
 - Avoided full zone scans for unique single-note drum pads within the compact
   indexed window while retaining the generic ordered layering fallback for
@@ -65,9 +66,18 @@ versioning and release process.
   by applying cutoff and resonance together, preserving the existing filter
   response and integrator state. A clean audio/grid-only follow-up measured
   68.3521% peak utilization and 31.6479% headroom over 605.2 seconds (STAY),
-  with file operations excluded; the full persistence gate remains blocked.
+  with file operations excluded; the later persistence workload is recorded
+  below.
 
 ### Changed
+
+- Recorded the completed persistence follow-up: six pattern save/load cycles
+  passed after the authorized directory preservation/recreation, with a
+  68.9444% peak callback utilization (STAY) over 605.2 seconds, zero
+  underruns, file errors or sequencer queue-drop messages, successful restart
+  loading, and nine focused HIL tests passing. Arbitrary power-loss recovery,
+  longer write soaks, physical panel/MIDI-clock checks and the full Phase 2
+  gate remain open.
 
 - Recorded the touch kit/grid capacity follow-up at 67.0844% worst-case
   callback usage with 32.9156% headroom across 122 DWT windows (610.2 s),

@@ -155,13 +155,13 @@ A fresh, separate diagnostic directory passed six save/load cycles over
 146 seconds with eight voices, zero underruns and zero dropped console
 bytes (`logs/perf-wavex-20260908-051957.log`). That diagnostic image used
 the same codec and file operations with only its directory redirected.
-The production path remains `wavex/patterns`. No original directory was
-renamed or deleted; preserving/recreating it awaits user authorization.
+The production path remains `wavex/patterns`. At that point, no original directory had been
+renamed or deleted; preserving/recreating it awaited user authorization.
 The temporary listing and rename instrumentation was removed. A retained
 visible-file restart check passed after backend restart (`logs/pattern-reboot-
 check.json`), preserving note, groove, tempo and Track bindings. The full
-persistence soak and new-save recovery remain blocked by the original
-directory failure; the short fresh-directory run does not satisfy the
+persistence soak and new-save recovery were still blocked by the original
+directory failure; the short fresh-directory run did not satisfy the
 ten-minute gate.
 
 ## Full-kit audio/grid follow-up — 2026-09-08
@@ -191,12 +191,59 @@ zero samples, zero voices and zero underruns; the check ended back at the
 Sequencer home state with playback stopped and tempo 120.
 
 File operations were excluded because the original pattern directory
-remains unresolved; this audio/grid capacity pass does not satisfy the
+was unresolved; this audio/grid capacity pass does not satisfy the
 persistence soak or the overall Phase 2 gate. The earlier retained-file
 restart check (`logs/pattern-reboot-check.json`) successfully loaded
 `Perf 043405 75` with its notes, step bits and swing intact while preserving
-session tempo and empty Track bindings. No original directory was renamed
-or deleted.
+session tempo and empty Track bindings. No original directory had been renamed
+or deleted at that point.
+
+## Pattern directory recovery and persistence follow-up — 2026-09-08
+
+With explicit user authorization, the idle backend renamed `wavex/patterns`
+to `wavex/patterns-failed-0908` and created a fresh `wavex/patterns`. The
+maintenance operation first checked that the source was a directory and the
+archive path did not exist. FatFs returned success for both operations and
+subsequent directory checks, captured in
+`logs/pattern-directory-recovery-0908.log`. The original directory was
+preserved without deleting its contents; this is not a claim that its
+damaged or missing entries were repaired. All temporary maintenance code
+was removed before rebuilding and flashing the measured image.
+
+Clean commit `27b7fd6` then passed the full persistence workload on the
+production path at the default 25 MHz SD clock. The runner observed 606.0
+seconds; 121 complete DWT windows cover 605.2 seconds. Maximum callback
+time was 330933 cycles (68.9444%), leaving 31.0556% headroom: STAY.
+Average utilization was 25.8%. All 473 periodic backend samples retained
+eight voices and an active stream, with zero underruns or dropped console
+bytes. The capture contains no sequencer queue-drop messages or pattern
+I/O errors; 48 UI samples confirmed live grid readback and playback.
+
+The workload used the eight fully populated sixteen-pad kits, Track-local
+choke, 64 modulation slots, WaveX 24 dB filter at full drive, live cutoff
+edits and alternating-step note lanes described above. Six new-copy saves
+and confirmed loads completed at approximately 97, 193, 289, 385, 482 and
+578 seconds. File operations stopped the streaming preview while resident
+voices continued; the driver restarted the preview and sequencer after
+each load. Parameter locks remain stored but unapplied.
+
+`logs/perf-wavex-20260908-102335.log` contains the capture; its companion
+JSON records the clean commit, image SHA256, SD mount clock, file results
+and device states. This passes the ten-minute persistence workload and
+callback capacity check; it does not verify arbitrary power interruption,
+physical panel operation, MIDI-clock synchronization or the full Phase 2 gate.
+
+Normal firmware was rebuilt and flashed to both boards with Daisy profiling
+and the experimental DaisySP filter disabled. After backend restart,
+`Perf 102335 450` loaded successfully with note 75, step bits 21845 and
+swing 60 while preserving session tempo 149 and all empty Track bindings.
+The check began with no resident samples or voices and ended at Home with
+the sequencer stopped and tempo 120; Home here means the Main Menu action.
+The retained result is
+`logs/pattern-reboot-check.json`. The subsequent console and pattern-file
+HIL selection passed all nine tests (45 deselected, 36.11 seconds),
+including hidden-step values, mute, duplicate-name rejection, confirmation
+cancellation, missing-file handling and resident voice/Track preservation.
 
 ## Recorded runs
 
@@ -211,3 +258,4 @@ or deleted.
 | 2026-09-08 | 95ac09b | 8 Tracks, 16 populated pads per kit, WaveX 24 dB full drive, 64 mod slots, SD 25MHz stream, touch grid, no file operations | 8 | 48000/48 | 480 MHz | qspi `-O2` | 605.2s (121 windows) | 480000 | 115946 (24.2%) | 337098 (70.2288%) | 29.7712% | 0 | yes | REVIEW | 605 s audio/grid-only run; zero underruns and sequencer queue-drop messages; persistence directory recovery pending; metadata logs/perf-wavex-20260908-053146.json |
 | 2026-09-08 | 38b83b0 | 8 Tracks, indexed 16-pad kits, WaveX 24 dB full drive, 64 mod slots, SD 25MHz stream, touch grid, no file operations | 8 | 48000/48 | 480 MHz | qspi `-O2` | 605.2s (121 windows) | 480000 | 118946 (24.8%) | 337649 (70.3435%) | 29.6565% | 0 | yes | REVIEW | 605 s indexed-pad comparison; zero underruns and sequencer queue-drop messages; full persistence gate blocked; metadata logs/perf-wavex-20260908-054919.json |
 | 2026-09-08 | 70deebd | 8 Tracks, 16-pad kits, combined WaveX filter retune, 24 dB full drive, 64 mod slots, SD 25MHz stream, touch grid, no file operations | 8 | 48000/48 | 480 MHz | qspi `-O2` | 605.2s (121 windows) | 480000 | 124071 (25.8%) | 328090 (68.3521%) | 31.6479% | 0 | yes | STAY | 605 s combined-retune comparison; zero underruns and sequencer queue-drop messages; full persistence soak remains blocked by original directory; metadata logs/perf-wavex-20260908-060531.json |
+| 2026-09-08 | 27b7fd6 | 8 Tracks, 16-pad kits, WaveX 24 dB full drive, 64 mod slots, SD 25MHz stream, touch grid, repeated pattern save/load | 8 | 48000/48 | 480 MHz | qspi `-O2` | 605.2s (121 windows) | 480000 | 123978 (25.8%) | 330933 (68.9444%) | 31.0556% | 0 | yes | STAY | 605 s persistence run after authorized directory preservation/recreation; six save/load cycles; zero underruns, sequencer queue-drop messages and file errors; metadata logs/perf-wavex-20260908-102335.json |
