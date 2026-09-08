@@ -37,7 +37,9 @@ def _pattern(daisy, tracks, length=4):
             _op(daisy, 0, track, step, int(track in tracks and step == 0), 100)
 
 
-@pytest.fixture
+# Keep the public fixture name when other test modules import it under an
+# alias.
+@pytest.fixture(name="sequence_samples")
 def sequence_samples(daisy, sample_path, sample_path2):
     _transport(daisy, False)
     daisy.reset_samples()

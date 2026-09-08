@@ -161,7 +161,8 @@ Never call LVGL from an ISR or hold a UI lock across long file/link waits.
    declarations in `include/ui/`.
 2. Create widgets in `onEnter()`; release listeners, timers and owned
    resources in `onExit()`.
-3. Register a factory in `ui_main_menu.cpp`, as a root item or tab child.
+3. Register a factory in `ui_navigation_integration.cpp`, then expose it as a root item
+   or tab child through the existing navigation model.
    The navigator owns the resulting page; do not add a global page pointer.
 4. Bind labels, dimensions and fonts through `styles/ui_theme.h`.
    The constraints guide owns their concrete values.

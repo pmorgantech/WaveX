@@ -29,6 +29,13 @@ versioning and release process.
 
 ### Changed
 
+- Recorded the touch kit/grid capacity follow-up at 67.0844% worst-case
+  callback usage with 32.9156% headroom across 122 DWT windows (610.2 s),
+  zero underruns or dropped commands, and a STAY decision. Updated Phase 2
+  status to reflect the completed touchscreen kit/grid workflows while keeping
+  arbitrary pad lanes, parameter locks, persistence, physical panel work and
+  the full phase gate open.
+
 - Sequencer rows now address their matching Tracks at MIDI note 60 across all
   16 rows. Scoped voice-map revocation preserves unaffected Tracks during
   rebinds and SFZ loads, and sample metadata edits refresh future hits without

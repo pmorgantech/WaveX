@@ -82,6 +82,47 @@ scoped releases on four Tracks, rebinding, asynchronous SFZ replacement and
 sample edits reaching future sequenced hits. Five new host voice-map tests
 also passed, along with the required commit hooks.
 
+## Touch kits and grid follow-up — 2026-09-07
+
+Clean commit 271c8e3 used persistent QSPI -O2 firmware at 480 MHz, 48 kHz
+and 48-sample blocks, with profiling enabled and DaisySP disabled. The
+local capture is logs/perf-wavex-20260908-023420.log; its companion JSON
+records the commit, image SHA256 and all sampled device states.
+
+The workload created eight drum Instruments, one on each of Tracks 0–7,
+with pad 1 assigned to /Drums/Kicks/bassdr01.wav and choke group 1. Choke
+is scoped to its Track. Each Instrument used eight modulation slots with
+the source, destination, depth and curve settings described above. Each
+Track used resonance 45000 and sustain 65535; cutoff alternated between
+32768 and 60000 on all eight Tracks roughly every 1.2 seconds. The WaveX
+24 dB filter ran at 100% drive. At 120 BPM, 16 steps and 60% swing, all
+eight rows triggered one-shot hits every second step; the other rows
+were muted. The sample-pool record retained its full-file loop for the
+concurrent singleton SD stream, while each drum zone used loop-off playback.
+The touch Sequencer page remained open with live row readback and the
+25 Hz playhead.
+
+After warm-up, the runner observed 606.1 seconds; the capture contains 122
+complete five-second DWT windows covering 610.2 seconds, including the
+window already in progress when capture began. All 498 backend samples
+retained eight voices and an active stream, with zero underruns or dropped
+commands. All 50 frontend samples reported current readback, running
+transport and zero dropped commands. Maximum callback usage was 67.0844%,
+leaving 32.9156% headroom: STAY. This is capacity evidence for a different
+workload from the previous looped-voice run, not a direct performance
+improvement claim.
+
+The host regressions cover kit ownership and failed saves, sparse and empty
+WXI reloads, Track-local choke, wire round trips and stale grid replies.
+These measurements do not verify physical panel wiring, MIDI clock sync,
+audible quality or reboot/power-loss recovery. Arbitrary pad-note lanes,
+velocity-aware prepared resolution, parameter-lock application and
+pattern/song persistence remain open; the full Phase 2 gate is not passed.
+
+Normal firmware was restored with profiling disabled and DaisySP disabled; the
+final two-board HIL selection passed all 20 selected tests, including console,
+kit save/reload, sequencer grid and Track-routing workflows.
+
 ## Recorded runs
 
 | Date | Commit | Scenario | Voices | Hz/block | Core | Image | Duration | Budget cycles | Average cycles | Maximum cycles | Worst headroom | Stream underruns | Callback features left | Decision | Note |
@@ -89,3 +130,4 @@ also passed, along with the required commit hooks.
 | 2026-09-07 | 176ce1f | 8 voices; WaveX 24 dB; drive 100%; 8 mod slots; sequencer; SD stream; cutoff updates | 8 | 48000/48 | 480 MHz | qspi `-O2` | 3606.0s (721 windows) | 480000 | 125013 (26.0%) | 315854 (65.8029%) | 34.1971% | 0 | yes | STAY | One-hour soak; zero startup/runtime underruns; console-triggered notes; locks stored but not applied. Capture: perf-wavex-20260907-212459.log |
 | 2026-09-07 | 176ce1f | 8 voices; DaisySP SVF; drive 100%; 8 mod slots; sequencer; SD stream; cutoff updates | 8 | 48000/48 | 480 MHz | qspi `-O2` | 605.2s (121 windows) | 480000 | 125695 (26.2%) | 430385 (89.6635%) | 10.3365% | 0 | yes | UPGRADE | Capacity gate blocked; zero startup/runtime underruns; slope argument ignored by DaisySP. Capture: perf-daisysp-20260907-222524.log |
 | 2026-09-07 | 66d0330 | 8 Tracks; WaveX 24 dB; drive 100%; 8 mod slots per Track; sequencer; SD stream; cutoff updates | 8 | 48000/48 | 480 MHz | qspi `-O2` | 605.2s (121 windows) | 480000 | 119331 (24.9%) | 318476 (66.3492%) | 33.6508% | 0 | yes | STAY | Track-addressed follow-up; zero startup/runtime underruns and dropped commands; locks stored but not applied. Capture: perf-wavex-20260908-003427.log |
+| 2026-09-07 | 271c8e3 | 8 kits; Track-local choke; 64 mod slots; WaveX 24 dB drive 100%; sequencer; SD stream; touch grid readback | 8 | 48000/48 | 480 MHz | qspi `-O2` | 610.2s (122 windows) | 480000 | 123172 (25.7%) | 322005 (67.0844%) | 32.9156% | 0 | yes | STAY | Ten-minute kit/grid follow-up; zero startup/runtime underruns and dropped commands; one-shot hits every second step; locks stored but not applied. Capture: perf-wavex-20260908-023420.log |
