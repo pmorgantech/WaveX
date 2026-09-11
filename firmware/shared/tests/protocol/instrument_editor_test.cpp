@@ -117,3 +117,41 @@ TEST(InstrumentEditorProtocol, PadSoundRejectsMalformedIdentityAndRanges) {
     bad.op = 255;
     EXPECT_FALSE(IsValidPadSoundOp(bad));
 }
+
+TEST(InstrumentEditorProtocol, TrackSettingsAndRequestIdentityRoundTrip) {
+    TrackStateRequest request{0x12345678, 15}, decoded_request{};
+    std::array<uint8_t, 128> wire{};
+    ASSERT_GT(ProtocolHandler::CreatePacket(
+                  wire.data(), wire.size(), MSG_TRACK_STATE_REQ, &request, sizeof(request)),
+              0);
+    ASSERT_TRUE(ProtocolHandler::ParseMessage(
+        wire.data(), MSG_TRACK_STATE_REQ, &decoded_request, sizeof(decoded_request)));
+    EXPECT_EQ(std::memcmp(&request, &decoded_request, sizeof(request)), 0);
+    TrackStateMessage state{}, decoded{};
+    state.request_id = request.request_id;
+    state.track = 15;
+    state.valid = state.loaded = 1;
+    state.mode = 1;
+    state.midi_in = TRACK_MIDI_IN_OMNI;
+    state.poly_limit = 8;
+    state.priority = 99;
+    state.program_change = 1;
+    state.sample_id = 65530;
+    std::strcpy(state.name, "Keyboard");
+    ASSERT_GT(ProtocolHandler::CreatePacket(
+                  wire.data(), wire.size(), MSG_TRACK_STATE, &state, sizeof(state)),
+              0);
+    ASSERT_TRUE(
+        ProtocolHandler::ParseMessage(wire.data(), MSG_TRACK_STATE, &decoded, sizeof(decoded)));
+    EXPECT_EQ(std::memcmp(&state, &decoded, sizeof(state)), 0);
+}
+TEST(InstrumentEditorProtocol, TrackEditsRejectWideValuesBeforeNarrowing) {
+    for (uint16_t value: {0, 1, 16, 255})
+        EXPECT_TRUE(IsValidTrackOp({TRACK_OP_SET_MIDI_IN, 15, value}));
+    for (uint16_t value: {17, 254, 256, 257, 65535})
+        EXPECT_FALSE(IsValidTrackOp({TRACK_OP_SET_MIDI_IN, 15, value}));
+    EXPECT_FALSE(IsValidTrackOp({TRACK_OP_SET_MIDI_IN, 16, 1}));
+    EXPECT_FALSE(IsValidTrackOp({TRACK_OP_SET_PROGRAM_CHANGE, 0, 2}));
+    EXPECT_FALSE(IsValidTrackOp({TRACK_OP_SET_PRIORITY, 0, 256}));
+    EXPECT_FALSE(IsValidTrackOp({0, 0, 0}));
+}

@@ -658,3 +658,20 @@ TEST_F(PacketRouterTest, PadSoundReadbackRejectsTruncationAndRoutesIdentity) {
     EXPECT_EQ(GetInterMcuCapture().pad_sound.pad, 15);
     EXPECT_EQ(GetInterMcuCapture().pad_sound.cutoff_hz, 1200);
 }
+
+TEST_F(PacketRouterTest, TrackReadbackRejectsTruncationAndRoutesIdentity) {
+    TrackStateMessage message{};
+    message.request_id = 123;
+    message.track = 15;
+    message.valid = 1;
+    message.midi_in = 255;
+    for (size_t size = 0; size < sizeof(message); ++size)
+        router_->route_uart_message(
+            MSG_TRACK_STATE, reinterpret_cast<const uint8_t*>(&message), size, 0, 1);
+    EXPECT_EQ(GetInterMcuCapture().track_state_calls, 0);
+    router_->route_uart_message(
+        MSG_TRACK_STATE, reinterpret_cast<const uint8_t*>(&message), sizeof(message), 0, 2);
+    ASSERT_EQ(GetInterMcuCapture().track_state_calls, 1);
+    EXPECT_EQ(GetInterMcuCapture().track_state.request_id, 123u);
+    EXPECT_EQ(GetInterMcuCapture().track_state.midi_in, 255);
+}

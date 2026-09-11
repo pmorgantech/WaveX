@@ -10,6 +10,7 @@
 #include <vector>
 
 namespace WaveX::Comm {
+static WaveX::Protocol::TrackStateMessage last_track_state;
 static WaveX::Protocol::InstZoneSyncMessage last_pad_map;
 static WaveX::Protocol::InstPadSoundSyncMessage last_pad_sound;
 int UartLinkSend(uint16_t type, const void* payload, uint16_t length) {
@@ -17,6 +18,8 @@ int UartLinkSend(uint16_t type, const void* payload, uint16_t length) {
         std::memcpy(&last_pad_map, payload, length);
     if (type == WaveX::Protocol::MSG_INST_PAD_SOUND_SYNC && length == sizeof(last_pad_sound))
         std::memcpy(&last_pad_sound, payload, length);
+    if (type == WaveX::Protocol::MSG_TRACK_STATE && length == sizeof(last_track_state))
+        std::memcpy(&last_track_state, payload, length);
     return length;
 }
 }  // namespace WaveX::Comm
@@ -458,3 +461,31 @@ TEST_F(SfzLoaderTest, PadSoundPreparationChangesOnlyFutureSnapshotOnSelectedTrac
     EXPECT_TRUE(updated[0].own_filter_env);
     EXPECT_EQ(map.tracks[1].revision, other_revision);
 }
+
+namespace {
+TEST_F(SfzLoaderTest, TrackReadbackReportsAuthoritativeRoutingAndCurrentBinding) {
+    SfzLoader::OnTrackStateRequest({51, 15});
+    SfzLoader::PumpEditorReply();
+    auto s = WaveX::Comm::last_track_state;
+    EXPECT_EQ(s.request_id, 51u);
+    EXPECT_EQ(s.valid, 1);
+    EXPECT_EQ(s.loaded, 0);
+    EXPECT_EQ(s.midi_in, 16);
+    ASSERT_TRUE(Load(15));
+    ASSERT_TRUE(SfzLoader::SetTrackMidiIn(15, TRACK_MIDI_IN_OFF));
+    ASSERT_TRUE(SfzLoader::SetTrackPriority(15, 99));
+    SfzLoader::OnTrackStateRequest({52, 15});
+    SfzLoader::PumpEditorReply();
+    s = WaveX::Comm::last_track_state;
+    EXPECT_EQ(s.request_id, 52u);
+    EXPECT_EQ(s.loaded, 1);
+    EXPECT_EQ(s.midi_in, TRACK_MIDI_IN_OFF);
+    EXPECT_EQ(s.priority, 99);
+    EXPECT_STREQ(s.name, "kit.sfz");
+    EXPECT_EQ(SfzLoader::TrackMidiIn(0), 1);
+    SfzLoader::OnTrackStateRequest({53, 16});
+    SfzLoader::PumpEditorReply();
+    EXPECT_EQ(WaveX::Comm::last_track_state.valid, 0);
+    EXPECT_EQ(WaveX::Comm::last_track_state.request_id, 53u);
+}
+}  // namespace

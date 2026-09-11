@@ -121,6 +121,8 @@ struct InterMcuCapture {
     uint8_t sample_status_channels = 0;
     uint32_t sample_status_frames = 0;
 
+    int track_state_calls = 0;
+    WaveX::Protocol::TrackStateMessage track_state;
     int pad_sound_calls = 0;
     WaveX::Protocol::InstPadSoundSyncMessage pad_sound;
     int instrument_map_calls = 0;

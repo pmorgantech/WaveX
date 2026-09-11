@@ -156,6 +156,8 @@ enum MessageType : uint8_t {
     MSG_INST_ZONE_SYNC = 0x62,       // D->E: Instrument pad map and retained edit result
     MSG_INST_PAD_SOUND_OP = 0x65,    // E->D: read/edit one pad's sound overrides
     MSG_INST_PAD_SOUND_SYNC = 0x66,  // D->E: effective values and retained completion
+    MSG_TRACK_STATE_REQ = 0x64,      // E->D: request selected Track settings
+    MSG_TRACK_STATE = 0x67,          // D->E: authoritative Track settings and binding
     MSG_TRACK_OP = 0x63,             // E->D: one Track setting (track-and-patch-model.md §2)
     // Mixer (output-routing-and-mixer.md §4). 0x70-0x7F is the recording /
     // mix / scenes block reserved in features/inter-mcu-protocol.md.
@@ -2067,6 +2069,45 @@ struct TrackOpMessage {
     TrackOpMessage(uint8_t op_, uint8_t track_, uint16_t value_)
         : op(op_), track(track_), value(value_) {}
 } __attribute__((packed));
+
+// Track pages read the backend after edits; no page-local settings authority.
+struct TrackStateRequest {
+    uint32_t request_id = 0;
+    uint8_t track = 0;
+} __attribute__((packed));
+
+struct TrackStateMessage {
+    uint32_t request_id = 0;
+    uint8_t track = 0;
+    uint8_t valid = 0;
+    uint8_t busy = 0;
+    uint8_t loaded = 0;
+    uint8_t mode = 0;
+    uint8_t midi_in = TRACK_MIDI_IN_OFF;
+    uint8_t poly_limit = 0;
+    uint8_t priority = 0;
+    uint8_t program_change = 0;
+    uint16_t sample_id = 0;
+    char name[INST_NAME_BYTES] = {};
+} __attribute__((packed));
+static_assert(sizeof(TrackStateRequest) == 5, "Track read request wire layout");
+static_assert(sizeof(TrackStateMessage) == 39, "Track state wire layout");
+
+inline bool IsValidTrackOp(const TrackOpMessage& m) {
+    if (m.track >= 16 || m.value > 255)
+        return false;
+    switch (m.op) {
+        case TRACK_OP_SET_MIDI_IN:
+            return TrackMidiInValid(static_cast<uint8_t>(m.value));
+        case TRACK_OP_SET_POLY_LIMIT:
+        case TRACK_OP_SET_PRIORITY:
+            return true;  // the backend additionally applies its voice-capacity limit
+        case TRACK_OP_SET_PROGRAM_CHANGE:
+            return m.value <= 1;
+        default:
+            return false;
+    }
+}
 
 // Largest PKT_SIZE_* class; sizes staging buffers for packet assembly.
 static const size_t MAX_PKT_SIZE = 2048;

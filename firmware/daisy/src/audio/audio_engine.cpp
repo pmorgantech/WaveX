@@ -2246,6 +2246,8 @@ void OnMixOp(const MixOpMessage& m) {
  * per-voice routing state.
  */
 void OnTrackOp(const TrackOpMessage& m) {
+    if (!IsValidTrackOp(m))
+        return;
     bool ok = false;
     switch (m.op) {
         case TRACK_OP_SET_MIDI_IN:
@@ -2922,6 +2924,9 @@ bool LoadSfzInstrument(const char* path, uint8_t slot) {
     return SfzLoader::Load(path, slot, *s_pool, s_sample_mem_mgr, s_sample_io, sizeof(s_sample_io));
 }
 
+void OnTrackStateRequest(const TrackStateRequest& request) {
+    SfzLoader::OnTrackStateRequest(request);
+}
 void OnPadSoundOp(const InstPadSoundOpMessage& request) {
     if (SfzLoader::OnPadSoundOp(request))
         PublishSequencerVoiceMap(static_cast<uint16_t>(1u << request.track));

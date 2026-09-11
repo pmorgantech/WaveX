@@ -205,6 +205,8 @@ esp_err_t inter_mcu_send_track_op(uint8_t op, uint8_t track, uint16_t value) {
     }
 
     WaveX::Protocol::TrackOpMessage msg(op, track, value);
+    if (!WaveX::Protocol::IsValidTrackOp(msg))
+        return ESP_ERR_INVALID_ARG;
     int result = send_uart_message(WaveX::Protocol::MSG_TRACK_OP, &msg, sizeof(msg));
     return result >= 0 ? ESP_OK : ESP_FAIL;
 }
@@ -1313,5 +1315,34 @@ bool inter_mcu_get_pad_sound(WaveX::Protocol::InstPadSoundSyncMessage* out) {
     if (valid)
         *out = s_pad_sound;
     taskEXIT_CRITICAL(&s_pad_sound_lock);
+    return valid;
+}
+
+namespace {
+portMUX_TYPE s_track_state_lock = portMUX_INITIALIZER_UNLOCKED;
+WaveX::Protocol::TrackStateMessage s_track_state;
+bool s_track_state_valid = false;
+}  // namespace
+esp_err_t inter_mcu_request_track_state(const WaveX::Protocol::TrackStateRequest& request) {
+    if (!request.request_id || request.track >= 16)
+        return ESP_ERR_INVALID_ARG;
+    return send_uart_message(WaveX::Protocol::MSG_TRACK_STATE_REQ, &request, sizeof(request)) >= 0
+               ? ESP_OK
+               : ESP_FAIL;
+}
+void inter_mcu_store_track_state(const WaveX::Protocol::TrackStateMessage& state) {
+    taskENTER_CRITICAL(&s_track_state_lock);
+    s_track_state = state;
+    s_track_state_valid = true;
+    taskEXIT_CRITICAL(&s_track_state_lock);
+}
+bool inter_mcu_get_track_state(WaveX::Protocol::TrackStateMessage* out) {
+    if (!out)
+        return false;
+    taskENTER_CRITICAL(&s_track_state_lock);
+    const bool valid = s_track_state_valid;
+    if (valid)
+        *out = s_track_state;
+    taskEXIT_CRITICAL(&s_track_state_lock);
     return valid;
 }

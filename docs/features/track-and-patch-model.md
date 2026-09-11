@@ -411,7 +411,7 @@ Pages reorganised around the nouns. Each page owns exactly one thing.
 
 | Page | Owns | Exists today as |
 |---|---|---|
-| **Track** | which Track is selected (8 per page, §2.4), its Instrument name, MIDI in, poly limit, program-change on/off, mixer strip, Load / Save Instrument | the selected Track (`current_track.h`) exists; the page does not |
+| **Track** | which Track is selected (8 per page, §2.4), its Instrument name, MIDI in, poly limit, program-change on/off, mixer strip, Load / Save Instrument | touch Track page with eight Tracks per view, current binding and MIDI input; polyphony, Program Change and mixer policy follow their engine stages |
 | **Instrument** | the selected Track's Instrument. Tabs: **Osc** (1/2, type, level/pan/tune, → Key Map or Pad Map by mode), **Filter**, **Amp**, **Env** (1/2/3), **LFO** (1/2), **Mod**; Name/Tags on the Track page's Save | Instrument page (renamed from "Voice" in stage 1, 2026-09-04; Sample/Env/Amp/Filter/Mod tabs exist; its TRACK param follows the selected Track — done 2026-09-04) |
 | **Key Map** | Keyboard-mode oscillator: zones over key × velocity ranges | nothing |
 | **Pad Map** | Drum-mode oscillator: 16 pads × Sample, choke, optional per-pad filter/env | touch editor with assignment, audition, choke, naming and new-copy saves; per-pad cutoff and amp attack/decay/sustain overrides with inheritance reset |

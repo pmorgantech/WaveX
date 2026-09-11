@@ -428,6 +428,8 @@ static InstZoneSyncMessage s_zone_reply;
 static bool s_zone_pending = false;
 static InstPadSoundSyncMessage s_sound_reply;
 static bool s_sound_pending = false;
+static TrackStateMessage s_track_reply;
+static bool s_track_pending = false;
 static uint32_t s_sound_completed[kNumTracks] = {};
 static uint8_t s_sound_error[kNumTracks] = {};
 
@@ -538,6 +540,7 @@ void Reset() {
     CloseFile();
     s_zone_pending = false;
     s_sound_pending = false;
+    s_track_pending = false;
     s_bank_storage.Reconstruct();
     for (uint8_t track = 0; track < kNumTracks; ++track) {
         s_sound_completed[track] = 0;
@@ -755,7 +758,31 @@ bool OnPadSoundOp(const InstPadSoundOpMessage& request) {
     KitEdit::ReadSound(ins, request.pad, reply);
     return changed;
 }
+void OnTrackStateRequest(const TrackStateRequest& request) {
+    s_track_reply = TrackStateMessage{};
+    auto& out = s_track_reply;
+    out.request_id = request.request_id;
+    out.track = request.track;
+    s_track_pending = true;
+    if (!request.request_id || request.track >= kNumTracks)
+        return;
+    const auto& track = s_bank.At(request.track);
+    const auto& ins = track.instrument;
+    out.valid = 1;
+    out.busy = Busy();
+    out.loaded = ins.origin != InstrumentOrigin::None;
+    out.mode = static_cast<uint8_t>(ins.mode);
+    out.midi_in = track.midi_in;
+    out.poly_limit = track.poly_limit;
+    out.priority = track.priority;
+    out.program_change = track.program_change;
+    out.sample_id = BoundSample(request.track);
+    Protocol::detail::CopyWireString(out.name, sizeof(out.name), ins.name);
+}
 void PumpEditorReply() {
+    if (s_track_pending &&
+        WaveX::Comm::UartLinkSend(MSG_TRACK_STATE, &s_track_reply, sizeof(s_track_reply)) >= 0)
+        s_track_pending = false;
     if (s_sound_pending && WaveX::Comm::UartLinkSend(
                                MSG_INST_PAD_SOUND_SYNC, &s_sound_reply, sizeof(s_sound_reply)) >= 0)
         s_sound_pending = false;

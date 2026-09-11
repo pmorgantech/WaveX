@@ -280,3 +280,18 @@ I/O, invalid format and capture-busy errors are explicit. See
 [sequencer.md](sequencer.md#pattern-files-as-built) for storage and handoff
 behavior. These additive messages keep protocol version 6; both updated
 MCUs are needed for the new page. The arpeggiator's 0x58 reservation remains.
+
+## Track page readback (additive to protocol 6)
+
+The Track page requests the selected Track through MSG_TRACK_STATE_REQ and
+consumes MSG_TRACK_STATE, using the shared TrackStateRequest/TrackStateMessage
+definitions in `firmware/shared/spi_protocol/protocol.h`. A nonzero request id
+and Track identity distinguish current replies from old selections. The Daisy
+foreground snapshots the binding and routing fields and retains a reply when
+the UART queue is full. No callback work is added.
+
+MIDI input edits use the existing MSG_TRACK_OP, followed by authoritative
+readback. Values are validated before narrowing to the engine's byte fields;
+wide values cannot wrap into another channel. The UI offers Omni, 1-16 and Off.
+Polyphony/priority and Program Change fields remain stored for their later
+engine stages and are not exposed as working controls.

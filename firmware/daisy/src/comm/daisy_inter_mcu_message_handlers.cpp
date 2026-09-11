@@ -103,6 +103,13 @@ void ProcessInterMcuMessage(uint8_t msg_type,
         case MSG_MIX_OP:
             HandleMixOpMessage(payload, payload_size);
             break;
+        case MSG_TRACK_STATE_REQ: {
+            TrackStateRequest request{};
+            if (payload && payload_size == sizeof(request)) {
+                std::memcpy(&request, payload, sizeof(request));
+                WaveX::AudioEngine::OnTrackStateRequest(request);
+            }
+        } break;
         case MSG_TRACK_OP:
             HandleTrackOpMessage(payload, payload_size);
             break;
@@ -492,7 +499,8 @@ static void HandleTrackOpMessage(const uint8_t* payload, size_t payload_size) {
     }
     TrackOpMessage msg;
     memcpy(&msg, payload, sizeof(msg));
-    WaveX::AudioEngine::OnTrackOp(msg);
+    if (IsValidTrackOp(msg))
+        WaveX::AudioEngine::OnTrackOp(msg);
 }
 
 static void HandleSampleMetaReqMessage(const uint8_t* payload, size_t payload_size) {

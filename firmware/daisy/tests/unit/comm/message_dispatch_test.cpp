@@ -768,3 +768,20 @@ TEST_F(MessageDispatchTest, PadSoundRequestRoutesOnlyExactPayload) {
         MSG_INST_PAD_SOUND_OP, 2, reinterpret_cast<const uint8_t*>(&m), sizeof(m) - 1);
     EXPECT_EQ(GetDispatchRecord().pad_sound_ops.size(), 1u);
 }
+
+TEST_F(MessageDispatchTest, TrackStateRequestsRequireExactSize) {
+    TrackStateRequest request{123, 15};
+    Dispatch(MSG_TRACK_STATE_REQ, request);
+    ASSERT_EQ(GetDispatchRecord().track_state_requests.size(), 1u);
+    EXPECT_EQ(GetDispatchRecord().track_state_requests[0].request_id, 123u);
+    for (size_t size = 0; size < sizeof(request); ++size)
+        ProcessInterMcuMessage(
+            MSG_TRACK_STATE_REQ, 1, reinterpret_cast<const uint8_t*>(&request), size);
+    EXPECT_EQ(GetDispatchRecord().track_state_requests.size(), 1u);
+}
+
+TEST_F(MessageDispatchTest, TrackMidiInputCannotWrapAnInvalidWideValue) {
+    Dispatch(MSG_TRACK_OP, TrackOpMessage{TRACK_OP_SET_MIDI_IN, 0, 257});
+    Dispatch(MSG_TRACK_OP, TrackOpMessage{TRACK_OP_SET_PROGRAM_CHANGE, 0, 2});
+    EXPECT_TRUE(GetDispatchRecord().track_ops.empty());
+}

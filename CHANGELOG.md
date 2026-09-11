@@ -13,6 +13,10 @@ versioning and release process.
 
 ### Added
 
+- Added a touchscreen Track page with eight Tracks per view, authoritative
+  binding and MIDI input readback, Omni/1-16/Off routing choices, and stale,
+  busy, and link-state guards.
+
 - Added Pad Map Sound editing for per-pad cutoff and amp attack, decay, and
   sustain overrides, with Instrument inheritance reset, backend-authoritative
   readback, retained completions, coalesced UI edits, and WXI persistence.
@@ -37,6 +41,9 @@ versioning and release process.
   protocol version 6 remains unchanged.
 
 ### Fixed
+
+- Fixed Track MIDI input values being narrowed before validation, which could
+  wrap a wide value into another channel.
 
 - Fixed per-voice filter updates recalculating coefficients redundantly when
   cutoff and resonance change together during triggers or inherited live edits.

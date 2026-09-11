@@ -8,6 +8,7 @@
 #include "ui/ui_main_menu.h"
 #include "ui/ui_play_page.h"
 #include "ui/ui_sequencer_page.h"
+#include "ui/ui_track_page.h"
 
 static const char* TAG = "UI_NAV_INTEGRATION";
 
@@ -17,12 +18,13 @@ void initNavigationSystem() {
     ESP_LOGI(TAG, "Initializing navigation system");
 
     // What a jump to each root group pushes - from the main menu or from the
-    // panel's jump keys. Track and Mixer are deliberately absent: they have
-    // keys before they have pages (Phase 2.5), and jumpToRoot() refuses them
+    // panel's jump keys. Mixer has a key before it has a page (Phase 2.5),
+    // and jumpToRoot() refuses unregistered groups
     // until a page is registered here.
     auto& nav = UINavigator::instance();
     nav.setRootGroupFactory(RootGroup::Sample, createSampleGroup);
     nav.setRootGroupFactory(RootGroup::Instrument, createInstrumentPage);
+    nav.setRootGroupFactory(RootGroup::Track, createTrackPage);
     nav.setRootGroupFactory(RootGroup::Play, createPlayPage);
     nav.setRootGroupFactory(RootGroup::Sequencer, createSequencerPage);
     nav.setRootGroupFactory(RootGroup::Settings, createSettingsGroup);

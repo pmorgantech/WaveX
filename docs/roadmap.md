@@ -115,6 +115,9 @@ applied by either measured callback.
 Design: `features/panel-controls.md` (decided 2026-09-05). The physical
 panel is not wired yet (confirmed 2026-09-07). Touchscreen work can continue,
 including the Phase 2 kit editor using the Phase 2.5 Instrument model.
+The user authorized stage 4 touchscreen editors to proceed on 2026-09-11:
+general key/velocity zones, Instrument Browser and Track page. This does not
+close the Phase 2 panel or timing gates.
 PCNT encoder support and the logical key map exist in firmware; their
 physical integration, LED/pot drivers and DIN MIDI remain deferred.
 Stages, one commit each:
@@ -152,7 +155,8 @@ done. Open work, in the order decided 2026-09-05 (model doc §8: 7 → 4 → 5 �
 6 → 8), with 7 now closed:
 
 1. Complete Instrument editors (stage 4): general Key Map and zone editing,
-   Instrument Browser and Track page. Pad Map
+   Instrument Browser. The Track page now selects eight Tracks per view and
+   edits MIDI input with authoritative readback. Pad Map
    creation, naming, resident assignment, choke and new-copy WXI saves are built.
 2. Voice architecture (stage 5): typed oscillators, Osc 2 + submix, filter
    type, Env 3, two per-voice LFOs, new mod destinations —

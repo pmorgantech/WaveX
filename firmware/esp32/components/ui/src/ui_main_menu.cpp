@@ -84,6 +84,7 @@ std::shared_ptr<UIPage> createMainMenu() {
         RootGroup group;
     } kItems[] = {
         {"Sample", "Manage / Browse / Edit / Record", RootGroup::Sample},
+        {"Track", "Select / MIDI input / Instrument", RootGroup::Track},
         {"Instrument", "Sample / Env / Amp / Filter / Mod", RootGroup::Instrument},
         {"Play", "Pads / Keys", RootGroup::Play},
         {"Sequencer", "Steps / Tempo / Swing", RootGroup::Sequencer},

@@ -47,6 +47,7 @@ Pages still call `inter_mcu_*` functions in `main`; a fully injected
 - **Sample:** Browse, Edit, Manage, Record.
 - **Play:** Pads and Keys, sharing note lifecycle and live parameters.
 - **Instrument:** Sample, Env, Amp, Filter, Mod.
+- **Track:** eight Tracks per view, current binding, MIDI input routing.
 - **Settings:** Display, Storage, MIDI, System, Calibrate.
 - **Diagnostics:** ESP32, Daisy, Audio, Link, Storage, MIDI, Panel.
 
@@ -62,7 +63,7 @@ state across tab changes, such as Instrument and Diagnostics. Reuse the
 shared chrome rather than duplicating styles. Diagnostics builds tab bodies
 lazily to bound entry work.
 
-Track, Bank, Instrument Browser, Mixer and expanded oscillator/envelope/LFO
+Bank, Instrument Browser, Mixer and expanded oscillator/envelope/LFO
 editors belong to the target
 [Track/Instrument model](features/track-and-patch-model.md). A logical panel
 jump key or a protocol operation does not prove the corresponding page exists.
@@ -210,3 +211,14 @@ Instrument > Sample > Pad Map opens the selected Track's kit editor, with
 resident-sample assignment, audition, choke, a name keyboard and new-copy
 saves. Both pages consume synchronized backend snapshots on UI timers.
 Their touch workflows do not require physical panel wiring.
+
+## Track page
+
+Track selects eight Tracks per view and reads the current binding and MIDI
+input from the Daisy. A selection change invalidates old readback; request
+ids reject late replies, and controls remain unavailable until current data
+arrives. Omni and Off are explicit choices alongside MIDI channels 1-16.
+Internal pads and sequencer steps continue to address their Track directly.
+The focused two-board HIL verifies routing, external setting refresh and
+preservation of another Track's held note. Physical panel operation remains
+a separate roadmap gate.
