@@ -124,6 +124,7 @@ struct Voice {
     uint16_t start_offset_frames = 0;  // consumed by the next Render() call
     uint8_t track = 0;                 // Track that owns this voice
     uint8_t choke_group = 0;           // 0 = none; 1..N = mutual-exclusion group (open/closed hat)
+    bool own_filter_env = false;       // zone overrides survive Instrument live edits
     bool one_shot = false;             // ignore note-off; stop at the sample/region end
     uint32_t age = 0;                  // trigger order, for stealing/release-newest-first
 
@@ -228,6 +229,7 @@ struct VoiceTriggerParams {
     // other voices in the same group at trigger time (open/closed hat).
     uint8_t track = 0;
     uint8_t choke_group = 0;
+    bool own_filter_env = false;  // zone overrides survive Instrument live edits
     bool one_shot = false;
 
     // Post-resolution multipliers the instrument layer folds in without
@@ -413,10 +415,11 @@ class VoiceManager {
                 v.filter.SetConfig(filter_config_);
             }
             v.filter.SetResonance(p.filter_resonance);
-            v.base_cutoff_hz = p.filter_cutoff_hz;
-            v.filter.SetCutoff(v.base_cutoff_hz * v.mod_cutoff_mul);
-            if (!v.envelope.IsReleasing()) {
-                v.envelope.SetParams(p.attack_s, p.decay_s, p.sustain_level, p.release_s);
+            if (!v.own_filter_env) {
+                v.base_cutoff_hz = p.filter_cutoff_hz;
+                v.filter.SetCutoff(v.base_cutoff_hz * v.mod_cutoff_mul);
+                if (!v.envelope.IsReleasing())
+                    v.envelope.SetParams(p.attack_s, p.decay_s, p.sustain_level, p.release_s);
             }
             // Pan is a gain pair recomputed per block in Render(), so writing
             // it here is heard on the next block without a click.
@@ -455,6 +458,7 @@ class VoiceManager {
         v.track = params.track;
         v.choke_group = params.choke_group;
         v.one_shot = params.one_shot;
+        v.own_filter_env = params.own_filter_env;
         v.age = next_age_++;
 
         // A stolen voice keeps its struct - without this reset it would

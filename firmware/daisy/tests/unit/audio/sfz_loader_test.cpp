@@ -11,9 +11,12 @@
 
 namespace WaveX::Comm {
 static WaveX::Protocol::InstZoneSyncMessage last_pad_map;
+static WaveX::Protocol::InstPadSoundSyncMessage last_pad_sound;
 int UartLinkSend(uint16_t type, const void* payload, uint16_t length) {
     if (type == WaveX::Protocol::MSG_INST_ZONE_SYNC && length == sizeof(last_pad_map))
         std::memcpy(&last_pad_map, payload, length);
+    if (type == WaveX::Protocol::MSG_INST_PAD_SOUND_SYNC && length == sizeof(last_pad_sound))
+        std::memcpy(&last_pad_sound, payload, length);
     return length;
 }
 }  // namespace WaveX::Comm
@@ -356,4 +359,102 @@ TEST_F(SfzLoaderTest, PreparingOneTrackLeavesOtherPreparedTracksUntouched) {
     EXPECT_FLOAT_EQ(map.tracks[1].zones[0].filter_resonance, resonance);
     SfzLoader::PrepareSequencerVoices(map, 2);
     EXPECT_FLOAT_EQ(map.tracks[1].zones[0].filter_resonance, 0.5f);
+}
+
+TEST_F(SfzLoaderTest, PadSoundOverridesSurviveCopyAndReloadAndCanInheritAgain) {
+    ASSERT_TRUE(Load(1));
+    const auto a = SampleId("/kits/a.wav");
+    Edit(INST_OP_NEW, 0, "Sounds");
+    Edit(INST_OP_SET_PAD_SAMPLE, 0, "", 0, a);
+    Edit(INST_OP_SET_PAD_SAMPLE, 0, "", 15, a);
+    InstrumentEnv env;
+    env.attack_s = .0234f;
+    env.decay_s = .4567f;
+    env.sustain = .61f;
+    ASSERT_TRUE(SfzLoader::SetInstrumentEnv(0, env));
+    InstPadSoundOpMessage request{900, 0, 15, PAD_SOUND_CUTOFF, a, 1234};
+    ASSERT_TRUE(SfzLoader::OnPadSoundOp(request));
+    EXPECT_FALSE(SfzLoader::OnPadSoundOp(request));  // replay never applies twice
+    SfzLoader::PumpEditorReply();
+    auto sound = WaveX::Comm::last_pad_sound;
+    EXPECT_EQ(sound.own, 1);
+    EXPECT_EQ(sound.cutoff_hz, 1234);
+    EXPECT_EQ(sound.attack_ms, 23);
+    EXPECT_EQ(sound.decay_ms, 457);
+    EXPECT_EQ(sound.sustain, 610);
+    request = {901, 0, 0, PAD_SOUND_GET, 0, 0};
+    EXPECT_FALSE(SfzLoader::OnPadSoundOp(request));
+    SfzLoader::PumpEditorReply();
+    EXPECT_EQ(WaveX::Comm::last_pad_sound.own, 0);
+    EXPECT_EQ(WaveX::Comm::last_pad_sound.cutoff_hz, 20000);
+    EXPECT_EQ(WaveX::Comm::last_pad_sound.completed_request_id, 900u);
+    ASSERT_EQ(Edit(INST_OP_SAVE, 0, "Sounds saved").error, INST_ERROR_NONE);
+    ASSERT_TRUE(SfzLoader::Load(
+        "0:/wavex/instruments/Sounds saved.wxi", 2, pool_, memory_, io_.data(), io_.size()));
+    request = {902, 2, 15, PAD_SOUND_GET, 0, 0};
+    SfzLoader::OnPadSoundOp(request);
+    SfzLoader::PumpEditorReply();
+    sound = WaveX::Comm::last_pad_sound;
+    EXPECT_EQ(sound.own, 1);
+    EXPECT_EQ(sound.cutoff_hz, 1234);
+    EXPECT_EQ(sound.decay_ms, 457);
+    request = {903, 2, 15, PAD_SOUND_INHERIT, sound.sample_id, 0};
+    EXPECT_TRUE(SfzLoader::OnPadSoundOp(request));
+    SfzLoader::PumpEditorReply();
+    EXPECT_EQ(WaveX::Comm::last_pad_sound.own, 0);
+    EXPECT_EQ(WaveX::Comm::last_pad_sound.cutoff_hz, 20000);
+}
+TEST_F(SfzLoaderTest, PadSoundRejectsEmptyStaleBusyAndMalformedEdits) {
+    ASSERT_TRUE(Load(1));
+    const auto a = SampleId("/kits/a.wav"), b = SampleId("/kits/b.wav");
+    Edit(INST_OP_NEW, 0, "Sounds");
+    Edit(INST_OP_SET_PAD_SAMPLE, 0, "", 0, a);
+    InstPadSoundOpMessage request{901, 0, 0, PAD_SOUND_ATTACK, b, 200};
+    EXPECT_FALSE(SfzLoader::OnPadSoundOp(request));
+    SfzLoader::PumpEditorReply();
+    EXPECT_EQ(WaveX::Comm::last_pad_sound.error, INST_ERROR_BAD_FILE);
+    request = {902, 0, 15, PAD_SOUND_ATTACK, a, 200};
+    EXPECT_FALSE(SfzLoader::OnPadSoundOp(request));
+    request = {903, 0, 0, PAD_SOUND_SUSTAIN, a, 1001};
+    EXPECT_FALSE(SfzLoader::OnPadSoundOp(request));
+    ASSERT_TRUE(SfzLoader::Begin({800, 0, INST_OP_SAVE, "Busy save"}));
+    request = {904, 0, 0, PAD_SOUND_DECAY, a, 200};
+    EXPECT_FALSE(SfzLoader::OnPadSoundOp(request));
+    SfzLoader::PumpEditorReply();
+    EXPECT_EQ(WaveX::Comm::last_pad_sound.error, INST_ERROR_BUSY);
+    EXPECT_EQ(WaveX::Comm::last_pad_sound.own, 0);
+    request = {905, 0, 0, PAD_SOUND_GET, 0, 0};
+    SfzLoader::OnPadSoundOp(request);
+    SfzLoader::PumpEditorReply();
+    EXPECT_EQ(WaveX::Comm::last_pad_sound.completed_request_id, 904u);
+    EXPECT_EQ(WaveX::Comm::last_pad_sound.error, INST_ERROR_BUSY);
+}
+
+TEST_F(SfzLoaderTest, PadSoundPreparationChangesOnlyFutureSnapshotOnSelectedTrack) {
+    ASSERT_TRUE(Load(1));
+    const auto a = SampleId("/kits/a.wav");
+    Edit(INST_OP_NEW, 0, "Snapshot kit");
+    Edit(INST_OP_SET_PAD_SAMPLE, 0, "", 15, a);
+    SfzLoader::SetLoadedSampleResolver({nullptr, [](const void*, uint16_t) {
+                                            static const int16_t pcm[64]{};
+                                            SampleRef ref;
+                                            ref.data = pcm;
+                                            ref.frames = 64;
+                                            ref.sample_rate_hz = 48000;
+                                            return ref;
+                                        }});
+    SequencerVoiceMap map;
+    SfzLoader::PrepareSequencerVoices(map);
+    const auto other_revision = map.tracks[1].revision;
+    VoiceTriggerParams old[4], updated[4];
+    ASSERT_EQ(map.Resolve(0, 75, 100, old), 1);
+    ASSERT_TRUE(SfzLoader::OnPadSoundOp({900, 0, 15, PAD_SOUND_CUTOFF, a, 777}));
+    EXPECT_FLOAT_EQ(map.tracks[0].zones[0].filter_cutoff_hz, 20000);
+    SfzLoader::PrepareSequencerVoices(map, 1);
+    ASSERT_EQ(map.Resolve(0, 75, 100, updated), 1);
+    EXPECT_FLOAT_EQ(old[0].filter_cutoff_hz, 20000);
+    EXPECT_FALSE(old[0].own_filter_env);
+    EXPECT_FLOAT_EQ(updated[0].filter_cutoff_hz, 777);
+    EXPECT_TRUE(updated[0].own_filter_env);
+    EXPECT_EQ(map.tracks[1].revision, other_revision);
 }

@@ -1,7 +1,7 @@
 # WaveX Implementation Roadmap
 
 **Status:** Canonical implementation order. **Current phase:** Phase 2.
-**Last updated:** 2026-09-08.
+**Last updated:** 2026-09-10.
 
 This document lists only open work. Completed work belongs in `CHANGELOG.md`
 and git history. Code-complete but unverified hardware behavior remains open in
@@ -64,7 +64,8 @@ Phase 2.5 work. Open work:
 1. Verify sample-offset timing and edit boundaries on hardware for the
    four-track gate, including the prepared note/velocity resolution.
 2. Serialize MIDI clock out on the ESP32's DIN and USB paths (needs 2.P.5).
-3. Complete per-pad filter/envelope editing and TLC5947 LED feedback. The
+3. Complete TLC5947 LED feedback. Per-pad cutoff and amp attack/decay/sustain
+   editing with inheritance reset is implemented. The
    touch kit editor provides creation, naming, assignment, choke and new-copy
    WXI saves. The touch Play pads
    and sequencer grid are built; the grid pages across all 16 Tracks and 64
@@ -148,7 +149,7 @@ done. Open work, in the order decided 2026-09-05 (model doc §8: 7 → 4 → 5 �
 6 → 8), with 7 now closed:
 
 1. Complete Instrument editors (stage 4): general Key Map and zone editing,
-   per-pad filter/env controls, Instrument Browser and Track page. Pad Map
+   Instrument Browser and Track page. Pad Map
    creation, naming, resident assignment, choke and new-copy WXI saves are built.
 2. Voice architecture (stage 5): typed oscillators, Osc 2 + submix, filter
    type, Env 3, two per-voice LFOs, new mod destinations —

@@ -232,6 +232,7 @@ inline VoiceTriggerParams PrepareZoneTrigger(const Instrument& ins,
     p.track = track;
     p.choke_group = zone.choke_group;
     p.one_shot = (zone.flags & ZONE_FLAG_ONE_SHOT) != 0;
+    p.own_filter_env = (zone.flags & ZONE_FLAG_OWN_FILTER_ENV) != 0;
 
     p.gain_mul = zone.gain * ref.gain_mul;
     p.pitch_ratio_mul = TuneRatio(zone.coarse_tune, zone.fine_tune);

@@ -13,6 +13,10 @@ versioning and release process.
 
 ### Added
 
+- Added Pad Map Sound editing for per-pad cutoff and amp attack, decay, and
+  sustain overrides, with Instrument inheritance reset, backend-authoritative
+  readback, retained completions, coalesced UI edits, and WXI persistence.
+
 - Added a touchscreen step grid with backend-authoritative page readback,
   live playhead feedback, and position-preserving tempo configuration; grid
   navigation remains usable during playback and row clears retain track mute.

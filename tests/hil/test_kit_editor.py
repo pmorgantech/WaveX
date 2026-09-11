@@ -39,6 +39,33 @@ def test_touch_kit_save_reload_preserves_samples_and_other_tracks(
     esp.wait_state(kitready=1, kitpad=16, kitsample=a)
     esp.softkey("Choke +")
     esp.wait_state(kitready=1, kitchoke=1)
+    esp.key("SHIFT")
+    esp.wait_state(shift=1)
+    esp.softkey("Sound")
+    esp.wait_state(
+        page="Pad_Sound", soundready=1, soundvalid=1, soundpad=16, soundown=0
+    )
+    for field, value in [
+        ("CUTOFF", 1200),
+        ("ATTACK", 7),
+        ("DECAY", 250),
+        ("SUSTAIN", 350),
+    ]:
+        esp.page(field, value)
+        esp.wait_state(soundready=1, soundown=1, **{field.lower(): value})
+    assert daisy.state()["voices"] == "1"
+    esp.softkey("Pad -")
+    esp.wait_state(soundready=1, soundvalid=0, soundpad=15)
+    esp.softkey("Pad +")
+    esp.wait_state(
+        soundready=1,
+        soundvalid=1,
+        soundpad=16,
+        soundown=1,
+        cutoff=1200,
+    )
+    esp.softkey("Back")
+    esp.wait_state(page="Pad_Map", kitready=1, kitpad=16)
     esp.softkey("Save copy")
     esp.wait_state(kitview=1)
     esp.softkey("Confirm")
@@ -73,6 +100,24 @@ def test_touch_kit_save_reload_preserves_samples_and_other_tracks(
     esp.wait_state(kitready=1, kiteditable=1, kitname=name.replace(" ", "_"))
     esp.page("PAD", 16)
     esp.wait_state(kitready=1, kitsample=a, kitchoke=1)
+    esp.key("SHIFT")
+    esp.wait_state(shift=1)
+    esp.softkey("Sound")
+    esp.wait_state(
+        page="Pad_Sound",
+        soundready=1,
+        soundown=1,
+        cutoff=1200,
+        attack=7,
+        decay=250,
+        sustain=350,
+    )
+    esp.softkey("Inherit")
+    esp.wait_state(
+        soundready=1, soundown=0, cutoff=20000, attack=1, decay=50, sustain=800
+    )
+    esp.softkey("Back")
+    esp.wait_state(page="Pad_Map", kitready=1)
     esp.page("PAD", 1)
     esp.wait_state(kitsample=0)
     # The selected pad audition reaches its sample end.

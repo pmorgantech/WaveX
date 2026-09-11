@@ -45,6 +45,7 @@ struct DispatchRecord {
     std::vector<WaveX::Protocol::SeqPatternRequestMessage> seq_pattern_requests;
     std::vector<WaveX::Protocol::MidiClockEventMessage> midi_clock_events;
     std::vector<WaveX::Protocol::MidiCcMessage> midi_ccs;
+    std::vector<WaveX::Protocol::InstPadSoundOpMessage> pad_sound_ops;
     std::vector<WaveX::Protocol::InstOpMessage> instrument_ops;
 
     struct BrowseCall {

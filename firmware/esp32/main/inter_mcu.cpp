@@ -1286,3 +1286,32 @@ bool inter_mcu_get_seq_file_status(WaveX::Protocol::SeqFileStatusMessage* out) {
     taskEXIT_CRITICAL(&s_seq_file_lock);
     return valid;
 }
+
+namespace {
+portMUX_TYPE s_pad_sound_lock = portMUX_INITIALIZER_UNLOCKED;
+WaveX::Protocol::InstPadSoundSyncMessage s_pad_sound;
+bool s_pad_sound_valid = false;
+}  // namespace
+esp_err_t inter_mcu_send_pad_sound(const WaveX::Protocol::InstPadSoundOpMessage& request) {
+    if (!WaveX::Protocol::IsValidPadSoundOp(request))
+        return ESP_ERR_INVALID_ARG;
+    return send_uart_message(WaveX::Protocol::MSG_INST_PAD_SOUND_OP, &request, sizeof(request)) >= 0
+               ? ESP_OK
+               : ESP_FAIL;
+}
+void inter_mcu_store_pad_sound(const WaveX::Protocol::InstPadSoundSyncMessage& state) {
+    taskENTER_CRITICAL(&s_pad_sound_lock);
+    s_pad_sound = state;
+    s_pad_sound_valid = true;
+    taskEXIT_CRITICAL(&s_pad_sound_lock);
+}
+bool inter_mcu_get_pad_sound(WaveX::Protocol::InstPadSoundSyncMessage* out) {
+    if (!out)
+        return false;
+    taskENTER_CRITICAL(&s_pad_sound_lock);
+    const bool valid = s_pad_sound_valid;
+    if (valid)
+        *out = s_pad_sound;
+    taskEXIT_CRITICAL(&s_pad_sound_lock);
+    return valid;
+}

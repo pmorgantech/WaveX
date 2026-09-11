@@ -2037,3 +2037,37 @@ TEST(VoiceManagerTest, KitChokeGroupCannotReleaseAnotherTracksVoice) {
     EXPECT_TRUE(VoiceAt(vm, index).envelope.IsReleasing());
     EXPECT_FALSE(VoiceAt(vm, FindVoiceForNote(vm, 61)).envelope.IsReleasing());
 }
+
+TEST(VoiceManagerLiveParamsTest, InstrumentEditsPreserveSoundingZoneOverrides) {
+    using namespace WaveX::AudioEngine;
+    VoiceManager vm;
+    vm.Init(48000.0f);
+    static int16_t samples[48000] = {};
+    VoiceTriggerParams p;
+    p.sample = samples;
+    p.sample_frames = 48000;
+    p.loop = true;
+    p.loop_end = 48000;
+    p.own_filter_env = true;
+    p.filter_cutoff_hz = 1234;
+    p.attack_s = 0;
+    p.decay_s = 0;
+    p.sustain_level = .3f;
+    vm.Trigger(p);
+    p.own_filter_env = false;
+    vm.Trigger(p);
+    VoiceLiveParams live;
+    live.filter_cutoff_hz = 7000;
+    live.sustain_level = .8f;
+    live.attack_s = 0;
+    live.decay_s = 0;
+    vm.ApplyLiveParams(live);
+    EXPECT_FLOAT_EQ(vm.GetVoice(0).base_cutoff_hz, 1234);
+    EXPECT_FLOAT_EQ(vm.GetVoice(1).base_cutoff_hz, 7000);
+    EXPECT_TRUE(vm.GetVoice(0).own_filter_env);
+    EXPECT_FALSE(vm.GetVoice(1).own_filter_env);
+    float l[64]{}, r[64]{};
+    vm.Render(l, r, 64);
+    EXPECT_FLOAT_EQ(vm.GetVoice(0).envelope.Level(), .3f);
+    EXPECT_FLOAT_EQ(vm.GetVoice(1).envelope.Level(), .8f);
+}

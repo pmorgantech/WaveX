@@ -2922,6 +2922,11 @@ bool LoadSfzInstrument(const char* path, uint8_t slot) {
     return SfzLoader::Load(path, slot, *s_pool, s_sample_mem_mgr, s_sample_io, sizeof(s_sample_io));
 }
 
+void OnPadSoundOp(const InstPadSoundOpMessage& request) {
+    if (SfzLoader::OnPadSoundOp(request))
+        PublishSequencerVoiceMap(static_cast<uint16_t>(1u << request.track));
+}
+
 void OnInstrumentOp(const InstOpMessage& request) {
     if (request.op == INST_OP_SAVE && !SfzLoader::Busy())
         CloseWav();

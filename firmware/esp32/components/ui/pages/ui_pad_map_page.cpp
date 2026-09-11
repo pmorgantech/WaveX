@@ -7,6 +7,7 @@
 #include "inter_mcu.h"
 #include "ui/current_track.h"
 #include "ui/ui_navigator.h"
+#include "ui/ui_pad_sound_page.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -446,7 +447,10 @@ std::array<Softkey, NUM_SOFTKEYS> UIPadMapPage::getShiftedSoftkeys() {
                valid_ && map_.loaded && !map_.busy && !pending_id_,
                "No Instrument"};
     keys[2] = {"Clear pad", [this] { setPad(0, 0); }, editable(), "Create a kit first"};
-    keys[3] = {"Samples", [] { UINavigator::instance().jumpToRoot(RootGroup::Sample); }};
+    keys[3] = {"Sound",
+               [this] { UINavigator::instance().push(createPadSoundPage(selected_)); },
+               editable() && map_.pads[selected_].sample_id,
+               "Assign a sample first"};
     keys[4] = {"Track -",
                [this] {
                    setCurrentTrack(getCurrentTrack() - 1);

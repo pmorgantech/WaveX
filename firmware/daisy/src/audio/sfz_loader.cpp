@@ -426,6 +426,10 @@ static uint32_t s_edit_completed[kNumTracks] = {};
 static uint8_t s_edit_error[kNumTracks] = {};
 static InstZoneSyncMessage s_zone_reply;
 static bool s_zone_pending = false;
+static InstPadSoundSyncMessage s_sound_reply;
+static bool s_sound_pending = false;
+static uint32_t s_sound_completed[kNumTracks] = {};
+static uint8_t s_sound_error[kNumTracks] = {};
 
 void QueueZoneReply(uint32_t id, uint8_t track, uint8_t immediate_error = 0) {
     s_zone_reply = InstZoneSyncMessage{};
@@ -533,8 +537,11 @@ uint8_t SaveCopy(SamplePool& pool) {
 void Reset() {
     CloseFile();
     s_zone_pending = false;
+    s_sound_pending = false;
     s_bank_storage.Reconstruct();
     for (uint8_t track = 0; track < kNumTracks; ++track) {
+        s_sound_completed[track] = 0;
+        s_sound_error[track] = 0;
         s_edit_completed[track] = 0;
         s_edit_error[track] = 0;
         s_mod_active[track] = ModTable{};
@@ -711,7 +718,47 @@ void ConfirmVoicesStopped(SamplePool& pool, SampleMemMgr& memory) {
     SendStatus(INST_STATUS_LOAD_BEGIN);
 }
 
+bool OnPadSoundOp(const InstPadSoundOpMessage& request) {
+    s_sound_reply = InstPadSoundSyncMessage{};
+    auto& reply = s_sound_reply;
+    reply.request_id = request.request_id;
+    reply.track = request.track;
+    reply.pad = request.pad;
+    reply.busy = Busy();
+    s_sound_pending = true;
+    if (request.track >= kNumTracks || request.pad >= INST_PAD_COUNT || !request.request_id) {
+        reply.completed_request_id = request.request_id;
+        reply.error = INST_ERROR_BAD_FILE;
+        return false;
+    }
+    auto& ins = s_bank.At(request.track).instrument;
+    bool changed = false;
+    if (request.op != PAD_SOUND_GET && s_sound_completed[request.track] != request.request_id) {
+        uint8_t error = INST_ERROR_NONE;
+        if (!IsValidPadSoundOp(request))
+            error = INST_ERROR_BAD_FILE;
+        else if (Busy())
+            error = INST_ERROR_BUSY;
+        else if (!KitEdit::SetSound(ins, request))
+            error = INST_ERROR_BAD_FILE;
+        else
+            changed = true;
+        s_sound_completed[request.track] = request.request_id;
+        s_sound_error[request.track] = error;
+    }
+    reply.completed_request_id = s_sound_completed[request.track];
+    reply.error = s_sound_error[request.track];
+    if (!IsValidPadSoundOp(request)) {
+        reply.completed_request_id = request.request_id;
+        reply.error = INST_ERROR_BAD_FILE;
+    }
+    KitEdit::ReadSound(ins, request.pad, reply);
+    return changed;
+}
 void PumpEditorReply() {
+    if (s_sound_pending && WaveX::Comm::UartLinkSend(
+                               MSG_INST_PAD_SOUND_SYNC, &s_sound_reply, sizeof(s_sound_reply)) >= 0)
+        s_sound_pending = false;
     if (s_zone_pending &&
         WaveX::Comm::UartLinkSend(MSG_INST_ZONE_SYNC, &s_zone_reply, sizeof(s_zone_reply)) >= 0)
         s_zone_pending = false;

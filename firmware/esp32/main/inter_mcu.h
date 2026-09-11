@@ -342,6 +342,9 @@ void inter_mcu_store_seq_playhead(const WaveX::Protocol::SeqPlayheadMessage& pla
 bool inter_mcu_get_seq_page(WaveX::Protocol::SeqPatternSyncMessage* out);
 bool inter_mcu_get_seq_playhead(WaveX::Protocol::SeqPlayheadMessage* out);
 
+esp_err_t inter_mcu_send_pad_sound(const WaveX::Protocol::InstPadSoundOpMessage& request);
+void inter_mcu_store_pad_sound(const WaveX::Protocol::InstPadSoundSyncMessage& state);
+bool inter_mcu_get_pad_sound(WaveX::Protocol::InstPadSoundSyncMessage* out);
 esp_err_t inter_mcu_send_instrument_edit(const WaveX::Protocol::InstOpMessage& request);
 void inter_mcu_store_instrument_map(const WaveX::Protocol::InstZoneSyncMessage& map);
 bool inter_mcu_get_instrument_map(WaveX::Protocol::InstZoneSyncMessage* out);

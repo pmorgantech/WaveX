@@ -70,6 +70,7 @@ void GetSampleMemStatus(WaveX::Protocol::SampleMemStatusMessage& out);
 // file, unsupported WAV, or RAM budget refusal). Runtime rebinding and UI are
 // deliberately outside the narrow first slice.
 bool LoadSfzInstrument(const char* path, uint8_t slot);
+void OnPadSoundOp(const WaveX::Protocol::InstPadSoundOpMessage& request);
 void OnInstrumentOp(const WaveX::Protocol::InstOpMessage& request);
 void PumpInstrumentLoad();
 

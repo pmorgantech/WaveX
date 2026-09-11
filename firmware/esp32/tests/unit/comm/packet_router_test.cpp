@@ -645,3 +645,16 @@ TEST_F(PacketRouterTest, InstrumentMapReadbackRejectsEveryTruncation) {
     EXPECT_EQ(GetInterMcuCapture().instrument_map.pads[15].sample_id, 65530);
     EXPECT_EQ(GetInterMcuCapture().instrument_map.pads[15].choke_group, 7);
 }
+
+TEST_F(PacketRouterTest, PadSoundReadbackRejectsTruncationAndRoutesIdentity) {
+    InstPadSoundSyncMessage message{123, 122, 15, 15, 1, 0, 0, 1, 25, 1200, 2, 75, 450};
+    for (size_t size = 0; size < sizeof(message); ++size)
+        router_->route_uart_message(
+            MSG_INST_PAD_SOUND_SYNC, reinterpret_cast<const uint8_t*>(&message), size, 0, 1);
+    EXPECT_EQ(GetInterMcuCapture().pad_sound_calls, 0);
+    router_->route_uart_message(
+        MSG_INST_PAD_SOUND_SYNC, reinterpret_cast<const uint8_t*>(&message), sizeof(message), 0, 2);
+    ASSERT_EQ(GetInterMcuCapture().pad_sound_calls, 1);
+    EXPECT_EQ(GetInterMcuCapture().pad_sound.pad, 15);
+    EXPECT_EQ(GetInterMcuCapture().pad_sound.cutoff_hz, 1200);
+}

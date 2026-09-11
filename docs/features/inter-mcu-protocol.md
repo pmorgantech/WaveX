@@ -92,6 +92,8 @@ sequence(u16 LE) | payload[0..2048] | crc16(u16 LE) | end(0x5A)
 | MSG_INST_OP | 0x60 | E→D | InstOpMessage | SFZ/WXI probe/load, modulation slot update, new drum Instrument, name, new-copy save, pad assignment/choke, and pad-map readback request; see Instrument editor below |
 | MSG_INST_STATUS | 0x61 | D→E | `InstStatusMessage{request_id, slot, op, state, flags, error, zone/sample counts, byte totals/progress, current_name[48]}` | preflight result plus total/current-WAV load progress; flags report missing/invalid WAVs and insufficient resident memory |
 | MSG_INST_ZONE_SYNC | 0x62 | D→E | InstZoneSyncMessage | sixteen-pad map, Instrument identity, busy state and retained mutation result |
+| MSG_INST_PAD_SOUND_OP | 0x65 | E→D | InstPadSoundOpMessage | read one pad or edit its cutoff/amp envelope inheritance |
+| MSG_INST_PAD_SOUND_SYNC | 0x66 | D→E | InstPadSoundSyncMessage | effective pad settings, sample identity and retained edit result |
 | MSG_TRACK_OP | 0x63 | E→D | `TrackOpMessage{op, track, value}` | one Track setting (`track-and-patch-model.md` §2.1), idempotent like `MSG_MIX_OP`. `TRACK_OP_SET_MIDI_IN` (`value` = `TrackMidiIn`: 0 Omni, 1..16 that channel **as displayed**, 0xFF Off), `TRACK_OP_SET_POLY_LIMIT` (0 = none, else ≤ `WAVEX_NUM_VOICES`), `TRACK_OP_SET_PRIORITY`, `TRACK_OP_SET_PROGRAM_CHANGE` (0/1). Only `midi_in` has behaviour today; the rest are stored for stages 8 and 6. An out-of-range track or value is rejected and logged, not clamped |
 | MSG_MIX_OP | 0x78 | E→D | `MixOpMessage{op, track, value}` | one mixer control change. `value` is op-dependent: gain/master are **centi-dB above the −60 dB floor** (0 = silence, 6000 = 0 dB, 6600 = +6 dB); pan reuses PARAM_PAN's convention (0 left, 32768 centre, 65535 right); `SET_MUTE_MASK` carries a bit per track. Conversions live in `WaveX::Mix` (`shared/audio/track_mix.hpp`) so both ends use one implementation |
 | MSG_MIX_METERS | 0x79 | D→E | `MixMetersMessage{peak[16]}` | per-track peak, log-mapped by `Mix::PeakToMeterByte` with 0 reserved for true silence. Sent only between `SUB_METERS` and `UNSUB_METERS`, at the existing meter cadence; master stereo meters stay on MSG_METER_PUSH |
@@ -222,6 +224,31 @@ are retained on a full UART queue. The UI never changes LVGL objects on RX.
 
 The bounded debug MSG payload now accommodates the 512-byte packet class's
 payload, including these extended requests.
+
+## Per-pad sound editing (additive to protocol 6)
+
+MSG_INST_PAD_SOUND_OP and MSG_INST_PAD_SOUND_SYNC carry the types and bounds
+defined in `firmware/shared/spi_protocol/protocol.h`. No existing payload or
+WXI layout changes. GET returns effective cutoff, amp attack/decay/sustain,
+inheritance state and sample identity. Mutations require a populated fixed
+drum pad and its current sample id; invalid, stale and busy edits return a
+retained error without changing the Instrument. INHERIT clears the zone's
+shared filter/envelope override flag. Editing the first field copies the
+Instrument defaults into the zone before changing that field, preserving
+untouched floating-point values.
+
+The Daisy foreground owns these edits and republishes only the affected
+Track's prepared voice map. No sample allocation, retirement or voice-stop
+barrier is needed. Edits apply to subsequent hits. Sounding overridden voices
+keep their cutoff and amp envelope when Instrument controls move; resonance
+continues to follow the Instrument. Release is not exposed for one-shot pads,
+which ignore note-off.
+
+The UI consumes synchronized snapshots under its normal LVGL lock, retains
+coalesced desired values while one mutation is pending, and retries GET to
+recover a dropped completion. Timed-out edits return to authoritative
+readback. The Pad Sound page is reached from Pad Map's shifted Sound key;
+Save copy on Pad Map persists the existing zone fields in WXI.
 
 ## Per-step notes (protocol 6)
 

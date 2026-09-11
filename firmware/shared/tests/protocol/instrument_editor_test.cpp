@@ -52,3 +52,68 @@ TEST(InstrumentEditorProtocol, NamesCannotEscapeInstrumentDirectoryOrTruncate) {
     std::memset(unterminated, 'x', sizeof(unterminated));
     EXPECT_FALSE(IsValidInstrumentName(unterminated));
 }
+
+TEST(InstrumentEditorProtocol, PadSoundOperationsAndEffectiveReplyRoundTrip) {
+    for (uint8_t op = PAD_SOUND_GET; op <= PAD_SOUND_SUSTAIN; ++op) {
+        InstPadSoundOpMessage in{0x12345678,
+                                 15,
+                                 15,
+                                 op,
+                                 65530,
+                                 static_cast<uint16_t>(op <= PAD_SOUND_INHERIT ? 0 : 999)};
+        ASSERT_TRUE(IsValidPadSoundOp(in));
+        std::array<uint8_t, 128> wire{};
+        ASSERT_GT(ProtocolHandler::CreatePacket(
+                      wire.data(), wire.size(), MSG_INST_PAD_SOUND_OP, &in, sizeof(in)),
+                  0);
+        InstPadSoundOpMessage out;
+        ASSERT_TRUE(
+            ProtocolHandler::ParseMessage(wire.data(), MSG_INST_PAD_SOUND_OP, &out, sizeof(out)));
+        EXPECT_EQ(std::memcmp(&in, &out, sizeof(in)), 0);
+    }
+    InstPadSoundSyncMessage in{
+        100, 99, 15, 15, 1, 0, INST_ERROR_BUSY, 1, 65530, 4321, 25, 750, 350};
+    std::array<uint8_t, 128> wire{};
+    ASSERT_GT(ProtocolHandler::CreatePacket(
+                  wire.data(), wire.size(), MSG_INST_PAD_SOUND_SYNC, &in, sizeof(in)),
+              0);
+    InstPadSoundSyncMessage out;
+    ASSERT_TRUE(
+        ProtocolHandler::ParseMessage(wire.data(), MSG_INST_PAD_SOUND_SYNC, &out, sizeof(out)));
+    EXPECT_EQ(std::memcmp(&in, &out, sizeof(in)), 0);
+}
+TEST(InstrumentEditorProtocol, PadSoundRejectsMalformedIdentityAndRanges) {
+    const InstPadSoundOpMessage valid{1, 0, 0, PAD_SOUND_CUTOFF, 1, 20000};
+    auto bad = valid;
+    bad.request_id = 0;
+    EXPECT_FALSE(IsValidPadSoundOp(bad));
+    bad = valid;
+    bad.track = 16;
+    EXPECT_FALSE(IsValidPadSoundOp(bad));
+    bad = valid;
+    bad.pad = 16;
+    EXPECT_FALSE(IsValidPadSoundOp(bad));
+    bad = valid;
+    bad.reserved = 1;
+    EXPECT_FALSE(IsValidPadSoundOp(bad));
+    bad = valid;
+    bad.sample_id = 0;
+    EXPECT_FALSE(IsValidPadSoundOp(bad));
+    bad = valid;
+    bad.value = 19;
+    EXPECT_FALSE(IsValidPadSoundOp(bad));
+    bad = valid;
+    bad.value = 20001;
+    EXPECT_FALSE(IsValidPadSoundOp(bad));
+    bad = valid;
+    bad.op = PAD_SOUND_SUSTAIN;
+    bad.value = 1001;
+    EXPECT_FALSE(IsValidPadSoundOp(bad));
+    bad.op = PAD_SOUND_ATTACK;
+    bad.value = 10001;
+    EXPECT_FALSE(IsValidPadSoundOp(bad));
+    bad.op = PAD_SOUND_INHERIT;
+    EXPECT_FALSE(IsValidPadSoundOp(bad));
+    bad.op = 255;
+    EXPECT_FALSE(IsValidPadSoundOp(bad));
+}

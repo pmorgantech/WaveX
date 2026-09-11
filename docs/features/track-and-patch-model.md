@@ -235,6 +235,23 @@ Akai has two program types — *Drum* (a pad is one fixed-pitch sound with its o
 
 **Instrument-level defaults vs. zone overrides.** An Instrument owns `filter` (type, cutoff, resonance) and `env`; a zone follows them unless it sets `ZONE_FLAG_OWN_FILTER_ENV`. That is what lets a 16-pad kit be given one envelope instead of sixteen. The Instrument page's Filter and Env tabs edit the Instrument; the Pad Map overrides per pad (the MPC drum case). SFZ import sets the override on every region, since an `.sfz` always carries its own values, so imported Instruments sound exactly as they did before the split. Resonance has no per-zone field and always comes from the Instrument.
 
+The touch Pad Map's shifted **Sound** key opens per-pad cutoff and amp
+attack/decay/sustain controls, audition, adjacent-pad navigation, and **Use
+Instrument** to clear the shared override. Edits affect subsequent hits and
+are saved by the kit's **Save copy** operation. Sounding overridden voices
+also retain their cutoff/envelope through Instrument live edits. Resonance
+remains Instrument-owned; one-shot pads ignore note-off, so this page does
+not offer an ineffective release control. General zone editing and the
+future filter-envelope/multiple-envelope engine remain separate work.
+
+The connected-board kit workflow verifies these four values through WXI
+save/reload on a different Track, inheritance reset, empty-pad navigation
+and preservation of another Track's sounding voice. The host tests cover
+stale selection, malformed values, busy/replayed edits, pending UI drags
+and immutable prepared snapshots. The normal two-board build and ten
+focused HIL cases passed on 2026-09-10. Hardware listening quality and the
+complete Phase 2 gate remain separate checks.
+
 ### 3.3 Persistence: `.wxi` over WXCF
 
 `instrument-model.md` §5 specified the container; the Instrument codec over it is `firmware/shared/wxi/wxi.hpp` (host-tested, `firmware/shared/tests/wxi/`). Chunks are laid out so that a file written before a feature exists still loads after it (readers skip unknown chunks), and so that an oscillator's chunk is typed by the oscillator, never by the Instrument:
@@ -397,7 +414,7 @@ Pages reorganised around the nouns. Each page owns exactly one thing.
 | **Track** | which Track is selected (8 per page, §2.4), its Instrument name, MIDI in, poly limit, program-change on/off, mixer strip, Load / Save Instrument | the selected Track (`current_track.h`) exists; the page does not |
 | **Instrument** | the selected Track's Instrument. Tabs: **Osc** (1/2, type, level/pan/tune, → Key Map or Pad Map by mode), **Filter**, **Amp**, **Env** (1/2/3), **LFO** (1/2), **Mod**; Name/Tags on the Track page's Save | Instrument page (renamed from "Voice" in stage 1, 2026-09-04; Sample/Env/Amp/Filter/Mod tabs exist; its TRACK param follows the selected Track — done 2026-09-04) |
 | **Key Map** | Keyboard-mode oscillator: zones over key × velocity ranges | nothing |
-| **Pad Map** | Drum-mode oscillator: 16 pads × Sample, choke, optional per-pad filter/env | touch editor with assignment, audition, choke, naming and new-copy saves; per-pad filter/env remains open |
+| **Pad Map** | Drum-mode oscillator: 16 pads × Sample, choke, optional per-pad filter/env | touch editor with assignment, audition, choke, naming and new-copy saves; per-pad cutoff and amp attack/decay/sustain overrides with inheritance reset |
 | **Instrument Browser** | `0:/wavex/instruments/*.wxi` and `sfz/**/*.sfz`; preflight; load into the selected Track (asks, §1.3); tag filter | Sample Browser's `.sfz` handling, split out |
 | **Bank** | the current `.wxb`: 128 slots, Load/Save Bank, recall slot → Track, store Track → slot, preload | nothing |
 | **Sample Browser** | what is on the card; audition; **Load onto the selected Track** (§6.1) | exists; Load binds to the selected Track (stage 2, 2026-09-04); loses its `.sfz` duties |

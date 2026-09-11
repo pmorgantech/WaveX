@@ -758,3 +758,13 @@ TEST_F(MessageDispatchTest, PatternFileRequestIsDispatchedOnlyAtItsExactWireSize
         ProcessInterMcuMessage(MSG_SEQ_FILE_OP, 1, short_payload, n);
     EXPECT_EQ(GetDispatchRecord().seq_file_ops.size(), 1u);
 }
+
+TEST_F(MessageDispatchTest, PadSoundRequestRoutesOnlyExactPayload) {
+    InstPadSoundOpMessage m{123, 15, 15, PAD_SOUND_CUTOFF, 32, 1250};
+    Dispatch(MSG_INST_PAD_SOUND_OP, m);
+    ASSERT_EQ(GetDispatchRecord().pad_sound_ops.size(), 1u);
+    EXPECT_EQ(GetDispatchRecord().pad_sound_ops[0].value, 1250);
+    ProcessInterMcuMessage(
+        MSG_INST_PAD_SOUND_OP, 2, reinterpret_cast<const uint8_t*>(&m), sizeof(m) - 1);
+    EXPECT_EQ(GetDispatchRecord().pad_sound_ops.size(), 1u);
+}

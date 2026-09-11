@@ -87,6 +87,11 @@ void inter_mcu_store_seq_file_status(const WaveX::Protocol::SeqFileStatusMessage
     (void)status;
 }
 
+void inter_mcu_store_pad_sound(const WaveX::Protocol::InstPadSoundSyncMessage& state) {
+    auto& cap = WaveX::Test::GetInterMcuCapture();
+    ++cap.pad_sound_calls;
+    cap.pad_sound = state;
+}
 void inter_mcu_store_instrument_map(const WaveX::Protocol::InstZoneSyncMessage& map) {
     auto& cap = GetInterMcuCapture();
     ++cap.instrument_map_calls;

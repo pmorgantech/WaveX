@@ -31,6 +31,8 @@ void Reset();
 bool Begin(const WaveX::Protocol::InstOpMessage& request);
 void Pump(SamplePool& pool, SampleMemMgr& memory, uint8_t* io_buffer, uint32_t io_buffer_bytes);
 bool Busy();
+// Returns true only for a newly applied edit; caller republishes that Track.
+bool OnPadSoundOp(const WaveX::Protocol::InstPadSoundOpMessage& request);
 void PumpEditorReply();  // retained pad-map reply; main loop only
 bool TrackLoading(uint8_t track);
 // The Track whose voices must be hard-stopped before the load can release

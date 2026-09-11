@@ -151,10 +151,12 @@ enum MessageType : uint8_t {
     MSG_SEQ_FILE_OP = 0x5A,       // E->D: named pattern save/load/new or retained status request
     MSG_SEQ_FILE_STATUS = 0x5B,   // D->E: foreground job and retained completion
     // Instrument browser/load lifecycle (instrument-model.md §6).
-    MSG_INST_OP = 0x60,         // E->D: inspect or load one instrument file
-    MSG_INST_STATUS = 0x61,     // D->E: inspection result and load progress
-    MSG_INST_ZONE_SYNC = 0x62,  // D->E: Instrument pad map and retained edit result
-    MSG_TRACK_OP = 0x63,        // E->D: one Track setting (track-and-patch-model.md §2)
+    MSG_INST_OP = 0x60,              // E->D: inspect or load one instrument file
+    MSG_INST_STATUS = 0x61,          // D->E: inspection result and load progress
+    MSG_INST_ZONE_SYNC = 0x62,       // D->E: Instrument pad map and retained edit result
+    MSG_INST_PAD_SOUND_OP = 0x65,    // E->D: read/edit one pad's sound overrides
+    MSG_INST_PAD_SOUND_SYNC = 0x66,  // D->E: effective values and retained completion
+    MSG_TRACK_OP = 0x63,             // E->D: one Track setting (track-and-patch-model.md §2)
     // Mixer (output-routing-and-mixer.md §4). 0x70-0x7F is the recording /
     // mix / scenes block reserved in features/inter-mcu-protocol.md.
     MSG_MIX_OP = 0x78,      // E->D: one mixer control change
@@ -1835,6 +1837,88 @@ struct InstZoneSyncMessage {
 } __attribute__((packed));
 static_assert(sizeof(InstZoneSyncMessage) <= 122, "pad map fits a 128-byte packet");
 
+// Per-pad sound edits target a populated fixed drum pad. sample_id guards
+// mutations against a stale selection; GET ignores it. All fields are LE.
+enum InstPadSoundOp : uint8_t {
+    PAD_SOUND_GET = 0,
+    PAD_SOUND_INHERIT = 1,
+    PAD_SOUND_CUTOFF = 2,   // Hz, 20..20000
+    PAD_SOUND_ATTACK = 3,   // milliseconds, 0..10000
+    PAD_SOUND_DECAY = 4,    // milliseconds, 0..10000
+    PAD_SOUND_SUSTAIN = 5,  // thousandths, 0..1000
+};
+struct InstPadSoundOpMessage {
+    uint32_t request_id = 0;
+    uint8_t track = 0;
+    uint8_t pad = 0;
+    uint8_t op = PAD_SOUND_GET;
+    uint8_t reserved = 0;
+    uint16_t sample_id = 0;
+    uint16_t value = 0;
+    InstPadSoundOpMessage() = default;
+    InstPadSoundOpMessage(
+        uint32_t id, uint8_t track_, uint8_t pad_, uint8_t op_, uint16_t sample, uint16_t value_)
+        : request_id(id), track(track_), pad(pad_), op(op_), sample_id(sample), value(value_) {}
+} __attribute__((packed));
+struct InstPadSoundSyncMessage {
+    uint32_t request_id = 0;
+    uint32_t completed_request_id = 0;
+    uint8_t track = 0;
+    uint8_t pad = 0;
+    uint8_t valid = 0;  // populated, editable drum pad
+    uint8_t busy = 0;
+    uint8_t error = 0;  // InstError
+    uint8_t own = 0;    // cutoff and amp envelope override Instrument defaults
+    uint16_t sample_id = 0;
+    uint16_t cutoff_hz = 20000;
+    uint16_t attack_ms = 1;
+    uint16_t decay_ms = 50;
+    uint16_t sustain = 800;
+    InstPadSoundSyncMessage() = default;
+    InstPadSoundSyncMessage(uint32_t id,
+                            uint32_t completed,
+                            uint8_t track_,
+                            uint8_t pad_,
+                            uint8_t valid_,
+                            uint8_t busy_,
+                            uint8_t error_,
+                            uint8_t own_,
+                            uint16_t sample,
+                            uint16_t cutoff,
+                            uint16_t attack,
+                            uint16_t decay,
+                            uint16_t sustain_)
+        : request_id(id),
+          completed_request_id(completed),
+          track(track_),
+          pad(pad_),
+          valid(valid_),
+          busy(busy_),
+          error(error_),
+          own(own_),
+          sample_id(sample),
+          cutoff_hz(cutoff),
+          attack_ms(attack),
+          decay_ms(decay),
+          sustain(sustain_) {}
+} __attribute__((packed));
+static_assert(sizeof(InstPadSoundOpMessage) == 12, "pad sound request wire size");
+static_assert(sizeof(InstPadSoundSyncMessage) == 24, "pad sound reply wire size");
+inline bool IsValidPadSoundOp(const InstPadSoundOpMessage& m) {
+    if (!m.request_id || m.track >= 16 || m.pad >= INST_PAD_COUNT || m.reserved ||
+        m.op > PAD_SOUND_SUSTAIN)
+        return false;
+    if (m.op == PAD_SOUND_GET)
+        return true;
+    if (!m.sample_id)
+        return false;
+    if (m.op == PAD_SOUND_INHERIT)
+        return m.value == 0;
+    if (m.op == PAD_SOUND_CUTOFF)
+        return m.value >= 20 && m.value <= 20000;
+    return m.value <= (m.op == PAD_SOUND_SUSTAIN ? 1000 : 10000);
+}
+
 inline bool IsValidInstrumentName(const char* name) {
     if (!name || !name[0] || name[0] == ' ')
         return false;
@@ -2272,6 +2356,10 @@ inline const char* MessageTypeName(uint8_t type) {
             return "INST_OP";
         case MSG_INST_STATUS:
             return "INST_STATUS";
+        case MSG_INST_PAD_SOUND_OP:
+            return "INST_PAD_SOUND_OP";
+        case MSG_INST_PAD_SOUND_SYNC:
+            return "INST_PAD_SOUND_SYNC";
         case MSG_INST_ZONE_SYNC:
             return "INST_ZONE_SYNC";
         case MSG_MIX_OP:
