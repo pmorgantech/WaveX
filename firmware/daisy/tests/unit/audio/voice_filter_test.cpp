@@ -144,3 +144,54 @@ TEST(VoiceFilterTest, SlopeAndDriveReachTheWaveXSvf) {
     f24.SetConfig(cfg);
     EXPECT_LT(SteadyStatePeak(f24, 4000.0f), 0.5f * SteadyStatePeak(f12, 4000.0f));
 }
+
+TEST(VoiceFilterTest, CombinedTuningPreservesSeparateSetterOutputAndState) {
+    // Exercise tuning on charged integrators, including clamping, bypass,
+    // reset and topology changes. A combined update must preserve the sound.
+    for (uint32_t sample_rate: {44100u, 48000u, 96000u}) {
+        for (FilterTopology topology: kBoth) {
+            for (SvfFilter::Slope slope: {SvfFilter::Slope::Db12, SvfFilter::Slope::Db24}) {
+                for (float drive: {0.0f, 1.0f}) {
+                    VoiceFilter combined, separate;
+                    combined.Init(sample_rate);
+                    separate.Init(sample_rate);
+                    FilterConfig cfg;
+                    cfg.topology = topology;
+                    cfg.slope = slope;
+                    cfg.drive = drive;
+                    combined.SetConfig(cfg);
+                    separate.SetConfig(cfg);
+                    for (float cutoff: {1200.0f, 18000.0f, 1.0e6f, -20.0f, 700.0f}) {
+                        for (float resonance: {0.7f, -0.1f, 1.2f, 0.0f}) {
+                            combined.SetParameters(cutoff, resonance);
+                            separate.SetResonance(resonance);
+                            separate.SetCutoff(cutoff);
+                            for (int phase = 0; phase < 3; ++phase) {
+                                if (phase == 1) {
+                                    cfg.topology = cfg.topology == FilterTopology::WaveXSvf
+                                                       ? FilterTopology::DaisySpSvf
+                                                       : FilterTopology::WaveXSvf;
+                                    combined.SetConfig(cfg);
+                                    separate.SetConfig(cfg);
+                                } else if (phase == 2) {
+                                    combined.Reset();
+                                    separate.Reset();
+                                }
+                                for (int i = 0; i < 96; ++i) {
+                                    const float input =
+                                        0.2f *
+                                        std::sin(2.0f * kPi * 700.0f * static_cast<float>(i) /
+                                                 static_cast<float>(sample_rate));
+                                    ASSERT_FLOAT_EQ(combined.Process(input),
+                                                    separate.Process(input))
+                                        << sample_rate << " Hz; cutoff " << cutoff << "; resonance "
+                                        << resonance << "; phase " << phase;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

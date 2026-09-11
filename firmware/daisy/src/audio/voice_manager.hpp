@@ -366,11 +366,9 @@ class VoiceManager {
     //
     // Intended to be driven at block rate from the audio callback, and only
     // when something actually changed - see the caller's dirty flag. It is
-    // cheap but not free: SetResonance() and SetCutoff() each recompute the
-    // coefficients (including a tan()) per voice. Every voice is handed the
-    // SAME cutoff and resonance here, so if this ever shows up in a DWT profile
-    // the fix is to compute the coefficients once and share them, not to update
-    // less often.
+    // cheap but not free: one combined cutoff/resonance update recomputes
+    // the coefficients per voice. The effective cutoff is voice-owned:
+    // pad overrides and modulation can make it differ within one Track.
     //
     // Envelope rates are deliberately NOT written to a voice that is already
     // releasing. Choke() forces a short release onto a voice immediately
@@ -414,10 +412,11 @@ class VoiceManager {
             if (filter_changed) {
                 v.filter.SetConfig(filter_config_);
             }
-            v.filter.SetResonance(p.filter_resonance);
-            if (!v.own_filter_env) {
+            if (v.own_filter_env) {
+                v.filter.SetResonance(p.filter_resonance);
+            } else {
                 v.base_cutoff_hz = p.filter_cutoff_hz;
-                v.filter.SetCutoff(v.base_cutoff_hz * v.mod_cutoff_mul);
+                v.filter.SetParameters(v.base_cutoff_hz * v.mod_cutoff_mul, p.filter_resonance);
                 if (!v.envelope.IsReleasing())
                     v.envelope.SetParams(p.attack_s, p.decay_s, p.sustain_level, p.release_s);
             }
@@ -527,9 +526,8 @@ class VoiceManager {
 
         v.filter.Init(sample_rate_);
         v.filter.SetConfig(filter_config_);
-        v.filter.SetResonance(params.filter_resonance);
         v.base_cutoff_hz = params.filter_cutoff_hz;
-        v.filter.SetCutoff(v.base_cutoff_hz);
+        v.filter.SetParameters(v.base_cutoff_hz, params.filter_resonance);
         v.filter.Reset();
 
         v.envelope.Init(sample_rate_);

@@ -38,6 +38,9 @@ versioning and release process.
 
 ### Fixed
 
+- Fixed per-voice filter updates recalculating coefficients redundantly when
+  cutoff and resonance change together during triggers or inherited live edits.
+
 - Rapid velocity and probability drags now retain pending edits while waiting
   for backend readback; stale replies cannot replace the latest local preview.
 

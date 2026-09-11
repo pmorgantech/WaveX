@@ -84,12 +84,14 @@ class VoiceFilter {
     }
     const FilterConfig& GetConfig() const { return config_; }
 
-    void SetCutoff(float hz) {
-        cutoff_hz_ = hz > 0.0f ? hz : 0.0f;
-        Retune();
-    }
+    void SetCutoff(float hz) { SetParameters(hz, resonance_); }
 
-    void SetResonance(float res) {
+    void SetResonance(float res) { SetParameters(cutoff_hz_, res); }
+
+    // One tuning pair produces one coefficient set. Keep the integrators
+    // intact, just as the separate setters do during a sounding note.
+    void SetParameters(float hz, float res) {
+        cutoff_hz_ = hz > 0.0f ? hz : 0.0f;
         resonance_ = res < 0.0f ? 0.0f : (res > 1.0f ? 1.0f : res);
         Retune();
     }
