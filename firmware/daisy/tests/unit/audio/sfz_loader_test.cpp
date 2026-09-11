@@ -10,10 +10,13 @@
 #include <vector>
 
 namespace WaveX::Comm {
+static WaveX::Protocol::InstKeyMapSyncMessage last_key_map;
 static WaveX::Protocol::TrackStateMessage last_track_state;
 static WaveX::Protocol::InstZoneSyncMessage last_pad_map;
 static WaveX::Protocol::InstPadSoundSyncMessage last_pad_sound;
 int UartLinkSend(uint16_t type, const void* payload, uint16_t length) {
+    if (type == WaveX::Protocol::MSG_INST_KEY_MAP_SYNC && length == sizeof(last_key_map))
+        std::memcpy(&last_key_map, payload, length);
     if (type == WaveX::Protocol::MSG_INST_ZONE_SYNC && length == sizeof(last_pad_map))
         std::memcpy(&last_pad_map, payload, length);
     if (type == WaveX::Protocol::MSG_INST_PAD_SOUND_SYNC && length == sizeof(last_pad_sound))
@@ -487,5 +490,165 @@ TEST_F(SfzLoaderTest, TrackReadbackReportsAuthoritativeRoutingAndCurrentBinding)
     SfzLoader::PumpEditorReply();
     EXPECT_EQ(WaveX::Comm::last_track_state.valid, 0);
     EXPECT_EQ(WaveX::Comm::last_track_state.request_id, 53u);
+}
+}  // namespace
+
+namespace {
+InstKeyMapSyncMessage KeyRead(uint8_t track, uint32_t id = 998) {
+    InstKeyMapOpMessage m;
+    m.request_id = id;
+    m.track = track;
+    SfzLoader::OnKeyMapOp(m);
+    SfzLoader::PumpEditorReply();
+    return WaveX::Comm::last_key_map;
+}
+TEST_F(SfzLoaderTest, KeyboardRangesRejectStaleEditsAndKeepOtherZones) {
+    ASSERT_TRUE(Load(0));
+    auto state = KeyRead(0);
+    ASSERT_EQ(state.loaded, 1);
+    ASSERT_EQ(state.mode, 0);
+    InstKeyMapOpMessage m;
+    m.request_id = 1001;
+    m.revision = state.revision;
+    m.track = 0;
+    m.zone = 0;
+    m.op = KEY_MAP_SET_RANGE;
+    m.expected_sample = state.zones[0].sample_id;
+    m.value = {m.expected_sample, 30, 65, 1, 63, 48};
+    ASSERT_TRUE(SfzLoader::OnKeyMapOp(m));
+    state = KeyRead(0);
+    EXPECT_EQ(state.zones[0].root_note, 48);
+    EXPECT_EQ(state.zones[0].vel_hi, 63);
+    EXPECT_EQ(state.zones[1].key_lo, 61);
+    EXPECT_EQ(SfzLoader::VoiceStopTrack(), 255);
+    EXPECT_FALSE(SfzLoader::OnKeyMapOp(m));  // replay cannot increment revision
+    EXPECT_EQ(KeyRead(0).revision, state.revision);
+    m.request_id = 1002;  // stale generation, even though sample still matches
+    EXPECT_FALSE(SfzLoader::OnKeyMapOp(m));
+    EXPECT_EQ(KeyRead(0).error, INST_ERROR_BAD_FILE);
+    ASSERT_TRUE(Load(0));
+    EXPECT_FALSE(SfzLoader::OnKeyMapOp(m));
+}
+TEST_F(SfzLoaderTest, SparseKeyboardAssignmentStopsOnlyItsTrackAndRetainsSharedSamples) {
+    ASSERT_TRUE(Load(1));
+    const auto sample = SampleId("/kits/a.wav");
+    ASSERT_EQ(Edit(INST_OP_NEW_KEYBOARD, 0, "Keys").error, INST_ERROR_NONE);
+    auto state = KeyRead(0);
+    ASSERT_EQ(state.mode, 0);
+    ASSERT_EQ(state.loaded, 1);
+    InstKeyMapOpMessage m;
+    m.request_id = 2001;
+    m.revision = state.revision;
+    m.track = 0;
+    m.zone = 31;
+    m.op = KEY_MAP_ASSIGN;
+    m.value.sample_id = sample;
+    SfzLoader::OnKeyMapOp(m);
+    EXPECT_EQ(SfzLoader::VoiceStopTrack(), 0);
+    EXPECT_EQ(KeyRead(0).zones[31].sample_id, 0);
+    SfzLoader::ConfirmVoicesStopped(pool_, memory_);
+    state = KeyRead(0);
+    EXPECT_EQ(state.zones[31].sample_id, sample);
+    EXPECT_EQ(pool_.Find(sample)->used_by, 3);
+    m.request_id = 2002;
+    m.revision = state.revision;
+    m.expected_sample = sample;
+    m.value.sample_id = 0;
+    SfzLoader::OnKeyMapOp(m);
+    SfzLoader::ConfirmVoicesStopped(pool_, memory_);
+    EXPECT_EQ(KeyRead(0).zones[31].sample_id, 0);
+    ASSERT_NE(pool_.Find(sample), nullptr);
+    EXPECT_EQ(pool_.Find(sample)->used_by, 2);
+}
+TEST_F(SfzLoaderTest, KeyAssignmentRechecksRevisionAfterVoiceBarrier) {
+    ASSERT_TRUE(Load(0));
+    auto state = KeyRead(0);
+    InstKeyMapOpMessage m;
+    m.request_id = 3001;
+    m.revision = state.revision;
+    m.op = KEY_MAP_ASSIGN;
+    m.expected_sample = state.zones[0].sample_id;
+    m.value.sample_id = state.zones[1].sample_id;
+    SfzLoader::OnKeyMapOp(m);
+    SfzLoader::ForgetLoadedSample(m.expected_sample);
+    SfzLoader::ConfirmVoicesStopped(pool_, memory_);
+    EXPECT_EQ(KeyRead(0).error, INST_ERROR_BAD_FILE);
+    EXPECT_EQ(KeyRead(0).zones[0].sample_id, 0);
+}
+}  // namespace
+
+namespace {
+TEST_F(SfzLoaderTest, SparseKeyboardRangesSaveReloadAndPublishOnlyFutureResolution) {
+    ASSERT_TRUE(Load(1));
+    const auto sample = SampleId("/kits/a.wav");
+    ASSERT_EQ(Edit(INST_OP_NEW_KEYBOARD, 0, "Split").error, INST_ERROR_NONE);
+    auto state = KeyRead(0);
+    InstKeyMapOpMessage m;
+    m.request_id = 4001;
+    m.revision = state.revision;
+    m.zone = 31;
+    m.op = KEY_MAP_ASSIGN;
+    m.value.sample_id = sample;
+    SfzLoader::OnKeyMapOp(m);
+    SfzLoader::ConfirmVoicesStopped(pool_, memory_);
+    state = KeyRead(0);
+    SfzLoader::SetLoadedSampleResolver({nullptr, [](const void*, uint16_t) {
+                                            static const int16_t pcm[4]{};
+                                            SampleRef ref;
+                                            ref.data = pcm;
+                                            ref.frames = 4;
+                                            ref.sample_rate_hz = 48000;
+                                            return ref;
+                                        }});
+    SequencerVoiceMap previous, updated;
+    SfzLoader::PrepareSequencerVoices(previous);
+    m.request_id = 4002;
+    m.revision = state.revision;
+    m.op = KEY_MAP_SET_RANGE;
+    m.expected_sample = sample;
+    m.value = {sample, 24, 72, 64, 127, 48};
+    ASSERT_TRUE(SfzLoader::OnKeyMapOp(m));
+    SfzLoader::PrepareSequencerVoices(updated);
+    VoiceTriggerParams triggers[4];
+    EXPECT_EQ(previous.Resolve(0, 60, 63, triggers), 1);
+    EXPECT_EQ(updated.Resolve(0, 60, 63, triggers), 0);
+    EXPECT_EQ(updated.Resolve(0, 24, 64, triggers), 1);
+    EXPECT_EQ(updated.Resolve(0, 72, 127, triggers), 1);
+    EXPECT_EQ(updated.Resolve(0, 73, 100, triggers), 0);
+    EXPECT_EQ(Edit(INST_OP_SAVE, 0, "Key split saved").error, INST_ERROR_NONE);
+    SfzLoader::BindSample(pool_, memory_, 0, 0);
+    SfzLoader::BindSample(pool_, memory_, 1, 0);
+    ASSERT_EQ(pool_.Count(), 0u);
+    ASSERT_TRUE(SfzLoader::Load(
+        "0:/wavex/instruments/Key split saved.wxi", 2, pool_, memory_, io_.data(), io_.size()));
+    state = KeyRead(2);
+    EXPECT_EQ(state.zones[0].sample_id, 0);
+    EXPECT_NE(state.zones[31].sample_id, 0);
+    EXPECT_EQ(state.zones[31].key_lo, 24);
+    EXPECT_EQ(state.zones[31].key_hi, 72);
+    EXPECT_EQ(state.zones[31].vel_lo, 64);
+    EXPECT_EQ(state.zones[31].vel_hi, 127);
+    EXPECT_EQ(state.zones[31].root_note, 48);
+}
+}  // namespace
+
+namespace {
+TEST_F(SfzLoaderTest, NamedAndSplitKeyboardMapsAreInstrumentBindings) {
+    ASSERT_TRUE(Load(1));
+    const auto sample = SampleId("/kits/a.wav");
+    ASSERT_TRUE(SfzLoader::BindSample(pool_, memory_, 0, sample));
+    EXPECT_EQ(SfzLoader::BoundSample(0), sample);
+    auto state = KeyRead(0);
+    InstKeyMapOpMessage m;
+    m.request_id = 5101;
+    m.revision = state.revision;
+    m.op = KEY_MAP_SET_RANGE;
+    m.expected_sample = sample;
+    m.value = {sample, 24, 72, 1, 127, 60};
+    ASSERT_TRUE(SfzLoader::OnKeyMapOp(m));
+    EXPECT_EQ(SfzLoader::BoundSample(0), 0);
+    ASSERT_TRUE(SfzLoader::BindSample(pool_, memory_, 0, sample));
+    EXPECT_EQ(Edit(INST_OP_SET_NAME, 0, "Named keys").error, INST_ERROR_NONE);
+    EXPECT_EQ(SfzLoader::BoundSample(0), 0);
 }
 }  // namespace

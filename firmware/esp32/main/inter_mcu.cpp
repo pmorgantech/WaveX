@@ -1276,6 +1276,35 @@ bool inter_mcu_get_seq_file_status(WaveX::Protocol::SeqFileStatusMessage* out) {
 }
 
 namespace {
+portMUX_TYPE s_key_map_lock = portMUX_INITIALIZER_UNLOCKED;
+WaveX::Protocol::InstKeyMapSyncMessage s_key_map;
+bool s_key_map_valid = false;
+}  // namespace
+esp_err_t inter_mcu_send_key_map(const WaveX::Protocol::InstKeyMapOpMessage& request) {
+    if (!WaveX::Protocol::IsValidKeyMapOp(request))
+        return ESP_ERR_INVALID_ARG;
+    return send_uart_message(WaveX::Protocol::MSG_INST_KEY_MAP_OP, &request, sizeof(request)) >= 0
+               ? ESP_OK
+               : ESP_FAIL;
+}
+void inter_mcu_store_key_map(const WaveX::Protocol::InstKeyMapSyncMessage& state) {
+    taskENTER_CRITICAL(&s_key_map_lock);
+    s_key_map = state;
+    s_key_map_valid = true;
+    taskEXIT_CRITICAL(&s_key_map_lock);
+}
+bool inter_mcu_get_key_map(WaveX::Protocol::InstKeyMapSyncMessage* out) {
+    if (!out)
+        return false;
+    taskENTER_CRITICAL(&s_key_map_lock);
+    const bool valid = s_key_map_valid;
+    if (valid)
+        *out = s_key_map;
+    taskEXIT_CRITICAL(&s_key_map_lock);
+    return valid;
+}
+
+namespace {
 portMUX_TYPE s_pad_sound_lock = portMUX_INITIALIZER_UNLOCKED;
 WaveX::Protocol::InstPadSoundSyncMessage s_pad_sound;
 bool s_pad_sound_valid = false;

@@ -13,6 +13,10 @@ versioning and release process.
 
 ### Added
 
+- Added keyboard Key Map editing for 32 stable key/velocity zones with staged
+  ranges and root notes, sample assignment and clearing, New keys, naming,
+  Save copy, paging, audition, retained outcomes, and shared Pad Map overlays.
+
 - Added a dedicated Instrument Browser from Track and Instrument pages with
   Root and Saved views, WXI/SFZ preflight and Track confirmation, independent
   browser state, WAV-only Sample browsing, and filtering before pagination.
@@ -45,6 +49,9 @@ versioning and release process.
   protocol version 6 remains unchanged.
 
 ### Fixed
+
+- Fixed named, split, and multi-zone keyboard Instruments being reported as
+  bare first-sample bindings instead of their actual zone map.
 
 - Fixed WXI files being omitted from Instrument Browser listings and rejected
   malformed or overlong browse requests before filesystem access.

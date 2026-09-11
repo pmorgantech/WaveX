@@ -675,3 +675,21 @@ TEST_F(PacketRouterTest, TrackReadbackRejectsTruncationAndRoutesIdentity) {
     EXPECT_EQ(GetInterMcuCapture().track_state.request_id, 123u);
     EXPECT_EQ(GetInterMcuCapture().track_state.midi_in, 255);
 }
+
+TEST_F(PacketRouterTest, KeyMapReadbackRoutesLastSlotAndRejectsTruncation) {
+    InstKeyMapSyncMessage message;
+    message.request_id = 123;
+    message.revision = 17;
+    message.zones[31] = {250, 12, 72, 64, 127, 48};
+    router_->route_uart_message(MSG_INST_KEY_MAP_SYNC,
+                                reinterpret_cast<const uint8_t*>(&message),
+                                sizeof(message) - 1,
+                                0,
+                                1);
+    EXPECT_EQ(GetInterMcuCapture().key_map_calls, 0);
+    router_->route_uart_message(
+        MSG_INST_KEY_MAP_SYNC, reinterpret_cast<const uint8_t*>(&message), sizeof(message), 0, 2);
+    ASSERT_EQ(GetInterMcuCapture().key_map_calls, 1);
+    EXPECT_EQ(GetInterMcuCapture().key_map.zones[31].vel_lo, 64);
+    EXPECT_EQ(GetInterMcuCapture().key_map.revision, 17);
+}

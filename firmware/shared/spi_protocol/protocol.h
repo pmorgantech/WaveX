@@ -157,6 +157,8 @@ enum MessageType : uint8_t {
     MSG_INST_PAD_SOUND_OP = 0x65,    // E->D: read/edit one pad's sound overrides
     MSG_INST_PAD_SOUND_SYNC = 0x66,  // D->E: effective values and retained completion
     MSG_TRACK_STATE_REQ = 0x64,      // E->D: request selected Track settings
+    MSG_INST_KEY_MAP_OP = 0x68,      // E->D: read/edit keyboard zone map
+    MSG_INST_KEY_MAP_SYNC = 0x69,    // D->E: 32 stable slots, revision and edit outcome
     MSG_TRACK_STATE = 0x67,          // D->E: authoritative Track settings and binding
     MSG_TRACK_OP = 0x63,             // E->D: one Track setting (track-and-patch-model.md §2)
     // Mixer (output-routing-and-mixer.md §4). 0x70-0x7F is the recording /
@@ -1779,6 +1781,7 @@ enum InstOpCode : uint8_t {
     // matrix slots this particular write targets. `path` is unused for
     // this op.
     INST_OP_SET_MOD_SLOT = 3,
+    INST_OP_NEW_KEYBOARD = 9,    // new empty keyboard Instrument; path carries name
     INST_OP_NEW = 4,             // new empty drum Instrument; path carries its name
     INST_OP_SAVE = 5,            // save a new .wxi copy; path carries the filename stem
     INST_OP_SET_NAME = 6,        // rename in RAM; path carries the display name
@@ -1916,6 +1919,45 @@ struct InstZoneSyncMessage {
     InstPadState pads[INST_PAD_COUNT] = {};
 } __attribute__((packed));
 static_assert(sizeof(InstZoneSyncMessage) <= 122, "pad map fits a 128-byte packet");
+
+// Key Map edits target stable slots, never a packed/sorted view. Revisions
+// invalidate stale edits after replacement even when a sample id is reused.
+static constexpr uint8_t INST_KEY_ZONE_COUNT = 32;
+enum InstKeyMapOp : uint8_t { KEY_MAP_GET = 0, KEY_MAP_SET_RANGE = 1, KEY_MAP_ASSIGN = 2 };
+struct InstKeyZone {
+    uint16_t sample_id = 0;
+    uint8_t key_lo = 0, key_hi = 127, vel_lo = 1, vel_hi = 127, root_note = 60;
+} __attribute__((packed));
+struct InstKeyMapOpMessage {
+    uint32_t request_id = 0, revision = 0;
+    uint8_t track = 0, zone = 0, op = KEY_MAP_GET, reserved = 0;
+    uint16_t expected_sample = 0;
+    InstKeyZone value{};
+} __attribute__((packed));
+struct InstKeyMapSyncMessage {
+    uint32_t request_id = 0, completed_request_id = 0, revision = 0;
+    uint8_t track = 0, loaded = 0, mode = 0, busy = 0, error = 0;
+    char name[INST_NAME_BYTES]{};
+    InstKeyZone zones[INST_KEY_ZONE_COUNT]{};
+} __attribute__((packed));
+static_assert(sizeof(InstKeyZone) == 7, "key zone wire size");
+static_assert(sizeof(InstKeyMapOpMessage) == 21, "key map request wire size");
+static_assert(sizeof(InstKeyMapSyncMessage) == 265, "key map snapshot wire size");
+inline bool IsValidKeyZoneRange(const InstKeyZone& z) {
+    return z.key_lo <= z.key_hi && z.key_hi <= 127 && z.vel_lo >= 1 && z.vel_lo <= z.vel_hi &&
+           z.vel_hi <= 127 && z.root_note <= 127;
+}
+inline bool IsValidKeyMapOp(const InstKeyMapOpMessage& m) {
+    if (!m.request_id || m.track >= 16 || m.zone >= INST_KEY_ZONE_COUNT || m.reserved ||
+        m.op > KEY_MAP_ASSIGN)
+        return false;
+    if (m.op == KEY_MAP_GET)
+        return true;
+    if (!m.revision)
+        return false;
+    return m.op == KEY_MAP_ASSIGN || (m.expected_sample && m.value.sample_id == m.expected_sample &&
+                                      IsValidKeyZoneRange(m.value));
+}
 
 // Per-pad sound edits target a populated fixed drum pad. sample_id guards
 // mutations against a stale selection; GET ignores it. All fields are LE.
@@ -2475,6 +2517,10 @@ inline const char* MessageTypeName(uint8_t type) {
             return "INST_OP";
         case MSG_INST_STATUS:
             return "INST_STATUS";
+        case MSG_INST_KEY_MAP_OP:
+            return "INST_KEY_MAP_OP";
+        case MSG_INST_KEY_MAP_SYNC:
+            return "INST_KEY_MAP_SYNC";
         case MSG_INST_PAD_SOUND_OP:
             return "INST_PAD_SOUND_OP";
         case MSG_INST_PAD_SOUND_SYNC:

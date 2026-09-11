@@ -305,3 +305,19 @@ live in protocol.h. Directories remain visible, and the Daisy applies filtering
 before counting and pagination. Sample listings contain WAV; Instrument listings
 contain WXI and SFZ, case-insensitively. Empty, unterminated, overlong or malformed
 requests are rejected without accessing a silently shortened path.
+
+### Keyboard Key Map (as built, 2026-09-11)
+
+The centralized Key Map request/snapshot records in protocol.h carry all 32
+stable zone slots, inclusive key and velocity ranges, root notes and pool sample
+ids. A per-Track revision plus the expected sample id guards each mutation;
+replacing the Instrument invalidates edits even when its sample ids are reused.
+Range changes are atomic and affect newly prepared triggers. Sample assignment
+or clearing waits for the target Track's voice-stop acknowledgement, rechecks
+the revision, then updates pool references. Other Tracks keep their references.
+
+Read requests retain the last completed editor request id and error, so a lost
+reply cannot turn an unconfirmed mutation into success. New keyboard Instruments
+use the additive INST_OP_NEW_KEYBOARD operation; naming and WXI save copies use
+the existing Instrument operations. Host round-trip, dispatch, stale revision,
+pool ownership and sparse WXI tests cover the contract.

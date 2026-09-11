@@ -178,6 +178,13 @@ void FreeFromPool(SamplePool& pool, SampleMemMgr& memory, uint16_t sample_id) {
     pool.Remove(sample_id);
 }
 
+static_assert(kMaxZones == INST_KEY_ZONE_COUNT, "Key Map covers every Instrument zone");
+// Main-loop identity: every map mutation/replacement invalidates stale editors.
+static uint32_t s_key_revision[kNumTracks]{};
+void BumpKeyRevision(uint8_t track) {
+    if (++s_key_revision[track] == 0)
+        ++s_key_revision[track];
+}
 // Drops Track `track`'s refs on every Pool sample and frees whatever nobody
 // else holds; then clears the Instrument. The caller stopped the Track's
 // voices first.
@@ -185,6 +192,7 @@ void ReleaseTrack(SamplePool& pool,
                   SampleMemMgr& memory,
                   uint8_t track,
                   uint16_t keep_sample_id = 0) {
+    BumpKeyRevision(track);
     pool.ClearTrack(track, [&](uint16_t id) {
         if (id != keep_sample_id) {
             FreeFromPool(pool, memory, id);
@@ -428,6 +436,9 @@ static InstZoneSyncMessage s_zone_reply;
 static bool s_zone_pending = false;
 static InstPadSoundSyncMessage s_sound_reply;
 static bool s_sound_pending = false;
+static InstKeyMapSyncMessage s_key_reply;
+static InstKeyMapOpMessage s_key_request;
+static bool s_key_pending = false, s_key_assignment = false;
 static TrackStateMessage s_track_reply;
 static bool s_track_pending = false;
 static uint32_t s_sound_completed[kNumTracks] = {};
@@ -460,6 +471,45 @@ void QueueZoneReply(uint32_t id, uint8_t track, uint8_t immediate_error = 0) {
         s_zone_reply.error = immediate_error;
     }
     s_zone_pending = true;
+}
+void QueueKeyReply(uint32_t id, uint8_t track, uint8_t immediate_error = 0) {
+    s_key_reply = InstKeyMapSyncMessage{};
+    auto& out = s_key_reply;
+    out.request_id = id;
+    out.track = track;
+    s_key_pending = true;
+    if (track >= kNumTracks) {
+        out.error = INST_ERROR_BAD_FILE;
+        return;
+    }
+    const auto& ins = s_bank.At(track).instrument;
+    out.revision = s_key_revision[track];
+    out.completed_request_id = s_edit_completed[track];
+    out.error = s_edit_error[track];
+    out.loaded = ins.origin != InstrumentOrigin::None;
+    out.mode = static_cast<uint8_t>(ins.mode);
+    out.busy = s_phase != Phase::Idle;
+    Protocol::detail::CopyWireString(out.name, sizeof(out.name), ins.name);
+    for (uint8_t i = 0; i < INST_KEY_ZONE_COUNT; ++i) {
+        const auto& z = ins.zones[i];
+        out.zones[i] = {static_cast<uint16_t>(z.in_use ? z.sample_id : 0),
+                        z.key_lo,
+                        z.key_hi,
+                        z.vel_lo,
+                        z.vel_hi,
+                        z.root_note};
+    }
+    if (immediate_error) {
+        out.completed_request_id = id;
+        out.error = immediate_error;
+    }
+}
+void FinishKey(uint8_t error = INST_ERROR_NONE) {
+    s_edit_completed[s_key_request.track] = s_key_request.request_id;
+    s_edit_error[s_key_request.track] = error;
+    s_key_assignment = false;
+    s_phase = Phase::Idle;
+    QueueKeyReply(s_key_request.request_id, s_key_request.track);
 }
 void FinishEdit(uint8_t error = INST_ERROR_NONE) {
     s_edit_completed[s_request.slot] = s_request.request_id;
@@ -541,8 +591,10 @@ void Reset() {
     s_zone_pending = false;
     s_sound_pending = false;
     s_track_pending = false;
+    s_key_pending = s_key_assignment = false;
     s_bank_storage.Reconstruct();
     for (uint8_t track = 0; track < kNumTracks; ++track) {
+        BumpKeyRevision(track);
         s_sound_completed[track] = 0;
         s_sound_error[track] = 0;
         s_edit_completed[track] = 0;
@@ -557,7 +609,7 @@ void Reset() {
 }
 
 bool Begin(const InstOpMessage& request) {
-    if (request.op >= INST_OP_NEW && request.op <= INST_OP_GET_PAD_MAP) {
+    if (request.op >= INST_OP_NEW && request.op <= INST_OP_NEW_KEYBOARD) {
         if (request.slot >= kNumTracks || request.request_id == 0) {
             QueueZoneReply(request.request_id, request.slot, INST_ERROR_BAD_FILE);
             return false;
@@ -576,8 +628,8 @@ bool Begin(const InstOpMessage& request) {
         }
         s_request = request;
         // Never silently truncate an unterminated wire name.
-        const bool named = request.op == INST_OP_NEW || request.op == INST_OP_SAVE ||
-                           request.op == INST_OP_SET_NAME;
+        const bool named = request.op == INST_OP_NEW_KEYBOARD || request.op == INST_OP_NEW ||
+                           request.op == INST_OP_SAVE || request.op == INST_OP_SET_NAME;
         if ((named && !IsValidInstrumentName(request.path)) ||
             (request.op == INST_OP_SET_PAD_SAMPLE &&
              (request.pad_index >= INST_PAD_COUNT || request.pad_choke > 15 ||
@@ -666,7 +718,8 @@ bool Busy() {
 
 bool TrackLoading(uint8_t slot) {
     return Busy() && s_request.slot == slot &&
-           (s_request.op == INST_OP_SFZ_LOAD || s_request.op == INST_OP_NEW ||
+           (s_key_assignment || s_request.op == INST_OP_NEW_KEYBOARD ||
+            s_request.op == INST_OP_SFZ_LOAD || s_request.op == INST_OP_NEW ||
             s_request.op == INST_OP_SET_PAD_SAMPLE);
 }
 
@@ -678,12 +731,50 @@ void ConfirmVoicesStopped(SamplePool& pool, SampleMemMgr& memory) {
     if (s_phase != Phase::AwaitVoiceStop)
         return;
 
-    if (s_request.op == INST_OP_NEW) {
+    if (s_key_assignment) {
+        auto& ins = s_bank.At(s_key_request.track).instrument;
+        const auto& current = ins.zones[s_key_request.zone];
+        if (s_key_revision[s_key_request.track] != s_key_request.revision ||
+            (current.in_use ? current.sample_id : 0) != s_key_request.expected_sample) {
+            FinishKey(INST_ERROR_BAD_FILE);
+            return;
+        }
+        const auto sample = s_key_request.value.sample_id;
+        const auto* record = pool.Find(sample);
+        if (sample && (!record || !SampleIsPlayable(record->payload))) {
+            FinishKey(INST_ERROR_MISSING_SAMPLES);
+            return;
+        }
+        auto& zone = ins.zones[s_key_request.zone];
+        const auto old = zone.in_use ? zone.sample_id : uint16_t{0};
+        if (!sample)
+            zone = Zone{};
+        else {
+            if (sample != old) {
+                zone.start_frame = zone.end_frame = zone.loop_start = zone.loop_end = 0;
+                zone.loop_mode = ZONE_LOOP_INHERIT;
+            }
+            zone.sample_id = sample;
+            zone.in_use = true;
+            pool.SetUsedBy(sample, s_key_request.track, true);
+        }
+        if (old && old != sample && !KitEdit::Uses(ins, old)) {
+            pool.SetUsedBy(old, s_key_request.track, false);
+            const auto* unused = pool.Find(old);
+            if (unused && !unused->pinned && !unused->used_by)
+                FreeFromPool(pool, memory, old);
+        }
+        BumpKeyRevision(s_key_request.track);
+        FinishKey();
+        return;
+    }
+    if (s_request.op == INST_OP_NEW || s_request.op == INST_OP_NEW_KEYBOARD) {
         ReleaseTrack(pool, memory, s_request.slot);
         auto& ins = s_bank.At(s_request.slot).instrument;
         WaveX::ReconstructInPlace(ins);
         ins.origin = InstrumentOrigin::Built;
-        ins.mode = InstrumentMode::Drum;
+        ins.mode =
+            s_request.op == INST_OP_NEW_KEYBOARD ? InstrumentMode::Keyboard : InstrumentMode::Drum;
         Protocol::detail::CopyWireString(ins.name, sizeof(ins.name), s_request.path);
         PublishModSlots(s_request.slot);
         FinishEdit();
@@ -698,6 +789,7 @@ void ConfirmVoicesStopped(SamplePool& pool, SampleMemMgr& memory) {
             return;
         }
         const auto old = ins.zones[s_request.pad_index].sample_id;
+        BumpKeyRevision(s_request.slot);
         KitEdit::Assign(ins, s_request.pad_index, sample, s_request.pad_choke);
         if (sample)
             pool.SetUsedBy(sample, s_request.slot, true);
@@ -721,6 +813,44 @@ void ConfirmVoicesStopped(SamplePool& pool, SampleMemMgr& memory) {
     SendStatus(INST_STATUS_LOAD_BEGIN);
 }
 
+bool OnKeyMapOp(const InstKeyMapOpMessage& request) {
+    if (!IsValidKeyMapOp(request)) {
+        QueueKeyReply(request.request_id, request.track, INST_ERROR_BAD_FILE);
+        return false;
+    }
+    if (request.op == KEY_MAP_GET || s_edit_completed[request.track] == request.request_id) {
+        QueueKeyReply(request.request_id, request.track);
+        return false;
+    }
+    if (Busy()) {
+        QueueKeyReply(request.request_id, request.track, INST_ERROR_BUSY);
+        return false;
+    }
+    s_key_request = request;
+    auto& ins = s_bank.At(request.track).instrument;
+    auto& z = ins.zones[request.zone];
+    const auto sample = z.in_use ? z.sample_id : uint16_t{0};
+    if (ins.origin == InstrumentOrigin::None || ins.mode != InstrumentMode::Keyboard ||
+        request.revision != s_key_revision[request.track] || sample != request.expected_sample) {
+        FinishKey(INST_ERROR_BAD_FILE);
+        return false;
+    }
+    if (request.op == KEY_MAP_ASSIGN) {
+        s_key_assignment = true;
+        s_request = InstOpMessage(request.request_id, request.track, 0, "");
+        s_phase = Phase::AwaitVoiceStop;
+        QueueKeyReply(request.request_id, request.track);
+        return false;
+    }
+    z.key_lo = request.value.key_lo;
+    z.key_hi = request.value.key_hi;
+    z.vel_lo = request.value.vel_lo;
+    z.vel_hi = request.value.vel_hi;
+    z.root_note = request.value.root_note;
+    BumpKeyRevision(request.track);
+    FinishKey();
+    return true;
+}
 bool OnPadSoundOp(const InstPadSoundOpMessage& request) {
     s_sound_reply = InstPadSoundSyncMessage{};
     auto& reply = s_sound_reply;
@@ -780,6 +910,9 @@ void OnTrackStateRequest(const TrackStateRequest& request) {
     Protocol::detail::CopyWireString(out.name, sizeof(out.name), ins.name);
 }
 void PumpEditorReply() {
+    if (s_key_pending &&
+        WaveX::Comm::UartLinkSend(MSG_INST_KEY_MAP_SYNC, &s_key_reply, sizeof(s_key_reply)) >= 0)
+        s_key_pending = false;
     if (s_track_pending &&
         WaveX::Comm::UartLinkSend(MSG_TRACK_STATE, &s_track_reply, sizeof(s_track_reply)) >= 0)
         s_track_pending = false;
@@ -1200,7 +1333,7 @@ const char* TrackName(uint8_t slot) {
     // A load in flight has not reached Commit, so the bank still holds the
     // PREVIOUS instrument for this slot - naming that would be actively
     // misleading. The request's own path is the truth until Commit runs.
-    if (TrackLoading(slot) && s_request.op != INST_OP_SET_PAD_SAMPLE)
+    if (TrackLoading(slot) && !s_key_assignment && s_request.op != INST_OP_SET_PAD_SAMPLE)
         return Basename(s_request.path);
     return s_bank.At(slot).instrument.name;
 }
@@ -1209,13 +1342,19 @@ uint16_t BoundSample(uint8_t slot) {
     if (slot >= kNumTracks)
         return 0;
     const Instrument& ins = s_bank.At(slot).instrument;
-    if (ins.origin != InstrumentOrigin::Built || ins.mode == InstrumentMode::Drum)
+    // Only the unnamed full-keyboard Quick Instrument represents a bare
+    // sample binding. Named or edited maps must not masquerade as their
+    // first sample in Track replacement/assignment flows.
+    if (ins.origin != InstrumentOrigin::Built || ins.mode != InstrumentMode::Keyboard ||
+        ins.name[0])
         return 0;
-    for (const auto& zone: ins.zones) {
-        if (zone.in_use)
-            return zone.sample_id;
-    }
-    return 0;
+    const auto& z = ins.zones[0];
+    if (!z.in_use || z.key_lo != 0 || z.key_hi != 127 || z.vel_lo != 1 || z.vel_hi != 127)
+        return 0;
+    for (uint8_t i = 1; i < kMaxZones; ++i)
+        if (ins.zones[i].in_use)
+            return 0;
+    return z.sample_id;
 }
 
 uint32_t ReclaimableBytes(SamplePool& pool, uint8_t track) {
@@ -1241,6 +1380,7 @@ void ForgetLoadedSample(uint16_t sample_id) {
         bool any_left = false;
         for (auto& zone: ins.zones) {
             if (zone.in_use && zone.sample_id == sample_id) {
+                BumpKeyRevision(slot);
                 zone = Zone{};
             }
             any_left = any_left || zone.in_use;

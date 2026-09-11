@@ -2927,6 +2927,12 @@ bool LoadSfzInstrument(const char* path, uint8_t slot) {
 void OnTrackStateRequest(const TrackStateRequest& request) {
     SfzLoader::OnTrackStateRequest(request);
 }
+void OnKeyMapOp(const InstKeyMapOpMessage& request) {
+    if (SfzLoader::OnKeyMapOp(request)) {
+        PublishSequencerVoiceMap(static_cast<uint16_t>(1u << request.track));
+        PushTrackBinding(request.track);
+    }
+}
 void OnPadSoundOp(const InstPadSoundOpMessage& request) {
     if (SfzLoader::OnPadSoundOp(request))
         PublishSequencerVoiceMap(static_cast<uint16_t>(1u << request.track));
@@ -2949,8 +2955,9 @@ void OnInstrumentOp(const InstOpMessage& request) {
         SfzLoader::SetModSlot(request.slot, request.mod_slot_index, slot);
         return;
     }
-    if (SfzLoader::Begin(request) && (request.op == INST_OP_SFZ_LOAD || request.op == INST_OP_NEW ||
-                                      request.op == INST_OP_SET_PAD_SAMPLE)) {
+    if (SfzLoader::Begin(request) &&
+        (request.op == INST_OP_NEW_KEYBOARD || request.op == INST_OP_SFZ_LOAD ||
+         request.op == INST_OP_NEW || request.op == INST_OP_SET_PAD_SAMPLE)) {
         ClearSequencerVoiceMap(static_cast<uint16_t>(1u << request.slot));
         // Streaming audition and instrument import share FatFs/SD bandwidth.
         // A load owns storage until its cooperative state machine completes.

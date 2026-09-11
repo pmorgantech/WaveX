@@ -154,11 +154,14 @@ the two-oscillator Instrument is designed there, §3). Stages 1 (rename),
 done. Open work, in the order decided 2026-09-05 (model doc §8: 7 → 4 → 5 →
 6 → 8), with 7 now closed:
 
-1. Complete Instrument editors (stage 4): general Key Map and zone editing.
-   The Instrument Browser now filters WXI/SFZ, provides preflight and confirmed
-   Track loading. The Track page now selects eight Tracks per view and
-   edits MIDI input with authoritative readback. Pad Map
-   creation, naming, resident assignment, choke and new-copy WXI saves are built.
+1. Requested core Instrument editors (stage 4) built 2026-09-11: Key Map
+   exposes 32 stable slots with resident assignment/clear, staged key/velocity
+   ranges, root notes and WXI save copies. Instrument Browser filters WXI/SFZ
+   with preflight and confirmed Track loading. Track page selects eight Tracks
+   per view and edits MIDI input with authoritative readback. Pad Map supports
+   creation, naming, assignment, choke and per-pad cutoff/amp ADS overrides.
+   Tag metadata/filtering remains future work; these editors do not close the
+   Phase 2 hardware gate.
 2. Voice architecture (stage 5): typed oscillators, Osc 2 + submix, filter
    type, Env 3, two per-voice LFOs, new mod destinations —
    DWT-measured at `WAVEX_NUM_VOICES` before the count is changed.

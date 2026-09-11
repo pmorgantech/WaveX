@@ -92,6 +92,11 @@ void inter_mcu_store_track_state(const WaveX::Protocol::TrackStateMessage& state
     ++cap.track_state_calls;
     cap.track_state = state;
 }
+void inter_mcu_store_key_map(const WaveX::Protocol::InstKeyMapSyncMessage& state) {
+    auto& cap = WaveX::Test::GetInterMcuCapture();
+    ++cap.key_map_calls;
+    cap.key_map = state;
+}
 void inter_mcu_store_pad_sound(const WaveX::Protocol::InstPadSoundSyncMessage& state) {
     auto& cap = WaveX::Test::GetInterMcuCapture();
     ++cap.pad_sound_calls;

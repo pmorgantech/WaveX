@@ -201,6 +201,9 @@ void OnMidiCc(const WaveX::Protocol::MidiCcMessage& m) {
 void OnTrackStateRequest(const WaveX::Protocol::TrackStateRequest& m) {
     WaveX::Test::GetDispatchRecord().track_state_requests.push_back(m);
 }
+void OnKeyMapOp(const WaveX::Protocol::InstKeyMapOpMessage& m) {
+    WaveX::Test::GetDispatchRecord().key_map_ops.push_back(m);
+}
 void OnPadSoundOp(const WaveX::Protocol::InstPadSoundOpMessage& m) {
     WaveX::Test::GetDispatchRecord().pad_sound_ops.push_back(m);
 }

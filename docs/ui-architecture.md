@@ -232,3 +232,26 @@ lists WAV files. Saved opens /wavex/instruments, Root opens /. Selecting an
 Instrument inspects its referenced samples; Load asks for the target Track and
 confirmation before replacement. The kit HIL test recalls its saved WXI through
 this flow and checks cancellation and preserved pad overrides.
+
+### Key Map (as built, 2026-09-11)
+
+Instrument → Shift → Key Map opens the keyboard editor. It shares naming, sample
+selection and save-copy flows with Pad Map. Eight of 32 stable slots appear per
+view; Shift → Previous 8 / Next 8 pages them. Assign selects a resident sample.
+Five draggable controls stage key low/high, velocity low/high and root note;
+Apply publishes the ranges and Revert discards them. Inclusive limits stay
+ordered. A replacement revision discards a stale draft.
+
+New keys confirms replacement before naming an empty keyboard Instrument.
+Shift provides Clear zone, Rename and a short note audition. Range edits preserve
+held voices; assignment/clear stops only the edited Track. Replacing a sample
+resets its zone's sample-specific region/loop markers, retaining key ranges,
+tuning, gain and sound settings. Save copy preserves sparse slots and ranges in
+WXI; Instrument Browser recalls the result. Bank and Program Change recall remain
+Phase 2.5 work. No physical panel gate is implied by these touchscreen controls.
+
+The final editor regression selection passed 17 two-board HIL tests, covering
+Key Map, Pad Map overrides, Track routing, Instrument/Sample loading, shared pool
+ownership and the sequencer grid. The 1280×720 Key Map capture was inspected on
+2026-09-11 after adjusting control heights to separate values from their fill
+bars. The capture is local at logs/key-map-20260911.png (gitignored).

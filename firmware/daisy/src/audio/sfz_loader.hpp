@@ -32,6 +32,7 @@ bool Begin(const WaveX::Protocol::InstOpMessage& request);
 void Pump(SamplePool& pool, SampleMemMgr& memory, uint8_t* io_buffer, uint32_t io_buffer_bytes);
 bool Busy();
 // Returns true only for a newly applied edit; caller republishes that Track.
+bool OnKeyMapOp(const WaveX::Protocol::InstKeyMapOpMessage& request);
 bool OnPadSoundOp(const WaveX::Protocol::InstPadSoundOpMessage& request);
 void OnTrackStateRequest(const WaveX::Protocol::TrackStateRequest& request);
 void PumpEditorReply();  // retained pad-map reply; main loop only
@@ -75,7 +76,8 @@ bool BindSample(SamplePool& pool,
 // Bytes the Pool would free if `track` released what it holds: samples only
 // this Track references and the user did not pin.
 uint32_t ReclaimableBytes(SamplePool& pool, uint8_t track);
-// The registry id a Built Track's first zone plays, else 0.
+// Bare-sample id only for an unnamed, one-zone, full-range Quick Instrument;
+// named, sparse or split keyboard maps and drum Instruments return 0.
 uint16_t BoundSample(uint8_t track);
 
 // Display name for what Track `track` holds: an import's .sfz basename, or - while
