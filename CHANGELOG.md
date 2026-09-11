@@ -78,6 +78,11 @@ versioning and release process.
 
 ### Changed
 
+- Recorded the pad-sound callback checkpoint at 69.4104% peak utilization
+  (STAY) over 605.2 seconds with six save/load cycles, zero underruns, file
+  errors or queue drops; documented normal-firmware save/restart validation
+  and updated the kit guide. Arbitrary power-loss recovery remains unverified.
+
 - Recorded the completed persistence follow-up: six pattern save/load cycles
   passed after the authorized directory preservation/recreation, with a
   68.9444% peak callback utilization (STAY) over 605.2 seconds, zero

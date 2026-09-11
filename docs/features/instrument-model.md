@@ -142,10 +142,12 @@ and the definitions in `protocol.h`.
 `INST_OP_SET_MOD_SLOT` are implemented. The loader also recognizes WXI input;
 the historical SFZ op names do not restrict its accepted extension.
 
-Zone editing, save/new/name and Bank recall need deliberately designed
-operations and round-trip tests before UI/engine consumers. There is no
-implemented union-by-op byte blob, competing kit payload or zone-sync format
-to copy from an old design sketch.
+Kit creation, naming, pad assignment/clear/choke and new-copy saves use
+the shared Instrument operations and sixteen-pad synchronization snapshot.
+Per-pad sound edits use the dedicated operation/readback contract in the
+[protocol catalog](inter-mcu-protocol.md#per-pad-sound-editing-additive-to-protocol-6).
+General keyboard-zone editing and Bank recall remain target work; new
+operations require shared definitions and round-trip tests before consumers.
 
 ## 7. UI and remaining work
 
@@ -153,11 +155,19 @@ Instrument's Sample tab opens Pad Map. Its sixteen pads select and audition
 notes 60-75 on the selected Track. Assign opens a paged resident-sample picker;
 load additional samples or saved WXI files through Sample > Browse.
 Choke controls edit the selected pad. Shift exposes Rename, Clear pad,
-Samples and Track navigation. New kit confirms replacement before showing
+Sound and Track navigation. New kit confirms replacement before showing
 the name keyboard. Save copy requires a new filename.
 
-Key Map, dedicated Instrument Browser, Bank/Track pages, per-pad filter/env
-controls, and expanded oscillator/envelope/LFO editors remain target work.
+Sound edits cutoff and amp attack/decay/sustain for the selected populated pad.
+The first edit copies the Instrument defaults into the zone, then changes
+the selected field. Inherit clears that shared filter/envelope override.
+Edits affect subsequent hits; sounding overridden voices keep their copied
+cutoff and amp envelope when Instrument controls move. Resonance remains
+Instrument-owned. One-shot pads ignore note-off, so release is not exposed.
+Save copy preserves the overrides through the existing WXI fields.
+
+Key Map, dedicated Instrument Browser, Bank/Track pages, and expanded
+oscillator/envelope/LFO editors remain target work.
 
 ## 8. Kits
 
@@ -168,9 +178,10 @@ voices and prepared sequencer triggers before dropping references. A sample
 used by another pad or Track remains resident. Choke groups are Track-local:
 two kits can both use group 1 without choking each other.
 
-The current sequencer grid triggers note 60 per Track; it does not yet
-sequence arbitrary pads within one kit. Pad Map and Play can audition all
-sixteen pads independently.
+Each sequencer step selects a MIDI note and resolves the matching Track's
+prepared zones at that note and velocity. Notes 60-75 address the sixteen
+kit pads; sparse pads remain silent. Pad Map and Play can audition the pads
+independently.
 
 ## 9. Validation
 
@@ -178,9 +189,15 @@ Host tests cover Instrument resolution, tuning/layer bounds, rendering,
 format codecs and cooperative loader ownership/failure transitions.
 Packet dispatch tests prove routing separately from real loader tests.
 
+Selected two-board HIL covers sparse kit creation, pad assignment and sound
+editing, WXI save/reload, inheritance reset, step-note selection and preservation
+of another Track's resident voice. Callback workload measurements and saved-file
+restart checks are recorded in
+[callback-performance-log.md](../callback-performance-log.md).
+
 Bench verification must still establish audible SFZ root notes and loops,
 layered release/choke behavior, concurrent Track imports, memory refusal,
-MIDI routing, save/reboot recovery when implemented, and callback headroom.
+MIDI routing and arbitrary power-loss recovery.
 See [testing_guide.md](../testing_guide.md) and the roadmap's hardware gates.
 
 ## Related

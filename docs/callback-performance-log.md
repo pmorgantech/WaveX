@@ -245,6 +245,64 @@ HIL selection passed all nine tests (45 deselected, 36.11 seconds),
 including hidden-step values, mute, duplicate-name rejection, confirmation
 cancellation, missing-file handling and resident voice/Track preservation.
 
+## Pad sound editing and combined tuning — 2026-09-10
+
+The per-pad sound workload adds filter/envelope overrides on pads 1, 5, 9
+and 13 of all eight kits, then alternates Pad 13 cutoff between 1200 and
+18000 Hz while the existing live Instrument cutoff edits continue. The
+remaining workload matches the preceding persistence run: sixteen populated
+pads per kit, Track-local choke, 64 modulation slots, WaveX 24 dB at full
+drive, 25 MHz SD streaming, step-note playback, touch grid readback and six
+pattern save/load cycles. Parameter locks remain stored but unapplied.
+
+The clean pad-editor commit `3e415cf` completed all file operations with
+zero underruns, console drops or sequencer queue-drop messages, but its
+maximum callback reached 339751 cycles (70.7815%, REVIEW). The baseline is
+`logs/perf-wavex-20260911-011618.log` and its companion JSON.
+
+A follow-up on clean `f904032` submits cutoff and resonance together at
+voice trigger and inherited live updates, eliminating the intermediate
+coefficient recalculation. Pad-owned cutoff remains unchanged by Instrument
+edits; filter integrators, modulation and envelope ownership are preserved.
+The focused filter/voice selection passed 84 host tests, including equivalent
+output across topology, slope, drive, sample rate, clamping, bypass, reset
+and topology-switch transitions. The commit's Daisy build and full host
+suite also passed.
+
+The same bench driver then observed 605.7 seconds; 121 complete DWT windows
+cover 605.2 seconds. The maximum was 333170 cycles (69.4104%, STAY), leaving
+30.5896% headroom. This is 6581 fewer peak cycles than the baseline in these
+two runs; it is not a bound on every future workload. Average utilization
+was 25.7%. All 465 periodic backend samples retained eight voices and an
+active stream, with zero underruns or dropped console bytes. Six save/load
+cycles and 47 live grid samples passed; no file errors or sequencer
+queue-drop messages appeared. Streaming preview stopped for each file
+operation and restarted afterward while resident voices continued.
+
+The capture is `logs/perf-wavex-20260911-013012.log`; its companion JSON
+records the clean commit, image SHA256, SD clock, file results and states.
+This passes the measured workload and capacity checkpoint. Physical panel
+operation, arbitrary power interruption, MIDI timing and the full Phase 2
+gate remain unverified.
+
+Normal firmware was rebuilt and flashed to both MCUs with profiling and
+the experimental DaisySP filter disabled. After backend restart,
+`Perf 013012 450` loaded with note 75, step bits 21845 and swing 60,
+preserving session tempo 149 and all empty Track bindings. The saved
+`HIL kit 1789088901` then loaded into Track 3 with Pad 16's override
+enabled, cutoff 1200 Hz, amp attack 7 ms, decay 250 ms and sustain 35%.
+Both checks started with no resident samples; their results are retained in
+`logs/pattern-reboot-check.json` and `logs/pad-sound-reboot-check.json`.
+These verify completed saves across restart, not interruption during a write.
+
+The final normal-firmware console, kit-editor and pattern-file HIL selection
+passed all ten tests (44 deselected, 62.09 seconds). This includes the default
+build rejecting the experimental filter, sparse kit sound save/reload and
+inheritance, hidden pattern steps, duplicate/missing files and preservation
+of another Track's voice. The devices finished at the Main Menu with no
+resident samples, voices or stream and zero underruns; the retained state is
+`logs/pad-sound-final-state.json`.
+
 ## Recorded runs
 
 | Date | Commit | Scenario | Voices | Hz/block | Core | Image | Duration | Budget cycles | Average cycles | Maximum cycles | Worst headroom | Stream underruns | Callback features left | Decision | Note |
@@ -260,3 +318,4 @@ cancellation, missing-file handling and resident voice/Track preservation.
 | 2026-09-08 | 70deebd | 8 Tracks, 16-pad kits, combined WaveX filter retune, 24 dB full drive, 64 mod slots, SD 25MHz stream, touch grid, no file operations | 8 | 48000/48 | 480 MHz | qspi `-O2` | 605.2s (121 windows) | 480000 | 124071 (25.8%) | 328090 (68.3521%) | 31.6479% | 0 | yes | STAY | 605 s combined-retune comparison; zero underruns and sequencer queue-drop messages; full persistence soak remains blocked by original directory; metadata logs/perf-wavex-20260908-060531.json |
 | 2026-09-08 | 27b7fd6 | 8 Tracks, 16-pad kits, WaveX 24 dB full drive, 64 mod slots, SD 25MHz stream, touch grid, repeated pattern save/load | 8 | 48000/48 | 480 MHz | qspi `-O2` | 605.2s (121 windows) | 480000 | 123978 (25.8%) | 330933 (68.9444%) | 31.0556% | 0 | yes | STAY | 605 s persistence run after authorized directory preservation/recreation; six save/load cycles; zero underruns, sequencer queue-drop messages and file errors; metadata logs/perf-wavex-20260908-102335.json |
 | 2026-09-10 | 3e415cf | 8 Tracks,16-pad kits,pad sound overrides,WaveX24dB full drive,64mod slots,live Instrument/pad cutoff,SD25MHz stream,grid,pattern save/load | 8 | 48000/48 | 480 MHz | qspi `-O2` | 605.2s (121 windows) | 480000 | 124555 (25.9%) | 339751 (70.7815%) | 29.2185% | 0 | yes | REVIEW | 605 s pad-sound baseline; six save/load cycles; zero underruns, sequencer queue drops and file errors; metadata logs/perf-wavex-20260911-011618.json |
+| 2026-09-10 | f904032 | 8 Tracks,16-pad kits,pad sound overrides,combined voice filter tuning,WaveX24dB full drive,64mod slots,live Instrument/pad cutoff,SD25MHz stream,grid,pattern save/load | 8 | 48000/48 | 480 MHz | qspi `-O2` | 605.2s (121 windows) | 480000 | 123316 (25.7%) | 333170 (69.4104%) | 30.5896% | 0 | yes | STAY | 605 s matched combined-tuning comparison; six save/load cycles; zero underruns, sequencer queue drops and file errors; metadata logs/perf-wavex-20260911-013012.json |

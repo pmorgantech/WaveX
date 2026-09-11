@@ -77,21 +77,24 @@ Phase 2.5 work. Open work:
    new-copy saves. Power-loss recovery remains a bench gate.
 5. Apply per-step parameter locks to trigger parameters.
 
-### 2.C — Callback capacity checkpoint (2026-09-08)
+### 2.C — Callback capacity checkpoint (2026-09-10)
 
-The latest persistence workload on 27b7fd6 measured **68.9444% peak callback
-utilization (STAY)** over 605.2 seconds, with six successful pattern save/load
-cycles, zero underruns, no file errors and no sequencer queue-drop messages.
-It used eight drum Instruments with sixteen populated pads each, Track-local
-choke, 64 modulation slots, the WaveX 24 dB filter at full drive, SD streaming,
-live cutoff edits and grid readback. The streaming preview stopped for each
-file operation and restarted afterward; resident Track voices continued.
+The per-pad sound persistence workload on f904032 measured **69.4104% peak
+callback utilization (STAY)** over 605.2 seconds, with six successful pattern
+save/load cycles, zero underruns, no file errors and no sequencer queue-drop
+messages. It used eight drum Instruments with sixteen populated pads each,
+Track-local choke, 64 modulation slots, the WaveX 24 dB filter at full drive,
+25 MHz SD streaming, live Instrument and pad cutoff edits and grid readback.
+The streaming preview stopped for each file operation and restarted afterward;
+resident Track voices continued. Combined cutoff/resonance updates reduced
+the observed peak from the pad-editor baseline's 70.7815% (REVIEW).
 Full captures and preceding comparisons are recorded in
 [callback-performance-log.md](callback-performance-log.md).
 
 The earlier SD-write failure no longer blocks this workload after the default
 clock reduction and authorized preservation/recreation of the test directory.
-A newly saved pattern loaded after backend restart on normal firmware.
+A newly saved pattern and a kit with pad sound overrides loaded after backend
+restart on normal firmware.
 Arbitrary power-loss recovery, longer write soaks and the full Phase 2 gate
 remain outstanding.
 
@@ -220,7 +223,7 @@ The following code paths are open until observed on the target:
 | Diagnostics | Open the page and verify live telemetry arrives. |
 | Digital voices | Trigger RAM-resident notes, sweep live parameters, and judge SVF response/resonance. |
 | Sample retirement | Four-Track routing, rebinds and SFZ replacement during sequencing, and sample-edit refresh now have passing HIL coverage. Still exercise delayed/stopped callbacks and concurrent import requests. Confirm timeout preserves storage, then measure DWT headroom and run the zero-underrun soak. Host helper tests do not verify this interrupt integration. |
-| Callback budget | Recurring whole-callback evidence is recorded in `callback-performance-log.md`: The eight-Track, fully populated kit/grid WaveX run is 68.3521% / STAY (file operations excluded) and the experimental DaisySP comparison is 89.6635% / UPGRADE, both with zero underruns. DaisySP is default-disabled. Remaining work is its capacity blocker, separate Render() timing, and selective placement A/B; no overall phase gate is claimed. |
+| Callback budget | Recurring whole-callback evidence is recorded in `callback-performance-log.md`: The eight-Track, fully populated kit/grid WaveX run with pad sound edits and pattern save/load is 69.4104% / STAY and the experimental DaisySP comparison is 89.6635% / UPGRADE, both with zero underruns. DaisySP is default-disabled. Remaining work is its capacity blocker, separate Render() timing, and selective placement A/B; no overall phase gate is claimed. |
 | Sample Edit | Verify waveform fetch, handles, loop seam audibility, browser detail waveform, and stereo readability. HIL covers Track-preserving audition, edits isolated to the matching stream, streaming loop wraps and RAM-loop note lifetime. |
 | Settings and input | Verify brightness, scrolling, MIDI channel filtering, keypad, encoder direction, and UI responsiveness. |
 | UI concurrency | Measure LVGL lock/refresh behavior during encoder bursts and sample loading. |
