@@ -16,6 +16,7 @@
 #include "ui/current_sample.h"
 #include "ui/current_track.h"
 #include "ui/sample_load_failure.h"
+#include "ui/ui_api.h"
 #include "ui/ui_busy_overlay.h"
 #include "ui/ui_palette.h"
 #include "ui_task.h"
@@ -70,11 +71,8 @@ constexpr int kWaveInnerH = kWaveH - 2;
 constexpr uint32_t kWaveTimeoutMs = 3000;
 constexpr uint8_t kWaveMaxRetries = 2;
 
-bool isSfzFile(const char* name) {
-    if (!name)
-        return false;
-    const char* dot = strrchr(name, '.');
-    return dot && strcasecmp(dot, ".sfz") == 0;
+bool isInstrumentFile(const char* name) {
+    return WaveX::Protocol::IsInstrumentFileName(name);
 }
 
 void formatBytes(uint32_t bytes, char* out, size_t out_size) {
@@ -93,8 +91,11 @@ void formatBytes(uint32_t bytes, char* out, size_t out_size) {
 UISampleBrowser* UISampleBrowser::s_active_instance_ = nullptr;
 
 UISampleBrowser::UISampleBrowser(WaveX::Comm::ICommInterface& comm_interface,
-                                 SampleBrowserState& persistent_state)
-    : comm_interface_(&comm_interface), persistent_state_(persistent_state) {}
+                                 SampleBrowserState& persistent_state,
+                                 bool instruments)
+    : comm_interface_(&comm_interface),
+      persistent_state_(persistent_state),
+      instruments_(instruments) {}
 
 UISampleBrowser::~UISampleBrowser() {
     // Cleanup is done in onExit()
@@ -237,7 +238,7 @@ void UISampleBrowser::onEnter(lv_obj_t* parent) {
     lv_obj_set_style_bg_color(play_bar_, lv_color_hex(0x1F1F1F), LV_PART_MAIN);
     lv_obj_set_style_bg_color(play_bar_, lv_color_hex(kColGreen), LV_PART_INDICATOR);
 
-    wavex_file_browser_config_t browser_config = {.root_path = persistent_state_.current_directory_path.c_str(), .file_extension = nullptr, .max_entries = 50, .show_hidden = false, .comm_interface = comm_interface_};
+    wavex_file_browser_config_t browser_config = {.root_path = persistent_state_.current_directory_path.c_str(), .filter = instruments_ ? WaveX::Protocol::BrowseFilter::Instruments : WaveX::Protocol::BrowseFilter::Samples, .max_entries = 50, .show_hidden = false, .comm_interface = comm_interface_};
 
     ESP_LOGI(TAG, "Creating file browser with root_path: %s", browser_config.root_path);
 
@@ -430,7 +431,8 @@ std::array<Softkey, NUM_SOFTKEYS> UISampleBrowser::getSoftkeys() {
     std::array<Softkey, NUM_SOFTKEYS> keys{};
     const wavex_file_entry_t* selected =
         file_browser_ ? wavex_file_browser_get_selected(file_browser_) : nullptr;
-    const bool selected_sfz = selected && !selected->is_directory && isSfzFile(selected->name);
+    const bool selected_sfz =
+        selected && !selected->is_directory && isInstrumentFile(selected->name);
 
     // Track picker: replaces the whole bar so there is no way to navigate away
     // mid-question and leave a half-answered load behind.
@@ -490,7 +492,7 @@ std::array<Softkey, NUM_SOFTKEYS> UISampleBrowser::getSoftkeys() {
             stopAudition(); } };
     } else {
         if (selected_sfz) {
-            keys[1] = {"Audition", nullptr, false, "SFZ instruments cannot be auditioned"};
+            keys[1] = {"Audition", nullptr, false, "Load an Instrument to play it"};
         } else {
             keys[1] = {"Audition", [this]() {
             ESP_LOGI(TAG, "Audition requested");
@@ -554,7 +556,7 @@ std::array<Softkey, NUM_SOFTKEYS> UISampleBrowser::getSoftkeys() {
             wavex_file_browser_navigate_to(file_browser_, path_to_use);
             refreshSoftkeys();
         } else {
-            if (isSfzFile(selected->name)) {
+            if (isInstrumentFile(selected->name)) {
                 // Always ask which Track: the load takes that Track away from
                 // Play, Instrument and Sample Manager, and a Track holding an
                 // Instrument refuses a bare-sample bind afterwards.
@@ -581,6 +583,17 @@ std::array<Softkey, NUM_SOFTKEYS> UISampleBrowser::getSoftkeys() {
         ESP_LOGI(TAG, "Down button pressed");
         if (!file_browser_) return;
         wavex_file_browser_navigate_down_entry(file_browser_); } };
+
+    if (instruments_) {
+        keys[1] = {"Saved", [this] {
+                       if (file_browser_)
+                           wavex_file_browser_navigate_to(file_browser_, "/wavex/instruments");
+                   }};
+        keys[5] = {"Root", [this] {
+                       if (file_browser_)
+                           wavex_file_browser_navigate_to(file_browser_, "/");
+                   }};
+    }
 
     return keys;
 }
@@ -725,7 +738,7 @@ void UISampleBrowser::updateMetadata(const wavex_file_entry_t* entry) {
         return;
     }
 
-    const bool selected_sfz = !entry->is_directory && isSfzFile(entry->name);
+    const bool selected_sfz = !entry->is_directory && isInstrumentFile(entry->name);
     sfz_selected_ = selected_sfz;
     if (selected_sfz) {
         if (strncmp(sfz_probe_path_, entry->path, sizeof(sfz_probe_path_)) != 0) {
@@ -923,10 +936,10 @@ void UISampleBrowser::processDeferredUpdates_() {
                          (unsigned long)entry->size_bytes,
                          entry->path);
 
-                if (isSfzFile(entry->name)) {
+                if (isInstrumentFile(entry->name)) {
                     snprintf(info_text,
                              sizeof(info_text),
-                             "SFZ instrument\nInspecting referenced WAV files...\n\n"
+                             "Instrument\nInspecting referenced WAV files...\n\n"
                              "Audition is unavailable for instruments.");
                     if (detail_name_ && lv_obj_is_valid(detail_name_)) {
                         lv_label_set_text(detail_name_, entry->name);
@@ -1067,7 +1080,7 @@ void UISampleBrowser::processDeferredUpdates_() {
             formatBytes(status.available_bytes, available, sizeof(available));
             int used = snprintf(text,
                                 sizeof(text),
-                                "SFZ instrument\nZones     %u\nSamples   %u\n"
+                                "Instrument\nZones     %u\nSamples   %u\n"
                                 "Total     %s\nAvailable %s",
                                 (unsigned)status.zone_count,
                                 (unsigned)status.sample_count,
@@ -1093,7 +1106,8 @@ void UISampleBrowser::processDeferredUpdates_() {
                          status.invalid_count == 1 ? " is" : "s are");
             }
             if (status.state == WaveX::Protocol::INST_STATUS_FAILED && status.flags == 0) {
-                snprintf(text, sizeof(text), "SFZ inspection failed (error %u).", status.error);
+                snprintf(
+                    text, sizeof(text), "Instrument inspection failed (error %u).", status.error);
             }
             if (metadata_label_ && lv_obj_is_valid(metadata_label_)) {
                 lv_label_set_text(metadata_label_, text);
@@ -1424,7 +1438,7 @@ void UISampleBrowser::instrument_status_callback(const WaveX::Protocol::InstStat
 }
 
 void UISampleBrowser::requestInstrumentProbe(const wavex_file_entry_t* entry) {
-    if (!entry || entry->is_directory || !isSfzFile(entry->name))
+    if (!entry || entry->is_directory || !isInstrumentFile(entry->name))
         return;
     snprintf(sfz_probe_path_, sizeof(sfz_probe_path_), "%s", entry->path);
     sfz_probe_ready_ = false;
@@ -1513,7 +1527,7 @@ void UISampleBrowser::beginSampleLoad(const wavex_file_entry_t* entry) {
 }
 
 bool UISampleBrowser::loadInstrument(const wavex_file_entry_t* entry) {
-    if (!entry || !isSfzFile(entry->name) || !sfz_probe_ready_ || !sfz_probe_loadable_) {
+    if (!entry || !isInstrumentFile(entry->name) || !sfz_probe_ready_ || !sfz_probe_loadable_) {
         updateStatus("Instrument is not ready to load");
         return false;
     }
@@ -1745,6 +1759,12 @@ SampleBrowserState& persistent_state_singleton() {
 
 std::shared_ptr<UIPage> createSampleBrowserPage(WaveX::Comm::ICommInterface& comm_interface) {
     return std::make_shared<UISampleBrowser>(comm_interface, persistent_state_singleton());
+}
+
+std::shared_ptr<UIPage> createInstrumentBrowserPage() {
+    static SampleBrowserState state;
+    auto comm = ui_get_comm_interface();
+    return comm ? std::make_shared<UISampleBrowser>(*comm, state, true) : nullptr;
 }
 
 SampleBrowserState* getSampleBrowserState() {

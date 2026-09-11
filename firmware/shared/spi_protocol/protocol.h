@@ -578,6 +578,84 @@ struct FileEntryWire {
     }
 } __attribute__((packed));
 
+// BROWSE_REQ retains [start_index][NUL-terminated path]. A trailing
+// filter byte is optional; legacy requests list all supported audio files.
+// This directory limit matches the device's browser path/cache storage.
+static constexpr size_t BROWSE_DIRECTORY_PATH_MAX = 96;
+enum class BrowseFilter : uint8_t { All = 0, Samples = 1, Instruments = 2 };
+inline bool BrowseFilterValid(BrowseFilter filter) {
+    return static_cast<uint8_t>(filter) <= static_cast<uint8_t>(BrowseFilter::Instruments);
+}
+inline bool BrowseExtensionEquals(const char* name, const char* suffix) {
+    if (!name || !suffix)
+        return false;
+    const char* dot = nullptr;
+    for (const char* p = name; *p; ++p)
+        if (*p == '.')
+            dot = p;
+    if (!dot)
+        return false;
+    while (*dot && *suffix) {
+        char c = *dot++;
+        if (c >= 'A' && c <= 'Z')
+            c = static_cast<char>(c + ('a' - 'A'));
+        if (c != *suffix++)
+            return false;
+    }
+    return !*dot && !*suffix;
+}
+inline bool IsInstrumentFileName(const char* name) {
+    return BrowseExtensionEquals(name, ".wxi") || BrowseExtensionEquals(name, ".sfz");
+}
+inline bool BrowseFileMatches(const char* name, BrowseFilter filter) {
+    if (!BrowseFilterValid(filter))
+        return false;
+    return (filter != BrowseFilter::Instruments && BrowseExtensionEquals(name, ".wav")) ||
+           (filter != BrowseFilter::Samples && IsInstrumentFileName(name));
+}
+inline size_t EncodeBrowseRequest(uint8_t* out,
+                                  size_t capacity,
+                                  const char* path,
+                                  uint8_t start_index,
+                                  BrowseFilter filter = BrowseFilter::All) {
+    if (!out || !path || !BrowseFilterValid(filter))
+        return 0;
+    size_t n = 0;
+    while (n < BROWSE_DIRECTORY_PATH_MAX && path[n])
+        ++n;
+    if (!n || n == BROWSE_DIRECTORY_PATH_MAX)
+        return 0;
+    const size_t bytes = n + 2 + (filter != BrowseFilter::All ? 1 : 0);
+    if (bytes > capacity)
+        return 0;
+    out[0] = start_index;
+    for (size_t i = 0; i <= n; ++i)
+        out[i + 1] = static_cast<uint8_t>(path[i]);
+    if (filter != BrowseFilter::All)
+        out[n + 2] = static_cast<uint8_t>(filter);
+    return bytes;
+}
+inline bool DecodeBrowseRequest(const uint8_t* payload,
+                                size_t size,
+                                uint8_t& start_index,
+                                char (&path)[BROWSE_DIRECTORY_PATH_MAX],
+                                BrowseFilter& filter) {
+    if (!payload || size < 3)
+        return false;
+    size_t n = 0;
+    while (n + 1 < size && payload[n + 1] && n < BROWSE_DIRECTORY_PATH_MAX)
+        ++n;
+    if (!n || n >= BROWSE_DIRECTORY_PATH_MAX || n + 1 >= size || size > n + 3)
+        return false;
+    filter = size == n + 3 ? static_cast<BrowseFilter>(payload[n + 2]) : BrowseFilter::All;
+    if (!BrowseFilterValid(filter))
+        return false;
+    start_index = payload[0];
+    for (size_t i = 0; i <= n; ++i)
+        path[i] = static_cast<char>(payload[i + 1]);
+    return true;
+}
+
 struct BrowseRespHeader {
     uint32_t total_count;
     uint8_t n;

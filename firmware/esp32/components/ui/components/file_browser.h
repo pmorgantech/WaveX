@@ -13,6 +13,7 @@
 #include <stdint.h>
 
 #include "lvgl.h"
+#include "spi_protocol/protocol.h"
 
 /* Keep headers C-friendly without forcing C linkage on downstream C++ headers */
 
@@ -36,9 +37,8 @@ class ICommInterface;
 
 typedef struct {
     const char* root_path;
-    // Optional frontend hint. The Daisy listing is authoritative and may
-    // return more than one supported type (currently WAV + SFZ).
-    const char* file_extension;
+    // Applied on the Daisy before pagination; directories remain navigable.
+    WaveX::Protocol::BrowseFilter filter;
     uint32_t max_entries;
     bool show_hidden;
     WaveX::Comm::ICommInterface* comm_interface;

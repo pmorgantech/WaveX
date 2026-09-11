@@ -1,5 +1,7 @@
 #pragma once
 
+#include "spi_protocol/protocol.h"
+
 #include <cstddef>
 #include <cstdint>
 
@@ -7,9 +9,9 @@ namespace WaveX {
 namespace Storage {
 
 struct FileEntry {
-    uint8_t  is_dir;     // 1 if directory, 0 if file
-    uint32_t size_bytes; // file size (0 for directories)
-    char     name[48];   // base name (no path), UTF-8 truncated
+    uint8_t is_dir;       // 1 if directory, 0 if file
+    uint32_t size_bytes;  // file size (0 for directories)
+    char name[48];        // base name (no path), UTF-8 truncated
 };
 
 // List directory entries starting at start_index (for pagination).
@@ -25,9 +27,8 @@ bool ListDir(const char* path,
              size_t max_entries,
              size_t& total_count,
              size_t start_index,
-             size_t& entries_written);
+             size_t& entries_written,
+             Protocol::BrowseFilter filter = Protocol::BrowseFilter::All);
 
-} // namespace Storage
-} // namespace WaveX
-
-
+}  // namespace Storage
+}  // namespace WaveX

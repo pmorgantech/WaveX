@@ -7,6 +7,7 @@
 #include "inter_mcu.h"
 #include "ui/current_track.h"
 #include "ui/ui_navigator.h"
+#include "ui/ui_sample_browser.h"
 
 #include <cstdio>
 #include <cstring>
@@ -198,7 +199,10 @@ std::array<Softkey, NUM_SOFTKEYS> UITrackPage::getSoftkeys() {
     std::array<Softkey, NUM_SOFTKEYS> k{};
     k[0] = {"Back", [] { UINavigator::instance().pop(); }};
     k[1] = {"Instrument", [] { UINavigator::instance().jumpToRoot(RootGroup::Instrument); }};
-    k[2] = {"Browse", [] { UINavigator::instance().jumpToRoot(RootGroup::Sample); }};
+    k[2] = {"Browse", [] {
+                if (auto page = createInstrumentBrowserPage())
+                    UINavigator::instance().push(page);
+            }};
     k[3] = {"MIDI -", [this] { adjust(-1); }, alive_ && model_.Ready(), "Reading Track"};
     k[4] = {"MIDI +", [this] { adjust(1); }, alive_ && model_.Ready(), "Reading Track"};
     k[5] = {first_ ? "Tracks 1-8" : "Tracks 9-16", [this] {

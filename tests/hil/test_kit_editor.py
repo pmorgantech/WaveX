@@ -74,29 +74,29 @@ def test_touch_kit_save_reload_preserves_samples_and_other_tracks(
     esp.wait_state(kitview=1)
     esp.softkey("Confirm")
     esp.wait_state(kitready=1, kiterror=9, timeout=10)
-    path = "0:/wavex/instruments/" + name + ".wxi"
-    daisy.msg(
-        0x60,
-        struct.pack(
-            "<IBBH256sBBBhBB4x",
-            345678,
-            2,
-            2,
-            0,
-            path.encode(),
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-        ),
-    )
-    deadline = time.monotonic() + 15
-    while not daisy.tracks()[2].startswith("instrument"):
-        assert time.monotonic() < deadline, daisy.tracks()
-        time.sleep(0.2)
+    # Recall the saved copy through the actual Instrument Browser.
     esp.track(2)
+    esp.home()
+    esp.open_menu("Track")
+    esp.softkey("Browse")
+    esp.wait_state(page="Instrument_Browser")
+    esp.softkey("Saved")
+    esp.wait_state(dir="/wavex/instruments", entries=lambda n: int(n) > 1)
+    esp.page("SEL", name + ".wxi")
+    esp.wait_state(sel=(name + ".wxi").replace(" ", "_"), sk2="Load")
+    previous_target = daisy.tracks()[2]
+    esp.softkey("Load")
+    esp.wait_state(picker=1, sk0="Cancel")
+    esp.softkey("Cancel")
+    esp.wait_state(picker=0)
+    assert daisy.tracks()[2] == previous_target
+    esp.softkey("Load")
+    esp.wait_state(picker=1, sk0="Cancel")
+    esp.softkey("Load")
+    esp.wait_state(timeout=15, status="Instrument_loaded")
+    esp.home()
+    esp.open_menu("Instrument")
+    esp.softkey("Pad Map")
     esp.wait_state(kitready=1, kiteditable=1, kitname=name.replace(" ", "_"))
     esp.page("PAD", 16)
     esp.wait_state(kitready=1, kitsample=a, kitchoke=1)

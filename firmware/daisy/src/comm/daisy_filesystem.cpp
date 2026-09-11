@@ -267,7 +267,10 @@ bool ParseWavMetadata(const WaveX::Storage::FileEntry& entry,
 namespace WaveX {
 namespace Comm {
 
-void ProcessBrowseRequest(const char* path, size_t start_index, uint8_t max_entries) {
+void ProcessBrowseRequest(const char* path,
+                          size_t start_index,
+                          uint8_t max_entries,
+                          Protocol::BrowseFilter filter) {
     using namespace WaveX::Storage;
     using namespace WaveX::Protocol;
 
@@ -309,7 +312,7 @@ void ProcessBrowseRequest(const char* path, size_t start_index, uint8_t max_entr
     if (start_index == 0) {
         // Get all entries for caching (max 50)
         uint32_t listdir_start_ms = daisy::System::GetNow();
-        bool success = ListDir(path, all_entries, 50, total_count, 0, all_entries_count);
+        bool success = ListDir(path, all_entries, 50, total_count, 0, all_entries_count, filter);
         uint32_t listdir_end_ms = daisy::System::GetNow();
         uint32_t listdir_duration_ms = listdir_end_ms - listdir_start_ms;
 
@@ -348,8 +351,8 @@ void ProcessBrowseRequest(const char* path, size_t start_index, uint8_t max_entr
         }
     } else {
         // For subsequent pages, just get the paginated entries (no caching needed)
-        bool success =
-            ListDir(path, entries, actual_max_entries, total_count, start_index, entries_written);
+        bool success = ListDir(
+            path, entries, actual_max_entries, total_count, start_index, entries_written, filter);
 
         if (!success) {
             WAVEX_LOGE(STORAGE, "Failed to list directory: %s", path);
@@ -375,7 +378,7 @@ void ProcessBrowseRequest(const char* path, size_t start_index, uint8_t max_entr
         wire_entries[i].channels = 0;
         wire_entries[i].bits_per_sample = 0;
         wire_entries[i].duration_ms = 0;
-        if (!entries[i].is_dir) {
+        if (!entries[i].is_dir && Protocol::BrowseExtensionEquals(entries[i].name, ".wav")) {
             ParseWavMetadata(entries[i], wire_entries[i], nullptr);
         }
     }

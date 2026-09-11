@@ -26,8 +26,10 @@ void CommInterfaceImpl::setStorageStatusListener(wavex_storage_status_cb_t cb, v
     statistics_.set_storage_status_callback(cb, user_data);
 }
 
-esp_err_t CommInterfaceImpl::sendBrowseRequest(const char* path, uint8_t start_index) {
-    return inter_mcu_send_browse_req(path, start_index);
+esp_err_t CommInterfaceImpl::sendBrowseRequest(const char* path,
+                                               uint8_t start_index,
+                                               WaveX::Protocol::BrowseFilter filter) {
+    return inter_mcu_send_browse_req(path, start_index, filter);
 }
 
 // Sample control operations

@@ -13,6 +13,10 @@ versioning and release process.
 
 ### Added
 
+- Added a dedicated Instrument Browser from Track and Instrument pages with
+  Root and Saved views, WXI/SFZ preflight and Track confirmation, independent
+  browser state, WAV-only Sample browsing, and filtering before pagination.
+
 - Added a touchscreen Track page with eight Tracks per view, authoritative
   binding and MIDI input readback, Omni/1-16/Off routing choices, and stale,
   busy, and link-state guards.
@@ -41,6 +45,9 @@ versioning and release process.
   protocol version 6 remains unchanged.
 
 ### Fixed
+
+- Fixed WXI files being omitted from Instrument Browser listings and rejected
+  malformed or overlong browse requests before filesystem access.
 
 - Fixed Track MIDI input values being narrowed before validation, which could
   wrap a wide value into another channel.

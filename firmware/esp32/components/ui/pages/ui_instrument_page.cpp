@@ -826,7 +826,10 @@ std::array<Softkey, NUM_SOFTKEYS> UIInstrumentPage::getShiftedSoftkeys() {
     keys[1] = {"< Stage", [this]() { moveStage(-1); }};
     keys[2] = {"Stage >", [this]() { moveStage(+1); }};
     keys[3] = {"Pad Map", [] { UINavigator::instance().push(createPadMapPage()); }};
-    keys[4] = {"Samples", [] { UINavigator::instance().jumpToRoot(RootGroup::Sample); }};
+    keys[4] = {"Browse", [] {
+                   if (auto page = createInstrumentBrowserPage())
+                       UINavigator::instance().push(page);
+               }};
     keys[5] = {"Init", [this]() {
                    // Re-send every wired parameter at its default so the engine
                    // and the page agree again.

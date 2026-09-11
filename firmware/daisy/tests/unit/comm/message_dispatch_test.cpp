@@ -309,28 +309,26 @@ TEST_F(MessageDispatchTest, BrowseRequestReachesFilesystem) {
 // The path field of a CRC-valid frame carries NO guarantee of an in-payload
 // NUL terminator; the handler must bound its scan to the payload instead of
 // strlen()ing into whatever follows. A path that fills the payload exactly
-// (no NUL anywhere) must come through truncated to the payload's bytes.
-TEST_F(MessageDispatchTest, BrowsePathWithoutTerminatorIsBoundedToPayload) {
+// (no NUL anywhere) must be rejected.
+TEST_F(MessageDispatchTest, BrowsePathWithoutTerminatorIsRejected) {
     uint8_t payload[1 + 4];
     payload[0] = 0;                       // start_index
     std::memcpy(payload + 1, "ABCD", 4);  // 4 bytes, deliberately no NUL
     ProcessInterMcuMessage(MSG_BROWSE_REQ, 1, payload, sizeof(payload));
 
-    ASSERT_EQ(GetDispatchRecord().browse_requests.size(), 1u);
-    EXPECT_EQ(GetDispatchRecord().browse_requests[0].path, "ABCD");
+    EXPECT_TRUE(GetDispatchRecord().browse_requests.empty());
 }
 
 // The handler's stack buffer holds 95 characters + NUL; a longer wire path
-// must be truncated there, not overflow it.
-TEST_F(MessageDispatchTest, OverlongBrowsePathIsTruncatedTo95Chars) {
+// must be rejected, not silently changed.
+TEST_F(MessageDispatchTest, OverlongBrowsePathIsRejected) {
     std::string long_path(120, 'x');
     std::vector<uint8_t> payload(1 + long_path.size() + 1);
     payload[0] = 0;
     std::memcpy(payload.data() + 1, long_path.c_str(), long_path.size() + 1);
     ProcessInterMcuMessage(MSG_BROWSE_REQ, 1, payload.data(), static_cast<size_t>(payload.size()));
 
-    ASSERT_EQ(GetDispatchRecord().browse_requests.size(), 1u);
-    EXPECT_EQ(GetDispatchRecord().browse_requests[0].path, std::string(95, 'x'));
+    EXPECT_TRUE(GetDispatchRecord().browse_requests.empty());
 }
 
 TEST_F(MessageDispatchTest, SamplePlayRequestForwardsThePath) {
@@ -668,7 +666,7 @@ TEST_F(MessageDispatchTest, UndersizedSampleSelectIsRejected) {
 // 1. The payload is a heap vector sized EXACTLY to the length under test.
 //    Every case test above uses a fixed stack array, so a read past the
 //    intended length lands in adjacent stack and returns a plausible byte -
-//    which is why BrowsePathWithoutTerminatorIsBoundedToPayload would have
+//    which is why BrowsePathWithoutTerminatorIsRejected would have
 //    passed against pre-fix code in some builds. One byte past a right-sized
 //    heap allocation is an ASan redzone.
 // 2. The 0x41 fill contains no NUL anywhere. That is precisely the input
@@ -784,4 +782,14 @@ TEST_F(MessageDispatchTest, TrackMidiInputCannotWrapAnInvalidWideValue) {
     Dispatch(MSG_TRACK_OP, TrackOpMessage{TRACK_OP_SET_MIDI_IN, 0, 257});
     Dispatch(MSG_TRACK_OP, TrackOpMessage{TRACK_OP_SET_PROGRAM_CHANGE, 0, 2});
     EXPECT_TRUE(GetDispatchRecord().track_ops.empty());
+}
+
+TEST_F(MessageDispatchTest, FilteredBrowseRequestReachesFilesystem) {
+    uint8_t payload[100]{};
+    const auto n =
+        EncodeBrowseRequest(payload, sizeof(payload), "/kits", 20, BrowseFilter::Instruments);
+    ProcessInterMcuMessage(MSG_BROWSE_REQ, 1, payload, n);
+    ASSERT_EQ(GetDispatchRecord().browse_requests.size(), 1u);
+    EXPECT_EQ(GetDispatchRecord().browse_requests[0].filter, BrowseFilter::Instruments);
+    EXPECT_EQ(GetDispatchRecord().browse_requests[0].start_index, 20u);
 }

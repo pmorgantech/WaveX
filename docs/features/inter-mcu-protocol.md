@@ -295,3 +295,13 @@ readback. Values are validated before narrowing to the engine's byte fields;
 wide values cannot wrap into another channel. The UI offers Omni, 1-16 and Off.
 Polyphony/priority and Program Change fields remain stored for their later
 engine stages and are not exposed as working controls.
+
+### Filtered browser requests (as built, 2026-09-11)
+
+MSG_BROWSE_REQ retains its legacy start-index byte and NUL-terminated directory
+path. An optional final BrowseFilter byte selects samples or instruments;
+omitting it lists all supported files. The values and bounded encoder/decoder
+live in protocol.h. Directories remain visible, and the Daisy applies filtering
+before counting and pagination. Sample listings contain WAV; Instrument listings
+contain WXI and SFZ, case-insensitively. Empty, unterminated, overlong or malformed
+requests are rejected without accessing a silently shortened path.

@@ -163,7 +163,8 @@ static bool parse_browse_response_with_pagination(const uint8_t* data,
                                                   const char* current_path);
 static bool send_browse_request(WaveX::Comm::ICommInterface* comm_interface,
                                 const char* path,
-                                uint8_t start_index = 0);
+                                uint8_t start_index,
+                                WaveX::Protocol::BrowseFilter filter);
 static void update_visual_selection(wavex_file_browser_t* browser);
 static void browse_resp_callback(const uint8_t* data, size_t length, void* user_data);
 static void storage_status_callback(bool mounted, void* user_data);
@@ -693,7 +694,7 @@ static bool refresh_file_list(wavex_file_browser_t* browser) {
     browser_set_ui_update(browser);
     wavex_ui_mark_content_changed();
 
-    if (!send_browse_request(browser->config.comm_interface, browser->current_path, 0)) {
+    if (!send_browse_request(browser->config.comm_interface, browser->current_path, 0, browser->config.filter)) {
         ESP_LOGE(TAG, "Failed to send browse request");
         browser_clear_pagination_in_progress(browser);
         browser->entry_count = 0;
@@ -850,13 +851,14 @@ static bool parse_browse_response_with_pagination(const uint8_t* data,
 
 static bool send_browse_request(WaveX::Comm::ICommInterface* comm_interface,
                                 const char* path,
-                                uint8_t start_index) {
+                                uint8_t start_index,
+                                WaveX::Protocol::BrowseFilter filter) {
     if (!comm_interface) {
         ESP_LOGE(TAG, "No comm interface available for browse request");
         return false;
     }
 
-    esp_err_t result = comm_interface->sendBrowseRequest(path, start_index);
+    esp_err_t result = comm_interface->sendBrowseRequest(path, start_index, filter);
     if (result != ESP_OK) {
         ESP_LOGE(TAG, "Failed to send browse request: %d", result);
         return false;
@@ -1035,7 +1037,7 @@ static void browse_resp_callback(const uint8_t* data, size_t length, void* user_
                  browser->current_page,
                  browser->entries_per_page,
                  next_start_index);
-        if (!send_browse_request(browser->config.comm_interface, browser->current_path, next_start_index)) {
+        if (!send_browse_request(browser->config.comm_interface, browser->current_path, next_start_index, browser->config.filter)) {
             ESP_LOGE(TAG, "Failed to request next page");
             browser_clear_pagination_in_progress(browser);
         }

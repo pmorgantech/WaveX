@@ -130,6 +130,7 @@ def test_sample_manager_lists_an_imports_samples(esp32, daisy, sfz_path):
     _load_instrument(esp32, daisy, sfz_path, track)
     n = len(daisy.samples())
     assert n >= 1
+    esp32.open_menu("Sample")
     esp32.page("TAB", "Manage")
     st = esp32.wait_state(tab="Manage", rows=lambda r: int(r) >= min(n, 8))
     assert int(st["rows"]) >= 1

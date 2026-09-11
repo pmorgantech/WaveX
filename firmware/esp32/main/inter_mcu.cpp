@@ -995,7 +995,9 @@ void inter_mcu_increment_packet_stat(uint8_t packet_type) {
     s_statistics->increment_packet_stat(packet_type);
 }
 
-esp_err_t inter_mcu_send_browse_req(const char* path, uint8_t start_index) {
+esp_err_t inter_mcu_send_browse_req(const char* path,
+                                    uint8_t start_index,
+                                    WaveX::Protocol::BrowseFilter filter) {
     ESP_LOGD("inter_mcu",
              "inter_mcu_send_browse_req: path='%s', start_index=%d",
              path ? path : "NULL",
@@ -1011,27 +1013,11 @@ esp_err_t inter_mcu_send_browse_req(const char* path, uint8_t start_index) {
         return ESP_ERR_INVALID_ARG;
     }
 
-    // Flexible payload: [start_index][path bytes...][\0]
-    const size_t path_len = strlen(path);
-    const size_t payload_len = 1 + path_len + 1;  // start_index + path + null terminator
-
-    // Fixed buffer, not std::vector: this is a send path, the maximum size is
-    // known from the protocol, and <vector> was only included under
-    // ESP_PLATFORM while the use was unconditional - so the non-ESP branch of
-    // this translation unit could not compile at all. That went unnoticed
-    // because the host tests exclude this file.
-    if (payload_len > 1 + WaveX::Protocol::BROWSE_PATH_MAX + 1) {
-        ESP_LOGE("inter_mcu", "browse path too long (%u)", (unsigned)path_len);
-        return ESP_ERR_INVALID_SIZE;
-    }
-    uint8_t payload[1 + WaveX::Protocol::BROWSE_PATH_MAX + 1] = {0};
-    payload[0] = start_index;
-    memcpy(&payload[1], path, path_len);
-    payload[payload_len - 1] = '\0';
-
-    for (size_t i = 0; i < payload_len && i < 24; i++) {
-        ESP_LOGD("inter_mcu", "  [%d] = 0x%02X", (int)i, payload[i]);
-    }
+    uint8_t payload[WaveX::Protocol::BROWSE_DIRECTORY_PATH_MAX + 2]{};
+    const size_t payload_len =
+        WaveX::Protocol::EncodeBrowseRequest(payload, sizeof(payload), path, start_index, filter);
+    if (!payload_len)
+        return ESP_ERR_INVALID_ARG;
 
     int result = send_uart_message(WaveX::Protocol::MSG_BROWSE_REQ, payload, (uint16_t)payload_len);
 

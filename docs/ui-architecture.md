@@ -222,3 +222,13 @@ Internal pads and sequencer steps continue to address their Track directly.
 The focused two-board HIL verifies routing, external setting refresh and
 preservation of another Track's held note. Physical panel operation remains
 a separate roadmap gate.
+
+### Instrument Browser (as built, 2026-09-11)
+
+Track → Browse and Instrument → Shift → Browse open the dedicated Instrument
+Browser. It reuses the existing browser lifecycle with independent directory and
+selection state. The Daisy filters WXI/SFZ before pagination; Sample → Browse
+lists WAV files. Saved opens /wavex/instruments, Root opens /. Selecting an
+Instrument inspects its referenced samples; Load asks for the target Track and
+confirmation before replacement. The kit HIL test recalls its saved WXI through
+this flow and checks cancellation and preserved pad overrides.

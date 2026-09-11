@@ -59,7 +59,10 @@ class ICommInterface {
     // File browsing operations
     virtual void setBrowseResponseListener(wavex_browse_resp_cb_t cb, void* user_data) = 0;
     virtual void setStorageStatusListener(wavex_storage_status_cb_t cb, void* user_data) = 0;
-    virtual esp_err_t sendBrowseRequest(const char* path, uint8_t start_index) = 0;
+    virtual esp_err_t sendBrowseRequest(
+        const char* path,
+        uint8_t start_index,
+        WaveX::Protocol::BrowseFilter filter = WaveX::Protocol::BrowseFilter::All) = 0;
 
     // Sample control operations
     virtual void setSampleStatusListener(wavex_sample_status_cb_t cb, void* user_data) = 0;

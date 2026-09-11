@@ -466,3 +466,26 @@ TEST_F(FsBrowseTest, CaseInsensitiveWavExtension) {
     EXPECT_EQ(3, total_count);  // All .wav variants, .txt filtered
     EXPECT_EQ(3, entries_written);
 }
+
+TEST_F(FsBrowseTest, FiltersBeforePaginationAndKeepsDirectories) {
+    CreateTestDirectory("/",
+                        {MockFileEntry("Folder", true),
+                         MockFileEntry("a.wav", false),
+                         MockFileEntry("b.WXI", false),
+                         MockFileEntry("c.sfz", false),
+                         MockFileEntry("d.wav", false)});
+    FileEntry entries[2]{};
+    size_t total = 0, written = 0;
+    ASSERT_TRUE(
+        ListDir("/", entries, 2, total, 1, written, WaveX::Protocol::BrowseFilter::Instruments));
+    EXPECT_EQ(total, 3u);
+    ASSERT_EQ(written, 2u);
+    EXPECT_STREQ(entries[0].name, "b.WXI");
+    EXPECT_STREQ(entries[1].name, "c.sfz");
+    ASSERT_TRUE(
+        ListDir("/", entries, 2, total, 0, written, WaveX::Protocol::BrowseFilter::Samples));
+    EXPECT_EQ(total, 3u);
+    ASSERT_EQ(written, 2u);
+    EXPECT_STREQ(entries[0].name, "Folder");
+    EXPECT_STREQ(entries[1].name, "a.wav");
+}

@@ -155,6 +155,7 @@ struct InterMcuCapture {
     esp_err_t send_result = ESP_OK;  // returned by every inter_mcu_send_* mock
     int browse_req_calls = 0;
     char browse_req_path[96] = {0};
+    WaveX::Protocol::BrowseFilter browse_req_filter = WaveX::Protocol::BrowseFilter::All;
     uint8_t browse_req_start_index = 0;
 
     int play_index_req_calls = 0;

@@ -225,7 +225,9 @@ void inter_mcu_set_browse_resp_listener(wavex_browse_resp_cb_t cb, void* user_da
     (void)cb;
     (void)user_data;
 }
-esp_err_t inter_mcu_send_browse_req(const char* path, uint8_t start_index) {
+esp_err_t inter_mcu_send_browse_req(const char* path,
+                                    uint8_t start_index,
+                                    WaveX::Protocol::BrowseFilter filter) {
     auto& cap = WaveX::Test::GetInterMcuCapture();
     cap.browse_req_calls++;
     cap.browse_req_path[0] = '\0';
@@ -234,5 +236,6 @@ esp_err_t inter_mcu_send_browse_req(const char* path, uint8_t start_index) {
         cap.browse_req_path[sizeof(cap.browse_req_path) - 1] = '\0';
     }
     cap.browse_req_start_index = start_index;
+    cap.browse_req_filter = filter;
     return cap.send_result;
 }

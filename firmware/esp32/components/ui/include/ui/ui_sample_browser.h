@@ -108,10 +108,13 @@ struct SampleBrowserState {
 class UISampleBrowser : public UIPage {
    public:
     explicit UISampleBrowser(WaveX::Comm::ICommInterface& comm_interface,
-                             SampleBrowserState& persistent_state);
+                             SampleBrowserState& persistent_state,
+                             bool instruments = false);
     ~UISampleBrowser() override;
 
-    const char* name() const override { return "Sample Browser"; }
+    const char* name() const override {
+        return instruments_ ? "Instrument Browser" : "Sample Browser";
+    }
 
     void onEnter(lv_obj_t* parent) override;
     size_t consoleState(char* out, size_t cap, size_t len) override;
@@ -136,6 +139,7 @@ class UISampleBrowser : public UIPage {
 
     // Persistent state (owned by caller, injected via constructor)
     SampleBrowserState& persistent_state_;
+    const bool instruments_;
 
     // Detail panel (design 1b).
     lv_obj_t* listing_label_ = nullptr;  // "1-20 of 63 - name ^"
@@ -278,5 +282,6 @@ std::shared_ptr<UIPage> createSampleBrowserPage(WaveX::Comm::ICommInterface& com
 
 /// Returns nullptr if the browser has not been created yet.
 SampleBrowserState* getSampleBrowserState();
+std::shared_ptr<UIPage> createInstrumentBrowserPage();
 
 }  // namespace wavex_ui

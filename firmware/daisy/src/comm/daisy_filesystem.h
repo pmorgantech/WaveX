@@ -9,7 +9,10 @@ namespace WaveX {
 namespace Comm {
 
 // Filesystem operation functions
-void ProcessBrowseRequest(const char* path, size_t start_index, uint8_t max_entries = 20);
+void ProcessBrowseRequest(const char* path,
+                          size_t start_index,
+                          uint8_t max_entries = 20,
+                          Protocol::BrowseFilter filter = Protocol::BrowseFilter::All);
 void ProcessSamplePlayRequest(const char* file_path);
 
 // Tell the frontend storage is gone: exit audition mode and clear the browser

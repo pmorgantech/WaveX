@@ -14,25 +14,14 @@ static bool is_dot_entry(const char* name) {
     return (name[0] == '.' && name[1] == '\0');
 }
 
-static bool has_browser_extension(const char* name) {
-    if (!name)
-        return false;
-
-    const char* last_dot = strrchr(name, '.');
-    if (!last_dot)
-        return false;
-
-    const char* ext = last_dot + 1;
-    return strcasecmp(ext, "wav") == 0 || strcasecmp(ext, "sfz") == 0;
-}
-
 bool ListDir(const char* path,
              FileEntry* out,
              size_t max_entries,
              size_t& total_count,
              size_t start_index,
-             size_t& entries_written) {
-    if (!path || !out || max_entries == 0) {
+             size_t& entries_written,
+             Protocol::BrowseFilter filter) {
+    if (!path || !out || max_entries == 0 || !Protocol::BrowseFilterValid(filter)) {
         total_count = 0;
         entries_written = 0;
         return false;
@@ -106,7 +95,7 @@ bool ListDir(const char* path,
         }
 
         bool is_dir = (fno.fattrib & AM_DIR) ? true : false;
-        if (is_dir || has_browser_extension(name)) {
+        if (is_dir || Protocol::BrowseFileMatches(name, filter)) {
             if (all_count < 256) {  // Prevent buffer overflow
                 FileEntry& e = all_entries[all_count++];
                 e.is_dir = is_dir ? 1 : 0;

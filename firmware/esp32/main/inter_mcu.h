@@ -214,7 +214,10 @@ void inter_mcu_handle_sample_stop_response(bool success);
 
 // Request/command functions sent to the backend over the active link (replaces
 // the earlier LinkManager abstraction).
-esp_err_t inter_mcu_send_browse_req(const char* path, uint8_t start_index);
+esp_err_t inter_mcu_send_browse_req(
+    const char* path,
+    uint8_t start_index,
+    WaveX::Protocol::BrowseFilter filter = WaveX::Protocol::BrowseFilter::All);
 // loop_gap_ms: silence between loop passes. The sample browser passes ~300 so
 // a short file does not sound like a drone; the editor passes 0 so the loop
 // seam is heard exactly as it will play.

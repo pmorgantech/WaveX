@@ -376,7 +376,7 @@ class FileBrowserResponseTest : public ::testing::Test {
 
         config_ = wavex_file_browser_config_t{};
         config_.root_path = "/";
-        config_.file_extension = ".wav";
+        config_.filter = WaveX::Protocol::BrowseFilter::Samples;
         config_.max_entries = 50;
         config_.show_hidden = false;
         config_.comm_interface = comm_;

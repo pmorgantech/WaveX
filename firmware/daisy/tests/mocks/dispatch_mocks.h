@@ -53,6 +53,7 @@ struct DispatchRecord {
         std::string path;
         size_t start_index;
         uint8_t max_entries;
+        Protocol::BrowseFilter filter;
     };
     std::vector<BrowseCall> browse_requests;
     std::vector<std::string> play_requests;

@@ -26,9 +26,14 @@ def _split(path):
 
 def _open_browser(esp, path):
     """Sample > Browse, listing `path`'s directory with its file selected."""
-    esp.open_menu("Sample")
-    esp.page("TAB", "Browse")
-    esp.wait_state(tab="Browse")
+    if path.lower().endswith((".sfz", ".wxi")):
+        esp.open_menu("Track")
+        esp.softkey("Browse")
+        esp.wait_state(page="Instrument_Browser")
+    else:
+        esp.open_menu("Sample")
+        esp.page("TAB", "Browse")
+        esp.wait_state(tab="Browse")
     d, f = _split(path)
     esp.page("DIR", d)
     # STATE reports text with spaces as underscores (one flat line).

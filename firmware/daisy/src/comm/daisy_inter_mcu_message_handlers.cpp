@@ -543,56 +543,14 @@ static void HandleStatusRequestMessage(const uint8_t* payload, size_t payload_si
 // Browse request handler - transport agnostic (works via SPI or UART)
 // Requires filesystem support and inter-MCU communication to be enabled
 static void HandleBrowseRequestMessage(const uint8_t* payload, size_t payload_size) {
-    UART_LOGI("daisy_uart", "BROWSE_REQ received: payload_size=%u", (unsigned)payload_size);
-
-    if (!payload || payload_size == 0) {
-        UART_LOGE("daisy_uart", "BROWSE_REQ empty payload");
+    uint8_t start_index = 0;
+    char path[WaveX::Protocol::BROWSE_DIRECTORY_PATH_MAX]{};
+    WaveX::Protocol::BrowseFilter filter{};
+    if (!WaveX::Protocol::DecodeBrowseRequest(payload, payload_size, start_index, path, filter)) {
+        UART_LOGE("daisy_uart", "BROWSE_REQ invalid path or filter");
         return;
     }
-
-    uint8_t start_index = payload[0];
-    const char* path_ptr = reinterpret_cast<const char*>(payload + 1);
-    // A CRC-valid frame carries no guarantee that the path field is
-    // NUL-terminated within payload_size; strlen()/'%s' on it directly can
-    // walk past the payload into whatever follows the stack buffer it was
-    // copied into. Bound the scan to the remaining payload before doing
-    // anything else with path_ptr, including logging it.
-    const size_t max_path_len = payload_size - 1;
-    size_t path_len = strnlen(path_ptr, max_path_len);
-
-    if (s_hw) {
-        WaveX::Log::PrintLine(
-            "DAISY: Parsed start_index=%d, path_ptr='%.*s'", start_index, (int)path_len, path_ptr);
-    }
-    UART_LOGI("daisy_uart",
-              "BROWSE_REQ: start_index=%u path='%.*s'",
-              (unsigned)start_index,
-              (int)path_len,
-              path_ptr);
-
-    char path[96] = {0};
-    if (path_len >= sizeof(path)) {
-        path_len = sizeof(path) - 1;
-    }
-    memcpy(path, path_ptr, path_len);
-    path[path_len] = '\0';
-
-    uint8_t max_entries = 20;  // Default to 20 entries
-
-    if (s_hw) {
-        WaveX::Log::PrintLine(
-            "DAISY: Calling ProcessBrowseRequest with path='%s', start_index=%d, max_entries=%d",
-            path,
-            start_index,
-            max_entries);
-    }
-    UART_LOGI("daisy_uart",
-              "BROWSE_REQ processing: path='%s' start=%u max=%u",
-              path,
-              (unsigned)start_index,
-              max_entries);
-
-    WaveX::Comm::ProcessBrowseRequest(path, start_index, max_entries);
+    WaveX::Comm::ProcessBrowseRequest(path, start_index, 20, filter);
 }
 
 static void HandleBrowseResponseMessage(const uint8_t*, size_t) {}

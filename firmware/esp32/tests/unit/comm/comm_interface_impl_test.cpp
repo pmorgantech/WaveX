@@ -155,12 +155,14 @@ TEST_F(CommInterfaceImplTest, SetSampleStatusListener) {
 // Sends must forward their arguments to the inter_mcu layer and return its
 // result unchanged - the UI shows an error toast off this code.
 TEST_F(CommInterfaceImplTest, SendBrowseRequestForwardsArgsAndResult) {
-    EXPECT_EQ(comm->sendBrowseRequest("/samples", 20), ESP_OK);
+    EXPECT_EQ(comm->sendBrowseRequest("/samples", 20, WaveX::Protocol::BrowseFilter::Instruments),
+              ESP_OK);
 
     const auto& cap = GetInterMcuCapture();
     ASSERT_EQ(cap.browse_req_calls, 1);
     EXPECT_STREQ(cap.browse_req_path, "/samples");
     EXPECT_EQ(cap.browse_req_start_index, 20);
+    EXPECT_EQ(cap.browse_req_filter, WaveX::Protocol::BrowseFilter::Instruments);
 }
 
 TEST_F(CommInterfaceImplTest, SendBrowseRequestPropagatesLinkFailure) {
