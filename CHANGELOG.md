@@ -19,10 +19,10 @@ versioning and release process.
   envelope phase, LFO phase and actual note age; map/sample assignment and
   Instrument replacement retain their stop/next-note boundaries. HIL verified
   gain/pan and oscillator zero-to-restore, muted/restored Env 2/3 routes and
-  both LFO pan routes through DSP meters. The clean capacity run before these
-  held-note changes remains the accepted 68.0921% STAY result. The clean
-  held-edit repeat reached 71.1283% peak and is REVIEW; callback optimization
-  is required before further callback scope.
+  both LFO pan routes through DSP meters. The clean held-edit repeat reached
+  71.1283% peak and was REVIEW; the subsequent clean filter-cache repeat
+  reached 69.0852% peak and is STAY. Callback optimization remains required
+  before further callback scope.
 
 - Added the Instrument LFO touch page with two selectable per-voice LFOs and
   eight tiles in two rows for waveform, Hz rate, sync, retrigger, delay, fade
