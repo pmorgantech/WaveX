@@ -499,3 +499,9 @@ It reads main-loop state; it does not inspect or log from the audio callback.
 different file and that Sample Edit audition preserves Track bindings.
 The `MSG` payload and line bounds live in `debug/console_command.h`; they
 cover the current `SampleLoadMessage`, checked at compile time.
+
+The Daisy `OSC <track> <oscillator>` debug query reads the same authoritative
+oscillator snapshot as the transport (zero-based indices). It reports revision,
+last completed edit/error, type, occupied zone count, coarse/fine tuning and
+key tracking; level and mix use thousandths. It is read-only. Changes use the
+normal `MSG_INST_OSC_OP` dispatcher, including revision and busy checks.

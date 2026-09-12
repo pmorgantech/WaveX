@@ -12,10 +12,13 @@
 
 namespace WaveX::Comm {
 static WaveX::Protocol::InstKeyMapSyncMessage last_key_map;
+static WaveX::Protocol::InstOscSyncMessage last_osc;
 static WaveX::Protocol::TrackStateMessage last_track_state;
 static WaveX::Protocol::InstZoneSyncMessage last_pad_map;
 static WaveX::Protocol::InstPadSoundSyncMessage last_pad_sound;
 int UartLinkSend(uint16_t type, const void* payload, uint16_t length) {
+    if (type == WaveX::Protocol::MSG_INST_OSC_SYNC && length == sizeof(last_osc))
+        std::memcpy(&last_osc, payload, length);
     if (type == WaveX::Protocol::MSG_INST_KEY_MAP_SYNC && length == sizeof(last_key_map))
         std::memcpy(&last_key_map, payload, length);
     if (type == WaveX::Protocol::MSG_INST_ZONE_SYNC && length == sizeof(last_pad_map))
@@ -699,4 +702,67 @@ TEST_F(SfzLoaderTest, ClearingOscillatorOneRetainsSamplesStillOwnedByOscillatorT
     EXPECT_EQ(SfzLoader::BoundSample(0), 0);
     ASSERT_TRUE(SfzLoader::BindSample(pool_, memory_, 0, 0));
     EXPECT_EQ(pool_.Count(), 0u);
+}
+
+TEST_F(SfzLoaderTest, OscillatorCopyAndSettingsPreserveOwnershipAndRejectStaleEdits) {
+    ASSERT_TRUE(Load(0));
+    InstOscOpMessage request;
+    request.request_id = 4000;
+    request.oscillator = 1;
+    EXPECT_FALSE(SfzLoader::OnOscOp(request));
+    SfzLoader::PumpEditorReply();
+    auto reply = WaveX::Comm::last_osc;
+    ASSERT_EQ(reply.valid, 1);
+    ASSERT_EQ(reply.zones, 0);
+    request.request_id++;
+    request.revision = reply.revision;
+    request.op = INST_OSC_COPY_EMPTY;
+    ASSERT_TRUE(SfzLoader::OnOscOp(request));
+    SfzLoader::PumpEditorReply();
+    reply = WaveX::Comm::last_osc;
+    EXPECT_EQ(reply.zones, 2);
+    EXPECT_EQ(reply.type, 1);
+    EXPECT_EQ(pool_.Count(), 2u);
+    EXPECT_EQ(SfzLoader::VoiceStopTrack(), 0xFF);  // no old source was invalidated
+    ASSERT_NE(reply.revision, request.revision);
+    EXPECT_FALSE(SfzLoader::OnOscOp(request));  // duplicate delivery is idempotent
+    request.request_id++;
+    request.op = INST_OSC_SET;
+    request.value = {0.75f, 0.5f, 12, -25, 0, 0};
+    EXPECT_FALSE(SfzLoader::OnOscOp(request));  // stale revision
+    SfzLoader::PumpEditorReply();
+    EXPECT_EQ(WaveX::Comm::last_osc.error, INST_ERROR_BAD_FILE);
+    request.request_id++;
+    request.revision = reply.revision;
+    ASSERT_TRUE(SfzLoader::OnOscOp(request));
+    SfzLoader::PumpEditorReply();
+    reply = WaveX::Comm::last_osc;
+    EXPECT_FLOAT_EQ(reply.value.mix, 0.5f);
+    EXPECT_FLOAT_EQ(reply.value.level, 0.75f);
+    EXPECT_EQ(reply.value.coarse, 12);
+    EXPECT_EQ(reply.value.keytrack, 0);
+    request.request_id++;
+    request.revision = reply.revision;
+    request.op = INST_OSC_COPY_EMPTY;
+    EXPECT_FALSE(SfzLoader::OnOscOp(request));  // populated destination is preserved
+    SfzLoader::PumpEditorReply();
+    EXPECT_EQ(WaveX::Comm::last_osc.error, INST_ERROR_EXISTS);
+    ASSERT_NE(pool_.Find(SampleId("/kits/a.wav")), nullptr);
+    EXPECT_EQ(pool_.Find(SampleId("/kits/a.wav"))->used_by, 1);
+    EXPECT_EQ(Edit(INST_OP_SAVE, 0, "Dual settings").error, INST_ERROR_NONE);
+    ASSERT_TRUE(SfzLoader::BindSample(pool_, memory_, 0, 0));
+    EXPECT_EQ(pool_.Count(), 0u);
+    ASSERT_TRUE(SfzLoader::Load("0:/wavex/instruments/Dual settings.wxi",
+                                0,
+                                pool_,
+                                memory_,
+                                io_.data(),
+                                static_cast<uint32_t>(io_.size())));
+    request.request_id++;
+    request.op = INST_OSC_GET;
+    SfzLoader::OnOscOp(request);
+    SfzLoader::PumpEditorReply();
+    EXPECT_EQ(WaveX::Comm::last_osc.zones, 2);
+    EXPECT_FLOAT_EQ(WaveX::Comm::last_osc.value.mix, 0.5f);
+    EXPECT_EQ(WaveX::Comm::last_osc.value.fine, -25);
 }

@@ -217,9 +217,9 @@ edit followed by Save preserves these stored settings. The loader plans up
 to 64 zone references and deduplicates paths across both maps. Removing a zone
 releases a sample only when neither oscillator still uses it.
 
-This milestone establishes storage and ownership. The active renderer and
-existing Key Map/Pad Map controls still address Oscillator 1; Oscillator 2
-rendering, additional modulators and their controls are the next stage.
+This milestone establishes storage and ownership. The existing Key Map/Pad Map controls still address Oscillator 1.
+The following renderer milestone adds Oscillator 2; additional modulators
+and touch controls remain open.
 Reserved wavetable sources remain unimplemented. Output/poly mode are retained
 settings, not a claim that their routing/voice policy is active.
 
@@ -229,3 +229,27 @@ their existing regions. The SRAM-debug layout places those records in its
 spare AXI range and moves document scratch within its guarded budgets.
 Both layouts compile; the host tests cover field preservation, cross-map
 sample deduplication and sample retention when Oscillator 1 is cleared.
+
+## Two sample sources per voice
+
+Each oscillator resolves its own key/velocity map. The nth valid match from
+each map forms one voice, in stable zone order; each zone is used once and
+the existing four-layer limit remains. A missing partner is silent.
+The Oscillator 1 match owns shared filter, amp, pan, choke and note-off
+overrides; Oscillator 2 supplies them when no Oscillator 1 match exists.
+Oscillator levels and the linear mix apply before the shared filter.
+Instrument trim gain and tuning compose with each zone's settings.
+
+Each source keeps its own native-rate compensation, tuning, region, loop
+and fade. With two sources, region fades apply before the submix.
+A shorter source becomes silent while its partner plays; reaching both
+source ends releases the shared envelope. MIDI note-off and Track stop
+retain their shared-voice behavior. Pitch and normalized position locks
+affect both sources using each source's own region and tuning.
+
+The output uses one mono submix and a shared Instrument/zone pan.
+Stored oscillator pan fields remain reserved; independent stereo oscillator
+panning is not exposed. The transport can read/edit oscillator level, mix,
+coarse/fine tune and key tracking, and copy a map into an empty oscillator.
+Those edits affect future triggers. Touch controls, additional envelopes/LFOs
+and their modulation destinations remain the next implementation steps.

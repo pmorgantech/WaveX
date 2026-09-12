@@ -46,6 +46,7 @@ struct DispatchRecord {
     std::vector<WaveX::Protocol::MidiClockEventMessage> midi_clock_events;
     std::vector<WaveX::Protocol::MidiCcMessage> midi_ccs;
     std::vector<WaveX::Protocol::TrackStateRequest> track_state_requests;
+    std::vector<WaveX::Protocol::InstOscOpMessage> osc_ops;
     std::vector<WaveX::Protocol::InstKeyMapOpMessage> key_map_ops;
     std::vector<WaveX::Protocol::InstPadSoundOpMessage> pad_sound_ops;
     std::vector<WaveX::Protocol::InstOpMessage> instrument_ops;

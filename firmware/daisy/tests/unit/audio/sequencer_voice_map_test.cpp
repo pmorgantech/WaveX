@@ -228,3 +228,60 @@ TEST_F(SequencerVoiceMapTest, IndexedDrumPadsMatchLiveResolutionAndRetireAcrossM
     ASSERT_FALSE(map.tracks[15].direct_drum);
     compare();
 }
+
+TEST_F(SequencerVoiceMapTest, DualMapsPairInOrderWithIndependentTuningAndGain) {
+    instrument.osc[1].type = OscType::Sample;
+    instrument.osc[1].keytrack = 0;
+    instrument.osc[1].coarse_tune = 12;
+    instrument.osc_mix = 0.25f;
+    instrument.trim_gain = 0.8f;
+    for (uint8_t i = 0; i < 5; ++i) {
+        instrument.osc[1].zones[i] = instrument.osc[0].zones[i];
+        instrument.osc[1].zones[i].key_lo = 0;
+        instrument.osc[1].zones[i].key_hi = 127;
+        instrument.osc[1].zones[i].sample_id = 32 - i;
+    }
+    map.PrepareTrack(0, instrument, resolver);
+    for (uint8_t note = 0; note < 128; ++note) {
+        for (uint8_t vel: {uint8_t{1}, uint8_t{60}, uint8_t{127}}) {
+            VoiceTriggerParams live[4], prepared[4];
+            auto count = ResolveNoteOn(instrument, 0, note, vel, resolver, live, 4);
+            ASSERT_EQ(count, map.Resolve(0, note, vel, prepared));
+            for (uint8_t i = 0; i < count; ++i) {
+                EXPECT_EQ(live[i].sample, prepared[i].sample);
+                EXPECT_EQ(live[i].note, prepared[i].note);
+                EXPECT_FLOAT_EQ(live[i].source_level, prepared[i].source_level);
+                EXPECT_FLOAT_EQ(live[i].gain_mul, prepared[i].gain_mul);
+                EXPECT_EQ(live[i].secondary.sample, prepared[i].secondary.sample);
+                EXPECT_EQ(live[i].secondary.note, prepared[i].secondary.note);
+                EXPECT_FLOAT_EQ(live[i].secondary.pitch_ratio_mul,
+                                prepared[i].secondary.pitch_ratio_mul);
+                EXPECT_FLOAT_EQ(live[i].secondary.source_level, prepared[i].secondary.source_level);
+            }
+        }
+    }
+    VoiceTriggerParams out[4];
+    ASSERT_EQ(map.Resolve(0, 0, 60, out), 4);
+    EXPECT_EQ(out[0].sample, samples[0]);
+    EXPECT_EQ(out[0].secondary.sample, samples[31]);
+    EXPECT_EQ(out[1].sample, samples[30]);  // no second primary match: secondary alone
+    EXPECT_EQ(out[1].secondary.sample, nullptr);
+    SequencerVoiceMap copy;
+    copy.CopyLiveFrom(map);
+    map.Revoke(1);
+    copy.CopyLiveFrom(map);
+    EXPECT_EQ(copy.Resolve(0, 0, 60, out), 0);
+}
+
+TEST_F(SequencerVoiceMapTest, DisabledSourcesDoNotResolveStaleZones) {
+    instrument.osc[1] = instrument.osc[0];
+    instrument.osc[0].type = OscType::Off;
+    instrument.osc_mix = 1;
+    map.PrepareTrack(0, instrument, resolver);
+    VoiceTriggerParams out[4];
+    ASSERT_GT(map.Resolve(0, 0, 70, out), 0);
+    EXPECT_EQ(out[0].secondary.sample, nullptr);
+    instrument.osc[1].type = OscType::Wavetable;
+    map.PrepareTrack(0, instrument, resolver);
+    EXPECT_EQ(map.Resolve(0, 0, 70, out), 0);
+}

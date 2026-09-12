@@ -241,24 +241,30 @@ inline VoiceTriggerParams PrepareZoneTrigger(const Instrument& ins,
                                              const SampleRef& ref,
                                              uint8_t track,
                                              uint8_t note,
-                                             uint8_t velocity) {
+                                             uint8_t velocity,
+                                             uint8_t oscillator = 0) {
     VoiceTriggerParams p;
     p.sample = ref.data;
     p.sample_frames = ref.frames;
     p.channels = ref.channels;
     p.sample_rate_hz = ref.sample_rate_hz;
-    p.note = (ins.mode == InstrumentMode::Drum) ? zone.root_note : note;
+    const auto& osc = ins.osc[oscillator];
+    p.note = (ins.mode == InstrumentMode::Drum || !osc.keytrack) ? zone.root_note : note;
     p.trigger_note = note;
     p.velocity = velocity;
     p.root_note = zone.root_note;
-    p.pan = zone.pan;
+    p.pan = zone.pan + ins.trim_pan - 0.5f;
     p.track = track;
     p.choke_group = zone.choke_group;
     p.one_shot = (zone.flags & ZONE_FLAG_ONE_SHOT) != 0;
     p.own_filter_env = (zone.flags & ZONE_FLAG_OWN_FILTER_ENV) != 0;
 
-    p.gain_mul = zone.gain * ref.gain_mul;
-    p.pitch_ratio_mul = TuneRatio(zone.coarse_tune, zone.fine_tune);
+    p.gain_mul = zone.gain * ref.gain_mul * ins.trim_gain;
+    const float mix = ins.osc_mix < 0 ? 0 : (ins.osc_mix > 1 ? 1 : ins.osc_mix);
+    p.source_level = osc.level * (oscillator == 0 ? 1.0f - mix : mix);
+    p.pitch_ratio_mul = TuneRatio(zone.coarse_tune, zone.fine_tune) *
+                        TuneRatio(osc.coarse_tune, osc.fine_tune) *
+                        TuneRatio(ins.transpose, ins.fine_tune);
 
     // Region/loop: the zone's value where it sets one, otherwise the
     // sample's own record. Fades have no zone field yet, so they are
@@ -304,6 +310,17 @@ inline VoiceTriggerParams PrepareZoneTrigger(const Instrument& ins,
 // Filter and envelope come from the Instrument unless the zone overrides
 // them (ZONE_FLAG_OWN_FILTER_ENV) - so this needs no engine state at all,
 // which is why the live-params argument it used to take is gone.
+// Pair the nth valid match from each map. Each zone is used at most once;
+// there is no Cartesian product and the four-voice layer bound is unchanged.
+// Primary matching zone owns shared filter/ADSR/pan/choke/note-off policy.
+inline void PairOscillatorTrigger(VoiceTriggerParams& primary,
+                                  const VoiceTriggerParams& secondary) {
+    primary.secondary = static_cast<const VoiceSampleParams&>(secondary);
+    primary.source_level *= primary.gain_mul;
+    primary.secondary.source_level *= secondary.gain_mul;
+    primary.gain_mul = 1.0f;
+}
+
 inline uint8_t ResolveNoteOn(const Instrument& ins,
                              uint8_t track,
                              uint8_t note,
@@ -316,24 +333,32 @@ inline uint8_t ResolveNoteOn(const Instrument& ins,
     if (max > kMaxLayerTriggers)
         max = kMaxLayerTriggers;
 
-    uint8_t count = 0;
-    for (uint8_t z = 0; z < kMaxZones && count < max; ++z) {
-        const Zone& zone = ins.osc[0].zones[z];
-        if (!zone.in_use)
+    uint8_t counts[2]{};
+    VoiceTriggerParams secondary[kMaxLayerTriggers];
+    for (uint8_t osc = 0; osc < kNumOscillators; ++osc) {
+        if (ins.osc[osc].type != OscType::Sample)
             continue;
-        if (note < zone.key_lo || note > zone.key_hi)
-            continue;
-        if (velocity < zone.vel_lo || velocity > zone.vel_hi)
-            continue;
-
-        SampleRef ref = resolver.Get(zone.sample_id);
-        if (!ref.valid())
-            continue;
-
-        VoiceTriggerParams p = PrepareZoneTrigger(ins, zone, ref, track, note, velocity);
-        p.gain_mul *= VelocityXfadeGain(zone, velocity);
-        out[count++] = p;
+        auto* dest = osc == 0 ? out : secondary;
+        for (uint8_t z = 0; z < kMaxZones && counts[osc] < max; ++z) {
+            const Zone& zone = ins.osc[osc].zones[z];
+            if (!zone.in_use || note < zone.key_lo || note > zone.key_hi ||
+                velocity < zone.vel_lo || velocity > zone.vel_hi)
+                continue;
+            const auto ref = resolver.Get(zone.sample_id);
+            if (!ref.valid())
+                continue;
+            auto p = PrepareZoneTrigger(ins, zone, ref, track, note, velocity, osc);
+            p.gain_mul *= VelocityXfadeGain(zone, velocity);
+            dest[counts[osc]++] = p;
+        }
     }
+    for (uint8_t i = 0; i < counts[1]; ++i) {
+        if (i < counts[0])
+            PairOscillatorTrigger(out[i], secondary[i]);
+        else
+            out[i] = secondary[i];
+    }
+    const uint8_t count = counts[0] > counts[1] ? counts[0] : counts[1];
     return count;
 }
 

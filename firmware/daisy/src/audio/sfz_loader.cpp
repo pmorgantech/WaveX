@@ -438,6 +438,8 @@ static InstZoneSyncMessage s_zone_reply;
 static bool s_zone_pending = false;
 static InstPadSoundSyncMessage s_sound_reply;
 static bool s_sound_pending = false;
+static InstOscSyncMessage s_osc_reply;
+static bool s_osc_pending = false;
 static InstKeyMapSyncMessage s_key_reply;
 static InstKeyMapOpMessage s_key_request;
 static bool s_key_pending = false, s_key_assignment = false;
@@ -473,6 +475,38 @@ void QueueZoneReply(uint32_t id, uint8_t track, uint8_t immediate_error = 0) {
         s_zone_reply.error = immediate_error;
     }
     s_zone_pending = true;
+}
+void FillOscReply(const InstOscOpMessage& request,
+                  InstOscSyncMessage& out,
+                  uint8_t immediate_error = 0) {
+    out = InstOscSyncMessage{};
+    out.request_id = request.request_id;
+    out.track = request.track;
+    out.oscillator = request.oscillator;
+    if (request.track >= kNumTracks || request.oscillator >= kNumOscillators) {
+        out.error = INST_ERROR_BAD_FILE;
+        return;
+    }
+    const auto& ins = s_bank->At(request.track).instrument;
+    const auto& osc = ins.osc[request.oscillator];
+    out.valid = ins.origin != InstrumentOrigin::None;
+    out.busy = s_phase != Phase::Idle;
+    out.revision = s_key_revision[request.track];
+    out.completed_request_id = s_edit_completed[request.track];
+    out.error = s_edit_error[request.track];
+    out.type = static_cast<uint8_t>(osc.type);
+    for (const auto& zone: osc.zones)
+        if (zone.in_use)
+            ++out.zones;
+    out.value = {osc.level, ins.osc_mix, osc.coarse_tune, osc.fine_tune, osc.keytrack, 0};
+    if (immediate_error) {
+        out.completed_request_id = request.request_id;
+        out.error = immediate_error;
+    }
+}
+void QueueOscReply(const InstOscOpMessage& request, uint8_t immediate_error = 0) {
+    FillOscReply(request, s_osc_reply, immediate_error);
+    s_osc_pending = true;
 }
 void QueueKeyReply(uint32_t id, uint8_t track, uint8_t immediate_error = 0) {
     s_key_reply = InstKeyMapSyncMessage{};
@@ -594,6 +628,7 @@ void Reset() {
     s_sound_pending = false;
     s_track_pending = false;
     s_key_pending = s_key_assignment = false;
+    s_osc_pending = false;
     if (s_bank)
         WaveX::ReconstructInPlace(*s_bank);
     else
@@ -818,6 +853,58 @@ void ConfirmVoicesStopped(SamplePool& pool, SampleMemMgr& memory) {
     SendStatus(INST_STATUS_LOAD_BEGIN);
 }
 
+InstOscSyncMessage ReadOscState(uint8_t track, uint8_t oscillator) {
+    InstOscOpMessage request;
+    request.track = track;
+    request.oscillator = oscillator;
+    InstOscSyncMessage out;
+    FillOscReply(request, out);
+    return out;
+}
+bool OnOscOp(const InstOscOpMessage& request) {
+    if (!IsValidInstOscOp(request)) {
+        QueueOscReply(request, INST_ERROR_BAD_FILE);
+        return false;
+    }
+    if (request.op == INST_OSC_GET || s_edit_completed[request.track] == request.request_id) {
+        QueueOscReply(request);
+        return false;
+    }
+    if (Busy()) {
+        QueueOscReply(request, INST_ERROR_BUSY);
+        return false;
+    }
+    auto& ins = s_bank->At(request.track).instrument;
+    auto& osc = ins.osc[request.oscillator];
+    uint8_t error = INST_ERROR_NONE;
+    if (ins.origin == InstrumentOrigin::None || request.revision != s_key_revision[request.track]) {
+        error = INST_ERROR_BAD_FILE;
+    } else if (request.op == INST_OSC_COPY_EMPTY) {
+        const auto& source = ins.osc[request.source];
+        if (source.type != OscType::Sample)
+            error = INST_ERROR_BAD_FILE;
+        for (const auto& zone: osc.zones)
+            if (zone.in_use)
+                error = INST_ERROR_EXISTS;
+        // No ownership transfer: every copied sample already has this Track's
+        // Pool reference. No old zone or sounding voice is removed.
+        if (!error)
+            osc = source;
+    } else {
+        osc.level = request.value.level;
+        osc.coarse_tune = request.value.coarse;
+        osc.fine_tune = request.value.fine;
+        osc.keytrack = request.value.keytrack;
+        ins.osc_mix = request.value.mix;
+    }
+    s_edit_completed[request.track] = request.request_id;
+    s_edit_error[request.track] = error;
+    if (!error)
+        BumpKeyRevision(request.track);
+    QueueOscReply(request);
+    return error == INST_ERROR_NONE;
+}
+
 bool OnKeyMapOp(const InstKeyMapOpMessage& request) {
     if (!IsValidKeyMapOp(request)) {
         QueueKeyReply(request.request_id, request.track, INST_ERROR_BAD_FILE);
@@ -915,6 +1002,9 @@ void OnTrackStateRequest(const TrackStateRequest& request) {
     Protocol::detail::CopyWireString(out.name, sizeof(out.name), ins.name);
 }
 void PumpEditorReply() {
+    if (s_osc_pending &&
+        WaveX::Comm::UartLinkSend(MSG_INST_OSC_SYNC, &s_osc_reply, sizeof(s_osc_reply)) >= 0)
+        s_osc_pending = false;
     if (s_key_pending &&
         WaveX::Comm::UartLinkSend(MSG_INST_KEY_MAP_SYNC, &s_key_reply, sizeof(s_key_reply)) >= 0)
         s_key_pending = false;

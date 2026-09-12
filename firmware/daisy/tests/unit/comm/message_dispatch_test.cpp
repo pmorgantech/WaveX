@@ -804,3 +804,13 @@ TEST_F(MessageDispatchTest, KeyMapDispatchRequiresExactPayload) {
     ASSERT_EQ(GetDispatchRecord().key_map_ops.size(), 1u);
     EXPECT_EQ(GetDispatchRecord().key_map_ops[0].request_id, 1u);
 }
+
+TEST_F(MessageDispatchTest, OscillatorDispatchRequiresExactPayload) {
+    InstOscOpMessage m;
+    m.request_id = 1;
+    ProcessInterMcuMessage(MSG_INST_OSC_OP, 1, reinterpret_cast<const uint8_t*>(&m), sizeof(m) - 1);
+    EXPECT_TRUE(GetDispatchRecord().osc_ops.empty());
+    ProcessInterMcuMessage(MSG_INST_OSC_OP, 1, reinterpret_cast<const uint8_t*>(&m), sizeof(m));
+    ASSERT_EQ(GetDispatchRecord().osc_ops.size(), 1u);
+    EXPECT_EQ(GetDispatchRecord().osc_ops[0].request_id, 1u);
+}

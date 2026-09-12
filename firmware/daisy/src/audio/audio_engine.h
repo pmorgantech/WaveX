@@ -71,6 +71,7 @@ void GetSampleMemStatus(WaveX::Protocol::SampleMemStatusMessage& out);
 // deliberately outside the narrow first slice.
 bool LoadSfzInstrument(const char* path, uint8_t slot);
 void OnTrackStateRequest(const WaveX::Protocol::TrackStateRequest& request);
+void OnOscOp(const WaveX::Protocol::InstOscOpMessage& request);
 void OnKeyMapOp(const WaveX::Protocol::InstKeyMapOpMessage& request);
 void OnPadSoundOp(const WaveX::Protocol::InstPadSoundOpMessage& request);
 void OnInstrumentOp(const WaveX::Protocol::InstOpMessage& request);

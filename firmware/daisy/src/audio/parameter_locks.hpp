@@ -6,17 +6,30 @@
 
 namespace WaveX {
 namespace AudioEngine {
+inline void ApplySourcePositionLock(VoiceSampleParams& p, const Sequencer::ParamLock& lock) {
+    const uint32_t end =
+        p.end_frame && p.end_frame < p.sample_frames ? p.end_frame : p.sample_frames;
+    const uint32_t start = p.start_frame < end ? p.start_frame : 0;
+    const uint32_t loop_end = p.loop_end && p.loop_end < end ? p.loop_end : end;
+    const uint32_t loop_start = p.loop_start < loop_end ? p.loop_start : start;
+    if (lock.param_id == Protocol::PARAM_SAMPLE_START && end > start && end - start >= 2)
+        p.start_frame = start + static_cast<uint32_t>(
+                                    (static_cast<uint64_t>(end - start - 2) * lock.value) / 65535u);
+    if (lock.param_id == Protocol::PARAM_LOOP_START && p.loop && loop_end > loop_start &&
+        loop_end - loop_start >= 2)
+        p.loop_start =
+            loop_start +
+            static_cast<uint32_t>((static_cast<uint64_t>(loop_end - loop_start - 2) * lock.value) /
+                                  65535u);
+}
 // Callback-only, bounded to four locks. Does not mutate the Instrument,
 // prepared map, sample metadata or any other voice. Modulation is applied later.
 inline void ApplyParamLocks(VoiceTriggerParams& p, const Sequencer::ParamLock* locks, uint8_t n) {
     using namespace Protocol;
     if (!locks)
         return;
-    const uint32_t end =
-        p.end_frame && p.end_frame < p.sample_frames ? p.end_frame : p.sample_frames;
-    const uint32_t start = p.start_frame < end ? p.start_frame : 0;
-    const uint32_t loop_end = p.loop_end && p.loop_end < end ? p.loop_end : end;
-    const uint32_t loop_start = p.loop_start < loop_end ? p.loop_start : start;
+    const auto original = static_cast<const VoiceSampleParams&>(p);
+    const auto original_secondary = p.secondary;
     for (uint8_t i = 0; i < n && i < Sequencer::kMaxParamLocks; ++i) {
         const auto& lock = locks[i];
         if (!Sequencer::IsVoiceLockParameter(lock.param_id))
@@ -52,19 +65,19 @@ inline void ApplyParamLocks(VoiceTriggerParams& p, const Sequencer::ParamLock* l
                 p.gain_mul *= static_cast<float>(lock.value) / 32768.0f;
                 break;
             case PARAM_SAMPLE_START:
-                if (end > start && end - start >= 2)
-                    p.start_frame =
-                        start + static_cast<uint32_t>(
-                                    (static_cast<uint64_t>(end - start - 2) * lock.value) / 65535u);
-                break;
-            case PARAM_LOOP_START:
-                if (p.loop && loop_end > loop_start && loop_end - loop_start >= 2)
-                    p.loop_start =
-                        loop_start +
-                        static_cast<uint32_t>(
-                            (static_cast<uint64_t>(loop_end - loop_start - 2) * lock.value) /
-                            65535u);
-                break;
+            case PARAM_LOOP_START: {
+                auto primary = original;
+                auto secondary = original_secondary;
+                ApplySourcePositionLock(primary, lock);
+                ApplySourcePositionLock(secondary, lock);
+                if (lock.param_id == PARAM_SAMPLE_START) {
+                    p.start_frame = primary.start_frame;
+                    p.secondary.start_frame = secondary.start_frame;
+                } else {
+                    p.loop_start = primary.loop_start;
+                    p.secondary.loop_start = secondary.loop_start;
+                }
+            } break;
             default:
                 break;
         }

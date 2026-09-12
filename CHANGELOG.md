@@ -13,6 +13,12 @@ versioning and release process.
 
 ### Added
 
+- Added dual-source voice rendering for independently resolved Sample
+  oscillator maps paired within the existing four-layer cap and mixed through
+  the shared mono filter/amp path. Oscillator level, mix, tuning, key tracking,
+  pitch/start locks, transport readback, empty-map copy, and WXI retention are
+  covered; touch oscillator controls and additional modulators remain open.
+
 - Added the Instrument storage and ownership foundation: WXI mapping now
   round-trips two oscillator maps, three envelopes, two LFO settings, filter
   tracking, tuning, mix, tags, output/poly settings, and modulation fields;

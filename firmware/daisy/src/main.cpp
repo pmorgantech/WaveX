@@ -286,6 +286,30 @@ static void DispatchConsoleCommand(const WaveX::Debug::Command& c) {
             }
             len = AppendKvText(reply, sizeof(reply), len, key, val);
         }
+    } else if (std::strcmp(c.verb, "OSC") == 0) {
+        long track, oscillator;
+        if (!NextInt(&p, &track) || !NextInt(&p, &oscillator) || track < 0 || track >= 16 ||
+            oscillator < 0 || oscillator >= 2) {
+            FormatErr(seq, "badosc", reply, sizeof(reply));
+        } else {
+            const auto state = WaveX::AudioEngine::SfzLoader::ReadOscState(
+                static_cast<uint8_t>(track), static_cast<uint8_t>(oscillator));
+            size_t len = FormatOk(seq, reply, sizeof(reply));
+            len = AppendKvInt(reply, sizeof(reply), len, "valid", state.valid);
+            len = AppendKvInt(reply, sizeof(reply), len, "busy", state.busy);
+            len = AppendKvInt(reply, sizeof(reply), len, "revision", state.revision);
+            len = AppendKvInt(reply, sizeof(reply), len, "completed", state.completed_request_id);
+            len = AppendKvInt(reply, sizeof(reply), len, "error", state.error);
+            len = AppendKvInt(reply, sizeof(reply), len, "type", state.type);
+            len = AppendKvInt(reply, sizeof(reply), len, "zones", state.zones);
+            len = AppendKvInt(
+                reply, sizeof(reply), len, "level", static_cast<long>(state.value.level * 1000));
+            len = AppendKvInt(
+                reply, sizeof(reply), len, "mix", static_cast<long>(state.value.mix * 1000));
+            len = AppendKvInt(reply, sizeof(reply), len, "coarse", state.value.coarse);
+            len = AppendKvInt(reply, sizeof(reply), len, "fine", state.value.fine);
+            AppendKvInt(reply, sizeof(reply), len, "keytrack", state.value.keytrack);
+        }
     } else if (std::strcmp(c.verb, "ROUTING") == 0) {
         // m<i>=<midi_in> for every Track (0 Omni, 1..16 as displayed, 255
         // Off). Its own verb rather than more keys on TRACKS: `reply` is

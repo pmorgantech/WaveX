@@ -158,6 +158,8 @@ enum MessageType : uint8_t {
     MSG_INST_PAD_SOUND_SYNC = 0x66,  // D->E: effective values and retained completion
     MSG_TRACK_STATE_REQ = 0x64,      // E->D: request selected Track settings
     MSG_INST_KEY_MAP_OP = 0x68,      // E->D: read/edit keyboard zone map
+    MSG_INST_OSC_OP = 0x6A,          // E->D: oscillator read/settings/copy into empty map
+    MSG_INST_OSC_SYNC = 0x6B,        // D->E: authoritative oscillator settings
     MSG_INST_KEY_MAP_SYNC = 0x69,    // D->E: 32 stable slots, revision and edit outcome
     MSG_TRACK_STATE = 0x67,          // D->E: authoritative Track settings and binding
     MSG_TRACK_OP = 0x63,             // E->D: one Track setting (track-and-patch-model.md §2)
@@ -1928,6 +1930,41 @@ struct InstZoneSyncMessage {
 } __attribute__((packed));
 static_assert(sizeof(InstZoneSyncMessage) <= 122, "pad map fits a 128-byte packet");
 
+enum InstOscOp : uint8_t { INST_OSC_GET = 0, INST_OSC_SET = 1, INST_OSC_COPY_EMPTY = 2 };
+struct InstOscSettings {
+    float level = 1.0f, mix = 0.0f;
+    int8_t coarse = 0, fine = 0;
+    uint8_t keytrack = 1, reserved = 0;
+} __attribute__((packed));
+struct InstOscOpMessage {
+    uint32_t request_id = 0, revision = 0;
+    uint8_t track = 0, oscillator = 0, op = INST_OSC_GET, source = 0;
+    InstOscSettings value{};
+} __attribute__((packed));
+struct InstOscSyncMessage {
+    uint32_t request_id = 0, completed_request_id = 0, revision = 0;
+    uint8_t track = 0, oscillator = 0, valid = 0, busy = 0;
+    uint8_t error = 0, type = 0, zones = 0, reserved = 0;
+    InstOscSettings value{};
+} __attribute__((packed));
+static_assert(sizeof(InstOscOpMessage) == 24, "oscillator request wire size");
+static_assert(sizeof(InstOscSyncMessage) == 32, "oscillator snapshot wire size");
+inline bool IsValidInstOscOp(const InstOscOpMessage& m) {
+    if (!m.request_id || m.track >= 16 || m.oscillator >= 2 || m.source >= 2 ||
+        m.op > INST_OSC_COPY_EMPTY || m.value.reserved)
+        return false;
+    if (m.op == INST_OSC_GET)
+        return true;
+    if (!m.revision)
+        return false;
+    if (m.op == INST_OSC_COPY_EMPTY)
+        return m.source != m.oscillator;
+    // Inclusive comparisons reject infinities and NaNs without a libm dependency.
+    return m.value.level >= 0 && m.value.level <= 2 && m.value.mix >= 0 && m.value.mix <= 1 &&
+           m.value.coarse >= -48 && m.value.coarse <= 48 && m.value.fine >= -100 &&
+           m.value.fine <= 100 && m.value.keytrack <= 1;
+}
+
 // Key Map edits target stable slots, never a packed/sorted view. Revisions
 // invalidate stale edits after replacement even when a sample id is reused.
 static constexpr uint8_t INST_KEY_ZONE_COUNT = 32;
@@ -2525,6 +2562,10 @@ inline const char* MessageTypeName(uint8_t type) {
             return "INST_OP";
         case MSG_INST_STATUS:
             return "INST_STATUS";
+        case MSG_INST_OSC_OP:
+            return "INST_OSC_OP";
+        case MSG_INST_OSC_SYNC:
+            return "INST_OSC_SYNC";
         case MSG_INST_KEY_MAP_OP:
             return "INST_KEY_MAP_OP";
         case MSG_INST_KEY_MAP_SYNC:

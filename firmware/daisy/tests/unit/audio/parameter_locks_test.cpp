@@ -157,3 +157,26 @@ TEST(ParameterLockEditing, SlotReplacementIsAtomicUniqueAndBounded) {
     EXPECT_EQ(page.steps[15].locks[3].parameter, 0);
 }
 }  // namespace
+
+TEST(ParameterLocks, SourcePositionsUseEachOscillatorsOriginalRegion) {
+    VoiceTriggerParams p;
+    p.sample_frames = 100;
+    p.start_frame = 10;
+    p.loop = true;
+    p.loop_start = 20;
+    p.loop_end = 80;
+    p.secondary.sample_frames = 300;
+    p.secondary.start_frame = 50;
+    p.secondary.loop = true;
+    p.secondary.loop_start = 60;
+    p.secondary.loop_end = 250;
+    WaveX::Sequencer::ParamLock locks[] = {{WaveX::Protocol::PARAM_SAMPLE_START, 65535},
+                                           {WaveX::Protocol::PARAM_LOOP_START, 65535},
+                                           {WaveX::Protocol::PARAM_PITCH, 65535}};
+    ApplyParamLocks(p, locks, 3);
+    EXPECT_EQ(p.start_frame, 98u);
+    EXPECT_EQ(p.secondary.start_frame, 298u);
+    EXPECT_EQ(p.loop_start, 78u);
+    EXPECT_EQ(p.secondary.loop_start, 248u);
+    EXPECT_FLOAT_EQ(p.locked_pitch_scale, 4.0f);
+}

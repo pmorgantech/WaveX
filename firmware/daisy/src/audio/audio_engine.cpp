@@ -2929,6 +2929,12 @@ bool LoadSfzInstrument(const char* path, uint8_t slot) {
 void OnTrackStateRequest(const TrackStateRequest& request) {
     SfzLoader::OnTrackStateRequest(request);
 }
+void OnOscOp(const InstOscOpMessage& request) {
+    if (SfzLoader::OnOscOp(request)) {
+        PublishSequencerVoiceMap(static_cast<uint16_t>(1u << request.track));
+        PushTrackBinding(request.track);
+    }
+}
 void OnKeyMapOp(const InstKeyMapOpMessage& request) {
     if (SfzLoader::OnKeyMapOp(request)) {
         PublishSequencerVoiceMap(static_cast<uint16_t>(1u << request.track));

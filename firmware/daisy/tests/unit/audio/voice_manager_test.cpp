@@ -2071,3 +2071,92 @@ TEST(VoiceManagerLiveParamsTest, InstrumentEditsPreserveSoundingZoneOverrides) {
     EXPECT_FLOAT_EQ(vm.GetVoice(0).envelope.Level(), .3f);
     EXPECT_FLOAT_EQ(vm.GetVoice(1).envelope.Level(), .8f);
 }
+
+TEST(VoiceManagerDualSource, SubmixPassesThroughOneSharedFilterAndEnvelope) {
+    std::vector<int16_t> first(256, 16384), second(256, 8192), mixed(256, 12288);
+    VoiceManager dual, reference;
+    dual.Init(48000);
+    reference.Init(48000);
+    auto p = FlatParams(first.data(), first.size(), 60, 127, 0.3f);
+    p.source_level = 0.5f;
+    p.secondary = static_cast<const WaveX::AudioEngine::VoiceSampleParams&>(p);
+    p.secondary.sample = second.data();
+    p.filter_cutoff_hz = 1500;
+    p.filter_resonance = 0.8f;
+    auto expected = p;
+    expected.sample = mixed.data();
+    expected.source_level = 1;
+    expected.secondary = {};
+    dual.Trigger(p);
+    reference.Trigger(expected);
+    float l[64], r[64], el[64], er[64];
+    dual.Render(l, r, 64);
+    reference.Render(el, er, 64);
+    EXPECT_EQ(dual.ActiveVoiceCount(), 1);
+    for (size_t i = 0; i < 64; ++i) {
+        EXPECT_FLOAT_EQ(l[i], el[i]);
+        EXPECT_FLOAT_EQ(r[i], er[i]);
+    }
+}
+
+TEST(VoiceManagerDualSource, ShortSourceFallsSilentWhileLoopedPartnerContinues) {
+    std::vector<int16_t> first(4, 16384), second(64, 8192);
+    VoiceManager vm;
+    vm.Init(48000);
+    auto p = FlatParams(first.data(), first.size(), 60, 127, 0);
+    p.secondary = static_cast<const WaveX::AudioEngine::VoiceSampleParams&>(p);
+    p.secondary.sample = second.data();
+    p.secondary.sample_frames = static_cast<uint32_t>(second.size());
+    p.secondary.loop = true;
+    vm.Trigger(p);
+    float l[32], r[32];
+    vm.Render(l, r, 32);
+    EXPECT_EQ(vm.ActiveVoiceCount(), 1);
+    EXPECT_FALSE(vm.GetVoice(0).envelope.IsReleasing());
+    EXPECT_FLOAT_EQ(l[0], 0.75f);
+    EXPECT_FLOAT_EQ(l[20], 0.25f);
+    vm.Release(60);
+    vm.Render(l, r, 32);
+    EXPECT_EQ(vm.ActiveVoiceCount(), 0);
+}
+
+TEST(VoiceManagerDualSource, LastSourceEndReleasesVoiceAndStealClearsSecondary) {
+    std::vector<int16_t> first(4, 16384), second(12, 8192);
+    VoiceManager vm;
+    vm.Init(48000);
+    auto p = FlatParams(first.data(), first.size(), 60, 127, 0);
+    p.secondary = static_cast<const WaveX::AudioEngine::VoiceSampleParams&>(p);
+    p.secondary.sample = second.data();
+    p.secondary.sample_frames = static_cast<uint32_t>(second.size());
+    vm.Trigger(p);
+    float l[32], r[32];
+    vm.Render(l, r, 32);
+    EXPECT_EQ(vm.ActiveVoiceCount(), 0);
+    p.secondary = {};
+    vm.Trigger(p);
+    EXPECT_EQ(vm.GetVoice(0).secondary.sample, nullptr);
+    vm.Render(l, r, 32);
+    EXPECT_FLOAT_EQ(l[0], 0.5f);
+}
+
+TEST(VoiceManagerDualSource, IndependentNativeRateTuningAndLivePitch) {
+    std::vector<int16_t> data(512, 12000);
+    VoiceManager vm;
+    vm.Init(48000);
+    auto p = FlatParams(data.data(), data.size(), 60, 127, 0);
+    p.secondary = static_cast<const WaveX::AudioEngine::VoiceSampleParams&>(p);
+    p.secondary.sample_rate_hz = 24000;
+    p.secondary.pitch_ratio_mul = 4;
+    p.secondary.start_frame = 10;
+    vm.Trigger(p);
+    float l[16], r[16];
+    vm.Render(l, r, 16);
+    EXPECT_EQ(vm.GetVoice(0).phase.Frame(), 16u);
+    EXPECT_EQ(vm.GetVoice(0).secondary.phase.Frame(), 42u);
+    WaveX::AudioEngine::VoiceLiveParams edit;
+    edit.pitch_semitones = 12;
+    vm.ApplyLiveParams(edit);
+    vm.Render(l, r, 16);
+    EXPECT_EQ(vm.GetVoice(0).phase.Frame(), 48u);
+    EXPECT_EQ(vm.GetVoice(0).secondary.phase.Frame(), 106u);
+}

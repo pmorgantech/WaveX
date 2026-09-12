@@ -19,15 +19,18 @@ struct SequencerVoiceMap {
     // A small lookup window, not a limit on supported note ranges or zones.
     static constexpr uint8_t kDirectDrumKeys = 16;
     static constexpr uint8_t kNoZone = 0xFF;
-    struct PreparedTrack {
-        // Foreground-only cache identity. The callback never inspects it.
-        uint64_t revision = 0;
+    struct PreparedOscillator {
         uint8_t count = 0;
         bool direct_drum = false;
         uint8_t drum_base = 0;
         uint8_t drum_zones[kDirectDrumKeys]{};
         Key keys[kMaxZones]{};
         VoiceTriggerParams zones[kMaxZones]{};
+    };
+    // The base holds Oscillator 1's prepared map; Oscillator 2 is independent.
+    struct PreparedTrack : PreparedOscillator {
+        uint64_t revision = 0;  // foreground cache identity, not callback state
+        PreparedOscillator secondary;
     };
     PreparedTrack tracks[kNumTracks]{};
 
@@ -36,25 +39,36 @@ struct SequencerVoiceMap {
             return;
         auto& dest = tracks[track];
         ++dest.revision;
+        PrepareOscillator(dest, instrument, resolver, track, 0);
+        PrepareOscillator(dest.secondary, instrument, resolver, track, 1);
+    }
+
+    static void PrepareOscillator(PreparedOscillator& dest,
+                                  const Instrument& instrument,
+                                  const SampleResolver& resolver,
+                                  uint8_t track,
+                                  uint8_t osc) {
         dest.count = 0;
         dest.direct_drum = false;
-        if (instrument.origin == InstrumentOrigin::None)
+        if (instrument.origin == InstrumentOrigin::None ||
+            instrument.osc[osc].type != OscType::Sample)
             return;
-        for (const auto& zone: instrument.osc[0].zones) {
+        for (const auto& zone: instrument.osc[osc].zones) {
             if (!zone.in_use)
                 continue;
             const auto sample = resolver.Get(zone.sample_id);
             if (!sample.valid())
                 continue;
             const auto index = dest.count++;
-            dest.keys[index] = {zone.key_lo,
-                                zone.key_hi,
-                                zone.vel_lo,
-                                zone.vel_hi,
-                                zone.flags,
-                                instrument.mode == InstrumentMode::Drum};
+            dest.keys[index] = {
+                zone.key_lo,
+                zone.key_hi,
+                zone.vel_lo,
+                zone.vel_hi,
+                zone.flags,
+                instrument.mode == InstrumentMode::Drum || !instrument.osc[osc].keytrack};
             dest.zones[index] =
-                PrepareZoneTrigger(instrument, zone, sample, track, zone.root_note, 127);
+                PrepareZoneTrigger(instrument, zone, sample, track, zone.root_note, 127, osc);
         }
         // Derive only when every prepared zone owns one distinct note in a
         // compact window. Velocity bounds/fades still use the zone key.
@@ -92,6 +106,25 @@ struct SequencerVoiceMap {
         if (max > kMaxLayerTriggers)
             max = kMaxLayerTriggers;
         const auto& source = tracks[track];
+        const auto first = ResolveOscillator(source, note, velocity, out, max);
+        if (source.secondary.count == 0)
+            return first;
+        VoiceTriggerParams secondary[kMaxLayerTriggers];
+        const auto second = ResolveOscillator(source.secondary, note, velocity, secondary, max);
+        for (uint8_t i = 0; i < second; ++i) {
+            if (i < first)
+                PairOscillatorTrigger(out[i], secondary[i]);
+            else
+                out[i] = secondary[i];
+        }
+        return first > second ? first : second;
+    }
+
+    static uint8_t ResolveOscillator(const PreparedOscillator& source,
+                                     uint8_t note,
+                                     uint8_t velocity,
+                                     VoiceTriggerParams* out,
+                                     uint8_t max) {
         uint8_t begin = 0;
         uint8_t end = source.count < kMaxZones ? source.count : kMaxZones;
         if (source.direct_drum) {
@@ -134,24 +167,31 @@ struct SequencerVoiceMap {
             if (src.revision != 0 && dest.revision == src.revision)
                 continue;
             dest.revision = src.revision;
-            dest.count = src.count < kMaxZones ? src.count : kMaxZones;
-            dest.direct_drum = src.direct_drum;
-            dest.drum_base = src.drum_base;
-            if (src.direct_drum)
-                for (uint8_t i = 0; i < kDirectDrumKeys; ++i)
-                    dest.drum_zones[i] = src.drum_zones[i];
-            for (uint8_t i = 0; i < dest.count; ++i) {
-                dest.keys[i] = src.keys[i];
-                dest.zones[i] = src.zones[i];
-            }
+            CopyOscillator(dest, src);
+            CopyOscillator(dest.secondary, src.secondary);
+        }
+    }
+
+    static void CopyOscillator(PreparedOscillator& dest, const PreparedOscillator& src) {
+        dest.count = src.count < kMaxZones ? src.count : kMaxZones;
+        dest.direct_drum = src.direct_drum;
+        dest.drum_base = src.drum_base;
+        if (src.direct_drum)
+            for (uint8_t i = 0; i < kDirectDrumKeys; ++i)
+                dest.drum_zones[i] = src.drum_zones[i];
+        for (uint8_t i = 0; i < dest.count; ++i) {
+            dest.keys[i] = src.keys[i];
+            dest.zones[i] = src.zones[i];
         }
     }
 
     void Revoke(uint16_t mask) {
         for (uint8_t track = 0; track < kNumTracks; ++track)
-            if ((mask & (1u << track)) && tracks[track].count != 0) {
+            if ((mask & (1u << track)) &&
+                (tracks[track].count != 0 || tracks[track].secondary.count != 0)) {
                 ++tracks[track].revision;
                 tracks[track].count = 0;
+                tracks[track].secondary.count = 0;
             }
     }
 };

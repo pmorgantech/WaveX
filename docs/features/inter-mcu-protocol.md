@@ -331,3 +331,15 @@ replaces one slot, rejects unsupported or duplicate ids, and accepts parameter
 zero to clear it. Field assignments and stable ids live in
 [protocol.h](../../firmware/shared/spi_protocol/protocol.h). Full pattern readback
 acknowledges accepted edits; no optimistic UI value becomes the pattern authority.
+
+## Oscillator settings and readback
+
+The centralized `InstOscOpMessage` / `InstOscSyncMessage` contract in
+`protocol.h` adds oscillator GET, SET and copy-into-empty-map operations.
+SET updates level, coarse/fine tuning, key tracking and the Instrument's
+oscillator mix. Reads return the authoritative values, map occupancy,
+Instrument revision and retained mutation outcome. Mutations require that
+revision; a stale edit, busy loader or occupied copy destination is rejected.
+Copying a map reuses this Track's existing Sample Pool references. These
+operations change future triggers through the immutable prepared-map handoff.
+They do not implement per-oscillator stereo pan, wavetable playback or Bank recall.

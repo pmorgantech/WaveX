@@ -115,8 +115,7 @@ struct VoiceAmpParams {
     float attack = 0.001f, decay = 0.05f, sustain = 0.8f, release = 0.1f;
 };
 
-struct Voice {
-    VoiceState state = VoiceState::Idle;
+struct VoiceSampleState {
     const int16_t* sample = nullptr;  // RAM-resident, interleaved; not owned by Voice
     uint32_t sample_frames = 0;
     uint8_t src_channels = 1;  // interleave stride: 1 = mono, 2 = stereo (averaged to mono)
@@ -128,20 +127,6 @@ struct Voice {
     // Kept so ApplyLiveParams can re-apply a pitch offset without losing key
     // tracking - recomputing from `increment` would compound each edit.
     float base_increment = 1.0f;
-    float gain = 0.0f;                 // 0..1, derived from velocity (× gain_mul)
-    float pan = 0.5f;                  // 0=left, 1=right, linear (not equal-power)
-    uint8_t note = 0;                  // MIDI note that triggered this voice
-    uint16_t start_offset_frames = 0;  // consumed by the next Render() call
-    uint8_t track = 0;                 // Track that owns this voice
-    uint8_t choke_group = 0;           // 0 = none; 1..N = mutual-exclusion group (open/closed hat)
-    bool own_filter_env = false;       // zone overrides survive Instrument live edits
-    uint16_t param_lock_mask = 0;
-    VoiceAmpParams amp_params;
-    float base_resonance = 0;
-    float locked_pitch_scale = 1;
-    bool one_shot = false;  // ignore note-off; stop at the sample/region end
-    uint32_t age = 0;       // trigger order, for stealing/release-newest-first
-
     // Playback region + loop (item 4). end_frame/loop_end are exclusive.
     uint32_t start_frame = 0;
     uint32_t end_frame = 0;
@@ -155,6 +140,36 @@ struct Voice {
     // marker move change the envelope, or an envelope change move the de-click.
     uint32_t fade_in_frames = 0;
     uint32_t fade_out_frames = 0;
+
+    void SetIncrement(float rate) {
+        increment = rate;
+        PlaybackPhase::SplitRate(rate, increment_frames, increment_fraction);
+    }
+
+    void AdvancePhase() { phase.Advance(increment_frames, increment_fraction); }
+
+    float source_level = 1.0f;
+};
+
+// The base is the primary sample cursor; the second cursor has independent
+// region, rate and lifetime. Both feed this voice's shared DSP chain.
+struct Voice : VoiceSampleState {
+    VoiceSampleState secondary;
+
+    VoiceState state = VoiceState::Idle;
+    float gain = 0.0f;                 // 0..1, derived from velocity (× gain_mul)
+    float pan = 0.5f;                  // 0=left, 1=right, linear (not equal-power)
+    uint8_t note = 0;                  // MIDI note that triggered this voice
+    uint16_t start_offset_frames = 0;  // consumed by the next Render() call
+    uint8_t track = 0;                 // Track that owns this voice
+    uint8_t choke_group = 0;           // 0 = none; 1..N = mutual-exclusion group (open/closed hat)
+    bool own_filter_env = false;       // zone overrides survive Instrument live edits
+    uint16_t param_lock_mask = 0;
+    VoiceAmpParams amp_params;
+    float base_resonance = 0;
+    float locked_pitch_scale = 1;
+    bool one_shot = false;  // ignore note-off; stop at the sample/region end
+    uint32_t age = 0;       // trigger order, for stealing/release-newest-first
 
     VoiceFilter filter;
     Envelope envelope;
@@ -192,13 +207,6 @@ struct Voice {
 
     bool IsFree() const { return state == VoiceState::Idle; }
 
-    void SetIncrement(float rate) {
-        increment = rate;
-        PlaybackPhase::SplitRate(rate, increment_frames, increment_fraction);
-    }
-
-    void AdvancePhase() { phase.Advance(increment_frames, increment_fraction); }
-
     // Writes this block's modulation multipliers - one struct write, called
     // from the control tick (VoiceManager::TickModulation), consumed at the
     // top of Render()'s per-voice slice. Callback-safe.
@@ -216,89 +224,33 @@ struct Voice {
 // precedent elsewhere in this codebase for why named fields over positional
 // sprawl). Only `sample`/`sample_frames` are required; everything else has
 // a sensible default for a plain one-shot voice.
-struct VoiceTriggerParams {
+// Primary-source fields remain directly addressable for single-sample callers.
+// A second source carries no duplicate filter, envelope or Track authority.
+struct VoiceSampleParams {
     const int16_t* sample = nullptr;
-    uint32_t sample_frames = 0;
-    // Interleaved channel count of `sample` (1 or 2). A stereo source is
-    // averaged to mono before the per-voice filter/envelope/pan chain -
-    // voices are mono-in by design (pan re-places them in the stereo
-    // field). Loaded WAVs are stored raw/interleaved (see audio_engine
-    // OnSampleLoad), so item 8's note path needs this to play 16-bit
-    // stereo files without a load-time downmix pass.
-    uint8_t channels = 1;
-    uint8_t note = 60;
-    // Incoming key used to release the voice. 0xFF means use `note`. This is
-    // distinct in drum mode, where `note` is forced to root_note to disable
-    // pitch tracking but note-off must still match the pad key that fired.
-    uint8_t trigger_note = 0xFF;
-    uint8_t velocity = 127;
-    // Intra-block start position for a scheduled trigger. The callback sets
-    // this from TriggerEvent::frame; ordinary MIDI note-ons retain 0.
+    uint32_t sample_frames = 0, sample_rate_hz = 0;
+    uint8_t channels = 1, note = 60, root_note = 60;
+    float pitch_ratio_mul = 1.0f, source_level = 1.0f;
+    uint32_t start_frame = 0, end_frame = 0;
+    bool loop = false;
+    uint32_t loop_start = 0, loop_end = 0;
+    uint16_t fade_in_ms = 0, fade_out_ms = 0;
+};
+struct VoiceTriggerParams : VoiceSampleParams {
+    VoiceSampleParams secondary;
+    uint8_t trigger_note = 0xFF, velocity = 127;
     uint16_t start_offset_frames = 0;
     float pan = 0.5f;
-    uint8_t root_note = 60;  // note at which `sample` plays at its recorded pitch
-
-    // Instrument-model routing (instrument-model.md §3). track identifies the
-    // owning Track (for StopTrack on rebind); choke_group != 0 mutes
-    // other voices in the same group at trigger time (open/closed hat).
-    uint8_t track = 0;
-    uint8_t choke_group = 0;
-    bool own_filter_env = false;  // zone overrides survive Instrument live edits
+    uint8_t track = 0, choke_group = 0;
+    bool own_filter_env = false;
     uint16_t param_lock_mask = 0;
     float locked_pitch_scale = 1;
     bool one_shot = false;
-
-    // Post-resolution multipliers the instrument layer folds in without
-    // re-deriving the base velocity/pitch: gain_mul scales the velocity gain
-    // (zone gain, mixer trim, gain modulation); pitch_ratio_mul multiplies
-    // the note/root pitch ratio (coarse/fine tune, tuning tables, pitch
-    // modulation). Both default to 1.0 (identity) so the plain MIDI path is
-    // unchanged.
     float gain_mul = 1.0f;
-    float pitch_ratio_mul = 1.0f;
-
-    // The sample's native rate in Hz. 0 (default) means "same as the
-    // engine" - no compensation. When set (e.g. 44100 for a 44.1kHz WAV on
-    // the 48kHz engine), playback rate is scaled by native/engine so the
-    // sample plays at its recorded pitch without resampling its data -
-    // the fractional-phase linear interpolation in Render() does the work
-    // (dma-timing-review-2026-07-03.md Finding 1, "playback-rate
-    // compensation" option).
-    uint32_t sample_rate_hz = 0;
-
-    uint32_t start_frame = 0;
-    uint32_t end_frame = 0;  // 0 => sample_frames
-    bool loop = false;
-    uint32_t loop_start = 0;
-    uint32_t loop_end = 0;  // 0 => end_frame
-    // Region fades in milliseconds, at the sample's own rate. Converted to
-    // frames at Trigger() so Render() does no division per block.
-    uint16_t fade_in_ms = 0;
-    uint16_t fade_out_ms = 0;
-
-    float filter_cutoff_hz = 20000.0f;  // effectively open by default
-    // 0 = no resonance, 1 = strongly resonant (svf_filter.hpp maps this onto
-    // Q). Defaults to 0 so an unset trigger sounds like the plain lowpass the
-    // one-pole used to give - adding the SVF must not put a peak on every
-    // voice that never asked for one.
-    float filter_resonance = 0.0f;
-
-    float attack_s = 0.001f;
-    float decay_s = 0.05f;
-    float sustain_level = 0.8f;
-    float release_s = 0.1f;
-
-    // Second envelope (param-locks-and-modulation.md §4), exposed only as
-    // SRC_ENV_FILTER - it does not touch the filter itself except through a
-    // mod slot routing it there. Defaults match the amp envelope above
-    // rather than anything zone-derived: Zone has no ADSR-for-SRC_ENV_FILTER
-    // fields yet (that's a wire-Zone chunk version bump, roadmap Phase 2.5
-    // item 4, still open), so every trigger gets this same shape until a
-    // zone can carry its own.
-    float filter_env_attack_s = 0.001f;
-    float filter_env_decay_s = 0.05f;
-    float filter_env_sustain_level = 0.8f;
-    float filter_env_release_s = 0.1f;
+    float filter_cutoff_hz = 20000.0f, filter_resonance = 0.0f;
+    float attack_s = 0.001f, decay_s = 0.05f, sustain_level = 0.8f, release_s = 0.1f;
+    float filter_env_attack_s = 0.001f, filter_env_decay_s = 0.05f;
+    float filter_env_sustain_level = 0.8f, filter_env_release_s = 0.1f;
 };
 
 // Resolves a voice's owning Track (Voice::track) to that
@@ -462,6 +414,8 @@ class VoiceManager {
             // live transpose stacks on key tracking instead of flattening every
             // voice to the same rate.
             v.SetIncrement(v.base_increment * VoicePitchScale(v));
+            if (v.secondary.sample)
+                v.secondary.SetIncrement(v.secondary.base_increment * VoicePitchScale(v));
         }
     }
 
@@ -482,9 +436,6 @@ class VoiceManager {
         Voice& v = voices_[static_cast<size_t>(idx)];
 
         v.state = VoiceState::Playing;
-        v.sample = params.sample;
-        v.sample_frames = params.sample_frames;
-        v.src_channels = (params.channels == 2) ? 2 : 1;
         v.gain = (static_cast<float>(params.velocity) / 127.0f) * params.gain_mul;
         v.pan = params.pan < 0.0f ? 0.0f : (params.pan > 1.0f ? 1.0f : params.pan);
         v.note = params.trigger_note == 0xFF ? params.note : params.trigger_note;
@@ -521,47 +472,10 @@ class VoiceManager {
         rng_ ^= rng_ << 5;
         v.mod_random = (static_cast<float>(rng_ >> 8) / 8388608.0f) - 1.0f;
 
-        v.start_frame = params.start_frame < params.sample_frames ? params.start_frame : 0;
-        v.end_frame = (params.end_frame == 0 || params.end_frame > params.sample_frames)
-                          ? params.sample_frames
-                          : params.end_frame;
-        v.loop = params.loop;
-        v.loop_start = params.loop_start < v.end_frame ? params.loop_start : v.start_frame;
-        v.loop_end =
-            (params.loop_end == 0 || params.loop_end > v.end_frame) ? v.end_frame : params.loop_end;
-        // A degenerate loop region (loop_end <= loop_start + 1) has no playable
-        // length: Render()'s wrap check would reset phase to loop_start every
-        // sample, freezing the voice on one value for as long as it's held.
-        // Trigger() is the single place that establishes region invariants, so
-        // enforce it here rather than trusting every future caller (e.g. the
-        // Phase 2.5 zone-sync path) to pre-validate.
-        if (v.loop && v.loop_end <= v.loop_start + 1)
-            v.loop = false;
-        v.phase.SetFrame(v.start_frame);
-
-        // Fades count in source frames, so they use the sample's own rate -
-        // not the engine's. A 44.1 kHz sample on a 48 kHz engine advances
-        // 0.919 source frames per output frame, and using the engine rate here
-        // would make the ramp 9% short in source terms, i.e. it would end
-        // before the region boundary it exists to cover.
-        const uint32_t src_rate = params.sample_rate_hz ? params.sample_rate_hz : sample_rate_;
-        v.fade_in_frames = FadeFrames(params.fade_in_ms, src_rate);
-        v.fade_out_frames = FadeFrames(params.fade_out_ms, src_rate);
-
-        // Pitch: 12-TET ratio relative to the sample's recorded root note,
-        // times native-rate/engine-rate compensation (a 44.1kHz sample on a
-        // 48kHz engine advances 0.919 source frames per output frame so it
-        // plays at recorded pitch).
-        const float rate_ratio =
-            (params.sample_rate_hz > 0)
-                ? static_cast<float>(params.sample_rate_hz) / static_cast<float>(sample_rate_)
-                : 1.0f;
-        v.base_increment = rate_ratio * params.pitch_ratio_mul *
-                           std::pow(2.0f,
-                                    static_cast<float>(static_cast<int>(params.note) -
-                                                       static_cast<int>(params.root_note)) /
-                                        12.0f);
-        v.SetIncrement(v.base_increment * VoicePitchScale(v));
+        InitSource(v, params, VoicePitchScale(v));
+        v.secondary = VoiceSampleState{};
+        if (params.secondary.sample && params.secondary.sample_frames >= 2)
+            InitSource(v.secondary, params.secondary, VoicePitchScale(v));
 
         v.filter.SetConfig(filter_config_);
         v.base_cutoff_hz = params.filter_cutoff_hz;
@@ -685,8 +599,13 @@ class VoiceManager {
             pan = pan < 0.0f ? 0.0f : (pan > 1.0f ? 1.0f : pan);
             const float left_gain = gain * (1.0f - pan);
             const float right_gain = gain * pan;
-            const uint32_t last_valid_frame = v.end_frame - 1;
-            const uint32_t loop_len = v.loop_end - v.loop_start;
+            const bool dual = v.secondary.sample != nullptr;
+            if (dual) {
+                const float rate =
+                    v.secondary.base_increment * VoicePitchScale(v) * v.mod_pitch_mul;
+                if (rate != v.secondary.increment)
+                    v.secondary.SetIncrement(rate);
+            }
 
             // Region fades, prepared once per voice per block: Prepare() holds
             // the only divides, so the per-sample Gain() below is a multiply
@@ -698,85 +617,50 @@ class VoiceManager {
                           v.start_frame, v.end_frame, v.fade_in_frames, v.fade_out_frames)
                     : RegionFade{};
             const bool apply_region_fade = region_fade.Active();
+            const RegionFade fade2 =
+                dual && (v.secondary.fade_in_frames || v.secondary.fade_out_frames)
+                    ? RegionFade::Prepare(v.secondary.start_frame,
+                                          v.secondary.end_frame,
+                                          v.secondary.fade_in_frames,
+                                          v.secondary.fade_out_frames)
+                    : RegionFade{};
 
             for (size_t i = 0; i < block_size; ++i) {
                 if (i < start_offset)
                     continue;
-                bool holding_release_tail = false;
-                if (v.loop && v.phase.Frame() >= v.loop_end) {
-                    // Wrap by the loop length so the fractional phase (and
-                    // with it the exact loop period/pitch) is preserved. The
-                    // window is [loop_start, loop_end): its final frame does
-                    // get rendered, interpolating toward loop_start below.
-                    v.phase.SubtractFrames(loop_len);
-                    if (v.phase.Frame() >= v.loop_end || v.phase.Frame() < v.loop_start) {
-                        // Phase far outside the window (start_frame beyond
-                        // loop_end, or increment > loop length): snap rather
-                        // than loop an unbounded number of subtractions here.
-                        v.phase.SetFrame(v.loop_start);
-                    }
-                } else if (!v.loop && v.phase.Frame() >= last_valid_frame) {
-                    // Reached the end of a non-looping sample: start the
-                    // release tail (or, if already releasing, this just
-                    // confirms we're done - the envelope-idle check below
-                    // frees the voice). Freeze the read position at the
-                    // region boundary instead of continuing to advance
-                    // phase - for a trimmed sample (end_frame <
-                    // sample_frames) letting phase run on would read
-                    // whatever raw audio follows the trim point for the
-                    // whole release time.
-                    v.envelope.Release();
-                    holding_release_tail = true;
-                }
-
-                uint32_t idx0, idx1;
-                float frac;
-                if (holding_release_tail) {
-                    idx0 = last_valid_frame;
-                    // frac is 0, so idx1's sample is never blended in - but the
-                    // read still happens, and idx0 == end_frame - 1 means
-                    // idx0 + 1 == end_frame, one frame past this voice's region
-                    // (the whole allocation when end_frame == sample_frames).
-                    // Mirror the non-tail branch's clamp instead of reading it.
-                    idx1 = idx0;
-                    frac = 0.0f;
+                uint32_t frame = 0;
+                bool ended = false;
+                float s = ReadSource(v, frame, ended);
+                if (dual) {
+                    uint32_t frame2 = 0;
+                    bool ended2 = false;
+                    float s2 = ReadSource(v.secondary, frame2, ended2);
+                    // A shorter source falls silent while its partner continues.
+                    // Only both source ends release the shared amplitude envelope.
+                    if (ended && !ended2)
+                        s = 0;
+                    if (ended2 && !ended)
+                        s2 = 0;
+                    if (ended && ended2)
+                        v.envelope.Release();
+                    if (apply_region_fade)
+                        s *= region_fade.Gain(frame);
+                    if (fade2.Active())
+                        s2 *= fade2.Gain(frame2);
+                    s = s * v.source_level + s2 * v.secondary.source_level;
+                    if (!ended2)
+                        v.secondary.AdvancePhase();
                 } else {
-                    idx0 = v.phase.Frame();
-                    if (v.loop && idx0 + 1 >= v.loop_end && idx0 >= v.loop_start) {
-                        // Circular seam: the loop window's final frame
-                        // interpolates toward loop_start, not toward the
-                        // frame after the window (which may be trimmed-off
-                        // audio, or out of bounds when loop_end ==
-                        // sample_frames).
-                        idx1 = v.loop_start;
-                    } else {
-                        if (idx0 >= v.sample_frames - 1)
-                            idx0 = v.sample_frames -
-                                   2;  // clamp: envelope release masks the tail anyway
-                        idx1 = idx0 + 1;
-                    }
-                    frac = v.phase.Fraction();
+                    if (ended)
+                        v.envelope.Release();
+                    s *= v.source_level;
                 }
-                float s0, s1;
-                if (v.src_channels == 2) {
-                    // Interleaved stereo source: average L/R to mono.
-                    s0 = (static_cast<float>(v.sample[idx0 * 2]) +
-                          static_cast<float>(v.sample[idx0 * 2 + 1])) *
-                         0.5f / 32768.0f;
-                    s1 = (static_cast<float>(v.sample[idx1 * 2]) +
-                          static_cast<float>(v.sample[idx1 * 2 + 1])) *
-                         0.5f / 32768.0f;
-                } else {
-                    s0 = static_cast<float>(v.sample[idx0]) / 32768.0f;
-                    s1 = static_cast<float>(v.sample[idx1]) / 32768.0f;
-                }
-                float s = s0 + (s1 - s0) * frac;
 
                 s = v.filter.Process(s);
                 float env = v.envelope.Process();
                 s *= env;
-                if (apply_region_fade) {
-                    s *= region_fade.Gain(idx0);
+                if (!dual && apply_region_fade) {
+                    s *= region_fade.Gain(frame);
                 }
 
                 out_l[i] += s * left_gain;
@@ -787,7 +671,8 @@ class VoiceManager {
                     break;
                 }
 
-                v.AdvancePhase();
+                if (!ended)
+                    v.AdvancePhase();
             }
         }
     }
@@ -906,6 +791,128 @@ class VoiceManager {
     }
 
    private:
+    void InitSource(VoiceSampleState& v, const VoiceSampleParams& params, float pitch_scale) {
+        v.sample = params.sample;
+        v.sample_frames = params.sample_frames;
+        v.src_channels = (params.channels == 2) ? 2 : 1;
+        v.source_level = params.source_level;
+        v.start_frame = params.start_frame < params.sample_frames ? params.start_frame : 0;
+        v.end_frame = (params.end_frame == 0 || params.end_frame > params.sample_frames)
+                          ? params.sample_frames
+                          : params.end_frame;
+        v.loop = params.loop;
+        v.loop_start = params.loop_start < v.end_frame ? params.loop_start : v.start_frame;
+        v.loop_end =
+            (params.loop_end == 0 || params.loop_end > v.end_frame) ? v.end_frame : params.loop_end;
+        // A degenerate loop region (loop_end <= loop_start + 1) has no playable
+        // length: Render()'s wrap check would reset phase to loop_start every
+        // sample, freezing the voice on one value for as long as it's held.
+        // Trigger() is the single place that establishes region invariants, so
+        // enforce it here rather than trusting every future caller (e.g. the
+        // Phase 2.5 zone-sync path) to pre-validate.
+        if (v.loop && v.loop_end <= v.loop_start + 1)
+            v.loop = false;
+        v.phase.SetFrame(v.start_frame);
+
+        // Fades count in source frames, so they use the sample's own rate -
+        // not the engine's. A 44.1 kHz sample on a 48 kHz engine advances
+        // 0.919 source frames per output frame, and using the engine rate here
+        // would make the ramp 9% short in source terms, i.e. it would end
+        // before the region boundary it exists to cover.
+        const uint32_t src_rate = params.sample_rate_hz ? params.sample_rate_hz : sample_rate_;
+        v.fade_in_frames = FadeFrames(params.fade_in_ms, src_rate);
+        v.fade_out_frames = FadeFrames(params.fade_out_ms, src_rate);
+
+        // Pitch: 12-TET ratio relative to the sample's recorded root note,
+        // times native-rate/engine-rate compensation (a 44.1kHz sample on a
+        // 48kHz engine advances 0.919 source frames per output frame so it
+        // plays at recorded pitch).
+        const float rate_ratio =
+            (params.sample_rate_hz > 0)
+                ? static_cast<float>(params.sample_rate_hz) / static_cast<float>(sample_rate_)
+                : 1.0f;
+        v.base_increment = rate_ratio * params.pitch_ratio_mul *
+                           std::pow(2.0f,
+                                    static_cast<float>(static_cast<int>(params.note) -
+                                                       static_cast<int>(params.root_note)) /
+                                        12.0f);
+        v.SetIncrement(v.base_increment * pitch_scale);
+    }
+    static float ReadSource(VoiceSampleState& v, uint32_t& frame, bool& ended) {
+        const uint32_t last_valid_frame = v.end_frame - 1;
+        const uint32_t loop_len = v.loop_end - v.loop_start;
+        bool holding_release_tail = false;
+        if (v.loop && v.phase.Frame() >= v.loop_end) {
+            // Wrap by the loop length so the fractional phase (and
+            // with it the exact loop period/pitch) is preserved. The
+            // window is [loop_start, loop_end): its final frame does
+            // get rendered, interpolating toward loop_start below.
+            v.phase.SubtractFrames(loop_len);
+            if (v.phase.Frame() >= v.loop_end || v.phase.Frame() < v.loop_start) {
+                // Phase far outside the window (start_frame beyond
+                // loop_end, or increment > loop length): snap rather
+                // than loop an unbounded number of subtractions here.
+                v.phase.SetFrame(v.loop_start);
+            }
+        } else if (!v.loop && v.phase.Frame() >= last_valid_frame) {
+            // Reached the end of a non-looping sample: start the
+            // release tail (or, if already releasing, this just
+            // confirms we're done - the envelope-idle check below
+            // frees the voice). Freeze the read position at the
+            // region boundary instead of continuing to advance
+            // phase - for a trimmed sample (end_frame <
+            // sample_frames) letting phase run on would read
+            // whatever raw audio follows the trim point for the
+            // whole release time.
+
+            holding_release_tail = true;
+        }
+
+        uint32_t idx0, idx1;
+        float frac;
+        if (holding_release_tail) {
+            idx0 = last_valid_frame;
+            // frac is 0, so idx1's sample is never blended in - but the
+            // read still happens, and idx0 == end_frame - 1 means
+            // idx0 + 1 == end_frame, one frame past this voice's region
+            // (the whole allocation when end_frame == sample_frames).
+            // Mirror the non-tail branch's clamp instead of reading it.
+            idx1 = idx0;
+            frac = 0.0f;
+        } else {
+            idx0 = v.phase.Frame();
+            if (v.loop && idx0 + 1 >= v.loop_end && idx0 >= v.loop_start) {
+                // Circular seam: the loop window's final frame
+                // interpolates toward loop_start, not toward the
+                // frame after the window (which may be trimmed-off
+                // audio, or out of bounds when loop_end ==
+                // sample_frames).
+                idx1 = v.loop_start;
+            } else {
+                if (idx0 >= v.sample_frames - 1)
+                    idx0 = v.sample_frames - 2;  // clamp: envelope release masks the tail anyway
+                idx1 = idx0 + 1;
+            }
+            frac = v.phase.Fraction();
+        }
+        float s0, s1;
+        if (v.src_channels == 2) {
+            // Interleaved stereo source: average L/R to mono.
+            s0 = (static_cast<float>(v.sample[idx0 * 2]) +
+                  static_cast<float>(v.sample[idx0 * 2 + 1])) *
+                 0.5f / 32768.0f;
+            s1 = (static_cast<float>(v.sample[idx1 * 2]) +
+                  static_cast<float>(v.sample[idx1 * 2 + 1])) *
+                 0.5f / 32768.0f;
+        } else {
+            s0 = static_cast<float>(v.sample[idx0]) / 32768.0f;
+            s1 = static_cast<float>(v.sample[idx1]) / 32768.0f;
+        }
+        frame = idx0;
+        ended = holding_release_tail;
+        return s0 + (s1 - s0) * frac;
+    }
+
     /// Optional per-track mixer; nullptr means the pre-mixer behaviour.
     /// Not owned - see SetTrackMixer().
     const WaveX::Mix::TrackMixer* track_mixer_ = nullptr;
