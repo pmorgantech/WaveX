@@ -13,7 +13,7 @@ inline bool Editable(const Instrument& ins) {
     if (ins.origin == InstrumentOrigin::None || ins.mode != InstrumentMode::Drum)
         return false;
     for (uint8_t i = 0; i < kMaxZones; ++i) {
-        const auto& z = ins.zones[i];
+        const auto& z = ins.osc[0].zones[i];
         if (!z.in_use)
             continue;
         if (i >= Protocol::INST_PAD_COUNT || z.key_lo != Protocol::INST_PAD_FIRST_NOTE + i ||
@@ -23,7 +23,7 @@ inline bool Editable(const Instrument& ins) {
     return true;
 }
 inline void Assign(Instrument& ins, uint8_t pad, uint16_t sample, uint8_t choke) {
-    auto& z = ins.zones[pad];
+    auto& z = ins.osc[0].zones[pad];
     // Sample assignment preserves that pad's edits; removal resets its zone.
     if (!sample) {
         z = Zone{};
@@ -49,22 +49,22 @@ inline uint16_t SoundWire(float value, float scale, uint16_t maximum) {
     return scaled >= maximum ? maximum : static_cast<uint16_t>(scaled + 0.5f);
 }
 inline void ReadSound(const Instrument& ins, uint8_t pad, Protocol::InstPadSoundSyncMessage& out) {
-    if (pad >= Protocol::INST_PAD_COUNT || !Editable(ins) || !ins.zones[pad].in_use)
+    if (pad >= Protocol::INST_PAD_COUNT || !Editable(ins) || !ins.osc[0].zones[pad].in_use)
         return;
-    const auto& z = ins.zones[pad];
+    const auto& z = ins.osc[0].zones[pad];
     out.valid = 1;
     out.sample_id = z.sample_id;
     out.own = (z.flags & ZONE_FLAG_OWN_FILTER_ENV) != 0;
     out.cutoff_hz = SoundWire(out.own ? z.cutoff_hz : ins.filter.cutoff_hz, 1, 20000);
-    out.attack_ms = SoundWire(out.own ? z.attack_s : ins.env.attack_s, 1000, 10000);
-    out.decay_ms = SoundWire(out.own ? z.decay_s : ins.env.decay_s, 1000, 10000);
-    out.sustain = SoundWire(out.own ? z.sustain : ins.env.sustain, 1000, 1000);
+    out.attack_ms = SoundWire(out.own ? z.attack_s : ins.env[0].attack_s, 1000, 10000);
+    out.decay_ms = SoundWire(out.own ? z.decay_s : ins.env[0].decay_s, 1000, 10000);
+    out.sustain = SoundWire(out.own ? z.sustain : ins.env[0].sustain, 1000, 1000);
 }
 inline bool SetSound(Instrument& ins, const Protocol::InstPadSoundOpMessage& m) {
     using namespace Protocol;
     if (!IsValidPadSoundOp(m) || m.op == PAD_SOUND_GET || !Editable(ins))
         return false;
-    auto& z = ins.zones[m.pad];
+    auto& z = ins.osc[0].zones[m.pad];
     if (!z.in_use || z.sample_id != m.sample_id)
         return false;
     if (m.op == PAD_SOUND_INHERIT) {
@@ -73,10 +73,10 @@ inline bool SetSound(Instrument& ins, const Protocol::InstPadSoundOpMessage& m) 
     }
     if (!(z.flags & ZONE_FLAG_OWN_FILTER_ENV)) {
         z.cutoff_hz = ins.filter.cutoff_hz;
-        z.attack_s = ins.env.attack_s;
-        z.decay_s = ins.env.decay_s;
-        z.sustain = ins.env.sustain;
-        z.release_s = ins.env.release_s;
+        z.attack_s = ins.env[0].attack_s;
+        z.decay_s = ins.env[0].decay_s;
+        z.sustain = ins.env[0].sustain;
+        z.release_s = ins.env[0].release_s;
         z.flags |= ZONE_FLAG_OWN_FILTER_ENV;
     }
     switch (m.op) {
@@ -98,9 +98,10 @@ inline bool SetSound(Instrument& ins, const Protocol::InstPadSoundOpMessage& m) 
     return true;
 }
 inline bool Uses(const Instrument& ins, uint16_t sample) {
-    for (const auto& z: ins.zones)
-        if (z.in_use && z.sample_id == sample)
-            return true;
+    for (const auto& oscillator: ins.osc)
+        for (const auto& z: oscillator.zones)
+            if (z.in_use && z.sample_id == sample)
+                return true;
     return false;
 }
 }  // namespace KitEdit

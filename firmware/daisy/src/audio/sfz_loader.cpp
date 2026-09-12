@@ -7,6 +7,7 @@
 #include "config/hardware_config.h"
 #include "ff.h"
 #include "memory.h"
+#include "memory_sections.h"
 
 #include "bss_static.hpp"
 #include "instrument_map.hpp"
@@ -63,19 +64,19 @@ enum class Phase : uint8_t {
     SaveCopy,
 };
 
-// BssStatic (bss_static.hpp): as plain statics the bank and the mapped
-// instrument were 34 KB and 8.5 KB images of Zone defaults in flash, copied
-// into SRAM at boot; Reset() rebuilt them through equally large stack
-// temporaries.
-static WaveX::BssStatic<Tracks> s_bank_storage;
-static Tracks& s_bank = s_bank_storage.Get();
+// Tracks are foreground-owned. Construct raw cacheable D2 storage only
+// from Reset(), after System initialization has enabled that RAM. The SRAM
+// debug layout instead uses its spare AXI range. Keeping
+// these expanded Instruments out of AXI SRAM preserves SD buffers and heap.
+alignas(Tracks) static uint8_t s_bank_storage[sizeof(Tracks)] WAVEX_BACKGROUND_DATA;
+static Tracks* s_bank = nullptr;
 using ModTable = std::array<ModSlot, kMaxModSlots>;
 static SnapshotMailbox<ModTable> s_mod_mailboxes[kNumTracks];
 static ModTable s_mod_active[kNumTracks];  // callback-owned after Reset()
 
 static void PublishModSlots(uint8_t track) {
     ModTable slots;
-    const ModSlot* stored = s_bank.At(track).instrument.mod_slots;
+    const ModSlot* stored = s_bank->At(track).instrument.mod_slots;
     std::copy(stored, stored + kMaxModSlots, slots.begin());
     s_mod_mailboxes[track].Publish(slots);
 }
@@ -84,9 +85,9 @@ static void PublishModSlots(uint8_t track) {
 // default-constructed one resolves nothing, so an unregistered engine drops
 // rather than crashes.
 static SampleResolver s_loaded_resolver;
-static LoadedSample s_loaded_samples[kMaxZones];
+static LoadedSample s_loaded_samples[kMaxInstrumentZones];
 
-// ~10 KB, dominated by two oscillators' zone paths, so it is resident like
+// Two oscillators of zone paths, so this is resident like
 // the bank and the mapped instrument rather than a stack local (wxi.hpp says
 // as much where the struct is declared).
 static WaveX::BssStatic<Wxi::InstrumentFile> s_doc_storage;
@@ -112,7 +113,7 @@ static Sfz::Parser s_parser;
 static WaveX::BssStatic<Sfz::MappedInstrument> s_mapped_storage;
 static Sfz::MappedInstrument& s_mapped = s_mapped_storage.Get();
 static Sfz::SamplePlan s_plan;
-static Sfz::SampleProbe s_probes[kMaxZones];
+static Sfz::SampleProbe s_probes[kMaxInstrumentZones];
 static char s_line[Sfz::kMaxLine];
 static FIL s_file;
 static bool s_file_open = false;
@@ -200,17 +201,18 @@ void ReleaseTrack(SamplePool& pool,
     });
     // Zones only: the mod slots are the user's, set through their own op,
     // and rebinding what plays is not a reason to lose them.
-    Instrument& ins = s_bank.At(track).instrument;
-    for (auto& zone: ins.zones) {
-        zone = Zone{};
-    }
+    Instrument& ins = s_bank->At(track).instrument;
+    for (auto& oscillator: ins.osc)
+        for (auto& zone: oscillator.zones) {
+            zone = Zone{};
+        }
     ins.origin = InstrumentOrigin::None;
     ins.name[0] = '\0';
 }
 
 // Undo everything this load admitted or allocated but did not commit.
 void AbandonLoad(SamplePool* pool, SampleMemMgr* memory) {
-    for (uint8_t i = 0; i < s_plan.count && i < kMaxZones; ++i) {
+    for (uint8_t i = 0; i < s_plan.count && i < kMaxInstrumentZones; ++i) {
         LoadedSample& ls = s_loaded_samples[i];
         if (ls.admitted && pool && memory) {
             if (ls.handle.len) {
@@ -451,7 +453,7 @@ void QueueZoneReply(uint32_t id, uint8_t track, uint8_t immediate_error = 0) {
     if (track >= kNumTracks) {
         s_zone_reply.error = INST_ERROR_BAD_FILE;
     } else {
-        const auto& ins = s_bank.At(track).instrument;
+        const auto& ins = s_bank->At(track).instrument;
         s_zone_reply.completed_request_id = s_edit_completed[track];
         s_zone_reply.error = s_edit_error[track];
         s_zone_reply.loaded = ins.origin != InstrumentOrigin::None;
@@ -460,7 +462,7 @@ void QueueZoneReply(uint32_t id, uint8_t track, uint8_t immediate_error = 0) {
         s_zone_reply.busy = s_phase != Phase::Idle;
         std::memcpy(s_zone_reply.name, ins.name, sizeof(ins.name));
         for (uint8_t i = 0; i < INST_PAD_COUNT; ++i) {
-            const auto& z = ins.zones[i];
+            const auto& z = ins.osc[0].zones[i];
             s_zone_reply.pads[i].sample_id = z.in_use ? z.sample_id : 0;
             s_zone_reply.pads[i].choke_group = z.choke_group;
             s_zone_reply.pads[i].note = static_cast<uint8_t>(INST_PAD_FIRST_NOTE + i);
@@ -482,7 +484,7 @@ void QueueKeyReply(uint32_t id, uint8_t track, uint8_t immediate_error = 0) {
         out.error = INST_ERROR_BAD_FILE;
         return;
     }
-    const auto& ins = s_bank.At(track).instrument;
+    const auto& ins = s_bank->At(track).instrument;
     out.revision = s_key_revision[track];
     out.completed_request_id = s_edit_completed[track];
     out.error = s_edit_error[track];
@@ -491,7 +493,7 @@ void QueueKeyReply(uint32_t id, uint8_t track, uint8_t immediate_error = 0) {
     out.busy = s_phase != Phase::Idle;
     Protocol::detail::CopyWireString(out.name, sizeof(out.name), ins.name);
     for (uint8_t i = 0; i < INST_KEY_ZONE_COUNT; ++i) {
-        const auto& z = ins.zones[i];
+        const auto& z = ins.osc[0].zones[i];
         out.zones[i] = {static_cast<uint16_t>(z.in_use ? z.sample_id : 0),
                         z.key_lo,
                         z.key_hi,
@@ -535,7 +537,7 @@ bool WxiWriteCb(void* user, const void* source, size_t bytes) {
            written == bytes;
 }
 uint8_t SaveCopy(SamplePool& pool) {
-    auto& ins = s_bank.At(s_request.slot).instrument;
+    auto& ins = s_bank->At(s_request.slot).instrument;
     if (ins.origin == InstrumentOrigin::None || !IsValidInstrumentName(s_request.path))
         return INST_ERROR_BAD_FILE;
     s_doc_storage.Reconstruct();
@@ -592,7 +594,10 @@ void Reset() {
     s_sound_pending = false;
     s_track_pending = false;
     s_key_pending = s_key_assignment = false;
-    s_bank_storage.Reconstruct();
+    if (s_bank)
+        WaveX::ReconstructInPlace(*s_bank);
+    else
+        s_bank = new (s_bank_storage) Tracks();
     for (uint8_t track = 0; track < kNumTracks; ++track) {
         BumpKeyRevision(track);
         s_sound_completed[track] = 0;
@@ -633,12 +638,12 @@ bool Begin(const InstOpMessage& request) {
         if ((named && !IsValidInstrumentName(request.path)) ||
             (request.op == INST_OP_SET_PAD_SAMPLE &&
              (request.pad_index >= INST_PAD_COUNT || request.pad_choke > 15 ||
-              !KitEdit::Editable(s_bank.At(request.slot).instrument)))) {
+              !KitEdit::Editable(s_bank->At(request.slot).instrument)))) {
             FinishEdit(INST_ERROR_BAD_FILE);
             return false;
         }
         if (request.op == INST_OP_SET_NAME) {
-            auto& ins = s_bank.At(request.slot).instrument;
+            auto& ins = s_bank->At(request.slot).instrument;
             if (ins.origin == InstrumentOrigin::None) {
                 FinishEdit(INST_ERROR_BAD_FILE);
                 return false;
@@ -732,8 +737,8 @@ void ConfirmVoicesStopped(SamplePool& pool, SampleMemMgr& memory) {
         return;
 
     if (s_key_assignment) {
-        auto& ins = s_bank.At(s_key_request.track).instrument;
-        const auto& current = ins.zones[s_key_request.zone];
+        auto& ins = s_bank->At(s_key_request.track).instrument;
+        const auto& current = ins.osc[0].zones[s_key_request.zone];
         if (s_key_revision[s_key_request.track] != s_key_request.revision ||
             (current.in_use ? current.sample_id : 0) != s_key_request.expected_sample) {
             FinishKey(INST_ERROR_BAD_FILE);
@@ -745,7 +750,7 @@ void ConfirmVoicesStopped(SamplePool& pool, SampleMemMgr& memory) {
             FinishKey(INST_ERROR_MISSING_SAMPLES);
             return;
         }
-        auto& zone = ins.zones[s_key_request.zone];
+        auto& zone = ins.osc[0].zones[s_key_request.zone];
         const auto old = zone.in_use ? zone.sample_id : uint16_t{0};
         if (!sample)
             zone = Zone{};
@@ -770,7 +775,7 @@ void ConfirmVoicesStopped(SamplePool& pool, SampleMemMgr& memory) {
     }
     if (s_request.op == INST_OP_NEW || s_request.op == INST_OP_NEW_KEYBOARD) {
         ReleaseTrack(pool, memory, s_request.slot);
-        auto& ins = s_bank.At(s_request.slot).instrument;
+        auto& ins = s_bank->At(s_request.slot).instrument;
         WaveX::ReconstructInPlace(ins);
         ins.origin = InstrumentOrigin::Built;
         ins.mode =
@@ -781,14 +786,14 @@ void ConfirmVoicesStopped(SamplePool& pool, SampleMemMgr& memory) {
         return;
     }
     if (s_request.op == INST_OP_SET_PAD_SAMPLE) {
-        auto& ins = s_bank.At(s_request.slot).instrument;
+        auto& ins = s_bank->At(s_request.slot).instrument;
         const auto sample = s_request.pad_sample_id;
         const auto* record = pool.Find(sample);
         if (sample && (!record || !SampleIsPlayable(record->payload))) {
             FinishEdit(INST_ERROR_MISSING_SAMPLES);
             return;
         }
-        const auto old = ins.zones[s_request.pad_index].sample_id;
+        const auto old = ins.osc[0].zones[s_request.pad_index].sample_id;
         BumpKeyRevision(s_request.slot);
         KitEdit::Assign(ins, s_request.pad_index, sample, s_request.pad_choke);
         if (sample)
@@ -827,8 +832,8 @@ bool OnKeyMapOp(const InstKeyMapOpMessage& request) {
         return false;
     }
     s_key_request = request;
-    auto& ins = s_bank.At(request.track).instrument;
-    auto& z = ins.zones[request.zone];
+    auto& ins = s_bank->At(request.track).instrument;
+    auto& z = ins.osc[0].zones[request.zone];
     const auto sample = z.in_use ? z.sample_id : uint16_t{0};
     if (ins.origin == InstrumentOrigin::None || ins.mode != InstrumentMode::Keyboard ||
         request.revision != s_key_revision[request.track] || sample != request.expected_sample) {
@@ -864,7 +869,7 @@ bool OnPadSoundOp(const InstPadSoundOpMessage& request) {
         reply.error = INST_ERROR_BAD_FILE;
         return false;
     }
-    auto& ins = s_bank.At(request.track).instrument;
+    auto& ins = s_bank->At(request.track).instrument;
     bool changed = false;
     if (request.op != PAD_SOUND_GET && s_sound_completed[request.track] != request.request_id) {
         uint8_t error = INST_ERROR_NONE;
@@ -896,7 +901,7 @@ void OnTrackStateRequest(const TrackStateRequest& request) {
     s_track_pending = true;
     if (!request.request_id || request.track >= kNumTracks)
         return;
-    const auto& track = s_bank.At(request.track);
+    const auto& track = s_bank->At(request.track);
     const auto& ins = track.instrument;
     out.valid = 1;
     out.busy = Busy();
@@ -1180,15 +1185,16 @@ void Pump(SamplePool& pool, SampleMemMgr& memory, uint8_t* io_buffer, uint32_t i
             }
             // The mapper numbered samples 1..N within this document; the
             // zones now name their Pool ids, and the Track takes its refs.
-            Instrument& ins = s_bank.At(s_request.slot).instrument;
+            Instrument& ins = s_bank->At(s_request.slot).instrument;
             ins = s_mapped.instrument;
-            for (auto& zone: ins.zones) {
-                if (!zone.in_use || zone.sample_id == 0 || zone.sample_id > s_plan.count) {
-                    continue;
+            for (auto& oscillator: ins.osc)
+                for (auto& zone: oscillator.zones) {
+                    if (!zone.in_use || zone.sample_id == 0 || zone.sample_id > s_plan.count) {
+                        continue;
+                    }
+                    zone.sample_id = s_loaded_samples[zone.sample_id - 1].pool_id;
+                    pool.SetUsedBy(zone.sample_id, s_request.slot, true);
                 }
-                zone.sample_id = s_loaded_samples[zone.sample_id - 1].pool_id;
-                pool.SetUsedBy(zone.sample_id, s_request.slot, true);
-            }
             // The mapper knows zones, not where the document came from, so the
             // display name is stamped here - the one place still holding the
             // .sfz path. Truncation is fine; it is a label, not an identifier.
@@ -1237,7 +1243,7 @@ bool Load(const char* path,
 }
 
 bool TrackLoaded(uint8_t slot) {
-    return slot < kNumTracks && s_bank.At(slot).instrument.origin != InstrumentOrigin::None;
+    return slot < kNumTracks && s_bank->At(slot).instrument.origin != InstrumentOrigin::None;
 }
 
 // --- Track settings and MIDI routing (track-and-patch-model.md §2) ---------
@@ -1249,49 +1255,49 @@ bool TrackLoaded(uint8_t slot) {
 bool SetTrackMidiIn(uint8_t track, uint8_t midi_in) {
     if (track >= kNumTracks || !TrackMidiInValid(midi_in))
         return false;
-    s_bank.At(track).midi_in = midi_in;
+    s_bank->At(track).midi_in = midi_in;
     return true;
 }
 
 uint8_t TrackMidiIn(uint8_t track) {
-    return track < kNumTracks ? s_bank.At(track).midi_in : TRACK_MIDI_IN_OFF;
+    return track < kNumTracks ? s_bank->At(track).midi_in : TRACK_MIDI_IN_OFF;
 }
 
 bool SetTrackPolyLimit(uint8_t track, uint8_t limit) {
     if (track >= kNumTracks || limit > WAVEX_NUM_VOICES)
         return false;
-    s_bank.At(track).poly_limit = limit;
+    s_bank->At(track).poly_limit = limit;
     return true;
 }
 
 uint8_t TrackPolyLimit(uint8_t track) {
-    return track < kNumTracks ? s_bank.At(track).poly_limit : 0;
+    return track < kNumTracks ? s_bank->At(track).poly_limit : 0;
 }
 
 bool SetTrackPriority(uint8_t track, uint8_t priority) {
     if (track >= kNumTracks)
         return false;
-    s_bank.At(track).priority = priority;
+    s_bank->At(track).priority = priority;
     return true;
 }
 
 uint8_t TrackPriority(uint8_t track) {
-    return track < kNumTracks ? s_bank.At(track).priority : 0;
+    return track < kNumTracks ? s_bank->At(track).priority : 0;
 }
 
 bool SetTrackProgramChange(uint8_t track, bool enabled) {
     if (track >= kNumTracks)
         return false;
-    s_bank.At(track).program_change = enabled ? 1 : 0;
+    s_bank->At(track).program_change = enabled ? 1 : 0;
     return true;
 }
 
 bool TrackProgramChange(uint8_t track) {
-    return track < kNumTracks && s_bank.At(track).program_change != 0;
+    return track < kNumTracks && s_bank->At(track).program_change != 0;
 }
 
 uint8_t TracksForMidiChannel(uint8_t channel, uint8_t* out, uint8_t max) {
-    return s_bank.TracksForMidiChannel(channel, out, max);
+    return s_bank->TracksForMidiChannel(channel, out, max);
 }
 
 void SetLoadedSampleResolver(const SampleResolver& resolver) {
@@ -1310,12 +1316,13 @@ bool BindSample(
     // Transfer that sample into the new binding instead of freeing it with
     // the old zones; the main loop restores its Track reference below.
     ReleaseTrack(pool, memory, slot, sample_id);
-    Instrument& ins = s_bank.At(slot).instrument;
+    Instrument& ins = s_bank->At(slot).instrument;
     if (sample_id == 0) {
         return true;
     }
     pool.SetUsedBy(sample_id, slot, true);
-    Zone& zone = ins.zones[0];
+    ins.osc[0].type = OscType::Sample;
+    Zone& zone = ins.osc[0].zones[0];
     zone.sample_id = sample_id;
     zone.root_note = root_note;
     // No override: a Quick Instrument follows its Instrument's defaults, so
@@ -1335,24 +1342,27 @@ const char* TrackName(uint8_t slot) {
     // misleading. The request's own path is the truth until Commit runs.
     if (TrackLoading(slot) && !s_key_assignment && s_request.op != INST_OP_SET_PAD_SAMPLE)
         return Basename(s_request.path);
-    return s_bank.At(slot).instrument.name;
+    return s_bank->At(slot).instrument.name;
 }
 
 uint16_t BoundSample(uint8_t slot) {
     if (slot >= kNumTracks)
         return 0;
-    const Instrument& ins = s_bank.At(slot).instrument;
+    const Instrument& ins = s_bank->At(slot).instrument;
     // Only the unnamed full-keyboard Quick Instrument represents a bare
     // sample binding. Named or edited maps must not masquerade as their
     // first sample in Track replacement/assignment flows.
     if (ins.origin != InstrumentOrigin::Built || ins.mode != InstrumentMode::Keyboard ||
         ins.name[0])
         return 0;
-    const auto& z = ins.zones[0];
+    for (const auto& extra: ins.osc[1].zones)
+        if (extra.in_use)
+            return 0;
+    const auto& z = ins.osc[0].zones[0];
     if (!z.in_use || z.key_lo != 0 || z.key_hi != 127 || z.vel_lo != 1 || z.vel_hi != 127)
         return 0;
     for (uint8_t i = 1; i < kMaxZones; ++i)
-        if (ins.zones[i].in_use)
+        if (ins.osc[0].zones[i].in_use)
             return 0;
     return z.sample_id;
 }
@@ -1374,17 +1384,18 @@ void ForgetLoadedSample(uint16_t sample_id) {
     if (sample_id == 0)
         return;
     for (uint8_t slot = 0; slot < kNumTracks; ++slot) {
-        Instrument& ins = s_bank.At(slot).instrument;
+        Instrument& ins = s_bank->At(slot).instrument;
         if (ins.origin == InstrumentOrigin::None)
             continue;
         bool any_left = false;
-        for (auto& zone: ins.zones) {
-            if (zone.in_use && zone.sample_id == sample_id) {
-                BumpKeyRevision(slot);
-                zone = Zone{};
+        for (auto& oscillator: ins.osc)
+            for (auto& zone: oscillator.zones) {
+                if (zone.in_use && zone.sample_id == sample_id) {
+                    BumpKeyRevision(slot);
+                    zone = Zone{};
+                }
+                any_left = any_left || zone.in_use;
             }
-            any_left = any_left || zone.in_use;
-        }
         if (!any_left && ins.mode != InstrumentMode::Drum) {
             ins.origin = InstrumentOrigin::None;
         }
@@ -1395,9 +1406,9 @@ uint8_t ResolveNote(
     uint8_t slot, uint8_t note, uint8_t velocity, VoiceTriggerParams* out, uint8_t max) {
     if (slot >= kNumTracks)
         return 0;
-    if (s_bank.At(slot).instrument.origin == InstrumentOrigin::None)
+    if (s_bank->At(slot).instrument.origin == InstrumentOrigin::None)
         return 0;
-    return s_bank.ResolveNote(slot, note, velocity, s_loaded_resolver, out, max);
+    return s_bank->ResolveNote(slot, note, velocity, s_loaded_resolver, out, max);
 }
 
 void PrepareSequencerVoices(SequencerVoiceMap& map, uint16_t tracks) {
@@ -1407,36 +1418,36 @@ void PrepareSequencerVoices(SequencerVoiceMap& map, uint16_t tracks) {
         if (TrackLoading(track))
             map.Revoke(static_cast<uint16_t>(1u << track));
         else
-            map.PrepareTrack(track, s_bank.At(track).instrument, s_loaded_resolver);
+            map.PrepareTrack(track, s_bank->At(track).instrument, s_loaded_resolver);
     }
 }
 
 bool SetInstrumentFilter(uint8_t track, const InstrumentFilter& filter) {
     if (track >= kNumTracks)
         return false;
-    s_bank.At(track).instrument.filter = filter;
+    s_bank->At(track).instrument.filter = filter;
     return true;
 }
 
 bool SetInstrumentEnv(uint8_t track, const InstrumentEnv& env) {
     if (track >= kNumTracks)
         return false;
-    s_bank.At(track).instrument.env = env;
+    s_bank->At(track).instrument.env[0] = env;
     return true;
 }
 
 const InstrumentFilter* GetInstrumentFilter(uint8_t track) {
-    return track < kNumTracks ? &s_bank.At(track).instrument.filter : nullptr;
+    return track < kNumTracks ? &s_bank->At(track).instrument.filter : nullptr;
 }
 
 const InstrumentEnv* GetInstrumentEnv(uint8_t track) {
-    return track < kNumTracks ? &s_bank.At(track).instrument.env : nullptr;
+    return track < kNumTracks ? &s_bank->At(track).instrument.env[0] : nullptr;
 }
 
 bool SetModSlot(uint8_t slot, uint8_t mod_slot_index, const ModSlot& value) {
     if (slot >= kNumTracks || mod_slot_index >= kMaxModSlots)
         return false;
-    s_bank.At(slot).instrument.mod_slots[mod_slot_index] = value;
+    s_bank->At(slot).instrument.mod_slots[mod_slot_index] = value;
     PublishModSlots(slot);
     return true;
 }

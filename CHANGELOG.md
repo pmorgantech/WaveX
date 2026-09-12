@@ -13,6 +13,12 @@ versioning and release process.
 
 ### Added
 
+- Added the Instrument storage and ownership foundation: WXI mapping now
+  round-trips two oscillator maps, three envelopes, two LFO settings, filter
+  tracking, tuning, mix, tags, output/poly settings, and modulation fields;
+  sample paths are deduplicated across maps and retained until both maps release
+  them. The active renderer and editor still use Oscillator 1.
+
 - Added the host-tested WXCF Bank container and bounded resident index for 128
   stable WXI slots, including dual-oscillator Instrument documents, metadata,
   duplicate/truncation checks, and slot-bounded recall validation. SD working

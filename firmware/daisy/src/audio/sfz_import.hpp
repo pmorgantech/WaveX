@@ -815,7 +815,7 @@ class Parser {
 
 struct MappedInstrument {
     Instrument instrument;
-    char sample_paths[kMaxZones][kMaxPath] = {};
+    char sample_paths[kMaxInstrumentZones][kMaxPath] = {};
     uint8_t zone_count = 0;
 };
 
@@ -950,7 +950,7 @@ inline bool MapDocument(const Document& document,
             status.error = Error::PathTooLong;
             return false;
         }
-        out.instrument.zones[destination] = zone;
+        out.instrument.osc[0].zones[destination] = zone;
         ++out.zone_count;
     }
     return true;
@@ -965,18 +965,18 @@ struct SamplePlanEntry {
 };
 
 struct SamplePlan {
-    SamplePlanEntry entries[kMaxZones];
+    SamplePlanEntry entries[kMaxInstrumentZones];
     uint8_t count = 0;
 };
 
 inline bool BuildSamplePlan(MappedInstrument& mapped, SamplePlan& plan, Status& status) {
     plan = SamplePlan{};
-    if (mapped.zone_count > kMaxZones) {
+    if (mapped.zone_count > kMaxInstrumentZones) {
         status.error = Error::TooManyRegions;
         return false;
     }
     for (uint8_t zone_index = 0; zone_index < mapped.zone_count; ++zone_index) {
-        if (!mapped.instrument.zones[zone_index].in_use)
+        if (!mapped.instrument.osc[zone_index / kMaxZones].zones[zone_index % kMaxZones].in_use)
             continue;
         uint8_t entry_index = 0;
         for (; entry_index < plan.count; ++entry_index) {
@@ -986,7 +986,7 @@ inline bool BuildSamplePlan(MappedInstrument& mapped, SamplePlan& plan, Status& 
             }
         }
         if (entry_index == plan.count) {
-            if (plan.count >= kMaxZones) {
+            if (plan.count >= kMaxInstrumentZones) {
                 status.error = Error::TooManyRegions;
                 return false;
             }
@@ -995,7 +995,8 @@ inline bool BuildSamplePlan(MappedInstrument& mapped, SamplePlan& plan, Status& 
             entry.sample_id = static_cast<uint16_t>(plan.count + 1u);
             ++plan.count;
         }
-        mapped.instrument.zones[zone_index].sample_id = plan.entries[entry_index].sample_id;
+        mapped.instrument.osc[zone_index / kMaxZones].zones[zone_index % kMaxZones].sample_id =
+            plan.entries[entry_index].sample_id;
     }
     return true;
 }

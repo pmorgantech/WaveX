@@ -394,7 +394,7 @@ These rules are mandatory for all new code. Most past instability (SPI corruptio
 | Region | Size | Use |
 |---|---|---|
 | ITCM/DTCM | 64/128 KB | explicitly annotated hot code / stack, **not DMA-reachable**; static DTCM is link-capped at 64 KB to preserve at least 64 KB for descending stacks |
-| AXI + D2/D3 SRAM | ~512 KB total | audio ring buffer, DMA slots, link buffers, bss |
+| AXI + D2/D3 SRAM | 512 KiB AXI + 352 KiB D2/D3 | audio ring buffer, DMA slots, link buffers, foreground Track state, bss |
 | SDRAM (external) | 64 MB | 60 MiB sample arena + 512 KiB Sample Registry + 3.5 MiB offline-render scratch (`sdram_layout.h`) |
 | QSPI flash | 8 MB | application (BOOT_QSPI via Daisy bootloader) |
 | SD card | up to SDXC | samples, projects/presets, rendered files |

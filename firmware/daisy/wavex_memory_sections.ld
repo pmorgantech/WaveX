@@ -1,5 +1,12 @@
 SECTIONS
 {
+    .wavex_background (NOLOAD) : ALIGN(32)
+    {
+        *(.wavex_background)
+        *(.wavex_background*)
+        . = ALIGN(32);
+    } > RAM_D2
+
     .itcm_text : ALIGN(4)
     {
         __itcm_text_start__ = .;

@@ -5,6 +5,7 @@
 #include "comm/daisy_uart_link.h"
 #include "fatfs_mock.h"
 
+#include "wxi/wxi.hpp"
 #include <array>
 #include <cstring>
 #include <vector>
@@ -652,3 +653,50 @@ TEST_F(SfzLoaderTest, NamedAndSplitKeyboardMapsAreInstrumentBindings) {
     EXPECT_EQ(SfzLoader::BoundSample(0), 0);
 }
 }  // namespace
+
+TEST_F(SfzLoaderTest, ClearingOscillatorOneRetainsSamplesStillOwnedByOscillatorTwo) {
+    WaveX::Wxi::InstrumentFile doc;
+    std::strcpy(doc.name, "Dual map");
+    doc.osc[0].type = WaveX::Wxi::OscType::Sample;
+    doc.osc[1].type = WaveX::Wxi::OscType::Sample;
+    doc.osc[0].zone_count = 1;
+    doc.osc[1].zone_count = 2;
+    std::strcpy(doc.osc[0].zones[0].path, "/kits/a.wav");
+    std::strcpy(doc.osc[1].zones[0].path, "/kits/a.wav");
+    doc.osc[1].zones[1].index = 31;
+    std::strcpy(doc.osc[1].zones[1].path, "/kits/b.wav");
+    std::vector<uint8_t> bytes;
+    WaveX::Wxcf::IoContext io{&bytes,
+                              nullptr,
+                              [](void* context, const void* source, size_t count) {
+                                  auto& destination = *static_cast<std::vector<uint8_t>*>(context);
+                                  const auto* first = static_cast<const uint8_t*>(source);
+                                  destination.insert(destination.end(), first, first + count);
+                                  return true;
+                              },
+                              nullptr};
+    ASSERT_EQ(WaveX::Wxi::Write(io, doc), WaveX::Wxi::Result::Ok);
+    MockFatFS::Instance().AddFile("/kits/dual.wxi", bytes);
+    ASSERT_TRUE(SfzLoader::Load(
+        "/kits/dual.wxi", 0, pool_, memory_, io_.data(), static_cast<uint32_t>(io_.size())));
+    ASSERT_EQ(pool_.Count(), 2u);
+    const auto sample = SampleId("/kits/a.wav");
+    auto state = KeyRead(0);
+    InstKeyMapOpMessage clear;
+    clear.request_id = 3001;
+    clear.revision = state.revision;
+    clear.track = 0;
+    clear.zone = 0;
+    clear.op = KEY_MAP_ASSIGN;
+    clear.expected_sample = sample;
+    clear.value.sample_id = 0;
+    EXPECT_FALSE(SfzLoader::OnKeyMapOp(clear));  // queued; not yet applied
+    ASSERT_EQ(SfzLoader::VoiceStopTrack(), 0);
+    SfzLoader::ConfirmVoicesStopped(pool_, memory_);
+    EXPECT_EQ(KeyRead(0).zones[0].sample_id, 0);
+    ASSERT_NE(pool_.Find(sample), nullptr);
+    EXPECT_EQ(pool_.Find(sample)->used_by, 1);
+    EXPECT_EQ(SfzLoader::BoundSample(0), 0);
+    ASSERT_TRUE(SfzLoader::BindSample(pool_, memory_, 0, 0));
+    EXPECT_EQ(pool_.Count(), 0u);
+}

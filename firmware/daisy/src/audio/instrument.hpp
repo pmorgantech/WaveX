@@ -35,7 +35,9 @@
 namespace WaveX {
 namespace AudioEngine {
 
-static constexpr uint8_t kMaxZones = 32;
+static constexpr uint8_t kMaxZones = 32;  // per Sample oscillator
+static constexpr uint8_t kNumOscillators = 2;
+static constexpr uint8_t kMaxInstrumentZones = kNumOscillators * kMaxZones;
 static constexpr uint8_t kMaxLayerTriggers = 4;  // zones fired per note-on, cap
 static constexpr uint8_t kNumTracks = 16;
 
@@ -117,15 +119,32 @@ struct InstrumentFilter {
     uint8_t type = 0;  // 0 = the 12 dB SVF lowpass, the only mode today
     float cutoff_hz = 20000.0f;
     float resonance = 0.0f;
+    float keytrack = 0.0f, env2_amount = 0.0f;
 };
 
-// The Instrument's amp envelope - Env 1 of the three in §3.1. Envs 2 and 3
-// arrive with stage 5; their chunks are written at these defaults until then.
+// Saved ADSR parameters. Env 1 is the amp; the remaining envelopes and
+// per-voice LFO settings are preserved independently for stage 5 rendering.
 struct InstrumentEnv {
     float attack_s = 0.001f;
     float decay_s = 0.05f;
     float sustain = 0.8f;
     float release_s = 0.1f;
+};
+
+enum class OscType : uint8_t { Off = 0, Sample = 1, Wavetable = 2 };
+struct Oscillator {
+    OscType type = OscType::Off;
+    float level = 1.0f, pan = 0.5f;
+    int8_t coarse_tune = 0, fine_tune = 0;
+    uint8_t keytrack = 1;
+    Zone zones[kMaxZones];
+};
+struct InstrumentLfo {
+    uint8_t wave = 0;
+    float rate_hz = 1.0f;
+    uint8_t sync_div = 0;
+    float delay_s = 0.0f, fade_s = 0.0f;
+    uint8_t retrigger = 1;
 };
 
 struct Instrument {
@@ -137,13 +156,17 @@ struct Instrument {
     // with it between Tracks and Banks, rather than being whatever the
     // engine's knobs last happened to say.
     InstrumentFilter filter;
-    InstrumentEnv env;
+    InstrumentEnv env[3];
     // What to call this instrument on screen: an import's .sfz basename, set
     // at load. Empty for a Built instrument, whose name is the bound sample's
     // own metadata and already known to the frontend. Without this the UI can
     // only say "Instrument bound" and never which Instrument.
     char name[kInstrumentNameBytes] = {};
-    Zone zones[kMaxZones];
+    uint8_t tags = 0, output = 0, poly_mode = 0, velocity_curve = 0;
+    int8_t transpose = 0, fine_tune = 0;
+    float trim_gain = 1.0f, trim_pan = 0.5f, osc_mix = 0.0f;
+    Oscillator osc[kNumOscillators]{{OscType::Sample}, {OscType::Off}};
+    InstrumentLfo lfo[2];
     // Modulation matrix (param-locks-and-modulation.md §3/§9 stage 4).
     // Always kMaxModSlots (8) entries - there is no separate "how many are
     // populated" count, because a default-constructed ModSlot is already
@@ -262,10 +285,10 @@ inline VoiceTriggerParams PrepareZoneTrigger(const Instrument& ins,
     } else {
         p.filter_cutoff_hz = ins.filter.cutoff_hz;
         p.filter_resonance = ins.filter.resonance;
-        p.attack_s = ins.env.attack_s;
-        p.decay_s = ins.env.decay_s;
-        p.sustain_level = ins.env.sustain;
-        p.release_s = ins.env.release_s;
+        p.attack_s = ins.env[0].attack_s;
+        p.decay_s = ins.env[0].decay_s;
+        p.sustain_level = ins.env[0].sustain;
+        p.release_s = ins.env[0].release_s;
     }
     return p;
 }
@@ -295,7 +318,7 @@ inline uint8_t ResolveNoteOn(const Instrument& ins,
 
     uint8_t count = 0;
     for (uint8_t z = 0; z < kMaxZones && count < max; ++z) {
-        const Zone& zone = ins.zones[z];
+        const Zone& zone = ins.osc[0].zones[z];
         if (!zone.in_use)
             continue;
         if (note < zone.key_lo || note > zone.key_hi)

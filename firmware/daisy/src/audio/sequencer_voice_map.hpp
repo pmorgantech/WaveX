@@ -40,7 +40,7 @@ struct SequencerVoiceMap {
         dest.direct_drum = false;
         if (instrument.origin == InstrumentOrigin::None)
             return;
-        for (const auto& zone: instrument.zones) {
+        for (const auto& zone: instrument.osc[0].zones) {
             if (!zone.in_use)
                 continue;
             const auto sample = resolver.Get(zone.sample_id);

@@ -178,10 +178,10 @@ SECTIONS
     } > RAM_D3
 
     /*
-     * The two largest pieces of constructed state (bss_static.hpp): the
-     * sequencer transport and the SFZ instrument bank, ~84 KiB together. In
-     * the QSPI layout they are ordinary .bss; here D2 cannot hold them, and
-     * DTCM has exactly the room their old .data images used to occupy.
+     * The sequencer transport and WXI document scratch are constructed
+     * state (bss_static.hpp). Spill them into DTCM so the remaining
+     * foreground state fits in D2. The expanded Tracks use raw late-
+     * constructed storage in AXI SRAM in this SRAM-only layout.
      * Cleared from preinit, BEFORE global constructors run - unlike
      * .dtcmram_bss below, which main() zeroes after them and which would
      * therefore wipe the defaults the constructors wrote.
@@ -191,10 +191,17 @@ SECTIONS
         . = ALIGN(8);
         PROVIDE(__wavex_sram_debug_dtcm_bss_start__ = .);
         *(.bss._ZN5WaveX11AudioEngineL23s_seq_transport_storageE)
-        *(.bss._ZN5WaveX11AudioEngine9SfzLoader12_GLOBAL__N_1L14s_bank_storageE)
+        *(.bss._ZN5WaveX11AudioEngine9SfzLoader12_GLOBAL__N_1L13s_doc_storageE)
         . = ALIGN(4);
         PROVIDE(__wavex_sram_debug_dtcm_bss_end__ = .);
     } > DTCMRAM
+
+    .wavex_background (NOLOAD) : ALIGN(32)
+    {
+        *(.wavex_background)
+        *(.wavex_background*)
+        . = ALIGN(32);
+    } > SRAM
 
     .sram_debug_d2_bss (NOLOAD) :
     {

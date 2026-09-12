@@ -67,7 +67,7 @@ TEST(InstrumentTest, UnusedZonesNeverMatch) {
 
 TEST(InstrumentTest, SingleZoneInRangeMatches) {
     Instrument ins;
-    ins.zones[0] = MakeZone(1, 48, 72, 1, 127);
+    ins.osc[0].zones[0] = MakeZone(1, 48, 72, 1, 127);
     FakeSampleBank tracks;
     VoiceTriggerParams out[kMaxLayerTriggers];
 
@@ -85,7 +85,7 @@ TEST(InstrumentTest, SingleZoneInRangeMatches) {
 // off-by-one on either boundary silences (or doubles) real notes.
 TEST(InstrumentTest, KeyAndVelocityBoundariesAreInclusive) {
     Instrument ins;
-    ins.zones[0] = MakeZone(1, 48, 72, 10, 90);
+    ins.osc[0].zones[0] = MakeZone(1, 48, 72, 10, 90);
     FakeSampleBank tracks;
     VoiceTriggerParams out[kMaxLayerTriggers];
 
@@ -106,7 +106,7 @@ TEST(InstrumentTest, KeyAndVelocityBoundariesAreInclusive) {
 // never fires on it (velocity-0 note-ons are note-offs in MIDI).
 TEST(InstrumentTest, VelocityZeroDoesNotMatchDefaultZone) {
     Instrument ins;
-    ins.zones[0] = MakeZone(1, 0, 127, 1, 127);
+    ins.osc[0].zones[0] = MakeZone(1, 0, 127, 1, 127);
     FakeSampleBank tracks;
     VoiceTriggerParams out[kMaxLayerTriggers];
     EXPECT_EQ(ResolveNoteOn(ins, 0, 60, 0, tracks.Resolver(), out, kMaxLayerTriggers), 0);
@@ -114,7 +114,7 @@ TEST(InstrumentTest, VelocityZeroDoesNotMatchDefaultZone) {
 
 TEST(InstrumentTest, NoteOutOfKeyRangeDoesNotMatch) {
     Instrument ins;
-    ins.zones[0] = MakeZone(1, 48, 72, 1, 127);
+    ins.osc[0].zones[0] = MakeZone(1, 48, 72, 1, 127);
     FakeSampleBank tracks;
     VoiceTriggerParams out[kMaxLayerTriggers];
     EXPECT_EQ(ResolveNoteOn(ins, 0, 40, 100, tracks.Resolver(), out, kMaxLayerTriggers), 0);
@@ -125,8 +125,8 @@ TEST(InstrumentTest, NoteOutOfKeyRangeDoesNotMatch) {
 // secondary). Only the matching layer fires.
 TEST(InstrumentTest, VelocitySwitchSelectsOneZone) {
     Instrument ins;
-    ins.zones[0] = MakeZone(1, 0, 127, 1, 63);    // soft
-    ins.zones[1] = MakeZone(2, 0, 127, 64, 127);  // hard
+    ins.osc[0].zones[0] = MakeZone(1, 0, 127, 1, 63);    // soft
+    ins.osc[0].zones[1] = MakeZone(2, 0, 127, 64, 127);  // hard
     FakeSampleBank tracks;
     VoiceTriggerParams out[kMaxLayerTriggers];
 
@@ -148,8 +148,8 @@ TEST(InstrumentTest, VelocitySwitchSelectsOneZone) {
 // Overlapping ranges layer: both fire (bounded by kMaxLayerTriggers).
 TEST(InstrumentTest, OverlappingZonesLayer) {
     Instrument ins;
-    ins.zones[0] = MakeZone(1, 0, 127, 1, 127);
-    ins.zones[1] = MakeZone(2, 0, 127, 1, 127);
+    ins.osc[0].zones[0] = MakeZone(1, 0, 127, 1, 127);
+    ins.osc[0].zones[1] = MakeZone(2, 0, 127, 1, 127);
     FakeSampleBank tracks;
     VoiceTriggerParams out[kMaxLayerTriggers];
 
@@ -163,7 +163,7 @@ TEST(InstrumentTest, OverlappingZonesLayer) {
 TEST(InstrumentTest, LayerCountIsCappedByMax) {
     Instrument ins;
     for (uint8_t z = 0; z < 6; ++z)
-        ins.zones[z] = MakeZone(1, 0, 127, 1, 127);
+        ins.osc[0].zones[z] = MakeZone(1, 0, 127, 1, 127);
     FakeSampleBank tracks;
     VoiceTriggerParams out[kMaxLayerTriggers];
 
@@ -178,8 +178,8 @@ TEST(InstrumentTest, LayerCountIsCappedByMax) {
 
 TEST(InstrumentTest, ZoneWithUnresolvableSampleIsSkipped) {
     Instrument ins;
-    ins.zones[0] = MakeZone(0, 0, 127, 1, 127);  // sample_id 0 => resolver returns invalid
-    ins.zones[1] = MakeZone(1, 0, 127, 1, 127);  // valid
+    ins.osc[0].zones[0] = MakeZone(0, 0, 127, 1, 127);  // sample_id 0 => resolver returns invalid
+    ins.osc[0].zones[1] = MakeZone(1, 0, 127, 1, 127);  // valid
     FakeSampleBank tracks;
     VoiceTriggerParams out[kMaxLayerTriggers];
 
@@ -192,7 +192,7 @@ TEST(InstrumentTest, ZoneWithUnresolvableSampleIsSkipped) {
 
 TEST(InstrumentTest, NullOutputOrZeroMaxIsRejected) {
     Instrument ins;
-    ins.zones[0] = MakeZone(1, 0, 127, 1, 127);
+    ins.osc[0].zones[0] = MakeZone(1, 0, 127, 1, 127);
     FakeSampleBank tracks;
     VoiceTriggerParams out[kMaxLayerTriggers];
 
@@ -205,7 +205,7 @@ TEST(InstrumentTest, NullOutputOrZeroMaxIsRejected) {
 TEST(InstrumentTest, DrumModeForcesRootNote) {
     Instrument ins;
     ins.mode = InstrumentMode::Drum;
-    ins.zones[0] = MakeZone(1, 36, 36, 1, 127, /*root=*/60);  // pad at key 36
+    ins.osc[0].zones[0] = MakeZone(1, 36, 36, 1, 127, /*root=*/60);  // pad at key 36
     FakeSampleBank tracks;
     VoiceTriggerParams out[kMaxLayerTriggers];
 
@@ -221,7 +221,7 @@ TEST(InstrumentTest, OneShotFlagFlowsIntoTriggerParams) {
     Instrument ins;
     Zone z = MakeZone(1, 0, 127, 1, 127);
     z.flags = ZONE_FLAG_ONE_SHOT;
-    ins.zones[0] = z;
+    ins.osc[0].zones[0] = z;
     FakeSampleBank tracks;
     VoiceTriggerParams out[kMaxLayerTriggers];
 
@@ -233,7 +233,7 @@ TEST(InstrumentTest, OneShotFlagFlowsIntoTriggerParams) {
 TEST(InstrumentTest, KeyboardModeKeepsIncomingNote) {
     Instrument ins;
     ins.mode = InstrumentMode::Keyboard;
-    ins.zones[0] = MakeZone(1, 0, 127, 1, 127, /*root=*/60);
+    ins.osc[0].zones[0] = MakeZone(1, 0, 127, 1, 127, /*root=*/60);
     FakeSampleBank tracks;
     VoiceTriggerParams out[kMaxLayerTriggers];
 
@@ -258,7 +258,7 @@ TEST(InstrumentTest, ZoneTuneFlowsIntoPitchRatioMul) {
     Instrument ins;
     Zone z = MakeZone(1, 0, 127, 1, 127);
     z.coarse_tune = 12;  // +1 octave
-    ins.zones[0] = z;
+    ins.osc[0].zones[0] = z;
     FakeSampleBank tracks;
     VoiceTriggerParams out[kMaxLayerTriggers];
 
@@ -271,7 +271,7 @@ TEST(InstrumentTest, ZoneGainFlowsIntoGainMul) {
     Instrument ins;
     Zone z = MakeZone(1, 0, 127, 1, 127);
     z.gain = 0.25f;
-    ins.zones[0] = z;
+    ins.osc[0].zones[0] = z;
     FakeSampleBank tracks;
     VoiceTriggerParams out[kMaxLayerTriggers];
 
@@ -305,8 +305,8 @@ TEST(InstrumentTest, OppositeCrossfadeZonesBlend) {
     up.flags = ZONE_FLAG_VEL_XFADE;
     Zone down = MakeZone(2, 0, 127, 1, 127);
     down.flags = ZONE_FLAG_VEL_XFADE_DOWN;
-    ins.zones[0] = up;
-    ins.zones[1] = down;
+    ins.osc[0].zones[0] = up;
+    ins.osc[0].zones[1] = down;
     FakeSampleBank tracks;
     VoiceTriggerParams out[kMaxLayerTriggers];
 
@@ -341,7 +341,7 @@ TEST(InstrumentTest, ChokeGroupAndRegionFlowThrough) {
     // is about a zone's OWN fields reaching the trigger, so it claims it.
     z.flags = ZONE_FLAG_OWN_FILTER_ENV;
     z.pan = 0.25f;
-    ins.zones[0] = z;
+    ins.osc[0].zones[0] = z;
     FakeSampleBank tracks;
     VoiceTriggerParams out[kMaxLayerTriggers];
 
@@ -358,7 +358,7 @@ TEST(InstrumentTest, ChokeGroupAndRegionFlowThrough) {
 // Tracks routes a slot to its instrument and resolves through it.
 TEST(InstrumentTest, BankResolvesThroughSlot) {
     Tracks tracks;
-    tracks.At(4).instrument.zones[0] = MakeZone(1, 0, 127, 1, 127);
+    tracks.At(4).instrument.osc[0].zones[0] = MakeZone(1, 0, 127, 1, 127);
     FakeSampleBank samples;
     VoiceTriggerParams out[kMaxLayerTriggers];
 
@@ -455,7 +455,7 @@ struct MarkedSampleBank {
 
 TEST(InstrumentTest, ZoneInheritsSampleRecordWhereItLeavesZero) {
     Instrument ins;
-    ins.zones[0] = MakeZone(1, 0, 127, 1, 127);  // region/loop/gain untouched
+    ins.osc[0].zones[0] = MakeZone(1, 0, 127, 1, 127);  // region/loop/gain untouched
     MarkedSampleBank samples;
     VoiceTriggerParams out[kMaxLayerTriggers];
 
@@ -480,7 +480,7 @@ TEST(InstrumentTest, ZoneOverridesSampleRecordWhereItSetsAValue) {
     z.loop_end = 70;
     z.loop_mode = ZONE_LOOP_OFF;  // explicit off beats the record's loop
     z.gain = 2.0f;
-    ins.zones[0] = z;
+    ins.osc[0].zones[0] = z;
     MarkedSampleBank samples;
     VoiceTriggerParams out[kMaxLayerTriggers];
 
@@ -493,7 +493,7 @@ TEST(InstrumentTest, ZoneOverridesSampleRecordWhereItSetsAValue) {
     EXPECT_FLOAT_EQ(out[0].gain_mul, 1.0f);  // 2.0 x 0.5
 
     // Forward loops regardless of what the record says.
-    ins.zones[0].loop_mode = ZONE_LOOP_FORWARD;
+    ins.osc[0].zones[0].loop_mode = ZONE_LOOP_FORWARD;
     FakeSampleBank plain;  // no loop in its record
     ASSERT_EQ(ResolveNoteOn(ins, 0, 60, 100, plain.Resolver(), out, kMaxLayerTriggers), 1);
     EXPECT_TRUE(out[0].loop);
@@ -503,7 +503,7 @@ TEST(InstrumentTest, ResolverWithoutRecordLeavesWholeSampleNoLoopUnity) {
     // A resolver that carries no record (0 => whole sample, no loop, unity):
     // the previous behaviour must be exactly preserved.
     Instrument ins;
-    ins.zones[0] = MakeZone(1, 0, 127, 1, 127);
+    ins.osc[0].zones[0] = MakeZone(1, 0, 127, 1, 127);
     FakeSampleBank samples;
     VoiceTriggerParams out[kMaxLayerTriggers];
 
@@ -522,16 +522,16 @@ TEST(InstrumentTest, ZoneWithoutOverrideFollowsTheInstrument) {
     Instrument ins;
     ins.filter.cutoff_hz = 1234.0f;
     ins.filter.resonance = 0.3f;
-    ins.env.attack_s = 0.2f;
-    ins.env.decay_s = 0.3f;
-    ins.env.sustain = 0.4f;
-    ins.env.release_s = 0.5f;
+    ins.env[0].attack_s = 0.2f;
+    ins.env[0].decay_s = 0.3f;
+    ins.env[0].sustain = 0.4f;
+    ins.env[0].release_s = 0.5f;
 
     Zone z = MakeZone(1, 0, 127, 1, 127);
     z.cutoff_hz = 3000.0f;  // present, but not the zone's to use
     z.attack_s = 0.9f;
     z.flags = 0;
-    ins.zones[0] = z;
+    ins.osc[0].zones[0] = z;
 
     FakeSampleBank samples;
     VoiceTriggerParams out[kMaxLayerTriggers];
@@ -549,7 +549,7 @@ TEST(InstrumentTest, ZoneWithoutOverrideFollowsTheInstrument) {
 TEST(InstrumentTest, ZoneWithOverrideKeepsItsOwnFilterAndEnvelope) {
     Instrument ins;
     ins.filter.cutoff_hz = 1234.0f;
-    ins.env.attack_s = 0.2f;
+    ins.env[0].attack_s = 0.2f;
 
     Zone z = MakeZone(1, 0, 127, 1, 127);
     z.cutoff_hz = 3000.0f;
@@ -558,7 +558,7 @@ TEST(InstrumentTest, ZoneWithOverrideKeepsItsOwnFilterAndEnvelope) {
     z.sustain = 0.7f;
     z.release_s = 0.6f;
     z.flags = ZONE_FLAG_OWN_FILTER_ENV;
-    ins.zones[0] = z;
+    ins.osc[0].zones[0] = z;
 
     FakeSampleBank samples;
     VoiceTriggerParams out[kMaxLayerTriggers];
@@ -582,7 +582,7 @@ TEST(InstrumentTest, ResonanceAlwaysComesFromTheInstrument) {
     for (uint8_t flags: {uint8_t(0), uint8_t(ZONE_FLAG_OWN_FILTER_ENV)}) {
         Zone z = MakeZone(1, 0, 127, 1, 127);
         z.flags = flags;
-        ins.zones[0] = z;
+        ins.osc[0].zones[0] = z;
         ASSERT_EQ(ResolveNoteOn(ins, 0, 60, 100, samples.Resolver(), out, kMaxLayerTriggers), 1);
         EXPECT_FLOAT_EQ(out[0].filter_resonance, 0.42f) << "flags " << int(flags);
     }
@@ -592,7 +592,7 @@ TEST(InstrumentTest, ResonanceAlwaysComesFromTheInstrument) {
 // before it owned any: an untouched Track sounds the same as it always did.
 TEST(InstrumentTest, DefaultInstrumentMatchesTheOldEngineDefaults) {
     Instrument ins;
-    ins.zones[0] = MakeZone(1, 0, 127, 1, 127);
+    ins.osc[0].zones[0] = MakeZone(1, 0, 127, 1, 127);
     FakeSampleBank samples;
     VoiceTriggerParams out[kMaxLayerTriggers];
 

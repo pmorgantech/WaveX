@@ -28,7 +28,7 @@ class SequencerVoiceMapTest : public ::testing::Test {
     void SetUp() override {
         instrument.origin = InstrumentOrigin::Built;
         for (uint8_t i = 0; i < kMaxZones; ++i) {
-            auto& z = instrument.zones[i];
+            auto& z = instrument.osc[0].zones[i];
             z.in_use = true;
             z.sample_id = i + 1;
             z.key_lo = i * 4;
@@ -79,13 +79,13 @@ TEST_F(SequencerVoiceMapTest, PreparedResolutionMatchesLiveNotesAndVelocityLayer
     }
 }
 TEST_F(SequencerVoiceMapTest, MissingSamplesAndLayerLimitsPreserveZoneOrder) {
-    for (auto& z: instrument.zones) {
+    for (auto& z: instrument.osc[0].zones) {
         z.key_lo = 0;
         z.key_hi = 127;
         z.vel_lo = 1;
         z.vel_hi = 127;
     }
-    instrument.zones[0].sample_id = 0;
+    instrument.osc[0].zones[0].sample_id = 0;
     map.PrepareTrack(0, instrument, resolver);
     VoiceTriggerParams out[4];
     EXPECT_EQ(map.Resolve(0, 60, 100, out), 4);
@@ -181,11 +181,11 @@ TEST_F(SequencerVoiceMapTest, SparseTrackEditsAndRevocationsSurviveMailboxReuse)
 }
 
 TEST_F(SequencerVoiceMapTest, IndexedDrumPadsMatchLiveResolutionAndRetireAcrossMailboxCopies) {
-    for (auto& zone: instrument.zones)
+    for (auto& zone: instrument.osc[0].zones)
         zone = {};
     instrument.mode = InstrumentMode::Drum;
     for (uint8_t i = 0; i < 16; ++i) {
-        auto& zone = instrument.zones[i];
+        auto& zone = instrument.osc[0].zones[i];
         zone.in_use = i != 3 && i != 7;
         zone.sample_id = i + 1;
         zone.key_lo = zone.key_hi = 60 + (i * 7) % 16;
@@ -219,11 +219,11 @@ TEST_F(SequencerVoiceMapTest, IndexedDrumPadsMatchLiveResolutionAndRetireAcrossM
     ASSERT_TRUE(map.tracks[15].direct_drum);
     compare();
     // Overlapping velocity layers must fall back and preserve their order.
-    instrument.zones[1].key_lo = instrument.zones[1].key_hi = 60;
+    instrument.osc[0].zones[1].key_lo = instrument.osc[0].zones[1].key_hi = 60;
     map.PrepareTrack(15, instrument, resolver);
     ASSERT_FALSE(map.tracks[15].direct_drum);
     compare();
-    instrument.zones[1].key_lo = 59;
+    instrument.osc[0].zones[1].key_lo = 59;
     map.PrepareTrack(15, instrument, resolver);
     ASSERT_FALSE(map.tracks[15].direct_drum);
     compare();

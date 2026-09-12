@@ -234,7 +234,7 @@ TEST(SfzMapperTest, MapsSupportedOpcodesAndUnitConversions) {
     // The mapper numbers samples within the document (1..N); the loader
     // rewrites them to Pool ids at Commit. origin tells the UI it is an import.
     EXPECT_EQ(mapped.instrument.origin, InstrumentOrigin::SfzImport);
-    const Zone& zone = mapped.instrument.zones[0];
+    const Zone& zone = mapped.instrument.osc[0].zones[0];
     EXPECT_EQ(zone.key_lo, 60);
     EXPECT_EQ(zone.key_hi, 60);
     EXPECT_EQ(zone.vel_lo, 20);
@@ -261,7 +261,7 @@ TEST(SfzMapperTest, MapsSupportedOpcodesAndUnitConversions) {
 TEST(SfzMapperTest, PreservesZoneDefaultsWhenOpcodesAreMissing) {
     const MappedInstrument mapped = ParseAndMap({"<region> sample=plain.wav"});
     ASSERT_EQ(mapped.zone_count, 1);
-    const Zone& zone = mapped.instrument.zones[0];
+    const Zone& zone = mapped.instrument.osc[0].zones[0];
     EXPECT_EQ(zone.key_lo, 0);
     EXPECT_EQ(zone.key_hi, 127);
     EXPECT_EQ(zone.vel_lo, 1);
@@ -274,9 +274,9 @@ TEST(SfzMapperTest, PreservesZoneDefaultsWhenOpcodesAreMissing) {
 TEST(SfzMapperTest, KeySetsRangeAndRootWhenPitchCenterIsAbsent) {
     const MappedInstrument mapped = ParseAndMap({"<region> key=g4 sample=g.wav"});
     ASSERT_EQ(mapped.zone_count, 1);
-    EXPECT_EQ(mapped.instrument.zones[0].key_lo, 67);
-    EXPECT_EQ(mapped.instrument.zones[0].key_hi, 67);
-    EXPECT_EQ(mapped.instrument.zones[0].root_note, 67);
+    EXPECT_EQ(mapped.instrument.osc[0].zones[0].key_lo, 67);
+    EXPECT_EQ(mapped.instrument.osc[0].zones[0].key_hi, 67);
+    EXPECT_EQ(mapped.instrument.osc[0].zones[0].root_note, 67);
 }
 
 TEST(SfzMapperTest, EndMinusOneDisablesRegion) {
@@ -309,7 +309,7 @@ TEST(SfzMapperTest, ClampsExtremeGainAndEnvelopeValuesToFiniteBounds) {
         {"<region> volume=100000 ampeg_attack=100000 ampeg_decay=-2 ampeg_release=100000 "
          "sample=safe.wav"});
     ASSERT_EQ(mapped.zone_count, 1);
-    const Zone& zone = mapped.instrument.zones[0];
+    const Zone& zone = mapped.instrument.osc[0].zones[0];
     EXPECT_TRUE(std::isfinite(zone.gain));
     EXPECT_NEAR(zone.gain, std::pow(10.0f, 24.0f / 20.0f), 1e-4f);
     EXPECT_FLOAT_EQ(zone.attack_s, 60.0f);
@@ -320,8 +320,8 @@ TEST(SfzMapperTest, ClampsExtremeGainAndEnvelopeValuesToFiniteBounds) {
 TEST(SfzMapperTest, OneShotSetsZoneFlagWithoutLooping) {
     const MappedInstrument mapped = ParseAndMap({"<region> loop_mode=one_shot sample=hit.wav"});
     ASSERT_EQ(mapped.zone_count, 1);
-    EXPECT_EQ(mapped.instrument.zones[0].loop_mode, ZONE_LOOP_INHERIT);
-    EXPECT_NE(mapped.instrument.zones[0].flags & ZONE_FLAG_ONE_SHOT, 0);
+    EXPECT_EQ(mapped.instrument.osc[0].zones[0].loop_mode, ZONE_LOOP_INHERIT);
+    EXPECT_NE(mapped.instrument.osc[0].zones[0].flags & ZONE_FLAG_ONE_SHOT, 0);
 }
 
 TEST(SfzMapperTest, NoLoopIsAnExplicitOffNotInherit) {
@@ -329,7 +329,7 @@ TEST(SfzMapperTest, NoLoopIsAnExplicitOffNotInherit) {
     // its own loop points; only an unset loop_mode inherits them.
     const MappedInstrument mapped = ParseAndMap({"<region> loop_mode=no_loop sample=hit.wav"});
     ASSERT_EQ(mapped.zone_count, 1);
-    EXPECT_EQ(mapped.instrument.zones[0].loop_mode, ZONE_LOOP_OFF);
+    EXPECT_EQ(mapped.instrument.osc[0].zones[0].loop_mode, ZONE_LOOP_OFF);
 }
 
 TEST(SfzSamplePlanTest, DeduplicatesPathsAndAssignsStableIds) {
@@ -340,9 +340,9 @@ TEST(SfzSamplePlanTest, DeduplicatesPathsAndAssignsStableIds) {
     Status status;
     ASSERT_TRUE(BuildSamplePlan(mapped, plan, status));
     ASSERT_EQ(plan.count, 2);
-    EXPECT_EQ(mapped.instrument.zones[0].sample_id, 1);
-    EXPECT_EQ(mapped.instrument.zones[1].sample_id, 1);
-    EXPECT_EQ(mapped.instrument.zones[2].sample_id, 2);
+    EXPECT_EQ(mapped.instrument.osc[0].zones[0].sample_id, 1);
+    EXPECT_EQ(mapped.instrument.osc[0].zones[1].sample_id, 1);
+    EXPECT_EQ(mapped.instrument.osc[0].zones[2].sample_id, 2);
 }
 
 TEST(SfzSamplePlanTest, BudgetGuardReservesRamAndCapsEachSample) {

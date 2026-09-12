@@ -206,3 +206,26 @@ See [testing_guide.md](../testing_guide.md) and the roadmap's hardware gates.
 - [Oscillator source boundary](oscillator-sources.md)
 - [Modulation](param-locks-and-modulation.md)
 - [Architecture](../architecture.md)
+
+
+## Expanded Instrument storage foundation (2026-09-12)
+
+The engine model and WXI mapper now retain two typed oscillator maps, three
+envelopes, two LFO parameter sets, trim/tuning, oscillator mix, filter tracking
+and modulation amount, velocity curve, tags, output and poly mode. A cutoff
+edit followed by Save preserves these stored settings. The loader plans up
+to 64 zone references and deduplicates paths across both maps. Removing a zone
+releases a sample only when neither oscillator still uses it.
+
+This milestone establishes storage and ownership. The active renderer and
+existing Key Map/Pad Map controls still address Oscillator 1; Oscillator 2
+rendering, additional modulators and their controls are the next stage.
+Reserved wavetable sources remain unimplemented. Output/poly mode are retained
+settings, not a claim that their routing/voice policy is active.
+
+Normal firmware stores the foreground Track records in cacheable D2 RAM,
+constructed explicitly after System initialization. DMA buffers remain in
+their existing regions. The SRAM-debug layout places those records in its
+spare AXI range and moves document scratch within its guarded budgets.
+Both layouts compile; the host tests cover field preservation, cross-map
+sample deduplication and sample retention when Oscillator 1 is cleared.
