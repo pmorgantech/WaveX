@@ -21,8 +21,10 @@ versioning and release process.
   gain/pan and oscillator zero-to-restore, muted/restored Env 2/3 routes and
   both LFO pan routes through DSP meters. The clean held-edit repeat reached
   71.1283% peak and was REVIEW; the subsequent clean filter-cache repeat
-  reached 69.0852% peak and is STAY. Callback optimization remains required
-  before further callback scope.
+  reached 69.0852% peak and is the accepted STAY result. Each future callback
+  milestone requires a fresh full measurement; the one-hour phase soak remains
+  open. Normal-image HIL passed four live preview, Apply/Revert, save/recall
+  and held-note editing cases (81.34 seconds).
 
 - Added the Instrument LFO touch page with two selectable per-voice LFOs and
   eight tiles in two rows for waveform, Hz rate, sync, retrigger, delay, fade
@@ -46,7 +48,7 @@ versioning and release process.
   modulation source ids, CMSIS sine evaluation and WXI retention. Legacy
   15-byte LFO records remain readable with a zero pitch-follow default; the
   new record size is 16 bytes. The LFO touch tab and live Apply/Revert
-  audition flow remain open, and no new callback capacity gate is claimed.
+  audition flow are implemented; the one-hour phase soak remains open.
 
 - Added runtime Env 3, saved Env 2/Env 3 Instrument mapping, append-only Env 1
   and Env 3 modulation sources, and revisioned envelope/matrix edit and
@@ -188,8 +190,8 @@ versioning and release process.
   skipping unchanged filter configuration and cutoff/resonance retuning. The
   filter cache test repeats topology, drive, slope, clamp and reset cases
   against the separate-setter waveform reference. The 125-second retry is
-  diagnostic evidence only; the latest full held-edit gate remains REVIEW at
-  71.1283% peak.
+  diagnostic evidence only; the accepted clean filter-cache gate is 69.0852%
+  peak. Each future callback milestone requires a fresh full measurement.
 
 - Reduced the short dirty dual-source renderer diagnostic peak from 97.1019%
   to 63.3992% through source-reader inlining, profiling zones and named ITCM

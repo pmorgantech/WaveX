@@ -223,8 +223,8 @@ done. Open work, in the order decided 2026-09-05 (model doc §8: 7 → 4 → 5 �
    fade controls. The held-note milestone is implemented and hardware-verified;
    The held-edit run on 328a419 reached 71.1283% peak and was REVIEW. The
    subsequent clean filter-cache run on 5466a96 reached 69.0852% peak and is
-   STAY; callback optimization remains required before further scope. Neither
-   run closes the one-hour phase soak or permits a voice-count change.
+   STAY; each future callback milestone requires a fresh full measurement.
+   Neither run closes the one-hour phase soak or permits a voice-count change.
 3. Bank (stage 6): the [WXCF Bank codec](features/bank-persistence.md) and
    bounded resident index are host-tested. SD working-copy management, Bank
    page, Track recall, preload and Program Change recall remain open and follow
