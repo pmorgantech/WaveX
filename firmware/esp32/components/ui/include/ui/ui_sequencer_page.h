@@ -38,6 +38,10 @@ class UISequencerPage : public UIPage {
     void adjust(uint8_t parameter, int delta);
     void transport();
     void clearRow();
+    void lockMode(bool enabled);
+    void adjustLock(uint8_t parameter, int delta);
+    bool setLock(uint8_t id, uint16_t value);
+    void renderLocks();
     uint8_t selectedRow() const;
     bool editable() const;
     bool valueStep(SequencerGridModel::Step& step) const;
@@ -57,6 +61,9 @@ class UISequencerPage : public UIPage {
     uint32_t requested_at_ = 0;
     bool link_alive_ = false;
     bool clear_armed_ = false;
+    bool locks_mode_ = false;
+    uint8_t lock_slot_ = 0;
+    uint8_t drawn_lock_slot_ = 0xff;
     char context_[96]{};
 };
 std::shared_ptr<UIPage> createSequencerPage();

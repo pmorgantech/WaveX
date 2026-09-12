@@ -5,7 +5,8 @@ playhead publication are implemented. Each of the 16 pattern rows addresses
 the matching Track's Instrument at the step's selected MIDI note. Velocity
 layers and crossfades use the step's velocity. Chords and melodic gate lanes
 remain future Phase 2.5 work.
-Physical panel integration, MIDI clock output, parameter-lock application and
+Voice-scoped parameter locks and their touch editor are implemented.
+Physical panel integration, MIDI clock output and
 song/project persistence remain open Phase 2 work in [roadmap.md](../roadmap.md).
 Host tests and device compilation do not establish audible timing or the
 hardware phase gate.
@@ -127,7 +128,7 @@ The existing Play page provides Pads and Keys with shared note lifecycle,
 Track selection, binding status and live sound controls. Navigation and
 threading are described in [ui-architecture.md](../ui-architecture.md).
 
-Remaining surfaces include parameter-lock editing, pattern/song selection
+Remaining surfaces include live lock recording, pattern/song selection
 and melodic gate/chord lanes. Panel keys already have a logical model;
 LEDs and endless-pot drivers are separate remaining prerequisites in
 [panel-controls.md](panel-controls.md). Do not describe a debug-console
@@ -248,3 +249,12 @@ The connected-board regression test covers edits at Track 16/step 64, tempo
 and swing changes, navigation while playing, and confirmed row clearing
 through on-screen softkeys. It does not verify physical panel wiring, audible
 timing, external MIDI synchronization or the Phase 2 gate.
+
+
+### Per-step parameter locks
+
+Sequencer → Shift → Locks edits four voice-scoped overrides on the selected
+step. Tapping a step in this view selects it without toggling the note.
+The existing pattern codec retains every lock, including hidden steps.
+Application, mappings and the future live-recording/analog scope are documented
+in [param-locks-and-modulation.md](param-locks-and-modulation.md).

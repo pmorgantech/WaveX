@@ -321,3 +321,13 @@ reply cannot turn an unconfirmed mutation into success. New keyboard Instruments
 use the additive INST_OP_NEW_KEYBOARD operation; naming and WXI save copies use
 the existing Instrument operations. Host round-trip, dispatch, stale revision,
 pool ownership and sparse WXI tests cover the contract.
+
+### Parameter-lock editing
+
+The existing MSG_SEQ_PATTERN_OP/MSG_SEQ_PATTERN_SYNC messages carry four locks
+per step. SET_PARAM_LOCK retains its by-parameter update/oldest-eviction policy.
+CLEAR_PARAM_LOCK removes a single parameter. SET_PARAM_LOCK_SLOT atomically
+replaces one slot, rejects unsupported or duplicate ids, and accepts parameter
+zero to clear it. Field assignments and stable ids live in
+[protocol.h](../../firmware/shared/spi_protocol/protocol.h). Full pattern readback
+acknowledges accepted edits; no optimistic UI value becomes the pattern authority.

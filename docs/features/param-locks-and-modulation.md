@@ -1,39 +1,46 @@
 # Parameter Locks & Modulation Matrix — Design
 
-**Status**: Partially built (2026-09-02) — see §9 for exact stage status. The mod matrix, its two primitives (LFO, param slew), the control-tick wiring into the audio callback, the second envelope, and instrument-scoped `SET_MOD_SLOT` protocol wiring all exist and are tested (host + protocol round-trip/dispatch); the Daisy device build and ESP32 build are both green. It is a no-op on hardware today only because no UI yet sends `SET_MOD_SLOT` (stage 5). `SRC_MODWHEEL`/`SRC_AFTERTOUCH` still read 0 — MIDI CC/aftertouch forwarding from the ESP32 MIDI task is unbuilt. P-locks (§2) have not been started. P-locks are Phase 2 (already named in `sequencer.md` §3); the modulation matrix and LFOs are Phase 2.5.
+**Status**: Parameter-lock application and touch editing are implemented. Four
+voice-scoped locks per step are applied after zone resolution; pattern files
+retain them. The Instrument modulation editor, matrix, global LFO and second
+envelope already exist. Expanded oscillator, envelope and per-voice LFO work
+remains Phase 2.5. Live motion recording and analog/group locks are still target
+design below, not implemented behavior.
 **Dependencies**: sequencer step scheduler (Phase 2), `instrument-model.md` (matrix slots are instrument-scoped), voice manager (done). **Revised 2026-09-04**: the two-oscillator Instrument (`track-and-patch-model.md` §3.1) fixes the source/destination set this matrix serves — three envelopes, two per-voice LFOs, one global LFO, oscillator and wavetable-position destinations — appended to the enums below, never renumbered.
 **Lineage**: two ancestries deliberately fused — Elektron parameter locks (per-step sound design) and the E-mu EIII **realtime controls matrix** (velocity/wheel/pedal → pitch, filter, level, LFO amount, attack — routed, not hardwired).
 
 ---
 
-## 1. Parameter id space (one namespace for everything)
+## 1. Parameter identity and mappings
 
-`ControlParameter` (`protocol.h`, currently 0x01–0x0A) becomes the single id space used by live CCs, p-locks, mod-matrix destinations, macros, and scenes. Extend (append-only):
+The wire contract is `ControlParameter` in
+[protocol.h](../../firmware/shared/spi_protocol/protocol.h). Existing PAN (0x08)
+and PITCH (0x09) retain their identities. The earlier proposed duplicate ids are
+withdrawn. SAMPLE_START, LOOP_START and GAIN occupy their reserved ids; macros
+and analog/group controls remain reserved.
 
-```cpp
-enum ControlParameter : uint8_t {
-    // 0x01..0x0A existing (VOLUME, FILTER_CUTOFF, FILTER_RESONANCE, ENV A/D/S/R,
-    //                      LFO_RATE, LFO_DEPTH, MODULATION_MATRIX*)
-    PARAM_PITCH_OFFSET   = 0x0B,  // ± semitones ×100 (cents), voice-scoped
-    PARAM_PAN            = 0x0C,
-    PARAM_SAMPLE_START   = 0x0D,  // 0..65535 → 0..100% of region
-    PARAM_LOOP_START     = 0x0E,
-    PARAM_GAIN           = 0x0F,  // voice/track gain (distinct from master VOLUME)
-    PARAM_MACRO_1        = 0x10,  // performance macros, scenes-and-performance.md
-    PARAM_MACRO_2        = 0x11,
-    PARAM_MACRO_3        = 0x12,
-    PARAM_MACRO_4        = 0x13,
-    PARAM_ANALOG_CUTOFF  = 0x14,  // Stage A shared / Stage B per-group CV cutoff base
-    PARAM_ANALOG_RES     = 0x15,
-};
-// *PARAM_MODULATION_MATRIX (0x0A) is currently a temporary alias for env→cutoff
-// depth (roadmap item 5 stage 3). When matrix slots land (§3), 0x0A is
-// retired-but-reserved and the alias behavior is deleted in the same commit.
-```
+All locks carry a uint16 value. Cutoff maps exponentially from 20 Hz to 20 kHz;
+resonance/sustain/pan map from zero to one; ADSR times map from 1 to 2001 ms.
+Pitch replaces the live Track offset over -24 to +24 semitones while retaining
+zone tuning. Gain scales the resolved zone gain, with 32768 meaning unity.
+Start and loop start map within their original resolved ranges, leaving at least
+two frames. Loop start does nothing when looping is disabled. Other voice
+controls compose with the existing post-trigger modulation.
 
-Values stay `uint16_t` on the wire (existing `ControlChangeMessage`); each param defines its own mapping (documented in a table in `protocol.h` comments, tested in the param-apply unit tests).
+## Touch editing (as built)
 
-**Scoping rule**: a param write has a scope — *(a)* instrument-slot base value (live CC / UI knob), *(b)* per-trigger override (p-lock), *(c)* modulation offset (matrix, computed per block). Final per-voice value = `clamp(base + plock_override? : base, then + Σ modulation)`. P-locks **replace** the base for that trigger (Elektron semantics); modulation **adds**.
+Sequencer → Shift → Locks displays four slots above the grid. Drag Slot,
+Parameter and Value to choose an override; dragging an occupied slot's value
+edits it directly. Tapping a step selects it without toggling its note while in
+Locks view. Clear lock removes only the selected override. Grid returns to the
+ordinary step editor. An asterisk marks steps containing stored locks.
+
+Slot replacement is one atomic pattern operation, rejects duplicate parameters,
+and waits for backend readback. Live Instrument edits still update unlocked
+fields on held voices; locked fields retain their trigger values. A subsequent
+unlocked step resolves the Instrument normally. Master volume, global LFO,
+macros and analog/group parameters are not offered as voice locks. Unsupported
+ids in files are preserved but ignored by the renderer.
 
 ## 2. Parameter locks
 
@@ -112,11 +119,23 @@ enum as retired-but-reserved and reads 0.
 - Host: revert-at-step-boundary for track-scoped locks (the "lock lasts one step" invariant).
 - Hardware: DWT-measure control-tick cost with 8 voices × 8 slots + 3 LFOs active; budget < 10% of the tick. Audible: vibrato smoothness at block-rate pitch mod (sanity listen), filter-env sweep on the Stage A analog path via SRC_PARA_ENV → PARAM_ANALOG_CUTOFF.
 
-## 9. Implementation stages (one verified commit each)
+## 9. Implementation status
 
-1. Param id extension + `ApplyParamLocks` + scheduler application path, host-tested (pure functions, no protocol). **Not started** — only the `ParamLock` data model and its pass-through into `TriggerEvent` exist (`sequencer/pattern.hpp`, `sequencer_scheduler.hpp`); nothing applies a lock to a `VoiceTriggerParams`.
-2. ~~`Voice` block-modulation surface~~ + ~~env2~~ + per-voice LFO, host-tested (extends `VoiceManagerTest`). **Block-modulation surface done**: `Voice::SetBlockModulation()`, plus the per-trigger sources (`SRC_VELOCITY`/`SRC_NOTE`/`SRC_RANDOM`) sampled once at `Trigger()`. **env2 done**: `Voice::env2`, released/choked alongside the amp envelope, advanced once per block via the new `Envelope::AdvanceBlock(n)` (§4's "not per sample" requirement, verified by pinning it against `n` calls to `Process()` across every stage-transition boundary). ADSR comes from new `filter_env_*` fields on `VoiceTriggerParams`, defaulted rather than zone-derived — Zone has no ADSR-for-SRC_ENV_FILTER fields yet, that's still the wire-Zone chunk v2 bump §4 names. **The per-voice LFO is not built** — `SRC_LFO_VOICE` still evaluates to 0, the same treatment `SRC_PARA_ENV` already gets.
-3. ~~Global LFOs~~ + matrix evaluator in the control tick, host-tested; DWT numbers recorded on bench. **Done, on host**: `VoiceManager::TickModulation()` runs once per callback (audio_engine.cpp's `Callback()` — one callback IS one 1kHz control tick), ticks two engine-global `Lfo` instances into `SRC_LFO1`/`SRC_LFO2`, and evaluates `EvaluateModMatrix()` per sounding voice against **that voice's own instrument's slots** (`ModSlotResolver`, resolved via `Voice::track` — stage 4 below gave this evaluator real per-instrument storage to read from instead of the original temporary engine-global array). **DWT numbers not recorded** — no hardware bench session yet.
-4. ~~Instrument-scoped `ModSlot` storage~~ + ~~`INST_OP` extension (`SET_MOD_SLOT`)~~ + ~~retire the 0x0A alias~~ — **done**. `Instrument::mod_slots[8]` (`instrument.hpp`), written by `SfzLoader::SetModSlot()` from a new `INST_OP_SET_MOD_SLOT` op riding `MSG_INST_OP` (extends the existing `InstOpMessage` wire struct with `mod_slot_index`/`mod_source`/`mod_dest`/`mod_depth`/`mod_curve`/`mod_flags`, `path` unused for this op) — ESP32 send wrapper `inter_mcu_send_mod_slot()`, round-trip test (`message_types_test.cpp`) and dispatch test (`message_dispatch_test.cpp`), `inter-mcu-protocol.md` updated. `PARAM_MODULATION_MATRIX`'s (0x0A) `OnControlChange` case is deleted (enum value stays reserved, per the design). Read directly from the audio callback with no mailbox — a `ModSlot` is smaller than this architecture's atomic word, but every field a torn read could produce is still bounds-checked downstream (`ModSources::Get()`/`EvaluateModMatrix()`'s `default` cases), so the worst case is one harmless-or-bounded control tick, self-correcting the next; promote to a mailbox like `s_voice_live_pending` if a bench session ever finds it audible. **Still open**: `MSG_MIDI_CC` (0x56) itself was already fully wired before this stage (struct, dispatch, round-trip/dispatch tests) but two things around it are not: the ESP32 MIDI task still drops incoming CC/channel-pressure instead of forwarding them (`midi_task.cpp`'s `ControlChange` case is a no-op, and channel pressure isn't even a parsed event yet in the shared MIDI stream parser), and nothing on the Daisy feeds a received CC into `ModSources.modwheel`/`.aftertouch` — `SequencerTransport::OnMidiCc()` still only records `last_cc_*` for tests. `SRC_MODWHEEL`/`SRC_AFTERTOUCH` read 0 until that's built.
-5. UI: step-hold p-lock gesture + mod/LFO pages.
-6. Live p-lock recording (motion capture window logic host-tested first).
+- Voice-scoped lock application, individual-field live-edit protection, four-slot
+  touch editing, single-slot clearing and pattern save/load are implemented.
+  Host tests cover mapping, region bounds, unsupported ids, live-note isolation,
+  slot identity and duplicate rejection. The two-board editor/recall HIL passed.
+  Callback measurements are recorded separately in
+  [callback-performance-log.md](../callback-performance-log.md).
+- The block modulation surface and per-trigger velocity/note/random sources are
+  implemented. Env 2 is a block-rate source and shares note/release/choke
+  lifecycle with Env 1. Its editable Instrument parameters follow in Phase 2.5.
+- The eight-row Instrument matrix and Instrument Mod editor are implemented.
+  Foreground edits publish complete per-Track snapshots through mailboxes;
+  the callback never reads a partially edited matrix.
+- The engine currently ticks two global LFOs. The target above replaces the
+  second global source with two Instrument-owned per-voice LFOs; that migration,
+  Env 3 and expanded destinations remain Phase 2.5 work.
+- MIDI CC/channel-pressure source wiring, live lock recording, global LFO
+  editing and analog/group lock lifetimes remain open. The corresponding
+  gestures and protocol extensions above describe targets, not current controls.

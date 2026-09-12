@@ -248,8 +248,12 @@ enum ControlParameter : uint8_t {
     PARAM_PAN = 0x08,    // 0 = hard left, 32768 = centre, 65535 = hard right
     PARAM_PITCH = 0x09,  // semitone offset, 32768 = no transposition
     PARAM_MODULATION_MATRIX = 0x0A,
-    // 0x0B..0x15 are reserved for the id space in
-    // docs/features/param-locks-and-modulation.md §1 - do not fill them here.
+    // Per-trigger controls (parameter locks); full uint16_t normalized range.
+    // Start offsets stay inside the resolved region, leaving two playable frames.
+    PARAM_SAMPLE_START = 0x0D,
+    PARAM_LOOP_START = 0x0E,
+    PARAM_GAIN = 0x0F,  // 0..2 times the resolved zone gain; 32768 is unity
+    // 0x0B..0x0C and 0x10..0x15 remain reserved.
     //
     // These two used to be 0x08 and 0x09: the same values as PARAM_PAN and
     // PARAM_PITCH, in the same enum. Harmless only because nothing has ever
@@ -1596,8 +1600,12 @@ enum SeqPatternOpCode : uint8_t {
     SEQ_OP_PATTERN_SWING = 7,
     SEQ_OP_SET_PARAM_LOCK = 8,
     SEQ_OP_CLEAR_PARAM_LOCKS = 9,
-    SEQ_OP_CLEAR_TRACK = 10,    // clear all steps and their locks; retain track mute
-    SEQ_OP_SET_STEP_NOTE = 11,  // arg_u8: MIDI note 0..127
+    SEQ_OP_CLEAR_TRACK = 10,       // clear all steps and their locks; retain track mute
+    SEQ_OP_SET_STEP_NOTE = 11,     // arg_u8: MIDI note 0..127
+    SEQ_OP_CLEAR_PARAM_LOCK = 12,  // arg_u8: ControlParameter to remove
+    // Atomic replacement: arg_s16 slot 0..3, arg_u8 parameter (0 clears),
+    // arg_u16 value. Duplicate parameters in another slot are rejected.
+    SEQ_OP_SET_PARAM_LOCK_SLOT = 13,
 };
 struct SeqPatternOpMessage {
     uint8_t op;      // SeqPatternOpCode

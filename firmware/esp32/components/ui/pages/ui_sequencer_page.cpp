@@ -4,6 +4,7 @@
 #include "debug/console_command.h"
 #include "inter_mcu.h"
 #include "ui/current_track.h"
+#include "ui/parameter_lock_model.h"
 #include "ui/ui_navigator.h"
 #include "ui/ui_pattern_files_page.h"
 
@@ -39,7 +40,7 @@ void UISequencerPage::onEnter(lv_obj_t* parent) {
     lv_obj_remove_flag(root_, LV_OBJ_FLAG_SCROLLABLE);
     const int width = (UI_CONTENT_WIDTH - 2 * UI_MARGIN_X - 3 * UI_GUTTER) / 4;
     const char* names[] = {"TEMPO", "SWING", "LENGTH", "SCALE", "VELOCITY", "PROBABILITY", "NOTE"};
-    const char* units[] = {"BPM", "%", "steps", "", "", "%", "MIDI"};
+    const char* units[] = {"BPM", "%", "steps", " ", " ", "%", "MIDI"};
     for (uint8_t i = 0; i < 7; ++i) {
         const int x = UI_MARGIN_X + (i < 4 ? i : i - 4) * (width + UI_GUTTER);
         const int y = i < 4 ? UI_PADDING_SMALL : UI_SEQ_DETAIL_TOP;
@@ -92,6 +93,7 @@ void UISequencerPage::onEnter(lv_obj_t* parent) {
             lv_obj_add_event_cb(cell.button, cellEvent, LV_EVENT_CLICKED, &cell);
         }
     }
+    drawn_lock_slot_ = 0xff;
     settings_.valid = 0;
     link_alive_ = inter_mcu_backend_link_alive();
     window(static_cast<uint8_t>((getCurrentTrack() / 4) * 4),
@@ -212,20 +214,22 @@ void UISequencerPage::render() {
     if (!root_)
         return;
     char value[192];
-    std::snprintf(value,
-                  sizeof(value),
-                  "%u.%02u",
-                  settings_.tempo_bpm_x100 / 100,
-                  settings_.tempo_bpm_x100 % 100);
-    tileText(tiles_[0], value);
-    std::snprintf(value, sizeof(value), "%u", settings_.swing);
-    tileText(tiles_[1], value);
-    std::snprintf(value, sizeof(value), "%u", settings_.length);
-    tileText(tiles_[2], value);
-    tileText(tiles_[3], settings_.scale < 6 ? kScales[settings_.scale] : "--");
-    if (!settings_.valid)
-        for (uint8_t i = 0; i < 4; ++i)
-            tileText(tiles_[i], "--");
+    if (!locks_mode_) {
+        std::snprintf(value,
+                      sizeof(value),
+                      "%u.%02u",
+                      settings_.tempo_bpm_x100 / 100,
+                      settings_.tempo_bpm_x100 % 100);
+        tileText(tiles_[0], value);
+        std::snprintf(value, sizeof(value), "%u", settings_.swing);
+        tileText(tiles_[1], value);
+        std::snprintf(value, sizeof(value), "%u", settings_.length);
+        tileText(tiles_[2], value);
+        tileText(tiles_[3], settings_.scale < 6 ? kScales[settings_.scale] : "--");
+        if (!settings_.valid)
+            for (uint8_t i = 0; i < 4; ++i)
+                tileText(tiles_[i], "--");
+    }
     for (uint8_t row = 0; row < 4; ++row) {
         const uint8_t track = model_.FirstTrack() + row;
         TrackBindingMessage binding;
@@ -267,39 +271,57 @@ void UISequencerPage::render() {
                                               0);
                 cell.drawn = flags;
             }
-            std::snprintf(value, sizeof(value), "%02u", step + 1);
+            bool locked = false;
+            if (ready)
+                for (const auto& lock: model_.Row(row).steps[col].locks)
+                    locked |= lock.parameter != 0;
+            std::snprintf(value, sizeof(value), "%02u%s", step + 1, locked ? "*" : "");
             text(cell.label, value);
         }
     }
-    SequencerGridModel::Step step;
-    if (valueStep(step)) {
-        std::snprintf(value, sizeof(value), "%u", step.velocity);
-        tileText(tiles_[4], value);
-        std::snprintf(value, sizeof(value), "%u", step.probability);
-        tileText(tiles_[5], value);
-        std::snprintf(value, sizeof(value), "%u", step.note);
-        tileText(tiles_[6], value);
-        if (step.note >= 60 && step.note < 76)
-            std::snprintf(value, sizeof(value), "Pad %u", step.note - 59);
-        else
-            std::snprintf(value, sizeof(value), "MIDI");
-        text(tiles_[6].unit, value);
-    } else {
-        tileText(tiles_[4], "--");
-        tileText(tiles_[5], "--");
-        tileText(tiles_[6], "--");
-        text(tiles_[6].unit, "MIDI");
+    if (!locks_mode_) {
+        SequencerGridModel::Step step;
+        if (valueStep(step)) {
+            std::snprintf(value, sizeof(value), "%u", step.velocity);
+            tileText(tiles_[4], value);
+            std::snprintf(value, sizeof(value), "%u", step.probability);
+            tileText(tiles_[5], value);
+            std::snprintf(value, sizeof(value), "%u", step.note);
+            tileText(tiles_[6], value);
+            if (step.note >= 60 && step.note < 76)
+                std::snprintf(value, sizeof(value), "Pad %u", step.note - 59);
+            else
+                std::snprintf(value, sizeof(value), "MIDI");
+            text(tiles_[6].unit, value);
+        } else {
+            tileText(tiles_[4], "--");
+            tileText(tiles_[5], "--");
+            tileText(tiles_[6], "--");
+            text(tiles_[6].unit, "MIDI");
+        }
+        std::snprintf(value,
+                      sizeof(value),
+                      "Track %u / Step %02u\n%s",
+                      trackDisplayNumber(getCurrentTrack()),
+                      selected_step_ + 1,
+                      !link_alive_         ? "Audio engine disconnected"
+                      : clear_armed_       ? "Clear this Track's steps? Choose Confirm or Cancel."
+                      : !model_.AllReady() ? "Reading pattern..."
+                                           : "Tap steps; drag values. Notes 60-75 play Pads 1-16.");
+        text(status_, value);
     }
-    std::snprintf(value,
-                  sizeof(value),
-                  "Track %u / Step %02u\n%s",
-                  trackDisplayNumber(getCurrentTrack()),
-                  selected_step_ + 1,
-                  !link_alive_         ? "Audio engine disconnected"
-                  : clear_armed_       ? "Clear this Track's steps? Choose Confirm or Cancel."
-                  : !model_.AllReady() ? "Reading pattern..."
-                                       : "Tap steps; drag values. Notes 60-75 play Pads 1-16.");
-    text(status_, value);
+    if (locks_mode_)
+        renderLocks();
+    else {
+        const char* labels[] = {
+            "TEMPO", "SWING", "LENGTH", "SCALE", "VELOCITY", "PROBABILITY", "NOTE"};
+        const char* units[] = {"BPM", "%", "steps", "", "", "%"};
+        for (uint8_t i = 0; i < 7; ++i) {
+            text(tiles_[i].label, labels[i]);
+            if (i < 6)
+                text(tiles_[i].unit, units[i]);
+        }
+    }
     char context[sizeof(context_)];
     std::snprintf(context,
                   sizeof(context),
@@ -341,6 +363,10 @@ void UISequencerPage::toggle(uint8_t row, uint8_t column) {
     if (step >= model_.Row(row).length)
         return;
     const auto saved = model_.Row(row).steps[column];
+    if (locks_mode_) {
+        focus(model_.FirstTrack() + row, step);
+        return;
+    }
     focus(model_.FirstTrack() + row, step);
     edit({SEQ_OP_SET_STEP,
           getCurrentTrack(),
@@ -353,6 +379,10 @@ void UISequencerPage::toggle(uint8_t row, uint8_t column) {
 void UISequencerPage::adjust(uint8_t parameter, int delta) {
     if (!link_alive_ || !settings_.valid || delta == 0)
         return;
+    if (locks_mode_) {
+        adjustLock(parameter, delta);
+        return;
+    }
     if (parameter == 0) {
         const int bpm =
             std::clamp(static_cast<int>(settings_.tempo_bpm_x100) + delta * 100, 2000, 30000);
@@ -417,6 +447,97 @@ void UISequencerPage::adjust(uint8_t parameter, int delta) {
         }
     }
 }
+void UISequencerPage::lockMode(bool enabled) {
+    locks_mode_ = enabled;
+    drawn_lock_slot_ = 0xff;
+    if (!enabled)
+        for (auto& tile: tiles_)
+            valueTileSetFocus(tile, false);
+    clear_armed_ = false;
+    render();
+    UINavigator::instance().refreshSoftkeys();
+}
+bool UISequencerPage::setLock(uint8_t id, uint16_t value) {
+    SequencerGridModel::Step step;
+    if (!valueStep(step) || !ParameterLocks::Replace(step, lock_slot_, id, value))
+        return false;
+    if (!edit(
+            {SEQ_OP_SET_PARAM_LOCK_SLOT, getCurrentTrack(), selected_step_, id, value, lock_slot_}))
+        return false;
+    model_.PreviewStep(selectedRow(), selected_step_ % 16, step);
+    render();
+    return true;
+}
+void UISequencerPage::adjustLock(uint8_t parameter, int delta) {
+    if (parameter == 4) {
+        lock_slot_ = static_cast<uint8_t>(std::clamp(lock_slot_ + delta, 0, 3));
+        UINavigator::instance().refreshSoftkeys();
+        render();
+        return;
+    }
+    if (parameter < 4) {
+        lock_slot_ = parameter;
+        UINavigator::instance().refreshSoftkeys();
+    }
+    SequencerGridModel::Step step;
+    if (!valueStep(step))
+        return;
+    auto lock = step.locks[lock_slot_];
+    if (parameter == 5) {
+        const auto id = ParameterLocks::Next(step, lock_slot_, delta);
+        setLock(id, ParameterLocks::choices[ParameterLocks::Index(id)].initial);
+    } else if (lock.parameter) {
+        setLock(lock.parameter,
+                static_cast<uint16_t>(
+                    std::clamp(static_cast<int>(lock.value) + delta * 256, 0, 65535)));
+    }
+    render();
+}
+void UISequencerPage::renderLocks() {
+    SequencerGridModel::Step step;
+    const bool ready = valueStep(step);
+    char value[64], label[48];
+    const char* unit = "";
+    for (uint8_t i = 0; i < 4; ++i) {
+        const auto lock = ready ? step.locks[i] : SeqLockState{};
+        std::snprintf(label, sizeof(label), "%u  %s", i + 1, ParameterLocks::Name(lock.parameter));
+        text(tiles_[i].label, label);
+        ParameterLocks::Format(lock, value, sizeof(value), unit);
+        text(tiles_[i].unit, unit);
+        tileText(tiles_[i], value);
+        if (drawn_lock_slot_ != lock_slot_)
+            valueTileSetFocus(tiles_[i], lock_slot_ == i);
+    }
+    drawn_lock_slot_ = lock_slot_;
+    text(tiles_[4].label, "LOCK SLOT");
+    text(tiles_[4].unit, "of 4");
+    std::snprintf(value, sizeof(value), "%u", lock_slot_ + 1);
+    tileText(tiles_[4], value);
+    text(tiles_[5].label, "PARAMETER");
+    text(tiles_[5].unit, "");
+    const auto lock = ready ? step.locks[lock_slot_] : SeqLockState{};
+    const char* parameter_name = ParameterLocks::Name(lock.parameter);
+    if (std::strcmp(lv_label_get_text(tiles_[5].value), parameter_name) != 0)
+        valueTileSetValue(tiles_[5], parameter_name, true);
+    text(tiles_[6].label, "VALUE");
+    ParameterLocks::Format(lock, value, sizeof(value), unit);
+    text(tiles_[6].unit, unit);
+    tileText(tiles_[6], value);
+    std::snprintf(value,
+                  sizeof(value),
+                  "Track %u / Step %02u",
+                  trackDisplayNumber(getCurrentTrack()),
+                  selected_step_ + 1);
+    char status[192];
+    std::snprintf(status,
+                  sizeof(status),
+                  "%s\n%s",
+                  value,
+                  !link_alive_ ? "Audio engine disconnected"
+                  : !ready     ? "Reading step..."
+                               : "Drag Slot, Parameter, then Value. * marks a locked step.");
+    text(status_, status);
+}
 void UISequencerPage::transport() {
     if (!link_alive_ || !model_.AllReady())
         return;
@@ -455,6 +576,17 @@ std::array<Softkey, NUM_SOFTKEYS> UISequencerPage::getSoftkeys() {
     std::array<Softkey, NUM_SOFTKEYS> keys{};
     keys[0] = {"Back", [] { UINavigator::instance().pop(); }};
     const bool ready = link_alive_ && model_.AllReady();
+    if (locks_mode_) {
+        keys[1] = {"Grid", [this] { lockMode(false); }};
+        keys[2] = {"Lock -", [this] { adjustLock(4, -1); }, lock_slot_ > 0, "First lock"};
+        keys[3] = {"Lock +", [this] { adjustLock(4, 1); }, lock_slot_ < 3, "Last lock"};
+        keys[4] = {"Clear lock", [this] { setLock(0, 0); }, editable(), "Reading step"};
+        keys[5] = {playhead_.playing ? "Stop" : "Play",
+                   [this] { transport(); },
+                   ready,
+                   "Waiting for the audio engine"};
+        return keys;
+    }
     if (clear_armed_) {
         keys[1] = {"Cancel", [this] {
                        clear_armed_ = false;
@@ -490,6 +622,8 @@ std::array<Softkey, NUM_SOFTKEYS> UISequencerPage::getShiftedSoftkeys() {
     std::array<Softkey, NUM_SOFTKEYS> keys{};
     keys[0] = {"Back", [] { UINavigator::instance().pop(); }};
     const bool ready = link_alive_ && model_.Ready(selectedRow());
+    if (locks_mode_)
+        return getSoftkeys();
     keys[1] = {ready && !model_.Row(selectedRow()).enabled ? "Unmute" : "Mute",
                [this] {
                    if (model_.Ready(selectedRow()))
@@ -526,10 +660,18 @@ std::array<Softkey, NUM_SOFTKEYS> UISequencerPage::getShiftedSoftkeys() {
                [] { UINavigator::instance().push(createPatternFilesPage()); },
                link_alive_,
                "Audio engine disconnected"};
+    keys[5] = {"Locks", [this] { lockMode(true); }, editable(), "Select an active step window"};
     return keys;
 }
 size_t UISequencerPage::consoleState(char* out, size_t cap, size_t len) {
     using namespace WaveX::Debug;
+    len = AppendKvInt(out, cap, len, "seqlocks", locks_mode_);
+    len = AppendKvInt(out, cap, len, "lockslot", lock_slot_ + 1);
+    SequencerGridModel::Step selected;
+    if (valueStep(selected)) {
+        len = AppendKvInt(out, cap, len, "lockparam", selected.locks[lock_slot_].parameter);
+        len = AppendKvInt(out, cap, len, "lockvalue", selected.locks[lock_slot_].value);
+    }
     len = AppendKvInt(out, cap, len, "seqready", model_.AllReady() && link_alive_);
     len = AppendKvInt(out, cap, len, "seqplaying", playhead_.playing);
     len = AppendKvInt(out, cap, len, "seqstep", playhead_.step + 1);
@@ -556,7 +698,16 @@ bool UISequencerPage::consoleCommand(const char* args, char* reply, size_t cap) 
     int a = 0, b = 0;
     SequencerGridModel::Step step;
     const int count = std::sscanf(args ? args : "", "%23s %d %d", verb, &a, &b);
-    if (count == 3 && std::strcmp(verb, "FOCUS") == 0 && a >= 1 && a <= 16 && b >= 1 && b <= 64)
+    if (count == 3 && locks_mode_ && std::strcmp(verb, "LOCK") == 0 && a >= 0 && a <= 255 &&
+        b >= 0 && b <= 65535) {
+        if (!setLock(static_cast<uint8_t>(a), static_cast<uint16_t>(b)))
+            return false;
+    } else if (count == 2 && locks_mode_ && std::strcmp(verb, "SLOT") == 0 && a >= 1 && a <= 4) {
+        adjustLock(4, a - lock_slot_ - 1);
+    } else if (count == 2 && locks_mode_ && std::strcmp(verb, "PARAMETER") == 0 && a != 0) {
+        adjustLock(5, a);
+    } else if (count == 3 && std::strcmp(verb, "FOCUS") == 0 && a >= 1 && a <= 16 && b >= 1 &&
+               b <= 64)
         focus(static_cast<uint8_t>(a - 1), static_cast<uint8_t>(b - 1));
     else if (count == 1 && std::strcmp(verb, "TOGGLE") == 0 && editable())
         lv_obj_send_event(

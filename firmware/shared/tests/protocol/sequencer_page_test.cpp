@@ -112,3 +112,16 @@ TEST(SequencerPageProtocol, StepNoteOperationAndReadbackRoundTripAtMidiBounds) {
         EXPECT_EQ(sizeof(SeqPatternSyncMessage), 336u);
     }
 }
+
+TEST(SequencerPageProtocol, LockSlotOperationsRoundTrip) {
+    for (uint8_t op: {uint8_t{SEQ_OP_CLEAR_PARAM_LOCK}, uint8_t{SEQ_OP_SET_PARAM_LOCK_SLOT}}) {
+        SeqPatternOpMessage original{op, 15, 63, PARAM_LOOP_START, 65535, 3}, parsed;
+        std::array<uint8_t, 128> bytes{};
+        ASSERT_GT(ProtocolHandler::CreatePacket(
+                      bytes.data(), bytes.size(), MSG_SEQ_PATTERN_OP, &original, sizeof(original)),
+                  0u);
+        ASSERT_TRUE(ProtocolHandler::ParseMessage(
+            bytes.data(), MSG_SEQ_PATTERN_OP, &parsed, sizeof(parsed)));
+        EXPECT_EQ(std::memcmp(&original, &parsed, sizeof(parsed)), 0);
+    }
+}

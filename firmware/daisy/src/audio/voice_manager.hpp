@@ -34,6 +34,7 @@
 // (AGENTS.md constraint #1 / architecture.md §7.1).
 
 #include "config/hardware_config.h"
+#include "spi_protocol/protocol.h"
 
 #include "audio/mod_matrix.hpp"
 #include "audio/track_mix.hpp"
@@ -105,6 +106,15 @@ class PlaybackPhase {
     uint32_t fraction_ = 0;
 };
 
+// Bits use the stable ControlParameter ids 2..9. Playback/gain locks are
+// baked into the resolved trigger and have no live replacement path.
+constexpr uint16_t VoiceLockBit(uint8_t parameter) {
+    return parameter < 16 ? static_cast<uint16_t>(1u << parameter) : 0;
+}
+struct VoiceAmpParams {
+    float attack = 0.001f, decay = 0.05f, sustain = 0.8f, release = 0.1f;
+};
+
 struct Voice {
     VoiceState state = VoiceState::Idle;
     const int16_t* sample = nullptr;  // RAM-resident, interleaved; not owned by Voice
@@ -125,8 +135,12 @@ struct Voice {
     uint8_t track = 0;                 // Track that owns this voice
     uint8_t choke_group = 0;           // 0 = none; 1..N = mutual-exclusion group (open/closed hat)
     bool own_filter_env = false;       // zone overrides survive Instrument live edits
-    bool one_shot = false;             // ignore note-off; stop at the sample/region end
-    uint32_t age = 0;                  // trigger order, for stealing/release-newest-first
+    uint16_t param_lock_mask = 0;
+    VoiceAmpParams amp_params;
+    float base_resonance = 0;
+    float locked_pitch_scale = 1;
+    bool one_shot = false;  // ignore note-off; stop at the sample/region end
+    uint32_t age = 0;       // trigger order, for stealing/release-newest-first
 
     // Playback region + loop (item 4). end_frame/loop_end are exclusive.
     uint32_t start_frame = 0;
@@ -230,6 +244,8 @@ struct VoiceTriggerParams {
     uint8_t track = 0;
     uint8_t choke_group = 0;
     bool own_filter_env = false;  // zone overrides survive Instrument live edits
+    uint16_t param_lock_mask = 0;
+    float locked_pitch_scale = 1;
     bool one_shot = false;
 
     // Post-resolution multipliers the instrument layer folds in without
@@ -353,6 +369,14 @@ class VoiceManager {
         sample_rate_ = sample_rate > 0 ? sample_rate : 48000;
         live_pitch_scales_.fill(1.0f);
         filter_config_ = FilterConfig{};
+        // DSP initialization belongs to startup, not every note-on. Trigger
+        // only installs tuning and resets the active filter's integrators.
+        for (auto& voice: voices_) {
+            voice = Voice{};
+            voice.filter.Init(sample_rate_);
+            voice.envelope.Init(sample_rate_);
+            voice.env2.Init(sample_rate_);
+        }
         // A zeroed seed is a fixed point of xorshift (0 stays 0 forever), which
         // would make SRC_RANDOM sample the same -1.0f on every voice for the
         // life of the engine - exactly the live_pitch_scale_ bug this
@@ -412,21 +436,32 @@ class VoiceManager {
             if (filter_changed) {
                 v.filter.SetConfig(filter_config_);
             }
-            if (v.own_filter_env) {
-                v.filter.SetResonance(p.filter_resonance);
-            } else {
+            const auto unlocked = [&v](uint8_t id) {
+                return !(v.param_lock_mask & VoiceLockBit(id));
+            };
+            if (unlocked(Protocol::PARAM_FILTER_RESONANCE))
+                v.base_resonance = p.filter_resonance;
+            if (!v.own_filter_env && unlocked(Protocol::PARAM_FILTER_CUTOFF))
                 v.base_cutoff_hz = p.filter_cutoff_hz;
-                v.filter.SetParameters(v.base_cutoff_hz * v.mod_cutoff_mul, p.filter_resonance);
-                if (!v.envelope.IsReleasing())
-                    v.envelope.SetParams(p.attack_s, p.decay_s, p.sustain_level, p.release_s);
+            v.filter.SetParameters(v.base_cutoff_hz * v.mod_cutoff_mul, v.base_resonance);
+            if (!v.own_filter_env && !v.envelope.IsReleasing()) {
+                auto& amp = v.amp_params;
+                if (unlocked(Protocol::PARAM_ENVELOPE_ATTACK))
+                    amp.attack = p.attack_s;
+                if (unlocked(Protocol::PARAM_ENVELOPE_DECAY))
+                    amp.decay = p.decay_s;
+                if (unlocked(Protocol::PARAM_ENVELOPE_SUSTAIN))
+                    amp.sustain = p.sustain_level;
+                if (unlocked(Protocol::PARAM_ENVELOPE_RELEASE))
+                    amp.release = p.release_s;
+                v.envelope.SetParams(amp.attack, amp.decay, amp.sustain, amp.release);
             }
-            // Pan is a gain pair recomputed per block in Render(), so writing
-            // it here is heard on the next block without a click.
-            v.pan = p.pan;
+            if (unlocked(Protocol::PARAM_PAN))
+                v.pan = p.pan;
             // Multiply the note's own increment rather than overwrite it, so a
             // live transpose stacks on key tracking instead of flattening every
             // voice to the same rate.
-            v.SetIncrement(v.base_increment * LivePitchScale(v.track));
+            v.SetIncrement(v.base_increment * VoicePitchScale(v));
         }
     }
 
@@ -458,6 +493,10 @@ class VoiceManager {
         v.choke_group = params.choke_group;
         v.one_shot = params.one_shot;
         v.own_filter_env = params.own_filter_env;
+        v.param_lock_mask = params.param_lock_mask;
+        v.locked_pitch_scale = params.locked_pitch_scale;
+        v.base_resonance = params.filter_resonance;
+        v.amp_params = {params.attack_s, params.decay_s, params.sustain_level, params.release_s};
         v.age = next_age_++;
 
         // A stolen voice keeps its struct - without this reset it would
@@ -522,20 +561,17 @@ class VoiceManager {
                                     static_cast<float>(static_cast<int>(params.note) -
                                                        static_cast<int>(params.root_note)) /
                                         12.0f);
-        v.SetIncrement(v.base_increment * LivePitchScale(v.track));
+        v.SetIncrement(v.base_increment * VoicePitchScale(v));
 
-        v.filter.Init(sample_rate_);
         v.filter.SetConfig(filter_config_);
         v.base_cutoff_hz = params.filter_cutoff_hz;
         v.filter.SetParameters(v.base_cutoff_hz, params.filter_resonance);
         v.filter.Reset();
 
-        v.envelope.Init(sample_rate_);
         v.envelope.SetParams(
             params.attack_s, params.decay_s, params.sustain_level, params.release_s);
         v.envelope.Retrigger();
 
-        v.env2.Init(sample_rate_);
         v.env2.SetParams(params.filter_env_attack_s,
                          params.filter_env_decay_s,
                          params.filter_env_sustain_level,
@@ -620,7 +656,7 @@ class VoiceManager {
             // filter's tan() recompute nor an increment rewrite; an active
             // LFO/matrix slot drives its mod_*_mul away from identity every
             // tick, so this still runs whenever modulation is actually live.
-            const float increment = v.base_increment * LivePitchScale(v.track) * v.mod_pitch_mul;
+            const float increment = v.base_increment * VoicePitchScale(v) * v.mod_pitch_mul;
             if (v.increment != increment) {
                 v.SetIncrement(increment);
             }
@@ -904,6 +940,11 @@ class VoiceManager {
     uint32_t sample_rate_ = 48000;
     // Live transpose as a rate multiplier. 1.0 until something moves PARAM_PITCH,
     // so a voice triggered before any edit sounds exactly as it did before.
+    float VoicePitchScale(const Voice& voice) const {
+        return (voice.param_lock_mask & VoiceLockBit(Protocol::PARAM_PITCH))
+                   ? voice.locked_pitch_scale
+                   : LivePitchScale(voice.track);
+    }
     float LivePitchScale(uint8_t track) const {
         return track < live_pitch_scales_.size() ? live_pitch_scales_[track] : 1.0f;
     }

@@ -255,3 +255,13 @@ Key Map, Pad Map overrides, Track routing, Instrument/Sample loading, shared poo
 ownership and the sequencer grid. The 1280×720 Key Map capture was inspected on
 2026-09-11 after adjusting control heights to separate values from their fill
 bars. The capture is local at logs/key-map-20260911.png (gitignored).
+
+
+### Sequencer Locks
+
+Shift → Locks switches the existing grid's detail controls to four lock slots.
+Slot/Parameter/Value drags and per-slot clearing use the same backend readback
+and preview lifetime as note/velocity edits. Tapping the grid in this mode
+selects a step without changing its trigger state. Grid restores normal editing.
+An asterisk marks steps with locks. The focused two-board test covers four-slot
+editing, individual clearing, navigation and pattern save/load.

@@ -1,6 +1,7 @@
 #include "comm/log_ring.h"
 
 #include "../config.hpp"
+#include "audio/parameter_locks.hpp"
 #if WAVEX_AUDIO_ENGINE_ENABLED
 
 #include <daisy.h>  // For CpuLoadMeter
@@ -483,6 +484,7 @@ static bool drain_sequencer(uint16_t block_size) {
         const uint8_t layer_count = s_seq_voices->mailbox.ConsumerValue().Resolve(
             event.track, event.note, event.velocity, layers);
         for (uint8_t layer = 0; layer < layer_count; ++layer) {
+            ApplyParamLocks(layers[layer], event.param_locks, event.param_lock_count);
             layers[layer].start_offset_frames = static_cast<uint16_t>(offset);
             s_voice_manager.Trigger(layers[layer]);
             any_trigger = true;

@@ -165,17 +165,17 @@ TEST(SequencerTransportTest, ParamLockIdZeroIsRejected) {
 // silent drop.
 TEST(SequencerTransportTest, FifthParamLockEvictsTheOldest) {
     SequencerTransport t = MakeTransport();
-    for (uint8_t id = 1; id <= 4; ++id)
+    for (uint8_t id = 2; id <= 5; ++id)
         t.ApplyPatternOp(SeqPatternOpMessage(SEQ_OP_SET_PARAM_LOCK, 0, 0, id, id * 100, 0));
-    t.ApplyPatternOp(SeqPatternOpMessage(SEQ_OP_SET_PARAM_LOCK, 0, 0, 5, 500, 0));
+    t.ApplyPatternOp(SeqPatternOpMessage(SEQ_OP_SET_PARAM_LOCK, 0, 0, 6, 600, 0));
 
     const auto& s = t.pattern().tracks[0].steps[0];
-    // Locks 2..5 survive, in shifted order; lock 1 is gone.
-    EXPECT_EQ(s.param_locks[0].param_id, 2);
-    EXPECT_EQ(s.param_locks[1].param_id, 3);
-    EXPECT_EQ(s.param_locks[2].param_id, 4);
-    EXPECT_EQ(s.param_locks[3].param_id, 5);
-    EXPECT_EQ(s.param_locks[3].value, 500);
+    // Locks 3..6 survive, in shifted order; lock 2 is gone.
+    EXPECT_EQ(s.param_locks[0].param_id, 3);
+    EXPECT_EQ(s.param_locks[1].param_id, 4);
+    EXPECT_EQ(s.param_locks[2].param_id, 5);
+    EXPECT_EQ(s.param_locks[3].param_id, 6);
+    EXPECT_EQ(s.param_locks[3].value, 600);
 }
 
 // ---- Internal-clock transport ----

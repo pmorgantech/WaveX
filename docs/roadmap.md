@@ -75,9 +75,21 @@ Phase 2.5 work. Open work:
    pattern WXCF save/load are implemented; pattern files preserve tempo and
    Track instruments, include hidden steps, and use checked temp/rename
    new-copy saves. Power-loss recovery remains a bench gate.
-5. Apply per-step parameter locks to trigger parameters.
+5. Voice-scoped per-step locks and the touch Locks editor are implemented:
+   cutoff, resonance, amp ADSR, pitch, pan, gain and sample/loop start. Host
+   tests and a two-board edit/save/recall test pass. Live lock recording and
+   analog/group lock lifetimes remain separate work; callback capacity and the
+   complete phase gate still require their measured acceptance.
 
-### 2.C — Callback capacity checkpoint (2026-09-10)
+### 2.C — Callback capacity checkpoint
+
+The fresh pre-lock baseline on 9dc8498 peaked at 70.0479% (REVIEW) over
+610.2 seconds with zero underruns. This supersedes the previous STAY result
+for continuation decisions. Parameter-lock timing and moving repeated DSP
+initialization out of note-on are being verified before further callback
+scope is added.
+
+Previous checkpoint (2026-09-10):
 
 The per-pad sound persistence workload on f904032 measured **69.4104% peak
 callback utilization (STAY)** over 605.2 seconds, with six successful pattern

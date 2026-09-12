@@ -17,7 +17,7 @@ TEST(SequencerReadback, LastTrackLastPageContainsAcceptedEditsAndLocks) {
         transport.ApplyPatternOp({SEQ_OP_SET_PARAM_LOCK,
                                   15,
                                   63,
-                                  static_cast<uint8_t>(i + 1),
+                                  static_cast<uint8_t>(i + 2),
                                   static_cast<uint16_t>(12000 + i),
                                   0});
     SeqPatternRequestMessage request;
@@ -43,7 +43,7 @@ TEST(SequencerReadback, LastTrackLastPageContainsAcceptedEditsAndLocks) {
     EXPECT_EQ(last.retrig_rate_ticks, 7);
     EXPECT_EQ(last.micro_offset, -11);
     for (uint8_t i = 0; i < 4; ++i) {
-        EXPECT_EQ(last.locks[i].parameter, i + 1);
+        EXPECT_EQ(last.locks[i].parameter, i + 2);
         EXPECT_EQ(last.locks[i].value, 12000 + i);
     }
 }

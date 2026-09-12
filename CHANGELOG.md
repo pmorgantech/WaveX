@@ -13,6 +13,11 @@ versioning and release process.
 
 ### Added
 
+- Added voice-scoped per-step parameter locks for cutoff, resonance, amp ADSR,
+  pitch, pan, gain, sample start, and loop start, with four-slot touch editing,
+  atomic replacement and clearing, pattern persistence, backend readback, and
+  two-board edit/save/recall coverage.
+
 - Added keyboard Key Map editing for 32 stable key/velocity zones with staged
   ranges and root notes, sample assignment and clearing, New keys, naming,
   Save copy, paging, audition, retained outcomes, and shared Pad Map overlays.

@@ -1,4 +1,5 @@
 #pragma once
+#include "sequencer/parameter_locks.hpp"
 
 // Sequencer transport controller (roadmap Phase 2; design bridge across
 // docs/features/sequencer.md, midi-sync-tempo-follower.md). HAL-free glue
@@ -187,7 +188,7 @@ class SequencerTransport {
                 break;
             }
             case SEQ_OP_SET_PARAM_LOCK:
-                if (StepValid(m.track, m.step) && m.arg_u8 != 0)
+                if (StepValid(m.track, m.step) && IsVoiceLockParameter(m.arg_u8))
                     SetParamLock(
                         pending_pattern_.tracks[m.track].steps[m.step], m.arg_u8, m.arg_u16);
                 break;
@@ -195,6 +196,25 @@ class SequencerTransport {
                 if (m.track < kMaxTracks) {
                     for (auto& step: pending_pattern_.tracks[m.track].steps)
                         step = Step{};
+                }
+                break;
+            case SEQ_OP_SET_PARAM_LOCK_SLOT:
+                if (StepValid(m.track, m.step) && m.arg_s16 >= 0 && m.arg_s16 < kMaxParamLocks &&
+                    (m.arg_u8 == 0 || IsVoiceLockParameter(m.arg_u8))) {
+                    auto& locks = pending_pattern_.tracks[m.track].steps[m.step].param_locks;
+                    bool duplicate = false;
+                    for (int i = 0; i < kMaxParamLocks; ++i)
+                        duplicate |=
+                            m.arg_u8 != 0 && i != m.arg_s16 && locks[i].param_id == m.arg_u8;
+                    if (!duplicate)
+                        locks[m.arg_s16] = {m.arg_u8, m.arg_u8 ? m.arg_u16 : uint16_t{0}};
+                }
+                break;
+            case SEQ_OP_CLEAR_PARAM_LOCK:
+                if (StepValid(m.track, m.step)) {
+                    for (auto& lock: pending_pattern_.tracks[m.track].steps[m.step].param_locks)
+                        if (lock.param_id == m.arg_u8)
+                            lock = ParamLock{};
                 }
                 break;
             case SEQ_OP_CLEAR_PARAM_LOCKS:
