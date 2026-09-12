@@ -54,11 +54,10 @@
 //   - Heap-allocating or otherwise hoisting a filter out of VoiceManager
 //     would silently drop it out of DTCM with no diagnostic.
 //
-// Hot *code* placement (WAVEX_ITCM_CODE) is deliberately NOT applied here.
-// Render() is an inline member of a header that is compiled on the host, and
-// the section attribute would have to be guarded per-target; more to the
-// point, AGENTS.md requires a DWT number before claiming a placement win, and
-// there isn't one yet. Tracked as a follow-up, not done on a hunch.
+// VoiceManager's renderer and trigger path carry the selective ITCM
+// annotation. Inlined filter operations inherit that code placement; the
+// filter has no separate section or storage owner. DWT comparisons and the
+// whole-callback gate are recorded in docs/callback-performance-log.md.
 //
 // SLOPE AND DRIVE (2026-09-04). Two things a linear 12 dB/oct TPT lowpass
 // cannot do that a "synth filter" is expected to: fall off at 24 dB/oct, and

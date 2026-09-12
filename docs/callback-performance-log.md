@@ -303,6 +303,35 @@ of another Track's voice. The devices finished at the Main Menu with no
 resident samples, voices or stream and zero underruns; the retained state is
 `logs/pad-sound-final-state.json`.
 
+## Two-source renderer placement diagnostics (2026-09-12)
+
+These four short, dirty-tree captures diagnose cost; none is a phase gate.
+They use eight Tracks with two independently resolved 16-pad maps each,
+different resident kick samples, a 50/50 mono submix and Oscillator 2 detuned
+17 cents. The workload retains eight modulation slots per Instrument, four
+applied locks per hit, WaveX 24 dB full drive, live Track/pad cutoff edits,
+25 MHz SD streaming, the touch grid and periodic pattern save/load.
+All runs completed one file cycle. Image hashes and setup/readback evidence
+are retained in each capture's adjacent JSON.
+
+| Change | Duration | Mean cycles | Peak cycles (budget %) | Underruns | Capture |
+|---|---:|---:|---:|---:|---|
+| Initial paired-source renderer | 126.1s | 194248 | 466089 (97.1019%) | 0 | `perf-dual-wavex-20260912-013126.log` |
+| Inline source reader; split profiling zones | 126.2s | 172181 | 406031 (84.5898%) | 0 | `perf-dual-wavex-20260912-013854.log` |
+| Renderer in ITCM | 126.1s | 154868 | 401614 (83.6696%) | 0 | `perf-dual-wavex-20260912-014331.log` |
+| Renderer and event paths in ITCM | 125.1s | 151645 | 304316 (63.3992%) | 0 | `perf-dual-wavex-20260912-014917.log` |
+
+The source reader initially remained out of line in the per-sample loop.
+Inlining removes that call and its frame/end-state spills. Separate
+`voice_events`, `voice_modulation` and `voice_render` profiling zones then
+identified the renderer's steady cost and event-path spikes. Selective ITCM
+placement covers Render, Trigger, source initialization, live-parameter
+application, prepared-map resolution, lock application and sequencer dispatch.
+Named subsections keep ordinary functions separate from header COMDAT groups;
+the existing startup copier installs them before audio starts. No voice count,
+filter/drive setting, sample rate, block size or DSP algorithm was reduced.
+The short runs justify a clean-commit ten-minute gate; they do not replace it.
+
 ## Recorded runs
 
 | Date | Commit | Scenario | Voices | Hz/block | Core | Image | Duration | Budget cycles | Average cycles | Maximum cycles | Worst headroom | Stream underruns | Callback features left | Decision | Note |

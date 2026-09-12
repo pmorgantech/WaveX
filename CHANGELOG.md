@@ -13,6 +13,9 @@ versioning and release process.
 
 ### Added
 
+- Added oscillator copy, stale-edit and WXI-recall HIL coverage for the paired
+  source renderer and its shared filter/amp behavior.
+
 - Added dual-source voice rendering for independently resolved Sample
   oscillator maps paired within the existing four-layer cap and mixed through
   the shared mono filter/amp path. Oscillator level, mix, tuning, key tracking,
@@ -127,6 +130,12 @@ versioning and release process.
   below.
 
 ### Changed
+
+- Reduced the short dirty dual-source renderer diagnostic peak from 97.1019%
+  to 63.3992% through source-reader inlining, profiling zones and named ITCM
+  placement; all four runs had zero underruns. The final 126.1-second run used
+  one file cycle and is diagnostic evidence only, not the ten-minute capacity
+  gate.
 
 - Recorded the pad-sound callback checkpoint at 69.4104% peak utilization
   (STAY) over 605.2 seconds with six save/load cycles, zero underruns, file

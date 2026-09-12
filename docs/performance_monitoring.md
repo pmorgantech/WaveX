@@ -295,3 +295,13 @@ temporarily rather than shipping:
 Check `LV_USE_REFR_DEBUG` first. It is cheaper to interpret and, on this
 codebase, coarse invalidation is the more likely cause: a full-width redraw
 costs the same whether the PPA is helping or not.
+
+### Voice-path attribution
+
+Profiling builds split the callback into `voice_events` (queued notes,
+live controls and sequencer dispatch), `voice_modulation` and `voice_render`.
+These nested zone maxima need not occur in the same callback. The complete
+`audio_callback` measurement remains the capacity gate. Selective ITCM
+placement and the inlined source reader are measured in
+[callback-performance-log.md](callback-performance-log.md); profiling-off
+builds retain the placement without the extra zone counters.

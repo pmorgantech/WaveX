@@ -95,6 +95,9 @@ namespace WaveX {
 namespace AudioEngine {
 
 PROFILE_DEFINE_ZONE(audio_callback);
+PROFILE_DEFINE_ZONE(voice_events);
+PROFILE_DEFINE_ZONE(voice_modulation);
+PROFILE_DEFINE_ZONE(voice_render);
 PROFILE_DEFINE_ZONE(wav_pump_io);
 PROFILE_DEFINE_ZONE(format_conversion);
 PROFILE_DEFINE_ZONE(ring_buffer_push);
@@ -428,7 +431,7 @@ static bool drain_note_queue() {
 // Callback-only. drain_note_queue has already acquired the latest voice map.
 // The main loop publishes that map before enqueuing PLAY, so step 0 sees the
 // complete matching binding.
-static bool drain_sequencer(uint16_t block_size) {
+static WAVEX_ITCM_CODE_NAMED("sequencer") bool drain_sequencer(uint16_t block_size) {
     SeqPatternRequestMessage read_request;
     bool read_requested = false;
     WaveX::Sequencer::SequencerCommand command;
@@ -1940,6 +1943,9 @@ void Init(DaisySeed& hw, float sample_rate, bool sdram_available) {
 
     WaveX::Profiling::InitHardware();
     PROFILE_REGISTER_ZONE(audio_callback);
+    PROFILE_REGISTER_ZONE(voice_events);
+    PROFILE_REGISTER_ZONE(voice_modulation);
+    PROFILE_REGISTER_ZONE(voice_render);
     PROFILE_REGISTER_ZONE(wav_pump_io);
     PROFILE_REGISTER_ZONE(format_conversion);
     PROFILE_REGISTER_ZONE(ring_buffer_push);
@@ -2093,6 +2099,7 @@ void Callback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t
     // content above. Render() only runs when a voice is active, so the
     // startup silence requirement is preserved. All callback-safe: fixed
     // buffers, no allocation, no I/O, no logging.
+    PROFILE_BEGIN(voice_events);
     bool any_note_on = drain_note_queue();
 
     // Publish control-plane changes only at a block boundary. A callback that
@@ -2109,6 +2116,7 @@ void Callback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t
     // sample offset inside this block, after the latest live voice snapshot is
     // active for both existing and newly scheduled voices.
     any_note_on = drain_sequencer(static_cast<uint16_t>(size)) || any_note_on;
+    PROFILE_END(voice_events);
     if (s_para_mailbox.ConsumeLatest(s_para_active)) {
         s_para_env.SetParams(s_para_active.attack_s,
                              s_para_active.decay_s,
@@ -2127,6 +2135,7 @@ void Callback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t
     // this is the all-digital path, unrelated to the optional analog CV
     // stage further down.
     {
+        PROFILE_SCOPE(voice_modulation);
         WaveX::AudioEngine::ModSources mod_global_sources;
         mod_global_sources.lfo1 = s_mod_lfo1.Tick();
         mod_global_sources.lfo2 = s_mod_lfo2.Tick();
@@ -2146,7 +2155,10 @@ void Callback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t
         static float vm_r[Timebase::kBlockSize];
         // Advance the mute ramps once per block, before the voices read them.
         s_track_mixer.Tick(static_cast<uint32_t>(size));
-        s_voice_manager.Render(vm_l, vm_r, size);
+        {
+            PROFILE_SCOPE(voice_render);
+            s_voice_manager.Render(vm_l, vm_r, size);
+        }
         for (size_t i = 0; i < size; ++i) {
             out[0][i] += vm_l[i];
             out[1][i] += vm_r[i];

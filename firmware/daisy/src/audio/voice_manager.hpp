@@ -34,6 +34,7 @@
 // (AGENTS.md constraint #1 / architecture.md §7.1).
 
 #include "config/hardware_config.h"
+#include "memory_sections.h"
 #include "spi_protocol/protocol.h"
 
 #include "audio/mod_matrix.hpp"
@@ -365,7 +366,7 @@ class VoiceManager {
         }
     }
 
-    void ApplyLiveParams(const VoiceLiveParams& p) {
+    WAVEX_ITCM_CODE_NAMED("voice.ApplyLiveParams") void ApplyLiveParams(const VoiceLiveParams& p) {
         // One pow() per call, not one per voice: this runs at block rate from
         // the audio callback whenever a control moved, and eight of them would
         // be eight transcendentals inside the deadline for no benefit.
@@ -423,7 +424,7 @@ class VoiceManager {
     // voice already in its release tail, else the oldest-triggered - see
     // FindVoiceToSteal()). No-op if `params.sample` is null or
     // `params.sample_frames < 2` (can't interpolate).
-    void Trigger(const VoiceTriggerParams& params) {
+    WAVEX_ITCM_CODE_NAMED("voice.Trigger") void Trigger(const VoiceTriggerParams& params) {
         if (!params.sample || params.sample_frames < 2)
             return;
         // Choke: mute other voices in the same group before allocating this
@@ -545,6 +546,7 @@ class VoiceManager {
     // silence (release complete) or - for a non-looping voice - once
     // playback reaches end_frame with the envelope not yet started
     // releasing (treated as an implicit release-from-here).
+    WAVEX_ITCM_CODE_NAMED("voice.Render")
     void Render(float* out_l, float* out_r, size_t block_size) {
         for (size_t i = 0; i < block_size; ++i) {
             out_l[i] = 0.0f;
@@ -791,6 +793,7 @@ class VoiceManager {
     }
 
    private:
+    WAVEX_ITCM_CODE_NAMED("voice.InitSource")
     void InitSource(VoiceSampleState& v, const VoiceSampleParams& params, float pitch_scale) {
         v.sample = params.sample;
         v.sample_frames = params.sample_frames;
@@ -838,7 +841,12 @@ class VoiceManager {
                                         12.0f);
         v.SetIncrement(v.base_increment * pitch_scale);
     }
-    static float ReadSource(VoiceSampleState& v, uint32_t& frame, bool& ended) {
+    // This runs once per sample per oscillator. Keep cursor state and the
+    // returned frame/end flags in the caller's registers instead of spilling
+    // them through an out-of-line call at audio rate.
+    [[gnu::always_inline]] static inline float ReadSource(VoiceSampleState& v,
+                                                          uint32_t& frame,
+                                                          bool& ended) {
         const uint32_t last_valid_frame = v.end_frame - 1;
         const uint32_t loop_len = v.loop_end - v.loop_start;
         bool holding_release_tail = false;

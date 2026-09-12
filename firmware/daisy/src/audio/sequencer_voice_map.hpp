@@ -120,11 +120,12 @@ struct SequencerVoiceMap {
         return first > second ? first : second;
     }
 
-    static uint8_t ResolveOscillator(const PreparedOscillator& source,
-                                     uint8_t note,
-                                     uint8_t velocity,
-                                     VoiceTriggerParams* out,
-                                     uint8_t max) {
+    static WAVEX_ITCM_CODE_NAMED("resolve") uint8_t
+        ResolveOscillator(const PreparedOscillator& source,
+                          uint8_t note,
+                          uint8_t velocity,
+                          VoiceTriggerParams* out,
+                          uint8_t max) {
         uint8_t begin = 0;
         uint8_t end = source.count < kMaxZones ? source.count : kMaxZones;
         if (source.direct_drum) {

@@ -2160,3 +2160,38 @@ TEST(VoiceManagerDualSource, IndependentNativeRateTuningAndLivePitch) {
     EXPECT_EQ(vm.GetVoice(0).phase.Frame(), 48u);
     EXPECT_EQ(vm.GetVoice(0).secondary.phase.Frame(), 106u);
 }
+
+TEST(VoiceManagerDualSource, SecondaryStereoLoopAndFadeDoNotAlterPrimaryCursor) {
+    std::vector<int16_t> silent(256, 0);
+    std::vector<int16_t> stereo(32);
+    for (size_t i = 0; i < stereo.size(); i += 2) {
+        stereo[i] = static_cast<int16_t>(1000 + i * 100);
+        stereo[i + 1] = static_cast<int16_t>(3000 + i * 100);
+    }
+    VoiceManager dual, reference;
+    dual.Init(48000);
+    reference.Init(48000);
+    auto p = FlatParams(silent.data(), silent.size(), 60, 127, 0);
+    p.loop = true;
+    p.loop_end = 128;
+    p.secondary = static_cast<const WaveX::AudioEngine::VoiceSampleParams&>(p);
+    p.secondary.sample = stereo.data();
+    p.secondary.sample_frames = 16;
+    p.secondary.channels = 2;
+    p.secondary.loop_start = 2;
+    p.secondary.loop_end = 8;
+    p.secondary.pitch_ratio_mul = 1.25f;
+    p.secondary.fade_in_ms = 1;
+    auto expected = p;
+    static_cast<WaveX::AudioEngine::VoiceSampleParams&>(expected) = p.secondary;
+    expected.secondary = {};
+    dual.Trigger(p);
+    reference.Trigger(expected);
+    float l[64], r[64], expected_l[64], expected_r[64];
+    dual.Render(l, r, 64);
+    reference.Render(expected_l, expected_r, 64);
+    EXPECT_EQ(dual.GetVoice(0).phase.Frame(), 64u);
+    EXPECT_EQ(dual.GetVoice(0).secondary.phase.Frame(), reference.GetVoice(0).phase.Frame());
+    for (size_t i = 0; i < 64; ++i)
+        EXPECT_FLOAT_EQ(l[i], expected_l[i]);
+}

@@ -24,6 +24,7 @@ inline void ApplySourcePositionLock(VoiceSampleParams& p, const Sequencer::Param
 }
 // Callback-only, bounded to four locks. Does not mutate the Instrument,
 // prepared map, sample metadata or any other voice. Modulation is applied later.
+WAVEX_ITCM_CODE_NAMED("locks")
 inline void ApplyParamLocks(VoiceTriggerParams& p, const Sequencer::ParamLock* locks, uint8_t n) {
     using namespace Protocol;
     if (!locks)
