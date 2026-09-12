@@ -87,11 +87,15 @@ Phase 2.5 work. Open work:
 
 ### 2.C — Callback capacity checkpoint
 
-The fresh pre-lock baseline on 9dc8498 peaked at 70.0479% (REVIEW) over
-610.2 seconds with zero underruns. This supersedes the previous STAY result
-for continuation decisions. Parameter-lock timing and moving repeated DSP
-initialization out of note-on are being verified before further callback
-scope is added.
+The applied-lock workload on 3dee3bf peaked at **69.6971% (STAY)** over
+605.2 seconds with zero underruns and six successful pattern save/load cycles.
+It uses the identical audio image committed in 5d9683a: four voice locks per
+hit and filter/envelope initialization moved from note-on to startup. This
+supersedes the fresh pre-lock 70.0479% REVIEW baseline for continuation.
+The margin below the 70% review threshold is narrow; remeasure each expanded
+voice milestone before proceeding beyond it. During pattern-load transitions,
+the transport is stopped and one-shot voices may finish naturally; eight
+voices are checked after each restart.
 
 Previous checkpoint (2026-09-10):
 
