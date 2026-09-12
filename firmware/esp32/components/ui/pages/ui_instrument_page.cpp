@@ -1495,7 +1495,14 @@ void UIInstrumentPage::refreshModulator() {
                 snprintf(value, sizeof(value), "%d", v);
             fill = static_cast<float>(v) / (i == 2 ? 1000 : 600000);
         } else {
-            const char* destinations[] = {"None", "Cutoff", "Gain", "Pitch", "Pan", "Resonance"};
+            const char* destinations[] = {"None",
+                                          "Cutoff",
+                                          "Gain",
+                                          "Pitch",
+                                          "Pan",
+                                          "Resonance",
+                                          "Osc 1 pitch",
+                                          "Osc 2 pitch"};
             const char* curves[] = {"Linear", "Exp", "S"};
             if (i == 1) {
                 snprintf(value, sizeof(value), "%s", sourceName(v));

@@ -265,3 +265,44 @@ TEST(ModMatrix, ResonanceUsesCurveAndPolarityWithoutAffectingOtherDestinations) 
     EXPECT_FLOAT_EQ(result.gain_mul, 1);
     EXPECT_FLOAT_EQ(result.pan_offset, 0);
 }
+
+TEST(ModMatrix, OscillatorPitchRoutesSumIndependentlyAndComposeWithCommonPitch) {
+    ModSources s;
+    s.velocity = 1;
+    s.lfo_voice = -.5f;
+    ModSlot slots[] = {
+        Slot(SRC_VELOCITY, DEST_OSC1_PITCH, 32767),
+        Slot(SRC_LFO_VOICE, DEST_OSC1_PITCH, 32767),
+        Slot(SRC_VELOCITY, DEST_OSC2_PITCH, -32767),
+        Slot(SRC_VELOCITY, DEST_PITCH, 32767),
+    };
+    auto out = EvaluateModMatrix(slots, 4, s);
+    EXPECT_NEAR(out.oscillator_pitch_mul[0], std::pow(2.f, 1.f / 12), 1e-6);
+    EXPECT_NEAR(out.oscillator_pitch_mul[1], std::pow(2.f, -2.f / 12), 1e-6);
+    EXPECT_NEAR(out.pitch_mul, std::pow(2.f, 2.f / 12), 1e-6);
+    EXPECT_FLOAT_EQ(out.cutoff_mul, 1);
+    EXPECT_FLOAT_EQ(out.gain_mul, 1);
+    EXPECT_FLOAT_EQ(out.resonance_offset, 0);
+    slots[1].depth = 0;
+    slots[0].depth = 0;
+    out = EvaluateModMatrix(slots, 4, s);
+    EXPECT_FLOAT_EQ(out.oscillator_pitch_mul[0], 1);
+}
+TEST(ModMatrix, OscillatorPitchCurvesPolarityAndCancelledRoutesReturnIdentity) {
+    ModSources s;
+    s.velocity = .75f;
+    ModSlot slots[] = {
+        Slot(SRC_VELOCITY, DEST_OSC2_PITCH, 32767, CURVE_EXPONENTIAL, MOD_FLAG_UNIPOLAR_TO_BIPOLAR),
+        Slot(
+            SRC_VELOCITY, DEST_OSC2_PITCH, -32767, CURVE_EXPONENTIAL, MOD_FLAG_UNIPOLAR_TO_BIPOLAR),
+    };
+    auto out = EvaluateModMatrix(slots, 1, s);
+    EXPECT_NEAR(out.oscillator_pitch_mul[1], std::pow(2.f, .5f / 12), 1e-6);
+    EXPECT_FLOAT_EQ(out.oscillator_pitch_mul[0], 1);
+    EXPECT_FLOAT_EQ(out.pitch_mul, 1);
+    out = EvaluateModMatrix(slots, 2, s);
+    EXPECT_FLOAT_EQ(out.oscillator_pitch_mul[1], 1);
+    out = EvaluateModMatrix(nullptr, 0, s);
+    EXPECT_FLOAT_EQ(out.oscillator_pitch_mul[0], 1);
+    EXPECT_FLOAT_EQ(out.oscillator_pitch_mul[1], 1);
+}

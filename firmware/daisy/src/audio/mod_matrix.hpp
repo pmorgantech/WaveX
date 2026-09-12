@@ -59,6 +59,8 @@ enum ModDest : uint8_t {
     DEST_PITCH,
     DEST_PAN,
     DEST_RESONANCE = Protocol::INST_MOD_RESONANCE,
+    DEST_OSC1_PITCH = Protocol::INST_MOD_OSC1_PITCH,
+    DEST_OSC2_PITCH = Protocol::INST_MOD_OSC2_PITCH,
     DEST_COUNT
 };
 
@@ -151,6 +153,7 @@ struct ModDestinations {
     float cutoff_mul = 1.0f;
     float gain_mul = 1.0f;
     float pitch_mul = 1.0f;
+    float oscillator_pitch_mul[2] = {1.0f, 1.0f};
     float pan_offset = 0.0f;
     float resonance_offset = 0.0f;
 };
@@ -206,6 +209,7 @@ inline ModDestinations EvaluateModMatrix(const ModSlot* slots,
     float cutoff = 0.0f;
     float gain = 0.0f;
     float pitch = 0.0f;
+    float oscillator_pitch[2] = {};
     float pan = 0.0f;
     float resonance = 0.0f;
 
@@ -235,6 +239,12 @@ inline ModDestinations EvaluateModMatrix(const ModSlot* slots,
                 case DEST_PITCH:
                     pitch += amount;
                     break;
+                case DEST_OSC1_PITCH:
+                    oscillator_pitch[0] += amount;
+                    break;
+                case DEST_OSC2_PITCH:
+                    oscillator_pitch[1] += amount;
+                    break;
                 case DEST_RESONANCE:
                     resonance += amount;
                     break;
@@ -257,6 +267,13 @@ inline ModDestinations EvaluateModMatrix(const ModSlot* slots,
         out.gain_mul = 0.0f;  // silence, never a phase-inverted signal
     }
     out.pitch_mul = std::pow(2.0f, (pitch * kModPitchSemitones) / 12.0f);
+    // Reuse the common pitch range; inactive or cancelling routes retain
+    // identity without evaluating another exponential.
+    for (uint8_t i = 0; i < 2; ++i) {
+        if (oscillator_pitch[i] != 0.f)
+            out.oscillator_pitch_mul[i] =
+                std::pow(2.0f, (oscillator_pitch[i] * kModPitchSemitones) / 12.0f);
+    }
     out.pan_offset = pan < -1.0f ? -1.0f : (pan > 1.0f ? 1.0f : pan);
     // Full signed depth spans the normalized resonance range. Sum routes
     // before clamping; the voice adds this to its own (possibly locked) base.

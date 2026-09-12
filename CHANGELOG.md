@@ -13,6 +13,10 @@ versioning and release process.
 
 ### Added
 
+- Added OSC1_PITCH and OSC2_PITCH as Instrument matrix destinations. Full-depth
+  source 1 spans ±2 semitones and composes with common pitch, tuning and pitch
+  locks through the existing preview, Apply/Revert and WXI path.
+
 - Added the Instrument matrix's resonance destination (id 5), using the
   existing revisioned snapshot, automatic preview, Apply/Revert and WXI save
   path. Signed normalized routes sum before clamping and compose with the

@@ -1,4 +1,4 @@
-"""Resonance routing uses the common live Instrument undo/save path."""
+"""New matrix destinations use the common live Instrument undo/save path."""
 
 import time
 
@@ -9,11 +9,14 @@ from test_sequencer_tracks import (  # noqa: F401
 )
 
 
+@pytest.mark.parametrize("destination", [5, 6, 7])
 @pytest.mark.both
 @pytest.mark.sdcard
-def test_resonance_route_preview_undo_and_wxi(esp32, daisy, sequence_samples):
+def test_matrix_destination_preview_undo_and_wxi(
+    esp32, daisy, sequence_samples, destination
+):
     esp = esp32
-    _instrument(daisy, 899001, 9, "HIL resonance matrix")
+    _instrument(daisy, 899001, 9, "HIL destination matrix")
     _wait_osc(daisy, 0, 0, completed=899001, error=0)
     daisy.bind_track(0, sequence_samples[0])
     _wait_osc(daisy, 0, 0, busy=0, valid=1, zones=1)
@@ -21,17 +24,26 @@ def test_resonance_route_preview_undo_and_wxi(esp32, daisy, sequence_samples):
     esp.track(0)
     esp.open_menu("Instrument")
     esp.wait_state(oscready=1, oscvalid=1)
+    esp.page("OSC", 2)
+    esp.wait_state(oscready=1, osc=2, osczones=0)
+    esp.key("SHIFT")
+    esp.wait_state(shift=1)
+    esp.softkey("Copy Other")
+    esp.wait_state(oscready=1, osczones=1, oscerror=0)
+    esp.page("MIX", 500)
+    esp.wait_state(editpending=0, oscdirty=0, oscmix=500)
     esp.page("TAB", "Mod")
     esp.wait_state(modready=1)
     esp.page("SLOT", 8)
     daisy.note(0, 60, 127)
     daisy.wait_state(voices=1)
     esp.page("SOURCE", 1)
-    esp.page("DEST", 5)
+    esp.page("DEST", destination)
     esp.page("DEPTH", 16384)
     esp.wait_state(editdirty=1, editpending=0, moddirty=0)
     route = daisy.cmd("MOD", 0, 7)
-    assert route["destination"] == "5" and route["depth"] == "16384"
+    assert route["destination"] == str(destination)
+    assert route["depth"] == "16384"
     esp.softkey("Apply")
     esp.wait_state(editdirty=0, editpending=0)
     esp.page("DEPTH", -16384)
@@ -45,7 +57,7 @@ def test_resonance_route_preview_undo_and_wxi(esp32, daisy, sequence_samples):
     esp.softkey("Revert")
     esp.wait_state(editdirty=0, editpending=0, moddepth=16384)
     daisy.wait_state(voices=1)
-    name = "HIL res " + str(int(time.time()))
+    name = "HIL route " + str(destination) + " " + str(int(time.time()))
     _instrument(daisy, 899002, 5, name)
     _wait_osc(daisy, 0, 0, completed=899002, busy=0, error=0)
     esp.home()
@@ -53,4 +65,5 @@ def test_resonance_route_preview_undo_and_wxi(esp32, daisy, sequence_samples):
     _instrument(daisy, 899003, 2, "0:/wavex/instruments/" + name + ".wxi")
     _wait_osc(daisy, 0, 0, busy=0, valid=1, zones=1)
     route = daisy.cmd("MOD", 0, 7)
-    assert route["destination"] == "5" and route["depth"] == "16384"
+    assert route["destination"] == str(destination)
+    assert route["depth"] == "16384"

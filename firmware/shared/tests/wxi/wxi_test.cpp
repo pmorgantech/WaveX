@@ -139,7 +139,7 @@ InstrumentFile MakeFullDoc() {
     }
     for (uint8_t i = 0; i < Wxi::kMaxModSlots; ++i) {
         d.mod_slots[i].source = static_cast<uint8_t>(i + 1);
-        d.mod_slots[i].dest = static_cast<uint8_t>((i % 5) + 1);
+        d.mod_slots[i].dest = static_cast<uint8_t>((i % 7) + 1);
         d.mod_slots[i].depth = static_cast<int16_t>(-20000 + i * 5000);
         d.mod_slots[i].curve = static_cast<uint8_t>(i % 3);
         d.mod_slots[i].flags = static_cast<uint8_t>(i & 1);

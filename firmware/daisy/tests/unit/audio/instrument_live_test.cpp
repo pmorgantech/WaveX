@@ -250,3 +250,97 @@ TEST_F(InstrumentLiveTest, ResonanceLockAndStolenVoiceKeepIndependentBaseAndModu
     EXPECT_FLOAT_EQ(vm.GetVoice(0).mod_resonance_offset, 0);
     EXPECT_FLOAT_EQ(vm.GetVoice(0).filter.Resonance(), .9f);
 }
+
+TEST_F(InstrumentLiveTest, IndependentPitchRoutesKeepTuningCursorsAndTrackOwnership) {
+    ins.osc[1].type = OscType::Sample;
+    ins.osc[1].coarse_tune = 12;
+    auto p = TriggerParams();
+    PairOscillatorTrigger(p, TriggerParams(60, 1));
+    vm.Trigger(p);
+    p.track = 1;
+    vm.Trigger(p);
+    ins.mod_slots[0] = {SRC_VELOCITY, DEST_OSC1_PITCH, 32767, CURVE_LINEAR, 0};
+    ins.mod_slots[1] = {SRC_VELOCITY, DEST_OSC2_PITCH, -32767, CURVE_LINEAR, 0};
+    ModSlotResolver routes{&ins, [](const void* c, uint8_t track) -> const ModSlot* {
+                               return track == 0 ? static_cast<const Instrument*>(c)->mod_slots
+                                                 : nullptr;
+                           }};
+    vm.TickModulation(routes, {}, 48);
+    const auto& v = vm.GetVoice(0);
+    EXPECT_EQ(v.phase.Frame(), 0u);
+    Render();
+    const float up = std::pow(2.f, 2.f / 12);
+    EXPECT_NEAR(v.increment, up, 1e-6);
+    EXPECT_NEAR(v.secondary.increment, 2.f / up, 1e-6);
+    EXPECT_FLOAT_EQ(vm.GetVoice(1).increment, 1);
+    EXPECT_FLOAT_EQ(vm.GetVoice(1).secondary.increment, 2);
+    const auto frame = v.phase.Frame();
+    const auto second = v.secondary.phase.Frame();
+    const auto age = v.age;
+    ins.osc[0].coarse_tune = 12;
+    Live();
+    EXPECT_EQ(v.phase.Frame(), frame);
+    EXPECT_EQ(v.secondary.phase.Frame(), second);
+    Render();
+    EXPECT_NEAR(v.increment, 2 * up, 1e-6);
+    EXPECT_NEAR(v.secondary.increment, 2 / up, 1e-6);
+    ins.mod_slots[0] = {};
+    ins.mod_slots[1] = {};
+    vm.TickModulation(routes, {}, 48);
+    Render();
+    EXPECT_FLOAT_EQ(v.increment, 2);
+    EXPECT_FLOAT_EQ(v.secondary.increment, 2);
+    EXPECT_GT(v.phase.Frame(), frame);
+    EXPECT_GT(v.secondary.phase.Frame(), second);
+    EXPECT_EQ(v.age, age);
+}
+TEST_F(InstrumentLiveTest, OscillatorTwoOnlyAndPreviewSourcesUseTheirActualIdentity) {
+    ins.osc[1].type = OscType::Sample;
+    vm.Trigger(TriggerParams(60, 1));
+    auto p = TriggerParams();
+    p.oscillator = 0xFF;
+    vm.Trigger(p);
+    ins.mod_slots[0] = {SRC_VELOCITY, DEST_OSC1_PITCH, 32767, CURVE_LINEAR, 0};
+    ins.mod_slots[1] = {SRC_VELOCITY, DEST_OSC2_PITCH, -32767, CURVE_LINEAR, 0};
+    ins.mod_slots[2] = {SRC_VELOCITY, DEST_PITCH, 32767, CURVE_LINEAR, 0};
+    ModSlotResolver routes{
+        &ins, [](const void* c, uint8_t) { return static_cast<const Instrument*>(c)->mod_slots; }};
+    vm.TickModulation(routes, {}, 48);
+    Render();
+    EXPECT_EQ(vm.GetVoice(0).oscillator, 1);
+    EXPECT_EQ(vm.GetVoice(0).secondary.sample, nullptr);
+    EXPECT_NEAR(vm.GetVoice(0).increment, 1, 1e-6);
+    EXPECT_NEAR(vm.GetVoice(1).increment, std::pow(2.f, 2.f / 12), 1e-6);
+}
+TEST_F(InstrumentLiveTest, PitchLockAndStolenVoiceDoNotInheritOscillatorModulation) {
+    auto p = TriggerParams();
+    WaveX::Sequencer::ParamLock lock{WaveX::Protocol::PARAM_PITCH, 49151};
+    ApplyParamLocks(p, &lock, 1);
+    for (uint8_t i = 0; i < WAVEX_NUM_VOICES; ++i)
+        vm.Trigger(p);
+    const float locked = vm.GetVoice(0).increment;
+    ins.mod_slots[0] = {SRC_VELOCITY, DEST_OSC1_PITCH, 32767, CURVE_LINEAR, 0};
+    ModSlotResolver routes{
+        &ins, [](const void* c, uint8_t) { return static_cast<const Instrument*>(c)->mod_slots; }};
+    vm.TickModulation(routes, {}, 48);
+    Render();
+    const float up = std::pow(2.f, 2.f / 12);
+    EXPECT_NEAR(vm.GetVoice(0).increment, locked * up, 1e-6);
+    VoiceLiveParams live;
+    live.track = 0;
+    live.pitch_semitones = -12;
+    vm.ApplyLiveParams(live);
+    Render();
+    EXPECT_NEAR(vm.GetVoice(0).increment, locked * up, 1e-6);
+    ins.mod_slots[0] = {};
+    vm.TickModulation(routes, {}, 48);
+    Render();
+    EXPECT_FLOAT_EQ(vm.GetVoice(0).increment, locked);
+    ins.mod_slots[0] = {SRC_VELOCITY, DEST_OSC1_PITCH, 32767, CURVE_LINEAR, 0};
+    vm.TickModulation(routes, {}, 48);
+    Render();
+    vm.Trigger(TriggerParams());
+    EXPECT_FLOAT_EQ(vm.GetVoice(0).mod_oscillator_pitch_mul[0], 1);
+    EXPECT_FLOAT_EQ(vm.GetVoice(0).mod_oscillator_pitch_mul[1], 1);
+    EXPECT_FLOAT_EQ(vm.GetVoice(0).increment, .5f);
+}

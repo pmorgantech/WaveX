@@ -2010,7 +2010,9 @@ static constexpr uint8_t INST_ENV_COUNT = 3;
 static constexpr uint8_t INST_MOD_SLOT_COUNT = 8;
 static constexpr uint8_t INST_MOD_SOURCE_COUNT = 18;
 static constexpr uint8_t INST_MOD_RESONANCE = 5;
-static constexpr uint8_t INST_MOD_DEST_COUNT = 6;
+static constexpr uint8_t INST_MOD_OSC1_PITCH = 6;
+static constexpr uint8_t INST_MOD_OSC2_PITCH = 7;
+static constexpr uint8_t INST_MOD_DEST_COUNT = 8;
 struct InstEnvelopeSettings {
     float attack_s = 0.001f, decay_s = 0.05f, sustain = 0.8f, release_s = 0.1f;
 } __attribute__((packed));

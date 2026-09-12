@@ -148,3 +148,24 @@ TEST(ModulatorModel, ResonanceDestinationPreviewsAndReadsBackWithFutureIdsReject
     EXPECT_FALSE(m.Pending());
     EXPECT_EQ(m.Value(1), INST_MOD_RESONANCE);
 }
+
+TEST(ModulatorModel, OscillatorPitchDestinationsPreviewAndRetainAuthoritativeReadback) {
+    for (auto destination: {INST_MOD_OSC1_PITCH, INST_MOD_OSC2_PITCH}) {
+        auto m = model();
+        ASSERT_TRUE(m.Select(false, 7));
+        ASSERT_TRUE(m.Set(1, destination));
+        EXPECT_FALSE(m.Set(1, INST_MOD_DEST_COUNT));
+        auto request = m.Request(11);
+        ASSERT_TRUE(IsValidInstModOp(request));
+        EXPECT_EQ(request.slot.destination, destination);
+        m.MutationSent(11);
+        auto s = snapshot();
+        s.request_id = s.completed_request_id = 11;
+        s.revision++;
+        s.slots[7] = request.slot;
+        ASSERT_TRUE(m.Accept(s));
+        EXPECT_FALSE(m.Dirty());
+        EXPECT_FALSE(m.Pending());
+        EXPECT_EQ(m.Value(1), destination);
+    }
+}

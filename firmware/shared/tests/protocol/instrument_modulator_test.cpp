@@ -84,7 +84,9 @@ TEST(InstrumentModulatorProtocol, RejectsInvalidIdentityRangesAndNonFiniteValues
     EXPECT_FALSE(IsValidInstModOp(bad));
 }
 
-TEST(InstrumentModulatorProtocol, ResonanceRoundTripAndFutureDestinationsRemainRejected) {
+TEST(InstrumentModulatorProtocol, DestinationsRoundTripAndFutureIdsRemainRejected) {
+    static_assert(INST_MOD_RESONANCE == 5 && INST_MOD_OSC1_PITCH == 6 && INST_MOD_OSC2_PITCH == 7 &&
+                  INST_MOD_DEST_COUNT == 8);
     for (uint8_t destination = 0; destination <= 13; ++destination) {
         InstModOpMessage in;
         in.request_id = 1;

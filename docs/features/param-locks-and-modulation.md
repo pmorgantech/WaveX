@@ -5,7 +5,8 @@ voice-scoped locks per step are applied after zone resolution; pattern files
 retain them. The Instrument modulation editor, matrix, global LFOs and three
 envelopes exist. Two per-voice LFO runtimes, their typed transport and the LFO
 touch page with live audition are implemented. The resonance destination is
-implemented; live motion recording, additional destinations and analog/group
+implemented; oscillator pitch destinations are the current pending checkpoint;
+live motion recording, additional destinations and analog/group
 locks remain target design below, not implemented behavior.
 **Dependencies**: sequencer step scheduler (Phase 2), `instrument-model.md` (matrix slots are instrument-scoped), voice manager (done). **Revised 2026-09-04**: the two-oscillator Instrument (`track-and-patch-model.md` §3.1) fixes the source/destination set this matrix serves — three envelopes, two per-voice LFOs, one global LFO, oscillator and wavetable-position destinations — appended to the enums below, never renumbered.
 **Lineage**: two ancestries deliberately fused — Elektron parameter locks (per-step sound design) and the E-mu EIII **realtime controls matrix** (velocity/wheel/pedal → pitch, filter, level, LFO amount, attack — routed, not hardwired).
@@ -69,8 +70,8 @@ struct ModSlot {
 `firmware/daisy/src/audio/mod_matrix.hpp`, mirrored as raw bytes in
 `firmware/shared/spi_protocol/protocol.h`. The five fields are source,
 destination, signed depth, curve and flags. Current destinations include
-cutoff, gain, pitch, pan and resonance; oscillator, wavetable-position and
-LFO-rate destinations remain planned.
+cutoff, gain, pitch, pan, resonance, OSC1_PITCH and OSC2_PITCH; oscillator
+mix, wavetable-position and LFO-rate destinations remain planned.
 
 **Evaluation model — control-rate, never per-sample**: once per 1 ms control
 tick, each active voice sums its instrument routes before applying destination
@@ -92,6 +93,14 @@ transport or per-sample work.
 The control tick writes the bounded `SetBlockModulation(const
 ModDestinations&)` prepared snapshot, including the resonance offset; the
 render path consumes it for voice-block tuning.
+
+Oscillator pitch routes use the source oscillator identity: OSC1_PITCH and
+OSC2_PITCH address their corresponding oscillator, including an Oscillator 2
+primary cursor when that source owns the voice. A full-depth source 1 raises
+pitch by 2 semitones at +100% depth and lowers it by 2 semitones at -100%;
+routes sum before the pitch scale is exponentiated and composed
+with common pitch, note/zone/live tuning and pitch locks. Sync, FM, oscillator
+mix and LFO-rate destinations remain separate future work.
 
 ## 4. Second envelope (filter envelope)
 

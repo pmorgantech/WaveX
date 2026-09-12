@@ -206,6 +206,7 @@ struct Voice : VoiceSampleState {
     bool modulation_cutoff_dirty = false;
     float mod_gain_mul = 1.0f;
     float mod_pitch_mul = 1.0f;
+    float mod_oscillator_pitch_mul[2] = {1.0f, 1.0f};
     float mod_pan_offset = 0.0f;
     float mod_resonance_offset = 0.0f;
 
@@ -227,8 +228,17 @@ struct Voice : VoiceSampleState {
         mod_cutoff_mul = mods.cutoff_mul;
         mod_gain_mul = mods.gain_mul;
         mod_pitch_mul = mods.pitch_mul;
+        mod_oscillator_pitch_mul[0] = mods.oscillator_pitch_mul[0];
+        mod_oscillator_pitch_mul[1] = mods.oscillator_pitch_mul[1];
         mod_pan_offset = mods.pan_offset;
         mod_resonance_offset = mods.resonance_offset;
+    }
+
+    float SourcePitchModulation(const VoiceSampleState& source) const {
+        // A lone Osc 2 occupies the primary cursor; cursor position is not
+        // oscillator identity. Unassigned/sample-preview sources stay common-only.
+        return mod_pitch_mul *
+               (source.oscillator < 2 ? mod_oscillator_pitch_mul[source.oscillator] : 1.f);
     }
 };
 
@@ -530,6 +540,7 @@ class VoiceManager {
         v.modulation_cutoff_dirty = false;
         v.mod_gain_mul = 1.0f;
         v.mod_pitch_mul = 1.0f;
+        v.mod_oscillator_pitch_mul[0] = v.mod_oscillator_pitch_mul[1] = 1.f;
         v.mod_pan_offset = 0.0f;
         v.mod_resonance_offset = 0.0f;
 
@@ -665,7 +676,8 @@ class VoiceManager {
             // filter's tan() recompute nor an increment rewrite; an active
             // LFO/matrix slot drives its mod_*_mul away from identity every
             // tick, so this still runs whenever modulation is actually live.
-            const float increment = v.base_increment * VoicePitchScale(v) * v.mod_pitch_mul;
+            const float increment =
+                v.base_increment * VoicePitchScale(v) * v.SourcePitchModulation(v);
             if (v.increment != increment) {
                 v.SetIncrement(increment);
             }
@@ -698,8 +710,8 @@ class VoiceManager {
             const float right_gain = gain * pan;
             const bool dual = v.secondary.sample != nullptr;
             if (dual) {
-                const float rate =
-                    v.secondary.base_increment * VoicePitchScale(v) * v.mod_pitch_mul;
+                const float rate = v.secondary.base_increment * VoicePitchScale(v) *
+                                   v.SourcePitchModulation(v.secondary);
                 if (rate != v.secondary.increment)
                     v.secondary.SetIncrement(rate);
             }
