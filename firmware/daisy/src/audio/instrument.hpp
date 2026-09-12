@@ -28,6 +28,7 @@
 // rather than being restated here (AGENTS.md: one source of truth).
 #include "spi_protocol/protocol.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -255,16 +256,22 @@ inline VoiceTriggerParams PrepareZoneTrigger(const Instrument& ins,
     p.velocity = velocity;
     p.root_note = zone.root_note;
     p.pan = zone.pan + ins.trim_pan - 0.5f;
+    p.zone_pan = zone.pan;
+    p.instrument_gain = ins.trim_gain;
     p.track = track;
     p.choke_group = zone.choke_group;
     p.one_shot = (zone.flags & ZONE_FLAG_ONE_SHOT) != 0;
     p.own_filter_env = (zone.flags & ZONE_FLAG_OWN_FILTER_ENV) != 0;
 
-    p.gain_mul = zone.gain * ref.gain_mul * ins.trim_gain;
+    p.gain_mul = zone.gain * ref.gain_mul;
+    p.oscillator = oscillator;
+    p.drum = ins.mode == InstrumentMode::Drum;
+    p.key_note = p.drum ? zone.root_note : note;
+    p.keytrack = !p.drum && osc.keytrack;
     const float mix = ins.osc_mix < 0 ? 0 : (ins.osc_mix > 1 ? 1 : ins.osc_mix);
     p.source_level = osc.level * (oscillator == 0 ? 1.0f - mix : mix);
-    p.pitch_ratio_mul = TuneRatio(zone.coarse_tune, zone.fine_tune) *
-                        TuneRatio(osc.coarse_tune, osc.fine_tune) *
+    p.dry_pitch_ratio = TuneRatio(zone.coarse_tune, zone.fine_tune);
+    p.pitch_ratio_mul = p.dry_pitch_ratio * TuneRatio(osc.coarse_tune, osc.fine_tune) *
                         TuneRatio(ins.transpose, ins.fine_tune);
 
     // Region/loop: the zone's value where it sets one, otherwise the
@@ -320,6 +327,38 @@ inline VoiceTriggerParams PrepareZoneTrigger(const Instrument& ins,
     return p;
 }
 
+// Foreground-only composition: fixed controls, no borrowed Instrument pointers.
+// Tuning is prepared here, never recomputed for every sounding source.
+inline void PrepareInstrumentLive(const Instrument& ins, VoiceLiveParams& live) {
+    live.filter_cutoff_hz = ins.filter.cutoff_hz;
+    live.filter_resonance = ins.filter.resonance;
+    live.attack_s = ins.env[0].attack_s;
+    live.decay_s = ins.env[0].decay_s;
+    live.sustain_level = ins.env[0].sustain;
+    live.release_s = ins.env[0].release_s;
+    auto& p = live.instrument;
+    p.enabled = ins.origin != InstrumentOrigin::None;
+    p.gain = ins.trim_gain;
+    p.pan = ins.trim_pan;
+    const float mix = std::clamp(ins.osc_mix, 0.f, 1.f);
+    const float tune = TuneRatio(ins.transpose, ins.fine_tune);
+    for (uint8_t i = 0; i < 2; ++i) {
+        p.osc[i].level = ins.osc[i].level * (i ? mix : 1.f - mix);
+        p.osc[i].tune_ratio = TuneRatio(ins.osc[i].coarse_tune, ins.osc[i].fine_tune) * tune;
+        p.osc[i].keytrack = ins.mode != InstrumentMode::Drum && ins.osc[i].keytrack;
+        const auto& env = ins.env[i + 1];
+        p.env[i] = {env.attack_s, env.decay_s, env.sustain, env.release_s};
+        const auto& lfo = ins.lfo[i];
+        p.lfo[i] = {lfo.wave,
+                    lfo.sync_div,
+                    lfo.retrigger,
+                    lfo.pitch_follow,
+                    lfo.rate_hz,
+                    lfo.delay_s,
+                    lfo.fade_s};
+    }
+}
+
 // Resolves an incoming note-on against `ins` into up to `max` (capped at
 // kMaxLayerTriggers) VoiceTriggerParams, ready to hand to VoiceManager::
 // Trigger(). Returns the count filled. A zone matches when it is in_use and
@@ -337,6 +376,8 @@ inline VoiceTriggerParams PrepareZoneTrigger(const Instrument& ins,
 inline void PairOscillatorTrigger(VoiceTriggerParams& primary,
                                   const VoiceTriggerParams& secondary) {
     primary.secondary = static_cast<const VoiceSampleParams&>(secondary);
+    primary.dry_level *= primary.gain_mul;
+    primary.secondary.dry_level *= secondary.gain_mul;
     primary.source_level *= primary.gain_mul;
     primary.secondary.source_level *= secondary.gain_mul;
     primary.gain_mul = 1.0f;

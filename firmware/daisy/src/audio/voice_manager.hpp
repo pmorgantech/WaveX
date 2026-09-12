@@ -151,6 +151,9 @@ struct VoiceSampleState {
     void AdvancePhase() { phase.Advance(increment_frames, increment_fraction); }
 
     float source_level = 1.0f;
+    // Dry source properties survive a zero level/mix and repeated live edits.
+    float dry_level = 1.0f, dry_increment = 1.0f, key_ratio = 1.0f;
+    uint8_t oscillator = 0xFF;
 };
 
 // The base is the primary sample cursor; the second cursor has independent
@@ -159,7 +162,10 @@ struct Voice : VoiceSampleState {
     VoiceSampleState secondary;
 
     VoiceState state = VoiceState::Idle;
-    float gain = 0.0f;                 // 0..1, derived from velocity (× gain_mul)
+    float gain = 0.0f;  // 0..1, derived from velocity (× gain_mul)
+    float dry_gain = 0, zone_pan = .5f;
+    float lfo_pitch_ratio = 1;
+    bool lfo_pitch_known = false;
     float pan = 0.5f;                  // 0=left, 1=right, linear (not equal-power)
     uint8_t note = 0;                  // MIDI note that triggered this voice
     uint16_t start_offset_frames = 0;  // consumed by the next Render() call
@@ -235,6 +241,9 @@ struct VoiceSampleParams {
     uint32_t sample_frames = 0, sample_rate_hz = 0;
     uint8_t channels = 1, note = 60, root_note = 60;
     float pitch_ratio_mul = 1.0f, source_level = 1.0f;
+    float dry_pitch_ratio = 1.0f, dry_level = 1.0f;
+    uint8_t oscillator = 0xFF, key_note = 60;
+    bool keytrack = true, drum = false;
     uint32_t start_frame = 0, end_frame = 0;
     bool loop = false;
     uint32_t loop_start = 0, loop_end = 0;
@@ -250,7 +259,7 @@ struct VoiceTriggerParams : VoiceSampleParams {
     uint16_t param_lock_mask = 0;
     float locked_pitch_scale = 1;
     bool one_shot = false;
-    float gain_mul = 1.0f;
+    float gain_mul = 1.0f, instrument_gain = 1.0f, zone_pan = .5f;
     float filter_cutoff_hz = 20000.0f, filter_resonance = 0.0f;
     float attack_s = 0.001f, decay_s = 0.05f, sustain_level = 0.8f, release_s = 0.1f;
     float filter_env_attack_s = 0.001f, filter_env_decay_s = 0.05f;
@@ -286,6 +295,17 @@ struct ModSlotResolver {
 //
 // Defaults deliberately match VoiceTriggerParams field for field, so an
 // engine that never applies a live edit behaves exactly as before.
+struct VoiceInstrumentParams {
+    struct Oscillator {
+        float level = 1, tune_ratio = 1;
+        bool keytrack = true;
+    };
+    bool enabled = false;
+    float gain = 1, pan = .5f;
+    Oscillator osc[2];
+    VoiceAmpParams env[2];
+    Protocol::InstLfoSettings lfo[Protocol::INST_LFO_COUNT];
+};
 struct VoiceLiveParams {
     // Which Track these values describe. A knob edits ONE Track's Instrument
     // (track-and-patch-model.md §3.2), so pushing the result onto every
@@ -305,6 +325,7 @@ struct VoiceLiveParams {
     // Which lowpass and how it is shaped (voice_filter.hpp). Default is the
     // linear 12 dB WaveX SVF, i.e. the filter as it always was.
     FilterConfig filter;
+    VoiceInstrumentParams instrument;
 };
 
 class VoiceManager {
@@ -426,8 +447,31 @@ class VoiceManager {
                     amp.release = p.release_s;
                 v.envelope.SetParams(amp.attack, amp.decay, amp.sustain, amp.release);
             }
+            if (p.instrument.enabled && v.oscillator < 2) {
+                v.gain = v.dry_gain * p.instrument.gain;
+                ApplySourceLive(v, p.instrument);
+                if (v.secondary.sample)
+                    ApplySourceLive(v.secondary, p.instrument);
+                const auto& e2 = p.instrument.env[0];
+                const auto& e3 = p.instrument.env[1];
+                if (!v.env2.IsReleasing())
+                    v.env2.SetParams(e2.attack, e2.decay, e2.sustain, e2.release);
+                if (!v.env3.IsReleasing())
+                    v.env3.SetParams(e3.attack, e3.decay, e3.sustain, e3.release);
+                const bool follow =
+                    (p.instrument.lfo[0].pitch_follow && !p.instrument.lfo[0].sync_div) ||
+                    (p.instrument.lfo[1].pitch_follow && !p.instrument.lfo[1].sync_div);
+                if (follow && !v.lfo_pitch_known) {
+                    v.lfo_pitch_ratio = std::pow(2.0f, (static_cast<float>(v.note) - 60) / 12);
+                    v.lfo_pitch_known = true;
+                }
+                for (uint8_t i = 0; i < Protocol::INST_LFO_COUNT; ++i)
+                    v.lfo[i].UpdateSettings(p.instrument.lfo[i], sample_rate_, v.lfo_pitch_ratio);
+            }
             if (unlocked(Protocol::PARAM_PAN))
-                v.pan = p.pan;
+                v.pan = p.instrument.enabled && v.oscillator < 2
+                            ? std::clamp(v.zone_pan + p.instrument.pan + p.pan - 1.f, 0.f, 1.f)
+                            : p.pan;
             // Multiply the note's own increment rather than overwrite it, so a
             // live transpose stacks on key tracking instead of flattening every
             // voice to the same rate.
@@ -454,7 +498,9 @@ class VoiceManager {
         Voice& v = voices_[static_cast<size_t>(idx)];
 
         v.state = VoiceState::Playing;
-        v.gain = (static_cast<float>(params.velocity) / 127.0f) * params.gain_mul;
+        v.dry_gain = (static_cast<float>(params.velocity) / 127.0f) * params.gain_mul;
+        v.gain = v.dry_gain * params.instrument_gain;
+        v.zone_pan = params.zone_pan;
         v.pan = params.pan < 0.0f ? 0.0f : (params.pan > 1.0f ? 1.0f : params.pan);
         v.note = params.trigger_note == 0xFF ? params.note : params.trigger_note;
         v.start_offset_frames = params.start_offset_frames;
@@ -516,12 +562,12 @@ class VoiceManager {
         v.env3.Retrigger();
         const bool follow = (params.lfo[0].pitch_follow && !params.lfo[0].sync_div) ||
                             (params.lfo[1].pitch_follow && !params.lfo[1].sync_div);
-        const float pitch_ratio =
-            follow ? std::pow(2.0f, (static_cast<float>(v.note) - 60) / 12) : 1;
+        v.lfo_pitch_known = follow;
+        v.lfo_pitch_ratio = follow ? std::pow(2.0f, (static_cast<float>(v.note) - 60) / 12) : 1;
         for (uint8_t i = 0; i < Protocol::INST_LFO_COUNT; ++i)
             v.lfo[i].Start(params.lfo[i],
                            sample_rate_,
-                           pitch_ratio,
+                           v.lfo_pitch_ratio,
                            frame_clock_,
                            beat_clock_,
                            beat_step_,
@@ -842,12 +888,22 @@ class VoiceManager {
     }
 
    private:
+    static void ApplySourceLive(VoiceSampleState& source, const VoiceInstrumentParams& p) {
+        if (source.oscillator >= 2)
+            return;
+        const auto& osc = p.osc[source.oscillator];
+        source.source_level = source.dry_level * osc.level;
+        source.base_increment =
+            source.dry_increment * osc.tune_ratio * (osc.keytrack ? source.key_ratio : 1.f);
+    }
     WAVEX_ITCM_CODE_NAMED("voice.InitSource")
     void InitSource(VoiceSampleState& v, const VoiceSampleParams& params, float pitch_scale) {
         v.sample = params.sample;
         v.sample_frames = params.sample_frames;
         v.src_channels = (params.channels == 2) ? 2 : 1;
         v.source_level = params.source_level;
+        v.dry_level = params.dry_level;
+        v.oscillator = params.oscillator;
         v.start_frame = params.start_frame < params.sample_frames ? params.start_frame : 0;
         v.end_frame = (params.end_frame == 0 || params.end_frame > params.sample_frames)
                           ? params.sample_frames
@@ -883,11 +939,13 @@ class VoiceManager {
             (params.sample_rate_hz > 0)
                 ? static_cast<float>(params.sample_rate_hz) / static_cast<float>(sample_rate_)
                 : 1.0f;
+        const uint8_t key = params.oscillator < 2 ? params.key_note : params.note;
+        v.key_ratio = std::pow(
+            2.0f,
+            static_cast<float>(static_cast<int>(key) - static_cast<int>(params.root_note)) / 12.0f);
+        v.dry_increment = rate_ratio * params.dry_pitch_ratio;
         v.base_increment = rate_ratio * params.pitch_ratio_mul *
-                           std::pow(2.0f,
-                                    static_cast<float>(static_cast<int>(params.note) -
-                                                       static_cast<int>(params.root_note)) /
-                                        12.0f);
+                           (params.oscillator < 2 && !params.keytrack ? 1.f : v.key_ratio);
         v.SetIncrement(v.base_increment * pitch_scale);
     }
     // This runs once per sample per oscillator. Keep cursor state and the

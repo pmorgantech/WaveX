@@ -93,3 +93,31 @@ TEST(VoiceLfo, CmsisSineMatchesTheReferenceWithinInterpolationError) {
     }
     EXPECT_LT(maximum, .00003f);
 }
+
+TEST(VoiceLfo, EditingDelayFadeUsesActualNoteAgeAndNeverRestartsPhase) {
+    InstLfoSettings s;
+    s.wave = 3;
+    s.rate_hz = .02f;
+    VoiceLfo l;
+    const auto beat = VoiceLfo::BeatStep(120, 1000);
+    l.Start(s, 1000, 1, 0, 0, beat, 0, 19, 0);
+    l.Advance(5000, beat);
+    const float phase = l.Phase();
+    s.delay_s = 4;
+    s.fade_s = 2;
+    l.UpdateSettings(s, 1000, 1);
+    EXPECT_FLOAT_EQ(l.Phase(), phase);
+    EXPECT_NEAR(l.Value(), .5f, 1e-6);
+    s.delay_s = 6;
+    l.UpdateSettings(s, 1000, 1);
+    EXPECT_FLOAT_EQ(l.Value(), 0);
+    l.Advance(2000, beat);
+    EXPECT_NEAR(l.Value(), .5f, 1e-6);
+    const auto next = l.Phase();
+    s.sync_div = 3;
+    s.retrigger = 0;
+    l.UpdateSettings(s, 1000, 1);
+    EXPECT_FLOAT_EQ(l.Phase(), next);
+    l.Advance(125, beat);
+    EXPECT_NEAR(l.Phase(), next + .25f, 1e-5);
+}

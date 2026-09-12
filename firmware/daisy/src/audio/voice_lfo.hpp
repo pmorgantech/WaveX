@@ -5,6 +5,7 @@
 #include "lfo_sine.hpp"
 #include <algorithm>
 #include <cstdint>
+#include <cstring>
 namespace WaveX::AudioEngine {
 // Callback-owned phase and delayed-vibrato state. Settings are copied at
 // note admission, never borrowed from the foreground Instrument.
@@ -30,6 +31,48 @@ class VoiceLfo {
                uint32_t offset,
                uint32_t random_seed,
                uint8_t index) {
+        Configure(settings, sample_rate, pitch_ratio);
+        elapsed_frames_ = 0;
+        // This clock advances even while every physical voice is idle.
+        phase_ = settings.retrigger || !enabled_ ? 0
+                 : division_ ? DivideBeatPhase(beat_clock + uint64_t{beat_step} * offset, division_)
+                             : (frame_clock + offset) * rate_step_;
+        seed_ = settings.retrigger ? random_seed : 0x9e3779b9u * (index + 1u);
+        Recompute();
+    }
+    // Changes the sound at its current phase and note age. Gate/free policy
+    // takes effect at the next note admission; neither edit nor Revert retriggers.
+    WAVEX_ITCM_CODE_NAMED("lfo.UpdateSettings")
+    void UpdateSettings(const Protocol::InstLfoSettings& settings,
+                        uint32_t sample_rate,
+                        float pitch_ratio) {
+        if (std::memcmp(&settings_, &settings, sizeof(settings)) == 0)
+            return;
+        Configure(settings, sample_rate, pitch_ratio);
+        Recompute();
+    }
+    float Advance(uint32_t frames, uint32_t beat_step) {
+        if (!frames)
+            return value_;
+        elapsed_frames_ += std::min(frames, UINT32_MAX - elapsed_frames_);
+        if (!enabled_)
+            return 0;
+        phase_ += division_ ? DivideBeatPhase(uint64_t{beat_step} * frames, division_)
+                            : uint64_t{rate_step_} * frames;
+        Recompute();
+        return value_;
+    }
+    float Value() const { return value_; }
+    float Phase() const {
+        return static_cast<float>(static_cast<uint32_t>(phase_)) / 4294967296.0f;
+    }
+
+   private:
+    WAVEX_ITCM_CODE_NAMED("lfo.Configure")
+    void Configure(const Protocol::InstLfoSettings& settings,
+                   uint32_t sample_rate,
+                   float pitch_ratio) {
+        settings_ = settings;
         sample_rate = sample_rate ? sample_rate : 48000;
         wave_ = settings.wave;
         division_ = settings.sync_div;
@@ -52,33 +95,7 @@ class VoiceLfo {
         delay_frames_ = frames(settings.delay_s);
         fade_frames_ = frames(settings.fade_s);
         fade_scale_ = fade_frames_ ? 1.0f / static_cast<float>(fade_frames_) : 1.0f;
-        elapsed_frames_ = 0;
-        // This clock advances even while every physical voice is idle.
-        phase_ = settings.retrigger || !enabled_ ? 0
-                 : division_ ? DivideBeatPhase(beat_clock + uint64_t{beat_step} * offset, division_)
-                             : (frame_clock + offset) * rate_step_;
-        seed_ = settings.retrigger ? random_seed : 0x9e3779b9u * (index + 1u);
-        Recompute();
     }
-    float Advance(uint32_t frames, uint32_t beat_step) {
-        if (!frames)
-            return value_;
-        if (!enabled_)
-            return 0;
-        phase_ += division_ ? DivideBeatPhase(uint64_t{beat_step} * frames, division_)
-                            : uint64_t{rate_step_} * frames;
-        const uint32_t end = delay_frames_ + fade_frames_;
-        const uint32_t remaining = end - std::min(elapsed_frames_, end);
-        elapsed_frames_ += std::min(frames, remaining);
-        Recompute();
-        return value_;
-    }
-    float Value() const { return value_; }
-    float Phase() const {
-        return static_cast<float>(static_cast<uint32_t>(phase_)) / 4294967296.0f;
-    }
-
-   private:
     void Recompute() {
         if (!enabled_ || elapsed_frames_ < delay_frames_) {
             value_ = 0;
@@ -113,6 +130,7 @@ class VoiceLfo {
                 : 1.0f;
         value_ = wave * gain;
     }
+    Protocol::InstLfoSettings settings_;
     uint64_t phase_ = 0;
     uint32_t rate_step_ = 0, delay_frames_ = 0, fade_frames_ = 0, elapsed_frames_ = 0, seed_ = 0;
     float fade_scale_ = 1, value_ = 0;

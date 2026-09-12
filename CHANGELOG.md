@@ -13,6 +13,16 @@ versioning and release process.
 
 ### Added
 
+- Added held-note live updates for Instrument gain/pan, oscillator level/mix/
+  tuning/key tracking, Env 2/3 and both LFO settings. The prepared handoff
+  preserves source cursors and loop/sample references, zone gain/tuning,
+  envelope phase, LFO phase and actual note age; map/sample assignment and
+  Instrument replacement retain their stop/next-note boundaries. HIL verified
+  gain/pan and oscillator zero-to-restore, muted/restored Env 2/3 routes and
+  both LFO pan routes through DSP meters. The clean capacity run before these
+  held-note changes remains the accepted 68.0921% STAY result; a new gate is
+  required.
+
 - Added the Instrument LFO touch page with two selectable per-voice LFOs and
   eight tiles in two rows for waveform, Hz rate, sync, retrigger, delay, fade
   and pitch-follow. The page uses revisioned transport with automatic preview,
@@ -26,8 +36,8 @@ versioning and release process.
   and Amp editors, typed filter/amp readback, and per-Track Apply/Revert undo
   for filter cutoff/resonance and Instrument trim gain/pan. Successful WXI
   saves commit the audible working values while failed saves retain the undo
-  point; replacing an Instrument clears it. Existing held voices are not yet
-  expanded to receive these edits. The earlier LFO REVIEW was superseded by a
+  point; replacing an Instrument clears it. Supported held-note controls are
+  covered by the later held-note milestone entry. The earlier LFO REVIEW was superseded by a
   clean 68.0921% STAY repeat; the one-hour phase gate remains open.
 
 - Added backend runtime support for two per-voice LFOs with revisioned typed

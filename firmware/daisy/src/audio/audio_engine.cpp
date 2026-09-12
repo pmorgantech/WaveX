@@ -206,6 +206,7 @@ static WaveX::AudioEngine::VoiceLiveParams ComposeTrackLive(
     live.decay_s = env.decay_s;
     live.sustain_level = env.sustain;
     live.release_s = env.release_s;
+    WaveX::AudioEngine::SfzLoader::PrepareLiveParams(track, live);
     live.pan = extras.pan;
     live.pitch_semitones = extras.pitch_semitones;
     live.filter = extras.filter;
@@ -2928,33 +2929,28 @@ bool LoadSfzInstrument(const char* path, uint8_t slot) {
 void OnTrackStateRequest(const TrackStateRequest& request) {
     SfzLoader::OnTrackStateRequest(request);
 }
-void OnEditOp(const InstEditOpMessage& request) {
-    if (!SfzLoader::OnEditOp(request))
-        return;
-    PublishSequencerVoiceMap(static_cast<uint16_t>(1u << request.track));
-    const auto* filter = SfzLoader::GetInstrumentFilter(request.track);
-    const auto* env = SfzLoader::GetInstrumentEnv(request.track);
+static void PublishInstrumentSound(uint8_t track) {
+    PublishSequencerVoiceMap(static_cast<uint16_t>(1u << track));
+    const auto* filter = SfzLoader::GetInstrumentFilter(track);
+    const auto* env = SfzLoader::GetInstrumentEnv(track);
     if (filter && env)
-        s_track_live_updates.Publish(ComposeTrackLive(request.track, *filter, *env));
+        s_track_live_updates.Publish(ComposeTrackLive(track, *filter, *env));
+}
+void OnEditOp(const InstEditOpMessage& request) {
+    if (SfzLoader::OnEditOp(request))
+        PublishInstrumentSound(request.track);
 }
 void OnLfoOp(const InstLfoOpMessage& request) {
     if (SfzLoader::OnLfoOp(request))
-        PublishSequencerVoiceMap(static_cast<uint16_t>(1u << request.track));
+        PublishInstrumentSound(request.track);
 }
 void OnModOp(const InstModOpMessage& request) {
-    if (!SfzLoader::OnModOp(request))
-        return;
-    PublishSequencerVoiceMap(static_cast<uint16_t>(1u << request.track));
-    if (request.op == INST_MOD_SET_ENV && request.index == 0) {
-        const auto* filter = SfzLoader::GetInstrumentFilter(request.track);
-        const auto* env = SfzLoader::GetInstrumentEnv(request.track);
-        if (filter && env)
-            s_track_live_updates.Publish(ComposeTrackLive(request.track, *filter, *env));
-    }
+    if (SfzLoader::OnModOp(request))
+        PublishInstrumentSound(request.track);
 }
 void OnOscOp(const InstOscOpMessage& request) {
     if (SfzLoader::OnOscOp(request)) {
-        PublishSequencerVoiceMap(static_cast<uint16_t>(1u << request.track));
+        PublishInstrumentSound(request.track);
         PushTrackBinding(request.track);
     }
 }

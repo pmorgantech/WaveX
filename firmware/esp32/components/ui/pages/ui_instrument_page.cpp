@@ -1182,7 +1182,7 @@ void UIInstrumentPage::refreshOscillator() {
                           : state.type == 2        ? "Wavetable playback is not available yet"
                           : state.zones == 0
                               ? "Empty map: Shift > Copy Other to copy the other oscillator"
-                              : "Changes apply to subsequent notes. Save a WXI copy from Pad Map.";
+                              : "Sound controls update held notes. Save a WXI copy from Pad Map.";
     char status[256];
     snprintf(status,
              sizeof(status),

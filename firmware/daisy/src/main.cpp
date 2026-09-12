@@ -257,6 +257,15 @@ static void DispatchConsoleCommand(const WaveX::Debug::Command& c) {
                           "dropped",
                           static_cast<long>(s_console_reader.DroppedBytes()));
         (void)len;
+    } else if (std::strcmp(c.verb, "METERS") == 0) {
+        WaveX::AudioEngine::BlockMeters levels;
+        WaveX::AudioEngine::GetMeters(levels);
+        size_t len = FormatOk(seq, reply, sizeof(reply));
+        len = AppendKvInt(
+            reply, sizeof(reply), len, "left", static_cast<long>(levels.peakL * 1000000.f));
+        len = AppendKvInt(
+            reply, sizeof(reply), len, "right", static_cast<long>(levels.peakR * 1000000.f));
+        (void)len;
     } else if (std::strcmp(c.verb, "STREAM") == 0) {
         const auto state = WaveX::AudioEngine::DebugStreamState();
         size_t len = FormatOk(seq, reply, sizeof(reply));

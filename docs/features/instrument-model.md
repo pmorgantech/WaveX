@@ -176,9 +176,12 @@ undo point. Changing pages or Tracks retains it, while replacing the
 Instrument clears it. Amp edits address Instrument trim gain and pan rather
 than the master volume.
 
-The current handoff updates future triggers. Expanding these sound changes to
-voices that are already held is still required; existing Env 1, filter and
-matrix live behavior remains the only held-voice path.
+The current handoff updates sounding voices for Instrument gain/pan, oscillator
+level/mix/coarse/fine/key tracking, Env 2/3 and LFO settings while preserving
+each voice's source cursor, loop/sample references, zone gain/tuning, envelope
+phase and LFO phase/note age. Gate/free admission policy applies to the next
+note. Map/sample assignment and Instrument replacement still use their
+voice-stop/next-note boundaries.
 
 Key Map, dedicated Instrument Browser, Bank/Track pages, and expanded
 oscillator/envelope/LFO editors remain target work.
@@ -265,9 +268,11 @@ The output uses one mono submix and a shared Instrument/zone pan.
 Stored oscillator pan fields remain reserved; independent stereo oscillator
 panning is not exposed. The transport can read/edit oscillator level, mix,
 coarse/fine tune and key tracking, and copy a map into an empty oscillator.
-Those edits affect future triggers. Instrument > Osc now exposes both source
-selectors, level, submix, coarse/fine tuning and key tracking with authoritative
-readback. Drag or step values, then use Shift > Apply or Revert. Copy Other
+Those edits update sounding voices through the bounded prepared handoff while
+preserving source cursors and zone-specific gain/tuning. Instrument > Osc now
+exposes both source selectors, level, submix, coarse/fine tuning and key
+tracking with authoritative readback. Drag or step values, then use Shift >
+Apply or Revert. Copy Other
 clones the other source into an empty map. Opening Instrument only reads the
 selected Track and never binds the Browser's last loaded sample.
 
@@ -363,8 +368,9 @@ to zero; new records use 16 bytes. The ESP32 LFO page presents eight tiles in
 two rows of four for the selector and seven settings, and shares the common
 sound Apply/Revert transport. Edits preview automatically, and a successful
 WXI save persists the audible working copy. Held LFO, oscillator, gain and Env
-2/3 voices still use their trigger snapshot; expanding these edits to already
-held voices remains open.
+2/3 voices retain their phase and continue through held-note edits; map/sample
+assignment and Instrument replacement remain the explicit stop/next-note
+boundaries.
 The frontend suite passes 274 tests, and the two-board LFO HIL verifies the
 transport, automatic preview and WXI readback (11.70 seconds). The inspected
 1280×720 capture is `logs/instrument-lfo-20260912.png`; all eight tiles fit

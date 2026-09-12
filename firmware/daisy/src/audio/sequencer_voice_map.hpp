@@ -146,6 +146,7 @@ struct SequencerVoiceMap {
             p = source.zones[i];
             p.note = key.drum ? p.root_note : note;
             p.trigger_note = note;
+            p.key_note = p.drum ? p.root_note : note;
             p.velocity = velocity;
             Zone fade;
             fade.vel_lo = key.vel_lo;

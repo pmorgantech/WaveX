@@ -120,6 +120,7 @@ bool SetInstrumentFilter(uint8_t track, const InstrumentFilter& filter);
 bool SetInstrumentEnv(uint8_t track, const InstrumentEnv& env);
 const InstrumentFilter* GetInstrumentFilter(uint8_t track);
 const InstrumentEnv* GetInstrumentEnv(uint8_t track);
+void PrepareLiveParams(uint8_t track, VoiceLiveParams& live);
 
 // Modulation matrix (param-locks-and-modulation.md §9 stage 4). Main-loop
 // context only (message dispatch) - mirrors every other Tracks

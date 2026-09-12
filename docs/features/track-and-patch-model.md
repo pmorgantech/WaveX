@@ -150,7 +150,7 @@ Two consequences worth stating, found while building this:
 
 ### 2.3 What a track does *not* own
 
-Filter/envelope/tuning are Instrument properties (§3). A parameter change is addressed to a Track — `MSG_CONTROL_CHANGE`'s `channel` field, which the frontend used to send as 0 — and `OnControlChange` writes it into **that Track's Instrument**, which is the authority a later note reads. `VoiceManager::ApplyLiveParams` still pushes edits onto *sounding* voices, but only that Track's, so a knob on Track 3 cannot move Track 5's held notes; the `VoiceLiveParams` it receives are composed from the Instrument on each change rather than accumulated, so there is one store and one derived message. Tuning is still engine-side pending `transpose`/`trim_pan` in stage 5.
+Filter/envelope/tuning are Instrument properties (§3). A parameter change is addressed to a Track — `MSG_CONTROL_CHANGE`'s `channel` field, which the frontend used to send as 0 — and `OnControlChange` writes it into **that Track's Instrument**, which is the authority a later note reads. `VoiceManager::ApplyLiveParams` pushes the bounded live controls onto *sounding* voices for only that Track, so a knob on Track 3 cannot move Track 5's held notes. The prepared handoff preserves source cursors/loops, zone gain/tuning, envelope phase and LFO phase; map/sample assignment and Instrument replacement retain their stop/next-note boundaries. Gain/pan and oscillator controls compose separately from per-zone gain and tuning, while gain locks remain relative to the resolved trigger.
 
 The engine-wide filter A/B (`WAVEX-FILTER`) keeps its own mailbox: it is a bench listening aid and genuinely global, and routing it through the per-Track snapshot would have carried one Track's cutoff and envelope onto every voice.
 
@@ -220,11 +220,12 @@ struct Instrument {
 **What exists today**: two typed Sample oscillators with separate zone maps
 feed one mono submix, filter and amp per voice. Env 1 runs per sample; Env 2
 and Env 3 run at block rate. The eight-row matrix supports cutoff/gain/pitch/pan
-and the three envelope sources. Oscillator settings, both Key Maps, Env 1–3
-and matrix rows have revisioned touch editors. Expanded WXI fields have an
-Instrument-owned storage home. Selectable filter modes, two per-voice LFOs,
+and the three envelope sources. Oscillator settings, both Key Maps, Env 1–3,
+matrix rows and two per-voice LFOs have revisioned touch editors; the live
+handoff preserves held-note state for their supported controls. Expanded WXI
+fields have an Instrument-owned storage home. Selectable filter modes,
 additional modulation destinations and Instrument output/polyphony behavior
-remain open; the engine still ticks two global LFOs pending that migration.
+remain open.
 See [the as-built Instrument model](instrument-model.md) for validation and
 the [roadmap capacity checkpoint](../roadmap.md#2c--callback-capacity-checkpoint)
 before expanding the callback.
@@ -422,7 +423,7 @@ Pages reorganised around the nouns. Each page owns exactly one thing.
 | Page | Owns | Exists today as |
 |---|---|---|
 | **Track** | which Track is selected (8 per page, §2.4), its Instrument name, MIDI in, poly limit, program-change on/off, mixer strip, Load / Save Instrument | touch Track page with eight Tracks per view, current binding and MIDI input; polyphony, Program Change and mixer policy follow their engine stages |
-| **Instrument** | the selected Track's Instrument. Tabs: **Osc** (1/2, type, level/pan/tune, → Key Map or Pad Map by mode), **Filter**, **Amp**, **Env** (1/2/3), **LFO** (1/2), **Mod**; Name/Tags on the Track page's Save | Instrument page (renamed from "Voice" in stage 1, 2026-09-04; Sample/Env/Amp/Filter/Mod tabs exist; its TRACK param follows the selected Track — done 2026-09-04) |
+| **Instrument** | the selected Track's Instrument. Tabs: **Osc** (1/2, type, level/pan/tune, → Key Map or Pad Map by mode), **Filter**, **Amp**, **Env** (1/2/3), **LFO** (1/2), **Mod**; Name/Tags on the Track page's Save | Instrument page (renamed from "Voice" in stage 1, 2026-09-04; Sample/Env/Amp/Filter/Mod/LFO tabs exist; its TRACK param follows the selected Track — done 2026-09-12) |
 | **Key Map** | Keyboard-mode oscillator: zones over key × velocity ranges | 32 stable slots, resident sample assignment/clear, staged inclusive key/velocity ranges and root note, audition, naming and WXI save copies (2026-09-11) |
 | **Pad Map** | Drum-mode oscillator: 16 pads × Sample, choke, optional per-pad filter/env | touch editor with assignment, audition, choke, naming and new-copy saves; per-pad cutoff and amp attack/decay/sustain overrides with inheritance reset |
 | **Instrument Browser** | `0:/wavex/instruments/*.wxi` and `sfz/**/*.sfz`; preflight; load into the selected Track (asks, §1.3); tag filter | Dedicated WXI/SFZ browser with Saved/Root shortcuts, preflight and confirmed Track load (2026-09-11); tag filtering awaits metadata support |

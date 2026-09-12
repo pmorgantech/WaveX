@@ -217,7 +217,9 @@ done. Open work, in the order decided 2026-09-05 (model doc §8: 7 → 4 → 5 �
    filter type, new mod destinations and held-voice expansion for the sound
    preview path remain open. Instrument sound controls now preview
    automatically with typed filter/amp readback and a per-Track Apply/Revert
-   undo point; this currently affects future triggers. The two-row eight-tile
+   undo point; supported controls now update held voices through the bounded
+   handoff, while map/sample replacement retains its stop/next-note boundary.
+   The two-row eight-tile
    LFO page adds waveform, frequency, sync, retrigger, pitch-follow, delay and
    fade controls. The clean LFO callback run reached 68.0921% peak and is
    STAY, permitting the held-note milestone but not closing the one-hour phase

@@ -1792,6 +1792,11 @@ bool SetInstrumentEnv(uint8_t track, const InstrumentEnv& env) {
     return true;
 }
 
+void PrepareLiveParams(uint8_t track, VoiceLiveParams& live) {
+    if (track < kNumTracks)
+        PrepareInstrumentLive(s_bank->At(track).instrument, live);
+}
+
 const InstrumentFilter* GetInstrumentFilter(uint8_t track) {
     return track < kNumTracks ? &s_bank->At(track).instrument.filter : nullptr;
 }
