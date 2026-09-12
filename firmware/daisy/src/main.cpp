@@ -286,6 +286,32 @@ static void DispatchConsoleCommand(const WaveX::Debug::Command& c) {
             }
             len = AppendKvText(reply, sizeof(reply), len, key, val);
         }
+    } else if (std::strcmp(c.verb, "LFO") == 0) {
+        long track, index;
+        if (!NextInt(&p, &track) || !NextInt(&p, &index) || track < 0 || track >= 16 || index < 0 ||
+            index >= 2) {
+            FormatErr(seq, "badlfo", reply, sizeof(reply));
+        } else {
+            const auto state =
+                WaveX::AudioEngine::SfzLoader::ReadLfoState(static_cast<uint8_t>(track));
+            const auto& v = state.values[index];
+            size_t len = FormatOk(seq, reply, sizeof(reply));
+            len = AppendKvInt(reply, sizeof(reply), len, "valid", state.valid);
+            len = AppendKvInt(reply, sizeof(reply), len, "busy", state.busy);
+            len = AppendKvInt(reply, sizeof(reply), len, "revision", state.revision);
+            len = AppendKvInt(reply, sizeof(reply), len, "completed", state.completed_request_id);
+            len = AppendKvInt(reply, sizeof(reply), len, "error", state.error);
+            len = AppendKvInt(reply, sizeof(reply), len, "wave", v.wave);
+            len = AppendKvInt(reply, sizeof(reply), len, "sync", v.sync_div);
+            len = AppendKvInt(reply, sizeof(reply), len, "retrigger", v.retrigger);
+            len = AppendKvInt(reply, sizeof(reply), len, "follow", v.pitch_follow);
+            len = AppendKvInt(
+                reply, sizeof(reply), len, "rate", static_cast<long>(v.rate_hz * 1000 + .5f));
+            len = AppendKvInt(
+                reply, sizeof(reply), len, "delay", static_cast<long>(v.delay_s * 1000 + .5f));
+            AppendKvInt(
+                reply, sizeof(reply), len, "fade", static_cast<long>(v.fade_s * 1000 + .5f));
+        }
     } else if (std::strcmp(c.verb, "ENV") == 0 || std::strcmp(c.verb, "MOD") == 0) {
         const bool envelope = std::strcmp(c.verb, "ENV") == 0;
         long track, index;

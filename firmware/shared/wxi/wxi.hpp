@@ -177,7 +177,8 @@ struct LfoParams {
     uint8_t sync_div = 0;  // 0 = free-running at rate_hz; else a tempo division
     float delay_s = 0.0f;  // the E-mu delayed-vibrato shape
     float fade_s = 0.0f;
-    uint8_t retrigger = 1;  // 1 = restart phase per voice
+    uint8_t retrigger = 1;     // 1 = restart phase per voice
+    uint8_t pitch_follow = 0;  // Hz rate follows MIDI note relative to C4
 };
 
 // Mirrors AudioEngine::ModSlot.
@@ -232,7 +233,7 @@ static constexpr uint32_t kZoneWireSize = 1 +           // index
 static constexpr uint32_t kFiltWireSize = 17;
 static constexpr uint32_t kAmpWireSize = 1;
 static constexpr uint32_t kEnvWireSize = 16;
-static constexpr uint32_t kLfoWireSize = 15;
+static constexpr uint32_t kLfoWireSize = 16;
 static constexpr uint32_t kModmHeaderWireSize = 2;
 static constexpr uint32_t kModSlotWireSize = 6;
 
@@ -513,6 +514,7 @@ inline void EncodeLfo(const LfoParams& l, uint8_t* b) {
     WriteF32LE(b + 6, l.delay_s);
     WriteF32LE(b + 10, l.fade_s);
     b[14] = l.retrigger;
+    b[15] = l.pitch_follow;
 }
 
 inline void DecodeLfo(const uint8_t* b, LfoParams& l) {
@@ -522,6 +524,7 @@ inline void DecodeLfo(const uint8_t* b, LfoParams& l) {
     l.delay_s = ReadF32LE(b + 6, 0.0f, kTimeMax, 0.0f);
     l.fade_s = ReadF32LE(b + 10, 0.0f, kTimeMax, 0.0f);
     l.retrigger = b[14] ? 1 : 0;
+    l.pitch_follow = b[15] ? 1 : 0;
 }
 
 inline void EncodeModSlot(const ModSlot& m, uint8_t* b) {
@@ -818,7 +821,9 @@ inline Result Read(Wxcf::IoContext io, InstrumentFile& out) {
                 break;
             case kChunkLfo1:
             case kChunkLfo2:
-                res = detail::ReadFixedPayload(r, ch.payload_len, buf, kLfoWireSize);
+                buf[15] = 0;
+                res = detail::ReadFixedPayload(
+                    r, ch.payload_len, buf, ch.payload_len >= kLfoWireSize ? kLfoWireSize : 15);
                 if (res == Result::Ok)
                     detail::DecodeLfo(buf, out.lfo[ch.chunk_id - kChunkLfo1]);
                 break;

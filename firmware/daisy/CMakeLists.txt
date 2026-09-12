@@ -362,12 +362,19 @@ if(NOT WAVEX_SRAM_DEBUG)
     )
 endif()
 
-# CMSIS-DSP is not linked. The sources live in libs/libDaisy/Drivers/CMSIS-DSP;
-# when a kernel is worth it (FFT, polyphase FIR resampling, saturating q15
-# block math - docs/daisy_rt_audio_coding_guide.md §8), add an OBJECT library
-# of exactly the arm_*.c files used, with Include/ and the CMSIS_5 Core
-# include on its interface, and link it PRIVATE. An earlier shim compiled ten
-# conversion/interpolation files of which the link kept one plain copy loop.
+# The vendored CMSIS sine kernel replaces libm sine in the LFO control path.
+# Compile only this kernel and its 513-entry table with the target toolchain.
+add_library(wavex_lfo_math OBJECT
+    libs/libDaisy/Drivers/CMSIS-DSP/Source/FastMathFunctions/arm_sin_f32.c
+    libs/libDaisy/Drivers/CMSIS-DSP/Source/CommonTables/arm_common_tables.c
+)
+target_include_directories(wavex_lfo_math SYSTEM PUBLIC
+    ${CMAKE_CURRENT_LIST_DIR}/libs/libDaisy/Drivers/CMSIS-DSP/Include
+    ${CMAKE_CURRENT_LIST_DIR}/libs/libDaisy/Drivers/CMSIS_5/CMSIS/Core/Include
+)
+target_compile_definitions(wavex_lfo_math PRIVATE ARM_DSP_CONFIG_TABLES ARM_FAST_ALLOW_TABLES ARM_TABLE_SIN_F32)
+target_compile_options(wavex_lfo_math PRIVATE -w)
+target_link_libraries(${FIRMWARE_NAME} PRIVATE wavex_lfo_math)
 
 # Set linker specs to use nano library with nosys stubs
 set(CMAKE_EXE_LINKER_FLAGS "--specs=nano.specs --specs=nosys.specs")

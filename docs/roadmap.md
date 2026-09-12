@@ -204,12 +204,13 @@ done. Open work, in the order decided 2026-09-05 (model doc §8: 7 → 4 → 5 �
    Tag metadata/filtering remains future work; these editors do not close the
    Phase 2 hardware gate.
 2. Voice architecture (stage 5): Osc 2 sample submix, its touch settings,
-   both keyboard zone maps, Env 1–3 and the eight-row matrix editor are built.
-   Complete filter type, two per-voice LFOs and new mod destinations —
-   DWT-measured at `WAVEX_NUM_VOICES` before the count is changed.
-   The planned LFO tab adds waveform, frequency, pitch-follow and gate/free-run
-   controls, taking the stage bar from five to six. Build it with the runtime
-   and typed transport, and measure each callback milestone before continuing.
+   both keyboard zone maps, Env 1–3, the eight-row matrix editor and the
+   backend runtime/typed transport for two per-voice LFOs are built. Complete
+   filter type, the LFO touch tab/live audition, and new mod destinations
+   remain open. The LFO tab adds waveform, frequency, pitch-follow and
+   gate/free-run controls, taking the stage bar from five to six. A fresh clean
+   callback gate is required after this milestone before changing the voice
+   count.
 3. Bank (stage 6): the [WXCF Bank codec](features/bank-persistence.md) and
    bounded resident index are host-tested. SD working-copy management, Bank
    page, Track recall, preload and Program Change recall remain open and follow

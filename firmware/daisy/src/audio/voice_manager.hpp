@@ -1,4 +1,5 @@
 #pragma once
+#include "voice_lfo.hpp"
 
 // 8-voice polyphonic RAM-resident sample player (roadmap Phase 1 items 2 +
 // 4). HAL-free: operates purely on int16_t* sample data (owned elsewhere -
@@ -182,6 +183,7 @@ struct Voice : VoiceSampleState {
     // fraction of the cost.
     Envelope env2;
     Envelope env3;
+    VoiceLfo lfo[Protocol::INST_LFO_COUNT];
     // The cutoff Trigger()/ApplyLiveParams last set, before modulation. Kept
     // so the control tick can recompute filter.SetCutoff(base * mod_cutoff_mul)
     // every block without compounding onto the previous block's modulated
@@ -255,6 +257,7 @@ struct VoiceTriggerParams : VoiceSampleParams {
     float filter_env_sustain_level = 0.8f, filter_env_release_s = 0.1f;
     float aux_env_attack_s = 0.001f, aux_env_decay_s = 0.05f;
     float aux_env_sustain_level = 0.8f, aux_env_release_s = 0.1f;
+    Protocol::InstLfoSettings lfo[Protocol::INST_LFO_COUNT];
 };
 
 // Resolves a voice's owning Track (Voice::track) to that
@@ -323,6 +326,9 @@ class VoiceManager {
     // InitEstablishesDefaultsFromZeroedMemory pins that.
     void Init(uint32_t sample_rate) {
         sample_rate_ = sample_rate > 0 ? sample_rate : 48000;
+        frame_clock_ = beat_clock_ = 0;
+        tempo_bpm_ = 0;
+        SetTempo(120);
         live_pitch_scales_.fill(1.0f);
         filter_config_ = FilterConfig{};
         // DSP initialization belongs to startup, not every note-on. Trigger
@@ -357,6 +363,13 @@ class VoiceManager {
     // hand that voice its full-length release back mid-choke - the hat would
     // not cut off. Filter changes still apply to releasing voices, because a
     // sweep should stay audible through the release tail.
+    void SetTempo(float bpm) {
+        if (bpm == tempo_bpm_)
+            return;
+        tempo_bpm_ = bpm;
+        beat_step_ = VoiceLfo::BeatStep(bpm, sample_rate_);
+    }
+
     // The engine-wide filter topology (the WAVEX-FILTER A/B aid). Separate
     // from ApplyLiveParams because it is the one genuinely global thing left
     // in this path: it must not carry one Track's cutoff or envelope with it.
@@ -501,6 +514,20 @@ class VoiceManager {
                          params.aux_env_sustain_level,
                          params.aux_env_release_s);
         v.env3.Retrigger();
+        const bool follow = (params.lfo[0].pitch_follow && !params.lfo[0].sync_div) ||
+                            (params.lfo[1].pitch_follow && !params.lfo[1].sync_div);
+        const float pitch_ratio =
+            follow ? std::pow(2.0f, (static_cast<float>(v.note) - 60) / 12) : 1;
+        for (uint8_t i = 0; i < Protocol::INST_LFO_COUNT; ++i)
+            v.lfo[i].Start(params.lfo[i],
+                           sample_rate_,
+                           pitch_ratio,
+                           frame_clock_,
+                           beat_clock_,
+                           beat_step_,
+                           v.start_offset_frames,
+                           rng_ ^ (0x9e3779b9u * (i + 1u)),
+                           i);
     }
 
     // Starts the release phase of the most recently triggered still-active
@@ -805,8 +832,12 @@ class VoiceManager {
             sources.env_amp = v.envelope.Level();
             sources.env_filter = v.env2.AdvanceBlock(active_frames);
             sources.env_aux = v.env3.AdvanceBlock(active_frames);
+            sources.lfo_voice = v.lfo[0].Advance(active_frames, beat_step_);
+            sources.lfo_voice2 = v.lfo[1].Advance(active_frames, beat_step_);
             v.SetBlockModulation(EvaluateModMatrix(slots, slots ? kMaxModSlots : 0, sources));
         }
+        frame_clock_ += block_size;
+        beat_clock_ += uint64_t{beat_step_} * block_size;
     }
 
    private:
@@ -970,6 +1001,9 @@ class VoiceManager {
     std::array<Voice, WAVEX_NUM_VOICES> voices_{};
     uint32_t next_age_ = 0;
     uint32_t sample_rate_ = 48000;
+    uint64_t frame_clock_ = 0, beat_clock_ = 0;
+    uint32_t beat_step_ = 0;
+    float tempo_bpm_ = 120;
     // Live transpose as a rate multiplier. 1.0 until something moves PARAM_PITCH,
     // so a voice triggered before any edit sounds exactly as it did before.
     float VoicePitchScale(const Voice& voice) const {

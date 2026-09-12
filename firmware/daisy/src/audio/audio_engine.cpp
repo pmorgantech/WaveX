@@ -219,20 +219,9 @@ static const WaveX::AudioEngine::ModSlot* ResolveModSlots(const void*, uint8_t s
     return SfzLoader::GetModSlots(slot);
 }
 
-// Two engine-global LFOs (§5) - global by design regardless of the
-// instrument model, so unlike the mod slots above they don't wait on it
-// ("slot 3's wobble must not change because slot 5 loaded a new
-// instrument"). Ticked once per control tick (one callback == one 1kHz tick,
-// timebase.hpp) into the matrix's SRC_LFO1/SRC_LFO2 sources.
-// DTCM for the same reason as s_para_env: ticked once per block from
-// Callback() itself, CPU-only, tiny. Init() below MUST also set rate_hz_ -
-// Lfo::Init()/Reset() deliberately leave it untouched (a running LFO
-// shouldn't have its rate reset along with its phase), so on DTCM's zeroed
-// memory it would otherwise stay 0 forever and the LFO would never advance -
-// the exact hazard VoiceManager::Init()'s own comment warns about for
-// live_pitch_scale_.
+// One performance-owned global LFO. The other two LFOs belong to each
+// Instrument voice. This DTCM object is zeroed, so Init must set its rate.
 static WaveX::AudioEngine::Lfo s_mod_lfo1 WAVEX_DTCM_DATA;
-static WaveX::AudioEngine::Lfo s_mod_lfo2 WAVEX_DTCM_DATA;
 
 // Sequencer transport is callback-owned: its command queue gives the main
 // loop an immutable, bounded hand-off and SequencerTransport itself keeps a
@@ -471,6 +460,7 @@ static WAVEX_ITCM_CODE_NAMED("sequencer") bool drain_sequencer(uint16_t block_si
         s_seq_telemetry_frames = 0;
         s_seq_head_mailbox.Publish(s_seq_transport.BuildPlayhead());
     }
+    s_voice_manager.SetTempo(s_seq_transport.scheduler().Tempo());
     bool any_trigger = false;
     for (size_t event_index = 0; event_index < event_count; ++event_index) {
         const WaveX::Sequencer::TriggerEvent& event = events[event_index];
@@ -1995,12 +1985,10 @@ void Init(DaisySeed& hw, float sample_rate, bool sdram_available) {
     s_voice_manager.Init(static_cast<uint32_t>(sample_rate));
 
     // Global LFOs run at the 1kHz control-tick rate regardless of the audio
-    // sample rate. See s_mod_lfo1/2's own comment for why SetRateHz() must
+    // sample rate. See s_mod_lfo1's own comment for why SetRateHz() must
     // be called explicitly here rather than trusted to a member initializer.
     s_mod_lfo1.Init(1000.0f);
     s_mod_lfo1.SetRateHz(1.0f);
-    s_mod_lfo2.Init(1000.0f);
-    s_mod_lfo2.SetRateHz(1.0f);
 
     // Sequencer transport uses the same sample-rate/block-size timebase as
     // the audio engine so its scheduler frames line up with the callback.
@@ -2128,7 +2116,7 @@ void Callback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t
     // Modulation matrix + global LFOs (roadmap Phase 2.5 item 4;
     // param-locks-and-modulation.md §3/§5). One callback IS one 1kHz control
     // tick (Timebase's own invariant - see its comment), so this runs once
-    // per block: tick both global LFOs, then evaluate every sounding voice's
+    // per block: tick the global LFO, then evaluate every sounding voice's
     // modulation destinations (against ITS OWN instrument's slots, via
     // ResolveModSlots) so Render() below picks up this tick's values rather
     // than the previous one's. Unconditional on WAVEX_ANALOG_CV_ENABLED -
@@ -2138,7 +2126,6 @@ void Callback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t
         PROFILE_SCOPE(voice_modulation);
         WaveX::AudioEngine::ModSources mod_global_sources;
         mod_global_sources.lfo1 = s_mod_lfo1.Tick();
-        mod_global_sources.lfo2 = s_mod_lfo2.Tick();
         const WaveX::AudioEngine::ModSlotResolver mod_slot_resolver{nullptr, &ResolveModSlots};
         s_voice_manager.TickModulation(
             mod_slot_resolver, mod_global_sources, static_cast<uint32_t>(size));
@@ -2940,6 +2927,10 @@ bool LoadSfzInstrument(const char* path, uint8_t slot) {
 
 void OnTrackStateRequest(const TrackStateRequest& request) {
     SfzLoader::OnTrackStateRequest(request);
+}
+void OnLfoOp(const InstLfoOpMessage& request) {
+    if (SfzLoader::OnLfoOp(request))
+        PublishSequencerVoiceMap(static_cast<uint16_t>(1u << request.track));
 }
 void OnModOp(const InstModOpMessage& request) {
     if (!SfzLoader::OnModOp(request))

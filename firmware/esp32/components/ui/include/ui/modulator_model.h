@@ -105,7 +105,7 @@ class ModulatorModel {
                 env_.release_s = v;
         } else {
             const int low = field == 2 ? -32767 : 0;
-            const int high = field == 0   ? 16
+            const int high = field == 0   ? WaveX::Protocol::INST_MOD_SOURCE_COUNT - 1
                              : field == 1 ? 4
                              : field == 2 ? 32767
                              : field == 3 ? 2

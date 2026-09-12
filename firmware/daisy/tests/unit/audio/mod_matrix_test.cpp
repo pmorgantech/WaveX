@@ -124,10 +124,10 @@ TEST(ModMatrix, PanOffsetIsClampedToTheVoiceRange) {
 TEST(ModMatrix, SlotsOnTheSameDestinationSum) {
     ModSlot one[] = {Slot(SRC_LFO1, DEST_CUTOFF, kFullDepth / 2)};
     ModSlot two[] = {Slot(SRC_LFO1, DEST_CUTOFF, kFullDepth / 2),
-                     Slot(SRC_LFO2, DEST_CUTOFF, kFullDepth / 2)};
+                     Slot(SRC_LFO_VOICE2, DEST_CUTOFF, kFullDepth / 2)};
     ModSources sources;
     sources.lfo1 = 1.0f;
-    sources.lfo2 = 1.0f;
+    sources.lfo_voice2 = 1.0f;
 
     const float single = EvaluateModMatrix(one, 1, sources).cutoff_mul;
     const float summed = EvaluateModMatrix(two, 2, sources).cutoff_mul;
@@ -139,10 +139,10 @@ TEST(ModMatrix, SlotsOnTheSameDestinationSum) {
 
 TEST(ModMatrix, OpposingSlotsCancel) {
     ModSlot slots[] = {Slot(SRC_LFO1, DEST_CUTOFF, kFullDepth),
-                       Slot(SRC_LFO2, DEST_CUTOFF, -kFullDepth)};
+                       Slot(SRC_LFO_VOICE2, DEST_CUTOFF, -kFullDepth)};
     ModSources sources;
     sources.lfo1 = 1.0f;
-    sources.lfo2 = 1.0f;
+    sources.lfo_voice2 = 1.0f;
     EXPECT_NEAR(EvaluateModMatrix(slots, 2, sources).cutoff_mul, 1.0f, 0.001f);
 }
 
@@ -233,3 +233,10 @@ TEST(ModMatrix, CountIsClampedToTheSlotLimit) {
 }
 
 }  // namespace
+
+TEST(ModMatrix, RetiredGlobalLfoSourceRemainsZero) {
+    ModSources sources;
+    EXPECT_FLOAT_EQ(sources.Get(SRC_LFO2), 0);
+    sources.lfo_voice2 = .75f;
+    EXPECT_FLOAT_EQ(sources.Get(SRC_LFO_VOICE2), .75f);
+}

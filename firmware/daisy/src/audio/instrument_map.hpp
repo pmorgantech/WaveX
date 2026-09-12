@@ -116,6 +116,7 @@ inline void FromFile(const Wxi::InstrumentFile& doc, Sfz::MappedInstrument& out)
         out.instrument.lfo[i].delay_s = doc.lfo[i].delay_s;
         out.instrument.lfo[i].fade_s = doc.lfo[i].fade_s;
         out.instrument.lfo[i].retrigger = doc.lfo[i].retrigger;
+        out.instrument.lfo[i].pitch_follow = doc.lfo[i].pitch_follow;
     }
 
     for (uint8_t i = 0; i < kMaxModSlots; ++i) {
@@ -226,6 +227,7 @@ inline bool ToFile(const Instrument& instrument,
         doc.lfo[i].delay_s = instrument.lfo[i].delay_s;
         doc.lfo[i].fade_s = instrument.lfo[i].fade_s;
         doc.lfo[i].retrigger = instrument.lfo[i].retrigger;
+        doc.lfo[i].pitch_follow = instrument.lfo[i].pitch_follow;
     }
 
     for (uint8_t i = 0; i < kMaxModSlots; ++i) {

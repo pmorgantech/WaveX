@@ -36,7 +36,7 @@ enum ModSource : uint8_t {
     SRC_NOTE,        // per-trigger, 0..1 across the MIDI range
     SRC_ENV_FILTER,  // per-voice second envelope, 0..1
     SRC_LFO1,        // global, -1..+1
-    SRC_LFO2,        // global, -1..+1
+    SRC_LFO2,        // retired global source; always zero
     SRC_LFO_VOICE,   // per-voice, -1..+1
     SRC_RANDOM,      // per-trigger sample & hold, -1..+1
     SRC_MACRO_1,     // 0..1
@@ -48,6 +48,7 @@ enum ModSource : uint8_t {
     SRC_PARA_ENV,    // deferred with the analog stage; always 0
     SRC_ENV_AMP,     // Env 1, sampled from the audio-rate amp envelope
     SRC_ENV_AUX,     // Env 3, block-rate modulation envelope
+    SRC_LFO_VOICE2,  // second per-voice LFO
     SRC_COUNT
 };
 
@@ -81,8 +82,8 @@ struct ModSources {
     float env_filter = 0.0f;
     float env_amp = 0.0f, env_aux = 0.0f;
     float lfo1 = 0.0f;
-    float lfo2 = 0.0f;
     float lfo_voice = 0.0f;
+    float lfo_voice2 = 0.0f;
     float random = 0.0f;
     float macro[4] = {0.0f, 0.0f, 0.0f, 0.0f};
     float modwheel = 0.0f;
@@ -103,9 +104,11 @@ struct ModSources {
             case SRC_LFO1:
                 return lfo1;
             case SRC_LFO2:
-                return lfo2;
+                return 0;
             case SRC_LFO_VOICE:
                 return lfo_voice;
+            case SRC_LFO_VOICE2:
+                return lfo_voice2;
             case SRC_RANDOM:
                 return random;
             case SRC_MACRO_1:

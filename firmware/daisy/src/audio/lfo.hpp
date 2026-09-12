@@ -3,11 +3,8 @@
 // Control-rate LFO (roadmap Phase 2.5 item 4; design:
 // docs/features/param-locks-and-modulation.md §5).
 //
-// Used two ways, from one class:
-//   - Two ENGINE-GLOBAL LFOs, like a modular's LFO bank. Global on purpose:
-//     slot 3's wobble must not change because slot 5 loaded a new instrument.
-//   - One PER-VOICE LFO whose parameters come from the instrument, retriggered
-//     at note-on with the classic E-mu delayed-vibrato ramp (delay then fade).
+// The single engine-global LFO. Instrument-owned voice LFO state lives in
+// voice_lfo.hpp and is clocked in active sample frames.
 //
 // Evaluated once per control tick and applied at block rate - never per
 // sample. Everything downstream of a mod source in §3 already updates at block
@@ -17,7 +14,7 @@
 // HAL-free and allocation-free, so the waveforms, the phase wrap, the S&H
 // sequence and the delay/fade envelope are all host-testable.
 
-#include <cmath>
+#include "lfo_sine.hpp"
 #include <cstdint>
 
 namespace WaveX {
@@ -124,7 +121,7 @@ class Lfo {
     float Shape(float phase) const {
         switch (wave_) {
             case LfoWave::Sine:
-                return std::sin(phase * 6.2831853071795865f);
+                return LfoSine(phase * 6.2831853071795865f);
             case LfoWave::Triangle:
                 // 0 -> +1 -> 0 -> -1 -> 0
                 return phase < 0.5f ? (4.0f * phase - 1.0f) : (3.0f - 4.0f * phase);

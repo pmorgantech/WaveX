@@ -241,6 +241,15 @@ void ProcessInterMcuMessage(uint8_t msg_type,
             }
 #endif
             break;
+        case MSG_INST_LFO_OP:
+#if WAVEX_AUDIO_ENGINE_ENABLED
+            if (payload && payload_size == sizeof(InstLfoOpMessage)) {
+                InstLfoOpMessage msg;
+                memcpy(&msg, payload, sizeof(msg));
+                WaveX::AudioEngine::OnLfoOp(msg);
+            }
+#endif
+            break;
         case MSG_INST_OSC_OP:
 #if WAVEX_AUDIO_ENGINE_ENABLED
             if (payload && payload_size == sizeof(InstOscOpMessage)) {

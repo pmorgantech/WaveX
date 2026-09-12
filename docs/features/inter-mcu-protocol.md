@@ -368,3 +368,22 @@ Envelope values use seconds and linear sustain; matrix depth is signed,
 with existing source/destination/curve numbering retained. Env 1 and Env 3
 append source ids without changing the original Env 2 source. GET never
 changes a Track; malformed, busy or stale edits are rejected.
+
+## Instrument LFO snapshots
+
+`MSG_INST_LFO_OP` (0x6E) and `MSG_INST_LFO_SYNC` (0x6F) provide typed,
+revisioned GET/SET snapshots for the two Instrument-owned per-voice LFOs.
+The request identifies the Track and LFO index and carries the expected
+Instrument revision for mutations; the retained completion id and error status
+make duplicate delivery and timeout recovery observable without retrying a
+blind edit. Snapshots carry waveform, rate mode/value, sync division,
+retrigger, pitch-follow, delay and fade. Hz values are limited to 0.02–20 and
+sync divisions span 1/16 through 4 bars; pitch-follow is meaningful only for
+Hz mode. Source id 5 remains retired and reads zero, while source ids 6 and 17
+identify voice LFO 1 and 2.
+
+The Daisy backend evaluates both LFOs from a Q32 free-running frame/beat epoch
+and retains them in WXI. This transport is host-tested and covered by a
+two-board save/reload check. The ESP32 LFO touch tab and live audition
+Apply/Revert flow are not yet connected; the typed messages therefore expose
+the backend foundation rather than a completed panel workflow.

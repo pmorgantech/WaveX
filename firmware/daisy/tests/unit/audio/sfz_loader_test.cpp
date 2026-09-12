@@ -863,3 +863,41 @@ TEST_F(SfzLoaderTest, OscillatorCopyAndSettingsPreserveOwnershipAndRejectStaleEd
     EXPECT_FLOAT_EQ(WaveX::Comm::last_osc.value.mix, 0.5f);
     EXPECT_EQ(WaveX::Comm::last_osc.value.fine, -25);
 }
+
+TEST_F(SfzLoaderTest, TwoLfoSettingsUseTrackRevisionsAndSurviveWxiRecall) {
+    ASSERT_TRUE(Load(0));
+    InstLfoOpMessage m;
+    m.request_id = 99501;
+    m.track = 0;
+    m.index = 1;
+    m.op = INST_LFO_SET;
+    m.revision = SfzLoader::ReadLfoState(0).revision;
+    m.value = {4, 0, 0, 1, 5.25f, .125f, .75f};
+    ASSERT_TRUE(SfzLoader::OnLfoOp(m));
+    auto state = SfzLoader::ReadLfoState(0);
+    EXPECT_FLOAT_EQ(state.values[1].rate_hz, 5.25f);
+    EXPECT_FALSE(SfzLoader::OnLfoOp(m));
+    EXPECT_EQ(SfzLoader::ReadLfoState(0).revision, state.revision);
+    ++m.request_id;
+    EXPECT_FALSE(SfzLoader::OnLfoOp(m));
+    EXPECT_EQ(SfzLoader::ReadLfoState(0).error, INST_ERROR_BAD_FILE);
+    ++m.request_id;
+    m.revision = state.revision;
+    m.index = 0;
+    m.value = {1, 7, 1, 0, 3, .025f, .25f};
+    ASSERT_TRUE(SfzLoader::OnLfoOp(m));
+    EXPECT_EQ(Edit(INST_OP_SAVE, 0, "Two LFOs").error, INST_ERROR_NONE);
+    ASSERT_TRUE(SfzLoader::BindSample(pool_, memory_, 0, 0));
+    ASSERT_TRUE(SfzLoader::Load("0:/wavex/instruments/Two LFOs.wxi",
+                                0,
+                                pool_,
+                                memory_,
+                                io_.data(),
+                                static_cast<uint32_t>(io_.size())));
+    state = SfzLoader::ReadLfoState(0);
+    EXPECT_EQ(state.values[0].sync_div, 7);
+    EXPECT_EQ(state.values[1].pitch_follow, 1);
+    EXPECT_EQ(state.values[1].retrigger, 0);
+    EXPECT_FLOAT_EQ(state.values[1].rate_hz, 5.25f);
+    EXPECT_FLOAT_EQ(state.values[1].fade_s, .75f);
+}

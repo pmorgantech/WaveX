@@ -824,3 +824,13 @@ TEST_F(MessageDispatchTest, ModulatorDispatchRequiresExactPayload) {
     ASSERT_EQ(GetDispatchRecord().mod_ops.size(), 1u);
     EXPECT_EQ(GetDispatchRecord().mod_ops[0].request_id, 1u);
 }
+
+TEST_F(MessageDispatchTest, LfoDispatchRequiresExactPayload) {
+    InstLfoOpMessage m;
+    m.request_id = 1;
+    ProcessInterMcuMessage(MSG_INST_LFO_OP, 1, reinterpret_cast<const uint8_t*>(&m), sizeof(m) - 1);
+    EXPECT_TRUE(GetDispatchRecord().lfo_ops.empty());
+    ProcessInterMcuMessage(MSG_INST_LFO_OP, 1, reinterpret_cast<const uint8_t*>(&m), sizeof(m));
+    ASSERT_EQ(GetDispatchRecord().lfo_ops.size(), 1u);
+    EXPECT_EQ(GetDispatchRecord().lfo_ops[0].request_id, 1u);
+}

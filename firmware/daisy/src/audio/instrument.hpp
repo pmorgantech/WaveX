@@ -145,6 +145,7 @@ struct InstrumentLfo {
     uint8_t sync_div = 0;
     float delay_s = 0.0f, fade_s = 0.0f;
     uint8_t retrigger = 1;
+    uint8_t pitch_follow = 0;
 };
 
 struct Instrument {
@@ -277,6 +278,17 @@ inline VoiceTriggerParams PrepareZoneTrigger(const Instrument& ins,
     p.loop_end = zone.loop_end ? zone.loop_end : ref.loop_end;
     p.fade_in_ms = ref.fade_in_ms;
     p.fade_out_ms = ref.fade_out_ms;
+
+    for (uint8_t i = 0; i < Protocol::INST_LFO_COUNT; ++i) {
+        const auto& lfo = ins.lfo[i];
+        p.lfo[i] = {lfo.wave,
+                    lfo.sync_div,
+                    lfo.retrigger,
+                    lfo.pitch_follow,
+                    lfo.rate_hz,
+                    lfo.delay_s,
+                    lfo.fade_s};
+    }
 
     p.filter_env_attack_s = ins.env[1].attack_s;
     p.filter_env_decay_s = ins.env[1].decay_s;

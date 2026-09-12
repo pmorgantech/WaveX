@@ -267,7 +267,9 @@ names the oscillator. Assignment, clear and key/velocity ranges share one
 Track revision across both maps. The voice-stop barrier protects replacement,
 and clearing a zone retains samples used elsewhere in either map.
 Pad Map still edits the first oscillator's fixed drum pads. Envelope/matrix
-editing is described below; per-voice LFOs and additional destinations remain open.
+editing is described below. The backend now owns two per-voice LFO parameter
+sets on the Instrument; their touch page and additional destinations remain
+open.
 
 The oscillator UI milestone passes 258 ESP32 host tests, 379 shared tests and
 both device builds. Two-board tests verify staged apply/revert, copying,
@@ -330,3 +332,20 @@ and independent navigation/modulation-depth console fields. Device captures
 are `logs/envelope-editor-20260912.png` and
 `logs/modulation-editor-20260912.png`. These checks do not establish audible
 modulation quality, physical controls or the one-hour phase soak.
+
+## Two per-voice LFOs (backend)
+
+Each Instrument now retains two per-voice LFO settings. The backend evaluates
+the LFOs with a Q32 free-running frame/beat epoch and supports waveform, Hz or
+tempo-division rate, sync, retrigger, pitch-follow, delay and fade. Hz rates
+are clamped to 0.02–20 Hz; tempo divisions cover 1/16 through 4 bars, and
+pitch-follow applies only in Hz mode. The first per-voice source remains the
+existing source id; the second is appended, while the retired global source id
+continues to read zero for wire compatibility.
+
+Typed revisioned GET/SET snapshots carry these settings and WXI retention
+accepts legacy 15-byte LFO records by defaulting the missing pitch-follow field
+to zero; new records use 16 bytes. The current host/build and two-board recall
+checks cover this backend foundation. The LFO touch tab and live Apply/Revert
+audition flow are still open, so saved settings have no claim of completed
+panel editing or audible audition behavior.

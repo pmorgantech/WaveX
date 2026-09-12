@@ -161,6 +161,8 @@ enum MessageType : uint8_t {
     MSG_INST_OSC_OP = 0x6A,          // E->D: oscillator read/settings/copy into empty map
     MSG_INST_OSC_SYNC = 0x6B,        // D->E: authoritative oscillator settings
     MSG_INST_MOD_OP = 0x6C,          // E->D: envelope and matrix edits
+    MSG_INST_LFO_OP = 0x6E,          // E->D: Instrument LFO edit/read
+    MSG_INST_LFO_SYNC = 0x6F,        // D->E: both Instrument LFO settings
     MSG_INST_MOD_SYNC = 0x6D,        // D->E: authoritative envelopes/matrix
     MSG_INST_KEY_MAP_SYNC = 0x69,    // D->E: 32 stable slots, revision and edit outcome
     MSG_TRACK_STATE = 0x67,          // D->E: authoritative Track settings and binding
@@ -1966,12 +1968,45 @@ inline bool IsValidInstOscOp(const InstOscOpMessage& m) {
            m.value.keytrack <= 1;
 }
 
+// Two per-voice LFOs. sync_div: 0=Hz, 1=1/16 note, 2=1/8,
+// 3=1/4, 4=1/2, 5=one bar, 6=two bars, 7=four bars (4/4).
+// Pitch follow applies to Hz mode: one octave of rate per octave above C4.
+// Runtime Hz clamps to 0.02..20; the storage domain retains 0..1000.
+static constexpr uint8_t INST_LFO_COUNT = 2;
+struct InstLfoSettings {
+    uint8_t wave = 0, sync_div = 0, retrigger = 1, pitch_follow = 0;
+    float rate_hz = 1.0f, delay_s = 0.0f, fade_s = 0.0f;
+} __attribute__((packed));
+enum InstLfoOp : uint8_t { INST_LFO_GET = 0, INST_LFO_SET = 1 };
+struct InstLfoOpMessage {
+    uint32_t request_id = 0, revision = 0;
+    uint8_t track = 0, index = 0, op = INST_LFO_GET, reserved = 0;
+    InstLfoSettings value;
+} __attribute__((packed));
+struct InstLfoSyncMessage {
+    uint32_t request_id = 0, completed_request_id = 0, revision = 0;
+    uint8_t track = 0, valid = 0, busy = 0, error = 0;
+    InstLfoSettings values[INST_LFO_COUNT];
+} __attribute__((packed));
+static_assert(sizeof(InstLfoSettings) == 16, "LFO settings wire size");
+static_assert(sizeof(InstLfoOpMessage) == 28, "LFO operation wire size");
+static_assert(sizeof(InstLfoSyncMessage) == 48, "LFO snapshot wire size");
+inline bool IsValidInstLfoSettings(const InstLfoSettings& s) {
+    return s.wave <= 4 && s.sync_div <= 7 && s.retrigger <= 1 && s.pitch_follow <= 1 &&
+           s.rate_hz >= 0 && s.rate_hz <= 1000 && s.delay_s >= 0 && s.delay_s <= 600 &&
+           s.fade_s >= 0 && s.fade_s <= 600;
+}
+inline bool IsValidInstLfoOp(const InstLfoOpMessage& m) {
+    return m.request_id && m.track < 16 && m.index < INST_LFO_COUNT && m.op <= INST_LFO_SET &&
+           !m.reserved && (m.op == INST_LFO_GET || (m.revision && IsValidInstLfoSettings(m.value)));
+}
+
 // Instrument-owned modulators. Edits carry one typed envelope or route;
 // replies carry a complete snapshot. Sources 15/16 append Env 1/3 without
 // moving the existing Env 2 (3), global LFOs (4/5) or reserved source ids.
 static constexpr uint8_t INST_ENV_COUNT = 3;
 static constexpr uint8_t INST_MOD_SLOT_COUNT = 8;
-static constexpr uint8_t INST_MOD_SOURCE_COUNT = 17;
+static constexpr uint8_t INST_MOD_SOURCE_COUNT = 18;
 static constexpr uint8_t INST_MOD_DEST_COUNT = 5;
 struct InstEnvelopeSettings {
     float attack_s = 0.001f, decay_s = 0.05f, sustain = 0.8f, release_s = 0.1f;
@@ -2613,6 +2648,10 @@ inline const char* MessageTypeName(uint8_t type) {
             return "INST_OP";
         case MSG_INST_STATUS:
             return "INST_STATUS";
+        case MSG_INST_LFO_OP:
+            return "INST_LFO_OP";
+        case MSG_INST_LFO_SYNC:
+            return "INST_LFO_SYNC";
         case MSG_INST_MOD_OP:
             return "INST_MOD_OP";
         case MSG_INST_MOD_SYNC:

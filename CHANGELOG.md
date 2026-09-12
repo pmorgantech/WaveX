@@ -13,6 +13,14 @@ versioning and release process.
 
 ### Added
 
+- Added backend runtime support for two per-voice LFOs with revisioned typed
+  GET/SET snapshots, Q32 frame/beat timing, Hz and tempo-division rates,
+  waveform, sync, retrigger, pitch-follow, delay and fade settings, appended
+  modulation source ids, CMSIS sine evaluation and WXI retention. Legacy
+  15-byte LFO records remain readable with a zero pitch-follow default; the
+  new record size is 16 bytes. The LFO touch tab and live Apply/Revert
+  audition flow remain open, and no new callback capacity gate is claimed.
+
 - Added runtime Env 3, saved Env 2/Env 3 Instrument mapping, append-only Env 1
   and Env 3 modulation sources, and revisioned envelope/matrix edit and
   readback messages with retained outcomes. Auxiliary envelope trigger offsets,

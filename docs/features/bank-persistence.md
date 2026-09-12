@@ -19,9 +19,11 @@ another Instrument encoding.
 
 The resident index contains names, tags, offsets and lengths and occupies
 4,632 bytes. Empty slots remain empty; slot numbers never compact on save.
-A full Bank of 128 Instruments with 32 zones on each of two oscillators
-encodes to 2,601,772 bytes. Files are capped at 4 MiB and each embedded
-Instrument at 64 KiB.
+A full Bank of 128 Instruments with 32 zones on each of two oscillators and
+the current 16-byte LFO records encodes to 2,602,028 bytes. Files are capped
+at 4 MiB and each embedded Instrument at 64 KiB. WXI readers retain backward
+compatibility with legacy 15-byte LFO records by defaulting the appended
+pitch-follow field to zero.
 
 ## Foreground transactions
 

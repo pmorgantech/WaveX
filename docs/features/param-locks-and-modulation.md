@@ -3,9 +3,10 @@
 **Status**: Parameter-lock application and touch editing are implemented. Four
 voice-scoped locks per step are applied after zone resolution; pattern files
 retain them. The Instrument modulation editor, matrix, global LFOs and three
-envelopes exist. Expanded oscillator, envelope and per-voice LFO work
-remains Phase 2.5. Live motion recording and analog/group locks are still target
-design below, not implemented behavior.
+envelopes exist. Two per-voice LFO runtimes and their typed transport now
+exist in the backend; the LFO touch page and live audition flow remain Phase
+2.5 work. Live motion recording and analog/group locks are still target design
+below, not implemented behavior.
 **Dependencies**: sequencer step scheduler (Phase 2), `instrument-model.md` (matrix slots are instrument-scoped), voice manager (done). **Revised 2026-09-04**: the two-oscillator Instrument (`track-and-patch-model.md` §3.1) fixes the source/destination set this matrix serves — three envelopes, two per-voice LFOs, one global LFO, oscillator and wavetable-position destinations — appended to the enums below, never renumbered.
 **Lineage**: two ancestries deliberately fused — Elektron parameter locks (per-step sound design) and the E-mu EIII **realtime controls matrix** (velocity/wheel/pedal → pitch, filter, level, LFO amount, attack — routed, not hardwired).
 
@@ -98,14 +99,14 @@ earlier "2 global + 1 per-voice" split is withdrawn; `SRC_LFO2` stays in the
 enum as retired-but-reserved and reads 0.
 
 - **1 global LFO** (control-tick, in `AudioEngine`, built as `SRC_LFO1`): sine/tri/saw/square/S&H, rate either Hz (0.02–20) or tempo-synced divisions (1/16 … 4 bars — needs the sequencer clock; free-runs in Hz until Phase 2 lands). Phase-restart options: free, on-transport-start, on-any-note. Engine-global like a modular's LFO bank: performance-wide movement, not part of any Instrument.
-- **2 per-voice LFOs** (`SRC_LFO_VOICE`, `SRC_LFO_VOICE2`; not yet built): phase accumulator per voice per LFO, waveform/rate/delay/fade/retrigger from the Instrument (`Instrument::lfo[2]`, saved in the `LFO1`/`LFO2` chunks), evaluated per block. Retrigger at note-on with optional `delay_s` and `fade_s` (the classic E-mu delayed-vibrato envelope on the LFO — one ramp, two params). Their rates are mod destinations (`LFO1_RATE`, `LFO2_RATE`).
+- **2 per-voice LFOs** (`SRC_LFO_VOICE`, `SRC_LFO_VOICE2`): phase accumulator per voice per LFO, waveform/rate/delay/fade/retrigger and pitch-follow from the Instrument (`Instrument::lfo[2]`, saved in the `LFO1`/`LFO2` chunks), evaluated per block from a Q32 frame/beat epoch. Rates support Hz (0.02–20) or tempo divisions (1/16 … 4 bars); pitch-follow applies only to Hz. Retrigger at note-on with optional `delay_s` and `fade_s`. Their rates are mod destinations (`LFO1_RATE`, `LFO2_RATE`). The backend and typed transport are implemented; the LFO touch page and live Apply/Revert audition are still open.
 - Why the Instrument owns them: an `.wxi` must sound the same on any Track and in any Project. Slot 3's wobble must not change because slot 5 loaded a new Instrument, and it must not depend on an engine setting the file does not carry.
 
 ## 6. Protocol
 
 - Matrix/envelope edits now use the typed revisioned `MSG_INST_MOD_OP` and
   `MSG_INST_MOD_SYNC` messages in [the protocol](inter-mcu-protocol.md).
-  The following LFO transport remains target design: new ops `SET_MOD_SLOT {slot_index, ModSlot}`, `SET_VOICE_LFO {wave, rate, delay, fade}`, `SET_GLOBAL_LFO {which, wave, rate_or_div, restart}` (global LFO op is engine-scoped; still fits INST_OP's envelope with slot ignored, or ride `MSG_CONTROL_CHANGE` for rate/depth as today — decide at implementation, both are wired paths).
+  Per-voice LFO snapshots use the typed revisioned `MSG_INST_LFO_OP`/`MSG_INST_LFO_SYNC` pair (0x6E/0x6F); global LFO editing and additional destinations remain target design.
 - Live sources: `SRC_MODWHEEL`/`SRC_AFTERTOUCH` need CC1/pressure forwarded — extend the ESP32 MIDI task to forward CC1 + channel pressure as `MSG_CONTROL_CHANGE{param=PARAM_MACRO-adjacent internal ids}`… cleaner: add `MSG_MIDI_CC {cc, value, channel}` (0x56) so the Daisy owns the CC→source map. Round-trip test + dispatch test same commit.
 - P-lock edit/record ops are `SEQ_PATTERN_OP` extensions (already reserved in `sequencer.md` §4).
 
@@ -113,8 +114,10 @@ enum as retired-but-reserved and reads 0.
 
 1. **Step hold + knob** = write p-lock (the core Elektron gesture); locked steps render with a corner badge; step hold shows current locks with per-lock clear.
 2. **Mod page** (per instrument slot): 8 slot rows `source → dest, depth, curve`; encoder-driven; live value bars per source (needs a coalesced `MSG_INST_STATUS` extension or piggyback on meter cadence — 10 Hz is plenty).
-3. **LFO page**: two Instrument-owned per-voice LFOs; the engine-global LFO
-   stays performance-owned. Tempo-sync controls follow the clock integration.
+3. **LFO page**: expose the two Instrument-owned per-voice LFOs; the
+   engine-global LFO stays performance-owned. Tempo-sync controls follow the
+   clock integration, and Apply/Revert must provide live audition before this
+   page is considered complete.
 
 ## 8. Test plan
 
@@ -136,9 +139,10 @@ enum as retired-but-reserved and reads 0.
 - The eight-row Instrument matrix and Instrument Mod editor are implemented.
   Foreground edits publish complete per-Track snapshots through mailboxes;
   the callback never reads a partially edited matrix.
-- The engine currently ticks two global LFOs. The target above replaces the
-  second global source with two Instrument-owned per-voice LFOs; that migration
-  and expanded destinations remain Phase 2.5 work.
+- The backend now runs two Instrument-owned per-voice LFOs with typed
+  revisioned snapshots, WXI retention and append-only source ids. The ESP32
+  touch page, live audition, global LFO editing, expanded destinations and
+  MIDI CC/channel-pressure source wiring remain Phase 2.5 work.
 - MIDI CC/channel-pressure source wiring, live lock recording, global LFO
   editing and analog/group lock lifetimes remain open. The corresponding
   gestures and protocol extensions above describe targets, not current controls.

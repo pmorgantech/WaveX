@@ -440,6 +440,8 @@ static InstPadSoundSyncMessage s_sound_reply;
 static bool s_sound_pending = false;
 static InstModSyncMessage s_mod_reply;
 static bool s_mod_pending = false;
+static InstLfoSyncMessage s_lfo_reply;
+static bool s_lfo_pending = false;
 static InstOscSyncMessage s_osc_reply;
 static bool s_osc_pending = false;
 static InstKeyMapSyncMessage s_key_reply;
@@ -505,6 +507,41 @@ void FillOscReply(const InstOscOpMessage& request,
         out.completed_request_id = request.request_id;
         out.error = immediate_error;
     }
+}
+void FillLfoReply(const InstLfoOpMessage& request,
+                  InstLfoSyncMessage& out,
+                  uint8_t immediate_error = 0) {
+    out = {};
+    out.request_id = request.request_id;
+    out.track = request.track;
+    if (request.track >= kNumTracks) {
+        out.error = INST_ERROR_BAD_FILE;
+        return;
+    }
+    const auto& ins = s_bank->At(request.track).instrument;
+    out.valid = ins.origin != InstrumentOrigin::None;
+    out.busy = Busy();
+    out.revision = s_key_revision[request.track];
+    out.completed_request_id = s_edit_completed[request.track];
+    out.error = s_edit_error[request.track];
+    for (uint8_t i = 0; i < INST_LFO_COUNT; ++i) {
+        const auto& lfo = ins.lfo[i];
+        out.values[i] = {lfo.wave,
+                         lfo.sync_div,
+                         lfo.retrigger,
+                         lfo.pitch_follow,
+                         lfo.rate_hz,
+                         lfo.delay_s,
+                         lfo.fade_s};
+    }
+    if (immediate_error) {
+        out.completed_request_id = request.request_id;
+        out.error = immediate_error;
+    }
+}
+void QueueLfoReply(const InstLfoOpMessage& request, uint8_t error = 0) {
+    FillLfoReply(request, s_lfo_reply, error);
+    s_lfo_pending = true;
 }
 void FillModReply(const InstModOpMessage& request,
                   InstModSyncMessage& out,
@@ -668,6 +705,7 @@ void Reset() {
     s_key_pending = s_key_assignment = false;
     s_osc_pending = false;
     s_mod_pending = false;
+    s_lfo_pending = false;
     if (s_bank)
         WaveX::ReconstructInPlace(*s_bank);
     else
@@ -893,6 +931,42 @@ void ConfirmVoicesStopped(SamplePool& pool, SampleMemMgr& memory) {
     SendStatus(INST_STATUS_LOAD_BEGIN);
 }
 
+InstLfoSyncMessage ReadLfoState(uint8_t track) {
+    InstLfoOpMessage request;
+    request.track = track;
+    InstLfoSyncMessage out;
+    FillLfoReply(request, out);
+    return out;
+}
+bool OnLfoOp(const InstLfoOpMessage& request) {
+    if (!IsValidInstLfoOp(request)) {
+        QueueLfoReply(request, INST_ERROR_BAD_FILE);
+        return false;
+    }
+    if (request.op == INST_LFO_GET || s_edit_completed[request.track] == request.request_id) {
+        QueueLfoReply(request);
+        return false;
+    }
+    if (Busy()) {
+        QueueLfoReply(request, INST_ERROR_BUSY);
+        return false;
+    }
+    auto& ins = s_bank->At(request.track).instrument;
+    uint8_t error = INST_ERROR_NONE;
+    if (ins.origin == InstrumentOrigin::None || request.revision != s_key_revision[request.track])
+        error = INST_ERROR_BAD_FILE;
+    else {
+        const auto& v = request.value;
+        ins.lfo[request.index] = {
+            v.wave, v.rate_hz, v.sync_div, v.delay_s, v.fade_s, v.retrigger, v.pitch_follow};
+    }
+    s_edit_completed[request.track] = request.request_id;
+    s_edit_error[request.track] = error;
+    if (!error)
+        BumpKeyRevision(request.track);
+    QueueLfoReply(request);
+    return error == INST_ERROR_NONE;
+}
 InstModSyncMessage ReadModState(uint8_t track) {
     InstModOpMessage request;
     request.track = track;
@@ -1083,6 +1157,9 @@ void OnTrackStateRequest(const TrackStateRequest& request) {
     Protocol::detail::CopyWireString(out.name, sizeof(out.name), ins.name);
 }
 void PumpEditorReply() {
+    if (s_lfo_pending &&
+        WaveX::Comm::UartLinkSend(MSG_INST_LFO_SYNC, &s_lfo_reply, sizeof(s_lfo_reply)) >= 0)
+        s_lfo_pending = false;
     if (s_mod_pending &&
         WaveX::Comm::UartLinkSend(MSG_INST_MOD_SYNC, &s_mod_reply, sizeof(s_mod_reply)) >= 0)
         s_mod_pending = false;

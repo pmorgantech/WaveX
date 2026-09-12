@@ -2266,3 +2266,50 @@ TEST(VoiceManagerModulationTest, ChokeAndReuseReconfigureThirdEnvelope) {
     vm.TickModulation({}, {}, 48);
     EXPECT_FLOAT_EQ(VoiceAt(vm, FindVoiceForNote(vm, p.note)).env3.Level(), .25f);
 }
+
+TEST(VoiceManagerModulationTest, IndependentVoiceLfosRespectOffsetAndRouteToTheMatrix) {
+    using namespace WaveX::AudioEngine;
+    VoiceManager vm;
+    vm.Init(48000);
+    const auto data = DcSample(4096, 16000);
+    auto p = DcTrigger(data, 2);
+    p.start_offset_frames = 24;
+    p.lfo[0] = {2, 0, 1, 0, 10, 0, 0};
+    p.lfo[1] = {2, 0, 1, 0, 20, 0, 0};
+    vm.Trigger(p);
+    const int index = FindVoiceForNote(vm, p.note);
+    ASSERT_GE(index, 0);
+    ModSlot slots[kMaxModSlots]{};
+    slots[0] = {SRC_LFO_VOICE, DEST_PITCH, 32767, CURVE_LINEAR, 0};
+    slots[1] = {SRC_LFO_VOICE2, DEST_PAN, 32767, CURVE_LINEAR, 0};
+    const ModSlotResolver resolver{slots, &SingleModSlotArray};
+    vm.TickModulation(resolver, {}, 48);
+    const auto& v = VoiceAt(vm, index);
+    EXPECT_NEAR(v.lfo[0].Phase(), .005f, 1e-6);
+    EXPECT_NEAR(v.lfo[1].Phase(), .010f, 1e-6);
+    ModSources sources;
+    sources.lfo_voice = v.lfo[0].Value();
+    sources.lfo_voice2 = v.lfo[1].Value();
+    const auto expected = EvaluateModMatrix(slots, kMaxModSlots, sources);
+    EXPECT_FLOAT_EQ(v.mod_pitch_mul, expected.pitch_mul);
+    EXPECT_FLOAT_EQ(v.mod_pan_offset, expected.pan_offset);
+}
+TEST(VoiceManagerModulationTest, IdleClockAndVoiceReuseDoNotRestartFreeRunLfos) {
+    using namespace WaveX::AudioEngine;
+    VoiceManager vm;
+    vm.Init(48000);
+    vm.TickModulation({}, {}, 12000);
+    const auto data = DcSample(4096, 16000);
+    auto p = DcTrigger(data, 2);
+    p.lfo[0] = {2, 0, 0, 0, 1, 0, 0};
+    vm.Trigger(p);
+    auto index = FindVoiceForNote(vm, p.note);
+    ASSERT_GE(index, 0);
+    EXPECT_NEAR(VoiceAt(vm, index).lfo[0].Phase(), .25f, 1e-5);
+    vm.StopTrack(2);
+    vm.TickModulation({}, {}, 12000);
+    vm.Trigger(p);
+    index = FindVoiceForNote(vm, p.note);
+    ASSERT_GE(index, 0);
+    EXPECT_NEAR(VoiceAt(vm, index).lfo[0].Phase(), .5f, 1e-5);
+}

@@ -135,6 +135,7 @@ InstrumentFile MakeFullDoc() {
         d.lfo[i].delay_s = 0.4f;
         d.lfo[i].fade_s = 0.2f;
         d.lfo[i].retrigger = static_cast<uint8_t>(i == 0 ? 1 : 0);
+        d.lfo[i].pitch_follow = 1;
     }
     for (uint8_t i = 0; i < Wxi::kMaxModSlots; ++i) {
         d.mod_slots[i].source = static_cast<uint8_t>(i + 1);
@@ -222,6 +223,7 @@ void ExpectDocEq(const InstrumentFile& a, const InstrumentFile& b) {
         EXPECT_FLOAT_EQ(a.lfo[i].delay_s, b.lfo[i].delay_s);
         EXPECT_FLOAT_EQ(a.lfo[i].fade_s, b.lfo[i].fade_s);
         EXPECT_EQ(a.lfo[i].retrigger, b.lfo[i].retrigger);
+        EXPECT_EQ(a.lfo[i].pitch_follow, b.lfo[i].pitch_follow);
     }
     for (uint8_t i = 0; i < Wxi::kMaxModSlots; ++i) {
         SCOPED_TRACE("mod " + std::to_string(i));
@@ -727,4 +729,27 @@ TEST(WxiCodec, ClampedZoneCountStillWritesAnExactFileLength) {
     MemoryIo io;
     ASSERT_EQ(Wxi::Write(io.AsWriter(), doc), Result::Ok);
     EXPECT_EQ(Wxcf::detail::ReadU32LE(io.buf.data() + 8), io.buf.size());
+}
+
+TEST(WxiCodec, LegacyLfoPrefixDefaultsPitchFollowAndShorterPrefixIsRejected) {
+    Wxi::LfoParams settings;
+    settings.rate_hz = 3.25f;
+    settings.pitch_follow = 1;
+    uint8_t payload[Wxi::kLfoWireSize]{};
+    Wxi::detail::EncodeLfo(settings, payload);
+    for (size_t size: {size_t{14}, size_t{15}, size_t{16}}) {
+        std::vector<uint8_t> bytes;
+        PutFileHeader(bytes, Wxi::kFileType, Wxi::kFileVersion);
+        PutChunk(bytes, Wxi::kChunkHead, MinimalHead());
+        PutChunk(bytes, Wxi::kChunkLfo1, std::vector<uint8_t>(payload, payload + size));
+        InstrumentFile out;
+        auto result = ReadBytes(bytes, out);
+        if (size == 14)
+            EXPECT_EQ(result, Result::BadChunk);
+        else {
+            ASSERT_EQ(result, Result::Ok);
+            EXPECT_FLOAT_EQ(out.lfo[0].rate_hz, 3.25f);
+            EXPECT_EQ(out.lfo[0].pitch_follow, size == 16 ? 1 : 0);
+        }
+    }
 }

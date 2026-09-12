@@ -91,6 +91,20 @@ include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/../libs/DaisySP/Source/Utility
 )
 
+# Test the same portable sine kernel/table used by the device.
+add_library(wavex_lfo_math_host OBJECT
+    ../libs/libDaisy/Drivers/CMSIS-DSP/Source/FastMathFunctions/arm_sin_f32.c
+    ../libs/libDaisy/Drivers/CMSIS-DSP/Source/CommonTables/arm_common_tables.c
+)
+target_include_directories(wavex_lfo_math_host SYSTEM PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/../libs/libDaisy/Drivers/CMSIS-DSP/Include
+    ${CMAKE_CURRENT_SOURCE_DIR}/../libs/libDaisy/Drivers/CMSIS_5/CMSIS/Core/Include
+)
+target_compile_definitions(wavex_lfo_math_host PRIVATE
+    ARM_DSP_CONFIG_TABLES ARM_FAST_ALLOW_TABLES ARM_TABLE_SIN_F32
+)
+target_compile_options(wavex_lfo_math_host PRIVATE -w)
+
 # Test library with WaveX source files (excluding hardware-dependent code)
 # Only include components that can be tested without full hardware dependencies
 add_library(wavex_test_lib STATIC
@@ -106,6 +120,8 @@ add_library(wavex_test_lib STATIC
     # Plain C++ over <cmath>; compiles on the host as-is.
     ${CMAKE_CURRENT_SOURCE_DIR}/../libs/DaisySP/Source/Filters/svf.cpp
 )
+
+target_link_libraries(wavex_test_lib PUBLIC wavex_lfo_math_host)
 
 target_include_directories(wavex_test_lib PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/../src

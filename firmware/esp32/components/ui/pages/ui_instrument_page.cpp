@@ -32,7 +32,7 @@ uint32_t nextId() {
 }
 constexpr const char* envelopeFields[] = {"ATTACK", "DECAY", "SUSTAIN", "RELEASE"};
 constexpr const char* slotFields[] = {"SOURCE", "DEST", "DEPTH", "CURVE", "POLARITY"};
-constexpr uint8_t liveSources[] = {0, 1, 2, 15, 3, 16, 4, 5, 7};
+constexpr uint8_t liveSources[] = {0, 1, 2, 15, 3, 16, 6, 17, 4, 7};
 const char* sourceName(int source) {
     switch (source) {
         case 0:
@@ -47,10 +47,12 @@ const char* sourceName(int source) {
             return "Env 2";
         case 16:
             return "Env 3";
+        case 6:
+            return "V LFO 1";
+        case 17:
+            return "V LFO 2";
         case 4:
-            return "G LFO 1";
-        case 5:
-            return "G LFO 2";
+            return "G LFO";
         case 7:
             return "Random";
         default:
