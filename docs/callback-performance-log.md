@@ -406,6 +406,17 @@ threshold and does not close the one-hour phase soak. Final normal-firmware
 HIL passed five selected pitch, resonance, filter-mode and held-note cases in
 80.22 seconds (`/tmp/wavex-pitch-final-hil.log`).
 
+Candidate 2 (`perf/dsp-2-setup`, commit `63cf37d`) was rejected by its clean
+trial. The `build-profile-dsp2` image SHA256 was
+`3233ba41f26d17e383b3b6f3fa5a42a6ff587964e52c06b70f1c043fd18662a6`;
+the 607.454-second workload ran 121 windows with 164,388 average cycles and
+339,017 peak cycles (70.6285%, REVIEW), versus the accepted 69.9396% baseline.
+It had zero underruns/drops, 376 live-edit cycles and five file cycles. The
+profiling zones measured events 11,303/146,105, modulation 29,294/73,014 and
+render 117,674/177,404 cycles (average/peak). Host validation remained 613
+tests with identical 2,027,520-byte output. The full helper row is recorded
+below; this candidate is rejected and must not be adopted.
+
 The dirty filter-cache retry used the same held-edit workload before the
 follow-up clean commit: `build-profile-filter-cache`, image SHA256
 `e598775059836ad6a95cc0675a6fcf10b9d9e3ecfde4cdd54acffca1fb96a91f`,
@@ -445,3 +456,4 @@ by the accepted 6a58a7b gate.
 | 2026-09-12 | 1a2eb5ee714e78d5cc89cdbdde4ec290f7eb6341 | 8 Tracks; two 16-zone oscillator maps; 64 routes; four locks per hit; WaveX 24 dB drive 100%; sixteen sine LFOs at 20 Hz; Env 1-3; SD stream; touch grid 25 Hz; all Tracks HP then alternating HP/Notch live filter edits on rotating Tracks | 8 | 48000/48 | 480 MHz | qspi `-O2` | 610.2s (122 windows) | 480000 | 154101 (32.1%) | 333546 (69.4887%) | 30.5113% | 0 | yes | STAY | Clean filter-mode gate; accepted STAY, one-hour phase soak and polyphony gate remain open |
 | 2026-09-12 | d891d3c7ed2ee95991910c806db97bf41ed5e4ec | 8 Tracks; two 16-zone oscillator maps; 64 routes; four locks per hit; WaveX 24 dB full drive; sixteen sine LFOs at 20 Hz; Env 1-3; SD stream; touch grid 25 Hz; HP/Notch filter modes; voiceLFO2 to resonance depth 8000 S-curve on slot 8 of each Track | 8 | 48000/48 | 480 MHz | qspi `-O2` | 610.2s (122 windows) | 480000 | 157210 (32.8%) | 335634 (69.9237%) | 30.0763% | 0 | yes | STAY | Clean resonance matrix gate; accepted STAY, near-70% threshold; one-hour phase soak remains open |
 | 2026-09-12 | 6a58a7bbe5438691d0347e1755e2e78f89299e71 | 8 Tracks; two 16-zone oscillator maps; 64 routes; four locks per hit; WaveX 24 dB full drive; sixteen sine LFOs at 20 Hz; Env 1-3; SD stream; touch grid 25 Hz; HP/Notch filter modes; LFO1 to OSC1_PITCH and LFO2 to OSC2_PITCH on every Track | 8 | 48000/48 | 480 MHz | qspi `-O2` | 605.2s (121 windows) | 480000 | 159773 (33.3%) | 335710 (69.9396%) | 30.0604% | 0 | yes | STAY | Clean oscillator-pitch gate; accepted STAY near 70%; one-hour phase soak remains open |
+| 2026-09-12 | 63cf37dca45e39ed6e511077b36fdf8aed46bb73 | 8 voices; held Instrument sound edits; two oscillator maps; Env 1-3; two per-voice LFOs; 64 routes; four locks per hit; WaveX 24 dB full drive; SD stream; periodic save/load | 8 | 48000/48 | 480 MHz | qspi `-O2` | 605.2s (121 windows) | 480000 | 164388 (34.2%) | 339017 (70.6285%) | 29.3715% | 0 | yes | REVIEW | Rejected candidate 2; clean setup-cache trial is REVIEW versus accepted 69.9396% baseline; do not adopt |
