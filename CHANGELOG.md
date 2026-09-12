@@ -20,17 +20,17 @@ versioning and release process.
   Instrument replacement retain their stop/next-note boundaries. HIL verified
   gain/pan and oscillator zero-to-restore, muted/restored Env 2/3 routes and
   both LFO pan routes through DSP meters. The clean capacity run before these
-  held-note changes remains the accepted 68.0921% STAY result; a new gate is
-  required.
+  held-note changes remains the accepted 68.0921% STAY result. The clean
+  held-edit repeat reached 71.1283% peak and is REVIEW; callback optimization
+  is required before further callback scope.
 
 - Added the Instrument LFO touch page with two selectable per-voice LFOs and
   eight tiles in two rows for waveform, Hz rate, sync, retrigger, delay, fade
   and pitch-follow. The page uses revisioned transport with automatic preview,
-  common Apply/Revert actions and WXI save of the audible working copy. Held
-  LFO, oscillator, gain and Env 2/3 voices still use trigger snapshots while
-  held-voice propagation remains open; the clean LFO capacity result is now
-  STAY at 68.0921% peak with zero underruns and does not close the one-hour
-  phase gate.
+  common Apply/Revert actions and WXI save of the audible working copy.
+  Held-note propagation is covered by the later live Instrument editing
+  milestone; the clean LFO capacity result is STAY at 68.0921% peak with zero
+  underruns and does not close the one-hour phase gate.
 
 - Added automatic Instrument sound preview across the Osc, Env, Mod, Filter
   and Amp editors, typed filter/amp readback, and per-Track Apply/Revert undo

@@ -252,8 +252,8 @@ Instrument** to clear the shared override. Edits affect subsequent hits and
 are saved by the kit's **Save copy** operation. Sounding overridden voices
 also retain their cutoff/envelope through Instrument live edits. Resonance
 remains Instrument-owned; one-shot pads ignore note-off, so this page does
-not offer an ineffective release control. General zone editing and the
-future filter-envelope/multiple-envelope engine remain separate work.
+not offer an ineffective release control. General zone editing is built;
+future filter-envelope/multiple-envelope expansion remains separate work.
 
 The connected-board kit workflow verifies these four values through WXI
 save/reload on a different Track, inheritance reset, empty-pad navigation
@@ -278,11 +278,12 @@ complete Phase 2 gate remain separate checks.
 | `MODM` | the mod rows | built |
 | `FXCH` | *reserved*, empty — readers skip it today | reserved |
 
-The codec is deliberately **ahead of the engine**: `Instrument` still has one
-oscillator and no instrument-level filter/envelopes/LFOs (stage 5), so those
-chunks are written and read at their defaults today. Settling the layout
-before the fields exist is the point — a file saved now gains those values
-when stage 5 lands instead of needing a format bump.
+The codec now retains the implemented two-source oscillator maps, filter,
+Env 1–3, matrix and per-voice LFO settings. The live sound handoff updates
+supported held-note controls while preserving source cursors, loop state and
+envelope/LFO phase. Map or sample assignment and Instrument replacement keep
+their stop/next-note boundaries. Wavetable bodies and additional destinations
+remain reserved for later stages.
 
 Three things the format does that the container alone does not. A known chunk
 whose payload is *longer* than the reader understands has its tail skipped, so
@@ -489,7 +490,7 @@ Rejected: 4 before 7 (the Track page would have needed a second visit); 6 straig
 3. ~~**Sample Pool**~~ (§4) — **done 2026-09-05** (`1622b9b` and the commit after it): `WaveX::Audio::SampleRegistry` (shared, host-tested; ids name their slot with a generation, 2 KB SRAM index, records in a 192 KB SDRAM partition, `WAVEX_SAMPLE_POOL_CAPACITY` = 1024, admission fails rather than evicts); the engine's WAV list and the loader's private table both replaced by it; an import's samples are Pool entries (hits by path cost nothing), released per Track behind a per-track voice stop (`s_voice_stop_tracks`), so two imports share files and a sample replaces an import; `MSG_SAMPLE_META_PAGE_REQ/PAGE` page the Pool in one frame per window with `used_by`/pinned on each record; the Sample Manager pages and shows "used by". Verified on the bench by `tests/hil/test_sample_pool.py`. Not renamed: `SfzLoader` keeps its name (it still only reads `.sfz`; the `.wxi` reader of stage 4 is where `InstrumentLoader` earns the rename).
 4. **Instrument file and editors** — requested core editors built 2026-09-11. Done: Instrument-level defaults + zone overrides (§3.2) with parameter changes addressed to a Track; the `.wxi` codec (§3.3); the document↔engine mapper (`instrument_map.hpp`); the loader accepting `.wxi` through the same phases as `.sfz`. Done: new drum Instruments, naming, new-copy saves and the sixteen-pad editor with resident-sample assignment and Track-local choke groups. Done: the Track page with authoritative MIDI routing, and a dedicated Instrument Browser for WXI/SFZ with preflight and Track confirmation. Done: general keyboard Key Map with 32 stable slots, staged key/velocity/root edits, assignment/clear and WXI copies. Tag metadata/filtering and the larger voice architecture remain later work. The Pad Map piece does not depend on stage 3 and may go first.
 
-   **A load-then-save through a build normalises an Instrument to what that build understands.** The file model is deliberately ahead of the engine (osc 2, envs 2–3, LFOs, trim, transpose, poly mode), so those fields have no engine home until stage 5 and do not survive a round trip through it. That is the container's "skip unknown chunks" rule applied to fields, and it is harmless today only because nothing in this build can *set* them, so no user edit can be lost. It stops being harmless as soon as a UI exists for one, so **do not ship a Save UI for a field the engine does not yet model.**
+   **A load-then-save through a build normalises an Instrument to what that build understands.** The codec and engine now model the two oscillator maps, Env 1–3, LFOs, trim, transpose, poly mode and modulation fields listed above. Unknown future chunks still follow the container's skip rule; Wavetable bodies and additional destinations remain reserved until implemented.
 5. **Voice architecture** (§3.1) — typed `Oscillator` wrapper, Osc 2 + submix, `FilterType`, Env 3, two per-voice LFOs (global LFO 2 retired), new mod destinations, `output`/`poly_mode` on the Instrument, `INST_OP_SET_OSC/FILTER/ENV/LFO`, Instrument page tabs. **DWT-measured** with both oscillators at `WAVEX_NUM_VOICES` before the count is changed. Can be split per sub-item; each is host-testable in `VoiceManagerTest`.
 6. **Bank** (§3.6) — `.wxb` reader/writer (nests the stage-4 Instrument chunks), `MSG_BANK_OP/STATUS`, Bank page, Program Change recall, "save with samples".
 7. ~~**Track model + MIDI routing**~~ (§2) — **done 2026-09-05**: `Track` struct (Instrument + `midi_in`/`poly_limit`/`priority`/`program_change`) behind `Tracks::At()`, `NOTE_ADDR_TRACK` addressing with split `_track`/`_midi` senders on the frontend, Daisy-side fan-out in the note handler (main loop), `MSG_TRACK_OP` 0x63, and the ESP32 global channel filter removed. `midi_in` is the only field with behaviour; the other three are stored and on the wire for stages 8 and 6. The sequencer (Goal B) can now address Tracks with `NOTE_ADDR_TRACK`.

@@ -214,16 +214,16 @@ done. Open work, in the order decided 2026-09-05 (model doc §8: 7 → 4 → 5 �
 2. Voice architecture (stage 5): Osc 2 sample submix, its touch settings,
    both keyboard zone maps, Env 1–3, the eight-row matrix editor and the
    backend runtime/typed transport for two per-voice LFOs are built. Complete
-   filter type, new mod destinations and held-voice expansion for the sound
-   preview path remain open. Instrument sound controls now preview
+   filter type and new mod destinations remain open. Instrument sound controls now preview
    automatically with typed filter/amp readback and a per-Track Apply/Revert
    undo point; supported controls now update held voices through the bounded
    handoff, while map/sample replacement retains its stop/next-note boundary.
    The two-row eight-tile
    LFO page adds waveform, frequency, sync, retrigger, pitch-follow, delay and
-   fade controls. The clean LFO callback run reached 68.0921% peak and is
-   STAY, permitting the held-note milestone but not closing the one-hour phase
-   soak or permitting a voice-count change.
+   fade controls. The held-note milestone is implemented and hardware-verified;
+   its clean callback run reached 71.1283% peak and is REVIEW, so callback
+   optimization is required before further callback scope. The run does not
+   close the one-hour phase soak or permit a voice-count change.
 3. Bank (stage 6): the [WXCF Bank codec](features/bank-persistence.md) and
    bounded resident index are host-tested. SD working-copy management, Bank
    page, Track recall, preload and Program Change recall remain open and follow

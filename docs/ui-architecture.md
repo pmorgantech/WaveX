@@ -263,8 +263,10 @@ rate in Hz, sync division, retrigger, delay, fade and pitch-follow. The page
 uses the shared revisioned transport and common sound Apply/Revert actions, so
 edits preview automatically and a WXI save persists the audible working copy.
 Navigation waits for an outstanding delivery but does not require Apply/Revert
-before leaving the tab. Held LFO, oscillator, gain and Env 2/3 voices still
-use their trigger snapshot; extending sound edits to held notes remains open.
+before leaving the tab. Held LFO, oscillator, gain and Env 2/3 edits use the
+bounded live handoff, preserving source cursors, loop state and envelope/LFO
+phase. Map/sample assignment and Instrument replacement retain their
+stop/next-note boundary.
 The frontend suite passes 274 tests, and the two-board LFO HIL passes the
 save/readback flow (11.70 seconds). The inspected 1280×720 capture is
 `logs/instrument-lfo-20260912.png`.
