@@ -74,7 +74,11 @@ Phase 2.5 work. Open work:
 4. Complete song/project persistence through WXCF. Kit WXI saves and named
    pattern WXCF save/load are implemented; pattern files preserve tempo and
    Track instruments, include hidden steps, and use checked temp/rename
-   new-copy saves. Power-loss recovery remains a bench gate.
+   new-copy saves. The
+   [Project codec](features/project-persistence.md) now preserves sparse
+   Patterns, Songs and Performance metadata in bounded foreground records;
+   SD transactions, Instrument snapshots and session restore remain to be
+   connected. Power-loss recovery remains a bench gate.
 5. Voice-scoped per-step locks and the touch Locks editor are implemented:
    cutoff, resonance, amp ADSR, pitch, pan, gain and sample/loop start. Host
    tests and a two-board edit/save/recall test pass. Live lock recording and

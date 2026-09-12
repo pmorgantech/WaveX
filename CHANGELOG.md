@@ -13,6 +13,12 @@ versioning and release process.
 
 ### Added
 
+- Added the host-tested WXCF project data model and cooperative codec for
+  sparse Patterns, Songs, Performance metadata, Instrument/Bank references,
+  hidden steps, and parameter locks, with bounded foreground I/O and malformed
+  input validation. Device SD transactions, session restore, project selection,
+  and Song playback remain to be connected.
+
 - Added voice-scoped per-step parameter locks for cutoff, resonance, amp ADSR,
   pitch, pan, gain, sample start, and loop start, with four-slot touch editing,
   atomic replacement and clearing, pattern persistence, backend readback, and
