@@ -21,6 +21,8 @@ class UIPage {
     virtual const char* name() const = 0;
     virtual void onEnter(lv_obj_t* parent) = 0;
     virtual void onExit() {}
+    // A page with an outgoing final edit can keep its delivery service alive.
+    virtual bool canLeave() { return true; }
     virtual void onInput(const InputEvent& /*evt*/) {}
 
     /**

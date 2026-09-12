@@ -1,4 +1,5 @@
 #pragma once
+#include "memory_sections.h"
 #include "spi_protocol/protocol.h"
 
 #include "lfo_sine.hpp"
@@ -19,6 +20,7 @@ class VoiceLfo {
     static uint64_t DivideBeatPhase(uint64_t beat_phase, uint8_t division) {
         return division <= 3 ? beat_phase << (3 - division) : beat_phase >> (division - 3);
     }
+    WAVEX_ITCM_CODE_NAMED("lfo.Start")
     void Start(const Protocol::InstLfoSettings& settings,
                uint32_t sample_rate,
                float pitch_ratio,

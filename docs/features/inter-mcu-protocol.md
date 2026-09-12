@@ -94,6 +94,8 @@ sequence(u16 LE) | payload[0..2048] | crc16(u16 LE) | end(0x5A)
 | MSG_INST_ZONE_SYNC | 0x62 | D→E | InstZoneSyncMessage | sixteen-pad map, Instrument identity, busy state and retained mutation result |
 | MSG_INST_PAD_SOUND_OP | 0x65 | E→D | InstPadSoundOpMessage | read one pad or edit its cutoff/amp envelope inheritance |
 | MSG_INST_PAD_SOUND_SYNC | 0x66 | D→E | InstPadSoundSyncMessage | effective pad settings, sample identity and retained edit result |
+| MSG_INST_EDIT_OP | 0x80 | E→D | `InstEditOpMessage` | Track Instrument sound snapshot, filter/amp edit, Apply or Revert; retains one backend undo point |
+| MSG_INST_EDIT_SYNC | 0x81 | D→E | `InstEditSyncMessage` | authoritative audible sound values, revision, busy/error, completion and undo-dirty state |
 | MSG_TRACK_OP | 0x63 | E→D | `TrackOpMessage{op, track, value}` | one Track setting (`track-and-patch-model.md` §2.1), idempotent like `MSG_MIX_OP`. `TRACK_OP_SET_MIDI_IN` (`value` = `TrackMidiIn`: 0 Omni, 1..16 that channel **as displayed**, 0xFF Off), `TRACK_OP_SET_POLY_LIMIT` (0 = none, else ≤ `WAVEX_NUM_VOICES`), `TRACK_OP_SET_PRIORITY`, `TRACK_OP_SET_PROGRAM_CHANGE` (0/1). Only `midi_in` has behaviour today; the rest are stored for stages 8 and 6. An out-of-range track or value is rejected and logged, not clamped |
 | MSG_MIX_OP | 0x78 | E→D | `MixOpMessage{op, track, value}` | one mixer control change. `value` is op-dependent: gain/master are **centi-dB above the −60 dB floor** (0 = silence, 6000 = 0 dB, 6600 = +6 dB); pan reuses PARAM_PAN's convention (0 left, 32768 centre, 65535 right); `SET_MUTE_MASK` carries a bit per track. Conversions live in `WaveX::Mix` (`shared/audio/track_mix.hpp`) so both ends use one implementation |
 | MSG_MIX_METERS | 0x79 | D→E | `MixMetersMessage{peak[16]}` | per-track peak, log-mapped by `Mix::PeakToMeterByte` with 0 reserved for true silence. Sent only between `SUB_METERS` and `UNSUB_METERS`, at the existing meter cadence; master stereo meters stay on MSG_METER_PUSH |
@@ -110,9 +112,10 @@ sequence(u16 LE) | payload[0..2048] | crc16(u16 LE) | end(0x5A)
 ## 5. Planned extensions (design first, then implement — see roadmap)
 
 Message-ID blocks are reserved: 0x50–0x5F for sequencer/clock/arp, 0x60–0x6F
-for instruments/tuning, 0x70–0x7F for recording/mix/scenes, and 0xA0–0xAF for
-render jobs. Do not assign a new ID outside these blocks without updating this
-document and `protocol.h`.
+for instruments/tuning, 0x70–0x7F for recording/mix/scenes, 0x80–0x81 for
+the retained Instrument sound edit extension, and 0xA0–0xAF for render jobs.
+Do not assign a new ID outside these blocks without updating this document and
+`protocol.h`.
 
 - **Phase 2 (sequencer)**: pattern-edit ops, transport control, playhead/step feedback (coalesced), MIDI clock in/out (`midi-sync-tempo-follower.md`). Kit management is subsumed by instrument ops (`instrument-model.md` §8; 0x54 stays reserved-unused).
 - **Phase 2.5**: editable zone sync (0x62), recording (0x70/0x71), and arp (0x58). The mixer ops at 0x78/0x79 are now defined and round-trip tested, though nothing drives them yet — the engine application and the mixer page are the next two stages of `output-routing-and-mixer.md` §6. SFZ probe/load uses the now-live instrument ops at 0x60/0x61; MIDI CC forwarding at 0x56 is also live. `INST_OP_SET_MOD_SLOT` (also on 0x60) is now live end to end (ESP32 `inter_mcu_send_mod_slot()` → Daisy `SfzLoader::SetModSlot()`, instrument-scoped storage on `Instrument::mod_slots`) — no UI sends it yet (`param-locks-and-modulation.md` §7/§9 stage 5). `SRC_MODWHEEL`/`SRC_AFTERTOUCH` still read 0: `MSG_MIDI_CC` reaches the Daisy but nothing feeds it into the mod matrix's `ModSources`, and the ESP32 MIDI task still drops incoming CC/aftertouch rather than forwarding it (§9 stage 4, second half).
@@ -249,6 +252,26 @@ coalesced desired values while one mutation is pending, and retries GET to
 recover a dropped completion. Timed-out edits return to authoritative
 readback. The Pad Sound page is reached from Pad Map's shifted Sound key;
 Save copy on Pad Map persists the existing zone fields in WXI.
+
+## Track Instrument sound preview and undo
+
+`MSG_INST_EDIT_OP` (0x80) and `MSG_INST_EDIT_SYNC` (0x81) extend the exhausted
+Instrument message range with typed filter and amp edits plus GET, Apply and
+Revert. The backend keeps one `InstrumentSoundUndo` point per Track for sound
+controls only: filter cutoff/resonance and Instrument amp trim gain/pan. It
+does not include PCM references, key maps, zones or names. The first edit
+captures the baseline; subsequent edits preview automatically, while Apply
+commits the current audible values and Revert restores the baseline. A
+successful WXI save also commits the audible working values; a failed save
+leaves the undo point intact. Switching pages or Tracks retains it, while
+replacing the Instrument clears it.
+
+The frontend coalesces edits and uses the common Edited marker/actions. Page
+navigation waits for an outstanding delivery, not for Apply/Revert, so the
+working sound remains audible while the user moves among Osc, Env, Mod, Filter
+and Amp. Expansion of these edits to already-held voices is still open; the
+current live behavior applies to future triggers and existing Env 1/filter/
+matrix paths.
 
 ## Per-step notes (protocol 6)
 

@@ -143,6 +143,11 @@ void PacketRouter::route_by_message_type(uint8_t msg_type,
             if (CopyMessage(payload, payload_len, message, "INST_OSC_SYNC"))
                 inter_mcu_store_oscillator(message);
         } break;
+        case WaveX::Protocol::MSG_INST_EDIT_SYNC: {
+            WaveX::Protocol::InstEditSyncMessage message;
+            if (CopyMessage(payload, payload_len, message, "INST_EDIT_SYNC"))
+                inter_mcu_store_instrument_edit(message);
+        } break;
         case WaveX::Protocol::MSG_INST_MOD_SYNC: {
             WaveX::Protocol::InstModSyncMessage message;
             if (CopyMessage(payload, payload_len, message, "INST_MOD_SYNC"))

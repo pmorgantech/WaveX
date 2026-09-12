@@ -11,6 +11,7 @@
 
 #include "bss_static.hpp"
 #include "instrument_map.hpp"
+#include "instrument_sound_undo.hpp"
 #include "kit_edit.hpp"
 #include "sample_load_info.hpp"
 #include "sfz_import.hpp"
@@ -70,6 +71,11 @@ enum class Phase : uint8_t {
 // these expanded Instruments out of AXI SRAM preserves SD buffers and heap.
 alignas(Tracks) static uint8_t s_bank_storage[sizeof(Tracks)] WAVEX_BACKGROUND_DATA;
 static Tracks* s_bank = nullptr;
+static InstrumentSoundUndo s_sound_undo[kNumTracks];
+static InstEditSyncMessage s_action_reply;
+static uint32_t s_action_completed[kNumTracks]{};
+static uint8_t s_action_error[kNumTracks]{};
+static bool s_action_pending = false;
 using ModTable = std::array<ModSlot, kMaxModSlots>;
 static SnapshotMailbox<ModTable> s_mod_mailboxes[kNumTracks];
 static ModTable s_mod_active[kNumTracks];  // callback-owned after Reset()
@@ -193,6 +199,7 @@ void ReleaseTrack(SamplePool& pool,
                   SampleMemMgr& memory,
                   uint8_t track,
                   uint16_t keep_sample_id = 0) {
+    s_sound_undo[track].Apply();
     BumpKeyRevision(track);
     pool.ClearTrack(track, [&](uint16_t id) {
         if (id != keep_sample_id) {
@@ -692,6 +699,8 @@ uint8_t SaveCopy(SamplePool& pool) {
         return renamed == FR_EXIST ? INST_ERROR_EXISTS : INST_ERROR_IO;
     }
     Protocol::detail::CopyWireString(ins.name, sizeof(ins.name), doc.name);
+    s_sound_undo[s_request.slot].Apply();
+    BumpKeyRevision(s_request.slot);
     return INST_ERROR_NONE;
 }
 
@@ -706,12 +715,16 @@ void Reset() {
     s_osc_pending = false;
     s_mod_pending = false;
     s_lfo_pending = false;
+    s_action_pending = false;
     if (s_bank)
         WaveX::ReconstructInPlace(*s_bank);
     else
         s_bank = new (s_bank_storage) Tracks();
     for (uint8_t track = 0; track < kNumTracks; ++track) {
         BumpKeyRevision(track);
+        s_sound_undo[track].Apply();
+        s_action_completed[track] = 0;
+        s_action_error[track] = 0;
         s_sound_completed[track] = 0;
         s_sound_error[track] = 0;
         s_edit_completed[track] = 0;
@@ -931,6 +944,75 @@ void ConfirmVoicesStopped(SamplePool& pool, SampleMemMgr& memory) {
     SendStatus(INST_STATUS_LOAD_BEGIN);
 }
 
+InstEditSyncMessage ReadEditState(uint8_t track) {
+    InstEditSyncMessage out;
+    out.track = track;
+    out.busy = Busy();
+    if (track >= kNumTracks)
+        return out;
+    const auto& ins = s_bank->At(track).instrument;
+    out.valid = ins.origin != InstrumentOrigin::None;
+    out.revision = s_key_revision[track];
+    out.completed_request_id = s_action_completed[track];
+    out.error = s_action_error[track];
+    out.dirty = s_sound_undo[track].Active();
+    out.sound = {ins.filter.cutoff_hz, ins.filter.resonance, ins.trim_gain, ins.trim_pan};
+    return out;
+}
+bool OnEditOp(const InstEditOpMessage& request) {
+    s_action_reply = ReadEditState(request.track);
+    s_action_reply.request_id = request.request_id;
+    s_action_pending = true;
+    if (!IsValidInstEditOp(request)) {
+        s_action_reply.completed_request_id = request.request_id;
+        s_action_reply.error = INST_ERROR_BAD_FILE;
+        return false;
+    }
+    if (request.op == INST_EDIT_GET || s_action_completed[request.track] == request.request_id)
+        return false;
+    if (Busy()) {
+        s_action_reply.completed_request_id = request.request_id;
+        s_action_reply.error = INST_ERROR_BUSY;
+        return false;
+    }
+    auto& ins = s_bank->At(request.track).instrument;
+    uint8_t error = INST_ERROR_NONE;
+    bool changed = false;
+    if (ins.origin == InstrumentOrigin::None || request.revision != s_key_revision[request.track])
+        error = INST_ERROR_BAD_FILE;
+    else if (request.op == INST_EDIT_APPLY) {
+        s_sound_undo[request.track].Apply();
+    } else if (request.op == INST_EDIT_REVERT) {
+        changed = s_sound_undo[request.track].Revert(ins);
+        if (changed)
+            PublishModSlots(request.track);
+    } else if (request.op == INST_EDIT_FILTER) {
+        changed = ins.filter.cutoff_hz != request.sound.cutoff_hz ||
+                  ins.filter.resonance != request.sound.resonance;
+        if (changed) {
+            s_sound_undo[request.track].Capture(ins);
+            ins.filter.cutoff_hz = request.sound.cutoff_hz;
+            ins.filter.resonance = request.sound.resonance;
+        }
+    } else {
+        changed = ins.trim_gain != request.sound.gain || ins.trim_pan != request.sound.pan;
+        if (changed) {
+            s_sound_undo[request.track].Capture(ins);
+            ins.trim_gain = request.sound.gain;
+            ins.trim_pan = request.sound.pan;
+        }
+    }
+    // Apply advances identity too: stale pre-Apply actions cannot consume the
+    // next edit's undo point.
+    if (!error)
+        BumpKeyRevision(request.track);
+    s_action_completed[request.track] = request.request_id;
+    s_action_error[request.track] = error;
+    s_action_reply = ReadEditState(request.track);
+    s_action_reply.request_id = request.request_id;
+    return changed;
+}
+
 InstLfoSyncMessage ReadLfoState(uint8_t track) {
     InstLfoOpMessage request;
     request.track = track;
@@ -956,6 +1038,7 @@ bool OnLfoOp(const InstLfoOpMessage& request) {
     if (ins.origin == InstrumentOrigin::None || request.revision != s_key_revision[request.track])
         error = INST_ERROR_BAD_FILE;
     else {
+        s_sound_undo[request.track].Capture(ins);
         const auto& v = request.value;
         ins.lfo[request.index] = {
             v.wave, v.rate_hz, v.sync_div, v.delay_s, v.fade_s, v.retrigger, v.pitch_follow};
@@ -992,9 +1075,11 @@ bool OnModOp(const InstModOpMessage& request) {
     if (ins.origin == InstrumentOrigin::None || request.revision != s_key_revision[request.track])
         error = INST_ERROR_BAD_FILE;
     else if (request.op == INST_MOD_SET_ENV) {
+        s_sound_undo[request.track].Capture(ins);
         const auto& e = request.envelope;
         ins.env[request.index] = {e.attack_s, e.decay_s, e.sustain, e.release_s};
     } else {
+        s_sound_undo[request.track].Capture(ins);
         const auto& slot = request.slot;
         ins.mod_slots[request.index] = {
             slot.source, slot.destination, slot.depth, slot.curve, slot.flags};
@@ -1045,6 +1130,7 @@ bool OnOscOp(const InstOscOpMessage& request) {
         if (!error)
             osc = source;
     } else {
+        s_sound_undo[request.track].Capture(ins);
         osc.level = request.value.level;
         osc.coarse_tune = request.value.coarse;
         osc.fine_tune = request.value.fine;
@@ -1157,6 +1243,9 @@ void OnTrackStateRequest(const TrackStateRequest& request) {
     Protocol::detail::CopyWireString(out.name, sizeof(out.name), ins.name);
 }
 void PumpEditorReply() {
+    if (s_action_pending &&
+        WaveX::Comm::UartLinkSend(MSG_INST_EDIT_SYNC, &s_action_reply, sizeof(s_action_reply)) >= 0)
+        s_action_pending = false;
     if (s_lfo_pending &&
         WaveX::Comm::UartLinkSend(MSG_INST_LFO_SYNC, &s_lfo_reply, sizeof(s_lfo_reply)) >= 0)
         s_lfo_pending = false;
@@ -1676,7 +1765,16 @@ void PrepareSequencerVoices(SequencerVoiceMap& map, uint16_t tracks) {
 bool SetInstrumentFilter(uint8_t track, const InstrumentFilter& filter) {
     if (track >= kNumTracks)
         return false;
-    s_bank->At(track).instrument.filter = filter;
+    auto& ins = s_bank->At(track).instrument;
+    const auto& old = ins.filter;
+    if (old.type != filter.type || old.cutoff_hz != filter.cutoff_hz ||
+        old.resonance != filter.resonance || old.keytrack != filter.keytrack ||
+        old.env2_amount != filter.env2_amount) {
+        if (ins.origin != InstrumentOrigin::None)
+            s_sound_undo[track].Capture(ins);
+        BumpKeyRevision(track);
+    }
+    ins.filter = filter;
     return true;
 }
 
@@ -1685,8 +1783,11 @@ bool SetInstrumentEnv(uint8_t track, const InstrumentEnv& env) {
         return false;
     const auto& old = s_bank->At(track).instrument.env[0];
     if (old.attack_s != env.attack_s || old.decay_s != env.decay_s || old.sustain != env.sustain ||
-        old.release_s != env.release_s)
+        old.release_s != env.release_s) {
+        if (s_bank->At(track).instrument.origin != InstrumentOrigin::None)
+            s_sound_undo[track].Capture(s_bank->At(track).instrument);
         BumpKeyRevision(track);
+    }
     s_bank->At(track).instrument.env[0] = env;
     return true;
 }
@@ -1704,6 +1805,8 @@ bool SetModSlot(uint8_t slot, uint8_t mod_slot_index, const ModSlot& value) {
         return false;
     if (!IsValidInstModSlot({value.source, value.dest, value.depth, value.curve, value.flags}))
         return false;
+    if (s_bank->At(slot).instrument.origin != InstrumentOrigin::None)
+        s_sound_undo[slot].Capture(s_bank->At(slot).instrument);
     s_bank->At(slot).instrument.mod_slots[mod_slot_index] = value;
     BumpKeyRevision(slot);
     PublishModSlots(slot);

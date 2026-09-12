@@ -4,6 +4,7 @@
 #include "components/ui_dial.h"
 #include "components/ui_value_tile.h"
 #include "input_event.h"
+#include "instrument_edit_model.h"
 #include "modulator_model.h"
 #include "oscillator_model.h"
 #include "spi_protocol/protocol.h"
@@ -16,13 +17,14 @@
 namespace wavex_ui {
 
 // Shared Instrument stages. Oscillator controls use revisioned backend snapshots;
-// envelope/matrix controls also use explicit drafts; Amp/Filter remain live controls.
+// all sound settings audition immediately with a backend-owned Apply/Revert point.
 class UIInstrumentPage : public UIPage {
    public:
     const char* name() const override { return "Instrument"; }
 
     void onEnter(lv_obj_t* parent) override;
     void onExit() override;
+    bool canLeave() override;
     void onInput(const InputEvent& evt) override;
     void onTrackChanged() override;
     std::array<Softkey, NUM_SOFTKEYS> getSoftkeys() override;
@@ -88,6 +90,14 @@ class UIInstrumentPage : public UIPage {
     int32_t stage_values_[kStageCount][kMaxParams] = {};
     bool values_seeded_ = false;
 
+    InstrumentEditModel sound_;
+    uint8_t display_track_ = 0, requested_action_ = 0;
+    uint32_t sound_read_at_ = 0, sound_pending_at_ = 0, action_read_id_ = 0;
+    bool track_change_pending_ = false;
+    void readSound();
+    void serviceSound();
+    void soundAction(uint8_t op);
+    void sendSound(uint8_t op);
     ModulatorModel modulator_;
     uint8_t selected_env_ = 0, selected_slot_ = 0;
     uint32_t mod_read_at_ = 0, mod_pending_at_ = 0;
@@ -103,7 +113,7 @@ class UIInstrumentPage : public UIPage {
     }
     bool draftActive() const {
         return oscillator_.Dirty() || oscillator_.Pending() || modulator_.Dirty() ||
-               modulator_.Pending();
+               modulator_.Pending() || sound_.Outgoing() || sound_.Pending() || requested_action_;
     }
     OscillatorModel oscillator_;
     lv_timer_t* timer_ = nullptr;

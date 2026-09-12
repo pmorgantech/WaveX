@@ -1305,6 +1305,35 @@ bool inter_mcu_get_oscillator(WaveX::Protocol::InstOscSyncMessage* out) {
 }
 
 namespace {
+portMUX_TYPE s_instrument_edit_lock = portMUX_INITIALIZER_UNLOCKED;
+WaveX::Protocol::InstEditSyncMessage s_instrument_edit;
+bool s_instrument_edit_valid = false;
+}  // namespace
+esp_err_t inter_mcu_send_instrument_edit(const WaveX::Protocol::InstEditOpMessage& request) {
+    if (!WaveX::Protocol::IsValidInstEditOp(request))
+        return ESP_ERR_INVALID_ARG;
+    return send_uart_message(WaveX::Protocol::MSG_INST_EDIT_OP, &request, sizeof(request)) >= 0
+               ? ESP_OK
+               : ESP_FAIL;
+}
+void inter_mcu_store_instrument_edit(const WaveX::Protocol::InstEditSyncMessage& state) {
+    taskENTER_CRITICAL(&s_instrument_edit_lock);
+    s_instrument_edit = state;
+    s_instrument_edit_valid = true;
+    taskEXIT_CRITICAL(&s_instrument_edit_lock);
+}
+bool inter_mcu_get_instrument_edit(WaveX::Protocol::InstEditSyncMessage* out) {
+    if (!out)
+        return false;
+    taskENTER_CRITICAL(&s_instrument_edit_lock);
+    const bool valid = s_instrument_edit_valid;
+    if (valid)
+        *out = s_instrument_edit;
+    taskEXIT_CRITICAL(&s_instrument_edit_lock);
+    return valid;
+}
+
+namespace {
 portMUX_TYPE s_modulator_lock = portMUX_INITIALIZER_UNLOCKED;
 WaveX::Protocol::InstModSyncMessage s_modulator;
 bool s_modulator_valid = false;

@@ -64,7 +64,7 @@ TEST(ModulatorModel, PendingMutationRequiresRetainedCompletionAndRejectionUsesRe
     ASSERT_TRUE(m.Select(false, 7));
     ASSERT_TRUE(m.Set(2, 32767));
     m.MutationSent(11);
-    EXPECT_FALSE(m.Set(0, 3));
+    EXPECT_TRUE(m.Set(0, 3));
     EXPECT_FALSE(m.Select(true, 0));
     m.Expect(12);
     auto s = snapshot();
@@ -102,4 +102,29 @@ TEST(ModulatorModel, UnknownRoutesRemainReadableAndCanBeExplicitlyCleared) {
     EXPECT_TRUE(IsValidInstModOp(m.Request(13)));
     m.Revert();
     EXPECT_EQ(m.Value(0), 200);
+}
+
+TEST(ModulatorModel, LaterEnvelopeMotionSurvivesEarlierAcknowledgement) {
+    auto m = model();
+    ASSERT_TRUE(m.Select(true, 2));
+    ASSERT_TRUE(m.Set(0, 250));
+    m.MutationSent(11);
+    ASSERT_TRUE(m.Set(0, 900));
+    ASSERT_TRUE(m.Set(3, 700));
+    auto s = snapshot();
+    s.request_id = s.completed_request_id = 11;
+    s.revision++;
+    s.envelopes[2].attack_s = .25f;
+    ASSERT_TRUE(m.Accept(s));
+    EXPECT_TRUE(m.Dirty());
+    EXPECT_EQ(m.Value(0), 900);
+    EXPECT_EQ(m.Value(3), 700);
+    auto request = m.Request(12);
+    EXPECT_EQ(request.revision, s.revision);
+    m.MutationSent(12);
+    s.request_id = s.completed_request_id = 12;
+    s.revision++;
+    s.envelopes[2] = request.envelope;
+    ASSERT_TRUE(m.Accept(s));
+    EXPECT_FALSE(m.Dirty());
 }

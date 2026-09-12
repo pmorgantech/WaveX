@@ -33,6 +33,8 @@ void Pump(SamplePool& pool, SampleMemMgr& memory, uint8_t* io_buffer, uint32_t i
 bool Busy();
 // Returns true only for a newly applied edit; caller republishes that Track.
 WaveX::Protocol::InstOscSyncMessage ReadOscState(uint8_t track, uint8_t oscillator);
+WaveX::Protocol::InstEditSyncMessage ReadEditState(uint8_t track);
+bool OnEditOp(const WaveX::Protocol::InstEditOpMessage& request);
 bool OnLfoOp(const WaveX::Protocol::InstLfoOpMessage& request);
 WaveX::Protocol::InstLfoSyncMessage ReadLfoState(uint8_t track);
 bool OnModOp(const WaveX::Protocol::InstModOpMessage& request);

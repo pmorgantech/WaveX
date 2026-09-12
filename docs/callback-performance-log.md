@@ -332,6 +332,15 @@ the existing startup copier installs them before audio starts. No voice count,
 filter/drive setting, sample rate, block size or DSP algorithm was reduced.
 The short runs justify a clean-commit ten-minute gate; they do not replace it.
 
+The 2026-09-12 placement diagnostic moved `VoiceLfo::Start` and
+`VoiceManager::TickModulation` into ITCM after the clean LFO run identified
+them in QSPI. The dirty build-profile-edit image measured 125.035 seconds
+over 25 windows, 152,798 average cycles and 313,693 peak cycles (65.3527%),
+with zero underruns/drops and one file cycle. Capture metadata is in
+`logs/perf-lfo-wavex-20260912-041514.json`. This is placement-only diagnostic
+evidence, not an accepted clean-commit gate; the 6ad2896 full run remains the
+latest LFO REVIEW result at 72.8827% peak.
+
 ## Recorded runs
 
 | Date | Commit | Scenario | Voices | Hz/block | Core | Image | Duration | Budget cycles | Average cycles | Maximum cycles | Worst headroom | Stream underruns | Callback features left | Decision | Note |
@@ -353,3 +362,4 @@ The short runs justify a clean-commit ten-minute gate; they do not replace it.
 | 2026-09-12 | 3dee3bf | 8 voices; four applied locks per hit; WaveX 24dB full drive; 64 mod slots; SD streaming; live Track/pad edits; grid; periodic pattern save/load | 8 | 48000/48 | 480 MHz | qspi `-O2` | 605.2s (121 windows) | 480000 | 142765 (29.7%) | 334546 (69.6971%) | 30.3029% | 0 | yes | STAY | Clean 3dee3bf, identical audio image to 5d9683a; startup DSP initialization; eight voices checked after every file-load restart; stopped one-shot voices may finish during load. Capture JSON records image SHA and six file cycles. Earlier 004704 run failed a benchmark voice-count assertion during stopped transport and is not a gate result. |
 | 2026-09-12 | 409e40c | Two source maps, 8 Tracks x 16 pads, 64 mod slots, 4 locks per hit, WaveX 24dB/full drive, live cutoff, SD stream, grid, pattern file cycles | 8 | 48000/48 | 480 MHz | qspi `-O2` | 605.2s (121 windows) | 480000 | 151643 (31.6%) | 315322 (65.6921%) | 34.3079% | 0 | yes | STAY | Clean source at capture start; image d020cd6f400c29b10bc01c751f2f4b3865c021533b2dd24ebe42757b3d7bc0b9; full two-source gate; metadata logs/perf-dual-wavex-20260912-020336.json |
 | 2026-09-12 | db6f1805e31b82aa61f860721d3be6cd621115e5 | 8 Tracks, 2x16 zones, Env 1-3 and 64 live routes, 4 locks per hit, WaveX 24 dB full drive, stream/grid/file cycles | 8 | 48000/48 | 480 MHz | qspi `-O2` | 605.2s (121 windows) | 480000 | 154075 (32.1%) | 321394 (66.9571%) | 33.0429% | 0 | yes | STAY | Clean source at capture; image SHA256 bf8bd1929024a7a6988d9d68fde64f34151b6e677f17d900edcb9a781023a20e; logs/perf-env-wavex-20260912-025245.json records all maps, envelopes, routes and six file cycles. Frontend-only edits during the fixed-image run. |
+| 2026-09-12 | 6ad289694be8590ec53d9e7bb67800d41e90a537 | Eight voices; sixteen voice-owned sine LFOs at20Hz; two sixteen-zone maps per Track;64routes;four locks per hit;WaveX24dB full drive;SDstream;live cutoff;touchgrid;periodic files | 8 | 48000/48 | 480 MHz | qspi `-O2` | 605.2s (121 windows) | 480000 | 169743 (35.4%) | 349837 (72.8827%) | 27.1173% | 0 | yes | REVIEW | Clean source image build-profile-events, SHA256 744c05c6c99ef0393857bc5d34e1254e347cdcbf26b2d92b8addb9328b149cd4. Retried after USB reenumeration using the retained clean pre-flash snapshot; source edits resumed after flashing while the image stayed unchanged. Metadata logs/perf-lfo-wavex-20260912-035853.json records provenance, LFO readbacks, voice counts and file cycles. |

@@ -169,8 +169,10 @@ enum MessageType : uint8_t {
     MSG_TRACK_OP = 0x63,             // E->D: one Track setting (track-and-patch-model.md §2)
     // Mixer (output-routing-and-mixer.md §4). 0x70-0x7F is the recording /
     // mix / scenes block reserved in features/inter-mcu-protocol.md.
-    MSG_MIX_OP = 0x78,      // E->D: one mixer control change
-    MSG_MIX_METERS = 0x79,  // D->E: per-track peak, while the mixer page is open
+    MSG_MIX_OP = 0x78,          // E->D: one mixer control change
+    MSG_MIX_METERS = 0x79,      // D->E: per-track peak, while the mixer page is open
+    MSG_INST_EDIT_OP = 0x80,    // E->D: sound undo/apply/filter/amp
+    MSG_INST_EDIT_SYNC = 0x81,  // D->E: audible sound and retained undo state
     MSG_ERROR = 0xFF
 };
 
@@ -2050,6 +2052,77 @@ inline bool IsValidInstModOp(const InstModOpMessage& m) {
                                     : m.index < INST_MOD_SLOT_COUNT && IsValidInstModSlot(m.slot);
 }
 
+// Instrument sound edits retain a backend undo point. 0x80/81 extend the
+// exhausted Instrument block; recording/mix and offline-render ids stay separate.
+enum InstEditOp : uint8_t {
+    INST_EDIT_GET = 0,
+    INST_EDIT_APPLY = 1,
+    INST_EDIT_REVERT = 2,
+    INST_EDIT_FILTER = 3,
+    INST_EDIT_AMP = 4
+};
+struct InstSoundSettings {
+    float cutoff_hz = 20000, resonance = 0, gain = 1, pan = .5f;
+} __attribute__((packed));
+struct InstEditOpMessage {
+    uint32_t request_id = 0, revision = 0;
+    uint8_t track = 0, op = INST_EDIT_GET;
+    uint16_t reserved = 0;
+    InstSoundSettings sound;
+    InstEditOpMessage() {}
+    InstEditOpMessage(uint32_t id,
+                      uint32_t rev,
+                      uint8_t target,
+                      uint8_t operation,
+                      const InstSoundSettings& value)
+        : request_id(id), revision(rev), track(target), op(operation), sound(value) {}
+} __attribute__((packed));
+struct InstEditSyncMessage {
+    uint32_t request_id = 0, completed_request_id = 0, revision = 0;
+    uint8_t track = 0, valid = 0, busy = 0, error = 0;
+    uint8_t dirty = 0, reserved[3] = {};
+    InstSoundSettings sound;
+    InstEditSyncMessage() {}
+    InstEditSyncMessage(uint32_t id,
+                        uint32_t completed,
+                        uint32_t rev,
+                        uint8_t target,
+                        uint8_t loaded,
+                        uint8_t loading,
+                        uint8_t failure,
+                        uint8_t edited,
+                        const InstSoundSettings& value)
+        : request_id(id),
+          completed_request_id(completed),
+          revision(rev),
+          track(target),
+          valid(loaded),
+          busy(loading),
+          error(failure),
+          dirty(edited),
+          sound(value) {}
+} __attribute__((packed));
+static_assert(sizeof(InstEditOpMessage) == 28, "Instrument edit operation wire size");
+static_assert(sizeof(InstEditSyncMessage) == 36, "Instrument edit snapshot wire size");
+inline bool IsValidInstSound(const InstSoundSettings& s) {
+    return s.cutoff_hz >= 0 && s.cutoff_hz <= 96000 && s.resonance >= 0 && s.resonance <= 1 &&
+           s.gain >= 0 && s.gain <= 64 && s.pan >= 0 && s.pan <= 1;
+}
+inline bool IsValidInstEditOp(const InstEditOpMessage& m) {
+    if (!m.request_id || m.track >= 16 || m.op > INST_EDIT_AMP || m.reserved)
+        return false;
+    if (m.op == INST_EDIT_GET)
+        return true;
+    if (!m.revision)
+        return false;
+    if (m.op == INST_EDIT_FILTER)
+        return m.sound.cutoff_hz >= 0 && m.sound.cutoff_hz <= 96000 && m.sound.resonance >= 0 &&
+               m.sound.resonance <= 1;
+    if (m.op == INST_EDIT_AMP)
+        return m.sound.gain >= 0 && m.sound.gain <= 64 && m.sound.pan >= 0 && m.sound.pan <= 1;
+    return true;
+}
+
 // Key Map edits target stable slots, never a packed/sorted view. Revisions
 // invalidate stale edits after replacement even when a sample id is reused.
 static constexpr uint8_t INST_KEY_ZONE_COUNT = 32;
@@ -2648,6 +2721,10 @@ inline const char* MessageTypeName(uint8_t type) {
             return "INST_OP";
         case MSG_INST_STATUS:
             return "INST_STATUS";
+        case MSG_INST_EDIT_OP:
+            return "INST_EDIT_OP";
+        case MSG_INST_EDIT_SYNC:
+            return "INST_EDIT_SYNC";
         case MSG_INST_LFO_OP:
             return "INST_LFO_OP";
         case MSG_INST_LFO_SYNC:

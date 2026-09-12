@@ -14,9 +14,19 @@ class ModulatorModel {
         *this = ModulatorModel{};
         state_.track = track;
     }
+    void AdoptRevision(uint32_t revision) {
+        if (valid_)
+            state_.revision = revision;
+    }
     void Expect(uint32_t id) { expected_ = id; }
-    void MutationSent(uint32_t id) { pending_ = expected_ = id; }
+    void MutationSent(uint32_t id) {
+        pending_ = expected_ = id;
+        sent_env_ = env_;
+        sent_slot_ = slot_;
+    }
     bool Accept(const State& s) {
+        if (valid_ && static_cast<int32_t>(s.revision - state_.revision) < 0)
+            return false;
         if (!expected_ || s.request_id != expected_ || s.track != state_.track || !s.revision ||
             s.valid > 1 || s.busy > 1)
             return false;
@@ -33,11 +43,16 @@ class ModulatorModel {
         const bool replaced = valid_ && s.revision != state_.revision;
         if (dirty_ && replaced && !completed)
             conflict_ = true;
+        const bool queued =
+            pending_ && (envelope_ ? std::memcmp(&env_, &sent_env_, sizeof(env_)) != 0
+                                   : std::memcmp(&slot_, &sent_slot_, sizeof(slot_)) != 0);
         state_ = s;
         valid_ = true;
         if (completed)
             pending_ = 0;
-        if (!dirty_ || replaced || completed)
+        if (completed && queued && !s.error)
+            UpdateDirty();
+        else if ((!dirty_ && !pending_) || replaced || completed)
             LoadDraft();
         return true;
     }
@@ -55,7 +70,7 @@ class ModulatorModel {
     const State& Snapshot() const { return state_; }
     bool Valid() const { return valid_; }
     bool Ready() const { return valid_ && !state_.busy && !pending_; }
-    bool Editable() const { return Ready() && state_.valid; }
+    bool Editable() const { return valid_ && !state_.busy && state_.valid; }
     bool Dirty() const { return dirty_; }
     bool Pending() const { return pending_ != 0; }
     bool Conflict() const { return conflict_; }
@@ -168,8 +183,8 @@ class ModulatorModel {
         conflict_ = false;
     }
     State state_{};
-    WaveX::Protocol::InstEnvelopeSettings env_{};
-    WaveX::Protocol::InstModSlotSettings slot_{};
+    WaveX::Protocol::InstEnvelopeSettings env_{}, sent_env_{};
+    WaveX::Protocol::InstModSlotSettings slot_{}, sent_slot_{};
     uint32_t expected_ = 0, pending_ = 0;
     uint8_t index_ = 0;
     bool envelope_ = true, valid_ = false, dirty_ = false, conflict_ = false;

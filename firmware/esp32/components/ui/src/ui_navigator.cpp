@@ -33,6 +33,8 @@ static const char* TAG = "UI_NAVIGATOR";
 namespace wavex_ui {
 
 void UINavigator::push(std::shared_ptr<UIPage> page) {
+    if (active_ && !active_->canLeave())
+        return;
     if (!page) {
         ESP_LOGE(TAG, "Cannot push null page");
         return;
@@ -170,6 +172,8 @@ void UINavigator::layoutContent() {
 }
 
 void UINavigator::pop() {
+    if (active_ && !active_->canLeave())
+        return;
     if (stack_.size() <= 1) {
         ESP_LOGW(TAG, "Cannot pop root page");
         return;
@@ -233,6 +237,8 @@ void UINavigator::unwindToRoot() {
 }
 
 void UINavigator::popToRoot() {
+    if (active_ && !active_->canLeave())
+        return;
     if (stack_.size() <= 1) {
         return;
     }
@@ -256,6 +262,8 @@ bool UINavigator::hasRootGroup(RootGroup group) const {
 }
 
 bool UINavigator::jumpToRoot(RootGroup group) {
+    if (active_ && !active_->canLeave())
+        return false;
     if (!hasRootGroup(group)) {
         // Track and Mixer have keys before they have pages. Refusing here,
         // loudly, beats leaving the user on a page that is not the one the

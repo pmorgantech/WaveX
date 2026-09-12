@@ -901,3 +901,92 @@ TEST_F(SfzLoaderTest, TwoLfoSettingsUseTrackRevisionsAndSurviveWxiRecall) {
     EXPECT_FLOAT_EQ(state.values[1].rate_hz, 5.25f);
     EXPECT_FLOAT_EQ(state.values[1].fade_s, .75f);
 }
+
+TEST_F(SfzLoaderTest, SoundEditsAuditionAndRevertAcrossControlsWithoutChangingZones) {
+    ASSERT_TRUE(Load(0));
+    const auto baseline = SfzLoader::ReadOscState(0, 0);
+    const auto env_before = SfzLoader::ReadModState(0);
+    InstOscOpMessage osc;
+    osc.request_id = 920001;
+    osc.revision = baseline.revision;
+    osc.op = INST_OSC_SET;
+    osc.value = baseline.value;
+    osc.value.level = .25f;
+    ASSERT_TRUE(SfzLoader::OnOscOp(osc));
+    EXPECT_FLOAT_EQ(SfzLoader::ReadOscState(0, 0).value.level, .25f);
+    EXPECT_TRUE(SfzLoader::ReadEditState(0).dirty);
+    InstModOpMessage env;
+    env.request_id = 920002;
+    env.revision = SfzLoader::ReadEditState(0).revision;
+    env.op = INST_MOD_SET_ENV;
+    env.index = 2;
+    env.envelope.attack_s = 2.5f;
+    ASSERT_TRUE(SfzLoader::OnModOp(env));
+    InstEditOpMessage revert;
+    revert.request_id = 920003;
+    revert.revision = SfzLoader::ReadEditState(0).revision;
+    revert.op = INST_EDIT_REVERT;
+    ASSERT_TRUE(SfzLoader::OnEditOp(revert));
+    EXPECT_FALSE(SfzLoader::ReadEditState(0).dirty);
+    EXPECT_FLOAT_EQ(SfzLoader::ReadOscState(0, 0).value.level, baseline.value.level);
+    EXPECT_FLOAT_EQ(SfzLoader::ReadModState(0).envelopes[2].attack_s,
+                    env_before.envelopes[2].attack_s);
+    EXPECT_EQ(SfzLoader::ReadOscState(0, 0).zones, baseline.zones);
+    const auto revision = SfzLoader::ReadEditState(0).revision;
+    EXPECT_FALSE(SfzLoader::OnEditOp(revert));
+    EXPECT_EQ(SfzLoader::ReadEditState(0).revision, revision);
+}
+TEST_F(SfzLoaderTest, ApplyBecomesRevertPointAndStaleActionsCannotConsumeNewEdits) {
+    ASSERT_TRUE(Load(0));
+    InstEditOpMessage op;
+    op.request_id = 921001;
+    op.revision = SfzLoader::ReadEditState(0).revision;
+    op.op = INST_EDIT_AMP;
+    op.sound.gain = .5f;
+    op.sound.pan = .25f;
+    ASSERT_TRUE(SfzLoader::OnEditOp(op));
+    op.request_id++;
+    op.revision = SfzLoader::ReadEditState(0).revision;
+    op.op = INST_EDIT_APPLY;
+    EXPECT_FALSE(SfzLoader::OnEditOp(op));
+    EXPECT_FALSE(SfzLoader::ReadEditState(0).dirty);
+    const auto applied = op;
+    op.request_id++;
+    op.revision = SfzLoader::ReadEditState(0).revision;
+    op.op = INST_EDIT_AMP;
+    op.sound.gain = 0;
+    ASSERT_TRUE(SfzLoader::OnEditOp(op));
+    EXPECT_TRUE(SfzLoader::ReadEditState(0).dirty);
+    EXPECT_FALSE(SfzLoader::OnEditOp(applied));
+    EXPECT_TRUE(SfzLoader::ReadEditState(0).dirty);
+    op.request_id++;
+    op.revision = SfzLoader::ReadEditState(0).revision;
+    op.op = INST_EDIT_REVERT;
+    ASSERT_TRUE(SfzLoader::OnEditOp(op));
+    EXPECT_FLOAT_EQ(SfzLoader::ReadEditState(0).sound.gain, .5f);
+    EXPECT_FLOAT_EQ(SfzLoader::ReadEditState(0).sound.pan, .25f);
+}
+TEST_F(SfzLoaderTest, SuccessfulSaveAppliesAudibleSettingsButFailedSaveKeepsUndo) {
+    ASSERT_TRUE(Load(0));
+    InstEditOpMessage op;
+    op.request_id = 922001;
+    op.revision = SfzLoader::ReadEditState(0).revision;
+    op.op = INST_EDIT_FILTER;
+    op.sound.cutoff_hz = 1234;
+    ASSERT_TRUE(SfzLoader::OnEditOp(op));
+    ASSERT_EQ(Edit(INST_OP_SAVE, 0, "Audible").error, INST_ERROR_NONE);
+    EXPECT_FALSE(SfzLoader::ReadEditState(0).dirty);
+    op.request_id++;
+    op.revision = SfzLoader::ReadEditState(0).revision;
+    op.sound.cutoff_hz = 4321;
+    ASSERT_TRUE(SfzLoader::OnEditOp(op));
+    EXPECT_EQ(Edit(INST_OP_SAVE, 0, "Audible").error, INST_ERROR_EXISTS);
+    EXPECT_TRUE(SfzLoader::ReadEditState(0).dirty);
+    op.request_id++;
+    op.revision = SfzLoader::ReadEditState(0).revision;
+    op.op = INST_EDIT_REVERT;
+    ASSERT_TRUE(SfzLoader::OnEditOp(op));
+    EXPECT_FLOAT_EQ(SfzLoader::ReadEditState(0).sound.cutoff_hz, 1234);
+    ASSERT_TRUE(SfzLoader::BindSample(pool_, memory_, 0, SampleId("/kits/a.wav")));
+    EXPECT_FALSE(SfzLoader::ReadEditState(0).dirty);
+}

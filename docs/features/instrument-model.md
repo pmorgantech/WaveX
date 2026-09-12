@@ -166,6 +166,20 @@ cutoff and amp envelope when Instrument controls move. Resonance remains
 Instrument-owned. One-shot pads ignore note-off, so release is not exposed.
 Save copy preserves the overrides through the existing WXI fields.
 
+Instrument sound controls on Osc, Env, Mod, Filter and Amp preview
+automatically. The backend keeps one per-Track undo point for filter cutoff /
+resonance and Instrument amp trim gain / pan; it does not snapshot PCM
+references, key maps, zones or names. The first edit establishes the baseline,
+and the shared Apply/Revert actions commit or restore that sound baseline.
+Successful WXI saves commit the audible working values; a failed save keeps the
+undo point. Changing pages or Tracks retains it, while replacing the
+Instrument clears it. Amp edits address Instrument trim gain and pan rather
+than the master volume.
+
+The current handoff updates future triggers. Expanding these sound changes to
+voices that are already held is still required; existing Env 1, filter and
+matrix live behavior remains the only held-voice path.
+
 Key Map, dedicated Instrument Browser, Bank/Track pages, and expanded
 oscillator/envelope/LFO editors remain target work.
 

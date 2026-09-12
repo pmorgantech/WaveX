@@ -119,3 +119,9 @@ void inter_mcu_store_modulator(const WaveX::Protocol::InstModSyncMessage& state)
     ++cap.modulator_calls;
     cap.modulator = state;
 }
+
+void inter_mcu_store_instrument_edit(const WaveX::Protocol::InstEditSyncMessage& state) {
+    auto& cap = GetInterMcuCapture();
+    ++cap.instrument_edit_calls;
+    cap.instrument_edit = state;
+}

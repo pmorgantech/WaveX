@@ -286,6 +286,32 @@ static void DispatchConsoleCommand(const WaveX::Debug::Command& c) {
             }
             len = AppendKvText(reply, sizeof(reply), len, key, val);
         }
+    } else if (std::strcmp(c.verb, "EDIT") == 0) {
+        long track;
+        if (!NextInt(&p, &track) || track < 0 || track >= 16) {
+            FormatErr(seq, "badtrack", reply, sizeof(reply));
+        } else {
+            const auto state =
+                WaveX::AudioEngine::SfzLoader::ReadEditState(static_cast<uint8_t>(track));
+            size_t len = FormatOk(seq, reply, sizeof(reply));
+            len = AppendKvInt(reply, sizeof(reply), len, "valid", state.valid);
+            len = AppendKvInt(reply, sizeof(reply), len, "busy", state.busy);
+            len = AppendKvInt(reply, sizeof(reply), len, "dirty", state.dirty);
+            len = AppendKvInt(reply, sizeof(reply), len, "revision", state.revision);
+            len = AppendKvInt(reply, sizeof(reply), len, "completed", state.completed_request_id);
+            len = AppendKvInt(reply, sizeof(reply), len, "error", state.error);
+            len = AppendKvInt(
+                reply, sizeof(reply), len, "cutoff", static_cast<long>(state.sound.cutoff_hz));
+            len = AppendKvInt(reply,
+                              sizeof(reply),
+                              len,
+                              "resonance",
+                              static_cast<long>(state.sound.resonance * 1000));
+            len = AppendKvInt(
+                reply, sizeof(reply), len, "gain", static_cast<long>(state.sound.gain * 1000));
+            AppendKvInt(
+                reply, sizeof(reply), len, "pan", static_cast<long>(state.sound.pan * 1000));
+        }
     } else if (std::strcmp(c.verb, "LFO") == 0) {
         long track, index;
         if (!NextInt(&p, &track) || !NextInt(&p, &index) || track < 0 || track >= 16 || index < 0 ||

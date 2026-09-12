@@ -95,6 +95,14 @@ The image SHA and complete readback are recorded in
 [the performance log](callback-performance-log.md). This permits the per-voice
 LFO milestone; it does not close the one-hour phase soak.
 
+The subsequent clean 6ad2896 LFO workload peaked at **72.8827% (REVIEW)**
+over 605.2 seconds, with zero underruns. It supersedes the Env3 checkpoint for
+the current callback scope and does not permit held-voice expansion or a voice
+count change. A later dirty placement diagnostic moved `VoiceLfo::Start` and
+`VoiceManager::TickModulation` into ITCM and reached 65.3527% peak over 125.035
+seconds; that short result is placement evidence only. A fresh clean full run
+is required before accepting the optimization or extending callback work.
+
 Previous two-source checkpoint:
 
 The clean two-source workload on 409e40c peaked at **65.6921% (STAY)**
@@ -206,11 +214,14 @@ done. Open work, in the order decided 2026-09-05 (model doc §8: 7 → 4 → 5 �
 2. Voice architecture (stage 5): Osc 2 sample submix, its touch settings,
    both keyboard zone maps, Env 1–3, the eight-row matrix editor and the
    backend runtime/typed transport for two per-voice LFOs are built. Complete
-   filter type, the LFO touch tab/live audition, and new mod destinations
-   remain open. The LFO tab adds waveform, frequency, pitch-follow and
-   gate/free-run controls, taking the stage bar from five to six. A fresh clean
-   callback gate is required after this milestone before changing the voice
-   count.
+   filter type, the LFO touch tab/live audition, new mod destinations and
+   held-voice expansion for the sound preview path remain open. Instrument
+   sound controls now preview automatically with typed filter/amp readback and
+   a per-Track Apply/Revert undo point; this currently affects future triggers.
+   The LFO tab adds waveform, frequency, pitch-follow and gate/free-run
+   controls, taking the stage bar from five to six. The clean LFO callback run
+   reached 72.8827% peak and is REVIEW, so it does not validate another
+   callback milestone or permit a voice-count change.
 3. Bank (stage 6): the [WXCF Bank codec](features/bank-persistence.md) and
    bounded resident index are host-tested. SD working-copy management, Bank
    page, Track recall, preload and Program Change recall remain open and follow

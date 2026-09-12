@@ -64,7 +64,7 @@ def test_instrument_envelope_three_and_matrix_survive_wxi_recall(
 
 @pytest.mark.both
 @pytest.mark.sdcard
-def test_touch_envelope_and_matrix_drafts_apply_revert_and_recall(
+def test_touch_sound_previews_apply_revert_and_recall(  # noqa: E501
     esp32, daisy, sequence_samples
 ):
     esp = esp32
@@ -86,19 +86,35 @@ def test_touch_envelope_and_matrix_drafts_apply_revert_and_recall(
     esp.page("DECAY", 456)
     esp.page("SUSTAIN", 650)
     esp.page("RELEASE", 789)
-    esp.wait_state(env=3, moddirty=1, attack=123, release=789)
-    assert daisy.cmd("ENV", 0, 2)["revision"] == before["revision"]
-    # A tab change cannot hide a pending draft.
+    esp.wait_state(
+        env=3, moddirty=0, editdirty=1, editpending=0, attack=123, release=789
+    )
+    assert daisy.cmd("ENV", 0, 2)["attack"] == "123"
+    # The audible edit and undo point survive tab navigation.
     esp.page("TAB", "Mod")
-    esp.wait_state(tab="Env", moddirty=1)
+    esp.wait_state(tab="Mod", editdirty=1, editpending=0)
+    esp.page("TAB", "Env")
+    esp.wait_state(tab="Env", env=3)
     esp.softkey("Revert")
-    esp.wait_state(moddirty=0, attack=int(before["attack"]))
+    esp.wait_state(  # noqa: E501
+        moddirty=0, editdirty=0, editpending=0, attack=int(before["attack"])
+    )
+    assert daisy.cmd("ENV", 0, 2)["attack"] == before["attack"]
     esp.page("ATTACK", 123)
     esp.page("DECAY", 456)
     esp.page("SUSTAIN", 650)
     esp.page("RELEASE", 789)
+    esp.wait_state(editdirty=1, editpending=0)
     esp.softkey("Apply")
-    esp.wait_state(modready=1, moddirty=0, moderror=0, attack=123, release=789)
+    esp.wait_state(
+        modready=1,
+        moddirty=0,
+        moderror=0,
+        editdirty=0,
+        editpending=0,
+        attack=123,
+        release=789,
+    )
     assert daisy.cmd("ENV", 0, 2)["attack"] == "123"
     esp.softkey("Mod")
     esp.wait_state(tab="Mod", modready=1)
@@ -108,19 +124,65 @@ def test_touch_envelope_and_matrix_drafts_apply_revert_and_recall(
     esp.page("DEPTH", -16384)
     esp.page("CURVE", 1)
     esp.page("POLARITY", 1)
-    esp.wait_state(slot=8, moddirty=1, source=16, moddepth=-16384, depth=2)
+    esp.wait_state(
+        slot=8,
+        moddirty=0,
+        editdirty=1,
+        editpending=0,
+        source=16,
+        moddepth=-16384,
+        depth=2,
+    )
+    assert daisy.cmd("MOD", 0, 7)["depth"] == "-16384"
     esp.softkey("Apply")
-    esp.wait_state(modready=1, moddirty=0, moderror=0, moddepth=-16384)
+    esp.wait_state(
+        modready=1,
+        moddirty=0,
+        moderror=0,
+        editdirty=0,
+        editpending=0,
+        moddepth=-16384,  # noqa: E501
+    )
     route = daisy.cmd("MOD", 0, 7)
     assert route["source"] == "16"
     assert route["depth"] == "-16384"
     esp.softkey("Clear")
-    esp.wait_state(moddirty=1, source=0, moddepth=0)
+    esp.wait_state(  # noqa: E501
+        moddirty=0, editdirty=1, editpending=0, source=0, moddepth=0
+    )
     esp.softkey("Revert")
-    esp.wait_state(moddirty=0, source=16, moddepth=-16384, depth=2)
+    esp.wait_state(
+        moddirty=0,
+        editdirty=0,
+        editpending=0,
+        source=16,
+        moddepth=-16384,
+        depth=2,  # noqa: E501
+    )
+    esp.page("TAB", "Amp")
+    esp.wait_state(tab="Amp", editready=1, editpending=0)
+    esp.page("LEVEL", 350)
+    esp.page("PAN", 250)
+    esp.wait_state(editdirty=1, editpending=0, instgain=350, instpan=250)
+    assert daisy.cmd("EDIT", 0)["gain"] == "350"
+    esp.page("TAB", "Filter")
+    esp.wait_state(tab="Filter", editready=1, editpending=0)
+    baseline_cutoff = daisy.cmd("EDIT", 0)["cutoff"]
+    esp.page("CUTOFF", 24000)
+    esp.wait_state(editdirty=1, editpending=0, instcutoff=24000)
+    assert daisy.cmd("EDIT", 0)["cutoff"] != baseline_cutoff
+    esp.key("SHIFT")
+    esp.softkey("Revert")
+    esp.wait_state(editdirty=0, editpending=0, instgain=1000, instpan=500)
+    assert daisy.cmd("EDIT", 0)["cutoff"] == baseline_cutoff
+    esp.page("TAB", "Amp")
+    esp.wait_state(tab="Amp", editready=1, editpending=0)
+    esp.page("LEVEL", 650)
+    esp.wait_state(editdirty=1, editpending=0, instgain=650)
     name = "HIL env UI " + str(int(time.time()))
     _instrument(daisy, 851001, 5, name)
     _wait_osc(daisy, 0, 0, busy=0, completed=851001, error=0)
+    assert daisy.cmd("EDIT", 0)["dirty"] == "0"
     esp.home()
     daisy.bind_track(0, 0)
     _instrument(daisy, 851002, 2, "0:/wavex/instruments/" + name + ".wxi")
@@ -131,6 +193,7 @@ def test_touch_envelope_and_matrix_drafts_apply_revert_and_recall(
     esp.wait_state(modready=1)
     esp.page("ENV", 3)
     esp.wait_state(attack=123, decay=456, sustain=650, release=789)
+    assert daisy.cmd("EDIT", 0)["gain"] == "650"
     esp.softkey("Mod")
     esp.wait_state(modready=1)
     esp.page("SLOT", 8)

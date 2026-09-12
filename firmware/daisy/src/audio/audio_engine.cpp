@@ -2928,6 +2928,15 @@ bool LoadSfzInstrument(const char* path, uint8_t slot) {
 void OnTrackStateRequest(const TrackStateRequest& request) {
     SfzLoader::OnTrackStateRequest(request);
 }
+void OnEditOp(const InstEditOpMessage& request) {
+    if (!SfzLoader::OnEditOp(request))
+        return;
+    PublishSequencerVoiceMap(static_cast<uint16_t>(1u << request.track));
+    const auto* filter = SfzLoader::GetInstrumentFilter(request.track);
+    const auto* env = SfzLoader::GetInstrumentEnv(request.track);
+    if (filter && env)
+        s_track_live_updates.Publish(ComposeTrackLive(request.track, *filter, *env));
+}
 void OnLfoOp(const InstLfoOpMessage& request) {
     if (SfzLoader::OnLfoOp(request))
         PublishSequencerVoiceMap(static_cast<uint16_t>(1u << request.track));

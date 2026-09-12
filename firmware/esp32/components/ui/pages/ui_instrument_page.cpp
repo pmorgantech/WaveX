@@ -145,16 +145,12 @@ int UIInstrumentPage::paramsForStage(Stage s, Param* out, int max) const {
                 add(envelopeFields[i], kParamModulator, modulator_.Value(i), i == 2 ? "%" : "ms");
             break;
         case Stage::Amp:
-            // The amp stage is the envelope's destination. Level is the same
-            // wire parameter as the sample stage's gain by design - there is
-            // one output gain, and showing it twice under two names would
-            // imply two controls that fight.
-            add("LEVEL", WaveX::Protocol::PARAM_VOLUME, 52428, "%");
-            add("ENV->AMP", kParamNone, 65535, "");
+            add("LEVEL", WaveX::Protocol::PARAM_GAIN, sound_.Value(2), "%");
+            add("PAN", WaveX::Protocol::PARAM_PAN, sound_.Value(3), "%");
             break;
         case Stage::Filter:
-            add("CUTOFF", WaveX::Protocol::PARAM_FILTER_CUTOFF, 65535, "%");
-            add("RES", WaveX::Protocol::PARAM_FILTER_RESONANCE, 0, "%");
+            add("CUTOFF", WaveX::Protocol::PARAM_FILTER_CUTOFF, sound_.Value(0), "%");
+            add("RES", WaveX::Protocol::PARAM_FILTER_RESONANCE, sound_.Value(1), "%");
             add("ENV->FLT", kParamNone, 0, "");
             break;
         case Stage::Mod:
@@ -171,14 +167,6 @@ int UIInstrumentPage::paramsForStage(Stage s, Param* out, int max) const {
             break;
     }
 
-    // Overlay what the user has actually set. Done here rather than in each
-    // add() so the table above stays a plain description of the chain.
-    if (values_seeded_ && (s == Stage::Amp || s == Stage::Filter)) {
-        const int si = static_cast<int>(s);
-        for (int i = 0; i < n; ++i) {
-            out[i].value = stage_values_[si][i];
-        }
-    }
     return n;
 }
 
@@ -197,11 +185,16 @@ void UIInstrumentPage::seedValues() {
 
 // Shared Track selection is also used by Play, Browser and Track pages.
 uint8_t UIInstrumentPage::currentTrack() const {
-    return getCurrentTrack();
+    return display_track_;
 }
 
 void UIInstrumentPage::onEnter(lv_obj_t* parent) {
     lv_obj_clean(parent);
+    display_track_ = getCurrentTrack();
+    sound_.Reset(display_track_);
+    requested_action_ = 0;
+    action_read_id_ = 0;
+    track_change_pending_ = false;
     stage_ = 0;
     param_ = 0;
     editing_ = false;
@@ -256,7 +249,8 @@ void UIInstrumentPage::onEnter(lv_obj_t* parent) {
     timed_out_ = false;
     pending_at_ = 0;
     readOscillator();
-    timer_ = lv_timer_create(tick, 100, this);
+    readSound();
+    timer_ = lv_timer_create(tick, 50, this);
 
     // Only the first tab's widgets exist after this; the rest are built when
     // first shown.
@@ -265,6 +259,12 @@ void UIInstrumentPage::onEnter(lv_obj_t* parent) {
     refreshParams();
 }
 
+bool UIInstrumentPage::canLeave() {
+    if (!draftActive() || !alive_)
+        return true;
+    refreshStatus("Updating sound...");
+    return false;
+}
 void UIInstrumentPage::onExit() {
     if (timer_)
         lv_timer_delete(timer_);
@@ -577,10 +577,11 @@ void UIInstrumentPage::selectStage(int stage) {
     }
     if (draftActive()) {
         lv_tabview_set_active(tabview_, stage_, LV_ANIM_OFF);
-        refreshStatus("Apply or revert the current draft");
+        refreshStatus("Updating sound...");
         return;
     }
     stage_ = stage;
+    readSound();
     if (modStage()) {
         modulator_.Select(
             stage_ == static_cast<int>(Stage::Envelopes),
@@ -614,9 +615,10 @@ void UIInstrumentPage::refreshHeader() {
     }
     snprintf(context_line_,
              sizeof(context_line_),
-             "Track %u / %.23s",
+             "Track %u / %.23s%s",
              trackDisplayNumber(currentTrack()),
-             name);
+             name,
+             sound_.Dirty() ? " / Edited" : "");
     // A status message displaces the sample for as long as it is set: it is
     // the more recent thing the user did, and the header is the only place
     // left to say it now the in-page strip is gone.
@@ -649,7 +651,8 @@ void UIInstrumentPage::refreshParams() {
         const Param& p = params[i];
         const bool inert = (p.wire_param == kParamNone);
         const bool focused = (i == param_);
-        const float frac = static_cast<float>(p.value) / 65535.0f;
+        const bool amp = stage_ == static_cast<int>(Stage::Amp);
+        const float frac = static_cast<float>(p.value) / (amp ? 1000.f : 65535.f);
 
         ValueTile& tile = tiles_[stage_][i];
         if (!tile.card) {
@@ -669,7 +672,7 @@ void UIInstrumentPage::refreshParams() {
         char value[40];
         snprintf(value, sizeof(value), "%d", static_cast<int>(frac * 100.0f + 0.5f));
         valueTileSetValue(tile, value);
-        valueTileSetFill(tile, frac);
+        valueTileSetFill(tile, std::clamp(frac, 0.f, 1.f));
         valueTileSetFocus(tile, focused);
     }
 
@@ -692,15 +695,19 @@ void UIInstrumentPage::sendParam(const Param& p) {
     }
     if (p.wire_param == kParamOscillator || p.wire_param == kParamModulator)
         return;
-    // The Instrument page edits the selected Track's Instrument, so its
-    // parameter changes are addressed to that Track.
-    if (inter_mcu_send_control_change(
-            p.wire_param, currentTrack(), static_cast<uint16_t>(p.value)) != ESP_OK) {
-        refreshStatus("Send failed - link busy?");
-    }
+    if (requested_action_)
+        return;
+    const uint8_t field = p.wire_param == WaveX::Protocol::PARAM_FILTER_CUTOFF      ? 0
+                          : p.wire_param == WaveX::Protocol::PARAM_FILTER_RESONANCE ? 1
+                          : p.wire_param == WaveX::Protocol::PARAM_GAIN             ? 2
+                                                                                    : 3;
+    if (!sound_.Set(field, p.value))
+        refreshStatus("Instrument is not ready");
 }
 
 void UIInstrumentPage::stepParam(int steps) {
+    if (requested_action_ || track_change_pending_)
+        return;
     Param params[kMaxParams];
     const int n = paramsForStage(static_cast<Stage>(stage_), params, kMaxParams);
     if (param_ < 0 || param_ >= n) {
@@ -771,16 +778,12 @@ void UIInstrumentPage::stepParam(int steps) {
         return;
     }
 
-    const int32_t delta = static_cast<int32_t>(steps) * kParamStep;
-    int32_t next = static_cast<int32_t>(p.value) + delta;
-    next = next < 0 ? 0 : (next > 65535 ? 65535 : next);
-    p.value = static_cast<uint16_t>(next);
-
-    // Values live in the table this function rebuilt, so persist them back into
-    // the page's own copy before sending. Kept in one place rather than a
-    // parallel array so the table stays the single description of the chain.
-    stage_values_[stage_][param_] = p.value;
-
+    const bool amp = stage_ == static_cast<int>(Stage::Amp);
+    const int high = amp ? (param_ == 0 ? 64000 : 1000) : 65535;
+    p.value = static_cast<int32_t>(std::clamp<int64_t>(
+        static_cast<int64_t>(p.value) + static_cast<int64_t>(steps) * (amp ? 10 : kParamStep),
+        0,
+        high));
     sendParam(p);
     refreshParams();
 }
@@ -865,34 +868,30 @@ std::array<Softkey, NUM_SOFTKEYS> UIInstrumentPage::getSoftkeys() {
         keys[5] = {"Pad Map",
                    [] { UINavigator::instance().push(createPadMapPage()); },
                    !oscillator_.Dirty() && !oscillator_.Pending(),
-                   "Apply or revert oscillator edits"};
+                   "Updating sound..."};
     if (modStage()) {
         const bool env = modulator_.Envelope();
         const bool navigating = !modulator_.Dirty() && !modulator_.Pending();
         keys[1] = {env ? "< Env" : "< Slot",
                    [this] { selectModulator(modulator_.Index() - 1); },
                    navigating && modulator_.Index() > 0,
-                   "Apply or revert the draft"};
+                   "Updating sound..."};
         keys[2] = {env ? "Env >" : "Slot >",
                    [this] { selectModulator(modulator_.Index() + 1); },
                    navigating && modulator_.Index() < (env ? 2 : 7),
-                   "Apply or revert the draft"};
+                   "Updating sound..."};
         keys[3] = {"Apply",
-                   [this] { applyModulator(); },
-                   alive_ && modulator_.Editable() && modulator_.Dirty(),
-                   "Adjust a value first"};
+                   [this] { soundAction(WaveX::Protocol::INST_EDIT_APPLY); },
+                   alive_ && sound_.Dirty() && !draftActive(),
+                   "No edits"};
         keys[4] = {"Revert",
-                   [this] {
-                       modulator_.Revert();
-                       refreshModulator();
-                       UINavigator::instance().refreshSoftkeys();
-                   },
-                   modulator_.Dirty() && !modulator_.Pending(),
-                   "No draft"};
+                   [this] { soundAction(WaveX::Protocol::INST_EDIT_REVERT); },
+                   alive_ && sound_.Dirty() && !draftActive(),
+                   "No edits"};
         keys[5] = env ? Softkey{"Mod",
                                 [this] { moveStage(static_cast<int>(Stage::Mod) - stage_); },
                                 navigating,
-                                "Apply or revert the draft"}
+                                "Updating sound..."}
                       : Softkey{"Clear",
                                 [this] {
                                     modulator_.Clear();
@@ -923,33 +922,39 @@ std::array<Softkey, NUM_SOFTKEYS> UIInstrumentPage::getShiftedSoftkeys() {
                        UINavigator::instance().push(page);
                }};
     keys[3].enabled = keys[4].enabled = !draftActive();
-    keys[3].why = keys[4].why = "Apply or revert the draft";
+    keys[3].why = keys[4].why = "Updating sound...";
     if (stage_ == static_cast<int>(Stage::Oscillator)) {
         const bool ready = alive_ && oscillator_.Editable();
         const bool navigating = !oscillator_.Dirty() && !oscillator_.Pending();
-        keys[1] = {"Apply",
-                   [this] { applyOscillator(WaveX::Protocol::INST_OSC_SET); },
-                   ready && oscillator_.Dirty(),
-                   "Adjust a value first"};
-        keys[2] = {"Revert",
-                   [this] {
-                       oscillator_.Revert();
-                       refreshOscillator();
-                       UINavigator::instance().refreshSoftkeys();
-                   },
-                   oscillator_.Dirty() && !oscillator_.Pending(),
-                   "No draft"};
         keys[3].enabled = keys[4].enabled = navigating;
-        keys[3].why = keys[4].why = "Apply or revert oscillator edits";
+        keys[3].why = keys[4].why = "Updating sound...";
         keys[5] = {"Copy Other",
                    [this] { applyOscillator(WaveX::Protocol::INST_OSC_COPY_EMPTY); },
                    ready && navigating && oscillator_.Snapshot().zones == 0,
                    "Select an empty oscillator"};
     }
+    keys[1] = {"Apply",
+               [this] { soundAction(WaveX::Protocol::INST_EDIT_APPLY); },
+               alive_ && sound_.Dirty() && !draftActive(),
+               "No edits"};
+    keys[2] = {"Revert",
+               [this] { soundAction(WaveX::Protocol::INST_EDIT_REVERT); },
+               alive_ && sound_.Dirty() && !draftActive(),
+               "No edits"};
     return keys;
 }
 
 void UIInstrumentPage::onTrackChanged() {
+    if (draftActive() && alive_) {
+        track_change_pending_ = true;
+        return;
+    }
+    track_change_pending_ = false;
+    display_track_ = getCurrentTrack();
+    sound_.Reset(display_track_);
+    requested_action_ = 0;
+    action_read_id_ = 0;
+    readSound();
     modulator_.Reset(currentTrack());
     modulator_.Select(stage_ != static_cast<int>(Stage::Mod),
                       stage_ == static_cast<int>(Stage::Mod) ? selected_slot_ : selected_env_);
@@ -969,6 +974,9 @@ void UIInstrumentPage::tick(lv_timer_t* timer) {
     auto* page = static_cast<UIInstrumentPage*>(lv_timer_get_user_data(timer));
     page->serviceOscillator();
     page->serviceModulator();
+    page->serviceSound();
+    if (page->track_change_pending_ && !page->draftActive())
+        page->onTrackChanged();
 }
 void UIInstrumentPage::readOscillator() {
     if (!alive_)
@@ -984,20 +992,32 @@ void UIInstrumentPage::serviceOscillator() {
     if (alive != alive_) {
         alive_ = alive;
         oscillator_.Reset(currentTrack(), oscillator_.Snapshot().oscillator);
+        sound_.Reset(currentTrack());
+        requested_action_ = 0;
+        action_read_id_ = 0;
         modulator_.Reset(currentTrack());
         modulator_.Select(stage_ != static_cast<int>(Stage::Mod),
                           stage_ == static_cast<int>(Stage::Mod) ? selected_slot_ : selected_env_);
         mod_pending_at_ = 0;
         pending_at_ = 0;
         changed = true;
-        if (alive_)
+        if (alive_) {
             readOscillator();
+            readSound();
+        }
     }
+    const bool was_pending = oscillator_.Pending();
     WaveX::Protocol::InstOscSyncMessage received;
     if (alive_ && inter_mcu_get_oscillator(&received) && oscillator_.Accept(received)) {
         changed = true;
-        if (!oscillator_.Pending())
+        if (was_pending && !oscillator_.Pending() && !received.error) {
+            sound_.AdoptRevision(received.revision);
+            modulator_.AdoptRevision(received.revision);
+        }
+        if (!oscillator_.Pending()) {
             pending_at_ = 0;
+            readSound();
+        }
     }
     const uint32_t now = lv_tick_get();
     if (oscillator_.Pending() && static_cast<uint32_t>(now - pending_at_) >= 5000) {
@@ -1012,6 +1032,9 @@ void UIInstrumentPage::serviceOscillator() {
     if (alive_ && static_cast<uint32_t>(now - read_at_) >= 300 &&
         (stage_ == static_cast<int>(Stage::Oscillator) || oscillator_.Pending()))
         readOscillator();
+    if (alive_ && oscillator_.Ready() && oscillator_.Dirty() && !modulator_.Pending() &&
+        !sound_.Pending() && !requested_action_)
+        applyOscillator(WaveX::Protocol::INST_OSC_SET);
     if (changed) {
         refreshHeader();
         refreshParams();
@@ -1028,7 +1051,7 @@ void UIInstrumentPage::selectOscillator(uint8_t oscillator) {
     UINavigator::instance().refreshSoftkeys();
 }
 void UIInstrumentPage::applyOscillator(uint8_t operation) {
-    if (!alive_ || !oscillator_.Editable() ||
+    if (!alive_ || !oscillator_.Ready() || !oscillator_.Editable() ||
         (operation == WaveX::Protocol::INST_OSC_SET && !oscillator_.Dirty()) ||
         (operation == WaveX::Protocol::INST_OSC_COPY_EMPTY &&
          (oscillator_.Dirty() || oscillator_.Snapshot().zones)))
@@ -1075,13 +1098,13 @@ void UIInstrumentPage::refreshOscillator() {
         valueTileSetFocus(tile, i == param_);
     }
     const char* message = !alive_                  ? "Audio engine disconnected"
-                          : oscillator_.Pending()  ? "Applying..."
+                          : oscillator_.Pending()  ? "Updating sound..."
                           : timed_out_             ? "Reply timed out; showing refreshed settings"
                           : !oscillator_.Valid()   ? "Reading oscillator..."
                           : !state.valid           ? "Load an Instrument from Browse"
                           : state.busy             ? "Instrument is busy"
                           : oscillator_.Conflict() ? "Instrument changed; draft discarded"
-                          : oscillator_.Dirty()    ? "Draft: Shift > Apply or Revert"
+                          : oscillator_.Dirty()    ? "Updating sound..."
                           : state.error            ? "Edit rejected; showing current settings"
                           : state.type == 2        ? "Wavetable playback is not available yet"
                           : state.zones == 0
@@ -1102,6 +1125,86 @@ void UIInstrumentPage::refreshOscillator() {
         lv_label_set_text(oscillator_status_, status);
 }
 
+void UIInstrumentPage::readSound() {
+    if (!alive_)
+        return;
+    const auto request = sound_.Request(nextId(), WaveX::Protocol::INST_EDIT_GET);
+    if (inter_mcu_send_instrument_edit(request) == ESP_OK) {
+        sound_.Expect(request.request_id);
+        if (requested_action_ && !sound_.Pending())
+            action_read_id_ = request.request_id;
+    }
+    sound_read_at_ = lv_tick_get();
+}
+void UIInstrumentPage::sendSound(uint8_t op) {
+    if (!alive_ || !sound_.Ready())
+        return;
+    const auto request = sound_.Request(nextId(), op);
+    if (inter_mcu_send_instrument_edit(request) != ESP_OK) {
+        refreshStatus("Send failed");
+        return;
+    }
+    sound_.Sent(request.request_id, op);
+    sound_pending_at_ = sound_read_at_ = lv_tick_get();
+    if (op == WaveX::Protocol::INST_EDIT_APPLY || op == WaveX::Protocol::INST_EDIT_REVERT)
+        action_read_id_ = 0;
+}
+void UIInstrumentPage::soundAction(uint8_t op) {
+    if (!alive_ || draftActive() || !sound_.Dirty())
+        return;
+    requested_action_ = op;
+    sound_pending_at_ = lv_tick_get();
+    readSound();  // A fresh revision includes the last preview in any tab.
+    UINavigator::instance().refreshSoftkeys();
+}
+void UIInstrumentPage::serviceSound() {
+    bool changed = false;
+    const bool was_pending = sound_.Pending();
+    WaveX::Protocol::InstEditSyncMessage received;
+    if (alive_ && inter_mcu_get_instrument_edit(&received) && sound_.Accept(received)) {
+        changed = true;
+        if (was_pending && !sound_.Pending() && !received.error && !requested_action_) {
+            oscillator_.AdoptRevision(received.revision);
+            modulator_.AdoptRevision(received.revision);
+        }
+        if (requested_action_ && !sound_.Pending()) {
+            if (action_read_id_ && received.request_id == action_read_id_) {
+                sendSound(requested_action_);
+            } else if (!action_read_id_) {
+                requested_action_ = 0;
+                status_[0] = 0;
+                oscillator_.Reset(currentTrack(), oscillator_.Snapshot().oscillator);
+                const bool envelope = modulator_.Envelope();
+                const uint8_t index = modulator_.Index();
+                modulator_.Reset(currentTrack());
+                modulator_.Select(envelope, index);
+                readOscillator();
+                readModulator();
+            }
+        }
+    }
+    const uint32_t now = lv_tick_get();
+    if ((sound_.Pending() || requested_action_) &&
+        static_cast<uint32_t>(now - sound_pending_at_) >= 5000) {
+        sound_.Reset(currentTrack());
+        requested_action_ = 0;
+        action_read_id_ = 0;
+        refreshStatus("Readback timed out; checking sound");
+        readSound();
+        changed = true;
+    }
+    if (sound_.Outgoing() && sound_.Ready() && !oscillator_.Pending() && !modulator_.Pending() &&
+        !requested_action_)
+        sendSound(sound_.Operation());
+    if (alive_ && static_cast<uint32_t>(now - sound_read_at_) >= 300)
+        readSound();
+    if (changed) {
+        refreshHeader();
+        refreshParams();
+        UINavigator::instance().refreshSoftkeys();
+    }
+}
+
 void UIInstrumentPage::readModulator() {
     if (!alive_)
         return;
@@ -1112,11 +1215,18 @@ void UIInstrumentPage::readModulator() {
 }
 void UIInstrumentPage::serviceModulator() {
     bool changed = false;
+    const bool was_pending = modulator_.Pending();
     WaveX::Protocol::InstModSyncMessage received;
     if (alive_ && inter_mcu_get_modulator(&received) && modulator_.Accept(received)) {
         changed = true;
-        if (!modulator_.Pending())
+        if (was_pending && !modulator_.Pending() && !received.error) {
+            sound_.AdoptRevision(received.revision);
+            oscillator_.AdoptRevision(received.revision);
+        }
+        if (!modulator_.Pending()) {
             mod_pending_at_ = 0;
+            readSound();
+        }
     }
     const uint32_t now = lv_tick_get();
     if (modulator_.Pending() && static_cast<uint32_t>(now - mod_pending_at_) >= 5000) {
@@ -1132,6 +1242,9 @@ void UIInstrumentPage::serviceModulator() {
     if (alive_ && static_cast<uint32_t>(now - mod_read_at_) >= 300 &&
         (modStage() || modulator_.Pending()))
         readModulator();
+    if (alive_ && modulator_.Ready() && modulator_.Dirty() && !oscillator_.Pending() &&
+        !sound_.Pending() && !requested_action_)
+        applyModulator();
     if (changed && modStage()) {
         refreshModulator();
         UINavigator::instance().refreshSoftkeys();
@@ -1151,7 +1264,7 @@ void UIInstrumentPage::selectModulator(int index) {
     UINavigator::instance().refreshSoftkeys();
 }
 void UIInstrumentPage::applyModulator() {
-    if (!alive_ || !modulator_.Editable() || !modulator_.Dirty())
+    if (!alive_ || !modulator_.Ready() || !modulator_.Editable() || !modulator_.Dirty())
         return;
     const auto request = modulator_.Request(nextId());
     if (!WaveX::Protocol::IsValidInstModOp(request)) {
@@ -1230,13 +1343,13 @@ void UIInstrumentPage::refreshModulator() {
         refreshEnvCurve();
     const auto& state = modulator_.Snapshot();
     const char* message = !alive_                          ? "Audio engine disconnected"
-                          : modulator_.Pending()           ? "Applying..."
+                          : modulator_.Pending()           ? "Updating sound..."
                           : mod_timed_out_                 ? "Reply timed out; settings refreshed"
                           : !modulator_.Valid()            ? "Reading..."
                           : !state.valid                   ? "Load an Instrument"
                           : state.busy                     ? "Instrument is busy"
                           : modulator_.Conflict()          ? "Instrument changed; draft discarded"
-                          : modulator_.Dirty()             ? "Draft: Apply or Revert"
+                          : modulator_.Dirty()             ? "Updating sound..."
                           : state.error                    ? "Edit rejected; current settings shown"
                           : env && modulator_.Index() == 0 ? "Amp envelope"
                           : env                            ? "Route through Mod"
@@ -1254,6 +1367,14 @@ void UIInstrumentPage::refreshModulator() {
 size_t UIInstrumentPage::consoleState(char* out, size_t cap, size_t len) {
     using namespace WaveX::Debug;
     len = AppendKvText(out, cap, len, "tab", kStageNames[stage_]);
+    len = AppendKvInt(out, cap, len, "editready", alive_ && sound_.Ready());
+    len = AppendKvInt(out, cap, len, "editdirty", sound_.Dirty());
+    len = AppendKvInt(out, cap, len, "editpending", draftActive());
+    len = AppendKvInt(out, cap, len, "editerror", sound_.Snapshot().error);
+    len = AppendKvInt(out, cap, len, "instgain", sound_.Value(2));
+    len = AppendKvInt(out, cap, len, "instpan", sound_.Value(3));
+    len = AppendKvInt(out, cap, len, "instcutoff", sound_.Value(0));
+    len = AppendKvInt(out, cap, len, "instres", sound_.Value(1));
     if (modStage()) {
         len = AppendKvInt(out, cap, len, "modready", alive_ && modulator_.Ready());
         len = AppendKvInt(
@@ -1283,6 +1404,8 @@ size_t UIInstrumentPage::consoleState(char* out, size_t cap, size_t len) {
     return len;
 }
 bool UIInstrumentPage::consoleCommand(const char* args, char* reply, size_t cap) {
+    if (requested_action_ || track_change_pending_)
+        return false;
     char name[16], extra;
     char tab[16];
     int value;
@@ -1295,6 +1418,19 @@ bool UIInstrumentPage::consoleCommand(const char* args, char* reply, size_t cap)
             return true;
         }
         return false;
+    }
+    if (args &&
+        (stage_ == static_cast<int>(Stage::Amp) || stage_ == static_cast<int>(Stage::Filter)) &&
+        sscanf(args, "%15s %d %c", name, &value, &extra) == 2) {
+        const bool amp = stage_ == static_cast<int>(Stage::Amp);
+        const int field = !strcmp(name, amp ? "LEVEL" : "CUTOFF") ? (amp ? 2 : 0)
+                          : !strcmp(name, amp ? "PAN" : "RES")    ? (amp ? 3 : 1)
+                                                                  : -1;
+        if (field < 0 || !sound_.Set(static_cast<uint8_t>(field), value))
+            return false;
+        refreshParams();
+        snprintf(reply, cap, "ok");
+        return true;
     }
     if (args && modStage() && sscanf(args, "%15s %d %c", name, &value, &extra) == 2) {
         const bool env = modulator_.Envelope();

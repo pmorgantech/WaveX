@@ -5,8 +5,8 @@
 #include <cstring>
 
 namespace wavex_ui {
-// Backend snapshot + one explicit draft. No UI value becomes authoritative
-// until a revision-checked mutation is acknowledged.
+// Backend snapshot plus a coalesced outgoing preview. The backend retains
+// the Apply/Revert baseline; this model only tracks delivery.
 class OscillatorModel {
     using State = WaveX::Protocol::InstOscSyncMessage;
     using Settings = WaveX::Protocol::InstOscSettings;
@@ -17,9 +17,18 @@ class OscillatorModel {
         state_.track = track;
         state_.oscillator = oscillator;
     }
+    void AdoptRevision(uint32_t revision) {
+        if (valid_)
+            state_.revision = revision;
+    }
     void Expect(uint32_t id) { expected_ = id; }
-    void MutationSent(uint32_t id) { pending_ = expected_ = id; }
+    void MutationSent(uint32_t id) {
+        pending_ = expected_ = id;
+        sent_ = draft_;
+    }
     bool Accept(const State& s) {
+        if (valid_ && static_cast<int32_t>(s.revision - state_.revision) < 0)
+            return false;
         if (!expected_ || s.request_id != expected_ || s.track != state_.track ||
             s.oscillator != state_.oscillator || !s.revision || s.valid > 1 || s.busy > 1 ||
             s.type > 2 || s.zones > 32 || s.reserved || s.value.reserved ||
@@ -32,11 +41,14 @@ class OscillatorModel {
         const bool replaced = valid_ && s.revision != state_.revision;
         if (dirty_ && replaced && !completed)
             conflict_ = true;
+        const bool queued = pending_ && std::memcmp(&draft_, &sent_, sizeof(draft_)) != 0;
         state_ = s;
         valid_ = true;
         if (completed)
             pending_ = 0;
-        if (!dirty_ || replaced || completed) {
+        if (completed && queued && !s.error) {
+            dirty_ = std::memcmp(&draft_, &state_.value, sizeof(draft_)) != 0;
+        } else if ((!dirty_ && !pending_) || replaced || completed) {
             draft_ = state_.value;
             dirty_ = false;
         }
@@ -45,7 +57,7 @@ class OscillatorModel {
     const State& Snapshot() const { return state_; }
     bool Valid() const { return valid_; }
     bool Ready() const { return valid_ && !state_.busy && !pending_; }
-    bool Editable() const { return Ready() && state_.valid && state_.type != 2; }
+    bool Editable() const { return valid_ && !state_.busy && state_.valid && state_.type != 2; }
     bool Dirty() const { return dirty_; }
     bool Pending() const { return pending_ != 0; }
     bool Conflict() const { return conflict_; }
@@ -109,7 +121,7 @@ class OscillatorModel {
 
    private:
     State state_{};
-    Settings draft_{};
+    Settings draft_{}, sent_{};
     uint32_t expected_ = 0, pending_ = 0;
     bool valid_ = false, dirty_ = false, conflict_ = false;
 };

@@ -834,3 +834,14 @@ TEST_F(MessageDispatchTest, LfoDispatchRequiresExactPayload) {
     ASSERT_EQ(GetDispatchRecord().lfo_ops.size(), 1u);
     EXPECT_EQ(GetDispatchRecord().lfo_ops[0].request_id, 1u);
 }
+
+TEST_F(MessageDispatchTest, EditDispatchRequiresExactPayload) {
+    InstEditOpMessage m;
+    m.request_id = 1;
+    ProcessInterMcuMessage(
+        MSG_INST_EDIT_OP, 1, reinterpret_cast<const uint8_t*>(&m), sizeof(m) - 1);
+    EXPECT_TRUE(GetDispatchRecord().edit_ops.empty());
+    ProcessInterMcuMessage(MSG_INST_EDIT_OP, 1, reinterpret_cast<const uint8_t*>(&m), sizeof(m));
+    ASSERT_EQ(GetDispatchRecord().edit_ops.size(), 1u);
+    EXPECT_EQ(GetDispatchRecord().edit_ops[0].request_id, 1u);
+}

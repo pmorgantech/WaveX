@@ -816,6 +816,7 @@ class VoiceManager {
      * Release()/Choke() calls same as env1, so it needs no separate guard
      * either.)
      */
+    WAVEX_ITCM_CODE_NAMED("voice.TickModulation")
     void TickModulation(const ModSlotResolver& resolver,
                         const ModSources& global,
                         uint32_t block_size) {

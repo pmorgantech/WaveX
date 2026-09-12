@@ -63,7 +63,7 @@ TEST(OscillatorModel, AcknowledgementAndRejectionRestoreAuthoritativeValues) {
     EXPECT_EQ(request.revision, 3u);
     EXPECT_FLOAT_EQ(request.value.mix, .5f);
     m.MutationSent(12);
-    EXPECT_FALSE(m.Set(2, 5));
+    EXPECT_FALSE(m.Ready());
     auto s = snapshot();
     s.request_id = s.completed_request_id = 12;
     s.revision++;
@@ -101,4 +101,28 @@ TEST(OscillatorModel, PreservesUntouchedFloatsAndFullStoredRanges) {
     r = m.Request(13, INST_OSC_COPY_EMPTY);
     EXPECT_EQ(r.oscillator, 1);
     EXPECT_EQ(r.source, 0);
+}
+
+TEST(OscillatorModel, CoalescesFinalMotionIncludingReturningToOriginalValue) {
+    auto m = model();
+    ASSERT_TRUE(m.Set(1, 500));
+    m.MutationSent(12);
+    ASSERT_TRUE(m.Set(1, 0));
+    auto s = snapshot();
+    s.request_id = s.completed_request_id = 12;
+    s.revision++;
+    s.value.mix = .5f;
+    ASSERT_TRUE(m.Accept(s));
+    EXPECT_TRUE(m.Ready());
+    EXPECT_TRUE(m.Dirty());
+    EXPECT_EQ(m.Value(1), 0);
+    m.MutationSent(13);
+    s.request_id = s.completed_request_id = 13;
+    s.revision++;
+    s.value.mix = 0;
+    ASSERT_TRUE(m.Accept(s));
+    EXPECT_FALSE(m.Dirty());
+    auto stale = s;
+    stale.revision--;
+    EXPECT_FALSE(m.Accept(stale));
 }

@@ -13,6 +13,14 @@ versioning and release process.
 
 ### Added
 
+- Added automatic Instrument sound preview across the Osc, Env, Mod, Filter
+  and Amp editors, typed filter/amp readback, and per-Track Apply/Revert undo
+  for filter cutoff/resonance and Instrument trim gain/pan. Successful WXI
+  saves commit the audible working values while failed saves retain the undo
+  point; replacing an Instrument clears it. Existing held voices are not yet
+  expanded to receive these edits, and the LFO callback run remains REVIEW at
+  72.8827% peak with zero underruns.
+
 - Added backend runtime support for two per-voice LFOs with revisioned typed
   GET/SET snapshots, Q32 frame/beat timing, Hz and tempo-division rates,
   waveform, sync, retrigger, pitch-follow, delay and fade settings, appended
