@@ -261,6 +261,7 @@ struct VoiceTriggerParams : VoiceSampleParams {
     bool one_shot = false;
     float gain_mul = 1.0f, instrument_gain = 1.0f, zone_pan = .5f;
     float filter_cutoff_hz = 20000.0f, filter_resonance = 0.0f;
+    SvfFilter::Mode filter_mode = SvfFilter::Mode::LowPass;
     float attack_s = 0.001f, decay_s = 0.05f, sustain_level = 0.8f, release_s = 0.1f;
     float filter_env_attack_s = 0.001f, filter_env_decay_s = 0.05f;
     float filter_env_sustain_level = 0.8f, filter_env_release_s = 0.1f;
@@ -301,6 +302,7 @@ struct VoiceInstrumentParams {
         bool keytrack = true;
     };
     bool enabled = false;
+    SvfFilter::Mode filter_mode = SvfFilter::Mode::LowPass;
     float gain = 1, pan = .5f;
     Oscillator osc[2];
     VoiceAmpParams env[2];
@@ -448,6 +450,7 @@ class VoiceManager {
                 v.envelope.SetParams(amp.attack, amp.decay, amp.sustain, amp.release);
             }
             if (p.instrument.enabled && v.oscillator < 2) {
+                v.filter.SetMode(p.instrument.filter_mode);
                 v.gain = v.dry_gain * p.instrument.gain;
                 ApplySourceLive(v, p.instrument);
                 if (v.secondary.sample)
@@ -542,6 +545,7 @@ class VoiceManager {
             InitSource(v.secondary, params.secondary, VoicePitchScale(v));
 
         v.filter.SetConfig(filter_config_);
+        v.filter.SetMode(params.filter_mode);
         v.base_cutoff_hz = params.filter_cutoff_hz;
         v.filter.SetParameters(v.base_cutoff_hz, params.filter_resonance);
         v.filter.Reset();

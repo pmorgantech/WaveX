@@ -213,8 +213,9 @@ done. Open work, in the order decided 2026-09-05 (model doc §8: 7 → 4 → 5 �
    Phase 2 hardware gate.
 2. Voice architecture (stage 5): Osc 2 sample submix, its touch settings,
    both keyboard zone maps, Env 1–3, the eight-row matrix editor and the
-   backend runtime/typed transport for two per-voice LFOs are built. Complete
-   filter type and new mod destinations remain open. Instrument sound controls now preview
+   backend runtime/typed transport for two per-voice LFOs are built. The four
+   Instrument filter modes (LP, HP, BP and Notch) and their typed transport are
+   implemented; new mod destinations remain open. Instrument sound controls now preview
    automatically with typed filter/amp readback and a per-Track Apply/Revert
    undo point; supported controls now update held voices through the bounded
    handoff, while map/sample replacement retains its stop/next-note boundary.
@@ -223,7 +224,9 @@ done. Open work, in the order decided 2026-09-05 (model doc §8: 7 → 4 → 5 �
    fade controls. The held-note milestone is implemented and hardware-verified;
    The held-edit run on 328a419 reached 71.1283% peak and was REVIEW. The
    subsequent clean filter-cache run on 5466a96 reached 69.0852% peak and is
-   STAY; each future callback milestone requires a fresh full measurement.
+   STAY as a pre-filter-mode baseline; a fresh capacity gate is pending for
+   the four-mode implementation. Each future callback milestone requires a
+   fresh full measurement.
    Neither run closes the one-hour phase soak or permits a voice-count change.
 3. Bank (stage 6): the [WXCF Bank codec](features/bank-persistence.md) and
    bounded resident index are host-tested. SD working-copy management, Bank

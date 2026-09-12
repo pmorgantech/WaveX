@@ -33,28 +33,33 @@ class InstrumentEditModel {
         pending_ = expected_ = id;
         pending_op_ = op;
         sent_ = desired_;
+        sent_type_ = desired_type_;
     }
     bool Accept(const State& s) {
         if (valid_ && static_cast<int32_t>(s.revision - state_.revision) < 0)
             return false;
         if (!expected_ || s.request_id != expected_ || s.track != state_.track || !s.revision ||
             s.valid > 1 || s.busy > 1 || s.dirty > 1 || s.reserved[0] || s.reserved[1] ||
-            s.reserved[2] || !WaveX::Protocol::IsValidInstSound(s.sound))
+            s.filter_type > WaveX::Protocol::INST_FILTER_NOTCH ||
+            !WaveX::Protocol::IsValidInstSound(s.sound))
             return false;
         State previous = state_;
         if (valid_ && std::memcmp(&previous, &s, sizeof(s)) == 0)
             return false;
         const bool completed = pending_ && s.completed_request_id == pending_;
-        const bool queued = pending_ && std::memcmp(&sent_, &desired_, sizeof(Sound)) != 0;
+        const bool queued = pending_ && (sent_type_ != desired_type_ ||
+                                         std::memcmp(&sent_, &desired_, sizeof(Sound)) != 0);
         const bool replaced = valid_ && s.revision != state_.revision;
         state_ = s;
         valid_ = true;
         if (completed)
             pending_ = 0;
         if (completed && queued && !s.error && pending_op_ >= WaveX::Protocol::INST_EDIT_FILTER)
-            outgoing_ = std::memcmp(&desired_, &s.sound, sizeof(Sound)) != 0;
+            outgoing_ = desired_type_ != s.filter_type ||
+                        std::memcmp(&desired_, &s.sound, sizeof(Sound)) != 0;
         else if (completed || replaced || (!pending_ && !outgoing_)) {
             desired_ = s.sound;
+            desired_type_ = s.filter_type;
             outgoing_ = false;
         }
         return true;
@@ -62,6 +67,8 @@ class InstrumentEditModel {
     // UI units: cutoff/resonance retain the existing 16-bit dial domain;
     // gain and pan use thousandths and keep the saved Instrument range.
     int Value(uint8_t field) const {
+        if (field == 4)
+            return desired_type_;
         if (field == 0)
             return static_cast<int>(std::log(std::clamp(desired_.cutoff_hz, 20.f, 20000.f) / 20.f) /
                                         std::log(1000.f) * 65535.f +
@@ -73,8 +80,9 @@ class InstrumentEditModel {
         return static_cast<int>(desired_.pan * 1000 + .5f);
     }
     bool Set(uint8_t field, int value) {
-        if (!Editable() || field > 3 || value < 0 ||
-            value > (field < 2    ? 65535
+        if (!Editable() || field > 4 || value < 0 ||
+            value > (field == 4   ? 3
+                     : field < 2  ? 65535
                      : field == 2 ? 64000
                                   : 1000))
             return false;
@@ -86,8 +94,12 @@ class InstrumentEditModel {
             desired_.gain = value / 1000.f;
         if (field == 3)
             desired_.pan = value / 1000.f;
-        operation_ = field < 2 ? WaveX::Protocol::INST_EDIT_FILTER : WaveX::Protocol::INST_EDIT_AMP;
-        outgoing_ = std::memcmp(&desired_, &state_.sound, sizeof(Sound)) != 0;
+        if (field == 4)
+            desired_type_ = static_cast<uint8_t>(value);
+        operation_ = field < 2 || field == 4 ? WaveX::Protocol::INST_EDIT_FILTER_SETTINGS
+                                             : WaveX::Protocol::INST_EDIT_AMP;
+        outgoing_ = desired_type_ != state_.filter_type ||
+                    std::memcmp(&desired_, &state_.sound, sizeof(Sound)) != 0;
         return true;
     }
     WaveX::Protocol::InstEditOpMessage Request(uint32_t id, uint8_t op) const {
@@ -97,6 +109,7 @@ class InstrumentEditModel {
         r.track = state_.track;
         r.op = op;
         r.sound = desired_;
+        r.filter_type = op == WaveX::Protocol::INST_EDIT_FILTER_SETTINGS ? desired_type_ : 0;
         return r;
     }
 
@@ -104,7 +117,7 @@ class InstrumentEditModel {
     State state_{};
     Sound desired_{}, sent_{};
     uint32_t expected_ = 0, pending_ = 0;
-    uint8_t operation_ = 0, pending_op_ = 0;
+    uint8_t operation_ = 0, pending_op_ = 0, desired_type_ = 0, sent_type_ = 0;
     bool valid_ = false, outgoing_ = false;
 };
 }  // namespace wavex_ui

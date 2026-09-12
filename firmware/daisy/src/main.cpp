@@ -309,6 +309,7 @@ static void DispatchConsoleCommand(const WaveX::Debug::Command& c) {
             len = AppendKvInt(reply, sizeof(reply), len, "revision", state.revision);
             len = AppendKvInt(reply, sizeof(reply), len, "completed", state.completed_request_id);
             len = AppendKvInt(reply, sizeof(reply), len, "error", state.error);
+            len = AppendKvInt(reply, sizeof(reply), len, "mode", state.filter_type);
             len = AppendKvInt(
                 reply, sizeof(reply), len, "cutoff", static_cast<long>(state.sound.cutoff_hz));
             len = AppendKvInt(reply,

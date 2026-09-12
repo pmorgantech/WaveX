@@ -956,6 +956,7 @@ InstEditSyncMessage ReadEditState(uint8_t track) {
     out.completed_request_id = s_action_completed[track];
     out.error = s_action_error[track];
     out.dirty = s_sound_undo[track].Active();
+    out.filter_type = ins.filter.type;
     out.sound = {ins.filter.cutoff_hz, ins.filter.resonance, ins.trim_gain, ins.trim_pan};
     return out;
 }
@@ -986,11 +987,14 @@ bool OnEditOp(const InstEditOpMessage& request) {
         changed = s_sound_undo[request.track].Revert(ins);
         if (changed)
             PublishModSlots(request.track);
-    } else if (request.op == INST_EDIT_FILTER) {
-        changed = ins.filter.cutoff_hz != request.sound.cutoff_hz ||
+    } else if (request.op == INST_EDIT_FILTER || request.op == INST_EDIT_FILTER_SETTINGS) {
+        const uint8_t mode =
+            request.op == INST_EDIT_FILTER_SETTINGS ? request.filter_type : ins.filter.type;
+        changed = ins.filter.type != mode || ins.filter.cutoff_hz != request.sound.cutoff_hz ||
                   ins.filter.resonance != request.sound.resonance;
         if (changed) {
             s_sound_undo[request.track].Capture(ins);
+            ins.filter.type = mode;
             ins.filter.cutoff_hz = request.sound.cutoff_hz;
             ins.filter.resonance = request.sound.resonance;
         }

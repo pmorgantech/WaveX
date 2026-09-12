@@ -13,6 +13,13 @@ versioning and release process.
 
 ### Added
 
+- Added four Instrument-owned filter modes (low-pass, high-pass, band-pass and
+  notch) to the Filter editor and typed filter-settings transport. Mode,
+  cutoff and resonance share the existing preview, Apply/Revert and WXI save
+  path; the existing global bench slope and drive controls remain intact. The
+  normal host suites and filter-mode preview/Apply/Revert/WXI HIL coverage pass;
+  a fresh callback capacity gate for the mode implementation remains pending.
+
 - Added held-note live updates for Instrument gain/pan, oscillator level/mix/
   tuning/key tracking, Env 2/3 and both LFO settings. The prepared handoff
   preserves source cursors and loop/sample references, zone gain/tuning,

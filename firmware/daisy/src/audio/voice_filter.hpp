@@ -63,6 +63,8 @@ class VoiceFilter {
         mine_.Init(sample_rate_);
         dsp_.Init(static_cast<float>(sample_rate_));
         config_ = FilterConfig{};
+        mode_ = SvfFilter::Mode::LowPass;
+        mine_.SetMode(mode_);
         cutoff_hz_ = 20000.0f;
         resonance_ = 0.0f;
         ApplyConfig();
@@ -84,6 +86,11 @@ class VoiceFilter {
             Reset();
         }
     }
+    void SetMode(SvfFilter::Mode mode) {
+        mode_ = static_cast<uint8_t>(mode) <= 3 ? mode : SvfFilter::Mode::LowPass;
+        mine_.SetMode(mode_);
+    }
+    SvfFilter::Mode GetMode() const { return mode_; }
     const FilterConfig& GetConfig() const { return config_; }
 
     void SetCutoff(float hz) { SetParameters(hz, resonance_); }
@@ -108,11 +115,24 @@ class VoiceFilter {
         if (config_.topology == FilterTopology::WaveXSvf) {
             return mine_.Process(in);
         }
-        if (dsp_bypass_) {
-            return in;
+        if (dsp_boundary_) {
+            const bool pass =
+                dsp_boundary_ == 2
+                    ? mode_ == SvfFilter::Mode::LowPass || mode_ == SvfFilter::Mode::Notch
+                    : mode_ == SvfFilter::Mode::HighPass || mode_ == SvfFilter::Mode::Notch;
+            return pass ? in : 0.f;
         }
         dsp_.Process(in);
-        return dsp_.Low();
+        switch (mode_) {
+            case SvfFilter::Mode::HighPass:
+                return dsp_.High();
+            case SvfFilter::Mode::BandPass:
+                return dsp_.Band();
+            case SvfFilter::Mode::Notch:
+                return dsp_.Notch();
+            default:
+                return dsp_.Low();
+        }
     }
 
     // Clears state, keeps tuning and config.
@@ -145,8 +165,8 @@ class VoiceFilter {
 
     void TuneDsp() {
         const float nyquist = static_cast<float>(sample_rate_) * 0.5f;
-        dsp_bypass_ = cutoff_hz_ >= nyquist;
-        if (!dsp_bypass_) {
+        dsp_boundary_ = cutoff_hz_ >= nyquist ? 2 : cutoff_hz_ <= 0 ? 1 : 0;
+        if (!dsp_boundary_) {
             dsp_.SetFreq(cutoff_hz_);
             dsp_.SetRes(resonance_);
         }
@@ -156,7 +176,8 @@ class VoiceFilter {
     FilterConfig config_;
     float cutoff_hz_ = 20000.0f;
     float resonance_ = 0.0f;
-    bool dsp_bypass_ = true;
+    uint8_t dsp_boundary_ = 2;
+    SvfFilter::Mode mode_ = SvfFilter::Mode::LowPass;
 
     SvfFilter mine_;
     daisysp::Svf dsp_;

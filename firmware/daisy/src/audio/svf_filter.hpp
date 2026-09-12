@@ -95,6 +95,17 @@ namespace AudioEngine {
 class SvfFilter {
    public:
     enum class Slope : uint8_t { Db12, Db24 };
+    enum class Mode : uint8_t { LowPass = 0, HighPass = 1, BandPass = 2, Notch = 3 };
+    void SetMode(Mode mode) {
+        if (static_cast<uint8_t>(mode) > 3)
+            mode = Mode::LowPass;
+        if (mode != mode_) {
+            // Stage 1 has the same input in every mode; stage 2 does not.
+            ic3eq_ = ic4eq_ = 0;
+        }
+        mode_ = mode;
+    }
+    Mode GetMode() const { return mode_; }
 
     // Pre-gain into the soft clipper at drive = 1.0. 8x means a bandpass
     // term of 1/8 full scale already starts to round; at drive just above 0
@@ -165,13 +176,16 @@ class SvfFilter {
     float GetDrive() const { return drive_; }
 
     float Process(float in) {
-        if (bypass_)
-            return in;
+        if (boundary_) {
+            const bool pass = boundary_ == 2 ? mode_ == Mode::LowPass || mode_ == Mode::Notch
+                                             : mode_ == Mode::HighPass || mode_ == Mode::Notch;
+            return pass ? in : 0.f;
+        }
         float out = Stage(in, ic1eq_, ic2eq_);
         if (slope_ == Slope::Db24) {
             out = Stage(out, ic3eq_, ic4eq_);
         }
-        return out;  // lowpass output
+        return out;
     }
 
     // Clears the integrator state without touching the tuning. Called at
@@ -196,7 +210,12 @@ class SvfFilter {
         }
         ic1 = 2.0f * v1 - ic1;
         ic2 = 2.0f * v2 - ic2;
-        return v2;
+        if (mode_ == Mode::LowPass)
+            return v2;
+        if (mode_ == Mode::BandPass)
+            return v1;
+        const float notch = in - damping_ * v1;
+        return mode_ == Mode::Notch ? notch : notch - v2;
     }
 
     // x - x^3/3 on [-1, 1], +-2/3 outside: unit slope at 0, C1 at the clamp.
@@ -211,15 +230,20 @@ class SvfFilter {
     void UpdateCoeffs() {
         const float nyquist = static_cast<float>(sample_rate_) * 0.5f;
         if (cutoff_hz_ >= nyquist) {
-            bypass_ = true;
+            boundary_ = 2;
             return;
         }
-        bypass_ = false;
+        if (cutoff_hz_ <= 0) {
+            boundary_ = 1;
+            return;
+        }
+        boundary_ = 0;
 
         const float g =
             std::tan(3.14159265358979323846f * cutoff_hz_ / static_cast<float>(sample_rate_));
         const float q = kMinQ + resonance_ * (kMaxQ - kMinQ);
         const float k = 1.0f / q;
+        damping_ = k;
 
         a1_ = 1.0f / (1.0f + g * (g + k));
         a2_ = g * a1_;
@@ -229,7 +253,9 @@ class SvfFilter {
     uint32_t sample_rate_ = 48000;
     float cutoff_hz_ = 20000.0f;
     float resonance_ = 0.0f;
-    bool bypass_ = true;
+    uint8_t boundary_ = 2;  // 0 normal, 1 zero cutoff, 2 Nyquist/open
+    Mode mode_ = Mode::LowPass;
+    float damping_ = 2;
 
     // Coefficients (recomputed only when tuning changes, never per sample).
     float a1_ = 1.0f;

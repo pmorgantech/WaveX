@@ -113,11 +113,10 @@ enum class InstrumentOrigin : uint8_t {
 static constexpr uint8_t kInstrumentNameBytes = 24;
 
 // The Instrument's own filter settings - the defaults every zone follows
-// unless it sets ZONE_FLAG_OWN_FILTER_ENV. `type` is a placeholder for the
-// FilterType of stage 5: the field is here now so the FILT chunk of a file
-// written today loads unchanged once modes are selectable.
+// unless it sets ZONE_FLAG_OWN_FILTER_ENV. Filter type always belongs to the
+// Instrument; zones may override cutoff/envelope values, but never the mode.
 struct InstrumentFilter {
-    uint8_t type = 0;  // 0 = the 12 dB SVF lowpass, the only mode today
+    uint8_t type = Protocol::INST_FILTER_LP;  // Instrument-owned LP/HP/BP/Notch
     float cutoff_hz = 20000.0f;
     float resonance = 0.0f;
     float keytrack = 0.0f, env2_amount = 0.0f;
@@ -306,6 +305,7 @@ inline VoiceTriggerParams PrepareZoneTrigger(const Instrument& ins,
     p.aux_env_sustain_level = ins.env[2].sustain;
     p.aux_env_release_s = ins.env[2].release_s;
 
+    p.filter_mode = static_cast<SvfFilter::Mode>(ins.filter.type);
     if (zone.flags & ZONE_FLAG_OWN_FILTER_ENV) {
         // The zone carries its own - an imported SFZ region, or a pad
         // the user has overridden. Note it has no resonance field of its
@@ -338,6 +338,7 @@ inline void PrepareInstrumentLive(const Instrument& ins, VoiceLiveParams& live) 
     live.release_s = ins.env[0].release_s;
     auto& p = live.instrument;
     p.enabled = ins.origin != InstrumentOrigin::None;
+    p.filter_mode = static_cast<SvfFilter::Mode>(ins.filter.type);
     p.gain = ins.trim_gain;
     p.pan = ins.trim_pan;
     const float mix = std::clamp(ins.osc_mix, 0.f, 1.f);

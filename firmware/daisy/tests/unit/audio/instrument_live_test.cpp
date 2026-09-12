@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include "audio/instrument.hpp"
+#include "audio/instrument_sound_undo.hpp"
 #include "audio/parameter_locks.hpp"
 #include "audio/sequencer_voice_map.hpp"
 #include <array>
@@ -172,3 +173,27 @@ TEST_F(InstrumentLiveTest, PreparedMapRetainsActualNoteWhenKeyTrackingStartsDisa
     EXPECT_FLOAT_EQ(vm.GetVoice(0).increment, 2);
 }
 }  // namespace
+
+TEST_F(InstrumentLiveTest, FilterModeFollowsOnlyItsInstrumentAndRevertPreservesCursor) {
+    using Mode = SvfFilter::Mode;
+    ins.filter.cutoff_hz = 1000;
+    auto first = TriggerParams();
+    auto other = first;
+    other.track = 1;
+    vm.Trigger(first);
+    vm.Trigger(other);
+    Render();
+    const auto frame = vm.GetVoice(0).phase.Frame();
+    InstrumentSoundUndo undo;
+    undo.Capture(ins);
+    ins.filter.type = WaveX::Protocol::INST_FILTER_HP;
+    Live();
+    EXPECT_EQ(vm.GetVoice(0).filter.GetMode(), Mode::HighPass);
+    EXPECT_EQ(vm.GetVoice(1).filter.GetMode(), Mode::LowPass);
+    EXPECT_EQ(vm.GetVoice(0).phase.Frame(), frame);
+    EXPECT_EQ(TriggerParams().filter_mode, Mode::HighPass);
+    ASSERT_TRUE(undo.Revert(ins));
+    Live();
+    EXPECT_EQ(vm.GetVoice(0).filter.GetMode(), Mode::LowPass);
+    EXPECT_EQ(vm.GetVoice(0).phase.Frame(), frame);
+}

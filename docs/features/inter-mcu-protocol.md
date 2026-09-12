@@ -269,9 +269,23 @@ replacing the Instrument clears it.
 The frontend coalesces edits and uses the common Edited marker/actions. Page
 navigation waits for an outstanding delivery, not for Apply/Revert, so the
 working sound remains audible while the user moves among Osc, Env, Mod, Filter
-and Amp. Expansion of these edits to already-held voices is still open; the
-current live behavior applies to future triggers and existing Env 1/filter/
-matrix paths.
+and Amp. Held-note updates use the bounded live handoff described in
+`instrument-model.md`; map/sample assignment and Instrument replacement retain
+their stop/next-note boundaries.
+
+The filter edit group supports four Instrument-owned modes: `LP` (0), `HP`
+(1), `BP` (2) and `Notch` (3). `INST_EDIT_FILTER_SETTINGS` (op 5) carries
+cutoff, resonance and the mode in the former reserved byte at offset 10;
+that byte is zero for every other edit op. The sync message returns the mode
+in its former reserved byte at offset 17, with the remaining reserved bytes
+zero. The packed payload sizes remain 28 bytes for the edit request and 36
+bytes for sync. Modes outside 0–3 and nonzero reserved fields are rejected;
+legacy filter edits preserve the current mode.
+
+Because this changes the meaning of a formerly reserved byte, the frontend
+and Daisy images must be deployed as a pair. A peer that does not understand
+op 5 or the returned mode byte is not a compatible mixed-version endpoint;
+the reserved bytes remain zero for all other operations.
 
 ## Per-step notes (protocol 6)
 

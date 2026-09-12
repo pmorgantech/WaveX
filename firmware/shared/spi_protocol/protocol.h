@@ -2059,7 +2059,14 @@ enum InstEditOp : uint8_t {
     INST_EDIT_APPLY = 1,
     INST_EDIT_REVERT = 2,
     INST_EDIT_FILTER = 3,
-    INST_EDIT_AMP = 4
+    INST_EDIT_AMP = 4,
+    INST_EDIT_FILTER_SETTINGS = 5  // cutoff/resonance plus filter_type
+};
+enum InstFilterType : uint8_t {
+    INST_FILTER_LP = 0,
+    INST_FILTER_HP = 1,
+    INST_FILTER_BP = 2,
+    INST_FILTER_NOTCH = 3
 };
 struct InstSoundSettings {
     float cutoff_hz = 20000, resonance = 0, gain = 1, pan = .5f;
@@ -2067,7 +2074,7 @@ struct InstSoundSettings {
 struct InstEditOpMessage {
     uint32_t request_id = 0, revision = 0;
     uint8_t track = 0, op = INST_EDIT_GET;
-    uint16_t reserved = 0;
+    uint8_t filter_type = INST_FILTER_LP, reserved = 0;
     InstSoundSettings sound;
     InstEditOpMessage() {}
     InstEditOpMessage(uint32_t id,
@@ -2080,7 +2087,7 @@ struct InstEditOpMessage {
 struct InstEditSyncMessage {
     uint32_t request_id = 0, completed_request_id = 0, revision = 0;
     uint8_t track = 0, valid = 0, busy = 0, error = 0;
-    uint8_t dirty = 0, reserved[3] = {};
+    uint8_t dirty = 0, filter_type = INST_FILTER_LP, reserved[2] = {};
     InstSoundSettings sound;
     InstEditSyncMessage() {}
     InstEditSyncMessage(uint32_t id,
@@ -2109,13 +2116,15 @@ inline bool IsValidInstSound(const InstSoundSettings& s) {
            s.gain >= 0 && s.gain <= 64 && s.pan >= 0 && s.pan <= 1;
 }
 inline bool IsValidInstEditOp(const InstEditOpMessage& m) {
-    if (!m.request_id || m.track >= 16 || m.op > INST_EDIT_AMP || m.reserved)
+    if (!m.request_id || m.track >= 16 || m.op > INST_EDIT_FILTER_SETTINGS || m.reserved ||
+        (m.op == INST_EDIT_FILTER_SETTINGS ? m.filter_type > INST_FILTER_NOTCH
+                                           : m.filter_type != 0))
         return false;
     if (m.op == INST_EDIT_GET)
         return true;
     if (!m.revision)
         return false;
-    if (m.op == INST_EDIT_FILTER)
+    if (m.op == INST_EDIT_FILTER || m.op == INST_EDIT_FILTER_SETTINGS)
         return m.sound.cutoff_hz >= 0 && m.sound.cutoff_hz <= 96000 && m.sound.resonance >= 0 &&
                m.sound.resonance <= 1;
     if (m.op == INST_EDIT_AMP)

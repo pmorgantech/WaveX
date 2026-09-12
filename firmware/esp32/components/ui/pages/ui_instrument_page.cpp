@@ -30,6 +30,8 @@ uint32_t nextId() {
         ++id;
     return id;
 }
+constexpr uint8_t kParamFilterMode = 0xFC;  // page-local field, never a control-change id
+constexpr const char* filterModes[] = {"Low-pass", "High-pass", "Band-pass", "Notch"};
 constexpr const char* envelopeFields[] = {"ATTACK", "DECAY", "SUSTAIN", "RELEASE"};
 constexpr const char* slotFields[] = {"SOURCE", "DEST", "DEPTH", "CURVE", "POLARITY"};
 constexpr uint8_t liveSources[] = {0, 1, 2, 15, 3, 16, 6, 17, 4, 7};
@@ -162,7 +164,7 @@ int UIInstrumentPage::paramsForStage(Stage s, Param* out, int max) const {
         case Stage::Filter:
             add("CUTOFF", WaveX::Protocol::PARAM_FILTER_CUTOFF, sound_.Value(0), "%");
             add("RES", WaveX::Protocol::PARAM_FILTER_RESONANCE, sound_.Value(1), "%");
-            add("ENV->FLT", kParamNone, 0, "");
+            add("TYPE", kParamFilterMode, sound_.Value(4), "");
             break;
         case Stage::Mod:
             add("SLOT", kParamModulator, selected_slot_ + 1, "");
@@ -412,7 +414,7 @@ void UIInstrumentPage::buildStageRows(int stage) {
                                        kBodyPadTop,
                                        kContentW,
                                        kFilterCurveH,
-                                       "LOW-PASS RESPONSE",
+                                       "FILTER RESPONSE",
                                        "20 Hz - 20 kHz",
                                        filter_pts_,
                                        kFilterCurvePoints);
@@ -528,10 +530,8 @@ void UIInstrumentPage::refreshEnvCurve() {
     lv_line_set_points(env_curve_, env_pts_, kEnvCurvePoints);
 }
 
-// A one-pole low-pass magnitude response with a resonant peak at the corner.
-// Not the engine's actual filter transfer function - the engine does not
-// publish one - so this is a shape that moves correctly with the two controls,
-// which is what the pane is for. It must not be read as a measurement.
+// Illustrative mode/cutoff/resonance shape. This is not the engine's actual
+// transfer function or a measured response.
 void UIInstrumentPage::refreshFilterCurve() {
     if (!filter_curve_ || !lv_obj_is_valid(filter_curve_)) {
         return;
@@ -552,7 +552,14 @@ void UIInstrumentPage::refreshFilterCurve() {
 
     for (int i = 0; i < kFilterCurvePoints; ++i) {
         const float t = static_cast<float>(i) / static_cast<float>(kFilterCurvePoints - 1);
-        const float x = t - cutoff;  // octaves-ish either side of the corner
+        const int mode = sound_.Value(4);
+        float x = t - cutoff;  // illustrative shape, not a measured response
+        if (mode == 1)
+            x = -x;
+        if (mode == 2)
+            x = std::fabs(x);
+        if (mode == 3)
+            x = .25f - std::fabs(x);
         float y;
         if (x <= 0.0f) {
             // Below the corner: flat, lifted by the resonant peak as it nears.
@@ -673,7 +680,8 @@ void UIInstrumentPage::refreshParams() {
         const bool inert = (p.wire_param == kParamNone);
         const bool focused = (i == param_);
         const bool amp = stage_ == static_cast<int>(Stage::Amp);
-        const float frac = static_cast<float>(p.value) / (amp ? 1000.f : 65535.f);
+        const bool mode = p.wire_param == kParamFilterMode;
+        const float frac = static_cast<float>(p.value) / (mode ? 3.f : amp ? 1000.f : 65535.f);
 
         ValueTile& tile = tiles_[stage_][i];
         if (!tile.card) {
@@ -691,7 +699,10 @@ void UIInstrumentPage::refreshParams() {
         }
 
         char value[40];
-        snprintf(value, sizeof(value), "%d", static_cast<int>(frac * 100.0f + 0.5f));
+        if (mode)
+            snprintf(value, sizeof(value), "%s", filterModes[std::clamp<int>(p.value, 0, 3)]);
+        else
+            snprintf(value, sizeof(value), "%d", static_cast<int>(frac * 100.0f + 0.5f));
         valueTileSetValue(tile, value);
         valueTileSetFill(tile, std::clamp(frac, 0.f, 1.f));
         valueTileSetFocus(tile, focused);
@@ -718,7 +729,8 @@ void UIInstrumentPage::sendParam(const Param& p) {
         return;
     if (requested_action_)
         return;
-    const uint8_t field = p.wire_param == WaveX::Protocol::PARAM_FILTER_CUTOFF      ? 0
+    const uint8_t field = p.wire_param == kParamFilterMode                          ? 4
+                          : p.wire_param == WaveX::Protocol::PARAM_FILTER_CUTOFF    ? 0
                           : p.wire_param == WaveX::Protocol::PARAM_FILTER_RESONANCE ? 1
                           : p.wire_param == WaveX::Protocol::PARAM_GAIN             ? 2
                                                                                     : 3;
@@ -821,9 +833,12 @@ void UIInstrumentPage::stepParam(int steps) {
     }
 
     const bool amp = stage_ == static_cast<int>(Stage::Amp);
-    const int high = amp ? (param_ == 0 ? 64000 : 1000) : 65535;
+    const bool mode = p.wire_param == kParamFilterMode;
+    const int high = mode ? 3 : amp ? (param_ == 0 ? 64000 : 1000) : 65535;
     p.value = static_cast<int32_t>(std::clamp<int64_t>(
-        static_cast<int64_t>(p.value) + static_cast<int64_t>(steps) * (amp ? 10 : kParamStep),
+        static_cast<int64_t>(p.value) + static_cast<int64_t>(steps) * (mode  ? 1
+                                                                       : amp ? 10
+                                                                             : kParamStep),
         0,
         high));
     sendParam(p);
@@ -1556,6 +1571,7 @@ size_t UIInstrumentPage::consoleState(char* out, size_t cap, size_t len) {
     len = AppendKvInt(out, cap, len, "instpan", sound_.Value(3));
     len = AppendKvInt(out, cap, len, "instcutoff", sound_.Value(0));
     len = AppendKvInt(out, cap, len, "instres", sound_.Value(1));
+    len = AppendKvInt(out, cap, len, "filtermode", sound_.Value(4));
     if (lfoStage()) {
         len = AppendKvInt(out, cap, len, "lfoready", alive_ && lfo_.Ready());
         len = AppendKvInt(out, cap, len, "lfovalid", lfo_.Snapshot().valid);
@@ -1616,9 +1632,10 @@ bool UIInstrumentPage::consoleCommand(const char* args, char* reply, size_t cap)
         (stage_ == static_cast<int>(Stage::Amp) || stage_ == static_cast<int>(Stage::Filter)) &&
         sscanf(args, "%15s %d %c", name, &value, &extra) == 2) {
         const bool amp = stage_ == static_cast<int>(Stage::Amp);
-        const int field = !strcmp(name, amp ? "LEVEL" : "CUTOFF") ? (amp ? 2 : 0)
-                          : !strcmp(name, amp ? "PAN" : "RES")    ? (amp ? 3 : 1)
-                                                                  : -1;
+        const int field = !amp && !strcmp(name, "TYPE")             ? 4
+                          : !strcmp(name, amp ? "LEVEL" : "CUTOFF") ? (amp ? 2 : 0)
+                          : !strcmp(name, amp ? "PAN" : "RES")      ? (amp ? 3 : 1)
+                                                                    : -1;
         if (field < 0 || !sound_.Set(static_cast<uint8_t>(field), value))
             return false;
         refreshParams();

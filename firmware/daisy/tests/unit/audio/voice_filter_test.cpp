@@ -199,3 +199,57 @@ TEST(VoiceFilterTest, CombinedTuningPreservesSeparateSetterOutputAndState) {
         }
     }
 }
+
+TEST(VoiceFilterTest, ModesRejectTheExpectedFrequencyBands) {
+    using Mode = SvfFilter::Mode;
+    for (Mode mode: {Mode::LowPass, Mode::HighPass, Mode::BandPass, Mode::Notch}) {
+        auto f = MakeFilter(FilterTopology::WaveXSvf, 1000);
+        f.SetMode(mode);
+        const auto low = SteadyStatePeak(f, 100);
+        const auto center = SteadyStatePeak(f, 1000);
+        const auto high = SteadyStatePeak(f, 8000);
+        if (mode == Mode::LowPass) {
+            EXPECT_GT(low, .9f);
+            EXPECT_LT(high, .03f);
+        }
+        if (mode == Mode::HighPass) {
+            EXPECT_LT(low, .03f);
+            EXPECT_GT(high, .9f);
+        }
+        if (mode == Mode::BandPass) {
+            EXPECT_GT(center, 3 * low);
+            EXPECT_GT(center, 3 * high);
+        }
+        if (mode == Mode::Notch) {
+            EXPECT_LT(center, .001f);
+            EXPECT_GT(low, .9f);
+            EXPECT_GT(high, .9f);
+        }
+    }
+}
+TEST(VoiceFilterTest, ModeCutoffBoundariesAndResonantDriveStayFinite) {
+    using Mode = SvfFilter::Mode;
+    for (auto topology: kBoth) {
+        for (auto mode: {Mode::LowPass, Mode::HighPass, Mode::BandPass, Mode::Notch}) {
+            auto f = MakeFilter(topology, 1000, 1);
+            f.SetMode(mode);
+            auto cfg = f.GetConfig();
+            cfg.slope = SvfFilter::Slope::Db24;
+            cfg.drive = 1;
+            f.SetConfig(cfg);
+            for (int i = 0; i < 16000; ++i) {
+                if (i % 48 == 0)
+                    f.SetParameters(20.f + (i % 240) * 99.f, 1);
+                const float out = f.Process(std::sin(i * .1f));
+                ASSERT_TRUE(std::isfinite(out));
+                ASSERT_LT(std::fabs(out), 1000.f);
+            }
+            for (float hz: {0.f, 24000.f, 96000.f}) {
+                f.SetCutoff(hz);
+                const bool pass = hz == 0 ? mode == Mode::HighPass || mode == Mode::Notch
+                                          : mode == Mode::LowPass || mode == Mode::Notch;
+                EXPECT_FLOAT_EQ(f.Process(.37f), pass ? .37f : 0);
+            }
+        }
+    }
+}

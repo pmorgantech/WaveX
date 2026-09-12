@@ -267,6 +267,10 @@ before leaving the tab. Held LFO, oscillator, gain and Env 2/3 edits use the
 bounded live handoff, preserving source cursors, loop state and envelope/LFO
 phase. Map/sample assignment and Instrument replacement retain their
 stop/next-note boundary.
+The Filter tab's third control selects the Instrument-owned response mode:
+LP, HP, BP or Notch. It replaces the former inert Env Amount placeholder and
+coalesces mode, cutoff and resonance into the typed filter-settings edit;
+Apply/Revert and WXI save use the same audible working-copy path.
 The frontend suite passes 274 tests, and the two-board LFO HIL passes the
 save/readback flow (11.70 seconds). The inspected 1280×720 capture is
 `logs/instrument-lfo-20260912.png`.

@@ -80,3 +80,47 @@ TEST(InstrumentEditModel, RejectsNonfiniteReadbackAndPreservesStoredCutoffOnOthe
     EXPECT_FLOAT_EQ(r.sound.cutoff_hz, 96000);
     EXPECT_TRUE(IsValidInstEditOp(r));
 }
+
+TEST(InstrumentEditModel, FilterModeAndCutoffCoalesceAndExternalReplacementWins) {
+    InstrumentEditModel m;
+    m.Reset(0);
+    m.Expect(10);
+    InstEditSyncMessage s;
+    s.request_id = 10;
+    s.revision = 7;
+    s.valid = 1;
+    ASSERT_TRUE(m.Accept(s));
+    ASSERT_TRUE(m.Set(4, INST_FILTER_HP));
+    auto r = m.Request(11, m.Operation());
+    EXPECT_EQ(r.op, INST_EDIT_FILTER_SETTINGS);
+    EXPECT_EQ(r.filter_type, INST_FILTER_HP);
+    m.Sent(11, r.op);
+    ASSERT_TRUE(m.Set(0, 20000));
+    ASSERT_TRUE(m.Set(4, INST_FILTER_NOTCH));
+    s.request_id = s.completed_request_id = 11;
+    ++s.revision;
+    s.filter_type = INST_FILTER_HP;
+    ASSERT_TRUE(m.Accept(s));
+    ASSERT_TRUE(m.Outgoing());
+    r = m.Request(12, m.Operation());
+    EXPECT_EQ(r.filter_type, INST_FILTER_NOTCH);
+    EXPECT_NE(r.sound.cutoff_hz, s.sound.cutoff_hz);
+    ASSERT_TRUE(IsValidInstEditOp(r));
+    m.Sent(12, r.op);
+    s.request_id = s.completed_request_id = 12;
+    ++s.revision;
+    s.filter_type = r.filter_type;
+    s.sound = r.sound;
+    ASSERT_TRUE(m.Accept(s));
+    EXPECT_FALSE(m.Outgoing());
+    m.Expect(13);
+    s.request_id = 13;
+    ++s.revision;
+    s.filter_type = INST_FILTER_BP;
+    ASSERT_TRUE(m.Accept(s));
+    EXPECT_EQ(m.Value(4), INST_FILTER_BP);
+    m.Expect(14);
+    s.request_id = 14;
+    s.filter_type = 4;
+    EXPECT_FALSE(m.Accept(s));
+}
