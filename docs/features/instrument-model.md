@@ -359,7 +359,13 @@ continues to read zero for wire compatibility.
 
 Typed revisioned GET/SET snapshots carry these settings and WXI retention
 accepts legacy 15-byte LFO records by defaulting the missing pitch-follow field
-to zero; new records use 16 bytes. The current host/build and two-board recall
-checks cover this backend foundation. The LFO touch tab and live Apply/Revert
-audition flow are still open, so saved settings have no claim of completed
-panel editing or audible audition behavior.
+to zero; new records use 16 bytes. The ESP32 LFO page presents eight tiles in
+two rows of four for the selector and seven settings, and shares the common
+sound Apply/Revert transport. Edits preview automatically, and a successful
+WXI save persists the audible working copy. Held LFO, oscillator, gain and Env
+2/3 voices still use their trigger snapshot; expanding these edits to already
+held voices remains open.
+The frontend suite passes 274 tests, and the two-board LFO HIL verifies the
+transport, automatic preview and WXI readback (11.70 seconds). The inspected
+1280×720 capture is `logs/instrument-lfo-20260912.png`; all eight tiles fit
+without clipping.

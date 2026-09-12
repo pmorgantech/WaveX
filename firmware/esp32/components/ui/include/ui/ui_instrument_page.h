@@ -5,6 +5,7 @@
 #include "components/ui_value_tile.h"
 #include "input_event.h"
 #include "instrument_edit_model.h"
+#include "lfo_model.h"
 #include "modulator_model.h"
 #include "oscillator_model.h"
 #include "spi_protocol/protocol.h"
@@ -34,12 +35,12 @@ class UIInstrumentPage : public UIPage {
     const char* contextLine() const override { return context_line_; }
 
     // Tabs share the selected Instrument.
-    enum class Stage : uint8_t { Oscillator = 0, Envelopes, Amp, Filter, Mod, kCount };
+    enum class Stage : uint8_t { Oscillator = 0, Envelopes, Amp, Filter, Mod, Lfo, kCount };
 
    private:
     static constexpr int kStageCount = static_cast<int>(Stage::kCount);
     // Oscillator selection plus five settings.
-    static constexpr int kMaxParams = 6;
+    static constexpr int kMaxParams = 8;
 
     // CC-backed controls and a sentinel for the revisioned oscillator editor.
     struct Param {
@@ -90,6 +91,13 @@ class UIInstrumentPage : public UIPage {
     int32_t stage_values_[kStageCount][kMaxParams] = {};
     bool values_seeded_ = false;
 
+    LfoModel lfo_;
+    uint32_t lfo_read_at_ = 0, lfo_pending_at_ = 0;
+    bool lfoStage() const { return stage_ == static_cast<int>(Stage::Lfo); }
+    void readLfo();
+    void serviceLfo();
+    void selectLfo(int index);
+    void refreshLfo();
     InstrumentEditModel sound_;
     uint8_t display_track_ = 0, requested_action_ = 0;
     uint32_t sound_read_at_ = 0, sound_pending_at_ = 0, action_read_id_ = 0;
@@ -112,8 +120,9 @@ class UIInstrumentPage : public UIPage {
                stage_ == static_cast<int>(Stage::Mod);
     }
     bool draftActive() const {
-        return oscillator_.Dirty() || oscillator_.Pending() || modulator_.Dirty() ||
-               modulator_.Pending() || sound_.Outgoing() || sound_.Pending() || requested_action_;
+        return lfo_.Dirty() || lfo_.Pending() || oscillator_.Dirty() || oscillator_.Pending() ||
+               modulator_.Dirty() || modulator_.Pending() || sound_.Outgoing() ||
+               sound_.Pending() || requested_action_;
     }
     OscillatorModel oscillator_;
     lv_timer_t* timer_ = nullptr;

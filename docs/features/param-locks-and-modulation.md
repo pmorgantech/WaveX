@@ -99,7 +99,7 @@ earlier "2 global + 1 per-voice" split is withdrawn; `SRC_LFO2` stays in the
 enum as retired-but-reserved and reads 0.
 
 - **1 global LFO** (control-tick, in `AudioEngine`, built as `SRC_LFO1`): sine/tri/saw/square/S&H, rate either Hz (0.02–20) or tempo-synced divisions (1/16 … 4 bars — needs the sequencer clock; free-runs in Hz until Phase 2 lands). Phase-restart options: free, on-transport-start, on-any-note. Engine-global like a modular's LFO bank: performance-wide movement, not part of any Instrument.
-- **2 per-voice LFOs** (`SRC_LFO_VOICE`, `SRC_LFO_VOICE2`): phase accumulator per voice per LFO, waveform/rate/delay/fade/retrigger and pitch-follow from the Instrument (`Instrument::lfo[2]`, saved in the `LFO1`/`LFO2` chunks), evaluated per block from a Q32 frame/beat epoch. Rates support Hz (0.02–20) or tempo divisions (1/16 … 4 bars); pitch-follow applies only to Hz. Retrigger at note-on with optional `delay_s` and `fade_s`. Their rates are mod destinations (`LFO1_RATE`, `LFO2_RATE`). The backend and typed transport are implemented; the LFO touch page and live Apply/Revert audition are still open.
+- **2 per-voice LFOs** (`SRC_LFO_VOICE`, `SRC_LFO_VOICE2`): phase accumulator per voice per LFO, waveform/rate/delay/fade/retrigger and pitch-follow from the Instrument (`Instrument::lfo[2]`, saved in the `LFO1`/`LFO2` chunks), evaluated per block from a Q32 frame/beat epoch. Rates support Hz (0.02–20) or tempo divisions (1/16 … 4 bars); pitch-follow applies only to Hz. Retrigger at note-on with optional `delay_s` and `fade_s`. Their rates are mod destinations (`LFO1_RATE`, `LFO2_RATE`). The backend, typed transport and two-row eight-tile LFO page are implemented; edits use the common automatic-preview Apply/Revert path and WXI save retains the audible working copy. Held LFO voices still use their trigger snapshot.
 - Why the Instrument owns them: an `.wxi` must sound the same on any Track and in any Project. Slot 3's wobble must not change because slot 5 loaded a new Instrument, and it must not depend on an engine setting the file does not carry.
 
 ## 6. Protocol
@@ -115,9 +115,9 @@ enum as retired-but-reserved and reads 0.
 1. **Step hold + knob** = write p-lock (the core Elektron gesture); locked steps render with a corner badge; step hold shows current locks with per-lock clear.
 2. **Mod page** (per instrument slot): 8 slot rows `source → dest, depth, curve`; encoder-driven; live value bars per source (needs a coalesced `MSG_INST_STATUS` extension or piggyback on meter cadence — 10 Hz is plenty).
 3. **LFO page**: expose the two Instrument-owned per-voice LFOs; the
-   engine-global LFO stays performance-owned. Tempo-sync controls follow the
-   clock integration, and Apply/Revert must provide live audition before this
-   page is considered complete.
+   engine-global LFO stays performance-owned. The implemented page uses eight
+   tiles in two rows and the common automatic-preview Apply/Revert path.
+   Held-voice propagation remains open.
 
 ## 8. Test plan
 
@@ -139,10 +139,11 @@ enum as retired-but-reserved and reads 0.
 - The eight-row Instrument matrix and Instrument Mod editor are implemented.
   Foreground edits publish complete per-Track snapshots through mailboxes;
   the callback never reads a partially edited matrix.
-- The backend now runs two Instrument-owned per-voice LFOs with typed
-  revisioned snapshots, WXI retention and append-only source ids. The ESP32
-  touch page, live audition, global LFO editing, expanded destinations and
-  MIDI CC/channel-pressure source wiring remain Phase 2.5 work.
+- The backend and ESP32 now run two Instrument-owned per-voice LFOs with typed
+  revisioned snapshots, WXI retention, append-only source ids and the two-row
+  touch page. Held-voice propagation, global LFO editing, expanded
+  destinations and MIDI CC/channel-pressure source wiring remain Phase 2.5
+  work.
 - MIDI CC/channel-pressure source wiring, live lock recording, global LFO
   editing and analog/group lock lifetimes remain open. The corresponding
   gestures and protocol extensions above describe targets, not current controls.

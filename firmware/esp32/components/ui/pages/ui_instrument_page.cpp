@@ -82,7 +82,8 @@ constexpr int kParamStep = 65535 / 64;
 
 // Tab bar labels, in the same order as UIInstrumentPage::Stage. Kept short because
 // the bar divides evenly - one long label shrinks every other tab's target.
-const char* const kStageNames[] = {"Osc", "Env", "Amp", "Filter", "Mod"};
+const char* const lfoFields[] = {"WAVE", "RATE", "SYNC", "RETRIGGER", "DELAY", "FADE", "FOLLOW"};
+const char* const kStageNames[] = {"Osc", "Env", "Amp", "Filter", "Mod", "LFO"};
 
 // Content geometry, from design turns 2c (Env) and 2d (Filter). Positions are
 // relative to the tab body, which the navigator has already inset by the
@@ -144,6 +145,16 @@ int UIInstrumentPage::paramsForStage(Stage s, Param* out, int max) const {
             for (uint8_t i = 0; i < 4; ++i)
                 add(envelopeFields[i], kParamModulator, modulator_.Value(i), i == 2 ? "%" : "ms");
             break;
+        case Stage::Lfo:
+            add("LFO", kParamModulator, lfo_.Index() + 1, "");
+            for (uint8_t i = 0; i < 7; ++i)
+                add(lfoFields[i],
+                    kParamModulator,
+                    lfo_.Value(i),
+                    i == 1             ? "Hz (Sync off)"
+                    : i == 4 || i == 5 ? "ms"
+                                       : "");
+            break;
         case Stage::Amp:
             add("LEVEL", WaveX::Protocol::PARAM_GAIN, sound_.Value(2), "%");
             add("PAN", WaveX::Protocol::PARAM_PAN, sound_.Value(3), "%");
@@ -191,6 +202,7 @@ uint8_t UIInstrumentPage::currentTrack() const {
 void UIInstrumentPage::onEnter(lv_obj_t* parent) {
     lv_obj_clean(parent);
     display_track_ = getCurrentTrack();
+    lfo_.Reset(display_track_);
     sound_.Reset(display_track_);
     requested_action_ = 0;
     action_read_id_ = 0;
@@ -240,6 +252,7 @@ void UIInstrumentPage::onEnter(lv_obj_t* parent) {
     // Entering this page reads the Track; only explicit edits mutate it.
     seedValues();
 
+    lfo_.Reset(currentTrack());
     oscillator_.Reset(currentTrack(), 0);
     modulator_.Reset(currentTrack());
     selected_env_ = selected_slot_ = 0;
@@ -425,22 +438,24 @@ void UIInstrumentPage::buildStageRows(int stage) {
         // One row of tiles, divided evenly. Osc has six, Amp two, Mod
         // three; an even division keeps every stage on the same baseline
         // rather than giving each its own bespoke grid.
-        const int cols = n > 0 ? n : 1;
+        const bool lfo = stage == static_cast<int>(Stage::Lfo);
+        const int cols = lfo ? 4 : n > 0 ? n : 1;
         const int tw = (kContentW - (cols - 1) * kDialGap) / cols;
-        const int ty = (kBodyH - kRowTileH) / 2;
+        const int tile_height = lfo ? (kBodyH - 2 * kBodyPadTop - kDialGap) / 2 : kRowTileH;
+        const int ty = lfo ? kBodyPadTop : (kBodyH - kRowTileH) / 2;
         for (int i = 0; i < n; ++i) {
             tiles_[stage][i] = valueTileCreate(body,
-                                               UI_MARGIN_X + i * (tw + kDialGap),
-                                               ty,
+                                               UI_MARGIN_X + (i % cols) * (tw + kDialGap),
+                                               ty + (i / cols) * (tile_height + kDialGap),
                                                tw,
-                                               kRowTileH,
+                                               tile_height,
                                                params[i].label,
                                                (stage == static_cast<int>(Stage::Oscillator) ||
-                                                stage == static_cast<int>(Stage::Mod))
+                                                stage == static_cast<int>(Stage::Mod) || lfo)
                                                    ? ""
                                                    : params[i].unit);
             if (stage == static_cast<int>(Stage::Oscillator) ||
-                stage == static_cast<int>(Stage::Mod)) {
+                stage == static_cast<int>(Stage::Mod) || lfo) {
                 tiles_[stage][i].value_font = UI_FONT_MONO_VALUE;
                 if (params[i].unit[0])
                     valueTileSetDesc(tiles_[stage][i], params[i].unit);
@@ -582,6 +597,8 @@ void UIInstrumentPage::selectStage(int stage) {
     }
     stage_ = stage;
     readSound();
+    if (lfoStage())
+        readLfo();
     if (modStage()) {
         modulator_.Select(
             stage_ == static_cast<int>(Stage::Envelopes),
@@ -632,6 +649,10 @@ void UIInstrumentPage::refreshHeader() {
 }
 
 void UIInstrumentPage::refreshParams() {
+    if (lfoStage()) {
+        refreshLfo();
+        return;
+    }
     if (modStage()) {
         refreshModulator();
         return;
@@ -737,6 +758,27 @@ void UIInstrumentPage::stepParam(int steps) {
         return;
     }
 
+    if (lfoStage()) {
+        if (param_ == 0)
+            selectLfo(std::clamp<int64_t>(static_cast<int64_t>(lfo_.Index()) + steps, 0, 1));
+        else if (alive_) {
+            const uint8_t field = static_cast<uint8_t>(param_ - 1);
+            const int old = lfo_.Value(field);
+            const int step = field == 1                 ? (old < 1000 ? 10 : 100)
+                             : field == 4 || field == 5 ? (old < 100    ? 1
+                                                           : old < 1000 ? 10
+                                                                        : 100)
+                                                        : 1;
+            lfo_.Set(field,
+                     static_cast<int>(std::clamp<int64_t>(
+                         static_cast<int64_t>(old) + static_cast<int64_t>(steps) * step,
+                         field == 1 ? 20 : 0,
+                         LfoModel::Maximum(field))));
+            refreshLfo();
+            UINavigator::instance().refreshSoftkeys();
+        }
+        return;
+    }
     if (modStage()) {
         if (!alive_)
             return;
@@ -901,6 +943,29 @@ std::array<Softkey, NUM_SOFTKEYS> UIInstrumentPage::getSoftkeys() {
                                 alive_ && modulator_.Editable(),
                                 "Instrument is busy"};
     }
+    if (lfoStage()) {
+        const bool navigating = !draftActive();
+        keys[1] = {"< LFO",
+                   [this] { selectLfo(lfo_.Index() - 1); },
+                   navigating && lfo_.Index() > 0,
+                   "Updating sound..."};
+        keys[2] = {"LFO >",
+                   [this] { selectLfo(lfo_.Index() + 1); },
+                   navigating && lfo_.Index() < 1,
+                   "Updating sound..."};
+        keys[3] = {"Apply",
+                   [this] { soundAction(WaveX::Protocol::INST_EDIT_APPLY); },
+                   alive_ && sound_.Dirty() && navigating,
+                   "No edits"};
+        keys[4] = {"Revert",
+                   [this] { soundAction(WaveX::Protocol::INST_EDIT_REVERT); },
+                   alive_ && sound_.Dirty() && navigating,
+                   "No edits"};
+        keys[5] = {"Mod",
+                   [this] { moveStage(static_cast<int>(Stage::Mod) - stage_); },
+                   navigating,
+                   "Updating sound..."};
+    }
     return keys;
 }
 
@@ -951,6 +1016,9 @@ void UIInstrumentPage::onTrackChanged() {
     }
     track_change_pending_ = false;
     display_track_ = getCurrentTrack();
+    lfo_.Reset(display_track_);
+    if (lfoStage())
+        readLfo();
     sound_.Reset(display_track_);
     requested_action_ = 0;
     action_read_id_ = 0;
@@ -974,6 +1042,7 @@ void UIInstrumentPage::tick(lv_timer_t* timer) {
     auto* page = static_cast<UIInstrumentPage*>(lv_timer_get_user_data(timer));
     page->serviceOscillator();
     page->serviceModulator();
+    page->serviceLfo();
     page->serviceSound();
     if (page->track_change_pending_ && !page->draftActive())
         page->onTrackChanged();
@@ -991,6 +1060,9 @@ void UIInstrumentPage::serviceOscillator() {
     const bool alive = inter_mcu_backend_link_alive();
     if (alive != alive_) {
         alive_ = alive;
+        lfo_.Reset(currentTrack());
+        if (alive_ && lfoStage())
+            readLfo();
         oscillator_.Reset(currentTrack(), oscillator_.Snapshot().oscillator);
         sound_.Reset(currentTrack());
         requested_action_ = 0;
@@ -1011,6 +1083,7 @@ void UIInstrumentPage::serviceOscillator() {
     if (alive_ && inter_mcu_get_oscillator(&received) && oscillator_.Accept(received)) {
         changed = true;
         if (was_pending && !oscillator_.Pending() && !received.error) {
+            lfo_.AdoptRevision(received.revision);
             sound_.AdoptRevision(received.revision);
             modulator_.AdoptRevision(received.revision);
         }
@@ -1033,7 +1106,7 @@ void UIInstrumentPage::serviceOscillator() {
         (stage_ == static_cast<int>(Stage::Oscillator) || oscillator_.Pending()))
         readOscillator();
     if (alive_ && oscillator_.Ready() && oscillator_.Dirty() && !modulator_.Pending() &&
-        !sound_.Pending() && !requested_action_)
+        !sound_.Pending() && !requested_action_ && !lfo_.Pending())
         applyOscillator(WaveX::Protocol::INST_OSC_SET);
     if (changed) {
         refreshHeader();
@@ -1164,6 +1237,7 @@ void UIInstrumentPage::serviceSound() {
     if (alive_ && inter_mcu_get_instrument_edit(&received) && sound_.Accept(received)) {
         changed = true;
         if (was_pending && !sound_.Pending() && !received.error && !requested_action_) {
+            lfo_.AdoptRevision(received.revision);
             oscillator_.AdoptRevision(received.revision);
             modulator_.AdoptRevision(received.revision);
         }
@@ -1172,6 +1246,11 @@ void UIInstrumentPage::serviceSound() {
                 sendSound(requested_action_);
             } else if (!action_read_id_) {
                 requested_action_ = 0;
+                const auto lfo_index = lfo_.Index();
+                lfo_.Reset(currentTrack());
+                lfo_.Select(lfo_index);
+                if (lfoStage())
+                    readLfo();
                 status_[0] = 0;
                 oscillator_.Reset(currentTrack(), oscillator_.Snapshot().oscillator);
                 const bool envelope = modulator_.Envelope();
@@ -1194,7 +1273,7 @@ void UIInstrumentPage::serviceSound() {
         changed = true;
     }
     if (sound_.Outgoing() && sound_.Ready() && !oscillator_.Pending() && !modulator_.Pending() &&
-        !requested_action_)
+        !requested_action_ && !lfo_.Pending())
         sendSound(sound_.Operation());
     if (alive_ && static_cast<uint32_t>(now - sound_read_at_) >= 300)
         readSound();
@@ -1205,6 +1284,107 @@ void UIInstrumentPage::serviceSound() {
     }
 }
 
+void UIInstrumentPage::readLfo() {
+    if (!alive_)
+        return;
+    const auto r = lfo_.Request(nextId(), true);
+    if (inter_mcu_send_instrument_lfo(r) == ESP_OK)
+        lfo_.Expect(r.request_id);
+    lfo_read_at_ = lv_tick_get();
+}
+void UIInstrumentPage::serviceLfo() {
+    bool changed = false;
+    const bool pending = lfo_.Pending();
+    WaveX::Protocol::InstLfoSyncMessage received;
+    if (alive_ && inter_mcu_get_instrument_lfo(&received) && lfo_.Accept(received)) {
+        changed = true;
+        if (pending && !lfo_.Pending()) {
+            if (!received.error) {
+                sound_.AdoptRevision(received.revision);
+                oscillator_.AdoptRevision(received.revision);
+                modulator_.AdoptRevision(received.revision);
+            }
+            readSound();
+        }
+    }
+    const uint32_t now = lv_tick_get();
+    if (lfo_.Pending() && static_cast<uint32_t>(now - lfo_pending_at_) >= 5000) {
+        const auto index = lfo_.Index();
+        lfo_.Reset(currentTrack());
+        lfo_.Select(index);
+        refreshStatus("Reply timed out; checking LFO");
+        readLfo();
+        changed = true;
+    }
+    if (alive_ && lfo_.Ready() && lfo_.Dirty() && !oscillator_.Pending() && !modulator_.Pending() &&
+        !sound_.Pending() && !requested_action_) {
+        const auto r = lfo_.Request(nextId());
+        if (!WaveX::Protocol::IsValidInstLfoOp(r)) {
+            refreshStatus("Select a supported wave and sync");
+        } else if (inter_mcu_send_instrument_lfo(r) == ESP_OK) {
+            lfo_.Sent(r.request_id);
+            lfo_pending_at_ = lfo_read_at_ = now;
+            changed = true;
+        }
+    }
+    if (alive_ && (lfoStage() || lfo_.Pending()) &&
+        static_cast<uint32_t>(now - lfo_read_at_) >= 300)
+        readLfo();
+    if (changed) {
+        if (lfoStage())
+            refreshLfo();
+        UINavigator::instance().refreshSoftkeys();
+    }
+}
+void UIInstrumentPage::selectLfo(int index) {
+    if (index < 0 || index > 1 || !lfo_.Select(static_cast<uint8_t>(index)))
+        return;
+    refreshLfo();
+    UINavigator::instance().refreshSoftkeys();
+}
+void UIInstrumentPage::refreshLfo() {
+    const char* waves[] = {"Sine", "Triangle", "Saw", "Square", "S & H"};
+    const char* sync[] = {"Off", "1/16", "1/8", "1/4", "1/2", "1 bar", "2 bars", "4 bars"};
+    for (int i = 0; i < 8; ++i) {
+        auto& tile = tiles_[static_cast<int>(Stage::Lfo)][i];
+        if (!tile.card)
+            continue;
+        char value[24];
+        float fill = 0;
+        if (i == 0) {
+            snprintf(value, sizeof(value), "%u", lfo_.Index() + 1);
+            fill = lfo_.Index();
+        } else if (!lfo_.Valid())
+            snprintf(value, sizeof(value), "--");
+        else {
+            const int v = lfo_.Value(static_cast<uint8_t>(i - 1));
+            fill = std::clamp(static_cast<float>(v) / LfoModel::Maximum(i - 1), 0.f, 1.f);
+            if (i == 1)
+                snprintf(value, sizeof(value), "%s", v <= 4 ? waves[v] : "Unknown");
+            else if (i == 2)
+                snprintf(value, sizeof(value), "%.2f", static_cast<double>(v) / 1000);
+            else if (i == 3)
+                snprintf(value, sizeof(value), "%s", v <= 7 ? sync[v] : "Unknown");
+            else if (i == 4)
+                snprintf(value, sizeof(value), "%s", v ? "Gate" : "Free");
+            else if (i == 7)
+                snprintf(value, sizeof(value), "%s", v ? "On (Hz)" : "Off");
+            else
+                snprintf(value, sizeof(value), "%d", v);
+        }
+        valueTileSetValue(tile, value);
+        valueTileSetFill(tile, fill);
+        valueTileSetFocus(tile, i == param_);
+    }
+    const auto& state = lfo_.Snapshot();
+    refreshStatus(!alive_                          ? "Audio engine disconnected"
+                  : !lfo_.Valid()                  ? "Reading LFO..."
+                  : !state.valid                   ? "Load an Instrument"
+                  : state.busy                     ? "Instrument is busy"
+                  : lfo_.Dirty() || lfo_.Pending() ? "Updating sound..."
+                  : state.error                    ? "Edit rejected; current settings shown"
+                                                   : "Route through Mod");
+}
 void UIInstrumentPage::readModulator() {
     if (!alive_)
         return;
@@ -1220,6 +1400,7 @@ void UIInstrumentPage::serviceModulator() {
     if (alive_ && inter_mcu_get_modulator(&received) && modulator_.Accept(received)) {
         changed = true;
         if (was_pending && !modulator_.Pending() && !received.error) {
+            lfo_.AdoptRevision(received.revision);
             sound_.AdoptRevision(received.revision);
             oscillator_.AdoptRevision(received.revision);
         }
@@ -1243,7 +1424,7 @@ void UIInstrumentPage::serviceModulator() {
         (modStage() || modulator_.Pending()))
         readModulator();
     if (alive_ && modulator_.Ready() && modulator_.Dirty() && !oscillator_.Pending() &&
-        !sound_.Pending() && !requested_action_)
+        !sound_.Pending() && !requested_action_ && !lfo_.Pending())
         applyModulator();
     if (changed && modStage()) {
         refreshModulator();
@@ -1375,6 +1556,18 @@ size_t UIInstrumentPage::consoleState(char* out, size_t cap, size_t len) {
     len = AppendKvInt(out, cap, len, "instpan", sound_.Value(3));
     len = AppendKvInt(out, cap, len, "instcutoff", sound_.Value(0));
     len = AppendKvInt(out, cap, len, "instres", sound_.Value(1));
+    if (lfoStage()) {
+        len = AppendKvInt(out, cap, len, "lfoready", alive_ && lfo_.Ready());
+        len = AppendKvInt(out, cap, len, "lfovalid", lfo_.Snapshot().valid);
+        len = AppendKvInt(out, cap, len, "lfodirty", lfo_.Dirty());
+        len = AppendKvInt(out, cap, len, "lfopending", lfo_.Pending());
+        len = AppendKvInt(out, cap, len, "lfoerror", lfo_.Snapshot().error);
+        len = AppendKvInt(out, cap, len, "lfo", lfo_.Index() + 1);
+        const char* fields[] = {"wave", "rate", "sync", "retrigger", "delay", "fade", "follow"};
+        for (uint8_t i = 0; i < 7; ++i)
+            len = AppendKvInt(out, cap, len, fields[i], lfo_.Value(i));
+        return len;
+    }
     if (modStage()) {
         len = AppendKvInt(out, cap, len, "modready", alive_ && modulator_.Ready());
         len = AppendKvInt(
@@ -1429,6 +1622,27 @@ bool UIInstrumentPage::consoleCommand(const char* args, char* reply, size_t cap)
         if (field < 0 || !sound_.Set(static_cast<uint8_t>(field), value))
             return false;
         refreshParams();
+        snprintf(reply, cap, "ok");
+        return true;
+    }
+    if (args && lfoStage() && sscanf(args, "%15s %d %c", name, &value, &extra) == 2) {
+        if (!strcmp(name, "LFO")) {
+            if (value < 1 || value > 2 || lfo_.Dirty() || lfo_.Pending())
+                return false;
+            selectLfo(value - 1);
+        } else {
+            bool matched = false;
+            for (uint8_t i = 0; i < 7; ++i)
+                if (!strcmp(name, lfoFields[i]) && alive_) {
+                    if (!lfo_.Set(i, value))
+                        return false;
+                    matched = true;
+                }
+            if (!matched)
+                return false;
+            refreshLfo();
+            UINavigator::instance().refreshSoftkeys();
+        }
         snprintf(reply, cap, "ok");
         return true;
     }

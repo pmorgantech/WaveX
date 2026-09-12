@@ -352,6 +352,9 @@ esp_err_t inter_mcu_send_oscillator(const WaveX::Protocol::InstOscOpMessage& req
 void inter_mcu_store_oscillator(const WaveX::Protocol::InstOscSyncMessage& state);
 bool inter_mcu_get_oscillator(WaveX::Protocol::InstOscSyncMessage* out);
 esp_err_t inter_mcu_send_instrument_edit(const WaveX::Protocol::InstEditOpMessage& request);
+esp_err_t inter_mcu_send_instrument_lfo(const WaveX::Protocol::InstLfoOpMessage& request);
+void inter_mcu_store_instrument_lfo(const WaveX::Protocol::InstLfoSyncMessage& state);
+bool inter_mcu_get_instrument_lfo(WaveX::Protocol::InstLfoSyncMessage* out);
 esp_err_t inter_mcu_send_modulator(const WaveX::Protocol::InstModOpMessage& request);
 void inter_mcu_store_instrument_edit(const WaveX::Protocol::InstEditSyncMessage& state);
 void inter_mcu_store_modulator(const WaveX::Protocol::InstModSyncMessage& state);

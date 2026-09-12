@@ -153,6 +153,11 @@ void PacketRouter::route_by_message_type(uint8_t msg_type,
             if (CopyMessage(payload, payload_len, message, "INST_MOD_SYNC"))
                 inter_mcu_store_modulator(message);
         } break;
+        case WaveX::Protocol::MSG_INST_LFO_SYNC: {
+            WaveX::Protocol::InstLfoSyncMessage message;
+            if (CopyMessage(payload, payload_len, message, "INST_LFO_SYNC"))
+                inter_mcu_store_instrument_lfo(message);
+        } break;
         case WaveX::Protocol::MSG_INST_KEY_MAP_SYNC: {
             WaveX::Protocol::InstKeyMapSyncMessage message;
             if (CopyMessage(payload, payload_len, message, "INST_KEY_MAP_SYNC"))

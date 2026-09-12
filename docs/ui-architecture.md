@@ -46,7 +46,7 @@ Pages still call `inter_mcu_*` functions in `main`; a fully injected
 
 - **Sample:** Browse, Edit, Manage, Record.
 - **Play:** Pads and Keys, sharing note lifecycle and live parameters.
-- **Instrument:** Sample, Env, Amp, Filter, Mod.
+- **Instrument:** Sample, Env, Amp, Filter, Mod, LFO.
 - **Track:** eight Tracks per view, current binding, MIDI input routing.
 - **Settings:** Display, Storage, MIDI, System, Calibrate.
 - **Diagnostics:** ESP32, Daisy, Audio, Link, Storage, MIDI, Panel.
@@ -63,8 +63,7 @@ state across tab changes, such as Instrument and Diagnostics. Reuse the
 shared chrome rather than duplicating styles. Diagnostics builds tab bodies
 lazily to bound entry work.
 
-Bank, Instrument Browser, Mixer and expanded oscillator/envelope/LFO
-editors belong to the target
+Bank, Instrument Browser and Mixer belong to the target
 [Track/Instrument model](features/track-and-patch-model.md). A logical panel
 jump key or a protocol operation does not prove the corresponding page exists.
 
@@ -255,6 +254,20 @@ Key Map, Pad Map overrides, Track routing, Instrument/Sample loading, shared poo
 ownership and the sequencer grid. The 1280×720 Key Map capture was inspected on
 2026-09-11 after adjusting control heights to separate values from their fill
 bars. The capture is local at logs/key-map-20260911.png (gitignored).
+
+### Instrument LFO (as built, 2026-09-12)
+
+Instrument → LFO presents two selectable per-voice LFOs. Each selection uses
+eight value tiles arranged in two rows of four: the LFO selector plus waveform,
+rate in Hz, sync division, retrigger, delay, fade and pitch-follow. The page
+uses the shared revisioned transport and common sound Apply/Revert actions, so
+edits preview automatically and a WXI save persists the audible working copy.
+Navigation waits for an outstanding delivery but does not require Apply/Revert
+before leaving the tab. Held LFO, oscillator, gain and Env 2/3 voices still
+use their trigger snapshot; extending sound edits to held notes remains open.
+The frontend suite passes 274 tests, and the two-board LFO HIL passes the
+save/readback flow (11.70 seconds). The inspected 1280×720 capture is
+`logs/instrument-lfo-20260912.png`.
 
 
 ### Sequencer Locks

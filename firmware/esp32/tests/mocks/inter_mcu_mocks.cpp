@@ -119,6 +119,11 @@ void inter_mcu_store_modulator(const WaveX::Protocol::InstModSyncMessage& state)
     ++cap.modulator_calls;
     cap.modulator = state;
 }
+void inter_mcu_store_instrument_lfo(const WaveX::Protocol::InstLfoSyncMessage& state) {
+    auto& cap = GetInterMcuCapture();
+    ++cap.instrument_lfo_calls;
+    cap.instrument_lfo = state;
+}
 
 void inter_mcu_store_instrument_edit(const WaveX::Protocol::InstEditSyncMessage& state) {
     auto& cap = GetInterMcuCapture();

@@ -752,3 +752,22 @@ TEST_F(PacketRouterTest, InstrumentEditSnapshotsAcceptPaddedFramesAndRejectTrunc
     router_->route_uart_message(MSG_INST_EDIT_SYNC, bytes, sizeof(state), 0, 1);
     EXPECT_EQ(GetInterMcuCapture().instrument_edit_calls, 2);
 }
+
+TEST_F(PacketRouterTest, LfoSnapshotsAcceptPaddedFramesAndRejectTruncatedUart) {
+    InstLfoSyncMessage state;
+    state.request_id = 19;
+    state.revision = 27;
+    state.track = 3;
+    state.values[1].rate_hz = 2.5f;
+    auto packet = ProtocolTestHelper::CreateWaveXPacket(MSG_INST_LFO_SYNC, &state, sizeof(state));
+    router_->route_packet(packet.data(), packet.size());
+    ASSERT_EQ(GetInterMcuCapture().instrument_lfo_calls, 1);
+    EXPECT_EQ(GetInterMcuCapture().instrument_lfo.request_id, 19u);
+    EXPECT_EQ(GetInterMcuCapture().instrument_lfo.values[1].rate_hz, 2.5f);
+    const auto* bytes = reinterpret_cast<const uint8_t*>(&state);
+    for (size_t size = 0; size < sizeof(state); ++size)
+        router_->route_uart_message(MSG_INST_LFO_SYNC, bytes, size, 0, 1);
+    EXPECT_EQ(GetInterMcuCapture().instrument_lfo_calls, 1);
+    router_->route_uart_message(MSG_INST_LFO_SYNC, bytes, sizeof(state), 0, 1);
+    EXPECT_EQ(GetInterMcuCapture().instrument_lfo_calls, 2);
+}

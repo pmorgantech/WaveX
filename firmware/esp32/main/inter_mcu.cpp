@@ -1363,6 +1363,35 @@ bool inter_mcu_get_modulator(WaveX::Protocol::InstModSyncMessage* out) {
 }
 
 namespace {
+portMUX_TYPE s_instrument_lfo_lock = portMUX_INITIALIZER_UNLOCKED;
+WaveX::Protocol::InstLfoSyncMessage s_instrument_lfo;
+bool s_instrument_lfo_valid = false;
+}  // namespace
+esp_err_t inter_mcu_send_instrument_lfo(const WaveX::Protocol::InstLfoOpMessage& request) {
+    if (!WaveX::Protocol::IsValidInstLfoOp(request))
+        return ESP_ERR_INVALID_ARG;
+    return send_uart_message(WaveX::Protocol::MSG_INST_LFO_OP, &request, sizeof(request)) >= 0
+               ? ESP_OK
+               : ESP_FAIL;
+}
+void inter_mcu_store_instrument_lfo(const WaveX::Protocol::InstLfoSyncMessage& state) {
+    taskENTER_CRITICAL(&s_instrument_lfo_lock);
+    s_instrument_lfo = state;
+    s_instrument_lfo_valid = true;
+    taskEXIT_CRITICAL(&s_instrument_lfo_lock);
+}
+bool inter_mcu_get_instrument_lfo(WaveX::Protocol::InstLfoSyncMessage* out) {
+    if (!out)
+        return false;
+    taskENTER_CRITICAL(&s_instrument_lfo_lock);
+    const bool valid = s_instrument_lfo_valid;
+    if (valid)
+        *out = s_instrument_lfo;
+    taskEXIT_CRITICAL(&s_instrument_lfo_lock);
+    return valid;
+}
+
+namespace {
 portMUX_TYPE s_key_map_lock = portMUX_INITIALIZER_UNLOCKED;
 WaveX::Protocol::InstKeyMapSyncMessage s_key_map;
 bool s_key_map_valid = false;

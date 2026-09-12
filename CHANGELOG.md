@@ -13,13 +13,22 @@ versioning and release process.
 
 ### Added
 
+- Added the Instrument LFO touch page with two selectable per-voice LFOs and
+  eight tiles in two rows for waveform, Hz rate, sync, retrigger, delay, fade
+  and pitch-follow. The page uses revisioned transport with automatic preview,
+  common Apply/Revert actions and WXI save of the audible working copy. Held
+  LFO, oscillator, gain and Env 2/3 voices still use trigger snapshots while
+  held-voice propagation remains open; the clean LFO capacity result is now
+  STAY at 68.0921% peak with zero underruns and does not close the one-hour
+  phase gate.
+
 - Added automatic Instrument sound preview across the Osc, Env, Mod, Filter
   and Amp editors, typed filter/amp readback, and per-Track Apply/Revert undo
   for filter cutoff/resonance and Instrument trim gain/pan. Successful WXI
   saves commit the audible working values while failed saves retain the undo
   point; replacing an Instrument clears it. Existing held voices are not yet
-  expanded to receive these edits, and the LFO callback run remains REVIEW at
-  72.8827% peak with zero underruns.
+  expanded to receive these edits. The earlier LFO REVIEW was superseded by a
+  clean 68.0921% STAY repeat; the one-hour phase gate remains open.
 
 - Added backend runtime support for two per-voice LFOs with revisioned typed
   GET/SET snapshots, Q32 frame/beat timing, Hz and tempo-division rates,
