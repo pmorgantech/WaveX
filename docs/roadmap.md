@@ -190,7 +190,10 @@ done. Open work, in the order decided 2026-09-05 (model doc §8: 7 → 4 → 5 �
    first would have produced controls that do nothing, which is the failure
    the Mod tab already documents. Build them with this stage, after the DWT
    measurement, not before.
-3. Bank (stage 6): `.wxb`, Bank page, Program Change recall.
+3. Bank (stage 6): the [WXCF Bank codec](features/bank-persistence.md) and
+   bounded resident index are host-tested. SD working-copy management, Bank
+   page, Track recall, preload and Program Change recall remain open and follow
+   the expanded Instrument engine.
 4. Polyphony policy (stage 8), from stage 5's measurement.
 5. Finish Mixer v1: UI/solo behavior, meter subscription, and hardware click
    and soak tests.

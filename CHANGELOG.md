@@ -13,6 +13,12 @@ versioning and release process.
 
 ### Added
 
+- Added the host-tested WXCF Bank container and bounded resident index for 128
+  stable WXI slots, including dual-oscillator Instrument documents, metadata,
+  duplicate/truncation checks, and slot-bounded recall validation. SD working
+  copies, Bank UI, Track replacement, preload, and Program Change recall remain
+  to be connected.
+
 - Added the host-tested WXCF project data model and cooperative codec for
   sparse Patterns, Songs, Performance metadata, Instrument/Bank references,
   hidden steps, and parameter locks, with bounded foreground I/O and malformed
