@@ -234,6 +234,17 @@ chunks, RAM admission, and a measured DWT budget. Any earlier refactor may only
 extract the typed source seam as a small, behavior-preserving change needed by
 scheduled sampler work.
 
+### Oscillator sync and FM
+
+Requested 2026-09-12. Unscheduled, post-Phase-2.5 candidate for an
+Instrument-owned interaction between its two oscillator slots. Before any
+implementation, decide master/slave direction; hard versus soft sync for
+sample and loop sources; true-frequency versus phase modulation; routing,
+depth and feedback policy; alias suppression; source compatibility; saved
+settings; and the measured callback budget. Sampler reliability, persistence
+and current audio gates come first. This item does not define a protocol or
+enable audio behavior.
+
 ### Parameter-id design drift
 
 The target parameter-lock document reserves IDs that conflict with live pan and
