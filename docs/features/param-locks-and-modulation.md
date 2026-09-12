@@ -2,8 +2,8 @@
 
 **Status**: Parameter-lock application and touch editing are implemented. Four
 voice-scoped locks per step are applied after zone resolution; pattern files
-retain them. The Instrument modulation editor, matrix, global LFO and second
-envelope already exist. Expanded oscillator, envelope and per-voice LFO work
+retain them. The Instrument modulation editor, matrix, global LFOs and three
+envelopes exist. Expanded oscillator, envelope and per-voice LFO work
 remains Phase 2.5. Live motion recording and analog/group locks are still target
 design below, not implemented behavior.
 **Dependencies**: sequencer step scheduler (Phase 2), `instrument-model.md` (matrix slots are instrument-scoped), voice manager (done). **Revised 2026-09-04**: the two-oscillator Instrument (`track-and-patch-model.md` §3.1) fixes the source/destination set this matrix serves — three envelopes, two per-voice LFOs, one global LFO, oscillator and wavetable-position destinations — appended to the enums below, never renumbered.
@@ -103,7 +103,9 @@ enum as retired-but-reserved and reads 0.
 
 ## 6. Protocol
 
-- Matrix/LFO edits ride `MSG_INST_OP` (0x60): new ops `SET_MOD_SLOT {slot_index, ModSlot}`, `SET_VOICE_LFO {wave, rate, delay, fade}`, `SET_GLOBAL_LFO {which, wave, rate_or_div, restart}` (global LFO op is engine-scoped; still fits INST_OP's envelope with slot ignored, or ride `MSG_CONTROL_CHANGE` for rate/depth as today — decide at implementation, both are wired paths).
+- Matrix/envelope edits now use the typed revisioned `MSG_INST_MOD_OP` and
+  `MSG_INST_MOD_SYNC` messages in [the protocol](inter-mcu-protocol.md).
+  The following LFO transport remains target design: new ops `SET_MOD_SLOT {slot_index, ModSlot}`, `SET_VOICE_LFO {wave, rate, delay, fade}`, `SET_GLOBAL_LFO {which, wave, rate_or_div, restart}` (global LFO op is engine-scoped; still fits INST_OP's envelope with slot ignored, or ride `MSG_CONTROL_CHANGE` for rate/depth as today — decide at implementation, both are wired paths).
 - Live sources: `SRC_MODWHEEL`/`SRC_AFTERTOUCH` need CC1/pressure forwarded — extend the ESP32 MIDI task to forward CC1 + channel pressure as `MSG_CONTROL_CHANGE{param=PARAM_MACRO-adjacent internal ids}`… cleaner: add `MSG_MIDI_CC {cc, value, channel}` (0x56) so the Daisy owns the CC→source map. Round-trip test + dispatch test same commit.
 - P-lock edit/record ops are `SEQ_PATTERN_OP` extensions (already reserved in `sequencer.md` §4).
 
@@ -111,7 +113,8 @@ enum as retired-but-reserved and reads 0.
 
 1. **Step hold + knob** = write p-lock (the core Elektron gesture); locked steps render with a corner badge; step hold shows current locks with per-lock clear.
 2. **Mod page** (per instrument slot): 8 slot rows `source → dest, depth, curve`; encoder-driven; live value bars per source (needs a coalesced `MSG_INST_STATUS` extension or piggyback on meter cadence — 10 Hz is plenty).
-3. **LFO page**: two global + voice LFO panels, tempo-sync toggle.
+3. **LFO page**: two Instrument-owned per-voice LFOs; the engine-global LFO
+   stays performance-owned. Tempo-sync controls follow the clock integration.
 
 ## 8. Test plan
 
@@ -128,14 +131,14 @@ enum as retired-but-reserved and reads 0.
   Callback measurements are recorded separately in
   [callback-performance-log.md](../callback-performance-log.md).
 - The block modulation surface and per-trigger velocity/note/random sources are
-  implemented. Env 2 is a block-rate source and shares note/release/choke
-  lifecycle with Env 1. Its editable Instrument parameters follow in Phase 2.5.
+  implemented. Env 2/3 are block-rate sources and share note/release/choke
+  lifecycle with Env 1. All three have saved Instrument settings and touch editing.
 - The eight-row Instrument matrix and Instrument Mod editor are implemented.
   Foreground edits publish complete per-Track snapshots through mailboxes;
   the callback never reads a partially edited matrix.
 - The engine currently ticks two global LFOs. The target above replaces the
-  second global source with two Instrument-owned per-voice LFOs; that migration,
-  Env 3 and expanded destinations remain Phase 2.5 work.
+  second global source with two Instrument-owned per-voice LFOs; that migration
+  and expanded destinations remain Phase 2.5 work.
 - MIDI CC/channel-pressure source wiring, live lock recording, global LFO
   editing and analog/group lock lifetimes remain open. The corresponding
   gestures and protocol extensions above describe targets, not current controls.

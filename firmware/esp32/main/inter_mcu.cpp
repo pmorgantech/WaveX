@@ -1305,6 +1305,35 @@ bool inter_mcu_get_oscillator(WaveX::Protocol::InstOscSyncMessage* out) {
 }
 
 namespace {
+portMUX_TYPE s_modulator_lock = portMUX_INITIALIZER_UNLOCKED;
+WaveX::Protocol::InstModSyncMessage s_modulator;
+bool s_modulator_valid = false;
+}  // namespace
+esp_err_t inter_mcu_send_modulator(const WaveX::Protocol::InstModOpMessage& request) {
+    if (!WaveX::Protocol::IsValidInstModOp(request))
+        return ESP_ERR_INVALID_ARG;
+    return send_uart_message(WaveX::Protocol::MSG_INST_MOD_OP, &request, sizeof(request)) >= 0
+               ? ESP_OK
+               : ESP_FAIL;
+}
+void inter_mcu_store_modulator(const WaveX::Protocol::InstModSyncMessage& state) {
+    taskENTER_CRITICAL(&s_modulator_lock);
+    s_modulator = state;
+    s_modulator_valid = true;
+    taskEXIT_CRITICAL(&s_modulator_lock);
+}
+bool inter_mcu_get_modulator(WaveX::Protocol::InstModSyncMessage* out) {
+    if (!out)
+        return false;
+    taskENTER_CRITICAL(&s_modulator_lock);
+    const bool valid = s_modulator_valid;
+    if (valid)
+        *out = s_modulator;
+    taskEXIT_CRITICAL(&s_modulator_lock);
+    return valid;
+}
+
+namespace {
 portMUX_TYPE s_key_map_lock = portMUX_INITIALIZER_UNLOCKED;
 WaveX::Protocol::InstKeyMapSyncMessage s_key_map;
 bool s_key_map_valid = false;

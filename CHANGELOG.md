@@ -16,9 +16,9 @@ versioning and release process.
 - Added runtime Env 3, saved Env 2/Env 3 Instrument mapping, append-only Env 1
   and Env 3 modulation sources, and revisioned envelope/matrix edit and
   readback messages with retained outcomes. Auxiliary envelope trigger offsets,
-  release and choke behavior are covered by host and HIL tests; touch controls,
-  additional LFOs/destinations and the new callback capacity measurement remain
-  open.
+  release and choke behavior are covered by host and HIL tests. Touch controls
+  now provide revisioned Env and matrix drafts with Apply/Revert and WXI
+  retention; additional LFOs/destinations and filter work remain open.
 
 - Added selected-oscillator Key Map editing for 32 keyboard zones, including
   source-aware readback, assignment into empty Sample maps, shared revision and
@@ -159,6 +159,11 @@ versioning and release process.
   utilization over 605.2 seconds and 121 windows, with zero underruns and six
   file cycles. The result is a STAY decision for the measured workload; broader
   future voice workloads and the full Phase 2 gate remain open.
+
+- Recorded the accepted clean Env3/matrix callback gate at 66.9571% peak
+  utilization over 605.2 seconds and 121 windows, with zero underruns and six
+  file cycles. The expanded-envelope workload remains a STAY result; the full
+  Phase 2 gate and future per-voice LFO capacity remain open.
 
 - Recorded the pad-sound callback checkpoint at 69.4104% peak utilization
   (STAY) over 605.2 seconds with six save/load cycles, zero underruns, file

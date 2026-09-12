@@ -217,7 +217,17 @@ struct Instrument {
 };
 ```
 
-**What exists today** (`voice_manager.hpp`, `instrument.hpp`): one Sample oscillator (zone-resolved), the TPT SVF (lowpass only exposed), Instrument-level `filter`/`env` defaults with per-zone override, Env 1 (amp, per sample), Env 2 (`env2`, block-rate mod source `SRC_ENV_FILTER`), block-rate cutoff/gain/pitch/pan modulation, the 8-row mod matrix with per-trigger sources, and two engine-global LFOs. **Not built**: Osc 2 and the submix, selectable `FilterType` (the field exists, one mode), Env 3, the per-voice LFOs, the typed `Oscillator` wrapper, `output`/`poly_mode` on the Instrument.
+**What exists today**: two typed Sample oscillators with separate zone maps
+feed one mono submix, filter and amp per voice. Env 1 runs per sample; Env 2
+and Env 3 run at block rate. The eight-row matrix supports cutoff/gain/pitch/pan
+and the three envelope sources. Oscillator settings, both Key Maps, Env 1–3
+and matrix rows have revisioned touch editors. Expanded WXI fields have an
+Instrument-owned storage home. Selectable filter modes, two per-voice LFOs,
+additional modulation destinations and Instrument output/polyphony behavior
+remain open; the engine still ticks two global LFOs pending that migration.
+See [the as-built Instrument model](instrument-model.md) for validation and
+the [roadmap capacity checkpoint](../roadmap.md#2c--callback-capacity-checkpoint)
+before expanding the callback.
 
 **Trim vs. mixer.** An Instrument's `trim_gain/pan` is part of the *sound* ("this piano is quiet"); the Track's `TrackMix` fader/pan/mute/solo is part of the *mix* ("bring the piano down in this song"). Loading an Instrument never touches the mixer strip. This is the same split every DAW and every E-mu makes, and it is what lets an Instrument be reused across projects.
 

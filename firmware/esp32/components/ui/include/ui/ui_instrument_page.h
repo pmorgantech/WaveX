@@ -4,6 +4,7 @@
 #include "components/ui_dial.h"
 #include "components/ui_value_tile.h"
 #include "input_event.h"
+#include "modulator_model.h"
 #include "oscillator_model.h"
 #include "spi_protocol/protocol.h"
 #include "ui_page.h"
@@ -15,7 +16,7 @@
 namespace wavex_ui {
 
 // Shared Instrument stages. Oscillator controls use revisioned backend snapshots;
-// legacy Env/Amp/Filter controls remain live Track controls.
+// envelope/matrix controls also use explicit drafts; Amp/Filter remain live controls.
 class UIInstrumentPage : public UIPage {
    public:
     const char* name() const override { return "Instrument"; }
@@ -42,13 +43,14 @@ class UIInstrumentPage : public UIPage {
     struct Param {
         const char* label;
         uint8_t wire_param;
-        uint16_t value;
+        int32_t value;
         Stage stage;
         const char* unit;
     };
 
     static constexpr uint8_t kParamNone = 0xFF;
     static constexpr uint8_t kParamOscillator = 0xFE;
+    static constexpr uint8_t kParamModulator = 0xFD;
 
     lv_obj_t* root_ = nullptr;
     lv_obj_t* tabview_ = nullptr;
@@ -83,9 +85,26 @@ class UIInstrumentPage : public UIPage {
     // Current value of every parameter, by stage and param index. paramsForStage()
     // describes the chain and its defaults; this holds what the user has since
     // moved, so the description stays in one place and the state in another.
-    uint16_t stage_values_[kStageCount][kMaxParams] = {};
+    int32_t stage_values_[kStageCount][kMaxParams] = {};
     bool values_seeded_ = false;
 
+    ModulatorModel modulator_;
+    uint8_t selected_env_ = 0, selected_slot_ = 0;
+    uint32_t mod_read_at_ = 0, mod_pending_at_ = 0;
+    bool mod_timed_out_ = false;
+    void readModulator();
+    void serviceModulator();
+    void selectModulator(int index);
+    void applyModulator();
+    void refreshModulator();
+    bool modStage() const {
+        return stage_ == static_cast<int>(Stage::Envelopes) ||
+               stage_ == static_cast<int>(Stage::Mod);
+    }
+    bool draftActive() const {
+        return oscillator_.Dirty() || oscillator_.Pending() || modulator_.Dirty() ||
+               modulator_.Pending();
+    }
     OscillatorModel oscillator_;
     lv_timer_t* timer_ = nullptr;
     lv_obj_t* oscillator_status_ = nullptr;

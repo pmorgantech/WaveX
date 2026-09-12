@@ -87,6 +87,16 @@ Phase 2.5 work. Open work:
 
 ### 2.C — Callback capacity checkpoint
 
+The clean expanded-envelope workload on db6f180 peaked at **66.9571% (STAY)**
+over 605.2 seconds (121 windows), with zero underruns and six successful
+pattern save/load cycles. It retains the two-source workload below and adds
+saved Env 2/3 settings and 64 routes using live sources, including Env 1/3.
+The image SHA and complete readback are recorded in
+[the performance log](callback-performance-log.md). This permits the per-voice
+LFO milestone; it does not close the one-hour phase soak.
+
+Previous two-source checkpoint:
+
 The clean two-source workload on 409e40c peaked at **65.6921% (STAY)**
 over 605.2 seconds (121 windows), with zero underruns. All eight Tracks use
 two 16-zone maps, with four locks per hit, 64 modulation slots, WaveX 24 dB
@@ -193,19 +203,13 @@ done. Open work, in the order decided 2026-09-05 (model doc §8: 7 → 4 → 5 �
    creation, naming, assignment, choke and per-pad cutoff/amp ADS overrides.
    Tag metadata/filtering remains future work; these editors do not close the
    Phase 2 hardware gate.
-2. Voice architecture (stage 5): Osc 2 sample submix and its touch settings
-   and both keyboard zone maps are built. Complete filter type, Env 3,
-   two per-voice LFOs and new mod destinations —
+2. Voice architecture (stage 5): Osc 2 sample submix, its touch settings,
+   both keyboard zone maps, Env 1–3 and the eight-row matrix editor are built.
+   Complete filter type, two per-voice LFOs and new mod destinations —
    DWT-measured at `WAVEX_NUM_VOICES` before the count is changed.
-   The **UI for this is already designed and not built**: Claude Design turn
-   5 gives Instrument an Env 1/2/3 selector with destination chips and a new
-   LFO tab (waveform, frequency, pitch-follow, gate/free-run), taking the
-   stage tab bar from five to six. It was deliberately left out of the
-   2026-09-06 UI redesign because nothing on the wire carries a second or
-   third envelope, an LFO, or a modulation destination — building the screens
-   first would have produced controls that do nothing, which is the failure
-   the Mod tab already documents. Build them with this stage, after the DWT
-   measurement, not before.
+   The planned LFO tab adds waveform, frequency, pitch-follow and gate/free-run
+   controls, taking the stage bar from five to six. Build it with the runtime
+   and typed transport, and measure each callback milestone before continuing.
 3. Bank (stage 6): the [WXCF Bank codec](features/bank-persistence.md) and
    bounded resident index are host-tested. SD working-copy management, Bank
    page, Track recall, preload and Program Change recall remain open and follow
