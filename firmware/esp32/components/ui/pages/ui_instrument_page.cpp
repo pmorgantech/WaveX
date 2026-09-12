@@ -818,7 +818,7 @@ void UIInstrumentPage::stepParam(int steps) {
                                                    : 1;
             const int low = !modulator_.Envelope() && field == 2 ? -32767 : 0;
             const int high = modulator_.Envelope() ? (field == 2 ? 1000 : 600000)
-                             : field == 1          ? 4
+                             : field == 1          ? WaveX::Protocol::INST_MOD_DEST_COUNT - 1
                              : field == 2          ? 32767
                              : field == 3          ? 2
                                                    : 1;
@@ -1495,7 +1495,7 @@ void UIInstrumentPage::refreshModulator() {
                 snprintf(value, sizeof(value), "%d", v);
             fill = static_cast<float>(v) / (i == 2 ? 1000 : 600000);
         } else {
-            const char* destinations[] = {"None", "Cutoff", "Gain", "Pitch", "Pan"};
+            const char* destinations[] = {"None", "Cutoff", "Gain", "Pitch", "Pan", "Resonance"};
             const char* curves[] = {"Linear", "Exp", "S"};
             if (i == 1) {
                 snprintf(value, sizeof(value), "%s", sourceName(v));
@@ -1503,8 +1503,13 @@ void UIInstrumentPage::refreshModulator() {
                     if (liveSources[j] == v)
                         fill = static_cast<float>(j) / (sizeof(liveSources) - 1);
             } else if (i == 2) {
-                snprintf(value, sizeof(value), "%s", v < 5 ? destinations[v] : "Pending");
-                fill = v < 5 ? static_cast<float>(v) / 4 : 0;
+                snprintf(value,
+                         sizeof(value),
+                         "%s",
+                         v < WaveX::Protocol::INST_MOD_DEST_COUNT ? destinations[v] : "Pending");
+                fill = v < WaveX::Protocol::INST_MOD_DEST_COUNT
+                           ? static_cast<float>(v) / (WaveX::Protocol::INST_MOD_DEST_COUNT - 1)
+                           : 0;
             } else if (i == 3) {
                 snprintf(value, sizeof(value), "%+.1f", static_cast<double>(v) * 100 / 32767);
                 fill = static_cast<float>(v + 32767) / 65534;

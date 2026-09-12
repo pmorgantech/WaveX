@@ -96,6 +96,7 @@ class VoiceFilter {
     void SetCutoff(float hz) { SetParameters(hz, resonance_); }
 
     void SetResonance(float res) { SetParameters(cutoff_hz_, res); }
+    float Resonance() const { return resonance_; }
 
     // One tuning pair produces one coefficient set. Keep the integrators
     // intact, just as the separate setters do during a sounding note.

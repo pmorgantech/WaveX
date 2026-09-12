@@ -128,3 +128,23 @@ TEST(ModulatorModel, LaterEnvelopeMotionSurvivesEarlierAcknowledgement) {
     ASSERT_TRUE(m.Accept(s));
     EXPECT_FALSE(m.Dirty());
 }
+
+TEST(ModulatorModel, ResonanceDestinationPreviewsAndReadsBackWithFutureIdsRejected) {
+    auto m = model();
+    ASSERT_TRUE(m.Select(false, 7));
+    ASSERT_TRUE(m.Set(1, INST_MOD_RESONANCE));
+    EXPECT_FALSE(m.Set(1, INST_MOD_DEST_COUNT));
+    auto r = m.Request(11);
+    ASSERT_TRUE(IsValidInstModOp(r));
+    EXPECT_EQ(r.slot.destination, INST_MOD_RESONANCE);
+    m.MutationSent(11);
+    auto s = snapshot();
+    s.request_id = 11;
+    s.completed_request_id = 11;
+    s.revision++;
+    s.slots[7] = r.slot;
+    ASSERT_TRUE(m.Accept(s));
+    EXPECT_FALSE(m.Dirty());
+    EXPECT_FALSE(m.Pending());
+    EXPECT_EQ(m.Value(1), INST_MOD_RESONANCE);
+}

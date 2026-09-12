@@ -13,6 +13,11 @@ versioning and release process.
 
 ### Added
 
+- Added the Instrument matrix's resonance destination (id 5), using the
+  existing revisioned snapshot, automatic preview, Apply/Revert and WXI save
+  path. Signed normalized routes sum before clamping and compose with the
+  base resonance; oscillator mix/pitch and LFO-rate destinations remain open.
+
 - Added four Instrument-owned filter modes (low-pass, high-pass, band-pass and
   notch) to the Filter editor and typed filter-settings transport. Mode,
   cutoff and resonance share the existing preview, Apply/Revert and WXI save

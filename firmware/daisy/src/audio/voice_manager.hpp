@@ -207,6 +207,7 @@ struct Voice : VoiceSampleState {
     float mod_gain_mul = 1.0f;
     float mod_pitch_mul = 1.0f;
     float mod_pan_offset = 0.0f;
+    float mod_resonance_offset = 0.0f;
 
     // Per-trigger modulation sources (SRC_VELOCITY/SRC_NOTE/SRC_RANDOM),
     // sampled once at Trigger() and held constant for the voice's lifetime -
@@ -221,11 +222,13 @@ struct Voice : VoiceSampleState {
     // from the control tick (VoiceManager::TickModulation), consumed at the
     // top of Render()'s per-voice slice. Callback-safe.
     void SetBlockModulation(const ModDestinations& mods) {
-        modulation_cutoff_dirty = modulation_cutoff_dirty || mod_cutoff_mul != mods.cutoff_mul;
+        modulation_cutoff_dirty = modulation_cutoff_dirty || mod_cutoff_mul != mods.cutoff_mul ||
+                                  mod_resonance_offset != mods.resonance_offset;
         mod_cutoff_mul = mods.cutoff_mul;
         mod_gain_mul = mods.gain_mul;
         mod_pitch_mul = mods.pitch_mul;
         mod_pan_offset = mods.pan_offset;
+        mod_resonance_offset = mods.resonance_offset;
     }
 };
 
@@ -436,7 +439,8 @@ class VoiceManager {
                 v.base_resonance = p.filter_resonance;
             if (!v.own_filter_env && unlocked(Protocol::PARAM_FILTER_CUTOFF))
                 v.base_cutoff_hz = p.filter_cutoff_hz;
-            v.filter.SetParameters(v.base_cutoff_hz * v.mod_cutoff_mul, v.base_resonance);
+            v.filter.SetParameters(v.base_cutoff_hz * v.mod_cutoff_mul,
+                                   v.base_resonance + v.mod_resonance_offset);
             if (!v.own_filter_env && !v.envelope.IsReleasing()) {
                 auto& amp = v.amp_params;
                 if (unlocked(Protocol::PARAM_ENVELOPE_ATTACK))
@@ -527,6 +531,7 @@ class VoiceManager {
         v.mod_gain_mul = 1.0f;
         v.mod_pitch_mul = 1.0f;
         v.mod_pan_offset = 0.0f;
+        v.mod_resonance_offset = 0.0f;
 
         // Per-trigger modulation sources (§3): sampled once, held constant
         // for the voice's life. SRC_RANDOM reuses the sample-and-hold xorshift
@@ -666,8 +671,10 @@ class VoiceManager {
             }
             // Returning modulation to identity is itself an update. Skipping
             // that transition would leave the last modulated cutoff latched.
-            if (v.mod_cutoff_mul != 1.0f || v.modulation_cutoff_dirty) {
-                v.filter.SetCutoff(v.base_cutoff_hz * v.mod_cutoff_mul);
+            if (v.mod_cutoff_mul != 1.0f || v.mod_resonance_offset != 0.f ||
+                v.modulation_cutoff_dirty) {
+                v.filter.SetParameters(v.base_cutoff_hz * v.mod_cutoff_mul,
+                                       v.base_resonance + v.mod_resonance_offset);
                 v.modulation_cutoff_dirty = false;
             }
 

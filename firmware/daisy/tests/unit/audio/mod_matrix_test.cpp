@@ -240,3 +240,28 @@ TEST(ModMatrix, RetiredGlobalLfoSourceRemainsZero) {
     sources.lfo_voice2 = .75f;
     EXPECT_FLOAT_EQ(sources.Get(SRC_LFO_VOICE2), .75f);
 }
+
+TEST(ModMatrix, ResonanceSumsSignedRoutesBeforeClamping) {
+    ModSources source;
+    source.velocity = .75f;
+    source.env_aux = .5f;
+    ModSlot slots[] = {Slot(SRC_VELOCITY, DEST_RESONANCE, 32767),
+                       Slot(SRC_ENV_AUX, DEST_RESONANCE, -32767)};
+    EXPECT_FLOAT_EQ(EvaluateModMatrix(slots, 2, source).resonance_offset, .25f);
+    slots[1].depth = 32767;
+    EXPECT_FLOAT_EQ(EvaluateModMatrix(slots, 2, source).resonance_offset, 1);
+    slots[0].depth = slots[1].depth = -32767;
+    EXPECT_FLOAT_EQ(EvaluateModMatrix(slots, 2, source).resonance_offset, -1);
+    EXPECT_FLOAT_EQ(EvaluateModMatrix(nullptr, 0, source).resonance_offset, 0);
+}
+TEST(ModMatrix, ResonanceUsesCurveAndPolarityWithoutAffectingOtherDestinations) {
+    ModSources source;
+    source.velocity = .75f;
+    ModSlot slot = Slot(SRC_VELOCITY, DEST_RESONANCE, 32767, CURVE_EXPONENTIAL, 1);
+    auto result = EvaluateModMatrix(&slot, 1, source);
+    EXPECT_FLOAT_EQ(result.resonance_offset, .25f);
+    EXPECT_FLOAT_EQ(result.cutoff_mul, 1);
+    EXPECT_FLOAT_EQ(result.pitch_mul, 1);
+    EXPECT_FLOAT_EQ(result.gain_mul, 1);
+    EXPECT_FLOAT_EQ(result.pan_offset, 0);
+}

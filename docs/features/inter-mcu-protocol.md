@@ -273,6 +273,14 @@ and Amp. Held-note updates use the bounded live handoff described in
 `instrument-model.md`; map/sample assignment and Instrument replacement retain
 their stop/next-note boundaries.
 
+The matrix destination id `INST_MOD_RESONANCE` is 5; ids 0–4 remain unchanged
+and ids 6 and above are unsupported until assigned. The existing revisioned
+Instrument matrix snapshot and 34-byte request/112-byte sync payloads are
+unchanged. Resonance routes use a signed normalized offset, sum before
+clamping to `[-1, 1]`, and apply to the base value before the filter's
+`[0, 1]` clamp. This reuses the existing matrix preview, Apply/Revert and WXI
+save path.
+
 The filter edit group supports four Instrument-owned modes: `LP` (0), `HP`
 (1), `BP` (2) and `Notch` (3). `INST_EDIT_FILTER_SETTINGS` (op 5) carries
 cutoff, resonance and the mode in the former reserved byte at offset 10;

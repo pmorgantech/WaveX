@@ -197,3 +197,56 @@ TEST_F(InstrumentLiveTest, FilterModeFollowsOnlyItsInstrumentAndRevertPreservesC
     EXPECT_EQ(vm.GetVoice(0).filter.GetMode(), Mode::LowPass);
     EXPECT_EQ(vm.GetVoice(0).phase.Frame(), frame);
 }
+
+TEST_F(InstrumentLiveTest, ResonanceRouteRemovalAndLiveEditsUseTheOwningNotesBase) {
+    ins.filter.resonance = .2f;
+    vm.Trigger(TriggerParams());
+    auto other = TriggerParams();
+    other.track = 1;
+    vm.Trigger(other);
+    ins.mod_slots[0] = {SRC_VELOCITY, DEST_RESONANCE, 16384, CURVE_LINEAR, 0};
+    ModSlotResolver routes{&ins, [](const void* c, uint8_t track) -> const ModSlot* {
+                               return track == 0 ? static_cast<const Instrument*>(c)->mod_slots
+                                                 : nullptr;
+                           }};
+    vm.TickModulation(routes, {}, 48);
+    Render();
+    EXPECT_NEAR(vm.GetVoice(0).filter.Resonance(), .7f, .0001f);
+    EXPECT_FLOAT_EQ(vm.GetVoice(1).filter.Resonance(), .2f);
+    const auto frame = vm.GetVoice(0).phase.Frame();
+    ins.filter.resonance = .8f;
+    Live();
+    EXPECT_FLOAT_EQ(vm.GetVoice(0).filter.Resonance(), 1);
+    EXPECT_EQ(vm.GetVoice(0).phase.Frame(), frame);
+    ins.mod_slots[0] = {};
+    vm.TickModulation(routes, {}, 48);
+    Render();
+    EXPECT_FLOAT_EQ(vm.GetVoice(0).filter.Resonance(), .8f);
+    EXPECT_FLOAT_EQ(vm.GetVoice(1).filter.Resonance(), .2f);
+}
+TEST_F(InstrumentLiveTest, ResonanceLockAndStolenVoiceKeepIndependentBaseAndModulation) {
+    auto p = TriggerParams();
+    WaveX::Sequencer::ParamLock lock{WaveX::Protocol::PARAM_FILTER_RESONANCE, 32768};
+    ApplyParamLocks(p, &lock, 1);
+    for (uint8_t i = 0; i < WAVEX_NUM_VOICES; ++i)
+        vm.Trigger(p);
+    ins.mod_slots[0] = {SRC_VELOCITY, DEST_RESONANCE, -32767, CURVE_LINEAR, 0};
+    ModSlotResolver routes{
+        &ins, [](const void* c, uint8_t) { return static_cast<const Instrument*>(c)->mod_slots; }};
+    vm.TickModulation(routes, {}, 48);
+    Render();
+    EXPECT_FLOAT_EQ(vm.GetVoice(0).filter.Resonance(), 0);
+    ins.filter.resonance = .9f;
+    Live();
+    EXPECT_FLOAT_EQ(vm.GetVoice(0).filter.Resonance(), 0);
+    ins.mod_slots[0] = {};
+    vm.TickModulation(routes, {}, 48);
+    Render();
+    EXPECT_NEAR(vm.GetVoice(0).filter.Resonance(), .5f, .0001f);
+    ins.mod_slots[0] = {SRC_VELOCITY, DEST_RESONANCE, -32767, CURVE_LINEAR, 0};
+    vm.TickModulation(routes, {}, 48);
+    Render();
+    vm.Trigger(TriggerParams());
+    EXPECT_FLOAT_EQ(vm.GetVoice(0).mod_resonance_offset, 0);
+    EXPECT_FLOAT_EQ(vm.GetVoice(0).filter.Resonance(), .9f);
+}

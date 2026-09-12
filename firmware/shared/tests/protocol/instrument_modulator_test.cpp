@@ -83,3 +83,33 @@ TEST(InstrumentModulatorProtocol, RejectsInvalidIdentityRangesAndNonFiniteValues
     bad.slot.flags = 2;
     EXPECT_FALSE(IsValidInstModOp(bad));
 }
+
+TEST(InstrumentModulatorProtocol, ResonanceRoundTripAndFutureDestinationsRemainRejected) {
+    for (uint8_t destination = 0; destination <= 13; ++destination) {
+        InstModOpMessage in;
+        in.request_id = 1;
+        in.revision = 2;
+        in.op = INST_MOD_SET_SLOT;
+        in.slot = {17, destination, -12345, 1, 0};
+        const bool supported = destination < INST_MOD_DEST_COUNT;
+        EXPECT_EQ(IsValidInstModOp(in), supported);
+        if (!supported)
+            continue;
+        std::array<uint8_t, 512> wire{};
+        ASSERT_GT(ProtocolHandler::CreatePacket(
+                      wire.data(), wire.size(), MSG_INST_MOD_OP, &in, sizeof(in)),
+                  0);
+        InstModOpMessage out;
+        ASSERT_TRUE(ProtocolHandler::ParseMessage(wire.data(), MSG_INST_MOD_OP, &out, sizeof(out)));
+        EXPECT_EQ(std::memcmp(&in, &out, sizeof(in)), 0);
+        InstModSyncMessage sync;
+        sync.slots[7] = in.slot;
+        ASSERT_GT(ProtocolHandler::CreatePacket(
+                      wire.data(), wire.size(), MSG_INST_MOD_SYNC, &sync, sizeof(sync)),
+                  0);
+        InstModSyncMessage read;
+        ASSERT_TRUE(
+            ProtocolHandler::ParseMessage(wire.data(), MSG_INST_MOD_SYNC, &read, sizeof(read)));
+        EXPECT_EQ(std::memcmp(&sync, &read, sizeof(sync)), 0);
+    }
+}

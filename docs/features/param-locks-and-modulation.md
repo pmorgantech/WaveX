@@ -3,10 +3,10 @@
 **Status**: Parameter-lock application and touch editing are implemented. Four
 voice-scoped locks per step are applied after zone resolution; pattern files
 retain them. The Instrument modulation editor, matrix, global LFOs and three
-envelopes exist. Two per-voice LFO runtimes and their typed transport now
-exist in the backend; the LFO touch page and live audition flow remain Phase
-2.5 work. Live motion recording and analog/group locks are still target design
-below, not implemented behavior.
+envelopes exist. Two per-voice LFO runtimes, their typed transport and the LFO
+touch page with live audition are implemented. The resonance destination is
+implemented; live motion recording, additional destinations and analog/group
+locks remain target design below, not implemented behavior.
 **Dependencies**: sequencer step scheduler (Phase 2), `instrument-model.md` (matrix slots are instrument-scoped), voice manager (done). **Revised 2026-09-04**: the two-oscillator Instrument (`track-and-patch-model.md` §3.1) fixes the source/destination set this matrix serves — three envelopes, two per-voice LFOs, one global LFO, oscillator and wavetable-position destinations — appended to the enums below, never renumbered.
 **Lineage**: two ancestries deliberately fused — Elektron parameter locks (per-step sound design) and the E-mu EIII **realtime controls matrix** (velocity/wheel/pedal → pitch, filter, level, LFO amount, attack — routed, not hardwired).
 
@@ -57,33 +57,37 @@ Stored in `Instrument` (`instrument-model.md` §2), 8 slots:
 
 ```cpp
 struct ModSlot {
-    uint8_t source;   // ModSource
-    uint8_t dest;     // ControlParameter (voice- or group-scoped subset)
+    uint8_t source;   // ModSource, see mod_matrix.hpp and protocol.h
+    uint8_t dest;     // ModDest, see mod_matrix.hpp and protocol.h
     int16_t depth;    // ±32767 → ±100%
-    uint8_t curve;    // 0=linear, 1=exponential, 2=S-curve (LUT, 33 points)
+    uint8_t curve;    // 0=linear, 1=exponential, 2=S-curve polynomial
     uint8_t flags;    // bit0: unipolar source remap to bipolar
 };
-enum ModSource : uint8_t {
-    SRC_NONE, SRC_VELOCITY, SRC_NOTE,          // per-trigger, sampled once
-    SRC_ENV_FILTER,                            // per-voice Env 2 (§4) — "Env 2" in the UI
-    SRC_LFO1,                                  // THE global LFO (§5)
-    SRC_LFO2,                                  // retired-but-reserved 2026-09-04: always 0 (one global LFO only)
-    SRC_LFO_VOICE,                             // per-voice LFO 1 (§5)
-    SRC_RANDOM,                                // per-trigger S&H, seeded RNG
-    SRC_MACRO_1, SRC_MACRO_2, SRC_MACRO_3, SRC_MACRO_4,
-    SRC_MODWHEEL, SRC_AFTERTOUCH,              // from MIDI CC1 / channel pressure
-    SRC_PARA_ENV,                              // Stage A paraphonic envelope (analog dests)
-    // Appended by the two-oscillator Instrument (track-and-patch-model.md §3.1); wire-stable, append-only:
-    SRC_LFO_VOICE2,                            // per-voice LFO 2
-    SRC_ENV1,                                  // amp envelope as a source
-    SRC_ENV3,                                  // per-voice Env 3 (pitch by default)
-};
-// ModDest grows the same way: today's CUTOFF/GAIN/PITCH/PAN, then RESONANCE,
-// OSC1_PITCH, OSC2_PITCH, OSC_MIX, OSC2_LEVEL, WT_POS1, WT_POS2, LFO1_RATE,
-// LFO2_RATE — appended, never renumbered.
 ```
 
-**Evaluation model — control-rate, never per-sample**: once per 1 ms control tick, for each active voice, `mod[dest] += depth · curve(source_value)` over its instrument's slots. Cost ceiling: 8 slots × 8 voices × ~10 ops = trivial. Per-trigger sources (velocity, note, random) are sampled into the voice at trigger and treated as constants. Destinations applied at block rate: cutoff → `filter.SetCutoff` once per block (one-pole recomputes its coefficient — cheap), gain/pan → block-constant multipliers, pitch → `increment` multiplier update once per block (this quantizes vibrato to 1 kHz steps, which is inaudible; do **not** move pitch mod per-sample without a DWT budget check).
+`source` and `dest` use the append-only `ModSource` and `ModDest` enums in
+`firmware/daisy/src/audio/mod_matrix.hpp`, mirrored as raw bytes in
+`firmware/shared/spi_protocol/protocol.h`. The five fields are source,
+destination, signed depth, curve and flags. Current destinations include
+cutoff, gain, pitch, pan and resonance; oscillator, wavetable-position and
+LFO-rate destinations remain planned.
+
+**Evaluation model — control-rate, never per-sample**: once per 1 ms control
+tick, each active voice sums its instrument routes before applying destination
+clamps. Cutoff and resonance are handed to the existing SVF through combined
+`VoiceFilter::SetParameters` once per block; gain/pan are block-constant
+multipliers and pitch updates the increment once per block. Callback cost is a
+measured gate, not an assumed constant; any future destination or callback
+change requires a fresh DWT capacity run.
+
+Resonance modulation uses a signed normalized offset. A full-depth source 1
+produces `+1`; routes are summed before the offset is clamped to `[-1, 1]`,
+then added to the base resonance and clamped to `[0, 1]`. A parameter lock may
+set the base resonance, and live base edits honor that lock; clearing a route
+restores the unmodulated base, while Revert restores the prior matrix and its
+modulation. A stolen voice resets the modulation state. This
+extends the bounded `Voice` block-modulation handoff without adding a new
+transport or per-sample work.
 
 This requires the modest `Voice` surface: `SetBlockModulation(cutoff_mul, gain_mul, pitch_mul, pan_offset)` applied at the top of its render slice — one struct write, callback-safe.
 
@@ -117,7 +121,8 @@ enum as retired-but-reserved and reads 0.
 3. **LFO page**: expose the two Instrument-owned per-voice LFOs; the
    engine-global LFO stays performance-owned. The implemented page uses eight
    tiles in two rows and the common automatic-preview Apply/Revert path.
-   Held-voice propagation remains open.
+   Held-voice propagation for the implemented LFO controls is built; global
+   LFO editing remains open.
 
 ## 8. Test plan
 
@@ -141,9 +146,9 @@ enum as retired-but-reserved and reads 0.
   the callback never reads a partially edited matrix.
 - The backend and ESP32 now run two Instrument-owned per-voice LFOs with typed
   revisioned snapshots, WXI retention, append-only source ids and the two-row
-  touch page. Held-voice propagation, global LFO editing, expanded
-  destinations and MIDI CC/channel-pressure source wiring remain Phase 2.5
-  work.
+  touch page. Held-voice propagation and the resonance destination are built;
+  global LFO editing, expanded destinations and MIDI CC/channel-pressure source
+  wiring remain Phase 2.5 work.
 - MIDI CC/channel-pressure source wiring, live lock recording, global LFO
   editing and analog/group lock lifetimes remain open. The corresponding
   gestures and protocol extensions above describe targets, not current controls.

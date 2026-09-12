@@ -215,7 +215,8 @@ done. Open work, in the order decided 2026-09-05 (model doc §8: 7 → 4 → 5 �
    both keyboard zone maps, Env 1–3, the eight-row matrix editor and the
    backend runtime/typed transport for two per-voice LFOs are built. The four
    Instrument filter modes (LP, HP, BP and Notch) and their typed transport are
-   implemented; new mod destinations remain open. Instrument sound controls now preview
+   implemented; the resonance matrix destination is implemented, while other
+   new mod destinations remain open. Instrument sound controls now preview
    automatically with typed filter/amp readback and a per-Track Apply/Revert
    undo point; supported controls now update held voices through the bounded
    handoff, while map/sample replacement retains its stop/next-note boundary.
@@ -225,8 +226,9 @@ done. Open work, in the order decided 2026-09-05 (model doc §8: 7 → 4 → 5 �
    The held-edit run on 328a419 reached 71.1283% peak and was REVIEW. The
    subsequent clean filter-cache run on 5466a96 reached 69.0852% peak and is
    STAY as a pre-filter-mode baseline. The clean filter-mode run on 1a2eb5e
-   reached 69.4887% peak and is STAY, with zero underruns/drops; each future
-   callback milestone requires a fresh full measurement.
+   reached 69.4887% peak and is STAY, with zero underruns/drops; the resonance
+   change needs a fresh capacity gate. Each future callback milestone requires
+   a fresh full measurement.
    These runs do not close the one-hour phase soak or permit a voice-count
    change.
 3. Bank (stage 6): the [WXCF Bank codec](features/bank-persistence.md) and

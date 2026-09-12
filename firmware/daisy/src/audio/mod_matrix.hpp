@@ -52,7 +52,15 @@ enum ModSource : uint8_t {
     SRC_COUNT
 };
 
-enum ModDest : uint8_t { DEST_NONE = 0, DEST_CUTOFF, DEST_GAIN, DEST_PITCH, DEST_PAN, DEST_COUNT };
+enum ModDest : uint8_t {
+    DEST_NONE = 0,
+    DEST_CUTOFF,
+    DEST_GAIN,
+    DEST_PITCH,
+    DEST_PAN,
+    DEST_RESONANCE = Protocol::INST_MOD_RESONANCE,
+    DEST_COUNT
+};
 
 static_assert(SRC_COUNT == Protocol::INST_MOD_SOURCE_COUNT, "modulation source wire contract");
 static_assert(DEST_COUNT == Protocol::INST_MOD_DEST_COUNT, "modulation destination wire contract");
@@ -144,6 +152,7 @@ struct ModDestinations {
     float gain_mul = 1.0f;
     float pitch_mul = 1.0f;
     float pan_offset = 0.0f;
+    float resonance_offset = 0.0f;
 };
 
 // Full-scale ranges. These are CHOSEN, not derived - the design fixes the
@@ -198,6 +207,7 @@ inline ModDestinations EvaluateModMatrix(const ModSlot* slots,
     float gain = 0.0f;
     float pitch = 0.0f;
     float pan = 0.0f;
+    float resonance = 0.0f;
 
     if (slots) {
         if (count > kMaxModSlots) {
@@ -225,6 +235,9 @@ inline ModDestinations EvaluateModMatrix(const ModSlot* slots,
                 case DEST_PITCH:
                     pitch += amount;
                     break;
+                case DEST_RESONANCE:
+                    resonance += amount;
+                    break;
                 case DEST_PAN:
                     pan += amount;
                     break;
@@ -245,6 +258,9 @@ inline ModDestinations EvaluateModMatrix(const ModSlot* slots,
     }
     out.pitch_mul = std::pow(2.0f, (pitch * kModPitchSemitones) / 12.0f);
     out.pan_offset = pan < -1.0f ? -1.0f : (pan > 1.0f ? 1.0f : pan);
+    // Full signed depth spans the normalized resonance range. Sum routes
+    // before clamping; the voice adds this to its own (possibly locked) base.
+    out.resonance_offset = resonance < -1.f ? -1.f : (resonance > 1.f ? 1.f : resonance);
     return out;
 }
 
