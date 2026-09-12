@@ -508,13 +508,16 @@ void QueueOscReply(const InstOscOpMessage& request, uint8_t immediate_error = 0)
     FillOscReply(request, s_osc_reply, immediate_error);
     s_osc_pending = true;
 }
-void QueueKeyReply(uint32_t id, uint8_t track, uint8_t immediate_error = 0) {
+void QueueKeyReply(uint32_t id,
+                   uint8_t track,
+                   uint8_t immediate_error = 0,
+                   uint8_t oscillator = 0) {
     s_key_reply = InstKeyMapSyncMessage{};
     auto& out = s_key_reply;
     out.request_id = id;
     out.track = track;
     s_key_pending = true;
-    if (track >= kNumTracks) {
+    if (track >= kNumTracks || oscillator >= kNumOscillators) {
         out.error = INST_ERROR_BAD_FILE;
         return;
     }
@@ -527,7 +530,7 @@ void QueueKeyReply(uint32_t id, uint8_t track, uint8_t immediate_error = 0) {
     out.busy = s_phase != Phase::Idle;
     Protocol::detail::CopyWireString(out.name, sizeof(out.name), ins.name);
     for (uint8_t i = 0; i < INST_KEY_ZONE_COUNT; ++i) {
-        const auto& z = ins.osc[0].zones[i];
+        const auto& z = ins.osc[oscillator].zones[i];
         out.zones[i] = {static_cast<uint16_t>(z.in_use ? z.sample_id : 0),
                         z.key_lo,
                         z.key_hi,
@@ -545,7 +548,7 @@ void FinishKey(uint8_t error = INST_ERROR_NONE) {
     s_edit_error[s_key_request.track] = error;
     s_key_assignment = false;
     s_phase = Phase::Idle;
-    QueueKeyReply(s_key_request.request_id, s_key_request.track);
+    QueueKeyReply(s_key_request.request_id, s_key_request.track, 0, s_key_request.oscillator);
 }
 void FinishEdit(uint8_t error = INST_ERROR_NONE) {
     s_edit_completed[s_request.slot] = s_request.request_id;
@@ -773,7 +776,7 @@ void ConfirmVoicesStopped(SamplePool& pool, SampleMemMgr& memory) {
 
     if (s_key_assignment) {
         auto& ins = s_bank->At(s_key_request.track).instrument;
-        const auto& current = ins.osc[0].zones[s_key_request.zone];
+        const auto& current = ins.osc[s_key_request.oscillator].zones[s_key_request.zone];
         if (s_key_revision[s_key_request.track] != s_key_request.revision ||
             (current.in_use ? current.sample_id : 0) != s_key_request.expected_sample) {
             FinishKey(INST_ERROR_BAD_FILE);
@@ -785,7 +788,7 @@ void ConfirmVoicesStopped(SamplePool& pool, SampleMemMgr& memory) {
             FinishKey(INST_ERROR_MISSING_SAMPLES);
             return;
         }
-        auto& zone = ins.osc[0].zones[s_key_request.zone];
+        auto& zone = ins.osc[s_key_request.oscillator].zones[s_key_request.zone];
         const auto old = zone.in_use ? zone.sample_id : uint16_t{0};
         if (!sample)
             zone = Zone{};
@@ -794,6 +797,7 @@ void ConfirmVoicesStopped(SamplePool& pool, SampleMemMgr& memory) {
                 zone.start_frame = zone.end_frame = zone.loop_start = zone.loop_end = 0;
                 zone.loop_mode = ZONE_LOOP_INHERIT;
             }
+            ins.osc[s_key_request.oscillator].type = OscType::Sample;
             zone.sample_id = sample;
             zone.in_use = true;
             pool.SetUsedBy(sample, s_key_request.track, true);
@@ -907,22 +911,23 @@ bool OnOscOp(const InstOscOpMessage& request) {
 
 bool OnKeyMapOp(const InstKeyMapOpMessage& request) {
     if (!IsValidKeyMapOp(request)) {
-        QueueKeyReply(request.request_id, request.track, INST_ERROR_BAD_FILE);
+        QueueKeyReply(request.request_id, request.track, INST_ERROR_BAD_FILE, request.oscillator);
         return false;
     }
     if (request.op == KEY_MAP_GET || s_edit_completed[request.track] == request.request_id) {
-        QueueKeyReply(request.request_id, request.track);
+        QueueKeyReply(request.request_id, request.track, 0, request.oscillator);
         return false;
     }
     if (Busy()) {
-        QueueKeyReply(request.request_id, request.track, INST_ERROR_BUSY);
+        QueueKeyReply(request.request_id, request.track, INST_ERROR_BUSY, request.oscillator);
         return false;
     }
     s_key_request = request;
     auto& ins = s_bank->At(request.track).instrument;
-    auto& z = ins.osc[0].zones[request.zone];
+    auto& z = ins.osc[request.oscillator].zones[request.zone];
     const auto sample = z.in_use ? z.sample_id : uint16_t{0};
     if (ins.origin == InstrumentOrigin::None || ins.mode != InstrumentMode::Keyboard ||
+        ins.osc[request.oscillator].type == OscType::Wavetable ||
         request.revision != s_key_revision[request.track] || sample != request.expected_sample) {
         FinishKey(INST_ERROR_BAD_FILE);
         return false;
@@ -931,7 +936,7 @@ bool OnKeyMapOp(const InstKeyMapOpMessage& request) {
         s_key_assignment = true;
         s_request = InstOpMessage(request.request_id, request.track, 0, "");
         s_phase = Phase::AwaitVoiceStop;
-        QueueKeyReply(request.request_id, request.track);
+        QueueKeyReply(request.request_id, request.track, 0, request.oscillator);
         return false;
     }
     z.key_lo = request.value.key_lo;

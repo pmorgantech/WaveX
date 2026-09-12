@@ -346,3 +346,14 @@ The ESP32 consumes complete synchronized snapshots for the Osc editor.
 SET accepts the same level and signed tuning ranges as saved WXI settings;
 unrelated edits preserve untouched fields exactly. These operations do not
 implement per-oscillator stereo pan, wavetable playback or Bank recall.
+
+## Oscillator selection in Key Map
+
+The former reserved byte in InstKeyMapOpMessage now selects oscillator 0 or
+1. Default zero retains the first-map behavior and the request/reply sizes
+are unchanged. Each read request ID is scoped to the selected oscillator;
+the reply carries the requested map under that ID. A page change creates a
+new request identity, so an old map cannot replace the current selection.
+Mutations share the Instrument revision across both maps and keep the
+existing expected-sample and voice-stop checks. Assignment enables a Sample
+source; it cannot replace a reserved Wavetable source.

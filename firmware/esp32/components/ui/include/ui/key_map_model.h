@@ -12,9 +12,10 @@ class KeyMapModel {
     using Zone = WaveX::Protocol::InstKeyZone;
 
    public:
-    void Reset(uint8_t track) {
+    void Reset(uint8_t track, uint8_t oscillator = 0) {
         *this = KeyMapModel{};
         state_.track = track;
+        oscillator_ = oscillator;
     }
     void Expect(uint32_t id) { expected_ = id; }
     void MutationSent(uint32_t id) { pending_ = id; }
@@ -99,6 +100,7 @@ class KeyMapModel {
         m.request_id = id;
         m.revision = state_.revision;
         m.track = state_.track;
+        m.oscillator = oscillator_;
         m.zone = selected_;
         m.op = op;
         m.expected_sample = state_.zones[selected_].sample_id;
@@ -112,7 +114,7 @@ class KeyMapModel {
     State state_{};
     Zone draft_{};
     uint32_t expected_ = 0, pending_ = 0;
-    uint8_t selected_ = 0;
+    uint8_t selected_ = 0, oscillator_ = 0;
     bool valid_ = false, dirty_ = false, conflict_ = false;
 };
 }  // namespace wavex_ui

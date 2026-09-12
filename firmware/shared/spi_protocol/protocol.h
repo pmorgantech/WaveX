@@ -1974,7 +1974,8 @@ struct InstKeyZone {
 } __attribute__((packed));
 struct InstKeyMapOpMessage {
     uint32_t request_id = 0, revision = 0;
-    uint8_t track = 0, zone = 0, op = KEY_MAP_GET, reserved = 0;
+    // Formerly reserved; zero retains the original first-map behavior.
+    uint8_t track = 0, zone = 0, op = KEY_MAP_GET, oscillator = 0;
     uint16_t expected_sample = 0;
     InstKeyZone value{};
 } __attribute__((packed));
@@ -1992,7 +1993,7 @@ inline bool IsValidKeyZoneRange(const InstKeyZone& z) {
            z.vel_hi <= 127 && z.root_note <= 127;
 }
 inline bool IsValidKeyMapOp(const InstKeyMapOpMessage& m) {
-    if (!m.request_id || m.track >= 16 || m.zone >= INST_KEY_ZONE_COUNT || m.reserved ||
+    if (!m.request_id || m.track >= 16 || m.zone >= INST_KEY_ZONE_COUNT || m.oscillator >= 2 ||
         m.op > KEY_MAP_ASSIGN)
         return false;
     if (m.op == KEY_MAP_GET)

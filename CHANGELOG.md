@@ -13,6 +13,11 @@ versioning and release process.
 
 ### Added
 
+- Added selected-oscillator Key Map editing for 32 keyboard zones, including
+  source-aware readback, assignment into empty Sample maps, shared revision and
+  voice-stop checks, cross-map sample retention, and navigation from the Osc
+  editor. Pad Map remains on Oscillator 1.
+
 - Added an Instrument > Oscillator editor with authoritative backend snapshots,
   draft/apply/revert controls, source selection, level/mix/tuning/key-tracking
   edits, copy-into-empty-map, stale-revision handling, retained outcomes and

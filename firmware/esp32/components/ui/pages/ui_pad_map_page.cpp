@@ -134,7 +134,7 @@ void UIPadMapPage::onTrackChanged() {
     if (audition_at_)
         inter_mcu_send_note_off_track(audition_note_, audition_track_);
     audition_at_ = 0;
-    key_model_.Reset(getCurrentTrack());
+    key_model_.Reset(getCurrentTrack(), oscillator_);
     if (keyboard_)
         selected_ = 0;
     closeOverlay();
@@ -158,6 +158,7 @@ void UIPadMapPage::read() {
         InstKeyMapOpMessage request;
         request.request_id = read_id_;
         request.track = getCurrentTrack();
+        request.oscillator = oscillator_;
         if (inter_mcu_send_key_map(request) == ESP_OK)
             key_model_.Expect(read_id_);
     } else
@@ -195,7 +196,7 @@ void UIPadMapPage::service() {
     const bool alive = inter_mcu_backend_link_alive();
     if (alive != alive_) {
         alive_ = alive;
-        key_model_.Reset(getCurrentTrack());
+        key_model_.Reset(getCurrentTrack(), oscillator_);
         key_model_.Select(selected_);
         valid_ = false;
         pending_id_ = 0;
@@ -270,7 +271,7 @@ void UIPadMapPage::service() {
         failed_ = true;
         pending_id_ = 0;
         if (keyboard_) {
-            key_model_.Reset(getCurrentTrack());
+            key_model_.Reset(getCurrentTrack(), oscillator_);
             key_model_.Select(selected_);
             valid_ = false;
         }
@@ -292,6 +293,10 @@ void UIPadMapPage::render() {
         "Track %u / %s",
         trackDisplayNumber(getCurrentTrack()),
         valid_ && map_.loaded ? (map_.name[0] ? map_.name : "Quick Instrument") : "Empty");
+    if (keyboard_) {
+        const size_t len = std::strlen(text);
+        std::snprintf(text + len, sizeof(text) - len, " / Osc %u", oscillator_ + 1);
+    }
     if (std::strcmp(context_, text)) {
         std::snprintf(
             context_, sizeof(context_), "%.*s", static_cast<int>(sizeof(context_) - 1), text);
@@ -631,6 +636,7 @@ std::array<Softkey, NUM_SOFTKEYS> UIPadMapPage::getShiftedSoftkeys() {
 size_t UIPadMapPage::consoleState(char* out, size_t cap, size_t len) {
     using namespace WaveX::Debug;
     if (keyboard_) {
+        len = AppendKvInt(out, cap, len, "keyosc", oscillator_ + 1);
         len = AppendKvInt(
             out, cap, len, "keyready", valid_ && alive_ && key_model_.Ready() && !pending_id_);
         len = AppendKvInt(out, cap, len, "keyeditable", valid_ && map_.editable);
@@ -773,8 +779,8 @@ void UIPadMapPage::renderKeys() {
                                                   : message_;
     label(status_, message);
 }
-std::shared_ptr<UIPage> createKeyMapPage() {
-    return std::make_shared<UIPadMapPage>(true);
+std::shared_ptr<UIPage> createKeyMapPage(uint8_t oscillator) {
+    return std::make_shared<UIPadMapPage>(true, oscillator);
 }
 std::shared_ptr<UIPage> createPadMapPage() {
     return std::make_shared<UIPadMapPage>();

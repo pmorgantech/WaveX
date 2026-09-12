@@ -498,13 +498,62 @@ TEST_F(SfzLoaderTest, TrackReadbackReportsAuthoritativeRoutingAndCurrentBinding)
 }  // namespace
 
 namespace {
-InstKeyMapSyncMessage KeyRead(uint8_t track, uint32_t id = 998) {
+InstKeyMapSyncMessage KeyRead(uint8_t track, uint32_t id = 998, uint8_t oscillator = 0) {
     InstKeyMapOpMessage m;
     m.request_id = id;
     m.track = track;
+    m.oscillator = oscillator;
     SfzLoader::OnKeyMapOp(m);
     SfzLoader::PumpEditorReply();
     return WaveX::Comm::last_key_map;
+}
+
+TEST_F(SfzLoaderTest, SecondMapEditsAreIndependentAndRetainCrossMapOwnership) {
+    ASSERT_TRUE(Load(0));
+    const auto first = KeyRead(0);
+    const auto sample = first.zones[0].sample_id;
+    InstKeyMapOpMessage m;
+    m.request_id = 90001;
+    m.revision = first.revision;
+    m.oscillator = 1;
+    m.zone = 31;
+    m.op = KEY_MAP_ASSIGN;
+    m.value.sample_id = sample;
+    EXPECT_FALSE(SfzLoader::OnKeyMapOp(m));
+    EXPECT_EQ(SfzLoader::VoiceStopTrack(), 0);
+    SfzLoader::ConfirmVoicesStopped(pool_, memory_);
+    auto second = KeyRead(0, 90002, 1);
+    EXPECT_EQ(second.zones[31].sample_id, sample);
+    EXPECT_EQ(KeyRead(0).zones[31].sample_id, 0);
+    EXPECT_EQ(KeyRead(0).zones[0].sample_id, sample);
+    EXPECT_EQ(SfzLoader::ReadOscState(0, 1).type, static_cast<uint8_t>(OscType::Sample));
+    m.request_id = 90003;
+    m.revision = second.revision;
+    m.op = KEY_MAP_SET_RANGE;
+    m.expected_sample = sample;
+    m.value = {sample, 40, 80, 64, 127, 60};
+    ASSERT_TRUE(SfzLoader::OnKeyMapOp(m));
+    second = KeyRead(0, 90004, 1);
+    EXPECT_EQ(second.zones[31].vel_lo, 64);
+    EXPECT_EQ(KeyRead(0).zones[0].vel_lo, first.zones[0].vel_lo);
+    // Replacing one map invalidates an outstanding edit to the other.
+    m.request_id = 90005;
+    m.oscillator = 0;
+    m.zone = 0;
+    m.value = first.zones[0];
+    EXPECT_FALSE(SfzLoader::OnKeyMapOp(m));
+    m.request_id = 90006;
+    m.oscillator = 1;
+    m.zone = 31;
+    m.revision = second.revision;
+    m.op = KEY_MAP_ASSIGN;
+    m.value.sample_id = 0;
+    SfzLoader::OnKeyMapOp(m);
+    SfzLoader::ConfirmVoicesStopped(pool_, memory_);
+    EXPECT_EQ(KeyRead(0, 90007, 1).zones[31].sample_id, 0);
+    ASSERT_NE(pool_.Find(sample), nullptr);
+    EXPECT_TRUE(pool_.Find(sample)->used_by & 1);
+    EXPECT_EQ(KeyRead(0).zones[0].sample_id, sample);
 }
 TEST_F(SfzLoaderTest, KeyboardRangesRejectStaleEditsAndKeepOtherZones) {
     ASSERT_TRUE(Load(0));

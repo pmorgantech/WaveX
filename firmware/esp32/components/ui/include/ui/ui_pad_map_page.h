@@ -7,7 +7,8 @@
 namespace wavex_ui {
 class UIPadMapPage : public UIPage {
    public:
-    explicit UIPadMapPage(bool keyboard = false) : keyboard_(keyboard) {}
+    explicit UIPadMapPage(bool keyboard = false, uint8_t oscillator = 0)
+        : keyboard_(keyboard), oscillator_(oscillator < 2 ? oscillator : 0) {}
     const char* name() const override { return keyboard_ ? "Key Map" : "Pad Map"; }
     const char* contextLine() const override { return context_; }
     void onEnter(lv_obj_t* parent) override;
@@ -32,6 +33,7 @@ class UIPadMapPage : public UIPage {
         return keyboard_ ? key_model_.Draft().sample_id : map_.pads[selected_].sample_id;
     }
     const bool keyboard_;
+    const uint8_t oscillator_;
     KeyMapModel key_model_;
     ValueTile key_tiles_[5]{};
     uint8_t audition_note_ = 0, audition_track_ = 0;
@@ -75,5 +77,5 @@ class UIPadMapPage : public UIPage {
     char message_[160]{}, context_[96]{};
 };
 std::shared_ptr<UIPage> createPadMapPage();
-std::shared_ptr<UIPage> createKeyMapPage();
+std::shared_ptr<UIPage> createKeyMapPage(uint8_t oscillator = 0);
 }  // namespace wavex_ui

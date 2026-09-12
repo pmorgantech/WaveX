@@ -13,6 +13,7 @@ TEST(KeyMapProtocol, OperationsAndSparseSnapshotRoundTrip) {
         in.revision = 789;
         in.track = 15;
         in.zone = 31;
+        in.oscillator = 1;
         in.op = op;
         in.expected_sample = 65000;
         in.value = {65000, 24, 72, 20, 99, 48};
@@ -86,4 +87,9 @@ TEST(KeyMapProtocol, RejectsInvalidRangesAndIdentity) {
     bad = m;
     bad.track = 16;
     EXPECT_FALSE(IsValidKeyMapOp(bad));
+    bad = m;
+    bad.oscillator = 2;
+    EXPECT_FALSE(IsValidKeyMapOp(bad));
+    m.oscillator = 1;
+    EXPECT_TRUE(IsValidKeyMapOp(m));
 }

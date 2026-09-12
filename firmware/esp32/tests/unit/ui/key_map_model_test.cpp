@@ -76,3 +76,25 @@ TEST(KeyMapModel, EmptyAndDrumMapsCannotStageKeyboardEdits) {
     ASSERT_TRUE(m.Accept(s));
     EXPECT_FALSE(m.Set(0, 10));
 }
+
+TEST(KeyMapModel, RequestIdentityScopesTheSelectedOscillator) {
+    KeyMapModel m;
+    m.Reset(3, 1);
+    m.Expect(10);
+    InstKeyMapSyncMessage s;
+    s.request_id = 9;
+    s.track = 3;
+    s.revision = 4;
+    s.loaded = 1;
+    EXPECT_FALSE(m.Accept(s));
+    s.request_id = 10;
+    EXPECT_TRUE(m.Accept(s));
+    auto request = m.Request(11, KEY_MAP_ASSIGN, 55);
+    EXPECT_EQ(request.track, 3);
+    EXPECT_EQ(request.oscillator, 1);
+    EXPECT_TRUE(IsValidKeyMapOp(request));
+    m.Reset(3, 0);
+    m.Expect(12);
+    EXPECT_FALSE(m.Accept(s));
+    EXPECT_EQ(m.Request(12, KEY_MAP_GET).oscillator, 0);
+}

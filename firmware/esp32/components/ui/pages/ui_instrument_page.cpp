@@ -790,7 +790,10 @@ std::array<Softkey, NUM_SOFTKEYS> UIInstrumentPage::getShiftedSoftkeys() {
     // equivalent at all.
     keys[1] = {"< Stage", [this]() { moveStage(-1); }};
     keys[2] = {"Stage >", [this]() { moveStage(+1); }};
-    keys[3] = {"Key Map", [] { UINavigator::instance().push(createKeyMapPage()); }};
+    keys[3] = {
+        "Key Map", [this] {
+            UINavigator::instance().push(createKeyMapPage(oscillator_.Snapshot().oscillator));
+        }};
     keys[4] = {"Browse", [] {
                    if (auto page = createInstrumentBrowserPage())
                        UINavigator::instance().push(page);

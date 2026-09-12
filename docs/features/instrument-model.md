@@ -261,8 +261,12 @@ The editor preserves untouched floating-point settings exactly and accepts the
 complete saved WXI level/tuning ranges. A changed Instrument revision discards
 a stale draft; pending operations are polled for their retained result. A
 timeout refreshes the authoritative state without blindly retrying a mutation.
-Both maps save through existing WXI copies. Key Map and Pad Map still edit
-the first oscillator's zones; general second-map editing, additional
+Both maps save through existing WXI copies. Key Map opens the oscillator
+selected in Osc and edits its 32 keyboard zones independently; its header
+names the oscillator. Assignment, clear and key/velocity ranges share one
+Track revision across both maps. The voice-stop barrier protects replacement,
+and clearing a zone retains samples used elsewhere in either map.
+Pad Map still edits the first oscillator's fixed drum pads. Additional
 envelopes/LFOs and modulation destinations remain open.
 
 The oscillator UI milestone passes 258 ESP32 host tests, 379 shared tests and
@@ -271,3 +275,10 @@ Track-entry preservation and WXI recall. The clean two-source callback gate
 is recorded at 65.6921% peak over 605.2 seconds with zero underruns in
 [the performance log](../callback-performance-log.md). These checks do not
 close the one-hour phase soak or physical-panel gate.
+
+Second-map Key Map validation covers both protocol operations, four UI-model
+tests and 26 loader tests. The two-board test assigns separate samples and
+key ranges to both maps, saves/reloads one WXI, reads both maps back, and
+checks note admission at every range edge (26.41 seconds). Both device
+images compile. This foreground editor patch does not change the measured
+voice renderer.

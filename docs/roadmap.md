@@ -194,7 +194,7 @@ done. Open work, in the order decided 2026-09-05 (model doc §8: 7 → 4 → 5 �
    Tag metadata/filtering remains future work; these editors do not close the
    Phase 2 hardware gate.
 2. Voice architecture (stage 5): Osc 2 sample submix and its touch settings
-   are built. Complete second-map zone editing, filter type, Env 3,
+   and both keyboard zone maps are built. Complete filter type, Env 3,
    two per-voice LFOs and new mod destinations —
    DWT-measured at `WAVEX_NUM_VOICES` before the count is changed.
    The **UI for this is already designed and not built**: Claude Design turn
