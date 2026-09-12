@@ -371,6 +371,18 @@ The final normal-image HIL passed both filter-mode preview/Apply/Revert/WXI
 recall and held-note filter preview cases in 54.46 seconds; the final Filter
 capture is `logs/filter-modes-20260912.png`.
 
+Candidate 1 (`perf/dsp-1-filter`, commit `701aaab`) was rejected by its
+controlled short trial. The `build-profile-dsp1` image SHA256 was
+`3671abc926a1781512c07c623d62efe26e774add9a9c743d539230af115f4a0b`;
+the interrupted capture ran 311.136 seconds over 62 windows, averaging
+159,280 cycles and peaking at 340,745 cycles (70.9885%), versus the clean
+baseline's 69.9396% peak. It had zero underruns/drops, 195 live edits and two
+file cycles. The exact-output check covered 160 cases and matched the
+2,027,520-byte baseline. This is rejected non-gating evidence; the helper did
+not record a gate row because the trial was intentionally stopped below ten
+minutes. Full capture metadata is in
+`logs/perf-dsp1-wavex-20260912-232515.json`.
+
 The resonance capture used clean source `d891d3c` and the
 `build-profile-resonance` image SHA256
 `cabc828e618c6faad759b30bc54977b7e4c38b3ee2355fc4b0616105353733b4`.
