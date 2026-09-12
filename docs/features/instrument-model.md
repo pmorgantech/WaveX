@@ -297,13 +297,14 @@ Track revision across both maps. The voice-stop barrier protects replacement,
 and clearing a zone retains samples used elsewhere in either map.
 Pad Map still edits the first oscillator's fixed drum pads. Envelope/matrix
 editing is described below. The backend now owns two per-voice LFO parameter
-sets on the Instrument; their touch page and additional destinations remain
-open.
+sets on the Instrument, and the LFO touch page plus four-mode filter editor
+are built. Additional modulation destinations remain open.
 
-The oscillator UI milestone passes 258 ESP32 host tests, 379 shared tests and
-both device builds. Two-board tests verify staged apply/revert, copying,
-Track-entry preservation and WXI recall. The clean two-source callback gate
-is recorded at 65.6921% peak over 605.2 seconds with zero underruns in
+The oscillator UI milestone historically passed 258 ESP32 host tests, 379
+shared tests and both device builds. Two-board tests verify staged apply/revert,
+copying, Track-entry preservation and WXI recall. The historical pre-LFO,
+pre-filter-mode two-source callback gate is recorded at 65.6921% peak over
+605.2 seconds with zero underruns in
 [the performance log](../callback-performance-log.md). These checks do not
 close the one-hour phase soak or physical-panel gate.
 
@@ -326,7 +327,8 @@ envelopes; they cannot keep a finished sample voice alive.
 The revisioned modulator messages edit one envelope or matrix slot and return
 all three envelopes/eight slots. The existing WXI mapper preserves them.
 Env 1 edits also use the existing live Track handoff, respecting pad overrides
-and parameter locks; auxiliary-envelope settings apply to subsequent notes.
+and parameter locks; Env 2/3 settings use the bounded held-note handoff while
+preserving envelope phase and note age.
 Legacy amp and matrix edits invalidate stale touch drafts. Env 2/3 routing
 uses the matrix, so no second implicit modulation path is added.
 
@@ -334,17 +336,19 @@ The Env and Mod touch editors now use those same revisioned snapshots.
 Env selects one of three envelopes and edits attack/decay/release in milliseconds
 and sustain in percent. Mod selects one of eight slots and edits source,
 destination, signed depth, curve and the optional unipolar-to-bipolar remap.
-Both keep one explicit draft: Apply sends it, Revert discards it, and a changed
-backend revision discards a stale draft. Tab changes require Apply/Revert;
-leaving the page or changing Track discards the draft. A lost acknowledgement
-causes readback without a blind mutation retry. Unknown saved matrix fields
+Edits preview automatically in the backend working Instrument. Apply accepts
+the common undo baseline, Revert restores the common snapshot, and a changed
+backend revision discards only a stale delivery. Tab changes and Track changes
+wait only for an outstanding delivery; they do not require Apply/Revert. A lost
+acknowledgement causes readback without a blind mutation retry. Unknown saved
+matrix fields
 remain readable and can be explicitly cleared; unavailable sources are not
 presented as working choices. Envelope and matrix edits save with WXI copies
-from Pad Map. Additional LFO/destination/filter work remains open.
-The clean db6f180 envelope gate measured 66.9571% peak over 605.2 seconds,
-with eight voices, both maps, 64 live routes, four locks per hit, full filter
-and drive, SD streaming, grid traffic and six file cycles. Zero underruns;
-STAY permits the next callback milestone. Capture/image attribution is in
+from Pad Map. Additional modulation destinations remain open.
+The historical clean db6f180 envelope gate measured 66.9571% peak over 605.2
+seconds, with eight voices, both maps, 64 live routes, four locks per hit,
+full filter and drive, SD streaming, grid traffic and six file cycles, with
+zero underruns. Capture/image attribution is in
 [the performance log](../callback-performance-log.md).
 
 The runtime-envelope milestone passes the Daisy host suite plus the prepared

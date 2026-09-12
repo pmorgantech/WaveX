@@ -345,13 +345,27 @@ accepted STAY result for the LFO workload. The clean 328a419 held-edit repeat
 then reached 71.1283% peak (33.0% average) over 605.2 seconds with zero
 underruns/drops, 386 live-edit cycles and five file cycles. It was REVIEW. The
 subsequent clean `5466a96` filter-cache repeat reached 69.0852% peak (32.0%
-average) over 605.2 seconds with zero underruns/drops and five file cycles,
-and is the accepted STAY result. Each future callback milestone requires a
-fresh full measurement.
+average) over 605.2 seconds with zero underruns/drops and five file cycles;
+it was the pre-filter-mode baseline. The clean `1a2eb5e` filter-mode repeat
+reached 69.4887% peak (32.1% average) over 610.2 seconds and 122 helper
+windows, with zero underruns/drops, 376 live-edit cycles and five pattern file
+cycles. It is the accepted STAY result for the filter-mode implementation.
+Each future callback milestone requires a fresh full measurement.
 Neither run closes the one-hour phase soak. The held-edit capture used the
 clean `328a419` source and `build-profile-held` image SHA256
 `d87b14a063c261b7395f5b7bb2f8f7c98e9f6ba45f66a2fffa3f111ff17d0c67`; full
 provenance is in the recorded JSON metadata.
+
+The filter-mode capture used clean source `1a2eb5e` and the
+`build-profile-modes` image SHA256
+`35aa620ee0aeadfa72cf0726b5a69fc2cc4e4afe996602fe5de32a9b9bd29c19`.
+The helper reports 610.2 seconds and 122 windows; the capture metadata reports
+607.85955 seconds of workload duration. Full provenance is in
+`logs/perf-modes-wavex-20260912-123616.json`.
+
+The final normal-image HIL passed both filter-mode preview/Apply/Revert/WXI
+recall and held-note filter preview cases in 54.46 seconds; the final Filter
+capture is `logs/filter-modes-20260912.png`.
 
 The dirty filter-cache retry used the same held-edit workload before the
 follow-up clean commit: `build-profile-filter-cache`, image SHA256
@@ -359,8 +373,8 @@ follow-up clean commit: `build-profile-filter-cache`, image SHA256
 125.032 seconds over 25 windows, 153,323 average cycles and 306,410 peak
 cycles (63.8354%), with zero underruns/drops, 80 live-edit cycles and one file
 cycle. This is short diagnostic evidence only; the clean 328a419 result at
-71.1283% is historical REVIEW evidence, superseded as the latest full result
-by the accepted 5466a96 gate.
+71.1283% is historical REVIEW evidence. The 5466a96 result is the pre-mode
+baseline, superseded as the latest full result by the accepted 1a2eb5e gate.
 
 ## Recorded runs
 
@@ -387,3 +401,4 @@ by the accepted 5466a96 gate.
 | 2026-09-12 | 8730cfd49a349dd265014baaaa55137d72df38ec | 8 Tracks; sixteen populated pads per kit; step notes 60-75; 8 mod slots per Instrument; four applied locks (cutoff/resonance/pan/pitch) per enabled step; WaveX 24 dB drive 100%; sequencing; SD stream; cutoff updates on all 8 Tracks; per-pad sound overrides on pads 1/5/9/13, live per-pad cutoff edits; eight drum Instruments; sixteen populated pads with choke group 1 per Track; one-shot at every second step; periodic save/load; streaming preview stops for file operations and restarts afterward; touch sequencer grid active with 16-step readback and 25 Hz playhead; during stopped file-load transitions one-shot voices may finish naturally; eight voices required after each restart; two 16-zone oscillator maps per Track with distinct kick PCM; 50/50 mono submix; Oscillator 2 detuned +17 cents; three active envelope sources with independent Env2/Env3 timing; all 64 routes use available sources; sixteen voice-owned sine LFOs at 20 Hz, gate retrigger with 1 ms delay and 3 ms fade; CMSIS sine kernel | 8 | 48000/48 | 480 MHz | qspi `-O2` | 605.2s (121 windows) | 480000 | 147323 (30.7%) | 326842 (68.0921%) | 31.9079% | 0 | yes | STAY | Clean 8730cfd source captured before flash; build-profile-edit image SHA256 81dc208fdccb0dd2a5c78e4b3ea7b69257dbc00c0bcd4d64b4f552d10fe5e64d; metadata logs/perf-lfo-wavex-20260912-043416.json; frontend LFO page source edits continued after capture, flashed firmware unchanged. Identical two-source /16 sine LFO workload; ITCM VoiceLfo::Start and TickModulation placement. Zero underruns/drops; six successful pattern file cycles. |
 | 2026-09-12 | 328a4193fce09de9070f2f76642705233b0487eb | 8 voices; held Instrument sound edits; two oscillator maps; Env 1-3; two per-voice LFOs; 64 routes; four locks per hit; WaveX 24 dB full drive; SD stream; periodic save/load | 8 | 48000/48 | 480 MHz | qspi `-O2` | 605.2s (121 windows) | 480000 | 158319 (33.0%) | 341416 (71.1283%) | 28.8717% | 0 | yes | REVIEW | Clean held-note callback checkpoint; REVIEW requires callback optimization before further scope |
 | 2026-09-12 | 5466a96bd01b6c1af5c161fe56ad824904e56471 | 8 voices; held Instrument sound edits; two oscillator maps; Env 1-3; two per-voice LFOs; 64 routes; four locks per hit; WaveX 24 dB full drive; SD stream; periodic save/load | 8 | 48000/48 | 480 MHz | qspi `-O2` | 605.2s (121 windows) | 480000 | 153509 (32.0%) | 331609 (69.0852%) | 30.9148% | 0 | yes | STAY | Clean filter snapshot cache repeat; image SHA256 e598775059836ad6a95cc0675a6fcf10b9d9e3ecfde4cdd54acffca1fb96a91f; capture logs/perf-held-wavex-20260912-053400.log and JSON metadata; five file cycles, 386 live-edit cycles; accepted STAY, one-hour phase soak remains open |
+| 2026-09-12 | 1a2eb5ee714e78d5cc89cdbdde4ec290f7eb6341 | 8 Tracks; two 16-zone oscillator maps; 64 routes; four locks per hit; WaveX 24 dB drive 100%; sixteen sine LFOs at 20 Hz; Env 1-3; SD stream; touch grid 25 Hz; all Tracks HP then alternating HP/Notch live filter edits on rotating Tracks | 8 | 48000/48 | 480 MHz | qspi `-O2` | 610.2s (122 windows) | 480000 | 154101 (32.1%) | 333546 (69.4887%) | 30.5113% | 0 | yes | STAY | Clean filter-mode gate; accepted STAY, one-hour phase soak and polyphony gate remain open |
