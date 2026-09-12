@@ -1960,9 +1960,8 @@ inline bool IsValidInstOscOp(const InstOscOpMessage& m) {
     if (m.op == INST_OSC_COPY_EMPTY)
         return m.source != m.oscillator;
     // Inclusive comparisons reject infinities and NaNs without a libm dependency.
-    return m.value.level >= 0 && m.value.level <= 2 && m.value.mix >= 0 && m.value.mix <= 1 &&
-           m.value.coarse >= -48 && m.value.coarse <= 48 && m.value.fine >= -100 &&
-           m.value.fine <= 100 && m.value.keytrack <= 1;
+    return m.value.level >= 0 && m.value.level <= 64 && m.value.mix >= 0 && m.value.mix <= 1 &&
+           m.value.keytrack <= 1;
 }
 
 // Key Map edits target stable slots, never a packed/sorted view. Revisions

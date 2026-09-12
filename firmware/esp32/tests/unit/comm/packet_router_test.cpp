@@ -88,11 +88,12 @@ class PacketRouterTest : public ::testing::Test {
     int TotalDispatches() const {
         const auto& cap = GetInterMcuCapture();
         return g_handlers.sync_calls + g_handlers.error_calls + g_handlers.unknown_calls +
-               cap.instrument_map_calls + cap.seq_page_calls + cap.seq_playhead_calls +
-               cap.heartbeat_calls + cap.meter_calls + cap.browse_resp_calls +
-               cap.envelope_chunk_calls + cap.sample_status_calls + cap.inst_status_calls +
-               cap.storage_status_calls + cap.stop_resp_calls + cap.diag_push_calls +
-               cap.sample_meta_calls + cap.sample_mem_status_calls + cap.cv_cal_calls;
+               cap.oscillator_calls + cap.instrument_map_calls + cap.seq_page_calls +
+               cap.seq_playhead_calls + cap.heartbeat_calls + cap.meter_calls +
+               cap.browse_resp_calls + cap.envelope_chunk_calls + cap.sample_status_calls +
+               cap.inst_status_calls + cap.storage_status_calls + cap.stop_resp_calls +
+               cap.diag_push_calls + cap.sample_meta_calls + cap.sample_mem_status_calls +
+               cap.cv_cal_calls;
     }
 
     std::unique_ptr<PacketRouter> router_;
@@ -692,4 +693,24 @@ TEST_F(PacketRouterTest, KeyMapReadbackRoutesLastSlotAndRejectsTruncation) {
     ASSERT_EQ(GetInterMcuCapture().key_map_calls, 1);
     EXPECT_EQ(GetInterMcuCapture().key_map.zones[31].vel_lo, 64);
     EXPECT_EQ(GetInterMcuCapture().key_map.revision, 17);
+}
+
+TEST_F(PacketRouterTest, OscillatorSnapshotsAcceptPaddedFramesAndRejectTruncatedUart) {
+    InstOscSyncMessage state;
+    state.request_id = 19;
+    state.revision = 27;
+    state.track = 3;
+    state.oscillator = 1;
+    state.value.fine = -25;
+    auto packet = ProtocolTestHelper::CreateWaveXPacket(MSG_INST_OSC_SYNC, &state, sizeof(state));
+    router_->route_packet(packet.data(), packet.size());
+    ASSERT_EQ(GetInterMcuCapture().oscillator_calls, 1);
+    EXPECT_EQ(GetInterMcuCapture().oscillator.request_id, 19u);
+    EXPECT_EQ(GetInterMcuCapture().oscillator.value.fine, -25);
+    const auto* bytes = reinterpret_cast<const uint8_t*>(&state);
+    for (size_t size = 0; size < sizeof(state); ++size)
+        router_->route_uart_message(MSG_INST_OSC_SYNC, bytes, size, 0, 1);
+    EXPECT_EQ(GetInterMcuCapture().oscillator_calls, 1);
+    router_->route_uart_message(MSG_INST_OSC_SYNC, bytes, sizeof(state), 0, 1);
+    EXPECT_EQ(GetInterMcuCapture().oscillator_calls, 2);
 }

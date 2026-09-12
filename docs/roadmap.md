@@ -1,7 +1,7 @@
 # WaveX Implementation Roadmap
 
 **Status:** Canonical implementation order. **Current phase:** Phase 2.
-**Last updated:** 2026-09-10.
+**Last updated:** 2026-09-11.
 
 This document lists only open work. Completed work belongs in `CHANGELOG.md`
 and git history. Code-complete but unverified hardware behavior remains open in
@@ -87,13 +87,24 @@ Phase 2.5 work. Open work:
 
 ### 2.C — Callback capacity checkpoint
 
+The clean two-source workload on 409e40c peaked at **65.6921% (STAY)**
+over 605.2 seconds (121 windows), with zero underruns. All eight Tracks use
+two 16-zone maps, with four locks per hit, 64 modulation slots, WaveX 24 dB
+filter/full drive, live cutoff edits, SD streaming and pattern save/load cycles.
+The renderer and event paths run from ITCM; source-reading calls are inlined.
+Capture and image attribution are recorded in
+[the performance log](callback-performance-log.md). This permits the next
+expanded-voice milestone; every further callback feature still needs its
+own measured checkpoint and the full phase soak remains open.
+
+Previous applied-lock checkpoint:
+
 The applied-lock workload on 3dee3bf peaked at **69.6971% (STAY)** over
 605.2 seconds with zero underruns and six successful pattern save/load cycles.
 It uses the identical audio image committed in 5d9683a: four voice locks per
 hit and filter/envelope initialization moved from note-on to startup. This
 supersedes the fresh pre-lock 70.0479% REVIEW baseline for continuation.
-The margin below the 70% review threshold is narrow; remeasure each expanded
-voice milestone before proceeding beyond it. During pattern-load transitions,
+Remeasure each expanded voice milestone before proceeding beyond it. During pattern-load transitions,
 the transport is stopped and one-shot voices may finish naturally; eight
 voices are checked after each restart.
 
@@ -182,8 +193,9 @@ done. Open work, in the order decided 2026-09-05 (model doc §8: 7 → 4 → 5 �
    creation, naming, assignment, choke and per-pad cutoff/amp ADS overrides.
    Tag metadata/filtering remains future work; these editors do not close the
    Phase 2 hardware gate.
-2. Voice architecture (stage 5): typed oscillators, Osc 2 + submix, filter
-   type, Env 3, two per-voice LFOs, new mod destinations —
+2. Voice architecture (stage 5): Osc 2 sample submix and its touch settings
+   are built. Complete second-map zone editing, filter type, Env 3,
+   two per-voice LFOs and new mod destinations —
    DWT-measured at `WAVEX_NUM_VOICES` before the count is changed.
    The **UI for this is already designed and not built**: Claude Design turn
    5 gives Instrument an Env 1/2/3 selector with destination chips and a new

@@ -4,6 +4,7 @@
 #include "components/ui_dial.h"
 #include "components/ui_value_tile.h"
 #include "input_event.h"
+#include "oscillator_model.h"
 #include "spi_protocol/protocol.h"
 #include "ui_page.h"
 
@@ -13,49 +14,8 @@
 
 namespace wavex_ui {
 
-/**
- * @brief Edits the selected Track's Instrument as five tabbed parameter groups.
- *
- * Tabs rather than a list because every group is a property of *the same
- * Instrument* - the rule `docs/ui-information-architecture.md` §2 pins, and the
- * same reason the Sample group is tabbed. The tab set and its order come from
- * §4: Sample, Env, Amp, Filter, Mod.
- *
- * That bar order is deliberately NOT the signal order. The audio actually
- * travels SAMPLE -> MOD -> ENV -> AMP -> FILTER, but Mod is the one stage the
- * protocol cannot carry yet, so §4 puts it last, where an unwired tab is least
- * in the way of the four that work. If Mod ever becomes real, moving it back
- * into signal position is a one-line change to `Stage` - the tab bar is built
- * from that enum, not from a second list.
- *
- * Like the Play group, this is a single `UIPage` that builds its own tabview
- * rather than a `UITabHostPage` over child pages. The state being edited -
- * which sample, every parameter value, whether the encoder is in edit mode -
- * is Instrument-scoped, not tab-scoped, and the header and status line that report
- * it therefore sit ABOVE the tabview. Built into a tab body they would vanish
- * on every tab switch, taking the only readout of what is being edited with
- * them.
- *
- * Scope, stated plainly because half of this chain is real and half is not yet:
- *
- * - **SAMPLE, ENV, AMP, FILTER are live.** SAMPLE cycles through resident
- *   samples (probing inter_mcu_get_sample_meta() the same way the Sample
- *   Manager page's list does - there is no dedicated "list of loaded ids"
- *   query) and TRACK is the shared selected Track (0..15, MSG_NOTE_ON's
- *   channel) that sample is bound to; both ride MSG_SAMPLE_SELECT. ENV/AMP/
- *   FILTER map onto the PARAM_* control changes the engine already applies to
- *   sounding voices, so edits are audible immediately. Picking a DIFFERENT
- *   already-resident sample for a Track can also be done from the Sample
- *   Manager page, which has the fuller list UI.
- * - **MOD is a placeholder.** Nothing in the protocol carries a modulation
- *   source, destination or depth, and inventing a matrix in the UI before the
- *   engine has one would be drawing controls that do nothing - the mistake this
- *   codebase has made before (see the sample edit page's "drawn but inert"
- *   note). The tab is shown, marked, and left unwired.
- * - **Pad Map persists Instruments.** The Sample tab opens its sixteen-pad
- *   editor, with confirmed new-kit creation, naming and new-copy WXI saves.
- *   Sample > Browse loads WXI and SFZ files through the same Track loader.
- */
+// Shared Instrument stages. Oscillator controls use revisioned backend snapshots;
+// legacy Env/Amp/Filter controls remain live Track controls.
 class UIInstrumentPage : public UIPage {
    public:
     const char* name() const override { return "Instrument"; }
@@ -66,21 +26,19 @@ class UIInstrumentPage : public UIPage {
     void onTrackChanged() override;
     std::array<Softkey, NUM_SOFTKEYS> getSoftkeys() override;
     std::array<Softkey, NUM_SOFTKEYS> getShiftedSoftkeys() override;
+    size_t consoleState(char* out, size_t cap, size_t len) override;
+    bool consoleCommand(const char* args, char* reply, size_t cap) override;
     const char* contextLine() const override { return context_line_; }
 
-    /// Tabs, in bar order (see the class note on why Mod is last).
-    enum class Stage : uint8_t { Sample = 0, Envelopes, Amp, Filter, Mod, kCount };
+    // Tabs share the selected Instrument.
+    enum class Stage : uint8_t { Oscillator = 0, Envelopes, Amp, Filter, Mod, kCount };
 
    private:
     static constexpr int kStageCount = static_cast<int>(Stage::kCount);
-    /// Widest stage is now Sample, at five (SAMPLE/TRACK/PITCH/PAN/GAIN).
-    static constexpr int kMaxParams = 5;
+    // Oscillator selection plus five settings.
+    static constexpr int kMaxParams = 6;
 
-    /// One editable parameter. `wire_param` is kParamNone for anything the
-    /// protocol cannot carry yet, which is how a control declares itself inert
-    /// rather than pretending. kParamSample/kParamTrack are real and live, but
-    /// ride MSG_SAMPLE_SELECT rather than MSG_CONTROL_CHANGE, so stepParam()/
-    /// sendParam() special-case them instead of treating `value` as a raw CC.
+    // CC-backed controls and a sentinel for the revisioned oscillator editor.
     struct Param {
         const char* label;
         uint8_t wire_param;
@@ -90,8 +48,7 @@ class UIInstrumentPage : public UIPage {
     };
 
     static constexpr uint8_t kParamNone = 0xFF;
-    static constexpr uint8_t kParamSample = 0xFE;
-    static constexpr uint8_t kParamTrack = 0xFD;
+    static constexpr uint8_t kParamOscillator = 0xFE;
 
     lv_obj_t* root_ = nullptr;
     lv_obj_t* tabview_ = nullptr;
@@ -129,8 +86,17 @@ class UIInstrumentPage : public UIPage {
     uint16_t stage_values_[kStageCount][kMaxParams] = {};
     bool values_seeded_ = false;
 
-    char instrument_name_[24] = "Init Instrument";
-    uint16_t sample_id_ = 0;
+    OscillatorModel oscillator_;
+    lv_timer_t* timer_ = nullptr;
+    lv_obj_t* oscillator_status_ = nullptr;
+    uint32_t read_at_ = 0, pending_at_ = 0;
+    bool alive_ = false, timed_out_ = false;
+    void readOscillator();
+    void serviceOscillator();
+    void selectOscillator(uint8_t oscillator);
+    void applyOscillator(uint8_t operation);
+    void refreshOscillator();
+    static void tick(lv_timer_t* timer);
     int stage_ = 0;  ///< index into Stage, and the active tab index
     int param_ = 0;  ///< index into the focused stage's parameters
     bool editing_ = false;
@@ -158,7 +124,6 @@ class UIInstrumentPage : public UIPage {
     void moveParam(int delta);
     void sendParam(const Param& p);
     void seedValues();
-    void cycleSample(int direction);
     uint8_t currentTrack() const;
 
     /// Parameters belonging to a stage, written into `out`.

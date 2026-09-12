@@ -138,6 +138,11 @@ void PacketRouter::route_by_message_type(uint8_t msg_type,
             if (CopyMessage(payload, payload_len, message, "TRACK_STATE"))
                 inter_mcu_store_track_state(message);
         } break;
+        case WaveX::Protocol::MSG_INST_OSC_SYNC: {
+            WaveX::Protocol::InstOscSyncMessage message;
+            if (CopyMessage(payload, payload_len, message, "INST_OSC_SYNC"))
+                inter_mcu_store_oscillator(message);
+        } break;
         case WaveX::Protocol::MSG_INST_KEY_MAP_SYNC: {
             WaveX::Protocol::InstKeyMapSyncMessage message;
             if (CopyMessage(payload, payload_len, message, "INST_KEY_MAP_SYNC"))

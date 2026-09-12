@@ -1276,6 +1276,35 @@ bool inter_mcu_get_seq_file_status(WaveX::Protocol::SeqFileStatusMessage* out) {
 }
 
 namespace {
+portMUX_TYPE s_oscillator_lock = portMUX_INITIALIZER_UNLOCKED;
+WaveX::Protocol::InstOscSyncMessage s_oscillator;
+bool s_oscillator_valid = false;
+}  // namespace
+esp_err_t inter_mcu_send_oscillator(const WaveX::Protocol::InstOscOpMessage& request) {
+    if (!WaveX::Protocol::IsValidInstOscOp(request))
+        return ESP_ERR_INVALID_ARG;
+    return send_uart_message(WaveX::Protocol::MSG_INST_OSC_OP, &request, sizeof(request)) >= 0
+               ? ESP_OK
+               : ESP_FAIL;
+}
+void inter_mcu_store_oscillator(const WaveX::Protocol::InstOscSyncMessage& state) {
+    taskENTER_CRITICAL(&s_oscillator_lock);
+    s_oscillator = state;
+    s_oscillator_valid = true;
+    taskEXIT_CRITICAL(&s_oscillator_lock);
+}
+bool inter_mcu_get_oscillator(WaveX::Protocol::InstOscSyncMessage* out) {
+    if (!out)
+        return false;
+    taskENTER_CRITICAL(&s_oscillator_lock);
+    const bool valid = s_oscillator_valid;
+    if (valid)
+        *out = s_oscillator;
+    taskEXIT_CRITICAL(&s_oscillator_lock);
+    return valid;
+}
+
+namespace {
 portMUX_TYPE s_key_map_lock = portMUX_INITIALIZER_UNLOCKED;
 WaveX::Protocol::InstKeyMapSyncMessage s_key_map;
 bool s_key_map_valid = false;

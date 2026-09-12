@@ -13,6 +13,12 @@ versioning and release process.
 
 ### Added
 
+- Added an Instrument > Oscillator editor with authoritative backend snapshots,
+  draft/apply/revert controls, source selection, level/mix/tuning/key-tracking
+  edits, copy-into-empty-map, stale-revision handling, retained outcomes and
+  WXI save retention. Additional oscillator-map editing, touch modulators and
+  envelope/LFO controls remain open.
+
 - Added oscillator copy, stale-edit and WXI-recall HIL coverage for the paired
   source renderer and its shared filter/amp behavior.
 
@@ -136,6 +142,11 @@ versioning and release process.
   placement; all four runs had zero underruns. The final 126.1-second run used
   one file cycle and is diagnostic evidence only, not the ten-minute capacity
   gate.
+
+- Recorded the accepted clean two-source callback gate at 65.6921% peak
+  utilization over 605.2 seconds and 121 windows, with zero underruns and six
+  file cycles. The result is a STAY decision for the measured workload; broader
+  future voice workloads and the full Phase 2 gate remain open.
 
 - Recorded the pad-sound callback checkpoint at 69.4104% peak utilization
   (STAY) over 605.2 seconds with six save/load cycles, zero underruns, file

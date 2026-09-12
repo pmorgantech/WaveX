@@ -125,6 +125,8 @@ struct InterMcuCapture {
     WaveX::Protocol::TrackStateMessage track_state;
     int key_map_calls = 0;
     WaveX::Protocol::InstKeyMapSyncMessage key_map;
+    int oscillator_calls = 0;
+    WaveX::Protocol::InstOscSyncMessage oscillator;
     int pad_sound_calls = 0;
     WaveX::Protocol::InstPadSoundSyncMessage pad_sound;
     int instrument_map_calls = 0;

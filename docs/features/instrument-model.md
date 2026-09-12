@@ -251,5 +251,23 @@ The output uses one mono submix and a shared Instrument/zone pan.
 Stored oscillator pan fields remain reserved; independent stereo oscillator
 panning is not exposed. The transport can read/edit oscillator level, mix,
 coarse/fine tune and key tracking, and copy a map into an empty oscillator.
-Those edits affect future triggers. Touch controls, additional envelopes/LFOs
-and their modulation destinations remain the next implementation steps.
+Those edits affect future triggers. Instrument > Osc now exposes both source
+selectors, level, submix, coarse/fine tuning and key tracking with authoritative
+readback. Drag or step values, then use Shift > Apply or Revert. Copy Other
+clones the other source into an empty map. Opening Instrument only reads the
+selected Track and never binds the Browser's last loaded sample.
+
+The editor preserves untouched floating-point settings exactly and accepts the
+complete saved WXI level/tuning ranges. A changed Instrument revision discards
+a stale draft; pending operations are polled for their retained result. A
+timeout refreshes the authoritative state without blindly retrying a mutation.
+Both maps save through existing WXI copies. Key Map and Pad Map still edit
+the first oscillator's zones; general second-map editing, additional
+envelopes/LFOs and modulation destinations remain open.
+
+The oscillator UI milestone passes 258 ESP32 host tests, 379 shared tests and
+both device builds. Two-board tests verify staged apply/revert, copying,
+Track-entry preservation and WXI recall. The clean two-source callback gate
+is recorded at 65.6921% peak over 605.2 seconds with zero underruns in
+[the performance log](../callback-performance-log.md). These checks do not
+close the one-hour phase soak or physical-panel gate.

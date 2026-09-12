@@ -342,4 +342,7 @@ Instrument revision and retained mutation outcome. Mutations require that
 revision; a stale edit, busy loader or occupied copy destination is rejected.
 Copying a map reuses this Track's existing Sample Pool references. These
 operations change future triggers through the immutable prepared-map handoff.
-They do not implement per-oscillator stereo pan, wavetable playback or Bank recall.
+The ESP32 consumes complete synchronized snapshots for the Osc editor.
+SET accepts the same level and signed tuning ranges as saved WXI settings;
+unrelated edits preserve untouched fields exactly. These operations do not
+implement per-oscillator stereo pan, wavetable playback or Bank recall.

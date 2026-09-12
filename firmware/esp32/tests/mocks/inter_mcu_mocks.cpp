@@ -107,3 +107,9 @@ void inter_mcu_store_instrument_map(const WaveX::Protocol::InstZoneSyncMessage& 
     ++cap.instrument_map_calls;
     cap.instrument_map = map;
 }
+
+void inter_mcu_store_oscillator(const WaveX::Protocol::InstOscSyncMessage& state) {
+    auto& cap = GetInterMcuCapture();
+    ++cap.oscillator_calls;
+    cap.oscillator = state;
+}

@@ -2,8 +2,10 @@
 #include "ui/ui_instrument_page.h"
 
 #include <esp_log.h>
+#include <esp_random.h>
 
 #include "../styles/ui_theme.h"
+#include "debug/console_command.h"
 #include "inter_mcu.h"
 #include "ui/current_track.h"
 #include "ui/ui_navigator.h"
@@ -12,6 +14,7 @@
 #include "ui/ui_sample_browser.h"
 #include "ui/ui_tab_group.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 
@@ -21,6 +24,13 @@ using namespace wavex_ui::palette;
 
 namespace {
 static const char* TAG = "UI_INSTRUMENT";
+uint32_t nextId() {
+    static uint32_t id = esp_random();
+    if (++id == 0)
+        ++id;
+    return id;
+}
+constexpr const char* oscillatorFields[] = {"LEVEL", "MIX", "COARSE", "FINE", "KEYTRACK"};
 
 // Not in the shared palette: "this control cannot be driven yet" is a state
 // only this page and the softkey bar have, and it is not part of the card /
@@ -37,7 +47,7 @@ constexpr int kParamStep = 65535 / 64;
 
 // Tab bar labels, in the same order as UIInstrumentPage::Stage. Kept short because
 // the bar divides evenly - one long label shrinks every other tab's target.
-const char* const kStageNames[] = {"Sample", "Env", "Amp", "Filter", "Mod"};
+const char* const kStageNames[] = {"Osc", "Env", "Amp", "Filter", "Mod"};
 
 // Content geometry, from design turns 2c (Env) and 2d (Filter). Positions are
 // relative to the tab body, which the navigator has already inset by the
@@ -64,8 +74,8 @@ constexpr int kFilterCurveH = 270;
 constexpr int kFilterTileY = kBodyPadTop + kFilterCurveH + 12;
 constexpr int kFilterTileH = kPaneH - kFilterCurveH - 12;  // 184
 
-// Stages that are neither: one row of tiles, centred in the body. Sample has
-// five controls and Amp two, so the row cannot fill 501px without stretching
+// Other stages use one row of tiles, centred in the body. Osc has
+// six controls and Amp two, so the row cannot fill 501px without stretching
 // tiles into panels; centring reads as deliberate where top-alignment leaves
 // the page looking truncated.
 constexpr int kRowTileH = 260;
@@ -87,24 +97,13 @@ int UIInstrumentPage::paramsForStage(Stage s, Param* out, int max) const {
     };
 
     switch (s) {
-        case Stage::Sample:
-            // SAMPLE and TRACK are not MSG_CONTROL_CHANGE destinations -
-            // stepParam() special-cases both. SAMPLE cycles which resident
-            // sample this Instrument addresses; TRACK is the shared selected
-            // Track (MIDI channel) that sample is bound to for note-on playback.
-            // Both ride MSG_SAMPLE_SELECT (roadmap Phase 2.5 item 1, "retire
-            // the fallback"). PITCH/PAN/GAIN are live: the engine applies all
-            // three to sounding voices.
-            add("SAMPLE", kParamSample, 0, "");
-            add("TRACK", kParamTrack, 0, "");
-            // Units are "%" of the wire range, not semitones or dB. The
-            // engine publishes no mapping from a 0..65535 control value to a
-            // physical unit, so printing "semi" beside a percentage - which
-            // this line used to do - claimed a calibration that does not
-            // exist. When the engine exposes ranges, these become real units.
-            add("PITCH", WaveX::Protocol::PARAM_PITCH, 32768, "%");
-            add("PAN", WaveX::Protocol::PARAM_PAN, 32768, "%");
-            add("GAIN", WaveX::Protocol::PARAM_VOLUME, 52428, "%");
+        case Stage::Oscillator:
+            add("OSC", kParamOscillator, 0, "");
+            add("LEVEL", kParamOscillator, 0, "%");
+            add("MIX", kParamOscillator, 0, "% Osc 2");
+            add("COARSE", kParamOscillator, 0, "semitones");
+            add("FINE", kParamOscillator, 0, "cents");
+            add("KEYTRACK", kParamOscillator, 0, "");
             break;
         case Stage::Envelopes:
             add("ATTACK", WaveX::Protocol::PARAM_ENVELOPE_ATTACK, 0, "");
@@ -126,9 +125,7 @@ int UIInstrumentPage::paramsForStage(Stage s, Param* out, int max) const {
             add("ENV->FLT", kParamNone, 0, "");
             break;
         case Stage::Mod:
-            // Inert, and labelled so. Nothing on the wire carries a modulation
-            // source, destination or depth yet; drawing a matrix that silently
-            // does nothing is the failure this codebase has already had once.
+            // The engine has matrix slots; the authoritative touch editor is pending.
             add("SOURCE", kParamNone, 0, "");
             add("DEST", kParamNone, 0, "");
             add("DEPTH", kParamNone, 0, "");
@@ -139,7 +136,7 @@ int UIInstrumentPage::paramsForStage(Stage s, Param* out, int max) const {
 
     // Overlay what the user has actually set. Done here rather than in each
     // add() so the table above stays a plain description of the chain.
-    if (values_seeded_) {
+    if (values_seeded_ && s != Stage::Oscillator) {
         const int si = static_cast<int>(s);
         for (int i = 0; i < n; ++i) {
             out[i].value = stage_values_[si][i];
@@ -161,37 +158,9 @@ void UIInstrumentPage::seedValues() {
     values_seeded_ = true;
 }
 
-// Which Track (0..15) the Sample tab's TRACK control currently targets.
-// Shared with Play, Sample Manager and the Browser's SFZ load target
-// (current_track.h) rather than kept in stage_values_ like the Instrument params:
-// a Track selection that only this page knew about was one of the reasons
-// "which Track?" had a different answer on every page.
+// Shared Track selection is also used by Play, Browser and Track pages.
 uint8_t UIInstrumentPage::currentTrack() const {
     return getCurrentTrack();
-}
-
-// Steps sample_id_ to the next/previous resident sample (wrapping) and
-// re-binds it to the selected Track - the Sample tab's "which sample this
-// Instrument plays" control (roadmap Phase 2.5 item 1, "retire the
-// fallback"). There is no "list of loaded ids" query, so this probes
-// inter_mcu_get_sample_meta() over the same id range the Sample Manager
-// page's list does, rather than inventing a second source of truth for it.
-void UIInstrumentPage::cycleSample(int direction) {
-    constexpr int32_t kMaxProbeId = 64;
-    for (int32_t step = 1; step <= kMaxProbeId; ++step) {
-        int32_t candidate = static_cast<int32_t>(sample_id_) + direction * step;
-        // Wrap into 1..kMaxProbeId (0 is reserved for "no sample").
-        candidate = ((candidate - 1) % kMaxProbeId + kMaxProbeId) % kMaxProbeId + 1;
-        WaveX::Protocol::SampleMetadata m;
-        if (inter_mcu_get_sample_meta(static_cast<uint16_t>(candidate), &m)) {
-            sample_id_ = static_cast<uint16_t>(candidate);
-            inter_mcu_send_sample_select(sample_id_, currentTrack());
-            refreshHeader();
-            refreshParams();
-            return;
-        }
-    }
-    refreshStatus("No other samples resident - load one from Browse");
 }
 
 void UIInstrumentPage::onEnter(lv_obj_t* parent) {
@@ -199,6 +168,7 @@ void UIInstrumentPage::onEnter(lv_obj_t* parent) {
     stage_ = 0;
     param_ = 0;
     editing_ = false;
+    status_[0] = 0;
     for (auto& b: stage_built_) {
         b = false;
     }
@@ -237,18 +207,15 @@ void UIInstrumentPage::onEnter(lv_obj_t* parent) {
     }
     lv_obj_add_event_cb(tabview_, &UIInstrumentPage::tabChangedCb, LV_EVENT_VALUE_CHANGED, this);
 
-    // The Instrument edits whatever sample is selected. Asking for metadata means
-    // the header can name it rather than showing a bare id.
+    // Entering this page reads the Track; only explicit edits mutate it.
     seedValues();
 
-    sample_id_ = 0;
-    if (auto* state = getSampleBrowserState()) {
-        sample_id_ = state->last_load_sample_id;
-    }
-    if (sample_id_ != 0) {
-        inter_mcu_request_sample_meta(sample_id_);
-        inter_mcu_send_sample_select(sample_id_, currentTrack());
-    }
+    oscillator_.Reset(currentTrack(), 0);
+    alive_ = inter_mcu_backend_link_alive();
+    timed_out_ = false;
+    pending_at_ = 0;
+    readOscillator();
+    timer_ = lv_timer_create(tick, 100, this);
 
     // Only the first tab's widgets exist after this; the rest are built when
     // first shown.
@@ -258,6 +225,10 @@ void UIInstrumentPage::onEnter(lv_obj_t* parent) {
 }
 
 void UIInstrumentPage::onExit() {
+    if (timer_)
+        lv_timer_delete(timer_);
+    timer_ = nullptr;
+    oscillator_status_ = nullptr;
     if (root_) {
         lv_obj_del(root_);
         root_ = nullptr;
@@ -410,20 +381,26 @@ void UIInstrumentPage::buildStageRows(int stage) {
             }
         }
     } else {
-        // One row of tiles, divided evenly. Sample has five, Amp two, Mod
+        // One row of tiles, divided evenly. Osc has six, Amp two, Mod
         // three; an even division keeps every stage on the same baseline
         // rather than giving each its own bespoke grid.
         const int cols = n > 0 ? n : 1;
         const int tw = (kContentW - (cols - 1) * kDialGap) / cols;
         const int ty = (kBodyH - kRowTileH) / 2;
         for (int i = 0; i < n; ++i) {
-            tiles_[stage][i] = valueTileCreate(body,
-                                               UI_MARGIN_X + i * (tw + kDialGap),
-                                               ty,
-                                               tw,
-                                               kRowTileH,
-                                               params[i].label,
-                                               params[i].unit);
+            tiles_[stage][i] =
+                valueTileCreate(body,
+                                UI_MARGIN_X + i * (tw + kDialGap),
+                                ty,
+                                tw,
+                                kRowTileH,
+                                params[i].label,
+                                stage == static_cast<int>(Stage::Oscillator) ? "" : params[i].unit);
+            if (stage == static_cast<int>(Stage::Oscillator)) {
+                tiles_[stage][i].value_font = UI_FONT_MONO_VALUE;
+                if (params[i].unit[0])
+                    valueTileSetDesc(tiles_[stage][i], params[i].unit);
+            }
             if (params[i].wire_param != kParamNone) {
                 const int idx = i;
                 valueTileSetOnAdjust(tiles_[stage][i], [this, idx](int steps) {
@@ -435,6 +412,15 @@ void UIInstrumentPage::buildStageRows(int stage) {
         }
     }
 
+    if (stage == static_cast<int>(Stage::Oscillator)) {
+        oscillator_status_ = lv_label_create(body);
+        ui_theme_apply_label_style(oscillator_status_, false);
+        lv_obj_set_style_text_font(oscillator_status_, UI_FONT_SMALL, 0);
+        lv_obj_set_pos(
+            oscillator_status_, UI_MARGIN_X, (kBodyH + kRowTileH) / 2 + UI_PADDING_LARGE);
+        lv_obj_set_width(oscillator_status_, kContentW);
+        lv_label_set_long_mode(oscillator_status_, LV_LABEL_LONG_WRAP);
+    }
     stage_built_[stage] = true;
 }
 
@@ -560,29 +546,21 @@ void UIInstrumentPage::selectStage(int stage) {
 // member because UIPage::contextLine() hands back a pointer the navigator
 // copies immediately.
 void UIInstrumentPage::refreshHeader() {
-    WaveX::Protocol::SampleMetadata m;
-    const unsigned track = trackDisplayNumber(currentTrack());
-    if (sample_id_ != 0 && inter_mcu_get_sample_meta(sample_id_, &m)) {
-        snprintf(context_line_,
-                 sizeof(context_line_),
-                 "%s / Track %u / %.24s",
-                 instrument_name_,
-                 track,
-                 m.name);
-    } else if (sample_id_ != 0) {
-        snprintf(context_line_,
-                 sizeof(context_line_),
-                 "%s / Track %u / sample %u",
-                 instrument_name_,
-                 track,
-                 (unsigned)sample_id_);
-    } else {
-        snprintf(context_line_,
-                 sizeof(context_line_),
-                 "%s / Track %u / no sample",
-                 instrument_name_,
-                 track);
+    WaveX::Protocol::TrackBindingMessage binding;
+    const char* name = "Empty";
+    if (inter_mcu_get_track_binding(currentTrack(), &binding)) {
+        if (binding.name[0])
+            name = binding.name;
+        else if (binding.state == WaveX::Protocol::TRACK_BINDING_SAMPLE)
+            name = "Sample";
+        else if (binding.state == WaveX::Protocol::TRACK_BINDING_LOADING)
+            name = "Loading";
     }
+    snprintf(context_line_,
+             sizeof(context_line_),
+             "Track %u / %.23s",
+             trackDisplayNumber(currentTrack()),
+             name);
     // A status message displaces the sample for as long as it is set: it is
     // the more recent thing the user did, and the header is the only place
     // left to say it now the in-page strip is gone.
@@ -596,6 +574,10 @@ void UIInstrumentPage::refreshHeader() {
 }
 
 void UIInstrumentPage::refreshParams() {
+    if (stage_ == static_cast<int>(Stage::Oscillator)) {
+        refreshOscillator();
+        return;
+    }
     Param params[kMaxParams];
     const int n = paramsForStage(static_cast<Stage>(stage_), params, kMaxParams);
     if (param_ >= n) {
@@ -630,32 +612,18 @@ void UIInstrumentPage::refreshParams() {
         if (inert) {
             // Set once: valueTileSetUnwired() adds a reason label each call.
             if (!tile.note) {
-                valueTileSetUnwired(tile, "protocol carries no mod routing yet");
+                valueTileSetUnwired(tile,
+                                    stage_ == static_cast<int>(Stage::Mod)
+                                        ? "Modulation editor pending"
+                                        : "Instrument editor pending");
             }
             continue;
         }
 
         char value[40];
-        if (p.wire_param == kParamSample) {
-            WaveX::Protocol::SampleMetadata m;
-            if (sample_id_ == 0) {
-                snprintf(value, sizeof(value), "none");
-            } else if (inter_mcu_get_sample_meta(sample_id_, &m)) {
-                snprintf(value, sizeof(value), "%.18s", m.name);
-            } else {
-                snprintf(value, sizeof(value), "%u", (unsigned)sample_id_);
-            }
-            valueTileSetValue(tile, value, true);
-            valueTileSetFill(tile, 0.0f);
-        } else if (p.wire_param == kParamTrack) {
-            snprintf(value, sizeof(value), "%u", trackDisplayNumber(getCurrentTrack()));
-            valueTileSetValue(tile, value);
-            valueTileSetFill(tile, 0.0f);
-        } else {
-            snprintf(value, sizeof(value), "%d", static_cast<int>(frac * 100.0f + 0.5f));
-            valueTileSetValue(tile, value);
-            valueTileSetFill(tile, frac);
-        }
+        snprintf(value, sizeof(value), "%d", static_cast<int>(frac * 100.0f + 0.5f));
+        valueTileSetValue(tile, value);
+        valueTileSetFill(tile, frac);
         valueTileSetFocus(tile, focused);
     }
 
@@ -673,16 +641,11 @@ void UIInstrumentPage::refreshStatus(const char* text) {
 
 void UIInstrumentPage::sendParam(const Param& p) {
     if (p.wire_param == kParamNone) {
-        refreshStatus("Not wired: the protocol carries no modulation routing yet");
+        refreshStatus("This Instrument control is not implemented yet");
         return;
     }
-    if (p.wire_param == kParamSample || p.wire_param == kParamTrack) {
-        // Not a CC destination - stepParam() is what actually sends
-        // MSG_SAMPLE_SELECT for these two. sendParam() is also called from
-        // Init's "resend every wired parameter" loop, which must not forward
-        // a sentinel as a bogus PARAM_* id.
+    if (p.wire_param == kParamOscillator)
         return;
-    }
     // The Instrument page edits the selected Track's Instrument, so its
     // parameter changes are addressed to that Track.
     if (inter_mcu_send_control_change(p.wire_param, currentTrack(), p.value) != ESP_OK) {
@@ -698,26 +661,25 @@ void UIInstrumentPage::stepParam(int steps) {
     }
     Param& p = params[param_];
     if (p.wire_param == kParamNone) {
-        refreshStatus("Not wired: the protocol carries no modulation routing yet");
+        refreshStatus("This Instrument control is not implemented yet");
         return;
     }
-    if (p.wire_param == kParamSample) {
-        cycleSample(steps > 0 ? 1 : -1);
-        return;
-    }
-    if (p.wire_param == kParamTrack) {
-        int32_t next = static_cast<int32_t>(getCurrentTrack()) + steps;
-        next = next < 0 ? 0 : (next > 15 ? 15 : next);
-        setCurrentTrack(static_cast<uint8_t>(next));
-        // Re-bind whatever sample this page is tracking to the new Track, so
-        // moving TRACK genuinely changes which channel's note-on plays it
-        // rather than just relabelling a number nothing reads.
-        if (sample_id_ != 0 &&
-            inter_mcu_send_sample_select(sample_id_, getCurrentTrack()) != ESP_OK) {
-            refreshStatus("Send failed - link busy?");
+    if (stage_ == static_cast<int>(Stage::Oscillator)) {
+        if (param_ == 0) {
+            selectOscillator(static_cast<uint8_t>(
+                std::clamp(static_cast<int>(oscillator_.Snapshot().oscillator) + steps, 0, 1)));
+        } else if (alive_) {
+            const auto field = static_cast<uint8_t>(param_ - 1);
+            const int step = field < 2 ? 10 : 1;
+            const int value = static_cast<int>(std::clamp(
+                static_cast<int64_t>(oscillator_.Value(field)) + static_cast<int64_t>(steps) * step,
+                int64_t{-128},
+                int64_t{64000}));
+            oscillator_.Set(field, value);
+            timed_out_ = false;
+            refreshOscillator();
+            UINavigator::instance().refreshSoftkeys();
         }
-        refreshHeader();
-        refreshParams();
         return;
     }
 
@@ -811,8 +773,11 @@ std::array<Softkey, NUM_SOFTKEYS> UIInstrumentPage::getSoftkeys() {
                    refreshParams();
                    UINavigator::instance().refreshSoftkeys();
                }};
-    if (stage_ == static_cast<int>(Stage::Sample))
-        keys[5] = {"Pad Map", [] { UINavigator::instance().push(createPadMapPage()); }};
+    if (stage_ == static_cast<int>(Stage::Oscillator))
+        keys[5] = {"Pad Map",
+                   [] { UINavigator::instance().push(createPadMapPage()); },
+                   !oscillator_.Dirty() && !oscillator_.Pending(),
+                   "Apply or revert oscillator edits"};
     return keys;
 }
 
@@ -830,33 +795,210 @@ std::array<Softkey, NUM_SOFTKEYS> UIInstrumentPage::getShiftedSoftkeys() {
                    if (auto page = createInstrumentBrowserPage())
                        UINavigator::instance().push(page);
                }};
-    keys[5] = {"Init", [this]() {
-                   // Re-send every wired parameter at its default so the engine
-                   // and the page agree again.
-                   for (int s = 0; s < kStageCount; ++s) {
-                       Param params[kMaxParams];
-                       const int n = paramsForStage(static_cast<Stage>(s), params, kMaxParams);
-                       for (int i = 0; i < n; ++i) {
-                           stage_values_[s][i] = params[i].value;
-                           if (params[i].wire_param != kParamNone) {
-                               sendParam(params[i]);
-                           }
-                       }
-                   }
-                   snprintf(instrument_name_, sizeof(instrument_name_), "Init Instrument");
-                   refreshHeader();
-                   refreshParams();
-                   refreshStatus("Instrument reset to defaults");
-               }};
+    if (stage_ == static_cast<int>(Stage::Oscillator)) {
+        const bool ready = alive_ && oscillator_.Editable();
+        const bool navigating = !oscillator_.Dirty() && !oscillator_.Pending();
+        keys[1] = {"Apply",
+                   [this] { applyOscillator(WaveX::Protocol::INST_OSC_SET); },
+                   ready && oscillator_.Dirty(),
+                   "Adjust a value first"};
+        keys[2] = {"Revert",
+                   [this] {
+                       oscillator_.Revert();
+                       refreshOscillator();
+                       UINavigator::instance().refreshSoftkeys();
+                   },
+                   oscillator_.Dirty() && !oscillator_.Pending(),
+                   "No draft"};
+        keys[3].enabled = keys[4].enabled = navigating;
+        keys[3].why = keys[4].why = "Apply or revert oscillator edits";
+        keys[5] = {"Copy Other",
+                   [this] { applyOscillator(WaveX::Protocol::INST_OSC_COPY_EMPTY); },
+                   ready && navigating && oscillator_.Snapshot().zones == 0,
+                   "Select an empty oscillator"};
+    }
     return keys;
 }
 
 void UIInstrumentPage::onTrackChanged() {
-    // The panel's Track -/+ stepped the shared Track. Unlike the TRACK param
-    // this does not re-bind the sample: the global key selects a Track, it
-    // does not edit one.
+    oscillator_.Reset(currentTrack(), oscillator_.Snapshot().oscillator);
+    timed_out_ = false;
+    pending_at_ = 0;
+    readOscillator();
     refreshHeader();
     refreshParams();
+}
+
+void UIInstrumentPage::tick(lv_timer_t* timer) {
+    static_cast<UIInstrumentPage*>(lv_timer_get_user_data(timer))->serviceOscillator();
+}
+void UIInstrumentPage::readOscillator() {
+    if (!alive_)
+        return;
+    auto request = oscillator_.Request(nextId(), WaveX::Protocol::INST_OSC_GET);
+    if (inter_mcu_send_oscillator(request) == ESP_OK)
+        oscillator_.Expect(request.request_id);
+    read_at_ = lv_tick_get();
+}
+void UIInstrumentPage::serviceOscillator() {
+    bool changed = false;
+    const bool alive = inter_mcu_backend_link_alive();
+    if (alive != alive_) {
+        alive_ = alive;
+        oscillator_.Reset(currentTrack(), oscillator_.Snapshot().oscillator);
+        pending_at_ = 0;
+        changed = true;
+        if (alive_)
+            readOscillator();
+    }
+    WaveX::Protocol::InstOscSyncMessage received;
+    if (alive_ && inter_mcu_get_oscillator(&received) && oscillator_.Accept(received)) {
+        changed = true;
+        if (!oscillator_.Pending())
+            pending_at_ = 0;
+    }
+    const uint32_t now = lv_tick_get();
+    if (oscillator_.Pending() && static_cast<uint32_t>(now - pending_at_) >= 5000) {
+        // The reply may be lost after a successful edit. Refresh, never retry
+        // a mutation blindly or claim it failed.
+        timed_out_ = true;
+        oscillator_.Reset(currentTrack(), oscillator_.Snapshot().oscillator);
+        pending_at_ = 0;
+        changed = true;
+        readOscillator();
+    }
+    if (alive_ && static_cast<uint32_t>(now - read_at_) >= 300 &&
+        (stage_ == static_cast<int>(Stage::Oscillator) || oscillator_.Pending()))
+        readOscillator();
+    if (changed) {
+        refreshHeader();
+        refreshParams();
+        UINavigator::instance().refreshSoftkeys();
+    }
+}
+void UIInstrumentPage::selectOscillator(uint8_t oscillator) {
+    if (oscillator >= 2 || oscillator_.Dirty() || oscillator_.Pending())
+        return;
+    oscillator_.Reset(currentTrack(), oscillator);
+    timed_out_ = false;
+    readOscillator();
+    refreshParams();
+    UINavigator::instance().refreshSoftkeys();
+}
+void UIInstrumentPage::applyOscillator(uint8_t operation) {
+    if (!alive_ || !oscillator_.Editable() ||
+        (operation == WaveX::Protocol::INST_OSC_SET && !oscillator_.Dirty()) ||
+        (operation == WaveX::Protocol::INST_OSC_COPY_EMPTY &&
+         (oscillator_.Dirty() || oscillator_.Snapshot().zones)))
+        return;
+    auto request = oscillator_.Request(nextId(), operation);
+    if (inter_mcu_send_oscillator(request) != ESP_OK) {
+        refreshStatus("Send failed");
+        return;
+    }
+    oscillator_.MutationSent(request.request_id);
+    pending_at_ = read_at_ = lv_tick_get();
+    timed_out_ = false;
+    refreshOscillator();
+    UINavigator::instance().refreshSoftkeys();
+}
+void UIInstrumentPage::refreshOscillator() {
+    const auto& state = oscillator_.Snapshot();
+    for (uint8_t i = 0; i < 6; ++i) {
+        auto& tile = tiles_[0][i];
+        if (!tile.card)
+            continue;
+        char value[24];
+        float fill = 0;
+        if (i == 0) {
+            snprintf(value, sizeof(value), "%u", state.oscillator + 1);
+            fill = state.oscillator;
+        } else if (!oscillator_.Valid())
+            snprintf(value, sizeof(value), "--");
+        else {
+            const int v = oscillator_.Value(i - 1);
+            if (i <= 2) {
+                snprintf(value, sizeof(value), "%d.%d", v / 10, v % 10);
+                fill = std::min(static_cast<float>(v) / 1000.0f, 1.0f);
+            } else if (i == 5) {
+                snprintf(value, sizeof(value), "%s", v ? "On" : "Off");
+                fill = static_cast<float>(v);
+            } else {
+                snprintf(value, sizeof(value), "%+d", v);
+                fill = static_cast<float>(v + 128) / 255.0f;
+            }
+        }
+        valueTileSetValue(tile, value);
+        valueTileSetFill(tile, fill);
+        valueTileSetFocus(tile, i == param_);
+    }
+    const char* message = !alive_                  ? "Audio engine disconnected"
+                          : oscillator_.Pending()  ? "Applying..."
+                          : timed_out_             ? "Reply timed out; showing refreshed settings"
+                          : !oscillator_.Valid()   ? "Reading oscillator..."
+                          : !state.valid           ? "Load an Instrument from Browse"
+                          : state.busy             ? "Instrument is busy"
+                          : oscillator_.Conflict() ? "Instrument changed; draft discarded"
+                          : oscillator_.Dirty()    ? "Draft: Shift > Apply or Revert"
+                          : state.error            ? "Edit rejected; showing current settings"
+                          : state.type == 2        ? "Wavetable playback is not available yet"
+                          : state.zones == 0
+                              ? "Empty map: Shift > Copy Other to copy the other oscillator"
+                              : "Changes apply to subsequent notes. Save a WXI copy from Pad Map.";
+    char status[256];
+    snprintf(status,
+             sizeof(status),
+             "Osc %u / %s / %u zone%s\n\n%s",
+             state.oscillator + 1,
+             state.type == 1   ? "Sample"
+             : state.type == 2 ? "Wavetable"
+                               : "Off",
+             state.zones,
+             state.zones == 1 ? "" : "s",
+             message);
+    if (oscillator_status_ && strcmp(lv_label_get_text(oscillator_status_), status))
+        lv_label_set_text(oscillator_status_, status);
+}
+size_t UIInstrumentPage::consoleState(char* out, size_t cap, size_t len) {
+    using namespace WaveX::Debug;
+    len = AppendKvInt(out, cap, len, "oscready", alive_ && oscillator_.Ready());
+    len =
+        AppendKvInt(out, cap, len, "oscvalid", oscillator_.Valid() && oscillator_.Snapshot().valid);
+    len = AppendKvInt(out, cap, len, "osc", oscillator_.Snapshot().oscillator + 1);
+    len = AppendKvInt(out, cap, len, "osczones", oscillator_.Snapshot().zones);
+    len = AppendKvInt(out, cap, len, "oscdirty", oscillator_.Dirty());
+    len = AppendKvInt(out, cap, len, "oscerror", oscillator_.Snapshot().error);
+    const char* fields[] = {"osclevel", "oscmix", "osccoarse", "oscfine", "osckeytrack"};
+    for (uint8_t i = 0; i < 5; ++i)
+        len = AppendKvInt(out, cap, len, fields[i], oscillator_.Value(i));
+    return len;
+}
+bool UIInstrumentPage::consoleCommand(const char* args, char* reply, size_t cap) {
+    char name[16], extra;
+    int value;
+    if (!args || stage_ != static_cast<int>(Stage::Oscillator) ||
+        sscanf(args, "%15s %d %c", name, &value, &extra) != 2)
+        return false;
+    if (!strcmp(name, "OSC") && value >= 1 && value <= 2 && !oscillator_.Dirty() &&
+        !oscillator_.Pending()) {
+        selectOscillator(static_cast<uint8_t>(value - 1));
+    } else {
+        bool matched = false;
+        for (uint8_t i = 0; i < 5; ++i)
+            if (!strcmp(name, oscillatorFields[i]) && alive_) {
+                const int low = i == 2 || i == 3 ? -128 : 0;
+                const int high = i == 0 ? 64000 : i == 1 ? 1000 : i == 4 ? 1 : 127;
+                if (value < low || value > high || !oscillator_.Set(i, value))
+                    return false;
+                matched = true;
+            }
+        if (!matched)
+            return false;
+        refreshOscillator();
+        UINavigator::instance().refreshSoftkeys();
+    }
+    snprintf(reply, cap, "ok");
+    return true;
 }
 
 std::shared_ptr<UIPage> createInstrumentPage() {

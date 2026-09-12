@@ -115,3 +115,61 @@ def test_two_oscillator_copy_retains_samples_and_survives_wxi_recall(
     _wait_osc(daisy, 0, 1, valid=1, busy=0, zones=1, mix=500, fine=-25)
     daisy.note(0, 60)
     daisy.wait_state(voices=2)
+
+
+@pytest.mark.both
+@pytest.mark.sdcard
+def test_touch_oscillator_draft_copy_and_track_entry_preserve_instrument(
+    esp32, daisy, sequence_samples, sample_path
+):
+    from test_load_to_track import _load_and_wait, _open_browser
+
+    esp = esp32
+    a, _ = sequence_samples
+    # Seed a real last-browsed sample on another Track. Opening Instrument
+    # must never silently bind it over the kit we construct below.
+    esp.home()
+    esp.track(3)
+    _open_browser(esp, sample_path)
+    loaded = _load_and_wait(esp)
+    assert int(loaded["lastid"]) > 0
+    name = "HIL osc UI " + str(int(time.time()))
+    _instrument(daisy, 820001, 4, name)
+    _wait_osc(daisy, 0, 0, completed=820001, error=0)
+    _instrument(daisy, 820002, 7, sample=a)
+    before = _wait_osc(daisy, 0, 0, completed=820002, zones=1, error=0)
+    esp.home()
+    esp.track(0)
+    esp.open_menu("Instrument")
+    esp.wait_state(oscready=1, oscvalid=1, osc=1, osczones=1)
+    assert daisy.cmd("OSC", 0, 0)["revision"] == before["revision"]
+    esp.page("OSC", 2)
+    esp.wait_state(oscready=1, osc=2, osczones=0)
+    esp.key("SHIFT")
+    esp.wait_state(shift=1)
+    esp.softkey("Copy Other")
+    copied = esp.wait_state(oscready=1, osczones=1, oscerror=0)
+    assert copied["oscdirty"] == "0"
+    esp.page("MIX", 500)
+    esp.page("COARSE", -12)
+    esp.page("FINE", 17)
+    esp.wait_state(oscdirty=1, oscmix=500, osccoarse=-12, oscfine=17)
+    assert daisy.cmd("OSC", 0, 1)["mix"] == "0"
+    esp.key("SHIFT")
+    esp.wait_state(shift=1)
+    esp.softkey("Revert")
+    esp.wait_state(oscdirty=0, oscmix=0, osccoarse=0)
+    esp.page("MIX", 500)
+    esp.page("COARSE", -12)
+    esp.page("FINE", 17)
+    esp.key("SHIFT")
+    esp.wait_state(shift=1)
+    esp.softkey("Apply")
+    esp.wait_state(oscready=1, oscdirty=0, oscerror=0, oscmix=500)
+    _wait_osc(daisy, 0, 1, mix=500, coarse=-12, fine=17, zones=1)
+    esp.home()
+    esp.open_menu("Instrument")
+    esp.wait_state(oscready=1, oscmix=500, osczones=1)
+    esp.page("OSC", 2)
+    esp.wait_state(oscready=1, osccoarse=-12, oscfine=17, osczones=1)
+    esp.home()

@@ -67,7 +67,7 @@ TEST(OscillatorProtocol, RejectsInvalidIdentityRangesAndNonFiniteValues) {
     bad.value.level = std::numeric_limits<float>::infinity();
     EXPECT_FALSE(IsValidInstOscOp(bad));
     bad = m;
-    bad.value.coarse = 49;
+    bad.value.level = 64.01f;
     EXPECT_FALSE(IsValidInstOscOp(bad));
     bad = m;
     bad.value.keytrack = 2;
@@ -75,4 +75,15 @@ TEST(OscillatorProtocol, RejectsInvalidIdentityRangesAndNonFiniteValues) {
     bad = m;
     bad.op = INST_OSC_COPY_EMPTY;
     EXPECT_FALSE(IsValidInstOscOp(bad));
+}
+
+TEST(OscillatorProtocol, PreservesCompleteStoredSettingsRange) {
+    InstOscOpMessage m;
+    m.request_id = 1;
+    m.revision = 1;
+    m.op = INST_OSC_SET;
+    m.value.level = 64;
+    m.value.coarse = -128;
+    m.value.fine = 127;
+    EXPECT_TRUE(IsValidInstOscOp(m));
 }
