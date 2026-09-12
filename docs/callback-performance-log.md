@@ -350,8 +350,12 @@ it was the pre-filter-mode baseline. The clean `1a2eb5e` filter-mode repeat
 reached 69.4887% peak (32.1% average) over 610.2 seconds and 122 helper
 windows, with zero underruns/drops, 376 live-edit cycles and five pattern file
 cycles. It is the accepted STAY result for the filter-mode implementation.
-Each future callback milestone requires a fresh full measurement.
-Neither run closes the one-hour phase soak. The held-edit capture used the
+The clean `d891d3c` resonance repeat reached 69.9237% peak (32.8% average)
+over 610.2 seconds and 122 helper windows, with zero underruns/drops, 376
+live-edit cycles and five pattern file cycles. It is the accepted STAY result
+for the resonance implementation and is near the 70% threshold. Each future
+callback milestone requires a fresh full measurement. These runs do not close
+the one-hour phase soak. The held-edit capture used the
 clean `328a419` source and `build-profile-held` image SHA256
 `d87b14a063c261b7395f5b7bb2f8f7c98e9f6ba45f66a2fffa3f111ff17d0c67`; full
 provenance is in the recorded JSON metadata.
@@ -367,6 +371,14 @@ The final normal-image HIL passed both filter-mode preview/Apply/Revert/WXI
 recall and held-note filter preview cases in 54.46 seconds; the final Filter
 capture is `logs/filter-modes-20260912.png`.
 
+The resonance capture used clean source `d891d3c` and the
+`build-profile-resonance` image SHA256
+`cabc828e618c6faad759b30bc54977b7e4c38b3ee2355fc4b0616105353733b4`.
+The helper reports 610.2 seconds and 122 windows; the capture metadata reports
+607.679544 seconds of workload duration. Eight resonance routes were verified
+in the capture metadata at voiceLFO2 → resonance depth 8000 with S-curve.
+Full provenance is in `logs/perf-resonance-wavex-20260912-144145.json`.
+
 The dirty filter-cache retry used the same held-edit workload before the
 follow-up clean commit: `build-profile-filter-cache`, image SHA256
 `e598775059836ad6a95cc0675a6fcf10b9d9e3ecfde4cdd54acffca1fb96a91f`,
@@ -374,7 +386,8 @@ follow-up clean commit: `build-profile-filter-cache`, image SHA256
 cycles (63.8354%), with zero underruns/drops, 80 live-edit cycles and one file
 cycle. This is short diagnostic evidence only; the clean 328a419 result at
 71.1283% is historical REVIEW evidence. The 5466a96 result is the pre-mode
-baseline, superseded as the latest full result by the accepted 1a2eb5e gate.
+baseline, and the 1a2eb5e result is the pre-resonance baseline; both are
+superseded as the latest full result by the accepted d891d3c gate.
 
 ## Recorded runs
 
@@ -402,3 +415,4 @@ baseline, superseded as the latest full result by the accepted 1a2eb5e gate.
 | 2026-09-12 | 328a4193fce09de9070f2f76642705233b0487eb | 8 voices; held Instrument sound edits; two oscillator maps; Env 1-3; two per-voice LFOs; 64 routes; four locks per hit; WaveX 24 dB full drive; SD stream; periodic save/load | 8 | 48000/48 | 480 MHz | qspi `-O2` | 605.2s (121 windows) | 480000 | 158319 (33.0%) | 341416 (71.1283%) | 28.8717% | 0 | yes | REVIEW | Clean held-note callback checkpoint; REVIEW requires callback optimization before further scope |
 | 2026-09-12 | 5466a96bd01b6c1af5c161fe56ad824904e56471 | 8 voices; held Instrument sound edits; two oscillator maps; Env 1-3; two per-voice LFOs; 64 routes; four locks per hit; WaveX 24 dB full drive; SD stream; periodic save/load | 8 | 48000/48 | 480 MHz | qspi `-O2` | 605.2s (121 windows) | 480000 | 153509 (32.0%) | 331609 (69.0852%) | 30.9148% | 0 | yes | STAY | Clean filter snapshot cache repeat; image SHA256 e598775059836ad6a95cc0675a6fcf10b9d9e3ecfde4cdd54acffca1fb96a91f; capture logs/perf-held-wavex-20260912-053400.log and JSON metadata; five file cycles, 386 live-edit cycles; accepted STAY, one-hour phase soak remains open |
 | 2026-09-12 | 1a2eb5ee714e78d5cc89cdbdde4ec290f7eb6341 | 8 Tracks; two 16-zone oscillator maps; 64 routes; four locks per hit; WaveX 24 dB drive 100%; sixteen sine LFOs at 20 Hz; Env 1-3; SD stream; touch grid 25 Hz; all Tracks HP then alternating HP/Notch live filter edits on rotating Tracks | 8 | 48000/48 | 480 MHz | qspi `-O2` | 610.2s (122 windows) | 480000 | 154101 (32.1%) | 333546 (69.4887%) | 30.5113% | 0 | yes | STAY | Clean filter-mode gate; accepted STAY, one-hour phase soak and polyphony gate remain open |
+| 2026-09-12 | d891d3c7ed2ee95991910c806db97bf41ed5e4ec | 8 Tracks; two 16-zone oscillator maps; 64 routes; four locks per hit; WaveX 24 dB full drive; sixteen sine LFOs at 20 Hz; Env 1-3; SD stream; touch grid 25 Hz; HP/Notch filter modes; voiceLFO2 to resonance depth 8000 S-curve on slot 8 of each Track | 8 | 48000/48 | 480 MHz | qspi `-O2` | 610.2s (122 windows) | 480000 | 157210 (32.8%) | 335634 (69.9237%) | 30.0763% | 0 | yes | STAY | Clean resonance matrix gate; accepted STAY, near-70% threshold; one-hour phase soak remains open |

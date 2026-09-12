@@ -226,9 +226,10 @@ done. Open work, in the order decided 2026-09-05 (model doc §8: 7 → 4 → 5 �
    The held-edit run on 328a419 reached 71.1283% peak and was REVIEW. The
    subsequent clean filter-cache run on 5466a96 reached 69.0852% peak and is
    STAY as a pre-filter-mode baseline. The clean filter-mode run on 1a2eb5e
-   reached 69.4887% peak and is STAY, with zero underruns/drops; the resonance
-   change needs a fresh capacity gate. Each future callback milestone requires
-   a fresh full measurement.
+   reached 69.4887% peak and is STAY as the pre-resonance baseline. The clean
+   resonance run on d891d3c reached 69.9237% peak and is STAY, with zero
+   underruns/drops; it is near the 70% threshold. Each future callback
+   milestone requires a fresh full measurement.
    These runs do not close the one-hour phase soak or permit a voice-count
    change.
 3. Bank (stage 6): the [WXCF Bank codec](features/bank-persistence.md) and

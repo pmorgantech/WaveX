@@ -83,13 +83,15 @@ change requires a fresh DWT capacity run.
 Resonance modulation uses a signed normalized offset. A full-depth source 1
 produces `+1`; routes are summed before the offset is clamped to `[-1, 1]`,
 then added to the base resonance and clamped to `[0, 1]`. A parameter lock may
-set the base resonance, and live base edits honor that lock; clearing a route
-restores the unmodulated base, while Revert restores the prior matrix and its
-modulation. A stolen voice resets the modulation state. This
+set the base resonance, and live base edits honor that lock; clearing the last
+resonance route restores the unmodulated base, while Revert restores the prior
+matrix and its modulation. A stolen voice resets the modulation state. This
 extends the bounded `Voice` block-modulation handoff without adding a new
 transport or per-sample work.
 
-This requires the modest `Voice` surface: `SetBlockModulation(cutoff_mul, gain_mul, pitch_mul, pan_offset)` applied at the top of its render slice — one struct write, callback-safe.
+The control tick writes the bounded `SetBlockModulation(const
+ModDestinations&)` prepared snapshot, including the resonance offset; the
+render path consumes it for voice-block tuning.
 
 ## 4. Second envelope (filter envelope)
 
