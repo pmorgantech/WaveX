@@ -350,6 +350,14 @@ and `build-profile-held` image SHA256
 `d87b14a063c261b7395f5b7bb2f8f7c98e9f6ba45f66a2fffa3f111ff17d0c67`; full
 provenance is in the recorded JSON metadata.
 
+The dirty filter-cache retry used the same held-edit workload before the
+follow-up clean commit: `build-profile-filter-cache`, image SHA256
+`e598775059836ad6a95cc0675a6fcf10b9d9e3ecfde4cdd54acffca1fb96a91f`,
+125.032 seconds over 25 windows, 153,323 average cycles and 306,410 peak
+cycles (63.8354%), with zero underruns/drops, 80 live-edit cycles and one file
+cycle. This is short diagnostic evidence only; the clean 328a419 result at
+71.1283% remains the latest full gate and is REVIEW.
+
 ## Recorded runs
 
 | Date | Commit | Scenario | Voices | Hz/block | Core | Image | Duration | Budget cycles | Average cycles | Maximum cycles | Worst headroom | Stream underruns | Callback features left | Decision | Note |

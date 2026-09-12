@@ -184,6 +184,13 @@ versioning and release process.
 
 ### Changed
 
+- Reduced repeated filter work during live Instrument snapshot delivery by
+  skipping unchanged filter configuration and cutoff/resonance retuning. The
+  filter cache test repeats topology, drive, slope, clamp and reset cases
+  against the separate-setter waveform reference. The 125-second retry is
+  diagnostic evidence only; the latest full held-edit gate remains REVIEW at
+  71.1283% peak.
+
 - Reduced the short dirty dual-source renderer diagnostic peak from 97.1019%
   to 63.3992% through source-reader inlining, profiling zones and named ITCM
   placement; all four runs had zero underruns. The final 126.1-second run used

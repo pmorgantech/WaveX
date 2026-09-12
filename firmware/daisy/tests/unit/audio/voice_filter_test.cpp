@@ -178,6 +178,10 @@ TEST(VoiceFilterTest, CombinedTuningPreservesSeparateSetterOutputAndState) {
                                     separate.Reset();
                                 }
                                 for (int i = 0; i < 96; ++i) {
+                                    // Unrelated live sound edits repeat the filter snapshot.
+                                    // They must leave the charged integrators and output intact.
+                                    combined.SetConfig(cfg);
+                                    combined.SetParameters(cutoff, resonance);
                                     const float input =
                                         0.2f *
                                         std::sin(2.0f * kPi * 700.0f * static_cast<float>(i) /

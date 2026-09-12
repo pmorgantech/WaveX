@@ -70,6 +70,8 @@ class VoiceFilter {
     }
 
     void SetConfig(const FilterConfig& config) {
+        if (config == config_)
+            return;
         const bool switching = config.topology != config_.topology;
         config_ = config;
         ApplyConfig();
@@ -91,8 +93,14 @@ class VoiceFilter {
     // One tuning pair produces one coefficient set. Keep the integrators
     // intact, just as the separate setters do during a sounding note.
     void SetParameters(float hz, float res) {
-        cutoff_hz_ = hz > 0.0f ? hz : 0.0f;
-        resonance_ = res < 0.0f ? 0.0f : (res > 1.0f ? 1.0f : res);
+        hz = hz > 0.0f ? hz : 0.0f;
+        res = res < 0.0f ? 0.0f : (res > 1.0f ? 1.0f : res);
+        // A full live Instrument snapshot also arrives for oscillator, amp,
+        // envelope and LFO edits. Those leave these coefficients unchanged.
+        if (hz == cutoff_hz_ && res == resonance_)
+            return;
+        cutoff_hz_ = hz;
+        resonance_ = res;
         Retune();
     }
 
