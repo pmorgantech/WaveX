@@ -5,7 +5,8 @@ voice-scoped locks per step are applied after zone resolution; pattern files
 retain them. The Instrument modulation editor, matrix, global LFOs and three
 envelopes exist. Two per-voice LFO runtimes, their typed transport and the LFO
 touch page with live audition are implemented. The resonance destination is
-implemented; oscillator pitch destinations are the current pending checkpoint;
+implemented; oscillator pitch destinations are implemented and their clean gate
+is STAY near the 70% threshold;
 live motion recording, additional destinations and analog/group
 locks remain target design below, not implemented behavior.
 **Dependencies**: sequencer step scheduler (Phase 2), `instrument-model.md` (matrix slots are instrument-scoped), voice manager (done). **Revised 2026-09-04**: the two-oscillator Instrument (`track-and-patch-model.md` §3.1) fixes the source/destination set this matrix serves — three envelopes, two per-voice LFOs, one global LFO, oscillator and wavetable-position destinations — appended to the enums below, never renumbered.

@@ -379,6 +379,21 @@ The helper reports 610.2 seconds and 122 windows; the capture metadata reports
 in the capture metadata at voiceLFO2 → resonance depth 8000 with S-curve.
 Full provenance is in `logs/perf-resonance-wavex-20260912-144145.json`.
 
+The clean oscillator-pitch follow-up ran from source `6a58a7b` with the
+`build-profile-osc-pitch` image SHA256
+`ba026e56917a6ac46380ff053f37adc9b6d1ba94182da11e53a059f7593ba358`.
+Its workload changes the per-Track matrix routes to LFO1 → OSC1_PITCH and
+LFO2 → OSC2_PITCH, with route readback asserted; source provenance is also
+retained in `/tmp/wavex-osc-pitch-source.json`. The helper row records the
+accepted 69.9396% STAY result; the capture metadata reports 606.728292068
+seconds of workload duration, with 376 live-edit cycles, five file cycles,
+zero underruns/drops and 16 pitch routes verified. The exact capture files are
+`logs/perf-osc-pitch-wavex-20260912-193020.log` and
+`logs/perf-osc-pitch-wavex-20260912-193020.json`. This is near the 70%
+threshold and does not close the one-hour phase soak. Final normal-firmware
+HIL passed five selected pitch, resonance, filter-mode and held-note cases in
+80.22 seconds (`/tmp/wavex-pitch-final-hil.log`).
+
 The dirty filter-cache retry used the same held-edit workload before the
 follow-up clean commit: `build-profile-filter-cache`, image SHA256
 `e598775059836ad6a95cc0675a6fcf10b9d9e3ecfde4cdd54acffca1fb96a91f`,
@@ -386,8 +401,9 @@ follow-up clean commit: `build-profile-filter-cache`, image SHA256
 cycles (63.8354%), with zero underruns/drops, 80 live-edit cycles and one file
 cycle. This is short diagnostic evidence only; the clean 328a419 result at
 71.1283% is historical REVIEW evidence. The 5466a96 result is the pre-mode
-baseline, and the 1a2eb5e result is the pre-resonance baseline; both are
-superseded as the latest full result by the accepted d891d3c gate.
+baseline, the 1a2eb5e result is the pre-resonance baseline, and the d891d3c
+result is the pre-pitch baseline; all are superseded as the latest full result
+by the accepted 6a58a7b gate.
 
 ## Recorded runs
 
@@ -416,3 +432,4 @@ superseded as the latest full result by the accepted d891d3c gate.
 | 2026-09-12 | 5466a96bd01b6c1af5c161fe56ad824904e56471 | 8 voices; held Instrument sound edits; two oscillator maps; Env 1-3; two per-voice LFOs; 64 routes; four locks per hit; WaveX 24 dB full drive; SD stream; periodic save/load | 8 | 48000/48 | 480 MHz | qspi `-O2` | 605.2s (121 windows) | 480000 | 153509 (32.0%) | 331609 (69.0852%) | 30.9148% | 0 | yes | STAY | Clean filter snapshot cache repeat; image SHA256 e598775059836ad6a95cc0675a6fcf10b9d9e3ecfde4cdd54acffca1fb96a91f; capture logs/perf-held-wavex-20260912-053400.log and JSON metadata; five file cycles, 386 live-edit cycles; accepted STAY, one-hour phase soak remains open |
 | 2026-09-12 | 1a2eb5ee714e78d5cc89cdbdde4ec290f7eb6341 | 8 Tracks; two 16-zone oscillator maps; 64 routes; four locks per hit; WaveX 24 dB drive 100%; sixteen sine LFOs at 20 Hz; Env 1-3; SD stream; touch grid 25 Hz; all Tracks HP then alternating HP/Notch live filter edits on rotating Tracks | 8 | 48000/48 | 480 MHz | qspi `-O2` | 610.2s (122 windows) | 480000 | 154101 (32.1%) | 333546 (69.4887%) | 30.5113% | 0 | yes | STAY | Clean filter-mode gate; accepted STAY, one-hour phase soak and polyphony gate remain open |
 | 2026-09-12 | d891d3c7ed2ee95991910c806db97bf41ed5e4ec | 8 Tracks; two 16-zone oscillator maps; 64 routes; four locks per hit; WaveX 24 dB full drive; sixteen sine LFOs at 20 Hz; Env 1-3; SD stream; touch grid 25 Hz; HP/Notch filter modes; voiceLFO2 to resonance depth 8000 S-curve on slot 8 of each Track | 8 | 48000/48 | 480 MHz | qspi `-O2` | 610.2s (122 windows) | 480000 | 157210 (32.8%) | 335634 (69.9237%) | 30.0763% | 0 | yes | STAY | Clean resonance matrix gate; accepted STAY, near-70% threshold; one-hour phase soak remains open |
+| 2026-09-12 | 6a58a7bbe5438691d0347e1755e2e78f89299e71 | 8 Tracks; two 16-zone oscillator maps; 64 routes; four locks per hit; WaveX 24 dB full drive; sixteen sine LFOs at 20 Hz; Env 1-3; SD stream; touch grid 25 Hz; HP/Notch filter modes; LFO1 to OSC1_PITCH and LFO2 to OSC2_PITCH on every Track | 8 | 48000/48 | 480 MHz | qspi `-O2` | 605.2s (121 windows) | 480000 | 159773 (33.3%) | 335710 (69.9396%) | 30.0604% | 0 | yes | STAY | Clean oscillator-pitch gate; accepted STAY near 70%; one-hour phase soak remains open |

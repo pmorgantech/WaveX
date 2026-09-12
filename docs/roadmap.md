@@ -230,8 +230,10 @@ done. Open work, in the order decided 2026-09-05 (model doc §8: 7 → 4 → 5 �
    reached 69.4887% peak and is STAY as the pre-resonance baseline. The clean
    resonance run on d891d3c reached 69.9237% peak and is STAY as the
    pre-pitch baseline, with zero underruns/drops; it is near the 70% threshold.
-   The pitch-destination checkpoint requires a fresh capacity measurement. Each
-   future callback milestone requires a fresh full measurement.
+   The clean oscillator-pitch capacity checkpoint from 6a58a7b reached 69.9396%
+   peak and is STAY, with zero underruns/drops and 16 pitch routes verified.
+   It is near the 70% threshold and does not close the one-hour phase soak.
+   Each future callback milestone requires a fresh full measurement.
    These runs do not close the one-hour phase soak or permit a voice-count
    change.
 3. Bank (stage 6): the [WXCF Bank codec](features/bank-persistence.md) and
