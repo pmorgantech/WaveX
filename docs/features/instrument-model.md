@@ -282,3 +282,29 @@ key ranges to both maps, saves/reloads one WXI, reads both maps back, and
 checks note admission at every range edge (26.41 seconds). Both device
 images compile. This foreground editor patch does not change the measured
 voice renderer.
+
+## Three runtime envelopes and matrix editing transport
+
+Env 1 remains the per-sample amp envelope. Env 2 and Env 3 are independently
+configured from the Instrument and advance once per block over the voice's
+active frames, including its sequencer trigger offset. All three are matrix
+sources: the original Env 2 id is unchanged, with Env 1/3 appended. Env 1
+is sampled without a second advance. Note-off and choke release the auxiliary
+envelopes; they cannot keep a finished sample voice alive.
+
+The revisioned modulator messages edit one envelope or matrix slot and return
+all three envelopes/eight slots. The existing WXI mapper preserves them.
+Env 1 edits also use the existing live Track handoff, respecting pad overrides
+and parameter locks; auxiliary-envelope settings apply to subsequent notes.
+Legacy amp and matrix edits invalidate stale touch drafts. Env 2/3 routing
+uses the matrix, so no second implicit modulation path is added.
+
+The touch editor and additional LFO/destination/filter work remain open.
+A fresh expanded-envelope DWT gate is required before the next callback
+milestone.
+
+The runtime-envelope milestone passes the Daisy host suite plus the prepared
+envelope handoff regression, normal and SRAM debug builds. A device test
+checks revision rejection, duplicate delivery, Env 3/matrix edits and WXI
+save/reload (1.17 seconds). That verifies control/persistence behavior, not
+the pending capacity gate or an audio listening test.

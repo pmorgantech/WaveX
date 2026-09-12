@@ -2195,3 +2195,74 @@ TEST(VoiceManagerDualSource, SecondaryStereoLoopAndFadeDoNotAlterPrimaryCursor) 
     for (size_t i = 0; i < 64; ++i)
         EXPECT_FLOAT_EQ(l[i], expected_l[i]);
 }
+
+TEST(VoiceManagerModulationTest, ThirdEnvelopeRespectsTriggerOffsetAndReleasesWithItsTrack) {
+    using namespace WaveX::AudioEngine;
+    VoiceManager vm;
+    vm.Init(48000);
+    const auto data = DcSample(4096, 16000);
+    auto p = DcTrigger(data, 2);
+    p.start_offset_frames = 24;
+    p.aux_env_attack_s = .01f;
+    p.aux_env_decay_s = 0;
+    p.aux_env_sustain_level = 1;
+    p.aux_env_release_s = .001f;
+    p.release_s = 1;
+    vm.Trigger(p);
+    const int index = FindVoiceForNote(vm, p.note);
+    ASSERT_GE(index, 0);
+    ModSlot slots[kMaxModSlots]{};
+    slots[0] = {SRC_ENV_AUX, DEST_PITCH, 32767, CURVE_LINEAR, 0};
+    const ModSlotResolver resolver{slots, &SingleModSlotArray};
+    vm.TickModulation(resolver, {}, 48);
+    EXPECT_NEAR(VoiceAt(vm, index).env3.Level(), .05f, 1e-6f);
+    EXPECT_NEAR(VoiceAt(vm, index).mod_pitch_mul, std::pow(2.0f, .1f / 12), 1e-6f);
+    EXPECT_FALSE(VoiceAt(vm, index).env3.IsReleasing());
+    vm.ReleaseTrack(p.note, 1);
+    EXPECT_FALSE(VoiceAt(vm, index).env3.IsReleasing());
+    vm.ReleaseTrack(p.note, 2);
+    EXPECT_TRUE(VoiceAt(vm, index).env3.IsReleasing());
+    vm.TickModulation(resolver, {}, 48);
+    EXPECT_TRUE(VoiceAt(vm, index).env3.IsIdle());
+}
+TEST(VoiceManagerModulationTest, AmpEnvelopeIsReadWithoutAdvancingItTwice) {
+    using namespace WaveX::AudioEngine;
+    VoiceManager vm;
+    vm.Init(48000);
+    const auto data = DcSample(4096, 16000);
+    auto p = DcTrigger(data, 0);
+    p.attack_s = .01f;
+    vm.Trigger(p);
+    const int index = FindVoiceForNote(vm, p.note);
+    float left[48], right[48];
+    vm.Render(left, right, 48);
+    const float level = VoiceAt(vm, index).envelope.Level();
+    ModSlot slots[kMaxModSlots]{};
+    slots[0] = {SRC_ENV_AMP, DEST_PAN, 32767, CURVE_LINEAR, 0};
+    vm.TickModulation({slots, &SingleModSlotArray}, {}, 48);
+    EXPECT_FLOAT_EQ(VoiceAt(vm, index).envelope.Level(), level);
+    EXPECT_NEAR(VoiceAt(vm, index).mod_pan_offset, level, 1e-6f);
+}
+TEST(VoiceManagerModulationTest, ChokeAndReuseReconfigureThirdEnvelope) {
+    using namespace WaveX::AudioEngine;
+    VoiceManager vm;
+    vm.Init(48000);
+    const auto data = DcSample(4096, 16000);
+    auto p = DcTrigger(data, 0);
+    p.choke_group = 1;
+    p.aux_env_attack_s = p.aux_env_decay_s = 0;
+    p.aux_env_sustain_level = 1;
+    vm.Trigger(p);
+    const int index = FindVoiceForNote(vm, p.note);
+    vm.TickModulation({}, {}, 48);
+    EXPECT_FLOAT_EQ(VoiceAt(vm, index).env3.Level(), 1);
+    vm.Choke(1, .001f, 0);
+    EXPECT_TRUE(VoiceAt(vm, index).env3.IsReleasing());
+    vm.TickModulation({}, {}, 49);
+    EXPECT_TRUE(VoiceAt(vm, index).env3.IsIdle());
+    vm.StopAll();
+    p.aux_env_sustain_level = .25f;
+    vm.Trigger(p);
+    vm.TickModulation({}, {}, 48);
+    EXPECT_FLOAT_EQ(VoiceAt(vm, FindVoiceForNote(vm, p.note)).env3.Level(), .25f);
+}

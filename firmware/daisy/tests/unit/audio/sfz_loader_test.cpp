@@ -555,6 +555,54 @@ TEST_F(SfzLoaderTest, SecondMapEditsAreIndependentAndRetainCrossMapOwnership) {
     EXPECT_TRUE(pool_.Find(sample)->used_by & 1);
     EXPECT_EQ(KeyRead(0).zones[0].sample_id, sample);
 }
+
+TEST_F(SfzLoaderTest, ModulatorEditsPreserveAllEnvelopesAndRoutesAcrossWxiRecall) {
+    ASSERT_TRUE(Load(0));
+    InstModOpMessage m;
+    m.request_id = 99001;
+    m.track = 0;
+    m.revision = SfzLoader::ReadModState(0).revision;
+    m.op = INST_MOD_SET_ENV;
+    m.index = 2;
+    m.envelope = {.023f, .45f, .67f, .89f};
+    ASSERT_TRUE(SfzLoader::OnModOp(m));
+    const auto applied = SfzLoader::ReadModState(0);
+    EXPECT_FLOAT_EQ(applied.envelopes[2].attack_s, .023f);
+    EXPECT_FALSE(SfzLoader::OnModOp(m));
+    EXPECT_EQ(SfzLoader::ReadModState(0).revision, applied.revision);
+    m.request_id++;
+    m.index = 1;
+    EXPECT_FALSE(SfzLoader::OnModOp(m));  // old revision
+    EXPECT_EQ(SfzLoader::ReadModState(0).error, INST_ERROR_BAD_FILE);
+    m.request_id++;
+    m.revision = applied.revision;
+    m.op = INST_MOD_SET_SLOT;
+    m.index = 7;
+    m.slot = {SRC_ENV_AUX, DEST_PITCH, -25000, CURVE_LINEAR, 0};
+    ASSERT_TRUE(SfzLoader::OnModOp(m));
+    EXPECT_EQ(SfzLoader::GetModSlots(0)[7].source, SRC_ENV_AUX);
+    EXPECT_EQ(SfzLoader::VoiceStopTrack(), 0xFF);
+    EXPECT_EQ(Edit(INST_OP_SAVE, 0, "Three envelopes").error, INST_ERROR_NONE);
+    ASSERT_TRUE(SfzLoader::BindSample(pool_, memory_, 0, 0));
+    ASSERT_TRUE(SfzLoader::Load("0:/wavex/instruments/Three envelopes.wxi",
+                                0,
+                                pool_,
+                                memory_,
+                                io_.data(),
+                                static_cast<uint32_t>(io_.size())));
+    const auto restored = SfzLoader::ReadModState(0);
+    EXPECT_FLOAT_EQ(restored.envelopes[2].attack_s, .023f);
+    EXPECT_FLOAT_EQ(restored.envelopes[2].release_s, .89f);
+    EXPECT_EQ(restored.slots[7].source, SRC_ENV_AUX);
+    EXPECT_EQ(restored.slots[7].depth, -25000);
+    // A legacy amp edit must invalidate an outstanding touch snapshot.
+    auto env = *SfzLoader::GetInstrumentEnv(0);
+    env.attack_s = .1f;
+    ASSERT_TRUE(SfzLoader::SetInstrumentEnv(0, env));
+    m.request_id++;
+    m.revision = restored.revision;
+    EXPECT_FALSE(SfzLoader::OnModOp(m));
+}
 TEST_F(SfzLoaderTest, KeyboardRangesRejectStaleEditsAndKeepOtherZones) {
     ASSERT_TRUE(Load(0));
     auto state = KeyRead(0);

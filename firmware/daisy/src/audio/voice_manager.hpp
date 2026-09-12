@@ -181,6 +181,7 @@ struct Voice : VoiceSampleState {
     // Process() once per sample - the same audible output either way, at a
     // fraction of the cost.
     Envelope env2;
+    Envelope env3;
     // The cutoff Trigger()/ApplyLiveParams last set, before modulation. Kept
     // so the control tick can recompute filter.SetCutoff(base * mod_cutoff_mul)
     // every block without compounding onto the previous block's modulated
@@ -252,6 +253,8 @@ struct VoiceTriggerParams : VoiceSampleParams {
     float attack_s = 0.001f, decay_s = 0.05f, sustain_level = 0.8f, release_s = 0.1f;
     float filter_env_attack_s = 0.001f, filter_env_decay_s = 0.05f;
     float filter_env_sustain_level = 0.8f, filter_env_release_s = 0.1f;
+    float aux_env_attack_s = 0.001f, aux_env_decay_s = 0.05f;
+    float aux_env_sustain_level = 0.8f, aux_env_release_s = 0.1f;
 };
 
 // Resolves a voice's owning Track (Voice::track) to that
@@ -329,6 +332,7 @@ class VoiceManager {
             voice.filter.Init(sample_rate_);
             voice.envelope.Init(sample_rate_);
             voice.env2.Init(sample_rate_);
+            voice.env3.Init(sample_rate_);
         }
         // A zeroed seed is a fixed point of xorshift (0 stays 0 forever), which
         // would make SRC_RANDOM sample the same -1.0f on every voice for the
@@ -492,6 +496,11 @@ class VoiceManager {
                          params.filter_env_sustain_level,
                          params.filter_env_release_s);
         v.env2.Retrigger();
+        v.env3.SetParams(params.aux_env_attack_s,
+                         params.aux_env_decay_s,
+                         params.aux_env_sustain_level,
+                         params.aux_env_release_s);
+        v.env3.Retrigger();
     }
 
     // Starts the release phase of the most recently triggered still-active
@@ -513,6 +522,7 @@ class VoiceManager {
         if (found >= 0) {
             voices_[static_cast<size_t>(found)].envelope.Release();
             voices_[static_cast<size_t>(found)].env2.Release();
+            voices_[static_cast<size_t>(found)].env3.Release();
         }
     }
 
@@ -526,6 +536,7 @@ class VoiceManager {
                 !v.one_shot && !v.envelope.IsReleasing()) {
                 v.envelope.Release();
                 v.env2.Release();
+                v.env3.Release();
             }
         }
     }
@@ -706,7 +717,9 @@ class VoiceManager {
                 v.envelope.SetReleaseTime(fast_release_s);
                 v.envelope.Release();
                 v.env2.SetReleaseTime(fast_release_s);
+                v.env3.SetReleaseTime(fast_release_s);
                 v.env2.Release();
+                v.env3.Release();
             }
         }
     }
@@ -787,7 +800,11 @@ class VoiceManager {
             sources.velocity = v.mod_velocity;
             sources.note = v.mod_note;
             sources.random = v.mod_random;
-            sources.env_filter = v.env2.AdvanceBlock(block_size);
+            const uint32_t active_frames =
+                block_size > v.start_offset_frames ? block_size - v.start_offset_frames : 0;
+            sources.env_amp = v.envelope.Level();
+            sources.env_filter = v.env2.AdvanceBlock(active_frames);
+            sources.env_aux = v.env3.AdvanceBlock(active_frames);
             v.SetBlockModulation(EvaluateModMatrix(slots, slots ? kMaxModSlots : 0, sources));
         }
     }

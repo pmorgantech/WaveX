@@ -357,3 +357,14 @@ new request identity, so an old map cannot replace the current selection.
 Mutations share the Instrument revision across both maps and keep the
 existing expected-sample and voice-stop checks. Assignment enables a Sample
 source; it cannot replace a reserved Wavetable source.
+
+## Instrument envelopes and modulation matrix
+
+InstModOpMessage / InstModSyncMessage provide GET, SET_ENV and SET_SLOT.
+The centralized schema in protocol.h defines the complete envelope and
+eight-slot snapshot. Every mutation carries the Instrument revision and
+retains its completion id/error for polling and duplicate delivery.
+Envelope values use seconds and linear sustain; matrix depth is signed,
+with existing source/destination/curve numbering retained. Env 1 and Env 3
+append source ids without changing the original Env 2 source. GET never
+changes a Track; malformed, busy or stale edits are rejected.

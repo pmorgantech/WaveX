@@ -13,6 +13,13 @@ versioning and release process.
 
 ### Added
 
+- Added runtime Env 3, saved Env 2/Env 3 Instrument mapping, append-only Env 1
+  and Env 3 modulation sources, and revisioned envelope/matrix edit and
+  readback messages with retained outcomes. Auxiliary envelope trigger offsets,
+  release and choke behavior are covered by host and HIL tests; touch controls,
+  additional LFOs/destinations and the new callback capacity measurement remain
+  open.
+
 - Added selected-oscillator Key Map editing for 32 keyboard zones, including
   source-aware readback, assignment into empty Sample maps, shared revision and
   voice-stop checks, cross-map sample retention, and navigation from the Osc

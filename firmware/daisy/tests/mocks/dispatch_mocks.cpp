@@ -201,6 +201,9 @@ void OnMidiCc(const WaveX::Protocol::MidiCcMessage& m) {
 void OnTrackStateRequest(const WaveX::Protocol::TrackStateRequest& m) {
     WaveX::Test::GetDispatchRecord().track_state_requests.push_back(m);
 }
+void OnModOp(const WaveX::Protocol::InstModOpMessage& m) {
+    WaveX::Test::GetDispatchRecord().mod_ops.push_back(m);
+}
 void OnOscOp(const WaveX::Protocol::InstOscOpMessage& m) {
     WaveX::Test::GetDispatchRecord().osc_ops.push_back(m);
 }

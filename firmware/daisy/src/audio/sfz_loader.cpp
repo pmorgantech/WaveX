@@ -438,6 +438,8 @@ static InstZoneSyncMessage s_zone_reply;
 static bool s_zone_pending = false;
 static InstPadSoundSyncMessage s_sound_reply;
 static bool s_sound_pending = false;
+static InstModSyncMessage s_mod_reply;
+static bool s_mod_pending = false;
 static InstOscSyncMessage s_osc_reply;
 static bool s_osc_pending = false;
 static InstKeyMapSyncMessage s_key_reply;
@@ -503,6 +505,39 @@ void FillOscReply(const InstOscOpMessage& request,
         out.completed_request_id = request.request_id;
         out.error = immediate_error;
     }
+}
+void FillModReply(const InstModOpMessage& request,
+                  InstModSyncMessage& out,
+                  uint8_t immediate_error = 0) {
+    out = InstModSyncMessage{};
+    out.request_id = request.request_id;
+    out.track = request.track;
+    if (request.track >= kNumTracks) {
+        out.error = INST_ERROR_BAD_FILE;
+        return;
+    }
+    const auto& ins = s_bank->At(request.track).instrument;
+    out.valid = ins.origin != InstrumentOrigin::None;
+    out.busy = Busy();
+    out.revision = s_key_revision[request.track];
+    out.completed_request_id = s_edit_completed[request.track];
+    out.error = s_edit_error[request.track];
+    for (uint8_t i = 0; i < INST_ENV_COUNT; ++i) {
+        const auto& e = ins.env[i];
+        out.envelopes[i] = {e.attack_s, e.decay_s, e.sustain, e.release_s};
+    }
+    for (uint8_t i = 0; i < INST_MOD_SLOT_COUNT; ++i) {
+        const auto& slot = ins.mod_slots[i];
+        out.slots[i] = {slot.source, slot.dest, slot.depth, slot.curve, slot.flags};
+    }
+    if (immediate_error) {
+        out.completed_request_id = request.request_id;
+        out.error = immediate_error;
+    }
+}
+void QueueModReply(const InstModOpMessage& request, uint8_t error = 0) {
+    FillModReply(request, s_mod_reply, error);
+    s_mod_pending = true;
 }
 void QueueOscReply(const InstOscOpMessage& request, uint8_t immediate_error = 0) {
     FillOscReply(request, s_osc_reply, immediate_error);
@@ -632,6 +667,7 @@ void Reset() {
     s_track_pending = false;
     s_key_pending = s_key_assignment = false;
     s_osc_pending = false;
+    s_mod_pending = false;
     if (s_bank)
         WaveX::ReconstructInPlace(*s_bank);
     else
@@ -857,6 +893,46 @@ void ConfirmVoicesStopped(SamplePool& pool, SampleMemMgr& memory) {
     SendStatus(INST_STATUS_LOAD_BEGIN);
 }
 
+InstModSyncMessage ReadModState(uint8_t track) {
+    InstModOpMessage request;
+    request.track = track;
+    InstModSyncMessage out;
+    FillModReply(request, out);
+    return out;
+}
+bool OnModOp(const InstModOpMessage& request) {
+    if (!IsValidInstModOp(request)) {
+        QueueModReply(request, INST_ERROR_BAD_FILE);
+        return false;
+    }
+    if (request.op == INST_MOD_GET || s_edit_completed[request.track] == request.request_id) {
+        QueueModReply(request);
+        return false;
+    }
+    if (Busy()) {
+        QueueModReply(request, INST_ERROR_BUSY);
+        return false;
+    }
+    auto& ins = s_bank->At(request.track).instrument;
+    uint8_t error = INST_ERROR_NONE;
+    if (ins.origin == InstrumentOrigin::None || request.revision != s_key_revision[request.track])
+        error = INST_ERROR_BAD_FILE;
+    else if (request.op == INST_MOD_SET_ENV) {
+        const auto& e = request.envelope;
+        ins.env[request.index] = {e.attack_s, e.decay_s, e.sustain, e.release_s};
+    } else {
+        const auto& slot = request.slot;
+        ins.mod_slots[request.index] = {
+            slot.source, slot.destination, slot.depth, slot.curve, slot.flags};
+        PublishModSlots(request.track);
+    }
+    s_edit_completed[request.track] = request.request_id;
+    s_edit_error[request.track] = error;
+    if (!error)
+        BumpKeyRevision(request.track);
+    QueueModReply(request);
+    return error == INST_ERROR_NONE;
+}
 InstOscSyncMessage ReadOscState(uint8_t track, uint8_t oscillator) {
     InstOscOpMessage request;
     request.track = track;
@@ -1007,6 +1083,9 @@ void OnTrackStateRequest(const TrackStateRequest& request) {
     Protocol::detail::CopyWireString(out.name, sizeof(out.name), ins.name);
 }
 void PumpEditorReply() {
+    if (s_mod_pending &&
+        WaveX::Comm::UartLinkSend(MSG_INST_MOD_SYNC, &s_mod_reply, sizeof(s_mod_reply)) >= 0)
+        s_mod_pending = false;
     if (s_osc_pending &&
         WaveX::Comm::UartLinkSend(MSG_INST_OSC_SYNC, &s_osc_reply, sizeof(s_osc_reply)) >= 0)
         s_osc_pending = false;
@@ -1527,6 +1606,10 @@ bool SetInstrumentFilter(uint8_t track, const InstrumentFilter& filter) {
 bool SetInstrumentEnv(uint8_t track, const InstrumentEnv& env) {
     if (track >= kNumTracks)
         return false;
+    const auto& old = s_bank->At(track).instrument.env[0];
+    if (old.attack_s != env.attack_s || old.decay_s != env.decay_s || old.sustain != env.sustain ||
+        old.release_s != env.release_s)
+        BumpKeyRevision(track);
     s_bank->At(track).instrument.env[0] = env;
     return true;
 }
@@ -1542,7 +1625,10 @@ const InstrumentEnv* GetInstrumentEnv(uint8_t track) {
 bool SetModSlot(uint8_t slot, uint8_t mod_slot_index, const ModSlot& value) {
     if (slot >= kNumTracks || mod_slot_index >= kMaxModSlots)
         return false;
+    if (!IsValidInstModSlot({value.source, value.dest, value.depth, value.curve, value.flags}))
+        return false;
     s_bank->At(slot).instrument.mod_slots[mod_slot_index] = value;
+    BumpKeyRevision(slot);
     PublishModSlots(slot);
     return true;
 }

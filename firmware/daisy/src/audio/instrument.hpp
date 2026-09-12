@@ -278,6 +278,15 @@ inline VoiceTriggerParams PrepareZoneTrigger(const Instrument& ins,
     p.fade_in_ms = ref.fade_in_ms;
     p.fade_out_ms = ref.fade_out_ms;
 
+    p.filter_env_attack_s = ins.env[1].attack_s;
+    p.filter_env_decay_s = ins.env[1].decay_s;
+    p.filter_env_sustain_level = ins.env[1].sustain;
+    p.filter_env_release_s = ins.env[1].release_s;
+    p.aux_env_attack_s = ins.env[2].attack_s;
+    p.aux_env_decay_s = ins.env[2].decay_s;
+    p.aux_env_sustain_level = ins.env[2].sustain;
+    p.aux_env_release_s = ins.env[2].release_s;
+
     if (zone.flags & ZONE_FLAG_OWN_FILTER_ENV) {
         // The zone carries its own - an imported SFZ region, or a pad
         // the user has overridden. Note it has no resonance field of its

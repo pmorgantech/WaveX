@@ -16,6 +16,8 @@
 // captured into the voice at note-on and are constants thereafter, exactly as
 // §3 requires.
 
+#include "spi_protocol/protocol.h"
+
 #include <cmath>
 #include <cstdint>
 
@@ -44,11 +46,15 @@ enum ModSource : uint8_t {
     SRC_MODWHEEL,    // MIDI CC1, 0..1
     SRC_AFTERTOUCH,  // channel pressure, 0..1
     SRC_PARA_ENV,    // deferred with the analog stage; always 0
+    SRC_ENV_AMP,     // Env 1, sampled from the audio-rate amp envelope
+    SRC_ENV_AUX,     // Env 3, block-rate modulation envelope
     SRC_COUNT
 };
 
 enum ModDest : uint8_t { DEST_NONE = 0, DEST_CUTOFF, DEST_GAIN, DEST_PITCH, DEST_PAN, DEST_COUNT };
 
+static_assert(SRC_COUNT == Protocol::INST_MOD_SOURCE_COUNT, "modulation source wire contract");
+static_assert(DEST_COUNT == Protocol::INST_MOD_DEST_COUNT, "modulation destination wire contract");
 enum ModCurve : uint8_t {
     CURVE_LINEAR = 0,
     CURVE_EXPONENTIAL,  // more travel near zero
@@ -73,6 +79,7 @@ struct ModSources {
     float velocity = 0.0f;
     float note = 0.0f;
     float env_filter = 0.0f;
+    float env_amp = 0.0f, env_aux = 0.0f;
     float lfo1 = 0.0f;
     float lfo2 = 0.0f;
     float lfo_voice = 0.0f;
@@ -89,6 +96,10 @@ struct ModSources {
                 return note;
             case SRC_ENV_FILTER:
                 return env_filter;
+            case SRC_ENV_AMP:
+                return env_amp;
+            case SRC_ENV_AUX:
+                return env_aux;
             case SRC_LFO1:
                 return lfo1;
             case SRC_LFO2:

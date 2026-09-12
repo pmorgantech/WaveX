@@ -232,6 +232,15 @@ void ProcessInterMcuMessage(uint8_t msg_type,
         case MSG_MIDI_CC:
             HandleMidiCcMessage(payload, payload_size);
             break;
+        case MSG_INST_MOD_OP:
+#if WAVEX_AUDIO_ENGINE_ENABLED
+            if (payload && payload_size == sizeof(InstModOpMessage)) {
+                InstModOpMessage msg;
+                memcpy(&msg, payload, sizeof(msg));
+                WaveX::AudioEngine::OnModOp(msg);
+            }
+#endif
+            break;
         case MSG_INST_OSC_OP:
 #if WAVEX_AUDIO_ENGINE_ENABLED
             if (payload && payload_size == sizeof(InstOscOpMessage)) {

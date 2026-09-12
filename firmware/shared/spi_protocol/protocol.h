@@ -160,6 +160,8 @@ enum MessageType : uint8_t {
     MSG_INST_KEY_MAP_OP = 0x68,      // E->D: read/edit keyboard zone map
     MSG_INST_OSC_OP = 0x6A,          // E->D: oscillator read/settings/copy into empty map
     MSG_INST_OSC_SYNC = 0x6B,        // D->E: authoritative oscillator settings
+    MSG_INST_MOD_OP = 0x6C,          // E->D: envelope and matrix edits
+    MSG_INST_MOD_SYNC = 0x6D,        // D->E: authoritative envelopes/matrix
     MSG_INST_KEY_MAP_SYNC = 0x69,    // D->E: 32 stable slots, revision and edit outcome
     MSG_TRACK_STATE = 0x67,          // D->E: authoritative Track settings and binding
     MSG_TRACK_OP = 0x63,             // E->D: one Track setting (track-and-patch-model.md §2)
@@ -1964,6 +1966,55 @@ inline bool IsValidInstOscOp(const InstOscOpMessage& m) {
            m.value.keytrack <= 1;
 }
 
+// Instrument-owned modulators. Edits carry one typed envelope or route;
+// replies carry a complete snapshot. Sources 15/16 append Env 1/3 without
+// moving the existing Env 2 (3), global LFOs (4/5) or reserved source ids.
+static constexpr uint8_t INST_ENV_COUNT = 3;
+static constexpr uint8_t INST_MOD_SLOT_COUNT = 8;
+static constexpr uint8_t INST_MOD_SOURCE_COUNT = 17;
+static constexpr uint8_t INST_MOD_DEST_COUNT = 5;
+struct InstEnvelopeSettings {
+    float attack_s = 0.001f, decay_s = 0.05f, sustain = 0.8f, release_s = 0.1f;
+} __attribute__((packed));
+struct InstModSlotSettings {
+    uint8_t source = 0, destination = 0;
+    int16_t depth = 0;
+    uint8_t curve = 0, flags = 0;
+} __attribute__((packed));
+enum InstModOp : uint8_t { INST_MOD_GET = 0, INST_MOD_SET_ENV = 1, INST_MOD_SET_SLOT = 2 };
+struct InstModOpMessage {
+    uint32_t request_id = 0, revision = 0;
+    uint8_t track = 0, index = 0, op = INST_MOD_GET, reserved = 0;
+    InstEnvelopeSettings envelope;
+    InstModSlotSettings slot;
+} __attribute__((packed));
+struct InstModSyncMessage {
+    uint32_t request_id = 0, completed_request_id = 0, revision = 0;
+    uint8_t track = 0, valid = 0, busy = 0, error = 0;
+    InstEnvelopeSettings envelopes[INST_ENV_COUNT];
+    InstModSlotSettings slots[INST_MOD_SLOT_COUNT];
+} __attribute__((packed));
+static_assert(sizeof(InstModOpMessage) == 34, "modulator request wire size");
+static_assert(sizeof(InstModSyncMessage) == 112, "modulator snapshot wire size");
+inline bool IsValidInstEnvelope(const InstEnvelopeSettings& e) {
+    return e.attack_s >= 0 && e.attack_s <= 600 && e.decay_s >= 0 && e.decay_s <= 600 &&
+           e.sustain >= 0 && e.sustain <= 1 && e.release_s >= 0 && e.release_s <= 600;
+}
+inline bool IsValidInstModSlot(const InstModSlotSettings& s) {
+    return s.source < INST_MOD_SOURCE_COUNT && s.destination < INST_MOD_DEST_COUNT &&
+           s.depth >= -32767 && s.curve <= 2 && !(s.flags & ~uint8_t{1});
+}
+inline bool IsValidInstModOp(const InstModOpMessage& m) {
+    if (!m.request_id || m.track >= 16 || m.op > INST_MOD_SET_SLOT || m.reserved)
+        return false;
+    if (m.op == INST_MOD_GET)
+        return true;
+    if (!m.revision)
+        return false;
+    return m.op == INST_MOD_SET_ENV ? m.index < INST_ENV_COUNT && IsValidInstEnvelope(m.envelope)
+                                    : m.index < INST_MOD_SLOT_COUNT && IsValidInstModSlot(m.slot);
+}
+
 // Key Map edits target stable slots, never a packed/sorted view. Revisions
 // invalidate stale edits after replacement even when a sample id is reused.
 static constexpr uint8_t INST_KEY_ZONE_COUNT = 32;
@@ -2562,6 +2613,10 @@ inline const char* MessageTypeName(uint8_t type) {
             return "INST_OP";
         case MSG_INST_STATUS:
             return "INST_STATUS";
+        case MSG_INST_MOD_OP:
+            return "INST_MOD_OP";
+        case MSG_INST_MOD_SYNC:
+            return "INST_MOD_SYNC";
         case MSG_INST_OSC_OP:
             return "INST_OSC_OP";
         case MSG_INST_OSC_SYNC:

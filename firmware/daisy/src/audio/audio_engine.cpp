@@ -2941,6 +2941,17 @@ bool LoadSfzInstrument(const char* path, uint8_t slot) {
 void OnTrackStateRequest(const TrackStateRequest& request) {
     SfzLoader::OnTrackStateRequest(request);
 }
+void OnModOp(const InstModOpMessage& request) {
+    if (!SfzLoader::OnModOp(request))
+        return;
+    PublishSequencerVoiceMap(static_cast<uint16_t>(1u << request.track));
+    if (request.op == INST_MOD_SET_ENV && request.index == 0) {
+        const auto* filter = SfzLoader::GetInstrumentFilter(request.track);
+        const auto* env = SfzLoader::GetInstrumentEnv(request.track);
+        if (filter && env)
+            s_track_live_updates.Publish(ComposeTrackLive(request.track, *filter, *env));
+    }
+}
 void OnOscOp(const InstOscOpMessage& request) {
     if (SfzLoader::OnOscOp(request)) {
         PublishSequencerVoiceMap(static_cast<uint16_t>(1u << request.track));

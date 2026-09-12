@@ -43,6 +43,19 @@ class SequencerVoiceMapTest : public ::testing::Test {
         }
     }
 };
+
+TEST_F(SequencerVoiceMapTest, PreparedTriggersCarryIndependentInstrumentEnvelopes) {
+    instrument.env[1] = {.125f, .25f, .5f, .75f};
+    instrument.env[2] = {.5f, .75f, .25f, 1.5f};
+    map.PrepareTrack(0, instrument, resolver);
+    VoiceTriggerParams actual[4];
+    const auto count = map.Resolve(0, 60, 100, actual);
+    ASSERT_GT(count, 0);
+    EXPECT_FLOAT_EQ(actual[0].filter_env_attack_s, .125f);
+    EXPECT_FLOAT_EQ(actual[0].filter_env_sustain_level, .5f);
+    EXPECT_FLOAT_EQ(actual[0].aux_env_attack_s, .5f);
+    EXPECT_FLOAT_EQ(actual[0].aux_env_release_s, 1.5f);
+}
 TEST_F(SequencerVoiceMapTest, PreparedResolutionMatchesLiveNotesAndVelocityLayers) {
     for (auto mode: {InstrumentMode::Keyboard, InstrumentMode::Drum}) {
         instrument.mode = mode;

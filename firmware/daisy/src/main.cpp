@@ -286,6 +286,49 @@ static void DispatchConsoleCommand(const WaveX::Debug::Command& c) {
             }
             len = AppendKvText(reply, sizeof(reply), len, key, val);
         }
+    } else if (std::strcmp(c.verb, "ENV") == 0 || std::strcmp(c.verb, "MOD") == 0) {
+        const bool envelope = std::strcmp(c.verb, "ENV") == 0;
+        long track, index;
+        if (!NextInt(&p, &track) || !NextInt(&p, &index) || track < 0 || track >= 16 || index < 0 ||
+            index >= (envelope ? 3 : 8)) {
+            FormatErr(seq, "badmodulator", reply, sizeof(reply));
+        } else {
+            const auto state =
+                WaveX::AudioEngine::SfzLoader::ReadModState(static_cast<uint8_t>(track));
+            size_t len = FormatOk(seq, reply, sizeof(reply));
+            len = AppendKvInt(reply, sizeof(reply), len, "valid", state.valid);
+            len = AppendKvInt(reply, sizeof(reply), len, "busy", state.busy);
+            len = AppendKvInt(reply, sizeof(reply), len, "revision", state.revision);
+            len = AppendKvInt(reply, sizeof(reply), len, "completed", state.completed_request_id);
+            len = AppendKvInt(reply, sizeof(reply), len, "error", state.error);
+            if (envelope) {
+                const auto& e = state.envelopes[index];
+                len = AppendKvInt(reply,
+                                  sizeof(reply),
+                                  len,
+                                  "attack",
+                                  static_cast<long>(e.attack_s * 1000 + .5f));
+                len = AppendKvInt(
+                    reply, sizeof(reply), len, "decay", static_cast<long>(e.decay_s * 1000 + .5f));
+                len = AppendKvInt(reply,
+                                  sizeof(reply),
+                                  len,
+                                  "sustain",
+                                  static_cast<long>(e.sustain * 1000 + .5f));
+                AppendKvInt(reply,
+                            sizeof(reply),
+                            len,
+                            "release",
+                            static_cast<long>(e.release_s * 1000 + .5f));
+            } else {
+                const auto& m = state.slots[index];
+                len = AppendKvInt(reply, sizeof(reply), len, "source", m.source);
+                len = AppendKvInt(reply, sizeof(reply), len, "destination", m.destination);
+                len = AppendKvInt(reply, sizeof(reply), len, "depth", m.depth);
+                len = AppendKvInt(reply, sizeof(reply), len, "curve", m.curve);
+                AppendKvInt(reply, sizeof(reply), len, "flags", m.flags);
+            }
+        }
     } else if (std::strcmp(c.verb, "OSC") == 0) {
         long track, oscillator;
         if (!NextInt(&p, &track) || !NextInt(&p, &oscillator) || track < 0 || track >= 16 ||
