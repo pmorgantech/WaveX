@@ -432,6 +432,21 @@ measured events 11,159/140,877, modulation 26,270/68,831 and render
 with identical 2,027,520-byte output. The full helper row is recorded below;
 this candidate is rejected and must not be adopted.
 
+Candidate 4 (`perf/dsp-4-render`, commit `131313ab0df03c704258fdd967bbdbdb6efd74f0`)
+was rejected as well. Its clean `build-profile-dsp4` image SHA256 was
+`cd8e04fd1faa0108b9b78b167525c0daa660e89c0e3732928bfbaaed741b296d`. The
+607.0647-second capture is
+`logs/perf-dsp4-wavex-20260913-001252.log` with matching JSON metadata:
+121 windows, 162,371 average cycles and 338,011 peak cycles (70.4190%, REVIEW),
+with zero underruns/drops, 376 live-edit cycles and five file cycles. Profiling
+zones measured events 9,551/149,014, modulation 25,378/70,139 and render
+120,384/174,084 cycles (average/peak). Host validation remained 611 tests
+with identical 2,027,520-byte output. The full helper row is recorded below;
+this candidate is rejected and must not be adopted. The comparison is against
+a single accepted baseline run, so it does not establish causality or separate
+the change from run-to-run variation; repeat the unchanged baseline before
+making further optimization decisions.
+
 The dirty filter-cache retry used the same held-edit workload before the
 follow-up clean commit: `build-profile-filter-cache`, image SHA256
 `e598775059836ad6a95cc0675a6fcf10b9d9e3ecfde4cdd54acffca1fb96a91f`,
@@ -473,3 +488,4 @@ by the accepted 6a58a7b gate.
 | 2026-09-12 | 6a58a7bbe5438691d0347e1755e2e78f89299e71 | 8 Tracks; two 16-zone oscillator maps; 64 routes; four locks per hit; WaveX 24 dB full drive; sixteen sine LFOs at 20 Hz; Env 1-3; SD stream; touch grid 25 Hz; HP/Notch filter modes; LFO1 to OSC1_PITCH and LFO2 to OSC2_PITCH on every Track | 8 | 48000/48 | 480 MHz | qspi `-O2` | 605.2s (121 windows) | 480000 | 159773 (33.3%) | 335710 (69.9396%) | 30.0604% | 0 | yes | STAY | Clean oscillator-pitch gate; accepted STAY near 70%; one-hour phase soak remains open |
 | 2026-09-12 | 63cf37dca45e39ed6e511077b36fdf8aed46bb73 | 8 voices; held Instrument sound edits; two oscillator maps; Env 1-3; two per-voice LFOs; 64 routes; four locks per hit; WaveX 24 dB full drive; SD stream; periodic save/load | 8 | 48000/48 | 480 MHz | qspi `-O2` | 605.2s (121 windows) | 480000 | 164388 (34.2%) | 339017 (70.6285%) | 29.3715% | 0 | yes | REVIEW | Rejected candidate 2; clean setup-cache trial is REVIEW versus accepted 69.9396% baseline; do not adopt |
 | 2026-09-13 | e581418d279ef91f6c8002d0ed9f086f926f5aa6 | 8 voices; held Instrument sound edits; two oscillator maps; Env 1-3; two per-voice LFOs; 64 routes; four locks per hit; WaveX 24 dB full drive; SD stream; periodic save/load; four cached modulation mappings | 8 | 48000/48 | 480 MHz | qspi `-O2` | 605.2s (121 windows) | 480000 | 163923 (34.2%) | 336380 (70.0792%) | 29.9208% | 0 | yes | REVIEW | Rejected candidate 3; clean modulation-cache trial is REVIEW versus accepted 69.9396% baseline; do not adopt |
+| 2026-09-13 | 131313ab0df03c704258fdd967bbdbdb6efd74f0 | 8 voices; held Instrument sound edits; two oscillator maps; Env 1-3; two per-voice LFOs; 64 routes; four locks per hit; WaveX 24 dB full drive; SD stream; periodic save/load; specialized single/dual-source render loops | 8 | 48000/48 | 480 MHz | qspi `-O2` | 605.2s (121 windows) | 480000 | 162371 (33.8%) | 338011 (70.4190%) | 29.5810% | 0 | yes | REVIEW | Rejected candidate 4; clean render-loop specialization trial is REVIEW versus accepted 69.9396% baseline; do not adopt; single-baseline comparison |
