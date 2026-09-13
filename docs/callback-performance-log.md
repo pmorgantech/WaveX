@@ -417,6 +417,21 @@ render 117,674/177,404 cycles (average/peak). Host validation remained 613
 tests with identical 2,027,520-byte output. The full helper row is recorded
 below; this candidate is rejected and must not be adopted.
 
+Candidate 3 (`perf/dsp-3-modulation`, commit `e581418d279ef91f6c8002d0ed9f086f926f5aa6`)
+was also rejected. Its clean `build-profile-dsp3` image SHA256 was
+`ba46e832b4c129d90970a0603bf8d1c5a6aeab526628111283c12c48a80c47d3`. The
+first setup attempt (`logs/perf-dsp3-wavex-20260912-235334.json`) stopped before
+capture because the baseline reported one dropped block; the same image was
+rebooted and the retry completed successfully. The retry capture is
+`logs/perf-dsp3-wavex-20260912-235623.log` with metadata in the matching JSON:
+607.852755 seconds, 121 windows, 163,923 average cycles and 336,380 peak
+cycles (70.0792%, REVIEW), versus the accepted 69.9396% baseline. It had zero
+underruns/drops, 376 live-edit cycles and five file cycles. Profiling zones
+measured events 11,159/140,877, modulation 26,270/68,831 and render
+118,964/193,692 cycles (average/peak). Host validation remained 612 tests
+with identical 2,027,520-byte output. The full helper row is recorded below;
+this candidate is rejected and must not be adopted.
+
 The dirty filter-cache retry used the same held-edit workload before the
 follow-up clean commit: `build-profile-filter-cache`, image SHA256
 `e598775059836ad6a95cc0675a6fcf10b9d9e3ecfde4cdd54acffca1fb96a91f`,
@@ -457,3 +472,4 @@ by the accepted 6a58a7b gate.
 | 2026-09-12 | d891d3c7ed2ee95991910c806db97bf41ed5e4ec | 8 Tracks; two 16-zone oscillator maps; 64 routes; four locks per hit; WaveX 24 dB full drive; sixteen sine LFOs at 20 Hz; Env 1-3; SD stream; touch grid 25 Hz; HP/Notch filter modes; voiceLFO2 to resonance depth 8000 S-curve on slot 8 of each Track | 8 | 48000/48 | 480 MHz | qspi `-O2` | 610.2s (122 windows) | 480000 | 157210 (32.8%) | 335634 (69.9237%) | 30.0763% | 0 | yes | STAY | Clean resonance matrix gate; accepted STAY, near-70% threshold; one-hour phase soak remains open |
 | 2026-09-12 | 6a58a7bbe5438691d0347e1755e2e78f89299e71 | 8 Tracks; two 16-zone oscillator maps; 64 routes; four locks per hit; WaveX 24 dB full drive; sixteen sine LFOs at 20 Hz; Env 1-3; SD stream; touch grid 25 Hz; HP/Notch filter modes; LFO1 to OSC1_PITCH and LFO2 to OSC2_PITCH on every Track | 8 | 48000/48 | 480 MHz | qspi `-O2` | 605.2s (121 windows) | 480000 | 159773 (33.3%) | 335710 (69.9396%) | 30.0604% | 0 | yes | STAY | Clean oscillator-pitch gate; accepted STAY near 70%; one-hour phase soak remains open |
 | 2026-09-12 | 63cf37dca45e39ed6e511077b36fdf8aed46bb73 | 8 voices; held Instrument sound edits; two oscillator maps; Env 1-3; two per-voice LFOs; 64 routes; four locks per hit; WaveX 24 dB full drive; SD stream; periodic save/load | 8 | 48000/48 | 480 MHz | qspi `-O2` | 605.2s (121 windows) | 480000 | 164388 (34.2%) | 339017 (70.6285%) | 29.3715% | 0 | yes | REVIEW | Rejected candidate 2; clean setup-cache trial is REVIEW versus accepted 69.9396% baseline; do not adopt |
+| 2026-09-13 | e581418d279ef91f6c8002d0ed9f086f926f5aa6 | 8 voices; held Instrument sound edits; two oscillator maps; Env 1-3; two per-voice LFOs; 64 routes; four locks per hit; WaveX 24 dB full drive; SD stream; periodic save/load; four cached modulation mappings | 8 | 48000/48 | 480 MHz | qspi `-O2` | 605.2s (121 windows) | 480000 | 163923 (34.2%) | 336380 (70.0792%) | 29.9208% | 0 | yes | REVIEW | Rejected candidate 3; clean modulation-cache trial is REVIEW versus accepted 69.9396% baseline; do not adopt |
