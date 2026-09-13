@@ -19,22 +19,21 @@ its fix and regression checks are committed.
 
 ## Performance, build, and transport
 
-### Callback capacity checkpoint — 2026-09-07
+### Callback capacity checkpoint
 
-The recurring callback gate is now measured in
-[callback-performance-log.md](callback-performance-log.md). The WaveX 24 dB
-path reached 65.8029% for 3606.0 seconds with zero underruns and remains in
-the STAY band. The DaisySP comparison reached 89.6635% for 605.2 seconds with
-zero underruns and is UPGRADE because callback-resident work remains. This
-activates backend-upgrade planning in the Phase 2 capacity checkpoint and the
-[RT1170 migration plan](rt1170-migration.md); it does not authorize a board
-port or purchase.
+The accepted post-ITCM WaveX reference and the four DSP retests are recorded in
+[callback-performance-log.md](callback-performance-log.md). The unchanged ITCM
+image has three full baseline captures; modulation exponent caching was then
+adopted after two confirming runs, and the other three candidates were rejected.
+The current capacity band is STAY, with the one-hour soak and complete Phase 2
+gate still open.
 
-Remaining optimization questions are to measure Render() separately, test
-selective placement A/B, decide whether slope/drive/topology become real
-parameters, and establish the effect of any future parameter-lock DSP. The
-WaveX path remains the fallback until those questions and the migration work
-are resolved.
+Render, event and modulation attribution and selective hot-path placement have
+been measured. Remaining work is to remeasure every callback expansion, examine
+the remaining QSPI math helpers if further headroom is needed, and complete the
+full soak. The historical DaisySP comparison exceeded the capacity threshold;
+it remains default-disabled and needs fresh evidence on the expanded workload
+before adoption. This does not authorize a backend port or hardware purchase.
 
 ### Page-entry render cost
 
@@ -46,30 +45,35 @@ interaction target.
 
 ### Daisy optimization and LTO
 
-The Daisy image defaults to `-O2`. The recurring QSPI `-O2` evidence is in
-[callback-performance-log.md](callback-performance-log.md): WaveX stays below
-70%, while the DaisySP comparison activates the backend-upgrade planning
-checkpoint. Consider LTO only after the remaining Render() and placement
-measurements; it can affect linker section placement and weak HAL symbols.
+The Daisy image retains `-O2`, with the profiling implementation pinned to
+`-O2` for comparable trials. The measured global `-O3` experiment was
+slower and was not adopted; see
+[callback-performance-log.md](callback-performance-log.md). LTO remains a
+separate measured experiment because it can affect linker placement and weak
+HAL symbols. Establish a repeated reference and hold instrumentation fixed
+before accepting another compiler configuration.
 
 ### Profile-guided QSPI-to-SRAM execution
 
-The persistent QSPI image already supports selective relocation:
+The persistent QSPI image uses selective relocation:
 `WAVEX_ITCM_CODE` gives code a QSPI load address and an ITCM run address, and
-`MemorySections::InitItcm()` copies it before interrupts start. Currently only
-the UART RX-position handler uses it. Profile the audio callback first, then
-move a measured hot region such as `VoiceManager::Render()` only when the DWT
-results justify the extra linker/startup complexity. Retaining its
-host-testable header implementation is preferable to an unmeasured placement
-change.
+`MemorySections::InitItcm()` copies it before interrupts start. The UART
+RX-position handler, voice rendering/events, LFO setup, callback and modulation
+evaluation now use measured ITCM placement. Hot voice state remains in DTCM.
+The accepted repeated baseline and four subsequent optimization trials are in
+[callback-performance-log.md](callback-performance-log.md).
+
+The accepted profiling ELF still places `powf`, `tanf` and
+`arm_sin_f32` in QSPI. Further selective relocation remains a benchmark
+candidate, with before/after DWT evidence and memory-map checks required.
 
 A matched `-O0`, profiling-enabled bench on 2026-09-04 streamed the same
 44.1-kHz stereo WAV from SD in both profiles. The active audio callback
 averaged 52.39 us from QSPI and 17.84 us from SRAM; the foreground WAV pump
 averaged 1.416 ms and 1.189 ms respectively, with no observed underruns. The
 current release-optimized eight-voice evidence is recorded in
-[callback-performance-log.md](callback-performance-log.md); selective
-relocation still needs a measured placement A/B before it is accepted.
+[callback-performance-log.md](callback-performance-log.md). The old `-O0`
+comparison is diagnostic history, not the reference for current optimizations.
 
 If selective ITCM placement is insufficient, evaluate a separate persistent
 bootloader-SRAM profile. libDaisy's `BOOT_SRAM` model stores the application in

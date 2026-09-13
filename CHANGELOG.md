@@ -214,9 +214,10 @@ versioning and release process.
   dropped bytes; the one-hour phase soak remains open.
 
 - Established a three-run unchanged-image ITCM baseline before candidate
-  retesting. The two additional 607-second repeats varied by only 15 average
-  cycles (0.0101%) and 2.12% at peak, with zero audio underruns and console RX
-  dropped bytes; the failed pre-timing setup attempt was excluded.
+  retesting. Across all three captures, average cost ranged from 148,233 to
+  148,248 cycles (15 cycles, 0.0101%) and peak cost ranged from 306,291 to
+  312,790 cycles (6,499 cycles, 2.12%), with zero audio underruns and console
+  RX dropped bytes; the failed pre-timing setup attempt was excluded.
 
 - Retested the filter cutoff prewarp cache after ITCM placement. Two full runs
   improved average callback cost by 1.46--1.48%, but both exceeded the
@@ -231,6 +232,13 @@ versioning and release process.
 - Adopted the voice-owned modulation exponent cache after ITCM placement.
   Two clean full runs showed about a 0.2% average callback benefit, with peaks
   within the unchanged baseline variation; no peak headroom gain is claimed.
+
+- Rejected the specialized single- and dual-source render-loop retest after
+  ITCM placement. The full capacity result was STAY at 66.1496% peak, but
+  average callback cost increased 2.18% and peak rose 1.70% against the
+  accepted modulation-cache reference; all four authorized retests are now
+  recorded, and the roadmap/backlog were refreshed with normal profiling-off
+  firmware restored and selected two-board HIL passing.
 
 - Reduced repeated filter work during live Instrument snapshot delivery by
   skipping unchanged filter configuration and cutoff/resonance retuning. The

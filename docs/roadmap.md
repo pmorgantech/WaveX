@@ -87,6 +87,22 @@ Phase 2.5 work. Open work:
 
 ### 2.C — Callback capacity checkpoint
 
+Current checkpoint (2026-09-13): the accepted callback/modulation ITCM
+placement was re-baselined with three unchanged-image ten-minute captures.
+The four DSP candidates were then retested in order; only voice-owned
+modulation exponent caching was adopted after two full confirming captures.
+Its worst observed callback was **65.0448% (STAY)**, with a repeatable
+approximately 0.2% average improvement over the ITCM baseline and no claimed
+peak improvement. The full eight-voice workload combines two source maps,
+Env 1-3, sixteen voice LFOs, 64 routes, four locks per hit, live editing,
+streaming, the touch grid and file operations. Every valid capture completed
+with zero reported underruns and console RX dropped bytes.
+[The performance log](callback-performance-log.md) records exact images,
+compiler/profiler controls, repeats and rejected candidates. The one-hour soak
+and complete Phase 2 gate remain open.
+
+Previous expanded-envelope and LFO checkpoints:
+
 The clean expanded-envelope workload on db6f180 peaked at **66.9571% (STAY)**
 over 605.2 seconds (121 windows), with zero underruns and six successful
 pattern save/load cycles. It retains the two-source workload below and adds
@@ -296,7 +312,7 @@ The following code paths are open until observed on the target:
 | Diagnostics | Open the page and verify live telemetry arrives. |
 | Digital voices | Trigger RAM-resident notes, sweep live parameters, and judge SVF response/resonance. |
 | Sample retirement | Four-Track routing, rebinds and SFZ replacement during sequencing, and sample-edit refresh now have passing HIL coverage. Still exercise delayed/stopped callbacks and concurrent import requests. Confirm timeout preserves storage, then measure DWT headroom and run the zero-underrun soak. Host helper tests do not verify this interrupt integration. |
-| Callback budget | Recurring whole-callback evidence is recorded in `callback-performance-log.md`: The eight-Track, fully populated kit/grid WaveX run with pad sound edits and pattern save/load is 69.4104% / STAY and the experimental DaisySP comparison is 89.6635% / UPGRADE, both with zero underruns. DaisySP is default-disabled. Remaining work is its capacity blocker, separate Render() timing, and selective placement A/B; no overall phase gate is claimed. |
+| Callback budget | The repeated post-ITCM eight-voice workload remains STAY; all four DSP candidates were retested and only modulation exponent caching was adopted. See `callback-performance-log.md` for the current reference and rejected trials. Render/event/modulation attribution and selective placement A/B are implemented and measured. Remaining work includes the one-hour soak, fresh gates for expanded callback features and any further placement/compiler experiments. The historical DaisySP comparison remains default-disabled and needs its own updated capacity evidence. |
 | Sample Edit | Verify waveform fetch, handles, loop seam audibility, browser detail waveform, and stereo readability. HIL covers Track-preserving audition, edits isolated to the matching stream, streaming loop wraps and RAM-loop note lifetime. |
 | Settings and input | Verify brightness, scrolling, MIDI channel filtering, keypad, encoder direction, and UI responsiveness. |
 | UI concurrency | Measure LVGL lock/refresh behavior during encoder bursts and sample loading. |

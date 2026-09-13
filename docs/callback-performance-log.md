@@ -623,6 +623,44 @@ candidate captures establish the new accepted comparison range for candidate 4:
 147,942--147,957 average cycles and 310,493--312,215 peak cycles. These short
 repeats do not replace the one-hour Phase 2 soak.
 
+Candidate 4 (specialized rendering loops, source
+`59783fec3a22296b68081d14c7e4af3202112103`) was measured against the
+newly accepted modulation-cache pair, not the older pre-cache baseline.
+Image SHA256
+`dd0f74de577f5e826d9f6d8448a7ea1df01cf18f528c9eee82bc8670532ed857`
+retained the O2 profiler and the accepted ITCM placement and modulation cache.
+`logs/perf-itcm-dsp4-wavex-20260913-061613.json` and its matching log
+record 607.7122 seconds, 376 live-edit cycles, five file cycles, zero audio
+underruns and zero console RX dropped bytes. Average/peak callback cost was
+151,174/317,518 cycles: about 2.18% more average work and a 1.70% higher peak
+than the accepted pair's worst values. Events measured 7,759/147,039,
+modulation 18,551/52,856 and rendering 120,134/179,585 cycles (average/peak).
+Capacity is **STAY**, but the optimization is not adopted. ITCM grew by
+1,048 bytes to 24,976 bytes. All 612 host tests and the unchanged exact-output
+fingerprint passed.
+
+All four candidates have now been retested in order after the repeated ITCM
+baseline. Only the modulation cache is adopted; candidate 4 includes that
+accepted change for its comparison. Candidates 1, 2 and 4 remain isolated on
+their experiment branches. The accepted profiling image remains the two-run
+modulation-cache reference above, with a worst observed callback of 312,215
+cycles (65.0448%, STAY). The one-hour Phase 2 soak and full phase gate remain
+open.
+
+Normal profiling-off O2 firmware was then rebuilt and restored from the
+accepted source on `develop` (`251a96b`; firmware code `af2804e`).
+Its binary SHA256 is
+`87a94650bcd3125f1cbab31e09d71379078ba2ab6a67ea3472682c7533b35bdb`.
+The callback remains at `0x00004eb4` (0xd50 bytes), and the modulation
+evaluator at `0x000000ac` (0x43e bytes); normal ITCM usage is 23,720 bytes.
+After USB readiness was confirmed, all five selected two-board HIL cases
+passed in 80.60 seconds (64 deselected, none skipped): held-note preview,
+Apply/Revert, filter-mode preview/save, and matrix destinations 5/6/7 with
+preview/undo/WXI recall. The container log is `/tmp/itcm-final-hil.log`.
+The accepted source retains the modulation cache and excludes the three
+rejected code changes. The exact unchanged benchmark script is retained
+locally as `logs/perf-itcm-workload.py` under its baseline SHA256 above.
+
 ## Recorded runs
 
 | Date | Commit | Scenario | Voices | Hz/block | Core | Image | Duration | Budget cycles | Average cycles | Maximum cycles | Worst headroom | Stream underruns | Callback features left | Decision | Note |
@@ -664,3 +702,4 @@ repeats do not replace the one-hour Phase 2 soak.
 | 2026-09-13 | 79802233dd806733956907c089e788d2dd96a764 | 8 voices; two oscillator maps; Env 1-3; two LFOs per voice; 64 routes; four locks per hit; WaveX 24 dB full drive; SD stream; live edits; grid; periodic save/load; Envelope/LFO setup cache | 8 | 48000/48 | 480 MHz | qspi `-O2` | 605.2s (121 windows) | 480000 | 151111 (31.5%) | 316707 (65.9806%) | 34.0194% | 0 | yes | STAY | Envelope/LFO setup cache; not adopted; 376 live edits and five file cycles; zero audio underruns and console RX dropped bytes; metadata logs/perf-itcm-dsp2-wavex-20260913-053214.json |
 | 2026-09-13 | af2804eb160a7d021b9d5315fa24ce28a5745ae5 | 8 voices; two oscillator maps; Env 1-3; two LFOs per voice; 64 routes; four locks per hit; WaveX 24 dB full drive; SD stream; live edits; grid; periodic save/load; modulation exponent cache | 8 | 48000/48 | 480 MHz | qspi `-O2` | 610.2s (122 windows) | 480000 | 147942 (30.8%) | 312215 (65.0448%) | 34.9552% | 0 | yes | STAY | Modulation cache trial 1; adopted average gain, no peak gain claimed; 376 live edits and five file cycles; zero audio underruns and console RX dropped bytes; metadata logs/perf-itcm-dsp3-wavex-20260913-054739.json |
 | 2026-09-13 | af2804eb160a7d021b9d5315fa24ce28a5745ae5 | 8 voices; two oscillator maps; Env 1-3; two LFOs per voice; 64 routes; four locks per hit; WaveX 24 dB full drive; SD stream; live edits; grid; periodic save/load; modulation exponent cache | 8 | 48000/48 | 480 MHz | qspi `-O2` | 610.2s (122 windows) | 480000 | 147957 (30.8%) | 310493 (64.6860%) | 35.3140% | 0 | yes | STAY | Modulation cache trial 2; adopted average gain, no peak gain claimed; 376 live edits and five file cycles; zero audio underruns and console RX dropped bytes; metadata logs/perf-itcm-dsp3-repeat-wavex-20260913-060007.json |
+| 2026-09-13 | 59783fec3a22296b68081d14c7e4af3202112103 | 8 voices; two oscillator maps; Env 1-3; two LFOs per voice; 64 routes; four locks per hit; WaveX 24 dB full drive; SD stream; live edits; grid; periodic save/load; accepted modulation cache plus specialized render loops | 8 | 48000/48 | 480 MHz | qspi `-O2` | 605.2s (121 windows) | 480000 | 151174 (31.5%) | 317518 (66.1496%) | 33.8504% | 0 | yes | STAY | Not adopted; higher average and peak than accepted modulation-cache pair; 376 live edits, five file cycles, zero audio underruns and console RX dropped bytes; metadata logs/perf-itcm-dsp4-wavex-20260913-061613.json |
