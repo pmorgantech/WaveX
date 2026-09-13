@@ -202,6 +202,7 @@ struct Voice : VoiceSampleState {
     // rather than absolute values so modulation composes onto whatever the
     // zone and live params already set. Identity by default, so a voice
     // nothing modulates renders exactly as it did before the matrix existed.
+    ModScaleCache mod_scale_cache;
     float mod_cutoff_mul = 1.0f;
     bool modulation_cutoff_dirty = false;
     float mod_gain_mul = 1.0f;
@@ -536,6 +537,7 @@ class VoiceManager {
         // note's leftover modulation until the next control tick overwrites
         // it. TickModulation() is expected to run before Render() each
         // callback, but Trigger() must not depend on that ordering.
+        v.mod_scale_cache = ModScaleCache{};
         v.mod_cutoff_mul = 1.0f;
         v.modulation_cutoff_dirty = false;
         v.mod_gain_mul = 1.0f;
@@ -904,7 +906,8 @@ class VoiceManager {
             sources.env_aux = v.env3.AdvanceBlock(active_frames);
             sources.lfo_voice = v.lfo[0].Advance(active_frames, beat_step_);
             sources.lfo_voice2 = v.lfo[1].Advance(active_frames, beat_step_);
-            v.SetBlockModulation(EvaluateModMatrix(slots, slots ? kMaxModSlots : 0, sources));
+            v.SetBlockModulation(
+                EvaluateModMatrix(slots, slots ? kMaxModSlots : 0, sources, &v.mod_scale_cache));
         }
         frame_clock_ += block_size;
         beat_clock_ += uint64_t{beat_step_} * block_size;

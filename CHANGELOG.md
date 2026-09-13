@@ -228,6 +228,10 @@ versioning and release process.
   1.93% and peak rose 1.25% over the unchanged baseline worst peak; the
   candidate was rejected for adoption on headroom.
 
+- Prepared the modulation exponent cache retest after ITCM placement. The
+  candidate preserves the existing modulation behavior through host coverage;
+  hardware capacity measurement and adoption remain pending.
+
 - Reduced repeated filter work during live Instrument snapshot delivery by
   skipping unchanged filter configuration and cutoff/resonance retuning. The
   filter cache test repeats topology, drive, slope, clamp and reset cases

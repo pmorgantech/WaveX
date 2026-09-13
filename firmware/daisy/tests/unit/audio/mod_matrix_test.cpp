@@ -306,3 +306,32 @@ TEST(ModMatrix, OscillatorPitchCurvesPolarityAndCancelledRoutesReturnIdentity) {
     EXPECT_FLOAT_EQ(out.oscillator_pitch_mul[0], 1);
     EXPECT_FLOAT_EQ(out.oscillator_pitch_mul[1], 1);
 }
+
+TEST(ModMatrix, CachedMappingsMatchFreshEvaluationAcrossSourceAndRouteEdits) {
+    ModScaleCache cache;
+    ModSources sources;
+    ModSlot slots[kMaxModSlots] = {};
+    const uint8_t destinations[] = {DEST_CUTOFF, DEST_PITCH, DEST_OSC1_PITCH, DEST_OSC2_PITCH};
+    for (int tick = 0; tick < 120; ++tick) {
+        sources.velocity = float((tick / 3) % 11) / 10.f;
+        for (uint8_t i = 0; i < 4; ++i) {
+            slots[i] = Slot(SRC_VELOCITY,
+                            destinations[i],
+                            21000,
+                            static_cast<uint8_t>((tick / 15) % 3),
+                            static_cast<uint8_t>((tick / 30) % 2));
+            slots[i + 4] = slots[i];
+            slots[i + 4].depth = tick % 5 == 0 ? -21000 : 7000;
+        }
+        const ModSlot* active = tick % 13 == 0 ? nullptr : slots;
+        const auto expected = EvaluateModMatrix(active, kMaxModSlots, sources);
+        const auto actual = EvaluateModMatrix(active, kMaxModSlots, sources, &cache);
+        EXPECT_EQ(actual.cutoff_mul, expected.cutoff_mul) << tick;
+        EXPECT_EQ(actual.pitch_mul, expected.pitch_mul) << tick;
+        EXPECT_EQ(actual.oscillator_pitch_mul[0], expected.oscillator_pitch_mul[0]) << tick;
+        EXPECT_EQ(actual.oscillator_pitch_mul[1], expected.oscillator_pitch_mul[1]) << tick;
+        EXPECT_EQ(actual.gain_mul, expected.gain_mul);
+        EXPECT_EQ(actual.pan_offset, expected.pan_offset);
+        EXPECT_EQ(actual.resonance_offset, expected.resonance_offset);
+    }
+}

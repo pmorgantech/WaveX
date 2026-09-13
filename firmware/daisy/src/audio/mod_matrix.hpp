@@ -9,9 +9,10 @@
 // slots x 8 voices x ~10 ops, which is why this can stay a straightforward
 // loop rather than anything clever.
 //
-// Pure: Evaluate() reads a ModSources snapshot and writes a ModDestinations,
-// with no state of its own. That makes every curve, every accumulation and
-// every full-scale range host-testable, and it means the caller decides when
+// Evaluate() reads a ModSources snapshot and writes ModDestinations.
+// An optional voice-owned cache reuses unchanged exponential mappings.
+// Every curve, accumulation and full-scale range remains host-testable.
+// The caller decides when
 // sources are sampled - per-trigger sources (velocity, note, random) are
 // captured into the voice at note-on and are constants thereafter, exactly as
 // §3 requires.
@@ -142,6 +143,21 @@ struct ModSources {
     }
 };
 
+// Voice-owned memoization of the four exponential destination mappings.
+// Keys are the final base-2 exponents, so changed routes/curves need no
+// separate invalidation and identical sums produce identical sound.
+struct ModScaleCache {
+    float exponent[4] = {};
+    float value[4] = {1, 1, 1, 1};
+    float Scale(uint8_t index, float power) {
+        if (power != exponent[index]) {
+            exponent[index] = power;
+            value[index] = power != 0.f ? std::pow(2.f, power) : 1.f;
+        }
+        return value[index];
+    }
+};
+
 /**
  * @brief What the matrix produces, applied at the top of a voice's block.
  *
@@ -200,6 +216,7 @@ inline float ApplyModCurve(float value, uint8_t curve) {
  * @param slots     the instrument's slots
  * @param count     how many are populated (<= kMaxModSlots)
  * @param sources   this tick's source snapshot
+ * @param cache     optional voice-owned derived exponential mappings
  *
  * Slots targeting the same destination sum, which is what makes two sources
  * on one cutoff behave like a mixer rather than last-one-wins.
@@ -207,7 +224,8 @@ inline float ApplyModCurve(float value, uint8_t curve) {
 WAVEX_ITCM_CODE_NAMED("voice.EvaluateModMatrix")
 inline ModDestinations EvaluateModMatrix(const ModSlot* slots,
                                          uint8_t count,
-                                         const ModSources& sources) {
+                                         const ModSources& sources,
+                                         ModScaleCache* cache = nullptr) {
     float cutoff = 0.0f;
     float gain = 0.0f;
     float pitch = 0.0f;
@@ -260,21 +278,23 @@ inline ModDestinations EvaluateModMatrix(const ModSlot* slots,
     }
 
     ModDestinations out;
+    const auto scale = [cache](uint8_t index, float power) {
+        return cache ? cache->Scale(index, power) : (power != 0.f ? std::pow(2.f, power) : 1.f);
+    };
     // Exponential in octaves: modulation of a frequency has to be
     // multiplicative or the same depth means something different at 200 Hz
     // than at 2 kHz.
-    out.cutoff_mul = std::pow(2.0f, cutoff * kModCutoffOctaves);
+    out.cutoff_mul = scale(0, cutoff * kModCutoffOctaves);
     out.gain_mul = 1.0f + gain;
     if (out.gain_mul < 0.0f) {
         out.gain_mul = 0.0f;  // silence, never a phase-inverted signal
     }
-    out.pitch_mul = std::pow(2.0f, (pitch * kModPitchSemitones) / 12.0f);
+    out.pitch_mul = scale(1, (pitch * kModPitchSemitones) / 12.0f);
     // Reuse the common pitch range; inactive or cancelling routes retain
     // identity without evaluating another exponential.
     for (uint8_t i = 0; i < 2; ++i) {
-        if (oscillator_pitch[i] != 0.f)
-            out.oscillator_pitch_mul[i] =
-                std::pow(2.0f, (oscillator_pitch[i] * kModPitchSemitones) / 12.0f);
+        out.oscillator_pitch_mul[i] =
+            scale(static_cast<uint8_t>(2 + i), (oscillator_pitch[i] * kModPitchSemitones) / 12.0f);
     }
     out.pan_offset = pan < -1.0f ? -1.0f : (pan > 1.0f ? 1.0f : pan);
     // Full signed depth spans the normalized resonance range. Sum routes
