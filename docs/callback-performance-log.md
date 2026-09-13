@@ -486,6 +486,16 @@ The O3 image under test is `build-profile-o3-baseline`, SHA256
 `8eba00eda23a0c288e9b98525802b7a3481d7f5106bd9a1c65d61796c4c65922`; no
 runtime capacity claim is made until it is measured with this fixed profiler.
 
+The adopted ITCM placement gate used source `6ae93efe142776b1c00ebc35ea07648946d8b450`,
+image SHA256 `52fb21487fbc57a19175f5b19caa41955b9f750618ae01aed52553ce6b9ceb6f`,
+and capture `logs/perf-itcm-control-wavex-20260913-011208.log` with matching
+JSON metadata. Its 607.650711-second workload measured 148,248 average and
+306,291 peak cycles (63.8106%, STAY), with 376 live edits, five file cycles,
+zero audio underruns and zero console RX dropped bytes. The named ITCM
+sections used 23,640 of 65,536 bytes (36.07%); host validation passed 611
+tests with identical golden output. This is an accepted placement result, not
+the one-hour Phase 2 soak.
+
 The fixed-profiler O3 trial was stopped intentionally after 188.205 seconds
 and 38 windows, so it is diagnostic evidence only and has no full gate row.
 The capture is `logs/perf-compiler-o3-wavex-20260913-010201.log` with matching
@@ -544,3 +554,4 @@ by the accepted 6a58a7b gate.
 | 2026-09-13 | 131313ab0df03c704258fdd967bbdbdb6efd74f0 | 8 voices; held Instrument sound edits; two oscillator maps; Env 1-3; two per-voice LFOs; 64 routes; four locks per hit; WaveX 24 dB full drive; SD stream; periodic save/load; specialized single/dual-source render loops | 8 | 48000/48 | 480 MHz | qspi `-O2` | 605.2s (121 windows) | 480000 | 162371 (33.8%) | 338011 (70.4190%) | 29.5810% | 0 | yes | REVIEW | Rejected candidate 4; clean render-loop specialization trial is REVIEW versus accepted 69.9396% baseline; do not adopt; single-baseline comparison |
 | 2026-09-13 | 6a58a7bbe5438691d0347e1755e2e78f89299e71 | Unchanged accepted oscillator-pitch baseline repeat 1; 8 voices; held sound edits; two oscillator maps; Env 1-3; two per-voice LFOs; 64 routes; four locks per hit; WaveX 24 dB full drive; SD stream; periodic save/load | 8 | 48000/48 | 480 MHz | qspi `-O2` | 605.2s (121 windows) | 480000 | 159767 (33.3%) | 325684 (67.8508%) | 32.1492% | 0 | yes | STAY | Unchanged baseline repeat 1; zero underruns/drops and console RX dropped bytes 0; original binary retained without rebuild |
 | 2026-09-13 | 6a58a7bbe5438691d0347e1755e2e78f89299e71 | Unchanged accepted oscillator-pitch baseline repeat 2; 8 voices; held sound edits; two oscillator maps; Env 1-3; two per-voice LFOs; 64 routes; four locks per hit; WaveX 24 dB full drive; SD stream; periodic save/load | 8 | 48000/48 | 480 MHz | qspi `-O2` | 605.2s (121 windows) | 480000 | 159765 (33.3%) | 336606 (70.1262%) | 29.8738% | 0 | yes | REVIEW | Unchanged baseline repeat 2; zero underruns/drops and console RX dropped bytes 0; original binary retained without rebuild |
+| 2026-09-13 | 6ae93efe142776b1c00ebc35ea07648946d8b450 | 8 voices; held Instrument sound edits; two oscillator maps; Env 1-3; two per-voice LFOs; 64 routes; four locks per hit; WaveX 24 dB full drive; SD stream; periodic save/load; Callback and modulation evaluation in named ITCM | 8 | 48000/48 | 480 MHz | qspi `-O2` | 605.2s (121 windows) | 480000 | 148248 (30.9%) | 306291 (63.8106%) | 36.1894% | 0 | yes | STAY | Accepted ITCM placement gate; clean full run with fixed O2 profiler, zero audio underruns and zero console RX dropped bytes; ITCM placement adopted; one-hour phase soak remains open |

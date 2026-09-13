@@ -126,6 +126,10 @@ current target rather than hard-coding the evaluator to it.
 1. Build a dedicated **persistent QSPI `-O2`** image with profiling enabled.
    The profiling implementation is pinned to `-O2` so compiler-level trials
    keep their timing instrumentation comparable.
+   Before interpreting a micro-optimization, audit the actual compiler flags
+   and transitive ELF placement, repeat the unchanged baseline to characterize
+   variance, and keep the profiler implementation fixed. A smaller peak alone
+   is not a real gain when it is within baseline noise.
    Do not use the `-O0` SRAM debug image for a capacity decision:
 
    ```sh

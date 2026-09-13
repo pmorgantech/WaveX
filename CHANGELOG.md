@@ -209,8 +209,9 @@ versioning and release process.
 
 - Placed the audio callback and modulation-matrix evaluation in named ITCM
   sections for a controlled placement experiment. The O2 algorithms and fixed
-  profiling implementation are unchanged; callback capacity remains pending
-  hardware measurement.
+  profiling implementation are unchanged. The clean placement gate measured
+  63.8106% peak utilization with zero audio underruns and zero console RX
+  dropped bytes; the one-hour phase soak remains open.
 
 - Reduced repeated filter work during live Instrument snapshot delivery by
   skipping unchanged filter configuration and cutoff/resonance retuning. The
