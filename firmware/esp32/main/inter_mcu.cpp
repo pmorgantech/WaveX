@@ -2,12 +2,17 @@
 
 #include <string.h>
 
+#include "../../shared/config/hardware_config.h"
 #include "../../shared/config/link_config.h"
 #include "../../shared/spi_protocol/protocol.h"
 #include "../../shared/uart_protocol/uart_protocol.h"
 #include "comm/listener_slot.h"
 #include "comm/statistics.h"
+#if WAVEX_SPI_LINK_ENABLED
+#include "links/esp_spi_link.h"
+#else
 #include "links/esp_uart_link.h"
+#endif
 
 #include <atomic>
 
@@ -26,9 +31,9 @@
 
 static const char* TAG = "InterMCU";
 
-// UART link state
-static bool s_uart_initialized = false;
-static bool s_uart_started = false;
+// Selected link state
+static bool s_link_initialized = false;
+static bool s_link_started = false;
 
 // Statistics tracking (injected dependency)
 static StatisticsManager* s_statistics = nullptr;
@@ -42,21 +47,25 @@ static std::atomic<bool> s_initialized{false};
 // Cached sample memory diagnostics
 static wavex_sample_mem_status_t s_sample_mem_status = {};
 static portMUX_TYPE s_sample_mem_lock = portMUX_INITIALIZER_UNLOCKED;
-// Pages register these with `this` and clear them in onExit; the UART task
+// Pages register these with `this` and clear them in onExit; the link task
 // invokes them. ListenerSlot makes the pair swap atomic and makes a clear
 // block until any in-flight callback has returned - see listener_slot.h.
 static WaveX::Comm::ListenerSlot<wavex_envelope_chunk_cb_t> s_envelope_chunk_listener;
 static WaveX::Comm::ListenerSlot<wavex_inst_status_cb_t> s_inst_status_listener;
 
-static int send_uart_message(uint8_t msg_type, const void* payload, uint16_t len) {
-    if (!s_uart_initialized || !s_uart_started) {
-        ESP_LOGE(TAG, "UART link not ready (msg=0x%02X)", msg_type);
+static int send_link_message(uint8_t msg_type, const void* payload, uint16_t len) {
+    if (!s_link_initialized || !s_link_started) {
+        ESP_LOGE(TAG, WAVEX_MCU_LINK_NAME " link not ready (msg=0x%02X)", msg_type);
         return -1;
     }
 
+#if WAVEX_SPI_LINK_ENABLED
+    int result = spi_link_send(msg_type, payload, len);
+#else
     int result = uart_link_send(msg_type, payload, len);
+#endif
     if (result < 0) {
-        ESP_LOGE(TAG, "UART send failed (msg=0x%02X)", msg_type);
+        ESP_LOGE(TAG, WAVEX_MCU_LINK_NAME " send failed (msg=0x%02X)", msg_type);
     }
     return result;
 }
@@ -69,14 +78,18 @@ esp_err_t inter_mcu_init(StatisticsManager& statistics) {
 
     s_statistics = &statistics;
 
-    ESP_LOGI(TAG, "Initializing inter-MCU communication (UART only)...");
+    ESP_LOGI(TAG, "Initializing inter-MCU communication (" WAVEX_MCU_LINK_NAME ")...");
 
+#if WAVEX_SPI_LINK_ENABLED
+    esp_err_t ret = spi_link_init();
+#else
     esp_err_t ret = uart_link_init();
+#endif
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "UART link initialization failed");
+        ESP_LOGE(TAG, WAVEX_MCU_LINK_NAME " link initialization failed");
         return ret;
     }
-    s_uart_initialized = true;
+    s_link_initialized = true;
     ESP_LOGI(TAG, "Inter-MCU communication initialized successfully");
     s_initialized = true;
 
@@ -89,14 +102,18 @@ esp_err_t inter_mcu_start() {
         return ESP_ERR_INVALID_STATE;
     }
 
-    ESP_LOGI(TAG, "Starting inter-MCU communication (UART only)...");
+    ESP_LOGI(TAG, "Starting inter-MCU communication (" WAVEX_MCU_LINK_NAME ")...");
 
+#if WAVEX_SPI_LINK_ENABLED
+    esp_err_t ret = spi_link_start();
+#else
     esp_err_t ret = uart_link_start();
+#endif
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "UART link start failed");
+        ESP_LOGE(TAG, WAVEX_MCU_LINK_NAME " link start failed");
         return ret;
     }
-    s_uart_started = true;
+    s_link_started = true;
 
     ESP_LOGI(TAG, "Inter-MCU communication started successfully");
 
@@ -109,7 +126,7 @@ esp_err_t inter_mcu_send_cv_cal_set(const WaveX::Protocol::CvCalMessage& cal) {
     if (!s_initialized || s_suspended) {
         return ESP_FAIL;
     }
-    int result = send_uart_message(WaveX::Protocol::MSG_CV_CAL_SET, &cal, sizeof(cal));
+    int result = send_link_message(WaveX::Protocol::MSG_CV_CAL_SET, &cal, sizeof(cal));
     return result >= 0 ? ESP_OK : ESP_FAIL;
 }
 
@@ -118,7 +135,7 @@ esp_err_t inter_mcu_send_cv_cal_get(uint8_t group) {
         return ESP_FAIL;
     }
     WaveX::Protocol::CvCalGetMessage msg(group);
-    int result = send_uart_message(WaveX::Protocol::MSG_CV_CAL_GET, &msg, sizeof(msg));
+    int result = send_link_message(WaveX::Protocol::MSG_CV_CAL_GET, &msg, sizeof(msg));
     return result >= 0 ? ESP_OK : ESP_FAIL;
 }
 
@@ -126,7 +143,7 @@ esp_err_t inter_mcu_send_cv_test(const WaveX::Protocol::CvTestMessage& test) {
     if (!s_initialized || s_suspended) {
         return ESP_FAIL;
     }
-    int result = send_uart_message(WaveX::Protocol::MSG_CV_TEST, &test, sizeof(test));
+    int result = send_link_message(WaveX::Protocol::MSG_CV_TEST, &test, sizeof(test));
     return result >= 0 ? ESP_OK : ESP_FAIL;
 }
 
@@ -148,7 +165,7 @@ esp_err_t inter_mcu_send_control_change(uint8_t parameter, uint8_t channel, uint
     msg.channel = channel;
     msg.value = value;
 
-    int result = send_uart_message(WaveX::Protocol::MSG_CONTROL_CHANGE, &msg, sizeof(msg));
+    int result = send_link_message(WaveX::Protocol::MSG_CONTROL_CHANGE, &msg, sizeof(msg));
     return result >= 0 ? ESP_OK : ESP_FAIL;
 }
 
@@ -170,7 +187,7 @@ static esp_err_t send_note(uint8_t msg_type,
     msg.channel = addressed_channel;
     msg.reserved = 0;
 
-    int result = send_uart_message(msg_type, &msg, sizeof(msg));
+    int result = send_link_message(msg_type, &msg, sizeof(msg));
     return result >= 0 ? ESP_OK : ESP_FAIL;
 }
 
@@ -207,7 +224,7 @@ esp_err_t inter_mcu_send_track_op(uint8_t op, uint8_t track, uint16_t value) {
     WaveX::Protocol::TrackOpMessage msg(op, track, value);
     if (!WaveX::Protocol::IsValidTrackOp(msg))
         return ESP_ERR_INVALID_ARG;
-    int result = send_uart_message(WaveX::Protocol::MSG_TRACK_OP, &msg, sizeof(msg));
+    int result = send_link_message(WaveX::Protocol::MSG_TRACK_OP, &msg, sizeof(msg));
     return result >= 0 ? ESP_OK : ESP_FAIL;
 }
 
@@ -221,7 +238,7 @@ esp_err_t inter_mcu_send_sample_ctrl(uint8_t slot, wavex_sample_ctrl_cmd_t cmd, 
     msg.cmd = static_cast<uint8_t>(cmd);
     msg.rate = rate;
 
-    int result = send_uart_message(WaveX::Protocol::MSG_SAMPLE_CTRL, &msg, sizeof(msg));
+    int result = send_link_message(WaveX::Protocol::MSG_SAMPLE_CTRL, &msg, sizeof(msg));
     return result >= 0 ? ESP_OK : ESP_FAIL;
 }
 
@@ -234,7 +251,7 @@ esp_err_t inter_mcu_send_envelope_req(uint16_t sample_id,
     }
 
     WaveX::Protocol::EnvelopeReqMessage msg(sample_id, columns, start_frame, end_frame);
-    int result = send_uart_message(WaveX::Protocol::MSG_ENVELOPE_REQ, &msg, sizeof(msg));
+    int result = send_link_message(WaveX::Protocol::MSG_ENVELOPE_REQ, &msg, sizeof(msg));
     return result >= 0 ? ESP_OK : ESP_FAIL;
 }
 
@@ -251,7 +268,7 @@ bool s_meta_valid[kMetaCacheSize] = {};
 size_t s_meta_next = 0;
 uint16_t s_meta_newest_id = 0;
 
-// The last Pool page. Written by the UART RX task, read by the UI task.
+// The last Pool page. Written by the link RX task, read by the UI task.
 portMUX_TYPE s_meta_page_lock = portMUX_INITIALIZER_UNLOCKED;
 WaveX::Protocol::SampleMetadata s_meta_page[WaveX::Protocol::MAX_SAMPLE_META_PAGE];
 uint8_t s_meta_page_n = 0;
@@ -383,7 +400,7 @@ esp_err_t inter_mcu_request_sample_meta_page(uint16_t first, uint8_t count) {
     }
     WaveX::Protocol::SampleMetaPageReqMessage msg(first, count);
     const int result =
-        send_uart_message(WaveX::Protocol::MSG_SAMPLE_META_PAGE_REQ, &msg, sizeof(msg));
+        send_link_message(WaveX::Protocol::MSG_SAMPLE_META_PAGE_REQ, &msg, sizeof(msg));
     return result >= 0 ? ESP_OK : ESP_FAIL;
 }
 
@@ -443,7 +460,7 @@ esp_err_t inter_mcu_request_sample_meta(uint16_t sample_id) {
         return ESP_ERR_INVALID_STATE;
     }
     WaveX::Protocol::SampleMetaReqMessage msg(sample_id);
-    int result = send_uart_message(WaveX::Protocol::MSG_SAMPLE_META_REQ, &msg, sizeof(msg));
+    int result = send_link_message(WaveX::Protocol::MSG_SAMPLE_META_REQ, &msg, sizeof(msg));
     return result >= 0 ? ESP_OK : ESP_FAIL;
 }
 
@@ -455,7 +472,7 @@ esp_err_t inter_mcu_request_track_binding(uint8_t track) {
         return ESP_ERR_INVALID_ARG;
     }
     WaveX::Protocol::TrackBindingReqMessage msg(track);
-    const int result = send_uart_message(WaveX::Protocol::MSG_TRACK_BINDING_REQ, &msg, sizeof(msg));
+    const int result = send_link_message(WaveX::Protocol::MSG_TRACK_BINDING_REQ, &msg, sizeof(msg));
     return result >= 0 ? ESP_OK : ESP_FAIL;
 }
 
@@ -505,7 +522,7 @@ esp_err_t inter_mcu_send_sample_select(uint16_t sample_id, uint8_t slot) {
         return ESP_ERR_INVALID_STATE;
     }
     WaveX::Protocol::SampleSelectMessage msg(sample_id, slot);
-    int result = send_uart_message(WaveX::Protocol::MSG_SAMPLE_SELECT, &msg, sizeof(msg));
+    int result = send_link_message(WaveX::Protocol::MSG_SAMPLE_SELECT, &msg, sizeof(msg));
     return result >= 0 ? ESP_OK : ESP_FAIL;
 }
 
@@ -517,7 +534,7 @@ esp_err_t inter_mcu_send_sample_unload(uint16_t sample_id) {
         return ESP_ERR_INVALID_ARG;  // the backend rejects it; fail here rather than round-trip
     }
     WaveX::Protocol::SampleUnloadMessage msg(sample_id);
-    int result = send_uart_message(WaveX::Protocol::MSG_SAMPLE_UNLOAD, &msg, sizeof(msg));
+    int result = send_link_message(WaveX::Protocol::MSG_SAMPLE_UNLOAD, &msg, sizeof(msg));
     return result >= 0 ? ESP_OK : ESP_FAIL;
 }
 
@@ -542,7 +559,7 @@ esp_err_t inter_mcu_send_sample_edit(uint16_t sample_id,
                                            loop_end,
                                            fade_in_ms,
                                            fade_out_ms);
-    int result = send_uart_message(WaveX::Protocol::MSG_SAMPLE_EDIT_SET, &msg, sizeof(msg));
+    int result = send_link_message(WaveX::Protocol::MSG_SAMPLE_EDIT_SET, &msg, sizeof(msg));
     return result >= 0 ? ESP_OK : ESP_FAIL;
 }
 
@@ -551,12 +568,12 @@ esp_err_t inter_mcu_send_diag_subscribe(bool enable, uint8_t interval_hz) {
         return ESP_ERR_INVALID_STATE;
     }
     WaveX::Protocol::DiagSubscribeMessage msg(enable ? 1 : 0, interval_hz);
-    int result = send_uart_message(WaveX::Protocol::MSG_DIAG_SUBSCRIBE, &msg, sizeof(msg));
+    int result = send_link_message(WaveX::Protocol::MSG_DIAG_SUBSCRIBE, &msg, sizeof(msg));
     return result >= 0 ? ESP_OK : ESP_FAIL;
 }
 
 namespace {
-// Written by the UART RX task, read by the UI task. A portMUX critical
+// Written by the link RX task, read by the UI task. A portMUX critical
 // section, matching the meter and heartbeat snapshots either side of it - the
 // struct is 94 bytes, so a torn read would mix two intervals.
 portMUX_TYPE s_diag_lock = portMUX_INITIALIZER_UNLOCKED;
@@ -596,7 +613,7 @@ bool inter_mcu_is_busy() {
         return false;
     }
 
-    // For now, UART link doesn't expose a busy state; return false
+    // The public API has no synchronous busy/admission query.
     return false;
 }
 
@@ -612,7 +629,7 @@ esp_err_t inter_mcu_request_sample_mem_status() {
 
     WaveX::Protocol::StatusRequestMessage req{};
     req.category = WaveX::Protocol::STATUS_CATEGORY_SAMPLE_MEM;
-    int result = send_uart_message(WaveX::Protocol::MSG_STATUS_REQUEST, &req, sizeof(req));
+    int result = send_link_message(WaveX::Protocol::MSG_STATUS_REQUEST, &req, sizeof(req));
     return result >= 0 ? ESP_OK : ESP_FAIL;
 }
 
@@ -645,7 +662,7 @@ namespace {
 // flags are written inside it.
 //
 // The first version ran the whole nested scan - up to 8x8 comparisons plus a
-// second pass - under taskENTER_CRITICAL, on the UART RX task. That disables
+// second pass - under taskENTER_CRITICAL, on the link RX task. That disables
 // interrupts on the core for the duration, and this runs on the path every
 // sample-status message takes, including the burst a load emits. Long critical
 // sections are exactly what docs/esp32p4_coding_guide.md and the esp32p4 skill
@@ -1019,7 +1036,7 @@ esp_err_t inter_mcu_send_browse_req(const char* path,
     if (!payload_len)
         return ESP_ERR_INVALID_ARG;
 
-    int result = send_uart_message(WaveX::Protocol::MSG_BROWSE_REQ, payload, (uint16_t)payload_len);
+    int result = send_link_message(WaveX::Protocol::MSG_BROWSE_REQ, payload, (uint16_t)payload_len);
 
     return result >= 0 ? ESP_OK : ESP_FAIL;
 }
@@ -1033,7 +1050,7 @@ esp_err_t inter_mcu_send_sample_play_index_req(uint32_t file_index, uint16_t loo
     msg.index = file_index;
     msg.loop_gap_ms = loop_gap_ms;
 
-    int result = send_uart_message(WaveX::Protocol::MSG_SAMPLE_PLAY_INDEX_REQ, &msg, sizeof(msg));
+    int result = send_link_message(WaveX::Protocol::MSG_SAMPLE_PLAY_INDEX_REQ, &msg, sizeof(msg));
     return result >= 0 ? ESP_OK : ESP_FAIL;
 }
 
@@ -1045,7 +1062,7 @@ esp_err_t inter_mcu_send_sample_audition(uint16_t sample_id) {
         return ESP_ERR_INVALID_ARG;
     }
     WaveX::Protocol::SampleAuditionMessage msg(sample_id);
-    return send_uart_message(WaveX::Protocol::MSG_SAMPLE_AUDITION, &msg, sizeof(msg)) >= 0
+    return send_link_message(WaveX::Protocol::MSG_SAMPLE_AUDITION, &msg, sizeof(msg)) >= 0
                ? ESP_OK
                : ESP_FAIL;
 }
@@ -1061,7 +1078,7 @@ esp_err_t inter_mcu_send_sample_stop_req() {
     msg.reserved[1] = 0;
     msg.reserved[2] = 0;
 
-    int result = send_uart_message(WaveX::Protocol::MSG_SAMPLE_STOP_REQ, &msg, sizeof(msg));
+    int result = send_link_message(WaveX::Protocol::MSG_SAMPLE_STOP_REQ, &msg, sizeof(msg));
     return result >= 0 ? ESP_OK : ESP_FAIL;
 }
 
@@ -1088,7 +1105,7 @@ esp_err_t inter_mcu_send_sample_load_req(uint16_t sample_id,
         msg.path[0] = '\0';
     }
 
-    int result = send_uart_message(WaveX::Protocol::MSG_SAMPLE_LOAD, &msg, sizeof(msg));
+    int result = send_link_message(WaveX::Protocol::MSG_SAMPLE_LOAD, &msg, sizeof(msg));
     return result >= 0 ? ESP_OK : ESP_FAIL;
 }
 
@@ -1101,7 +1118,7 @@ esp_err_t inter_mcu_send_sample_data(const uint8_t* data, size_t length) {
         return ESP_ERR_INVALID_ARG;
     }
 
-    // send_uart_message takes a uint16_t length. Without this check a length
+    // send_link_message takes a uint16_t length. Without this check a length
     // of 65536+n truncates to n, passes the payload-size test inside, and
     // sends the wrong bytes while returning ESP_OK.
     if (length > WaveX::UartProtocol::UART_MAX_PAYLOAD) {
@@ -1110,7 +1127,7 @@ esp_err_t inter_mcu_send_sample_data(const uint8_t* data, size_t length) {
     }
 
     int result =
-        send_uart_message(WaveX::Protocol::MSG_SAMPLE_DATA, data, static_cast<uint16_t>(length));
+        send_link_message(WaveX::Protocol::MSG_SAMPLE_DATA, data, static_cast<uint16_t>(length));
     return result >= 0 ? ESP_OK : ESP_FAIL;
 }
 
@@ -1122,7 +1139,7 @@ esp_err_t inter_mcu_send_inst_op(uint32_t request_id,
         return ESP_ERR_INVALID_STATE;
     }
     WaveX::Protocol::InstOpMessage msg(request_id, slot, static_cast<uint8_t>(op), path);
-    const int result = send_uart_message(WaveX::Protocol::MSG_INST_OP, &msg, sizeof(msg));
+    const int result = send_link_message(WaveX::Protocol::MSG_INST_OP, &msg, sizeof(msg));
     return result >= 0 ? ESP_OK : ESP_FAIL;
 }
 
@@ -1139,7 +1156,7 @@ esp_err_t inter_mcu_send_mod_slot(uint32_t request_id,
     }
     WaveX::Protocol::InstOpMessage msg(
         request_id, instrument_slot, mod_slot_index, source, dest, depth, curve, flags);
-    const int result = send_uart_message(WaveX::Protocol::MSG_INST_OP, &msg, sizeof(msg));
+    const int result = send_link_message(WaveX::Protocol::MSG_INST_OP, &msg, sizeof(msg));
     return result >= 0 ? ESP_OK : ESP_FAIL;
 }
 
@@ -1162,13 +1179,13 @@ bool s_seq_playhead_valid = false;
 }  // namespace
 
 esp_err_t inter_mcu_send_seq_transport(const WaveX::Protocol::SeqTransportMessage& message) {
-    return send_uart_message(WaveX::Protocol::MSG_SEQ_TRANSPORT, &message, sizeof(message)) >= 0
+    return send_link_message(WaveX::Protocol::MSG_SEQ_TRANSPORT, &message, sizeof(message)) >= 0
                ? ESP_OK
                : ESP_FAIL;
 }
 
 esp_err_t inter_mcu_send_seq_pattern_op(const WaveX::Protocol::SeqPatternOpMessage& message) {
-    return send_uart_message(WaveX::Protocol::MSG_SEQ_PATTERN_OP, &message, sizeof(message)) >= 0
+    return send_link_message(WaveX::Protocol::MSG_SEQ_PATTERN_OP, &message, sizeof(message)) >= 0
                ? ESP_OK
                : ESP_FAIL;
 }
@@ -1176,7 +1193,7 @@ esp_err_t inter_mcu_send_seq_pattern_op(const WaveX::Protocol::SeqPatternOpMessa
 esp_err_t inter_mcu_request_seq_page(const WaveX::Protocol::SeqPatternRequestMessage& request) {
     if (!WaveX::Protocol::IsValidSeqPatternRequest(request))
         return ESP_ERR_INVALID_ARG;
-    return send_uart_message(WaveX::Protocol::MSG_SEQ_PATTERN_SYNC, &request, sizeof(request)) >= 0
+    return send_link_message(WaveX::Protocol::MSG_SEQ_PATTERN_SYNC, &request, sizeof(request)) >= 0
                ? ESP_OK
                : ESP_FAIL;
 }
@@ -1225,7 +1242,7 @@ bool s_instrument_map_valid = false;
 esp_err_t inter_mcu_send_instrument_edit(const WaveX::Protocol::InstOpMessage& request) {
     if (request.slot >= 16 || !request.request_id)
         return ESP_ERR_INVALID_ARG;
-    return send_uart_message(WaveX::Protocol::MSG_INST_OP, &request, sizeof(request)) >= 0
+    return send_link_message(WaveX::Protocol::MSG_INST_OP, &request, sizeof(request)) >= 0
                ? ESP_OK
                : ESP_FAIL;
 }
@@ -1254,7 +1271,7 @@ bool s_seq_file_valid = false;
 esp_err_t inter_mcu_send_seq_file_op(const WaveX::Protocol::SeqFileOpMessage& request) {
     if (!WaveX::Protocol::IsValidSeqFileOp(request))
         return ESP_ERR_INVALID_ARG;
-    return send_uart_message(WaveX::Protocol::MSG_SEQ_FILE_OP, &request, sizeof(request)) >= 0
+    return send_link_message(WaveX::Protocol::MSG_SEQ_FILE_OP, &request, sizeof(request)) >= 0
                ? ESP_OK
                : ESP_FAIL;
 }
@@ -1283,7 +1300,7 @@ bool s_oscillator_valid = false;
 esp_err_t inter_mcu_send_oscillator(const WaveX::Protocol::InstOscOpMessage& request) {
     if (!WaveX::Protocol::IsValidInstOscOp(request))
         return ESP_ERR_INVALID_ARG;
-    return send_uart_message(WaveX::Protocol::MSG_INST_OSC_OP, &request, sizeof(request)) >= 0
+    return send_link_message(WaveX::Protocol::MSG_INST_OSC_OP, &request, sizeof(request)) >= 0
                ? ESP_OK
                : ESP_FAIL;
 }
@@ -1312,11 +1329,39 @@ bool s_instrument_edit_valid = false;
 esp_err_t inter_mcu_send_instrument_edit(const WaveX::Protocol::InstEditOpMessage& request) {
     if (!WaveX::Protocol::IsValidInstEditOp(request))
         return ESP_ERR_INVALID_ARG;
-    return send_uart_message(WaveX::Protocol::MSG_INST_EDIT_OP, &request, sizeof(request)) >= 0
-               ? ESP_OK
-               : ESP_FAIL;
+#if WAVEX_LINK_LATENCY_PROFILE_ENABLED && defined(ESP_PLATFORM)
+    const int64_t started_us = esp_timer_get_time();
+#endif
+    const int result =
+        send_link_message(WaveX::Protocol::MSG_INST_EDIT_OP, &request, sizeof(request));
+#if WAVEX_LINK_LATENCY_PROFILE_ENABLED && defined(ESP_PLATFORM)
+    // Print after admission; the timestamp precedes queueing. Correlate by
+    // request ID/track offline, so the UI and RX tasks share no profiling state.
+    ESP_LOGI(TAG,
+             "LINK_LATENCY TX us=%lld id=%lu track=%u op=%u result=%d",
+             static_cast<long long>(started_us),
+             static_cast<unsigned long>(request.request_id),
+             request.track,
+             request.op,
+             result);
+#endif
+    return result >= 0 ? ESP_OK : ESP_FAIL;
 }
 void inter_mcu_store_instrument_edit(const WaveX::Protocol::InstEditSyncMessage& state) {
+#if WAVEX_LINK_LATENCY_PROFILE_ENABLED && defined(ESP_PLATFORM)
+    // This is a control round trip through backend processing, not one-way
+    // wire latency or time until the audio callback applies the value.
+    const int64_t received_us = esp_timer_get_time();
+    ESP_LOGI(TAG,
+             "LINK_LATENCY RX us=%lld id=%lu track=%u completed=%lu valid=%u busy=%u error=%u",
+             static_cast<long long>(received_us),
+             static_cast<unsigned long>(state.request_id),
+             state.track,
+             static_cast<unsigned long>(state.completed_request_id),
+             state.valid,
+             state.busy,
+             state.error);
+#endif
     taskENTER_CRITICAL(&s_instrument_edit_lock);
     s_instrument_edit = state;
     s_instrument_edit_valid = true;
@@ -1341,7 +1386,7 @@ bool s_modulator_valid = false;
 esp_err_t inter_mcu_send_modulator(const WaveX::Protocol::InstModOpMessage& request) {
     if (!WaveX::Protocol::IsValidInstModOp(request))
         return ESP_ERR_INVALID_ARG;
-    return send_uart_message(WaveX::Protocol::MSG_INST_MOD_OP, &request, sizeof(request)) >= 0
+    return send_link_message(WaveX::Protocol::MSG_INST_MOD_OP, &request, sizeof(request)) >= 0
                ? ESP_OK
                : ESP_FAIL;
 }
@@ -1370,7 +1415,7 @@ bool s_instrument_lfo_valid = false;
 esp_err_t inter_mcu_send_instrument_lfo(const WaveX::Protocol::InstLfoOpMessage& request) {
     if (!WaveX::Protocol::IsValidInstLfoOp(request))
         return ESP_ERR_INVALID_ARG;
-    return send_uart_message(WaveX::Protocol::MSG_INST_LFO_OP, &request, sizeof(request)) >= 0
+    return send_link_message(WaveX::Protocol::MSG_INST_LFO_OP, &request, sizeof(request)) >= 0
                ? ESP_OK
                : ESP_FAIL;
 }
@@ -1399,7 +1444,7 @@ bool s_key_map_valid = false;
 esp_err_t inter_mcu_send_key_map(const WaveX::Protocol::InstKeyMapOpMessage& request) {
     if (!WaveX::Protocol::IsValidKeyMapOp(request))
         return ESP_ERR_INVALID_ARG;
-    return send_uart_message(WaveX::Protocol::MSG_INST_KEY_MAP_OP, &request, sizeof(request)) >= 0
+    return send_link_message(WaveX::Protocol::MSG_INST_KEY_MAP_OP, &request, sizeof(request)) >= 0
                ? ESP_OK
                : ESP_FAIL;
 }
@@ -1428,7 +1473,7 @@ bool s_pad_sound_valid = false;
 esp_err_t inter_mcu_send_pad_sound(const WaveX::Protocol::InstPadSoundOpMessage& request) {
     if (!WaveX::Protocol::IsValidPadSoundOp(request))
         return ESP_ERR_INVALID_ARG;
-    return send_uart_message(WaveX::Protocol::MSG_INST_PAD_SOUND_OP, &request, sizeof(request)) >= 0
+    return send_link_message(WaveX::Protocol::MSG_INST_PAD_SOUND_OP, &request, sizeof(request)) >= 0
                ? ESP_OK
                : ESP_FAIL;
 }
@@ -1457,7 +1502,7 @@ bool s_track_state_valid = false;
 esp_err_t inter_mcu_request_track_state(const WaveX::Protocol::TrackStateRequest& request) {
     if (!request.request_id || request.track >= 16)
         return ESP_ERR_INVALID_ARG;
-    return send_uart_message(WaveX::Protocol::MSG_TRACK_STATE_REQ, &request, sizeof(request)) >= 0
+    return send_link_message(WaveX::Protocol::MSG_TRACK_STATE_REQ, &request, sizeof(request)) >= 0
                ? ESP_OK
                : ESP_FAIL;
 }

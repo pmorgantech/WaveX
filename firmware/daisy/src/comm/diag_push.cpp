@@ -1,7 +1,7 @@
 #include "diag_push.h"
 
 #include "audio/audio_engine.h"
-#include "comm/daisy_uart_link.h"
+#include "comm/mcu_link.h"
 #include "config/hardware_config.h"
 #include "spi_protocol/protocol.h"
 #include "storage/sd_sdio.h"
@@ -67,8 +67,8 @@ void DiagSubscribe(bool enable, uint8_t interval_hz) {
         uint32_t b = 0, r = 0, a = 0, mn = 0, mx = 0;
         WaveX::AudioEngine::TakeIOThroughput(b, r, a, mn, mx);
 #if WAVEX_DAISY_UART_PERF_DEBUG
-        UartPerfSample perf;
-        TakeUartPerf(perf);
+        LinkPerfSample perf;
+        TakeLinkPerf(perf);
 #endif
         s_last_push_ms = 0;  // push immediately rather than after an interval
     }
@@ -152,8 +152,8 @@ void DiagPushTick(uint32_t now_ms) {
 
     // --- link ----------------------------------------------------------
 #if WAVEX_DAISY_UART_PERF_DEBUG
-    UartPerfSample perf;
-    TakeUartPerf(perf);
+    LinkPerfSample perf;
+    TakeLinkPerf(perf);
     m.link_total_us = perf.total_us;
     m.link_max_us = Sat16(perf.max_us);
     m.link_rx_frames = Sat16(perf.rx_frames);
@@ -163,7 +163,7 @@ void DiagPushTick(uint32_t now_ms) {
     m.link_queue_overflows = Sat16(perf.queue_overflows);
 #endif
     // Without WAVEX_DAISY_UART_PERF_DEBUG these stay zero. Timing every
-    // UartLinkProcess call is exactly the overhead that flag gates, and the
+    // LinkProcess call is exactly the overhead that flag gates, and the
     // frontend already shows its own view of the link, so the fields are left
     // unfilled rather than paid for on every build.
 
@@ -192,7 +192,7 @@ void DiagPushTick(uint32_t now_ms) {
     // zeros is honest - the frontend labels the tab accordingly - where
     // inventing plausible values would not be.
 
-    UartLinkSend(WaveX::Protocol::MSG_DIAG_PUSH, &m, sizeof(m));
+    LinkSend(WaveX::Protocol::MSG_DIAG_PUSH, &m, sizeof(m));
 }
 
 }  // namespace Comm

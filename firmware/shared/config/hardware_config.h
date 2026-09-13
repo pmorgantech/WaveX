@@ -22,9 +22,74 @@
 #define WAVEX_INTER_MCU_LINK_ENABLED 1
 #endif
 
+// Bench-only ESP timestamps for Instrument control request/ack comparisons.
+// Uses the existing request IDs; no wire changes or audio-path instrumentation.
+#ifndef WAVEX_LINK_LATENCY_PROFILE_ENABLED
+#define WAVEX_LINK_LATENCY_PROFILE_ENABLED 0
+#endif
+
+// SPI electrical bench selectors. Mode must match on both boards; changing
+// it requires a paired flash. Drive -1 preserves the ESP driver's pad setting;
+// 0..3 select the ESP-IDF GPIO drive capability. UART builds do not use these.
+#ifndef WAVEX_SPI_CLOCK_MODE
+#define WAVEX_SPI_CLOCK_MODE 0
+#endif
+#if WAVEX_SPI_CLOCK_MODE < 0 || WAVEX_SPI_CLOCK_MODE > 3
+#error "WAVEX_SPI_CLOCK_MODE must be 0..3"
+#endif
+#ifndef WAVEX_ESP_SPI_MISO_DRIVE_CAPABILITY
+#define WAVEX_ESP_SPI_MISO_DRIVE_CAPABILITY -1
+#endif
+#if WAVEX_ESP_SPI_MISO_DRIVE_CAPABILITY < -1 || WAVEX_ESP_SPI_MISO_DRIVE_CAPABILITY > 3
+#error "WAVEX_ESP_SPI_MISO_DRIVE_CAPABILITY must be -1 or 0..3"
+#endif
+
+// Log at most eight completed nonempty ESP TX / invalid Daisy RX prefixes.
+// Foreground/task only, after DMA ownership returns. Disable for load timing.
+#ifndef WAVEX_SPI_SIGNAL_DIAGNOSTICS_ENABLED
+#define WAVEX_SPI_SIGNAL_DIAGNOSTICS_ENABLED 0
+#endif
+#if WAVEX_SPI_SIGNAL_DIAGNOSTICS_ENABLED != 0 && WAVEX_SPI_SIGNAL_DIAGNOSTICS_ENABLED != 1
+#error "WAVEX_SPI_SIGNAL_DIAGNOSTICS_ENABLED must be 0 or 1"
+#endif
+
 // ============================================================================
 // DAISY-SPECIFIC COMPONENTS
 // ============================================================================
+
+// SPI master speed presets for the pinned libDaisy clock tree. The adapter
+// selects a kernel source and divider, then verifies the resulting frequency.
+// Only the SPI123 mux changes; PLL settings shared with audio/SDRAM do not.
+// The 32 MHz preset uses the existing HSI64 CKPER source divided by two.
+// It is nominal (RC oscillator tolerance); it never changes HSI or CKPER.
+// Rebuild/flash Daisy after changing this; the ESP32 is the clocked slave.
+#ifndef WAVEX_DAISY_SPI_CLOCK_HZ
+#define WAVEX_DAISY_SPI_CLOCK_HZ 6250000
+#endif
+#if WAVEX_DAISY_SPI_CLOCK_HZ != 1562500 && WAVEX_DAISY_SPI_CLOCK_HZ != 6250000 &&   \
+    WAVEX_DAISY_SPI_CLOCK_HZ != 12500000 && WAVEX_DAISY_SPI_CLOCK_HZ != 24000000 && \
+    WAVEX_DAISY_SPI_CLOCK_HZ != 32000000 && WAVEX_DAISY_SPI_CLOCK_HZ != 48000000
+#error "Unsupported WAVEX_DAISY_SPI_CLOCK_HZ preset"
+#endif
+
+// libDaisy defaults SPI outputs to low slew. The high-rate link bench needs
+// faster SCLK/MOSI edges; keep this switch for controlled electrical A/B tests.
+#ifndef WAVEX_DAISY_SPI_FAST_GPIO_ENABLED
+#define WAVEX_DAISY_SPI_FAST_GPIO_ENABLED 1
+#endif
+#if WAVEX_DAISY_SPI_FAST_GPIO_ENABLED != 0 && WAVEX_DAISY_SPI_FAST_GPIO_ENABLED != 1
+#error "WAVEX_DAISY_SPI_FAST_GPIO_ENABLED must be 0 or 1"
+#endif
+
+// Experimental scheduling A/B. Fast mode launches whenever DMA and READY
+// permit, including empty polls. RX dispatch and deferred replies get a
+// foreground pass before the next empty frame. Zero restores the 5 ms cadence.
+#ifndef WAVEX_DAISY_SPI_FAST_SCHEDULING_ENABLED
+#define WAVEX_DAISY_SPI_FAST_SCHEDULING_ENABLED 1
+#endif
+#if WAVEX_DAISY_SPI_FAST_SCHEDULING_ENABLED != 0 && WAVEX_DAISY_SPI_FAST_SCHEDULING_ENABLED != 1
+#error "WAVEX_DAISY_SPI_FAST_SCHEDULING_ENABLED must be 0 or 1"
+#endif
 
 // Audio Engine (Daisy only)
 #ifndef WAVEX_AUDIO_ENGINE_ENABLED

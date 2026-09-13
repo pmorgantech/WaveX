@@ -13,6 +13,20 @@ versioning and release process.
 
 ### Added
 
+- Added an opt-in, shared macro UART/SPI transport selector for matched MCU
+  builds. SPI uses the existing exact-length codec and a bounded deferred RX
+  queue so foreground TX pumping cannot recursively dispatch commands. UART
+  remains the default; experimental SPI requires the documented bench gates.
+  A separate hardware macro selects the SPI speed, verifies the resulting
+  clock at startup, and replaces unused misleading clock constants. Optional
+  ESP-clock Instrument control timestamps support acknowledged-latency comparisons.
+  Experimental fast scheduling removes the launch interval and dispatches a
+  received command before preparing its response frame; its macro restores
+  the original cadence for A/B tests. The clock presets also support PLL1Q/4
+  and an intermediate HSI64/2 rate without retuning shared PLLs.
+  Electrical comparison macros select matched SPI clock modes and ESP MISO
+  drive capability, with optional bounded TX/rejected-RX prefix diagnostics.
+
 - Added OSC1_PITCH and OSC2_PITCH as Instrument matrix destinations. Full-depth
   source 1 spans ±2 semitones and composes with common pitch, tuning and pitch
   locks through the existing preview, Apply/Revert and WXI path.
@@ -152,6 +166,15 @@ versioning and release process.
   protocol version 6 remains unchanged.
 
 ### Fixed
+
+- Apply the bench-verified SPI output slew setting after initialization and
+  recovery. Previously failing 24 MHz receive checks passed with this setting;
+  the shared hardware macro retains an electrical A/B option.
+
+- Fixed an SPI cutover stall found on hardware: a late Daisy TX-DMA interrupt
+  could outlive libDaisy's transfer owner and starve foreground/USB service.
+  Successful completion now retires pending DMA interrupts only after both
+  streams stop; errors retain ownership for bounded recovery.
 
 - Fixed named, split, and multi-zone keyboard Instruments being reported as
   bare first-sample bindings instead of their actual zone map.

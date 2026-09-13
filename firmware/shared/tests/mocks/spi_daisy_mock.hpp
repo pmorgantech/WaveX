@@ -3,6 +3,7 @@
 // Hardware-only model for the real daisy_spi_link.cpp translation unit.
 #include "config/pin_config.h"
 
+#include "spi_protocol/spi_transport.hpp"
 #include <array>
 #include <cassert>
 #include <cstddef>
@@ -11,10 +12,13 @@
 
 #define WAVEX_SPI_LINK_ENABLED 1
 #define WAVEX_SPI_DMA_ENABLED 1
+#define WAVEX_DAISY_UART_PERF_DEBUG 0
 #define DMA_BUFFER_MEM_SECTION
 
 enum IRQn_Type { SPI1_IRQn, DMA2_Stream2_IRQn, DMA2_Stream3_IRQn, EXTI15_10_IRQn };
-struct GPIO_TypeDef {};
+struct GPIO_TypeDef {
+    uint32_t OSPEEDR = 0;
+};
 inline GPIO_TypeDef gpio_ports[11];
 #define GPIOA (&gpio_ports[0])
 #define GPIOB (&gpio_ports[1])
@@ -31,14 +35,24 @@ struct GPIO_InitTypeDef {
     uint32_t Pin = 0, Mode = 0, Pull = 0;
 };
 constexpr uint32_t GPIO_MODE_IT_FALLING = 1, GPIO_PULLDOWN = 2;
+constexpr uint32_t GPIO_SPEED_FREQ_VERY_HIGH = 3;
 struct SpiRegisters {
     uint32_t IER = 0, CFG1 = 0;
 };
 struct DmaStream {
     uint32_t CR = 0;
 };
+inline uint32_t dma_pending_flags = 0;
+struct DmaFlagClear {
+    uint32_t value = 0;
+    void operator=(uint32_t mask) {
+        value = mask;
+        dma_pending_flags &= ~mask;
+    }
+    operator uint32_t() const { return value; }
+};
 struct DmaRegisters {
-    uint32_t LIFCR = 0;
+    DmaFlagClear LIFCR;
 };
 inline SpiRegisters spi_registers;
 inline DmaStream rx_stream, tx_stream;
@@ -54,9 +68,9 @@ constexpr uint32_t DMA_LIFCR_CFEIF2 = 1, DMA_LIFCR_CDMEIF2 = 2, DMA_LIFCR_CTEIF2
                    DMA_LIFCR_CTCIF3 = 512;
 
 namespace SpiDaisyMock {
-inline uint32_t now = 10, pending_exti = 0;
+inline uint32_t now = 10, pending_exti = 0, spi_clock_source = 1, clock_override = 0;
 inline bool ready = false, cs_high = true, hold_dma_enabled = false, reset = false;
-inline std::array<bool, 4> irq_enabled{};
+inline std::array<bool, 4> irq_enabled{}, irq_pending{};
 inline std::array<uint32_t, 4> priorities{};
 inline unsigned launches = 0, inits = 0, resets = 0, scheduler_resets = 0, routed = 0;
 inline size_t routed_bytes = 0;
@@ -73,6 +87,18 @@ inline void ResetPeripheral() {
     ++resets;
 }
 }  // namespace SpiDaisyMock
+constexpr uint32_t RCC_SPI123CLKSOURCE_PLL = 0, RCC_SPI123CLKSOURCE_PLL2 = 1,
+                   RCC_SPI123CLKSOURCE_CLKP = 4;
+constexpr uint64_t RCC_PERIPHCLK_SPI1 = 0x1000;
+#define __HAL_RCC_SPI123_CONFIG(source) (SpiDaisyMock::spi_clock_source = (source))
+inline uint32_t HAL_RCCEx_GetPeriphCLKFreq(uint64_t) {
+    if (SpiDaisyMock::clock_override)
+        return SpiDaisyMock::clock_override;
+    if (SpiDaisyMock::spi_clock_source == RCC_SPI123CLKSOURCE_CLKP)
+        return 64000000u;
+    return SpiDaisyMock::spi_clock_source == RCC_SPI123CLKSOURCE_PLL ? 192000000u : 25000000u;
+}
+
 #define CLEAR_BIT(reg, bits) SpiDaisyMock::Clear(reg, bits)
 #define __HAL_RCC_SPI1_FORCE_RESET() SpiDaisyMock::ResetPeripheral()
 #define __HAL_RCC_SPI1_RELEASE_RESET() (SpiDaisyMock::reset = false)
@@ -89,7 +115,9 @@ inline void HAL_NVIC_EnableIRQ(IRQn_Type irq) {
 inline void HAL_NVIC_DisableIRQ(IRQn_Type irq) {
     SpiDaisyMock::irq_enabled[irq] = false;
 }
-inline void HAL_NVIC_ClearPendingIRQ(IRQn_Type) {}
+inline void HAL_NVIC_ClearPendingIRQ(IRQn_Type irq) {
+    SpiDaisyMock::irq_pending[irq] = false;
+}
 inline void HAL_GPIO_Init(GPIO_TypeDef*, GPIO_InitTypeDef*) {}
 
 namespace daisy {
@@ -100,7 +128,14 @@ struct Pin {
 };
 class DaisySeed {
    public:
-    Pin GetPin(int) { return {}; }
+    Pin GetPin(int index) {
+        // Distinct synthetic pins exercise preservation of unrelated fields.
+        if (index == WAVEX_DAISY_SPI_SCK)
+            return Pin{2, 3};
+        if (index == WAVEX_DAISY_SPI_MOSI)
+            return Pin{4, 5};
+        return {};
+    }
 };
 class GPIO {
    public:
@@ -129,9 +164,9 @@ class SpiHandle {
         enum class Peripheral { SPI_1 };
         enum class Mode { MASTER };
         enum class Direction { TWO_LINES };
-        enum class ClockPolarity { LOW };
-        enum class ClockPhase { ONE_EDGE };
-        enum class BaudPrescaler { PS_16 };
+        enum class ClockPolarity { LOW, HIGH };
+        enum class ClockPhase { ONE_EDGE, TWO_EDGE };
+        enum class BaudPrescaler { PS_2, PS_4, PS_8, PS_16 };
         enum class NSS { SOFT };
         Peripheral periph{};
         Mode mode{};
@@ -145,7 +180,10 @@ class SpiHandle {
             Pin sclk, mosi, miso, nss;
         } pin_config;
     };
-    Result Init(const Config&) {
+    Result Init(const Config& config) {
+        for (const auto pin: {config.pin_config.sclk, config.pin_config.mosi})
+            gpio_ports[pin.port].OSPEEDR &= ~(3u << (2u * pin.pin));
+
         assert(!(rx_stream.CR & DMA_SxCR_EN));
         assert(!(tx_stream.CR & DMA_SxCR_EN));
         ++SpiDaisyMock::inits;
@@ -163,7 +201,7 @@ class SpiHandle {
                                  void (*start)(void*),
                                  void (*end)(void*, Result),
                                  void* ctx) {
-        assert(bytes == 2048);
+        assert(bytes == WaveX::Protocol::Spi::kFrameBytes);
         assert(!(rx_stream.CR & DMA_SxCR_EN));  // A second launch would enter the vendor wait.
         assert(!(tx_stream.CR & DMA_SxCR_EN));
         ++SpiDaisyMock::launches;

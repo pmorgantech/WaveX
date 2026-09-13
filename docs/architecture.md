@@ -155,7 +155,7 @@ The ESP32 frontend *does* run FreeRTOS (§4.3) — correct there, because it jug
 
 Waveform envelope scans are background main-loop work after streaming refill.
 They retain partial columns and a single unsent packet, yield within a fixed
-PCM-read budget, and admit small packets only when UART TX is idle. This bounds
+PCM-read budget, and admit small packets only when the selected link's TX is idle. This bounds
 waveform queue occupancy without changing the audio callback or DMA ownership.
 See [waveform transfer scheduling](features/inter-mcu-protocol.md#waveform-transfer-scheduling-as-built)
 for the representation, cache handoff and verification limits.
@@ -165,8 +165,8 @@ for the representation, cache handoff and verification limits.
 FreeRTOS tasks:
 
 - **UI task**: LVGL handler loop (~30 FPS), deferred-update pattern for data arriving from other tasks (never call LVGL off the UI task — see `ui-architecture.md`).
-- **UART link task** (`esp_uart_link`): drains the ESP-IDF driver's RX ring, scans framed packets, and pumps queued TX into its software TX ring. The driver is interrupt-driven rather than GDMA-backed.
-- **Dormant SPI slave task** (`esp_spi_link`): compiled only when `WAVEX_SPI_LINK_ENABLED=1`; its DMA transactions and ATTN signaling are not present in the shipped image.
+- **UART link task** (`esp_uart_link`, default selection): drains the ESP-IDF driver's RX ring, scans framed packets, and pumps queued TX into its software TX ring. The driver is interrupt-driven rather than GDMA-backed.
+- **Experimental SPI slave task** (`esp_spi_link`): selected instead of UART for the SPI experiment; it owns DMA descriptors and READY signaling.
 - **Input tasks**: PCNT encoder polling, TCA8418 keypad FIFO polling.
 
 Full task inventory (as-built, 2026-08-29). The guide requires name, priority,
@@ -176,7 +176,8 @@ only inline magic numbers:
 | Task | Prio | Stack | Core | Blocks on | Notes |
 |---|---|---|---|---|---|
 | `main` (app_main) | 1 | 32768 | 0 | 1 s delay loop | Logs heap every 60 s; otherwise idle |
-| `uart_link` | 6 | 16384 | any | driver event queue, 10 ms timeout | Woken on TX by a marker posted to the same queue |
+| `uart_link` | 6 | 16384 | any | driver event queue, 10 ms timeout | Default link; woken on TX by a queue marker |
+| `spi_slave` | 5 | 16384 | any | DMA result, repeated 50 ms wait | SPI selection only; timeout retains descriptor ownership |
 | `ui_task` | 2 | 16384 | 1 | 32 ms delay | Takes the LVGL port lock per input event |
 | LVGL port task | 4 | 16384 | any | esp_lvgl_port | Owns the tick and the display; created by the BSP |
 | `pcnt_task` | 5 | 4096 | any | 2 ms delay | Polls quadrature counters; consumer runs at ~31 Hz |
@@ -192,9 +193,9 @@ Two of these still poll where an interrupt would do (`pcnt_task` at 500 Hz for a
 31 Hz consumer, and the keypad at 100 Hz). Both are deliberate for now and
 explained at the call site; converting either needs bench time.
 
-**Lock order is LVGL → UART.** UI-task code takes the LVGL port lock and then
-sends over the link, which briefly takes `s_uart_mutex`. Nothing may take them
-in the other order — in particular, comm callbacks running on the UART task must
+**Lock order is LVGL → selected link mutex.** UI-task code takes the LVGL port
+lock and then sends over the link. Link dispatch releases the queue mutex before
+calling application handlers. Comm callbacks running on either link task must
 never touch LVGL; they stage data behind an atomic flag and let the owning page
 draw it.
 
@@ -205,7 +206,7 @@ Known architectural debt (from the 2026-06-26 assessment, still valid): event/ca
 See `features/inter-mcu-protocol.md` for the message catalog. Every message struct lives in `firmware/shared/spi_protocol/protocol.h` regardless of transport. Transport status (**as-built; decision recorded 2026-07-05**):
 
 - **UART is the transport of record.** All inter-MCU traffic — heartbeat, meters, status, browse requests/responses, wave-preview chunks, note on/off, sample load/control — runs over UART1 (ESP32) ↔ UART4 (Daisy) at 2 Mbaud, using the framing in `firmware/shared/uart_protocol/uart_protocol.h` (0xA5/0x5A markers, 16-bit length, CRC16-CCITT, 16-bit sequence numbers) with `protocol.h` structs as payloads. Daisy UART4 uses independent continuous RX DMA1 Stream 5 and asynchronous TX DMA2 Stream 4 through the WaveX-owned `uart4_dma_transport`; this bypasses libDaisy v8.1.0's single-operation UART DMA scheduler (upstream issue #653). The ESP32 legacy UART driver is interrupt/ring-buffer driven. New messages target this link.
-- **The SPI link is wired but compiled out**: `WAVEX_SPI_LINK_ENABLED` is `0` in `firmware/shared/config/link_config.h`, so `daisy_spi_link.cpp` / `esp_spi_link.cpp` (Daisy master / ESP32 slave, ATTN/READY line) are in no shipped image. The dormant ownership and recovery fixes retain the existing packet codec; [SPI notes](spi-notes.md#retained-transport-contract) define their physical transfer lifecycle. Re-enabling SPI requires startup integration and the bench gate in `backlog.md`; the source fixes do not change the live transport decision.
+- **SPI is an opt-in compile-time experiment; UART remains the default.** The shared selector in `firmware/shared/config/link_config.h` now selects startup, routing, sends and service on both MCUs and derives DMA enablement. Both images must be rebuilt and flashed together. SPI retains Daisy-master/ESP32-slave roles and READY ownership; it carries the existing length-bearing UART codec inside fixed DMA slots so exact command lengths survive. There is no automatic fallback. [SPI notes](spi-notes.md#retained-transport-contract) define the lifecycle and record experiment evidence; the production transport decision still requires the remaining bench gates.
 - The pre-2026-07-05 revision of this section stated the opposite ("SPI active, UART legacy"); see `docs/code_review_20260705.md` finding C4 for the correction trail.
 
 ---
@@ -383,7 +384,7 @@ These rules are mandatory for all new code. Most past instability (SPI corruptio
 
 - Parameter changes (UI → audio): target < 5 ms end-to-end (touch → UART → applied at next control tick).
 - Meters/heartbeat: 20–50 ms cadence, coalesced, lowest priority.
-- The link must degrade gracefully: either MCU rebooting must never wedge the other; recovery and resync are regression-tested. Daisy UART TX is asynchronous DMA with a bounded one-second retry/drop policy; it never waits for peer wire time in the main loop. `SequenceTracker` (`firmware/shared/spi_protocol/sequence_tracker.hpp`) is wired into **both live UART RX paths** (duplicate/out-of-order drop + peer-reboot resync, counted in link stats) as well as both compiled-out SPI RX paths. Dormant SPI uses a shared ownership/READY state machine (`spi_transport.hpp`), covered by host and mocked-device tests; it no longer uses `AttnWatchdog`. Its recovery requires exclusive ownership of libDaisy SPI DMA, and its timing/reboot behavior still needs the bench gate in [SPI notes](spi-notes.md#verification-and-remaining-gates).
+- The link must degrade gracefully: either MCU rebooting must never wedge the other; recovery and resync are regression-tested. Daisy UART TX is asynchronous DMA with a bounded one-second retry/drop policy; it never waits for peer wire time in the main loop. `SequenceTracker` (`firmware/shared/spi_protocol/sequence_tracker.hpp`) is wired into **both live UART RX paths** (duplicate/out-of-order drop + peer-reboot resync, counted in link stats) as well as both compiled-out SPI RX paths. Dormant SPI uses a shared ownership/READY state machine (`spi_transport.hpp`), covered by host and mocked-device tests; it no longer uses `AttnWatchdog`. Its recovery requires exclusive ownership of libDaisy SPI DMA, and production timing/reboot behavior still needs the bench gate in [SPI notes](spi-notes.md#verification-and-remaining-gates).
 
 ---
 
@@ -458,9 +459,9 @@ These rules are mandatory for all new code. Most past instability (SPI corruptio
    deferred unless the voice board is revived.
 6. **ESP32 event ownership**: `PacketRouter` owns routing, but listener
    registration still overlaps `StatisticsManager` and `inter_mcu`.
-7. **SPI link**: the disabled implementation has source-level ownership and
-   recovery fixes, but hardware verification and startup integration remain
-   open. UART is the transport of record (§4.4).
+7. **SPI link**: macro-controlled startup and source-level ownership/recovery
+   fixes are implemented for the opt-in experiment. The remaining production
+   hardware gates are in `spi-notes.md`. UART is the transport of record (§4.4).
 8. **MIDI**: DIN/USB input forwarding reaches the Daisy note path, pending
    hardware verification; MIDI clock in/out and tempo-following integration
    remain open for the Phase 2 gate.

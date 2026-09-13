@@ -1,8 +1,9 @@
-#include "uart4_dma_transport.h"
-
+#include "config/link_config.h"
+#if !WAVEX_SPI_LINK_ENABLED
 #include "memory_sections.h"
 #include "stm32h7xx_hal.h"
 #include "sys/dma.h"
+#include "uart4_dma_transport.h"
 #include "util/hal_map.h"
 
 namespace WaveX {
@@ -260,11 +261,12 @@ extern "C" void HAL_UART_ErrorCallback(UART_HandleTypeDef* handle) {
     }
 }
 
-// System::Init calls every libDaisy peripheral's global initializer. The
-// WaveX target omits libDaisy's UART translation unit, so provide the UART
-// initializer it expects; all state above is initialized explicitly by Init.
-extern "C" void dsy_uart_global_init() {}
-
 }  // namespace Uart4Dma
 }  // namespace Comm
 }  // namespace WaveX
+
+#endif  // !WAVEX_SPI_LINK_ENABLED
+
+// libDaisy System::Init needs this even in SPI builds. WaveX omits the
+// library's UART translation unit and initializes its own UART state in Init.
+extern "C" void dsy_uart_global_init() {}

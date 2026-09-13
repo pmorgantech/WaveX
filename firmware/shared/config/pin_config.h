@@ -193,7 +193,6 @@ extern "C" {
 
 // ESP32 SPI configuration (slave mode)
 #define WAVEX_ESP_SPI_HOST SPI3_HOST  // ESP32-P4 uses SPI3_HOST for slave mode
-#define WAVEX_ESP_SPI_CLK_HZ 4000000  // 4 MHz (master controls)
 #define WAVEX_ESP_SPI_QUEUE_SIZE 8
 #define WAVEX_ESP_SPI_DMA_CH \
     SPI_DMA_CH_AUTO  // P4 slave mode supports only auto-allocated DMA channels

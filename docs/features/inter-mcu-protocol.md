@@ -15,12 +15,25 @@
 | ESP32 | ESP-IDF legacy interrupt-driven UART with 8 KiB RX / 4 KiB TX rings |
 | CRC | CRC16-CCITT over flags/type/sequence/payload framing bytes |
 
-The Daisy streams RX and TX simultaneously through independent DMA streams; TX never waits for frame wire time in the main loop. The compiled-out SPI transport remains wired but `WAVEX_SPI_LINK_ENABLED=0`; its fixed-size `WaveXPacket` framing is dormant and is not the shipped wire format.
+The Daisy streams RX and TX simultaneously through independent DMA streams; TX never waits for frame wire time in the main loop. The shared selector defaults to UART. The opt-in SPI experiment uses the same length-bearing codec and payload catalog; see below.
 
-### Dormant SPI implementation
+### Experimental SPI implementation
 
-The compiled-out SPI adapters retain the packet codec in `protocol.h` and share
-the ownership/READY rules in
+The shared `WAVEX_SPI_LINK_ENABLED` selector in
+[link_config.h](../../firmware/shared/config/link_config.h) selects initialization,
+routing, sends and foreground service on both MCUs. Rebuild and flash both boards
+with the same value; only the selected link starts, with no automatic fallback.
+SPI DMA follows the selector. Independent USB consoles and flashing remain available.
+
+SPI carries one existing length-bearing `UartProtocol` frame per fixed physical
+DMA slot, zero-padded, or an all-zero idle slot. This preserves exact payload
+lengths through the maximum payload, including commands whose handlers require
+an exact struct size. The older dormant `WaveXPacket` size-class codec cannot
+preserve those lengths and is no longer used by the SPI adapters. The UART
+wire format, shared message payloads and protocol version are unchanged; old
+experimental SPI images are incompatible and must not be mixed with these images.
+
+Both SPI adapters share the ownership/READY rules in
 [spi_transport.hpp](../../firmware/shared/spi_protocol/spi_transport.hpp).
 The [SPI transport notes](../spi-notes.md#retained-transport-contract) specify
 physical completion, short-frame rejection, queue retention and recovery limits.

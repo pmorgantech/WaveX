@@ -2,8 +2,8 @@
 
 #include <strings.h>  // for strcasecmp
 
-#include "comm/daisy_uart_link.h"
 #include "comm/log_ring.h"
+#include "comm/mcu_link.h"
 #include "config/hardware_config.h"
 #include "ff.h"
 #include "memory.h"
@@ -163,7 +163,7 @@ void SendStatus(uint8_t state, uint8_t error = INST_ERROR_NONE) {
     s_status.state = state;
     s_status.error = error;
     if (s_request.request_id != 0) {
-        WaveX::Comm::UartLinkSend(MSG_INST_STATUS, &s_status, sizeof(s_status));
+        WaveX::Comm::LinkSend(MSG_INST_STATUS, &s_status, sizeof(s_status));
     }
 }
 
@@ -796,7 +796,7 @@ bool Begin(const InstOpMessage& request) {
             busy.state = INST_STATUS_FAILED;
             busy.error = INST_ERROR_BUSY;
             if (request.request_id != 0) {
-                WaveX::Comm::UartLinkSend(MSG_INST_STATUS, &busy, sizeof(busy));
+                WaveX::Comm::LinkSend(MSG_INST_STATUS, &busy, sizeof(busy));
             }
             return false;
         }
@@ -1248,28 +1248,28 @@ void OnTrackStateRequest(const TrackStateRequest& request) {
 }
 void PumpEditorReply() {
     if (s_action_pending &&
-        WaveX::Comm::UartLinkSend(MSG_INST_EDIT_SYNC, &s_action_reply, sizeof(s_action_reply)) >= 0)
+        WaveX::Comm::LinkSend(MSG_INST_EDIT_SYNC, &s_action_reply, sizeof(s_action_reply)) >= 0)
         s_action_pending = false;
     if (s_lfo_pending &&
-        WaveX::Comm::UartLinkSend(MSG_INST_LFO_SYNC, &s_lfo_reply, sizeof(s_lfo_reply)) >= 0)
+        WaveX::Comm::LinkSend(MSG_INST_LFO_SYNC, &s_lfo_reply, sizeof(s_lfo_reply)) >= 0)
         s_lfo_pending = false;
     if (s_mod_pending &&
-        WaveX::Comm::UartLinkSend(MSG_INST_MOD_SYNC, &s_mod_reply, sizeof(s_mod_reply)) >= 0)
+        WaveX::Comm::LinkSend(MSG_INST_MOD_SYNC, &s_mod_reply, sizeof(s_mod_reply)) >= 0)
         s_mod_pending = false;
     if (s_osc_pending &&
-        WaveX::Comm::UartLinkSend(MSG_INST_OSC_SYNC, &s_osc_reply, sizeof(s_osc_reply)) >= 0)
+        WaveX::Comm::LinkSend(MSG_INST_OSC_SYNC, &s_osc_reply, sizeof(s_osc_reply)) >= 0)
         s_osc_pending = false;
     if (s_key_pending &&
-        WaveX::Comm::UartLinkSend(MSG_INST_KEY_MAP_SYNC, &s_key_reply, sizeof(s_key_reply)) >= 0)
+        WaveX::Comm::LinkSend(MSG_INST_KEY_MAP_SYNC, &s_key_reply, sizeof(s_key_reply)) >= 0)
         s_key_pending = false;
     if (s_track_pending &&
-        WaveX::Comm::UartLinkSend(MSG_TRACK_STATE, &s_track_reply, sizeof(s_track_reply)) >= 0)
+        WaveX::Comm::LinkSend(MSG_TRACK_STATE, &s_track_reply, sizeof(s_track_reply)) >= 0)
         s_track_pending = false;
-    if (s_sound_pending && WaveX::Comm::UartLinkSend(
-                               MSG_INST_PAD_SOUND_SYNC, &s_sound_reply, sizeof(s_sound_reply)) >= 0)
+    if (s_sound_pending &&
+        WaveX::Comm::LinkSend(MSG_INST_PAD_SOUND_SYNC, &s_sound_reply, sizeof(s_sound_reply)) >= 0)
         s_sound_pending = false;
     if (s_zone_pending &&
-        WaveX::Comm::UartLinkSend(MSG_INST_ZONE_SYNC, &s_zone_reply, sizeof(s_zone_reply)) >= 0)
+        WaveX::Comm::LinkSend(MSG_INST_ZONE_SYNC, &s_zone_reply, sizeof(s_zone_reply)) >= 0)
         s_zone_pending = false;
 }
 

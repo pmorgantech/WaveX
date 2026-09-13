@@ -68,7 +68,7 @@ implementation.
 | [performance_monitoring.md](performance_monitoring.md) | DWT cycle-counter and CPU-load measurement on the Daisy; LVGL render/flush/FPS instrumentation on the ESP32 |
 | [firmware-size-log.md](firmware-size-log.md) | Measured firmware size by build and memory region |
 | [callback-performance-log.md](callback-performance-log.md) | Durable target-hardware results from the recurring Daisy callback-headroom gate |
-| [spi-notes.md](spi-notes.md) | libDaisy 8.1 SPI slave/DMA limits, a minimal bring-up recipe, and the source-level diagnosis of the dormant inter-MCU SPI link |
+| [spi-notes.md](spi-notes.md) | UART/SPI measured loads and control latency, scheduling and return-path experiments, tested image identities, rollback state, and remaining SPI gates |
 | [LICENSES.md](LICENSES.md) | Third-party license inventory |
 
 For the development quickstart, build commands and CI, see the

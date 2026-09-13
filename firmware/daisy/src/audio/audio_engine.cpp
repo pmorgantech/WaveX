@@ -20,7 +20,7 @@ extern "C" SD_HandleTypeDef hsd1;  // libDaisy per/sdmmc.cpp
 // library IS worth linking.
 using q15_t = int16_t;
 #include "audio_engine.h"
-#include "comm/daisy_uart_link.h"
+#include "comm/mcu_link.h"
 #include "config/hardware_config.h"
 #include "config/link_config.h"
 #include "daisy_core.h"  // For memory sections
@@ -794,7 +794,7 @@ static void PushSampleMeta(const LoadedSampleInfo& info) {
             }
         }
     }
-    WaveX::Comm::UartLinkSend(WaveX::Protocol::MSG_SAMPLE_META, &wire, sizeof(wire));
+    WaveX::Comm::LinkSend(WaveX::Protocol::MSG_SAMPLE_META, &wire, sizeof(wire));
 }
 
 // Position of the streaming audition within its region, in frames.
@@ -918,7 +918,7 @@ uint16_t SelectedSample(uint8_t slot) {
 
 // Tracks whose binding has been requested but not yet sent, one bit each.
 // Main-loop only (the message handler sets it, PumpTrackBinding drains it),
-// so it needs no synchronisation - see UartLinkSend's single-context
+// so it needs no synchronisation - see LinkSend's single-context
 // invariant. A broadcast marks all 16 rather than sending them: the UART TX
 // queue is 4 deep (daisy_uart_link.cpp MSG_QUEUE_SIZE), so a 16-message
 // burst would drop most of the replies as queue overflow.
@@ -1024,7 +1024,7 @@ static void PumpSampleMetaPage() {
         MetaForWire(*page[i], records[i]);
     }
     const size_t bytes = sizeof(SampleMetaPageHeader) + n * sizeof(SampleMetadata);
-    if (WaveX::Comm::UartLinkSend(MSG_SAMPLE_META_PAGE, s_meta_page_buf, bytes) < 0) {
+    if (WaveX::Comm::LinkSend(MSG_SAMPLE_META_PAGE, s_meta_page_buf, bytes) < 0) {
         return;  // queue full: try again next pass
     }
     s_meta_page_first = 0xFFFF;
@@ -1049,7 +1049,7 @@ void PumpTrackBinding() {
 
         TrackBindingMessage msg;
         BuildTrackBinding(track, msg);
-        if (WaveX::Comm::UartLinkSend(MSG_TRACK_BINDING, &msg, sizeof(msg)) < 0) {
+        if (WaveX::Comm::LinkSend(MSG_TRACK_BINDING, &msg, sizeof(msg)) < 0) {
             return;
         }
         s_track_binding_pending &= static_cast<uint16_t>(~(1u << track));
@@ -1089,7 +1089,7 @@ bool UnloadSample(uint16_t sample_id) {
     if (LoadedSampleInfo* gone = find_loaded_sample(sample_id)) {
         WaveX::Protocol::SampleMetadata bye = gone->meta;
         bye.flags = 0;
-        WaveX::Comm::UartLinkSend(WaveX::Protocol::MSG_SAMPLE_META, &bye, sizeof(bye));
+        WaveX::Comm::LinkSend(WaveX::Protocol::MSG_SAMPLE_META, &bye, sizeof(bye));
     }
     remove_loaded_sample(sample_id);
     PublishSequencerVoiceMap();
@@ -2438,7 +2438,7 @@ static void SendCvCalResp(uint8_t group) {
                       c.vca_gain,
                       c.vca_off,
                       c.cutoff_k);
-    WaveX::Comm::UartLinkSend(WaveX::Protocol::MSG_CV_CAL_RESP, &resp, sizeof(resp));
+    WaveX::Comm::LinkSend(WaveX::Protocol::MSG_CV_CAL_RESP, &resp, sizeof(resp));
 }
 
 void OnCvCalSet(const CvCalMessage& m) {
@@ -2558,11 +2558,11 @@ void PumpSequencerState() {
     s_seq_page_pending |= s_seq_page_mailbox.ConsumeLatest(page);
     s_seq_head_pending |= s_seq_head_mailbox.ConsumeLatest(head);
     if (s_seq_page_pending) {
-        if (WaveX::Comm::UartLinkSend(MSG_SEQ_PATTERN_SYNC, &page, sizeof(page)) < 0)
+        if (WaveX::Comm::LinkSend(MSG_SEQ_PATTERN_SYNC, &page, sizeof(page)) < 0)
             return;
         s_seq_page_pending = false;
     }
-    if (s_seq_head_pending && WaveX::Comm::UartLinkSend(MSG_SEQ_PLAYHEAD, &head, sizeof(head)) >= 0)
+    if (s_seq_head_pending && WaveX::Comm::LinkSend(MSG_SEQ_PLAYHEAD, &head, sizeof(head)) >= 0)
         s_seq_head_pending = false;
 }
 
@@ -2908,13 +2908,13 @@ void PumpEnvelopeJob() {
         [](const EnvelopeScan::Packet& packet, uint16_t bytes) {
             // Never stack waveform frames behind normal traffic or another
             // waveform frame. A queued packet includes the active DMA frame.
-            if (!WaveX::Comm::UartLinkTxIdle()) {
+            if (!WaveX::Comm::LinkTxIdle()) {
                 return false;
             }
             const bool sent =
-                WaveX::Comm::UartLinkSend(WaveX::Protocol::MSG_ENVELOPE_CHUNK, &packet, bytes) >= 0;
+                WaveX::Comm::LinkSend(WaveX::Protocol::MSG_ENVELOPE_CHUNK, &packet, bytes) >= 0;
             if (sent) {
-                WaveX::Comm::UartLinkPumpTx();
+                WaveX::Comm::LinkPumpTx();
             }
             return sent;
         });
@@ -3043,7 +3043,7 @@ static void ReportSampleLoadFailed(uint16_t sample_id, SampleLoadFailReason reas
     status.sample_id = sample_id;
     status.state = SAMPLE_STATUS_LOAD_FAILED;
     status.frames_played = reason;
-    WaveX::Comm::UartLinkSend(WaveX::Protocol::MSG_SAMPLE_STATUS, &status, sizeof(status));
+    WaveX::Comm::LinkSend(WaveX::Protocol::MSG_SAMPLE_STATUS, &status, sizeof(status));
 }
 
 void OnSampleLoad(const SampleLoadMessage& sl) {
@@ -3076,7 +3076,7 @@ void OnSampleLoad(const SampleLoadMessage& sl) {
         status.channels = hit->payload.channels;
         status.sample_rate = hit->payload.sample_rate;
         status.frames_played = hit->payload.meta.total_frames;
-        WaveX::Comm::UartLinkSend(WaveX::Protocol::MSG_SAMPLE_STATUS, &status, sizeof(status));
+        WaveX::Comm::LinkSend(WaveX::Protocol::MSG_SAMPLE_STATUS, &status, sizeof(status));
         if (s_hw) {
             WaveX::Log::PrintLine(
                 "SAMPLE_LOAD: '%s' already resident as id=%u", sl.path, (unsigned)hit->sample_id);
@@ -3259,11 +3259,11 @@ void OnSampleLoad(const SampleLoadMessage& sl) {
                 progress.channels = static_cast<uint8_t>(num_ch);
                 progress.sample_rate = sample_rate;
                 progress.frames_played = pct;
-                WaveX::Comm::UartLinkSend(
+                WaveX::Comm::LinkSend(
                     WaveX::Protocol::MSG_SAMPLE_STATUS, &progress, sizeof(progress));
                 // The link is not pumped from here, so drain one frame or the
                 // 4-deep TX queue fills and later progress is silently lost.
-                WaveX::Comm::UartLinkPumpTx();
+                WaveX::Comm::LinkPumpTx();
             }
         }
     }
@@ -3305,7 +3305,7 @@ void OnSampleLoad(const SampleLoadMessage& sl) {
     status.channels = static_cast<uint8_t>(num_ch);
     status.sample_rate = sample_rate;
     status.frames_played = data_size / ((bits / 8) * num_ch);  // total frames loaded
-    WaveX::Comm::UartLinkSend(WaveX::Protocol::MSG_SAMPLE_STATUS, &status, sizeof(status));
+    WaveX::Comm::LinkSend(WaveX::Protocol::MSG_SAMPLE_STATUS, &status, sizeof(status));
 }
 
 void GetSampleMemStatus(SampleMemStatusMessage& out) {

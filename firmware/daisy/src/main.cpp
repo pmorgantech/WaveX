@@ -1,9 +1,9 @@
 #include "../shared/config/pin_config.h"
 #include "comm/daisy_filesystem.h"
 #include "comm/daisy_spi_link.h"
-#include "comm/daisy_uart_link.h"
 #include "comm/diag_push.h"
 #include "comm/log_ring.h"
+#include "comm/mcu_link.h"
 #include "config/link_config.h"
 #include "config/logging_config.h"
 #include "daisy_seed.h"
@@ -34,10 +34,7 @@ using namespace WaveX::Protocol;
 // Hardware
 DaisySeed hw;
 #if WAVEX_SPI_LINK_ENABLED
-// Every use of spi_handle lives inside a WAVEX_SPI_LINK_ENABLED block below;
-// UART is the transport of record (roadmap 0.2) and this flag is hard-coded
-// 0, so the declaration is guarded to match rather than carrying a permanently
-// unused static in every image.
+// Every use of spi_handle is guarded by the selected transport macro.
 static daisy::SpiHandle spi_handle;
 #endif
 
@@ -580,12 +577,13 @@ static void PrintProfilingStats(DaisySeed& hw) {
     // from this line and rejects a capture without it. Repeated per window
     // so a capture started mid-run still carries it.
     WaveX::Log::PrintLine(
-        "profile_config: core_hz=%u sample_rate=%u block_size=%u storage=%s opt=%s",
+        "profile_config: core_hz=%u sample_rate=%u block_size=%u storage=%s opt=%s link=%s",
         (unsigned)SystemCoreClock,
         (unsigned)hw.AudioSampleRate(),
         (unsigned)hw.AudioBlockSize(),
         WAVEX_PROFILE_STORAGE,
-        WAVEX_PROFILE_OPT);
+        WAVEX_PROFILE_OPT,
+        WAVEX_MCU_LINK_NAME);
     uint32_t zone_count = WaveX::Profiling::Profiler::GetZoneCount();
     for (uint32_t i = 0; i < zone_count; ++i) {
         const auto* zone = WaveX::Profiling::Profiler::GetZone(i);
@@ -781,9 +779,10 @@ int main(void) {
     WAVEX_LOG_DAISY(INTER_MCU_LINK, "=== COMMUNICATION INIT START ===");
 
 #if WAVEX_SPI_LINK_ENABLED
-    WaveX::Comm::Spi_Init(hw, &spi_handle);
-#endif
-
+    WaveX::Comm::s_hw = &hw;
+    if (!WaveX::Comm::Spi_Init(hw, &spi_handle))
+        WaveX::Log::PrintLine("DAISY: SPI init failed; link offline");
+#else
     WaveX::Comm::UartLinkInit(&hw);
     WaveX::Comm::UartLinkStart();
     // dsy_dma_init installs UART DMA IRQs at priority 0. Restore the §7.1.5
@@ -794,6 +793,8 @@ int main(void) {
     HAL_NVIC_SetPriority(DMA2_Stream4_IRQn, 7, 0);
     WAVEX_LOG_DAISY(INTER_MCU_LINK,
                     "DAISY: UART full-duplex DMA started (IRQ priority 7, below audio)");
+#endif
+    WaveX::Log::PrintLine("DAISY: MCU link=" WAVEX_MCU_LINK_NAME);
 
 // Start audio callback system
 #if WAVEX_AUDIO_ENGINE_ENABLED
@@ -858,12 +859,7 @@ int main(void) {
 
         uint32_t current_time = System::GetNow();
 
-#if WAVEX_SPI_LINK_ENABLED
-        // One foreground owner services completion, timeout recovery and READY.
-        WaveX::Comm::ProcessQueuedSpiMessage();
-#endif
-
-        WaveX::Comm::UartLinkProcess();
+        WaveX::Comm::LinkProcess();
 
         // Push at most one USB packet of buffered log output. Non-blocking:
         // a busy or unread endpoint costs nothing here.
@@ -1110,10 +1106,11 @@ int main(void) {
                 // total_us against the interval says what fraction of the
                 // main loop the link consumed; max_us says whether any single
                 // pass was long enough to matter to the ring refill.
-                WaveX::Comm::UartPerfSample uart_perf;
-                WaveX::Comm::TakeUartPerf(uart_perf);
+                WaveX::Comm::LinkPerfSample uart_perf;
+                WaveX::Comm::TakeLinkPerf(uart_perf);
                 WAVEX_LOG_DAISY(INTER_MCU_LINK,
-                                "UART PERF: %lu calls, %lu us total (%lu.%02lu%% of loop) "
+                                WAVEX_MCU_LINK_NAME
+                                " PERF: %lu calls, %lu us total (%lu.%02lu%% of loop) "
                                 "avg=%lu us max=%lu us | rx %lu B/%lu fr, tx %lu B/%lu fr | "
                                 "err=%lu seqdrop=%lu ovf=%lu",
                                 (unsigned long)uart_perf.calls,
@@ -1131,11 +1128,11 @@ int main(void) {
                                 (unsigned long)uart_perf.queue_overflows);
 #endif
 
-                WaveX::Comm::UartLinkLogStats();
+                WaveX::Comm::LinkLogStats();
             }  // !stats_throttled
 #else
-            // Log UART stats
-            WaveX::Comm::UartLinkLogStats();
+            // Log selected-link stats
+            WaveX::Comm::LinkLogStats();
 #endif
         }
 
@@ -1156,7 +1153,7 @@ int main(void) {
                            1000.0f)  // cpu_max_percent (scaled by 10)
             );
 
-            int heartbeat_result = WaveX::Comm::UartLinkSend(
+            int heartbeat_result = WaveX::Comm::LinkSend(
                 WaveX::Protocol::MSG_HEARTBEAT, &heartbeat_msg, sizeof(heartbeat_msg));
             (void)heartbeat_result;  // read only by the packet-debug log below
 #if WAVEX_MCU_LINK_PACKET_DEBUG
@@ -1176,7 +1173,7 @@ int main(void) {
                             (unsigned int)heartbeat_msg.cpu_min_percent,
                             (unsigned int)heartbeat_msg.cpu_max_percent);
             WAVEX_LOG_DAISY(INTER_MCU_LINK,
-                            "UART Heartbeat sent: uptime=%lu loop_counter=%lu",
+                            WAVEX_MCU_LINK_NAME " Heartbeat sent: uptime=%lu loop_counter=%lu",
                             (unsigned long)current_time,
                             (unsigned long)loop_counter);
 #endif
@@ -1209,7 +1206,7 @@ int main(void) {
                 pos.state = 1;  // playing
                 pos.frames_played = played;
                 pos.sample_rate = region;  // region length, so the UI can scale
-                WaveX::Comm::UartLinkSend(WaveX::Protocol::MSG_SAMPLE_STATUS, &pos, sizeof(pos));
+                WaveX::Comm::LinkSend(WaveX::Protocol::MSG_SAMPLE_STATUS, &pos, sizeof(pos));
             }
         }
 
@@ -1226,28 +1223,30 @@ int main(void) {
             uint16_t q_pkL = (uint16_t)(fminf(1.f, m.peakL) * 32767.f);
             uint16_t q_pkR = (uint16_t)(fminf(1.f, m.peakR) * 32767.f);
 
-            // Create meter push message for UART transmission
+            // Create the meter push message for the selected transport
             WaveX::Protocol::MeterPushMessage meter_msg(q_rmsL,  // rms_left
                                                         q_rmsR,  // rms_right
                                                         q_pkL,   // peak_left
                                                         q_pkR    // peak_right
             );
 
-            // Send meter data via UART (not SPI - SPI reserved for browse/wave only)
-            int result = WaveX::Comm::UartLinkSend(
+            // All traffic, including meters, follows the selected transport
+            int result = WaveX::Comm::LinkSend(
                 WaveX::Protocol::MSG_METER_PUSH, &meter_msg, sizeof(meter_msg));
             (void)result;  // read only by the packet-debug log below
 #if WAVEX_MCU_LINK_PACKET_DEBUG
             if (result > 0) {
                 WAVEX_LOG_DAISY(INTER_MCU_LINK,
-                                "Sent meter data via UART: RMS L=%u R=%u, Peak L=%u R=%u",
+                                "Sent meter data via " WAVEX_MCU_LINK_NAME
+                                ": RMS L=%u R=%u, Peak L=%u R=%u",
                                 (unsigned)q_rmsL,
                                 (unsigned)q_rmsR,
                                 (unsigned)q_pkL,
                                 (unsigned)q_pkR);
             } else {
-                WAVEX_LOG_DAISY(
-                    INTER_MCU_LINK, "Failed to send meter data via UART: result=%d", result);
+                WAVEX_LOG_DAISY(INTER_MCU_LINK,
+                                "Failed to send meter data via " WAVEX_MCU_LINK_NAME ": result=%d",
+                                result);
             }
 #endif
         }

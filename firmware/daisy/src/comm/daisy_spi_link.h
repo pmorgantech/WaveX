@@ -33,13 +33,23 @@ typedef struct {
     uint32_t rx_q_overflows;
     uint32_t irq_asserts;
     uint32_t last_activity_ms;
+    uint32_t tx_q_overflows;
+    uint32_t seq_drops;
+    uint32_t timeouts;
+    uint32_t rx_bytes;
+    uint32_t tx_bytes;
 } spi_link_stats_t;
 
 // ============================================================================
 // Core SPI Communication Functions
 // ============================================================================
 
-void Spi_Init(daisy::DaisySeed& hw, daisy::SpiHandle* hspi);
+bool Spi_Init(daisy::DaisySeed& hw, daisy::SpiHandle* hspi);
+int Spi_Send(uint16_t type, const void* payload, uint16_t bytes);
+bool Spi_TxIdle();
+void Spi_PumpTx();
+struct UartPerfSample;
+void Spi_TakePerf(UartPerfSample& out);
 bool Spi_SendPreCreatedPacket(const uint8_t* packet_data, size_t packet_size);
 
 // ============================================================================

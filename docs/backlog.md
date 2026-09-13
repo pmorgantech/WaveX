@@ -29,11 +29,27 @@ The current capacity band is STAY, with the one-hour soak and complete Phase 2
 gate still open.
 
 Render, event and modulation attribution and selective hot-path placement have
-been measured. Remaining work is to remeasure every callback expansion, examine
-the remaining QSPI math helpers if further headroom is needed, and complete the
-full soak. The historical DaisySP comparison exceeded the capacity threshold;
-it remains default-disabled and needs fresh evidence on the expanded workload
-before adoption. This does not authorize a backend port or hardware purchase.
+been measured. Remaining work is to remeasure every callback expansion and
+complete the full soak. Further optimizations are deferred at the user's request
+(2026-09-13):
+
+- Benchmark the remaining QSPI math helpers using the selective placement
+  procedure below; keep the accepted compiler/profiler and workload fixed.
+- Split event timing into note triggers, parameter locks and live snapshot
+  application. Move eligible preparation outside the callback only after
+  attributing the bursts; preserve sample-offset timing and immutable handoffs.
+- Investigate UART TX queue-full bursts and repeated foreground polling.
+  Consider coalescing replaceable telemetry and avoiding unnecessary service
+  work. Queue-full counts include rejected enqueue attempts that callers may
+  retry; distinguish them from lost musical events. Foreground UART elapsed
+  timing includes preempting audio interrupts and does not establish that UART
+  caused a callback peak.
+
+The historical DaisySP comparison exceeded the capacity threshold; it remains
+default-disabled and needs fresh evidence on the expanded workload before
+adoption. The rejected cutoff/setup caches, specialized rendering loops and
+global O3 trial remain rejected unless a new controlled measurement justifies
+revisiting them. This does not authorize a backend port or hardware purchase.
 
 ### Page-entry render cost
 
@@ -87,20 +103,57 @@ usage, and callback min/average/max for both profiles.
 
 ### SPI-link revival requires hardware verification
 
-UART remains the live transport. The September 2026 SPI audit fixes descriptor
-ownership, duplex RX publication, parser capacity, sequence/length handling,
-READY signaling and bounded recovery in the compiled-out adapters. It does not
-enable SPI or change the Phase 2 transport decision.
+Investigate the recorded pattern-save SD error under the 24 MHz slew trial
+(`fatfs=1`, `hal_err=0x6`, offset 5120) and its recurrence with fast scheduling
+(offset 0), including repeat/soak coverage and
+whether combined electrical activity contributes. SPI invalid-frame/timeout
+counters stayed zero; do not treat that as a complete system pass.
 
-The remaining gate is startup/routing integration, a measured READY/CS timing
-proof, bidirectional DMA under audio/SD load, fault injection and peer-reboot
-recovery. Define application retry behavior for CRC rejection and a peer that
-never reasserts READY. The Daisy recovery path requires exclusive ownership of
-libDaisy's SPI DMA streams; resolve Stage B CV sharing before combining them.
+The cutover measured slower acknowledged controls on SPI despite faster bulk
+wire time. Fast scheduling now removes the five-millisecond interval and
+gives deferred replies a foreground pass before another empty frame.
+Before another adoption comparison, measure the remaining immutable
+empty-frame delay, fixed-slot padding and queue backpressure. Preserve DMA ownership and measure control latency and audio
+load together. Treat selective SPI ITCM placement as a measured candidate; it
+does not establish signal integrity. The 48 MHz trial failed on Daisy RX
+with both fast and legacy cadence. The original nominal 32 MHz midpoint
+failed too, but matched mode 1 plus stronger ESP MISO drive later completed
+two 200-edit control trials and four selected two-board HIL checks without
+reported link errors. Mode or drive changes alone did not pass; 48 MHz still failed and its captured RX prefixes were
+exactly one bit late. Validate SCLK/MISO timing at the Daisy receiver and
+repeat/soak the working combination before increasing the clock further.
+Finer rate candidates require a separately validated boot-time clock
+profile; short trials do not establish a stability threshold. See the
+[return-path investigation](spi-notes.md#return-path-investigation).
+
+UART remains the default and production transport. The September 2026 audit
+fixes descriptor ownership, duplex RX publication, parser capacity,
+sequence/length handling, READY signaling and bounded recovery.
+
+The requested reversible experiment is implemented on
+`experiment/mcu-link-switch`: the shared selector controls both MCUs'
+initialization, startup, routing, sends and service, with DMA derived from it.
+Only the selected transport carries application traffic. The Daisy TX-only
+pump retains RX in a bounded queue without recursive command dispatch. SPI
+uses the existing exact-length codec to serve strict application handlers.
+Both builds print their selection, and initialization failure stays offline.
+
+Both selections compile and the repository host suites pass. The SPI transport
+tests also pass with ASan/UBSan. The UART/SPI/UART hardware comparison and its
+limits are recorded in [SPI notes](spi-notes.md#verification-and-remaining-gates).
+Use [flashing](flashing.md#uartspi-comparison) for the one-macro rebuild/flash
+procedure and retained-image rollback. UART stays the checked-in default.
+
+The remaining hardware gate includes fault injection and peer-reboot recovery.
+Define application retry behavior for CRC rejection and a peer that never
+reasserts READY. The Daisy recovery path requires exclusive ownership of
+libDaisy's SPI DMA streams; Stage A has no competing general-purpose SPI DMA
+consumer, while Stage B CV sharing must be resolved before combining them.
 
 Use [spi-notes.md](spi-notes.md#verification-and-remaining-gates) for evidence,
 limits and the bench gate. The GPIO continuity test passed; high-speed signal
-integrity and the corrected DMA path have not been verified on hardware.
+integrity, fault recovery and the full soak remain unverified despite the
+targeted corrected-DMA bench checks.
 
 ### Streaming CRC recovery
 

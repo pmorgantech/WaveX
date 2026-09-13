@@ -35,13 +35,13 @@ class SpiEspDevice : public ::testing::Test {
         auto* trans = SpiEspMock::owned;
         if (rx_seq) {
             const uint8_t payload = 0x5a;
-            EXPECT_NE(ProtocolHandler::CreateWaveXPacket(static_cast<uint8_t*>(trans->rx_buffer),
-                                                         kFrameBytes,
-                                                         MSG_BROWSE_RESP,
-                                                         &payload,
-                                                         1,
-                                                         rx_seq,
-                                                         0),
+            EXPECT_NE(WaveX::UartProtocol::CreateUartPacket(static_cast<uint8_t*>(trans->rx_buffer),
+                                                            kFrameBytes,
+                                                            MSG_BROWSE_RESP,
+                                                            &payload,
+                                                            1,
+                                                            rx_seq,
+                                                            0),
                       0u);
         }
         trans->trans_len = bits;
@@ -51,6 +51,22 @@ class SpiEspDevice : public ::testing::Test {
         return ESP_OK;
     }
 };
+
+#if WAVEX_ESP_SPI_MISO_DRIVE_CAPABILITY >= 0
+TEST(SpiEspConfiguration, FailedDriveSetupReleasesDriverWithoutStartingTask) {
+    SpiEspMock::task = nullptr;
+    SpiEspMock::freed = 0;
+    SpiEspMock::fail_drive = true;
+    ASSERT_EQ(spi_link_init(), ESP_OK);
+    EXPECT_EQ(spi_link_start(), ESP_ERR_INVALID_STATE);
+    EXPECT_FALSE(driver_initialized);
+    EXPECT_FALSE(running.load());
+    EXPECT_EQ(SpiEspMock::task, nullptr);
+    EXPECT_EQ(SpiEspMock::freed, 1u);
+    SpiEspMock::fail_drive = false;
+    EXPECT_EQ(spi_link_stop(), ESP_OK);
+}
+#endif
 
 TEST_F(SpiEspDevice, TenTimeoutsNeverRequeueOrConsumeMessageBehindEmptyFrame) {
     unsigned phase = 0;
@@ -68,7 +84,7 @@ TEST_F(SpiEspDevice, TenTimeoutsNeverRequeueOrConsumeMessageBehindEmptyFrame) {
         if (phase++ == 10)
             return Complete(result, kFrameBytes * 8);
         EXPECT_EQ(SpiEspMock::queued, 2u);
-        EXPECT_EQ(static_cast<const uint8_t*>(transaction.tx_buffer)[1], MSG_BROWSE_REQ);
+        EXPECT_EQ(static_cast<const uint8_t*>(transaction.tx_buffer)[4], MSG_BROWSE_REQ);
         EXPECT_EQ(outgoing.Count(), 1u);
         stop_requested.store(true);
         return Complete(result, kFrameBytes * 8);
@@ -85,7 +101,7 @@ TEST_F(SpiEspDevice, ShortTransferRejectsRxAndRetriesSameTxThenFiltersDuplicateR
     SpiEspMock::on_wait = [&](spi_slave_transaction_t** result) {
         EXPECT_EQ(SpiEspMock::queued, phase + 1);
         if (phase < 2) {
-            EXPECT_EQ(static_cast<const uint8_t*>(transaction.tx_buffer)[2], 1);
+            EXPECT_EQ(static_cast<const uint8_t*>(transaction.tx_buffer)[5], 1);
         }
         if (phase++ == 0)
             return Complete(result, 32 * 8, 20);  // Valid bytes in RAM do not make a full transfer.
@@ -138,7 +154,7 @@ TEST_F(SpiEspDevice, StopTimeoutRetainsDriverBuffersUntilDescriptorReturns) {
 
 TEST_F(SpiEspDevice, TxUsesSixteenBitSequenceAndSupportsMaximumLogicalPayload) {
     next_sequence = 255;
-    std::array<uint8_t, kFrameBytes - 6> payload{};
+    std::array<uint8_t, kMaxPayload> payload{};
     ASSERT_EQ(spi_link_send(MSG_BROWSE_RESP, payload.data(), payload.size()),
               static_cast<int>(payload.size()));
     Queue();
@@ -146,11 +162,11 @@ TEST_F(SpiEspDevice, TxUsesSixteenBitSequenceAndSupportsMaximumLogicalPayload) {
     SpiEspMock::on_wait = [&](spi_slave_transaction_t** result) {
         const auto* tx = static_cast<const uint8_t*>(transaction.tx_buffer);
         if (phase++ == 0) {
-            EXPECT_EQ(tx[2], 255);
-            EXPECT_EQ(tx[3], 0);
+            EXPECT_EQ(tx[5], 255);
+            EXPECT_EQ(tx[6], 0);
         } else {
-            EXPECT_EQ(tx[2], 0);
-            EXPECT_EQ(tx[3], 1);
+            EXPECT_EQ(tx[5], 0);
+            EXPECT_EQ(tx[6], 1);
             stop_requested.store(true);
         }
         return Complete(result, kFrameBytes * 8);

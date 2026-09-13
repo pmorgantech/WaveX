@@ -15,14 +15,24 @@
 #define WAVEX_MCU_LINK_PACKET_DEBUG 0
 #endif
 
-// SPI link configuration.
-// 0 = SPI link compiled out. Decision recorded 2026-07-05 (architecture.md
-// §4.4): UART is the transport of record and carries all inter-MCU traffic;
-// re-enabling SPI requires bench re-validation (roadmap Phase 1 item 6).
+// Shared build-time transport selector. Rebuild and flash BOTH MCUs after
+// changing it: 0 = UART (default), 1 = experimental SPI. No runtime fallback.
+#ifndef WAVEX_SPI_LINK_ENABLED
 #define WAVEX_SPI_LINK_ENABLED 0
-
+#endif
+#if WAVEX_SPI_LINK_ENABLED != 0 && WAVEX_SPI_LINK_ENABLED != 1
+#error "WAVEX_SPI_LINK_ENABLED must be 0 (UART) or 1 (SPI)"
+#endif
 #ifndef WAVEX_SPI_DMA_ENABLED
-#define WAVEX_SPI_DMA_ENABLED 0  // Disabled - not using SPI currently, save DMA memory
+#define WAVEX_SPI_DMA_ENABLED WAVEX_SPI_LINK_ENABLED
+#endif
+#if WAVEX_SPI_DMA_ENABLED != WAVEX_SPI_LINK_ENABLED
+#error "SPI DMA must follow the selected transport"
+#endif
+#if WAVEX_SPI_LINK_ENABLED
+#define WAVEX_MCU_LINK_NAME "SPI"
+#else
+#define WAVEX_MCU_LINK_NAME "UART"
 #endif
 
 // Use pin definitions from centralized pin_config.h
@@ -35,7 +45,6 @@
 #define PIN_IRQ_DAISY2ESP WAVEX_ESP_DAISY_IRQ
 #define PIN_IRQ_ESP2DAISY WAVEX_ESP_ATTN_OUT
 
-#define SPI_CLOCK_SPEED_HZ WAVEX_ESP_SPI_CLK_HZ
 #define SPI_QUEUE_SIZE WAVEX_ESP_SPI_QUEUE_SIZE
 #define SPI_DMA_CHANNEL WAVEX_ESP_SPI_DMA_CH
 #else
@@ -48,7 +57,6 @@
 #define PIN_IRQ_DAISY2ESP WAVEX_DAISY_IRQ_OUT
 #define PIN_IRQ_ESP2DAISY WAVEX_DAISY_ATTN_IN
 
-#define SPI_CLOCK_SPEED_HZ 10000000
 #define SPI_QUEUE_SIZE 4
 #define SPI_DMA_CHANNEL SPI_DMA_CH_AUTO
 #endif

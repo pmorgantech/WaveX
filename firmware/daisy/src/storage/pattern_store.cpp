@@ -1,7 +1,7 @@
 #include "pattern_store.hpp"
 
-#include "comm/daisy_uart_link.h"
 #include "comm/log_ring.h"
+#include "comm/mcu_link.h"
 #include "ff.h"
 
 #include "bss_static.hpp"
@@ -265,7 +265,7 @@ void Pump(Sequencer::PatternExchange& exchange) {
                 Finish(SEQ_FILE_OK, exchange);
             break;
     }
-    if (j.send && Comm::UartLinkSend(MSG_SEQ_FILE_STATUS, &j.status, sizeof(j.status)) >= 0)
+    if (j.send && Comm::LinkSend(MSG_SEQ_FILE_STATUS, &j.status, sizeof(j.status)) >= 0)
         j.send = false;
 }
 }  // namespace PatternStore

@@ -21,8 +21,8 @@
 #include "daisy_filesystem.h"
 #include "daisy_inter_mcu_message_handlers.h"
 #include "daisy_seed.h"
-#include "daisy_uart_link.h"
 #include "ff.h"
+#include "mcu_link.h"
 #include "spi_protocol/protocol.h"  // For WaveX::Protocol namespace
 #include "sys/dma.h"                // For DMA_BUFFER_MEM_SECTION
 
@@ -32,9 +32,6 @@
 
 using namespace daisy;
 using namespace WaveX::Protocol;
-
-// Forward declaration for Spi_SendPreCreatedPacket (defined in main file)
-extern bool Spi_SendPreCreatedPacket(const uint8_t* packet_data, size_t packet_size);
 
 // FileSystem class declaration
 namespace WaveX {
@@ -411,7 +408,7 @@ void ProcessBrowseRequest(const char* path,
                     (uint32_t)payload_size);
 
     // In range: payload_size <= kBrowsePayloadCapacity (2048) by construction.
-    int send_result = UartLinkSend(
+    int send_result = LinkSend(
         WaveX::Protocol::MSG_BROWSE_RESP, browse_payload, static_cast<uint16_t>(payload_size));
     if (send_result < 0) {
         WAVEX_LOG_DAISY(STORAGE, "Failed to send browse response (queue full?)");
@@ -433,15 +430,15 @@ void NotifyStorageLost() {
     stop_resp.reserved[0] = 0;
     stop_resp.reserved[1] = 0;
     stop_resp.reserved[2] = 0;
-    WaveX::Comm::UartLinkSend(MSG_SAMPLE_STOP_RESP, &stop_resp, sizeof(stop_resp));
+    WaveX::Comm::LinkSend(MSG_SAMPLE_STOP_RESP, &stop_resp, sizeof(stop_resp));
 
     // An empty browse response: total_count 0, n 0. Same shape the browser
     // already parses, so it clears the list through its normal path.
     uint8_t empty_browse[sizeof(uint32_t) + sizeof(uint8_t)] = {0, 0, 0, 0, 0};
-    WaveX::Comm::UartLinkSend(MSG_BROWSE_RESP, empty_browse, sizeof(empty_browse));
+    WaveX::Comm::LinkSend(MSG_BROWSE_RESP, empty_browse, sizeof(empty_browse));
 
     StorageStatusMessage status(0);
-    WaveX::Comm::UartLinkSend(MSG_STORAGE_STATUS, &status, sizeof(status));
+    WaveX::Comm::LinkSend(MSG_STORAGE_STATUS, &status, sizeof(status));
 
     WaveX::Log::PrintLine("DAISY: storage lost - told frontend to exit audition and clear list");
 }
@@ -452,7 +449,7 @@ void NotifyStorageLost() {
 void NotifyStorageAvailable() {
     using namespace WaveX::Protocol;
     StorageStatusMessage status(1);
-    WaveX::Comm::UartLinkSend(MSG_STORAGE_STATUS, &status, sizeof(status));
+    WaveX::Comm::LinkSend(MSG_STORAGE_STATUS, &status, sizeof(status));
     WaveX::Log::PrintLine("DAISY: storage available - frontend can re-list");
 }
 
@@ -468,7 +465,7 @@ void ProcessSamplePlayRequest(const char* file_path) {
     {
         AckMessage ack;
         ack.serial_id = 0;  // TODO: Get actual serial ID if needed
-        WaveX::Comm::UartLinkSend(WaveX::Protocol::MSG_ACK, &ack, sizeof(ack));
+        WaveX::Comm::LinkSend(WaveX::Protocol::MSG_ACK, &ack, sizeof(ack));
     }
 
     // Stop any current playback first (may touch filesystem/audio state)
@@ -486,7 +483,7 @@ void ProcessSamplePlayRequest(const char* file_path) {
         strncpy(error.msg, "Failed to open WAV file", sizeof(error.msg) - 1);
         error.msg[sizeof(error.msg) - 1] = '\0';
 
-        WaveX::Comm::UartLinkSend(WaveX::Protocol::MSG_ERROR, &error, sizeof(error));
+        WaveX::Comm::LinkSend(WaveX::Protocol::MSG_ERROR, &error, sizeof(error));
         return;
     }
 
@@ -518,7 +515,7 @@ void ProcessSampleStopRequest(uint8_t slot) {
     stop_resp.reserved[1] = 0;
     stop_resp.reserved[2] = 0;
 
-    WaveX::Comm::UartLinkSend(WaveX::Protocol::MSG_SAMPLE_STOP_RESP, &stop_resp, sizeof(stop_resp));
+    WaveX::Comm::LinkSend(WaveX::Protocol::MSG_SAMPLE_STOP_RESP, &stop_resp, sizeof(stop_resp));
 
     if (WaveX::Comm::s_hw) {
         WaveX::Log::PrintLine("DAISY: Sample stop response sent");
@@ -568,7 +565,7 @@ void ProcessSampleGetPathRequest(uint32_t file_index) {
         strncpy(response.path, file_path, sizeof(response.path) - 1);
         response.path[sizeof(response.path) - 1] = '\0';
 
-        WaveX::Comm::UartLinkSend(
+        WaveX::Comm::LinkSend(
             WaveX::Protocol::MSG_SAMPLE_GET_PATH_RESP, &response, sizeof(response));
 
         if (WaveX::Comm::s_hw) {

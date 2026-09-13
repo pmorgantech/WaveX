@@ -9,8 +9,8 @@
 #include "config/uart_debug_config.h"
 #include "daisy_filesystem.h"
 #include "daisy_seed.h"
-#include "daisy_uart_link.h"
 #include "diag_push.h"
+#include "mcu_link.h"
 #include "spi_protocol/protocol.h"
 
 #if WAVEX_SPI_LINK_ENABLED
@@ -171,7 +171,7 @@ void ProcessInterMcuMessage(uint8_t msg_type,
                 ErrorMessage error;
                 error.code = 1;
                 detail::CopyWireString(error.msg, sizeof(error.msg), "Sample audition failed");
-                WaveX::Comm::UartLinkSend(MSG_ERROR, &error, sizeof(error));
+                WaveX::Comm::LinkSend(MSG_ERROR, &error, sizeof(error));
             }
             break;
         }
@@ -482,7 +482,7 @@ static void HandleSampleUnloadMessage(const uint8_t* payload, size_t payload_siz
         WaveX::AudioEngine::PushAllSampleMeta(0);
         WaveX::Protocol::SampleMemStatusMessage status{};
         WaveX::AudioEngine::GetSampleMemStatus(status);
-        WaveX::Comm::UartLinkSend(WaveX::Protocol::MSG_STATUS_RESPONSE, &status, sizeof(status));
+        WaveX::Comm::LinkSend(WaveX::Protocol::MSG_STATUS_RESPONSE, &status, sizeof(status));
     }
 #else
     (void)msg;
@@ -581,7 +581,7 @@ static void HandleStatusRequestMessage(const uint8_t* payload, size_t payload_si
     if (msg->category == STATUS_CATEGORY_SAMPLE_MEM) {
         WaveX::Protocol::SampleMemStatusMessage status{};
         WaveX::AudioEngine::GetSampleMemStatus(status);
-        WaveX::Comm::UartLinkSend(WaveX::Protocol::MSG_STATUS_RESPONSE, &status, sizeof(status));
+        WaveX::Comm::LinkSend(WaveX::Protocol::MSG_STATUS_RESPONSE, &status, sizeof(status));
     }
 }
 

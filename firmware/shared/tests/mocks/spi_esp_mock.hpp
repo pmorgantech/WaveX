@@ -28,6 +28,7 @@ constexpr uint32_t pdMS_TO_TICKS(uint32_t ms) {
 }
 using SemaphoreHandle_t = int*;
 using gpio_num_t = int;
+using gpio_drive_cap_t = int;
 constexpr int GPIO_MODE_OUTPUT = 1, GPIO_INTR_DISABLE = 0;
 struct gpio_config_t {
     uint64_t pin_bit_mask = 0;
@@ -59,6 +60,8 @@ inline void (*task)(void*) = nullptr;
 inline std::function<int(spi_slave_transaction_t**)> on_wait;
 inline std::function<void()> on_route;
 inline bool defer_setup = false;
+inline int drive = 2;
+inline bool fail_drive = false;
 }  // namespace SpiEspMock
 inline SemaphoreHandle_t xSemaphoreCreateMutex() {
     return &SpiEspMock::semaphore;
@@ -95,6 +98,18 @@ inline int gpio_set_level(gpio_num_t, int level) {
     SpiEspMock::ready = level;
     return ESP_OK;
 }
+inline int gpio_set_drive_capability(gpio_num_t pin, gpio_drive_cap_t drive) {
+    assert(pin == WAVEX_ESP_SPI_MISO);
+    if (SpiEspMock::fail_drive)
+        return ESP_ERR_INVALID_STATE;
+    SpiEspMock::drive = drive;
+    return ESP_OK;
+}
+inline int gpio_get_drive_capability(gpio_num_t pin, gpio_drive_cap_t* drive) {
+    assert(pin == WAVEX_ESP_SPI_MISO);
+    *drive = SpiEspMock::drive;
+    return ESP_OK;
+}
 inline int spi_slave_initialize(int,
                                 const spi_bus_config_t*,
                                 const spi_slave_interface_config_t* slave,
@@ -128,7 +143,7 @@ namespace WaveX {
 namespace Comm {
 class PacketRouter {
    public:
-    void route_packet(const uint8_t*, size_t) {
+    void route_uart_message(uint8_t, const uint8_t*, size_t, uint8_t, uint16_t) {
         ++SpiEspMock::routed;
         if (SpiEspMock::on_route)
             SpiEspMock::on_route();

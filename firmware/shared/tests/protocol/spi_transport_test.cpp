@@ -16,7 +16,7 @@ struct Packet {
     explicit Packet(uint16_t sequence, size_t payload_size = 4) {
         Frame payload{};
         payload.fill(0x5a);
-        bytes = ProtocolHandler::CreateWaveXPacket(
+        bytes = WaveX::UartProtocol::CreateUartPacket(
             data.data(), data.size(), MSG_BROWSE_RESP, payload.data(), payload_size, sequence, 0);
     }
 };
@@ -126,9 +126,9 @@ TEST(SpiTxOwnership, RejectsMalformedPacketsAndNeverResetsOwnedFrame) {
 
 TEST(SpiTxOwnership, LargeThenSmallTransferZeroesPhysicalPadding) {
     TxQueue queue;
-    Packet large(1, kFrameBytes - 6), small(2);
+    Packet large(1, kMaxPayload), small(2);
     Frame dma{};
-    ASSERT_EQ(large.bytes, kFrameBytes);
+    ASSERT_EQ(large.bytes, kMaxPayload + WaveX::UartProtocol::UART_FRAME_OVERHEAD);
     ASSERT_TRUE(queue.Push(large.data.data(), large.bytes));
     ASSERT_TRUE(queue.Begin(dma.data()));
     queue.Finish(true);
@@ -260,14 +260,17 @@ TEST(SpiRx, EmptyFramesAndInvalidSizeCodesDoNotReachHandlers) {
     EXPECT_EQ(sequence.ExpectedSeq(), 1);
 }
 
-TEST(SpiRx, AllPacketSizeClassesParseWithExplicitPayloadCapacity) {
+TEST(SpiRx, PreservesExactPayloadLengthsAcrossAllSizeBoundaries) {
     for (size_t payload_size: {size_t{0},
+                               size_t{4},
+                               size_t{26},
+                               size_t{27},
                                size_t{40},
                                size_t{100},
                                size_t{220},
                                size_t{450},
                                size_t{900},
-                               kFrameBytes - 6}) {
+                               kMaxPayload}) {
         const Packet packet(1, payload_size);
         SequenceTracker sequence;
         size_t bytes = 0;
@@ -276,9 +279,9 @@ TEST(SpiRx, AllPacketSizeClassesParseWithExplicitPayloadCapacity) {
         size_t capacity = payload.size();
         uint8_t type = 0, flags = 0;
         uint16_t seq = 0;
-        ASSERT_TRUE(ProtocolHandler::ParseWaveXPacket(
+        ASSERT_TRUE(WaveX::UartProtocol::ParseUartPacket(
             packet.data.data(), bytes, type, payload.data(), capacity, seq, flags));
-        EXPECT_EQ(capacity, bytes - 6);
+        EXPECT_EQ(capacity, payload_size);
         EXPECT_EQ(seq, 1);
         for (size_t i = 0; i < payload_size; ++i)
             EXPECT_EQ(payload[i], 0x5a);

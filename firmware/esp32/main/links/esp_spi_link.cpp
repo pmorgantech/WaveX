@@ -3,6 +3,7 @@
 #if WAVEX_SPI_LINK_ENABLED
 
 #include "comm/packet_router.h"
+#include "config/hardware_config.h"
 #include "driver/gpio.h"
 #include "driver/spi_slave.h"
 #include "esp_attr.h"
@@ -64,14 +65,24 @@ RxResult ProcessRx(size_t actual_bytes) {
     auto callback = packet_callback;
     xSemaphoreGive(mutex);
     // Dispatch outside the queue mutex: handlers may enqueue responses.
+    uint8_t payload[kMaxPayload];
+    size_t bytes = sizeof(payload);
+    uint8_t type = 0, flags = 0;
+    uint16_t sequence = 0;
+    if (!WaveX::UartProtocol::ParseUartPacket(
+            rx_dma, packet_bytes, type, payload, bytes, sequence, flags))
+        return RxResult::Invalid;
     if (target)
-        target->route_packet(rx_dma, packet_bytes);
+        target->route_uart_message(type, bytes ? payload : nullptr, bytes, flags, sequence);
     else if (callback)
         callback(rx_dma, packet_bytes);
     return result;
 }
 
 void SlaveTask(void*) {
+#if WAVEX_SPI_SIGNAL_DIAGNOSTICS_ENABLED
+    unsigned traced_tx = 0;
+#endif
     while (!stop_requested.load(std::memory_order_acquire)) {
         xSemaphoreTake(mutex, portMAX_DELAY);
         const bool prepared = outgoing.Begin(tx_dma);
@@ -108,6 +119,23 @@ void SlaveTask(void*) {
                 vTaskDelay(pdMS_TO_TICKS(10));
             }
         }
+
+#if WAVEX_SPI_SIGNAL_DIAGNOSTICS_ENABLED
+        // IDF returned both buffers. Never inspect an active DMA descriptor.
+        if (tx_dma[0] != 0 && traced_tx < 8) {
+            char prefix[65]{};
+            constexpr char digits[] = "0123456789abcdef";
+            for (size_t i = 0; i < 32; ++i) {
+                prefix[2 * i] = digits[tx_dma[i] >> 4];
+                prefix[2 * i + 1] = digits[tx_dma[i] & 15];
+            }
+            ESP_LOGI(kTag,
+                     "SPI signal TX bits=%u head=%s",
+                     static_cast<unsigned>(completed->trans_len),
+                     prefix);
+            ++traced_tx;
+        }
+#endif
 
         // trans_len is the number of bits actually clocked. length is capacity.
         const bool full_frame = completed->trans_len == kFrameBytes * 8;
@@ -207,16 +235,35 @@ esp_err_t spi_link_start() {
     bus.intr_flags = 0;
     spi_slave_interface_config_t slave{};
     slave.spics_io_num = WAVEX_ESP_SPI_CS;
-    slave.mode = 0;
+    slave.mode = WAVEX_SPI_CLOCK_MODE;
     slave.queue_size = 1;
     slave.post_setup_cb = SlaveReady;
     slave.post_trans_cb = SlaveComplete;
-    const auto result = spi_slave_initialize(WAVEX_ESP_SPI_HOST, &bus, &slave, SPI_DMA_CH_AUTO);
+    auto result = spi_slave_initialize(WAVEX_ESP_SPI_HOST, &bus, &slave, SPI_DMA_CH_AUTO);
     if (result != ESP_OK) {
         xSemaphoreGive(mutex);
         return result;
     }
     driver_initialized = true;
+#if WAVEX_ESP_SPI_MISO_DRIVE_CAPABILITY >= 0
+    result = gpio_set_drive_capability(
+        static_cast<gpio_num_t>(WAVEX_ESP_SPI_MISO),
+        static_cast<gpio_drive_cap_t>(WAVEX_ESP_SPI_MISO_DRIVE_CAPABILITY));
+#endif
+#if WAVEX_SPI_SIGNAL_DIAGNOSTICS_ENABLED
+    gpio_drive_cap_t drive{};
+    if (result == ESP_OK)
+        result = gpio_get_drive_capability(static_cast<gpio_num_t>(WAVEX_ESP_SPI_MISO), &drive);
+    if (result == ESP_OK)
+        ESP_LOGI(kTag, "SPI signal mode=%u MISO drive=%d", unsigned(slave.mode), int(drive));
+#endif
+    if (result != ESP_OK) {
+        // No task or transaction exists yet: releasing the driver is safe.
+        if (spi_slave_free(WAVEX_ESP_SPI_HOST) == ESP_OK)
+            driver_initialized = false;
+        xSemaphoreGive(mutex);
+        return result;
+    }
     stop_requested.store(false, std::memory_order_release);
     running.store(true, std::memory_order_release);
     if (xTaskCreate(SlaveTask, "spi_slave", 16384, nullptr, 5, nullptr) != pdPASS) {
@@ -231,7 +278,7 @@ esp_err_t spi_link_start() {
 }
 
 int spi_link_send(uint16_t type, const void* payload, uint16_t len) {
-    if (!mutex || type > UINT8_MAX || len > kFrameBytes - 6 || (len && !payload))
+    if (!mutex || type > UINT8_MAX || len > kMaxPayload || (len && !payload))
         return -1;
     if (xSemaphoreTake(mutex, pdMS_TO_TICKS(10)) != pdTRUE)
         return -1;
@@ -240,8 +287,8 @@ int spi_link_send(uint16_t type, const void* payload, uint16_t len) {
         return -1;
     }
     uint8_t packet[kFrameBytes];
-    const size_t bytes = ProtocolHandler::CreateWaveXPacket(
-        packet, sizeof(packet), static_cast<MessageType>(type), payload, len, next_sequence, 0);
+    const size_t bytes = WaveX::UartProtocol::CreateUartPacket(
+        packet, sizeof(packet), static_cast<uint8_t>(type), payload, len, next_sequence, 0);
     const bool queued = bytes != 0 && outgoing.Push(packet, bytes);
     if (queued)
         next_sequence = NextSequence(next_sequence);

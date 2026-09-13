@@ -1,5 +1,5 @@
-#include "esp_uart_link.h"
-
+#include "config/link_config.h"
+#if !WAVEX_SPI_LINK_ENABLED
 #include "../../shared/config/uart_debug_config.h"
 #include "../../shared/spi_protocol/protocol.h"
 #include "../../shared/uart_protocol/uart_protocol.h"
@@ -7,6 +7,7 @@
 #include "../inter_mcu.h"
 #include "driver/uart.h"
 #include "esp_log.h"
+#include "esp_uart_link.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
@@ -580,3 +581,5 @@ void uart_link_log_stats(void) {
               s_stats.seq_drops,
               s_stats.seq_resyncs);
 }
+
+#endif  // !WAVEX_SPI_LINK_ENABLED

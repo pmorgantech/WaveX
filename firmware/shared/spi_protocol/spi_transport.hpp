@@ -1,5 +1,6 @@
 #pragma once
 
+#include "../uart_protocol/uart_protocol.h"
 #include "protocol.h"
 
 #include "sequence_tracker.hpp"
@@ -12,9 +13,12 @@ namespace WaveX {
 namespace Protocol {
 namespace Spi {
 
-// One fixed-size, full-duplex physical transfer contains at most one logical
-// WaveX packet in each direction. An all-zero frame means no queued packet.
-constexpr size_t kFrameBytes = MAX_PKT_SIZE;
+// Reuse the live length-bearing codec on both links. The older padded packet
+// format cannot represent exact payload lengths required by current handlers.
+// Round the maximum framed payload to full 128-byte P4/M7 cache lines.
+constexpr size_t kFrameBytes =
+    ((UartProtocol::UART_MAX_PAYLOAD + UartProtocol::UART_FRAME_OVERHEAD + 127) / 128) * 128;
+constexpr size_t kMaxPayload = UartProtocol::UART_MAX_PAYLOAD;
 constexpr uint32_t kTransferTimeoutMs = 100;
 constexpr uint32_t kPollIntervalMs = 5;
 
@@ -23,9 +27,8 @@ constexpr uint32_t kPollIntervalMs = 5;
 class TxQueue {
    public:
     bool Push(const uint8_t* packet, size_t bytes) {
-        if (!packet || bytes < 6 || bytes > kFrameBytes || count_ == kCapacity ||
-            ProtocolHandler::GetPacketSizeFromCode(packet[0] & PKT_SIZE_MASK) != bytes ||
-            !ProtocolHandler::ValidateWaveXPacket(packet, bytes))
+        if (!packet || bytes > kFrameBytes || Full() ||
+            !UartProtocol::ValidateUartFrame(packet, bytes))
             return false;
         std::memcpy(packets_[tail_], packet, bytes);
         sizes_[tail_] = bytes;
@@ -45,7 +48,7 @@ class TxQueue {
         return true;
     }
 
-    // Only call after the driver returned ownership and RX was processed, or
+    // Only call after the driver returned ownership and RX was retained, or
     // after a failed launch/abort has proved that DMA cannot touch the buffers.
     bool Finish(bool full_transfer) {
         if (!owned_)
@@ -70,6 +73,7 @@ class TxQueue {
 
     bool Owned() const { return owned_; }
     size_t Count() const { return count_; }
+    bool Full() const { return count_ == kCapacity; }
 
    private:
     static constexpr size_t kCapacity = 8;
@@ -161,10 +165,10 @@ inline RxResult InspectFrame(const uint8_t* frame,
         empty = empty && frame[i] == 0;
     if (empty)
         return RxResult::Empty;
-    const size_t size = ProtocolHandler::GetPacketSizeFromCode(frame[0] & PKT_SIZE_MASK);
-    if (size == 0 || size > transferred_bytes || !ProtocolHandler::ValidateWaveXPacket(frame, size))
+    const size_t size = UartProtocol::GetFrameLength(frame, transferred_bytes);
+    if (size == 0 || size > transferred_bytes || !UartProtocol::ValidateUartFrame(frame, size))
         return RxResult::Invalid;
-    const uint16_t seq = static_cast<uint16_t>(frame[2] | (uint16_t(frame[3]) << 8));
+    const uint16_t seq = static_cast<uint16_t>(frame[5] | (uint16_t(frame[6]) << 8));
     const auto result = sequence.Evaluate(seq);
     if (result == SequenceTracker::Result::Duplicate ||
         result == SequenceTracker::Result::OutOfOrder)

@@ -7,6 +7,7 @@ Use this guide to build and install the current WaveX firmware on the ESP32-P4 f
 - [Prerequisites](#prerequisites)
 - [ESP32-P4 frontend](#esp32-p4-frontend)
 - [Daisy Seed backend](#daisy-seed-backend)
+- [UART/SPI comparison](#uartspi-comparison)
 - [Troubleshooting](#troubleshooting)
 - [Related](#related)
 
@@ -188,6 +189,62 @@ headroom and zero-underrun claims on the persistent QSPI profile.
 The ESP32-P4's own USB connector is the normal flash path (see the frontend
 section above). Its ROM also offers USB DFU (`idf.py dfu-flash`) on the same
 connector; `make esp32-flash` does not need this.
+
+## UART/SPI comparison
+
+Use an experiment branch and the shared selector in
+[`link_config.h`](../firmware/shared/config/link_config.h). Its default selects
+UART. Edit that one macro to select SPI; DMA selection follows automatically.
+Changing the file rebuilds its consumers, so no branch switch or separate
+runtime setting is needed. Rebuild **both** images with `make all -j$(nproc)`
+and flash both persistently with `make flash-all -j$(nproc)`. A board pair with
+different selections cannot communicate. Daisy boot logs identify
+`MCU link=UART` or `MCU link=SPI`; the ESP32's
+InterMCU initialization/start logs also name the selection. Initialization
+failure leaves the link offline.
+
+SPI speed is selected separately by `WAVEX_DAISY_SPI_CLOCK_HZ` in
+[`hardware_config.h`](../firmware/shared/config/hardware_config.h). Its supported
+presets choose the Daisy master's divider and an existing SPI kernel clock.
+Only Daisy needs rebuilding/flashing for a speed change; the ESP32 slave
+follows the clock on the wire. Startup prints the verified rate and refuses
+initialization if the clock tree cannot produce it. The speed presets do not
+retune PLLs used by audio or SDRAM. The intermediate HSI-derived preset is
+nominal: register readback verifies its divider and nominal source frequency,
+not the RC oscillator's physical frequency. It requires the expected CKPER
+source already running and refuses initialization if the nominal rate differs. The same hardware header holds the SPI
+output-slew and scheduling A/B selectors and optional ESP control-latency timestamps. Keep the transport selector matched on both
+boards throughout a rate comparison. Consult the [measured cutover results](spi-notes.md#measured-cutover-comparison) before choosing a preset; a preset being supported by the clock tree does not establish link reliability.
+
+The hardware header also provides matched clock-mode and ESP MISO drive
+selectors for electrical comparisons. A clock-mode change requires rebuilding
+and flashing both boards; a drive-only change requires ESP32. Optional signal
+diagnostics log bounded completed TX and rejected RX prefixes; disable them
+for the final timing/load comparison. See the
+[return-path investigation](spi-notes.md#return-path-investigation).
+
+When overriding macros through compiler flags, use explicit CMake settings
+in a fresh build directory, or clean all objects after changing them. The
+tested ESP-IDF build discarded shell CXXFLAGS, and changing its generated
+compiler response file did not rebuild existing objects. Check both the
+actual executable and each board's startup transport before treating a
+trial as a link measurement. Editing the shared header follows ordinary
+header dependencies.
+
+Before the first cutover, retain the known UART binaries and their flash
+arguments separately from build output. Keep independent USB/DFU or SWD access
+to Daisy and USB-Serial/JTAG access to ESP32. Hardware connections and
+configuration are defined only in the shared config headers. Follow the
+[SPI verification gates](spi-notes.md#verification-and-remaining-gates);
+a successful flash alone does not verify communication or audio stability.
+
+Capture a UART baseline, cut over, and repeat exactly the same workload with
+the same compiler/profiler settings. Check browse/load, waveform replies,
+sequencer edits/playhead, audio load/underruns, and link error counters. Restore
+the selector's default, rebuild and flash **both** UART images, then verify
+communication again. If SPI wedges a board, use the retained UART binaries
+through the independent flashing paths above. The experiment does not provide
+runtime fallback or guarantee application delivery after corruption/reset.
 
 ## Troubleshooting
 

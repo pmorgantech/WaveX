@@ -25,6 +25,8 @@ using namespace WaveX::UartProtocol;
 // Global hardware instance pointer (used by all comm handlers)
 daisy::DaisySeed* s_hw = NULL;
 
+#if !WAVEX_SPI_LINK_ENABLED
+
 constexpr size_t RX_BUFFER_SIZE = WAVEX_DAISY_UART_INTER_BUF_SIZE;
 constexpr size_t RX_PENDING_CAPACITY = RX_BUFFER_SIZE * 2;
 constexpr size_t MSG_QUEUE_SIZE = 4;
@@ -716,6 +718,8 @@ void UartLinkLogStats() {
               s_stats.seq_drops,
               s_stats.seq_resyncs);
 }
+
+#endif  // !WAVEX_SPI_LINK_ENABLED
 
 }  // namespace Comm
 }  // namespace WaveX

@@ -23,8 +23,9 @@ ApplicationContext::ApplicationContext()
 void ApplicationContext::initializeLinks() {
 #if WAVEX_SPI_LINK_ENABLED
     ::spi_link_set_packet_router(packet_router_.get());
-#endif
+#else
     ::uart_link_set_packet_router(packet_router_.get());
+#endif
 }
 
 }  // namespace WaveX

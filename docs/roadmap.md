@@ -1,7 +1,7 @@
 # WaveX Implementation Roadmap
 
 **Status:** Canonical implementation order. **Current phase:** Phase 2.
-**Last updated:** 2026-09-11.
+**Last updated:** 2026-09-13.
 
 This document lists only open work. Completed work belongs in `CHANGELOG.md`
 and git history. Code-complete but unverified hardware behavior remains open in
@@ -20,8 +20,10 @@ changing system behavior.
    compiled for the filter comparison; add other kernels only when used. Revisit only when upstream moves or such a kernel
    requires a newer version. Update libDaisy only for a
    Phase 3 need or a released upstream tag.
-4. The live transport is UART. Dormant SPI source fixes do not satisfy the
-   [hardware revival gate](backlog.md#spi-link-revival-requires-hardware-verification).
+4. UART remains the production transport. The opt-in macro experiment and
+   [cutover evidence](spi-notes.md#verification-and-remaining-gates) do not close
+   the [hardware revival gate](backlog.md#spi-link-revival-requires-hardware-verification):
+   production adoption still needs timing traces, fault injection and a long soak.
 
 **Gate:** clean `make all` and `make test`; SD soak passes.
 
@@ -31,7 +33,8 @@ changing system behavior.
    path is singleton-only.
 2. Rebuild recording against the voice/streaming architecture with fixed
    allocations outside the audio callback.
-3. Revisit SPI bandwidth only after SPI revival is approved and bench-proven.
+3. Revisit the production SPI bandwidth decision only after its full hardware
+   revival gate passes.
 
 **Gate:** eight MIDI-played voices run for one hour with zero underruns; the
 digital filter and gain are panel-controllable; both output/CV configurations
