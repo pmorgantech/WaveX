@@ -475,6 +475,17 @@ at `0x900523c8` (0xe00 bytes); `EvaluateModMatrix` is QSPI at `0x90049ea0`
 in QSPI. These facts are recorded to separate compiler and placement effects
 from algorithm changes before the next candidate.
 
+The profiling-control proof kept `src/profiling/profiler.cpp` at `-O2` for
+profiling-enabled builds. The timing-control image
+`build-profile-timing-control/wavex-daisy.bin` matched the original binary
+SHA256 `ba026e56917a6ac46380ff053f37adc9b6d1ba94182da11e53a059f7593ba358`.
+The profiler object SHA256 was identical across the original `-O2`, timing
+control and `-O3` builds:
+`9fb4c0a44933f739f13ff9a478f8d92fcb7cee32b17e793a15b3a895130d282b`.
+The O3 image under test is `build-profile-o3-baseline`, SHA256
+`8eba00eda23a0c288e9b98525802b7a3481d7f5106bd9a1c65d61796c4c65922`; no
+runtime capacity claim is made until it is measured with this fixed profiler.
+
 The dirty filter-cache retry used the same held-edit workload before the
 follow-up clean commit: `build-profile-filter-cache`, image SHA256
 `e598775059836ad6a95cc0675a6fcf10b9d9e3ecfde4cdd54acffca1fb96a91f`,

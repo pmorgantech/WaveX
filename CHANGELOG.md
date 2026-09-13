@@ -202,6 +202,11 @@ versioning and release process.
 
 ### Changed
 
+- Kept the profiling implementation at `-O2` when profiling is enabled so
+  compiler-level comparisons measure DSP changes rather than changed timing
+  instrumentation. The control build reproduced the original image exactly;
+  an O3 runtime result remains unmeasured.
+
 - Reduced repeated filter work during live Instrument snapshot delivery by
   skipping unchanged filter configuration and cutoff/resonance retuning. The
   filter cache test repeats topology, drive, slope, clamp and reset cases

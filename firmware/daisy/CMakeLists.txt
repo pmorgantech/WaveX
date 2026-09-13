@@ -257,6 +257,11 @@ endif()
 option(WAVEX_PROFILING_ENABLED "Enable the STM32H7 DWT/ITM profiling helpers" OFF)
 if(WAVEX_PROFILING_ENABLED)
     add_compile_definitions(WAVEX_PROFILING_ENABLED=1)
+    # Keep the timing machinery constant when comparing firmware -O levels.
+    # Otherwise the profiler's own inlining changes with the code under test.
+    set_source_files_properties(src/profiling/profiler.cpp
+        PROPERTIES COMPILE_OPTIONS "-O2")
+
     # The profiling dump names the image it came from (storage layout and
     # the hot-path -O level) so scripts/callback_performance.py records what
     # was measured rather than what the operator typed. Only the build knows

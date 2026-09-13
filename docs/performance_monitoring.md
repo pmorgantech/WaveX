@@ -124,6 +124,8 @@ current target rather than hard-coding the evaluator to it.
 #### Measurement and report procedure
 
 1. Build a dedicated **persistent QSPI `-O2`** image with profiling enabled.
+   The profiling implementation is pinned to `-O2` so compiler-level trials
+   keep their timing instrumentation comparable.
    Do not use the `-O0` SRAM debug image for a capacity decision:
 
    ```sh
