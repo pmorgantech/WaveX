@@ -421,7 +421,7 @@ Candidate 3 (`perf/dsp-3-modulation`, commit `e581418d279ef91f6c8002d0ed9f086f92
 was also rejected. Its clean `build-profile-dsp3` image SHA256 was
 `ba46e832b4c129d90970a0603bf8d1c5a6aeab526628111283c12c48a80c47d3`. The
 first setup attempt (`logs/perf-dsp3-wavex-20260912-235334.json`) stopped before
-capture because the baseline reported one dropped block; the same image was
+capture because the baseline reported one dropped console RX byte; the same image was
 rebooted and the retry completed successfully. The retry capture is
 `logs/perf-dsp3-wavex-20260912-235623.log` with metadata in the matching JSON:
 607.852755 seconds, 121 windows, 163,923 average cycles and 336,380 peak
@@ -446,6 +446,34 @@ this candidate is rejected and must not be adopted. The comparison is against
 a single accepted baseline run, so it does not establish causality or separate
 the change from run-to-run variation; repeat the unchanged baseline before
 making further optimization decisions.
+
+The unchanged original oscillator-pitch binary was then repeated twice to
+measure baseline variation. Both runs used source commit
+`6a58a7bbe5438691d0347e1755e2e78f89299e71`, the retained binary
+`/tmp/wavex-original-baseline.bin`, and image SHA256
+`ba026e56917a6ac46380ff053f37adc9b6d1ba94182da11e53a059f7593ba358` without
+a rebuild. Repeat 1 is
+`logs/perf-baseline-repeat1-wavex-20260913-002947.log` with matching JSON:
+607.4224 seconds, average 159,767 cycles and peak 325,684 (67.8508%). Repeat
+2 is `logs/perf-baseline-repeat2-wavex-20260913-004142.log` with matching JSON:
+607.3339 seconds, average 159,765 and peak 336,606 (70.1262%, REVIEW). Both
+had 376 live-edit cycles, five file cycles and zero underruns/drops; the
+console reports RX dropped bytes, rather than audio-block or engine-command
+drops. Event/modulation/render zones were 9,829/143,627, 25,560/73,299 and
+117,596/186,863 for repeat 1, and 9,829/155,819, 25,566/69,647 and
+117,591/176,365 for repeat 2 (average/peak). The first setup attempt,
+`logs/perf-baseline-repeat1-wavex-20260913-002626.json`, reported one dropped
+RX-byte count before timing and was retried successfully. The average span is
+only eight cycles, but the peak span is 10,922 cycles (about 3.2%), so the
+original near-70% result is not a robust single-run baseline.
+
+The compiler/placement audit for this baseline found `-O2`, Cortex-M7 and hard
+FPU flags on DSP objects, no LTO, and cold translation units. The callback is
+at `0x900523c8` (0xe00 bytes); `EvaluateModMatrix` is QSPI at `0x90049ea0`
+(0x344 bytes). VoiceManager render/trigger/live-apply/tick paths occupy about
+19 KiB of the 64 KiB ITCM budget. Library `powf`, `tanf` and `arm_sin` remain
+in QSPI. These facts are recorded to separate compiler and placement effects
+from algorithm changes before the next candidate.
 
 The dirty filter-cache retry used the same held-edit workload before the
 follow-up clean commit: `build-profile-filter-cache`, image SHA256
@@ -489,3 +517,5 @@ by the accepted 6a58a7b gate.
 | 2026-09-12 | 63cf37dca45e39ed6e511077b36fdf8aed46bb73 | 8 voices; held Instrument sound edits; two oscillator maps; Env 1-3; two per-voice LFOs; 64 routes; four locks per hit; WaveX 24 dB full drive; SD stream; periodic save/load | 8 | 48000/48 | 480 MHz | qspi `-O2` | 605.2s (121 windows) | 480000 | 164388 (34.2%) | 339017 (70.6285%) | 29.3715% | 0 | yes | REVIEW | Rejected candidate 2; clean setup-cache trial is REVIEW versus accepted 69.9396% baseline; do not adopt |
 | 2026-09-13 | e581418d279ef91f6c8002d0ed9f086f926f5aa6 | 8 voices; held Instrument sound edits; two oscillator maps; Env 1-3; two per-voice LFOs; 64 routes; four locks per hit; WaveX 24 dB full drive; SD stream; periodic save/load; four cached modulation mappings | 8 | 48000/48 | 480 MHz | qspi `-O2` | 605.2s (121 windows) | 480000 | 163923 (34.2%) | 336380 (70.0792%) | 29.9208% | 0 | yes | REVIEW | Rejected candidate 3; clean modulation-cache trial is REVIEW versus accepted 69.9396% baseline; do not adopt |
 | 2026-09-13 | 131313ab0df03c704258fdd967bbdbdb6efd74f0 | 8 voices; held Instrument sound edits; two oscillator maps; Env 1-3; two per-voice LFOs; 64 routes; four locks per hit; WaveX 24 dB full drive; SD stream; periodic save/load; specialized single/dual-source render loops | 8 | 48000/48 | 480 MHz | qspi `-O2` | 605.2s (121 windows) | 480000 | 162371 (33.8%) | 338011 (70.4190%) | 29.5810% | 0 | yes | REVIEW | Rejected candidate 4; clean render-loop specialization trial is REVIEW versus accepted 69.9396% baseline; do not adopt; single-baseline comparison |
+| 2026-09-13 | 6a58a7bbe5438691d0347e1755e2e78f89299e71 | Unchanged accepted oscillator-pitch baseline repeat 1; 8 voices; held sound edits; two oscillator maps; Env 1-3; two per-voice LFOs; 64 routes; four locks per hit; WaveX 24 dB full drive; SD stream; periodic save/load | 8 | 48000/48 | 480 MHz | qspi `-O2` | 605.2s (121 windows) | 480000 | 159767 (33.3%) | 325684 (67.8508%) | 32.1492% | 0 | yes | STAY | Unchanged baseline repeat 1; zero underruns/drops and console RX dropped bytes 0; original binary retained without rebuild |
+| 2026-09-13 | 6a58a7bbe5438691d0347e1755e2e78f89299e71 | Unchanged accepted oscillator-pitch baseline repeat 2; 8 voices; held sound edits; two oscillator maps; Env 1-3; two per-voice LFOs; 64 routes; four locks per hit; WaveX 24 dB full drive; SD stream; periodic save/load | 8 | 48000/48 | 480 MHz | qspi `-O2` | 605.2s (121 windows) | 480000 | 159765 (33.3%) | 336606 (70.1262%) | 29.8738% | 0 | yes | REVIEW | Unchanged baseline repeat 2; zero underruns/drops and console RX dropped bytes 0; original binary retained without rebuild |
