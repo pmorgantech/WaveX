@@ -220,8 +220,13 @@ versioning and release process.
 
 - Retested the filter cutoff prewarp cache after ITCM placement. Two full runs
   improved average callback cost by 1.46--1.48%, but both exceeded the
-  unchanged baseline’s worst peak; the candidate was retained as REVIEW and
-  rejected for adoption on headroom.
+  unchanged baseline’s worst peak. Both capacity results were STAY; the
+  candidate was rejected for adoption on headroom.
+
+- Retested envelope and voice-LFO setup caches after ITCM placement. The full
+  capacity result was STAY at 65.9806% peak, but average callback cost rose
+  1.93% and peak rose 1.25% over the unchanged baseline worst peak; the
+  candidate was rejected for adoption on headroom.
 
 - Reduced repeated filter work during live Instrument snapshot delivery by
   skipping unchanged filter configuration and cutoff/resonance retuning. The
