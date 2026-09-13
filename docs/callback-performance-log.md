@@ -496,6 +496,18 @@ sections used 23,640 of 65,536 bytes (36.07%); host validation passed 611
 tests with identical golden output. This is an accepted placement result, not
 the one-hour Phase 2 soak.
 
+After the gate, normal profiling-off O2 firmware was restored successfully;
+the binary SHA256 was
+`e0453c6a8fe12228bc1be2e87b1a98f34a280d7efdf952909b2b8a774c59b539`, with the
+ITCM callback at `0x00004d94` (0xd50 bytes) and
+`EvaluateModMatrix` at `0x000000ac` (0x344 bytes). The first HIL launch before
+USB re-enumeration skipped five cases and is excluded. After an explicit Daisy
+probe, the rerun passed all five selected matrix-destination, held-note and
+filter-mode cases (80.12 seconds, 64 deselected) in
+`/tmp/dsp-final-hil-retry.log`; this covers preview/revert/apply/save, held-note
+editing and matrix destinations 5/6/7 preview/undo/WXI behavior. The full
+one-hour Phase 2 soak remains open.
+
 The fixed-profiler O3 trial was stopped intentionally after 188.205 seconds
 and 38 windows, so it is diagnostic evidence only and has no full gate row.
 The capture is `logs/perf-compiler-o3-wavex-20260913-010201.log` with matching
