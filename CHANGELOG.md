@@ -213,6 +213,11 @@ versioning and release process.
   63.8106% peak utilization with zero audio underruns and zero console RX
   dropped bytes; the one-hour phase soak remains open.
 
+- Established a three-run unchanged-image ITCM baseline before candidate
+  retesting. The two additional 607-second repeats varied by only 15 average
+  cycles (0.0101%) and 2.12% at peak, with zero audio underruns and console RX
+  dropped bytes; the failed pre-timing setup attempt was excluded.
+
 - Reduced repeated filter work during live Instrument snapshot delivery by
   skipping unchanged filter configuration and cutoff/resonance retuning. The
   filter cache test repeats topology, drive, slope, clamp and reset cases

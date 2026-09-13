@@ -522,6 +522,36 @@ cycles (average/peak). Host validation passed 611 O3 Release tests with the
 identical golden output. The O2 default remains unchanged; the O3 trial is
 rejected for adoption pending a better-controlled experiment.
 
+The accepted ITCM profiling-control image was then repeated twice more before
+retesting the four optimization candidates. Both captures used source commit
+`6ae93efe142776b1c00ebc35ea07648946d8b450`, image SHA256
+`52fb21487fbc57a19175f5b19caa41955b9f750618ae01aed52553ce6b9ceb6f`, the
+retained workload helper SHA256
+`f3e1a168eb605ed5db8667b5f1bae197e7ed521308ab49983f75734c2f986e84`, and the
+fixed profiler object SHA256
+`9fb4c0a44933f739f13ff9a478f8d92fcb7cee32b17e793a15b3a895130d282b`.
+Repeat 1 is `logs/perf-itcm-baseline-repeat1-wavex-20260913-043026.log` with
+matching JSON metadata: 607.6513 seconds, average 148,248 cycles and peak
+312,790 cycles (65.1646%). Repeat 2 is
+`logs/perf-itcm-baseline-repeat2-wavex-20260913-044230.log` with matching JSON:
+607.6060 seconds, average 148,233 cycles and peak 308,425 cycles (64.2552%).
+Both completed 376 live-edit cycles and five file cycles with eight voices,
+zero audio underruns and zero console RX dropped bytes.
+Profiling zones were events 6,791/145,639, modulation 19,162/52,800 and
+render 118,130/177,425 cycles for repeat 1, and events 6,790/148,837,
+modulation 19,162/51,681 and render 118,118/186,503 for repeat 2
+(average/peak). Together with the original accepted run (148,248 average,
+306,291 peak), the three-run average range is 148,233--148,248 cycles (15
+cycles, 0.0101%); the peak range is 306,291--312,790 (6,499 cycles, 2.12%).
+The failed setup attempt `logs/perf-itcm-baseline-repeat1-wavex-20260913-042753.json`
+reported three console RX dropped bytes before timing and produced no timed
+capture, so it is excluded from gate evidence. The successful retry included
+10 seconds of post-flash settling outside the workload. This establishes a
+stable unchanged-image baseline for the four candidate comparisons. Fresh host
+validation passed all 611 Daisy tests in 3.15 seconds, with the unchanged
+2,027,520-byte output fingerprint SHA256
+`f4834359cff7f37bb97790d6feb9419bc5c6495bc21967bd9bf103eeb672957a`.
+
 The dirty filter-cache retry used the same held-edit workload before the
 follow-up clean commit: `build-profile-filter-cache`, image SHA256
 `e598775059836ad6a95cc0675a6fcf10b9d9e3ecfde4cdd54acffca1fb96a91f`,
@@ -566,4 +596,6 @@ by the accepted 6a58a7b gate.
 | 2026-09-13 | 131313ab0df03c704258fdd967bbdbdb6efd74f0 | 8 voices; held Instrument sound edits; two oscillator maps; Env 1-3; two per-voice LFOs; 64 routes; four locks per hit; WaveX 24 dB full drive; SD stream; periodic save/load; specialized single/dual-source render loops | 8 | 48000/48 | 480 MHz | qspi `-O2` | 605.2s (121 windows) | 480000 | 162371 (33.8%) | 338011 (70.4190%) | 29.5810% | 0 | yes | REVIEW | Rejected candidate 4; clean render-loop specialization trial is REVIEW versus accepted 69.9396% baseline; do not adopt; single-baseline comparison |
 | 2026-09-13 | 6a58a7bbe5438691d0347e1755e2e78f89299e71 | Unchanged accepted oscillator-pitch baseline repeat 1; 8 voices; held sound edits; two oscillator maps; Env 1-3; two per-voice LFOs; 64 routes; four locks per hit; WaveX 24 dB full drive; SD stream; periodic save/load | 8 | 48000/48 | 480 MHz | qspi `-O2` | 605.2s (121 windows) | 480000 | 159767 (33.3%) | 325684 (67.8508%) | 32.1492% | 0 | yes | STAY | Unchanged baseline repeat 1; zero underruns/drops and console RX dropped bytes 0; original binary retained without rebuild |
 | 2026-09-13 | 6a58a7bbe5438691d0347e1755e2e78f89299e71 | Unchanged accepted oscillator-pitch baseline repeat 2; 8 voices; held sound edits; two oscillator maps; Env 1-3; two per-voice LFOs; 64 routes; four locks per hit; WaveX 24 dB full drive; SD stream; periodic save/load | 8 | 48000/48 | 480 MHz | qspi `-O2` | 605.2s (121 windows) | 480000 | 159765 (33.3%) | 336606 (70.1262%) | 29.8738% | 0 | yes | REVIEW | Unchanged baseline repeat 2; zero underruns/drops and console RX dropped bytes 0; original binary retained without rebuild |
+| 2026-09-13 | 6ae93efe142776b1c00ebc35ea07648946d8b450 | Unchanged accepted ITCM profiling-control baseline repeat 1; 8 voices; held sound edits; two oscillator maps; Env 1-3; two per-voice LFOs; 64 routes; four locks per hit; WaveX 24 dB full drive; SD stream; periodic save/load | 8 | 48000/48 | 480 MHz | qspi `-O2` | 605.2s (121 windows) | 480000 | 148248 (30.9%) | 312790 (65.1646%) | 34.8354% | 0 | yes | STAY | Same accepted image SHA256 `52fb2148…`; 376 live edits, five file cycles, zero audio underruns and console RX dropped bytes 0; metadata `logs/perf-itcm-baseline-repeat1-wavex-20260913-043026.json` |
+| 2026-09-13 | 6ae93efe142776b1c00ebc35ea07648946d8b450 | Unchanged accepted ITCM profiling-control baseline repeat 2; 8 voices; held sound edits; two oscillator maps; Env 1-3; two per-voice LFOs; 64 routes; four locks per hit; WaveX 24 dB full drive; SD stream; periodic save/load | 8 | 48000/48 | 480 MHz | qspi `-O2` | 605.2s (121 windows) | 480000 | 148233 (30.9%) | 308425 (64.2552%) | 35.7448% | 0 | yes | STAY | Same accepted image SHA256 `52fb2148…`; 376 live edits, five file cycles, zero audio underruns and console RX dropped bytes 0; metadata `logs/perf-itcm-baseline-repeat2-wavex-20260913-044230.json` |
 | 2026-09-13 | 6ae93efe142776b1c00ebc35ea07648946d8b450 | 8 voices; held Instrument sound edits; two oscillator maps; Env 1-3; two per-voice LFOs; 64 routes; four locks per hit; WaveX 24 dB full drive; SD stream; periodic save/load; Callback and modulation evaluation in named ITCM | 8 | 48000/48 | 480 MHz | qspi `-O2` | 605.2s (121 windows) | 480000 | 148248 (30.9%) | 306291 (63.8106%) | 36.1894% | 0 | yes | STAY | Accepted ITCM placement gate; clean full run with fixed O2 profiler, zero audio underruns and zero console RX dropped bytes; ITCM placement adopted; one-hour phase soak remains open |
