@@ -486,6 +486,20 @@ The O3 image under test is `build-profile-o3-baseline`, SHA256
 `8eba00eda23a0c288e9b98525802b7a3481d7f5106bd9a1c65d61796c4c65922`; no
 runtime capacity claim is made until it is measured with this fixed profiler.
 
+The fixed-profiler O3 trial was stopped intentionally after 188.205 seconds
+and 38 windows, so it is diagnostic evidence only and has no full gate row.
+The capture is `logs/perf-compiler-o3-wavex-20260913-010201.log` with matching
+JSON metadata, using source `ff8248a00618036791f9bd385fa29ef2db9b0aca` and the
+O3 image above. It completed 119 live edits and one file cycle with zero audio
+underruns and zero console RX dropped bytes. Average callback cost was 168,248
+cycles versus 159,765--159,773 in the unchanged repeats (about 5.3% higher);
+peak cost was 336,660 versus the repeat maximum of 336,606, a small difference
+within observed peak noise and not evidence of causality. Profiling zones were
+events 10,359/146,623, modulation 21,506/64,420 and render 126,756/184,800
+cycles (average/peak). Host validation passed 611 O3 Release tests with the
+identical golden output. The O2 default remains unchanged; the O3 trial is
+rejected for adoption pending a better-controlled experiment.
+
 The dirty filter-cache retry used the same held-edit workload before the
 follow-up clean commit: `build-profile-filter-cache`, image SHA256
 `e598775059836ad6a95cc0675a6fcf10b9d9e3ecfde4cdd54acffca1fb96a91f`,
