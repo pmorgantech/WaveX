@@ -2042,6 +2042,7 @@ void Init(DaisySeed& hw, float sample_rate, bool sdram_available) {
     s_callback_blocks = 0;
 }
 
+WAVEX_ITCM_CODE_NAMED("audio.Callback")
 void Callback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t size) {
     PROFILE_SCOPE(audio_callback);
     uint32_t callback_cycles_start = WaveX::Profiling::GetCycles();

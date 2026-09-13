@@ -207,6 +207,11 @@ versioning and release process.
   instrumentation. The control build reproduced the original image exactly;
   an O3 runtime result remains unmeasured.
 
+- Placed the audio callback and modulation-matrix evaluation in named ITCM
+  sections for a controlled placement experiment. The O2 algorithms and fixed
+  profiling implementation are unchanged; callback capacity remains pending
+  hardware measurement.
+
 - Reduced repeated filter work during live Instrument snapshot delivery by
   skipping unchanged filter configuration and cutoff/resonance retuning. The
   filter cache test repeats topology, drive, slope, clamp and reset cases

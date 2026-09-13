@@ -16,6 +16,7 @@
 // captured into the voice at note-on and are constants thereafter, exactly as
 // §3 requires.
 
+#include "memory_sections.h"
 #include "spi_protocol/protocol.h"
 
 #include <cmath>
@@ -203,6 +204,7 @@ inline float ApplyModCurve(float value, uint8_t curve) {
  * Slots targeting the same destination sum, which is what makes two sources
  * on one cutoff behave like a mixer rather than last-one-wins.
  */
+WAVEX_ITCM_CODE_NAMED("voice.EvaluateModMatrix")
 inline ModDestinations EvaluateModMatrix(const ModSlot* slots,
                                          uint8_t count,
                                          const ModSources& sources) {
