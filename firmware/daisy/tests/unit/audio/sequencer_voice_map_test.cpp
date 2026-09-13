@@ -3,6 +3,7 @@
 #include <gtest/gtest.h>
 
 #include "audio/snapshot_mailbox.hpp"
+#include "sequencer/sequencer_scheduler.hpp"
 
 using namespace WaveX::AudioEngine;
 namespace {
@@ -297,4 +298,91 @@ TEST_F(SequencerVoiceMapTest, DisabledSourcesDoNotResolveStaleZones) {
     instrument.osc[1].type = OscType::Wavetable;
     map.PrepareTrack(0, instrument, resolver);
     EXPECT_EQ(map.Resolve(0, 0, 70, out), 0);
+}
+
+TEST(SequencerVoiceAlignment, EightTracksKeepIdenticalSamplePhaseAcrossRepeatedSteals) {
+    // Exercise the scheduler -> prepared Instrument -> VoiceManager path with
+    // all voice slots occupied. 123 BPM also puts triggers inside audio blocks.
+    for (const float bpm: {120.f, 123.f}) {
+        SCOPED_TRACE(bpm);
+        constexpr uint32_t block_size = 48;
+        int16_t pcm[256];
+        for (size_t i = 0; i < 256; ++i)
+            pcm[i] = static_cast<int16_t>(i * 64);
+        SampleResolver resolver{pcm, [](const void* ctx, uint16_t) {
+                                    SampleRef ref;
+                                    ref.data = static_cast<const int16_t*>(ctx);
+                                    ref.frames = 256;
+                                    ref.sample_rate_hz = 44100;
+                                    ref.loop_enabled = true;
+                                    ref.loop_end = 256;
+                                    return ref;
+                                }};
+        Instrument instrument;
+        instrument.origin = InstrumentOrigin::Built;
+        auto& zone = instrument.osc[0].zones[0];
+        zone.in_use = true;
+        zone.sample_id = 1;
+        zone.key_lo = zone.key_hi = zone.root_note = 60;
+        zone.vel_lo = 1;
+        zone.vel_hi = 127;
+        SequencerVoiceMap map;
+        WaveX::Sequencer::Pattern pattern;
+        pattern.length = 16;
+        pattern.scale = WaveX::Sequencer::StepScale::Sixteenth;
+        pattern.swing = 50;
+        for (uint8_t track = 0; track < 16; ++track) {
+            pattern.tracks[track].enabled = track < 8;
+            if (track >= 8)
+                continue;
+            map.PrepareTrack(track, instrument, resolver);
+            for (uint8_t step = 0; step < 16; step += 2)
+                pattern.tracks[track].steps[step].on = true;
+        }
+        WaveX::Sequencer::SequencerScheduler scheduler;
+        scheduler.Init(48000, block_size);
+        scheduler.SetTempo(bpm);
+        scheduler.SetPattern(&pattern);
+        scheduler.Start();
+        VoiceManager voices;
+        voices.Init(48000);
+        float left[block_size], right[block_size];
+        uint32_t groups = 0, nonzero_offsets = 0;
+        for (uint32_t block = 0; block < 8000; ++block) {
+            const auto start = scheduler.CurrentFrame();
+            WaveX::Sequencer::TriggerEvent events[64];
+            const auto count = scheduler.Process(events, 64);
+            if (count) {
+                ASSERT_EQ(count, 8u);
+                const auto expected_frame =
+                    static_cast<uint64_t>(48000.0 * 30.0 * groups / bpm + .5);
+                for (uint8_t track = 0; track < 8; ++track) {
+                    ASSERT_EQ(events[track].track, track);
+                    ASSERT_EQ(events[track].frame, expected_frame);
+                    VoiceTriggerParams trigger[4];
+                    ASSERT_EQ(map.Resolve(track, 60, 100, trigger), 1);
+                    trigger[0].start_offset_frames =
+                        static_cast<uint16_t>(events[track].frame - start);
+                    voices.Trigger(trigger[0]);
+                }
+                nonzero_offsets += expected_frame != start;
+                ++groups;
+            }
+            voices.Render(left, right, block_size);
+            ASSERT_EQ(voices.ActiveVoiceCount(), 8);
+            uint16_t tracks = 0;
+            const auto& first = voices.GetVoice(0);
+            for (uint8_t index = 0; index < 8; ++index) {
+                const auto& voice = voices.GetVoice(index);
+                tracks |= 1u << voice.track;
+                ASSERT_EQ(voice.phase.Frame(), first.phase.Frame());
+                ASSERT_FLOAT_EQ(voice.phase.Fraction(), first.phase.Fraction());
+            }
+            ASSERT_EQ(tracks, 0xFF);
+        }
+        EXPECT_GE(groups, 32u);
+        if (bpm != 120.f) {
+            EXPECT_GT(nonzero_offsets, 0u);
+        }
+    }
 }

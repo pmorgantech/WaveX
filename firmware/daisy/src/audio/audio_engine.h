@@ -248,6 +248,8 @@ struct StreamDebugState {
     bool open = false, loop = false;
 };
 StreamDebugState DebugStreamState();
+// Foreground-only copy of the authoritative playback markers for bench checks.
+bool DebugSampleMeta(uint16_t sample_id, Protocol::SampleMetadata& out);
 size_t DebugLoadedSamples(uint16_t* ids, size_t cap);
 
 /// A resident sample's card path, for naming it in a saved Instrument.

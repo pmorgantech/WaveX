@@ -24,6 +24,9 @@ changing system behavior.
    [cutover evidence](spi-notes.md#verification-and-remaining-gates) do not close
    the [hardware revival gate](backlog.md#spi-link-revival-requires-hardware-verification):
    production adoption still needs timing traces, fault injection and a long soak.
+   The authorized [hybrid design](features/hybrid-inter-mcu-link.md) keeps
+   controls and confirmations on UART while evaluating SPI data/telemetry; its
+   implementation and session-recovery gates remain open.
 
 **Gate:** clean `make all` and `make test`; SD soak passes.
 

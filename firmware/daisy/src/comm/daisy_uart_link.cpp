@@ -706,6 +706,24 @@ void TakeUartPerf(UartPerfSample& out) {
 #endif
 
 void UartLinkLogStats() {
+#if WAVEX_PROFILING_ENABLED
+    decltype(s_stats) health;
+    {
+        daisy::ScopedIrqBlocker lock;
+        health = s_stats;
+    }
+    WaveX::Log::PrintLine(
+        "DAISY: UART HEALTH sent=%lu received=%lu crc=%lu sync=%lu overflow=%lu "
+        "txerr=%lu seqdrop=%lu resync=%lu",
+        static_cast<unsigned long>(health.packets_sent),
+        static_cast<unsigned long>(health.packets_received),
+        static_cast<unsigned long>(health.crc_errors),
+        static_cast<unsigned long>(health.frame_sync_errors),
+        static_cast<unsigned long>(health.queue_overflows),
+        static_cast<unsigned long>(health.tx_errors),
+        static_cast<unsigned long>(health.seq_drops),
+        static_cast<unsigned long>(health.seq_resyncs));
+#endif
     UART_LOGI("daisy_uart",
               "UART stats: sent=%u received=%u crc=%u sync=%u overflow=%u txerr=%u seqdrop=%u "
               "resync=%u",

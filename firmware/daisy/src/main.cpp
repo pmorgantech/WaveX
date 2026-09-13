@@ -428,6 +428,25 @@ static void DispatchConsoleCommand(const WaveX::Debug::Command& c) {
                               key,
                               static_cast<long>(WaveX::AudioEngine::SfzLoader::TrackMidiIn(t)));
         }
+    } else if (std::strcmp(c.verb, "SAMPLE") == 0) {
+        long id;
+        SampleMetadata meta;
+        if (!NextInt(&p, &id) || id <= 0 || id > 65535 ||
+            !WaveX::AudioEngine::DebugSampleMeta(static_cast<uint16_t>(id), meta)) {
+            FormatErr(seq, "badsample", reply, sizeof(reply));
+        } else {
+            size_t len = FormatOk(seq, reply, sizeof(reply));
+            len = AppendKvInt(reply, sizeof(reply), len, "id", meta.sample_id);
+            len = AppendKvInt(reply, sizeof(reply), len, "rate", meta.sample_rate);
+            len = AppendKvInt(reply, sizeof(reply), len, "frames", meta.total_frames);
+            len = AppendKvInt(reply, sizeof(reply), len, "start", meta.start_frame);
+            len = AppendKvInt(reply, sizeof(reply), len, "end", meta.end_frame);
+            len = AppendKvInt(reply, sizeof(reply), len, "loop", meta.loop_enabled);
+            len = AppendKvInt(reply, sizeof(reply), len, "ls", meta.loop_start);
+            len = AppendKvInt(reply, sizeof(reply), len, "le", meta.loop_end);
+            len = AppendKvInt(reply, sizeof(reply), len, "fi", meta.fade_in_ms);
+            AppendKvInt(reply, sizeof(reply), len, "fo", meta.fade_out_ms);
+        }
     } else if (std::strcmp(c.verb, "SAMPLES") == 0) {
         // n=<count> ids=<comma list> - the WAV registry (MSG_SAMPLE_LOAD ids).
         uint16_t ids[64];

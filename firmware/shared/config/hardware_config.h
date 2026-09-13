@@ -22,6 +22,17 @@
 #define WAVEX_INTER_MCU_LINK_ENABLED 1
 #endif
 
+// Shared UART baud selection. Rebuild and flash both MCUs together; the
+// independent USB/debug consoles keep their existing rates. Faster presets
+// are experimental until their paired hardware comparison passes.
+#ifndef WAVEX_MCU_UART_BAUD
+#define WAVEX_MCU_UART_BAUD 2000000
+#endif
+#if WAVEX_MCU_UART_BAUD != 2000000 && WAVEX_MCU_UART_BAUD != 3000000 && \
+    WAVEX_MCU_UART_BAUD != 4000000 && WAVEX_MCU_UART_BAUD != 5000000
+#error "WAVEX_MCU_UART_BAUD must select 2, 3, 4 or 5 Mbaud"
+#endif
+
 // Bench-only ESP timestamps for Instrument control request/ack comparisons.
 // Uses the existing request IDs; no wire changes or audio-path instrumentation.
 #ifndef WAVEX_LINK_LATENCY_PROFILE_ENABLED

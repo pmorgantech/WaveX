@@ -38,7 +38,10 @@ Both SPI adapters share the ownership/READY rules in
 The [SPI transport notes](../spi-notes.md#retained-transport-contract) specify
 physical completion, short-frame rejection, queue retention and recovery limits.
 These source fixes do not change the live UART framing or protocol version.
-SPI still requires separate startup integration and hardware verification.
+Macro-selected SPI startup is integrated; production adoption still requires
+the remaining hardware verification. The proposed
+[hybrid link](hybrid-inter-mcu-link.md) is a separate target design; no hybrid
+routing or session wire extension is implemented yet.
 
 ## 2. Packet framing
 

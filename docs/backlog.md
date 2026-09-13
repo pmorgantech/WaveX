@@ -17,6 +17,23 @@ its fix and regression checks are committed.
   the navigation, sequencer and testing references have been consolidated.
   Keep hardware-only results separate from host coverage (principles 13, 15).
 
+## Note lengths and one-shot playback — decision pending
+
+Deferred at the user’s request (2026-09-13), linked to the existing
+[Phase 2.5 melodic sequencing design](features/melodic-sequencing.md).
+Revisit that draft before implementing its gate/tie model. Decide how sequence
+note duration relates to one-shot versus gated Instrument/zone playback;
+release tails, overlapping repeated notes, chord lanes, tempo changes and
+transport-stop cleanup need explicit behavior. Keep note-off scheduling on the
+Daisy audio clock with bounded storage and stable voice/note identity.
+The [MPC1000 manual](https://cdn.inmusicbrands.com/akai/mpc1000/mpc1000v2_operators_manual_00.pdf_055b8b24eeb101e27a2f4042c6819727.pdf)
+(printed pages 32, 36 and 67) is a reference: sequence duration and one-shot
+versus note-on playback are separate choices, not necessarily Track types.
+
+The drum-and-chord UART benchmark may use explicitly bounded, unlooped sample
+regions at its fixed tempo. Those one-shot regions are a test arrangement,
+not an implementation of sequenced note lengths or MIDI note-off gates.
+
 ## Performance, build, and transport
 
 ### Callback capacity checkpoint

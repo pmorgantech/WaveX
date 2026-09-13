@@ -209,6 +209,15 @@ See `features/inter-mcu-protocol.md` for the message catalog. Every message stru
 - **SPI is an opt-in compile-time experiment; UART remains the default.** The shared selector in `firmware/shared/config/link_config.h` now selects startup, routing, sends and service on both MCUs and derives DMA enablement. Both images must be rebuilt and flashed together. SPI retains Daisy-master/ESP32-slave roles and READY ownership; it carries the existing length-bearing UART codec inside fixed DMA slots so exact command lengths survive. There is no automatic fallback. [SPI notes](spi-notes.md#retained-transport-contract) define the lifecycle and record experiment evidence; the production transport decision still requires the remaining bench gates.
 - The pre-2026-07-05 revision of this section stated the opposite ("SPI active, UART legacy"); see `docs/code_review_20260705.md` finding C4 for the correction trail.
 
+### 4.5 Hybrid link (target design, not implemented)
+
+The authorized Stage A follow-up keeps controls, confirming replies and liveness
+on UART, with waveform data and meters on SPI.
+[Hybrid link design](features/hybrid-inter-mcu-link.md) defines the routing,
+single receive-dispatch owner, diagnostic interval constraints and session/soak
+gates. Both the source default and hardware remain UART; this proposal does
+not change the as-built selection above.
+
 ---
 
 ## 5. Real-Time Audio Engine (as-built + target)

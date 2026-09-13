@@ -241,6 +241,10 @@ void uart_task(void* /*param*/) {
     uint8_t temp[RX_TEMP_BUFFER];
     uint32_t last_event_time = xTaskGetTickCount();
     uint32_t event_count = 0;
+#if WAVEX_LINK_LATENCY_PROFILE_ENABLED
+    uint32_t health_at = xTaskGetTickCount();
+    uint32_t rx_overflows = 0, framing_errors = 0, parity_errors = 0;
+#endif
 
     while (s_uart_running) {
         if (xQueueReceive(s_uart_event_queue, &event, pdMS_TO_TICKS(10))) {
@@ -273,6 +277,9 @@ void uart_task(void* /*param*/) {
                     }
                     case UART_FIFO_OVF:
                     case UART_BUFFER_FULL:
+#if WAVEX_LINK_LATENCY_PROFILE_ENABLED
+                        ++rx_overflows;
+#endif
                         UART_LOGE(
                             TAG, "UART overflow (%d), flushing", static_cast<int>(event.type));
                         uart_flush_input(WAVEX_ESP_UART_INTER_NUM);
@@ -285,9 +292,15 @@ void uart_task(void* /*param*/) {
                         UART_LOGW(TAG, "UART break detected");
                         break;
                     case UART_PARITY_ERR:
+#if WAVEX_LINK_LATENCY_PROFILE_ENABLED
+                        ++parity_errors;
+#endif
                         UART_LOGW(TAG, "UART parity error");
                         break;
                     case UART_FRAME_ERR:
+#if WAVEX_LINK_LATENCY_PROFILE_ENABLED
+                        ++framing_errors;
+#endif
                         UART_LOGW(TAG, "UART frame error");
                         break;
                     default:
@@ -311,6 +324,25 @@ void uart_task(void* /*param*/) {
             drain_driver_rx(temp);
             process_rx_frames();
         }
+
+#if WAVEX_LINK_LATENCY_PROFILE_ENABLED
+        if (xTaskGetTickCount() - health_at >= pdMS_TO_TICKS(5000)) {
+            health_at = xTaskGetTickCount();
+            // These fields are owned by this task. TX producer overflow counts
+            // are intentionally excluded because they have another writer.
+            ESP_LOGI(TAG,
+                     "UART HEALTH sent=%lu received=%lu crc=%lu sync=%lu seqdrop=%lu "
+                     "rxoverflow=%lu framing=%lu parity=%lu",
+                     static_cast<unsigned long>(s_stats.packets_sent),
+                     static_cast<unsigned long>(s_stats.packets_received),
+                     static_cast<unsigned long>(s_stats.crc_errors),
+                     static_cast<unsigned long>(s_stats.frame_sync_errors),
+                     static_cast<unsigned long>(s_stats.seq_drops),
+                     static_cast<unsigned long>(rx_overflows),
+                     static_cast<unsigned long>(framing_errors),
+                     static_cast<unsigned long>(parity_errors));
+        }
+#endif
 
         // Drain everything queued, not one frame per pass. One-per-pass meant
         // a backlog left the wire idle for 10 ms between frames; the bound is
@@ -383,6 +415,26 @@ esp_err_t uart_link_init(void) {
         UART_LOGE(TAG, "uart_param_config failed: %d", err);
         return err;
     }
+
+    uint32_t actual_baud = 0;
+    err = uart_get_baudrate(WAVEX_ESP_UART_INTER_NUM, &actual_baud);
+    if (err != ESP_OK) {
+        return err;
+    }
+    const uint32_t requested_baud = WAVEX_ESP_UART_INTER_BAUD;
+    const uint32_t baud_error =
+        actual_baud > requested_baud ? actual_baud - requested_baud : requested_baud - actual_baud;
+    if (!actual_baud || static_cast<uint64_t>(baud_error) * 200u > requested_baud) {
+        ESP_LOGE(TAG,
+                 "UART baud outside tolerance: requested=%lu actual=%lu",
+                 static_cast<unsigned long>(requested_baud),
+                 static_cast<unsigned long>(actual_baud));
+        return ESP_FAIL;
+    }
+    ESP_LOGI(TAG,
+             "UART baud requested=%lu actual=%lu",
+             static_cast<unsigned long>(requested_baud),
+             static_cast<unsigned long>(actual_baud));
 
     err = uart_set_pin(WAVEX_ESP_UART_INTER_NUM,
                        WAVEX_ESP_UART_INTER_TX,

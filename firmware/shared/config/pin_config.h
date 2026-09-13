@@ -1,6 +1,8 @@
 #ifndef WAVEX_PIN_CONFIG_H
 #define WAVEX_PIN_CONFIG_H
 
+#include "hardware_config.h"
+
 /**
  * @file pin_config.h
  * @brief WaveX Centralized Pin Configuration
@@ -52,7 +54,7 @@ extern "C" {
 #define WAVEX_ESP_UART_INTER_NUM UART_NUM_1
 #define WAVEX_ESP_UART_INTER_TX 22
 #define WAVEX_ESP_UART_INTER_RX 23
-#define WAVEX_ESP_UART_INTER_BAUD 2000000
+#define WAVEX_ESP_UART_INTER_BAUD WAVEX_MCU_UART_BAUD
 #define WAVEX_ESP_UART_INTER_BUF_SIZE 2048
 
 // Inter-MCU SPI (SPI3 slave to Daisy master) + ATTN. Compiled out
@@ -137,7 +139,7 @@ extern "C" {
 #define WAVEX_DAISY_UART_INTER_PERIPH 3  // matches daisy::UartHandler::Config::Peripheral::UART_4
 #define WAVEX_DAISY_UART_INTER_TX 12     // D12: UART4_TX (PORTB9)
 #define WAVEX_DAISY_UART_INTER_RX 11     // D11: UART4_RX (PORTB8)
-#define WAVEX_DAISY_UART_INTER_BAUD 2000000
+#define WAVEX_DAISY_UART_INTER_BAUD WAVEX_MCU_UART_BAUD
 #define WAVEX_DAISY_UART_INTER_BUF_SIZE 2048
 
 // Audio I/O (Built-in AK4556 Codec)

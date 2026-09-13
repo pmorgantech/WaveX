@@ -1,5 +1,6 @@
 #include "config/link_config.h"
 #if !WAVEX_SPI_LINK_ENABLED
+#include "comm/log_ring.h"
 #include "memory_sections.h"
 #include "stm32h7xx_hal.h"
 #include "sys/dma.h"
@@ -110,11 +111,37 @@ bool Init(uint32_t baudrate, daisy::Pin tx_pin, daisy::Pin rx_pin) {
     s_uart.Init.HwFlowCtl = UART_HWCONTROL_NONE;
     s_uart.Init.OverSampling = UART_OVERSAMPLING_16;
     s_uart.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
-    s_uart.Init.ClockPrescaler = UART_PRESCALER_DIV2;
+    // Keep the original low-rate configuration. Faster presets need a
+    // larger UART-local clock to retain 16x oversampling; no shared mux/PLL changes.
+    const uint32_t prescaler = baudrate > 3000000u ? 1u : 2u;
+    s_uart.Init.ClockPrescaler = prescaler == 1u ? UART_PRESCALER_DIV1 : UART_PRESCALER_DIV2;
     s_uart.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
 
-    if (HAL_UART_Init(&s_uart) != HAL_OK ||
-        HAL_UARTEx_SetTxFifoThreshold(&s_uart, UART_TXFIFO_THRESHOLD_1_8) != HAL_OK ||
+    if (HAL_UART_Init(&s_uart) != HAL_OK) {
+        return false;
+    }
+    // The pinned HAL's generic peripheral-frequency query does not handle
+    // UART. Follow its UART clock-source lookup and verify our existing mux.
+    const uint32_t kernel_hz =
+        __HAL_RCC_GET_USART234578_SOURCE() == RCC_USART234578CLKSOURCE_D2PCLK1
+            ? HAL_RCC_GetPCLK1Freq()
+            : 0u;
+    const uint32_t brr = s_uart.Instance->BRR;
+    const uint32_t actual_baud = brr ? kernel_hz / prescaler / brr : 0u;
+    const uint32_t error = actual_baud > baudrate ? actual_baud - baudrate : baudrate - actual_baud;
+    WaveX::Log::PrintLine(
+        "DAISY: UART baud requested=%lu actual=%lu kernel=%lu prescaler=%lu BRR=%lu",
+        static_cast<unsigned long>(baudrate),
+        static_cast<unsigned long>(actual_baud),
+        static_cast<unsigned long>(kernel_hz),
+        static_cast<unsigned long>(prescaler),
+        static_cast<unsigned long>(brr));
+    // Fail closed on an unexpected boot clock/divider (>0.5% baud error).
+    if (!actual_baud || static_cast<uint64_t>(error) * 200u > baudrate) {
+        HAL_UART_DeInit(&s_uart);
+        return false;
+    }
+    if (HAL_UARTEx_SetTxFifoThreshold(&s_uart, UART_TXFIFO_THRESHOLD_1_8) != HAL_OK ||
         HAL_UARTEx_SetRxFifoThreshold(&s_uart, UART_RXFIFO_THRESHOLD_1_8) != HAL_OK ||
         HAL_UARTEx_DisableFifoMode(&s_uart) != HAL_OK || !InitDma()) {
         return false;

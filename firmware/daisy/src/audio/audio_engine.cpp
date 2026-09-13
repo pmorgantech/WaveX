@@ -970,6 +970,14 @@ StreamDebugState DebugStreamState() {
     return state;
 }
 
+bool DebugSampleMeta(uint16_t sample_id, SampleMetadata& out) {
+    const auto* info = find_loaded_sample(sample_id);
+    if (!info)
+        return false;
+    out = info->meta;
+    return true;
+}
+
 size_t DebugLoadedSamples(uint16_t* ids, size_t cap) {
     if (!s_pool) {
         return 0;

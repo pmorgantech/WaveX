@@ -1,6 +1,10 @@
 # Melodic Sequencing — Note Tracks, Chords, Live Record
 
 **Status**: Target design (unimplemented). Phase 2.5 in `roadmap.md`.
+**Decision pending (2026-09-13):** note-length gates and one-shot/gated playback
+semantics are [backlogged for discussion](../backlog.md#note-lengths-and-one-shot-playback--decision-pending).
+The gate/tie model below remains a proposal, not an approved implementation.
+
 **Dependencies**: Phase 2 sequencer core (`sequencer.md` — scheduler, pattern model, transport), `instrument-model.md` (keyboard-mode instruments are what melodic tracks play).
 **Lineage**: Emax's built-in sequencer recorded keyboard performances over its preset engine; that combination — multisampled instrument + note sequencer + analog voice path — is the target here.
 

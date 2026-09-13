@@ -246,6 +246,26 @@ communication again. If SPI wedges a board, use the retained UART binaries
 through the independent flashing paths above. The experiment does not provide
 runtime fallback or guarantee application delivery after corruption/reset.
 
+### UART baud comparison
+
+The shared UART setting in
+[`hardware_config.h`](../firmware/shared/config/hardware_config.h) applies to
+both MCU aliases. Build matched images with the same selected preset, using
+the fresh-directory/explicit-CMake procedure above; console/USB speeds are
+independent. Verify the requested and actual UART baud printed by **both**
+boards before running a test. Keep the original matched images for rollback.
+See [UART baud findings](uart-baud-notes.md) for timing, load and error evidence.
+
+The repeatable musical workload is
+[`scripts/bench_drum_chords.py`](../scripts/bench_drum_chords.py). Run it with the
+existing HIL Python environment inside the hardware devcontainer after both
+serial loggers are active. It requires the debug `SAMPLE` metadata readback,
+replaces session Track bindings and pattern contents, and leaves playback
+running. It loads existing card assets; it does not rewrite source WAV files.
+The pattern contains eight drum Tracks and four 500 ms chord-note Tracks at
+120 BPM. This fixed-tempo sample-region arrangement does not implement the
+backlogged note-length gates. Stop it with the sequencer Stop softkey.
+
 ## Troubleshooting
 
 **ESP32 stuck in download mode** (`rst:0x17 ... boot:0x307 (DOWNLOAD...)` and

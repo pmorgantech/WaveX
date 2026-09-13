@@ -13,6 +13,20 @@ versioning and release process.
 
 ### Added
 
+- Added a repeatable drum/chord hardware benchmark and a debug-only sample
+  marker readback to verify unlooped playback lengths. Note-length gate
+  semantics remain backlogged for discussion.
+
+- Added a shared experimental UART baud preset with matched-board overrides,
+  UART-local Daisy prescaler selection, startup baud readback validation and
+  profiling-only link-health counters.
+  The default remains the existing UART rate; limited 4 and 5 Mbaud control,
+  audio-load and two-board integration results are recorded in the UART notes.
+
+- Documented the proposed hybrid link: UART controls, confirmations and health;
+  SPI waveform/meters with bounded ownership, diagnostic interval handling and
+  session/recovery acceptance gates. Hybrid firmware is not yet implemented.
+
 - Added an opt-in, shared macro UART/SPI transport selector for matched MCU
   builds. SPI uses the existing exact-length codec and a bounded deferred RX
   queue so foreground TX pumping cannot recursively dispatch commands. UART
