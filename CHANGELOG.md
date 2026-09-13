@@ -228,9 +228,9 @@ versioning and release process.
   1.93% and peak rose 1.25% over the unchanged baseline worst peak; the
   candidate was rejected for adoption on headroom.
 
-- Prepared the modulation exponent cache retest after ITCM placement. The
-  candidate preserves the existing modulation behavior through host coverage;
-  hardware capacity measurement and adoption remain pending.
+- Adopted the voice-owned modulation exponent cache after ITCM placement.
+  Two clean full runs showed about a 0.2% average callback benefit, with peaks
+  within the unchanged baseline variation; no peak headroom gain is claimed.
 
 - Reduced repeated filter work during live Instrument snapshot delivery by
   skipping unchanged filter configuration and cutoff/resonance retuning. The

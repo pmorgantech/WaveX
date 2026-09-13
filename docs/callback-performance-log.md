@@ -596,6 +596,33 @@ baseline, the 1a2eb5e result is the pre-resonance baseline, and the d891d3c
 result is the pre-pitch baseline; all are superseded as the latest full result
 by the accepted 6a58a7b gate.
 
+Candidate 3 (modulation exponent cache, source
+`af2804eb160a7d021b9d5315fa24ce28a5745ae5`) is adopted after two full
+matched captures of image SHA256
+`4b1268c4ec656039017a0240c24757ea0ef16d7de5428095047dbae5b76e914d`.
+The O2 profiler object and workload helper hashes remain unchanged.
+`logs/perf-itcm-dsp3-wavex-20260913-054739.log` and
+`logs/perf-itcm-dsp3-repeat-wavex-20260913-060007.log` have matching JSON
+metadata, recording 607.6649 and 607.1274 seconds of workload. Both completed
+376 live-edit cycles and five file cycles with zero audio underruns and zero
+console RX dropped bytes. Average/peak callback costs were 147,942/312,215
+and 147,957/310,493 cycles. The average reduction is about 0.2%, larger than
+the observed unchanged-image average range; peaks remain inside the original
+baseline range, so no peak-headroom improvement is claimed. Both capacity
+results are **STAY**.
+
+The candidate has 122 five-second profiler windows per capture, versus 121
+in the original baseline captures; the helper's summed window time includes
+capture edges and differs from workload elapsed time. Excluding the first
+and last windows, and then two windows at each end, preserves the average
+gain. The exact calculations are retained in
+`logs/perf-itcm-edge-window-check.json`. The cache costs 32 bytes per
+voice (256 bytes for eight voices); ITCM grows by 288 bytes to 23,928 bytes.
+All 612 host tests and the unchanged exact-output fingerprint passed. The two
+candidate captures establish the new accepted comparison range for candidate 4:
+147,942--147,957 average cycles and 310,493--312,215 peak cycles. These short
+repeats do not replace the one-hour Phase 2 soak.
+
 ## Recorded runs
 
 | Date | Commit | Scenario | Voices | Hz/block | Core | Image | Duration | Budget cycles | Average cycles | Maximum cycles | Worst headroom | Stream underruns | Callback features left | Decision | Note |
@@ -635,3 +662,5 @@ by the accepted 6a58a7b gate.
 | 2026-09-13 | 26132d4b507f431af25a0caa08aa8ef4e85daa83 | 8 voices; two oscillator maps; Env 1-3; two LFOs per voice; 64 routes; four locks per hit; WaveX 24 dB full drive; SD stream; live edits; grid; periodic save/load; Cutoff cache trial 1 | 8 | 48000/48 | 480 MHz | qspi `-O2` | 605.2s (121 windows) | 480000 | 146054 (30.4%) | 315354 (65.6988%) | 34.3012% | 0 | yes | STAY | Cutoff cache trial 1; not adopted; 376 live edits and five file cycles; zero audio underruns and console RX dropped bytes; metadata logs/perf-itcm-dsp1-wavex-20260913-050343.json |
 | 2026-09-13 | 26132d4b507f431af25a0caa08aa8ef4e85daa83 | 8 voices; two oscillator maps; Env 1-3; two LFOs per voice; 64 routes; four locks per hit; WaveX 24 dB full drive; SD stream; live edits; grid; periodic save/load; Cutoff cache trial 2 | 8 | 48000/48 | 480 MHz | qspi `-O2` | 605.2s (121 windows) | 480000 | 146075 (30.4%) | 316824 (66.0050%) | 33.9950% | 0 | yes | STAY | Cutoff cache trial 2; not adopted; 376 live edits and five file cycles; zero audio underruns and console RX dropped bytes; metadata logs/perf-itcm-dsp1-repeat-wavex-20260913-051604.json |
 | 2026-09-13 | 79802233dd806733956907c089e788d2dd96a764 | 8 voices; two oscillator maps; Env 1-3; two LFOs per voice; 64 routes; four locks per hit; WaveX 24 dB full drive; SD stream; live edits; grid; periodic save/load; Envelope/LFO setup cache | 8 | 48000/48 | 480 MHz | qspi `-O2` | 605.2s (121 windows) | 480000 | 151111 (31.5%) | 316707 (65.9806%) | 34.0194% | 0 | yes | STAY | Envelope/LFO setup cache; not adopted; 376 live edits and five file cycles; zero audio underruns and console RX dropped bytes; metadata logs/perf-itcm-dsp2-wavex-20260913-053214.json |
+| 2026-09-13 | af2804eb160a7d021b9d5315fa24ce28a5745ae5 | 8 voices; two oscillator maps; Env 1-3; two LFOs per voice; 64 routes; four locks per hit; WaveX 24 dB full drive; SD stream; live edits; grid; periodic save/load; modulation exponent cache | 8 | 48000/48 | 480 MHz | qspi `-O2` | 610.2s (122 windows) | 480000 | 147942 (30.8%) | 312215 (65.0448%) | 34.9552% | 0 | yes | STAY | Modulation cache trial 1; adopted average gain, no peak gain claimed; 376 live edits and five file cycles; zero audio underruns and console RX dropped bytes; metadata logs/perf-itcm-dsp3-wavex-20260913-054739.json |
+| 2026-09-13 | af2804eb160a7d021b9d5315fa24ce28a5745ae5 | 8 voices; two oscillator maps; Env 1-3; two LFOs per voice; 64 routes; four locks per hit; WaveX 24 dB full drive; SD stream; live edits; grid; periodic save/load; modulation exponent cache | 8 | 48000/48 | 480 MHz | qspi `-O2` | 610.2s (122 windows) | 480000 | 147957 (30.8%) | 310493 (64.6860%) | 35.3140% | 0 | yes | STAY | Modulation cache trial 2; adopted average gain, no peak gain claimed; 376 live edits and five file cycles; zero audio underruns and console RX dropped bytes; metadata logs/perf-itcm-dsp3-repeat-wavex-20260913-060007.json |
