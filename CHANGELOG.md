@@ -218,6 +218,11 @@ versioning and release process.
   cycles (0.0101%) and 2.12% at peak, with zero audio underruns and console RX
   dropped bytes; the failed pre-timing setup attempt was excluded.
 
+- Retested the filter cutoff prewarp cache after ITCM placement. Two full runs
+  improved average callback cost by 1.46--1.48%, but both exceeded the
+  unchanged baseline’s worst peak; the candidate was retained as REVIEW and
+  rejected for adoption on headroom.
+
 - Reduced repeated filter work during live Instrument snapshot delivery by
   skipping unchanged filter configuration and cutoff/resonance retuning. The
   filter cache test repeats topology, drive, slope, clamp and reset cases
