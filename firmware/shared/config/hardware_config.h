@@ -39,6 +39,11 @@
 #define WAVEX_LINK_LATENCY_PROFILE_ENABLED 0
 #endif
 
+// Bench-only sequencer touch/readback/refresh timestamps, UI context only.
+#ifndef WAVEX_UI_LATENCY_PROFILE_ENABLED
+#define WAVEX_UI_LATENCY_PROFILE_ENABLED 0
+#endif
+
 // SPI electrical bench selectors. Mode must match on both boards; changing
 // it requires a paired flash. Drive -1 preserves the ESP driver's pad setting;
 // 0..3 select the ESP-IDF GPIO drive capability. UART builds do not use these.

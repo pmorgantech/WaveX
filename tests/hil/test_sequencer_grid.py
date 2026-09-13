@@ -54,3 +54,40 @@ def test_sequencer_grid_edits_survive_navigation_and_page_boundaries(
     esp.page("TEMPO", 12000)
     esp.wait_state(seqready=1, seqtempo=12000)
     esp.home()
+
+
+@pytest.mark.both
+def test_grid_touch_down_edits_once_and_survives_exit_while_held(esp32, daisy):
+    esp = esp32
+    esp.open_menu("Sequencer")
+    esp.wait_state(seqready=1)
+    esp.page("FOCUS", 1, 1)
+    before = esp.wait_state(seqready=1, seqtrack=1, seqpage=1)
+    original = int(before["seqbits"])
+    xy = esp.page("CELL", 1, 1)
+    x, y = int(xy["x"]), int(xy["y"])
+    try:
+        esp.cmd("TOUCH", "DOWN", x, y)
+        # No UP has been sent: a release-driven implementation fails here.
+        esp.wait_state(seqready=1, seqbits=original ^ 1)
+        deadline = time.monotonic() + 0.7
+        while time.monotonic() < deadline:
+            assert int(esp.state()["seqbits"]) == original ^ 1
+            time.sleep(0.05)
+        esp.cmd("TOUCH", "UP", x, y)
+        time.sleep(0.15)
+        esp.wait_state(seqready=1, seqbits=original ^ 1)
+        # The next press works after readback; leaving while held must not
+        # deliver a late release to a deleted cell or toggle a second time.
+        esp.cmd("TOUCH", "DOWN", x, y)
+        esp.wait_state(seqready=1, seqbits=original)
+        esp.home()
+        esp.wait_state(page="Main_Menu")
+    finally:
+        esp.cmd("TOUCH", "UP", x, y)
+    esp.open_menu("Sequencer")
+    esp.wait_state(seqready=1)
+    esp.page("FOCUS", 1, 1)
+    esp.wait_state(seqready=1, seqbits=original)
+    daisy.wait_state(underruns=0, dropped=0)
+    esp.home()

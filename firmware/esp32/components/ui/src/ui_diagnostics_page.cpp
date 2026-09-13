@@ -225,7 +225,7 @@ void UIDiagnosticsPage::buildTabs(lv_obj_t* parent) {
     // Tab CONTENT is built on first show, not here.
     //
     // Six tabs of eight cards is ~250 LVGL objects, and page entry is this
-    // page's entire cost (docs/backlog.md: 30-47 ms, the worst in the UI)
+    // page's entire cost (docs/roadmap.md: 30-47 ms, the worst in the UI)
     // because every object is laid out and drawn in the frame the user is
     // waiting on. Five of the six tabs are, at that moment, invisible. Building
     // one tab instead of six is a straight ~6x cut to that frame, and the
@@ -410,14 +410,35 @@ void UIDiagnosticsPage::pushSpark(Card& c, int value) {
     lv_chart_set_next_value(c.spark, c.series, static_cast<int32_t>(value));
 }
 
+namespace {
+// LVGL objects own the last rendered values. Diagnostics samples keep their
+// existing cadence and authority; unchanged presentation needs no redraw.
+bool setLabel(lv_obj_t* label, const char* text) {
+    if (strcmp(lv_label_get_text(label), text) == 0) {
+        return false;
+    }
+    lv_label_set_text(label, text);
+    return true;
+}
+
+void setTableCell(lv_obj_t* table, uint32_t row, uint32_t col, const char* text) {
+    // Callers size the complete table first, including its empty-state row.
+    if (strcmp(lv_table_get_cell_value(table, row, col), text) != 0) {
+        lv_table_set_cell_value(table, row, col, text);
+    }
+}
+}  // namespace
+
 void UIDiagnosticsPage::setCard(
     Card& c, const char* value, const char* unit, const char* sub, int pct) {
     if (!c.value)
         return;
-    lv_label_set_text(c.value, value);
-    lv_label_set_text(c.unit, unit ? unit : "");
-    lv_obj_align_to(c.unit, c.value, LV_ALIGN_OUT_RIGHT_BOTTOM, 10, -6);
-    lv_label_set_text(c.sub, sub ? sub : "");
+    const bool value_changed = setLabel(c.value, value);
+    const bool unit_changed = setLabel(c.unit, unit ? unit : "");
+    if (value_changed || unit_changed) {
+        lv_obj_align_to(c.unit, c.value, LV_ALIGN_OUT_RIGHT_BOTTOM, 10, -6);
+    }
+    setLabel(c.sub, sub ? sub : "");
     if (c.bar) {
         if (pct < 0)
             pct = 0;
@@ -426,8 +447,10 @@ void UIDiagnosticsPage::setCard(
         lv_bar_set_value(c.bar, pct, LV_ANIM_OFF);
         // Orange is a real warning, not decoration: only where high is bad.
         const bool warn = (c.warn_pct > 0 && pct >= c.warn_pct);
-        lv_obj_set_style_bg_color(
-            c.bar, lv_color_hex(warn ? kColOrange : kColGreen), LV_PART_INDICATOR);
+        const lv_color_t colour = lv_color_hex(warn ? kColOrange : kColGreen);
+        if (!lv_color_eq(lv_obj_get_style_bg_color(c.bar, LV_PART_INDICATOR), colour)) {
+            lv_obj_set_style_bg_color(c.bar, colour, LV_PART_INDICATOR);
+        }
     }
 }
 
@@ -1382,23 +1405,23 @@ void UIDiagnosticsPage::refreshDaisyTab() {
                           ? mem.sample_count
                           : (uint8_t)WAVEX_SAMPLE_STATUS_MAX_ENTRIES;
     lv_table_set_row_count(sample_table, n ? (uint32_t)n + 1 : 2);
-    lv_table_set_cell_value(sample_table, 0, 0, "ID");
-    lv_table_set_cell_value(sample_table, 0, 1, "POOL");
-    lv_table_set_cell_value(sample_table, 0, 2, "ALLOC");
-    lv_table_set_cell_value(sample_table, 0, 3, "LOADED");
-    lv_table_set_cell_value(sample_table, 0, 4, "FORMAT / PLACEMENT");
+    setTableCell(sample_table, 0, 0, "ID");
+    setTableCell(sample_table, 0, 1, "POOL");
+    setTableCell(sample_table, 0, 2, "ALLOC");
+    setTableCell(sample_table, 0, 3, "LOADED");
+    setTableCell(sample_table, 0, 4, "FORMAT / PLACEMENT");
     for (uint8_t i = 0; i < n; i++) {
         const auto& e = mem.entries[i];
         char cell[64];
         snprintf(cell, sizeof(cell), "%u", (unsigned)e.sample_id);
-        lv_table_set_cell_value(sample_table, i + 1, 0, cell);
+        setTableCell(sample_table, i + 1, 0, cell);
         // cls 0xFF is the large-pool sentinel; anything else is a small-pool
         // size class.
-        lv_table_set_cell_value(sample_table, i + 1, 1, e.cls == 0xFF ? "Large" : "Small");
+        setTableCell(sample_table, i + 1, 1, e.cls == 0xFF ? "Large" : "Small");
         snprintf(cell, sizeof(cell), "%lu KB", (unsigned long)(e.allocated_bytes / 1024));
-        lv_table_set_cell_value(sample_table, i + 1, 2, cell);
+        setTableCell(sample_table, i + 1, 2, cell);
         snprintf(cell, sizeof(cell), "%lu KB", (unsigned long)(e.loaded_bytes / 1024));
-        lv_table_set_cell_value(sample_table, i + 1, 3, cell);
+        setTableCell(sample_table, i + 1, 3, cell);
         snprintf(cell,
                  sizeof(cell),
                  "%lu Hz %uch %ub  cls=%u p=%u s=%u",
@@ -1408,15 +1431,14 @@ void UIDiagnosticsPage::refreshDaisyTab() {
                  (unsigned)e.cls,
                  (unsigned)e.page,
                  (unsigned)e.slot);
-        lv_table_set_cell_value(sample_table, i + 1, 4, cell);
+        setTableCell(sample_table, i + 1, 4, cell);
     }
     if (n == 0) {
-        lv_table_set_cell_value(sample_table, 1, 0, "-");
-        lv_table_set_cell_value(sample_table, 1, 1, "");
-        lv_table_set_cell_value(sample_table, 1, 2, "");
-        lv_table_set_cell_value(sample_table, 1, 3, "");
-        lv_table_set_cell_value(
-            sample_table, 1, 4, mem_valid ? "none resident" : "awaiting backend");
+        setTableCell(sample_table, 1, 0, "-");
+        setTableCell(sample_table, 1, 1, "");
+        setTableCell(sample_table, 1, 2, "");
+        setTableCell(sample_table, 1, 3, "");
+        setTableCell(sample_table, 1, 4, mem_valid ? "none resident" : "awaiting backend");
     }
 }
 
@@ -1515,13 +1537,13 @@ void UIDiagnosticsPage::refreshLinkTab() {
     };
     const int n = (int)(sizeof(rows) / sizeof(rows[0]));
     lv_table_set_row_count(msg_table, n + 1);
-    lv_table_set_cell_value(msg_table, 0, 0, "MESSAGE");
-    lv_table_set_cell_value(msg_table, 0, 1, "COUNT");
+    setTableCell(msg_table, 0, 0, "MESSAGE");
+    setTableCell(msg_table, 0, 1, "COUNT");
     for (int i = 0; i < n; i++) {
         char cnt[24];
         snprintf(cnt, sizeof(cnt), "%lu", (unsigned long)rows[i].count);
-        lv_table_set_cell_value(msg_table, i + 1, 0, rows[i].name);
-        lv_table_set_cell_value(msg_table, i + 1, 1, cnt);
+        setTableCell(msg_table, i + 1, 0, rows[i].name);
+        setTableCell(msg_table, i + 1, 1, cnt);
     }
 }
 

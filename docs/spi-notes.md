@@ -725,4 +725,4 @@ while WaveX currently has no measured need for the extra link bandwidth.
 - [`features/inter-mcu-protocol.md`](features/inter-mcu-protocol.md) — live wire contract
 - [`features/analog-voice-board.md`](features/analog-voice-board.md) — planned Stage B CV bus
 - [`daisy_rt_audio_coding_guide.md`](daisy_rt_audio_coding_guide.md) — DMA, cache, ISR, and audio rules
-- [`backlog.md`](backlog.md) — SPI revival gates and rationale
+- [`roadmap.md`](roadmap.md) — SPI revival gates and rationale

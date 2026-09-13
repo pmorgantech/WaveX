@@ -8,11 +8,10 @@ WaveX is a modern **sampler / groovebox / drum machine** with a 5" touchscreen, 
 
 ## Documentation
 
-**Start with [`docs/README.md`](docs/README.md)** — it indexes everything and says what each document is for. The three that matter most:
+**Start with [`docs/README.md`](docs/README.md)** — it indexes everything and says what each document is for. The key references:
 
 - [`docs/architecture.md`](docs/architecture.md) — canonical system design, including the real-time / DMA / cache rules all code must follow.
-- [`docs/roadmap.md`](docs/roadmap.md) — implementation order, per-phase test gates, and the hardware verification still outstanding.
-- [`docs/backlog.md`](docs/backlog.md) — concise unscheduled work and open decisions.
+- [`docs/roadmap.md`](docs/roadmap.md) — implementation order, phase gates, next steps/backlog, and outstanding hardware verification.
 
 The docs describe what is and what will be; finished work lives in [`CHANGELOG.md`](CHANGELOG.md) and git history.
 

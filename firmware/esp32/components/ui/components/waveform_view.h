@@ -18,7 +18,7 @@ namespace wavex_ui {
  *
  * **Not an lv_chart.** It was one, and that cost 37-44 ms on the first frame
  * after entering Sample Edit or Sample Record - measured, see
- * docs/backlog.md. An `lv_chart` of `LV_CHART_TYPE_LINE` with two series draws
+ * docs/roadmap.md. An `lv_chart` of `LV_CHART_TYPE_LINE` with two series draws
  * ~1022 anti-aliased line segments, and anti-aliasing a waveform silhouette
  * buys nothing: the shape is a solid block of colour, not a curve anyone reads
  * the slope of. This draws one opaque fill per column from an

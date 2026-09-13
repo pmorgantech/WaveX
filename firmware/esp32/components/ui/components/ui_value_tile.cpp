@@ -3,6 +3,8 @@
 
 #include "ui_theme.h"
 
+#include <cstring>
+
 namespace wavex_ui {
 namespace {
 
@@ -206,19 +208,28 @@ void valueTileSetDesc(ValueTile& tile, const char* text) {
         lv_obj_set_width(tile.desc, tile.bar_width);  // see valueTileSetValue
         lv_label_set_long_mode(tile.desc, LV_LABEL_LONG_WRAP);
     }
-    lv_label_set_text(tile.desc, text);
+    if (!text || std::strcmp(lv_label_get_text(tile.desc), text))
+        lv_label_set_text(tile.desc, text);
 }
 
 void valueTileSetFocus(ValueTile& tile, bool focused) {
     if (!tile.card) {
         return;
     }
-    lv_obj_set_style_border_width(tile.card, focused ? UI_BORDER_WIDTH_FOCUS : UI_BORDER_WIDTH, 0);
-    lv_obj_set_style_border_color(tile.card, focused ? UI_COLOR_ACCENT : UI_COLOR_LINE, 0);
-    lv_obj_set_style_text_color(tile.label, focused ? UI_COLOR_ACCENT : UI_COLOR_DIM, 0);
-    if (tile.bar_fill) {
+    // Read the widget's actual style: ValueTile handles can be copied, and
+    // tone/unwired styling also touches these properties.
+    const int width = focused ? UI_BORDER_WIDTH_FOCUS : UI_BORDER_WIDTH;
+    const auto border = focused ? UI_COLOR_ACCENT : UI_COLOR_LINE;
+    const auto label = focused ? UI_COLOR_ACCENT : UI_COLOR_DIM;
+    if (lv_obj_get_style_border_width(tile.card, LV_PART_MAIN) != width)
+        lv_obj_set_style_border_width(tile.card, width, 0);
+    if (!lv_color_eq(lv_obj_get_style_border_color(tile.card, LV_PART_MAIN), border))
+        lv_obj_set_style_border_color(tile.card, border, 0);
+    if (!lv_color_eq(lv_obj_get_style_text_color(tile.label, LV_PART_MAIN), label))
+        lv_obj_set_style_text_color(tile.label, label, 0);
+    if (tile.bar_fill && !lv_color_eq(lv_obj_get_style_bg_color(tile.bar_fill, LV_PART_MAIN),
+                                      fillColour(tile, focused)))
         lv_obj_set_style_bg_color(tile.bar_fill, fillColour(tile, focused), 0);
-    }
 }
 
 // Centres the value, and the value+unit pair when there is a unit - offsetting
@@ -228,7 +239,17 @@ void valueTileSetValue(ValueTile& tile, const char* text, bool compact) {
     if (!tile.value) {
         return;
     }
-    lv_obj_set_style_text_font(tile.value, compact ? UI_FONT_MONO_VALUE : tile.value_font, 0);
+    const auto* font = compact ? UI_FONT_MONO_VALUE : tile.value_font;
+    const int32_t width = compact ? tile.bar_width : LV_SIZE_CONTENT;
+    const bool font_changed = lv_obj_get_style_text_font(tile.value, LV_PART_MAIN) != font;
+    const bool width_changed = lv_obj_get_style_width(tile.value, LV_PART_MAIN) != width;
+    const bool text_changed = !text || std::strcmp(lv_label_get_text(tile.value), text);
+    if (!font_changed && !width_changed && !text_changed)
+        return;
+    if (font_changed)
+        lv_obj_set_style_text_font(tile.value, font, 0);
+    // Restore content width when a compact name becomes a numeric value.
+    lv_obj_set_width(tile.value, width);
     if (compact) {
         // A compact value can be a sentence rather than a number, so it has to
         // wrap inside the card instead of running off its right edge.
@@ -239,7 +260,8 @@ void valueTileSetValue(ValueTile& tile, const char* text, bool compact) {
         lv_obj_set_width(tile.value, tile.bar_width);
         lv_label_set_long_mode(tile.value, LV_LABEL_LONG_WRAP);
     }
-    lv_label_set_text(tile.value, text);
+    if (text_changed)
+        lv_label_set_text(tile.value, text);
 
     if (compact) {
         // A wrapped sentence is read left to right, not centred on itself.
@@ -272,9 +294,9 @@ void valueTileSetFill(ValueTile& tile, float fraction) {
 
 void valueTileSetTone(ValueTile& tile, TileTone tone) {
     tile.tone = tone;
-    if (tile.bar_fill) {
+    if (tile.bar_fill && !lv_color_eq(lv_obj_get_style_bg_color(tile.bar_fill, LV_PART_MAIN),
+                                      fillColour(tile, tileFocused(tile))))
         lv_obj_set_style_bg_color(tile.bar_fill, fillColour(tile, tileFocused(tile)), 0);
-    }
 }
 
 void valueTileSetOnAdjust(ValueTile& tile, std::function<void(int)> on_adjust) {

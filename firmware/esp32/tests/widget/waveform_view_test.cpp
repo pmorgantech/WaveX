@@ -2,7 +2,7 @@
 //
 // These exist because the stacked L/R change (roadmap 1.5.7 item 1) landed
 // with no automated coverage, justified at the time by "there is no LVGL on
-// the host". That was wrong - see docs/backlog.md. LVGL's software renderer
+// the host". That was wrong - see docs/roadmap.md. LVGL's software renderer
 // draws into a plain memory framebuffer with no display driver, no SDL and no
 // hardware, which is exactly what tools/ui_preview has been doing all along.
 //

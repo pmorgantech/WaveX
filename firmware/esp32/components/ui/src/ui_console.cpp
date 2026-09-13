@@ -112,6 +112,53 @@ std::atomic<ReqState> s_req_state{ReqState::Idle};
 UiRequest s_req;
 char s_reply[640];
 
+#if WAVEX_UI_LATENCY_PROFILE_ENABLED
+// UI-domain counters: no logging/allocation in display callbacks. Count only
+// refreshes which submit pixels; idle timer opportunities are separate.
+struct RenderStats {
+    int64_t started_us = 0, refresh_us = 0;
+    uint64_t pixels = 0, time_us = 0;
+    uint32_t runs = 0, frames = 0, full = 0;
+    uint32_t frame_pixels = 0, peak_pixels = 0, peak_us = 0;
+} s_render;
+
+void render_event(lv_event_t* event) {
+    switch (lv_event_get_code(event)) {
+        case LV_EVENT_REFR_START:
+            s_render.frame_pixels = 0;
+            s_render.refresh_us = esp_timer_get_time();
+            break;
+        case LV_EVENT_FLUSH_START: {
+            const auto* area = static_cast<const lv_area_t*>(lv_event_get_param(event));
+            if (area)
+                s_render.frame_pixels += lv_area_get_size(area);
+            break;
+        }
+        case LV_EVENT_REFR_READY: {
+            ++s_render.runs;
+            if (!s_render.frame_pixels || !s_render.refresh_us)
+                break;
+            const uint32_t elapsed = esp_timer_get_time() - s_render.refresh_us;
+            auto* display = static_cast<lv_display_t*>(lv_event_get_target(event));
+            const uint32_t screen_pixels = lv_display_get_horizontal_resolution(display) *
+                                           lv_display_get_vertical_resolution(display);
+            ++s_render.frames;
+            if (s_render.frame_pixels >= screen_pixels)
+                ++s_render.full;
+            s_render.pixels += s_render.frame_pixels;
+            s_render.time_us += elapsed;
+            if (s_render.frame_pixels > s_render.peak_pixels)
+                s_render.peak_pixels = s_render.frame_pixels;
+            if (elapsed > s_render.peak_us)
+                s_render.peak_us = elapsed;
+            break;
+        }
+        default:
+            break;
+    }
+}
+#endif
+
 // ---------------------------------------------------------------------------
 // Console-task verbs
 // ---------------------------------------------------------------------------
@@ -342,7 +389,11 @@ void dispatch(const Command& c) {
             ? reply_ok(seq)
             : reply_err(seq, "queuefull");
     } else if (!strcmp(c.verb, "STATE") || !strcmp(c.verb, "PAGE") || !strcmp(c.verb, "TRACK") ||
-               !strcmp(c.verb, "HOME")) {
+               !strcmp(c.verb, "HOME")
+#if WAVEX_UI_LATENCY_PROFILE_ENABLED
+               || !strcmp(c.verb, "RENDER")
+#endif
+    ) {
         run_on_ui_task(c);
     } else {
         reply_err(seq, "unknown");
@@ -452,6 +503,29 @@ void serve_request() {
     const int32_t seq = s_req.seq;
     if (!strcmp(s_req.verb, "STATE")) {
         serve_state(seq);
+#if WAVEX_UI_LATENCY_PROFILE_ENABLED
+    } else if (!strcmp(s_req.verb, "RENDER")) {
+        if (!strcmp(s_req.args, "RESET")) {
+            s_render = RenderStats{};
+            s_render.started_us = esp_timer_get_time();
+        } else if (s_req.args[0]) {
+            FormatErr(seq, "badarg", s_reply, sizeof(s_reply));
+            return;
+        }
+        const size_t len = FormatOk(seq, s_reply, sizeof(s_reply));
+        snprintf(s_reply + len,
+                 sizeof(s_reply) - len,
+                 " elapsed=%lld runs=%lu frames=%lu full=%lu pixels=%llu time=%llu"
+                 " peak_pixels=%lu peak_us=%lu",
+                 static_cast<long long>(esp_timer_get_time() - s_render.started_us),
+                 static_cast<unsigned long>(s_render.runs),
+                 static_cast<unsigned long>(s_render.frames),
+                 static_cast<unsigned long>(s_render.full),
+                 static_cast<unsigned long long>(s_render.pixels),
+                 static_cast<unsigned long long>(s_render.time_us),
+                 static_cast<unsigned long>(s_render.peak_pixels),
+                 static_cast<unsigned long>(s_render.peak_us));
+#endif
     } else if (!strcmp(s_req.verb, "TRACK")) {
         // TRACK <n>: select a Track (0-based, as on the wire) and ask the
         // Daisy for its binding, the way the Track -/+ keys do.
@@ -514,6 +588,10 @@ void wavex_console_start() {
         lv_indev_set_read_cb(s_touch_indev, touch_read_cb);
         lv_indev_set_display(s_touch_indev, lv_display_get_default());
     }
+#if WAVEX_UI_LATENCY_PROFILE_ENABLED
+    s_render.started_us = esp_timer_get_time();
+    lv_display_add_event_cb(lv_display_get_default(), render_event, LV_EVENT_ALL, nullptr);
+#endif
     lvgl_port_unlock();
 
     xTaskCreate(console_task, "console", 6144, nullptr, 3, nullptr);

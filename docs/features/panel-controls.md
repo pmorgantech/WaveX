@@ -82,7 +82,7 @@ order:
 2. **Keep what is wired.** Inter-MCU UART, the BSP I2C bus, PCNT unit 1, the
    keypad INT stay where they are.
 3. **Keep the dormant SPI-slave link's five pins reserved** until the SPI
-   revival decision (`backlog.md`) is made. They cost the panel nothing it
+   revival decision (`roadmap.md`) is made. They cost the panel nothing it
    needs today; releasing them is a one-line decision later.
 4. **Adjacent header pins for each pair** (encoder A/B, MIDI RX/TX, the SPI2
    run) so each control is one small connector.

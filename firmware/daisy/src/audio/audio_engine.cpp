@@ -136,7 +136,7 @@ static WaveX::Cv::CvGroupRouter<CvBackendType, WAVEX_ANALOG_CV_GROUPS> s_cv_rout
 // Constructed but not yet driven: nothing calls into the sink today, so the
 // StereoMix/TDM8 backend flag currently selects only which sink type must
 // keep compiling (CI builds both flag sets). Kept so Stage B wiring has its
-// object and both sinks stay in the build; see docs/backlog.md.
+// object and both sinks stay in the build; see docs/roadmap.md.
 __attribute__((unused)) static OutputSinkType s_output_sink;
 // Roadmap Phase 1 items 2+8: 8-voice RAM-resident player (allocation/
 // stealing, per-voice gain/pan/pitch - see voice_manager.hpp), driven by

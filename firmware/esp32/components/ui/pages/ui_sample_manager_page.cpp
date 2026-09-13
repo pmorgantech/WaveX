@@ -295,7 +295,7 @@ void UISampleManagerPage::rebuildList() {
     // at 0 indefinitely while an import is actually resident - the "nothing
     // changed" path would otherwise never reach a status update at all. Both
     // registries share one allocator, so RAM in use with zero listed samples
-    // is exactly that case, not "nothing loaded" (docs/backlog.md "Sample
+    // is exactly that case, not "nothing loaded" (docs/roadmap.md "Sample
     // Manager cannot see an SFZ import's samples" - fixed properly by the
     // shared registry in track-and-patch-model.md §4; this is a status line
     // until then).

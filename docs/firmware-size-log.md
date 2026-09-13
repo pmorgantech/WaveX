@@ -39,7 +39,7 @@ that they match the sizes recorded in the commit messages byte for byte.
 - `be2d86d`: flash -117 KB, `.data` 126 KB -> 2.6 KB, `.bss` +120 KB (same
   RAM, no longer duplicated in flash).
 - `479db13`: -18 KB text from `-Os` on the six main-loop-only sources. The
-  real-time path is still `-O0` (`WAVEX_DAISY_OPT`); see `docs/backlog.md`.
+  real-time path is still `-O0` (`WAVEX_DAISY_OPT`); see `docs/roadmap.md`.
 
 ## Log
 

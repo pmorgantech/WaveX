@@ -1,6 +1,6 @@
 # WaveX UI Architecture and Navigation
 
-**Status:** As-built framework reference, reviewed 2026-09-06. This document
+**Status:** As-built framework reference, reviewed 2026-09-13. This document
 owns navigation, page lifecycle and UI threading. Display dimensions, fonts,
 palette and rendering limits live in
 [ui-design-constraints.md](ui-design-constraints.md).
@@ -40,7 +40,7 @@ high-water marks on hardware.
 `DisplayManager` is a singleton, as are the navigator and input dispatcher.
 Pages still call `inter_mcu_*` functions in `main`; a fully injected
 `UISharedContext` and removal of that dependency cycle are future work in
-[backlog.md](backlog.md). Do not present them as an implemented abstraction.
+[roadmap.md](roadmap.md). Do not present them as an implemented abstraction.
 
 ## Navigation structure
 
@@ -66,6 +66,11 @@ lazily to bound entry work.
 Bank, Instrument Browser and Mixer belong to the target
 [Track/Instrument model](features/track-and-patch-model.md). A logical panel
 jump key or a protocol operation does not prove the corresponding page exists.
+
+The proposed Sequencer/Track and Performance/Bank/Instrument grouping,
+including Mixer and Song editor work, is tracked in the
+[roadmap](roadmap.md#composition-and-performance-workflows). It has not changed
+the current navigation above.
 
 ## Page contract and lifetime
 
@@ -121,7 +126,25 @@ already running is removed from the queue before it can navigate. Queue-full
 or LVGL scheduling failure rejects the press without running it inline.
 
 When action labels or enabled states change, update the page model and call
-`UINavigator::refreshSoftkeys()`.
+`UINavigator::refreshSoftkeys()`. The bar replaces actions and metadata on
+every refresh, but changes LVGL labels/styles only when their appearance
+changes. The Shift chip/rule use the same visual-state caching policy.
+Cache lifetime ends when widgets are recreated; identical labels do not
+mean identical callbacks.
+
+Sequencer cells toggle once on touch-down. Their UI model retains the last
+confirmed row while readback is pending; that retained picture does not
+make the row editable. A matching validated Daisy reply authorizes further
+toggles. Window/link invalidation discards the picture. Page servicing runs
+every 16 ms while background row requests retain their existing cadence.
+See [UI latency measurements](ui-latency-notes.md) for hardware evidence.
+
+Shared value-tile and dial setters compare their current LVGL properties
+before invalidating widgets. Widget properties remain the visual source of
+truth because page-owned handles can be copied. Play keys separately cache
+applied base colours: the temporary pressed-state colour is not the latched
+base colour. Instrument curves keep page-owned point arrays and only reset
+LVGL's points when geometry changes or a new line widget needs its array.
 
 Pads and Keys must release notes on release, `PRESS_LOST`, exit and changes
 that invalidate their held-note map. Latch and panic share that lifecycle.
@@ -182,6 +205,11 @@ retained.
 Transfer scheduling is documented in
 [inter-mcu-protocol.md](features/inter-mcu-protocol.md#waveform-transfer-scheduling-as-built).
 
+Diagnostics keeps its existing live sample and sparkline cadence, while card
+text, warning colours and table cells update only when their displayed values
+change. The shared header similarly avoids resetting identical title/context
+text; geometry is recomputed when either string changes.
+
 ## Verification and remaining work
 
 Use the real-LVGL leaf-widget tests described in
@@ -189,7 +217,7 @@ Use the real-LVGL leaf-widget tests described in
 listener teardown under traffic, real touch coordinates and panel memory
 headroom still need the relevant host boundary tests or HIL/bench checks.
 
-Open UI ownership work stays in [backlog.md](backlog.md); panel acceptance
+Open UI ownership work stays in [roadmap.md](roadmap.md); panel acceptance
 and rendering/audio measurements stay in
 [roadmap.md](roadmap.md#outstanding-hardware-verification) and
 [performance_monitoring.md](performance_monitoring.md).

@@ -82,6 +82,9 @@ class UIPlayPage : public UIPage {
         // key" is otherwise index arithmetic that breaks the moment either
         // surface changes size.
         uint32_t bg_normal = 0;
+        // Last applied base style, independent of LVGL's pressed-state colour.
+        uint32_t drawn_bg = 0;
+        int16_t drawn_note = -1;
         uint32_t text_normal = 0;
         bool is_black = false;
         bool down = false;

@@ -90,7 +90,7 @@ include_directories(
     # wavex_fonts.h beside it. Only the declarations are needed - no host
     # test references a mono table, so the generated .c files stay out of
     # the link. That the mock is dead for those TUs is tracked in
-    # docs/backlog.md.
+    # docs/roadmap.md.
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/ui/fonts  # For wavex_fonts.h
     ${CMAKE_CURRENT_SOURCE_DIR}/../../shared
     ${CMAKE_CURRENT_SOURCE_DIR}/../../shared/config  # For link_config.h

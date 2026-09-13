@@ -182,6 +182,10 @@ exact clean commit before using it for a phase, release, or chip decision.
 
 ## Part 2 - ESP32 UI rendering
 
+For touch-to-confirmed-refresh timestamps, submitted pixel counts and the
+repeatable sequencer benchmark, see [UI latency notes](ui-latency-notes.md).
+These distinguish time spent waiting for release/readback from drawing cost.
+
 ### What is instrumented
 
 `CONFIG_LV_USE_SYSMON=y` with `CONFIG_LV_USE_PERF_MONITOR=y` and

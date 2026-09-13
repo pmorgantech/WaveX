@@ -1,5 +1,6 @@
 #pragma once
 #include "components/ui_value_tile.h"
+#include "config/hardware_config.h"
 #include "sequencer_grid_model.h"
 #include "ui_page.h"
 
@@ -46,11 +47,24 @@ class UISequencerPage : public UIPage {
     bool editable() const;
     bool valueStep(SequencerGridModel::Step& step) const;
 
+#if WAVEX_UI_LATENCY_PROFILE_ENABLED
+    // All accesses occur in the serialized UI domain. No logging on the path.
+    struct LatencyTrace {
+        uint32_t sequence = 0, request_id = 0, pixels = 0;
+        uint8_t row = 0, column = 0;
+        bool expected_on = false;
+        int64_t pressed_us = 0, released_us = 0, sent_us = 0;
+        int64_t accepted_us = 0, refreshed_us = 0;
+    } latency_;
+    uint32_t refresh_pixels_ = 0;
+    static void refreshEvent(lv_event_t* event);
+#endif
     SequencerGridModel model_;
     Cell cells_[4][16]{};
     Cell row_context_[4]{};
     lv_obj_t* row_buttons_[4]{};
     lv_obj_t* row_labels_[4]{};
+    uint8_t drawn_rows_[4]{};
     lv_obj_t* status_ = nullptr;
     lv_timer_t* timer_ = nullptr;
     ValueTile tiles_[7]{};

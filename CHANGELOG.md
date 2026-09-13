@@ -181,6 +181,24 @@ versioning and release process.
 
 ### Fixed
 
+- Shared headers skip unchanged title/context text. Diagnostics updates card text, warning colours and table cells only
+  when their displayed values change, preserving live sampling, sparklines
+  and Freeze while avoiding repeated full-screen Daisy-tab repaints.
+
+- Shared value tiles/dials skip unchanged appearance updates; Instrument
+  curves redraw only when their points change. Play latch updates restyle
+  affected keys and keep the latch/transpose tiles current. Compact tile
+  text restores its content width when returning to numeric display.
+  Broader hardware redraw comparisons are documented separately from the
+  completed sequencer measurements.
+
+- Reduced sequencer touch latency by caching unchanged softkey/header/row
+  styles, using flat grid cells, retaining confirmed rows during readback and
+  consuming replies more promptly. Step toggles act once on touch-down.
+  Matched two-board playback measurements fell from 561 ms to 44 ms mean
+  touch-event-to-confirmed-refresh time; see the UI latency notes for limits.
+  Added opt-in timestamp/pixel tracing and a repeatable UI latency benchmark.
+
 - Apply the bench-verified SPI output slew setting after initialization and
   recovery. Previously failing 24 MHz receive checks passed with this setting;
   the shared hardware macro retains an electrical A/B option.
@@ -238,6 +256,13 @@ versioning and release process.
   below.
 
 ### Changed
+
+- Extend the LVGL project skill with page-construction and verification rules
+  for local redraws, unchanged-value updates and safe visual-cache lifetimes.
+
+- Consolidate unscheduled work and open decisions into the roadmap, update
+  active references, and track Mixer, Bank Manager, Pattern/Song editors and
+  proposed Sequencer/Performance navigation together with their phase gates.
 
 - Kept the profiling implementation at `-O2` when profiling is enabled so
   compiler-level comparisons measure DSP changes rather than changed timing

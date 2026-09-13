@@ -81,7 +81,7 @@ class UIInstrumentPage : public UIPage {
     char context_line_[160] = "";
     char status_[64] = "";  // longest caller string is ~57 bytes
     /// A tab's rows are built the first time it is shown, so entering the page
-    /// costs one stage's widgets rather than five (docs/backlog.md: these pages
+    /// costs one stage's widgets rather than five (docs/roadmap.md: these pages
     /// are slow to enter, not slow to run).
     bool stage_built_[kStageCount] = {};
 

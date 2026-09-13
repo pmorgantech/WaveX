@@ -7,6 +7,8 @@
 #include "esp_lvgl_port.h"
 #include "ui/ui_status_strip.h"
 
+#include <cstring>
+
 // LVGL locking macros
 #define LV_LOCK() lvgl_port_lock(portMAX_DELAY)
 #define LV_UNLOCK() lvgl_port_unlock()
@@ -145,14 +147,25 @@ void UINavigator::setHeaderFor(UIPage* page) {
     if (!title_label_ || !page) {
         return;
     }
-    lv_label_set_text(title_label_, page->name());
+    const bool title_changed = std::strcmp(lv_label_get_text(title_label_), page->name()) != 0;
+    if (title_changed) {
+        lv_label_set_text(title_label_, page->name());
+    }
     if (!context_label_) {
         return;
     }
     const char* ctx = page->contextLine();
-    lv_label_set_text(context_label_, ctx ? ctx : "");
-    lv_obj_update_layout(title_label_);
-    lv_obj_align_to(context_label_, title_label_, LV_ALIGN_OUT_RIGHT_MID, UI_HEADER_GAP, 0);
+    if (!ctx) {
+        ctx = "";
+    }
+    const bool context_changed = std::strcmp(lv_label_get_text(context_label_), ctx) != 0;
+    if (context_changed) {
+        lv_label_set_text(context_label_, ctx);
+    }
+    if (title_changed || context_changed) {
+        lv_obj_update_layout(title_label_);
+        lv_obj_align_to(context_label_, title_label_, LV_ALIGN_OUT_RIGHT_MID, UI_HEADER_GAP, 0);
+    }
 }
 
 void UINavigator::refreshContext() {
@@ -347,6 +360,7 @@ void UINavigator::buildShiftChip() {
     // Far right of the header, outboard of the meter and CPU readout, at the
     // end the eye reaches last. Its geometry is UI_SHIFT_CHIP_* so the status
     // strip can anchor to the same edge without the two drifting apart.
+    drawn_shift_ = 0xff;
     shift_chip_ = lv_btn_create(header_);
     lv_obj_set_size(shift_chip_, UI_SHIFT_CHIP_W, UI_SHIFT_CHIP_H);
     lv_obj_set_pos(shift_chip_, UI_SHIFT_CHIP_X, UI_SHIFT_CHIP_Y);
@@ -370,6 +384,11 @@ void UINavigator::refreshShiftChip() {
     }
     const bool available = activePageHasShiftedKeys();
     const bool on = shifted_ && available;
+    const uint8_t flags = (available ? 1u : 0u) | (on ? 2u : 0u);
+    if (drawn_shift_ == flags && drawn_shift_rule_ == shift_rule_)
+        return;
+    drawn_shift_ = flags;
+    drawn_shift_rule_ = shift_rule_;
 
     lv_obj_set_style_bg_color(shift_chip_, on ? UI_COLOR_SHIFT : UI_COLOR_CARD_ALT, LV_PART_MAIN);
     lv_obj_set_style_border_color(shift_chip_, on ? UI_COLOR_SHIFT : UI_COLOR_LINE, LV_PART_MAIN);

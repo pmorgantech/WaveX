@@ -4,6 +4,7 @@
 #include "ui_theme.h"
 
 #include <cstdio>
+#include <cstring>
 
 namespace wavex_ui {
 namespace {
@@ -164,11 +165,18 @@ void dialSetFocus(Dial& dial, bool focused) {
     if (!dial.card) {
         return;
     }
-    lv_obj_set_style_border_width(dial.card, focused ? UI_BORDER_WIDTH_FOCUS : UI_BORDER_WIDTH, 0);
-    lv_obj_set_style_border_color(dial.card, focused ? UI_COLOR_ACCENT : UI_COLOR_LINE, 0);
-    lv_obj_set_style_arc_color(
-        dial.arc, focused ? UI_COLOR_ACCENT : UI_COLOR_FG, LV_PART_INDICATOR);
-    lv_obj_set_style_text_color(dial.label, focused ? UI_COLOR_ACCENT : UI_COLOR_DIM, 0);
+    const int width = focused ? UI_BORDER_WIDTH_FOCUS : UI_BORDER_WIDTH;
+    const auto border = focused ? UI_COLOR_ACCENT : UI_COLOR_LINE;
+    const auto arc = focused ? UI_COLOR_ACCENT : UI_COLOR_FG;
+    const auto label = focused ? UI_COLOR_ACCENT : UI_COLOR_DIM;
+    if (lv_obj_get_style_border_width(dial.card, LV_PART_MAIN) != width)
+        lv_obj_set_style_border_width(dial.card, width, 0);
+    if (!lv_color_eq(lv_obj_get_style_border_color(dial.card, LV_PART_MAIN), border))
+        lv_obj_set_style_border_color(dial.card, border, 0);
+    if (!lv_color_eq(lv_obj_get_style_arc_color(dial.arc, LV_PART_INDICATOR), arc))
+        lv_obj_set_style_arc_color(dial.arc, arc, LV_PART_INDICATOR);
+    if (!lv_color_eq(lv_obj_get_style_text_color(dial.label, LV_PART_MAIN), label))
+        lv_obj_set_style_text_color(dial.label, label, 0);
 }
 
 void dialSetValue(Dial& dial, float fraction, const char* text, const char* hint) {
@@ -178,10 +186,10 @@ void dialSetValue(Dial& dial, float fraction, const char* text, const char* hint
     const float f = clamp01(fraction);
     lv_arc_set_value(dial.arc, static_cast<int32_t>(f * 1000.0f));
 
-    if (text) {
+    if (text && std::strcmp(lv_label_get_text(dial.value), text)) {
         lv_label_set_text(dial.value, text);
     }
-    if (hint) {
+    if (hint && std::strcmp(lv_label_get_text(dial.hint), hint)) {
         lv_label_set_text(dial.hint, hint);
     }
 }

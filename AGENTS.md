@@ -138,7 +138,7 @@ correction) before adding logic on top. Do not paper over a bad shape with more 
 
 - Apply the decision filter in `docs/project-principles.md` to every significant review. Constitutional findings cite the relevant principle number(s) and a concrete bug, risk, ownership conflict, or maintenance failure in the reviewed scope.
 - Trace audio stability and determinism first, then ownership and immutable cross-domain handoffs, responsibility and hardware boundaries, library reuse and measurement evidence, roadmap phase alignment, and documentation changes.
-- Do not manufacture style findings from the principles or demand a big-bang cleanup. Principle-driven remediation stays small, phase-aligned, and independently buildable; existing debt belongs in `docs/roadmap.md` or `docs/backlog.md`, not an unrelated patch.
+- Do not manufacture style findings from the principles or demand a big-bang cleanup. Principle-driven remediation stays small, phase-aligned, and independently buildable; existing debt belongs in `docs/roadmap.md` under Next steps and backlog, not an unrelated patch.
 - Do not invent a new architectural principle during review. Propose an update to `docs/project-principles.md` when the constitution genuinely needs to evolve.
 
 ## General discipline

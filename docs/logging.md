@@ -109,4 +109,4 @@ runtime but never turn detail on.)
 Legacy `WAVEX_LOG_DAISY(MODULE, ...)` calls are INFO via an alias; when
 touching one, give it a real level. The `UART_LOGx` macros
 (`uart_debug_config.h`) are still their own compile-time system — folding
-them into the module table is tracked in `docs/backlog.md`.
+them into the module table is tracked in `docs/roadmap.md`.

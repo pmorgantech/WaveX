@@ -59,7 +59,7 @@ extern "C" {
 
 // Inter-MCU SPI (SPI3 slave to Daisy master) + ATTN. Compiled out
 // (WAVEX_SPI_LINK_ENABLED=0, link_config.h); the pins stay reserved until
-// the SPI revival decision in backlog.md is made one way or the other.
+// the SPI revival decision in roadmap.md is made one way or the other.
 #define WAVEX_ESP_SPI_SCLK 48
 #define WAVEX_ESP_SPI_MOSI 49
 #define WAVEX_ESP_SPI_MISO 50

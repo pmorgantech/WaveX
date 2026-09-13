@@ -479,4 +479,4 @@ These rules are mandatory for all new code. Most past instability (SPI corruptio
    reload are not implemented.
 10. **Wavetable source**: the typed boundary and its oscillator slot are
     defined, but the renderer is intentionally unscheduled until promoted from
-    `backlog.md` after the sampler/Instrument/sequencer gates.
+    `roadmap.md` after the sampler/Instrument/sequencer gates.

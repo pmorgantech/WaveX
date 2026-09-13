@@ -156,7 +156,7 @@ Outstanding work:
   placeholders are not executed coverage.
 
 Concrete discovered firmware bugs are tracked once in
-[backlog.md](backlog.md#firmware-audit-remediation--2026-09-06);
+[roadmap.md](roadmap.md#firmware-audit-remediation--2026-09-06);
 do not duplicate their task status here.
 
 ## Hardware verification

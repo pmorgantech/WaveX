@@ -16,6 +16,7 @@ static const char* TAG = "SOFTKEY_BAR";
 namespace wavex_ui {
 
 void SoftkeyBar::create(lv_obj_t* parent) {
+    visuals_initialized_ = false;
     // Destroy previous container if it exists to avoid duplicates on push/pop
     if (container_) {
         lv_obj_del(container_);
@@ -80,18 +81,26 @@ void SoftkeyBar::create(lv_obj_t* parent) {
 }
 
 void SoftkeyBar::setSoftkeys(const std::array<Softkey, NUM_SOFTKEYS>& keys, bool shifted) {
-    keys_ = keys;
     for (int i = 0; i < NUM_SOFTKEYS; ++i) {
+        const bool label_changed = !visuals_initialized_ || keys_[i].label != keys[i].label;
+        const bool style_changed = !visuals_initialized_ || drawn_shifted_ != shifted ||
+                                   keys_[i].enabled != keys[i].enabled ||
+                                   keys_[i].label.empty() != keys[i].label.empty();
+        // Always replace actions/metadata, even when the visible key is identical.
+        keys_[i] = keys[i];
+        if (label_changed)
+            lv_label_set_text(labels_[i], keys_[i].label.c_str());
+        if (!style_changed)
+            continue;
         const bool empty = keys_[i].label.empty();
         const bool live = keys_[i].enabled && !empty;
-
-        lv_label_set_text(labels_[i], keys_[i].label.c_str());
 
         // Every slot stays visible and the same width. Hiding a disabled key
         // collapses the flex row and moves every other key, so muscle memory
         // for "Back is bottom-left" breaks the moment one becomes unavailable.
         lv_obj_clear_flag(btns_[i], LV_OBJ_FLAG_HIDDEN);
         lv_obj_set_style_bg_opa(btns_[i], LV_OPA_COVER, LV_PART_MAIN);
+        lv_obj_set_style_border_width(btns_[i], empty ? 0 : UI_BORDER_WIDTH, LV_PART_MAIN);
 
         if (live) {
             lv_obj_add_flag(btns_[i], LV_OBJ_FLAG_CLICKABLE);
@@ -112,11 +121,12 @@ void SoftkeyBar::setSoftkeys(const std::array<Softkey, NUM_SOFTKEYS>& keys, bool
             // that exists but cannot be used right now. Those are different
             // things and should not look the same.
             lv_obj_set_style_bg_color(btns_[i], empty ? UI_COLOR_BG : UI_COLOR_CARD, LV_PART_MAIN);
-            lv_obj_set_style_border_width(btns_[i], empty ? 0 : UI_BORDER_WIDTH, LV_PART_MAIN);
             lv_obj_set_style_border_color(btns_[i], UI_COLOR_LINE, LV_PART_MAIN);
             lv_obj_set_style_text_color(labels_[i], UI_COLOR_DIMMER, LV_PART_MAIN);
         }
     }
+    visuals_initialized_ = true;
+    drawn_shifted_ = shifted;
 }
 
 bool SoftkeyBar::press(int index) {

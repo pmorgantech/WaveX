@@ -165,6 +165,17 @@ carrying its own sequence number. It makes the existing silent-drop behaviour
 | `SCREENSHOT` | Existing capture, moved under this grammar |
 | `LOG <...>` | Existing level control, moved under this grammar |
 
+On the Sequencer page, `PAGE CELL <row 1..4> <column 1..16>` returns a cell's
+current touch coordinates. `PAGE LATENCY` is available only in the opt-in UI
+profiling build; its ESP-clock timestamps and pixel count are documented in
+[UI latency notes](../ui-latency-notes.md). Both remain debug-harness commands.
+
+The profiling-only `RENDER RESET` / `RENDER` commands reset/read display
+counters under the UI lock on any page. They record refresh opportunities,
+refreshes which actually submit pixels, full-screen-equivalent submissions,
+total pixels/time, and per-refresh peaks. No per-frame logging is added.
+See `scripts/bench_ui_redraws.py` and the UI latency notes for the workload.
+
 **Daisy verbs**
 
 | Verb | Effect |
@@ -253,7 +264,7 @@ a genuine removal (a task, its buffers, an indev), but **the runtime log-level
 table is not** — 12 bytes and a byte-load per call site survive into release,
 because no compiler can prove the command channel that writes them is gone. The
 logging saving comes from lowering the compile-time ceilings, not from this
-flag. The release-ceiling decision is tracked in [`backlog.md`](../backlog.md).
+flag. The release-ceiling decision is tracked in [`roadmap.md`](../roadmap.md).
 
 ## 6. The HIL suite
 

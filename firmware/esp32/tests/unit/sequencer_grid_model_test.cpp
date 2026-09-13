@@ -129,3 +129,40 @@ TEST(SequencerGridModelTest, PreviewLifetimeIsBoundedBySelectionWindowAndLink) {
     EXPECT_FALSE(model.CopyStepForEdit(4, 0, step));
     EXPECT_FALSE(model.CopyStepForEdit(0, 16, step));
 }
+
+TEST(SequencerGridModelTest, PendingReadKeepsConfirmedPictureButCannotAuthorizeAnotherEdit) {
+    SequencerGridModel model;
+    auto confirmed = Reply(model.BeginRead(1, 0));
+    confirmed.steps[2].on = 1;
+    confirmed.steps[2].velocity = 71;
+    ASSERT_TRUE(model.Accept(confirmed));
+    model.InvalidateRow(0);
+    EXPECT_TRUE(model.HasSnapshot(0));
+    EXPECT_FALSE(model.Ready(0));
+    SequencerGridModel::Step step;
+    EXPECT_FALSE(model.CopyStepForEdit(0, 2, step));
+    EXPECT_EQ(model.Row(0).steps[2].on, 1);
+    EXPECT_EQ(model.Row(0).steps[2].velocity, 71);
+    auto current = Reply(model.BeginRead(2, 0));
+    EXPECT_FALSE(model.Accept(confirmed));
+    EXPECT_TRUE(model.HasSnapshot(0));
+    EXPECT_FALSE(model.Ready(0));
+    current.steps[2].velocity = 99;
+    ASSERT_TRUE(model.Accept(current));
+    EXPECT_TRUE(model.Ready(0));
+    EXPECT_EQ(model.Row(0).steps[2].on, 0);
+    EXPECT_EQ(model.Row(0).steps[2].velocity, 99);
+}
+
+TEST(SequencerGridModelTest, WindowAndLinkInvalidationDiscardOldPictures) {
+    SequencerGridModel model;
+    EXPECT_FALSE(model.HasSnapshot(0));
+    ASSERT_TRUE(model.Accept(Reply(model.BeginRead(1, 0))));
+    model.SetWindow(4, 16);
+    EXPECT_FALSE(model.HasSnapshot(0));
+    ASSERT_TRUE(model.Accept(Reply(model.BeginRead(2, 0))));
+    model.Invalidate();
+    EXPECT_FALSE(model.HasSnapshot(0));
+    EXPECT_FALSE(model.Ready(0));
+    EXPECT_FALSE(model.HasSnapshot(4));
+}

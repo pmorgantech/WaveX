@@ -109,6 +109,8 @@ class UINavigator {
     lv_obj_t* content_ = nullptr;
     lv_obj_t* shift_chip_ = nullptr;
     lv_obj_t* shift_label_ = nullptr;
+    uint8_t drawn_shift_ = 0xff;
+    lv_obj_t* drawn_shift_rule_ = nullptr;
     bool shifted_ = false;
 
     void buildShiftChip();

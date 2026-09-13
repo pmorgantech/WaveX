@@ -133,7 +133,7 @@ No parsing, mapping, filesystem work, allocation, or instrument mutation runs in
 - **Parser + opcode mapper**: host-tested, no hardware/SD needed. Fixture `.sfz` text covering: basic region, `<group>` cascading, `#define` macros, key-name vs numeric keys, missing opcodes (verify `Zone` defaults survive), a region exceeding valid ranges, an unsupported opcode mixed into a valid line (verify it's skipped, not fatal), a 33rd region (verify rejection with count in the message).
 - **Note-name parsing**: explicit unit test table proving `c4` → 60, `c#4`/`db4` → 61, etc. — this is the highest-value single test given §5.2.
 - **Sample table / dedup**: host-tested with a mock resolver (same pattern `instrument_test.cpp` uses for `SampleResolver`), verifying two regions referencing the same path get the same `sample_id` and the loader is invoked once.
-- **End-to-end playback**: requires hardware audition (SD card, real `.sfz` + `.wav` set) — note in the PR/commit which physical instrument was used to verify, per this repo's existing bench-verification convention (see `docs/backlog.md` and recent commit messages for the pattern).
+- **End-to-end playback**: requires hardware audition (SD card, real `.sfz` + `.wav` set) — note in the PR/commit which physical instrument was used to verify, per this repo's existing bench-verification convention (see `docs/roadmap.md` and recent commit messages for the pattern).
 
 ---
 
@@ -144,7 +144,7 @@ No parsing, mapping, filesystem work, allocation, or instrument mutation runs in
 3. ~~**Sample table / loader glue**, host-tested: path resolution + dedup, resolver table, RAM reserve and per-sample cap.~~ Done; target-side FatFs/SDRAM integration is compile-verified, not hardware-verified.
 4. ~~**Wiring**: fixed boot path, slot-0 bind, additive note-on/off routing, layered slot release and one-shot behavior.~~ Code-complete and compile-verified.
 5. ~~**Browser/runtime loading**: `.sfz` listing, disabled Audition, reference/memory preflight, warning-gated Load, and total/current-WAV progress.~~ Code-complete; protocol round trips are host-tested and both firmware targets compile.
-6. **Bench verification remains**: select and load a real third-party `.sfz` multisample, confirm both progress bars, warning states, key-range switching, tuning, loop behavior and one-shot release on hardware, and record the instrument/opcode findings in `docs/backlog.md`.
+6. **Bench verification remains**: select and load a real third-party `.sfz` multisample, confirm both progress bars, warning states, key-range switching, tuning, loop behavior and one-shot release on hardware, and record the instrument/opcode findings in `docs/roadmap.md`.
 
 ---
 

@@ -24,6 +24,18 @@ using namespace wavex_ui::palette;
 
 namespace {
 static const char* TAG = "UI_INSTRUMENT";
+
+// The line keeps a pointer into page-owned storage. Install it for a newly
+// created widget, then invalidate only when the displayed points change.
+template <size_t N>
+void setCurvePoints(lv_obj_t* line,
+                    lv_point_precise_t (&stored)[N],
+                    const lv_point_precise_t (&next)[N]) {
+    if (lv_line_get_point_count(line) == N && std::memcmp(stored, next, sizeof(stored)) == 0)
+        return;
+    std::memcpy(stored, next, sizeof(stored));
+    lv_line_set_points(line, stored, N);
+}
 uint32_t nextId() {
     static uint32_t id = esp_random();
     if (++id == 0)
@@ -309,7 +321,7 @@ void UIInstrumentPage::onExit() {
 
 // Builds one tab's parameter rows. Called on first display of that tab, not up
 // front: entering the page then costs three rows rather than seventeen, and
-// page entry is what this UI pays for (docs/backlog.md).
+// page entry is what this UI pays for (docs/roadmap.md).
 // A titled card with a plot area inside it, shared by the envelope and filter
 // curves. Returns the lv_line; the caller owns updating its points.
 lv_obj_t* UIInstrumentPage::buildCurvePane(lv_obj_t* parent,
@@ -522,12 +534,9 @@ void UIInstrumentPage::refreshEnvCurve() {
     const int32_t xs = xd + static_cast<int32_t>(0.30f * static_cast<float>(w));
     const int32_t ys = bottom - static_cast<int32_t>(sus * static_cast<float>(bottom - top));
 
-    env_pts_[0] = {0, bottom};
-    env_pts_[1] = {xa, top};
-    env_pts_[2] = {xd, ys};
-    env_pts_[3] = {xs, ys};
-    env_pts_[4] = {w > xs ? w : xs, bottom};
-    lv_line_set_points(env_curve_, env_pts_, kEnvCurvePoints);
+    const lv_point_precise_t next[kEnvCurvePoints] = {
+        {0, bottom}, {xa, top}, {xd, ys}, {xs, ys}, {w > xs ? w : xs, bottom}};
+    setCurvePoints(env_curve_, env_pts_, next);
 }
 
 // Illustrative mode/cutoff/resonance shape. This is not the engine's actual
@@ -550,6 +559,7 @@ void UIInstrumentPage::refreshFilterCurve() {
     const float res = static_cast<float>(params[1].value) / 65535.0f;
     const float flat = static_cast<float>(h) * 0.42f;
 
+    lv_point_precise_t next[kFilterCurvePoints]{};
     for (int i = 0; i < kFilterCurvePoints; ++i) {
         const float t = static_cast<float>(i) / static_cast<float>(kFilterCurvePoints - 1);
         const int mode = sound_.Value(4);
@@ -576,9 +586,9 @@ void UIInstrumentPage::refreshFilterCurve() {
         if (y > static_cast<float>(h) - 2.0f) {
             y = static_cast<float>(h) - 2.0f;
         }
-        filter_pts_[i] = {static_cast<int32_t>(t * static_cast<float>(w)), static_cast<int32_t>(y)};
+        next[i] = {static_cast<int32_t>(t * static_cast<float>(w)), static_cast<int32_t>(y)};
     }
-    lv_line_set_points(filter_curve_, filter_pts_, kFilterCurvePoints);
+    setCurvePoints(filter_curve_, filter_pts_, next);
 }
 
 void UIInstrumentPage::tabChangedCb(lv_event_t* e) {

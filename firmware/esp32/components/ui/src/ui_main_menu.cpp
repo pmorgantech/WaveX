@@ -75,7 +75,7 @@ std::shared_ptr<UIPage> createMainMenu() {
     // Instrument's name are deliberately absent: neither is exposed outside
     // the page that owns it today, and a plausible-looking placeholder in the
     // root menu is worse than a blank - you would have to open the page to
-    // find out whether to believe it. Tracked in docs/backlog.md.
+    // find out whether to believe it. Tracked in docs/roadmap.md.
     // Separator is ASCII "/" and not a middle dot: LVGL's built-in Montserrat
     // tables cover printable ASCII, so U+00B7 renders as a box on the panel.
     static const struct {

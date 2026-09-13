@@ -8,6 +8,10 @@
 #include "ui/ui_navigator.h"
 #include "ui/ui_pattern_files_page.h"
 
+#if WAVEX_UI_LATENCY_PROFILE_ENABLED
+#include "esp_timer.h"
+#endif
+
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
@@ -65,7 +69,9 @@ void UISequencerPage::onEnter(lv_obj_t* parent) {
         const int y = UI_SEQ_GRID_TOP + row * UI_SEQ_ROW_HEIGHT;
         auto* button = lv_button_create(root_);
         row_buttons_[row] = button;
+        drawn_rows_[row] = 0xff;
         ui_theme_apply_button_style(button, false);
+        lv_obj_set_style_shadow_width(button, 0, 0);
         lv_obj_set_pos(button, UI_MARGIN_X, y);
         lv_obj_set_size(button, UI_SEQ_TRACK_WIDTH, UI_SEQ_ROW_HEIGHT - UI_GUTTER);
         row_labels_[row] = lv_label_create(button);
@@ -83,14 +89,23 @@ void UISequencerPage::onEnter(lv_obj_t* parent) {
             cell.column = col;
             cell.drawn = UINT32_MAX;
             cell.button = lv_button_create(root_);
+            // Build a flat grid style before setting geometry: the default
+            // button theme carries blurred shadows and animated transitions.
+            lv_obj_remove_style_all(cell.button);
             ui_theme_apply_button_style(cell.button, false);
+            lv_obj_set_style_bg_opa(cell.button, LV_OPA_COVER, LV_PART_MAIN);
+            lv_obj_set_style_opa(cell.button, LV_OPA_60, LV_PART_MAIN | LV_STATE_DISABLED);
             lv_obj_set_pos(cell.button, kGridX + col * (kCellW + UI_GUTTER), y);
             lv_obj_set_size(cell.button, kCellW, UI_SEQ_ROW_HEIGHT - UI_GUTTER);
             lv_obj_set_style_pad_all(cell.button, 0, 0);
             cell.label = lv_label_create(cell.button);
             lv_obj_set_style_text_font(cell.label, UI_FONT_MONO_SMALL, 0);
             lv_obj_center(cell.label);
-            lv_obj_add_event_cb(cell.button, cellEvent, LV_EVENT_CLICKED, &cell);
+#if WAVEX_UI_LATENCY_PROFILE_ENABLED
+            lv_obj_add_event_cb(cell.button, cellEvent, LV_EVENT_ALL, &cell);
+#else
+            lv_obj_add_event_cb(cell.button, cellEvent, LV_EVENT_PRESSED, &cell);
+#endif
         }
     }
     drawn_lock_slot_ = 0xff;
@@ -99,11 +114,18 @@ void UISequencerPage::onEnter(lv_obj_t* parent) {
     window(static_cast<uint8_t>((getCurrentTrack() / 4) * 4),
            static_cast<uint8_t>((selected_step_ / 16) * 16));
     inter_mcu_request_track_binding(0xFF);
-    timer_ = lv_timer_create(timerEvent, 40, this);
+#if WAVEX_UI_LATENCY_PROFILE_ENABLED
+    lv_display_add_event_cb(lv_obj_get_display(root_), refreshEvent, LV_EVENT_ALL, this);
+#endif
+    timer_ = lv_timer_create(timerEvent, 16, this);
     service();
 }
 
 void UISequencerPage::onExit() {
+#if WAVEX_UI_LATENCY_PROFILE_ENABLED
+    if (root_)
+        lv_display_remove_event_cb_with_user_data(lv_obj_get_display(root_), refreshEvent, this);
+#endif
     if (timer_) {
         lv_timer_delete(timer_);
         timer_ = nullptr;
@@ -191,6 +213,12 @@ void UISequencerPage::service() {
         SeqPatternSyncMessage page;
         const bool was_ready = model_.AllReady();
         if (inter_mcu_get_seq_page(&page) && model_.Accept(page)) {
+#if WAVEX_UI_LATENCY_PROFILE_ENABLED
+            if (latency_.sent_us && !latency_.accepted_us &&
+                page.request_id == latency_.request_id &&
+                page.steps[latency_.column].on == latency_.expected_on)
+                latency_.accepted_us = esp_timer_get_time();
+#endif
             settings_ = page;
             next_row_ = static_cast<uint8_t>((page.track - model_.FirstTrack() + 1) % 4);
             if (was_ready != model_.AllReady())
@@ -238,17 +266,21 @@ void UISequencerPage::render() {
                       sizeof(value),
                       "Track %u%s\n%s",
                       trackDisplayNumber(track),
-                      model_.Ready(row) && !model_.Row(row).enabled ? " / MUTE" : "",
+                      model_.HasSnapshot(row) && !model_.Row(row).enabled ? " / MUTE" : "",
                       bound && binding.name[0] ? binding.name : "Empty");
         text(row_labels_[row], value);
-        lv_obj_set_style_bg_color(
-            row_buttons_[row], getCurrentTrack() == track ? UI_COLOR_ACCENT : UI_COLOR_CARD_ALT, 0);
-        lv_obj_set_style_border_color(
-            row_buttons_[row], getCurrentTrack() == track ? UI_COLOR_ACCENT : UI_COLOR_LINE, 0);
+        const uint8_t selected_row = getCurrentTrack() == track ? 1u : 0u;
+        if (drawn_rows_[row] != selected_row) {
+            lv_obj_set_style_bg_color(
+                row_buttons_[row], selected_row ? UI_COLOR_ACCENT : UI_COLOR_CARD_ALT, 0);
+            lv_obj_set_style_border_color(
+                row_buttons_[row], selected_row ? UI_COLOR_ACCENT : UI_COLOR_LINE, 0);
+            drawn_rows_[row] = selected_row;
+        }
         for (uint8_t col = 0; col < 16; ++col) {
             auto& cell = cells_[row][col];
             const uint8_t step = model_.FirstStep() + col;
-            const bool ready = link_alive_ && model_.Ready(row);
+            const bool ready = link_alive_ && model_.HasSnapshot(row);
             const bool enabled = ready && step < model_.Row(row).length;
             const bool on = ready && model_.Row(row).steps[col].on;
             const bool head = link_alive_ && playhead_.playing && playhead_.step == step;
@@ -281,7 +313,13 @@ void UISequencerPage::render() {
     }
     if (!locks_mode_) {
         SequencerGridModel::Step step;
-        if (valueStep(step)) {
+        bool have_step = valueStep(step);
+        if (!have_step && link_alive_ && model_.HasSnapshot(selectedRow()) &&
+            selected_step_ < model_.Row(selectedRow()).length) {
+            step = model_.Row(selectedRow()).steps[selected_step_ % 16];
+            have_step = true;
+        }
+        if (have_step) {
             std::snprintf(value, sizeof(value), "%u", step.velocity);
             tileText(tiles_[4], value);
             std::snprintf(value, sizeof(value), "%u", step.probability);
@@ -343,6 +381,15 @@ bool UISequencerPage::edit(const SeqPatternOpMessage& message) {
     if (inter_mcu_send_seq_pattern_op(message) != ESP_OK)
         return false;
     const uint8_t row = static_cast<uint8_t>(message.track - model_.FirstTrack());
+#if WAVEX_UI_LATENCY_PROFILE_ENABLED
+    const bool measured = latency_.pressed_us && !latency_.sent_us &&
+                          message.op == SEQ_OP_SET_STEP && row == latency_.row &&
+                          message.step == model_.FirstStep() + latency_.column;
+    if (measured) {
+        latency_.sent_us = esp_timer_get_time();
+        latency_.expected_on = message.arg_u8 != 0;
+    }
+#endif
     if (message.op == SEQ_OP_PATTERN_LENGTH || message.op == SEQ_OP_PATTERN_SCALE ||
         message.op == SEQ_OP_PATTERN_SWING) {
         model_.Invalidate();
@@ -351,6 +398,10 @@ bool UISequencerPage::edit(const SeqPatternOpMessage& message) {
         model_.InvalidateRow(row);
         requestRow(row);
     }
+#if WAVEX_UI_LATENCY_PROFILE_ENABLED
+    if (measured)
+        latency_.request_id = s_read_id;
+#endif
     render();
     UINavigator::instance().refreshSoftkeys();
     return true;
@@ -555,8 +606,51 @@ void UISequencerPage::clearRow() {
 }
 void UISequencerPage::cellEvent(lv_event_t* event) {
     auto* cell = static_cast<Cell*>(lv_event_get_user_data(event));
+#if WAVEX_UI_LATENCY_PROFILE_ENABLED
+    auto& trace = cell->owner->latency_;
+    const auto code = lv_event_get_code(event);
+    if (code == LV_EVENT_PRESSED) {
+        const uint32_t sequence = trace.sequence + 1;
+        trace = LatencyTrace{};
+        trace.sequence = sequence;
+        trace.row = cell->row;
+        trace.column = cell->column;
+        trace.pressed_us = esp_timer_get_time();
+    } else if (code == LV_EVENT_RELEASED && trace.row == cell->row &&
+               trace.column == cell->column) {
+        trace.released_us = esp_timer_get_time();
+    }
+    if (code != LV_EVENT_PRESSED)
+        return;
+#endif
     cell->owner->toggle(cell->row, cell->column);
 }
+#if WAVEX_UI_LATENCY_PROFILE_ENABLED
+void UISequencerPage::refreshEvent(lv_event_t* event) {
+    auto& page = *static_cast<UISequencerPage*>(lv_event_get_user_data(event));
+    auto& trace = page.latency_;
+    switch (lv_event_get_code(event)) {
+        case LV_EVENT_REFR_START:
+            page.refresh_pixels_ = 0;
+            break;
+        case LV_EVENT_FLUSH_START: {
+            // The pinned LVGL 9.5 flush event supplies the submitted strip area.
+            const auto* area = static_cast<const lv_area_t*>(lv_event_get_param(event));
+            if (area)
+                page.refresh_pixels_ += lv_area_get_size(area);
+            break;
+        }
+        case LV_EVENT_REFR_READY:
+            if (trace.accepted_us && !trace.refreshed_us) {
+                trace.refreshed_us = esp_timer_get_time();
+                trace.pixels = page.refresh_pixels_;
+            }
+            break;
+        default:
+            break;
+    }
+}
+#endif
 void UISequencerPage::rowEvent(lv_event_t* event) {
     auto* row = static_cast<Cell*>(lv_event_get_user_data(event));
     row->owner->focus(row->owner->model_.FirstTrack() + row->row, row->owner->selected_step_);
@@ -698,6 +792,35 @@ bool UISequencerPage::consoleCommand(const char* args, char* reply, size_t cap) 
     int a = 0, b = 0;
     SequencerGridModel::Step step;
     const int count = std::sscanf(args ? args : "", "%23s %d %d", verb, &a, &b);
+#if WAVEX_UI_LATENCY_PROFILE_ENABLED
+    if (count == 1 && std::strcmp(verb, "LATENCY") == 0) {
+        std::snprintf(
+            reply,
+            cap,
+            "id=%lu down=%lld up=%lld sent=%lld read=%lld frame=%lld row=%u col=%u pixels=%lu",
+            static_cast<unsigned long>(latency_.sequence),
+            static_cast<long long>(latency_.pressed_us),
+            static_cast<long long>(latency_.released_us),
+            static_cast<long long>(latency_.sent_us),
+            static_cast<long long>(latency_.accepted_us),
+            static_cast<long long>(latency_.refreshed_us),
+            latency_.row,
+            latency_.column,
+            static_cast<unsigned long>(latency_.pixels));
+        return true;
+    }
+#endif
+    if (count == 3 && std::strcmp(verb, "CELL") == 0 && a >= 1 && a <= 4 && b >= 1 && b <= 16) {
+        lv_obj_update_layout(root_);
+        lv_area_t area;
+        lv_obj_get_coords(cells_[a - 1][b - 1].button, &area);
+        std::snprintf(reply,
+                      cap,
+                      "x=%ld y=%ld",
+                      static_cast<long>((area.x1 + area.x2) / 2),
+                      static_cast<long>((area.y1 + area.y2) / 2));
+        return true;
+    }
     if (count == 3 && locks_mode_ && std::strcmp(verb, "LOCK") == 0 && a >= 0 && a <= 255 &&
         b >= 0 && b <= 65535) {
         if (!setLock(static_cast<uint8_t>(a), static_cast<uint16_t>(b)))
@@ -711,7 +834,7 @@ bool UISequencerPage::consoleCommand(const char* args, char* reply, size_t cap) 
         focus(static_cast<uint8_t>(a - 1), static_cast<uint8_t>(b - 1));
     else if (count == 1 && std::strcmp(verb, "TOGGLE") == 0 && editable())
         lv_obj_send_event(
-            cells_[selectedRow()][selected_step_ % 16].button, LV_EVENT_CLICKED, nullptr);
+            cells_[selectedRow()][selected_step_ % 16].button, LV_EVENT_PRESSED, nullptr);
     else if (count == 2 && link_alive_ && settings_.valid) {
         if (std::strcmp(verb, "TEMPO") == 0 && a >= 2000 && a <= 30000 && a % 100 == 0)
             adjust(0, (a - settings_.tempo_bpm_x100) / 100);

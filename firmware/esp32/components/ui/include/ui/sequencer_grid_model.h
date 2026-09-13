@@ -28,6 +28,7 @@ class SequencerGridModel {
     }
     void Invalidate() {
         ready_.fill(false);
+        snapshot_valid_.fill(false);
         DiscardPreview();
         request_ = Request{};
     }
@@ -57,6 +58,7 @@ class SequencerGridModel {
         if (preview_valid_ && preview_row_ == row)
             DiscardPreview();
         ready_[row] = true;
+        snapshot_valid_[row] = true;
         request_ = Request{};
         return true;
     }
@@ -88,6 +90,9 @@ class SequencerGridModel {
         preview_valid_ = true;
     }
     void DiscardPreview() { preview_valid_ = false; }
+    // Readback pending does not erase the last confirmed picture. It still
+    // authorizes no new edits; only Accept() can make that row ready again.
+    bool HasSnapshot(uint8_t row) const { return row < kRows && snapshot_valid_[row]; }
     bool Ready(uint8_t row) const { return row < kRows && ready_[row]; }
     bool AllReady() const {
         for (bool ready: ready_)
@@ -103,6 +108,7 @@ class SequencerGridModel {
    private:
     std::array<Page, kRows> pages_{};
     std::array<bool, kRows> ready_{};
+    std::array<bool, kRows> snapshot_valid_{};
     Request request_{};
     Step preview_{};
     uint8_t preview_row_ = 0, preview_column_ = 0;

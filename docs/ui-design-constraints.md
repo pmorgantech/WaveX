@@ -91,6 +91,15 @@ structured, and how to build a page.
 | Pages recreated on entry | `ui-architecture.md` "Known Limitations" #2 |
 | Browse pagination, 20/page | `file_browser.cpp` (`entries_per_page = 20`) |
 
+## Avoiding unnecessary redraws
+
+LVGL local-style setters invalidate widgets even when the value is unchanged.
+Cache visible state before calling them from recurring page services. Keep
+callback/action replacement independent of this visual cache. Dense grids use
+explicit flat styles without inherited blurred shadows or transitions; remove
+inherited styles before setting geometry because coordinates are style-backed.
+The [UI responsiveness measurements](ui-latency-notes.md) quantify this cost.
+
 ## Known discrepancy (do not design around it — it should be fixed)
 
 The vendored BSP's `bsp_touch_new()` (`esp32_p4_nano.c`, in
@@ -100,7 +109,7 @@ orientation — while LVGL draws to the software-rotated 1280×720 landscape
 canvas (`LV_DISPLAY_ROTATION_90` in `display_manager.cpp`). Touch and
 display disagree about which axis is which. If touch positions feel offset,
 swapped, or compressed, this is the first suspect; verify by tapping the
-four corners. Tracked in `docs/backlog.md`.
+four corners. Tracked in `docs/roadmap.md`.
 
 ## Iterating with Claude Design
 

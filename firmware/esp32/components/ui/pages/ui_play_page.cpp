@@ -13,6 +13,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 
 namespace wavex_ui {
 
@@ -237,7 +238,7 @@ lv_obj_t* UIPlayPage::makeKey(
     // style list, which allocates. This page builds 41 keys, each a button
     // plus a label, so the six local properties these used to set were ~500
     // property stores on a single page entry - and page entry is the whole
-    // cost of this page (docs/backlog.md). What genuinely varies per key is
+    // cost of this page (docs/roadmap.md). What genuinely varies per key is
     // the two colours; the border, radius and pressed fill are identical
     // across all 41, so they belong in one style every key references.
     //
@@ -292,6 +293,7 @@ lv_obj_t* UIPlayPage::makeKey(
     k.label = label;
     k.offset = offset;
     k.bg_normal = bg;
+    k.drawn_bg = bg;
     k.text_normal = text;
     k.is_black = is_black;
     k.down = false;
@@ -514,15 +516,23 @@ void UIPlayPage::refreshKeys() {
         if (!k.obj || !k.label) {
             continue;
         }
-        NoteName(noteFor(k), name, sizeof(name));
-        lv_label_set_text(k.label, name);
+        const int note = noteFor(k);
+        if (k.drawn_note != note) {
+            NoteName(note, name, sizeof(name));
+            lv_label_set_text(k.label, name);
+            k.drawn_note = static_cast<int16_t>(note);
+        }
         // Latched keys stay lit: a sustaining note you cannot see is one you
         // forget about. Resting colour comes from the key itself rather than
         // from working out which surface it belongs to.
-        lv_obj_set_style_bg_color(
-            k.obj, lv_color_hex(k.down ? kColGreen : k.bg_normal), LV_PART_MAIN);
+        const uint32_t bg = k.down ? kColGreen : k.bg_normal;
+        if (k.drawn_bg != bg) {
+            lv_obj_set_style_bg_color(k.obj, lv_color_hex(bg), LV_PART_MAIN);
+            k.drawn_bg = bg;
+        }
     }
 
+    refreshPadTiles();
     refreshBindingStatus();
 }
 
@@ -681,7 +691,8 @@ void UIPlayPage::refreshPadTiles() {
     char value[24];
     FormatParamValue(current_param_, raw, value, sizeof(value));
 
-    lv_label_set_text(param_tile_.label, kParams[i].label);
+    if (std::strcmp(lv_label_get_text(param_tile_.label), kParams[i].label))
+        lv_label_set_text(param_tile_.label, kParams[i].label);
     valueTileSetValue(param_tile_, value);
     valueTileSetFocus(param_tile_, true);
     if (current_param_ == Param::Track) {

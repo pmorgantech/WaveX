@@ -2,7 +2,7 @@
 
 **Status**: Target design (unimplemented). Phase 2.5 in `roadmap.md`.
 **Decision pending (2026-09-13):** note-length gates and one-shot/gated playback
-semantics are [backlogged for discussion](../backlog.md#note-lengths-and-one-shot-playback--decision-pending).
+semantics are [backlogged for discussion](../roadmap.md#note-lengths-and-one-shot-playback--decision-pending).
 The gate/tie model below remains a proposal, not an approved implementation.
 
 **Dependencies**: Phase 2 sequencer core (`sequencer.md` — scheduler, pattern model, transport), `instrument-model.md` (keyboard-mode instruments are what melodic tracks play).

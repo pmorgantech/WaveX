@@ -157,7 +157,7 @@ Both source types obey the existing callback rules:
 
 Sampler playback, Instrument editing, and the Track/Instrument workflow remain the
 current product path. The wavetable renderer is an unscheduled, post-Phase-2.5
-candidate and must be promoted from `backlog.md` before implementation. This
+candidate and must be scheduled in a phase of `roadmap.md` before implementation. This
 follows the version-1 rule: establish reliable sampling, sequencing, Instrument
 persistence, and zero-underrun performance before adding another oscillator
 engine.
@@ -189,4 +189,4 @@ Before wavetable implementation, its focused design must settle:
 - [Parameter locks and modulation](param-locks-and-modulation.md)
 - [Offline sample editing](offline-sample-editing.md)
 - [Roadmap](../roadmap.md)
-- [Backlog](../backlog.md)
+- [Next steps and backlog](../roadmap.md#next-steps-and-backlog)

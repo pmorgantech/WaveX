@@ -9,7 +9,7 @@
 # draws into a plain memory buffer with no display driver, no SDL and no
 # hardware, so a widget's real output can be asserted on directly.
 # tools/ui_preview has rendered design previews this way since it was written;
-# the only thing missing was pointing a test at it. See docs/backlog.md.
+# the only thing missing was pointing a test at it. See docs/roadmap.md.
 
 # THE important line. Directory-level include_directories() are INHERITED by
 # subdirectories, and the parent puts `mocks/` first specifically to shadow
@@ -73,6 +73,23 @@ foreach(test_source IN LISTS widget_tests)
         ${CMAKE_CURRENT_SOURCE_DIR}/../../components/ui/fonts
         ${CMAKE_CURRENT_SOURCE_DIR}/../../../shared
     )
+
+    if(test_name STREQUAL "softkey_bar_test")
+        target_sources(${test_name} PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/../../components/ui/src/ui_softkey_bar.cpp)
+        target_include_directories(${test_name} PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/stubs
+            ${CMAKE_CURRENT_SOURCE_DIR}/../../components/ui/include)
+    endif()
+
+    if(test_name STREQUAL "parameter_widgets_test")
+        file(GLOB PARAMETER_WIDGET_FONTS
+            ${CMAKE_CURRENT_SOURCE_DIR}/../../components/ui/fonts/wavex_mono_*.c)
+        target_sources(${test_name} PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/../../components/ui/components/ui_value_tile.cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/../../components/ui/components/ui_dial.cpp
+            ${PARAMETER_WIDGET_FONTS})
+    endif()
 
     target_link_libraries(${test_name} PRIVATE
         lvgl_host

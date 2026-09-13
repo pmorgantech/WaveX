@@ -18,8 +18,7 @@ live in `firmware/shared/config/pin_config.h` and `hardware_config.h` only.
 |---|---|
 | [project-principles.md](project-principles.md) | **Architectural constitution**: the 15 engineering principles and decision filter that every significant design, implementation, and review must satisfy |
 | [architecture.md](architecture.md) | **Single source of truth** for system design: product vision, hardware, firmware structure, real-time/DMA/timing rules (§7), memory layout, open decisions |
-| [roadmap.md](roadmap.md) | Implementation order (Phases 0–5), per-phase test gates, library upgrade recommendations with risk callouts, and § Outstanding hardware verification — code-complete work that nothing has yet proven on the bench |
-| [backlog.md](backlog.md) | Concise unscheduled work and open decisions; completed work belongs in the changelog and git history |
+| [roadmap.md](roadmap.md) | Implementation order (Phases 0–5), next steps/backlog and open decisions, per-phase test gates, and § Outstanding hardware verification — code-complete work that nothing has yet proven on the bench |
 | [rt1170-migration.md](rt1170-migration.md) | Forward-looking plan for moving the backend off the STM32H750 |
 
 ## Required reading before writing code
@@ -86,6 +85,6 @@ mutually contradictory hardware claims (ESP32-S3 vs P4, UART vs SPI link,
 conflicting pin tables), or report tests that were never run.
 
 Superseded documents are now deleted rather than moved there, after anything
-still open has been rescued into `roadmap.md`, `backlog.md` or a
+still open has been rescued into `roadmap.md` or a
 `features/*.md`. Git history is the archive: `git log --diff-filter=D --
 docs/` lists what has left.

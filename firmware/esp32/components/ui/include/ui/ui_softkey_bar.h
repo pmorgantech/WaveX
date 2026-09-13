@@ -41,6 +41,8 @@ class SoftkeyBar {
     static void runPending(void* data);
     PendingActions pending_;
     bool pending_scheduled_ = false;
+    bool visuals_initialized_ = false;
+    bool drawn_shifted_ = false;
 
     lv_obj_t* container_ = nullptr;
     std::array<lv_obj_t*, NUM_SOFTKEYS> btns_{};

@@ -45,7 +45,7 @@ constexpr int kTileGap = 10;
 //
 // Every lv_obj_set_style_*() call stores a property in the object's own style
 // list, which allocates. A settings page builds up to a dozen rows of three
-// objects each, and page entry is what this UI pays for (docs/backlog.md), so
+// objects each, and page entry is what this UI pays for (docs/roadmap.md), so
 // the properties that are identical across rows live in one style each and the
 // rows only add/remove them.
 //

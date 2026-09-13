@@ -289,4 +289,4 @@ adoption. A clean short meter or waveform check does not close those gates.
 - [Architecture](../architecture.md): as-built transport and mandatory DMA rules.
 - [Inter-MCU protocol](inter-mcu-protocol.md): payloads and waveform identity.
 - [SPI findings](../spi-notes.md): measured comparisons and rollback evidence.
-- [Roadmap](../roadmap.md) and [backlog](../backlog.md): phase and adoption gates.
+- [Roadmap](../roadmap.md): phases, next steps and transport adoption gates.

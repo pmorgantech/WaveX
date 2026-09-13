@@ -143,6 +143,54 @@ to the same bar: measure the widget you're replacing (or an `lv_chart`
 prototype) with log-mode sysmon before deciding a hand-drawn version is
 justified, and keep its buffers pre-allocated and fixed-size.
 
+## Build pages with bounded repainting
+
+Apply this while designing and implementing every new or changed page, before
+it becomes a later optimization task. See
+[UI latency measurements](../../docs/ui-latency-notes.md) for the measured
+Sequencer, Play, Instrument and Diagnostics examples and profiling commands.
+
+- **Define the visual update model first.** Identify backend-owned values,
+  transient input state and derived presentation. A poll/reply or new request
+  ID alone must not redraw unchanged content. Retain the last confirmed
+  snapshot during an in-flight refresh, but keep edit readiness separate so
+  stale data cannot authorize a second mutation.
+- **Make repeated refreshes idempotent.** Reuse the value-tile, dial and chrome
+  helpers. Compare displayed text, font, focus/tone styles, table cells and
+  curve points before calling setters that invalidate on identical input.
+  Check the pinned LVGL implementation: some setters already deduplicate,
+  while label/table/style setters can still allocate or invalidate. Prefer
+  widget-owned values to a second model, especially for copied widget handles.
+- **Cache only what widget getters cannot represent reliably.** A pressed
+  style can override the base colour: Play caches its applied base colour so
+  latch highlighting survives release. Reset visual caches when widgets are
+  recreated. Keep callback/command metadata current even when appearance does
+  not change; skipping a redraw must never retain a stale action.
+- **Keep one interaction local.** Restyle the changed key/cell and previous
+  selection, not every row or sibling. Rewriting enough small objects can
+  overflow LVGL invalidation capacity and become a full-screen repaint. Set
+  static styles/geometry at creation; avoid inherited shadows/transitions on
+  dense grids. Use supported style removal, never a null transition descriptor.
+- **Preserve meaningful live updates.** Changed values, warning/offline states
+  and time-series history must still update. A new sparkline sample can be
+  meaningful even when its value equals the previous sample. Avoid reducing
+  telemetry cadence or freezing the view merely to conceal repaint work.
+- **Check rendering before page completion.** Exercise idle polling, repeated
+  identical replies, one control change, selection/latch/press/release, and
+  exit/re-entry. Use a real-LVGL host test for reusable update helpers where
+  useful. On hardware, separate page-entry cost from steady interaction;
+  record submitted pixels/full-screen refreshes and refresh mean/peak with
+  profiling-only `RENDER` and log-mode sysmon. A local edit should not require
+  a full-screen refresh unless its actual layout/content change justifies it.
+  Compare under the same workload, check appearance and note/control lifetime,
+  and leave profiling disabled in the final image. If hardware is unavailable,
+  report that gate open rather than asserting responsiveness.
+
+`RENDER` measures pixel-submitting refresh wall time; sysmon busy percentage
+is LVGL activity, not whole-ESP32 CPU utilization. Neither establishes physical
+touch-to-visible-panel or audio latency. Use the dedicated input/readback trace
+when attributing interaction delay rather than blaming the transport.
+
 ## Measuring instead of guessing
 
 Never claim a WaveX UI change is faster or "smoother" without a number — see
@@ -199,13 +247,15 @@ For every significant LVGL/UI review:
   constants rather than literals.
 - Check that a new custom-drawn widget is justified by a measurement against
   the standard-widget alternative it replaces, not just aesthetic preference.
+- Check the bounded-repainting workflow above for new pages and repeated
+  refresh paths, not only when the user reports lag.
 - Check that a performance claim (faster page, PPA on/off, shadow/blur added)
   cites log-mode sysmon numbers with render/flush split, not the on-screen
   overlay or an impression.
 - Check roadmap phase alignment (`docs/roadmap.md`) and that
   `docs/ui-architecture.md`/`ui-design-constraints.md` are updated in the same
   change when the page contract, chrome dimensions, palette, or navigation
-  shape intentionally changes. Record unrelated UI debt in `docs/backlog.md`
+  shape intentionally changes. Record unrelated UI debt in `docs/roadmap.md`
   rather than expanding the reviewed patch — several open items already exist
   there (touch axis mismatch, busy-overlay error path, softkey allocation).
 
