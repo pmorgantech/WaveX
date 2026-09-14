@@ -156,6 +156,12 @@ The filter's mode, topology, slope and drive are Instrument properties as well a
 
 ### 2.4 The selected Track (shared UI state — built 2026-09-04)
 
+The root setup page is named **Performance** from 2026-09-14. Track remains
+the musical entity; this page configures those parts collectively and stays
+outside Sequencer. Historical references to the Track page below refer to
+this same page. Its initial controls include assignment, MIDI input, level
+and pan; future polyphony/Bank/Scene controls retain their roadmap stages.
+
 Every page acts on **one** selected Track (`ui/current_track.h`): Play sends notes on it, the Sample Manager assigns to it, the Instrument page edits it, the browser loads into it. Before this existed, four pages kept four private copies, which was the whole of the "which Track?" bench finding. Rules:
 
 - The Track selector shows **eight Tracks per page** (1–8, 9–16); paging, not a 16-wide strip, so the numbers stay legible on the 1280×720 panel.
@@ -424,7 +430,7 @@ Pages reorganised around the nouns. Each page owns exactly one thing.
 
 | Page | Owns | Exists today as |
 |---|---|---|
-| **Track** | which Track is selected (8 per page, §2.4), its Instrument name, MIDI in, poly limit, program-change on/off, mixer strip, Load / Save Instrument | touch Track page with eight Tracks per view, current binding and MIDI input; polyphony, Program Change and mixer policy follow their engine stages |
+| **Performance** | the live Track setup: selection (8 per page, §2.4), Instrument assignment, MIDI routing and Track mix | renamed from Track, with the current binding, Assign/Instrument Browser, Edit sound, MIDI input, Track level and pan; polyphony, Program Change, full Mixer and Scene recall follow their engine stages |
 | **Instrument** | the selected Track's Instrument. Tabs: **Osc** (1/2, type, level/pan/tune, → Key Map or Pad Map by mode), **Filter**, **Amp**, **Env** (1/2/3), **LFO** (1/2), **Mod**; Name/Tags on the Track page's Save | Instrument page (renamed from "Voice" in stage 1, 2026-09-04; Sample/Env/Amp/Filter/Mod/LFO tabs exist; its TRACK param follows the selected Track — done 2026-09-12) |
 | **Key Map** | Keyboard-mode oscillator: zones over key × velocity ranges | 32 stable slots, resident sample assignment/clear, staged inclusive key/velocity ranges and root note, audition, naming and WXI save copies (2026-09-11) |
 | **Pad Map** | Drum-mode oscillator: 16 pads × Sample, choke, optional per-pad filter/env | touch editor with assignment, audition, choke, naming and new-copy saves; per-pad cutoff and amp attack/decay/sustain overrides with inheritance reset |
@@ -434,7 +440,7 @@ Pages reorganised around the nouns. Each page owns exactly one thing.
 | **Sample Manager** | the Pool: what is resident, who uses it, unload, assign to Track / to pad, **set current sample for editing** | exists; today cannot see an import's samples (§4); "Assign" with a replace confirm (stage 2, 2026-09-04); "to pad" waits for the Pad Map |
 | **Sample Edit** | the **current sample**'s markers/gain/fades | exists |
 | **Play** | the grid, addressed to the selected Track | exists; follows the selected Track (2026-09-04) |
-| **Mixer** | 16 strips | `output-routing-and-mixer.md` stage 3, not built |
+| **Mixer** | 16 strips (Track level/pan already exposed in Performance) | `output-routing-and-mixer.md` stage 3, not built |
 
 "Selected Track" and "current sample" are the two pieces of shared UI state; both are ESP32-side, both survive page navigation like `SampleBrowserState` does. The selected Track is always visible as the header chip (§2.4), so no page needs its own Track readout — the strip on Play that today says "Track 3: …" collapses into the chip.
 

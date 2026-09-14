@@ -171,6 +171,8 @@ enum MessageType : uint8_t {
     // mix / scenes block reserved in features/inter-mcu-protocol.md.
     MSG_MIX_OP = 0x78,          // E->D: one mixer control change
     MSG_MIX_METERS = 0x79,      // D->E: per-track peak, while the mixer page is open
+    MSG_MIX_STATE_REQ = 0x7B,   // E->D: correlated selected Track mix read
+    MSG_MIX_STATE = 0x7C,       // D->E: foreground-owned accepted mix settings
     MSG_INST_EDIT_OP = 0x80,    // E->D: sound undo/apply/filter/amp
     MSG_INST_EDIT_SYNC = 0x81,  // D->E: audible sound and retained undo state
     MSG_ERROR = 0xFF
@@ -217,6 +219,28 @@ struct MixOpMessage {
     MixOpMessage(uint8_t op_, uint8_t track_, uint16_t value_)
         : op(op_), track(track_), value(value_) {}
 } __attribute__((packed));
+
+// Readback is the foreground-owned accepted target, applied by the existing
+// immutable mixer handoff at the next audio block. It is not ramp telemetry.
+struct MixStateRequest {
+    uint32_t request_id = 0;
+    uint8_t track = 0;
+} __attribute__((packed));
+
+struct MixStateMessage {
+    uint32_t request_id = 0;
+    uint8_t track = 0;
+    uint8_t valid = 0;
+    uint16_t gain = 6000;
+    uint16_t pan = 32768;
+    uint8_t mute = 0;
+} __attribute__((packed));
+static_assert(sizeof(MixStateRequest) == 5, "Mixer request wire layout");
+static_assert(sizeof(MixStateMessage) == 11, "Mixer state wire layout");
+
+inline bool IsValidMixState(const MixStateMessage& m) {
+    return m.request_id != 0 && m.track < 16 && m.valid == 1 && m.gain <= 6600 && m.mute <= 1;
+}
 
 /// Tracks a MixMetersMessage reports on. Matches WaveX::Mix::kNumTracks and
 /// the instrument slot count; static_asserted where they meet.

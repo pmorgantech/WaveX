@@ -2220,6 +2220,12 @@ void Callback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t
 // (s_track_live_updates). The analog board is
 // optional hardware and the digital voices always render - so a knob has to
 // reach both or it would do nothing on whichever configuration is in use.
+void OnMixStateRequest(const MixStateRequest& request) {
+    const auto state = s_mixer_controls.Read(request);
+    if (state.valid)
+        WaveX::Comm::LinkSend(MSG_MIX_STATE, &state, sizeof(state));
+}
+
 void OnMixOp(const MixOpMessage& m) {
     if (m.op == MIX_OP_SUB_METERS || m.op == MIX_OP_UNSUB_METERS) {
         s_mix_meters_subscribed = (m.op == MIX_OP_SUB_METERS);

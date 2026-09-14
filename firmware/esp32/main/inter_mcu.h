@@ -345,6 +345,11 @@ void inter_mcu_store_seq_playhead(const WaveX::Protocol::SeqPlayheadMessage& pla
 bool inter_mcu_get_seq_page(WaveX::Protocol::SeqPatternSyncMessage* out);
 bool inter_mcu_get_seq_playhead(WaveX::Protocol::SeqPlayheadMessage* out);
 
+// Selected-Track gain/pan only; master, mutes and solo have separate owners.
+esp_err_t inter_mcu_set_track_mix(const WaveX::Protocol::MixOpMessage& message);
+esp_err_t inter_mcu_request_mix_state(const WaveX::Protocol::MixStateRequest& request);
+void inter_mcu_store_mix_state(const WaveX::Protocol::MixStateMessage& state);
+bool inter_mcu_get_mix_state(WaveX::Protocol::MixStateMessage* out);
 esp_err_t inter_mcu_request_track_state(const WaveX::Protocol::TrackStateRequest& request);
 void inter_mcu_store_track_state(const WaveX::Protocol::TrackStateMessage& state);
 bool inter_mcu_get_track_state(WaveX::Protocol::TrackStateMessage* out);

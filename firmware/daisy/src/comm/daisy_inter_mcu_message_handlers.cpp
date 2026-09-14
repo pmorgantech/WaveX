@@ -103,6 +103,13 @@ void ProcessInterMcuMessage(uint8_t msg_type,
         case MSG_MIX_OP:
             HandleMixOpMessage(payload, payload_size);
             break;
+        case MSG_MIX_STATE_REQ: {
+            MixStateRequest request{};
+            if (payload && payload_size == sizeof(request)) {
+                std::memcpy(&request, payload, sizeof(request));
+                WaveX::AudioEngine::OnMixStateRequest(request);
+            }
+        } break;
         case MSG_TRACK_STATE_REQ: {
             TrackStateRequest request{};
             if (payload && payload_size == sizeof(request)) {

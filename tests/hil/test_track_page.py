@@ -20,7 +20,7 @@ def test_track_page_reads_routing_and_preserves_other_tracks(
     try:
         daisy.set_midi_in(0, 1)
         daisy.set_midi_in(15, 16)
-        esp32.open_menu("Track")
+        esp32.open_menu("Performance")
         esp32.page("SELECT", 16)
         esp32.wait_state(
             trackready=1,

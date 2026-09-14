@@ -291,9 +291,11 @@ done. Open work, in the order decided 2026-09-05 (model doc §8: 7 → 4 → 5 �
    copy/move/clear with explicit replacement and unsaved-edit behavior; preserve
    stable slot identity and validate sample admission before replacing a Track.
 4. Polyphony policy (stage 8), from stage 5's measurement.
-5. Finish [Mixer v1](features/output-routing-and-mixer.md): a touch Mixer
-   page for all 16 Tracks with gain, pan, mute/solo, master controls and
-   subscribed per-Track meters. Decide visible strip count/paging against the
+5. Finish [Mixer v1](features/output-routing-and-mixer.md): Performance now
+   replaces the Track root and exposes Instrument assignment, MIDI input,
+   Track level and pan across the existing eight-Track selector pages.
+   Correlated mixer target readback is implemented. Complete the full strip
+   view with mute/solo, audible master controls and subscribed per-Track meters. Decide visible strip count/paging against the
    touch budget. Keep Track mix independent of Instrument sound trim; verify
    authoritative readback, solo/mute restoration, click-free changes and
    bounded redraw/telemetry cost during playback, then run the hardware soak.
@@ -336,6 +338,14 @@ sample import, and a measured CPU/memory headroom pass. Consider polyphase sampl
 shows linear interpolation is a meaningful cost or quality limit.
 
 ## Outstanding hardware verification
+
+- **Performance setup (2026-09-14):** both firmware builds and host checks
+  cover the renamed Track root, selected-Track gain/pan and correlated
+  mixer readback. Verify assignment/replacement/cancel and selected-Track
+  continuity; level/pan during held notes and sequencing; Instrument replacement
+  preserving mix; link loss/reconnect; and idle/local-control repaint cost on
+  the panel. No rendering, click-free or audio-latency claim is established
+  by compilation. The full Mixer and phase soak gates remain open.
 
 The following code paths are open until observed on the target:
 
@@ -383,17 +393,19 @@ the former separate backlog (2026-09-13).
 
 ### Composition and performance workflows
 
-Requested 2026-09-13. Mixer, Bank Manager and Pattern/Song editing are tracked
-in their Phase 2/2.5 items above. Resolve the navigation below before building
-new page groups; it is a proposal, not the current menu or a renamed model.
+Requested 2026-09-13; Performance navigation resolved 2026-09-14.
+Performance replaces and extends the Track root page: the existing Track setup
+was already the foundation for central Instrument assignment and mixing.
+Keep this globally accessible rather than nesting it under Sequencer.
+Mixer, Bank Manager and Pattern/Song editing retain their Phase 2/2.5 stages.
 
-| Concept | Ownership and role | UI decision to resolve |
+| Concept | Ownership and role | UI placement and status |
 |---|---|---|
-| Track | One of 16 parts: Instrument binding, MIDI routing and mix strip; a Pattern has a row addressing it | Offer Track setup as a subsequent Sequencer screen, while preserving selection/access from Play, Instrument and Mixer. Decide whether to retain a root shortcut. |
-| Performance | The full live setup of all Tracks, routing and mix, stored by the Project | Consider a Performance area linking Tracks, Mixer, Bank Manager and Instrument editing. |
+| Track | One of 16 parts: Instrument binding, MIDI routing and mix strip; a Pattern has a row addressing it | Configure through Performance; preserve the shared selection used by Play, Instrument and Sequencer. |
+| Performance | The full live setup of all Tracks, routing and mix, stored by the Project | Root area replacing Track; initial assignment, MIDI input, level and pan implemented. Expand Mixer and Bank access in their scheduled stages. |
 | Bank | A stable numbered collection of saved Instruments; recall makes a Track-owned editable copy | Bank Manager belongs beside Instrument browsing/editing; storing back to a slot is explicit. |
 | Instrument | The sound loaded into one Track | Keep sound editing and saving distinct from Track/Performance mix settings. |
-| Scene | A recallable performance snapshot referencing content | Consider Scene access in the Performance area; scene recall/macros remain Phase 5. |
+| Scene | A recallable performance snapshot referencing content | Future Scene access belongs inside Performance; scene recall/macros remain Phase 5. |
 | Pattern / Song | Pattern owns musical events; Song arranges Pattern references and repeat counts | Sequencer should expose Pattern management and a Song editor without hiding the currently playing/queued section. |
 
 The accepted ownership model is in
@@ -404,7 +416,7 @@ Workstation terms vary: a Track is one part of a Performance, not a synonym
 for the entire Performance or a Scene. Grouping screens does not transfer
 ownership to the sequencer or make Pattern changes reload Instruments.
 
-Before implementation, settle navigation/back behavior, selected-Track
+For the remaining Bank/Scene/Pattern/Song work, settle navigation/back behavior, selected-Track
 continuity, unsaved edits and recall confirmation, active/queued Pattern
 identity, quantized transitions and project recovery. Keep SD work in the
 foreground and publish prepared state at deterministic audio boundaries.

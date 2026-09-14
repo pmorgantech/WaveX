@@ -1495,10 +1495,45 @@ bool inter_mcu_get_pad_sound(WaveX::Protocol::InstPadSoundSyncMessage* out) {
 }
 
 namespace {
+portMUX_TYPE s_mix_state_lock = portMUX_INITIALIZER_UNLOCKED;
+WaveX::Protocol::MixStateMessage s_mix_state;
+bool s_mix_state_valid = false;
 portMUX_TYPE s_track_state_lock = portMUX_INITIALIZER_UNLOCKED;
 WaveX::Protocol::TrackStateMessage s_track_state;
 bool s_track_state_valid = false;
 }  // namespace
+esp_err_t inter_mcu_set_track_mix(const WaveX::Protocol::MixOpMessage& message) {
+    using namespace WaveX::Protocol;
+    if (message.track >= 16 || (message.op != MIX_OP_SET_GAIN && message.op != MIX_OP_SET_PAN) ||
+        (message.op == MIX_OP_SET_GAIN && message.value > 6600))
+        return ESP_ERR_INVALID_ARG;
+    return send_link_message(MSG_MIX_OP, &message, sizeof(message)) >= 0 ? ESP_OK : ESP_FAIL;
+}
+esp_err_t inter_mcu_request_mix_state(const WaveX::Protocol::MixStateRequest& request) {
+    if (!request.request_id || request.track >= 16)
+        return ESP_ERR_INVALID_ARG;
+    return send_link_message(WaveX::Protocol::MSG_MIX_STATE_REQ, &request, sizeof(request)) >= 0
+               ? ESP_OK
+               : ESP_FAIL;
+}
+void inter_mcu_store_mix_state(const WaveX::Protocol::MixStateMessage& state) {
+    if (!WaveX::Protocol::IsValidMixState(state))
+        return;
+    taskENTER_CRITICAL(&s_mix_state_lock);
+    s_mix_state = state;
+    s_mix_state_valid = true;
+    taskEXIT_CRITICAL(&s_mix_state_lock);
+}
+bool inter_mcu_get_mix_state(WaveX::Protocol::MixStateMessage* out) {
+    if (!out)
+        return false;
+    taskENTER_CRITICAL(&s_mix_state_lock);
+    const bool valid = s_mix_state_valid;
+    if (valid)
+        *out = s_mix_state;
+    taskEXIT_CRITICAL(&s_mix_state_lock);
+    return valid;
+}
 esp_err_t inter_mcu_request_track_state(const WaveX::Protocol::TrackStateRequest& request) {
     if (!request.request_id || request.track >= 16)
         return ESP_ERR_INVALID_ARG;

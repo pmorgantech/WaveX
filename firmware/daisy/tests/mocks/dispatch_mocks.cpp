@@ -130,6 +130,8 @@ void OnControlChange(const WaveX::Protocol::ControlChangeMessage& m) {
     WaveX::Test::GetDispatchRecord().control_changes.push_back(m);
 }
 
+void OnMixStateRequest(const WaveX::Protocol::MixStateRequest&) {}
+
 void OnMixOp(const WaveX::Protocol::MixOpMessage& m) {
     WaveX::Test::GetDispatchRecord().mix_ops.push_back(m);
 }

@@ -65,4 +65,29 @@ TEST_F(MixerControlHandoffTest, InvalidTrackDoesNotReplacePendingValidControls) 
     EXPECT_TRUE(mixer_.Track(15).mute);
     EXPECT_FLOAT_EQ(mixer_.Track(0).gain, 1);
 }
+TEST_F(MixerControlHandoffTest, ReadbackUsesAcceptedTargetsAndPreservesTrackIdentity) {
+    auto state = handoff_.Read({17, 15});
+    ASSERT_TRUE(IsValidMixState(state));
+    EXPECT_EQ(state.gain, 6000);
+    EXPECT_EQ(state.pan, 32768);
+    EXPECT_EQ(state.request_id, 17);
+    EXPECT_EQ(state.track, 15);
+    for (uint16_t pan: {0, 32767, 32768, 65535}) {
+        Update(MIX_OP_SET_PAN, 15, pan);
+        EXPECT_EQ(handoff_.Read({18, 15}).pan, pan);
+    }
+    Update(MIX_OP_SET_GAIN, 15, 5400);
+    Update(MIX_OP_SET_MUTE, 15, 1);
+    state = handoff_.Read({19, 15});
+    EXPECT_EQ(state.gain, 5400);
+    EXPECT_EQ(state.mute, 1);
+    EXPECT_EQ(handoff_.Read({20, 0}).gain, 6000);
+    // Reading main-loop targets does not prematurely mutate the audio state.
+    EXPECT_FLOAT_EQ(mixer_.Track(15).gain, 1);
+    handoff_.ApplyTo(mixer_);
+    EXPECT_FLOAT_EQ(mixer_.Track(15).gain, Mix::DbToLinear(-6));
+    EXPECT_FALSE(handoff_.Read({0, 0}).valid);
+    EXPECT_FALSE(handoff_.Read({1, 16}).valid);
+}
+
 }  // namespace

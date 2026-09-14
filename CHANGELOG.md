@@ -13,6 +13,13 @@ versioning and release process.
 
 ### Added
 
+- Performance replaces the Track main-menu page, keeping central Instrument
+  assignment and MIDI routing and adding Track level/pan controls. Mix values
+  use correlated backend readback and remain separate from Instrument sound
+  settings. Assign opens the existing confirmed Instrument load flow; Edit
+  sound opens its editor. Track selection and the logical panel jump remain
+  shared with the other pages. Scene recall remains future work.
+
 - Two more filter topologies for the ladder A/B: `Ladder 2x` (the
   Huovilainen port at 2x oversampling) and `ZDF` (the zero-delay-feedback
   ladder), selectable per Instrument on the MODEL tile alongside SVF and

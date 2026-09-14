@@ -9,6 +9,8 @@
 #include "ui/ui_navigator.h"
 #include "ui/ui_sample_browser.h"
 
+#include "audio/track_mix.hpp"
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 
@@ -58,14 +60,44 @@ void UITrackPage::onEnter(lv_obj_t* parent) {
     lv_obj_set_pos(heading_, UI_MARGIN_X, 232);
     lv_obj_set_width(heading_, UI_CONTENT_WIDTH - 2 * UI_MARGIN_X);
     lv_label_set_long_mode(heading_, LV_LABEL_LONG_WRAP);
-    midi_ = valueTileCreate(root_, UI_MARGIN_X, 320, 350, 190, "MIDI INPUT", "");
+    const int tile_width = (UI_CONTENT_WIDTH - 2 * UI_MARGIN_X - 2 * UI_GUTTER) / 3;
+    const int tile_y = UI_CONTENT_HEIGHT * 3 / 5;
+    const int tile_height = UI_CONTENT_HEIGHT - tile_y - UI_PADDING_MEDIUM;
+    midi_ = valueTileCreate(root_, UI_MARGIN_X, tile_y, tile_width, tile_height, "MIDI INPUT", "");
+    level_ = valueTileCreate(root_,
+                             UI_MARGIN_X + tile_width + UI_GUTTER,
+                             tile_y,
+                             tile_width,
+                             tile_height,
+                             "TRACK LEVEL",
+                             "dB");
+    pan_ = valueTileCreate(root_,
+                           UI_MARGIN_X + 2 * (tile_width + UI_GUTTER),
+                           tile_y,
+                           tile_width,
+                           tile_height,
+                           "TRACK PAN",
+                           "");
     valueTileHideFill(midi_);
-    valueTileSetOnAdjust(midi_, [this](int delta) { adjust(delta); });
+    valueTileSetOnAdjust(midi_, [this](int delta) {
+        focusControl(0);
+        adjust(delta);
+    });
+    valueTileSetOnAdjust(level_, [this](int delta) {
+        focusControl(1);
+        adjust(delta);
+    });
+    valueTileSetOnAdjust(pan_, [this](int delta) {
+        focusControl(2);
+        adjust(delta);
+    });
+    for (auto* card: {midi_.card, level_.card, pan_.card})
+        lv_obj_add_event_cb(card, controlEvent, LV_EVENT_PRESSED, this);
     status_ = lv_label_create(root_);
     ui_theme_apply_label_style(status_, false);
     lv_obj_set_style_text_font(status_, UI_FONT_SMALL, 0);
-    lv_obj_set_pos(status_, 420, 340);
-    lv_obj_set_width(status_, UI_CONTENT_WIDTH - 440);
+    lv_obj_set_pos(status_, UI_MARGIN_X, tile_y - 2 * UI_PADDING_MEDIUM);
+    lv_obj_set_width(status_, UI_CONTENT_WIDTH - 2 * UI_MARGIN_X);
     lv_label_set_long_mode(status_, LV_LABEL_LONG_WRAP);
     timer_ = lv_timer_create(tick, 100, this);
     onTrackChanged();
@@ -77,17 +109,22 @@ void UITrackPage::onExit() {
     if (root_)
         lv_obj_delete(root_);
     root_ = heading_ = status_ = nullptr;
-    midi_ = {};
+    midi_ = level_ = pan_ = {};
+    mix_pending_ = false;
+    mix_.Reset(getCurrentTrack());
     pending_ = false;
     model_.Reset(getCurrentTrack());
 }
 void UITrackPage::onTrackChanged() {
     first_ = getCurrentTrack() < 8 ? 0 : 8;
     model_.Reset(getCurrentTrack());
+    mix_.Reset(getCurrentTrack());
+    mix_pending_ = false;
     alive_ = inter_mcu_backend_link_alive();
     pending_ = false;
     soft_state_ = UINT32_MAX;
     read();
+    readMix();
     render();
 }
 void UITrackPage::read() {
@@ -107,6 +144,7 @@ void UITrackPage::service() {
         onTrackChanged();
         return;
     }
+    serviceMix();
     TrackStateMessage s{};
     if (pending_ && inter_mcu_get_track_state(&s) && model_.Accept(s)) {
         pending_ = false;
@@ -142,9 +180,72 @@ void UITrackPage::setMidi(uint8_t value) {
     read();
     render();
 }
+void UITrackPage::focusControl(uint8_t control) {
+    if (control_ == control)
+        return;
+    control_ = control;
+    render();
+}
+void UITrackPage::controlEvent(lv_event_t* event) {
+    auto* page = static_cast<UITrackPage*>(lv_event_get_user_data(event));
+    auto* card = lv_event_get_current_target(event);
+    page->focusControl(card == page->midi_.card ? 0 : (card == page->level_.card ? 1 : 2));
+}
 void UITrackPage::adjust(int delta) {
-    if (model_.Ready())
-        setMidi(TrackPageModel::StepMidi(model_.State().midi_in, delta));
+    if (control_ == 0) {
+        if (model_.Ready())
+            setMidi(TrackPageModel::StepMidi(model_.State().midi_in, delta));
+    } else {
+        adjustMix(control_ == 1 ? MIX_OP_SET_GAIN : MIX_OP_SET_PAN, delta);
+    }
+}
+void UITrackPage::readMix() {
+    if (!alive_)
+        return;
+    const MixStateRequest request{nextId(), getCurrentTrack()};
+    mix_read_at_ = lv_tick_get();
+    if (inter_mcu_request_mix_state(request) == ESP_OK) {
+        mix_.Expect(request.request_id);
+        mix_pending_ = true;
+    }
+}
+void UITrackPage::serviceMix() {
+    MixStateMessage state{};
+    if (mix_pending_ && inter_mcu_get_mix_state(&state) && mix_.Accept(state)) {
+        mix_pending_ = false;
+        mix_accepted_at_ = lv_tick_get();
+    }
+    if (mix_.Valid() && lv_tick_elaps(mix_accepted_at_) > 2000)
+        mix_.Reset(getCurrentTrack());
+    if ((mix_pending_ && lv_tick_elaps(mix_read_at_) > 1500) ||
+        (!mix_pending_ && lv_tick_elaps(mix_read_at_) > 500))
+        readMix();
+}
+void UITrackPage::setMix(uint8_t op, uint16_t value) {
+    if (!alive_ || !mix_.Ready())
+        return;
+    if (inter_mcu_set_track_mix(MixOpMessage{op, getCurrentTrack(), value}) != ESP_OK) {
+        label(status_, "Link busy. Try again.");
+        return;
+    }
+    mix_.Block();
+    mix_pending_ = false;
+    readMix();
+    render();
+}
+void UITrackPage::adjustMix(uint8_t op, int delta) {
+    if (!mix_.Ready())
+        return;
+    const auto& state = mix_.State();
+    if (op == MIX_OP_SET_GAIN) {
+        setMix(
+            op,
+            static_cast<uint16_t>(std::clamp(static_cast<int>(state.gain) + delta * 50, 0, 6600)));
+    } else {
+        const int percent = static_cast<int>(std::lround(WaveX::Mix::WireToPan(state.pan) * 100));
+        const int value = std::clamp(percent + delta, -100, 100);
+        setMix(op, value == 0 ? 32768 : WaveX::Mix::PanToWire(static_cast<float>(value) / 100));
+    }
 }
 void UITrackPage::render() {
     if (!root_)
@@ -180,16 +281,38 @@ void UITrackPage::render() {
         std::snprintf(text, sizeof(text), "%u", s.midi_in);
     if (std::strcmp(lv_label_get_text(midi_.value), text))
         valueTileSetValue(midi_, text);
-    valueTileSetFocus(midi_, alive_ && model_.Ready());
+    valueTileSetFocus(midi_, control_ == 0 && alive_ && model_.Ready());
+    const auto& mix = mix_.State();
+    if (!mix_.Valid())
+        std::snprintf(text, sizeof(text), "--");
+    else if (!mix.gain)
+        std::snprintf(text, sizeof(text), "-inf");
+    else
+        std::snprintf(
+            text, sizeof(text), "%.1f", static_cast<double>(WaveX::Mix::WireToGainDb(mix.gain)));
+    valueTileSetValue(level_, text);
+    valueTileSetFill(level_, mix_.Valid() ? static_cast<float>(mix.gain) / 6600 : 0);
+    valueTileSetFocus(level_, control_ == 1 && alive_ && mix_.Ready());
+    const int pan = static_cast<int>(std::lround(WaveX::Mix::WireToPan(mix.pan) * 100));
+    if (!mix_.Valid())
+        std::snprintf(text, sizeof(text), "--");
+    else if (pan == 0)
+        std::snprintf(text, sizeof(text), "Center");
+    else
+        std::snprintf(text, sizeof(text), "%s %d", pan < 0 ? "L" : "R", std::abs(pan));
+    valueTileSetValue(pan_, text);
+    valueTileSetFill(pan_, mix_.Valid() ? static_cast<float>(mix.pan) / 65535 : 0);
+    valueTileSetFocus(pan_, control_ == 2 && alive_ && mix_.Ready());
     label(status_,
-          !alive_
-              ? "Audio engine disconnected"
-              : (!model_.Valid()
-                     ? "Reading Track settings..."
-                     : (s.busy ? "Instrument loading..."
-                               : "MIDI input chooses which external notes reach this Track.\nPads "
-                                 "and sequencer steps address the Track directly.")));
-    uint32_t state = (alive_ && model_.Ready() ? 1u : 0u) | (static_cast<uint32_t>(first_) << 1);
+          !alive_ ? "Audio engine disconnected"
+                  : (!model_.Valid()
+                         ? "Reading Track settings..."
+                         : (s.busy ? "Instrument loading..."
+                                   : (!mix_.Valid() ? "Reading mixer settings..."
+                                                    : "Assign loads an Instrument. Tap a control "
+                                                      "or click encoder to focus."))));
+    uint32_t state = (alive_ && model_.Ready() ? 1u : 0u) | (static_cast<uint32_t>(first_) << 1) |
+                     (mix_.Ready() ? 64u : 0u) | (static_cast<uint32_t>(control_) << 7);
     if (state != soft_state_) {
         soft_state_ = state;
         UINavigator::instance().refreshSoftkeys();
@@ -198,13 +321,20 @@ void UITrackPage::render() {
 std::array<Softkey, NUM_SOFTKEYS> UITrackPage::getSoftkeys() {
     std::array<Softkey, NUM_SOFTKEYS> k{};
     k[0] = {"Back", [] { UINavigator::instance().pop(); }};
-    k[1] = {"Instrument", [] { UINavigator::instance().jumpToRoot(RootGroup::Instrument); }};
-    k[2] = {"Browse", [] {
+    k[2] = {"Edit sound", [] { UINavigator::instance().jumpToRoot(RootGroup::Instrument); }};
+    k[1] = {"Assign", [] {
                 if (auto page = createInstrumentBrowserPage())
                     UINavigator::instance().push(page);
             }};
-    k[3] = {"MIDI -", [this] { adjust(-1); }, alive_ && model_.Ready(), "Reading Track"};
-    k[4] = {"MIDI +", [this] { adjust(1); }, alive_ && model_.Ready(), "Reading Track"};
+    const bool ready = alive_ && (control_ == 0 ? model_.Ready() : mix_.Ready());
+    k[3] = {control_ == 0 ? "MIDI -" : (control_ == 1 ? "Level -" : "Pan -"),
+            [this] { adjust(-1); },
+            ready,
+            "Reading settings"};
+    k[4] = {control_ == 0 ? "MIDI +" : (control_ == 1 ? "Level +" : "Pan +"),
+            [this] { adjust(1); },
+            ready,
+            "Reading settings"};
     k[5] = {first_ ? "Tracks 1-8" : "Tracks 9-16", [this] {
                 first_ = first_ ? 0 : 8;
                 render();
@@ -214,12 +344,17 @@ std::array<Softkey, NUM_SOFTKEYS> UITrackPage::getSoftkeys() {
 void UITrackPage::onInput(const InputEvent& e) {
     if (e.type == InputType::EncoderRight || e.type == InputType::EncoderLeft)
         adjust(e.steps());
+    else if (e.type == InputType::EncoderClick || e.type == InputType::ButtonPress)
+        focusControl(static_cast<uint8_t>((control_ + 1) % 3));
 }
 size_t UITrackPage::consoleState(char* out, size_t cap, size_t len) {
     using namespace WaveX::Debug;
     len = AppendKvInt(out, cap, len, "trackready", alive_ && model_.Ready());
     len = AppendKvInt(out, cap, len, "trackfirst", first_ + 1);
     len = AppendKvInt(out, cap, len, "trackloaded", model_.Valid() && model_.State().loaded);
+    len = AppendKvInt(out, cap, len, "mixready", alive_ && mix_.Ready());
+    len = AppendKvInt(out, cap, len, "mixgain", mix_.State().gain);
+    len = AppendKvInt(out, cap, len, "mixpan", mix_.State().pan);
     return AppendKvInt(out, cap, len, "midiin", model_.State().midi_in);
 }
 bool UITrackPage::consoleCommand(const char* args, char* reply, size_t cap) {
@@ -229,9 +364,13 @@ bool UITrackPage::consoleCommand(const char* args, char* reply, size_t cap) {
         return false;
     if (!std::strcmp(field, "SELECT") && value >= 1 && value <= 16)
         select(static_cast<uint8_t>(value - 1));
-    else if (!std::strcmp(field, "MIDI") && value >= 0 && value <= 255 && TrackMidiInValid(value) &&
-             alive_ && model_.Ready())
+    else if (!std::strcmp(field, "MIDI") && value >= 0 && value <= 255 &&
+             TrackMidiInValid(static_cast<uint8_t>(value)) && alive_ && model_.Ready())
         setMidi(static_cast<uint8_t>(value));
+    else if (!std::strcmp(field, "LEVEL") && value >= 0 && value <= 6600 && alive_ && mix_.Ready())
+        setMix(MIX_OP_SET_GAIN, static_cast<uint16_t>(value));
+    else if (!std::strcmp(field, "PAN") && value >= 0 && value <= 65535 && alive_ && mix_.Ready())
+        setMix(MIX_OP_SET_PAN, static_cast<uint16_t>(value));
     else
         return false;
     std::snprintf(reply, cap, "ok");

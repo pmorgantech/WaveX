@@ -51,6 +51,21 @@ class MixerControlHandoff {
         mailbox_.Publish(pending_);
     }
 
+    // Foreground only: read accepted targets without touching callback-owned ramps.
+    Protocol::MixStateMessage Read(const Protocol::MixStateRequest& request) const {
+        Protocol::MixStateMessage state{};
+        state.request_id = request.request_id;
+        state.track = request.track;
+        if (!request.request_id || request.track >= Mix::kNumTracks)
+            return state;
+        const auto& strip = pending_.tracks[request.track];
+        state.valid = 1;
+        state.gain = Mix::GainDbToWire(Mix::LinearToDb(strip.gain));
+        state.pan = static_cast<uint16_t>(std::lround((strip.pan_offset + 1.0f) * 32767.5f));
+        state.mute = strip.mute;
+        return state;
+    }
+
     void ApplyTo(Mix::TrackMixer& mixer) {
         Controls latest;
         if (!mailbox_.ConsumeLatest(latest)) {

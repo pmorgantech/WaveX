@@ -35,6 +35,7 @@ void OnControlChange(const WaveX::Protocol::ControlChangeMessage& m);
 /// Applies one mixer control change (MSG_MIX_OP). Main loop only: it writes
 /// the track table the audio callback reads, and every field is a single
 /// aligned word, so a change lands whole on the next block.
+void OnMixStateRequest(const WaveX::Protocol::MixStateRequest& request);
 void OnMixOp(const WaveX::Protocol::MixOpMessage& m);
 void OnTrackOp(const WaveX::Protocol::TrackOpMessage& m);
 void OnNoteOn(const WaveX::Protocol::NoteMessage& m);

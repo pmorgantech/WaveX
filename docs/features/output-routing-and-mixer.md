@@ -1,6 +1,11 @@
 # Output Routing & Mixer — Design
 
-**Status**: Target design (unimplemented). Mixer v1 is Phase 2.5 (per-track control is core groovebox workflow); routing matrix is Phase 3/5 (needs Stage B hardware / send FX).
+**Status**: Partially implemented. The engine Track mix/handoff and control
+protocol exist. Performance (the renamed Track root) now exposes selected-Track
+level and pan with authoritative readback, alongside Instrument assignment and
+MIDI routing. The full strip view, solo/mute restoration, audible mixer-master
+integration and meter UI remain open; sections below retain their target-design
+role. See [UI architecture](../ui-architecture.md#performance-page). Mixer v1 is Phase 2.5 (per-track control is core groovebox workflow); routing matrix is Phase 3/5 (needs Stage B hardware / send FX).
 **Dependencies**: `instrument-model.md` (slots are the mixer's tracks), output sink seam (`architecture.md` §5.4, done), Stage B TDM path (Phase 3) for physical multi-out.
 **Lineage**: E-mu presets routed to main/sub outputs per preset — the studio workflow was stems-per-instrument. Stage B's per-voice analog outs recreate that physically; the mixer here is the digital control layer over both stages.
 
