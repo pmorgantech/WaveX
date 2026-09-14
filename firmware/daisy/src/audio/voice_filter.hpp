@@ -6,12 +6,13 @@
 //   FilterTopology::WaveXSvf - svf_filter.hpp: the first-party TPT
 //                              state-variable filter. LP/HP/BP/Notch, 12 or
 //                              24 dB, cubic soft-clip drive.
-//   FilterTopology::Ladder   - daisysp::LadderFilter: the Huovilainen 4-pole
-//                              Moog ladder as ported to the Teensy Audio
-//                              Library and then to DaisySP (both MIT). Four
-//                              one-pole stages inside a tanh feedback loop,
-//                              4x linear oversampling, LP/BP/HP at 12 or
-//                              24 dB with passband-gain compensation. Notch
+//   FilterTopology::Ladder   - ladder_huovilainen.hpp: the Huovilainen 4-pole
+//                              Moog ladder, WaveX's port of DaisySP's port of
+//                              the Teensy Audio Library filter (all MIT), at
+//                              DaisySP's 4x oversampling. Four one-pole
+//                              stages inside a tanh feedback loop, LP/BP/HP
+//                              at 12 or 24 dB with passband-gain
+//                              compensation. Notch
 //                              is not a ladder response; it is rendered as
 //                              input minus the 12 dB bandpass tap, which is
 //                              a true null at the cutoff (that tap sits at
@@ -48,10 +49,9 @@
 // states (about 100 B for the ladder); folding the inactive one into a union
 // is backlogged for when a third topology arrives.
 //
-// HAL-free: host tests compile this with DaisySP's ladder.cpp.
+// HAL-free: plain float arithmetic, host-testable.
 
-#include "Filters/ladder.h"
-
+#include "ladder_huovilainen.hpp"
 #include "svf_filter.hpp"
 #include <cstdint>
 
@@ -73,6 +73,8 @@ struct FilterConfig {
 };
 
 class VoiceFilter {
+    using Ladder = HuovilainenLadder<4>;
+
    public:
     void Init(uint32_t sample_rate) {
         sample_rate_ = sample_rate > 0 ? sample_rate : 48000;
@@ -156,20 +158,15 @@ class VoiceFilter {
         if (topology_ == FilterTopology::WaveXSvf) {
             mine_.Reset();
         } else {
-            // daisysp::LadderFilter has no state reset; Init() is the only
-            // way to zero its stages, and it also resets the tuning.
-            ladder_.Init(static_cast<float>(sample_rate_));
-            ladder_.SetFilterMode(LadderMode());
-            ApplyLadderDrive();
-            TuneLadder();
+            ladder_.Reset();
         }
     }
 
    private:
     // The ladder response for mode x slope. Notch runs the BP12 tap, which
     // Process() subtracts from the input.
-    daisysp::LadderFilter::FilterMode LadderMode() const {
-        using M = daisysp::LadderFilter::FilterMode;
+    Ladder::Mode LadderMode() const {
+        using M = Ladder::Mode;
         const bool db24 = config_.slope == SvfFilter::Slope::Db24;
         switch (mode_) {
             case SvfFilter::Mode::HighPass:
@@ -230,7 +227,7 @@ class VoiceFilter {
     SvfFilter::Mode mode_ = SvfFilter::Mode::LowPass;
 
     SvfFilter mine_;
-    daisysp::LadderFilter ladder_;
+    Ladder ladder_;
 };
 
 }  // namespace AudioEngine

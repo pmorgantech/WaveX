@@ -32,9 +32,10 @@ requires them; keep one task here rather than parallel lists in separate files.
    modules only as relevant code changes.
 2. Pin ESP-IDF to a 5.5 tag, then run the SD soak and panel checks. Treat an
    ESP-IDF 6 migration as a separate spike.
-3. Keep CMSIS-DSP aligned with libDaisy. The DaisySP ladder filter is
-   compiled as the Instrument-selectable second filter topology; add other
-   kernels only when used. Revisit only when upstream moves or such a kernel
+3. Keep CMSIS-DSP aligned with libDaisy. No DaisySP module is linked into
+   the firmware: its ladder is ported first-party (`ladder_huovilainen.hpp`,
+   MIT) and the vendored copy is built only as the host-test reference; add
+   other kernels only when used. Revisit only when upstream moves or such a kernel
    requires a newer version. Update libDaisy only for a
    Phase 3 need or a released upstream tag.
 4. UART remains the production transport. The opt-in macro experiment and

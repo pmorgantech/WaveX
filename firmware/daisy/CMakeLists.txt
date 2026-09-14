@@ -216,20 +216,12 @@ if(TARGET STM32H7xx_HAL_Driver AND HAL_CMSIS_INCLUDES)
 endif()
 # =========================================
 
-# The DaisySP modules in use, as an OBJECT library so the vendor code is
-# compiled without our first-party warning flags (SYSTEM below). Currently
-# just LadderFilter, the Instrument-selectable second per-voice filter in
-# audio/voice_filter.hpp.
-add_library(daisysp_modules OBJECT
-    libs/DaisySP/Source/Filters/ladder.cpp
-)
-target_include_directories(daisysp_modules SYSTEM PUBLIC ${CMAKE_CURRENT_LIST_DIR}/libs/DaisySP/Source)
-# DaisySP's own build has every module directory on the include path
-# (its sources say `#include "dsp.h"`, meaning Source/Utility/dsp.h).
-target_include_directories(daisysp_modules SYSTEM PRIVATE ${CMAKE_CURRENT_LIST_DIR}/libs/DaisySP/Source/Utility)
-target_compile_options(daisysp_modules PRIVATE -w)
-# DaisyProject.cmake links ${DAISYSP_LIB}; the module objects go on the
-# firmware target directly instead.
+# No DaisySP module is linked into the firmware (2026-09-14): the ladder it
+# used to supply is ported first-party in audio/ladder_huovilainen.hpp (MIT,
+# header retained) so its oversampling factor can be chosen and its state
+# reset. The vendored ladder.cpp is still built by the host test tree as the
+# reference the port is pinned against. DaisyProject.cmake links
+# ${DAISYSP_LIB}; nothing to link.
 set(DAISYSP_LIB "")
 
 # Shared protocol (headers under firmware/shared)
@@ -330,7 +322,6 @@ if(WAVEX_SRAM_DEBUG)
         endif()
     endforeach()
 endif()
-target_link_libraries(${FIRMWARE_NAME} PRIVATE daisysp_modules)
 
 # Shared logging state uses C++17 inline variables. Select the language level
 # explicitly instead of relying on the ARM toolchain's current gnu++14 default.

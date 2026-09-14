@@ -13,6 +13,14 @@ versioning and release process.
 
 ### Added
 
+- `ladder_huovilainen.hpp`: a first-party, MIT-attributed port of the
+  DaisySP/Teensy Huovilainen ladder templated on its oversampling factor,
+  with a real state `Reset()`. The 4x instantiation is pinned bit-for-bit
+  against the vendored `daisysp::LadderFilter` on the host and is what the
+  `Ladder` topology now runs; the 2x instantiation is the same model at
+  about half the cost, for the coming A/B. DaisySP is no longer linked into
+  the firmware.
+
 - The Instrument Filter tab gained SLOPE (12/24 dB) and DRIVE (0-100%)
   tiles beside MODEL, completing the Instrument-owned filter; both preview
   on held notes, follow Apply/Revert and save with the preset. Console:
