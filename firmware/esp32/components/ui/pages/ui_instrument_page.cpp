@@ -49,6 +49,10 @@ constexpr const char* filterTopologies[] = {"SVF", "Ladder"};
 constexpr int kFilterTopologyMax = WaveX::Protocol::INST_FILTER_TOPOLOGY_COUNT - 1;
 static_assert(sizeof(filterTopologies) / sizeof(filterTopologies[0]) == kFilterTopologyMax + 1,
               "one label per wire topology");
+constexpr uint8_t kParamFilterSlope = 0xFA;  // 12 or 24 dB, either topology
+constexpr uint8_t kParamFilterDrive = 0xF9;  // 0..100 %, either topology
+constexpr const char* filterSlopes[] = {"12 dB", "24 dB"};
+constexpr int kFilterSlopeMax = WaveX::Protocol::INST_FILTER_SLOPE_24;
 constexpr const char* envelopeFields[] = {"ATTACK", "DECAY", "SUSTAIN", "RELEASE"};
 constexpr const char* slotFields[] = {"SOURCE", "DEST", "DEPTH", "CURVE", "POLARITY"};
 constexpr uint8_t liveSources[] = {0, 1, 2, 15, 3, 16, 6, 17, 4, 7};
@@ -183,6 +187,8 @@ int UIInstrumentPage::paramsForStage(Stage s, Param* out, int max) const {
             add("RES", WaveX::Protocol::PARAM_FILTER_RESONANCE, sound_.Value(1), "%");
             add("TYPE", kParamFilterMode, sound_.Value(4), "");
             add("MODEL", kParamFilterTopology, sound_.Value(5), "");
+            add("SLOPE", kParamFilterSlope, sound_.Value(6), "");
+            add("DRIVE", kParamFilterDrive, sound_.Value(7), "%");
             break;
         case Stage::Mod:
             add("SLOT", kParamModulator, selected_slot_ + 1, "");
@@ -436,8 +442,8 @@ void UIInstrumentPage::buildStageRows(int stage) {
                                        "20 Hz - 20 kHz",
                                        filter_pts_,
                                        kFilterCurvePoints);
-        const int tw = (kContentW - 3 * kDialGap) / 4;
-        for (int i = 0; i < n && i < 4; ++i) {
+        const int tw = (kContentW - 5 * kDialGap) / 6;
+        for (int i = 0; i < n && i < 6; ++i) {
             tiles_[stage][i] = valueTileCreate(body,
                                                UI_MARGIN_X + i * (tw + kDialGap),
                                                kFilterTileY,
@@ -698,9 +704,13 @@ void UIInstrumentPage::refreshParams() {
         const bool amp = stage_ == static_cast<int>(Stage::Amp);
         const bool mode = p.wire_param == kParamFilterMode;
         const bool model = p.wire_param == kParamFilterTopology;
+        const bool slope = p.wire_param == kParamFilterSlope;
+        const bool drive = p.wire_param == kParamFilterDrive;
         const float frac =
             static_cast<float>(p.value) / (mode    ? 3.f
                                            : model ? static_cast<float>(kFilterTopologyMax)
+                                           : slope ? static_cast<float>(kFilterSlopeMax)
+                                           : drive ? 1000.f
                                            : amp   ? 1000.f
                                                    : 65535.f);
 
@@ -727,6 +737,11 @@ void UIInstrumentPage::refreshParams() {
                      sizeof(value),
                      "%s",
                      filterTopologies[std::clamp<int>(p.value, 0, kFilterTopologyMax)]);
+        else if (slope)
+            snprintf(value,
+                     sizeof(value),
+                     "%s",
+                     filterSlopes[std::clamp<int>(p.value, 0, kFilterSlopeMax)]);
         else
             snprintf(value, sizeof(value), "%d", static_cast<int>(frac * 100.0f + 0.5f));
         valueTileSetValue(tile, value);
@@ -757,6 +772,8 @@ void UIInstrumentPage::sendParam(const Param& p) {
         return;
     const uint8_t field = p.wire_param == kParamFilterMode                          ? 4
                           : p.wire_param == kParamFilterTopology                    ? 5
+                          : p.wire_param == kParamFilterSlope                       ? 6
+                          : p.wire_param == kParamFilterDrive                       ? 7
                           : p.wire_param == WaveX::Protocol::PARAM_FILTER_CUTOFF    ? 0
                           : p.wire_param == WaveX::Protocol::PARAM_FILTER_RESONANCE ? 1
                           : p.wire_param == WaveX::Protocol::PARAM_GAIN             ? 2
@@ -862,14 +879,19 @@ void UIInstrumentPage::stepParam(int steps) {
     const bool amp = stage_ == static_cast<int>(Stage::Amp);
     const bool mode = p.wire_param == kParamFilterMode;
     const bool model = p.wire_param == kParamFilterTopology;
+    const bool slope = p.wire_param == kParamFilterSlope;
+    const bool drive = p.wire_param == kParamFilterDrive;
+    const bool enumerated = mode || model || slope;
     const int high = mode    ? 3
                      : model ? kFilterTopologyMax
+                     : slope ? kFilterSlopeMax
+                     : drive ? 1000
                      : amp   ? (param_ == 0 ? 64000 : 1000)
                              : 65535;
     p.value = static_cast<int32_t>(std::clamp<int64_t>(
-        static_cast<int64_t>(p.value) + static_cast<int64_t>(steps) * (mode || model ? 1
-                                                                       : amp         ? 10
-                                                                                     : kParamStep),
+        static_cast<int64_t>(p.value) + static_cast<int64_t>(steps) * (enumerated     ? 1
+                                                                       : amp || drive ? 10
+                                                                                      : kParamStep),
         0,
         high));
     sendParam(p);
@@ -1616,6 +1638,8 @@ size_t UIInstrumentPage::consoleState(char* out, size_t cap, size_t len) {
     len = AppendKvInt(out, cap, len, "instres", sound_.Value(1));
     len = AppendKvInt(out, cap, len, "filtermode", sound_.Value(4));
     len = AppendKvInt(out, cap, len, "filtertopology", sound_.Value(5));
+    len = AppendKvInt(out, cap, len, "filterslope", sound_.Value(6));
+    len = AppendKvInt(out, cap, len, "filterdrive", sound_.Value(7));
     if (lfoStage()) {
         len = AppendKvInt(out, cap, len, "lfoready", alive_ && lfo_.Ready());
         len = AppendKvInt(out, cap, len, "lfovalid", lfo_.Snapshot().valid);
@@ -1678,6 +1702,8 @@ bool UIInstrumentPage::consoleCommand(const char* args, char* reply, size_t cap)
         const bool amp = stage_ == static_cast<int>(Stage::Amp);
         const int field = !amp && !strcmp(name, "TYPE")             ? 4
                           : !amp && !strcmp(name, "MODEL")          ? 5
+                          : !amp && !strcmp(name, "SLOPE")          ? 6
+                          : !amp && !strcmp(name, "DRIVE")          ? 7
                           : !strcmp(name, amp ? "LEVEL" : "CUTOFF") ? (amp ? 2 : 0)
                           : !strcmp(name, amp ? "PAN" : "RES")      ? (amp ? 3 : 1)
                                                                     : -1;

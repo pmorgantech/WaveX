@@ -1,4 +1,4 @@
-"""Filter topology (SVF/Ladder) previews on held notes and survives WXI."""
+"""Filter topology, slope and drive preview on held notes and survive WXI."""
 
 import struct
 import time
@@ -73,6 +73,14 @@ def test_filter_topology_preview_revert_apply_and_save(
     esp.page("TYPE", 2)
     esp.wait_state(filtermode=2, filtertopology=1, editpending=0)
     assert daisy.cmd("EDIT", 0)["topology"] == "1"
+    # Slope and drive ride the same edit; the bypassed note keeps sounding.
+    esp.page("SLOPE", 1)
+    esp.wait_state(filterslope=1, editpending=0)
+    esp.page("DRIVE", 500)
+    esp.wait_state(filterdrive=500, filterslope=1, editpending=0)
+    state = daisy.cmd("EDIT", 0)
+    assert state["slope"] == "1" and state["drive"] == "500", state
+    assert min(_peak(daisy)) > 100
     esp.key("SHIFT")
     esp.softkey("Apply")
     esp.wait_state(editdirty=0, editpending=0)
@@ -84,10 +92,18 @@ def test_filter_topology_preview_revert_apply_and_save(
     daisy.bind_track(0, 0)
     _instrument(daisy, 896004, 2, "0:/wavex/instruments/" + name + ".wxi")
     _wait_osc(daisy, 0, 0, busy=0, valid=1, zones=1)
-    assert daisy.cmd("EDIT", 0)["topology"] == "1"
-    assert daisy.cmd("EDIT", 0)["mode"] == "2"
+    state = daisy.cmd("EDIT", 0)
+    assert state["topology"] == "1" and state["mode"] == "2", state
+    assert state["slope"] == "1" and state["drive"] == "500", state
     esp.open_menu("Instrument")
     esp.wait_state(oscready=1, oscvalid=1)
     esp.page("TAB", "Filter")
-    esp.wait_state(editready=1, filtertopology=1, filtermode=2, editdirty=0)
+    esp.wait_state(
+        editready=1,
+        filtertopology=1,
+        filtermode=2,
+        filterslope=1,
+        filterdrive=500,
+        editdirty=0,
+    )
     esp.home()

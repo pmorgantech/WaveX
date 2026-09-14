@@ -13,6 +13,12 @@ versioning and release process.
 
 ### Added
 
+- The Instrument Filter tab gained SLOPE (12/24 dB) and DRIVE (0-100%)
+  tiles beside MODEL, completing the Instrument-owned filter; both preview
+  on held notes, follow Apply/Revert and save with the preset. Console:
+  `filterslope` / `filterdrive` in the page state, `SLOPE` / `DRIVE` on the
+  Filter tab. The topology HIL case now covers them through WXI reload.
+
 - The Daisy engine applies each Instrument's own filter slope and drive to
   its voices, on held notes and the next note alike, restored by Revert and
   loaded from WXI. The console `EDIT` readback adds `slope` and `drive`.
