@@ -124,3 +124,50 @@ TEST(InstrumentEditModel, FilterModeAndCutoffCoalesceAndExternalReplacementWins)
     s.filter_type = 4;
     EXPECT_FALSE(m.Accept(s));
 }
+
+TEST(InstrumentEditModel, FilterTopologyTravelsWithTheSettingsOpAndCoalesces) {
+    InstrumentEditModel m;
+    m.Reset(0);
+    m.Expect(10);
+    InstEditSyncMessage s;
+    s.request_id = 10;
+    s.revision = 7;
+    s.valid = 1;
+    ASSERT_TRUE(m.Accept(s));
+    EXPECT_EQ(m.Value(5), INST_FILTER_TOPOLOGY_SVF);
+    EXPECT_FALSE(m.Set(5, INST_FILTER_TOPOLOGY_COUNT));
+    ASSERT_TRUE(m.Set(5, INST_FILTER_TOPOLOGY_LADDER));
+    EXPECT_TRUE(m.Outgoing());
+    auto r = m.Request(11, m.Operation());
+    EXPECT_EQ(r.op, INST_EDIT_FILTER_SETTINGS);
+    EXPECT_EQ(r.filter_topology, INST_FILTER_TOPOLOGY_LADDER);
+    EXPECT_EQ(r.filter_type, INST_FILTER_LP);
+    ASSERT_TRUE(IsValidInstEditOp(r));
+    // Any other op leaves the byte zero, as the validator requires.
+    EXPECT_EQ(m.Request(11, INST_EDIT_AMP).filter_topology, 0);
+    m.Sent(11, r.op);
+    ASSERT_TRUE(m.Set(5, INST_FILTER_TOPOLOGY_SVF));  // changed again while in flight
+    s.request_id = s.completed_request_id = 11;
+    ++s.revision;
+    s.filter_topology = INST_FILTER_TOPOLOGY_LADDER;
+    ASSERT_TRUE(m.Accept(s));
+    EXPECT_TRUE(m.Outgoing());
+    r = m.Request(12, m.Operation());
+    EXPECT_EQ(r.filter_topology, INST_FILTER_TOPOLOGY_SVF);
+    m.Sent(12, r.op);
+    s.request_id = s.completed_request_id = 12;
+    ++s.revision;
+    s.filter_topology = r.filter_topology;
+    ASSERT_TRUE(m.Accept(s));
+    EXPECT_FALSE(m.Outgoing());
+    // A backend that reports a topology this build does not know is not
+    // adopted, exactly like an unknown mode.
+    m.Expect(13);
+    s.request_id = 13;
+    ++s.revision;
+    s.filter_topology = INST_FILTER_TOPOLOGY_COUNT;
+    EXPECT_FALSE(m.Accept(s));
+    s.filter_topology = INST_FILTER_TOPOLOGY_LADDER;
+    ASSERT_TRUE(m.Accept(s));
+    EXPECT_EQ(m.Value(5), INST_FILTER_TOPOLOGY_LADDER);
+}

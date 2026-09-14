@@ -116,6 +116,7 @@ InstrumentFile MakeFullDoc() {
     }
 
     d.filter.type = FilterType::SvfBp;
+    d.filter.topology = Wxi::FilterTopology::Ladder;
     d.filter.cutoff_hz = 3200.0f;
     d.filter.resonance = 0.6f;
     d.filter.keytrack = 0.5f;
@@ -202,6 +203,7 @@ void ExpectDocEq(const InstrumentFile& a, const InstrumentFile& b) {
     }
 
     EXPECT_EQ(a.filter.type, b.filter.type);
+    EXPECT_EQ(a.filter.topology, b.filter.topology);
     EXPECT_FLOAT_EQ(a.filter.cutoff_hz, b.filter.cutoff_hz);
     EXPECT_FLOAT_EQ(a.filter.resonance, b.filter.resonance);
     EXPECT_FLOAT_EQ(a.filter.keytrack, b.filter.keytrack);
@@ -433,6 +435,47 @@ TEST(WxiCodec, SkipsAnUnknownChunk) {
     InstrumentFile dst;
     ASSERT_EQ(ReadBytes(bytes, dst), Result::Ok);
     EXPECT_EQ(dst.tags, 0x11);
+}
+
+// FILT was 17 bytes before the topology byte was appended, and files of that
+// width are on cards. They must load as the SVF they were written against;
+// only something shorter than that first width is corruption.
+TEST(WxiCodec, LoadsAV1FilterChunkWithTheSvfTopology) {
+    std::vector<uint8_t> filt(Wxi::kFiltWireSizeV1, 0);
+    filt[0] = static_cast<uint8_t>(FilterType::SvfBp);
+    std::vector<uint8_t> bytes;
+    PutFileHeader(bytes, Wxi::kFileType, Wxi::kFileVersion);
+    PutChunk(bytes, Wxi::kChunkHead, MinimalHead());
+    PutChunk(bytes, Wxi::kChunkFilt, filt);
+
+    InstrumentFile dst;
+    dst.filter.topology = Wxi::FilterTopology::Ladder;  // must be overwritten, not kept
+    ASSERT_EQ(ReadBytes(bytes, dst), Result::Ok);
+    EXPECT_EQ(dst.filter.type, FilterType::SvfBp);
+    EXPECT_EQ(dst.filter.topology, Wxi::FilterTopology::Svf);
+
+    std::vector<uint8_t> current(Wxi::kFiltWireSize, 0);
+    current[17] = static_cast<uint8_t>(Wxi::FilterTopology::Ladder);
+    bytes.clear();
+    PutFileHeader(bytes, Wxi::kFileType, Wxi::kFileVersion);
+    PutChunk(bytes, Wxi::kChunkHead, MinimalHead());
+    PutChunk(bytes, Wxi::kChunkFilt, current);
+    ASSERT_EQ(ReadBytes(bytes, dst), Result::Ok);
+    EXPECT_EQ(dst.filter.topology, Wxi::FilterTopology::Ladder);
+
+    current[17] = 0x7F;  // a topology this build does not have
+    bytes.clear();
+    PutFileHeader(bytes, Wxi::kFileType, Wxi::kFileVersion);
+    PutChunk(bytes, Wxi::kChunkHead, MinimalHead());
+    PutChunk(bytes, Wxi::kChunkFilt, current);
+    ASSERT_EQ(ReadBytes(bytes, dst), Result::Ok);
+    EXPECT_EQ(dst.filter.topology, Wxi::FilterTopology::Svf);
+
+    bytes.clear();
+    PutFileHeader(bytes, Wxi::kFileType, Wxi::kFileVersion);
+    PutChunk(bytes, Wxi::kChunkHead, MinimalHead());
+    PutChunk(bytes, Wxi::kChunkFilt, std::vector<uint8_t>(Wxi::kFiltWireSizeV1 - 1, 0));
+    EXPECT_EQ(ReadBytes(bytes, dst), Result::BadChunk);
 }
 
 TEST(WxiCodec, IgnoresTrailingFieldsInAKnownChunk) {

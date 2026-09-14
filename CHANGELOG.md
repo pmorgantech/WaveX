@@ -13,6 +13,13 @@ versioning and release process.
 
 ### Added
 
+- Added the Instrument filter topology to the wire contract and the `.wxi`
+  file: `INST_EDIT_FILTER_SETTINGS` and its sync now carry which filter
+  implementation renders the Instrument's mode (`SVF` or `LADDER`) in the
+  formerly reserved bytes, and the FILT chunk grew by one byte with older
+  17-byte files still loading as `SVF`. Round-trip and compatibility tests
+  cover both; the frontend edit model delivers the byte alongside the mode.
+
 - Added a repeatable drum/chord hardware benchmark and a debug-only sample
   marker readback to verify unlooped playback lengths. Note-length gate
   semantics remain backlogged for discussion.

@@ -34,39 +34,46 @@ class InstrumentEditModel {
         pending_op_ = op;
         sent_ = desired_;
         sent_type_ = desired_type_;
+        sent_topology_ = desired_topology_;
     }
     bool Accept(const State& s) {
         if (valid_ && static_cast<int32_t>(s.revision - state_.revision) < 0)
             return false;
         if (!expected_ || s.request_id != expected_ || s.track != state_.track || !s.revision ||
-            s.valid > 1 || s.busy > 1 || s.dirty > 1 || s.reserved[0] || s.reserved[1] ||
+            s.valid > 1 || s.busy > 1 || s.dirty > 1 || s.reserved ||
             s.filter_type > WaveX::Protocol::INST_FILTER_NOTCH ||
+            s.filter_topology >= WaveX::Protocol::INST_FILTER_TOPOLOGY_COUNT ||
             !WaveX::Protocol::IsValidInstSound(s.sound))
             return false;
         State previous = state_;
         if (valid_ && std::memcmp(&previous, &s, sizeof(s)) == 0)
             return false;
         const bool completed = pending_ && s.completed_request_id == pending_;
-        const bool queued = pending_ && (sent_type_ != desired_type_ ||
-                                         std::memcmp(&sent_, &desired_, sizeof(Sound)) != 0);
+        const bool queued =
+            pending_ && (sent_type_ != desired_type_ || sent_topology_ != desired_topology_ ||
+                         std::memcmp(&sent_, &desired_, sizeof(Sound)) != 0);
         const bool replaced = valid_ && s.revision != state_.revision;
         state_ = s;
         valid_ = true;
         if (completed)
             pending_ = 0;
         if (completed && queued && !s.error && pending_op_ >= WaveX::Protocol::INST_EDIT_FILTER)
-            outgoing_ = desired_type_ != s.filter_type ||
+            outgoing_ = desired_type_ != s.filter_type || desired_topology_ != s.filter_topology ||
                         std::memcmp(&desired_, &s.sound, sizeof(Sound)) != 0;
         else if (completed || replaced || (!pending_ && !outgoing_)) {
             desired_ = s.sound;
             desired_type_ = s.filter_type;
+            desired_topology_ = s.filter_topology;
             outgoing_ = false;
         }
         return true;
     }
     // UI units: cutoff/resonance retain the existing 16-bit dial domain;
     // gain and pan use thousandths and keep the saved Instrument range.
+    // Fields: 0 cutoff, 1 resonance, 2 gain, 3 pan, 4 filter mode, 5 topology.
     int Value(uint8_t field) const {
+        if (field == 5)
+            return desired_topology_;
         if (field == 4)
             return desired_type_;
         if (field == 0)
@@ -80,8 +87,9 @@ class InstrumentEditModel {
         return static_cast<int>(desired_.pan * 1000 + .5f);
     }
     bool Set(uint8_t field, int value) {
-        if (!Editable() || field > 4 || value < 0 ||
-            value > (field == 4   ? 3
+        if (!Editable() || field > 5 || value < 0 ||
+            value > (field == 5   ? WaveX::Protocol::INST_FILTER_TOPOLOGY_COUNT - 1
+                     : field == 4 ? 3
                      : field < 2  ? 65535
                      : field == 2 ? 64000
                                   : 1000))
@@ -96,9 +104,12 @@ class InstrumentEditModel {
             desired_.pan = value / 1000.f;
         if (field == 4)
             desired_type_ = static_cast<uint8_t>(value);
-        operation_ = field < 2 || field == 4 ? WaveX::Protocol::INST_EDIT_FILTER_SETTINGS
+        if (field == 5)
+            desired_topology_ = static_cast<uint8_t>(value);
+        operation_ = field < 2 || field >= 4 ? WaveX::Protocol::INST_EDIT_FILTER_SETTINGS
                                              : WaveX::Protocol::INST_EDIT_AMP;
         outgoing_ = desired_type_ != state_.filter_type ||
+                    desired_topology_ != state_.filter_topology ||
                     std::memcmp(&desired_, &state_.sound, sizeof(Sound)) != 0;
         return true;
     }
@@ -109,7 +120,9 @@ class InstrumentEditModel {
         r.track = state_.track;
         r.op = op;
         r.sound = desired_;
-        r.filter_type = op == WaveX::Protocol::INST_EDIT_FILTER_SETTINGS ? desired_type_ : 0;
+        const bool settings = op == WaveX::Protocol::INST_EDIT_FILTER_SETTINGS;
+        r.filter_type = settings ? desired_type_ : 0;
+        r.filter_topology = settings ? desired_topology_ : 0;
         return r;
     }
 
@@ -118,6 +131,7 @@ class InstrumentEditModel {
     Sound desired_{}, sent_{};
     uint32_t expected_ = 0, pending_ = 0;
     uint8_t operation_ = 0, pending_op_ = 0, desired_type_ = 0, sent_type_ = 0;
+    uint8_t desired_topology_ = 0, sent_topology_ = 0;
     bool valid_ = false, outgoing_ = false;
 };
 }  // namespace wavex_ui

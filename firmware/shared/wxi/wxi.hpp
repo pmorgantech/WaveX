@@ -113,6 +113,8 @@ enum class OscType : uint8_t { Off = 0, Sample = 1, Wavetable = 2 };
 
 // track-and-patch-model.md §3.1: a 3-bit field, 8 values reserved, 4 defined.
 enum class FilterType : uint8_t { SvfLp = 0, SvfHp = 1, SvfBp = 2, SvfNotch = 3 };
+// Which implementation renders that type (Protocol::InstFilterTopology).
+enum class FilterTopology : uint8_t { Svf = 0, Ladder = 1 };
 
 // ---------------------------------------------------------------------------
 // File model
@@ -157,6 +159,7 @@ struct Oscillator {
 
 struct Filter {
     FilterType type = FilterType::SvfLp;
+    FilterTopology topology = FilterTopology::Svf;
     float cutoff_hz = 20000.0f;
     float resonance = 0.0f;
     float keytrack = 0.0f;
@@ -230,7 +233,11 @@ static constexpr uint32_t kZoneWireSize = 1 +           // index
                                           16 +          // start/end/loop x2
                                           4 +           // loop_mode..flags
                                           20;           // cutoff + ADSR
-static constexpr uint32_t kFiltWireSize = 17;
+// FILT grew from 17 to 18 bytes (topology) after files at 17 were already on
+// cards, so it is the one fixed chunk with a floor below its written width:
+// a reader accepts anything from kFiltWireSizeV1 up and defaults the rest.
+static constexpr uint32_t kFiltWireSizeV1 = 17;
+static constexpr uint32_t kFiltWireSize = 18;
 static constexpr uint32_t kAmpWireSize = 1;
 static constexpr uint32_t kEnvWireSize = 16;
 static constexpr uint32_t kLfoWireSize = 16;
@@ -482,8 +489,11 @@ inline void EncodeFilt(const Filter& f, uint8_t* b) {
     WriteF32LE(b + 5, f.resonance);
     WriteF32LE(b + 9, f.keytrack);
     WriteF32LE(b + 13, f.env2_amount);
+    b[17] = static_cast<uint8_t>(f.topology);
 }
 
+// `b` is kFiltWireSize bytes; a V1 file's missing tail arrives zeroed, and a
+// zero topology byte is the SVF every V1 file was written against.
 inline void DecodeFilt(const uint8_t* b, Filter& f) {
     f.type = (b[0] <= static_cast<uint8_t>(FilterType::SvfNotch)) ? static_cast<FilterType>(b[0])
                                                                   : FilterType::SvfLp;
@@ -491,6 +501,9 @@ inline void DecodeFilt(const uint8_t* b, Filter& f) {
     f.resonance = ReadF32LE(b + 5, 0.0f, 1.0f, 0.0f);
     f.keytrack = ReadF32LE(b + 9, -kAmountMax, kAmountMax, 0.0f);
     f.env2_amount = ReadF32LE(b + 13, -kAmountMax, kAmountMax, 0.0f);
+    f.topology = (b[17] <= static_cast<uint8_t>(FilterTopology::Ladder))
+                     ? static_cast<FilterTopology>(b[17])
+                     : FilterTopology::Svf;
 }
 
 inline void EncodeEnv(const Adsr& e, uint8_t* b) {
@@ -666,6 +679,22 @@ inline Result ReadFixedPayload(Wxcf::Reader& r, uint32_t payload_len, uint8_t* b
     return Result::Ok;
 }
 
+// A fixed chunk that has grown: anything shorter than `floor` is corruption,
+// anything between `floor` and `want` is an older writer and the unread tail
+// of `buf` is zeroed for the decoder's defaults, anything longer is skipped.
+inline Result ReadGrownPayload(
+    Wxcf::Reader& r, uint32_t payload_len, uint8_t* buf, uint32_t floor, uint32_t want) {
+    if (payload_len < floor)
+        return Result::BadChunk;
+    const uint32_t have = payload_len < want ? payload_len : want;
+    if (r.ReadPayload(buf, have) != Wxcf::Result::Ok)
+        return Result::IoError;
+    std::memset(buf + have, 0, want - have);
+    if (r.SkipPayload(payload_len - have) != Wxcf::Result::Ok)
+        return Result::IoError;
+    return Result::Ok;
+}
+
 inline Result ReadOscChunk(Wxcf::Reader& r, uint32_t payload_len, Oscillator& out) {
     uint8_t buf[kScratchBytes];
     // header_len and zone_stride come first precisely so they can be read
@@ -803,7 +832,8 @@ inline Result Read(Wxcf::IoContext io, InstrumentFile& out) {
                 res = detail::ReadOscChunk(r, ch.payload_len, out.osc[1]);
                 break;
             case kChunkFilt:
-                res = detail::ReadFixedPayload(r, ch.payload_len, buf, kFiltWireSize);
+                res = detail::ReadGrownPayload(
+                    r, ch.payload_len, buf, kFiltWireSizeV1, kFiltWireSize);
                 if (res == Result::Ok)
                     detail::DecodeFilt(buf, out.filter);
                 break;

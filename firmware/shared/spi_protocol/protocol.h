@@ -2063,7 +2063,7 @@ enum InstEditOp : uint8_t {
     INST_EDIT_REVERT = 2,
     INST_EDIT_FILTER = 3,
     INST_EDIT_AMP = 4,
-    INST_EDIT_FILTER_SETTINGS = 5  // cutoff/resonance plus filter_type
+    INST_EDIT_FILTER_SETTINGS = 5  // cutoff/resonance plus filter_type/topology
 };
 enum InstFilterType : uint8_t {
     INST_FILTER_LP = 0,
@@ -2071,13 +2071,20 @@ enum InstFilterType : uint8_t {
     INST_FILTER_BP = 2,
     INST_FILTER_NOTCH = 3
 };
+// Which per-voice filter implementation renders the mode above. Owned by the
+// Instrument exactly like the mode; zones never override it. SVF is the
+// first-party 12/24 dB TPT state-variable filter, LADDER the DaisySP 4-pole
+// Huovilainen ladder (Daisy: audio/voice_filter.hpp). New topologies append.
+enum InstFilterTopology : uint8_t { INST_FILTER_TOPOLOGY_SVF = 0, INST_FILTER_TOPOLOGY_LADDER = 1 };
+static constexpr uint8_t INST_FILTER_TOPOLOGY_COUNT = 2;
 struct InstSoundSettings {
     float cutoff_hz = 20000, resonance = 0, gain = 1, pan = .5f;
 } __attribute__((packed));
 struct InstEditOpMessage {
     uint32_t request_id = 0, revision = 0;
     uint8_t track = 0, op = INST_EDIT_GET;
-    uint8_t filter_type = INST_FILTER_LP, reserved = 0;
+    // Both carried only by INST_EDIT_FILTER_SETTINGS; zero for every other op.
+    uint8_t filter_type = INST_FILTER_LP, filter_topology = INST_FILTER_TOPOLOGY_SVF;
     InstSoundSettings sound;
     InstEditOpMessage() {}
     InstEditOpMessage(uint32_t id,
@@ -2090,7 +2097,8 @@ struct InstEditOpMessage {
 struct InstEditSyncMessage {
     uint32_t request_id = 0, completed_request_id = 0, revision = 0;
     uint8_t track = 0, valid = 0, busy = 0, error = 0;
-    uint8_t dirty = 0, filter_type = INST_FILTER_LP, reserved[2] = {};
+    uint8_t dirty = 0, filter_type = INST_FILTER_LP;
+    uint8_t filter_topology = INST_FILTER_TOPOLOGY_SVF, reserved = 0;
     InstSoundSettings sound;
     InstEditSyncMessage() {}
     InstEditSyncMessage(uint32_t id,
@@ -2119,9 +2127,10 @@ inline bool IsValidInstSound(const InstSoundSettings& s) {
            s.gain >= 0 && s.gain <= 64 && s.pan >= 0 && s.pan <= 1;
 }
 inline bool IsValidInstEditOp(const InstEditOpMessage& m) {
-    if (!m.request_id || m.track >= 16 || m.op > INST_EDIT_FILTER_SETTINGS || m.reserved ||
-        (m.op == INST_EDIT_FILTER_SETTINGS ? m.filter_type > INST_FILTER_NOTCH
-                                           : m.filter_type != 0))
+    if (!m.request_id || m.track >= 16 || m.op > INST_EDIT_FILTER_SETTINGS ||
+        (m.op == INST_EDIT_FILTER_SETTINGS
+             ? m.filter_type > INST_FILTER_NOTCH || m.filter_topology >= INST_FILTER_TOPOLOGY_COUNT
+             : m.filter_type != 0 || m.filter_topology != 0))
         return false;
     if (m.op == INST_EDIT_GET)
         return true;

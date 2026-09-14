@@ -310,10 +310,23 @@ zero. The packed payload sizes remain 28 bytes for the edit request and 36
 bytes for sync. Modes outside 0–3 and nonzero reserved fields are rejected;
 legacy filter edits preserve the current mode.
 
-Because this changes the meaning of a formerly reserved byte, the frontend
+The same op also carries the Instrument's filter **topology**, which
+implementation renders that mode: `SVF` (0, the first-party 12/24 dB
+state-variable filter) or `LADDER` (1, the DaisySP four-pole ladder). It
+occupies the edit request's byte at offset 11 and the sync message's byte at
+offset 18, both formerly reserved; the sync message's last byte at offset 19
+stays reserved and zero. Topologies at or above
+`INST_FILTER_TOPOLOGY_COUNT` are rejected, and like the mode the byte must
+be zero for every op other than 5, so a legacy filter edit preserves the
+current topology. Zones never override it. The `.wxi` FILT chunk grew from
+17 to 18 bytes to persist it; a 17-byte chunk from an earlier file loads as
+`SVF`.
+
+Because this changes the meaning of formerly reserved bytes, the frontend
 and Daisy images must be deployed as a pair. A peer that does not understand
-op 5 or the returned mode byte is not a compatible mixed-version endpoint;
-the reserved bytes remain zero for all other operations.
+op 5 or the returned mode and topology bytes is not a compatible
+mixed-version endpoint; the reserved byte remains zero for all other
+operations.
 
 ## Per-step notes (protocol 6)
 

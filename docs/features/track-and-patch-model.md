@@ -185,6 +185,7 @@ Why **submix, then one filter**, rather than a filter per oscillator: Stage B ha
 // Target shape. Everything below the first line is additive to today's Instrument.
 enum class OscType : uint8_t { Off = 0, Sample = 1, Wavetable = 2 /* reserved; 8 values total */ };
 enum class FilterType : uint8_t { SvfLp = 0, SvfHp, SvfBp, SvfNotch /* 4 defined; 8 values reserved */ };
+enum class FilterTopology : uint8_t { Svf = 0, Ladder /* which implementation renders the type */ };
 
 struct Oscillator {
     OscType  type;                    // Off / Sample / Wavetable

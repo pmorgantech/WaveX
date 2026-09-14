@@ -61,7 +61,7 @@ TEST(InstrumentEditProtocol, RejectsInvalidIdentityAndNonfiniteValues) {
     bad.request_id = 0;
     EXPECT_FALSE(IsValidInstEditOp(bad));
     bad = m;
-    bad.reserved = 1;
+    bad.filter_topology = INST_FILTER_TOPOLOGY_LADDER;  // only op 5 may carry one
     EXPECT_FALSE(IsValidInstEditOp(bad));
     bad = m;
     bad.op = INST_EDIT_AMP;
@@ -114,4 +114,60 @@ TEST(InstrumentEditProtocol, FilterModesUseReservedBytesWithoutChangingMessageSi
         in.op = INST_EDIT_FILTER;
         EXPECT_FALSE(IsValidInstEditOp(in));
     }
+}
+
+TEST(InstrumentEditProtocol, FilterTopologyUsesTheRemainingReservedBytes) {
+    std::array<uint8_t, 256> packet{};
+    for (uint8_t topology = 0; topology < INST_FILTER_TOPOLOGY_COUNT; ++topology) {
+        InstEditOpMessage in;
+        in.request_id = 48;
+        in.revision = 24;
+        in.track = 6;
+        in.op = INST_EDIT_FILTER_SETTINGS;
+        in.filter_type = INST_FILTER_BP;
+        in.filter_topology = topology;
+        in.sound.cutoff_hz = 900;
+        in.sound.resonance = .2f;
+        ASSERT_TRUE(IsValidInstEditOp(in));
+        uint8_t bytes[sizeof(in)];
+        std::memcpy(bytes, &in, sizeof(in));
+        EXPECT_EQ(bytes[10], INST_FILTER_BP);
+        EXPECT_EQ(bytes[11], topology);
+        ASSERT_GT(ProtocolHandler::CreatePacket(
+                      packet.data(), packet.size(), MSG_INST_EDIT_OP, &in, sizeof(in)),
+                  0);
+        InstEditOpMessage out;
+        ASSERT_TRUE(
+            ProtocolHandler::ParseMessage(packet.data(), MSG_INST_EDIT_OP, &out, sizeof(out)));
+        EXPECT_EQ(out.filter_topology, topology);
+        EXPECT_EQ(out.filter_type, INST_FILTER_BP);
+
+        InstEditSyncMessage state;
+        state.filter_type = INST_FILTER_HP;
+        state.filter_topology = topology;
+        uint8_t snapshot[sizeof(state)];
+        std::memcpy(snapshot, &state, sizeof(state));
+        EXPECT_EQ(snapshot[17], INST_FILTER_HP);
+        EXPECT_EQ(snapshot[18], topology);
+        EXPECT_EQ(snapshot[19], 0);
+        ASSERT_GT(ProtocolHandler::CreatePacket(
+                      packet.data(), packet.size(), MSG_INST_EDIT_SYNC, &state, sizeof(state)),
+                  0);
+        InstEditSyncMessage back;
+        ASSERT_TRUE(
+            ProtocolHandler::ParseMessage(packet.data(), MSG_INST_EDIT_SYNC, &back, sizeof(back)));
+        EXPECT_EQ(std::memcmp(&state, &back, sizeof(back)), 0);
+    }
+    static_assert(sizeof(InstEditOpMessage) == 28, "topology fits the former reserved byte");
+    static_assert(sizeof(InstEditSyncMessage) == 36, "topology fits a former reserved byte");
+    InstEditOpMessage bad;
+    bad.request_id = 1;
+    bad.revision = 1;
+    bad.op = INST_EDIT_FILTER_SETTINGS;
+    bad.filter_topology = INST_FILTER_TOPOLOGY_COUNT;
+    EXPECT_FALSE(IsValidInstEditOp(bad));
+    bad.filter_topology = INST_FILTER_TOPOLOGY_LADDER;
+    EXPECT_TRUE(IsValidInstEditOp(bad));
+    bad.op = INST_EDIT_AMP;
+    EXPECT_FALSE(IsValidInstEditOp(bad));
 }
