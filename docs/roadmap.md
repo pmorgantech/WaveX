@@ -348,7 +348,7 @@ The following code paths are open until observed on the target:
 | Panel pins (2026-09-05) | `pin_config.h` was rewritten against the ESP32-P4-WIFI6 header. The bench encoder is PCNT unit 1 (confirmed 2026-09-05); it counts negative on clockwise as wired, and three pages had compensated for it — direction is now one per-encoder flag in `hardware_config.h`, and those pages follow the shared contract. Clockwise increases values / moves forward on every page — verified 2026-09-05. Verify the TCA8418 matrix geometry (`WAVEX_TCA8418_ROWS/COLUMNS`, never confirmed against the wiring) and the `WAVEX_KEYCODE_*` map from the Diagnostics ▸ Panel tab (2.P.1): press each key, read its keycode, row/column and `PanelKey`; "unmapped" means the map or the geometry is wrong. Blocker first: the bench log shows `TCA8418 hardware initialization failed` on every boot recorded (2026-09-05), so the keypad has not been answering on I2C at all — check its wiring and address before reading anything off the Panel tab. Scope an endless pot's two wipers before calibrating (the decoder assumes triangle waves). |
 | Diagnostics | Open the page and verify live telemetry arrives. |
 | Digital voices | Trigger RAM-resident notes, sweep live parameters, and judge SVF response/resonance. |
-| Ladder filter budget (2026-09-13) | Eight voices on the ladder topology are unmeasured. The DaisySP ladder is 4x oversampled with a tanh per pass, several times the WaveX 24 dB stage per sample, and the callback baseline already sits just under the 70% gate. Set all eight Tracks' Instruments to the ladder on the Filter page, 24 dB and full drive from `WAVEX-FILTER`, run the standard perf capture and record it in `callback-performance-log.md`. If it fails the gate, the options are block processing, a 2x-oversampled variant or a per-topology voice cap - not removing the parameter. Also judge the ladder by ear: LP/HP/BP at both slopes, and Notch (input minus the 12 dB band-pass tap, an approximation). |
+| Ladder filter budget (2026-09-13) | Eight voices on the ladder topology are unmeasured. The DaisySP ladder is 4x oversampled with a tanh per pass, several times the WaveX 24 dB stage per sample, and the callback baseline already sits just under the 70% gate. Set all eight Tracks' Instruments to the ladder on the Filter page, 24 dB and full drive from `WAVEX-FILTER`, run the standard perf capture and record it in `callback-performance-log.md`. If it fails the gate, the options are block processing, a 2x-oversampled variant, the cheaper Stilson ladder model (see the filter backlog entry) or a per-topology voice cap - not removing the parameter. Also judge the ladder by ear: LP/HP/BP at both slopes, and Notch (input minus the 12 dB band-pass tap, an approximation). |
 | Sample retirement | Four-Track routing, rebinds and SFZ replacement during sequencing, and sample-edit refresh now have passing HIL coverage. Still exercise delayed/stopped callbacks and concurrent import requests. Confirm timeout preserves storage, then measure DWT headroom and run the zero-underrun soak. Host helper tests do not verify this interrupt integration. |
 | Callback budget | The repeated post-ITCM eight-voice workload remains STAY; all four DSP candidates were retested and only modulation exponent caching was adopted. See `callback-performance-log.md` for the current reference and rejected trials. Render/event/modulation attribution and selective placement A/B are implemented and measured. Remaining work includes the one-hour soak, fresh gates for expanded callback features and any further placement/compiler experiments. The historical DaisySP comparison remains default-disabled and needs its own updated capacity evidence. |
 | Sample Edit | Verify waveform fetch, handles, loop seam audibility, browser detail waveform, and stereo readability. HIL covers Track-preserving audition, edits isolated to the matching stream, streaming loop wraps and RAM-loop note lifetime. |
@@ -796,6 +796,25 @@ since 2026-09-13): the WaveX TPT SVF or the DaisySP Huovilainen ladder. Slope
   When it is added, fold the inactive topologies' state into a union inside
   `VoiceFilter`: every Voice carries every implementation's state today,
   about 160 B of DTCM each, fine for two and wasteful for four.
+- **Cheaper SVF retune.** `SvfFilter::UpdateCoeffs` computes one real
+  `tan()` per cutoff or resonance change, so eight voices under cutoff
+  modulation cost eight transcendentals per block inside the callback.
+  Mutable Instruments' stmlib (MIT, written for STM32) replaces it with the
+  `FREQUENCY_FAST` / `FREQUENCY_DIRTY` polynomial approximations of
+  tan(pi f) over the audio band; porting the polynomial is a few lines and
+  removes the last transcendental from the per-block filter path. Not
+  urgent: retunes only run when tuning changes, and the resonance/cutoff
+  captures were STAY with the real tan(). When to revisit: the next DWT
+  capture that shows filter retune in the callback profile, or any change
+  that moves retune toward per-sample rates.
+- **Stilson ladder as the ladder fallback.** If the DaisySP ladder fails
+  its eight-voice gate, the Stilson model (public domain / Unlicense in the
+  ddiakopoulos `MoogLadders` collection) is the cheap "character ladder":
+  no oversampling, a single soft saturation, cheap coefficient updates. Its
+  known limits are resonance/cutoff coupling, instability at extreme
+  resonance and no true self-oscillation, which is why it is the fallback
+  and not the first choice. It would slot in as a third `FilterTopology`
+  value or replace `Ladder` outright, decided by the measurement.
 
 #### Daisy image size: what is left after the 2026-09-04 slimming
 
