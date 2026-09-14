@@ -348,17 +348,16 @@ save/readback flow (11.70 seconds). The inspected 1280×720 capture is
 Shift ▸ Solo on the Sequencer page solos the selected row's Track: the page
 sends one `MIX_OP_SET_MUTE_MASK` with every other Track's bit set, so the
 engine never passes through a wrong intermediate mute set. The soloed row's
-Track button turns green and its steps take a green outline (the playhead's
-orange outline wins where the two cross); every other row dims to half, as a
-row-muted row does, and the label reads `/ SOLO` or `/ MUTE`. Shift ▸ Unsolo
-(or Solo on another row) sends the new mask; un-solo clears it. Solo is
-frontend-owned and sticky - leaving the page does not clear it - and the UI
-re-sends its mask whenever the backend link comes up, so a reboot of either
-board cannot leave the engine muted behind a page that shows nothing. It is
-separate from the row Mute, which stops a row triggering and is saved with
-the pattern. It replaced the Step off softkey, which only duplicated tapping
-the step. Console: `seqsolo` (display Track number, 0 = none) and
-`SOLO <0-16>`. Panel capture: `logs/sequencer-solo-20260914.png`.
+Track button turns green and its steps take a green outline; every other row
+dims to half, as a row-muted row does, and the label reads `/ SOLO` or
+`/ MUTE`. Shift ▸ Unsolo (or Solo on another row) sends the new mask; un-solo
+clears it. Solo is frontend-owned and sticky - leaving the page does not
+clear it - and the UI re-sends its mask whenever the backend link comes up,
+so a reboot of either board cannot leave the engine muted behind a page that
+shows nothing. It is separate from the row Mute, which stops a row triggering
+and is saved with the pattern. It replaced the Step off softkey, which only
+duplicated tapping the step. Console: `seqsolo` (display Track number, 0 =
+none) and `SOLO <0-16>`.
 
 ### Sequencer Locks
 

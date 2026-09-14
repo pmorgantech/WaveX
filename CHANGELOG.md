@@ -35,10 +35,14 @@ versioning and release process.
   Console `seqsolo` / `SOLO <n>`; a HIL case checks the mask through the
   output meters.
 - `scripts/bench_filter_listen.py`: the ladder listening test - Tracks 1-3
-  on one Minimoog saw trimmed to a 220 ms pluck, identical filter settings
-  except MODEL (Ladder, Ladder 2x, ZDF), the same bass line with cutoff
-  locks on alternate steps and a short filter envelope, playback left
-  running for Solo-driven A/B. `--svf` adds the SVF on Track 4.
+  on one looped Minimoog saw with identical filter settings except MODEL
+  (Ladder, Ladder 2x, ZDF), the same bass line with cutoff locks on
+  alternate steps and a short filter envelope, playback left running for
+  Solo-driven A/B. `--svf` adds the SVF on Track 4.
+
+- Historical same-day filter comparison: `Ladder 2x` and `ZDF` were added
+  for listening and measurement, then withdrawn after the A/B. Their wire
+  values are retired and are not reused; the supported ladder is now ZDF.
 
 - Independent GT911 touch pointers for up to five contacts, preserving finger
   identity when contacts reorder or lift. Separate parameters and pads can be
@@ -286,11 +290,11 @@ versioning and release process.
 
 ### Fixed
 
-- A single-source voice's region fade-out was applied after the filter
-  and envelope, so once a sample passed its end frame the whole voice was
+- A single-source voice's region fade-out was applied after the filter and
+  envelope, so once a sample passed its end frame the whole voice was
   multiplied by zero: no release tail, and no resonant ring through it. It
-  now shapes the source before the filter, as the dual-source path always
-  did, so a filter at high resonance rings through the amp release.
+  now shapes the source before the filter, as the dual-source path always did,
+  so a filter at high resonance rings through the amp release.
 
 - The SRAM debug image (`make daisy-debug-build`) links again. It had
   overflowed the SRAM region by about 10 KB at `-O0`; the vendor archives
@@ -374,17 +378,10 @@ versioning and release process.
 
 ### Changed
 
-- Resonance under the one RES control: the ladder's loop gain is now
-  5.4 x resonance (self-oscillation from about 74%, a clean saturation-
-  bounded tone at the top) and the SVF's cubic Q curve tops out at Q 16,
-  so both sit near +13 to +15 dB at 70%.
-
-- The SVF's resonance now follows a cubic (Q = 0.5 + 9.5 r^3, top Q 10:
-  +4.5 dB at half travel, +20 dB at full) instead of a straight line to
-  Q 20, and its 24 dB cascade puts the resonance in the first stage only
-  with a fixed Butterworth second stage, so a held tone at the cutoff
-  peaks at Q rather than Q squared. Both bring the SVF's feel and level
-  under the one RES control in line with the ladders.
+- Resonance under the one RES control: the ladder's loop gain is now 5.4 ×
+  resonance (self-oscillation from about 74%, a clean saturation-bounded tone
+  at the top) and the SVF's cubic Q curve tops out at Q 16, so both sit near
+  +13 to +15 dB at 70%.
 
 - The SVF's drive law: drive now raises and soft-saturates the input with
   the ladders' 1x..2.5x gain law, blended in continuously from zero, and no
@@ -392,8 +389,6 @@ versioning and release process.
   switched a limiter on inside the loop (a level jump, since resonance 0.7
   is Q 14 and any per-sample limit damps such a ring hard) and full drive
   crushed the resonance term, so more drive sounded duller and quieter.
-- Ladder resonance 100% now maps to a loop gain of 4.8 (self-oscillation
-  from about 85%); 4.0 was exactly marginal and the saturation damped it.
 
 - `WAVEX-FILTER` and `scripts/wavex_filter.py` now take only the bench slope
   and drive (`WAVEX-FILTER <12|24> [drive 0-100]`); the topology word is
@@ -703,12 +698,6 @@ versioning and release process.
   at INFO; they flooded the log ring on every load.
 
 ### Removed
-
-- The two Huovilainen ladder topologies (`Ladder` 4x and `Ladder 2x`), their
-  first-party port and the vendored DaisySP ladder reference: at working
-  settings all three ladders were the same filter to within -35 dB and the
-  4x model could not be an eight-voice default. The ZDF ladder is now
-  `Ladder` (wire value 1); values 2 and 3 are retired, not reused.
 
 - The `WAVEX-FILTER` console command, `scripts/wavex_filter.py` and the
   engine-wide slope/drive mailbox: slope and drive are Instrument
