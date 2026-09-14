@@ -42,8 +42,13 @@ uint32_t nextId() {
         ++id;
     return id;
 }
-constexpr uint8_t kParamFilterMode = 0xFC;  // page-local field, never a control-change id
+constexpr uint8_t kParamFilterMode = 0xFC;      // page-local field, never a control-change id
+constexpr uint8_t kParamFilterTopology = 0xFB;  // likewise: which filter renders the mode
 constexpr const char* filterModes[] = {"Low-pass", "High-pass", "Band-pass", "Notch"};
+constexpr const char* filterTopologies[] = {"SVF", "Ladder"};
+constexpr int kFilterTopologyMax = WaveX::Protocol::INST_FILTER_TOPOLOGY_COUNT - 1;
+static_assert(sizeof(filterTopologies) / sizeof(filterTopologies[0]) == kFilterTopologyMax + 1,
+              "one label per wire topology");
 constexpr const char* envelopeFields[] = {"ATTACK", "DECAY", "SUSTAIN", "RELEASE"};
 constexpr const char* slotFields[] = {"SOURCE", "DEST", "DEPTH", "CURVE", "POLARITY"};
 constexpr uint8_t liveSources[] = {0, 1, 2, 15, 3, 16, 6, 17, 4, 7};
@@ -177,6 +182,7 @@ int UIInstrumentPage::paramsForStage(Stage s, Param* out, int max) const {
             add("CUTOFF", WaveX::Protocol::PARAM_FILTER_CUTOFF, sound_.Value(0), "%");
             add("RES", WaveX::Protocol::PARAM_FILTER_RESONANCE, sound_.Value(1), "%");
             add("TYPE", kParamFilterMode, sound_.Value(4), "");
+            add("MODEL", kParamFilterTopology, sound_.Value(5), "");
             break;
         case Stage::Mod:
             add("SLOT", kParamModulator, selected_slot_ + 1, "");
@@ -430,8 +436,8 @@ void UIInstrumentPage::buildStageRows(int stage) {
                                        "20 Hz - 20 kHz",
                                        filter_pts_,
                                        kFilterCurvePoints);
-        const int tw = (kContentW - 2 * kDialGap) / 3;
-        for (int i = 0; i < n && i < 3; ++i) {
+        const int tw = (kContentW - 3 * kDialGap) / 4;
+        for (int i = 0; i < n && i < 4; ++i) {
             tiles_[stage][i] = valueTileCreate(body,
                                                UI_MARGIN_X + i * (tw + kDialGap),
                                                kFilterTileY,
@@ -691,7 +697,12 @@ void UIInstrumentPage::refreshParams() {
         const bool focused = (i == param_);
         const bool amp = stage_ == static_cast<int>(Stage::Amp);
         const bool mode = p.wire_param == kParamFilterMode;
-        const float frac = static_cast<float>(p.value) / (mode ? 3.f : amp ? 1000.f : 65535.f);
+        const bool model = p.wire_param == kParamFilterTopology;
+        const float frac =
+            static_cast<float>(p.value) / (mode    ? 3.f
+                                           : model ? static_cast<float>(kFilterTopologyMax)
+                                           : amp   ? 1000.f
+                                                   : 65535.f);
 
         ValueTile& tile = tiles_[stage_][i];
         if (!tile.card) {
@@ -711,6 +722,11 @@ void UIInstrumentPage::refreshParams() {
         char value[40];
         if (mode)
             snprintf(value, sizeof(value), "%s", filterModes[std::clamp<int>(p.value, 0, 3)]);
+        else if (model)
+            snprintf(value,
+                     sizeof(value),
+                     "%s",
+                     filterTopologies[std::clamp<int>(p.value, 0, kFilterTopologyMax)]);
         else
             snprintf(value, sizeof(value), "%d", static_cast<int>(frac * 100.0f + 0.5f));
         valueTileSetValue(tile, value);
@@ -740,6 +756,7 @@ void UIInstrumentPage::sendParam(const Param& p) {
     if (requested_action_)
         return;
     const uint8_t field = p.wire_param == kParamFilterMode                          ? 4
+                          : p.wire_param == kParamFilterTopology                    ? 5
                           : p.wire_param == WaveX::Protocol::PARAM_FILTER_CUTOFF    ? 0
                           : p.wire_param == WaveX::Protocol::PARAM_FILTER_RESONANCE ? 1
                           : p.wire_param == WaveX::Protocol::PARAM_GAIN             ? 2
@@ -844,11 +861,15 @@ void UIInstrumentPage::stepParam(int steps) {
 
     const bool amp = stage_ == static_cast<int>(Stage::Amp);
     const bool mode = p.wire_param == kParamFilterMode;
-    const int high = mode ? 3 : amp ? (param_ == 0 ? 64000 : 1000) : 65535;
+    const bool model = p.wire_param == kParamFilterTopology;
+    const int high = mode    ? 3
+                     : model ? kFilterTopologyMax
+                     : amp   ? (param_ == 0 ? 64000 : 1000)
+                             : 65535;
     p.value = static_cast<int32_t>(std::clamp<int64_t>(
-        static_cast<int64_t>(p.value) + static_cast<int64_t>(steps) * (mode  ? 1
-                                                                       : amp ? 10
-                                                                             : kParamStep),
+        static_cast<int64_t>(p.value) + static_cast<int64_t>(steps) * (mode || model ? 1
+                                                                       : amp         ? 10
+                                                                                     : kParamStep),
         0,
         high));
     sendParam(p);
@@ -1594,6 +1615,7 @@ size_t UIInstrumentPage::consoleState(char* out, size_t cap, size_t len) {
     len = AppendKvInt(out, cap, len, "instcutoff", sound_.Value(0));
     len = AppendKvInt(out, cap, len, "instres", sound_.Value(1));
     len = AppendKvInt(out, cap, len, "filtermode", sound_.Value(4));
+    len = AppendKvInt(out, cap, len, "filtertopology", sound_.Value(5));
     if (lfoStage()) {
         len = AppendKvInt(out, cap, len, "lfoready", alive_ && lfo_.Ready());
         len = AppendKvInt(out, cap, len, "lfovalid", lfo_.Snapshot().valid);
@@ -1655,6 +1677,7 @@ bool UIInstrumentPage::consoleCommand(const char* args, char* reply, size_t cap)
         sscanf(args, "%15s %d %c", name, &value, &extra) == 2) {
         const bool amp = stage_ == static_cast<int>(Stage::Amp);
         const int field = !amp && !strcmp(name, "TYPE")             ? 4
+                          : !amp && !strcmp(name, "MODEL")          ? 5
                           : !strcmp(name, amp ? "LEVEL" : "CUTOFF") ? (amp ? 2 : 0)
                           : !strcmp(name, amp ? "PAN" : "RES")      ? (amp ? 3 : 1)
                                                                     : -1;

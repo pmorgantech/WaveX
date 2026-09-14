@@ -13,6 +13,12 @@ versioning and release process.
 
 ### Added
 
+- The Instrument Filter tab gained a fourth control, MODEL, selecting the
+  filter that renders the mode: SVF or Ladder. It previews on held notes,
+  coalesces with cutoff/resonance/type into one edit, and follows
+  Apply/Revert and WXI save like the other sound controls. Debug console:
+  `filtertopology` in the page state and `MODEL <0|1>` on the Filter tab.
+
 - Instruments now select which filter renders their mode: the WaveX
   state-variable filter or the DaisySP four-pole Huovilainen ladder
   (`daisysp::LadderFilter`, MIT). The topology is Instrument-owned like the
