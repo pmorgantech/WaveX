@@ -789,17 +789,6 @@ Slope and drive joined it as Instrument parameters on 2026-09-14.
   When it is added, fold the inactive topologies' state into a union inside
   `VoiceFilter`: every Voice carries every implementation's state today,
   about 160 B of DTCM each, fine for two and wasteful for four.
-- **Cheaper SVF retune.** `SvfFilter::UpdateCoeffs` computes one real
-  `tan()` per cutoff or resonance change, so eight voices under cutoff
-  modulation cost eight transcendentals per block inside the callback.
-  Mutable Instruments' stmlib (MIT, written for STM32) replaces it with the
-  `FREQUENCY_FAST` / `FREQUENCY_DIRTY` polynomial approximations of
-  tan(pi f) over the audio band; porting the polynomial is a few lines and
-  removes the last transcendental from the per-block filter path. Not
-  urgent: retunes only run when tuning changes, and the resonance/cutoff
-  captures were STAY with the real tan(). When to revisit: the next DWT
-  capture that shows filter retune in the callback profile, or any change
-  that moves retune toward per-sample rates.
 - **Stilson ladder as the ladder fallback.** If the DaisySP ladder fails
   its eight-voice gate, the Stilson model (public domain / Unlicense in the
   ddiakopoulos `MoogLadders` collection) is the cheap "character ladder":

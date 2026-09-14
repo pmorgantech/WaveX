@@ -27,6 +27,11 @@
 // entire point of stage 1: sweeping the filter *while a note sounds*. That is
 // a correctness property here, not a preference.
 //
+// RETUNE COST (2026-09-14). g = tan(pi fc/fs) comes from fast_tan.hpp: the
+// stmlib polynomial below 12 kHz (within 0.25% of tan), the real tan above.
+// A retune under cutoff modulation on eight voices no longer costs eight
+// library tan() calls per block.
+//
 // The block-kernel route stays open as a measured optimization: if the DWT
 // numbers say the per-sample SVF is too expensive at 8 voices, the answer is
 // to restructure Render() around block processing, not to give up modulation.
@@ -86,6 +91,7 @@
 //
 // HAL-free: plain float arithmetic, host-testable.
 
+#include "fast_tan.hpp"
 #include <cmath>
 #include <cstdint>
 
@@ -239,8 +245,7 @@ class SvfFilter {
         }
         boundary_ = 0;
 
-        const float g =
-            std::tan(3.14159265358979323846f * cutoff_hz_ / static_cast<float>(sample_rate_));
+        const float g = TanPi(cutoff_hz_ / static_cast<float>(sample_rate_));
         const float q = kMinQ + resonance_ * (kMaxQ - kMinQ);
         const float k = 1.0f / q;
         damping_ = k;

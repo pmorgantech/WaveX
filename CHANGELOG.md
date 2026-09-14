@@ -13,6 +13,17 @@ versioning and release process.
 
 ### Added
 
+- `ladder_zdf.hpp`: a first-party zero-delay-feedback Moog ladder
+  (Zavalishin's TPT ladder with the Valimaki/Huovilainen response mixing),
+  exact tuning with no oversampling, one saturation per sample, resonance
+  to 1.25 for bounded self-oscillation; about the cost of the 24 dB SVF.
+  Host tests pin tuning, resonance peak, self-oscillation frequency, the six
+  responses, and agreement with the Huovilainen port's linear response.
+- `fast_tan.hpp`: tan(pi f) for filter retunes via the stmlib (MIT)
+  polynomial below 12 kHz, the real tan above, error-bound tested. The
+  WaveX SVF's retune uses it, so cutoff modulation no longer calls the
+  library tan per voice per block.
+
 - `ladder_huovilainen.hpp`: a first-party, MIT-attributed port of the
   DaisySP/Teensy Huovilainen ladder templated on its oversampling factor,
   with a real state `Reset()`. The 4x instantiation is pinned bit-for-bit
