@@ -451,6 +451,14 @@ void UIInstrumentPage::buildStageRows(int stage) {
                                                kFilterTileH,
                                                params[i].label,
                                                params[i].unit);
+            // TYPE, MODEL and SLOPE show words, and at a sixth of the row
+            // "Band-pass" and "Ladder 2x" overflow the numeric value font;
+            // use the same smaller mono value font the Osc/Mod/LFO rows do.
+            if (params[i].wire_param == kParamFilterMode ||
+                params[i].wire_param == kParamFilterTopology ||
+                params[i].wire_param == kParamFilterSlope) {
+                tiles_[stage][i].value_font = UI_FONT_MONO_VALUE;
+            }
             if (params[i].wire_param != kParamNone) {
                 const int idx = i;
                 valueTileSetOnAdjust(tiles_[stage][i], [this, idx](int steps) {
