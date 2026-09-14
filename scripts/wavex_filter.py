@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""Switch the Daisy's per-voice lowpass at runtime, for A/B listening.
+"""Set the Daisy's per-voice filter slope/drive at runtime, for listening.
 
 Sends "WAVEX-FILTER ..." to the Daisy's console port (debug builds only:
 WAVEX_DEBUG_HARNESS_ENABLED) and prints the board's confirmation line.
+Which filter topology renders a voice (SVF or ladder) is the Instrument's
+own setting on the Filter page, not a console switch; this shapes whichever
+one each Instrument selects.
 
   wavex_filter.py '?'                # report the current selection
-  wavex_filter.py wavex              # first-party TPT SVF, as configured
-  wavex_filter.py wavex 24           # ... 24 dB/oct
-  wavex_filter.py wavex 12 60        # ... 12 dB/oct, drive 60%
-  wavex_filter.py daisysp            # daisysp::Svf (drive as last set)
-  wavex_filter.py daisysp 12 30      # slope is ignored by daisysp::Svf
+  wavex_filter.py 24                 # 24 dB/oct, drive as last set
+  wavex_filter.py 12 60              # 12 dB/oct, drive 60%
 
 The selection is not a wire parameter and is not saved: it lives until the
 next reboot. Same transport rules as wavex_log.py.
@@ -29,13 +29,8 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     ap.add_argument(
-        "topology",
-        help="wavex | mine | daisysp | dsp | ?",
-    )
-    ap.add_argument(
         "slope",
-        nargs="?",
-        help="12 or 24 (WaveX SVF only)",
+        help="12 | 24 | ?",
     )
     ap.add_argument(
         "drive",
@@ -55,25 +50,19 @@ def main():
     )
     args = ap.parse_args()
 
-    if args.topology == "?":
+    if args.slope == "?":
         cmd = "WAVEX-FILTER ?"
     else:
-        if args.topology not in ("wavex", "mine", "daisysp", "dsp"):
-            ap.error(f"bad topology {args.topology!r}")
-        if args.slope and args.slope not in ("12", "24"):
+        if args.slope not in ("12", "24"):
             ap.error("slope must be 12 or 24")
         drive_ok = args.drive is None or (
             args.drive.isdigit() and int(args.drive) <= 100
         )
         if not drive_ok:
             ap.error("drive must be 0-100")
-        parts = ["WAVEX-FILTER", args.topology]
-        if args.slope:
-            parts.append(args.slope)
-            if args.drive:
-                parts.append(args.drive)
-        elif args.drive:
-            ap.error("give a slope (12|24) before a drive value")
+        parts = ["WAVEX-FILTER", args.slope]
+        if args.drive:
+            parts.append(args.drive)
         cmd = " ".join(parts)
 
     port = send("daisy", cmd)

@@ -966,6 +966,52 @@ TEST_F(SfzLoaderTest, ApplyBecomesRevertPointAndStaleActionsCannotConsumeNewEdit
     EXPECT_FLOAT_EQ(SfzLoader::ReadEditState(0).sound.gain, .5f);
     EXPECT_FLOAT_EQ(SfzLoader::ReadEditState(0).sound.pan, .25f);
 }
+TEST_F(SfzLoaderTest, FilterSettingsEditCarriesTheTopologyAndLegacyEditsKeepIt) {
+    ASSERT_TRUE(Load(0));
+    EXPECT_EQ(SfzLoader::ReadEditState(0).filter_topology, INST_FILTER_TOPOLOGY_SVF);
+    InstEditOpMessage op;
+    op.request_id = 923001;
+    op.revision = SfzLoader::ReadEditState(0).revision;
+    op.op = INST_EDIT_FILTER_SETTINGS;
+    op.filter_type = INST_FILTER_BP;
+    op.filter_topology = INST_FILTER_TOPOLOGY_LADDER;
+    op.sound = SfzLoader::ReadEditState(0).sound;
+    ASSERT_TRUE(SfzLoader::OnEditOp(op));
+    auto state = SfzLoader::ReadEditState(0);
+    EXPECT_EQ(state.filter_type, INST_FILTER_BP);
+    EXPECT_EQ(state.filter_topology, INST_FILTER_TOPOLOGY_LADDER);
+    EXPECT_TRUE(state.dirty);
+    EXPECT_EQ(SfzLoader::GetInstrumentFilter(0)->topology, INST_FILTER_TOPOLOGY_LADDER);
+    // A legacy cutoff edit carries zero bytes and must not put the SVF back.
+    op.request_id++;
+    op.revision = state.revision;
+    op.op = INST_EDIT_FILTER;
+    op.filter_type = 0;
+    op.filter_topology = 0;
+    op.sound.cutoff_hz = 1234;
+    ASSERT_TRUE(SfzLoader::OnEditOp(op));
+    state = SfzLoader::ReadEditState(0);
+    EXPECT_EQ(state.filter_topology, INST_FILTER_TOPOLOGY_LADDER);
+    EXPECT_EQ(state.filter_type, INST_FILTER_BP);
+    EXPECT_FLOAT_EQ(state.sound.cutoff_hz, 1234);
+    // Re-sending the same settings is not an edit.
+    op.request_id++;
+    op.revision = state.revision;
+    op.op = INST_EDIT_FILTER_SETTINGS;
+    op.filter_type = INST_FILTER_BP;
+    op.filter_topology = INST_FILTER_TOPOLOGY_LADDER;
+    EXPECT_FALSE(SfzLoader::OnEditOp(op));
+    op.request_id++;
+    op.revision = SfzLoader::ReadEditState(0).revision;  // a no-op still advances it
+    op.op = INST_EDIT_REVERT;
+    op.filter_type = 0;  // only op 5 may carry these
+    op.filter_topology = 0;
+    ASSERT_TRUE(SfzLoader::OnEditOp(op));
+    state = SfzLoader::ReadEditState(0);
+    EXPECT_EQ(state.filter_topology, INST_FILTER_TOPOLOGY_SVF);
+    EXPECT_EQ(state.filter_type, INST_FILTER_LP);
+    EXPECT_FALSE(state.dirty);
+}
 TEST_F(SfzLoaderTest, SuccessfulSaveAppliesAudibleSettingsButFailedSaveKeepsUndo) {
     ASSERT_TRUE(Load(0));
     InstEditOpMessage op;

@@ -113,14 +113,23 @@ enum class InstrumentOrigin : uint8_t {
 static constexpr uint8_t kInstrumentNameBytes = 24;
 
 // The Instrument's own filter settings - the defaults every zone follows
-// unless it sets ZONE_FLAG_OWN_FILTER_ENV. Filter type always belongs to the
-// Instrument; zones may override cutoff/envelope values, but never the mode.
+// unless it sets ZONE_FLAG_OWN_FILTER_ENV. Filter type and topology always
+// belong to the Instrument; zones may override cutoff/envelope values, but
+// never the mode or which filter renders it.
 struct InstrumentFilter {
-    uint8_t type = Protocol::INST_FILTER_LP;  // Instrument-owned LP/HP/BP/Notch
+    uint8_t type = Protocol::INST_FILTER_LP;                // Instrument-owned LP/HP/BP/Notch
+    uint8_t topology = Protocol::INST_FILTER_TOPOLOGY_SVF;  // SVF or ladder
     float cutoff_hz = 20000.0f;
     float resonance = 0.0f;
     float keytrack = 0.0f, env2_amount = 0.0f;
 };
+// The wire byte is stored as-is and cast straight to the engine enum.
+static_assert(static_cast<uint8_t>(FilterTopology::WaveXSvf) ==
+                      Protocol::INST_FILTER_TOPOLOGY_SVF &&
+                  static_cast<uint8_t>(FilterTopology::Ladder) ==
+                      Protocol::INST_FILTER_TOPOLOGY_LADDER &&
+                  kFilterTopologyCount == Protocol::INST_FILTER_TOPOLOGY_COUNT,
+              "FilterTopology mirrors Protocol::InstFilterTopology");
 
 // Saved ADSR parameters. Env 1 is the amp; the remaining envelopes and
 // per-voice LFO settings are preserved independently for stage 5 rendering.
@@ -306,6 +315,7 @@ inline VoiceTriggerParams PrepareZoneTrigger(const Instrument& ins,
     p.aux_env_release_s = ins.env[2].release_s;
 
     p.filter_mode = static_cast<SvfFilter::Mode>(ins.filter.type);
+    p.filter_topology = static_cast<FilterTopology>(ins.filter.topology);
     if (zone.flags & ZONE_FLAG_OWN_FILTER_ENV) {
         // The zone carries its own - an imported SFZ region, or a pad
         // the user has overridden. Note it has no resonance field of its
@@ -339,6 +349,7 @@ inline void PrepareInstrumentLive(const Instrument& ins, VoiceLiveParams& live) 
     auto& p = live.instrument;
     p.enabled = ins.origin != InstrumentOrigin::None;
     p.filter_mode = static_cast<SvfFilter::Mode>(ins.filter.type);
+    p.filter_topology = static_cast<FilterTopology>(ins.filter.topology);
     p.gain = ins.trim_gain;
     p.pan = ins.trim_pan;
     const float mix = std::clamp(ins.osc_mix, 0.f, 1.f);

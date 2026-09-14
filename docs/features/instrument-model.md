@@ -177,14 +177,23 @@ Instrument clears it. Amp edits address Instrument trim gain and pan rather
 than the master volume.
 
 The Instrument Filter editor selects one of four per-voice modes: low-pass,
-high-pass, band-pass or notch. Cutoff and resonance retain their existing
-float ranges. The WaveX state-variable path returns LP, HP, BP or Notch from
-the shared filter state; the existing 12/24 dB slope and drive settings remain
-global bench `FilterConfig` controls rather than Instrument-owned settings. At zero cutoff, high-pass and
-notch pass the input while low-pass and band-pass are silent. At or above
-Nyquist, low-pass and notch pass while high-pass and band-pass are silent.
-Changing mode preserves the first-stage state and clears only the second stage
-whose input changed; source cursors are unaffected.
+high-pass, band-pass or notch, and which topology renders it: the WaveX
+state-variable filter (`SVF`) or the DaisySP four-pole Huovilainen ladder
+(`Ladder`). Both are Instrument-owned, travel with the Instrument between
+Tracks and Banks, persist in WXI and are restored by Revert; zones never
+override either. Cutoff and resonance retain their existing float ranges. The
+WaveX state-variable path returns LP, HP, BP or Notch from the shared filter
+state; the ladder renders LP, HP and BP as its weighted stage sums at the
+bench slope and Notch as input minus its 12 dB band-pass tap, an
+approximation that nulls at the cutoff. The existing 12/24 dB slope and drive
+settings remain global bench `FilterConfig` controls rather than
+Instrument-owned settings, applied to whichever topology is active. At zero
+cutoff, high-pass and notch pass the input while low-pass and band-pass are
+silent. At or above Nyquist, low-pass and notch pass while high-pass and
+band-pass are silent, on both topologies. Changing mode preserves the
+first-stage state and clears only the second stage whose input changed;
+changing topology retunes the incoming filter and starts it from cleared
+state; source cursors are unaffected either way.
 
 The current handoff updates sounding voices for Instrument gain/pan, oscillator
 level/mix/coarse/fine/key tracking, Env 2/3 and LFO settings while preserving

@@ -32,8 +32,9 @@ requires them; keep one task here rather than parallel lists in separate files.
    modules only as relevant code changes.
 2. Pin ESP-IDF to a 5.5 tag, then run the SD soak and panel checks. Treat an
    ESP-IDF 6 migration as a separate spike.
-3. Keep CMSIS-DSP aligned with libDaisy. The DaisySP SVF implementation is
-   compiled for the filter comparison; add other kernels only when used. Revisit only when upstream moves or such a kernel
+3. Keep CMSIS-DSP aligned with libDaisy. The DaisySP ladder filter is
+   compiled as the Instrument-selectable second filter topology; add other
+   kernels only when used. Revisit only when upstream moves or such a kernel
    requires a newer version. Update libDaisy only for a
    Phase 3 need or a released upstream tag.
 4. UART remains the production transport. The opt-in macro experiment and
@@ -258,8 +259,8 @@ done. Open work, in the order decided 2026-09-05 (model doc §8: 7 → 4 → 5 �
 2. Voice architecture (stage 5): Osc 2 sample submix, its touch settings,
    both keyboard zone maps, Env 1–3, the eight-row matrix editor and the
    backend runtime/typed transport for two per-voice LFOs are built. The four
-   Instrument filter modes (LP, HP, BP and Notch) and their typed transport are
-   implemented; the resonance matrix destination and OSC1_PITCH/OSC2_PITCH
+   Instrument filter modes (LP, HP, BP and Notch), the per-Instrument filter
+   topology (SVF or ladder) and their typed transport are implemented; the resonance matrix destination and OSC1_PITCH/OSC2_PITCH
    destinations are the current implementation checkpoint, while other new
    mod destinations remain open. Instrument sound controls now preview
    automatically with typed filter/amp readback and a per-Track Apply/Revert
@@ -347,6 +348,7 @@ The following code paths are open until observed on the target:
 | Panel pins (2026-09-05) | `pin_config.h` was rewritten against the ESP32-P4-WIFI6 header. The bench encoder is PCNT unit 1 (confirmed 2026-09-05); it counts negative on clockwise as wired, and three pages had compensated for it — direction is now one per-encoder flag in `hardware_config.h`, and those pages follow the shared contract. Clockwise increases values / moves forward on every page — verified 2026-09-05. Verify the TCA8418 matrix geometry (`WAVEX_TCA8418_ROWS/COLUMNS`, never confirmed against the wiring) and the `WAVEX_KEYCODE_*` map from the Diagnostics ▸ Panel tab (2.P.1): press each key, read its keycode, row/column and `PanelKey`; "unmapped" means the map or the geometry is wrong. Blocker first: the bench log shows `TCA8418 hardware initialization failed` on every boot recorded (2026-09-05), so the keypad has not been answering on I2C at all — check its wiring and address before reading anything off the Panel tab. Scope an endless pot's two wipers before calibrating (the decoder assumes triangle waves). |
 | Diagnostics | Open the page and verify live telemetry arrives. |
 | Digital voices | Trigger RAM-resident notes, sweep live parameters, and judge SVF response/resonance. |
+| Ladder filter budget (2026-09-13) | Eight voices on the ladder topology are unmeasured. The DaisySP ladder is 4x oversampled with a tanh per pass, several times the WaveX 24 dB stage per sample, and the callback baseline already sits just under the 70% gate. Set all eight Tracks' Instruments to the ladder on the Filter page, 24 dB and full drive from `WAVEX-FILTER`, run the standard perf capture and record it in `callback-performance-log.md`. If it fails the gate, the options are block processing, a 2x-oversampled variant or a per-topology voice cap - not removing the parameter. Also judge the ladder by ear: LP/HP/BP at both slopes, and Notch (input minus the 12 dB band-pass tap, an approximation). |
 | Sample retirement | Four-Track routing, rebinds and SFZ replacement during sequencing, and sample-edit refresh now have passing HIL coverage. Still exercise delayed/stopped callbacks and concurrent import requests. Confirm timeout preserves storage, then measure DWT headroom and run the zero-underrun soak. Host helper tests do not verify this interrupt integration. |
 | Callback budget | The repeated post-ITCM eight-voice workload remains STAY; all four DSP candidates were retested and only modulation exponent caching was adopted. See `callback-performance-log.md` for the current reference and rejected trials. Render/event/modulation attribution and selective placement A/B are implemented and measured. Remaining work includes the one-hour soak, fresh gates for expanded callback features and any further placement/compiler experiments. The historical DaisySP comparison remains default-disabled and needs its own updated capacity evidence. |
 | Sample Edit | Verify waveform fetch, handles, loop seam audibility, browser detail waveform, and stereo readability. HIL covers Track-preserving audition, edits isolated to the matching stream, streaming loop wraps and RAM-loop note lifetime. |
@@ -770,27 +772,39 @@ needs, not the roughly 4 KB text saving at WARN alone.
 hot-path cost before deciding whether cheap counts should remain enabled in
 release and whether the flag follows the build profile.
 
-#### Filter: promote slope, drive and topology to real parameters
+#### Filter: promote slope and drive to Instrument parameters; a third topology
 
-`audio/voice_filter.hpp` (2026-09-04) makes the per-voice lowpass selectable
-- WaveX TPT SVF at 12 or 24 dB/oct with a soft-clip drive, or `daisysp::Svf`
-- but only through the debug console (`WAVEX-FILTER`), for A/B listening.
-Whatever the listening decides:
+`audio/voice_filter.hpp` renders each voice through the topology its
+Instrument selects (`InstrumentFilter::topology`, on the wire and in WXI
+since 2026-09-13): the WaveX TPT SVF or the DaisySP Huovilainen ladder. Slope
+(12/24 dB) and drive still reach both only through the debug console
+(`WAVEX-FILTER`), engine-wide.
 
 - **Slope and drive** belong on the Instrument (they are voice character,
   like resonance): a `PARAM_FILTER_SLOPE` / `PARAM_FILTER_DRIVE` pair in
-  `protocol.h` with round-trip tests, a Zone/Instrument field with SFZ
-  defaults, and Voice-page controls. Until then both default off, so the
-  filter is the linear 12 dB one it always was.
-- **Topology** is a build-time decision once the comparison is done: keep
-  one, delete the other and `VoiceFilter`, or keep both behind a per-Instrument
-  field if they turn out to be complementary voices rather than a better and a
-  worse one. The DaisySP side costs ~1.8 KB of flash and ~3x the per-sample
-  CPU of the 12 dB WaveX stage.
-- Whichever wins, DWT-measure `Render()` at eight voices with drive on and
-  24 dB before calling it done (roadmap "Callback budget").
+  `protocol.h` with round-trip tests, an Instrument field with WXI and SFZ
+  defaults, and Filter-page controls. Until then both default off, so the
+  filter is the linear 12 dB one it always was. Not urgent: nothing audible
+  is lost by the default and the bench switch covers listening tests. When
+  to revisit: when the Filter page gains a second row of controls.
+- **Third topology.** Candidates, all permissively licensed: a Korg35 or
+  diode ladder from Faust's `vaeffects.lib` (STK-4.3, MIT-style; Will
+  Pirkle's designs as transcribed by Eric Tarr) generated as checked-in C++,
+  or a first-party TPT implementation of the same designs. Blocked on the
+  ladder's eight-voice DWT number (Outstanding hardware verification): a
+  second unmeasured filter on top of an unmeasured one is not a decision.
+  When it is added, fold the inactive topologies' state into a union inside
+  `VoiceFilter`: every Voice carries every implementation's state today,
+  about 160 B of DTCM each, fine for two and wasteful for four.
 
 #### Daisy image size: what is left after the 2026-09-04 slimming
+
+**The SRAM debug image (`make debug-build`) does not link on develop as of
+2026-09-13:** at 385f93e it overflows the 480 KB SRAM region by about 10 KB
+(`.itcm_text` no longer fits), independently of the filter work that
+noticed it. Its hand-tuned spill lists in `wavex_sram_debug.lds` need
+another pass before the SWD/SRAM bench workflow can be used again; the QSPI
+and Stage B images are unaffected.
 
 The Daisy image went from 438 KB to 273 KB. Remaining, in order of size, each
 a decision rather than a mechanical fix:

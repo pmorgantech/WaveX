@@ -1,41 +1,58 @@
 #pragma once
 
-// The per-voice lowpass, selectable between two implementations so they can
-// be compared by ear on the same material without reflashing:
+// The per-voice filter, selectable per Instrument between two topologies
+// (Protocol::InstFilterTopology, carried by InstrumentFilter::topology):
 //
-//   FilterTopology::WaveXSvf   - svf_filter.hpp: the first-party TPT SVF,
-//                                with its 12/24 dB slope and soft-clip drive.
-//   FilterTopology::DaisySpSvf - daisysp::Svf: Andrew Simper's double-sampled
-//                                Chamberlin SVF as shipped in DaisySP, lowpass
-//                                output, with its own cubic drive term on the
-//                                bandpass state. About 3x the per-sample cost
-//                                of the 12 dB WaveX stage (two passes and
-//                                five outputs computed per sample).
+//   FilterTopology::WaveXSvf - svf_filter.hpp: the first-party TPT
+//                              state-variable filter. LP/HP/BP/Notch, 12 or
+//                              24 dB, cubic soft-clip drive.
+//   FilterTopology::Ladder   - daisysp::LadderFilter: the Huovilainen 4-pole
+//                              Moog ladder as ported to the Teensy Audio
+//                              Library and then to DaisySP (both MIT). Four
+//                              one-pole stages inside a tanh feedback loop,
+//                              4x linear oversampling, LP/BP/HP at 12 or
+//                              24 dB with passband-gain compensation. Notch
+//                              is not a ladder response; it is rendered as
+//                              input minus the 12 dB bandpass tap, which is
+//                              a true null at the cutoff (that tap sits at
+//                              unity gain and zero phase there) and only an
+//                              approximation of a notch skirt away from it.
 //
-// FilterConfig is the whole selectable surface. It is NOT on the inter-MCU
-// wire or in the UI: the debug console's "WAVEX-FILTER" command (main.cpp)
-// publishes it through the voice-live mailbox, which is enough for an A/B
-// listen. Promoting any of it to a real parameter is a protocol change and
-// is backlogged as such.
+// The topology is Instrument-owned voice character, exactly like the mode:
+// it arrives on VoiceTriggerParams for the next note and through
+// VoiceInstrumentParams for held ones. FilterConfig (slope, drive) is the
+// remaining bench-only surface behind the debug console's WAVEX-FILTER; it
+// applies to whichever topology is active. Promoting slope and drive to
+// Instrument parameters is roadmap backlog.
 //
 // Contracts kept identical across both:
-//   - cutoff at or above Nyquist is an EXACT bypass (the voice-manager tests
-//     rely on it; daisysp::Svf would otherwise clamp to sr/3 and still
-//     filter), so it is handled here before either implementation sees it;
+//   - cutoff at or above Nyquist is an EXACT bypass for LP/Notch and silence
+//     for HP/BP, and cutoff at or below zero the reverse (the voice-manager
+//     tests rely on it; the ladder would otherwise clamp to 0.425 sr and
+//     still filter), so it is handled here before either sees it;
 //   - resonance 0..1, cutoff in Hz, both callable at block rate from the
-//     callback: no allocation, only the tuning transcendentals each already
-//     pays (tan() here, sinf()+powf() in DaisySP) and only when tuning changes.
+//     callback: no allocation, only the tuning arithmetic each already pays
+//     (one tan() here, a short polynomial in the ladder) and only when the
+//     tuning changes.
 //
-// Only the ACTIVE implementation is retuned on SetCutoff/SetResonance; the
-// other is brought up to date when it is switched in, so an idle topology
-// costs nothing per block.
+// Only the ACTIVE topology is retuned on SetCutoff/SetResonance; the other is
+// brought up to date when it is switched in, so an idle topology costs
+// nothing per block. A switch clears the incoming filter's state so the
+// previous topology cannot leak through as a click.
+//
+// COST. The ladder is several times the WaveX 24 dB stage per sample (four
+// oversampled passes, each a rational tanh and four one-poles). Its
+// eight-voice DWT number is an open gate in docs/roadmap.md "Outstanding
+// hardware verification"; nothing about it is measured yet.
 //
 // Both filters live inside Voice, so they inherit VoiceManager's DTCM
-// placement (see svf_filter.hpp on why that matters).
+// placement (see svf_filter.hpp on why that matters). Each Voice holds both
+// states (about 100 B for the ladder); folding the inactive one into a union
+// is backlogged for when a third topology arrives.
 //
-// HAL-free: host tests compile this with DaisySP's svf.cpp.
+// HAL-free: host tests compile this with DaisySP's ladder.cpp.
 
-#include "Filters/svf.h"
+#include "Filters/ladder.h"
 
 #include "svf_filter.hpp"
 #include <cstdint>
@@ -43,16 +60,17 @@
 namespace WaveX {
 namespace AudioEngine {
 
-enum class FilterTopology : uint8_t { WaveXSvf = 0, DaisySpSvf = 1 };
+// Values match Protocol::InstFilterTopology (static_asserted in instrument.hpp).
+enum class FilterTopology : uint8_t { WaveXSvf = 0, Ladder = 1 };
+static constexpr uint8_t kFilterTopologyCount = 2;
 
+// Bench-only shaping (WAVEX-FILTER). Both default OFF so a filter nobody
+// configured is the linear 12 dB one the tests were written against.
 struct FilterConfig {
-    FilterTopology topology = FilterTopology::WaveXSvf;
-    SvfFilter::Slope slope = SvfFilter::Slope::Db12;  // WaveXSvf only
-    float drive = 0.0f;                               // 0..1; WaveXSvf soft clip, DaisySP SetDrive
+    SvfFilter::Slope slope = SvfFilter::Slope::Db12;
+    float drive = 0.0f;  // 0..1; WaveXSvf soft clip, ladder input drive
 
-    bool operator==(const FilterConfig& o) const {
-        return topology == o.topology && slope == o.slope && drive == o.drive;
-    }
+    bool operator==(const FilterConfig& o) const { return slope == o.slope && drive == o.drive; }
     bool operator!=(const FilterConfig& o) const { return !(*this == o); }
 };
 
@@ -61,8 +79,9 @@ class VoiceFilter {
     void Init(uint32_t sample_rate) {
         sample_rate_ = sample_rate > 0 ? sample_rate : 48000;
         mine_.Init(sample_rate_);
-        dsp_.Init(static_cast<float>(sample_rate_));
+        ladder_.Init(static_cast<float>(sample_rate_));
         config_ = FilterConfig{};
+        topology_ = FilterTopology::WaveXSvf;
         mode_ = SvfFilter::Mode::LowPass;
         mine_.SetMode(mode_);
         cutoff_hz_ = 20000.0f;
@@ -71,27 +90,34 @@ class VoiceFilter {
         Retune();
     }
 
+    // Instrument-owned. A change retunes the incoming implementation (it has
+    // not been tuned since it was last active, or ever) and starts it clean.
+    // A value this build does not know falls back to the SVF.
+    void SetTopology(FilterTopology topology) {
+        if (static_cast<uint8_t>(topology) >= kFilterTopologyCount)
+            topology = FilterTopology::WaveXSvf;
+        if (topology == topology_)
+            return;
+        topology_ = topology;
+        Retune();
+        Reset();
+    }
+    FilterTopology GetTopology() const { return topology_; }
+
     void SetConfig(const FilterConfig& config) {
         if (config == config_)
             return;
-        const bool switching = config.topology != config_.topology;
         config_ = config;
         ApplyConfig();
-        if (switching) {
-            // The incoming implementation has not been tuned since it was
-            // last active (or ever); bring it up to date and start it clean
-            // so the previous topology's state cannot leak through as a
-            // click.
-            Retune();
-            Reset();
-        }
     }
+    const FilterConfig& GetConfig() const { return config_; }
+
     void SetMode(SvfFilter::Mode mode) {
         mode_ = static_cast<uint8_t>(mode) <= 3 ? mode : SvfFilter::Mode::LowPass;
         mine_.SetMode(mode_);
+        ladder_.SetFilterMode(LadderMode());
     }
     SvfFilter::Mode GetMode() const { return mode_; }
-    const FilterConfig& GetConfig() const { return config_; }
 
     void SetCutoff(float hz) { SetParameters(hz, resonance_); }
 
@@ -113,75 +139,100 @@ class VoiceFilter {
     }
 
     float Process(float in) {
-        if (config_.topology == FilterTopology::WaveXSvf) {
+        if (topology_ == FilterTopology::WaveXSvf) {
             return mine_.Process(in);
         }
-        if (dsp_boundary_) {
+        if (ladder_boundary_) {
             const bool pass =
-                dsp_boundary_ == 2
+                ladder_boundary_ == 2
                     ? mode_ == SvfFilter::Mode::LowPass || mode_ == SvfFilter::Mode::Notch
                     : mode_ == SvfFilter::Mode::HighPass || mode_ == SvfFilter::Mode::Notch;
             return pass ? in : 0.f;
         }
-        dsp_.Process(in);
-        switch (mode_) {
-            case SvfFilter::Mode::HighPass:
-                return dsp_.High();
-            case SvfFilter::Mode::BandPass:
-                return dsp_.Band();
-            case SvfFilter::Mode::Notch:
-                return dsp_.Notch();
-            default:
-                return dsp_.Low();
-        }
+        const float out = ladder_.Process(in);
+        return mode_ == SvfFilter::Mode::Notch ? in - out : out;
     }
 
-    // Clears state, keeps tuning and config.
+    // Clears state, keeps tuning, mode and config.
     void Reset() {
-        if (config_.topology == FilterTopology::WaveXSvf) {
+        if (topology_ == FilterTopology::WaveXSvf) {
             mine_.Reset();
         } else {
-            // daisysp::Svf has no state reset; Init() is the only way to
-            // zero its integrators, and it also resets the tuning.
-            dsp_.Init(static_cast<float>(sample_rate_));
-            TuneDsp();
-            dsp_.SetDrive(config_.drive);
+            // daisysp::LadderFilter has no state reset; Init() is the only
+            // way to zero its stages, and it also resets the tuning.
+            ladder_.Init(static_cast<float>(sample_rate_));
+            ladder_.SetFilterMode(LadderMode());
+            ApplyLadderDrive();
+            TuneLadder();
         }
     }
 
    private:
+    // The ladder response for mode x slope. Notch runs the BP12 tap, which
+    // Process() subtracts from the input.
+    daisysp::LadderFilter::FilterMode LadderMode() const {
+        using M = daisysp::LadderFilter::FilterMode;
+        const bool db24 = config_.slope == SvfFilter::Slope::Db24;
+        switch (mode_) {
+            case SvfFilter::Mode::HighPass:
+                return db24 ? M::HP24 : M::HP12;
+            case SvfFilter::Mode::BandPass:
+                return db24 ? M::BP24 : M::BP12;
+            case SvfFilter::Mode::Notch:
+                return M::BP12;
+            default:
+                return db24 ? M::LP24 : M::LP12;
+        }
+    }
+
     void ApplyConfig() {
         mine_.SetSlope(config_.slope);
         mine_.SetDrive(config_.drive);
-        dsp_.SetDrive(config_.drive);
+        ladder_.SetFilterMode(LadderMode());
+        ApplyLadderDrive();
+    }
+
+    // The ladder's input always runs through its tanh; its "drive" is a gain
+    // of 0..4 into that stage, and below 1 an attenuation. Map 0..1 onto
+    // 1..4 so drive 0 leaves the level alone, and keep DaisySP's
+    // passband-gain compensation so resonance does not hollow the sound.
+    void ApplyLadderDrive() {
+        ladder_.SetPassbandGain(kLadderPassbandGain);
+        ladder_.SetInputDrive(1.0f + config_.drive * 3.0f);
     }
 
     void Retune() {
-        if (config_.topology == FilterTopology::WaveXSvf) {
+        if (topology_ == FilterTopology::WaveXSvf) {
             mine_.SetParameters(cutoff_hz_, resonance_);
         } else {
-            TuneDsp();
+            TuneLadder();
         }
     }
 
-    void TuneDsp() {
+    void TuneLadder() {
         const float nyquist = static_cast<float>(sample_rate_) * 0.5f;
-        dsp_boundary_ = cutoff_hz_ >= nyquist ? 2 : cutoff_hz_ <= 0 ? 1 : 0;
-        if (!dsp_boundary_) {
-            dsp_.SetFreq(cutoff_hz_);
-            dsp_.SetRes(resonance_);
+        ladder_boundary_ = cutoff_hz_ >= nyquist ? 2 : cutoff_hz_ <= 0 ? 1 : 0;
+        if (!ladder_boundary_) {
+            ladder_.SetFreq(cutoff_hz_);
+            // 0..1 onto the ladder's 0..1 (loop gain K = 0..4): the classic
+            // range, self-oscillating at the top. Its 1.8 ceiling is not
+            // exposed; the SVF's resonance 1 is not self-oscillating either.
+            ladder_.SetRes(resonance_);
         }
     }
+
+    static constexpr float kLadderPassbandGain = 0.5f;
 
     uint32_t sample_rate_ = 48000;
     FilterConfig config_;
+    FilterTopology topology_ = FilterTopology::WaveXSvf;
     float cutoff_hz_ = 20000.0f;
     float resonance_ = 0.0f;
-    uint8_t dsp_boundary_ = 2;
+    uint8_t ladder_boundary_ = 2;
     SvfFilter::Mode mode_ = SvfFilter::Mode::LowPass;
 
     SvfFilter mine_;
-    daisysp::Svf dsp_;
+    daisysp::LadderFilter ladder_;
 };
 
 }  // namespace AudioEngine

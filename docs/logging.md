@@ -57,21 +57,17 @@ scripts/wavex_log.py esp32 UI_NAVIGATOR DEBUG    # per-IDF-tag
 scripts/wavex_log.py esp32 '?'                   # current module levels
 ```
 
-The same console carries the per-voice filter A/B switch on the Daisy
-(debug builds; `audio/voice_filter.hpp`):
+The same console carries the per-voice filter slope/drive bench switch on the
+Daisy (debug builds; `audio/voice_filter.hpp`). Which filter topology renders
+a voice (SVF or ladder) is the Instrument's own Filter-page setting, not a
+console switch; this shapes whichever one each Instrument selects:
 
 ```
 WAVEX-FILTER ?                          # current selection
-WAVEX-FILTER <wavex|daisysp> [12|24] [drive 0-100]
-scripts/wavex_filter.py daisysp         # the DaisySP Svf
-scripts/wavex_filter.py wavex 24 60     # first-party SVF, 24 dB, 60% drive
+WAVEX-FILTER <12|24> [drive 0-100]
+scripts/wavex_filter.py 24              # 24 dB/oct, drive as last set
+scripts/wavex_filter.py 12 60           # 12 dB/oct, 60% drive
 ```
-
-Default firmware rejects the DaisySP selection because its measured callback
-cost exceeds the capacity gate. Dedicated comparison builds can opt in through
-the Daisy CMake option backed by
-[hardware_config.h](../firmware/shared/config/hardware_config.h); that override
-does not pass the capacity gate.
 
 It is a listening aid, not a parameter: nothing on the wire or in the UI
 sets it, and it does not survive a reboot.

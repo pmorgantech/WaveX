@@ -39,6 +39,7 @@ TEST(InstrumentMapTest, NameModeFilterAndEnvelopeReachTheDocument) {
     std::strncpy(ins.name, "Rhodes Mk I", sizeof(ins.name) - 1);
     ins.mode = InstrumentMode::Drum;
     ins.filter.type = 2;
+    ins.filter.topology = WaveX::Protocol::INST_FILTER_TOPOLOGY_LADDER;
     ins.filter.cutoff_hz = 1234.5f;
     ins.filter.resonance = 0.42f;
     ins.env[0].attack_s = 0.11f;
@@ -51,6 +52,7 @@ TEST(InstrumentMapTest, NameModeFilterAndEnvelopeReachTheDocument) {
     EXPECT_STREQ(doc.name, "Rhodes Mk I");
     EXPECT_EQ(doc.mode, Wxi::Mode::Drum);
     EXPECT_EQ(doc.filter.type, Wxi::FilterType::SvfBp);
+    EXPECT_EQ(doc.filter.topology, Wxi::FilterTopology::Ladder);
     EXPECT_FLOAT_EQ(doc.filter.cutoff_hz, 1234.5f);
     EXPECT_FLOAT_EQ(doc.filter.resonance, 0.42f);
     EXPECT_FLOAT_EQ(doc.env[0].attack_s, 0.11f);
@@ -322,6 +324,7 @@ TEST(InstrumentMapTest, EditingCutoffKeepsExpandedInstrumentSettingsOnSave) {
     saved.amp.velocity_curve = 2;
     saved.filter.keytrack = .5f;
     saved.filter.env2_amount = .3f;
+    saved.filter.topology = Wxi::FilterTopology::Ladder;
     saved.osc[0].type = Wxi::OscType::Sample;
     saved.osc[1].type = Wxi::OscType::Sample;
     saved.osc[1].level = .6f;
@@ -341,6 +344,7 @@ TEST(InstrumentMapTest, EditingCutoffKeepsExpandedInstrumentSettingsOnSave) {
     loaded.instrument.filter.cutoff_hz = 987;
     Wxi::InstrumentFile next;
     ASSERT_TRUE(IM::ToFile(loaded.instrument, Resolver(), next));
+    EXPECT_EQ(next.filter.topology, Wxi::FilterTopology::Ladder);
     EXPECT_FLOAT_EQ(next.filter.cutoff_hz, 987);
     EXPECT_EQ(next.tags, 7);
     EXPECT_EQ(next.transpose, -12);

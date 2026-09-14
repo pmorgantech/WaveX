@@ -218,13 +218,14 @@ endif()
 
 # The DaisySP modules in use, as an OBJECT library so the vendor code is
 # compiled without our first-party warning flags (SYSTEM below). Currently
-# just Svf, the second per-voice lowpass in audio/voice_filter.hpp.
+# just LadderFilter, the Instrument-selectable second per-voice filter in
+# audio/voice_filter.hpp.
 add_library(daisysp_modules OBJECT
-    libs/DaisySP/Source/Filters/svf.cpp
+    libs/DaisySP/Source/Filters/ladder.cpp
 )
 target_include_directories(daisysp_modules SYSTEM PUBLIC ${CMAKE_CURRENT_LIST_DIR}/libs/DaisySP/Source)
 # DaisySP's own build has every module directory on the include path
-# (svf.cpp says `#include "dsp.h"`, meaning Source/Utility/dsp.h).
+# (its sources say `#include "dsp.h"`, meaning Source/Utility/dsp.h).
 target_include_directories(daisysp_modules SYSTEM PRIVATE ${CMAKE_CURRENT_LIST_DIR}/libs/DaisySP/Source/Utility)
 target_compile_options(daisysp_modules PRIVATE -w)
 # DaisyProject.cmake links ${DAISYSP_LIB}; the module objects go on the
@@ -246,12 +247,6 @@ add_compile_definitions(
     # TU that includes the device header warns "__FPU_PRESENT" redefined.
     __FPU_PRESENT=1U
 )
-
-# Explicit opt-in for repeating the blocked experimental filter benchmark.
-option(WAVEX_DAISYSP_FILTER_ENABLED "Allow experimental DaisySP filter selection" OFF)
-if(WAVEX_DAISYSP_FILTER_ENABLED)
-    add_compile_definitions(WAVEX_DAISYSP_FILTER_ENABLED=1)
-endif()
 
 # Profiling option
 option(WAVEX_PROFILING_ENABLED "Enable the STM32H7 DWT/ITM profiling helpers" OFF)

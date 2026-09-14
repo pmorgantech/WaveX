@@ -90,6 +90,7 @@ inline void FromFile(const Wxi::InstrumentFile& doc, Sfz::MappedInstrument& out)
     out.instrument.name[kInstrumentNameBytes - 1] = '\0';
 
     out.instrument.filter.type = static_cast<uint8_t>(doc.filter.type);
+    out.instrument.filter.topology = static_cast<uint8_t>(doc.filter.topology);
     out.instrument.filter.cutoff_hz = doc.filter.cutoff_hz;
     out.instrument.filter.resonance = doc.filter.resonance;
     out.instrument.filter.keytrack = doc.filter.keytrack;
@@ -200,6 +201,10 @@ inline bool ToFile(const Instrument& instrument,
     doc.mode = instrument.mode == InstrumentMode::Drum ? Wxi::Mode::Drum : Wxi::Mode::Keyboard;
 
     doc.filter.type = static_cast<Wxi::FilterType>(instrument.filter.type);
+    static_assert(
+        static_cast<uint8_t>(Wxi::FilterTopology::Ladder) == Protocol::INST_FILTER_TOPOLOGY_LADDER,
+        "the file byte is the wire byte");
+    doc.filter.topology = static_cast<Wxi::FilterTopology>(instrument.filter.topology);
     doc.filter.cutoff_hz = instrument.filter.cutoff_hz;
     doc.filter.resonance = instrument.filter.resonance;
 

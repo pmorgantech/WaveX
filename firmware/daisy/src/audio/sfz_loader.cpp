@@ -957,6 +957,7 @@ InstEditSyncMessage ReadEditState(uint8_t track) {
     out.error = s_action_error[track];
     out.dirty = s_sound_undo[track].Active();
     out.filter_type = ins.filter.type;
+    out.filter_topology = ins.filter.topology;
     out.sound = {ins.filter.cutoff_hz, ins.filter.resonance, ins.trim_gain, ins.trim_pan};
     return out;
 }
@@ -988,13 +989,16 @@ bool OnEditOp(const InstEditOpMessage& request) {
         if (changed)
             PublishModSlots(request.track);
     } else if (request.op == INST_EDIT_FILTER || request.op == INST_EDIT_FILTER_SETTINGS) {
-        const uint8_t mode =
-            request.op == INST_EDIT_FILTER_SETTINGS ? request.filter_type : ins.filter.type;
-        changed = ins.filter.type != mode || ins.filter.cutoff_hz != request.sound.cutoff_hz ||
+        const bool settings = request.op == INST_EDIT_FILTER_SETTINGS;
+        const uint8_t mode = settings ? request.filter_type : ins.filter.type;
+        const uint8_t topology = settings ? request.filter_topology : ins.filter.topology;
+        changed = ins.filter.type != mode || ins.filter.topology != topology ||
+                  ins.filter.cutoff_hz != request.sound.cutoff_hz ||
                   ins.filter.resonance != request.sound.resonance;
         if (changed) {
             s_sound_undo[request.track].Capture(ins);
             ins.filter.type = mode;
+            ins.filter.topology = topology;
             ins.filter.cutoff_hz = request.sound.cutoff_hz;
             ins.filter.resonance = request.sound.resonance;
         }
@@ -1771,9 +1775,9 @@ bool SetInstrumentFilter(uint8_t track, const InstrumentFilter& filter) {
         return false;
     auto& ins = s_bank->At(track).instrument;
     const auto& old = ins.filter;
-    if (old.type != filter.type || old.cutoff_hz != filter.cutoff_hz ||
-        old.resonance != filter.resonance || old.keytrack != filter.keytrack ||
-        old.env2_amount != filter.env2_amount) {
+    if (old.type != filter.type || old.topology != filter.topology ||
+        old.cutoff_hz != filter.cutoff_hz || old.resonance != filter.resonance ||
+        old.keytrack != filter.keytrack || old.env2_amount != filter.env2_amount) {
         if (ins.origin != InstrumentOrigin::None)
             s_sound_undo[track].Capture(ins);
         BumpKeyRevision(track);

@@ -1,9 +1,10 @@
 // Unit tests for VoiceFilter (src/audio/voice_filter.hpp): the per-voice
-// lowpass that can be switched between the first-party TPT SVF and
-// daisysp::Svf. What is pinned is the contract the voice path relies on
-// being the same whichever implementation is selected - exact bypass at or
-// above Nyquist, a real lowpass below it, callback-safe tuning while
-// running - plus that switching between them mid-note is clean.
+// filter that each Instrument switches between the first-party TPT SVF and
+// daisysp::LadderFilter. What is pinned is the contract the voice path
+// relies on being the same whichever topology is selected - exact bypass at
+// or above Nyquist, a real filter below it, callback-safe tuning while
+// running, the four modes - plus that switching between them mid-note is
+// clean and that the bench slope/drive reach both.
 
 #include "audio/voice_filter.hpp"
 
@@ -20,34 +21,37 @@ namespace {
 
 constexpr uint32_t kSr = 48000;
 constexpr float kPi = 3.14159265358979323846f;
+// The ladder's input stage is a tanh even at drive 0, so its response is
+// measured well inside the linear region and reported relative to the
+// input amplitude; the SVF is linear and gets the same treatment.
+constexpr float kProbe = 0.2f;
 
-float SteadyStatePeak(VoiceFilter& f, float hz, size_t cycles = 200) {
+// Steady-state peak of a sine through the filter, relative to its amplitude.
+float SteadyStateGain(VoiceFilter& f, float hz, float amplitude = kProbe, size_t cycles = 200) {
     const size_t n = static_cast<size_t>(static_cast<float>(kSr) / hz * static_cast<float>(cycles));
     const size_t settle = n / 2;
     float peak = 0.0f;
     for (size_t i = 0; i < n; ++i) {
         const float in =
-            std::sin(2.0f * kPi * hz * static_cast<float>(i) / static_cast<float>(kSr));
+            amplitude * std::sin(2.0f * kPi * hz * static_cast<float>(i) / static_cast<float>(kSr));
         const float out = f.Process(in);
         if (i >= settle)
             peak = std::max(peak, std::fabs(out));
     }
-    return peak;
+    return peak / amplitude;
 }
 
 VoiceFilter MakeFilter(FilterTopology topology, float cutoff_hz, float res = 0.0f) {
     VoiceFilter f;
     f.Init(kSr);
-    FilterConfig cfg;
-    cfg.topology = topology;
-    f.SetConfig(cfg);
+    f.SetTopology(topology);
     f.SetResonance(res);
     f.SetCutoff(cutoff_hz);
     f.Reset();
     return f;
 }
 
-const FilterTopology kBoth[] = {FilterTopology::WaveXSvf, FilterTopology::DaisySpSvf};
+const FilterTopology kBoth[] = {FilterTopology::WaveXSvf, FilterTopology::Ladder};
 
 }  // namespace
 
@@ -57,7 +61,7 @@ TEST(VoiceFilterTest, DefaultIsTheWaveXSvfAndPassesThroughItUnchanged) {
     // were written against SvfFilter directly.
     VoiceFilter wrapped;
     wrapped.Init(kSr);
-    EXPECT_EQ(wrapped.GetConfig().topology, FilterTopology::WaveXSvf);
+    EXPECT_EQ(wrapped.GetTopology(), FilterTopology::WaveXSvf);
     EXPECT_EQ(wrapped.GetConfig().slope, SvfFilter::Slope::Db12);
     EXPECT_FLOAT_EQ(wrapped.GetConfig().drive, 0.0f);
 
@@ -75,6 +79,13 @@ TEST(VoiceFilterTest, DefaultIsTheWaveXSvfAndPassesThroughItUnchanged) {
     }
 }
 
+TEST(VoiceFilterTest, UnknownTopologyFallsBackToTheSvf) {
+    VoiceFilter f = MakeFilter(FilterTopology::Ladder, 1000.0f);
+    ASSERT_EQ(f.GetTopology(), FilterTopology::Ladder);
+    f.SetTopology(static_cast<FilterTopology>(7));
+    EXPECT_EQ(f.GetTopology(), FilterTopology::WaveXSvf);
+}
+
 TEST(VoiceFilterTest, BothTopologiesBypassExactlyAtOrAboveNyquist) {
     for (FilterTopology t: kBoth) {
         VoiceFilter f = MakeFilter(t, 1.0e6f, 1.0f);
@@ -89,8 +100,8 @@ TEST(VoiceFilterTest, BothTopologiesBypassExactlyAtOrAboveNyquist) {
 TEST(VoiceFilterTest, BothTopologiesAreLowpassesBelowNyquist) {
     for (FilterTopology t: kBoth) {
         VoiceFilter f = MakeFilter(t, 1000.0f);
-        EXPECT_NEAR(SteadyStatePeak(f, 50.0f), 1.0f, 0.05f) << static_cast<int>(t);
-        const float db = 20.0f * std::log10(SteadyStatePeak(f, 8000.0f));
+        EXPECT_NEAR(SteadyStateGain(f, 50.0f), 1.0f, 0.05f) << static_cast<int>(t);
+        const float db = 20.0f * std::log10(SteadyStateGain(f, 8000.0f));
         EXPECT_LT(db, -20.0f) << "topology " << static_cast<int>(t) << " three octaves up";
     }
 }
@@ -99,9 +110,20 @@ TEST(VoiceFilterTest, BothTopologiesResonate) {
     for (FilterTopology t: kBoth) {
         VoiceFilter flat = MakeFilter(t, 1000.0f, 0.0f);
         VoiceFilter peaky = MakeFilter(t, 1000.0f, 0.8f);
-        EXPECT_GT(SteadyStatePeak(peaky, 1000.0f), 1.5f * SteadyStatePeak(flat, 1000.0f))
+        EXPECT_GT(SteadyStateGain(peaky, 1000.0f), 1.5f * SteadyStateGain(flat, 1000.0f))
             << "topology " << static_cast<int>(t);
     }
+}
+
+TEST(VoiceFilterTest, TheLadderIsNotTheSvfInDisguise) {
+    VoiceFilter svf = MakeFilter(FilterTopology::WaveXSvf, 1000.0f, 0.5f);
+    VoiceFilter ladder = MakeFilter(FilterTopology::Ladder, 1000.0f, 0.5f);
+    float difference = 0.0f;
+    for (int i = 0; i < 4800; ++i) {
+        const float in = kProbe * std::sin(2.0f * kPi * 700.0f * static_cast<float>(i) / 48000.0f);
+        difference = std::max(difference, std::fabs(svf.Process(in) - ladder.Process(in)));
+    }
+    EXPECT_GT(difference, 0.01f);
 }
 
 TEST(VoiceFilterTest, SwitchingTopologyMidNoteStaysFiniteAndRetunes) {
@@ -109,11 +131,9 @@ TEST(VoiceFilterTest, SwitchingTopologyMidNoteStaysFiniteAndRetunes) {
     float peak_after = 0.0f;
     for (int i = 0; i < 96000; ++i) {
         if (i == 48000) {
-            FilterConfig cfg = f.GetConfig();
-            cfg.topology = FilterTopology::DaisySpSvf;
-            f.SetConfig(cfg);  // the DaisySP side had never been tuned until now
+            f.SetTopology(FilterTopology::Ladder);  // the ladder had never been tuned until now
         }
-        const float in = std::sin(2.0f * kPi * 5000.0f * static_cast<float>(i) / 48000.0f);
+        const float in = kProbe * std::sin(2.0f * kPi * 5000.0f * static_cast<float>(i) / 48000.0f);
         const float out = f.Process(in);
         ASSERT_TRUE(std::isfinite(out)) << "sample " << i;
         if (i > 72000)
@@ -121,7 +141,21 @@ TEST(VoiceFilterTest, SwitchingTopologyMidNoteStaysFiniteAndRetunes) {
     }
     // 5 kHz through a 600 Hz lowpass: the switched-in filter must actually be
     // filtering at the cutoff it inherited, not at DaisySP's Init() default.
-    EXPECT_LT(peak_after, 0.1f);
+    EXPECT_LT(peak_after / kProbe, 0.1f);
+}
+
+TEST(VoiceFilterTest, SwitchingTopologyStartsTheIncomingFilterClean) {
+    // Charge the SVF to DC, switch to the ladder and back: neither switch may
+    // hand the incoming implementation the other's charged state.
+    VoiceFilter f = MakeFilter(FilterTopology::WaveXSvf, 500.0f);
+    for (int i = 0; i < 2000; ++i)
+        f.Process(1.0f);
+    f.SetTopology(FilterTopology::Ladder);
+    EXPECT_LT(std::fabs(f.Process(0.0f)), 1e-3f);
+    for (int i = 0; i < 2000; ++i)
+        f.Process(1.0f);
+    f.SetTopology(FilterTopology::WaveXSvf);
+    EXPECT_LT(std::fabs(f.Process(0.0f)), 1e-3f);
 }
 
 TEST(VoiceFilterTest, ConfigChangesWithinATopologyDoNotResetState) {
@@ -136,13 +170,58 @@ TEST(VoiceFilterTest, ConfigChangesWithinATopologyDoNotResetState) {
     EXPECT_GT(f.Process(1.0f), 0.9f) << "state kept: still sitting at the DC level";
 }
 
-TEST(VoiceFilterTest, SlopeAndDriveReachTheWaveXSvf) {
-    VoiceFilter f12 = MakeFilter(FilterTopology::WaveXSvf, 1000.0f);
-    VoiceFilter f24 = MakeFilter(FilterTopology::WaveXSvf, 1000.0f);
-    FilterConfig cfg = f24.GetConfig();
+TEST(VoiceFilterTest, SlopeReachesBothTopologies) {
+    for (FilterTopology t: kBoth) {
+        VoiceFilter f12 = MakeFilter(t, 1000.0f);
+        VoiceFilter f24 = MakeFilter(t, 1000.0f);
+        FilterConfig cfg = f24.GetConfig();
+        cfg.slope = SvfFilter::Slope::Db24;
+        f24.SetConfig(cfg);
+        EXPECT_LT(SteadyStateGain(f24, 4000.0f), 0.5f * SteadyStateGain(f12, 4000.0f))
+            << "topology " << static_cast<int>(t);
+    }
+}
+
+TEST(VoiceFilterTest, DriveReachesTheLadderWithoutChangingItsLevelAtZero) {
+    // Drive 0 must not attenuate (DaisySP's own default halves the input),
+    // and full drive must push the tanh harder: a loud sine comes out with
+    // a different, flatter shape. (It does not come out quieter - the
+    // saturated level is the tanh ceiling either way.)
+    VoiceFilter clean = MakeFilter(FilterTopology::Ladder, 5000.0f);
+    EXPECT_NEAR(SteadyStateGain(clean, 100.0f, 0.05f), 1.0f, 0.02f);
+    VoiceFilter hot = MakeFilter(FilterTopology::Ladder, 5000.0f);
+    FilterConfig cfg = hot.GetConfig();
+    cfg.drive = 1.0f;
+    hot.SetConfig(cfg);
+    clean.Reset();
+    float difference = 0.0f;
+    for (int i = 0; i < 9600; ++i) {
+        const float in = std::sin(2.0f * kPi * 100.0f * static_cast<float>(i) / 48000.0f);
+        const float a = clean.Process(in);
+        const float b = hot.Process(in);
+        if (i > 4800)
+            difference = std::max(difference, std::fabs(a - b));
+    }
+    EXPECT_GT(difference, 0.1f);
+}
+
+TEST(VoiceFilterTest, ResetKeepsTheLadderTunedShapedAndInMode) {
+    // The ladder can only be cleared by re-initialising it, which also
+    // resets its tuning: Reset() must put cutoff, mode, slope and drive back.
+    VoiceFilter f = MakeFilter(FilterTopology::Ladder, 600.0f, 0.3f);
+    f.SetMode(SvfFilter::Mode::HighPass);
+    FilterConfig cfg = f.GetConfig();
     cfg.slope = SvfFilter::Slope::Db24;
-    f24.SetConfig(cfg);
-    EXPECT_LT(SteadyStatePeak(f24, 4000.0f), 0.5f * SteadyStatePeak(f12, 4000.0f));
+    f.SetConfig(cfg);
+    const float before_low = SteadyStateGain(f, 100.0f);
+    const float before_high = SteadyStateGain(f, 6000.0f);
+    f.Reset();
+    EXPECT_EQ(f.GetMode(), SvfFilter::Mode::HighPass);
+    EXPECT_EQ(f.GetTopology(), FilterTopology::Ladder);
+    EXPECT_NEAR(SteadyStateGain(f, 100.0f), before_low, 1e-3f);
+    EXPECT_NEAR(SteadyStateGain(f, 6000.0f), before_high, 1e-3f);
+    EXPECT_LT(before_low, 0.05f);
+    EXPECT_GT(before_high, 0.9f);
 }
 
 TEST(VoiceFilterTest, CombinedTuningPreservesSeparateSetterOutputAndState) {
@@ -156,11 +235,12 @@ TEST(VoiceFilterTest, CombinedTuningPreservesSeparateSetterOutputAndState) {
                     combined.Init(sample_rate);
                     separate.Init(sample_rate);
                     FilterConfig cfg;
-                    cfg.topology = topology;
                     cfg.slope = slope;
                     cfg.drive = drive;
                     combined.SetConfig(cfg);
                     separate.SetConfig(cfg);
+                    combined.SetTopology(topology);
+                    separate.SetTopology(topology);
                     for (float cutoff: {1200.0f, 18000.0f, 1.0e6f, -20.0f, 700.0f}) {
                         for (float resonance: {0.7f, -0.1f, 1.2f, 0.0f}) {
                             combined.SetParameters(cutoff, resonance);
@@ -168,11 +248,12 @@ TEST(VoiceFilterTest, CombinedTuningPreservesSeparateSetterOutputAndState) {
                             separate.SetCutoff(cutoff);
                             for (int phase = 0; phase < 3; ++phase) {
                                 if (phase == 1) {
-                                    cfg.topology = cfg.topology == FilterTopology::WaveXSvf
-                                                       ? FilterTopology::DaisySpSvf
-                                                       : FilterTopology::WaveXSvf;
-                                    combined.SetConfig(cfg);
-                                    separate.SetConfig(cfg);
+                                    const FilterTopology other =
+                                        combined.GetTopology() == FilterTopology::WaveXSvf
+                                            ? FilterTopology::Ladder
+                                            : FilterTopology::WaveXSvf;
+                                    combined.SetTopology(other);
+                                    separate.SetTopology(other);
                                 } else if (phase == 2) {
                                     combined.Reset();
                                     separate.Reset();
@@ -181,6 +262,7 @@ TEST(VoiceFilterTest, CombinedTuningPreservesSeparateSetterOutputAndState) {
                                     // Unrelated live sound edits repeat the filter snapshot.
                                     // They must leave the charged integrators and output intact.
                                     combined.SetConfig(cfg);
+                                    combined.SetTopology(combined.GetTopology());
                                     combined.SetParameters(cutoff, resonance);
                                     const float input =
                                         0.2f *
@@ -200,14 +282,14 @@ TEST(VoiceFilterTest, CombinedTuningPreservesSeparateSetterOutputAndState) {
     }
 }
 
-TEST(VoiceFilterTest, ModesRejectTheExpectedFrequencyBands) {
+TEST(VoiceFilterTest, SvfModesRejectTheExpectedFrequencyBands) {
     using Mode = SvfFilter::Mode;
     for (Mode mode: {Mode::LowPass, Mode::HighPass, Mode::BandPass, Mode::Notch}) {
         auto f = MakeFilter(FilterTopology::WaveXSvf, 1000);
         f.SetMode(mode);
-        const auto low = SteadyStatePeak(f, 100);
-        const auto center = SteadyStatePeak(f, 1000);
-        const auto high = SteadyStatePeak(f, 8000);
+        const auto low = SteadyStateGain(f, 100);
+        const auto center = SteadyStateGain(f, 1000);
+        const auto high = SteadyStateGain(f, 8000);
         if (mode == Mode::LowPass) {
             EXPECT_GT(low, .9f);
             EXPECT_LT(high, .03f);
@@ -227,6 +309,40 @@ TEST(VoiceFilterTest, ModesRejectTheExpectedFrequencyBands) {
         }
     }
 }
+
+TEST(VoiceFilterTest, LadderModesRejectTheExpectedFrequencyBands) {
+    // The ladder's HP/BP are Huovilainen's weighted stage sums and its
+    // Notch is input minus the 12 dB band-pass tap, so the skirts are
+    // shallower and the HP passband settles later than the SVF's (its HP12
+    // is still about -2 dB three octaves up); the bands still have to be
+    // the right ones.
+    using Mode = SvfFilter::Mode;
+    for (Mode mode: {Mode::LowPass, Mode::HighPass, Mode::BandPass, Mode::Notch}) {
+        auto f = MakeFilter(FilterTopology::Ladder, 1000);
+        f.SetMode(mode);
+        const auto low = SteadyStateGain(f, 100);
+        const auto center = SteadyStateGain(f, 1000);
+        const auto high = SteadyStateGain(f, 8000);
+        if (mode == Mode::LowPass) {
+            EXPECT_GT(low, .9f);
+            EXPECT_LT(high, .05f);
+        }
+        if (mode == Mode::HighPass) {
+            EXPECT_LT(low, .05f);
+            EXPECT_GT(high, .7f);
+        }
+        if (mode == Mode::BandPass) {
+            EXPECT_GT(center, 3 * low);
+            EXPECT_GT(center, 3 * high);
+        }
+        if (mode == Mode::Notch) {
+            EXPECT_LT(center, .1f);
+            EXPECT_GT(low, .9f);
+            EXPECT_GT(high, .9f);
+        }
+    }
+}
+
 TEST(VoiceFilterTest, ModeCutoffBoundariesAndResonantDriveStayFinite) {
     using Mode = SvfFilter::Mode;
     for (auto topology: kBoth) {

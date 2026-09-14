@@ -72,7 +72,7 @@ static volatile bool s_dfu_requested = false;
 // (firmware/shared/debug/console_command.h, host-tested):
 //
 //   WAVEX-LOG <MODULE|*> <LEVEL> / WAVEX-LOG ?     legacy, seq-less, no ack
-//   WAVEX-FILTER <wavex|daisysp> [12|24] [drive%]  (scripts/wavex_log.py,
+//   WAVEX-FILTER <12|24> [drive%] / WAVEX-FILTER ?  (scripts/wavex_log.py,
 //                                                   scripts/wavex_filter.py)
 //   WAVEX-DBG <seq> <VERB> [args]                  acknowledged, for tests/hil:
 //     PING | LOG ... | FILTER ... | STATE | TRACKS | SAMPLES
@@ -98,36 +98,17 @@ static std::atomic<bool> s_console_line_pending{false};
 #endif
 
 #if WAVEX_DEBUG_HARNESS_ENABLED
-static const char* FilterTopologyName(uint8_t topology) {
-    return topology == 1 ? "daisysp" : "wavex";
-}
-
-// "FILTER ?" reports; "FILTER <wavex|daisysp> [12|24] [drive 0-100]" applies.
-// Drive is a percentage so the parser needs no float support. Main-loop
-// context; the engine publishes the selection to the callback.
+// "FILTER ?" reports; "FILTER <12|24> [drive 0-100]" applies the bench
+// slope/drive shaping to every voice, whichever topology its Instrument
+// selects. Drive is a percentage so the parser needs no float support.
+// Main-loop context; the engine publishes the selection to the callback.
 static bool HandleFilterCommand(const char* args) {
     while (*args == ' ')
         ++args;
 #if WAVEX_AUDIO_ENGINE_ENABLED
     WaveX::AudioEngine::FilterSelection sel = WaveX::AudioEngine::GetFilterSelection();
     if (*args != '?' && *args != '\0') {
-        char word[16];
-        size_t n = 0;
-        while (*args != ' ' && *args != '\0' && n + 1 < sizeof(word))
-            word[n++] = *args++;
-        word[n] = '\0';
-        if (std::strcmp(word, "wavex") == 0 || std::strcmp(word, "mine") == 0) {
-            sel.topology = 0;
-        } else if (std::strcmp(word, "daisysp") == 0 || std::strcmp(word, "dsp") == 0) {
-            sel.topology = 1;
-        } else {
-            WaveX::Log::PrintLine(
-                "WAVEX-FILTER: bad topology '%s' - usage: WAVEX-FILTER <wavex|daisysp> "
-                "[12|24] [drive 0-100]",
-                word);
-            return false;
-        }
-        // Optional numeric fields, in order: slope, drive%.
+        // Numeric fields, in order: slope (required), drive% (optional).
         int fields[2] = {-1, -1};
         for (int f = 0; f < 2; ++f) {
             while (*args == ' ')
@@ -141,20 +122,18 @@ static bool HandleFilterCommand(const char* args) {
         }
         if (fields[0] == 12 || fields[0] == 24) {
             sel.slope_db = static_cast<uint8_t>(fields[0]);
-        } else if (fields[0] != -1) {
-            WaveX::Log::PrintLine("WAVEX-FILTER: slope must be 12 or 24 (got %d)", fields[0]);
+        } else {
+            WaveX::Log::PrintLine(
+                "WAVEX-FILTER: slope must be 12 or 24 - usage: WAVEX-FILTER <12|24> "
+                "[drive 0-100]");
             return false;
         }
         if (fields[1] != -1) {
             sel.drive = static_cast<float>(fields[1] > 100 ? 100 : fields[1]) / 100.0f;
         }
-        if (!WaveX::AudioEngine::SetFilterSelection(sel)) {
-            WaveX::Log::PrintLine("WAVEX-FILTER: DaisySP disabled by callback capacity gate");
-            return false;
-        }
+        WaveX::AudioEngine::SetFilterSelection(sel);
     }
-    WaveX::Log::PrintLine("WAVEX-FILTER: topology=%s slope=%u drive=%d%%",
-                          FilterTopologyName(sel.topology),
+    WaveX::Log::PrintLine("WAVEX-FILTER: slope=%u drive=%d%%",
                           static_cast<unsigned>(sel.slope_db),
                           static_cast<int>(sel.drive * 100.0f + 0.5f));
     return true;
@@ -307,6 +286,7 @@ static void DispatchConsoleCommand(const WaveX::Debug::Command& c) {
             len = AppendKvInt(reply, sizeof(reply), len, "completed", state.completed_request_id);
             len = AppendKvInt(reply, sizeof(reply), len, "error", state.error);
             len = AppendKvInt(reply, sizeof(reply), len, "mode", state.filter_type);
+            len = AppendKvInt(reply, sizeof(reply), len, "topology", state.filter_topology);
             len = AppendKvInt(
                 reply, sizeof(reply), len, "cutoff", static_cast<long>(state.sound.cutoff_hz));
             len = AppendKvInt(reply,

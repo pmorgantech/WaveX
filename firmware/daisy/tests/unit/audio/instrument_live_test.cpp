@@ -198,6 +198,31 @@ TEST_F(InstrumentLiveTest, FilterModeFollowsOnlyItsInstrumentAndRevertPreservesC
     EXPECT_EQ(vm.GetVoice(0).phase.Frame(), frame);
 }
 
+TEST_F(InstrumentLiveTest, FilterTopologyFollowsTheInstrumentOnHeldAndNextNotes) {
+    auto first = TriggerParams();
+    auto other = first;
+    other.track = 1;
+    vm.Trigger(first);
+    vm.Trigger(other);
+    Render();
+    const auto frame = vm.GetVoice(0).phase.Frame();
+    InstrumentSoundUndo undo;
+    undo.Capture(ins);
+    ins.filter.topology = WaveX::Protocol::INST_FILTER_TOPOLOGY_LADDER;
+    Live();
+    EXPECT_EQ(vm.GetVoice(0).filter.GetTopology(), FilterTopology::Ladder);
+    EXPECT_EQ(vm.GetVoice(1).filter.GetTopology(), FilterTopology::WaveXSvf);
+    EXPECT_EQ(vm.GetVoice(0).phase.Frame(), frame);
+    EXPECT_EQ(TriggerParams().filter_topology, FilterTopology::Ladder);
+    vm.Trigger(TriggerParams(62));
+    EXPECT_EQ(vm.GetVoice(2).filter.GetTopology(), FilterTopology::Ladder);
+    ASSERT_TRUE(undo.Revert(ins));
+    Live();
+    EXPECT_EQ(vm.GetVoice(0).filter.GetTopology(), FilterTopology::WaveXSvf);
+    EXPECT_EQ(vm.GetVoice(0).phase.Frame(), frame);
+    EXPECT_EQ(TriggerParams().filter_topology, FilterTopology::WaveXSvf);
+}
+
 TEST_F(InstrumentLiveTest, ResonanceRouteRemovalAndLiveEditsUseTheOwningNotesBase) {
     ins.filter.resonance = .2f;
     vm.Trigger(TriggerParams());

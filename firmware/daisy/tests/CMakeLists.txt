@@ -116,9 +116,10 @@ add_library(wavex_test_lib STATIC
     # Note: audio_engine.cpp and other hardware-dependent files excluded for now
     # They require STM32 HAL headers which aren't available in host tests
     ${CMAKE_CURRENT_SOURCE_DIR}/../../shared/uart_protocol/uart_protocol.cpp
-    # DaisySP's Svf, the second per-voice lowpass behind audio/voice_filter.hpp.
-    # Plain C++ over <cmath>; compiles on the host as-is.
-    ${CMAKE_CURRENT_SOURCE_DIR}/../libs/DaisySP/Source/Filters/svf.cpp
+    # DaisySP's LadderFilter, the Instrument-selectable second per-voice
+    # filter behind audio/voice_filter.hpp. Plain C++ over <cmath>; compiles
+    # on the host as-is.
+    ${CMAKE_CURRENT_SOURCE_DIR}/../libs/DaisySP/Source/Filters/ladder.cpp
 )
 
 target_link_libraries(wavex_test_lib PUBLIC wavex_lfo_math_host)

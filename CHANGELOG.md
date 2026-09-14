@@ -13,6 +13,15 @@ versioning and release process.
 
 ### Added
 
+- Instruments now select which filter renders their mode: the WaveX
+  state-variable filter or the DaisySP four-pole Huovilainen ladder
+  (`daisysp::LadderFilter`, MIT). The topology is Instrument-owned like the
+  mode, reaches held voices through the live handoff and the next note
+  through the trigger path, persists in WXI and is restored by Revert. The
+  ladder renders LP/HP/BP at the bench slope and Notch as input minus its
+  12 dB band-pass tap. Its eight-voice callback cost is unmeasured and is
+  recorded as an open hardware gate.
+
 - Added the Instrument filter topology to the wire contract and the `.wxi`
   file: `INST_EDIT_FILTER_SETTINGS` and its sync now carry which filter
   implementation renders the Instrument's mode (`SVF` or `LADDER`) in the
@@ -263,6 +272,11 @@ versioning and release process.
   below.
 
 ### Changed
+
+- `WAVEX-FILTER` and `scripts/wavex_filter.py` now take only the bench slope
+  and drive (`WAVEX-FILTER <12|24> [drive 0-100]`); the topology word is
+  gone because the topology is an Instrument setting. The Daisy console
+  `EDIT` readback adds `topology`.
 
 - Extend the LVGL project skill with page-construction and verification rules
   for local redraws, unchanged-value updates and safe visual-cache lifetimes.
@@ -567,6 +581,10 @@ versioning and release process.
   at INFO; they flooded the log ring on every load.
 
 ### Removed
+
+- The engine-wide DaisySP `Svf` bench topology and the
+  `WAVEX_DAISYSP_FILTER_ENABLED` build option. Its measured callback cost had
+  already blocked it, and the Instrument-owned topology replaces the A/B.
 
 - **The decimated waveform preview** (`MSG_PREVIEW_REQ` 0x0A /
   `MSG_WAVE_CHUNK` 0x11, roadmap Phase 1.5 item 5). Every Sample tab now draws

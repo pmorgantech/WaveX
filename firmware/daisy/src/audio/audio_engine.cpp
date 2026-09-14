@@ -170,10 +170,11 @@ static bool s_mix_meters_subscribed = false;
 static TrackLiveUpdates s_track_live_updates;
 
 // Per-Track staging for the live values the Instrument does NOT own yet.
-// Filter and envelope moved onto Instrument in stage 4; pan and pitch become
-// its trim_pan/transpose in stage 5, and the filter topology becomes
-// FilterType, so those three stay here until then. Deliberately not a second
-// copy of anything Instrument owns - one field, one owner.
+// Filter and envelope moved onto Instrument in stage 4 and the filter
+// topology followed; pan and pitch become its trim_pan/transpose in stage 5
+// and the slope/drive shaping is roadmap backlog, so those stay here until
+// then. Deliberately not a second copy of anything Instrument owns - one
+// field, one owner.
 struct TrackLiveExtras {
     float pan = 0.5f;
     float pitch_semitones = 0.0f;
@@ -181,10 +182,10 @@ struct TrackLiveExtras {
 };
 static TrackLiveExtras s_track_live[WaveX::AudioEngine::kNumTracks];
 
-// The runtime filter A/B (WAVEX-FILTER) is a bench listening aid and is
-// deliberately engine-wide, so it gets its own mailbox rather than riding on
-// the per-Track live snapshot - pushing it through that would have made a
-// global switch carry one Track's cutoff and envelope to every voice.
+// The runtime slope/drive shaping (WAVEX-FILTER) is a bench listening aid
+// and is deliberately engine-wide, so it gets its own mailbox rather than
+// riding on the per-Track live snapshot - pushing it through that would have
+// made a global switch carry one Track's cutoff and envelope to every voice.
 static WaveX::AudioEngine::FilterConfig s_filter_config_active WAVEX_DTCM_DATA;
 static WaveX::AudioEngine::FilterConfig s_filter_config_pending;
 static SnapshotMailbox<WaveX::AudioEngine::FilterConfig> s_filter_config_mailbox;
@@ -2400,20 +2401,13 @@ void OnControlChange(const ControlChangeMessage& ctrl_msg) {
 }
 
 bool SetFilterSelection(const FilterSelection& sel) {
-#if !WAVEX_DAISYSP_FILTER_ENABLED
-    if (sel.topology == 1) {
-        return false;
-    }
-#endif
     WaveX::AudioEngine::FilterConfig cfg;
-    cfg.topology = sel.topology == 1 ? WaveX::AudioEngine::FilterTopology::DaisySpSvf
-                                     : WaveX::AudioEngine::FilterTopology::WaveXSvf;
     cfg.slope = sel.slope_db == 24 ? WaveX::AudioEngine::SvfFilter::Slope::Db24
                                    : WaveX::AudioEngine::SvfFilter::Slope::Db12;
     cfg.drive = sel.drive < 0.0f ? 0.0f : (sel.drive > 1.0f ? 1.0f : sel.drive);
     s_filter_config_pending = cfg;
     // Every Track's staged extras too, so a later per-Track publish does not
-    // quietly put the previous topology back.
+    // quietly put the previous shaping back.
     for (auto& extras: s_track_live) {
         extras.filter = cfg;
     }
@@ -2424,7 +2418,6 @@ bool SetFilterSelection(const FilterSelection& sel) {
 FilterSelection GetFilterSelection() {
     const WaveX::AudioEngine::FilterConfig& cfg = s_filter_config_pending;
     FilterSelection sel;
-    sel.topology = cfg.topology == WaveX::AudioEngine::FilterTopology::DaisySpSvf ? 1 : 0;
     sel.slope_db = cfg.slope == WaveX::AudioEngine::SvfFilter::Slope::Db24 ? 24 : 12;
     sel.drive = cfg.drive;
     return sel;
