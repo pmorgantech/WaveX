@@ -39,13 +39,20 @@ per topology, no sequencer, SD stream or parameter locks. Zero underruns in both
 | Topology | Peak cycles | Peak | Active-window average |
 |---|---|---|---|
 | WaveX SVF | 145183 | 30.25% | 18.0% |
-| DaisySP ladder | 335154 | 69.82% | 47.5% |
+| ZDF ladder (`ladder_zdf.hpp`) | 161532 | 33.65% | 20.3% |
+| Huovilainen ladder, 2x (`HuovilainenLadder<2>`) | 227922 | 47.48% | 30.9% |
+| Huovilainen ladder, 4x (`HuovilainenLadder<4>`, the DaisySP model) | 335154 | 69.82% | 47.5% |
 
-These are not gate rows (`callback_performance.py` requires 600 s), but the
-delta is the number that matters: the ladder adds ~40 points for eight voices.
-The modulation drives cutoff above Nyquist for part of each LFO cycle, where
-both topologies take the exact-bypass path, which is why the averages swing
-more than the peaks. Captures: `logs/perf-svf-mod-20260914-023223.log`,
+The 4x and SVF rows are at f9e823b; the ZDF and 2x rows are at a42c255 with
+the same driver and the same workload. These are not gate rows
+(`callback_performance.py` requires 600 s), but the deltas are the numbers
+that matter: eight voices cost ~3 points on the ZDF ladder, ~17 on the 2x
+Huovilainen and ~40 on the 4x. The modulation drives cutoff above Nyquist for
+part of each LFO cycle, where every topology takes the exact-bypass path,
+which is why the averages swing more than the peaks. Captures:
+`logs/perf-svf-mod-20260914-023223.log`,
+`logs/perf-zdf-mod-20260914-033817.log`,
+`logs/perf-ladder2x-mod-20260914-033436.log`,
 `logs/perf-ladder-mod-20260914-022750.log`.
 
 ## Workload and evidence notes — 2026-09-07

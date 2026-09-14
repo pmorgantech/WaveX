@@ -307,7 +307,8 @@ persists with the Instrument. The console exposes it as `filtertopology` and
 24 dB) and DRIVE (0-100%), complete the Instrument-owned filter: same edit,
 same preview/undo/save path, `filterslope` / `filterdrive` in the console
 state and `SLOPE <0|1>` / `DRIVE <0-1000>` on the tab. The Filter tab row is
-six tiles wide.
+six tiles wide; the three word-valued tiles use the smaller mono value font
+so "Band-pass" and "Ladder 2x" fit (`logs/filter-tab-20260914.png`).
 The frontend suite passes 274 tests, and the two-board LFO HIL passes the
 save/readback flow (11.70 seconds). The inspected 1280×720 capture is
 `logs/instrument-lfo-20260912.png`.
