@@ -171,24 +171,15 @@ static TrackLiveUpdates s_track_live_updates;
 
 // Per-Track staging for the live values the Instrument does NOT own yet.
 // Filter and envelope moved onto Instrument in stage 4 and the filter
-// topology followed; pan and pitch become its trim_pan/transpose in stage 5
-// and the slope/drive shaping is roadmap backlog, so those stay here until
-// then. Deliberately not a second copy of anything Instrument owns - one
-// field, one owner.
+// topology, slope and drive followed; pan and pitch become its
+// trim_pan/transpose in stage 5, so those two stay here until then.
+// Deliberately not a second copy of anything Instrument owns - one field,
+// one owner.
 struct TrackLiveExtras {
     float pan = 0.5f;
     float pitch_semitones = 0.0f;
-    WaveX::AudioEngine::FilterConfig filter;
 };
 static TrackLiveExtras s_track_live[WaveX::AudioEngine::kNumTracks];
-
-// The runtime slope/drive shaping (WAVEX-FILTER) is a bench listening aid
-// and is deliberately engine-wide, so it gets its own mailbox rather than
-// riding on the per-Track live snapshot - pushing it through that would have
-// made a global switch carry one Track's cutoff and envelope to every voice.
-static WaveX::AudioEngine::FilterConfig s_filter_config_active WAVEX_DTCM_DATA;
-static WaveX::AudioEngine::FilterConfig s_filter_config_pending;
-static SnapshotMailbox<WaveX::AudioEngine::FilterConfig> s_filter_config_mailbox;
 
 // The message the callback applies, composed from the Instrument (the store)
 // plus the extras above. Nothing else may build a VoiceLiveParams for a
@@ -210,7 +201,6 @@ static WaveX::AudioEngine::VoiceLiveParams ComposeTrackLive(
     WaveX::AudioEngine::SfzLoader::PrepareLiveParams(track, live);
     live.pan = extras.pan;
     live.pitch_semitones = extras.pitch_semitones;
-    live.filter = extras.filter;
     return live;
 }
 
@@ -1906,9 +1896,6 @@ void Init(DaisySeed& hw, float sample_rate, bool sdram_available) {
     // the type declares. Anything added to DTCM that has non-zero defaults
     // belongs in this block too.
     s_track_live_updates.Init();
-    s_filter_config_pending = WaveX::AudioEngine::FilterConfig{};
-    s_filter_config_active = s_filter_config_pending;
-    s_filter_config_mailbox.Init(s_filter_config_pending);
     for (auto& extras: s_track_live) {
         extras = TrackLiveExtras{};
     }
@@ -2106,9 +2093,6 @@ void Callback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t
     // picks up the new generation one block later.
     s_track_live_updates.ApplyTo(s_voice_manager);
     s_mixer_controls.ApplyTo(s_track_mixer);
-    if (s_filter_config_mailbox.ConsumeLatest(s_filter_config_active)) {
-        s_voice_manager.ApplyFilterConfig(s_filter_config_active);
-    }
 
     // Sequencer transport and pattern edits are callback-owned through the
     // bounded command queue. Its TriggerEvents start voices at their exact
@@ -2398,29 +2382,6 @@ void OnControlChange(const ControlChangeMessage& ctrl_msg) {
         s_track_live_updates.Publish(ComposeTrackLive(track, filter, env));
         PublishSequencerVoiceMap(static_cast<uint16_t>(1u << track));
     }
-}
-
-bool SetFilterSelection(const FilterSelection& sel) {
-    WaveX::AudioEngine::FilterConfig cfg;
-    cfg.slope = sel.slope_db == 24 ? WaveX::AudioEngine::SvfFilter::Slope::Db24
-                                   : WaveX::AudioEngine::SvfFilter::Slope::Db12;
-    cfg.drive = sel.drive < 0.0f ? 0.0f : (sel.drive > 1.0f ? 1.0f : sel.drive);
-    s_filter_config_pending = cfg;
-    // Every Track's staged extras too, so a later per-Track publish does not
-    // quietly put the previous shaping back.
-    for (auto& extras: s_track_live) {
-        extras.filter = cfg;
-    }
-    s_filter_config_mailbox.Publish(s_filter_config_pending);
-    return true;
-}
-
-FilterSelection GetFilterSelection() {
-    const WaveX::AudioEngine::FilterConfig& cfg = s_filter_config_pending;
-    FilterSelection sel;
-    sel.slope_db = cfg.slope == WaveX::AudioEngine::SvfFilter::Slope::Db24 ? 24 : 12;
-    sel.drive = cfg.drive;
-    return sel;
 }
 
 // --- CV calibration workflow (item 5 stage 4; analog-voice-board.md §3).

@@ -277,6 +277,7 @@ struct VoiceTriggerParams : VoiceSampleParams {
     float filter_cutoff_hz = 20000.0f, filter_resonance = 0.0f;
     SvfFilter::Mode filter_mode = SvfFilter::Mode::LowPass;
     FilterTopology filter_topology = FilterTopology::WaveXSvf;
+    FilterConfig filter_config;  // slope and drive, Instrument-owned like the mode
     float attack_s = 0.001f, decay_s = 0.05f, sustain_level = 0.8f, release_s = 0.1f;
     float filter_env_attack_s = 0.001f, filter_env_decay_s = 0.05f;
     float filter_env_sustain_level = 0.8f, filter_env_release_s = 0.1f;
@@ -319,6 +320,7 @@ struct VoiceInstrumentParams {
     bool enabled = false;
     SvfFilter::Mode filter_mode = SvfFilter::Mode::LowPass;
     FilterTopology filter_topology = FilterTopology::WaveXSvf;
+    FilterConfig filter_config;
     float gain = 1, pan = .5f;
     Oscillator osc[2];
     VoiceAmpParams env[2];
@@ -340,10 +342,6 @@ struct VoiceLiveParams {
     float decay_s = 0.05f;
     float sustain_level = 0.8f;
     float release_s = 0.1f;
-    // Bench-only slope/drive shaping (voice_filter.hpp). Default is the
-    // linear 12 dB filter as it always was. Which topology renders it is
-    // the Instrument's (instrument.filter_topology), like the mode.
-    FilterConfig filter;
     VoiceInstrumentParams instrument;
 };
 
@@ -370,7 +368,6 @@ class VoiceManager {
         tempo_bpm_ = 0;
         SetTempo(120);
         live_pitch_scales_.fill(1.0f);
-        filter_config_ = FilterConfig{};
         // DSP initialization belongs to startup, not every note-on. Trigger
         // only installs tuning and resets the active filter's integrators.
         for (auto& voice: voices_) {
@@ -410,20 +407,6 @@ class VoiceManager {
         beat_step_ = VoiceLfo::BeatStep(bpm, sample_rate_);
     }
 
-    // The engine-wide filter slope/drive (the WAVEX-FILTER bench aid).
-    // Separate from ApplyLiveParams because it is the one genuinely global
-    // thing left in this path: it must not carry one Track's cutoff or
-    // envelope with it.
-    void ApplyFilterConfig(const FilterConfig& cfg) {
-        if (cfg == filter_config_)
-            return;
-        filter_config_ = cfg;
-        for (auto& v: voices_) {
-            if (v.state == VoiceState::Playing)
-                v.filter.SetConfig(filter_config_);
-        }
-    }
-
     WAVEX_ITCM_CODE_NAMED("voice.ApplyLiveParams") void ApplyLiveParams(const VoiceLiveParams& p) {
         // One pow() per call, not one per voice: this runs at block rate from
         // the audio callback whenever a control moved, and eight of them would
@@ -434,19 +417,11 @@ class VoiceManager {
         } else if (p.track < live_pitch_scales_.size()) {
             live_pitch_scales_[p.track] = live_pitch_scale;
         }
-        // Remembered so voices triggered after this edit start with it too;
-        // SetConfig is a no-op unless something in it changed, so a live edit
-        // of any other parameter does not retune or reset the filters.
-        const bool filter_changed = p.filter != filter_config_;
-        filter_config_ = p.filter;
         for (auto& v: voices_) {
             if (v.state != VoiceState::Playing)
                 continue;
             if (p.track != 0xFF && v.track != p.track)
                 continue;
-            if (filter_changed) {
-                v.filter.SetConfig(filter_config_);
-            }
             const auto unlocked = [&v](uint8_t id) {
                 return !(v.param_lock_mask & VoiceLockBit(id));
             };
@@ -469,6 +444,9 @@ class VoiceManager {
                 v.envelope.SetParams(amp.attack, amp.decay, amp.sustain, amp.release);
             }
             if (p.instrument.enabled && v.oscillator < 2) {
+                // SetConfig is a no-op unless slope or drive changed, so an
+                // unrelated live edit neither retunes nor resets the filter.
+                v.filter.SetConfig(p.instrument.filter_config);
                 v.filter.SetTopology(p.instrument.filter_topology);
                 v.filter.SetMode(p.instrument.filter_mode);
                 v.gain = v.dry_gain * p.instrument.gain;
@@ -567,7 +545,7 @@ class VoiceManager {
         if (params.secondary.sample && params.secondary.sample_frames >= 2)
             InitSource(v.secondary, params.secondary, VoicePitchScale(v));
 
-        v.filter.SetConfig(filter_config_);
+        v.filter.SetConfig(params.filter_config);
         v.filter.SetTopology(params.filter_topology);
         v.filter.SetMode(params.filter_mode);
         v.base_cutoff_hz = params.filter_cutoff_hz;
@@ -1106,10 +1084,6 @@ class VoiceManager {
         return track < live_pitch_scales_.size() ? live_pitch_scales_[track] : 1.0f;
     }
     std::array<float, WaveX::Mix::kNumTracks> live_pitch_scales_{};
-    // The bench slope/drive every voice gets at Trigger() (voice_filter.hpp).
-    // Written only by ApplyLiveParams(), i.e. from the callback at block
-    // boundaries.
-    FilterConfig filter_config_;
     // SRC_RANDOM sample-and-hold seed (lfo.hpp's xorshift idiom), advanced
     // once per Trigger(). Non-zero default MUST also be set in Init() -
     // see that function's comment.

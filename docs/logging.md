@@ -57,17 +57,10 @@ scripts/wavex_log.py esp32 UI_NAVIGATOR DEBUG    # per-IDF-tag
 scripts/wavex_log.py esp32 '?'                   # current module levels
 ```
 
-The same console carries the per-voice filter slope/drive bench switch on the
-Daisy (debug builds; `audio/voice_filter.hpp`). Which filter topology renders
-a voice (SVF or ladder) is the Instrument's own Filter-page setting, not a
-console switch; this shapes whichever one each Instrument selects:
-
-```
-WAVEX-FILTER ?                          # current selection
-WAVEX-FILTER <12|24> [drive 0-100]
-scripts/wavex_filter.py 24              # 24 dB/oct, drive as last set
-scripts/wavex_filter.py 12 60           # 12 dB/oct, 60% drive
-```
+The per-voice filter (topology, mode, slope and drive) is entirely
+Instrument-owned and edited on the Instrument page's Filter tab; there is no
+console switch for it. The `WAVEX-DBG <seq> EDIT <track>` readback reports
+the current `mode`, `topology`, `slope` and `drive` (thousandths).
 
 It is a listening aid, not a parameter: nothing on the wire or in the UI
 sets it, and it does not survive a reboot.

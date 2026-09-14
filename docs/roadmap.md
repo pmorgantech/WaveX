@@ -772,21 +772,13 @@ needs, not the roughly 4 KB text saving at WARN alone.
 hot-path cost before deciding whether cheap counts should remain enabled in
 release and whether the flag follows the build profile.
 
-#### Filter: promote slope and drive to Instrument parameters; a third topology
+#### Filter: a third topology and cheaper retunes
 
 `audio/voice_filter.hpp` renders each voice through the topology its
 Instrument selects (`InstrumentFilter::topology`, on the wire and in WXI
-since 2026-09-13): the WaveX TPT SVF or the DaisySP Huovilainen ladder. Slope
-(12/24 dB) and drive still reach both only through the debug console
-(`WAVEX-FILTER`), engine-wide.
+since 2026-09-13): the WaveX TPT SVF or the DaisySP Huovilainen ladder.
+Slope and drive joined it as Instrument parameters on 2026-09-14.
 
-- **Slope and drive** belong on the Instrument (they are voice character,
-  like resonance): a `PARAM_FILTER_SLOPE` / `PARAM_FILTER_DRIVE` pair in
-  `protocol.h` with round-trip tests, an Instrument field with WXI and SFZ
-  defaults, and Filter-page controls. Until then both default off, so the
-  filter is the linear 12 dB one it always was. Not urgent: nothing audible
-  is lost by the default and the bench switch covers listening tests. When
-  to revisit: when the Filter page gains a second row of controls.
 - **Third topology.** Candidates, all permissively licensed: a Korg35 or
   diode ladder from Faust's `vaeffects.lib` (STK-4.3, MIT-style; Will
   Pirkle's designs as transcribed by Eric Tarr) generated as checked-in C++,

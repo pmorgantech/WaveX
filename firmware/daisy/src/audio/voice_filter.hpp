@@ -18,12 +18,10 @@
 //                              unity gain and zero phase there) and only an
 //                              approximation of a notch skirt away from it.
 //
-// The topology is Instrument-owned voice character, exactly like the mode:
-// it arrives on VoiceTriggerParams for the next note and through
-// VoiceInstrumentParams for held ones. FilterConfig (slope, drive) is the
-// remaining bench-only surface behind the debug console's WAVEX-FILTER; it
-// applies to whichever topology is active. Promoting slope and drive to
-// Instrument parameters is roadmap backlog.
+// Topology, slope and drive are Instrument-owned voice character, exactly
+// like the mode: they arrive on VoiceTriggerParams for the next note and
+// through VoiceInstrumentParams for held ones. FilterConfig (slope, drive)
+// applies to whichever topology is active.
 //
 // Contracts kept identical across both:
 //   - cutoff at or above Nyquist is an EXACT bypass for LP/Notch and silence
@@ -64,8 +62,8 @@ namespace AudioEngine {
 enum class FilterTopology : uint8_t { WaveXSvf = 0, Ladder = 1 };
 static constexpr uint8_t kFilterTopologyCount = 2;
 
-// Bench-only shaping (WAVEX-FILTER). Both default OFF so a filter nobody
-// configured is the linear 12 dB one the tests were written against.
+// Slope and drive. Both default OFF so a filter nobody configured is the
+// linear 12 dB one the tests were written against.
 struct FilterConfig {
     SvfFilter::Slope slope = SvfFilter::Slope::Db12;
     float drive = 0.0f;  // 0..1; WaveXSvf soft clip, ladder input drive

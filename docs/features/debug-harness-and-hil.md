@@ -413,9 +413,10 @@ marker is found anywhere in the line, not only at its start: the first line
 after a port (re)opens can carry bytes already in flight, and the very first
 Daisy PING of the bench run was lost to exactly that before the change.
 
-The legacy seq-less lines (`WAVEX-LOG`, `WAVEX-FILTER`, `WAVEX-SCREENSHOT`)
-still work and still answer in their legacy form, so `scripts/wavex_log.py`,
-`wavex_filter.py` and `esp32_screenshot.py` are unchanged. `WAVEX-ENTER-DFU`
+The legacy seq-less lines (`WAVEX-LOG`, `WAVEX-SCREENSHOT`) still work and
+still answer in their legacy form, so `scripts/wavex_log.py` and
+`esp32_screenshot.py` are unchanged (`WAVEX-FILTER` was retired on 2026-09-14
+when slope and drive became Instrument parameters). `WAVEX-ENTER-DFU`
 keeps its own substring matcher, as §3 required.
 
 **ESP32** (`components/ui/src/ui_console.cpp`, `ui_console.h`; the console

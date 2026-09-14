@@ -13,6 +13,10 @@ versioning and release process.
 
 ### Added
 
+- The Daisy engine applies each Instrument's own filter slope and drive to
+  its voices, on held notes and the next note alike, restored by Revert and
+  loaded from WXI. The console `EDIT` readback adds `slope` and `drive`.
+
 - The Instrument filter's slope (12/24 dB) and drive are Instrument
   parameters: carried by `INST_EDIT_FILTER_SETTINGS` and its sync (edit
   request 28 to 36 bytes, sync 36 to 44), persisted in the `.wxi` FILT chunk
@@ -605,6 +609,10 @@ versioning and release process.
   at INFO; they flooded the log ring on every load.
 
 ### Removed
+
+- The `WAVEX-FILTER` console command, `scripts/wavex_filter.py` and the
+  engine-wide slope/drive mailbox: slope and drive are Instrument
+  parameters now, so the bench switch had nothing left to switch.
 
 - The engine-wide DaisySP `Svf` bench topology and the
   `WAVEX_DAISYSP_FILTER_ENABLED` build option. Its measured callback cost had

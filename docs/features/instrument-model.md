@@ -185,9 +185,11 @@ override either. Cutoff and resonance retain their existing float ranges. The
 WaveX state-variable path returns LP, HP, BP or Notch from the shared filter
 state; the ladder renders LP, HP and BP as its weighted stage sums at the
 bench slope and Notch as input minus its 12 dB band-pass tap, an
-approximation that nulls at the cutoff. The existing 12/24 dB slope and drive
-settings remain global bench `FilterConfig` controls rather than
-Instrument-owned settings, applied to whichever topology is active. At zero
+approximation that nulls at the cutoff. Slope (12 or 24 dB) and drive are
+Instrument-owned as well: on the SVF the slope adds a second TPT stage and
+drive soft-clips the resonance path; on the ladder the slope picks the 12 or
+24 dB tap and drive pushes its input stage. All four filter settings preview
+on held notes, undo with Revert and persist in WXI. At zero
 cutoff, high-pass and notch pass the input while low-pass and band-pass are
 silent. At or above Nyquist, low-pass and notch pass while high-pass and
 band-pass are silent, on both topologies. Changing mode preserves the

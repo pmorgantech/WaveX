@@ -70,11 +70,3 @@ def test_daisy_log_level_round_trip(daisy):
     daisy.cmd("LOG", "STORAGE", "INFO")
     with pytest.raises(TargetError, match="badlog"):
         daisy.cmd("LOG", "NOSUCHMODULE", "INFO")
-
-
-@pytest.mark.daisy
-def test_daisy_default_build_rejects_experimental_filter(daisy):
-    daisy.cmd("FILTER", "wavex", 12, 0)
-    with pytest.raises(TargetError, match="ERR filter"):
-        daisy.cmd("FILTER", "daisysp", 12, 100)
-    assert daisy.cmd("PING") == {}

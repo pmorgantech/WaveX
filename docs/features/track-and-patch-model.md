@@ -152,7 +152,7 @@ Two consequences worth stating, found while building this:
 
 Filter/envelope/tuning are Instrument properties (§3). A parameter change is addressed to a Track — `MSG_CONTROL_CHANGE`'s `channel` field, which the frontend used to send as 0 — and `OnControlChange` writes it into **that Track's Instrument**, which is the authority a later note reads. `VoiceManager::ApplyLiveParams` pushes the bounded live controls onto *sounding* voices for only that Track, so a knob on Track 3 cannot move Track 5's held notes. The prepared handoff preserves source cursors/loops, zone gain/tuning, envelope phase and LFO phase; map/sample assignment and Instrument replacement retain their stop/next-note boundaries. Gain/pan and oscillator controls compose separately from per-zone gain and tuning, while gain locks remain relative to the resolved trigger.
 
-The engine-wide filter slope/drive switch (`WAVEX-FILTER`) keeps its own mailbox: it is a bench listening aid and genuinely global, and routing it through the per-Track snapshot would have carried one Track's cutoff and envelope onto every voice.
+The filter's mode, topology, slope and drive are Instrument properties as well and ride the same per-Track snapshot; the former engine-wide `WAVEX-FILTER` bench switch and its mailbox are gone (2026-09-14).
 
 ### 2.4 The selected Track (shared UI state — built 2026-09-04)
 

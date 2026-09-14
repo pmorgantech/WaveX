@@ -32,18 +32,6 @@ void Callback(daisy::AudioHandle::InputBuffer in,
 // Control/message hook APIs
 void OnControlChange(const WaveX::Protocol::ControlChangeMessage& m);
 
-// Per-voice filter shaping (voice_filter.hpp): slope and drive, applied to
-// whichever topology each Instrument selects. Not a wire parameter - reached
-// only through the debug console's WAVEX-FILTER command, for bench
-// listening. Main-loop context; published to the callback through its own
-// mailbox, so it takes effect at the next block boundary.
-struct FilterSelection {
-    uint8_t slope_db = 12;  // 12 or 24
-    float drive = 0.0f;     // 0..1
-};
-bool SetFilterSelection(const FilterSelection& sel);
-FilterSelection GetFilterSelection();
-
 /// Applies one mixer control change (MSG_MIX_OP). Main loop only: it writes
 /// the track table the audio callback reads, and every field is a single
 /// aligned word, so a change lands whole on the next block.

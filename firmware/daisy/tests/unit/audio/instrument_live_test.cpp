@@ -223,6 +223,34 @@ TEST_F(InstrumentLiveTest, FilterTopologyFollowsTheInstrumentOnHeldAndNextNotes)
     EXPECT_EQ(TriggerParams().filter_topology, FilterTopology::WaveXSvf);
 }
 
+TEST_F(InstrumentLiveTest, FilterSlopeAndDriveFollowTheInstrumentOnHeldAndNextNotes) {
+    auto first = TriggerParams();
+    auto other = first;
+    other.track = 1;
+    vm.Trigger(first);
+    vm.Trigger(other);
+    Render();
+    EXPECT_EQ(vm.GetVoice(0).filter.GetConfig().slope, SvfFilter::Slope::Db12);
+    EXPECT_FLOAT_EQ(vm.GetVoice(0).filter.GetConfig().drive, 0.0f);
+    InstrumentSoundUndo undo;
+    undo.Capture(ins);
+    ins.filter.slope = WaveX::Protocol::INST_FILTER_SLOPE_24;
+    ins.filter.drive = 0.5f;
+    Live();
+    EXPECT_EQ(vm.GetVoice(0).filter.GetConfig().slope, SvfFilter::Slope::Db24);
+    EXPECT_FLOAT_EQ(vm.GetVoice(0).filter.GetConfig().drive, 0.5f);
+    EXPECT_EQ(vm.GetVoice(1).filter.GetConfig().slope, SvfFilter::Slope::Db12);
+    EXPECT_FLOAT_EQ(vm.GetVoice(1).filter.GetConfig().drive, 0.0f);
+    EXPECT_EQ(TriggerParams().filter_config.slope, SvfFilter::Slope::Db24);
+    EXPECT_FLOAT_EQ(TriggerParams().filter_config.drive, 0.5f);
+    vm.Trigger(TriggerParams(62));
+    EXPECT_EQ(vm.GetVoice(2).filter.GetConfig().slope, SvfFilter::Slope::Db24);
+    ASSERT_TRUE(undo.Revert(ins));
+    Live();
+    EXPECT_EQ(vm.GetVoice(0).filter.GetConfig().slope, SvfFilter::Slope::Db12);
+    EXPECT_FLOAT_EQ(vm.GetVoice(0).filter.GetConfig().drive, 0.0f);
+}
+
 TEST_F(InstrumentLiveTest, ResonanceRouteRemovalAndLiveEditsUseTheOwningNotesBase) {
     ins.filter.resonance = .2f;
     vm.Trigger(TriggerParams());

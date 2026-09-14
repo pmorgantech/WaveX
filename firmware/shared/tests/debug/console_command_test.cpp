@@ -102,9 +102,9 @@ TEST(ConsoleParse, LegacyLinesKeepTheirVerbAndNoSeq) {
     EXPECT_STREQ(c.verb, "LOG");
     EXPECT_STREQ(c.args, "STORAGE DEBUG");
 
-    ASSERT_TRUE(ParseCommand("WAVEX-FILTER 24 60", c));
-    EXPECT_STREQ(c.verb, "FILTER");
-    EXPECT_STREQ(c.args, "24 60");
+    ASSERT_TRUE(ParseCommand("WAVEX-SCREENSHOT 1", c));
+    EXPECT_STREQ(c.verb, "SCREENSHOT");
+    EXPECT_STREQ(c.args, "1");
 
     ASSERT_TRUE(ParseCommand("WAVEX-ENTER-DFU", c));
     EXPECT_STREQ(c.verb, "ENTER-DFU");

@@ -10,9 +10,9 @@
 //
 // <seq> is a host-chosen integer echoed back verbatim, which is what lets a
 // test suite wait for *its* acknowledgement instead of sleeping and hoping.
-// The legacy seq-less lines ("WAVEX-LOG ...", "WAVEX-FILTER ...") stay
+// The legacy seq-less lines ("WAVEX-LOG ...", "WAVEX-SCREENSHOT ...") stay
 // accepted for the human-driven scripts; they are reported as verb "LOG" /
-// "FILTER" with seq = kNoSeq and get their legacy reply lines, no ack.
+// "SCREENSHOT" with seq = kNoSeq and get their legacy reply lines, no ack.
 //
 // Everything here is freestanding: no allocation, no exceptions, no I/O, and
 // nothing that cannot run on the Daisy main loop. Parsing never happens in an

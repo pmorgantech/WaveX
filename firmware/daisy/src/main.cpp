@@ -72,8 +72,6 @@ static volatile bool s_dfu_requested = false;
 // (firmware/shared/debug/console_command.h, host-tested):
 //
 //   WAVEX-LOG <MODULE|*> <LEVEL> / WAVEX-LOG ?     legacy, seq-less, no ack
-//   WAVEX-FILTER <12|24> [drive%] / WAVEX-FILTER ?  (scripts/wavex_log.py,
-//                                                   scripts/wavex_filter.py)
 //   WAVEX-DBG <seq> <VERB> [args]                  acknowledged, for tests/hil:
 //     PING | LOG ... | FILTER ... | STATE | TRACKS | SAMPLES
 //     MSG <type_hex> <payload_hex>   straight into ProcessInterMcuMessage
@@ -98,52 +96,6 @@ static std::atomic<bool> s_console_line_pending{false};
 #endif
 
 #if WAVEX_DEBUG_HARNESS_ENABLED
-// "FILTER ?" reports; "FILTER <12|24> [drive 0-100]" applies the bench
-// slope/drive shaping to every voice, whichever topology its Instrument
-// selects. Drive is a percentage so the parser needs no float support.
-// Main-loop context; the engine publishes the selection to the callback.
-static bool HandleFilterCommand(const char* args) {
-    while (*args == ' ')
-        ++args;
-#if WAVEX_AUDIO_ENGINE_ENABLED
-    WaveX::AudioEngine::FilterSelection sel = WaveX::AudioEngine::GetFilterSelection();
-    if (*args != '?' && *args != '\0') {
-        // Numeric fields, in order: slope (required), drive% (optional).
-        int fields[2] = {-1, -1};
-        for (int f = 0; f < 2; ++f) {
-            while (*args == ' ')
-                ++args;
-            if (*args < '0' || *args > '9')
-                break;
-            int value = 0;
-            while (*args >= '0' && *args <= '9' && value < 1000)
-                value = value * 10 + (*args++ - '0');
-            fields[f] = value;
-        }
-        if (fields[0] == 12 || fields[0] == 24) {
-            sel.slope_db = static_cast<uint8_t>(fields[0]);
-        } else {
-            WaveX::Log::PrintLine(
-                "WAVEX-FILTER: slope must be 12 or 24 - usage: WAVEX-FILTER <12|24> "
-                "[drive 0-100]");
-            return false;
-        }
-        if (fields[1] != -1) {
-            sel.drive = static_cast<float>(fields[1] > 100 ? 100 : fields[1]) / 100.0f;
-        }
-        WaveX::AudioEngine::SetFilterSelection(sel);
-    }
-    WaveX::Log::PrintLine("WAVEX-FILTER: slope=%u drive=%d%%",
-                          static_cast<unsigned>(sel.slope_db),
-                          static_cast<int>(sel.drive * 100.0f + 0.5f));
-    return true;
-#else
-    (void)args;
-    WaveX::Log::PrintLine("WAVEX-FILTER: audio engine disabled in this build");
-    return false;
-#endif
-}
-
 // "LOG ?" lists; "LOG <MODULE|*> <LEVEL>" applies. Returns true if applied.
 static bool HandleLogCommand(const char* args) {
     if (args[0] == '?' && args[1] == '\0') {
@@ -186,8 +138,6 @@ static void DispatchConsoleCommand(const WaveX::Debug::Command& c) {
     if (c.legacy) {
         if (std::strcmp(c.verb, "LOG") == 0) {
             HandleLogCommand(c.args);
-        } else if (std::strcmp(c.verb, "FILTER") == 0) {
-            HandleFilterCommand(c.args);
         } else if (std::strcmp(c.verb, "ENTER-DFU") != 0) {
             WaveX::Log::PrintLine("WAVEX: unknown command '%s'", c.verb);
         }
@@ -204,9 +154,6 @@ static void DispatchConsoleCommand(const WaveX::Debug::Command& c) {
     } else if (std::strcmp(c.verb, "LOG") == 0) {
         HandleLogCommand(c.args) ? FormatOk(seq, reply, sizeof(reply))
                                  : FormatErr(seq, "badlog", reply, sizeof(reply));
-    } else if (std::strcmp(c.verb, "FILTER") == 0) {
-        HandleFilterCommand(c.args) ? FormatOk(seq, reply, sizeof(reply))
-                                    : FormatErr(seq, "filter", reply, sizeof(reply));
 #if WAVEX_AUDIO_ENGINE_ENABLED
     } else if (std::strcmp(c.verb, "STATE") == 0) {
         size_t len = FormatOk(seq, reply, sizeof(reply));
@@ -287,6 +234,12 @@ static void DispatchConsoleCommand(const WaveX::Debug::Command& c) {
             len = AppendKvInt(reply, sizeof(reply), len, "error", state.error);
             len = AppendKvInt(reply, sizeof(reply), len, "mode", state.filter_type);
             len = AppendKvInt(reply, sizeof(reply), len, "topology", state.filter_topology);
+            len = AppendKvInt(reply, sizeof(reply), len, "slope", state.filter_slope);
+            len = AppendKvInt(reply,
+                              sizeof(reply),
+                              len,
+                              "drive",
+                              static_cast<long>(state.filter_drive * 1000.0f + 0.5f));
             len = AppendKvInt(
                 reply, sizeof(reply), len, "cutoff", static_cast<long>(state.sound.cutoff_hz));
             len = AppendKvInt(reply,
