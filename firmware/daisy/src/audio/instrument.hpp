@@ -130,6 +130,10 @@ static_assert(static_cast<uint8_t>(FilterTopology::WaveXSvf) ==
                       Protocol::INST_FILTER_TOPOLOGY_SVF &&
                   static_cast<uint8_t>(FilterTopology::Ladder) ==
                       Protocol::INST_FILTER_TOPOLOGY_LADDER &&
+                  static_cast<uint8_t>(FilterTopology::LadderLite) ==
+                      Protocol::INST_FILTER_TOPOLOGY_LADDER_LITE &&
+                  static_cast<uint8_t>(FilterTopology::LadderZdf) ==
+                      Protocol::INST_FILTER_TOPOLOGY_LADDER_ZDF &&
                   kFilterTopologyCount == Protocol::INST_FILTER_TOPOLOGY_COUNT,
               "FilterTopology mirrors Protocol::InstFilterTopology");
 static_assert(static_cast<uint8_t>(SvfFilter::Slope::Db12) == Protocol::INST_FILTER_SLOPE_12 &&

@@ -13,6 +13,13 @@ versioning and release process.
 
 ### Added
 
+- Two more filter topologies for the ladder A/B: `Ladder 2x` (the
+  Huovilainen port at 2x oversampling) and `ZDF` (the zero-delay-feedback
+  ladder), selectable per Instrument on the MODEL tile alongside SVF and
+  Ladder, carried as wire values 2 and 3 and in WXI. `bench_filter_topology.py`
+  takes `--topology ladder2x|zdf`. These two are a comparison set and may be
+  withdrawn once heard and measured.
+
 - `ladder_zdf.hpp`: a first-party zero-delay-feedback Moog ladder
   (Zavalishin's TPT ladder with the Valimaki/Huovilainen response mixing),
   exact tuning with no oversampling, one saturation per sample, resonance

@@ -28,7 +28,7 @@ sys.path.insert(0, str(ROOT / "tests/hil"))
 from wavex_target import Daisy  # noqa: E402
 
 KICK = "/Drums/Kicks/bassdr01.wav"
-TOPOLOGIES = {"svf": 0, "ladder": 1}
+TOPOLOGIES = {"svf": 0, "ladder": 1, "ladder2x": 2, "zdf": 3}
 TRACKS = range(8)
 PARAM_FILTER_CUTOFF = 2
 # The backend drops an edit whose request id it has already completed, so

@@ -178,8 +178,10 @@ than the master volume.
 
 The Instrument Filter editor selects one of four per-voice modes: low-pass,
 high-pass, band-pass or notch, and which topology renders it: the WaveX
-state-variable filter (`SVF`) or the DaisySP four-pole Huovilainen ladder
-(`Ladder`). Both are Instrument-owned, travel with the Instrument between
+state-variable filter (`SVF`), the Huovilainen four-pole ladder at 4x
+oversampling (`Ladder`), the same model at 2x (`Ladder 2x`) or the
+zero-delay-feedback ladder (`ZDF`); the last two are the 2026-09-14 A/B set.
+All are Instrument-owned, travel with the Instrument between
 Tracks and Banks, persist in WXI and are restored by Revert; zones never
 override either. Cutoff and resonance retain their existing float ranges. The
 WaveX state-variable path returns LP, HP, BP or Notch from the shared filter

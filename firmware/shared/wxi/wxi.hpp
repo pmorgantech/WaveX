@@ -114,7 +114,7 @@ enum class OscType : uint8_t { Off = 0, Sample = 1, Wavetable = 2 };
 // track-and-patch-model.md §3.1: a 3-bit field, 8 values reserved, 4 defined.
 enum class FilterType : uint8_t { SvfLp = 0, SvfHp = 1, SvfBp = 2, SvfNotch = 3 };
 // Which implementation renders that type (Protocol::InstFilterTopology).
-enum class FilterTopology : uint8_t { Svf = 0, Ladder = 1 };
+enum class FilterTopology : uint8_t { Svf = 0, Ladder = 1, LadderLite = 2, LadderZdf = 3 };
 enum class FilterSlope : uint8_t { Db12 = 0, Db24 = 1 };
 
 // ---------------------------------------------------------------------------
@@ -507,7 +507,7 @@ inline void DecodeFilt(const uint8_t* b, Filter& f) {
     f.resonance = ReadF32LE(b + 5, 0.0f, 1.0f, 0.0f);
     f.keytrack = ReadF32LE(b + 9, -kAmountMax, kAmountMax, 0.0f);
     f.env2_amount = ReadF32LE(b + 13, -kAmountMax, kAmountMax, 0.0f);
-    f.topology = (b[17] <= static_cast<uint8_t>(FilterTopology::Ladder))
+    f.topology = (b[17] <= static_cast<uint8_t>(FilterTopology::LadderZdf))
                      ? static_cast<FilterTopology>(b[17])
                      : FilterTopology::Svf;
     f.slope =

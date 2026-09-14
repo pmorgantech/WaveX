@@ -2073,10 +2073,18 @@ enum InstFilterType : uint8_t {
 };
 // Which per-voice filter implementation renders the mode above. Owned by the
 // Instrument exactly like the mode; zones never override it. SVF is the
-// first-party 12/24 dB TPT state-variable filter, LADDER the DaisySP 4-pole
-// Huovilainen ladder (Daisy: audio/voice_filter.hpp). New topologies append.
-enum InstFilterTopology : uint8_t { INST_FILTER_TOPOLOGY_SVF = 0, INST_FILTER_TOPOLOGY_LADDER = 1 };
-static constexpr uint8_t INST_FILTER_TOPOLOGY_COUNT = 2;
+// first-party 12/24 dB TPT state-variable filter; LADDER the Huovilainen
+// 4-pole ladder at 4x oversampling (the DaisySP/Teensy model, ported);
+// LADDER_LITE the same model at 2x; LADDER_ZDF a first-party zero-delay-
+// feedback ladder (Daisy: audio/voice_filter.hpp). 2 and 3 are the
+// 2026-09-14 A/B set and may be withdrawn once heard. New values append.
+enum InstFilterTopology : uint8_t {
+    INST_FILTER_TOPOLOGY_SVF = 0,
+    INST_FILTER_TOPOLOGY_LADDER = 1,
+    INST_FILTER_TOPOLOGY_LADDER_LITE = 2,
+    INST_FILTER_TOPOLOGY_LADDER_ZDF = 3
+};
+static constexpr uint8_t INST_FILTER_TOPOLOGY_COUNT = 4;
 // Slope of the Instrument's filter, applied by whichever topology renders
 // it (SVF: one or two TPT stages; ladder: the 12 or 24 dB tap).
 enum InstFilterSlope : uint8_t { INST_FILTER_SLOPE_12 = 0, INST_FILTER_SLOPE_24 = 1 };

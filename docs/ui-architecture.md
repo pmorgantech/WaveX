@@ -299,8 +299,8 @@ The Filter tab's third control selects the Instrument-owned response mode:
 LP, HP, BP or Notch. It replaces the former inert Env Amount placeholder and
 coalesces mode, cutoff and resonance into the typed filter-settings edit;
 Apply/Revert and WXI save use the same audible working-copy path. The fourth
-control, MODEL, selects which filter renders that mode - SVF (the WaveX
-state-variable filter) or Ladder (the DaisySP four-pole ladder) - and travels
+control, MODEL, selects which filter renders that mode - SVF, Ladder, Ladder
+2x or ZDF (the 2026-09-14 A/B set; see instrument-model.md) - and travels
 in the same edit, so it previews on held notes, undoes with Revert and
 persists with the Instrument. The console exposes it as `filtertopology` and
 `MODEL <0|1>` on the Filter tab. The fifth and sixth controls, SLOPE (12 or

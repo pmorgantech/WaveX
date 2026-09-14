@@ -312,7 +312,10 @@ legacy filter edits preserve the current mode.
 
 The same op also carries the Instrument's filter **topology**, which
 implementation renders that mode: `SVF` (0, the first-party 12/24 dB
-state-variable filter) or `LADDER` (1, the DaisySP four-pole ladder). It
+state-variable filter), `LADDER` (1, the Huovilainen four-pole ladder at 4x
+oversampling), `LADDER_LITE` (2, the same at 2x) or `LADDER_ZDF` (3, a
+zero-delay-feedback ladder); 2 and 3 are the 2026-09-14 A/B set and may be
+withdrawn. It
 occupies the edit request's byte at offset 11 and the sync message's byte at
 offset 18, both formerly reserved; the sync message's last byte at offset 19
 stays reserved and zero. Topologies at or above
