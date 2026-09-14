@@ -110,6 +110,7 @@ sequence(u16 LE) | payload[0..2048] | crc16(u16 LE) | end(0x5A)
 | MSG_INST_ZONE_SYNC | 0x62 | D→E | InstZoneSyncMessage | sixteen-pad map, Instrument identity, busy state and retained mutation result |
 | MSG_INST_PAD_SOUND_OP | 0x65 | E→D | InstPadSoundOpMessage | read one pad or edit its cutoff/amp envelope inheritance |
 | MSG_INST_PAD_SOUND_SYNC | 0x66 | D→E | InstPadSoundSyncMessage | effective pad settings, sample identity and retained edit result |
+| MSG_MIX_OP (Solo) | 0x78 | E→D | `MixOpMessage` | since 2026-09-14 the Sequencer page's Solo sends `MIX_OP_SET_MUTE_MASK` with every other Track's bit set; un-solo sends 0 |
 | MSG_INST_EDIT_OP | 0x80 | E→D | `InstEditOpMessage` | Track Instrument sound snapshot, filter/amp edit, Apply or Revert; retains one backend undo point |
 | MSG_INST_EDIT_SYNC | 0x81 | D→E | `InstEditSyncMessage` | authoritative audible sound values, revision, busy/error, completion and undo-dirty state |
 | MSG_TRACK_OP | 0x63 | E→D | `TrackOpMessage{op, track, value}` | one Track setting (`track-and-patch-model.md` §2.1), idempotent like `MSG_MIX_OP`. `TRACK_OP_SET_MIDI_IN` (`value` = `TrackMidiIn`: 0 Omni, 1..16 that channel **as displayed**, 0xFF Off), `TRACK_OP_SET_POLY_LIMIT` (0 = none, else ≤ `WAVEX_NUM_VOICES`), `TRACK_OP_SET_PRIORITY`, `TRACK_OP_SET_PROGRAM_CHANGE` (0/1). Only `midi_in` has behaviour today; the rest are stored for stages 8 and 6. An out-of-range track or value is rejected and logged, not clamped |
@@ -314,10 +315,9 @@ legacy filter edits preserve the current mode.
 
 The same op also carries the Instrument's filter **topology**, which
 implementation renders that mode: `SVF` (0, the first-party 12/24 dB
-state-variable filter), `LADDER` (1, the Huovilainen four-pole ladder at 4x
-oversampling), `LADDER_LITE` (2, the same at 2x) or `LADDER_ZDF` (3, a
-zero-delay-feedback ladder); 2 and 3 are the 2026-09-14 A/B set and may be
-withdrawn. It
+state-variable filter) or `LADDER` (1, the first-party zero-delay-feedback
+four-pole ladder). Values 2 and 3 carried two Huovilainen ladders for one
+day (2026-09-14) and are retired, not reused. It
 occupies the edit request's byte at offset 11 and the sync message's byte at
 offset 18, both formerly reserved; the sync message's last byte at offset 19
 stays reserved and zero. Topologies at or above

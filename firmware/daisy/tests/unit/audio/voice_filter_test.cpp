@@ -1,6 +1,6 @@
 // Unit tests for VoiceFilter (src/audio/voice_filter.hpp): the per-voice
 // filter that each Instrument switches between the first-party TPT SVF and
-// daisysp::LadderFilter. What is pinned is the contract the voice path
+// the ZDF ladder. What is pinned is the contract the voice path
 // relies on being the same whichever topology is selected - exact bypass at
 // or above Nyquist, a real filter below it, callback-safe tuning while
 // running, the four modes - plus that switching between them mid-note is
@@ -51,12 +51,8 @@ VoiceFilter MakeFilter(FilterTopology topology, float cutoff_hz, float res = 0.0
     return f;
 }
 
-const FilterTopology kBoth[] = {FilterTopology::WaveXSvf,
-                                FilterTopology::Ladder,
-                                FilterTopology::LadderLite,
-                                FilterTopology::LadderZdf};
-const FilterTopology kLadders[] = {
-    FilterTopology::Ladder, FilterTopology::LadderLite, FilterTopology::LadderZdf};
+const FilterTopology kBoth[] = {FilterTopology::WaveXSvf, FilterTopology::Ladder};
+const FilterTopology kLadders[] = {FilterTopology::Ladder};
 
 }  // namespace
 
@@ -324,7 +320,7 @@ TEST(VoiceFilterTest, SvfModesRejectTheExpectedFrequencyBands) {
 }
 
 TEST(VoiceFilterTest, LadderModesRejectTheExpectedFrequencyBands) {
-    // The ladders' HP/BP are Huovilainen's weighted stage sums and their
+    // The ladder's HP/BP are Valimaki/Huovilainen's weighted stage sums and its
     // Notch is input minus the 12 dB band-pass tap, so the skirts are
     // shallower and the HP passband settles later than the SVF's (HP12 is
     // still about -2 dB three octaves up); the bands still have to be the

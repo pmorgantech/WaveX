@@ -65,6 +65,13 @@ esp_err_t inter_mcu_send_note_off_track(uint8_t note, uint8_t track);
  */
 esp_err_t inter_mcu_send_track_op(uint8_t op, uint8_t track, uint16_t value);
 
+/**
+ * One mixer control change (MSG_MIX_OP). `op` is a WaveX::Protocol::MixOp
+ * and `value` is op-dependent - see protocol.h. The Sequencer page's Solo
+ * expands to MIX_OP_SET_MUTE_MASK so the whole set moves in one message.
+ */
+esp_err_t inter_mcu_send_mix_op(uint8_t op, uint8_t track, uint16_t value);
+
 // Phase I helpers
 typedef enum {
     WAVEX_SAMPLE_REC_START = 1,

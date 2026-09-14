@@ -178,19 +178,21 @@ than the master volume.
 
 The Instrument Filter editor selects one of four per-voice modes: low-pass,
 high-pass, band-pass or notch, and which topology renders it: the WaveX
-state-variable filter (`SVF`), the Huovilainen four-pole ladder at 4x
-oversampling (`Ladder`), the same model at 2x (`Ladder 2x`) or the
-zero-delay-feedback ladder (`ZDF`); the last two are the 2026-09-14 A/B set.
-All are Instrument-owned, travel with the Instrument between
+state-variable filter (`SVF`) or the zero-delay-feedback four-pole ladder
+(`Ladder`). Both are Instrument-owned, travel with the Instrument between
 Tracks and Banks, persist in WXI and are restored by Revert; zones never
 override either. Cutoff and resonance retain their existing float ranges. The
 WaveX state-variable path returns LP, HP, BP or Notch from the shared filter
 state; the ladder renders LP, HP and BP as its weighted stage sums at the
-bench slope and Notch as input minus its 12 dB band-pass tap, an
-approximation that nulls at the cutoff. Slope (12 or 24 dB) and drive are
+slope and Notch as input minus its 12 dB band-pass tap, an approximation
+that nulls at the cutoff. Under the one RES control the ladder
+self-oscillates from about 74% and the SVF, which cannot, rises to Q 16;
+both sit near +13 to +15 dB at 70%. Slope (12 or 24 dB) and drive are
 Instrument-owned as well: on the SVF the slope adds a second TPT stage and
-drive soft-clips the resonance path; on the ladder the slope picks the 12 or
-24 dB tap and drive pushes its input stage. All four filter settings preview
+drive raises and soft-saturates the input with the same gain law as the
+ladders while soft-limiting the resonance path; on the ladders the slope
+picks the 12 or 24 dB tap and drive pushes their input stage. On every
+topology drive 0 is the clean filter and more drive is louder and dirtier. All four filter settings preview
 on held notes, undo with Revert and persist in WXI. At zero
 cutoff, high-pass and notch pass the input while low-pass and band-pass are
 silent. At or above Nyquist, low-pass and notch pass while high-pass and

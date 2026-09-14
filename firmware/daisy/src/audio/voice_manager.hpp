@@ -749,14 +749,20 @@ class VoiceManager {
                     if (ended)
                         v.envelope.Release();
                     s *= v.source_level;
+                    // The region fade shapes the SOURCE, before the filter,
+                    // exactly as the dual path applies it. It used to sit
+                    // after the filter and envelope, where a sample's
+                    // fade-out multiplied the whole voice by zero past the
+                    // end frame - so a resonant filter's ring through the
+                    // release, and the release itself, were silenced
+                    // (found 2026-09-14 chasing a ladder that would not sing).
+                    if (apply_region_fade)
+                        s *= region_fade.Gain(frame);
                 }
 
                 s = v.filter.Process(s);
                 float env = v.envelope.Process();
                 s *= env;
-                if (!dual && apply_region_fade) {
-                    s *= region_fade.Gain(frame);
-                }
 
                 out_l[i] += s * left_gain;
                 out_r[i] += s * right_gain;

@@ -328,8 +328,8 @@ The Filter tab's third control selects the Instrument-owned response mode:
 LP, HP, BP or Notch. It replaces the former inert Env Amount placeholder and
 coalesces mode, cutoff and resonance into the typed filter-settings edit;
 Apply/Revert and WXI save use the same audible working-copy path. The fourth
-control, MODEL, selects which filter renders that mode - SVF, Ladder, Ladder
-2x or ZDF (the 2026-09-14 A/B set; see instrument-model.md) - and travels
+control, MODEL, selects which filter renders that mode - SVF or Ladder (the
+zero-delay-feedback ladder; see instrument-model.md) - and travels
 in the same edit, so it previews on held notes, undoes with Revert and
 persists with the Instrument. The console exposes it as `filtertopology` and
 `MODEL <0|1>` on the Filter tab. The fifth and sixth controls, SLOPE (12 or
@@ -342,6 +342,23 @@ The frontend suite passes 274 tests, and the two-board LFO HIL passes the
 save/readback flow (11.70 seconds). The inspected 1280×720 capture is
 `logs/instrument-lfo-20260912.png`.
 
+
+### Sequencer Solo
+
+Shift ▸ Solo on the Sequencer page solos the selected row's Track: the page
+sends one `MIX_OP_SET_MUTE_MASK` with every other Track's bit set, so the
+engine never passes through a wrong intermediate mute set. The soloed row's
+Track button turns green and its steps take a green outline (the playhead's
+orange outline wins where the two cross); every other row dims to half, as a
+row-muted row does, and the label reads `/ SOLO` or `/ MUTE`. Shift ▸ Unsolo
+(or Solo on another row) sends the new mask; un-solo clears it. Solo is
+frontend-owned and sticky - leaving the page does not clear it - and the UI
+re-sends its mask whenever the backend link comes up, so a reboot of either
+board cannot leave the engine muted behind a page that shows nothing. It is
+separate from the row Mute, which stops a row triggering and is saved with
+the pattern. It replaced the Step off softkey, which only duplicated tapping
+the step. Console: `seqsolo` (display Track number, 0 = none) and
+`SOLO <0-16>`. Panel capture: `logs/sequencer-solo-20260914.png`.
 
 ### Sequencer Locks
 

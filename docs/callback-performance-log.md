@@ -55,6 +55,11 @@ which is why the averages swing more than the peaks. Captures:
 `logs/perf-ladder2x-mod-20260914-033436.log`,
 `logs/perf-ladder-mod-20260914-022750.log`.
 
+Outcome the same day: the ZDF ladder was kept as the `Ladder` topology and
+both Huovilainen variants were pruned; at working settings the three had
+differed by -35 dB and the 4x model's cost could not be an eight-voice
+default.
+
 ## Workload and evidence notes — 2026-09-07
 
 Both captures used firmware commit 176ce1f, persistent QSPI -O2, 480 MHz,

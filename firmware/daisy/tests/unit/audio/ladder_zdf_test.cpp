@@ -1,17 +1,15 @@
 // Unit tests for ZdfLadder (src/audio/ladder_zdf.hpp): a 4-pole lowpass with
 // exact tuning, a resonance that peaks at the cutoff and self-oscillates at
 // the top without blowing up, the six responses in their bands, and a linear
-// response close to the Huovilainen port's so the two are comparable.
+// resonance range that reaches self-oscillation cleanly.
 
 #include "audio/ladder_zdf.hpp"
 
 #include <gtest/gtest.h>
 
-#include "audio/ladder_huovilainen.hpp"
 #include <algorithm>
 #include <cmath>
 
-using WaveX::AudioEngine::HuovilainenLadder;
 using WaveX::AudioEngine::ZdfLadder;
 
 namespace {
@@ -121,45 +119,14 @@ TEST(ZdfLadderTest, ModesRejectTheExpectedBands) {
     }
 }
 
-TEST(ZdfLadderTest, LinearResponseMatchesTheHuovilainenPortWithinTolerance) {
-    // Same model family at zero resonance: the two must agree well enough
-    // that an A/B between them is about the feedback structure and the
-    // nonlinearity, not about tuning.
-    for (float cutoff: {200.0f, 1000.0f, 4000.0f}) {
-        ZdfLadder zdf = Make(cutoff, 0.0f);
-        HuovilainenLadder<4> hnm;
-        hnm.Init(kSr);
-        hnm.SetInputDrive(1.0f);
-        hnm.SetPassbandGain(0.5f);
-        hnm.SetRes(0.0f);
-        hnm.SetFreq(cutoff);
-        hnm.Reset();
-        for (float probe: {cutoff * 0.25f, cutoff * 0.5f, cutoff, cutoff * 2.0f}) {
-            zdf.Reset();
-            hnm.Reset();
-            const float a = SteadyStateGain(zdf, probe, 0.2f);
-            const float b = SteadyStateGain(hnm, probe, 0.2f);
-            EXPECT_NEAR(a, b, 0.2f * std::max(a, b) + 0.005f) << cutoff << " @ " << probe;
-        }
-    }
-}
-
-TEST(ZdfLadderTest, DriveShapesALoudSignalWithoutChangingAQuietOne) {
+TEST(ZdfLadderTest, DriveIsAGainIntoTheClipWithNoMakeUp) {
+    // Drive 1 is unity; drive 4 is DaisySP's 2.5x (passband-weighted) into
+    // the clip with no make-up - the same law the SVF's input stage uses.
     ZdfLadder soft = Make(5000.0f, 0.0f);
     ZdfLadder hot = Make(5000.0f, 0.0f);
     hot.SetInputDrive(4.0f);
     EXPECT_NEAR(SteadyStateGain(soft, 100.0f, 0.05f), 1.0f, 0.02f);
-    EXPECT_NEAR(SteadyStateGain(hot, 100.0f, 0.02f), 1.0f, 0.05f);
-    soft.Reset();
-    hot.Reset();
-    float difference = 0.0f;
-    for (int i = 0; i < 9600; ++i) {
-        const float in = std::sin(2.0f * kPi * 100.0f * static_cast<float>(i) / kSr);
-        const float a = soft.Process(in), b = hot.Process(in);
-        if (i > 4800)
-            difference = std::max(difference, std::fabs(a - b));
-    }
-    EXPECT_GT(difference, 0.1f);
+    EXPECT_NEAR(SteadyStateGain(hot, 100.0f, 0.01f), 2.5f, 0.1f);
 }
 
 TEST(ZdfLadderTest, SweepsAtFullResonanceAndDriveStayFinite) {

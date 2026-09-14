@@ -1,68 +1,61 @@
 #pragma once
 
-// The per-voice filter, selectable per Instrument between four topologies
+// The per-voice filter, selectable per Instrument between two topologies
 // (Protocol::InstFilterTopology, carried by InstrumentFilter::topology):
 //
-//   FilterTopology::WaveXSvf   - svf_filter.hpp: the first-party TPT
-//                                state-variable filter. LP/HP/BP/Notch, 12
-//                                or 24 dB, cubic soft-clip drive.
-//   FilterTopology::Ladder     - ladder_huovilainen.hpp at 4x oversampling:
-//                                WaveX's port of DaisySP's port of the Teensy
-//                                Huovilainen Moog ladder (all MIT), bit for
-//                                bit the DaisySP filter. Four one-poles in a
-//                                tanh feedback loop, LP/BP/HP at 12 or 24 dB
-//                                with passband-gain compensation. About 500
-//                                cycles per sample.
-//   FilterTopology::LadderLite - the same port at 2x, Huovilainen's own
-//                                published oversampling. Half the cost;
-//                                nothing else differs, so an A/B against
-//                                Ladder hears only the oversampling.
-//   FilterTopology::LadderZdf  - ladder_zdf.hpp: a first-party zero-delay-
-//                                feedback ladder, exact tuning with no
-//                                oversampling and one saturation per
-//                                sample. About the cost of the 24 dB SVF.
+//   FilterTopology::WaveXSvf - svf_filter.hpp: the first-party TPT
+//                              state-variable filter. LP/HP/BP/Notch, 12 or
+//                              24 dB, input-stage drive.
+//   FilterTopology::Ladder   - ladder_zdf.hpp: a first-party zero-delay-
+//                              feedback Moog ladder, exact tuning with no
+//                              oversampling and one saturation per sample.
+//                              About the cost of the 24 dB SVF.
 //
-// All three ladders share DaisySP's response set (LP/BP/HP at 12 or 24 dB)
-// and the same saturation curve. Notch is not a ladder response; it is
-// rendered as input minus the 12 dB band-pass tap, a true null at the
-// cutoff (that tap sits at unity gain and zero phase there) and only an
-// approximation of a notch skirt away from it.
+// HISTORY. Two more ladders were built and measured on 2026-09-14 - a port
+// of the DaisySP/Teensy Huovilainen ladder at 4x and 2x oversampling - and
+// pruned the same day: at listening settings all three were the same filter
+// to within -35 dB, the 4x model cost ~40 points of the block budget for
+// eight voices against the ZDF's ~3, and the only audible divergence was at
+// high cutoff with full resonance and drive on the high-pass taps. The
+// numbers are in docs/callback-performance-log.md; wire values 2 and 3 are
+// retired, not reused.
+//
+// The ladder renders LP/BP/HP at 12 or 24 dB from its stage taps; Notch is
+// not a ladder response and is rendered as input minus the 12 dB band-pass
+// tap, a true null at the cutoff and only an approximation of a notch skirt
+// away from it.
 //
 // Topology, mode, slope and drive are Instrument-owned voice character:
 // they arrive on VoiceTriggerParams for the next note and through
 // VoiceInstrumentParams for held ones. FilterConfig (slope, drive) applies
 // to whichever topology is active.
 //
-// Contracts kept identical across all four:
+// Contracts kept identical across both:
 //   - cutoff at or above Nyquist is an EXACT bypass for LP/Notch and silence
 //     for HP/BP, and cutoff at or below zero the reverse (the voice-manager
-//     tests rely on it; the ladders would otherwise clamp to their top and
-//     still filter), so it is handled here before any of them sees it;
+//     tests rely on it; the ladder would otherwise clamp to its top and
+//     still filter), so it is handled here before either sees it;
 //   - resonance 0..1, cutoff in Hz, both callable at block rate from the
 //     callback: no allocation, only the tuning arithmetic each already pays
-//     (fast_tan.hpp's polynomial, or the Huovilainen tuning polynomials) and
-//     only when the tuning changes.
+//     (fast_tan.hpp's polynomial) and only when the tuning changes.
 //
-// Only the ACTIVE topology is retuned on SetCutoff/SetResonance; the others
-// are brought up to date when switched in, so an idle topology costs
-// nothing per block. A switch clears the incoming filter's state so the
-// previous topology cannot leak through as a click.
+// RESONANCE, ONE CONTROL FOR BOTH (2026-09-14, tuned on the bench). The
+// ladder's loop gain is 5.4 * resonance: it self-oscillates from about 74%
+// and holds a clean, saturation-bounded tone above that. The SVF cannot
+// self-oscillate by construction (its Q clamp is the ceiling), so its cubic
+// Q curve is set to meet the ladder's peak height through the middle of the
+// travel: both are near +13..15 dB at 70%.
 //
-// COST. Measured 2026-09-14 on the profiling image, eight held modulated
-// voices, 24 dB, full drive: SVF peak 30%, Ladder peak 70% of the block
-// budget. LadderLite and LadderZdf are the candidates to bring the ladder
-// sound under the gate; their rows are the open item in docs/roadmap.md
-// "Outstanding hardware verification". Four topologies are the A/B set, not
-// the product: the losers are removed once listened to.
+// Only the ACTIVE topology is retuned on SetCutoff/SetResonance; the other
+// is brought up to date when switched in, so an idle topology costs nothing
+// per block. A switch clears the incoming filter's state so the previous
+// topology cannot leak through as a click.
 //
-// All four live inside Voice, so they inherit VoiceManager's DTCM placement
-// (see svf_filter.hpp on why that matters). Each Voice holds every state
-// (about 310 B in all); folding the inactive ones into a union is the
-// obvious follow-up once the set is pruned.
+// Both live inside Voice, so they inherit VoiceManager's DTCM placement
+// (see svf_filter.hpp on why that matters).
 //
 // HAL-free: plain float arithmetic, host-testable.
 
-#include "ladder_huovilainen.hpp"
 #include "ladder_zdf.hpp"
 #include "svf_filter.hpp"
 #include <cstdint>
@@ -71,30 +64,25 @@ namespace WaveX {
 namespace AudioEngine {
 
 // Values match Protocol::InstFilterTopology (static_asserted in instrument.hpp).
-enum class FilterTopology : uint8_t { WaveXSvf = 0, Ladder = 1, LadderLite = 2, LadderZdf = 3 };
-static constexpr uint8_t kFilterTopologyCount = 4;
+enum class FilterTopology : uint8_t { WaveXSvf = 0, Ladder = 1 };
+static constexpr uint8_t kFilterTopologyCount = 2;
 
 // Slope and drive. Both default OFF so a filter nobody configured is the
 // linear 12 dB one the tests were written against.
 struct FilterConfig {
     SvfFilter::Slope slope = SvfFilter::Slope::Db12;
-    float drive = 0.0f;  // 0..1; SVF soft clip, ladders' input drive
+    float drive = 0.0f;  // 0..1; SVF input stage, ladder input drive
 
     bool operator==(const FilterConfig& o) const { return slope == o.slope && drive == o.drive; }
     bool operator!=(const FilterConfig& o) const { return !(*this == o); }
 };
 
 class VoiceFilter {
-    using LadderHq = HuovilainenLadder<4>;
-    using LadderLite = HuovilainenLadder<2>;
-
    public:
     void Init(uint32_t sample_rate) {
         sample_rate_ = sample_rate > 0 ? sample_rate : 48000;
         mine_.Init(sample_rate_);
-        ladder_hq_.Init(static_cast<float>(sample_rate_));
-        ladder_lite_.Init(static_cast<float>(sample_rate_));
-        ladder_zdf_.Init(static_cast<float>(sample_rate_));
+        ladder_.Init(static_cast<float>(sample_rate_));
         config_ = FilterConfig{};
         topology_ = FilterTopology::WaveXSvf;
         mode_ = SvfFilter::Mode::LowPass;
@@ -130,7 +118,7 @@ class VoiceFilter {
     void SetMode(SvfFilter::Mode mode) {
         mode_ = static_cast<uint8_t>(mode) <= 3 ? mode : SvfFilter::Mode::LowPass;
         mine_.SetMode(mode_);
-        ApplyLadderMode();
+        ladder_.SetFilterMode(LadderMode());
     }
     SvfFilter::Mode GetMode() const { return mode_; }
 
@@ -164,85 +152,45 @@ class VoiceFilter {
                     : mode_ == SvfFilter::Mode::HighPass || mode_ == SvfFilter::Mode::Notch;
             return pass ? in : 0.f;
         }
-        float out;
-        switch (topology_) {
-            case FilterTopology::LadderLite:
-                out = ladder_lite_.Process(in);
-                break;
-            case FilterTopology::LadderZdf:
-                out = ladder_zdf_.Process(in);
-                break;
-            default:
-                out = ladder_hq_.Process(in);
-                break;
-        }
+        const float out = ladder_.Process(in);
         return mode_ == SvfFilter::Mode::Notch ? in - out : out;
     }
 
     // Clears state, keeps tuning, mode and config.
     void Reset() {
-        switch (topology_) {
-            case FilterTopology::WaveXSvf:
-                mine_.Reset();
-                break;
-            case FilterTopology::LadderLite:
-                ladder_lite_.Reset();
-                break;
-            case FilterTopology::LadderZdf:
-                ladder_zdf_.Reset();
-                break;
-            default:
-                ladder_hq_.Reset();
-                break;
+        if (topology_ == FilterTopology::WaveXSvf) {
+            mine_.Reset();
+        } else {
+            ladder_.Reset();
         }
     }
 
    private:
-    // The ladders share one response enumeration order (LP24, LP12, BP24,
-    // BP12, HP24, HP12); this is the index of the response for mode x
-    // slope. Notch runs the BP12 tap, which Process() subtracts from the
-    // input.
-    uint8_t LadderModeIndex() const {
+    // The ladder response for mode x slope. Notch runs the BP12 tap, which
+    // Process() subtracts from the input.
+    ZdfLadder::Mode LadderMode() const {
+        using M = ZdfLadder::Mode;
         const bool db24 = config_.slope == SvfFilter::Slope::Db24;
         switch (mode_) {
             case SvfFilter::Mode::HighPass:
-                return db24 ? 4 : 5;
+                return db24 ? M::HP24 : M::HP12;
             case SvfFilter::Mode::BandPass:
-                return db24 ? 2 : 3;
+                return db24 ? M::BP24 : M::BP12;
             case SvfFilter::Mode::Notch:
-                return 3;
+                return M::BP12;
             default:
-                return db24 ? 0 : 1;
+                return db24 ? M::LP24 : M::LP12;
         }
-    }
-    template <typename L>
-    void SetLadderMode(L& ladder) const {
-        ladder.SetFilterMode(static_cast<typename L::Mode>(LadderModeIndex()));
-    }
-    void ApplyLadderMode() {
-        SetLadderMode(ladder_hq_);
-        SetLadderMode(ladder_lite_);
-        SetLadderMode(ladder_zdf_);
     }
 
     void ApplyConfig() {
         mine_.SetSlope(config_.slope);
         mine_.SetDrive(config_.drive);
-        ApplyLadderMode();
-        ApplyLadderDrive();
-    }
-
-    // A ladder's input always runs through its saturation; its "drive" is a
-    // gain of up to 4 into that stage. Map 0..1 onto 1..4 so drive 0 leaves
-    // the level alone. The Huovilainen ladders also take DaisySP's
-    // passband-gain compensation; the ZDF ladder applies its own.
-    void ApplyLadderDrive() {
-        const float drive = 1.0f + config_.drive * 3.0f;
-        ladder_hq_.SetPassbandGain(kLadderPassbandGain);
-        ladder_hq_.SetInputDrive(drive);
-        ladder_lite_.SetPassbandGain(kLadderPassbandGain);
-        ladder_lite_.SetInputDrive(drive);
-        ladder_zdf_.SetInputDrive(drive);
+        ladder_.SetFilterMode(LadderMode());
+        // The ladder's input always runs through its saturation; its drive
+        // is a gain of up to 4 into that stage. 0..1 onto 1..4 so drive 0
+        // leaves the level alone - the same law the SVF's input stage uses.
+        ladder_.SetInputDrive(1.0f + config_.drive * 3.0f);
     }
 
     void Retune() {
@@ -254,26 +202,14 @@ class VoiceFilter {
         ladder_boundary_ = cutoff_hz_ >= nyquist ? 2 : cutoff_hz_ <= 0 ? 1 : 0;
         if (ladder_boundary_)
             return;
-        // Resonance 0..1 onto each ladder's 0..1 (loop gain 0..4): the
-        // classic range. None of the topologies self-oscillates at 1; the
-        // ladders' higher ceilings are not exposed.
-        switch (topology_) {
-            case FilterTopology::LadderLite:
-                ladder_lite_.SetFreq(cutoff_hz_);
-                ladder_lite_.SetRes(resonance_);
-                break;
-            case FilterTopology::LadderZdf:
-                ladder_zdf_.SetFreq(cutoff_hz_);
-                ladder_zdf_.SetRes(resonance_);
-                break;
-            default:
-                ladder_hq_.SetFreq(cutoff_hz_);
-                ladder_hq_.SetRes(resonance_);
-                break;
-        }
+        ladder_.SetFreq(cutoff_hz_);
+        ladder_.SetRes(resonance_ * kLadderResonanceScale);
     }
 
-    static constexpr float kLadderPassbandGain = 0.5f;
+    // 100% = loop gain 5.4 (the ladder's own unit is loop gain / 4). 4.0 is
+    // exactly marginal and the saturation damps it, so the scale is what
+    // makes the top of the travel sing; oscillation starts at 4 / 5.4 = 74%.
+    static constexpr float kLadderResonanceScale = 1.35f;
 
     uint32_t sample_rate_ = 48000;
     FilterConfig config_;
@@ -284,9 +220,7 @@ class VoiceFilter {
     SvfFilter::Mode mode_ = SvfFilter::Mode::LowPass;
 
     SvfFilter mine_;
-    LadderHq ladder_hq_;
-    LadderLite ladder_lite_;
-    ZdfLadder ladder_zdf_;
+    ZdfLadder ladder_;
 };
 
 }  // namespace AudioEngine

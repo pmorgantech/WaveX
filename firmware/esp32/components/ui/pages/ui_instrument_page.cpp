@@ -45,7 +45,7 @@ uint32_t nextId() {
 constexpr uint8_t kParamFilterMode = 0xFC;      // page-local field, never a control-change id
 constexpr uint8_t kParamFilterTopology = 0xFB;  // likewise: which filter renders the mode
 constexpr const char* filterModes[] = {"Low-pass", "High-pass", "Band-pass", "Notch"};
-constexpr const char* filterTopologies[] = {"SVF", "Ladder", "Ladder 2x", "ZDF"};
+constexpr const char* filterTopologies[] = {"SVF", "Ladder"};
 constexpr int kFilterTopologyMax = WaveX::Protocol::INST_FILTER_TOPOLOGY_COUNT - 1;
 static_assert(sizeof(filterTopologies) / sizeof(filterTopologies[0]) == kFilterTopologyMax + 1,
               "one label per wire topology");

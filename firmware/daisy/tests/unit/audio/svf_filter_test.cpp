@@ -142,10 +142,25 @@ TEST(SvfFilterTest, MagnitudeMatchesAnalogPrototypeAtQHalf) {
 
 // Peak gain of a 2-pole lowpass driven exactly at cutoff is Q. resonance=1
 // maps to kMaxQ, so the resonant peak must measure ~kMaxQ - not merely "more
-// than flat".
+// than flat" - and the cubic curve puts half travel near +4.5 dB.
 TEST(SvfFilterTest, ResonantGainAtCutoffEqualsQ) {
     SvfFilter f = MakeFilter(1000.0f, 1.0f);
     EXPECT_NEAR(SteadyStatePeak(f, 1000.0f), SvfFilter::kMaxQ, SvfFilter::kMaxQ * 0.03f);
+    SvfFilter half = MakeFilter(1000.0f, 0.5f);
+    const float q_half = SvfFilter::kMinQ + 0.125f * (SvfFilter::kMaxQ - SvfFilter::kMinQ);
+    EXPECT_NEAR(SteadyStatePeak(half, 1000.0f), q_half, q_half * 0.05f);
+}
+
+TEST(SvfFilterTest, TwentyFourDbPeaksAtQNotQSquared) {
+    // The second stage is a fixed Butterworth pair: at the cutoff it costs
+    // -3 dB and adds no bump, so the resonant peak of the 24 dB filter is
+    // the 12 dB peak times 0.707, not Q times Q.
+    SvfFilter f12 = MakeFilter(1000.0f, 1.0f);
+    SvfFilter f24 = MakeFilter(1000.0f, 1.0f);
+    f24.SetSlope(SvfFilter::Slope::Db24);
+    const float p12 = SteadyStatePeak(f12, 1000.0f);
+    const float p24 = SteadyStatePeak(f24, 1000.0f);
+    EXPECT_NEAR(p24, p12 * 0.7071f, p12 * 0.05f);
 }
 
 // --- Resonance -------------------------------------------------------------
@@ -267,9 +282,10 @@ TEST(SvfFilterTest, SlopeDefaultsToTwelveAndBypassStillHolds) {
 
 // --- Drive -------------------------------------------------------------------
 //
-// Drive 0 is the linear filter exactly; drive > 0 soft-clips the bandpass term
-// inside the integrator loop, so a hot resonant peak is level-limited while a
-// quiet signal passes as before.
+// Drive 0 is the linear filter exactly; drive > 0 raises and soft-saturates
+// the input (1x .. 2.5x, the ladders' law), blended in continuously. It
+// never touches the integrator loop: the resonance is what the resonance
+// setting asks for at every drive.
 
 TEST(SvfFilterTest, ZeroDriveIsBitIdenticalToLinear) {
     SvfFilter linear = MakeFilter(1000.0f, 0.8f);
@@ -281,20 +297,26 @@ TEST(SvfFilterTest, ZeroDriveIsBitIdenticalToLinear) {
     }
 }
 
-TEST(SvfFilterTest, DriveLimitsTheResonantPeakButLeavesQuietSignalsAlone) {
+TEST(SvfFilterTest, DriveLeavesTheResonantPeakAloneAndRaisesQuietSignalsByItsGain) {
     // Full resonance, a full-scale sine sitting on the cutoff: the linear
-    // filter's peak is Q-sized; with drive the clipper folds it down.
+    // filter's peak is Q-sized, and drive does not damp it - the saturated
+    // input is at most unity, so the driven peak is at most the linear one
+    // and stays finite.
     SvfFilter linear = MakeFilter(1000.0f, 1.0f);
     SvfFilter driven = MakeFilter(1000.0f, 1.0f);
     driven.SetDrive(1.0f);
     const float hot_linear = SteadyStatePeak(linear, 1000.0f);
     const float hot_driven = SteadyStatePeak(driven, 1000.0f);
     EXPECT_GT(hot_linear, 4.0f) << "sanity: the linear peak at Q=20 is large";
-    EXPECT_LT(hot_driven, 0.5f * hot_linear);
+    EXPECT_GT(hot_driven, 0.5f * hot_linear) << "drive must not damp the resonance";
+    // A full-scale sine saturated at 2.5x is nearly square: its fundamental
+    // is up to 4/pi of the sine's, and that is all the peak can grow by.
+    EXPECT_LE(hot_driven, hot_linear * 1.3f);
     EXPECT_TRUE(std::isfinite(hot_driven));
 
-    // At -60 dB the clipper's cubic is indistinguishable from unit gain, so
-    // the driven filter must match the linear one to well under 1%.
+    // At -60 dB both cubics are indistinguishable from straight lines, so the
+    // driven filter is the linear one raised by exactly the input gain (2.5x
+    // at full drive, the same law as the ladders).
     SvfFilter quiet_linear = MakeFilter(1000.0f, 0.3f);
     SvfFilter quiet_driven = MakeFilter(1000.0f, 0.3f);
     quiet_driven.SetDrive(1.0f);
@@ -308,7 +330,33 @@ TEST(SvfFilterTest, DriveLimitsTheResonantPeakButLeavesQuietSignalsAlone) {
             peak_d = std::max(peak_d, std::fabs(d));
         }
     }
-    EXPECT_NEAR(peak_d / peak_l, 1.0f, 0.01f);
+    EXPECT_NEAR(peak_d / peak_l, 2.5f, 0.03f);
+}
+
+TEST(SvfFilterTest, DriveIsContinuousFromZeroAndLouderAsItRises) {
+    // No step at the first non-zero setting, and level rises monotonically
+    // with drive on a moderate resonant signal.
+    float last = 0.0f, first = 0.0f;
+    for (float drive: {0.0f, 0.01f, 0.1f, 0.3f, 0.6f, 1.0f}) {
+        SvfFilter f = MakeFilter(1000.0f, 0.5f);
+        f.SetDrive(drive);
+        float peak = 0.0f;
+        for (int i = 0; i < 24000; ++i) {
+            const float in =
+                0.5f * std::sin(2.0f * kPi * 700.0f * static_cast<float>(i) / 48000.0f);
+            const float out = f.Process(in);
+            if (i > 12000)
+                peak = std::max(peak, std::fabs(out));
+        }
+        if (drive == 0.0f)
+            first = peak;
+        else if (drive == 0.01f)
+            EXPECT_NEAR(peak, last, 0.02f * last) << "1% drive must not jump";
+        else
+            EXPECT_GT(peak, last) << "drive " << drive;
+        last = peak;
+    }
+    EXPECT_GT(last, 1.5f * first) << "full drive is clearly louder than none";
 }
 
 TEST(SvfFilterTest, DriveIsClampedAndReadsBack) {
@@ -331,9 +379,10 @@ TEST(SvfFilterTest, DrivenTwentyFourDbSweepStaysFiniteAndBounded) {
         ASSERT_TRUE(std::isfinite(out)) << "sample " << i;
         peak = std::max(peak, std::fabs(out));
     }
-    // A self-oscillating linear 4-pole at Q=20 would run far past this; the
-    // clipper holds the resonance to a few times full scale at most.
-    EXPECT_LT(peak, 8.0f);
+    // Two resonant stages at Q=20 can reach Q^2 = 400x on a sine held at the
+    // cutoff; the sweep never dwells there, and drive adds no gain of its
+    // own beyond the 2.5x input stage. Finite and within that bound.
+    EXPECT_LT(peak, 500.0f);
 }
 
 TEST(SvfFilterTest, CombinedTuningMatchesSequentialSettersWithoutResettingState) {

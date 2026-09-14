@@ -75,19 +75,22 @@
 //     lowpass shape. Both stages share one coefficient set, so modulation
 //     still costs one tan() per change.
 //
-//   - Drive > 0 soft-clips the bandpass term v1 inside the integrator loop
-//     before it is written back to the state. v1 is what the resonance
-//     feedback path runs through, so this is where an analogue filter
-//     saturates: the clipper only ever reduces |v1|, so the loop gain
-//     cannot exceed the linear case and stability is preserved, while a
-//     self-oscillating peak flattens into a rounded, level-limited tone
-//     instead of a clean sine that grows without bound. The curve is the
-//     cubic x - x^3/3 on [-1, 1] clamped to +-2/3 beyond it: unit slope at
-//     zero (a quiet signal is untouched), continuous first derivative at the
-//     clamp, and no divide, transcendental or table - four multiplies and
-//     two compares per stage. Drive scales the signal into the clipper
-//     (1x .. kMaxDriveGain x) and back out, so it sets how hot the
-//     resonance has to be before it starts to fold.
+//   - Drive (rewritten 2026-09-14) does what drive does on the ladders and
+//     on the bench: more of it is louder and dirtier, never duller. It is
+//     an input stage only: the signal is raised by the same passband-
+//     weighted gain law the ladders use (1x at drive 0 to 2.5x at drive 1)
+//     and soft-saturated, blended in by the drive amount so drive 0 is the
+//     linear filter bit for bit and 1% is a whisper away from it. The
+//     curve is one cubic, x - x^3/6.75 on [-1.5, 1.5] clamped to +-1
+//     beyond it: unit slope at zero, unit ceiling, continuous first
+//     derivative at the clamp, no divide, transcendental or table.
+//     Nothing touches the integrator loop. Two earlier versions did, and
+//     both were wrong in the same way: a per-sample limiter on the
+//     bandpass state damps a high-Q ring drastically even when blended in
+//     at 1% (resonance 0.7 is Q 14 here, and the state runs far above
+//     unity), which heard as a level jump at the first click of drive and
+//     as "more drive, quieter". The resonance stays exactly as linear as
+//     the resonance setting asks for; stability comes from the Q clamp.
 //
 // HAL-free: plain float arithmetic, host-testable.
 
@@ -116,15 +119,24 @@ class SvfFilter {
     // Pre-gain into the soft clipper at drive = 1.0. 8x means a bandpass
     // term of 1/8 full scale already starts to round; at drive just above 0
     // only a genuinely runaway resonance (|v1| toward 1) is touched.
-    static constexpr float kMaxDriveGain = 8.0f;
+    // Input gain at full drive: DaisySP's ladder law, 1 + (4 - 1) * (1 - 0.5).
+    static constexpr float kMaxDriveGain = 2.5f;
 
-    // Resonance 0..1 maps onto this Q range. 0.5 is well-damped (no peak at
-    // all - a gentler knee than Butterworth, so resonance=0 sounds like a
-    // plain lowpass rather than like a filter with a bump). kMaxQ is chosen
-    // to be strongly resonant while staying comfortably stable: k = 1/Q is
-    // still 0.05 at the top, and self-oscillation lives at k == 0.
+    // Resonance 0..1 maps onto this Q range along a cubic, Q = 0.5 + 15.5 r^3,
+    // so it tracks the ladder's feel under the one RES control (2026-09-14,
+    // tuned on the bench): 0.5 is well-damped (no peak at all - a gentler
+    // knee than Butterworth, so resonance=0 sounds like a plain lowpass
+    // rather than like a filter with a bump), 50% is +7 dB, 70% +15 dB,
+    // 100% is Q 16 (+24 dB). The ladder sits near +13 dB at 70% and
+    // self-oscillates from 74%; the SVF cannot self-oscillate (k = 1/Q is
+    // still 0.06 at the top), so its top is simply very resonant instead.
     static constexpr float kMinQ = 0.5f;
-    static constexpr float kMaxQ = 20.0f;
+    static constexpr float kMaxQ = 16.0f;
+    // The 24 dB cascade's second stage is a fixed Butterworth pair (Q 0.707):
+    // resonance lives in the first stage only, so a held tone at the cutoff
+    // peaks at Q, not Q^2 (400x at the old top), and the second stage adds
+    // slope without a second bump.
+    static constexpr float kSecondStageQ = 0.70710678f;
 
     void Init(uint32_t sample_rate) {
         sample_rate_ = sample_rate > 0 ? sample_rate : 48000;
@@ -171,13 +183,7 @@ class SvfFilter {
     // is driven kMaxDriveGain x into the soft clipper. Clamped.
     void SetDrive(float drive) {
         drive_ = drive < 0.0f ? 0.0f : (drive > 1.0f ? 1.0f : drive);
-        if (drive_ > 0.0f) {
-            drive_gain_ = 1.0f + drive_ * (kMaxDriveGain - 1.0f);
-            drive_gain_inv_ = 1.0f / drive_gain_;
-        } else {
-            drive_gain_ = 0.0f;  // sentinel: clipper off
-            drive_gain_inv_ = 0.0f;
-        }
+        drive_gain_ = 1.0f + drive_ * (kMaxDriveGain - 1.0f);
     }
     float GetDrive() const { return drive_; }
 
@@ -187,9 +193,15 @@ class SvfFilter {
                                              : mode_ == Mode::HighPass || mode_ == Mode::Notch;
             return pass ? in : 0.f;
         }
-        float out = Stage(in, ic1eq_, ic2eq_);
+        float x = in;
+        if (drive_ > 0.0f) {
+            // Blended so the linear filter is recovered exactly at 0 and
+            // approached continuously; the cubic's slope is 1 at the origin.
+            x = in + drive_ * (Saturate(in * drive_gain_) - in);
+        }
+        float out = Stage(x, ic1eq_, ic2eq_, a1_, a2_, a3_, damping_);
         if (slope_ == Slope::Db24) {
-            out = Stage(out, ic3eq_, ic4eq_);
+            out = Stage(out, ic3eq_, ic4eq_, b1_, b2_, b3_, kSecondStageK);
         }
         return out;
     }
@@ -205,32 +217,30 @@ class SvfFilter {
     }
 
    private:
-    // One TPT lowpass stage over the given integrator pair. With the clipper
-    // off this is exactly the original single-stage Process().
-    float Stage(float in, float& ic1, float& ic2) const {
+    // One TPT stage over the given integrator pair and coefficient set:
+    // exactly the original single-stage Process() for the first stage.
+    float Stage(float in, float& ic1, float& ic2, float a1, float a2, float a3, float k) const {
         const float v3 = in - ic2;
-        float v1 = a1_ * ic1 + a2_ * v3;
-        const float v2 = ic2 + a2_ * ic1 + a3_ * v3;
-        if (drive_gain_ > 0.0f) {
-            v1 = SoftClip(v1 * drive_gain_) * drive_gain_inv_;
-        }
+        const float v1 = a1 * ic1 + a2 * v3;
+        const float v2 = ic2 + a2 * ic1 + a3 * v3;
         ic1 = 2.0f * v1 - ic1;
         ic2 = 2.0f * v2 - ic2;
         if (mode_ == Mode::LowPass)
             return v2;
         if (mode_ == Mode::BandPass)
             return v1;
-        const float notch = in - damping_ * v1;
+        const float notch = in - k * v1;
         return mode_ == Mode::Notch ? notch : notch - v2;
     }
 
-    // x - x^3/3 on [-1, 1], +-2/3 outside: unit slope at 0, C1 at the clamp.
-    static float SoftClip(float x) {
-        if (x > 1.0f)
-            return 2.0f / 3.0f;
-        if (x < -1.0f)
-            return -2.0f / 3.0f;
-        return x - (x * x * x) * (1.0f / 3.0f);
+    // x - x^3/6.75 on [-1.5, 1.5], +-1 outside: unit slope at 0, unit
+    // ceiling, C1 at the clamp. (The cubic x - x^3/3 scaled by 1.5.)
+    static float Saturate(float x) {
+        if (x > 1.5f)
+            return 1.0f;
+        if (x < -1.5f)
+            return -1.0f;
+        return x - (x * x * x) * (1.0f / 6.75f);
     }
 
     void UpdateCoeffs() {
@@ -246,14 +256,20 @@ class SvfFilter {
         boundary_ = 0;
 
         const float g = TanPi(cutoff_hz_ / static_cast<float>(sample_rate_));
-        const float q = kMinQ + resonance_ * (kMaxQ - kMinQ);
+        const float r3 = resonance_ * resonance_ * resonance_;
+        const float q = kMinQ + r3 * (kMaxQ - kMinQ);
         const float k = 1.0f / q;
         damping_ = k;
 
         a1_ = 1.0f / (1.0f + g * (g + k));
         a2_ = g * a1_;
         a3_ = g * a2_;
+        // Second stage: same g, fixed Butterworth damping.
+        b1_ = 1.0f / (1.0f + g * (g + kSecondStageK));
+        b2_ = g * b1_;
+        b3_ = g * b2_;
     }
+    static constexpr float kSecondStageK = 1.0f / kSecondStageQ;
 
     uint32_t sample_rate_ = 48000;
     float cutoff_hz_ = 20000.0f;
@@ -266,6 +282,7 @@ class SvfFilter {
     float a1_ = 1.0f;
     float a2_ = 0.0f;
     float a3_ = 0.0f;
+    float b1_ = 1.0f, b2_ = 0.0f, b3_ = 0.0f;  // second (24 dB) stage
 
     // Trapezoidal integrator state. These decay toward zero on silence and
     // can reach subnormal magnitudes; the Cortex-M7's FPv5 handles subnormals
@@ -279,8 +296,7 @@ class SvfFilter {
 
     Slope slope_ = Slope::Db12;
     float drive_ = 0.0f;
-    float drive_gain_ = 0.0f;  // 0 = clipper off (see SetDrive)
-    float drive_gain_inv_ = 0.0f;
+    float drive_gain_ = 1.0f;  // input gain, 1..kMaxDriveGain
 };
 
 }  // namespace AudioEngine

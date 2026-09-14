@@ -39,6 +39,14 @@ class UISequencerPage : public UIPage {
     void adjust(uint8_t parameter, int delta);
     void transport();
     void clearRow();
+    // Solo is frontend-owned: it expands to one MIX_OP_SET_MUTE_MASK so the
+    // engine never passes through a wrong intermediate mute set. The state
+    // outlives this page object (see the file-scope holder in the .cpp) and
+    // is re-sent whenever the link comes up, so the picture and the mask
+    // cannot drift apart across page visits or a reboot of either board.
+    void solo(uint8_t track);
+    bool soloed(uint8_t track) const;
+    bool soloActive() const;
     void lockMode(bool enabled);
     void adjustLock(uint8_t parameter, int delta);
     bool setLock(uint8_t id, uint16_t value);

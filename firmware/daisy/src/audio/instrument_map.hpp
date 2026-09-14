@@ -203,11 +203,9 @@ inline bool ToFile(const Instrument& instrument,
     doc.mode = instrument.mode == InstrumentMode::Drum ? Wxi::Mode::Drum : Wxi::Mode::Keyboard;
 
     doc.filter.type = static_cast<Wxi::FilterType>(instrument.filter.type);
-    static_assert(static_cast<uint8_t>(Wxi::FilterTopology::Ladder) ==
-                          Protocol::INST_FILTER_TOPOLOGY_LADDER &&
-                      static_cast<uint8_t>(Wxi::FilterTopology::LadderZdf) ==
-                          Protocol::INST_FILTER_TOPOLOGY_LADDER_ZDF,
-                  "the file byte is the wire byte");
+    static_assert(
+        static_cast<uint8_t>(Wxi::FilterTopology::Ladder) == Protocol::INST_FILTER_TOPOLOGY_LADDER,
+        "the file byte is the wire byte");
     doc.filter.topology = static_cast<Wxi::FilterTopology>(instrument.filter.topology);
     static_assert(static_cast<uint8_t>(Wxi::FilterSlope::Db24) == Protocol::INST_FILTER_SLOPE_24,
                   "the file slope byte is the wire byte");

@@ -19,6 +19,13 @@
 namespace wavex_ui {
 using namespace WaveX::Protocol;
 namespace {
+// Solo survives the page being re-created (each open makes a new page
+// object) and is the one source of truth for the mute mask the UI sends.
+// 0xFF = no solo.
+uint8_t s_solo_track = 0xFF;
+uint16_t SoloMask(uint8_t track) {
+    return track < 16 ? static_cast<uint16_t>(~(1u << track) & 0xFFFFu) : 0u;
+}
 constexpr int kGridX = UI_MARGIN_X + UI_SEQ_TRACK_WIDTH + UI_GUTTER;
 constexpr int kGridW = UI_CONTENT_WIDTH - UI_MARGIN_X - kGridX;
 constexpr int kCellW = (kGridW - 15 * UI_GUTTER) / 16;
@@ -205,8 +212,12 @@ void UISequencerPage::service() {
         link_alive_ = alive;
         model_.Invalidate();
         settings_.valid = 0;
-        if (alive)
+        if (alive) {
             requestRow(0);
+            // Either board may have rebooted: make the engine's mute mask
+            // match what this UI shows (a solo, or nothing muted).
+            inter_mcu_send_mix_op(MIX_OP_SET_MUTE_MASK, 0, SoloMask(s_solo_track));
+        }
         UINavigator::instance().refreshSoftkeys();
     }
     if (alive) {
@@ -266,16 +277,33 @@ void UISequencerPage::render() {
                       sizeof(value),
                       "Track %u%s\n%s",
                       trackDisplayNumber(track),
-                      model_.HasSnapshot(row) && !model_.Row(row).enabled ? " / MUTE" : "",
+                      soloed(track)                                         ? " / SOLO"
+                      : model_.HasSnapshot(row) && !model_.Row(row).enabled ? " / MUTE"
+                                                                            : "",
                       bound && binding.name[0] ? binding.name : "Empty");
         text(row_labels_[row], value);
-        const uint8_t selected_row = getCurrentTrack() == track ? 1u : 0u;
-        if (drawn_rows_[row] != selected_row) {
-            lv_obj_set_style_bg_color(
-                row_buttons_[row], selected_row ? UI_COLOR_ACCENT : UI_COLOR_CARD_ALT, 0);
-            lv_obj_set_style_border_color(
-                row_buttons_[row], selected_row ? UI_COLOR_ACCENT : UI_COLOR_LINE, 0);
-            drawn_rows_[row] = selected_row;
+        // Row state: solo paints the Track button green and outlines its
+        // steps; a row that is muted - by its own row mute, or because
+        // another Track is soloed - dims to half, steps included.
+        const bool selected_row = getCurrentTrack() == track;
+        const bool solo_here = soloed(track);
+        const bool row_muted = model_.HasSnapshot(row) && !model_.Row(row).enabled;
+        const bool dim = row_muted || (soloActive() && !solo_here);
+        const uint8_t row_flags =
+            (selected_row ? 1u : 0u) | (solo_here ? 2u : 0u) | (dim ? 4u : 0u);
+        if (drawn_rows_[row] != row_flags) {
+            lv_obj_set_style_bg_color(row_buttons_[row],
+                                      solo_here      ? UI_COLOR_OK
+                                      : selected_row ? UI_COLOR_ACCENT
+                                                     : UI_COLOR_CARD_ALT,
+                                      0);
+            lv_obj_set_style_border_color(row_buttons_[row],
+                                          solo_here      ? UI_COLOR_OK
+                                          : selected_row ? UI_COLOR_ACCENT
+                                                         : UI_COLOR_LINE,
+                                          0);
+            lv_obj_set_style_opa(row_buttons_[row], dim ? LV_OPA_50 : LV_OPA_COVER, 0);
+            drawn_rows_[row] = row_flags;
         }
         for (uint8_t col = 0; col < 16; ++col) {
             auto& cell = cells_[row][col];
@@ -285,8 +313,8 @@ void UISequencerPage::render() {
             const bool on = ready && model_.Row(row).steps[col].on;
             const bool head = link_alive_ && playhead_.playing && playhead_.step == step;
             const bool selected = getCurrentTrack() == track && selected_step_ == step;
-            const uint32_t flags =
-                (enabled ? 1u : 0u) | (on ? 2u : 0u) | (head ? 4u : 0u) | (selected ? 8u : 0u);
+            const uint32_t flags = (enabled ? 1u : 0u) | (on ? 2u : 0u) | (head ? 4u : 0u) |
+                                   (selected ? 8u : 0u) | (solo_here ? 16u : 0u) | (dim ? 32u : 0u);
             if (flags != cell.drawn) {
                 if (enabled)
                     lv_obj_remove_state(cell.button, LV_STATE_DISABLED);
@@ -294,13 +322,19 @@ void UISequencerPage::render() {
                     lv_obj_add_state(cell.button, LV_STATE_DISABLED);
                 lv_obj_set_style_bg_color(cell.button, on ? UI_COLOR_ACCENT : UI_COLOR_CARD_ALT, 0);
                 lv_obj_set_style_text_color(cell.button, on ? UI_COLOR_ACCENT_FG : UI_COLOR_DIM, 0);
+                // The playhead column's orange outline wins over the solo
+                // row's green where they cross; selection sits between.
                 lv_obj_set_style_border_width(
-                    cell.button, head || selected ? UI_BORDER_WIDTH_FOCUS : UI_BORDER_WIDTH, 0);
+                    cell.button,
+                    head || selected || solo_here ? UI_BORDER_WIDTH_FOCUS : UI_BORDER_WIDTH,
+                    0);
                 lv_obj_set_style_border_color(cell.button,
-                                              head       ? UI_COLOR_WARN
-                                              : selected ? UI_COLOR_ACCENT
-                                                         : UI_COLOR_LINE,
+                                              head        ? UI_COLOR_WARN
+                                              : selected  ? UI_COLOR_ACCENT
+                                              : solo_here ? UI_COLOR_OK
+                                                          : UI_COLOR_LINE,
                                               0);
+                lv_obj_set_style_opa(cell.button, dim ? LV_OPA_50 : LV_OPA_COVER, 0);
                 cell.drawn = flags;
             }
             bool locked = false;
@@ -738,18 +772,13 @@ std::array<Softkey, NUM_SOFTKEYS> UISequencerPage::getShiftedSoftkeys() {
                },
                ready,
                "Waiting for the Track"};
-    keys[3] = {"Step off",
-               [this] {
-                   if (editable())
-                       edit({SEQ_OP_SET_STEP,
-                             getCurrentTrack(),
-                             selected_step_,
-                             0,
-                             model_.Row(selectedRow()).steps[selected_step_ % 16].velocity,
-                             0});
-               },
-               editable(),
-               "Select an active step window"};
+    // Solo replaced "Step off" here (2026-09-14): a step is turned off by
+    // tapping it or clicking the encoder on it, so that key only duplicated
+    // toggle(); solo had no home at all.
+    keys[3] = {soloed(getCurrentTrack()) ? "Unsolo" : "Solo",
+               [this] { solo(soloed(getCurrentTrack()) ? 0xFF : getCurrentTrack()); },
+               link_alive_,
+               "Audio engine disconnected"};
     keys[4] = {"Files",
                [] { UINavigator::instance().push(createPatternFilesPage()); },
                link_alive_,
@@ -757,9 +786,24 @@ std::array<Softkey, NUM_SOFTKEYS> UISequencerPage::getShiftedSoftkeys() {
     keys[5] = {"Locks", [this] { lockMode(true); }, editable(), "Select an active step window"};
     return keys;
 }
+bool UISequencerPage::soloed(uint8_t track) const {
+    return s_solo_track == track;
+}
+bool UISequencerPage::soloActive() const {
+    return s_solo_track < 16;
+}
+void UISequencerPage::solo(uint8_t track) {
+    if (inter_mcu_send_mix_op(MIX_OP_SET_MUTE_MASK, 0, SoloMask(track)) != ESP_OK)
+        return;
+    s_solo_track = track < 16 ? track : 0xFF;
+    render();
+    UINavigator::instance().refreshSoftkeys();
+}
 size_t UISequencerPage::consoleState(char* out, size_t cap, size_t len) {
     using namespace WaveX::Debug;
     len = AppendKvInt(out, cap, len, "seqlocks", locks_mode_);
+    len =
+        AppendKvInt(out, cap, len, "seqsolo", soloActive() ? trackDisplayNumber(s_solo_track) : 0);
     len = AppendKvInt(out, cap, len, "lockslot", lock_slot_ + 1);
     SequencerGridModel::Step selected;
     if (valueStep(selected)) {
@@ -835,6 +879,8 @@ bool UISequencerPage::consoleCommand(const char* args, char* reply, size_t cap) 
     else if (count == 1 && std::strcmp(verb, "TOGGLE") == 0 && editable())
         lv_obj_send_event(
             cells_[selectedRow()][selected_step_ % 16].button, LV_EVENT_PRESSED, nullptr);
+    else if (count == 2 && link_alive_ && std::strcmp(verb, "SOLO") == 0 && a >= 0 && a <= 16)
+        solo(a == 0 ? 0xFF : static_cast<uint8_t>(a - 1));
     else if (count == 2 && link_alive_ && settings_.valid) {
         if (std::strcmp(verb, "TEMPO") == 0 && a >= 2000 && a <= 30000 && a % 100 == 0)
             adjust(0, (a - settings_.tempo_bpm_x100) / 100);
