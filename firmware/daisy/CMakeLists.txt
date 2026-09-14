@@ -311,6 +311,25 @@ endif()
 include(DaisyProject)
 
 set_source_files_properties(${WAVEX_COLD_SOURCES} PROPERTIES COMPILE_OPTIONS "${WAVEX_DAISY_COLD_OPT}")
+
+# SRAM debug image only: the vendor archives (libDaisy, the HAL, FatFS, the
+# USB stacks) are built for size. At the image's -O0 they were ~146 KB of its
+# ~336 KB of code, and on 2026-09-13 that pushed the 480 KB SRAM region over
+# by ~10 KB with nothing left to spill. Nobody steps through the HAL with
+# WaveX's debugger; WaveX's own sources keep DEBUG_OPT (-O0). Target-level
+# options land after the directory-level flag DaisyProject adds, so this -Os
+# wins for exactly these targets and nothing else. To step into a driver,
+# configure with -DWAVEX_SRAM_DEBUG_VENDOR_OPT=-O0 and accept the overflow risk.
+set(WAVEX_SRAM_DEBUG_VENDOR_OPT "-Os" CACHE STRING
+    "Optimization flag for vendor libraries in the SRAM debug image")
+if(WAVEX_SRAM_DEBUG)
+    foreach(vendor daisy STM32H7XX_HAL_DRIVER FatFs STM32_USB_DEVICE_LIBRARY
+                   STM32_USB_HOST_LIBRARY CMSIS_DEVICE_H7)
+        if(TARGET ${vendor})
+            target_compile_options(${vendor} PRIVATE ${WAVEX_SRAM_DEBUG_VENDOR_OPT})
+        endif()
+    endforeach()
+endif()
 target_link_libraries(${FIRMWARE_NAME} PRIVATE daisysp_modules)
 
 # Shared logging state uses C++17 inline variables. Select the language level

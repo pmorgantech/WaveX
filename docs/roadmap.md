@@ -818,12 +818,15 @@ since 2026-09-13): the WaveX TPT SVF or the DaisySP Huovilainen ladder. Slope
 
 #### Daisy image size: what is left after the 2026-09-04 slimming
 
-**The SRAM debug image (`make debug-build`) does not link on develop as of
-2026-09-13:** at 385f93e it overflows the 480 KB SRAM region by about 10 KB
-(`.itcm_text` no longer fits), independently of the filter work that
-noticed it. Its hand-tuned spill lists in `wavex_sram_debug.lds` need
-another pass before the SWD/SRAM bench workflow can be used again; the QSPI
-and Stage B images are unaffected.
+The SRAM debug image (`make debug-build`) stopped linking between 5998d37
+and 385f93e (about 10 KB over the 480 KB SRAM region at `-O0`, found
+2026-09-13). Fixed the same day by building the vendor archives `-Os` in that
+profile only (`WAVEX_SRAM_DEBUG_VENDOR_OPT`); WaveX sources stay `-O0`, and
+the image now has roughly 60 KB of SRAM headroom. The spill lists in
+`wavex_sram_debug.lds` were not touched. If it overflows again, the next
+levers are `DEBUG_OPT=-Og` for WaveX sources or spilling more `.bss` into D3
+(about 30 KB free) - both before anything that assumes the debugger can
+load DTCM or ITCM directly, which has not been verified on this bench.
 
 The Daisy image went from 438 KB to 273 KB. Remaining, in order of size, each
 a decision rather than a mechanical fix:

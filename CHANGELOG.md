@@ -203,6 +203,12 @@ versioning and release process.
 
 ### Fixed
 
+- The SRAM debug image (`make daisy-debug-build`) links again. It had
+  overflowed the SRAM region by about 10 KB at `-O0`; the vendor archives
+  (libDaisy, HAL, FatFS, USB) are now built `-Os` in that profile only
+  (`WAVEX_SRAM_DEBUG_VENDOR_OPT`), leaving WaveX sources at `-O0` and about
+  60 KB of headroom. The QSPI and Stage B images are unchanged.
+
 - Shared headers skip unchanged title/context text. Diagnostics updates card text, warning colours and table cells only
   when their displayed values change, preserving live sampling, sparklines
   and Freeze while avoiding repeated full-screen Daisy-tab repaints.

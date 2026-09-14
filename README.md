@@ -112,9 +112,11 @@ the previous profile's flags.
 The Daisy also has a separate SRAM-linked debug profile in `build-debug/` for
 fast SWD iteration. `make daisy-debug` loads that ELF directly through ST-Link
 without changing QSPI; a reset or power cycle returns to the persistent QSPI
-image. It builds at `-O0` (`DEBUG_OPT`) for stepping, whereas the persistent
-image is `-O2` (`WAVEX_DAISY_OPT`, `firmware/daisy/CMakeLists.txt`), and SRAM
-execution has different memory timing; use it for functional testing and the
+image. It builds WaveX's sources at `-O0` (`DEBUG_OPT`) for stepping and the vendor
+libraries at `-Os` (`WAVEX_SRAM_DEBUG_VENDOR_OPT`) so the image fits, whereas
+the persistent image is `-O2` (`WAVEX_DAISY_OPT`,
+`firmware/daisy/CMakeLists.txt`), and SRAM execution has different memory
+timing; use it for functional testing and the
 normal QSPI build for DWT/callback performance results.
 
 `WAVEX-ENTER-DFU` deliberately remains in release images; it is the only

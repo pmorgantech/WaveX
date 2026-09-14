@@ -179,7 +179,13 @@ The two Daisy profiles intentionally have different memory timing:
 `DEBUG_OPT` defaults to `-O0` for stepping; the persistent build is `-O2`
 (`WAVEX_DAISY_OPT`, since 2026-09-04), so the debug profile differs from it in
 optimization level as well as in memory placement. Pass `DEBUG_OPT=-O2` to
-remove that difference when chasing something timing-sensitive.
+remove that difference when chasing something timing-sensitive. Only WaveX's
+own sources get `DEBUG_OPT`: the vendor archives (libDaisy, the HAL, FatFS,
+the USB stacks) are built `-Os` in this profile
+(`WAVEX_SRAM_DEBUG_VENDOR_OPT`, since 2026-09-13), because at `-O0` they were
+almost half of the image's code and no longer fit in SRAM. To step into a
+driver, configure with `CMAKE_EXTRA_ARGS=-DWAVEX_SRAM_DEBUG_VENDOR_OPT=-O0`
+and expect to have to spill something.
 
 That makes the SRAM profile suitable for functional work, debugger use, and
 controlled comparisons made with matching compiler flags and workloads. It is
