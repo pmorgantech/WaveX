@@ -13,6 +13,12 @@ versioning and release process.
 
 ### Added
 
+- Added `scripts/bench_filter_topology.py`, a repeatable eight-voice filter
+  workload (looped kick per Track, chosen topology, slow triangle voice LFO
+  and long Env 2/3 into cutoff and resonance, cutoff updates) for A/B
+  captures on the profiling image. First result: SVF 30% versus ladder 70%
+  peak on the same workload; recorded in the callback performance log.
+
 - The Instrument Filter tab gained a fourth control, MODEL, selecting the
   filter that renders the mode: SVF or Ladder. It previews on held notes,
   coalesces with cutoff/resonance/type into one edit, and follows

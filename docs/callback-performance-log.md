@@ -26,6 +26,28 @@ The log deliberately records whether callback-resident features remain. At
 activates the backend chip-upgrade path; a feature-complete build is still
 blocked from release or further callback scope until its margin is resolved.
 
+## Filter topology A/B — 2026-09-14
+
+Profiling QSPI `-O2` image at f9e823b, 480 MHz, 48 kHz, 48-sample blocks, driven
+by `scripts/bench_filter_topology.py`: Tracks 0–7 bound to a full-file-looped
+`/Drums/Kicks/bassdr01.wav`, every Instrument LP with the chosen topology,
+`WAVEX-FILTER 24 100`, voice LFO 1 triangle at 0.05 Hz and Env 2/Env 3 at
+6 s/6 s/0.4/6 s routed through four matrix slots into cutoff and resonance, one
+held note per Track, cutoff alternated on all eight Tracks every 1.2 s, 200 s
+per topology, no sequencer, SD stream or parameter locks. Zero underruns in both.
+
+| Topology | Peak cycles | Peak | Active-window average |
+|---|---|---|---|
+| WaveX SVF | 145183 | 30.25% | 18.0% |
+| DaisySP ladder | 335154 | 69.82% | 47.5% |
+
+These are not gate rows (`callback_performance.py` requires 600 s), but the
+delta is the number that matters: the ladder adds ~40 points for eight voices.
+The modulation drives cutoff above Nyquist for part of each LFO cycle, where
+both topologies take the exact-bypass path, which is why the averages swing
+more than the peaks. Captures: `logs/perf-svf-mod-20260914-023223.log`,
+`logs/perf-ladder-mod-20260914-022750.log`.
+
 ## Workload and evidence notes — 2026-09-07
 
 Both captures used firmware commit 176ce1f, persistent QSPI -O2, 480 MHz,
