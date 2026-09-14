@@ -28,7 +28,7 @@ def test_filter_topology_preview_revert_apply_and_save(
     daisy.msg(
         0x80,
         struct.pack(
-            "<IIBBHffff",
+            "<IIBBHffffBBBBf",
             896002,
             int(before["revision"]),
             0,
@@ -38,6 +38,11 @@ def test_filter_topology_preview_revert_apply_and_save(
             0.0,
             1.0,
             0.5,
+            0,
+            0,
+            0,
+            0,
+            0.0,
         ),
     )
     assert daisy.cmd("EDIT", 0)["cutoff"] == "96000"

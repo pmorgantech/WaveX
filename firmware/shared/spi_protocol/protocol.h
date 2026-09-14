@@ -2077,15 +2077,21 @@ enum InstFilterType : uint8_t {
 // Huovilainen ladder (Daisy: audio/voice_filter.hpp). New topologies append.
 enum InstFilterTopology : uint8_t { INST_FILTER_TOPOLOGY_SVF = 0, INST_FILTER_TOPOLOGY_LADDER = 1 };
 static constexpr uint8_t INST_FILTER_TOPOLOGY_COUNT = 2;
+// Slope of the Instrument's filter, applied by whichever topology renders
+// it (SVF: one or two TPT stages; ladder: the 12 or 24 dB tap).
+enum InstFilterSlope : uint8_t { INST_FILTER_SLOPE_12 = 0, INST_FILTER_SLOPE_24 = 1 };
 struct InstSoundSettings {
     float cutoff_hz = 20000, resonance = 0, gain = 1, pan = .5f;
 } __attribute__((packed));
 struct InstEditOpMessage {
     uint32_t request_id = 0, revision = 0;
     uint8_t track = 0, op = INST_EDIT_GET;
-    // Both carried only by INST_EDIT_FILTER_SETTINGS; zero for every other op.
+    // These four are carried only by INST_EDIT_FILTER_SETTINGS; zero for
+    // every other op, so a legacy filter edit preserves them.
     uint8_t filter_type = INST_FILTER_LP, filter_topology = INST_FILTER_TOPOLOGY_SVF;
     InstSoundSettings sound;
+    uint8_t filter_slope = INST_FILTER_SLOPE_12, reserved[3] = {};
+    float filter_drive = 0;  // 0..1: SVF soft-clip amount, ladder input drive
     InstEditOpMessage() {}
     InstEditOpMessage(uint32_t id,
                       uint32_t rev,
@@ -2100,6 +2106,8 @@ struct InstEditSyncMessage {
     uint8_t dirty = 0, filter_type = INST_FILTER_LP;
     uint8_t filter_topology = INST_FILTER_TOPOLOGY_SVF, reserved = 0;
     InstSoundSettings sound;
+    uint8_t filter_slope = INST_FILTER_SLOPE_12, reserved_tail[3] = {};
+    float filter_drive = 0;
     InstEditSyncMessage() {}
     InstEditSyncMessage(uint32_t id,
                         uint32_t completed,
@@ -2120,17 +2128,24 @@ struct InstEditSyncMessage {
           dirty(edited),
           sound(value) {}
 } __attribute__((packed));
-static_assert(sizeof(InstEditOpMessage) == 28, "Instrument edit operation wire size");
-static_assert(sizeof(InstEditSyncMessage) == 36, "Instrument edit snapshot wire size");
+static_assert(sizeof(InstEditOpMessage) == 36, "Instrument edit operation wire size");
+static_assert(sizeof(InstEditSyncMessage) == 44, "Instrument edit snapshot wire size");
+inline bool IsValidInstFilterDrive(float drive) {
+    return drive >= 0 && drive <= 1;  // rejects NaN by comparison
+}
 inline bool IsValidInstSound(const InstSoundSettings& s) {
     return s.cutoff_hz >= 0 && s.cutoff_hz <= 96000 && s.resonance >= 0 && s.resonance <= 1 &&
            s.gain >= 0 && s.gain <= 64 && s.pan >= 0 && s.pan <= 1;
 }
 inline bool IsValidInstEditOp(const InstEditOpMessage& m) {
-    if (!m.request_id || m.track >= 16 || m.op > INST_EDIT_FILTER_SETTINGS ||
+    if (!m.request_id || m.track >= 16 || m.op > INST_EDIT_FILTER_SETTINGS || m.reserved[0] ||
+        m.reserved[1] || m.reserved[2] ||
         (m.op == INST_EDIT_FILTER_SETTINGS
-             ? m.filter_type > INST_FILTER_NOTCH || m.filter_topology >= INST_FILTER_TOPOLOGY_COUNT
-             : m.filter_type != 0 || m.filter_topology != 0))
+             ? m.filter_type > INST_FILTER_NOTCH ||
+                   m.filter_topology >= INST_FILTER_TOPOLOGY_COUNT ||
+                   m.filter_slope > INST_FILTER_SLOPE_24 || !IsValidInstFilterDrive(m.filter_drive)
+             : m.filter_type != 0 || m.filter_topology != 0 || m.filter_slope != 0 ||
+                   m.filter_drive != 0))
         return false;
     if (m.op == INST_EDIT_GET)
         return true;

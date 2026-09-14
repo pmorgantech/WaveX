@@ -306,8 +306,8 @@ The filter edit group supports four Instrument-owned modes: `LP` (0), `HP`
 cutoff, resonance and the mode in the former reserved byte at offset 10;
 that byte is zero for every other edit op. The sync message returns the mode
 in its former reserved byte at offset 17, with the remaining reserved bytes
-zero. The packed payload sizes remain 28 bytes for the edit request and 36
-bytes for sync. Modes outside 0–3 and nonzero reserved fields are rejected;
+zero. The packed payload sizes were 28 bytes for the edit request and 36
+bytes for sync until the slope/drive growth described below. Modes outside 0–3 and nonzero reserved fields are rejected;
 legacy filter edits preserve the current mode.
 
 The same op also carries the Instrument's filter **topology**, which
@@ -318,9 +318,20 @@ offset 18, both formerly reserved; the sync message's last byte at offset 19
 stays reserved and zero. Topologies at or above
 `INST_FILTER_TOPOLOGY_COUNT` are rejected, and like the mode the byte must
 be zero for every op other than 5, so a legacy filter edit preserves the
-current topology. Zones never override it. The `.wxi` FILT chunk grew from
-17 to 18 bytes to persist it; a 17-byte chunk from an earlier file loads as
-`SVF`.
+current topology. Zones never override it.
+
+Since 2026-09-14 op 5 also carries the Instrument's filter **slope**
+(`INST_FILTER_SLOPE_12` = 0 or `INST_FILTER_SLOPE_24` = 1) and **drive**
+(float 0..1: the SVF's soft-clip amount, the ladder's input drive). They
+follow the 16-byte sound block: the edit request grew from 28 to 36 bytes
+(slope at offset 28, three reserved zero bytes, drive at 32) and the sync
+message from 36 to 44 bytes (slope at 36, three reserved bytes, drive at
+40). Like mode and topology they must be zero for every op other than 5.
+Both are Instrument-owned and applied by whichever topology renders the
+voice; the former engine-wide `WAVEX-FILTER` bench switch is gone. The
+`.wxi` FILT chunk is 23 bytes (topology at 17, slope at 18, drive at 19);
+17- and 18-byte chunks from earlier files load with the defaults `SVF`,
+12 dB and no drive.
 
 Because this changes the meaning of formerly reserved bytes, the frontend
 and Daisy images must be deployed as a pair. A peer that does not understand

@@ -171,3 +171,53 @@ TEST(InstrumentEditModel, FilterTopologyTravelsWithTheSettingsOpAndCoalesces) {
     ASSERT_TRUE(m.Accept(s));
     EXPECT_EQ(m.Value(5), INST_FILTER_TOPOLOGY_LADDER);
 }
+
+TEST(InstrumentEditModel, SlopeAndDriveAreFilterSettingsFieldsInThousandths) {
+    InstrumentEditModel m;
+    m.Reset(0);
+    m.Expect(10);
+    InstEditSyncMessage s;
+    s.request_id = 10;
+    s.revision = 7;
+    s.valid = 1;
+    ASSERT_TRUE(m.Accept(s));
+    EXPECT_EQ(m.Value(6), INST_FILTER_SLOPE_12);
+    EXPECT_EQ(m.Value(7), 0);
+    EXPECT_FALSE(m.Set(6, 2));
+    EXPECT_FALSE(m.Set(7, 1001));
+    ASSERT_TRUE(m.Set(6, INST_FILTER_SLOPE_24));
+    ASSERT_TRUE(m.Set(7, 650));
+    EXPECT_TRUE(m.Outgoing());
+    auto r = m.Request(11, m.Operation());
+    EXPECT_EQ(r.op, INST_EDIT_FILTER_SETTINGS);
+    EXPECT_EQ(r.filter_slope, INST_FILTER_SLOPE_24);
+    EXPECT_FLOAT_EQ(r.filter_drive, .65f);
+    ASSERT_TRUE(IsValidInstEditOp(r));
+    const auto amp = m.Request(11, INST_EDIT_AMP);
+    EXPECT_EQ(amp.filter_slope, 0);
+    EXPECT_FLOAT_EQ(amp.filter_drive, 0);
+    m.Sent(11, r.op);
+    s.request_id = s.completed_request_id = 11;
+    ++s.revision;
+    s.filter_slope = r.filter_slope;
+    s.filter_drive = r.filter_drive;
+    ASSERT_TRUE(m.Accept(s));
+    EXPECT_FALSE(m.Outgoing());
+    EXPECT_EQ(m.Value(7), 650);
+    // A readback the frontend cannot represent is refused like a bad mode.
+    m.Expect(12);
+    s.request_id = 12;
+    ++s.revision;
+    s.filter_drive = 1.5f;
+    EXPECT_FALSE(m.Accept(s));
+    s.filter_drive = 1.0f;
+    s.reserved_tail[2] = 1;
+    EXPECT_FALSE(m.Accept(s));
+    s.reserved_tail[2] = 0;
+    s.filter_slope = 2;
+    EXPECT_FALSE(m.Accept(s));
+    s.filter_slope = INST_FILTER_SLOPE_12;
+    ASSERT_TRUE(m.Accept(s));
+    EXPECT_EQ(m.Value(6), INST_FILTER_SLOPE_12);
+    EXPECT_EQ(m.Value(7), 1000);
+}

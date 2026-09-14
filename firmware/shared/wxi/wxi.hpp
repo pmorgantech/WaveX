@@ -115,6 +115,7 @@ enum class OscType : uint8_t { Off = 0, Sample = 1, Wavetable = 2 };
 enum class FilterType : uint8_t { SvfLp = 0, SvfHp = 1, SvfBp = 2, SvfNotch = 3 };
 // Which implementation renders that type (Protocol::InstFilterTopology).
 enum class FilterTopology : uint8_t { Svf = 0, Ladder = 1 };
+enum class FilterSlope : uint8_t { Db12 = 0, Db24 = 1 };
 
 // ---------------------------------------------------------------------------
 // File model
@@ -160,6 +161,8 @@ struct Oscillator {
 struct Filter {
     FilterType type = FilterType::SvfLp;
     FilterTopology topology = FilterTopology::Svf;
+    FilterSlope slope = FilterSlope::Db12;
+    float drive = 0.0f;  // 0..1
     float cutoff_hz = 20000.0f;
     float resonance = 0.0f;
     float keytrack = 0.0f;
@@ -233,11 +236,12 @@ static constexpr uint32_t kZoneWireSize = 1 +           // index
                                           16 +          // start/end/loop x2
                                           4 +           // loop_mode..flags
                                           20;           // cutoff + ADSR
-// FILT grew from 17 to 18 bytes (topology) after files at 17 were already on
-// cards, so it is the one fixed chunk with a floor below its written width:
-// a reader accepts anything from kFiltWireSizeV1 up and defaults the rest.
+// FILT grew from 17 bytes (topology at 17, then slope and drive at 18..22)
+// after files at 17 were already on cards, so it is the one fixed chunk with
+// a floor below its written width: a reader accepts anything from
+// kFiltWireSizeV1 up and defaults the rest from a zeroed tail.
 static constexpr uint32_t kFiltWireSizeV1 = 17;
-static constexpr uint32_t kFiltWireSize = 18;
+static constexpr uint32_t kFiltWireSize = 23;
 static constexpr uint32_t kAmpWireSize = 1;
 static constexpr uint32_t kEnvWireSize = 16;
 static constexpr uint32_t kLfoWireSize = 16;
@@ -490,6 +494,8 @@ inline void EncodeFilt(const Filter& f, uint8_t* b) {
     WriteF32LE(b + 9, f.keytrack);
     WriteF32LE(b + 13, f.env2_amount);
     b[17] = static_cast<uint8_t>(f.topology);
+    b[18] = static_cast<uint8_t>(f.slope);
+    WriteF32LE(b + 19, f.drive);
 }
 
 // `b` is kFiltWireSize bytes; a V1 file's missing tail arrives zeroed, and a
@@ -504,6 +510,9 @@ inline void DecodeFilt(const uint8_t* b, Filter& f) {
     f.topology = (b[17] <= static_cast<uint8_t>(FilterTopology::Ladder))
                      ? static_cast<FilterTopology>(b[17])
                      : FilterTopology::Svf;
+    f.slope =
+        b[18] == static_cast<uint8_t>(FilterSlope::Db24) ? FilterSlope::Db24 : FilterSlope::Db12;
+    f.drive = ReadF32LE(b + 19, 0.0f, 1.0f, 0.0f);
 }
 
 inline void EncodeEnv(const Adsr& e, uint8_t* b) {

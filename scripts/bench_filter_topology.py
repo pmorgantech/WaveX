@@ -4,8 +4,9 @@
 Run with the serial loggers active and a profiling Daisy image
 (docs/performance_monitoring.md). Binds Tracks 0-7 to a full-file-looped
 kick, sets every Instrument's filter to the chosen topology (LP, 24 dB and
-full drive from WAVEX-FILTER), routes a very slow triangle voice LFO and the
-long Env 2 / Env 3 to cutoff and resonance through four matrix slots, holds
+full drive, all Instrument-owned), routes a very slow triangle voice LFO and
+the long Env 2 / Env 3 to cutoff and resonance through four matrix slots,
+holds
 one note per Track and alternates the cutoff on all eight Tracks about every
 1.2 s for --seconds, as the 2026-09-07 topology captures did. Leaves the
 Daisy with the notes released and the samples unloaded. Evaluate the
@@ -55,12 +56,12 @@ def load_looped(daisy, path):
     return sid
 
 
-def set_filter(daisy, track, topology, cutoff_hz, resonance):
+def set_filter(daisy, track, topology, cutoff_hz, resonance, slope, drive):
     state = daisy.cmd("EDIT", track)
     daisy.msg(
         0x80,
         struct.pack(
-            "<IIBBHffff",
+            "<IIBBHffffBBBBf",
             RUN_ID + 1000 + track,
             int(state["revision"]),
             track,
@@ -70,11 +71,17 @@ def set_filter(daisy, track, topology, cutoff_hz, resonance):
             resonance,
             1.0,
             0.5,
+            slope,  # 0 = 12 dB, 1 = 24 dB
+            0,
+            0,
+            0,
+            drive,  # 0..1
         ),
     )
     state = daisy.cmd("EDIT", track)
     assert state["topology"] == str(topology), state
     assert state["mode"] == "0", state
+    assert state["slope"] == str(slope), state
 
 
 def configure_modulation(daisy, track):
@@ -171,10 +178,17 @@ def main():
     sid = load_looped(daisy, KICK)
     for track in TRACKS:
         daisy.bind_track(track, sid)
-        set_filter(daisy, track, topology, 2000.0, 0.6)
+        set_filter(
+            daisy,
+            track,
+            topology,
+            2000.0,
+            0.6,
+            int(args.slope == 24),
+            args.drive / 100.0,
+        )
         if not args.no_modulation:
             configure_modulation(daisy, track)
-    daisy.cmd("FILTER", args.slope, args.drive)
     for track in TRACKS:
         daisy.note(track, 60, 127)
     daisy.wait_state(voices=len(TRACKS))

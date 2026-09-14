@@ -158,8 +158,6 @@ TEST(InstrumentEditProtocol, FilterTopologyUsesTheRemainingReservedBytes) {
             ProtocolHandler::ParseMessage(packet.data(), MSG_INST_EDIT_SYNC, &back, sizeof(back)));
         EXPECT_EQ(std::memcmp(&state, &back, sizeof(back)), 0);
     }
-    static_assert(sizeof(InstEditOpMessage) == 28, "topology fits the former reserved byte");
-    static_assert(sizeof(InstEditSyncMessage) == 36, "topology fits a former reserved byte");
     InstEditOpMessage bad;
     bad.request_id = 1;
     bad.revision = 1;
@@ -170,4 +168,74 @@ TEST(InstrumentEditProtocol, FilterTopologyUsesTheRemainingReservedBytes) {
     EXPECT_TRUE(IsValidInstEditOp(bad));
     bad.op = INST_EDIT_AMP;
     EXPECT_FALSE(IsValidInstEditOp(bad));
+}
+
+TEST(InstrumentEditProtocol, SlopeAndDriveTravelWithTheSettingsOpOnly) {
+    std::array<uint8_t, 256> packet{};
+    for (uint8_t slope = INST_FILTER_SLOPE_12; slope <= INST_FILTER_SLOPE_24; ++slope) {
+        InstEditOpMessage in;
+        in.request_id = 49;
+        in.revision = 25;
+        in.track = 7;
+        in.op = INST_EDIT_FILTER_SETTINGS;
+        in.filter_type = INST_FILTER_LP;
+        in.filter_topology = INST_FILTER_TOPOLOGY_LADDER;
+        in.filter_slope = slope;
+        in.filter_drive = .35f;
+        in.sound = {800, .1f, 1, .5f};
+        ASSERT_TRUE(IsValidInstEditOp(in));
+        uint8_t bytes[sizeof(in)];
+        std::memcpy(bytes, &in, sizeof(in));
+        EXPECT_EQ(bytes[28], slope);  // right after the 16-byte sound block
+        EXPECT_EQ(bytes[29], 0);
+        EXPECT_EQ(bytes[30], 0);
+        EXPECT_EQ(bytes[31], 0);
+        ASSERT_GT(ProtocolHandler::CreatePacket(
+                      packet.data(), packet.size(), MSG_INST_EDIT_OP, &in, sizeof(in)),
+                  0);
+        InstEditOpMessage out;
+        ASSERT_TRUE(
+            ProtocolHandler::ParseMessage(packet.data(), MSG_INST_EDIT_OP, &out, sizeof(out)));
+        EXPECT_EQ(out.filter_slope, slope);
+        EXPECT_FLOAT_EQ(out.filter_drive, .35f);
+
+        InstEditSyncMessage state;
+        state.filter_slope = slope;
+        state.filter_drive = .6f;
+        uint8_t snapshot[sizeof(state)];
+        std::memcpy(snapshot, &state, sizeof(state));
+        EXPECT_EQ(snapshot[36], slope);
+        EXPECT_EQ(snapshot[37], 0);
+        ASSERT_GT(ProtocolHandler::CreatePacket(
+                      packet.data(), packet.size(), MSG_INST_EDIT_SYNC, &state, sizeof(state)),
+                  0);
+        InstEditSyncMessage back;
+        ASSERT_TRUE(
+            ProtocolHandler::ParseMessage(packet.data(), MSG_INST_EDIT_SYNC, &back, sizeof(back)));
+        EXPECT_EQ(std::memcmp(&state, &back, sizeof(back)), 0);
+    }
+    static_assert(sizeof(InstEditOpMessage) == 36, "slope/drive grew the edit request");
+    static_assert(sizeof(InstEditSyncMessage) == 44, "slope/drive grew the sync");
+    InstEditOpMessage bad;
+    bad.request_id = 1;
+    bad.revision = 1;
+    bad.op = INST_EDIT_FILTER_SETTINGS;
+    bad.filter_slope = INST_FILTER_SLOPE_24 + 1;
+    EXPECT_FALSE(IsValidInstEditOp(bad));
+    bad.filter_slope = INST_FILTER_SLOPE_24;
+    bad.filter_drive = 1.5f;
+    EXPECT_FALSE(IsValidInstEditOp(bad));
+    bad.filter_drive = std::numeric_limits<float>::quiet_NaN();
+    EXPECT_FALSE(IsValidInstEditOp(bad));
+    bad.filter_drive = 1.0f;
+    EXPECT_TRUE(IsValidInstEditOp(bad));
+    bad.reserved[1] = 1;
+    EXPECT_FALSE(IsValidInstEditOp(bad));
+    bad.reserved[1] = 0;
+    bad.op = INST_EDIT_FILTER;  // legacy op: both must be zero
+    EXPECT_FALSE(IsValidInstEditOp(bad));
+    bad.filter_slope = 0;
+    EXPECT_FALSE(IsValidInstEditOp(bad));
+    bad.filter_drive = 0;
+    EXPECT_TRUE(IsValidInstEditOp(bad));
 }

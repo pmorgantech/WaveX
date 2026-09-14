@@ -13,6 +13,12 @@ versioning and release process.
 
 ### Added
 
+- The Instrument filter's slope (12/24 dB) and drive are Instrument
+  parameters: carried by `INST_EDIT_FILTER_SETTINGS` and its sync (edit
+  request 28 to 36 bytes, sync 36 to 44), persisted in the `.wxi` FILT chunk
+  (now 23 bytes; older 17- and 18-byte chunks load with 12 dB and no drive),
+  and delivered by the frontend edit model as fields 6 and 7.
+
 - Added `scripts/bench_filter_topology.py`, a repeatable eight-voice filter
   workload (looped kick per Track, chosen topology, slow triangle voice LFO
   and long Env 2/3 into cutoff and resonance, cutoff updates) for A/B

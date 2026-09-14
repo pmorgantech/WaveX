@@ -91,7 +91,7 @@ def setup(daisy, esp):
         state = daisy.cmd("EDIT", track)
         msg(
             0x80,
-            "<IIBBHffff",
+            "<IIBBHffffBBBBf",
             4700000 + track,
             int(state["revision"]),
             track,
@@ -101,6 +101,11 @@ def setup(daisy, esp):
             0.0,
             gain,
             0.5,
+            0,
+            0,
+            0,
+            0,
+            0.0,
         )
         state = daisy.cmd("ENV", track, 0)
         msg(
@@ -143,7 +148,7 @@ def setup(daisy, esp):
         op(4, track, value8=int(track < 12))
     daisy.reset_samples()
     daisy.wait_state(voices=0, streaming=0)
-    daisy.cmd("FILTER", "wavex", 12, 0)
+    # Fresh Instruments start at 12 dB with no drive (Instrument-owned).
     op(5, value16=32)
     op(6, value8=1)
     op(7, value8=50)

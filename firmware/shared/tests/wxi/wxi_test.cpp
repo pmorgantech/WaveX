@@ -117,6 +117,8 @@ InstrumentFile MakeFullDoc() {
 
     d.filter.type = FilterType::SvfBp;
     d.filter.topology = Wxi::FilterTopology::Ladder;
+    d.filter.slope = Wxi::FilterSlope::Db24;
+    d.filter.drive = 0.45f;
     d.filter.cutoff_hz = 3200.0f;
     d.filter.resonance = 0.6f;
     d.filter.keytrack = 0.5f;
@@ -204,6 +206,8 @@ void ExpectDocEq(const InstrumentFile& a, const InstrumentFile& b) {
 
     EXPECT_EQ(a.filter.type, b.filter.type);
     EXPECT_EQ(a.filter.topology, b.filter.topology);
+    EXPECT_EQ(a.filter.slope, b.filter.slope);
+    EXPECT_FLOAT_EQ(a.filter.drive, b.filter.drive);
     EXPECT_FLOAT_EQ(a.filter.cutoff_hz, b.filter.cutoff_hz);
     EXPECT_FLOAT_EQ(a.filter.resonance, b.filter.resonance);
     EXPECT_FLOAT_EQ(a.filter.keytrack, b.filter.keytrack);
@@ -450,18 +454,41 @@ TEST(WxiCodec, LoadsAV1FilterChunkWithTheSvfTopology) {
 
     InstrumentFile dst;
     dst.filter.topology = Wxi::FilterTopology::Ladder;  // must be overwritten, not kept
+    dst.filter.slope = Wxi::FilterSlope::Db24;
+    dst.filter.drive = 1.0f;
     ASSERT_EQ(ReadBytes(bytes, dst), Result::Ok);
     EXPECT_EQ(dst.filter.type, FilterType::SvfBp);
     EXPECT_EQ(dst.filter.topology, Wxi::FilterTopology::Svf);
+    EXPECT_EQ(dst.filter.slope, Wxi::FilterSlope::Db12);
+    EXPECT_FLOAT_EQ(dst.filter.drive, 0.0f);
+
+    // An 18-byte chunk (topology only, 2026-09-13 writers) defaults the rest.
+    std::vector<uint8_t> v2(18, 0);
+    v2[17] = static_cast<uint8_t>(Wxi::FilterTopology::Ladder);
+    bytes.clear();
+    PutFileHeader(bytes, Wxi::kFileType, Wxi::kFileVersion);
+    PutChunk(bytes, Wxi::kChunkHead, MinimalHead());
+    PutChunk(bytes, Wxi::kChunkFilt, v2);
+    ASSERT_EQ(ReadBytes(bytes, dst), Result::Ok);
+    EXPECT_EQ(dst.filter.topology, Wxi::FilterTopology::Ladder);
+    EXPECT_EQ(dst.filter.slope, Wxi::FilterSlope::Db12);
+    EXPECT_FLOAT_EQ(dst.filter.drive, 0.0f);
 
     std::vector<uint8_t> current(Wxi::kFiltWireSize, 0);
     current[17] = static_cast<uint8_t>(Wxi::FilterTopology::Ladder);
+    current[18] = static_cast<uint8_t>(Wxi::FilterSlope::Db24);
+    current[19] = 0x00;  // drive 2.0f little-endian: out of range, defaults
+    current[20] = 0x00;
+    current[21] = 0x00;
+    current[22] = 0x40;
     bytes.clear();
     PutFileHeader(bytes, Wxi::kFileType, Wxi::kFileVersion);
     PutChunk(bytes, Wxi::kChunkHead, MinimalHead());
     PutChunk(bytes, Wxi::kChunkFilt, current);
     ASSERT_EQ(ReadBytes(bytes, dst), Result::Ok);
     EXPECT_EQ(dst.filter.topology, Wxi::FilterTopology::Ladder);
+    EXPECT_EQ(dst.filter.slope, Wxi::FilterSlope::Db24);
+    EXPECT_FLOAT_EQ(dst.filter.drive, 0.0f);
 
     current[17] = 0x7F;  // a topology this build does not have
     bytes.clear();
