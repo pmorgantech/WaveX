@@ -1,5 +1,13 @@
 # Scenes & Performance Macros — Design
 
+> **2026-09-14 planning update:** See
+> [Project, menus, mixing and voice channels](project-menu-and-voice-model.md)
+> for the Project-owned setup model, proposed Scene/menu simplification,
+> configurable stereo/Mono allocation and deferred oscillator drift. Its
+> proposed Scene scope/recall rules are newer than this document's draft;
+> implementation still follows the canonical roadmap.
+
+
 **Status**: Target design (unimplemented). Phase 5 in `roadmap.md` (macros were already named there; scenes join them). Nothing here blocks earlier phases, but the **param slew engine** (§3) is small and worth landing with Phase 2.5's modulation work since both touch the same control-tick surface.
 **Dependencies**: `param-locks-and-modulation.md` (macros are mod sources; scenes snapshot the same param id space), sequencer (pattern select in scenes), mixer (`output-routing-and-mixer.md`) for track levels in scenes.
 **Lineage**: E-mu's realtime-control assignments (one physical controller → many routed destinations with per-route range) are exactly the macro model; scenes are the modern live-set layer on top.

@@ -1,5 +1,13 @@
 # Track and Instrument Model — the user-facing paradigm and its end state
 
+> **2026-09-14 planning update:** See
+> [Project, menus, mixing and voice channels](project-menu-and-voice-model.md)
+> for the Project-owned setup model, proposed Scene/menu simplification,
+> configurable stereo/Mono allocation and deferred oscillator drift. Its
+> proposed Scene scope/recall rules are newer than this document's draft;
+> implementation still follows the canonical roadmap.
+
+
 **Status**: **Proposed 2026-09-02; all decisions taken 2026-09-03/04** (see §9). Written in response to direct requests for an end-state design so that the Phase 2/2.5 UI and voice work converges on one paradigm rather than accreting. Track/Instrument/Pattern/Song/Bank vocabulary is confirmed; the ownership hierarchy is accepted architecture; the two-oscillator Instrument (§3) is *designed now, implementation order to be decided* (§8). Nothing here is built as one unit; the pieces that already are, are marked. The file keeps its historical name so links from code comments, commits and other docs stay valid.
 **Supersedes, in vocabulary only**: "slot" (`instrument-model.md` §1), "Voice" as a page/entity name, and **"Patch"** (used 2026-09-02 to 2026-09-03 for what is now called an Instrument — the user chose Instrument on 2026-09-03 because it is the natural noun for a sampler and matches the `.wxi` extension). The engine-side data model in `instrument-model.md` stands; this document says what it is *called*, what it grows into, and how Tracks, MIDI and memory are arranged around it.
 **Dependencies**: `instrument-model.md` (the sampler `Instrument`/`Zone` model, built), `oscillator-sources.md` (typed sampler/wavetable boundary), `param-locks-and-modulation.md` (mod matrix, envelopes, LFOs — partly built), `output-routing-and-mixer.md` (`TrackMix`, built), `sequencer.md` (tracks, built core), `wxcf.hpp` (built).

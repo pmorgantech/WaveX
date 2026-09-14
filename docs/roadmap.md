@@ -394,34 +394,40 @@ the former separate backlog (2026-09-13).
 
 ### Composition and performance workflows
 
-Requested 2026-09-13; Performance navigation resolved 2026-09-14.
-Performance replaces and extends the Track root page: the existing Track setup
-was already the foundation for central Instrument assignment and mixing.
-Keep this globally accessible rather than nesting it under Sequencer.
-Mixer, Bank Manager and Pattern/Song editing retain their Phase 2/2.5 stages.
+The [Project, menus, mixing and voice-channel model](features/project-menu-and-voice-model.md)
+consolidates the 2026-09-14 discussion, including current behavior, requested
+stereo/Mono changes and the proposed Project navigation and Scene workflow.
+Performance currently exposes Track assignment, MIDI input, level and pan;
+Project owns that setup without needing a separate saved Performance object.
 
-| Concept | Ownership and role | UI placement and status |
-|---|---|---|
-| Track | One of 16 parts: Instrument binding, MIDI routing and mix strip; a Pattern has a row addressing it | Configure through Performance; preserve the shared selection used by Play, Instrument and Sequencer. |
-| Performance | The full live setup of all Tracks, routing and mix, stored by the Project | Root area replacing Track; initial assignment, MIDI input, level and pan implemented. Expand Mixer and Bank access in their scheduled stages. |
-| Bank | A stable numbered collection of saved Instruments; recall makes a Track-owned editable copy | Bank Manager belongs beside Instrument browsing/editing; storing back to a slot is explicit. |
-| Instrument | The sound loaded into one Track | Keep sound editing and saving distinct from Track/Performance mix settings. |
-| Scene | A recallable performance snapshot referencing content | Future Scene access belongs inside Performance; scene recall/macros remain Phase 5. |
-| Pattern / Song | Pattern owns musical events; Song arranges Pattern references and repeat counts | Sequencer should expose Pattern management and a Song editor without hiding the currently playing/queued section. |
+- [ ] **Phase 1.5 stereo reconciliation / Phase 2.5 voice capacity:** implement
+  stereo preservation, a saved per-oscillator Mono toggle (default Off), and a
+  configurable global render-channel macro defaulting to eight. Count mono
+  voices as one and stereo voices as two, including release tails; derive
+  allocation/storage from configuration. Verify mixed-cost stealing, two-source
+  notes, pan/balance, WXI/Apply/Revert and the streaming-preview boundary.
+  Measure DWT before/after and run the full channel-budget soak; earlier
+  eight-mono-voice measurements do not verify the new renderer.
+- [ ] **Phase 2 / Mixer v1:** converge navigation on Project-owned Tracks/Mixer
+  and session Save/Load; preserve selected-Track continuity and keep Pattern/
+  Song editing in Sequencer. Complete Project transactions and mixer readback/
+  mute/solo/master/meters at their existing phase gates.
+- [ ] **Phase 5 Scenes:** settle the proposed eight project-scoped snapshots,
+  explicit Store/Update, initial level/pan/mute contents, quantized manual recall
+  and optional Scene references on Song entries. Resolve automation, stop/seek,
+  deletion and Pattern authority before versioned storage and atomic recall.
+  Macros and effect sends follow their own available runtime controls.
 
-The accepted ownership model is in
-[Track and Instrument model](features/track-and-patch-model.md), with
-[Project](features/project-persistence.md), [Bank](features/bank-persistence.md)
-and [Scene](features/scenes-and-performance.md) persistence/design boundaries.
-Workstation terms vary: a Track is one part of a Performance, not a synonym
-for the entire Performance or a Scene. Grouping screens does not transfer
-ownership to the sequencer or make Pattern changes reload Instruments.
+### Oscillator drift — unscheduled
 
-For the remaining Bank/Scene/Pattern/Song work, settle navigation/back behavior, selected-Track
-continuity, unsaved edits and recall confirmation, active/queued Pattern
-identity, quantized transitions and project recovery. Keep SD work in the
-foreground and publish prepared state at deterministic audio boundaries.
-Note-length/gate semantics remain explicitly deferred below.
+Requested 2026-09-14; **backlog only**. See the
+[drift proposal](features/project-menu-and-voice-model.md#oscillator-drift-backlog):
+bounded pitch variation in cents, independently per voice/oscillator, using
+note-on random offsets and/or slow continuous drift. Default amount zero;
+stereo pairs share one pitch trajectory. Decide Instrument-wide versus
+per-oscillator amount and any global scale, rate/distribution, retrigger and
+combined bounds before implementation. Reuse the existing pitch modulation
+path and measure callback cost; this is not part of the current stereo patch.
 
 ### Firmware audit remediation — 2026-09-06
 

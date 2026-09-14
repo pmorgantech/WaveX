@@ -13,6 +13,11 @@ versioning and release process.
 
 ### Added
 
+- Documented the Project/menu ownership model, proposed Scene workflow and
+  Track/Instrument mixing rules; roadmapped configurable stereo/Mono channel
+  allocation and deferred oscillator pitch drift. These are design/planning
+  changes, not implemented Scene, stereo or drift features.
+
 - Performance replaces the Track main-menu page, keeping central Instrument
   assignment and MIDI routing and adding Track level/pan controls. Mix values
   use correlated backend readback and remain separate from Instrument sound
