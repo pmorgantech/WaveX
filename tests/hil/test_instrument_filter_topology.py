@@ -73,14 +73,15 @@ def test_filter_topology_preview_revert_apply_and_save(
     esp.page("TYPE", 2)
     esp.wait_state(filtermode=2, filtertopology=1, editpending=0)
     assert daisy.cmd("EDIT", 0)["topology"] == "1"
-    # Slope and drive ride the same edit; the bypassed note keeps sounding.
+    # Slope and drive ride the same edit. The note is band-pass above
+    # Nyquist here, which is silent by contract on both topologies.
     esp.page("SLOPE", 1)
     esp.wait_state(filterslope=1, editpending=0)
     esp.page("DRIVE", 500)
     esp.wait_state(filterdrive=500, filterslope=1, editpending=0)
     state = daisy.cmd("EDIT", 0)
     assert state["slope"] == "1" and state["drive"] == "500", state
-    assert min(_peak(daisy)) > 100
+    assert _peak(daisy) == [0, 0]
     esp.key("SHIFT")
     esp.softkey("Apply")
     esp.wait_state(editdirty=0, editpending=0)
