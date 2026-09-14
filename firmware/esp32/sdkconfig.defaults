@@ -128,3 +128,6 @@ CONFIG_LIBC_PICOLIBC=y
 # -----------------------------------------------------------------------------
 CONFIG_LOG_MAXIMUM_EQUALS_DEFAULT=n
 CONFIG_LOG_MAXIMUM_LEVEL_VERBOSE=y
+
+# Preserve every GT911 contact and tracking ID for independent pointers.
+CONFIG_ESP_LCD_TOUCH_MAX_POINTS=5

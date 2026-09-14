@@ -27,8 +27,9 @@ structured, and how to build a page.
 > **Input model:** capacitive touch, plus a **rotary encoder** that moves
 > page-defined selection/values and clicks to activate, plus a hardware
 > keypad whose SOFT keys invoke the displayed actions. There is no encoder
-> focus traversal of the softkey bar. Preserve panel access to interactions. No hover states, no gestures beyond tap and
-> scroll, no multi-touch.
+> focus traversal of the softkey bar. Preserve panel access to interactions. No hover states or pinch/rotate gestures. Independent touches on separate
+> controls are supported (up to five contacts); two-finger panel verification
+> remains open in the roadmap.
 >
 > **Typography:** two faces, eleven sizes, and nothing else exists on the
 > device — naming another size is a link error. Montserrat for prose at 14

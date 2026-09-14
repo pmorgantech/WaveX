@@ -1,3 +1,8 @@
 #pragma once
-// This widget receives LVGL callbacks under the existing UI lock.
-// Its port-lock macros are not invoked by the widget itself.
+#include <cstdint>
+// Host tests execute LVGL and navigation synchronously on one thread.
+constexpr uint32_t portMAX_DELAY = UINT32_MAX;
+inline bool lvgl_port_lock(uint32_t) {
+    return true;
+}
+inline void lvgl_port_unlock() {}

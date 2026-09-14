@@ -45,10 +45,10 @@ class DisplayManager {
     static void touchActivityEventCb(lv_event_t* event);
     static uint32_t nowMs();
 
-    // No touch handle or tick timer here on purpose: the BSP creates and
-    // registers the GT911 indev, and esp_lvgl_port runs the LVGL tick. This
-    // class owning either meant a second driver on the same controller and a
-    // doubled tick.
+    // No touch handle or tick timer here: the BSP creates the GT911 driver,
+    // MultiTouchInput registers its pointers, and esp_lvgl_port runs the tick.
+    // Owning either here previously meant a second driver on the controller
+    // and a doubled tick.
     esp_lcd_panel_handle_t panel_handle_ = nullptr;
     lv_display_t* display_ = nullptr;
     ScreenBlanker screen_blanker_;

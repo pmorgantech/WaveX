@@ -20,6 +20,12 @@ versioning and release process.
   sound opens its editor. Track selection and the logical panel jump remain
   shared with the other pages. Scene recall remains future work.
 
+- Independent GT911 touch pointers for up to five contacts, preserving finger
+  identity when contacts reorder or lift. Separate parameters and pads can be
+  operated together; Shift activates on touch-down for Shift-plus-button use
+  while retaining tap-to-latch behavior. Physical panel verification remains
+  open in the roadmap.
+
 - Two more filter topologies for the ladder A/B: `Ladder 2x` (the
   Huovilainen port at 2x oversampling) and `ZDF` (the zero-delay-feedback
   ladder), selectable per Instrument on the MODEL tile alongside SVF and

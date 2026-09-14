@@ -374,7 +374,8 @@ void UINavigator::buildShiftChip() {
     lv_obj_set_style_text_letter_space(shift_label_, 1, 0);
     lv_obj_center(shift_label_);
 
-    lv_obj_add_event_cb(shift_chip_, shiftChipEventCb, LV_EVENT_CLICKED, this);
+    // Activate before release so another finger can use the shifted row.
+    lv_obj_add_event_cb(shift_chip_, shiftChipEventCb, LV_EVENT_PRESSED, this);
     refreshShiftChip();
 }
 

@@ -1,10 +1,13 @@
 #include <gtest/gtest.h>
 
+#include "ui/multi_touch_input.h"
 #include "ui_dial.h"
 #include "ui_theme.h"
 #include "ui_value_tile.h"
 
+#include <array>
 #include <cstdint>
+#include <utility>
 
 namespace {
 uint16_t pixels[1280 * 720];
@@ -100,4 +103,121 @@ TEST_F(ParameterWidgetsTest, FocusToneAndCopiedHandlesPreserveCurrentAppearance)
     EXPECT_EQ(lv_obj_get_style_border_width(tile_.card, LV_PART_MAIN), UI_BORDER_WIDTH_FOCUS);
     wavex_ui::dialSetFocus(dial_, false);
     EXPECT_TRUE(lv_color_eq(lv_obj_get_style_arc_color(dial_.arc, LV_PART_INDICATOR), UI_COLOR_FG));
+}
+
+TEST_F(ParameterWidgetsTest, TwoParametersKeepTheirFingerAcrossReorderReleaseAndReplacement) {
+    int tile_steps = 0, dial_steps = 0;
+    wavex_ui::valueTileSetOnAdjust(tile_, [&](int delta) { tile_steps += delta; });
+    wavex_ui::dialSetOnAdjust(dial_, [&](int delta) { dial_steps += delta; });
+    Draw();
+    wavex_ui::MultiTouchInput touch;
+    ASSERT_TRUE(touch.init(display_));
+    wavex_ui::TouchContact points[] = {{7, {100, 100}}, {42, {440, 100}}};
+    touch.update(points, 2);
+    points[0].point.y -= 18;
+    points[1].point.y -= 27;
+    touch.update(points, 2);
+    EXPECT_EQ(tile_steps, 2);
+    EXPECT_EQ(dial_steps, 3);
+    std::swap(points[0], points[1]);
+    points[0].point.y -= 9;
+    points[1].point.y -= 9;
+    touch.update(points, 2);
+    EXPECT_EQ(tile_steps, 3);
+    EXPECT_EQ(dial_steps, 4);
+    // Release the first-created pointer; the second must remain on its dial.
+    touch.update(points, 1);
+    points[0].point.y -= 9;
+    touch.update(points, 1);
+    EXPECT_EQ(tile_steps, 3);
+    EXPECT_EQ(dial_steps, 5);
+    points[1] = {99, {100, 100}};
+    touch.update(points, 2);
+    points[1].point.y -= 18;
+    points[0].point.y -= 9;
+    touch.update(points, 2);
+    EXPECT_EQ(tile_steps, 5);
+    EXPECT_EQ(dial_steps, 6);
+    // Release in the opposite order.
+    touch.update(&points[1], 1);
+    points[1].point.y -= 9;
+    touch.update(&points[1], 1);
+    EXPECT_EQ(tile_steps, 6);
+    EXPECT_EQ(dial_steps, 6);
+    touch.update(nullptr, 0);
+    touch.deinit();
+}
+
+TEST_F(ParameterWidgetsTest, FiveContactsReleaseTheirOwnButtons) {
+    lv_obj_clean(screen_);
+    std::array<int, 5> presses{}, releases{};
+    std::array<wavex_ui::TouchContact, 5> points{};
+    for (size_t i = 0; i < points.size(); ++i) {
+        auto* button = lv_button_create(screen_);
+        lv_obj_set_pos(button, static_cast<int32_t>(i) * 200, 0);
+        lv_obj_set_size(button, 180, 180);
+        lv_obj_add_event_cb(
+            button,
+            [](lv_event_t* e) { ++*static_cast<int*>(lv_event_get_user_data(e)); },
+            LV_EVENT_PRESSED,
+            &presses[i]);
+        lv_obj_add_event_cb(
+            button,
+            [](lv_event_t* e) { ++*static_cast<int*>(lv_event_get_user_data(e)); },
+            LV_EVENT_RELEASED,
+            &releases[i]);
+        points[i] = {static_cast<uint8_t>(i + 10), {static_cast<int32_t>(i) * 200 + 80, 80}};
+    }
+    Draw();
+    wavex_ui::MultiTouchInput touch;
+    ASSERT_TRUE(touch.init(display_));
+    touch.update(points.data(), points.size());
+    for (int press: presses)
+        EXPECT_EQ(press, 1);
+    touch.update(points.data() + 1, points.size() - 1);
+    EXPECT_EQ(releases[0], 1);
+    for (size_t i = 1; i < points.size(); ++i)
+        EXPECT_EQ(releases[i], 0);
+    touch.update(nullptr, 0);
+    for (int release: releases)
+        EXPECT_EQ(release, 1);
+    touch.deinit();
+}
+
+TEST_F(ParameterWidgetsTest, ReplacingAnIdDeliversReleaseBeforeNewPress) {
+    Draw();
+    int presses = 0, releases = 0;
+    lv_obj_add_event_cb(
+        tile_.card,
+        [](lv_event_t* e) { ++*static_cast<int*>(lv_event_get_user_data(e)); },
+        LV_EVENT_PRESSED,
+        &presses);
+    lv_obj_add_event_cb(
+        tile_.card,
+        [](lv_event_t* e) { ++*static_cast<int*>(lv_event_get_user_data(e)); },
+        LV_EVENT_RELEASED,
+        &releases);
+    wavex_ui::MultiTouchInput touch;
+    ASSERT_TRUE(touch.init(display_));
+    wavex_ui::TouchContact point{1, {100, 100}};
+    touch.update(&point, 1);
+    point.id = 2;
+    touch.update(&point, 1);
+    EXPECT_EQ(presses, 2);
+    EXPECT_EQ(releases, 1);
+    touch.update(nullptr, 0);
+    EXPECT_EQ(releases, 2);
+    touch.deinit();
+}
+
+TEST_F(ParameterWidgetsTest, DeletingHeldWidgetsDoesNotLeaveDanglingPointers) {
+    Draw();
+    wavex_ui::MultiTouchInput touch;
+    ASSERT_TRUE(touch.init(display_));
+    wavex_ui::TouchContact points[] = {{1, {100, 100}}, {2, {440, 100}}};
+    touch.update(points, 2);
+    lv_obj_clean(screen_);
+    touch.update(points, 2);
+    touch.update(nullptr, 0);
+    touch.deinit();
 }

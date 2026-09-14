@@ -351,6 +351,7 @@ The following code paths are open until observed on the target:
 
 | Area | Verification |
 |---|---|
+| Multi-touch | Hold Shift and press an alternate softkey; drag two different value tiles/dials; lift either finger first and re-touch while the other keeps moving. Check two Play pads release independently, navigation while held, five contacts, corner coordinates and wake from blanking. Host pointer tests and compilation do not establish GT911/panel behavior or touch/audio latency. |
 | Display rotation/PPA | Check the HX8394 panel for corruption or tearing. |
 | Partition migration | Flash, boot, and confirm settings persist. |
 | Audio formats | Audition 44.1 and 48 kHz WAVs; confirm pitch. |

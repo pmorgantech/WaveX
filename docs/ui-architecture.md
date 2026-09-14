@@ -20,7 +20,8 @@ palette and rendering limits live in
 | Owner | Responsibility |
 |---|---|
 | `DisplayManager` | Starts the BSP display, configures software rotation, exposes panel/display handles and services brightness/blanking |
-| BSP + `esp_lvgl_port` | Own the GT911 input registration, LVGL tick and rendering task; do not initialize a second touch driver or tick |
+| BSP + `esp_lvgl_port` | Own the GT911 controller, LVGL tick and rendering task; do not initialize a second touch driver or tick |
+| `MultiTouchInput` + `multi_touch_port.cpp` | Adapt the BSP touch registration to five independent pointers, sampled together under the LVGL port lock |
 | `UINavigator` | Owns the page stack and shared header/content/softkey chrome |
 | `UITask` | Drains queued panel/encoder input and services deferred application updates |
 | LVGL port task | Runs LVGL timers, touch events and rendering |
@@ -103,6 +104,18 @@ authoritative source on the Storage tab.
 
 ## Input and softkeys
 
+The GT911 adapter reads one complete snapshot per LVGL refresh period and
+routes up to five contacts to separate pointer devices by tracking ID, not
+array index. Releases are delivered before a slot is reused. Each pointer
+uses LVGL's existing display rotation, and any finger can wake the screen.
+This supports simultaneous interactions with separate controls; pinch/rotate
+gestures are not enabled. I2C errors release all contacts. The integration
+wraps the public `lvgl_port_add_touch` / `lvgl_port_remove_touch` entry points,
+leaving the BSP's controller initialization and managed sources intact.
+The adapter owns its sampling timer and pointers; removal stops the timer
+before deleting them. Physical two-finger behavior still needs the bench
+checks in [roadmap.md](roadmap.md#outstanding-hardware-verification).
+
 `InputDispatcher` has a bounded queue shared by keypad, encoder and debug
 input producers. Producers post value events; the UI task drains them under
 the LVGL port lock.
@@ -116,7 +129,8 @@ invoke the displayed action. Encoder events are handled by the active page;
 there is no implemented encoder-focus traversal of the softkey bar.
 Use theme roles for text/colour and preserve empty versus disabled actions.
 
-Shift is latched: the header chip and rule indicate it, a shifted action
+Shift toggles on touch-down so a second finger can press a shifted action
+while the first remains on Shift. A tap still latches it: the header chip and rule indicate it, a shifted action
 consumes it, and navigation clears it. Pages may supply
 `getShiftedSoftkeys()`; use the navigator's shifted-key query rather than
 implementing a second modifier policy.

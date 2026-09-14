@@ -24,6 +24,8 @@ set(COMPONENT_SRCS
     "src/ui_navigation_integration.cpp"
     "src/ui_navigator.cpp"
     "src/display_manager.cpp"
+    "src/multi_touch_input.cpp"
+    "src/multi_touch_port.cpp"
     "src/ui_settings_page.cpp"
     "src/ui_softkey_bar.cpp"
     "src/ui_tab_group.cpp"
@@ -149,3 +151,9 @@ foreach(dep lvgl__lvgl lvgl)
         target_include_directories(${COMPONENT_LIB} SYSTEM PRIVATE ${dep_incs})
     endif()
 endforeach()
+
+# The BSP creates the controller once; WaveX adapts its public registration
+# entry points to independent LVGL pointers. Never patch managed components.
+target_link_options(${COMPONENT_LIB} INTERFACE
+    "LINKER:--wrap=lvgl_port_add_touch"
+    "LINKER:--wrap=lvgl_port_remove_touch")

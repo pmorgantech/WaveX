@@ -70,11 +70,9 @@ class UINavigator {
     /**
      * @brief Shift modifier: reveals the active page's alternate softkey row.
      *
-     * Latched, not held. A touch panel makes hold-and-press awkward with one
-     * hand, and holding a physical key while turning the encoder is worse. It
-     * is *sticky*: it clears itself after one shifted key is used, so it
-     * cannot be left on by accident, which is the usual failure of a plain
-     * toggle.
+     * Sticky: touch-down toggles the alternate row immediately, allowing a
+     * second finger to press an action while Shift is held. A tap still
+     * latches it; one shifted action or navigation clears it.
      */
     void toggleShift();
     void setShift(bool on);

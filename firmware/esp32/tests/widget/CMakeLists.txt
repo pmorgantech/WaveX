@@ -82,12 +82,28 @@ foreach(test_source IN LISTS widget_tests)
             ${CMAKE_CURRENT_SOURCE_DIR}/../../components/ui/include)
     endif()
 
+    if(test_name STREQUAL "shift_touch_test")
+        file(GLOB SHIFT_TOUCH_FONTS
+            ${CMAKE_CURRENT_SOURCE_DIR}/../../components/ui/fonts/wavex_mono_*.c)
+        target_sources(${test_name} PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/../../components/ui/src/ui_navigator.cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/../../components/ui/src/ui_softkey_bar.cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/../../components/ui/src/multi_touch_input.cpp
+            ${SHIFT_TOUCH_FONTS})
+        target_include_directories(${test_name} PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/stubs
+            ${CMAKE_CURRENT_SOURCE_DIR}/../../components/ui/include)
+    endif()
+
     if(test_name STREQUAL "parameter_widgets_test")
+        target_include_directories(${test_name} PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/../../components/ui/include)
         file(GLOB PARAMETER_WIDGET_FONTS
             ${CMAKE_CURRENT_SOURCE_DIR}/../../components/ui/fonts/wavex_mono_*.c)
         target_sources(${test_name} PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/../../components/ui/components/ui_value_tile.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/../../components/ui/components/ui_dial.cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/../../components/ui/src/multi_touch_input.cpp
             ${PARAMETER_WIDGET_FONTS})
     endif()
 

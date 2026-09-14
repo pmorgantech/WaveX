@@ -205,7 +205,7 @@ esp_err_t DisplayManager::init() {
         return ESP_OK;
     }
 
-    // Touch and the LVGL tick both belong to esp_lvgl_port / the BSP; see
+    // The touch controller and LVGL tick belong to esp_lvgl_port / the BSP; see
     // initLvglDisplay(). Adding our own of either is what made LVGL time run
     // at double speed and put a second driver on the touch controller.
     ESP_RETURN_ON_ERROR(initLvglDisplay(), TAG, "failed to initialise LVGL display");
@@ -218,8 +218,13 @@ void DisplayManager::deinit() {
     // properly means lvgl_port_deinit() under the port lock, and nothing calls
     // deinit() today. Tracked as E-STOP1.
     if (display_) {
+        LV_LOCK();
+        if (auto* touch = bsp_display_get_input_dev()) {
+            lvgl_port_remove_touch(touch);
+        }
         lv_display_delete(display_);
         display_ = nullptr;
+        LV_UNLOCK();
     }
 }
 
@@ -319,13 +324,15 @@ esp_err_t DisplayManager::initLvglDisplay() {
     const uint32_t activity_ms = nowMs();
     activity_ms_.store(activity_ms, std::memory_order_release);
     last_observed_activity_ms_ = activity_ms;
-    if (lv_indev_t* touch = bsp_display_get_input_dev()) {
-        // Input-device events see every touch before it reaches page widgets;
-        // page-local click callbacks would miss drags and empty screen areas.
-        lv_indev_add_event_cb(touch, touchActivityEventCb, LV_EVENT_PRESSED, this);
-    } else {
-        ESP_LOGW(TAG, "No LVGL touch input device; touch cannot wake screen blanking");
+    LV_LOCK();
+    // Every finger counts as activity, even if an earlier contact stays held.
+    for (lv_indev_t* touch = lv_indev_get_next(nullptr); touch; touch = lv_indev_get_next(touch)) {
+        if (lv_indev_get_type(touch) == LV_INDEV_TYPE_POINTER &&
+            lv_indev_get_display(touch) == display_) {
+            lv_indev_add_event_cb(touch, touchActivityEventCb, LV_EVENT_PRESSED, this);
+        }
     }
+    LV_UNLOCK();
 
     return ESP_OK;
 }
