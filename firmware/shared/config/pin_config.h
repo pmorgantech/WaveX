@@ -23,6 +23,77 @@ extern "C" {
 
 #ifdef ESP_PLATFORM
 
+// MIPI-DSI/CSI and USB HS are dedicated PHY nets, never numbered GPIO.
+// Both carriers wire the display FPC I2C to GPIO7/8. The current
+// waveshare__esp32_p4_nano BSP owns that bus and polls touch (no touch IRQ
+// or reset GPIO). These reservations must match BSP_I2C_SDA/SCL.
+#define WAVEX_ESP_I2C_SDA 7
+#define WAVEX_ESP_I2C_SCL 8
+// MCP3208 SPI clock; LEDs use the BSP I2C bus. No ADC driver exists yet.
+#define WAVEX_ESP_MCP3208_FREQ_HZ 1000000
+
+#if WAVEX_ESP_BOARD == WAVEX_ESP_BOARD_CORE
+
+// Waveshare ESP32-P4-Core-DEV-KIT, schematic checked 2026-09-14:
+// https://files.waveshare.com/wiki/ESP32-P4-Core-DEV-KIT/ESP32-P4-Core-DEV-KIT.pdf
+// Main headers: 2-13, 20-23, 26-27, 32-33, 46-48, 53-54 (25 GPIO).
+// Bottom pads: 28-31, 34, 36, 39-45, 49-52. GPIO28, not GPIO26, starts
+// that bottom-pad bank. GPIO34 drives the onboard RGB LED and is a strap;
+// leave it alone. GPIO35 is BOOT; GPIO37/38 belong to the CH343 UART bridge.
+// GPIO24/25 connect the native USB-Serial/JTAG Type-C port; GPIO26/27 remain
+// reserved for a future FS USB host. Native USB HS has its own connector.
+// This is a schematic-backed allocation, not hardware-verified wiring.
+
+// Keep the live UART and DIN pair on headers; SPI never replaces UART here.
+#define WAVEX_ESP_UART_INTER_NUM UART_NUM_1
+#define WAVEX_ESP_UART_INTER_TX 22
+#define WAVEX_ESP_UART_INTER_RX 23
+#define WAVEX_ESP_UART_INTER_BAUD WAVEX_MCU_UART_BAUD
+#define WAVEX_ESP_UART_INTER_BUF_SIZE 2048
+#define WAVEX_ESP_MIDI_UART_NUM UART_NUM_2
+#define WAVEX_ESP_MIDI_RX 20
+#define WAVEX_ESP_MIDI_TX 21
+#define WAVEX_ESP_MIDI_BAUD 31250
+
+// SPI3 slave to Daisy, reserved even when compiled out. GPIO-matrix routing;
+// these assignments make no native SPI2/IOMUX or high-speed timing claim.
+#define WAVEX_ESP_SPI_SCLK 9
+#define WAVEX_ESP_SPI_MOSI 10
+#define WAVEX_ESP_SPI_MISO 11
+#define WAVEX_ESP_SPI_CS 12
+#define WAVEX_ESP_ATTN_OUT 13
+
+// Two PCNT navigation encoders. Push switches belong to the TCA8418 matrix.
+#define WAVEX_ESP_ENCODER_A 33
+#define WAVEX_ESP_ENCODER_B 32
+#define WAVEX_ESP_PCNT1_A 46
+#define WAVEX_ESP_PCNT1_B 47
+#define WAVEX_ESP_BTN_INT 28  // Bottom pad; TCA8418 active-low open-drain IRQ
+
+// One SPI2 owner for both MCP3208 ADCs. PCA9956B LEDs share BSP I2C.
+#define WAVEX_ESP_SPI2_HOST SPI2_HOST
+#define WAVEX_ESP_SPI2_SCLK 54
+#define WAVEX_ESP_SPI2_MOSI 53
+#define WAVEX_ESP_SPI2_MISO 48
+#define WAVEX_ESP_SPI2_FREQ_HZ WAVEX_ESP_MCP3208_FREQ_HZ
+#define WAVEX_ESP_MCP3208_CS 36      // Bottom: dedicated four-RV112FF ADC
+#define WAVEX_ESP_MCP3208_AUX_CS 43  // Bottom: conventional-pot ADC + mux
+#define WAVEX_ESP_PCA9956B_RESET 29  // Bottom: shared active-low RESET, 10k pull-up
+#define WAVEX_ESP_PCA9956B_OE 30     // Bottom: shared active-low OE, pull-up for dark boot
+
+// 74HC4067 common terminal -> auxiliary MCP3208 CH0; EN tied low on panel.
+// Tie unused mux inputs to a defined level; scan/settling is future 2.P.4 work.
+#define WAVEX_ESP_MUX_S0 39  // Bottom pads, low-speed address outputs
+#define WAVEX_ESP_MUX_S1 40
+#define WAVEX_ESP_MUX_S2 41
+#define WAVEX_ESP_MUX_S3 42
+
+// Expansion: five free header GPIO (2, 3, 4, 5, 6), separate from USB26/27.
+// Free bottom GPIO: 31, 44, 45, 49, 50, 51, 52. Pads require a carrier or
+// soldered breakout and continuity checks; do not confuse them with headers.
+
+#else  // WAVEX_ESP_BOARD_WIFI6
+
 // Board: Waveshare ESP32-P4-WIFI6. Its two 2x20 headers expose exactly 27
 // GPIOs (Waveshare pin-definition diagram, re-checked 2026-09-05):
 //   GPIO2-5, GPIO7, GPIO8, GPIO20-33, GPIO46-52
@@ -64,7 +135,7 @@ extern "C" {
 #define WAVEX_ESP_SPI_MOSI 49
 #define WAVEX_ESP_SPI_MISO 50
 #define WAVEX_ESP_SPI_CS 51
-#define WAVEX_ESP_ATTN_OUT 31  // ESP attention output to Daisy (active high)
+#define WAVEX_ESP_ATTN_OUT 31   // ESP attention output to Daisy (active high)
 
 // Quadrature encoders (PCNT, 4x decode, PEC11R with detents). Two units;
 // the push switches go into the TCA8418 matrix, not GPIO.
@@ -94,30 +165,29 @@ extern "C" {
 #define WAVEX_ESP_MIDI_TX 21
 #define WAVEX_ESP_MIDI_BAUD 31250
 
-// SPI2 master: TLC5947 LED chain + MCP3008 ADC (endless pots). Was 46/47/52,
-// colliding with PCNT unit 1 on 46/47; moved to the adjacent header run
-// GPIO2-5. The MCP3008 has a chip select; the TLC5947 does not - it is a
-// shift register that latches whatever was clocked in when XLAT pulses, so
-// every MCP3008 transaction also shifts garbage through it and the LED frame
-// must always be re-sent in full before XLAT. Per-device clocks: the
-// TLC5947 takes up to 30 MHz, the MCP3008 about 2 MHz at 3.3 V.
+// SPI2 master: MCP3208 ADCs only; the LED drivers use BSP I2C.
 #define WAVEX_ESP_SPI2_HOST SPI2_HOST
 #define WAVEX_ESP_SPI2_SCLK 2
-#define WAVEX_ESP_SPI2_MOSI 3  // TLC5947 SIN + MCP3008 DIN
-#define WAVEX_ESP_SPI2_MISO 4  // MCP3008 DOUT
-#define WAVEX_ESP_SPI2_FREQ_HZ 10000000
+#define WAVEX_ESP_SPI2_MOSI 3  // MCP3208 DIN
+#define WAVEX_ESP_SPI2_MISO 4  // MCP3208 DOUT
+#define WAVEX_ESP_SPI2_FREQ_HZ WAVEX_ESP_MCP3208_FREQ_HZ
 
-#define WAVEX_ESP_MCP3008_CS 5  // ADC #0 (8 channels = 4 endless pots)
+#define WAVEX_ESP_MCP3208_CS 5  // ADC #0 (8 channels = 4 endless pots)
 
-// TLC5947: XLAT latches the frame; BLANK high forces all outputs off. Wire a
-// pull-up on BLANK so the LEDs stay dark from power-on until the first frame
-// is latched, instead of showing the shift register's random contents.
-#define WAVEX_ESP_TLC5947_LAT 28
-#define WAVEX_ESP_TLC5947_BLANK 29
+// Shared PCA9956B controls: active-low RESET and OE; external pull-ups
+// hold reset inactive and outputs disabled before firmware initialization.
+#define WAVEX_ESP_PCA9956B_RESET 28
+#define WAVEX_ESP_PCA9956B_OE 29
 
-// Unassigned header GPIO: 52 (earmarked: chip select for a second MCP3008
-// if more than four endless pots or any plain pots are added). GPIO26/27 are
-// reserved for USB, see above.
+// Second ADC reservation only. The WIFI6 has no mux address allocation;
+// conventional-pot scanning must not be enabled on this profile yet.
+#define WAVEX_ESP_MCP3208_AUX_CS 52
+#define WAVEX_ESP_MUX_S0 -1
+#define WAVEX_ESP_MUX_S1 -1
+#define WAVEX_ESP_MUX_S2 -1
+#define WAVEX_ESP_MUX_S3 -1
+
+#endif  // Board profile
 
 #endif  // ESP_PLATFORM
 
@@ -229,6 +299,46 @@ extern "C" {
 
 #ifdef __cplusplus
 }
+#endif
+
+#if defined(ESP_PLATFORM) && defined(__cplusplus)
+namespace wavex_pins {
+// Reject collisions even for dormant peripherals: the map reserves physical
+// wiring, not only currently enabled drivers. Shared bus wires occur once.
+constexpr int claimed[] = {
+    WAVEX_ESP_I2C_SDA,        WAVEX_ESP_I2C_SCL,     WAVEX_ESP_UART_INTER_TX,
+    WAVEX_ESP_UART_INTER_RX,  WAVEX_ESP_SPI_SCLK,    WAVEX_ESP_SPI_MOSI,
+    WAVEX_ESP_SPI_MISO,       WAVEX_ESP_SPI_CS,      WAVEX_ESP_ATTN_OUT,
+    WAVEX_ESP_ENCODER_A,      WAVEX_ESP_ENCODER_B,   WAVEX_ESP_PCNT1_A,
+    WAVEX_ESP_PCNT1_B,        WAVEX_ESP_BTN_INT,     WAVEX_ESP_MIDI_RX,
+    WAVEX_ESP_MIDI_TX,        WAVEX_ESP_SPI2_SCLK,   WAVEX_ESP_SPI2_MOSI,
+    WAVEX_ESP_SPI2_MISO,      WAVEX_ESP_MCP3208_CS,  WAVEX_ESP_MCP3208_AUX_CS,
+    WAVEX_ESP_PCA9956B_RESET, WAVEX_ESP_PCA9956B_OE, WAVEX_ESP_MUX_S0,
+    WAVEX_ESP_MUX_S1,         WAVEX_ESP_MUX_S2,      WAVEX_ESP_MUX_S3,
+};
+constexpr bool available(int pin) {
+#if WAVEX_ESP_BOARD == WAVEX_ESP_BOARD_CORE
+    return (pin >= 2 && pin <= 13) || (pin >= 20 && pin <= 23) || (pin >= 28 && pin <= 33) ||
+           pin == 36 || (pin >= 39 && pin <= 54);
+#else
+    return (pin >= 2 && pin <= 5) || pin == 7 || pin == 8 || (pin >= 20 && pin <= 23) ||
+           (pin >= 28 && pin <= 33) || (pin >= 46 && pin <= 52);
+#endif
+}
+constexpr bool validAllocation() {
+    for (unsigned i = 0; i < sizeof(claimed) / sizeof(claimed[0]); ++i) {
+        if (claimed[i] == -1)
+            continue;
+        if (!available(claimed[i]))
+            return false;
+        for (unsigned j = 0; j < i; ++j)
+            if (claimed[i] == claimed[j])
+                return false;
+    }
+    return true;
+}
+static_assert(validAllocation(), "ESP32 pin collision, reserved USB/board net, or unexposed GPIO");
+}  // namespace wavex_pins
 #endif
 
 #endif  // WAVEX_PIN_CONFIG_H

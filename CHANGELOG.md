@@ -26,6 +26,17 @@ versioning and release process.
   retain their roadmap stages. Stereo/UI changes are host/compile verified;
   target timing, panel, listening and soak verification remain open.
 
+- Replaced the planned TLC5947 LED chain with two PCA9956BTWY I²C drivers:
+  retained 48 logical channels, changed brightness to 8-bit, and reserved shared
+  reset/output-enable pins. Updated panel ownership and bring-up gates for
+  shared touch/keypad I²C traffic; the LED driver is not implemented yet.
+
+- Added a selectable ESP32-P4-Core-DEV-KIT pin profile with compile-time
+  allocation checks, preserving the WIFI6 bench default. Documented the
+  RV112FF/MCP3208 panel target, separate conventional-pot ADC/mux path and
+  Phase 2.P Core bring-up gates; Core hardware and panel drivers remain unverified.
+  Recorded MCP48CMB28-20E/ST and the PA0035 adapter in the hardware note.
+
 - Documented the Project/menu ownership model, proposed Scene workflow and
   Track/Instrument mixing rules; roadmapped configurable stereo/Mono channel
   allocation and deferred oscillator pitch drift. These are design/planning

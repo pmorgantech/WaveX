@@ -74,6 +74,16 @@ else()
 endif()
 idf_build_set_property(COMPILE_DEFINITIONS "WAVEX_BUILD_DEBUG=${WAVEX_BUILD_DEBUG_VALUE}" APPEND)
 
+# Select pin wiring consistently across all components. Use a separate build
+# directory for Core so the bench image remains available.
+set(WAVEX_ESP_BOARD "WIFI6" CACHE STRING "Frontend carrier: WIFI6 or CORE")
+set_property(CACHE WAVEX_ESP_BOARD PROPERTY STRINGS WIFI6 CORE)
+if(NOT WAVEX_ESP_BOARD STREQUAL "WIFI6" AND NOT WAVEX_ESP_BOARD STREQUAL "CORE")
+    message(FATAL_ERROR "WAVEX_ESP_BOARD must be WIFI6 or CORE")
+endif()
+idf_build_set_property(COMPILE_DEFINITIONS
+    "WAVEX_ESP_BOARD=WAVEX_ESP_BOARD_${WAVEX_ESP_BOARD}" APPEND)
+
 project(wavex-esp32)
 
 # NOTE: do not add add_compile_options()/add_link_options() here. ESP-IDF

@@ -149,7 +149,7 @@ Full component table and open hardware decisions: [`docs/architecture.md`](docs/
 | | Frontend | Backend |
 |---|---|---|
 | MCU | ESP32-P4 (Waveshare P4-WIFI6 board, 16 MB flash, PSRAM) | Daisy Seed (STM32H750, 64 MB SDRAM, 8 MB QSPI) |
-| Display/UI | 5" 1280×720 MIPI-DSI (HX8394) + GT911 touch, PCNT encoder, TCA8418 button matrix, TLC5947 LEDs | — |
+| Display/UI | 5" 1280×720 MIPI-DSI (HX8394) + GT911 touch, PCNT encoder, TCA8418 button matrix, PCA9956BTWY I²C LEDs (planned) | — |
 | Audio | — | built-in stereo codec (SAI1); PCM1690 8-ch TDM DAC planned (SAI2) |
 | Storage | 16 MB flash | microSD via SDMMC 4-bit + FatFs |
 | MIDI | DIN (UART2) + USB | — |

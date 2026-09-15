@@ -40,7 +40,7 @@ Dual-MCU split, each processor doing what it is best at:
 │  • LVGL 9.5 touchscreen UI   │ UART1 ↔  │  • Audio engine @48 kHz          │
 │    (1280×720 MIPI-DSI+GT911) │◄────────►│  • Sample streaming from SD      │
 │  • Encoders (PCNT), TCA8418  │  UART4   │    (SDMMC 4-bit + FatFs)         │
-│    button matrix, TLC5947 LEDs│         │  • 64 MB SDRAM sample RAM        │
+│    button matrix, I²C LEDs    │         │  • 64 MB SDRAM sample RAM        │
 │  • MIDI (UART DIN + USB)     │ (SPI link│  • CV outputs (VCF/VCA/CV-Gate)  │
 │  • Sample browser / metadata │ wired but│  • PCM1690 8-ch TDM DAC (planned)│
 │  • Presets & settings        │ disabled)│  • Metrics, heartbeat, profiling │
@@ -74,7 +74,7 @@ The **file browsing model** follows from the storage split: the SD card is on th
 | Touch | GT911 capacitive | I2C0 (shared) | working |
 | Button matrix | TCA8418 | BSP I2C bus (shared with touch) + INT (INT not yet used) | driver present; four keys mapped — full panel key model is Phase 2.P (`features/panel-controls.md`) |
 | Encoders | 2× PCNT quadrature (PEC11R, nav); 4× endless pots via MCP3008 planned | PCNT / SPI2 | PCNT unit 1 working (the bench encoder); MCP3008 no driver yet (2.P.4) |
-| LEDs | 2× TLC5947 chained | SPI2 (one owner task) | planned (2.P.3); no driver yet |
+| LEDs | 2× PCA9956BTWY | BSP I²C bus (shared with touch/keypad) | planned (2.P.3); no driver yet |
 | MIDI | DIN via UART2 @31250 (compiled out until the receiver is rewired to the new pins, 2.P.5); USB MIDI device on the USB 2.0 **HS** OTG controller — the board's 4-pin USB connector, independent of the USB-Serial/JTAG flash port | UART / USB HS | USB in works; no MIDI out on either path yet |
 | Backend MCU | Daisy Seed rev (STM32H750, 480 MHz, 64 MB SDRAM, 8 MB QSPI) | — | working |
 | Audio codec | Built-in (stereo in/out, 24-bit) | SAI1 | working |
@@ -83,6 +83,17 @@ The **file browsing model** follows from the storage split: the SD card is on th
 | CV DACs | **open decision — see §3.3** | I2C or SPI | prototype (MCP4728 I2C in code) |
 | Inter-MCU link (live) | UART @ 2 Mbaud, framing in `firmware/shared/uart_protocol/` | UART1 (ESP) ↔ UART4 (Daisy) | working — carries **all** inter-MCU traffic |
 | Inter-MCU link (SPI) | SPI: **Daisy master / ESP32 slave**, mode 0, software CS, ATTN line ESP → Daisy (`WAVEX_ESP_ATTN_OUT` / `WAVEX_DAISY_ATTN_IN`) | SPI1 (Daisy) / SPI3_HOST slave (ESP) | wired but **compiled out** (`WAVEX_SPI_LINK_ENABLED=0` in `link_config.h`); revival requires bench re-validation |
+
+### 3.1.1 Core carrier and panel target (not hardware-verified)
+
+The [Core carrier decision](features/esp32-p4-core.md) adds selectable
+ESP32-P4-Core-DEV-KIT wiring for Phase 2.P while retaining the WIFI6 bench
+profile. The target panel uses two PCNT navigation encoders, TCA8418 switches,
+PCA9956BTWY LEDs and four Alpha RV112FF controls on a dedicated MCP3208. Conventional
+pots get a separate MCP3208/74HC4067 path. ADCs use the
+panel-owned SPI2 bus; LEDs use shared BSP I²C; the live UART and reserved SPI3 link remain separate.
+This supersedes the MCP3008 target in the dated component table above.
+Core display, USB, memory and two-board behavior require their own bench gate.
 
 ### 3.2 Authoritative configuration files
 

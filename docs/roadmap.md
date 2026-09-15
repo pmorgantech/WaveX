@@ -1,7 +1,7 @@
 # WaveX Implementation Roadmap
 
 **Status:** Canonical implementation order. **Current phase:** Phase 2.
-**Last updated:** 2026-09-13.
+**Last updated:** 2026-09-14.
 
 This document is the single planning list: scheduled phases, next steps,
 unscheduled backlog and open decisions. Completed work belongs in `CHANGELOG.md`
@@ -88,7 +88,7 @@ Phase 2.5 work. Open work:
 1. Verify sample-offset timing and edit boundaries on hardware for the
    four-track gate, including the prepared note/velocity resolution.
 2. Serialize MIDI clock out on the ESP32's DIN and USB paths (needs 2.P.5).
-3. Complete TLC5947 LED feedback. Per-pad cutoff and amp attack/decay/sustain
+3. Complete PCA9956BTWY I²C LED feedback. Per-pad cutoff and amp attack/decay/sustain
    editing with inheritance reset is implemented. The
    touch kit editor provides creation, naming, assignment, choke and new-copy
    WXI saves. The touch Play pads
@@ -215,13 +215,32 @@ general key/velocity zones, Instrument Browser and Track page. This does not
 close the Phase 2 panel or timing gates.
 PCNT encoder support and the logical key map exist in firmware; their
 physical integration, LED/pot drivers and DIN MIDI remain deferred.
-Stages, one commit each:
+The [Core carrier decision](features/esp32-p4-core.md) (2026-09-14) adds a
+selectable pin profile while preserving the WIFI6 bench default. This is
+configuration support, not a completed Core hardware port.
+
+**Core bring-up prerequisite:** check the carrier revision and bottom-pad
+breakout, boot/flash/console and memory configuration, existing HX8394/GT911
+BSP path, live UART and USB MIDI. Preserve the current partition layout until
+its use on Core is verified. Record board/image identities; repeat the two-board
+traffic/reboot checks before adopting Core on the bench.
+
+Stages, one independently buildable change each:
 
 2. TCA8418 interrupt-driven keypad task (fallback poll retained).
-3. `panel_task` owning SPI2: TLC5947 chain, LED policy, `LEDS` in `STATE`;
-   absorbs `pcnt_task`.
-4. MCP3008 + endless-pot decoder (host-tested), calibration store, the
-   four-`EncoderBinding` page contract and strip widget; first consumers
+3. `panel_task`: PCA9956BTWY LED driver on shared BSP I²C, 8-bit brightness,
+   LED policy and `LEDS` in `STATE`; absorbs `pcnt_task` and owns ADC SPI2.
+   Verify both device addresses, current limits, dark boot, reset recovery and
+   blank/wake. Bound LED writes/retries and measure touch/keypad latency during
+   LED traffic; no I²C operation runs from the UI task or blocks ADC sampling
+   beyond its measured budget.
+4. Dedicated MCP3208 + four RV112FF dual-track endless controls: confirm
+   exact mechanical order/drawing and scope both wipers before implementing
+   MCP3208 framing and a host-tested decoder. Bound pair skew, calibrate
+   direction/range and test reversal, wrap, noise and disconnected inputs.
+   Add a separate MCP3208/74HC4067 conventional-pot path only after its
+   population and settling/scan budget are defined. Then implement the
+   calibration store, four-`EncoderBinding` page contract and strip widget; first consumers
    are the Instrument and Play pages.
 5. MIDI: DIN back on at its new pins, UART2 TX ring shared with USB MIDI
    out, DIN/USB latency measured.
@@ -357,7 +376,8 @@ The following code paths are open until observed on the target:
 | Audio formats | Audition 44.1 and 48 kHz WAVs; confirm pitch. |
 | UART and SD | Sustain traffic during streaming; run read and hot-unmount soak tests. |
 | MIDI latency | Measure DIN and USB input-to-sound latency; target under 5 ms. USB MIDI enumerates on the USB 2.0 HS controller — the board's 4-pin USB connector, not the Type-C — and that has never been confirmed on the bench. DIN waits on 2.P.5 (receiver on the new RX pin). |
-| Panel pins (2026-09-05) | `pin_config.h` was rewritten against the ESP32-P4-WIFI6 header. The bench encoder is PCNT unit 1 (confirmed 2026-09-05); it counts negative on clockwise as wired, and three pages had compensated for it — direction is now one per-encoder flag in `hardware_config.h`, and those pages follow the shared contract. Clockwise increases values / moves forward on every page — verified 2026-09-05. Verify the TCA8418 matrix geometry (`WAVEX_TCA8418_ROWS/COLUMNS`, never confirmed against the wiring) and the `WAVEX_KEYCODE_*` map from the Diagnostics ▸ Panel tab (2.P.1): press each key, read its keycode, row/column and `PanelKey`; "unmapped" means the map or the geometry is wrong. Blocker first: the bench log shows `TCA8418 hardware initialization failed` on every boot recorded (2026-09-05), so the keypad has not been answering on I2C at all — check its wiring and address before reading anything off the Panel tab. Scope an endless pot's two wipers before calibrating (the decoder assumes triangle waves). |
+| Core carrier (2026-09-14) | Verify schematic-to-board continuity including bottom pads, boot straps and USB reservations; boot/flash/console, PSRAM, existing partition/NVS layout, display/touch/brightness, UART traffic and reboot recovery, PCNT direction and USB MIDI on the Core. Confirm RV112FF order suffix/shaft fit and measured wiper curves; then PCA9956BTWY addressing/current limits, dark boot/reset recovery, blank/wake and shared-I²C touch/keypad latency under LED traffic, paired-read skew, mux settling, noise/drift and input-to-sound latency under load. Pin-profile compilation does not close these checks or the Phase 2 zero-underrun gate. |
+| Panel pins (2026-09-05) | `pin_config.h` was rewritten against the ESP32-P4-WIFI6 header. The bench encoder is PCNT unit 1 (confirmed 2026-09-05); it counts negative on clockwise as wired, and three pages had compensated for it — direction is now one per-encoder flag in `hardware_config.h`, and those pages follow the shared contract. Clockwise increases values / moves forward on every page — verified 2026-09-05. Verify the TCA8418 matrix geometry (`WAVEX_TCA8418_ROWS/COLUMNS`, never confirmed against the wiring) and the `WAVEX_KEYCODE_*` map from the Diagnostics ▸ Panel tab (2.P.1): press each key, read its keycode, row/column and `PanelKey`; "unmapped" means the map or the geometry is wrong. Blocker first: the bench log shows `TCA8418 hardware initialization failed` on every boot recorded (2026-09-05), so the keypad has not been answering on I2C at all — check its wiring and address before reading anything off the Panel tab. Scope an endless pot's two wipers before calibrating (the decoder is not built; verify the assumed transfer curve first). |
 | Diagnostics | Open the page and verify live telemetry arrives. |
 | Digital voices | Trigger RAM-resident notes, sweep live parameters, and judge SVF response/resonance. |
 | Ladder filter (resolved 2026-09-14) | Three ladders were measured on one workload (`callback-performance-log.md` § Filter topology A/B): Huovilainen 4x peak 69.8%, 2x 47.5%, ZDF 33.7%, SVF 30.3%. Listened to on the bench they were the same filter at working settings (-35 dB difference); the ZDF was kept as `Ladder` (about 3 points of budget for eight voices) and the Huovilainen ladders were pruned, wire values 2 and 3 retired. Still open by ear: the ladder's self-oscillation (from 74% RES) and the SVF's Q 16 top with the reworked drive, on `scripts/bench_filter_listen.py`. Related, on the gate backlog: a held pad cannot keep a one-shot voice open past its sample end, so a pluck's ring only lasts its amp release. |
@@ -772,13 +792,11 @@ protocol migration.
 
 #### ESP32 pin verification
 
-`pin_config.h` was reconciled against the ESP32-P4-WIFI6 header on 2026-09-05
-(the SPI2/PCNT collision is gone; see `features/panel-controls.md`). What is
-left is bench work, tracked in `roadmap.md` § Outstanding hardware
-verification: which encoder is physically wired and to what, and the keypad
-matrix geometry. The dormant SPI-slave link's five pins stay reserved until
-the SPI revival decision above is made; releasing them for the panel is the
-alternative if that decision is "never".
+The WIFI6 allocation remains the bench default; a Core carrier profile and
+MCP3208/RV112FF target are now recorded in
+[esp32-p4-core.md](features/esp32-p4-core.md). Bring-up belongs to Phase 2.P;
+physical acceptance remains in Outstanding hardware verification. Keep the
+SPI link reservation until its separate revival/adoption decision is made.
 
 #### Logging policy
 
