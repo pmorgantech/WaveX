@@ -110,11 +110,11 @@ sequence(u16 LE) | payload[0..2048] | crc16(u16 LE) | end(0x5A)
 | MSG_INST_ZONE_SYNC | 0x62 | D→E | InstZoneSyncMessage | sixteen-pad map, Instrument identity, busy state and retained mutation result |
 | MSG_INST_PAD_SOUND_OP | 0x65 | E→D | InstPadSoundOpMessage | read one pad or edit its cutoff/amp envelope inheritance |
 | MSG_INST_PAD_SOUND_SYNC | 0x66 | D→E | InstPadSoundSyncMessage | effective pad settings, sample identity and retained edit result |
-| MSG_MIX_OP (Solo) | 0x78 | E→D | `MixOpMessage` | since 2026-09-14 the Sequencer page's Solo sends `MIX_OP_SET_MUTE_MASK` with every other Track's bit set; un-solo sends 0 |
+| MSG_MIX_OP (Solo) | 0x78 | E→D | `MixOpMessage` | since 2026-09-14 the Sequencer page's Solo sends `MIX_OP_SET_SOLO_MASK` selecting the audible Track; un-solo sends 0 and preserves user mutes |
 | MSG_INST_EDIT_OP | 0x80 | E→D | `InstEditOpMessage` | Track Instrument sound snapshot, filter/amp edit, Apply or Revert; retains one backend undo point |
 | MSG_INST_EDIT_SYNC | 0x81 | D→E | `InstEditSyncMessage` | authoritative audible sound values, revision, busy/error, completion and undo-dirty state |
 | MSG_TRACK_OP | 0x63 | E→D | `TrackOpMessage{op, track, value}` | one Track setting (`track-and-patch-model.md` §2.1), idempotent like `MSG_MIX_OP`. `TRACK_OP_SET_MIDI_IN` (`value` = `TrackMidiIn`: 0 Omni, 1..16 that channel **as displayed**, 0xFF Off), `TRACK_OP_SET_POLY_LIMIT` (0 = none, else ≤ `WAVEX_NUM_VOICES`), `TRACK_OP_SET_PRIORITY`, `TRACK_OP_SET_PROGRAM_CHANGE` (0/1). Only `midi_in` has behaviour today; the rest are stored for stages 8 and 6. An out-of-range track or value is rejected and logged, not clamped |
-| MSG_MIX_OP | 0x78 | E→D | `MixOpMessage{op, track, value}` | one mixer control change. `value` is op-dependent: gain/master are **centi-dB above the −60 dB floor** (0 = silence, 6000 = 0 dB, 6600 = +6 dB); pan reuses PARAM_PAN's convention (0 left, 32768 centre, 65535 right); `SET_MUTE_MASK` carries a bit per track. Conversions live in `WaveX::Mix` (`shared/audio/track_mix.hpp`) so both ends use one implementation |
+| MSG_MIX_OP | 0x78 | E→D | `MixOpMessage{op, track, value}` | one mixer control change. `value` is op-dependent: gain/master are **centi-dB above the −60 dB floor** (0 = silence, 6000 = 0 dB, 6600 = +6 dB); pan reuses PARAM_PAN's convention (0 left, 32768 centre, 65535 right); `SET_MUTE_MASK` changes user mutes; `SET_SOLO_MASK` (op 0x08) selects audible Tracks without changing those mutes, with zero disabling Solo. Conversions live in `WaveX::Mix` (`shared/audio/track_mix.hpp`) so both ends use one implementation |
 | MSG_MIX_STATE_REQ | 0x7B | E→D | `MixStateRequest` | correlated selected-Track read; nonzero request id and Track 0–15 |
 | MSG_MIX_STATE | 0x7C | D→E | `MixStateMessage` | matching identity, validity, gain/pan in existing mixer wire units and mute target; foreground accepted state, applied through the existing block-boundary handoff; no ramp or master telemetry |
 | MSG_MIX_METERS | 0x79 | D→E | `MixMetersMessage{peak[16]}` | per-track peak, log-mapped by `Mix::PeakToMeterByte` with 0 reserved for true silence. Sent only between `SUB_METERS` and `UNSUB_METERS`, at the existing meter cadence; master stereo meters stay on MSG_METER_PUSH |
@@ -430,8 +430,12 @@ acknowledges accepted edits; no optimistic UI value becomes the pattern authorit
 
 The centralized `InstOscOpMessage` / `InstOscSyncMessage` contract in
 `protocol.h` adds oscillator GET, SET and copy-into-empty-map operations.
-SET updates level, coarse/fine tuning, key tracking and the Instrument's
-oscillator mix. Reads return the authoritative values, map occupancy,
+SET updates level, coarse/fine tuning, key tracking, Mono and the Instrument's
+oscillator mix. `InstOscSettings::mono` uses its formerly reserved final byte,
+validated as 0/1 with default 0; request/snapshot sizes remain unchanged.
+Mono applies to new notes only so held voices retain their channel reservation.
+Paired firmware is needed for the Mono control; older receivers reject a
+nonzero formerly reserved byte rather than silently applying it. Reads return the authoritative values, map occupancy,
 Instrument revision and retained mutation outcome. Mutations require that
 revision; a stale edit, busy loader or occupied copy destination is rejected.
 Copying a map reuses this Track's existing Sample Pool references. These

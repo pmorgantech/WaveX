@@ -189,6 +189,7 @@ enum MixOp : uint8_t {
     MIX_OP_SET_MUTE_MASK = 0x05,  // value = bit per track, 1 = muted; track ignored
     MIX_OP_SUB_METERS = 0x06,     // start MSG_MIX_METERS; value/track ignored
     MIX_OP_UNSUB_METERS = 0x07,   // stop it
+    MIX_OP_SET_SOLO_MASK = 0x08,  // bit per audible solo Track; 0 disables Solo, preserves mutes
 };
 
 /**
@@ -204,11 +205,10 @@ enum MixOp : uint8_t {
  *   centre, 65535 hard right - because a second pan encoding on the same wire
  *   is how the two ends end up disagreeing about centre.
  *
- * MIX_OP_SET_MUTE_MASK is not in the original design list. It is here because
- * solo is expanded to a mute set on the frontend, and sending that expansion
- * as up to 16 separate SET_MUTE messages walks the engine through
- * intermediate states where the wrong tracks are muted. With 5 ms mute ramps
- * those intermediates are audible, so the whole set moves in one message.
+ * MUTE_MASK changes stored Track mutes atomically. SOLO_MASK is a separate
+ * temporary selection: zero disables Solo, otherwise only selected Tracks
+ * are audible (subject to their own mute). One message avoids intermediate
+ * states, and clearing Solo never erases user mute settings.
  */
 struct MixOpMessage {
     uint8_t op;      // MixOp
@@ -1964,7 +1964,7 @@ enum InstOscOp : uint8_t { INST_OSC_GET = 0, INST_OSC_SET = 1, INST_OSC_COPY_EMP
 struct InstOscSettings {
     float level = 1.0f, mix = 0.0f;
     int8_t coarse = 0, fine = 0;
-    uint8_t keytrack = 1, reserved = 0;
+    uint8_t keytrack = 1, mono = 0;  // mono: explicit stereo downmix; next-note setting
 } __attribute__((packed));
 struct InstOscOpMessage {
     uint32_t request_id = 0, revision = 0;
@@ -1981,7 +1981,7 @@ static_assert(sizeof(InstOscOpMessage) == 24, "oscillator request wire size");
 static_assert(sizeof(InstOscSyncMessage) == 32, "oscillator snapshot wire size");
 inline bool IsValidInstOscOp(const InstOscOpMessage& m) {
     if (!m.request_id || m.track >= 16 || m.oscillator >= 2 || m.source >= 2 ||
-        m.op > INST_OSC_COPY_EMPTY || m.value.reserved)
+        m.op > INST_OSC_COPY_EMPTY || m.value.mono > 1)
         return false;
     if (m.op == INST_OSC_GET)
         return true;

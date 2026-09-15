@@ -400,16 +400,16 @@ stereo/Mono changes and the proposed Project navigation and Scene workflow.
 Performance currently exposes Track assignment, MIDI input, level and pan;
 Project owns that setup without needing a separate saved Performance object.
 
-- [ ] **Phase 1.5 stereo reconciliation / Phase 2.5 voice capacity:** implement
-  stereo preservation, a saved per-oscillator Mono toggle (default Off), and a
-  configurable global render-channel macro defaulting to eight. Count mono
-  voices as one and stereo voices as two, including release tails; derive
-  allocation/storage from configuration. Verify mixed-cost stealing, two-source
-  notes, pan/balance, WXI/Apply/Revert and the streaming-preview boundary.
-  Measure DWT before/after and run the full channel-budget soak; earlier
-  eight-mono-voice measurements do not verify the new renderer.
-- [ ] **Phase 2 / Mixer v1:** converge navigation on Project-owned Tracks/Mixer
-  and session Save/Load; preserve selected-Track continuity and keep Pattern/
+- [ ] **Stereo/Mono hardware verification:** stereo preservation, saved
+  per-oscillator Mono (default Off) and the configurable render-channel budget
+  are implemented. Host tests cover mixed-cost stealing, release tails,
+  independent stereo filters, next-note/undo behavior, old WXI headers and a
+  larger configured capacity. Verify audible pan/balance, Mono and Solo/manual-mute restoration, measure
+  DWT before/after at matched workloads, and run the full channel-budget soak
+  with streaming audition and modulation. Earlier mono-voice measurements
+  do not verify this renderer. Sample Edit `channel_mode` UI remains separate.
+- [ ] **Phase 2 / Mixer v1:** Project now exposes Track assignment, MIDI, level,
+  pan/balance and mute. Add session Save/Load; preserve selected-Track continuity and keep Pattern/
   Song editing in Sequencer. Complete Project transactions and mixer readback/
   mute/solo/master/meters at their existing phase gates.
 - [ ] **Phase 5 Scenes:** settle the proposed eight project-scoped snapshots,

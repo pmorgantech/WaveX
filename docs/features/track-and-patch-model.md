@@ -28,12 +28,12 @@ The words the UI, the docs and the code use. Engine identifiers were renamed to 
 | **Instrument** | **Confirmed 2026-09-03 (replacing "Patch"):** one playable, named, tagged, saveable sound: two Oscillators → submix → Filter → Amp/Pan, with three envelopes, two LFOs and a mod matrix (§3). Saved as `.wxi`. Gets loaded *into* a Track. A drum **Kit** is a drum-mode Instrument, not another kind of thing. | Voice, Patch, Preset, Program, Sound | `Instrument` (`instrument.hpp` — the name was already right) |
 | **Track** | **Confirmed 2026-09-02:** one sequencer track (formerly "slot") *and* one space in which an active Instrument can be loaded, responding to MIDI messages on its designated channel. Sixteen of them. Also owns a mixer strip and a polyphony limit. What a note is *addressed to*. | slot, instrument slot, channel | `kNumTracks`, `Tracks::Track()`, `Voice::track`, `NoteMessage::channel` (was `kNumInstrumentSlots`, `InstrumentBank::Slot()`, `Voice::slot`); `pattern.hpp`'s per-track step row is `TrackSteps` (was `Track`) so the word means one thing |
 | **Bank** | **Confirmed 2026-09-04:** a numbered table of **128 Instrument slots** (0–127) saved as one self-contained file, `.wxb`, addressable by MIDI Program Change (§3.6). A Bank is *storage* — loading slot *n* copies that Instrument into a Track; a Bank never owns runtime sound. | bank, sound pool, program bank | none; the 16 runtime Tracks are `Tracks` (was `InstrumentBank`) so "Bank" means only this |
-| **Voice** | One of `WAVEX_NUM_VOICES` polyphony channels rendering one resolved note through an Instrument's signal path. An *engine* term; it never names a page or a user entity again. Track → Instrument → Voice is a dynamic allocation from one shared pool, never a static Track↔Voice mapping (§5). | voice | `Voice`, `WAVEX_NUM_VOICES` (`hardware_config.h`; was `kNumVoices`) |
-| **Performance** | The current live configuration of all Tracks: Instrument bindings, MIDI routing, mixer, mutes, and shared effects. V1 stores one Performance directly in the Project; it is an ownership concept, not a separate file yet. | multi, part, performance | Project's target `Tracks[16]` plus mixer state |
+| **Voice** | One temporary note/layer using one mono or two stereo render channels from the configured budget, through an Instrument's signal path. An *engine* term; it never names a page or a user entity again. Track → Instrument → Voice is a dynamic allocation from one shared pool, never a static Track↔Voice mapping (§5). | voice | `Voice`, `WAVEX_NUM_VOICES` (`hardware_config.h`; was `kNumVoices`) |
+| **Performance** | Former page name for the live Track/mixer setup now accessed through Project. No separate saved entity or file; Project directly owns the setup. | multi, part, performance | Project's target `Tracks[16]` plus mixer state |
 | **Pattern** | A group of notes/velocities over a fixed span — default **2 bars of 16ths = 32 steps** — with one step row per Track. The sequencer's unit of composition. | pattern | `Pattern` (`pattern.hpp`, built: 1–64 steps, default 16 → 32) |
 | **Song** | An ordered arrangement of Patterns over time, at a tempo and swing setting. | song, chain | target Song arrangement — not yet in code |
 | **Scene** | A performance snapshot of mixer, macros, mutes, and optional Pattern selection. It references content and never embeds Samples, Instruments, or Pattern data. | performance | target only; `scenes-and-performance.md` |
-| **Project** | The portable root that stores one Performance, Patterns, Songs, Scenes, settings, the current Bank, and references to saved Instruments/assets. | project | `.wxp` target; not yet in code |
+| **Project** | The portable root that stores Track/mixer setup, Patterns, Songs, settings, Bank and Instrument/asset references; Scenes when implemented. | project | Project codec built; device save/load and Scene storage remain open |
 | **MIDI channel** | 1–16 on the DIN/USB input. A *routing input* to Tracks, never the same word as Track. | channel | `MidiEvent::channel` |
 | **Mod slot** | One row of an Instrument's modulation matrix. Keeps "slot" — it is the conventional word there and it is never confused with a Track once Track exists. | mod slot | `ModSlot`, `Instrument::mod_slots[8]` |
 
@@ -50,10 +50,9 @@ SD assets ──load──▶ Sample Pool (resident Samples, refcounted) ◀─�
 Bank (.wxb): Instrument slots[128] ──copy into──▶ Track           │
                                                                   │
 Project                                                           │
-├── Performance                                                   │
-│   └── Tracks[16]                                                │
-│       ├── active Instrument ────────────────────────────────────┘
-│       └── MIDI routing, polyphony, mixer strip
+├── Tracks[16]                                                    │
+│   ├── active Instrument ────────────────────────────────────────┘
+│   └── MIDI routing, polyphony, mixer strip
 ├── Patterns -> TrackSteps[16] -> Tracks
 ├── Scenes   -> performance state + optional Pattern reference
 └── Songs    -> ordered Pattern references, repeats, tempo, overrides
@@ -69,8 +68,8 @@ The resulting save policy is explicit:
   not another layer.
 - A Track owns the active Instrument binding, MIDI routing, polyphony policy,
   and mixer strip.
-- The Performance is the live set of all Track/Instrument bindings, routing,
-  mixer state, mutes, and shared effects. V1 stores one directly in the Project.
+- Project directly owns the live Track/Instrument bindings, routing, mixer
+  and mutes. Performance is the former page label, not another saved object.
 - A Pattern owns musical time: notes, triggers, probability, micro-timing, and
   parameter locks. It does not own or silently replace Track Instruments.
 - A Scene owns recallable performance state, not content.
@@ -80,10 +79,9 @@ The resulting save policy is explicit:
 - A Project owns the portable working set and its references. Export/snapshot
   may copy referenced assets; normal save does not duplicate them.
 
-This gives the Performance an explicit stable boundary: Pattern changes
-preserve the Track/Instrument setup unless an explicit Scene or Project action
-changes it. Multiple independently named Performances or Parts can be added
-later without changing what a Pattern owns.
+Pattern changes preserve Project Track/Instrument setup. Scenes recall only
+their defined controls; Instrument replacement remains an explicit Project/Track
+action. Pattern ownership does not change when menus are regrouped.
 
 ### 1.2 Oscillator type is below Instrument, Voice is below note resolution
 
@@ -164,11 +162,11 @@ The filter's mode, topology, slope and drive are Instrument properties as well a
 
 ### 2.4 The selected Track (shared UI state — built 2026-09-04)
 
-The root setup page is named **Performance** from 2026-09-14. Track remains
+The root setup page is named **Project** from 2026-09-14. Track remains
 the musical entity; this page configures those parts collectively and stays
 outside Sequencer. Historical references to the Track page below refer to
 this same page. Its initial controls include assignment, MIDI input, level
-and pan; future polyphony/Bank/Scene controls retain their roadmap stages.
+pan/balance and mute; future polyphony/Bank/Scene controls retain their roadmap stages.
 
 Every page acts on **one** selected Track (`ui/current_track.h`): Play sends notes on it, the Sample Manager assigns to it, the Instrument page edits it, the browser loads into it. Before this existed, four pages kept four private copies, which was the whole of the "which Track?" bench finding. Rules:
 
@@ -233,7 +231,7 @@ struct Instrument {
 ```
 
 **What exists today**: two typed Sample oscillators with separate zone maps
-feed one mono submix, filter and amp per voice. Env 1 runs per sample; Env 2
+feed one mono/stereo submix with independent filter state per channel and one amp envelope per voice. Env 1 runs per sample; Env 2
 and Env 3 run at block rate. The eight-row matrix supports cutoff/gain/pitch/pan
 and the three envelope sources. Oscillator settings, both Key Maps, Env 1–3,
 matrix rows and two per-voice LFOs have revisioned touch editors; the live
@@ -285,7 +283,7 @@ complete Phase 2 gate remain separate checks.
 | chunk | payload | status |
 |---|---|---|
 | `HEAD` | name, tags, mode, transpose/fine, trim gain/pan, output, poly mode, osc mix | built |
-| `OSC1`, `OSC2` | `{type, level, pan, tune, keytrack}` then a type-specific body: **Sample** = Zone array, each Zone **plus its Sample's card path** (never a runtime id) and per-zone overrides; **Wavetable** = its own versioned body (`oscillator-sources.md`) | Sample body built; Wavetable body reserved |
+| `OSC1`, `OSC2` | `{type, level, pan, tune, keytrack, mono}` then a type-specific body: **Sample** = Zone array, each Zone **plus its Sample's card path** (never a runtime id) and per-zone overrides; **Wavetable** = its own versioned body (`oscillator-sources.md`) | Sample body built; Wavetable body reserved |
 | `FILT` | type, cutoff, resonance, keytrack, env2 amount | built |
 | `AMP` | velocity curve | built |
 | `ENV1`, `ENV2`, `ENV3` | ADSR each | built |
@@ -416,11 +414,19 @@ This is what makes **two soundfonts at once** ordinary: an Instrument on track 1
 
 ## 5. Polyphony
 
-`WAVEX_NUM_VOICES = 8` (`hardware_config.h`, since stage 1; was `kNumVoices` in `voice_manager.hpp`) is a **measured DTCM/CPU budget**, not a design choice, and the SVF's per-voice cost was never measured on hardware (see `sequencer.md` "Validation"). It is the only place the digital voice count is written; `voices_` sizes off it and nothing else in the engine hard-codes 8 for polyphony. Decided 2026-09-04:
+`WAVEX_AUDIO_CHANNEL_BUDGET` in `hardware_config.h` limits active mono render
+lanes. One stereo voice costs two; a mono voice costs one. `WAVEX_NUM_VOICES`
+counts note slots and defaults to that budget, so a future MCU can increase
+capacity centrally. Configured capacity still requires a DWT workload and
+linker-memory check. Physical output/CV groups are separate hardware limits.
 
-- It lives in **`hardware_config.h`** next to the other tunables, so 8 → 16 is that one edit plus a DWT measurement and the linker report. `VoiceManager` `static_assert`s against it.
-- It is **independent of the analog voice count** (`TdmVoiceSink::kNumSlots` = 8 PCM1690 slots, the 8-group CV calibration tables — hardware facts). The Stage B invariant "voice index == TDM slot == CV group" holds for the first 8 voices; digital voices beyond that render to the stereo codec only. `kMaxMixChannels` (mixer) is a third, unrelated 8.
-- The two-oscillator voice (§3.1) roughly doubles oscillator cost per voice while leaving filter, amp envelope and block-rate modulation flat. Before any number is promised: read the DWT callback-cycle counters with `WAVEX_NUM_VOICES` voices sounding, both oscillators active, through the filter. If there is headroom, 12 or 16 is the one-constant change.
+The allocator includes release tails, prefers stealing releasing notes then
+the oldest note, and can steal two mono notes to admit one stereo note. Two
+oscillators share one voice's mono/stereo reservation; a silent oscillator
+still reserves capacity because live level edits can make it audible.
+Mono changes affect new notes, and never expand a held voice's reservation.
+The following per-Track polyphony policy remains a target beyond this global
+channel allocator:
 
 Allocation policy, one shared pool (per-track reservations waste voices on a small machine):
 
@@ -438,7 +444,7 @@ Pages reorganised around the nouns. Each page owns exactly one thing.
 
 | Page | Owns | Exists today as |
 |---|---|---|
-| **Performance** | the live Track setup: selection (8 per page, §2.4), Instrument assignment, MIDI routing and Track mix | renamed from Track, with the current binding, Assign/Instrument Browser, Edit sound, MIDI input, Track level and pan; polyphony, Program Change, full Mixer and Scene recall follow their engine stages |
+| **Project** | the live Track setup: selection (8 per page, §2.4), Instrument assignment, MIDI routing and Track mix | renamed from Track, with the current binding, Assign/Instrument Browser, Edit sound, MIDI input, Track level and pan; polyphony, Program Change, full Mixer and Scene recall follow their engine stages |
 | **Instrument** | the selected Track's Instrument. Tabs: **Osc** (1/2, type, level/pan/tune, → Key Map or Pad Map by mode), **Filter**, **Amp**, **Env** (1/2/3), **LFO** (1/2), **Mod**; Name/Tags on the Track page's Save | Instrument page (renamed from "Voice" in stage 1, 2026-09-04; Sample/Env/Amp/Filter/Mod/LFO tabs exist; its TRACK param follows the selected Track — done 2026-09-12) |
 | **Key Map** | Keyboard-mode oscillator: zones over key × velocity ranges | 32 stable slots, resident sample assignment/clear, staged inclusive key/velocity ranges and root note, audition, naming and WXI save copies (2026-09-11) |
 | **Pad Map** | Drum-mode oscillator: 16 pads × Sample, choke, optional per-pad filter/env | touch editor with assignment, audition, choke, naming and new-copy saves; per-pad cutoff and amp attack/decay/sustain overrides with inheritance reset |
@@ -448,7 +454,7 @@ Pages reorganised around the nouns. Each page owns exactly one thing.
 | **Sample Manager** | the Pool: what is resident, who uses it, unload, assign to Track / to pad, **set current sample for editing** | exists; today cannot see an import's samples (§4); "Assign" with a replace confirm (stage 2, 2026-09-04); "to pad" waits for the Pad Map |
 | **Sample Edit** | the **current sample**'s markers/gain/fades | exists |
 | **Play** | the grid, addressed to the selected Track | exists; follows the selected Track (2026-09-04) |
-| **Mixer** | 16 strips (Track level/pan already exposed in Performance) | `output-routing-and-mixer.md` stage 3, not built |
+| **Mixer** | 16 strips (Track level/pan already exposed in Project) | `output-routing-and-mixer.md` stage 3, not built |
 
 "Selected Track" and "current sample" are the two pieces of shared UI state; both are ESP32-side, both survive page navigation like `SampleBrowserState` does. The selected Track is always visible as the header chip (§2.4), so no page needs its own Track readout — the strip on Play that today says "Track 3: …" collapses into the chip.
 

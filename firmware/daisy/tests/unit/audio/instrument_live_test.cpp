@@ -172,6 +172,29 @@ TEST_F(InstrumentLiveTest, PreparedMapRetainsActualNoteWhenKeyTrackingStartsDisa
     Live();
     EXPECT_FLOAT_EQ(vm.GetVoice(0).increment, 2);
 }
+TEST_F(InstrumentLiveTest, MonoChangesNextNotesAndRevertsWithoutReallocatingHeldNotes) {
+    ref.channels = 2;
+    ref.frames = pcm.size() / 2;
+    auto first = TriggerParams();
+    EXPECT_FALSE(first.mono);
+    vm.Trigger(first);
+    ASSERT_EQ(vm.ActiveChannelCount(), 2);
+    InstrumentSoundUndo undo;
+    undo.Capture(ins);
+    ins.osc[0].mono = true;
+    Live();
+    EXPECT_EQ(vm.ActiveChannelCount(), 2);
+    auto second = TriggerParams(62);
+    EXPECT_TRUE(second.mono);
+    vm.Trigger(second);
+    EXPECT_EQ(vm.ActiveChannelCount(), 3);
+    ASSERT_TRUE(undo.Revert(ins));
+    EXPECT_FALSE(ins.osc[0].mono);
+    Live();
+    EXPECT_EQ(vm.ActiveChannelCount(), 3);
+    EXPECT_FALSE(TriggerParams().mono);
+}
+
 }  // namespace
 
 TEST_F(InstrumentLiveTest, FilterModeFollowsOnlyItsInstrumentAndRevertPreservesCursor) {

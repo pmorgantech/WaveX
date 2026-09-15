@@ -83,6 +83,7 @@ InstrumentFile MakeFullDoc() {
         osc.coarse_tune = static_cast<int8_t>(-5 + o);
         osc.fine_tune = static_cast<int8_t>(11 + o);
         osc.keytrack = static_cast<uint8_t>(o == 0 ? 1 : 0);
+        osc.mono = o == 1;
         osc.zone_count = 3;
         for (uint8_t z = 0; z < osc.zone_count; ++z) {
             Zone& zn = osc.zones[z];
@@ -197,6 +198,7 @@ void ExpectDocEq(const InstrumentFile& a, const InstrumentFile& b) {
         EXPECT_EQ(a.osc[o].coarse_tune, b.osc[o].coarse_tune);
         EXPECT_EQ(a.osc[o].fine_tune, b.osc[o].fine_tune);
         EXPECT_EQ(a.osc[o].keytrack, b.osc[o].keytrack);
+        EXPECT_EQ(a.osc[o].mono, b.osc[o].mono);
         ASSERT_EQ(a.osc[o].zone_count, b.osc[o].zone_count);
         for (uint8_t z = 0; z < a.osc[o].zone_count; ++z) {
             SCOPED_TRACE("zone " + std::to_string(z));
@@ -535,6 +537,7 @@ TEST(WxiCodec, WalksAWiderZoneStride) {
     osc.push_back(static_cast<uint8_t>(static_cast<int8_t>(-2)));  // coarse
     osc.push_back(3);                                              // fine
     osc.push_back(1);                                              // keytrack
+    osc.push_back(1);                                              // mono
     osc.insert(osc.end(), future_header - Wxi::kOscHeaderWireSize, 0xCD);
 
     for (uint8_t z = 0; z < 2; ++z) {
@@ -822,4 +825,20 @@ TEST(WxiCodec, LegacyLfoPrefixDefaultsPitchFollowAndShorterPrefixIsRejected) {
             EXPECT_EQ(out.lfo[0].pitch_follow, size == 16 ? 1 : 0);
         }
     }
+}
+
+TEST(WxiCodec, OriginalOscillatorHeaderDefaultsMonoOff) {
+    std::vector<uint8_t> bytes, osc(17, 0);
+    Wxcf::detail::WriteU16LE(osc.data(), 17);
+    Wxcf::detail::WriteU16LE(osc.data() + 2, Wxi::kZoneWireSize);
+    osc[5] = static_cast<uint8_t>(OscType::Sample);
+    osc[16] = 1;
+    PutFileHeader(bytes, Wxi::kFileType, Wxi::kFileVersion);
+    PutChunk(bytes, Wxi::kChunkHead, MinimalHead());
+    PutChunk(bytes, Wxi::kChunkOsc1, osc);
+    InstrumentFile dst;
+    dst.osc[0].mono = true;
+    ASSERT_EQ(ReadBytes(bytes, dst), Result::Ok);
+    EXPECT_FALSE(dst.osc[0].mono);
+    EXPECT_EQ(dst.osc[0].keytrack, 1);
 }

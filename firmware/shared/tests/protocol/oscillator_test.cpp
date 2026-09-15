@@ -16,7 +16,7 @@ TEST(OscillatorProtocol, SettingsCopyAndReadbackRoundTrip) {
         in.track = 15;
         in.oscillator = 1;
         in.op = op;
-        in.value = {1.75f, 0.25f, -48, 100, 0, 0};
+        in.value = {1.75f, 0.25f, -48, 100, 0, 1};
         ASSERT_TRUE(IsValidInstOscOp(in));
         ASSERT_GT(ProtocolHandler::CreatePacket(
                       wire.data(), wire.size(), MSG_INST_OSC_OP, &in, sizeof(in)),
@@ -34,7 +34,7 @@ TEST(OscillatorProtocol, SettingsCopyAndReadbackRoundTrip) {
     in.valid = 1;
     in.type = 1;
     in.zones = 32;
-    in.value = {0.25f, 0.75f, 48, -100, 1, 0};
+    in.value = {0.25f, 0.75f, 48, -100, 1, 1};
     ASSERT_GT(
         ProtocolHandler::CreatePacket(wire.data(), wire.size(), MSG_INST_OSC_SYNC, &in, sizeof(in)),
         0);
@@ -86,4 +86,15 @@ TEST(OscillatorProtocol, PreservesCompleteStoredSettingsRange) {
     m.value.coarse = -128;
     m.value.fine = 127;
     EXPECT_TRUE(IsValidInstOscOp(m));
+}
+
+TEST(OscillatorProtocol, MonoDefaultsOffAndRejectsNonBooleanValues) {
+    InstOscOpMessage m;
+    EXPECT_EQ(m.value.mono, 0);
+    m.request_id = m.revision = 1;
+    m.op = INST_OSC_SET;
+    m.value.mono = 1;
+    EXPECT_TRUE(IsValidInstOscOp(m));
+    m.value.mono = 2;
+    EXPECT_FALSE(IsValidInstOscOp(m));
 }

@@ -42,6 +42,9 @@ class MixerControlHandoff {
                     pending_.tracks[track].mute = ((message.value >> track) & 1u) != 0;
                 }
                 break;
+            case MIX_OP_SET_SOLO_MASK:
+                pending_.solo_mask = message.value;
+                break;
             case MIX_OP_SET_MASTER:
                 pending_.master_gain = Mix::DbToLinear(Mix::WireToGainDb(message.value));
                 break;
@@ -62,7 +65,7 @@ class MixerControlHandoff {
         state.valid = 1;
         state.gain = Mix::GainDbToWire(Mix::LinearToDb(strip.gain));
         state.pan = static_cast<uint16_t>(std::lround((strip.pan_offset + 1.0f) * 32767.5f));
-        state.mute = strip.mute;
+        state.mute = strip.mute;  // user mute, independent of temporary Solo
         return state;
     }
 
@@ -71,10 +74,12 @@ class MixerControlHandoff {
         if (!mailbox_.ConsumeLatest(latest)) {
             return;
         }
+        const uint16_t solo_exclusions = Mix::ExpandSoloToMutes(latest.solo_mask, 0);
         for (uint8_t track = 0; track < Mix::kNumTracks; ++track) {
             mixer.SetGain(track, latest.tracks[track].gain);
             mixer.SetPanOffset(track, latest.tracks[track].pan_offset);
-            mixer.SetMute(track, latest.tracks[track].mute);
+            const bool excluded_by_solo = (solo_exclusions & (1u << track)) != 0;
+            mixer.SetMute(track, latest.tracks[track].mute || excluded_by_solo);
         }
         mixer.SetMasterGain(latest.master_gain);
     }
@@ -83,6 +88,7 @@ class MixerControlHandoff {
     struct Controls {
         std::array<Mix::TrackMix, Mix::kNumTracks> tracks;
         float master_gain = 1.0f;
+        uint16_t solo_mask = 0;
     };
     Controls pending_;
     SnapshotMailbox<Controls> mailbox_;

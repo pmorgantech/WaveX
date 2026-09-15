@@ -31,7 +31,7 @@ class OscillatorModel {
             return false;
         if (!expected_ || s.request_id != expected_ || s.track != state_.track ||
             s.oscillator != state_.oscillator || !s.revision || s.valid > 1 || s.busy > 1 ||
-            s.type > 2 || s.zones > 32 || s.reserved || s.value.reserved ||
+            s.type > 2 || s.zones > 32 || s.reserved || s.value.mono > 1 ||
             !(s.value.level >= 0 && s.value.level <= 64) ||
             !(s.value.mix >= 0 && s.value.mix <= 1) || s.value.keytrack > 1)
             return false;
@@ -79,12 +79,14 @@ class OscillatorModel {
                 return draft_.fine;
             case 4:
                 return draft_.keytrack;
+            case 5:
+                return draft_.mono;
             default:
                 return 0;
         }
     }
     bool Set(uint8_t field, int value) {
-        if (!Editable() || field >= 5)
+        if (!Editable() || field >= 6)
             return false;
         switch (field) {
             case 0:
@@ -101,6 +103,9 @@ class OscillatorModel {
                 break;
             case 4:
                 draft_.keytrack = value > 0;
+                break;
+            case 5:
+                draft_.mono = value > 0;
                 break;
         }
         dirty_ = std::memcmp(&draft_, &state_.value, sizeof(draft_)) != 0;

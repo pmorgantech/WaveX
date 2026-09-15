@@ -48,7 +48,7 @@ Pages still call `inter_mcu_*` functions in `main`; a fully injected
 - **Sample:** Browse, Edit, Manage, Record.
 - **Play:** Pads and Keys, sharing note lifecycle and live parameters.
 - **Instrument:** Sample, Env, Amp, Filter, Mod, LFO.
-- **Performance:** eight Tracks per view, Instrument assignment, MIDI input, Track level and pan.
+- **Project:** eight Tracks per view, Instrument assignment, MIDI input, Track level, pan/balance and mute.
 - **Settings:** Display, Storage, MIDI, System, Calibrate.
 - **Diagnostics:** ESP32, Daisy, Audio, Link, Storage, MIDI, Panel.
 
@@ -68,9 +68,9 @@ Bank, Instrument Browser and Mixer belong to the target
 [Track/Instrument model](features/track-and-patch-model.md). A logical panel
 jump key or a protocol operation does not prove the corresponding page exists.
 
-Performance replaces the Track root label and extends the existing page.
+Project replaces the Performance root label and owns the existing Track/mixer setup.
 Track setup remains globally accessible; it is not nested under Sequencer.
-The existing logical Track panel jump opens Performance. Further Mixer,
+The existing logical Track panel jump opens Project. Further Mixer,
 Bank, Scene and Song work is tracked in the
 [roadmap](roadmap.md#composition-and-performance-workflows).
 
@@ -254,9 +254,11 @@ resident-sample assignment, audition, choke, a name keyboard and new-copy
 saves. Both pages consume synchronized backend snapshots on UI timers.
 Their touch workflows do not require physical panel wiring.
 
-## Performance page
+<a id="performance-page"></a>
 
-Performance (formerly Track) selects eight Tracks per view and reads the current binding and MIDI
+## Project page
+
+Project (formerly Performance/Track) selects eight Tracks per view and reads the current binding and MIDI
 input from the Daisy. A selection change invalidates old readback; request
 ids reject late replies, and controls remain unavailable until current data
 arrives. Omni and Off are explicit choices alongside MIDI channels 1-16.
@@ -265,23 +267,23 @@ The focused two-board HIL verifies routing, external setting refresh and
 preservation of another Track's held note. Physical panel operation remains
 a separate roadmap gate.
 
-The selected Track also exposes Track level and pan through the existing
+The selected Track also exposes Track level, pan/balance and mute through the existing
 mixer operations. Correlated mixer readback reports the Daisy foreground's
 accepted targets; its existing handoff applies them at the next audio block.
 Mix settings remain independent of Instrument trim and replacement.
 An edit retains the last confirmed display while blocking another edit until
 readback. Track switches and link loss invalidate the old snapshot.
-Tap or drag a control to focus it; encoder click cycles MIDI, level and pan,
+Tap or drag a control to focus it; encoder click cycles MIDI, level, pan/balance and mute,
 with encoder rotation and the minus/plus softkeys adjusting the focus.
 Assign opens Instrument Browser with the existing target/replacement flow;
 Edit sound opens the selected Track's Instrument editor. Scene recall is
-still Phase 5, and this page does not save the Performance to a Project.
+still Phase 5; Project device save/load remains a separate persistence task.
 This change is compile/host verified; panel rendering and audio checks remain
 open in the roadmap.
 
 ### Instrument Browser (as built, 2026-09-11)
 
-Performance → Assign and Instrument → Shift → Browse open the dedicated Instrument
+Project → Assign and Instrument → Shift → Browse open the dedicated Instrument
 Browser. It reuses the existing browser lifecycle with independent directory and
 selection state. The Daisy filters WXI/SFZ before pagination; Sample → Browse
 lists WAV files. Saved opens /wavex/instruments, Root opens /. Selecting an
@@ -346,7 +348,7 @@ save/readback flow (11.70 seconds). The inspected 1280×720 capture is
 ### Sequencer Solo
 
 Shift ▸ Solo on the Sequencer page solos the selected row's Track: the page
-sends one `MIX_OP_SET_MUTE_MASK` with every other Track's bit set, so the
+sends one `MIX_OP_SET_SOLO_MASK` selecting the audible Track, so the
 engine never passes through a wrong intermediate mute set. The soloed row's
 Track button turns green and its steps take a green outline; every other row
 dims to half, as a row-muted row does, and the label reads `/ SOLO` or
@@ -367,3 +369,16 @@ and preview lifetime as note/velocity edits. Tapping the grid in this mode
 selects a step without changing its trigger state. Grid restores normal editing.
 An asterisk marks steps with locks. The focused two-board test covers four-slot
 editing, individual clearing, navigation and pattern save/load.
+
+### Stereo Mono setting
+
+Instrument > Osc exposes Mono (Off/On) beside Keytrack. Off preserves native
+stereo; On downmixes stereo. This setting uses authoritative oscillator
+readback and the existing Apply/Revert baseline, but affects new notes only.
+Console `MONO 0|1` and `oscmono` use the same path. Project pan is labelled
+Pan / Balance: mono pans, stereo balances. The Project `MUTE 0|1` command and
+`mixmute` readback use the same control as its Track Mute tile.
+
+Project mute readback is the user's stored mute target, independent of Solo.
+The backend combines that target with the temporary Solo mask in one handoff;
+manual mute has priority, and clearing Solo retains edits made while soloed.

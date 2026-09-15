@@ -13,6 +13,19 @@ versioning and release process.
 
 ### Added
 
+- Stereo Instrument voices preserve both sample channels through independent
+  filters. Per-oscillator Mono defaults Off, downmixes stereo when On, applies
+  on new notes, and follows WXI save/load and sound Apply/Revert. Legacy WXI
+  files default to stereo preservation. `WAVEX_AUDIO_CHANNEL_BUDGET` sets the
+  shared render-lane limit (default eight); stereo notes cost two channels and
+  mono notes one, including release tails. Mixed-cost stealing stays bounded.
+- Project replaces the Performance main-menu label and exposes Track assignment,
+  MIDI input, level, pan/balance and mute with authoritative readback. Instrument
+  trim remains independent. Solo uses a separate mask so Unsolo preserves
+  manual mutes, including edits made while soloed. Scene, Project file integration, EQ/FX and drift
+  retain their roadmap stages. Stereo/UI changes are host/compile verified;
+  target timing, panel, listening and soak verification remain open.
+
 - Documented the Project/menu ownership model, proposed Scene workflow and
   Track/Instrument mixing rules; roadmapped configurable stereo/Mono channel
   allocation and deferred oscillator pitch drift. These are design/planning

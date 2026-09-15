@@ -126,3 +126,23 @@ TEST(OscillatorModel, CoalescesFinalMotionIncludingReturningToOriginalValue) {
     stale.revision--;
     EXPECT_FALSE(m.Accept(stale));
 }
+
+TEST(OscillatorModel, MonoRoundTripAndUndoKeepAuthoritativeState) {
+    auto m = model();
+    EXPECT_EQ(m.Value(5), 0);
+    ASSERT_TRUE(m.Set(5, 1));
+    const auto request = m.Request(12, INST_OSC_SET);
+    EXPECT_EQ(request.value.mono, 1);
+    m.MutationSent(12);
+    auto s = snapshot();
+    s.request_id = s.completed_request_id = 12;
+    s.revision++;
+    s.value.mono = 1;
+    ASSERT_TRUE(m.Accept(s));
+    EXPECT_FALSE(m.Dirty());
+    ASSERT_TRUE(m.Set(5, 0));
+    m.Revert();
+    EXPECT_EQ(m.Value(5), 1);
+    s.value.mono = 2;
+    EXPECT_FALSE(m.Accept(s));
+}

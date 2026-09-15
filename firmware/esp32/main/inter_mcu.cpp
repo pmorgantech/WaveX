@@ -1511,8 +1511,11 @@ bool s_track_state_valid = false;
 }  // namespace
 esp_err_t inter_mcu_set_track_mix(const WaveX::Protocol::MixOpMessage& message) {
     using namespace WaveX::Protocol;
-    if (message.track >= 16 || (message.op != MIX_OP_SET_GAIN && message.op != MIX_OP_SET_PAN) ||
-        (message.op == MIX_OP_SET_GAIN && message.value > 6600))
+    if (message.track >= 16 ||
+        (message.op != MIX_OP_SET_GAIN && message.op != MIX_OP_SET_PAN &&
+         message.op != MIX_OP_SET_MUTE) ||
+        (message.op == MIX_OP_SET_GAIN && message.value > 6600) ||
+        (message.op == MIX_OP_SET_MUTE && message.value > 1))
         return ESP_ERR_INVALID_ARG;
     return send_link_message(MSG_MIX_OP, &message, sizeof(message)) >= 0 ? ESP_OK : ESP_FAIL;
 }

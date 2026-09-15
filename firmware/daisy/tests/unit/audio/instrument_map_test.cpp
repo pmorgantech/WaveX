@@ -337,6 +337,7 @@ TEST(InstrumentMapTest, EditingCutoffKeepsExpandedInstrumentSettingsOnSave) {
     saved.osc[1].coarse_tune = 7;
     saved.osc[1].fine_tune = -30;
     saved.osc[1].keytrack = 0;
+    saved.osc[1].mono = true;
     saved.env[1].decay_s = .9f;
     saved.env[2].attack_s = .8f;
     saved.lfo[1].rate_hz = 5.5f;
@@ -370,6 +371,7 @@ TEST(InstrumentMapTest, EditingCutoffKeepsExpandedInstrumentSettingsOnSave) {
     EXPECT_EQ(next.osc[1].coarse_tune, 7);
     EXPECT_EQ(next.osc[1].fine_tune, -30);
     EXPECT_EQ(next.osc[1].keytrack, 0);
+    EXPECT_TRUE(next.osc[1].mono);
     EXPECT_FLOAT_EQ(next.env[1].decay_s, .9f);
     EXPECT_FLOAT_EQ(next.env[2].attack_s, .8f);
     EXPECT_FLOAT_EQ(next.lfo[1].rate_hz, 5.5f);

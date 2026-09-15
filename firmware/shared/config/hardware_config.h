@@ -112,13 +112,25 @@
 #define WAVEX_AUDIO_ENGINE_ENABLED 1
 #endif
 
+// Maximum mono render lanes across all active notes, including releases.
+// Stereo voices reserve two lanes; mono voices reserve one. Raise only after
+// callback-cycle and linker-memory measurement on the target MCU.
+#ifndef WAVEX_AUDIO_CHANNEL_BUDGET
+#define WAVEX_AUDIO_CHANNEL_BUDGET 8
+#endif
+#if WAVEX_AUDIO_CHANNEL_BUDGET < 2 || WAVEX_AUDIO_CHANNEL_BUDGET > 64
+#error "WAVEX_AUDIO_CHANNEL_BUDGET must be 2..64"
+#endif
+
+// Digital note-slot count (Daisy only). Defaults to the channel budget so
+// all-mono playback can use every lane after a capacity increase.
 // Digital voice count (Daisy only). A measured DTCM/CPU budget, not a design
 // choice (features/track-and-patch-model.md §5): raise it only after a DWT
 // callback-cycle measurement at the new count and a look at the linker
 // report. Independent of the analog Stage B voice count (8 PCM1690 TDM
 // slots, 8 CV calibration groups) and of the mixer's kMaxMixChannels.
 #ifndef WAVEX_NUM_VOICES
-#define WAVEX_NUM_VOICES 8
+#define WAVEX_NUM_VOICES WAVEX_AUDIO_CHANNEL_BUDGET
 #endif
 
 // Sample Pool capacity (Daisy only): how many samples can be resident at

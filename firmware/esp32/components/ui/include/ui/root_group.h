@@ -11,7 +11,7 @@ namespace wavex_ui {
  * One entry per menu item and per panel jump key. A jump
  * (UINavigator::jumpToRoot) unwinds to the main menu and pushes the group's
  * page; the navigator remembers which, and that is what the panel's jump
- * LEDs show. The Track key opens Performance; the Mixer key is reserved for
+ * LEDs show. The Track key opens Project; the Mixer key is reserved for
  * the full strip view: a jump to a group with no page registered
  * is refused, and the key still shows on the Diagnostics ▸ Panel tab.
  */
@@ -39,7 +39,7 @@ inline const char* rootGroupName(RootGroup group) {
         case RootGroup::Instrument:
             return "Instrument";
         case RootGroup::Track:
-            return "Performance";
+            return "Project";
         case RootGroup::Mixer:
             return "Mixer";
         case RootGroup::Settings:

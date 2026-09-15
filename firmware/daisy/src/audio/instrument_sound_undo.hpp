@@ -22,7 +22,7 @@ class InstrumentSoundUndo {
         fine_ = ins.fine_tune;
         for (uint8_t i = 0; i < 2; ++i) {
             const auto& o = ins.osc[i];
-            osc_[i] = {o.level, o.pan, o.coarse_tune, o.fine_tune, o.keytrack};
+            osc_[i] = {o.level, o.pan, o.coarse_tune, o.fine_tune, o.keytrack, o.mono};
         }
         active_ = true;
     }
@@ -46,6 +46,7 @@ class InstrumentSoundUndo {
             o.coarse_tune = s.coarse;
             o.fine_tune = s.fine;
             o.keytrack = s.keytrack;
+            o.mono = s.mono;
         }
         active_ = false;
         return true;
@@ -56,6 +57,7 @@ class InstrumentSoundUndo {
         float level = 1, pan = .5f;
         int8_t coarse = 0, fine = 0;
         uint8_t keytrack = 1;
+        bool mono = false;
     };
     InstrumentFilter filter_;
     InstrumentEnv env_[3];

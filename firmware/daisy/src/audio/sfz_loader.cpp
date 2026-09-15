@@ -509,7 +509,12 @@ void FillOscReply(const InstOscOpMessage& request,
     for (const auto& zone: osc.zones)
         if (zone.in_use)
             ++out.zones;
-    out.value = {osc.level, ins.osc_mix, osc.coarse_tune, osc.fine_tune, osc.keytrack, 0};
+    out.value = {osc.level,
+                 ins.osc_mix,
+                 osc.coarse_tune,
+                 osc.fine_tune,
+                 osc.keytrack,
+                 static_cast<uint8_t>(osc.mono)};
     if (immediate_error) {
         out.completed_request_id = request.request_id;
         out.error = immediate_error;
@@ -1150,6 +1155,7 @@ bool OnOscOp(const InstOscOpMessage& request) {
         osc.coarse_tune = request.value.coarse;
         osc.fine_tune = request.value.fine;
         osc.keytrack = request.value.keytrack;
+        osc.mono = request.value.mono != 0;
         ins.osc_mix = request.value.mix;
     }
     s_edit_completed[request.track] = request.request_id;

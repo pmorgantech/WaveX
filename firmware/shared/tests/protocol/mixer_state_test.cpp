@@ -47,3 +47,17 @@ TEST(MixerStateProtocol, RejectsInvalidState) {
     bad.mute = 2;
     EXPECT_FALSE(IsValidMixState(bad));
 }
+
+TEST(MixerStateProtocol, SoloMaskRoundTripDoesNotReuseStoredMuteOpcode) {
+    using namespace WaveX::Protocol;
+    EXPECT_NE(MIX_OP_SET_SOLO_MASK, MIX_OP_SET_MUTE_MASK);
+    for (uint16_t mask: {uint16_t{0}, uint16_t{1}, uint16_t{0x8000}, uint16_t{0xffff}}) {
+        uint8_t bytes[32]{};
+        MixOpMessage in{MIX_OP_SET_SOLO_MASK, 0, mask}, out;
+        ASSERT_GT(ProtocolHandler::CreatePacket(bytes, sizeof(bytes), MSG_MIX_OP, &in, sizeof(in)),
+                  0);
+        ASSERT_TRUE(ProtocolHandler::ParseMessage(bytes, MSG_MIX_OP, &out, sizeof(out)));
+        EXPECT_EQ(out.op, MIX_OP_SET_SOLO_MASK);
+        EXPECT_EQ(out.value, mask);
+    }
+}

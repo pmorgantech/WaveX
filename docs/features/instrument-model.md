@@ -289,14 +289,17 @@ source ends releases the shared envelope. MIDI note-off and Track stop
 retain their shared-voice behavior. Pitch and normalized position locks
 affect both sources using each source's own region and tuning.
 
-The output uses one mono submix and a shared Instrument/zone pan.
+The output submix preserves stereo if either resolved oscillator requires it;
+otherwise it is mono. Each stereo side has independent filter state with one
+shared envelope and Instrument/zone placement. Mono panning retains its linear
+law; stereo uses balance, preserving both channels at center.
 Stored oscillator pan fields remain reserved; independent stereo oscillator
 panning is not exposed. The transport can read/edit oscillator level, mix,
-coarse/fine tune and key tracking, and copy a map into an empty oscillator.
-Those edits update sounding voices through the bounded prepared handoff while
+coarse/fine tune, key tracking and Mono, and copy a map into an empty oscillator.
+Except for Mono (a next-note setting), those edits update sounding voices through the bounded prepared handoff while
 preserving source cursors and zone-specific gain/tuning. Instrument > Osc now
 exposes both source selectors, level, submix, coarse/fine tuning and key
-tracking with authoritative readback. Drag or step values, then use Shift >
+tracking plus a Mono toggle with authoritative readback. Drag or step values, then use Shift >
 Apply or Revert. Copy Other
 clones the other source into an empty map. Opening Instrument only reads the
 selected Track and never binds the Browser's last loaded sample.
@@ -404,3 +407,19 @@ The frontend suite passes 274 tests, and the two-board LFO HIL verifies the
 transport, automatic preview and WXI readback (11.70 seconds). The inspected
 1280×720 capture is `logs/instrument-lfo-20260912.png`; all eight tiles fit
 without clipping.
+
+### Render-channel reservation and Mono persistence
+
+`WAVEX_AUDIO_CHANNEL_BUDGET` in `hardware_config.h` bounds active render lanes.
+A resolved voice reserves one mono or two stereo channels, regardless of its
+one/two source cursors; both oscillators share that reservation. Release tails
+count until finished or stolen. Stealing remains release-first then oldest,
+and may retire two mono notes for one stereo note. No allocation occurs in the
+callback. Raising capacity requires target DWT and linker-memory validation.
+
+Mono belongs to each oscillator, defaults Off and downmixes `(L+R)/2` when On.
+It changes the next prepared trigger, never a held voice's channel cost.
+Apply/Revert and WXI retain the setting. The OSC header appends one byte;
+legacy 17-byte headers default Mono Off, and older readers skip the extension.
+Sample metadata channel modes and streaming audition are separate Sample Edit
+concerns, not an additional saved owner of oscillator Mono.

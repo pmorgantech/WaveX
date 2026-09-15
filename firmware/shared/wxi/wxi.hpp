@@ -155,6 +155,7 @@ struct Oscillator {
     int8_t coarse_tune = 0;
     int8_t fine_tune = 0;
     uint8_t keytrack = 1;  // 1 = pitch follows the note; 0 = fixed (pads)
+    bool mono = false;     // explicit stereo downmix, sampled on note-on
     uint8_t zone_count = 0;
     Zone zones[kMaxZonesPerOsc];
 };
@@ -225,7 +226,7 @@ struct InstrumentFile {
 // ---------------------------------------------------------------------------
 
 static constexpr uint32_t kHeadWireSize = 42;
-static constexpr uint32_t kOscHeaderWireSize = 17;
+static constexpr uint32_t kOscHeaderWireSize = 18;
 // Derived from the fields, not typed as a literal: the path is the only
 // variable-length part of it, and a literal here silently disagreed with the
 // encoder the moment kPathBytes moved.
@@ -475,6 +476,7 @@ inline void EncodeOscHeader(const Oscillator& osc, uint8_t* b) {
     WriteI8(b + 14, osc.coarse_tune);
     WriteI8(b + 15, osc.fine_tune);
     b[16] = osc.keytrack;
+    b[17] = osc.mono ? 1 : 0;
 }
 
 inline void DecodeOscHeader(const uint8_t* b, Oscillator& osc) {
@@ -486,6 +488,7 @@ inline void DecodeOscHeader(const uint8_t* b, Oscillator& osc) {
     osc.coarse_tune = ReadI8(b + 14);
     osc.fine_tune = ReadI8(b + 15);
     osc.keytrack = b[16] ? 1 : 0;
+    osc.mono = b[17] != 0;
 }
 
 inline void EncodeFilt(const Filter& f, uint8_t* b) {
@@ -715,11 +718,14 @@ inline Result ReadOscChunk(Wxcf::Reader& r, uint32_t payload_len, Oscillator& ou
         return Result::IoError;
     const uint32_t header_len = ReadU16LE(buf + 0);
     const uint32_t zone_stride = ReadU16LE(buf + 2);
-    if (header_len < kOscHeaderWireSize || header_len > payload_len)
+    if (header_len < 17 || header_len > payload_len)
         return Result::BadChunk;
-    if (r.ReadPayload(buf + 4, kOscHeaderWireSize - 4) != Wxcf::Result::Ok)
+    // The original 17-byte header has no Mono field; absent means Off.
+    std::memset(buf + 4, 0, kOscHeaderWireSize - 4);
+    const uint32_t have = header_len < kOscHeaderWireSize ? header_len : kOscHeaderWireSize;
+    if (r.ReadPayload(buf + 4, have - 4) != Wxcf::Result::Ok)
         return Result::IoError;
-    if (r.SkipPayload(header_len - kOscHeaderWireSize) != Wxcf::Result::Ok)
+    if (r.SkipPayload(header_len - have) != Wxcf::Result::Ok)
         return Result::IoError;
 
     const uint32_t zone_count = buf[4];

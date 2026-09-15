@@ -159,6 +159,7 @@ struct Oscillator {
     float level = 1.0f, pan = 0.5f;
     int8_t coarse_tune = 0, fine_tune = 0;
     uint8_t keytrack = 1;
+    bool mono = false;
     Zone zones[kMaxZones];
 };
 struct InstrumentLfo {
@@ -272,6 +273,7 @@ inline VoiceTriggerParams PrepareZoneTrigger(const Instrument& ins,
     p.channels = ref.channels;
     p.sample_rate_hz = ref.sample_rate_hz;
     const auto& osc = ins.osc[oscillator];
+    p.mono = osc.mono;
     p.note = (ins.mode == InstrumentMode::Drum || !osc.keytrack) ? zone.root_note : note;
     p.trigger_note = note;
     p.velocity = velocity;

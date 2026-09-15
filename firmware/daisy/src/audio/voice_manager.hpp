@@ -1,38 +1,17 @@
 #pragma once
 #include "voice_lfo.hpp"
 
-// 8-voice polyphonic RAM-resident sample player (roadmap Phase 1 items 2 +
-// 4). HAL-free: operates purely on int16_t* sample data (owned elsewhere -
-// the SDRAM slab/extent allocator in memory.h, SampleMemMgr) and float
-// output buffers, so it's host-testable without any Daisy hardware or
-// cross compiler.
+// Polyphonic RAM sample player with a configured mono render-channel budget.
+// Each note/layer owns one or two source cursors, one envelope/modulation
+// lifetime, and one mono or two independent stereo filter channels. Stereo
+// sources share their L/R cursor; explicit Mono averages their PCM channels.
+// Sample storage and note-to-zone resolution belong to the engine/Pool.
 //
-// In scope here: voice allocation/stealing across 8 voices, per-voice
-// gain/pan/pitch (note-relative-to-root-note ratio), start/end/loop points,
-// a one-pole digital filter stand-in for the analog VCF (item 4), a linear
-// ADSR envelope per voice (item 4), RAM-resident triggering with zero I/O
-// (Trigger() just stores state - no allocation, no blocking), and
-// rendering into the stereo buffers the output sink (output_sink.hpp,
-// item 1) consumes.
-//
-// Deliberately NOT in scope: note-to-sample mapping policy (which MIDI note
-// plays which sample) - item 8's mapping lives in audio_engine.cpp's
-// OnNoteOn, which resolves a loaded sample and feeds Trigger() through an
-// SPSC event queue drained by the audio callback; CMSIS-DSP
-// interpolation kernels (arm_linear_interp_q15) - the roadmap cites this as
-// "(exists)" in the codebase for later use, not something this pass must
-// adopt; swapping the portable float interpolation below for a q15 CMSIS
-// kernel is a profiling-driven ARM-only optimization (AGENTS.md: "measure
-// before/after with the DWT cycle counter... don't assert a performance win
-// without a number" - not possible without real hardware), and doing so
-// would cost host-testability, which this class currently has. The "2
-// concurrent streamed voices with prebuffer admission control" half of
-// item 2's text is a separate refactor of the existing singleton
-// WAV-streaming path in audio_engine.cpp, tracked separately.
-//
-// Real-time-safety: Trigger()/Release()/Render() are all callback-safe -
-// fixed-size array, no heap allocation, no blocking I/O, no logging
-// (AGENTS.md constraint #1 / architecture.md §7.1).
+// Trigger, Release and Render are callback-safe: fixed storage, bounded
+// allocation/stealing scans, no heap, blocking, I/O or logging. The existing
+// portable linear interpolation remains host-testable; target callback cost
+// must be measured with DWT before claiming hardware capacity. Concurrent
+// streamed voices remain separate from this RAM renderer.
 
 #include "config/hardware_config.h"
 #include "memory_sections.h"
@@ -120,7 +99,8 @@ struct VoiceAmpParams {
 struct VoiceSampleState {
     const int16_t* sample = nullptr;  // RAM-resident, interleaved; not owned by Voice
     uint32_t sample_frames = 0;
-    uint8_t src_channels = 1;  // interleave stride: 1 = mono, 2 = stereo (averaged to mono)
+    uint8_t src_channels = 1;  // native PCM interleave stride
+    bool stereo = false;       // preserve both source channels for this note
     PlaybackPhase phase;       // exact frame + fractional playback position
     float increment = 1.0f;    // playback rate (pitch), from note/root_note
     uint32_t increment_frames = 1;
@@ -179,7 +159,8 @@ struct Voice : VoiceSampleState {
     bool one_shot = false;  // ignore note-off; stop at the sample/region end
     uint32_t age = 0;       // trigger order, for stealing/release-newest-first
 
-    VoiceFilter filter;
+    uint8_t render_channels = 1;  // reservation lasts through the release tail
+    VoiceFilter filter, right_filter;
     Envelope envelope;
     // Second envelope (param-locks-and-modulation.md §4), exposed only as
     // SRC_ENV_FILTER. Unlike `envelope` above, this is a MODULATION SOURCE,
@@ -258,6 +239,7 @@ struct VoiceSampleParams {
     float dry_pitch_ratio = 1.0f, dry_level = 1.0f;
     uint8_t oscillator = 0xFF, key_note = 60;
     bool keytrack = true, drum = false;
+    bool mono = false;  // force (L+R)/2; false preserves native stereo
     uint32_t start_frame = 0, end_frame = 0;
     bool loop = false;
     uint32_t loop_start = 0, loop_end = 0;
@@ -345,6 +327,20 @@ struct VoiceLiveParams {
     VoiceInstrumentParams instrument;
 };
 
+// A value, not a second cursor: both channels advance at exactly the same rate.
+struct StereoFrame {
+    float left = 0, right = 0;
+    StereoFrame& operator*=(float gain) {
+        left *= gain;
+        right *= gain;
+        return *this;
+    }
+    StereoFrame operator*(float gain) const { return {left * gain, right * gain}; }
+    StereoFrame operator+(const StereoFrame& other) const {
+        return {left + other.left, right + other.right};
+    }
+};
+
 class VoiceManager {
    public:
     // MUST establish every non-zero default this class declares, not just the
@@ -373,6 +369,7 @@ class VoiceManager {
         for (auto& voice: voices_) {
             voice = Voice{};
             voice.filter.Init(sample_rate_);
+            voice.right_filter.Init(sample_rate_);
             voice.envelope.Init(sample_rate_);
             voice.env2.Init(sample_rate_);
             voice.env3.Init(sample_rate_);
@@ -431,6 +428,9 @@ class VoiceManager {
                 v.base_cutoff_hz = p.filter_cutoff_hz;
             v.filter.SetParameters(v.base_cutoff_hz * v.mod_cutoff_mul,
                                    v.base_resonance + v.mod_resonance_offset);
+            if (v.render_channels == 2)
+                v.right_filter.SetParameters(v.base_cutoff_hz * v.mod_cutoff_mul,
+                                             v.base_resonance + v.mod_resonance_offset);
             if (!v.own_filter_env && !v.envelope.IsReleasing()) {
                 auto& amp = v.amp_params;
                 if (unlocked(Protocol::PARAM_ENVELOPE_ATTACK))
@@ -447,8 +447,14 @@ class VoiceManager {
                 // SetConfig is a no-op unless slope or drive changed, so an
                 // unrelated live edit neither retunes nor resets the filter.
                 v.filter.SetConfig(p.instrument.filter_config);
+                if (v.render_channels == 2)
+                    v.right_filter.SetConfig(p.instrument.filter_config);
                 v.filter.SetTopology(p.instrument.filter_topology);
+                if (v.render_channels == 2)
+                    v.right_filter.SetTopology(p.instrument.filter_topology);
                 v.filter.SetMode(p.instrument.filter_mode);
+                if (v.render_channels == 2)
+                    v.right_filter.SetMode(p.instrument.filter_mode);
                 v.gain = v.dry_gain * p.instrument.gain;
                 ApplySourceLive(v, p.instrument);
                 if (v.secondary.sample)
@@ -482,7 +488,7 @@ class VoiceManager {
         }
     }
 
-    // Triggers a new voice, or steals one if all 8 are busy (prefers a
+    // Triggers a new voice, stealing enough channels if needed (prefers a
     // voice already in its release tail, else the oldest-triggered - see
     // FindVoiceToSteal()). No-op if `params.sample` is null or
     // `params.sample_frames < 2` (can't interpolate).
@@ -493,12 +499,27 @@ class VoiceManager {
         // one (the new voice must not choke itself). No-op for group 0.
         if (params.choke_group != 0)
             Choke(params.choke_group, 0.005f, params.track);
+        const uint8_t channels =
+            SourceChannels(params) == 2 || SourceChannels(params.secondary) == 2 ? 2 : 1;
+        // A stereo note may need two mono victims. Each pass retires one
+        // active reservation; the configured note-slot bound limits the work.
+        for (size_t n = 0;
+             n < voices_.size() && ActiveChannelCount() + channels > WAVEX_AUDIO_CHANNEL_BUDGET;
+             ++n) {
+            const int victim = FindVoiceToSteal();
+            if (victim < 0)
+                return;
+            voices_[static_cast<size_t>(victim)].state = VoiceState::Idle;
+        }
         int idx = FindFreeVoice();
         if (idx < 0)
             idx = FindVoiceToSteal();
+        if (idx < 0)
+            return;
         Voice& v = voices_[static_cast<size_t>(idx)];
 
         v.state = VoiceState::Playing;
+        v.render_channels = channels;
         v.dry_gain = (static_cast<float>(params.velocity) / 127.0f) * params.gain_mul;
         v.gain = v.dry_gain * params.instrument_gain;
         v.zone_pan = params.zone_pan;
@@ -546,11 +567,23 @@ class VoiceManager {
             InitSource(v.secondary, params.secondary, VoicePitchScale(v));
 
         v.filter.SetConfig(params.filter_config);
+
+        if (v.render_channels == 2)
+
+            v.right_filter.SetConfig(params.filter_config);
         v.filter.SetTopology(params.filter_topology);
+        if (v.render_channels == 2)
+            v.right_filter.SetTopology(params.filter_topology);
         v.filter.SetMode(params.filter_mode);
+        if (v.render_channels == 2)
+            v.right_filter.SetMode(params.filter_mode);
         v.base_cutoff_hz = params.filter_cutoff_hz;
         v.filter.SetParameters(v.base_cutoff_hz, params.filter_resonance);
+        if (v.render_channels == 2)
+            v.right_filter.SetParameters(v.base_cutoff_hz, params.filter_resonance);
         v.filter.Reset();
+        if (v.render_channels == 2)
+            v.right_filter.Reset();
 
         v.envelope.SetParams(
             params.attack_s, params.decay_s, params.sustain_level, params.release_s);
@@ -673,6 +706,9 @@ class VoiceManager {
                 v.modulation_cutoff_dirty) {
                 v.filter.SetParameters(v.base_cutoff_hz * v.mod_cutoff_mul,
                                        v.base_resonance + v.mod_resonance_offset);
+                if (v.render_channels == 2)
+                    v.right_filter.SetParameters(v.base_cutoff_hz * v.mod_cutoff_mul,
+                                                 v.base_resonance + v.mod_resonance_offset);
                 v.modulation_cutoff_dirty = false;
             }
 
@@ -692,8 +728,10 @@ class VoiceManager {
                 pan += track_mixer_->PanOffsetFor(v.track);
             }
             pan = pan < 0.0f ? 0.0f : (pan > 1.0f ? 1.0f : pan);
-            const float left_gain = gain * (1.0f - pan);
-            const float right_gain = gain * pan;
+            const bool stereo = v.render_channels == 2;
+            // Mono retains linear pan; stereo uses balance (unity at center).
+            const float left_gain = gain * (stereo ? std::min(1.f, 2.f * (1.f - pan)) : 1.f - pan);
+            const float right_gain = gain * (stereo ? std::min(1.f, 2.f * pan) : pan);
             const bool dual = v.secondary.sample != nullptr;
             if (dual) {
                 const float rate = v.secondary.base_increment * VoicePitchScale(v) *
@@ -725,17 +763,21 @@ class VoiceManager {
                     continue;
                 uint32_t frame = 0;
                 bool ended = false;
-                float s = ReadSource(v, frame, ended);
+                StereoFrame s = ReadSource(v, frame, ended);
+                if (stereo && !v.stereo)
+                    s *= .5f;  // mono source centered inside a stereo submix
                 if (dual) {
                     uint32_t frame2 = 0;
                     bool ended2 = false;
-                    float s2 = ReadSource(v.secondary, frame2, ended2);
+                    StereoFrame s2 = ReadSource(v.secondary, frame2, ended2);
+                    if (stereo && !v.secondary.stereo)
+                        s2 *= .5f;
                     // A shorter source falls silent while its partner continues.
                     // Only both source ends release the shared amplitude envelope.
                     if (ended && !ended2)
-                        s = 0;
+                        s = {};
                     if (ended2 && !ended)
-                        s2 = 0;
+                        s2 = {};
                     if (ended && ended2)
                         v.envelope.Release();
                     if (apply_region_fade)
@@ -760,12 +802,11 @@ class VoiceManager {
                         s *= region_fade.Gain(frame);
                 }
 
-                s = v.filter.Process(s);
-                float env = v.envelope.Process();
-                s *= env;
-
-                out_l[i] += s * left_gain;
-                out_r[i] += s * right_gain;
+                const float left = v.filter.Process(s.left);
+                const float right = stereo ? v.right_filter.Process(s.right) : left;
+                const float env = v.envelope.Process();
+                out_l[i] += left * env * left_gain;
+                out_r[i] += right * env * right_gain;
 
                 if (v.envelope.IsIdle()) {
                     v.state = VoiceState::Idle;
@@ -845,6 +886,14 @@ class VoiceManager {
         return count;
     }
 
+    uint8_t ActiveChannelCount() const {
+        uint8_t count = 0;
+        for (const auto& v: voices_)
+            if (!v.IsFree())
+                count += v.render_channels;
+        return count;
+    }
+
     const Voice& GetVoice(uint8_t i) const { return voices_[i]; }
 
     /**
@@ -917,6 +966,7 @@ class VoiceManager {
         v.sample = params.sample;
         v.sample_frames = params.sample_frames;
         v.src_channels = (params.channels == 2) ? 2 : 1;
+        v.stereo = SourceChannels(params) == 2;
         v.source_level = params.source_level;
         v.dry_level = params.dry_level;
         v.oscillator = params.oscillator;
@@ -967,9 +1017,9 @@ class VoiceManager {
     // This runs once per sample per oscillator. Keep cursor state and the
     // returned frame/end flags in the caller's registers instead of spilling
     // them through an out-of-line call at audio rate.
-    [[gnu::always_inline]] static inline float ReadSource(VoiceSampleState& v,
-                                                          uint32_t& frame,
-                                                          bool& ended) {
+    [[gnu::always_inline]] static inline StereoFrame ReadSource(VoiceSampleState& v,
+                                                                uint32_t& frame,
+                                                                bool& ended) {
         const uint32_t last_valid_frame = v.end_frame - 1;
         const uint32_t loop_len = v.loop_end - v.loop_start;
         bool holding_release_tail = false;
@@ -1026,27 +1076,33 @@ class VoiceManager {
             }
             frac = v.phase.Fraction();
         }
-        float s0, s1;
-        if (v.src_channels == 2) {
-            // Interleaved stereo source: average L/R to mono.
-            s0 = (static_cast<float>(v.sample[idx0 * 2]) +
-                  static_cast<float>(v.sample[idx0 * 2 + 1])) *
-                 0.5f / 32768.0f;
-            s1 = (static_cast<float>(v.sample[idx1 * 2]) +
-                  static_cast<float>(v.sample[idx1 * 2 + 1])) *
-                 0.5f / 32768.0f;
-        } else {
-            s0 = static_cast<float>(v.sample[idx0]) / 32768.0f;
-            s1 = static_cast<float>(v.sample[idx1]) / 32768.0f;
-        }
         frame = idx0;
         ended = holding_release_tail;
-        return s0 + (s1 - s0) * frac;
+        if (v.src_channels == 2) {
+            const float l0 = static_cast<float>(v.sample[idx0 * 2]) / 32768.f;
+            const float r0 = static_cast<float>(v.sample[idx0 * 2 + 1]) / 32768.f;
+            const float l1 = static_cast<float>(v.sample[idx1 * 2]) / 32768.f;
+            const float r1 = static_cast<float>(v.sample[idx1 * 2 + 1]) / 32768.f;
+            if (v.stereo)
+                return {l0 + (l1 - l0) * frac, r0 + (r1 - r0) * frac};
+            const float s0 = (l0 + r0) * .5f, s1 = (l1 + r1) * .5f;
+            const float mono = s0 + (s1 - s0) * frac;
+            return {mono, mono};
+        }
+        const float s0 = static_cast<float>(v.sample[idx0]) / 32768.f;
+        const float s1 = static_cast<float>(v.sample[idx1]) / 32768.f;
+        const float mono = s0 + (s1 - s0) * frac;
+        return {mono, mono};
     }
 
     /// Optional per-track mixer; nullptr means the pre-mixer behaviour.
     /// Not owned - see SetTrackMixer().
     const WaveX::Mix::TrackMixer* track_mixer_ = nullptr;
+    static uint8_t SourceChannels(const VoiceSampleParams& source) {
+        return source.sample && source.sample_frames >= 2 && source.channels == 2 && !source.mono
+                   ? 2
+                   : 1;
+    }
     int FindFreeVoice() const {
         for (uint8_t i = 0; i < WAVEX_NUM_VOICES; ++i) {
             if (voices_[i].IsFree())
@@ -1060,9 +1116,12 @@ class VoiceManager {
     // if none are releasing.
     int FindVoiceToSteal() const {
         int releasing_oldest = -1;
-        uint8_t overall_oldest = 0;
+        int overall_oldest = -1;
         for (uint8_t i = 0; i < WAVEX_NUM_VOICES; ++i) {
-            if (voices_[i].age < voices_[overall_oldest].age)
+            if (voices_[i].IsFree())
+                continue;
+            if (overall_oldest < 0 ||
+                voices_[i].age < voices_[static_cast<size_t>(overall_oldest)].age)
                 overall_oldest = i;
             if (voices_[i].envelope.IsReleasing() &&
                 (releasing_oldest < 0 ||

@@ -90,4 +90,38 @@ TEST_F(MixerControlHandoffTest, ReadbackUsesAcceptedTargetsAndPreservesTrackIden
     EXPECT_FALSE(handoff_.Read({1, 16}).valid);
 }
 
+TEST_F(MixerControlHandoffTest, SoloPreservesUserMutesAndEditsMadeWhileSoloed) {
+    Update(MIX_OP_SET_MUTE, 2, 1);
+    Update(MIX_OP_SET_SOLO_MASK, 0, 1);
+    handoff_.ApplyTo(mixer_);
+    EXPECT_FALSE(mixer_.Track(0).mute);
+    EXPECT_TRUE(mixer_.Track(1).mute);
+    EXPECT_TRUE(mixer_.Track(2).mute);
+    EXPECT_FALSE(handoff_.Read({1, 1}).mute);
+    EXPECT_TRUE(handoff_.Read({2, 2}).mute);
+    Update(MIX_OP_SET_MUTE, 2, 0);
+    Update(MIX_OP_SET_MUTE, 3, 1);
+    Update(MIX_OP_SET_SOLO_MASK, 0, 0);
+    handoff_.ApplyTo(mixer_);
+    for (uint8_t track = 0; track < Mix::kNumTracks; ++track)
+        EXPECT_EQ(mixer_.Track(track).mute, track == 3);
+}
+TEST_F(MixerControlHandoffTest, SoloSwitchAndClearAreAtomicAndKeepManualMutePriority) {
+    Update(MIX_OP_SET_MUTE, 15, 1);
+    Update(MIX_OP_SET_SOLO_MASK, 0, 0x8001);
+    handoff_.ApplyTo(mixer_);
+    EXPECT_FALSE(mixer_.Track(0).mute);
+    EXPECT_TRUE(mixer_.Track(1).mute);
+    EXPECT_TRUE(mixer_.Track(15).mute);
+    Update(MIX_OP_SET_SOLO_MASK, 0, 2);
+    EXPECT_FALSE(mixer_.Track(0).mute);
+    handoff_.ApplyTo(mixer_);
+    EXPECT_TRUE(mixer_.Track(0).mute);
+    EXPECT_FALSE(mixer_.Track(1).mute);
+    Update(MIX_OP_SET_SOLO_MASK, 0, 0);
+    handoff_.ApplyTo(mixer_);
+    EXPECT_FALSE(mixer_.Track(0).mute);
+    EXPECT_TRUE(mixer_.Track(15).mute);
+}
+
 }  // namespace

@@ -20,11 +20,11 @@ namespace wavex_ui {
 using namespace WaveX::Protocol;
 namespace {
 // Solo survives the page being re-created (each open makes a new page
-// object) and is the one source of truth for the mute mask the UI sends.
+// object) and is the one source of truth for the temporary solo selection the UI sends.
 // 0xFF = no solo.
 uint8_t s_solo_track = 0xFF;
 uint16_t SoloMask(uint8_t track) {
-    return track < 16 ? static_cast<uint16_t>(~(1u << track) & 0xFFFFu) : 0u;
+    return track < 16 ? static_cast<uint16_t>(1u << track) : 0u;
 }
 constexpr int kGridX = UI_MARGIN_X + UI_SEQ_TRACK_WIDTH + UI_GUTTER;
 constexpr int kGridW = UI_CONTENT_WIDTH - UI_MARGIN_X - kGridX;
@@ -216,7 +216,7 @@ void UISequencerPage::service() {
             requestRow(0);
             // Either board may have rebooted: make the engine's mute mask
             // match what this UI shows (a solo, or nothing muted).
-            inter_mcu_send_mix_op(MIX_OP_SET_MUTE_MASK, 0, SoloMask(s_solo_track));
+            inter_mcu_send_mix_op(MIX_OP_SET_SOLO_MASK, 0, SoloMask(s_solo_track));
         }
         UINavigator::instance().refreshSoftkeys();
     }
@@ -793,7 +793,7 @@ bool UISequencerPage::soloActive() const {
     return s_solo_track < 16;
 }
 void UISequencerPage::solo(uint8_t track) {
-    if (inter_mcu_send_mix_op(MIX_OP_SET_MUTE_MASK, 0, SoloMask(track)) != ESP_OK)
+    if (inter_mcu_send_mix_op(MIX_OP_SET_SOLO_MASK, 0, SoloMask(track)) != ESP_OK)
         return;
     s_solo_track = track < 16 ? track : 0xFF;
     render();

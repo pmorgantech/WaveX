@@ -88,7 +88,7 @@ bool liveSource(int source) {
             return true;
     return false;
 }
-constexpr const char* oscillatorFields[] = {"LEVEL", "MIX", "COARSE", "FINE", "KEYTRACK"};
+constexpr const char* oscillatorFields[] = {"LEVEL", "MIX", "COARSE", "FINE", "KEYTRACK", "MONO"};
 
 // Not in the shared palette: "this control cannot be driven yet" is a state
 // only this page and the softkey bar have, and it is not part of the card /
@@ -163,6 +163,7 @@ int UIInstrumentPage::paramsForStage(Stage s, Param* out, int max) const {
             add("COARSE", kParamOscillator, 0, "semitones");
             add("FINE", kParamOscillator, 0, "cents");
             add("KEYTRACK", kParamOscillator, 0, "");
+            add("MONO", kParamOscillator, 0, "Next note");
             break;
         case Stage::Envelopes:
             for (uint8_t i = 0; i < 4; ++i)
@@ -1218,7 +1219,7 @@ void UIInstrumentPage::applyOscillator(uint8_t operation) {
 }
 void UIInstrumentPage::refreshOscillator() {
     const auto& state = oscillator_.Snapshot();
-    for (uint8_t i = 0; i < 6; ++i) {
+    for (uint8_t i = 0; i < 7; ++i) {
         auto& tile = tiles_[0][i];
         if (!tile.card)
             continue;
@@ -1234,7 +1235,7 @@ void UIInstrumentPage::refreshOscillator() {
             if (i <= 2) {
                 snprintf(value, sizeof(value), "%d.%d", v / 10, v % 10);
                 fill = std::min(static_cast<float>(v) / 1000.0f, 1.0f);
-            } else if (i == 5) {
+            } else if (i >= 5) {
                 snprintf(value, sizeof(value), "%s", v ? "On" : "Off");
                 fill = static_cast<float>(v);
             } else {
@@ -1683,8 +1684,8 @@ size_t UIInstrumentPage::consoleState(char* out, size_t cap, size_t len) {
     len = AppendKvInt(out, cap, len, "osczones", oscillator_.Snapshot().zones);
     len = AppendKvInt(out, cap, len, "oscdirty", oscillator_.Dirty());
     len = AppendKvInt(out, cap, len, "oscerror", oscillator_.Snapshot().error);
-    const char* fields[] = {"osclevel", "oscmix", "osccoarse", "oscfine", "osckeytrack"};
-    for (uint8_t i = 0; i < 5; ++i)
+    const char* fields[] = {"osclevel", "oscmix", "osccoarse", "oscfine", "osckeytrack", "oscmono"};
+    for (uint8_t i = 0; i < 6; ++i)
         len = AppendKvInt(out, cap, len, fields[i], oscillator_.Value(i));
     return len;
 }
@@ -1772,10 +1773,10 @@ bool UIInstrumentPage::consoleCommand(const char* args, char* reply, size_t cap)
         selectOscillator(static_cast<uint8_t>(value - 1));
     } else {
         bool matched = false;
-        for (uint8_t i = 0; i < 5; ++i)
+        for (uint8_t i = 0; i < 6; ++i)
             if (!strcmp(name, oscillatorFields[i]) && alive_) {
                 const int low = i == 2 || i == 3 ? -128 : 0;
-                const int high = i == 0 ? 64000 : i == 1 ? 1000 : i == 4 ? 1 : 127;
+                const int high = i == 0 ? 64000 : i == 1 ? 1000 : i >= 4 ? 1 : 127;
                 if (value < low || value > high || !oscillator_.Set(i, value))
                     return false;
                 matched = true;

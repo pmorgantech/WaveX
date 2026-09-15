@@ -1,6 +1,8 @@
 # Project, menus, mixing and voice channels
 
-**Status:** Target model and implementation planning summary, 2026-09-14.
+**Status:** Stereo/Mono allocation and Project Track controls implemented;
+host/compile verified, hardware verification open. Scene, session persistence,
+effects and drift sections retain their target/proposal status. Updated 2026-09-14.
 This document consolidates the terminology and menu discussion so the remaining
 work can be scheduled. It distinguishes current behavior, requested changes and
 proposals; the [roadmap](../roadmap.md#next-steps-and-backlog) owns task order.
@@ -45,11 +47,12 @@ There are no implemented Scene slots or Scene recall controls yet.
 ## Menu structure
 
 The former Track page already provided central Instrument assignment and MIDI
-routing. Renaming it Performance and adding Track level/pan was the implemented
-first step. It is useful independently of sequencing and should remain globally
+routing. Renaming it Performance and adding Track level/pan was the first step.
+The root is now **Project**, exposing assignment, MIDI, level, pan/balance and
+mute. Project is the setup owner; there is no separate Performance save object. It is useful independently of sequencing and should remain globally
 accessible.
 
-Proposed destination for the next navigation pass:
+Navigation direction (Tracks/Mixer is exposed directly on Project today):
 
 ```text
 Project
@@ -63,8 +66,8 @@ Sequencer
 ```
 
 This shows the affected areas, not a replacement inventory of every existing
-menu. Project would absorb the current Performance setup page; exact tab names
-and shortcut placement remain a UI decision. No separate Performance save or
+menu. Project now contains the existing setup page; separate tabs for future
+Scene and session-storage workflows remain a UI decision. No separate Performance save or
 Scene-as-Project container is needed. Track event editing belongs in Sequencer;
 Track assignment and mixing belong in Project. Preserve the selected Track
 when moving between these views.
@@ -108,6 +111,11 @@ another: Instrument gain 0.5 with Track gain 0.5 gives gain 0.25 before other
 velocity, envelope and master factors. Two Tracks can use the same Instrument
 preset with different mix levels without changing the saved preset.
 
+Project's mute control edits a user mute target. Sequencer Solo has a separate
+temporary mask: manual mutes take priority, and clearing Solo restores current
+mute targets, including edits made while soloed. Pattern row mute separately
+stops row triggering and does not replace the Project mix.
+
 Current pan combines Instrument/zone placement with Track pan offset and
 clamps the result. For the stereo implementation, interpret that effective
 control as balance; for mono, retain the current linear pan law.
@@ -121,8 +129,8 @@ processors already exist.
 
 ## Stereo, Mono and channel capacity
 
-**Requested:** Preserve a stereo sample by default. Add a per-oscillator
-**Mono** boolean, saved with the Instrument, default Off. On explicitly
+**Implemented:** Stereo samples preserve both channels by default. Each
+oscillator exposes a **Mono** boolean, saved with the Instrument, default Off. On explicitly
 combines stereo to `(L + R) / 2`; a native mono sample remains mono in either
 setting. PCM on disk is unchanged. This is independent of mono/legato keyboard
 polyphony modes.
@@ -143,12 +151,12 @@ A zero-level oscillator can become audible through live edits, so level zero
 alone must not release its reservation. A layered Instrument can resolve one
 note into several voices; each voice consumes its own channel allocation.
 
-The global render budget must be a configurable macro in
+The global render budget is `WAVEX_AUDIO_CHANNEL_BUDGET` in
 [hardware_config.h](../../firmware/shared/config/hardware_config.h), with a
-default of eight. Allocation and fixed storage must derive from configuration,
-so a future MCU can support more without finding hard-coded limits. The existing
-`WAVEX_NUM_VOICES` setting currently counts note slots; implementation must
-reconcile it with the new channel budget and preserve Stage B buildability.
+default of eight. Allocation and fixed storage derive from configuration,
+so a future MCU can support more without finding hard-coded limits. `WAVEX_NUM_VOICES` counts note slots and defaults to the channel budget,
+so increasing the budget also increases all-mono capacity. A separate note-slot
+override may impose a lower capacity.
 
 Examples at the requested default: eight mono voices, four stereo voices, or
 three stereo plus two mono voices. Admission must never exceed the budget.
@@ -160,9 +168,13 @@ Stereo balance at center preserves both channels. Turning left attenuates
 right and vice versa; hard left silences the right channel rather than moving
 its content left. Forced mono uses the existing downmix and mono pan behavior.
 
-**As built before this work:** RAM Instrument voices average stereo to mono;
-streaming audition preserves stereo. The separate streaming audition path and
-Sample metadata `channel_mode` also need explicit reconciliation. The channel
+RAM Instrument voices now preserve stereo through their submix, independent
+filters and shared envelope; forced Mono retains the previous downmix behavior.
+A mono source is centered at half gain on each side when paired with a stereo
+source, preserving its center level. Streaming audition remains its separate
+stereo path and does not inherit an Instrument oscillator's Mono setting.
+Sample metadata `channel_mode` controls and RAM-path reconciliation remain
+separate Sample Edit work. The channel
 budget describes Instrument rendering, not the number of codec outputs or a
 promise that audition, FX and other callback work have no cost.
 
@@ -193,8 +205,8 @@ promoting this work into the roadmap phase.
 ## Implementation boundaries
 
 Schedule from the [canonical roadmap](../roadmap.md#composition-and-performance-workflows):
-first pin the channel allocation and Mono persistence contract, then implement
-and verify renderer/UI changes; continue Project/Mixer integration within the
+complete hardware verification of channel allocation and Mono renderer/UI
+changes, then continue Project/Mixer integration within the
 current Phase 2 dependencies. Scenes/macros and effects retain Phase 5 placement.
 Drift remains unscheduled.
 

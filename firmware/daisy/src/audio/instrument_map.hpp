@@ -140,6 +140,7 @@ inline void FromFile(const Wxi::InstrumentFile& doc, Sfz::MappedInstrument& out)
         target.coarse_tune = osc.coarse_tune;
         target.fine_tune = osc.fine_tune;
         target.keytrack = osc.keytrack;
+        target.mono = osc.mono;
 
         if (target.type != OscType::Sample)
             continue;
@@ -258,6 +259,7 @@ inline bool ToFile(const Instrument& instrument,
         osc.coarse_tune = source.coarse_tune;
         osc.fine_tune = source.fine_tune;
         osc.keytrack = source.keytrack;
+        osc.mono = source.mono;
 
         osc.zone_count = 0;
         for (uint8_t z = 0; z < kMaxZones; ++z) {

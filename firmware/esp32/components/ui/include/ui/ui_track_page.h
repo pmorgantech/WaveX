@@ -5,7 +5,7 @@
 namespace wavex_ui {
 class UITrackPage : public UIPage {
    public:
-    const char* name() const override { return "Performance"; }
+    const char* name() const override { return "Project"; }
     void onEnter(lv_obj_t*) override;
     void onExit() override;
     void onTrackChanged() override;
@@ -23,11 +23,11 @@ class UITrackPage : public UIPage {
     };
     std::array<Cell, 8> cells_{};
     TrackPageModel model_;
-    ValueTile midi_, level_, pan_;
+    ValueTile midi_, level_, pan_, mute_;
     TrackMixModel mix_;
     uint32_t mix_read_at_ = 0, mix_accepted_at_ = 0;
     bool mix_pending_ = false;
-    uint8_t control_ = 0;  // MIDI / level / pan: shared touch and encoder focus.
+    uint8_t control_ = 0;  // MIDI / level / pan / mute: shared touch and encoder focus.
     void readMix();
     void serviceMix();
     void setMix(uint8_t op, uint16_t value);

@@ -9,10 +9,9 @@
 //
 //   - The Daisy holds the gain/pan/mute table and applies it in the voice
 //     render sum.
-//   - The ESP32 owns SOLO. The engine deliberately has no solo concept: a
-//     solo set is expanded to a mute set on the frontend and sent as mutes, so
-//     a dropped link cannot strand a hidden solo on the backend with no way to
-//     clear it. ExpandSoloToMutes() is that expansion.
+//   - The ESP32 owns Solo selection. The Daisy handoff combines its temporary
+//     mask with manual mute targets before publishing the callback's complete
+//     mixer table. Solo never overwrites the Project's user mute state.
 //   - Both sides convert between dB and linear, and between a peak level and
 //     the meter byte the wire carries. Two implementations of those would
 //     disagree in the last bit and show a fader that does not match what is
@@ -188,7 +187,7 @@ class TrackMixer {
         }
     }
 
-    /// Applies a whole mute set at once, which is how the frontend sends solo.
+    /// Applies a complete effective mute set; stored user mutes live in the handoff.
     void SetMuteMask(uint16_t mask) {
         for (uint8_t t = 0; t < kNumTracks; ++t) {
             tracks_[t].mute = ((mask >> t) & 1u) != 0u;

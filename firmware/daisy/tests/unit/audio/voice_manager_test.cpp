@@ -875,6 +875,7 @@ TEST(VoiceManagerTest, StereoSourceAveragesChannelsToMono) {
     }
     VoiceTriggerParams p = FlatParams(sample.data(), 100, 60, 127, 0.5f);
     p.channels = 2;
+    p.mono = true;
     vm.Trigger(p);
 
     float out_l[4] = {0}, out_r[4] = {0};
@@ -2312,4 +2313,140 @@ TEST(VoiceManagerModulationTest, IdleClockAndVoiceReuseDoNotRestartFreeRunLfos) 
     index = FindVoiceForNote(vm, p.note);
     ASSERT_GE(index, 0);
     EXPECT_NEAR(VoiceAt(vm, index).lfo[0].Phase(), .5f, 1e-5);
+}
+
+TEST(VoiceChannels, StereoPreservesOppositeChannelsAndBalancesWithoutCrossfeed) {
+    std::vector<int16_t> pcm(256);
+    for (size_t i = 0; i < pcm.size(); i += 2) {
+        pcm[i] = 8192;
+        pcm[i + 1] = -4096;
+    }
+    for (float pan: {0.f, .5f, 1.f}) {
+        VoiceManager vm;
+        vm.Init(48000);
+        auto p = FlatParams(pcm.data(), 128, 60, 127, pan);
+        p.channels = 2;
+        vm.Trigger(p);
+        EXPECT_EQ(vm.ActiveChannelCount(), 2);
+        float l[8], r[8];
+        vm.Render(l, r, 8);
+        for (int i = 0; i < 8; ++i) {
+            EXPECT_FLOAT_EQ(l[i], pan == 1 ? 0 : .25f);
+            EXPECT_FLOAT_EQ(r[i], pan == 0 ? 0 : -.125f);
+        }
+    }
+}
+TEST(VoiceChannels, StereoFiltersHaveIndependentStateAndFollowLiveSettings) {
+    std::vector<int16_t> pcm(512, 0);
+    pcm[0] = 16000;
+    for (auto topology: {WaveX::AudioEngine::FilterTopology::WaveXSvf,
+                         WaveX::AudioEngine::FilterTopology::Ladder}) {
+        VoiceManager vm;
+        vm.Init(48000);
+        auto p = FlatParams(pcm.data(), 256, 60, 127, .5f);
+        p.channels = 2;
+        p.oscillator = 0;
+        p.filter_cutoff_hz = 2000;
+        p.filter_topology = topology;
+        vm.Trigger(p);
+        WaveX::AudioEngine::VoiceLiveParams live;
+        live.filter_cutoff_hz = 4000;
+        live.instrument.enabled = true;
+        live.instrument.filter_topology = topology;
+        vm.ApplyLiveParams(live);
+        float l[64], r[64];
+        vm.Render(l, r, 64);
+        EXPECT_GT(std::fabs(l[1]), 0.f);
+        for (auto value: r)
+            EXPECT_FLOAT_EQ(value, 0.f);
+    }
+}
+TEST(VoiceChannels, StereoTriggerCanStealTwoMonoVoicesAndSkipsIdleSlots) {
+    VoiceManager vm;
+    vm.Init(48000);
+    std::vector<int16_t> pcm(512, 4096);
+    auto p = FlatParams(pcm.data(), 256, 60, 127, .5f);
+    p.loop = true;
+    for (int i = 0; i < WAVEX_AUDIO_CHANNEL_BUDGET; ++i) {
+        p.note = 40 + i;
+        vm.Trigger(p);
+    }
+    ASSERT_EQ(vm.ActiveChannelCount(), WAVEX_AUDIO_CHANNEL_BUDGET);
+    p.channels = 2;
+    p.note = 90;
+    vm.Trigger(p);
+    EXPECT_EQ(vm.ActiveChannelCount(), WAVEX_AUDIO_CHANNEL_BUDGET);
+    EXPECT_EQ(vm.ActiveVoiceCount(), WAVEX_AUDIO_CHANNEL_BUDGET - 1);
+    for (int i = 0; i < WAVEX_AUDIO_CHANNEL_BUDGET * 2; ++i) {
+        p.channels = (i % 2) ? 1 : 2;
+        vm.Trigger(p);
+        EXPECT_LE(vm.ActiveChannelCount(), WAVEX_AUDIO_CHANNEL_BUDGET);
+    }
+    vm.StopAll();
+    EXPECT_EQ(vm.ActiveChannelCount(), 0);
+}
+TEST(VoiceChannels, FullStereoBudgetAndReleaseReservations) {
+    VoiceManager vm;
+    vm.Init(48000);
+    std::vector<int16_t> pcm(512, 4096);
+    auto p = FlatParams(pcm.data(), 256, 60, 127, .5f);
+    p.channels = 2;
+    p.loop = true;
+    p.release_s = .01f;
+    for (int i = 0; i < WAVEX_AUDIO_CHANNEL_BUDGET; ++i) {
+        p.note = 40 + i;
+        vm.Trigger(p);
+    }
+    EXPECT_EQ(vm.ActiveVoiceCount(), WAVEX_AUDIO_CHANNEL_BUDGET / 2);
+    EXPECT_EQ(vm.ActiveChannelCount(), 2 * (WAVEX_AUDIO_CHANNEL_BUDGET / 2));
+    float l[1024], r[1024];
+    vm.Render(l, r, 8);
+    vm.Release(p.note);
+    EXPECT_EQ(vm.ActiveChannelCount(), 2 * (WAVEX_AUDIO_CHANNEL_BUDGET / 2));
+    vm.Render(l, r, 1024);
+    EXPECT_EQ(vm.ActiveChannelCount(), 2 * (WAVEX_AUDIO_CHANNEL_BUDGET / 2) - 2);
+}
+TEST(VoiceChannels, TwoOscillatorsShareOneStereoReservationAndMonoKeepsOne) {
+    std::vector<int16_t> pcm(256);
+    for (size_t i = 0; i < pcm.size(); i += 2) {
+        pcm[i] = 8192;
+        pcm[i + 1] = -8192;
+    }
+    for (bool mono: {false, true}) {
+        VoiceManager vm;
+        vm.Init(48000);
+        auto p = FlatParams(pcm.data(), 128, 60, 127, .5f);
+        p.channels = 2;
+        p.mono = mono;
+        p.secondary = static_cast<const WaveX::AudioEngine::VoiceSampleParams&>(p);
+        vm.Trigger(p);
+        EXPECT_EQ(vm.ActiveVoiceCount(), 1);
+        EXPECT_EQ(vm.ActiveChannelCount(), mono ? 1 : 2);
+        float l[8], r[8];
+        vm.Render(l, r, 8);
+        EXPECT_FLOAT_EQ(l[0], mono ? 0.f : .5f);
+        EXPECT_FLOAT_EQ(r[0], mono ? 0.f : -.5f);
+    }
+}
+
+TEST(VoiceChannels, FractionalStereoPlaybackInterpolatesBothChannelsAcrossLoopSeam) {
+    const int16_t pcm[] = {0, -32768, 8192, -24576, 16384, -16384, 24576, -8192};
+    VoiceManager vm;
+    vm.Init(48000);
+    auto p = FlatParams(pcm, 4, 60, 127, .5f);
+    p.channels = 2;
+    p.pitch_ratio_mul = .5f;
+    p.start_frame = 1;
+    p.loop_start = 1;
+    p.loop_end = 4;
+    p.loop = true;
+    vm.Trigger(p);
+    float l[8], r[8];
+    vm.Render(l, r, 8);
+    const float expected_l[] = {.25f, .375f, .5f, .625f, .75f, .5f, .25f, .375f};
+    const float expected_r[] = {-.75f, -.625f, -.5f, -.375f, -.25f, -.5f, -.75f, -.625f};
+    for (int i = 0; i < 8; ++i) {
+        EXPECT_FLOAT_EQ(l[i], expected_l[i]);
+        EXPECT_FLOAT_EQ(r[i], expected_r[i]);
+    }
 }
