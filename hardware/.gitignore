@@ -10,3 +10,6 @@ _autosave-*
 
 # Generated hardware outputs
 build/
+
+# Keep the hand-written hardware build entrypoint.
+!Makefile

@@ -1,2 +1,4 @@
 # 2026-09-16
-kicad-python==0.8.0
+kicad-mcp-pro==3.34.6
+# kicad-mcp-pro==3.34.6 depends on kicad-python<0.8.0
+#kicad-python==0.8.0

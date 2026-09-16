@@ -13,6 +13,14 @@ versioning and release process.
 
 ### Added
 
+- Added `hardware/Makefile` targets for ERC/DRC checks, Gerber and drill exports,
+  and schematic PDF documentation, with generated outputs under `hardware/build/`.
+
+- Added hardware agent instructions and a project KiCad skill covering native
+  editing, CLI/IPC tooling, local Python automation, layout checks, and fabrication
+  handoff, with a separate electrical-review reference for circuit and component
+  decisions.
+
 - Added stereo/Mono hardware-verification harnesses: `tests/hil/test_stereo_channels.py`
   covers mixed 0–4 stereo capacity, held Mono next-note/undo, Project mixing,
   WXI Mono persistence, and Solo/manual mute. `scripts/bench_stereo_channels.py`
