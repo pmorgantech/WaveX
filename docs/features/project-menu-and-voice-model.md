@@ -1,8 +1,10 @@
 # Project, menus, mixing and voice channels
 
 **Status:** Stereo/Mono allocation and Project Track controls implemented;
-host/compile verified, hardware verification open. Scene, session persistence,
-effects and drift sections retain their target/proposal status. Updated 2026-09-14.
+host/compile verified, with ten focused two-board checks passing. Listening,
+physical controls and the complete soak gate remain open. Scene, session
+persistence, effects and drift retain their target/proposal status.
+Updated 2026-09-16.
 This document consolidates the terminology and menu discussion so the remaining
 work can be scheduled. It distinguishes current behavior, requested changes and
 proposals; the [roadmap](../roadmap.md#next-steps-and-backlog) owns task order.

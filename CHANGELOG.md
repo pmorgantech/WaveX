@@ -13,6 +13,18 @@ versioning and release process.
 
 ### Added
 
+- Added stereo/Mono hardware-verification harnesses: `tests/hil/test_stereo_channels.py`
+  covers mixed 0–4 stereo capacity, held Mono next-note/undo, Project mixing,
+  WXI Mono persistence, and Solo/manual mute. `scripts/bench_stereo_channels.py`
+  provides a reusable default-eight-channel profiler with two oscillators,
+  modulation, locks, streaming, and periodic pattern save/load. HIL menu labels
+  now use Project in place of Performance. All 10 stereo/Project cases plus the
+  existing Project MIDI-routing case passed together (11/11) on both boards in
+  75.17 seconds, including WXI Mono recall and incoming stereo stealing the two
+  oldest Mono voices. Three 605-second DWT capacity captures each had zero
+  underruns/drops and 10 pattern save/load cycles; details are in the
+  [callback performance log](docs/callback-performance-log.md).
+
 - Stereo Instrument voices preserve both sample channels through independent
   filters. Per-oscillator Mono defaults Off, downmixes stereo when On, applies
   on new notes, and follows WXI save/load and sound Apply/Revert. Legacy WXI
@@ -302,6 +314,12 @@ versioning and release process.
   protocol version 6 remains unchanged.
 
 ### Fixed
+
+- Fixed ESP32 debug `STATE` replies truncating full Instrument/filter values
+  before `oscmono`: the static reply buffer is now 1024 bytes and emits explicit
+  `ERR state_overflow` on exhaustion. Complete `oscmono` readback is covered by
+  the frontend build and flash; 293 ESP32 host tests passed via hooks, and the
+  final HIL run passed 11/11 cases in 75.17 seconds.
 
 - A single-source voice's region fade-out was applied after the filter and
   envelope, so once a sample passed its end frame the whole voice was

@@ -26,6 +26,78 @@ The log deliberately records whether callback-resident features remain. At
 activates the backend chip-upgrade path; a feature-complete build is still
 blocked from release or further callback scope until its margin is resolved.
 
+## Stereo channel verification — 2026-09-16
+
+The Daisy profiling image was built from clean tracked firmware at
+`8714ad010cd297b9154233ef7e983cf2af9f0fb3`, persistent QSPI `-O2`, 480 MHz,
+48 kHz and 48-sample blocks. Its SHA256 is
+`8665204064c8ec5ccdf975f496a07cc49e5d47856fdbb3a20e63957308283f90`.
+The reporting helper adds `+` because verification files and the frontend
+console fix were being edited during evaluation; the captured Daisy audio
+image was unchanged.
+
+`scripts/bench_stereo_channels.py` drives the default eight-channel budget.
+Each voice has two oscillators using the same resident stereo PCM, Oscillator
+2 detuned +17 cents, the 24 dB Ladder filter at full drive, three envelopes,
+two 20 Hz sine LFOs and eight modulation routes. The 120 BPM sequencer plays
+all active Tracks every other step, with cutoff/resonance/pan/pitch locks.
+A stereo SD audition runs concurrently; live filter edits continue and each
+minute a new Pattern copy is saved and reloaded before playback restarts.
+The source is `/03 Lips of Ashes.wav` (44.1 kHz, PCM16 stereo), with a resident
+loop from ten to eleven seconds. Metadata JSON records exact configuration,
+file cycles and sampled board state next to each log.
+
+These are capacity measurements of the new stereo renderer, not a matched
+before/after comparison against the earlier mono renderer. The two maps share
+one PCM and do not reproduce the older sixteen-zone/per-pad workload. They do
+not close the full phase gate or establish analog output quality.
+
+| Voices | Duration | Average cycles | Peak cycles | Peak load | Stream underruns | Decision | Capture |
+|---|---:|---:|---:|---:|---:|---|---|
+| 8 Mono | 605.2 s | 176656 | 319229 | 66.5060% | 0 | STAY | `logs/stereo-0-ladder-20260916-051033.log` |
+| 4 stereo | 605.2 s | 126070 | 241636 | 50.3408% | 0 | COMFORTABLE | `logs/stereo-4-ladder-20260916-054217.log` |
+| 2 stereo + 4 Mono | 605.3 s | 151756 | 276542 | 57.6129% | 0 | COMFORTABLE | `logs/stereo-2-ladder-20260916-055718.log` |
+
+All three accepted captures contain 121 profiling windows, ten successful
+Pattern save/load cycles, zero stream underruns and zero sampled console
+dropped bytes. The worst measured peak is 66.5060% (STAY).
+
+The earlier four-stereo attempt,
+`logs/stereo-4-ladder-20260916-053748.log`, stopped at approximately two
+minutes when the harness requested Load before Save copy completed. It is
+excluded from the gate results. The corrected harness waits for the new
+saved filename and enabled Load softkey before continuing. The first mixed
+attempt, `logs/stereo-2-ladder-20260916-055302.log`, was also excluded: its
+date-stamped save name exceeded the Pattern format's 23-character limit.
+Compact date/time names correct that harness error.
+
+The final normal-firmware HIL selection passed 11/11 in 75.17 seconds:
+ten stereo/Project cases plus the existing Project MIDI-routing regression.
+The stereo checks use
+`/Drums/Loops/loop15_3.wav.wav`, a stereo fixture small enough for WXI import.
+They cover every full-budget mono/stereo mix, whole-note stealing (including
+two Mono notes evicted by one stereo note), Mono
+next-note lifetime and Revert, Project gain/balance/mute, per-oscillator Mono
+WXI recall and manual mute edits across Solo. Digital peak meters verify the
+output controls; no external audio capture or physical-panel check was made.
+The frontend required a static debug reply-buffer increase from 640 to 1024
+bytes: full filter values previously truncated the final `oscmono` field.
+Its build and ESP32 host tests passed; the same longer values now pass HIL.
+
+Normal QSPI `-O2` Daisy firmware was rebuilt and restored with profiling Off;
+its SHA256 is
+`bb741897abe28876dab82d99399df90e9afc0c87b02ef53156057938a38a3ce0`.
+Build/flash logs, the final HIL transcript and binary hashes are retained
+locally in `build/stereo-verification-20260916/` (gitignored). The accepted
+capture logs and per-scenario metadata remain in `logs/` (gitignored).
+After HIL, a backend reset cleared temporary sound/mixer settings; both
+consoles responded with no loaded samples, active voices or stream, and the
+frontend was left at the main menu on Track 1. The frontend retains the
+tested debug reply fix. Listening, physical panel
+operation, MIDI timing, a matched pre-stereo baseline and the full one-hour
+phase soak remain unverified.
+
+
 ## Filter topology A/B — 2026-09-14
 
 Profiling QSPI `-O2` image at f9e823b, 480 MHz, 48 kHz, 48-sample blocks, driven
@@ -737,3 +809,6 @@ locally as `logs/perf-itcm-workload.py` under its baseline SHA256 above.
 | 2026-09-13 | af2804eb160a7d021b9d5315fa24ce28a5745ae5 | 8 voices; two oscillator maps; Env 1-3; two LFOs per voice; 64 routes; four locks per hit; WaveX 24 dB full drive; SD stream; live edits; grid; periodic save/load; modulation exponent cache | 8 | 48000/48 | 480 MHz | qspi `-O2` | 610.2s (122 windows) | 480000 | 147942 (30.8%) | 312215 (65.0448%) | 34.9552% | 0 | yes | STAY | Modulation cache trial 1; adopted average gain, no peak gain claimed; 376 live edits and five file cycles; zero audio underruns and console RX dropped bytes; metadata logs/perf-itcm-dsp3-wavex-20260913-054739.json |
 | 2026-09-13 | af2804eb160a7d021b9d5315fa24ce28a5745ae5 | 8 voices; two oscillator maps; Env 1-3; two LFOs per voice; 64 routes; four locks per hit; WaveX 24 dB full drive; SD stream; live edits; grid; periodic save/load; modulation exponent cache | 8 | 48000/48 | 480 MHz | qspi `-O2` | 610.2s (122 windows) | 480000 | 147957 (30.8%) | 310493 (64.6860%) | 35.3140% | 0 | yes | STAY | Modulation cache trial 2; adopted average gain, no peak gain claimed; 376 live edits and five file cycles; zero audio underruns and console RX dropped bytes; metadata logs/perf-itcm-dsp3-repeat-wavex-20260913-060007.json |
 | 2026-09-13 | 59783fec3a22296b68081d14c7e4af3202112103 | 8 voices; two oscillator maps; Env 1-3; two LFOs per voice; 64 routes; four locks per hit; WaveX 24 dB full drive; SD stream; live edits; grid; periodic save/load; accepted modulation cache plus specialized render loops | 8 | 48000/48 | 480 MHz | qspi `-O2` | 605.2s (121 windows) | 480000 | 151174 (31.5%) | 317518 (66.1496%) | 33.8504% | 0 | yes | STAY | Not adopted; higher average and peak than accepted modulation-cache pair; 376 live edits, five file cycles, zero audio underruns and console RX dropped bytes; metadata logs/perf-itcm-dsp4-wavex-20260913-061613.json |
+| 2026-09-16 | 8714ad0+ | 8 Mono voices, two oscillators, Ladder, locks, stream, file cycles | 8 | 48000/48 | 480 MHz | qspi `-O2` | 605.2s (121 windows) | 480000 | 176656 (36.8%) | 319229 (66.5060%) | 33.4940% | 0 | yes | STAY | Stereo channel checkpoint; unchanged Daisy image 8665204064c8; verification working tree dirty; see 2026-09-16 evidence notes |
+| 2026-09-16 | 8714ad0+ | 4 stereo voices, two oscillators, Ladder, locks, stream, file cycles | 4 | 48000/48 | 480 MHz | qspi `-O2` | 605.2s (121 windows) | 480000 | 126070 (26.3%) | 241636 (50.3408%) | 49.6592% | 0 | yes | COMFORTABLE | Stereo channel checkpoint; unchanged Daisy image 8665204064c8; verification working tree dirty; see 2026-09-16 evidence notes |
+| 2026-09-16 | 8714ad0+ | 2 stereo + 4 Mono voices, two oscillators, Ladder, locks, stream, file cycles | 6 | 48000/48 | 480 MHz | qspi `-O2` | 605.3s (121 windows) | 480000 | 151756 (31.6%) | 276542 (57.6129%) | 42.3871% | 0 | yes | COMFORTABLE | Stereo channel checkpoint; unchanged Daisy image 8665204064c8; verification working tree dirty; see 2026-09-16 evidence notes |

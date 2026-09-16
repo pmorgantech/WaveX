@@ -27,7 +27,7 @@ def _split(path):
 def _open_browser(esp, path):
     """Sample > Browse, listing `path`'s directory with its file selected."""
     if path.lower().endswith((".sfz", ".wxi")):
-        esp.open_menu("Performance")
+        esp.open_menu("Project")
         esp.softkey("Assign")
         esp.wait_state(page="Instrument_Browser")
     else:

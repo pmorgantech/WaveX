@@ -1,7 +1,7 @@
 # WaveX Implementation Roadmap
 
 **Status:** Canonical implementation order. **Current phase:** Phase 2.
-**Last updated:** 2026-09-13.
+**Last updated:** 2026-09-16.
 
 This document is the single planning list: scheduled phases, next steps,
 unscheduled backlog and open decisions. Completed work belongs in `CHANGELOG.md`
@@ -117,7 +117,19 @@ Phase 2.5 work. Open work:
 
 ### 2.C — Callback capacity checkpoint
 
-Current checkpoint (2026-09-13): the accepted callback/modulation ITCM
+Current stereo checkpoint (2026-09-16): three ten-minute captures on the
+unchanged `8714ad0` Daisy image filled the default eight-channel budget.
+Eight downmixed voices peaked at **66.5060% (STAY)**; four stereo voices at
+**50.3408%**, and two stereo plus four Mono voices at **57.6129%** (both
+COMFORTABLE). All completed ten Pattern save/load cycles with zero reported
+underruns and dropped console bytes. The new harness uses two oscillators,
+modulation, locks, streaming and live filter edits; its one-zone maps differ
+from the older sixteen-zone workload, so this is capacity evidence, not a
+matched before/after comparison. See the
+[stereo evidence](callback-performance-log.md#stereo-channel-verification--2026-09-16).
+The one-hour soak and complete phase gate remain open.
+
+Pre-stereo checkpoint (2026-09-13): the accepted callback/modulation ITCM
 placement was re-baselined with three unchanged-image ten-minute captures.
 The four DSP candidates were then retested in order; only voice-owned
 modulation exponent caching was adopted after two full confirming captures.
@@ -397,17 +409,32 @@ the former separate backlog (2026-09-13).
 The [Project, menus, mixing and voice-channel model](features/project-menu-and-voice-model.md)
 consolidates the 2026-09-14 discussion, including current behavior, requested
 stereo/Mono changes and the proposed Project navigation and Scene workflow.
-Performance currently exposes Track assignment, MIDI input, level and pan;
-Project owns that setup without needing a separate saved Performance object.
+Project exposes Track assignment, MIDI input, level, pan/balance and mute;
+it owns that setup without needing a separate saved Performance object.
 
 - [ ] **Stereo/Mono hardware verification:** stereo preservation, saved
   per-oscillator Mono (default Off) and the configurable render-channel budget
   are implemented. Host tests cover mixed-cost stealing, release tails,
   independent stereo filters, next-note/undo behavior, old WXI headers and a
-  larger configured capacity. Verify audible pan/balance, Mono and Solo/manual-mute restoration, measure
-  DWT before/after at matched workloads, and run the full channel-budget soak
-  with streaming audition and modulation. Earlier mono-voice measurements
-  do not verify this renderer. Sample Edit `channel_mode` UI remains separate.
+  larger configured capacity. Ten stereo/Project HIL cases now pass (2026-09-16):
+  all five full-budget mixes, whole-note stealing (including two Mono notes
+  evicted by one stereo note), held-note/next-note Mono,
+  Project level/pan/mute, Apply/Revert, saved per-oscillator Mono and manual
+  mutes across Solo. These are debug-console and digital-meter checks;
+  audible stereo/pan quality and physical controls remain open.
+  [Stereo DWT captures](callback-performance-log.md#stereo-channel-verification--2026-09-16)
+  record the new renderer separately from earlier mono measurements. Still
+  run a matched before/after comparison and the full channel-budget soak
+  with streaming audition and modulation. Sample Edit `channel_mode` UI
+  remains separate. WXI recall fixtures must meet Instrument import admission;
+  direct-loaded large samples can exceed that limit (see below).
+- [ ] **Phase 2 / Instrument save admission:** a directly loaded WAV can
+  exceed `WAVEX_INST_MAX_RAM_SAMPLE_BYTES`, yet WXI Save copy succeeds and
+  recall rejects that referenced sample as unsupported. The stereo bench
+  reproduced this with a 49,250,304-byte PCM payload. Make save/load admission
+  consistent, or report the non-recallable dependency before publishing a
+  saved Instrument. Preserve pool ownership and memory limits; do not silently
+  enlarge the budget. Include this preflight in Project snapshot transactions.
 - [ ] **Phase 2 / Mixer v1:** Project now exposes Track assignment, MIDI, level,
   pan/balance and mute. Add session Save/Load; preserve selected-Track continuity and keep Pattern/
   Song editing in Sequencer. Complete Project transactions and mixer readback/

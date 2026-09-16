@@ -271,7 +271,7 @@ class Esp32(Target):
         st = self.wait_state(page="Main_Menu")
         items = [
             "Sample",
-            "Performance",
+            "Project",
             "Instrument",
             "Play",
             "Sequencer",

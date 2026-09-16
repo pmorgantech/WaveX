@@ -167,6 +167,49 @@ do not duplicate their task status here.
 commands and transcripts. Missing boards cause skips: an all-skipped run is
 not a passing hardware gate.
 
+### Stereo channels and Project mixing
+
+With both debug consoles logged, the default eight-channel firmware and a
+resident-compatible PCM16 stereo WAV on the card, run:
+
+```bash
+WAVEX_HIL_STEREO='/Drums/Loops/loop15_3.wav.wav' \
+  python3 -m pytest -q tests/hil/test_stereo_channels.py
+```
+
+This replaces the live bench session and writes a uniquely named WXI save
+copy; it does not alter the source WAV. It checks all five full-budget
+mono/stereo combinations, whole-note stealing (including two Mono notes
+evicted by one stereo note), next-note Mono changes,
+Apply/Revert, WXI recall, Track level/pan/mute and manual mutes across Solo.
+Output assertions use the codec-bound digital meters, not a recording of the
+analog output. Use a stereo file within the Instrument import size limit
+(`WAVEX_INST_MAX_RAM_SAMPLE_BYTES`). The tests loop a one-second region
+at ten seconds, or the final second for shorter files.
+
+For callback measurements, build/flash the persistent QSPI `-O2` profiling
+image using [the performance guide](performance_monitoring.md), then run:
+
+```bash
+python3 scripts/bench_stereo_channels.py --stereo 4 --seconds 605 \
+  --topology ladder --sample '/03 Lips of Ashes.wav' \
+  --image path/to/flashed-daisy.bin --commit SOURCE_COMMIT
+python3 scripts/callback_performance.py logs/stereo-4-ladder-TIMESTAMP.log \
+  --scenario '4 stereo voices, two oscillators, locks, stream, file cycles' \
+  --voices 4 --features-remaining yes
+```
+
+`--stereo 0` exercises eight downmixed voices; `--stereo 2` exercises two
+stereo plus four downmixed voices. The harness assumes the default channel
+budget. Each scenario uses two oscillators, modulation, sequencing, locks,
+streaming and periodic new-copy Pattern save/load. It saves device readback,
+source-commit attribution, image SHA256 and a separate serial capture in
+`logs/`. Supply the exact binary flashed and its source commit; the script
+does not verify the target's flash against that file. Avoid other console
+clients or log rotation during a run. Restore normal firmware afterward.
+These runs do not establish matched before/after performance, analog quality,
+physical input timing or the complete Phase 2 gate.
+
 Host tests cannot establish real-panel legibility, MIDI/audio latency,
 cache/DMA ownership on silicon, CV settling, SD fault recovery, reboot
 persistence or zero-underrun behavior. Device compilation also cannot prove

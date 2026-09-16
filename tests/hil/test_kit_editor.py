@@ -77,7 +77,7 @@ def test_touch_kit_save_reload_preserves_samples_and_other_tracks(
     # Recall the saved copy through the actual Instrument Browser.
     esp.track(2)
     esp.home()
-    esp.open_menu("Performance")
+    esp.open_menu("Project")
     esp.softkey("Assign")
     esp.wait_state(page="Instrument_Browser")
     esp.softkey("Saved")

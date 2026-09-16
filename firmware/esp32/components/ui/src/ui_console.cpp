@@ -110,7 +110,9 @@ struct UiRequest {
 };
 std::atomic<ReqState> s_req_state{ReqState::Idle};
 UiRequest s_req;
-char s_reply[640];
+// Common navigation/softkey fields plus the full Instrument state can
+// exceed 640 bytes. Keep this mailbox static, outside the UI task stack.
+char s_reply[1024];
 
 #if WAVEX_UI_LATENCY_PROFILE_ENABLED
 // UI-domain counters: no logging/allocation in display callbacks. Count only
@@ -496,7 +498,8 @@ void serve_state(int32_t seq) {
     if (page) {
         len = page->consoleState(s_reply, sizeof(s_reply), len);
     }
-    (void)len;
+    if (len >= sizeof(s_reply) - 1)
+        FormatErr(seq, "state_overflow", s_reply, sizeof(s_reply));
 }
 
 void serve_request() {

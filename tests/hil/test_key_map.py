@@ -96,7 +96,7 @@ def test_key_map_velocity_split_staging_and_saved_recall(
     esp.wait_state(keyready=1, keyerror=0, timeout=10)
     esp.home()
     esp.track(2)
-    esp.open_menu("Performance")
+    esp.open_menu("Project")
     esp.softkey("Assign")
     esp.wait_state(page="Instrument_Browser")
     esp.softkey("Saved")
