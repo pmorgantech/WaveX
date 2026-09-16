@@ -1,0 +1,12 @@
+# Python environment
+.venv/
+__pycache__/
+*.pyc
+
+# KiCad temporary/backup files
+*-backups/
+_autosave-*
+*.lck
+
+# Generated hardware outputs
+build/
