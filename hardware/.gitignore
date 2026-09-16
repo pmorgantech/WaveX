@@ -13,3 +13,6 @@ build/
 
 # Keep the hand-written hardware build entrypoint.
 !Makefile
+
+# Ignore kicad's own auto-commit backups
+.history/
