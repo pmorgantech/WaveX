@@ -1,4 +1,4 @@
-# Run inside the WaveX devcontainer: make -C hardware <target>
+# Run on the host with KiCad 10 installed: make -C hardware <target>
 # KiCad 10 CLI reference: https://docs.kicad.org/10.0/en/cli/cli.html
 KICAD_CLI ?= kicad-cli
 PROJECT ?= wavex
@@ -10,11 +10,13 @@ PCB ?= $(PROJECT).kicad_pcb
 GERBER_LAYERS ?= F.Cu,B.Cu,F.Mask,B.Mask,F.SilkS,B.SilkS,Edge.Cuts
 
 .DEFAULT_GOAL := help
+# KiCad CLI processes share an instance lock; serialize even when given -j.
+.NOTPARALLEL:
 .PHONY: help all check erc drc gerbers docs pdf require-kicad
 
 help: ## Show targets and configuration
 	@awk 'BEGIN {FS = ":.*## "} /^[a-z-]+:.*## / {printf "  %-16s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
-	@printf '\nRun inside the devcontainer with KiCad 10 installed.\n'
+	@printf '\nRun on the host with KiCad 10 installed.\n'
 	@printf 'Overrides: KICAD_CLI, PROJECT, SCHEMATIC, PCB, BUILD_DIR, GERBER_LAYERS\n'
 	@printf 'Outputs: $(BUILD_DIR)/reports/, $(BUILD_DIR)/gerbers/, $(BUILD_DIR)/docs/\n'
 
@@ -26,7 +28,7 @@ check: ## Run ERC and DRC; fail if either check fails
 
 require-kicad:
 	@command -v "$(KICAD_CLI)" >/dev/null 2>&1 || { \
-		printf '%s\n' 'KiCad CLI not found: $(KICAD_CLI). Install KiCad 10 in the devcontainer or set KICAD_CLI to its executable path.' >&2; \
+		printf '%s\n' 'KiCad CLI not found: $(KICAD_CLI). Install KiCad 10 on the host or set KICAD_CLI to its executable path.' >&2; \
 		exit 127; \
 	}
 

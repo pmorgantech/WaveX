@@ -61,7 +61,9 @@ WaveX/
    QSPI/DFU (`make daisy-flash`, hold BOOT while resetting). For the faster,
    volatile Daisy edit/test loop with an ST-Link, use `make daisy-debug`.
 
-**All work happens inside the devcontainer — including `git commit`.** The
+**Firmware development happens inside the devcontainer, and all commits remain
+container-only.** Hardware CAD commands run on the host with KiCad 10; see
+[`hardware/AGENTS.md`](hardware/AGENTS.md) for checks and exports. The
 pre-commit suite (formatting, firmware builds, host tests) only exists in the
 container image, and the tracked hook wrapper (`.githooks/pre-commit`) blocks
 commits made from the host with instructions to re-run from the container.

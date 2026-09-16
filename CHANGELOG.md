@@ -417,6 +417,11 @@ versioning and release process.
 
 ### Changed
 
+- Hardware Make targets and KiCad/Python IPC tooling now run on the host with
+  KiCad 10. Firmware builds/tests, pre-commit, and commits remain in the
+  devcontainer; no container KiCad installation is required. Hardware targets
+  run serially to avoid contention over KiCad's shared CLI instance lock.
+
 - Resonance under the one RES control: the ladder's loop gain is now 5.4 ×
   resonance (self-oscillation from about 74%, a clean saturation-bounded tone
   at the top) and the SVF's cubic Q curve tops out at Q 16, so both sit near

@@ -22,17 +22,19 @@ For checking or exporting designs, read
 
 ## Prerequisites and tool choice
 
-Work inside the repository's devcontainer as required by the root instructions.
+Run hardware CAD work on the host with KiCad 10, as authorized by
+`hardware/AGENTS.md`. Firmware builds/tests, pre-commit, and commits remain
+container-only.
 Inspect the installed KiCad version, project file headers, available libraries,
 and task-specific command help. A missing tool is a validation limitation, not
 permission to fabricate a result or change the file-format version.
 
 Keep repeatable automation in `hardware/tools/` and its Python dependencies in
 the ignored `hardware/.venv/`, installed from `hardware/requirements.txt`.
-Use the local interpreter explicitly inside the devcontainer, for example
+Use the local interpreter explicitly on the host, for example
 `hardware/.venv/bin/python hardware/tools/<script>.py` from the repository root,
 or `.venv/bin/python tools/<script>.py` from `hardware/`. Create the environment
-in the supported container; do not reuse an incompatible host environment or
+on the host; do not reuse an incompatible container environment or
 install project dependencies globally.
 
 Use Ref for current API documentation when available; otherwise use Exa to find
@@ -56,7 +58,7 @@ document's full path before mutations. Check capabilities for the installed
 version; do not assume schematic editing exists because PCB editing does.
 Do not introduce legacy `pcbnew` SWIG automation as though it were this client.
 
-A container client needs access to the intended editor's IPC endpoint; a venv
+Connect the host client to the intended host editor's IPC endpoint; a venv
 alone does not establish that connection. Keep one writer per document:
 coordinate unsaved GUI state with disk edits so neither overwrites the other.
 After an IPC timeout, inspect whether the change landed before retrying a

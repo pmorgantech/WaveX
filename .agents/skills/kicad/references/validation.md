@@ -14,7 +14,7 @@ format; verify installed help before execution.
 
 ## Prerequisites
 
-Run from the repository root inside the supported devcontainer. Have the
+Run from the repository root on the host. Have the
 matching KiCad application, symbol/footprint libraries, and the saved project
 available. The Python IPC dependency does not provide `kicad-cli`.
 

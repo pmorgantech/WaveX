@@ -29,9 +29,11 @@ Apply only the sections relevant to the requested change.
 
 ## Prerequisites and starting state
 
-Use the root devcontainer workflow for commands, checks, and commits. Check
-`kicad-cli version` and the actual file headers before choosing tools; preserve
-the project's format version unless a migration is requested.
+Run hardware CAD commands, checks, exports, and Python IPC automation on the
+host with KiCad 10 installed. This is an explicit exception to the root
+container workflow; firmware builds/tests, pre-commit, and commits still run
+inside the devcontainer. Check `kicad-cli version` and the actual file headers
+before choosing tools; preserve the format version unless a migration is requested.
 
 At this guide's creation (2026-09-16), `wavex.kicad_sch` and
 `wavex.kicad_pcb` are **empty KiCad 10 starters**. The saved ERC report has no
@@ -39,13 +41,13 @@ violations, while DRC reports a missing `Edge.Cuts` outline. Neither report
 demonstrates a working circuit. Reinspect the files on each task.
 
 [requirements.txt](requirements.txt) pins the Python IPC client, not the KiCad
-application. The inspected devcontainer has no `kicad-cli`; report unavailable
-checks until a compatible KiCad installation exists in the supported environment.
-Do not silently run a host-only workflow or downgrade the design.
+application. Use the host's `kicad-cli` and symbol/footprint libraries; no KiCad
+installation or image rebuild is needed in the devcontainer. Report unavailable
+checks if host tools are missing; do not downgrade the design.
 
 ## Check and export commands
 
-Run these inside the devcontainer from the repository root:
+Run these on the host from the repository root:
 
 ```bash
 make -C hardware -j$(nproc) help
