@@ -210,6 +210,9 @@ void OnCvTest(const WaveX::Protocol::CvTestMessage& m);
 // Load the persisted calibration table (call once at boot, after SD mount).
 void LoadCvCalFromSd();
 bool StorageJobBusy();
+bool ProjectBusy();
+void OnProjectOp(const WaveX::Protocol::ProjectOpMessage& request);
+void PumpProjectSession();
 bool PrepareCardFormat();
 void FinishCardFormat();
 

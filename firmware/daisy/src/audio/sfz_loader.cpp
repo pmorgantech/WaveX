@@ -443,6 +443,11 @@ ProbeResult ProbeCurrent(SamplePool& pool) {
     // hit costs no memory and no SD read, and its bytes are not counted
     // against what this load needs.
     if (const SamplePool::Record* r = pool.FindByPath(path)) {
+        if (s_in_project_step && (r->payload.meta.total_frames != resident.total_frames ||
+                                  r->payload.sample_rate != resident.sample_rate ||
+                                  r->payload.channels != resident.channels ||
+                                  r->payload.bit_depth != resident.bit_depth))
+            return ProbeResult::Invalid;
         ls.hit = true;
         ls.pool_id = r->sample_id;
         s_probes[s_index].bytes = 0;
@@ -716,7 +721,7 @@ uint8_t PrepareSave(SamplePool& pool) {
     return INST_ERROR_NONE;
 }
 
-void ProbeSaveSample() {
+void ProbeSaveSample(SamplePool& pool) {
     const auto& doc = s_doc_storage.Get();
     while (s_index < kMaxInstrumentZones) {
         const auto& osc = doc.osc[s_index / kMaxZones];
@@ -733,7 +738,14 @@ void ProbeSaveSample() {
         s_file_open = true;
         ResidentSampleInfo resident;
         uint32_t data_offset = 0;
-        const bool valid = ReadInstrumentSampleInfo(0, resident, data_offset);
+        bool valid = ReadInstrumentSampleInfo(0, resident, data_offset);
+        if (s_project_snapshot && valid) {
+            const auto* live = pool.FindByPath(path);
+            valid = live && live->payload.meta.total_frames == resident.total_frames &&
+                    live->payload.sample_rate == resident.sample_rate &&
+                    live->payload.channels == resident.channels &&
+                    live->payload.bit_depth == resident.bit_depth;
+        }
         const FRESULT closed = f_close(&s_file);
         s_file_open = false;
         if (closed != FR_OK) {
@@ -1706,7 +1718,7 @@ void Pump(SamplePool& pool, SampleMemMgr& memory, uint8_t* io_buffer, uint32_t i
                 FinishEdit(error);
         } break;
         case Phase::ProbeSaveSample:
-            ProbeSaveSample();
+            ProbeSaveSample(pool);
             break;
         case Phase::SaveCopy:
             FinishEdit(SaveCopy());

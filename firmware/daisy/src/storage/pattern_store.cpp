@@ -108,6 +108,13 @@ bool MakeDirectory(const char* name) {
     return result == FR_OK || result == FR_EXIST;
 }
 }  // namespace
+const char* CurrentName() {
+    return job().status.name;
+}
+void SetProjectPatternName(const char* name) {
+    if (!Busy())
+        detail::CopyWireString(job().status.name, sizeof(job().status.name), name);
+}
 bool BlocksEdits() {
     const auto& j = job();
     return j.phase != Phase::Idle && j.request.op != SEQ_FILE_SAVE_COPY;

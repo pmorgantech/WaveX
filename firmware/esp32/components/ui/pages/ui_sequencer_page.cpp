@@ -208,9 +208,11 @@ void UISequencerPage::service() {
         settings_.valid = 0;
         if (alive) {
             requestRow(0);
-            // Either board may have rebooted: restore the shared temporary Solo
-            // selection without touching manual mute targets.
-            inter_mcu_send_mix_op(MIX_OP_SET_SOLO_MASK, 0, mixerSolo.Mask());
+            ProjectOpMessage project;
+            if (++s_read_id == 0)
+                ++s_read_id;
+            project.request_id = s_read_id;
+            inter_mcu_send_project_op(project);  // read completion; never replay a stale Solo mask
         }
         UINavigator::instance().refreshSoftkeys();
     }

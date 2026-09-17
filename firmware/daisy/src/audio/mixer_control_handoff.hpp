@@ -14,6 +14,18 @@ namespace AudioEngine {
 // and lets repeated edits coalesce without losing changes to other Tracks.
 class MixerControlHandoff {
    public:
+    struct Controls {
+        std::array<Mix::TrackMix, Mix::kNumTracks> tracks;
+        float master_gain = 1.0f;
+        uint16_t solo_mask = 0;
+    };
+    // Main-loop snapshots contain accepted targets, never callback ramp state.
+    const Controls& Pending() const { return pending_; }
+    void Restore(const Controls& controls) {
+        pending_ = controls;
+        pending_.solo_mask = 0;  // Solo is transient and never recalled from a file.
+        mailbox_.Publish(pending_);
+    }
     void Init() {
         pending_ = Controls{};
         mailbox_.Init(pending_);
@@ -92,11 +104,6 @@ class MixerControlHandoff {
     }
 
    private:
-    struct Controls {
-        std::array<Mix::TrackMix, Mix::kNumTracks> tracks;
-        float master_gain = 1.0f;
-        uint16_t solo_mask = 0;
-    };
     Controls pending_;
     SnapshotMailbox<Controls> mailbox_;
 };

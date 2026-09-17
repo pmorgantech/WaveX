@@ -203,3 +203,12 @@ void ui_theme_apply_label_style(lv_obj_t* label, bool is_title);
 #define UI_MIX_PAN_TOP 352
 #define UI_MIX_MUTE_TOP 408
 #define UI_MIX_SOLO_TOP 464
+
+// Project files: filename, feedback and keyboard within the shared content frame.
+#define UI_PROJECT_FILE_INPUT_Y 55
+#define UI_PROJECT_FILE_INPUT_H 65
+#define UI_PROJECT_FILE_HINT_Y 132
+#define UI_PROJECT_FILE_KEYBOARD_H 340
+#define UI_PROJECT_FILES_BUTTON_W 256
+#define UI_PROJECT_FILES_BUTTON_H 48
+#define UI_PROJECT_FILES_BUTTON_Y 232

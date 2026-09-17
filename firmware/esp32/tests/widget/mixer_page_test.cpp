@@ -222,3 +222,7 @@ TEST_F(MixerPageTest, MetersRenewWhileVisibleAndClearStaleLevels) {
     Advance(30);
     EXPECT_EQ(subscriptions, previous);
 }
+
+esp_err_t inter_mcu_send_project_op(const WaveX::Protocol::ProjectOpMessage&) {
+    return ESP_OK;
+}

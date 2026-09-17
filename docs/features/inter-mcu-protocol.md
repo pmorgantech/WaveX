@@ -521,3 +521,14 @@ and retains them in WXI. This transport is host-tested and covered by a
 two-board save/reload check. The ESP32 LFO touch tab and live audition
 Apply/Revert flow are not yet connected; the typed messages therefore expose
 the backend foundation rather than a completed panel workflow.
+
+### Project transactions
+
+`MSG_PROJECT_OP` / `MSG_PROJECT_STATUS` use the centralized Project operation,
+status and error definitions in `firmware/shared/spi_protocol/protocol.h`.
+GET reads retained state; SAVE_COPY, LOAD and NEW carry nonzero request IDs.
+Active/completed IDs, progress, failure Track and the last successful name let
+the frontend distinguish a long operation from an unconfirmed completion.
+Readback never repeats an operation. See [Project persistence](project-persistence.md)
+for lease, stop acknowledgement, commit and failure semantics. Round-trip tests
+cover every operation/error and reject malformed status bounds.

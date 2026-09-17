@@ -160,9 +160,14 @@ void UIMixerPage::service() {
         meter_sub_at_ = lv_tick_get() - 1000;
         reset();
     }
-    if (alive_ && solo_sync_ &&
-        inter_mcu_send_mix_op(MIX_OP_SET_SOLO_MASK, 0, mixerSolo.Mask()) == ESP_OK)
-        solo_sync_ = false;
+    if (alive_ && solo_sync_) {
+        ProjectOpMessage request;
+        request.request_id = nextId();
+        // Read retained Project completion before reusing UI Solo selection.
+        // Page entry never replays a stale mask over a just-restored Project.
+        if (inter_mcu_send_project_op(request) == ESP_OK)
+            solo_sync_ = false;
+    }
     if (alive_ && lv_tick_elaps(meter_sub_at_) >= 1000 &&
         inter_mcu_send_mix_op(MIX_OP_SUB_METERS, 0, 0) == ESP_OK)
         meter_sub_at_ = lv_tick_get();

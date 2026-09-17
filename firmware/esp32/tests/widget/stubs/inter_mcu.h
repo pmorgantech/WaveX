@@ -8,3 +8,5 @@ esp_err_t inter_mcu_send_mix_op(uint8_t, uint8_t, uint16_t);
 bool inter_mcu_get_mix_state(WaveX::Protocol::MixStateMessage*);
 
 bool inter_mcu_get_mix_meters(WaveX::Protocol::MixMetersMessage*);
+esp_err_t inter_mcu_send_project_op(const WaveX::Protocol::ProjectOpMessage&);
+bool inter_mcu_get_project_status(WaveX::Protocol::ProjectStatusMessage*);

@@ -72,6 +72,32 @@ void ProcessInterMcuMessage(uint8_t msg_type,
                             uint16_t sequence_number,
                             const uint8_t* payload,
                             size_t payload_size) {
+    if (msg_type == MSG_PROJECT_OP) {
+#if WAVEX_AUDIO_ENGINE_ENABLED
+        ProjectOpMessage request;
+        if (payload && payload_size == sizeof(request)) {
+            std::memcpy(&request, payload, sizeof(request));
+            if (IsValidProjectOp(request))
+                AudioEngine::OnProjectOp(request);
+        }
+#endif
+        return;
+    }
+#if WAVEX_AUDIO_ENGINE_ENABLED
+    bool project_stop = false;
+    if (msg_type == MSG_SEQ_TRANSPORT && payload && payload_size == sizeof(SeqTransportMessage)) {
+        SeqTransportMessage transport;
+        std::memcpy(&transport, payload, sizeof(transport));
+        project_stop = transport.command == SEQ_TRANSPORT_STOP;
+    }
+    // One Project owner freezes edits, notes and competing SD operations.
+    // Releases and readback remain available; polling cannot replay a job.
+    if (AudioEngine::ProjectBusy() && !project_stop && msg_type != MSG_HEARTBEAT &&
+        msg_type != MSG_STATUS_REQUEST && msg_type != MSG_NOTE_OFF &&
+        msg_type != MSG_MIX_STATE_REQ && msg_type != MSG_TRACK_STATE_REQ &&
+        msg_type != MSG_SEQ_PATTERN_SYNC && msg_type != MSG_TRACK_BINDING_REQ)
+        return;
+#endif
     if (msg_type == MSG_CARD_OP) {
         if (payload && payload_size == sizeof(CardOpMessage)) {
             CardOpMessage request;

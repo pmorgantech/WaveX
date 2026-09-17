@@ -99,6 +99,8 @@ enum MessageType : uint8_t {
     MSG_STORAGE_STATUS = 0x39,         // Daisy -> ESP32: SD mounted/unmounted (unsolicited)
     MSG_CARD_OP = 0x4C,                // E->D: inspect/arm/confirm/cancel card formatting
     MSG_CARD_STATE = 0x4D,             // D->E: retained card-maintenance result
+    MSG_PROJECT_OP = 0x4E,             // E->D: Project save/load/new or retained status request
+    MSG_PROJECT_STATUS = 0x4F,         // D->E: session transaction and retained completion
     // Diagnostics telemetry (docs/ui-diagnostics-spec.md). Subscription-gated:
     // the push flows only while the diagnostics page is open, so it costs
     // nothing the rest of the time.
@@ -1623,6 +1625,65 @@ inline bool IsValidCardState(const CardStateMessage& m) {
            !m.reserved;
 }
 
+// Project persistence owns the complete session while busy. A GET only reads
+// retained state; it never repeats a mutation after a lost completion frame.
+enum ProjectOpCode : uint8_t {
+    PROJECT_GET = 0,
+    PROJECT_SAVE_COPY = 1,
+    PROJECT_LOAD = 2,
+    PROJECT_NEW = 3
+};
+enum ProjectError : uint8_t {
+    PROJECT_OK = 0,
+    PROJECT_BUSY,
+    PROJECT_BAD_NAME,
+    PROJECT_NOT_FOUND,
+    PROJECT_EXISTS,
+    PROJECT_IO,
+    PROJECT_BAD_FILE,
+    PROJECT_CAPTURE_BUSY,
+    PROJECT_NO_SPACE,
+    PROJECT_NO_MEMORY,
+    PROJECT_DEPENDENCY,
+    PROJECT_AUDIO_BUSY
+};
+constexpr size_t PROJECT_NAME_BYTES = 24;
+struct ProjectOpMessage {
+    uint32_t request_id = 0;
+    uint8_t op = PROJECT_GET;
+    uint8_t reserved[3]{};
+    char name[PROJECT_NAME_BYTES]{};
+} __attribute__((packed));
+struct ProjectStatusMessage {
+    uint32_t request_id = 0;
+    uint32_t active_request_id = 0;
+    uint32_t completed_request_id = 0;
+    uint8_t busy = 0;
+    uint8_t error = PROJECT_OK;
+    uint8_t active_op = PROJECT_GET;
+    uint8_t completed_op = PROJECT_GET;
+    uint8_t progress = 0;  // 0..100; 100 only after complete save/runtime installation
+    uint8_t failed_track = 0xff;
+    uint16_t reserved = 0;
+    char name[PROJECT_NAME_BYTES]{};  // last successful save/load; empty after New
+} __attribute__((packed));
+static_assert(sizeof(ProjectOpMessage) == 32 && sizeof(ProjectStatusMessage) == 44,
+              "Project wire sizes");
+inline bool IsValidProjectOp(const ProjectOpMessage& m) {
+    return m.request_id && m.op <= PROJECT_NEW && !m.reserved[0] && !m.reserved[1] &&
+           !m.reserved[2];  // file-name rules are checked by the transaction owner
+}
+inline bool IsValidProjectStatus(const ProjectStatusMessage& m) {
+    bool terminated = false;
+    for (char c: m.name)
+        terminated |= c == 0;
+    return m.request_id && m.busy <= 1 && m.error <= PROJECT_AUDIO_BUSY &&
+           m.active_op <= PROJECT_NEW && m.completed_op <= PROJECT_NEW && m.progress <= 100 &&
+           (m.failed_track == 0xff || m.failed_track < 16) && !m.reserved && terminated &&
+           (m.busy ? m.active_request_id != 0 && m.active_op != PROJECT_GET
+                   : m.active_request_id == 0);
+}
+
 // Pattern persistence is a foreground job. GET polls retained completion;
 // reads never replay a mutation whose outcome was lost on the link.
 enum SeqFileOp : uint8_t {
@@ -2773,6 +2834,10 @@ inline const char* MessageTypeName(uint8_t type) {
             return "SAMPLE_GET_PATH_RESP";
         case MSG_STORAGE_STATUS:
             return "STORAGE_STATUS";
+        case MSG_PROJECT_OP:
+            return "PROJECT_OP";
+        case MSG_PROJECT_STATUS:
+            return "PROJECT_STATUS";
         case MSG_CARD_OP:
             return "CARD_OP";
         case MSG_CARD_STATE:

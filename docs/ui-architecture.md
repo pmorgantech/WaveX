@@ -408,3 +408,14 @@ Pan / Balance: mono pans, stereo balances. The Project `MUTE 0|1` command and
 Project mute readback is the user's stored mute target, independent of Solo.
 The backend combines that target with the temporary Solo mask in one handoff;
 manual mute has priority, and clearing Solo retains edits made while soloed.
+
+### Project files
+
+The Project page's **Project files** button opens named Save copy/Load/New.
+Load and New require explicit confirmation of unsaved-state replacement.
+The page polls correlated retained backend status, disables actions on stale
+readback and keeps long jobs pending without replaying mutations. Successful
+recall clears transient Solo through an atomic UI-domain reset intent and
+invalidates sample metadata caches; neither comm callbacks nor storage jobs
+call LVGL. See [Project persistence](features/project-persistence.md) and
+[HV-007](hardware-validation.md#hv-007--project-save-load-and-recovery).

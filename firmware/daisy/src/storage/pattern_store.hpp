@@ -10,5 +10,7 @@ void Pump(Sequencer::PatternExchange& exchange);
 // Keep edits/play from crossing a confirmed load/new. Stop/readback remain available.
 bool BlocksEdits();
 bool Busy();
+const char* CurrentName();
+void SetProjectPatternName(const char* name);  // foreground, only while !Busy()
 }  // namespace PatternStore
 }  // namespace WaveX

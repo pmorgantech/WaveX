@@ -55,7 +55,9 @@ using q15_t = int16_t;
 #include "sequencer_voice_map.hpp"
 #include "sfz_loader.hpp"
 #include "snapshot_mailbox.hpp"
+#include "storage/card_service.hpp"
 #include "storage/pattern_store.hpp"
+#include "storage/project_session.hpp"
 #include "track_live_updates.hpp"
 #include "voice_manager.hpp"
 #include "wav/wav_header_parser.hpp"
@@ -425,6 +427,9 @@ static WAVEX_ITCM_CODE_NAMED("sequencer") bool drain_sequencer(uint16_t block_si
     WaveX::Sequencer::SequencerCommand command;
     while (s_seq_command_queue.Pop(command)) {
         switch (command.type) {
+            case WaveX::Sequencer::SequencerCommandType::StopOnly:
+                s_seq_transport.StopForProject();
+                break;
             case WaveX::Sequencer::SequencerCommandType::Transport:
                 s_seq_transport.ApplyTransport(command.transport);
                 break;
@@ -680,6 +685,9 @@ static_assert(sizeof(SamplePool::Record) * WAVEX_SAMPLE_POOL_CAPACITY <=
 // construction does not fit).
 alignas(SamplePool) static uint8_t s_pool_bytes[sizeof(SamplePool)];
 static SamplePool* s_pool = nullptr;
+static BssStatic<std::optional<Storage::ProjectSession>> s_project_session;
+static bool StopProjectVoices();
+static void PublishProject();
 
 // O(1): the id names its registry slot (SampleRegistry::Find).
 static LoadedSampleInfo* find_loaded_sample(uint16_t sample_id) {
@@ -1974,6 +1982,14 @@ void Init(DaisySeed& hw, float sample_rate, bool sdram_available) {
     if (s_sample_memory_available) {
         s_pool = new (s_pool_bytes) SamplePool(
             reinterpret_cast<SamplePool::Record*>(WaveX::SdramLayout::kSampleRegistryBase));
+        s_project_session.Get().emplace(
+            s_sample_mem_mgr,
+            *s_pool,
+            s_pattern_exchange_storage.Get(),
+            s_mixer_controls,
+            s_sample_io,
+            sizeof(s_sample_io),
+            Storage::ProjectSession::Boundary{StopProjectVoices, PublishProject});
         void* memory = nullptr;
         if (s_sample_mem_mgr.alloc(sizeof(SequencerVoiceState), &s_seq_voice_storage) &&
             s_sample_mem_mgr.ptr(s_seq_voice_storage, &memory)) {
@@ -2525,6 +2541,14 @@ static void EnqueueSequencerCommand(const WaveX::Sequencer::SequencerCommand& co
 }
 
 void OnSeqTransport(const SeqTransportMessage& m) {
+    if (ProjectBusy()) {
+        if (m.command == SEQ_TRANSPORT_STOP) {
+            WaveX::Sequencer::SequencerCommand command;
+            command.type = WaveX::Sequencer::SequencerCommandType::StopOnly;
+            EnqueueSequencerCommand(command);
+        }
+        return;
+    }
     if (WaveX::PatternStore::BlocksEdits() && m.command != SEQ_TRANSPORT_STOP &&
         m.command != SEQ_TRANSPORT_CONFIGURE)
         return;
@@ -2559,8 +2583,47 @@ void OnSeqFileOp(const SeqFileOpMessage& request) {
         CloseWav();  // file jobs own SD bandwidth; resident Track voices continue
 }
 
+bool ProjectBusy() {
+    return s_project_session.Get() && s_project_session.Get()->Busy();
+}
+void OnProjectOp(const ProjectOpMessage& request) {
+    if (!IsValidProjectOp(request))
+        return;
+    if (!s_project_session.Get()) {
+        ProjectStatusMessage status;
+        status.request_id = request.request_id;
+        status.completed_request_id = request.op == PROJECT_GET ? 0 : request.request_id;
+        status.completed_op = request.op;
+        status.error = PROJECT_NO_MEMORY;
+        Comm::LinkSend(MSG_PROJECT_STATUS, &status, sizeof(status));
+        return;
+    }
+    const bool accepted = s_project_session.Get()->Request(
+        request, SfzLoader::Busy() || PatternStore::Busy() || Storage::CardService::Busy());
+    if (accepted) {
+        CancelEnvelopeJob();
+        CloseWav();
+    }
+}
+static bool StopProjectVoices() {
+    ClearSequencerVoiceMap();
+    return StopTracksAndWait(0xffff);
+}
+static void PublishProject() {
+    PublishSequencerVoiceMap();
+    PushTrackBinding(0xff);
+}
+void PumpProjectSession() {
+    auto& session = s_project_session.Get();
+    if (!session)
+        return;
+    session->Pump();
+    if (session->ReplyPending() &&
+        Comm::LinkSend(MSG_PROJECT_STATUS, &session->Status(), sizeof(ProjectStatusMessage)) >= 0)
+        session->ReplySent();
+}
 bool StorageJobBusy() {
-    return SfzLoader::Busy() || WaveX::PatternStore::Busy();
+    return ProjectBusy() || SfzLoader::Busy() || WaveX::PatternStore::Busy();
 }
 bool PrepareCardFormat() {
     if (StorageJobBusy())
@@ -2626,6 +2689,9 @@ void OnSeqPatternOp(const SeqPatternOpMessage& m) {
 }
 
 void OnMidiClockEvent(const MidiClockEventMessage& m) {
+    if (ProjectBusy() && (s_project_session.Get()->Status().active_op != PROJECT_SAVE_COPY ||
+                          (m.event != MIDI_CLK_TICK && m.event != MIDI_CLK_STOP)))
+        return;
     if (WaveX::PatternStore::BlocksEdits() &&
         (m.event == MIDI_CLK_START || m.event == MIDI_CLK_CONTINUE))
         return;
@@ -3046,7 +3112,7 @@ void OnInstrumentOp(const InstOpMessage& request) {
 }
 
 void PumpInstrumentLoad() {
-    if (SfzLoader::ProjectLoadActive())
+    if (ProjectBusy() || SfzLoader::ProjectLoadActive())
         return;
     SfzLoader::PumpEditorReply();
     if (!s_pool) {

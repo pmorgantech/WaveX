@@ -8,6 +8,7 @@
 #include "../../shared/uart_protocol/uart_protocol.h"
 #include "comm/listener_slot.h"
 #include "comm/statistics.h"
+#include "ui/mixer_solo.h"
 #if WAVEX_SPI_LINK_ENABLED
 #include "links/esp_spi_link.h"
 #else
@@ -1617,5 +1618,62 @@ bool inter_mcu_get_track_state(WaveX::Protocol::TrackStateMessage* out) {
     if (valid)
         *out = s_track_state;
     taskEXIT_CRITICAL(&s_track_state_lock);
+    return valid;
+}
+
+namespace {
+portMUX_TYPE s_project_lock = portMUX_INITIALIZER_UNLOCKED;
+WaveX::Protocol::ProjectStatusMessage s_project_status;
+bool s_project_valid = false;
+uint32_t s_project_reset_completion = 0;
+}  // namespace
+esp_err_t inter_mcu_send_project_op(const WaveX::Protocol::ProjectOpMessage& request) {
+    if (!WaveX::Protocol::IsValidProjectOp(request))
+        return ESP_ERR_INVALID_ARG;
+    return send_link_message(WaveX::Protocol::MSG_PROJECT_OP, &request, sizeof(request)) >= 0
+               ? ESP_OK
+               : ESP_FAIL;
+}
+void inter_mcu_store_project_status(const WaveX::Protocol::ProjectStatusMessage& status) {
+    using namespace WaveX::Protocol;
+    if (!IsValidProjectStatus(status))
+        return;
+    bool reset_samples = false;
+    taskENTER_CRITICAL(&s_project_lock);
+    s_project_status = status;
+    s_project_valid = true;
+    if (status.completed_request_id && status.completed_request_id != s_project_reset_completion &&
+        status.error == PROJECT_OK &&
+        (status.completed_op == PROJECT_LOAD || status.completed_op == PROJECT_NEW)) {
+        s_project_reset_completion = status.completed_request_id;
+        reset_samples = true;
+        wavex_ui::mixerSolo.RequestReset();  // atomic intent; UI consumes it, no LVGL on comm task
+    }
+    taskEXIT_CRITICAL(&s_project_lock);
+    if (reset_samples) {
+        // A retained PCM id can now have different Project-owned markers.
+        // Invalidate display caches after commit; each view requests fresh data.
+        // Locks stay unnested, matching the normal metadata cache paths.
+        taskENTER_CRITICAL(&s_meta_lock);
+        for (auto& valid: s_meta_valid)
+            valid = false;
+        s_meta_newest_id = 0;
+        taskEXIT_CRITICAL(&s_meta_lock);
+        taskENTER_CRITICAL(&s_meta_page_lock);
+        s_meta_page_valid = false;
+        s_meta_page_n = 0;
+        taskEXIT_CRITICAL(&s_meta_page_lock);
+        s_pool_revision.fetch_add(1, std::memory_order_relaxed);
+        s_cache_revision.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+bool inter_mcu_get_project_status(WaveX::Protocol::ProjectStatusMessage* out) {
+    if (!out)
+        return false;
+    taskENTER_CRITICAL(&s_project_lock);
+    const bool valid = s_project_valid;
+    if (valid)
+        *out = s_project_status;
+    taskEXIT_CRITICAL(&s_project_lock);
     return valid;
 }

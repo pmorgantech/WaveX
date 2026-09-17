@@ -6,6 +6,7 @@
 #include "fatfs_mock.h"
 
 #include "audio/sample_pool_stage.hpp"
+#include "storage/project_session.hpp"
 #include "wxi/wxi.hpp"
 #include <array>
 #include <cstring>
@@ -38,7 +39,7 @@ using namespace WaveX::Protocol;
 
 // Loader admission includes the production 8 MiB reserve. Keep real limits
 // rather than weakening them for the tests.
-alignas(32) std::array<uint8_t, 12 * 1024 * 1024> arena;
+alignas(32) std::array<uint8_t, 24 * 1024 * 1024> arena;
 std::array<SamplePool::Record, WAVEX_SAMPLE_POOL_CAPACITY> records;
 
 std::vector<uint8_t> PcmWave(uint32_t data_bytes = 8, uint16_t channels = 1) {
@@ -1407,5 +1408,245 @@ TEST_F(SfzLoaderTest, ProjectCloseFailureAndCancellationDoNotReleaseBorrowedSamp
     EXPECT_TRUE(SfzLoader::TrackLoaded(0));
     EXPECT_FALSE(SfzLoader::TrackLoaded(1));
     EXPECT_FALSE(SfzLoader::TrackLoaded(2));
+}
+}  // namespace
+
+namespace {
+bool project_stop_allowed = true;
+unsigned project_published = 0;
+bool StopProjectTestVoices() {
+    return project_stop_allowed;
+}
+void PublishProjectTest() {
+    ++project_published;
+}
+void RunProject(WaveX::Storage::ProjectSession& session,
+                WaveX::Sequencer::PatternExchange& exchange,
+                WaveX::Sequencer::SequencerTransport& transport) {
+    for (unsigned i = 0; i < 40000 && session.Busy(); ++i) {
+        exchange.Process(transport);
+        session.Pump();
+    }
+    EXPECT_FALSE(session.Busy());
+}
+ProjectOpMessage ProjectRequest(uint32_t id, uint8_t op, const char* name = "") {
+    ProjectOpMessage request;
+    request.request_id = id;
+    request.op = op;
+    WaveX::Protocol::detail::CopyWireString(request.name, sizeof(request.name), name);
+    return request;
+}
+TEST_F(SfzLoaderTest, ProjectSessionSaveNewRecallPreservesEditsMixAndHiddenSteps) {
+    project_stop_allowed = true;
+    project_published = 0;
+    ASSERT_TRUE(Load(0));
+    const auto sample = SampleId("/kits/a.wav");
+    pool_.Find(sample)->payload.meta.gain_db_x10 = -90;
+    pool_.Find(sample)->payload.meta.channel_mode = SAMPLE_CH_MONO_SUM;
+    auto filter = *SfzLoader::GetInstrumentFilter(0);
+    filter.cutoff_hz = 1700;
+    ASSERT_TRUE(SfzLoader::SetInstrumentFilter(0, filter));
+    ASSERT_TRUE(SfzLoader::SetTrackMidiIn(0, 16));
+    WaveX::Sequencer::PatternExchange exchange;
+    WaveX::Sequencer::SequencerTransport transport;
+    transport.Init(48000, 48);
+    transport.ApplyTransport(
+        {SEQ_TRANSPORT_PLAY, SEQ_CLOCK_INTERNAL, SEQ_INPUT_STEP_RECORD, 1, 14325, 0});
+    transport.ApplyPatternOp({SEQ_OP_SET_STEP_NOTE, 15, 63, 120, 0, 0});
+    MixerControlHandoff mixer;
+    mixer.Init();
+    mixer.Update({MIX_OP_SET_GAIN, 0, 5300});
+    mixer.Update({MIX_OP_SET_PAN, 15, 65535});
+    mixer.Update({MIX_OP_SET_MUTE, 15, 1});
+    mixer.Update({MIX_OP_SET_MASTER, 0, 5700});
+    mixer.Update({MIX_OP_SET_SOLO_MASK, 0, 1});
+    WaveX::Storage::ProjectSession session(memory_,
+                                           pool_,
+                                           exchange,
+                                           mixer,
+                                           io_.data(),
+                                           io_.size(),
+                                           {StopProjectTestVoices, PublishProjectTest});
+    const auto save = ProjectRequest(1000, PROJECT_SAVE_COPY, "Night");
+    ASSERT_TRUE(session.Request(save));
+    EXPECT_FALSE(session.Request(save));
+    EXPECT_FALSE(session.Request(ProjectRequest(1001, PROJECT_GET)));
+    RunProject(session, exchange, transport);
+    ASSERT_EQ(session.Status().error, PROJECT_OK);
+    EXPECT_EQ(session.Status().completed_request_id, 1000u);
+    EXPECT_EQ(session.Status().progress, 100);
+    EXPECT_TRUE(transport.IsPlaying());
+    EXPECT_EQ(project_published, 0u);
+    EXPECT_EQ(mixer.Pending().solo_mask, 1);
+    EXPECT_STREQ(SfzLoader::TrackName(0), "kit.sfz");
+    ASSERT_NE(MockFatFS::Instance().GetFile("0:/wavex/projects/Night.wxp"), nullptr);
+    ASSERT_NE(MockFatFS::Instance().GetFile("0:/wavex/projects/Night/track01.wxi"), nullptr);
+    EXPECT_EQ(session.Current()->patterns[0].pattern.tracks[15].steps[63].note, 120);
+    ASSERT_TRUE(session.Request(ProjectRequest(1002, PROJECT_NEW)));
+    RunProject(session, exchange, transport);
+    ASSERT_EQ(session.Status().error, PROJECT_OK);
+    EXPECT_FALSE(SfzLoader::TrackLoaded(0));
+    EXPECT_FALSE(transport.IsPlaying());
+    EXPECT_EQ(pool_.Count(), 0u);
+    EXPECT_EQ(mixer.Pending().solo_mask, 0);
+    ASSERT_TRUE(session.Request(ProjectRequest(1003, PROJECT_LOAD, "Night")));
+    RunProject(session, exchange, transport);
+    ASSERT_EQ(session.Status().error, PROJECT_OK);
+    EXPECT_TRUE(SfzLoader::TrackLoaded(0));
+    EXPECT_FLOAT_EQ(SfzLoader::GetInstrumentFilter(0)->cutoff_hz, 1700);
+    EXPECT_EQ(SfzLoader::TrackMidiIn(0), 16);
+    ASSERT_NE(pool_.FindByPath("/kits/a.wav"), nullptr);
+    EXPECT_EQ(pool_.FindByPath("/kits/a.wav")->payload.meta.gain_db_x10, -90);
+    EXPECT_EQ(pool_.FindByPath("/kits/a.wav")->payload.meta.channel_mode, SAMPLE_CH_MONO_SUM);
+    EXPECT_DOUBLE_EQ(transport.TempoBpm(), 143.25);
+    EXPECT_EQ(transport.InputMode(), SEQ_INPUT_STEP_RECORD);
+    EXPECT_EQ(transport.pattern().tracks[15].steps[63].note, 120);
+    EXPECT_FALSE(transport.IsPlaying());
+    EXPECT_EQ(mixer.Read({777, 0}).gain, 5300);
+    EXPECT_EQ(mixer.Read({778, MIX_MASTER_TRACK}).gain, 5700);
+    EXPECT_TRUE(mixer.Pending().tracks[15].mute);
+    EXPECT_FLOAT_EQ(mixer.Pending().tracks[15].pan_offset, 1);
+}
+TEST_F(SfzLoaderTest, ProjectSessionFailuresKeepTheLiveSessionAndCleanOwnedFiles) {
+    project_stop_allowed = true;
+    ASSERT_TRUE(Load(0));
+    ASSERT_TRUE(Load(1));
+    WaveX::Sequencer::PatternExchange exchange;
+    WaveX::Sequencer::SequencerTransport transport;
+    transport.Init(48000, 48);
+    MixerControlHandoff mixer;
+    mixer.Init();
+    WaveX::Storage::ProjectSession session(memory_,
+                                           pool_,
+                                           exchange,
+                                           mixer,
+                                           io_.data(),
+                                           io_.size(),
+                                           {StopProjectTestVoices, PublishProjectTest});
+    ASSERT_TRUE(session.Request(ProjectRequest(2000, PROJECT_SAVE_COPY, "Recall")));
+    RunProject(session, exchange, transport);
+    ASSERT_EQ(session.Status().error, PROJECT_OK);
+    ASSERT_TRUE(MockFatFS::Instance().RemoveFile("0:/wavex/projects/Recall/track02.wxi"));
+    auto filter = *SfzLoader::GetInstrumentFilter(0);
+    filter.cutoff_hz = 777;
+    SfzLoader::SetInstrumentFilter(0, filter);
+    const auto id = SampleId("/kits/a.wav");
+    wxsamp_stats_t before{}, after{};
+    memory_.stats(&before);
+    ASSERT_TRUE(session.Request(ProjectRequest(2001, PROJECT_LOAD, "Recall")));
+    RunProject(session, exchange, transport);
+    EXPECT_EQ(session.Status().error, PROJECT_DEPENDENCY);
+    EXPECT_EQ(session.Status().failed_track, 1);
+    EXPECT_FLOAT_EQ(SfzLoader::GetInstrumentFilter(0)->cutoff_hz, 777);
+    EXPECT_EQ(SampleId("/kits/a.wav"), id);
+    EXPECT_STREQ(session.Status().name, "Recall");
+    memory_.stats(&after);
+    EXPECT_EQ(after.in_use_bytes, before.in_use_bytes);
+    EXPECT_FALSE(SfzLoader::ProjectLoadActive());
+    MockFatFS::Instance().free_clusters = 0;
+    ASSERT_TRUE(session.Request(ProjectRequest(2002, PROJECT_SAVE_COPY, "Full")));
+    RunProject(session, exchange, transport);
+    EXPECT_EQ(session.Status().error, PROJECT_NO_SPACE);
+    EXPECT_EQ(MockFatFS::Instance().GetFile("0:/wavex/projects/Full.wxp"), nullptr);
+    EXPECT_EQ(MockFatFS::Instance().GetDirectory("0:/wavex/projects/Full"), nullptr);
+    MockFatFS::Instance().free_clusters = 1024 * 1024;
+    MockFatFS::Instance().write_limit = 100;
+    ASSERT_TRUE(session.Request(ProjectRequest(2003, PROJECT_SAVE_COPY, "Broken")));
+    RunProject(session, exchange, transport);
+    EXPECT_NE(session.Status().error, PROJECT_OK);
+    EXPECT_EQ(MockFatFS::Instance().GetFile("0:/wavex/projects/Broken.wxp"), nullptr);
+    EXPECT_EQ(MockFatFS::Instance().GetFile("0:/wavex/projects/Broken/track01.wxi"), nullptr);
+    EXPECT_EQ(MockFatFS::Instance().GetDirectory("0:/wavex/projects/Broken"), nullptr);
+    EXPECT_EQ(SampleId("/kits/a.wav"), id);
+}
+TEST_F(SfzLoaderTest, ProjectSessionRequiresAudioAcknowledgementAndRejectsCompetingJobs) {
+    project_stop_allowed = false;
+    ASSERT_TRUE(Load(0));
+    WaveX::Sequencer::PatternExchange exchange;
+    WaveX::Sequencer::SequencerTransport transport;
+    transport.Init(48000, 48);
+    MixerControlHandoff mixer;
+    mixer.Init();
+    WaveX::Storage::ProjectSession session(memory_,
+                                           pool_,
+                                           exchange,
+                                           mixer,
+                                           io_.data(),
+                                           io_.size(),
+                                           {StopProjectTestVoices, PublishProjectTest});
+    EXPECT_FALSE(session.Request(ProjectRequest(3000, PROJECT_NEW), true));
+    EXPECT_EQ(session.Status().error, PROJECT_BUSY);
+    ASSERT_TRUE(session.Request(ProjectRequest(3001, PROJECT_NEW)));
+    EXPECT_FALSE(session.Request(ProjectRequest(3002, PROJECT_SAVE_COPY, "Concurrent")));
+    EXPECT_EQ(session.Status().completed_request_id, 3002u);
+    EXPECT_EQ(session.Status().active_request_id, 3001u);
+    RunProject(session, exchange, transport);
+    EXPECT_EQ(session.Status().error, PROJECT_AUDIO_BUSY);
+    EXPECT_TRUE(SfzLoader::TrackLoaded(0));
+    EXPECT_EQ(session.Current(), nullptr);
+    EXPECT_FALSE(session.Request(ProjectRequest(3001, PROJECT_NEW)));
+    project_stop_allowed = true;
+}
+}  // namespace
+
+namespace {
+TEST_F(SfzLoaderTest, ProjectSessionRetainsInactiveSlotsAndRefusesNoMemoryOrReplacedWave) {
+    project_stop_allowed = true;
+    ASSERT_TRUE(Load(0));
+    WaveX::Sequencer::PatternExchange exchange;
+    WaveX::Sequencer::SequencerTransport transport;
+    transport.Init(48000, 48);
+    MixerControlHandoff mixer;
+    mixer.Init();
+    WaveX::Storage::ProjectSession session(memory_,
+                                           pool_,
+                                           exchange,
+                                           mixer,
+                                           io_.data(),
+                                           io_.size(),
+                                           {StopProjectTestVoices, PublishProjectTest});
+    ASSERT_TRUE(session.Request(ProjectRequest(4000, PROJECT_SAVE_COPY, "Base")));
+    RunProject(session, exchange, transport);
+    ASSERT_EQ(session.Status().error, PROJECT_OK);
+    auto expanded = std::make_unique<WaveX::Sequencer::Project>(*session.Current());
+    std::strcpy(expanded->name, "With songs");
+    expanded->patterns[127].used = true;
+    std::strcpy(expanded->patterns[127].name, "Ending");
+    expanded->patterns[127].pattern.tracks[15].steps[63].note = 101;
+    expanded->songs[15].used = true;
+    std::strcpy(expanded->songs[15].name, "Set");
+    expanded->songs[15].length = 1;
+    expanded->songs[15].entries[0] = {127, 8};
+    WaveX::Storage::ProjectFileJob file;
+    ASSERT_TRUE(file.SaveCopy(*expanded, 4001));
+    for (unsigned i = 0; i < 40000 && file.Busy(); ++i)
+        file.Pump();
+    ASSERT_EQ(file.Status(), WaveX::Storage::ProjectFileJob::Result::Saved);
+    ASSERT_TRUE(session.Request(ProjectRequest(4002, PROJECT_LOAD, "With songs")));
+    RunProject(session, exchange, transport);
+    ASSERT_EQ(session.Status().error, PROJECT_OK);
+    ASSERT_TRUE(session.Request(ProjectRequest(4003, PROJECT_SAVE_COPY, "Keep songs")));
+    RunProject(session, exchange, transport);
+    ASSERT_EQ(session.Status().error, PROJECT_OK);
+    EXPECT_TRUE(session.Current()->patterns[127].used);
+    EXPECT_EQ(session.Current()->patterns[127].pattern.tracks[15].steps[63].note, 101);
+    EXPECT_EQ(session.Current()->songs[15].entries[0].pattern, 127);
+    EXPECT_EQ(session.Current()->songs[15].entries[0].repeats, 8);
+    wxsamp_stats_t stats;
+    memory_.stats(&stats);
+    wxsamp_t occupied{};
+    ASSERT_TRUE(memory_.alloc(stats.largest_free_bytes, &occupied));
+    ASSERT_TRUE(session.Request(ProjectRequest(4004, PROJECT_LOAD, "With songs")));
+    RunProject(session, exchange, transport);
+    EXPECT_EQ(session.Status().error, PROJECT_NO_MEMORY);
+    EXPECT_STREQ(session.Status().name, "Keep songs");
+    EXPECT_TRUE(SfzLoader::TrackLoaded(0));
+    memory_.release(&occupied);
+    MockFatFS::Instance().AddFile("/kits/a.wav", PcmWave(200));
+    ASSERT_TRUE(session.Request(ProjectRequest(4005, PROJECT_LOAD, "With songs")));
+    RunProject(session, exchange, transport);
+    EXPECT_EQ(session.Status().error, PROJECT_DEPENDENCY);
+    EXPECT_EQ(pool_.FindByPath("/kits/a.wav")->payload.meta.total_frames, 4u);
+    EXPECT_STREQ(session.Status().name, "Keep songs");
 }
 }  // namespace

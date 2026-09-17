@@ -7,6 +7,7 @@
 #include "inter_mcu.h"
 #include "ui/current_track.h"
 #include "ui/ui_navigator.h"
+#include "ui/ui_project_files_page.h"
 #include "ui/ui_sample_browser.h"
 
 #include "audio/track_mix.hpp"
@@ -58,7 +59,23 @@ void UITrackPage::onEnter(lv_obj_t* parent) {
     heading_ = lv_label_create(root_);
     ui_theme_apply_label_style(heading_, true);
     lv_obj_set_pos(heading_, UI_MARGIN_X, 232);
-    lv_obj_set_width(heading_, UI_CONTENT_WIDTH - 2 * UI_MARGIN_X);
+    lv_obj_set_width(heading_,
+                     UI_CONTENT_WIDTH - 2 * UI_MARGIN_X - UI_PROJECT_FILES_BUTTON_W - UI_GUTTER);
+    auto* files = lv_button_create(root_);
+    ui_theme_apply_button_style(files, false);
+    lv_obj_set_pos(files,
+                   UI_CONTENT_WIDTH - UI_MARGIN_X - UI_PROJECT_FILES_BUTTON_W,
+                   UI_PROJECT_FILES_BUTTON_Y);
+    lv_obj_set_size(files, UI_PROJECT_FILES_BUTTON_W, UI_PROJECT_FILES_BUTTON_H);
+    auto* files_label = lv_label_create(files);
+    ui_theme_apply_label_style(files_label, false);
+    lv_label_set_text(files_label, "Project files");
+    lv_obj_center(files_label);
+    lv_obj_add_event_cb(
+        files,
+        [](lv_event_t*) { UINavigator::instance().push(createProjectFilesPage()); },
+        LV_EVENT_CLICKED,
+        nullptr);
     lv_label_set_long_mode(heading_, LV_LABEL_LONG_WRAP);
     const int tile_width = (UI_CONTENT_WIDTH - 2 * UI_MARGIN_X - 3 * UI_GUTTER) / 4;
     const int tile_y = UI_CONTENT_HEIGHT * 3 / 5;

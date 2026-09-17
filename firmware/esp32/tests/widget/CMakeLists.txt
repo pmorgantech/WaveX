@@ -107,11 +107,16 @@ foreach(test_source IN LISTS widget_tests)
             ${PARAMETER_WIDGET_FONTS})
     endif()
 
-    if(test_name STREQUAL "mixer_page_test")
+    if(test_name STREQUAL "mixer_page_test" OR test_name STREQUAL "project_files_page_test")
         file(GLOB MIXER_FONTS
             ${CMAKE_CURRENT_SOURCE_DIR}/../../components/ui/fonts/wavex_mono_*.c)
+        if(test_name STREQUAL "mixer_page_test")
+            set(WAVEX_PAGE_SOURCE ui_mixer_page.cpp)
+        else()
+            set(WAVEX_PAGE_SOURCE ui_project_files_page.cpp)
+        endif()
         target_sources(${test_name} PRIVATE
-            ${CMAKE_CURRENT_SOURCE_DIR}/../../components/ui/pages/ui_mixer_page.cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/../../components/ui/pages/${WAVEX_PAGE_SOURCE}
             ${CMAKE_CURRENT_SOURCE_DIR}/../../components/ui/src/ui_navigator.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/../../components/ui/src/ui_softkey_bar.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/../../components/ui/src/current_track.cpp

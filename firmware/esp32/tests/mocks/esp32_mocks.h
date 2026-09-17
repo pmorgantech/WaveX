@@ -121,6 +121,8 @@ struct InterMcuCapture {
     uint8_t sample_status_channels = 0;
     uint32_t sample_status_frames = 0;
 
+    int project_status_calls = 0;
+    WaveX::Protocol::ProjectStatusMessage project_status;
     int mix_meter_calls = 0;
     WaveX::Protocol::MixMetersMessage mix_meters;
     int track_state_calls = 0;

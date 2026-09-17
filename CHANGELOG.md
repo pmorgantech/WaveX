@@ -13,6 +13,14 @@ versioning and release process.
 
 ### Added
 
+- Project files now provides confirmed Load/New and new-copy Save, backed by
+  one foreground session transaction. Saves include quiet Instrument copies,
+  referenced Sample edits, mixer/Track settings and retained Patterns/Songs.
+  Private loading preserves the old session on admission/I/O failure; success
+  installs stopped state and clears transient Solo. Long jobs/reconnects poll
+  retained completion without replaying operations. Hardware recovery, audible
+  recall and timing checks are open in HV-007.
+
 - Project format 1.1 retains path-keyed Sample editor markers, gain, fades and
   channel mode with dependency dimension checks before candidate restore.
   Version 1.0 remains readable; device transaction wiring remains in progress.

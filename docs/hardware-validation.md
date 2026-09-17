@@ -16,6 +16,7 @@ this document owns the runnable checks and their validation status.
 - [HV-004 — Stereo and Mono physical checks](#hv-004--stereo-and-mono-physical-checks)
 - [HV-005 — Phase 2 timing and soak gate](#hv-005--phase-2-timing-and-soak-gate)
 - [HV-006 — Mixer controls and master](#hv-006--mixer-controls-and-master)
+- [HV-007 — Project save, load and recovery](#hv-007--project-save-load-and-recovery)
 - [Recording a validation session](#recording-a-validation-session)
 - [Related](#related)
 
@@ -62,8 +63,8 @@ Use Passed or Failed after recording the corresponding evidence.
 | HV-003 | Instrument save/recall admission | Pending | Host/compile verified; large and admitted WAV fixtures needed |
 | HV-004 | Stereo/Mono physical follow-up | Partial | Switching reported working by user, 2026-09-16; remaining checks below |
 | HV-005 | Phase 2 timing and soak | Blocked (full gate) | Timing/soak can be run separately; complete gate still needs roadmap prerequisites |
-
 | HV-006 | Mixer controls, master and callback timing | Pending | Host/compile checks; physical audio and timing unrun |
+| HV-007 | Project Save/Load/New and recovery | Pending | Host/compile checks; disposable card and two-board session needed |
 
 ## HV-001 — SD card formatting
 
@@ -214,6 +215,56 @@ headphones and scope/audio capture; DWT and underrun telemetry available.
 
 **Blocker:** Hardware session pending. Record date, image hashes, measurements
 and capture/log evidence here; do not infer physical success from host tests.
+
+## HV-007 — Project save, load and recovery
+
+**Introduced:** Project session transaction and Project files UI.
+**Gate:** [Phase 2 persistence](roadmap.md#phase-2--groovebox-core-sequencer-and-pads),
+[Project persistence](features/project-persistence.md).
+**Setup:** Two boards, an admitted mono/stereo sample kit, a disposable or
+backed-up card with spare capacity, serial logs and audio/DWT capture tools.
+Use distinct Project names for each run; WAV dependencies stay at their card
+paths. Preserve earlier files when testing failure/recovery.
+
+- [ ] Build a session with multiple Tracks, edited filter/envelopes/Mono,
+  MIDI routing, Track level/pan/manual mutes, master gain, tempo/input settings,
+  groove, hidden steps and locks. Edit a referenced sample's trim/loop, gain,
+  fades and channel mode. Save copy from Project > Project files.
+  **Pass:** Resident playback continues, UI remains responsive, success occurs
+  only after the new `.wxp` and all referenced WXI copies exist. Solo and live
+  editor Revert state remain unchanged by Save.
+- [ ] Cancel both Load and New confirmations, then confirm New and Load the
+  saved name. Repeat after rebooting both boards.
+  **Pass:** Cancel changes nothing; New starts empty/stopped; recall restores
+  the saved audible settings, hidden steps and metadata. Manual mutes return,
+  Solo clears and playback stays stopped until explicitly started.
+- [ ] Keep an existing Project and attempt another copy under the same name;
+  then use a nearly full card and an abandoned same-name asset directory.
+  **Pass:** Clear failure, no overwritten files or current-session changes.
+  Free space/use a new name and verify a successful retry.
+- [ ] Remove a later Track's WXI/WAV dependency, change a WAV's dimensions,
+  and repeat with too little free sample RAM to stage the whole session.
+  **Pass:** Load fails before replacement, all old Tracks/PCM/edits/mutes remain
+  usable, memory returns to the pre-job level and playback is left stopped.
+- [ ] On the disposable card, interrupt power during Instrument-copy writing,
+  Project writing and publication; reboot and load the previous Project.
+  **Pass:** The earlier Project still loads. Incomplete new files never install
+  partial state; orphan files are reported/preserved and are not overwritten.
+  Record the interruption point and card/filesystem state for each case.
+- [ ] Run a long load, leave/re-enter Project files and disconnect/reconnect
+  the frontend link. **Pass:** Status polling never repeats a mutation,
+  stale readback disables actions and a completed Load/New clears stale Solo
+  and Sample editor metadata when returning to Mixer/Sequencer/Sample views.
+- [ ] Measure DWT callback/control average, p95 and maximum cycles against the
+  preceding image while saving resident playback and while recalling large
+  Projects. Record foreground responsiveness during document construction,
+  UART errors/queue pressure, peak RAM usage and underruns. **Pass:** No audio
+  underruns and timing satisfies the performance policy; complete HV-005's
+  separate soak gate. Do not infer timing from host test duration.
+
+**Blocker/result:** Physical session not run. Record tested image identities,
+date and evidence below; no reboot/durability/timing result is implied by the
+host integration and widget tests.
 
 ## Recording a validation session
 

@@ -316,6 +316,7 @@ class Decoder {
                 type != kFileType || Wxcf::VersionMajor(version) != 1 || length > kMaxFileBytes)
                 return Fail(Result::Invalid);
             needs_samples_ = version >= 0x0101;
+            p_.sample_edits_present = needs_samples_;
             started_ = true;
             return result_;
         }
@@ -408,6 +409,7 @@ class Decoder {
             if (p_.sample_count > kMaxProjectSamples)
                 return Fail(Result::Invalid);
             samples_head_ = true;
+            p_.sample_edits_present = true;
         } else if (h.chunk_id >= 0x1000 && h.chunk_id < 0x1000 + kMaxProjectSamples) {
             // Ordered, contiguous records make completeness and duplicate detection
             // independent of a large MCU-side bitmap. Paths remain the identity.

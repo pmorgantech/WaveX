@@ -49,9 +49,9 @@ struct ProjectPattern {
     char name[24]{};
     Pattern pattern;
 };
-// A file transaction's private workspace, NOT an audio-domain object or an
-// always-resident device global. Device adapters must reserve foreground
-// scratch explicitly; never instantiate this (~3 MiB) on either MCU's stack.
+// Foreground document, NOT an audio-domain object. The session owner reserves
+// retained and candidate documents through the sample allocator; never
+// instantiate this (~3.5 MiB) on either MCU's stack.
 // Playback retains one prepared Pattern. Song execution is a separate owner.
 struct Project {
     char name[24]{};
@@ -63,6 +63,7 @@ struct Project {
     uint8_t input_mode = Protocol::SEQ_INPUT_PLAY;
     bool quantize = false;
     float master_gain = 1;
+    bool sample_edits_present = true;  // decoder provenance; not a native-layout file field
     uint16_t sample_count = 0;
     ProjectSample samples[kMaxProjectSamples]{};
     ProjectTrack tracks[kMaxTracks]{};

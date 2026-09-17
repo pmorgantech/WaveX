@@ -19,6 +19,7 @@ enum class SequencerCommandType : uint8_t {
     PatternRequest,
     MidiClock,
     MidiCc,
+    StopOnly,  // stop without importing potentially stale frontend session settings
 };
 
 struct SequencerCommand {

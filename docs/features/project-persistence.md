@@ -1,18 +1,19 @@
 # Project persistence
 
-**Status:** Project data model and cooperative WXCF codec are host-tested.
-The cooperative SD file job and isolated Instrument/Pool load staging are
-implemented and host-testable; session capture, restore orchestration,
-project selection and song playback are not connected
-yet. This is the persistence foundation for Phase 2, not a completed save/load
-workflow or power-loss guarantee.
+**Status:** Project Save copy, Load and New are connected to the Project files
+screen and foreground session owner. Both firmware images compile; host tests
+exercise the real codec, file job, loader, session boundary and UI lifecycle.
+Reboot, card interruption, memory-pressure recovery and callback timing remain
+open in [HV-007](../hardware-validation.md#hv-007--project-save-load-and-recovery).
+Pattern/Song management and Song execution remain separate Phase 2 work.
 
 ## Contents
 
 - [Ownership and contents](#ownership-and-contents)
 - [File transaction](#file-transaction)
 - [Isolated load staging](#isolated-load-staging)
-- [Remaining device work](#remaining-device-work)
+- [Session workflow](#session-workflow)
+- [Remaining work](#remaining-work)
 - [Validation](#validation)
 - [Related](#related)
 
@@ -41,9 +42,8 @@ its runtime ID, generation and residency remain intact. These dimension checks
 do not detect replacement PCM with identical dimensions. Ordered records and
 an explicit count detect missing/duplicate entries without a large decoder
 bitmap. This is Project-scoped metadata, not a global sidecar that changes the
-same WAV in every Project. The coordinator must capture every referenced
-sample and restore edits before preparing voice maps; the adapters alone do
-not make the current Sample Edit screen persistent.
+same WAV in every Project. The coordinator captures every referenced sample and restores edits before
+preparing voice maps. Standalone Sample sidecar saving remains separate.
 
 Pattern swing remains explicit (50–75), matching the current scheduler.
 The future Song-default swing inheritance described in the target model has
@@ -69,8 +69,10 @@ must name populated Pattern slots before the decoder returns Done.
 
 The caller must own a private transaction workspace. The complete Project
 occupies roughly 3.5 MiB: never construct it on either MCU's stack or make it
-callback-visible. Device integration must reserve foreground scratch
-exclusively and release it when the transaction ends. Playback retains its
+callback-visible. The device reserves retained and candidate documents through the sample
+allocator; they count against available sample memory. The retained document
+keeps inactive Pattern and Song slots between transactions. Candidate storage
+is released after failure or promoted only on success. Playback retains its
 current prepared Pattern while decoding takes place.
 
 A failed decode may have changed the private workspace. Publish nothing until
@@ -89,8 +91,8 @@ caller-owned private scratch and report success only after a checked close;
 they never install runtime state. Each pump advances at most eight codec
 records, and FatFs adapters use sub-sector transfers through an AXI SRAM FIL.
 The session owner must keep save input immutable for both encoding passes and
-must retain its scratch until completion. This adapter does not yet capture
-Instruments or provide a user-visible Project save/load operation.
+must retain its scratch until completion. The session owner composes this adapter with quiet Instrument snapshots and
+private restore staging.
 
 ## Isolated load staging
 
@@ -112,37 +114,74 @@ retained. Ordinary loader pumping defers throughout the staging lease.
 The session coordinator must reserve candidate storage and freeze live edits
 for the lease. Staging does not reclaim the current session's memory for new
 samples: insufficient headroom must fail while retaining the old session.
-These primitives are not yet a user-visible or automatically orchestrated
-Project load operation.
+The session owner now orchestrates these primitives under the Project transaction lease.
 
-## Remaining device work
+## Session workflow
 
-1. Reserve scratch and coordinate Pattern capture, Track edits and Instrument
-   export under one foreground transaction owner.
-2. Connect Instrument snapshots to the session transaction. The loader's
-   `BeginProjectSnapshot` now exports a Project-owned WXI without renaming the
-   live Instrument, changing its editor revision, or consuming its Revert
-   point. Its parent directory must be owned/created by the session job. It
-   checks free space and on-card WAV dependencies, preserves existing files,
-   and returns an internal result without an unrelated editor completion.
-   References alone do not preserve an edited live Instrument. Apply the same on-card WAV
-   format and per-sample admission preflight as
-   [Instrument Save copy](instrument-model.md#5-persistence) before publishing
-   snapshots; direct-load Pool residency does not prove recall admission.
-3. Connect isolated Instrument/Pool staging to the session coordinator,
-   including the audio stop fence, prepared-map publication and Bank-reference
-   preflight. Report failures without committing a partial Performance.
-4. Connect SD save/load, authoritative status and touchscreen selection.
-5. Verify reboot restore and interrupted writes on hardware; integrate Song
-   selection/playback separately from file decoding.
+Open **Project > Project files**. Enter a name without an extension and choose
+Save copy or Load. Names follow the same bounded character rules as Pattern
+files. Load and New ask for confirmation before replacing unsaved state.
+Status reads correlate to requests and retain completion; reconnects and long
+jobs never automatically resend a mutation. Stale readback disables actions.
+
+`storage/project_session.cpp` is the single foreground owner. During a job,
+new notes, edits and competing SD operations are gated. Existing resident
+playback continues during Save; transport Stop, MIDI clock ticks/stops and note releases remain
+available. Streaming audition stops to give the file job the card. A failed
+Load leaves the previous session intact with playback stopped.
+
+Save captures the callback-owned Pattern and transport settings, accepted
+mixer targets and all foreground Track settings. It exports quiet WXI copies
+into a newly owned `wavex/projects/<name>/` directory and snapshots edits for
+every Track-referenced sample. WAV audio stays at its existing card path;
+this is not a self-contained audio collection or a PCM render. Free-space
+admission applies to directory creation, every WXI and the final Project file.
+The `.wxp` publishes last, after checked writes/closes. Existing files,
+directories and abandoned temporaries are never overwritten. A failed save
+removes only its owned assets; a failed cleanup reports I/O failure and may
+leave an orphan directory, which a later save must not overwrite.
+
+Load decodes a private document, validates a referenced Bank's index, then
+stages Instruments and PCM while retaining the live Pool and Revert points.
+File dimensions must match borrowed PCM as well as saved sample edits.
+Missing dependencies, malformed metadata, insufficient memory or a failed
+voice-stop acknowledgement abort before live replacement. The callback first
+acknowledges transport pause without changing its settings. After all staging
+succeeds, the owner commits the Pool/Tracks, publishes voice maps and mixer
+settings, and awaits callback installation of the active Pattern and transport
+settings before reporting completion. New uses the same stopped boundary with
+empty Tracks/Patterns/Songs and default settings. Explicitly pinned Pool
+samples remain resident; unreferenced, unpinned old PCM is retired.
+
+Solo is transient and cleared on successful Load/New; manual mutes are saved.
+The frontend invalidates sample metadata caches at completion, since a retained
+PCM ID can have different saved markers. Page entry reads retained Project
+status and does not replay a stale Solo mask. Save leaves editor names, Revert
+points and Solo unchanged. Inactive Pattern/Song slots remain in the retained
+Project and survive a subsequent save; only the active Pattern is currently
+editable/playable through the existing sequencer workflow.
+
+## Remaining work
+
+- Run HV-007: real-card durability/reboot, interrupted saves, memory-pressure
+  rollback, panel interaction and DWT measurements. Host/compile results do
+  not establish a power-loss guarantee or a callback performance improvement.
+- Add explicit Pattern management, queued transitions and Song editing/playback
+  after defining the roadmap's Daisy-clock transition and edit rules.
+- Bank selection/Program Change playback, portable audio collection and missing
+  asset repair follow their own roadmap designs. Project recall validates and
+  retains the Bank reference; it does not add Bank runtime execution.
 
 ## Validation
 
 Host tests cover sparse and full-capacity round trips, hidden steps and locks,
 Track mix/routing, Song references, bounded I/O, malformed/truncated files,
 unknown chunks, duplicate chunks, future major versions and write failures.
-They do not establish SD durability, atomic session replacement, audible
-continuity or power-loss recovery.
+They do not establish physical SD durability, audible continuity or power-loss
+recovery. Host session tests cover commit/rollback ordering, mixer/settings and
+hidden-step recall, missing later Instruments, full cards, write failure and
+missing voice-stop acknowledgement. Real LVGL tests cover confirmation,
+long-running jobs, reconnects, stale state and timer retirement.
 
 Loader host tests also verify Project snapshots retain the live name, undo,
 revision and Sample Pool ownership, restore the edited sound into another

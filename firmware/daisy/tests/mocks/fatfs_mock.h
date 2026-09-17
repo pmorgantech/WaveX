@@ -141,6 +141,22 @@ class MockFatFS {
         return it == files_.end() ? nullptr : &it->second;
     }
     bool RemoveFile(const char* path) { return files_.erase(path) != 0; }
+    FRESULT RemoveDirectory(const char* path) {
+        auto dir = directories_.find(path);
+        if (dir == directories_.end())
+            return FR_NO_FILE;
+        const std::string prefix = std::string(path) + "/";
+        for (const auto& entry: files_)
+            if (entry.first.compare(0, prefix.size(), prefix) == 0)
+                return FR_DENIED;
+        for (const auto& entry: directories_)
+            if (entry.first.compare(0, prefix.size(), prefix) == 0)
+                return FR_DENIED;
+        if (!dir->second.empty())
+            return FR_DENIED;
+        directories_.erase(dir);
+        return FR_OK;
+    }
     // --- Failure injection -------------------------------------------------
     // f_opendir(): force the next (and every subsequent) open to fail with
     // `r` until Reset(). Models a dead/removed card rather than a missing

@@ -186,6 +186,12 @@ void GetSampleMemStatus(WaveX::Protocol::SampleMemStatusMessage& out) {
     WaveX::Test::GetDispatchRecord().get_sample_mem_status_calls++;
 }
 
+bool ProjectBusy() {
+    return WaveX::Test::GetDispatchRecord().project_busy;
+}
+void OnProjectOp(const WaveX::Protocol::ProjectOpMessage& m) {
+    WaveX::Test::GetDispatchRecord().project_ops.push_back(m);
+}
 void OnSeqFileOp(const WaveX::Protocol::SeqFileOpMessage& m) {
     WaveX::Test::GetDispatchRecord().seq_file_ops.push_back(m);
 }

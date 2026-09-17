@@ -80,3 +80,35 @@ TEST(PatternExchangeTest, CaptureDefersRowsOnTriggerBlocksButInstallDoesNotWait)
     EXPECT_TRUE(exchange.Process(transport, false));
     EXPECT_EQ(exchange.state(), PatternExchange::State::Installed);
 }
+
+TEST(PatternExchangeTest, ProjectPausePreservesSettingsAndSessionInstallRestoresThem) {
+    SequencerTransport transport;
+    transport.Init(48000, 48);
+    transport.ApplyTransport(
+        {SEQ_TRANSPORT_PLAY, SEQ_CLOCK_MIDI, SEQ_INPUT_STEP_RECORD, 1, 15725, 0});
+    PatternExchange exchange;
+    ASSERT_TRUE(exchange.Pause());
+    EXPECT_TRUE(exchange.Process(transport));
+    EXPECT_FALSE(transport.IsArmed());
+    EXPECT_FALSE(transport.IsPlaying());
+    EXPECT_DOUBLE_EQ(transport.TempoBpm(), 157.25);
+    exchange.Retire();
+    ASSERT_TRUE(exchange.Capture());
+    for (int i = 0; i < 16; ++i)
+        exchange.Process(transport);
+    const auto saved = exchange.capturedSettings();
+    EXPECT_EQ(saved.tempo_bpm_x100, 15725);
+    EXPECT_EQ(saved.clock_source, SEQ_CLOCK_MIDI);
+    EXPECT_EQ(saved.input_mode, SEQ_INPUT_STEP_RECORD);
+    EXPECT_EQ(saved.quantize, 1);
+    exchange.Retire();
+    transport.ApplyTransport({SEQ_TRANSPORT_PLAY, SEQ_CLOCK_INTERNAL, SEQ_INPUT_PLAY, 0, 10000, 0});
+    exchange.foreground().length = 31;
+    ASSERT_TRUE(exchange.InstallSession(saved));
+    EXPECT_TRUE(exchange.Process(transport));
+    EXPECT_DOUBLE_EQ(transport.TempoBpm(), 157.25);
+    EXPECT_TRUE(transport.UsingMidiSync());
+    EXPECT_EQ(transport.InputMode(), SEQ_INPUT_STEP_RECORD);
+    EXPECT_FALSE(transport.IsPlaying());
+    EXPECT_FALSE(transport.IsArmed());
+}

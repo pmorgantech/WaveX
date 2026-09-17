@@ -71,6 +71,21 @@ class SequencerTransport {
         ++pattern_revision_;
     }
 
+    // Callback-only Project boundary: stop without replacing session settings.
+    void StopForProject() {
+        scheduler_.Stop();
+        follower_.OnStop();
+        armed_ = false;
+    }
+    Protocol::SeqTransportMessage SessionSettings() const {
+        return {Protocol::SEQ_TRANSPORT_STOP,
+                using_midi_ ? Protocol::SEQ_CLOCK_MIDI : Protocol::SEQ_CLOCK_INTERNAL,
+                input_mode_,
+                quantize_,
+                static_cast<uint16_t>(tempo_bpm_ * 100.0 + 0.5),
+                0};
+    }
+
     // ---- Transport + mode (MSG_SEQ_TRANSPORT) ----
     void ApplyTransport(const Protocol::SeqTransportMessage& m) {
         tempo_bpm_ = static_cast<double>(m.tempo_bpm_x100) / 100.0;

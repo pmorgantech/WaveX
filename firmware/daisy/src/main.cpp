@@ -137,6 +137,14 @@ static void DispatchConsoleCommand(const WaveX::Debug::Command& c) {
     const int32_t seq = c.seq;
     const char* p = c.args;
 
+#if WAVEX_AUDIO_ENGINE_ENABLED
+    if (WaveX::AudioEngine::ProjectBusy() && std::strcmp(c.verb, "PING") &&
+        std::strcmp(c.verb, "STATE") && std::strcmp(c.verb, "LOG")) {
+        FormatErr(seq, "projectbusy", reply, sizeof(reply));
+        WaveX::Log::PrintLine("%s", reply);
+        return;
+    }
+#endif
     if (c.legacy) {
         if (std::strcmp(c.verb, "LOG") == 0) {
             HandleLogCommand(c.args);
@@ -884,6 +892,7 @@ int main(void) {
         // SFZ inspection/loading is one bounded cooperative step per pass.
         // It follows the deadline-driven streaming refill; a LOAD closes the
         // audition first, while a lightweight PROBE yields between files.
+        WaveX::AudioEngine::PumpProjectSession();
         WaveX::AudioEngine::PumpInstrumentLoad();
         WaveX::AudioEngine::PumpEnvelopeJob();
         WaveX::AudioEngine::PumpTrackBinding();

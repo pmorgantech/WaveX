@@ -390,3 +390,8 @@ void inter_mcu_store_card_state(const WaveX::Protocol::CardStateMessage& state);
 bool inter_mcu_get_card_state(WaveX::Protocol::CardStateMessage* out);
 void inter_mcu_store_seq_file_status(const WaveX::Protocol::SeqFileStatusMessage& status);
 bool inter_mcu_get_seq_file_status(WaveX::Protocol::SeqFileStatusMessage* out);
+
+// Project session transactions; status is cached under the comm/UI lock.
+esp_err_t inter_mcu_send_project_op(const WaveX::Protocol::ProjectOpMessage&);
+void inter_mcu_store_project_status(const WaveX::Protocol::ProjectStatusMessage&);
+bool inter_mcu_get_project_status(WaveX::Protocol::ProjectStatusMessage*);

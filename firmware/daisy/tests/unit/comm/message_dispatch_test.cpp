@@ -863,3 +863,35 @@ TEST_F(MessageDispatchTest, EditDispatchRequiresExactPayload) {
     ASSERT_EQ(GetDispatchRecord().edit_ops.size(), 1u);
     EXPECT_EQ(GetDispatchRecord().edit_ops[0].request_id, 1u);
 }
+
+TEST_F(MessageDispatchTest, ProjectLeaseRoutesStatusButFreezesSessionMutations) {
+    ProjectOpMessage request;
+    request.request_id = 77;
+    request.op = PROJECT_SAVE_COPY;
+    std::strcpy(request.name, "Night");
+    Dispatch(MSG_PROJECT_OP, request);
+    ASSERT_EQ(GetDispatchRecord().project_ops.size(), 1u);
+    ProcessInterMcuMessage(
+        MSG_PROJECT_OP, 1, reinterpret_cast<const uint8_t*>(&request), sizeof(request) - 1);
+    EXPECT_EQ(GetDispatchRecord().project_ops.size(), 1u);
+    GetDispatchRecord().project_busy = true;
+    Dispatch(MSG_NOTE_ON, NoteMessage(60, 100, 0));
+    Dispatch(MSG_SAMPLE_LOAD, SampleLoadMessage{});
+    Dispatch(MSG_MIX_OP, MixOpMessage(MIX_OP_SET_GAIN, 0, 0));
+    Dispatch(
+        MSG_SEQ_TRANSPORT,
+        SeqTransportMessage{SEQ_TRANSPORT_PLAY, SEQ_CLOCK_INTERNAL, SEQ_INPUT_PLAY, 0, 12000, 0});
+    EXPECT_TRUE(GetDispatchRecord().note_ons.empty());
+    EXPECT_TRUE(GetDispatchRecord().sample_loads.empty());
+    EXPECT_TRUE(GetDispatchRecord().mix_ops.empty());
+    EXPECT_TRUE(GetDispatchRecord().seq_transports.empty());
+    Dispatch(
+        MSG_SEQ_TRANSPORT,
+        SeqTransportMessage{SEQ_TRANSPORT_STOP, SEQ_CLOCK_INTERNAL, SEQ_INPUT_PLAY, 0, 12000, 0});
+    EXPECT_EQ(GetDispatchRecord().seq_transports.size(), 1u);
+    Dispatch(MSG_NOTE_OFF, NoteMessage(60, 0, 0));
+    EXPECT_EQ(GetDispatchRecord().note_offs.size(), 1u);
+    request.op = PROJECT_GET;
+    Dispatch(MSG_PROJECT_OP, request);
+    EXPECT_EQ(GetDispatchRecord().project_ops.size(), 2u);
+}

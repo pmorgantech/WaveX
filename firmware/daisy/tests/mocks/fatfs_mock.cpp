@@ -206,11 +206,13 @@ FRESULT f_mkdir(const char* path) {
 }
 FRESULT f_stat(const char* path, FILINFO* info) {
     auto* bytes = MockFatFS::Instance().GetFile(path);
-    if (!bytes)
+    const bool directory = MockFatFS::Instance().GetDirectory(path) != nullptr;
+    if (!bytes && !directory)
         return FR_NO_FILE;
     if (info) {
         *info = FILINFO{};
-        info->fsize = static_cast<uint32_t>(bytes->size());
+        info->fsize = bytes ? static_cast<uint32_t>(bytes->size()) : 0;
+        info->fattrib = directory ? AM_DIR : 0;
     }
     return FR_OK;
 }
@@ -228,6 +230,7 @@ FRESULT f_rename(const char* from, const char* to) {
     return FR_OK;
 }
 FRESULT f_unlink(const char* path) {
-    return MockFatFS::Instance().RemoveFile(path) ? FR_OK : FR_NO_FILE;
+    return MockFatFS::Instance().RemoveFile(path) ? FR_OK
+                                                  : MockFatFS::Instance().RemoveDirectory(path);
 }
 }  // extern "C"
