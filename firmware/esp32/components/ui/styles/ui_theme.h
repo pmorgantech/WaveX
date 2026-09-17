@@ -216,3 +216,15 @@ void ui_theme_apply_label_style(lv_obj_t* label, bool is_title);
 #define UI_SLOT_HEADING_X 190
 #define UI_SLOT_BUTTON_W 150
 #define UI_SLOT_BUTTON_H 48
+
+// Song arrangement: six rows with a separate selection/edit column.
+#define UI_SONG_ROW_X 24
+#define UI_SONG_ROW_Y 140
+#define UI_SONG_ROW_W 760
+#define UI_SONG_ROW_H 48
+#define UI_SONG_ROW_GAP 8
+#define UI_SONG_FIELD_X 810
+#define UI_SONG_FIELD_W 440
+#define UI_SONG_FIELD_H 70
+#define UI_SONG_FIELD_GAP 14
+#define UI_SONG_HINT_Y 490

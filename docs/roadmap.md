@@ -101,20 +101,16 @@ Phase 2.5 work. Open work:
    and sequencer grid are built; the grid pages across all 16 Tracks and 64
    steps and edits tempo, swing, length, scale, velocity, probability, note and mute.
    Physical controls/LED feedback require 2.P.1–3; touch workflows do not.
-4. Complete song/project persistence through WXCF. Kit WXI saves and named
-   pattern WXCF save/load are implemented; pattern files preserve tempo and
-   Track instruments, include hidden steps, and use checked temp/rename
-   new-copy saves. The
-   [Project codec](features/project-persistence.md) now preserves sparse
-   Patterns, Songs and Performance metadata in bounded foreground records;
-   SD transactions, Instrument snapshots and session restore remain to be
-   connected. Power-loss recovery remains a bench gate. Add explicit Pattern
-   management and a Song editor after those foundations: create/name/copy
-   Patterns, select the active versus queued Pattern, arrange references with
-   repeat counts, insert/remove/reorder sections, and show the playing section.
-   Define quantized Pattern transitions, loop/stop and edit-during-play behavior
-   on the Daisy clock before implementation. See the
-   [workflow decisions](#composition-and-performance-workflows) below.
+4. Song/Project persistence and touch composition are software-complete:
+   checked new-copy Project transactions restore Instruments, sample edits,
+   Pattern slots, Songs, mixer and session settings. Named Pattern files and Kit
+   WXI saves remain available. [Pattern management](features/pattern-management.md)
+   creates/names/copies slots and launches at the next full-loop boundary.
+   [Song sequencing](features/song-sequencing.md) arranges stable references with
+   repeats, insert/remove/reorder, selected-section starts, looping and playing
+   section feedback on the Daisy clock. Physical timing, callback capacity,
+   save/reboot recovery and panel validation remain open in
+   [HV-007–009](hardware-validation.md). This does not close the Phase 2 gate.
 5. Voice-scoped per-step locks and the touch Locks editor are implemented:
    cutoff, resonance, amp ADSR, pitch, pan, gain and sample/loop start. Host
    tests and a two-board edit/save/recall test pass. Live lock recording and

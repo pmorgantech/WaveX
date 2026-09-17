@@ -934,3 +934,22 @@ TEST_F(MessageDispatchTest, ScopedPatternEditsRejectMalformedAndProjectLeaseButR
              MidiClockEventMessage{});  // engine owns allowed clock-event filtering
     EXPECT_EQ(GetDispatchRecord().midi_clock_events.size(), 1u);
 }
+
+TEST_F(MessageDispatchTest, SongReadAndStopRemainRoutableAndMalformedCommandsAreRejected) {
+    SeqSongOpMessage request;
+    request.request_id = 88;
+    request.song = 15;
+    GetDispatchRecord().project_busy = true;
+    for (size_t n = 0; n < sizeof(request); ++n)
+        ProcessInterMcuMessage(MSG_SEQ_SONG_OP, 1, reinterpret_cast<uint8_t*>(&request), n);
+    EXPECT_TRUE(GetDispatchRecord().seq_song_ops.empty());
+    request.song = 16;
+    Dispatch(MSG_SEQ_SONG_OP, request);
+    EXPECT_TRUE(GetDispatchRecord().seq_song_ops.empty());
+    request.song = 15;
+    Dispatch(MSG_SEQ_SONG_OP, request);
+    request.op = SEQ_SONG_STOP;
+    Dispatch(MSG_SEQ_SONG_OP, request);
+    ASSERT_EQ(GetDispatchRecord().seq_song_ops.size(), 2u);
+    EXPECT_EQ(GetDispatchRecord().seq_song_ops[1].op, SEQ_SONG_STOP);
+}

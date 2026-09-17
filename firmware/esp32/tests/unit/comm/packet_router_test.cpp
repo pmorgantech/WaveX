@@ -87,10 +87,10 @@ class PacketRouterTest : public ::testing::Test {
     // strong-override handlers. Used to assert "nothing was dispatched".
     int TotalDispatches() const {
         const auto& cap = GetInterMcuCapture();
-        return cap.seq_slot_page_calls + cap.seq_slot_status_calls + cap.project_status_calls +
-               g_handlers.sync_calls + g_handlers.error_calls + g_handlers.unknown_calls +
-               cap.oscillator_calls + cap.instrument_map_calls + cap.seq_page_calls +
-               cap.seq_playhead_calls + cap.heartbeat_calls + cap.meter_calls +
+        return cap.seq_song_status_calls + cap.seq_slot_page_calls + cap.seq_slot_status_calls +
+               cap.project_status_calls + g_handlers.sync_calls + g_handlers.error_calls +
+               g_handlers.unknown_calls + cap.oscillator_calls + cap.instrument_map_calls +
+               cap.seq_page_calls + cap.seq_playhead_calls + cap.heartbeat_calls + cap.meter_calls +
                cap.browse_resp_calls + cap.envelope_chunk_calls + cap.sample_status_calls +
                cap.inst_status_calls + cap.storage_status_calls + cap.stop_resp_calls +
                cap.diag_push_calls + cap.sample_meta_calls + cap.sample_mem_status_calls +
@@ -840,4 +840,22 @@ TEST_F(PacketRouterTest, ScopedPatternPageRequiresExactSizeAndIdentity) {
     router_->route_uart_message(MSG_SEQ_SLOT_PAGE, bytes, sizeof(page), 0, 1);
     EXPECT_EQ(GetInterMcuCapture().seq_slot_page_calls, 1);
     EXPECT_EQ(GetInterMcuCapture().seq_slot_page.epoch, 77u);
+}
+
+TEST_F(PacketRouterTest, SongStatusRejectsWrongSizeAndBrokenReferences) {
+    SeqSongStatusMessage status;
+    status.request_id = 88;
+    status.used = 1;
+    status.length = 128;
+    auto* bytes = reinterpret_cast<uint8_t*>(&status);
+    for (size_t n = 0; n < sizeof(status); ++n)
+        router_->route_uart_message(MSG_SEQ_SONG_STATUS, bytes, n, 0, 1);
+    EXPECT_EQ(GetInterMcuCapture().seq_song_status_calls, 0);
+    status.entries[127].pattern = 128;
+    router_->route_uart_message(MSG_SEQ_SONG_STATUS, bytes, sizeof(status), 0, 1);
+    EXPECT_EQ(GetInterMcuCapture().seq_song_status_calls, 0);
+    status.entries[127].pattern = 127;
+    router_->route_uart_message(MSG_SEQ_SONG_STATUS, bytes, sizeof(status), 0, 1);
+    EXPECT_EQ(GetInterMcuCapture().seq_song_status_calls, 1);
+    EXPECT_EQ(GetInterMcuCapture().seq_song_status.entries[127].pattern, 127);
 }

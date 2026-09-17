@@ -402,3 +402,7 @@ void inter_mcu_store_seq_slot_status(const WaveX::Protocol::SeqSlotStatusMessage
 bool inter_mcu_get_seq_slot_status(WaveX::Protocol::SeqSlotStatusMessage*);
 void inter_mcu_store_project_status(const WaveX::Protocol::ProjectStatusMessage&);
 bool inter_mcu_get_project_status(WaveX::Protocol::ProjectStatusMessage*);
+
+esp_err_t inter_mcu_send_seq_song_op(const WaveX::Protocol::SeqSongOpMessage& request);
+void inter_mcu_store_seq_song_status(const WaveX::Protocol::SeqSongStatusMessage& status);
+bool inter_mcu_get_seq_song_status(WaveX::Protocol::SeqSongStatusMessage* out);

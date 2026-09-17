@@ -24,7 +24,10 @@ class PatternExchange {
         Launch,
         Launching,
         Launched,
-        Cancelled
+        Cancelled,
+        SongStart,
+        SongPlaying,
+        SongEnded
     };
     State state() const { return state_.load(std::memory_order_acquire); }
     Pattern& foreground() { return *buffer_; }  // only Idle / Captured
@@ -69,17 +72,47 @@ class PatternExchange {
         state_.store(State::Launch, std::memory_order_release);
         return true;
     }
+    bool PlaySong(const Project* project, uint8_t song, uint8_t entry, bool loop) {
+        if (state() != State::Idle)
+            return false;
+        song_project_ = project;
+        song_slot_ = song;
+        song_entry_ = entry;
+        song_loop_ = loop;
+        song_stop_.store(false, std::memory_order_relaxed);
+        song_position_.store(0, std::memory_order_relaxed);
+        state_.store(State::SongStart, std::memory_order_release);
+        return true;
+    }
+    void StopSong() { song_stop_.store(true, std::memory_order_release); }
+    uint32_t SongPosition() const { return song_position_.load(std::memory_order_acquire); }
     void Retire() {  // only completed states; never cancel callback ownership
         const auto s = state();
         if (s == State::Captured || s == State::Installed || s == State::Failed ||
             s == State::Paused || s == State::Running || s == State::Launched ||
-            s == State::Cancelled)
+            s == State::Cancelled || s == State::SongEnded)
             state_.store(State::Idle, std::memory_order_release);
     }
     // Called after scheduling. A successful install discards that block's old
     // pattern events. Save rows wait for a block without scheduled triggers.
     bool Process(SequencerTransport& transport, bool allow_capture = true) {
         const auto s = state_.load(std::memory_order_acquire);
+        if (s == State::SongStart) {
+            const bool started =
+                transport.StartSong(song_project_, song_slot_, song_entry_, song_loop_);
+            song_position_.store(transport.SongPosition(), std::memory_order_release);
+            state_.store(started ? State::SongPlaying : State::Running, std::memory_order_release);
+            return started;
+        }
+        if (s == State::SongPlaying) {
+            const bool stop = song_stop_.load(std::memory_order_acquire);
+            if (stop)
+                transport.StopSong();
+            song_position_.store(transport.SongPosition(), std::memory_order_release);
+            if (!transport.SongActive())
+                state_.store(State::SongEnded, std::memory_order_release);
+            return stop;
+        }
         if (s == State::Launch) {
             if (!transport.LaunchPattern(buffer_, slot_))
                 state_.store(State::Running, std::memory_order_release);
@@ -136,6 +169,11 @@ class PatternExchange {
     }
 
    private:
+    const Project* song_project_ = nullptr;
+    uint8_t song_slot_ = 0, song_entry_ = 0;
+    bool song_loop_ = false;
+    std::atomic<bool> song_stop_{false};
+    std::atomic<uint32_t> song_position_{0};
     Pattern pattern_;
     Pattern* buffer_ = &pattern_;
     uint8_t slot_ = 0xff;

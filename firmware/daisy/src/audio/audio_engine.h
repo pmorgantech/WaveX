@@ -213,6 +213,7 @@ bool StorageJobBusy();
 bool ProjectBusy();
 void OnSeqSlotEdit(const WaveX::Protocol::SeqSlotEditMessage&);
 void OnSeqSlotPageRequest(const WaveX::Protocol::SeqPatternRequestMessage&);
+void OnSongOp(const WaveX::Protocol::SeqSongOpMessage& request);
 void OnPatternSlotOp(const WaveX::Protocol::SeqSlotOpMessage& request);
 void OnProjectOp(const WaveX::Protocol::ProjectOpMessage& request);
 void PumpProjectSession();

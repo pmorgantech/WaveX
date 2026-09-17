@@ -2613,6 +2613,25 @@ void OnSeqFileOp(const SeqFileOpMessage& request) {
 bool ProjectBusy() {
     return s_project_session.Get() && s_project_session.Get()->BlocksEdits();
 }
+void OnSongOp(const SeqSongOpMessage& request) {
+    if (!IsValidSeqSongOp(request))
+        return;
+    if (s_project_session.Get()) {
+        if (s_project_session.Get()->RequestSong(
+                request,
+                SfzLoader::Busy() || PatternStore::Busy() || Storage::CardService::Busy()) &&
+            request.op == SEQ_SONG_PLAY)
+            PublishSequencerVoiceMap();
+    } else {
+        SeqSongStatusMessage status;
+        status.request_id = request.request_id;
+        status.song = request.song;
+        status.completed_request_id = request.op == SEQ_SONG_GET ? 0 : request.request_id;
+        status.completed_op = request.op;
+        status.error = SEQ_SONG_NO_MEMORY;
+        Comm::LinkSend(MSG_SEQ_SONG_STATUS, &status, sizeof(status));
+    }
+}
 void OnPatternSlotOp(const SeqSlotOpMessage& request) {
     if (!IsValidSeqSlotOp(request))
         return;
@@ -2661,6 +2680,10 @@ void PumpProjectSession() {
     if (!session)
         return;
     session->Pump();
+    auto& songs = session->Songs();
+    if (songs.ReplyPending() &&
+        Comm::LinkSend(MSG_SEQ_SONG_STATUS, &songs.Status(), sizeof(SeqSongStatusMessage)) >= 0)
+        songs.ReplySent();
     auto& patterns = session->Patterns();
     if (patterns.ReplyPending() &&
         Comm::LinkSend(MSG_SEQ_SLOT_STATUS, &patterns.Status(), sizeof(SeqSlotStatusMessage)) >= 0)

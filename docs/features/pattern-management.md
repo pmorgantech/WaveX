@@ -2,7 +2,8 @@
 
 Pattern slots let you build variations within one Project. This Phase 2 increment
 adds create, copy, rename and selection plus queued loop-boundary launch.
-Song execution remains the next increment. Hardware acceptance is tracked separately.
+Song arrangement and execution are implemented in [Song sequencing](song-sequencing.md).
+Hardware acceptance is tracked separately.
 
 ## Data and ownership
 
@@ -69,11 +70,11 @@ back to the same slot. A new epoch invalidates the grid's other cached rows.
 Legacy unscoped debug commands still address the current working Pattern.
 Standalone file jobs cannot claim the exchange while a launch is pending.
 
-## Songs (target)
+## Songs
 
-Song entries reference these same stable slots with repeat counts. Song
-loop/stop, seek and edit-during-play rules must be defined with the Song owner
-before adding execution; a saved Song record does not imply runtime playback.
+[Song sequencing](song-sequencing.md) arranges these stable Pattern slots with
+repeat counts. Its immutable playback loan freezes Pattern edits until the
+callback acknowledges Stop or the final section boundary.
 
 ## Related
 

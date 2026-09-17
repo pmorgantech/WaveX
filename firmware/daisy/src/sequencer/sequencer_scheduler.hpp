@@ -120,6 +120,7 @@ class SequencerScheduler {
         frame_counter_ = frame_anchor_ = 0;
         tick_anchor_ = pattern_origin_tick_ = 0;
         queued_pattern_ = nullptr;
+        queued_stop_ = false;
         switched_pattern_ = false;
         rng_state_ = seed_;
         playing_ = true;
@@ -135,19 +136,26 @@ class SequencerScheduler {
     void Stop() {
         playing_ = false;
         queued_pattern_ = nullptr;
+        queued_stop_ = false;
     }
 
     // Immutable destination remains borrowed until switch or Stop/Start.
     // The launch boundary is the next full loop on the grid at acceptance;
     // subsequent step edits do not move that already-armed musical boundary.
-    bool QueuePattern(const Pattern* pattern) {
-        if (!playing_ || !pattern_ || !pattern || queued_pattern_)
+    bool QueuePattern(const Pattern* pattern, uint8_t repeats = 1) {
+        if (!playing_ || !pattern_ || !pattern || queued_pattern_ || !repeats)
             return false;
         const double length = PatternLength() * StepIntervalTicks(pattern_->scale);
         const double loop =
-            std::floor(std::max(0.0, CurrentTick() - pattern_origin_tick_) / length) + 1.0;
+            std::floor(std::max(0.0, CurrentTick() - pattern_origin_tick_) / length) + repeats;
         queued_tick_ = pattern_origin_tick_ + loop * length;
         queued_pattern_ = pattern;
+        return true;
+    }
+    bool QueueStop(uint8_t repeats = 1) {
+        if (!QueuePattern(pattern_, repeats))
+            return false;
+        queued_stop_ = true;
         return true;
     }
     bool HasQueuedPattern() const { return queued_pattern_ != nullptr; }
@@ -195,15 +203,19 @@ class SequencerScheduler {
             const auto split = std::max(block_start_frame, boundary);
             if (split > block_start_frame)
                 AppendRange(local, local_count, block_start_frame, split);
-            pattern_ = queued_pattern_;
-            queued_pattern_ = nullptr;
-            pattern_origin_tick_ = queued_tick_;
-            playhead_step_ = 0;
-            playhead_loop_ = 0;
-            for (uint8_t t = 0; t < kMaxTracks; ++t)
-                RescheduleTrack(t, 0, 0);
-            switched_pattern_ = true;
-            AppendRange(local, local_count, split, block_end_frame);
+            if (queued_stop_) {
+                Stop();
+            } else {
+                pattern_ = queued_pattern_;
+                queued_pattern_ = nullptr;
+                pattern_origin_tick_ = queued_tick_;
+                playhead_step_ = 0;
+                playhead_loop_ = 0;
+                for (uint8_t t = 0; t < kMaxTracks; ++t)
+                    RescheduleTrack(t, 0, 0);
+                switched_pattern_ = true;
+                AppendRange(local, local_count, split, block_end_frame);
+            }
         } else
             AppendRange(local, local_count, block_start_frame, block_end_frame);
 
@@ -493,6 +505,7 @@ class SequencerScheduler {
 
     const Pattern* pattern_ = nullptr;
     const Pattern* queued_pattern_ = nullptr;
+    bool queued_stop_ = false;
     double queued_tick_ = 0, pattern_origin_tick_ = 0, tick_anchor_ = 0;
     uint64_t frame_anchor_ = 0;
     bool switched_pattern_ = false;

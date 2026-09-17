@@ -66,6 +66,7 @@ Use Passed or Failed after recording the corresponding evidence.
 | HV-006 | Mixer controls, master and callback timing | Pending | Host/compile checks; physical audio and timing unrun |
 | HV-007 | Project Save/Load/New and recovery | Pending | Host/compile checks; disposable card and two-board session needed |
 | HV-008 | Project Pattern slots | Pending | Stopped workflow, panel, reboot and callback checks |
+| HV-009 | Song arrangement and playback | Pending | Host tests; audio timing, panel, MIDI and DWT unrun |
 
 ## HV-001 — SD card formatting
 
@@ -345,3 +346,44 @@ Queued launch follow-up (host-verified, hardware pending):
 - [ ] Sweep tempo mid-loop and while queued; timing remains continuous.
   Record matched DWT average/p95/max on launch blocks with full voice load,
   not just idle sequencing. Include loop-boundary launches in the soak.
+
+
+## HV-009 — Song arrangement and playback
+
+**Status:** Pending. No hardware execution recorded for this implementation.
+**Design / gate:** [Song sequencing](features/song-sequencing.md),
+[Phase 2](roadmap.md#phase-2--groovebox-core-sequencer-and-pads).
+**Setup:** Both images from the same commit, two audible Pattern variations,
+one short Pattern with a different length/scale, MIDI clock source, test card,
+audio recording and DWT/underrun logging per the performance guide.
+
+- **009a — Arrange and recall:** Open Sequencer → Shift → Patterns → Shift →
+  Songs. Create/name a Song, change reference/repeats/tempo, insert, remove and
+  move sections, including scrolling past section six. Apply and Revert must be
+  distinct. Save a Project, reboot and Load; all sections, references, repeats,
+  names and tempo must match. Empty references and deleting the last section
+  must be refused. Pending operations must not repeat after reconnect.
+- **009b — Boundaries:** Play a two-section arrangement at 123 BPM with repeat
+  counts 2 and 3, then with unequal lengths/scales and negative micro-offsets /
+  retriggers. Record audio: exactly the requested loops sound, the next section
+  starts on its grid boundary, and no outgoing next-loop downbeat/retrigger
+  crosses it. Voice tails must continue without unintended cuts.
+- **009c — Stop, loop and seek:** Play once stops at the final boundary. Loop
+  returns to section one. Start at a later selected section, Stop, select another
+  and restart. The displayed playing section/repeat must follow audio, separately
+  from selected edit row. Song Stop must reopen editing only after callback
+  release; ordinary transport restart must exit Song mode into the current Pattern.
+- **009d — Ownership and MIDI:** Try grid edits, Pattern launch and Project
+  Save/Load during playback; frozen edits and competing storage jobs must be
+  refused, while live notes/mixer remain usable. Repeat with MIDI arming,
+  Start/Continue and Stop. No unrequested start may occur while waiting for clock.
+- **009e — Capacity and rendering:** Use shortest Patterns at maximum tempo,
+  dense retriggers/locks and the four-Track gate workload. Record DWT mean/peak,
+  over-budget blocks, underruns and output continuity during transitions and
+  start/stop. On the panel, compare idle polling, one field edit and section
+  changes with RENDER/log-mode sysmon; unchanged polls must not redraw content.
+  Run the separate full-duration HV-005 soak. Restore profiling defaults afterward.
+
+**Pass:** Every case above passes with dated paired image identities and evidence.
+**Blockers:** Physical boards, audio/MIDI capture and DWT measurements are required;
+host and compile results do not close this gate.

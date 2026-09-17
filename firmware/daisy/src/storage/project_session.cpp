@@ -28,7 +28,8 @@ ProjectSession::ProjectSession(SampleMemMgr& memory,
       io_(io),
       io_bytes_(bytes),
       boundary_(boundary),
-      patterns_(exchange) {}
+      patterns_(exchange),
+      songs_(exchange) {}
 ProjectSession::~ProjectSession() {
     file_.Cancel();
     ReleaseScratch();
@@ -220,9 +221,25 @@ void ProjectSession::CaptureSession() {
         phase_ = Phase::Assets;
 }
 bool ProjectSession::RequestPattern(const SeqSlotOpMessage& request, bool external_busy) {
-    return patterns_.Request(request, current_, external_busy || status_.busy);
+    const auto position = exchange_.SongPosition();
+    const auto slot =
+        static_cast<uint8_t>(songs_.Busy() && (position & (1u << 24)) ? position & 0x7f : 0xff);
+    return patterns_.Request(
+        request, current_, external_busy || status_.busy || songs_.Busy(), slot);
+}
+bool ProjectSession::RequestSong(const SeqSongOpMessage& request, bool external_busy) {
+    return songs_.Request(request, current_, external_busy || status_.busy || patterns_.Busy());
 }
 void ProjectSession::Pump() {
+    if (songs_.Busy()) {
+        if (!current_ && exchange_.state() == Exchange::State::Captured) {
+            void* bytes = nullptr;
+            if (Allocate(sizeof(Project), current_mem_, &bytes))
+                current_ = new (bytes) Project();
+        }
+        songs_.Pump(current_);
+        return;
+    }
     if (patterns_.Busy()) {
         // Wait for ownership return before allocating or reporting allocation
         // failure; never retire a callback-owned capture buffer.

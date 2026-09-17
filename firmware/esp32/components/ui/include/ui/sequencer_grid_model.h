@@ -27,6 +27,7 @@ class SequencerGridModel {
         return true;
     }
     void Invalidate() {
+        read_only_ = false;
         epoch_ = 0;
         ready_.fill(false);
         snapshot_valid_.fill(false);
@@ -73,6 +74,7 @@ class SequencerGridModel {
             const auto row = static_cast<uint8_t>(snapshot.page.track - first_track_);
             ready_[row] = snapshot_valid_[row] = true;
         }
+        read_only_ = snapshot.read_only;
         epoch_ = snapshot.epoch;
         pattern_ = snapshot.pattern;
         return true;
@@ -118,8 +120,11 @@ class SequencerGridModel {
     // Readback pending does not erase the last confirmed picture. It still
     // authorizes no new edits; only Accept() can make that row ready again.
     bool HasSnapshot(uint8_t row) const { return row < kRows && snapshot_valid_[row]; }
-    bool Ready(uint8_t row) const { return row < kRows && ready_[row]; }
+    bool ReadOnly() const { return read_only_; }
+    bool Ready(uint8_t row) const { return !read_only_ && row < kRows && ready_[row]; }
     bool AllReady() const {
+        if (read_only_)
+            return false;
         for (bool ready: ready_)
             if (!ready)
                 return false;
@@ -137,7 +142,7 @@ class SequencerGridModel {
     Request request_{};
     Step preview_{};
     uint8_t preview_row_ = 0, preview_column_ = 0;
-    bool preview_valid_ = false;
+    bool preview_valid_ = false, read_only_ = false;
     uint32_t epoch_ = 0;
     uint8_t pattern_ = 0;
     uint8_t first_track_ = 0;

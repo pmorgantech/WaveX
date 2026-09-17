@@ -8,9 +8,12 @@ namespace WaveX::Storage {
 class ProjectPatterns {
    public:
     explicit ProjectPatterns(Sequencer::PatternExchange& exchange) : exchange_(exchange) {}
-    bool Request(const Protocol::SeqSlotOpMessage&, const Sequencer::Project*, bool external_busy);
+    bool Request(const Protocol::SeqSlotOpMessage&,
+                 const Sequencer::Project*,
+                 bool external_busy,
+                 uint8_t runtime_slot = 0xff);
     void Pump(Sequencer::Project*);
-    void Refresh(const Sequencer::Project*);
+    void Refresh(const Sequencer::Project*, uint8_t runtime_slot = 0xff);
     void Fail(uint8_t error);
     bool BlocksEdits() const { return Busy() && phase_ != Phase::Launch; }
     bool Busy() const { return phase_ != Phase::Idle; }

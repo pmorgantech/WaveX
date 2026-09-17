@@ -266,4 +266,5 @@ The stopped slot manager is implemented separately from standalone files:
 [Pattern management](pattern-management.md). It captures the outgoing working
 Pattern and installs the selected slot without changing session settings.
 Queued launch switches on the Daisy full-loop boundary with intra-block frame
-offsets; Song execution remains pending. No UI timer schedules musical events.
+offsets. [Song execution](song-sequencing.md) counts repeats and advances sections
+on the same clock, with immutable Pattern references and explicit stop/loop rules. No UI timer schedules musical events.

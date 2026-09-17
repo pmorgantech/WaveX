@@ -46,6 +46,7 @@ struct DispatchRecord {
     bool project_busy = false;
     std::vector<WaveX::Protocol::SeqSlotEditMessage> seq_slot_edits;
     std::vector<WaveX::Protocol::SeqPatternRequestMessage> seq_slot_pages;
+    std::vector<WaveX::Protocol::SeqSongOpMessage> seq_song_ops;
     std::vector<WaveX::Protocol::SeqSlotOpMessage> seq_slot_ops;
     std::vector<WaveX::Protocol::ProjectOpMessage> project_ops;
     std::vector<WaveX::Protocol::SeqPatternOpMessage> seq_pattern_ops;
@@ -105,12 +106,12 @@ struct DispatchRecord {
                unloaded_samples.size() + auditioned_samples.size() +
                static_cast<size_t>(get_sample_mem_status_calls) + seq_transports.size() +
                seq_slot_edits.size() + seq_slot_pages.size() + seq_slot_ops.size() +
-               project_ops.size() + seq_file_ops.size() + card_ops.size() + seq_pattern_ops.size() +
-               seq_pattern_requests.size() + midi_clock_events.size() + midi_ccs.size() +
-               instrument_ops.size() + browse_requests.size() + play_requests.size() +
-               stop_requests.size() + play_index_requests.size() + sample_edits.size() +
-               meta_requests.size() + loop_gaps_ms.size() + diag_subscribes.size() +
-               mix_ops.size() + track_ops.size();
+               seq_song_ops.size() + project_ops.size() + seq_file_ops.size() + card_ops.size() +
+               seq_pattern_ops.size() + seq_pattern_requests.size() + midi_clock_events.size() +
+               midi_ccs.size() + instrument_ops.size() + browse_requests.size() +
+               play_requests.size() + stop_requests.size() + play_index_requests.size() +
+               sample_edits.size() + meta_requests.size() + loop_gaps_ms.size() +
+               diag_subscribes.size() + mix_ops.size() + track_ops.size();
     }
 };
 

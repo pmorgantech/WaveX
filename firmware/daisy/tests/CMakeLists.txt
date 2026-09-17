@@ -297,6 +297,7 @@ function(add_wavex_test test_source)
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/storage/project_file_job.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/storage/project_session.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/storage/project_patterns.cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/../src/storage/project_songs.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/storage/pattern_store.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/audio/sfz_loader.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/mocks/log_ring_mock.cpp

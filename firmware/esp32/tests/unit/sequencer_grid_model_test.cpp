@@ -196,3 +196,27 @@ TEST(SequencerGridModelTest, ScopedReplacementDropsOtherRowsAndLabelsEditsWithEp
     model.Invalidate();
     EXPECT_EQ(model.ScopedEdit({}).epoch, 0u);
 }
+
+TEST(SequencerGridModelSong, FrozenPageKeepsDisplayButCannotAuthorizeAnEdit) {
+    wavex_ui::SequencerGridModel model;
+    auto request = model.BeginRead(44, 0);
+    WaveX::Protocol::SeqSlotPageMessage page;
+    page.epoch = 9;
+    page.pattern = 7;
+    page.page.request_id = request.request_id;
+    page.page.valid = 1;
+    page.page.length = 16;
+    page.page.enabled = 1;
+    page.page.tempo_bpm_x100 = 12000;
+    page.read_only = 1;
+    ASSERT_TRUE(model.AcceptScoped(page));
+    EXPECT_TRUE(model.HasSnapshot(0));
+    EXPECT_TRUE(model.ReadOnly());
+    EXPECT_FALSE(model.Ready(0));
+    request = model.BeginRead(45, 0);
+    page.page.request_id = 45;
+    page.read_only = 0;
+    page.epoch = 10;
+    ASSERT_TRUE(model.AcceptScoped(page));
+    EXPECT_TRUE(model.Ready(0));
+}

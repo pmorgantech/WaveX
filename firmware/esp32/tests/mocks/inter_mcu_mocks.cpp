@@ -156,3 +156,9 @@ void inter_mcu_store_seq_slot_page(const WaveX::Protocol::SeqSlotPageMessage& pa
     ++cap.seq_slot_page_calls;
     cap.seq_slot_page = page;
 }
+
+void inter_mcu_store_seq_song_status(const WaveX::Protocol::SeqSongStatusMessage& status) {
+    auto& cap = GetInterMcuCapture();
+    ++cap.seq_song_status_calls;
+    cap.seq_song_status = status;
+}

@@ -152,6 +152,8 @@ enum MessageType : uint8_t {
     MSG_MIDI_CLOCK_EVENT = 0x55,  // E->D: forwarded MIDI real-time clock/transport byte
     MSG_MIDI_CC = 0x56,           // E->D: forwarded MIDI control change
     MSG_SEQ_CLOCK_OUT = 0x57,     // D->E: MIDI clock/transport for the ESP32 to serialize outbound
+    MSG_SEQ_SONG_OP = 0x58,       // E->D: Project Song arrangement and playback
+    MSG_SEQ_SONG_STATUS = 0x59,   // D->E: arrangement and callback play position
     MSG_SEQ_FILE_OP = 0x5A,       // E->D: named pattern save/load/new or retained status request
     MSG_SEQ_FILE_STATUS = 0x5B,   // D->E: foreground job and retained completion
     MSG_SEQ_SLOT_OP = 0x5C,       // E->D: Project Pattern slot management
@@ -1688,6 +1690,76 @@ inline bool IsValidProjectStatus(const ProjectStatusMessage& m) {
                    : m.active_request_id == 0);
 }
 
+// Song arrangement commands address stable Project slots. Structural edits are
+// stopped-only; playback borrows the frozen Project until callback release.
+enum SeqSongOp : uint8_t {
+    SEQ_SONG_GET,
+    SEQ_SONG_CREATE,
+    SEQ_SONG_RENAME,
+    SEQ_SONG_INSERT,
+    SEQ_SONG_REMOVE,
+    SEQ_SONG_MOVE,
+    SEQ_SONG_SET_ENTRY,
+    SEQ_SONG_TEMPO,
+    SEQ_SONG_PLAY,
+    SEQ_SONG_STOP
+};
+enum SeqSongError : uint8_t {
+    SEQ_SONG_OK,
+    SEQ_SONG_BUSY,
+    SEQ_SONG_BAD_NAME,
+    SEQ_SONG_EMPTY,
+    SEQ_SONG_EXISTS,
+    SEQ_SONG_STOP_FIRST,
+    SEQ_SONG_NO_MEMORY,
+    SEQ_SONG_BAD_ENTRY,
+    SEQ_SONG_CAPTURE_BUSY
+};
+struct SeqSongOpMessage {
+    uint32_t request_id = 0;
+    uint8_t op = SEQ_SONG_GET, song = 0, entry = 0, destination = 0;
+    uint8_t pattern = 0, repeats = 1, loop = 0, reserved = 0;
+    uint16_t tempo_bpm_x100 = 12000;
+    char name[24]{};
+} __attribute__((packed));
+struct SeqSongEntry {
+    uint8_t pattern = 0, repeats = 1;
+} __attribute__((packed));
+struct SeqSongStatusMessage {
+    uint32_t request_id = 0, active_request_id = 0, completed_request_id = 0;
+    uint8_t busy = 0, error = SEQ_SONG_OK, completed_op = SEQ_SONG_GET;
+    uint8_t song = 0, used = 0, selected_song = 0xff;
+    uint8_t playing_song = 0xff, playing_entry = 0, playing_repeat = 0, loop = 0;
+    uint8_t active_pattern = 0, length = 0;
+    uint16_t tempo_bpm_x100 = 12000;
+    char name[24]{};
+    SeqSongEntry entries[128]{};
+} __attribute__((packed));
+inline bool IsValidSeqSongOp(const SeqSongOpMessage& m) {
+    return m.request_id && m.op <= SEQ_SONG_STOP && m.song < 16 && m.entry < 128 &&
+           m.destination < 128 && m.pattern < 128 && m.repeats && m.loop <= 1 && !m.reserved &&
+           m.tempo_bpm_x100 >= 2000 && m.tempo_bpm_x100 <= 30000;
+}
+inline bool IsValidSeqSongStatus(const SeqSongStatusMessage& m) {
+    bool terminated = false;
+    for (char c: m.name)
+        terminated |= c == 0;
+    if (!m.request_id || m.busy > 1 || m.error > SEQ_SONG_CAPTURE_BUSY ||
+        m.completed_op > SEQ_SONG_STOP || m.song >= 16 || m.used > 1 ||
+        (m.selected_song != 0xff && m.selected_song >= 16) ||
+        (m.playing_song != 0xff && m.playing_song >= 16) || m.playing_entry >= 128 || m.loop > 1 ||
+        m.active_pattern >= 128 || m.length > 128 || (m.used && !m.length) || !terminated ||
+        m.tempo_bpm_x100 < 2000 || m.tempo_bpm_x100 > 30000 ||
+        (m.busy ? !m.active_request_id : m.active_request_id != 0))
+        return false;
+    for (uint8_t i = 0; i < m.length; ++i)
+        if (m.entries[i].pattern >= 128 || !m.entries[i].repeats)
+            return false;
+    return true;
+}
+static_assert(sizeof(SeqSongOpMessage) == 38 && sizeof(SeqSongStatusMessage) == 306,
+              "Song wire sizes");
+
 // Project Pattern slots are stable zero-based identities, independent of files.
 enum SeqSlotOp : uint8_t {
     SEQ_SLOT_GET,
@@ -1892,17 +1964,18 @@ struct SeqSlotPageMessage {
     uint32_t epoch = 0;
     uint8_t pattern = 0;
     SeqPatternSyncMessage page;
+    uint8_t read_only = 0;  // frozen Song playback
 } __attribute__((packed));
 inline bool IsValidSeqSlotEdit(const SeqSlotEditMessage& m) {
     return m.epoch && m.pattern < 128 && m.edit.op <= SEQ_OP_SET_PARAM_LOCK_SLOT &&
            m.edit.track < 16 && m.edit.step < 64;
 }
 inline bool IsValidSeqSlotPage(const SeqSlotPageMessage& m) {
-    return m.epoch && m.pattern < 128 && m.page.request_id && m.page.valid <= 1 &&
-           m.page.track < SEQ_TRACK_COUNT && m.page.first_step < SEQ_MAX_STEPS &&
-           m.page.first_step % SEQ_PAGE_STEPS == 0;
+    return m.read_only <= 1 && m.epoch && m.pattern < 128 && m.page.request_id &&
+           m.page.valid <= 1 && m.page.track < SEQ_TRACK_COUNT &&
+           m.page.first_step < SEQ_MAX_STEPS && m.page.first_step % SEQ_PAGE_STEPS == 0;
 }
-static_assert(sizeof(SeqSlotEditMessage) == 13 && sizeof(SeqSlotPageMessage) == 341,
+static_assert(sizeof(SeqSlotEditMessage) == 13 && sizeof(SeqSlotPageMessage) == 342,
               "Scoped Pattern wire sizes");
 
 // MSG_SEQ_PLAYHEAD (D->E): coalesced playhead + sync feedback for the UI.
@@ -2917,6 +2990,10 @@ inline const char* MessageTypeName(uint8_t type) {
             return "SEQ_SLOT_EDIT";
         case MSG_SEQ_SLOT_PAGE:
             return "SEQ_SLOT_PAGE";
+        case MSG_SEQ_SONG_OP:
+            return "SEQ_SONG_OP";
+        case MSG_SEQ_SONG_STATUS:
+            return "SEQ_SONG_STATUS";
         case MSG_SEQ_SLOT_OP:
             return "SEQ_SLOT_OP";
         case MSG_SEQ_SLOT_STATUS:

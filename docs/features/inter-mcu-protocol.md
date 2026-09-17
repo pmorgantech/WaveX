@@ -102,6 +102,8 @@ sequence(u16 LE) | payload[0..2048] | crc16(u16 LE) | end(0x5A)
 | MSG_SEQ_PATTERN_OP | 0x51 | E→D | `SeqPatternOpMessage{op, track, step, arg_u8, arg_u16, arg_s16}` | one small idempotent pattern edit; `op` (`SeqPatternOpCode`) selects which fields apply — see the table in `protocol.h` above the struct |
 | MSG_SEQ_PATTERN_SYNC | 0x52 | both | SeqPatternRequestMessage / SeqPatternSyncMessage | sixteen-step readback window from the callback-owned pending pattern; see Sequencer page readback below |
 | MSG_SEQ_PLAYHEAD | 0x53 | D→E | `SeqPlayheadMessage{pattern, step, playing, sync_state, measured_bpm_x100, loop_count}` | coalesced playhead + sync-lock feedback for the UI (≤ 30 Hz) |
+| MSG_SEQ_SONG_OP | 0x58 | E→D | SeqSongOpMessage | inspect/edit a Project Song or start/stop selected-section playback; see [Song sequencing](song-sequencing.md) |
+| MSG_SEQ_SONG_STATUS | 0x59 | D→E | SeqSongStatusMessage | retained operation result, full bounded arrangement and callback section/repeat position |
 | MSG_SEQ_FILE_OP | 0x5A | E→D | SeqFileOpMessage | read retained status or save-copy/load/new a named pattern |
 | MSG_SEQ_FILE_STATUS | 0x5B | D→E | SeqFileStatusMessage | active job, retained completion/error and last successful file name |
 | MSG_MIDI_CLOCK_EVENT | 0x55 | E→D | `MidiClockEventMessage{event, source, tick_seq, esp_delta_us, spp_beats16}` | forwarded MIDI real-time/transport byte; `esp_delta_us` is the ESP-domain **delta** (never an absolute timestamp) so the tempo follower can't mix clock domains — `midi-sync-tempo-follower.md` §2/§3 |
@@ -559,3 +561,14 @@ edit. The callback rejects stale identities; legacy unscoped commands retain
 their current-working-Pattern semantics. All layouts remain in `protocol.h`.
 Project save now permits MIDI clock messages through the dispatcher so the
 engine can retain ticks/Stop and reject Start/Continue during its lease.
+
+### Song ownership and readback
+
+`SeqSongOpMessage` and `SeqSongStatusMessage` are defined only in `protocol.h`.
+Commands and replies require exact size and validated bounds. GET reads retained
+results without replaying mutations. Song playback keeps its active request while
+reporting successful start; STOP is accepted during that lifetime and completes
+only after callback release. The existing Project WXCF Song records are unchanged.
+Scoped Pattern pages also carry `read_only`, set while the callback borrows a Song;
+clients retain the grid picture but refuse Pattern edits. Both MCU images
+must be updated together for the extended scoped-page payload.

@@ -13,6 +13,12 @@ versioning and release process.
 
 ### Added
 
+- Song arrangement and playback: 16 named Songs reference Project Patterns with
+  repeat counts, insert/remove/reorder controls, Song tempo, selected-section
+  starts and optional looping. Sections switch on the Daisy audio clock;
+  Pattern edits stay read-only until callback release. Project saves retain
+  arrangements. Physical acceptance is tracked in HV-009.
+
 - Pattern Launch selects while stopped or queues a sample-offset switch at the
   next full-loop boundary. Stop/restart cancels; outgoing edits and voice tails
   survive. Scoped grid epochs reject delayed edits after switching, including

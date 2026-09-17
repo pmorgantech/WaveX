@@ -31,6 +31,7 @@
 #include "spi_protocol/protocol.h"
 
 #include "pattern.hpp"
+#include "sequencer/project_data.hpp"
 #include "sequencer_scheduler.hpp"
 #include "tempo_follower.hpp"
 #include <cstddef>
@@ -45,6 +46,7 @@ class SequencerTransport {
     SequencerTransport(const SequencerTransport&) = delete;
     SequencerTransport& operator=(const SequencerTransport&) = delete;
     void Init(uint32_t sample_rate, uint16_t block_size) {
+        song_project_ = nullptr;
         pending_pattern_ = &pending_storage_;
         *pending_pattern_ = Pattern{};
         launch_buffer_ = nullptr;
@@ -65,12 +67,15 @@ class SequencerTransport {
     // Direct pattern access is for pre-play test setup only. Runtime edits use
     // ApplyPatternOp(), which marks the pending copy for the next safe swap.
     Pattern& pattern() { return *pending_pattern_; }
-    const Pattern& pattern() const { return *pending_pattern_; }
+    const Pattern& pattern() const {
+        return song_project_ ? song_project_->patterns[active_slot_].pattern : *pending_pattern_;
+    }
 
     uint32_t PatternRevision() const { return pattern_revision_; }
     // Callback only. Persistence validates before handing this private buffer
     // over. Stop without changing tempo, sync configuration or Track bindings.
     void ReplacePattern(const Pattern& pattern) {
+        StopSong();
         scheduler_.Stop();
         follower_.OnStop();
         armed_ = false;
@@ -82,6 +87,7 @@ class SequencerTransport {
 
     // Callback-only Project boundary: stop without replacing session settings.
     void StopForProject() {
+        StopSong();
         scheduler_.Stop();
         follower_.OnStop();
         armed_ = false;
@@ -99,7 +105,7 @@ class SequencerTransport {
     // onto the ISR stack. After completion the foreground owns the old working
     // buffer, including edits accepted while the destination was queued.
     bool LaunchPattern(Pattern*& buffer, uint8_t slot) {
-        if (armed_ || launch_buffer_)
+        if (armed_ || launch_buffer_ || song_project_)
             return false;
         launch_cancelled_ = false;
         launch_slot_ = slot;
@@ -115,8 +121,55 @@ class SequencerTransport {
     bool LaunchCancelled() const { return launch_cancelled_; }
     void SetPatternSlot(uint8_t slot) { active_slot_ = slot; }
 
+    // The Project is frozen by the foreground owner until SongActive() is false
+    // and its exchange publishes release. Only this callback reads it meanwhile.
+    bool StartSong(const Project* project, uint8_t song, uint8_t entry, bool loop) {
+        if (!project || song >= kMaxSongs || !project->songs[song].used ||
+            project->songs[song].length > kMaxSongEntries || entry >= project->songs[song].length ||
+            IsPlaying() || armed_ || launch_buffer_ || song_project_)
+            return false;
+        const auto& first = project->songs[song].entries[entry];
+        if (first.pattern >= kMaxPatterns || !project->patterns[first.pattern].used ||
+            !first.repeats)
+            return false;
+        song_slot_ = song;
+        song_entry_ = entry;
+        song_loop_ = loop;
+        auto settings = SessionSettings();
+        settings.tempo_bpm_x100 = project->songs[song].tempo_bpm_x100;
+        settings.command = Protocol::SEQ_TRANSPORT_PLAY;
+        ApplyTransport(settings);
+        song_project_ = project;
+        InstallSongEntry();
+        return true;
+    }
+    void StopSong() {
+        if (!song_project_)
+            return;
+        scheduler_.Stop();
+        follower_.OnStop();
+        armed_ = false;
+        *pending_pattern_ = song_project_->patterns[active_slot_].pattern;
+        song_project_ = nullptr;
+        ++pattern_revision_;
+        AdvanceEpoch();
+        CommitPendingPattern();
+    }
+    bool SongActive() const { return song_project_ != nullptr; }
+    // One lock-free value for foreground status; section/repeat are zero/one based.
+    uint32_t SongPosition() const {
+        const uint8_t repeat =
+            static_cast<uint8_t>(std::min<uint32_t>(255, scheduler_.PlayheadLoop() + 1));
+        return active_slot_ | (static_cast<uint32_t>(song_entry_) << 8) |
+               (static_cast<uint32_t>(repeat) << 16) | (SongActive() ? 1u << 24 : 0);
+    }
+
     // ---- Transport + mode (MSG_SEQ_TRANSPORT) ----
     void ApplyTransport(const Protocol::SeqTransportMessage& m) {
+        if (song_project_ && (m.command == Protocol::SEQ_TRANSPORT_STOP ||
+                              m.command == Protocol::SEQ_TRANSPORT_PLAY ||
+                              m.command == Protocol::SEQ_TRANSPORT_CONTINUE))
+            StopSong();
         tempo_bpm_ = static_cast<double>(m.tempo_bpm_x100) / 100.0;
         if (tempo_bpm_ < 1.0)
             tempo_bpm_ = 1.0;
@@ -172,6 +225,8 @@ class SequencerTransport {
     // Bounds-checked; an out-of-range track/step or unknown op is a silent
     // no-op (the wire is untrusted; never index past the fixed arrays).
     void ApplyPatternOp(const Protocol::SeqPatternOpMessage& m) {
+        if (song_project_)
+            return;
         using namespace Protocol;
         switch (m.op) {
             case SEQ_OP_SET_STEP:
@@ -276,14 +331,15 @@ class SequencerTransport {
     }
 
     bool ApplySlotEdit(const Protocol::SeqSlotEditMessage& message) {
-        if (!Protocol::IsValidSeqSlotEdit(message) || message.pattern != active_slot_ ||
-            message.epoch != active_epoch_)
+        if (song_project_ || !Protocol::IsValidSeqSlotEdit(message) ||
+            message.pattern != active_slot_ || message.epoch != active_epoch_)
             return false;
         ApplyPatternOp(message.edit);
         return true;
     }
     void BuildSlotPage(const Protocol::SeqPatternRequestMessage& request,
                        Protocol::SeqSlotPageMessage& page) const {
+        page.read_only = SongActive();
         page.pattern = active_slot_;
         page.epoch = active_epoch_;
         BuildPatternPage(request, page.page);
@@ -311,6 +367,8 @@ class SequencerTransport {
                 }
                 break;
             case MIDI_CLK_STOP:
+                StopSong();
+                armed_ = false;
                 follower_.OnStop();
                 scheduler_.Stop();
                 break;
@@ -345,7 +403,20 @@ class SequencerTransport {
             if (scheduler_.IsPlaying())
                 scheduler_.SetTempo(static_cast<float>(follower_.InstantaneousBpm()));
         }
+        if (song_project_ && scheduler_.IsPlaying() && !scheduler_.HasQueuedPattern())
+            ArmSongBoundary();
         const size_t count = scheduler_.Process(out_events, max_events);
+        if (song_project_) {
+            if (scheduler_.SwitchedPattern()) {
+                song_entry_ = static_cast<uint8_t>(song_entry_ + 1);
+                if (song_entry_ == song_project_->songs[song_slot_].length)
+                    song_entry_ = 0;
+                InstallSongEntry();
+                ArmSongBoundary();
+            } else if (!scheduler_.IsPlaying() && !armed_) {
+                StopSong();
+            }
+        }
         if (launch_buffer_) {
             if (scheduler_.SwitchedPattern()) {
                 SwapWorkingPattern(*launch_buffer_);
@@ -406,17 +477,16 @@ class SequencerTransport {
         if (!Protocol::IsValidSeqPatternRequest(request))
             return;
         out.valid = 1;
-        out.length = pending_pattern_->length;
-        out.scale = static_cast<uint8_t>(pending_pattern_->scale);
-        out.swing = pending_pattern_->swing;
-        out.enabled = pending_pattern_->tracks[request.track].enabled;
+        out.length = pattern().length;
+        out.scale = static_cast<uint8_t>(pattern().scale);
+        out.swing = pattern().swing;
+        out.enabled = pattern().tracks[request.track].enabled;
         out.clock_source = using_midi_ ? Protocol::SEQ_CLOCK_MIDI : Protocol::SEQ_CLOCK_INTERNAL;
         out.input_mode = input_mode_;
         out.quantize = quantize_;
         out.tempo_bpm_x100 = static_cast<uint16_t>(tempo_bpm_ * 100.0 + 0.5);
         for (uint8_t i = 0; i < Protocol::SEQ_PAGE_STEPS; ++i) {
-            const auto& step =
-                pending_pattern_->tracks[request.track].steps[request.first_step + i];
+            const auto& step = pattern().tracks[request.track].steps[request.first_step + i];
             auto& wire = out.steps[i];
             wire.on = step.on;
             wire.velocity = step.velocity;
@@ -478,6 +548,24 @@ class SequencerTransport {
         s.param_locks[kMaxParamLocks - 1] = ParamLock{param_id, value};
     }
 
+    void InstallSongEntry() {
+        active_slot_ = song_project_->songs[song_slot_].entries[song_entry_].pattern;
+        ++pattern_revision_;
+        AdvanceEpoch();
+        pending_pattern_dirty_ = false;
+        scheduler_.SetPattern(&song_project_->patterns[active_slot_].pattern);
+    }
+    void ArmSongBoundary() {
+        const auto& song = song_project_->songs[song_slot_];
+        const auto repeats = song.entries[song_entry_].repeats;
+        const auto next = static_cast<uint16_t>(song_entry_ + 1);
+        if (next == song.length && !song_loop_)
+            scheduler_.QueueStop(repeats);
+        else {
+            const auto slot = song.entries[next == song.length ? 0 : next].pattern;
+            scheduler_.QueuePattern(&song_project_->patterns[slot].pattern, repeats);
+        }
+    }
     void AdvanceEpoch() {
         if (!++active_epoch_)
             ++active_epoch_;
@@ -496,6 +584,9 @@ class SequencerTransport {
         scheduler_.SetPattern(&active_pattern_);
     }
 
+    const Project* song_project_ = nullptr;
+    uint8_t song_slot_ = 0, song_entry_ = 0;
+    bool song_loop_ = false;
     Pattern pending_storage_;
     Pattern* pending_pattern_ = &pending_storage_;
     Pattern** launch_buffer_ = nullptr;

@@ -7,6 +7,7 @@
 #include "inter_mcu.h"
 #include "ui/ui_navigator.h"
 #include "ui/ui_pattern_files_page.h"
+#include "ui/ui_song_page.h"
 
 #include "wxcf/pattern_file.hpp"
 #include <algorithm>
@@ -288,6 +289,15 @@ std::array<Softkey, NUM_SOFTKEYS> UIPatternSlotsPage::getSoftkeys() {
                [] { UINavigator::instance().push(createPatternFilesPage()); },
                !pending_id_,
                "Wait for the operation"};
+    return keys;
+}
+std::array<Softkey, NUM_SOFTKEYS> UIPatternSlotsPage::getShiftedSoftkeys() {
+    std::array<Softkey, NUM_SOFTKEYS> keys{};
+    keys[0] = {"Back", [] { UINavigator::instance().pop(); }};
+    keys[1] = {"Songs",
+               [] { UINavigator::instance().push(createSongPage()); },
+               alive_,
+               "Audio engine disconnected"};
     return keys;
 }
 void UIPatternSlotsPage::onInput(const InputEvent& event) {

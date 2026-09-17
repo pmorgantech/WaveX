@@ -1841,3 +1841,155 @@ TEST_F(SfzLoaderTest, ProjectPatternQueueAllowsEditsAndReturnsOutgoingSnapshot) 
     EXPECT_EQ(session.Patterns().Status().error, SEQ_SLOT_CANCELLED);
     EXPECT_EQ(session.Current()->active_pattern, 1);
 }
+
+TEST_F(SfzLoaderTest, SongArrangementEditsPlaybackAndProjectRecall) {
+    using namespace WaveX::Sequencer;
+    PatternExchange exchange;
+    SequencerTransport transport;
+    transport.Init(48000, 48);
+    transport.ApplyPatternOp({SEQ_OP_PATTERN_LENGTH, 0, 0, 0, 1, 0});
+    MixerControlHandoff mixer;
+    WaveX::Storage::ProjectSession session(memory_,
+                                           pool_,
+                                           exchange,
+                                           mixer,
+                                           io_.data(),
+                                           io_.size(),
+                                           {StopProjectTestVoices, PublishProjectTest});
+    ASSERT_TRUE(session.RequestPattern(SlotRequest(6000, SEQ_SLOT_COPY, 127, "Fill")));
+    RunProject(session, exchange, transport);
+    SeqSongOpMessage request;
+    request.request_id = 6001;
+    request.song = 15;
+    request.op = SEQ_SONG_CREATE;
+    std::strcpy(request.name, "Night song");
+    ASSERT_TRUE(session.RequestSong(request));
+    RunProject(session, exchange, transport);
+    ASSERT_EQ(session.Songs().Status().error, SEQ_SONG_OK);
+    EXPECT_EQ(session.Current()->songs[15].length, 1);
+    request.request_id++;
+    request.op = SEQ_SONG_INSERT;
+    request.entry = 1;
+    request.pattern = 127;
+    request.repeats = 2;
+    ASSERT_TRUE(session.RequestSong(request));
+    RunProject(session, exchange, transport);
+    request.request_id++;
+    request.op = SEQ_SONG_MOVE;
+    request.destination = 0;
+    ASSERT_TRUE(session.RequestSong(request));
+    RunProject(session, exchange, transport);
+    EXPECT_EQ(session.Current()->songs[15].entries[0].pattern, 127);
+    EXPECT_EQ(session.Current()->songs[15].entries[1].pattern, 0);
+    request.request_id++;
+    request.op = SEQ_SONG_SET_ENTRY;
+    request.entry = 1;
+    request.repeats = 3;
+    ASSERT_TRUE(session.RequestSong(request));
+    RunProject(session, exchange, transport);
+    request.request_id++;
+    request.op = SEQ_SONG_TEMPO;
+    request.tempo_bpm_x100 = 12300;
+    ASSERT_TRUE(session.RequestSong(request));
+    RunProject(session, exchange, transport);
+    request.request_id++;
+    request.op = SEQ_SONG_PLAY;
+    request.entry = 0;
+    ASSERT_TRUE(session.RequestSong(request));
+    TriggerEvent events[32];
+    for (int i = 0; i < 30; ++i) {
+        transport.Tick(events, 32);
+        exchange.Process(transport);
+        session.Pump();
+    }
+    EXPECT_TRUE(session.Busy());
+    EXPECT_FALSE(session.BlocksEdits());
+    EXPECT_TRUE(transport.SongActive());
+    EXPECT_EQ(session.Songs().Status().completed_request_id, request.request_id);
+    SeqPatternRequestMessage read;
+    read.request_id = 1;
+    SeqSlotPageMessage page;
+    transport.BuildSlotPage(read, page);
+    EXPECT_EQ(page.read_only, 1);
+    EXPECT_FALSE(session.RequestPattern(SlotRequest(6100, SEQ_SLOT_CREATE, 1, "Busy")));
+    EXPECT_FALSE(session.Request(ProjectRequest(6101, PROJECT_NEW)));
+    // Song plays to completion without any foreground pump, including section changes.
+    for (int i = 0; i < 700; ++i) {
+        transport.Tick(events, 32);
+        exchange.Process(transport);
+    }
+    EXPECT_FALSE(transport.SongActive());
+    EXPECT_TRUE(session.Busy());
+    session.Pump();
+    EXPECT_FALSE(session.Busy());
+    EXPECT_EQ(session.Current()->active_pattern, 127);
+    ASSERT_TRUE(session.Request(ProjectRequest(6102, PROJECT_SAVE_COPY, "Song session")));
+    RunProject(session, exchange, transport);
+    ASSERT_EQ(session.Status().error, PROJECT_OK);
+    ASSERT_TRUE(session.Request(ProjectRequest(6103, PROJECT_NEW)));
+    RunProject(session, exchange, transport);
+    ASSERT_TRUE(session.Request(ProjectRequest(6104, PROJECT_LOAD, "Song session")));
+    RunProject(session, exchange, transport);
+    ASSERT_EQ(session.Status().error, PROJECT_OK);
+    EXPECT_EQ(session.Current()->selected_song, 15);
+    EXPECT_STREQ(session.Current()->songs[15].name, "Night song");
+    EXPECT_EQ(session.Current()->songs[15].entries[0].pattern, 127);
+    EXPECT_EQ(session.Current()->songs[15].entries[1].repeats, 3);
+    EXPECT_EQ(session.Current()->songs[15].tempo_bpm_x100, 12300);
+}
+
+TEST_F(SfzLoaderTest, SongRejectsInvalidEditsAndStopWaitsForCallbackRelease) {
+    using namespace WaveX::Sequencer;
+    PatternExchange exchange;
+    SequencerTransport transport;
+    transport.Init(48000, 48);
+    MixerControlHandoff mixer;
+    WaveX::Storage::ProjectSession session(memory_,
+                                           pool_,
+                                           exchange,
+                                           mixer,
+                                           io_.data(),
+                                           io_.size(),
+                                           {StopProjectTestVoices, PublishProjectTest});
+    SeqSongOpMessage request;
+    request.request_id = 6200;
+    request.op = SEQ_SONG_CREATE;
+    std::strcpy(request.name, "Loop");
+    ASSERT_TRUE(session.RequestSong(request));
+    RunProject(session, exchange, transport);
+    request.request_id++;
+    request.op = SEQ_SONG_REMOVE;
+    EXPECT_FALSE(session.RequestSong(request));
+    EXPECT_EQ(session.Songs().Status().error, SEQ_SONG_BAD_ENTRY);
+    request.request_id++;
+    request.op = SEQ_SONG_INSERT;
+    request.pattern = 1;
+    EXPECT_FALSE(session.RequestSong(request));
+    EXPECT_EQ(session.Current()->songs[0].length, 1);
+    request.request_id++;
+    request.op = SEQ_SONG_PLAY;
+    request.loop = 1;
+    ASSERT_TRUE(session.RequestSong(request));
+    TriggerEvent events[32];
+    for (int i = 0; i < 30; ++i) {
+        transport.Tick(events, 32);
+        exchange.Process(transport);
+        session.Pump();
+    }
+    EXPECT_TRUE(transport.SongActive());
+    request.request_id++;
+    request.op = SEQ_SONG_RENAME;
+    EXPECT_FALSE(session.RequestSong(request));
+    EXPECT_EQ(session.Songs().Status().error, SEQ_SONG_BUSY);
+    request.request_id++;
+    request.op = SEQ_SONG_STOP;
+    ASSERT_TRUE(session.RequestSong(request));
+    session.Pump();
+    EXPECT_TRUE(session.Busy());
+    EXPECT_TRUE(transport.SongActive());
+    exchange.Process(transport);
+    session.Pump();
+    EXPECT_FALSE(session.Busy());
+    EXPECT_EQ(session.Songs().Status().completed_request_id, request.request_id);
+    EXPECT_FALSE(transport.SongActive());
+}

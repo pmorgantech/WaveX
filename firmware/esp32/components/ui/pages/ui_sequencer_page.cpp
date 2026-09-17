@@ -375,6 +375,7 @@ void UISequencerPage::render() {
                       selected_step_ + 1,
                       !link_alive_         ? "Audio engine disconnected"
                       : clear_armed_       ? "Clear this Track's steps? Choose Confirm or Cancel."
+                      : model_.ReadOnly()  ? "Song playing: stop Song to edit Patterns"
                       : !model_.AllReady() ? "Reading pattern..."
                                            : "Tap steps; drag values. Notes 60-75 play Pads 1-16.");
         text(status_, value);

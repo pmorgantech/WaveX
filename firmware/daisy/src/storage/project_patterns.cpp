@@ -9,24 +9,30 @@ namespace WaveX::Storage {
 using namespace Protocol;
 using namespace Sequencer;
 using State = PatternExchange::State;
-void ProjectPatterns::Refresh(const Project* project) {
-    status_.active_pattern = project ? project->active_pattern : 0;
+void ProjectPatterns::Refresh(const Project* project, uint8_t runtime_slot) {
+    status_.active_pattern =
+        runtime_slot < 128 ? runtime_slot : (project ? project->active_pattern : 0);
     status_.used =
         status_.slot == status_.active_pattern || (project && project->patterns[status_.slot].used);
     const char* name = project ? project->patterns[status_.slot].name : "";
-    if (status_.slot == status_.active_pattern && PatternStore::CurrentName()[0])
+    if (status_.slot == status_.active_pattern &&
+        (!project || status_.active_pattern == project->active_pattern) &&
+        PatternStore::CurrentName()[0])
         name = PatternStore::CurrentName();
     detail::CopyWireString(status_.name, sizeof(status_.name), status_.used ? name : "");
     if (status_.used && !status_.name[0])
         std::snprintf(status_.name, sizeof(status_.name), "Pattern %u", status_.slot + 1);
 }
-bool ProjectPatterns::Request(const SeqSlotOpMessage& request, const Project* project, bool busy) {
+bool ProjectPatterns::Request(const SeqSlotOpMessage& request,
+                              const Project* project,
+                              bool busy,
+                              uint8_t runtime_slot) {
     if (!IsValidSeqSlotOp(request))
         return false;
     status_.request_id = request.request_id;
     status_.slot = request.slot;
     reply_ = true;
-    Refresh(project);
+    Refresh(project, runtime_slot);
     if (request.op == SEQ_SLOT_GET || request.request_id == status_.active_request_id ||
         request.request_id == status_.completed_request_id)
         return false;

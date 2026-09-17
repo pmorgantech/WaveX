@@ -439,3 +439,12 @@ replacement advances an epoch; an incoming epoch clears other cached rows, and
 edits echo the displayed epoch/slot so a delayed command cannot alter a newly
 selected Pattern. The heading identifies the displayed slot. Grid edits remain
 available while a launch is queued and are captured in the outgoing Pattern.
+
+### Song arrangement
+
+`UISongPage`, reached through Project Patterns' shifted Songs key, follows the
+same correlated polling and retained-completion pattern as the slot/file pages.
+It displays six arrangement rows, a separate section/Pattern/repeat/tempo edit
+column, and the actual playing section. Draft edits require Apply/Revert; playback
+freezes arrangement edits. Widgets compare values before repainting on each poll.
+See [Song sequencing](features/song-sequencing.md) for operation and timing rules.

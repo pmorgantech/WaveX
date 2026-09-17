@@ -90,6 +90,7 @@ TEST(PatternSlotProtocol, ScopedPageAndEditKeepIdentityAndRejectInvalidBounds) {
     parsed.epoch = 0;
     EXPECT_FALSE(IsValidSeqSlotEdit(parsed));
     SeqSlotPageMessage page;
+    page.read_only = 1;
     page.epoch = 0x12345678;
     page.pattern = 126;
     page.page.request_id = 777;
@@ -106,6 +107,9 @@ TEST(PatternSlotProtocol, ScopedPageAndEditKeepIdentityAndRejectInvalidBounds) {
         packet.data(), MSG_SEQ_SLOT_PAGE, &parsed_page, sizeof(parsed_page)));
     EXPECT_EQ(std::memcmp(&page, &parsed_page, sizeof(page)), 0);
     EXPECT_TRUE(IsValidSeqSlotPage(parsed_page));
+    parsed_page.read_only = 2;
+    EXPECT_FALSE(IsValidSeqSlotPage(parsed_page));
+    parsed_page = page;
     parsed_page.pattern = 128;
     EXPECT_FALSE(IsValidSeqSlotPage(parsed_page));
     parsed_page = page;
