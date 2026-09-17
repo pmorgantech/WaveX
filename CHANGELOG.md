@@ -13,6 +13,10 @@ versioning and release process.
 
 ### Added
 
+- Added manufacturer datasheets and RT1170 module/processor references under
+  `hardware/datasheets/`, with source/revision indexing in `hardware/docs/index.md`
+  and SHA-256 checksums for the downloaded PDFs.
+
 - Added `hardware/Makefile` targets for ERC/DRC checks, Gerber and drill exports,
   and schematic PDF documentation, with generated outputs under `hardware/build/`.
 
