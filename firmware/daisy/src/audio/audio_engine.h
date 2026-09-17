@@ -226,6 +226,8 @@ void FinishCardFormat();
 void OnSeqTransport(const WaveX::Protocol::SeqTransportMessage& m);
 void PumpSequencerState();
 void PumpMixMeters();
+void OnSamplePlayheadRequest(const WaveX::Protocol::SamplePlayheadRequest& request);
+void PumpSamplePlayhead();
 void OnSeqFileOp(const WaveX::Protocol::SeqFileOpMessage& request);
 void OnSeqPatternRequest(const WaveX::Protocol::SeqPatternRequestMessage& request);
 void OnSeqPatternOp(const WaveX::Protocol::SeqPatternOpMessage& m);

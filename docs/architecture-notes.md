@@ -366,7 +366,10 @@ establish a finished workflow. This is design rationale, not another task list.
 
 ### Playback head in waveform views
 
-**Requested 2026-09-17; not implemented by these notes.** Waveform views should
+**Requested 2026-09-17.** The initial sample-scoped implementation is described
+in [Waveform playback head](features/waveform-playback-head.md); physical
+acceptance is open in HV-010. The requirements below also cover future reverse
+playback and Track/Zone-specific contexts. Waveform views should
 show a moving vertical playback-head line while the displayed sound is playing,
 including browser audition and Sample editing. Use the same behavior wherever
 that waveform is displayed. Keep the line visually distinct from trim, loop
@@ -381,9 +384,10 @@ window, and clear it when playback ends, stops, is stolen or changes asset.
 For polyphonic playback, the proposed initial rule is one head for the newest
 active voice matching the displayed Track/Zone/sample context, falling back to
 the next matching voice when it ends. Browser audition follows its own preview
-instance. This selection rule still needs implementation-level agreement;
-stable instance identity and generation must prevent delayed telemetry from
-moving the head for a newly selected sound.
+instance. The current sample-only views use the newest matching sample voice,
+with matching streaming audition taking precedence. Request identity, sample
+identity and generation must prevent delayed telemetry from moving the head for
+a newly selected sound.
 
 Publish bounded playback snapshots from the engine and deliver coalesced,
 rate-limited telemetry through the existing link. Render the overlay on the UI

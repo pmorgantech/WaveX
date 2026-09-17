@@ -34,6 +34,15 @@ WaveformView::WaveformView(lv_obj_t* parent, int32_t width, int32_t height) {
     lv_obj_remove_flag(obj_, LV_OBJ_FLAG_CLICKABLE);
 
     lv_obj_add_event_cb(obj_, drawEventCb, LV_EVENT_DRAW_MAIN, this);
+    playhead_ = lv_obj_create(obj_);
+    lv_obj_remove_style_all(playhead_);
+    lv_obj_set_size(playhead_, UI_WAVEFORM_PLAYHEAD_WIDTH, lv_pct(100));
+    lv_obj_set_style_bg_color(playhead_, UI_COLOR_WAVEFORM_PLAYHEAD, 0);
+    lv_obj_set_style_bg_opa(playhead_, LV_OPA_COVER, 0);
+    lv_obj_remove_flag(playhead_,
+                       static_cast<lv_obj_flag_t>(LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE));
+    lv_obj_add_flag(playhead_,
+                    static_cast<lv_obj_flag_t>(LV_OBJ_FLAG_HIDDEN | LV_OBJ_FLAG_IGNORE_LAYOUT));
     clear();
 }
 
@@ -42,6 +51,7 @@ void WaveformView::clear() {
     std::fill(col_max_.begin(), col_max_.end(), 0);
     channels_ = 1;
     has_data_ = false;
+    setPlaybackPosition(false, 0, 0, 0);
     if (obj_) {
         lv_obj_invalidate(obj_);
     }
@@ -111,6 +121,29 @@ void WaveformView::setEnvelope(const WaveX::Protocol::EnvelopeColumn* columns,
 
     has_data_ = true;
     lv_obj_invalidate(obj_);
+}
+
+void WaveformView::setPlaybackPosition(bool playing, uint32_t frame, uint32_t start, uint32_t end) {
+    if (!playhead_)
+        return;
+    const bool visible = playing && has_data_ && end > start && frame >= start && frame < end;
+    const bool hidden = lv_obj_has_flag(playhead_, LV_OBJ_FLAG_HIDDEN);
+    if (!visible) {
+        if (!hidden)
+            lv_obj_add_flag(playhead_, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+    const int32_t width = lv_obj_get_content_width(obj_);
+    if (width <= 0)
+        return;
+    const int32_t x = std::min<int32_t>(
+        static_cast<int32_t>((uint64_t(frame - start) * static_cast<uint32_t>(width)) /
+                             (end - start)),
+        std::max<int32_t>(0, width - UI_WAVEFORM_PLAYHEAD_WIDTH));
+    if (lv_obj_get_x(playhead_) != x)
+        lv_obj_set_x(playhead_, x);
+    if (hidden)
+        lv_obj_remove_flag(playhead_, LV_OBJ_FLAG_HIDDEN);
 }
 
 int32_t WaveformView::valueToY(int32_t value, const lv_area_t& area) {

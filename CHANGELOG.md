@@ -13,6 +13,13 @@ versioning and release process.
 
 ### Added
 
+- Waveform playback line in Browser, Sample Edit and Record: source positions
+  follow the newest matching RAM voice or streamed audition, including rate
+  conversion and loop wraps. Zoom clips the line, stale replies expire, and
+  loop-splice views omit it. Consumed audio positions replace read-ahead as the
+  cursor source; unchanged pixels do not redraw the waveform. Physical timing
+  and panel validation remain open in HV-010.
+
 - Song arrangement and playback: 16 named Songs reference Project Patterns with
   repeat counts, insert/remove/reorder controls, Song tempo, selected-section
   starts and optional looping. Sections switch on the Daisy audio clock;

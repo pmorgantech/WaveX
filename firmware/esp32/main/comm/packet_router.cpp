@@ -123,6 +123,14 @@ void PacketRouter::route_by_message_type(uint8_t msg_type,
     }
 
     switch (msg_type) {
+        case WaveX::Protocol::MSG_SAMPLE_PLAYHEAD: {
+            WaveX::Protocol::SamplePlayheadMessage message;
+            if (payload_len == sizeof(message) &&
+                CopyMessage(payload, payload_len, message, "SAMPLE_PLAYHEAD") &&
+                WaveX::Protocol::IsValidSamplePlayhead(message))
+                inter_mcu_store_sample_playhead(message);
+            break;
+        }
         case WaveX::Protocol::MSG_SEQ_SONG_STATUS: {
             WaveX::Protocol::SeqSongStatusMessage message;
             if (payload_len == sizeof(message) &&

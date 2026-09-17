@@ -39,6 +39,15 @@ bool g_send_ok = true;
 EnvelopePanel::ChunkCb g_listener = nullptr;
 void* g_listener_user = nullptr;
 int g_listen_calls = 0;
+uint32_t g_cursor_requests = 0;
+WaveX::Protocol::SamplePlayheadMessage g_cursor_reply;
+uint32_t FakeCursorRequest(uint16_t, uint16_t) {
+    return ++g_cursor_requests;
+}
+bool FakeCursorRead(WaveX::Protocol::SamplePlayheadMessage* out) {
+    *out = g_cursor_reply;
+    return true;
+}
 
 bool FakeSend(uint16_t sample_id, uint16_t columns, uint32_t start_frame, uint32_t end_frame) {
     if (!g_send_ok) {
@@ -79,6 +88,14 @@ struct FakeSink : EnvelopeSink {
         last_channels = 0;
     }
 
+    void setPlaybackPosition(bool on, uint32_t frame, uint32_t start, uint32_t end) override {
+        playing = on;
+        cursor_frame = frame;
+        window_start = start;
+        window_end = end;
+    }
+    bool playing = false;
+    uint32_t cursor_frame = 0, window_start = 0, window_end = 0;
     uint16_t width;
     int sets = 0;
     int clears = 0;
@@ -110,6 +127,8 @@ class EnvelopePanelTest : public ::testing::Test {
    protected:
     void SetUp() override {
         g_sent.clear();
+        g_cursor_requests = 0;
+        g_cursor_reply = {};
         g_send_ok = true;
         g_listener = nullptr;
         g_listener_user = nullptr;
@@ -508,3 +527,82 @@ TEST_F(EnvelopePanelTest, CachedWindowDrawsBeforeSettleWithoutSending) {
 }
 
 }  // namespace
+
+TEST_F(EnvelopePanelTest, CursorMatchesIdentityTimesOutAndHidesOnSampleChange) {
+    link_.request_cursor = &FakeCursorRequest;
+    link_.read_cursor = &FakeCursorRead;
+    attachOne(256);
+    panel_.setSample(7, 0, 65536);
+    panel_.setWindow(0, 0, 65536);
+    panel_.service(0);
+    ASSERT_EQ(g_cursor_requests, 1u);
+    deliver(g_sent.back(), 1, 100, 65536);
+    g_cursor_reply.request_id = 1;
+    g_cursor_reply.sample_id = 8;
+    g_cursor_reply.source = WaveX::Protocol::PLAYHEAD_VOICE;
+    g_cursor_reply.frame = 12345;
+    panel_.service(10);
+    EXPECT_FALSE(sinks_[0].playing);
+    g_cursor_reply.sample_id = 7;
+    g_cursor_reply.generation = 1;
+    panel_.service(20);
+    EXPECT_FALSE(sinks_[0].playing);
+    g_cursor_reply.generation = 0;
+    panel_.service(30);
+    ASSERT_TRUE(sinks_[0].playing);
+    EXPECT_EQ(sinks_[0].cursor_frame, 12345u);
+    panel_.service(50);
+    EXPECT_EQ(g_cursor_requests, 2u);
+    EXPECT_TRUE(sinks_[0].playing);
+    panel_.service(231);
+    EXPECT_FALSE(sinks_[0].playing);  // stale cached reply cannot refresh TTL
+    g_cursor_reply.request_id = 2;
+    panel_.service(250);
+    EXPECT_FALSE(sinks_[0].playing);  // late matching reply rejected
+    EXPECT_EQ(g_cursor_requests, 3u);
+    g_cursor_reply.request_id = 3;
+    panel_.service(260);
+    ASSERT_TRUE(sinks_[0].playing);
+    panel_.setSample(9, 0, 65536);
+    EXPECT_FALSE(sinks_[0].playing);
+    panel_.service(300);
+    EXPECT_FALSE(sinks_[0].playing);
+    panel_.detach();
+    EXPECT_FALSE(sinks_[0].playing);
+}
+
+TEST_F(EnvelopePanelTest, CursorNeverDrawsOnSpliceHalvesAndPollingIsBoundedAcrossWrap) {
+    link_.request_cursor = &FakeCursorRequest;
+    link_.read_cursor = &FakeCursorRead;
+    attachThree(256, 128);
+    panel_.setSample(7, 0, 65536);
+    panel_.setWindow(0, 0, 65536);
+    panel_.setWindow(1, 0, 32768);
+    panel_.setWindow(2, 32768, 65536);
+    panel_.service(UINT32_MAX - 20);
+    deliver(g_sent.back(), 1, 100, 65536);
+    g_cursor_reply.request_id = 1;
+    g_cursor_reply.sample_id = 7;
+    g_cursor_reply.source = WaveX::Protocol::PLAYHEAD_STREAM;
+    g_cursor_reply.frame = 100;
+    panel_.service(UINT32_MAX - 10);
+    ASSERT_TRUE(sinks_[0].playing);
+    EXPECT_FALSE(sinks_[1].playing);
+    EXPECT_FALSE(sinks_[2].playing);
+    panel_.service(20);
+    EXPECT_EQ(g_cursor_requests, 1u);
+    panel_.service(30);
+    EXPECT_EQ(g_cursor_requests, 2u);
+    panel_.enableView(0, false);
+    EXPECT_FALSE(sinks_[0].playing);
+    panel_.service(1000);
+    EXPECT_EQ(g_cursor_requests, 2u);
+    panel_.enableView(0, true);
+    panel_.service(1001);
+    EXPECT_FALSE(sinks_[0].playing);
+    EXPECT_EQ(g_cursor_requests, 3u);
+    g_cursor_reply.request_id = 3;
+    g_cursor_reply.source = WaveX::Protocol::PLAYHEAD_IDLE;
+    panel_.service(1010);
+    EXPECT_FALSE(sinks_[0].playing);
+}

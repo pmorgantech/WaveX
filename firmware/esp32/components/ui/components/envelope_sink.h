@@ -29,6 +29,10 @@ struct EnvelopeSink {
 
     // Nothing to show: no sample, or a new one whose data has not arrived.
     virtual void clear() = 0;
+
+    // Absolute source frame within the displayed [start, end) window.
+    // Optional for sinks which do not draw a playback line.
+    virtual void setPlaybackPosition(bool, uint32_t, uint32_t, uint32_t) {}
 };
 
 }  // namespace wavex_ui

@@ -898,6 +898,7 @@ int main(void) {
         WaveX::AudioEngine::PumpTrackBinding();
         WaveX::AudioEngine::PumpSequencerState();
         WaveX::AudioEngine::PumpMixMeters();
+        WaveX::AudioEngine::PumpSamplePlayhead();
 #endif
 
 // Log SPI processing to verify it continues during auditioning

@@ -49,6 +49,7 @@ using q15_t = int16_t;
 #include "note_event_queue.hpp"
 #include "output_sink.hpp"
 #include "paraphonic_envelope.hpp"
+#include "playback_cursor.hpp"
 #include "sample_load_info.hpp"
 #include "sequencer/pattern_exchange.hpp"
 #include "sequencer/sequencer_command_queue.hpp"
@@ -1157,14 +1158,27 @@ static uint32_t s_rb_tail = 0;
 // never observed half-applied.
 static bool s_rb_live = false;
 static q15_t s_rb[RB_CAP_FRAMES * kMaxMixChannels];
+// CPU-only provenance shares the PCM ring's head/tail publication. No DMA.
+static uint32_t s_rb_source_frames[RB_CAP_FRAMES];
+static uint32_t s_stream_epoch = 0;  // main writes only with s_rb_live false
+static uint32_t s_consumed_source_frame = SourceFrameWalk::kSilent;  // callback-owned
+struct PlayheadQuery {
+    SamplePlayheadRequest request;
+    const int16_t* pcm = nullptr;  // comparison only; never dereferenced
+    uint32_t stream_epoch = 0;
+};
+static SnapshotMailbox<PlayheadQuery> s_playhead_query;
+static SnapshotMailbox<SamplePlayheadMessage> s_playhead_reply;
+static PlayheadQuery s_playhead_latest;  // foreground owner
 
 // Pre-buffering system for smooth playback start
 static const uint32_t PREBUFFER_FRAMES =
     1024;  // ~21ms at 48kHz (much more responsive for auditioning)
 static q15_t s_prebuffer[PREBUFFER_FRAMES * kMaxMixChannels];  // ~23ms of interleaved audio
-static uint32_t s_prebuffer_filled = 0;                        // Number of frames pre-buffered
-static bool s_prebuffer_ready = false;  // Whether pre-buffer is ready for playback
-static bool s_prebuffering = false;     // Whether we're currently pre-buffering
+static uint32_t s_prebuffer_source_frames[PREBUFFER_FRAMES];
+static uint32_t s_prebuffer_filled = 0;  // Number of frames pre-buffered
+static bool s_prebuffer_ready = false;   // Whether pre-buffer is ready for playback
+static bool s_prebuffering = false;      // Whether we're currently pre-buffering
 
 // Background SD I/O system with larger buffers
 static const uint32_t SD_BUFFER_SIZE = 8192;  // 8KB SD read buffer for better performance
@@ -1384,6 +1398,7 @@ static uint32_t ConvertFramesToOutput(
 // and PumpWavIO() takes over from there, so they are consecutive chunks of the
 // SAME stream and must share the phase. Reset when a file is opened or closed.
 static StreamResamplerState s_resampler;
+static uint32_t s_resampler_history_frame = SourceFrameWalk::kSilent;
 
 // Pre-buffering functions
 static bool prebuffer_audio() {
@@ -1494,6 +1509,7 @@ static bool prebuffer_audio() {
 
     UINT br = 0;
     s_io_start_time = System::GetTick();
+    const uint32_t source_first = (f_tell(&s_wav.file) - s_wav.data_start) / file_bpf;
     FRESULT fr = f_read(&s_wav.file, s_prebuffer_sd, req_bytes, &br);
     s_io_duration = System::GetTick() - s_io_start_time;
 
@@ -1542,6 +1558,7 @@ static bool prebuffer_audio() {
 
     q15_t* to_push = conversion_output;
     uint32_t output_frames = frames_read;
+    const StreamResamplerState resampler_before = s_resampler;
     if (resample_ratio != 1.0f) {
         uint32_t max_out_frames =
             static_cast<uint32_t>(std::ceil(static_cast<float>(frames_read) * resample_ratio)) + 1;
@@ -1549,7 +1566,6 @@ static bool prebuffer_audio() {
         uint32_t resampled = 0;
         // Same snapshot reasoning as the streaming path: the drop below
         // discards this pass's output, so the phase must not stay advanced.
-        const StreamResamplerState resampler_before = s_resampler;
         if (resample_buffer != nullptr) {
             resampled = ResampleStreamInterleaved(s_resampler,
                                                   conversion_output,
@@ -1580,6 +1596,15 @@ static bool prebuffer_audio() {
     // Push into the pre-buffer
     q15_t* dst = &s_prebuffer[s_prebuffer_filled * s_output_channels];
     memcpy(dst, to_push, output_frames * s_output_channels * sizeof(q15_t));
+    SourceFrameWalk walk{
+        source_first,
+        s_resampler_history_frame,
+        resample_ratio != 1.0f && resampler_before.has_history ? resampler_before.phase : 0.0f,
+        1.0f / resample_ratio,
+        false};
+    for (uint32_t i = 0; i < output_frames; ++i)
+        s_prebuffer_source_frames[s_prebuffer_filled + i] = walk.Next();
+    s_resampler_history_frame = source_first + frames_read - 1;
     s_prebuffer_filled += output_frames;
 
     if (s_prebuffer_filled >= PREBUFFER_FRAMES) {
@@ -1817,7 +1842,10 @@ static inline uint32_t rb_free_frames() {
     return (RB_CAP_FRAMES - 1u) - rb_count_frames();
 }
 
-static inline void rb_push_frames(const q15_t* samples, uint32_t frames) {
+static inline void rb_push_frames(const q15_t* samples,
+                                  uint32_t frames,
+                                  SourceFrameWalk walk = {},
+                                  const uint32_t* tags = nullptr) {
     if (frames == 0 || samples == nullptr)
         return;
 
@@ -1837,6 +1865,9 @@ static inline void rb_push_frames(const q15_t* samples, uint32_t frames) {
                samples + chunk * samples_per_channel,
                (frames - chunk) * samples_per_channel * sizeof(q15_t));
     }
+
+    for (uint32_t i = 0; i < frames; ++i)
+        s_rb_source_frames[(head + i) & mask] = tags ? tags[i] : walk.Next();
 
     // Release: publish the sample writes above before the consumer can see
     // the new head and read them.
@@ -1858,6 +1889,7 @@ static inline void rb_push_frames(const q15_t* samples, uint32_t frames) {
 // accounting for any remaining samples itself, exactly as the old per-sample
 // loop did on a failed pop.
 static inline size_t rb_pop_stereo_batch(float* out_l, float* out_r, size_t size) {
+    s_consumed_source_frame = SourceFrameWalk::kSilent;
     if (!__atomic_load_n(&s_rb_live, __ATOMIC_ACQUIRE)) {
         // Main loop is mid-reset (OpenWav/CloseWav) - treat the ring as
         // empty and touch neither index, matching rb_push_frames' contract.
@@ -1884,6 +1916,7 @@ static inline size_t rb_pop_stereo_batch(float* out_l, float* out_r, size_t size
     }
 
     if (popped > 0) {
+        s_consumed_source_frame = s_rb_source_frames[(tail - 1) & mask];
         // Release: the data reads above are complete before the freed slots
         // are republished to the producer via the advanced tail.
         __atomic_store_n(&s_rb_tail, tail, __ATOMIC_RELEASE);
@@ -1908,6 +1941,8 @@ void Init(DaisySeed& hw, float sample_rate, bool sdram_available) {
     s_mix_meter_sequence = s_mix_meter_sent = 0;
     s_mix_meter_main = {};
     s_mix_meter_mailbox.Init(s_mix_meter_main);
+    s_playhead_query.Init({});
+    s_playhead_reply.Init({});
     s_track_mixer.SetSampleRate(sample_rate);
     s_voice_manager.SetTrackMixer(&s_track_mixer);
 
@@ -2203,6 +2238,29 @@ void Callback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t
         snapshot.sequence = ++s_mix_meter_sequence;
         s_mix_meter_mailbox.Publish(snapshot);
         s_mix_meter_window.Reset();
+    }
+    if (s_playhead_query.AcquireLatest()) {
+        const auto& query = s_playhead_query.ConsumerValue();
+        SamplePlayheadMessage reply;
+        reply.request_id = query.request.request_id;
+        reply.sample_id = query.request.sample_id;
+        reply.generation = query.request.generation;
+        // An active matching audition owns the cursor even during its silent
+        // loop gap; don't jump to a resident voice during that gap.
+        if (query.stream_epoch && __atomic_load_n(&s_rb_live, __ATOMIC_ACQUIRE) &&
+            query.stream_epoch == s_stream_epoch) {
+            if (s_consumed_source_frame != SourceFrameWalk::kSilent) {
+                reply.source = PLAYHEAD_STREAM;
+                reply.frame = s_consumed_source_frame;
+            }
+        } else {
+            uint32_t frame = 0;
+            if (FindVoicePlayhead(s_voice_manager, query.pcm, frame)) {
+                reply.source = PLAYHEAD_VOICE;
+                reply.frame = frame;
+            }
+        }
+        s_playhead_reply.Publish(reply);
     }
     s_master_gain.SetTarget(s_track_mixer.MasterGain());
 
@@ -2716,6 +2774,36 @@ void FinishCardFormat() {
     // Resident PCM remains owned by its Tracks, just as on card removal.
     // Save admission will reject the now-missing on-card dependencies.
     PublishSequencerVoiceMap();
+}
+
+void OnSamplePlayheadRequest(const SamplePlayheadRequest& request) {
+    PlayheadQuery query;
+    query.request = request;
+    const auto* sample = find_loaded_sample(request.sample_id);
+    if (sample && sample->meta.generation == request.generation) {
+        query.pcm = ResolveLoadedSample(nullptr, request.sample_id).data;
+        if (s_wav.open && sample->path[0] && std::strcmp(sample->path, s_wav.path) == 0)
+            query.stream_epoch = s_stream_epoch;
+    }
+    s_playhead_latest = query;
+    s_playhead_query.Publish(query);
+}
+
+void PumpSamplePlayhead() {
+    SamplePlayheadMessage reply;
+    if (!s_playhead_reply.ConsumeLatest(reply) ||
+        reply.request_id != s_playhead_latest.request.request_id)
+        return;
+    const auto* sample = find_loaded_sample(reply.sample_id);
+    if (!sample || sample->meta.generation != reply.generation ||
+        (reply.source == PLAYHEAD_STREAM &&
+         (!s_wav.open || s_playhead_latest.stream_epoch != s_stream_epoch))) {
+        reply.source = PLAYHEAD_IDLE;
+        reply.frame = 0;
+    }
+    // Display telemetry is expendable. A full TX queue drops this reply;
+    // the panel times out and asks again instead of delaying control traffic.
+    Comm::LinkSend(MSG_SAMPLE_PLAYHEAD, &reply, sizeof(reply));
 }
 
 void PumpMixMeters() {
@@ -3831,6 +3919,9 @@ void CloseWav() {
     // indices at all. Until this is observed, the ISR may still be
     // advancing s_rb_tail; the stores below must not race that.
     __atomic_store_n(&s_rb_live, false, __ATOMIC_RELEASE);
+    if (++s_stream_epoch == 0)
+        ++s_stream_epoch;
+    s_resampler_history_frame = SourceFrameWalk::kSilent;
 
     if (s_wav.open) {
         if (s_hw)
@@ -4012,13 +4103,16 @@ void PumpWavIO() {
         if (frames_to_transfer == 0)
             return;
 
-        rb_push_frames(s_prebuffer, frames_to_transfer);
+        rb_push_frames(s_prebuffer, frames_to_transfer, {}, s_prebuffer_source_frames);
         // Publish only after the initial audio is visible to the consumer.
         // OpenWav leaves the callback silent throughout SD prebuffering.
         __atomic_store_n(&s_rb_live, true, __ATOMIC_RELEASE);
 
         s_prebuffer_filled -= frames_to_transfer;
         if (s_prebuffer_filled > 0) {
+            memmove(s_prebuffer_source_frames,
+                    s_prebuffer_source_frames + frames_to_transfer,
+                    s_prebuffer_filled * sizeof(uint32_t));
             memmove(s_prebuffer,
                     &s_prebuffer[frames_to_transfer * s_output_channels],
                     s_prebuffer_filled * s_output_channels * sizeof(q15_t));
@@ -4219,7 +4313,15 @@ void PumpWavIO() {
 
     ++s_dbg_pushes;
     ++s_diag_pushes;
-    rb_push_frames(final_buffer, final_frames);
+    const uint32_t source_first = (block_file_pos - s_wav.data_start) / file_bpf;
+    SourceFrameWalk walk{
+        source_first,
+        s_resampler_history_frame,
+        resample_ratio != 1.0f && resampler_before.has_history ? resampler_before.phase : 0.0f,
+        1.0f / resample_ratio,
+        false};
+    rb_push_frames(final_buffer, final_frames, walk);
+    s_resampler_history_frame = source_first + frames_to_transfer - 1;
     slot.consumed += frames_to_transfer;
     if (slot.consumed >= slot.frames) {
         slot.ready = false;

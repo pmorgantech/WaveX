@@ -26,6 +26,8 @@ EnvelopePanel::Link EspEnvelopeLink() {
     EnvelopePanel::Link link;
     link.send = &SendEnvelopeReq;
     link.listen = &ListenForChunks;
+    link.request_cursor = &inter_mcu_request_sample_playhead;
+    link.read_cursor = &inter_mcu_get_sample_playhead;
     return link;
 }
 

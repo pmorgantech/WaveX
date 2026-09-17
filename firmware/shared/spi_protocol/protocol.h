@@ -91,6 +91,7 @@ enum MessageType : uint8_t {
     MSG_SAMPLE_PLAY_REQ = 0x32,
     MSG_SAMPLE_STOP_REQ = 0x33,
     MSG_SAMPLE_STATUS = 0x34,
+    MSG_SAMPLE_PLAYHEAD = 0x54,  // E->D identity request / D->E consumed-source cursor
     MSG_SAMPLE_STOP_RESP = 0x35,
     // Index-based file selection (new)
     MSG_SAMPLE_PLAY_INDEX_REQ = 0x36,  // Play sample by index
@@ -760,6 +761,29 @@ struct SampleStatusMessage {
           sample_rate(sample_rate_),
           frames_played(frames_played_) {}
 } __attribute__((packed));
+
+// Display-only audio position, absolute source frames. Never an SD read pointer.
+struct SamplePlayheadRequest {
+    uint32_t request_id = 0;
+    uint16_t sample_id = 0, generation = 0;
+} __attribute__((packed));
+enum SamplePlayheadSource : uint8_t { PLAYHEAD_IDLE, PLAYHEAD_VOICE, PLAYHEAD_STREAM };
+struct SamplePlayheadMessage {
+    uint32_t request_id = 0;
+    uint16_t sample_id = 0, generation = 0;
+    uint32_t frame = 0;
+    uint8_t source = PLAYHEAD_IDLE;
+    uint8_t reserved[3]{};
+} __attribute__((packed));
+inline bool IsValidSamplePlayheadRequest(const SamplePlayheadRequest& m) {
+    return m.request_id && m.sample_id;
+}
+inline bool IsValidSamplePlayhead(const SamplePlayheadMessage& m) {
+    return m.request_id && m.sample_id && m.source <= PLAYHEAD_STREAM && !m.reserved[0] &&
+           !m.reserved[1] && !m.reserved[2];
+}
+static_assert(sizeof(SamplePlayheadRequest) == 8 && sizeof(SamplePlayheadMessage) == 16,
+              "Sample playhead wire sizes");
 
 // Sample stop request (now includes slot)
 struct SampleStopReqMessage {
@@ -2974,6 +2998,8 @@ inline const char* MessageTypeName(uint8_t type) {
             return "SAMPLE_PLAY_REQ";
         case MSG_SAMPLE_STOP_REQ:
             return "SAMPLE_STOP_REQ";
+        case MSG_SAMPLE_PLAYHEAD:
+            return "SAMPLE_PLAYHEAD";
         case MSG_SAMPLE_STATUS:
             return "SAMPLE_STATUS";
         case MSG_SAMPLE_STOP_RESP:

@@ -406,3 +406,9 @@ bool inter_mcu_get_project_status(WaveX::Protocol::ProjectStatusMessage*);
 esp_err_t inter_mcu_send_seq_song_op(const WaveX::Protocol::SeqSongOpMessage& request);
 void inter_mcu_store_seq_song_status(const WaveX::Protocol::SeqSongStatusMessage& status);
 bool inter_mcu_get_seq_song_status(WaveX::Protocol::SeqSongStatusMessage* out);
+
+// Request identities are allocated on the UI task; replies are copied under
+// the mailbox lock and never invoke LVGL from the RX task.
+uint32_t inter_mcu_request_sample_playhead(uint16_t sample_id, uint16_t generation);
+void inter_mcu_store_sample_playhead(const WaveX::Protocol::SamplePlayheadMessage& status);
+bool inter_mcu_get_sample_playhead(WaveX::Protocol::SamplePlayheadMessage* out);

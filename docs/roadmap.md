@@ -450,13 +450,16 @@ it owns that setup without needing a separate saved Performance object.
   with streaming audition and modulation. Sample Edit `channel_mode` UI
   remains separate. WXI recall fixtures must meet Instrument import admission;
   direct-loaded large samples can exceed that limit (see below).
-- [ ] **Phase 2 / Waveform playback head:** add a moving vertical line to
-  waveform views while their sound plays, including browser audition and Sample
-  editing. Follow the [playback-head requirements](architecture-notes.md#playback-head-in-waveform-views)
-  for source-frame position, zoom, stereo, loop/reverse/rate behavior and
-  overlapping voices. Use bounded, coalesced telemetry and clear stale heads on
-  stop/steal/context changes. Validate panel tracking and link load with zero
-  audio underruns; this remains unimplemented.
+- [ ] **Phase 2 / Waveform playback head:** software implemented for the current
+  forward RAM voices and streamed audition, shared by Browser, Sample Edit and
+  Record waveform panels. A source-frame line follows rate, retriggers, loops
+  and the newest matching sample voice; matching streaming audition takes
+  precedence. Zoom clips the line; loop splice views omit it. See the
+  [as-built design](features/waveform-playback-head.md). Host tests cover
+  identity/expiry, rate mapping and narrow LVGL redraws. Panel tracking, UART
+  load and matched callback/zero-underrun measurements remain open in
+  [HV-010](hardware-validation.md#hv-010--waveform-playback-head). Reverse and
+  Track/Zone-specific cursors remain tied to future playback/context support.
 - [ ] **Instrument/Kit polyphony policy (Phase 2.5 follow-up, measure first):**
   implement the requested [saved allocation defaults](features/project-menu-and-voice-model.md#instrument-and-kit-allocation-policy)
   for Mono, Auto/1–8-note caps and Own only / Own first / Any stealing, with

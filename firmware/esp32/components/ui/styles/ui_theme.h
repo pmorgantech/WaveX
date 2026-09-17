@@ -228,3 +228,7 @@ void ui_theme_apply_label_style(lv_obj_t* label, bool is_title);
 #define UI_SONG_FIELD_H 70
 #define UI_SONG_FIELD_GAP 14
 #define UI_SONG_HINT_Y 490
+
+// Shared waveform playback overlay.
+#define UI_WAVEFORM_PLAYHEAD_WIDTH 2
+#define UI_COLOR_WAVEFORM_PLAYHEAD UI_COLOR_TEXT

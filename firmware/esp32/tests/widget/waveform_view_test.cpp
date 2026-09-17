@@ -22,9 +22,12 @@
 #include <gtest/gtest.h>
 
 #include "lvgl.h"
+#include "ui_theme.h"
 
 #include <algorithm>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <vector>
 
 using WaveX::Protocol::EnvelopeColumn;
@@ -39,6 +42,7 @@ constexpr int32_t kDisplayH = 200;
 
 uint16_t g_framebuffer[kDisplayW * kDisplayH];
 uint32_t g_tick_ms = 0;
+uint32_t g_flushed_pixels = 0;
 
 uint32_t TickCb() {
     return g_tick_ms;
@@ -46,7 +50,8 @@ uint32_t TickCb() {
 
 // LVGL insists on a flush callback. Rendering is DIRECT, so the pixels are
 // already in g_framebuffer by the time this runs and there is nothing to copy.
-void FlushCb(lv_display_t* disp, const lv_area_t*, uint8_t*) {
+void FlushCb(lv_display_t* disp, const lv_area_t* area, uint8_t*) {
+    g_flushed_pixels += static_cast<uint32_t>(lv_area_get_width(area) * lv_area_get_height(area));
     lv_display_flush_ready(disp);
 }
 
@@ -359,3 +364,59 @@ TEST_F(WaveformViewRenderTest, StripRenderMatchesWholeScreenRender) {
 }
 
 }  // namespace
+
+TEST_F(WaveformViewRenderTest, PlaybackLineSpansStereoAndMovesWithoutFullWaveformRepaint) {
+    Render(StereoEnvelope(18000, 8000, kDisplayW), kDisplayW, 2);
+    const auto baseline =
+        std::vector<uint16_t>(g_framebuffer, g_framebuffer + kDisplayW * kDisplayH);
+    view_->setPlaybackPosition(true, 1100, 1000, 1256);
+    lv_refr_now(display_);
+    const auto accent = lv_color_to_u16(UI_COLOR_WAVEFORM_PLAYHEAD);
+    for (int y: {1, 50, 100, 150, 198})
+        EXPECT_EQ(pixel(100, y), accent);
+    EXPECT_FALSE(lv_obj_has_flag(lv_obj_get_child(view_->root(), 0), LV_OBJ_FLAG_CLICKABLE));
+    if (const char* path = std::getenv("WAVEX_CURSOR_PREVIEW")) {
+        FILE* out = std::fopen(path, "wb");
+        ASSERT_NE(out, nullptr);
+        std::fprintf(out, "P6\n%d %d\n255\n", kDisplayW, kDisplayH);
+        for (const uint16_t p: g_framebuffer) {
+            const unsigned char rgb[] = {static_cast<unsigned char>(((p >> 11) & 31) * 255 / 31),
+                                         static_cast<unsigned char>(((p >> 5) & 63) * 255 / 63),
+                                         static_cast<unsigned char>((p & 31) * 255 / 31)};
+            std::fwrite(rgb, 1, 3, out);
+        }
+        std::fclose(out);
+    }
+    g_flushed_pixels = 0;
+    view_->setPlaybackPosition(true, 1100, 1000, 1256);
+    lv_refr_now(display_);
+    EXPECT_EQ(g_flushed_pixels, 0u);
+    view_->setPlaybackPosition(true, 1120, 1000, 1256);
+    lv_refr_now(display_);
+    EXPECT_EQ(pixel(100, 50), baseline[50 * kDisplayW + 100]);
+    EXPECT_EQ(pixel(120, 50), accent);
+    EXPECT_LT(g_flushed_pixels, static_cast<uint32_t>(kDisplayW * kDisplayH / 4));
+    view_->setPlaybackPosition(false, 1120, 1000, 1256);
+    lv_refr_now(display_);
+    EXPECT_TRUE(std::equal(baseline.begin(), baseline.end(), g_framebuffer));
+}
+
+TEST_F(WaveformViewRenderTest, PlaybackLineClipsZoomAndHandlesLargeFrameNumbers) {
+    Render(MonoEnvelope(10000, kDisplayW), kDisplayW, 1);
+    auto* line = lv_obj_get_child(view_->root(), 0);
+    const uint32_t start = 0xf0000000u;
+    view_->setPlaybackPosition(true, start + 255, start, start + 256);
+    lv_refr_now(display_);
+    EXPECT_FALSE(lv_obj_has_flag(line, LV_OBJ_FLAG_HIDDEN));
+    EXPECT_EQ(lv_obj_get_x(line), kDisplayW - UI_WAVEFORM_PLAYHEAD_WIDTH);
+    view_->setPlaybackPosition(true, start + 256, start, start + 256);
+    EXPECT_TRUE(lv_obj_has_flag(line, LV_OBJ_FLAG_HIDDEN));
+    view_->setPlaybackPosition(true, start - 1, start, start + 256);
+    EXPECT_TRUE(lv_obj_has_flag(line, LV_OBJ_FLAG_HIDDEN));
+    view_->setPlaybackPosition(true, start, start, start + 256);
+    EXPECT_FALSE(lv_obj_has_flag(line, LV_OBJ_FLAG_HIDDEN));
+    view_->clear();
+    EXPECT_TRUE(lv_obj_has_flag(line, LV_OBJ_FLAG_HIDDEN));
+    view_->setPlaybackPosition(true, start, start, start + 256);
+    EXPECT_TRUE(lv_obj_has_flag(line, LV_OBJ_FLAG_HIDDEN));
+}

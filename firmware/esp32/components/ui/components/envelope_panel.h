@@ -54,6 +54,8 @@ class EnvelopePanel {
         /// Registers @p cb as the process's envelope chunk listener; a null
         /// @p cb unregisters whoever holds it.
         void (*listen)(ChunkCb cb, void* user) = nullptr;
+        uint32_t (*request_cursor)(uint16_t sample_id, uint16_t generation) = nullptr;
+        bool (*read_cursor)(WaveX::Protocol::SamplePlayheadMessage* out) = nullptr;
     };
 
     struct Config {
@@ -157,6 +159,8 @@ class EnvelopePanel {
 
     /// Forget what a view shows, so the next render() reaches the sink.
     static void invalidate(View& v) {
+        if (v.sink)
+            v.sink->setPlaybackPosition(false, 0, 0, 0);
         v.drawn = false;
         v.shown_fpc = 0;
         v.shown_covered = 0;
@@ -173,6 +177,14 @@ class EnvelopePanel {
     bool requestMissing(uint32_t now_ms, Event& event);
     void render();
     void clearSinks();
+    void serviceCursor(uint32_t now_ms);
+    void resetCursor();
+    uint32_t cursor_request_ = 0;
+    uint32_t cursor_sent_at_ = 0;
+    uint32_t cursor_received_at_ = 0;
+    bool cursor_polled_ = false;
+    bool cursor_valid_ = false;
+    WaveX::Protocol::SamplePlayheadMessage cursor_{};
 
     Config config_{};
     Link link_{};

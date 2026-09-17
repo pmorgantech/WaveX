@@ -859,3 +859,22 @@ TEST_F(PacketRouterTest, SongStatusRejectsWrongSizeAndBrokenReferences) {
     EXPECT_EQ(GetInterMcuCapture().seq_song_status_calls, 1);
     EXPECT_EQ(GetInterMcuCapture().seq_song_status.entries[127].pattern, 127);
 }
+
+TEST_F(PacketRouterTest, PlayheadRejectsMalformedReplies) {
+    SamplePlayheadMessage status;
+    status.request_id = 88;
+    status.sample_id = 500;
+    status.frame = 12345678;
+    status.source = PLAYHEAD_STREAM;
+    auto* bytes = reinterpret_cast<uint8_t*>(&status);
+    for (size_t n = 0; n < sizeof(status); ++n)
+        router_->route_uart_message(MSG_SAMPLE_PLAYHEAD, bytes, n, 0, 1);
+    EXPECT_EQ(GetInterMcuCapture().playhead_calls, 0);
+    status.reserved[0] = 1;
+    router_->route_uart_message(MSG_SAMPLE_PLAYHEAD, bytes, sizeof(status), 0, 1);
+    EXPECT_EQ(GetInterMcuCapture().playhead_calls, 0);
+    status.reserved[0] = 0;
+    router_->route_uart_message(MSG_SAMPLE_PLAYHEAD, bytes, sizeof(status), 0, 1);
+    EXPECT_EQ(GetInterMcuCapture().playhead_calls, 1);
+    EXPECT_EQ(GetInterMcuCapture().playhead.frame, 12345678u);
+}

@@ -157,6 +157,11 @@ void inter_mcu_store_seq_slot_page(const WaveX::Protocol::SeqSlotPageMessage& pa
     cap.seq_slot_page = page;
 }
 
+void inter_mcu_store_sample_playhead(const WaveX::Protocol::SamplePlayheadMessage& status) {
+    auto& cap = GetInterMcuCapture();
+    ++cap.playhead_calls;
+    cap.playhead = status;
+}
 void inter_mcu_store_seq_song_status(const WaveX::Protocol::SeqSongStatusMessage& status) {
     auto& cap = GetInterMcuCapture();
     ++cap.seq_song_status_calls;

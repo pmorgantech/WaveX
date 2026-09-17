@@ -953,3 +953,17 @@ TEST_F(MessageDispatchTest, SongReadAndStopRemainRoutableAndMalformedCommandsAre
     ASSERT_EQ(GetDispatchRecord().seq_song_ops.size(), 2u);
     EXPECT_EQ(GetDispatchRecord().seq_song_ops[1].op, SEQ_SONG_STOP);
 }
+
+TEST_F(MessageDispatchTest, PlayheadIsReadOnlyAndRejectsMalformedRequests) {
+    SamplePlayheadRequest request{123, 500, 4};
+    GetDispatchRecord().project_busy = true;
+    for (size_t n = 0; n < sizeof(request); ++n)
+        ProcessInterMcuMessage(MSG_SAMPLE_PLAYHEAD, 1, reinterpret_cast<uint8_t*>(&request), n);
+    EXPECT_TRUE(GetDispatchRecord().playhead_requests.empty());
+    Dispatch(MSG_SAMPLE_PLAYHEAD, request);
+    ASSERT_EQ(GetDispatchRecord().playhead_requests.size(), 1u);
+    EXPECT_EQ(GetDispatchRecord().playhead_requests[0].sample_id, 500);
+    request.request_id = 0;
+    Dispatch(MSG_SAMPLE_PLAYHEAD, request);
+    EXPECT_EQ(GetDispatchRecord().playhead_requests.size(), 1u);
+}

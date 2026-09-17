@@ -80,6 +80,7 @@ class WaveformView : public EnvelopeSink {
                      uint16_t count,
                      uint8_t channels) override;
     void clear() override;
+    void setPlaybackPosition(bool playing, uint32_t frame, uint32_t start, uint32_t end) override;
 
    private:
     /// Used only when the constructor is given a width that is not a pixel
@@ -122,6 +123,7 @@ class WaveformView : public EnvelopeSink {
     int16_t colMax(uint8_t ch, uint16_t i) const { return col_max_[ch * columns_ + i]; }
 
     lv_obj_t* obj_ = nullptr;
+    lv_obj_t* playhead_ = nullptr;
     uint16_t columns_ = kFallbackColumns;
 
     /// kMaxChannels lanes of columns_ each, lane-major.

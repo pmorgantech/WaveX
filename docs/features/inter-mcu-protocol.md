@@ -102,6 +102,7 @@ sequence(u16 LE) | payload[0..2048] | crc16(u16 LE) | end(0x5A)
 | MSG_SEQ_PATTERN_OP | 0x51 | E→D | `SeqPatternOpMessage{op, track, step, arg_u8, arg_u16, arg_s16}` | one small idempotent pattern edit; `op` (`SeqPatternOpCode`) selects which fields apply — see the table in `protocol.h` above the struct |
 | MSG_SEQ_PATTERN_SYNC | 0x52 | both | SeqPatternRequestMessage / SeqPatternSyncMessage | sixteen-step readback window from the callback-owned pending pattern; see Sequencer page readback below |
 | MSG_SEQ_PLAYHEAD | 0x53 | D→E | `SeqPlayheadMessage{pattern, step, playing, sync_state, measured_bpm_x100, loop_count}` | coalesced playhead + sync-lock feedback for the UI (≤ 30 Hz) |
+| MSG_SAMPLE_PLAYHEAD | 0x54 | both | SamplePlayheadRequest / SamplePlayheadMessage | identity-scoped, display-only source-frame position; see [Waveform playback head](waveform-playback-head.md) |
 | MSG_SEQ_SONG_OP | 0x58 | E→D | SeqSongOpMessage | inspect/edit a Project Song or start/stop selected-section playback; see [Song sequencing](song-sequencing.md) |
 | MSG_SEQ_SONG_STATUS | 0x59 | D→E | SeqSongStatusMessage | retained operation result, full bounded arrangement and callback section/repeat position |
 | MSG_SEQ_FILE_OP | 0x5A | E→D | SeqFileOpMessage | read retained status or save-copy/load/new a named pattern |

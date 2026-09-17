@@ -17,6 +17,9 @@ this document owns the runnable checks and their validation status.
 - [HV-005 — Phase 2 timing and soak gate](#hv-005--phase-2-timing-and-soak-gate)
 - [HV-006 — Mixer controls and master](#hv-006--mixer-controls-and-master)
 - [HV-007 — Project save, load and recovery](#hv-007--project-save-load-and-recovery)
+- [HV-008 — Project Pattern management](#hv-008--project-pattern-management)
+- [HV-009 — Song arrangement and playback](#hv-009--song-arrangement-and-playback)
+- [HV-010 — Waveform playback head](#hv-010--waveform-playback-head)
 - [Recording a validation session](#recording-a-validation-session)
 - [Related](#related)
 
@@ -67,6 +70,7 @@ Use Passed or Failed after recording the corresponding evidence.
 | HV-007 | Project Save/Load/New and recovery | Pending | Host/compile checks; disposable card and two-board session needed |
 | HV-008 | Project Pattern slots | Pending | Stopped workflow, panel, reboot and callback checks |
 | HV-009 | Song arrangement and playback | Pending | Host tests; audio timing, panel, MIDI and DWT unrun |
+| HV-010 | Waveform playback head | Pending | Host/render checks; tracking, UART, DWT and soak unrun |
 
 ## HV-001 — SD card formatting
 
@@ -387,3 +391,46 @@ audio recording and DWT/underrun logging per the performance guide.
 **Pass:** Every case above passes with dated paired image identities and evidence.
 **Blockers:** Physical boards, audio/MIDI capture and DWT measurements are required;
 host and compile results do not close this gate.
+
+
+## HV-010 — Waveform playback head
+
+**Status:** Pending; no hardware results recorded.
+**Design / gate:** [Waveform playback head](features/waveform-playback-head.md),
+[Phase 2](roadmap.md#phase-2--groovebox-core-sequencer-and-pads).
+**Setup:** Paired images from the same commit, mono and stereo WAVs at 44.1,
+48 and 96 kHz, a long sample, overlapping playable notes, disposable test card,
+UART diagnostics, audio recording and DWT/RENDER logging. Compare the previous
+image under the same supported voice/streaming workload; record image identities.
+
+- [ ] **010a — Position:** Load a sample so its waveform is available. Audition
+  it in Browser, Sample Edit and Record preview. Check distinctive transients
+  against audible playback, trimmed start/end and a long-file position. The
+  line must track consumed audio, not jump ahead with SD reads. Both stereo
+  lanes share one line. Unloaded files without waveform data have no line.
+- [ ] **010b — Notes and loops:** Play pitched RAM notes and overlapping notes
+  of the displayed sample (including a secondary oscillator). The newest
+  matching note wins; when it ends, an older still-playing match may resume.
+  Test retriggers, stealing and final Stop. Audition overrides matching notes;
+  loop gaps hide the line. Check resampled streamed loops at all fixture rates.
+- [ ] **010c — Editing:** Zoom/scroll during playback. Off-window positions
+  disappear instead of sticking at an edge. Change trim/loop markers and check
+  their handles remain distinguishable and touchable. Focus a loop splice:
+  neither splice half gets a line; return to the continuous view to resume it.
+- [ ] **010d — Lifetime:** Change sample, unload, leave/re-enter the page,
+  stop/restart rapidly and interrupt/reconnect UART. No old sample's line may
+  appear on the new view. On missing replies the line expires, without
+  replaying an old request as an edit or blocking controls.
+- [ ] **010e — Budget:** At the maximum supported voice workload with streamed
+  audition, run matched DWT captures with the waveform open and closed. Record
+  callback mean/p95/peak, over-budget blocks, underruns, UART queue/drops and
+  command latency. Profile the panel with RENDER/log-mode sysmon: identical
+  replies do not repaint; motion updates the old/new narrow strips. Complete
+  the applicable HV-005 soak without underruns, then disable profiling.
+
+**Pass:** All applicable checks pass with dated paired image identities,
+recordings/logs and measured callback headroom. Visual tracking is display-rate
+feedback, not a sample-accurate audio/visual synchronization promise.
+**Blockers:** Physical boards and measurements unavailable in the host run.
+Reverse playback and Track/Zone-specific views are not implemented; add their
+checks when those features reach their own gate.

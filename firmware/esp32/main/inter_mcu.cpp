@@ -19,6 +19,7 @@
 
 #ifdef ESP_PLATFORM
 #include "esp_log.h"
+#include "esp_random.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
@@ -1776,5 +1777,42 @@ bool inter_mcu_get_seq_song_status(WaveX::Protocol::SeqSongStatusMessage* out) {
     if (valid)
         *out = s_seq_song_status;
     taskEXIT_CRITICAL(&s_seq_song_lock);
+    return valid;
+}
+
+namespace {
+portMUX_TYPE s_playhead_lock = portMUX_INITIALIZER_UNLOCKED;
+WaveX::Protocol::SamplePlayheadMessage s_playhead;
+bool s_playhead_valid = false;
+}  // namespace
+uint32_t inter_mcu_request_sample_playhead(uint16_t sample_id, uint16_t generation) {
+    // UI-task-owned sequence; random boot seed rejects a previous image's
+    // delayed reply. Zero is reserved for send failure.
+    static uint32_t sequence = esp_random();
+    if (++sequence == 0)
+        ++sequence;
+    WaveX::Protocol::SamplePlayheadRequest request{sequence, sample_id, generation};
+    if (!WaveX::Protocol::IsValidSamplePlayheadRequest(request))
+        return 0;
+    return send_link_message(WaveX::Protocol::MSG_SAMPLE_PLAYHEAD, &request, sizeof(request)) >= 0
+               ? sequence
+               : 0;
+}
+void inter_mcu_store_sample_playhead(const WaveX::Protocol::SamplePlayheadMessage& status) {
+    if (!WaveX::Protocol::IsValidSamplePlayhead(status))
+        return;
+    taskENTER_CRITICAL(&s_playhead_lock);
+    s_playhead = status;
+    s_playhead_valid = true;
+    taskEXIT_CRITICAL(&s_playhead_lock);
+}
+bool inter_mcu_get_sample_playhead(WaveX::Protocol::SamplePlayheadMessage* out) {
+    if (!out)
+        return false;
+    taskENTER_CRITICAL(&s_playhead_lock);
+    const bool valid = s_playhead_valid;
+    if (valid)
+        *out = s_playhead;
+    taskEXIT_CRITICAL(&s_playhead_lock);
     return valid;
 }

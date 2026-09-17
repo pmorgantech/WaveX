@@ -59,6 +59,7 @@ void EnvelopePanel::detach() {
     if (!attached()) {
         return;
     }
+    resetCursor();
     // Listener FIRST, so no chunk can arrive on the RX task while the fetcher
     // is being torn down, THEN the fetcher, which releases the cache's run.
     link_.listen(nullptr, nullptr);
@@ -90,6 +91,7 @@ void EnvelopePanel::setSample(uint16_t sample_id, uint16_t generation, uint32_t 
     retries_ = 0;
     dirty_ = false;
     changed_ = false;
+    resetCursor();
     clearSinks();
     if (has_sample_) {
         request_pending_ = true;
@@ -111,6 +113,7 @@ void EnvelopePanel::clearSample() {
     dirty_ = false;
     changed_ = false;
     request_pending_ = false;
+    resetCursor();
     clearSinks();
 }
 
@@ -138,6 +141,8 @@ void EnvelopePanel::enableView(uint8_t index, bool enabled) {
         return;
     }
     v.enabled = enabled;
+    if (!enabled && v.sink)
+        v.sink->setPlaybackPosition(false, 0, 0, 0);
     if (enabled) {
         // Whatever the cache has, straight away; what it lacks, after the
         // settle. Disabling asks for nothing: a run in flight for the view
@@ -231,6 +236,7 @@ EnvelopePanel::Event EnvelopePanel::service(uint32_t now_ms) {
             event = Event::Drawn;
         }
     }
+    serviceCursor(now_ms);
     return event;
 }
 
@@ -327,4 +333,50 @@ void EnvelopePanel::clearSinks() {
     }
 }
 
+void EnvelopePanel::resetCursor() {
+    cursor_request_ = 0;
+    cursor_polled_ = false;
+    cursor_valid_ = false;
+    for (uint8_t i = 0; i < view_count_; ++i)
+        if (views_[i].sink)
+            views_[i].sink->setPlaybackPosition(false, 0, 0, 0);
+}
+
+void EnvelopePanel::serviceCursor(uint32_t now_ms) {
+    // Only the continuous trace gets a cursor. The splice halves have
+    // disjoint time axes and remain devoted to judging the loop seam.
+    constexpr uint32_t kPollMs = 50;
+    constexpr uint32_t kStaleMs = 200;
+    if (!has_sample_ || !sample_id_ || !link_.request_cursor || !link_.read_cursor)
+        return;
+    WaveX::Protocol::SamplePlayheadMessage reply;
+    if (cursor_request_ && link_.read_cursor(&reply) &&
+        WaveX::Protocol::IsValidSamplePlayhead(reply) && reply.request_id == cursor_request_ &&
+        reply.sample_id == sample_id_ && reply.generation == generation_) {
+        // A delayed reply cannot revive a position from before the timeout.
+        if (now_ms - cursor_sent_at_ < kStaleMs) {
+            cursor_ = reply;
+            cursor_valid_ = true;
+            cursor_received_at_ = now_ms;
+        }
+        cursor_request_ = 0;
+    }
+    if (cursor_request_ && now_ms - cursor_sent_at_ >= kStaleMs)
+        cursor_request_ = 0;
+    if (cursor_valid_ && now_ms - cursor_received_at_ >= kStaleMs)
+        cursor_valid_ = false;
+    if (view_count_ && views_[0].sink) {
+        const auto& v = views_[0];
+        const bool playing = v.enabled && v.drawn && cursor_valid_ &&
+                             cursor_.source != WaveX::Protocol::PLAYHEAD_IDLE &&
+                             cursor_.frame < total_frames_;
+        v.sink->setPlaybackPosition(playing, cursor_.frame, v.start, v.end);
+        if (v.enabled && !cursor_request_ &&
+            (!cursor_polled_ || now_ms - cursor_sent_at_ >= kPollMs)) {
+            cursor_request_ = link_.request_cursor(sample_id_, generation_);
+            cursor_sent_at_ = now_ms;
+            cursor_polled_ = true;
+        }
+    }
+}
 }  // namespace wavex_ui
