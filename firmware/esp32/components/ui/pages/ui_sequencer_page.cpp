@@ -168,7 +168,7 @@ void UISequencerPage::requestRow(uint8_t row) {
     const auto request = model_.BeginRead(s_read_id, row);
     next_row_ = row;
     requested_at_ = lv_tick_get();
-    inter_mcu_request_seq_page(request);  // timeout path retries a fresh id
+    inter_mcu_request_seq_slot_page(request);  // timeout path retries a fresh id
 }
 void UISequencerPage::window(uint8_t track, uint8_t step) {
     if (!model_.SetWindow(track, step))
@@ -217,9 +217,10 @@ void UISequencerPage::service() {
         UINavigator::instance().refreshSoftkeys();
     }
     if (alive) {
-        SeqPatternSyncMessage page;
+        SeqSlotPageMessage snapshot;
+        const auto& page = snapshot.page;
         const bool was_ready = model_.AllReady();
-        if (inter_mcu_get_seq_page(&page) && model_.Accept(page)) {
+        if (inter_mcu_get_seq_slot_page(&snapshot) && model_.AcceptScoped(snapshot)) {
 #if WAVEX_UI_LATENCY_PROFILE_ENABLED
             if (latency_.sent_us && !latency_.accepted_us &&
                 page.request_id == latency_.request_id &&
@@ -393,7 +394,8 @@ void UISequencerPage::render() {
     char context[sizeof(context_)];
     std::snprintf(context,
                   sizeof(context),
-                  "Working pattern / Steps %u-%u / %s",
+                  "Pattern %u / Steps %u-%u / %s",
+                  model_.PatternSlot() + 1,
                   model_.FirstStep() + 1,
                   model_.FirstStep() + 16,
                   !link_alive_        ? "Disconnected"
@@ -408,7 +410,7 @@ void UISequencerPage::render() {
 bool UISequencerPage::edit(const SeqPatternOpMessage& message) {
     if (!link_alive_)
         return false;
-    if (inter_mcu_send_seq_pattern_op(message) != ESP_OK)
+    if (inter_mcu_send_seq_slot_edit(model_.ScopedEdit(message)) != ESP_OK)
         return false;
     const uint8_t row = static_cast<uint8_t>(message.track - model_.FirstTrack());
 #if WAVEX_UI_LATENCY_PROFILE_ENABLED
@@ -807,6 +809,7 @@ size_t UISequencerPage::consoleState(char* out, size_t cap, size_t len) {
         len = AppendKvInt(out, cap, len, "lockvalue", selected.locks[lock_slot_].value);
     }
     len = AppendKvInt(out, cap, len, "seqready", model_.AllReady() && link_alive_);
+    len = AppendKvInt(out, cap, len, "seqpattern", model_.PatternSlot() + 1);
     len = AppendKvInt(out, cap, len, "seqplaying", playhead_.playing);
     len = AppendKvInt(out, cap, len, "seqstep", playhead_.step + 1);
     len = AppendKvInt(out, cap, len, "seqtrack", trackDisplayNumber(getCurrentTrack()));

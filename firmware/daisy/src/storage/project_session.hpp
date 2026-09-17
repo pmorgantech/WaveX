@@ -29,6 +29,7 @@ class ProjectSession {
     bool RequestPattern(const Protocol::SeqSlotOpMessage&, bool external_busy = false);
     ProjectPatterns& Patterns() { return patterns_; }
     void Pump();
+    bool BlocksEdits() const { return status_.busy || patterns_.BlocksEdits(); }
     bool Busy() const { return status_.busy || patterns_.Busy(); }
     const Protocol::ProjectStatusMessage& Status() const { return status_; }
     bool ReplyPending() const { return reply_; }

@@ -87,13 +87,14 @@ class PacketRouterTest : public ::testing::Test {
     // strong-override handlers. Used to assert "nothing was dispatched".
     int TotalDispatches() const {
         const auto& cap = GetInterMcuCapture();
-        return cap.seq_slot_status_calls + cap.project_status_calls + g_handlers.sync_calls +
-               g_handlers.error_calls + g_handlers.unknown_calls + cap.oscillator_calls +
-               cap.instrument_map_calls + cap.seq_page_calls + cap.seq_playhead_calls +
-               cap.heartbeat_calls + cap.meter_calls + cap.browse_resp_calls +
-               cap.envelope_chunk_calls + cap.sample_status_calls + cap.inst_status_calls +
-               cap.storage_status_calls + cap.stop_resp_calls + cap.diag_push_calls +
-               cap.sample_meta_calls + cap.sample_mem_status_calls + cap.cv_cal_calls;
+        return cap.seq_slot_page_calls + cap.seq_slot_status_calls + cap.project_status_calls +
+               g_handlers.sync_calls + g_handlers.error_calls + g_handlers.unknown_calls +
+               cap.oscillator_calls + cap.instrument_map_calls + cap.seq_page_calls +
+               cap.seq_playhead_calls + cap.heartbeat_calls + cap.meter_calls +
+               cap.browse_resp_calls + cap.envelope_chunk_calls + cap.sample_status_calls +
+               cap.inst_status_calls + cap.storage_status_calls + cap.stop_resp_calls +
+               cap.diag_push_calls + cap.sample_meta_calls + cap.sample_mem_status_calls +
+               cap.cv_cal_calls;
     }
 
     std::unique_ptr<PacketRouter> router_;
@@ -820,4 +821,23 @@ TEST_F(PacketRouterTest, PatternSlotStatusRejectsTruncationAndInvalidSlots) {
     router_->route_uart_message(MSG_SEQ_SLOT_STATUS, bytes, sizeof(status), 0, 1);
     EXPECT_EQ(GetInterMcuCapture().seq_slot_status_calls, 1);
     EXPECT_EQ(GetInterMcuCapture().seq_slot_status.completed_request_id, 66u);
+}
+
+TEST_F(PacketRouterTest, ScopedPatternPageRequiresExactSizeAndIdentity) {
+    SeqSlotPageMessage page;
+    page.epoch = 77;
+    page.pattern = 127;
+    page.page.request_id = 44;
+    page.page.valid = 1;
+    auto* bytes = reinterpret_cast<uint8_t*>(&page);
+    for (size_t n = 0; n < sizeof(page); ++n)
+        router_->route_uart_message(MSG_SEQ_SLOT_PAGE, bytes, n, 0, 1);
+    EXPECT_EQ(GetInterMcuCapture().seq_slot_page_calls, 0);
+    page.epoch = 0;
+    router_->route_uart_message(MSG_SEQ_SLOT_PAGE, bytes, sizeof(page), 0, 1);
+    EXPECT_EQ(GetInterMcuCapture().seq_slot_page_calls, 0);
+    page.epoch = 77;
+    router_->route_uart_message(MSG_SEQ_SLOT_PAGE, bytes, sizeof(page), 0, 1);
+    EXPECT_EQ(GetInterMcuCapture().seq_slot_page_calls, 1);
+    EXPECT_EQ(GetInterMcuCapture().seq_slot_page.epoch, 77u);
 }

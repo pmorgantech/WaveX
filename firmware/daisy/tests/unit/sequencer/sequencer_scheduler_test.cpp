@@ -657,3 +657,65 @@ TEST(SequencerSchedulerTest, RetriggersKeepOriginalNoteAfterPatternEdits) {
         EXPECT_EQ(event.velocity, 73);
     }
 }
+
+TEST(SequencerSchedulerQueueTest, MicroOffsetsAndRetriggersCannotCrossLaunchBoundary) {
+    Pattern old, next;
+    old.length = 1;
+    auto& hit = old.tracks[0].steps[0];
+    hit.on = true;
+    hit.note = 60;
+    hit.micro_offset = -2;
+    hit.retrig_count = 8;
+    hit.retrig_rate_ticks = 3;
+    next.length = 1;
+    next.scale = StepScale::ThirtySecond;
+    next.tracks[0].steps[0].on = true;
+    next.tracks[0].steps[0].note = 70;
+    next.tracks[0].steps[0].micro_offset = -3;
+    SequencerScheduler scheduler;
+    scheduler.Init(48000, 48);
+    scheduler.SetPattern(&old);
+    scheduler.Start();
+    TriggerEvent events[32];
+    scheduler.Process(events, 32);
+    ASSERT_TRUE(scheduler.QueuePattern(&next));
+    unsigned old_primary = 0, next_primary = 0;
+    for (int i = 0; i < 130; ++i) {
+        auto n = scheduler.Process(events, 32);
+        for (size_t j = 0; j < n; ++j) {
+            if (events[j].note == 60) {
+                EXPECT_LT(events[j].frame, 6000u);
+                if (!events[j].is_retrig)
+                    ++old_primary;
+            } else {
+                if (!events[j].is_retrig)
+                    ++next_primary;
+                EXPECT_EQ(events[j].frame, 6000u);  // negative destination offset clamps to launch
+            }
+        }
+    }
+    EXPECT_EQ(old_primary, 0u);
+    EXPECT_EQ(next_primary, 1u);
+}
+TEST(SequencerSchedulerQueueTest, TempoChangesPreservePhaseAndMoveQueuedBoundaryMusically) {
+    Pattern old, next;
+    old.length = 4;
+    next.tracks[0].steps[0].on = true;
+    SequencerScheduler scheduler;
+    scheduler.Init(48000, 48);
+    scheduler.SetPattern(&old);
+    scheduler.Start();
+    TriggerEvent events[32];
+    for (int i = 0; i < 250; ++i)
+        scheduler.Process(events, 32);  // half a quarter at 120
+    ASSERT_TRUE(scheduler.QueuePattern(&next));
+    EXPECT_EQ(scheduler.QueuedBoundaryFrame(), 24000u);
+    scheduler.SetTempo(60);  // the remaining half-quarter now takes 24000 frames
+    EXPECT_EQ(scheduler.QueuedBoundaryFrame(), 36000u);
+    for (int i = 0; i < 501; ++i) {
+        const auto n = scheduler.Process(events, 32);
+        if (n)
+            EXPECT_EQ(events[0].frame, 36000u);
+    }
+    EXPECT_TRUE(scheduler.SwitchedPattern());
+}

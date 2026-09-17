@@ -143,6 +143,8 @@ struct InterMcuCapture {
     WaveX::Protocol::InstPadSoundSyncMessage pad_sound;
     int instrument_map_calls = 0;
     WaveX::Protocol::InstZoneSyncMessage instrument_map;
+    int seq_slot_page_calls = 0;
+    WaveX::Protocol::SeqSlotPageMessage seq_slot_page;
     int seq_page_calls = 0;
     int seq_playhead_calls = 0;
     WaveX::Protocol::SeqPatternSyncMessage last_seq_page;

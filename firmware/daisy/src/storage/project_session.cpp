@@ -518,7 +518,7 @@ void ProjectSession::Pump() {
                                          static_cast<uint8_t>(scratch_->quantize),
                                          scratch_->tempo_bpm_x100,
                                          0};
-            exchange_.InstallSession(settings);
+            exchange_.InstallSession(settings, scratch_->active_pattern);
             phase_ = Phase::Install;
             status_.progress = 95;
             break;

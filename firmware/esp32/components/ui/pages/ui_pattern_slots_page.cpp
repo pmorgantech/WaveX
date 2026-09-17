@@ -39,6 +39,9 @@ const char* errorText(uint8_t error) {
             return "That slot is occupied. Choose an empty destination.";
         case SEQ_SLOT_STOP_FIRST:
             return "Stop the sequencer first, including MIDI-armed playback. Then try again.";
+        case SEQ_SLOT_CANCELLED:
+            return "Queued launch cancelled by transport Stop / restart. The active Pattern is "
+                   "unchanged.";
         case SEQ_SLOT_NO_MEMORY:
             return "Not enough sample memory for Project Patterns. Your working Pattern is "
                    "retained.";
@@ -205,7 +208,7 @@ void UIPatternSlotsPage::send(uint8_t op) {
     if (!ready())
         return;
     const char* name = lv_textarea_get_text(input_);
-    if (op != SEQ_SLOT_SELECT && !WaveX::PatternFile::ValidName(name)) {
+    if (op != SEQ_SLOT_SELECT && op != SEQ_SLOT_LAUNCH && !WaveX::PatternFile::ValidName(name)) {
         std::snprintf(message_, sizeof(message_), "%s", errorText(SEQ_SLOT_BAD_NAME));
         render();
         return;
@@ -235,9 +238,18 @@ void UIPatternSlotsPage::render() {
     else
         std::snprintf(value, sizeof(value), "Slot %u: reading...", slot_ + 1);
     label(last_, value);
-    label(hint_,
-          !alive_ ? "Audio engine disconnected"
-                  : (valid_ && status_.busy ? "Pattern operation in progress..." : message_));
+    if (alive_ && valid_ && status_.queued_pattern != 0xff) {
+        char queued[192];
+        std::snprintf(queued,
+                      sizeof(queued),
+                      "Pattern %u queued for the next loop. Back returns to the grid; Stop "
+                      "cancels. Create / Copy / Rename require stopped playback.",
+                      status_.queued_pattern + 1);
+        label(hint_, queued);
+    } else
+        label(hint_,
+              !alive_ ? "Audio engine disconnected"
+                      : (valid_ && status_.busy ? "Pattern operation in progress..." : message_));
     const bool disabled = pending_id_ || (valid_ && status_.busy);
     for (auto* obj: {input_, keyboard_}) {
         if (lv_obj_has_state(obj, LV_STATE_DISABLED) != disabled) {
@@ -268,8 +280,8 @@ std::array<Softkey, NUM_SOFTKEYS> UIPatternSlotsPage::getSoftkeys() {
                [this] { send(SEQ_SLOT_RENAME); },
                ready() && status_.used,
                "Choose an occupied slot"};
-    keys[4] = {"Select",
-               [this] { send(SEQ_SLOT_SELECT); },
+    keys[4] = {"Launch",
+               [this] { send(SEQ_SLOT_LAUNCH); },
                ready() && status_.used,
                "Choose an occupied slot"};
     keys[5] = {"Files",
@@ -302,6 +314,11 @@ size_t UIPatternSlotsPage::consoleState(char* out, size_t cap, size_t len) {
     len = AppendKvInt(out, cap, len, "slotready", ready());
     len = AppendKvInt(out, cap, len, "slotused", valid_ && status_.used);
     len = AppendKvInt(out, cap, len, "slotactive", valid_ ? status_.active_pattern + 1 : 0);
+    len = AppendKvInt(out,
+                      cap,
+                      len,
+                      "slotqueued",
+                      valid_ && status_.queued_pattern < 128 ? status_.queued_pattern + 1 : 0);
     len = AppendKvInt(out, cap, len, "sloterror", status_.error);
     return AppendKvText(out, cap, len, "slotname", valid_ ? status_.name : "");
 }

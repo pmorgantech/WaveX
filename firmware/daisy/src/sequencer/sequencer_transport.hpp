@@ -41,9 +41,17 @@ namespace Sequencer {
 
 class SequencerTransport {
    public:
+    SequencerTransport() = default;
+    SequencerTransport(const SequencerTransport&) = delete;
+    SequencerTransport& operator=(const SequencerTransport&) = delete;
     void Init(uint32_t sample_rate, uint16_t block_size) {
-        pending_pattern_ = Pattern{};
-        active_pattern_ = pending_pattern_;
+        pending_pattern_ = &pending_storage_;
+        *pending_pattern_ = Pattern{};
+        launch_buffer_ = nullptr;
+        launch_cancelled_ = false;
+        active_slot_ = 0;
+        active_epoch_ = 1;
+        active_pattern_ = *pending_pattern_;
         pending_pattern_dirty_ = false;
         sample_rate_ = sample_rate > 0 ? sample_rate : 48000;
         block_size_ = block_size > 0 ? block_size : 48;
@@ -56,8 +64,8 @@ class SequencerTransport {
 
     // Direct pattern access is for pre-play test setup only. Runtime edits use
     // ApplyPatternOp(), which marks the pending copy for the next safe swap.
-    Pattern& pattern() { return pending_pattern_; }
-    const Pattern& pattern() const { return pending_pattern_; }
+    Pattern& pattern() { return *pending_pattern_; }
+    const Pattern& pattern() const { return *pending_pattern_; }
 
     uint32_t PatternRevision() const { return pattern_revision_; }
     // Callback only. Persistence validates before handing this private buffer
@@ -66,9 +74,10 @@ class SequencerTransport {
         scheduler_.Stop();
         follower_.OnStop();
         armed_ = false;
-        pending_pattern_ = pattern;
+        *pending_pattern_ = pattern;
         pending_pattern_dirty_ = true;
         ++pattern_revision_;
+        AdvanceEpoch();
     }
 
     // Callback-only Project boundary: stop without replacing session settings.
@@ -85,6 +94,26 @@ class SequencerTransport {
                 static_cast<uint16_t>(tempo_bpm_ * 100.0 + 0.5),
                 0};
     }
+
+    // Callback only: exchange buffer ownership, never copy an outgoing Pattern
+    // onto the ISR stack. After completion the foreground owns the old working
+    // buffer, including edits accepted while the destination was queued.
+    bool LaunchPattern(Pattern*& buffer, uint8_t slot) {
+        if (armed_ || launch_buffer_)
+            return false;
+        launch_cancelled_ = false;
+        launch_slot_ = slot;
+        if (scheduler_.IsPlaying()) {
+            if (!scheduler_.QueuePattern(buffer))
+                return false;
+            launch_buffer_ = &buffer;
+        } else
+            SwapWorkingPattern(buffer);
+        return true;
+    }
+    bool LaunchPending() const { return launch_buffer_ != nullptr; }
+    bool LaunchCancelled() const { return launch_cancelled_; }
+    void SetPatternSlot(uint8_t slot) { active_slot_ = slot; }
 
     // ---- Transport + mode (MSG_SEQ_TRANSPORT) ----
     void ApplyTransport(const Protocol::SeqTransportMessage& m) {
@@ -147,30 +176,30 @@ class SequencerTransport {
         switch (m.op) {
             case SEQ_OP_SET_STEP:
                 if (StepValid(m.track, m.step)) {
-                    Step& s = pending_pattern_.tracks[m.track].steps[m.step];
+                    Step& s = pending_pattern_->tracks[m.track].steps[m.step];
                     s.on = (m.arg_u8 != 0);
                     s.velocity = ClampVelocity(m.arg_u16);
                 }
                 break;
             case SEQ_OP_SET_STEP_NOTE:
                 if (StepValid(m.track, m.step) && m.arg_u8 <= 127)
-                    pending_pattern_.tracks[m.track].steps[m.step].note = m.arg_u8;
+                    pending_pattern_->tracks[m.track].steps[m.step].note = m.arg_u8;
                 break;
             case SEQ_OP_TOGGLE_STEP:
                 if (StepValid(m.track, m.step)) {
-                    Step& s = pending_pattern_.tracks[m.track].steps[m.step];
+                    Step& s = pending_pattern_->tracks[m.track].steps[m.step];
                     s.on = !s.on;
                 }
                 break;
             case SEQ_OP_SET_STEP_PROB:
                 if (StepValid(m.track, m.step)) {
-                    pending_pattern_.tracks[m.track].steps[m.step].probability =
+                    pending_pattern_->tracks[m.track].steps[m.step].probability =
                         m.arg_u8 > 100 ? 100 : m.arg_u8;
                 }
                 break;
             case SEQ_OP_SET_STEP_MICRO:
                 if (StepValid(m.track, m.step)) {
-                    Step& s = pending_pattern_.tracks[m.track].steps[m.step];
+                    Step& s = pending_pattern_->tracks[m.track].steps[m.step];
                     s.retrig_count = m.arg_u8 > kMaxRetrigCount ? kMaxRetrigCount : m.arg_u8;
                     s.retrig_rate_ticks = static_cast<uint8_t>(m.arg_u16 & 0xFF);
                     s.micro_offset = m.arg_s16;
@@ -178,7 +207,7 @@ class SequencerTransport {
                 break;
             case SEQ_OP_TRACK_MUTE:
                 if (m.track < kMaxTracks)
-                    pending_pattern_.tracks[m.track].enabled = (m.arg_u8 != 0);
+                    pending_pattern_->tracks[m.track].enabled = (m.arg_u8 != 0);
                 break;
             case SEQ_OP_PATTERN_LENGTH: {
                 uint16_t len = m.arg_u16;
@@ -186,12 +215,12 @@ class SequencerTransport {
                     len = 1;
                 if (len > kMaxSteps)
                     len = kMaxSteps;
-                pending_pattern_.length = static_cast<uint8_t>(len);
+                pending_pattern_->length = static_cast<uint8_t>(len);
                 break;
             }
             case SEQ_OP_PATTERN_SCALE:
                 if (m.arg_u8 <= static_cast<uint8_t>(StepScale::EighthTriplet))
-                    pending_pattern_.scale = static_cast<StepScale>(m.arg_u8);
+                    pending_pattern_->scale = static_cast<StepScale>(m.arg_u8);
                 break;
             case SEQ_OP_PATTERN_SWING: {
                 uint8_t sw = m.arg_u8;
@@ -199,24 +228,24 @@ class SequencerTransport {
                     sw = 50;
                 if (sw > 75)
                     sw = 75;
-                pending_pattern_.swing = sw;
+                pending_pattern_->swing = sw;
                 break;
             }
             case SEQ_OP_SET_PARAM_LOCK:
                 if (StepValid(m.track, m.step) && IsVoiceLockParameter(m.arg_u8))
                     SetParamLock(
-                        pending_pattern_.tracks[m.track].steps[m.step], m.arg_u8, m.arg_u16);
+                        pending_pattern_->tracks[m.track].steps[m.step], m.arg_u8, m.arg_u16);
                 break;
             case SEQ_OP_CLEAR_TRACK:
                 if (m.track < kMaxTracks) {
-                    for (auto& step: pending_pattern_.tracks[m.track].steps)
+                    for (auto& step: pending_pattern_->tracks[m.track].steps)
                         step = Step{};
                 }
                 break;
             case SEQ_OP_SET_PARAM_LOCK_SLOT:
                 if (StepValid(m.track, m.step) && m.arg_s16 >= 0 && m.arg_s16 < kMaxParamLocks &&
                     (m.arg_u8 == 0 || IsVoiceLockParameter(m.arg_u8))) {
-                    auto& locks = pending_pattern_.tracks[m.track].steps[m.step].param_locks;
+                    auto& locks = pending_pattern_->tracks[m.track].steps[m.step].param_locks;
                     bool duplicate = false;
                     for (int i = 0; i < kMaxParamLocks; ++i)
                         duplicate |=
@@ -227,14 +256,14 @@ class SequencerTransport {
                 break;
             case SEQ_OP_CLEAR_PARAM_LOCK:
                 if (StepValid(m.track, m.step)) {
-                    for (auto& lock: pending_pattern_.tracks[m.track].steps[m.step].param_locks)
+                    for (auto& lock: pending_pattern_->tracks[m.track].steps[m.step].param_locks)
                         if (lock.param_id == m.arg_u8)
                             lock = ParamLock{};
                 }
                 break;
             case SEQ_OP_CLEAR_PARAM_LOCKS:
                 if (StepValid(m.track, m.step)) {
-                    Step& s = pending_pattern_.tracks[m.track].steps[m.step];
+                    Step& s = pending_pattern_->tracks[m.track].steps[m.step];
                     for (auto& lock: s.param_locks)
                         lock = ParamLock{};
                 }
@@ -244,6 +273,20 @@ class SequencerTransport {
         }
         pending_pattern_dirty_ = true;
         ++pattern_revision_;
+    }
+
+    bool ApplySlotEdit(const Protocol::SeqSlotEditMessage& message) {
+        if (!Protocol::IsValidSeqSlotEdit(message) || message.pattern != active_slot_ ||
+            message.epoch != active_epoch_)
+            return false;
+        ApplyPatternOp(message.edit);
+        return true;
+    }
+    void BuildSlotPage(const Protocol::SeqPatternRequestMessage& request,
+                       Protocol::SeqSlotPageMessage& page) const {
+        page.pattern = active_slot_;
+        page.epoch = active_epoch_;
+        BuildPatternPage(request, page.page);
     }
 
     // ---- MIDI clock (MSG_MIDI_CLOCK_EVENT) ----
@@ -303,6 +346,15 @@ class SequencerTransport {
                 scheduler_.SetTempo(static_cast<float>(follower_.InstantaneousBpm()));
         }
         const size_t count = scheduler_.Process(out_events, max_events);
+        if (launch_buffer_) {
+            if (scheduler_.SwitchedPattern()) {
+                SwapWorkingPattern(*launch_buffer_);
+                launch_buffer_ = nullptr;
+            } else if (!scheduler_.HasQueuedPattern()) {
+                launch_buffer_ = nullptr;
+                launch_cancelled_ = true;
+            }
+        }
         if (pending_pattern_dirty_ && scheduler_.ProcessedStepBoundary()) {
             CommitPendingPattern();
         }
@@ -332,13 +384,12 @@ class SequencerTransport {
         }
         double bpm = using_midi_ ? follower_.MeasuredBpm() : tempo_bpm_;
         uint16_t bpm_x100 = static_cast<uint16_t>(bpm * 100.0 + 0.5);
-        return Protocol::SeqPlayheadMessage(
-            /*pattern=*/0,
-            scheduler_.PlayheadStep(),
-            scheduler_.IsPlaying() ? 1 : 0,
-            sync_state,
-            bpm_x100,
-            scheduler_.PlayheadLoop());
+        return Protocol::SeqPlayheadMessage(active_slot_,
+                                            scheduler_.PlayheadStep(),
+                                            scheduler_.IsPlaying() ? 1 : 0,
+                                            sync_state,
+                                            bpm_x100,
+                                            scheduler_.PlayheadLoop());
     }
 
     // Callback-owned readback. No foreground reader touches either Pattern.
@@ -355,16 +406,17 @@ class SequencerTransport {
         if (!Protocol::IsValidSeqPatternRequest(request))
             return;
         out.valid = 1;
-        out.length = pending_pattern_.length;
-        out.scale = static_cast<uint8_t>(pending_pattern_.scale);
-        out.swing = pending_pattern_.swing;
-        out.enabled = pending_pattern_.tracks[request.track].enabled;
+        out.length = pending_pattern_->length;
+        out.scale = static_cast<uint8_t>(pending_pattern_->scale);
+        out.swing = pending_pattern_->swing;
+        out.enabled = pending_pattern_->tracks[request.track].enabled;
         out.clock_source = using_midi_ ? Protocol::SEQ_CLOCK_MIDI : Protocol::SEQ_CLOCK_INTERNAL;
         out.input_mode = input_mode_;
         out.quantize = quantize_;
         out.tempo_bpm_x100 = static_cast<uint16_t>(tempo_bpm_ * 100.0 + 0.5);
         for (uint8_t i = 0; i < Protocol::SEQ_PAGE_STEPS; ++i) {
-            const auto& step = pending_pattern_.tracks[request.track].steps[request.first_step + i];
+            const auto& step =
+                pending_pattern_->tracks[request.track].steps[request.first_step + i];
             auto& wire = out.steps[i];
             wire.on = step.on;
             wire.velocity = step.velocity;
@@ -426,16 +478,32 @@ class SequencerTransport {
         s.param_locks[kMaxParamLocks - 1] = ParamLock{param_id, value};
     }
 
+    void AdvanceEpoch() {
+        if (!++active_epoch_)
+            ++active_epoch_;
+    }
+    void SwapWorkingPattern(Pattern*& buffer) {
+        AdvanceEpoch();
+        std::swap(pending_pattern_, buffer);
+        ++pattern_revision_;
+        active_slot_ = launch_slot_;
+        CommitPendingPattern();
+    }
+
     void CommitPendingPattern() {
-        active_pattern_ = pending_pattern_;
+        active_pattern_ = *pending_pattern_;
         pending_pattern_dirty_ = false;
         scheduler_.SetPattern(&active_pattern_);
     }
 
-    Pattern pending_pattern_;
+    Pattern pending_storage_;
+    Pattern* pending_pattern_ = &pending_storage_;
+    Pattern** launch_buffer_ = nullptr;
+    uint8_t launch_slot_ = 0, active_slot_ = 0;
+    bool launch_cancelled_ = false;
     Pattern active_pattern_;
     bool pending_pattern_dirty_ = false;
-    uint32_t pattern_revision_ = 0;
+    uint32_t pattern_revision_ = 0, active_epoch_ = 1;
     SequencerScheduler scheduler_;
     TempoFollower follower_;
 

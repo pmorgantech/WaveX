@@ -165,3 +165,24 @@ TEST_F(PatternSlotsPageTest, Preview) {
         EXPECT_EQ(std::fclose(image), 0);
     }
 }
+
+TEST_F(PatternSlotsPageTest, LaunchIsSingleMutationAndSurvivesQueuedNavigation) {
+    status.used = 1;
+    Advance(5);
+    Press(4);
+    ASSERT_EQ(mutations.size(), 1u);
+    EXPECT_EQ(mutations[0].op, SEQ_SLOT_LAUNCH);
+    status.queued_pattern = 1;
+    Advance(200);
+    EXPECT_EQ(mutations.size(), 1u);
+    EXPECT_FALSE(page->getSoftkeys()[4].enabled);
+    EXPECT_TRUE(page->getSoftkeys()[0].enabled);
+    status.busy = 0;
+    status.active_request_id = 0;
+    status.queued_pattern = 0xff;
+    status.completed_request_id = mutations[0].request_id;
+    status.completed_op = SEQ_SLOT_LAUNCH;
+    status.error = SEQ_SLOT_CANCELLED;
+    Advance(5);
+    EXPECT_TRUE(page->getSoftkeys()[4].enabled);
+}

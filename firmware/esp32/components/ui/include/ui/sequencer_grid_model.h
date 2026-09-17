@@ -27,6 +27,7 @@ class SequencerGridModel {
         return true;
     }
     void Invalidate() {
+        epoch_ = 0;
         ready_.fill(false);
         snapshot_valid_.fill(false);
         DiscardPreview();
@@ -62,6 +63,30 @@ class SequencerGridModel {
         request_ = Request{};
         return true;
     }
+    bool AcceptScoped(const WaveX::Protocol::SeqSlotPageMessage& snapshot) {
+        if (!WaveX::Protocol::IsValidSeqSlotPage(snapshot) || !Accept(snapshot.page))
+            return false;
+        if (epoch_ != snapshot.epoch || pattern_ != snapshot.pattern) {
+            ready_.fill(false);
+            snapshot_valid_.fill(false);
+            DiscardPreview();
+            const auto row = static_cast<uint8_t>(snapshot.page.track - first_track_);
+            ready_[row] = snapshot_valid_[row] = true;
+        }
+        epoch_ = snapshot.epoch;
+        pattern_ = snapshot.pattern;
+        return true;
+    }
+    WaveX::Protocol::SeqSlotEditMessage ScopedEdit(
+        const WaveX::Protocol::SeqPatternOpMessage& edit) const {
+        WaveX::Protocol::SeqSlotEditMessage message;
+        message.epoch = epoch_;
+        message.pattern = pattern_;
+        message.edit = edit;
+        return message;
+    }
+    uint8_t PatternSlot() const { return pattern_; }
+
     void InvalidateRow(uint8_t row) {
         if (row < kRows)
             ready_[row] = false;
@@ -113,6 +138,8 @@ class SequencerGridModel {
     Step preview_{};
     uint8_t preview_row_ = 0, preview_column_ = 0;
     bool preview_valid_ = false;
+    uint32_t epoch_ = 0;
+    uint8_t pattern_ = 0;
     uint8_t first_track_ = 0;
     uint8_t first_step_ = 0;
 };

@@ -265,5 +265,5 @@ in [param-locks-and-modulation.md](param-locks-and-modulation.md).
 The stopped slot manager is implemented separately from standalone files:
 [Pattern management](pattern-management.md). It captures the outgoing working
 Pattern and installs the selected slot without changing session settings.
-Queued transitions and Song execution remain pending; no UI timer schedules
-musical events.
+Queued launch switches on the Daisy full-loop boundary with intra-block frame
+offsets; Song execution remains pending. No UI timer schedules musical events.

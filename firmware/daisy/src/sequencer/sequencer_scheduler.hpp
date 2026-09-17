@@ -39,7 +39,9 @@
 // frames_per_tick fresh (no accumulation) avoids that entirely - for a
 // "nice" tempo/rate pair like 120 BPM @ 48 kHz, frames_per_tick is exactly
 // 250.0 in double precision, so target_tick * 250.0 is an *exact* result
-// for any integer target_tick, with zero rounding at all.
+// for any integer target_tick, with zero rounding at all. Tempo changes re-anchor
+// tick/frame conversion at the current musical phase; they never rescale all
+// elapsed frames. Pattern launches establish a new grid origin on that timebase.
 //
 // Real-time-safety: Process() does no allocation and no I/O; the local
 // working buffer is a fixed-size stack array. Safe to call from the audio
@@ -51,6 +53,7 @@
 
 #include "pattern.hpp"
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 
 namespace WaveX {
@@ -75,7 +78,13 @@ class SequencerScheduler {
     }
 
     void SetTempo(float bpm) {
-        bpm_ = bpm > 1.0f ? bpm : 1.0f;
+        const float next = bpm > 1.0f ? bpm : 1.0f;
+        if (next == bpm_)
+            return;
+        // Preserve musical phase when tempo changes, including MIDI servo updates.
+        tick_anchor_ = CurrentTick();
+        frame_anchor_ = frame_counter_;
+        bpm_ = next;
         RecomputeTempoConstants();
     }
 
@@ -108,7 +117,10 @@ class SequencerScheduler {
     // standard sequencer/drum-machine behavior: the downbeat sounds the
     // instant playback starts, it does not wait one full step interval.
     void Start() {
-        frame_counter_ = 0;
+        frame_counter_ = frame_anchor_ = 0;
+        tick_anchor_ = pattern_origin_tick_ = 0;
+        queued_pattern_ = nullptr;
+        switched_pattern_ = false;
         rng_state_ = seed_;
         playing_ = true;
         playhead_step_ = 0;
@@ -120,7 +132,27 @@ class SequencerScheduler {
         }
     }
 
-    void Stop() { playing_ = false; }
+    void Stop() {
+        playing_ = false;
+        queued_pattern_ = nullptr;
+    }
+
+    // Immutable destination remains borrowed until switch or Stop/Start.
+    // The launch boundary is the next full loop on the grid at acceptance;
+    // subsequent step edits do not move that already-armed musical boundary.
+    bool QueuePattern(const Pattern* pattern) {
+        if (!playing_ || !pattern_ || !pattern || queued_pattern_)
+            return false;
+        const double length = PatternLength() * StepIntervalTicks(pattern_->scale);
+        const double loop =
+            std::floor(std::max(0.0, CurrentTick() - pattern_origin_tick_) / length) + 1.0;
+        queued_tick_ = pattern_origin_tick_ + loop * length;
+        queued_pattern_ = pattern;
+        return true;
+    }
+    bool HasQueuedPattern() const { return queued_pattern_ != nullptr; }
+    bool SwitchedPattern() const { return switched_pattern_; }
+    uint64_t QueuedBoundaryFrame() const { return TickToFrame(queued_tick_); }
 
     bool IsPlaying() const { return playing_; }
 
@@ -148,6 +180,7 @@ class SequencerScheduler {
     // if stopped or no pattern is set.
     size_t Process(TriggerEvent* out_events, size_t max_events) {
         processed_step_boundary_ = false;
+        switched_pattern_ = false;
         if (!playing_ || !pattern_ || pattern_->length == 0)
             return 0;
 
@@ -157,6 +190,55 @@ class SequencerScheduler {
         TriggerEvent local[kMaxEventsPerTick];
         size_t local_count = 0;
 
+        const auto boundary = queued_pattern_ ? TickToFrame(queued_tick_) : block_end_frame;
+        if (queued_pattern_ && boundary < block_end_frame) {
+            const auto split = std::max(block_start_frame, boundary);
+            if (split > block_start_frame)
+                AppendRange(local, local_count, block_start_frame, split);
+            pattern_ = queued_pattern_;
+            queued_pattern_ = nullptr;
+            pattern_origin_tick_ = queued_tick_;
+            playhead_step_ = 0;
+            playhead_loop_ = 0;
+            for (uint8_t t = 0; t < kMaxTracks; ++t)
+                RescheduleTrack(t, 0, 0);
+            switched_pattern_ = true;
+            AppendRange(local, local_count, split, block_end_frame);
+        } else
+            AppendRange(local, local_count, block_start_frame, block_end_frame);
+
+        std::sort(local, local + local_count, [](const TriggerEvent& a, const TriggerEvent& b) {
+            if (a.frame != b.frame)
+                return a.frame < b.frame;
+            return a.track < b.track;
+        });
+
+        size_t n = std::min(local_count, max_events);
+        for (size_t i = 0; i < n; ++i)
+            out_events[i] = local[i];
+
+        frame_counter_ = block_end_frame;
+        return n;
+    }
+
+   private:
+    struct TrackState {
+        uint8_t step_index = 0;
+        uint32_t loop_count = 0;
+        double next_trigger_tick = 0.0;
+        uint8_t pending_retrigs = 0;
+        double next_retrig_tick = 0.0;
+        double retrig_rate_ticks = 0.0;
+        double retrig_clip_tick = 0.0;
+        uint8_t pending_retrig_velocity = 0;
+        uint8_t pending_retrig_note = 60;
+        uint8_t pending_retrig_step = 0;
+    };
+
+    void AppendRange(TriggerEvent* local,
+                     size_t& local_count,
+                     uint64_t block_start_frame,
+                     uint64_t block_end_frame) {
         for (uint8_t t = 0; t < kMaxTracks; ++t) {
             TrackState& ts = track_state_[t];
             const TrackSteps& track = pattern_->tracks[t];
@@ -192,6 +274,11 @@ class SequencerScheduler {
                     --ts.pending_retrigs;
                 }
 
+                // A queued launch suppresses the old Pattern's anticipated
+                // next-loop step zero even when its micro-offset is negative.
+                if (queued_pattern_ &&
+                    StepBoundaryTicks(ts.step_index, ts.loop_count) >= queued_tick_)
+                    break;
                 const uint64_t tframe = TickToFrame(ts.next_trigger_tick);
                 if (tframe >= block_end_frame)
                     break;
@@ -261,34 +348,11 @@ class SequencerScheduler {
                 ts.next_trigger_tick = upcoming_tick;
             }
         }
-
-        std::sort(local, local + local_count, [](const TriggerEvent& a, const TriggerEvent& b) {
-            if (a.frame != b.frame)
-                return a.frame < b.frame;
-            return a.track < b.track;
-        });
-
-        size_t n = std::min(local_count, max_events);
-        for (size_t i = 0; i < n; ++i)
-            out_events[i] = local[i];
-
-        frame_counter_ = block_end_frame;
-        return n;
     }
-
-   private:
-    struct TrackState {
-        uint8_t step_index = 0;
-        uint32_t loop_count = 0;
-        double next_trigger_tick = 0.0;
-        uint8_t pending_retrigs = 0;
-        double next_retrig_tick = 0.0;
-        double retrig_rate_ticks = 0.0;
-        double retrig_clip_tick = 0.0;
-        uint8_t pending_retrig_velocity = 0;
-        uint8_t pending_retrig_note = 60;
-        uint8_t pending_retrig_step = 0;
-    };
+    double CurrentTick() const {
+        return tick_anchor_ +
+               static_cast<double>(frame_counter_ - frame_anchor_) / frames_per_tick_;
+    }
 
     uint8_t PatternLength() const {
         if (!pattern_)
@@ -313,7 +377,7 @@ class SequencerScheduler {
     }
 
     uint64_t TickToFrame(double tick) const {
-        double f = tick * frames_per_tick_;
+        double f = static_cast<double>(frame_anchor_) + (tick - tick_anchor_) * frames_per_tick_;
         if (f <= 0.0)
             return 0;
         return static_cast<uint64_t>(f + 0.5);  // round to nearest frame
@@ -351,7 +415,7 @@ class SequencerScheduler {
         const double pattern_length_ticks = static_cast<double>(PatternLength()) * interval;
         const double base = static_cast<double>(loop_count) * pattern_length_ticks +
                             static_cast<double>(step_index) * interval;
-        return base + SwingOffsetTicks(step_index, interval);
+        return pattern_origin_tick_ + base + SwingOffsetTicks(step_index, interval);
     }
 
     // Adds the per-(track,step) micro-timing offset on top of the shared
@@ -428,6 +492,10 @@ class SequencerScheduler {
     }
 
     const Pattern* pattern_ = nullptr;
+    const Pattern* queued_pattern_ = nullptr;
+    double queued_tick_ = 0, pattern_origin_tick_ = 0, tick_anchor_ = 0;
+    uint64_t frame_anchor_ = 0;
+    bool switched_pattern_ = false;
     uint32_t sample_rate_ = 48000;
     uint16_t block_size_ = 48;
     float bpm_ = 120.0f;

@@ -5,9 +5,7 @@ namespace wavex_ui {
 class UIPatternSlotsPage : public UIPage {
    public:
     const char* name() const override { return "Project Patterns"; }
-    const char* contextLine() const override {
-        return "Stop playback to create, copy, rename or select";
-    }
+    const char* contextLine() const override { return "Select now or launch at the next loop"; }
     void onEnter(lv_obj_t*) override;
     void onExit() override;
     void onInput(const InputEvent&) override;

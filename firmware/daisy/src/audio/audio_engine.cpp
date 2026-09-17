@@ -238,11 +238,15 @@ static constexpr uint32_t kSequencerCommandQueueSize = 32;
 static WaveX::Sequencer::SequencerCommandQueue<kSequencerCommandQueueSize> s_seq_command_queue;
 
 // Callback produces complete readbacks; foreground alone serializes them.
-static WaveX::BssStatic<SnapshotMailbox<SeqPatternSyncMessage>> s_seq_page_mailbox_storage;
+struct SeqPageSnapshot {
+    SeqSlotPageMessage value;
+    bool scoped = false;
+};
+static WaveX::BssStatic<SnapshotMailbox<SeqPageSnapshot>> s_seq_page_mailbox_storage;
 static auto& s_seq_page_mailbox = s_seq_page_mailbox_storage.Get();
 static WaveX::BssStatic<SnapshotMailbox<SeqPlayheadMessage>> s_seq_head_mailbox_storage;
 static auto& s_seq_head_mailbox = s_seq_head_mailbox_storage.Get();
-static WaveX::BssStatic<SeqPatternSyncMessage> s_seq_page_pending_storage;
+static WaveX::BssStatic<SeqPageSnapshot> s_seq_page_pending_storage;
 static WaveX::BssStatic<SeqPlayheadMessage> s_seq_head_pending_storage;
 static bool s_seq_page_pending = false;
 static bool s_seq_head_pending = false;
@@ -423,7 +427,7 @@ static bool drain_note_queue() {
 // complete matching binding.
 static WAVEX_ITCM_CODE_NAMED("sequencer") bool drain_sequencer(uint16_t block_size) {
     SeqPatternRequestMessage read_request;
-    bool read_requested = false;
+    bool read_requested = false, scoped_read = false;
     WaveX::Sequencer::SequencerCommand command;
     while (s_seq_command_queue.Pop(command)) {
         switch (command.type) {
@@ -436,7 +440,15 @@ static WAVEX_ITCM_CODE_NAMED("sequencer") bool drain_sequencer(uint16_t block_si
             case WaveX::Sequencer::SequencerCommandType::PatternOp:
                 s_seq_transport.ApplyPatternOp(command.pattern_op);
                 break;
+            case WaveX::Sequencer::SequencerCommandType::SlotEdit:
+                s_seq_transport.ApplySlotEdit(command.slot_edit);
+                break;
+            case WaveX::Sequencer::SequencerCommandType::SlotPage:
+                read_request = command.pattern_request;
+                read_requested = scoped_read = true;
+                break;
             case WaveX::Sequencer::SequencerCommandType::PatternRequest:
+                scoped_read = false;
                 read_request = command.pattern_request;
                 read_requested = true;
                 break;
@@ -450,8 +462,9 @@ static WAVEX_ITCM_CODE_NAMED("sequencer") bool drain_sequencer(uint16_t block_si
     }
     // At most one bounded page copy per callback, regardless of request bursts.
     if (read_requested) {
-        SeqPatternSyncMessage page;
-        s_seq_transport.BuildPatternPage(read_request, page);
+        SeqPageSnapshot page;
+        page.scoped = scoped_read;
+        s_seq_transport.BuildSlotPage(read_request, page.value);
         s_seq_page_mailbox.Publish(page);
     }
     const uint64_t block_start_frame = s_seq_transport.scheduler().CurrentFrame();
@@ -2570,6 +2583,20 @@ void OnSeqTransport(const SeqTransportMessage& m) {
 #endif
 }
 
+void OnSeqSlotEdit(const SeqSlotEditMessage& message) {
+    if (ProjectBusy() || PatternStore::BlocksEdits() || !IsValidSeqSlotEdit(message))
+        return;
+    WaveX::Sequencer::SequencerCommand command;
+    command.type = WaveX::Sequencer::SequencerCommandType::SlotEdit;
+    command.slot_edit = message;
+    EnqueueSequencerCommand(command);
+}
+void OnSeqSlotPageRequest(const SeqPatternRequestMessage& request) {
+    WaveX::Sequencer::SequencerCommand command;
+    command.type = WaveX::Sequencer::SequencerCommandType::SlotPage;
+    command.pattern_request = request;
+    EnqueueSequencerCommand(command);
+}
 void OnSeqPatternRequest(const SeqPatternRequestMessage& request) {
     WaveX::Sequencer::SequencerCommand command;
     command.type = WaveX::Sequencer::SequencerCommandType::PatternRequest;
@@ -2584,7 +2611,7 @@ void OnSeqFileOp(const SeqFileOpMessage& request) {
 }
 
 bool ProjectBusy() {
-    return s_project_session.Get() && s_project_session.Get()->Busy();
+    return s_project_session.Get() && s_project_session.Get()->BlocksEdits();
 }
 void OnPatternSlotOp(const SeqSlotOpMessage& request) {
     if (!IsValidSeqSlotOp(request))
@@ -2643,7 +2670,8 @@ void PumpProjectSession() {
         session->ReplySent();
 }
 bool StorageJobBusy() {
-    return ProjectBusy() || SfzLoader::Busy() || WaveX::PatternStore::Busy();
+    return (s_project_session.Get() && s_project_session.Get()->Busy()) || SfzLoader::Busy() ||
+           WaveX::PatternStore::Busy();
 }
 bool PrepareCardFormat() {
     if (StorageJobBusy())
@@ -2691,7 +2719,11 @@ void PumpSequencerState() {
     s_seq_page_pending |= s_seq_page_mailbox.ConsumeLatest(page);
     s_seq_head_pending |= s_seq_head_mailbox.ConsumeLatest(head);
     if (s_seq_page_pending) {
-        if (WaveX::Comm::LinkSend(MSG_SEQ_PATTERN_SYNC, &page, sizeof(page)) < 0)
+        const int sent =
+            page.scoped ? WaveX::Comm::LinkSend(MSG_SEQ_SLOT_PAGE, &page.value, sizeof(page.value))
+                        : WaveX::Comm::LinkSend(
+                              MSG_SEQ_PATTERN_SYNC, &page.value.page, sizeof(page.value.page));
+        if (sent < 0)
             return;
         s_seq_page_pending = false;
     }

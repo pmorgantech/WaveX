@@ -1791,3 +1791,53 @@ TEST_F(SfzLoaderTest, ProjectPatternMemoryRefusalReturnsExchangeAndKeepsWorkingD
     RunProject(session, exchange, transport);
     EXPECT_EQ(session.Patterns().Status().error, SEQ_SLOT_OK);
 }
+
+TEST_F(SfzLoaderTest, ProjectPatternQueueAllowsEditsAndReturnsOutgoingSnapshot) {
+    using namespace WaveX::Sequencer;
+    PatternExchange exchange;
+    SequencerTransport transport;
+    transport.Init(48000, 48);
+    transport.ApplyPatternOp({SEQ_OP_PATTERN_LENGTH, 0, 0, 0, 1, 0});
+    MixerControlHandoff mixer;
+    WaveX::Storage::ProjectSession session(memory_,
+                                           pool_,
+                                           exchange,
+                                           mixer,
+                                           io_.data(),
+                                           io_.size(),
+                                           {StopProjectTestVoices, PublishProjectTest});
+    ASSERT_TRUE(session.RequestPattern(SlotRequest(5300, SEQ_SLOT_COPY, 1, "Next")));
+    RunProject(session, exchange, transport);
+    transport.ApplyTransport({SEQ_TRANSPORT_PLAY, SEQ_CLOCK_INTERNAL, SEQ_INPUT_PLAY, 0, 12000, 0});
+    ASSERT_TRUE(session.RequestPattern(SlotRequest(5301, SEQ_SLOT_LAUNCH, 1)));
+    EXPECT_TRUE(session.Busy());
+    EXPECT_FALSE(session.BlocksEdits());
+    EXPECT_EQ(session.Patterns().Status().queued_pattern, 1);
+    // Standalone New must never overwrite a buffer borrowed for launch.
+    SeqFileOpMessage file;
+    file.request_id = 5399;
+    file.op = SEQ_FILE_NEW;
+    EXPECT_FALSE(WaveX::PatternStore::Request(file, exchange));
+    transport.ApplyPatternOp({SEQ_OP_SET_STEP_NOTE, 15, 63, 110, 0, 0});
+    TriggerEvent events[32];
+    for (int i = 0; i < 200 && session.Busy(); ++i) {
+        transport.Tick(events, 32);
+        exchange.Process(transport);
+        session.Pump();
+    }
+    ASSERT_FALSE(session.Busy());
+    EXPECT_EQ(session.Current()->active_pattern, 1);
+    EXPECT_EQ(session.Current()->patterns[0].pattern.tracks[15].steps[63].note, 110);
+    EXPECT_EQ(transport.pattern().tracks[15].steps[63].note, 60);
+    EXPECT_TRUE(transport.IsPlaying());
+    EXPECT_EQ(session.Patterns().Status().queued_pattern, 0xff);
+    ASSERT_TRUE(session.RequestPattern(SlotRequest(5302, SEQ_SLOT_LAUNCH, 0)));
+    exchange.Process(transport);
+    transport.StopForProject();
+    transport.Tick(events, 32);
+    exchange.Process(transport);
+    session.Pump();
+    EXPECT_FALSE(session.Busy());
+    EXPECT_EQ(session.Patterns().Status().error, SEQ_SLOT_CANCELLED);
+    EXPECT_EQ(session.Current()->active_pattern, 1);
+}

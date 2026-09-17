@@ -150,6 +150,14 @@ void PacketRouter::route_by_message_type(uint8_t msg_type,
             if (CopyMessage(payload, payload_len, message, "SEQ_FILE_STATUS"))
                 inter_mcu_store_seq_file_status(message);
         } break;
+        case WaveX::Protocol::MSG_SEQ_SLOT_PAGE: {
+            WaveX::Protocol::SeqSlotPageMessage message;
+            if (payload_len == sizeof(message) &&
+                CopyMessage(payload, payload_len, message, "SEQ_SLOT_PAGE") &&
+                WaveX::Protocol::IsValidSeqSlotPage(message))
+                inter_mcu_store_seq_slot_page(message);
+            break;
+        }
         case WaveX::Protocol::MSG_SEQ_PATTERN_SYNC: {
             WaveX::Protocol::SeqPatternSyncMessage message;
             if (CopyMessage(payload, payload_len, message, "SEQ_PATTERN_SYNC"))

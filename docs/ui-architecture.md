@@ -425,10 +425,17 @@ call LVGL. See [Project persistence](features/project-persistence.md) and
 
 Sequencer → Shift → Patterns opens 128 stable Project slots. Previous/Next and
 the encoder choose a destination; Create and Copy active require an empty slot,
-while Rename and Select require an occupied one. All mutations require stopped,
-unarmed playback. Select retains outgoing edits without changing Instruments,
+while Rename and Launch require an occupied one. Create/Copy/Rename require
+stopped, unarmed playback. Launch selects while stopped or queues at the next
+loop while playing; Stop cancels the queue. Launch retains outgoing edits without changing Instruments,
 mixer or tempo. Files opens standalone import/export for the active slot.
 The page uses correlated status snapshots and retained completion, disables
 stale actions, never replays a mutation on reconnect, and deletes its timer on
 exit. Project Save copy persists the complete collection. See
 [Pattern management](features/pattern-management.md).
+
+The Sequencer grid uses Pattern-scoped pages and edits. Each whole-Pattern
+replacement advances an epoch; an incoming epoch clears other cached rows, and
+edits echo the displayed epoch/slot so a delayed command cannot alter a newly
+selected Pattern. The heading identifies the displayed slot. Grid edits remain
+available while a launch is queued and are captured in the outgoing Pattern.

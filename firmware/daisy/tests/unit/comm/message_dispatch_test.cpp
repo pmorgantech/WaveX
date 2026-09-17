@@ -912,3 +912,25 @@ TEST_F(MessageDispatchTest, PatternSlotsValidateBeforeRoutingAndRemainReadableDu
     ASSERT_EQ(GetDispatchRecord().seq_slot_ops.size(), 1u);
     EXPECT_EQ(GetDispatchRecord().seq_slot_ops[0].slot, 127);
 }
+
+TEST_F(MessageDispatchTest, ScopedPatternEditsRejectMalformedAndProjectLeaseButReadsRemain) {
+    SeqSlotEditMessage edit;
+    edit.epoch = 8;
+    edit.pattern = 127;
+    edit.edit = {SEQ_OP_SET_STEP_NOTE, 15, 63, 99, 0, 0};
+    for (size_t n = 0; n < sizeof(edit); ++n)
+        ProcessInterMcuMessage(MSG_SEQ_SLOT_EDIT, 1, reinterpret_cast<uint8_t*>(&edit), n);
+    EXPECT_TRUE(GetDispatchRecord().seq_slot_edits.empty());
+    Dispatch(MSG_SEQ_SLOT_EDIT, edit);
+    ASSERT_EQ(GetDispatchRecord().seq_slot_edits.size(), 1u);
+    GetDispatchRecord().project_busy = true;
+    Dispatch(MSG_SEQ_SLOT_EDIT, edit);
+    EXPECT_EQ(GetDispatchRecord().seq_slot_edits.size(), 1u);
+    SeqPatternRequestMessage request;
+    request.request_id = 4;
+    Dispatch(MSG_SEQ_SLOT_PAGE, request);
+    EXPECT_EQ(GetDispatchRecord().seq_slot_pages.size(), 1u);
+    Dispatch(MSG_MIDI_CLOCK_EVENT,
+             MidiClockEventMessage{});  // engine owns allowed clock-event filtering
+    EXPECT_EQ(GetDispatchRecord().midi_clock_events.size(), 1u);
+}

@@ -245,3 +245,12 @@ void OnInstrumentOp(const WaveX::Protocol::InstOpMessage& m) {
 
 }  // namespace AudioEngine
 }  // namespace WaveX
+
+namespace WaveX::AudioEngine {
+void OnSeqSlotEdit(const Protocol::SeqSlotEditMessage& message) {
+    Test::GetDispatchRecord().seq_slot_edits.push_back(message);
+}
+void OnSeqSlotPageRequest(const Protocol::SeqPatternRequestMessage& message) {
+    Test::GetDispatchRecord().seq_slot_pages.push_back(message);
+}
+}  // namespace WaveX::AudioEngine

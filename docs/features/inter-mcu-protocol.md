@@ -545,3 +545,17 @@ runs without changing its destination. Active and last completed request IDs
 allow lost replies to be recovered without repeating mutations. The callback
 rejects playing or MIDI-armed captures, and Select completes only after install
 acknowledgement. See [Pattern management](pattern-management.md).
+
+
+### Pattern launch and scoped grid
+
+Pattern slot Launch now selects immediately while stopped or queues for the next
+full loop while playing. Slot status includes the queued destination (or none)
+and retains cancellation from Stop/restart. Create/Copy/Rename remain stopped.
+The existing playhead carries the active slot. `MSG_SEQ_SLOT_PAGE` wraps the
+existing page with slot identity and a replacement epoch; its request uses the
+existing bounded page request. `MSG_SEQ_SLOT_EDIT` echoes that identity with an
+edit. The callback rejects stale identities; legacy unscoped commands retain
+their current-working-Pattern semantics. All layouts remain in `protocol.h`.
+Project save now permits MIDI clock messages through the dispatcher so the
+engine can retain ticks/Stop and reject Start/Continue during its lease.

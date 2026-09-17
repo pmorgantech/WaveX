@@ -1,8 +1,8 @@
 # Project Pattern management
 
 Pattern slots let you build variations within one Project. This Phase 2 increment
-adds stopped create, copy, rename and select; queued transitions and Song
-execution remain the next increments. Hardware acceptance is tracked separately.
+adds create, copy, rename and selection plus queued loop-boundary launch.
+Song execution remains the next increment. Hardware acceptance is tracked separately.
 
 ## Data and ownership
 
@@ -21,11 +21,13 @@ The UI displays slots 1–128; storage and protocol use 0–127.
 
 ## Operation boundary
 
-For this increment every mutation requires a stopped, unarmed transport. The
+Create, Copy, Rename and the explicit stopped Select operation require a
+stopped, unarmed transport. Launch selects immediately while stopped and
+queues while playing; it refuses MIDI-armed state until playback starts. The
 callback checks that condition throughout the row-wise capture. Playing or
 MIDI-armed requests fail with Stop first and never stop playback implicitly.
 The Project owner gates edits, Play/Continue and competing storage jobs during
-the exchange; Stop, note releases and readback remain available. There is no SD
+stopped capture/install; Stop, note releases and readback remain available. There is no SD
 I/O for slot operations. Project Save copy persists the complete slot collection.
 Standalone Pattern file Load/New replaces the active slot's working contents;
 its latest contents and name are captured before leaving that slot.
@@ -37,18 +39,37 @@ The existing fixed exchange buffer is reused, with no callback allocation and
 one row per capture block. Memory admission for the retained Project occurs in
 the foreground and failure leaves the working Pattern unchanged.
 
-## Queued transitions and Songs (target, not implemented here)
+## Queued transitions (implemented)
 
-The next increment will distinguish the active slot from one queued destination.
-A queued selection takes effect at the outgoing Pattern's next full-loop grid
+The active slot and one queued destination are distinct. A queued launch takes effect at the outgoing Pattern's next full-loop grid
 boundary on the Daisy audio clock, before the destination's step zero. The
-boundary is independent of Track micro-offsets. Stop cancels the queue; replacing
-a queued destination does not replace the playing Pattern. Edits continue to
+boundary is independent of Track micro-offsets. Stop or a transport restart cancels the queue. This increment accepts one
+launch at a time; replacing the queued destination is not yet exposed. Edits continue to
 address the active slot, and the outgoing snapshot must include edits accepted
-before the switch. No foreground timer or UART arrival time generates the switch.
+before the switch. The boundary uses the length/scale at launch acceptance;
+later groove edits do not move that armed musical boundary. Tempo changes
+preserve phase and move it in audio frames. No foreground timer or UART arrival time generates the switch.
 Different lengths/scales start the destination at its own step zero while keeping
-session tempo and voice tails. Microtiming/retrigger cutoffs and intra-block
-switching require scheduler tests before this target is enabled.
+session tempo and voice tails. The outgoing next-loop step zero is suppressed even with negative microtiming;
+outgoing tails/retriggers end at the launch boundary. A negative destination
+step-zero offset clamps to that boundary. The scheduler splits the audio block
+when needed, keeping old events before and destination events after the split.
+Probability RNG state continues; current voice tails are not stopped.
+
+The exchange lends its immutable destination buffer to the callback. At launch
+the callback swaps working-buffer pointers, returning the outgoing working
+Pattern (including the latest edits) to the foreground. It then updates its
+existing active scheduling copy. All three buffers have engine lifetime, and
+none is reused by the foreground until release/acquire acknowledgement. No
+large outgoing Pattern is constructed on the callback stack.
+
+Grid readback includes slot identity and a replacement epoch. UI edits carry
+that pair, and the callback rejects an old pair even after switching away and
+back to the same slot. A new epoch invalidates the grid's other cached rows.
+Legacy unscoped debug commands still address the current working Pattern.
+Standalone file jobs cannot claim the exchange while a launch is pending.
+
+## Songs (target)
 
 Song entries reference these same stable slots with repeat counts. Song
 loop/stop, seek and edit-during-play rules must be defined with the Song owner

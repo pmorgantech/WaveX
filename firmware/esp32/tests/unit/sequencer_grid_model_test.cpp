@@ -166,3 +166,33 @@ TEST(SequencerGridModelTest, WindowAndLinkInvalidationDiscardOldPictures) {
     EXPECT_FALSE(model.Ready(0));
     EXPECT_FALSE(model.HasSnapshot(4));
 }
+
+TEST(SequencerGridModelTest, ScopedReplacementDropsOtherRowsAndLabelsEditsWithEpoch) {
+    using namespace WaveX::Protocol;
+    SequencerGridModel model;
+    SeqSlotPageMessage page;
+    page.epoch = 10;
+    page.pattern = 2;
+    page.page = Reply(model.BeginRead(1, 0));
+    ASSERT_TRUE(model.AcceptScoped(page));
+    page.page = Reply(model.BeginRead(2, 1));
+    ASSERT_TRUE(model.AcceptScoped(page));
+    EXPECT_TRUE(model.Ready(0));
+    page.epoch = 11;
+    page.pattern = 127;
+    page.page = Reply(model.BeginRead(3, 1));
+    ASSERT_TRUE(model.AcceptScoped(page));
+    EXPECT_FALSE(model.Ready(0));
+    EXPECT_FALSE(model.HasSnapshot(0));
+    EXPECT_TRUE(model.Ready(1));
+    const auto edit = model.ScopedEdit({SEQ_OP_SET_STEP_NOTE, 1, 0, 99, 0, 0});
+    EXPECT_EQ(edit.pattern, 127);
+    EXPECT_EQ(edit.epoch, 11u);
+    EXPECT_EQ(edit.edit.arg_u8, 99);
+    page.epoch = 12;
+    page.page.request_id = 99;
+    EXPECT_FALSE(model.AcceptScoped(page));
+    EXPECT_TRUE(model.Ready(1));
+    model.Invalidate();
+    EXPECT_EQ(model.ScopedEdit({}).epoch, 0u);
+}

@@ -1708,3 +1708,42 @@ bool inter_mcu_get_seq_slot_status(WaveX::Protocol::SeqSlotStatusMessage* out) {
     taskEXIT_CRITICAL(&s_seq_slot_lock);
     return valid;
 }
+
+namespace {
+portMUX_TYPE s_scoped_page_lock = portMUX_INITIALIZER_UNLOCKED;
+WaveX::Protocol::SeqSlotPageMessage s_scoped_page;
+bool s_scoped_page_valid = false;
+}  // namespace
+esp_err_t inter_mcu_send_seq_slot_edit(const WaveX::Protocol::SeqSlotEditMessage& message) {
+    if (!WaveX::Protocol::IsValidSeqSlotEdit(message))
+        return ESP_ERR_INVALID_ARG;
+    return send_link_message(WaveX::Protocol::MSG_SEQ_SLOT_EDIT, &message, sizeof(message)) >= 0
+               ? ESP_OK
+               : ESP_FAIL;
+}
+esp_err_t inter_mcu_request_seq_slot_page(
+    const WaveX::Protocol::SeqPatternRequestMessage& request) {
+    if (!WaveX::Protocol::IsValidSeqPatternRequest(request))
+        return ESP_ERR_INVALID_ARG;
+    return send_link_message(WaveX::Protocol::MSG_SEQ_SLOT_PAGE, &request, sizeof(request)) >= 0
+               ? ESP_OK
+               : ESP_FAIL;
+}
+void inter_mcu_store_seq_slot_page(const WaveX::Protocol::SeqSlotPageMessage& page) {
+    if (!WaveX::Protocol::IsValidSeqSlotPage(page))
+        return;
+    taskENTER_CRITICAL(&s_scoped_page_lock);
+    s_scoped_page = page;
+    s_scoped_page_valid = true;
+    taskEXIT_CRITICAL(&s_scoped_page_lock);
+}
+bool inter_mcu_get_seq_slot_page(WaveX::Protocol::SeqSlotPageMessage* out) {
+    if (!out)
+        return false;
+    taskENTER_CRITICAL(&s_scoped_page_lock);
+    const bool valid = s_scoped_page_valid;
+    if (valid)
+        *out = s_scoped_page;
+    taskEXIT_CRITICAL(&s_scoped_page_lock);
+    return valid;
+}

@@ -345,6 +345,10 @@ void inter_mcu_increment_packet_stat(uint8_t packet_type);
 
 // Sequencer values cross UART -> UI through synchronized complete snapshots.
 esp_err_t inter_mcu_send_seq_transport(const WaveX::Protocol::SeqTransportMessage& message);
+esp_err_t inter_mcu_send_seq_slot_edit(const WaveX::Protocol::SeqSlotEditMessage&);
+esp_err_t inter_mcu_request_seq_slot_page(const WaveX::Protocol::SeqPatternRequestMessage&);
+void inter_mcu_store_seq_slot_page(const WaveX::Protocol::SeqSlotPageMessage&);
+bool inter_mcu_get_seq_slot_page(WaveX::Protocol::SeqSlotPageMessage*);
 esp_err_t inter_mcu_send_seq_pattern_op(const WaveX::Protocol::SeqPatternOpMessage& message);
 esp_err_t inter_mcu_request_seq_page(const WaveX::Protocol::SeqPatternRequestMessage& request);
 void inter_mcu_store_seq_page(const WaveX::Protocol::SeqPatternSyncMessage& page);

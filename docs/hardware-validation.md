@@ -308,8 +308,9 @@ monitoring, a writable card and DWT/render profiling per the performance guide.
   edit it and rename it. Switch among all three; every hidden step, lock and
   label returns, with no change to tempo, MIDI input, Instruments or mixer/Solo.
 - [ ] Try Create/Copy on an occupied slot and Select on an empty one. Each fails
-  without replacing any Pattern. Try while playing and while MIDI-armed: Stop
-  first appears and playback/arming continues until explicitly stopped.
+  without replacing any Pattern. Try Create/Copy/Rename while playing or
+  MIDI-armed: Stop first appears and playback/arming continues until explicitly
+  stopped. Launch behavior is covered below.
 - [ ] Load a standalone Pattern file into a selected slot, switch away and back,
   then Project Save copy, reboot and Load. Active slot, other slots, labels and
   all step data return. Existing saved copies remain untouched.
@@ -325,5 +326,22 @@ monitoring, a writable card and DWT/render profiling per the performance guide.
   no stopped-voice requirement for held live notes, and no sample corruption.
 
 **Results:** Not run. Record date, both image identities and evidence here.
-**Blocker:** Physical boards and measurement session required; queued switching
-and Song playback are not part of this entry yet.
+**Blocker:** Physical boards and measurement session required. Song playback
+is not part of this entry yet.
+
+Queued launch follow-up (host-verified, hardware pending):
+
+- [ ] Use Patterns with different lengths/scales and distinguishable downbeats.
+  Launch while playing at a tempo whose loop end is inside an audio block.
+  Record/inspect the boundary: destination step zero starts on the outgoing
+  full-loop grid, without an extra old downbeat or gap. Repeat under MIDI sync.
+- [ ] Exercise negative offsets on both step-zero hits and retriggers on the
+  outgoing final step. Old events do not cross the boundary; destination
+  negative step zero clamps to launch. Held voice tails continue normally.
+- [ ] Edit the outgoing Pattern while queued, including hidden locks; launch
+  away and back and verify those edits. Send an old scoped edit after the
+  switch: it must not modify the destination, even after returning to the same
+  slot. Stop/restart cancels, reconnect never replays the launch.
+- [ ] Sweep tempo mid-loop and while queued; timing remains continuous.
+  Record matched DWT average/p95/max on launch blocks with full voice load,
+  not just idle sequencing. Include loop-boundary launches in the soak.

@@ -155,6 +155,8 @@ enum MessageType : uint8_t {
     MSG_SEQ_FILE_OP = 0x5A,       // E->D: named pattern save/load/new or retained status request
     MSG_SEQ_FILE_STATUS = 0x5B,   // D->E: foreground job and retained completion
     MSG_SEQ_SLOT_OP = 0x5C,       // E->D: Project Pattern slot management
+    MSG_SEQ_SLOT_EDIT = 0x5E,     // E->D: edit guarded by active Pattern identity
+    MSG_SEQ_SLOT_PAGE = 0x5F,     // E->D page request / D->E identity plus page
     MSG_SEQ_SLOT_STATUS = 0x5D,   // D->E: selected slot and retained completion
     // Instrument browser/load lifecycle (instrument-model.md §6).
     MSG_INST_OP = 0x60,              // E->D: inspect or load one instrument file
@@ -1692,7 +1694,8 @@ enum SeqSlotOp : uint8_t {
     SEQ_SLOT_CREATE,
     SEQ_SLOT_COPY,
     SEQ_SLOT_RENAME,
-    SEQ_SLOT_SELECT
+    SEQ_SLOT_SELECT,
+    SEQ_SLOT_LAUNCH
 };
 enum SeqSlotError : uint8_t {
     SEQ_SLOT_OK,
@@ -1702,7 +1705,8 @@ enum SeqSlotError : uint8_t {
     SEQ_SLOT_EXISTS,
     SEQ_SLOT_STOP_FIRST,
     SEQ_SLOT_NO_MEMORY,
-    SEQ_SLOT_CAPTURE_BUSY
+    SEQ_SLOT_CAPTURE_BUSY,
+    SEQ_SLOT_CANCELLED
 };
 struct SeqSlotOpMessage {
     uint32_t request_id = 0;
@@ -1715,21 +1719,23 @@ struct SeqSlotStatusMessage {
     uint32_t request_id = 0, active_request_id = 0, completed_request_id = 0;
     uint8_t busy = 0, error = SEQ_SLOT_OK, completed_op = SEQ_SLOT_GET;
     uint8_t slot = 0, used = 0, active_pattern = 0;
-    uint16_t reserved = 0;
+    uint8_t queued_pattern = 0xff;
+    uint8_t reserved = 0;
     char name[24]{};  // inspected slot name, not a file path
 } __attribute__((packed));
 static_assert(sizeof(SeqSlotOpMessage) == 32 && sizeof(SeqSlotStatusMessage) == 44,
               "Pattern slot wire sizes");
 inline bool IsValidSeqSlotOp(const SeqSlotOpMessage& m) {
-    return m.request_id && m.op <= SEQ_SLOT_SELECT && m.slot < 128 && !m.reserved;
+    return m.request_id && m.op <= SEQ_SLOT_LAUNCH && m.slot < 128 && !m.reserved;
 }
 inline bool IsValidSeqSlotStatus(const SeqSlotStatusMessage& m) {
     bool terminated = false;
     for (char c: m.name)
         terminated |= c == 0;
-    return m.request_id && m.busy <= 1 && m.error <= SEQ_SLOT_CAPTURE_BUSY &&
-           m.completed_op <= SEQ_SLOT_SELECT && m.slot < 128 && m.used <= 1 &&
-           m.active_pattern < 128 && !m.reserved && terminated &&
+    return m.request_id && m.busy <= 1 && m.error <= SEQ_SLOT_CANCELLED &&
+           m.completed_op <= SEQ_SLOT_LAUNCH && m.slot < 128 && m.used <= 1 &&
+           m.active_pattern < 128 && (m.queued_pattern == 0xff || m.queued_pattern < 128) &&
+           !m.reserved && terminated &&
            (m.busy ? m.active_request_id != 0 : m.active_request_id == 0);
 }
 
@@ -1874,6 +1880,30 @@ static_assert(sizeof(SeqPatternRequestMessage) == 8, "sequencer request wire siz
 static_assert(sizeof(SeqStepState) == 20, "sequencer step wire size");
 static_assert(sizeof(SeqPatternSyncMessage) == 336, "sequencer page wire size");
 static_assert(sizeof(SeqPatternSyncMessage) <= 506, "page fits a 512-byte packet");
+
+// Scoped UI commands cannot edit a new Pattern using an outgoing grid image.
+// Epoch changes on every whole-Pattern replacement, even a return to the same slot.
+struct SeqSlotEditMessage {
+    uint32_t epoch = 0;
+    uint8_t pattern = 0;
+    SeqPatternOpMessage edit;
+} __attribute__((packed));
+struct SeqSlotPageMessage {
+    uint32_t epoch = 0;
+    uint8_t pattern = 0;
+    SeqPatternSyncMessage page;
+} __attribute__((packed));
+inline bool IsValidSeqSlotEdit(const SeqSlotEditMessage& m) {
+    return m.epoch && m.pattern < 128 && m.edit.op <= SEQ_OP_SET_PARAM_LOCK_SLOT &&
+           m.edit.track < 16 && m.edit.step < 64;
+}
+inline bool IsValidSeqSlotPage(const SeqSlotPageMessage& m) {
+    return m.epoch && m.pattern < 128 && m.page.request_id && m.page.valid <= 1 &&
+           m.page.track < SEQ_TRACK_COUNT && m.page.first_step < SEQ_MAX_STEPS &&
+           m.page.first_step % SEQ_PAGE_STEPS == 0;
+}
+static_assert(sizeof(SeqSlotEditMessage) == 13 && sizeof(SeqSlotPageMessage) == 341,
+              "Scoped Pattern wire sizes");
 
 // MSG_SEQ_PLAYHEAD (D->E): coalesced playhead + sync feedback for the UI.
 // measured_bpm_x100 mirrors SeqTransportMessage's tempo encoding.
@@ -2883,6 +2913,10 @@ inline const char* MessageTypeName(uint8_t type) {
             return "SAMPLE_GET_PATH_RESP";
         case MSG_STORAGE_STATUS:
             return "STORAGE_STATUS";
+        case MSG_SEQ_SLOT_EDIT:
+            return "SEQ_SLOT_EDIT";
+        case MSG_SEQ_SLOT_PAGE:
+            return "SEQ_SLOT_PAGE";
         case MSG_SEQ_SLOT_OP:
             return "SEQ_SLOT_OP";
         case MSG_SEQ_SLOT_STATUS:

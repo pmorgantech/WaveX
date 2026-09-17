@@ -72,6 +72,29 @@ void ProcessInterMcuMessage(uint8_t msg_type,
                             uint16_t sequence_number,
                             const uint8_t* payload,
                             size_t payload_size) {
+    if (msg_type == MSG_SEQ_SLOT_PAGE) {
+#if WAVEX_AUDIO_ENGINE_ENABLED
+        SeqPatternRequestMessage request;
+        if (payload && payload_size == sizeof(request)) {
+            std::memcpy(&request, payload, sizeof(request));
+            if (IsValidSeqPatternRequest(request))
+                AudioEngine::OnSeqSlotPageRequest(request);
+        }
+#endif
+        return;
+    }
+    if (msg_type == MSG_SEQ_SLOT_EDIT) {
+#if WAVEX_AUDIO_ENGINE_ENABLED
+        SeqSlotEditMessage request;
+        if (!AudioEngine::ProjectBusy() && !Storage::CardService::Busy() && payload &&
+            payload_size == sizeof(request)) {
+            std::memcpy(&request, payload, sizeof(request));
+            if (IsValidSeqSlotEdit(request))
+                AudioEngine::OnSeqSlotEdit(request);
+        }
+#endif
+        return;
+    }
     if (msg_type == MSG_SEQ_SLOT_OP) {
 #if WAVEX_AUDIO_ENGINE_ENABLED
         SeqSlotOpMessage request;
@@ -106,7 +129,8 @@ void ProcessInterMcuMessage(uint8_t msg_type,
     if (AudioEngine::ProjectBusy() && !project_stop && msg_type != MSG_HEARTBEAT &&
         msg_type != MSG_STATUS_REQUEST && msg_type != MSG_NOTE_OFF &&
         msg_type != MSG_MIX_STATE_REQ && msg_type != MSG_TRACK_STATE_REQ &&
-        msg_type != MSG_SEQ_PATTERN_SYNC && msg_type != MSG_TRACK_BINDING_REQ)
+        msg_type != MSG_SEQ_PATTERN_SYNC && msg_type != MSG_TRACK_BINDING_REQ &&
+        msg_type != MSG_MIDI_CLOCK_EVENT)
         return;
 #endif
     if (msg_type == MSG_CARD_OP) {

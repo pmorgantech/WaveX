@@ -131,7 +131,7 @@ bool Request(const SeqFileOpMessage& request, Sequencer::PatternExchange& exchan
     if (request.op == SEQ_FILE_GET || request.request_id == j.status.active_request_id ||
         request.request_id == j.status.completed_request_id)
         return false;
-    if (j.phase != Phase::Idle) {
+    if (j.phase != Phase::Idle || exchange.state() != Sequencer::PatternExchange::State::Idle) {
         j.status.completed_request_id = request.request_id;
         j.status.completed_op = request.op;
         j.status.error = SEQ_FILE_BUSY;

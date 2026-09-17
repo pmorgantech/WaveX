@@ -12,13 +12,14 @@ class ProjectPatterns {
     void Pump(Sequencer::Project*);
     void Refresh(const Sequencer::Project*);
     void Fail(uint8_t error);
+    bool BlocksEdits() const { return Busy() && phase_ != Phase::Launch; }
     bool Busy() const { return phase_ != Phase::Idle; }
     bool ReplyPending() const { return reply_; }
     void ReplySent() { reply_ = false; }
     const Protocol::SeqSlotStatusMessage& Status() const { return status_; }
 
    private:
-    enum class Phase { Idle, Capture, Install };
+    enum class Phase { Idle, Capture, Install, Launch };
     Sequencer::PatternExchange& exchange_;
     Protocol::SeqSlotOpMessage request_;
     Protocol::SeqSlotStatusMessage status_;

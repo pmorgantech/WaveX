@@ -13,6 +13,11 @@ versioning and release process.
 
 ### Added
 
+- Pattern Launch selects while stopped or queues a sample-offset switch at the
+  next full-loop boundary. Stop/restart cancels; outgoing edits and voice tails
+  survive. Scoped grid epochs reject delayed edits after switching, including
+  returning to the same slot. Callback/panel checks remain open in HV-008.
+
 - Sequencer Project Patterns now creates, copies, renames and selects 128 stable
   slots while stopped. Switching preserves outgoing hidden steps/locks and
   session tempo, sounds and mixer; Project saves retain the collection.
@@ -384,6 +389,9 @@ versioning and release process.
   protocol version 6 remains unchanged.
 
 ### Fixed
+
+- Sequencer tempo changes retain musical phase, and Project Save permits MIDI
+  clock ticks/Stop through its dispatcher lease.
 
 - Instrument Save copy now checks both oscillator maps' on-card WAV dependencies
   against the same format and per-sample size limits as recall before creating

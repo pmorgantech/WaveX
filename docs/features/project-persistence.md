@@ -5,8 +5,8 @@ screen and foreground session owner. Both firmware images compile; host tests
 exercise the real codec, file job, loader, session boundary and UI lifecycle.
 Reboot, card interruption, memory-pressure recovery and callback timing remain
 open in [HV-007](../hardware-validation.md#hv-007--project-save-load-and-recovery).
-Stopped [Pattern management](pattern-management.md) is connected; queued
-transitions, Song management and Song execution remain separate Phase 2 work.
+[Pattern management and queued launch](pattern-management.md) are connected;
+Song management and Song execution remain separate Phase 2 work.
 
 ## Contents
 
@@ -167,7 +167,7 @@ selection captures outgoing edits before installing another Pattern.
 - Run HV-007: real-card durability/reboot, interrupted saves, memory-pressure
   rollback, panel interaction and DWT measurements. Host/compile results do
   not establish a power-loss guarantee or a callback performance improvement.
-- Add queued transitions and Song editing/playback
+- Add Song editing/playback
   after defining the roadmap's Daisy-clock transition and edit rules.
 - Bank selection/Program Change playback, portable audio collection and missing
   asset repair follow their own roadmap designs. Project recall validates and

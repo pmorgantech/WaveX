@@ -42,10 +42,11 @@ void FeedMidiClocks(SequencerTransport& t, int count, double bpm) {
     }
 }
 
-SequencerTransport MakeTransport() {
-    SequencerTransport t;
-    t.Init(48000, 48);
-    return t;
+struct TestTransport : SequencerTransport {
+    TestTransport() { Init(48000, 48); }
+};
+TestTransport MakeTransport() {
+    return TestTransport{};
 }
 
 }  // namespace
@@ -53,7 +54,7 @@ SequencerTransport MakeTransport() {
 // ---- Pattern edits ----
 
 TEST(SequencerTransportTest, SetStepOpEnablesStepWithVelocity) {
-    SequencerTransport t = MakeTransport();
+    auto t = MakeTransport();
     t.ApplyPatternOp(SeqPatternOpMessage(SEQ_OP_SET_STEP, 2, 5, 1, 99, 0));
 
     const auto& step = t.pattern().tracks[2].steps[5];
@@ -62,7 +63,7 @@ TEST(SequencerTransportTest, SetStepOpEnablesStepWithVelocity) {
 }
 
 TEST(SequencerTransportTest, ToggleStepFlipsOnOff) {
-    SequencerTransport t = MakeTransport();
+    auto t = MakeTransport();
     EXPECT_FALSE(t.pattern().tracks[0].steps[0].on);
     t.ApplyPatternOp(SeqPatternOpMessage(SEQ_OP_TOGGLE_STEP, 0, 0, 0, 0, 0));
     EXPECT_TRUE(t.pattern().tracks[0].steps[0].on);
@@ -71,7 +72,7 @@ TEST(SequencerTransportTest, ToggleStepFlipsOnOff) {
 }
 
 TEST(SequencerTransportTest, VelocityAndProbabilityAreClamped) {
-    SequencerTransport t = MakeTransport();
+    auto t = MakeTransport();
     t.ApplyPatternOp(SeqPatternOpMessage(SEQ_OP_SET_STEP, 0, 0, 1, 500 /*vel*/, 0));
     EXPECT_EQ(t.pattern().tracks[0].steps[0].velocity, 127);
     t.ApplyPatternOp(SeqPatternOpMessage(SEQ_OP_SET_STEP_PROB, 0, 0, 200 /*prob*/, 0, 0));
@@ -79,7 +80,7 @@ TEST(SequencerTransportTest, VelocityAndProbabilityAreClamped) {
 }
 
 TEST(SequencerTransportTest, MicroOffsetAndRetrigOpAppliesSignedOffset) {
-    SequencerTransport t = MakeTransport();
+    auto t = MakeTransport();
     t.ApplyPatternOp(SeqPatternOpMessage(SEQ_OP_SET_STEP_MICRO, 1, 3, 2 /*count*/, 8 /*rate*/, -5));
     const auto& s = t.pattern().tracks[1].steps[3];
     EXPECT_EQ(s.retrig_count, 2);
@@ -88,7 +89,7 @@ TEST(SequencerTransportTest, MicroOffsetAndRetrigOpAppliesSignedOffset) {
 }
 
 TEST(SequencerTransportTest, PatternScopedOpsAreClamped) {
-    SequencerTransport t = MakeTransport();
+    auto t = MakeTransport();
     t.ApplyPatternOp(SeqPatternOpMessage(SEQ_OP_PATTERN_LENGTH, 0, 0, 0, 999, 0));
     EXPECT_EQ(t.pattern().length, WaveX::Sequencer::kMaxSteps);
     t.ApplyPatternOp(SeqPatternOpMessage(SEQ_OP_PATTERN_SWING, 0, 0, 200, 0, 0));
@@ -99,14 +100,14 @@ TEST(SequencerTransportTest, PatternScopedOpsAreClamped) {
 }
 
 TEST(SequencerTransportTest, TrackMuteOpTogglesEnabled) {
-    SequencerTransport t = MakeTransport();
+    auto t = MakeTransport();
     EXPECT_TRUE(t.pattern().tracks[4].enabled);
     t.ApplyPatternOp(SeqPatternOpMessage(SEQ_OP_TRACK_MUTE, 4, 0, 0 /*disable*/, 0, 0));
     EXPECT_FALSE(t.pattern().tracks[4].enabled);
 }
 
 TEST(SequencerTransportTest, OutOfRangeEditsAreSilentNoOps) {
-    SequencerTransport t = MakeTransport();
+    auto t = MakeTransport();
     // track 99 / step 99 are out of range - must not crash or corrupt.
     t.ApplyPatternOp(SeqPatternOpMessage(SEQ_OP_SET_STEP, 99, 99, 1, 100, 0));
     t.ApplyPatternOp(SeqPatternOpMessage(SEQ_OP_TRACK_MUTE, 200, 0, 0, 0, 0));
@@ -117,7 +118,7 @@ TEST(SequencerTransportTest, OutOfRangeEditsAreSilentNoOps) {
 }
 
 TEST(SequencerTransportTest, PatternLengthAndSwingClampAtTheLowEndToo) {
-    SequencerTransport t = MakeTransport();
+    auto t = MakeTransport();
     t.ApplyPatternOp(SeqPatternOpMessage(SEQ_OP_PATTERN_LENGTH, 0, 0, 0, 0 /*len*/, 0));
     EXPECT_EQ(t.pattern().length, 1) << "length 0 must clamp to 1, not disable the pattern";
     t.ApplyPatternOp(SeqPatternOpMessage(SEQ_OP_PATTERN_SWING, 0, 0, 10 /*swing*/, 0, 0));
@@ -125,20 +126,20 @@ TEST(SequencerTransportTest, PatternLengthAndSwingClampAtTheLowEndToo) {
 }
 
 TEST(SequencerTransportTest, InvalidScaleValueIsIgnored) {
-    SequencerTransport t = MakeTransport();
+    auto t = MakeTransport();
     const StepScale before = t.pattern().scale;
     t.ApplyPatternOp(SeqPatternOpMessage(SEQ_OP_PATTERN_SCALE, 0, 0, 200 /*bogus*/, 0, 0));
     EXPECT_EQ(t.pattern().scale, before) << "an unknown scale byte from the wire must not land";
 }
 
 TEST(SequencerTransportTest, RetrigCountIsClampedToMax) {
-    SequencerTransport t = MakeTransport();
+    auto t = MakeTransport();
     t.ApplyPatternOp(SeqPatternOpMessage(SEQ_OP_SET_STEP_MICRO, 0, 0, 200 /*count*/, 8, 0));
     EXPECT_EQ(t.pattern().tracks[0].steps[0].retrig_count, WaveX::Sequencer::kMaxRetrigCount);
 }
 
 TEST(SequencerTransportTest, ParamLockSetOverwriteAndClear) {
-    SequencerTransport t = MakeTransport();
+    auto t = MakeTransport();
     t.ApplyPatternOp(SeqPatternOpMessage(SEQ_OP_SET_PARAM_LOCK, 0, 0, 5 /*param*/, 200, 0));
     t.ApplyPatternOp(SeqPatternOpMessage(SEQ_OP_SET_PARAM_LOCK, 0, 0, 5 /*param*/, 300, 0));
     // Same param id overwrites in place, not a second slot.
@@ -152,7 +153,7 @@ TEST(SequencerTransportTest, ParamLockSetOverwriteAndClear) {
 }
 
 TEST(SequencerTransportTest, ParamLockIdZeroIsRejected) {
-    SequencerTransport t = MakeTransport();
+    auto t = MakeTransport();
     // param_id 0 marks a free slot; accepting it from the wire would create
     // an "unused" lock carrying a value.
     t.ApplyPatternOp(SeqPatternOpMessage(SEQ_OP_SET_PARAM_LOCK, 0, 0, 0 /*param*/, 123, 0));
@@ -164,7 +165,7 @@ TEST(SequencerTransportTest, ParamLockIdZeroIsRejected) {
 // out), per param-locks-and-modulation.md §2 - not the newest, and not a
 // silent drop.
 TEST(SequencerTransportTest, FifthParamLockEvictsTheOldest) {
-    SequencerTransport t = MakeTransport();
+    auto t = MakeTransport();
     for (uint8_t id = 2; id <= 5; ++id)
         t.ApplyPatternOp(SeqPatternOpMessage(SEQ_OP_SET_PARAM_LOCK, 0, 0, id, id * 100, 0));
     t.ApplyPatternOp(SeqPatternOpMessage(SEQ_OP_SET_PARAM_LOCK, 0, 0, 6, 600, 0));
@@ -181,7 +182,7 @@ TEST(SequencerTransportTest, FifthParamLockEvictsTheOldest) {
 // ---- Internal-clock transport ----
 
 TEST(SequencerTransportTest, InternalPlayStartsSchedulerImmediately) {
-    SequencerTransport t = MakeTransport();
+    auto t = MakeTransport();
     t.pattern().length = 1;
     t.pattern().scale = StepScale::Quarter;
     t.pattern().tracks[0].steps[0].on = true;
@@ -200,7 +201,7 @@ TEST(SequencerTransportTest, InternalPlayStartsSchedulerImmediately) {
 }
 
 TEST(SequencerTransportTest, RuntimePatternEditTakesEffectAfterTheCurrentStepBoundary) {
-    SequencerTransport t = MakeTransport();
+    auto t = MakeTransport();
     t.pattern().length = 2;
     t.pattern().tracks[0].steps[0].on = true;
 
@@ -223,7 +224,7 @@ TEST(SequencerTransportTest, RuntimePatternEditTakesEffectAfterTheCurrentStepBou
 }
 
 TEST(SequencerTransportTest, StopHaltsPlayback) {
-    SequencerTransport t = MakeTransport();
+    auto t = MakeTransport();
     t.pattern().length = 1;
     t.pattern().scale = StepScale::Quarter;
     t.pattern().tracks[0].steps[0].on = true;
@@ -239,7 +240,7 @@ TEST(SequencerTransportTest, StopHaltsPlayback) {
 }
 
 TEST(SequencerTransportTest, TempoFromTransportMessageDrivesTiming) {
-    SequencerTransport t = MakeTransport();
+    auto t = MakeTransport();
     t.pattern().length = 1;
     t.pattern().scale = StepScale::Quarter;
     t.pattern().tracks[0].steps[0].on = true;
@@ -255,7 +256,7 @@ TEST(SequencerTransportTest, TempoFromTransportMessageDrivesTiming) {
 }
 
 TEST(SequencerTransportTest, TempoIsClampedToOneBpmMinimum) {
-    SequencerTransport t = MakeTransport();
+    auto t = MakeTransport();
     t.ApplyTransport(
         SeqTransportMessage(SEQ_TRANSPORT_STOP, SEQ_CLOCK_INTERNAL, SEQ_INPUT_PLAY, 0, 0, 0));
     EXPECT_DOUBLE_EQ(t.TempoBpm(), 1.0) << "tempo_bpm_x100 = 0 must clamp, not stop time";
@@ -265,7 +266,7 @@ TEST(SequencerTransportTest, TempoIsClampedToOneBpmMinimum) {
 // no native mid-pattern resume in the scheduler core yet). Pinning it keeps
 // the eventual real resume an intentional change.
 TEST(SequencerTransportTest, InternalContinueRestartsFromStepZero) {
-    SequencerTransport t = MakeTransport();
+    auto t = MakeTransport();
     t.pattern().length = 4;
     t.pattern().scale = StepScale::Quarter;
     t.pattern().tracks[0].steps[0].on = true;
@@ -290,7 +291,7 @@ TEST(SequencerTransportTest, InternalContinueRestartsFromStepZero) {
 // CONTINUE in MIDI mode arms (like PLAY) and starts on the master's
 // MIDI CONTINUE, not by itself.
 TEST(SequencerTransportTest, MidiContinueArmsAndStartsOnClockContinue) {
-    SequencerTransport t = MakeTransport();
+    auto t = MakeTransport();
     t.pattern().length = 1;
     t.pattern().scale = StepScale::Quarter;
     t.pattern().tracks[0].steps[0].on = true;
@@ -310,7 +311,7 @@ TEST(SequencerTransportTest, MidiContinueArmsAndStartsOnClockContinue) {
 // A standalone SPP message repositions the follower without touching the
 // scheduler's armed/playing state.
 TEST(SequencerTransportTest, SppRepositionsFollowerPhase) {
-    SequencerTransport t = MakeTransport();
+    auto t = MakeTransport();
     t.ApplyTransport(
         SeqTransportMessage(SEQ_TRANSPORT_STOP, SEQ_CLOCK_MIDI, SEQ_INPUT_PLAY, 0, 12000, 0));
     ASSERT_FALSE(t.IsPlaying());
@@ -323,7 +324,7 @@ TEST(SequencerTransportTest, SppRepositionsFollowerPhase) {
 // MIDI START while NOT armed (no PLAY from the UI) must not start playback -
 // the user's transport intent gates the master's.
 TEST(SequencerTransportTest, UnarmedMidiStartDoesNotStartScheduler) {
-    SequencerTransport t = MakeTransport();
+    auto t = MakeTransport();
     t.pattern().tracks[0].steps[0].on = true;
     t.ApplyTransport(
         SeqTransportMessage(SEQ_TRANSPORT_STOP, SEQ_CLOCK_MIDI, SEQ_INPUT_PLAY, 0, 12000, 0));
@@ -335,7 +336,7 @@ TEST(SequencerTransportTest, UnarmedMidiStartDoesNotStartScheduler) {
 // ---- Playhead feedback ----
 
 TEST(SequencerTransportTest, PlayheadReportsStepAndBpm) {
-    SequencerTransport t = MakeTransport();
+    auto t = MakeTransport();
     t.pattern().length = 4;
     t.pattern().scale = StepScale::Sixteenth;
     for (int i = 0; i < 4; ++i)
@@ -360,7 +361,7 @@ TEST(SequencerTransportTest, PlayheadReportsStepAndBpm) {
 // ---- MIDI-slave transport ----
 
 TEST(SequencerTransportTest, MidiPlayArmsAndStartsOnMidiStart) {
-    SequencerTransport t = MakeTransport();
+    auto t = MakeTransport();
     t.pattern().length = 1;
     t.pattern().scale = StepScale::Quarter;
     t.pattern().tracks[0].steps[0].on = true;
@@ -382,7 +383,7 @@ TEST(SequencerTransportTest, MidiPlayArmsAndStartsOnMidiStart) {
 }
 
 TEST(SequencerTransportTest, MidiClockLocksAndTracksTempo) {
-    SequencerTransport t = MakeTransport();
+    auto t = MakeTransport();
     t.pattern().length = 1;
     t.pattern().scale = StepScale::Sixteenth;
     t.pattern().tracks[0].steps[0].on = true;
@@ -401,7 +402,7 @@ TEST(SequencerTransportTest, MidiClockLocksAndTracksTempo) {
 }
 
 TEST(SequencerTransportTest, MidiStopHaltsScheduler) {
-    SequencerTransport t = MakeTransport();
+    auto t = MakeTransport();
     t.pattern().length = 1;
     t.pattern().scale = StepScale::Sixteenth;
     t.pattern().tracks[0].steps[0].on = true;
@@ -419,7 +420,7 @@ TEST(SequencerTransportTest, MidiStopHaltsScheduler) {
 // ---- MIDI CC forwarding ----
 
 TEST(SequencerTransportTest, MidiCcIsRecorded) {
-    SequencerTransport t = MakeTransport();
+    auto t = MakeTransport();
     EXPECT_EQ(t.CcCount(), 0u);
     t.OnMidiCc(MidiCcMessage(1 /*modwheel*/, 77, 3));
     EXPECT_EQ(t.CcCount(), 1u);
@@ -431,7 +432,7 @@ TEST(SequencerTransportTest, MidiCcIsRecorded) {
 // ---- Mode fields ----
 
 TEST(SequencerTransportTest, InputModeStoredFromTransport) {
-    SequencerTransport t = MakeTransport();
+    auto t = MakeTransport();
     t.ApplyTransport(SeqTransportMessage(
         SEQ_TRANSPORT_STOP, SEQ_CLOCK_INTERNAL, SEQ_INPUT_LIVE_RECORD, 1, 12000, 0));
     EXPECT_EQ(t.InputMode(), SEQ_INPUT_LIVE_RECORD);
