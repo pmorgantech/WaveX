@@ -428,13 +428,14 @@ it owns that setup without needing a separate saved Performance object.
   with streaming audition and modulation. Sample Edit `channel_mode` UI
   remains separate. WXI recall fixtures must meet Instrument import admission;
   direct-loaded large samples can exceed that limit (see below).
-- [ ] **Phase 2 / Instrument save admission:** a directly loaded WAV can
-  exceed `WAVEX_INST_MAX_RAM_SAMPLE_BYTES`, yet WXI Save copy succeeds and
-  recall rejects that referenced sample as unsupported. The stereo bench
-  reproduced this with a 49,250,304-byte PCM payload. Make save/load admission
-  consistent, or report the non-recallable dependency before publishing a
-  saved Instrument. Preserve pool ownership and memory limits; do not silently
-  enlarge the budget. Include this preflight in Project snapshot transactions.
+- [ ] **Phase 2 / Instrument save admission bench check:** Save copy now
+  preflights both oscillator maps' on-card WAV dependencies under recall's
+  format and per-sample size policy before creating a WXI. Host regressions
+  cover rejection and preserved ownership/undo state. Repeat the stereo
+  bench's 49,250,304-byte direct-loaded PCM case: save must report unsupported
+  sample, create no WXI, and preserve the playable Track and Revert point.
+  Also verify an admitted save/reload. Include this preflight in Project
+  snapshot transactions; session-wide memory admission remains separate.
 - [ ] **Phase 2 / Mixer v1:** Project now exposes Track assignment, MIDI, level,
   pan/balance and mute. Add session Save/Load; preserve selected-Track continuity and keep Pattern/
   Song editing in Sequencer. Complete Project transactions and mixer readback/

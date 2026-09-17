@@ -40,12 +40,23 @@ using namespace WaveX::Protocol;
 alignas(32) std::array<uint8_t, 12 * 1024 * 1024> arena;
 std::array<SamplePool::Record, WAVEX_SAMPLE_POOL_CAPACITY> records;
 
-std::vector<uint8_t> PcmWave() {
+std::vector<uint8_t> PcmWave(uint32_t data_bytes = 8, uint16_t channels = 1) {
     const uint8_t header[] = {'R', 'I', 'F', 'F',  44, 0, 0, 0, 'W', 'A', 'V', 'E',  'f',
                               'm', 't', ' ', 16,   0,  0, 0, 1, 0,   1,   0,   0x80, 0xbb,
                               0,   0,   0,   0x77, 1,  0, 2, 0, 16,  0,   'd', 'a',  't',
                               'a', 8,   0,   0,    0,  1, 0, 2, 0,   3,   0,   4,    0};
-    return {std::begin(header), std::end(header)};
+    std::vector<uint8_t> wave(std::begin(header), std::end(header));
+    wave.resize(44 + data_bytes);
+    auto put32 = [&](size_t at, uint32_t value) {
+        for (unsigned byte = 0; byte < 4; ++byte)
+            wave[at + byte] = static_cast<uint8_t>(value >> (8 * byte));
+    };
+    put32(4, 36 + data_bytes);
+    put32(28, 48000u * channels * 2u);
+    put32(40, data_bytes);
+    wave[22] = static_cast<uint8_t>(channels);
+    wave[32] = static_cast<uint8_t>(channels * 2);
+    return wave;
 }
 
 class SfzLoaderTest : public ::testing::Test {
@@ -72,6 +83,26 @@ class SfzLoaderTest : public ::testing::Test {
     uint16_t SampleId(const char* path) {
         auto* record = pool_.FindByPath(path);
         return record ? record->sample_id : 0;
+    }
+    // Model the direct WAV loader's resident result, which admits samples
+    // against the arena rather than the smaller Instrument-import limit.
+    void AddResidentWave(const char* path, uint32_t data_bytes, uint16_t channels = 1) {
+        const auto wave = PcmWave(data_bytes, channels);
+        MockFatFS::Instance().AddFile(path, wave);
+        SamplePool::Record* record = nullptr;
+        ASSERT_EQ(pool_.AdmitPath(path, &record), SamplePool::Admit::Ok);
+        wxsamp_t handle{};
+        ASSERT_TRUE(memory_.alloc(data_bytes, &handle));
+        void* pcm = nullptr;
+        ASSERT_TRUE(memory_.ptr(handle, &pcm));
+        std::memcpy(pcm, wave.data() + 44, data_bytes);
+        ResidentSampleInfo info{record->sample_id,
+                                data_bytes,
+                                48000,
+                                data_bytes / (channels * 2u),
+                                static_cast<uint8_t>(channels),
+                                16};
+        FillLoadedSample(record->payload, record->sample_id, path, info, handle);
     }
     uint32_t next_request_ = 100;
     InstZoneSyncMessage Edit(uint8_t op,
@@ -310,6 +341,81 @@ TEST_F(SfzLoaderTest, FailedSaveNeverReplacesAnExistingCopy) {
     EXPECT_EQ(Edit(INST_OP_SAVE, 0, "Rename").error, INST_ERROR_IO);
     EXPECT_EQ(fs.GetFile("0:/wavex/instruments/Rename.wxi"), nullptr);
     EXPECT_EQ(*fs.GetFile("0:/wavex/instruments/Saved.wxi"), original);
+}
+
+TEST_F(SfzLoaderTest, SaveRejectsOversizedResidentDependencyAndPreservesTrackAndUndo) {
+    AddResidentWave("/kits/large.wav", WAVEX_INST_MAX_RAM_SAMPLE_BYTES + 2);
+    const auto sample = SampleId("/kits/large.wav");
+    ASSERT_TRUE(SfzLoader::BindSample(pool_, memory_, 0, sample));
+    const auto original = pool_.Find(sample)->payload;
+    const auto before = SfzLoader::ReadEditState(0);
+    InstEditOpMessage op;
+    op.request_id = 9000;
+    op.revision = before.revision;
+    op.op = INST_EDIT_FILTER;
+    op.sound.cutoff_hz = 1234;
+    ASSERT_TRUE(SfzLoader::OnEditOp(op));
+    const auto edited = SfzLoader::ReadEditState(0);
+
+    const auto saved = Edit(INST_OP_SAVE, 0, "Too large");
+    EXPECT_EQ(saved.error, INST_ERROR_UNSUPPORTED_SAMPLE);
+    EXPECT_EQ(saved.completed_request_id, next_request_);
+    EXPECT_EQ(MockFatFS::Instance().GetFile("0:/wavex/instruments/Too large.wxi"), nullptr);
+    EXPECT_EQ(MockFatFS::Instance().GetFile("0:/wavex/instruments/.Too large-00000065.tmp"),
+              nullptr);
+    EXPECT_EQ(SfzLoader::BoundSample(0), sample);
+    ASSERT_NE(pool_.Find(sample), nullptr);
+    EXPECT_EQ(pool_.Find(sample)->used_by, 1);
+    EXPECT_EQ(pool_.Find(sample)->payload.handle.len, original.handle.len);
+    EXPECT_EQ(pool_.Find(sample)->payload.loaded_bytes, original.loaded_bytes);
+    wxsamp_stats_t stats{};
+    memory_.stats(&stats);
+    EXPECT_EQ(stats.objects_alive, 1u);
+    auto state = SfzLoader::ReadEditState(0);
+    EXPECT_EQ(state.revision, edited.revision);
+    EXPECT_TRUE(state.dirty);
+    EXPECT_FLOAT_EQ(state.sound.cutoff_hz, 1234);
+    op.request_id++;
+    op.revision = state.revision;
+    op.op = INST_EDIT_REVERT;
+    ASSERT_TRUE(SfzLoader::OnEditOp(op));
+    EXPECT_FLOAT_EQ(SfzLoader::ReadEditState(0).sound.cutoff_hz, before.sound.cutoff_hz);
+}
+
+TEST_F(SfzLoaderTest, SaveAtInstrumentLimitRecallsStereoAfterPoolRelease) {
+    AddResidentWave("/kits/boundary.wav", WAVEX_INST_MAX_RAM_SAMPLE_BYTES, 2);
+    const auto sample = SampleId("/kits/boundary.wav");
+    ASSERT_TRUE(SfzLoader::BindSample(pool_, memory_, 0, sample));
+    ASSERT_EQ(Edit(INST_OP_SAVE, 0, "Boundary").error, INST_ERROR_NONE);
+    ASSERT_TRUE(SfzLoader::BindSample(pool_, memory_, 0, 0));
+    ASSERT_EQ(pool_.Count(), 0u);
+    ASSERT_TRUE(SfzLoader::Load("0:/wavex/instruments/Boundary.wxi",
+                                0,
+                                pool_,
+                                memory_,
+                                io_.data(),
+                                static_cast<uint32_t>(io_.size())));
+    const auto* record = pool_.FindByPath("/kits/boundary.wav");
+    ASSERT_NE(record, nullptr);
+    EXPECT_EQ(record->payload.loaded_bytes, WAVEX_INST_MAX_RAM_SAMPLE_BYTES);
+    EXPECT_EQ(record->payload.channels, 2);
+}
+
+TEST_F(SfzLoaderTest, SaveChecksCardDependenciesEvenWhenPoolMetadataIsValid) {
+    ASSERT_TRUE(Load(0));
+    auto& fs = MockFatFS::Instance();
+    ASSERT_TRUE(fs.RemoveFile("/kits/b.wav"));
+    EXPECT_EQ(Edit(INST_OP_SAVE, 0, "Missing").error, INST_ERROR_MISSING_SAMPLES);
+    EXPECT_EQ(fs.GetFile("0:/wavex/instruments/Missing.wxi"), nullptr);
+    auto truncated = PcmWave();
+    truncated.pop_back();
+    fs.AddFile("/kits/b.wav", truncated);
+    EXPECT_EQ(Edit(INST_OP_SAVE, 0, "Truncated").error, INST_ERROR_UNSUPPORTED_SAMPLE);
+    EXPECT_EQ(fs.GetFile("0:/wavex/instruments/Truncated.wxi"), nullptr);
+    EXPECT_EQ(pool_.Count(), 2u);
+    EXPECT_TRUE(SfzLoader::TrackLoaded(0));
+    fs.AddFile("/kits/b.wav", PcmWave());
+    EXPECT_EQ(Edit(INST_OP_SAVE, 0, "Recovered").error, INST_ERROR_NONE);
 }
 TEST_F(SfzLoaderTest, EmptyKitReloadAndLostReplyRecovery) {
     Edit(INST_OP_NEW, 0, "Empty");
@@ -554,6 +660,41 @@ TEST_F(SfzLoaderTest, SecondMapEditsAreIndependentAndRetainCrossMapOwnership) {
     ASSERT_NE(pool_.Find(sample), nullptr);
     EXPECT_TRUE(pool_.Find(sample)->used_by & 1);
     EXPECT_EQ(KeyRead(0).zones[0].sample_id, sample);
+}
+
+TEST_F(SfzLoaderTest, SavePreflightIncludesSparseSecondOscillatorWithoutStoppingVoices) {
+    ASSERT_TRUE(Load(0));
+    AddResidentWave("/kits/large.wav", WAVEX_INST_MAX_RAM_SAMPLE_BYTES + 4, 2);
+    const auto sample = SampleId("/kits/large.wav");
+    InstKeyMapOpMessage assign;
+    assign.request_id = 91000;
+    assign.revision = KeyRead(0).revision;
+    assign.oscillator = 1;
+    assign.zone = 31;
+    assign.op = KEY_MAP_ASSIGN;
+    assign.value.sample_id = sample;
+    EXPECT_FALSE(SfzLoader::OnKeyMapOp(assign));
+    SfzLoader::ConfirmVoicesStopped(pool_, memory_);
+    ASSERT_EQ(KeyRead(0, 91001, 1).zones[31].sample_id, sample);
+
+    ASSERT_TRUE(SfzLoader::Begin({91002, 0, INST_OP_SAVE, "Second source"}));
+    unsigned passes = 0;
+    while (SfzLoader::Busy() && passes < 100) {
+        EXPECT_EQ(SfzLoader::VoiceStopTrack(), 0xFF);
+        EXPECT_FALSE(SfzLoader::TrackLoading(0));
+        SfzLoader::Pump(pool_, memory_, io_.data(), static_cast<uint32_t>(io_.size()));
+        ++passes;
+    }
+    EXPECT_FALSE(SfzLoader::Busy());
+    // Snapshot plus one pass for each of the three populated dependencies.
+    EXPECT_GE(passes, 4u);
+    SfzLoader::PumpEditorReply();
+    EXPECT_EQ(WaveX::Comm::last_pad_map.error, INST_ERROR_UNSUPPORTED_SAMPLE);
+    EXPECT_EQ(WaveX::Comm::last_pad_map.completed_request_id, 91002u);
+    EXPECT_EQ(MockFatFS::Instance().GetFile("0:/wavex/instruments/Second source.wxi"), nullptr);
+    ASSERT_NE(pool_.Find(sample), nullptr);
+    EXPECT_EQ(pool_.Find(sample)->used_by, 1);
+    EXPECT_EQ(pool_.Count(), 3u);
 }
 
 TEST_F(SfzLoaderTest, ModulatorEditsPreserveAllEnvelopesAndRoutesAcrossWxiRecall) {

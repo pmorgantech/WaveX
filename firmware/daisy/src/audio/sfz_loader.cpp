@@ -62,6 +62,8 @@ enum class Phase : uint8_t {
     OpenSample,
     ReadSample,
     Commit,
+    PrepareSave,
+    ProbeSaveSample,
     SaveCopy,
 };
 
@@ -365,6 +367,27 @@ bool FindSampleFallback(const char* missing_path, char* out, size_t capacity) {
     return true;
 }
 
+// Both recall and save validate the card file, even when its PCM is already
+// resident. Pool residency cannot make an otherwise unsupported file recallable.
+bool ReadInstrumentSampleInfo(uint16_t sample_id,
+                              ResidentSampleInfo& resident,
+                              uint32_t& data_offset) {
+    WaveX::Wav::WavInfo wav_info;
+    WaveX::Storage::FatFsWavReader reader(s_file);
+    const auto parsed = WaveX::Wav::ParseWavHeader(reader, wav_info);
+    SampleLoadMessage hint;
+    hint.sample_id = sample_id;
+    if (parsed != WaveX::Wav::ParseResult::Ok ||
+        !BuildResidentSampleInfo(hint,
+                                 wav_info,
+                                 static_cast<uint32_t>(f_size(&s_file)),
+                                 WAVEX_INST_MAX_RAM_SAMPLE_BYTES,
+                                 resident))
+        return false;
+    data_offset = wav_info.data_offset;
+    return true;
+}
+
 ProbeResult ProbeCurrent(SamplePool& pool) {
     char* path = s_mapped.sample_paths[s_plan.entries[s_index].path_zone];
     FRESULT fr = f_open(&s_file, path, FA_READ);
@@ -382,18 +405,10 @@ ProbeResult ProbeCurrent(SamplePool& pool) {
         }
     }
     s_file_open = true;
-    WaveX::Wav::WavInfo wav_info;
-    WaveX::Storage::FatFsWavReader reader(s_file);
-    const auto parsed = WaveX::Wav::ParseWavHeader(reader, wav_info);
-    SampleLoadMessage hint;
-    hint.sample_id = s_plan.entries[s_index].sample_id;
     ResidentSampleInfo resident;
-    const bool valid = parsed == WaveX::Wav::ParseResult::Ok &&
-                       BuildResidentSampleInfo(hint,
-                                               wav_info,
-                                               static_cast<uint32_t>(f_size(&s_file)),
-                                               WAVEX_INST_MAX_RAM_SAMPLE_BYTES,
-                                               resident);
+    uint32_t data_offset = 0;
+    const bool valid =
+        ReadInstrumentSampleInfo(s_plan.entries[s_index].sample_id, resident, data_offset);
     CloseFile();
     if (!valid) {
         WaveX::Log::PrintLine("SFZ_PROBE: sample %u unsupported: '%s'", (unsigned)s_index, path);
@@ -401,7 +416,7 @@ ProbeResult ProbeCurrent(SamplePool& pool) {
     }
     LoadedSample& ls = s_loaded_samples[s_index];
     ls.resident = resident;
-    ls.data_offset = wav_info.data_offset;
+    ls.data_offset = data_offset;
     // Already in the Pool (the user loaded it, or another import did): a
     // hit costs no memory and no SD read, and its bytes are not counted
     // against what this load needs.
@@ -657,7 +672,7 @@ bool WxiWriteCb(void* user, const void* source, size_t bytes) {
     return f_write(static_cast<FIL*>(user), source, static_cast<UINT>(bytes), &written) == FR_OK &&
            written == bytes;
 }
-uint8_t SaveCopy(SamplePool& pool) {
+uint8_t PrepareSave(SamplePool& pool) {
     auto& ins = s_bank->At(s_request.slot).instrument;
     if (ins.origin == InstrumentOrigin::None || !IsValidInstrumentName(s_request.path))
         return INST_ERROR_BAD_FILE;
@@ -666,6 +681,46 @@ uint8_t SaveCopy(SamplePool& pool) {
     if (!InstrumentMap::ToFile(ins, {&pool, SaveSamplePath}, doc))
         return INST_ERROR_MISSING_SAMPLES;
     Protocol::detail::CopyWireString(doc.name, sizeof(doc.name), s_request.path);
+    s_index = 0;
+    s_phase = Phase::ProbeSaveSample;
+    return INST_ERROR_NONE;
+}
+
+void ProbeSaveSample() {
+    const auto& doc = s_doc_storage.Get();
+    while (s_index < kMaxInstrumentZones) {
+        const auto& osc = doc.osc[s_index / kMaxZones];
+        const uint8_t zone = s_index++ % kMaxZones;
+        if (zone >= osc.zone_count)
+            continue;
+        const char* path = osc.zones[zone].path;
+        const FRESULT opened = f_open(&s_file, path, FA_READ);
+        if (opened != FR_OK) {
+            FinishEdit(opened == FR_NO_FILE || opened == FR_NO_PATH ? INST_ERROR_MISSING_SAMPLES
+                                                                    : INST_ERROR_IO);
+            return;
+        }
+        s_file_open = true;
+        ResidentSampleInfo resident;
+        uint32_t data_offset = 0;
+        const bool valid = ReadInstrumentSampleInfo(0, resident, data_offset);
+        const FRESULT closed = f_close(&s_file);
+        s_file_open = false;
+        if (closed != FR_OK) {
+            FinishEdit(INST_ERROR_IO);
+        } else if (!valid) {
+            WaveX::Log::PrintLine("WXI_SAVE: unsupported sample: '%s'", path);
+            FinishEdit(INST_ERROR_UNSUPPORTED_SAMPLE);
+        }
+        // One dependency per main-loop pass; never stop or release resident voices.
+        return;
+    }
+    s_phase = Phase::SaveCopy;
+}
+
+uint8_t SaveCopy() {
+    auto& ins = s_bank->At(s_request.slot).instrument;
+    const auto& doc = s_doc_storage.Get();
     const FRESULT root = f_mkdir("0:/wavex");
     if (root != FR_OK && root != FR_EXIST)
         return INST_ERROR_IO;
@@ -782,7 +837,7 @@ bool Begin(const InstOpMessage& request) {
             FinishEdit();
             return true;
         }
-        s_phase = request.op == INST_OP_SAVE ? Phase::SaveCopy : Phase::AwaitVoiceStop;
+        s_phase = request.op == INST_OP_SAVE ? Phase::PrepareSave : Phase::AwaitVoiceStop;
         return true;
     }
 
@@ -1574,8 +1629,16 @@ void Pump(SamplePool& pool, SampleMemMgr& memory, uint8_t* io_buffer, uint32_t i
             s_phase = Phase::Idle;
         } break;
 
+        case Phase::PrepareSave: {
+            const uint8_t error = PrepareSave(pool);
+            if (error != INST_ERROR_NONE)
+                FinishEdit(error);
+        } break;
+        case Phase::ProbeSaveSample:
+            ProbeSaveSample();
+            break;
         case Phase::SaveCopy:
-            FinishEdit(SaveCopy(pool));
+            FinishEdit(SaveCopy());
             break;
         case Phase::Idle:
         case Phase::AwaitVoiceStop:

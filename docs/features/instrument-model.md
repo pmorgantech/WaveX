@@ -131,6 +131,15 @@ the current Instrument filter, amp envelope, modulation slots and zone
 overrides. Unsupported future oscillator/envelope fields normalize to current
 defaults in the new copy; the original file stays untouched. Sample PCM and
 Sample Pool marker edits are separate from this Instrument save.
+Before creating the temporary file, save checks each stored zone's on-card WAV
+using the same resident format and `WAVEX_INST_MAX_RAM_SAMPLE_BYTES` admission
+policy as recall. It checks one dependency per foreground pass across both
+oscillator maps. Pool residency does not bypass this check: a directly loaded
+sample can be playable but too large for Instrument recall. Missing files and
+unsupported payloads reject the save through the existing Instrument error
+status, preserving the current name, Track bindings, Pool ownership and sound
+undo point. This checks individual dependencies; it does not reserve memory
+for a future session or guarantee that the card files remain unchanged.
 Streaming audition stops before a save takes the shared SD path; resident
 voices continue. Bank and Project serializers remain open.
 

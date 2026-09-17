@@ -327,6 +327,14 @@ versioning and release process.
 
 ### Fixed
 
+- Instrument Save copy now checks both oscillator maps' on-card WAV dependencies
+  against the same format and per-sample size limits as recall before creating
+  a temporary WXI. Oversized, missing or invalid dependencies reject the save
+  without changing Track bindings, Sample Pool ownership or the sound undo
+  point. Host regressions cover oversized resident samples, the exact stereo
+  size boundary, missing/truncated files and sparse Oscillator 2 dependencies;
+  device save rejection still needs a bench check.
+
 - Fixed ESP32 debug `STATE` replies truncating full Instrument/filter values
   before `oscmono`: the static reply buffer is now 1024 bytes and emits explicit
   `ERR state_overflow` on exhaustion. Complete `oscmono` readback is covered by

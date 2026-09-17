@@ -67,7 +67,10 @@ existing Pattern store. The codec itself does not create or rename files.
 1. Reserve scratch and coordinate Pattern capture, Track edits and Instrument
    export under one foreground transaction owner.
 2. Snapshot unsaved Instrument edits to Project-owned WXI copies; references
-   alone do not preserve an edited live Instrument.
+   alone do not preserve an edited live Instrument. Apply the same on-card WAV
+   format and per-sample admission preflight as
+   [Instrument Save copy](instrument-model.md#5-persistence) before publishing
+   snapshots; direct-load Pool residency does not prove recall admission.
 3. Preflight referenced Instruments, Bank and sample admission before replacing
    the current Performance. Define and report partial failures explicitly.
 4. Connect SD save/load, authoritative status and touchscreen selection.
