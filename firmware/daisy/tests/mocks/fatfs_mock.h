@@ -117,6 +117,7 @@ class MockFatFS {
         next_handle_ = 1;
         write_limit = -1;
         close_result = FR_OK;
+        read_close_result = read_result = FR_OK;
         rename_result = FR_OK;
         free_result = FR_OK;
         free_clusters = 1024 * 1024;
@@ -129,6 +130,7 @@ class MockFatFS {
 
     int write_limit = -1;  // total bytes before a short write
     FRESULT close_result = FR_OK;
+    FRESULT read_close_result = FR_OK, read_result = FR_OK;
     FRESULT rename_result = FR_OK;
     FRESULT free_result = FR_OK;
     uint32_t free_clusters = 1024 * 1024;

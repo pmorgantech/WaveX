@@ -13,6 +13,11 @@ versioning and release process.
 
 ### Added
 
+- Added a cooperative Project SD file job with complete pre-write validation,
+  exact free-space admission, checked new-copy publication, cancellation and
+  private-scratch loading. This is the storage adapter for upcoming session
+  integration; it does not yet expose Project save/load on the device.
+
 - Added a hardware-validation checklist with stable case IDs, setup, pass
   criteria and result records, seeded with storage and remaining stereo/Phase 2
   checks. Project instructions now require an entry as each physical gate is

@@ -1,7 +1,8 @@
 # Project persistence
 
 **Status:** Project data model and cooperative WXCF codec are host-tested.
-SD jobs, session restore, project selection and song playback are not connected
+The cooperative SD file job is implemented and host-testable; session capture,
+restore, project selection and song playback are not connected
 yet. This is the persistence foundation for Phase 2, not a completed save/load
 workflow or power-loss guarantee.
 
@@ -61,6 +62,20 @@ A failed decode may have changed the private workspace. Publish nothing until
 Done. File adapters must check every read, write, close and rename, and use a
 new temporary file plus checked rename to publish a save, following the
 existing Pattern store. The codec itself does not create or rename files.
+
+`storage/project_file_job.hpp` provides that foreground file adapter. It first
+runs the real encoder against a counting sink in bounded batches, validating
+the complete Project and measuring its exact serialized size before any file
+is created. Free-space admission includes the standard cluster/directory
+headroom. Saves use a new request-specific temporary and checked close/rename;
+neither an existing destination nor an abandoned temporary is overwritten.
+Cancellation removes only a temporary created by that job. Loads decode into
+caller-owned private scratch and report success only after a checked close;
+they never install runtime state. Each pump advances at most eight codec
+records, and FatFs adapters use sub-sector transfers through an AXI SRAM FIL.
+The session owner must keep save input immutable for both encoding passes and
+must retain its scratch until completion. This adapter does not yet capture
+Instruments or provide a user-visible Project save/load operation.
 
 ## Remaining device work
 

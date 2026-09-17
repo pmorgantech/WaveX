@@ -279,6 +279,12 @@ function(add_wavex_test test_source)
 
     # Exercise the real cooperative loader and Pool ownership against a
     # byte-backed FatFs mock, including read/seek/EOF failure boundaries.
+    if(test_name STREQUAL "project_file_job_test")
+        target_sources(${test_name} PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/../src/storage/project_file_job.cpp
+        )
+    endif()
+
     if(test_name STREQUAL "pattern_store_test")
         target_sources(${test_name} PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/storage/pattern_store.cpp

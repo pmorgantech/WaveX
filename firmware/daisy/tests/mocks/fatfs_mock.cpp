@@ -40,7 +40,8 @@ FRESULT f_open(FIL* file, const char* path, uint8_t mode) {
 FRESULT f_close(FIL* file) {
     if (!file)
         return FR_INT_ERR;
-    const auto result = file->writable ? MockFatFS::Instance().close_result : FR_OK;
+    const auto result = file->writable ? MockFatFS::Instance().close_result
+                                       : MockFatFS::Instance().read_close_result;
     *file = FIL{};
     return result;
 }
@@ -49,6 +50,8 @@ FRESULT f_read(FIL* file, void* out, UINT requested, UINT* read) {
     if (!file || !file->bytes || !read || (!out && requested))
         return FR_INVALID_OBJECT;
     *read = 0;
+    if (MockFatFS::Instance().read_result != FR_OK)
+        return MockFatFS::Instance().read_result;
     if (file->error != FR_OK)
         return file->error;
     const size_t remaining = file->bytes->size() - file->position;
