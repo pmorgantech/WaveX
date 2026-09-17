@@ -15,11 +15,12 @@ constexpr size_t kKeyCount = static_cast<size_t>(PanelKey::Count);
 // Indexed by PanelKey. The order is the enum's; a key added to one without
 // the other trips the size check below rather than shifting every name.
 constexpr const char* kNames[kKeyCount] = {
-    "NONE",  "NAV_A_PUSH", "BACK",     "NAV_B_PUSH", "SHIFT",      "SOFT1",  "SOFT2", "SOFT3",
-    "SOFT4", "SOFT5",      "SOFT6",    "TRACK_PREV", "TRACK_NEXT", "SAMPLE", "PLAY",  "INSTRUMENT",
-    "TRACK", "MIXER",      "SETTINGS", "PLAY_STOP",  "REC",        "PAD1",   "PAD2",  "PAD3",
-    "PAD4",  "PAD5",       "PAD6",     "PAD7",       "PAD8",       "PAD9",   "PAD10", "PAD11",
-    "PAD12", "PAD13",      "PAD14",    "PAD15",      "PAD16",
+    "NONE",  "NAV_A_PUSH", "BACK",      "NAV_B_PUSH",  "SHIFT",      "SOFT1",      "SOFT2",
+    "SOFT3", "SOFT4",      "SOFT5",     "SOFT6",       "TRACK_PREV", "TRACK_NEXT", "SAMPLE",
+    "PLAY",  "INSTRUMENT", "TRACK",     "MIXER",       "SETTINGS",   "PLAY_STOP",  "REC",
+    "PAD1",  "PAD2",       "PAD3",      "PAD4",        "PAD5",       "PAD6",       "PAD7",
+    "PAD8",  "PAD9",       "PAD10",     "PAD11",       "PAD12",      "PAD13",      "PAD14",
+    "PAD15", "PAD16",      "SEQUENCER", "DIAGNOSTICS",
 };
 static_assert(sizeof(kNames) / sizeof(kNames[0]) == kKeyCount, "one name per PanelKey");
 
@@ -63,6 +64,8 @@ constexpr uint8_t kKeycodes[kKeyCount] = {
     WAVEX_KEYCODE_PAD14,
     WAVEX_KEYCODE_PAD15,
     WAVEX_KEYCODE_PAD16,
+    WAVEX_KEYCODE_JUMP_SEQUENCER,
+    WAVEX_KEYCODE_JUMP_DIAGNOSTICS,
 };
 
 // The TCA8418 reports keycodes 1..80 (8 rows x 10 columns); 0 is "no key".
@@ -109,6 +112,8 @@ PanelKey panelKeyFromName(const char* name) {
     if (!strcmp(name, "ENC") || !strcmp(name, "CLICK")) {
         return PanelKey::NavBPush;
     }
+    if (!strcmp(name, "PROJECT"))
+        return PanelKey::JumpTrack;
     for (size_t i = 1; i < kKeyCount; ++i) {
         if (!strcmp(name, kNames[i])) {
             return static_cast<PanelKey>(i);

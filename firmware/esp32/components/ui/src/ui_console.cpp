@@ -1,3 +1,4 @@
+#include "ui/panel_leds.h"
 // ESP32 debug console: one line reader, two grammars, acknowledged verbs.
 // See ui_console.h and docs/features/debug-harness-and-hil.md.
 #include "ui/ui_console.h"
@@ -466,6 +467,12 @@ void serve_state(int32_t seq) {
                    len,
                    "lastkey",
                    wavex_ui::panelKeyName(wavex_ui::InputDispatcher::instance().lastKey()));
+    const auto leds = wavex_ui::panel_leds_stats();
+    len = AppendKv(
+        s_reply, sizeof(s_reply), len, "ledstate", wavex_ui::panelLedStateName(leds.state));
+    len = AppendKvInt(s_reply, sizeof(s_reply), len, "ledframes", static_cast<long>(leds.frames));
+    len = AppendKvInt(s_reply, sizeof(s_reply), len, "lederrors", static_cast<long>(leds.errors));
+    len = AppendKvInt(s_reply, sizeof(s_reply), len, "ledfault", leds.fault_status);
     len = append_track_state(s_reply, sizeof(s_reply), len, wavex_ui::getCurrentTrack());
     // The softkey row as the bar shows it now (shifted or not), with each
     // button's centre so a host can TAP it through the real touch path.

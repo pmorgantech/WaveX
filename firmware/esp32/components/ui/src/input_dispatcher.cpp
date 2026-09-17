@@ -7,6 +7,7 @@
 #include "inter_mcu.h"
 #include "ui/current_track.h"
 #include "ui/display_manager.h"
+#include "ui/panel_assignments.h"
 #include "ui/ui_navigator.h"
 #include "ui/ui_softkey.h"
 
@@ -26,6 +27,7 @@ InputDispatcher::InputDispatcher() {
 }
 
 bool InputDispatcher::postFromISR(const InputEvent& evt, BaseType_t* hpTaskWoken) {
+    recordButton(evt);
     if (!queue_)
         return false;
     const bool posted = xQueueSendFromISR(queue_, &evt, hpTaskWoken) == pdTRUE;
@@ -36,6 +38,7 @@ bool InputDispatcher::postFromISR(const InputEvent& evt, BaseType_t* hpTaskWoken
 }
 
 bool InputDispatcher::post(const InputEvent& evt, TickType_t ticksToWait) {
+    recordButton(evt);
     if (!queue_)
         return false;
     // Callers mostly ignore the return value, and a dropped event is a
@@ -46,6 +49,19 @@ bool InputDispatcher::post(const InputEvent& evt, TickType_t ticksToWait) {
         dropped_events_.fetch_add(1, std::memory_order_relaxed);
     }
     return posted;
+}
+
+void InputDispatcher::recordButton(const InputEvent& evt) {
+    if (evt.type != InputType::KeyPress && evt.type != InputType::KeyRelease &&
+        evt.type != InputType::ButtonPress && evt.type != InputType::ButtonRelease)
+        return;
+    const uint32_t bit = panelButtonBit(evt.key());
+    // Capture physical state even if the action queue is full. A dropped
+    // release must not leave the Shift LED on indefinitely.
+    if (evt.isKeyPress())
+        held_buttons_.fetch_or(bit, std::memory_order_relaxed);
+    else
+        held_buttons_.fetch_and(~bit, std::memory_order_relaxed);
 }
 
 void InputDispatcher::processAll() {
@@ -105,6 +121,12 @@ void InputDispatcher::dispatch(InputEvent evt) {
     }
     auto& nav = UINavigator::instance();
 
+    const RootGroup jump = panelMenuGroup(key);
+    if (jump != RootGroup::None) {
+        if (press)
+            nav.jumpToRoot(jump);
+        return;
+    }
     switch (key) {
         case PanelKey::Shift:
             if (press) {
@@ -127,36 +149,6 @@ void InputDispatcher::dispatch(InputEvent evt) {
             // latched - exactly as a touch on that button would.
             if (press) {
                 nav.softkeyBar()->press(softkeyIndex(key));
-            }
-            return;
-        case PanelKey::JumpSample:
-            if (press) {
-                nav.jumpToRoot(RootGroup::Sample);
-            }
-            return;
-        case PanelKey::JumpPlay:
-            if (press) {
-                nav.jumpToRoot(RootGroup::Play);
-            }
-            return;
-        case PanelKey::JumpInstrument:
-            if (press) {
-                nav.jumpToRoot(RootGroup::Instrument);
-            }
-            return;
-        case PanelKey::JumpTrack:
-            if (press) {
-                nav.jumpToRoot(RootGroup::Track);
-            }
-            return;
-        case PanelKey::JumpMixer:
-            if (press) {
-                nav.jumpToRoot(RootGroup::Mixer);
-            }
-            return;
-        case PanelKey::JumpSettings:
-            if (press) {
-                nav.jumpToRoot(RootGroup::Settings);
             }
             return;
         case PanelKey::TrackPrev:

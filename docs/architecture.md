@@ -72,9 +72,9 @@ The **file browsing model** follows from the storage split: the SD card is on th
 | Frontend MCU | ESP32-P4 (Waveshare ESP32-P4-WIFI6, 16 MB flash, PSRAM hex-mode @200 MHz) | — | working |
 | Display | 5" 1280×720, HX8394 controller | MIPI-DSI 2-lane | working |
 | Touch | GT911 capacitive | I2C0 (shared) | working |
-| Button matrix | TCA8418 | BSP I2C bus (shared with touch) + INT (INT not yet used) | driver present; four keys mapped — full panel key model is Phase 2.P (`features/panel-controls.md`) |
+| Button matrix | TCA8418 | BSP I2C bus (shared with touch) + INT | checked IRQ/FIFO driver and full logical key map implemented; physical panel gate remains Phase 2.P (`features/panel-controls.md`) |
 | Encoders | 2× PCNT quadrature (PEC11R, nav); 4× endless pots via MCP3008 planned | PCNT / SPI2 | PCNT unit 1 working (the bench encoder); MCP3008 no driver yet (2.P.4) |
-| LEDs | 2× PCA9956BTWY | BSP I²C bus (shared with touch/keypad) | planned (2.P.3); no driver yet |
+| LEDs | 2× PCA9956BTWY | BSP I²C bus (shared with touch/keypad) | initial 14-LED driver/policy implemented (one populated device); current selection and bench verification pending |
 | MIDI | DIN via UART2 @31250 (compiled out until the receiver is rewired to the new pins, 2.P.5); USB MIDI device on the USB 2.0 **HS** OTG controller — the board's 4-pin USB connector, independent of the USB-Serial/JTAG flash port | UART / USB HS | USB in works; no MIDI out on either path yet |
 | Backend MCU | Daisy Seed rev (STM32H750, 480 MHz, 64 MB SDRAM, 8 MB QSPI) | — | working |
 | Audio codec | Built-in (stereo in/out, 24-bit) | SAI1 | working |
@@ -178,7 +178,7 @@ FreeRTOS tasks:
 - **UI task**: LVGL handler loop (~30 FPS), deferred-update pattern for data arriving from other tasks (never call LVGL off the UI task — see `ui-architecture.md`).
 - **UART link task** (`esp_uart_link`, default selection): drains the ESP-IDF driver's RX ring, scans framed packets, and pumps queued TX into its software TX ring. The driver is interrupt-driven rather than GDMA-backed.
 - **Experimental SPI slave task** (`esp_spi_link`): selected instead of UART for the SPI experiment; it owns DMA descriptors and READY signaling.
-- **Input tasks**: PCNT encoder polling, TCA8418 keypad FIFO polling.
+- **Input tasks**: PCNT encoder polling, TCA8418 IRQ notifications with fallback FIFO polling.
 
 Full task inventory (as-built, 2026-08-29). The guide requires name, priority,
 stack, affinity and blocking behaviour to be written down; these were previously
@@ -191,8 +191,8 @@ only inline magic numbers:
 | `spi_slave` | 5 | 16384 | any | DMA result, repeated 50 ms wait | SPI selection only; timeout retains descriptor ownership |
 | `ui_task` | 2 | 16384 | 1 | 32 ms delay | Takes the LVGL port lock per input event |
 | LVGL port task | 4 | 16384 | any | esp_lvgl_port | Owns the tick and the display; created by the BSP |
-| `pcnt_task` | 5 | 4096 | any | 2 ms delay | Polls quadrature counters; consumer runs at ~31 Hz |
-| `tca8418_task` | 5 | 4096 | 1 | 10 ms delay | Polls the keypad event FIFO; does not use the INT line (2.P.2 makes it INT-driven) |
+| `panel_task` | 5 | 4096 | any | 2 ms delay | Polls PCNT; owns PCA9956B handles and bounded LED service; UI publishes snapshots at ~31 Hz |
+| `tca8418_task` | 5 | 4096 | 1 | notification / 100 ms fallback (10 ms without IRQ) | Bounded FIFO/acknowledge passes; yields at least one tick; I²C errors back off; IRQ and device teardown use a task-exit handoff |
 | `din_midi` | 5 | 4096 | any | UART read, 100 ms timeout | Bounded so it can observe a stop request |
 | `usb_midi` | 5 | 4096 | any | task notification | Woken by TinyUSB's device task |
 | `log_drain` | 1 | 3072 | any | 20 ms delay | Drains the log ring to the console |
@@ -200,9 +200,12 @@ only inline magic numbers:
 | TinyUSB device | esp_tinyusb default | — | — | USB events | Calls `tud_midi_rx_cb` |
 | esp_timer task | 22 | — | 0 | timer queue | Shared; keep callbacks short (guide §11) |
 
-Two of these still poll where an interrupt would do (`pcnt_task` at 500 Hz for a
-31 Hz consumer, and the keypad at 100 Hz). Both are deliberate for now and
-explained at the call site; converting either needs bench time.
+`panel_task` retains the 2 ms PCNT delay for a 31 Hz consumer; LED transfers
+can extend a pass by their configured timeout. Actual shared-bus latency needs
+measurement. The keypad interrupt path
+is implemented with a polling safety net; its latency and behavior under shared
+I²C traffic remain bench checks. See [panel controls](features/panel-controls.md)
+for device ownership, bounded work and failure recovery.
 
 **Lock order is LVGL → selected link mutex.** UI-task code takes the LVGL port
 lock and then sends over the link. Link dispatch releases the queue mutex before

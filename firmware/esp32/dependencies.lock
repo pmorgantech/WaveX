@@ -1,14 +1,4 @@
 dependencies:
-  esp_tca8418:
-    component_hash: 8c7b139e6e4982df65396c1133081a969c6455ade9fe69b42f70d7825e26ee6d
-    dependencies:
-    - name: idf
-      version: '>=5.2'
-    source:
-      git: https://github.com/atanisoft/esp_tca8418.git
-      path: .
-      type: git
-    version: 52f11fb6222ca7837ba08853cd16cf7f8129f991
   espressif/cmake_utilities:
     component_hash: 351350613ceafba240b761b4ea991e0f231ac7a9f59a9ee901f751bddc0bb18f
     dependencies:
@@ -277,7 +267,6 @@ dependencies:
     - esp32p4
     version: 2.0.0
 direct_dependencies:
-- esp_tca8418
 - espressif/esp_lcd_touch
 - espressif/esp_lcd_touch_gt911
 - espressif/esp_lvgl_port
@@ -286,6 +275,6 @@ direct_dependencies:
 - waveshare/esp32_p4_nano
 - waveshare/esp_lcd_dsi
 - waveshare/esp_lcd_hx8394
-manifest_hash: 7da82039b8a0c1c5535de1bd92830e9de54523e0ca4b4a78045054c2528a240c
+manifest_hash: 280ae866dff0ba642bae7acc7ecb65b7ee467108a9eec484b125434fd0a13c84
 target: esp32p4
 version: 2.0.0

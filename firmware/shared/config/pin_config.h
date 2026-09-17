@@ -39,7 +39,8 @@ extern "C" {
 // Main headers: 2-13, 20-23, 26-27, 32-33, 46-48, 53-54 (25 GPIO).
 // Bottom pads: 28-31, 34, 36, 39-45, 49-52. GPIO28, not GPIO26, starts
 // that bottom-pad bank. GPIO34 drives the onboard RGB LED and is a strap;
-// leave it alone. GPIO35 is BOOT; GPIO37/38 belong to the CH343 UART bridge.
+// leave it alone. GPIO35 is BOOT; GPIO36 is also a strap and stays unclaimed.
+// GPIO37/38 belong to the CH343 UART bridge.
 // GPIO24/25 connect the native USB-Serial/JTAG Type-C port; GPIO26/27 remain
 // reserved for a future FS USB host. Native USB HS has its own connector.
 // This is a schematic-backed allocation, not hardware-verified wiring.
@@ -76,7 +77,7 @@ extern "C" {
 #define WAVEX_ESP_SPI2_MOSI 53
 #define WAVEX_ESP_SPI2_MISO 48
 #define WAVEX_ESP_SPI2_FREQ_HZ WAVEX_ESP_MCP3208_FREQ_HZ
-#define WAVEX_ESP_MCP3208_CS 36      // Bottom: dedicated four-RV112FF ADC
+#define WAVEX_ESP_MCP3208_CS 31      // Bottom: dedicated four-RV112FF ADC; avoid strap GPIO36
 #define WAVEX_ESP_MCP3208_AUX_CS 43  // Bottom: conventional-pot ADC + mux
 #define WAVEX_ESP_PCA9956B_RESET 29  // Bottom: shared active-low RESET, 10k pull-up
 #define WAVEX_ESP_PCA9956B_OE 30     // Bottom: shared active-low OE, pull-up for dark boot
@@ -89,7 +90,7 @@ extern "C" {
 #define WAVEX_ESP_MUX_S3 42
 
 // Expansion: five free header GPIO (2, 3, 4, 5, 6), separate from USB26/27.
-// Free bottom GPIO: 31, 44, 45, 49, 50, 51, 52. Pads require a carrier or
+// Free bottom GPIO: 44, 45, 49, 50, 51, 52. Pads require a carrier or
 // soldered breakout and continuity checks; do not confuse them with headers.
 
 #else  // WAVEX_ESP_BOARD_WIFI6
@@ -319,7 +320,7 @@ constexpr int claimed[] = {
 constexpr bool available(int pin) {
 #if WAVEX_ESP_BOARD == WAVEX_ESP_BOARD_CORE
     return (pin >= 2 && pin <= 13) || (pin >= 20 && pin <= 23) || (pin >= 28 && pin <= 33) ||
-           pin == 36 || (pin >= 39 && pin <= 54);
+           (pin >= 39 && pin <= 54);
 #else
     return (pin >= 2 && pin <= 5) || pin == 7 || pin == 8 || (pin >= 20 && pin <= 23) ||
            (pin >= 28 && pin <= 33) || (pin >= 46 && pin <= 52);

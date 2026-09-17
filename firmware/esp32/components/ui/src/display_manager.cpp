@@ -28,6 +28,13 @@ namespace wavex_ui {
 namespace {
 
 static const char* TAG = "DisplayManager";
+// Only the BSP's matching display/I2C path is reused on Core. A managed BSP
+// update must not silently move touch onto a panel-control or link GPIO.
+static_assert(BSP_I2C_SDA == WAVEX_ESP_I2C_SDA && BSP_I2C_SCL == WAVEX_ESP_I2C_SCL,
+              "Display BSP I2C wiring disagrees with the selected WaveX board");
+static_assert(BSP_LCD_RST == GPIO_NUM_NC && BSP_LCD_TOUCH_RST == GPIO_NUM_NC &&
+                  BSP_LCD_TOUCH_INT == GPIO_NUM_NC && BSP_LCD_BACKLIGHT == GPIO_NUM_NC,
+              "Display BSP claims GPIOs outside the WaveX pin allocation");
 
 static void log_dma_heap(const char* phase) {
     constexpr uint32_t kInternalDmaCaps = MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA;

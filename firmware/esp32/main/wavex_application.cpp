@@ -41,6 +41,8 @@ typedef int esp_err_t;
 #endif
 
 #ifndef WAVEX_TEST_BUILD
+#include "esp_flash.h"
+#include "esp_psram.h"
 #include "log_ring.h"
 #include "pcnt_task.h"
 // MIDI input tasks (roadmap Phase 1 item 8)
@@ -81,6 +83,20 @@ bool WaveXApplication::initialize() {
     const esp_app_desc_t* app_desc = esp_app_get_description();
     ESP_LOGI(TAG, "Version: %s", app_desc->version);
     ESP_LOGI(TAG, "Built: %s %s", app_desc->date, app_desc->time);
+    ESP_LOGI(TAG, "Board profile: %s", WAVEX_ESP_BOARD_NAME);
+#ifndef WAVEX_TEST_BUILD
+    uint32_t physical_flash = 0;
+    const esp_err_t flash_result = esp_flash_get_physical_size(nullptr, &physical_flash);
+    if (flash_result == ESP_OK) {
+        ESP_LOGI(TAG,
+                 "Memory: flash detected=%" PRIu32 " bytes, image=%s, PSRAM=%zu bytes",
+                 physical_flash,
+                 CONFIG_ESPTOOLPY_FLASHSIZE,
+                 esp_psram_get_size());
+    } else {
+        ESP_LOGW(TAG, "Flash size detection failed: %s", esp_err_to_name(flash_result));
+    }
+#endif
     ESP_LOGI(TAG, "Free heap: %" PRIu32 " bytes", esp_get_free_heap_size());
 
     if (!initializeInterMCU()) {

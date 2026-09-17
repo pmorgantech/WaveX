@@ -64,6 +64,10 @@ TEST(PanelKeyNames, LegacyConsoleAliases) {
     EXPECT_EQ(wavex_ui::panelKeyFromName("CLICK"), PanelKey::NavBPush);
     EXPECT_EQ(wavex_ui::panelKeyFromName("BACK"), PanelKey::Back);
     EXPECT_EQ(wavex_ui::panelKeyFromName("SHIFT"), PanelKey::Shift);
+    EXPECT_EQ(wavex_ui::panelKeyFromName("PROJECT"), PanelKey::JumpTrack);
+    EXPECT_EQ(wavex_ui::panelKeyFromName("TRACK"), PanelKey::JumpTrack);
+    EXPECT_EQ(wavex_ui::panelKeyFromName("SEQUENCER"), PanelKey::JumpSequencer);
+    EXPECT_EQ(wavex_ui::panelKeyFromName("DIAGNOSTICS"), PanelKey::JumpDiagnostics);
 }
 
 TEST(PanelKeyNames, UnknownIsNone) {
@@ -112,7 +116,7 @@ TEST(PanelKeycodes, EveryKeyMapsBackToItself) {
             EXPECT_TRUE(seen.insert(code).second);
         }
     }
-    // 37 keys on the panel (panel-controls.md §3.4), 37 keycodes.
+    // Each assigned logical key has one unique keycode.
     EXPECT_EQ(seen.size(), static_cast<size_t>(kKeyCount - 1));
 }
 

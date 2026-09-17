@@ -86,6 +86,19 @@ idf_build_set_property(COMPILE_DEFINITIONS
 
 project(wavex-esp32)
 
+# Core initially reuses only the existing HX8394/GT911 display path and lower
+# 16 MB flash layout. Fail clearly if a stale/custom sdkconfig selects another
+# panel or removes the PSRAM needed by the DSI framebuffers.
+if(WAVEX_ESP_BOARD STREQUAL "CORE")
+    if(NOT CONFIG_BSP_LCD_TYPE_720_1280_5_INCH_A OR NOT CONFIG_SPIRAM)
+        message(FATAL_ERROR "Core bring-up requires the HX8394/GT911 panel and PSRAM")
+    endif()
+    if(NOT CONFIG_ESPTOOLPY_FLASHSIZE_16MB)
+        message(FATAL_ERROR "Core bring-up preserves the existing 16 MB image layout")
+    endif()
+endif()
+message(STATUS "WaveX frontend carrier: ${WAVEX_ESP_BOARD}")
+
 # NOTE: do not add add_compile_options()/add_link_options() here. ESP-IDF
 # configures every component target inside project() above, so anything added
 # after it applies to nothing. This file used to carry

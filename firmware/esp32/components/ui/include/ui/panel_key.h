@@ -59,6 +59,8 @@ enum class PanelKey : uint8_t {
     Pad14,
     Pad15,
     Pad16,
+    JumpSequencer,
+    JumpDiagnostics,
     Count
 };
 

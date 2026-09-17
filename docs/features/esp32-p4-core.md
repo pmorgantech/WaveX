@@ -1,9 +1,11 @@
 # ESP32-P4-Core carrier and analog panel controls
 
 **Status:** Target hardware decision, 2026-09-14. A selectable Core pin profile
-exists; Core boot, display, communications and panel operation remain unverified.
+exists with build/startup checks and an interrupt-driven keypad path; Core boot,
+display, communications and panel operation remain hardware-unverified.
 This note records the requested board/control change for Phase 2.P and corrects
 the initial allocation against the vendor schematic and current WaveX wiring.
+The ADC chip-select reservation now avoids boot-strapping pads as well.
 
 ## Contents
 
@@ -60,7 +62,7 @@ GPIOs free**, in addition to the reserved future USB-host pair. The exact free
 pool and pad locations are recorded only in the pin header. A carrier or soldered
 breakout and continuity checks are required to use bottom pads.
 
-Use two **NXP PCA9956BTWY** LED drivers on the BSP-owned I²C bus, sharing
+Support two **NXP PCA9956BTWY** LED drivers (one populated initially) on the BSP-owned I²C bus, sharing
 it with touch and keypad. SPI2 serves only the panel ADCs; SPI3 remains reserved
 for the Daisy link. The replacement changes the LED interface and brightness
 resolution; the existing 48-channel logical map still fits two devices.
@@ -86,10 +88,12 @@ The MCP3208 replaces the earlier MCP3008 plan. Use its 12-bit transfer framing
 and result extraction; changing a resolution constant alone is insufficient.
 The initial clock follows the conservative low-voltage limit in the
 [Microchip datasheet][adc]; verify acquisition settling with the actual pots.
-No ADC, mux or LED driver is enabled by these config reservations. One future
-`panel_task` owns ADC SPI2 and the two I²C LED device handles, consumes complete
-LED snapshots, and publishes complete input events. LED transfers and retries
-are bounded so they do not monopolize touch/keypad I²C or delay ADC sampling. See
+ADC and mux drivers remain unimplemented. The existing PCNT worker is now
+`panel_task` and owns the PCA9956B device handles. It consumes complete UI LED
+snapshots with bounded transactions and retries. The initial policy covers seven
+menu destinations, six softkeys and held Shift; the current setting defaults dark
+until REXT/current selection is confirmed. ADC SPI2 ownership will join this task
+when its driver is implemented and its sampling budget measured. See
 [panel-controls.md](panel-controls.md) for the software ownership model.
 
 ## Additional parts
@@ -108,13 +112,31 @@ container, select Core in an independent build directory:
 
 ```bash
 cd /workspaces/WaveX/firmware/esp32
-idf.py -B build-core -DWAVEX_ESP_BOARD=CORE build
+mkdir -p build-core
+if [ ! -f build-core/sdkconfig ]; then cp sdkconfig build-core/sdkconfig; fi
+idf.py -B build-core -DWAVEX_ESP_BOARD=CORE \
+  -DSDKCONFIG="$PWD/build-core/sdkconfig" build
 ```
 
-The default remains WIFI6. Both profiles reject duplicate, unexposed and reserved
+The separate sdkconfig preserves the bench settings while allowing Core-specific
+bring-up adjustments. The default remains WIFI6. Both profiles reject duplicate, unexposed and reserved
 GPIO claims at compile time. Reuse the current display BSP only for its matching
 DSI/I²C path; its unrelated SD, codec and radio assumptions are not Core support.
-Do not enable those peripherals during bring-up. Core has two Type-C functions:
+Do not enable those peripherals during bring-up. Core configuration now rejects
+an incompatible panel, disabled PSRAM or a changed flash-image size. Compile-time
+checks also reject BSP changes that claim GPIOs outside the selected pin map.
+The startup log identifies the selected carrier, detected physical flash,
+configured image size and initialized PSRAM; it does not detect the carrier model.
+Keep that log with the board revision and firmware image identity.
+
+The keypad uses an interrupt notification with fallback polling and reports its
+active mode (or offline status) and error/overflow counters in Diagnostics → Panel. It uses the
+BSP-owned bus and tolerates an absent keypad without aborting display startup.
+See [panel-controls.md](panel-controls.md#41-ownership-and-tasks) for the implemented
+ownership, acknowledgement and recovery rules. GPIO IRQ wiring, shared-bus
+latency and key-roll behavior still require the bench acceptance checks.
+
+Core has two Type-C functions:
 USB/UART bridge and native USB; verify console/flash port selection on the board.
 
 Implementation order and all open acceptance checks live in

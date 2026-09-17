@@ -16,6 +16,7 @@
 #include "../../shared/config/pin_config.h"
 #include "driver/pulse_cnt.h"
 #include "esp_log.h"
+#include "ui/panel_leds.h"
 
 #include <atomic>
 
@@ -190,9 +191,9 @@ static esp_err_t pcnt_init_unit(const wavex_pcnt_config_t *config) {
 /**
  * @brief PCNT monitoring task (polling-based for reliable encoder reading)
  */
-static void pcnt_task(void *pvParameters) {
+static void panel_task(void *pvParameters) {
     (void)pvParameters;
-    ESP_LOGI(TAG, "PCNT monitoring task started (polling-based for reliable operation)");
+    ESP_LOGI(TAG, "Panel task started (PCNT and LED service)");
 
     while (s_pcnt_running) {
         for (size_t i = 0; i < PCNT_CONFIG_COUNT; i++) {
@@ -271,9 +272,11 @@ static void pcnt_task(void *pvParameters) {
             }
         }
 
+        wavex_ui::panel_leds_service();
         vTaskDelay(pdMS_TO_TICKS(2));
     }
 
+    wavex_ui::panel_leds_shutdown();
     s_pcnt_task_handle = NULL;
     vTaskDelete(NULL);
 }
@@ -301,12 +304,12 @@ esp_err_t pcnt_task_start(void) {
 
     s_pcnt_running = true;
     TaskHandle_t handle = NULL;
-    BaseType_t ret = xTaskCreate(pcnt_task,    // Task function
-                                 "pcnt_task",  // Task name
-                                 4096,         // Stack size
-                                 NULL,         // Parameters
-                                 5,            // Priority (higher than UI task)
-                                 &handle       // Task handle
+    BaseType_t ret = xTaskCreate(panel_task,    // Task function
+                                 "panel_task",  // Task name
+                                 4096,          // Stack size
+                                 NULL,          // Parameters
+                                 5,             // Priority (higher than UI task)
+                                 &handle        // Task handle
     );
     s_pcnt_task_handle = handle;
 

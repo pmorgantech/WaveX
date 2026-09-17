@@ -226,10 +226,14 @@ The user authorized stage 4 touchscreen editors to proceed on 2026-09-11:
 general key/velocity zones, Instrument Browser and Track page. This does not
 close the Phase 2 panel or timing gates.
 PCNT encoder support and the logical key map exist in firmware; their
-physical integration, LED/pot drivers and DIN MIDI remain deferred.
+physical integration, pot drivers and DIN MIDI remain deferred. The initial
+14-LED PCA9956B driver/policy is implemented; current selection and physical
+LED verification remain open.
 The [Core carrier decision](features/esp32-p4-core.md) (2026-09-14) adds a
-selectable pin profile while preserving the WIFI6 bench default. This is
-configuration support, not a completed Core hardware port.
+selectable pin profile while preserving the WIFI6 bench default. Core startup
+now identifies the carrier profile and detected memory; build checks enforce the
+matching display/PSRAM and retained image layout. Boot straps are excluded from
+panel reservations. This is not a completed Core hardware port.
 
 **Core bring-up prerequisite:** check the carrier revision and bottom-pad
 breakout, boot/flash/console and memory configuration, existing HX8394/GT911
@@ -239,13 +243,20 @@ traffic/reboot checks before adopting Core on the bench.
 
 Stages, one independently buildable change each:
 
-2. TCA8418 interrupt-driven keypad task (fallback poll retained).
-3. `panel_task`: PCA9956BTWY LED driver on shared BSP I²C, 8-bit brightness,
-   LED policy and `LEDS` in `STATE`; absorbs `pcnt_task` and owns ADC SPI2.
-   Verify both device addresses, current limits, dark boot, reset recovery and
-   blank/wake. Bound LED writes/retries and measure touch/keypad latency during
-   LED traffic; no I²C operation runs from the UI task or blocks ADC sampling
-   beyond its measured budget.
+2. TCA8418 interrupt-driven keypad task is implemented, with bounded checked
+   FIFO/acknowledge work, fallback polling and diagnostic error/overflow counts.
+   Controller tests cover key order, overflow, failures, pass limits and events
+   racing acknowledgement. Verify IRQ wiring, key-roll latency, missing IRQ,
+   shared-touch traffic and stop/restart on each carrier.
+3. `panel_task` now includes the initial PCA9956BTWY LED driver, central
+   seven-menu/six-softkey/held-Shift assignment policy, snapshot mailbox, bounded
+   transfers/recovery and console driver status. One populated device is the
+   initial configuration; support for a second is retained. Select the actual
+   REXT/current limit before enabling light output. Verify addressing, all
+   assigned outputs, dark boot, reset/fault recovery and blank/wake; measure
+   touch/keypad latency under LED traffic. LED walk controls and raw-level
+   `STATE` export remain pending. ADC SPI2 will join the same owner in stage 4;
+   its measured sampling budget must include LED transfer time.
 4. Dedicated MCP3208 + four RV112FF dual-track endless controls: confirm
    exact mechanical order/drawing and scope both wipers before implementing
    MCP3208 framing and a host-tested decoder. Bound pair skew, calibrate

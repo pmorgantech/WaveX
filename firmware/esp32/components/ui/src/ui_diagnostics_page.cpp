@@ -1182,7 +1182,11 @@ void UIDiagnosticsPage::refreshPanelTab() {
         panel_cards[1], last == PanelKey::None ? "-" : panelKeyName(last), "", "as dispatched", -1);
 
     snprintf(v, sizeof(v), "%u", static_cast<unsigned>(disp.keyPresses()));
-    snprintf(sub, sizeof(sub), "%u from the matrix", static_cast<unsigned>(k.events));
+    snprintf(sub,
+             sizeof(sub),
+             "%u matrix / %s",
+             static_cast<unsigned>(k.events),
+             !k.running ? "offline" : (k.irq_active ? "IRQ + poll" : "poll"));
     setCard(panel_cards[2], v, "", sub, -1);
 
     snprintf(v, sizeof(v), "%u", static_cast<unsigned>(k.unmapped));
@@ -1201,7 +1205,12 @@ void UIDiagnosticsPage::refreshPanelTab() {
     }
 
     snprintf(v, sizeof(v), "%u", static_cast<unsigned>(disp.droppedEvents()));
-    setCard(panel_cards[6], v, "", "input queue full", -1);
+    snprintf(sub,
+             sizeof(sub),
+             "queue / I2C %u / FIFO %u",
+             static_cast<unsigned>(k.io_errors),
+             static_cast<unsigned>(k.overflows));
+    setCard(panel_cards[6], v, "", sub, -1);
 }
 
 void UIDiagnosticsPage::refreshEsp32Tab() {

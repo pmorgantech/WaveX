@@ -12,5 +12,3 @@ dependencies:
   # USB MIDI device (roadmap Phase 1 item 8) - TinyUSB device stack;
   # MIDI class itself is enabled by CONFIG_TINYUSB_MIDI_COUNT=1.
   espressif/esp_tinyusb: '^2.0.0'
-  esp_tca8418:
-    git: https://github.com/atanisoft/esp_tca8418.git

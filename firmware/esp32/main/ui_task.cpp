@@ -46,6 +46,7 @@
 
 // Include BSP header for display functions
 #include "bsp/esp32_p4_nano.h"
+#include "ui/panel_leds.h"
 #include "ui/tca8418_keypad.h"
 
 static const char *TAG = "UI_TASK";
@@ -114,6 +115,7 @@ esp_err_t UITask::start() {
 
     wavex_ui::InputDispatcher::instance().setActiveContext(wavex_ui::createNavigationContext());
 
+    wavex_ui::panel_leds_start();
     s_ui_running = true;
     TaskHandle_t handle = NULL;
     BaseType_t task_ret =
@@ -156,6 +158,9 @@ esp_err_t UITask::stop() {
         return ESP_ERR_TIMEOUT;
     }
 
+    const esp_err_t led_stop = wavex_ui::panel_leds_stop();
+    if (led_stop != ESP_OK)
+        return led_stop;
     wavex_ui::DisplayManager::instance().deinit();
 
     ESP_LOGI(TAG, "UITask stopped");
@@ -275,6 +280,7 @@ void UITask::run() {
         // button/encoder activity from InputDispatcher. Keep its actual
         // backlight I2C writes on this UI task, outside LVGL's lock.
         wavex_ui::DisplayManager::instance().serviceScreenBlanker();
+        wavex_ui::panel_leds_publish_ui();
 
         // Debug-build console: screenshots and the HIL harness's UI-task
         // verbs (no-op stubs in release; both manage their own LVGL

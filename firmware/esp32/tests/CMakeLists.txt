@@ -201,3 +201,14 @@ endforeach()
 if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/widget/CMakeLists.txt)
     add_subdirectory(widget)
 endif()
+
+# Compile the actual reservation table for both boards without linking a
+# library built with the other board's macros.
+foreach(board WIFI6 CORE)
+    set(board_test board_profile_${board}_test)
+    add_executable(${board_test} board/board_profile_test.cpp)
+    target_compile_definitions(${board_test} PRIVATE ESP_PLATFORM
+        WAVEX_ESP_BOARD=WAVEX_ESP_BOARD_${board})
+    target_link_libraries(${board_test} PRIVATE GTest::gtest_main)
+    gtest_discover_tests(${board_test} TEST_PREFIX "${board}.")
+endforeach()

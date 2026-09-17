@@ -20,6 +20,7 @@ set(COMPONENT_SRCS
     "src/ui_busy_overlay.cpp"
     "src/ui_main_menu.cpp"
     "src/panel_key.cpp"
+    "src/panel_leds.cpp"
     "src/ui_menu_page.cpp"
     "src/ui_navigation_integration.cpp"
     "src/ui_navigator.cpp"
@@ -75,7 +76,7 @@ idf_component_register(
         esp_lvgl_port
         esp_lcd_touch_gt911
         driver
-        esp_tca8418
+        esp_driver_i2c
         esp_driver_gpio
         esp_driver_spi
         esp32_p4_nano

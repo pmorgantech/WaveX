@@ -9,6 +9,7 @@
 #include "midi_task.h"
 #include "ui/current_track.h"
 #include "ui/display_manager.h"
+#include "ui/panel_assignments.h"
 #include "ui/ui_api.h"
 #include "ui/ui_cv_cal_page.h"
 #include "ui/ui_diagnostics_page.h"
@@ -78,22 +79,9 @@ std::shared_ptr<UIPage> createMainMenu() {
     // find out whether to believe it. Tracked in docs/roadmap.md.
     // Separator is ASCII "/" and not a middle dot: LVGL's built-in Montserrat
     // tables cover printable ASCII, so U+00B7 renders as a box on the panel.
-    static const struct {
-        const char* label;
-        const char* purpose;
-        RootGroup group;
-    } kItems[] = {
-        {"Sample", "Manage / Browse / Edit / Record", RootGroup::Sample},
-        {"Project", "Tracks / Instruments / Mixer / MIDI", RootGroup::Track},
-        {"Instrument", "Sample / Env / Amp / Filter / Mod", RootGroup::Instrument},
-        {"Play", "Pads / Keys", RootGroup::Play},
-        {"Sequencer", "Steps / Tempo / Swing", RootGroup::Sequencer},
-        {"Settings", "Display / Storage / MIDI / System / Calibrate", RootGroup::Settings},
-        {"Diagnostics",
-         "ESP32 / Daisy / Audio / Link / Storage / MIDI / Panel",
-         RootGroup::Diagnostics},
-    };
-    for (const auto& item: kItems) {
+    for (const auto& item: kPanelMenuButtons) {
+        if (!item.purpose)
+            continue;
         const RootGroup group = item.group;
         auto open = [group]() {
             ESP_LOGI(TAG, "Opening %s", rootGroupName(group));
@@ -120,7 +108,7 @@ std::shared_ptr<UIPage> createMainMenu() {
             ok = []() { return inter_mcu_backend_link_alive(); };
         }
 
-        menu->addItem(item.label, item.purpose, std::move(context), std::move(ok), open);
+        menu->addItem(rootGroupName(group), item.purpose, std::move(context), std::move(ok), open);
     }
 
     return menu;

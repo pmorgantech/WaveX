@@ -37,6 +37,27 @@ versioning and release process.
   underruns/drops and 10 pattern save/load cycles; details are in the
   [callback performance log](docs/callback-performance-log.md).
 
+- Added Core startup memory/profile diagnostics, display/PSRAM/image
+  configuration checks and BSP pin checks. Moved the Core ADC chip-select
+  reservation off a boot strap; both carrier profiles reject USB and
+  strapping-pin claims.
+- Added interrupt-driven TCA8418 keypad input with polling fallback, bounded
+  checked I2C, non-destructive FIFO acknowledgement and held-key release
+  recovery. Diagnostics reports offline/IRQ/poll mode, read errors and FIFO
+  overflows. Replaced the old keypad dependency while preserving other
+  dependency versions. Core/WIFI6 and Daisy builds, host suites (311 frontend
+  tests) and 12 keypad ASan/UBSan tests pass; physical bring-up and latency
+  remain unverified.
+- Added initial PCA9956B panel LED support on the existing panel/PCNT task,
+  with one populated chip and an optional second. A central assignment table
+  maps seven menu destinations, six softkeys and held Shift to 14 LEDs;
+  Sequencer and Diagnostics jump keys and the `PROJECT` console alias share
+  those assignments. Enabled softkeys glow dim, then held or explicitly
+  active keys glow bright. Startup blanking, bounded retries and `STATE` LED
+  diagnostics keep failures safe. Configuration remains dark by default
+  pending REXT/current selection. Core/WIFI6 and Daisy builds and host
+  suites (320 frontend tests) pass; hardware verification remains open.
+
 - Stereo Instrument voices preserve both sample channels through independent
   filters. Per-oscillator Mono defaults Off, downmixes stereo when On, applies
   on new notes, and follows WXI save/load and sound Apply/Revert. Legacy WXI

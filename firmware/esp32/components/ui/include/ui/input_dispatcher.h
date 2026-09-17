@@ -18,6 +18,7 @@ class InputDispatcher {
     bool postFromISR(const InputEvent& evt, BaseType_t* hpTaskWoken);
     bool post(const InputEvent& evt, TickType_t ticksToWait = 0);
     void processAll();
+    uint32_t heldPanelButtons() const { return held_buttons_.load(std::memory_order_relaxed); }
     void setActiveContext(std::shared_ptr<UIContext> ctx);
 
     /// Events dropped because the queue was full. A non-zero value means input
@@ -36,8 +37,10 @@ class InputDispatcher {
     InputDispatcher();
     // The key semantics of panel-controls.md §4.3, applied under the LVGL lock.
     void dispatch(InputEvent evt);
+    void recordButton(const InputEvent& evt);
     void stepTrack(int delta);
 
+    std::atomic<uint32_t> held_buttons_{0};
     QueueHandle_t queue_;
     std::shared_ptr<UIContext> current_;
     std::atomic<PanelKey> last_key_{PanelKey::None};

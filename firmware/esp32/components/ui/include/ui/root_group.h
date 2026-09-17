@@ -23,8 +23,8 @@ enum class RootGroup : uint8_t {
     Track,
     Mixer,
     Settings,
-    Diagnostics,  ///< menu only; no panel key
-    Sequencer,    ///< touchscreen composition surface
+    Diagnostics,  ///< menu and panel key
+    Sequencer,    ///< menu and panel key
     Count
 };
 

@@ -395,6 +395,12 @@
 #error "Unsupported WaveX ESP32 board profile"
 #endif
 
+#if WAVEX_ESP_BOARD == WAVEX_ESP_BOARD_CORE
+#define WAVEX_ESP_BOARD_NAME "ESP32-P4-Core-DEV-KIT"
+#else
+#define WAVEX_ESP_BOARD_NAME "ESP32-P4-WIFI6"
+#endif
+
 // Quadrature Encoder (PCNT peripheral)
 #ifndef WAVEX_ESP_ENCODER_PCNT_ENABLED
 #define WAVEX_ESP_ENCODER_PCNT_ENABLED 1
@@ -757,6 +763,39 @@
 #define WAVEX_PCA9956B_I2C_ADDR_1 0x21
 #define WAVEX_PCA9956B_I2C_CLOCK_HZ 400000
 
+// Initial panel: one populated chip, fourteen menu/softkey/Shift indicators.
+// Current code must be chosen from the fitted REXT and LED rating. Zero keeps
+// OE disabled until that electrical configuration is supplied; PWM is not a
+// substitute for a safe peak-current setting (NXP datasheet section 7.3.13).
+#ifndef WAVEX_ESP_PANEL_LEDS_ENABLED
+#define WAVEX_ESP_PANEL_LEDS_ENABLED (WAVEX_ESP_BOARD == WAVEX_ESP_BOARD_CORE)
+#endif
+#ifndef WAVEX_PCA9956B_POPULATED_DEVICES
+#define WAVEX_PCA9956B_POPULATED_DEVICES 1
+#endif
+#ifndef WAVEX_PCA9956B_IREF
+#define WAVEX_PCA9956B_IREF 0
+#endif
+#ifndef WAVEX_PANEL_LED_DIM
+#define WAVEX_PANEL_LED_DIM 24
+#endif
+#ifndef WAVEX_PANEL_LED_BRIGHT
+#define WAVEX_PANEL_LED_BRIGHT 192
+#endif
+#define WAVEX_PANEL_LED_TRANSFER_TIMEOUT_MS 2
+#define WAVEX_PANEL_LED_REFRESH_MS 20
+#define WAVEX_PANEL_LED_RETRY_MS 1000
+#if WAVEX_PCA9956B_POPULATED_DEVICES < 1 || WAVEX_PCA9956B_POPULATED_DEVICES > 2
+#error "Panel supports one or two populated PCA9956B devices"
+#endif
+#if WAVEX_PCA9956B_IREF < 0 || WAVEX_PCA9956B_IREF > 255
+#error "PCA9956B current register must be 0..255"
+#endif
+#if WAVEX_PANEL_LED_DIM < 0 || WAVEX_PANEL_LED_DIM > WAVEX_PANEL_LED_BRIGHT || \
+    WAVEX_PANEL_LED_BRIGHT > 255
+#error "Panel LED levels must satisfy 0 <= dim <= bright <= 255"
+#endif
+
 // Panel LED map: which flattened PCA9956B channel each logical LED (PanelLed, in
 // components/ui/include/ui/panel_led.h) sits on. Wiring truth, so it lives
 // here with the pins (panel-controls.md §6 decision 4); panel_led.h turns
@@ -780,6 +819,8 @@
 #define WAVEX_LED_CH_JUMP_SETTINGS 12
 #define WAVEX_LED_CH_PLAY_STOP 13
 #define WAVEX_LED_CH_REC 14
+#define WAVEX_LED_CH_JUMP_SEQUENCER 15
+#define WAVEX_LED_CH_JUMP_DIAGNOSTICS 16
 #define WAVEX_LED_CH_PAD1 24
 #define WAVEX_LED_CH_PAD2 25
 #define WAVEX_LED_CH_PAD3 26
@@ -902,8 +943,8 @@
 #if WAVEX_ESP_BUTTON_MATRIX_ENABLED
 // I2C configuration
 // I2C address of the keypad controller. The bus itself belongs to the BSP
-// (shared with the touch controller), which is why the port/clock macros below
-// are unused - they describe a bus this firmware does not open itself.
+// (shared with the touch controller). The device clock below applies only
+// to keypad transactions; the unused port macro never creates a second bus.
 #ifndef WAVEX_TCA8418_I2C_ADDR
 #define WAVEX_TCA8418_I2C_ADDR 0x34
 #endif
@@ -913,7 +954,18 @@
 #endif
 
 #ifndef WAVEX_TCA8418_I2C_CLOCK_SPEED
-#define WAVEX_TCA8418_I2C_CLOCK_SPEED (400 * 1000)  // 400 kHz
+#define WAVEX_TCA8418_I2C_CLOCK_SPEED (100 * 1000)  // retain the bench driver's 100 kHz
+#endif
+
+// IRQ wakes the keypad task; missing IRQ/service falls back to 10 ms polling.
+#ifndef WAVEX_TCA8418_INTERRUPT_ENABLED
+#define WAVEX_TCA8418_INTERRUPT_ENABLED 1
+#endif
+#ifndef WAVEX_TCA8418_TRANSFER_TIMEOUT_MS
+#define WAVEX_TCA8418_TRANSFER_TIMEOUT_MS 10
+#endif
+#if WAVEX_TCA8418_TRANSFER_TIMEOUT_MS < 1 || WAVEX_TCA8418_TRANSFER_TIMEOUT_MS > 20
+#error "Keypad I2C timeout must be 1..20 ms on the shared touch bus"
 #endif
 
 // Button matrix dimensions
@@ -971,6 +1023,8 @@
 #define WAVEX_KEYCODE_JUMP_TRACK 24
 #define WAVEX_KEYCODE_JUMP_MIXER 25
 #define WAVEX_KEYCODE_JUMP_SETTINGS 26
+#define WAVEX_KEYCODE_JUMP_SEQUENCER 27
+#define WAVEX_KEYCODE_JUMP_DIAGNOSTICS 28
 #define WAVEX_KEYCODE_PAD1 31
 #define WAVEX_KEYCODE_PAD2 32
 #define WAVEX_KEYCODE_PAD3 33
