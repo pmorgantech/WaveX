@@ -25,7 +25,7 @@ TEST(SequencerFileProtocol, RequestsAndRetainedCompletionRoundTrip) {
         state.active_request_id = request.request_id;
         state.completed_request_id = 123;
         state.busy = 1;
-        state.error = SEQ_FILE_EXISTS;
+        state.error = SEQ_FILE_NO_SPACE;
         state.completed_op = SEQ_FILE_SAVE_COPY;
         std::strcpy(state.name, "Earlier pattern");
         ASSERT_GT(ProtocolHandler::CreatePacket(

@@ -54,6 +54,24 @@ TEST_F(MessageDispatchTest, NoteOnReachesAudioEngine) {
     EXPECT_TRUE(GetDispatchRecord().note_offs.empty());
 }
 
+TEST_F(MessageDispatchTest, CardMaintenanceRejectsMalformedCommandsAndBlocksNewWork) {
+    const CardOpMessage request{123, 0, CARD_PREPARE_FORMAT, {}};
+    const auto* bytes = reinterpret_cast<const uint8_t*>(&request);
+    for (size_t length = 0; length < sizeof(request); ++length)
+        ProcessInterMcuMessage(MSG_CARD_OP, 1, bytes, length);
+    EXPECT_TRUE(GetDispatchRecord().card_ops.empty());
+    Dispatch(MSG_CARD_OP, request);
+    ASSERT_EQ(GetDispatchRecord().card_ops.size(), 1u);
+    EXPECT_EQ(GetDispatchRecord().card_ops.back().request_id, 123u);
+    GetDispatchRecord().card_busy = true;
+    Dispatch(MSG_NOTE_ON, NoteMessage(60, 100, 2));
+    Dispatch(MSG_SEQ_FILE_OP, SeqFileOpMessage{124, SEQ_FILE_SAVE_COPY, {}, "New"});
+    EXPECT_TRUE(GetDispatchRecord().note_ons.empty());
+    EXPECT_TRUE(GetDispatchRecord().seq_file_ops.empty());
+    Dispatch(MSG_CARD_OP, CardOpMessage{125, 0, CARD_GET, {}});
+    EXPECT_EQ(GetDispatchRecord().card_ops.size(), 2u);
+}
+
 TEST_F(MessageDispatchTest, NoteOffReachesAudioEngine) {
     NoteMessage note(72, 0, 5);
     Dispatch(MSG_NOTE_OFF, note);

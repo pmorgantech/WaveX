@@ -11,13 +11,17 @@ namespace Storage {
 namespace SdSdio {
 
 // Initialize SDMMC (SDIO) and mount FATFS on "/".
-// If auto_format is true and no filesystem is found, a FAT filesystem will be created.
+// Never formats implicitly; card erasure requires the confirmed maintenance job.
 // Returns true on successful mount.
 //
 // Starts at WAVEX_DAISY_SD_CARD_SPEED and steps down one bus clock at a time
 // until the card mounts and reads, so a card or harness that cannot hold the
 // fastest rate lands on the fastest rate it CAN hold instead of failing.
-bool InitAndMount(daisy::DaisySeed& hw, bool auto_format);
+bool InitAndMount(daisy::DaisySeed& hw);
+bool CanFormat();
+uint32_t MediaGeneration();
+// Destructive, main-loop maintenance only: all storage jobs/streaming stopped.
+bool FormatCard();
 
 // Drop to the next slower bus clock and remount, for use when the card is
 // mounted but returning data CRC errors under load - a marginal-timing

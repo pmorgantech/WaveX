@@ -50,6 +50,11 @@ Pages still call `inter_mcu_*` functions in `main`; a fully injected
 - **Instrument:** Sample, Env, Amp, Filter, Mod, LFO.
 - **Project:** eight Tracks per view, Instrument assignment, MIDI input, Track level, pan/balance and mute.
 - **Settings:** Display, Storage, MIDI, System, Calibrate.
+
+  Storage offers Format Card, followed by a separate **ALL CARD DATA WILL BE
+  LOST** confirmation with Cancel and Erase all data. The backend owns the
+  expiring confirmation and format result; read-only polling recovers lost
+  replies without replaying erasure. See [card maintenance](features/inter-mcu-protocol.md#card-maintenance).
 - **Diagnostics:** ESP32, Daisy, Audio, Link, Storage, MIDI, Panel.
 
 `ui_main_menu.cpp` registers root groups and their factories.

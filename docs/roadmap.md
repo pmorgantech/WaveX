@@ -436,6 +436,14 @@ it owns that setup without needing a separate saved Performance object.
   sample, create no WXI, and preserve the playable Track and Revert point.
   Also verify an admitted save/reload. Include this preflight in Project
   snapshot transactions; session-wide memory admission remains separate.
+- [ ] **Phase 2 / Card storage bench check:** all implemented saves now
+  preflight free space; Settings > Storage provides explicit, expiring format
+  confirmation and creates the expected directories. Verify near-full-card
+  Instrument/Pattern/CV saves, query failure, cancel, card replacement during
+  confirmation, format/remount on a disposable card, directory creation and
+  save/reload after reboot. Confirm panel warning/layout and audio/link recovery
+  after the blocking maintenance operation. Host tests and both firmware builds
+  cover this change; no card was formatted during development.
 - [ ] **Phase 2 / Mixer v1:** Project now exposes Track assignment, MIDI, level,
   pan/balance and mute. Add session Save/Load; preserve selected-Track continuity and keep Pattern/
   Song editing in Sequencer. Complete Project transactions and mixer readback/

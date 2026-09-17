@@ -64,6 +64,8 @@ typedef struct {
 using UINT = unsigned int;
 using FSIZE_t = uint32_t;
 #define FA_READ 0x01
+#define FA_CREATE_ALWAYS 0x08
+using DWORD = uint32_t;
 #define FA_WRITE 0x02
 #define FA_CREATE_NEW 0x04
 
@@ -116,6 +118,10 @@ class MockFatFS {
         write_limit = -1;
         close_result = FR_OK;
         rename_result = FR_OK;
+        free_result = FR_OK;
+        free_clusters = 1024 * 1024;
+        cluster_sectors = 1;
+        mkdir_result = FR_OK;
         opendir_result_ = FR_OK;
         readdir_successes_before_failure_ = -1;
         readdir_fail_result_ = FR_DISK_ERR;
@@ -124,6 +130,10 @@ class MockFatFS {
     int write_limit = -1;  // total bytes before a short write
     FRESULT close_result = FR_OK;
     FRESULT rename_result = FR_OK;
+    FRESULT free_result = FR_OK;
+    uint32_t free_clusters = 1024 * 1024;
+    uint32_t cluster_sectors = 1;
+    FRESULT mkdir_result = FR_OK;
     std::vector<uint8_t>* MutableFile(const char* path) {
         auto it = files_.find(path);
         return it == files_.end() ? nullptr : &it->second;
@@ -236,6 +246,7 @@ class MockFatFS {
 
 // Mock FatFS functions
 extern "C" {
+FRESULT f_getfree(const char* path, DWORD* clusters, FATFS** fs);
 FRESULT f_open(FIL* file, const char* path, uint8_t mode);
 FRESULT f_close(FIL* file);
 FRESULT f_write(FIL* file, const void* source, UINT bytes, UINT* written);

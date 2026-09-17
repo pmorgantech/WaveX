@@ -9,5 +9,6 @@ bool Request(const Protocol::SeqFileOpMessage& request, Sequencer::PatternExchan
 void Pump(Sequencer::PatternExchange& exchange);
 // Keep edits/play from crossing a confirmed load/new. Stop/readback remain available.
 bool BlocksEdits();
+bool Busy();
 }  // namespace PatternStore
 }  // namespace WaveX

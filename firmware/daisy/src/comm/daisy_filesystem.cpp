@@ -422,6 +422,8 @@ void ProcessBrowseRequest(const char* path,
 // it can no longer open.
 void NotifyStorageLost() {
     using namespace WaveX::Protocol;
+    s_directory_state_valid = false;
+    s_current_file_count = 0;
 
     // Same message a user-requested stop sends, so the browser's existing
     // stop handling takes it - no new frontend state to get wrong.

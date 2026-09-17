@@ -11,6 +11,8 @@
 #include "sys/system.h"
 #include "util/sd_diskio.h"
 
+#include "card_layout.hpp"
+
 extern "C" SD_HandleTypeDef hsd1;  // libDaisy per/sdmmc.cpp
 
 // FatFs asks for a timestamp when it creates or updates a file. libDaisy's
@@ -62,7 +64,7 @@ static_assert(WAVEX_DAISY_SD_CARD_SPEED >= 0 && WAVEX_DAISY_SD_CARD_SPEED < kSpe
 int s_speed_index = WAVEX_DAISY_SD_CARD_SPEED;
 bool s_mounted = false;
 daisy::DaisySeed* s_hw = nullptr;
-bool s_auto_format = false;
+uint32_t s_media_generation = 1;
 CardEventCallback s_card_cb = nullptr;
 
 #if WAVEX_DAISY_SD_CARD_DETECT_PIN >= 0
@@ -115,7 +117,7 @@ bool s_sd_brought_up = false;
 // mount (unmounting does not release it), so it is done exactly once.
 bool s_fs_linked = false;
 
-bool TrySpeed(int index, bool auto_format) {
+bool TrySpeed(int index) {
     SdmmcHandler::Config sd_cfg;
     sd_cfg.Defaults();
     sd_cfg.speed = kSpeeds[index].speed;
@@ -229,19 +231,6 @@ bool TrySpeed(int index, bool auto_format) {
         System::Delay(50);
     }
 
-    if (fr == FR_NO_FILESYSTEM && auto_format) {
-        WaveX::Log::PrintLine("SD: No filesystem detected; formatting...");
-        static BYTE workbuf[4096];
-        if (f_mkfs("/", FM_FAT | FM_SFD, 0, workbuf, sizeof(workbuf)) == FR_OK &&
-            f_opendir(&dir, "/") == FR_OK) {
-            f_closedir(&dir);
-            s_speed_index = index;
-            s_mounted = true;
-            WaveX::Log::PrintLine("SD: mounted at %s (after format)", kSpeeds[index].name);
-            return true;
-        }
-    }
-
     const char* why = "";
     if (fr == FR_NO_FILESYSTEM) {
         why = " (FR_NO_FILESYSTEM - not FAT12/16/32; exFAT is not supported by this build)";
@@ -255,9 +244,9 @@ bool TrySpeed(int index, bool auto_format) {
 }
 
 // Walks down from `start_index` to the slowest rate.
-bool ConfigureAndMount(int start_index, bool auto_format) {
+bool ConfigureAndMount(int start_index) {
     for (int i = start_index; i >= 0; --i) {
-        if (TrySpeed(i, auto_format)) {
+        if (TrySpeed(i)) {
             if (i != start_index) {
                 WaveX::Log::PrintLine(
                     "SD: negotiated DOWN from %s to %s - the card or wiring "
@@ -276,6 +265,45 @@ bool ConfigureAndMount(int start_index, bool auto_format) {
 
 bool IsMounted() {
     return s_mounted;
+}
+
+bool CanFormat() {
+    if (!s_fs_linked || !s_sd_brought_up)
+        return false;
+#if WAVEX_DAISY_SD_CARD_DETECT_PIN >= 0
+    return s_reinit_state == ReinitState::Idle && s_pending_level && !s_cd_pin.Read() &&
+           System::GetNow() - s_pending_since_ms >= kCardDebounceMs;
+#else
+    return true;  // disk_initialize inside f_mkfs reports an absent card
+#endif
+}
+uint32_t MediaGeneration() {
+    return s_media_generation;
+}
+
+bool FormatCard() {
+    if (!CanFormat())
+        return false;
+    // AXI SRAM, full cache lines, never the DTCM stack. SD_write maintains
+    // cache coherence before its IDMA transfer.
+    alignas(32) static BYTE work[4096];
+    s_mounted = false;
+    ++s_media_generation;
+    if (f_mount(nullptr, "0:", 0) != FR_OK)
+        return false;
+    // libDaisy vendors FatFs R0.12c's five-argument API. Create a partition
+    // and FAT32 for normal SD media (FAT12/16 permitted for small cards).
+    const auto formatted = f_mkfs("0:", FM_FAT | FM_FAT32, 0, work, sizeof(work));
+    const auto mounted = f_mount(&s_sd_fs, "0:", 1);
+    s_mounted = mounted == FR_OK;
+#if WAVEX_DAISY_SD_CARD_DETECT_PIN >= 0
+    s_reinit_state = ReinitState::Idle;
+    s_card_present = !s_cd_pin.Read();
+    s_remount_retry_after_ms = 0;
+#endif
+    if (formatted != FR_OK || !s_mounted)
+        return false;
+    return CreateCardDirectories();
 }
 
 void SetCardEventCallback(CardEventCallback cb) {
@@ -302,7 +330,7 @@ void Poll() {
         s_negotiate_index = static_cast<int>(WAVEX_DAISY_SD_CARD_SPEED);
     }
     if (s_reinit_state == ReinitState::Negotiating) {
-        if (TrySpeed(s_negotiate_index, s_auto_format)) {
+        if (TrySpeed(s_negotiate_index)) {
             if (s_negotiate_index != static_cast<int>(WAVEX_DAISY_SD_CARD_SPEED)) {
                 WaveX::Log::PrintLine(
                     "SD: negotiated DOWN from %s to %s - the card or wiring cannot hold the "
@@ -337,6 +365,7 @@ void Poll() {
     const uint32_t now = System::GetNow();
 
     if (present_now != s_pending_level) {
+        ++s_media_generation;
         s_pending_level = present_now;
         s_pending_since_ms = now;
         return;
@@ -383,7 +412,7 @@ bool DowngradeSpeed() {
     WaveX::Log::PrintLine("SD: downgrading %s -> %s after read errors",
                           kSpeeds[s_speed_index].name,
                           kSpeeds[target].name);
-    return TrySpeed(target, false);
+    return TrySpeed(target);
 }
 
 int CurrentSpeedIndex() {
@@ -394,9 +423,8 @@ const char* CurrentSpeedName() {
     return kSpeeds[s_speed_index].name;
 }
 
-bool InitAndMount(DaisySeed& hw, bool auto_format) {
+bool InitAndMount(DaisySeed& hw) {
     s_hw = &hw;
-    s_auto_format = auto_format;
 // Check for Card Detect pin if configured
 #if WAVEX_DAISY_SD_CARD_DETECT_PIN >= 0
     // Initialize Card Detect pin (active low - card present when pin reads LOW)
@@ -420,7 +448,7 @@ bool InitAndMount(DaisySeed& hw, bool auto_format) {
     // harness that cannot hold the configured rate settles on the fastest one
     // it can, rather than failing outright or being pinned low for everyone.
     // Figures derived in hardware_config.h.
-    if (!ConfigureAndMount(static_cast<int>(WAVEX_DAISY_SD_CARD_SPEED), auto_format)) {
+    if (!ConfigureAndMount(static_cast<int>(WAVEX_DAISY_SD_CARD_SPEED))) {
         return false;
     }
 
@@ -463,19 +491,6 @@ bool InitAndMount(DaisySeed& hw, bool auto_format) {
 
             // For other errors or last retry, break and handle below
             break;
-        }
-
-        // Handle the actual mount result
-        if (!test_success && test_fr == FR_NO_FILESYSTEM && auto_format) {
-            WaveX::Log::PrintLine("SD: No filesystem detected; formatting...");
-            static BYTE workbuf[4096];
-            test_fr = f_mkfs("/", FM_FAT | FM_SFD, 0, workbuf, sizeof(workbuf));
-            WaveX::Log::PrintLine("SD: Format result: %d", (int)test_fr);
-            if (test_fr == FR_OK) {
-                test_fr = f_opendir(&dir, "/");  // Try again after format
-                WaveX::Log::PrintLine("SD: Re-test after format result: %d", (int)test_fr);
-                test_success = (test_fr == FR_OK);
-            }
         }
 
         if (test_success) {

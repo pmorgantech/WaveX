@@ -16,6 +16,7 @@
 #include "ff.h"
 
 #include "cv_cal.hpp"
+#include "storage/card_space.hpp"
 #include <cstring>
 
 namespace WaveX {
@@ -63,6 +64,8 @@ inline bool LoadCvCalTable(FIL& file, CvCal* out) {
 
 // Writes the full table. Returns false on any I/O failure.
 inline bool SaveCvCalTable(FIL& file, const CvCal* table) {
+    if (Storage::CheckSaveSpace(sizeof(CvCalFile)) != Storage::SaveSpace::Ready)
+        return false;
     if (f_open(&file, kCvCalPath, FA_WRITE | FA_CREATE_ALWAYS) != FR_OK) {
         return false;
     }
@@ -74,8 +77,8 @@ inline bool SaveCvCalTable(FIL& file, const CvCal* table) {
     }
     UINT bytes_written = 0;
     const FRESULT fr = f_write(&file, &data, sizeof(data), &bytes_written);
-    f_close(&file);
-    return fr == FR_OK && bytes_written == sizeof(data);
+    const auto closed = f_close(&file);
+    return fr == FR_OK && bytes_written == sizeof(data) && closed == FR_OK;
 }
 
 }  // namespace Cv

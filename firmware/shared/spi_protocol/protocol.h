@@ -97,6 +97,8 @@ enum MessageType : uint8_t {
     MSG_SAMPLE_GET_PATH_REQ = 0x37,    // Get full path for index
     MSG_SAMPLE_GET_PATH_RESP = 0x38,   // Full path response
     MSG_STORAGE_STATUS = 0x39,         // Daisy -> ESP32: SD mounted/unmounted (unsolicited)
+    MSG_CARD_OP = 0x4C,                // E->D: inspect/arm/confirm/cancel card formatting
+    MSG_CARD_STATE = 0x4D,             // D->E: retained card-maintenance result
     // Diagnostics telemetry (docs/ui-diagnostics-spec.md). Subscription-gated:
     // the push flows only while the diagnostics page is open, so it costs
     // nothing the rest of the time.
@@ -1579,6 +1581,44 @@ struct SeqTransportMessage {
 //   SEQ_OP_SET_PARAM_LOCK  |  yes  | yes  | param_id(slot key)| value            | -
 //   SEQ_OP_CLEAR_PARAM_LOCKS| yes  | yes  | -                 | -                | -
 
+// Card maintenance is foreground-only. PREPARE issues a one-use token; CONFIRM
+// consumes it. GET recovers the result without repeating a destructive command.
+enum CardOp : uint8_t { CARD_GET, CARD_PREPARE_FORMAT, CARD_CONFIRM_FORMAT, CARD_CANCEL };
+enum CardState : uint8_t { CARD_IDLE, CARD_CONFIRMATION, CARD_FORMATTING, CARD_DONE, CARD_FAILED };
+enum CardError : uint8_t {
+    CARD_OK,
+    CARD_BUSY,
+    CARD_NOT_READY,
+    CARD_BAD_CONFIRMATION,
+    CARD_IO,
+    CARD_AUDIO_BUSY
+};
+struct CardOpMessage {
+    uint32_t request_id = 0;
+    uint32_t token = 0;
+    uint8_t op = CARD_GET;
+    uint8_t reserved[3]{};
+} __attribute__((packed));
+struct CardStateMessage {
+    uint32_t request_id = 0;
+    uint32_t token = 0;
+    uint32_t completed_request_id = 0;
+    uint8_t state = CARD_IDLE;
+    uint8_t error = CARD_OK;
+    uint8_t mounted = 0;
+    uint8_t reserved = 0;
+} __attribute__((packed));
+static_assert(sizeof(CardOpMessage) == 12 && sizeof(CardStateMessage) == 16,
+              "card maintenance wire sizes");
+inline bool IsValidCardOp(const CardOpMessage& m) {
+    return m.request_id && m.op <= CARD_CANCEL && !m.reserved[0] && !m.reserved[1] &&
+           !m.reserved[2] && (m.op == CARD_CONFIRM_FORMAT ? m.token != 0 : m.token == 0);
+}
+inline bool IsValidCardState(const CardStateMessage& m) {
+    return m.request_id && m.state <= CARD_FAILED && m.error <= CARD_AUDIO_BUSY && m.mounted <= 1 &&
+           !m.reserved;
+}
+
 // Pattern persistence is a foreground job. GET polls retained completion;
 // reads never replay a mutation whose outcome was lost on the link.
 enum SeqFileOp : uint8_t {
@@ -1595,7 +1635,8 @@ enum SeqFileError : uint8_t {
     SEQ_FILE_EXISTS = 4,
     SEQ_FILE_IO = 5,
     SEQ_FILE_BAD_FILE = 6,
-    SEQ_FILE_CAPTURE_BUSY = 7
+    SEQ_FILE_CAPTURE_BUSY = 7,
+    SEQ_FILE_NO_SPACE = 8
 };
 constexpr size_t SEQ_FILE_NAME_BYTES = 24;
 struct SeqFileOpMessage {
@@ -1856,6 +1897,7 @@ enum InstError : uint8_t {
     INST_ERROR_BUSY = 7,
     INST_ERROR_IO = 8,
     INST_ERROR_EXISTS = 9,
+    INST_ERROR_NO_SPACE = 10,
 };
 
 // MSG_INST_OP (E->D). request_id lets the browser discard a probe response
@@ -2727,6 +2769,10 @@ inline const char* MessageTypeName(uint8_t type) {
             return "SAMPLE_GET_PATH_RESP";
         case MSG_STORAGE_STATUS:
             return "STORAGE_STATUS";
+        case MSG_CARD_OP:
+            return "CARD_OP";
+        case MSG_CARD_STATE:
+            return "CARD_STATE";
         case MSG_DIAG_SUBSCRIBE:
             return "DIAG_SUBSCRIBE";
         case MSG_DIAG_PUSH:

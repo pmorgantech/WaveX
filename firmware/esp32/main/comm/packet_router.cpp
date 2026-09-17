@@ -123,6 +123,13 @@ void PacketRouter::route_by_message_type(uint8_t msg_type,
     }
 
     switch (msg_type) {
+        case WaveX::Protocol::MSG_CARD_STATE: {
+            WaveX::Protocol::CardStateMessage message;
+            if (payload_len == sizeof(message) &&
+                CopyMessage(payload, payload_len, message, "CARD_STATE") &&
+                WaveX::Protocol::IsValidCardState(message))
+                inter_mcu_store_card_state(message);
+        } break;
         case WaveX::Protocol::MSG_SEQ_FILE_STATUS: {
             WaveX::Protocol::SeqFileStatusMessage message;
             if (CopyMessage(payload, payload_len, message, "SEQ_FILE_STATUS"))

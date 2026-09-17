@@ -160,6 +160,38 @@ waveform queue occupancy without changing the audio callback or DMA ownership.
 See [waveform transfer scheduling](features/inter-mcu-protocol.md#waveform-transfer-scheduling-as-built)
 for the representation, cache handoff and verification limits.
 
+#### Card saves and formatting (as-built)
+
+SD saves and formatting remain Daisy foreground responsibilities. Instrument
+WXI, Pattern WXCF and CV calibration saves call the shared
+`storage/card_space.hpp` admission helper before directory creation or file
+creation/truncation. FatFs reports free clusters; admission rounds the complete
+file size up to clusters and reserves four more for directory/temp/rename
+entries, without counting an existing destination as reclaimable. Query failure
+rejects the save. Write, close and rename errors still need checking: admission
+is not a guarantee against subsequent I/O failure. A first `f_getfree` may scan
+the FAT; saves stop streamed audition before this potentially long foreground
+operation. Resident Track playback uses RAM and remains available.
+
+Settings > Storage formatting is an explicit maintenance operation. The Daisy
+owns a one-use confirmation tied to the observed card generation and a
+60-second expiry. It refuses active Instrument or Pattern jobs, stops audition
+and transport, and waits for callback acknowledgement that Track voices have
+stopped before unmounting. `f_mkfs` is synchronous foreground work: the audio
+interrupt remains live, but link and foreground CV servicing can pause. The
+backend sends an accepted state before starting; the UI polls for the retained
+result and never retries erasure automatically. A timeout/reboot must not be
+interpreted as success. Mount failure never causes automatic formatting.
+
+Formatting creates the content roots in `storage/card_layout.hpp`, matching
+[the card layout](features/track-and-patch-model.md#33-persistence-wxi-over-wxcf) plus the
+Pattern directory. It erases all card data, including the calibration file;
+resident PCM and runtime settings remain in memory, but their saved backing
+files are gone. Directory/remount failure reports failure even if erasure
+succeeded. Full-card, real-panel and destructive format/reboot behavior still
+require the roadmap bench checks. See the
+[card protocol](features/inter-mcu-protocol.md#card-maintenance) for recovery.
+
 ### 4.3 ESP32 frontend runtime model
 
 FreeRTOS tasks:

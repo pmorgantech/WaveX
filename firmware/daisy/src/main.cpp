@@ -40,6 +40,8 @@ static daisy::SpiHandle spi_handle;
 
 #if WAVEX_DAISY_SD_CARD_ENABLED && (WAVEX_DAISY_SD_CARD_BACKEND == 1)
 #include "storage/sd_sdio.h"
+
+#include "storage/card_service.hpp"
 #endif
 
 // (Review M11: a hand-rolled CPU-usage measurement scaffold sat here -
@@ -628,7 +630,7 @@ int main(void) {
     WAVEX_LOG_DAISY(INTER_MCU_LINK, "SD: InitAndMount start");
 #endif
     WaveX::Storage::SdSdio::SetCardEventCallback(OnSdCardEvent);
-    sd_available = WaveX::Storage::SdSdio::InitAndMount(hw, WAVEX_DAISY_SD_AUTO_FORMAT != 0);
+    sd_available = WaveX::Storage::SdSdio::InitAndMount(hw);
 
     uint32_t sd_init_time = System::GetNow() - sd_start_time;
     WAVEX_LOG_DAISY(
@@ -812,6 +814,7 @@ int main(void) {
         uint32_t current_time = System::GetNow();
 
         WaveX::Comm::LinkProcess();
+        WaveX::Storage::CardService::Pump();
 
         // Push at most one USB packet of buffered log output. Non-blocking:
         // a busy or unread endpoint costs nothing here.

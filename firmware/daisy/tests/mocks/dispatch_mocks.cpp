@@ -21,6 +21,15 @@ DispatchRecord& GetDispatchRecord() {
 }  // namespace Test
 }  // namespace WaveX
 
+namespace WaveX::Storage::CardService {
+void Request(const Protocol::CardOpMessage& request) {
+    Test::GetDispatchRecord().card_ops.push_back(request);
+}
+bool Busy() {
+    return Test::GetDispatchRecord().card_busy;
+}
+}  // namespace WaveX::Storage::CardService
+
 namespace WaveX {
 namespace Comm {
 

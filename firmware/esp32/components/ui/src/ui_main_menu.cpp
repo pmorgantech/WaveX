@@ -185,21 +185,6 @@ std::shared_ptr<UIPage> createDisplaySettingsPage() {
     return page;
 }
 
-std::shared_ptr<UIPage> createStorageSettingsPage() {
-    auto page = std::make_shared<UISettingsPage>("Storage");
-
-    // There is genuinely nothing to configure here yet: the SD card belongs to
-    // the Daisy, which mounts it itself, and every number worth seeing is
-    // already on the Diagnostics ▸ Storage tab. Saying that is more useful
-    // than three sliders that log and return.
-    page->addInfo("Storage settings", "none yet");
-    page->addInfo("SD card status", "see Diagnostics > Storage");
-    page->addUnimplemented("Format SD card", "not implemented - format the card on a computer");
-    page->addUnimplemented("Sample folder", "not implemented - the Daisy chooses the path");
-
-    return page;
-}
-
 std::shared_ptr<UIPage> createMidiSettingsPage() {
     auto page = std::make_shared<UISettingsPage>("MIDI");
 

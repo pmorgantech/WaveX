@@ -29,7 +29,7 @@ TEST(InstrumentEditorProtocol, PadIdentityAndMutationOutcomeRoundTrip) {
     in.loaded = 1;
     in.mode = 1;
     in.editable = 1;
-    in.error = INST_ERROR_EXISTS;
+    in.error = INST_ERROR_NO_SPACE;
     std::strcpy(in.name, "Sparse kit");
     in.pads[15] = {65530, 9, 75};
     std::array<uint8_t, 128> wire{};

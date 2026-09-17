@@ -95,6 +95,8 @@ sequence(u16 LE) | payload[0..2048] | crc16(u16 LE) | end(0x5A)
 | MSG_SAMPLE_META_PAGE_REQ | 0x49 | E→D | `SampleMetaPageReqMessage{first, count}` | one window of the Sample Pool in registry order: `first` counts resident records, `count` ≤ `MAX_SAMPLE_META_PAGE` (20). The Pool (1024) is paged, not mirrored |
 | MSG_SAMPLE_META_PAGE | 0x4A | D→E | `SampleMetaPageHeader{total, first, n}` + n × `SampleMetadata` | the whole window in ONE frame, so a page cannot be lost to the 4-deep TX queue the way n separate `MSG_SAMPLE_META` would be; retried next main-loop pass if the queue is full. Records carry `used_by` (Track mask) and `flags` (resident / pinned) filled from the Pool |
 | MSG_SAMPLE_AUDITION | 0x4B | E→D | `SampleAuditionMessage{sample_id}` | stream the Pool sample's card file with its current region, loop, gain and fades; never claims a Track. Zero/unknown ids or missing paths fail. Stop with `MSG_SAMPLE_STOP_REQ`. Requires an SD-backed sample |
+| MSG_CARD_OP | 0x4C | E→D | `CardOpMessage` | read status, prepare, explicitly confirm or cancel card formatting; see Card maintenance |
+| MSG_CARD_STATE | 0x4D | D→E | `CardStateMessage` | correlated card confirmation/progress/result; retained for read-only recovery |
 | MSG_TRACK_BINDING | 0x48 | D→E | `TrackBindingMessage{track, state, sample_id}` | one Track's actual binding: empty, bare resident sample, imported Patch, or Patch loading. The ESP32 uses this instead of inferring playability from its own Load/Select history; `sample_id` is set only for a bare-sample binding. |
 | MSG_SEQ_TRANSPORT | 0x50 | E→D | `SeqTransportMessage{command, clock_source, input_mode, quantize, tempo_bpm_x100, song_position}` | play/stop/continue, tempo, clock source (internal/MIDI), input mode (play/step-rec/live-rec/erase) — `sequencer.md` §4, `midi-sync-tempo-follower.md` §3 |
 | MSG_SEQ_PATTERN_OP | 0x51 | E→D | `SeqPatternOpMessage{op, track, step, arg_u8, arg_u16, arg_s16}` | one small idempotent pattern edit; `op` (`SeqPatternOpCode`) selects which fields apply — see the table in `protocol.h` above the struct |
@@ -370,10 +372,44 @@ automatically replays a timed-out mutation.
 File names are bounded, terminated path components, not arbitrary paths.
 LOAD/NEW replace the working pattern after confirmation; tempo and Track
 instruments are not file-owned. Busy, invalid name, missing/duplicate file,
-I/O, invalid format and capture-busy errors are explicit. See
+I/O, invalid format, insufficient space and capture-busy errors are explicit. See
 [sequencer.md](sequencer.md#pattern-files-as-built) for storage and handoff
 behavior. These additive messages keep protocol version 6; both updated
 MCUs are needed for the new page. The arpeggiator's 0x58 reservation remains.
+
+### Card maintenance
+
+`CardOpMessage` and `CardStateMessage` in `protocol.h` are the authoritative
+payload definitions (12-byte request, 16-byte response). These additive
+messages retain protocol 6 and require both updated firmware images.
+Nonzero request IDs correlate replies; reserved bytes must be zero. The
+frontend stores a complete response snapshot outside LVGL and the Storage
+page consumes it on its UI timer.
+
+GET only reads state. PREPARE_FORMAT arms a token; CONFIRM_FORMAT must echo
+that token within 60 seconds on the same observed card generation. CANCEL
+disarms it. The page only exposes **Erase all data** after its own explicit
+PREPARE receives the matching token, alongside **ALL CARD DATA WILL BE LOST**
+and Cancel. Unsolicited or stale confirmation cannot arm the page. While the
+format is accepted/running, mutations are ignored; the last completion ID
+prevents replay of the same confirmation. GET retains that completion ID
+separately from its read ID, and reconnect polling never sends CONFIRM again.
+
+The Daisy retains pending responses under TX backpressure, leaves a short
+foreground interval after acceptance, then rechecks storage ownership and
+stops playback before formatting. During maintenance, the dispatcher admits
+only card status/control and heartbeat messages. Errors distinguish busy,
+missing card, invalid/expired confirmation, unsafe audio stop and I/O failure.
+An I/O failure may mean the card was already erased or only partly initialized;
+only DONE means format, remount and directory creation all succeeded. Firmware
+reboot loses the retained result; the page reports an unknown result when its
+confirmed ID is no longer present. See [architecture](../architecture.md#card-saves-and-formatting-as-built)
+for foreground timing and resident-sample behavior.
+
+Save admission adds `INST_ERROR_NO_SPACE` and `SEQ_FILE_NO_SPACE`; query
+failure remains an I/O error. CV calibration uses its existing boolean storage
+result/logging path; `MSG_CV_CAL_RESP` still reports the runtime table, not
+successful persistence.
 
 ## Track page readback (additive to protocol 6)
 

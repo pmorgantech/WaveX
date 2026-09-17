@@ -383,5 +383,8 @@ void inter_mcu_store_instrument_map(const WaveX::Protocol::InstZoneSyncMessage& 
 bool inter_mcu_get_instrument_map(WaveX::Protocol::InstZoneSyncMessage* out);
 
 esp_err_t inter_mcu_send_seq_file_op(const WaveX::Protocol::SeqFileOpMessage& request);
+esp_err_t inter_mcu_send_card_op(const WaveX::Protocol::CardOpMessage& request);
+void inter_mcu_store_card_state(const WaveX::Protocol::CardStateMessage& state);
+bool inter_mcu_get_card_state(WaveX::Protocol::CardStateMessage* out);
 void inter_mcu_store_seq_file_status(const WaveX::Protocol::SeqFileStatusMessage& status);
 bool inter_mcu_get_seq_file_status(WaveX::Protocol::SeqFileStatusMessage* out);

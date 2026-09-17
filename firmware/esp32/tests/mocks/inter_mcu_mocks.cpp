@@ -86,6 +86,7 @@ void inter_mcu_store_seq_playhead(const WaveX::Protocol::SeqPlayheadMessage& pla
 void inter_mcu_store_seq_file_status(const WaveX::Protocol::SeqFileStatusMessage& status) {
     (void)status;
 }
+void inter_mcu_store_card_state(const WaveX::Protocol::CardStateMessage&) {}
 
 void inter_mcu_store_mix_state(const WaveX::Protocol::MixStateMessage&) {}
 

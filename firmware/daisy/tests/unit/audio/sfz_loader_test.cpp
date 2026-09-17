@@ -432,6 +432,19 @@ TEST_F(SfzLoaderTest, EmptyKitReloadAndLostReplyRecovery) {
     EXPECT_EQ(read.pads[15].sample_id, 0);
 }
 
+TEST_F(SfzLoaderTest, SaveChecksFreeSpaceBeforePublishingAndRetainsName) {
+    ASSERT_EQ(Edit(INST_OP_NEW, 0, "Original").error, INST_ERROR_NONE);
+    auto& fs = MockFatFS::Instance();
+    fs.free_clusters = 0;
+    auto reply = Edit(INST_OP_SAVE, 0, "Full");
+    EXPECT_EQ(reply.error, INST_ERROR_NO_SPACE);
+    EXPECT_STREQ(reply.name, "Original");
+    EXPECT_EQ(fs.GetFile("0:/wavex/instruments/Full.wxi"), nullptr);
+    fs.free_result = FR_DISK_ERR;
+    EXPECT_EQ(Edit(INST_OP_SAVE, 0, "Unknown").error, INST_ERROR_IO);
+    EXPECT_EQ(fs.GetFile("0:/wavex/instruments/Unknown.wxi"), nullptr);
+}
+
 TEST_F(SfzLoaderTest, KitReplacementGatesNewTriggersUntilStopAcknowledgement) {
     ASSERT_TRUE(Load(0));
     ASSERT_TRUE(Load(1));

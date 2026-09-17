@@ -13,6 +13,8 @@
 #include "mcu_link.h"
 #include "spi_protocol/protocol.h"
 
+#include "storage/card_service.hpp"
+
 #if WAVEX_SPI_LINK_ENABLED
 #include "daisy_spi_link.h"
 #endif
@@ -70,6 +72,19 @@ void ProcessInterMcuMessage(uint8_t msg_type,
                             uint16_t sequence_number,
                             const uint8_t* payload,
                             size_t payload_size) {
+    if (msg_type == MSG_CARD_OP) {
+        if (payload && payload_size == sizeof(CardOpMessage)) {
+            CardOpMessage request;
+            std::memcpy(&request, payload, sizeof(request));
+            if (IsValidCardOp(request))
+                Storage::CardService::Request(request);
+        }
+        return;
+    }
+    // Maintenance owns the card and audio stop boundary. Do not queue new
+    // playback or storage operations behind an accepted format request.
+    if (Storage::CardService::Busy() && msg_type != MSG_HEARTBEAT)
+        return;
 #if WAVEX_MCU_LINK_PACKET_DEBUG
     // Per-message tracing: compile-gated (review M5 - this ran unconditionally
     // for every frame, including 20 Hz meter pushes, over blocking USB-CDC).

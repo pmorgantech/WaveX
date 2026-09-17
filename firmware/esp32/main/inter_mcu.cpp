@@ -1274,7 +1274,35 @@ namespace {
 portMUX_TYPE s_seq_file_lock = portMUX_INITIALIZER_UNLOCKED;
 WaveX::Protocol::SeqFileStatusMessage s_seq_file_status;
 bool s_seq_file_valid = false;
+portMUX_TYPE s_card_lock = portMUX_INITIALIZER_UNLOCKED;
+WaveX::Protocol::CardStateMessage s_card_state;
+bool s_card_valid = false;
 }  // namespace
+esp_err_t inter_mcu_send_card_op(const WaveX::Protocol::CardOpMessage& request) {
+    if (!WaveX::Protocol::IsValidCardOp(request))
+        return ESP_ERR_INVALID_ARG;
+    return send_link_message(WaveX::Protocol::MSG_CARD_OP, &request, sizeof(request)) >= 0
+               ? ESP_OK
+               : ESP_FAIL;
+}
+void inter_mcu_store_card_state(const WaveX::Protocol::CardStateMessage& state) {
+    if (!WaveX::Protocol::IsValidCardState(state))
+        return;
+    taskENTER_CRITICAL(&s_card_lock);
+    s_card_state = state;
+    s_card_valid = true;
+    taskEXIT_CRITICAL(&s_card_lock);
+}
+bool inter_mcu_get_card_state(WaveX::Protocol::CardStateMessage* out) {
+    if (!out)
+        return false;
+    taskENTER_CRITICAL(&s_card_lock);
+    const bool valid = s_card_valid;
+    if (valid)
+        *out = s_card_state;
+    taskEXIT_CRITICAL(&s_card_lock);
+    return valid;
+}
 esp_err_t inter_mcu_send_seq_file_op(const WaveX::Protocol::SeqFileOpMessage& request) {
     if (!WaveX::Protocol::IsValidSeqFileOp(request))
         return ESP_ERR_INVALID_ARG;

@@ -44,7 +44,11 @@ const char* errorText(uint8_t error) {
         case INST_ERROR_BUSY:
             return "Instrument loader busy. Try again.";
         case INST_ERROR_MISSING_SAMPLES:
-            return "Sample is no longer resident.";
+            return "A referenced sample is missing from memory or the card.";
+        case INST_ERROR_UNSUPPORTED_SAMPLE:
+            return "A sample exceeds Instrument recall limits or has an unsupported format.";
+        case INST_ERROR_NO_SPACE:
+            return "Not enough free space on the card. Free space and try again.";
         case INST_ERROR_IO:
             return "Card save failed. Existing copies are unchanged.";
         default:

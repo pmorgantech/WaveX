@@ -5,13 +5,26 @@
 
 extern "C" {
 
+FRESULT f_getfree(const char*, DWORD* clusters, FATFS** fs) {
+    auto& mock = MockFatFS::Instance();
+    if (mock.free_result != FR_OK)
+        return mock.free_result;
+    static FATFS volume;
+    volume.csize = mock.cluster_sectors;
+    *clusters = mock.free_clusters;
+    *fs = &volume;
+    return FR_OK;
+}
+
 FRESULT f_open(FIL* file, const char* path, uint8_t mode) {
-    if (!file || !path || (mode != FA_READ && mode != (FA_WRITE | FA_CREATE_NEW)))
+    if (!file || !path ||
+        (mode != FA_READ && mode != (FA_WRITE | FA_CREATE_NEW) &&
+         mode != (FA_WRITE | FA_CREATE_ALWAYS)))
         return FR_INT_ERR;
     *file = FIL{};
     auto& fs = MockFatFS::Instance();
     if (mode & FA_WRITE) {
-        if (fs.GetFile(path))
+        if ((mode & FA_CREATE_NEW) && fs.GetFile(path))
             return FR_EXIST;
         fs.AddFile(path, {});
         file->writable = fs.MutableFile(path);
@@ -181,6 +194,8 @@ FRESULT f_write(FIL* file, const void* source, UINT bytes, UINT* written) {
 }
 FRESULT f_mkdir(const char* path) {
     auto& fs = MockFatFS::Instance();
+    if (fs.mkdir_result != FR_OK)
+        return fs.mkdir_result;
     if (fs.GetDirectory(path))
         return FR_EXIST;
     fs.AddDirectory(path, {});

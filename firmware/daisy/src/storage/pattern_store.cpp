@@ -5,6 +5,7 @@
 #include "ff.h"
 
 #include "bss_static.hpp"
+#include "storage/card_space.hpp"
 #include "wxcf/pattern_file.hpp"
 #include <cstdio>
 #include <cstring>
@@ -111,6 +112,9 @@ bool BlocksEdits() {
     const auto& j = job();
     return j.phase != Phase::Idle && j.request.op != SEQ_FILE_SAVE_COPY;
 }
+bool Busy() {
+    return job().phase != Phase::Idle;
+}
 bool Request(const SeqFileOpMessage& request, Sequencer::PatternExchange& exchange) {
     if (!IsValidSeqFileOp(request))
         return false;
@@ -171,6 +175,12 @@ void Pump(Sequencer::PatternExchange& exchange) {
                 Finish(SEQ_FILE_CAPTURE_BUSY, exchange);
             break;
         case Phase::OpenSave: {
+            const auto space = Storage::CheckSaveSpace(PatternFile::kFileBytes);
+            if (space != Storage::SaveSpace::Ready) {
+                Finish(space == Storage::SaveSpace::Full ? SEQ_FILE_NO_SPACE : SEQ_FILE_IO,
+                       exchange);
+                break;
+            }
             if (!MakeDirectory("0:/wavex") || !MakeDirectory("0:/wavex/patterns")) {
                 Finish(SEQ_FILE_IO, exchange);
                 break;

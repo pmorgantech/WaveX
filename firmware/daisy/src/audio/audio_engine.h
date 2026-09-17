@@ -209,6 +209,9 @@ void OnCvCalGet(const WaveX::Protocol::CvCalGetMessage& m);
 void OnCvTest(const WaveX::Protocol::CvTestMessage& m);
 // Load the persisted calibration table (call once at boot, after SD mount).
 void LoadCvCalFromSd();
+bool StorageJobBusy();
+bool PrepareCardFormat();
+void FinishCardFormat();
 
 // Sequencer / transport / MIDI-clock hooks (Phase 2). These forward to the
 // engine-owned SequencerTransport (firmware/daisy/src/sequencer/), which

@@ -13,6 +13,17 @@ versioning and release process.
 
 ### Added
 
+- Settings > Storage now offers a confirmed SD-card format flow that warns
+  **ALL CARD DATA WILL BE LOST**, stops playback, formats FAT/FAT32 and creates
+  the WaveX directory layout. Confirmation expires and is invalidated by card
+  changes; status polling never retries a format. Automatic formatting on mount
+  failure has been removed. Host/compile verified; destructive card tests remain
+  a separate bench step.
+- Instrument, Pattern and CV calibration saves check available card space
+  before creating or truncating files, including cluster rounding and directory
+  headroom. Full-card and free-space-query failures preserve existing files;
+  Instrument and Pattern pages report insufficient space explicitly.
+
 - Added manufacturer datasheets and RT1170 module/processor references under
   `hardware/datasheets/`, with source/revision indexing in `hardware/docs/index.md`
   and SHA-256 checksums for the downloaded PDFs.

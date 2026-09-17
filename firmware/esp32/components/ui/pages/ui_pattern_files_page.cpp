@@ -42,6 +42,8 @@ const char* errorText(uint8_t error) {
             return "Invalid or unsupported pattern file. The working pattern is unchanged.";
         case SEQ_FILE_CAPTURE_BUSY:
             return "Pattern kept changing during capture. Pause editing and save again.";
+        case SEQ_FILE_NO_SPACE:
+            return "Not enough free space on the card. Free space and try again.";
         default:
             return "Card operation failed. Check the card and retry.";
     }
@@ -143,7 +145,7 @@ void UIPatternFilesPage::service() {
     }
     SeqFileStatusMessage received;
     if (alive_ && inter_mcu_get_seq_file_status(&received) && received.request_id == read_id_ &&
-        received.busy <= 1 && received.error <= SEQ_FILE_CAPTURE_BUSY &&
+        received.busy <= 1 && received.error <= SEQ_FILE_NO_SPACE &&
         received.completed_op <= SEQ_FILE_NEW &&
         std::memchr(received.name, 0, sizeof(received.name))) {
         const bool changed = !valid_ || std::memcmp(&status_, &received, sizeof(status_));

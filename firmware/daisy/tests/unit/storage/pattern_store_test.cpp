@@ -53,6 +53,17 @@ class PatternStoreTest : public ::testing::Test {
     }
 };
 uint32_t PatternStoreTest::counter = 1000;
+TEST_F(PatternStoreTest, SaveChecksFreeSpaceBeforeCreatingAnyFile) {
+    auto& fs = MockFatFS::Instance();
+    fs.free_clusters = 0;
+    Request(SEQ_FILE_SAVE_COPY, "Full");
+    EXPECT_EQ(Complete().error, SEQ_FILE_NO_SPACE);
+    EXPECT_EQ(fs.GetFile("0:/wavex/patterns/Full.wxpat"), nullptr);
+    fs.free_result = FR_DISK_ERR;
+    Request(SEQ_FILE_SAVE_COPY, "Unknown");
+    EXPECT_EQ(Complete().error, SEQ_FILE_IO);
+    EXPECT_EQ(fs.GetFile("0:/wavex/patterns/Unknown.wxpat"), nullptr);
+}
 TEST_F(PatternStoreTest, SaveLoadRoundTripPreservesTempoAndStopsPlayback) {
     transport.ApplyPatternOp({SEQ_OP_SET_STEP_NOTE, 15, 63, 127, 0, 0});
     transport.ApplyPatternOp({SEQ_OP_SET_STEP, 15, 63, 1, 77, 0});

@@ -2426,6 +2426,7 @@ void OnCvCalSet(const CvCalMessage& m) {
     s_cv_backend.SetGroupCal(m.group, cal);
 
     if (m.persist) {
+        CloseWav();  // free-space discovery and writes own the foreground SD path
         CvCal table[WAVEX_ANALOG_CV_GROUPS_MAX];
         for (uint8_t g = 0; g < WAVEX_ANALOG_CV_GROUPS_MAX; ++g) {
             table[g] = s_cv_backend.GroupCal(g);
@@ -2517,6 +2518,31 @@ void OnSeqFileOp(const SeqFileOpMessage& request) {
     const bool accepted = WaveX::PatternStore::Request(request, s_pattern_exchange_storage.Get());
     if (accepted && (request.op == SEQ_FILE_SAVE_COPY || request.op == SEQ_FILE_LOAD))
         CloseWav();  // file jobs own SD bandwidth; resident Track voices continue
+}
+
+bool StorageJobBusy() {
+    return SfzLoader::Busy() || WaveX::PatternStore::Busy();
+}
+bool PrepareCardFormat() {
+    if (StorageJobBusy())
+        return false;
+    CloseWav();
+    WaveX::Sequencer::SequencerCommand command;
+    command.type = WaveX::Sequencer::SequencerCommandType::Transport;
+    command.transport.command = SEQ_TRANSPORT_STOP;
+    if (!s_seq_command_queue.Push(command))
+        return false;
+    ClearSequencerVoiceMap();
+    if (!StopTracksAndWait(0xFFFFu)) {
+        PublishSequencerVoiceMap();
+        return false;
+    }
+    return true;
+}
+void FinishCardFormat() {
+    // Resident PCM remains owned by its Tracks, just as on card removal.
+    // Save admission will reject the now-missing on-card dependencies.
+    PublishSequencerVoiceMap();
 }
 
 void PumpSequencerState() {

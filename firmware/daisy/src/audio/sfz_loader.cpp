@@ -16,6 +16,7 @@
 #include "sample_load_info.hpp"
 #include "sfz_import.hpp"
 #include "snapshot_mailbox.hpp"
+#include "storage/card_space.hpp"
 #include "storage/fatfs_wav_reader.hpp"
 #include "wav/wav_header_parser.hpp"
 #include <algorithm>
@@ -721,6 +722,9 @@ void ProbeSaveSample() {
 uint8_t SaveCopy() {
     auto& ins = s_bank->At(s_request.slot).instrument;
     const auto& doc = s_doc_storage.Get();
+    const auto space = Storage::CheckSaveSpace(Wxi::detail::TotalFileSize(doc));
+    if (space != Storage::SaveSpace::Ready)
+        return space == Storage::SaveSpace::Full ? INST_ERROR_NO_SPACE : INST_ERROR_IO;
     const FRESULT root = f_mkdir("0:/wavex");
     if (root != FR_OK && root != FR_EXIST)
         return INST_ERROR_IO;
