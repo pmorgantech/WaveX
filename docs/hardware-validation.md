@@ -15,6 +15,7 @@ this document owns the runnable checks and their validation status.
 - [HV-003 — Instrument save and recall admission](#hv-003--instrument-save-and-recall-admission)
 - [HV-004 — Stereo and Mono physical checks](#hv-004--stereo-and-mono-physical-checks)
 - [HV-005 — Phase 2 timing and soak gate](#hv-005--phase-2-timing-and-soak-gate)
+- [HV-006 — Mixer controls and master](#hv-006--mixer-controls-and-master)
 - [Recording a validation session](#recording-a-validation-session)
 - [Related](#related)
 
@@ -61,6 +62,8 @@ Use Passed or Failed after recording the corresponding evidence.
 | HV-003 | Instrument save/recall admission | Pending | Host/compile verified; large and admitted WAV fixtures needed |
 | HV-004 | Stereo/Mono physical follow-up | Partial | Switching reported working by user, 2026-09-16; remaining checks below |
 | HV-005 | Phase 2 timing and soak | Blocked (full gate) | Timing/soak can be run separately; complete gate still needs roadmap prerequisites |
+
+| HV-006 | Mixer controls, master and callback timing | Pending | Host/compile checks; physical audio and timing unrun |
 
 ## HV-001 — SD card formatting
 
@@ -172,6 +175,28 @@ and [performance acceptance policy](performance_monitoring.md).
 The complete Phase 2 gate also depends on unfinished MIDI clock, panel and
 session-persistence work listed in the roadmap. Passing these checks alone
 does not close it; add their runnable entries as those implementations arrive.
+
+## HV-006 — Mixer controls and master
+
+**Status:** Open — host/compile checks only. No physical results recorded.
+**Gate:** [Mixer v1](features/output-routing-and-mixer.md),
+[Phase 2 timing](roadmap.md). Introduced by the audible master/readback change.
+**Setup:** Matching ESP32/Daisy images, stereo sustained sample, mono sample,
+headphones and scope/audio capture; DWT and underrun telemetry available.
+
+- [ ] While voices and browser audition play, sweep master from silence to
+  unity to +6 dB. Both sides follow; unity preserves the prior level and zero
+  becomes silent after 5 ms. Meter levels follow the post-master output.
+- [ ] Repeat fast reversals and identical repeated commands; scope confirms
+  continuous ramps without resets or hard gain jumps. Verify legacy volume
+  controls and mixer master read back the same accepted target.
+- [ ] Compare DWT callback/control timing against the preceding image under
+  the same maximum-voice/filter/modulation workload. Record average, p95 and
+  maximum cycles, load, image identities and underrun counts; remain within
+  the callback budget. Complete HV-005's separate soak gate.
+
+**Blocker:** Hardware session pending. Record date, image hashes, measurements
+and capture/log evidence here; do not infer physical success from host tests.
 
 ## Recording a validation session
 

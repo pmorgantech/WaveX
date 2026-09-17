@@ -1,6 +1,7 @@
 #include "comm/log_ring.h"
 
 #include "../config.hpp"
+#include "audio/master_gain.hpp"
 #include "audio/parameter_locks.hpp"
 #if WAVEX_AUDIO_ENGINE_ENABLED
 
@@ -162,6 +163,7 @@ static MixerControlHandoff s_mixer_controls;
 // Meter subscription (MSG_MIX_OP SUB/UNSUB_METERS). Honoured as a flag now;
 // the MSG_MIX_METERS sender is stage 4 of output-routing-and-mixer.md §6, so
 // subscribing currently records intent and sends nothing.
+static MasterGain s_master_gain;
 static bool s_mix_meters_subscribed = false;
 
 // Main-loop instrument/extras edits publish complete per-Track values. The
@@ -1872,6 +1874,7 @@ void Init(DaisySeed& hw, float sample_rate, bool sdram_available) {
     // ramps, so nothing fades in at boot.
     s_track_mixer.Reset();
     s_mixer_controls.Init();
+    s_master_gain.Init(sample_rate);
     s_track_mixer.SetSampleRate(sample_rate);
     s_voice_manager.SetTrackMixer(&s_track_mixer);
 
@@ -2147,12 +2150,15 @@ void Callback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t
         }
     }
 
-    // Compute per-block meters
+    s_master_gain.SetTarget(s_track_mixer.MasterGain());
+
+    // Compute post-master per-block meters
     float sumL = 0.f, sumR = 0.f;
     float pkL = 0.f, pkR = 0.f;
     for (size_t i = 0; i < size; ++i) {
-        float l = out[0][i];
-        float r = out[1][i];
+        const float gain = s_master_gain.Next();
+        float l = out[0][i] *= gain;
+        float r = out[1][i] *= gain;
         sumL += l * l;
         sumR += r * r;
         float al = fabsf(l);
@@ -2231,7 +2237,6 @@ void OnMixOp(const MixOpMessage& m) {
         s_mix_meters_subscribed = (m.op == MIX_OP_SUB_METERS);
         return;
     }
-    // Master remains stored only: PARAM_VOLUME still owns the audible master.
     s_mixer_controls.Update(m);
 }
 
@@ -2294,6 +2299,11 @@ void OnTrackOp(const TrackOpMessage& m) {
  */
 void OnControlChange(const ControlChangeMessage& ctrl_msg) {
     const float norm = static_cast<float>(ctrl_msg.value) / 65535.0f;
+    if (ctrl_msg.parameter == PARAM_VOLUME) {
+        s_mixer_controls.Update(
+            MixOpMessage{MIX_OP_SET_MASTER, 0, Mix::GainDbToWire(Mix::LinearToDb(norm))});
+        return;
+    }
     const uint8_t track = ctrl_msg.channel & 0x0Fu;
     bool para_changed = false;
     bool voice_changed = false;
@@ -2372,7 +2382,7 @@ void OnControlChange(const ControlChangeMessage& ctrl_msg) {
             // param-locks-and-modulation.md's own note that this alias's
             // behavior is deleted in the same commit the real thing lands.
             // env_to_cutoff keeps its compiled-in default (0.8) since Stage A
-            // is deferred hardware anyway. PARAM_VOLUME / LFO_*: no Stage A
+            // is deferred hardware anyway. LFO_*: no Stage A
             // consumer either (the analog VCA is the level control; a global
             // LFO is future work).
             break;

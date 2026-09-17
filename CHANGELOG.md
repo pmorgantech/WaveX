@@ -454,6 +454,10 @@ versioning and release process.
 
 ### Changed
 
+- Mixer master now controls the final stereo output through a 5 ms ramp, with
+  correlated target readback. Legacy volume controls use the same master target.
+  Hardware click and callback-timing validation remains open (HV-006).
+
 - Hardware Make targets and KiCad/Python IPC tooling now run on the host with
   KiCad 10. Firmware builds/tests, pre-commit, and commits remain in the
   devcontainer; no container KiCad installation is required. Hardware targets

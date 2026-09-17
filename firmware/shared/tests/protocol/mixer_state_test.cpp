@@ -61,3 +61,28 @@ TEST(MixerStateProtocol, SoloMaskRoundTripDoesNotReuseStoredMuteOpcode) {
         EXPECT_EQ(out.value, mask);
     }
 }
+
+TEST(MixerStateProtocol, MasterReadbackRoundTripAndValidation) {
+    uint8_t packet[128]{};
+    MixStateRequest request{42, MIX_MASTER_TRACK}, decoded;
+    ASSERT_GT(ProtocolHandler::CreatePacket(
+                  packet, sizeof(packet), MSG_MIX_STATE_REQ, &request, sizeof(request)),
+              0);
+    ASSERT_TRUE(
+        ProtocolHandler::ParseMessage(packet, MSG_MIX_STATE_REQ, &decoded, sizeof(decoded)));
+    EXPECT_EQ(decoded.track, MIX_MASTER_TRACK);
+    for (uint16_t gain: {0, 6000, 6600}) {
+        MixStateMessage state{42, MIX_MASTER_TRACK, 1, gain, 32768, 0}, out;
+        ASSERT_TRUE(IsValidMixState(state));
+        ASSERT_GT(ProtocolHandler::CreatePacket(
+                      packet, sizeof(packet), MSG_MIX_STATE, &state, sizeof(state)),
+                  0);
+        ASSERT_TRUE(ProtocolHandler::ParseMessage(packet, MSG_MIX_STATE, &out, sizeof(out)));
+        EXPECT_EQ(std::memcmp(&state, &out, sizeof(state)), 0);
+        state.mute = 1;
+        EXPECT_FALSE(IsValidMixState(state));
+        state.mute = 0;
+        state.pan = 0;
+        EXPECT_FALSE(IsValidMixState(state));
+    }
+}

@@ -59,7 +59,14 @@ class MixerControlHandoff {
         Protocol::MixStateMessage state{};
         state.request_id = request.request_id;
         state.track = request.track;
-        if (!request.request_id || request.track >= Mix::kNumTracks)
+        if (!request.request_id)
+            return state;
+        if (request.track == Protocol::MIX_MASTER_TRACK) {
+            state.valid = 1;
+            state.gain = Mix::GainDbToWire(Mix::LinearToDb(pending_.master_gain));
+            return state;
+        }
+        if (request.track >= Mix::kNumTracks)
             return state;
         const auto& strip = pending_.tracks[request.track];
         state.valid = 1;

@@ -2,6 +2,8 @@
 
 #include <gtest/gtest.h>
 
+#include "audio/master_gain.hpp"
+
 namespace {
 using namespace WaveX;
 using namespace WaveX::Protocol;
@@ -125,3 +127,36 @@ TEST_F(MixerControlHandoffTest, SoloSwitchAndClearAreAtomicAndKeepManualMutePrio
 }
 
 }  // namespace
+
+TEST(MasterGainTest, RampsBothDirectionsAndRetargetsFromCurrentGain) {
+    WaveX::AudioEngine::MasterGain gain;
+    gain.Init(48000);
+    EXPECT_FLOAT_EQ(gain.Next(), 1);
+    gain.SetTarget(0);
+    for (int i = 0; i < 120; ++i) {
+        gain.SetTarget(0);  // block refresh never restarts an unchanged ramp
+        EXPECT_NEAR(gain.Next(), 1.0f - (i + 1) / 240.0f, 0.00001f);
+    }
+    gain.SetTarget(2);
+    for (int i = 0; i < 240; ++i)
+        EXPECT_NEAR(gain.Next(), 0.5f + (i + 1) * 1.5f / 240, 0.00002f);
+    EXPECT_FLOAT_EQ(gain.Next(), 2);
+    gain.SetTarget(0);
+    for (int i = 0; i < 240; ++i)
+        gain.Next();
+    EXPECT_FLOAT_EQ(gain.Next(), 0);
+}
+TEST(MixerMasterTest, ReadbackAndCallbackShareOneTarget) {
+    WaveX::AudioEngine::MixerControlHandoff handoff;
+    WaveX::Mix::TrackMixer mixer;
+    handoff.Init();
+    for (uint16_t value: {0, 5400, 6000, 6600}) {
+        handoff.Update({MIX_OP_SET_MASTER, 0, value});
+        auto state = handoff.Read({42, MIX_MASTER_TRACK});
+        ASSERT_TRUE(IsValidMixState(state));
+        EXPECT_EQ(state.gain, value);
+        handoff.ApplyTo(mixer);
+        EXPECT_FLOAT_EQ(mixer.MasterGain(),
+                        WaveX::Mix::DbToLinear(WaveX::Mix::WireToGainDb(value)));
+    }
+}

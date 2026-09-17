@@ -224,6 +224,8 @@ struct MixOpMessage {
 
 // Readback is the foreground-owned accepted target, applied by the existing
 // immutable mixer handoff at the next audio block. It is not ramp telemetry.
+constexpr uint8_t MIX_MASTER_TRACK = 0xFF;  // read master gain; pan=center, mute=0
+
 struct MixStateRequest {
     uint32_t request_id = 0;
     uint8_t track = 0;
@@ -241,7 +243,9 @@ static_assert(sizeof(MixStateRequest) == 5, "Mixer request wire layout");
 static_assert(sizeof(MixStateMessage) == 11, "Mixer state wire layout");
 
 inline bool IsValidMixState(const MixStateMessage& m) {
-    return m.request_id != 0 && m.track < 16 && m.valid == 1 && m.gain <= 6600 && m.mute <= 1;
+    return m.request_id != 0 && m.valid == 1 && m.gain <= 6600 &&
+           ((m.track < 16 && m.mute <= 1) ||
+            (m.track == MIX_MASTER_TRACK && m.pan == 32768 && m.mute == 0));
 }
 
 /// Tracks a MixMetersMessage reports on. Matches WaveX::Mix::kNumTracks and

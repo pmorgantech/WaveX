@@ -3,8 +3,8 @@
 **Status**: Partially implemented. The engine Track mix/handoff and control
 protocol exist. Project (the former Performance/Track root) now exposes selected-Track
 level, pan/balance and mute with authoritative readback, alongside Instrument assignment and
-MIDI routing. The full strip view, audible mixer-master
-integration and meter UI remain open; sections below retain their target-design
+MIDI routing. The master now applies to the final stereo sum with a 5 ms ramp; its
+accepted target has correlated readback. The full strip view and meter UI remain open; sections below retain their target-design
 role. See [UI architecture](../ui-architecture.md#project-page). Mixer v1 is Phase 2.5 (per-track control is core groovebox workflow); routing matrix is Phase 3/5 (needs Stage B hardware / send FX).
 **Dependencies**: `instrument-model.md` (slots are the mixer's tracks), output sink seam (`architecture.md` §5.4, done), Stage B TDM path (Phase 3) for physical multi-out.
 **Lineage**: E-mu presets routed to main/sub outputs per preset — the studio workflow was stems-per-instrument. Stage B's per-voice analog outs recreate that physically; the mixer here is the digital control layer over both stages.
@@ -22,7 +22,7 @@ struct TrackMix {           // ×16, engine-global, control-tick applied
     uint8_t mute = 0;       // soft mute: 5 ms gain ramp, not a hard cut (no clicks)
     uint8_t solo = 0;       // solo bus logic on the ESP32 side → emitted as mutes
 };
-+ master: float master_gain; (existing PARAM_VOLUME becomes explicitly master-scoped)
++ master: float master_gain; (PARAM_VOLUME aliases the same target)
 ```
 
 - Stereo-aware placement: Instrument and Track gains multiply. Instrument/zone
@@ -36,6 +36,15 @@ struct TrackMix {           // ×16, engine-global, control-tick applied
   current user mute targets, including edits made while soloed. Readback and
   Project storage use user mutes, never the temporary Solo exclusions.
 - Mute ramps ride the slew engine (`scenes-and-performance.md` §3) — one mechanism.
+
+Master gain is callback-owned and applied after audition and voice summation,
+before the existing stereo meters. Both channels use the same sample gain.
+Repeated identical controls do not restart its fixed 5 ms ramp; a new target
+starts at the current gain. Legacy `PARAM_VOLUME` maps linear 0–1 to the same
+foreground master target; mixer controls extend the range to +6 dB. The ramp
+is fused into the existing output/meter traversal (no extra buffer or traversal).
+Hardware click checks and DWT timing remain open in
+[HV-006](../hardware-validation.md#hv-006--mixer-controls-and-master).
 
 ## 2. Metering per track
 
