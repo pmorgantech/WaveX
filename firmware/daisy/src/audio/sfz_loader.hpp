@@ -31,6 +31,24 @@ void Reset();
 bool Begin(const WaveX::Protocol::InstOpMessage& request);
 void Pump(SamplePool& pool, SampleMemMgr& memory, uint8_t* io_buffer, uint32_t io_buffer_bytes);
 bool Busy();
+// Project restore: private empty Tracks plus a staged Pool with borrowed live
+// PCM retained. Busy() covers the entire lease; normal Pump/Begin cannot touch
+// it. Each Track is loaded once. Queries keep reporting the live bank.
+// The caller freezes live Pool/Track edits, owns both scratch objects and
+// drives only PumpProjectLoad until each Track finishes. No editor undo,
+// revision or callback modulation state changes until FinishProjectLoad(true).
+bool BeginProjectLoad(Tracks& candidate);
+bool ProjectLoadActive();
+bool BeginProjectTrack(uint8_t track, const char* path);
+bool ProjectTrackBusy();
+uint8_t ProjectTrackError();
+void PumpProjectLoad(SamplePool&, SampleMemMgr&, uint8_t* io, uint32_t bytes);
+void CancelProjectTrack(SamplePool&, SampleMemMgr&);
+// Commit only after every dependency loads and the engine's audio stop fence.
+// Keep notes/transport gated until Pool commit, Track commit and publication
+// of all prepared voice maps finish. A failed/cancelled session cannot commit.
+// Abort requires CancelProjectTrack first, then caller rolls back staged PCM.
+bool FinishProjectLoad(bool commit);
 // Project-owned WXI copy. Uses normal sample admission, but does not rename
 // the live Instrument, apply its undo point, or emit an editor completion.
 // Parent directory must already exist; destination is never overwritten.

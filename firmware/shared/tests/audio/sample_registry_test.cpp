@@ -274,3 +274,33 @@ TEST_F(Fixture, InvalidOrOverlongPathsCannotAliasResidentEntries) {
     ASSERT_NE(reg.FindByPath(longest.c_str()), nullptr);
     EXPECT_EQ(reg.FindByPath(longest.c_str())->sample_id, id);
 }
+
+TEST_F(Fixture, ExplicitSnapshotKeepsIdentityButOwnsIndependentRecords) {
+    const uint16_t a = admit("/a.wav");
+    const uint16_t b = admit("/b.wav");
+    reg.SetUsedBy(a, 15, true);
+    reg.SetPinned(b, true);
+    reg.NoteNewest(b);
+    reg.Find(a)->payload.bytes = 1234;
+    std::vector<Registry::Record> candidate_storage(kCap);
+    Registry candidate(candidate_storage.data());
+    candidate.CopyStateFrom(reg);
+    ASSERT_NE(candidate.Find(a), nullptr);
+    EXPECT_NE(candidate.Find(a), reg.Find(a));
+    EXPECT_EQ(candidate.Count(), reg.Count());
+    EXPECT_EQ(candidate.Newest(), b);
+    EXPECT_EQ(candidate.Find(a)->used_by, 0x8000);
+    EXPECT_TRUE(candidate.Find(b)->pinned);
+    candidate.Find(a)->payload.bytes = 7;
+    candidate.Remove(b);
+    Registry::Record* next = nullptr;
+    ASSERT_EQ(candidate.AdmitPath("/c.wav", &next), Registry::Admit::Ok);
+    EXPECT_EQ(reg.Find(a)->payload.bytes, 1234u);
+    EXPECT_NE(reg.Find(b), nullptr);
+    EXPECT_EQ(reg.Find(next->sample_id), nullptr);
+    EXPECT_EQ(reg.Newest(), b);
+    reg.CopyStateFrom(candidate);
+    EXPECT_EQ(reg.Find(a)->payload.bytes, 7u);
+    EXPECT_EQ(reg.Find(b), nullptr);
+    EXPECT_NE(reg.Find(next->sample_id), nullptr);
+}

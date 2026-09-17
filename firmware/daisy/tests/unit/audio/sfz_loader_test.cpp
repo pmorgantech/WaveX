@@ -5,6 +5,7 @@
 #include "comm/daisy_uart_link.h"
 #include "fatfs_mock.h"
 
+#include "audio/sample_pool_stage.hpp"
 #include "wxi/wxi.hpp"
 #include <array>
 #include <cstring>
@@ -1259,3 +1260,152 @@ TEST_F(SfzLoaderTest, SuccessfulSaveAppliesAudibleSettingsButFailedSaveKeepsUndo
     ASSERT_TRUE(SfzLoader::BindSample(pool_, memory_, 0, SampleId("/kits/a.wav")));
     EXPECT_FALSE(SfzLoader::ReadEditState(0).dirty);
 }
+
+namespace {
+TEST_F(SfzLoaderTest, ProjectStagingFailurePreservesLiveTracksUndoAndPcm) {
+    ASSERT_TRUE(Load(0));
+    // Preserve an actual live edit and its Revert point.
+    InstEditOpMessage edit{};
+    edit.request_id = ++next_request_;
+    edit.track = 0;
+    edit.op = INST_EDIT_FILTER;
+    edit.revision = SfzLoader::ReadEditState(0).revision;
+    edit.sound.cutoff_hz = 1234;
+    ASSERT_TRUE(SfzLoader::OnEditOp(edit));
+    ModSlot modulation;
+    modulation.source = SRC_LFO1;
+    modulation.dest = DEST_CUTOFF;
+    modulation.depth = 1234;
+    ASSERT_TRUE(SfzLoader::SetModSlot(0, 0, modulation));
+    ASSERT_EQ(SfzLoader::GetModSlots(0)[0].depth, 1234);
+    const auto before = SfzLoader::ReadEditState(0);
+    const uint16_t old_a = SampleId("/kits/a.wav");
+    const auto old_handle = pool_.Find(old_a)->payload.handle;
+    wxsamp_stats_t initial{};
+    memory_.stats(&initial);
+    std::vector<SamplePool::Record> candidate_records(WAVEX_SAMPLE_POOL_CAPACITY);
+    SamplePool candidate(candidate_records.data());
+    SamplePoolStage pool_stage(pool_, candidate, memory_);
+    Tracks tracks;
+    ASSERT_TRUE(pool_stage.Begin());
+    ASSERT_TRUE(SfzLoader::BeginProjectLoad(tracks));
+    ASSERT_TRUE(SfzLoader::Busy());
+    ASSERT_FALSE(SfzLoader::Begin(InstOpMessage(200, 0, INST_OP_SFZ_LOAD, "/kits/kit.sfz")));
+    const char fresh[] = "<region> sample=new.wav key=60\n";
+    MockFatFS::Instance().AddFile("/kits/new.sfz", {fresh, fresh + std::strlen(fresh)});
+    MockFatFS::Instance().AddFile("/kits/new.wav", PcmWave());
+    ASSERT_TRUE(SfzLoader::BeginProjectTrack(0, "/kits/new.sfz"));
+    for (int i = 0; i < 1000 && SfzLoader::ProjectTrackBusy(); ++i)
+        SfzLoader::PumpProjectLoad(candidate, memory_, io_.data(), io_.size());
+    ASSERT_FALSE(SfzLoader::ProjectTrackBusy());
+    ASSERT_EQ(SfzLoader::ProjectTrackError(), INST_ERROR_NONE);
+    ASSERT_NE(candidate.FindByPath("/kits/new.wav"), nullptr);
+    EXPECT_EQ(pool_.FindByPath("/kits/new.wav"), nullptr);
+    EXPECT_STREQ(SfzLoader::TrackName(0), "kit.sfz");
+    EXPECT_STREQ(tracks.At(0).instrument.name, "new.sfz");
+    EXPECT_EQ(SfzLoader::GetModSlots(0)[0].depth, 1234);
+    EXPECT_EQ(SfzLoader::ReadEditState(0).revision, before.revision);
+    EXPECT_EQ(SfzLoader::ReadEditState(0).dirty, before.dirty);
+    // Reusing a staged Track would let the ordinary loader free borrowed PCM.
+    EXPECT_FALSE(SfzLoader::BeginProjectTrack(0, "/kits/kit.sfz"));
+    ASSERT_TRUE(SfzLoader::BeginProjectTrack(1, "/kits/missing.sfz"));
+    for (int i = 0; i < 1000 && SfzLoader::ProjectTrackBusy(); ++i)
+        SfzLoader::PumpProjectLoad(candidate, memory_, io_.data(), io_.size());
+    ASSERT_NE(SfzLoader::ProjectTrackError(), INST_ERROR_NONE);
+    EXPECT_FALSE(SfzLoader::FinishProjectLoad(true));
+    ASSERT_TRUE(SfzLoader::FinishProjectLoad(false));
+    pool_stage.Rollback();
+    EXPECT_EQ(pool_.Find(old_a)->used_by, 1);
+    void* pcm = nullptr;
+    EXPECT_TRUE(memory_.ptr(old_handle, &pcm));
+    EXPECT_STREQ(SfzLoader::TrackName(0), "kit.sfz");
+    EXPECT_EQ(SfzLoader::ReadEditState(0).revision, before.revision);
+    EXPECT_EQ(SfzLoader::ReadEditState(0).dirty, before.dirty);
+    wxsamp_stats_t after{};
+    memory_.stats(&after);
+    EXPECT_EQ(after.large_free_bytes, initial.large_free_bytes);
+    EXPECT_EQ(after.small_free_bytes, initial.small_free_bytes);
+}
+TEST_F(SfzLoaderTest, ProjectCommitRetainsSharedAndPinnedPcmAndPublishesOnlyAtFinish) {
+    ASSERT_TRUE(Load(0));
+    const uint16_t a = SampleId("/kits/a.wav");
+    const uint16_t b = SampleId("/kits/b.wav");
+    AddResidentWave("/kits/pinned.wav", 8);
+    const uint16_t pinned = SampleId("/kits/pinned.wav");
+    pool_.SetPinned(pinned, true);
+    std::vector<SamplePool::Record> candidate_records(WAVEX_SAMPLE_POOL_CAPACITY);
+    SamplePool candidate(candidate_records.data());
+    SamplePoolStage pool_stage(pool_, candidate, memory_);
+    Tracks tracks;
+    ASSERT_TRUE(pool_stage.Begin());
+    ASSERT_TRUE(SfzLoader::BeginProjectLoad(tracks));
+    const char shared[] = "<region> sample=a.wav key=60\n";
+    MockFatFS::Instance().AddFile("/kits/shared.sfz", {shared, shared + std::strlen(shared)});
+    ASSERT_TRUE(SfzLoader::BeginProjectTrack(15, "/kits/shared.sfz"));
+    for (int i = 0; i < 1000 && SfzLoader::ProjectTrackBusy(); ++i)
+        SfzLoader::PumpProjectLoad(candidate, memory_, io_.data(), io_.size());
+    ASSERT_EQ(SfzLoader::ProjectTrackError(), INST_ERROR_NONE);
+    EXPECT_FALSE(SfzLoader::TrackLoaded(15));
+    EXPECT_EQ(pool_.Find(a)->used_by, 1);
+    EXPECT_EQ(candidate.Find(a)->used_by, 0x8000);
+    // Host model's stop fence: no callback runs in this fixture.
+    ASSERT_TRUE(pool_stage.Commit());
+    ASSERT_TRUE(SfzLoader::FinishProjectLoad(true));
+    EXPECT_FALSE(SfzLoader::TrackLoaded(0));
+    EXPECT_TRUE(SfzLoader::TrackLoaded(15));
+    EXPECT_STREQ(SfzLoader::TrackName(15), "shared.sfz");
+    EXPECT_EQ(pool_.Find(a)->used_by, 0x8000);
+    EXPECT_EQ(pool_.Find(b), nullptr);  // unpinned old dependency retired
+    ASSERT_NE(pool_.Find(pinned), nullptr);
+    EXPECT_EQ(pool_.Find(pinned)->used_by, 0);
+    EXPECT_TRUE(pool_.Find(pinned)->pinned);
+    EXPECT_FALSE(SfzLoader::Busy());
+}
+}  // namespace
+
+namespace {
+TEST_F(SfzLoaderTest, ProjectCloseFailureAndCancellationDoNotReleaseBorrowedSamples) {
+    ASSERT_TRUE(Load(0));
+    const uint16_t old = SampleId("/kits/a.wav");
+    std::vector<SamplePool::Record> candidate_records(WAVEX_SAMPLE_POOL_CAPACITY);
+    SamplePool candidate(candidate_records.data());
+    SamplePoolStage pool_stage(pool_, candidate, memory_);
+    Tracks tracks;
+    ASSERT_TRUE(pool_stage.Begin());
+    ASSERT_TRUE(SfzLoader::BeginProjectLoad(tracks));
+    ASSERT_TRUE(SfzLoader::BeginProjectTrack(1, "/kits/kit.sfz"));
+    MockFatFS::Instance().read_close_result = FR_DISK_ERR;
+    for (int i = 0; i < 1000 && SfzLoader::ProjectTrackBusy(); ++i)
+        SfzLoader::PumpProjectLoad(candidate, memory_, io_.data(), io_.size());
+    EXPECT_EQ(SfzLoader::ProjectTrackError(), INST_ERROR_IO);
+    EXPECT_FALSE(SfzLoader::FinishProjectLoad(true));
+    ASSERT_TRUE(SfzLoader::FinishProjectLoad(false));
+    pool_stage.Rollback();
+    MockFatFS::Instance().read_close_result = FR_OK;
+    ASSERT_TRUE(pool_stage.Begin());
+    ASSERT_TRUE(SfzLoader::BeginProjectLoad(tracks));
+    const char sfz[] = "<region> sample=cancel.wav key=60\n";
+    MockFatFS::Instance().AddFile("/kits/cancel.sfz", {sfz, sfz + std::strlen(sfz)});
+    MockFatFS::Instance().AddFile("/kits/cancel.wav", PcmWave(65536));
+    wxsamp_stats_t before{};
+    memory_.stats(&before);
+    ASSERT_TRUE(SfzLoader::BeginProjectTrack(2, "/kits/cancel.sfz"));
+    for (int i = 0; i < 1000 && !candidate.FindByPath("/kits/cancel.wav"); ++i)
+        SfzLoader::PumpProjectLoad(candidate, memory_, io_.data(), io_.size());
+    ASSERT_NE(candidate.FindByPath("/kits/cancel.wav"), nullptr);
+    ASSERT_TRUE(SfzLoader::ProjectTrackBusy());
+    SfzLoader::CancelProjectTrack(candidate, memory_);
+    wxsamp_stats_t after{};
+    memory_.stats(&after);
+    EXPECT_EQ(after.large_free_bytes, before.large_free_bytes);
+    EXPECT_EQ(after.small_free_bytes, before.small_free_bytes);
+    EXPECT_FALSE(SfzLoader::ProjectTrackBusy());
+    ASSERT_TRUE(SfzLoader::FinishProjectLoad(false));
+    pool_stage.Rollback();
+    ASSERT_NE(pool_.Find(old), nullptr);
+    EXPECT_EQ(pool_.Find(old)->used_by, 1);
+    EXPECT_TRUE(SfzLoader::TrackLoaded(0));
+    EXPECT_FALSE(SfzLoader::TrackLoaded(1));
+    EXPECT_FALSE(SfzLoader::TrackLoaded(2));
+}
+}  // namespace

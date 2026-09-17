@@ -74,6 +74,10 @@ enum class Phase : uint8_t {
 // these expanded Instruments out of AXI SRAM preserves SD buffers and heap.
 alignas(Tracks) static uint8_t s_bank_storage[sizeof(Tracks)] WAVEX_BACKGROUND_DATA;
 static Tracks* s_bank = nullptr;
+static Tracks* s_project_bank = nullptr;
+static bool s_in_project_step = false;
+static bool s_project_close_failed = false;
+static bool s_project_failed = false;
 static InstrumentSoundUndo s_sound_undo[kNumTracks];
 static InstEditSyncMessage s_action_reply;
 static uint32_t s_action_completed[kNumTracks]{};
@@ -84,6 +88,8 @@ static SnapshotMailbox<ModTable> s_mod_mailboxes[kNumTracks];
 static ModTable s_mod_active[kNumTracks];  // callback-owned after Reset()
 
 static void PublishModSlots(uint8_t track) {
+    if (s_in_project_step)
+        return;
     ModTable slots;
     const ModSlot* stored = s_bank->At(track).instrument.mod_slots;
     std::copy(stored, stored + kMaxModSlots, slots.begin());
@@ -175,7 +181,8 @@ void SendStatus(uint8_t state, uint8_t error = INST_ERROR_NONE) {
 
 void CloseFile() {
     if (s_file_open) {
-        f_close(&s_file);
+        if (f_close(&s_file) != FR_OK && s_in_project_step)
+            s_project_close_failed = true;
         s_file_open = false;
     }
 }
@@ -195,6 +202,8 @@ static_assert(kMaxZones == INST_KEY_ZONE_COUNT, "Key Map covers every Instrument
 // Main-loop identity: every map mutation/replacement invalidates stale editors.
 static uint32_t s_key_revision[kNumTracks]{};
 void BumpKeyRevision(uint8_t track) {
+    if (s_in_project_step)
+        return;
     if (++s_key_revision[track] == 0)
         ++s_key_revision[track];
 }
@@ -205,7 +214,8 @@ void ReleaseTrack(SamplePool& pool,
                   SampleMemMgr& memory,
                   uint8_t track,
                   uint16_t keep_sample_id = 0) {
-    s_sound_undo[track].Apply();
+    if (!s_in_project_step)
+        s_sound_undo[track].Apply();
     BumpKeyRevision(track);
     pool.ClearTrack(track, [&](uint16_t id) {
         if (id != keep_sample_id) {
@@ -239,6 +249,8 @@ void AbandonLoad(SamplePool* pool, SampleMemMgr* memory) {
 }
 
 void Fail(SamplePool* pool, SampleMemMgr* memory, uint8_t error) {
+    if (s_in_project_step)
+        s_project_failed = true;
     CloseFile();
     AbandonLoad(pool, memory);
     if (s_project_snapshot) {
@@ -795,6 +807,9 @@ uint8_t SaveCopy() {
 }  // namespace
 
 void Reset() {
+    s_project_bank = nullptr;
+    s_in_project_step = false;
+    s_project_close_failed = false;
     s_project_snapshot = false;
     s_snapshot_error = INST_ERROR_NONE;
     CloseFile();
@@ -849,6 +864,8 @@ uint8_t ProjectSnapshotError() {
 }
 
 bool Begin(const InstOpMessage& request) {
+    if (s_project_bank && !s_in_project_step)
+        return false;
     if (request.op >= INST_OP_NEW && request.op <= INST_OP_NEW_KEYBOARD) {
         if (request.slot >= kNumTracks || request.request_id == 0) {
             QueueZoneReply(request.request_id, request.slot, INST_ERROR_BAD_FILE);
@@ -953,7 +970,7 @@ bool Begin(const InstOpMessage& request) {
 }
 
 bool Busy() {
-    return s_phase != Phase::Idle;
+    return s_phase != Phase::Idle || (s_project_bank && !s_in_project_step);
 }
 
 bool TrackLoading(uint8_t slot) {
@@ -968,6 +985,8 @@ uint8_t VoiceStopTrack() {
 }
 
 void ConfirmVoicesStopped(SamplePool& pool, SampleMemMgr& memory) {
+    if (s_project_bank && !s_in_project_step)
+        return;
     if (s_phase != Phase::AwaitVoiceStop)
         return;
 
@@ -1396,6 +1415,8 @@ void PumpEditorReply() {
 }
 
 void Pump(SamplePool& pool, SampleMemMgr& memory, uint8_t* io_buffer, uint32_t io_buffer_bytes) {
+    if (s_project_bank && !s_in_project_step)
+        return;
     if (s_phase == Phase::Idle || s_phase == Phase::AwaitVoiceStop)
         return;
     if (!memory.initialized() || !io_buffer || io_buffer_bytes < 512) {
@@ -1716,6 +1737,84 @@ bool Load(const char* path,
     return s_status.state == INST_STATUS_LOAD_COMPLETE && TrackLoaded(slot);
 }
 
+bool BeginProjectLoad(Tracks& candidate) {
+    if (Busy())
+        return false;
+    for (uint8_t track = 0; track < kNumTracks; ++track)
+        if (candidate.At(track).instrument.origin != InstrumentOrigin::None)
+            return false;
+    s_project_failed = false;
+    s_project_bank = &candidate;
+    return true;
+}
+bool ProjectLoadActive() {
+    return s_project_bank != nullptr;
+}
+bool ProjectTrackBusy() {
+    return s_project_bank && s_phase != Phase::Idle;
+}
+uint8_t ProjectTrackError() {
+    return s_status.error;
+}
+bool BeginProjectTrack(uint8_t track, const char* path) {
+    if (!s_project_bank || s_project_failed || s_phase != Phase::Idle || track >= kNumTracks ||
+        !path || strnlen(path, sizeof(s_request.path)) == sizeof(s_request.path) ||
+        s_project_bank->At(track).instrument.origin != InstrumentOrigin::None)
+        return false;
+    s_in_project_step = true;
+    s_project_close_failed = false;
+    auto* live = s_bank;
+    s_bank = s_project_bank;
+    const bool accepted = Begin(InstOpMessage(0, track, INST_OP_SFZ_LOAD, path));
+    if (!accepted)
+        s_project_failed = true;
+    s_bank = live;
+    s_in_project_step = false;
+    return accepted;
+}
+void PumpProjectLoad(SamplePool& pool, SampleMemMgr& memory, uint8_t* io, uint32_t bytes) {
+    if (!s_project_bank || s_phase == Phase::Idle)
+        return;
+    auto* live = s_bank;
+    s_bank = s_project_bank;
+    s_in_project_step = true;
+    // Candidate Tracks have never sounded; their stop acknowledgement is
+    // immediate. The live bank and its callback publications are untouched.
+    if (VoiceStopTrack() != 0xff)
+        ConfirmVoicesStopped(pool, memory);
+    else
+        Pump(pool, memory, io, bytes);
+    if (s_project_close_failed)
+        Fail(&pool, &memory, INST_ERROR_IO);
+    s_in_project_step = false;
+    s_bank = live;
+}
+void CancelProjectTrack(SamplePool& pool, SampleMemMgr& memory) {
+    if (!s_project_bank || s_phase == Phase::Idle)
+        return;
+    auto* live = s_bank;
+    s_bank = s_project_bank;
+    s_in_project_step = true;
+    Fail(&pool, &memory, INST_ERROR_BAD_FILE);
+    s_in_project_step = false;
+    s_bank = live;
+}
+bool FinishProjectLoad(bool commit) {
+    if (!s_project_bank || s_phase != Phase::Idle || (commit && s_project_failed))
+        return false;
+    if (commit)
+        *s_bank = *s_project_bank;
+    s_project_bank = nullptr;
+    if (commit) {
+        for (uint8_t track = 0; track < kNumTracks; ++track) {
+            s_sound_undo[track].Apply();
+            BumpKeyRevision(track);
+            PublishModSlots(track);
+        }
+    }
+    return true;
+}
+
 bool TrackLoaded(uint8_t slot) {
     return slot < kNumTracks && s_bank->At(slot).instrument.origin != InstrumentOrigin::None;
 }
@@ -1814,7 +1913,8 @@ const char* TrackName(uint8_t slot) {
     // A load in flight has not reached Commit, so the bank still holds the
     // PREVIOUS instrument for this slot - naming that would be actively
     // misleading. The request's own path is the truth until Commit runs.
-    if (TrackLoading(slot) && !s_key_assignment && s_request.op != INST_OP_SET_PAD_SAMPLE)
+    if (!s_project_bank && TrackLoading(slot) && !s_key_assignment &&
+        s_request.op != INST_OP_SET_PAD_SAMPLE)
         return Basename(s_request.path);
     return s_bank->At(slot).instrument.name;
 }

@@ -13,6 +13,10 @@ versioning and release process.
 
 ### Added
 
+- Added isolated Project Instrument/Pool staging with rollback of newly loaded
+  PCM, preserved live edits/modulation, and explicit commit after dependency
+  admission. Session orchestration and the Project file UI remain open.
+
 - Mixer Track peak bars now use 40 ms peak-hold snapshots with a renewable
   subscription, three-second backend timeout and stale-display clearing.
   Meter capture and UI lifecycle are host-tested; DWT/link/soak checks remain

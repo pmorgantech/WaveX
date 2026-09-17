@@ -3046,6 +3046,8 @@ void OnInstrumentOp(const InstOpMessage& request) {
 }
 
 void PumpInstrumentLoad() {
+    if (SfzLoader::ProjectLoadActive())
+        return;
     SfzLoader::PumpEditorReply();
     if (!s_pool) {
         return;

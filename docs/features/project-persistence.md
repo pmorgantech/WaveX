@@ -1,8 +1,9 @@
 # Project persistence
 
 **Status:** Project data model and cooperative WXCF codec are host-tested.
-The cooperative SD file job is implemented and host-testable; session capture,
-restore, project selection and song playback are not connected
+The cooperative SD file job and isolated Instrument/Pool load staging are
+implemented and host-testable; session capture, restore orchestration,
+project selection and song playback are not connected
 yet. This is the persistence foundation for Phase 2, not a completed save/load
 workflow or power-loss guarantee.
 
@@ -10,6 +11,7 @@ workflow or power-loss guarantee.
 
 - [Ownership and contents](#ownership-and-contents)
 - [File transaction](#file-transaction)
+- [Isolated load staging](#isolated-load-staging)
 - [Remaining device work](#remaining-device-work)
 - [Validation](#validation)
 - [Related](#related)
@@ -77,6 +79,29 @@ The session owner must keep save input immutable for both encoding passes and
 must retain its scratch until completion. This adapter does not yet capture
 Instruments or provide a user-visible Project save/load operation.
 
+## Isolated load staging
+
+The loader can stage a Project's Instruments into a separate, initially empty
+Track bank. The private Sample Pool copies metadata and stable IDs into its
+own record storage, borrows existing PCM without changing live ownership, and
+admits new samples only into the candidate. Each candidate Track loads once.
+Live names, editor revisions, Revert points and callback modulation tables
+remain unchanged during staging. Close failures, missing dependencies and
+cancellation latch failure and prevent commit.
+
+Abort first cancels/drains the loader, then releases only newly admitted PCM.
+Commit requires every dependency to succeed and the engine's audio stop
+acknowledgement. The transaction owner keeps notes and transport gated while
+it retires unreferenced/unpinned old PCM, installs the candidate Pool and Track
+bank, and publishes all prepared voice maps. Existing explicit user pins are
+retained. Ordinary loader pumping defers throughout the staging lease.
+
+The session coordinator must reserve candidate storage and freeze live edits
+for the lease. Staging does not reclaim the current session's memory for new
+samples: insufficient headroom must fail while retaining the old session.
+These primitives are not yet a user-visible or automatically orchestrated
+Project load operation.
+
 ## Remaining device work
 
 1. Reserve scratch and coordinate Pattern capture, Track edits and Instrument
@@ -91,8 +116,9 @@ Instruments or provide a user-visible Project save/load operation.
    format and per-sample admission preflight as
    [Instrument Save copy](instrument-model.md#5-persistence) before publishing
    snapshots; direct-load Pool residency does not prove recall admission.
-3. Preflight referenced Instruments, Bank and sample admission before replacing
-   the current Performance. Define and report partial failures explicitly.
+3. Connect isolated Instrument/Pool staging to the session coordinator,
+   including the audio stop fence, prepared-map publication and Bank-reference
+   preflight. Report failures without committing a partial Performance.
 4. Connect SD save/load, authoritative status and touchscreen selection.
 5. Verify reboot restore and interrupted writes on hardware; integrate Song
    selection/playback separately from file decoding.
@@ -108,6 +134,12 @@ continuity or power-loss recovery.
 Loader host tests also verify Project snapshots retain the live name, undo,
 revision and Sample Pool ownership, restore the edited sound into another
 Track, and reject full cards and samples outside recall admission.
+
+Staging tests cover a later missing Instrument after an earlier one loaded,
+close failure, cancellation during sample admission, retained live PCM/undo/
+modulation state, and commit of shared/pinned samples. The registry snapshot
+has independent records with preserved IDs/generations. No hardware session
+replacement or recovery result is implied.
 
 ## Related
 

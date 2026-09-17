@@ -84,6 +84,25 @@ class SampleRegistry {
         }
     }
 
+    SampleRegistry(const SampleRegistry&) = delete;
+    SampleRegistry& operator=(const SampleRegistry&) = delete;
+
+    // Explicit metadata snapshot into this registry's OWN record storage.
+    // Payload handles are copied, not acquired/freed. The transaction owner
+    // must retain their backing memory until commit/rollback; never use an
+    // implicit copy that aliases the source's record array.
+    void CopyStateFrom(const SampleRegistry& source) {
+        if (this == &source)
+            return;
+        for (size_t i = 0; i < Capacity; ++i) {
+            records_[i] = source.records_[i];
+            ids_[i] = source.ids_[i];
+        }
+        next_slot_ = source.next_slot_;
+        count_ = source.count_;
+        newest_ = source.newest_;
+    }
+
     static uint16_t SlotOf(uint16_t sample_id) { return sample_id & kSlotMask; }
 
     /// O(1): the id names its slot; the slot's own id must agree.
