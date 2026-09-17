@@ -38,6 +38,7 @@ implementation.
 |---|---|---|
 | [inter-mcu-protocol.md](features/inter-mcu-protocol.md) | **As-built** | The live wire specification, mirroring `firmware/shared/spi_protocol/protocol.h`. If the two diverge, fix one in the same commit that changed the other |
 | [hybrid-inter-mcu-link.md](features/hybrid-inter-mcu-link.md) | Proposed; no hybrid firmware yet | UART controls and confirming replies, SPI waveform/meters, ownership, interval telemetry and recovery gates |
+| [esp32-p4-core.md](features/esp32-p4-core.md) | Target hardware; pin profile selectable, bench gate open | Core carrier migration, RV112FF/MCP3208 decision and source verification |
 | [panel-controls.md](features/panel-controls.md) | Logical keys built; drivers partial | Panel key/LED model, input stages and MIDI hardware gates |
 | [sequencer.md](features/sequencer.md) | Callback preview built; panel and Track integration open | Sequencer timing, digital audition, ownership and Phase 2 gaps |
 | [track-and-patch-model.md](features/track-and-patch-model.md) | Confirmed vocabulary; decisions taken 2026-09-04 | Sample Pool → Oscillator → Instrument → Track → Pattern/Scene/Song hierarchy, the Bank, the two-oscillator Instrument, workflows, and save boundaries |

@@ -90,7 +90,7 @@ Add new pin definitions to the appropriate section in `pin_config.h`:
 - **MIDI**: GPIO8, 42 (UART2)
 - **Potentiometers**: GPIO1, 33-37 (CD74HC4067)
 - **Buttons**: GPIO39-43 (TCA8418 I2C)
-- **LEDs**: GPIO44-48 (TLC5947 SPI)
+- **LEDs (current target)**: PCA9956BTWY on shared I²C; use [pin_config.h](pin_config.h) for wiring.
 
 ### **Daisy Seed (Backend)**
 - **Inter-MCU SPI**: D9-14 (SPI1 from ESP32)

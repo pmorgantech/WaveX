@@ -382,6 +382,19 @@
 // ESP32-SPECIFIC COMPONENTS
 // ============================================================================
 
+// Frontend board profile. WIFI6 preserves the existing bench wiring; CORE
+// selects the ESP32-P4-Core-DEV-KIT carrier, not a bare P4-Core module.
+// ESP-IDF CMake exposes the names WIFI6/CORE and passes this selector to all
+// components. Host builds may override it directly.
+#define WAVEX_ESP_BOARD_WIFI6 1
+#define WAVEX_ESP_BOARD_CORE 2
+#ifndef WAVEX_ESP_BOARD
+#define WAVEX_ESP_BOARD WAVEX_ESP_BOARD_WIFI6
+#endif
+#if WAVEX_ESP_BOARD != WAVEX_ESP_BOARD_WIFI6 && WAVEX_ESP_BOARD != WAVEX_ESP_BOARD_CORE
+#error "Unsupported WaveX ESP32 board profile"
+#endif
+
 // Quadrature Encoder (PCNT peripheral)
 #ifndef WAVEX_ESP_ENCODER_PCNT_ENABLED
 #define WAVEX_ESP_ENCODER_PCNT_ENABLED 1
@@ -714,29 +727,44 @@
 #define WAVEX_PCNT1_THRESH_NEG -4
 #endif
 #endif
-// Panel LEDs (TLC5947 chain), endless pots (MCP3008) and the button matrix
+// Panel LEDs (two PCA9956BTWY I2C devices), endless pots (MCP3208) and the button matrix
 // sizing. PLANNED, not as-built: no driver reads these yet. The design that
-// consumes them is docs/features/panel-controls.md; 48 channels = two chained
-// TLC5947s, four endless pots = the eight channels of one MCP3008.
+// consumes them is docs/features/panel-controls.md; 48 channels = two addressed
+// PCA9956Bs, four endless pots = the eight channels of one MCP3208.
 #ifndef WAVEX_LED_CHANNELS
 #define WAVEX_LED_CHANNELS 48
 #endif
 
 #ifndef WAVEX_LED_PWM_FREQ_HZ
-#define WAVEX_LED_PWM_FREQ_HZ 1000
+#define WAVEX_LED_PWM_FREQ_HZ 31250  // Fixed individual PWM; not bus update rate
 #endif
 
 #ifndef WAVEX_LED_BRIGHTNESS_BITS
-#define WAVEX_LED_BRIGHTNESS_BITS 12
+#define WAVEX_LED_BRIGHTNESS_BITS 8
 #endif
 
-// Panel LED map: which TLC5947 channel each logical LED (PanelLed, in
+// PCA9956BTWY (HTSSOP38) target wiring. Datasheet rev 1.2, tables 4/5:
+// https://www.nxp.com/docs/en/data-sheet/PCA9956B.pdf
+// Addresses are 7-bit, not the shifted write-address byte.
+// Device 0: AD2/AD1/AD0 each 100k to GND -> 0x20.
+// Device 1: AD2/AD1 each 100k to GND, AD0 floating -> 0x21.
+// Both share BSP SDA/SCL and common OE/RESET from pin_config.h.
+// Disable All Call/Sub Call responses per device during initialization;
+// do not issue a bus-wide software reset on the touch/keypad bus.
+#define WAVEX_PCA9956B_DEVICE_COUNT 2
+#define WAVEX_PCA9956B_CHANNELS_PER_DEVICE 24
+#define WAVEX_PCA9956B_I2C_ADDR_0 0x20
+#define WAVEX_PCA9956B_I2C_ADDR_1 0x21
+#define WAVEX_PCA9956B_I2C_CLOCK_HZ 400000
+
+// Panel LED map: which flattened PCA9956B channel each logical LED (PanelLed, in
 // components/ui/include/ui/panel_led.h) sits on. Wiring truth, so it lives
 // here with the pins (panel-controls.md §6 decision 4); panel_led.h turns
 // these into the table and static_asserts that no channel is used twice and
-// every one is < WAVEX_LED_CHANNELS. Nothing drives the chain until 2.P.3;
+// every one is < WAVEX_LED_CHANNELS. Nothing drives the devices until 2.P.3;
 // the numbers follow the panel PCB when it exists. Chip 1 is channels 0-23,
-// chip 2 is 24-47: the pad grid is kept whole on chip 2.
+// chip 2 is 24-47: the pad grid is kept whole on chip 2. Device index =
+// channel / WAVEX_PCA9956B_CHANNELS_PER_DEVICE; local output = channel % 24.
 #define WAVEX_LED_CH_SOFT1 0
 #define WAVEX_LED_CH_SOFT2 1
 #define WAVEX_LED_CH_SOFT3 2
@@ -769,22 +797,37 @@
 #define WAVEX_LED_CH_PAD15 38
 #define WAVEX_LED_CH_PAD16 39
 
-// Optional potentiometer configuration (e.g., MCP3008 via SPI)
+// Planned RV112FF analog controls: one dedicated MCP3208, two channels per
+// control. These constants do not enable a driver. Ordinary pots use a second
+// MCP3208 with a 74HC4067 on CH0; its other channels remain available.
 #ifndef WAVEX_POT_COUNT
 #define WAVEX_POT_COUNT 4
 #endif
 
 #ifndef WAVEX_POT_ADC_RESOLUTION
-#define WAVEX_POT_ADC_RESOLUTION 10
+#define WAVEX_POT_ADC_RESOLUTION 12
 #endif
 
 #ifndef WAVEX_POT_ADC_SAMPLES
 #define WAVEX_POT_ADC_SAMPLES 64
 #endif
 
-// Rotary Encoder Configuration (via MCP3008 ADC)
+// Adjacent reads form one analog pair (not simultaneous conversions).
+#define WAVEX_ENDLESS_POT0_ADC_A 0
+#define WAVEX_ENDLESS_POT0_ADC_B 1
+#define WAVEX_ENDLESS_POT1_ADC_A 2
+#define WAVEX_ENDLESS_POT1_ADC_B 3
+#define WAVEX_ENDLESS_POT2_ADC_A 4
+#define WAVEX_ENDLESS_POT2_ADC_B 5
+#define WAVEX_ENDLESS_POT3_ADC_A 6
+#define WAVEX_ENDLESS_POT3_ADC_B 7
+#define WAVEX_CONVENTIONAL_POT_MUX_ADC_CHANNEL 0
+#define WAVEX_CONVENTIONAL_POT_MUX_CHANNELS 16
+
+// Analog endless control configuration (via MCP3208, not PCNT).
+// Legacy macro names retained until the panel decoder is implemented.
 #ifndef WAVEX_ROTARY_ENCODER_COUNT
-#define WAVEX_ROTARY_ENCODER_COUNT 4  // 4x dual rotary encoders
+#define WAVEX_ROTARY_ENCODER_COUNT 4  // 4x dual-track analog endless pots
 #endif
 
 #ifndef WAVEX_ROTARY_ENCODER_TYPE
