@@ -5,7 +5,8 @@ screen and foreground session owner. Both firmware images compile; host tests
 exercise the real codec, file job, loader, session boundary and UI lifecycle.
 Reboot, card interruption, memory-pressure recovery and callback timing remain
 open in [HV-007](../hardware-validation.md#hv-007--project-save-load-and-recovery).
-Pattern/Song management and Song execution remain separate Phase 2 work.
+Stopped [Pattern management](pattern-management.md) is connected; queued
+transitions, Song management and Song execution remain separate Phase 2 work.
 
 ## Contents
 
@@ -158,15 +159,15 @@ The frontend invalidates sample metadata caches at completion, since a retained
 PCM ID can have different saved markers. Page entry reads retained Project
 status and does not replay a stale Solo mask. Save leaves editor names, Revert
 points and Solo unchanged. Inactive Pattern/Song slots remain in the retained
-Project and survive a subsequent save; only the active Pattern is currently
-editable/playable through the existing sequencer workflow.
+Project and survive a subsequent save; the active Pattern is editable/playable through the sequencer. Stopped slot
+selection captures outgoing edits before installing another Pattern.
 
 ## Remaining work
 
 - Run HV-007: real-card durability/reboot, interrupted saves, memory-pressure
   rollback, panel interaction and DWT measurements. Host/compile results do
   not establish a power-loss guarantee or a callback performance improvement.
-- Add explicit Pattern management, queued transitions and Song editing/playback
+- Add queued transitions and Song editing/playback
   after defining the roadmap's Daisy-clock transition and edit rules.
 - Bank selection/Program Change playback, portable audio collection and missing
   asset repair follow their own roadmap designs. Project recall validates and

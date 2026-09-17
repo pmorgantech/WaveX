@@ -38,6 +38,7 @@ set(COMPONENT_SRCS
     "pages/ui_sequencer_page.cpp"
     "pages/ui_pattern_files_page.cpp"
     "pages/ui_project_files_page.cpp"
+    "pages/ui_pattern_slots_page.cpp"
     "pages/ui_pad_map_page.cpp"
     "pages/ui_pad_sound_page.cpp"
     "pages/ui_track_page.cpp"

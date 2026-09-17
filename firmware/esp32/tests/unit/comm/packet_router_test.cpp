@@ -87,13 +87,13 @@ class PacketRouterTest : public ::testing::Test {
     // strong-override handlers. Used to assert "nothing was dispatched".
     int TotalDispatches() const {
         const auto& cap = GetInterMcuCapture();
-        return cap.project_status_calls + g_handlers.sync_calls + g_handlers.error_calls +
-               g_handlers.unknown_calls + cap.oscillator_calls + cap.instrument_map_calls +
-               cap.seq_page_calls + cap.seq_playhead_calls + cap.heartbeat_calls + cap.meter_calls +
-               cap.browse_resp_calls + cap.envelope_chunk_calls + cap.sample_status_calls +
-               cap.inst_status_calls + cap.storage_status_calls + cap.stop_resp_calls +
-               cap.diag_push_calls + cap.sample_meta_calls + cap.sample_mem_status_calls +
-               cap.cv_cal_calls;
+        return cap.seq_slot_status_calls + cap.project_status_calls + g_handlers.sync_calls +
+               g_handlers.error_calls + g_handlers.unknown_calls + cap.oscillator_calls +
+               cap.instrument_map_calls + cap.seq_page_calls + cap.seq_playhead_calls +
+               cap.heartbeat_calls + cap.meter_calls + cap.browse_resp_calls +
+               cap.envelope_chunk_calls + cap.sample_status_calls + cap.inst_status_calls +
+               cap.storage_status_calls + cap.stop_resp_calls + cap.diag_push_calls +
+               cap.sample_meta_calls + cap.sample_mem_status_calls + cap.cv_cal_calls;
     }
 
     std::unique_ptr<PacketRouter> router_;
@@ -802,4 +802,22 @@ TEST_F(PacketRouterTest, ProjectStatusRejectsTruncatedAndInvalidReplies) {
     router_->route_uart_message(MSG_PROJECT_STATUS, bytes, sizeof(status), 0, 1);
     EXPECT_EQ(GetInterMcuCapture().project_status_calls, 1);
     EXPECT_EQ(GetInterMcuCapture().project_status.completed_request_id, 66u);
+}
+
+TEST_F(PacketRouterTest, PatternSlotStatusRejectsTruncationAndInvalidSlots) {
+    SeqSlotStatusMessage status;
+    status.request_id = 77;
+    status.completed_request_id = 66;
+    status.completed_op = SEQ_SLOT_SELECT;
+    auto* bytes = reinterpret_cast<uint8_t*>(&status);
+    for (size_t n = 0; n < sizeof(status); ++n)
+        router_->route_uart_message(MSG_SEQ_SLOT_STATUS, bytes, n, 0, 1);
+    EXPECT_EQ(GetInterMcuCapture().seq_slot_status_calls, 0);
+    status.active_pattern = 128;
+    router_->route_uart_message(MSG_SEQ_SLOT_STATUS, bytes, sizeof(status), 0, 1);
+    EXPECT_EQ(GetInterMcuCapture().seq_slot_status_calls, 0);
+    status.active_pattern = 127;
+    router_->route_uart_message(MSG_SEQ_SLOT_STATUS, bytes, sizeof(status), 0, 1);
+    EXPECT_EQ(GetInterMcuCapture().seq_slot_status_calls, 1);
+    EXPECT_EQ(GetInterMcuCapture().seq_slot_status.completed_request_id, 66u);
 }

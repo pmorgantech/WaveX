@@ -27,7 +27,8 @@ ProjectSession::ProjectSession(SampleMemMgr& memory,
       mixer_(mixer),
       io_(io),
       io_bytes_(bytes),
-      boundary_(boundary) {}
+      boundary_(boundary),
+      patterns_(exchange) {}
 ProjectSession::~ProjectSession() {
     file_.Cancel();
     ReleaseScratch();
@@ -218,7 +219,21 @@ void ProjectSession::CaptureSession() {
     else
         phase_ = Phase::Assets;
 }
+bool ProjectSession::RequestPattern(const SeqSlotOpMessage& request, bool external_busy) {
+    return patterns_.Request(request, current_, external_busy || status_.busy);
+}
 void ProjectSession::Pump() {
+    if (patterns_.Busy()) {
+        // Wait for ownership return before allocating or reporting allocation
+        // failure; never retire a callback-owned capture buffer.
+        if (!current_ && exchange_.state() == Exchange::State::Captured) {
+            void* bytes = nullptr;
+            if (Allocate(sizeof(Project), current_mem_, &bytes))
+                current_ = new (bytes) Project();
+        }
+        patterns_.Pump(current_);
+        return;
+    }
     if (!Busy())
         return;
     switch (phase_) {

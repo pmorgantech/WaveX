@@ -144,3 +144,9 @@ void inter_mcu_store_mix_meters(const WaveX::Protocol::MixMetersMessage& message
     ++cap.mix_meter_calls;
     cap.mix_meters = message;
 }
+
+void inter_mcu_store_seq_slot_status(const WaveX::Protocol::SeqSlotStatusMessage& status) {
+    auto& cap = GetInterMcuCapture();
+    ++cap.seq_slot_status_calls;
+    cap.seq_slot_status = status;
+}

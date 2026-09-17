@@ -154,6 +154,8 @@ enum MessageType : uint8_t {
     MSG_SEQ_CLOCK_OUT = 0x57,     // D->E: MIDI clock/transport for the ESP32 to serialize outbound
     MSG_SEQ_FILE_OP = 0x5A,       // E->D: named pattern save/load/new or retained status request
     MSG_SEQ_FILE_STATUS = 0x5B,   // D->E: foreground job and retained completion
+    MSG_SEQ_SLOT_OP = 0x5C,       // E->D: Project Pattern slot management
+    MSG_SEQ_SLOT_STATUS = 0x5D,   // D->E: selected slot and retained completion
     // Instrument browser/load lifecycle (instrument-model.md §6).
     MSG_INST_OP = 0x60,              // E->D: inspect or load one instrument file
     MSG_INST_STATUS = 0x61,          // D->E: inspection result and load progress
@@ -1684,6 +1686,53 @@ inline bool IsValidProjectStatus(const ProjectStatusMessage& m) {
                    : m.active_request_id == 0);
 }
 
+// Project Pattern slots are stable zero-based identities, independent of files.
+enum SeqSlotOp : uint8_t {
+    SEQ_SLOT_GET,
+    SEQ_SLOT_CREATE,
+    SEQ_SLOT_COPY,
+    SEQ_SLOT_RENAME,
+    SEQ_SLOT_SELECT
+};
+enum SeqSlotError : uint8_t {
+    SEQ_SLOT_OK,
+    SEQ_SLOT_BUSY,
+    SEQ_SLOT_BAD_NAME,
+    SEQ_SLOT_EMPTY,
+    SEQ_SLOT_EXISTS,
+    SEQ_SLOT_STOP_FIRST,
+    SEQ_SLOT_NO_MEMORY,
+    SEQ_SLOT_CAPTURE_BUSY
+};
+struct SeqSlotOpMessage {
+    uint32_t request_id = 0;
+    uint8_t op = SEQ_SLOT_GET;
+    uint8_t slot = 0;  // destination / inspected slot; COPY copies the active Pattern
+    uint16_t reserved = 0;
+    char name[24]{};
+} __attribute__((packed));
+struct SeqSlotStatusMessage {
+    uint32_t request_id = 0, active_request_id = 0, completed_request_id = 0;
+    uint8_t busy = 0, error = SEQ_SLOT_OK, completed_op = SEQ_SLOT_GET;
+    uint8_t slot = 0, used = 0, active_pattern = 0;
+    uint16_t reserved = 0;
+    char name[24]{};  // inspected slot name, not a file path
+} __attribute__((packed));
+static_assert(sizeof(SeqSlotOpMessage) == 32 && sizeof(SeqSlotStatusMessage) == 44,
+              "Pattern slot wire sizes");
+inline bool IsValidSeqSlotOp(const SeqSlotOpMessage& m) {
+    return m.request_id && m.op <= SEQ_SLOT_SELECT && m.slot < 128 && !m.reserved;
+}
+inline bool IsValidSeqSlotStatus(const SeqSlotStatusMessage& m) {
+    bool terminated = false;
+    for (char c: m.name)
+        terminated |= c == 0;
+    return m.request_id && m.busy <= 1 && m.error <= SEQ_SLOT_CAPTURE_BUSY &&
+           m.completed_op <= SEQ_SLOT_SELECT && m.slot < 128 && m.used <= 1 &&
+           m.active_pattern < 128 && !m.reserved && terminated &&
+           (m.busy ? m.active_request_id != 0 : m.active_request_id == 0);
+}
+
 // Pattern persistence is a foreground job. GET polls retained completion;
 // reads never replay a mutation whose outcome was lost on the link.
 enum SeqFileOp : uint8_t {
@@ -2834,6 +2883,10 @@ inline const char* MessageTypeName(uint8_t type) {
             return "SAMPLE_GET_PATH_RESP";
         case MSG_STORAGE_STATUS:
             return "STORAGE_STATUS";
+        case MSG_SEQ_SLOT_OP:
+            return "SEQ_SLOT_OP";
+        case MSG_SEQ_SLOT_STATUS:
+            return "SEQ_SLOT_STATUS";
         case MSG_PROJECT_OP:
             return "PROJECT_OP";
         case MSG_PROJECT_STATUS:

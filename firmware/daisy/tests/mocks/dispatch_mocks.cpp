@@ -189,6 +189,9 @@ void GetSampleMemStatus(WaveX::Protocol::SampleMemStatusMessage& out) {
 bool ProjectBusy() {
     return WaveX::Test::GetDispatchRecord().project_busy;
 }
+void OnPatternSlotOp(const WaveX::Protocol::SeqSlotOpMessage& m) {
+    WaveX::Test::GetDispatchRecord().seq_slot_ops.push_back(m);
+}
 void OnProjectOp(const WaveX::Protocol::ProjectOpMessage& m) {
     WaveX::Test::GetDispatchRecord().project_ops.push_back(m);
 }

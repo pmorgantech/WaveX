@@ -13,6 +13,13 @@ versioning and release process.
 
 ### Added
 
+- Sequencer Project Patterns now creates, copies, renames and selects 128 stable
+  slots while stopped. Switching preserves outgoing hidden steps/locks and
+  session tempo, sounds and mixer; Project saves retain the collection.
+  Playing/MIDI-armed requests are rejected without stopping playback. Correlated
+  UI readback recovers lost replies without replaying mutations; HV-008 tracks
+  panel, reboot and callback checks.
+
 - Project files now provides confirmed Load/New and new-copy Save, backed by
   one foreground session transaction. Saves include quiet Instrument copies,
   referenced Sample edits, mixer/Track settings and retained Patterns/Songs.

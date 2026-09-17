@@ -72,6 +72,17 @@ void ProcessInterMcuMessage(uint8_t msg_type,
                             uint16_t sequence_number,
                             const uint8_t* payload,
                             size_t payload_size) {
+    if (msg_type == MSG_SEQ_SLOT_OP) {
+#if WAVEX_AUDIO_ENGINE_ENABLED
+        SeqSlotOpMessage request;
+        if (payload && payload_size == sizeof(request)) {
+            std::memcpy(&request, payload, sizeof(request));
+            if (IsValidSeqSlotOp(request))
+                AudioEngine::OnPatternSlotOp(request);
+        }
+#endif
+        return;
+    }
     if (msg_type == MSG_PROJECT_OP) {
 #if WAVEX_AUDIO_ENGINE_ENABLED
         ProjectOpMessage request;

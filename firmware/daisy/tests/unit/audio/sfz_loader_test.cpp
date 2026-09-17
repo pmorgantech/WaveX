@@ -6,6 +6,7 @@
 #include "fatfs_mock.h"
 
 #include "audio/sample_pool_stage.hpp"
+#include "storage/pattern_store.hpp"
 #include "storage/project_session.hpp"
 #include "wxi/wxi.hpp"
 #include <array>
@@ -1650,3 +1651,143 @@ TEST_F(SfzLoaderTest, ProjectSessionRetainsInactiveSlotsAndRefusesNoMemoryOrRepl
     EXPECT_STREQ(session.Status().name, "Keep songs");
 }
 }  // namespace
+
+namespace {
+SeqSlotOpMessage SlotRequest(uint32_t id, uint8_t op, uint8_t slot, const char* name = "") {
+    SeqSlotOpMessage request;
+    request.request_id = id;
+    request.op = op;
+    request.slot = slot;
+    WaveX::Protocol::detail::CopyWireString(request.name, sizeof(request.name), name);
+    return request;
+}
+}  // namespace
+TEST_F(SfzLoaderTest, ProjectPatternSlotsPreserveEditsAndSurviveProjectRecall) {
+    WaveX::Sequencer::PatternExchange exchange;
+    WaveX::Sequencer::SequencerTransport transport;
+    transport.Init(48000, 48);
+    WaveX::PatternStore::SetProjectPatternName("");
+    MixerControlHandoff mixer;
+    WaveX::Storage::ProjectSession session(memory_,
+                                           pool_,
+                                           exchange,
+                                           mixer,
+                                           io_.data(),
+                                           io_.size(),
+                                           {StopProjectTestVoices, PublishProjectTest});
+    transport.ApplyTransport(
+        {SEQ_TRANSPORT_STOP, SEQ_CLOCK_MIDI, SEQ_INPUT_STEP_RECORD, 1, 14750, 0});
+    transport.ApplyPatternOp({SEQ_OP_SET_STEP_NOTE, 15, 63, 101, 0, 0});
+    transport.ApplyPatternOp({SEQ_OP_SET_PARAM_LOCK_SLOT, 15, 63, PARAM_FILTER_CUTOFF, 333, 3});
+    ASSERT_TRUE(session.RequestPattern(SlotRequest(5000, SEQ_SLOT_COPY, 127, "Variation")));
+    EXPECT_FALSE(session.Request(ProjectRequest(5001, PROJECT_NEW)));
+    RunProject(session, exchange, transport);
+    ASSERT_EQ(session.Patterns().Status().error, SEQ_SLOT_OK);
+    EXPECT_EQ(session.Current()->patterns[127].pattern.tracks[15].steps[63].note, 101);
+    EXPECT_EQ(session.Current()->patterns[127].pattern.tracks[15].steps[63].param_locks[3].value,
+              333);
+    EXPECT_EQ(session.Current()->active_pattern, 0);
+    ASSERT_TRUE(session.RequestPattern(SlotRequest(5002, SEQ_SLOT_CREATE, 1, "Empty")));
+    RunProject(session, exchange, transport);
+    ASSERT_TRUE(session.RequestPattern(SlotRequest(5003, SEQ_SLOT_SELECT, 1)));
+    RunProject(session, exchange, transport);
+    EXPECT_EQ(session.Current()->active_pattern, 1);
+    EXPECT_EQ(transport.pattern().tracks[15].steps[63].note, 60);
+    EXPECT_DOUBLE_EQ(transport.TempoBpm(), 147.5);
+    EXPECT_TRUE(transport.UsingMidiSync());
+    EXPECT_EQ(transport.InputMode(), SEQ_INPUT_STEP_RECORD);
+    transport.ApplyPatternOp({SEQ_OP_SET_STEP_NOTE, 15, 63, 99, 0, 0});
+    ASSERT_TRUE(session.RequestPattern(SlotRequest(5004, SEQ_SLOT_RENAME, 1, "Bridge")));
+    RunProject(session, exchange, transport);
+    EXPECT_STREQ(WaveX::PatternStore::CurrentName(), "Bridge");
+    ASSERT_TRUE(session.RequestPattern(SlotRequest(5005, SEQ_SLOT_SELECT, 127)));
+    RunProject(session, exchange, transport);
+    EXPECT_EQ(transport.pattern().tracks[15].steps[63].note, 101);
+    EXPECT_EQ(session.Current()->patterns[1].pattern.tracks[15].steps[63].note, 99);
+    ASSERT_TRUE(session.Request(ProjectRequest(5006, PROJECT_SAVE_COPY, "Slots")));
+    RunProject(session, exchange, transport);
+    ASSERT_EQ(session.Status().error, PROJECT_OK);
+    ASSERT_TRUE(session.Request(ProjectRequest(5007, PROJECT_NEW)));
+    RunProject(session, exchange, transport);
+    ASSERT_TRUE(session.Request(ProjectRequest(5008, PROJECT_LOAD, "Slots")));
+    RunProject(session, exchange, transport);
+    ASSERT_EQ(session.Status().error, PROJECT_OK);
+    ASSERT_TRUE(session.RequestPattern(SlotRequest(5009, SEQ_SLOT_SELECT, 1)));
+    RunProject(session, exchange, transport);
+    EXPECT_EQ(transport.pattern().tracks[15].steps[63].note, 99);
+    EXPECT_STREQ(WaveX::PatternStore::CurrentName(), "Bridge");
+    EXPECT_FALSE(transport.IsPlaying());
+}
+TEST_F(SfzLoaderTest, ProjectPatternSlotsRejectConflictsAndPlayingWithoutMutation) {
+    WaveX::Sequencer::PatternExchange exchange;
+    WaveX::Sequencer::SequencerTransport transport;
+    transport.Init(48000, 48);
+    WaveX::PatternStore::SetProjectPatternName("");
+    MixerControlHandoff mixer;
+    WaveX::Storage::ProjectSession session(memory_,
+                                           pool_,
+                                           exchange,
+                                           mixer,
+                                           io_.data(),
+                                           io_.size(),
+                                           {StopProjectTestVoices, PublishProjectTest});
+    EXPECT_FALSE(session.RequestPattern(SlotRequest(5100, SEQ_SLOT_CREATE, 0, "Occupied")));
+    EXPECT_EQ(session.Patterns().Status().error, SEQ_SLOT_EXISTS);
+    EXPECT_FALSE(session.RequestPattern(SlotRequest(5101, SEQ_SLOT_SELECT, 127)));
+    EXPECT_EQ(session.Patterns().Status().error, SEQ_SLOT_EMPTY);
+    EXPECT_FALSE(session.RequestPattern(SlotRequest(5102, SEQ_SLOT_CREATE, 127, " bad")));
+    EXPECT_EQ(session.Patterns().Status().error, SEQ_SLOT_BAD_NAME);
+    EXPECT_FALSE(session.RequestPattern(SlotRequest(5103, SEQ_SLOT_CREATE, 127, "Fill"), true));
+    EXPECT_EQ(session.Patterns().Status().error, SEQ_SLOT_BUSY);
+    transport.ApplyTransport({SEQ_TRANSPORT_PLAY, SEQ_CLOCK_INTERNAL, SEQ_INPUT_PLAY, 0, 12000, 0});
+    ASSERT_TRUE(session.RequestPattern(SlotRequest(5104, SEQ_SLOT_CREATE, 127, "Fill")));
+    RunProject(session, exchange, transport);
+    EXPECT_EQ(session.Patterns().Status().error, SEQ_SLOT_STOP_FIRST);
+    EXPECT_TRUE(transport.IsPlaying());
+    EXPECT_EQ(session.Current(), nullptr);
+    transport.StopForProject();
+    ASSERT_TRUE(session.RequestPattern(SlotRequest(5105, SEQ_SLOT_CREATE, 127, "Fill")));
+    EXPECT_FALSE(session.RequestPattern(SlotRequest(5106, SEQ_SLOT_GET, 0)));
+    RunProject(session, exchange, transport);
+    EXPECT_EQ(session.Patterns().Status().completed_request_id, 5105u);
+    EXPECT_EQ(session.Patterns().Status().slot, 0);  // GET changes view, not job destination
+    EXPECT_FALSE(session.RequestPattern(SlotRequest(5105, SEQ_SLOT_CREATE, 126, "Replay")));
+    EXPECT_FALSE(session.Current()->patterns[126].used);
+    ASSERT_TRUE(session.RequestPattern(SlotRequest(5107, SEQ_SLOT_SELECT, 127)));
+    for (int i = 0; i < 16; ++i)
+        exchange.Process(transport);
+    session.Pump();  // install published, callback has not acknowledged
+    EXPECT_TRUE(session.Busy());
+    EXPECT_EQ(session.Current()->active_pattern, 0);
+    RunProject(session, exchange, transport);
+    EXPECT_EQ(session.Current()->active_pattern, 127);
+}
+
+TEST_F(SfzLoaderTest, ProjectPatternMemoryRefusalReturnsExchangeAndKeepsWorkingData) {
+    WaveX::Sequencer::PatternExchange exchange;
+    WaveX::Sequencer::SequencerTransport transport;
+    transport.Init(48000, 48);
+    transport.ApplyPatternOp({SEQ_OP_SET_STEP_NOTE, 15, 63, 119, 0, 0});
+    MixerControlHandoff mixer;
+    WaveX::Storage::ProjectSession session(memory_,
+                                           pool_,
+                                           exchange,
+                                           mixer,
+                                           io_.data(),
+                                           io_.size(),
+                                           {StopProjectTestVoices, PublishProjectTest});
+    wxsamp_stats_t stats;
+    memory_.stats(&stats);
+    wxsamp_t occupied{};
+    ASSERT_TRUE(memory_.alloc(stats.largest_free_bytes, &occupied));
+    ASSERT_TRUE(session.RequestPattern(SlotRequest(5200, SEQ_SLOT_COPY, 127, "Copy")));
+    RunProject(session, exchange, transport);
+    EXPECT_EQ(session.Patterns().Status().error, SEQ_SLOT_NO_MEMORY);
+    EXPECT_EQ(session.Current(), nullptr);
+    EXPECT_EQ(exchange.state(), WaveX::Sequencer::PatternExchange::State::Idle);
+    EXPECT_EQ(transport.pattern().tracks[15].steps[63].note, 119);
+    memory_.release(&occupied);
+    ASSERT_TRUE(session.RequestPattern(SlotRequest(5201, SEQ_SLOT_COPY, 127, "Copy")));
+    RunProject(session, exchange, transport);
+    EXPECT_EQ(session.Patterns().Status().error, SEQ_SLOT_OK);
+}

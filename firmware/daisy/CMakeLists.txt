@@ -64,6 +64,7 @@ set(WAVEX_COLD_SOURCES
     src/storage/card_service.cpp
     src/storage/project_file_job.cpp
     src/storage/project_session.cpp
+    src/storage/project_patterns.cpp
     src/storage/pattern_store.cpp
     src/storage/fs_browse.cpp
     src/storage/sd_sdio.cpp
@@ -92,6 +93,7 @@ set(FIRMWARE_SOURCES
     src/storage/card_service.cpp
     src/storage/project_file_job.cpp
     src/storage/project_session.cpp
+    src/storage/project_patterns.cpp
     src/storage/pattern_store.cpp
     src/storage/fs_browse.cpp
     src/storage/sd_sdio.cpp

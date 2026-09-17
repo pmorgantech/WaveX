@@ -123,6 +123,14 @@ void PacketRouter::route_by_message_type(uint8_t msg_type,
     }
 
     switch (msg_type) {
+        case WaveX::Protocol::MSG_SEQ_SLOT_STATUS: {
+            WaveX::Protocol::SeqSlotStatusMessage message;
+            if (payload_len == sizeof(message) &&
+                CopyMessage(payload, payload_len, message, "SEQ_SLOT_STATUS") &&
+                WaveX::Protocol::IsValidSeqSlotStatus(message))
+                inter_mcu_store_seq_slot_status(message);
+            break;
+        }
         case WaveX::Protocol::MSG_PROJECT_STATUS: {
             WaveX::Protocol::ProjectStatusMessage message;
             if (payload_len == sizeof(message) &&

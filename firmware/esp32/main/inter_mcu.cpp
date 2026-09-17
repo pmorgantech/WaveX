@@ -1677,3 +1677,34 @@ bool inter_mcu_get_project_status(WaveX::Protocol::ProjectStatusMessage* out) {
     taskEXIT_CRITICAL(&s_project_lock);
     return valid;
 }
+
+namespace {
+portMUX_TYPE s_seq_slot_lock = portMUX_INITIALIZER_UNLOCKED;
+WaveX::Protocol::SeqSlotStatusMessage s_seq_slot_status;
+bool s_seq_slot_valid = false;
+}  // namespace
+esp_err_t inter_mcu_send_seq_slot_op(const WaveX::Protocol::SeqSlotOpMessage& request) {
+    if (!WaveX::Protocol::IsValidSeqSlotOp(request))
+        return ESP_ERR_INVALID_ARG;
+    return send_link_message(WaveX::Protocol::MSG_SEQ_SLOT_OP, &request, sizeof(request)) >= 0
+               ? ESP_OK
+               : ESP_FAIL;
+}
+void inter_mcu_store_seq_slot_status(const WaveX::Protocol::SeqSlotStatusMessage& status) {
+    if (!WaveX::Protocol::IsValidSeqSlotStatus(status))
+        return;
+    taskENTER_CRITICAL(&s_seq_slot_lock);
+    s_seq_slot_status = status;
+    s_seq_slot_valid = true;
+    taskEXIT_CRITICAL(&s_seq_slot_lock);
+}
+bool inter_mcu_get_seq_slot_status(WaveX::Protocol::SeqSlotStatusMessage* out) {
+    if (!out)
+        return false;
+    taskENTER_CRITICAL(&s_seq_slot_lock);
+    const bool valid = s_seq_slot_valid;
+    if (valid)
+        *out = s_seq_slot_status;
+    taskEXIT_CRITICAL(&s_seq_slot_lock);
+    return valid;
+}

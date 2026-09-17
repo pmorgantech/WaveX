@@ -17,13 +17,15 @@ class PatternExchange {
         Installed,
         Failed,
         Pause,
-        Paused
+        Paused,
+        Running
     };
     State state() const { return state_.load(std::memory_order_acquire); }
     Pattern& foreground() { return pattern_; }  // only Idle / Captured
-    bool Capture() {
+    bool Capture(bool stopped_only = false) {
         if (state() != State::Idle)
             return false;
+        stopped_only_ = stopped_only;
         rows_ = 0;
         ticks_ = 0;
         state_.store(State::Capture, std::memory_order_release);
@@ -55,7 +57,7 @@ class PatternExchange {
     void Retire() {  // only completed states; never cancel callback ownership
         const auto s = state();
         if (s == State::Captured || s == State::Installed || s == State::Failed ||
-            s == State::Paused)
+            s == State::Paused || s == State::Running)
             state_.store(State::Idle, std::memory_order_release);
     }
     // Called after scheduling. A successful install discards that block's old
@@ -74,6 +76,10 @@ class PatternExchange {
             state_.store(State::Installed, std::memory_order_release);
             return true;
         } else if (s == State::Capture) {
+            if (stopped_only_ && (transport.IsPlaying() || transport.IsArmed())) {
+                state_.store(State::Running, std::memory_order_release);
+                return false;
+            }
             if (++ticks_ > 500) {
                 state_.store(State::Failed, std::memory_order_release);
                 return false;
@@ -100,7 +106,7 @@ class PatternExchange {
    private:
     Pattern pattern_;
     Protocol::SeqTransportMessage settings_;
-    bool install_settings_ = false;
+    bool install_settings_ = false, stopped_only_ = false;
     std::atomic<State> state_{State::Idle};
     uint32_t revision_ = 0;
     uint16_t ticks_ = 0;

@@ -2586,6 +2586,22 @@ void OnSeqFileOp(const SeqFileOpMessage& request) {
 bool ProjectBusy() {
     return s_project_session.Get() && s_project_session.Get()->Busy();
 }
+void OnPatternSlotOp(const SeqSlotOpMessage& request) {
+    if (!IsValidSeqSlotOp(request))
+        return;
+    if (s_project_session.Get()) {
+        s_project_session.Get()->RequestPattern(
+            request, SfzLoader::Busy() || PatternStore::Busy() || Storage::CardService::Busy());
+    } else {
+        SeqSlotStatusMessage status;
+        status.request_id = request.request_id;
+        status.slot = request.slot;
+        status.completed_request_id = request.op == SEQ_SLOT_GET ? 0 : request.request_id;
+        status.completed_op = request.op;
+        status.error = SEQ_SLOT_NO_MEMORY;
+        Comm::LinkSend(MSG_SEQ_SLOT_STATUS, &status, sizeof(status));
+    }
+}
 void OnProjectOp(const ProjectOpMessage& request) {
     if (!IsValidProjectOp(request))
         return;
@@ -2618,6 +2634,10 @@ void PumpProjectSession() {
     if (!session)
         return;
     session->Pump();
+    auto& patterns = session->Patterns();
+    if (patterns.ReplyPending() &&
+        Comm::LinkSend(MSG_SEQ_SLOT_STATUS, &patterns.Status(), sizeof(SeqSlotStatusMessage)) >= 0)
+        patterns.ReplySent();
     if (session->ReplyPending() &&
         Comm::LinkSend(MSG_PROJECT_STATUS, &session->Status(), sizeof(ProjectStatusMessage)) >= 0)
         session->ReplySent();

@@ -65,6 +65,7 @@ Use Passed or Failed after recording the corresponding evidence.
 | HV-005 | Phase 2 timing and soak | Blocked (full gate) | Timing/soak can be run separately; complete gate still needs roadmap prerequisites |
 | HV-006 | Mixer controls, master and callback timing | Pending | Host/compile checks; physical audio and timing unrun |
 | HV-007 | Project Save/Load/New and recovery | Pending | Host/compile checks; disposable card and two-board session needed |
+| HV-008 | Project Pattern slots | Pending | Stopped workflow, panel, reboot and callback checks |
 
 ## HV-001 — SD card formatting
 
@@ -291,3 +292,38 @@ Failure follow-up / remaining cases:
 - [Flashing](flashing.md)
 - [Performance monitoring](performance_monitoring.md)
 - [Callback performance evidence](callback-performance-log.md)
+
+
+## HV-008 — Project Pattern management
+
+**Status:** Pending hardware verification. Host/compile checks do not close this gate.
+**Design:** [Pattern management](features/pattern-management.md), roadmap Phase 2.
+**Introduced by:** stopped Project Pattern slot workflow.
+
+**Setup:** Both updated images, resident Instruments on multiple Tracks, audio
+monitoring, a writable card and DWT/render profiling per the performance guide.
+
+- [ ] With sequencing stopped, put notes and locks on Track 16 / Step 64, shorten
+  the visible Pattern, then copy active to slot 128. Create slot 2, select it,
+  edit it and rename it. Switch among all three; every hidden step, lock and
+  label returns, with no change to tempo, MIDI input, Instruments or mixer/Solo.
+- [ ] Try Create/Copy on an occupied slot and Select on an empty one. Each fails
+  without replacing any Pattern. Try while playing and while MIDI-armed: Stop
+  first appears and playback/arming continues until explicitly stopped.
+- [ ] Load a standalone Pattern file into a selected slot, switch away and back,
+  then Project Save copy, reboot and Load. Active slot, other slots, labels and
+  all step data return. Existing saved copies remain untouched.
+- [ ] Disconnect/reconnect the frontend during Copy/Select and navigate away
+  during an operation. Completion is recovered through reads, no operation is
+  replayed, and no stale response enables a command on the wrong slot.
+- [ ] Exercise touchscreen Previous/Next, encoder, naming and all softkeys;
+  inspect both UI stack margins. Idle polling and identical replies do not
+  cause repeated full-screen refreshes. Verify all controls remain legible.
+- [ ] Record matched DWT average/p95/maximum and underruns before/after captures
+  and selection with held/releasing voices. Check foreground responsiveness
+  during first Project allocation and low-memory refusal. No deadline misses,
+  no stopped-voice requirement for held live notes, and no sample corruption.
+
+**Results:** Not run. Record date, both image identities and evidence here.
+**Blocker:** Physical boards and measurement session required; queued switching
+and Song playback are not part of this entry yet.

@@ -895,3 +895,20 @@ TEST_F(MessageDispatchTest, ProjectLeaseRoutesStatusButFreezesSessionMutations) 
     Dispatch(MSG_PROJECT_OP, request);
     EXPECT_EQ(GetDispatchRecord().project_ops.size(), 2u);
 }
+
+TEST_F(MessageDispatchTest, PatternSlotsValidateBeforeRoutingAndRemainReadableDuringLease) {
+    SeqSlotOpMessage request;
+    request.request_id = 42;
+    request.slot = 127;
+    GetDispatchRecord().project_busy = true;
+    for (size_t n = 0; n < sizeof(request); ++n)
+        ProcessInterMcuMessage(MSG_SEQ_SLOT_OP, 1, reinterpret_cast<uint8_t*>(&request), n);
+    EXPECT_TRUE(GetDispatchRecord().seq_slot_ops.empty());
+    request.slot = 128;
+    Dispatch(MSG_SEQ_SLOT_OP, request);
+    EXPECT_TRUE(GetDispatchRecord().seq_slot_ops.empty());
+    request.slot = 127;
+    Dispatch(MSG_SEQ_SLOT_OP, request);
+    ASSERT_EQ(GetDispatchRecord().seq_slot_ops.size(), 1u);
+    EXPECT_EQ(GetDispatchRecord().seq_slot_ops[0].slot, 127);
+}

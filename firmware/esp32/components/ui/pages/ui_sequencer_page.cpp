@@ -7,7 +7,7 @@
 #include "ui/mixer_solo.h"
 #include "ui/parameter_lock_model.h"
 #include "ui/ui_navigator.h"
-#include "ui/ui_pattern_files_page.h"
+#include "ui/ui_pattern_slots_page.h"
 
 #if WAVEX_UI_LATENCY_PROFILE_ENABLED
 #include "esp_timer.h"
@@ -775,8 +775,8 @@ std::array<Softkey, NUM_SOFTKEYS> UISequencerPage::getShiftedSoftkeys() {
                [this] { solo(soloed(getCurrentTrack()) ? 0xFF : getCurrentTrack()); },
                link_alive_,
                "Audio engine disconnected"};
-    keys[4] = {"Files",
-               [] { UINavigator::instance().push(createPatternFilesPage()); },
+    keys[4] = {"Patterns",
+               [] { UINavigator::instance().push(createPatternSlotsPage()); },
                link_alive_,
                "Audio engine disconnected"};
     keys[5] = {"Locks", [this] { lockMode(true); }, editable(), "Select an active step window"};

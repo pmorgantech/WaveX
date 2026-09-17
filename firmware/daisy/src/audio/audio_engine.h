@@ -211,6 +211,7 @@ void OnCvTest(const WaveX::Protocol::CvTestMessage& m);
 void LoadCvCalFromSd();
 bool StorageJobBusy();
 bool ProjectBusy();
+void OnPatternSlotOp(const WaveX::Protocol::SeqSlotOpMessage& request);
 void OnProjectOp(const WaveX::Protocol::ProjectOpMessage& request);
 void PumpProjectSession();
 bool PrepareCardFormat();

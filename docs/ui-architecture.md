@@ -419,3 +419,16 @@ recall clears transient Solo through an atomic UI-domain reset intent and
 invalidates sample metadata caches; neither comm callbacks nor storage jobs
 call LVGL. See [Project persistence](features/project-persistence.md) and
 [HV-007](hardware-validation.md#hv-007--project-save-load-and-recovery).
+
+
+### Project Pattern slots
+
+Sequencer → Shift → Patterns opens 128 stable Project slots. Previous/Next and
+the encoder choose a destination; Create and Copy active require an empty slot,
+while Rename and Select require an occupied one. All mutations require stopped,
+unarmed playback. Select retains outgoing edits without changing Instruments,
+mixer or tempo. Files opens standalone import/export for the active slot.
+The page uses correlated status snapshots and retained completion, disables
+stale actions, never replays a mutation on reconnect, and deletes its timer on
+exit. Project Save copy persists the complete collection. See
+[Pattern management](features/pattern-management.md).

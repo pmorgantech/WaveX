@@ -532,3 +532,16 @@ the frontend distinguish a long operation from an unconfirmed completion.
 Readback never repeats an operation. See [Project persistence](project-persistence.md)
 for lease, stop acknowledgement, commit and failure semantics. Round-trip tests
 cover every operation/error and reject malformed status bounds.
+
+
+## Project Pattern slots
+
+`MSG_SEQ_SLOT_OP` / `MSG_SEQ_SLOT_STATUS` add stopped Create, Copy active,
+Rename, Select and retained GET for 128 Project Pattern slots. Exact payloads,
+operation values and validators live in `protocol.h`; both images need this
+additive protocol-v6 feature. Destination IDs are stable zero-based slots;
+Create/Copy refuse occupied slots. GET may inspect another slot while a job
+runs without changing its destination. Active and last completed request IDs
+allow lost replies to be recovered without repeating mutations. The callback
+rejects playing or MIDI-armed captures, and Select completes only after install
+acknowledgement. See [Pattern management](pattern-management.md).

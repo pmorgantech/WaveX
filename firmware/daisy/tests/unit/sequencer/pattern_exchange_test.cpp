@@ -112,3 +112,25 @@ TEST(PatternExchangeTest, ProjectPausePreservesSettingsAndSessionInstallRestores
     EXPECT_FALSE(transport.IsPlaying());
     EXPECT_FALSE(transport.IsArmed());
 }
+
+TEST(PatternExchangeTest, StoppedCaptureRefusesPlayingArmedAndMidCaptureStarts) {
+    SequencerTransport transport;
+    transport.Init(48000, 48);
+    PatternExchange exchange;
+    for (uint8_t clock: {SEQ_CLOCK_INTERNAL, SEQ_CLOCK_MIDI}) {
+        transport.ApplyTransport({SEQ_TRANSPORT_PLAY, clock, SEQ_INPUT_PLAY, 0, 12000, 0});
+        ASSERT_TRUE(exchange.Capture(true));
+        exchange.Process(transport);
+        EXPECT_EQ(exchange.state(), PatternExchange::State::Running);
+        EXPECT_TRUE(transport.IsPlaying() || transport.IsArmed());
+        exchange.Retire();
+    }
+    transport.StopForProject();
+    ASSERT_TRUE(exchange.Capture(true));
+    for (int i = 0; i < 15; ++i)
+        exchange.Process(transport);
+    transport.ApplyTransport({SEQ_TRANSPORT_PLAY, SEQ_CLOCK_INTERNAL, SEQ_INPUT_PLAY, 0, 12000, 0});
+    exchange.Process(transport);
+    EXPECT_EQ(exchange.state(), PatternExchange::State::Running);
+    EXPECT_TRUE(transport.IsPlaying());
+}

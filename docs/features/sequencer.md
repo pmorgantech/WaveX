@@ -136,7 +136,7 @@ transport command as a completed panel workflow.
 
 ### Pattern files (as-built)
 
-From the sequencer, choose **Shift → Files**. Enter a name and choose
+From the sequencer, choose **Shift → Patterns → Files**. Enter a name and choose
 **Save copy**, or enter an existing name and choose **Load → Confirm**.
 **New → Confirm** clears the working pattern and restores its default groove
 settings. The keyboard's checkmark dismisses the keyboard; file operations
@@ -258,3 +258,12 @@ step. Tapping a step in this view selects it without toggling the note.
 The existing pattern codec retains every lock, including hidden steps.
 Application, mappings and the future live-recording/analog scope are documented
 in [param-locks-and-modulation.md](param-locks-and-modulation.md).
+
+
+### Project Pattern selection
+
+The stopped slot manager is implemented separately from standalone files:
+[Pattern management](pattern-management.md). It captures the outgoing working
+Pattern and installs the selected slot without changing session settings.
+Queued transitions and Song execution remain pending; no UI timer schedules
+musical events.

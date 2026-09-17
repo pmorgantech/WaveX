@@ -212,3 +212,7 @@ void ui_theme_apply_label_style(lv_obj_t* label, bool is_title);
 #define UI_PROJECT_FILES_BUTTON_W 256
 #define UI_PROJECT_FILES_BUTTON_H 48
 #define UI_PROJECT_FILES_BUTTON_Y 232
+
+#define UI_SLOT_HEADING_X 190
+#define UI_SLOT_BUTTON_W 150
+#define UI_SLOT_BUTTON_H 48

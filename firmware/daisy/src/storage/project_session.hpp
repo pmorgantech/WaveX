@@ -3,6 +3,7 @@
 #include "audio/sample_pool_stage.hpp"
 #include "audio/sfz_loader.hpp"
 #include "project_file_job.hpp"
+#include "project_patterns.hpp"
 #include "sequencer/pattern_exchange.hpp"
 #include "wxcf/bank_file.hpp"
 
@@ -25,8 +26,10 @@ class ProjectSession {
                    Boundary);
     ~ProjectSession();  // caller must drain any callback-owned exchange first
     bool Request(const Protocol::ProjectOpMessage&, bool external_busy = false);
+    bool RequestPattern(const Protocol::SeqSlotOpMessage&, bool external_busy = false);
+    ProjectPatterns& Patterns() { return patterns_; }
     void Pump();
-    bool Busy() const { return status_.busy; }
+    bool Busy() const { return status_.busy || patterns_.Busy(); }
     const Protocol::ProjectStatusMessage& Status() const { return status_; }
     bool ReplyPending() const { return reply_; }
     void ReplySent() { reply_ = false; }
@@ -75,6 +78,7 @@ class ProjectSession {
     uint8_t* io_;
     uint32_t io_bytes_;
     Boundary boundary_;
+    ProjectPatterns patterns_;
     ProjectFileJob file_;
     FIL bank_file_{};
     bool bank_open_ = false;

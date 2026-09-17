@@ -393,5 +393,8 @@ bool inter_mcu_get_seq_file_status(WaveX::Protocol::SeqFileStatusMessage* out);
 
 // Project session transactions; status is cached under the comm/UI lock.
 esp_err_t inter_mcu_send_project_op(const WaveX::Protocol::ProjectOpMessage&);
+esp_err_t inter_mcu_send_seq_slot_op(const WaveX::Protocol::SeqSlotOpMessage&);
+void inter_mcu_store_seq_slot_status(const WaveX::Protocol::SeqSlotStatusMessage&);
+bool inter_mcu_get_seq_slot_status(WaveX::Protocol::SeqSlotStatusMessage*);
 void inter_mcu_store_project_status(const WaveX::Protocol::ProjectStatusMessage&);
 bool inter_mcu_get_project_status(WaveX::Protocol::ProjectStatusMessage*);
